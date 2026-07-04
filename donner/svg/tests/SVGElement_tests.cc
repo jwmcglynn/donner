@@ -1270,26 +1270,19 @@ TEST_F(SVGElementTests, FindMatchingAttributes) {
   // 1) findMatchingAttributes("foo") -> [ "foo" ]
   {
     auto matches = element.findMatchingAttributes("foo");
-    EXPECT_EQ(matches.size(), 1u);
-    EXPECT_EQ(matches[0].name, "foo");
-    EXPECT_TRUE(matches[0].namespacePrefix.empty());
+    EXPECT_THAT(matches, ElementsAre(xml::XMLQualifiedNameRef("foo")));
   }
 
   // 2) findMatchingAttributes({"namespace", "bar"}) -> exactly [ "namespace:bar" ]
   {
     auto matches = element.findMatchingAttributes({"namespace", "bar"});
-    EXPECT_EQ(matches.size(), 1u);
-    EXPECT_EQ(matches[0].name, "bar");
-    EXPECT_EQ(matches[0].namespacePrefix, "namespace");
+    EXPECT_THAT(matches, ElementsAre(xml::XMLQualifiedNameRef("namespace", "bar")));
   }
 
   // 3) Using a wildcard on the namespace, findMatchingAttributes({ "*", "bar" })
   //    Expect matches from both "namespace:bar" and "anotherNS:bar"
   {
     auto matches = element.findMatchingAttributes({"*", "bar"});
-    ASSERT_EQ(matches.size(), 2u);
-    // Because the order of attributes might not be guaranteed, verify via a set or multiple checks.
-    // For simplicity, just do:
     EXPECT_THAT(matches,
                 testing::UnorderedElementsAre(xml::XMLQualifiedNameRef("namespace", "bar"),
                                               xml::XMLQualifiedNameRef("anotherNS", "bar")));

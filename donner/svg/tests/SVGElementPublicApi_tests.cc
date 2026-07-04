@@ -21,6 +21,7 @@ using testing::Eq;
 using testing::FloatNear;
 using testing::Ne;
 using testing::Optional;
+using testing::SizeIs;
 
 namespace donner::svg {
 
@@ -225,15 +226,15 @@ TEST(SVGTextPositioningElementTest, PositionLists) {
   auto tspan = instantiateSubtreeElementAs<SVGTSpanElement>(R"(<tspan x="1 2 3" y="4 5 6" />)",
                                                             kExperimentalOptions);
 
-  EXPECT_EQ(tspan->xList().size(), 3u);
-  EXPECT_EQ(tspan->yList().size(), 3u);
+  EXPECT_THAT(tspan->xList(), SizeIs(3u));
+  EXPECT_THAT(tspan->yList(), SizeIs(3u));
 }
 
 TEST(SVGTextPositioningElementTest, RotateList) {
   auto tspan = instantiateSubtreeElementAs<SVGTSpanElement>(R"(<tspan rotate="10 20 30" />)",
                                                             kExperimentalOptions);
 
-  EXPECT_EQ(tspan->rotateList().size(), 3u);
+  EXPECT_THAT(tspan->rotateList(), SizeIs(3u));
 }
 
 }  // namespace donner::svg
