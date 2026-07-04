@@ -12,8 +12,10 @@
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/parser/SVGParser.h"
 
+using testing::ElementsAre;
 using testing::Eq;
 using testing::Optional;
+using testing::SizeIs;
 
 namespace donner::svg {
 
@@ -33,6 +35,15 @@ SVGDocument ParseSVG(std::string_view input) {
 /// Matcher to check for an element with the given id.
 MATCHER_P(ElementIdEq, id, "") {
   return arg.id() == id;
+}
+
+MATCHER(StylesheetSourceMapIsEmpty, "") {
+  if (!arg.empty()) {
+    *result_listener << "source map is not empty";
+    return false;
+  }
+
+  return true;
 }
 
 }  // namespace
@@ -159,8 +170,7 @@ TEST(SVGDocument, ApplySourceEditProjectsTextMutation) {
   EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
   const auto& textComponent = text.entityHandle().get<components::TextComponent>();
   EXPECT_EQ(textComponent.text, "world");
-  ASSERT_EQ(textComponent.textChunks.size(), 1u);
-  EXPECT_EQ(textComponent.textChunks[0], "world");
+  EXPECT_THAT(textComponent.textChunks, ElementsAre(RcString("world")));
 }
 
 TEST(SVGDocument, TextProjectionPreservesChunkBoundariesAroundChildElements) {
@@ -203,8 +213,8 @@ TEST(SVGDocument, ApplySourceEditProjectsStyleMutationWithSourceMap) {
   EXPECT_TRUE(result.applied);
   EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
   const auto& stylesheet = style.entityHandle().get<components::StylesheetComponent>();
-  EXPECT_EQ(stylesheet.stylesheet.rules().size(), 1u);
-  EXPECT_TRUE(stylesheet.sourceMap.empty());
+  EXPECT_THAT(stylesheet.stylesheet.rules(), SizeIs(1u));
+  EXPECT_THAT(stylesheet.sourceMap, StylesheetSourceMapIsEmpty());
 }
 
 TEST(SVGDocument, ApplySourceEditProjectsSubtreeReplacement) {
