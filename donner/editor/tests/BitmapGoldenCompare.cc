@@ -11,6 +11,7 @@
 #include <string_view>
 #include <vector>
 
+#include "donner/editor/tests/BitmapTestMatchers.h"
 #include "donner/svg/renderer/RendererImageIO.h"  // IWYU pragma: keep
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/tests/RendererImageTestUtils.h"
@@ -62,7 +63,7 @@ std::vector<uint8_t> BuildSideBySide(const std::vector<uint8_t>& expected, int e
 
 void CompareBitmapToGolden(const svg::RendererBitmap& bitmap, std::string_view goldenPath,
                            std::string_view testLabel, const BitmapGoldenCompareParams& params) {
-  ASSERT_FALSE(bitmap.empty()) << "[" << testLabel << "] bitmap is empty";
+  ASSERT_THAT(bitmap, NonEmptyRendererBitmap()) << "[" << testLabel << "] bitmap is empty";
   ASSERT_EQ(bitmap.rowBytes % 4u, 0u)
       << "[" << testLabel << "] bitmap rowBytes must be RGBA-aligned";
 
@@ -154,8 +155,9 @@ void CompareBitmapToGolden(const svg::RendererBitmap& bitmap, std::string_view g
 
 void CompareBitmapToBitmap(const svg::RendererBitmap& actual, const svg::RendererBitmap& expected,
                            std::string_view testLabel, const BitmapGoldenCompareParams& params) {
-  ASSERT_FALSE(actual.empty()) << "[" << testLabel << "] actual bitmap is empty";
-  ASSERT_FALSE(expected.empty()) << "[" << testLabel << "] expected bitmap is empty";
+  ASSERT_THAT(actual, NonEmptyRendererBitmap()) << "[" << testLabel << "] actual bitmap is empty";
+  ASSERT_THAT(expected, NonEmptyRendererBitmap())
+      << "[" << testLabel << "] expected bitmap is empty";
   ASSERT_EQ(actual.rowBytes % 4u, 0u)
       << "[" << testLabel << "] actual rowBytes must be RGBA-aligned";
   const int width = actual.dimensions.x;

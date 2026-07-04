@@ -37,6 +37,7 @@
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/TextEditor.h"
 #include "donner/editor/ViewportState.h"
+#include "donner/editor/tests/BitmapTestMatchers.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/renderer/Renderer.h"
@@ -51,6 +52,7 @@ namespace donner::editor::gui {
 namespace {
 
 #if defined(DONNER_EDITOR_WGPU)
+using ::donner::editor::tests::NonEmptyRendererBitmap;
 using svg::test::Near;
 using svg::test::Rgba;
 using ::testing::SizeIs;
@@ -571,7 +573,7 @@ TEST(EditorWindowTest, WgpuDirectRenderCallbackAppendsToFramebuffer) {
   ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(96.0f, 96.0f),
                                                 IM_COL32(0, 0, 255, 255));
   const svg::RendererBitmap actual = window.endFrameAndReadPixels();
-  ASSERT_FALSE(actual.empty());
+  ASSERT_THAT(actual, NonEmptyRendererBitmap());
   const Vector2d readbackFromLogical = ReadbackScale(actual, 96, 96);
 
   const std::array<std::uint8_t, 4> outside = PixelAtLogical(actual, readbackFromLogical, 16, 16);
@@ -626,7 +628,7 @@ TEST(EditorWindowTest, WgpuUnderlayDirectRenderCallbackDrawsBelowImGui) {
   ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(32.0f, 32.0f), ImVec2(64.0f, 64.0f),
                                                 IM_COL32(0, 0, 255, 255));
   const svg::RendererBitmap actual = window.endFrameAndReadPixels();
-  ASSERT_FALSE(actual.empty());
+  ASSERT_THAT(actual, NonEmptyRendererBitmap());
   const Vector2d readbackFromLogical = ReadbackScale(actual, 96, 96);
 
   const std::array<std::uint8_t, 4> underlayOnly =
@@ -727,7 +729,7 @@ TEST(EditorWindowTest, WgpuPresentsFilledPromotedLayerAfterStyleMutation) {
   window.beginFrame();
   const svg::RendererBitmap actual = window.endFrameAndReadPixels();
   WriteDiagnosticBitmap(actual, "filled_promoted_layer_after_style_mutation.png");
-  ASSERT_FALSE(actual.empty());
+  ASSERT_THAT(actual, NonEmptyRendererBitmap());
   EXPECT_GT(CountGreenPixels(actual), 600)
       << "A style mutation on a selected path must publish and present a Geode layer texture whose "
          "pixels include the new fill color.";
@@ -831,7 +833,7 @@ TEST(EditorWindowTest, WgpuPresentsFilledPenCreatedPromotedLayerAfterStyleMutati
   window.beginFrame();
   const svg::RendererBitmap actual = window.endFrameAndReadPixels();
   WriteDiagnosticBitmap(actual, "filled_pen_created_promoted_layer_after_style_mutation.png");
-  ASSERT_FALSE(actual.empty());
+  ASSERT_THAT(actual, NonEmptyRendererBitmap());
   EXPECT_GT(CountGreenPixels(actual), 600)
       << "A fill mutation on a Pen-created selected path must refresh the Geode promoted layer "
          "texture instead of retaining the no-fill snapshot.";
@@ -936,7 +938,7 @@ TEST(EditorWindowTest, WgpuPresentsFilledSplashPenLayerAfterStyleMutation) {
   window.beginFrame();
   const svg::RendererBitmap actual = window.endFrameAndReadPixels();
   WriteDiagnosticBitmap(actual, "filled_splash_pen_layer_after_style_mutation.png");
-  ASSERT_FALSE(actual.empty());
+  ASSERT_THAT(actual, NonEmptyRendererBitmap());
   EXPECT_GT(CountGreenPixels(actual), 600)
       << "The Donner splash compositor must publish the new fill pixels for the Pen-created "
          "selected layer.";
@@ -1046,7 +1048,7 @@ TEST(EditorWindowTest, WgpuPenFillReplayViewportPublishesFilledLayerTile) {
   window.beginFrame();
   const svg::RendererBitmap actual = window.endFrameAndReadPixels();
   WriteDiagnosticBitmap(actual, "pen_fill_replay_viewport_layer_texture.png");
-  ASSERT_FALSE(actual.empty());
+  ASSERT_THAT(actual, NonEmptyRendererBitmap());
   EXPECT_GT(CountGreenPixels(actual), 600)
       << "The promoted-layer texture for the replay path must contain the new fill color.";
 }
@@ -1170,7 +1172,7 @@ TEST(EditorWindowTest, WgpuPenFillLiveSourceSyncPublishesFilledLayerTile) {
   window.beginFrame();
   const svg::RendererBitmap actual = window.endFrameAndReadPixels();
   WriteDiagnosticBitmap(actual, "pen_fill_live_source_sync_layer_texture.png");
-  ASSERT_FALSE(actual.empty());
+  ASSERT_THAT(actual, NonEmptyRendererBitmap());
   EXPECT_GT(CountGreenPixels(actual), 600)
       << "The promoted-layer texture for a live source-synced Pen path must contain the fill "
          "chosen through the UI.";
@@ -1216,7 +1218,7 @@ TEST(EditorWindowTest, WgpuPresentsGeodePremultipliedTextureWithoutDarkening) {
   ImGui::GetBackgroundDrawList()->AddImage(textureId, ImVec2(16.0f, 16.0f), ImVec2(80.0f, 80.0f));
   const svg::RendererBitmap actual = window.endFrameAndReadPixels();
 
-  ASSERT_FALSE(actual.empty());
+  ASSERT_THAT(actual, NonEmptyRendererBitmap());
   const std::array<std::uint8_t, 4> center = PixelAt(actual, 48, 48);
   EXPECT_THAT(center, Rgba(Near(128, 3), testing::Le(3), testing::Le(3), testing::Eq(255)))
       << "A premultiplied red texture should not be multiplied by alpha again during ImGui "
@@ -1272,7 +1274,7 @@ TEST(EditorWindowTest, WgpuPresentsUploadedStraightAlphaBitmapWithStraightBlend)
                                            ImVec2(48.0f, 48.0f));
   const svg::RendererBitmap actual = window.endFrameAndReadPixels();
 
-  ASSERT_FALSE(actual.empty());
+  ASSERT_THAT(actual, NonEmptyRendererBitmap());
   const std::array<std::uint8_t, 4> center = PixelAt(actual, 32, 32);
   EXPECT_THAT(center, Rgba(Near(128, 3), testing::Le(3), testing::Le(3), testing::Eq(255)))
       << "CPU bitmap uploads are straight-alpha RGBA; registering them as premultiplied makes "
@@ -1327,7 +1329,7 @@ TEST(EditorWindowTest, WgpuLayerThumbnailUploadHonorsPayloadUv) {
                                                   static_cast<float>(uploaded.uvBottomRight.y)));
   const svg::RendererBitmap actual = window.endFrameAndReadPixels();
 
-  ASSERT_FALSE(actual.empty());
+  ASSERT_THAT(actual, NonEmptyRendererBitmap());
   const std::array<std::uint8_t, 4> center = PixelAt(actual, 37, 28);
   EXPECT_THAT(center, Rgba(testing::Le(8), testing::Ge(245), testing::Le(8), testing::Eq(255)))
       << "The middle band should stay green; sampling the full power-of-two texture instead of "
@@ -1403,7 +1405,7 @@ TEST(EditorWindowTest, WgpuLayersPanelPresentsBackgroundStickerThumbnailLikeGold
       FindTextureDrawRect(*ImGui::GetWindowDrawList(), actualUpload.texture);
   ImGui::End();
   const svg::RendererBitmap actualFramebuffer = window.endFrameAndReadPixels();
-  ASSERT_FALSE(actualFramebuffer.empty());
+  ASSERT_THAT(actualFramebuffer, NonEmptyRendererBitmap());
   ASSERT_TRUE(actualRect.has_value())
       << "expected the Background_sticker row to draw the uploaded thumbnail texture";
 
@@ -1417,7 +1419,7 @@ TEST(EditorWindowTest, WgpuLayersPanelPresentsBackgroundStickerThumbnailLikeGold
                                       static_cast<float>(expectedUpload.uvBottomRight.y)));
   foregroundDrawList->AddRect(expectedMin, expectedMax, IM_COL32(255, 255, 255, 60), 3.0f);
   const svg::RendererBitmap expectedFramebuffer = window.endFrameAndReadPixels();
-  ASSERT_FALSE(expectedFramebuffer.empty());
+  ASSERT_THAT(expectedFramebuffer, NonEmptyRendererBitmap());
 
   const Vector2d actualReadbackFromLogical = ReadbackScale(actualFramebuffer, 500, 260);
   const Vector2d expectedReadbackFromLogical = ReadbackScale(expectedFramebuffer, 500, 260);
@@ -1500,7 +1502,7 @@ TEST(EditorWindowTest, WgpuPremultipliedTextureSurvivesOnePresentationOwnerRetir
   const svg::RendererBitmap actual = window.endFrameAndReadPixels();
   WriteDiagnosticBitmap(actual, "premul_shared_owner_retire_presentation.png");
 
-  ASSERT_FALSE(actual.empty());
+  ASSERT_THAT(actual, NonEmptyRendererBitmap());
   const Vector2d readbackFromLogical = ReadbackScale(actual, 128, 96);
   const std::array<std::uint8_t, 4> center =
       PixelAtLogical(actual, readbackFromLogical, 32.0, 32.0);
@@ -1536,7 +1538,7 @@ TEST(EditorWindowTest, WgpuPresentsZoomedBlurredPremultipliedTextureWithoutDarke
   const svg::RendererBitmap actual = window.endFrameAndReadPixels();
   WriteDiagnosticBitmap(actual, "zoomed_blurred_premul_presentation.png");
 
-  ASSERT_FALSE(actual.empty());
+  ASSERT_THAT(actual, NonEmptyRendererBitmap());
   const Vector2d readbackFromLogical = ReadbackScale(actual, 368, 232);
   const double referenceLuma =
       MeanLumaAtLogical(actual, readbackFromLogical, 16.0 + 48.0, 68.0 + 48.0, 1.0);
@@ -1588,7 +1590,7 @@ TEST(EditorWindowTest, WgpuPresentsZoomedCompositedBlurredLayerWithoutDarkening)
   const svg::RendererBitmap actual = window.endFrameAndReadPixels();
   WriteDiagnosticBitmap(actual, "zoomed_composited_blurred_layer_presentation.png");
 
-  ASSERT_FALSE(actual.empty());
+  ASSERT_THAT(actual, NonEmptyRendererBitmap());
   const Vector2d readbackFromLogical = ReadbackScale(actual, 592, 368);
   const double referenceCenterLuma =
       MeanLumaAtLogical(actual, readbackFromLogical, 16.0 + 80.0, 24.0 + 80.0, 2.0);
@@ -1662,7 +1664,7 @@ TEST(EditorWindowTest, WgpuPresentsZoomedDonnerSplashFilteredLayerWithoutDarkeni
   const svg::RendererBitmap actual = window.endFrameAndReadPixels();
   WriteDiagnosticBitmap(actual, "zoomed_donner_splash_filtered_layer_presentation.png");
 
-  ASSERT_FALSE(actual.empty());
+  ASSERT_THAT(actual, NonEmptyRendererBitmap());
   const Vector2d readbackFromLogical = ReadbackScale(actual, 760, 300);
   const double referenceCenterLuma =
       MeanLumaAtLogical(actual, readbackFromLogical, kReferenceCenterX, kCenterY, 2.0);

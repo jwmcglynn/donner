@@ -35,6 +35,7 @@
 #include "donner/editor/ViewportState.h"
 #include "donner/editor/repro/ReproFile.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
+#include "donner/editor/tests/BitmapTestMatchers.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererImageIO.h"  // IWYU pragma: keep
@@ -44,6 +45,7 @@ namespace donner::editor {
 namespace {
 
 using ::testing::SizeIs;
+using tests::NonEmptyRendererBitmap;
 
 bool IsGraphicsElement(const svg::SVGElement& element) {
   return element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
@@ -413,7 +415,8 @@ protected:
     SyncCanvasSize(app, viewport);
     auto initialResult = RequestRenderAndWait(asyncRenderer, renderer, app, selectTool);
     ASSERT_TRUE(initialResult.has_value()) << "Initial render timed out";
-    ASSERT_FALSE(initialResult->bitmap.empty()) << "Initial render produced an empty bitmap";
+    ASSERT_THAT(initialResult->bitmap, NonEmptyRendererBitmap())
+        << "Initial render produced an empty bitmap";
 
     out->bitmap = initialResult->bitmap;
     out->frameIndex = 0;
@@ -483,7 +486,7 @@ protected:
       if (frameNeedsRender) {
         auto result = RequestRenderAndWait(asyncRenderer, renderer, app, selectTool);
         ASSERT_TRUE(result.has_value()) << "Render timed out at replay frame " << frame.index;
-        ASSERT_FALSE(result->bitmap.empty())
+        ASSERT_THAT(result->bitmap, NonEmptyRendererBitmap())
             << "Render produced an empty bitmap at frame " << frame.index;
         out->bitmap = result->bitmap;
       }
@@ -505,7 +508,8 @@ protected:
     if (out->stoppedForBisection) {
       out->diagnosticPath = DiagnosticOutputDir() /
                             ("rnr_replay_bisect_frame_" + std::to_string(out->frameIndex) + ".png");
-      ASSERT_FALSE(out->bitmap.empty()) << "No bitmap available to dump for BISECTION_FRAME";
+      ASSERT_THAT(out->bitmap, NonEmptyRendererBitmap())
+          << "No bitmap available to dump for BISECTION_FRAME";
       svg::RendererImageIO::writeRgbaPixelsToPngFile(
           out->diagnosticPath.string().c_str(), out->bitmap.pixels, out->bitmap.dimensions.x,
           out->bitmap.dimensions.y, out->bitmap.rowBytes / 4u);
@@ -842,7 +846,7 @@ TEST_F(RnrReplayTest, FilterDisappearRepro3MatchesGoldenAfterSecondMouseUp) {
 
   ASSERT_GE(snapshot.mouseUpCount, kTargetMouseUpCount)
       << "Replay ended before the second mouse-up checkpoint";
-  ASSERT_FALSE(snapshot.bitmap.empty()) << "Replay produced an empty final bitmap";
+  ASSERT_THAT(snapshot.bitmap, NonEmptyRendererBitmap()) << "Replay produced an empty final bitmap";
 
   // Approved exception: this committed golden still has small AA/raster drift across replay runs.
   // The test remains useful for the presented-frame regression while the fixture is not yet
@@ -897,7 +901,7 @@ TEST_F(RnrReplayTest, FilterSnapbackReproPreservesCompositorAcrossWriteback) {
   drainWritebacksEachFrame_ = true;
   ReplayRecording("donner/editor/tests/filter_snapback_repro.rnr", &snapshot);
 
-  ASSERT_FALSE(snapshot.bitmap.empty()) << "Replay produced an empty final bitmap";
+  ASSERT_THAT(snapshot.bitmap, NonEmptyRendererBitmap()) << "Replay produced an empty final bitmap";
   EXPECT_EQ(snapshot.compositorReconstructCount, 1u)
       << "Compositor was reconstructed " << snapshot.compositorReconstructCount
       << " times — the post-drag-release source reparse must route through "
@@ -958,7 +962,7 @@ TEST_F(RnrReplayTest, DeleteElementDoesNotResetPreviouslyMovedShapes) {
   {
     auto initial = RequestRenderAndWait(asyncRenderer, renderer, app, selectTool);
     ASSERT_TRUE(initial.has_value());
-    ASSERT_FALSE(initial->bitmap.empty());
+    ASSERT_THAT(initial->bitmap, NonEmptyRendererBitmap());
   }
 
   // For each "dragged" shape, simulate the drag-end writeback by
@@ -997,14 +1001,14 @@ TEST_F(RnrReplayTest, DeleteElementDoesNotResetPreviouslyMovedShapes) {
     ASSERT_TRUE(app.flushFrame());
     auto result = RequestRenderAndWait(asyncRenderer, renderer, app, selectTool);
     ASSERT_TRUE(result.has_value()) << "Render after drag of " << drag.id << " timed out";
-    ASSERT_FALSE(result->bitmap.empty());
+    ASSERT_THAT(result->bitmap, NonEmptyRendererBitmap());
   }
 
   // Capture the post-drags state. This is the bitmap the user sees
   // right before pressing Delete.
   auto stateAfterMoves = RequestRenderAndWait(asyncRenderer, renderer, app, selectTool);
   ASSERT_TRUE(stateAfterMoves.has_value());
-  ASSERT_FALSE(stateAfterMoves->bitmap.empty());
+  ASSERT_THAT(stateAfterMoves->bitmap, NonEmptyRendererBitmap());
 
   // Find Lightning_glow_dark in the live DOM and select it (matches
   // the user's "I clicked the lighting_glow_dark in my repro" step).
@@ -1032,7 +1036,7 @@ TEST_F(RnrReplayTest, DeleteElementDoesNotResetPreviouslyMovedShapes) {
 
   auto stateAfterDelete = RequestRenderAndWait(asyncRenderer, renderer, app, selectTool);
   ASSERT_TRUE(stateAfterDelete.has_value()) << "Post-delete render timed out";
-  ASSERT_FALSE(stateAfterDelete->bitmap.empty());
+  ASSERT_THAT(stateAfterDelete->bitmap, NonEmptyRendererBitmap());
 
   // Pump enough renders to clear `processPendingDemotions`' 30-frame
   // hysteresis (`kDemotionHysteresisFrames`), then compare the settled
@@ -1058,7 +1062,7 @@ TEST_F(RnrReplayTest, DeleteElementDoesNotResetPreviouslyMovedShapes) {
 
   auto stateAfterReparse = RequestRenderAndWait(asyncRenderer, renderer, app, selectTool);
   ASSERT_TRUE(stateAfterReparse.has_value()) << "Post-reparse render timed out";
-  ASSERT_FALSE(stateAfterReparse->bitmap.empty());
+  ASSERT_THAT(stateAfterReparse->bitmap, NonEmptyRendererBitmap());
 
   // Independent ground truth: render the FINAL source (post-drag,
   // post-delete) through a fresh `EditorApp` + `AsyncRenderer`. No
@@ -1074,7 +1078,7 @@ TEST_F(RnrReplayTest, DeleteElementDoesNotResetPreviouslyMovedShapes) {
   auto groundTruth = RequestRenderAndWait(groundTruthAsync, groundTruthRenderer, groundTruthApp,
                                           groundTruthSelectTool);
   ASSERT_TRUE(groundTruth.has_value());
-  ASSERT_FALSE(groundTruth->bitmap.empty());
+  ASSERT_THAT(groundTruth->bitmap, NonEmptyRendererBitmap());
 
   // Dump all four bitmaps so the human investigator can inspect the
   // delta when this trips.
@@ -1113,7 +1117,7 @@ TEST_F(RnrReplayTest, FilterPostDragJumpReplayMatchesGroundTruth) {
   drainWritebacksEachFrame_ = true;
   ReplayRecording("donner/editor/tests/filter_post_drag_jump.rnr", &snapshot);
 
-  ASSERT_FALSE(snapshot.bitmap.empty());
+  ASSERT_THAT(snapshot.bitmap, NonEmptyRendererBitmap());
 
   EditorApp groundTruthApp;
   AsyncRenderer groundTruthAsync;

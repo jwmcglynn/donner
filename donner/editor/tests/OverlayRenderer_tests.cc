@@ -11,6 +11,7 @@
 
 #include "donner/base/Transform.h"
 #include "donner/editor/EditorApp.h"
+#include "donner/editor/tests/BitmapTestMatchers.h"
 #include "donner/svg/DocumentState.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
@@ -37,6 +38,7 @@ using ::testing::IsEmpty;
 using ::testing::Not;
 using ::testing::ResultOf;
 using ::testing::SizeIs;
+using tests::NonEmptyRendererBitmap;
 
 constexpr double kPi = 3.14159265358979323846;
 
@@ -141,7 +143,7 @@ TEST(OverlayRendererTest, EmitsChromeForSelectedElement) {
   // pixels here without going to the framebuffer-golden tier, but we
   // can at least confirm the renderer produced *something*.
   const auto bitmap = renderer.takeSnapshot();
-  EXPECT_FALSE(bitmap.empty());
+  EXPECT_THAT(bitmap, NonEmptyRendererBitmap());
   EXPECT_GT(bitmap.dimensions.x, 0);
   EXPECT_GT(bitmap.dimensions.y, 0);
 }
@@ -412,7 +414,7 @@ TEST(OverlayRendererTest, OverlayRendersIntoStandaloneRendererFrame) {
   overlayRenderer.endFrame();
 
   const auto bitmap = overlayRenderer.takeSnapshot();
-  ASSERT_FALSE(bitmap.empty());
+  ASSERT_THAT(bitmap, NonEmptyRendererBitmap());
   EXPECT_EQ(bitmap.dimensions.x, 200);
   EXPECT_EQ(bitmap.dimensions.y, 200);
 
@@ -457,7 +459,7 @@ TEST(OverlayRendererTest, DrawsWhiteCornerHandlesWithSelectionStroke) {
   overlayRenderer.endFrame();
 
   const auto bitmap = overlayRenderer.takeSnapshot();
-  ASSERT_FALSE(bitmap.empty());
+  ASSERT_THAT(bitmap, NonEmptyRendererBitmap());
 
   const auto pixelAt = [&](int x, int y, int channel) -> std::uint8_t {
     const std::uint8_t* row = bitmap.pixels.data() + y * bitmap.rowBytes;
@@ -572,7 +574,7 @@ TEST(OverlayRendererTest, RepeatedOverlayRendersWithChangingSelection) {
     OverlayRenderer::drawChromeWithTransform(overlayRenderer, selection, canvasFromDoc);
     overlayRenderer.endFrame();
     auto bitmap = overlayRenderer.takeSnapshot();
-    EXPECT_FALSE(bitmap.empty());
+    EXPECT_THAT(bitmap, NonEmptyRendererBitmap());
     EXPECT_EQ(bitmap.dimensions.x, 200);
     EXPECT_EQ(bitmap.dimensions.y, 200);
   };
@@ -636,7 +638,7 @@ TEST(OverlayRendererTest, PathOutlineFollowsElementTransform) {
   overlayRenderer.endFrame();
 
   const auto bitmap = overlayRenderer.takeSnapshot();
-  ASSERT_FALSE(bitmap.empty());
+  ASSERT_THAT(bitmap, NonEmptyRendererBitmap());
 
   // Helper: returns the alpha at a given canvas pixel.
   const auto alphaAt = [&](int x, int y) -> std::uint8_t {
@@ -701,7 +703,7 @@ TEST(OverlayRendererTest, DisplayNoneSelectionStillDrawsPathOutline) {
   overlayRenderer.endFrame();
 
   const auto bitmap = overlayRenderer.takeSnapshot();
-  ASSERT_FALSE(bitmap.empty());
+  ASSERT_THAT(bitmap, NonEmptyRendererBitmap());
 
   const auto pixelAt = [&](int x, int y) -> std::array<std::uint8_t, 4> {
     const std::uint8_t* row = bitmap.pixels.data() + y * bitmap.rowBytes;
@@ -752,7 +754,7 @@ TEST(OverlayRendererTest, DisplayNonePathSelectionStillDrawsPathOutline) {
   overlayRenderer.endFrame();
 
   const auto bitmap = overlayRenderer.takeSnapshot();
-  ASSERT_FALSE(bitmap.empty());
+  ASSERT_THAT(bitmap, NonEmptyRendererBitmap());
 
   const auto alphaAt = [&](int x, int y) -> std::uint8_t {
     const std::uint8_t* row = bitmap.pixels.data() + y * bitmap.rowBytes;
@@ -815,7 +817,7 @@ TEST(OverlayRendererTest, PathOutlineDrawnAtTransformedLocationNotInverted) {
   overlayRenderer.endFrame();
 
   const auto bitmap = overlayRenderer.takeSnapshot();
-  ASSERT_FALSE(bitmap.empty());
+  ASSERT_THAT(bitmap, NonEmptyRendererBitmap());
 
   const auto alphaAt = [&](int x, int y) -> std::uint8_t {
     const std::uint8_t* row = bitmap.pixels.data() + y * bitmap.rowBytes;
@@ -873,7 +875,7 @@ TEST(OverlayRendererTest, PathOutlineStrokeDoesNotInheritElementScale) {
   overlayRenderer.endFrame();
 
   const auto bitmap = overlayRenderer.takeSnapshot();
-  ASSERT_FALSE(bitmap.empty());
+  ASSERT_THAT(bitmap, NonEmptyRendererBitmap());
 
   const auto alphaAt = [&](int x, int y) -> std::uint8_t {
     const std::uint8_t* row = bitmap.pixels.data() + y * bitmap.rowBytes;
@@ -918,7 +920,7 @@ TEST(OverlayRendererTest, MultiElementSpanDrawsPathOutlinesForEachSelectedElemen
   overlayRenderer.endFrame();
 
   const auto bitmap = overlayRenderer.takeSnapshot();
-  ASSERT_FALSE(bitmap.empty());
+  ASSERT_THAT(bitmap, NonEmptyRendererBitmap());
 
   // Helper: returns the alpha at a given canvas pixel.
   const auto alphaAt = [&](int x, int y) -> std::uint8_t {
@@ -985,7 +987,7 @@ TEST(OverlayRendererTest, MultiSelectDrawsCombinedAabbInSkiaOverlay) {
   overlayRenderer.endFrame();
 
   const auto bitmap = overlayRenderer.takeSnapshot();
-  ASSERT_FALSE(bitmap.empty());
+  ASSERT_THAT(bitmap, NonEmptyRendererBitmap());
   const auto alphaAt = [&](int x, int y) {
     const std::uint8_t* row = bitmap.pixels.data() + y * bitmap.rowBytes;
     return row[x * 4 + 3];
@@ -1053,7 +1055,7 @@ TEST(OverlayRendererTest, SelectingFilterGroupDrawsOutlinesOfAllGeometryDescenda
   overlayRenderer.endFrame();
 
   const auto bitmap = overlayRenderer.takeSnapshot();
-  ASSERT_FALSE(bitmap.empty());
+  ASSERT_THAT(bitmap, NonEmptyRendererBitmap());
   const auto alphaAt = [&](int x, int y) -> std::uint8_t {
     const std::uint8_t* row = bitmap.pixels.data() + y * bitmap.rowBytes;
     return row[x * 4 + 3];
@@ -1116,7 +1118,7 @@ TEST(OverlayRendererTest, SelectingGroupSkipsNonRenderedContainerChildren) {
   overlayRenderer.endFrame();
 
   const auto bitmap = overlayRenderer.takeSnapshot();
-  ASSERT_FALSE(bitmap.empty());
+  ASSERT_THAT(bitmap, NonEmptyRendererBitmap());
   const auto alphaAt = [&](int x, int y) -> std::uint8_t {
     const std::uint8_t* row = bitmap.pixels.data() + y * bitmap.rowBytes;
     return row[x * 4 + 3];
@@ -1160,7 +1162,7 @@ TEST(OverlayRendererTest, EmptySelectionSpanProducesTransparentOverlay) {
   overlayRenderer.endFrame();
 
   const auto bitmap = overlayRenderer.takeSnapshot();
-  ASSERT_FALSE(bitmap.empty());
+  ASSERT_THAT(bitmap, NonEmptyRendererBitmap());
 
   for (std::size_t y = 0; y < static_cast<std::size_t>(bitmap.dimensions.y); ++y) {
     const std::uint8_t* row = bitmap.pixels.data() + y * bitmap.rowBytes;
@@ -1187,7 +1189,7 @@ TEST(OverlayRendererTest, EmptySelectionSpanWithIdentityTransformIsNoOp) {
   overlayRenderer.endFrame();
 
   const auto bitmap = overlayRenderer.takeSnapshot();
-  ASSERT_FALSE(bitmap.empty());
+  ASSERT_THAT(bitmap, NonEmptyRendererBitmap());
   // Bitmap should be entirely transparent (the beginFrame clear).
   for (std::size_t y = 0; y < static_cast<std::size_t>(bitmap.dimensions.y); ++y) {
     const std::uint8_t* row = bitmap.pixels.data() + y * bitmap.rowBytes;
@@ -1397,7 +1399,7 @@ TEST(OverlayRendererTest, LockedFlashDrawsRedOutlineScaledByIntensity) {
   };
 
   const auto fullBitmap = drawFlashAtIntensity(1.0f);
-  ASSERT_FALSE(fullBitmap.empty());
+  ASSERT_THAT(fullBitmap, NonEmptyRendererBitmap());
 
   const auto pixelAt = [](const auto& bitmap, int x, int y, int channel) -> std::uint8_t {
     const std::uint8_t* row = bitmap.pixels.data() + y * bitmap.rowBytes;
@@ -1427,7 +1429,7 @@ TEST(OverlayRendererTest, LockedFlashDrawsRedOutlineScaledByIntensity) {
 
   // A dimmer flash should produce a lower peak alpha on the same outline band.
   const auto dimBitmap = drawFlashAtIntensity(0.3f);
-  ASSERT_FALSE(dimBitmap.empty());
+  ASSERT_THAT(dimBitmap, NonEmptyRendererBitmap());
   int maxRedAlphaDim = 0;
   for (int y = 28; y <= 82; ++y) {
     for (int x = 18; x <= 62; ++x) {

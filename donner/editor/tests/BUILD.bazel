@@ -8,11 +8,24 @@ load(
 )
 
 donner_cc_library(
+    name = "bitmap_test_matchers",
+    testonly = 1,
+    hdrs = [
+        "BitmapTestMatchers.h",
+    ],
+    deps = [
+        "//donner/svg/renderer:renderer_interface",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+donner_cc_library(
     name = "bitmap_golden_compare",
     testonly = 1,
     srcs = ["BitmapGoldenCompare.cc"],
     hdrs = ["BitmapGoldenCompare.h"],
     deps = [
+        ":bitmap_test_matchers",
         "//donner/svg/renderer:renderer_image_io",
         "//donner/svg/renderer:renderer_interface",
         "//donner/svg/renderer/tests:renderer_image_test_utils",
@@ -98,6 +111,7 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
     ] + select({
         "//donner/svg/renderer:renderer_backend_geode": [
+            ":bitmap_test_matchers",
             "//donner/base:base_test_utils",
             "//donner/editor:async_renderer",
             "//donner/editor:document_sync_controller",
@@ -333,6 +347,7 @@ donner_cc_test(
     name = "render_pane_presenter_visual_repro_tests",
     srcs = ["RenderPanePresenterVisualRepro_tests.cc"],
     deps = [
+        ":bitmap_test_matchers",
         "//donner/base",
         "//donner/base:base_test_utils",
         "//donner/editor:gl_texture_cache",
@@ -398,6 +413,7 @@ donner_cc_test(
     name = "async_svg_document_tests",
     srcs = ["AsyncSVGDocument_tests.cc"],
     deps = [
+        ":bitmap_test_matchers",
         "//donner/editor:async_svg_document",
         "//donner/svg",
         "//donner/svg/renderer",
@@ -441,6 +457,7 @@ donner_cc_test(
         "//:donner_splash.svg",
     ],
     deps = [
+        ":bitmap_test_matchers",
         "//donner/editor:async_renderer",
         "//donner/editor:async_svg_document",
         "//donner/editor:command_queue",
@@ -486,6 +503,7 @@ donner_cc_test(
         "perf",
     ],
     deps = [
+        ":bitmap_test_matchers",
         "//donner/editor:async_renderer",
         "//donner/editor:async_svg_document",
         "//donner/editor:command_queue",
@@ -665,6 +683,7 @@ donner_cc_test(
     srcs = ["PenTool_tests.cc"],
     data = ["//:donner_splash.svg"],
     deps = [
+        ":bitmap_test_matchers",
         "//donner/editor:document_sync_controller",
         "//donner/editor:editor_app",
         "//donner/editor:overlay_renderer",
@@ -682,6 +701,7 @@ donner_cc_test(
     name = "overlay_renderer_tests",
     srcs = ["OverlayRenderer_tests.cc"],
     deps = [
+        ":bitmap_test_matchers",
         "//donner/editor:editor_app",
         "//donner/editor:overlay_renderer",
         "//donner/svg",
@@ -776,6 +796,7 @@ donner_cc_test(
     name = "drag_release_pop_back_tests",
     srcs = ["DragReleasePopBack_tests.cc"],
     deps = [
+        ":bitmap_test_matchers",
         "//donner/editor:composited_presentation",
         "//donner/editor:select_tool",
         "//donner/svg",
@@ -895,6 +916,7 @@ donner_cc_test(
     shard_count = 5,
     deps = [
         ":bitmap_golden_compare",
+        ":bitmap_test_matchers",
         "//donner/base:base_test_utils",
         "//donner/editor:async_renderer",
         "//donner/editor:attribute_writeback",
@@ -1020,6 +1042,7 @@ donner_cc_test(
     data = ["//:donner_splash.svg"],
     variants = ["geode"],
     deps = [
+        ":bitmap_test_matchers",
         "//donner/base:base_test_utils",
         "//donner/editor:editor_app",
         "//donner/editor:layer_tree_model",
@@ -1040,6 +1063,7 @@ donner_cc_test(
     ),
     deps = [
         ":bitmap_golden_compare",
+        ":bitmap_test_matchers",
         "//donner/base:base_test_utils",
         "//donner/svg",
         "//donner/svg/parser",
