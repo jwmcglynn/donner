@@ -1,8 +1,10 @@
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <atomic>
 #include <cstdint>
 #include <optional>
+#include <ostream>
 #include <thread>
 #include <vector>
 
@@ -37,12 +39,29 @@
 #include "donner/svg/SVGUseElement.h"
 
 namespace donner::svg {
+
+void PrintTo(const DocumentMutationRecord& record, std::ostream* os) {
+  *os << "DocumentMutationRecord{sequence=" << record.sequence << ", revision=" << record.revision
+      << "}";
+}
+
 namespace {
+
+using ::testing::AllOf;
+using ::testing::ElementsAre;
+using ::testing::Field;
+using ::testing::IsEmpty;
+using ::testing::SizeIs;
 
 template <typename Element, typename Callback>
 auto ReadElement(Element element, Callback callback) {
   return element.withReadAccess(
       [&](DocumentReadAccess&, EntityHandle) { return callback(element); });
+}
+
+auto MutationRecordIs(std::uint64_t sequence, std::uint64_t revision) {
+  return AllOf(Field("sequence", &DocumentMutationRecord::sequence, sequence),
+               Field("revision", &DocumentMutationRecord::revision, revision));
 }
 
 TEST(SVGDocumentConcurrencyTests, ConcurrentDomSerializesDocumentLevelWrites) {
@@ -205,7 +224,7 @@ TEST(SVGDocumentConcurrencyTests, MutationLogRecordsCommittedRevisions) {
 
   document.withWriteAccess([](DocumentWriteAccess&) {});
   DocumentMutationLogSnapshot snapshot = document.handle()->mutationRecordsSince(initialSequence);
-  EXPECT_TRUE(snapshot.records.empty());
+  EXPECT_THAT(snapshot.records, IsEmpty());
   EXPECT_EQ(snapshot.latestSequence, initialSequence);
   EXPECT_FALSE(snapshot.missedRecords);
 
@@ -215,9 +234,8 @@ TEST(SVGDocumentConcurrencyTests, MutationLogRecordsCommittedRevisions) {
   });
 
   snapshot = document.handle()->mutationRecordsSince(initialSequence);
-  ASSERT_EQ(snapshot.records.size(), 1u);
-  EXPECT_EQ(snapshot.records.front().sequence, initialSequence + 1);
-  EXPECT_EQ(snapshot.records.front().revision, initialRevision + 1);
+  EXPECT_THAT(snapshot.records,
+              ElementsAre(MutationRecordIs(initialSequence + 1, initialRevision + 1)));
   EXPECT_EQ(snapshot.latestSequence, initialSequence + 1);
   EXPECT_FALSE(snapshot.missedRecords);
 
@@ -225,9 +243,8 @@ TEST(SVGDocumentConcurrencyTests, MutationLogRecordsCommittedRevisions) {
 
   DocumentMutationLogSnapshot secondSnapshot =
       document.handle()->mutationRecordsSince(snapshot.latestSequence);
-  ASSERT_EQ(secondSnapshot.records.size(), 1u);
-  EXPECT_EQ(secondSnapshot.records.front().sequence, initialSequence + 2);
-  EXPECT_EQ(secondSnapshot.records.front().revision, initialRevision + 2);
+  EXPECT_THAT(secondSnapshot.records,
+              ElementsAre(MutationRecordIs(initialSequence + 2, initialRevision + 2)));
   EXPECT_EQ(secondSnapshot.latestSequence, initialSequence + 2);
   EXPECT_FALSE(secondSnapshot.missedRecords);
 }
@@ -270,7 +287,7 @@ TEST(SVGDocumentConcurrencyTests, ConcurrentDomPublicReadAccessorsAcquireAccessI
   EXPECT_EQ(child->getAttribute("fill"), "red");
   EXPECT_FALSE(child->nextSibling().has_value());
   EXPECT_TRUE(child->parentElement().has_value());
-  EXPECT_EQ(child->attributes().size(), 2u);
+  EXPECT_THAT(child->attributes(), SizeIs(2u));
 }
 
 TEST(SVGDocumentConcurrencyTests, ConcurrentDomSerializesElementHandleCopies) {
