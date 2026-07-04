@@ -189,11 +189,7 @@ TEST(FindChunkRangesTest, KeepsJoinerAndVariationSelectorWithBaseCluster) {
 
   const auto ranges = findChunkRanges(text, xList, yList);
 
-  ASSERT_EQ(ranges.size(), 2u);
-  EXPECT_EQ(ranges[0].byteStart, 0u);
-  EXPECT_EQ(ranges[0].byteEnd, 8u);
-  EXPECT_EQ(ranges[1].byteStart, 8u);
-  EXPECT_EQ(ranges[1].byteEnd, 9u);
+  EXPECT_THAT(ranges, ElementsAre(ChunkRangeIs(0u, 8u), ChunkRangeIs(8u, 9u)));
 }
 
 TEST(FindChunkRangesTest, EmptyTextReturnsSingleEmptyRange) {
@@ -223,18 +219,8 @@ TEST(BuildByteIndexMappingsTest, JoinerAndVariationSelectorShareBaseIndex) {
       "B\xEF\xB8\x8F"
       "C");
 
-  ASSERT_EQ(m.byteToCharIdx.size(), 9u);
-  EXPECT_EQ(m.byteToCharIdx[0], 0u);  // A.
-  EXPECT_EQ(m.byteToCharIdx[1], 0u);  // ZWJ.
-  EXPECT_EQ(m.byteToCharIdx[4], 0u);  // B following ZWJ.
-  EXPECT_EQ(m.byteToCharIdx[5], 0u);  // VS16.
-  EXPECT_EQ(m.byteToCharIdx[8], 1u);  // C starts the next addressable character.
-
-  EXPECT_EQ(m.byteToRawCpIdx[0], 0u);
-  EXPECT_EQ(m.byteToRawCpIdx[1], 1u);
-  EXPECT_EQ(m.byteToRawCpIdx[4], 2u);
-  EXPECT_EQ(m.byteToRawCpIdx[5], 3u);
-  EXPECT_EQ(m.byteToRawCpIdx[8], 4u);
+  EXPECT_THAT(m.byteToCharIdx, ElementsAre(0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 1u));
+  EXPECT_THAT(m.byteToRawCpIdx, ElementsAre(0u, 1u, 1u, 1u, 2u, 3u, 3u, 3u, 4u));
 }
 
 TEST(BuildByteIndexMappingsTest, SupplementaryCharacterConsumeTwoIndices) {

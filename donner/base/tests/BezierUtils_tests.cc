@@ -1,5 +1,6 @@
 #include "donner/base/BezierUtils.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <cmath>
@@ -8,10 +9,20 @@ namespace donner {
 
 namespace {
 
+using ::testing::DoubleNear;
+using ::testing::ElementsAre;
+using ::testing::IsEmpty;
+
 /// Helper: check that two Vector2d values are approximately equal.
 void ExpectNear(const Vector2d& actual, const Vector2d& expected, double tolerance = 1e-9) {
   EXPECT_NEAR(actual.x, expected.x, tolerance) << "actual=" << actual << " expected=" << expected;
   EXPECT_NEAR(actual.y, expected.y, tolerance) << "actual=" << actual << " expected=" << expected;
+}
+
+MATCHER(HasTwoSortedExtremaInOpenUnitInterval,
+        "two strictly increasing extrema in the open interval (0, 1)") {
+  *result_listener << "actual extrema=" << testing::PrintToString(arg);
+  return arg.size() == 2u && arg[0] > 0.0 && arg[0] < arg[1] && arg[1] < 1.0;
 }
 
 }  // namespace
@@ -342,7 +353,7 @@ TEST(BezierUtils, QuadraticYExtremaMonotonic) {
   const Vector2d p2(2.0, 2.0);
 
   auto result = QuadraticYExtrema(p0, p1, p2);
-  EXPECT_EQ(result.size(), 0u);
+  EXPECT_THAT(result, IsEmpty());
 }
 
 TEST(BezierUtils, QuadraticYExtremaOneExtremum) {
@@ -352,8 +363,7 @@ TEST(BezierUtils, QuadraticYExtremaOneExtremum) {
   const Vector2d p2(2.0, 0.0);
 
   auto result = QuadraticYExtrema(p0, p1, p2);
-  ASSERT_EQ(result.size(), 1u);
-  EXPECT_NEAR(result[0], 0.5, 1e-9);
+  EXPECT_THAT(result, ElementsAre(DoubleNear(0.5, 1e-9)));
 }
 
 TEST(BezierUtils, QuadraticYExtremaAsymmetric) {
@@ -364,8 +374,7 @@ TEST(BezierUtils, QuadraticYExtremaAsymmetric) {
 
   // t = (p0.y - p1.y) / (p0.y - 2*p1.y + p2.y) = (0 - 4) / (0 - 8 + 2) = -4 / -6 = 2/3
   auto result = QuadraticYExtrema(p0, p1, p2);
-  ASSERT_EQ(result.size(), 1u);
-  EXPECT_NEAR(result[0], 2.0 / 3.0, 1e-9);
+  EXPECT_THAT(result, ElementsAre(DoubleNear(2.0 / 3.0, 1e-9)));
 }
 
 // =============================================================================
@@ -380,7 +389,7 @@ TEST(BezierUtils, CubicYExtremaMonotonic) {
   const Vector2d p3(3.0, 3.0);
 
   auto result = CubicYExtrema(p0, p1, p2, p3);
-  EXPECT_EQ(result.size(), 0u);
+  EXPECT_THAT(result, IsEmpty());
 }
 
 TEST(BezierUtils, CubicYExtremaOneExtremum) {
@@ -393,8 +402,7 @@ TEST(BezierUtils, CubicYExtremaOneExtremum) {
   auto result = CubicYExtrema(p0, p1, p2, p3);
   // Should have exactly 1 extremum due to the symmetric arch shape.
   // The Y derivative is 0 at the peak. With this symmetric curve, the peak is at t=0.5.
-  ASSERT_EQ(result.size(), 1u);
-  EXPECT_NEAR(result[0], 0.5, 1e-9);
+  EXPECT_THAT(result, ElementsAre(DoubleNear(0.5, 1e-9)));
 }
 
 TEST(BezierUtils, CubicYExtremaTwoExtrema) {
@@ -405,11 +413,8 @@ TEST(BezierUtils, CubicYExtremaTwoExtrema) {
   const Vector2d p3(10.0, 0.0);
 
   auto result = CubicYExtrema(p0, p1, p2, p3);
-  ASSERT_EQ(result.size(), 2u);
   // Both should be in (0, 1) and sorted.
-  EXPECT_GT(result[0], 0.0);
-  EXPECT_LT(result[0], result[1]);
-  EXPECT_LT(result[1], 1.0);
+  EXPECT_THAT(result, HasTwoSortedExtremaInOpenUnitInterval());
 }
 
 // =============================================================================

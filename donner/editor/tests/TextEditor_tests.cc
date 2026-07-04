@@ -24,6 +24,14 @@ void PrintTo(const SourceByteRange& range, std::ostream* os) {
   *os << "SourceByteRange{start=" << range.start << ", end=" << range.end << "}";
 }
 
+void PrintTo(const SourcePoint& point, std::ostream* os) {
+  *os << "SourcePoint{line=" << point.line << ", column=" << point.column << "}";
+}
+
+void PrintTo(const Coordinates& coords, std::ostream* os) {
+  *os << "Coordinates{line=" << coords.line << ", column=" << coords.column << "}";
+}
+
 void PrintTo(SourceEditIntentKind kind, std::ostream* os) {
   switch (kind) {
     case SourceEditIntentKind::Unknown: *os << "Unknown"; return;
@@ -39,13 +47,30 @@ void PrintTo(SourceEditIntentKind kind, std::ostream* os) {
 
 namespace {
 
+using ::testing::_;
 using ::testing::AllOf;
 using ::testing::ElementsAre;
 using ::testing::Field;
+using ::testing::Gt;
 
 auto SourceByteRangeIs(std::size_t start, std::size_t end) {
   return AllOf(Field("start", &SourceByteRange::start, start),
                Field("end", &SourceByteRange::end, end));
+}
+
+auto SourcePointIs(SourcePoint expected) {
+  return AllOf(Field("line", &SourcePoint::line, expected.line),
+               Field("column", &SourcePoint::column, expected.column));
+}
+
+auto FocusReferenceLinkIs(SourcePoint from, SourcePoint to) {
+  return AllOf(Field("from", &FocusReferenceLink::from, SourcePointIs(from)),
+               Field("to", &FocusReferenceLink::to, SourcePointIs(to)));
+}
+
+auto ActiveFlashIs(std::size_t start, std::size_t end, auto intensityMatcher = Gt(0.0f)) {
+  return AllOf(Field("byteRange", &ActiveFlash::byteRange, SourceByteRangeIs(start, end)),
+               Field("intensity", &ActiveFlash::intensity, intensityMatcher));
 }
 
 auto SourceEditIntentIs(std::size_t offset, std::size_t removedLength, std::string_view replacement,
@@ -58,20 +83,29 @@ auto SourceEditIntentIs(std::size_t offset, std::size_t removedLength, std::stri
 
 auto SourceStyleDecorationIs(std::size_t id, SourceByteRange range, bool ineffective, bool showChip,
                              int chipCount, std::string_view tooltip = "",
-                             SourceByteRange chipRange = {}) {
-  if (chipRange.end <= chipRange.start) {
-    chipRange = range;
-  }
+                             std::optional<SourceByteRange> chipRange = std::nullopt) {
+  const SourceByteRange expectedChipRange = chipRange.value_or(range);
 
   return AllOf(Field("id", &TextEditor::SourceStyleDecoration::id, id),
                Field("range", &TextEditor::SourceStyleDecoration::range,
                      SourceByteRangeIs(range.start, range.end)),
                Field("chipRange", &TextEditor::SourceStyleDecoration::chipRange,
-                     SourceByteRangeIs(chipRange.start, chipRange.end)),
+                     SourceByteRangeIs(expectedChipRange.start, expectedChipRange.end)),
                Field("ineffective", &TextEditor::SourceStyleDecoration::ineffective, ineffective),
                Field("showChip", &TextEditor::SourceStyleDecoration::showChip, showChip),
                Field("chipCount", &TextEditor::SourceStyleDecoration::chipCount, chipCount),
                Field("tooltip", &TextEditor::SourceStyleDecoration::tooltip, std::string(tooltip)));
+}
+
+std::vector<int> CoordinateColumnWidths(const std::vector<Coordinates>& starts,
+                                        const std::vector<Coordinates>& ends) {
+  std::vector<int> widths;
+  widths.reserve(std::min(starts.size(), ends.size()));
+  for (std::size_t index = 0; index < starts.size() && index < ends.size(); ++index) {
+    widths.push_back(ends[index].column - starts[index].column);
+  }
+
+  return widths;
 }
 
 /// In-memory clipboard backing for the test ImGui context. ImGui's default
@@ -1206,11 +1240,12 @@ TEST_F(TextEditorTests, RemapFocusMetadataNoOpLeavesExistingRanges) {
 
   RemapFocusMetadataForSourceEdit(SourceEditIntent{});
 
-  ASSERT_EQ(editor.hoverSourceRanges().size(), 1u);
-  EXPECT_EQ(editor.hoverSourceRanges()[0], (SourceByteRange{.start = 1, .end = 4}));
-  ASSERT_EQ(editor.sourceStyleDecorations().size(), 1u);
-  EXPECT_EQ(editor.sourceStyleDecorations()[0].range, (SourceByteRange{.start = 2, .end = 5}));
-  EXPECT_EQ(editor.sourceStyleDecorations()[0].chipRange, (SourceByteRange{.start = 1, .end = 2}));
+  EXPECT_THAT(editor.hoverSourceRanges(), ElementsAre(SourceByteRangeIs(1, 4)));
+  EXPECT_THAT(editor.sourceStyleDecorations(),
+              ElementsAre(SourceStyleDecorationIs(3, SourceByteRange{.start = 2, .end = 5},
+                                                  /*ineffective=*/false, /*showChip=*/true,
+                                                  /*chipCount=*/0, "",
+                                                  SourceByteRange{.start = 1, .end = 2})));
 }
 
 TEST_F(TextEditorTests, RemapFocusMetadataMapsRangesAndFocusPartitionAfterEdit) {
@@ -1252,16 +1287,17 @@ TEST_F(TextEditorTests, RemapFocusMetadataMapsRangesAndFocusPartitionAfterEdit) 
 
   RemapFocusMetadataForSourceEdit(intent);
 
-  ASSERT_EQ(editor.hoverSourceRanges().size(), 2u);
-  EXPECT_EQ(editor.hoverSourceRanges()[0], (SourceByteRange{.start = 0, .end = 5}));
-  EXPECT_EQ(editor.hoverSourceRanges()[1], (SourceByteRange{.start = 5, .end = 11}));
-  ASSERT_EQ(editor.sourceStyleDecorations().size(), 1u);
-  EXPECT_EQ(editor.sourceStyleDecorations()[0].range, (SourceByteRange{.start = 5, .end = 11}));
-  EXPECT_EQ(editor.sourceStyleDecorations()[0].chipRange, (SourceByteRange{.start = 5, .end = 5}));
+  EXPECT_THAT(editor.hoverSourceRanges(),
+              ElementsAre(SourceByteRangeIs(0, 5), SourceByteRangeIs(5, 11)));
+  EXPECT_THAT(editor.sourceStyleDecorations(),
+              ElementsAre(SourceStyleDecorationIs(9, SourceByteRange{.start = 5, .end = 11},
+                                                  /*ineffective=*/false, /*showChip=*/true,
+                                                  /*chipCount=*/0, "",
+                                                  SourceByteRange{.start = 5, .end = 5})));
   EXPECT_TRUE(editor.hasFocusPartition());
-  ASSERT_EQ(ActiveFocusPartition().referenceLinks.size(), 1u);
-  EXPECT_EQ(ActiveFocusPartition().referenceLinks[0].from, (SourcePoint{.line = 0, .column = 5}));
-  EXPECT_EQ(ActiveFocusPartition().referenceLinks[0].to, (SourcePoint{.line = 2, .column = 0}));
+  EXPECT_THAT(ActiveFocusPartition().referenceLinks,
+              ElementsAre(FocusReferenceLinkIs(SourcePoint{.line = 0, .column = 5},
+                                               SourcePoint{.line = 2, .column = 0})));
 }
 
 TEST_F(TextEditorTests, ContentUpdateHookRunsForShellEdits) {
@@ -1369,9 +1405,7 @@ TEST_F(TextEditorTests, SnippetTypingPropagatesRepeatedPlaceholderText) {
   EXPECT_FALSE(keepAutocompleteOpen);
   EXPECT_TRUE(hasWrittenLetter);
   EXPECT_EQ(editor.getText(), "<x>x</x>");
-  ASSERT_EQ(SnippetStarts().size(), 3u);
-  EXPECT_EQ(SnippetEnds()[0].column - SnippetStarts()[0].column, 1);
-  EXPECT_EQ(SnippetEnds()[1].column - SnippetStarts()[1].column, 1);
+  EXPECT_THAT(CoordinateColumnWidths(SnippetStarts(), SnippetEnds()), ElementsAre(1, 1, 1));
 }
 
 TEST_F(TextEditorTests, AutocompleteSelectReplacesProviderRange) {
@@ -2152,9 +2186,7 @@ TEST_F(TextEditorTests, ExternalSourceEditQueuesRenderedFlashDecoration) {
 
   ASSERT_TRUE(HasActiveSourceFlash());
   const std::vector<ActiveFlash> flashes = ActiveSourceFlashes();
-  ASSERT_EQ(flashes.size(), 1u);
-  EXPECT_EQ(flashes[0].byteRange, (SourceByteRange{.start = 5, .end = 9}));
-  EXPECT_GT(flashes[0].intensity, 0.0f);
+  EXPECT_THAT(flashes, ElementsAre(ActiveFlashIs(5, 9, Gt(0.0f))));
 }
 
 TEST_F(TextEditorTests, ExternalSourceEditInsideSelectionExtendsSelection) {
@@ -2876,10 +2908,10 @@ TEST_F(TextEditorTests, AutocompleteParseSnippetReplacesRepeatedPlaceholders) {
   EXPECT_TRUE(IsSnippet());
   EXPECT_EQ(SnippetIds(), (std::vector<int>{1, 2, 1, 1}));
   EXPECT_EQ(SnippetHighlights(), (std::vector<bool>{true, true, false, false}));
-  ASSERT_EQ(SnippetStarts().size(), 4u);
-  ASSERT_EQ(SnippetEnds().size(), 4u);
-  EXPECT_EQ(SnippetStarts()[0], Coordinates(3, 5));
-  EXPECT_EQ(SnippetEnds()[0], Coordinates(3, 9));
+  EXPECT_THAT(SnippetStarts(), ElementsAre(Coordinates(3, 5), Coordinates(3, 14),
+                                           Coordinates(3, 20), Coordinates(3, 26)));
+  EXPECT_THAT(SnippetEnds(), ElementsAre(Coordinates(3, 9), Coordinates(3, 18), Coordinates(3, 24),
+                                         Coordinates(3, 30)));
 }
 
 TEST_F(TextEditorTests, AutocompleteParseSnippetWithoutTagsClearsSnippetState) {

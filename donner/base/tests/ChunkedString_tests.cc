@@ -3,10 +3,24 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <initializer_list>
+#include <vector>
+
 namespace donner {
 
+using ::testing::ElementsAre;
 using ::testing::Eq;
 using ::testing::StrEq;
+
+std::vector<char> CharactersAt(const ChunkedString& chunks, std::initializer_list<size_t> indexes) {
+  std::vector<char> result;
+  result.reserve(indexes.size());
+  for (size_t index : indexes) {
+    result.push_back(chunks[index]);
+  }
+
+  return result;
+}
 
 /**
  * Construct an empty ChunkedString and verify its size.
@@ -686,9 +700,7 @@ TEST(ChunkedString, SubscriptOperator) {
   {
     // Single chunk
     ChunkedString chunks(std::string_view("hello"));
-    EXPECT_EQ(chunks[0], 'h');
-    EXPECT_EQ(chunks[1], 'e');
-    EXPECT_EQ(chunks[4], 'o');
+    EXPECT_THAT(CharactersAt(chunks, {0, 1, 4}), ElementsAre('h', 'e', 'o'));
   }
 
   {
@@ -698,11 +710,7 @@ TEST(ChunkedString, SubscriptOperator) {
     chunks.append(std::string_view(" "));
     chunks.append(std::string_view("world"));
 
-    EXPECT_EQ(chunks[0], 'h');
-    EXPECT_EQ(chunks[4], 'o');
-    EXPECT_EQ(chunks[5], ' ');
-    EXPECT_EQ(chunks[6], 'w');
-    EXPECT_EQ(chunks[10], 'd');
+    EXPECT_THAT(CharactersAt(chunks, {0, 4, 5, 6, 10}), ElementsAre('h', 'o', ' ', 'w', 'd'));
   }
 
   // We remove the out-of-range test since operator[] now uses assert
