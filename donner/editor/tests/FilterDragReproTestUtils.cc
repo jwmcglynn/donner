@@ -19,6 +19,9 @@
 
 #include "donner/editor/tests/FilterDragReproTestUtils.h"
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -50,10 +53,13 @@
 #include "donner/svg/compositor/ScopedCompositorHint.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererInterface.h"
-#include "gtest/gtest.h"
 
 namespace donner::editor::filter_drag_repro {
 namespace {
+
+using ::testing::IsEmpty;
+using ::testing::Not;
+using ::testing::SizeIs;
 
 bool IsGraphicsElement(const svg::SVGElement& element) {
   return element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
@@ -400,10 +406,10 @@ void RunFilterDragReproScenario(FilterDragReproResult* out) {
   }
 
   ReplayResults r = ReplayRepro(reproPath, svgPath);
-  ASSERT_FALSE(r.frames.empty()) << "repro produced zero frames";
-  ASSERT_EQ(r.mouseDownFrameIndices.size(), 2u)
+  ASSERT_THAT(r.frames, Not(IsEmpty())) << "repro produced zero frames";
+  ASSERT_THAT(r.mouseDownFrameIndices, SizeIs(2u))
       << "expected exactly two mouse-down events in the repro (first drag, second drag)";
-  ASSERT_EQ(r.mouseUpFrameIndices.size(), 2u) << "expected two mouse-up events in the repro";
+  ASSERT_THAT(r.mouseUpFrameIndices, SizeIs(2u)) << "expected two mouse-up events in the repro";
 
   const uint64_t firstDown = r.mouseDownFrameIndices[0];
   const uint64_t firstUp = r.mouseUpFrameIndices[0];
@@ -431,14 +437,15 @@ void RunFilterDragReproScenario(FilterDragReproResult* out) {
   std::cerr << "[FilterDragRepro] fast-path counters at end: fast=" << r.fastPathFrames
             << " slowWithDirty=" << r.slowPathFramesWithDirty << " noDirty=" << r.noDirtyFrames
             << "\n";
-  ASSERT_EQ(r.selectionElementIds.size(), 2u);
+  ASSERT_THAT(r.selectionElementIds, SizeIs(2u));
+  ASSERT_THAT(r.selectionFilterAncestorIds, SizeIs(2u));
   std::cerr << "[FilterDragRepro] firstSel id=" << r.selectionElementIds[0]
             << " filterAncestor=" << r.selectionFilterAncestorIds[0] << "\n";
   std::cerr << "[FilterDragRepro] secondSel id=" << r.selectionElementIds[1]
             << " filterAncestor=" << r.selectionFilterAncestorIds[1] << "\n";
 
-  ASSERT_EQ(r.selectionAfterMouseUp.size(), 2u);
-  ASSERT_EQ(r.selectionSizesAfterMouseUp.size(), 2u);
+  ASSERT_THAT(r.selectionAfterMouseUp, SizeIs(2u));
+  ASSERT_THAT(r.selectionSizesAfterMouseUp, SizeIs(2u));
   const Entity firstSel = r.selectionAfterMouseUp[0];
   const Entity secondSel = r.selectionAfterMouseUp[1];
   out->firstSelectionExists = (firstSel != entt::null);

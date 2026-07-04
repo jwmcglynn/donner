@@ -1,9 +1,12 @@
 #include "donner/editor/CompositedPresentation.h"
 
-#include "gtest/gtest.h"
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
 
 namespace donner::editor {
 namespace {
+
+using ::testing::ElementsAre;
 
 using Phase = CompositedPresentation::Phase;
 
@@ -308,7 +311,7 @@ TEST(CompositedPresentationTest, ActiveDragKeepsGroupedSelectionPrewarmEntities)
 
   ASSERT_TRUE(displayed.has_value());
   EXPECT_EQ(displayed->entity, Entity(7));
-  EXPECT_EQ(displayed->extraEntities, std::vector<Entity>{Entity(8)})
+  EXPECT_THAT(displayed->extraEntities, ElementsAre(Entity(8)))
       << "Selection-prewarmed grouped tiles must remain tied to the active drag group so the "
          "first live drag frames translate every unbundled component.";
   EXPECT_EQ(displayed->dragGeneration, active.dragGeneration);
