@@ -62,6 +62,29 @@ void PrintTo(const CompositorController::LayerInspectorRow& row, std::ostream* o
       << ", fallbackReasons=" << testing::PrintToString(row.fallbackReasonsText) << "}";
 }
 
+void PrintTo(const CompositorController::CompositeTileSnapshot& tile, std::ostream* os) {
+  *os << "CompositeTileSnapshot{id=" << testing::PrintToString(tile.id)
+      << ", label=" << testing::PrintToString(tile.label)
+      << ", kind=" << static_cast<int>(tile.kind)
+      << ", bitmapDims=" << testing::PrintToString(tile.bitmapDims)
+      << ", generation=" << tile.generation << ", immediate=" << tile.immediate
+      << ", staticHeuristicImmediate=" << tile.staticHeuristicImmediate
+      << ", dynamicHeuristicImmediate=" << tile.dynamicHeuristicImmediate
+      << ", demotedDynamicImmediate=" << tile.demotedDynamicImmediate
+      << ", hasValidBitmap=" << tile.hasValidBitmap
+      << ", thumbnailPixels=" << tile.thumbnailPixels.size()
+      << ", spanRangeLabel=" << testing::PrintToString(tile.spanRangeLabel) << "}";
+}
+
+void PrintTo(const CompositorTile& tile, std::ostream* os) {
+  *os << "CompositorTile{tileId=" << tile.tileId << ", generation=" << tile.generation
+      << ", layerEntity=" << testing::PrintToString(tile.layerEntity)
+      << ", bitmapDims=" << testing::PrintToString(tile.bitmapDims)
+      << ", bitmapEmpty=" << tile.bitmap.empty()
+      << ", textureSnapshot=" << (tile.textureSnapshot != nullptr)
+      << ", isDragTarget=" << tile.isDragTarget << ", immediate=" << tile.immediate << "}";
+}
+
 namespace {
 
 using MockRendererInterface = tests::MockRendererInterface;
@@ -237,6 +260,17 @@ MATCHER_P(CachedSegmentUploadTileHasBitmap, hasBitmap,
   return false;
 }
 
+MATCHER(ImmediateUploadTileWithBitmap, "an immediate upload tile with bitmap payload") {
+  if (arg.immediate && !arg.bitmap.empty()) {
+    return true;
+  }
+
+  *result_listener << "tileId=" << arg.tileId << ", immediate=" << arg.immediate
+                   << ", bitmapEmpty=" << arg.bitmap.empty()
+                   << ", bitmapDims=" << testing::PrintToString(arg.bitmapDims);
+  return false;
+}
+
 MATCHER(UploadTileWithoutBitmapOrTexture, "an upload tile without bitmap or texture payload") {
   if (arg.bitmap.empty() && arg.textureSnapshot == nullptr) {
     return true;
@@ -247,6 +281,42 @@ MATCHER(UploadTileWithoutBitmapOrTexture, "an upload tile without bitmap or text
                    << ", bitmapEmpty=" << arg.bitmap.empty()
                    << ", textureSnapshot=" << (arg.textureSnapshot != nullptr)
                    << ", bitmapDims=" << testing::PrintToString(arg.bitmapDims);
+  return false;
+}
+
+MATCHER_P3(ImmediateCompositeSegment, staticHeuristicImmediate, dynamicHeuristicImmediate,
+           labelSubstr,
+           std::string("an immediate composite segment containing ") +
+               testing::PrintToString(labelSubstr)) {
+  std::vector<std::string> failures;
+  if (arg.kind != CompositeTileSnapshot::Kind::Segment) {
+    failures.push_back("kind=" + testing::PrintToString(static_cast<int>(arg.kind)));
+  }
+  if (!arg.immediate) {
+    failures.push_back("immediate=false");
+  }
+  if (arg.staticHeuristicImmediate != staticHeuristicImmediate) {
+    failures.push_back("staticHeuristicImmediate=" +
+                       testing::PrintToString(arg.staticHeuristicImmediate));
+  }
+  if (arg.dynamicHeuristicImmediate != dynamicHeuristicImmediate) {
+    failures.push_back("dynamicHeuristicImmediate=" +
+                       testing::PrintToString(arg.dynamicHeuristicImmediate));
+  }
+  if (arg.demotedDynamicImmediate) {
+    failures.push_back("demotedDynamicImmediate=true");
+  }
+  if (arg.spanRangeLabel.find(labelSubstr) == std::string::npos) {
+    failures.push_back("spanRangeLabel=" + testing::PrintToString(arg.spanRangeLabel));
+  }
+
+  if (failures.empty()) {
+    return true;
+  }
+
+  *result_listener << "id=" << testing::PrintToString(arg.id)
+                   << ", label=" << testing::PrintToString(arg.label)
+                   << ", failures=" << testing::PrintToString(failures);
   return false;
 }
 
@@ -1434,22 +1504,12 @@ TEST_F(CompositorControllerTest, CheapStaticSpanPlanChoosesImmediate) {
 
   const auto immediateTiles =
       compositor.snapshotTilesForUpload(CompositorTileBitmapPayload::ImmediateOnly);
-  const auto immediateTileIt =
-      std::find_if(immediateTiles.begin(), immediateTiles.end(),
-                   [](const CompositorTile& tile) { return tile.immediate; });
-  ASSERT_NE(immediateTileIt, immediateTiles.end());
-  EXPECT_FALSE(immediateTileIt->bitmap.empty());
+  EXPECT_THAT(immediateTiles, Contains(ImmediateUploadTileWithBitmap()));
 
   const auto inspectorTiles = compositor.snapshotCompositeTiles();
-  const auto inspectorTileIt =
-      std::find_if(inspectorTiles.begin(), inspectorTiles.end(), [](const auto& tile) {
-        return tile.kind == CompositorController::CompositeTileSnapshot::Kind::Segment &&
-               tile.immediate;
-      });
-  ASSERT_NE(inspectorTileIt, inspectorTiles.end());
-  EXPECT_TRUE(inspectorTileIt->staticHeuristicImmediate);
-  EXPECT_FALSE(inspectorTileIt->dynamicHeuristicImmediate);
-  EXPECT_THAT(inspectorTileIt->spanRangeLabel, HasSubstr("rect#cheap"));
+  EXPECT_THAT(inspectorTiles, Contains(ImmediateCompositeSegment(
+                                  /*staticHeuristicImmediate=*/true,
+                                  /*dynamicHeuristicImmediate=*/false, "rect#cheap")));
 }
 
 TEST_F(CompositorControllerTest, ImmediateStaticSpanComposesDirectlyIntoCurrentFrame) {
@@ -1653,15 +1713,9 @@ TEST_F(CompositorControllerTest, DynamicImmediateSpanStaysImmediateDespiteSlowMe
   EXPECT_EQ(stats.cachedTileCount, 0);
 
   const auto inspectorTiles = compositor.snapshotCompositeTiles();
-  const auto inspectorTileIt =
-      std::find_if(inspectorTiles.begin(), inspectorTiles.end(), [](const auto& tile) {
-        return tile.kind == CompositorController::CompositeTileSnapshot::Kind::Segment &&
-               tile.dynamicHeuristicImmediate;
-      });
-  ASSERT_NE(inspectorTileIt, inspectorTiles.end());
-  EXPECT_TRUE(inspectorTileIt->immediate);
-  EXPECT_FALSE(inspectorTileIt->demotedDynamicImmediate);
-  EXPECT_THAT(inspectorTileIt->spanRangeLabel, HasSubstr("rect#medium"));
+  EXPECT_THAT(inspectorTiles, Contains(ImmediateCompositeSegment(/*staticHeuristicImmediate=*/false,
+                                                                 /*dynamicHeuristicImmediate=*/true,
+                                                                 "rect#medium")));
 }
 
 TEST_F(CompositorControllerTest, PaintResourceStaticSpanPlanChoosesCachedTile) {
