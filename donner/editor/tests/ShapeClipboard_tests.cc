@@ -13,6 +13,7 @@
 #include "donner/editor/ShapeClipboardPayload.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
+#include "donner/svg/SVGRectElement.h"
 #include "donner/svg/parser/SVGParser.h"
 
 namespace donner::editor {
@@ -109,6 +110,14 @@ TEST(ShapeClipboardCommands, CopySerializesStableFragment) {
 TEST(ShapeClipboardCommands, CopyEmptySelectionReturnsNullopt) {
   svg::SVGDocument document = Parse(kTwoRects);
   EXPECT_FALSE(copySelectionToPayload(document, {}).has_value());
+}
+
+TEST(ShapeClipboardCommands, CopyProgrammaticElementWithoutSourceMappingReturnsNullopt) {
+  svg::SVGDocument document;
+  svg::SVGRectElement rect = svg::SVGRectElement::Create(document);
+  document.svgElement().appendChild(rect);
+
+  EXPECT_FALSE(copySelectionToPayload(document, {rect}).has_value());
 }
 
 TEST(ShapeClipboardCommands, CopyGroupSelectionMarksPayloadAsGroupSelection) {
@@ -285,6 +294,33 @@ TEST(ShapeClipboardCommands, PasteIntoSelectedGroupLandsInsideGroup) {
   EXPECT_LT(wrapperPos, groupClose);
 }
 
+TEST(ShapeClipboardCommands, PasteIntoNestedSelectedGroupUsesMatchingCloseTag) {
+  constexpr std::string_view kNested =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+<g id="outer"><g id="inner"><rect id="inside" x="0" y="0" width="4" height="4"/></g></g>
+<rect id="loose" x="50" y="50" width="4" height="4"/>
+</svg>)";
+  svg::SVGDocument document = Parse(kNested);
+  std::optional<ShapeClipboardPayload> payload =
+      copySelectionToPayload(document, Select(document, {"loose"}));
+  ASSERT_TRUE(payload.has_value());
+
+  std::optional<svg::SVGElement> outer = document.querySelector("#outer");
+  ASSERT_TRUE(outer.has_value());
+  PreparePasteResult result =
+      preparePaste(document, *payload, PastePlacement::EndOfRootOffset, outer);
+  ASSERT_TRUE(result.ok) << result.error;
+
+  const std::size_t wrapperPos = result.mergedSource.find("loose_pasted");
+  const std::size_t innerClose = result.mergedSource.find("</g>");
+  const std::size_t outerClose = result.mergedSource.find("</g>", innerClose + 4);
+  ASSERT_NE(wrapperPos, std::string::npos);
+  ASSERT_NE(innerClose, std::string::npos);
+  ASSERT_NE(outerClose, std::string::npos);
+  EXPECT_GT(wrapperPos, innerClose);
+  EXPECT_LT(wrapperPos, outerClose);
+}
+
 TEST(ShapeClipboardCommands, PasteWithNonGroupSelectedElementFallsBackToRoot) {
   svg::SVGDocument document = Parse(kTwoRects);
   std::optional<ShapeClipboardPayload> payload =
@@ -325,6 +361,33 @@ TEST(ShapeClipboardCommands, FailedPasteLeavesDocumentUnchanged) {
   EXPECT_TRUE(result.mergedSource.empty());
   // The destination document source is untouched (preparePaste never mutates).
   EXPECT_EQ(std::string(document.source()), sourceBefore);
+}
+
+TEST(ShapeClipboardCommands, FailedPasteWithoutDestinationSourceText) {
+  svg::SVGDocument document;
+  ShapeClipboardPayload payload;
+  payload.svgFragment = R"(<rect id="shape" x="0" y="0" width="5" height="5"/>)";
+  payload.sourceElementIds = {"shape"};
+
+  PreparePasteResult result = preparePaste(document, payload, PastePlacement::EndOfRootOffset);
+
+  EXPECT_FALSE(result.ok);
+  EXPECT_THAT(result.error, HasSubstr("no source text"));
+  EXPECT_TRUE(result.mergedSource.empty());
+}
+
+TEST(ShapeClipboardCommands, FailedPasteWithoutExplicitRootCloseTag) {
+  svg::SVGDocument document =
+      Parse(R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"/>)");
+  ShapeClipboardPayload payload;
+  payload.svgFragment = R"(<rect id="shape" x="0" y="0" width="5" height="5"/>)";
+  payload.sourceElementIds = {"shape"};
+
+  PreparePasteResult result = preparePaste(document, payload, PastePlacement::EndOfRootOffset);
+
+  EXPECT_FALSE(result.ok);
+  EXPECT_THAT(result.error, HasSubstr("root <svg>"));
+  EXPECT_TRUE(result.mergedSource.empty());
 }
 
 TEST(ShapeClipboardCommands, FailedPasteOnMalformedFragment) {
