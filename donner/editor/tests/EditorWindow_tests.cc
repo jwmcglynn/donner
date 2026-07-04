@@ -1,5 +1,6 @@
 #include "donner/editor/gui/EditorWindow.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -52,6 +53,7 @@ namespace {
 #if defined(DONNER_EDITOR_WGPU)
 using svg::test::Near;
 using svg::test::Rgba;
+using ::testing::SizeIs;
 
 std::array<std::uint8_t, 4> PixelAt(const svg::RendererBitmap& bitmap, int x, int y) {
   const std::size_t offset =
@@ -777,7 +779,7 @@ TEST(EditorWindowTest, WgpuPresentsFilledPenCreatedPromotedLayerAfterStyleMutati
   ASSERT_TRUE(app.flushFrame());
   ASSERT_TRUE(penTool.commitOpenPath(app));
   ASSERT_TRUE(app.flushFrame());
-  ASSERT_EQ(app.selectedElements().size(), 1u);
+  ASSERT_THAT(app.selectedElements(), SizeIs(1u));
   const Entity targetEntity = app.selectedElements().front().unsafeEntityHandle().entity();
 
   const std::optional<RenderResult> before = RenderSelectedPromotedPreview(
@@ -882,7 +884,7 @@ TEST(EditorWindowTest, WgpuPresentsFilledSplashPenLayerAfterStyleMutation) {
   penTool.onMouseDown(app, Vector2d(313.0, 121.5), MouseModifiers{.pixelsPerDocUnit = 1.0});
   ASSERT_TRUE(app.flushFrame());
   ASSERT_FALSE(penTool.isDrafting());
-  ASSERT_EQ(app.selectedElements().size(), 1u);
+  ASSERT_THAT(app.selectedElements(), SizeIs(1u));
   const Entity targetEntity = app.selectedElements().front().unsafeEntityHandle().entity();
 
   const std::optional<RenderResult> before = RenderSelectedPromotedPreview(
@@ -985,7 +987,7 @@ TEST(EditorWindowTest, WgpuPenFillReplayViewportPublishesFilledLayerTile) {
   ASSERT_TRUE(app.flushFrame());
   penTool.onMouseDown(app, Vector2d(392.0, 228.5), MouseModifiers{.pixelsPerDocUnit = 1.0});
   ASSERT_TRUE(app.flushFrame());
-  ASSERT_EQ(app.selectedElements().size(), 1u);
+  ASSERT_THAT(app.selectedElements(), SizeIs(1u));
   const Entity targetEntity = app.selectedElements().front().unsafeEntityHandle().entity();
 
   const EditorRasterViewport replayRasterViewport =
@@ -1111,7 +1113,7 @@ TEST(EditorWindowTest, WgpuPenFillLiveSourceSyncPublishesFilledLayerTile) {
   penTool.onMouseDown(app, Vector2d(10.0, 10.0), MouseModifiers{.pixelsPerDocUnit = 1.0});
   settle();
   ASSERT_FALSE(penTool.isDrafting());
-  ASSERT_EQ(app.selectedElements().size(), 1u);
+  ASSERT_THAT(app.selectedElements(), SizeIs(1u));
   const Entity targetEntity = app.selectedElements().front().unsafeEntityHandle().entity();
 
   const std::optional<RenderResult> before = RenderSelectedPromotedPreview(
@@ -1262,7 +1264,7 @@ TEST(EditorWindowTest, WgpuPresentsUploadedStraightAlphaBitmapWithStraightBlend)
   GlTextureCache textures(window.geodeDevice());
   textures.initialize();
   textures.uploadComposited(preview);
-  ASSERT_EQ(textures.tiles().size(), 1u);
+  ASSERT_THAT(textures.tiles(), SizeIs(1u));
   ASSERT_NE(textures.tiles().front().texture, 0);
 
   window.beginFrame();
@@ -1479,7 +1481,7 @@ TEST(EditorWindowTest, WgpuPremultipliedTextureSurvivesOnePresentationOwnerRetir
   transientOwner.initialize();
   liveOwner.uploadComposited(sharedSnapshotPreview());
   transientOwner.uploadComposited(sharedSnapshotPreview());
-  ASSERT_EQ(liveOwner.tiles().size(), 1u);
+  ASSERT_THAT(liveOwner.tiles(), SizeIs(1u));
   ASSERT_NE(liveOwner.tiles().front().texture, 0);
   const ImTextureID liveTexture = liveOwner.tiles().front().texture;
 

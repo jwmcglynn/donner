@@ -18,6 +18,7 @@ namespace {
 using ::testing::ElementsAre;
 using ::testing::Field;
 using ::testing::IsEmpty;
+using ::testing::SizeIs;
 
 class PayloadTextureSnapshot final : public svg::RendererTextureSnapshot {
 public:
@@ -322,7 +323,7 @@ TEST(GlTextureCacheTest, UnboundedUploadRetainsSeparateOverviewAcrossBoundedUplo
 
   GlTextureCache cache(device);
   cache.uploadComposited(overviewPreview, RasterViewportForTest(/*viewportBounded=*/false));
-  ASSERT_EQ(cache.tiles().size(), 1u);
+  ASSERT_THAT(cache.tiles(), SizeIs(1u));
   ASSERT_THAT(cache.overviewTiles(), ElementsAre(TileRasterCanvasSizeIs(Vector2i(100, 100))));
   EXPECT_FALSE(cache.activeTilesViewportBounded());
 
@@ -340,7 +341,7 @@ TEST(GlTextureCacheTest, UnboundedUploadRetainsSeparateOverviewAcrossBoundedUplo
 
   cache.uploadComposited(boundedPreview, RasterViewportForTest(/*viewportBounded=*/true));
 
-  ASSERT_EQ(cache.tiles().size(), 1u);
+  ASSERT_THAT(cache.tiles(), SizeIs(1u));
   ASSERT_THAT(cache.overviewTiles(), ElementsAre(TileRasterCanvasSizeIs(Vector2i(100, 100))));
   EXPECT_TRUE(cache.activeTilesViewportBounded());
   const PresentationCoverageDiagnostics coverage = cache.coverageDiagnostics();
@@ -375,7 +376,7 @@ TEST(GlTextureCacheTest, OverviewUploadDoesNotReplaceActiveBoundedTiles) {
 
   GlTextureCache cache(device);
   cache.uploadComposited(boundedPreview, RasterViewportForTest(/*viewportBounded=*/true));
-  ASSERT_EQ(cache.tiles().size(), 1u);
+  ASSERT_THAT(cache.tiles(), SizeIs(1u));
   EXPECT_THAT(cache.overviewTiles(), IsEmpty());
 
   int overviewDestructionCount = 0;
