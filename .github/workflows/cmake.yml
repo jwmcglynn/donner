@@ -7,11 +7,11 @@ on:
     branches: [main, feature/ci-hardening-2026q2]
 
 # Superseded PR pushes cancel their in-flight CMake run so a rapid push storm
-# does not pile up redundant hosted builds. Push runs stay unique (never
-# cancel each other) via run_id in the group key.
+# does not pile up redundant hosted builds. Non-main branch pushes also cancel
+# stale runs; main pushes stay unique via run_id so every main commit gets CI.
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.workflow, github.event.pull_request.number) || format('push-{0}-{1}', github.workflow, github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.workflow, github.event.pull_request.number) || (github.ref == 'refs/heads/main' && format('push-{0}-{1}', github.workflow, github.run_id) || format('push-{0}-{1}', github.workflow, github.ref)) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 jobs:
   gatekeeper:
@@ -126,10 +126,12 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y ccache ninja-build
+          sudo apt-get install -y --no-install-recommends ccache ninja-build
           if [[ "${{ matrix.backend }}" == "skia" ]]; then
-            sudo apt-get install -y pkg-config libfontconfig1-dev libfreetype6-dev
+            sudo apt-get install -y --no-install-recommends \
+              pkg-config libfontconfig1-dev libfreetype6-dev
           fi
+          sudo apt-get clean
 
       # Cache key includes both gen_cmakelists.py AND MODULE.bazel because the
       # generated CMakeLists.txt embeds FetchContent versions extracted from

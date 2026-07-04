@@ -9,8 +9,8 @@ on:
     branches: [main]
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.workflow, github.event.pull_request.number) || format('push-{0}-{1}', github.workflow, github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.workflow, github.event.pull_request.number) || (github.ref == 'refs/heads/main' && format('push-{0}-{1}', github.workflow, github.run_id) || format('push-{0}-{1}', github.workflow, github.ref)) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 permissions:
   contents: read
@@ -21,19 +21,14 @@ permissions:
 # are NOT retried -- a real test failure should surface immediately.
 
 # Self-hosted runner gates (repo Settings -> Variables). Setting
-# SELFHOSTED_LINUX_RUNNER / SELFHOSTED_MACOS_RUNNER to "true" routes the
-# operator's own matching OS lane onto the homelab ARM64 runner and skips the
-# matching GitHub-hosted lane; everyone else stays GitHub-hosted. Gated on BOTH
-# github.actor and github.triggering_actor == jwmcglynn so that no collaborator
-# push -- and no rerun of the operator's run by someone else -- can execute on
-# the runner or poison the shared LAN Bazel cache. Unset is a no-op: behavior
-# is identical to the GitHub-hosted-only workflow.
-#
-# Main CI stays GitHub-hosted so a stuck/offline self-hosted runner can never
-# hang main's required check. PR CI uses the self-hosted lane only for trusted
-# partial-target runs; hosted runners remain the PR fallback for untrusted
-# actors, unavailable self-hosted runners, fallback //... runs, and
-# `ci:full-test` fanout runs. Other branch refs do not run build/test jobs.
+# SELFHOSTED_LINUX_RUNNER / SELFHOSTED_MACOS_RUNNER to "true" routes trusted
+# operator PRs and main pushes onto the matching self-hosted ARM64 runner and
+# skips the matching GitHub-hosted lane. Renovate and non-operator diffs stay
+# GitHub-hosted. Gated on BOTH github.actor and github.triggering_actor ==
+# jwmcglynn so that no collaborator push -- and no rerun of the operator's run
+# by someone else -- can execute on the runner or poison the shared LAN Bazel
+# cache. Unset is a no-op: behavior is identical to the GitHub-hosted-only
+# workflow.
 
 jobs:
   gatekeeper:
@@ -41,6 +36,8 @@ jobs:
     outputs:
       docs_only: ${{ steps.docs_only.outputs.docs_only }}
       is_duplicate_push: ${{ steps.dup_push.outputs.is_duplicate_push }}
+      use_self_hosted_linux: ${{ steps.runner_gate.outputs.use_self_hosted_linux }}
+      use_self_hosted_macos: ${{ steps.runner_gate.outputs.use_self_hosted_macos }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -123,6 +120,94 @@ jobs:
           done <<< "$changed_files"
 
           echo "docs_only=${docs_only}" >> "$GITHUB_OUTPUT"
+
+      - id: runner_gate
+        name: Determine trusted self-hosted runner routing
+        env:
+          ACTOR: ${{ github.actor }}
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ github.ref }}
+          REPOSITORY: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          SELFHOSTED_LINUX_RUNNER: ${{ vars.SELFHOSTED_LINUX_RUNNER }}
+          SELFHOSTED_MACOS_RUNNER: ${{ vars.SELFHOSTED_MACOS_RUNNER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          is_renovate="$(
+            python3 - <<'PY'
+          import json
+          import os
+
+          event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8"))
+          paths = [
+              ("sender", "login"),
+              ("pull_request", "user", "login"),
+              ("head_commit", "author", "username"),
+              ("head_commit", "author", "name"),
+              ("head_commit", "author", "email"),
+              ("head_commit", "committer", "username"),
+              ("head_commit", "committer", "name"),
+              ("head_commit", "committer", "email"),
+              ("pusher", "name"),
+              ("pusher", "email"),
+          ]
+
+          values = []
+          for path in paths:
+              value = event
+              for key in path:
+                  if not isinstance(value, dict):
+                      value = None
+                      break
+                  value = value.get(key)
+              if value:
+                  values.append(str(value))
+
+          print("true" if any("renovate" in value.lower() for value in values) else "false")
+          PY
+          )"
+
+          pr_author="$(
+            python3 - <<'PY'
+          import json
+          import os
+
+          event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8"))
+          print(event.get("pull_request", {}).get("user", {}).get("login", ""))
+          PY
+          )"
+
+          if [[ -z "$pr_author" && "$EVENT_NAME" == "push" && "$REF" == "refs/heads/main" ]]; then
+            if ! pr_author="$(gh api -H "Accept: application/vnd.github+json" \
+              "/repos/$REPOSITORY/commits/$SHA/pulls" \
+              --jq '.[0].user.login // ""')"; then
+              pr_author="unknown"
+            fi
+          fi
+
+          trusted_operator=false
+          if [[ "$ACTOR" == "jwmcglynn" && "$TRIGGERING_ACTOR" == "jwmcglynn" && "$is_renovate" != "true" ]]; then
+            if [[ -z "$pr_author" || "$pr_author" == "jwmcglynn" ]]; then
+              trusted_operator=true
+            fi
+          fi
+
+          use_linux=false
+          use_macos=false
+          if [[ "$trusted_operator" == "true" && "$SELFHOSTED_LINUX_RUNNER" == "true" ]]; then
+            use_linux=true
+          fi
+          if [[ "$trusted_operator" == "true" && "$SELFHOSTED_MACOS_RUNNER" == "true" ]]; then
+            use_macos=true
+          fi
+
+          echo "use_self_hosted_linux=$use_linux" >> "$GITHUB_OUTPUT"
+          echo "use_self_hosted_macos=$use_macos" >> "$GITHUB_OUTPUT"
+          echo "trusted_operator=$trusted_operator renovate=$is_renovate pr_author=$pr_author linux=$use_linux macos=$use_macos"
 
   determine-targets:
     runs-on: ubuntu-24.04
@@ -358,7 +443,7 @@ jobs:
     # required Linux path canceled.
     runs-on: ubuntu-24.04
     needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && (needs.determine-targets.outputs.fallback == 'true' || needs.determine-targets.outputs.full_test == 'true' || needs.determine-targets.outputs.large_change == 'true' || vars.SELFHOSTED_LINUX_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn'))) && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && (needs.gatekeeper.outputs.use_self_hosted_linux != 'true' || needs.determine-targets.outputs.large_change == 'true') }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -371,10 +456,12 @@ jobs:
           retry_wait_seconds: 15
           command: |
             sudo apt-get update
-            sudo apt-get install -y pkg-config libfontconfig1-dev libfreetype6-dev \
+            sudo apt-get install -y --no-install-recommends \
+              pkg-config libfontconfig1-dev libfreetype6-dev \
               mesa-vulkan-drivers libvulkan1 libvulkan-dev \
               libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
               libgl1-mesa-dev libosmesa6 clang-tidy-19
+            sudo apt-get clean
 
       - name: Setup Bazel
         uses: bazel-contrib/setup-bazel@0.19.0
@@ -429,10 +516,9 @@ jobs:
 
 
   # Operator's ARM64 Linux runs on the operator's self-hosted runner.
-  # Replaces `linux` for small trusted partial-target operator runs (extra arch
-  # coverage + homelab cache). Full fallback and broad PR runs stay on hosted
-  # Linux because the self-hosted lane is tuned for narrow affected-target
-  # checks.
+  # Replaces `linux` for trusted operator PRs and main pushes (extra arch
+  # coverage + homelab cache). Renovate and non-operator runs stay hosted.
+  # Large-change PRs (over the changed-file cap) stay on hosted Linux.
   # The NixOS host pre-provisions the toolchain (fontconfig, freetype, mesa,
   # vulkan, X11, clang-tidy) and writes bazel-cache1 over LAN gRPC, so there
   # is no apt/setup-bazel step. The runner intentionally has no host GPU
@@ -442,27 +528,24 @@ jobs:
   linux-self-hosted:
     runs-on: [self-hosted, linux, arm64]
     needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && github.event_name == 'pull_request' && needs.gatekeeper.outputs.docs_only != 'true' && needs.determine-targets.outputs.fallback != 'true' && needs.determine-targets.outputs.large_change != 'true' && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' && needs.determine-targets.outputs.large_change != 'true' }}
     # RE-availability SLA lane. A healthy affected-target run is ~21 min; bound
     # it at 60 min for buffer while a wedged/degraded RE endpoint still
     # fast-fails instead of silently tailing for hours.
     timeout-minutes: 60
-    # Admission control on the shared RE path. The Linux self-hosted lanes
-    # execute on bazel-re1 (a 96-vcpu Incus VM on event-horizon, reached via the
-    # runner bazelrc --config=ci -> ci-re -> remote_executor=bazel-re1:50051),
-    # which the priority dev host dev1 also uses; the runner-side work runs on
-    # gha-host1 (8 vcpu shared by all four runners). Two-plus concurrent operator
-    # PRs oversubscribe that path ~20x and crawl into the 60 min timeout (measured
-    # 2026-07-10; see docs/design_docs/0029-2-ci_runtime.md appendix). This
+    # Admission control on the shared remote-execution backend. Both self-hosted
+    # lanes execute on a shared remote-execution backend that an interactive
+    # development host also uses with priority; two-plus concurrent operator PRs
+    # oversubscribe it and crawl into the 60 min timeout (measured). This
     # per-lane group serializes linux-self-hosted across all of the operator's
     # in-flight PRs so at most one runs at a time; the sibling
     # coverage-self-hosted lane has its own group, so a Linux build and a
     # coverage build may overlap but two of the same heavy lane never do.
-    # Bounding CI's demand on bazel-re1 also protects dev1's interactive
+    # Bounding CI's demand on the backend also protects the interactive host's
     # latency. cancel-in-progress: false never kills a running build (a
     # superseded push to the SAME PR is already cancelled by the workflow-level
     # concurrency group). This job-level group composes with the workflow-level
-    # group and with the centralized routing in PR #818 (it is gate-agnostic).
+    # group and with the centralized routing (it is gate-agnostic).
     concurrency:
       group: donner-selfhosted-linux-re
       cancel-in-progress: false
@@ -478,8 +561,8 @@ jobs:
       # SSH. Keep artifacts small; retention is 3 days. DIAG_DIR is exported
       # from the first step ($RUNNER_TEMP; the `runner` context is not
       # available in job-level env).
-      # Build without the Bytes: the runner microvm is a thin RE client on a
-      # CPU-capped host. Downloading every toplevel output (unstripped ARM64
+      # Build without the Bytes: the runner is a thin remote-execution client on
+      # a CPU-capped host. Downloading every toplevel output (unstripped ARM64
       # test binaries) added minutes of pure transfer per run. Tests execute
       # remotely, so only test logs/XML need to come back.
       DIAG_BUILD_FLAGS: "--remote_download_outputs=minimal"
@@ -672,7 +755,7 @@ jobs:
   macos:
     runs-on: macos-26
     needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && (needs.determine-targets.outputs.fallback == 'true' || needs.determine-targets.outputs.full_test == 'true' || vars.SELFHOSTED_MACOS_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn'))) && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos != 'true' }}
     env:
       # Xcode's libc++ marks std::format floating-point support as macOS 13.3+.
       # Set the CI deployment target explicitly so hosted and self-hosted macOS
@@ -739,13 +822,13 @@ jobs:
 
 
   # Operator's ARM64 macOS runs on the operator's self-hosted runner.
-  # Replaces `macos` for trusted partial-target operator runs. Full fallback
-  # runs stay on hosted macOS. The host pre-provisions Bazelisk, Homebrew
+  # Replaces `macos` for trusted operator PRs and main pushes. Renovate and
+  # non-operator runs stay hosted. The host pre-provisions Bazelisk, Homebrew
   # llvm@19, and Xcode Command Line Tools.
   macos-self-hosted:
     runs-on: [self-hosted, macOS, ARM64]
     needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && github.event_name == 'pull_request' && needs.gatekeeper.outputs.docs_only != 'true' && needs.determine-targets.outputs.fallback != 'true' && vars.SELFHOSTED_MACOS_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' }}
     # RE-availability SLA lane. Bound at 60 min so healthy affected-target
     # runs have buffer while RE degradation still fast-fails instead of tailing
     # for hours on the capped host.
