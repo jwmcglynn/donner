@@ -39,7 +39,7 @@ TEST(SoftWrapTest, UsesPreviousLineIndentForNonElementText) {
 }
 
 TEST(SoftWrapTest, EmptyLineStillProducesOneVisualRow) {
-  EXPECT_EQ(ComputeSoftWrapSegments("", 20), (std::vector<SoftWrapSegment>{SoftWrapSegment{}}));
+  EXPECT_THAT(ComputeSoftWrapSegments("", 20), testing::ElementsAre(SoftWrapSegmentIs(0, false)));
 }
 
 }  // namespace
