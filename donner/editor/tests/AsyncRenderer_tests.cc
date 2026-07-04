@@ -50,9 +50,12 @@ using svg::test::Rgba;
 using ::testing::AllOf;
 using ::testing::Contains;
 using ::testing::DoubleNear;
+using ::testing::Each;
 using ::testing::ElementsAre;
 using ::testing::Field;
 using ::testing::Gt;
+using ::testing::IsEmpty;
+using ::testing::Not;
 using ::testing::SizeIs;
 
 bool IsGraphicsElement(const svg::SVGElement& element) {
@@ -153,6 +156,131 @@ MATCHER_P(ByteVectorEq, expected,
   *result_listener << "first mismatch at byte " << index
                    << ": actual=" << static_cast<int>(*mismatch.first)
                    << ", expected=" << static_cast<int>(*mismatch.second);
+  return false;
+}
+
+MATCHER(CompositedTileWithPresentationPayload, "a composited tile with presentation payload") {
+  if (HasPresentationPayload(arg)) {
+    return true;
+  }
+
+  *result_listener << "id=" << testing::PrintToString(arg.id)
+                   << ", kind=" << static_cast<int>(arg.kind)
+                   << ", layerEntity=" << testing::PrintToString(arg.layerEntity)
+                   << ", isDragTarget=" << testing::PrintToString(arg.isDragTarget);
+  return false;
+}
+
+MATCHER_P3(ReusesTileGenerationsAndOmitNonDragBitmaps, previousGenerations, allowNewDragTarget,
+           phase,
+           std::string("tiles reuse generations and omit non-drag bitmap payloads during ") +
+               phase) {
+  std::vector<std::string> unexpectedNewTiles;
+  std::vector<std::string> changedGenerations;
+  std::vector<std::string> nonDragBitmaps;
+
+  for (const RenderResult::CompositedTile& tile : arg) {
+    const auto it = previousGenerations.find(tile.id);
+    if (it == previousGenerations.end()) {
+      if (allowNewDragTarget && tile.isDragTarget) {
+        continue;
+      }
+
+      std::ostringstream label;
+      label << tile.id << " generation=" << tile.generation
+            << " isDragTarget=" << tile.isDragTarget;
+      unexpectedNewTiles.push_back(label.str());
+      continue;
+    }
+
+    if (it->second != tile.generation) {
+      std::ostringstream label;
+      label << tile.id << " " << it->second << "->" << tile.generation;
+      changedGenerations.push_back(label.str());
+    }
+
+    if (!tile.isDragTarget && !tile.bitmap.empty()) {
+      std::ostringstream label;
+      label << tile.id << " dimensions=(" << tile.bitmap.dimensions.x << ", "
+            << tile.bitmap.dimensions.y << ") pixels=" << tile.bitmap.pixels.size()
+            << " rowBytes=" << tile.bitmap.rowBytes;
+      nonDragBitmaps.push_back(label.str());
+    }
+  }
+
+  if (unexpectedNewTiles.empty() && changedGenerations.empty() && nonDragBitmaps.empty()) {
+    return true;
+  }
+
+  bool wroteDetail = false;
+  const auto appendDetail = [&](const char* label, const std::vector<std::string>& values) {
+    if (values.empty()) {
+      return;
+    }
+
+    if (wroteDetail) {
+      *result_listener << "; ";
+    }
+
+    *result_listener << label << "=" << testing::PrintToString(values);
+    wroteDetail = true;
+  };
+  appendDetail("unexpectedNewTiles", unexpectedNewTiles);
+  appendDetail("changedGenerations", changedGenerations);
+  appendDetail("nonDragBitmaps", nonDragBitmaps);
+  return false;
+}
+
+MATCHER_P(MetadataOnlyReuseOfDragTile, previous,
+          std::string("a metadata-only reuse of drag tile ") +
+              testing::PrintToString(previous.id)) {
+  std::vector<std::string> failures;
+  if (arg.id != previous.id) {
+    failures.push_back("id=" + testing::PrintToString(arg.id) +
+                       " expected=" + testing::PrintToString(previous.id));
+  }
+  if (arg.generation != previous.generation) {
+    failures.push_back("generation=" + testing::PrintToString(arg.generation) +
+                       " expected=" + testing::PrintToString(previous.generation));
+  }
+  if (HasPresentationPayload(arg)) {
+    failures.push_back("has presentation payload");
+  }
+  if (arg.dragTranslationDoc == previous.dragTranslationDoc) {
+    failures.push_back("dragTranslationDoc did not change from " +
+                       testing::PrintToString(previous.dragTranslationDoc));
+  }
+
+  if (failures.empty()) {
+    return true;
+  }
+
+  *result_listener << testing::PrintToString(failures);
+  return false;
+}
+
+MATCHER(LayerInspectorRowWithoutThumbnailPixels, "a layer inspector row without thumbnail pixels") {
+  if (arg.thumbnailPixels.empty()) {
+    return true;
+  }
+
+  *result_listener << "layerId=" << arg.layerId << ", entity=" << testing::PrintToString(arg.entity)
+                   << ", thumbnailDims=(" << arg.thumbnailDims.x << ", " << arg.thumbnailDims.y
+                   << "), thumbnailPixels=" << arg.thumbnailPixels.size();
+  return false;
+}
+
+MATCHER(CompositeTileSnapshotWithoutThumbnailPixels,
+        "a composite tile snapshot without thumbnail pixels") {
+  if (arg.thumbnailPixels.empty()) {
+    return true;
+  }
+
+  *result_listener << "id=" << testing::PrintToString(arg.id)
+                   << ", label=" << testing::PrintToString(arg.label)
+                   << ", kind=" << static_cast<int>(arg.kind) << ", thumbnailDims=("
+                   << arg.thumbnailDims.x << ", " << arg.thumbnailDims.y
+                   << "), thumbnailPixels=" << arg.thumbnailPixels.size();
   return false;
 }
 
@@ -1493,7 +1621,7 @@ TEST(AsyncRendererTest, SelectedEntityWithoutDragPreviewProducesCompositedPrevie
   EXPECT_EQ(result->bitmap.empty(), renderer.requiresTextureSnapshotPresentation());
   ASSERT_TRUE(result->compositedPreview.has_value());
   EXPECT_TRUE(result->compositedPreview->valid());
-  EXPECT_TRUE(std::ranges::any_of(result->compositedPreview->tiles, HasPresentationPayload));
+  EXPECT_THAT(result->compositedPreview->tiles, Contains(CompositedTileWithPresentationPayload()));
 }
 
 TEST(AsyncRendererTest, ColdRenderWithoutSelectionProducesFullCanvasCompositedTile) {
@@ -1524,7 +1652,7 @@ TEST(AsyncRendererTest, ColdRenderWithoutSelectionProducesFullCanvasCompositedTi
   const RenderResult::CompositedTile& tile = result->compositedPreview->tiles.front();
   EXPECT_EQ(tile.kind, RenderResult::CompositedTile::Kind::Segment);
   EXPECT_EQ(tile.id, "full-canvas");
-  EXPECT_TRUE(HasPresentationPayload(tile));
+  EXPECT_THAT(tile, CompositedTileWithPresentationPayload());
   if (renderer.requiresTextureSnapshotPresentation()) {
     ASSERT_NE(tile.textureSnapshot, nullptr);
     EXPECT_THAT(tile.bitmap, EmptyRendererBitmap());
@@ -1571,7 +1699,7 @@ TEST(AsyncRendererTest, CompositedTilesCarryRasterCanvasSizeForCacheIdentity) {
 
   ASSERT_TRUE(result.has_value());
   ASSERT_TRUE(result->compositedPreview.has_value());
-  ASSERT_FALSE(result->compositedPreview->tiles.empty());
+  ASSERT_THAT(result->compositedPreview->tiles, Not(IsEmpty()));
   for (const RenderResult::CompositedTile& tile : result->compositedPreview->tiles) {
     EXPECT_EQ(tile.rasterCanvasSize, Vector2i(64, 64));
     EXPECT_GT(tile.bitmapDimsPx.x, 0);
@@ -1826,7 +1954,7 @@ TEST(AsyncRendererTest, ActiveDragCanvasResizePublishesFreshFinalOnly) {
   ASSERT_TRUE(result->compositedPreview.has_value());
   for (const RenderResult::CompositedTile& tile : result->compositedPreview->tiles) {
     if (tile.bitmapDimsDoc.x > 0.0 && tile.bitmapDimsDoc.y > 0.0) {
-      EXPECT_TRUE(HasPresentationPayload(tile))
+      EXPECT_THAT(tile, CompositedTileWithPresentationPayload())
           << "final composited tiles must carry fresh presentation payloads";
     }
   }
@@ -1903,18 +2031,11 @@ TEST(AsyncRendererTest, SplashShapeDragFramesDoNotCrash) {
   auto prewarm = waitForResult();
   ASSERT_TRUE(prewarm.has_value());
   ASSERT_TRUE(prewarm->compositedPreview.has_value());
-  ASSERT_FALSE(prewarm->compositedPreview->tiles.empty());
+  ASSERT_THAT(prewarm->compositedPreview->tiles, Not(IsEmpty()));
   // At least one tile must carry a non-empty presentation payload (post-M2C the prewarm
   // delivers the full paint-order tile list, not just a single promoted
   // bitmap, so the assertion exists on the union, not a named slot).
-  bool sawTilePayload = false;
-  for (const auto& tile : prewarm->compositedPreview->tiles) {
-    if (HasPresentationPayload(tile)) {
-      sawTilePayload = true;
-      break;
-    }
-  }
-  ASSERT_TRUE(sawTilePayload);
+  ASSERT_THAT(prewarm->compositedPreview->tiles, Contains(CompositedTileWithPresentationPayload()));
 
   // Drive a long drag sequence. Each frame: mutate the DOM transform (via
   // the public `setTransform`, identical to `SetTransformCommand` in
@@ -2008,84 +2129,36 @@ TEST(AsyncRendererTest, ActiveDragStartDoesNotAdvanceUnchangedTileGenerations) {
   ASSERT_TRUE(selection->compositedPreview.has_value());
   const std::unordered_map<std::string, uint64_t> selectionGenerations =
       tileGenerations(*selection->compositedPreview);
-  ASSERT_FALSE(selectionGenerations.empty());
+  ASSERT_THAT(selectionGenerations, Not(IsEmpty()));
 
   AsGraphicsElement(*target).setTransform(Transform2d::Translate(Vector2d(12.0, 0.0)));
   auto activeDrag = postRequest(2, svg::compositor::InteractionHint::ActiveDrag);
   ASSERT_TRUE(activeDrag.has_value());
   ASSERT_TRUE(activeDrag->compositedPreview.has_value());
-
-  std::vector<std::string> changedTiles;
-  for (const RenderResult::CompositedTile& tile : activeDrag->compositedPreview->tiles) {
-    const auto it = selectionGenerations.find(tile.id);
-    ASSERT_NE(it, selectionGenerations.end()) << "new tile appeared on drag start: " << tile.id;
-    if (it->second != tile.generation) {
-      std::ostringstream label;
-      label << tile.id << " " << it->second << "->" << tile.generation;
-      changedTiles.push_back(label.str());
-    }
-    if (!tile.isDragTarget) {
-      EXPECT_TRUE(tile.bitmap.empty()) << "unchanged non-drag tile " << tile.id
-                                       << " should move via metadata only on drag start";
-    }
-  }
-
-  EXPECT_TRUE(changedTiles.empty()) << "translation-only drag start advanced tile generations: "
-                                    << testing::PrintToString(changedTiles);
+  EXPECT_THAT(activeDrag->compositedPreview->tiles,
+              ReusesTileGenerationsAndOmitNonDragBitmaps(
+                  selectionGenerations, /*allowNewDragTarget=*/false, "drag start"));
 
   auto reselected = postRequest(3, svg::compositor::InteractionHint::Selection);
   ASSERT_TRUE(reselected.has_value());
   ASSERT_TRUE(reselected->compositedPreview.has_value());
 
-  changedTiles.clear();
   const std::unordered_map<std::string, uint64_t> activeDragGenerations =
       tileGenerations(*activeDrag->compositedPreview);
-  for (const RenderResult::CompositedTile& tile : reselected->compositedPreview->tiles) {
-    const auto it = activeDragGenerations.find(tile.id);
-    ASSERT_NE(it, activeDragGenerations.end()) << "new tile appeared on reselection: " << tile.id;
-    if (it->second != tile.generation) {
-      std::ostringstream label;
-      label << tile.id << " " << it->second << "->" << tile.generation;
-      changedTiles.push_back(label.str());
-    }
-    if (!tile.isDragTarget) {
-      EXPECT_TRUE(tile.bitmap.empty()) << "unchanged non-drag tile " << tile.id
-                                       << " should move via metadata only on reselection";
-    }
-  }
-
-  EXPECT_TRUE(changedTiles.empty()) << "reselection advanced already-elevated tile generations: "
-                                    << testing::PrintToString(changedTiles);
+  EXPECT_THAT(reselected->compositedPreview->tiles,
+              ReusesTileGenerationsAndOmitNonDragBitmaps(
+                  activeDragGenerations, /*allowNewDragTarget=*/false, "reselection"));
 
   AsGraphicsElement(*target).setTransform(Transform2d::Translate(Vector2d(18.0, 0.0)));
   auto secondDrag = postRequest(4, svg::compositor::InteractionHint::ActiveDrag);
   ASSERT_TRUE(secondDrag.has_value());
   ASSERT_TRUE(secondDrag->compositedPreview.has_value());
 
-  changedTiles.clear();
   const std::unordered_map<std::string, uint64_t> reselectedGenerations =
       tileGenerations(*reselected->compositedPreview);
-  for (const RenderResult::CompositedTile& tile : secondDrag->compositedPreview->tiles) {
-    const auto it = reselectedGenerations.find(tile.id);
-    if (it == reselectedGenerations.end()) {
-      EXPECT_TRUE(tile.isDragTarget)
-          << "new non-drag tile appeared on second drag start: " << tile.id;
-      continue;
-    }
-    if (it->second != tile.generation) {
-      std::ostringstream label;
-      label << tile.id << " " << it->second << "->" << tile.generation;
-      changedTiles.push_back(label.str());
-    }
-    if (!tile.isDragTarget) {
-      EXPECT_TRUE(tile.bitmap.empty()) << "unchanged non-drag tile " << tile.id
-                                       << " should move via metadata only on second drag start";
-    }
-  }
-
-  EXPECT_TRUE(changedTiles.empty())
-      << "second translation-only drag start advanced tile generations: "
-      << testing::PrintToString(changedTiles);
+  EXPECT_THAT(secondDrag->compositedPreview->tiles,
+              ReusesTileGenerationsAndOmitNonDragBitmaps(
+                  reselectedGenerations, /*allowNewDragTarget=*/true, "second drag start"));
 }
 
 TEST(AsyncRendererTest, SteadyActiveDragTargetReusesPublishedTextureMetadataOnly) {
@@ -2134,36 +2207,30 @@ TEST(AsyncRendererTest, SteadyActiveDragTargetReusesPublishedTextureMetadataOnly
   auto firstDrag = postActiveDrag(/*version=*/1, /*x=*/4.0);
   ASSERT_TRUE(firstDrag.has_value());
   ASSERT_TRUE(firstDrag->compositedPreview.has_value());
-  const auto firstDragTile = findDragTile(*firstDrag->compositedPreview);
-  ASSERT_NE(firstDragTile, firstDrag->compositedPreview->tiles.end());
-  ASSERT_TRUE(HasPresentationPayload(*firstDragTile))
+  ASSERT_THAT(
+      firstDrag->compositedPreview->tiles,
+      Contains(AllOf(DragTargetLayerTileFor(entity), CompositedTileWithPresentationPayload())))
       << "First active drag frame must upload the drag target texture.";
+  const RenderResult::CompositedTile firstDragTile = *findDragTile(*firstDrag->compositedPreview);
 
   auto secondDrag = postActiveDrag(/*version=*/2, /*x=*/8.0);
   ASSERT_TRUE(secondDrag.has_value());
   ASSERT_TRUE(secondDrag->compositedPreview.has_value());
-  const auto secondDragTile = findDragTile(*secondDrag->compositedPreview);
-  ASSERT_NE(secondDragTile, secondDrag->compositedPreview->tiles.end());
-
-  EXPECT_EQ(secondDragTile->id, firstDragTile->id);
-  EXPECT_EQ(secondDragTile->generation, firstDragTile->generation);
-  EXPECT_FALSE(HasPresentationPayload(*secondDragTile))
+  EXPECT_THAT(
+      secondDrag->compositedPreview->tiles,
+      Contains(AllOf(DragTargetLayerTileFor(entity), MetadataOnlyReuseOfDragTile(firstDragTile))))
       << "Once the drag target texture is published and its generation is unchanged, steady drag "
          "frames should send metadata only. Re-uploading the active bitmap every mouse move is the "
          "#Blue_center_burst high-zoom lag.";
-  EXPECT_NE(secondDragTile->dragTranslationDoc, firstDragTile->dragTranslationDoc)
-      << "Metadata-only reuse must still carry updated presentation geometry.";
 
-  for (const auto& row : asyncRenderer.compositorLayerInspectorRows()) {
-    EXPECT_TRUE(row.thumbnailPixels.empty())
-        << "Active-drag diagnostics should keep metadata current without rebuilding layer "
-           "thumbnails on the drag hot path.";
-  }
-  for (const auto& tile : asyncRenderer.compositorCompositeTiles()) {
-    EXPECT_TRUE(tile.thumbnailPixels.empty())
-        << "Active-drag diagnostics should keep tile metadata current without rebuilding composite "
-           "thumbnails on the drag hot path.";
-  }
+  EXPECT_THAT(asyncRenderer.compositorLayerInspectorRows(),
+              Each(LayerInspectorRowWithoutThumbnailPixels()))
+      << "Active-drag diagnostics should keep metadata current without rebuilding layer "
+         "thumbnails on the drag hot path.";
+  EXPECT_THAT(asyncRenderer.compositorCompositeTiles(),
+              Each(CompositeTileSnapshotWithoutThumbnailPixels()))
+      << "Active-drag diagnostics should keep tile metadata current without rebuilding composite "
+         "thumbnails on the drag hot path.";
 }
 
 TEST(AsyncRendererTest, SelectedPathStyleChangePublishesFreshPromotedLayerPixels) {
