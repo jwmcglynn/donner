@@ -115,7 +115,7 @@ bazel_dep(name = "brotli", version = "1.2.0.bcr.1")
 ## Test dependencies
 ##
 # re2 is not used directly, but is selected by googletest and transitive test dependencies.
-bazel_dep(name = "re2", version = "2025-08-12.bcr.1", dev_dependency = True)
+bazel_dep(name = "re2", version = "2025-11-05.bcr.1", dev_dependency = True)
 bazel_dep(name = "googletest", repo_name = "com_google_gtest", version = "1.17.0.bcr.2", dev_dependency = True)
 
 bazel_dep(name = "nlohmann_json", version = "3.12.0.bcr.1", dev_dependency = True)
