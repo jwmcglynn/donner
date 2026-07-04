@@ -1,3 +1,5 @@
+#include <gmock/gmock.h>
+
 #include <cstddef>
 #include <optional>
 #include <string>
@@ -21,6 +23,15 @@
 
 namespace donner::editor {
 namespace {
+
+using ::testing::AllOf;
+using ::testing::ElementsAre;
+using ::testing::Eq;
+using ::testing::Field;
+using ::testing::Gt;
+using ::testing::IsEmpty;
+using ::testing::Not;
+using ::testing::SizeIs;
 
 constexpr std::string_view kCircleSvg =
     R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
@@ -433,7 +444,7 @@ TEST(EditorSyncTest, DeleteMutationWritesElementRemovalBackToSource) {
   ASSERT_TRUE(app.flushFrame());
 
   auto pendingRemove = app.consumeElementRemoveWritebacks();
-  ASSERT_EQ(pendingRemove.size(), 1u);
+  ASSERT_THAT(pendingRemove, SizeIs(1u));
   ASSERT_TRUE(ApplyElementRemoveWriteback(&source, pendingRemove.front().target));
   EXPECT_EQ(source.find("id=\"a\""), std::string::npos);
   EXPECT_NE(source.find("id=\"b\""), std::string::npos);
@@ -575,7 +586,7 @@ TEST(EditorSyncTest, DeleteWritebackReparseRefreshesFollowingElementLocation) {
   ASSERT_TRUE(app.flushFrame());
 
   auto pendingRemove = app.consumeElementRemoveWritebacks();
-  ASSERT_EQ(pendingRemove.size(), 1u);
+  ASSERT_THAT(pendingRemove, SizeIs(1u));
   ASSERT_TRUE(QueueElementRemoveWritebackReparse(
       app, &source, &previousSourceText, &lastWritebackSourceText, pendingRemove.front().target));
 
@@ -615,7 +626,7 @@ TEST(EditorSyncTest, StructuredSourceEditAppliesThroughXMLDocumentWithoutCommand
 
   EXPECT_TRUE(dispatch.dispatchedMutation);
   EXPECT_FALSE(dispatch.skippedSelfWriteback);
-  EXPECT_TRUE(app.document().queue().empty());
+  EXPECT_THAT(app.document().queue().size(), Eq(0u));
   EXPECT_FALSE(app.flushFrame());
   EXPECT_GT(app.document().currentFrameVersion(), previousFrameVersion);
   EXPECT_EQ(app.document().document().source(), kEditedSvg);
@@ -663,7 +674,7 @@ TEST(EditorSyncTest, StructuredSourceEditInsertsChildElementIncrementally) {
   EXPECT_FALSE(dispatch.skippedSelfWriteback);
   // Incremental: a fallback would queue a ReplaceDocumentCommand, which would make
   // flushFrame() return true. An incremental apply queues nothing.
-  EXPECT_TRUE(app.document().queue().empty());
+  EXPECT_THAT(app.document().queue().size(), Eq(0u));
   EXPECT_FALSE(app.flushFrame());
 
   EXPECT_EQ(app.document().document().source(), editedSource);
@@ -704,7 +715,7 @@ TEST(EditorSyncTest, StructuredSourceEditDeletesChildElementIncrementally) {
 
   EXPECT_TRUE(dispatch.dispatchedMutation);
   EXPECT_FALSE(dispatch.skippedSelfWriteback);
-  EXPECT_TRUE(app.document().queue().empty());
+  EXPECT_THAT(app.document().queue().size(), Eq(0u));
   EXPECT_FALSE(app.flushFrame());
 
   EXPECT_EQ(app.document().document().source(), editedSource);
@@ -769,7 +780,7 @@ TEST(EditorSyncTest, StructuredSourceEditingIsDefaultForNewEditorApps) {
 
   EXPECT_TRUE(dispatch.dispatchedMutation);
   EXPECT_FALSE(dispatch.skippedSelfWriteback);
-  EXPECT_TRUE(app.document().queue().empty());
+  EXPECT_THAT(app.document().queue().size(), Eq(0u));
   EXPECT_FALSE(app.flushFrame());
   EXPECT_EQ(app.document().document().source(), kEditedSvg);
 }
@@ -792,7 +803,7 @@ TEST(EditorSyncTest, StructuredSourceEditingRuntimeOptOutUsesDocumentReplace) {
 
   EXPECT_TRUE(dispatch.dispatchedMutation);
   EXPECT_FALSE(dispatch.skippedSelfWriteback);
-  EXPECT_FALSE(app.document().queue().empty());
+  EXPECT_THAT(app.document().queue().size(), Gt(0u));
   ASSERT_TRUE(app.flushFrame());
   EXPECT_TRUE(app.document().lastFlushResult().replacedDocument);
   EXPECT_EQ(app.document().document().source(), kEditedSvg);
@@ -816,7 +827,7 @@ TEST(EditorSyncTest, StructuredMalformedOpeningTagEditDoesNotQueueReplaceDocumen
 
   EXPECT_TRUE(dispatch.dispatchedMutation);
   EXPECT_FALSE(dispatch.skippedSelfWriteback);
-  EXPECT_TRUE(app.document().queue().empty());
+  EXPECT_THAT(app.document().queue().size(), Eq(0u));
   EXPECT_FALSE(app.flushFrame());
   EXPECT_EQ(app.document().document().source(), kEditedSvg);
   ASSERT_TRUE(app.document().lastParseError().has_value());
@@ -850,7 +861,7 @@ TEST(EditorSyncTest, StructuredOpeningTagRecoveryClearsDiagnosticWithoutCommand)
 
   EXPECT_TRUE(dispatch.dispatchedMutation);
   EXPECT_FALSE(dispatch.skippedSelfWriteback);
-  EXPECT_TRUE(app.document().queue().empty());
+  EXPECT_THAT(app.document().queue().size(), Eq(0u));
   EXPECT_FALSE(app.flushFrame());
   EXPECT_EQ(app.document().document().source(), kSvg);
   EXPECT_EQ(app.document().lastParseError(), std::nullopt);
@@ -876,7 +887,7 @@ TEST(EditorSyncTest, DispatchSourceTextChangeNoOpDoesNotDispatch) {
   EXPECT_FALSE(dispatch.skippedSelfWriteback);
   EXPECT_EQ(previousSourceText, kCircleSvg);
   EXPECT_FALSE(lastWritebackSourceText.has_value());
-  EXPECT_TRUE(app.document().queue().empty());
+  EXPECT_THAT(app.document().queue().size(), Eq(0u));
 }
 
 TEST(EditorSyncTest, DispatchSourceEditIntentsSkipsSelfWritebackEcho) {
@@ -896,7 +907,7 @@ TEST(EditorSyncTest, DispatchSourceEditIntentsSkipsSelfWritebackEcho) {
   EXPECT_TRUE(dispatch.skippedSelfWriteback);
   EXPECT_EQ(previousSourceText, kCircleAt40Svg);
   EXPECT_FALSE(lastWritebackSourceText.has_value());
-  EXPECT_TRUE(app.document().queue().empty());
+  EXPECT_THAT(app.document().queue().size(), Eq(0u));
 }
 
 TEST(EditorSyncTest, DispatchSourceEditIntentsNoOpDoesNotApplyStaleIntent) {
@@ -915,7 +926,7 @@ TEST(EditorSyncTest, DispatchSourceEditIntentsNoOpDoesNotApplyStaleIntent) {
   EXPECT_FALSE(dispatch.dispatchedMutation);
   EXPECT_FALSE(dispatch.skippedSelfWriteback);
   EXPECT_EQ(previousSourceText, kCircleSvg);
-  EXPECT_TRUE(app.document().queue().empty());
+  EXPECT_THAT(app.document().queue().size(), Eq(0u));
 }
 
 TEST(EditorSyncTest, DispatchSourceEditIntentsEmptyListDelegatesToTextChange) {
@@ -935,7 +946,7 @@ TEST(EditorSyncTest, DispatchSourceEditIntentsEmptyListDelegatesToTextChange) {
 
   EXPECT_TRUE(dispatch.dispatchedMutation);
   EXPECT_FALSE(dispatch.skippedSelfWriteback);
-  EXPECT_TRUE(app.document().queue().empty());
+  EXPECT_THAT(app.document().queue().size(), Eq(0u));
   EXPECT_FALSE(app.flushFrame());
   EXPECT_EQ(app.document().document().source(), kEditedSvg);
   EXPECT_EQ(previousSourceText, kEditedSvg);
@@ -958,7 +969,7 @@ TEST(EditorSyncTest, DispatchSourceEditIntentsInvalidIntentQueuesDocumentReplace
   EXPECT_FALSE(dispatch.skippedSelfWriteback);
   EXPECT_EQ(previousSourceText, kCircleAt40Svg);
   EXPECT_FALSE(lastWritebackSourceText.has_value());
-  EXPECT_FALSE(app.document().queue().empty());
+  EXPECT_THAT(app.document().queue().size(), Gt(0u));
   ASSERT_TRUE(app.flushFrame());
   EXPECT_TRUE(app.document().lastFlushResult().replacedDocument);
   EXPECT_EQ(app.document().document().source(), kCircleAt40Svg);
@@ -987,7 +998,7 @@ TEST(EditorSyncTest, DispatchSourceEditIntentsStructuredOptOutQueuesDocumentRepl
 
   EXPECT_TRUE(dispatch.dispatchedMutation);
   EXPECT_FALSE(dispatch.skippedSelfWriteback);
-  EXPECT_FALSE(app.document().queue().empty());
+  EXPECT_THAT(app.document().queue().size(), Gt(0u));
   ASSERT_TRUE(app.flushFrame());
   EXPECT_TRUE(app.document().lastFlushResult().replacedDocument);
   EXPECT_EQ(app.document().document().source(), kEditedSvg);
@@ -1018,7 +1029,7 @@ TEST(EditorSyncTest, DispatchSourceEditIntentsFinalMismatchQueuesDocumentReplace
   EXPECT_TRUE(dispatch.dispatchedMutation);
   EXPECT_FALSE(dispatch.skippedSelfWriteback);
   EXPECT_EQ(app.document().document().source(), kIntentSvg);
-  EXPECT_FALSE(app.document().queue().empty());
+  EXPECT_THAT(app.document().queue().size(), Gt(0u));
   ASSERT_TRUE(app.flushFrame());
   EXPECT_TRUE(app.document().lastFlushResult().replacedDocument);
   EXPECT_EQ(app.document().document().source(), kNewSvg);
@@ -1050,7 +1061,7 @@ TEST(EditorSyncTest, DispatchSourceEditIntentsAppliesMultipleStructuredEdits) {
 
   EXPECT_TRUE(dispatch.dispatchedMutation);
   EXPECT_FALSE(dispatch.skippedSelfWriteback);
-  EXPECT_TRUE(app.document().queue().empty());
+  EXPECT_THAT(app.document().queue().size(), Eq(0u));
   EXPECT_FALSE(app.flushFrame());
   EXPECT_EQ(app.document().document().source(), kEditedSvg);
   EXPECT_EQ(previousSourceText, kEditedSvg);
@@ -1084,10 +1095,11 @@ TEST(EditorSyncTest, SelfInitiatedWritebackDoesNotDispatchDuplicateReplaceDocume
   EXPECT_TRUE(dispatch.skippedSelfWriteback);
 
   auto effective = app.document().queue().flush();
-  ASSERT_EQ(effective.effectiveCommands.size(), 1u);
-  EXPECT_EQ(effective.effectiveCommands.front().kind, EditorCommand::Kind::ReplaceDocument);
-  EXPECT_EQ(effective.effectiveCommands.front().bytes, source);
-  EXPECT_TRUE(effective.effectiveCommands.front().preserveUndoOnReparse);
+  EXPECT_THAT(effective.effectiveCommands,
+              ElementsAre(AllOf(
+                  Field("kind", &EditorCommand::kind, EditorCommand::Kind::ReplaceDocument),
+                  Field("bytes", &EditorCommand::bytes, source),
+                  Field("preserveUndoOnReparse", &EditorCommand::preserveUndoOnReparse, true))));
   EXPECT_TRUE(effective.hadReplaceDocument);
   EXPECT_TRUE(effective.preserveUndoOnReparse);
 }
@@ -1144,7 +1156,7 @@ TEST(EditorSyncTest, SelectionClearsAndDisplayedBoundsClearWhenElementDisappears
   const std::uint64_t initialVersion = app.document().currentFrameVersion();
   RefreshSelectionBoundsCache(cache, std::span<const svg::SVGElement>(app.selectedElements()),
                               initialVersion, initialVersion);
-  ASSERT_FALSE(cache.displayedBoundsDoc.empty());
+  ASSERT_THAT(cache.displayedBoundsDoc, Not(IsEmpty()));
 
   app.applyMutation(
       EditorCommand::ReplaceDocumentCommand("<svg xmlns=\"http://www.w3.org/2000/svg\"/>"));
@@ -1153,7 +1165,7 @@ TEST(EditorSyncTest, SelectionClearsAndDisplayedBoundsClearWhenElementDisappears
 
   RefreshSelectionBoundsCache(cache, std::span<const svg::SVGElement>(app.selectedElements()),
                               app.document().currentFrameVersion(), initialVersion);
-  EXPECT_TRUE(cache.displayedBoundsDoc.empty());
+  EXPECT_THAT(cache.displayedBoundsDoc, IsEmpty());
 }
 
 // Interleave of drag + source-pane edit + undo. The user:

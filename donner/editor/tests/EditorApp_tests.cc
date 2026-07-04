@@ -22,6 +22,11 @@
 namespace donner::editor {
 namespace {
 
+using ::testing::ElementsAre;
+using ::testing::Eq;
+using ::testing::IsEmpty;
+using ::testing::SizeIs;
+
 constexpr std::string_view kTrivialSvg =
     R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
          <rect id="r1" x="10" y="10" width="20" height="20" fill="red"/>
@@ -246,9 +251,8 @@ TEST(EditorAppTest, MarqueeHitTestRectUnderConcurrentDomHoldsAccess) {
   const std::vector<svg::SVGGeometryElement> hits =
       app.hitTestRect(Box2d(Vector2d(0.0, 0.0), Vector2d(40.0, 40.0)));
 
-  ASSERT_EQ(hits.size(), 1u);
   app.document().document().withReadAccess(
-      [&](svg::DocumentReadAccess&) { EXPECT_EQ(hits.front().id(), "r1"); });
+      [&](svg::DocumentReadAccess&) { EXPECT_THAT(ElementIds(hits), ElementsAre("r1")); });
 }
 
 TEST(EditorAppTest, ApplyMutationFlowsThroughDocument) {
@@ -261,9 +265,9 @@ TEST(EditorAppTest, ApplyMutationFlowsThroughDocument) {
   app.applyMutation(
       EditorCommand::SetTransformCommand(*rect, Transform2d::Translate(Vector2d(99.0, 0.0))));
 
-  EXPECT_EQ(app.document().queue().size(), 1u);
+  EXPECT_THAT(app.document().queue().size(), Eq(1u));
   EXPECT_TRUE(app.flushFrame());
-  EXPECT_EQ(app.document().queue().size(), 0u);
+  EXPECT_THAT(app.document().queue().size(), Eq(0u));
 }
 
 TEST(EditorAppTest, SelectionSetAndClear) {
@@ -277,11 +281,11 @@ TEST(EditorAppTest, SelectionSetAndClear) {
   EXPECT_TRUE(app.hasSelection());
   ASSERT_TRUE(app.selectedElement().has_value());
   EXPECT_TRUE(*app.selectedElement() == *r1);
-  EXPECT_EQ(app.selectedElements().size(), 1u);
+  EXPECT_THAT(app.selectedElements(), ElementsAre(*r1));
 
   app.setSelection(std::nullopt);
   EXPECT_FALSE(app.hasSelection());
-  EXPECT_TRUE(app.selectedElements().empty());
+  EXPECT_THAT(app.selectedElements(), IsEmpty());
 }
 
 // Multi-select API (Milestone 4 of the editor UX design doc): a
@@ -299,7 +303,7 @@ TEST(EditorAppTest, MultiSelectionStoresEveryElement) {
 
   app.setSelection(std::vector<svg::SVGElement>{*r1, *r2});
   EXPECT_TRUE(app.hasSelection());
-  EXPECT_THAT(ElementIds(app.selectedElements()), ::testing::ElementsAre("r1", "r2"));
+  EXPECT_THAT(ElementIds(app.selectedElements()), ElementsAre("r1", "r2"));
   // Single-element compat: returns the *first* element.
   ASSERT_TRUE(app.selectedElement().has_value());
   EXPECT_TRUE(*app.selectedElement() == *r1);
@@ -307,7 +311,7 @@ TEST(EditorAppTest, MultiSelectionStoresEveryElement) {
   // clearSelection reads as the natural opposite of "set N elements".
   app.clearSelection();
   EXPECT_FALSE(app.hasSelection());
-  EXPECT_TRUE(app.selectedElements().empty());
+  EXPECT_THAT(app.selectedElements(), IsEmpty());
   EXPECT_FALSE(app.selectedElement().has_value());
 }
 
@@ -323,9 +327,7 @@ TEST(EditorAppTest, SelectableElementsReturnsEveryGeometryElement) {
   // "Select All" returns both rects regardless of position, in document order — the same selectable
   // set marquee selection uses.
   const std::vector<svg::SVGElement> selectable = app.selectableElements();
-  ASSERT_EQ(selectable.size(), 2u);
-  EXPECT_EQ(selectable.at(0), *r1);
-  EXPECT_EQ(selectable.at(1), *r2);
+  EXPECT_THAT(selectable, ElementsAre(*r1, *r2));
 }
 
 TEST(EditorAppTest, SelectableElementsExcludesNonGeometryNodes) {
@@ -341,13 +343,12 @@ TEST(EditorAppTest, SelectableElementsExcludesNonGeometryNodes) {
   ASSERT_TRUE(r1.has_value());
 
   const std::vector<svg::SVGElement> selectable = app.selectableElements();
-  ASSERT_EQ(selectable.size(), 1u);
-  EXPECT_EQ(selectable.at(0), *r1);
+  EXPECT_THAT(selectable, ElementsAre(*r1));
 }
 
 TEST(EditorAppTest, SelectableElementsIsEmptyWithoutDocument) {
   EditorApp app;
-  EXPECT_TRUE(app.selectableElements().empty());
+  EXPECT_THAT(app.selectableElements(), IsEmpty());
 }
 
 TEST(EditorAppTest, ToggleInSelectionAddsThenRemoves) {
@@ -385,7 +386,7 @@ TEST(EditorAppTest, AddToSelectionIsIdempotent) {
   app.addToSelection(*r1);
   app.addToSelection(*r1);
   app.addToSelection(*r1);
-  EXPECT_EQ(app.selectedElements().size(), 1u);
+  EXPECT_THAT(app.selectedElements(), ElementsAre(*r1));
 }
 
 TEST(EditorAppTest, SetAttributeOnSelectionQueuesEverySelectedElement) {
@@ -399,7 +400,7 @@ TEST(EditorAppTest, SetAttributeOnSelectionQueuesEverySelectedElement) {
   app.setSelection(std::vector<svg::SVGElement>{*r1, *r2});
 
   ASSERT_TRUE(app.setAttributeOnSelection("fill", "#112233"));
-  EXPECT_EQ(app.document().queue().size(), 2u);
+  EXPECT_THAT(app.document().queue().size(), Eq(2u));
   ASSERT_TRUE(app.flushFrame());
 
   auto updatedR1 = app.document().document().querySelector("#r1");
@@ -416,7 +417,7 @@ TEST(EditorAppTest, EmptySelectionMutatorsReturnFalseWithoutQueueingCommands) {
 
   EXPECT_FALSE(app.setAttributeOnSelection("fill", "#112233"));
   EXPECT_FALSE(app.setStylePropertyOnSelection("fill", "#112233"));
-  EXPECT_EQ(app.document().queue().size(), 0u);
+  EXPECT_THAT(app.document().queue().size(), Eq(0u));
 }
 
 TEST(EditorAppTest, SetStylePropertyOnSelectionMergesIntoStyleAttribute) {
@@ -434,7 +435,7 @@ TEST(EditorAppTest, SetStylePropertyOnSelectionMergesIntoStyleAttribute) {
   app.setSelection(*r1);
 
   ASSERT_TRUE(app.setStylePropertyOnSelection("fill", "#112233"));
-  EXPECT_EQ(app.document().queue().size(), 1u);
+  EXPECT_THAT(app.document().queue().size(), Eq(1u));
   ASSERT_TRUE(app.flushFrame());
 
   auto updatedR1 = app.document().document().querySelector("#r1");
@@ -474,7 +475,7 @@ TEST(EditorAppTest, SetStylePropertyOnSelectionSkipsUnparseableDeclarations) {
   app.setSelection(*r1);
 
   EXPECT_FALSE(app.setStylePropertyOnSelection("", "#112233"));
-  EXPECT_EQ(app.document().queue().size(), 0u);
+  EXPECT_THAT(app.document().queue().size(), Eq(0u));
 }
 
 TEST(EditorAppTest, SetStrokeWidthOnSelectionClampsNegativeValues) {
@@ -695,7 +696,7 @@ TEST(EditorAppTest, UnbundleCompoundPathReplacesExplicitTargetAndRestoresUndoSel
   EXPECT_TRUE(app.compoundPathUnbundleAvailability(*compound).canApply);
 
   ASSERT_TRUE(app.unbundleCompoundPath(*compound));
-  ASSERT_EQ(app.selectedElements().size(), 2u);
+  ASSERT_THAT(app.selectedElements(), SizeIs(2u));
   for (const svg::SVGElement& selected : app.selectedElements()) {
     ASSERT_TRUE(selected.isa<svg::SVGPathElement>());
     EXPECT_FALSE(selected.getAttribute("id").has_value());
@@ -719,8 +720,8 @@ TEST(EditorAppTest, UnbundleCompoundPathReplacesExplicitTargetAndRestoresUndoSel
   app.undo();
   ASSERT_TRUE(app.flushFrame());
   EXPECT_TRUE(app.document().document().querySelector("#compound").has_value());
-  EXPECT_EQ(RootPathChildren(app).size(), 1u);
-  EXPECT_THAT(ElementIds(app.selectedElements()), ::testing::ElementsAre("compound"));
+  EXPECT_THAT(RootPathChildren(app), SizeIs(1u));
+  EXPECT_THAT(ElementIds(app.selectedElements()), ElementsAre("compound"));
 }
 
 TEST(EditorAppTest, UnbundleCompoundPathReleasesNestedHoleContours) {
@@ -789,7 +790,7 @@ TEST(EditorAppTest, PathUnionReplacesSelectionWithBooleanPath) {
   app.setSelection(std::vector<svg::SVGElement>{*r1, *r2});
 
   ASSERT_TRUE(app.applyPathOperation(PathOperationKind::Union));
-  ASSERT_EQ(app.selectedElements().size(), 1u);
+  ASSERT_THAT(app.selectedElements(), SizeIs(1u));
   ASSERT_TRUE(app.selectedElements().front().isa<svg::SVGPathElement>());
   EXPECT_EQ(std::string_view(app.selectedElements().front().cast<svg::SVGPathElement>().d()),
             "M 10 10 L 30 10 L 30 30 L 10 30 Z M 50 50 L 70 50 L 70 70 L 50 70 Z");
@@ -880,8 +881,8 @@ TEST(EditorAppTest, PathIntersectUnavailableWhenBoundsDoNotOverlap) {
   EXPECT_FALSE(app.pathOperationAvailability(PathOperationKind::Intersect).canApply);
   EXPECT_FALSE(app.applyPathOperation(PathOperationKind::Intersect));
   EXPECT_EQ(app.document().document().source(), sourceBefore);
-  EXPECT_EQ(app.document().queue().size(), 0u);
-  EXPECT_EQ(app.selectedElements().size(), 2u);
+  EXPECT_THAT(app.document().queue().size(), Eq(0u));
+  EXPECT_THAT(app.selectedElements(), SizeIs(2u));
   EXPECT_EQ(app.undoTimeline().entryCount(), 0u);
 }
 
@@ -906,8 +907,8 @@ TEST(EditorAppTest, EmptyPathIntersectLeavesDocumentUnchanged) {
   EXPECT_TRUE(app.pathOperationAvailability(PathOperationKind::Intersect).canApply);
   EXPECT_FALSE(app.applyPathOperation(PathOperationKind::Intersect));
   EXPECT_EQ(app.document().document().source(), sourceBefore);
-  EXPECT_EQ(app.document().queue().size(), 0u);
-  EXPECT_EQ(app.selectedElements().size(), 2u);
+  EXPECT_THAT(app.document().queue().size(), Eq(0u));
+  EXPECT_THAT(app.selectedElements(), SizeIs(2u));
   EXPECT_EQ(app.undoTimeline().entryCount(), 0u);
 }
 
@@ -1239,7 +1240,7 @@ TEST(EditorAppTest, PathOperationsHandleOverlappingDonnerLetters) {
     EXPECT_TRUE(app.applyPathOperation(operation));
     EXPECT_TRUE(app.flushFrame());
 
-    EXPECT_EQ(app.selectedElements().size(), 1u);
+    EXPECT_THAT(app.selectedElements(), SizeIs(1u));
     if (app.selectedElements().empty() ||
         !app.selectedElements().front().isa<svg::SVGPathElement>()) {
       return std::optional<Path>();
@@ -1297,7 +1298,7 @@ TEST(EditorAppTest, HitTestRectFindsAllIntersectingElements) {
   // r1 lives at (10,10..30,30), r2 at (50,50..70,70). A marquee
   // covering the full document grabs both.
   auto bothHits = app.hitTestRect(Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0));
-  EXPECT_EQ(bothHits.size(), 2u);
+  EXPECT_THAT(ElementIds(bothHits), ElementsAre("r1", "r2"));
 
   // A marquee that only overlaps r1 returns just r1.
   auto r1Only = app.hitTestRect(Box2d::FromXYWH(5.0, 5.0, 20.0, 20.0));
@@ -1305,7 +1306,7 @@ TEST(EditorAppTest, HitTestRectFindsAllIntersectingElements) {
 
   // A marquee that misses both returns empty.
   auto noHits = app.hitTestRect(Box2d::FromXYWH(80.0, 80.0, 5.0, 5.0));
-  EXPECT_TRUE(noHits.empty());
+  EXPECT_THAT(noHits, IsEmpty());
 
   // Edge contact (marquee touches r1's edge) counts as intersection.
   auto edgeHits = app.hitTestRect(Box2d::FromXYWH(30.0, 30.0, 5.0, 5.0));
