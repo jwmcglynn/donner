@@ -1,5 +1,7 @@
 #include "donner/editor/GlTextureCache.h"
 
+#include <gmock/gmock.h>
+
 #include <memory>
 #include <utility>
 
@@ -12,6 +14,10 @@
 
 namespace donner::editor {
 namespace {
+
+using ::testing::ElementsAre;
+using ::testing::Field;
+using ::testing::IsEmpty;
 
 class PayloadTextureSnapshot final : public svg::RendererTextureSnapshot {
 public:
@@ -43,6 +49,14 @@ RenderResult::CompositedTile MetadataTile(RenderResult::CompositedTile::Kind kin
   viewport.outputFromDocument = Transform2d();
   viewport.viewportBounded = viewportBounded;
   return viewport;
+}
+
+auto TileIdIs(auto matcher) {
+  return Field("id", &GlTextureCache::TileView::id, matcher);
+}
+
+auto TileRasterCanvasSizeIs(auto matcher) {
+  return Field("rasterCanvasSize", &GlTextureCache::TileView::rasterCanvasSize, matcher);
 }
 
 TEST(GlTextureCacheTest, MetadataOnlyReuseRequiresFullTextureIdentity) {
@@ -309,9 +323,8 @@ TEST(GlTextureCacheTest, UnboundedUploadRetainsSeparateOverviewAcrossBoundedUplo
   GlTextureCache cache(device);
   cache.uploadComposited(overviewPreview, RasterViewportForTest(/*viewportBounded=*/false));
   ASSERT_EQ(cache.tiles().size(), 1u);
-  ASSERT_EQ(cache.overviewTiles().size(), 1u);
+  ASSERT_THAT(cache.overviewTiles(), ElementsAre(TileRasterCanvasSizeIs(Vector2i(100, 100))));
   EXPECT_FALSE(cache.activeTilesViewportBounded());
-  EXPECT_EQ(cache.overviewTiles().front().rasterCanvasSize, Vector2i(100, 100));
 
   int boundedDestructionCount = 0;
   RenderResult::CompositedPreview boundedPreview;
@@ -328,7 +341,7 @@ TEST(GlTextureCacheTest, UnboundedUploadRetainsSeparateOverviewAcrossBoundedUplo
   cache.uploadComposited(boundedPreview, RasterViewportForTest(/*viewportBounded=*/true));
 
   ASSERT_EQ(cache.tiles().size(), 1u);
-  ASSERT_EQ(cache.overviewTiles().size(), 1u);
+  ASSERT_THAT(cache.overviewTiles(), ElementsAre(TileRasterCanvasSizeIs(Vector2i(100, 100))));
   EXPECT_TRUE(cache.activeTilesViewportBounded());
   const PresentationCoverageDiagnostics coverage = cache.coverageDiagnostics();
   EXPECT_TRUE(coverage.activeTilesViewportBounded);
@@ -337,8 +350,8 @@ TEST(GlTextureCacheTest, UnboundedUploadRetainsSeparateOverviewAcrossBoundedUplo
   EXPECT_EQ(coverage.overviewRasterDocumentRect, Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0));
   EXPECT_EQ(coverage.activeOutputSizePx, Vector2i(20, 20));
   EXPECT_EQ(coverage.overviewOutputSizePx, Vector2i(100, 100));
-  EXPECT_EQ(cache.tiles().front().rasterCanvasSize, Vector2i(20, 20));
-  EXPECT_EQ(cache.overviewTiles().front().rasterCanvasSize, Vector2i(100, 100))
+  EXPECT_THAT(cache.tiles(), ElementsAre(TileRasterCanvasSizeIs(Vector2i(20, 20))));
+  EXPECT_THAT(cache.overviewTiles(), ElementsAre(TileRasterCanvasSizeIs(Vector2i(100, 100))))
       << "Bounded uploads may reuse tile ids and must not overwrite the retained overview.";
   EXPECT_EQ(overviewDestructionCount, 0);
   EXPECT_EQ(boundedDestructionCount, 0);
@@ -363,7 +376,7 @@ TEST(GlTextureCacheTest, OverviewUploadDoesNotReplaceActiveBoundedTiles) {
   GlTextureCache cache(device);
   cache.uploadComposited(boundedPreview, RasterViewportForTest(/*viewportBounded=*/true));
   ASSERT_EQ(cache.tiles().size(), 1u);
-  EXPECT_TRUE(cache.overviewTiles().empty());
+  EXPECT_THAT(cache.overviewTiles(), IsEmpty());
 
   int overviewDestructionCount = 0;
   RenderResult::CompositedPreview overviewPreview;
@@ -378,11 +391,9 @@ TEST(GlTextureCacheTest, OverviewUploadDoesNotReplaceActiveBoundedTiles) {
 
   cache.uploadCompositedOverview(overviewPreview, RasterViewportForTest(/*viewportBounded=*/false));
 
-  ASSERT_EQ(cache.tiles().size(), 1u);
-  ASSERT_EQ(cache.overviewTiles().size(), 1u);
+  ASSERT_THAT(cache.tiles(), ElementsAre(TileIdIs("seg:0")));
+  ASSERT_THAT(cache.overviewTiles(), ElementsAre(TileIdIs("full-canvas")));
   EXPECT_TRUE(cache.activeTilesViewportBounded());
-  EXPECT_EQ(cache.tiles().front().id, "seg:0");
-  EXPECT_EQ(cache.overviewTiles().front().id, "full-canvas");
   EXPECT_TRUE(cache.coverageDiagnostics().overviewInfillAvailable);
   EXPECT_EQ(boundedDestructionCount, 0);
   EXPECT_EQ(overviewDestructionCount, 0);

@@ -95,8 +95,7 @@ TEST_F(PenToolTest, FirstClickInsertsSelectedPath) {
 
   svg::SVGPathElement inserted = path();
   EXPECT_EQ(inserted.d(), "M 10 20");
-  ASSERT_EQ(app.selectedElements().size(), 1u);
-  EXPECT_EQ(app.selectedElements().front(), inserted);
+  EXPECT_THAT(app.selectedElements(), testing::ElementsAre(inserted));
   const std::string source(app.document().document().source());
   const std::size_t pathOffset = source.find(R"(<path d="M 10 20")");
   const std::size_t svgCloseOffset = source.find("</svg>");
@@ -252,11 +251,9 @@ TEST_F(PenToolTest, BoundsIncludeNewestPointAfterImmediateIdleFlush) {
 
   const std::vector<Box2d> bounds =
       SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(app.selectedElements()));
-  ASSERT_EQ(bounds.size(), 1u);
-  EXPECT_LE(bounds.front().topLeft.x, 10.0);
-  EXPECT_LE(bounds.front().topLeft.y, 20.0);
-  EXPECT_GE(bounds.front().bottomRight.x, 80.0);
-  EXPECT_GE(bounds.front().bottomRight.y, 90.0);
+  EXPECT_THAT(bounds,
+              testing::ElementsAre(testing::AllOf(BoxContainingPoint(Vector2d(10.0, 20.0)),
+                                                  BoxContainingPoint(Vector2d(80.0, 90.0)))));
 }
 
 TEST_F(PenToolTest, ConsecutiveClicksBeforeFlushStayInsideSvgRoot) {
