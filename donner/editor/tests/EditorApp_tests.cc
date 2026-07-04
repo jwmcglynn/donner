@@ -364,6 +364,15 @@ TEST(EditorAppTest, SetAttributeOnSelectionQueuesEverySelectedElement) {
   EXPECT_EQ(updatedR2->getAttribute("fill"), "#112233");
 }
 
+TEST(EditorAppTest, EmptySelectionMutatorsReturnFalseWithoutQueueingCommands) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+
+  EXPECT_FALSE(app.setAttributeOnSelection("fill", "#112233"));
+  EXPECT_FALSE(app.setStylePropertyOnSelection("fill", "#112233"));
+  EXPECT_EQ(app.document().queue().size(), 0u);
+}
+
 TEST(EditorAppTest, SetStylePropertyOnSelectionMergesIntoStyleAttribute) {
   constexpr std::string_view kStyledSvg =
       R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
@@ -408,6 +417,18 @@ TEST(EditorAppTest, SetStylePropertyOnSelectionOverridesExistingStyleProperty) {
   auto updatedR1 = app.document().document().querySelector("#r1");
   ASSERT_TRUE(updatedR1.has_value());
   EXPECT_EQ(updatedR1->getAttribute("style"), "stroke: black; fill: #112233");
+}
+
+TEST(EditorAppTest, SetStylePropertyOnSelectionSkipsUnparseableDeclarations) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+
+  auto r1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(r1.has_value());
+  app.setSelection(*r1);
+
+  EXPECT_FALSE(app.setStylePropertyOnSelection("", "#112233"));
+  EXPECT_EQ(app.document().queue().size(), 0u);
 }
 
 TEST(EditorAppTest, SetStrokeWidthOnSelectionClampsNegativeValues) {
@@ -464,6 +485,17 @@ TEST(EditorAppTest, SetActiveStrokeWidthClampsNegativeValues) {
   EXPECT_EQ(app.activePaintStyle().strokeWidth, 0.0);
 }
 
+TEST(EditorAppTest, PathOperationAvailabilityReportsNoDocument) {
+  EditorApp app;
+
+  const PathOperationAvailability availability =
+      app.pathOperationAvailability(PathOperationKind::Union);
+
+  EXPECT_FALSE(availability.canApply);
+  EXPECT_EQ(availability.reason, "No SVG document is loaded");
+  EXPECT_FALSE(app.applyPathOperation(PathOperationKind::Union));
+}
+
 TEST(EditorAppTest, PathOperationAvailabilityRequiresMultipleGeometryElements) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTrivialSvg));
@@ -481,6 +513,20 @@ TEST(EditorAppTest, PathOperationAvailabilityRequiresMultipleGeometryElements) {
   app.setSelection(std::vector<svg::SVGElement>{*r1, *r2});
   EXPECT_TRUE(app.pathOperationAvailability(PathOperationKind::Union).canApply);
   EXPECT_TRUE(app.pathOperationAvailability(PathOperationKind::SubtractFront).canApply);
+}
+
+TEST(EditorAppTest, PathOperationAvailabilityRejectsUnsupportedSelectionMembers) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+
+  auto r1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(r1.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{app.document().document().svgElement(), *r1});
+
+  const PathOperationAvailability availability =
+      app.pathOperationAvailability(PathOperationKind::Union);
+  EXPECT_FALSE(availability.canApply);
+  EXPECT_EQ(availability.reason, "Selection includes unsupported or empty geometry");
 }
 
 TEST(EditorAppTest, PathOperationAvailabilityUnderConcurrentDomHoldsAccess) {
@@ -519,6 +565,16 @@ TEST(EditorAppTest, PathOperationUnavailableWhileDocumentMutationIsPending) {
   EXPECT_FALSE(app.applyPathOperation(PathOperationKind::Union));
 }
 
+TEST(EditorAppTest, CompoundPathUnbundleAvailabilityReportsNoDocument) {
+  EditorApp app;
+
+  const PathOperationAvailability availability = app.compoundPathUnbundleAvailability();
+
+  EXPECT_FALSE(availability.canApply);
+  EXPECT_EQ(availability.reason, "No SVG document is loaded");
+  EXPECT_FALSE(app.unbundleCompoundPath());
+}
+
 TEST(EditorAppTest, CompoundPathUnbundleAvailabilityRequiresMultipleContours) {
   constexpr std::string_view kCompoundSvg =
       R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
@@ -549,6 +605,32 @@ TEST(EditorAppTest, CompoundPathUnbundleAvailabilityRequiresMultipleContours) {
 
   app.setSelection(*compound);
   EXPECT_TRUE(app.compoundPathUnbundleAvailability().canApply);
+}
+
+TEST(EditorAppTest, CompoundPathUnbundleAvailabilityRejectsUnsupportedTargets) {
+  constexpr std::string_view kUnsupportedSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <rect id="rect" x="10" y="10" width="20" height="20" fill="red"/>
+         <path id="empty" d=""/>
+       </svg>)";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kUnsupportedSvg));
+
+  auto rect = app.document().document().querySelector("#rect");
+  auto empty = app.document().document().querySelector("#empty");
+  ASSERT_TRUE(rect.has_value());
+  ASSERT_TRUE(empty.has_value());
+
+  app.setSelection(*rect);
+  PathOperationAvailability availability = app.compoundPathUnbundleAvailability();
+  EXPECT_FALSE(availability.canApply);
+  EXPECT_EQ(availability.reason, "Target is not a path");
+
+  app.setSelection(*empty);
+  availability = app.compoundPathUnbundleAvailability();
+  EXPECT_FALSE(availability.canApply);
+  EXPECT_EQ(availability.reason, "Path has no geometry");
 }
 
 TEST(EditorAppTest, UnbundleCompoundPathReplacesExplicitTargetAndRestoresUndoSelection) {
@@ -1254,6 +1336,34 @@ TEST(EditorAppTest, HitTestRectUsesStrokeShapeIntersection) {
   EXPECT_EQ(hits[0].id(), "stroke");
 }
 
+TEST(EditorAppTest, HitTestRectCoversStrokeCapAndJoinVariants) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="220" height="120">
+           <path id="round-cap" d="M 10 10 L 50 10" fill="none" stroke="black"
+                 stroke-width="8" stroke-linecap="round"/>
+           <path id="square-cap" d="M 10 30 L 50 30" fill="none" stroke="black"
+                 stroke-width="8" stroke-linecap="square"/>
+           <path id="miter-clip-join" d="M 80 10 L 100 30 L 120 10" fill="none"
+                 stroke="black" stroke-width="8" stroke-linejoin="miter-clip"/>
+           <path id="round-join" d="M 80 35 L 100 55 L 120 35" fill="none"
+                 stroke="black" stroke-width="8" stroke-linejoin="round"/>
+           <path id="bevel-join" d="M 140 10 L 160 30 L 180 10" fill="none"
+                 stroke="black" stroke-width="8" stroke-linejoin="bevel"/>
+           <path id="arcs-join" d="M 140 35 L 160 55 L 180 35" fill="none"
+                 stroke="black" stroke-width="8" stroke-linejoin="arcs"/>
+         </svg>)svg"));
+
+  std::vector<std::string> hitIds;
+  for (const svg::SVGGeometryElement& hit :
+       app.hitTestRect(Box2d::FromXYWH(0.0, 0.0, 220.0, 120.0))) {
+    hitIds.push_back(std::string(hit.id().str()));
+  }
+
+  EXPECT_THAT(hitIds, ::testing::UnorderedElementsAre("round-cap", "square-cap", "miter-clip-join",
+                                                      "round-join", "bevel-join", "arcs-join"));
+}
+
 TEST(EditorAppTest, HitTestRectSkipsXmlTextNodeChildren) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(
@@ -1552,6 +1662,27 @@ TEST(EditorAppRenameTest, RenameRepointsHrefReference) {
 
   EXPECT_TRUE(app.document().document().querySelector("#rect2").has_value());
   EXPECT_EQ(AttrOf(app, "u", "href"), "#rect2");
+}
+
+TEST(EditorAppRenameTest, RenameLeavesPrefixedHrefReferenceUntouched) {
+  constexpr std::string_view kXlinkDoc =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg"
+                 xmlns:xlink="http://www.w3.org/1999/xlink"
+                 width="100" height="100">
+         <rect id="r" x="0" y="0" width="50" height="50"/>
+         <use id="u" href="#r" xlink:href="#r"/>
+       </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kXlinkDoc)));
+  SelectById(app, "r");
+  EXPECT_TRUE(app.renameSelectedElement("rect2"));
+  ASSERT_TRUE(app.flushFrame());
+
+  const std::optional<svg::SVGElement> use = app.document().document().querySelector("#u");
+  ASSERT_TRUE(use.has_value());
+  EXPECT_EQ(AttrOf(app, "u", "href"), "#rect2");
+  EXPECT_EQ(use->getAttribute(xml::XMLQualifiedNameRef("xlink", "href")), "#r");
 }
 
 // `#grad` appears both as a standalone id selector (must repoint) and as the
