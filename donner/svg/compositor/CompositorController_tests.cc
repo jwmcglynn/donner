@@ -62,6 +62,13 @@ void PrintTo(const CompositorController::LayerInspectorRow& row, std::ostream* o
       << ", fallbackReasons=" << testing::PrintToString(row.fallbackReasonsText) << "}";
 }
 
+void PrintTo(const CompositorController::SegmentInspectorRow& row, std::ostream* os) {
+  *os << "SegmentInspectorRow{slotIndex=" << row.slotIndex
+      << ", bitmapSize=" << testing::PrintToString(row.bitmapSize)
+      << ", generation=" << row.generation << ", dirty=" << row.dirty
+      << ", hasValidBitmap=" << row.hasValidBitmap << "}";
+}
+
 void PrintTo(const CompositorController::CompositeTileSnapshot& tile, std::ostream* os) {
   *os << "CompositeTileSnapshot{id=" << testing::PrintToString(tile.id)
       << ", label=" << testing::PrintToString(tile.label)
@@ -163,6 +170,22 @@ MATCHER_P(ValidSegmentRowWithBitmapSize, bitmapSize,
 
   *result_listener << "slotIndex=" << arg.slotIndex << ", hasValidBitmap=" << arg.hasValidBitmap
                    << ", bitmapSize=" << testing::PrintToString(arg.bitmapSize);
+  return false;
+}
+
+MATCHER(SegmentRowEmptyOrHasBitmapMetadata,
+        "an empty segment row or a valid segment row with bitmap metadata") {
+  if (!arg.hasValidBitmap) {
+    return true;
+  }
+
+  if (arg.bitmapSize != Vector2i::Zero() && arg.generation > 0u) {
+    return true;
+  }
+
+  *result_listener << "slotIndex=" << arg.slotIndex
+                   << ", bitmapSize=" << testing::PrintToString(arg.bitmapSize)
+                   << ", generation=" << arg.generation;
   return false;
 }
 
@@ -1452,19 +1475,14 @@ TEST_F(CompositorControllerTest, SnapshotSegmentInspectorRowsEmitsOneRowPerSlot)
 
   const auto rows = compositor.snapshotSegmentInspectorRows();
   // One promoted layer → two segment slots (pre-layer + post-layer).
-  ASSERT_EQ(rows.size(), 2u);
+  ASSERT_THAT(rows, SizeIs(2u));
   EXPECT_THAT(
       rows,
       ::testing::ElementsAre(
           ::testing::Field("slotIndex", &CompositorController::SegmentInspectorRow::slotIndex, 0u),
           ::testing::Field("slotIndex", &CompositorController::SegmentInspectorRow::slotIndex,
                            1u)));
-  for (const auto& row : rows) {
-    if (row.hasValidBitmap) {
-      EXPECT_NE(row.bitmapSize, Vector2i::Zero());
-      EXPECT_GT(row.generation, 0u);
-    }
-  }
+  EXPECT_THAT(rows, Each(SegmentRowEmptyOrHasBitmapMetadata()));
 }
 
 TEST_F(CompositorControllerTest, CheapStaticSpanPlanChoosesImmediate) {
