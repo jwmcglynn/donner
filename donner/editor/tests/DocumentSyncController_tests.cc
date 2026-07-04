@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <span>
 #include <string>
+#include <utility>
 
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorApp.h"
@@ -14,6 +15,8 @@
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/SelectionAabb.h"
 #include "donner/editor/TextEditor.h"
+#include "donner/svg/SVGDocument.h"
+#include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGTextElement.h"
 #include "donner/svg/core/Display.h"
 
@@ -322,6 +325,108 @@ TEST_F(DocumentSyncControllerTest, AppTransformWritebacksDrainAllQueuedEntries) 
   ASSERT_TRUE(r2.has_value());
   EXPECT_EQ(r1->getAttribute("transform"), std::optional<RcString>(RcString("translate(5)")));
   EXPECT_EQ(r2->getAttribute("transform"), std::optional<RcString>(RcString("translate(11)")));
+}
+
+TEST_F(DocumentSyncControllerTest, MultiSelectionDragWritebackDrainsSelectToolExtras) {
+  EditorApp app;
+  TextEditor textEditor;
+  SelectTool tool;
+  DocumentSyncController controller{std::string(kTwoRectSvg)};
+
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  app.setCurrentFilePath("test.svg");
+  app.setCleanSourceText(kTwoRectSvg);
+  textEditor.setText(kTwoRectSvg);
+  textEditor.resetTextChanged();
+
+  auto r1 = app.document().document().querySelector("#r1");
+  auto r2 = app.document().document().querySelector("#r2");
+  ASSERT_TRUE(r1.has_value());
+  ASSERT_TRUE(r2.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*r1, *r2});
+
+  tool.onMouseDown(app, Vector2d(5.0, 5.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(13.0, 5.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(13.0, 5.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  controller.applyPendingWritebacks(app, tool, textEditor);
+
+  EXPECT_EQ(textEditor.getText(), app.document().document().source());
+  EXPECT_FALSE(textEditor.isTextChanged());
+  r1 = app.document().document().querySelector("#r1");
+  r2 = app.document().document().querySelector("#r2");
+  ASSERT_TRUE(r1.has_value());
+  ASSERT_TRUE(r2.has_value());
+  EXPECT_EQ(r1->getAttribute("transform"), std::optional<RcString>(RcString("translate(8)")));
+  EXPECT_EQ(r2->getAttribute("transform"), std::optional<RcString>(RcString("translate(8)")));
+}
+
+TEST_F(DocumentSyncControllerTest, TransformWritebackRestoreAndEmptyTransformBranches) {
+  constexpr std::string_view kSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <rect id="r1" x="0" y="0" width="10" height="10" transform="translate(1)"/>
+         <rect id="r2" x="20" y="0" width="10" height="10" transform="translate(2)"/>
+         <rect id="r3" x="40" y="0" width="10" height="10" transform="translate(3)"/>
+       </svg>)svg";
+
+  EditorApp app;
+  TextEditor textEditor;
+  SelectTool tool;
+  DocumentSyncController controller{std::string(kSvg)};
+
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  app.setCurrentFilePath("test.svg");
+  app.setCleanSourceText(kSvg);
+  textEditor.setText(kSvg);
+  textEditor.resetTextChanged();
+
+  auto r1 = app.document().document().querySelector("#r1");
+  auto r2 = app.document().document().querySelector("#r2");
+  auto r3 = app.document().document().querySelector("#r3");
+  ASSERT_TRUE(r1.has_value());
+  ASSERT_TRUE(r2.has_value());
+  ASSERT_TRUE(r3.has_value());
+  auto r1Target = captureAttributeWritebackTarget(*r1);
+  auto r2Target = captureAttributeWritebackTarget(*r2);
+  auto r3Target = captureAttributeWritebackTarget(*r3);
+  ASSERT_TRUE(r1Target.has_value());
+  ASSERT_TRUE(r2Target.has_value());
+  ASSERT_TRUE(r3Target.has_value());
+
+  app.enqueueTransformWriteback(EditorApp::CompletedTransformWriteback{
+      .target = AttributeWritebackTarget{},
+      .transform = Transform2d::Translate(Vector2d(99.0, 0.0)),
+  });
+  app.enqueueTransformWriteback(EditorApp::CompletedTransformWriteback{
+      .target = *r1Target,
+      .transform = Transform2d::Translate(Vector2d(7.0, 0.0)),
+      .sourceTransformAttributeValue = RcString("translate(4 5)"),
+      .restoreSourceTransformAttributeValue = true,
+  });
+  app.enqueueTransformWriteback(EditorApp::CompletedTransformWriteback{
+      .target = *r2Target,
+      .transform = Transform2d::Translate(Vector2d(7.0, 0.0)),
+      .restoreSourceTransformAttributeValue = true,
+  });
+  app.enqueueTransformWriteback(EditorApp::CompletedTransformWriteback{
+      .target = *r3Target,
+      .transform = Transform2d(),
+  });
+
+  controller.applyPendingWritebacks(app, tool, textEditor);
+
+  EXPECT_EQ(textEditor.getText(), app.document().document().source());
+  EXPECT_FALSE(textEditor.isTextChanged());
+  r1 = app.document().document().querySelector("#r1");
+  r2 = app.document().document().querySelector("#r2");
+  r3 = app.document().document().querySelector("#r3");
+  ASSERT_TRUE(r1.has_value());
+  ASSERT_TRUE(r2.has_value());
+  ASSERT_TRUE(r3.has_value());
+  EXPECT_EQ(r1->getAttribute("transform"), std::optional<RcString>(RcString("translate(4 5)")));
+  EXPECT_FALSE(r2->getAttribute("transform").has_value());
+  EXPECT_FALSE(r3->getAttribute("transform").has_value());
 }
 
 TEST_F(DocumentSyncControllerTest, SourceBackedDeleteWritebackMirrorsFlushDeltaWithoutTextEcho) {
@@ -951,6 +1056,43 @@ TEST(DocumentSyncControllerStructuredTest, MirrorSourceDeltasWithEmptyDeltasRetu
   EXPECT_FALSE(controller.mirrorSourceDeltas(app, textEditor, {}));
 }
 
+TEST(DocumentSyncControllerStructuredTest, MirrorSourceDeltasWithoutDocumentReturnsFalse) {
+  EditorApp app;
+  TextEditor textEditor;
+  textEditor.setText(kTwoRectSvg);
+  textEditor.resetTextChanged();
+  DocumentSyncController controller{std::string(kTwoRectSvg)};
+
+  xml::XMLSourceDelta delta;
+  delta.offset = 0;
+  delta.removedLength = 0;
+  delta.insertedLength = 1;
+
+  EXPECT_FALSE(controller.mirrorSourceDeltas(app, textEditor, {delta}));
+  EXPECT_EQ(textEditor.getText(), std::string(kTwoRectSvg));
+}
+
+TEST(DocumentSyncControllerStructuredTest, MirrorSourceDeltasWithSourceLessDocumentReturnsFalse) {
+  EditorApp app;
+  svg::SVGDocument document;
+  app.document().setDocument(std::move(document));
+  ASSERT_TRUE(app.hasDocument());
+  ASSERT_FALSE(app.document().document().hasSourceStore());
+
+  TextEditor textEditor;
+  textEditor.setText(kTwoRectSvg);
+  textEditor.resetTextChanged();
+  DocumentSyncController controller{std::string(kTwoRectSvg)};
+
+  xml::XMLSourceDelta delta;
+  delta.offset = 0;
+  delta.removedLength = 0;
+  delta.insertedLength = 1;
+
+  EXPECT_FALSE(controller.mirrorSourceDeltas(app, textEditor, {delta}));
+  EXPECT_EQ(textEditor.getText(), std::string(kTwoRectSvg));
+}
+
 TEST(DocumentSyncControllerStructuredTest, MirrorSourceDeltasOutOfRangeFallsBackToFullMirror) {
   EditorApp app;
   app.setStructuredEditingEnabled(true);
@@ -1078,6 +1220,300 @@ TEST(DocumentSyncControllerStructuredTest, MultiDeltaMoveMirrorsIntoTextPane) {
   EXPECT_EQ(app.document().documentGeneration(), documentGeneration);
   EXPECT_NE(textEditor.getText().find(R"(<g id="target"><rect id="moved")"), std::string::npos);
   EXPECT_TRUE(app.isDirty());
+}
+
+TEST(DocumentSyncControllerStructuredTest, MirrorSourceDeltasPreservesLocalEditAndQueuesReparse) {
+  EditorApp app;
+  app.setStructuredEditingEnabled(true);
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  app.setCleanSourceText(kTwoRectSvg);
+
+  TextEditor textEditor;
+  textEditor.setText(kTwoRectSvg);
+  textEditor.resetTextChanged();
+  DocumentSyncController controller{std::string(kTwoRectSvg)};
+
+  const std::size_t rectOffset = textEditor.getText().find("<rect");
+  ASSERT_NE(rectOffset, std::string::npos);
+  textEditor.setCursorPosition(textEditor.getCoordinatesAtByteOffset(rectOffset));
+  textEditor.insertText("<!-- local -->");
+  textEditor.resetTextChanged();
+
+  auto rect = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(rect.has_value());
+  xml::ApplySourceEditResult result =
+      app.document().document().setElementAttribute(*rect, "fill", "green");
+  ASSERT_TRUE(result.applied);
+  ASSERT_FALSE(result.sourceDeltas.empty());
+
+  EXPECT_TRUE(controller.mirrorSourceDeltas(app, textEditor, result.sourceDeltas));
+
+  EXPECT_NE(textEditor.getText().find("<!-- local -->"), std::string::npos);
+  EXPECT_NE(textEditor.getText().find(R"(fill="green")"), std::string::npos);
+  EXPECT_FALSE(textEditor.isTextChanged());
+  EXPECT_FALSE(app.document().queue().empty());
+}
+
+TEST(DocumentSyncControllerStructuredTest, MirrorSourceDeltasMapsBeforeLocalEdit) {
+  EditorApp app;
+  app.setStructuredEditingEnabled(true);
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  app.setCleanSourceText(kTwoRectSvg);
+
+  TextEditor textEditor;
+  textEditor.setText(kTwoRectSvg);
+  textEditor.resetTextChanged();
+  DocumentSyncController controller{std::string(kTwoRectSvg)};
+
+  const std::size_t closeOffset = textEditor.getText().find("</svg>");
+  ASSERT_NE(closeOffset, std::string::npos);
+  textEditor.setCursorPosition(textEditor.getCoordinatesAtByteOffset(closeOffset));
+  textEditor.insertText("<!-- local tail -->");
+  textEditor.resetTextChanged();
+
+  auto rect = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(rect.has_value());
+  xml::ApplySourceEditResult result =
+      app.document().document().setElementAttribute(*rect, "fill", "green");
+  ASSERT_TRUE(result.applied);
+  ASSERT_FALSE(result.sourceDeltas.empty());
+
+  EXPECT_TRUE(controller.mirrorSourceDeltas(app, textEditor, result.sourceDeltas));
+
+  EXPECT_NE(textEditor.getText().find("<!-- local tail -->"), std::string::npos);
+  EXPECT_NE(textEditor.getText().find(R"(fill="green")"), std::string::npos);
+  EXPECT_FALSE(textEditor.isTextChanged());
+  EXPECT_FALSE(app.document().queue().empty());
+}
+
+TEST(DocumentSyncControllerStructuredTest, MirrorSourceDeltasMapsAfterLocalEdit) {
+  EditorApp app;
+  app.setStructuredEditingEnabled(true);
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  app.setCleanSourceText(kTwoRectSvg);
+
+  TextEditor textEditor;
+  textEditor.setText(kTwoRectSvg);
+  textEditor.resetTextChanged();
+  DocumentSyncController controller{std::string(kTwoRectSvg)};
+
+  const std::size_t firstRectOffset = textEditor.getText().find("<rect");
+  ASSERT_NE(firstRectOffset, std::string::npos);
+  textEditor.setCursorPosition(textEditor.getCoordinatesAtByteOffset(firstRectOffset));
+  textEditor.insertText("<!-- local head -->");
+  textEditor.resetTextChanged();
+
+  auto rect = app.document().document().querySelector("#r2");
+  ASSERT_TRUE(rect.has_value());
+  xml::ApplySourceEditResult result =
+      app.document().document().setElementAttribute(*rect, "fill", "blue");
+  ASSERT_TRUE(result.applied);
+  ASSERT_FALSE(result.sourceDeltas.empty());
+
+  EXPECT_TRUE(controller.mirrorSourceDeltas(app, textEditor, result.sourceDeltas));
+
+  EXPECT_NE(textEditor.getText().find("<!-- local head -->"), std::string::npos);
+  const std::size_t r2Offset = textEditor.getText().find(R"(id="r2")");
+  ASSERT_NE(r2Offset, std::string::npos);
+  EXPECT_NE(textEditor.getText().find(R"(fill="blue")", r2Offset), std::string::npos);
+  EXPECT_FALSE(textEditor.isTextChanged());
+  EXPECT_FALSE(app.document().queue().empty());
+}
+
+TEST(DocumentSyncControllerStructuredTest, MirrorSourceDeltasFallsBackWhenDeleteOverlapsLocalEdit) {
+  EditorApp app;
+  app.setStructuredEditingEnabled(true);
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  app.setCleanSourceText(kTwoRectSvg);
+
+  TextEditor textEditor;
+  textEditor.setText(kTwoRectSvg);
+  textEditor.resetTextChanged();
+  DocumentSyncController controller{std::string(kTwoRectSvg)};
+
+  const std::size_t widthOffset = textEditor.getText().find(R"(width="10")");
+  ASSERT_NE(widthOffset, std::string::npos);
+  textEditor.setSelection(textEditor.getCoordinatesAtByteOffset(widthOffset),
+                          textEditor.getCoordinatesAtByteOffset(
+                              widthOffset + std::string_view(R"(width="10")").size()));
+  textEditor.insertText(R"(width="11")");
+  textEditor.resetTextChanged();
+
+  auto rect = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(rect.has_value());
+  xml::ApplySourceEditResult result = app.document().document().removeElement(*rect);
+  ASSERT_TRUE(result.applied);
+  ASSERT_EQ(result.sourceDeltas.size(), 1u);
+  ASSERT_GT(result.sourceDeltas.front().removedLength, 0u);
+
+  EXPECT_TRUE(controller.mirrorSourceDeltas(app, textEditor, result.sourceDeltas));
+
+  EXPECT_EQ(textEditor.getText(), app.document().document().source());
+  EXPECT_EQ(textEditor.getText().find("id=\"r1\""), std::string::npos);
+  EXPECT_FALSE(textEditor.isTextChanged());
+}
+
+TEST(DocumentSyncControllerStructuredTest, MirrorSourceDeltasFallsBackWhenInsertionContextIsGone) {
+  EditorApp app;
+  app.setStructuredEditingEnabled(true);
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  app.setCleanSourceText(kTwoRectSvg);
+
+  TextEditor textEditor;
+  textEditor.setText(kTwoRectSvg);
+  textEditor.resetTextChanged();
+  DocumentSyncController controller{std::string(kTwoRectSvg)};
+
+  const std::size_t closeOffset = textEditor.getText().find("</svg>");
+  ASSERT_NE(closeOffset, std::string::npos);
+  textEditor.setSelection(textEditor.getCoordinatesAtByteOffset(closeOffset - 1),
+                          textEditor.getCoordinatesAtByteOffset(textEditor.getText().size()));
+  textEditor.insertText("");
+  textEditor.resetTextChanged();
+
+  svg::SVGRectElement inserted = svg::SVGRectElement::Create(app.document().document());
+  inserted.setAttribute("id", "inserted");
+  inserted.setAttribute("width", "5");
+  inserted.setAttribute("height", "6");
+  xml::ApplySourceEditResult result =
+      app.document().document().insertElement(app.document().document().svgElement(), inserted);
+  ASSERT_TRUE(result.applied);
+  ASSERT_EQ(result.sourceDeltas.size(), 1u);
+  ASSERT_EQ(result.sourceDeltas.front().removedLength, 0u);
+
+  EXPECT_TRUE(controller.mirrorSourceDeltas(app, textEditor, result.sourceDeltas));
+
+  EXPECT_EQ(textEditor.getText(), app.document().document().source());
+  EXPECT_NE(textEditor.getText().find("</svg>"), std::string::npos);
+  EXPECT_NE(textEditor.getText().find(R"(id="inserted")"), std::string::npos);
+}
+
+TEST(DocumentSyncControllerStructuredTest, MirrorSourceDeltasInsertsNewRootChildIntoLocalText) {
+  EditorApp app;
+  app.setStructuredEditingEnabled(true);
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  app.setCleanSourceText(kTwoRectSvg);
+
+  TextEditor textEditor;
+  textEditor.setText(kTwoRectSvg);
+  textEditor.resetTextChanged();
+  DocumentSyncController controller{std::string(kTwoRectSvg)};
+
+  const std::size_t closeOffset = textEditor.getText().find("</svg>");
+  ASSERT_NE(closeOffset, std::string::npos);
+  textEditor.setCursorPosition(textEditor.getCoordinatesAtByteOffset(closeOffset));
+  textEditor.insertText("<!-- local -->\n");
+  textEditor.resetTextChanged();
+
+  svg::SVGRectElement inserted = svg::SVGRectElement::Create(app.document().document());
+  inserted.setAttribute("id", "inserted");
+  inserted.setAttribute("width", "5");
+  inserted.setAttribute("height", "6");
+  xml::ApplySourceEditResult result =
+      app.document().document().insertElement(app.document().document().svgElement(), inserted);
+  ASSERT_TRUE(result.applied);
+  ASSERT_EQ(result.sourceDeltas.size(), 1u);
+  ASSERT_EQ(result.sourceDeltas.front().removedLength, 0u);
+  ASSERT_GT(result.sourceDeltas.front().insertedLength, 0u);
+
+  EXPECT_TRUE(controller.mirrorSourceDeltas(app, textEditor, result.sourceDeltas));
+
+  EXPECT_NE(textEditor.getText().find("<!-- local -->"), std::string::npos);
+  EXPECT_NE(textEditor.getText().find(R"(id="inserted")"), std::string::npos);
+  EXPECT_LT(textEditor.getText().find("<!-- local -->"), textEditor.getText().find("</svg>"));
+  EXPECT_FALSE(textEditor.isTextChanged());
+}
+
+TEST(DocumentSyncControllerStructuredTest, InvalidSourceBackedTransformWritebackMirrorsSource) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  app.setCleanSourceText(kTwoRectSvg);
+
+  TextEditor textEditor;
+  textEditor.setText("stale text");
+  textEditor.resetTextChanged();
+  SelectTool tool;
+  DocumentSyncController controller{std::string(kTwoRectSvg)};
+
+  app.enqueueTransformWriteback(EditorApp::CompletedTransformWriteback{
+      .target = AttributeWritebackTarget{},
+      .transform = Transform2d::Translate(Vector2d(5.0, 0.0)),
+  });
+
+  controller.applyPendingWritebacks(app, tool, textEditor);
+
+  EXPECT_EQ(textEditor.getText(), app.document().document().source());
+  EXPECT_FALSE(textEditor.isTextChanged());
+}
+
+TEST(DocumentSyncControllerStructuredTest, ProgrammaticDocumentTransformWritebacksPatchText) {
+  constexpr std::string_view kSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect id="r1" width="10" height="10"/><rect id="r2" width="10" height="10" transform="translate(2)"/><rect id="r3" width="10" height="10" transform="translate(3)"/></svg>)svg";
+
+  svg::SVGDocument document;
+  const auto makeRectTarget = [](std::size_t rectIndex, RcString id) {
+    return AttributeWritebackTarget{
+        .elementPath =
+            {
+                AttributeWritebackPathSegment{0, xml::XMLQualifiedName(RcString("svg"))},
+                AttributeWritebackPathSegment{rectIndex, xml::XMLQualifiedName(RcString("rect"))},
+            },
+        .elementId = std::move(id),
+    };
+  };
+  AttributeWritebackTarget r1Target = makeRectTarget(0, RcString("r1"));
+  AttributeWritebackTarget r2Target = makeRectTarget(1, RcString("r2"));
+  AttributeWritebackTarget r3Target = makeRectTarget(2, RcString("r3"));
+
+  EditorApp app;
+  app.document().setDocument(std::move(document));
+  ASSERT_TRUE(app.hasDocument());
+  ASSERT_FALSE(app.document().document().hasSourceStore());
+  app.setCleanSourceText(kSvg);
+
+  TextEditor textEditor;
+  textEditor.setText(kSvg);
+  textEditor.resetTextChanged();
+  SelectTool tool;
+  DocumentSyncController controller{std::string(kSvg)};
+
+  app.enqueueTransformWriteback(EditorApp::CompletedTransformWriteback{
+      .target = r1Target,
+      .transform = Transform2d::Translate(Vector2d(6.0, 0.0)),
+      .sourceTransformAttributeValue = RcString("translate(9)"),
+      .restoreSourceTransformAttributeValue = true,
+  });
+  app.enqueueTransformWriteback(EditorApp::CompletedTransformWriteback{
+      .target = r2Target,
+      .transform = Transform2d::Translate(Vector2d(6.0, 0.0)),
+      .restoreSourceTransformAttributeValue = true,
+  });
+  app.enqueueTransformWriteback(EditorApp::CompletedTransformWriteback{
+      .target = r3Target,
+      .transform = Transform2d(),
+  });
+
+  controller.applyPendingWritebacks(app, tool, textEditor);
+
+  EXPECT_NE(textEditor.getText().find("id=\"r1\""), std::string::npos);
+  EXPECT_NE(textEditor.getText().find("transform=\"translate(9)\""), std::string::npos);
+  EXPECT_NE(textEditor.getText().find(R"(<rect id="r2" width="10" height="10"/>)"),
+            std::string::npos);
+  EXPECT_NE(textEditor.getText().find(R"(<rect id="r3" width="10" height="10"/>)"),
+            std::string::npos);
+  EXPECT_FALSE(app.document().queue().empty());
+
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_TRUE(app.document().document().hasSourceStore());
+  auto parsedR1 = app.document().document().querySelector("#r1");
+  auto parsedR2 = app.document().document().querySelector("#r2");
+  auto parsedR3 = app.document().document().querySelector("#r3");
+  ASSERT_TRUE(parsedR1.has_value());
+  ASSERT_TRUE(parsedR2.has_value());
+  ASSERT_TRUE(parsedR3.has_value());
+  EXPECT_EQ(parsedR1->getAttribute("transform"), std::optional<RcString>(RcString("translate(9)")));
+  EXPECT_FALSE(parsedR2->getAttribute("transform").has_value());
+  EXPECT_FALSE(parsedR3->getAttribute("transform").has_value());
 }
 
 }  // namespace

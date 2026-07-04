@@ -1,11 +1,4 @@
-"""Sandbox render-session tooling: the headless session, REPL shell, and binary.
-
-The `app` package is the non-GUI tooling surface on top of the sandbox primitives:
-
-  - `SvgSource` for URI → bytes
-  - `PipelinedRenderer` for multi-threaded wire-based rasterization
-  - `FrameInspector` + `RnrFile` for "inspect" / "record" commands
-  - `TerminalImageViewer` for the `show` command
+"""Headless render-session tooling: the non-GUI session, REPL shell, and binary.
 
 The `:render_session` library is fully UI-free and exhaustively testable; the
 binary target layers a stdin/stdout REPL on top.
@@ -19,15 +12,16 @@ donner_cc_library(
     name = "render_session",
     srcs = ["EditorApp.cc"],
     hdrs = ["EditorApp.h"],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
+    target_compatible_with = renderer_backend_compatible_with([
+        "tiny_skia",
+        "geode",
+    ]),
     visibility = ["//donner/editor:__subpackages__"],
     deps = [
         "//donner/base",
-        "//donner/editor/sandbox:pipelined_renderer",
-        "//donner/editor/sandbox:serializing_renderer",
-        "//donner/editor/sandbox:svg_source",
         "//donner/svg",
         "//donner/svg/parser",
+        "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_interface",
     ],
 )
@@ -36,12 +30,13 @@ donner_cc_library(
     name = "render_session_repl",
     srcs = ["EditorRepl.cc"],
     hdrs = ["EditorRepl.h"],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
+    target_compatible_with = renderer_backend_compatible_with([
+        "tiny_skia",
+        "geode",
+    ]),
     visibility = ["//donner/editor:__subpackages__"],
     deps = [
         ":render_session",
-        "//donner/editor/sandbox:frame_inspector",
-        "//donner/editor/sandbox:rnr_file",
         "//donner/svg/renderer:renderer_image_io",
         "//donner/svg/renderer:renderer_interface",
         "//donner/svg/renderer:terminal_image_viewer",
@@ -51,7 +46,10 @@ donner_cc_library(
 donner_cc_binary(
     name = "render_repl",
     srcs = ["donner_editor_main.cc"],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
+    target_compatible_with = renderer_backend_compatible_with([
+        "tiny_skia",
+        "geode",
+    ]),
     visibility = ["//donner/editor:__subpackages__"],
     deps = [
         ":render_session",

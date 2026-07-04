@@ -16,8 +16,6 @@
 #endif
 
 #include "donner/editor/app/EditorApp.h"
-#include "donner/editor/sandbox/FrameInspector.h"
-#include "donner/editor/sandbox/RnrFile.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/TerminalImageViewer.h"
 
@@ -155,18 +153,6 @@ bool RenderSessionRepl::dispatch(const std::string& line) {
     cmdSave(tokens[1]);
     return true;
   }
-  if (cmd == "inspect") {
-    cmdInspect();
-    return true;
-  }
-  if (cmd == "record") {
-    if (tokens.size() != 2) {
-      out_ << "usage: record <out.rnr>\n";
-      return false;
-    }
-    cmdRecord(tokens[1]);
-    return true;
-  }
   if (cmd == "watch") {
     if (tokens.size() != 2) {
       out_ << "usage: watch on|off\n";
@@ -189,8 +175,6 @@ void RenderSessionRepl::printHelp() {
        << "  status                  print the latest status line\n"
        << "  show                    render current frame to the terminal\n"
        << "  save <out.png>          write current bitmap as PNG\n"
-       << "  inspect                 dump decoded wire stream\n"
-       << "  record <out.rnr>        save current frame as a .rnr recording\n"
        << "  watch on|off            toggle filesystem watch for auto-reload\n"
        << "  quit | exit             leave the editor\n";
 }
@@ -256,34 +240,6 @@ void RenderSessionRepl::cmdSave(const std::string& path) {
   }
   out.write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
   out_ << "save: wrote " << path << " (" << png.size() << " bytes)\n";
-}
-
-void RenderSessionRepl::cmdInspect() {
-  const auto& wire = app_.lastGoodWire();
-  if (wire.empty()) {
-    out_ << "inspect: no frame available\n";
-    return;
-  }
-  out_ << sandbox::FrameInspector::Dump(wire);
-}
-
-void RenderSessionRepl::cmdRecord(const std::string& path) {
-  const auto& wire = app_.lastGoodWire();
-  if (wire.empty()) {
-    out_ << "record: no frame available\n";
-    return;
-  }
-  sandbox::RnrHeader header;
-  header.width = static_cast<uint32_t>(app_.width());
-  header.height = static_cast<uint32_t>(app_.height());
-  header.backend = sandbox::BackendHint::kTinySkia;
-  header.uri = app_.current().uri;
-  const auto status = sandbox::SaveRnrFile(path, header, wire);
-  if (status != sandbox::RnrIoStatus::kOk) {
-    out_ << "record: save failed\n";
-    return;
-  }
-  out_ << "record: wrote " << path << " (" << wire.size() << " wire bytes)\n";
 }
 
 void RenderSessionRepl::cmdWatch(const std::string& arg) {

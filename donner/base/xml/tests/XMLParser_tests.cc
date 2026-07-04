@@ -3,6 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <string>
 #include <string_view>
 
 #include "donner/base/ParseResult.h"
@@ -2644,6 +2645,55 @@ TEST_F(XMLParserTests, NameAllowsCJKCharacters) {
   EXPECT_THAT(maybeNode->tagName(), Eq("\xE4\xB8\xAD\xE6\x96\x87"));
 }
 
+TEST_F(XMLParserTests, NameAllowsSupplementaryPlaneStartCharacter) {
+  // U+10000 is the first supplementary-plane code point allowed by NameStartChar.
+  auto maybeNode = parseAndGetFirstNode("<\xF0\x90\x80\x80tag />");
+  ASSERT_TRUE(maybeNode.has_value());
+  EXPECT_THAT(maybeNode->tagName(), Eq("\xF0\x90\x80\x80tag"));
+}
+
+TEST_F(XMLParserTests, NameStartCharAllowsXmlRangeBoundaries) {
+  const std::string_view names[] = {
+      "\xC3\x80",          // U+00C0
+      "\xC3\x96",          // U+00D6
+      "\xC3\x98",          // U+00D8
+      "\xC3\xB6",          // U+00F6
+      "\xC3\xB8",          // U+00F8
+      "\xCB\xBF",          // U+02FF
+      "\xCD\xB0",          // U+0370
+      "\xCD\xBD",          // U+037D
+      "\xCD\xBF",          // U+037F
+      "\xE1\xBF\xBF",      // U+1FFF
+      "\xE2\x80\x8C",      // U+200C
+      "\xE2\x80\x8D",      // U+200D
+      "\xE2\x81\xB0",      // U+2070
+      "\xE2\x86\x8F",      // U+218F
+      "\xE2\xB0\x80",      // U+2C00
+      "\xE2\xBF\xAF",      // U+2FEF
+      "\xE3\x80\x81",      // U+3001
+      "\xED\x9F\xBF",      // U+D7FF
+      "\xEF\xA4\x80",      // U+F900
+      "\xEF\xB7\x8F",      // U+FDCF
+      "\xEF\xB7\xB0",      // U+FDF0
+      "\xEF\xBF\xBD",      // U+FFFD
+      "\xF3\xAF\xBF\xBF",  // U+EFFFF
+  };
+
+  for (std::string_view name : names) {
+    SCOPED_TRACE(testing::Message() << "name bytes size=" << name.size());
+    std::string xml = "<";
+    xml.append(name);
+    xml.append("tag />");
+
+    auto maybeNode = parseAndGetFirstNode(xml);
+    ASSERT_TRUE(maybeNode.has_value());
+
+    std::string expected(name);
+    expected.append("tag");
+    EXPECT_EQ(std::string(maybeNode->tagName().name), expected);
+  }
+}
+
 TEST_F(XMLParserTests, NameRejectsInvalidUnicodeRange) {
   // U+00D7 (×, multiplication sign) is NOT in NameStartChar ranges
   // (it's between [#xC0-#xD6] and [#xD8-#xF6])
@@ -2659,6 +2709,36 @@ TEST_F(XMLParserTests, NameCharAllowsMiddleDotB7) {
   auto maybeNode = parseAndGetFirstNode("<tag\xC2\xB7name />");
   ASSERT_TRUE(maybeNode.has_value());
   EXPECT_THAT(maybeNode->tagName(), Eq("tag\xC2\xB7name"));
+}
+
+TEST_F(XMLParserTests, NameCharAllowsCombiningMarkAfterStart) {
+  // U+0300 is allowed as NameChar after a valid starter.
+  auto maybeNode = parseAndGetFirstNode("<tag\xCC\x80 />");
+  ASSERT_TRUE(maybeNode.has_value());
+  EXPECT_THAT(maybeNode->tagName(), Eq("tag\xCC\x80"));
+}
+
+TEST_F(XMLParserTests, NameCharAllowsXmlRangeBoundariesAfterAsciiStart) {
+  const std::string_view suffixes[] = {
+      "\xCC\x80",      // U+0300
+      "\xCD\xAF",      // U+036F
+      "\xE2\x80\xBF",  // U+203F
+      "\xE2\x81\x80",  // U+2040
+  };
+
+  for (std::string_view suffix : suffixes) {
+    SCOPED_TRACE(testing::Message() << "suffix bytes size=" << suffix.size());
+    std::string xml = "<tag";
+    xml.append(suffix);
+    xml.append(" />");
+
+    auto maybeNode = parseAndGetFirstNode(xml);
+    ASSERT_TRUE(maybeNode.has_value());
+
+    std::string expected = "tag";
+    expected.append(suffix);
+    EXPECT_EQ(std::string(maybeNode->tagName().name), expected);
+  }
 }
 
 TEST_F(XMLParserTests, NameStartCharRejectsMiddleDotB7) {

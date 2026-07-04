@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <string_view>
 #include <thread>
 
 #include "donner/svg/SVGDocument.h"
@@ -130,8 +131,21 @@ TEST_F(CompositorControllerTest, PromoteInvalidEntityFails) {
   )svg");
 
   CompositorController compositor(document, renderer_);
-  EXPECT_FALSE(compositor.promoteEntity(entt::null));
+  const auto result = compositor.promoteEntity(entt::null);
+  EXPECT_EQ(result, CompositorController::PromoteResult::InvalidEntity);
+  EXPECT_FALSE(result.promotedLayer());
+  EXPECT_FALSE(result.fullCanvasPreviewRequired());
   EXPECT_EQ(compositor.layerCount(), 0u);
+  EXPECT_FALSE(compositor.isPromoted(entt::null));
+  EXPECT_TRUE(compositor.layerComposeOffset(entt::null).isIdentity());
+  EXPECT_EQ(compositor.fallbackReasonsOf(entt::null), FallbackReason::None);
+  EXPECT_TRUE(compositor.layerBitmapOf(entt::null).empty());
+  EXPECT_EQ(compositor.layerCanvasOffsetOf(entt::null), Vector2d::Zero());
+
+  const auto state = compositor.snapshotState();
+  EXPECT_EQ(state.lastPromoteRefusalReason,
+            CompositorController::PromoteRefusalReason::InvalidEntity);
+  EXPECT_TRUE(state.lastPromoteRefusalEntity == entt::null);
 }
 
 TEST_F(CompositorControllerTest, DemoteRemovesLayer) {
@@ -366,6 +380,28 @@ TEST_F(CompositorControllerTest, DemoteNonPromotedEntityIsNoOp) {
   CompositorController compositor(document, renderer_);
   compositor.demoteEntity(entity);  // No-op, should not crash.
   EXPECT_EQ(compositor.layerCount(), 0u);
+}
+
+TEST_F(CompositorControllerTest, DemoteDetachedPromotedEntityClearsInteractionHint) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" width="10" height="10" fill="red" />
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity));
+  ASSERT_TRUE(compositor.isPromoted(entity));
+
+  target->remove();
+  compositor.demoteEntity(entity);
+
+  EXPECT_FALSE(compositor.isPromoted(entity));
+  const auto state = compositor.snapshotState();
+  EXPECT_EQ(state.activeHintsCount, 0u);
+  EXPECT_TRUE(state.splitStaticLayersEntity == entt::null);
 }
 
 TEST_F(CompositorControllerTest, ComputedLayerAssignmentAttachedOnPromote) {
@@ -706,6 +742,107 @@ TEST_F(CompositorControllerTest, FallbackReasonsOfUnpromotedEntity) {
   EXPECT_EQ(compositor.fallbackReasonsOf(entity), FallbackReason::None);
 }
 
+TEST_F(CompositorControllerTest,
+       PromoteDescendantUnderRawCompositingAncestorUsesFullCanvasPreview) {
+  const auto expectFullCanvasPreview = [this](std::string_view svg) {
+    SVGDocument document = makeDocument(svg);
+    auto target = document.querySelector("#target");
+    ASSERT_TRUE(target.has_value());
+    const Entity entity = target->unsafeEntityHandle().entity();
+
+    CompositorController compositor(document, renderer_);
+    const auto result = compositor.promoteEntity(entity);
+
+    EXPECT_EQ(result, CompositorController::PromoteResult::FullCanvasPreviewRequired);
+    EXPECT_TRUE(result.fullCanvasPreviewRequired());
+    EXPECT_FALSE(result.promotedLayer());
+    EXPECT_FALSE(compositor.isPromoted(entity));
+    EXPECT_EQ(compositor.layerCount(), 0u);
+    EXPECT_EQ(compositor.snapshotState().lastPromoteRefusalReason,
+              CompositorController::PromoteRefusalReason::None);
+  };
+
+  expectFullCanvasPreview(R"svg(
+    <defs>
+      <filter id="blur"><feGaussianBlur stdDeviation="2" /></filter>
+    </defs>
+    <g filter="url(#blur)">
+      <rect id="target" width="10" height="10" fill="red" />
+    </g>
+  )svg");
+  expectFullCanvasPreview(R"svg(
+    <defs>
+      <clipPath id="cp"><rect width="5" height="5" /></clipPath>
+    </defs>
+    <g clip-path="url(#cp)">
+      <rect id="target" width="10" height="10" fill="red" />
+    </g>
+  )svg");
+  expectFullCanvasPreview(R"svg(
+    <defs>
+      <mask id="m"><rect width="10" height="10" fill="white" /></mask>
+    </defs>
+    <g mask="url(#m)">
+      <rect id="target" width="10" height="10" fill="red" />
+    </g>
+  )svg");
+}
+
+TEST_F(CompositorControllerTest,
+       PromoteDescendantUnderPreparedIsolatedAncestorUsesFullCanvasPreview) {
+  SVGDocument document = makeDocument(R"svg(
+    <g id="ancestor" opacity="0.5">
+      <rect id="target" width="10" height="10" fill="red" />
+    </g>
+  )svg");
+
+  ParseWarningSink warningSink;
+  RendererUtils::prepareDocumentForRendering(document, /*verbose=*/false, warningSink);
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  const auto result = compositor.promoteEntity(entity);
+
+  EXPECT_EQ(result, CompositorController::PromoteResult::FullCanvasPreviewRequired);
+  EXPECT_TRUE(result.fullCanvasPreviewRequired());
+  EXPECT_FALSE(compositor.isPromoted(entity));
+  EXPECT_EQ(compositor.layerCount(), 0u);
+}
+
+TEST_F(CompositorControllerTest, PromoteParentWithAlreadyPromotedDescendantFails) {
+  SVGDocument document = makeDocument(R"svg(
+    <g id="parent">
+      <rect id="child" width="10" height="10" fill="red" opacity="0.5" />
+    </g>
+  )svg");
+
+  configureMockForCaching();
+  CompositorController compositor(document, renderer_);
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  auto parent = document.querySelector("#parent");
+  auto child = document.querySelector("#child");
+  ASSERT_TRUE(parent.has_value());
+  ASSERT_TRUE(child.has_value());
+  const Entity parentEntity = parent->unsafeEntityHandle().entity();
+  const Entity childEntity = child->unsafeEntityHandle().entity();
+  ASSERT_NE(compositor.findLayerForTest(childEntity), nullptr)
+      << "Sanity check: the opacity child should be mandatorily promoted first.";
+
+  const auto result = compositor.promoteEntity(parentEntity);
+
+  EXPECT_EQ(result, CompositorController::PromoteResult::DescendantPromoted);
+  EXPECT_FALSE(compositor.isPromoted(parentEntity));
+  EXPECT_NE(compositor.findLayerForTest(childEntity), nullptr);
+  const auto state = compositor.snapshotState();
+  EXPECT_EQ(state.lastPromoteRefusalReason,
+            CompositorController::PromoteRefusalReason::DescendantPromoted);
+  EXPECT_EQ(state.lastPromoteRefusalEntity, parentEntity);
+}
+
 TEST_F(CompositorControllerTest, ResetAllLayersClearsPromotedEntities) {
   SVGDocument document = makeDocument(R"svg(
     <rect id="under" width="10" height="10" fill="blue" />
@@ -880,6 +1017,62 @@ TEST_F(CompositorControllerTest, TextureOnlyDragReusesPayloadWithoutRasterize) {
   const auto countersAfterDrag = compositor.fastPathCountersForTesting();
   EXPECT_EQ(countersAfterDrag.fastPathFrames, countersBeforeDrag.fastPathFrames + 1u);
   EXPECT_EQ(countersAfterDrag.slowPathFramesWithDirty, countersBeforeDrag.slowPathFramesWithDirty);
+}
+
+TEST_F(CompositorControllerTest, TextureBackedStaticSegmentsExposeDimensionsWithoutCpuBitmap) {
+  SVGDocument document = makeDocument(R"svg(
+    <defs>
+      <pattern id="p" x="0" y="0" width="4" height="4" patternUnits="userSpaceOnUse">
+        <rect width="4" height="4" fill="blue" />
+      </pattern>
+    </defs>
+    <rect id="patterned" x="2" y="2" width="8" height="8" fill="url(#p)" />
+    <rect id="target" x="40" y="0" width="10" height="10" fill="red" />
+  )svg");
+
+  configureMockForTextureCaching();
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity, InteractionHint::ActiveDrag));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  const auto segmentRows = compositor.snapshotSegmentInspectorRows();
+  const auto segmentRowIt = std::find_if(segmentRows.begin(), segmentRows.end(),
+                                         [](const auto& row) { return row.hasValidBitmap; });
+  ASSERT_NE(segmentRowIt, segmentRows.end());
+  EXPECT_EQ(segmentRowIt->bitmapSize, Vector2i(32, 32));
+
+  const auto allTiles = compositor.snapshotTilesForUpload(CompositorTileBitmapPayload::All);
+  const auto segmentTileIt = std::find_if(allTiles.begin(), allTiles.end(), [](const auto& tile) {
+    return tile.layerEntity == entt::null && tile.textureSnapshot != nullptr;
+  });
+  ASSERT_NE(segmentTileIt, allTiles.end());
+  EXPECT_TRUE(segmentTileIt->bitmap.empty());
+  EXPECT_EQ(segmentTileIt->bitmapDims, Vector2i(32, 32));
+
+  const auto metadataOnly =
+      compositor.snapshotTilesForUpload(CompositorTileBitmapPayload::MetadataOnly);
+  const auto metadataSegmentIt =
+      std::find_if(metadataOnly.begin(), metadataOnly.end(), [](const auto& tile) {
+        return tile.layerEntity == entt::null && tile.bitmapDims == Vector2i(32, 32);
+      });
+  ASSERT_NE(metadataSegmentIt, metadataOnly.end());
+  EXPECT_TRUE(metadataSegmentIt->bitmap.empty());
+  EXPECT_EQ(metadataSegmentIt->textureSnapshot, nullptr);
+
+  const auto inspectorTiles = compositor.snapshotCompositeTiles();
+  const auto inspectorSegmentIt =
+      std::find_if(inspectorTiles.begin(), inspectorTiles.end(), [](const auto& tile) {
+        return tile.kind == CompositorController::CompositeTileSnapshot::Kind::Segment &&
+               tile.textureSnapshot != nullptr;
+      });
+  ASSERT_NE(inspectorSegmentIt, inspectorTiles.end());
+  EXPECT_TRUE(inspectorSegmentIt->hasValidBitmap);
+  EXPECT_TRUE(inspectorSegmentIt->thumbnailPixels.empty());
+  EXPECT_EQ(inspectorSegmentIt->bitmapDims, Vector2i(32, 32));
 }
 
 TEST_F(CompositorControllerTest, PromotedGroupWithMandatoryChildDragReusesTextureFastPath) {
@@ -1272,6 +1465,177 @@ TEST_F(CompositorControllerTest, PaintResourceStaticSpanPlanChoosesCachedTile) {
                            [](const CompositorTile& tile) { return tile.immediate; }));
 }
 
+TEST_F(CompositorControllerTest, SnapshotTilesForUploadAppliesPayloadPolicies) {
+  SVGDocument document = makeDocument(R"svg(
+    <defs>
+      <pattern id="p" x="0" y="0" width="4" height="4" patternUnits="userSpaceOnUse">
+        <rect width="4" height="4" fill="blue" />
+      </pattern>
+    </defs>
+    <rect id="patterned" x="2" y="2" width="8" height="8" fill="url(#p)" />
+    <rect id="target" x="40" y="0" width="10" height="10" fill="red" />
+  )svg");
+
+  configureMockForCaching();
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity, InteractionHint::ActiveDrag));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  const auto allTiles = compositor.snapshotTilesForUpload(CompositorTileBitmapPayload::All);
+  const auto findTargetTile = [entity](const std::vector<CompositorTile>& tiles) {
+    return std::find_if(tiles.begin(), tiles.end(), [entity](const CompositorTile& tile) {
+      return tile.layerEntity == entity;
+    });
+  };
+  const auto findCachedSegmentTile = [](const std::vector<CompositorTile>& tiles) {
+    return std::find_if(tiles.begin(), tiles.end(), [](const CompositorTile& tile) {
+      return tile.layerEntity == entt::null && !tile.immediate &&
+             tile.bitmapDims != Vector2i::Zero();
+    });
+  };
+
+  const auto allTarget = findTargetTile(allTiles);
+  const auto allCachedSegment = findCachedSegmentTile(allTiles);
+  ASSERT_NE(allTarget, allTiles.end());
+  ASSERT_NE(allCachedSegment, allTiles.end());
+  ASSERT_TRUE(allTarget->isDragTarget);
+  ASSERT_FALSE(allTarget->bitmap.empty());
+  ASSERT_FALSE(allCachedSegment->bitmap.empty());
+
+  const auto dragOnly =
+      compositor.snapshotTilesForUpload(CompositorTileBitmapPayload::DragTargetOnly);
+  const auto dragOnlyTarget = findTargetTile(dragOnly);
+  const auto dragOnlyCachedSegment = findCachedSegmentTile(dragOnly);
+  ASSERT_NE(dragOnlyTarget, dragOnly.end());
+  ASSERT_NE(dragOnlyCachedSegment, dragOnly.end());
+  EXPECT_FALSE(dragOnlyTarget->bitmap.empty());
+  EXPECT_TRUE(dragOnlyCachedSegment->bitmap.empty());
+  EXPECT_NE(dragOnlyCachedSegment->bitmapDims, Vector2i::Zero());
+
+  const auto immediateOnly =
+      compositor.snapshotTilesForUpload(CompositorTileBitmapPayload::ImmediateOnly);
+  const auto immediateOnlyCachedSegment = findCachedSegmentTile(immediateOnly);
+  ASSERT_NE(immediateOnlyCachedSegment, immediateOnly.end());
+  EXPECT_TRUE(immediateOnlyCachedSegment->bitmap.empty());
+  EXPECT_NE(immediateOnlyCachedSegment->bitmapDims, Vector2i::Zero());
+
+  const auto immediateAndDrag =
+      compositor.snapshotTilesForUpload(CompositorTileBitmapPayload::ImmediateAndDragTargetOnly);
+  const auto immediateAndDragTarget = findTargetTile(immediateAndDrag);
+  const auto immediateAndDragCachedSegment = findCachedSegmentTile(immediateAndDrag);
+  ASSERT_NE(immediateAndDragTarget, immediateAndDrag.end());
+  ASSERT_NE(immediateAndDragCachedSegment, immediateAndDrag.end());
+  EXPECT_FALSE(immediateAndDragTarget->bitmap.empty());
+  EXPECT_TRUE(immediateAndDragCachedSegment->bitmap.empty());
+
+  const auto metadataOnly =
+      compositor.snapshotTilesForUpload(CompositorTileBitmapPayload::MetadataOnly);
+  ASSERT_EQ(metadataOnly.size(), allTiles.size());
+  for (const CompositorTile& tile : metadataOnly) {
+    EXPECT_TRUE(tile.bitmap.empty());
+    EXPECT_EQ(tile.textureSnapshot, nullptr);
+  }
+}
+
+TEST_F(CompositorControllerTest, SnapshotLayerInspectorRowsCanOmitThumbnails) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" width="10" height="10" fill="red" />
+  )svg");
+
+  configureMockForCaching();
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  const auto rows =
+      compositor.snapshotLayerInspectorRows(CompositorController::SnapshotThumbnails::Omit);
+  ASSERT_EQ(rows.size(), 1u);
+  EXPECT_TRUE(rows.front().hasValidBitmap);
+  EXPECT_NE(rows.front().bitmapSize, Vector2i::Zero());
+  EXPECT_EQ(rows.front().thumbnailDims, Vector2i::Zero());
+  EXPECT_TRUE(rows.front().thumbnailPixels.empty());
+}
+
+TEST_F(CompositorControllerTest, SetTightBoundedSegmentsEnabledMarksExistingSegmentsDirty) {
+  SVGDocument document = makeDocument(R"svg(
+    <defs>
+      <pattern id="p" x="0" y="0" width="4" height="4" patternUnits="userSpaceOnUse">
+        <rect width="4" height="4" fill="blue" />
+      </pattern>
+    </defs>
+    <rect id="target" x="40" y="0" width="10" height="10" fill="red" />
+    <rect id="static" x="2" y="2" width="8" height="8" fill="url(#p)" />
+  )svg");
+
+  configureMockForCaching();
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.tightBoundedSegmentsEnabled());
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  const auto rowsBeforeToggle = compositor.snapshotSegmentInspectorRows();
+  ASSERT_FALSE(rowsBeforeToggle.empty());
+  EXPECT_TRUE(std::none_of(rowsBeforeToggle.begin(), rowsBeforeToggle.end(),
+                           [](const auto& row) { return row.dirty; }));
+
+  compositor.setTightBoundedSegmentsEnabled(false);
+  EXPECT_FALSE(compositor.tightBoundedSegmentsEnabled());
+
+  const auto rowsAfterToggle = compositor.snapshotSegmentInspectorRows();
+  ASSERT_EQ(rowsAfterToggle.size(), rowsBeforeToggle.size());
+  EXPECT_TRUE(std::all_of(rowsAfterToggle.begin(), rowsAfterToggle.end(),
+                          [](const auto& row) { return row.dirty; }));
+
+  compositor.setTightBoundedSegmentsEnabled(false);
+  const auto rowsAfterIdempotentToggle = compositor.snapshotSegmentInspectorRows();
+  ASSERT_EQ(rowsAfterIdempotentToggle.size(), rowsAfterToggle.size());
+  EXPECT_TRUE(std::all_of(rowsAfterIdempotentToggle.begin(), rowsAfterIdempotentToggle.end(),
+                          [](const auto& row) { return row.dirty; }));
+}
+
+TEST_F(CompositorControllerTest, CancelledRenderLeavesDirtyLayerForNextFrame) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" width="10" height="10" fill="red" />
+  )svg");
+
+  configureMockForCaching();
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity));
+
+  CancellationToken token;
+  token.cancel();
+  EXPECT_FALSE(compositor.renderFrame(RenderViewport{kTestSvgDefaultSize}, token));
+
+  {
+    const auto rows = compositor.snapshotLayerInspectorRows();
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_TRUE(rows.front().dirty);
+    EXPECT_FALSE(rows.front().hasValidBitmap);
+  }
+
+  token.reset();
+  EXPECT_TRUE(compositor.renderFrame(RenderViewport{kTestSvgDefaultSize}, token));
+
+  const auto rows = compositor.snapshotLayerInspectorRows();
+  ASSERT_EQ(rows.size(), 1u);
+  EXPECT_FALSE(rows.front().dirty);
+  EXPECT_TRUE(rows.front().hasValidBitmap);
+}
+
 TEST_F(CompositorControllerTest, IntrinsicSizeMandatoryFilterLayerHasNonZeroCanvasOffset) {
   // Design doc 0033 §M2A: mandatory-detected filter layers rasterize
   // into an offscreen sized to their tight canvas bounds (with 1px AA
@@ -1494,6 +1858,69 @@ TEST_F(CompositorControllerTest, ResetAllLayersAllowsRepromotion) {
   EXPECT_TRUE(compositor.promoteEntity(entity));
   EXPECT_EQ(compositor.layerCount(), 1u);
   EXPECT_TRUE(compositor.isPromoted(entity));
+}
+
+TEST_F(CompositorControllerTest, BuildStructuralEntityRemapMapsEquivalentTrees) {
+  SVGDocument oldDocument = makeDocument(R"svg(
+    <g id="parent">
+      <rect id="target" x="1" y="2" width="10" height="10" fill="red" />
+      <circle cx="20" cy="20" r="5" />
+    </g>
+  )svg");
+  SVGDocument newDocument = makeDocument(R"svg(
+    <g id="parent">
+      <rect id="target" x="3" y="4" width="20" height="20" fill="blue" />
+      <circle cx="25" cy="25" r="6" />
+    </g>
+  )svg");
+
+  auto oldParent = oldDocument.querySelector("#parent");
+  auto oldTarget = oldDocument.querySelector("#target");
+  auto newParent = newDocument.querySelector("#parent");
+  auto newTarget = newDocument.querySelector("#target");
+  ASSERT_TRUE(oldParent.has_value());
+  ASSERT_TRUE(oldTarget.has_value());
+  ASSERT_TRUE(newParent.has_value());
+  ASSERT_TRUE(newTarget.has_value());
+
+  const auto remap = BuildStructuralEntityRemap(oldDocument, newDocument);
+
+  ASSERT_FALSE(remap.empty());
+  EXPECT_EQ(remap.at(oldDocument.svgElement().unsafeEntityHandle().entity()),
+            newDocument.svgElement().unsafeEntityHandle().entity());
+  EXPECT_EQ(remap.at(oldParent->unsafeEntityHandle().entity()),
+            newParent->unsafeEntityHandle().entity());
+  EXPECT_EQ(remap.at(oldTarget->unsafeEntityHandle().entity()),
+            newTarget->unsafeEntityHandle().entity());
+}
+
+TEST_F(CompositorControllerTest, BuildStructuralEntityRemapRejectsStructuralMismatches) {
+  SVGDocument oldDocument = makeDocument(R"svg(
+    <g id="parent">
+      <rect id="target" width="10" height="10" fill="red" />
+    </g>
+  )svg");
+
+  SVGDocument tagMismatch = makeDocument(R"svg(
+    <g id="parent">
+      <circle id="target" cx="5" cy="5" r="5" fill="red" />
+    </g>
+  )svg");
+  SVGDocument idMismatch = makeDocument(R"svg(
+    <g id="parent">
+      <rect id="other" width="10" height="10" fill="red" />
+    </g>
+  )svg");
+  SVGDocument childCountMismatch = makeDocument(R"svg(
+    <g id="parent">
+      <rect id="target" width="10" height="10" fill="red" />
+      <rect id="extra" width="5" height="5" fill="blue" />
+    </g>
+  )svg");
+
+  EXPECT_TRUE(BuildStructuralEntityRemap(oldDocument, tagMismatch).empty());
+  EXPECT_TRUE(BuildStructuralEntityRemap(oldDocument, idMismatch).empty());
+  EXPECT_TRUE(BuildStructuralEntityRemap(oldDocument, childCountMismatch).empty());
 }
 
 }  // namespace donner::svg::compositor

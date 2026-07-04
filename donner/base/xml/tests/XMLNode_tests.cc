@@ -249,6 +249,53 @@ TEST_F(XMLNodeTests, SourceOffsetsNotSet) {
   EXPECT_THAT(element.sourceEndOffset(), Eq(std::nullopt));
 }
 
+TEST_F(XMLNodeTests, AuxiliarySourceLocationsSetClearAndRejectInvalidRanges) {
+  constexpr std::string_view kXml = R"(<root attr="x">text</root>)";
+  auto maybeRoot = parseAndGetFirstNode(kXml);
+  ASSERT_TRUE(maybeRoot.has_value());
+  XMLNode root = *maybeRoot;
+
+  const auto openingRange =
+      SourceRange{FileOffset::Offset(0), FileOffset::Offset(kXml.find('>') + 1)};
+  const auto valueRange =
+      SourceRange{FileOffset::Offset(kXml.find("text")), FileOffset::Offset(kXml.find("text") + 4)};
+  const auto closingRange =
+      SourceRange{FileOffset::Offset(kXml.find("</root>")), FileOffset::Offset(kXml.size())};
+
+  root.setOpeningTagLocation(openingRange);
+  root.setValueLocation(valueRange);
+  root.setClosingTagLocation(closingRange);
+
+  EXPECT_THAT(root.getOpeningTagLocation(), Optional(Eq(openingRange)));
+  EXPECT_THAT(root.getValueLocation(), Optional(Eq(valueRange)));
+  EXPECT_THAT(root.getClosingTagLocation(), Optional(Eq(closingRange)));
+
+  root.setOpeningTagLocation(
+      SourceRange{FileOffset::Offset(kXml.find("attr")), FileOffset::Offset(1)});
+  EXPECT_THAT(root.getOpeningTagLocation(), Eq(std::nullopt));
+
+  root.setValueLocation(SourceRange{FileOffset::EndOfString(), FileOffset::Offset(1)});
+  EXPECT_THAT(root.getValueLocation(), Eq(std::nullopt));
+
+  root.clearClosingTagLocation();
+  EXPECT_THAT(root.getClosingTagLocation(), Eq(std::nullopt));
+  root.clearClosingTagLocation();
+  EXPECT_THAT(root.getClosingTagLocation(), Eq(std::nullopt));
+}
+
+TEST_F(XMLNodeTests, ClearAuxiliarySourceLocationsNoOpsWhenUnset) {
+  XMLDocument doc;
+  XMLNode element = XMLNode::CreateElementNode(doc, "test");
+
+  element.clearOpeningTagLocation();
+  element.clearClosingTagLocation();
+  element.clearValueLocation();
+
+  EXPECT_THAT(element.getOpeningTagLocation(), Eq(std::nullopt));
+  EXPECT_THAT(element.getClosingTagLocation(), Eq(std::nullopt));
+  EXPECT_THAT(element.getValueLocation(), Eq(std::nullopt));
+}
+
 TEST_F(XMLNodeTests, NodeEquality) {
   XMLDocument doc;
   XMLNode node1 = XMLNode::CreateElementNode(doc, "test");
@@ -307,6 +354,27 @@ TEST_F(XMLNodeTests, GetNodeLocationInvalid) {
   EXPECT_THAT(node.getNodeLocation(), Eq(std::nullopt));
 }
 
+TEST_F(XMLNodeTests, NodeLocationAnchorsTrackSourceEdits) {
+  constexpr std::string_view kXml = "<root><child/></root>";
+  XMLDocument doc = std::move(XMLParser::Parse(kXml).result());
+  XMLNode root = *doc.root().firstChild();
+  XMLNode child = *root.firstChild();
+  const SourceRange originalLocation = *child.getNodeLocation();
+
+  ApplySourceEditResult result = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(0), FileOffset::Offset(0)},
+      .replacement = "<!--prefix-->",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  ASSERT_TRUE(result.applied);
+
+  const SourceRange movedLocation = *child.getNodeLocation();
+  EXPECT_GT(*movedLocation.start.offset, *originalLocation.start.offset);
+  EXPECT_EQ(doc.source().substr(*movedLocation.start.offset,
+                                *movedLocation.end.offset - *movedLocation.start.offset),
+            "<child/>");
+}
+
 TEST_F(XMLNodeTests, GetAttributeLocation) {
   std::string_view xml = R"(<child attr="Hello, world!"></child>)";
 
@@ -341,6 +409,54 @@ TEST_F(XMLNodeTests, GetAttributeLocationInvalid) {
   // Try with a source offset set
   node.setSourceEndOffset(FileOffset::Offset(42));
   EXPECT_THAT(node.getAttributeLocation(mismatchedXml, "attr"), Eq(std::nullopt));
+}
+
+TEST_F(XMLNodeTests, AttributeSourceLocationSetClearAndInvalidRangeHandling) {
+  constexpr std::string_view kXml = R"(<child attr="Hello"></child>)";
+  auto maybeChild = parseAndGetFirstNode(kXml);
+  ASSERT_TRUE(maybeChild.has_value());
+  XMLNode child = *maybeChild;
+  ASSERT_TRUE(child.hasAttribute("attr"));
+
+  const SourceRange fullRange{FileOffset::Offset(kXml.find("attr")),
+                              FileOffset::Offset(kXml.find("\">") + 1)};
+  const SourceRange valueRange{FileOffset::Offset(kXml.find("Hello")),
+                               FileOffset::Offset(kXml.find("Hello") + 5)};
+  child.setAttributeSourceLocation("attr", fullRange, valueRange, '\'');
+
+  std::optional<XMLAttributeSourceLocation> sourceLocation =
+      child.getAttributeSourceLocation("attr");
+  ASSERT_THAT(sourceLocation, Ne(std::nullopt));
+  EXPECT_THAT(sourceLocation->fullRange, Eq(fullRange));
+  EXPECT_THAT(sourceLocation->valueRange, Eq(valueRange));
+  EXPECT_EQ(sourceLocation->quote, '\'');
+
+  child.setAttributeSourceLocation("attr", fullRange,
+                                   SourceRange{FileOffset::Offset(kXml.find("Hello") + 6),
+                                               FileOffset::Offset(kXml.find("Hello"))},
+                                   '"');
+  EXPECT_THAT(child.getAttributeSourceLocation("attr"), Eq(std::nullopt));
+
+  child.setAttributeSourceLocation("missing", fullRange, valueRange, '"');
+  EXPECT_THAT(child.getAttributeSourceLocation("missing"), Eq(std::nullopt));
+}
+
+TEST_F(XMLNodeTests, ClearSourceLocationRemovesNodeAndAttributeSourceAnchors) {
+  constexpr std::string_view kXml = R"(<child attr="Hello">text</child>)";
+  auto maybeChild = parseAndGetFirstNode(kXml);
+  ASSERT_TRUE(maybeChild.has_value());
+  XMLNode child = *maybeChild;
+  ASSERT_THAT(child.getNodeLocation(), Ne(std::nullopt));
+  ASSERT_THAT(child.getAttributeSourceLocation("attr"), Ne(std::nullopt));
+
+  child.clearSourceLocation();
+
+  EXPECT_THAT(child.getNodeLocation(), Eq(std::nullopt));
+  EXPECT_THAT(child.getOpeningTagLocation(), Eq(std::nullopt));
+  EXPECT_THAT(child.getClosingTagLocation(), Eq(std::nullopt));
+  EXPECT_THAT(child.getValueLocation(), Eq(std::nullopt));
+  EXPECT_THAT(child.getAttributeSourceLocation("attr"), Eq(std::nullopt));
+  EXPECT_THAT(child.getAttribute("attr"), Optional(Eq("Hello")));
 }
 
 // ---------------------------------------------------------------------------
@@ -405,6 +521,27 @@ TEST_F(XMLNodeTests, SerializeToString_NestedElements) {
             "    <rect/>\n"
             "  </g>\n"
             "</svg>");
+}
+
+TEST_F(XMLNodeTests, SerializeToString_PrettyPrintCanBeDisabledForNestedElements) {
+  XMLDocument doc;
+  XMLNode parent = XMLNode::CreateElementNode(doc, "svg");
+  XMLNode child = XMLNode::CreateElementNode(doc, "g");
+  child.appendChild(XMLNode::CreateElementNode(doc, "rect"));
+  parent.appendChild(child);
+
+  EXPECT_EQ(parent.serializeToString(0, /*prettyPrint=*/false), "<svg><g><rect/></g></svg>");
+}
+
+TEST_F(XMLNodeTests, SerializeToString_DocumentNodeWithAndWithoutPrettyNewlines) {
+  XMLDocument doc;
+  XMLNode first = XMLNode::CreateElementNode(doc, "a");
+  XMLNode second = XMLNode::CreateElementNode(doc, "b");
+  doc.root().appendChild(first);
+  doc.root().appendChild(second);
+
+  EXPECT_EQ(doc.root().serializeToString(), "<a/>\n<b/>\n");
+  EXPECT_EQ(doc.root().serializeToString(0, /*prettyPrint=*/false), "<a/><b/>");
 }
 
 TEST_F(XMLNodeTests, SerializeToString_IndentLevel) {

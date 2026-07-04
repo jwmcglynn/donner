@@ -1,9 +1,8 @@
 # Donner Editor
 
 The Donner editor is a browser-based and desktop SVG editor built on top of the
-Donner SVG engine. It uses a sandbox architecture to isolate the parser child
-from the host, communicating via a wire format that the `ReplayingRenderer`
-decodes onto whatever `RendererInterface` backend was selected at build time.
+Donner SVG engine. The interactive editor parses and renders in-process through
+the selected `Renderer` backend.
 
 ## Building
 

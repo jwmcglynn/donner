@@ -5,6 +5,7 @@
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
+#include "donner/base/xml/XMLParser.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/renderer/RendererUtils.h"
@@ -90,6 +91,53 @@ TEST(SVGParser, Style) {
   EXPECT_THAT(warnings.warnings(), ElementsAre());
 }
 
+TEST(SVGParser, StyleConcatenatesTextAndCDataButRejectsElementChildren) {
+  const std::string_view styleXml(
+      R"(<svg xmlns="http://www.w3.org/2000/svg">
+           <style>
+             rect { fill:
+             <![CDATA[red;]]>
+             }
+           </style>
+         </svg>)");
+  ParseWarningSink warnings;
+  EXPECT_THAT(SVGParser::ParseSVG(styleXml, warnings), NoParseError());
+
+  const std::string_view badStyleXml(
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><style><rect/></style></svg>)");
+  ParseWarningSink badWarnings;
+  EXPECT_THAT(SVGParser::ParseSVG(badStyleXml, badWarnings),
+              ParseErrorIs(testing::HasSubstr("Unexpected <style> element contents")));
+}
+
+TEST(SVGParser, TextContentElementsCollectTextAndChunkBoundaries) {
+  const std::string_view textXml(
+      R"(<svg xmlns="http://www.w3.org/2000/svg">
+           <text>one<tspan>two<g/></tspan><a>three<g/></a>
+             <textPath href="#path">four<g/></textPath>
+           </text>
+         </svg>)");
+
+  ParseWarningSink warnings;
+  EXPECT_THAT(SVGParser::ParseSVG(textXml, warnings), NoParseError());
+}
+
+TEST(SVGParser, UnsupportedNamespacesWarnAndContinueInsideSvg) {
+  const std::string_view source(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" xmlns:other="http://example.test/other">
+           <rect other:attr="value"/>
+           <other:rect/>
+         </svg>)");
+
+  ParseWarningSink warnings;
+  auto documentResult = SVGParser::ParseSVG(source, warnings);
+
+  EXPECT_THAT(documentResult, NoParseError());
+  EXPECT_THAT(warnings.warnings(),
+              testing::Contains(testing::Field(&ParseDiagnostic::reason,
+                                               testing::HasSubstr("unsupported namespace"))));
+}
+
 TEST(SVGParser, Attributes) {
   const std::string_view attributeXml =
       std::string_view(R"(<svg id="svg1" xmlns="http://www.w3.org/2000/svg">
@@ -152,6 +200,16 @@ TEST(SVGParser, XmlParseErrors) {
     EXPECT_THAT(SVGParser::ParseSVG(badXml, warnings),
                 AllOf(ParseErrorPos(2, 21), ParseErrorIs("Mismatched closing tag")));
   }
+}
+
+TEST(SVGParser, ParseXMLDocumentReportsMissingSvgRoot) {
+  xml::XMLParser::Options options = xml::XMLParser::Options::ParseAll();
+  auto xmlResult = xml::XMLParser::Parse("<!-- only comments -->", options);
+  ASSERT_THAT(xmlResult, NoParseError());
+
+  ParseWarningSink warnings;
+  EXPECT_THAT(SVGParser::ParseXMLDocument(std::move(xmlResult.result()), warnings),
+              ParseErrorIs("No SVG element found in document"));
 }
 
 TEST(SVGParser, Warning) {

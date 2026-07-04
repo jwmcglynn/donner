@@ -1,10 +1,9 @@
 /// @file
 ///
-/// Sandbox render-session tests covering `RenderSession` state transitions and `RenderSessionRepl`
-/// command dispatch. These are fully headless — the REPL is driven by an
-/// in-memory `std::stringstream` instead of a TTY, and the status chips
-/// and `.rnr` files are asserted without touching the terminal image
-/// viewer path (which is noisy to match against).
+/// Headless render-session tests covering `RenderSession` state transitions and
+/// `RenderSessionRepl` command dispatch. The REPL is driven by an in-memory
+/// `std::stringstream` instead of a TTY, and bitmap output is asserted without
+/// touching the terminal image viewer path (which is noisy to match against).
 
 #include "donner/editor/app/EditorApp.h"
 
@@ -17,7 +16,6 @@
 #include <string_view>
 
 #include "donner/editor/app/EditorRepl.h"
-#include "donner/editor/sandbox/RnrFile.h"
 
 namespace donner::editor::app {
 namespace {
@@ -78,8 +76,6 @@ TEST_F(RenderSessionTest, NavigateSucceedsOnValidFile) {
   EXPECT_EQ(snap.uri, "red.svg");
   EXPECT_EQ(snap.bitmap.dimensions.x, 64);
   EXPECT_EQ(snap.bitmap.dimensions.y, 48);
-  EXPECT_FALSE(snap.wire.empty());
-  EXPECT_EQ(snap.unsupportedCount, 0u);
 
   // lastGoodBitmap mirrors the current bitmap on success.
   EXPECT_EQ(app.lastGoodBitmap().pixels, snap.bitmap.pixels);
@@ -229,10 +225,27 @@ TEST_F(RenderSessionReplTest, HelpListsAllCommands) {
   repl.run();
 
   const auto text = out.str();
-  for (const auto* cmd :
-       {"load ", "reload", "resize", "show", "save ", "inspect", "record", "quit"}) {
+  for (const auto* cmd : {"load ", "reload", "resize", "show", "save ", "watch", "quit"}) {
     EXPECT_NE(text.find(cmd), std::string::npos) << "help missing: " << cmd;
   }
+}
+
+TEST_F(RenderSessionReplTest, BannerPromptAndBlankLinesDoNotCountAsCommands) {
+  RenderSessionReplOptions options = ReplOptions();
+  options.printBanner = true;
+  options.prompt = "donner-test> ";
+
+  RenderSession app(Options());
+  std::stringstream in("\n?\nexit\n");
+  std::stringstream out;
+  RenderSessionRepl repl(app, in, out, options);
+
+  EXPECT_EQ(repl.run(), 2);
+
+  const std::string text = out.str();
+  EXPECT_NE(text.find("Donner Editor MVP"), std::string::npos) << text;
+  EXPECT_NE(text.find("donner-test> "), std::string::npos) << text;
+  EXPECT_NE(text.find("Commands:"), std::string::npos) << text;
 }
 
 TEST_F(RenderSessionReplTest, LoadStatusSaveCycle) {
@@ -267,48 +280,6 @@ TEST_F(RenderSessionReplTest, LoadStatusSaveCycle) {
   }
 }
 
-TEST_F(RenderSessionReplTest, RecordWritesValidRnrFile) {
-  WriteSvg("red.svg", kSimpleSvg);
-  const auto rnrPath = tmpDir_ / "demo.rnr";
-
-  std::stringstream in;
-  in << "load red.svg\n"
-     << "record " << rnrPath.string() << "\n"
-     << "quit\n";
-  std::stringstream out;
-
-  RenderSession app(Options());
-  RenderSessionRepl repl(app, in, out, ReplOptions());
-  repl.run();
-
-  EXPECT_NE(out.str().find("record: wrote"), std::string::npos);
-  ASSERT_TRUE(std::filesystem::exists(rnrPath));
-
-  // Load the .rnr back and verify its contents look reasonable.
-  sandbox::RnrHeader header;
-  std::vector<uint8_t> wire;
-  ASSERT_EQ(sandbox::LoadRnrFile(rnrPath, header, wire), sandbox::RnrIoStatus::kOk);
-  EXPECT_EQ(header.width, 64u);
-  EXPECT_EQ(header.height, 48u);
-  EXPECT_FALSE(wire.empty());
-}
-
-TEST_F(RenderSessionReplTest, InspectProducesCommandDump) {
-  WriteSvg("red.svg", kSimpleSvg);
-
-  std::stringstream in("load red.svg\ninspect\nquit\n");
-  std::stringstream out;
-
-  RenderSession app(Options());
-  RenderSessionRepl repl(app, in, out, ReplOptions());
-  repl.run();
-
-  const auto text = out.str();
-  EXPECT_NE(text.find("beginFrame"), std::string::npos);
-  EXPECT_NE(text.find("endFrame"), std::string::npos);
-  EXPECT_NE(text.find("drawPath"), std::string::npos);
-}
-
 TEST_F(RenderSessionReplTest, UnknownCommandDoesNotCrash) {
   RenderSession app(Options());
   std::stringstream in("frobnicate\nquit\n");
@@ -318,13 +289,29 @@ TEST_F(RenderSessionReplTest, UnknownCommandDoesNotCrash) {
   EXPECT_NE(out.str().find("unknown command"), std::string::npos);
 }
 
-TEST_F(RenderSessionReplTest, InspectWithNoFrameReportsError) {
+TEST_F(RenderSessionReplTest, InvalidCommandArityAndDimensionsReturnFalse) {
   RenderSession app(Options());
-  std::stringstream in("inspect\nquit\n");
+  std::stringstream in;
   std::stringstream out;
   RenderSessionRepl repl(app, in, out, ReplOptions());
-  repl.run();
-  EXPECT_NE(out.str().find("no frame available"), std::string::npos);
+
+  EXPECT_FALSE(repl.dispatch(""));
+  EXPECT_FALSE(repl.dispatch("load"));
+  EXPECT_FALSE(repl.dispatch("resize 10"));
+  EXPECT_FALSE(repl.dispatch("resize wide 20"));
+  EXPECT_FALSE(repl.dispatch("resize 20 0"));
+  EXPECT_FALSE(repl.dispatch("save"));
+  EXPECT_FALSE(repl.dispatch("watch"));
+  EXPECT_FALSE(repl.dispatch("bogus"));
+
+  const std::string text = out.str();
+  EXPECT_NE(text.find("usage: load <uri>"), std::string::npos) << text;
+  EXPECT_NE(text.find("usage: resize <width> <height>"), std::string::npos) << text;
+  EXPECT_NE(text.find("resize: invalid dimension 'wide'"), std::string::npos) << text;
+  EXPECT_NE(text.find("resize: invalid dimension '0'"), std::string::npos) << text;
+  EXPECT_NE(text.find("usage: save <out.png>"), std::string::npos) << text;
+  EXPECT_NE(text.find("usage: watch on|off"), std::string::npos) << text;
+  EXPECT_NE(text.find("unknown command 'bogus'"), std::string::npos) << text;
 }
 
 TEST_F(RenderSessionReplTest, ResizeCommandParsesDimensions) {
@@ -339,6 +326,40 @@ TEST_F(RenderSessionReplTest, ResizeCommandParsesDimensions) {
 
   const auto text = out.str();
   EXPECT_NE(text.find("rendered 128x96"), std::string::npos) << text;
+}
+
+TEST_F(RenderSessionReplTest, ShowAndSaveReportMissingFrameBeforeLoad) {
+  RenderSession app(Options());
+  std::stringstream in;
+  std::stringstream out;
+  RenderSessionRepl repl(app, in, out, ReplOptions());
+
+  EXPECT_TRUE(repl.dispatch("show"));
+  EXPECT_TRUE(repl.dispatch("save out.png"));
+
+  const std::string text = out.str();
+  EXPECT_NE(text.find("show: no frame available"), std::string::npos) << text;
+  EXPECT_NE(text.find("save: no frame available"), std::string::npos) << text;
+}
+
+TEST_F(RenderSessionReplTest, ShowDisabledAndSaveOpenFailureAreReported) {
+  WriteSvg("red.svg", kSimpleSvg);
+  const auto outputDirectory = tmpDir_ / "output-directory";
+  std::filesystem::create_directories(outputDirectory);
+
+  RenderSession app(Options());
+  ASSERT_EQ(app.navigate("red.svg").status, RenderSessionStatus::kRendered);
+
+  std::stringstream in;
+  std::stringstream out;
+  RenderSessionRepl repl(app, in, out, ReplOptions());
+
+  EXPECT_TRUE(repl.dispatch("show"));
+  EXPECT_TRUE(repl.dispatch("save " + outputDirectory.string()));
+
+  const std::string text = out.str();
+  EXPECT_NE(text.find("show: disabled in this repl session"), std::string::npos) << text;
+  EXPECT_NE(text.find("save: cannot open"), std::string::npos) << text;
 }
 
 TEST_F(RenderSessionReplTest, WatchOnOffCommand) {

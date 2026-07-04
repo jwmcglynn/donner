@@ -6,6 +6,10 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Transform.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
+#include "donner/svg/SVGRectElement.h"
+#include "donner/svg/components/StylesheetComponent.h"
+#include "donner/svg/components/text/TextComponent.h"
+#include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/parser/SVGParser.h"
 
 using testing::Eq;
@@ -74,6 +78,19 @@ TEST(SVGDocument, CanvasSizeFromFile) {
   }
 }
 
+TEST(SVGDocument, SourceBackedAccessorsReflectParsedXmlSource) {
+  SVGDocument emptyDocument;
+  EXPECT_FALSE(emptyDocument.hasSourceStore());
+  EXPECT_THAT(emptyDocument.source(), Eq(std::string_view()));
+  EXPECT_EQ(emptyDocument.sourceVersion(), 0u);
+
+  auto document = ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r"/></svg>)");
+
+  EXPECT_TRUE(document.hasSourceStore());
+  EXPECT_THAT(document.source(), testing::HasSubstr(R"(<rect id="r"/>)"));
+  EXPECT_EQ(document.sourceVersion(), 0u);
+}
+
 TEST(SVGDocument, QuerySelector) {
   {
     auto document = ParseSVG(R"(
@@ -87,7 +104,306 @@ TEST(SVGDocument, QuerySelector) {
     EXPECT_THAT(document.querySelector("#rect2"), Optional(ElementIdEq("rect2")));
     EXPECT_THAT(document.querySelector("svg > :nth-child(2)"), Optional(ElementIdEq("rect2")));
     EXPECT_THAT(document.querySelector("does-not-exist"), Eq(std::nullopt));
+    EXPECT_THAT(document.querySelector("["), Eq(std::nullopt));
   }
+}
+
+TEST(SVGDocument, SourceLessApplySourceEditReportsDiagnostic) {
+  SVGDocument document;
+
+  xml::ApplySourceEditResult result = document.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(0), FileOffset::Offset(0)},
+      .replacement = "x",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_FALSE(result.applied);
+  ASSERT_TRUE(result.diagnostic.has_value());
+  EXPECT_THAT(result.diagnostic->reason, testing::HasSubstr("without XML source text"));
+}
+
+TEST(SVGDocument, ApplySourceEditProjectsAttributeValueMutation) {
+  auto document =
+      ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r" fill="red"/></svg>)");
+  SVGElement rect = document.querySelector("#r").value();
+  const std::size_t valueOffset = document.source().find("red");
+  ASSERT_NE(valueOffset, std::string_view::npos);
+
+  xml::ApplySourceEditResult result = document.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(valueOffset), FileOffset::Offset(valueOffset + 3)},
+      .replacement = "blue",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, xml::ReparseScope::AttributeValue);
+  EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+  EXPECT_THAT(rect.getAttribute("fill"), Optional(Eq("blue")));
+  EXPECT_THAT(document.source(), testing::HasSubstr(R"(fill="blue")"));
+}
+
+TEST(SVGDocument, ApplySourceEditProjectsTextMutation) {
+  auto document =
+      ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><text id="label">hello</text></svg>)");
+  SVGElement text = document.querySelector("#label").value();
+  const std::size_t valueOffset = document.source().find("hello");
+  ASSERT_NE(valueOffset, std::string_view::npos);
+
+  xml::ApplySourceEditResult result = document.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(valueOffset), FileOffset::Offset(valueOffset + 5)},
+      .replacement = "world",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+  const auto& textComponent = text.entityHandle().get<components::TextComponent>();
+  EXPECT_EQ(textComponent.text, "world");
+  ASSERT_EQ(textComponent.textChunks.size(), 1u);
+  EXPECT_EQ(textComponent.textChunks[0], "world");
+}
+
+TEST(SVGDocument, TextProjectionPreservesChunkBoundariesAroundChildElements) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <text id="label">one<tspan>two</tspan>three<![CDATA[four]]></text>
+      <text id="leading-child"><tspan/>tail</text>
+    </svg>
+  )");
+
+  SVGElement label = document.querySelector("#label").value();
+  const auto& labelText = label.entityHandle().get<components::TextComponent>();
+  EXPECT_EQ(labelText.text, "onethreefour");
+  EXPECT_THAT(labelText.textChunks,
+              testing::ElementsAre(RcString("one"), RcString("three"), RcString("four")));
+
+  SVGElement leadingChild = document.querySelector("#leading-child").value();
+  const auto& leadingText = leadingChild.entityHandle().get<components::TextComponent>();
+  EXPECT_EQ(leadingText.text, "tail");
+  EXPECT_THAT(leadingText.textChunks, testing::ElementsAre(RcString(""), RcString("tail")));
+}
+
+TEST(SVGDocument, ApplySourceEditProjectsStyleMutationWithSourceMap) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <style id="style">rect { fill: red; }</style>
+      <rect/>
+    </svg>
+  )");
+  SVGElement style = document.querySelector("#style").value();
+  const std::size_t valueOffset = document.source().find("red");
+  ASSERT_NE(valueOffset, std::string_view::npos);
+
+  xml::ApplySourceEditResult result = document.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(valueOffset), FileOffset::Offset(valueOffset + 3)},
+      .replacement = "blue",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+  const auto& stylesheet = style.entityHandle().get<components::StylesheetComponent>();
+  EXPECT_EQ(stylesheet.stylesheet.rules().size(), 1u);
+  EXPECT_TRUE(stylesheet.sourceMap.empty());
+}
+
+TEST(SVGDocument, ApplySourceEditProjectsSubtreeReplacement) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <g id="group"><rect id="old"/></g>
+    </svg>
+  )");
+  const std::size_t editStart = document.source().find(R"(<rect id="old"/>)");
+  const std::size_t editEnd = document.source().find("</g>");
+  ASSERT_NE(editStart, std::string_view::npos);
+  ASSERT_NE(editEnd, std::string_view::npos);
+
+  xml::ApplySourceEditResult result = document.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(editStart), FileOffset::Offset(editEnd)},
+      .replacement = R"(<circle id="new"/>)",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+  EXPECT_THAT(document.querySelector("#old"), Eq(std::nullopt));
+  ASSERT_THAT(document.querySelector("#new"), Optional(ElementIdEq("new")));
+  EXPECT_EQ(document.querySelector("#new")->type(), ElementType::Circle);
+}
+
+TEST(SVGDocument, SourceBackedElementAttributeHelpersUpdateSourceAndProjection) {
+  auto document =
+      ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r" fill="red"/></svg>)");
+  SVGElement rect = document.querySelector("#r").value();
+
+  xml::ApplySourceEditResult setResult = document.setElementAttribute(rect, "fill", "green");
+  EXPECT_TRUE(setResult.applied);
+  EXPECT_THAT(rect.getAttribute("fill"), Optional(Eq("green")));
+  EXPECT_THAT(document.source(), testing::HasSubstr(R"(fill="green")"));
+
+  xml::ApplySourceEditResult removeResult = document.removeElementAttribute(rect, "fill");
+  EXPECT_TRUE(removeResult.applied);
+  EXPECT_FALSE(rect.hasAttribute("fill"));
+  EXPECT_THAT(document.source(), testing::Not(testing::HasSubstr("fill=")));
+}
+
+TEST(SVGDocument, SourceBackedInvalidAttributeSetReportsProjectionDiagnostic) {
+  auto document =
+      ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r" width="1"/></svg>)");
+  SVGElement rect = document.querySelector("#r").value();
+
+  xml::ApplySourceEditResult result = document.setElementAttribute(rect, "width", "not-a-length");
+
+  EXPECT_TRUE(result.applied);
+  ASSERT_TRUE(result.diagnostic.has_value());
+  EXPECT_THAT(result.diagnostic->reason, testing::HasSubstr("Invalid length or percentage"));
+  EXPECT_THAT(document.source(), testing::HasSubstr(R"(width="not-a-length")"));
+}
+
+TEST(SVGDocument, ProgrammaticElementAttributeHelpersUseDomFallback) {
+  SVGDocument document;
+  SVGRectElement rect = SVGRectElement::Create(document);
+  document.svgElement().appendChild(rect);
+
+  xml::ApplySourceEditResult setResult = document.setElementAttribute(rect, "fill", "green");
+  EXPECT_FALSE(setResult.applied);
+  EXPECT_THAT(setResult.diagnostic, Eq(std::nullopt));
+  EXPECT_THAT(rect.getAttribute("fill"), Optional(Eq("green")));
+
+  xml::ApplySourceEditResult removeResult = document.removeElementAttribute(rect, "fill");
+  EXPECT_FALSE(removeResult.applied);
+  EXPECT_THAT(removeResult.diagnostic, Eq(std::nullopt));
+  EXPECT_FALSE(rect.hasAttribute("fill"));
+}
+
+TEST(SVGDocument, ProgrammaticInvalidAttributeSetReportsDiagnostic) {
+  SVGDocument document;
+  SVGRectElement rect = SVGRectElement::Create(document);
+  document.svgElement().appendChild(rect);
+
+  xml::ApplySourceEditResult result = document.setElementAttribute(rect, "width", "not-a-length");
+
+  EXPECT_FALSE(result.applied);
+  ASSERT_TRUE(result.diagnostic.has_value());
+  EXPECT_THAT(result.diagnostic->reason, testing::HasSubstr("Invalid length or percentage"));
+}
+
+TEST(SVGDocument, SourceBackedInsertAndRemoveElementUpdateSource) {
+  auto document = ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><g id="group"></g></svg>)");
+  SVGElement group = document.querySelector("#group").value();
+  SVGRectElement rect = SVGRectElement::Create(document);
+  rect.setId("inserted");
+
+  xml::ApplySourceEditResult insertResult = document.insertElement(group, rect);
+  EXPECT_TRUE(insertResult.applied);
+  EXPECT_THAT(document.querySelector("#inserted"), Optional(ElementIdEq("inserted")));
+  EXPECT_THAT(document.source(), testing::HasSubstr(R"(<rect id="inserted"/>)"));
+
+  xml::ApplySourceEditResult removeResult = document.removeElement(rect);
+  EXPECT_TRUE(removeResult.applied);
+  EXPECT_THAT(document.querySelector("#inserted"), Eq(std::nullopt));
+  EXPECT_THAT(document.source(), testing::Not(testing::HasSubstr("inserted")));
+}
+
+TEST(SVGDocument, SourceBackedMoveElementBetweenParentsMarksOldParentRemoved) {
+  auto document = ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <g id="a"><rect id="moved"/></g>
+    <g id="b"></g>
+  </svg>)");
+  SVGElement sourceParent = document.querySelector("#a").value();
+  SVGElement targetParent = document.querySelector("#b").value();
+  SVGElement moved = document.querySelector("#moved").value();
+
+  xml::ApplySourceEditResult result = document.insertElement(targetParent, moved);
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+  EXPECT_THAT(sourceParent.firstChild(), Eq(std::nullopt));
+  ASSERT_THAT(targetParent.firstChild(), Optional(ElementIdEq("moved")));
+  EXPECT_THAT(document.source(), testing::HasSubstr(R"(<g id="a"></g>)"));
+  EXPECT_THAT(document.source(), testing::HasSubstr(R"(<g id="b"><rect id="moved"/></g>)"));
+}
+
+TEST(SVGDocument, SourceBackedInsertInvalidElementReportsProjectionDiagnostic) {
+  auto document = ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><g id="group"></g></svg>)");
+  SVGElement group = document.querySelector("#group").value();
+  SVGRectElement rect = SVGRectElement::Create(document);
+  rect.setId("bad");
+  rect.setAttribute("width", "not-a-length");
+
+  xml::ApplySourceEditResult result = document.insertElement(group, rect);
+
+  EXPECT_TRUE(result.applied);
+  ASSERT_TRUE(result.diagnostic.has_value());
+  EXPECT_THAT(result.diagnostic->reason, testing::HasSubstr("Invalid length or percentage"));
+  EXPECT_THAT(document.source(), testing::HasSubstr(R"(width="not-a-length")"));
+}
+
+TEST(SVGDocument, SourceBackedInsertBeforeProgrammaticReferenceReportsDiagnostic) {
+  auto document = ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"></svg>)");
+  SVGRectElement reference = SVGRectElement::Create(document);
+  reference.setId("reference");
+
+  SVGRectElement inserted = SVGRectElement::Create(document);
+  inserted.setId("inserted");
+
+  xml::ApplySourceEditResult result =
+      document.insertElement(document.svgElement(), inserted, reference);
+
+  EXPECT_FALSE(result.applied);
+  EXPECT_EQ(result.scope, xml::ReparseScope::ElementSubtree);
+  ASSERT_TRUE(result.diagnostic.has_value());
+  EXPECT_THAT(result.diagnostic->reason, testing::HasSubstr("without XML source identity"));
+  EXPECT_THAT(document.querySelector("#inserted"), Eq(std::nullopt));
+}
+
+TEST(SVGDocument, ProgrammaticInsertElementFallbackDoesNotMutateSourceLessDocument) {
+  SVGDocument document;
+  SVGRectElement rect = SVGRectElement::Create(document);
+  rect.setId("detached");
+
+  xml::ApplySourceEditResult result = document.insertElement(document.svgElement(), rect);
+
+  EXPECT_FALSE(result.applied);
+  EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+  EXPECT_THAT(document.querySelector("#detached"), Eq(std::nullopt));
+}
+
+TEST(SVGDocument, ProgrammaticRemoveElementFallbackRemovesAttachedElement) {
+  SVGDocument document;
+  SVGRectElement rect = SVGRectElement::Create(document);
+  rect.setId("attached");
+  document.svgElement().appendChild(rect);
+  ASSERT_THAT(document.querySelector("#attached"), Optional(ElementIdEq("attached")));
+
+  xml::ApplySourceEditResult result = document.removeElement(rect);
+
+  EXPECT_FALSE(result.applied);
+  EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+  EXPECT_THAT(document.querySelector("#attached"), Eq(std::nullopt));
+}
+
+TEST(SVGDocument, TypedMutationHelperWrapsDomOperations) {
+  SVGDocument document;
+  SVGRectElement kept = SVGRectElement::Create(document);
+  SVGRectElement inserted = SVGRectElement::Create(document);
+  SVGRectElement replacement = SVGRectElement::Create(document);
+
+  document.withWriteAccess([&](SVGDocumentMutation& mutation) {
+    EXPECT_EQ(&mutation.access().registry(), &document.registry());
+    mutation.setCanvasSize(64, 32);
+    mutation.useAutomaticCanvasSize();
+    mutation.appendChild(document.svgElement(), kept);
+    mutation.setAttribute(kept, "id", "kept");
+    mutation.removeAttribute(kept, "id");
+    mutation.insertBefore(document.svgElement(), inserted, kept);
+    mutation.replaceChild(document.svgElement(), replacement, inserted);
+    mutation.removeChild(document.svgElement(), replacement);
+    mutation.remove(kept);
+  });
+
+  EXPECT_EQ(document.canvasSize(), Vector2i(512, 512));
+  EXPECT_EQ(document.svgElement().firstChild(), std::nullopt);
 }
 
 /**
@@ -101,6 +417,53 @@ TEST(SVGDocument, RootElementTag) {
   )");
 
   EXPECT_EQ(document.svgElement().type(), ElementType::SVG);
+}
+
+TEST(SVGDocument, ProjectsKnownElementTypes) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <a id="anchor"><tspan id="anchor-tspan">link</tspan></a>
+      <circle id="circle"/>
+      <clipPath id="clip"><rect id="clip-rect"/></clipPath>
+      <defs id="defs"/>
+      <ellipse id="ellipse"/>
+      <filter id="filter"><feGaussianBlur id="blur"/></filter>
+      <g id="group"/>
+      <line id="line"/>
+      <path id="path"/>
+      <polygon id="polygon"/>
+      <polyline id="polyline"/>
+      <rect id="rect"/>
+      <style id="style">rect { fill: red; }</style>
+      <text id="text"><tspan id="tspan">hello</tspan></text>
+      <custom id="custom"/>
+    </svg>
+  )");
+
+  EXPECT_EQ(document.querySelector("#anchor")->type(), ElementType::A);
+  EXPECT_EQ(document.querySelector("#circle")->type(), ElementType::Circle);
+  EXPECT_EQ(document.querySelector("#clip")->type(), ElementType::ClipPath);
+  EXPECT_EQ(document.querySelector("#defs")->type(), ElementType::Defs);
+  EXPECT_EQ(document.querySelector("#ellipse")->type(), ElementType::Ellipse);
+  EXPECT_EQ(document.querySelector("#filter")->type(), ElementType::Filter);
+  EXPECT_EQ(document.querySelector("#blur")->type(), ElementType::FeGaussianBlur);
+  EXPECT_EQ(document.querySelector("#group")->type(), ElementType::G);
+  EXPECT_EQ(document.querySelector("#line")->type(), ElementType::Line);
+  EXPECT_EQ(document.querySelector("#path")->type(), ElementType::Path);
+  EXPECT_EQ(document.querySelector("#polygon")->type(), ElementType::Polygon);
+  EXPECT_EQ(document.querySelector("#polyline")->type(), ElementType::Polyline);
+  EXPECT_EQ(document.querySelector("#rect")->type(), ElementType::Rect);
+  EXPECT_EQ(document.querySelector("#style")->type(), ElementType::Style);
+  EXPECT_EQ(document.querySelector("#text")->type(), ElementType::Text);
+  EXPECT_EQ(document.querySelector("#tspan")->type(), ElementType::TSpan);
+  EXPECT_EQ(document.querySelector("#custom")->type(), ElementType::Unknown);
+
+  EXPECT_TRUE(
+      document.querySelector("#anchor")->entityHandle().all_of<components::TextComponent>());
+  EXPECT_TRUE(
+      document.querySelector("#text")->entityHandle().all_of<components::TextRootComponent>());
+  EXPECT_TRUE(
+      document.querySelector("#style")->entityHandle().all_of<components::StylesheetComponent>());
 }
 
 /**

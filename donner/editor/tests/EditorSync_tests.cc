@@ -862,6 +862,205 @@ TEST(EditorSyncTest, StructuredOpeningTagRecoveryClearsDiagnosticWithoutCommand)
   EXPECT_EQ(*fill, RcString("red"));
 }
 
+TEST(EditorSyncTest, DispatchSourceTextChangeNoOpDoesNotDispatch) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kCircleSvg));
+
+  std::string previousSourceText(kCircleSvg);
+  std::optional<std::string> lastWritebackSourceText;
+
+  const auto dispatch =
+      DispatchSourceTextChange(app, kCircleSvg, &previousSourceText, &lastWritebackSourceText);
+
+  EXPECT_FALSE(dispatch.dispatchedMutation);
+  EXPECT_FALSE(dispatch.skippedSelfWriteback);
+  EXPECT_EQ(previousSourceText, kCircleSvg);
+  EXPECT_FALSE(lastWritebackSourceText.has_value());
+  EXPECT_TRUE(app.document().queue().empty());
+}
+
+TEST(EditorSyncTest, DispatchSourceEditIntentsSkipsSelfWritebackEcho) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kCircleSvg));
+
+  std::string previousSourceText(kCircleSvg);
+  std::optional<std::string> lastWritebackSourceText{std::string(kCircleAt40Svg)};
+  const std::vector<SourceEditIntent> ignoredIntents = {
+      SourceEditIntent{.offset = kCircleSvg.size() + 1, .removedLength = 1, .replacement = "x"},
+  };
+
+  const auto dispatch = DispatchSourceEditIntents(app, ignoredIntents, kCircleAt40Svg,
+                                                  &previousSourceText, &lastWritebackSourceText);
+
+  EXPECT_FALSE(dispatch.dispatchedMutation);
+  EXPECT_TRUE(dispatch.skippedSelfWriteback);
+  EXPECT_EQ(previousSourceText, kCircleAt40Svg);
+  EXPECT_FALSE(lastWritebackSourceText.has_value());
+  EXPECT_TRUE(app.document().queue().empty());
+}
+
+TEST(EditorSyncTest, DispatchSourceEditIntentsNoOpDoesNotApplyStaleIntent) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kCircleSvg));
+
+  std::string previousSourceText(kCircleSvg);
+  std::optional<std::string> lastWritebackSourceText;
+  const std::vector<SourceEditIntent> staleIntents = {
+      SourceEditIntent{.offset = kCircleSvg.size() + 1, .removedLength = 1, .replacement = "x"},
+  };
+
+  const auto dispatch = DispatchSourceEditIntents(app, staleIntents, kCircleSvg,
+                                                  &previousSourceText, &lastWritebackSourceText);
+
+  EXPECT_FALSE(dispatch.dispatchedMutation);
+  EXPECT_FALSE(dispatch.skippedSelfWriteback);
+  EXPECT_EQ(previousSourceText, kCircleSvg);
+  EXPECT_TRUE(app.document().queue().empty());
+}
+
+TEST(EditorSyncTest, DispatchSourceEditIntentsEmptyListDelegatesToTextChange) {
+  constexpr std::string_view kSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r" fill="red"/></svg>)";
+  constexpr std::string_view kEditedSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r" fill="blue"/></svg>)";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+
+  std::string previousSourceText(kSvg);
+  std::optional<std::string> lastWritebackSourceText;
+
+  const auto dispatch =
+      DispatchSourceEditIntents(app, {}, kEditedSvg, &previousSourceText, &lastWritebackSourceText);
+
+  EXPECT_TRUE(dispatch.dispatchedMutation);
+  EXPECT_FALSE(dispatch.skippedSelfWriteback);
+  EXPECT_TRUE(app.document().queue().empty());
+  EXPECT_FALSE(app.flushFrame());
+  EXPECT_EQ(app.document().document().source(), kEditedSvg);
+  EXPECT_EQ(previousSourceText, kEditedSvg);
+}
+
+TEST(EditorSyncTest, DispatchSourceEditIntentsInvalidIntentQueuesDocumentReplace) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kCircleSvg));
+
+  std::string previousSourceText(kCircleSvg);
+  std::optional<std::string> lastWritebackSourceText;
+  const std::vector<SourceEditIntent> invalidIntents = {
+      SourceEditIntent{.offset = kCircleSvg.size() + 1, .removedLength = 1, .replacement = "x"},
+  };
+
+  const auto dispatch = DispatchSourceEditIntents(app, invalidIntents, kCircleAt40Svg,
+                                                  &previousSourceText, &lastWritebackSourceText);
+
+  EXPECT_TRUE(dispatch.dispatchedMutation);
+  EXPECT_FALSE(dispatch.skippedSelfWriteback);
+  EXPECT_EQ(previousSourceText, kCircleAt40Svg);
+  EXPECT_FALSE(lastWritebackSourceText.has_value());
+  EXPECT_FALSE(app.document().queue().empty());
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_TRUE(app.document().lastFlushResult().replacedDocument);
+  EXPECT_EQ(app.document().document().source(), kCircleAt40Svg);
+}
+
+TEST(EditorSyncTest, DispatchSourceEditIntentsStructuredOptOutQueuesDocumentReplace) {
+  constexpr std::string_view kSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r" fill="red"/></svg>)";
+  constexpr std::string_view kEditedSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r" fill="blue"/></svg>)";
+
+  EditorApp app;
+  app.setStructuredEditingEnabled(false);
+  ASSERT_TRUE(app.loadFromString(kSvg));
+
+  const std::size_t redOffset = kSvg.find("red");
+  ASSERT_NE(redOffset, std::string_view::npos);
+  const std::vector<SourceEditIntent> intents = {
+      SourceEditIntent{.offset = redOffset, .removedLength = 3, .replacement = "blue"},
+  };
+  std::string previousSourceText(kSvg);
+  std::optional<std::string> lastWritebackSourceText;
+
+  const auto dispatch = DispatchSourceEditIntents(app, intents, kEditedSvg, &previousSourceText,
+                                                  &lastWritebackSourceText);
+
+  EXPECT_TRUE(dispatch.dispatchedMutation);
+  EXPECT_FALSE(dispatch.skippedSelfWriteback);
+  EXPECT_FALSE(app.document().queue().empty());
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_TRUE(app.document().lastFlushResult().replacedDocument);
+  EXPECT_EQ(app.document().document().source(), kEditedSvg);
+}
+
+TEST(EditorSyncTest, DispatchSourceEditIntentsFinalMismatchQueuesDocumentReplace) {
+  constexpr std::string_view kSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r" fill="red"/></svg>)";
+  constexpr std::string_view kIntentSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r" fill="blue"/></svg>)";
+  constexpr std::string_view kNewSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r" fill="green"/></svg>)";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+
+  const std::size_t redOffset = kSvg.find("red");
+  ASSERT_NE(redOffset, std::string_view::npos);
+  const std::vector<SourceEditIntent> intents = {
+      SourceEditIntent{.offset = redOffset, .removedLength = 3, .replacement = "blue"},
+  };
+  std::string previousSourceText(kSvg);
+  std::optional<std::string> lastWritebackSourceText;
+
+  const auto dispatch = DispatchSourceEditIntents(app, intents, kNewSvg, &previousSourceText,
+                                                  &lastWritebackSourceText);
+
+  EXPECT_TRUE(dispatch.dispatchedMutation);
+  EXPECT_FALSE(dispatch.skippedSelfWriteback);
+  EXPECT_EQ(app.document().document().source(), kIntentSvg);
+  EXPECT_FALSE(app.document().queue().empty());
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_TRUE(app.document().lastFlushResult().replacedDocument);
+  EXPECT_EQ(app.document().document().source(), kNewSvg);
+  EXPECT_EQ(previousSourceText, kNewSvg);
+}
+
+TEST(EditorSyncTest, DispatchSourceEditIntentsAppliesMultipleStructuredEdits) {
+  constexpr std::string_view kSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r" fill="red" stroke="black"/></svg>)";
+  constexpr std::string_view kEditedSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r" fill="tan" stroke="green"/></svg>)";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+
+  const std::size_t redOffset = kSvg.find("red");
+  const std::size_t blackOffset = kSvg.find("black");
+  ASSERT_NE(redOffset, std::string_view::npos);
+  ASSERT_NE(blackOffset, std::string_view::npos);
+  const std::vector<SourceEditIntent> intents = {
+      SourceEditIntent{.offset = redOffset, .removedLength = 3, .replacement = "tan"},
+      SourceEditIntent{.offset = blackOffset, .removedLength = 5, .replacement = "green"},
+  };
+  std::string previousSourceText(kSvg);
+  std::optional<std::string> lastWritebackSourceText;
+
+  const auto dispatch = DispatchSourceEditIntents(app, intents, kEditedSvg, &previousSourceText,
+                                                  &lastWritebackSourceText);
+
+  EXPECT_TRUE(dispatch.dispatchedMutation);
+  EXPECT_FALSE(dispatch.skippedSelfWriteback);
+  EXPECT_TRUE(app.document().queue().empty());
+  EXPECT_FALSE(app.flushFrame());
+  EXPECT_EQ(app.document().document().source(), kEditedSvg);
+  EXPECT_EQ(previousSourceText, kEditedSvg);
+
+  auto rect = app.document().document().querySelector("#r");
+  ASSERT_TRUE(rect.has_value());
+  EXPECT_EQ(rect->getAttribute("fill"), std::optional<RcString>(RcString("tan")));
+  EXPECT_EQ(rect->getAttribute("stroke"), std::optional<RcString>(RcString("green")));
+}
+
 TEST(EditorSyncTest, SelfInitiatedWritebackDoesNotDispatchDuplicateReplaceDocument) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kCircleSvg));

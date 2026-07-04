@@ -136,6 +136,25 @@ TEST(FindChunkRangesTest, HandlesMultibyteUtf8) {
   EXPECT_EQ(ranges[1].byteEnd, 3u);
 }
 
+TEST(FindChunkRangesTest, KeepsJoinerAndVariationSelectorWithBaseCluster) {
+  // A + ZWJ + B + VS16 + C.  The joiner sequence and variation selector stay in the
+  // first SVG addressable character cluster; the absolute x at character index 1 starts C.
+  const std::string text =
+      "A\xE2\x80\x8D"
+      "B\xEF\xB8\x8F"
+      "C";
+  SmallVector<std::optional<Lengthd>, 1> xList = {std::nullopt, Lengthd(50.0, Lengthd::Unit::None)};
+  SmallVector<std::optional<Lengthd>, 1> yList;
+
+  const auto ranges = findChunkRanges(text, xList, yList);
+
+  ASSERT_EQ(ranges.size(), 2u);
+  EXPECT_EQ(ranges[0].byteStart, 0u);
+  EXPECT_EQ(ranges[0].byteEnd, 8u);
+  EXPECT_EQ(ranges[1].byteStart, 8u);
+  EXPECT_EQ(ranges[1].byteEnd, 9u);
+}
+
 TEST(FindChunkRangesTest, EmptyTextReturnsSingleEmptyRange) {
   SmallVector<std::optional<Lengthd>, 1> xList;
   SmallVector<std::optional<Lengthd>, 1> yList;
@@ -165,6 +184,26 @@ TEST(BuildByteIndexMappingsTest, CombiningMarkSharesBaseIndex) {
   EXPECT_EQ(m.byteToCharIdx[0], 0u);  // 'o'
   EXPECT_EQ(m.byteToCharIdx[1], 0u);  // combining mark byte 1 shares base index
   EXPECT_EQ(m.byteToCharIdx[2], 0u);  // combining mark byte 2 shares base index
+}
+
+TEST(BuildByteIndexMappingsTest, JoinerAndVariationSelectorShareBaseIndex) {
+  const auto m = buildByteIndexMappings(
+      "A\xE2\x80\x8D"
+      "B\xEF\xB8\x8F"
+      "C");
+
+  ASSERT_EQ(m.byteToCharIdx.size(), 9u);
+  EXPECT_EQ(m.byteToCharIdx[0], 0u);  // A.
+  EXPECT_EQ(m.byteToCharIdx[1], 0u);  // ZWJ.
+  EXPECT_EQ(m.byteToCharIdx[4], 0u);  // B following ZWJ.
+  EXPECT_EQ(m.byteToCharIdx[5], 0u);  // VS16.
+  EXPECT_EQ(m.byteToCharIdx[8], 1u);  // C starts the next addressable character.
+
+  EXPECT_EQ(m.byteToRawCpIdx[0], 0u);
+  EXPECT_EQ(m.byteToRawCpIdx[1], 1u);
+  EXPECT_EQ(m.byteToRawCpIdx[4], 2u);
+  EXPECT_EQ(m.byteToRawCpIdx[5], 3u);
+  EXPECT_EQ(m.byteToRawCpIdx[8], 4u);
 }
 
 TEST(BuildByteIndexMappingsTest, SupplementaryCharacterConsumeTwoIndices) {
@@ -337,6 +376,81 @@ TEST(ApplyTextLengthTest, GlobalTextLengthAppliesWhenNoSpanTextLength) {
   EXPECT_NEAR(runs[0].glyphs[1].xPosition, 40.0, 0.001);
 }
 
+TEST(ApplyTextLengthTest, VerticalPerSpanSpacingAndGlyphsScalesYPositions) {
+  std::vector<TextRun> runs(1);
+  runs[0].glyphs = {{.yPosition = 10.0, .yAdvance = 20.0}, {.yPosition = 30.0, .yAdvance = 20.0}};
+
+  components::ComputedTextComponent text;
+  components::ComputedTextComponent::TextSpan span;
+  span.textLength = Lengthd(80.0, Lengthd::Unit::None);
+  span.lengthAdjust = LengthAdjust::SpacingAndGlyphs;
+  text.spans.push_back(span);
+
+  std::vector<RunPenExtent> extents = {{0.0, 10.0, 0.0, 50.0}};
+  TextLayoutParams params;
+  params.viewBox = Box2d(Vector2d::Zero(), Vector2d(200, 200));
+  params.fontMetrics = FontMetrics();
+
+  applyTextLength(runs, text, extents, params, true, 0.0, 50.0);
+
+  EXPECT_NEAR(runs[0].glyphs[0].yPosition, 10.0, 0.001);
+  EXPECT_NEAR(runs[0].glyphs[1].yPosition, 50.0, 0.001);
+  EXPECT_NEAR(runs[0].glyphs[0].yAdvance, 40.0, 0.001);
+  EXPECT_NEAR(runs[0].glyphs[1].yAdvance, 40.0, 0.001);
+  EXPECT_FLOAT_EQ(runs[0].glyphs[0].stretchScaleY, 2.0f);
+  EXPECT_FLOAT_EQ(runs[0].glyphs[1].stretchScaleY, 2.0f);
+}
+
+TEST(ApplyTextLengthTest, GlobalSpacingAndGlyphsScalesAcrossRuns) {
+  std::vector<TextRun> runs(2);
+  runs[0].glyphs = {{.xPosition = 10.0, .xAdvance = 10.0}};
+  runs[1].glyphs = {{.xPosition = 20.0, .xAdvance = 10.0}};
+
+  components::ComputedTextComponent text;
+  text.spans.push_back(components::ComputedTextComponent::TextSpan());
+  text.spans.push_back(components::ComputedTextComponent::TextSpan());
+
+  std::vector<RunPenExtent> extents = {{10.0, 0.0, 20.0, 0.0}, {20.0, 0.0, 30.0, 0.0}};
+  TextLayoutParams params;
+  params.viewBox = Box2d(Vector2d::Zero(), Vector2d(200, 200));
+  params.fontMetrics = FontMetrics();
+  params.textLength = Lengthd(60.0, Lengthd::Unit::None);
+  params.lengthAdjust = LengthAdjust::SpacingAndGlyphs;
+
+  applyTextLength(runs, text, extents, params, false, 30.0, 0.0);
+
+  EXPECT_NEAR(runs[0].glyphs[0].xPosition, 10.0, 0.001);
+  EXPECT_NEAR(runs[1].glyphs[0].xPosition, 40.0, 0.001);
+  EXPECT_NEAR(runs[0].glyphs[0].xAdvance, 30.0, 0.001);
+  EXPECT_NEAR(runs[1].glyphs[0].xAdvance, 30.0, 0.001);
+  EXPECT_FLOAT_EQ(runs[0].glyphs[0].stretchScaleX, 3.0f);
+  EXPECT_FLOAT_EQ(runs[1].glyphs[0].stretchScaleX, 3.0f);
+}
+
+TEST(ApplyTextLengthTest, IgnoresNonPositiveSpanLengths) {
+  std::vector<TextRun> runs(2);
+  runs[0].glyphs = {{.xPosition = 10.0, .xAdvance = 10.0}};
+  runs[1].glyphs = {{.xPosition = 50.0, .xAdvance = 10.0}};
+
+  components::ComputedTextComponent text;
+  components::ComputedTextComponent::TextSpan zeroNaturalSpan;
+  zeroNaturalSpan.textLength = Lengthd(40.0, Lengthd::Unit::None);
+  components::ComputedTextComponent::TextSpan zeroTargetSpan;
+  zeroTargetSpan.textLength = Lengthd(0.0, Lengthd::Unit::None);
+  text.spans.push_back(zeroNaturalSpan);
+  text.spans.push_back(zeroTargetSpan);
+
+  std::vector<RunPenExtent> extents = {{10.0, 0.0, 10.0, 0.0}, {50.0, 0.0, 60.0, 0.0}};
+  TextLayoutParams params;
+  params.viewBox = Box2d(Vector2d::Zero(), Vector2d(200, 200));
+  params.fontMetrics = FontMetrics();
+
+  applyTextLength(runs, text, extents, params, false, 60.0, 0.0);
+
+  EXPECT_DOUBLE_EQ(runs[0].glyphs[0].xPosition, 10.0);
+  EXPECT_DOUBLE_EQ(runs[1].glyphs[0].xPosition, 50.0);
+}
+
 // ── computeSpanBaselineShiftPx ──────────────────────────────────────────────
 
 TEST(ComputeSpanBaselineShiftPxTest, LengthBasedShift) {
@@ -392,6 +506,47 @@ TEST(ComputeSpanBaselineShiftPxTest, SuperKeywordUsesOS2Metrics) {
   // Scale = 1.0, superscriptYOffset = 300, so shift = 300 * 1.0 = 300.
   const double shift = computeSpanBaselineShiftPx(backend, span, FontHandle{}, 1.0f, params);
   EXPECT_DOUBLE_EQ(shift, 300.0);
+}
+
+TEST(ComputeSpanBaselineShiftPxTest, SubKeywordFallsBackWhenMetricsAreMissing) {
+  using BSK = components::ComputedTextComponent::TextSpan::BaselineShiftKeyword;
+  testing::NiceMock<MockTextBackend> backend;
+  ON_CALL(backend, subSuperMetrics(testing::_)).WillByDefault(testing::Return(std::nullopt));
+
+  components::ComputedTextComponent::TextSpan span;
+  span.baselineShiftKeyword = BSK::Sub;
+  span.baselineShift = Lengthd(-0.25, Lengthd::Unit::Em);
+
+  TextLayoutParams params;
+  params.viewBox = Box2d(Vector2d::Zero(), Vector2d(200, 200));
+  params.fontMetrics = FontMetrics::DefaultsWithFontSize(20.0);
+  params.fontSize = Lengthd(20.0, Lengthd::Unit::Px);
+
+  const double shift = computeSpanBaselineShiftPx(backend, span, FontHandle{}, 1.0f, params);
+  EXPECT_DOUBLE_EQ(shift, -5.0);
+}
+
+TEST(ComputeSpanBaselineShiftPxTest, AccumulatesAncestorKeywordAndLengthShifts) {
+  using BSK = components::ComputedTextComponent::TextSpan::BaselineShiftKeyword;
+  testing::NiceMock<MockTextBackend> backend;
+  ON_CALL(backend, subSuperMetrics(testing::_))
+      .WillByDefault(testing::Return(SubSuperMetrics{200, 300}));
+  ON_CALL(backend, scaleForEmToPixels(testing::_, testing::_))
+      .WillByDefault(testing::Return(0.02f));
+
+  components::ComputedTextComponent::TextSpan span;
+  span.baselineShift = Lengthd(5.0, Lengthd::Unit::Px);
+  span.ancestorBaselineShifts.push_back({BSK::Sub, Lengthd(-0.33, Lengthd::Unit::Em), 18.0});
+  span.ancestorBaselineShifts.push_back({BSK::Super, Lengthd(0.4, Lengthd::Unit::Em), 18.0});
+  span.ancestorBaselineShifts.push_back({BSK::Length, Lengthd(3.0, Lengthd::Unit::Px), 18.0});
+
+  TextLayoutParams params;
+  params.viewBox = Box2d(Vector2d::Zero(), Vector2d(200, 200));
+  params.fontMetrics = FontMetrics::DefaultsWithFontSize(20.0);
+  params.fontSize = Lengthd(20.0, Lengthd::Unit::Px);
+
+  const double shift = computeSpanBaselineShiftPx(backend, span, FontHandle{}, 1.0f, params);
+  EXPECT_NEAR(shift, 10.0, 1e-6);
 }
 
 // ── TextEngine::layout() with MockTextBackend ───────────────────────────────
@@ -591,6 +746,217 @@ TEST_F(TextEngineLayoutTest, LetterSpacingAddsSpace) {
   EXPECT_NEAR(runs[0].glyphs[1].xPosition, 15.0, 0.1);
 }
 
+TEST_F(TextEngineLayoutTest, CursiveGlyphSuppressesLetterSpacing) {
+  ON_CALL(*mockBackend_, shapeRun(testing::_, testing::_, testing::_, testing::_, testing::_,
+                                  testing::_, testing::_, testing::_))
+      .WillByDefault([](FontHandle, float, std::string_view text, size_t offset, size_t length,
+                        bool, FontVariant, bool) {
+        return TextEngineLayoutTest::makeShapedRun(text, offset, length, 10.0);
+      });
+  ON_CALL(*mockBackend_, isCursive(static_cast<uint32_t>('A')))
+      .WillByDefault(testing::Return(true));
+
+  components::ComputedTextComponent text;
+  auto span = makeSpan("AB");
+  span.xList.push_back(Lengthd(0.0, Lengthd::Unit::None));
+  span.yList.push_back(Lengthd(0.0, Lengthd::Unit::None));
+  span.letterSpacingPx = 5.0;
+  text.spans.push_back(std::move(span));
+
+  const auto runs = engine_->layout(text, makeParams());
+
+  ASSERT_EQ(runs.size(), 1u);
+  ASSERT_EQ(runs[0].glyphs.size(), 2u);
+  EXPECT_NEAR(runs[0].glyphs[1].xPosition, 10.0, 0.1);
+}
+
+TEST_F(TextEngineLayoutTest, WordSpacingAddsAfterAsciiSpace) {
+  ON_CALL(*mockBackend_, shapeRun(testing::_, testing::_, testing::_, testing::_, testing::_,
+                                  testing::_, testing::_, testing::_))
+      .WillByDefault([](FontHandle, float, std::string_view text, size_t offset, size_t length,
+                        bool, FontVariant, bool) {
+        return TextEngineLayoutTest::makeShapedRun(text, offset, length, 10.0);
+      });
+
+  components::ComputedTextComponent text;
+  auto span = makeSpan("A B");
+  span.xList.push_back(Lengthd(0.0, Lengthd::Unit::None));
+  span.yList.push_back(Lengthd(0.0, Lengthd::Unit::None));
+  span.wordSpacingPx = 5.0;
+  text.spans.push_back(std::move(span));
+
+  const auto runs = engine_->layout(text, makeParams());
+
+  ASSERT_EQ(runs.size(), 1u);
+  ASSERT_EQ(runs[0].glyphs.size(), 3u);
+  EXPECT_NEAR(runs[0].glyphs[0].xPosition, 0.0, 0.1);
+  EXPECT_NEAR(runs[0].glyphs[1].xPosition, 10.0, 0.1);
+  EXPECT_NEAR(runs[0].glyphs[2].xPosition, 25.0, 0.1);
+}
+
+TEST_F(TextEngineLayoutTest, CrossSpanKerningAppliesWhenSpanContinuesChunk) {
+  ON_CALL(*mockBackend_, shapeRun(testing::_, testing::_, testing::_, testing::_, testing::_,
+                                  testing::_, testing::_, testing::_))
+      .WillByDefault([](FontHandle, float, std::string_view text, size_t offset, size_t length,
+                        bool, FontVariant, bool) {
+        return TextEngineLayoutTest::makeShapedRun(text, offset, length, 10.0);
+      });
+  ON_CALL(*mockBackend_,
+          crossSpanKern(testing::_, testing::_, testing::_, testing::_, static_cast<uint32_t>('A'),
+                        static_cast<uint32_t>('V'), false))
+      .WillByDefault(testing::Return(-2.0));
+
+  components::ComputedTextComponent text;
+  auto span1 = makeSpan("A");
+  span1.xList.push_back(Lengthd(0.0, Lengthd::Unit::None));
+  span1.yList.push_back(Lengthd(0.0, Lengthd::Unit::None));
+  auto span2 = makeSpan("V");
+  span2.startsNewChunk = false;
+  text.spans.push_back(std::move(span1));
+  text.spans.push_back(std::move(span2));
+
+  const auto runs = engine_->layout(text, makeParams());
+
+  ASSERT_EQ(runs.size(), 2u);
+  ASSERT_EQ(runs[0].glyphs.size(), 1u);
+  ASSERT_EQ(runs[1].glyphs.size(), 1u);
+  EXPECT_NEAR(runs[1].glyphs[0].xPosition, 8.0, 0.1);
+}
+
+TEST_F(TextEngineLayoutTest, VerticalLatinRotatesAndUsesSpacing) {
+  ON_CALL(*mockBackend_, shapeRun(testing::_, testing::_, testing::_, testing::_, testing::_,
+                                  testing::_, testing::_, testing::_))
+      .WillByDefault([](FontHandle, float, std::string_view text, size_t offset, size_t length,
+                        bool, FontVariant, bool) {
+        return TextEngineLayoutTest::makeShapedRun(text, offset, length, 10.0);
+      });
+
+  components::ComputedTextComponent text;
+  auto span = makeSpan("A B");
+  span.xList.push_back(Lengthd(100.0, Lengthd::Unit::None));
+  span.yList.push_back(Lengthd(10.0, Lengthd::Unit::None));
+  span.rotateList = {15.0};
+  span.letterSpacingPx = 2.0;
+  span.wordSpacingPx = 3.0;
+  text.spans.push_back(std::move(span));
+
+  auto params = makeParams();
+  params.writingMode = WritingMode::VerticalRl;
+  const auto runs = engine_->layout(text, params);
+
+  ASSERT_EQ(runs.size(), 1u);
+  ASSERT_EQ(runs[0].glyphs.size(), 3u);
+  EXPECT_NEAR(runs[0].glyphs[0].xPosition, 95.2, 0.1);
+  EXPECT_NEAR(runs[0].glyphs[0].yPosition, 10.0, 0.1);
+  EXPECT_DOUBLE_EQ(runs[0].glyphs[0].rotateDegrees, 105.0);
+  EXPECT_NEAR(runs[0].glyphs[1].yPosition, 22.0, 0.1);
+  EXPECT_NEAR(runs[0].glyphs[2].yPosition, 37.0, 0.1);
+}
+
+TEST_F(TextEngineLayoutTest, VerticalCjkUsesBackendOffsetsAndAdvanceFallback) {
+  ON_CALL(*mockBackend_, shapeRun(testing::_, testing::_, testing::_, testing::_, testing::_,
+                                  testing::_, testing::_, testing::_))
+      .WillByDefault(
+          [](FontHandle, float, std::string_view, size_t offset, size_t, bool, FontVariant, bool) {
+            TextBackend::ShapedRun run;
+            run.glyphs.push_back(TextBackend::ShapedGlyph{
+                .glyphIndex = 7,
+                .xAdvance = 0.0,
+                .yAdvance = 0.0,
+                .xOffset = 3.0,
+                .yOffset = -4.0,
+                .cluster = static_cast<uint32_t>(offset),
+            });
+            return run;
+          });
+
+  components::ComputedTextComponent text;
+  auto span = makeSpan("\xE6\x97\xA5");  // 日.
+  span.xList.push_back(Lengthd(80.0, Lengthd::Unit::None));
+  span.yList.push_back(Lengthd(25.0, Lengthd::Unit::None));
+  span.rotateList = {12.0};
+  text.spans.push_back(std::move(span));
+
+  auto params = makeParams();
+  params.writingMode = WritingMode::VerticalRl;
+  const auto runs = engine_->layout(text, params);
+
+  ASSERT_EQ(runs.size(), 1u);
+  ASSERT_EQ(runs[0].glyphs.size(), 1u);
+  EXPECT_EQ(runs[0].glyphs[0].glyphIndex, 7);
+  EXPECT_NEAR(runs[0].glyphs[0].xPosition, 83.0, 0.1);
+  EXPECT_NEAR(runs[0].glyphs[0].yPosition, 21.0, 0.1);
+  EXPECT_NEAR(runs[0].glyphs[0].yAdvance, 16.0, 0.1);
+  EXPECT_DOUBLE_EQ(runs[0].glyphs[0].rotateDegrees, 12.0);
+}
+
+TEST_F(TextEngineLayoutTest, VerticalPerCharacterAbsolutePositionsApplyDxDy) {
+  ON_CALL(*mockBackend_, shapeRun(testing::_, testing::_, testing::_, testing::_, testing::_,
+                                  testing::_, testing::_, testing::_))
+      .WillByDefault([](FontHandle, float, std::string_view text, size_t offset, size_t length,
+                        bool, FontVariant, bool) {
+        return TextEngineLayoutTest::makeShapedRun(text, offset, length, 10.0);
+      });
+
+  components::ComputedTextComponent text;
+  auto span = makeSpan("AB");
+  span.xList = {Lengthd(100.0, Lengthd::Unit::None), Lengthd(130.0, Lengthd::Unit::None)};
+  span.yList = {Lengthd(10.0, Lengthd::Unit::None), Lengthd(50.0, Lengthd::Unit::None)};
+  span.dxList = {std::nullopt, Lengthd(3.0, Lengthd::Unit::None)};
+  span.dyList = {std::nullopt, Lengthd(4.0, Lengthd::Unit::None)};
+  text.spans.push_back(std::move(span));
+
+  auto params = makeParams();
+  params.writingMode = WritingMode::VerticalRl;
+  const auto runs = engine_->layout(text, params);
+
+  ASSERT_EQ(runs.size(), 1u);
+  ASSERT_EQ(runs[0].glyphs.size(), 2u);
+  EXPECT_NEAR(runs[0].glyphs[0].xPosition, 95.2, 0.1);
+  EXPECT_NEAR(runs[0].glyphs[0].yPosition, 10.0, 0.1);
+  EXPECT_NEAR(runs[0].glyphs[1].xPosition, 128.2, 0.1);
+  EXPECT_NEAR(runs[0].glyphs[1].yPosition, 54.0, 0.1);
+}
+
+TEST_F(TextEngineLayoutTest, HorizontalRtlChunkUsesAbsoluteYOverrideForWholeChunk) {
+  ON_CALL(*mockBackend_, shapeRun(testing::_, testing::_, testing::_, testing::_, testing::_,
+                                  testing::_, testing::_, testing::_))
+      .WillByDefault([](FontHandle, float, std::string_view text, size_t offset, size_t length,
+                        bool, FontVariant, bool) {
+        if (offset == 2 && length == 2) {
+          TextBackend::ShapedRun run;
+          run.glyphs.push_back(TextBackend::ShapedGlyph{
+              .glyphIndex = 3,
+              .xAdvance = 10.0,
+              .cluster = 3,
+          });
+          run.glyphs.push_back(TextBackend::ShapedGlyph{
+              .glyphIndex = 2,
+              .xAdvance = 10.0,
+              .cluster = 2,
+          });
+          return run;
+        }
+        return TextEngineLayoutTest::makeShapedRun(text, offset, length, 10.0);
+      });
+
+  components::ComputedTextComponent text;
+  auto span = makeSpan("ABCD");
+  span.xList.push_back(Lengthd(0.0, Lengthd::Unit::None));
+  span.yList = {Lengthd(10.0, Lengthd::Unit::None), std::nullopt,
+                Lengthd(50.0, Lengthd::Unit::None)};
+  text.spans.push_back(std::move(span));
+
+  const auto runs = engine_->layout(text, makeParams());
+
+  ASSERT_EQ(runs.size(), 1u);
+  ASSERT_EQ(runs[0].glyphs.size(), 4u);
+  EXPECT_NEAR(runs[0].glyphs[0].yPosition, 10.0, 0.1);
+  EXPECT_NEAR(runs[0].glyphs[1].yPosition, 10.0, 0.1);
+  EXPECT_NEAR(runs[0].glyphs[2].yPosition, 50.0, 0.1);
+  EXPECT_NEAR(runs[0].glyphs[3].yPosition, 50.0, 0.1);
+}
+
 TEST_F(TextEngineLayoutTest, AlignmentBaselineHangingShiftsGlyphsDown) {
   ON_CALL(*mockBackend_, shapeRun(testing::_, testing::_, testing::_, testing::_, testing::_,
                                   testing::_, testing::_, testing::_))
@@ -611,7 +977,7 @@ TEST_F(TextEngineLayoutTest, AlignmentBaselineHangingShiftsGlyphsDown) {
 
   ASSERT_EQ(runs.size(), 1u);
   ASSERT_EQ(runs[0].glyphs.size(), 2u);
-  // Hanging shift = 0.8 * ascent(800) * emScale(0.016) = 10.24, added to y (glyphs move down).
+  // Hanging shift = 0.8 * ascent(800) * emScale(0.016) = 10.24, added to y.
   EXPECT_THAT(runs[0].glyphs[0].yPosition, testing::DoubleNear(60.24, 0.01));
   EXPECT_THAT(runs[0].glyphs[1].yPosition, testing::DoubleNear(60.24, 0.01));
 }
@@ -640,12 +1006,52 @@ TEST_F(TextEngineLayoutTest, BaselineAlignmentIsIgnoredInVerticalWritingMode) {
     return Vector2d(runs[0].glyphs[0].xPosition, runs[0].glyphs[0].yPosition);
   };
 
-  // Matching resvg, dominant/alignment baseline shifts apply only to horizontal text: a
-  // vertical span with `hanging` must lay out exactly like one with `auto`.
   const Vector2d hangingPosition = layoutFirstGlyphPosition(DominantBaseline::Hanging);
   const Vector2d autoPosition = layoutFirstGlyphPosition(DominantBaseline::Auto);
   EXPECT_THAT(hangingPosition.x, testing::DoubleEq(autoPosition.x));
   EXPECT_THAT(hangingPosition.y, testing::DoubleEq(autoPosition.y));
+}
+
+TEST_F(TextEngineLayoutTest, VisibilityHiddenAdvancesButClearsGlyphs) {
+  ON_CALL(*mockBackend_, shapeRun(testing::_, testing::_, testing::_, testing::_, testing::_,
+                                  testing::_, testing::_, testing::_))
+      .WillByDefault([](FontHandle, float, std::string_view text, size_t offset, size_t length,
+                        bool, FontVariant, bool) {
+        return TextEngineLayoutTest::makeShapedRun(text, offset, length, 10.0);
+      });
+
+  components::ComputedTextComponent text;
+  auto hiddenSpan = makeSpan("AB");
+  hiddenSpan.xList.push_back(Lengthd(0.0, Lengthd::Unit::None));
+  hiddenSpan.yList.push_back(Lengthd(0.0, Lengthd::Unit::None));
+  hiddenSpan.visibility = Visibility::Hidden;
+  auto visibleSpan = makeSpan("C");
+  visibleSpan.startsNewChunk = false;
+  text.spans.push_back(std::move(hiddenSpan));
+  text.spans.push_back(std::move(visibleSpan));
+
+  const auto runs = engine_->layout(text, makeParams());
+
+  ASSERT_EQ(runs.size(), 2u);
+  EXPECT_TRUE(runs[0].glyphs.empty());
+  ASSERT_EQ(runs[1].glyphs.size(), 1u);
+  EXPECT_NEAR(runs[1].glyphs[0].xPosition, 20.0, 0.1);
+}
+
+TEST_F(TextEngineLayoutTest, TextPathFailureProducesEmptyRunWithoutShaping) {
+  EXPECT_CALL(*mockBackend_, shapeRun(testing::_, testing::_, testing::_, testing::_, testing::_,
+                                      testing::_, testing::_, testing::_))
+      .Times(0);
+
+  components::ComputedTextComponent text;
+  auto span = makeSpan("missing path");
+  span.textPathFailed = true;
+  text.spans.push_back(std::move(span));
+
+  const auto runs = engine_->layout(text, makeParams());
+
+  ASSERT_EQ(runs.size(), 1u);
+  EXPECT_TRUE(runs[0].glyphs.empty());
 }
 
 TEST_F(TextEngineLayoutTest, HiddenSpanProducesEmptyGlyphs) {
@@ -658,6 +1064,49 @@ TEST_F(TextEngineLayoutTest, HiddenSpanProducesEmptyGlyphs) {
 
   ASSERT_EQ(runs.size(), 1u);
   EXPECT_TRUE(runs[0].glyphs.empty());
+}
+
+TEST_F(TextEngineLayoutTest, TextPathVisibilityHiddenClearsGlyphsAfterPathLayout) {
+  ON_CALL(*mockBackend_, shapeRun(testing::_, testing::_, testing::_, testing::_, testing::_,
+                                  testing::_, testing::_, testing::_))
+      .WillByDefault([](FontHandle, float, std::string_view text, size_t offset, size_t length,
+                        bool, FontVariant, bool) {
+        return TextEngineLayoutTest::makeShapedRun(text, offset, length, 10.0);
+      });
+
+  components::ComputedTextComponent text;
+  auto span = makeSpan("AB");
+  span.pathSpline = PathBuilder().moveTo(Vector2d(0.0, 0.0)).lineTo(Vector2d(100.0, 0.0)).build();
+  span.visibility = Visibility::Hidden;
+  text.spans.push_back(std::move(span));
+
+  const auto runs = engine_->layout(text, makeParams());
+
+  ASSERT_EQ(runs.size(), 1u);
+  EXPECT_TRUE(runs[0].onPath);
+  EXPECT_TRUE(runs[0].glyphs.empty());
+}
+
+TEST_F(TextEngineLayoutTest, EmptyTextPathHidesGlyphsAndLeavesPathRun) {
+  ON_CALL(*mockBackend_, shapeRun(testing::_, testing::_, testing::_, testing::_, testing::_,
+                                  testing::_, testing::_, testing::_))
+      .WillByDefault([](FontHandle, float, std::string_view text, size_t offset, size_t length,
+                        bool, FontVariant, bool) {
+        return TextEngineLayoutTest::makeShapedRun(text, offset, length, 10.0);
+      });
+
+  components::ComputedTextComponent text;
+  auto span = makeSpan("AB");
+  span.pathSpline = Path{};
+  text.spans.push_back(std::move(span));
+
+  const auto runs = engine_->layout(text, makeParams());
+
+  ASSERT_EQ(runs.size(), 1u);
+  EXPECT_TRUE(runs[0].onPath);
+  ASSERT_EQ(runs[0].glyphs.size(), 2u);
+  EXPECT_EQ(runs[0].glyphs[0].glyphIndex, 0);
+  EXPECT_EQ(runs[0].glyphs[1].glyphIndex, 0);
 }
 
 TEST_F(TextEngineLayoutTest, EmptySpanPreservesPosition) {

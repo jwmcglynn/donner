@@ -51,11 +51,9 @@ coverage forever.
 
 ## Non-Goals
 
-- Capturing rendering commands at the `RendererInterface` level —
-  the existing `SerializingRenderer` / `.rnr` path (see
-  `donner/editor/sandbox/`) already covers draw-call-level recording.
-  The two mechanisms are complementary: `.rnr` captures "what did the
-  renderer do", `.donner-repro` captures "what did the user do".
+- Capturing rendering commands at the `RendererInterface` level. The removed
+  editor sandbox prototype covered draw-call-level recording separately;
+  `.donner-repro` captures "what did the user do".
 - Cross-session playback. A recording is paired with a specific SVG
   file (path stored in metadata). The player resolves that file at
   replay time; if the SVG has changed, playback is undefined.
@@ -326,11 +324,11 @@ because:
 
 ### Record rendering commands instead
 
-Already exists via `SerializingRenderer` + `.rnr` files (see
-`donner/editor/sandbox/`). Solves a different problem: reproducing
-a rendering regression given a known scene + drawcall sequence. Can't
-reproduce a compositor bug or a DOM-mutation bug because both happen
-*above* the renderer. The two mechanisms are complementary.
+The removed editor sandbox prototype previously covered this via
+`SerializingRenderer` + `.rnr` files. That solved a different problem:
+reproducing a rendering regression given a known scene + drawcall sequence.
+It could not reproduce a compositor bug or a DOM-mutation bug because both
+happen *above* the renderer.
 
 ### Use a real JSON library
 

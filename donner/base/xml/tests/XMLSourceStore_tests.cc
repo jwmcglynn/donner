@@ -94,6 +94,51 @@ TEST(XMLSourceStore, ExplicitInvalidationMakesSpanUnresolvable) {
   EXPECT_EQ(store.resolveSpan(*span), std::nullopt);
 }
 
+TEST(XMLSourceStore, InvalidAnchorIdsResolveToNullopt) {
+  XMLSourceStore store("abcdef");
+  ASSERT_TRUE(store.createAnchor(1).has_value());
+
+  EXPECT_EQ(store.resolveAnchor(SourceAnchorId{}), std::nullopt);
+  EXPECT_EQ(store.resolveAnchor(SourceAnchorId{999}), std::nullopt);
+
+  store.invalidateAnchor(SourceAnchorId{999});
+  EXPECT_EQ(store.resolveAnchor(SourceAnchorId{999}), std::nullopt);
+}
+
+TEST(XMLSourceStore, ResolveSpanRejectsInvertedAnchorOrder) {
+  XMLSourceStore store("abcdef");
+  std::optional<SourceAnchorId> start = store.createAnchor(1);
+  std::optional<SourceAnchorId> end = store.createAnchor(5);
+  ASSERT_TRUE(start.has_value());
+  ASSERT_TRUE(end.has_value());
+
+  EXPECT_EQ(store.resolveSpan(SourceAnchorSpan{.start = *end, .end = *start}), std::nullopt);
+}
+
+TEST(XMLSourceStore, CreateSpanRejectsInvalidRangesAndInvalidatesPartialStart) {
+  XMLSourceStore store(std::string("a\xC3\xA9z", 4));  // "aéz"
+
+  EXPECT_FALSE(store.createSpan(3, 1).has_value());
+  EXPECT_FALSE(store.createSpan(2, 3).has_value());
+
+  EXPECT_FALSE(store.createSpan(0, 2).has_value());
+  EXPECT_EQ(store.resolveAnchor(SourceAnchorId{1}), std::nullopt);
+}
+
+TEST(XMLSourceStore, ReplaceSkipsInvalidAnchors) {
+  XMLSourceStore store("abcdef");
+  std::optional<SourceAnchorId> invalidated = store.createAnchor(3);
+  std::optional<SourceAnchorId> after = store.createAnchor(6);
+  ASSERT_TRUE(invalidated.has_value());
+  ASSERT_TRUE(after.has_value());
+
+  store.invalidateAnchor(*invalidated);
+  ASSERT_TRUE(store.replace(0, 1, "XY").has_value());
+
+  EXPECT_EQ(store.resolveAnchor(*invalidated), std::nullopt);
+  EXPECT_EQ(store.resolveAnchor(*after), std::optional<std::size_t>(7));
+}
+
 TEST(XMLSourceStore, RejectsOutOfBoundsEditsWithoutChangingVersion) {
   XMLSourceStore store("abc");
 
@@ -118,6 +163,9 @@ TEST(XMLSourceStore, RejectsInvalidUtf8Replacement) {
   XMLSourceStore store("abc");
 
   EXPECT_FALSE(store.replace(1, 0, std::string_view("\xC3", 1)).has_value());
+  EXPECT_FALSE(store.replace(1, 0, std::string_view("\xC3x", 2)).has_value());
+  EXPECT_FALSE(store.replace(1, 0, std::string_view("\xE2\x82", 2)).has_value());
+  EXPECT_FALSE(store.replace(1, 0, std::string_view("\xF0\x9F\x98", 3)).has_value());
 
   EXPECT_EQ(store.source(), "abc");
   EXPECT_EQ(store.sourceVersion(), 0u);
@@ -128,9 +176,27 @@ TEST(XMLSourceStore, RejectsInvalidXmlSourceCodepoints) {
 
   EXPECT_FALSE(store.replace(1, 0, std::string_view("\0", 1)).has_value());
   EXPECT_FALSE(store.replace(1, 0, std::string_view("\x01", 1)).has_value());
+  EXPECT_FALSE(store.replace(1, 0, std::string_view("\xC0\xAF", 2)).has_value());
+  EXPECT_FALSE(store.replace(1, 0, std::string_view("\xE0\x80\xAF", 3)).has_value());
+  EXPECT_FALSE(store.replace(1, 0, std::string_view("\xF0\x80\x80\xAF", 4)).has_value());
+  EXPECT_FALSE(store.replace(1, 0, std::string_view("\xF4\x90\x80\x80", 4)).has_value());
+  EXPECT_FALSE(store.replace(1, 0, std::string_view("\xED\xA0\x80", 3)).has_value());
+  EXPECT_FALSE(store.replace(1, 0, std::string_view("\xEF\xBF\xBE", 3)).has_value());
+  EXPECT_FALSE(store.replace(1, 0, std::string_view("\xEF\xBF\xBF", 3)).has_value());
 
   EXPECT_EQ(store.source(), "abc");
   EXPECT_EQ(store.sourceVersion(), 0u);
+}
+
+TEST(XMLSourceStore, AcceptsValidMultibyteUtf8Replacement) {
+  XMLSourceStore store("abc");
+
+  ASSERT_TRUE(store.replace(1, 1, std::string_view("\xC3\xA9", 2)).has_value());
+  ASSERT_TRUE(store.replace(3, 0, std::string_view("\xE2\x82\xAC", 3)).has_value());
+  ASSERT_TRUE(store.replace(6, 0, std::string_view("\xF0\x9F\x98\x80", 4)).has_value());
+
+  EXPECT_EQ(store.source(), std::string("a\xC3\xA9\xE2\x82\xAC\xF0\x9F\x98\x80", 10) + "c");
+  EXPECT_EQ(store.sourceVersion(), 3u);
 }
 
 TEST(XMLSourceStore, RepeatedEditsBeforeSiblingDoNotRetargetSpan) {

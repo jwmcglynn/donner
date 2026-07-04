@@ -1,6 +1,6 @@
 # Design: Coverage Improvement 2026-Q2 (81.5% → 85%+)
 
-**Status:** Implemented
+**Status:** Historical — implemented, then partially superseded by removal of the editor sandbox
 **Author:** Claude Opus 4.8
 **Created:** 2026-05-29
 
@@ -10,6 +10,8 @@
 > 62%→80%, `XMLDocument.cc` 74%→80%, `TextEditor.cc` 57%→69%. The coverage push
 > also surfaced and fixed three real bugs (two TextEditor crashes + the
 > `EncodeColor` CurrentColor semantics). See [Results](#results).
+>
+> Note: the editor sandbox prototype and `SandboxCodecs.cc` were later removed.
 
 ## Summary
 

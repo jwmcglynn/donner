@@ -180,10 +180,9 @@ Three vNext workstreams existed during v0.5 development but were **not** part of
 feature surface — code landed on `main` but none was enabled/exposed for v0.5 users. They are
 the first feature work to finish for v1.0.
 
-- [ ] **Sandboxing** — Finish the remaining milestones in
-  [0023-editor_sandbox.md](0023-editor_sandbox.md). Scaffolding (wire-format fuzzer,
-  `sandbox_diff` CLI, hardened-child test fixes) already landed; the end-to-end hardened
-  editor path still needs to ship.
+- [ ] **Sandboxing** — Redesign the editor parser/renderer isolation path for v1.0. The
+  historical prototype in [0023-editor_sandbox.md](0023-editor_sandbox.md) was removed and should
+  not be revived as-is; the v1.0 work is to define and ship a production sandbox boundary.
 - [ ] **Composited rendering** — [0025-composited_rendering.md](0025-composited_rendering.md)
   graduates from Draft → Shipped. Layer-based caching that keeps editor dragging fluid.
 - [ ] **Geode renderer on a real GPU** — Finish [0017-geode_renderer.md](0017-geode_renderer.md).
@@ -429,7 +428,8 @@ per-phase design docs:
 - Composited rendering → [0025-composited_rendering.md](0025-composited_rendering.md).
 - Scripting → [0027-2-scripting.md](0027-2-scripting.md).
 - Conformance → [0026-svg_conformance_testing.md](0026-svg_conformance_testing.md).
-- Editor sandbox → [0023-editor_sandbox.md](0023-editor_sandbox.md).
+- Editor sandbox → [0023-editor_sandbox.md](0023-editor_sandbox.md) records the removed prototype;
+  Phase 2 needs a replacement design for the v1.0 sandbox boundary.
 - Geode → [0017-geode_renderer.md](0017-geode_renderer.md).
 - Incremental invalidation → [0005-incremental_invalidation.md](0005-incremental_invalidation.md).
 - BCR → [0018-bcr_release.md](0018-bcr_release.md).
@@ -450,11 +450,12 @@ v1.0 adds two major new trust boundaries beyond v0.5's parser / renderer surface
 
 - **Scripting.** Untrusted JS running inside Donner. The threat model, sandbox, and fuzz
   strategy are owned by [0027-2-scripting.md](0027-2-scripting.md) §Security / privacy.
-- **Editor sandbox.** Process isolation for editor parser/renderer. Owned by
-  [0023-editor_sandbox.md](0023-editor_sandbox.md).
-
+- **Editor sandbox.** Process isolation for editor parser/renderer work remains in scope for
+  v1.0. The previous prototype was removed, so Phase 2 must define the replacement threat model,
+  IPC boundary, and validation strategy before implementation.
 Donner's global invariant — "must safely handle untrusted input and must never crash" — extends
-unchanged across the scripting boundary. Phase 12 (Security pass) is the verification step.
+unchanged across the scripting and editor-sandbox boundaries. Phase 12 (Security pass) is the
+verification step.
 
 ## Testing and Validation
 

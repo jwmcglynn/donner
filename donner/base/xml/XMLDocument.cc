@@ -641,7 +641,8 @@ std::optional<std::size_t> GetAttributeInsertionOffset(const XMLDocument& docume
     return std::nullopt;
   }
 
-  if (*tagEnd >= 2 && document.source()[*tagEnd - 2] == '/') {
+  if (*tagEnd >= 2 &&
+      (document.source()[*tagEnd - 2] == '/' || document.source()[*tagEnd - 2] == '?')) {
     return *tagEnd - 2;
   }
 
