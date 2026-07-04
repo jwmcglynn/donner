@@ -21,6 +21,9 @@
 #include "donner/svg/tests/ParserTestUtils.h"
 
 using testing::AllOf;
+using testing::DoubleEq;
+using testing::ElementsAre;
+using testing::Field;
 
 namespace donner::svg {
 
@@ -45,6 +48,21 @@ auto HeightEq(auto valueMatcher, auto unitMatcher) {
 
 MATCHER_P(FilterHas, matchers, "") {
   return testing::ExplainMatchResult(matchers, arg.element, result_listener);
+}
+
+MATCHER_P2(GaussianBlurNodeHasStdDeviation, expectedX, expectedY, "") {
+  const auto* blur = std::get_if<components::filter_primitive::GaussianBlur>(&arg.primitive);
+  if (blur == nullptr) {
+    *result_listener << "primitive variant index is " << arg.primitive.index();
+    return false;
+  }
+
+  return testing::ExplainMatchResult(
+      AllOf(Field("stdDeviationX", &components::filter_primitive::GaussianBlur::stdDeviationX,
+                  DoubleEq(expectedX)),
+            Field("stdDeviationY", &components::filter_primitive::GaussianBlur::stdDeviationY,
+                  DoubleEq(expectedY))),
+      *blur, result_listener);
 }
 
 }  // namespace
@@ -202,13 +220,7 @@ TEST(SVGFilterElementTests, HrefInheritsPrimitivesAndRegion) {
   const auto* computed =
       document.registry().try_get<components::ComputedFilterComponent>(filter1Entity);
   ASSERT_NE(computed, nullptr);
-  ASSERT_EQ(computed->filterGraph.nodes.size(), 1u);
-
-  const auto* blur = std::get_if<components::filter_primitive::GaussianBlur>(
-      &computed->filterGraph.nodes.front().primitive);
-  ASSERT_NE(blur, nullptr);
-  EXPECT_DOUBLE_EQ(blur->stdDeviationX, 4.0);
-  EXPECT_DOUBLE_EQ(blur->stdDeviationY, 4.0);
+  EXPECT_THAT(computed->filterGraph.nodes, ElementsAre(GaussianBlurNodeHasStdDeviation(4.0, 4.0)));
   EXPECT_THAT(computed->x.value, testing::DoubleEq(0.1));
   EXPECT_THAT(computed->y.value, testing::DoubleEq(0.2));
   EXPECT_THAT(computed->width.value, testing::DoubleEq(0.8));
@@ -242,13 +254,7 @@ TEST(SVGFilterElementTests, HrefInheritsAttributesButKeepsLocalPrimitives) {
   const auto* computed =
       document.registry().try_get<components::ComputedFilterComponent>(filter1Entity);
   ASSERT_NE(computed, nullptr);
-  ASSERT_EQ(computed->filterGraph.nodes.size(), 1u);
-
-  const auto* blur = std::get_if<components::filter_primitive::GaussianBlur>(
-      &computed->filterGraph.nodes.front().primitive);
-  ASSERT_NE(blur, nullptr);
-  EXPECT_DOUBLE_EQ(blur->stdDeviationX, 4.0);
-  EXPECT_DOUBLE_EQ(blur->stdDeviationY, 4.0);
+  EXPECT_THAT(computed->filterGraph.nodes, ElementsAre(GaussianBlurNodeHasStdDeviation(4.0, 4.0)));
   EXPECT_THAT(computed->x.value, testing::DoubleEq(0.1));
   EXPECT_THAT(computed->y.value, testing::DoubleEq(0.2));
   EXPECT_THAT(computed->width.value, testing::DoubleEq(0.8));
