@@ -7,6 +7,11 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <ostream>
+#include <string>
+#include <string_view>
+#include <vector>
+
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
@@ -26,6 +31,10 @@ namespace donner::svg::components {
 
 namespace {
 
+using ::testing::AllOf;
+using ::testing::ElementsAre;
+using ::testing::Field;
+
 void SetRenderTreeState(Registry& registry, const RenderTreeState& state) {
   if (registry.ctx().contains<RenderTreeState>()) {
     registry.ctx().erase<RenderTreeState>();
@@ -42,6 +51,51 @@ std::string_view SourceSlice(std::string_view source, const SourceRange& range) 
   }
 
   return source.substr(*range.start.offset, *range.end.offset - *range.start.offset);
+}
+
+struct AuthoredMatchedRuleSummary {
+  std::size_t selectorEntryIndex = 0;
+  css::Specificity specificity;
+  std::string selectorSource;
+  std::string ruleSource;
+};
+
+void PrintTo(const AuthoredMatchedRuleSummary& summary, std::ostream* os) {
+  *os << "AuthoredMatchedRuleSummary{selectorEntryIndex=" << summary.selectorEntryIndex
+      << ", specificity=" << summary.specificity << ", selectorSource=\"" << summary.selectorSource
+      << "\", ruleSource=\"" << summary.ruleSource << "\"}";
+}
+
+std::vector<AuthoredMatchedRuleSummary> AuthoredMatchedRuleSummaries(
+    std::string_view documentSource, const std::vector<MatchedStyleRule>& matches) {
+  std::vector<AuthoredMatchedRuleSummary> summaries;
+  for (const MatchedStyleRule& match : matches) {
+    if (!match.ruleSourceRange.has_value()) {
+      continue;
+    }
+
+    summaries.push_back(AuthoredMatchedRuleSummary{
+        .selectorEntryIndex = match.selectorEntryIndex,
+        .specificity = match.specificity,
+        .selectorSource = match.selectorSourceRange.has_value()
+                              ? std::string(SourceSlice(documentSource, *match.selectorSourceRange))
+                              : std::string(),
+        .ruleSource = std::string(SourceSlice(documentSource, *match.ruleSourceRange)),
+    });
+  }
+
+  return summaries;
+}
+
+auto AuthoredMatchedRuleIs(std::size_t selectorEntryIndex, css::Specificity specificity,
+                           std::string_view selectorSource, std::string_view ruleSource) {
+  return AllOf(
+      Field("selectorEntryIndex", &AuthoredMatchedRuleSummary::selectorEntryIndex,
+            selectorEntryIndex),
+      Field("specificity", &AuthoredMatchedRuleSummary::specificity, specificity),
+      Field("selectorSource", &AuthoredMatchedRuleSummary::selectorSource,
+            std::string(selectorSource)),
+      Field("ruleSource", &AuthoredMatchedRuleSummary::ruleSource, std::string(ruleSource)));
 }
 
 }  // namespace
@@ -182,21 +236,11 @@ TEST_F(StyleSystemTest, CollectMatchedStyleRulesReportsSelectorBranchAndSourceRa
   }
 
   EXPECT_TRUE(sawUserAgentWithoutSource);
-  ASSERT_EQ(authoredMatches.size(), 2u);
-
-  EXPECT_EQ(authoredMatches[0].selectorEntryIndex, 0u);
-  EXPECT_EQ(authoredMatches[0].specificity, css::Specificity::FromABC(0, 1, 0));
-  ASSERT_TRUE(authoredMatches[0].selectorSourceRange.has_value());
-  EXPECT_EQ(SourceSlice(document.source(), *authoredMatches[0].selectorSourceRange), ".cls-92");
-  EXPECT_EQ(SourceSlice(document.source(), *authoredMatches[0].ruleSourceRange),
-            ".cls-92, #other { fill: red; }");
-
-  EXPECT_EQ(authoredMatches[1].selectorEntryIndex, 0u);
-  EXPECT_EQ(authoredMatches[1].specificity, css::Specificity::FromABC(0, 1, 0));
-  ASSERT_TRUE(authoredMatches[1].selectorSourceRange.has_value());
-  EXPECT_EQ(SourceSlice(document.source(), *authoredMatches[1].selectorSourceRange), "[class]");
-  EXPECT_EQ(SourceSlice(document.source(), *authoredMatches[1].ruleSourceRange),
-            "[class] { stroke: blue; }");
+  EXPECT_THAT(AuthoredMatchedRuleSummaries(document.source(), authoredMatches),
+              ElementsAre(AuthoredMatchedRuleIs(0u, css::Specificity::FromABC(0, 1, 0), ".cls-92",
+                                                ".cls-92, #other { fill: red; }"),
+                          AuthoredMatchedRuleIs(0u, css::Specificity::FromABC(0, 1, 0), "[class]",
+                                                "[class] { stroke: blue; }")));
 }
 
 TEST_F(StyleSystemTest, FindsStyleRuleAtSourceOffsetAndSelectorBranch) {

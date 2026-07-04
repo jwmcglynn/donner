@@ -1,13 +1,25 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <ostream>
+#include <string_view>
+
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/svg/SVGGraphicsElement.h"
 
 namespace donner::editor {
+
+void PrintTo(const Vector2d& vector, std::ostream* os) {
+  *os << "Vector2d{x=" << vector.x << ", y=" << vector.y << "}";
+}
+
 namespace {
+
+using ::testing::AllOf;
+using ::testing::DoubleNear;
+using ::testing::Field;
 
 // Two non-overlapping rects in a 200x200 viewBox. r1 is in the
 // top-left quadrant, r2 in the bottom-right. The test sets the
@@ -18,7 +30,18 @@ constexpr std::string_view kTwoRectSvg =
     R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
             <rect id="r1" x="20"  y="20"  width="40" height="40" fill="red"/>
             <rect id="r2" x="140" y="140" width="40" height="40" fill="blue"/>
-          </svg>)svg";
+      </svg>)svg";
+
+auto Vector2dNear(Vector2d expected, double tolerance) {
+  return AllOf(Field("x", &Vector2d::x, DoubleNear(expected.x, tolerance)),
+               Field("y", &Vector2d::y, DoubleNear(expected.y, tolerance)));
+}
+
+Vector2d TransformTranslationDelta(const Transform2d& parentFromElementBefore,
+                                   const Transform2d& parentFromElementAfter) {
+  return Vector2d(parentFromElementAfter.data[4] - parentFromElementBefore.data[4],
+                  parentFromElementAfter.data[5] - parentFromElementBefore.data[5]);
+}
 
 ViewportState MakeViewportFor(EditorApp& app, Vector2d paneOrigin, Vector2d paneSize,
                               double dpr = 1.0) {
@@ -183,15 +206,14 @@ TEST(RenderPaneClickTest, DragMovesElementByDocDeltaUnderHighDpr) {
   tool.onMouseMove(app, v.screenToDocument(targetScreen), /*buttonHeld=*/true);
   ASSERT_TRUE(tool.activeDragPreview().has_value());
 
-  EXPECT_NEAR(tool.activeDragPreview()->translation.x, 50.0, 1e-6);
-  EXPECT_NEAR(tool.activeDragPreview()->translation.y, 0.0, 1e-6);
+  EXPECT_THAT(tool.activeDragPreview()->translation, Vector2dNear(Vector2d(50.0, 0.0), 1e-6));
 
   tool.onMouseUp(app, v.screenToDocument(targetScreen));
   ASSERT_TRUE(app.flushFrame());
 
   const Transform2d after = rect.transform();
-  EXPECT_NEAR(after.data[4] - startTransform.data[4], 50.0, 1e-6);
-  EXPECT_NEAR(after.data[5] - startTransform.data[5], 0.0, 1e-6);
+  EXPECT_THAT(TransformTranslationDelta(startTransform, after),
+              Vector2dNear(Vector2d(50.0, 0.0), 1e-6));
 }
 
 // Drag smoothness: when SelectTool receives a sequence of N
@@ -231,17 +253,15 @@ TEST(RenderPaneClickTest, DragMovesElementByCursorDelta) {
     // cursor delta.
     const Vector2d expectedDocDelta =
         v.screenToDocument(screenAtStep) - v.screenToDocument(startScreen);
-    EXPECT_NEAR(tool.activeDragPreview()->translation.x, expectedDocDelta.x, 1e-6)
-        << "  step=" << i << " of " << kSteps;
-    EXPECT_NEAR(tool.activeDragPreview()->translation.y, expectedDocDelta.y, 1e-6)
+    EXPECT_THAT(tool.activeDragPreview()->translation, Vector2dNear(expectedDocDelta, 1e-6))
         << "  step=" << i << " of " << kSteps;
   }
 
   tool.onMouseUp(app, v.screenToDocument(startScreen + totalScreenDelta));
   ASSERT_TRUE(app.flushFrame());
   const Transform2d finalTransform = rect.transform();
-  EXPECT_NEAR(finalTransform.data[4] - startTransform.data[4], 100.0, 1e-6);
-  EXPECT_NEAR(finalTransform.data[5] - startTransform.data[5], 50.0, 1e-6);
+  EXPECT_THAT(TransformTranslationDelta(startTransform, finalTransform),
+              Vector2dNear(Vector2d(100.0, 50.0), 1e-6));
 }
 
 // Regression for "clicks dropped during initial render" reported on
@@ -328,14 +348,13 @@ TEST(RenderPaneClickTest, MainLoopClickDragSequenceMovesElement) {
   const Vector2d screenAt2 = r1ScreenStart + Vector2d(40.0, 30.0);
   tool.onMouseMove(app, v.screenToDocument(screenAt2), /*buttonHeld=*/true);
   ASSERT_TRUE(tool.activeDragPreview().has_value());
-  EXPECT_NEAR(tool.activeDragPreview()->translation.x, 40.0, 1e-6);
-  EXPECT_NEAR(tool.activeDragPreview()->translation.y, 30.0, 1e-6);
+  EXPECT_THAT(tool.activeDragPreview()->translation, Vector2dNear(Vector2d(40.0, 30.0), 1e-6));
 
   // ---- Frame N+3: IsMouseReleased = true ----
   tool.onMouseUp(app, v.screenToDocument(screenAt2));
   ASSERT_TRUE(app.flushFrame());
-  EXPECT_NEAR(rect.transform().data[4] - startTransform.data[4], 40.0, 1e-6);
-  EXPECT_NEAR(rect.transform().data[5] - startTransform.data[5], 30.0, 1e-6);
+  EXPECT_THAT(TransformTranslationDelta(startTransform, rect.transform()),
+              Vector2dNear(Vector2d(40.0, 30.0), 1e-6));
   EXPECT_FALSE(tool.isDragging());
   EXPECT_TRUE(tool.consumeCompletedDragWriteback().has_value())
       << "drag-completed writeback should be latched so the source sync path runs";
@@ -402,15 +421,14 @@ TEST(RenderPaneClickTest, DragMovesElementByDocDeltaUnderZoom) {
   tool.onMouseMove(app, v.screenToDocument(targetScreen), /*buttonHeld=*/true);
   ASSERT_TRUE(tool.activeDragPreview().has_value());
 
-  EXPECT_NEAR(tool.activeDragPreview()->translation.x, 50.0, 1e-6);
-  EXPECT_NEAR(tool.activeDragPreview()->translation.y, 0.0, 1e-6);
+  EXPECT_THAT(tool.activeDragPreview()->translation, Vector2dNear(Vector2d(50.0, 0.0), 1e-6));
 
   tool.onMouseUp(app, v.screenToDocument(targetScreen));
   ASSERT_TRUE(app.flushFrame());
 
   const Transform2d after = rect.transform();
-  EXPECT_NEAR(after.data[4] - startTransform.data[4], 50.0, 1e-6);
-  EXPECT_NEAR(after.data[5] - startTransform.data[5], 0.0, 1e-6);
+  EXPECT_THAT(TransformTranslationDelta(startTransform, after),
+              Vector2dNear(Vector2d(50.0, 0.0), 1e-6));
 }
 
 }  // namespace

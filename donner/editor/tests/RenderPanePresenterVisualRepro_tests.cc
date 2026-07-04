@@ -1,3 +1,5 @@
+#include <gmock/gmock.h>
+
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -14,10 +16,15 @@
 #include "donner/editor/RenderPanePresenter.h"
 #include "donner/editor/gui/EditorWindow.h"
 #include "donner/svg/renderer/RendererImageIO.h"
+#include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "gtest/gtest.h"
 
 namespace donner::editor {
 namespace {
+
+using svg::test::Rgba;
+using ::testing::Eq;
+using ::testing::Lt;
 
 constexpr int kLogicalWidth = 320;
 constexpr int kLogicalHeight = 220;
@@ -300,11 +307,8 @@ TEST(RenderPanePresenterVisualReproTest, OverviewInfillDoesNotBleedThroughTransp
   ASSERT_FALSE(actual.empty());
   const std::array<std::uint8_t, 4> center =
       PixelAtLogical(actual, kLogicalWidth / 2, kLogicalHeight / 2);
-  EXPECT_LT(center[0], 100)
+  EXPECT_THAT(center, Rgba(Lt(100), Lt(100), Lt(100), Eq(255)))
       << "A transparent current tile must reveal the checkerboard, not stale red overview pixels.";
-  EXPECT_LT(center[1], 100);
-  EXPECT_LT(center[2], 100);
-  EXPECT_EQ(center[3], 255);
 }
 
 TEST(RenderPanePresenterVisualReproTest, OverviewInfillDoesNotBleedThroughOldDragTargetBounds) {
@@ -360,12 +364,9 @@ TEST(RenderPanePresenterVisualReproTest, OverviewInfillDoesNotBleedThroughOldDra
 
   ASSERT_FALSE(actual.empty());
   const std::array<std::uint8_t, 4> oldLeftEdge = PixelAtLogical(actual, 40, kLogicalHeight / 2);
-  EXPECT_LT(oldLeftEdge[0], 100)
+  EXPECT_THAT(oldLeftEdge, Rgba(Lt(100), Lt(100), Lt(100), Eq(255)))
       << "Overview infill must not redraw stale drag-target pixels at the old background "
          "position while the active tile is presented at the live drag position.";
-  EXPECT_LT(oldLeftEdge[1], 100);
-  EXPECT_LT(oldLeftEdge[2], 100);
-  EXPECT_EQ(oldLeftEdge[3], 255);
 }
 
 }  // namespace
