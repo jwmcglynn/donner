@@ -44,6 +44,19 @@ protected:
   }
 };
 
+MATCHER_P(MatchesSelector, selectorText, "") {
+  auto maybeSelector = SelectorParser::Parse(selectorText);
+  if (maybeSelector.hasError()) {
+    *result_listener << "selector parse error: " << maybeSelector.error().reason;
+    return false;
+  }
+
+  const bool matched = maybeSelector.result().matches(arg).matched;
+  *result_listener << "selector " << testing::PrintToString(selectorText) << " matched element "
+                   << testing::PrintToString(arg) << " = " << matched;
+  return matched;
+}
+
 TEST_F(SelectorTests, TypeMatch) {
   FakeElement root("rect");
   FakeElement child1("a");
@@ -448,32 +461,33 @@ TEST_F(SelectorTests, PseudoClassSelectorNthChildForgivingSelectorList) {
   SCOPED_TRACE(testing::Message() << "*** Tree structure:\n" << root.printAsTree() << "\n");
 
   // Test :nth-child with forgiving selector list
-  EXPECT_TRUE(matches(":nth-child(2 of p, div, span)", children[1]))
+  EXPECT_THAT(children[1], MatchesSelector(":nth-child(2 of p, div, span)"))
       << "Should match 2nd child, which is a p element";
-  EXPECT_TRUE(matches(":nth-child(3 of span, :invalid, p)", children[2]))
+  EXPECT_THAT(children[2], MatchesSelector(":nth-child(3 of span, :invalid, p)"))
       << "Should match 3rd child (span) despite invalid selector in list";
-  EXPECT_FALSE(matches(":nth-child(1 of p, :invalid)", children[0]))
+  EXPECT_THAT(children[0], testing::Not(MatchesSelector(":nth-child(1 of p, :invalid)")))
       << "Should not match 1st child (span) as it doesn't match any valid selector in the list";
 
   // Test :nth-last-child with forgiving selector list
-  EXPECT_TRUE(matches(":nth-last-child(2 of p, span, :invalid)", children[3]))
+  EXPECT_THAT(children[3], MatchesSelector(":nth-last-child(2 of p, span, :invalid)"))
       << "Should match 2nd-to-last child, which is a p element";
-  EXPECT_TRUE(matches(":nth-last-child(1 of span, :invalid, div)", children[4]))
+  EXPECT_THAT(children[4], MatchesSelector(":nth-last-child(1 of span, :invalid, div)"))
       << "Should match last child (span) despite invalid selector in list";
-  EXPECT_FALSE(matches(":nth-last-child(3 of p, :invalid)", children[2]))
+  EXPECT_THAT(children[2], testing::Not(MatchesSelector(":nth-last-child(3 of p, :invalid)")))
       << "Should not match 3rd-to-last child (span) as it doesn't match any valid selector in the "
          "list";
 
   // Test complex selectors within the forgiving list
-  EXPECT_TRUE(matches(":nth-child(odd of span, p[class], div > *)", children[2]))
+  EXPECT_THAT(children[2], MatchesSelector(":nth-child(odd of span, p[class], div > *)"))
       << "Should match 3rd child (span) with complex selectors in the list";
-  EXPECT_TRUE(matches(":nth-last-child(even of p, :invalid)", children[1]))
+  EXPECT_THAT(children[1], MatchesSelector(":nth-last-child(even of p, :invalid)"))
       << "Should match 2nd-to-last child (p) with complex selectors and an invalid selector";
 
   // Test with all invalid selectors
-  EXPECT_FALSE(matches(":nth-child(1 of :invalid1, :invalid2)", children[0]))
+  EXPECT_THAT(children[0], testing::Not(MatchesSelector(":nth-child(1 of :invalid1, :invalid2)")))
       << "Should not match when all selectors in the list are invalid";
-  EXPECT_FALSE(matches(":nth-last-child(1 of :invalid1, :invalid2)", children[4]))
+  EXPECT_THAT(children[4],
+              testing::Not(MatchesSelector(":nth-last-child(1 of :invalid1, :invalid2)")))
       << "Should not match when all selectors in the list are invalid";
 }
 

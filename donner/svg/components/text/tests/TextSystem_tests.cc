@@ -21,7 +21,11 @@
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/parser/SVGParser.h"
 
+using testing::_;
+using testing::AllOf;
+using testing::DoubleNear;
 using testing::Eq;
+using testing::Field;
 using testing::IsEmpty;
 using testing::SizeIs;
 
@@ -50,6 +54,29 @@ MATCHER(NoLengthValue, "") {
 
 MATCHER_P(PathCommandVerbIs, expectedVerb, "") {
   return testing::ExplainMatchResult(Eq(expectedVerb), arg.verb, result_listener);
+}
+
+MATCHER(HasTextPathSpline, "") {
+  *result_listener << "pathSpline.has_value()=" << arg.pathSpline.has_value();
+  return arg.pathSpline.has_value();
+}
+
+MATCHER(HasNoTextPathSpline, "") {
+  *result_listener << "pathSpline.has_value()=" << arg.pathSpline.has_value();
+  return !arg.pathSpline.has_value();
+}
+
+MATCHER_P(TextPathFailedIs, expected, "") {
+  return testing::ExplainMatchResult(Eq(expected), arg.textPathFailed, result_listener);
+}
+
+MATCHER_P(TextSpanHiddenIs, expected, "") {
+  return testing::ExplainMatchResult(Eq(expected), arg.hidden, result_listener);
+}
+
+auto PathStartOffsetNear(double expected, double tolerance) {
+  return Field("pathStartOffset", &ComputedTextComponent::TextSpan::pathStartOffset,
+               DoubleNear(expected, tolerance));
 }
 
 }  // namespace
@@ -286,11 +313,8 @@ TEST_F(TextSystemTest, TextPathReference) {
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
-  // Root span + textPath child span.
-  ASSERT_THAT(computed->spans, SizeIs(2));
-
   // The textPath span should have a path spline attached.
-  EXPECT_TRUE(computed->spans[1].pathSpline.has_value());
+  EXPECT_THAT(computed->spans, testing::ElementsAre(_, HasTextPathSpline()));
 }
 
 // --- textPath with startOffset ---
@@ -310,12 +334,9 @@ TEST_F(TextSystemTest, TextPathWithStartOffset) {
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
-  // Root span + textPath child span.
-  ASSERT_THAT(computed->spans, SizeIs(2));
-
   // 50% of a 100-unit path should be ~50.
-  EXPECT_TRUE(computed->spans[1].pathSpline.has_value());
-  EXPECT_NEAR(computed->spans[1].pathStartOffset, 50.0, 1.0);
+  EXPECT_THAT(computed->spans,
+              testing::ElementsAre(_, AllOf(HasTextPathSpline(), PathStartOffsetNear(50.0, 1.0))));
 }
 
 TEST_F(TextSystemTest, TextPathWithAbsoluteStartOffsetAndTransform) {
@@ -346,11 +367,11 @@ TEST_F(TextSystemTest, TextPathWithAbsoluteStartOffsetAndTransform) {
   auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
-  ASSERT_THAT(computed->spans, SizeIs(2));
-  ASSERT_TRUE(computed->spans[1].pathSpline.has_value());
-  EXPECT_THAT(computed->spans[1].pathSpline->points(),
+  ASSERT_THAT(computed->spans, testing::ElementsAre(_, HasTextPathSpline()));
+  const auto& textPathSpan = computed->spans[1];
+  EXPECT_THAT(textPathSpan.pathSpline->points(),
               testing::ElementsAre(Vector2d(5, 7), Vector2d(105, 7)));
-  EXPECT_DOUBLE_EQ(computed->spans[1].pathStartOffset, 10.0);
+  EXPECT_THAT(textPathSpan, PathStartOffsetNear(10.0, 0.0));
 }
 
 // Issue #624: the textPath baseline geometry must include the referenced path's
@@ -387,11 +408,11 @@ TEST_F(TextSystemTest, TextPathTransformIncludesTransformOriginPivot) {
   auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
-  ASSERT_THAT(computed->spans, SizeIs(2));
-  ASSERT_TRUE(computed->spans[1].pathSpline.has_value());
+  ASSERT_THAT(computed->spans, testing::ElementsAre(_, HasTextPathSpline()));
+  const auto& textPathSpan = computed->spans[1];
 
   // Pivoted result: T(-origin) * rotate90 * T(origin).
-  EXPECT_THAT(computed->spans[1].pathSpline->points(),
+  EXPECT_THAT(textPathSpan.pathSpline->points(),
               testing::ElementsAre(Vector2Near(50.0, -50.0), Vector2Near(50.0, 50.0)));
 }
 
@@ -423,9 +444,9 @@ TEST_F(TextSystemTest, TextPathUsesSplineOverrideWhenComputedPathMissing) {
   auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
-  ASSERT_THAT(computed->spans, SizeIs(2));
-  ASSERT_TRUE(computed->spans[1].pathSpline.has_value());
-  EXPECT_THAT(computed->spans[1].pathSpline->points(),
+  ASSERT_THAT(computed->spans, testing::ElementsAre(_, HasTextPathSpline()));
+  const auto& textPathSpan = computed->spans[1];
+  EXPECT_THAT(textPathSpan.pathSpline->points(),
               testing::ElementsAre(Vector2d(1, 2), Vector2d(3, 4)));
 }
 
@@ -440,9 +461,8 @@ TEST_F(TextSystemTest, TextPathWithInvalidReferenceMarksFailure) {
   auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
-  ASSERT_THAT(computed->spans, SizeIs(2));
-  EXPECT_FALSE(computed->spans[1].pathSpline.has_value());
-  EXPECT_TRUE(computed->spans[1].textPathFailed);
+  EXPECT_THAT(computed->spans,
+              testing::ElementsAre(_, AllOf(HasNoTextPathSpline(), TextPathFailedIs(true))));
 }
 
 TEST_F(TextSystemTest, TextPathWithEmptyReferencedPathMarksFailure) {
@@ -457,9 +477,8 @@ TEST_F(TextSystemTest, TextPathWithEmptyReferencedPathMarksFailure) {
   auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
-  ASSERT_THAT(computed->spans, SizeIs(2));
-  EXPECT_FALSE(computed->spans[1].pathSpline.has_value());
-  EXPECT_TRUE(computed->spans[1].textPathFailed);
+  EXPECT_THAT(computed->spans,
+              testing::ElementsAre(_, AllOf(HasNoTextPathSpline(), TextPathFailedIs(true))));
 }
 
 TEST_F(TextSystemTest, MixedTextPathChildrenProduceSeparateSpans) {
@@ -769,9 +788,8 @@ TEST_F(TextSystemTest, TextPathWithoutHrefIsHidden) {
   auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
-  ASSERT_THAT(computed->spans, SizeIs(2));
-  EXPECT_TRUE(computed->spans[1].hidden);
-  EXPECT_FALSE(computed->spans[1].textPathFailed);
+  EXPECT_THAT(computed->spans,
+              testing::ElementsAre(_, AllOf(TextSpanHiddenIs(true), TextPathFailedIs(false))));
 }
 
 TEST_F(TextSystemTest, TextPathNestedUnderTspanMarksFailure) {

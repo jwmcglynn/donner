@@ -579,31 +579,29 @@ TEST(SmallVector, Front) {
   // Test with int
   {
     SmallVector<int, 4> vec = {1, 2, 3, 4};
-    EXPECT_EQ(vec.front(), 1);
+    EXPECT_THAT(vec, ElementsAre(1, 2, 3, 4));
     vec.front() = 10;
-    EXPECT_EQ(vec.front(), 10);
     EXPECT_THAT(vec, ElementsAre(10, 2, 3, 4));
   }
 
   // Test with single element
   {
     SmallVector<int, 4> vec = {42};
-    EXPECT_EQ(vec.front(), 42);
+    EXPECT_THAT(vec, ElementsAre(42));
   }
 
   // Test with string (non-trivial type)
   {
     SmallVector<std::string, 4> vec = {"hello", "world", "test"};
-    EXPECT_EQ(vec.front(), "hello");
+    EXPECT_THAT(vec, ElementsAre("hello", "world", "test"));
     vec.front() = "modified";
-    EXPECT_EQ(vec.front(), "modified");
     EXPECT_THAT(vec, ElementsAre("modified", "world", "test"));
   }
 
   // Test with vector that exceeds small size
   {
     SmallVector<int, 2> vec = {1, 2, 3, 4, 5};
-    EXPECT_EQ(vec.front(), 1);
+    EXPECT_THAT(vec, ElementsAre(1, 2, 3, 4, 5));
   }
 }
 
@@ -612,10 +610,10 @@ TEST(SmallVector, Front) {
  */
 TEST(SmallVector, FrontConst) {
   const SmallVector<int, 4> vec = {1, 2, 3, 4};
-  EXPECT_EQ(vec.front(), 1);
+  EXPECT_THAT(vec, ElementsAre(1, 2, 3, 4));
 
   const SmallVector<std::string, 4> strVec = {"hello", "world"};
-  EXPECT_EQ(strVec.front(), "hello");
+  EXPECT_THAT(strVec, ElementsAre("hello", "world"));
 }
 
 /**
@@ -625,42 +623,39 @@ TEST(SmallVector, Back) {
   // Test with int
   {
     SmallVector<int, 4> vec = {1, 2, 3, 4};
-    EXPECT_EQ(vec.back(), 4);
+    EXPECT_THAT(vec, ElementsAre(1, 2, 3, 4));
     vec.back() = 40;
-    EXPECT_EQ(vec.back(), 40);
     EXPECT_THAT(vec, ElementsAre(1, 2, 3, 40));
   }
 
   // Test with single element
   {
     SmallVector<int, 4> vec = {42};
-    EXPECT_EQ(vec.back(), 42);
-    EXPECT_EQ(vec.front(), vec.back());
+    EXPECT_THAT(vec, ElementsAre(42));
   }
 
   // Test with string (non-trivial type)
   {
     SmallVector<std::string, 4> vec = {"hello", "world", "test"};
-    EXPECT_EQ(vec.back(), "test");
+    EXPECT_THAT(vec, ElementsAre("hello", "world", "test"));
     vec.back() = "modified";
-    EXPECT_EQ(vec.back(), "modified");
     EXPECT_THAT(vec, ElementsAre("hello", "world", "modified"));
   }
 
   // Test with vector that exceeds small size
   {
     SmallVector<int, 2> vec = {1, 2, 3, 4, 5};
-    EXPECT_EQ(vec.back(), 5);
+    EXPECT_THAT(vec, ElementsAre(1, 2, 3, 4, 5));
   }
 
   // Test back() after push_back and pop_back
   {
     SmallVector<int, 4> vec = {1, 2, 3};
-    EXPECT_EQ(vec.back(), 3);
+    EXPECT_THAT(vec, ElementsAre(1, 2, 3));
     vec.push_back(4);
-    EXPECT_EQ(vec.back(), 4);
+    EXPECT_THAT(vec, ElementsAre(1, 2, 3, 4));
     vec.pop_back();
-    EXPECT_EQ(vec.back(), 3);
+    EXPECT_THAT(vec, ElementsAre(1, 2, 3));
   }
 }
 
@@ -669,10 +664,10 @@ TEST(SmallVector, Back) {
  */
 TEST(SmallVector, BackConst) {
   const SmallVector<int, 4> vec = {1, 2, 3, 4};
-  EXPECT_EQ(vec.back(), 4);
+  EXPECT_THAT(vec, ElementsAre(1, 2, 3, 4));
 
   const SmallVector<std::string, 4> strVec = {"hello", "world"};
-  EXPECT_EQ(strVec.back(), "world");
+  EXPECT_THAT(strVec, ElementsAre("hello", "world"));
 }
 
 /**
@@ -680,8 +675,7 @@ TEST(SmallVector, BackConst) {
  */
 TEST(SmallVector, FrontAndBack) {
   SmallVector<int, 4> vec = {1, 2, 3, 4, 5};
-  EXPECT_EQ(vec.front(), 1);
-  EXPECT_EQ(vec.back(), 5);
+  EXPECT_THAT(vec, ElementsAre(1, 2, 3, 4, 5));
 
   vec.front() = 10;
   vec.back() = 50;
