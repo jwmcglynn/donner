@@ -23,7 +23,9 @@ using ::testing::Contains;
 using ::testing::Each;
 using ::testing::Field;
 using ::testing::HasSubstr;
+using ::testing::IsEmpty;
 using ::testing::NiceMock;
+using ::testing::Not;
 using ::testing::SizeIs;
 
 namespace donner::svg::compositor {
@@ -1857,23 +1859,23 @@ TEST_F(CompositorControllerTest, SetTightBoundedSegmentsEnabledMarksExistingSegm
   compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
 
   const auto rowsBeforeToggle = compositor.snapshotSegmentInspectorRows();
-  ASSERT_FALSE(rowsBeforeToggle.empty());
-  EXPECT_TRUE(std::none_of(rowsBeforeToggle.begin(), rowsBeforeToggle.end(),
-                           [](const auto& row) { return row.dirty; }));
+  ASSERT_THAT(rowsBeforeToggle, Not(IsEmpty()));
+  EXPECT_THAT(rowsBeforeToggle,
+              Each(Field("dirty", &CompositorController::SegmentInspectorRow::dirty, false)));
 
   compositor.setTightBoundedSegmentsEnabled(false);
   EXPECT_FALSE(compositor.tightBoundedSegmentsEnabled());
 
   const auto rowsAfterToggle = compositor.snapshotSegmentInspectorRows();
-  ASSERT_EQ(rowsAfterToggle.size(), rowsBeforeToggle.size());
-  EXPECT_TRUE(std::all_of(rowsAfterToggle.begin(), rowsAfterToggle.end(),
-                          [](const auto& row) { return row.dirty; }));
+  ASSERT_THAT(rowsAfterToggle, SizeIs(rowsBeforeToggle.size()));
+  EXPECT_THAT(rowsAfterToggle,
+              Each(Field("dirty", &CompositorController::SegmentInspectorRow::dirty, true)));
 
   compositor.setTightBoundedSegmentsEnabled(false);
   const auto rowsAfterIdempotentToggle = compositor.snapshotSegmentInspectorRows();
-  ASSERT_EQ(rowsAfterIdempotentToggle.size(), rowsAfterToggle.size());
-  EXPECT_TRUE(std::all_of(rowsAfterIdempotentToggle.begin(), rowsAfterIdempotentToggle.end(),
-                          [](const auto& row) { return row.dirty; }));
+  ASSERT_THAT(rowsAfterIdempotentToggle, SizeIs(rowsAfterToggle.size()));
+  EXPECT_THAT(rowsAfterIdempotentToggle,
+              Each(Field("dirty", &CompositorController::SegmentInspectorRow::dirty, true)));
 }
 
 TEST_F(CompositorControllerTest, CancelledRenderLeavesDirtyLayerForNextFrame) {
