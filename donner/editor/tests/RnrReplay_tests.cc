@@ -7,6 +7,8 @@
 /// post-second-mouse-up checkpoint, and pin the landed bitmap against
 /// a committed PNG.
 
+#include <gmock/gmock.h>
+
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -40,6 +42,8 @@
 
 namespace donner::editor {
 namespace {
+
+using ::testing::SizeIs;
 
 bool IsGraphicsElement(const svg::SVGElement& element) {
   return element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
@@ -1044,7 +1048,7 @@ TEST_F(RnrReplayTest, DeleteElementDoesNotResetPreviouslyMovedShapes) {
   // exactly what `DocumentSyncController::applyPendingWritebacks`
   // does for the post-delete source-pane sync.
   auto removals = app.consumeElementRemoveWritebacks();
-  ASSERT_EQ(removals.size(), 1u);
+  ASSERT_THAT(removals, SizeIs(1u));
   auto patch = buildElementRemoveWriteback(liveSource_, removals[0].target);
   ASSERT_TRUE(patch.has_value()) << "Failed to build element-remove patch";
   applyPatches(liveSource_, {{*patch}});
