@@ -139,9 +139,9 @@ struct ComputedTextComponent {
     /// Ordered stack of baseline shifts contributed by ancestor text spans.
     SmallVector<AncestorShift, 2> ancestorBaselineShifts;
 
-    /// CSS `alignment-baseline` value for this span. When not Auto, overrides the
-    /// dominant-baseline for this specific inline element. Populated by RendererDriver from
-    /// sourceEntity.
+    /// Effective baseline alignment for this span: the CSS `alignment-baseline` value when not
+    /// Auto, otherwise the span's resolved (inherited) `dominant-baseline`. Auto means the
+    /// alphabetic baseline (no shift). Populated by RendererDriver from sourceEntity.
     DominantBaseline alignmentBaseline = DominantBaseline::Auto;
 
     /// CSS `visibility` value for this span. Hidden/collapsed spans are laid out normally

@@ -780,7 +780,6 @@ TextParams toTextParams(Registry& registry, const components::RenderingInstanceC
   }
   params.textAnchor = properties.textAnchor.get().value();
   params.textDecoration = properties.textDecoration.get().value();
-  params.dominantBaseline = properties.dominantBaseline.get().value();
   params.writingMode = properties.writingMode.get().value();
 
   // Resolve letter-spacing and word-spacing to pixels.

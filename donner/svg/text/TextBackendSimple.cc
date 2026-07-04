@@ -82,6 +82,15 @@ FontVMetrics TextBackendSimple::fontVMetrics(FontHandle font) const {
   }
   FontVMetrics metrics;
   stbtt_GetFontVMetrics(info, &metrics.ascent, &metrics.descent, &metrics.lineGap);
+
+  // x-height from the OS/2 table (`sxHeight`, offset 86), present in version >= 2.
+  if (const int os2 = findFontTable(info->data, info->fontstart, "OS/2")) {
+    const uint16_t version =
+        static_cast<uint16_t>(readInt16BE(info->data, os2));  // USHORT version at offset 0.
+    if (version >= 2) {
+      metrics.xHeight = readInt16BE(info->data, os2 + 86);
+    }
+  }
   return metrics;
 }
 

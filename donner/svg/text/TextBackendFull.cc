@@ -212,21 +212,37 @@ FontVMetrics TextBackendFull::fontVMetrics(FontHandle font) const {
     return {};
   }
 
-  // Search for the 'hhea' table in the TrueType table directory.
+  // Search for the 'hhea' and 'OS/2' tables in the TrueType table directory.
   const auto* d = data.data();
   const int numTables = (d[4] << 8) | d[5];
+  int hheaOffset = 0;
+  int os2Offset = 0;
   for (int i = 0; i < numTables; ++i) {
     const int loc = 12 + 16 * i;
+    const int offset = static_cast<int>(
+        (static_cast<unsigned>(d[loc + 8]) << 24) | (static_cast<unsigned>(d[loc + 9]) << 16) |
+        (static_cast<unsigned>(d[loc + 10]) << 8) | static_cast<unsigned>(d[loc + 11]));
     if (d[loc] == 'h' && d[loc + 1] == 'h' && d[loc + 2] == 'e' && d[loc + 3] == 'a') {
-      const int offset = static_cast<int>(
-          (static_cast<unsigned>(d[loc + 8]) << 24) | (static_cast<unsigned>(d[loc + 9]) << 16) |
-          (static_cast<unsigned>(d[loc + 10]) << 8) | static_cast<unsigned>(d[loc + 11]));
-      FontVMetrics metrics;
-      metrics.ascent = static_cast<int16_t>((d[offset + 4] << 8) | d[offset + 5]);
-      metrics.descent = static_cast<int16_t>((d[offset + 6] << 8) | d[offset + 7]);
-      metrics.lineGap = static_cast<int16_t>((d[offset + 8] << 8) | d[offset + 9]);
-      return metrics;
+      hheaOffset = offset;
+    } else if (d[loc] == 'O' && d[loc + 1] == 'S' && d[loc + 2] == '/' && d[loc + 3] == '2') {
+      os2Offset = offset;
     }
+  }
+
+  if (hheaOffset != 0) {
+    FontVMetrics metrics;
+    metrics.ascent = static_cast<int16_t>((d[hheaOffset + 4] << 8) | d[hheaOffset + 5]);
+    metrics.descent = static_cast<int16_t>((d[hheaOffset + 6] << 8) | d[hheaOffset + 7]);
+    metrics.lineGap = static_cast<int16_t>((d[hheaOffset + 8] << 8) | d[hheaOffset + 9]);
+
+    // x-height from the OS/2 table (`sxHeight`, offset 86), present in version >= 2.
+    if (os2Offset != 0) {
+      const uint16_t os2Version = static_cast<uint16_t>((d[os2Offset] << 8) | d[os2Offset + 1]);
+      if (os2Version >= 2) {
+        metrics.xHeight = static_cast<int16_t>((d[os2Offset + 86] << 8) | d[os2Offset + 87]);
+      }
+    }
+    return metrics;
   }
 
   // Fallback to FreeType if hhea not found.

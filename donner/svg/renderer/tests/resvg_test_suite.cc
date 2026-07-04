@@ -1205,42 +1205,28 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     TextAlignmentBaseline, ImageComparisonTestFixture,
-    Combine(
-        ValuesIn(getTestsInCategory(
-            "text/alignment-baseline",
-            {
-                {"after-edge.svg",
-                 Params::Skip(
-                     "Not impl: full alignment-baseline keyword set + tspan baseline alignment")},
-                {"baseline.svg",
-                 Params::Skip(
-                     "Not impl: full alignment-baseline keyword set + tspan baseline alignment")},
-                {"before-edge.svg",
-                 Params::Skip(
-                     "Not impl: full alignment-baseline keyword set + tspan baseline alignment")},
-                {"hanging-on-vertical.svg",
-                 Params::Skip(
-                     "Not impl: full alignment-baseline keyword set + tspan baseline alignment")},
-                {"ideographic.svg",
-                 Params::Skip(
-                     "Not impl: full alignment-baseline keyword set + tspan baseline alignment")},
-                {"middle-on-textPath.svg",
-                 Params::Skip(
-                     "Not impl: full alignment-baseline keyword set + tspan baseline alignment")},
-                {"middle.svg",
-                 Params::Skip(
-                     "Not impl: full alignment-baseline keyword set + tspan baseline alignment")},
-                {"text-after-edge.svg",
-                 Params::Skip(
-                     "Not impl: full alignment-baseline keyword set + tspan baseline alignment")},
-                {"text-before-edge.svg",
-                 Params::Skip(
-                     "Not impl: full alignment-baseline keyword set + tspan baseline alignment")},
-                {"two-textPath-with-middle-on-first.svg",
-                 Params::Skip(
-                     "Not impl: full alignment-baseline keyword set + tspan baseline alignment")},
-            })),
-        ValuesIn(ActiveComparisonModes())),
+    Combine(ValuesIn(getTestsInCategory(
+                "text/alignment-baseline",
+                {
+                    // UB: resvg's golden PNG is a "UB" placeholder overlay, so no render can
+                    // match it. Render for no-crash coverage only.
+                    {"after-edge.svg", Params::RenderOnly("UB: golden is a UB placeholder image")},
+                    {"baseline.svg", Params::RenderOnly("UB: golden is a UB placeholder image")},
+                    {"ideographic.svg", Params::RenderOnly("UB: golden is a UB placeholder image")},
+                    {"text-after-edge.svg",
+                     Params::RenderOnly("UB: golden is a UB placeholder image")},
+
+                    {"hanging-on-vertical.svg",
+                     Params::Skip("Bug: mixed-script vertical flow (upright CJK + rotated Latin) "
+                                  "column geometry differs from resvg; alignment-baseline is "
+                                  "correctly ignored in vertical mode. Same gap as the "
+                                  "text/writing-mode mixed-languages-with-tb skip.")},
+                    {"two-textPath-with-middle-on-first.svg",
+                     Params().withMaxPixelsDifferent(200).withReason(
+                         "Sub-pixel glyph placement along the two paths; ~108 scattered "
+                         "edge pixels, no positional drift (bounding boxes match exactly)")},
+                })),
+            ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
@@ -1274,57 +1260,17 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "text/dominant-baseline",
                 {
-                    {"alignment-baseline-and-baseline-shift-on-tspans.svg",
-                     Params::Skip(
-                         "Not impl: full dominant-baseline keyword set (incl. before/after-edge, "
-                         "no-change, reset-size, use-script)")},
-                    {"alignment-baseline=baseline-on-tspan.svg",
-                     Params::Skip(
-                         "Not impl: full dominant-baseline keyword set (incl. before/after-edge, "
-                         "no-change, reset-size, use-script)")},
-                    {"complex.svg",
-                     Params::Skip("Not impl: full dominant-baseline keyword set (incl. "
-                                  "before/after-edge, no-change, reset-size, use-script)")},
-                    {"dummy-tspan.svg",
-                     Params::Skip(
-                         "Not impl: full dominant-baseline keyword set (incl. before/after-edge, "
-                         "no-change, reset-size, use-script)")},
+                    // UB: resvg's golden PNG is a "UB" placeholder overlay, so no render can
+                    // match it. Render for no-crash coverage only.
+                    {"reset-size.svg", Params::RenderOnly("UB: golden is a UB placeholder image")},
+                    {"use-script.svg", Params::RenderOnly("UB: golden is a UB placeholder image")},
+
                     {"hanging.svg",
-                     Params::Skip("Not impl: full dominant-baseline keyword set (incl. "
-                                  "before/after-edge, no-change, reset-size, use-script)")},
-                    {"inherit.svg",
-                     Params::Skip("Not impl: full dominant-baseline keyword set (incl. "
-                                  "before/after-edge, no-change, reset-size, use-script)")},
-                    {"middle.svg",
-                     Params::Skip("Not impl: full dominant-baseline keyword set (incl. "
-                                  "before/after-edge, no-change, reset-size, use-script)")},
-                    {"nested.svg",
-                     Params::Skip("Not impl: full dominant-baseline keyword set (incl. "
-                                  "before/after-edge, no-change, reset-size, use-script)")},
-                    {"no-change.svg",
-                     Params::Skip(
-                         "Not impl: full dominant-baseline keyword set (incl. before/after-edge, "
-                         "no-change, reset-size, use-script)")},
-                    {"reset-size.svg",
-                     Params::Skip(
-                         "Not impl: full dominant-baseline keyword set (incl. before/after-edge, "
-                         "no-change, reset-size, use-script)")},
-                    {"sequential.svg",
-                     Params::Skip(
-                         "Not impl: full dominant-baseline keyword set (incl. before/after-edge, "
-                         "no-change, reset-size, use-script)")},
-                    {"text-after-edge.svg",
-                     Params::Skip(
-                         "Not impl: full dominant-baseline keyword set (incl. before/after-edge, "
-                         "no-change, reset-size, use-script)")},
-                    {"text-before-edge.svg",
-                     Params::Skip(
-                         "Not impl: full dominant-baseline keyword set (incl. before/after-edge, "
-                         "no-change, reset-size, use-script)")},
-                    {"use-script.svg",
-                     Params::Skip(
-                         "Not impl: full dominant-baseline keyword set (incl. before/after-edge, "
-                         "no-change, reset-size, use-script)")},
+                     Params::WithThreshold(
+                         0.1f, kDefaultMismatchedPixels,
+                         "Golden's 0.5px crosshair hairline is rasterized with a sub-pixel x "
+                         "offset (vertical-line alpha 128/192 vs 160/160 in the sibling "
+                         "middle/central/alphabetic goldens); the glyph itself matches")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);

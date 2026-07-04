@@ -1026,7 +1026,10 @@ void EncodeTextParams(WireWriter& w, const svg::TextParams& p) {
 
   w.writeU8(static_cast<uint8_t>(p.textAnchor));
   w.writeU8(static_cast<uint8_t>(p.textDecoration));
-  w.writeU8(static_cast<uint8_t>(p.dominantBaseline));
+  // Reserved byte: was TextParams::dominantBaseline. Baseline alignment is now resolved
+  // per span into TextSpan::alignmentBaseline; the byte is kept so the wire layout (and
+  // committed .rnr recordings) stay stable.
+  w.writeU8(0);
   w.writeU8(static_cast<uint8_t>(p.writingMode));
   w.writeF64(p.letterSpacingPx);
   w.writeF64(p.wordSpacingPx);
@@ -1079,8 +1082,8 @@ bool DecodeTextParams(WireReader& r, svg::TextParams& out,
   out.textAnchor = static_cast<svg::TextAnchor>(u);
   if (!r.readU8(u)) return false;
   out.textDecoration = static_cast<svg::TextDecoration>(u);
+  // Reserved byte: was TextParams::dominantBaseline (see EncodeTextParams).
   if (!r.readU8(u)) return false;
-  out.dominantBaseline = static_cast<svg::DominantBaseline>(u);
   if (!r.readU8(u)) return false;
   out.writingMode = static_cast<svg::WritingMode>(u);
   if (!r.readF64(out.letterSpacingPx)) return false;

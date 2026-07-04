@@ -206,7 +206,6 @@ TextLayoutParams buildTextLayoutParams(Registry& registry, EntityHandle handle,
   params.fontMetrics = FontMetrics::DefaultsWithFontSize(fontSizePx);
 
   params.textAnchor = properties.textAnchor.get().value();
-  params.dominantBaseline = properties.dominantBaseline.get().value();
   params.writingMode = properties.writingMode.get().value();
   params.letterSpacingPx = properties.letterSpacing.get().value().toPixels(
       params.viewBox, params.fontMetrics, Lengthd::Extent::X);
@@ -245,7 +244,33 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
     span.textAnchor = style->properties->textAnchor.get().value();
     span.textDecoration = style->properties->textDecoration.get().value();
     span.baselineShift = style->properties->baselineShift.get().value();
-    span.alignmentBaseline = style->properties->alignmentBaseline.get().value();
+
+    // Effective baseline alignment (matching resvg): a non-auto `alignment-baseline`
+    // overrides; otherwise the span's (inherited) `dominant-baseline` applies.
+    {
+      DominantBaseline dominantBaseline = style->properties->dominantBaseline.get().value();
+      if (dominantBaseline == DominantBaseline::NoChange) {
+        // `no-change` uses the parent element's dominant baseline (one level, matching
+        // resvg). A residual NoChange (parent is also no-change, or there is no parent
+        // style) behaves like auto in computeBaselineShift.
+        if (registry.all_of<donner::components::TreeComponent>(styleEntity)) {
+          const Entity parent =
+              registry.get<donner::components::TreeComponent>(styleEntity).parent();
+          if (const auto* parentStyle =
+                  parent != entt::null
+                      ? registry.try_get<components::ComputedStyleComponent>(parent)
+                      : nullptr;
+              parentStyle && parentStyle->properties) {
+            dominantBaseline = parentStyle->properties->dominantBaseline.get().value();
+          }
+        }
+      }
+
+      const DominantBaseline alignmentBaseline = style->properties->alignmentBaseline.get().value();
+      span.alignmentBaseline =
+          alignmentBaseline != DominantBaseline::Auto ? alignmentBaseline : dominantBaseline;
+    }
+
     span.fontWeight = style->properties->fontWeight.get().value();
     span.fontStyle = style->properties->fontStyle.get().value();
     span.fontStretch = static_cast<FontStretch>(style->properties->fontStretch.get().value());
@@ -315,10 +340,24 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
 namespace text_engine_detail {
 
 double computeBaselineShift(DominantBaseline baseline, const FontVMetrics& vm, float scale) {
+  // Keyword → offset mapping matches resvg's usvg text layout
+  // (ResolvedFont::alignment_baseline_shift), which in turn matches Chrome's hardcoded
+  // baseline table. Positive values move glyphs down (+Y in SVG coordinates).
   switch (baseline) {
     case DominantBaseline::Auto:
-    case DominantBaseline::Alphabetic: return 0.0;
-    case DominantBaseline::Middle:
+    case DominantBaseline::Alphabetic:
+    case DominantBaseline::UseScript:  // Deprecated SVG 1.1 keyword; behaves like auto.
+    case DominantBaseline::NoChange:   // Resolved to the parent's value before layout; a
+                                       // residual no-change behaves like auto.
+    case DominantBaseline::ResetSize:  // Deprecated SVG 1.1 keyword; behaves like auto.
+      return 0.0;
+    case DominantBaseline::Middle: {
+      // Half the x-height. Fonts without an OS/2 sxHeight fall back to 45% of
+      // ascent−descent (what Firefox and resvg use).
+      const double xHeight = vm.xHeight > 0 ? static_cast<double>(vm.xHeight)
+                                            : static_cast<double>(vm.ascent - vm.descent) * 0.45;
+      return xHeight * 0.5 * scale;
+    }
     case DominantBaseline::Central:
       return static_cast<double>(vm.ascent + vm.descent) * 0.5 * scale;
     case DominantBaseline::Hanging: return static_cast<double>(vm.ascent) * 0.8 * scale;
@@ -788,15 +827,6 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
   const float fontSizePx = static_cast<float>(
       params.fontSize.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
 
-  // ── Compute dominant-baseline shift ───────────────────────────────────────────
-  const float scale = backend_->scaleForPixelHeight(font, fontSizePx);
-  double baselineShift = 0.0;
-  if (params.dominantBaseline != DominantBaseline::Auto &&
-      params.dominantBaseline != DominantBaseline::Alphabetic) {
-    baselineShift =
-        computeBaselineShift(params.dominantBaseline, backend_->fontVMetrics(font), scale);
-  }
-
   // ── Layout state ──────────────────────────────────────────────────────────────
   std::vector<TextRun> runs;
   bool haveCurrentPosition = false;
@@ -867,9 +897,12 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     const double spanBaselineShiftPx =
         computeSpanBaselineShiftPx(*backend_, span, spanFont, spanScale, params);
 
-    // ── Alignment-baseline override ─────────────────────────────────────────────
-    double effectiveBaselineShift = baselineShift;
-    if (span.alignmentBaseline != DominantBaseline::Auto) {
+    // ── Baseline alignment (dominant-baseline / alignment-baseline) ────────────
+    // span.alignmentBaseline is the effective baseline resolved per span: a non-auto
+    // alignment-baseline override, otherwise the span's (inherited) dominant-baseline.
+    // Matching resvg, baseline alignment applies only to horizontal text.
+    double effectiveBaselineShift = 0.0;
+    if (!isVertical(params.writingMode) && span.alignmentBaseline != DominantBaseline::Auto) {
       effectiveBaselineShift =
           computeBaselineShift(span.alignmentBaseline, backend_->fontVMetrics(spanFont), spanScale);
     }

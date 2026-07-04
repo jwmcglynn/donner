@@ -293,7 +293,8 @@ ParseResult<DominantBaseline> ParseDominantBaseline(
 
       if (value.equalsLowercase("auto")) {
         return DominantBaseline::Auto;
-      } else if (value.equalsLowercase("text-bottom")) {
+      } else if (value.equalsLowercase("text-bottom") || value.equalsLowercase("text-after-edge")) {
+        // `text-after-edge` is the SVG 1.1 name for CSS Inline 3's `text-bottom`.
         return DominantBaseline::TextBottom;
       } else if (value.equalsLowercase("alphabetic")) {
         return DominantBaseline::Alphabetic;
@@ -307,14 +308,64 @@ ParseResult<DominantBaseline> ParseDominantBaseline(
         return DominantBaseline::Mathematical;
       } else if (value.equalsLowercase("hanging")) {
         return DominantBaseline::Hanging;
-      } else if (value.equalsLowercase("text-top")) {
+      } else if (value.equalsLowercase("text-top") || value.equalsLowercase("text-before-edge")) {
+        // `text-before-edge` is the SVG 1.1 name for CSS Inline 3's `text-top`.
         return DominantBaseline::TextTop;
+      } else if (value.equalsLowercase("use-script")) {
+        return DominantBaseline::UseScript;
+      } else if (value.equalsLowercase("no-change")) {
+        return DominantBaseline::NoChange;
+      } else if (value.equalsLowercase("reset-size")) {
+        return DominantBaseline::ResetSize;
       }
     }
   }
 
   ParseDiagnostic err;
   err.reason = "Invalid dominant-baseline value";
+  err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  return err;
+}
+
+/**
+ * Parse the `alignment-baseline` keyword set. Reuses \ref DominantBaseline for the result:
+ * `baseline` maps to \ref DominantBaseline::Auto (both mean "align to the parent's dominant
+ * baseline"), and the SVG 1.1 `before-edge` / `after-edge` keywords map to the same baselines as
+ * `text-before-edge` / `text-after-edge`, matching resvg and Chrome.
+ */
+ParseResult<DominantBaseline> ParseAlignmentBaseline(
+    std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    const css::ComponentValue& component = components.front();
+    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
+      const RcString& value = ident->value;
+
+      if (value.equalsLowercase("auto") || value.equalsLowercase("baseline")) {
+        return DominantBaseline::Auto;
+      } else if (value.equalsLowercase("text-bottom") || value.equalsLowercase("text-after-edge") ||
+                 value.equalsLowercase("after-edge")) {
+        return DominantBaseline::TextBottom;
+      } else if (value.equalsLowercase("alphabetic")) {
+        return DominantBaseline::Alphabetic;
+      } else if (value.equalsLowercase("ideographic")) {
+        return DominantBaseline::Ideographic;
+      } else if (value.equalsLowercase("middle")) {
+        return DominantBaseline::Middle;
+      } else if (value.equalsLowercase("central")) {
+        return DominantBaseline::Central;
+      } else if (value.equalsLowercase("mathematical")) {
+        return DominantBaseline::Mathematical;
+      } else if (value.equalsLowercase("hanging")) {
+        return DominantBaseline::Hanging;
+      } else if (value.equalsLowercase("text-top") || value.equalsLowercase("text-before-edge") ||
+                 value.equalsLowercase("before-edge")) {
+        return DominantBaseline::TextTop;
+      }
+    }
+  }
+
+  ParseDiagnostic err;
+  err.reason = "Invalid alignment-baseline value";
   err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
 }
@@ -1648,7 +1699,7 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                    return Parse(
                        params,
                        [](const parser::PropertyParseFnParams& params) {
-                         return ParseDominantBaseline(params.components());
+                         return ParseAlignmentBaseline(params.components());
                        },
                        &registry.alignmentBaseline);
                  }},  //
