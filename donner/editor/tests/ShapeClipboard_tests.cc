@@ -22,6 +22,7 @@ namespace {
 
 using ::testing::ElementsAre;
 using ::testing::HasSubstr;
+using ::testing::IsEmpty;
 using ::testing::Not;
 
 /// Parse \p svg into a source-backed SVGDocument, asserting success.
@@ -67,7 +68,7 @@ TEST(ShapeClipboardPayload, HeaderedRoundTrip) {
   std::optional<ShapeClipboardPayload> parsed = ShapeClipboardPayload::parse(text);
   ASSERT_TRUE(parsed.has_value());
   EXPECT_EQ(parsed->svgFragment, payload.svgFragment);
-  EXPECT_EQ(parsed->sourceElementIds, payload.sourceElementIds);
+  EXPECT_THAT(parsed->sourceElementIds, ElementsAre("a", ""));
   EXPECT_FALSE(parsed->wasGroupSelection);
   ASSERT_TRUE(parsed->documentBounds.has_value());
   EXPECT_DOUBLE_EQ(parsed->documentBounds->topLeft.x, 1.0);
@@ -79,7 +80,7 @@ TEST(ShapeClipboardPayload, HeaderlessTextIsBestEffortFragment) {
   std::optional<ShapeClipboardPayload> parsed = ShapeClipboardPayload::parse(raw);
   ASSERT_TRUE(parsed.has_value());
   EXPECT_EQ(parsed->svgFragment, raw);
-  EXPECT_TRUE(parsed->sourceElementIds.empty());
+  EXPECT_THAT(parsed->sourceElementIds, IsEmpty());
   EXPECT_FALSE(parsed->documentBounds.has_value());
 }
 
@@ -132,7 +133,7 @@ TEST(ShapeClipboardCommands, CopyGroupSelectionMarksPayloadAsGroupSelection) {
   ASSERT_TRUE(payload.has_value());
   EXPECT_TRUE(payload->wasGroupSelection);
   EXPECT_THAT(payload->svgFragment, HasSubstr("<g id=\"group\">"));
-  EXPECT_THAT(payload->sourceElementIds, ::testing::ElementsAre("group"));
+  EXPECT_THAT(payload->sourceElementIds, ElementsAre("group"));
   EXPECT_FALSE(payload->documentBounds.has_value())
       << "group-only selections do not have geometry bounds of their own";
 }
@@ -171,8 +172,7 @@ TEST(ShapeClipboardCommands, PasteWithoutIdSelectsGeneratedWrapper) {
   PreparePasteResult result = preparePaste(document, payload, PastePlacement::EndOfRootOffset);
   ASSERT_TRUE(result.ok) << result.error;
 
-  ASSERT_EQ(result.pastedElementIds.size(), 1u);
-  EXPECT_EQ(result.pastedElementIds[0], "donner-paste_pasted");
+  EXPECT_THAT(result.pastedElementIds, ElementsAre("donner-paste_pasted"));
   EXPECT_THAT(result.mergedSource, HasSubstr("id=\"donner-paste_pasted\""));
 }
 
@@ -187,7 +187,7 @@ TEST(ShapeClipboardCommands, PasteRegeneratesIdsDeterministically) {
   ASSERT_TRUE(first.ok);
   ASSERT_TRUE(second.ok);
   // Same inputs → identical id assignment and merged output.
-  EXPECT_EQ(first.pastedElementIds, second.pastedElementIds);
+  EXPECT_THAT(second.pastedElementIds, ElementsAre("a_pasted", "b_pasted"));
   EXPECT_EQ(first.mergedSource, second.mergedSource);
   EXPECT_THAT(first.pastedElementIds, ElementsAre("a_pasted", "b_pasted"));
 }
@@ -202,7 +202,7 @@ TEST(ShapeClipboardCommands, PasteUniqueIdsKeepsFragmentIdsAndIgnoresIdSubstring
   PreparePasteResult result = preparePaste(document, payload, PastePlacement::EndOfRootOffset);
   ASSERT_TRUE(result.ok) << result.error;
 
-  EXPECT_THAT(result.pastedElementIds, ::testing::ElementsAre("fresh"));
+  EXPECT_THAT(result.pastedElementIds, ElementsAre("fresh"));
   EXPECT_THAT(result.mergedSource, HasSubstr("gradientid=\"ignored\""));
   EXPECT_THAT(result.mergedSource, HasSubstr("id='fresh'"));
   EXPECT_THAT(result.mergedSource, Not(HasSubstr("fresh_pasted")));
@@ -225,7 +225,7 @@ TEST(ShapeClipboardCommands, PasteRepairsUrlAndHrefReferencesToRenamedIds) {
   PreparePasteResult result = preparePaste(document, payload, PastePlacement::EndOfRootOffset);
   ASSERT_TRUE(result.ok) << result.error;
 
-  EXPECT_THAT(result.pastedElementIds, ::testing::ElementsAre("shape_pasted"));
+  EXPECT_THAT(result.pastedElementIds, ElementsAre("shape_pasted"));
   EXPECT_THAT(result.mergedSource, HasSubstr("id='grad_pasted'"));
   EXPECT_THAT(result.mergedSource, HasSubstr("fill=\"url(#grad_pasted)\""));
   EXPECT_THAT(result.mergedSource, HasSubstr("xlink:href='#shape_pasted'"));
@@ -245,7 +245,7 @@ TEST(ShapeClipboardCommands, PasteIdRepairSkipsAlreadyTakenGeneratedIds) {
   PreparePasteResult result = preparePaste(document, payload, PastePlacement::EndOfRootOffset);
   ASSERT_TRUE(result.ok) << result.error;
 
-  EXPECT_THAT(result.pastedElementIds, ::testing::ElementsAre("shape_pasted2"));
+  EXPECT_THAT(result.pastedElementIds, ElementsAre("shape_pasted2"));
   EXPECT_THAT(result.mergedSource, HasSubstr("id=\"shape_pasted2\""));
 }
 
@@ -357,7 +357,7 @@ TEST(ShapeClipboardCommands, FailedPasteLeavesDocumentUnchanged) {
   PreparePasteResult result = preparePaste(document, payload, PastePlacement::EndOfRootOffset);
   EXPECT_FALSE(result.ok);
   EXPECT_THAT(result.error, HasSubstr("missing-grad"));
-  EXPECT_TRUE(result.mergedSource.empty());
+  EXPECT_THAT(result.mergedSource, IsEmpty());
   // The destination document source is untouched (preparePaste never mutates).
   EXPECT_EQ(std::string(document.source()), sourceBefore);
 }
@@ -372,7 +372,7 @@ TEST(ShapeClipboardCommands, FailedPasteWithoutDestinationSourceText) {
 
   EXPECT_FALSE(result.ok);
   EXPECT_THAT(result.error, HasSubstr("no source text"));
-  EXPECT_TRUE(result.mergedSource.empty());
+  EXPECT_THAT(result.mergedSource, IsEmpty());
 }
 
 TEST(ShapeClipboardCommands, FailedPasteWithoutExplicitRootCloseTag) {
@@ -386,7 +386,7 @@ TEST(ShapeClipboardCommands, FailedPasteWithoutExplicitRootCloseTag) {
 
   EXPECT_FALSE(result.ok);
   EXPECT_THAT(result.error, HasSubstr("root <svg>"));
-  EXPECT_TRUE(result.mergedSource.empty());
+  EXPECT_THAT(result.mergedSource, IsEmpty());
 }
 
 TEST(ShapeClipboardCommands, FailedPasteOnMalformedFragment) {
@@ -395,7 +395,7 @@ TEST(ShapeClipboardCommands, FailedPasteOnMalformedFragment) {
   payload.svgFragment = "<rect <<< not valid";
   PreparePasteResult result = preparePaste(document, payload, PastePlacement::EndOfRootOffset);
   EXPECT_FALSE(result.ok);
-  EXPECT_TRUE(result.mergedSource.empty());
+  EXPECT_THAT(result.mergedSource, IsEmpty());
 }
 
 TEST(ShapeClipboardCommands, CopyModifyPasteRoundTripPreservesGeometryAtOffset) {
