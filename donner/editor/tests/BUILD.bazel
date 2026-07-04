@@ -401,6 +401,7 @@ donner_cc_test(
         "//donner/editor:async_svg_document",
         "//donner/svg",
         "//donner/svg/renderer",
+        "//donner/svg/renderer/tests:rgba_test_matchers",
         "@com_google_gtest//:gtest_main",
     ],
 )

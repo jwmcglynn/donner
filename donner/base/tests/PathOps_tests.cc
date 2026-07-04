@@ -1,5 +1,6 @@
 #include "donner/base/PathOps.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <array>
@@ -66,15 +67,6 @@ std::string Diagnostics(const PathBooleanResult& result) {
   return diagnostics;
 }
 
-bool HasCommand(const Path& path, Path::Verb verb) {
-  for (const Path::Command& command : path.commands()) {
-    if (command.verb == verb) {
-      return true;
-    }
-  }
-  return false;
-}
-
 std::size_t CommandCount(const Path& path, Path::Verb verb) {
   std::size_t count = 0;
   for (const Path::Command& command : path.commands()) {
@@ -83,6 +75,28 @@ std::size_t CommandCount(const Path& path, Path::Verb verb) {
     }
   }
   return count;
+}
+
+MATCHER_P(HasCommandVerb, expectedVerb, "") {
+  return testing::ExplainMatchResult(
+      testing::Contains(testing::Field("verb", &Path::Command::verb, testing::Eq(expectedVerb))),
+      arg.commands(), result_listener);
+}
+
+MATCHER_P2(CommandCountIs, expectedVerb, expectedCount, "") {
+  *result_listener << "path data: " << arg.toSVGPathData();
+  return testing::ExplainMatchResult(testing::Eq(expectedCount), CommandCount(arg, expectedVerb),
+                                     result_listener);
+}
+
+MATCHER_P(IsInside, point, "") {
+  *result_listener << "path data: " << arg.toSVGPathData();
+  return arg.isInside(point);
+}
+
+MATCHER_P(IsOutside, point, "") {
+  *result_listener << "path data: " << arg.toSVGPathData();
+  return !arg.isInside(point);
 }
 
 Path QuadraticCapPath() {
@@ -437,9 +451,9 @@ TEST(PathOpsTest, DifferenceKeepsFirstInputMinusLaterInputs) {
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok);
   const Path& path = result.paths.front();
-  EXPECT_TRUE(path.isInside({20, 20}));
-  EXPECT_FALSE(path.isInside({35, 30}));
-  EXPECT_FALSE(path.isInside({60, 30}));
+  EXPECT_THAT(path, IsInside(Vector2d(20, 20)));
+  EXPECT_THAT(path, IsOutside(Vector2d(35, 30)));
+  EXPECT_THAT(path, IsOutside(Vector2d(60, 30)));
 }
 
 TEST(PathOpsTest, DifferenceCreatesHoleForNestedContour) {
@@ -449,8 +463,8 @@ TEST(PathOpsTest, DifferenceCreatesHoleForNestedContour) {
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok);
   const Path& path = result.paths.front();
-  EXPECT_TRUE(path.isInside({10, 10}));
-  EXPECT_FALSE(path.isInside({50, 50}));
+  EXPECT_THAT(path, IsInside(Vector2d(10, 10)));
+  EXPECT_THAT(path, IsOutside(Vector2d(50, 50)));
 }
 
 TEST(PathOpsTest, UnionPreservesNonZeroCompoundPathHole) {
@@ -460,9 +474,9 @@ TEST(PathOpsTest, UnionPreservesNonZeroCompoundPathHole) {
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_FALSE(result.paths.empty());
   const Path& path = result.paths.front();
-  EXPECT_TRUE(path.isInside({10, 10}));
-  EXPECT_FALSE(path.isInside({50, 50}));
-  EXPECT_TRUE(path.isInside({160, 10}));
+  EXPECT_THAT(path, IsInside(Vector2d(10, 10)));
+  EXPECT_THAT(path, IsOutside(Vector2d(50, 50)));
+  EXPECT_THAT(path, IsInside(Vector2d(160, 10)));
 }
 
 TEST(PathOpsTest, DifferencePreservesNonOverlappingNonZeroCompoundPathLobes) {
@@ -473,9 +487,9 @@ TEST(PathOpsTest, DifferencePreservesNonOverlappingNonZeroCompoundPathLobes) {
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_FALSE(result.paths.empty());
   const Path& path = result.paths.front();
-  EXPECT_TRUE(path.isInside({10, 10}));
-  EXPECT_FALSE(path.isInside({50, 50}));
-  EXPECT_FALSE(path.isInside({90, 10}));
+  EXPECT_THAT(path, IsInside(Vector2d(10, 10)));
+  EXPECT_THAT(path, IsOutside(Vector2d(50, 50)));
+  EXPECT_THAT(path, IsOutside(Vector2d(90, 10)));
 }
 
 TEST(PathOpsTest, DifferenceCreatesCurvedHoleForNestedContour) {
@@ -486,12 +500,12 @@ TEST(PathOpsTest, DifferenceCreatesCurvedHoleForNestedContour) {
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_EQ(result.paths.size(), 1u);
   const Path& path = result.paths.front();
-  EXPECT_EQ(CommandCount(path, Path::Verb::MoveTo), 2u);
-  EXPECT_EQ(CommandCount(path, Path::Verb::ClosePath), 2u);
-  EXPECT_TRUE(HasCommand(path, Path::Verb::CurveTo));
-  EXPECT_TRUE(path.isInside({50, 25}));
-  EXPECT_FALSE(path.isInside({50, 50}));
-  EXPECT_FALSE(path.isInside({5, 50}));
+  EXPECT_THAT(path, CommandCountIs(Path::Verb::MoveTo, 2u));
+  EXPECT_THAT(path, CommandCountIs(Path::Verb::ClosePath, 2u));
+  EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
+  EXPECT_THAT(path, IsInside(Vector2d(50, 25)));
+  EXPECT_THAT(path, IsOutside(Vector2d(50, 50)));
+  EXPECT_THAT(path, IsOutside(Vector2d(5, 50)));
 }
 
 TEST(PathOpsTest, IntersectOfNestedCirclesKeepsInnerCircle) {
@@ -501,11 +515,11 @@ TEST(PathOpsTest, IntersectOfNestedCirclesKeepsInnerCircle) {
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_EQ(result.paths.size(), 1u);
   const Path& path = result.paths.front();
-  EXPECT_EQ(CommandCount(path, Path::Verb::MoveTo), 1u);
-  EXPECT_TRUE(HasCommand(path, Path::Verb::CurveTo));
-  EXPECT_TRUE(path.isInside({50, 50}));
-  EXPECT_FALSE(path.isInside({50, 25}));
-  EXPECT_FALSE(path.isInside({5, 50}));
+  EXPECT_THAT(path, CommandCountIs(Path::Verb::MoveTo, 1u));
+  EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
+  EXPECT_THAT(path, IsInside(Vector2d(50, 50)));
+  EXPECT_THAT(path, IsOutside(Vector2d(50, 25)));
+  EXPECT_THAT(path, IsOutside(Vector2d(5, 50)));
 }
 
 TEST(PathOpsTest, UnionOfNestedCirclesKeepsOuterCircle) {
@@ -515,11 +529,11 @@ TEST(PathOpsTest, UnionOfNestedCirclesKeepsOuterCircle) {
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_EQ(result.paths.size(), 1u);
   const Path& path = result.paths.front();
-  EXPECT_EQ(CommandCount(path, Path::Verb::MoveTo), 1u);
-  EXPECT_TRUE(HasCommand(path, Path::Verb::CurveTo));
-  EXPECT_TRUE(path.isInside({50, 50}));
-  EXPECT_TRUE(path.isInside({50, 25}));
-  EXPECT_FALSE(path.isInside({5, 50}));
+  EXPECT_THAT(path, CommandCountIs(Path::Verb::MoveTo, 1u));
+  EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
+  EXPECT_THAT(path, IsInside(Vector2d(50, 50)));
+  EXPECT_THAT(path, IsInside(Vector2d(50, 25)));
+  EXPECT_THAT(path, IsOutside(Vector2d(5, 50)));
 }
 
 TEST(PathOpsTest, LowIntersectionCapAllowsNestedCircleContainment) {
@@ -533,15 +547,15 @@ TEST(PathOpsTest, LowIntersectionCapAllowsNestedCircleContainment) {
   const PathBooleanResult unionResult = ApplyPathBoolean(PathBooleanOp::Union, inputs, options);
   ASSERT_EQ(unionResult.status, PathBooleanStatus::Ok) << Diagnostics(unionResult);
   ASSERT_EQ(unionResult.paths.size(), 1u);
-  EXPECT_TRUE(unionResult.paths.front().isInside({50, 50}));
-  EXPECT_FALSE(unionResult.paths.front().isInside({5, 50}));
+  EXPECT_THAT(unionResult.paths.front(), IsInside(Vector2d(50, 50)));
+  EXPECT_THAT(unionResult.paths.front(), IsOutside(Vector2d(5, 50)));
 
   const PathBooleanResult intersectResult =
       ApplyPathBoolean(PathBooleanOp::Intersect, inputs, options);
   ASSERT_EQ(intersectResult.status, PathBooleanStatus::Ok) << Diagnostics(intersectResult);
   ASSERT_EQ(intersectResult.paths.size(), 1u);
-  EXPECT_TRUE(intersectResult.paths.front().isInside({50, 50}));
-  EXPECT_FALSE(intersectResult.paths.front().isInside({50, 25}));
+  EXPECT_THAT(intersectResult.paths.front(), IsInside(Vector2d(50, 50)));
+  EXPECT_THAT(intersectResult.paths.front(), IsOutside(Vector2d(50, 25)));
 }
 
 TEST(PathOpsTest, XorOfNestedCirclesCreatesCurvedRing) {
@@ -551,12 +565,12 @@ TEST(PathOpsTest, XorOfNestedCirclesCreatesCurvedRing) {
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_EQ(result.paths.size(), 1u);
   const Path& path = result.paths.front();
-  EXPECT_EQ(CommandCount(path, Path::Verb::MoveTo), 2u);
-  EXPECT_EQ(CommandCount(path, Path::Verb::ClosePath), 2u);
-  EXPECT_TRUE(HasCommand(path, Path::Verb::CurveTo));
-  EXPECT_FALSE(path.isInside({50, 50}));
-  EXPECT_TRUE(path.isInside({50, 25}));
-  EXPECT_FALSE(path.isInside({5, 50}));
+  EXPECT_THAT(path, CommandCountIs(Path::Verb::MoveTo, 2u));
+  EXPECT_THAT(path, CommandCountIs(Path::Verb::ClosePath, 2u));
+  EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
+  EXPECT_THAT(path, IsOutside(Vector2d(50, 50)));
+  EXPECT_THAT(path, IsInside(Vector2d(50, 25)));
+  EXPECT_THAT(path, IsOutside(Vector2d(5, 50)));
 }
 
 TEST(PathOpsTest, DifferenceOfCircleCoveredByLargerCircleIsEmpty) {
@@ -613,10 +627,10 @@ TEST(PathOpsTest, IntersectKeepsCurvedDonutRingOutsideHole) {
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_FALSE(result.paths.empty());
   const Path& path = result.paths.front();
-  EXPECT_TRUE(HasCommand(path, Path::Verb::CurveTo));
-  EXPECT_TRUE(path.isInside({50, 25}));
-  EXPECT_FALSE(path.isInside({50, 50}));
-  EXPECT_FALSE(path.isInside({50, 10}));
+  EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
+  EXPECT_THAT(path, IsInside(Vector2d(50, 25)));
+  EXPECT_THAT(path, IsOutside(Vector2d(50, 50)));
+  EXPECT_THAT(path, IsOutside(Vector2d(50, 10)));
 }
 
 TEST(PathOpsTest, XorExcludesOverlap) {
@@ -625,9 +639,9 @@ TEST(PathOpsTest, XorExcludesOverlap) {
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok);
   const Path& path = result.paths.front();
-  EXPECT_TRUE(path.isInside({20, 20}));
-  EXPECT_FALSE(path.isInside({35, 30}));
-  EXPECT_TRUE(path.isInside({60, 30}));
+  EXPECT_THAT(path, IsInside(Vector2d(20, 20)));
+  EXPECT_THAT(path, IsOutside(Vector2d(35, 30)));
+  EXPECT_THAT(path, IsInside(Vector2d(60, 30)));
 }
 
 TEST(PathOpsTest, EmptyIntersectionReportsEmptyWithoutOutput) {
@@ -661,11 +675,11 @@ TEST(PathOpsTest, SharedEdgeUnionProducesSingleExteriorContour) {
   ASSERT_EQ(result.status, PathBooleanStatus::Ok);
   ASSERT_EQ(result.paths.size(), 1u);
   const Path& path = result.paths.front();
-  EXPECT_EQ(CommandCount(path, Path::Verb::MoveTo), 1u);
-  EXPECT_EQ(CommandCount(path, Path::Verb::ClosePath), 1u);
-  EXPECT_TRUE(path.isInside({5, 5}));
-  EXPECT_TRUE(path.isInside({15, 5}));
-  EXPECT_FALSE(path.isInside({25, 5}));
+  EXPECT_THAT(path, CommandCountIs(Path::Verb::MoveTo, 1u));
+  EXPECT_THAT(path, CommandCountIs(Path::Verb::ClosePath, 1u));
+  EXPECT_THAT(path, IsInside(Vector2d(5, 5)));
+  EXPECT_THAT(path, IsInside(Vector2d(15, 5)));
+  EXPECT_THAT(path, IsOutside(Vector2d(25, 5)));
 }
 
 TEST(PathOpsTest, IntersectOfLineAndStraightQuadraticSharedBoundaryIsEmpty) {
@@ -685,8 +699,8 @@ TEST(PathOpsTest, DifferenceRetainsLineAndStraightQuadraticSharedBoundarySide) {
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_FALSE(result.paths.empty());
   const Path& path = result.paths.front();
-  EXPECT_TRUE(path.isInside({50, 75}));
-  EXPECT_FALSE(path.isInside({50, 25}));
+  EXPECT_THAT(path, IsInside(Vector2d(50, 75)));
+  EXPECT_THAT(path, IsOutside(Vector2d(50, 25)));
 }
 
 TEST(PathOpsTest, IntersectOfLineAndStraightCubicSharedBoundaryIsEmpty) {
@@ -706,8 +720,8 @@ TEST(PathOpsTest, DifferenceRetainsLineAndStraightCubicSharedBoundarySide) {
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_FALSE(result.paths.empty());
   const Path& path = result.paths.front();
-  EXPECT_TRUE(path.isInside({50, 75}));
-  EXPECT_FALSE(path.isInside({50, 25}));
+  EXPECT_THAT(path, IsInside(Vector2d(50, 75)));
+  EXPECT_THAT(path, IsOutside(Vector2d(50, 25)));
 }
 
 TEST(PathOpsTest, IntersectOfPartiallySharedLineAndStraightQuadraticBoundaryIsEmpty) {
@@ -727,9 +741,9 @@ TEST(PathOpsTest, DifferenceRetainsPartiallySharedLineAndStraightQuadraticBounda
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_FALSE(result.paths.empty());
   const Path& path = result.paths.front();
-  EXPECT_TRUE(path.isInside({50, 75}));
-  EXPECT_FALSE(path.isInside({50, 25}));
-  EXPECT_FALSE(path.isInside({90, 75}));
+  EXPECT_THAT(path, IsInside(Vector2d(50, 75)));
+  EXPECT_THAT(path, IsOutside(Vector2d(50, 25)));
+  EXPECT_THAT(path, IsOutside(Vector2d(90, 75)));
 }
 
 TEST(PathOpsTest, IntersectOfPartiallySharedLineAndStraightCubicBoundaryIsEmpty) {
@@ -749,9 +763,9 @@ TEST(PathOpsTest, DifferenceRetainsPartiallySharedLineAndStraightCubicBoundarySi
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_FALSE(result.paths.empty());
   const Path& path = result.paths.front();
-  EXPECT_TRUE(path.isInside({50, 75}));
-  EXPECT_FALSE(path.isInside({50, 25}));
-  EXPECT_FALSE(path.isInside({90, 75}));
+  EXPECT_THAT(path, IsInside(Vector2d(50, 75)));
+  EXPECT_THAT(path, IsOutside(Vector2d(50, 25)));
+  EXPECT_THAT(path, IsOutside(Vector2d(90, 75)));
 }
 
 TEST(PathOpsTest, TransformedInputsParticipateInOutputCoordinates) {
@@ -773,8 +787,8 @@ TEST(PathOpsTest, RotatedAndScaledInputParticipatesInOutputCoordinates) {
   ASSERT_EQ(result.status, PathBooleanStatus::Ok);
   ASSERT_FALSE(result.paths.empty());
   const Path& path = result.paths.front();
-  EXPECT_TRUE(path.isInside({-10, 5}));
-  EXPECT_FALSE(path.isInside({5, 5}));
+  EXPECT_THAT(path, IsInside(Vector2d(-10, 5)));
+  EXPECT_THAT(path, IsOutside(Vector2d(5, 5)));
 }
 
 TEST(PathOpsTest, TransformedCircleInputParticipatesInCurveIntersection) {
@@ -786,10 +800,10 @@ TEST(PathOpsTest, TransformedCircleInputParticipatesInCurveIntersection) {
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_FALSE(result.paths.empty());
   const Path& path = result.paths.front();
-  EXPECT_TRUE(HasCommand(path, Path::Verb::CurveTo));
-  EXPECT_TRUE(path.isInside({50, 50}));
-  EXPECT_FALSE(path.isInside({25, 50}));
-  EXPECT_FALSE(path.isInside({75, 50}));
+  EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
+  EXPECT_THAT(path, IsInside(Vector2d(50, 50)));
+  EXPECT_THAT(path, IsOutside(Vector2d(25, 50)));
+  EXPECT_THAT(path, IsOutside(Vector2d(75, 50)));
 }
 
 TEST(PathOpsTest, ScaledCircleInputParticipatesInContainment) {
@@ -801,10 +815,10 @@ TEST(PathOpsTest, ScaledCircleInputParticipatesInContainment) {
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_FALSE(result.paths.empty());
   const Path& path = result.paths.front();
-  EXPECT_TRUE(HasCommand(path, Path::Verb::CurveTo));
-  EXPECT_TRUE(path.isInside({50, 25}));
-  EXPECT_FALSE(path.isInside({50, 50}));
-  EXPECT_FALSE(path.isInside({5, 50}));
+  EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
+  EXPECT_THAT(path, IsInside(Vector2d(50, 25)));
+  EXPECT_THAT(path, IsOutside(Vector2d(50, 50)));
+  EXPECT_THAT(path, IsOutside(Vector2d(5, 50)));
 }
 
 TEST(PathOpsTest, ReflectedInputParticipatesInOutputCoordinates) {
@@ -816,9 +830,9 @@ TEST(PathOpsTest, ReflectedInputParticipatesInOutputCoordinates) {
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_FALSE(result.paths.empty());
   const Path& path = result.paths.front();
-  EXPECT_TRUE(path.isInside({17, 5}));
-  EXPECT_FALSE(path.isInside({12, 5}));
-  EXPECT_FALSE(path.isInside({22, 5}));
+  EXPECT_THAT(path, IsInside(Vector2d(17, 5)));
+  EXPECT_THAT(path, IsOutside(Vector2d(12, 5)));
+  EXPECT_THAT(path, IsOutside(Vector2d(22, 5)));
 }
 
 TEST(PathOpsTest, SkewedInputParticipatesInOutputCoordinates) {
@@ -830,9 +844,9 @@ TEST(PathOpsTest, SkewedInputParticipatesInOutputCoordinates) {
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_FALSE(result.paths.empty());
   const Path& path = result.paths.front();
-  EXPECT_TRUE(path.isInside({25, 10}));
-  EXPECT_FALSE(path.isInside({10, 10}));
-  EXPECT_FALSE(path.isInside({38, 10}));
+  EXPECT_THAT(path, IsInside(Vector2d(25, 10)));
+  EXPECT_THAT(path, IsOutside(Vector2d(10, 10)));
+  EXPECT_THAT(path, IsOutside(Vector2d(38, 10)));
 }
 
 TEST(PathOpsTest, RetainedCurvesStayBezierSegments) {
@@ -842,7 +856,7 @@ TEST(PathOpsTest, RetainedCurvesStayBezierSegments) {
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok);
   ASSERT_FALSE(result.paths.empty());
-  EXPECT_TRUE(HasCommand(result.paths.front(), Path::Verb::CurveTo));
+  EXPECT_THAT(result.paths.front(), HasCommandVerb(Path::Verb::CurveTo));
 }
 
 TEST(PathOpsTest, IntersectOverlappingCirclesProducesCurvedLens) {
@@ -852,10 +866,10 @@ TEST(PathOpsTest, IntersectOverlappingCirclesProducesCurvedLens) {
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_FALSE(result.paths.empty());
   const Path& path = result.paths.front();
-  EXPECT_TRUE(HasCommand(path, Path::Verb::CurveTo));
-  EXPECT_TRUE(path.isInside({50, 50}));
-  EXPECT_FALSE(path.isInside({25, 50}));
-  EXPECT_FALSE(path.isInside({75, 50}));
+  EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
+  EXPECT_THAT(path, IsInside(Vector2d(50, 50)));
+  EXPECT_THAT(path, IsOutside(Vector2d(25, 50)));
+  EXPECT_THAT(path, IsOutside(Vector2d(75, 50)));
 }
 
 TEST(PathOpsTest, UnionOfOverlappingCirclesCoversBothLobes) {
@@ -865,11 +879,11 @@ TEST(PathOpsTest, UnionOfOverlappingCirclesCoversBothLobes) {
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_FALSE(result.paths.empty());
   const Path& path = result.paths.front();
-  EXPECT_TRUE(HasCommand(path, Path::Verb::CurveTo));
-  EXPECT_TRUE(path.isInside({25, 50}));
-  EXPECT_TRUE(path.isInside({50, 50}));
-  EXPECT_TRUE(path.isInside({75, 50}));
-  EXPECT_FALSE(path.isInside({5, 50}));
+  EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
+  EXPECT_THAT(path, IsInside(Vector2d(25, 50)));
+  EXPECT_THAT(path, IsInside(Vector2d(50, 50)));
+  EXPECT_THAT(path, IsInside(Vector2d(75, 50)));
+  EXPECT_THAT(path, IsOutside(Vector2d(5, 50)));
 }
 
 TEST(PathOpsTest, DifferenceOfOverlappingCirclesRemovesLens) {
@@ -880,10 +894,10 @@ TEST(PathOpsTest, DifferenceOfOverlappingCirclesRemovesLens) {
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_FALSE(result.paths.empty());
   const Path& path = result.paths.front();
-  EXPECT_TRUE(HasCommand(path, Path::Verb::CurveTo));
-  EXPECT_TRUE(path.isInside({25, 50}));
-  EXPECT_FALSE(path.isInside({50, 50}));
-  EXPECT_FALSE(path.isInside({75, 50}));
+  EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
+  EXPECT_THAT(path, IsInside(Vector2d(25, 50)));
+  EXPECT_THAT(path, IsOutside(Vector2d(50, 50)));
+  EXPECT_THAT(path, IsOutside(Vector2d(75, 50)));
 }
 
 TEST(PathOpsTest, XorOfOverlappingCirclesExcludesLens) {
@@ -893,10 +907,10 @@ TEST(PathOpsTest, XorOfOverlappingCirclesExcludesLens) {
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_FALSE(result.paths.empty());
   const Path& path = result.paths.front();
-  EXPECT_TRUE(HasCommand(path, Path::Verb::CurveTo));
-  EXPECT_TRUE(path.isInside({25, 50}));
-  EXPECT_FALSE(path.isInside({50, 50}));
-  EXPECT_TRUE(path.isInside({75, 50}));
+  EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
+  EXPECT_THAT(path, IsInside(Vector2d(25, 50)));
+  EXPECT_THAT(path, IsOutside(Vector2d(50, 50)));
+  EXPECT_THAT(path, IsInside(Vector2d(75, 50)));
 }
 
 TEST(PathOpsTest, TangentCurvedIntersectionIsEmpty) {
@@ -922,11 +936,11 @@ TEST(PathOpsTest, UnionOfDuplicateCurvedContoursKeepsSingleContour) {
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_EQ(result.paths.size(), 1u);
   const Path& path = result.paths.front();
-  EXPECT_EQ(CommandCount(path, Path::Verb::MoveTo), 1u);
-  EXPECT_EQ(CommandCount(path, Path::Verb::ClosePath), 1u);
-  EXPECT_TRUE(HasCommand(path, Path::Verb::CurveTo));
-  EXPECT_TRUE(path.isInside({20, 20}));
-  EXPECT_FALSE(path.isInside({40, 20}));
+  EXPECT_THAT(path, CommandCountIs(Path::Verb::MoveTo, 1u));
+  EXPECT_THAT(path, CommandCountIs(Path::Verb::ClosePath, 1u));
+  EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
+  EXPECT_THAT(path, IsInside(Vector2d(20, 20)));
+  EXPECT_THAT(path, IsOutside(Vector2d(40, 20)));
 }
 
 TEST(PathOpsTest, IntersectOfDuplicateCurvedContoursKeepsOriginalRegion) {
@@ -937,11 +951,11 @@ TEST(PathOpsTest, IntersectOfDuplicateCurvedContoursKeepsOriginalRegion) {
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_EQ(result.paths.size(), 1u);
   const Path& path = result.paths.front();
-  EXPECT_EQ(CommandCount(path, Path::Verb::MoveTo), 1u);
-  EXPECT_EQ(CommandCount(path, Path::Verb::ClosePath), 1u);
-  EXPECT_TRUE(HasCommand(path, Path::Verb::CurveTo));
-  EXPECT_TRUE(path.isInside({20, 20}));
-  EXPECT_FALSE(path.isInside({40, 20}));
+  EXPECT_THAT(path, CommandCountIs(Path::Verb::MoveTo, 1u));
+  EXPECT_THAT(path, CommandCountIs(Path::Verb::ClosePath, 1u));
+  EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
+  EXPECT_THAT(path, IsInside(Vector2d(20, 20)));
+  EXPECT_THAT(path, IsOutside(Vector2d(40, 20)));
 }
 
 TEST(PathOpsTest, DifferenceOfDuplicateCurvedContoursIsEmpty) {
@@ -968,9 +982,9 @@ TEST(PathOpsTest, UnionOfOppositeDirectionCurvedContoursKeepsSingleRegion) {
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_FALSE(result.paths.empty());
   const Path& path = result.paths.front();
-  EXPECT_TRUE(HasCommand(path, Path::Verb::CurveTo));
-  EXPECT_TRUE(path.isInside({50, 70}));
-  EXPECT_FALSE(path.isInside({50, -10}));
+  EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
+  EXPECT_THAT(path, IsInside(Vector2d(50, 70)));
+  EXPECT_THAT(path, IsOutside(Vector2d(50, -10)));
 }
 
 TEST(PathOpsTest, DifferenceOfOppositeDirectionCurvedContoursIsEmpty) {
@@ -998,10 +1012,10 @@ TEST(PathOpsTest, UnionOfSharedQuadraticBoundaryCoversBothSides) {
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_FALSE(result.paths.empty());
   const Path& path = result.paths.front();
-  EXPECT_TRUE(path.isInside({50, 10}));
-  EXPECT_TRUE(path.isInside({50, 70}));
-  EXPECT_FALSE(path.isInside({50, -10}));
-  EXPECT_FALSE(path.isInside({50, 110}));
+  EXPECT_THAT(path, IsInside(Vector2d(50, 10)));
+  EXPECT_THAT(path, IsInside(Vector2d(50, 70)));
+  EXPECT_THAT(path, IsOutside(Vector2d(50, -10)));
+  EXPECT_THAT(path, IsOutside(Vector2d(50, 110)));
 }
 
 TEST(PathOpsTest, DifferenceRetainsSharedQuadraticBoundarySide) {
@@ -1012,9 +1026,9 @@ TEST(PathOpsTest, DifferenceRetainsSharedQuadraticBoundarySide) {
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_FALSE(result.paths.empty());
   const Path& path = result.paths.front();
-  EXPECT_TRUE(HasCommand(path, Path::Verb::QuadTo));
-  EXPECT_FALSE(path.isInside({50, 10}));
-  EXPECT_TRUE(path.isInside({50, 70}));
+  EXPECT_THAT(path, HasCommandVerb(Path::Verb::QuadTo));
+  EXPECT_THAT(path, IsOutside(Vector2d(50, 10)));
+  EXPECT_THAT(path, IsInside(Vector2d(50, 70)));
 }
 
 TEST(PathOpsTest, IntersectOfSharedCubicBoundaryIsEmpty) {
@@ -1034,9 +1048,9 @@ TEST(PathOpsTest, DifferenceRetainsSharedCubicBoundarySide) {
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_FALSE(result.paths.empty());
   const Path& path = result.paths.front();
-  EXPECT_TRUE(HasCommand(path, Path::Verb::CurveTo));
-  EXPECT_FALSE(path.isInside({50, 5}));
-  EXPECT_TRUE(path.isInside({50, 70}));
+  EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
+  EXPECT_THAT(path, IsOutside(Vector2d(50, 5)));
+  EXPECT_THAT(path, IsInside(Vector2d(50, 70)));
 }
 
 TEST(PathOpsTest, IntersectOfPartialSharedQuadraticBoundaryIsEmpty) {
@@ -1056,9 +1070,9 @@ TEST(PathOpsTest, DifferenceRetainsPartialSharedQuadraticBoundarySide) {
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_FALSE(result.paths.empty());
   const Path& path = result.paths.front();
-  EXPECT_TRUE(HasCommand(path, Path::Verb::QuadTo));
-  EXPECT_FALSE(path.isInside({50, 10}));
-  EXPECT_TRUE(path.isInside({50, 70}));
+  EXPECT_THAT(path, HasCommandVerb(Path::Verb::QuadTo));
+  EXPECT_THAT(path, IsOutside(Vector2d(50, 10)));
+  EXPECT_THAT(path, IsInside(Vector2d(50, 70)));
 }
 
 TEST(PathOpsTest, IntersectOfOverlappingPartialSharedQuadraticBoundaryIsEmpty) {
@@ -1078,9 +1092,9 @@ TEST(PathOpsTest, DifferenceRetainsOverlappingPartialSharedQuadraticBoundarySide
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_FALSE(result.paths.empty());
   const Path& path = result.paths.front();
-  EXPECT_TRUE(HasCommand(path, Path::Verb::QuadTo));
-  EXPECT_FALSE(path.isInside({50, 10}));
-  EXPECT_TRUE(path.isInside({50, 70}));
+  EXPECT_THAT(path, HasCommandVerb(Path::Verb::QuadTo));
+  EXPECT_THAT(path, IsOutside(Vector2d(50, 10)));
+  EXPECT_THAT(path, IsInside(Vector2d(50, 70)));
 }
 
 TEST(PathOpsTest, IntersectOfOppositeDirectionOverlappingPartialSharedQuadraticBoundaryIsEmpty) {
@@ -1100,9 +1114,9 @@ TEST(PathOpsTest, DifferenceRetainsOppositeDirectionOverlappingPartialSharedQuad
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_FALSE(result.paths.empty());
   const Path& path = result.paths.front();
-  EXPECT_TRUE(HasCommand(path, Path::Verb::QuadTo));
-  EXPECT_FALSE(path.isInside({50, 10}));
-  EXPECT_TRUE(path.isInside({50, 70}));
+  EXPECT_THAT(path, HasCommandVerb(Path::Verb::QuadTo));
+  EXPECT_THAT(path, IsOutside(Vector2d(50, 10)));
+  EXPECT_THAT(path, IsInside(Vector2d(50, 70)));
 }
 
 TEST(PathOpsTest, IntersectOfPartialSharedCubicBoundaryIsEmpty) {
@@ -1122,9 +1136,9 @@ TEST(PathOpsTest, DifferenceRetainsPartialSharedCubicBoundarySide) {
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_FALSE(result.paths.empty());
   const Path& path = result.paths.front();
-  EXPECT_TRUE(HasCommand(path, Path::Verb::CurveTo));
-  EXPECT_FALSE(path.isInside({50, 5}));
-  EXPECT_TRUE(path.isInside({50, 70}));
+  EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
+  EXPECT_THAT(path, IsOutside(Vector2d(50, 5)));
+  EXPECT_THAT(path, IsInside(Vector2d(50, 70)));
 }
 
 TEST(PathOpsTest, IntersectOfOverlappingPartialSharedCubicBoundaryIsEmpty) {
@@ -1144,9 +1158,9 @@ TEST(PathOpsTest, DifferenceRetainsOverlappingPartialSharedCubicBoundarySide) {
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_FALSE(result.paths.empty());
   const Path& path = result.paths.front();
-  EXPECT_TRUE(HasCommand(path, Path::Verb::CurveTo));
-  EXPECT_FALSE(path.isInside({50, 5}));
-  EXPECT_TRUE(path.isInside({50, 70}));
+  EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
+  EXPECT_THAT(path, IsOutside(Vector2d(50, 5)));
+  EXPECT_THAT(path, IsInside(Vector2d(50, 70)));
 }
 
 TEST(PathOpsTest, IntersectOfOppositeDirectionOverlappingPartialSharedCubicBoundaryIsEmpty) {
@@ -1166,9 +1180,9 @@ TEST(PathOpsTest, DifferenceRetainsOppositeDirectionOverlappingPartialSharedCubi
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_FALSE(result.paths.empty());
   const Path& path = result.paths.front();
-  EXPECT_TRUE(HasCommand(path, Path::Verb::CurveTo));
-  EXPECT_FALSE(path.isInside({50, 5}));
-  EXPECT_TRUE(path.isInside({50, 70}));
+  EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
+  EXPECT_THAT(path, IsOutside(Vector2d(50, 5)));
+  EXPECT_THAT(path, IsInside(Vector2d(50, 70)));
 }
 
 TEST(PathOpsTest, IntersectRetainsQuadraticBoundarySpan) {
@@ -1177,9 +1191,9 @@ TEST(PathOpsTest, IntersectRetainsQuadraticBoundarySpan) {
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok);
   ASSERT_FALSE(result.paths.empty());
-  EXPECT_TRUE(HasCommand(result.paths.front(), Path::Verb::QuadTo));
-  EXPECT_TRUE(result.paths.front().isInside({50, 40}));
-  EXPECT_FALSE(result.paths.front().isInside({10, 40}));
+  EXPECT_THAT(result.paths.front(), HasCommandVerb(Path::Verb::QuadTo));
+  EXPECT_THAT(result.paths.front(), IsInside(Vector2d(50, 40)));
+  EXPECT_THAT(result.paths.front(), IsOutside(Vector2d(10, 40)));
 }
 
 TEST(PathOpsTest, IntersectRetainsCubicBoundarySpan) {
@@ -1188,9 +1202,9 @@ TEST(PathOpsTest, IntersectRetainsCubicBoundarySpan) {
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok);
   ASSERT_FALSE(result.paths.empty());
-  EXPECT_TRUE(HasCommand(result.paths.front(), Path::Verb::CurveTo));
-  EXPECT_TRUE(result.paths.front().isInside({50, 70}));
-  EXPECT_FALSE(result.paths.front().isInside({10, 50}));
+  EXPECT_THAT(result.paths.front(), HasCommandVerb(Path::Verb::CurveTo));
+  EXPECT_THAT(result.paths.front(), IsInside(Vector2d(50, 70)));
+  EXPECT_THAT(result.paths.front(), IsOutside(Vector2d(10, 50)));
 }
 
 TEST(PathOpsTest, IntersectSplitsInteriorQuadraticQuadraticCrossings) {
@@ -1200,10 +1214,10 @@ TEST(PathOpsTest, IntersectSplitsInteriorQuadraticQuadraticCrossings) {
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_FALSE(result.paths.empty());
-  EXPECT_TRUE(HasCommand(result.paths.front(), Path::Verb::QuadTo));
-  EXPECT_TRUE(result.paths.front().isInside({50, 50}));
-  EXPECT_FALSE(result.paths.front().isInside({50, 20}));
-  EXPECT_FALSE(result.paths.front().isInside({50, 80}));
+  EXPECT_THAT(result.paths.front(), HasCommandVerb(Path::Verb::QuadTo));
+  EXPECT_THAT(result.paths.front(), IsInside(Vector2d(50, 50)));
+  EXPECT_THAT(result.paths.front(), IsOutside(Vector2d(50, 20)));
+  EXPECT_THAT(result.paths.front(), IsOutside(Vector2d(50, 80)));
 }
 
 TEST(PathOpsTest, IntersectSplitsInteriorQuadraticCubicCrossings) {
@@ -1212,11 +1226,11 @@ TEST(PathOpsTest, IntersectSplitsInteriorQuadraticCubicCrossings) {
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_FALSE(result.paths.empty());
-  EXPECT_TRUE(HasCommand(result.paths.front(), Path::Verb::QuadTo));
-  EXPECT_TRUE(HasCommand(result.paths.front(), Path::Verb::CurveTo));
-  EXPECT_TRUE(result.paths.front().isInside({50, 50}));
-  EXPECT_FALSE(result.paths.front().isInside({50, 20}));
-  EXPECT_FALSE(result.paths.front().isInside({50, 90}));
+  EXPECT_THAT(result.paths.front(), HasCommandVerb(Path::Verb::QuadTo));
+  EXPECT_THAT(result.paths.front(), HasCommandVerb(Path::Verb::CurveTo));
+  EXPECT_THAT(result.paths.front(), IsInside(Vector2d(50, 50)));
+  EXPECT_THAT(result.paths.front(), IsOutside(Vector2d(50, 20)));
+  EXPECT_THAT(result.paths.front(), IsOutside(Vector2d(50, 90)));
 }
 
 TEST(PathOpsTest, IntersectSplitsInteriorCubicCubicCrossings) {
@@ -1225,10 +1239,10 @@ TEST(PathOpsTest, IntersectSplitsInteriorCubicCubicCrossings) {
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_FALSE(result.paths.empty());
-  EXPECT_TRUE(HasCommand(result.paths.front(), Path::Verb::CurveTo));
-  EXPECT_TRUE(result.paths.front().isInside({50, 50}));
-  EXPECT_FALSE(result.paths.front().isInside({50, 10}));
-  EXPECT_FALSE(result.paths.front().isInside({50, 90}));
+  EXPECT_THAT(result.paths.front(), HasCommandVerb(Path::Verb::CurveTo));
+  EXPECT_THAT(result.paths.front(), IsInside(Vector2d(50, 50)));
+  EXPECT_THAT(result.paths.front(), IsOutside(Vector2d(50, 10)));
+  EXPECT_THAT(result.paths.front(), IsOutside(Vector2d(50, 90)));
 }
 
 TEST(PathOpsTest, MultiInputDifferenceSubtractsEveryLaterInput) {
@@ -1239,11 +1253,11 @@ TEST(PathOpsTest, MultiInputDifferenceSubtractsEveryLaterInput) {
   ASSERT_EQ(result.status, PathBooleanStatus::Ok);
   ASSERT_FALSE(result.paths.empty());
   const Path& path = result.paths.front();
-  EXPECT_TRUE(path.isInside({10, 15}));
-  EXPECT_FALSE(path.isInside({30, 15}));
-  EXPECT_TRUE(path.isInside({50, 15}));
-  EXPECT_FALSE(path.isInside({70, 15}));
-  EXPECT_TRUE(path.isInside({90, 15}));
+  EXPECT_THAT(path, IsInside(Vector2d(10, 15)));
+  EXPECT_THAT(path, IsOutside(Vector2d(30, 15)));
+  EXPECT_THAT(path, IsInside(Vector2d(50, 15)));
+  EXPECT_THAT(path, IsOutside(Vector2d(70, 15)));
+  EXPECT_THAT(path, IsInside(Vector2d(90, 15)));
 }
 
 TEST(PathOpsTest, MultiInputIntersectionRequiresEveryInput) {

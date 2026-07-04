@@ -638,7 +638,7 @@ TEST(RendererPublicApiTest, FillOpacityAndStrokeOpacity) {
 
   // Stroke edge should have higher alpha from stroke-opacity 0.8.
   auto strokeEdge = PixelAt(snapshot, 5, 20);
-  EXPECT_GT(strokeEdge[3], interior[3]);
+  EXPECT_THAT(strokeEdge, Rgba(_, _, _, Gt(interior[3])));
 }
 
 // 5. Marker rendering - path with marker-start, marker-mid, marker-end
@@ -898,7 +898,7 @@ TEST(RendererPublicApiTest, RadialGradient) {
 
   // Corner should be darker.
   auto corner = PixelAt(snapshot, 0, 0);
-  EXPECT_LT(corner[0], center[0]);
+  EXPECT_THAT(corner, Rgba(Lt(center[0]), _, _, _));
 }
 
 // 14. Image element - <image> with data: URI (small inline 2x2 red PNG)
@@ -1068,7 +1068,7 @@ TEST(RendererPublicApiTest, MaskElement) {
 
   // Inside the black hole (center) - mask is black, so content should be masked.
   auto center = PixelAt(snapshot, 20, 20);
-  EXPECT_LT(center[3], corner[3]);  // More transparent than the corner
+  EXPECT_THAT(center, Rgba(_, _, _, Lt(corner[3])));  // More transparent than the corner
 }
 
 // 21. Mix-blend-mode triggers isolated layer
@@ -1154,8 +1154,7 @@ TEST(RendererPublicApiTest, GradientWithTransform) {
   auto top = PixelAt(snapshot, 20, 1);
   auto bottom = PixelAt(snapshot, 20, 38);
   // Top should be more red, bottom more blue.
-  EXPECT_GT(top[0], bottom[0]);  // More red at top
-  EXPECT_LT(top[2], bottom[2]);  // Less blue at top
+  EXPECT_THAT(top, Rgba(Gt(bottom[0]), _, Lt(bottom[2]), _));
 }
 
 // 25. Path element (exercises drawPath code path)
