@@ -19,11 +19,14 @@
 #include "donner/base/tests/Runfiles.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/LayerTreeModel.h"
+#include "donner/editor/tests/BitmapTestMatchers.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/renderer/Renderer.h"
 
 namespace donner::svg {
 namespace {
+
+using editor::tests::NonEmptyRendererBitmap;
 
 constexpr std::string_view kRedRectSvg =
     R"SVG(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
@@ -180,7 +183,7 @@ TEST(RenderElementToBitmapTest, RedRectFillsCenterRed) {
 
   Renderer renderer;
   const RendererBitmap bitmap = renderer.renderElementToBitmap(*rect, Vector2i(24, 24));
-  ASSERT_FALSE(bitmap.empty());
+  ASSERT_THAT(bitmap, NonEmptyRendererBitmap());
   EXPECT_EQ(bitmap.dimensions, Vector2i(24, 24));
 
   // The square fills the cell, so the center pixel is the rect's opaque fill.
@@ -204,7 +207,7 @@ TEST(RenderElementToBitmapTest, GreenCircleCenterGreenCornerTransparent) {
 
   Renderer renderer;
   const RendererBitmap bitmap = renderer.renderElementToBitmap(*circle, Vector2i(24, 24));
-  ASSERT_FALSE(bitmap.empty());
+  ASSERT_THAT(bitmap, NonEmptyRendererBitmap());
 
   // Center is inside the circle: green and opaque.
   EXPECT_THAT(PixelAt(bitmap, 12, 12), RgbaNear(0, 200, 0, 255, 6));
@@ -222,7 +225,7 @@ TEST(RenderElementToBitmapTest, ForegroundThumbnailDoesNotIncludeBackgroundSibli
 
   Renderer renderer;
   const RendererBitmap bitmap = renderer.renderElementToBitmap(*dot, Vector2i(24, 24));
-  ASSERT_FALSE(bitmap.empty());
+  ASSERT_THAT(bitmap, NonEmptyRendererBitmap());
 
   EXPECT_THAT(PixelAt(bitmap, 12, 12), RgbaNear(250, 225, 0, 255, 6));
   EXPECT_THAT(PixelAt(bitmap, 0, 0), RgbaNear(0, 0, 0, 0, 2))
@@ -241,7 +244,7 @@ TEST(RenderElementToBitmapTest, DonnerSplashLayerThumbnailDoesNotIncludeBackgrou
 
   Renderer renderer;
   const RendererBitmap bitmap = renderer.renderElementToBitmap(*donner, Vector2i(32, 32));
-  ASSERT_FALSE(bitmap.empty());
+  ASSERT_THAT(bitmap, NonEmptyRendererBitmap());
 
   EXPECT_THAT(PixelAt(bitmap, 0, 0), RgbaNear(0, 0, 0, 0, 2))
       << "the Donner layer thumbnail should keep empty crop corners transparent instead of "
@@ -259,7 +262,7 @@ TEST(RenderElementToBitmapTest, DonnerSplashDonnerThumbnailShowsLetterFill) {
 
   Renderer renderer;
   const RendererBitmap bitmap = renderer.renderElementToBitmap(*donner, Vector2i(32, 32));
-  ASSERT_FALSE(bitmap.empty());
+  ASSERT_THAT(bitmap, NonEmptyRendererBitmap());
 
   EXPECT_THAT(PixelAt(bitmap, 0, 0), RgbaNear(0, 0, 0, 0, 2))
       << "the Donner layer itself does not include the document background or sticker silhouette";
@@ -283,7 +286,7 @@ TEST(RenderElementToBitmapTest, DonnerSplashSunburstThumbnailCentersBrightConten
 
   Renderer renderer;
   const RendererBitmap bitmap = renderer.renderElementToBitmap(*sunburst, Vector2i(32, 32));
-  ASSERT_FALSE(bitmap.empty());
+  ASSERT_THAT(bitmap, NonEmptyRendererBitmap());
 
   const int warmPixels = CountPixelsMatching(bitmap, IsBrightWarmPixel);
   ASSERT_GT(warmPixels, 20) << "the Sunburst thumbnail should include the sun, not only shine";
@@ -302,7 +305,7 @@ TEST(RenderElementToBitmapTest, DonnerSplashSunburstThumbnailUsesFullElementBoun
 
   Renderer renderer;
   const RendererBitmap bitmap = renderer.renderElementToBitmap(*sunburst, Vector2i(42, 24));
-  ASSERT_FALSE(bitmap.empty());
+  ASSERT_THAT(bitmap, NonEmptyRendererBitmap());
 
   // #Sunburst's full canvas-visible element bounds are the shine ellipse
   // (455.4x272.32 after clipping the off-canvas top to the root viewBox), so
@@ -323,7 +326,7 @@ TEST(RenderElementToBitmapTest, DonnerSplashBlueCenterBurstThumbnailUsesFullElem
 
   Renderer renderer;
   const RendererBitmap bitmap = renderer.renderElementToBitmap(*burst, Vector2i(42, 24));
-  ASSERT_FALSE(bitmap.empty());
+  ASSERT_THAT(bitmap, NonEmptyRendererBitmap());
 
   // #Blue_center_burst is a 365.32x420.64 ellipse, clipped by the root viewBox
   // to 365.32x419.06. Fitting the whole element into 42x24 produces 21x24.
@@ -378,7 +381,7 @@ TEST(RenderElementToBitmapTest, WideLayerThumbnailFitsFullContentInRectangularBi
 
   Renderer renderer;
   const RendererBitmap bitmap = renderer.renderElementToBitmap(*group, Vector2i(42, 24));
-  ASSERT_FALSE(bitmap.empty());
+  ASSERT_THAT(bitmap, NonEmptyRendererBitmap());
 
   EXPECT_EQ(bitmap.dimensions.x, 42);
   EXPECT_GE(bitmap.dimensions.y, 3);
@@ -403,7 +406,7 @@ TEST(RenderElementToBitmapTest, TransparentGeometryDoesNotBiasTightCrop) {
 
   Renderer renderer;
   const RendererBitmap bitmap = renderer.renderElementToBitmap(*group, Vector2i(24, 24));
-  ASSERT_FALSE(bitmap.empty());
+  ASSERT_THAT(bitmap, NonEmptyRendererBitmap());
 
   EXPECT_GT(CountPixelsMatching(bitmap, IsBrightWarmPixel), 250)
       << "the visible circle should fill the thumbnail after alpha-tight cropping";
@@ -420,7 +423,7 @@ TEST(RenderElementToBitmapTest, StrokeOnlyLayerThumbnailUsesStrokeContentBounds)
 
   Renderer renderer;
   const RendererBitmap bitmap = renderer.renderElementToBitmap(*line, Vector2i(24, 24));
-  ASSERT_FALSE(bitmap.empty())
+  ASSERT_THAT(bitmap, NonEmptyRendererBitmap())
       << "stroke-only geometry is visible layer content and must not fall back to a fill swatch";
 
   EXPECT_EQ(bitmap.dimensions.x, 24);
@@ -439,7 +442,7 @@ TEST(RenderElementToBitmapTest, GroupComposesDescendants) {
 
   Renderer renderer;
   const RendererBitmap bitmap = renderer.renderElementToBitmap(*group, Vector2i(24, 24));
-  ASSERT_FALSE(bitmap.empty());
+  ASSERT_THAT(bitmap, NonEmptyRendererBitmap());
 
   // The group's two halves compose into one preview: left blue, right yellow.
   EXPECT_THAT(PixelAt(bitmap, 6, 12), RgbaNear(80, 200, 255, 255, 6));
@@ -455,7 +458,7 @@ TEST(RenderElementToBitmapTest, WideBackgroundFillsMatchingRectangularThumbnail)
 
   Renderer renderer;
   const RendererBitmap bitmap = renderer.renderElementToBitmap(*background, Vector2i(42, 24));
-  ASSERT_FALSE(bitmap.empty());
+  ASSERT_THAT(bitmap, NonEmptyRendererBitmap());
 
   EXPECT_EQ(bitmap.dimensions, Vector2i(42, 24));
   EXPECT_THAT(PixelAt(bitmap, 21, 0), RgbaNear(0, 0, 0, 255, 4))
@@ -474,7 +477,7 @@ TEST(RenderElementToBitmapTest, RootGroupThumbnailIsClippedToSvgViewBox) {
 
   Renderer renderer;
   const RendererBitmap bitmap = renderer.renderElementToBitmap(*group, Vector2i(24, 24));
-  ASSERT_FALSE(bitmap.empty());
+  ASSERT_THAT(bitmap, NonEmptyRendererBitmap());
 
   EXPECT_THAT(PixelAt(bitmap, 12, 0), RgbaNear(0, 0, 0, 255, 4))
       << "off-canvas descendants must not expand the root group thumbnail crop";

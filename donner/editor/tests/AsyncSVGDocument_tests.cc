@@ -4,6 +4,7 @@
 
 #include <array>
 
+#include "donner/editor/tests/BitmapTestMatchers.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
@@ -18,6 +19,7 @@ using ::testing::Field;
 using ::testing::Gt;
 using ::testing::Lt;
 using ::testing::SizeIs;
+using tests::NonEmptyRendererBitmap;
 
 constexpr std::string_view kTrivialSvg =
     R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
@@ -176,7 +178,7 @@ TEST(AsyncSVGDocumentTest, CommandAfterStructuralWritebackReparseTargetsRemapped
   EXPECT_EQ(pathAfterReparse->getAttribute("style"), "fill: #ff0000; stroke: none");
 
   const svg::RendererBitmap rendered = RenderDocument(doc.document());
-  ASSERT_FALSE(rendered.empty());
+  ASSERT_THAT(rendered, NonEmptyRendererBitmap());
   const std::array<std::uint8_t, 4> pixel = PixelAt(rendered, 24, 24);
   EXPECT_THAT(pixel, Rgba(Gt(200), Lt(40), Lt(40), Gt(200)));
 }

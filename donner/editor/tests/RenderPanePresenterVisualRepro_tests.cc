@@ -15,6 +15,7 @@
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/RenderPanePresenter.h"
 #include "donner/editor/gui/EditorWindow.h"
+#include "donner/editor/tests/BitmapTestMatchers.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "gtest/gtest.h"
@@ -25,6 +26,7 @@ namespace {
 using svg::test::Rgba;
 using ::testing::Eq;
 using ::testing::Lt;
+using tests::NonEmptyRendererBitmap;
 
 constexpr int kLogicalWidth = 320;
 constexpr int kLogicalHeight = 220;
@@ -304,7 +306,7 @@ TEST(RenderPanePresenterVisualReproTest, OverviewInfillDoesNotBleedThroughTransp
   const svg::RendererBitmap actual = CapturePresenterFrame(&window, &textures, entt::null);
   WriteDiagnosticBitmap(actual, "actual_transparent_active_overview_infill.png");
 
-  ASSERT_FALSE(actual.empty());
+  ASSERT_THAT(actual, NonEmptyRendererBitmap());
   const std::array<std::uint8_t, 4> center =
       PixelAtLogical(actual, kLogicalWidth / 2, kLogicalHeight / 2);
   EXPECT_THAT(center, Rgba(Lt(100), Lt(100), Lt(100), Eq(255)))
@@ -362,7 +364,7 @@ TEST(RenderPanePresenterVisualReproTest, OverviewInfillDoesNotBleedThroughOldDra
       CapturePresenterFrame(&window, &textures, entt::null, activePreview, displayedPreview);
   WriteDiagnosticBitmap(actual, "actual_drag_target_old_bounds_overview_infill.png");
 
-  ASSERT_FALSE(actual.empty());
+  ASSERT_THAT(actual, NonEmptyRendererBitmap());
   const std::array<std::uint8_t, 4> oldLeftEdge = PixelAtLogical(actual, 40, kLogicalHeight / 2);
   EXPECT_THAT(oldLeftEdge, Rgba(Lt(100), Lt(100), Lt(100), Eq(255)))
       << "Overview infill must not redraw stale drag-target pixels at the old background "

@@ -5,6 +5,7 @@
 #include "donner/base/Transform.h"
 #include "donner/editor/CompositedPresentation.h"
 #include "donner/editor/SelectTool.h"
+#include "donner/editor/tests/BitmapTestMatchers.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/compositor/CompositorController.h"
@@ -17,6 +18,7 @@ namespace donner::editor {
 namespace {
 
 using svg::SVGGraphicsElement;
+using tests::NonEmptyRendererBitmap;
 
 CompositedPresentation::DiagnosticsSnapshot Snapshot(const CompositedPresentation& state) {
   return state.diagnostics();
@@ -122,7 +124,7 @@ TEST(DragReleasePopBackTest, CompositorProducesCorrectOutputAtEveryPhase) {
 
   {
     const auto flat = renderer.takeSnapshot();
-    ASSERT_FALSE(flat.empty());
+    ASSERT_THAT(flat, NonEmptyRendererBitmap());
     EXPECT_THAT(getPixel(flat, kOrigCenterX, kOrigCenterY), IsRed())
         << "Pre-drag flat: rect at original position";
     EXPECT_THAT(getPixel(flat, kMovedCenterX, kMovedCenterY), IsWhite())
@@ -131,7 +133,7 @@ TEST(DragReleasePopBackTest, CompositorProducesCorrectOutputAtEveryPhase) {
 
   {
     const auto& promoted = compositor.layerBitmapOf(entity);
-    ASSERT_FALSE(promoted.empty());
+    ASSERT_THAT(promoted, NonEmptyRendererBitmap());
     const auto [bx, by] = canvasToBitmap(kOrigCenterX, kOrigCenterY);
     EXPECT_THAT(getPixel(promoted, bx, by), IsRed()) << "Pre-drag promoted: rect at DOM position";
   }
@@ -383,7 +385,7 @@ TEST(DragReleasePopBackTest, CpuSnapshotShowsCorrectImageAfterSettling) {
     driver.draw(document);
   }
   const auto preDragFlat = renderer.takeSnapshot();
-  ASSERT_FALSE(preDragFlat.empty());
+  ASSERT_THAT(preDragFlat, NonEmptyRendererBitmap());
   EXPECT_THAT(getPixel(preDragFlat, kOrigCenterX, kOrigCenterY), IsRed());
 
   // Apply the transform (simulating SetTransformCommand).
@@ -395,7 +397,7 @@ TEST(DragReleasePopBackTest, CpuSnapshotShowsCorrectImageAfterSettling) {
     driver.draw(document);
   }
   const auto settlingFlat = renderer.takeSnapshot();
-  ASSERT_FALSE(settlingFlat.empty());
+  ASSERT_THAT(settlingFlat, NonEmptyRendererBitmap());
 
   // The CPU snapshot must show the element at its new position.
   EXPECT_THAT(getPixel(settlingFlat, kMovedCenterX, kMovedCenterY), IsRed())
@@ -522,10 +524,12 @@ TEST(DragReleasePopBackTest, EndToEndFrameSequence) {
       // Composited path: the promoted texture is drawn at DOM position + screen offset.
       // The "screen offset" in document coordinates is preview->translation.
       // We verify the promoted (drag-target) tile has cached pixels.
-      EXPECT_FALSE(uploadedPromoted.empty()) << label << ": promoted bitmap should exist";
+      EXPECT_THAT(uploadedPromoted, NonEmptyRendererBitmap())
+          << label << ": promoted bitmap should exist";
     } else {
       // No composited texture yet: the CPU snapshot should still contain valid pixels.
-      ASSERT_FALSE(uploadedSnapshot.empty()) << label << ": CPU snapshot must exist";
+      ASSERT_THAT(uploadedSnapshot, NonEmptyRendererBitmap())
+          << label << ": CPU snapshot must exist";
       // After any post-drag render, the snapshot must show the element at the moved position. If it
       // shows the original position, that's the pop.
       EXPECT_THAT(getPixel(uploadedSnapshot, kOrigCenterX, kOrigCenterY), IsNotRed())

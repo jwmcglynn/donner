@@ -12,6 +12,7 @@
 
 #include "donner/base/tests/Runfiles.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
+#include "donner/editor/tests/BitmapTestMatchers.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -79,7 +80,8 @@ TEST(LayerThumbnailGoldenTest, DonnerSplashLayerThumbnailsMatchGoldens) {
 
     const svg::RendererBitmap bitmap =
         renderer.renderElementToBitmap(*element, kLayerThumbnailMaxSize);
-    ASSERT_FALSE(bitmap.empty()) << "Layer " << testCase.label << " produced an empty thumbnail";
+    ASSERT_THAT(bitmap, NonEmptyRendererBitmap())
+        << "Layer " << testCase.label << " produced an empty thumbnail";
 
     CompareBitmapToGolden(bitmap, testCase.goldenPath, testCase.label, PixelmatchIdentityParams());
   }

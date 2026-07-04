@@ -17,6 +17,7 @@
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/SelectionAabb.h"
 #include "donner/editor/TextEditor.h"
+#include "donner/editor/tests/BitmapTestMatchers.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGPathElement.h"
 #include "donner/svg/renderer/Renderer.h"
@@ -26,6 +27,8 @@
 
 namespace donner::editor {
 namespace {
+
+using tests::NonEmptyRendererBitmap;
 
 constexpr std::string_view kEmptySvg =
     R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"></svg>)";
@@ -53,16 +56,6 @@ MATCHER_P(BoxContainingPoint, point,
   *result_listener << "box [" << arg.topLeft.x << ", " << arg.topLeft.y << " — "
                    << arg.bottomRight.x << ", " << arg.bottomRight.y << "] does not contain ("
                    << point.x << ", " << point.y << ")";
-  return false;
-}
-
-MATCHER(NonEmptyRendererBitmap, "a non-empty RendererBitmap") {
-  if (!arg.empty()) {
-    return true;
-  }
-
-  *result_listener << "dimensions=(" << arg.dimensions.x << ", " << arg.dimensions.y
-                   << "), pixels=" << arg.pixels.size() << ", rowBytes=" << arg.rowBytes;
   return false;
 }
 

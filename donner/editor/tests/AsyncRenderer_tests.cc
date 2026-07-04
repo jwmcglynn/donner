@@ -29,6 +29,7 @@
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/TracyWrapper.h"
 #include "donner/editor/ViewportState.h"
+#include "donner/editor/tests/BitmapTestMatchers.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/compositor/CompositorController.h"
@@ -69,6 +70,7 @@ using ::testing::Gt;
 using ::testing::IsEmpty;
 using ::testing::Not;
 using ::testing::SizeIs;
+using tests::NonEmptyRendererBitmap;
 
 bool IsGraphicsElement(const svg::SVGElement& element) {
   return element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
@@ -128,16 +130,6 @@ MATCHER_P(DragTargetLayerTileFor, entity,
 
 MATCHER(EmptyRendererBitmap, "an empty renderer bitmap") {
   if (arg.empty()) {
-    return true;
-  }
-
-  *result_listener << "dimensions=(" << arg.dimensions.x << ", " << arg.dimensions.y
-                   << "), pixels=" << arg.pixels.size() << ", rowBytes=" << arg.rowBytes;
-  return false;
-}
-
-MATCHER(NonEmptyRendererBitmap, "a non-empty renderer bitmap") {
-  if (!arg.empty()) {
     return true;
   }
 
@@ -3410,7 +3402,8 @@ TEST(AsyncRendererE2ETest, ClickThenDragOnSplashShapeMeetsLatencyBudget) {
         svg::RenderViewport{.size = Vector2d(892, 512), .devicePixelRatio = 1.0});
   }
   const auto referenceBitmap = referenceRenderer.takeSnapshot();
-  ASSERT_FALSE(referenceBitmap.empty()) << "reference render produced empty bitmap";
+  ASSERT_THAT(referenceBitmap, NonEmptyRendererBitmap())
+      << "reference render produced empty bitmap";
   EXPECT_EQ(referenceBitmap.dimensions.x, 892);
   EXPECT_EQ(referenceBitmap.dimensions.y, 512);
 }
@@ -4074,7 +4067,7 @@ TEST(AsyncRendererE2ETest, CpuSnapshotStaysNonTransparentAcrossDragTargetSwap) {
   auto checkResult = [&](std::string_view phase) {
     auto result = waitForResult();
     ASSERT_TRUE(result.has_value()) << "no result for " << phase;
-    EXPECT_FALSE(result->bitmap.empty()) << phase << ": CPU snapshot empty";
+    EXPECT_THAT(result->bitmap, NonEmptyRendererBitmap()) << phase << ": CPU snapshot empty";
     EXPECT_FALSE(isBitmapMostlyTransparent(result->bitmap))
         << phase
         << ": CPU snapshot is ≥99% transparent — a full-canvas composited tile seeded from it "
@@ -4229,7 +4222,8 @@ TEST(AsyncRendererE2ETest, DragEndWritebackTakesStructuralRemapPath) {
   ASSERT_TRUE(postReplaceResult.has_value());
 
   const svg::RendererBitmap& postReplaceBitmap = postReplaceResult->bitmap;
-  ASSERT_FALSE(postReplaceBitmap.empty()) << "post-replace CPU snapshot must refresh";
+  ASSERT_THAT(postReplaceBitmap, NonEmptyRendererBitmap())
+      << "post-replace CPU snapshot must refresh";
   const auto pixelAt = [&](int x, int y) -> std::array<uint8_t, 4> {
     const size_t offset =
         static_cast<size_t>(y) * postReplaceBitmap.rowBytes + static_cast<size_t>(x) * 4u;
