@@ -30,10 +30,12 @@ namespace {
 
 using ::testing::_;
 using ::testing::AllOf;
+using ::testing::Contains;
 using ::testing::DoubleNear;
 using ::testing::ElementsAre;
 using ::testing::Field;
 using ::testing::IsEmpty;
+using ::testing::Not;
 using ::testing::ResultOf;
 using ::testing::SizeIs;
 
@@ -44,10 +46,6 @@ constexpr std::string_view kTrivialSvg =
          <rect id="r1" x="20" y="30" width="40" height="50" fill="red"/>
        </svg>)";
 
-bool AnyBoxContains(std::span<const Box2d> boxes, const Vector2d& point) {
-  return std::ranges::any_of(boxes, [&](const Box2d& box) { return box.contains(point); });
-}
-
 auto Vector2dNear(Vector2d expected, double tolerance) {
   return AllOf(Field("x", &Vector2d::x, DoubleNear(expected.x, tolerance)),
                Field("y", &Vector2d::y, DoubleNear(expected.y, tolerance)));
@@ -57,6 +55,19 @@ auto Box2dNear(Box2d expected, double tolerance) {
   return AllOf(
       Field("topLeft", &Box2d::topLeft, Vector2dNear(expected.topLeft, tolerance)),
       Field("bottomRight", &Box2d::bottomRight, Vector2dNear(expected.bottomRight, tolerance)));
+}
+
+MATCHER_P(BoxContainingPoint, point,
+          std::string("a Box2d that contains (") + testing::PrintToString(point.x) + ", " +
+              testing::PrintToString(point.y) + ")") {
+  if (arg.contains(point)) {
+    return true;
+  }
+
+  *result_listener << "box [" << arg.topLeft.x << ", " << arg.topLeft.y << " - "
+                   << arg.bottomRight.x << ", " << arg.bottomRight.y << "] does not contain ("
+                   << point.x << ", " << point.y << ")";
+  return false;
 }
 
 auto PathControlLineIs(Vector2d anchorDoc, Vector2d controlDoc) {
@@ -148,11 +159,11 @@ TEST(OverlayRendererTest, CaptureSnapshotIncludesSourceHoverChromeWithoutSelecti
       std::span<const svg::SVGElement>(), std::nullopt, Transform2d(), std::nullopt,
       std::span<const svg::SVGElement>(hoverElements));
 
-  EXPECT_TRUE(snapshot.paths.empty());
-  EXPECT_TRUE(snapshot.aabbsDoc.empty());
-  EXPECT_TRUE(snapshot.handleBoxesDoc.empty());
-  EXPECT_FALSE(snapshot.hoverPaths.empty());
-  EXPECT_FALSE(snapshot.hoverAabbsDoc.empty());
+  EXPECT_THAT(snapshot.paths, IsEmpty());
+  EXPECT_THAT(snapshot.aabbsDoc, IsEmpty());
+  EXPECT_THAT(snapshot.handleBoxesDoc, IsEmpty());
+  EXPECT_THAT(snapshot.hoverPaths, Not(IsEmpty()));
+  EXPECT_THAT(snapshot.hoverAabbsDoc, Not(IsEmpty()));
 }
 
 TEST(OverlayRendererTest, CaptureSnapshotAllowsConcurrentDomSelectionAndHover) {
@@ -169,10 +180,10 @@ TEST(OverlayRendererTest, CaptureSnapshotAllowsConcurrentDomSelectionAndHover) {
       std::span<const svg::SVGElement>(app.selectedElements()), std::nullopt, Transform2d(),
       std::nullopt, std::span<const svg::SVGElement>(hoverElements));
 
-  EXPECT_FALSE(snapshot.paths.empty());
-  EXPECT_FALSE(snapshot.aabbsDoc.empty());
-  EXPECT_FALSE(snapshot.hoverPaths.empty());
-  EXPECT_FALSE(snapshot.hoverAabbsDoc.empty());
+  EXPECT_THAT(snapshot.paths, Not(IsEmpty()));
+  EXPECT_THAT(snapshot.aabbsDoc, Not(IsEmpty()));
+  EXPECT_THAT(snapshot.hoverPaths, Not(IsEmpty()));
+  EXPECT_THAT(snapshot.hoverAabbsDoc, Not(IsEmpty()));
 }
 
 TEST(OverlayRendererTest, PathOutlinesOnlyOmitsSelectionBoundsAndHandles) {
@@ -188,10 +199,10 @@ TEST(OverlayRendererTest, PathOutlinesOnlyOmitsSelectionBoundsAndHandles) {
       std::nullopt, std::span<const svg::SVGElement>(), std::nullopt,
       SelectionChromeDetail::PathOutlinesOnly);
 
-  EXPECT_FALSE(snapshot.paths.empty());
-  EXPECT_TRUE(snapshot.aabbsDoc.empty());
+  EXPECT_THAT(snapshot.paths, Not(IsEmpty()));
+  EXPECT_THAT(snapshot.aabbsDoc, IsEmpty());
   EXPECT_FALSE(snapshot.orientedBoundsDoc.has_value());
-  EXPECT_TRUE(snapshot.handleBoxesDoc.empty());
+  EXPECT_THAT(snapshot.handleBoxesDoc, IsEmpty());
 }
 
 TEST(OverlayRendererTest, SelectedPathSnapshotIncludesAnchorsAndControlLines) {
@@ -213,18 +224,20 @@ TEST(OverlayRendererTest, SelectedPathSnapshotIncludesAnchorsAndControlLines) {
       std::nullopt, std::span<const svg::SVGElement>(), std::nullopt,
       SelectionChromeDetail::PathOutlinesOnly);
 
-  EXPECT_EQ(snapshot.paths.size(), 1u);
-  EXPECT_EQ(snapshot.pathAnchorBoxesDoc.size(), 3u);
-  EXPECT_EQ(snapshot.pathControlLinesDoc.size(), 2u);
-  EXPECT_EQ(snapshot.pathControlPointBoxesDoc.size(), 2u);
-  EXPECT_TRUE(snapshot.aabbsDoc.empty());
-  EXPECT_TRUE(snapshot.handleBoxesDoc.empty());
+  EXPECT_THAT(snapshot.paths, SizeIs(1u));
+  EXPECT_THAT(snapshot.pathAnchorBoxesDoc, SizeIs(3u));
+  EXPECT_THAT(snapshot.pathControlLinesDoc, SizeIs(2u));
+  EXPECT_THAT(snapshot.pathControlPointBoxesDoc, SizeIs(2u));
+  EXPECT_THAT(snapshot.aabbsDoc, IsEmpty());
+  EXPECT_THAT(snapshot.handleBoxesDoc, IsEmpty());
 
-  EXPECT_TRUE(AnyBoxContains(snapshot.pathAnchorBoxesDoc, Vector2d(10.0, 20.0)));
-  EXPECT_TRUE(AnyBoxContains(snapshot.pathAnchorBoxesDoc, Vector2d(50.0, 20.0)));
-  EXPECT_TRUE(AnyBoxContains(snapshot.pathAnchorBoxesDoc, Vector2d(80.0, 20.0)));
-  EXPECT_TRUE(AnyBoxContains(snapshot.pathControlPointBoxesDoc, Vector2d(20.0, 10.0)));
-  EXPECT_TRUE(AnyBoxContains(snapshot.pathControlPointBoxesDoc, Vector2d(40.0, 10.0)));
+  EXPECT_THAT(snapshot.pathAnchorBoxesDoc, Contains(BoxContainingPoint(Vector2d(10.0, 20.0))));
+  EXPECT_THAT(snapshot.pathAnchorBoxesDoc, Contains(BoxContainingPoint(Vector2d(50.0, 20.0))));
+  EXPECT_THAT(snapshot.pathAnchorBoxesDoc, Contains(BoxContainingPoint(Vector2d(80.0, 20.0))));
+  EXPECT_THAT(snapshot.pathControlPointBoxesDoc,
+              Contains(BoxContainingPoint(Vector2d(20.0, 10.0))));
+  EXPECT_THAT(snapshot.pathControlPointBoxesDoc,
+              Contains(BoxContainingPoint(Vector2d(40.0, 10.0))));
 
   EXPECT_THAT(snapshot.pathControlLinesDoc,
               ElementsAre(PathControlLineIs(Vector2d(10.0, 20.0), Vector2d(20.0, 10.0)),
@@ -249,10 +262,10 @@ TEST(OverlayRendererTest, FullSelectionChromeOmitsPathPointChrome) {
       std::span<const svg::SVGElement>(app.selectedElements()), std::nullopt, Transform2d(),
       std::nullopt, std::span<const svg::SVGElement>(), std::nullopt, SelectionChromeDetail::Full);
 
-  EXPECT_FALSE(snapshot.paths.empty());
-  EXPECT_TRUE(snapshot.pathAnchorBoxesDoc.empty());
-  EXPECT_TRUE(snapshot.pathControlLinesDoc.empty());
-  EXPECT_TRUE(snapshot.pathControlPointBoxesDoc.empty());
+  EXPECT_THAT(snapshot.paths, Not(IsEmpty()));
+  EXPECT_THAT(snapshot.pathAnchorBoxesDoc, IsEmpty());
+  EXPECT_THAT(snapshot.pathControlLinesDoc, IsEmpty());
+  EXPECT_THAT(snapshot.pathControlPointBoxesDoc, IsEmpty());
 }
 
 TEST(OverlayRendererTest, NonPathSelectionsDoNotEmitPathPointChrome) {
@@ -266,10 +279,10 @@ TEST(OverlayRendererTest, NonPathSelectionsDoNotEmitPathPointChrome) {
   const SelectionChromeSnapshot snapshot = OverlayRenderer::captureChromeSnapshot(
       std::span<const svg::SVGElement>(app.selectedElements()), std::nullopt, Transform2d());
 
-  EXPECT_FALSE(snapshot.paths.empty());
-  EXPECT_TRUE(snapshot.pathAnchorBoxesDoc.empty());
-  EXPECT_TRUE(snapshot.pathControlLinesDoc.empty());
-  EXPECT_TRUE(snapshot.pathControlPointBoxesDoc.empty());
+  EXPECT_THAT(snapshot.paths, Not(IsEmpty()));
+  EXPECT_THAT(snapshot.pathAnchorBoxesDoc, IsEmpty());
+  EXPECT_THAT(snapshot.pathControlLinesDoc, IsEmpty());
+  EXPECT_THAT(snapshot.pathControlPointBoxesDoc, IsEmpty());
 }
 
 TEST(OverlayRendererTest, SelectionStrokeWidthScalesWithDevicePixelRatio) {
@@ -335,9 +348,9 @@ TEST(OverlayRendererTest, CaptureSnapshotCullsOffscreenHandles) {
       std::span<const svg::SVGElement>(app.selectedElements()), std::nullopt, Transform2d(),
       std::nullopt, std::span<const svg::SVGElement>(), Box2d::FromXYWH(40.0, 40.0, 20.0, 20.0));
 
-  EXPECT_EQ(snapshot.paths.size(), 1u);
-  EXPECT_EQ(snapshot.aabbsDoc.size(), 1u);
-  EXPECT_TRUE(snapshot.handleBoxesDoc.empty());
+  EXPECT_THAT(snapshot.paths, SizeIs(1u));
+  EXPECT_THAT(snapshot.aabbsDoc, SizeIs(1u));
+  EXPECT_THAT(snapshot.handleBoxesDoc, IsEmpty());
 }
 
 TEST(OverlayRendererTest, CaptureSnapshotCombinedBoundsOnlySkipsSelectionPaths) {
@@ -501,7 +514,7 @@ TEST(OverlayRendererTest, ActiveRotationUsesOrientedBoundsUntilGestureEnds) {
       });
 
   ASSERT_TRUE(activeSnapshot.orientedBoundsDoc.has_value());
-  ASSERT_EQ(activeSnapshot.handleBoxesDoc.size(), 4u);
+  ASSERT_THAT(activeSnapshot.handleBoxesDoc, SizeIs(4u));
   const Vector2d expectedTopLeft =
       rotatedDocumentFromStartDocument.transformPosition(startBounds.topLeft);
   EXPECT_THAT(activeSnapshot.orientedBoundsDoc->cornersDoc,
@@ -1329,7 +1342,7 @@ TEST(OverlayRendererTest, CaptureSnapshotIncludesLockedFlashOutlineAndIntensity)
       std::span<const svg::SVGElement>(), std::nullopt, SelectionChromeDetail::Full, Transform2d(),
       flashInput);
 
-  EXPECT_TRUE(snapshot.paths.empty()) << "Locked element must not be drawn as a selection.";
+  EXPECT_THAT(snapshot.paths, IsEmpty()) << "Locked element must not be drawn as a selection.";
   ASSERT_TRUE(snapshot.lockedFlash.has_value());
   EXPECT_FALSE(snapshot.lockedFlash->pathDoc.empty())
       << "Locked flash must carry the rejected element's outline.";
