@@ -82,6 +82,12 @@ public:
     return inspectorSnapshot_.hasSelection;
   }
 
+  [[nodiscard]] bool hasTreeSnapshotForTesting() const { return treeSnapshot_.has_value(); }
+
+  [[nodiscard]] std::string_view inspectorTitleForTesting() const {
+    return inspectorSnapshot_.titleText;
+  }
+
   [[nodiscard]] std::span<const std::pair<std::string, std::string>>
   inspectorXmlAttributesForTesting() const {
     return inspectorSnapshot_.xmlAttributes;

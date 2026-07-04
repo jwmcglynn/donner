@@ -59,4 +59,24 @@ TEST(ViewMenuVisibility, ToggleActionsFlipPerfOverlay) {
   EXPECT_TRUE(showPerfOverlay);
 }
 
+TEST(ViewMenuVisibility, ToggleActionsIgnoreNullVisibilityPointers) {
+  bool showCompositorDebugPanel = false;
+  bool showPerfOverlay = true;
+  MenuBarActions actions;
+  actions.toggleCompositorDebugPanel = true;
+  actions.togglePerfOverlay = true;
+
+  ApplyViewMenuToggleActions(actions, nullptr, &showPerfOverlay);
+  EXPECT_FALSE(showCompositorDebugPanel);
+  EXPECT_FALSE(showPerfOverlay);
+
+  ApplyViewMenuToggleActions(actions, &showCompositorDebugPanel, nullptr);
+  EXPECT_TRUE(showCompositorDebugPanel);
+  EXPECT_FALSE(showPerfOverlay);
+
+  ApplyViewMenuToggleActions(actions, nullptr, nullptr);
+  EXPECT_TRUE(showCompositorDebugPanel);
+  EXPECT_FALSE(showPerfOverlay);
+}
+
 }  // namespace donner::editor
