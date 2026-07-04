@@ -162,6 +162,7 @@ LLVM_COVERAGE_FLAGS=(
   else
     python3 tools/filter_coverage.py --verbose "${FILTER_ARGS[@]}"
   fi
+  python3 tools/check_lcov_report.py "$COVERAGE_HTML_DIR/filtered_report.dat"
   phase_mark filter_done
 
   if [ "$NO_HTML" = false ]; then
