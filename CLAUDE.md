@@ -5,6 +5,8 @@
 - **NEVER merge a PR without explicit operator approval.** AI agents may open, update, and review PRs, but must not run `gh pr merge` (or merge via any other means) unless the operator approved merging that specific PR in the current conversation. Green CI does not constitute approval.
 - **Always squash-and-merge** when merging PRs (post-approval). Use `gh pr merge --squash`.
 - Never use merge commits or rebase-and-merge on this repository.
+- **Omit `## Summary` in PR descriptions.** The first paragraph or bullet list is implicitly the
+  summary, so start directly with the summary content.
 
 ## AI Comment Convention
 
