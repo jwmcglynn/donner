@@ -100,9 +100,12 @@ When creating a pull request:
 5. **No agent branding in PR titles** — do not prefix pull request titles with `[codex]`, agent names, or other tool branding. Use a plain project-style title that describes the change.
 6. **Omit `## Summary` in PR descriptions** — the first paragraph or bullet list is implicitly the
    summary, so start with the summary content directly instead of adding a redundant heading.
-7. **Expect a Codex code review** within the first few minutes after the PR is published and out of draft — address feedback promptly by pushing follow-up commits. If Codex finds no issues it will approve the PR (👍 / APPROVED state). A Codex approval alone is not sufficient to merge — a `jwmcglynn` review is always required.
-8. **Transient CI failures** (apt/bazel fetch/chromium rate-limits) are retried automatically. Test, compile, linker, and pixel-diff failures are never transient — investigate the root cause, don't re-run blindly.
-9. **Fix CI diagnosability gaps** — if a CI failure cannot be diagnosed because logs, test output,
+7. **Do not publish draft diffs** — open PRs only when they are ready for review
+   after local validation. Do not use draft PRs to share work-in-progress diffs;
+   keep WIP local until it has a coherent reviewable boundary.
+8. **Expect a Codex code review** within the first few minutes after the PR is published and out of draft — address feedback promptly by pushing follow-up commits. If Codex finds no issues it will approve the PR (👍 / APPROVED state). A Codex approval alone is not sufficient to merge — a `jwmcglynn` review is always required.
+9. **Transient CI failures** (apt/bazel fetch/chromium rate-limits) are retried automatically. Test, compile, linker, and pixel-diff failures are never transient — investigate the root cause, don't re-run blindly.
+10. **Fix CI diagnosability gaps** — if a CI failure cannot be diagnosed because logs, test output,
    screenshots, undeclared outputs, pixel diffs, artifacts, or job summaries are missing or
    inaccessible, treat that as a CI bug and fix the workflow/test harness to expose the missing
    evidence. Do not leave failures opaque or rely on blind reruns when better GitHub Actions

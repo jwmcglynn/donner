@@ -6,6 +6,12 @@ keys. When writing commands in docs and to the user, use `bazel` instead.
 
 When creating pull requests, do not prefix PR titles with `[codex]`, agent names,
 or other tool branding. Use plain project-style titles that describe the change.
+Omit a `## Summary` heading or first line in PR descriptions; the first line of
+the body is implicitly the summary. Start directly with that content, then add
+sections such as `## Validation` as needed.
+Do not publish draft PR diffs. Open PRs only when they are ready for review after
+local validation; keep work-in-progress diffs local until they have a coherent
+reviewable boundary.
 
 When monitoring pull requests, do not expect code-review comments while the PR is
 still a draft. Keep monitoring CI and mergeability, but treat review/comment
