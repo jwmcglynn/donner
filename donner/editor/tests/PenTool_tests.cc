@@ -56,6 +56,16 @@ MATCHER_P(BoxContainingPoint, point,
   return false;
 }
 
+MATCHER(NonEmptyRendererBitmap, "a non-empty RendererBitmap") {
+  if (!arg.empty()) {
+    return true;
+  }
+
+  *result_listener << "dimensions=(" << arg.dimensions.x << ", " << arg.dimensions.y
+                   << "), pixels=" << arg.pixels.size() << ", rowBytes=" << arg.rowBytes;
+  return false;
+}
+
 /// Capture pen-path overlay chrome the same way the editor does on a click frame.
 SelectionChromeSnapshot CapturePenChromeSnapshot(EditorApp& app) {
   return OverlayRenderer::captureChromeSnapshot(
@@ -807,7 +817,7 @@ TEST_F(PenToolTest, FirstClickStartsNewPathUnderConcurrentDom) {
   tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
   ASSERT_TRUE(app.flushFrame());
 
-  ASSERT_EQ(app.selectedElements().size(), 1u);
+  ASSERT_THAT(app.selectedElements(), testing::SizeIs(1u));
   // Verify the result through a scoped read guard, exactly as the live editor
   // reads the selected element under ConcurrentDom (raw `d()` here would itself
   // trip the release assert).
@@ -1024,10 +1034,10 @@ TEST_F(PenToolLiveSyncTest, FillChangeOnNewPathUpdatesRenderedPixels) {
 
   ASSERT_TRUE(tool.commitOpenPath(app));
   Settle();
-  ASSERT_EQ(app.selectedElements().size(), 1u);
+  ASSERT_THAT(app.selectedElements(), testing::SizeIs(1u));
 
   const svg::RendererBitmap beforeFill = RenderDocument();
-  ASSERT_FALSE(beforeFill.empty());
+  ASSERT_THAT(beforeFill, NonEmptyRendererBitmap());
   const std::array<std::uint8_t, 4> beforePixel = PixelAt(beforeFill, 24, 24);
   ASSERT_THAT(beforePixel, svg::test::Alpha(::testing::Lt(16)))
       << "The repro starts with an unfilled, unstroked Pen-created triangle; pixel was "
@@ -1037,12 +1047,12 @@ TEST_F(PenToolLiveSyncTest, FillChangeOnNewPathUpdatesRenderedPixels) {
   Settle();
 
   const std::string source(app.document().document().source());
-  EXPECT_NE(source.find("fill: #ff0000"), std::string::npos)
+  EXPECT_THAT(source, testing::HasSubstr("fill: #ff0000"))
       << "The source pane update must include the selected path fill change:\n"
       << source;
 
   const svg::RendererBitmap afterFill = RenderDocument();
-  ASSERT_FALSE(afterFill.empty());
+  ASSERT_THAT(afterFill, NonEmptyRendererBitmap());
   const std::array<std::uint8_t, 4> afterPixel = PixelAt(afterFill, 24, 24);
   EXPECT_THAT(afterPixel, svg::test::Rgba(::testing::Gt(200), ::testing::Lt(40), ::testing::Lt(40),
                                           ::testing::Gt(200)))
@@ -1070,10 +1080,10 @@ TEST_F(PenToolLiveSyncTest, FillChangeOnClosedNewPathUpdatesRenderedPixels) {
   tool.onMouseUp(app, Vector2d(10.0, 10.0));
   Settle();
   ASSERT_FALSE(tool.isDrafting());
-  ASSERT_EQ(app.selectedElements().size(), 1u);
+  ASSERT_THAT(app.selectedElements(), testing::SizeIs(1u));
 
   const svg::RendererBitmap beforeFill = RenderDocument();
-  ASSERT_FALSE(beforeFill.empty());
+  ASSERT_THAT(beforeFill, NonEmptyRendererBitmap());
   const std::array<std::uint8_t, 4> beforePixel = PixelAt(beforeFill, 24, 24);
   ASSERT_THAT(beforePixel, svg::test::Alpha(::testing::Lt(16)))
       << "The repro starts with an unfilled, unstroked closed Pen path; pixel was "
@@ -1083,7 +1093,7 @@ TEST_F(PenToolLiveSyncTest, FillChangeOnClosedNewPathUpdatesRenderedPixels) {
   Settle();
 
   const std::string source(app.document().document().source());
-  EXPECT_NE(source.find("fill: #ff0000"), std::string::npos)
+  EXPECT_THAT(source, testing::HasSubstr("fill: #ff0000"))
       << "The source pane update must include the selected closed-path fill change:\n"
       << source;
 
@@ -1096,7 +1106,7 @@ TEST_F(PenToolLiveSyncTest, FillChangeOnClosedNewPathUpdatesRenderedPixels) {
       << source;
 
   const svg::RendererBitmap afterFill = RenderDocument();
-  ASSERT_FALSE(afterFill.empty());
+  ASSERT_THAT(afterFill, NonEmptyRendererBitmap());
   const std::array<std::uint8_t, 4> afterPixel = PixelAt(afterFill, 24, 24);
   EXPECT_THAT(afterPixel, svg::test::Rgba(::testing::Gt(200), ::testing::Lt(40), ::testing::Lt(40),
                                           ::testing::Gt(200)))
@@ -1118,10 +1128,10 @@ TEST_F(PenToolLiveSyncTest, FillChangeOnDraftPathUpdatesRenderedPixels) {
   tool.onMouseDown(app, Vector2d(10.0, 80.0), MouseModifiers{});
   Settle();
   ASSERT_TRUE(tool.isDrafting());
-  ASSERT_EQ(app.selectedElements().size(), 1u);
+  ASSERT_THAT(app.selectedElements(), testing::SizeIs(1u));
 
   const svg::RendererBitmap beforeFill = RenderDocument();
-  ASSERT_FALSE(beforeFill.empty());
+  ASSERT_THAT(beforeFill, NonEmptyRendererBitmap());
   const std::array<std::uint8_t, 4> beforePixel = PixelAt(beforeFill, 24, 24);
   ASSERT_THAT(beforePixel, svg::test::Alpha(::testing::Lt(16)))
       << "The repro starts with an unfilled, unstroked Pen draft; pixel was "
@@ -1131,12 +1141,12 @@ TEST_F(PenToolLiveSyncTest, FillChangeOnDraftPathUpdatesRenderedPixels) {
   Settle();
 
   const std::string source(app.document().document().source());
-  EXPECT_NE(source.find("fill: #ff0000"), std::string::npos)
+  EXPECT_THAT(source, testing::HasSubstr("fill: #ff0000"))
       << "The source pane update must include the selected draft path fill change:\n"
       << source;
 
   const svg::RendererBitmap afterFill = RenderDocument();
-  ASSERT_FALSE(afterFill.empty());
+  ASSERT_THAT(afterFill, NonEmptyRendererBitmap());
   const std::array<std::uint8_t, 4> afterPixel = PixelAt(afterFill, 24, 24);
   EXPECT_THAT(afterPixel, svg::test::Rgba(::testing::Gt(200), ::testing::Lt(40), ::testing::Lt(40),
                                           ::testing::Gt(200)))

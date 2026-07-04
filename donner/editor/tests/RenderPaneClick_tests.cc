@@ -1,12 +1,14 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <optional>
 #include <ostream>
 #include <string_view>
 
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/ViewportState.h"
+#include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
 
 namespace donner::editor {
@@ -20,6 +22,7 @@ namespace {
 using ::testing::AllOf;
 using ::testing::DoubleNear;
 using ::testing::Field;
+using ::testing::UnorderedElementsAre;
 
 // Two non-overlapping rects in a 200x200 viewBox. r1 is in the
 // top-left quadrant, r2 in the bottom-right. The test sets the
@@ -367,6 +370,10 @@ TEST(RenderPaneClickTest, MainLoopClickDragSequenceMovesElement) {
 TEST(RenderPaneClickTest, MarqueeDragUpwardSelectsIntersectingElements) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  const std::optional<svg::SVGElement> r1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(r1.has_value());
+  const std::optional<svg::SVGElement> r2 = app.document().document().querySelector("#r2");
+  ASSERT_TRUE(r2.has_value());
   ViewportState v = MakeViewportFor(app, Vector2d::Zero(), Vector2d(800.0, 600.0));
 
   SelectTool tool;
@@ -394,7 +401,7 @@ TEST(RenderPaneClickTest, MarqueeDragUpwardSelectsIntersectingElements) {
   tool.onMouseUp(app, v.screenToDocument(screenEnd));
   EXPECT_FALSE(tool.isMarqueeing());
   EXPECT_FALSE(tool.marqueeRect().has_value());
-  EXPECT_EQ(app.selectedElements().size(), 2u)
+  EXPECT_THAT(app.selectedElements(), UnorderedElementsAre(*r1, *r2))
       << "Upward marquee should select both elements just like a downward marquee does";
 }
 
