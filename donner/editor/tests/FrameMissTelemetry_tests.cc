@@ -1,11 +1,16 @@
 #include "donner/editor/FrameMissTelemetry.h"
 
-#include <string>
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
 
-#include "gtest/gtest.h"
+#include <string>
 
 namespace donner::editor {
 namespace {
+
+using ::testing::HasSubstr;
+using ::testing::IsEmpty;
+using ::testing::Not;
 
 TEST(FrameMissTelemetryTest, ClassifiesBudgets) {
   EXPECT_EQ(ClassifyFrameBudgetMiss(8.0), FrameBudgetMiss::WithinBudget);
@@ -25,7 +30,7 @@ TEST(FrameMissTelemetryTest, DoesNotSerializeFramesWithinBudget) {
   input.frameIndex = 4;
   input.frameMs = 8.0;
 
-  EXPECT_TRUE(BuildFrameMissTelemetryJson(input).empty());
+  EXPECT_THAT(BuildFrameMissTelemetryJson(input), IsEmpty());
 }
 
 TEST(FrameMissTelemetryTest, SerializesMissWithContributorBreakdown) {
@@ -49,19 +54,19 @@ TEST(FrameMissTelemetryTest, SerializesMissWithContributorBreakdown) {
 
   const std::string json = BuildFrameMissTelemetryJson(input);
 
-  EXPECT_NE(json.find(R"("event":"frame_budget_miss")"), std::string::npos);
-  EXPECT_NE(json.find(R"("frame":42)"), std::string::npos);
-  EXPECT_NE(json.find(R"("miss":"missed_60hz")"), std::string::npos);
-  EXPECT_NE(json.find(R"("known_ui_ms":10)"), std::string::npos);
-  EXPECT_NE(json.find(R"("known_worker_ms":9)"), std::string::npos);
-  EXPECT_NE(json.find(R"("other_ui_ms":12)"), std::string::npos);
-  EXPECT_NE(json.find(R"({"name":"other","ms":12})"), std::string::npos);
-  EXPECT_NE(json.find(R"({"name":"backend","ms":11})"), std::string::npos);
-  EXPECT_NE(json.find(R"({"name":"rnd-cache","ms":9})"), std::string::npos);
-  EXPECT_NE(json.find(R"("has_live_drag_preview":true)"), std::string::npos);
-  EXPECT_NE(json.find(R"("cached_tiles":12)"), std::string::npos);
-  EXPECT_NE(json.find(R"("document_canvas_commits":2)"), std::string::npos);
-  EXPECT_NE(json.find(R"("total_tracked_bytes":67108864)"), std::string::npos);
+  EXPECT_THAT(json, HasSubstr(R"("event":"frame_budget_miss")"));
+  EXPECT_THAT(json, HasSubstr(R"("frame":42)"));
+  EXPECT_THAT(json, HasSubstr(R"("miss":"missed_60hz")"));
+  EXPECT_THAT(json, HasSubstr(R"("known_ui_ms":10)"));
+  EXPECT_THAT(json, HasSubstr(R"("known_worker_ms":9)"));
+  EXPECT_THAT(json, HasSubstr(R"("other_ui_ms":12)"));
+  EXPECT_THAT(json, HasSubstr(R"({"name":"other","ms":12})"));
+  EXPECT_THAT(json, HasSubstr(R"({"name":"backend","ms":11})"));
+  EXPECT_THAT(json, HasSubstr(R"({"name":"rnd-cache","ms":9})"));
+  EXPECT_THAT(json, HasSubstr(R"("has_live_drag_preview":true)"));
+  EXPECT_THAT(json, HasSubstr(R"("cached_tiles":12)"));
+  EXPECT_THAT(json, HasSubstr(R"("document_canvas_commits":2)"));
+  EXPECT_THAT(json, HasSubstr(R"("total_tracked_bytes":67108864)"));
   EXPECT_EQ(json.back(), '\n');
 }
 
@@ -83,18 +88,18 @@ TEST(FrameMissTelemetryTest, TopLevelFrameCostsReplaceLegacyOther) {
 
   const std::string json = BuildFrameMissTelemetryJson(input);
 
-  EXPECT_NE(json.find(R"("known_ui_ms":30)"), std::string::npos);
-  EXPECT_NE(json.find(R"("other_ui_ms":10)"), std::string::npos);
-  EXPECT_NE(json.find(R"({"name":"render-pane","ms":12})"), std::string::npos);
-  EXPECT_NE(json.find(R"({"name":"host-present","ms":6})"), std::string::npos);
-  EXPECT_NE(json.find(R"({"name":"host-direct","ms":3})"), std::string::npos);
-  EXPECT_NE(json.find(R"({"name":"ui-misc","ms":2})"), std::string::npos);
-  EXPECT_NE(json.find(R"("previous_end_frame_ms":10)"), std::string::npos);
-  EXPECT_NE(json.find(R"("checkerboard_ms":8)"), std::string::npos);
-  EXPECT_NE(json.find(R"("checkerboard_draws":1)"), std::string::npos);
-  EXPECT_EQ(json.find(R"({"name":"overlay-capture","ms":20})"), std::string::npos)
+  EXPECT_THAT(json, HasSubstr(R"("known_ui_ms":30)"));
+  EXPECT_THAT(json, HasSubstr(R"("other_ui_ms":10)"));
+  EXPECT_THAT(json, HasSubstr(R"({"name":"render-pane","ms":12})"));
+  EXPECT_THAT(json, HasSubstr(R"({"name":"host-present","ms":6})"));
+  EXPECT_THAT(json, HasSubstr(R"({"name":"host-direct","ms":3})"));
+  EXPECT_THAT(json, HasSubstr(R"({"name":"ui-misc","ms":2})"));
+  EXPECT_THAT(json, HasSubstr(R"("previous_end_frame_ms":10)"));
+  EXPECT_THAT(json, HasSubstr(R"("checkerboard_ms":8)"));
+  EXPECT_THAT(json, HasSubstr(R"("checkerboard_draws":1)"));
+  EXPECT_THAT(json, Not(HasSubstr(R"({"name":"overlay-capture","ms":20})")))
       << "legacy nested renderer details must not double-count top-level UI frame time";
-  EXPECT_EQ(json.find(R"({"name":"checkerboard","ms":8})"), std::string::npos)
+  EXPECT_THAT(json, Not(HasSubstr(R"({"name":"checkerboard","ms":8})")))
       << "nested direct-presentation details must not double-count host underlay time";
 }
 
@@ -122,27 +127,29 @@ TEST(FrameMissTelemetryTest, SerializesOverlayStateAndOrdersTiedContributorsByNa
 
   const std::string json = BuildFrameMissTelemetryJson(input);
 
+  EXPECT_THAT(json, HasSubstr(R"({"name":"overlay-capture","ms":2})"));
+  EXPECT_THAT(json, HasSubstr(R"({"name":"overlay-draw","ms":2})"));
   const std::size_t capturePos = json.find(R"({"name":"overlay-capture","ms":2})");
   const std::size_t drawPos = json.find(R"({"name":"overlay-draw","ms":2})");
   ASSERT_NE(capturePos, std::string::npos);
   ASSERT_NE(drawPos, std::string::npos);
   EXPECT_LT(capturePos, drawPos);
 
-  EXPECT_NE(json.find(R"("payload_bytes":128)"), std::string::npos);
-  EXPECT_NE(json.find(R"("selected_elements":3)"), std::string::npos);
-  EXPECT_NE(json.find(R"("source_hover_elements":2)"), std::string::npos);
-  EXPECT_NE(json.find(R"("paths":4)"), std::string::npos);
-  EXPECT_NE(json.find(R"("hover_paths":1)"), std::string::npos);
-  EXPECT_NE(json.find(R"("aabbs":5)"), std::string::npos);
-  EXPECT_NE(json.find(R"("hover_aabbs":6)"), std::string::npos);
-  EXPECT_NE(json.find(R"("handles":7)"), std::string::npos);
-  EXPECT_NE(json.find(R"("has_marquee":true)"), std::string::npos);
-  EXPECT_NE(json.find(R"("selection_bounds_only":true)"), std::string::npos);
-  EXPECT_NE(json.find(R"("has_live_drag_preview":false)"), std::string::npos);
-  EXPECT_NE(json.find(R"("has_represented_drag_preview":true)"), std::string::npos);
-  EXPECT_NE(json.find(R"("live_drag_translation_doc":[1.5,-2.5])"), std::string::npos);
-  EXPECT_NE(json.find(R"("represented_drag_translation_doc":[3,4])"), std::string::npos);
-  EXPECT_NE(json.find(R"("canvas_size":[320,240])"), std::string::npos);
+  EXPECT_THAT(json, HasSubstr(R"("payload_bytes":128)"));
+  EXPECT_THAT(json, HasSubstr(R"("selected_elements":3)"));
+  EXPECT_THAT(json, HasSubstr(R"("source_hover_elements":2)"));
+  EXPECT_THAT(json, HasSubstr(R"("paths":4)"));
+  EXPECT_THAT(json, HasSubstr(R"("hover_paths":1)"));
+  EXPECT_THAT(json, HasSubstr(R"("aabbs":5)"));
+  EXPECT_THAT(json, HasSubstr(R"("hover_aabbs":6)"));
+  EXPECT_THAT(json, HasSubstr(R"("handles":7)"));
+  EXPECT_THAT(json, HasSubstr(R"("has_marquee":true)"));
+  EXPECT_THAT(json, HasSubstr(R"("selection_bounds_only":true)"));
+  EXPECT_THAT(json, HasSubstr(R"("has_live_drag_preview":false)"));
+  EXPECT_THAT(json, HasSubstr(R"("has_represented_drag_preview":true)"));
+  EXPECT_THAT(json, HasSubstr(R"("live_drag_translation_doc":[1.5,-2.5])"));
+  EXPECT_THAT(json, HasSubstr(R"("represented_drag_translation_doc":[3,4])"));
+  EXPECT_THAT(json, HasSubstr(R"("canvas_size":[320,240])"));
 }
 
 }  // namespace

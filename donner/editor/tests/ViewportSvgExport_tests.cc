@@ -1,5 +1,6 @@
 #include "donner/editor/ViewportSvgExport.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <cstddef>
@@ -24,6 +25,10 @@
 
 namespace donner::editor {
 namespace {
+
+using ::testing::HasSubstr;
+using ::testing::IsEmpty;
+using ::testing::Not;
 
 using svg::SVGDocument;
 using svg::parser::SVGParser;
@@ -69,10 +74,6 @@ ViewportState MakeViewport(double zoom, const Vector2d& panDocPoint, const Vecto
   return viewport;
 }
 
-bool Contains(const std::string& haystack, std::string_view needle) {
-  return haystack.find(needle) != std::string::npos;
-}
-
 /// A viewport whose `screenToDocument` is the identity over the render pane, so
 /// the exported viewBox is "0 0 400 300" and document coords map 1:1.
 ViewportState IdentityViewport() {
@@ -105,10 +106,10 @@ TEST(ViewportSvgExportTest, ViewBoxMatchesScreenToDocumentOfRenderPaneRect) {
       ExportViewportAsSvg(doc, viewport, renderPaneRect, options);
   ASSERT_TRUE(result.ok()) << result.error;
 
-  EXPECT_TRUE(Contains(result.value, "viewBox=\"60 70 200 150\"")) << result.value;
+  EXPECT_THAT(result.value, HasSubstr("viewBox=\"60 70 200 150\""));
   // Output dimensions are the render-pane size in CSS px.
-  EXPECT_TRUE(Contains(result.value, "width=\"400\"")) << result.value;
-  EXPECT_TRUE(Contains(result.value, "height=\"300\"")) << result.value;
+  EXPECT_THAT(result.value, HasSubstr("width=\"400\""));
+  EXPECT_THAT(result.value, HasSubstr("height=\"300\""));
 }
 
 TEST(ViewportSvgExportTest, ContentIsClippedToViewportRect) {
@@ -125,17 +126,14 @@ TEST(ViewportSvgExportTest, ContentIsClippedToViewportRect) {
   ASSERT_TRUE(result.ok()) << result.error;
 
   // A clipPath with the document-space viewport rect must exist.
-  EXPECT_TRUE(Contains(result.value, "<clipPath id=\"donner-viewport-clip\">")) << result.value;
-  EXPECT_TRUE(
-      Contains(result.value, "<rect x=\"0\" y=\"0\" width=\"400\" height=\"300\"/></clipPath>"))
-      << result.value;
+  EXPECT_THAT(result.value, HasSubstr("<clipPath id=\"donner-viewport-clip\">"));
+  EXPECT_THAT(result.value,
+              HasSubstr("<rect x=\"0\" y=\"0\" width=\"400\" height=\"300\"/></clipPath>"));
   // Content is wrapped in a group referencing that clip path.
-  EXPECT_TRUE(Contains(result.value, "<g clip-path=\"url(#donner-viewport-clip)\">"))
-      << result.value;
+  EXPECT_THAT(result.value, HasSubstr("<g clip-path=\"url(#donner-viewport-clip)\">"));
   // Source children are present (verbatim, vector-first - no <image> snapshot).
-  EXPECT_TRUE(Contains(result.value, "<rect x=\"10\" y=\"20\" width=\"100\" height=\"50\""))
-      << result.value;
-  EXPECT_TRUE(Contains(result.value, "<circle cx=\"300\" cy=\"300\" r=\"40\"")) << result.value;
+  EXPECT_THAT(result.value, HasSubstr("<rect x=\"10\" y=\"20\" width=\"100\" height=\"50\""));
+  EXPECT_THAT(result.value, HasSubstr("<circle cx=\"300\" cy=\"300\" r=\"40\""));
 }
 
 TEST(ViewportSvgExportTest, OverlayGroupAbsentByDefault) {
@@ -150,7 +148,7 @@ TEST(ViewportSvgExportTest, OverlayGroupAbsentByDefault) {
       ExportViewportAsSvg(doc, viewport, renderPaneRect, options);
   ASSERT_TRUE(result.ok()) << result.error;
 
-  EXPECT_FALSE(Contains(result.value, "donner-editor-overlay")) << result.value;
+  EXPECT_THAT(result.value, Not(HasSubstr("donner-editor-overlay")));
 }
 
 TEST(ViewportSvgExportTest, OverlayGroupPlaceholderEmittedWhenRequested) {
@@ -166,8 +164,8 @@ TEST(ViewportSvgExportTest, OverlayGroupPlaceholderEmittedWhenRequested) {
   ASSERT_TRUE(result.ok()) << result.error;
 
   // The overlay group exists with the documented id but is EMPTY in M6.
-  EXPECT_TRUE(Contains(result.value, "<g id=\"donner-editor-overlay\"")) << result.value;
-  EXPECT_TRUE(Contains(result.value, "data-donner-export-role=\"editor-overlay\"")) << result.value;
+  EXPECT_THAT(result.value, HasSubstr("<g id=\"donner-editor-overlay\""));
+  EXPECT_THAT(result.value, HasSubstr("data-donner-export-role=\"editor-overlay\""));
   // No overlay primitives yet; the group must close immediately.
   const std::size_t overlayPos = result.value.find("<g id=\"donner-editor-overlay\"");
   ASSERT_NE(overlayPos, std::string::npos);
@@ -178,8 +176,7 @@ TEST(ViewportSvgExportTest, OverlayGroupPlaceholderEmittedWhenRequested) {
   // Between the overlay group's open tag and its close tag there is no nested
   // element - only whitespace/comment placeholder.
   const std::string between = result.value.substr(openTagEnd + 1, closePos - (openTagEnd + 1));
-  EXPECT_EQ(between.find('<'), std::string::npos)
-      << "overlay group must be empty in M6: " << between;
+  EXPECT_THAT(between, Not(HasSubstr("<"))) << "overlay group must be empty in M6";
 }
 
 TEST(ViewportSvgExportTest, ExportDoesNotMutateSourceDocument) {
@@ -236,8 +233,8 @@ TEST(ViewportSvgExportTest, ExternalResourceReferenceIsRefused) {
       ExportViewportAsSvg(doc, viewport, renderPaneRect, options);
   EXPECT_FALSE(result.ok());
   // The error must be useful: name the offending external reference.
-  EXPECT_TRUE(Contains(result.error, "http://example.com/x.png")) << result.error;
-  EXPECT_TRUE(Contains(result.error, "external")) << result.error;
+  EXPECT_THAT(result.error, HasSubstr("http://example.com/x.png"));
+  EXPECT_THAT(result.error, HasSubstr("external"));
 }
 
 TEST(ViewportSvgExportTest, NonTransparentBackgroundPrependsCoveringRect) {
@@ -252,9 +249,8 @@ TEST(ViewportSvgExportTest, NonTransparentBackgroundPrependsCoveringRect) {
       ExportViewportAsSvg(doc, viewport, renderPaneRect, options);
   ASSERT_TRUE(result.ok()) << result.error;
 
-  EXPECT_TRUE(Contains(result.value,
-                       "<rect x=\"0\" y=\"0\" width=\"400\" height=\"300\" fill=\"#ffffff\"/>"))
-      << result.value;
+  EXPECT_THAT(result.value,
+              HasSubstr("<rect x=\"0\" y=\"0\" width=\"400\" height=\"300\" fill=\"#ffffff\"/>"));
 }
 
 TEST(ViewportSvgExportTest, ProgrammaticDocumentWithoutSourceStoreIsRefused) {
@@ -266,7 +262,7 @@ TEST(ViewportSvgExportTest, ProgrammaticDocumentWithoutSourceStoreIsRefused) {
       ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
 
   EXPECT_FALSE(result.ok());
-  EXPECT_TRUE(Contains(result.error, "source store")) << result.error;
+  EXPECT_THAT(result.error, HasSubstr("source store"));
 }
 
 TEST(ViewportSvgExportTest, ExternalReferenceScannerSkipsHrefLikeAttributes) {
@@ -285,8 +281,8 @@ TEST(ViewportSvgExportTest, ExternalReferenceScannerSkipsHrefLikeAttributes) {
       ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
 
   EXPECT_FALSE(result.ok());
-  EXPECT_TRUE(Contains(result.error, "FILE://tmp/image.png")) << result.error;
-  EXPECT_FALSE(Contains(result.error, "not-a-reference.example")) << result.error;
+  EXPECT_THAT(result.error, HasSubstr("FILE://tmp/image.png"));
+  EXPECT_THAT(result.error, Not(HasSubstr("not-a-reference.example")));
 }
 
 TEST(ViewportSvgExportTest, InternalFragmentReferencesAreAllowed) {
@@ -304,8 +300,8 @@ TEST(ViewportSvgExportTest, InternalFragmentReferencesAreAllowed) {
       ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
 
   ASSERT_TRUE(result.ok()) << result.error;
-  EXPECT_TRUE(Contains(result.value, "<use href=\"#shape\" x=\"5\"/>")) << result.value;
-  EXPECT_TRUE(Contains(result.value, "<use xlink:href=\"#shape\" x=\"20\"/>")) << result.value;
+  EXPECT_THAT(result.value, HasSubstr("<use href=\"#shape\" x=\"5\"/>"));
+  EXPECT_THAT(result.value, HasSubstr("<use xlink:href=\"#shape\" x=\"20\"/>"));
 }
 
 TEST(ViewportSvgExportTest, RootAttributeEscapingIsDeterministic) {
@@ -321,10 +317,10 @@ TEST(ViewportSvgExportTest, RootAttributeEscapingIsDeterministic) {
       ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
 
   ASSERT_TRUE(result.ok()) << result.error;
-  EXPECT_TRUE(Contains(result.value, "source: root&amp;amp;source")) << result.value;
-  EXPECT_TRUE(Contains(result.value, "id=\"root&amp;amp;source\"")) << result.value;
-  EXPECT_TRUE(Contains(result.value, "data-title=\"&quot;quoted&quot;\"")) << result.value;
-  EXPECT_TRUE(Contains(result.value, "data-owner=\"Bob&apos;s\"")) << result.value;
+  EXPECT_THAT(result.value, HasSubstr("source: root&amp;amp;source"));
+  EXPECT_THAT(result.value, HasSubstr("id=\"root&amp;amp;source\""));
+  EXPECT_THAT(result.value, HasSubstr("data-title=\"&quot;quoted&quot;\""));
+  EXPECT_THAT(result.value, HasSubstr("data-owner=\"Bob&apos;s\""));
 }
 
 TEST(ViewportSvgExportTest, RawLessThanInRootAttributeIsEscapedAfterSourceEdit) {
@@ -346,8 +342,8 @@ TEST(ViewportSvgExportTest, RawLessThanInRootAttributeIsEscapedAfterSourceEdit) 
       doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions{});
 
   ASSERT_TRUE(result.ok()) << result.error;
-  EXPECT_TRUE(Contains(result.value, "source: a&lt;b")) << result.value;
-  EXPECT_TRUE(Contains(result.value, "id=\"a&lt;b\"")) << result.value;
+  EXPECT_THAT(result.value, HasSubstr("source: a&lt;b"));
+  EXPECT_THAT(result.value, HasSubstr("id=\"a&lt;b\""));
 }
 
 TEST(ViewportSvgExportTest, RootAttributeGreaterThanAndMissingDimensionsAreNormalized) {
@@ -362,10 +358,10 @@ TEST(ViewportSvgExportTest, RootAttributeGreaterThanAndMissingDimensionsAreNorma
       ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
 
   ASSERT_TRUE(result.ok()) << result.error;
-  EXPECT_TRUE(Contains(result.value, "data-arrow=\"a&gt;b\"")) << result.value;
-  EXPECT_TRUE(Contains(result.value, "width=\"100\"")) << result.value;
-  EXPECT_TRUE(Contains(result.value, "height=\"100\"")) << result.value;
-  EXPECT_TRUE(Contains(result.value, "viewBox=\"0 0 100 100\"")) << result.value;
+  EXPECT_THAT(result.value, HasSubstr("data-arrow=\"a&gt;b\""));
+  EXPECT_THAT(result.value, HasSubstr("width=\"100\""));
+  EXPECT_THAT(result.value, HasSubstr("height=\"100\""));
+  EXPECT_THAT(result.value, HasSubstr("viewBox=\"0 0 100 100\""));
 }
 
 TEST(ViewportSvgExportTest, RootScannerSkipsPrologCommentsDoctypeAndProcessingInstructions) {
@@ -384,8 +380,8 @@ TEST(ViewportSvgExportTest, RootScannerSkipsPrologCommentsDoctypeAndProcessingIn
       ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
 
   ASSERT_TRUE(result.ok()) << result.error;
-  EXPECT_TRUE(Contains(result.value, "real-root-child")) << result.value;
-  EXPECT_FALSE(Contains(result.value, "svg-not-root")) << result.value;
+  EXPECT_THAT(result.value, HasSubstr("real-root-child"));
+  EXPECT_THAT(result.value, Not(HasSubstr("svg-not-root")));
 }
 
 TEST(ViewportSvgExportTest, RootScannerRejectsUnterminatedPrologMarkup) {
@@ -407,7 +403,7 @@ TEST(ViewportSvgExportTest, RootScannerRejectsUnterminatedPrologMarkup) {
                             ViewportExportOptions{});
 
     EXPECT_FALSE(result.ok());
-    EXPECT_TRUE(Contains(result.error, "root <svg>")) << result.error;
+    EXPECT_THAT(result.error, HasSubstr("root <svg>"));
   }
 }
 
@@ -432,9 +428,9 @@ TEST(ViewportSvgExportTest, RootScannerAcceptsSvgNameTerminators) {
         doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 80)), ViewportExportOptions{});
 
     ASSERT_TRUE(result.ok()) << result.error;
-    EXPECT_TRUE(Contains(result.value, "<svg")) << result.value;
-    EXPECT_TRUE(Contains(result.value, "width=\"100\"")) << result.value;
-    EXPECT_TRUE(Contains(result.value, "height=\"80\"")) << result.value;
+    EXPECT_THAT(result.value, HasSubstr("<svg"));
+    EXPECT_THAT(result.value, HasSubstr("width=\"100\""));
+    EXPECT_THAT(result.value, HasSubstr("height=\"80\""));
   }
 }
 
@@ -457,7 +453,7 @@ TEST(ViewportSvgExportTest, RootScannerAcceptsRawSlashTerminatedSvgStart) {
       doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 80)), ViewportExportOptions{});
 
   ASSERT_TRUE(result.ok()) << result.error;
-  EXPECT_TRUE(Contains(result.value, "<svg width=\"100\" height=\"80\"")) << result.value;
+  EXPECT_THAT(result.value, HasSubstr("<svg width=\"100\" height=\"80\""));
 }
 
 TEST(ViewportSvgExportTest, SelfClosingRootExportsEmptyContentGroup) {
@@ -470,8 +466,7 @@ TEST(ViewportSvgExportTest, SelfClosingRootExportsEmptyContentGroup) {
       ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
 
   ASSERT_TRUE(result.ok()) << result.error;
-  EXPECT_TRUE(Contains(result.value, "<g clip-path=\"url(#donner-viewport-clip)\"></g>"))
-      << result.value;
+  EXPECT_THAT(result.value, HasSubstr("<g clip-path=\"url(#donner-viewport-clip)\"></g>"));
 }
 
 TEST(ViewportSvgExportTest, NonFiniteViewportValuesFormatAsZero) {
@@ -485,7 +480,7 @@ TEST(ViewportSvgExportTest, NonFiniteViewportValuesFormatAsZero) {
       ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
 
   ASSERT_TRUE(result.ok()) << result.error;
-  EXPECT_TRUE(Contains(result.value, "viewBox=\"0 0 0 0\"")) << result.value;
+  EXPECT_THAT(result.value, HasSubstr("viewBox=\"0 0 0 0\""));
 }
 
 TEST(ViewportSvgExportTest, NegativeZeroViewportValuesFormatAsZero) {
@@ -498,8 +493,8 @@ TEST(ViewportSvgExportTest, NegativeZeroViewportValuesFormatAsZero) {
       ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
 
   ASSERT_TRUE(result.ok()) << result.error;
-  EXPECT_TRUE(Contains(result.value, "viewBox=\"0 0 0 0\"")) << result.value;
-  EXPECT_FALSE(Contains(result.value, "-0")) << result.value;
+  EXPECT_THAT(result.value, HasSubstr("viewBox=\"0 0 0 0\""));
+  EXPECT_THAT(result.value, Not(HasSubstr("-0")));
 }
 
 TEST(ViewportSvgExportTest, RoundedNegativeZeroViewportValuesFormatAsZero) {
@@ -512,8 +507,8 @@ TEST(ViewportSvgExportTest, RoundedNegativeZeroViewportValuesFormatAsZero) {
       ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
 
   ASSERT_TRUE(result.ok()) << result.error;
-  EXPECT_TRUE(Contains(result.value, "viewBox=\"0 0 0 0\"")) << result.value;
-  EXPECT_FALSE(Contains(result.value, "-0")) << result.value;
+  EXPECT_THAT(result.value, HasSubstr("viewBox=\"0 0 0 0\""));
+  EXPECT_THAT(result.value, Not(HasSubstr("-0")));
 }
 
 TEST(ViewportSvgExportTest, FractionalViewportValuesTrimTrailingZeros) {
@@ -528,7 +523,7 @@ TEST(ViewportSvgExportTest, FractionalViewportValuesTrimTrailingZeros) {
       ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
 
   ASSERT_TRUE(result.ok()) << result.error;
-  EXPECT_TRUE(Contains(result.value, "viewBox=\"0.5 0.25 0.333333 0.666667\"")) << result.value;
+  EXPECT_THAT(result.value, HasSubstr("viewBox=\"0.5 0.25 0.333333 0.666667\""));
 }
 
 TEST(ViewportSvgExportTest, SourceWithoutRootSvgIsRejected) {
@@ -549,7 +544,7 @@ TEST(ViewportSvgExportTest, SourceWithoutRootSvgIsRejected) {
       doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions{});
 
   EXPECT_FALSE(result.ok());
-  EXPECT_TRUE(Contains(result.error, "root <svg>")) << result.error;
+  EXPECT_THAT(result.error, HasSubstr("root <svg>"));
 }
 
 TEST(ViewportSvgExportTest, MalformedRootOpenTagWithoutTerminatorIsRejected) {
@@ -571,7 +566,7 @@ TEST(ViewportSvgExportTest, MalformedRootOpenTagWithoutTerminatorIsRejected) {
       doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions{});
 
   EXPECT_FALSE(result.ok());
-  EXPECT_TRUE(Contains(result.error, "root <svg>")) << result.error;
+  EXPECT_THAT(result.error, HasSubstr("root <svg>"));
 }
 
 TEST(ViewportSvgExportTest, MalformedRootOpenTagEndingInWhitespaceIsRejected) {
@@ -593,7 +588,7 @@ TEST(ViewportSvgExportTest, MalformedRootOpenTagEndingInWhitespaceIsRejected) {
       doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions{});
 
   EXPECT_FALSE(result.ok());
-  EXPECT_TRUE(Contains(result.error, "root <svg>")) << result.error;
+  EXPECT_THAT(result.error, HasSubstr("root <svg>"));
 }
 
 TEST(ViewportSvgExportTest, MalformedSelfClosingRootWithoutCloseAngleIsRejected) {
@@ -615,7 +610,7 @@ TEST(ViewportSvgExportTest, MalformedSelfClosingRootWithoutCloseAngleIsRejected)
       doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions{});
 
   EXPECT_FALSE(result.ok());
-  EXPECT_TRUE(Contains(result.error, "root <svg>")) << result.error;
+  EXPECT_THAT(result.error, HasSubstr("root <svg>"));
 }
 
 TEST(ViewportSvgExportTest, EmptyRootIdFallsBackToUntitledProvenance) {
@@ -628,8 +623,8 @@ TEST(ViewportSvgExportTest, EmptyRootIdFallsBackToUntitledProvenance) {
       doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions{});
 
   ASSERT_TRUE(result.ok()) << result.error;
-  EXPECT_TRUE(Contains(result.value, "source: untitled;")) << result.value;
-  EXPECT_TRUE(Contains(result.value, "id=\"\"")) << result.value;
+  EXPECT_THAT(result.value, HasSubstr("source: untitled;"));
+  EXPECT_THAT(result.value, HasSubstr("id=\"\""));
 }
 
 TEST(ViewportSvgExportTest, RootScannerSkipsSvgPrefixedElementNamesBeforeRealRoot) {
@@ -647,8 +642,8 @@ TEST(ViewportSvgExportTest, RootScannerSkipsSvgPrefixedElementNamesBeforeRealRoo
       doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions{});
 
   ASSERT_TRUE(result.ok()) << result.error;
-  EXPECT_FALSE(Contains(result.value, "not-root")) << result.value;
-  EXPECT_TRUE(Contains(result.value, "width=\"100\"")) << result.value;
+  EXPECT_THAT(result.value, Not(HasSubstr("not-root")));
+  EXPECT_THAT(result.value, HasSubstr("width=\"100\""));
 }
 
 TEST(ViewportSvgExportTest, MissingRootCloseTagUsesSourceRemainderAsBody) {
@@ -670,7 +665,7 @@ TEST(ViewportSvgExportTest, MissingRootCloseTagUsesSourceRemainderAsBody) {
       doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions{});
 
   ASSERT_TRUE(result.ok()) << result.error;
-  EXPECT_TRUE(Contains(result.value, "id=\"kept\"")) << result.value;
+  EXPECT_THAT(result.value, HasSubstr("id=\"kept\""));
 }
 
 TEST(ViewportSvgExportTest, HrefLikeTextWithoutQuotedValueIsIgnored) {
@@ -686,7 +681,7 @@ TEST(ViewportSvgExportTest, HrefLikeTextWithoutQuotedValueIsIgnored) {
       ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
 
   ASSERT_TRUE(result.ok()) << result.error;
-  EXPECT_TRUE(Contains(result.value, "not-an-attribute.png")) << result.value;
+  EXPECT_THAT(result.value, HasSubstr("not-an-attribute.png"));
 }
 
 TEST(ViewportSvgExportTest, HrefScannerIgnoresMalformedRawSuffixes) {
@@ -708,7 +703,7 @@ TEST(ViewportSvgExportTest, HrefScannerIgnoresMalformedRawSuffixes) {
       doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions{});
 
   ASSERT_TRUE(result.ok()) << result.error;
-  EXPECT_TRUE(Contains(result.value, "id=\"shape\"")) << result.value;
+  EXPECT_THAT(result.value, HasSubstr("id=\"shape\""));
 }
 
 TEST(ViewportSvgExportTest, ExternalReferenceScannerHandlesWhitespaceAndUppercaseSchemes) {
@@ -723,7 +718,7 @@ TEST(ViewportSvgExportTest, ExternalReferenceScannerHandlesWhitespaceAndUppercas
       ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
 
   EXPECT_FALSE(result.ok());
-  EXPECT_TRUE(Contains(result.error, "HTTPS://example.com/image.png")) << result.error;
+  EXPECT_THAT(result.error, HasSubstr("HTTPS://example.com/image.png"));
 }
 
 // --- Milestone 7: overlay serialization ---------------------------------
@@ -787,9 +782,9 @@ TEST(ViewportSvgExportTest, OverlayGroupPopulatedFromSnapshot) {
   ASSERT_TRUE(result.ok()) << result.error;
 
   const std::string overlay = OverlayGroupSpan(result.value);
-  ASSERT_FALSE(overlay.empty()) << result.value;
+  ASSERT_THAT(overlay, Not(IsEmpty())) << result.value;
   // The overlay group must now be NON-empty: it contains primitives.
-  EXPECT_NE(overlay.find("<rect"), std::string::npos) << overlay;
+  EXPECT_THAT(overlay, HasSubstr("<rect"));
 
   // The AABB rect is emitted first (paths -> aabbs -> handles), so the first
   // `<rect` is the AABB. Its coordinates must match the snapshot AABB.
@@ -815,9 +810,9 @@ TEST(ViewportSvgExportTest, OverlayHandlesRendered) {
   ASSERT_TRUE(result.ok()) << result.error;
 
   const std::string overlay = OverlayGroupSpan(result.value);
-  ASSERT_FALSE(overlay.empty()) << result.value;
+  ASSERT_THAT(overlay, Not(IsEmpty())) << result.value;
   // The resize handle is a white-filled rect.
-  EXPECT_NE(overlay.find("fill=\"#ffffff\""), std::string::npos) << overlay;
+  EXPECT_THAT(overlay, HasSubstr("fill=\"#ffffff\""));
 }
 
 TEST(ViewportSvgExportTest, OverlayPathPointChromeRendered) {
@@ -834,15 +829,13 @@ TEST(ViewportSvgExportTest, OverlayPathPointChromeRendered) {
   ASSERT_TRUE(result.ok()) << result.error;
 
   const std::string overlay = OverlayGroupSpan(result.value);
-  ASSERT_FALSE(overlay.empty()) << result.value;
-  EXPECT_NE(overlay.find("d=\"M 10 20 L 20 10\""), std::string::npos) << overlay;
-  EXPECT_NE(overlay.find("<rect x=\"18\" y=\"8\" width=\"4\" height=\"4\" fill=\"#1ea7fd\""),
-            std::string::npos)
-      << overlay;
-  EXPECT_NE(overlay.find("<rect x=\"8\" y=\"18\" width=\"4\" height=\"4\" fill=\"#1ea7fd\""),
-            std::string::npos)
-      << overlay;
-  EXPECT_NE(overlay.find("stroke=\"none\" stroke-width=\"0\""), std::string::npos) << overlay;
+  ASSERT_THAT(overlay, Not(IsEmpty())) << result.value;
+  EXPECT_THAT(overlay, HasSubstr("d=\"M 10 20 L 20 10\""));
+  EXPECT_THAT(overlay,
+              HasSubstr("<rect x=\"18\" y=\"8\" width=\"4\" height=\"4\" fill=\"#1ea7fd\""));
+  EXPECT_THAT(overlay,
+              HasSubstr("<rect x=\"8\" y=\"18\" width=\"4\" height=\"4\" fill=\"#1ea7fd\""));
+  EXPECT_THAT(overlay, HasSubstr("stroke=\"none\" stroke-width=\"0\""));
 }
 
 TEST(ViewportSvgExportTest, OverlaySelectedPathAndOrientedBoundsRendered) {
@@ -873,13 +866,11 @@ TEST(ViewportSvgExportTest, OverlaySelectedPathAndOrientedBoundsRendered) {
   ASSERT_TRUE(result.ok()) << result.error;
 
   const std::string overlay = OverlayGroupSpan(result.value);
-  ASSERT_FALSE(overlay.empty()) << result.value;
-  EXPECT_NE(overlay.find("d=\"M 5 6 L 7 8\""), std::string::npos) << overlay;
-  EXPECT_EQ(overlay.find("d=\"\""), std::string::npos) << overlay;
-  EXPECT_NE(overlay.find("d=\"M 10 20 L 30 20 L 35 45 L 12 50 Z\""), std::string::npos) << overlay;
-  EXPECT_NE(overlay.find("<rect x=\"1\" y=\"2\" width=\"2\" height=\"2\" fill=\"none\""),
-            std::string::npos)
-      << overlay;
+  ASSERT_THAT(overlay, Not(IsEmpty())) << result.value;
+  EXPECT_THAT(overlay, HasSubstr("d=\"M 5 6 L 7 8\""));
+  EXPECT_THAT(overlay, Not(HasSubstr("d=\"\"")));
+  EXPECT_THAT(overlay, HasSubstr("d=\"M 10 20 L 30 20 L 35 45 L 12 50 Z\""));
+  EXPECT_THAT(overlay, HasSubstr("<rect x=\"1\" y=\"2\" width=\"2\" height=\"2\" fill=\"none\""));
 }
 
 TEST(ViewportSvgExportTest, OverlayGroupCarriesClipPath) {
@@ -901,7 +892,7 @@ TEST(ViewportSvgExportTest, OverlayGroupCarriesClipPath) {
   const std::size_t openTagEnd = result.value.find('>', open);
   ASSERT_NE(openTagEnd, std::string::npos);
   const std::string openTag = result.value.substr(open, openTagEnd - open);
-  EXPECT_NE(openTag.find("clip-path=\"url(#donner-viewport-clip)\""), std::string::npos) << openTag;
+  EXPECT_THAT(openTag, HasSubstr("clip-path=\"url(#donner-viewport-clip)\""));
 }
 
 TEST(ViewportSvgExportTest, OverlayStyleIsDeterministic) {
@@ -918,9 +909,9 @@ TEST(ViewportSvgExportTest, OverlayStyleIsDeterministic) {
   ASSERT_TRUE(result.ok()) << result.error;
 
   const std::string overlay = OverlayGroupSpan(result.value);
-  ASSERT_FALSE(overlay.empty()) << result.value;
+  ASSERT_THAT(overlay, Not(IsEmpty())) << result.value;
   // Theme-independent stroke color.
-  EXPECT_NE(overlay.find("stroke=\"#1ea7fd\""), std::string::npos) << overlay;
+  EXPECT_THAT(overlay, HasSubstr("stroke=\"#1ea7fd\""));
 }
 
 TEST(ViewportSvgExportTest, OverlayExportDoesNotMutateSourceDocument) {

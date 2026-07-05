@@ -1,3 +1,4 @@
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -19,6 +20,19 @@
 
 namespace donner::svg {
 namespace {
+
+using ::testing::_;
+using ::testing::AllOf;
+using ::testing::DoubleEq;
+using ::testing::DoubleNear;
+using ::testing::ElementsAre;
+using ::testing::Eq;
+using ::testing::Field;
+using ::testing::FloatEq;
+using ::testing::Gt;
+using ::testing::IsEmpty;
+using ::testing::Not;
+using ::testing::SizeIs;
 
 components::ComputedTextComponent::TextSpan MakeSpan(const std::string& str) {
   components::ComputedTextComponent::TextSpan span;
@@ -139,6 +153,46 @@ TextEngine MakeScriptedEngine(Registry& registry, FontManager& fontManager,
   return TextEngine(fontManager, registry, std::move(backend));
 }
 
+auto GlyphIndexIs(auto matcher) {
+  return Field("glyphIndex", &TextGlyph::glyphIndex, matcher);
+}
+
+auto GlyphXPositionIs(auto matcher) {
+  return Field("xPosition", &TextGlyph::xPosition, matcher);
+}
+
+auto GlyphYPositionIs(auto matcher) {
+  return Field("yPosition", &TextGlyph::yPosition, matcher);
+}
+
+auto GlyphXAdvanceIs(auto matcher) {
+  return Field("xAdvance", &TextGlyph::xAdvance, matcher);
+}
+
+auto GlyphYAdvanceIs(auto matcher) {
+  return Field("yAdvance", &TextGlyph::yAdvance, matcher);
+}
+
+auto GlyphRotateDegreesIs(auto matcher) {
+  return Field("rotateDegrees", &TextGlyph::rotateDegrees, matcher);
+}
+
+auto GlyphStretchScaleXIs(auto matcher) {
+  return Field("stretchScaleX", &TextGlyph::stretchScaleX, matcher);
+}
+
+auto GlyphStretchScaleYIs(auto matcher) {
+  return Field("stretchScaleY", &TextGlyph::stretchScaleY, matcher);
+}
+
+auto RunGlyphsAre(auto matcher) {
+  return Field("glyphs", &TextRun::glyphs, matcher);
+}
+
+auto RunOnPathIs(auto matcher) {
+  return Field("onPath", &TextRun::onPath, matcher);
+}
+
 }  // namespace
 
 TEST(TextEngineScriptedTest, AddFontFacesOnlyRegistersNewBatchEntries) {
@@ -178,7 +232,7 @@ TEST(TextEngineScriptedTest, CachedGeometryReturnsEmptyCacheWhenRequiredComponen
 
   const EntityHandle rootHandle(registry, root);
   EXPECT_EQ(engine.getNumberOfChars(rootHandle), 0);
-  EXPECT_TRUE(engine.computedGlyphPaths(rootHandle).empty());
+  EXPECT_THAT(engine.computedGlyphPaths(rootHandle), IsEmpty());
   EXPECT_EQ(engine.computedObjectBoundingBox(rootHandle), Box2d());
 }
 
@@ -218,14 +272,14 @@ TEST(TextEngineScriptedTest, CachedGeometryBuildsCharacterGlyphAndBoundsData) {
   EXPECT_EQ(engine.getNumberOfChars(rootHandle), 2);
 
   const std::vector<Path> glyphPaths = engine.computedGlyphPaths(rootHandle);
-  EXPECT_EQ(glyphPaths.size(), 3u);
-  EXPECT_GT(engine.computedInkBounds(rootHandle).width(), 0.0);
-  EXPECT_GT(engine.computedObjectBoundingBox(rootHandle).height(), 0.0);
-  EXPECT_GT(engine.getComputedTextLength(rootHandle), 0.0);
-  EXPECT_GT(engine.getSubStringLength(rootHandle, 0, 1), 0.0);
+  EXPECT_THAT(glyphPaths, SizeIs(3));
+  EXPECT_THAT(engine.computedInkBounds(rootHandle).width(), Gt(0.0));
+  EXPECT_THAT(engine.computedObjectBoundingBox(rootHandle).height(), Gt(0.0));
+  EXPECT_THAT(engine.getComputedTextLength(rootHandle), Gt(0.0));
+  EXPECT_THAT(engine.getSubStringLength(rootHandle, 0, 1), Gt(0.0));
   EXPECT_EQ(engine.getStartPositionOfChar(rootHandle, 2), Vector2d());
   EXPECT_NE(engine.getRotationOfChar(rootHandle, 0), 0.0);
-  EXPECT_TRUE(engine.getExtentOfChar(rootHandle, 0).width() > 0.0);
+  EXPECT_THAT(engine.getExtentOfChar(rootHandle, 0).width(), Gt(0.0));
   EXPECT_EQ(engine.getCharNumAtPosition(rootHandle, engine.getStartPositionOfChar(rootHandle, 0)),
             0);
 }
@@ -259,18 +313,15 @@ TEST(TextEngineScriptedTest, HorizontalLayoutCoversChunkAndSpanPositioningBranch
 
   const auto runs = engine.layout(text, MakeTextParams(20.0));
 
-  ASSERT_EQ(runs.size(), 2u);
-  ASSERT_EQ(runs[0].glyphs.size(), 1u);
-  ASSERT_EQ(runs[1].glyphs.size(), 3u);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[0].xPosition, 11.0);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[0].yPosition, 22.0);
-  EXPECT_DOUBLE_EQ(runs[1].glyphs[0].xPosition, 24.0);
-  EXPECT_DOUBLE_EQ(runs[1].glyphs[1].xPosition, 38.0);
-  EXPECT_DOUBLE_EQ(runs[1].glyphs[2].xPosition, 82.0);
-  EXPECT_DOUBLE_EQ(runs[1].glyphs[2].yPosition, 44.0);
-  EXPECT_DOUBLE_EQ(runs[1].glyphs[0].rotateDegrees, 5.0);
-  EXPECT_DOUBLE_EQ(runs[1].glyphs[1].rotateDegrees, 15.0);
-  EXPECT_DOUBLE_EQ(runs[1].glyphs[2].rotateDegrees, 15.0);
+  EXPECT_THAT(
+      runs,
+      ElementsAre(RunGlyphsAre(ElementsAre(
+                      AllOf(GlyphXPositionIs(DoubleEq(11.0)), GlyphYPositionIs(DoubleEq(22.0))))),
+                  RunGlyphsAre(ElementsAre(
+                      AllOf(GlyphXPositionIs(DoubleEq(24.0)), GlyphRotateDegreesIs(DoubleEq(5.0))),
+                      AllOf(GlyphXPositionIs(DoubleEq(38.0)), GlyphRotateDegreesIs(DoubleEq(15.0))),
+                      AllOf(GlyphXPositionIs(DoubleEq(82.0)), GlyphYPositionIs(DoubleEq(44.0)),
+                            GlyphRotateDegreesIs(DoubleEq(15.0)))))));
 }
 
 TEST(TextEngineScriptedTest, SupplementaryCoordinateListsUseLowSurrogateSlot) {
@@ -292,12 +343,10 @@ TEST(TextEngineScriptedTest, SupplementaryCoordinateListsUseLowSurrogateSlot) {
 
   const auto runs = engine.layout(text, MakeTextParams(20.0));
 
-  ASSERT_EQ(runs.size(), 1u);
-  ASSERT_EQ(runs[0].glyphs.size(), 3u);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[0].xPosition, 0.0);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[1].xPosition, 13.0);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[2].xPosition, 70.0);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[2].yPosition, 90.0);
+  EXPECT_THAT(runs,
+              ElementsAre(RunGlyphsAre(ElementsAre(
+                  GlyphXPositionIs(DoubleEq(0.0)), GlyphXPositionIs(DoubleEq(13.0)),
+                  AllOf(GlyphXPositionIs(DoubleEq(70.0)), GlyphYPositionIs(DoubleEq(90.0)))))));
 }
 
 TEST(TextEngineScriptedTest, SupplementaryLowSurrogateCoordinatesApplyToFollowingGlyph) {
@@ -317,10 +366,9 @@ TEST(TextEngineScriptedTest, SupplementaryLowSurrogateCoordinatesApplyToFollowin
 
   const auto runs = engine.layout(text, MakeTextParams(20.0));
 
-  ASSERT_EQ(runs.size(), 1u);
-  ASSERT_EQ(runs[0].glyphs.size(), 2u);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[1].xPosition, 70.0);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[1].yPosition, 90.0);
+  EXPECT_THAT(runs,
+              ElementsAre(RunGlyphsAre(ElementsAre(
+                  _, AllOf(GlyphXPositionIs(DoubleEq(70.0)), GlyphYPositionIs(DoubleEq(90.0)))))));
 }
 
 TEST(TextEngineScriptedTest, VerticalLayoutCoversSidewaysUprightSpacingAndRotation) {
@@ -347,14 +395,13 @@ TEST(TextEngineScriptedTest, VerticalLayoutCoversSidewaysUprightSpacingAndRotati
   params.writingMode = WritingMode::VerticalRl;
   const auto runs = engine.layout(text, params);
 
-  ASSERT_EQ(runs.size(), 1u);
-  ASSERT_EQ(runs[0].glyphs.size(), 3u);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[0].rotateDegrees, 97.0);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[1].rotateDegrees, 17.0);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[2].rotateDegrees, 107.0);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[1].xPosition, 114.0);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[1].yPosition, 47.0);
-  EXPECT_GT(runs[0].glyphs[2].yPosition, runs[0].glyphs[1].yPosition);
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(
+                        GlyphRotateDegreesIs(DoubleEq(97.0)),
+                        AllOf(GlyphRotateDegreesIs(DoubleEq(17.0)),
+                              GlyphXPositionIs(DoubleEq(114.0)), GlyphYPositionIs(DoubleEq(47.0))),
+                        GlyphRotateDegreesIs(DoubleEq(107.0))))));
+  ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(SizeIs(3))));
+  EXPECT_THAT(runs[0].glyphs[2].yPosition, Gt(runs[0].glyphs[1].yPosition));
 }
 
 TEST(TextEngineScriptedTest, VerticalLayoutStartsNewChunksForLaterAbsoluteCoordinates) {
@@ -374,12 +421,11 @@ TEST(TextEngineScriptedTest, VerticalLayoutStartsNewChunksForLaterAbsoluteCoordi
   params.writingMode = WritingMode::VerticalRl;
   const auto runs = engine.layout(text, params);
 
-  ASSERT_EQ(runs.size(), 1u);
-  ASSERT_EQ(runs[0].glyphs.size(), 4u);
-  EXPECT_GT(runs[0].glyphs[1].xPosition, runs[0].glyphs[0].xPosition);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[1].yPosition, 20.0);
-  EXPECT_GT(runs[0].glyphs[3].xPosition, runs[0].glyphs[1].xPosition);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[3].yPosition, 70.0);
+  ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(SizeIs(4))));
+  EXPECT_THAT(runs[0].glyphs[1].xPosition, Gt(runs[0].glyphs[0].xPosition));
+  EXPECT_THAT(runs[0].glyphs[1], GlyphYPositionIs(DoubleEq(20.0)));
+  EXPECT_THAT(runs[0].glyphs[3].xPosition, Gt(runs[0].glyphs[1].xPosition));
+  EXPECT_THAT(runs[0].glyphs[3], GlyphYPositionIs(DoubleEq(70.0)));
 }
 
 TEST(TextEngineScriptedTest, RtlChunkYOverrideKeepsVisualGlyphsOnSameBaseline) {
@@ -397,10 +443,8 @@ TEST(TextEngineScriptedTest, RtlChunkYOverrideKeepsVisualGlyphsOnSameBaseline) {
 
   const auto runs = engine.layout(text, MakeTextParams(20.0));
 
-  ASSERT_EQ(runs.size(), 1u);
-  ASSERT_EQ(runs[0].glyphs.size(), 4u);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[2].yPosition, 60.0);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[3].yPosition, 60.0);
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(_, _, GlyphYPositionIs(DoubleEq(60.0)),
+                                                         GlyphYPositionIs(DoubleEq(60.0))))));
 }
 
 TEST(TextEngineScriptedTest, TextAnchorAdjustsIndependentHorizontalChunks) {
@@ -421,13 +465,11 @@ TEST(TextEngineScriptedTest, TextAnchorAdjustsIndependentHorizontalChunks) {
 
   const auto runs = engine.layout(text, MakeTextParams(20.0));
 
-  ASSERT_EQ(runs.size(), 2u);
-  ASSERT_EQ(runs[0].glyphs.size(), 2u);
-  ASSERT_EQ(runs[1].glyphs.size(), 2u);
-  EXPECT_NEAR(runs[0].glyphs[0].xPosition, -10.5, 0.001);
-  EXPECT_NEAR(runs[0].glyphs[1].xPosition, 0.5, 0.001);
-  EXPECT_NEAR(runs[1].glyphs[0].xPosition, 29.0, 0.001);
-  EXPECT_NEAR(runs[1].glyphs[1].xPosition, 40.0, 0.001);
+  EXPECT_THAT(runs,
+              ElementsAre(RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleNear(-10.5, 0.001)),
+                                                   GlyphXPositionIs(DoubleNear(0.5, 0.001)))),
+                          RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleNear(29.0, 0.001)),
+                                                   GlyphXPositionIs(DoubleNear(40.0, 0.001))))));
 }
 
 TEST(TextEngineScriptedTest, HiddenAndFailedSpansResetLayoutContinuity) {
@@ -451,12 +493,9 @@ TEST(TextEngineScriptedTest, HiddenAndFailedSpansResetLayoutContinuity) {
 
   const auto runs = engine.layout(text, MakeTextParams(20.0));
 
-  ASSERT_EQ(runs.size(), 3u);
-  EXPECT_TRUE(runs[0].glyphs.empty());
-  EXPECT_TRUE(runs[1].glyphs.empty());
-  ASSERT_EQ(runs[2].glyphs.size(), 1u);
-  EXPECT_DOUBLE_EQ(runs[2].glyphs[0].xPosition, 0.0);
-  EXPECT_DOUBLE_EQ(runs[2].glyphs[0].yPosition, 0.0);
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(IsEmpty()), RunGlyphsAre(IsEmpty()),
+                                RunGlyphsAre(ElementsAre(AllOf(GlyphXPositionIs(DoubleEq(0.0)),
+                                                               GlyphYPositionIs(DoubleEq(0.0)))))));
 }
 
 TEST(TextEngineScriptedTest, TextPathUsesAnchorContinuationAndVisibility) {
@@ -490,16 +529,13 @@ TEST(TextEngineScriptedTest, TextPathUsesAnchorContinuationAndVisibility) {
 
   const auto runs = engine.layout(text, MakeTextParams(20.0));
 
-  ASSERT_EQ(runs.size(), 3u);
-  ASSERT_EQ(runs[0].glyphs.size(), 2u);
-  ASSERT_EQ(runs[1].glyphs.size(), 1u);
-  EXPECT_TRUE(runs[0].onPath);
-  EXPECT_TRUE(runs[1].onPath);
-  EXPECT_TRUE(runs[2].onPath);
-  EXPECT_NEAR(runs[0].glyphs[0].xPosition, -0.5, 0.001);
-  EXPECT_NEAR(runs[0].glyphs[1].xPosition, 10.5, 0.001);
-  EXPECT_NEAR(runs[1].glyphs[0].xPosition, 20.5, 0.001);
-  EXPECT_TRUE(runs[2].glyphs.empty());
+  EXPECT_THAT(
+      runs, ElementsAre(AllOf(RunOnPathIs(Eq(true)),
+                              RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleNear(-0.5, 0.001)),
+                                                       GlyphXPositionIs(DoubleNear(10.5, 0.001))))),
+                        AllOf(RunOnPathIs(Eq(true)),
+                              RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleNear(20.5, 0.001))))),
+                        AllOf(RunOnPathIs(Eq(true)), RunGlyphsAre(IsEmpty()))));
 }
 
 TEST(TextEngineScriptedTest, PerSpanTextLengthSpacingAndGlyphsScalesHorizontalAdvances) {
@@ -515,14 +551,11 @@ TEST(TextEngineScriptedTest, PerSpanTextLengthSpacingAndGlyphsScalesHorizontalAd
 
   const auto runs = engine.layout(text, MakeTextParams(20.0));
 
-  ASSERT_EQ(runs.size(), 1u);
-  ASSERT_EQ(runs[0].glyphs.size(), 3u);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[0].xPosition, 0.0);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[1].xPosition, 22.0);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[2].xPosition, 44.0);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[0].xAdvance, 20.0);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[1].xAdvance, 20.0);
-  EXPECT_FLOAT_EQ(runs[0].glyphs[0].stretchScaleX, 2.0f);
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(
+                        AllOf(GlyphXPositionIs(DoubleEq(0.0)), GlyphXAdvanceIs(DoubleEq(20.0)),
+                              GlyphStretchScaleXIs(FloatEq(2.0f))),
+                        AllOf(GlyphXPositionIs(DoubleEq(22.0)), GlyphXAdvanceIs(DoubleEq(20.0))),
+                        GlyphXPositionIs(DoubleEq(44.0))))));
 }
 
 TEST(TextEngineScriptedTest, GlobalTextLengthSpacingAdjustsVerticalGlyphGaps) {
@@ -540,12 +573,10 @@ TEST(TextEngineScriptedTest, GlobalTextLengthSpacingAdjustsVerticalGlyphGaps) {
 
   const auto runs = engine.layout(text, params);
 
-  ASSERT_EQ(runs.size(), 1u);
-  ASSERT_EQ(runs[0].glyphs.size(), 2u);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[0].yPosition, 0.0);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[1].yPosition, 34.0);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[0].yAdvance, 10.0);
-  EXPECT_FLOAT_EQ(runs[0].glyphs[0].stretchScaleY, 1.0f);
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(
+                        AllOf(GlyphYPositionIs(DoubleEq(0.0)), GlyphYAdvanceIs(DoubleEq(10.0)),
+                              GlyphStretchScaleYIs(FloatEq(1.0f))),
+                        GlyphYPositionIs(DoubleEq(34.0))))));
 }
 
 TEST(TextEngineScriptedTest, RotatedCombiningMarkOffsetsRotateAroundBaseGlyph) {
@@ -560,12 +591,11 @@ TEST(TextEngineScriptedTest, RotatedCombiningMarkOffsetsRotateAroundBaseGlyph) {
 
   const auto runs = engine.layout(text, MakeTextParams(20.0));
 
-  ASSERT_EQ(runs.size(), 1u);
-  ASSERT_EQ(runs[0].glyphs.size(), 2u);
+  ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(SizeIs(2))));
   const TextGlyph& base = runs[0].glyphs[0];
   const TextGlyph& mark = runs[0].glyphs[1];
-  EXPECT_NEAR(mark.xPosition, base.xPosition, 1e-6);
-  EXPECT_NEAR(mark.yPosition, base.yPosition + 11.0, 1e-6);
+  EXPECT_THAT(mark.xPosition, DoubleNear(base.xPosition, 1e-6));
+  EXPECT_THAT(mark.yPosition, DoubleNear(base.yPosition + 11.0, 1e-6));
 }
 
 TEST(TextEngineScriptedTest, GlobalTextLengthSpacingAndGlyphsScalesVerticalAdvances) {
@@ -583,12 +613,10 @@ TEST(TextEngineScriptedTest, GlobalTextLengthSpacingAndGlyphsScalesVerticalAdvan
 
   const auto runs = engine.layout(text, params);
 
-  ASSERT_EQ(runs.size(), 1u);
-  ASSERT_EQ(runs[0].glyphs.size(), 2u);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[0].yPosition, 0.0);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[1].yPosition, 24.0);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[0].yAdvance, 20.0);
-  EXPECT_FLOAT_EQ(runs[0].glyphs[0].stretchScaleY, 2.0f);
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(
+                        AllOf(GlyphYPositionIs(DoubleEq(0.0)), GlyphYAdvanceIs(DoubleEq(20.0)),
+                              GlyphStretchScaleYIs(FloatEq(2.0f))),
+                        GlyphYPositionIs(DoubleEq(24.0))))));
 }
 
 TEST(TextEngineScriptedTest, SubSuperMetricsResolveSpanAndAncestorBaselineShifts) {
@@ -619,13 +647,10 @@ TEST(TextEngineScriptedTest, SubSuperMetricsResolveSpanAndAncestorBaselineShifts
 
   const auto runs = engine.layout(text, MakeTextParams(20.0));
 
-  ASSERT_EQ(runs.size(), 3u);
-  ASSERT_EQ(runs[0].glyphs.size(), 1u);
-  ASSERT_EQ(runs[1].glyphs.size(), 1u);
-  ASSERT_EQ(runs[2].glyphs.size(), 1u);
-  EXPECT_NEAR(runs[0].glyphs[0].yPosition, 6.0, 1e-6);
-  EXPECT_NEAR(runs[1].glyphs[0].yPosition, -10.0, 1e-6);
-  EXPECT_NEAR(runs[2].glyphs[0].yPosition, -4.0, 1e-6);
+  EXPECT_THAT(runs,
+              ElementsAre(RunGlyphsAre(ElementsAre(GlyphYPositionIs(DoubleNear(6.0, 1e-6)))),
+                          RunGlyphsAre(ElementsAre(GlyphYPositionIs(DoubleNear(-10.0, 1e-6)))),
+                          RunGlyphsAre(ElementsAre(GlyphYPositionIs(DoubleNear(-4.0, 1e-6))))));
 }
 
 TEST(TextEngineScriptedTest, TextPathEndAnchorAndExhaustedPathHideGlyphs) {
@@ -645,11 +670,9 @@ TEST(TextEngineScriptedTest, TextPathEndAnchorAndExhaustedPathHideGlyphs) {
 
   const auto runs = engine.layout(text, MakeTextParams(20.0));
 
-  ASSERT_EQ(runs.size(), 1u);
-  ASSERT_EQ(runs[0].glyphs.size(), 2u);
-  EXPECT_TRUE(runs[0].onPath);
-  EXPECT_EQ(runs[0].glyphs[0].glyphIndex, 0);
-  EXPECT_EQ(runs[0].glyphs[1].glyphIndex, 0);
+  EXPECT_THAT(runs, ElementsAre(AllOf(
+                        RunOnPathIs(Eq(true)),
+                        RunGlyphsAre(ElementsAre(GlyphIndexIs(Eq(0)), GlyphIndexIs(Eq(0)))))));
 }
 
 }  // namespace donner::svg

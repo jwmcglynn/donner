@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <fstream>
 #include <iterator>
 #include <memory>
@@ -26,12 +27,14 @@ namespace donner::svg {
 
 namespace {
 
+using ::testing::_;
 using ::testing::AllOf;
 using ::testing::DoubleEq;
 using ::testing::DoubleNear;
 using ::testing::Each;
 using ::testing::ElementsAre;
 using ::testing::Field;
+using ::testing::FloatEq;
 using ::testing::Gt;
 using ::testing::IsEmpty;
 using ::testing::Lt;
@@ -96,8 +99,24 @@ auto GlyphYPositionIs(auto matcher) {
   return Field("yPosition", &TextGlyph::yPosition, matcher);
 }
 
+auto GlyphXAdvanceIs(auto matcher) {
+  return Field("xAdvance", &TextGlyph::xAdvance, matcher);
+}
+
+auto GlyphYAdvanceIs(auto matcher) {
+  return Field("yAdvance", &TextGlyph::yAdvance, matcher);
+}
+
 auto GlyphRotateDegreesIs(auto matcher) {
   return Field("rotateDegrees", &TextGlyph::rotateDegrees, matcher);
+}
+
+auto GlyphStretchScaleXIs(auto matcher) {
+  return Field("stretchScaleX", &TextGlyph::stretchScaleX, matcher);
+}
+
+auto GlyphStretchScaleYIs(auto matcher) {
+  return Field("stretchScaleY", &TextGlyph::stretchScaleY, matcher);
 }
 
 auto RunFontIs(auto matcher) {
@@ -106,6 +125,15 @@ auto RunFontIs(auto matcher) {
 
 auto RunGlyphsAre(auto matcher) {
   return Field("glyphs", &TextRun::glyphs, matcher);
+}
+
+auto ChunkRangeIs(std::size_t byteStart, std::size_t byteEnd) {
+  return AllOf(Field("byteStart", &text_engine_detail::ChunkRange::byteStart, byteStart),
+               Field("byteEnd", &text_engine_detail::ChunkRange::byteEnd, byteEnd));
+}
+
+auto ChunkTextAnchorIs(TextAnchor textAnchor) {
+  return Field("textAnchor", &text_engine_detail::ChunkBoundary::textAnchor, textAnchor);
 }
 
 MATCHER_P(FirstGlyphMatches, glyphMatcher, "first glyph matches") {
@@ -407,13 +435,9 @@ TEST(TextEngineHelperTest, ByteMappingsAndChunkRangesCollapseNonSpacingSequences
 
   const auto chunks = text_engine_detail::findChunkRanges(text, xList, yList);
 
-  ASSERT_EQ(chunks.size(), 3u);
-  EXPECT_EQ(chunks[0].byteStart, 0u);
-  EXPECT_EQ(chunks[0].byteEnd, offsets[cOffsetIndex]);
-  EXPECT_EQ(chunks[1].byteStart, offsets[cOffsetIndex]);
-  EXPECT_EQ(chunks[1].byteEnd, offsets[emojiOffsetIndex]);
-  EXPECT_EQ(chunks[2].byteStart, offsets[emojiOffsetIndex]);
-  EXPECT_EQ(chunks[2].byteEnd, text.size());
+  EXPECT_THAT(chunks, ElementsAre(ChunkRangeIs(0u, offsets[cOffsetIndex]),
+                                  ChunkRangeIs(offsets[cOffsetIndex], offsets[emojiOffsetIndex]),
+                                  ChunkRangeIs(offsets[emojiOffsetIndex], text.size())));
 }
 
 TEST(TextEngineHelperTest, ApplyTextLengthAdjustsPerSpanSpacingAndVerticalGlyphScaling) {
@@ -433,9 +457,10 @@ TEST(TextEngineHelperTest, ApplyTextLengthAdjustsPerSpanSpacingAndVerticalGlyphS
                                         /*vertical=*/false, /*currentPenX=*/30.0,
                                         /*currentPenY=*/0.0);
 
-    EXPECT_DOUBLE_EQ(runs[0].glyphs[0].xPosition, 10.0);
-    EXPECT_DOUBLE_EQ(runs[0].glyphs[1].xPosition, 40.0);
-    EXPECT_DOUBLE_EQ(runs[0].glyphs[1].xAdvance, 10.0);
+    EXPECT_THAT(runs,
+                ElementsAre(RunGlyphsAre(ElementsAre(
+                    GlyphXPositionIs(DoubleEq(10.0)),
+                    AllOf(GlyphXPositionIs(DoubleEq(40.0)), GlyphXAdvanceIs(DoubleEq(10.0)))))));
   }
 
   {
@@ -454,10 +479,10 @@ TEST(TextEngineHelperTest, ApplyTextLengthAdjustsPerSpanSpacingAndVerticalGlyphS
                                         /*vertical=*/true, /*currentPenX=*/0.0,
                                         /*currentPenY=*/25.0);
 
-    EXPECT_DOUBLE_EQ(runs[0].glyphs[0].yPosition, 5.0);
-    EXPECT_DOUBLE_EQ(runs[0].glyphs[1].yPosition, 25.0);
-    EXPECT_DOUBLE_EQ(runs[0].glyphs[1].yAdvance, 10.0);
-    EXPECT_FLOAT_EQ(runs[0].glyphs[1].stretchScaleY, 2.0f);
+    EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(
+                          GlyphYPositionIs(DoubleEq(5.0)),
+                          AllOf(GlyphYPositionIs(DoubleEq(25.0)), GlyphYAdvanceIs(DoubleEq(10.0)),
+                                GlyphStretchScaleYIs(FloatEq(2.0f)))))));
   }
 }
 
@@ -475,9 +500,9 @@ TEST(TextEngineHelperTest, ApplyTextLengthAdjustsGlobalSpacing) {
   text_engine_detail::applyTextLength(runs, text, {}, params, /*vertical=*/false,
                                       /*currentPenX=*/40.0, /*currentPenY=*/0.0);
 
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[0].xPosition, 10.0);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[1].xPosition, 30.0);
-  EXPECT_DOUBLE_EQ(runs[1].glyphs[0].xPosition, 50.0);
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(10.0)),
+                                                         GlyphXPositionIs(DoubleEq(30.0)))),
+                                RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(50.0))))));
 }
 
 TEST(TextEngineHelperTest, ApplyTextLengthAdjustsGlobalSpacingAndGlyphsHorizontally) {
@@ -494,11 +519,11 @@ TEST(TextEngineHelperTest, ApplyTextLengthAdjustsGlobalSpacingAndGlyphsHorizonta
   text_engine_detail::applyTextLength(runs, text, {}, params, /*vertical=*/false,
                                       /*currentPenX=*/40.0, /*currentPenY=*/0.0);
 
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[0].xPosition, 10.0);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[1].xPosition, 30.0);
-  EXPECT_DOUBLE_EQ(runs[1].glyphs[0].xPosition, 50.0);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[0].xAdvance, 20.0);
-  EXPECT_FLOAT_EQ(runs[0].glyphs[0].stretchScaleX, 2.0f);
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(AllOf(GlyphXPositionIs(DoubleEq(10.0)),
+                                                               GlyphXAdvanceIs(DoubleEq(20.0)),
+                                                               GlyphStretchScaleXIs(FloatEq(2.0f))),
+                                                         GlyphXPositionIs(DoubleEq(30.0)))),
+                                RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(50.0))))));
 }
 
 TEST(TextEngineHelperTest, ApplyTextAnchorSkipsOnPathRunsAndUsesFirstGlyphSpanAnchor) {
@@ -516,10 +541,10 @@ TEST(TextEngineHelperTest, ApplyTextAnchorSkipsOnPathRunsAndUsesFirstGlyphSpanAn
 
   text_engine_detail::applyTextAnchor(runs, chunks, text, /*vertical=*/false);
 
-  ASSERT_EQ(chunks.size(), 1u);
-  EXPECT_EQ(chunks[0].textAnchor, TextAnchor::End);
-  EXPECT_DOUBLE_EQ(runs[1].glyphs[0].xPosition, 5.0);
-  EXPECT_DOUBLE_EQ(runs[2].glyphs[0].xPosition, 100.0);
+  EXPECT_THAT(chunks, ElementsAre(ChunkTextAnchorIs(TextAnchor::End)));
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(IsEmpty()),
+                                RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(5.0)))),
+                                RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(100.0))))));
 }
 
 TEST(TextEngineHelperTest, ApplyTextAnchorAdjustsVerticalMiddleChunks) {
@@ -535,9 +560,9 @@ TEST(TextEngineHelperTest, ApplyTextAnchorAdjustsVerticalMiddleChunks) {
 
   text_engine_detail::applyTextAnchor(runs, chunks, text, /*vertical=*/true);
 
-  EXPECT_EQ(chunks[0].textAnchor, TextAnchor::Middle);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[0].yPosition, -10.0);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[1].yPosition, 0.0);
+  EXPECT_THAT(chunks, ElementsAre(ChunkTextAnchorIs(TextAnchor::Middle)));
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(GlyphYPositionIs(DoubleEq(-10.0)),
+                                                         GlyphYPositionIs(DoubleEq(0.0))))));
 }
 
 TEST(TextEngineHelperTest, ApplyTextAnchorLeavesEmptyEndChunksUnchanged) {
@@ -554,8 +579,9 @@ TEST(TextEngineHelperTest, ApplyTextAnchorLeavesEmptyEndChunksUnchanged) {
 
   text_engine_detail::applyTextAnchor(runs, chunks, text, /*vertical=*/false);
 
-  EXPECT_EQ(chunks[0].textAnchor, TextAnchor::End);
-  EXPECT_DOUBLE_EQ(runs[1].glyphs[0].xPosition, 20.0);
+  EXPECT_THAT(chunks, ElementsAre(ChunkTextAnchorIs(TextAnchor::End)));
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(IsEmpty()),
+                                RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(20.0))))));
 }
 
 TEST(TextEngineHelperTest, ComputeSpanBaselineShiftUsesFontMetricsAndLengthFallbacks) {
@@ -707,18 +733,15 @@ TEST(TextEngineTest, ScriptedHorizontalLayoutCoversChunkAndSpanPositioningBranch
 
   const auto runs = engine.layout(text, MakeTextParams(20.0));
 
-  ASSERT_EQ(runs.size(), 2u);
-  ASSERT_EQ(runs[0].glyphs.size(), 1u);
-  ASSERT_EQ(runs[1].glyphs.size(), 3u);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[0].xPosition, 11.0);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[0].yPosition, 22.0);
-  EXPECT_DOUBLE_EQ(runs[1].glyphs[0].xPosition, 24.0);
-  EXPECT_DOUBLE_EQ(runs[1].glyphs[1].xPosition, 38.0);
-  EXPECT_DOUBLE_EQ(runs[1].glyphs[2].xPosition, 82.0);
-  EXPECT_DOUBLE_EQ(runs[1].glyphs[2].yPosition, 44.0);
-  EXPECT_DOUBLE_EQ(runs[1].glyphs[0].rotateDegrees, 5.0);
-  EXPECT_DOUBLE_EQ(runs[1].glyphs[1].rotateDegrees, 15.0);
-  EXPECT_DOUBLE_EQ(runs[1].glyphs[2].rotateDegrees, 15.0);
+  EXPECT_THAT(
+      runs,
+      ElementsAre(RunGlyphsAre(ElementsAre(
+                      AllOf(GlyphXPositionIs(DoubleEq(11.0)), GlyphYPositionIs(DoubleEq(22.0))))),
+                  RunGlyphsAre(ElementsAre(
+                      AllOf(GlyphXPositionIs(DoubleEq(24.0)), GlyphRotateDegreesIs(DoubleEq(5.0))),
+                      AllOf(GlyphXPositionIs(DoubleEq(38.0)), GlyphRotateDegreesIs(DoubleEq(15.0))),
+                      AllOf(GlyphXPositionIs(DoubleEq(82.0)), GlyphYPositionIs(DoubleEq(44.0)),
+                            GlyphRotateDegreesIs(DoubleEq(15.0)))))));
 }
 
 TEST(TextEngineTest, ScriptedSupplementaryCoordinateListsUseLowSurrogateSlot) {
@@ -740,12 +763,10 @@ TEST(TextEngineTest, ScriptedSupplementaryCoordinateListsUseLowSurrogateSlot) {
 
   const auto runs = engine.layout(text, MakeTextParams(20.0));
 
-  ASSERT_EQ(runs.size(), 1u);
-  ASSERT_EQ(runs[0].glyphs.size(), 3u);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[0].xPosition, 0.0);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[1].xPosition, 13.0);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[2].xPosition, 70.0);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[2].yPosition, 90.0);
+  EXPECT_THAT(runs,
+              ElementsAre(RunGlyphsAre(ElementsAre(
+                  GlyphXPositionIs(DoubleEq(0.0)), GlyphXPositionIs(DoubleEq(13.0)),
+                  AllOf(GlyphXPositionIs(DoubleEq(70.0)), GlyphYPositionIs(DoubleEq(90.0)))))));
 }
 
 TEST(TextEngineTest, ScriptedVerticalLayoutCoversSidewaysUprightSpacingAndRotation) {
@@ -772,14 +793,13 @@ TEST(TextEngineTest, ScriptedVerticalLayoutCoversSidewaysUprightSpacingAndRotati
   params.writingMode = WritingMode::VerticalRl;
   const auto runs = engine.layout(text, params);
 
-  ASSERT_EQ(runs.size(), 1u);
-  ASSERT_EQ(runs[0].glyphs.size(), 3u);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[0].rotateDegrees, 97.0);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[1].rotateDegrees, 17.0);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[2].rotateDegrees, 107.0);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[1].xPosition, 114.0);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[1].yPosition, 47.0);
-  EXPECT_GT(runs[0].glyphs[2].yPosition, runs[0].glyphs[1].yPosition);
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(
+                        GlyphRotateDegreesIs(DoubleEq(97.0)),
+                        AllOf(GlyphRotateDegreesIs(DoubleEq(17.0)),
+                              GlyphXPositionIs(DoubleEq(114.0)), GlyphYPositionIs(DoubleEq(47.0))),
+                        GlyphRotateDegreesIs(DoubleEq(107.0))))));
+  ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(SizeIs(3))));
+  EXPECT_THAT(runs[0].glyphs[2].yPosition, Gt(runs[0].glyphs[1].yPosition));
 }
 
 TEST(TextEngineTest, ScriptedRtlChunkYOverrideKeepsVisualGlyphsOnSameBaseline) {
@@ -797,10 +817,8 @@ TEST(TextEngineTest, ScriptedRtlChunkYOverrideKeepsVisualGlyphsOnSameBaseline) {
 
   const auto runs = engine.layout(text, MakeTextParams(20.0));
 
-  ASSERT_EQ(runs.size(), 1u);
-  ASSERT_EQ(runs[0].glyphs.size(), 4u);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[2].yPosition, 60.0);
-  EXPECT_DOUBLE_EQ(runs[0].glyphs[3].yPosition, 60.0);
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(_, _, GlyphYPositionIs(DoubleEq(60.0)),
+                                                         GlyphYPositionIs(DoubleEq(60.0))))));
 }
 
 TEST(TextEngineTest, UsesCoverageFallbackForArabicText) {
@@ -857,7 +875,7 @@ TEST(TextEngineTest, UsesCoverageFallbackForVerticalJapaneseText) {
   const float scale = engine.scaleForEmToPixels(runs[0].font, 64.0f);
   const Path firstGlyphPath =
       engine.glyphOutline(runs[0].font, runs[0].glyphs[0].glyphIndex, scale);
-  ASSERT_FALSE(firstGlyphPath.empty());
+  ASSERT_THAT(firstGlyphPath.commands(), Not(IsEmpty()));
 
   Box2d positionedBounds = firstGlyphPath.bounds();
   positionedBounds += Vector2d(runs[0].glyphs[0].xPosition, runs[0].glyphs[0].yPosition);

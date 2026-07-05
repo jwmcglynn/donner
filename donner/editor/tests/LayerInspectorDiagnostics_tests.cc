@@ -1,5 +1,8 @@
 #include "donner/editor/LayerInspectorDiagnostics.h"
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -7,10 +10,10 @@
 #include <string>
 #include <vector>
 
-#include "gtest/gtest.h"
-
 namespace donner::editor {
 namespace {
+
+using ::testing::HasSubstr;
 
 using CompositeTileSnapshot = svg::compositor::CompositorController::CompositeTileSnapshot;
 
@@ -87,25 +90,24 @@ TEST(LayerInspectorDiagnosticsTest, SerializesHeuristicTelemetryForOfflineRefine
 
   const std::string json = BuildCompositorHeuristicTelemetryJson(tiles, context);
 
-  EXPECT_NE(json.find("\"format\":\"donner-compositor-heuristics-v1\""), std::string::npos);
-  EXPECT_NE(json.find("\"rnd_imm_ms\":10.500"), std::string::npos);
-  EXPECT_NE(json.find("\"over_budget_immediate\":1"), std::string::npos);
-  EXPECT_NE(json.find("\"demoted_dynamic\":1"), std::string::npos);
-  EXPECT_NE(json.find("\"span\":\"rect#Background_shine #42\""), std::string::npos);
-  EXPECT_NE(json.find("\"reason\":\"dynamic_timing\""), std::string::npos);
-  EXPECT_NE(json.find("\"signal\":\"over_budget_immediate\""), std::string::npos);
-  EXPECT_NE(json.find("\"bounds\":{\"tl\":[10.000,20.000]"), std::string::npos);
-  EXPECT_NE(json.find("\"active_viewport_bounded\":true"), std::string::npos);
-  EXPECT_NE(json.find("\"overview_infill\":true"), std::string::npos);
-  EXPECT_NE(json.find("\"active_output_canvas\":[512,384]"), std::string::npos);
-  EXPECT_NE(json.find("\"overview_raster_rect\":{\"tl\":[0.000,0.000]"), std::string::npos);
+  EXPECT_THAT(json, HasSubstr("\"format\":\"donner-compositor-heuristics-v1\""));
+  EXPECT_THAT(json, HasSubstr("\"rnd_imm_ms\":10.500"));
+  EXPECT_THAT(json, HasSubstr("\"over_budget_immediate\":1"));
+  EXPECT_THAT(json, HasSubstr("\"demoted_dynamic\":1"));
+  EXPECT_THAT(json, HasSubstr("\"span\":\"rect#Background_shine #42\""));
+  EXPECT_THAT(json, HasSubstr("\"reason\":\"dynamic_timing\""));
+  EXPECT_THAT(json, HasSubstr("\"signal\":\"over_budget_immediate\""));
+  EXPECT_THAT(json, HasSubstr("\"bounds\":{\"tl\":[10.000,20.000]"));
+  EXPECT_THAT(json, HasSubstr("\"active_viewport_bounded\":true"));
+  EXPECT_THAT(json, HasSubstr("\"overview_infill\":true"));
+  EXPECT_THAT(json, HasSubstr("\"active_output_canvas\":[512,384]"));
+  EXPECT_THAT(json, HasSubstr("\"overview_raster_rect\":{\"tl\":[0.000,0.000]"));
 
   const std::string sampleJson =
       BuildCompositorHeuristicTelemetrySampleJson(immediateTile, context, 17);
-  EXPECT_NE(sampleJson.find("\"format\":\"donner-compositor-heuristic-sample-v1\""),
-            std::string::npos);
-  EXPECT_NE(sampleJson.find("\"seq\":17"), std::string::npos);
-  EXPECT_NE(sampleJson.find("\"tile\":{\"id\":\"seg:1\""), std::string::npos);
+  EXPECT_THAT(sampleJson, HasSubstr("\"format\":\"donner-compositor-heuristic-sample-v1\""));
+  EXPECT_THAT(sampleJson, HasSubstr("\"seq\":17"));
+  EXPECT_THAT(sampleJson, HasSubstr("\"tile\":{\"id\":\"seg:1\""));
 }
 
 TEST(LayerInspectorDiagnosticsTest, SerializesPromotedLayersAsCachedLayerTiles) {
@@ -129,10 +131,10 @@ TEST(LayerInspectorDiagnosticsTest, SerializesPromotedLayersAsCachedLayerTiles) 
   const std::vector<CompositeTileSnapshot> tiles = {immediateLayer};
   const std::string json = BuildCompositorHeuristicTelemetryJson(tiles, context);
 
-  EXPECT_NE(json.find("\"layers\":1,\"immediate\":0,\"cached\":1"), std::string::npos);
-  EXPECT_NE(json.find("\"kind\":\"layer\""), std::string::npos);
-  EXPECT_NE(json.find("\"mode\":\"cached\""), std::string::npos);
-  EXPECT_NE(json.find("\"signal\":\"normal\""), std::string::npos);
+  EXPECT_THAT(json, HasSubstr("\"layers\":1,\"immediate\":0,\"cached\":1"));
+  EXPECT_THAT(json, HasSubstr("\"kind\":\"layer\""));
+  EXPECT_THAT(json, HasSubstr("\"mode\":\"cached\""));
+  EXPECT_THAT(json, HasSubstr("\"signal\":\"normal\""));
 }
 
 TEST(LayerInspectorDiagnosticsTest, SerializesTileKindsReasonsSignalsAndNonFiniteNumbers) {
@@ -180,15 +182,15 @@ TEST(LayerInspectorDiagnosticsTest, SerializesTileKindsReasonsSignalsAndNonFinit
                                                     expensive,  invisible,  cachedFast};
   const std::string json = BuildCompositorHeuristicTelemetryJson(tiles, context);
 
-  EXPECT_NE(json.find("\"freshness\":\"commit_stalled\""), std::string::npos);
-  EXPECT_NE(json.find("\"zoom\":null"), std::string::npos);
-  EXPECT_NE(json.find("\"id\":\"background\",\"kind\":\"background\""), std::string::npos);
-  EXPECT_NE(json.find("\"id\":\"foreground\",\"kind\":\"foreground\""), std::string::npos);
-  EXPECT_NE(json.find("\"reason\":\"static_heuristic\""), std::string::npos);
-  EXPECT_NE(json.find("\"reason\":\"expensive_effect\""), std::string::npos);
-  EXPECT_NE(json.find("\"reason\":\"not_visible\""), std::string::npos);
-  EXPECT_NE(json.find("\"signal\":\"cached_fast_candidate\""), std::string::npos);
-  EXPECT_NE(json.find("\"last_ms\":null"), std::string::npos);
+  EXPECT_THAT(json, HasSubstr("\"freshness\":\"commit_stalled\""));
+  EXPECT_THAT(json, HasSubstr("\"zoom\":null"));
+  EXPECT_THAT(json, HasSubstr("\"id\":\"background\",\"kind\":\"background\""));
+  EXPECT_THAT(json, HasSubstr("\"id\":\"foreground\",\"kind\":\"foreground\""));
+  EXPECT_THAT(json, HasSubstr("\"reason\":\"static_heuristic\""));
+  EXPECT_THAT(json, HasSubstr("\"reason\":\"expensive_effect\""));
+  EXPECT_THAT(json, HasSubstr("\"reason\":\"not_visible\""));
+  EXPECT_THAT(json, HasSubstr("\"signal\":\"cached_fast_candidate\""));
+  EXPECT_THAT(json, HasSubstr("\"last_ms\":null"));
 }
 
 TEST(LayerInspectorDiagnosticsTest, EscapesJsonStringsAndSerializesUnknownTileKind) {
@@ -209,15 +211,15 @@ TEST(LayerInspectorDiagnosticsTest, EscapesJsonStringsAndSerializesUnknownTileKi
   const std::vector<CompositeTileSnapshot> tiles = {unknown};
   const std::string json = BuildCompositorHeuristicTelemetryJson(tiles, context);
 
-  EXPECT_NE(json.find(R"("id":"quote\"slash\\\b\f\n\r\t\u0001")"), std::string::npos);
-  EXPECT_NE(json.find(R"("kind":"unknown")"), std::string::npos);
-  EXPECT_NE(json.find(R"("label":"label\nwith\tcontrols")"), std::string::npos);
-  EXPECT_NE(json.find(R"("span":"span\\range\"quoted")"), std::string::npos);
-  EXPECT_NE(json.find(R"("mode":"cached")"), std::string::npos);
-  EXPECT_NE(json.find(R"("reason":"cached")"), std::string::npos);
-  EXPECT_NE(json.find(R"("signal":"normal")"), std::string::npos);
-  EXPECT_NE(json.find(R"("over_budget":true)"), std::string::npos);
-  EXPECT_NE(json.find(R"("over_budget_cached":0)"), std::string::npos);
+  EXPECT_THAT(json, HasSubstr(R"("id":"quote\"slash\\\b\f\n\r\t\u0001")"));
+  EXPECT_THAT(json, HasSubstr(R"("kind":"unknown")"));
+  EXPECT_THAT(json, HasSubstr(R"("label":"label\nwith\tcontrols")"));
+  EXPECT_THAT(json, HasSubstr(R"("span":"span\\range\"quoted")"));
+  EXPECT_THAT(json, HasSubstr(R"("mode":"cached")"));
+  EXPECT_THAT(json, HasSubstr(R"("reason":"cached")"));
+  EXPECT_THAT(json, HasSubstr(R"("signal":"normal")"));
+  EXPECT_THAT(json, HasSubstr(R"("over_budget":true)"));
+  EXPECT_THAT(json, HasSubstr(R"("over_budget_cached":0)"));
 }
 
 TEST(LayerInspectorDiagnosticsTest, AppendsHeuristicTelemetryJsonLine) {
@@ -247,10 +249,10 @@ TEST(LayerInspectorDiagnosticsTest, ReportsTelemetryWriteErrors) {
   ASSERT_FALSE(ec);
 
   EXPECT_FALSE(AppendCompositorHeuristicTelemetry(directory.string(), "{}", &error));
-  EXPECT_NE(error.find("failed to open telemetry path:"), std::string::npos);
+  EXPECT_THAT(error, HasSubstr("failed to open telemetry path:"));
 
   EXPECT_FALSE(SaveCompositorHeuristicTelemetry(directory.string(), "{}", &error));
-  EXPECT_NE(error.find("failed to open telemetry path:"), std::string::npos);
+  EXPECT_THAT(error, HasSubstr("failed to open telemetry path:"));
 
   EXPECT_FALSE(AppendCompositorHeuristicTelemetry("", "{}", nullptr));
   EXPECT_FALSE(SaveCompositorHeuristicTelemetry("", "{}", nullptr));
