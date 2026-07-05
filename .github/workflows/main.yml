@@ -30,10 +30,10 @@ permissions:
 # is identical to the GitHub-hosted-only workflow.
 #
 # Main CI stays GitHub-hosted so a stuck/offline self-hosted runner can never
-# hang main's required check. PR CI uses the self-hosted lane only when the
-# trusted runner gate passes; hosted runners remain the PR fallback for
-# untrusted actors, unavailable self-hosted runners, and `ci:full-test` fanout
-# runs. Other branch refs do not run build/test jobs.
+# hang main's required check. PR CI uses the self-hosted lane only for trusted
+# partial-target runs; hosted runners remain the PR fallback for untrusted
+# actors, unavailable self-hosted runners, fallback //... runs, and
+# `ci:full-test` fanout runs. Other branch refs do not run build/test jobs.
 
 jobs:
   gatekeeper:
@@ -339,7 +339,7 @@ jobs:
     # self-hosted ARM64 lane is active (see gate comment above).
     runs-on: ubuntu-24.04
     needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && (needs.determine-targets.outputs.full_test == 'true' || vars.SELFHOSTED_LINUX_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn'))) && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && (needs.determine-targets.outputs.fallback == 'true' || needs.determine-targets.outputs.full_test == 'true' || vars.SELFHOSTED_LINUX_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn'))) && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -410,7 +410,9 @@ jobs:
 
 
   # Operator's ARM64 Linux runs on the operator's self-hosted runner.
-  # Replaces `linux` for operator runs (extra arch coverage + homelab cache).
+  # Replaces `linux` for trusted partial-target operator runs (extra arch
+  # coverage + homelab cache). Full fallback runs stay on hosted Linux because
+  # the self-hosted lane is tuned for affected-target PR checks.
   # The NixOS host pre-provisions the toolchain (fontconfig, freetype, mesa,
   # vulkan, X11, clang-tidy) and writes bazel-cache1 over LAN gRPC, so there
   # is no apt/setup-bazel step. The runner intentionally has no host GPU
@@ -420,7 +422,7 @@ jobs:
   linux-self-hosted:
     runs-on: [self-hosted, linux, arm64]
     needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && github.event_name == 'pull_request' && needs.gatekeeper.outputs.docs_only != 'true' && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && github.event_name == 'pull_request' && needs.gatekeeper.outputs.docs_only != 'true' && needs.determine-targets.outputs.fallback != 'true' && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
     env:
       # The runner host may add the LAN Bazel cache from its home rc. Keep
       # that acceleration when it is healthy, but fall back to local execution
@@ -625,7 +627,7 @@ jobs:
   macos:
     runs-on: macos-26
     needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && (needs.determine-targets.outputs.full_test == 'true' || vars.SELFHOSTED_MACOS_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn'))) && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && (needs.determine-targets.outputs.fallback == 'true' || needs.determine-targets.outputs.full_test == 'true' || vars.SELFHOSTED_MACOS_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn'))) && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
     env:
       # Xcode's libc++ marks std::format floating-point support as macOS 13.3+.
       # Set the CI deployment target explicitly so hosted and self-hosted macOS
@@ -692,12 +694,13 @@ jobs:
 
 
   # Operator's ARM64 macOS runs on the operator's self-hosted runner.
-  # Replaces `macos` for operator runs. The host pre-provisions Bazelisk,
-  # Homebrew llvm@19, and Xcode Command Line Tools.
+  # Replaces `macos` for trusted partial-target operator runs. Full fallback
+  # runs stay on hosted macOS. The host pre-provisions Bazelisk, Homebrew
+  # llvm@19, and Xcode Command Line Tools.
   macos-self-hosted:
     runs-on: [self-hosted, macOS, ARM64]
     needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && github.event_name == 'pull_request' && needs.gatekeeper.outputs.docs_only != 'true' && vars.SELFHOSTED_MACOS_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && github.event_name == 'pull_request' && needs.gatekeeper.outputs.docs_only != 'true' && needs.determine-targets.outputs.fallback != 'true' && vars.SELFHOSTED_MACOS_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
     env:
       # The runner host has an operator ~/.bazelrc for interactive RE/cache work.
       # The invocations below use --nohome_rc so CI matches GitHub-hosted macOS
