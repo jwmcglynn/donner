@@ -150,6 +150,7 @@ for the external-consumer setup.
 | `--config=text-full` | Enable HarfBuzz text shaping + WOFF2 (advanced text layout) |
 | `--config=asan-fuzzer` | Build fuzzers with AddressSanitizer |
 | `--config=latest_llvm` | Use the latest LLVM toolchain (required for coverage) |
+| `--config=lld` | Force the `lld` linker; workaround for dev boxes whose default linker can't link the suite (see FAQ below) |
 
 ## Frequently Asked Questions (FAQ)
 
@@ -168,6 +169,22 @@ If it is not installed, install it from the App Store. Once this is complete cle
 ```sh
 bazel clean --expunge
 ```
+
+### `bazel test //...` fails to link with undefined symbols, or `ld.bfd: unrecognized option '--start-lib'`
+
+This means Bazel's autoconfigured toolchain picked a linker on your machine that can't
+handle Bazel's `--start-lib`/`--end-lib` archive groups: `ld.gold` resolves them in a
+single pass and can drop objects emitted before their consumers, and some distros ship
+an `ld.bfd` that doesn't support `--start-lib` at all. `lld` handles both cases. Install
+`lld` (e.g. `sudo apt-get install lld` on Debian/Ubuntu) and build with:
+
+```sh
+bazel test --config=lld //...
+```
+
+This is a local dev-box workaround, not the default, so it doesn't force an `lld`
+dependency onto CI images that already link fine. See
+[#665](https://github.com/jwmcglynn/donner/issues/665).
 
 ### What's with the build times?
 

@@ -1,0 +1,109 @@
+name: GitHub-Hosted Nightly Build
+
+# Verifies the full //... build continues to work on GitHub-hosted
+# infrastructure alone, independent of main.yml's self-hosted routing (see
+# main.yml's "Self-hosted runner gates" comment) — a regression only visible
+# to external contributors and BCR consumers building fresh could otherwise
+# go unnoticed if the operator's own runs are always routed to the
+# self-hosted lane. Also re-runs the full tree with a forced non-lld linker
+# (gold) as a standing regression net for the archive-link-order class of
+# bug fixed in #665: lld masks that class of bug by fully rescanning archive
+# groups, so a PR that only exercises the default (usually lld) toolchain
+# wouldn't catch a new diamond-dependency that needs alwayslink.
+on:
+  schedule:
+    - cron: "45 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  gatekeeper:
+    runs-on: ubuntu-24.04
+    outputs:
+      should_run: ${{ steps.decide.outputs.should_run }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Decide whether nightly build should run
+        id: decide
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "Manual dispatch requested; running nightly build."
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git fetch --no-tags --depth=1 origin main
+          main_sha="$(git rev-parse origin/main)"
+          last_success_sha="$(gh run list \
+            --workflow=github_hosted_nightly.yml \
+            --status=success \
+            --limit=1 \
+            --json headSha \
+            --jq '.[0].headSha')"
+
+          if [[ -z "$last_success_sha" || "$last_success_sha" == "null" ]]; then
+            echo "No previous successful run found; running nightly build."
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          elif [[ "$last_success_sha" == "$main_sha" ]]; then
+            echo "origin/main has not advanced since the last successful run; skipping."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "origin/main advanced from $last_success_sha to $main_sha; running nightly build."
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    runs-on: ubuntu-24.04
+    needs: gatekeeper
+    if: needs.gatekeeper.outputs.should_run == 'true'
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        # "default" is whatever ld the runner's autoconfigured toolchain picks
+        # (verifies plain GitHub-hosted build health); "gold" is the
+        # historically-problematic single-pass linker from #665.
+        linker: [default, gold]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install system dependencies
+        uses: nick-fields/retry@v4
+        with:
+          timeout_minutes: 5
+          max_attempts: 3
+          retry_wait_seconds: 15
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y pkg-config libfontconfig1-dev libfreetype6-dev \
+              mesa-vulkan-drivers libvulkan1 libvulkan-dev \
+              libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+              libgl1-mesa-dev libosmesa6
+
+      - name: Setup Bazel
+        uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-${{ runner.os }}-${{ matrix.linker }}
+          repository-cache: true
+          external-cache: true
+          cache-save: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+
+      - name: Build //...
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ matrix.linker }}" == "default" ]]; then
+            bazelisk build --config=ci //...
+          else
+            bazelisk build --config=ci --linkopt=-fuse-ld=${{ matrix.linker }} //...
+          fi

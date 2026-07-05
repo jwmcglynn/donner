@@ -63,6 +63,7 @@ donner_cc_library(
         "//donner/svg/components/style:components",
         "//donner/svg/properties:property_parsing",
     ],
+    alwayslink = True,  # link-order independence (#665)
 )
 
 donner_cc_test(

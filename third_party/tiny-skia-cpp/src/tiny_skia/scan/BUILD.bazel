@@ -7,16 +7,16 @@ tiny_skia_cc_library(
     srcs = [
         "Hairline.cpp",
         "HairlineAa.cpp",
-        "Scan.cpp",
         "Path.cpp",
         "PathAa.cpp",
+        "Scan.cpp",
     ],
     hdrs = [
         "Hairline.h",
         "HairlineAa.h",
-        "Scan.h",
         "Path.h",
         "PathAa.h",
+        "Scan.h",
     ],
     include_prefix = "tiny_skia/scan",
     strip_include_prefix = ".",
@@ -24,4 +24,5 @@ tiny_skia_cc_library(
     deps = [
         "//src/tiny_skia:tiny_skia_core",
     ],
+    alwayslink = True,  # link-order independence (#665)
 )

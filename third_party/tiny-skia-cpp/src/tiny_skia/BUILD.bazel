@@ -51,8 +51,8 @@ tiny_skia_cc_library(
         "AlphaRuns.h",
         "AnalyticEdge.h",
         "BlendMode.h",
-        "Canvas.h",
         "Blitter.h",
+        "Canvas.h",
         "Color.h",
         "Dash.h",
         "Edge.h",
@@ -95,6 +95,7 @@ tiny_skia_cc_library(
         "//src/tiny_skia/path64:tiny_skia_path64",
         "//src/tiny_skia/wide:tiny_skia_wide",
     ],
+    alwayslink = True,  # link-order independence (#665)
 )
 
 tiny_skia_cc_library(
@@ -113,4 +114,5 @@ tiny_skia_cc_library(
         "//src/tiny_skia:tiny_skia_core",
         "//src/tiny_skia/scan:tiny_skia_scan",
     ],
+    alwayslink = True,  # link-order independence (#665)
 )

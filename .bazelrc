@@ -4,6 +4,8 @@
 ## Options:
 ##
 ##   --config=latest_llvm       - Build with LLVM toolchain (downloads automatically)
+##   --config=lld               - Force the lld linker; workaround for dev boxes whose
+##                                 default linker can't link the suite (see docs/building.md).
 ##   --config=debug             - Build debug with configs set to simplify debugging.
 ##   --config=binary-size       - Common optimized build and symbols for binary size analysis.
 ##   --config=linux-binary-size - Binary size analysis with Linux linker size flags.
@@ -79,6 +81,12 @@ common:latest_llvm --action_env=NODE_OPTIONS=--jitless
 # include paths and link inputs. Suppress that driver-only warning in the LLVM
 # toolchain config so real compiler diagnostics are not buried in CI logs.
 common:latest_llvm --copt=-Qunused-arguments
+
+# Opt-in workaround for dev boxes whose autoconfigured linker (gold, or bfd
+# without --start-lib) fails to link the suite. Not the default so it doesn't
+# force an lld dependency onto CI images. See #665.
+build:lld --linkopt=-fuse-ld=lld
+build:lld --host_linkopt=-fuse-ld=lld
 
 # Renderer backend selection
 common:tiny-skia --//donner/svg/renderer:renderer_backend=tiny_skia

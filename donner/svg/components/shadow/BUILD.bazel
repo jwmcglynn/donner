@@ -34,19 +34,20 @@ donner_cc_library(
         "//donner/svg/components:components_core",
         "//donner/svg/components/style:components",
     ],
+    alwayslink = True,  # link-order independence (#665)
 )
 
 donner_cc_test(
     name = "shadow_tree_system_tests",
+    srcs = [
+        "tests/ShadowTreeSystem_tests.cc",
+    ],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
         "tiny",
         "text_full",
         "geode",
-    ],
-    srcs = [
-        "tests/ShadowTreeSystem_tests.cc",
     ],
     deps = [
         ":shadow_tree_system",

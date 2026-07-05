@@ -167,6 +167,7 @@ donner_perf_sensitive_cc_library(
         ],
         "//conditions:default": [],
     }),
+    alwayslink = True,  # link-order independence (#665)
 )
 
 donner_perf_sensitive_cc_library(
@@ -202,6 +203,7 @@ donner_perf_sensitive_cc_library(
         "//donner/svg:__subpackages__",
     ],
     deps = [],
+    alwayslink = True,  # link-order independence (#665)
 )
 
 # Shared backend-agnostic text geometry (placement) consumed by both
@@ -220,6 +222,7 @@ donner_perf_sensitive_cc_library(
         "//donner/svg/text:text_engine",
         "//donner/svg/text:text_types",
     ],
+    alwayslink = True,  # link-order independence (#665)
 )
 
 donner_perf_sensitive_cc_library(
@@ -239,6 +242,7 @@ donner_perf_sensitive_cc_library(
         "//donner/base",
         "//donner/svg",
     ],
+    alwayslink = True,  # link-order independence (#665)
 )
 
 donner_cc_library(
