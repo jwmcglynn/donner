@@ -222,6 +222,7 @@ UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer
 ## Test Diagnosability (gmock + ToTT)
 
 - **Prioritize gmock (`EXPECT_THAT` + matchers) over `EXPECT_TRUE(a == b)`-style asserts.** A failure must localize the bug without a rerun — match the whole value and print expected-vs-actual, not a bare boolean (the "Testing on the Toilet" standard). Promote repeated assertion shapes into a named matcher with a descriptive failure message (e.g. the `Rgba`/`Alpha` pixel matchers in `RendererGeode_tests.cc`). See CLAUDE.md §"Test Diagnosability".
+- **Keep each local developer test case under 10s.** Agent-authored or agent-edited gtest cases that exceed 10s on a local dev box are bugs to fix by splitting the case, sampling expensive replays, replacing sleeps with deterministic hooks, or refactoring the code under test. Put genuinely long coverage/perf scenarios behind explicit `manual` or `perf` targets with justification; do not make >10s cases part of the normal local/PR gate.
 
 ## Pixel Diff & Threshold Philosophy
 

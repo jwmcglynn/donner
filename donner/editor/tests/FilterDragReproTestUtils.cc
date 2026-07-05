@@ -186,7 +186,7 @@ struct ReplayResults {
 };
 
 ReplayResults ReplayRepro(const std::filesystem::path& reproPath,
-                          const std::filesystem::path& svgPath) {
+                          const std::filesystem::path& svgPath, FilterDragReproReplayMode mode) {
   ReplayResults results;
 
   const std::string svgSource = LoadFileOrSkip(svgPath);
@@ -216,8 +216,31 @@ ReplayResults ReplayRepro(const std::filesystem::path& reproPath,
 
   ReplayState state;
   uint64_t version = 1;
+  int heldFrameOrdinal = 0;
+
+  const auto shouldReplayFrame = [&](const repro::ReproFrame& frame) {
+    if (mode == FilterDragReproReplayMode::Full) {
+      return true;
+    }
+
+    if (frame.index == 0 || !frame.events.empty()) {
+      return true;
+    }
+
+    if ((frame.mouseButtonMask & 1) == 0) {
+      return false;
+    }
+
+    ++heldFrameOrdinal;
+    constexpr int kHeldFrameStride = 8;
+    return heldFrameOrdinal == 1 || heldFrameOrdinal % kHeldFrameStride == 0;
+  };
 
   for (const auto& frame : repro.frames) {
+    if (!shouldReplayFrame(frame)) {
+      continue;
+    }
+
     FrameTiming timing;
     timing.reproFrameIndex = frame.index;
 
@@ -390,7 +413,7 @@ void DumpFirstFiveFrames(const ReplayResults& r, uint64_t fromFrame, uint64_t to
 
 }  // namespace
 
-void RunFilterDragReproScenario(FilterDragReproResult* out) {
+void RunFilterDragReproScenario(FilterDragReproResult* out, FilterDragReproReplayMode mode) {
   const std::filesystem::path reproPath = "donner/editor/tests/filter_drag_repro.rnr";
   const std::filesystem::path svgPath = "donner_splash.svg";
 
@@ -399,7 +422,7 @@ void RunFilterDragReproScenario(FilterDragReproResult* out) {
     return;
   }
 
-  ReplayResults r = ReplayRepro(reproPath, svgPath);
+  ReplayResults r = ReplayRepro(reproPath, svgPath, mode);
   ASSERT_FALSE(r.frames.empty()) << "repro produced zero frames";
   ASSERT_EQ(r.mouseDownFrameIndices.size(), 2u)
       << "expected exactly two mouse-down events in the repro (first drag, second drag)";

@@ -75,6 +75,14 @@ struct FilterDragReproResult {
   uint64_t noDirtyFrames = 0;
 };
 
+/// Replay density for the checked-in repro fixture.
+enum class FilterDragReproReplayMode {
+  /// Replay every recorded frame. Used by wall-clock budget tests.
+  Full,
+  /// Replay only a deterministic subset needed for CPU-invariant correctness checks.
+  CompactCorrectness,
+};
+
 /// Replay the checked-in recording and populate `out`. Also streams the
 /// standard diagnostic log lines (per-gesture avg/max, histograms, first
 /// 5 frames, fast-path counters, selection ids) to `std::cerr` so both
@@ -84,6 +92,7 @@ struct FilterDragReproResult {
 /// stays false and the caller's test is halted by the assertion flow.
 /// On genuine "files missing in runfiles", sets `out->skipped = true`
 /// and returns without asserting - the caller issues `GTEST_SKIP()`.
-void RunFilterDragReproScenario(FilterDragReproResult* out);
+void RunFilterDragReproScenario(FilterDragReproResult* out,
+                                FilterDragReproReplayMode mode = FilterDragReproReplayMode::Full);
 
 }  // namespace donner::editor::filter_drag_repro
