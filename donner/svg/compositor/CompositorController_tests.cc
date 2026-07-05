@@ -11,10 +11,12 @@
 
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGraphicsElement.h"
+#include "donner/svg/compositor/CompositorTestMatchers.h"
 #include "donner/svg/compositor/ComputedLayerAssignmentComponent.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/RendererUtils.h"
 #include "donner/svg/renderer/tests/MockRendererInterface.h"
+#include "donner/svg/renderer/tests/RendererTestMatchers.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
 using ::testing::_;
@@ -97,6 +99,9 @@ void PrintTo(const CompositorTile& tile, std::ostream* os) {
 namespace {
 
 using MockRendererInterface = tests::MockRendererInterface;
+using ::donner::svg::test::EmptyRendererBitmap;
+using ::donner::svg::test::NonEmptyRendererBitmap;
+using ::donner::svg::test::NullEntity;
 using CompositeTileSnapshot = CompositorController::CompositeTileSnapshot;
 using LayerInspectorRow = CompositorController::LayerInspectorRow;
 using SegmentInspectorRow = CompositorController::SegmentInspectorRow;
@@ -457,13 +462,13 @@ TEST_F(CompositorControllerTest, PromoteInvalidEntityFails) {
   EXPECT_FALSE(compositor.isPromoted(entt::null));
   EXPECT_TRUE(compositor.layerComposeOffset(entt::null).isIdentity());
   EXPECT_EQ(compositor.fallbackReasonsOf(entt::null), FallbackReason::None);
-  EXPECT_TRUE(compositor.layerBitmapOf(entt::null).empty());
+  EXPECT_THAT(compositor.layerBitmapOf(entt::null), EmptyRendererBitmap());
   EXPECT_EQ(compositor.layerCanvasOffsetOf(entt::null), Vector2d::Zero());
 
   const auto state = compositor.snapshotState();
   EXPECT_EQ(state.lastPromoteRefusalReason,
             CompositorController::PromoteRefusalReason::InvalidEntity);
-  EXPECT_TRUE(state.lastPromoteRefusalEntity == entt::null);
+  EXPECT_THAT(state.lastPromoteRefusalEntity, NullEntity());
 }
 
 TEST_F(CompositorControllerTest, DemoteRemovesLayer) {
@@ -719,7 +724,7 @@ TEST_F(CompositorControllerTest, DemoteDetachedPromotedEntityClearsInteractionHi
   EXPECT_FALSE(compositor.isPromoted(entity));
   const auto state = compositor.snapshotState();
   EXPECT_EQ(state.activeHintsCount, 0u);
-  EXPECT_TRUE(state.splitStaticLayersEntity == entt::null);
+  EXPECT_THAT(state.splitStaticLayersEntity, NullEntity());
 }
 
 TEST_F(CompositorControllerTest, ComputedLayerAssignmentAttachedOnPromote) {
@@ -880,7 +885,7 @@ TEST_F(CompositorControllerTest, SinglePromotedLayerBuildsSplitStaticLayers) {
   // exists. Assert the layer's bitmap is non-empty (the editor reads
   // it directly via `snapshotTilesForUpload`).
   EXPECT_TRUE(compositor.hasSplitStaticLayers());
-  EXPECT_FALSE(compositor.layerBitmapOf(entity).empty());
+  EXPECT_THAT(compositor.layerBitmapOf(entity), NonEmptyRendererBitmap());
 }
 
 TEST_F(CompositorControllerTest, MultiplePromotedLayersDoNotBuildSplitStaticLayers) {
@@ -962,7 +967,8 @@ TEST_F(CompositorControllerTest, FilterTriggersFallback) {
 
   CompositorController compositor(document, renderer_);
   compositor.promoteEntity(entity);
-  EXPECT_NE(compositor.fallbackReasonsOf(entity) & FallbackReason::Filter, FallbackReason::None);
+  EXPECT_THAT(compositor.fallbackReasonsOf(entity),
+              test::FallbackReasonsInclude(FallbackReason::Filter));
 }
 
 TEST_F(CompositorControllerTest, ClipPathTriggersFallback) {
@@ -982,7 +988,8 @@ TEST_F(CompositorControllerTest, ClipPathTriggersFallback) {
 
   CompositorController compositor(document, renderer_);
   compositor.promoteEntity(entity);
-  EXPECT_NE(compositor.fallbackReasonsOf(entity) & FallbackReason::ClipPath, FallbackReason::None);
+  EXPECT_THAT(compositor.fallbackReasonsOf(entity),
+              test::FallbackReasonsInclude(FallbackReason::ClipPath));
 }
 
 TEST_F(CompositorControllerTest, MaskTriggersFallback) {
@@ -1002,7 +1009,8 @@ TEST_F(CompositorControllerTest, MaskTriggersFallback) {
 
   CompositorController compositor(document, renderer_);
   compositor.promoteEntity(entity);
-  EXPECT_NE(compositor.fallbackReasonsOf(entity) & FallbackReason::Mask, FallbackReason::None);
+  EXPECT_THAT(compositor.fallbackReasonsOf(entity),
+              test::FallbackReasonsInclude(FallbackReason::Mask));
 }
 
 TEST_F(CompositorControllerTest, OpacityTriggersFallback) {
@@ -1019,8 +1027,8 @@ TEST_F(CompositorControllerTest, OpacityTriggersFallback) {
 
   CompositorController compositor(document, renderer_);
   compositor.promoteEntity(entity);
-  EXPECT_NE(compositor.fallbackReasonsOf(entity) & FallbackReason::IsolatedLayer,
-            FallbackReason::None);
+  EXPECT_THAT(compositor.fallbackReasonsOf(entity),
+              test::FallbackReasonsInclude(FallbackReason::IsolatedLayer));
 }
 
 TEST_F(CompositorControllerTest, GradientFillTriggersFallback) {
@@ -1043,8 +1051,8 @@ TEST_F(CompositorControllerTest, GradientFillTriggersFallback) {
 
   CompositorController compositor(document, renderer_);
   compositor.promoteEntity(entity);
-  EXPECT_NE(compositor.fallbackReasonsOf(entity) & FallbackReason::ExternalPaint,
-            FallbackReason::None);
+  EXPECT_THAT(compositor.fallbackReasonsOf(entity),
+              test::FallbackReasonsInclude(FallbackReason::ExternalPaint));
 }
 
 TEST_F(CompositorControllerTest, FallbackReasonsOfUnpromotedEntity) {
@@ -1218,7 +1226,7 @@ TEST_F(CompositorControllerTest, SnapshotLayerInspectorRowsIsEmptyBeforePromotio
   )svg");
 
   CompositorController compositor(document, renderer_);
-  EXPECT_TRUE(compositor.snapshotLayerInspectorRows().empty());
+  EXPECT_THAT(compositor.snapshotLayerInspectorRows(), IsEmpty());
 }
 
 TEST_F(CompositorControllerTest, SnapshotLayerInspectorRowsEmitsRowPerLayerWithBitmapDims) {
@@ -1241,14 +1249,14 @@ TEST_F(CompositorControllerTest, SnapshotLayerInspectorRowsEmitsRowPerLayerWithB
   compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
 
   const auto rows = compositor.snapshotLayerInspectorRows();
-  ASSERT_EQ(rows.size(), 2u);
+  ASSERT_THAT(rows, SizeIs(2u));
 
   // Every row must point at one of the promoted entities; every row must
   // have a populated bitmap (the mock renderer's dummy bitmap) and a
   // non-zero rasterize count after the first renderFrame.
   std::vector<Entity> entitiesInRows;
   for (const auto& row : rows) {
-    EXPECT_TRUE(row.hasValidBitmap);
+    EXPECT_THAT(row, LayerHasValidBitmapIs(true));
     EXPECT_NE(row.bitmapSize, Vector2i::Zero());
     EXPECT_GE(row.rasterizeCount, 1u);
     EXPECT_GE(row.generation, 1u);
@@ -1443,9 +1451,9 @@ TEST_F(CompositorControllerTest, SnapshotLayerInspectorRowsEmitsThumbnailWithMax
   compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
 
   const auto rows = compositor.snapshotLayerInspectorRows();
-  ASSERT_EQ(rows.size(), 1u);
+  ASSERT_THAT(rows, SizeIs(1u));
   const auto& row = rows.front();
-  ASSERT_TRUE(row.hasValidBitmap);
+  ASSERT_THAT(row, LayerHasValidBitmapIs(true));
 
   // Thumbnail must be non-empty, longer side clamped to `kLayerThumbnailMaxSide`,
   // and the RGBA8 byte buffer must match the dimensions.
@@ -1453,8 +1461,8 @@ TEST_F(CompositorControllerTest, SnapshotLayerInspectorRowsEmitsThumbnailWithMax
   EXPECT_GT(row.thumbnailDims.y, 0);
   EXPECT_LE(std::max(row.thumbnailDims.x, row.thumbnailDims.y),
             CompositorController::kLayerThumbnailMaxSide);
-  EXPECT_EQ(row.thumbnailPixels.size(), static_cast<size_t>(row.thumbnailDims.x) *
-                                            static_cast<size_t>(row.thumbnailDims.y) * 4u);
+  EXPECT_THAT(row.thumbnailPixels, SizeIs(static_cast<size_t>(row.thumbnailDims.x) *
+                                          static_cast<size_t>(row.thumbnailDims.y) * 4u));
 }
 
 TEST_F(CompositorControllerTest, SnapshotSegmentInspectorRowsEmitsOneRowPerSlot) {
@@ -2049,7 +2057,7 @@ TEST_F(CompositorControllerTest, MandatoryFilterLayerSurvivesCanvasResize) {
 
   // First render: mandatory detector picks up the filter group.
   compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
-  ASSERT_FALSE(compositor.snapshotLayerInspectorRows().empty())
+  ASSERT_THAT(compositor.snapshotLayerInspectorRows(), Not(IsEmpty()))
       << "Sanity check: mandatory filter detection should have promoted #target on first frame.";
 
   // Simulate a canvas resize — same code path as the editor's pinch-zoom
@@ -2062,7 +2070,7 @@ TEST_F(CompositorControllerTest, MandatoryFilterLayerSurvivesCanvasResize) {
   // render. Without the fix, the snapshot returns zero rows because
   // the detector ran before prepare and saw an empty RIC view.
   const auto rows = compositor.snapshotLayerInspectorRows();
-  EXPECT_FALSE(rows.empty())
+  EXPECT_THAT(rows, Not(IsEmpty()))
       << "Canvas resize dropped the mandatory filter layer (detector ran against empty RICs).";
   bool sawFilterAfterResize = false;
   for (const auto& row : rows) {
@@ -2070,7 +2078,7 @@ TEST_F(CompositorControllerTest, MandatoryFilterLayerSurvivesCanvasResize) {
       sawFilterAfterResize = true;
     }
   }
-  EXPECT_TRUE(sawFilterAfterResize)
+  EXPECT_THAT(sawFilterAfterResize, testing::IsTrue())
       << "Filter-bearing layer should still be promoted after canvas resize.";
 }
 
@@ -2094,7 +2102,7 @@ TEST_F(CompositorControllerTest, SnapshotLayerInspectorRowsFormatsFallbackReason
   compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
 
   const auto rows = compositor.snapshotLayerInspectorRows();
-  ASSERT_FALSE(rows.empty());
+  ASSERT_THAT(rows, Not(IsEmpty()));
 
   // At least one row should have the Filter fallback flag set, with the
   // string representation matching the FallbackReasonToString output.
@@ -2102,11 +2110,10 @@ TEST_F(CompositorControllerTest, SnapshotLayerInspectorRowsFormatsFallbackReason
   for (const auto& row : rows) {
     if ((row.fallbackReasons & FallbackReason::Filter) != FallbackReason::None) {
       sawFilter = true;
-      EXPECT_NE(row.fallbackReasonsText.find("Filter"), std::string::npos)
-          << "fallbackReasonsText='" << row.fallbackReasonsText << "'";
+      EXPECT_THAT(row.fallbackReasonsText, HasSubstr("Filter"));
     }
   }
-  EXPECT_TRUE(sawFilter);
+  EXPECT_THAT(sawFilter, testing::IsTrue());
 }
 
 TEST_F(CompositorControllerTest, ResetAllLayersAllowsRepromotion) {
@@ -2158,7 +2165,7 @@ TEST_F(CompositorControllerTest, BuildStructuralEntityRemapMapsEquivalentTrees) 
 
   const auto remap = BuildStructuralEntityRemap(oldDocument, newDocument);
 
-  ASSERT_FALSE(remap.empty());
+  ASSERT_THAT(remap, Not(IsEmpty()));
   EXPECT_EQ(remap.at(oldDocument.svgElement().unsafeEntityHandle().entity()),
             newDocument.svgElement().unsafeEntityHandle().entity());
   EXPECT_EQ(remap.at(oldParent->unsafeEntityHandle().entity()),
@@ -2191,9 +2198,9 @@ TEST_F(CompositorControllerTest, BuildStructuralEntityRemapRejectsStructuralMism
     </g>
   )svg");
 
-  EXPECT_TRUE(BuildStructuralEntityRemap(oldDocument, tagMismatch).empty());
-  EXPECT_TRUE(BuildStructuralEntityRemap(oldDocument, idMismatch).empty());
-  EXPECT_TRUE(BuildStructuralEntityRemap(oldDocument, childCountMismatch).empty());
+  EXPECT_THAT(BuildStructuralEntityRemap(oldDocument, tagMismatch), IsEmpty());
+  EXPECT_THAT(BuildStructuralEntityRemap(oldDocument, idMismatch), IsEmpty());
+  EXPECT_THAT(BuildStructuralEntityRemap(oldDocument, childCountMismatch), IsEmpty());
 }
 
 }  // namespace donner::svg::compositor

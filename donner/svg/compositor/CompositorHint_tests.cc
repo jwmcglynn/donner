@@ -7,21 +7,19 @@
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/svg/compositor/CompositorHintComponent.h"
+#include "donner/svg/compositor/CompositorTestMatchers.h"
 #include "donner/svg/compositor/ScopedCompositorHint.h"
 
 namespace donner::svg::compositor {
 
 namespace {
 
+using test::HintEntryIs;
+
 class CompositorHintTest : public ::testing::Test {
 protected:
   Registry registry_;
 };
-
-auto HintEntryIs(HintSource source, uint16_t weight) {
-  return testing::AllOf(testing::Field("source", &HintEntry::source, source),
-                        testing::Field("weight", &HintEntry::weight, weight));
-}
 
 }  // namespace
 

@@ -69,11 +69,24 @@ donner_cc_library(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
+donner_cc_library(
+    name = "geode_test_matchers",
+    testonly = 1,
+    hdrs = [
+        "tests/GeodeTestMatchers.h",
+    ],
+    deps = [
+        ":geode_path_encoder",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
 donner_cc_test(
     name = "geode_path_encoder_tests",
     srcs = ["tests/GeodePathEncoder_tests.cc"],
     deps = [
         ":geode_path_encoder",
+        ":geode_test_matchers",
         "//donner/base",
         "//donner/base:gtest_timeout_main",
     ],
@@ -98,6 +111,7 @@ donner_cc_test(
     srcs = ["tests/GeodeWgpuUtil_tests.cc"],
     target_compatible_with = _GEODE_ONLY,
     deps = [
+        ":geode_test_matchers",
         ":geode_wgpu_util",
         "//donner/base:gtest_timeout_main",
     ],
@@ -171,6 +185,7 @@ donner_cc_test(
     target_compatible_with = _GEODE_ONLY,
     deps = [
         ":geode_device",
+        ":geode_test_matchers",
         ":geode_wgpu_util",
         "//donner/base",
         "//donner/base:gtest_timeout_main",
@@ -467,6 +482,7 @@ donner_cc_test(
     deps = [
         ":geode_device",
         ":geode_shaders",
+        ":geode_test_matchers",
         "//donner/base:gtest_timeout_main",
     ],
 )
@@ -523,6 +539,7 @@ donner_cc_test(
     deps = [
         ":geo_encoder",
         ":geode_device",
+        ":geode_test_matchers",
         ":geode_wgpu_util",
         "//donner/base",
         "//donner/base:gtest_timeout_main",
@@ -553,6 +570,7 @@ donner_cc_test(
         ":geode_counters",
         ":geode_device",
         "//donner/base",
+        "//donner/base:base_test_utils",
         "//donner/base:gtest_timeout_main",
         "//donner/svg",
         "//donner/svg/parser",
@@ -574,11 +592,13 @@ donner_cc_test(
     target_compatible_with = _GEODE_ONLY,
     deps = [
         ":geode_device",
+        ":geode_test_matchers",
         ":geode_wgpu_util",
         "//donner/base",
         "//donner/base:gtest_timeout_main",
         "//donner/svg/renderer:renderer_geode",
         "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer/tests:renderer_test_matchers",
         "//donner/svg/renderer/tests:rgba_test_matchers",
     ],
 )
