@@ -8,7 +8,7 @@ namespace donner::svg {
 /**
  * @page xml_fePointLight "<fePointLight>"
  *
- * `<fePointLight>` is a positional light source — think of a bare light bulb floating in space.
+ * `<fePointLight>` is a positional light source - think of a bare light bulb floating in space.
  * It emits light in all directions from a single `(x, y, z)` point in the filter's coordinate
  * system. Unlike \ref xml_feDistantLight (which has a single direction everywhere), the direction
  * of a point light is different at every pixel of the surface, because each pixel sits at a
@@ -18,7 +18,7 @@ namespace donner::svg {
  * bulb far away so the illumination is soft and nearly uniform; a small `z` puts the bulb right up
  * against the surface so you get a small, bright hotspot with harsh falloff toward the edges.
  * `<fePointLight>` must appear as a child of \ref xml_feDiffuseLighting or \ref
- * xml_feSpecularLighting — on its own it does nothing. It takes no standard filter primitive
+ * xml_feSpecularLighting - on its own it does nothing. It takes no standard filter primitive
  * attributes.
  *
  * - DOM object: SVGFEPointLightElement
@@ -145,7 +145,7 @@ namespace donner::svg {
  * | `z`       | `0`     | Z coordinate (height above the surface). Larger values produce softer, more uniform light; smaller values produce a bright hotspot with sharp falloff. |
  *
  * `<fePointLight>` does not take the standard filter primitive attributes (`in`, `result`, `x`,
- * `y`, `width`, `height`) — it is purely a child element of a lighting primitive.
+ * `y`, `width`, `height`) - it is purely a child element of a lighting primitive.
  */
 
 /**

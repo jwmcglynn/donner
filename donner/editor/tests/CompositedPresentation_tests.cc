@@ -109,7 +109,7 @@ TEST(CompositedPresentationTest, PureTranslationActiveDragWithMatchingCacheSuppr
          "canvas refresh happens after drag settles.";
 }
 
-// A large affine scale drift past the threshold re-captures a crisp bitmap — the
+// A large affine scale drift past the threshold re-captures a crisp bitmap - the
 // intentional anti-blur re-capture. The worker bakes the live transform into the
 // fresh bitmap and `represented` is updated to that baked transform, so the
 // presentation (`effective = represented^-1 * active`) compensates for the
@@ -131,7 +131,7 @@ TEST(CompositedPresentationTest, LargeAffineScaleDriftRequestsCrispRecapture) {
       << "Scaling 2x past the crisp-recapture threshold should request a fresh, sharper bitmap.";
 }
 
-// A small affine change below the scale threshold must NOT re-capture — the
+// A small affine change below the scale threshold must NOT re-capture - the
 // presentation quad tracks it against the cached bitmap with no worker round-trip.
 TEST(CompositedPresentationTest, SmallAffineScaleDriftTracksWithoutRecapture) {
   const SelectTool::ActiveDragPreview represented{
@@ -387,7 +387,7 @@ TEST(CompositedPresentationTest, MouseUpKeepsSettlingPreviewUntilFullRenderLands
   EXPECT_EQ(state.presentationPreview(std::nullopt)->entity, Entity(7));
   EXPECT_DOUBLE_EQ(state.presentationPreview(std::nullopt)->translation.x, 12.0);
 
-  // Below-target render leaves settlingPreview in place — the settling
+  // Below-target render leaves settlingPreview in place - the settling
   // window hasn't closed yet, so the settling preview still drives the
   // displayed translation.
   state.noteFullRenderLanded(/*landedVersion=*/3);

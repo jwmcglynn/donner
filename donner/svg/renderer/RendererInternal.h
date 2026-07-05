@@ -17,7 +17,7 @@ namespace donner::svg {
 // RendererGeodeBackend.cc is linked (BUILD config), and each defines these
 // factories returning its concrete backend. The backends implement
 // RendererInterface directly; there is deliberately no intermediate
-// "implementation" interface — an earlier RendererImplementation layer added
+// "implementation" interface - an earlier RendererImplementation layer added
 // only hand-written forwarding, where a missed forward silently fell back to
 // a base-class default (a real perf bug for drawBitmap).
 std::unique_ptr<RendererInterface> CreateRendererImplementation(bool verbose);

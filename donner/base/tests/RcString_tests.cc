@@ -597,13 +597,13 @@ TEST(RcString, DataIsNullTerminated) {
 }
 
 // Regression coverage for issue #603: a std::string_view taken from an RcString aliases the
-// RcString's storage — and with the small-string optimization that storage is the temporary's own
+// RcString's storage - and with the small-string optimization that storage is the temporary's own
 // inline buffer. The fix annotates the std::string_view conversion (and data()/iterators) with
 // [[clang::lifetimebound]] so Clang's -Wdangling (and clang-tidy's clang-diagnostic-dangling under
 // WarningsAsErrors) reject `std::string_view sv = makeTemporaryRcString();`. This test pins the
 // *safe* lifetime contract: a view of a stable RcString stays valid for that RcString's lifetime.
 TEST(RcString, ViewLifetimeContract) {
-  // A view into a stable (named) RcString is valid for as long as that RcString lives — including
+  // A view into a stable (named) RcString is valid for as long as that RcString lives - including
   // the small-string-optimized case where the bytes live inline in the object.
   const RcString small("rect");  // Short enough to be stored inline (SSO).
   const std::string_view smallView = small;

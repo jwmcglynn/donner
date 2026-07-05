@@ -16,7 +16,7 @@ namespace donner::editor::repro {
 namespace {
 
 // Minimal string quoter for JSON. Handles ASCII-safe escapes we need
-// for filenames, ISO timestamps, and event-type tags — does NOT attempt
+// for filenames, ISO timestamps, and event-type tags - does NOT attempt
 // to handle every Unicode escape. The recorder only emits short
 // ASCII-ish strings so this is sufficient.
 void WriteQuotedJsonString(std::ostream& os, std::string_view s) {
@@ -280,7 +280,7 @@ void WriteFrameLine(std::ostream& os, const ReproFrame& frame) {
 // Dead-simple JSON scalar extractor for our controlled format. Looks
 // for `"key":` after the caller's starting position, then parses the
 // following token as a number / string / array-of-numbers. Not a
-// general JSON parser — our writer emits a known, regular shape.
+// general JSON parser - our writer emits a known, regular shape.
 std::string_view FindKey(std::string_view line, std::string_view key) {
   std::string pattern;
   pattern.reserve(key.size() + 3);

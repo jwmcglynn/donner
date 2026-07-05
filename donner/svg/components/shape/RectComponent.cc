@@ -108,7 +108,7 @@ ParseResult<bool> ParseRectPresentationAttribute(EntityHandle handle, std::strin
     } else {
       // Property found and parsed successfully. Drop stale computed geometry so
       // on-demand readers (computedSpline, worldBounds, editor overlay chrome)
-      // see the new values — matching SVGRectElement::invalidate().
+      // see the new values - matching SVGRectElement::invalidate().
       handle.remove<ComputedRectComponent>();
       handle.remove<ComputedPathComponent>();
       return true;

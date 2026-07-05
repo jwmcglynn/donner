@@ -9,14 +9,14 @@ namespace donner::svg {
  * @page xml_feMerge "<feMerge>"
  *
  * `<feMerge>` stacks multiple filter results on top of each other like layers in an image
- * editor, producing a final composite. It takes **zero direct attributes of its own** — instead,
+ * editor, producing a final composite. It takes **zero direct attributes of its own** - instead,
  * its child \ref xml_feMergeNode elements name the intermediate results to layer. Layers are
  * stacked in document order, **bottom to top**: the first `<feMergeNode>` becomes the bottom
  * layer, and each subsequent one is painted over it.
  *
  * `<feMerge>` is the "glue" that lets a filter chain produce outputs that combine several
  * intermediate steps. For example, a drop shadow filter needs to paint the shadow *and* the
- * original graphic in the final result — `<feMerge>` is what unions those two pieces together.
+ * original graphic in the final result - `<feMerge>` is what unions those two pieces together.
  *
  * Every merge is just a stack of source-over composites, so `<feMerge>` is strictly simpler
  * (and clearer) than writing a chain of \ref xml_feComposite primitives by hand.
@@ -28,7 +28,7 @@ namespace donner::svg {
  *
  * `<feMerge>` expects one or more \ref xml_feMergeNode children. Each `<feMergeNode>` has a
  * single attribute `in` that names the filter result to layer. `<feMerge>` does nothing on its
- * own — all of its behavior is driven by its children. See \ref xml_feMergeNode for the full
+ * own - all of its behavior is driven by its children. See \ref xml_feMergeNode for the full
  * details of the child element.
  *
  * ```xml

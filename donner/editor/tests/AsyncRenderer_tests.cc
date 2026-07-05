@@ -347,7 +347,7 @@ TEST(AsyncRendererTest, ImmediateStaticSpansCarryPayloadAcrossPublishedFrames) {
   AsyncRenderer asyncRenderer;
 
   const auto waitForResult = [&]() -> std::optional<RenderResult> {
-    // 30s budget — generous for a loaded self-hosted CI runner (see
+    // 30s budget - generous for a loaded self-hosted CI runner (see
     // WaitForRenderResult).
     for (int i = 0; i < 3000; ++i) {
       auto result = asyncRenderer.pollResult();
@@ -517,7 +517,7 @@ constexpr bool kAsyncRendererWallclockTestsEnabled =
     false;
 #endif
 
-// Design doc 0033 §M5 — preemptive swap-in. When the worker finishes a
+// Design doc 0033 §M5 - preemptive swap-in. When the worker finishes a
 // render, the editor's main loop must learn about the result on the
 // NEXT ImGui frame, not on the next mouse event. The mechanism is the
 // `setWakeCallback` hook, which the worker invokes after every
@@ -542,7 +542,7 @@ TEST(AsyncRendererTest, WakeCallbackFiresOnDoneTransitionBeforePollResult) {
   std::promise<void> wakeFired;
   std::atomic<int> wakeCount{0};
   asyncRenderer.setWakeCallback([&] {
-    // First wake completes the promise; subsequent wakes (if any —
+    // First wake completes the promise; subsequent wakes (if any -
     // they shouldn't happen for a single request) just bump the count.
     const int prev = wakeCount.fetch_add(1, std::memory_order_acq_rel);
     if (prev == 0) {
@@ -561,7 +561,7 @@ TEST(AsyncRendererTest, WakeCallbackFiresOnDoneTransitionBeforePollResult) {
   ASSERT_EQ(status, std::future_status::ready) << "wake callback never fired; M5 invariant broken.";
 
   // Wake fires after the Done transition, so pollResult() must now
-  // return the result on the first call — no spinning needed.
+  // return the result on the first call - no spinning needed.
   std::optional<RenderResult> result = asyncRenderer.pollResult();
   ASSERT_TRUE(result.has_value())
       << "pollResult returned nothing after wake fired; state machine bug.";
@@ -625,7 +625,7 @@ TEST(AsyncRendererTest, ReplayResultHoldWithholdsStagedDoneResultForPollAttempts
   EXPECT_FALSE(asyncRenderer.isBusy());
 }
 
-// A second wake should fire for a second render request — the worker
+// A second wake should fire for a second render request - the worker
 // loop is reusable; the callback is not single-shot.
 TEST(AsyncRendererTest, WakeCallbackFiresPerRequest) {
   svg::SVGDocument document = svg::instantiateSubtree(R"svg(
@@ -702,7 +702,7 @@ TEST(AsyncRendererTest, WakeCallbackFiresWhenCancellationReturnsWorkerToIdle) {
   EXPECT_GE(wakeCount.load(std::memory_order_acquire), 1);
 }
 
-// `setWakeCallback` is optional — callers that don't set it must still
+// `setWakeCallback` is optional - callers that don't set it must still
 // see the result via plain polling, with no regression in the legacy
 // pollResult-driven path.
 TEST(AsyncRendererTest, PollResultStillWorksWithoutWakeCallback) {
@@ -713,7 +713,7 @@ TEST(AsyncRendererTest, PollResultStillWorksWithoutWakeCallback) {
 
   svg::Renderer renderer;
   AsyncRenderer asyncRenderer;
-  // No setWakeCallback — the editor's old pollResult-on-each-frame
+  // No setWakeCallback - the editor's old pollResult-on-each-frame
   // path must continue to work.
 
   RenderRequest request(renderer, document);
@@ -730,13 +730,13 @@ TEST(AsyncRendererTest, PollResultStillWorksWithoutWakeCallback) {
   ASSERT_TRUE(result.has_value());
 }
 
-// Design doc 0033 §M9 + §M2C — pending-demote layers must carry their
+// Design doc 0033 §M9 + §M2C - pending-demote layers must carry their
 // `canvasFromBitmap` translation through to the editor blit. The
 // worker's tile-build code previously populated `dragTranslationDoc`
 // only when `isDragTarget == true`, so a pending-demote layer (whose
 // bitmap was rasterized at the entity's pre-drag transform and whose
 // canvasFromBitmap compensates with the residual drag delta) blitted
-// at its rasterize-time canvas offset — the operator saw previously-
+// at its rasterize-time canvas offset - the operator saw previously-
 // moved shapes "pop back" to their pre-drag positions during the
 // hysteresis window, then pop forward again when the demote actually
 // fired and the segment re-rasterized. Fix: extract the translation
@@ -770,7 +770,7 @@ TEST(AsyncRendererTest, PendingDemotePreviousDragTargetKeepsDragTranslationInTil
     return std::nullopt;
   };
 
-  // 1. Pre-warm A — promote with Selection so A's layer rasterizes at
+  // 1. Pre-warm A - promote with Selection so A's layer rasterizes at
   //    the entity's CURRENT (identity) transform. The fast path's
   //    `canvasFromBitmap` update later replaces with a non-zero
   //    translation; without a pre-rasterize the fast path's first
@@ -804,7 +804,7 @@ TEST(AsyncRendererTest, PendingDemotePreviousDragTargetKeepsDragTranslationInTil
   auto resultA = waitForResult();
   ASSERT_TRUE(resultA.has_value());
 
-  // 3. Now drag B — A is demoted (queued by M9) and B is promoted.
+  // 3. Now drag B - A is demoted (queued by M9) and B is promoted.
   //    A's bitmap is still cached with its post-drag canvasFromBitmap.
   svg::SVGGraphicsElement graphicsB = elemB->withReadAccess(
       [&elemB](svg::DocumentReadAccess&, EntityHandle) { return AsGraphicsElement(*elemB); });
@@ -956,7 +956,7 @@ TEST(AsyncRendererTest, DisplayNoneSelectionDoesNotLeaveStaleBackgroundPixelsWhe
   AsyncRenderer asyncRenderer;
 
   const auto waitForResult = [&]() -> std::optional<RenderResult> {
-    // 30s budget — generous for a loaded self-hosted CI runner (see
+    // 30s budget - generous for a loaded self-hosted CI runner (see
     // WaitForRenderResult).
     for (int i = 0; i < 3000; ++i) {
       auto result = asyncRenderer.pollResult();
@@ -1078,7 +1078,7 @@ TEST(AsyncRendererTest, DisplayNoneSelectionDoesNotLeaveStaleBackgroundPixelsWhe
   EXPECT_TRUE(sawNextLayer) << "The repro must isolate #next as the active drag layer.";
 }
 
-// Design doc 0033 §M4 — async re-rasterization with cancellation. A
+// Design doc 0033 §M4 - async re-rasterization with cancellation. A
 // second `requestRender` posted while the worker is busy must:
 //   * signal cancellation to the in-flight `CompositorController::
 //     renderFrame` (the compositor polls between rasterize loops);
@@ -1133,7 +1133,7 @@ TEST(AsyncRendererTest, RequestRenderDuringBusySignalsCancellationAndPicksUpNewR
   }
   ASSERT_TRUE(result.has_value());
 
-  // The result that lands MUST be for the second request — request 1
+  // The result that lands MUST be for the second request - request 1
   // either was cancelled mid-flight or was preempted before starting.
   // Either way `version` tracks the request the worker actually
   // committed.
@@ -1149,7 +1149,7 @@ TEST(AsyncRendererTest, RequestRenderDuringBusySignalsCancellationAndPicksUpNewR
   EXPECT_GE(asyncRenderer.cancelledRenderCount(), 0u);
 }
 
-// Design doc 0033 — `cancelInFlight()` bails a long render that's no
+// Design doc 0033 - `cancelInFlight()` bails a long render that's no
 // longer wanted (a stale selection prewarm at high zoom, etc.) WITHOUT
 // queueing a new one. The worker either:
 //   - bails at the next §M4 safe point and parks (mid-render cancel),
@@ -1195,7 +1195,7 @@ TEST(AsyncRendererTest, CancelInFlightDropsResultAndReturnsWorkerToIdle) {
 
   EXPECT_FALSE(asyncRenderer.pollResult().has_value())
       << "cancelInFlight must drop the render result rather than publishing it for "
-         "`pollResult` — otherwise the caller picks up stale pre-cancel state";
+         "`pollResult` - otherwise the caller picks up stale pre-cancel state";
 }
 
 // Same contract, but assert that a follow-up `requestRender` after the
@@ -1366,7 +1366,7 @@ TEST(AsyncRendererTest, CompositorResetOnDocumentVersionChange) {
     ASSERT_TRUE(result->compositedPreview.has_value());
   }
 
-  // Second render at version 2 — compositor should reset rather than using stale layers.
+  // Second render at version 2 - compositor should reset rather than using stale layers.
   {
     RenderRequest request(renderer, document);
     request.version = 2;
@@ -1409,7 +1409,7 @@ TEST(AsyncRendererTest, SelectedEntityWithoutDragPreviewProducesCompositedPrevie
   RenderRequest request(renderer, document);
   request.version = 1;
   request.selectedEntity = target->unsafeEntityHandle().entity();
-  // No dragPreview — editor is holding a selection pre-warmed but not
+  // No dragPreview - editor is holding a selection pre-warmed but not
   // dragging yet.
 
   asyncRenderer.requestRender(request);
@@ -1589,7 +1589,7 @@ TEST(AsyncRendererTest, CompositingContextDescendantsProduceFullCanvasComposited
 // second drag's promoted bitmap must be bit-exactly identical to the one
 // produced while the first drag was in flight (same entity, same document
 // version, same canvas size). That proves the compositor was not torn down
-// between drags — a teardown would force re-rasterization from scratch.
+// between drags - a teardown would force re-rasterization from scratch.
 TEST(AsyncRendererTest, CompositorStaysAliveAcrossDragRelease) {
   svg::SVGDocument document = svg::instantiateSubtree(R"svg(
     <rect id="target" x="0" y="0" width="16" height="16" fill="red" />
@@ -1669,7 +1669,7 @@ TEST(AsyncRendererTest, CompositorStaysAliveAcrossDragRelease) {
 
   // Drag frame 2: same entity, same DOM transform (4, 0). If the compositor
   // were torn down between the release and this drag, it would re-rasterize
-  // — but the output would still be visually correct, so check the cheaper
+  // - but the output would still be visually correct, so check the cheaper
   // proxy: the promoted-entity bitmap must be bit-identical.
   {
     RenderRequest request(renderer, document);
@@ -1767,8 +1767,8 @@ TEST(AsyncRendererTest, ActiveDragCanvasResizePublishesFreshFinalOnly) {
   EXPECT_EQ(asyncRenderer.compositorState().canvasSize, resizedCanvasSize);
 }
 
-// Regression: mimic the editor's splash scenario — a drag target living
-// alongside multiple mandatory-promoted filter-group siblings — and run
+// Regression: mimic the editor's splash scenario - a drag target living
+// alongside multiple mandatory-promoted filter-group siblings - and run
 // many drag frames through the real `AsyncRenderer` worker. Every drag
 // frame must succeed (no crash in the worker) and the composited-preview
 // stream must stay live across the whole sequence.
@@ -1854,7 +1854,7 @@ TEST(AsyncRendererTest, SplashShapeDragFramesDoNotCrash) {
   // `AsyncSVGDocument::applyOne`), bump `version`, keep `documentGeneration`
   // the same (no reparse), request a new render. If any frame crashes in
   // `rasterizeLayer` / `createOffscreenInstance`, the worker terminates and
-  // `pollResult` hangs — `waitForResult` returns `nullopt` and the ASSERT
+  // `pollResult` hangs - `waitForResult` returns `nullopt` and the ASSERT
   // trips cleanly.
   constexpr int kDragFrames = 30;
   for (int i = 0; i < kDragFrames; ++i) {
@@ -1872,12 +1872,12 @@ TEST(AsyncRendererTest, SplashShapeDragFramesDoNotCrash) {
     auto result = waitForResult();
     ASSERT_TRUE(result.has_value()) << "drag frame " << i << " did not complete";
     ASSERT_TRUE(result->compositedPreview.has_value())
-        << "drag frame " << i << " produced no composited preview — the split-layer path "
+        << "drag frame " << i << " produced no composited preview - the split-layer path "
         << "broke and the editor would lose the composited presentation path. This is the perf "
         << "regression shape behind the user's ~200ms drag updates.";
   }
 
-  // The compositor should not have been reset a single time — only frame
+  // The compositor should not have been reset a single time - only frame
   // version changed, not documentGeneration.
   EXPECT_EQ(asyncRenderer.compositorResetCountForTesting(), 0u);
 }
@@ -2490,7 +2490,7 @@ TEST(AsyncRendererE2ETest, BackgroundStickerDragPresentsLiveDeltaFromStaleCache)
 // corner handle + onMouseMove), posts the worker request the editor would
 // (capture), then advances the drag one more LIVE frame WITHOUT a new worker
 // render and checks the presented drag-target tile tracks the live affine in
-// lockstep — exactly what the editor does between async captures. Compositor-unit
+// lockstep - exactly what the editor does between async captures. Compositor-unit
 // repros pass; this exercises the async presentation telescoping that those
 // can't see. Diagnostic for now: prints the telescoped transforms.
 TEST(AsyncRendererE2ETest, AffineScaleDragTileTracksLiveTransformInLockstep) {
@@ -2695,7 +2695,7 @@ TEST(AsyncRendererE2ETest, SchedulerAffineScaleCaptureRerasterizesDragTargetTile
 // flushFrame` does) must NOT trigger `CompositorController::resetAllLayers()`.
 // Before the fix that introduced `documentGeneration_`, the worker compared
 // `request.version` against its cached snapshot and ran `resetAllLayers()`
-// every time they differed — i.e. on every drag frame. The reset tore down
+// every time they differed - i.e. on every drag frame. The reset tore down
 // `activeHints_` mid-drag, dropped every `ScopedCompositorHint`, and
 // occasionally crashed in `~ScopedCompositorHint` via `registry_->valid()` /
 // `try_get<CompositorHintComponent>` when the registry was in a transient
@@ -2745,7 +2745,7 @@ TEST(AsyncRendererTest, DragFrameVersionBumpDoesNotResetCompositor) {
 
   // Simulate a sequence of drag frames: `version` bumps each time (as
   // `flushFrame` does when a `SetTransformCommand` is applied), but
-  // `documentGeneration` stays at 1 — no document replacement occurred.
+  // `documentGeneration` stays at 1 - no document replacement occurred.
   constexpr int kDragFrames = 10;
   for (int i = 0; i < kDragFrames; ++i) {
     AsGraphicsElement(*target).setTransform(
@@ -2768,10 +2768,10 @@ TEST(AsyncRendererTest, DragFrameVersionBumpDoesNotResetCompositor) {
   // drag frame.
   EXPECT_EQ(asyncRenderer.compositorResetCountForTesting(), 0u)
       << "compositor was reset " << asyncRenderer.compositorResetCountForTesting()
-      << " times during drag — the `documentGeneration` vs `frameVersion` gate regressed";
+      << " times during drag - the `documentGeneration` vs `frameVersion` gate regressed";
 
   // Bumping `documentGeneration` (e.g. source-pane reparse) *should* fire a
-  // reset, exactly once — sanity check on the positive half of the contract.
+  // reset, exactly once - sanity check on the positive half of the contract.
   {
     RenderRequest request(renderer, document);
     request.version = 100;
@@ -2785,7 +2785,7 @@ TEST(AsyncRendererTest, DragFrameVersionBumpDoesNotResetCompositor) {
 }
 
 // End-to-end drag-latency harness that FAITHFULLY mirrors the real
-// editor's click-drag sequence — critically, it does NOT fake a
+// editor's click-drag sequence - critically, it does NOT fake a
 // Selection-hint prewarm that the editor never actually fires. The
 // editor's flow on mouse-down → drag is:
 //
@@ -2799,7 +2799,7 @@ TEST(AsyncRendererTest, DragFrameVersionBumpDoesNotResetCompositor) {
 //     SelectTool sets selection + dragState in the same event. By the
 //     next UI-thread tick, `SelectTool::activeDragPreview()` already
 //     returns non-null, so the editor's RenderCoordinator fires a
-//     RenderRequest with `dragPreview={letter, ActiveDrag}` — NEVER
+//     RenderRequest with `dragPreview={letter, ActiveDrag}` - NEVER
 //     a Selection-hint prewarm in this path (see SelectTool.cc:260
 //     and RenderCoordinator.cc:207). The compositor promotes letter
 //     for the first time on this frame, and if it rebuilds all
@@ -2825,7 +2825,7 @@ struct EndToEndDragStats {
 //            transform.
 //   Frames 2..: drag mouse-move frames.
 //
-// No phantom prewarm — the editor's RenderCoordinator doesn't fire
+// No phantom prewarm - the editor's RenderCoordinator doesn't fire
 // one on click-drag (see `activeDragPreview()` returning non-null
 // immediately after mouse-down sets `dragState_`).
 EndToEndDragStats RunEditorFlowDragHarness(AsyncSVGDocument& asyncDoc, svg::Renderer& renderer,
@@ -2867,7 +2867,7 @@ EndToEndDragStats RunEditorFlowDragHarness(AsyncSVGDocument& asyncDoc, svg::Rend
 
   EndToEndDragStats stats;
 
-  // Phase 0 — page-load cold render. No selection, no drag. This is
+  // Phase 0 - page-load cold render. No selection, no drag. This is
   // what runs while the editor initializes and before the user clicks.
   {
     const auto t = Clock::now();
@@ -2877,7 +2877,7 @@ EndToEndDragStats RunEditorFlowDragHarness(AsyncSVGDocument& asyncDoc, svg::Rend
     EXPECT_TRUE(result.has_value()) << "cold page-load render didn't land";
   }
 
-  // Phase 1 — click-then-drag, one frame. User's mouse-down sets the
+  // Phase 1 - click-then-drag, one frame. User's mouse-down sets the
   // drag target; RenderCoordinator fires this render with both
   // `selectedEntity` AND `dragPreview.ActiveDrag` set to the same
   // entity. DOM transform has just been updated by the first mouse-
@@ -2892,7 +2892,7 @@ EndToEndDragStats RunEditorFlowDragHarness(AsyncSVGDocument& asyncDoc, svg::Rend
     EXPECT_TRUE(result.has_value()) << "click-then-drag render didn't land";
   }
 
-  // Phase 2 — steady-state drag frames. Pure-translation transform
+  // Phase 2 - steady-state drag frames. Pure-translation transform
   // mutations, same selection + drag entity every frame. Compositor
   // fast path should fire.
   double steadyTotal = 0.0;
@@ -2917,7 +2917,7 @@ EndToEndDragStats RunEditorFlowDragHarness(AsyncSVGDocument& asyncDoc, svg::Rend
 // measures only the async-renderer round-trip. The real editor's
 // main thread *additionally* synchronously captures the selection
 // chrome overlay every frame where the selection, canvas size, or
-// document version changed — and during a drag, the version bumps
+// document version changed - and during a drag, the version bumps
 // each mouse-move, so the overlay capture runs every frame.
 // `RunFaithfulEditorFrameDragHarness` measures THAT too, so the
 // test numbers match what the user feels when they drag.
@@ -2948,7 +2948,7 @@ struct FaithfulFrameDragStats {
   // Bitmap payload sizes (rough proxy for per-frame GL upload bytes).
   // GL upload throughput on Apple silicon is ~10 GB/s for
   // GL_RGBA8 glTexSubImage2D, so a 3x 892x512 RGBA upload costs
-  // ~0.55 ms of GPU bandwidth — useful to compare against CPU cost.
+  // ~0.55 ms of GPU bandwidth - useful to compare against CPU cost.
   std::size_t compositedUploadBytesPerFrame = 0;
   std::size_t flatUploadBytesPerFrame = 0;
   // Retained overlay payload bytes. The immediate overlay path keeps this at zero.
@@ -3032,19 +3032,19 @@ FaithfulFrameDragStats RunFaithfulEditorFrameDragHarness(AsyncSVGDocument& async
   double immediateRasterizeTotal = 0.0;
   double cachedRasterizeTotal = 0.0;
 
-  // Phase 0 — page-load cold render.
+  // Phase 0 - page-load cold render.
   {
     const auto t = Clock::now();
     postRequest(1, false, false);
     auto result = waitForResult();
     stats.coldRenderMs = elapsedMs(t);
     EXPECT_TRUE(result.has_value());
-    // Cold frame doesn't rasterize overlay (no selection yet) — matches
+    // Cold frame doesn't rasterize overlay (no selection yet) - matches
     // `RenderCoordinator` behavior where `selectionDiffers` would fire
     // only once the user clicks.
   }
 
-  // Phase 1 — click-then-drag, one frame. Measures:
+  // Phase 1 - click-then-drag, one frame. Measures:
   //   (a) async render worker time
   //   (b) main-thread overlay capture
   //   (c) combined click → first-pixel-with-overlay wall-clock
@@ -3090,7 +3090,7 @@ FaithfulFrameDragStats RunFaithfulEditorFrameDragHarness(AsyncSVGDocument& async
     stats.overlayUploadBytesPerFrame = 0u;
   }
 
-  // Phase 2 — steady-state drag frames. Each frame does the same
+  // Phase 2 - steady-state drag frames. Each frame does the same
   // worker round-trip + overlay capture the editor does.
   double steadyTotal = 0.0;
   for (int i = 0; i < steadyFrames; ++i) {
@@ -3156,7 +3156,7 @@ FaithfulFrameDragStats RunFaithfulEditorFrameDragHarness(AsyncSVGDocument& async
 // shape document, measuring wall-clock per simulated frame end-to-end
 // (UI-thread push + worker render + result poll). This is the harness
 // that gates the drag-start freeze, steady-state smoothness, and
-// drag-end lag as shipped — not just the compositor's renderFrame
+// drag-end lag as shipped - not just the compositor's renderFrame
 // component.
 // Baseline latency budgets for a click-then-drag on the splash-shape
 // document. The user's aspirational requirements are:
@@ -3180,7 +3180,7 @@ TEST(AsyncRendererE2ETest, ClickThenDragOnSplashShapeMeetsLatencyBudget) {
   }
 
   // Read the ACTUAL `donner_splash.svg` (112 paths, complex filter
-  // groups with real geometry — not a simplified stub). This is the
+  // groups with real geometry - not a simplified stub). This is the
   // document the user is interacting with in the editor; test numbers
   // must match editor reality.
   std::ifstream splashStream("donner_splash.svg");
@@ -3196,9 +3196,9 @@ TEST(AsyncRendererE2ETest, ClickThenDragOnSplashShapeMeetsLatencyBudget) {
   ASSERT_TRUE(asyncDoc.loadFromString(splashSource));
   asyncDoc.document().setCanvasSize(892, 512);
 
-  // Drag a letter from the Donner group — the user's reported flow.
+  // Drag a letter from the Donner group - the user's reported flow.
   auto target = asyncDoc.document().querySelector("#Donner path");
-  ASSERT_TRUE(target.has_value()) << "splash lacks #Donner path — has file structure changed?";
+  ASSERT_TRUE(target.has_value()) << "splash lacks #Donner path - has file structure changed?";
   const Entity targetEntity = target->unsafeEntityHandle().entity();
 
   svg::Renderer renderer;
@@ -3214,12 +3214,12 @@ TEST(AsyncRendererE2ETest, ClickThenDragOnSplashShapeMeetsLatencyBudget) {
   // this fails, the user sees a multi-second freeze between their
   // click and any visual feedback.
   EXPECT_LT(stats.clickToFirstPixelMs, kClickToFirstPixelBudgetMs)
-      << "click-to-first-pixel latency blown — user will see a multi-second freeze after "
+      << "click-to-first-pixel latency blown - user will see a multi-second freeze after "
          "clicking-to-drag on the splash. The first-promote path is rebuilding state that "
          "should have been warmed by the cold render.";
 
   EXPECT_LT(stats.steadyAvgMs, kDragFrameBudgetMs)
-      << "steady-state drag frames exceed the 120Hz budget — drag will feel laggy";
+      << "steady-state drag frames exceed the 120Hz budget - drag will feel laggy";
   EXPECT_LT(stats.steadyMaxMs, kDragFrameBudgetMs * 3)
       << "a steady-state drag frame spiked past 3x the 120Hz budget";
 
@@ -3228,7 +3228,7 @@ TEST(AsyncRendererE2ETest, ClickThenDragOnSplashShapeMeetsLatencyBudget) {
   // state. If the surgical segment-preservation on the click promote
   // left a stale segment in place (e.g., we failed to rasterize the
   // two halves of a split segment correctly), the user would see
-  // visual corruption — the letter drawn twice, or the segment showing
+  // visual corruption - the letter drawn twice, or the segment showing
   // its pre-split content. This assertion catches that.
   //
   // Approach: drive one more drag frame via the compositor, capture
@@ -3238,7 +3238,7 @@ TEST(AsyncRendererE2ETest, ClickThenDragOnSplashShapeMeetsLatencyBudget) {
   // Toggle skipMainCompose off for this frame via a fresh AsyncRenderer
   // cycle that populates a non-skipped compositor, OR render directly
   // with a fresh non-composited renderer for the reference side. We
-  // use the latter — simpler and doesn't disturb the `AsyncRenderer`
+  // use the latter - simpler and doesn't disturb the `AsyncRenderer`
   // worker state.
   svg::Renderer referenceRenderer;
   {
@@ -3298,10 +3298,10 @@ TEST(AsyncRendererE2ETest, EndToEndDragHarnessOnSplashShape) {
             << " ms\n";
 
   EXPECT_LT(stats.clickToFirstPixelMs, kClickToFirstPixelBudgetMs)
-      << "click-to-first-pixel on splash-shape blown — see ClickThenDragOnSplashShapeMeets"
+      << "click-to-first-pixel on splash-shape blown - see ClickThenDragOnSplashShapeMeets"
          "LatencyBudget for the primary assertion";
   EXPECT_LT(stats.steadyAvgMs, kDragFrameBudgetMs)
-      << "steady-state drag blown — see ClickThenDrag test for primary assertion";
+      << "steady-state drag blown - see ClickThenDrag test for primary assertion";
 }
 
 // Real-splash variant: reads `donner_splash.svg` from runfiles (BUILD
@@ -3343,16 +3343,16 @@ TEST(AsyncRendererE2ETest, EndToEndDragHarnessOnRealSplash) {
   // meet the user latency budget. This is the test that directly
   // reproduces the 4-second freeze the user reports.
   EXPECT_LT(stats.clickToFirstPixelMs, kClickToFirstPixelBudgetMs)
-      << "click-to-first-pixel on real splash blown — this is the 4-second freeze the user "
+      << "click-to-first-pixel on real splash blown - this is the 4-second freeze the user "
          "sees when they click-to-drag a letter. The compositor is rebuilding state on the "
          "click's render that should have been warmed by the cold page-load render.";
   EXPECT_LT(stats.steadyAvgMs, kDragFrameBudgetMs)
-      << "steady-state drag on real splash regressed past 20 ms/frame — drag will feel laggy";
+      << "steady-state drag on real splash regressed past 20 ms/frame - drag will feel laggy";
 }
 
 // Faithful-frame drag harness on the real splash. Includes the
 // synchronous overlay-chrome rasterize that the editor runs on the
-// main thread every drag frame — this is the variable the
+// main thread every drag frame - this is the variable the
 // `EndToEndDragHarness*` tests above *don't* measure, which explains
 // why they report ~1.5ms/frame while the user observes 80ms/frame in
 // the real editor.
@@ -3361,7 +3361,7 @@ TEST(AsyncRendererE2ETest, EndToEndDragHarnessOnRealSplash) {
 // (worker vs overlay vs GL-upload-proxy bytes) so we can attribute
 // the observed 80ms to the right bucket. It asserts the TOTAL frame
 // budget (16ms for 60Hz, aspirational 8ms for 120Hz) because that's
-// what the user feels — but with a current-reality gate so the test
+// what the user feels - but with a current-reality gate so the test
 // reports the number without hiding regressions.
 TEST(AsyncRendererE2ETest, FaithfulFrameDragOnRealSplashBreaksDownPerFrameCost) {
   if (!kAsyncRendererWallclockTestsEnabled) {
@@ -3425,21 +3425,21 @@ TEST(AsyncRendererE2ETest, FaithfulFrameDragOnRealSplashBreaksDownPerFrameCost) 
 
   // The user observes 80 ms per drag frame in the real editor. If this
   // faithful harness reports <20 ms while the editor shows 80 ms, the
-  // bulk of the cost is outside this measurement — almost certainly
+  // bulk of the cost is outside this measurement - almost certainly
   // the GL upload path or ImGui frame submission. The diagnostic
   // output above discriminates: if overlay+worker ~= 80 ms, the
   // culprit is CPU and visible here; if it's ~2 ms, the 80 ms lives
   // in the uncovered GL/present path and we need a headless-GL test.
   //
   // Budget gates against a CI-runner-shape floor rather than the 60 Hz
-  // aspirational 16 ms — GitHub's shared macOS runners reliably land
+  // aspirational 16 ms - GitHub's shared macOS runners reliably land
   // the faithful breakdown around 39 ms/frame. 75 ms = ~2x observed,
   // still tight enough to catch real regressions (e.g. N+1 per-segment
   // traversal would be multi-hundred ms on real splash). Breakdown
   // lines above tell you WHERE the regression lives.
   EXPECT_LT(stats.steadyAvgMs, 75.0)
       << "faithful per-frame drag cost exceeded 75 ms on a real splash drag. Breakdown above "
-         "tells you WHICH component grew — worker (compositor) vs overlay capture.";
+         "tells you WHICH component grew - worker (compositor) vs overlay capture.";
 }
 
 TEST(AsyncRendererE2ETest, FaithfulFrameDragOnRealSplashBlueCenterBurstBreaksDownPerFrameCost) {
@@ -3641,13 +3641,13 @@ TEST(AsyncRendererE2ETest, RawSelectedZoomRenderOnRealSplashBreaksDownPerFrameCo
 // shape (the "O"). The existing single-shape harness above showed
 // ~345 ms max per click-drag frame; the live editor reported ~3 s.
 // Two candidate amplifiers are exercised here:
-//   - **HiDPI-scaled canvas** — the live editor runs at device-pixel
+//   - **HiDPI-scaled canvas** - the live editor runs at device-pixel
 //     ratio 2 on a Retina display, which roughly doubles the canvas
 //     dimensions `donner_splash.svg` is rasterized into. Segment /
 //     layer bitmaps scale 2x×2x = 4x in pixel count, so any O(N) pixel
 //     work (segment rasterize, bg/fg compose, layer rasterize) grows
 //     accordingly.
-//   - **Second-promotion state churn** — when the user releases the D
+//   - **Second-promotion state churn** - when the user releases the D
 //     and clicks the O, the drag target changes mid-session. The
 //     compositor must demote the previous drag layer, promote a new
 //     one, and reshuffle the segment set. Any cache miss there
@@ -3655,7 +3655,7 @@ TEST(AsyncRendererE2ETest, RawSelectedZoomRenderOnRealSplashBreaksDownPerFrameCo
 //
 // The test asserts the per-click-drag compositor renderFrame stays
 // under 500 ms. If it trips the threshold, run the editor against the
-// same SVG and inspect the CompositorDebugPanel — the paint-order tile
+// same SVG and inspect the CompositorDebugPanel - the paint-order tile
 // list, raster-time column, and state header (active hints, split
 // path, last promote-refusal reason) give the equivalent breakdown
 // live.
@@ -3684,7 +3684,7 @@ TEST(AsyncRendererE2ETest, MultiShapeClickDragHiDpiRepro) {
 
   auto donnerPath = asyncDoc.document().querySelector("#Donner path");
   ASSERT_TRUE(donnerPath.has_value())
-      << "splash lacks #Donner path — did the fixture structure change?";
+      << "splash lacks #Donner path - did the fixture structure change?";
   const Entity donnerEntity = donnerPath->unsafeEntityHandle().entity();
 
   svg::Renderer renderer;
@@ -3738,12 +3738,12 @@ TEST(AsyncRendererE2ETest, MultiShapeClickDragHiDpiRepro) {
   // editor's first frame after opening the file.
   runPhase("cold", entt::null, entt::null, 1);
 
-  // Phase 1: click on "D" — first promote. `SelectTool` sets both
+  // Phase 1: click on "D" - first promote. `SelectTool` sets both
   // `selectedEntity` and `dragPreview(ActiveDrag)` on mouse-down.
   AsGraphicsElement(*donnerPath).setTransform(Transform2d::Translate(Vector2d(4.0, 0.0)));
   runPhase("click-D (first promote)", donnerEntity, donnerEntity, 2);
 
-  // Phase 2: steady drag on "D" — a few mouse-move frames.
+  // Phase 2: steady drag on "D" - a few mouse-move frames.
   for (int i = 0; i < 3; ++i) {
     AsGraphicsElement(*donnerPath)
         .setTransform(Transform2d::Translate(Vector2d(static_cast<double>(i + 2) * 8.0, 0.0)));
@@ -3758,7 +3758,7 @@ TEST(AsyncRendererE2ETest, MultiShapeClickDragHiDpiRepro) {
   // Phase 4: click on a DIFFERENT shape. Use a second path from the
   // Donner group if available; otherwise any non-Donner path. This
   // forces the compositor to demote the previous drag layer and
-  // promote a fresh one — the "click O blanks canvas" scenario.
+  // promote a fresh one - the "click O blanks canvas" scenario.
   auto alternatePath = asyncDoc.document().querySelector("#Donner path:nth-of-type(2)");
   if (!alternatePath.has_value()) {
     alternatePath = asyncDoc.document().querySelector("svg > path");
@@ -3768,7 +3768,7 @@ TEST(AsyncRendererE2ETest, MultiShapeClickDragHiDpiRepro) {
   AsGraphicsElement(*alternatePath).setTransform(Transform2d::Translate(Vector2d(4.0, 0.0)));
   runPhase("click-O (second promote)", alternateEntity, alternateEntity, 7);
 
-  // Phase 5: drag on O — matches the user's second drag gesture.
+  // Phase 5: drag on O - matches the user's second drag gesture.
   for (int i = 0; i < 3; ++i) {
     AsGraphicsElement(*alternatePath)
         .setTransform(Transform2d::Translate(Vector2d(static_cast<double>(i + 2) * 8.0, 0.0)));
@@ -3783,7 +3783,7 @@ TEST(AsyncRendererE2ETest, MultiShapeClickDragHiDpiRepro) {
   // Click-drag frames (Phase 1 and Phase 4) exercise the first-promote
   // path on each shape. Before the `demoteEntity` fix, the SECOND
   // promote (click-O) cost ~3.7s because `demoteEntity` unconditionally
-  // set `rootDirty_` and wiped every segment cache — forcing 8x
+  // set `rootDirty_` and wiped every segment cache - forcing 8x
   // `rasterizeLayer` and all 9 segments to rebuild. After the fix the
   // drag-target swap reuses every cached layer / segment whose
   // boundary pair survived, so click-D and click-O both land around
@@ -3804,7 +3804,7 @@ TEST(AsyncRendererE2ETest, MultiShapeClickDragHiDpiRepro) {
     if (t.label == "click-D (first promote)" || t.label == "click-O (second promote)") {
       EXPECT_LT(t.wallMs, 2500.0)
           << t.label
-          << " — the most common regression is re-introducing the eager "
+          << " - the most common regression is re-introducing the eager "
              "`rootDirty_ = true` / segment-cache wipe in `CompositorController"
              "::demoteEntity`. Reproduce in the editor and open the layer "
              "inspector panel: a raster-time column where most segments and "
@@ -3827,7 +3827,7 @@ TEST(AsyncRendererE2ETest, MultiShapeClickDragHiDpiRepro) {
   EXPECT_LT(clickOMs, clickDMs * 2.0)
       << "click-O (" << clickOMs << " ms) is more than 2x click-D (" << clickDMs
       << " ms). Drag-target swap should cost about the same as an initial "
-         "promote — every order of magnitude over click-D is cache invalidation "
+         "promote - every order of magnitude over click-D is cache invalidation "
          "that the fix was meant to prevent.";
 }
 
@@ -3915,21 +3915,21 @@ TEST(AsyncRendererE2ETest, CpuSnapshotStaysNonTransparentAcrossDragTargetSwap) {
     EXPECT_FALSE(result->bitmap.empty()) << phase << ": CPU snapshot empty";
     EXPECT_FALSE(isBitmapMostlyTransparent(result->bitmap))
         << phase
-        << ": CPU snapshot is ≥99% transparent — a full-canvas composited tile seeded from it "
+        << ": CPU snapshot is ≥99% transparent - a full-canvas composited tile seeded from it "
            "would show as a transparent flash to the user.";
   };
 
-  // Phase 0 — cold render. Flat must contain real document content.
+  // Phase 0 - cold render. Flat must contain real document content.
   post(1, entt::null, entt::null);
   checkResult("cold");
 
-  // Phase 1 — click-drag on D. Even though the editor displays composited
+  // Phase 1 - click-drag on D. Even though the editor displays composited
   // tiles for this frame, the CPU snapshot must retain the cold render's pixels.
   AsGraphicsElement(*donnerPath).setTransform(Transform2d::Translate(Vector2d(4.0, 0.0)));
   post(2, donnerEntity, donnerEntity);
   checkResult("click-D");
 
-  // Phase 2 — drag frames. The CPU snapshot must still hold cold pixels
+  // Phase 2 - drag frames. The CPU snapshot must still hold cold pixels
   // (skip-main-compose is active, main renderer's pixmap preserved).
   for (int i = 0; i < 3; ++i) {
     AsGraphicsElement(*donnerPath)
@@ -3938,12 +3938,12 @@ TEST(AsyncRendererE2ETest, CpuSnapshotStaysNonTransparentAcrossDragTargetSwap) {
     checkResult("drag-D");
   }
 
-  // Phase 3 — release D (selection kept). Still split-path, still
+  // Phase 3 - release D (selection kept). Still split-path, still
   // skip-main-compose, flat still preserved.
   post(6, donnerEntity, entt::null);
   checkResult("release-D");
 
-  // Phase 4 — click a different shape. THE critical phase: before the
+  // Phase 4 - click a different shape. THE critical phase: before the
   // fix, this was when the presenter fell back to flat and saw a
   // transparent texture.
   auto alternate = asyncDoc.document().querySelector("#Donner path:nth-of-type(2)");
@@ -3962,7 +3962,7 @@ TEST(AsyncRendererE2ETest, CpuSnapshotStaysNonTransparentAcrossDragTargetSwap) {
 // (with modified transform) as the writeback would. The compositor
 // should route through `remapAfterStructuralReplace`, not
 // `resetAllLayers(documentReplaced=true)`. Asserts the reset counter
-// does NOT bump — if it did, the remap path regressed.
+// does NOT bump - if it did, the remap path regressed.
 TEST(AsyncRendererE2ETest, DragEndWritebackTakesStructuralRemapPath) {
   const char* kSvgSource = R"svg(
 <?xml version="1.0" encoding="UTF-8"?>
@@ -4049,7 +4049,7 @@ TEST(AsyncRendererE2ETest, DragEndWritebackTakesStructuralRemapPath) {
   // The remap should be sitting in pendingStructuralRemap_ for the next
   // render request to carry.
 
-  // Refetch the target entity — entity ids changed across the reparse.
+  // Refetch the target entity - entity ids changed across the reparse.
   auto targetAfterReplace = asyncDoc.document().querySelector("#target");
   ASSERT_TRUE(targetAfterReplace.has_value());
 
@@ -4086,7 +4086,7 @@ TEST(AsyncRendererE2ETest, DragEndWritebackTakesStructuralRemapPath) {
   EXPECT_GT(static_cast<int>(originalOnlyPixel[2]), 200);
 
   EXPECT_EQ(asyncRenderer.compositorResetCountForTesting(), 0u)
-      << "drag-end writeback took the full-reset path instead of the structural remap path — "
+      << "drag-end writeback took the full-reset path instead of the structural remap path - "
          "Option B regressed";
 }
 
@@ -4359,14 +4359,14 @@ TEST(AsyncRendererE2ETest, SourcePaneStructurallyEquivalentReparseAvoidsReset) {
 
   // User-typed source-pane edit: the classifier's fast path doesn't
   // apply here (the change is an attribute on an existing element, so
-  // it actually WOULD classify as `SetAttributeCommand` in real use —
+  // it actually WOULD classify as `SetAttributeCommand` in real use -
   // but this test asserts the *fallback* structural-remap path works
   // just as well when the classifier can't handle the change, so emit
   // `preserveUndoOnReparse=false` and force `applyOne` through
   // `setDocumentMaybeStructural` via the non-preserve path).
   //
   // The non-preserve-undo ReplaceDocument still reaches setDocument,
-  // which today unconditionally clears `pendingStructuralRemap_` — so
+  // which today unconditionally clears `pendingStructuralRemap_` - so
   // a NON-structural edit should end up with `FullReplace` semantics
   // too. The TEST is that the *structurally-equivalent* bytes below
   // (only a fill color changed) produce a remap-preserving path.
@@ -4377,7 +4377,7 @@ TEST(AsyncRendererE2ETest, SourcePaneStructurallyEquivalentReparseAvoidsReset) {
   // path. This test documents that gap: we expect (future work) that
   // all `ReplaceDocumentCommand`s with structurally-equivalent bytes
   // skip the reset. Today the assertion fails loudly at the reset
-  // counter check — that's the regression surface we want gated.
+  // counter check - that's the regression surface we want gated.
   asyncDoc.applyMutation(EditorCommand::ReplaceDocumentCommand(kSvgStructurallyEquivalentEdit,
                                                                /*preserveUndoOnReparse=*/false));
   asyncDoc.flushFrame();
@@ -4393,7 +4393,7 @@ TEST(AsyncRendererE2ETest, SourcePaneStructurallyEquivalentReparseAvoidsReset) {
   asyncRenderer.requestRender(postEditRequest);
   ASSERT_TRUE(waitForResult().has_value());
 
-  // With the gap fixed, this would be 0 — the editor observed that
+  // With the gap fixed, this would be 0 - the editor observed that
   // the new tree is structurally equivalent to the old and dispatched
   // a `Structural` replace. Until then, the test documents the gap.
   //

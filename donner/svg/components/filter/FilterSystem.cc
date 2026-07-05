@@ -580,7 +580,7 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
         prim.svgSubDocument = svgLoaded->subDocument;
       } else if (const std::string_view hrefView(feImage->href);
                  !hrefView.empty() && hrefView[0] == '#') {
-        // Same-document fragment reference — store the fragment ID for the renderer to resolve.
+        // Same-document fragment reference - store the fragment ID for the renderer to resolve.
         prim.fragmentId = RcString(hrefView.substr(1));
         prim.isFragmentReference = true;
       }

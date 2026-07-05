@@ -1,23 +1,23 @@
 #pragma once
 /// @file
 ///
-/// `EditorWindow` — RAII wrapper around GLFW + OpenGL + Dear ImGui. Keeps
+/// `EditorWindow` - RAII wrapper around GLFW + OpenGL + Dear ImGui. Keeps
 /// the main binary thin by encapsulating everything that would otherwise
 /// be boilerplate: GLFW init, window creation, context current, glad
 /// loader, ImGui context, imgui_impl_glfw + imgui_impl_opengl3 setup,
 /// plus texture upload from a `RendererBitmap`.
 ///
-/// The class is intentionally narrow — it exposes only what the main
+/// The class is intentionally narrow - it exposes only what the main
 /// binary needs:
 ///   - construct/destruct (RAII handles cleanup)
-///   - `shouldClose()` / `pollEvents()` / `waitEvents()` / `waitEventsTimeout()` — event loop hooks
-///   - `beginFrame()` / `endFrame()` — ImGui frame bracketing + swap
-///   - `uploadBitmap()` — moves a CPU-side RGBA buffer into a GL texture
+///   - `shouldClose()` / `pollEvents()` / `waitEvents()` / `waitEventsTimeout()` - event loop hooks
+///   - `beginFrame()` / `endFrame()` - ImGui frame bracketing + swap
+///   - `uploadBitmap()` - moves a CPU-side RGBA buffer into a GL texture
 ///     (reuses the same texture ID across frames to avoid churn)
-///   - `textureId()` — exposes the current texture for `ImGui::Image`
+///   - `textureId()` - exposes the current texture for `ImGui::Image`
 ///
 /// Any code that wants to draw ImGui widgets happens *between*
-/// `beginFrame()` and `endFrame()` on the caller's side — this class
+/// `beginFrame()` and `endFrame()` on the caller's side - this class
 /// doesn't own the widget tree, just the hosting surface.
 
 #include <array>
@@ -147,7 +147,7 @@ using WgpuDirectRenderCallback = std::function<void(const EditorWindowWgpuRender
 #endif
 
 /// Initializes GLFW + GL + ImGui when constructed, tears everything down
-/// in the destructor. One instance per process — ImGui's global state
+/// in the destructor. One instance per process - ImGui's global state
 /// means we can't easily have two at once.
 class EditorWindow {
 public:
@@ -218,7 +218,7 @@ public:
   [[nodiscard]] svg::RendererBitmap endFrameAndReadPixels();
 
   /// Uploads `bitmap` to the GL texture owned by this window. The
-  /// texture is reused across calls — later calls replace the contents.
+  /// texture is reused across calls - later calls replace the contents.
   /// No-op on empty bitmaps. After upload, `textureId()` returns a handle
   /// suitable for `ImGui::Image((void*)(intptr_t)textureId(), ...)`.
   void uploadBitmap(const svg::RendererBitmap& bitmap);

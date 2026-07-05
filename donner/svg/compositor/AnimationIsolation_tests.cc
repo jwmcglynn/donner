@@ -25,7 +25,7 @@ protected:
 
 // Proves that a future animation system can publish `Animation` hints through
 // `ScopedCompositorHint::Animation` and the resolver will promote the
-// animated entity to its own layer — the Phase 2 "animation unblocked" gate.
+// animated entity to its own layer - the Phase 2 "animation unblocked" gate.
 // The animation system itself doesn't exist yet; this exercises the seam.
 TEST_F(AnimationIsolationTest, AnimationHintPromotesEntityToLayer) {
   const Entity animated = registry_.create();
@@ -57,7 +57,7 @@ TEST_F(AnimationIsolationTest, AnimationOutweighsInteractionUnderBudget) {
 
 // When the `autoPromoteAnimations` gate is off in `ResolveOptions`, Animation
 // hints produce no layer. This is the runtime kill-switch the design doc calls
-// out in Goal 7 / § Reversibility — animations fall back to whole-document
+// out in Goal 7 / § Reversibility - animations fall back to whole-document
 // re-rendering without ABI fragmentation.
 TEST_F(AnimationIsolationTest, AnimationGateDisablesPromotion) {
   const Entity animated = registry_.create();
@@ -72,7 +72,7 @@ TEST_F(AnimationIsolationTest, AnimationGateDisablesPromotion) {
 }
 
 // An entity with both a Mandatory hint AND an Animation hint still gets a
-// layer even when the Animation gate is off — Mandatory hints represent SVG
+// layer even when the Animation gate is off - Mandatory hints represent SVG
 // semantics (opacity < 1, filter, mask) and are always honored.
 TEST_F(AnimationIsolationTest, MandatoryHintOverridesAnimationGate) {
   const Entity e = registry_.create();
@@ -90,7 +90,7 @@ TEST_F(AnimationIsolationTest, MandatoryHintOverridesAnimationGate) {
 
 // Toggling the gate on a live registry drops the assignment when the gate
 // flips off and re-publishes it when the gate flips back on. The RAII hint
-// handle itself persists — only the resolver's output changes.
+// handle itself persists - only the resolver's output changes.
 TEST_F(AnimationIsolationTest, GateFlipDemotesAndRepromotes) {
   const Entity animated = registry_.create();
   ScopedCompositorHint hint = ScopedCompositorHint::Animation(registry_, animated);

@@ -9,8 +9,8 @@ namespace donner::svg {
  * @page xml_feSpecularLighting "<feSpecularLighting>"
  *
  * `<feSpecularLighting>` is the shiny-highlight companion of \ref xml_feDiffuseLighting.
- * Where diffuse lighting gives you the *matte* component of the Phong reflection model — the
- * soft, bright-toward-the-light look of a pool ball — specular lighting gives you the *glossy*
+ * Where diffuse lighting gives you the *matte* component of the Phong reflection model - the
+ * soft, bright-toward-the-light look of a pool ball - specular lighting gives you the *glossy*
  * component: the small, bright hotspot you see on a wet or metallic surface when a light
  * reflects off it toward your eye. Use it to add shiny highlights to shapes; it's how you get
  * the classic glossy-button look.
@@ -19,8 +19,8 @@ namespace donner::svg {
  * opaque = taller surface at that spot) and uses the resulting surface normals to compute
  * shading. The surface normal is the imaginary arrow sticking out of the terrain at each
  * point; specular lighting is brightest where that arrow points exactly halfway between the
- * light and the viewer. It must contain exactly one child light source — \ref
- * xml_feDistantLight, \ref xml_fePointLight, or \ref xml_feSpotLight — and because the
+ * light and the viewer. It must contain exactly one child light source - \ref
+ * xml_feDistantLight, \ref xml_fePointLight, or \ref xml_feSpotLight - and because the
  * specular output is non-opaque (black everywhere except the highlight), you almost always
  * composite it on top of a diffuse pass or the source graphic with \ref xml_feComposite using
  * `operator="arithmetic"`. As with diffuse lighting, feeding a solid alpha shape to this
@@ -58,12 +58,12 @@ namespace donner::svg {
  * </filter>
  * ```
  *
- * Everything outside the small bright hotspot is black — that's the empty (RGBA=0) background
+ * Everything outside the small bright hotspot is black - that's the empty (RGBA=0) background
  * `feSpecularLighting` emits. In real use you'd composite this over something.
  *
  * \par Example 2: same bump, point light
  *
- * Using a \ref xml_fePointLight instead of a distant light — the hotspot sits under wherever
+ * Using a \ref xml_fePointLight instead of a distant light - the hotspot sits under wherever
  * the point light is, rather than from a fixed direction.
  *
  * \htmlonly
@@ -89,13 +89,13 @@ namespace donner::svg {
  * </feSpecularLighting>
  * ```
  *
- * Moving the point's `(x, y, z)` drags the highlight around the surface — this is the primary
+ * Moving the point's `(x, y, z)` drags the highlight around the surface - this is the primary
  * knob for making highlights feel interactive. (See \ref xml_feSpotLight for a cone-shaped
  * alternative that clips everything outside a narrow beam.)
  *
  * \par Example 3: specularExponent
  *
- * `specularExponent` is the "shininess" exponent from the Phong model. Small values (1–5)
+ * `specularExponent` is the "shininess" exponent from the Phong model. Small values (1-5)
  * produce a broad, soft sheen; large values (50+) produce a tight, sharp mirror-like highlight.
  *
  * \htmlonly
@@ -185,7 +185,7 @@ namespace donner::svg {
  * </svg>
  * \endhtmlonly
  *
- * \par Example 5: putting it together — glossy button
+ * \par Example 5: putting it together - glossy button
  *
  * This is the "why do I care" example. We take a colored circle, run it through \ref
  * xml_feDiffuseLighting to give it matte shading, then add a \ref xml_feSpecularLighting pass
@@ -243,7 +243,7 @@ namespace donner::svg {
  * ```
  *
  * Notice that both lighting primitives share the same blurred-alpha input and the same light
- * source parameters — that's what makes the highlight sit in the right place relative to the
+ * source parameters - that's what makes the highlight sit in the right place relative to the
  * matte shading. Varying the light's azimuth/elevation rotates both effects together.
  *
  * \par Attributes

@@ -173,7 +173,7 @@ TEST_F(CompositorGoldenTest, RotationDragProducesCorrectPixels) {
   // First frame rasterizes the cached bitmap at the identity transform.
   compositor.renderFrame(viewport_);
 
-  // Rotate ~28.6° about the rect center — a non-translation gesture frame.
+  // Rotate ~28.6° about the rect center - a non-translation gesture frame.
   const Vector2d center(100.0, 50.0);
   const Transform2d documentFromElement =
       Transform2d::Translate(center) * Transform2d::Rotate(0.5) * Transform2d::Translate(-center);
@@ -221,8 +221,8 @@ TEST_F(CompositorGoldenTest, ScaleDragProducesCorrectPixels) {
 // frame. The bug: the cached static segment / layer holding the element's
 // pixels was not invalidated by the `display` attribute change, so the hidden
 // element persisted as a ghost over the (now transparent) area. DualPathVerifier
-// compares the composite against a full re-render — which correctly omits a
-// display:none element — so a stale tile shows up as a non-zero mismatch.
+// compares the composite against a full re-render - which correctly omits a
+// display:none element - so a stale tile shows up as a non-zero mismatch.
 TEST_F(CompositorGoldenTest, HidingElementClearsItsPixelsFromComposite) {
   SVGDocument document = parseDocument(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
@@ -240,7 +240,7 @@ TEST_F(CompositorGoldenTest, HidingElementClearsItsPixelsFromComposite) {
   EXPECT_THAT(getPixel(renderer_.takeSnapshot(), 35, 35), IsRed())
       << "red rect should be visible before hiding";
 
-  // Hide it — mirrors EditorApp::setElementVisible(false).
+  // Hide it - mirrors EditorApp::setElementVisible(false).
   target->setAttribute(xml::XMLQualifiedNameRef("display"), "none");
 
   DualPathVerifier verifier(compositor, renderer_);
@@ -256,7 +256,7 @@ TEST_F(CompositorGoldenTest, HidingElementClearsItsPixelsFromComposite) {
 // its generation changes (and reuses the cached texture for a metadata-only /
 // unchanged-generation tile). So if hiding an element changes the visible
 // composite WITHOUT changing the published (tileId, generation) set, the editor
-// keeps drawing the stale texture — the reported "ghost". This pins the
+// keeps drawing the stale texture - the reported "ghost". This pins the
 // invariant that a visible content change must change the published tile set.
 TEST_F(CompositorGoldenTest, HidingElementChangesPublishedTileGenerations) {
   SVGDocument document = parseDocument(R"svg(
@@ -291,18 +291,18 @@ TEST_F(CompositorGoldenTest, HidingElementChangesPublishedTileGenerations) {
 
   EXPECT_NE(before, after)
       << "hiding an element changed the composite but left the published "
-         "(tileId, generation) set identical — the editor's GL cache would keep "
+         "(tileId, generation) set identical - the editor's GL cache would keep "
          "drawing the stale tile (the hide-layer ghost).";
 }
 
 // Lockstep rotate/scale preview (#6/#7): an ActiveDrag layer under a
 // NON-translation drag delta (rotate/scale) must carry the affine in
-// `canvasFromBitmap` and REUSE the cached bitmap — exactly like the translation
-// fast path slides it — so the presentation transforms the cached pixels as a
+// `canvasFromBitmap` and REUSE the cached bitmap - exactly like the translation
+// fast path slides it - so the presentation transforms the cached pixels as a
 // live quad in lockstep with the overlay. Re-rasterizing instead (baking the
 // rotation so canvasFromBitmap collapses to ~identity) drops the shape off the
 // live-tracking path: the presented quad then only carries the incremental
-// (represented->active) delta and snaps back as the worker republishes — the
+// (represented->active) delta and snaps back as the worker republishes - the
 // "shape lags / doesn't move in lockstep" QA report.
 TEST_F(CompositorGoldenTest, RotationDragCarriesAffineInCanvasFromBitmapForLockstep) {
   SVGDocument document = parseDocument(R"svg(
@@ -329,7 +329,7 @@ TEST_F(CompositorGoldenTest, RotationDragCarriesAffineInCanvasFromBitmapForLocks
     return std::nullopt;
   };
 
-  // Rotate ~28.6° about the rect center — a non-translation gesture frame.
+  // Rotate ~28.6° about the rect center - a non-translation gesture frame.
   const Vector2d center(100.0, 50.0);
   const Transform2d documentFromElement =
       Transform2d::Translate(center) * Transform2d::Rotate(0.5) * Transform2d::Translate(-center);
@@ -407,7 +407,7 @@ TEST_F(CompositorGoldenTest, DraggingFilterGroupSubtreeEngagesFastPath) {
   ASSERT_TRUE(stampAfterWarm.has_value());
 
   // Drag. The filter group contains children, so `layer.firstEntity()
-  // != layer.lastEntity()` — the single-entity fast-path gate would
+  // != layer.lastEntity()` - the single-entity fast-path gate would
   // have rejected this, forcing a full `prepareDocumentForRendering`
   // re-run every frame.
   target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(10.0, 0.0)));
@@ -418,13 +418,13 @@ TEST_F(CompositorGoldenTest, DraggingFilterGroupSubtreeEngagesFastPath) {
   ASSERT_TRUE(layerAfterDrag->hasValidBitmap());
 
   // Fast-path signal #1: the layer's rasterize-time stamp hasn't
-  // moved. If it changed, `setBitmap` ran — slow path.
+  // moved. If it changed, `setBitmap` ran - slow path.
   const std::optional<Transform2d> stampAfterDrag =
       layerAfterDrag->bitmapEntityFromWorldTransform();
   ASSERT_TRUE(stampAfterDrag.has_value());
   EXPECT_NEAR(stampAfterDrag->data[4], stampAfterWarm->data[4], 1e-9)
       << "filter-group layer was re-rasterized during drag instead of reusing "
-         "the cached bitmap — the `firstEntity == lastEntity == e` gate "
+         "the cached bitmap - the `firstEntity == lastEntity == e` gate "
          "rejected the subtree layer from the fast path";
   EXPECT_NEAR(stampAfterDrag->data[5], stampAfterWarm->data[5], 1e-9);
 
@@ -439,7 +439,7 @@ TEST_F(CompositorGoldenTest, DraggingFilterGroupSubtreeEngagesFastPath) {
 // Lockstep rotate/scale for a FILTERED group (#6/#7, e.g. #Lighting_glow_dark).
 // A filter group is a subtree layer (its cached bitmap is the whole filtered
 // result), so it must reuse that cached bitmap and carry the rotate/scale affine
-// in `canvasFromBitmap` — transforming the filtered result as a live quad —
+// in `canvasFromBitmap` - transforming the filtered result as a live quad -
 // rather than re-rendering the (expensive) filter every frame. Re-rendering each
 // frame is what makes a filtered element "glitchy" during resize/rotate: the
 // subtree fast-path gate disqualified non-translation deltas and fell back to a
@@ -477,7 +477,7 @@ TEST_F(CompositorGoldenTest, FilterGroupRotationDragReusesCachedBitmapForLockste
   const std::optional<Transform2d> stampAfterWarm = warm->bitmapEntityFromWorldTransform();
   ASSERT_TRUE(stampAfterWarm.has_value());
 
-  // Rotate the filter group about its center — a non-translation gesture frame.
+  // Rotate the filter group about its center - a non-translation gesture frame.
   const Vector2d center(80.0, 90.0);
   const Transform2d documentFromElement =
       Transform2d::Translate(center) * Transform2d::Rotate(0.4) * Transform2d::Translate(-center);
@@ -488,7 +488,7 @@ TEST_F(CompositorGoldenTest, FilterGroupRotationDragReusesCachedBitmapForLockste
   ASSERT_NE(afterDrag, nullptr);
   ASSERT_TRUE(afterDrag->hasValidBitmap());
 
-  // The cached filtered bitmap must be reused (stamp unchanged) — not re-filtered.
+  // The cached filtered bitmap must be reused (stamp unchanged) - not re-filtered.
   const std::optional<Transform2d> stampAfterDrag = afterDrag->bitmapEntityFromWorldTransform();
   ASSERT_TRUE(stampAfterDrag.has_value());
   EXPECT_NEAR(stampAfterDrag->data[4], stampAfterWarm->data[4], 1e-9)
@@ -560,7 +560,7 @@ TEST_F(CompositorGoldenTest, TranslationDragEngagesFastPathAtMultipleCanvasScale
         << "bitmap stamp regressed: layer was re-rasterized instead of using "
            "the translation-only fast path";
 
-    // And the canvasFromBitmap MUST carry the delta — 25 doc units
+    // And the canvasFromBitmap MUST carry the delta - 25 doc units
     // at `canvasScale` → `25 * canvasScale` canvas pixels.
     const Transform2d canvasFromBitmap = layerAfterDrag->canvasFromBitmap();
     ASSERT_TRUE(canvasFromBitmap.isTranslation())
@@ -574,8 +574,8 @@ TEST_F(CompositorGoldenTest, TranslationDragEngagesFastPathAtMultipleCanvasScale
   }
 }
 
-// Editor-reported bug repro: when the canvas is bigger than the viewBox —
-// e.g. HiDPI rendering at 2x, or zoomed-in interactive mode — a drag that
+// Editor-reported bug repro: when the canvas is bigger than the viewBox -
+// e.g. HiDPI rendering at 2x, or zoomed-in interactive mode - a drag that
 // translates an element by N document units should produce a visible move
 // of N * canvasScale pixels. On Geode's split-bitmap path this was moving
 // the bitmap by N pixels (document units applied raw) while the rest of
@@ -615,7 +615,7 @@ TEST_F(CompositorGoldenTest, ScaledCanvasTranslationOnlyDragProducesCorrectPixel
   // Frame 2: drag frame. Compositor picks up the delta against the
   // stamped bitmap and applies a translation-only canvasFromBitmap
   // instead of re-rasterizing. This is the path the user exercises
-  // during drag — if the delta is computed in doc space but applied
+  // during drag - if the delta is computed in doc space but applied
   // in canvas-pixel space, the bitmap moves HALF the intended
   // distance, producing a visible gap between the chrome AABB (which
   // re-reads DOM canvas-space) and the rendered shape.
@@ -628,15 +628,15 @@ TEST_F(CompositorGoldenTest, ScaledCanvasTranslationOnlyDragProducesCorrectPixel
       << "after a fast-path drag the bitmap should be stamped at canvas "
          "pixel (80, 30); any other offset means the compositor applied "
          "the doc-space delta in pixel space and missed the canvasFromDoc "
-         "scale — this is the user-reported `shape moves half the distance "
+         "scale - this is the user-reported `shape moves half the distance "
          "of the overlay` regression";
   EXPECT_THAT(getPixel(flat, 30, 30), IsWhite())
-      << "original position now vacated — a stale bitmap here means the "
+      << "original position now vacated - a stale bitmap here means the "
          "compositor left the old stamp around AND overlaid a shifted copy";
   // Probe the "moved half the distance" regression specifically: canvas
   // pixel (55, 30) is where the bitmap lands if delta is applied raw.
   EXPECT_THAT(getPixel(flat, 55, 30), IsWhite())
-      << "no bitmap residue at half-delta position — if this fails, the "
+      << "no bitmap residue at half-delta position - if this fails, the "
          "split-bitmap path is treating doc-space translation as pixel-space";
 }
 
@@ -733,16 +733,16 @@ TEST_F(CompositorGoldenTest, DragReleaseResetSequenceWithAggressiveBucketing) {
   // Phase 1.
   compositor.renderFrame(viewport_);
 
-  // Phase 2 — drag via DOM mutation. The compositor's fast path detects the
+  // Phase 2 - drag via DOM mutation. The compositor's fast path detects the
   // pure-translation delta vs. the bitmap's stamped transform and reuses the
   // cached bitmap with an internal compose offset.
   target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(100.0, 0.0)));
   compositor.renderFrame(viewport_);
 
-  // Phase 3 — DOM is already at the final transform; just re-render.
+  // Phase 3 - DOM is already at the final transform; just re-render.
   compositor.renderFrame(viewport_);
 
-  // Phase 4 — resetAllLayers, re-promote.
+  // Phase 4 - resetAllLayers, re-promote.
   compositor.resetAllLayers();
   ASSERT_TRUE(compositor.promoteEntity(entity));
   compositor.renderFrame(viewport_);
@@ -754,7 +754,7 @@ TEST_F(CompositorGoldenTest, DragReleaseResetSequenceWithAggressiveBucketing) {
 }
 
 // Exercises the `CompositorConfig::verifyPixelIdentity` runtime gate. With
-// the gate on, `renderFrame` internally dual-paths and asserts — if
+// the gate on, `renderFrame` internally dual-paths and asserts - if
 // composited output matches the full-render reference, the test passes; if
 // a regression ever produces drift, `UTILS_RELEASE_ASSERT` fires and the
 // test fails with a diagnostic.
@@ -790,7 +790,7 @@ TEST_F(CompositorGoldenTest, MultiBucketCompositionMatchesFullRender) {
 // output to full-render. The auto-promoted layer's cached bitmap is
 // premultiplied-alpha; `composeLayers` unpremultiplies before passing to
 // `drawImage` so the compose math matches the direct-render path.
-// Filter groups should auto-promote after the first `renderFrame` completes —
+// Filter groups should auto-promote after the first `renderFrame` completes -
 // i.e. the moment `RenderingInstanceComponent`s exist, the
 // `MandatoryHintDetector` should have noticed and published a Mandatory hint
 // for any `<g filter="…">` in the document. This guards against the earlier
@@ -810,7 +810,7 @@ TEST_F(CompositorGoldenTest, FilterGroupAutoPromotesOnFirstRender) {
   const Entity glowEntity = glow->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
-  EXPECT_EQ(compositor.layerCount(), 0u) << "no render yet — detectors haven't run";
+  EXPECT_EQ(compositor.layerCount(), 0u) << "no render yet - detectors haven't run";
 
   compositor.renderFrame(viewport_);
   EXPECT_EQ(compositor.layerCount(), 1u)
@@ -992,7 +992,7 @@ TEST_F(CompositorGoldenTest, DualPathGate_ExplicitPromoteAtIdentity) {
 
 TEST_F(CompositorGoldenTest, VerifyPixelIdentityGateCatchesNoDriftOnValidScene) {
   // The dual-path assertion compares composited output against a full-render
-  // reference. It can only be enabled when both paths render the SAME scene —
+  // reference. It can only be enabled when both paths render the SAME scene -
   // i.e., composition transform must match the DOM. During an active drag
   // (composition transform differs from DOM), enabling the gate would always
   // fire (correctly!) because the paths render visually different content.
@@ -1012,7 +1012,7 @@ TEST_F(CompositorGoldenTest, VerifyPixelIdentityGateCatchesNoDriftOnValidScene) 
   CompositorController compositor(document, renderer_, config);
   ASSERT_TRUE(compositor.promoteEntity(entity));
 
-  // DOM is at identity — the compositor and reference paths render the same
+  // DOM is at identity - the compositor and reference paths render the same
   // pixels. Each renderFrame internally dual-paths and asserts. Survival to
   // the end = no drift detected.
   compositor.renderFrame(viewport_);
@@ -1093,7 +1093,7 @@ TEST_F(CompositorGoldenTest, GaussianBlurredShapeRemainsVisibleDuringDrag) {
 
   // Original rect x=60,y=20,w=60,h=60. After translate +30, rect is at
   // [90, 150] × [20, 80]. The Gaussian blur (stdDeviation=4) produces a
-  // halo extending ~8–12 px beyond the edges — red bleeds into the
+  // halo extending ~8-12 px beyond the edges - red bleeds into the
   // surrounding white.
   //
   // Sample the halo at (155, 50): 5 px outside the right edge. If the blur
@@ -1115,13 +1115,13 @@ TEST_F(CompositorGoldenTest, GaussianBlurredShapeRemainsVisibleDuringDrag) {
 // filtered groups are top-level children (bucketed by ComplexityBucketer)
 // and their layer rasterization goes through `drawEntityRange(g, g.lastRenderedEntity)`.
 // If that range iteration doesn't process the group's children, the bucket
-// bitmap is empty — the glow vanishes.
+// bitmap is empty - the glow vanishes.
 //
 // This test explicitly rasterizes such a group to confirm the path works.
 // Reproduces the donner_splash.svg scenario: a "letters" group (the draggable
 // yellow foreground) alongside a "glow" group with a blur filter (the
 // background glow that shouldn't disappear when the letters are dragged).
-// Both are top-level children of the SVG root — with aggressive bucketing
+// Both are top-level children of the SVG root - with aggressive bucketing
 // (minCostToBucket=1), they become separate bucket layers. When the user
 // drags a LETTER (descendant of the letters group), the glow layer should
 // STILL render correctly.
@@ -1208,7 +1208,7 @@ TEST_F(CompositorGoldenTest, ReducedSplashDraggingLetterPreservesGlow) {
   constexpr int kSampleX = 465;
   constexpr int kSampleY = 420;
 
-  // Frame 0: full render BEFORE any drag — baseline.
+  // Frame 0: full render BEFORE any drag - baseline.
   compositor.renderFrame(fullViewport);
   const RendererBitmap baseline = renderer_.takeSnapshot();
   const Pixel glowBaseline = getPixel(baseline, kSampleX, kSampleY);
@@ -1333,7 +1333,7 @@ TEST_F(CompositorGoldenTest, SplashDragWithBucketingAndMultipleFilterGroups) {
 
 // Translation-only drag must not re-rasterize the static segment / non-
 // drag-layer tiles between frames. Post §M2C the editor blits segments
-// and non-drag layers directly — if their generations bumped per frame,
+// and non-drag layers directly - if their generations bumped per frame,
 // the editor would re-upload N textures every pointer move (the
 // equivalent of the pre-M2C "bg/fg flatten on every frame" regression).
 // We probe `snapshotTilesForUpload` and assert generations are stable
@@ -1394,10 +1394,10 @@ TEST_F(CompositorGoldenTest, SplitBitmapsStableAcrossTranslationOnlyDragFrames) 
     auto it = nonDragGenerations.find(tile.tileId);
     ASSERT_NE(it, nonDragGenerations.end())
         << "non-drag tile id " << tile.tileId
-        << " disappeared between drag frames — segment cache rebuilt mid-drag";
+        << " disappeared between drag frames - segment cache rebuilt mid-drag";
     EXPECT_EQ(it->second, tile.generation)
         << "non-drag tile id " << tile.tileId
-        << " re-rasterized between drag frames — cache invalidated incorrectly";
+        << " re-rasterized between drag frames - cache invalidated incorrectly";
   }
 }
 
@@ -1527,7 +1527,7 @@ TEST_F(CompositorGoldenTest, SelectionToActiveDragDoesNotAdvanceUnchangedTileGen
 }
 
 // A drag-release `SetTransformCommand` mutation must NOT trigger a full
-// `prepareDocumentForRendering` rebuild — that tears down every RIC and
+// `prepareDocumentForRendering` rebuild - that tears down every RIC and
 // every `ComputedShadowTreeComponent`, then recomputes styles / paint /
 // filters across the whole tree (O(N)). For a complex document this was
 // the user-visible ~2s hang on mouse release even though nothing needed
@@ -1536,7 +1536,7 @@ TEST_F(CompositorGoldenTest, SelectionToActiveDragDoesNotAdvanceUnchangedTileGen
 // entities" and refreshes just the affected `worldFromEntityTransform`
 // in place, leaving the rest of the render tree untouched.
 //
-// Test probes a RIC pointer outside the dirty entity's layer — it must
+// Test probes a RIC pointer outside the dirty entity's layer - it must
 // stay stable across the mutation, which is only true if no RIC rebuild
 // happened.
 TEST_F(CompositorGoldenTest, TransformMutationOnPromotedEntitySkipsFullPrepare) {
@@ -1572,12 +1572,12 @@ TEST_F(CompositorGoldenTest, TransformMutationOnPromotedEntitySkipsFullPrepare) 
   const components::RenderingInstanceComponent* bystanderRicAfter =
       &document.registry().get<components::RenderingInstanceComponent>(bystanderEntity);
   EXPECT_EQ(bystanderRicBefore, bystanderRicAfter)
-      << "unrelated entity's RIC was reallocated — prepareDocumentForRendering ran and wiped every "
+      << "unrelated entity's RIC was reallocated - prepareDocumentForRendering ran and wiped every "
          "RIC. The compositor should have taken the fast path and updated only the target's RIC.";
 }
 
 // A SetTransformCommand on drag release dirties the dragged entity. The
-// compositor must re-rasterize *only* the drag layer's cached bitmap — NOT
+// compositor must re-rasterize *only* the drag layer's cached bitmap - NOT
 // every mandatory filter layer it happens to share the document with. A
 // naive `any-entity-dirty → root-dirty → rasterize-everything` policy would
 // pay full filter-rasterization cost on every drag release. The test sets
@@ -1620,7 +1620,7 @@ TEST_F(CompositorGoldenTest, DragEntityMutationKeepsMandatoryFilterLayerCached) 
   const uint8_t* glowDataAfter =
       compositor.layerBitmapOf(glow->unsafeEntityHandle().entity()).pixels.data();
   EXPECT_EQ(glowDataBefore, glowDataAfter)
-      << "glow filter layer must be reused across the drag-release mutation — re-rasterizing it "
+      << "glow filter layer must be reused across the drag-release mutation - re-rasterizing it "
          "is what the user felt as a ~2s hang on every new drag";
 }
 
@@ -1629,11 +1629,11 @@ TEST_F(CompositorGoldenTest, DragEntityMutationKeepsMandatoryFilterLayerCached) 
 // has two non-promoted rects (`before`, `after`) on either side of a
 // promoted drag target. The `before` rect lives in segment[0]; `after`
 // lives in segment[1]. We capture both segments' data pointers, mutate
-// only `after`, and assert segment[0]'s pointer is preserved — i.e.
+// only `after`, and assert segment[0]'s pointer is preserved - i.e.
 // segment[0] stayed cached because only segment[1] was dirty.
 // Mirrors the splash shape: one drag target plus N sibling mandatory-promoted
 // filter groups, then drives many drag frames. Each drag frame only mutates
-// the drag target's transform — every filter layer's bitmap MUST be reused
+// the drag target's transform - every filter layer's bitmap MUST be reused
 // across the whole drag session. Before the fix, mutating the drag target
 // somehow escalated to marking sibling filter layers dirty (or to
 // `rootDirty_`), so `rasterizeLayer()` got called per-filter per drag frame.
@@ -1645,7 +1645,7 @@ TEST_F(CompositorGoldenTest, DragEntityMutationKeepsMandatoryFilterLayerCached) 
 //
 // Probe: capture every filter layer's bitmap `.data()` pointer after the first
 // drag frame, then drive N more drag frames. The pointer stays stable iff the
-// vector was never reassigned — i.e. the layer was not re-rasterized. Any
+// vector was never reassigned - i.e. the layer was not re-rasterized. Any
 // regression that makes a filter layer re-rasterize during pure-translation
 // drag will flip the pointer.
 TEST_F(CompositorGoldenTest, SplashDragMultipleFilterLayersStableAcrossManyFrames) {
@@ -1717,7 +1717,7 @@ TEST_F(CompositorGoldenTest, SplashDragMultipleFilterLayersStableAcrossManyFrame
   ASSERT_NE(glowBData, nullptr);
   ASSERT_NE(glowCData, nullptr);
 
-  // Drive many more drag frames, pure-translation only — no filter layer's
+  // Drive many more drag frames, pure-translation only - no filter layer's
   // pixel content has changed, so no filter layer should re-rasterize.
   constexpr int kTrailingDragFrames = 20;
   for (int i = 2; i <= kTrailingDragFrames; ++i) {
@@ -1726,14 +1726,14 @@ TEST_F(CompositorGoldenTest, SplashDragMultipleFilterLayersStableAcrossManyFrame
     compositor.renderFrame(splashViewport);
   }
 
-  // Each filter layer's bitmap pointer must still match — the vector was not
+  // Each filter layer's bitmap pointer must still match - the vector was not
   // reallocated, i.e. no `rasterizeLayer` ran for these layers. If this trips,
   // the compositor has regressed into a mode where drag-target mutations
   // cascade into the filter layers, which means the splash is re-rasterizing
   // every frame (the perf symptom) and repeatedly hitting
   // `Renderer::createOffscreenInstance()` (the crash symptom).
   EXPECT_EQ(compositor.layerBitmapOf(glowAEntity).pixels.data(), glowAData)
-      << "glow_a filter-layer bitmap re-allocated during drag — the drag-target mutation "
+      << "glow_a filter-layer bitmap re-allocated during drag - the drag-target mutation "
          "escalated to marking the filter layer dirty.";
   EXPECT_EQ(compositor.layerBitmapOf(glowBEntity).pixels.data(), glowBData)
       << "glow_b filter-layer bitmap re-allocated during drag.";
@@ -1744,7 +1744,7 @@ TEST_F(CompositorGoldenTest, SplashDragMultipleFilterLayersStableAcrossManyFrame
 // Drag target is a `<g>` with child elements, so its entity range is multi-
 // entity (`subtreeInfo.lastRenderedEntity != firstEntity`). The fast-path
 // single-entity eligibility check rejects this layer; every drag frame falls
-// through to the slow path — `prepareDocumentForRendering` + a full
+// through to the slow path - `prepareDocumentForRendering` + a full
 // `rasterizeLayer` call. That slow path is where the user's ~200ms drag
 // updates and the `Renderer::createOffscreenInstance` crash live.
 //
@@ -1752,7 +1752,7 @@ TEST_F(CompositorGoldenTest, SplashDragMultipleFilterLayersStableAcrossManyFrame
 // splash-shaped document (sibling filter groups on both sides of the drag
 // target) and asserts that every frame completes without crashing. Before
 // the fix the `rasterizeLayer` call path was flaky against repeated offscreen
-// instantiation — exactly the `+36` bytes-into-`createOffscreenInstance`
+// instantiation - exactly the `+36` bytes-into-`createOffscreenInstance`
 // SIGSEGV the editor hit.
 TEST_F(CompositorGoldenTest, SplashDragOnGroupReExercisesRasterizePath) {
   SVGDocument document = parseDocument(R"svg(
@@ -1788,7 +1788,7 @@ TEST_F(CompositorGoldenTest, SplashDragOnGroupReExercisesRasterizePath) {
 
   // First render to populate RICs and detect mandatory filter hints.
   compositor.renderFrame(splashViewport);
-  // Now promote the `<g>` — a multi-entity range.
+  // Now promote the `<g>` - a multi-entity range.
   ASSERT_TRUE(compositor.promoteEntity(donnerEntity));
 
   // Drive many drag frames. If any frame crashes inside `rasterizeLayer`
@@ -1844,7 +1844,7 @@ TEST_F(CompositorGoldenTest, NonPromotedMutationInvalidatesOnlyContainingSegment
     }
   }
 
-  // Mutate `after` (lives in segment[1]) — per-segment dirty tracking
+  // Mutate `after` (lives in segment[1]) - per-segment dirty tracking
   // should flag only segment[1].
   after->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(5.0, 0.0));
   compositor.renderFrame(viewport_);
@@ -1861,7 +1861,7 @@ TEST_F(CompositorGoldenTest, NonPromotedMutationInvalidatesOnlyContainingSegment
     }
   }
   EXPECT_EQ(segment0GenBefore, segment0GenAfter)
-      << "segment[0] re-rasterized even though the mutation lived in segment[1] — "
+      << "segment[0] re-rasterized even though the mutation lived in segment[1] - "
          "Phase B per-segment dirty tracking regressed. `rootDirty_` escalation "
          "has crept back in somewhere in consumeDirtyFlags.";
   EXPECT_NE(segment1GenBefore, segment1GenAfter)
@@ -1872,7 +1872,7 @@ TEST_F(CompositorGoldenTest, NonPromotedMutationInvalidatesOnlyContainingSegment
 
 // Elements whose transformed device-space bounds fall entirely outside the
 // render target (after including stroke width) must be skipped by the
-// renderer's core culling path — drawing them wastes GPU/CPU cycles and
+// renderer's core culling path - drawing them wastes GPU/CPU cycles and
 // their contribution is zero. The test puts a red 10×10 rect well above the
 // visible canvas and asserts the final image is entirely white.
 TEST_F(CompositorGoldenTest, ViewportCullingSkipsOffscreenPaths) {
@@ -1920,7 +1920,7 @@ TEST_F(CompositorGoldenTest, TooSmallCullingSkipsSubpixelPaths) {
 }
 
 // Zooming changes the viewport size the renderer rasterizes at, so the
-// cached segment bitmaps from the previous zoom level must NOT be reused —
+// cached segment bitmaps from the previous zoom level must NOT be reused -
 // they're sized to the old canvas. Reusing them would stamp their pixels
 // into the top-left region of the new (larger) canvas, leaving the rest
 // transparent, which the editor's GL layer would then linearly-stretch
@@ -1967,7 +1967,7 @@ TEST_F(CompositorGoldenTest, SplitBitmapsInvalidateOnViewportResize) {
   compositor.renderFrame(largeViewport);
 
   // Every non-drag tile that had a bitmap at the small canvas size must
-  // have its generation bumped after the canvas resize — the old bitmap is
+  // have its generation bumped after the canvas resize - the old bitmap is
   // sized for 200×100 and re-using it would leave the new 400×200 canvas
   // mostly transparent.
   auto largeTiles = compositor.snapshotTilesForUpload();
@@ -1978,7 +1978,7 @@ TEST_F(CompositorGoldenTest, SplitBitmapsInvalidateOnViewportResize) {
     }
     EXPECT_NE(it->second, tile.generation)
         << "non-drag tile id " << tile.tileId
-        << " kept its generation across canvas resize — would re-use a stale-sized bitmap";
+        << " kept its generation across canvas resize - would re-use a stale-sized bitmap";
   }
 }
 
@@ -1996,13 +1996,13 @@ TEST_F(CompositorGoldenTest, SplitBitmapsInvalidateOnViewportResize) {
 // scene with content at varied positions and runs the dual-path
 // verifier, which pixel-diffs composited output against a full-render
 // reference. A mismatch count > 0 is the exact signature the user
-// reported ("things shifted and got cropped the wrong way") — surface
+// reported ("things shifted and got cropped the wrong way") - surface
 // it here so it can't sneak back.
 TEST_F(CompositorGoldenTest, TightBoundedSegmentsProducePixelIdentityWithMultipleLayers) {
   // Scene: three small shapes distributed across the canvas, separated
   // by two filter groups. The filter groups become mandatory promoted
   // layers, so the non-promoted shapes get partitioned into ≥ 3
-  // segments — each with a different paint-order range and different
+  // segments - each with a different paint-order range and different
   // canvas-space bounds. That's the setup where tight-bound bounds /
   // offsets differ between segments, maximizing the chance of catching
   // a mismatch.
@@ -2032,7 +2032,7 @@ TEST_F(CompositorGoldenTest, TightBoundedSegmentsProducePixelIdentityWithMultipl
   CompositorController compositor(document, renderer_);
   DualPathVerifier verifier(compositor, renderer_);
 
-  // Frame 1 — no drag, no explicit promote. Any mandatory layers
+  // Frame 1 - no drag, no explicit promote. Any mandatory layers
   // (filter groups) get auto-promoted on the first render. This is
   // the cleanest dual-path scenario: every layer's composition
   // transform is identity, so the full-render reference and the
@@ -2079,7 +2079,7 @@ TEST_F(CompositorGoldenTest, TightBoundedSegmentsSurviveExplicitDragTargetPromot
   CompositorController compositor(document, renderer_);
   // Leaving `skipMainComposeDuringSplit` at its default (`false`) so
   // the main renderer actually composes bg + drag + fg onto its
-  // framebuffer — `DualPathVerifier::renderAndVerify` reads that
+  // framebuffer - `DualPathVerifier::renderAndVerify` reads that
   // framebuffer back. With the flag on, the main renderer would be
   // untouched (the editor path) and the comparison would land on
   // whatever stale pixels were there before.
@@ -2087,7 +2087,7 @@ TEST_F(CompositorGoldenTest, TightBoundedSegmentsSurviveExplicitDragTargetPromot
   DualPathVerifier verifier(compositor, renderer_);
 
   // DOM is at identity (no drag motion). Composition transform is
-  // also identity — composited and reference paths render the same
+  // also identity - composited and reference paths render the same
   // scene, so they must produce pixel-identical output.
   const auto result = verifier.renderAndVerify(viewport);
   EXPECT_TRUE(result.isExact()) << "explicit drag promote with tight segments: " << result;
@@ -2121,14 +2121,14 @@ TEST_F(CompositorGoldenTest, TightBoundedSegmentsPixelIdentityOnRealSplashWithDr
   SVGDocument document = parseDocument(splashSource);
 
   // Find a letter in the `Donner` group to promote + drag. The user
-  // reports the `O` as the trouble shape — use the second path in
+  // reports the `O` as the trouble shape - use the second path in
   // `#Donner` which is usually an O or similar glyph.
   auto target = document.querySelector("#Donner path:nth-of-type(2)");
   if (!target.has_value()) {
     target = document.querySelector("#Donner path");
   }
   ASSERT_TRUE(target.has_value())
-      << "splash has no `#Donner path` — has the file structure changed?";
+      << "splash has no `#Donner path` - has the file structure changed?";
 
   RenderViewport viewport;
   viewport.size = Vector2d(892, 512);
@@ -2140,14 +2140,14 @@ TEST_F(CompositorGoldenTest, TightBoundedSegmentsPixelIdentityOnRealSplashWithDr
   // Promote as a drag target and apply a small DOM transform to
   // simulate the first drag frame.
   ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()))
-      << "letter failed to promote — check compositing-breaking-ancestor";
+      << "letter failed to promote - check compositing-breaking-ancestor";
   target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(8.0, 0.0)));
 
   // First render: lays down cached bitmaps for all mandatory layers
   // + segments (tight or full-canvas), composites main target.
   compositor.renderFrame(viewport);
 
-  // Second render at the same DOM state — composition transform for
+  // Second render at the same DOM state - composition transform for
   // the drag target is still identity relative to its stamp (the
   // bitmap was stamped on the first render). Both paths
   // (composited and full-render reference) see the same scene, so
@@ -2161,7 +2161,7 @@ TEST_F(CompositorGoldenTest, TightBoundedSegmentsPixelIdentityOnRealSplashWithDr
   // round-trip vs the direct-to-main full-render reference. That
   // drift is the same regardless of tight-bounding (measured at
   // 19,746 mismatches @ max diff 3 WITHOUT tight-bound, 19,747 @
-  // max diff 3 WITH — indistinguishable). Tight-bound shift/crop
+  // max diff 3 WITH - indistinguishable). Tight-bound shift/crop
   // bugs, by contrast, show up as max channel diff 200+ (dark bg
   // leaking through where content should be). Tolerance 5 catches
   // the shift/crop class of regression without flaking on the
@@ -2206,7 +2206,7 @@ TEST_F(CompositorGoldenTest, TightBoundedSegmentsPixelIdentityOnRealSplash) {
   CompositorController compositor(document, renderer_);
   DualPathVerifier verifier(compositor, renderer_);
 
-  // No drag promoted — mandatory filter groups auto-promote via the
+  // No drag promoted - mandatory filter groups auto-promote via the
   // first-frame detector path, which triggers eager segment warmup
   // (so every segment goes through `rasterizeDirtyStaticSegments`).
   const auto result = verifier.renderAndVerify(viewport);
@@ -2216,7 +2216,7 @@ TEST_F(CompositorGoldenTest, TightBoundedSegmentsPixelIdentityOnRealSplash) {
   // reference. Any mismatch is either a bounds miscalculation or an
   // offset misapplication. If this flakes in CI, loosen to
   // `isWithinTolerance(1)` for anti-aliasing drift across backends
-  // — but only after confirming the diff is AA-noise, not a
+  // - but only after confirming the diff is AA-noise, not a
   // cropping/shifting regression.
   EXPECT_TRUE(result.isExact())
       << "real-splash tight-bounds pixel identity failed. Mismatch count=" << result.mismatchCount
@@ -2234,7 +2234,7 @@ TEST_F(CompositorGoldenTest, TightBoundedSegmentsPixelIdentityOnRealSplash) {
 // render the circle + gradient at the new position. If the gradient's
 // coordinate system is interpreted differently between the two paths,
 // the diff shows crescent-shaped drift at the gradient's outer radius
-// — the splash symptom on `#Clouds_with_gradients` drag.
+// - the splash symptom on `#Clouds_with_gradients` drag.
 TEST_F(CompositorGoldenTest, DragGroupWithRadialGradientChild_NoArtifact) {
   SVGDocument document = parseDocument(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
@@ -2322,7 +2322,7 @@ TEST_F(CompositorGoldenTest, DragGroupWithRadialGradientChild_NoArtifact) {
 // `computeEntityRangeBounds` calls `finalTransform.transformBox(
 // localBounds)` which treats the local AABB as four corners and
 // transforms them. For a rotated ellipse, the resulting box should be
-// the rotated AABB — but if localBounds is wrong (e.g., returns a
+// the rotated AABB - but if localBounds is wrong (e.g., returns a
 // degenerate box), the segment bitmap is too small and the ellipse
 // gets clipped.
 TEST_F(CompositorGoldenTest, TightBoundsRotatedEllipseNoClip) {
@@ -2617,7 +2617,7 @@ TEST_F(CompositorGoldenTest, TightBoundsRotatedEllipseWithRotatingGradient) {
 // Reproduction of the user's recorded scenario in
 // `/tmp/clouds_bug.donner-repro`: click a DONNER letter, then click a
 // yellow cloud orb (`cls-64` / `cls-8`-region) inside
-// `#Clouds_with_gradients`. No drag — just Selection-hint promotion
+// `#Clouds_with_gradients`. No drag - just Selection-hint promotion
 // of two different entities. Assert the compositor render matches a
 // reference full-render, within premul noise.
 TEST_F(CompositorGoldenTest, SplashLetterThenCloudOrbSelection) {
@@ -2645,7 +2645,7 @@ TEST_F(CompositorGoldenTest, SplashLetterThenCloudOrbSelection) {
     if (!orb.has_value()) {
       orb = doc.querySelector(".cls-64");
     }
-    EXPECT_TRUE(orb.has_value()) << "splash missing cls-64 cloud orb — has the file changed?";
+    EXPECT_TRUE(orb.has_value()) << "splash missing cls-64 cloud orb - has the file changed?";
 
     CompositorConfig config;
     config.tightBoundedSegments = tightBounds;
@@ -2775,7 +2775,7 @@ TEST_F(CompositorGoldenTest, SplashLetterThenCloudOrbSelection) {
 // Splash regression: dragging `#Clouds_with_gradients` must match the
 // reference full-render (within premul noise). Exercises the compositor
 // path where a dragged plain `<g>` contains mandatory-promoted sublayer
-// descendants (cls-90 / cls-93 clip-path groups) — the original user-
+// descendants (cls-90 / cls-93 clip-path groups) - the original user-
 // reported artifact was crescent-shaped color drift at the top of the
 // cls-8 radial-gradient cloud orb.
 TEST_F(CompositorGoldenTest, SplashCloudsDragMatchesReference) {
@@ -2802,7 +2802,7 @@ TEST_F(CompositorGoldenTest, SplashCloudsDragMatchesReference) {
     compositor.renderFrame(vp);
     compositor.demoteEntity(target->unsafeEntityHandle().entity());
     // §M9: flush the hysteresis window so the demote actually fires
-    // before the kind-change re-promote — this test specifically
+    // before the kind-change re-promote - this test specifically
     // probes the demote+promote layer-rebuild path (vs. the
     // hysteresis-preserved layer reuse), so the hysteresis would
     // otherwise mask the very transition under test.
@@ -2931,7 +2931,7 @@ TEST_F(CompositorGoldenTest, DragGroupWithClipPathSiblingAndGradient) {
   compositor.renderFrame(viewport);
   compositor.demoteEntity(group->unsafeEntityHandle().entity());
   // §M9: flush the hysteresis window so the demote actually fires
-  // before the kind-change re-promote — this test probes the
+  // before the kind-change re-promote - this test probes the
   // demote+promote layer-rebuild path, which the M9 hysteresis would
   // otherwise short-circuit.
   compositor.flushPendingDemotionsForTesting();
@@ -3030,7 +3030,7 @@ TEST_F(CompositorGoldenTest, TwoPhaseDragOfPlainGroupMovesChildren) {
   viewport.devicePixelRatio = 1.0;
 
   CompositorController compositor(document, renderer_);
-  // NOT setSkipMainComposeDuringSplit here — we want
+  // NOT setSkipMainComposeDuringSplit here - we want
   // `takeSnapshot()` to reflect the post-phase-2 state, not the cached
   // phase-1 snapshot.
 
@@ -3057,7 +3057,7 @@ TEST_F(CompositorGoldenTest, TwoPhaseDragOfPlainGroupMovesChildren) {
 
   EXPECT_FALSE(originalPos.r > 200 && originalPos.g > 150 && originalPos.b < 100)
       << "rect is still at original position (30, 50). got: " << originalPos
-      << ". The two-phase Selection→ActiveDrag drag left the rect where it was before drag — "
+      << ". The two-phase Selection→ActiveDrag drag left the rect where it was before drag - "
          "DOM transform change didn't move the promoted layer's content.";
   EXPECT_TRUE(newPos.r > 200 && newPos.g > 150 && newPos.b < 100)
       << "rect didn't move to new position (70, 50). got: " << newPos;
@@ -3068,7 +3068,7 @@ TEST_F(CompositorGoldenTest, TwoPhaseDragOfPlainGroupMovesChildren) {
 // tight-bounded segments enabled (the default), flipping the toggle to
 // false on the next frame must produce the same composited pixels as a
 // compositor that never had tight-bounds enabled at all. This is the
-// invariant the editor's View-menu toggle relies on — the user sees the
+// invariant the editor's View-menu toggle relies on - the user sees the
 // same frame whether they were toggling or had the feature off from
 // start.
 TEST_F(CompositorGoldenTest, SetTightBoundedSegmentsEnabledTogglesAtRuntime) {
@@ -3086,7 +3086,7 @@ TEST_F(CompositorGoldenTest, SetTightBoundedSegmentsEnabledTogglesAtRuntime) {
   ASSERT_TRUE(compositorTight.tightBoundedSegmentsEnabled());
   ASSERT_TRUE(compositorTight.promoteEntity(target->unsafeEntityHandle().entity()));
   compositorTight.renderFrame(viewport_);
-  // Flip the toggle off — all cached segments are marked dirty and
+  // Flip the toggle off - all cached segments are marked dirty and
   // re-rasterize on the next frame at full canvas size.
   compositorTight.setTightBoundedSegmentsEnabled(false);
   EXPECT_FALSE(compositorTight.tightBoundedSegmentsEnabled());
@@ -3128,11 +3128,11 @@ TEST_F(CompositorGoldenTest, SetTightBoundedSegmentsEnabledTogglesAtRuntime) {
          "mismatchCount="
       << mismatchCount << " maxDiff=" << maxDiff
       << ". If non-zero, `setTightBoundedSegmentsEnabled(false)` is not fully "
-         "invalidating prior tight-bound caches — likely a missing "
+         "invalidating prior tight-bound caches - likely a missing "
          "`markAllSegmentsDirty` call in the setter.";
 }
 
-// Isolates the gradient + filter interaction. Single frame, no drag — does
+// Isolates the gradient + filter interaction. Single frame, no drag - does
 // it render correctly at all?
 TEST_F(CompositorGoldenTest, GradientInsideFilteredGroup_SingleFrame) {
   SVGDocument document = parseDocument(R"svg(
@@ -3239,7 +3239,7 @@ TEST_F(CompositorGoldenTest, DraggingLetterPreservesGradientFilteredGlowAcrossFr
 
   const RendererBitmap flat = renderer_.takeSnapshot();
 
-  // Glow halo sampling — left of circle, in the blur halo.
+  // Glow halo sampling - left of circle, in the blur halo.
   const Pixel halo = getPixel(flat, 70, 50);
   const bool isPureWhite = halo.r >= 253 && halo.g >= 253 && halo.b >= 253;
   EXPECT_FALSE(isPureWhite)
@@ -3279,7 +3279,7 @@ TEST_F(CompositorGoldenTest, DraggingLetterInsideWrapperPreservesNestedGlow) {
 
   const RendererBitmap flat = renderer_.takeSnapshot();
 
-  // Glow halo sampling — blur extends ~8-12px beyond circle edge.
+  // Glow halo sampling - blur extends ~8-12px beyond circle edge.
   const Pixel glowHaloLeft = getPixel(flat, 70, 50);
   EXPECT_LT(glowHaloLeft.g, 240)
       << "glow halo should be tinted red. If white, the nested glow disappeared during drag. "
@@ -3324,7 +3324,7 @@ TEST_F(CompositorGoldenTest, DraggingLetterPreservesBackgroundGlow) {
 
   // The glow's halo extends beyond the circle. Sample outside the
   // circle but within the blur radius. Circle is at cx=100 cy=50 r=25.
-  // Point (70, 50) is 5 px outside the left edge — in the halo.
+  // Point (70, 50) is 5 px outside the left edge - in the halo.
   const Pixel glowHaloLeft = getPixel(flat, 70, 50);
   const Pixel glowHaloRight = getPixel(flat, 130, 50);
 
@@ -3492,7 +3492,7 @@ TEST_F(CompositorGoldenTest, RadialGradientShapeMatchesFullRenderAfterPromotion)
 }
 
 // The ancestor-clip safety check (committed earlier) should prevent
-// auto-promotion here, so the output exactly matches the full render — no
+// auto-promotion here, so the output exactly matches the full render - no
 // layer extraction, no lost clip context.
 TEST_F(CompositorGoldenTest, ClippedGroupWithOpacityChildRendersCorrectly) {
   SVGDocument document = parseDocument(R"svg(
@@ -3521,7 +3521,7 @@ TEST_F(CompositorGoldenTest, ClippedGroupWithOpacityChildRendersCorrectly) {
 }
 
 // Splash-shape document, real Skia-backed renderer, full-size 892×512
-// canvas — the exact conditions the editor hits when the user opens
+// canvas - the exact conditions the editor hits when the user opens
 // `donner_splash.svg` and drags a letter. Measures each latency bucket
 // the user feels:
 //
@@ -3531,7 +3531,7 @@ TEST_F(CompositorGoldenTest, ClippedGroupWithOpacityChildRendersCorrectly) {
 //   4. Post-drag reset + re-render (simulates the source-writeback reparse
 //      that fires after drag release)
 //
-// Thresholds are intentionally loose — they're "something regressed by 2x"
+// Thresholds are intentionally loose - they're "something regressed by 2x"
 // gates, not tight perf targets. The interactive-feel number is #3: if
 // steady-state drag blows past a handful of ms, dragging feels laggy.
 TEST_F(CompositorGoldenTest, SplashDragLatencyBudgetsOnRealRenderer) {
@@ -3587,7 +3587,7 @@ TEST_F(CompositorGoldenTest, SplashDragLatencyBudgetsOnRealRenderer) {
   fullViewport.devicePixelRatio = 1.0;
 
   // Editor default config: all auto-promotion features on. `setSkipMainCompose
-  // DuringSplit(true)` matches the editor's setting — without it the compositor
+  // DuringSplit(true)` matches the editor's setting - without it the compositor
   // pays ~100 ms/frame on the real renderer composing into a buffer the editor
   // never displays during drag.
   CompositorConfig config;
@@ -3599,7 +3599,7 @@ TEST_F(CompositorGoldenTest, SplashDragLatencyBudgetsOnRealRenderer) {
     return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
   };
 
-  // Phase 1 — cold first render (no drag promoted yet).
+  // Phase 1 - cold first render (no drag promoted yet).
   const auto t0 = Clock::now();
   compositor.renderFrame(fullViewport);
   const double coldRenderMs = elapsedMs(t0);
@@ -3608,7 +3608,7 @@ TEST_F(CompositorGoldenTest, SplashDragLatencyBudgetsOnRealRenderer) {
   ASSERT_TRUE(letter2.has_value());
   const Entity letter2Entity = letter2->unsafeEntityHandle().entity();
 
-  // Phase 2 — first drag frame. Promotes the drag target for the first
+  // Phase 2 - first drag frame. Promotes the drag target for the first
   // time, triggers first-time rasterization of N+1 segments + all promoted
   // layer bitmaps + bg/fg composite.
   ASSERT_TRUE(compositor.promoteEntity(letter2Entity));
@@ -3617,7 +3617,7 @@ TEST_F(CompositorGoldenTest, SplashDragLatencyBudgetsOnRealRenderer) {
   compositor.renderFrame(fullViewport);
   const double firstDragFrameMs = elapsedMs(t1);
 
-  // Phase 3 — steady-state drag frames. Fast path updates composition
+  // Phase 3 - steady-state drag frames. Fast path updates composition
   // transform, skip-main-compose skips the main-renderer draw. Should be
   // sub-millisecond on any hardware; allow headroom for slow CI.
   double steadyMaxMs = 0.0;
@@ -3634,7 +3634,7 @@ TEST_F(CompositorGoldenTest, SplashDragLatencyBudgetsOnRealRenderer) {
   }
   const double steadyAvgMs = steadyTotalMs / kSteadyFrames;
 
-  // Phase 4 — drag-end reset. Simulates what happens in the editor when
+  // Phase 4 - drag-end reset. Simulates what happens in the editor when
   // the source-writeback round-trip issues a `ReplaceDocumentCommand`:
   // `resetAllLayers` clears every cache, then the next render rebuilds
   // from scratch. The user feels this as a freeze right after letting go
@@ -3649,28 +3649,28 @@ TEST_F(CompositorGoldenTest, SplashDragLatencyBudgetsOnRealRenderer) {
             << " ms, steadyMax=" << steadyMaxMs << " ms, postReset=" << postResetRenderMs
             << " ms\n";
 
-  // Budgets are loose — real Skia on an M1 lands cold ≈ 600-800 ms,
+  // Budgets are loose - real Skia on an M1 lands cold ≈ 600-800 ms,
   // first-drag ≈ 3000-3500 ms (regression target), steady ≈ 0.2 ms,
   // post-reset ≈ 3000-4000 ms (regression target).
   //
   // The steady budget is the one that directly determines "does drag
   // feel smooth". Anything above ~20 ms will show as perceptible lag
   // during a 60 Hz mouse-move stream.
-  EXPECT_LT(steadyAvgMs, 20.0) << "steady-state drag average is above 20 ms — this is the "
+  EXPECT_LT(steadyAvgMs, 20.0) << "steady-state drag average is above 20 ms - this is the "
                                   "interactive-feel budget; >20 ms shows as perceptible lag";
   EXPECT_LT(steadyMaxMs, 50.0) << "a single steady-state drag frame spiked above 50 ms";
 
   // First-drag-frame and post-reset budgets are deliberately permissive
-  // in v1 — these failures are known-expensive. Tighten them as fixes
+  // in v1 - these failures are known-expensive. Tighten them as fixes
   // land for Tasks #26 / #27.
   EXPECT_LT(firstDragFrameMs, 5000.0)
-      << "first drag frame exploded past 5s — something regressed the first-time promote path";
+      << "first drag frame exploded past 5s - something regressed the first-time promote path";
   EXPECT_LT(postResetRenderMs, 5000.0)
-      << "post-reset rebuild exploded past 5s — something regressed resetAllLayers+rebuild";
+      << "post-reset rebuild exploded past 5s - something regressed resetAllLayers+rebuild";
 }
 
 // Same splash document + same drag mutation, but promotes the target BEFORE
-// the first render — simulating the ideal editor flow where selection
+// the first render - simulating the ideal editor flow where selection
 // fires a pre-warm render before the user starts dragging. The expensive
 // first-time rasterization moves to the pre-warm; the first drag frame
 // then hits the steady-state fast path. This test proves that the big
@@ -3720,14 +3720,14 @@ TEST_F(CompositorGoldenTest, SplashPrewarmMakesFirstDragFree) {
     return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
   };
 
-  // Promote BEFORE the first render — pre-warm flow.
+  // Promote BEFORE the first render - pre-warm flow.
   ASSERT_TRUE(compositor.promoteEntity(letter2Entity));
 
   const auto t0 = Clock::now();
   compositor.renderFrame(fullViewport);  // single cold+prewarm render
   const double coldRenderMs = elapsedMs(t0);
 
-  // First "drag frame" — target already promoted, caches already warm.
+  // First "drag frame" - target already promoted, caches already warm.
   // Should hit the fast path and skip main compose.
   letter2->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(4.0, 0.0)));
   const auto t1 = Clock::now();
@@ -3749,20 +3749,20 @@ TEST_F(CompositorGoldenTest, SplashPrewarmMakesFirstDragFree) {
 // numbers this file emits match what the user sees in the editor. My
 // reduced splash has ~10 drawable rects and reports ~400 ms for the
 // first drag frame on TinySkia; the real splash reports ~3200 ms in the
-// editor — the 8× gap is document complexity, not backend choice (both
+// editor - the 8× gap is document complexity, not backend choice (both
 // paths are `RendererTinySkia` by default per `config/extensions.bzl`).
 //
 // The test file is in the `data` array of the `compositor_golden_tests`
 // target; bazel materializes it under the test's runfiles directory.
 TEST_F(CompositorGoldenTest, RealSplashDragLatencyOnTinySkia) {
   // Load the splash file from the Bazel runfiles. If the path can't be
-  // opened the test skips — a dev running the test outside bazel (e.g.
+  // opened the test skips - a dev running the test outside bazel (e.g.
   // via an IDE runner that bypasses runfiles plumbing) shouldn't see a
   // spurious failure.
   const char* kSplashPath = "donner_splash.svg";
   std::ifstream splashStream(kSplashPath);
   if (!splashStream.is_open()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles — skipping splash perf test";
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles - skipping splash perf test";
   }
   std::ostringstream splashBuf;
   splashBuf << splashStream.rdbuf();
@@ -3784,7 +3784,7 @@ TEST_F(CompositorGoldenTest, RealSplashDragLatencyOnTinySkia) {
     return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
   };
 
-  // Phase 1 — cold first render (no drag promoted yet).
+  // Phase 1 - cold first render (no drag promoted yet).
   const auto t0 = Clock::now();
   compositor.renderFrame(fullViewport);
   const double coldRenderMs = elapsedMs(t0);
@@ -3794,18 +3794,18 @@ TEST_F(CompositorGoldenTest, RealSplashDragLatencyOnTinySkia) {
   // exactly the shape the fast path wants. Grab the first one.
   auto firstLetter = document.querySelector("#Donner path");
   ASSERT_TRUE(firstLetter.has_value())
-      << "splash has no `#Donner path` — has the file structure changed?";
+      << "splash has no `#Donner path` - has the file structure changed?";
   const Entity letterEntity = firstLetter->unsafeEntityHandle().entity();
 
-  // Phase 2 — first drag frame. Promotes + rasterizes everything.
+  // Phase 2 - first drag frame. Promotes + rasterizes everything.
   ASSERT_TRUE(compositor.promoteEntity(letterEntity))
-      << "letter failed to promote — a compositing-breaking ancestor may be in the way";
+      << "letter failed to promote - a compositing-breaking ancestor may be in the way";
   firstLetter->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(4.0, 0.0)));
   const auto t1 = Clock::now();
   compositor.renderFrame(fullViewport);
   const double firstDragFrameMs = elapsedMs(t1);
 
-  // Phase 3 — steady-state. Fast path + skipMainCompose → near-zero.
+  // Phase 3 - steady-state. Fast path + skipMainCompose → near-zero.
   double steadyMaxMs = 0.0;
   double steadyTotalMs = 0.0;
   constexpr int kSteadyFrames = 20;
@@ -3820,7 +3820,7 @@ TEST_F(CompositorGoldenTest, RealSplashDragLatencyOnTinySkia) {
   }
   const double steadyAvgMs = steadyTotalMs / kSteadyFrames;
 
-  // Phase 4 — drag-end replay. Simulates the editor's `setDocument` →
+  // Phase 4 - drag-end replay. Simulates the editor's `setDocument` →
   // `resetAllLayers(documentReplaced=true)` → fresh render sequence.
   compositor.resetAllLayers(/*documentReplaced=*/true);
   ASSERT_TRUE(compositor.promoteEntity(letterEntity));
@@ -3833,20 +3833,20 @@ TEST_F(CompositorGoldenTest, RealSplashDragLatencyOnTinySkia) {
             << " ms, steadyAvg=" << steadyAvgMs << " ms, steadyMax=" << steadyMaxMs
             << " ms, postReset=" << postResetRenderMs << " ms\n";
 
-  // Budgets are loose — the real splash is expensive on any backend.
+  // Budgets are loose - the real splash is expensive on any backend.
   // The steady-state budget is the one that matters for interactive
   // feel; anything over 20 ms shows as perceptible drag lag.
-  EXPECT_LT(steadyAvgMs, 20.0) << "interactive-feel budget blown — drag will feel laggy";
+  EXPECT_LT(steadyAvgMs, 20.0) << "interactive-feel budget blown - drag will feel laggy";
   EXPECT_LT(steadyMaxMs, 100.0) << "a steady-state drag frame spiked way above budget";
   // First-drag and post-reset are known-expensive on the splash. Budget
   // at 2× the observed TinySkia numbers so an unrelated regression is
   // loud, but small fluctuations in path tessellation don't flake the
   // test. Design doc 0026 tracks the reductions in Options A/B.
   EXPECT_LT(firstDragFrameMs, 8000.0)
-      << "first drag frame on real splash regressed beyond 8s — something broke beyond the "
+      << "first drag frame on real splash regressed beyond 8s - something broke beyond the "
          "known pre-existing 4s prewarm cost";
   EXPECT_LT(postResetRenderMs, 8000.0)
-      << "drag-end replay on real splash regressed beyond 8s — resetAllLayers + rebuild cost "
+      << "drag-end replay on real splash regressed beyond 8s - resetAllLayers + rebuild cost "
          "grew past pre-existing baseline";
 }
 
@@ -3854,7 +3854,7 @@ TEST_F(CompositorGoldenTest, RealSplashBlueCenterBurstEllipseDragLatency) {
   const char* kSplashPath = "donner_splash.svg";
   std::ifstream splashStream(kSplashPath);
   if (!splashStream.is_open()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles — skipping splash perf test";
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles - skipping splash perf test";
   }
   std::ostringstream splashBuf;
   splashBuf << splashStream.rdbuf();
@@ -3887,7 +3887,7 @@ TEST_F(CompositorGoldenTest, RealSplashBlueCenterBurstEllipseDragLatency) {
 
   auto burstEllipse = document.querySelector("#Blue_center_burst ellipse");
   ASSERT_TRUE(burstEllipse.has_value())
-      << "splash has no `#Blue_center_burst ellipse` — has the file structure changed?";
+      << "splash has no `#Blue_center_burst ellipse` - has the file structure changed?";
   const Entity burstEntity = burstEllipse->unsafeEntityHandle().entity();
 
   const auto rowsAfterCold = compositor.snapshotLayerInspectorRows();
@@ -3898,7 +3898,7 @@ TEST_F(CompositorGoldenTest, RealSplashBlueCenterBurstEllipseDragLatency) {
   const uint32_t coldRasterizeCount = burstRowAfterCold->rasterizeCount;
 
   ASSERT_TRUE(compositor.promoteEntity(burstEntity, InteractionHint::ActiveDrag))
-      << "burst ellipse failed to promote — this drag should reuse its mandatory layer.";
+      << "burst ellipse failed to promote - this drag should reuse its mandatory layer.";
   burstEllipse->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(4.0, 0.0)));
   const auto t1 = Clock::now();
   compositor.renderFrame(fullViewport);
@@ -4005,7 +4005,7 @@ TEST_F(CompositorGoldenTest, SplashDragEndReplaceDocumentReplayLatency) {
 
   // Drag-end replay: compositor is told the document has been replaced.
   // `resetAllLayers(documentReplaced=true)` defuses the hints (crash-safe)
-  // but loses every cached bitmap — the next render rebuilds the whole
+  // but loses every cached bitmap - the next render rebuilds the whole
   // thing from scratch, including re-running mandatory-hint detection,
   // re-rasterizing every promoted layer, and re-compositing bg/fg. That's
   // the "4-second hang on mouse-up" the user reports.
@@ -4021,11 +4021,11 @@ TEST_F(CompositorGoldenTest, SplashDragEndReplaceDocumentReplayLatency) {
 
   std::cerr << "[PERF] SplashDragEndReplay: resetAllLayers+rerender=" << replayRenderMs << " ms\n";
 
-  // Permissive budget — this lands ~400 ms on real-Skia in the test
+  // Permissive budget - this lands ~400 ms on real-Skia in the test
   // harness, ~4000 ms on GPU-Skia in the editor. Sub-second *would* be
   // the dream but we're nowhere close without architectural changes.
   EXPECT_LT(replayRenderMs, 5000.0)
-      << "drag-end replay cost exploded — `resetAllLayers(documentReplaced=true)` + rebuild is "
+      << "drag-end replay cost exploded - `resetAllLayers(documentReplaced=true)` + rebuild is "
          "already the worst steady-state cost in the system; anything worse means something "
          "regressed the rebuild path itself";
 }
@@ -4033,7 +4033,7 @@ TEST_F(CompositorGoldenTest, SplashDragEndReplaceDocumentReplayLatency) {
 // The same scenario as the drag-latency test, but asserts the CORRECTNESS
 // invariant that flushed out crash #2 in the editor: after a `resetAllLayers`
 // call (triggered in-editor by a drag-end `ReplaceDocumentCommand` round-
-// trip through the source pane), the next `renderFrame` must not crash —
+// trip through the source pane), the next `renderFrame` must not crash -
 // the `ScopedCompositorHint` destructors on the cleared `activeHints_`
 // map must not touch the rebuilt registry's entt sparse set. `release()` on
 // each hint before clearing is what keeps this safe.
@@ -4053,7 +4053,7 @@ TEST_F(CompositorGoldenTest, ResetAllLayersAfterPromoteDoesNotCrash) {
   CompositorController compositor(document, renderer_);
   compositor.setSkipMainComposeDuringSplit(true);
 
-  // Promote + render — populates activeHints_ with a ScopedCompositorHint
+  // Promote + render - populates activeHints_ with a ScopedCompositorHint
   // pinned to the current registry. This is the state that used to crash
   // when `resetAllLayers` ran after the document was replaced.
   ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
@@ -4067,7 +4067,7 @@ TEST_F(CompositorGoldenTest, ResetAllLayersAfterPromoteDoesNotCrash) {
     compositor.renderFrame(viewport_);
   }
 
-  // Reset — this used to blow up inside `~ScopedCompositorHint → registry.
+  // Reset - this used to blow up inside `~ScopedCompositorHint → registry.
   // valid()` because the dtor called into entt with stale entity IDs.
   // Now the hints should be neutralized via `release()` before clear()
   // runs their dtors.
@@ -4077,7 +4077,7 @@ TEST_F(CompositorGoldenTest, ResetAllLayersAfterPromoteDoesNotCrash) {
   ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
   compositor.renderFrame(viewport_);
 
-  // A second reset-then-render cycle — the editor's source-writeback path
+  // A second reset-then-render cycle - the editor's source-writeback path
   // can fire this more than once if the user drags repeatedly.
   compositor.resetAllLayers();
   ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
@@ -4086,8 +4086,8 @@ TEST_F(CompositorGoldenTest, ResetAllLayersAfterPromoteDoesNotCrash) {
 
 // Identity-remap baseline for `remapAfterStructuralReplace`: every old
 // entity maps to itself (trivial map). This exercises the remap plumbing
-// — hint re-emplacement, layer id rewrite, detector rebuild, resolver
-// re-run — without needing two documents. If this regresses, the full
+// - hint re-emplacement, layer id rewrite, detector rebuild, resolver
+// re-run - without needing two documents. If this regresses, the full
 // cross-document remap test below is guaranteed to regress too, so
 // start here when debugging.
 TEST_F(CompositorGoldenTest, RemapAfterStructuralReplaceIdentityPreservesCaches) {
@@ -4131,15 +4131,15 @@ TEST_F(CompositorGoldenTest, RemapAfterStructuralReplaceIdentityPreservesCaches)
   }
 
   ASSERT_TRUE(compositor.remapAfterStructuralReplace(identityRemap))
-      << "identity remap must succeed — every required entity is present";
+      << "identity remap must succeed - every required entity is present";
 
   // Cached bitmaps should be preserved (same `.pixels.data()` pointer).
   EXPECT_EQ(compositor.layerBitmapOf(glow->unsafeEntityHandle().entity()).pixels.data(),
             glowBitmapBefore)
-      << "glow filter-layer bitmap was reallocated during identity remap — cache lost";
+      << "glow filter-layer bitmap was reallocated during identity remap - cache lost";
   EXPECT_EQ(compositor.layerBitmapOf(target->unsafeEntityHandle().entity()).pixels.data(),
             targetBitmapBefore)
-      << "drag-target bitmap was reallocated during identity remap — cache lost";
+      << "drag-target bitmap was reallocated during identity remap - cache lost";
 
   // Next render must stay on the steady-state fast path.
   target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(10.0, 0.0)));
@@ -4147,7 +4147,7 @@ TEST_F(CompositorGoldenTest, RemapAfterStructuralReplaceIdentityPreservesCaches)
 
   EXPECT_EQ(compositor.layerBitmapOf(glow->unsafeEntityHandle().entity()).pixels.data(),
             glowBitmapBefore)
-      << "glow bitmap was reallocated on the post-remap drag frame — fast path broke";
+      << "glow bitmap was reallocated on the post-remap drag frame - fast path broke";
 }
 
 // Structural remap sanity: reparse the SAME bytes, build a remap between
@@ -4243,7 +4243,7 @@ TEST_F(CompositorGoldenTest, BuildStructuralEntityRemapIgnoresAttributeValueChan
 
 // Incremental GL-upload discipline: on the first click-to-drag after
 // a cold render of the splash, the editor should observe AT MOST 3
-// compositor tiles advance their `generation` counter — the two halves
+// compositor tiles advance their `generation` counter - the two halves
 // of the split segment and the new drag-target layer. Every other tile
 // (filter-group layers, segments outside the split range, the root
 // background) keeps its generation and the editor's GL texture for
@@ -4281,7 +4281,7 @@ TEST_F(CompositorGoldenTest, ClickToDragAdvancesAtMostThreeTileGenerations) {
   CompositorController compositor(document, renderer_);
   compositor.setSkipMainComposeDuringSplit(true);
 
-  // Phase 0 — cold render: detectors run, 4 filter groups promote,
+  // Phase 0 - cold render: detectors run, 4 filter groups promote,
   // eager-warmup rasterizes their layer bitmaps + 5 static segments
   // between/around them. No drag target yet.
   compositor.renderFrame(vp);
@@ -4293,7 +4293,7 @@ TEST_F(CompositorGoldenTest, ClickToDragAdvancesAtMostThreeTileGenerations) {
     baselineGen[tile.tileId] = tile.generation;
   }
 
-  // Phase 1 — click + drag in one frame: the editor sets the drag
+  // Phase 1 - click + drag in one frame: the editor sets the drag
   // target's transform and posts a render with the letter as the
   // drag entity.
   ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
@@ -4325,13 +4325,13 @@ TEST_F(CompositorGoldenTest, ClickToDragAdvancesAtMostThreeTileGenerations) {
   }
 
   // Hard invariant: click-to-drag must advance AT MOST 3 tile
-  // generations — two halves of the split segment and the new
+  // generations - two halves of the split segment and the new
   // drag-target layer. If this trips, something in the compositor
   // is re-rasterizing a tile that didn't structurally change (a
   // filter-group layer that survived, a segment outside the split
   // range), which defeats the incremental GL-upload discipline.
   EXPECT_LE(changedCount, 3)
-      << "click-to-drag advanced more than 3 tile generations — compositor is over-invalidating";
+      << "click-to-drag advanced more than 3 tile generations - compositor is over-invalidating";
 }
 
 }  // namespace donner::svg::compositor

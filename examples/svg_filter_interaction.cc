@@ -67,7 +67,7 @@ int main(int argc, char* argv[]) {
   //! [filter_query_primitive]
 
   //! [filter_mutate_primitive]
-  // Crank the blur up. The renderer picks up the new values on the next draw — filters are
+  // Crank the blur up. The renderer picks up the new values on the next draw - filters are
   // part of the live document, not baked at parse time.
   blur.setStdDeviation(6.0, 6.0);
   std::cout << "After mutation, stdDeviation: (" << blur.stdDeviationX() << ", "

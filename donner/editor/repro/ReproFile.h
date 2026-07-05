@@ -8,8 +8,8 @@
 ///
 /// The file records at the raw ImGui-input level (below menu action
 /// dispatch, below tool dispatch, below the compositor) so every stage
-/// of the stack — from Donner's DOM mutations down through the
-/// RendererTinySkia pixel ops — is exercised during playback. That
+/// of the stack - from Donner's DOM mutations down through the
+/// RendererTinySkia pixel ops - is exercised during playback. That
 /// breadth is the point: a recording made in the live editor
 /// reproduces the bug regardless of which layer it lives in.
 ///
@@ -45,7 +45,7 @@
 ///
 /// The "frame record" itself captures the continuous state (mouse
 /// position + current button mask) so a dropped event in the discrete
-/// list can't leave the player in an inconsistent state — the next
+/// list can't leave the player in an inconsistent state - the next
 /// frame's state trumps.
 ///
 /// Since v2 the frame record can also carry:

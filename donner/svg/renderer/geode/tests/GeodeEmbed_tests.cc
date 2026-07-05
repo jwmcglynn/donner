@@ -11,7 +11,7 @@
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
-#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"  // IWYU pragma: keep — provides wgpuLabel
+#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"  // IWYU pragma: keep - provides wgpuLabel
 
 namespace donner::svg {
 namespace {
@@ -140,7 +140,7 @@ TEST_F(GeodeEmbedTest, SetTargetTextureRendersIntoHostTexture) {
   auto renderer = createRenderer();
   renderer.setTargetTexture(hostTexture);
 
-  // Render an empty frame — the target dimensions should come from the
+  // Render an empty frame - the target dimensions should come from the
   // host texture, not the viewport.
   RenderViewport viewport;
   viewport.size = Vector2d(kSize, kSize);

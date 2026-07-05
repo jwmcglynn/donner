@@ -2,7 +2,7 @@
 /// @file
 ///
 /// Read-only diagnostic panel that exposes the live compositor's
-/// composite state — every tile (background, foreground, segments,
+/// composite state - every tile (background, foreground, segments,
 /// layers) the renderer blits to produce the final frame, displayed
 /// in paint order with a thumbnail per tile.
 ///
@@ -40,7 +40,7 @@ class GeodeDevice;
 
 namespace donner::editor {
 
-/// Stateful — owns one preview resource per active composite tile (keyed on
+/// Stateful - owns one preview resource per active composite tile (keyed on
 /// `CompositeTileSnapshot::id`). OpenGL builds upload CPU thumbnail pixels into
 /// small GL textures. WebGPU builds keep backend texture snapshots alive and
 /// pass their texture views directly to ImGui, avoiding thumbnail readback.
@@ -73,7 +73,7 @@ public:
   /// @param viewportDesiredCanvas What the viewport's
   ///   `desiredCanvasSize()` currently returns.
   /// @param documentCanvas What `SVGDocument::canvasSize()` currently
-  ///   returns — the committed canvas size the worker rendered at.
+  ///   returns - the committed canvas size the worker rendered at.
   ///   Compare against `viewportDesiredCanvas` (commit pipeline) and
   ///   `state.canvasSize` (compositor rasterize freshness).
   /// @param coverageDiagnostics Active bounded-raster and overview-infill presentation coverage.

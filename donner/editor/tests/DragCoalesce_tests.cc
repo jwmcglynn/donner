@@ -12,7 +12,7 @@
 ///   `backend->pointerEvent(...)` future. The session-backed client
 ///   places each request into a FIFO that the backend serves
 ///   serially. Discarding the previous future does NOT cancel the
-///   request — it just abandons the response. Net result: backend
+///   request - it just abandons the response. Net result: backend
 ///   processes events 1..N in order and the host only ever sees
 ///   N's frame, after the queue drains. With a 30 ms backend
 ///   round-trip, dragging for 100 ms queues ~6 events; the user sees
@@ -46,7 +46,7 @@ TEST(ShouldPostDragMove, FirstPostAllowedWhenNothingInFlight) {
 }
 
 // First post should still be SUPPRESSED if a prior request is in
-// flight — the host hasn't had a chance to consume the first
+// flight - the host hasn't had a chance to consume the first
 // future yet, so we don't add a second.
 TEST(ShouldPostDragMove, FirstPostSuppressedWhenAlreadyInFlight) {
   EXPECT_FALSE(ShouldPostDragMove(Vector2d(100.0, 100.0), std::optional<Vector2d>(),
@@ -72,7 +72,7 @@ TEST(ShouldPostDragMove, JustOverEpsilonAllowed) {
 }
 
 // **The regression-pin test.** Cursor moved a meaningful distance
-// from the last posted point — but a previous future is still in
+// from the last posted point - but a previous future is still in
 // flight, so the host MUST NOT post another. Reverting the new gate
 // (deleting the `pendingFrameInFlight` early-return) flips this to
 // `true` and the test goes red.
@@ -83,7 +83,7 @@ TEST(ShouldPostDragMove, MeaningfulMoveSuppressedWhilePendingInFlight) {
 }
 
 // And once the wire frees up, the same coalesced position is allowed
-// to fire — confirming the gate's only role is "wait, then send the
+// to fire - confirming the gate's only role is "wait, then send the
 // LATEST" rather than "drop this position permanently."
 TEST(ShouldPostDragMove, MeaningfulMoveAllowedWhenWireFrees) {
   EXPECT_TRUE(ShouldPostDragMove(Vector2d(150.0, 200.0),
@@ -106,7 +106,7 @@ TEST(ShouldPostDragMove, FastCursorAgainstSlowBackend) {
         << "wire busy → drop this post; dx=" << dx;
   }
   EXPECT_EQ(lastPosted, Vector2d(100.0, 100.0))
-      << "suppressed posts must not advance lastPosted — that's what "
+      << "suppressed posts must not advance lastPosted - that's what "
          "lets the LATEST cursor position win when the wire frees";
 
   // Wire frees. The accumulated 5 px delta clears the epsilon, so we

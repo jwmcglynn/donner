@@ -201,6 +201,9 @@ codebase consistent and portable.
 - **Avoid `long long`**: use fixed-width integers such as `std::int64_t` or `std::uint64_t`.
 - **Avoid `std::aligned_storage`/`std::aligned_union`**: prefer `alignas(T)` on a byte buffer for
   inline storage.
+- **Avoid typographic punctuation in source**: use ASCII hyphens and quotes instead of smart
+  hyphens, em dashes, en dashes, and smart quotes. Use ordinary ASCII whitespace in source files;
+  spell intentional Unicode whitespace in literals with escaped code points.
 - **No new `wgpu::Device::createRenderPipeline` / `createComputePipeline` calls**: wgpu-native
   retains every pipeline it ever constructs internally — `wgpuDevicePoll(wait=true)` does not
   drain the pending-destroy queue for pipelines. Per-frame or per-renderer construction silently

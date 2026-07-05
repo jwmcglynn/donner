@@ -11,8 +11,8 @@
 ///   2. Splice a `<text id="showcase_svg_label">SVG</text>` into the source,
 ///      rooted inside the root `<svg>` (mirrors the Text tool placing a `<text>`
 ///      inside the document root).
-///   3. Run `convertTextToOutlines(...)` — the exact helper backing the editor's
-///      `ConvertTextToOutlines` command — to replace the live `<text>` with an
+///   3. Run `convertTextToOutlines(...)` - the exact helper backing the editor's
+///      `ConvertTextToOutlines` command - to replace the live `<text>` with an
 ///      outline `<g id="showcase_svg_label_outlines"
 ///      data-donner-converted-from="text">` of `<path>` glyphs.
 ///   4. Run `ExportViewportAsSvg(...)` with `includeSelectionOverlay = true` and
@@ -162,7 +162,7 @@ int Run(const std::string& inputPath, const std::string& outputPath) {
 
   // 3. Convert Text to Outlines (the editor's ConvertTextToOutlines code
   //    path): build the detached outline group, then apply it as structural
-  //    DOM edits mirroring the shell — insert the group before the <text>,
+  //    DOM edits mirroring the shell - insert the group before the <text>,
   //    insert its paths, delete the <text>.
   ConvertTextToOutlinesResult outlines = convertTextToOutlines(textDocument, *textElement);
   if (!outlines.ok) {

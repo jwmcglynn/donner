@@ -58,7 +58,7 @@ public:
   /// `GlTextureCache` (the same Donner-bitmap -> GL/WGPU texture path the render
   /// pane uses); when null (e.g. in headless unit tests) the panel falls back to
   /// the deterministic swatch. Donner renders the thumbnail pixels; ImGui only
-  /// blits the resulting texture — see CLAUDE.md "No Rendering Vector Graphics
+  /// blits the resulting texture - see CLAUDE.md "No Rendering Vector Graphics
   /// With ImGui".
   ///
   /// @param stableId Stable id of the row whose thumbnail is being uploaded.
@@ -193,7 +193,7 @@ public:
   void handleLockClick(EditorApp& app, std::size_t rowIndex);
 
   /// Rename the element at @p rowIndex to @p newId via the shared
-  /// `EditorApp::renameSelectedElement` path — a DOM-level id change that also
+  /// `EditorApp::renameSelectedElement` path - a DOM-level id change that also
   /// repoints `url(#…)` / `href` references and `<style>` selectors. The row's
   /// element is selected first (renaming the thing you double-clicked), then the
   /// engine runs. Factored out so the inline-edit affordance is unit-testable
@@ -219,7 +219,7 @@ public:
   bool handleRowReorder(EditorApp& app, std::size_t fromIndex, std::size_t toIndex);
 
   /// Reorder the element at @p rowIndex in paint order (z-order) via the shared
-  /// `EditorApp::reorderSelectedElement` engine — the same path as the canvas
+  /// `EditorApp::reorderSelectedElement` engine - the same path as the canvas
   /// Arrange menu and the Cmd+[ / Cmd+] shortcuts. The row's element is selected
   /// first, then the move runs. Factored out so the Layers context-menu Arrange
   /// items are unit-testable without an ImGui frame.
@@ -297,7 +297,7 @@ private:
   std::unordered_map<std::uint64_t, css::RGBA> swatchByStableId_;
   /// Per-row Donner-rendered preview thumbnails keyed by stable id. Each entry
   /// is the element's subtree rasterized through
-  /// `svg::Renderer::renderElementToBitmap` into the preview cell size — a real
+  /// `svg::Renderer::renderElementToBitmap` into the preview cell size - a real
   /// render of the user's artwork, not an ImGui-synthesized silhouette. Rows
   /// whose subtree has no boundable geometry (empty groups, text, image, use)
   /// have no entry and fall back to the swatch.

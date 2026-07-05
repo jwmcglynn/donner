@@ -3,14 +3,14 @@
 ///
 /// These tests are the durable regression signal for every optimization
 /// milestone in `docs/design_docs/0030-geode_performance.md`. They assert
-/// `GeodeCounters` ceilings — steady-state buffer / bindgroup / texture /
-/// submit / path-encode counts — on representative SVG fixtures.
+/// `GeodeCounters` ceilings - steady-state buffer / bindgroup / texture /
+/// submit / path-encode counts - on representative SVG fixtures.
 ///
 /// Counter ceilings are deterministic; wall-clock budgets are not. That's
 /// why these tests (not the benchmark harness) are the CI gate.
 ///
 /// Milestone 0 (this file, initial): ceilings match CURRENT observed
-/// behaviour — the tests pass today. Each later milestone tightens the
+/// behaviour - the tests pass today. Each later milestone tightens the
 /// ceiling(s) it targets; the `// M{N}:` comment beside each assertion
 /// names the milestone that will change it.
 
@@ -37,7 +37,7 @@ namespace donner::svg {
 namespace {
 
 /// Inline fixture: three disjoint primitives, no gradients/filters/layers.
-/// Exercises the pure `submitFillDraw` path — the Tier-1 hot path from
+/// Exercises the pure `submitFillDraw` path - the Tier-1 hot path from
 /// design 0030.
 constexpr std::string_view kSimpleShapesSvg = R"SVG(
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
@@ -49,7 +49,7 @@ constexpr std::string_view kSimpleShapesSvg = R"SVG(
 
 /// Inline fixture: a single defined shape referenced by eight `<use>`
 /// instances at distinct positions. The whole document resolves to
-/// eight draws of the same source entity — exactly the shape
+/// eight draws of the same source entity - exactly the shape
 /// Milestone 6 Bullet 2 targets for instancing. Today these draw as
 /// eight separate GPU calls; `sameSourceDrawPairs` should report
 /// seven (= 8 − 1) adjacent-same-source pairs, which is the draw-call
@@ -101,7 +101,7 @@ void printCounters(const char* label, const geode::GeodeCounters& c) {
                c.submits, c.drawCalls, c.pipelineSwitches, c.sameSourceDrawPairs);
 }
 
-/// Read a file from disk. Returns the empty string on any I/O error —
+/// Read a file from disk. Returns the empty string on any I/O error -
 /// callers treat that as "fixture not available" and skip.
 std::string readFile(const std::string& path) {
   std::ifstream f(path);
@@ -143,7 +143,7 @@ geode::GeodeCounters renderAndGetCounters(std::string_view svgSource,
 class GeodePerfTest : public ::testing::Test {
 protected:
   /// Single process-wide device. Each test gets its own `RendererGeode`
-  /// backed by this device — matches how production embedders wire things
+  /// backed by this device - matches how production embedders wire things
   /// up (host owns GPU context, many short-lived renderers).
   static std::shared_ptr<geode::GeodeDevice> sharedDevice() {
     static auto device = [] {
@@ -179,7 +179,7 @@ TEST_F(GeodePerfTest, SimpleShapes_BaselineCeilings) {
   //   M0 baseline:        bufferCreates=13
   //   M1.d+e (ssbo+vb):   bufferCreates=7
   //   M1.f.1 (uniforms):  bufferCreates=5 (4 arenas + 1 readback,
-  //                       arenas lazily grown — some frames only
+  //                       arenas lazily grown - some frames only
   //                       touch 3 arenas)
   //   M4.2 (device dummies + pool): textureCreates=2 (target + MSAA
   //                       pair, fresh on first frame; repeat-render
@@ -221,7 +221,7 @@ TEST_F(GeodePerfTest, Moderate_BaselineCeilings) {
   //   M0 baseline:    bufferCreates=10 submits=4 textureCreates=10
   //   M1.d+e:         bufferCreates=10 submits=4 textureCreates=10
   //                   (three encoders from push/pop each allocate
-  //                   their own arenas — 3×3 + 1 readback.)
+  //                   their own arenas - 3×3 + 1 readback.)
   //   M3 (shared CE): bufferCreates=10 submits=2 textureCreates=10
   //                   (push/pop no longer forces a queue submit)
   //   M4.2 (device dummies + pool): textureCreates=4 on frame 1
@@ -241,7 +241,7 @@ TEST_F(GeodePerfTest, Moderate_BaselineCeilings) {
 }
 
 // ---------------------------------------------------------------------------
-// Fixture: lion.svg — the workhorse SVG used across Donner's test suites.
+// Fixture: lion.svg - the workhorse SVG used across Donner's test suites.
 // Skipped gracefully if the file isn't bundled (e.g. unit test run without
 // testdata deps).
 // ---------------------------------------------------------------------------
@@ -252,7 +252,7 @@ TEST_F(GeodePerfTest, Lion_BaselineCeilings) {
 
   const std::string svg = readFile("donner/svg/renderer/testdata/lion.svg");
   if (svg.empty()) {
-    GTEST_SKIP() << "testdata/lion.svg not readable — ensure the test target "
+    GTEST_SKIP() << "testdata/lion.svg not readable - ensure the test target "
                  << "has testdata as a data dep.";
     return;
   }
@@ -278,7 +278,7 @@ TEST_F(GeodePerfTest, Lion_BaselineCeilings) {
   //   M4.2 (device dummies + pool): textureCreates=2 on frame 1
   //                       (target + MSAA); 0 on repeat.
   //   M6 instrumentation: drawCalls=132 (one per path),
-  //                       pipelineSwitches=1 (solid pipeline only —
+  //                       pipelineSwitches=1 (solid pipeline only -
   //                       all of Lion is solid-fill). M6 Bullet 2
   //                       (`<use>` instancing) is the knob that moves
   //                       drawCalls for `<use>`-heavy fixtures; Lion
@@ -291,7 +291,7 @@ TEST_F(GeodePerfTest, Lion_BaselineCeilings) {
   EXPECT_LE(c.submits, 3u);              // M3: target = 1.
   EXPECT_LE(c.drawCalls, 200u);          // 132 paths, one draw each (no <use>).
   EXPECT_LE(c.pipelineSwitches, 2u);     // All-solid fixture: tracker binds solid once.
-  EXPECT_EQ(c.sameSourceDrawPairs, 0u);  // No `<use>` in Lion — every draw has a unique source.
+  EXPECT_EQ(c.sameSourceDrawPairs, 0u);  // No `<use>` in Lion - every draw has a unique source.
 }
 
 // ---------------------------------------------------------------------------
@@ -326,13 +326,13 @@ TEST_F(GeodePerfTest, UseHeavy_BaselineCeilings) {
   // M6-B step 3: the batcher collapses all eight consecutive
   // same-source `<use>` draws into a single instanced GPU call.
   EXPECT_EQ(c.drawCalls, 1u);
-  // And a single bind group covers all eight — per-instance
+  // And a single bind group covers all eight - per-instance
   // transforms ride in a storage-buffer binding (binding 7), while
   // the other seven entries are stable across the batch.
   EXPECT_EQ(c.bindgroupCreates, 1u);
   // Seven adjacent-same-source pairs detected at `drawPath` entry
   // (BEFORE batching collapses them). This is the "opportunity"
-  // counter — kept as a separate signal from `drawCalls` (the
+  // counter - kept as a separate signal from `drawCalls` (the
   // "realized" counter) so a regression in the detection path
   // (e.g. `<use>` stops resolving to a shared `dataEntity`) or
   // in the batcher trips independently.
@@ -342,7 +342,7 @@ TEST_F(GeodePerfTest, UseHeavy_BaselineCeilings) {
 // ---------------------------------------------------------------------------
 // Double-render sanity: same renderer, two consecutive frames. Counters
 // should reflect only the SECOND frame (beginFrame resets). This guards
-// the reset path — if a future optimization accidentally persists state
+// the reset path - if a future optimization accidentally persists state
 // across frames, this test catches it.
 // ---------------------------------------------------------------------------
 
@@ -376,7 +376,7 @@ TEST_F(GeodePerfTest, CountersResetBetweenFrames) {
 
   // Second-frame counters are strictly this-frame only (beginFrame
   // resets). Since M2 (`GeodePathCacheComponent`) landed, an unchanged
-  // second render does zero path encodes — the explicit assertion on
+  // second render does zero path encodes - the explicit assertion on
   // that invariant lives in `SimpleShapes_NoDirtyPath_ZeroEncodes`;
   // here we just confirm the reset path preserves the invariant across
   // counters and that render targets get reused (Milestone 4.1).
@@ -388,7 +388,7 @@ TEST_F(GeodePerfTest, CountersResetBetweenFrames) {
 }
 
 // ---------------------------------------------------------------------------
-// Milestone 2: GeodePathCacheComponent — no-geometry-change ⇒ zero encodes.
+// Milestone 2: GeodePathCacheComponent - no-geometry-change ⇒ zero encodes.
 //
 // The promise: once a document has been rendered once, rendering it again
 // with no geometry or style mutation must perform zero CPU-side path
@@ -416,7 +416,7 @@ geode::GeodeCounters countersForSecondRender(std::string_view svgSource,
   RendererGeode renderer(device);
   renderer.draw(document);
   (void)renderer.takeSnapshot();
-  // First-frame counters intentionally discarded — we only care about the
+  // First-frame counters intentionally discarded - we only care about the
   // steady-state second frame.
 
   renderer.draw(document);
@@ -431,7 +431,7 @@ TEST_F(GeodePerfTest, SimpleShapes_NoDirtyPath_ZeroEncodes) {
   const geode::GeodeCounters c = countersForSecondRender(kSimpleShapesSvg, device);
   printCounters("SimpleShapes_NoDirtyPath_ZeroEncodes (frame2)", c);
 
-  // M2 target: second frame does zero path encodes — three shapes hit the
+  // M2 target: second frame does zero path encodes - three shapes hit the
   // cache. countPathEncode() is only called on cache miss.
   EXPECT_EQ(c.pathEncodes, 0u) << "Cache miss on an unchanged second render: one or more paths "
                                   "re-encoded despite zero geometry changes.";
@@ -444,7 +444,7 @@ TEST_F(GeodePerfTest, Moderate_NoDirtyPath_ZeroEncodes) {
   const geode::GeodeCounters c = countersForSecondRender(kModerateSvg, device);
   printCounters("Moderate_NoDirtyPath_ZeroEncodes (frame2)", c);
 
-  // M2 target: zero encodes across both fill paths — confirms the cache
+  // M2 target: zero encodes across both fill paths - confirms the cache
   // covers both `submitFillDraw` (opacity-layer path) and
   // `fillPathLinearGradient` (rounded-rect path).
   EXPECT_EQ(c.pathEncodes, 0u) << "Cache miss on unchanged second render: fill or gradient path "
@@ -457,7 +457,7 @@ TEST_F(GeodePerfTest, Lion_NoDirtyPath_ZeroEncodes) {
 
   const std::string svg = readFile("donner/svg/renderer/testdata/lion.svg");
   if (svg.empty()) {
-    GTEST_SKIP() << "testdata/lion.svg not readable — ensure the test target "
+    GTEST_SKIP() << "testdata/lion.svg not readable - ensure the test target "
                  << "has testdata as a data dep.";
     return;
   }
@@ -479,7 +479,7 @@ TEST_F(GeodePerfTest, GhostscriptTiger_NoDirtyPath_ZeroEncodes) {
 
   const std::string svg = readFile("donner/svg/renderer/testdata/Ghostscript_Tiger.svg");
   if (svg.empty()) {
-    GTEST_SKIP() << "testdata/Ghostscript_Tiger.svg not readable — ensure the "
+    GTEST_SKIP() << "testdata/Ghostscript_Tiger.svg not readable - ensure the "
                  << "test target has testdata as a data dep.";
     return;
   }
@@ -488,7 +488,7 @@ TEST_F(GeodePerfTest, GhostscriptTiger_NoDirtyPath_ZeroEncodes) {
   printCounters("GhostscriptTiger_NoDirtyPath_ZeroEncodes (frame2)", c);
 
   // M2 target: Tiger has strokes too, so this test also exercises the
-  // stroke slot of `GeodePathCacheComponent` — a second render must not
+  // stroke slot of `GeodePathCacheComponent` - a second render must not
   // re-run `Path::strokeToFill` nor re-encode the stroked outline.
   EXPECT_EQ(c.pathEncodes, 0u)
       << "Cache miss on unchanged second render of Ghostscript_Tiger.svg: "
@@ -496,7 +496,7 @@ TEST_F(GeodePerfTest, GhostscriptTiger_NoDirtyPath_ZeroEncodes) {
 }
 
 // ---------------------------------------------------------------------------
-// Milestone 4.2: Transient render-target pool — zero-alloc repeat render.
+// Milestone 4.2: Transient render-target pool - zero-alloc repeat render.
 //
 // Per design doc 0030 §M4.2: a size-keyed free list for layer / filter /
 // mask / clip-mask scratch textures. Combined with M4.1 (target + MSAA
@@ -529,7 +529,7 @@ TEST_F(GeodePerfTest, Moderate_NoDirtyPath_ZeroTextures) {
 
   // Moderate fixture has `<path opacity="0.8">` which triggers a
   // `pushIsolatedLayer` / `popIsolatedLayer` round-trip per frame. The
-  // layer allocates an RGBA8 resolve + 4× MSAA companion — M4.2 must
+  // layer allocates an RGBA8 resolve + 4× MSAA companion - M4.2 must
   // pool and reuse both.
   EXPECT_EQ(c.textureCreates, 0u) << "Isolated-layer texture leak on unchanged second render. "
                                      "Layer push/pop should draw from the M4.2 texture pool.";
@@ -578,7 +578,7 @@ TEST_F(GeodePerfTest, GhostscriptTiger_NoDirtyPath_ZeroTextures) {
 // sized resources (target + MSAA pair go into the per-instance pool,
 // plus a readback buffer for `takeSnapshot`), but every *pipeline*
 // lives on the device. Doubling the renderer count therefore roughly
-// doubles textures/buffers, not pipelines — and the per-renderer
+// doubles textures/buffers, not pipelines - and the per-renderer
 // overhead stays comfortably under the ceiling we assert below.
 // ---------------------------------------------------------------------------
 TEST_F(GeodePerfTest, SharedDevice_RendererConstructionDoesNotLeakPipelines) {
@@ -613,7 +613,7 @@ TEST_F(GeodePerfTest, SharedDevice_RendererConstructionDoesNotLeakPipelines) {
   //     the three solid fills in `kSimpleShapesSvg`
   // Budget liberally: 4 textures and 8 buffers per iteration absorbs
   // both paths plus a little slack. Anything larger than that means
-  // something new is being allocated per-renderer — most likely a
+  // something new is being allocated per-renderer - most likely a
   // pipeline, which is exactly what this test guards against.
   EXPECT_LE(deltaTex, 4u * kRendererCount) << "Per-renderer texture growth exceeds expected "
                                               "(target + MSAA + slack). Did pipeline construction "

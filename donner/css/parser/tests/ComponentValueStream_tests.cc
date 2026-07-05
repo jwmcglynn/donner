@@ -152,7 +152,7 @@ TEST(ComponentValueStreamTest, SkipWhitespaceAdvancesOverLeadingWhitespace) {
   stream.skipWhitespace();
 
   // Two whitespace tokens consumed; the trailing whitespace after "hello" is
-  // deliberately NOT consumed — skipWhitespace only eats leading whitespace.
+  // deliberately NOT consumed - skipWhitespace only eats leading whitespace.
   EXPECT_EQ(stream.remaining(), 2u);
   EXPECT_TRUE(stream.peekIsToken<Token::Ident>());
   EXPECT_EQ(stream.peekAs<Token>()->get<Token::Ident>().value, "hello");

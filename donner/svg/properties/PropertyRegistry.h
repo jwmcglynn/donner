@@ -363,7 +363,7 @@ public:
 
   /// `alignment-baseline` property. Specifies how an inline element aligns with its parent's
   /// baseline. Uses the same enum as dominant-baseline (`baseline` parses to
-  /// \ref DominantBaseline::Auto — both defer to the dominant baseline). Not inherited.
+  /// \ref DominantBaseline::Auto - both defer to the dominant baseline). Not inherited.
   Property<DominantBaseline> alignmentBaseline{
       "alignment-baseline",
       []() -> std::optional<DominantBaseline> { return DominantBaseline::Auto; }};
@@ -538,7 +538,7 @@ public:
   /**
    * Clear every property that was set from a `style=""` attribute, leaving presentation
    * attributes (specificity `0,0,0`) and stylesheet-origin declarations intact. Identifies
-   * style-origin properties by their stored \ref css::Specificity::StyleAttribute() tag —
+   * style-origin properties by their stored \ref css::Specificity::StyleAttribute() tag -
    * the same tag \ref parseStyle applies when it writes them.
    *
    * Use this before re-calling \ref parseStyle on the same registry to get "replace the

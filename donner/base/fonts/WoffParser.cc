@@ -19,16 +19,16 @@ uint16_t ReadBE16(const uint8_t* p) {
 }
 
 /**
- * Converts a UTF‑16BE string to UTF‑8.
+ * Converts a UTF-16BE string to UTF-8.
  *
  * Used for 'name' table records on Windows/Unicode platforms.
  *
- * @param utf16be The UTF‑16BE encoded string as a byte span.
- * @return        The UTF‑8 encoded string.
+ * @param utf16be The UTF-16BE encoded string as a byte span.
+ * @return        The UTF-8 encoded string.
  */
 std::string Utf16BeToUtf8(std::span<const uint8_t> utf16be) {
   std::string out;
-  out.reserve(utf16be.size());  // worst‑case 1 UTF‑8 byte per 16‑bit code unit
+  out.reserve(utf16be.size());  // worst-case 1 UTF-8 byte per 16-bit code unit
   for (size_t i = 0; i + 1 < utf16be.size(); i += 2) {
     uint16_t code = ReadBE16(utf16be.data() + i);
     if (code < 0x80) {
@@ -49,17 +49,17 @@ std::string Utf16BeToUtf8(std::span<const uint8_t> utf16be) {
  * Attempts to extract the font family name from a NAME table.
  *
  * @param nameTable Raw 'name' table bytes.
- * @return UTF‑8 family name, or \c std::nullopt if not found/decodable.
+ * @return UTF-8 family name, or \c std::nullopt if not found/decodable.
  */
 std::optional<std::string> ParseNameTable(std::span<const uint8_t> nameTable) {
-  // The table header is 6 bytes: format, count, stringOffset.
+  // The table header is 6 bytes: format, count, stringOffset.
   if (nameTable.size() < 6) {
     return std::nullopt;
   }
   const uint16_t count = ReadBE16(nameTable.data() + 2);
   const uint16_t stringOffset = ReadBE16(nameTable.data() + 4);
 
-  // Each NameRecord is 12 bytes.
+  // Each NameRecord is 12 bytes.
   const size_t recordsSize = static_cast<size_t>(count) * 12;
   if (6 + recordsSize > nameTable.size()) {
     return std::nullopt;
@@ -80,7 +80,7 @@ std::optional<std::string> ParseNameTable(std::span<const uint8_t> nameTable) {
         return rec;
       }
     }
-    // Fallback: return the first record with the requested name‑id.
+    // Fallback: return the first record with the requested name-id.
     rec = nameTable.data() + 6;
     for (uint16_t i = 0; i < count; ++i, rec += 12) {
       if (ReadBE16(rec + 6) == wantedNameId) {
@@ -92,7 +92,7 @@ std::optional<std::string> ParseNameTable(std::span<const uint8_t> nameTable) {
 
   const uint8_t* record = pickRecord(/*Font Family =*/1);
   if (!record) {
-    // Try Typographic Family (name‑id 16) as a last resort.
+    // Try Typographic Family (name-id 16) as a last resort.
     record = pickRecord(/*Typographic Family =*/16);
     if (!record) {
       return std::nullopt;
@@ -109,15 +109,15 @@ std::optional<std::string> ParseNameTable(std::span<const uint8_t> nameTable) {
   const uint16_t platform = ReadBE16(record);
   const uint16_t encoding = ReadBE16(record + 2);
 
-  // Windows‑Unicode -> UTF‑16BE
+  // Windows-Unicode -> UTF-16BE
   if (platform == 3 && (encoding == 1 || encoding == 10)) {
     if (raw.size() % 2 != 0) {
-      return std::nullopt;  // broken UTF‑16 length
+      return std::nullopt;  // broken UTF-16 length
     }
     return Utf16BeToUtf8(raw);
   }
 
-  // Macintosh Roman -> 8‑bit, nearly ASCII; accept as‑is.
+  // Macintosh Roman -> 8-bit, nearly ASCII; accept as-is.
   if (platform == 1) {
     return std::string(reinterpret_cast<const char*>(raw.data()), raw.size());
   }

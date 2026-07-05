@@ -96,7 +96,7 @@ void UnpremultiplyRgbaInPlace(std::vector<std::uint8_t>& rgba) {
       rgba[i + 1] = 0;
       rgba[i + 2] = 0;
     } else if (a != 255) {
-      // Integer (r * 255 * 256 / a + 128) >> 8 — carried forward
+      // Integer (r * 255 * 256 / a + 128) >> 8 - carried forward
       // verbatim from `CompositorController::UnpremultiplyPixels`
       // (the pre-shared-helper origin), which has been validated
       // against the full compositor golden suite. Preserve this

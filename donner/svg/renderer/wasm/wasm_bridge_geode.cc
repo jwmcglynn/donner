@@ -1,6 +1,6 @@
 /**
  * @file
- * WASM bridge for Donner SVG renderer — Geode (WebGPU) backend.
+ * WASM bridge for Donner SVG renderer - Geode (WebGPU) backend.
  *
  * Provides the same C ABI as `wasm_bridge.cc` but uses `RendererGeode`
  * directly so the rendering path goes through the browser's native WebGPU
@@ -84,7 +84,7 @@ uint8_t* donner_geode_render_svg(const char* svgText, int width, int height) {
 
   // Render using the Geode (WebGPU) backend. Under Emscripten the
   // RendererGeode constructor calls GeodeDevice::CreateHeadless() which
-  // requests an adapter and device — these are async in the browser and
+  // requests an adapter and device - these are async in the browser and
   // require ASYNCIFY to complete synchronously.
   std::cerr << "[wasm] constructing RendererGeode (will acquire WebGPU device)" << std::endl;
   RendererGeode renderer(/*verbose=*/true);
@@ -102,7 +102,7 @@ uint8_t* donner_geode_render_svg(const char* svgText, int width, int height) {
     return nullptr;
   }
 
-  // NOLINTNEXTLINE: malloc is required for Emscripten interop — JS frees via donner_free_pixels.
+  // NOLINTNEXTLINE: malloc is required for Emscripten interop - JS frees via donner_free_pixels.
   auto* pixels = static_cast<uint8_t*>(std::malloc(expectedBytes));
   if (pixels == nullptr) {
     gLastError = "Failed to allocate pixel buffer";

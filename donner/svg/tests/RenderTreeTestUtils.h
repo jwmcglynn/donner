@@ -3,7 +3,7 @@
 ///
 /// Test-only helpers for inspecting render-tree invalidation state. These wrap
 /// ECS-internal components (DirtyFlagsComponent, RenderingInstanceComponent)
-/// so tests outside donner/svg — e.g. editor Layers-panel tests — can assert
+/// so tests outside donner/svg - e.g. editor Layers-panel tests - can assert
 /// render-invalidation behavior without including component headers directly
 /// (which the banned-patterns lint forbids).
 

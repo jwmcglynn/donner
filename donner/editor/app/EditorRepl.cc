@@ -41,7 +41,7 @@ RenderSessionRepl::RenderSessionRepl(RenderSession& app, std::istream& in, std::
 
 int RenderSessionRepl::run() {
   if (options_.printBanner) {
-    out_ << "Donner Editor MVP — type 'help' for commands, 'quit' to exit.\n";
+    out_ << "Donner Editor MVP - type 'help' for commands, 'quit' to exit.\n";
   }
 
   int count = 0;
@@ -162,7 +162,7 @@ bool RenderSessionRepl::dispatch(const std::string& line) {
     return true;
   }
 
-  out_ << "unknown command '" << cmd << "' — type 'help' for the list\n";
+  out_ << "unknown command '" << cmd << "' - type 'help' for the list\n";
   return false;
 }
 

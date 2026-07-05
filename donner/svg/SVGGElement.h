@@ -14,8 +14,8 @@ namespace donner::svg {
  * - SVG2 spec: https://www.w3.org/TR/SVG2/struct.html#GElement
  *
  * The `<g>` element (short for "group") is a purely organizational container. It draws nothing
- * of its own, but any attributes you set on it — `transform`, `fill`, `stroke`, `opacity`,
- * `filter`, `clip-path`, etc. — cascade down to all of its children. Think of it as the SVG
+ * of its own, but any attributes you set on it - `transform`, `fill`, `stroke`, `opacity`,
+ * `filter`, `clip-path`, etc. - cascade down to all of its children. Think of it as the SVG
  * equivalent of HTML's `<div>`: a wrapper that groups related elements so you can move, scale,
  * recolor, or hide them all at once.
  *

@@ -25,7 +25,7 @@ namespace donner::svg {
  * by one or more \ref xml_use elements. Like \ref xml_defs content, a `<symbol>` is not drawn
  * where it appears; unlike a plain `<defs>` group, a `<symbol>` brings its own `viewBox` and
  * `preserveAspectRatio`, so each `<use>` can resize it to fit a target rectangle without
- * distortion — just like a nested \ref xml_svg element.
+ * distortion - just like a nested \ref xml_svg element.
  *
  * Use `<symbol>` when you have an icon, glyph, or repeated graphic that needs to be reused at
  * different sizes or positions (think of an icon sprite sheet). For content that does not need
@@ -121,7 +121,7 @@ public:
 
   /**
    * Set the `preserveAspectRatio` attribute, which determines how the
-   * symbol’s viewport scales its content.
+   * symbol's viewport scales its content.
    *
    * @param preserveAspectRatio The preserveAspectRatio value to set.
    */

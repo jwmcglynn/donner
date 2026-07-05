@@ -422,7 +422,7 @@ void SidebarPresenter::renderTreeNode(EditorApp* liveApp, const TreeNodeSnapshot
   const bool nodeOpen = ImGui::TreeNodeEx(node.label.c_str(), nodeFlags);
 
   // Click handling: only valid when we have live access to the EditorApp.
-  // When `liveApp` is null (async renderer is busy), clicks are dropped —
+  // When `liveApp` is null (async renderer is busy), clicks are dropped -
   // the selection state freezes along with the rest of the snapshot until
   // the worker finishes and the main loop catches up next frame.
   if (liveApp != nullptr && ImGui::IsItemClicked()) {

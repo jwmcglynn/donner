@@ -1009,9 +1009,9 @@ TEST_F(TextSystemTest, StartsNewChunk) {
 
   // Root span starts a new chunk (has x and y).
   EXPECT_TRUE(computed->spans[0].startsNewChunk);
-  // First tspan has no explicit position — continuation.
+  // First tspan has no explicit position - continuation.
   EXPECT_FALSE(computed->spans[1].startsNewChunk);
-  // Second tspan has explicit x — new chunk.
+  // Second tspan has explicit x - new chunk.
   EXPECT_TRUE(computed->spans[2].startsNewChunk);
 }
 
@@ -1052,7 +1052,7 @@ TEST_F(TextSystemTest, DisplayNoneConsumesRotateIndices) {
   ASSERT_GE(rotateLists[0].size(), 1u);
   EXPECT_DOUBLE_EQ(rotateLists[0][0], 10.0);
 
-  // "ex" is hidden (display:none) — does NOT consume attribute indices.
+  // "ex" is hidden (display:none) - does NOT consume attribute indices.
   // The hidden span has no rotate values (skips character counting entirely).
   EXPECT_TRUE(rotateLists[1].empty());
 

@@ -3,7 +3,7 @@
 /// CPU-invariant portion of the `filter_drag_repro` replay test.
 /// Runs on the default PR gate (`bazel test //...`) because every
 /// assertion here is independent of the host runner's wall-clock
-/// speed — fast-path counters, the selection-change invariant, and
+/// speed - fast-path counters, the selection-change invariant, and
 /// the "something was selected at all" invariant all derive from
 /// compositor and editor state, not from timing.
 ///
@@ -28,18 +28,18 @@ TEST(FilterDragReproCorrectnessTest, ReplayReSelectsAndHitsFastPathWhenEligible)
   // Selection invariant: after the first mouse-up, ONE element must be
   // selected (the first drag's target). The second mouse-down in the
   // recording lands on a different location; it must hit-test, replace
-  // the selection, and produce a visible drag preview — the user's
+  // the selection, and produce a visible drag preview - the user's
   // "I can't select any other elements" complaint is exactly the
   // failure mode where the first drag's selection sticks because the
   // new mouse-down was dropped (async renderer busy / first drag
   // layer never demoted).
   EXPECT_TRUE(r.firstSelectionExists)
-      << "first drag ended without a latched selection — hit-test missed or gesture aborted";
+      << "first drag ended without a latched selection - hit-test missed or gesture aborted";
   EXPECT_TRUE(r.secondSelectionExists)
-      << "second mouse-down never produced a selection — user's 'can't select anything else' "
+      << "second mouse-down never produced a selection - user's 'can't select anything else' "
          "complaint exactly";
   EXPECT_TRUE(r.selectionChangedAcrossDrags)
-      << "second drag's selection did not differ from the first — second mouse-down was ignored "
+      << "second drag's selection did not differ from the first - second mouse-down was ignored "
          "(likely dropped because async renderer stayed busy through the entire repro window)";
 
   // With sibling-expansion enabled, a click on a compositing group may

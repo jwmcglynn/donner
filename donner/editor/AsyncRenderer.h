@@ -16,12 +16,12 @@
 /// mutate the document while a render is in flight.
 ///
 /// UI thread flow per frame:
-/// 1. `pollResult()` — if a render just finished, pick up the bitmap.
+/// 1. `pollResult()` - if a render just finished, pick up the bitmap.
 /// 2. If NOT busy: process mutations via `flushFrame()`.
 /// 3. If NOT busy AND a new render is needed: `requestRender()`.
 /// 4. If busy: skip flushFrame, leave pending mutations in the queue.
 ///    They apply on the next idle frame. Input (drags, typing) still
-///    gets processed and queued — just not dispatched to the ECS.
+///    gets processed and queued - just not dispatched to the ECS.
 /// 5. The editor overlay is the exception: it may take guarded document access for immediate
 ///    presentation chrome. That access serializes behind the worker's render access instead of
 ///    racing it, and must not be taken while holding `AsyncRenderer`'s mutex.
@@ -30,7 +30,7 @@
 /// return from `pollResult()`, the UI thread must not mutate the
 /// `SVGDocument`. Registry-reading UI paths should normally gate on
 /// `!isBusy()` unless they are using guarded access for immediate overlay presentation. The UI
-/// thread must not call any method on the worker `Renderer` at any time — it lives on the worker.
+/// thread must not call any method on the worker `Renderer` at any time - it lives on the worker.
 
 #include <atomic>
 #include <chrono>
@@ -99,7 +99,7 @@ struct RenderRequest {
     std::vector<Entity> extraEntities;
     /// Which interaction phase drove this preview. `Selection` means the
     /// editor is pre-warming a layer for the selected entity before any
-    /// drag begins. `ActiveDrag` means the user is actively dragging — the
+    /// drag begins. `ActiveDrag` means the user is actively dragging - the
     /// DOM's transform attribute already reflects the cursor delta. The
     /// compositor stamps the correct `InteractionHint` on the entity based
     /// on this field so downstream introspection stays accurate.
@@ -211,7 +211,7 @@ struct RenderResult {
     enum class Kind : std::uint8_t { Segment, Layer, Immediate };
 
     Kind kind = Kind::Segment;
-    /// Stable id from the compositor — `"seg:{i}"` or
+    /// Stable id from the compositor - `"seg:{i}"` or
     /// `"layer:{entity}"`. The editor's per-tile texture cache uses
     /// this to reuse GL textures across frames when the tile's
     /// `generation` hasn't bumped.
@@ -240,7 +240,7 @@ struct RenderResult {
     Vector2d canvasOffsetDoc = Vector2d::Zero();
     /// Bitmap's intrinsic dimensions, in document units. Editor
     /// multiplies by current `pixelsPerDocUnit` to get the on-screen
-    /// blit size — keeps the bitmap stretching with pinch-zoom while
+    /// blit size - keeps the bitmap stretching with pinch-zoom while
     /// the canvas-size commit is debounced.
     Vector2d bitmapDimsDoc = Vector2d::Zero();
     /// For drag-target tiles, the per-frame DOM translation in doc
@@ -347,7 +347,7 @@ public:
   /// Safe to call from any thread.
   void cancelInFlight();
 
-  /// Design doc 0033 §M4 — count of renders that were cancelled
+  /// Design doc 0033 §M4 - count of renders that were cancelled
   /// mid-flight by a subsequent `requestRender`. Exposed for tests
   /// to assert preemption is engaging (vs. the worker silently
   /// queueing requests). Incremented under the internal mutex; safe
@@ -369,13 +369,13 @@ public:
   /// without continuous polling.
   ///
   /// The callback runs on the worker thread. It must be thread-safe
-  /// and must NOT re-enter the renderer — a simple wake-up post into
+  /// and must NOT re-enter the renderer - a simple wake-up post into
   /// the window's event queue is the intended use.
   void setWakeCallback(std::function<void()> callback);
 
   /// Toggle whether the compositor uses tight-bounded segment
   /// rasterization (design doc 0027). The change applies at the start
-  /// of the next worker iteration — `renderFrame` calls
+  /// of the next worker iteration - `renderFrame` calls
   /// `CompositorController::setTightBoundedSegmentsEnabled` before
   /// compositing, which marks all cached segments dirty so the flip
   /// takes full effect that frame.
@@ -416,7 +416,7 @@ public:
     return compositorReconstructCount_.load(std::memory_order_acquire);
   }
 
-  /// Snapshot of the compositor's fast-path counters. Read-only — the worker
+  /// Snapshot of the compositor's fast-path counters. Read-only - the worker
   /// writes them under the mutex when transitioning to Done. Returns zeros
   /// before the compositor is constructed (first render not yet requested).
   /// UI-thread safe.
@@ -536,14 +536,14 @@ private:
   std::function<void()> wakeCallback_;
   std::unique_ptr<svg::compositor::CompositorController> compositor_;
   /// The `SVGDocument` this compositor is currently configured for. Stored by
-  /// value — `SVGDocument` is a thin value-facade over a `std::shared_ptr<Registry>`
+  /// value - `SVGDocument` is a thin value-facade over a `std::shared_ptr<Registry>`
   /// (see `SVGDocumentHandle`), so copying is a refcount bump, not a deep copy
   /// of the document state. `nullopt` before the first render request; set to
   /// a copy of the request's document lease on the first iteration and any time the
   /// underlying document handle changes.
   ///
   /// Identity comparison uses `handle().get()` against the incoming request's
-  /// document — two `SVGDocument` values wrapping the same `std::shared_ptr<
+  /// document - two `SVGDocument` values wrapping the same `std::shared_ptr<
   /// Registry>` compare equal, which is the right "same document" semantic.
   std::optional<svg::SVGDocument> compositorDocument_;
   svg::Renderer* compositorRenderer_ = nullptr;
@@ -589,7 +589,7 @@ private:
   /// keep it there across drag-release-and-reparse cycles.
   std::atomic<std::uint64_t> compositorReconstructCount_{0};
 
-  /// Design doc 0033 §M4 — cancellation token threaded into
+  /// Design doc 0033 §M4 - cancellation token threaded into
   /// `CompositorController::renderFrame(viewport, token)`. The UI
   /// thread sets `cancelRender_` via `requestRender` when posting a
   /// new request while the worker is busy; the worker polls the
@@ -635,7 +635,7 @@ private:
   Entity lastWorkerCompositorEntity_ = entt::null;
 
   /// Canvas size from the request's document lease at the last
-  /// completed render. Diagnostic — compared against the
+  /// completed render. Diagnostic - compared against the
   /// compositor's `staticSegmentsCanvas_` to spot "document was
   /// re-sized but compositor hasn't caught up yet".
   Vector2i lastDocumentCanvasSize_ = Vector2i::Zero();

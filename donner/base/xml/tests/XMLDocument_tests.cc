@@ -244,7 +244,7 @@ TEST_F(XMLDocumentTests, AttributeAtSourceOffsetWithSourceOnlyDocumentReturnsNul
 }
 
 //
-// applySourceEdit — error paths.
+// applySourceEdit - error paths.
 //
 
 TEST_F(XMLDocumentTests, ApplySourceEditWithoutSourceStoreFails) {
@@ -913,7 +913,7 @@ TEST_F(XMLDocumentTests, ApplySourceEditSuccessClearsPreviousScopedDiagnostic) {
 }
 
 //
-// setAttribute — DOM-side structured edit.
+// setAttribute - DOM-side structured edit.
 //
 
 TEST_F(XMLDocumentTests, SetAttributeUpdatesExistingValue) {

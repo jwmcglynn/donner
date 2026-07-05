@@ -157,7 +157,7 @@ TEST(KeyboardShortcutPolicyTest, DeselectAllCanvasRequiresCmdShiftAWithSelection
 }
 
 TEST(KeyboardShortcutPolicyTest, DeselectAllSourcePaneRequiresCmdShiftAWithFocus) {
-  // Cmd+Shift+A with the source pane focused and no popup fires (no canvas selection needed —
+  // Cmd+Shift+A with the source pane focused and no popup fires (no canvas selection needed -
   // collapsing the caret is always valid).
   EXPECT_TRUE(CanDeselectAllFromSourcePaneShortcut(/*pressedA=*/true, /*cmd=*/true, /*shift=*/true,
                                                    /*anyPopupOpen=*/false,

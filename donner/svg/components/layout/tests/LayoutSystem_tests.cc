@@ -266,7 +266,7 @@ TEST_F(LayoutSystemTest, TransformOriginSupport) {
 }
 
 /**
- * Verify transform-origin with 100 % 100 % (bottom‑right corner of the element).
+ * Verify transform-origin with 100 % 100 % (bottom-right corner of the element).
  */
 TEST_F(LayoutSystemTest, TransformOriginBottomRight) {
   auto document = ParseSVG(R"-(
@@ -286,7 +286,7 @@ TEST_F(LayoutSystemTest, TransformOriginBottomRight) {
 }
 
 /**
- * Verify transform-origin with 25 % 75 % (mixed percentages).
+ * Verify transform-origin with 25 % 75 % (mixed percentages).
  */
 TEST_F(LayoutSystemTest, TransformOriginQuarterThreeQuarter) {
   auto document = ParseSVG(R"-(
@@ -306,7 +306,7 @@ TEST_F(LayoutSystemTest, TransformOriginQuarterThreeQuarter) {
 }
 
 /**
- * Verify transform-origin with absolute pixel values (10 px 20 px).
+ * Verify transform-origin with absolute pixel values (10 px 20 px).
  */
 TEST_F(LayoutSystemTest, TransformOriginPixels) {
   auto document = ParseSVG(R"-(
@@ -397,7 +397,7 @@ TEST_F(LayoutSystemTest, CanvasScaledDocumentSizeInvalidReturnsZeroOrDefault) {
 
 // Regression test for B1: intrinsic sizing on a non-square viewBox.
 // A viewBox of 0 0 200 100 (aspect 2:1) with no width/height, fitted into a 500x500 canvas with
-// the default preserveAspectRatio (xMidYMid meet), must produce a 500x250 document — the *extent*
+// the default preserveAspectRatio (xMidYMid meet), must produce a 500x250 document - the *extent*
 // of the scaled viewBox, NOT a viewBox corner mapped through the letterboxed content transform
 // (which would fold in the 62.5px vertical centering offset and yield an incorrect 500x375).
 TEST_F(LayoutSystemTest, CanvasScaledDocumentSizeNonSquareViewBox) {
@@ -720,7 +720,7 @@ TEST_F(LayoutSystemTest, PercentageWidthHeightOnRootFallsBackToViewBox) {
 }
 
 /**
- * Percentage width/height without viewBox — no intrinsic dimensions or ratio.
+ * Percentage width/height without viewBox - no intrinsic dimensions or ratio.
  */
 TEST_F(LayoutSystemTest, PercentageWidthHeightNoViewBox) {
   auto document = ParseSVG(R"(

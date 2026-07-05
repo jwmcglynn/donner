@@ -17,7 +17,7 @@ CommandQueue::FlushResult CommandQueue::flush() {
   // Commands queued after the latest structural-replace survive coalescing
   // against each other, but anything before it is logically wiped out.
   // ReplaceDocument, CutShapes, and PasteShapes are all "swap the whole
-  // document" commands — they invalidate any element handles that earlier
+  // document" commands - they invalidate any element handles that earlier
   // commands hold, so prior commands must be discarded.
   auto isStructuralReplace = [](EditorCommand::Kind kind) {
     return kind == EditorCommand::Kind::ReplaceDocument || kind == EditorCommand::Kind::CutShapes ||
@@ -45,7 +45,7 @@ CommandQueue::FlushResult CommandQueue::flush() {
   // the index each element's most recent SetTransform landed at; later
   // writes overwrite the earlier slot in-place. Order across distinct
   // elements is preserved. The element identity key is pulled from the
-  // SVGElement handle — using the underlying entity id is safe because
+  // SVGElement handle - using the underlying entity id is safe because
   // we're only using it as an opaque key, not dereferencing it into the
   // registry.
   std::unordered_map<Entity, std::size_t> setTransformSlot;

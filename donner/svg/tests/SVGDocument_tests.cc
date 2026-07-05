@@ -495,9 +495,9 @@ TEST(SVGDocument, CanvasFromDocumentTransformIdentity) {
  * returns a transformation in `destinationFromSource` notation that maps coordinates from the
  * document's viewBox (source) to the canvas-scaled output space (destination).
  *
- * For a viewBox of 200×200 and a canvas size of 100×200, the transformation scales the x‑coordinate
+ * For a viewBox of 200×200 and a canvas size of 100×200, the transformation scales the x-coordinate
  * by 0.5 (i.e. a point (50, 100) in the viewBox is mapped to (25, 100) in canvas space),
- * while the y‑coordinate remains unchanged.
+ * while the y-coordinate remains unchanged.
  */
 TEST(SVGDocument, CanvasFromDocumentTransformScaling) {
   auto document = ParseSVG(R"(

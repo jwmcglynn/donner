@@ -5,7 +5,7 @@ Companion to `banned_deps.bzl`. Where `banned_deps_test` checks *direct*
 asserts that `target` has **no path at all** (transitive) to `forbidden` in the
 loading-phase target graph.
 
-Uses genquery (`somepath`), evaluated at analysis time — no reentrant Bazel
+Uses genquery (`somepath`), evaluated at analysis time - no reentrant Bazel
 calls, so it runs inside `bazel test //...` like any other test.
 
 NOTE: genquery evaluates over the *unconfigured* target graph, where every
@@ -14,7 +14,7 @@ meaningful when `target` is a backend-specific library whose own dep list never
 mentions `forbidden` (so there is no select branch to hide it). It is the right
 tool for `:renderer_geode` (a pure geode library that must never reach
 `:renderer_tiny_skia`), but it must NOT be pointed at the dispatcher
-`:renderer` — that target legitimately reaches tiny-skia through its
+`:renderer` - that target legitimately reaches tiny-skia through its
 `//conditions:default` select branch, which the unconfigured graph always
 includes.
 """

@@ -12,14 +12,14 @@ namespace donner::geode {
  * regions, plus its bind group layout.
  *
  * Owned by `GeodeDevice` (lazily, via `GeodeDevice::checkerboardPipeline()`) so
- * every consumer sharing the device reuses one compiled pipeline — wgpu-native
+ * every consumer sharing the device reuses one compiled pipeline - wgpu-native
  * retains every pipeline ever constructed, so per-consumer construction leaks
  * (issue #575).
  *
  * Bind group layout:
  * - binding 0: uniform buffer (\ref Uniforms)
  *
- * The pipeline takes no vertex buffer — the shader emits a fullscreen triangle
+ * The pipeline takes no vertex buffer - the shader emits a fullscreen triangle
  * from `@builtin(vertex_index)`. A draw call is `pass.draw(3, 1, 0, 0)`. The
  * caller owns its uniform buffer and bind group; \ref Uniforms pins the layout
  * contract between the two.

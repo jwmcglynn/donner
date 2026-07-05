@@ -7,7 +7,7 @@ namespace donner::editor {
 
 /// Parse options for editor documents. The editor round-trips user content, so
 /// the parser must PRESERVE user / `data-*` attributes in the DOM rather than
-/// dropping them — editor features read them back via `getAttribute` (e.g.
+/// dropping them - editor features read them back via `getAttribute` (e.g.
 /// `IsLocked` reads `data-donner-locked`), and a save must not silently lose the
 /// user's own attributes. The library default `disableUserAttributes = true` is
 /// correct for a strict renderer, not for an authoring tool. Every editor-side

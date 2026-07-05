@@ -3,7 +3,7 @@
 ///
 /// `EditorCommand` is the discriminated union of every UI-thread→DOM mutation
 /// in the M2 scope of the editor. New tools (path, node-edit, etc.) extend
-/// this variant in their own follow-up milestones — one new case per logical
+/// this variant in their own follow-up milestones - one new case per logical
 /// operation, NOT one per ECS write.
 ///
 /// All editor-side DOM writes flow through `EditorApp::applyMutation()` which
@@ -26,14 +26,14 @@ namespace donner::editor {
 /// command's payload.
 ///
 /// Commands carry `svg::SVGElement` handles rather than raw ECS entities
-/// so the editor never has to touch the registry directly — every
+/// so the editor never has to touch the registry directly - every
 /// payload value comes from a public SVG-level API (`EditorApp::hitTest`,
 /// tree traversal, `querySelector`) and every applied mutation goes
 /// through public `SVGElement` / `SVGGraphicsElement` methods.
 struct EditorCommand {
   enum class Kind : std::uint8_t {
     /// Set the element's transform attribute. Used by SelectTool drag and
-    /// undo/redo replay. Coalesces by element identity at flush time —
+    /// undo/redo replay. Coalesces by element identity at flush time -
     /// multiple SetTransform commands targeting the same element collapse
     /// into the most-recently-queued one.
     SetTransform,
@@ -46,13 +46,13 @@ struct EditorCommand {
 
     /// Set a single attribute on the element. Used by the structured-
     /// editing writeback path (M3) when a tool modifies an attribute
-    /// value. Coalesces by `(element, attributeName)` — successive
+    /// value. Coalesces by `(element, attributeName)` - successive
     /// SetAttribute commands for the same element and attribute collapse
     /// to the most-recently-queued value.
     SetAttribute,
 
     /// Remove a single attribute from the element (DOM-level). Used to clear a
-    /// marker attribute rather than leaving a falsy value behind — e.g. unlocking
+    /// marker attribute rather than leaving a falsy value behind - e.g. unlocking
     /// a layer removes `data-donner-locked` instead of writing `="false"`. No-op
     /// if the attribute is absent. Not coalesced.
     RemoveAttribute,
@@ -63,7 +63,7 @@ struct EditorCommand {
     InsertElement,
 
     /// Detach the element from its parent, making it invisible to the
-    /// renderer. The ECS entity itself is NOT destroyed — it stays in
+    /// renderer. The ECS entity itself is NOT destroyed - it stays in
     /// the registry, just orphaned. This is a "soft delete" so any
     /// in-flight references (stale selection, undo snapshots) stay
     /// valid. Not coalesced.
@@ -94,7 +94,7 @@ struct EditorCommand {
 
     /// Replace the element's text content with `textContent` (the element is
     /// a `<text>` or `<tspan>`). Used by the text-property inspector's
-    /// content field. Coalesces by element identity at flush time —
+    /// content field. Coalesces by element identity at flush time -
     /// successive SetTextContent commands targeting the same element collapse
     /// to the most-recently-queued value, like SetTransform.
     SetTextContent,

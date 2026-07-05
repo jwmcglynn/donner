@@ -152,7 +152,7 @@ constexpr css::RGBA kPlaceholderSwatch = css::RGBA(128, 128, 128, 255);
 /// Resolve a deterministic preview swatch color from an element's computed fill.
 ///
 /// The swatch is a solid-color UI rect (not a depiction of vector geometry) used
-/// only as the fallback when no rendered thumbnail is available — e.g. a row
+/// only as the fallback when no rendered thumbnail is available - e.g. a row
 /// whose subtree has no boundable geometry, or a build with no GL texture
 /// context. The real per-row preview is the Donner-rendered raster produced by
 /// `svg::Renderer::renderElementToBitmap` in `refreshSnapshot`.
@@ -365,7 +365,7 @@ void LayersPanel::handleEyeClick(EditorApp& app, std::size_t rowIndex) {
   app.setElementVisible(rows[rowIndex].element, !rows[rowIndex].isVisible);
   // A show/hide toggle queues a DOM mutation but does not change the selection,
   // so it produces no `selectionChanged_` signal. Flag it separately so the
-  // shell flushes the queued mutation and re-renders — otherwise the canvas
+  // shell flushes the queued mutation and re-renders - otherwise the canvas
   // keeps showing the pre-toggle frame (the "hidden layer ghost" QA report).
   mutationQueued_ = true;
 }
@@ -471,7 +471,7 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
     // the draw list so the red highlight rect lands *behind* the row content
     // (chevron, preview, label, affordances). The rect is filled after the row
     // is laid out, when its full height is known. This is plain UI chrome (a row
-    // background), not a depiction of vector artwork — see CLAUDE.md "No
+    // background), not a depiction of vector artwork - see CLAUDE.md "No
     // Rendering Vector Graphics With ImGui".
     const bool isFlashRow = flashRowIndex.has_value() && *flashRowIndex == i;
     const ImVec2 rowFlashTopLeft = ImGui::GetCursorScreenPos();
@@ -501,7 +501,7 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
     // (the element subtree rasterized in refreshSnapshot, uploaded to an ImGui
     // texture by the shell-provided textureProvider and blitted via
     // ImGui::Image) over a transparent-canvas checkerboard. ImGui never draws
-    // the vector geometry itself — only the Donner-produced texture. Rows with
+    // the vector geometry itself - only the Donner-produced texture. Rows with
     // no rendered thumbnail (or no GL texture context) fall back to the
     // deterministic fill swatch. See CLAUDE.md "No Rendering Vector Graphics
     // With ImGui".
@@ -582,7 +582,7 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
       }
     } else {
       // AllowOverlap so the right-aligned eye/lock buttons (drawn after this
-      // full-width Selectable) actually receive clicks — without it the
+      // full-width Selectable) actually receive clicks - without it the
       // SpanAllColumns Selectable claims the whole row's hit area and the
       // buttons are dead.
       const ImVec2 labelMin = ImGui::GetCursorScreenPos();
@@ -712,7 +712,7 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
       if (ImGui::MenuItem("Rename", nullptr, false, !row.isLocked) && liveApp != nullptr) {
         beginRename(row.stableId);
       }
-      // Arrange (paint/z-order) — routes through the shared reorderSelectedElement
+      // Arrange (paint/z-order) - routes through the shared reorderSelectedElement
       // engine, same as the canvas Arrange menu and the Cmd+[ / Cmd+] shortcuts.
       if (ImGui::BeginMenu("Arrange", !row.isLocked)) {
         if (ImGui::MenuItem("Bring to Front", "Cmd+Shift+]") && liveApp != nullptr) {
@@ -729,7 +729,7 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
         }
         ImGui::EndMenu();
       }
-      // TODO(v0.8): Delete from the Layers panel — needs the in-sync source
+      // TODO(v0.8): Delete from the Layers panel - needs the in-sync source
       // text that lives in EditorShell, so it is wired at the shell level
       // rather than inventing a new EditorApp API here.
       ImGui::MenuItem("Delete", nullptr, false, false);

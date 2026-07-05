@@ -22,14 +22,14 @@ namespace donner::svg {
  *
  * A `<clipPath>` defines a **binary, geometry-based** clipping region. Each pixel of the
  * clipped element is either fully visible (if it falls inside the clip shape) or fully
- * invisible (if it falls outside) — there is no partial transparency and no anti-aliased
+ * invisible (if it falls outside) - there is no partial transparency and no anti-aliased
  * fade. The clipping region itself is built from ordinary SVG shapes (\ref xml_rect,
  * \ref xml_circle, \ref xml_path, etc.) placed inside the `<clipPath>`; their union forms the
  * visible area.
  *
  * Declare a `<clipPath>` inside \ref xml_defs with an `id`, then apply it to any shape via the
  * CSS `clip-path: url(#id)` property. For soft-edged, opacity-based, or luminance-driven
- * masking — where pixels can be partially visible — use \ref xml_mask instead.
+ * masking - where pixels can be partially visible - use \ref xml_mask instead.
  *
  * ```xml
  * <defs>

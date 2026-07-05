@@ -360,7 +360,7 @@ RendererBitmap CreateHighlightBitmap(SVGDocument& document, Renderer& renderer,
 
   overlay.remove();
 
-  // Composite the AABB outline directly into the bitmap — bypasses anti-aliasing.
+  // Composite the AABB outline directly into the bitmap - bypasses anti-aliasing.
   if (const auto bounds = element.worldBounds()) {
     CompositeAABBRect(highlighted, *bounds, imageInfo);
   }
@@ -434,7 +434,7 @@ void RedrawImage(const TerminalImageView& view, int imageRows, std::ostream& out
 
   TerminalImageViewer viewer;
   viewer.render(view, out, config);
-  // End synchronized output — terminal displays the buffered frame now.
+  // End synchronized output - terminal displays the buffered frame now.
   out << "\x1b[?2026l";
 }
 

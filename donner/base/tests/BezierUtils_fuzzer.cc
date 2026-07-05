@@ -127,7 +127,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     (void)out;
   }
 
-  // Exercise remaining functions for crash detection — no numerical assertions.
+  // Exercise remaining functions for crash detection - no numerical assertions.
   // Correctness is validated by the 37 unit tests in BezierUtils_tests.cc.
   {
     auto e = QuadraticYExtrema(p0, p1, p2);

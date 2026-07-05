@@ -774,7 +774,7 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
 
   // On-demand render loop: the main thread sleeps in `window.waitEvents()`
   // between user inputs, so the worker thread has to nudge it when a
-  // render finishes — otherwise the fresh bitmap sits in `result_`
+  // render finishes - otherwise the fresh bitmap sits in `result_`
   // forever. Safe to capture `this` because `AsyncRenderer`'s lifetime
   // is strictly nested inside `RenderCoordinator`'s, which is a member
   // of `*this`.
@@ -819,7 +819,7 @@ EditorShell::~EditorShell() {
 #endif
   if (reproRecorder_) {
     if (!reproRecorder_->flush()) {
-      std::fprintf(stderr, "[repro] flush failed — recording lost\n");
+      std::fprintf(stderr, "[repro] flush failed - recording lost\n");
     }
   }
 }
@@ -1347,7 +1347,7 @@ bool EditorShell::tryExportViewportSvgToPath(std::string_view path, std::string*
   options.includeSelectionOverlay = pendingViewportExportOverlay_;
 
   // Capture the overlay snapshot at export time so the serialized chrome samples
-  // the same selection state the editor currently displays — it cannot be a
+  // the same selection state the editor currently displays - it cannot be a
   // frame behind. Mirrors how `OverlayRenderer::drawChrome(renderer, editor)`
   // derives the transform + selection for the live chrome.
   std::optional<SelectionChromeSnapshot> overlaySnapshot;
@@ -1532,7 +1532,7 @@ void EditorShell::handleGlobalShortcuts() {
   if (!anyPopupOpen && ImGui::IsKeyPressed(ImGuiKey_Escape, /*repeat=*/false) &&
       penTool_.isDrafting()) {
     // Escape ends the pen session, committing the placed anchors as an open
-    // path (one undoable operation, same as Enter) — undo is the discard
+    // path (one undoable operation, same as Enter) - undo is the discard
     // mechanism. A draft with fewer than two anchors has no committable
     // segment, so it is discarded, restoring the document and undo stack to
     // the pre-pen baseline.
@@ -1582,7 +1582,7 @@ void EditorShell::handleGlobalShortcuts() {
   }
 
   // Shape clipboard shortcuts route through the canvas selection only when the
-  // source pane is not focused — the text editor owns Cmd+X/C/V while it has
+  // source pane is not focused - the text editor owns Cmd+X/C/V while it has
   // keyboard focus. Cmd+F is Paste in Front (exact-position duplication).
   if (!sourcePaneFocused && !anyPopupOpen && cmd && !shift) {
     if (ImGui::IsKeyPressed(ImGuiKey_X, /*repeat=*/false)) {
@@ -1599,7 +1599,7 @@ void EditorShell::handleGlobalShortcuts() {
   const bool deleteKey = ImGui::IsKeyPressed(ImGuiKey_Delete, /*repeat=*/false) ||
                          ImGui::IsKeyPressed(ImGuiKey_Backspace, /*repeat=*/false);
   // While the Pen tool is drafting, Backspace/Delete removes the last placed
-  // anchor (a lone-anchor draft is discarded entirely) — the draft path is the
+  // anchor (a lone-anchor draft is discarded entirely) - the draft path is the
   // selection, so falling through to delete-selection would nuke the whole
   // in-progress path.
   if (deleteKey && !anyPopupOpen && !sourcePaneFocused && activeTool_ == ActiveTool::Pen &&
@@ -1701,7 +1701,7 @@ void EditorShell::pasteShapesFromClipboard(bool inFront) {
   // Build selection-restore targets from a scratch parse of the merged source.
   // The scratch tree is structurally identical to the post-reparse live tree,
   // so path-based writeback targets captured here resolve after the live
-  // reparse — letting `restoreSelectionAfterNextDocumentReplace` select the
+  // reparse - letting `restoreSelectionAfterNextDocumentReplace` select the
   // pasted elements without a live handle that does not yet exist.
   std::vector<AttributeWritebackTarget> selectionTargets;
   {
@@ -2279,12 +2279,12 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     pendingSelectClickStartSeconds_ = ImGui::GetTime();
   }
 
-  // Design doc 0033 §M8 — click→drag handoff doesn't wait for raster.
+  // Design doc 0033 §M8 - click→drag handoff doesn't wait for raster.
   //
   // Fast path: if the user clicks inside the bounds of the currently-
   // selected element and outside cached later-painted bounds, we can
   // start the re-drag IMMEDIATELY without gating on `!isBusy()`. The
-  // check uses `SelectionBoundsCache` — populated on idle frames — so
+  // check uses `SelectionBoundsCache` - populated on idle frames - so
   // the call doesn't touch the registry the worker is mid-mutating. The
   // previous M8 attempt failed because it called the live
   // `SnapshotSelectionWorldBounds` during the busy window; the
@@ -2408,7 +2408,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       // previous canvas size or zoom. Cancel it so the next idle frame
       // can run the slow-path mouseDown immediately, rather than
       // waiting up to seconds for the in-flight prewarm to finish at
-      // high zoom. The render in flight is dispensable — it was a
+      // high zoom. The render in flight is dispensable - it was a
       // selection prewarm, not a drag, and the click is about to
       // supersede the selection state anyway.
       renderCoordinator_.asyncRenderer().cancelInFlight();
@@ -2564,7 +2564,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
   // the edited path's document pixels (captured from the same post-flush DOM
   // as the chrome). Suppress the path's stale composited layer tile so the
   // previous geometry doesn't show through underneath the preview.
-  // Content-only captures carry no chrome — and therefore no preview — so
+  // Content-only captures carry no chrome - and therefore no preview - so
   // they keep presenting the raster tile.
   Entity penPreviewSuppressedEntity = entt::null;
   if (!contentOnlyCaptureThisFrame_ && renderCoordinator_.immediateOverlaySnapshot().has_value() &&
@@ -2581,7 +2581,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
   // is no ImGui-vector or texture-blit fallback: edge frames that can't take
   // this path (a content-only capture, which intentionally carries no chrome,
   // or a viewport with no presentable clip rect, which has nowhere to draw)
-  // simply skip the overlay — clearing the callback leaves the framebuffer
+  // simply skip the overlay - clearing the callback leaves the framebuffer
   // chrome-free for that frame.
   bool documentPresentedDirectly = false;
 #ifdef DONNER_EDITOR_WGPU
@@ -2695,7 +2695,7 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
   }
   treeSelectionOriginatedInTree_ = false;
 
-  // Refresh the sidebar snapshot only when the async renderer is idle —
+  // Refresh the sidebar snapshot only when the async renderer is idle -
   // during render the worker thread may be mutating registry state the
   // snapshot walk would read. The snapshot persists across the busy window
   // so the panes keep showing their last-known content instead of flashing
@@ -2781,7 +2781,7 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
   }
   // A Layers-panel show/hide, lock, rename, reorder, or z-order click queues a
   // DOM mutation. Flush it and refresh the overlay the same way the Inspector
-  // panels do (above) — otherwise the queued mutation never reaches the worker
+  // panels do (above) - otherwise the queued mutation never reaches the worker
   // and the canvas keeps presenting the pre-mutation frame (the hidden-layer
   // "ghost").
   if (layersPanel_.consumeQueuedMutation()) {
@@ -2834,7 +2834,7 @@ void EditorShell::renderLayerPanelContents() {
   const auto& viewport = interactionController_.viewport();
   const Vector2i viewportDesiredCanvas = viewport.desiredCanvasSize();
   // `SVGDocument::canvasSize()` walks the registry (ComputedAbsoluteTransform /
-  // SizedElement / ViewBox) — racy against the worker's
+  // SizedElement / ViewBox) - racy against the worker's
   // `prepareDocumentForRendering` which rebuilds those components in place.
   // When the worker is busy we have to read the cached value the worker
   // stamped at the end of its last completed render; reading live trips a
@@ -3450,7 +3450,7 @@ bool EditorShell::flushQueuedMutationAndRefreshOverlay() {
   documentSyncController_.applyPendingWritebacks(app_, selectTool_, textEditor_);
   renderCoordinator_.refreshSelectionBoundsCache(app_);
   updatePenLivePreviewTarget();
-  // Any pen-tool flush is live geometry the chrome must track immediately —
+  // Any pen-tool flush is live geometry the chrome must track immediately -
   // not just active anchor drags. Close-path clicks and deferred clicks
   // processed after mouse-release flush without isDraggingAnchor(), and gating
   // them on the displayed doc version left the overlay one gesture behind
@@ -3531,8 +3531,8 @@ void EditorShell::renderRenderPaneContextMenu() {
 
   // Arrange (paint/z-order). Acts on the right-clicked element, or on the single
   // selection when the menu was opened over empty canvas. Reuses the shared
-  // DOM-level reorderSelectedElement engine — the same path as the Cmd+[ / Cmd+]
-  // shortcuts — so the move is undoable and reflected back into the source.
+  // DOM-level reorderSelectedElement engine - the same path as the Cmd+[ / Cmd+]
+  // shortcuts - so the move is undoable and reflected back into the source.
   std::optional<svg::SVGElement> arrangeTarget;
   if (renderContextMenuHitElement_.has_value()) {
     arrangeTarget = *renderContextMenuHitElement_;
@@ -3927,7 +3927,7 @@ void EditorShell::runFrame() {
 
   // Re-rasterize the overlay against the just-flushed DOM while a locked-rejection flash is (or was
   // just) active. A locked click never changes selection, so none of the selection-/hover-driven
-  // overlay rasterize triggers fire for the flash — this is what animates the fade and erases the
+  // overlay rasterize triggers fire for the flash - this is what animates the fade and erases the
   // outline on the final frame.
   if (lockedRejectionFlashNeedsRedraw && app_.hasDocument() &&
       !renderCoordinator_.asyncRenderer().isBusy()) {

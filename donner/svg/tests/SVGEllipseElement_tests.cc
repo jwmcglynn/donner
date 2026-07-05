@@ -17,7 +17,7 @@ namespace donner::svg {
 
 namespace {
 
-// Helper matchers to compare the ellipse’s attributes.
+// Helper matchers to compare the ellipse's attributes.
 auto CxEq(auto valueMatcher, auto unitMatcher) {
   return testing::Property("cx", &SVGEllipseElement::cx, LengthIs(valueMatcher, unitMatcher));
 }
@@ -101,7 +101,7 @@ TEST(SVGEllipseElementTests, PresentationAttributes) {
                                        CyEq(0.0, Lengthd::Unit::None), RxIsAuto(), RyIsAuto())));
 }
 
-/// Verify that the ellipse can be safely down‐cast to the appropriate base types.
+/// Verify that the ellipse can be safely down-cast to the appropriate base types.
 TEST(SVGEllipseElementTests, Cast) {
   auto ellipse = instantiateSubtreeElementAs<SVGEllipseElement>("<ellipse />");
   EXPECT_THAT(ellipse->tryCast<SVGElement>(), testing::Ne(std::nullopt));
@@ -137,7 +137,7 @@ TEST(SVGEllipseElementTests, UpdateCoordinates) {
 /// Test the "auto" fallback behavior: if only one radius is specified then the computed value for
 /// the other should match.
 TEST(SVGEllipseElementTests, ComputedValuesFallback) {
-  {  // Only rx provided – computed ry should fall back to the same value.
+  {  // Only rx provided - computed ry should fall back to the same value.
     auto fragment = instantiateSubtreeElementAs<SVGEllipseElement>(R"(
       <ellipse cx="100" cy="100" rx="50" />
     )");
@@ -147,7 +147,7 @@ TEST(SVGEllipseElementTests, ComputedValuesFallback) {
     EXPECT_THAT(fragment->computedRy(), LengthIs(50.0, Lengthd::Unit::None));
   }
 
-  {  // Only ry provided – computed rx should fall back.
+  {  // Only ry provided - computed rx should fall back.
     auto fragment = instantiateSubtreeElementAs<SVGEllipseElement>(R"(
       <ellipse cx="100" cy="100" ry="60" />
     )");
@@ -158,7 +158,7 @@ TEST(SVGEllipseElementTests, ComputedValuesFallback) {
   }
 }
 
-/// Verify that presentation (CSS) attributes override the element’s raw attribute values when
+/// Verify that presentation (CSS) attributes override the element's raw attribute values when
 /// computing the final (computed) values.
 TEST(SVGEllipseElementTests, ComputedValuesOverrideAttributes) {
   auto result = instantiateSubtreeElementAs<SVGEllipseElement>(R"(

@@ -108,7 +108,7 @@ TEST(DragReleasePopBackTest, CompositorProducesCorrectOutputAtEveryPhase) {
 
   // Translate canvas coords into the promoted bitmap's local pixel
   // space. Under M2B (design doc 0033) the promoted bitmap is
-  // intrinsic-sized — its pixel (0,0) corresponds to canvas
+  // intrinsic-sized - its pixel (0,0) corresponds to canvas
   // `canvasOffset`, not canvas origin. For canvas-sized bitmaps the
   // offset is Zero and the conversion is a no-op.
   const auto canvasToBitmap = [&](int canvasX, int canvasY) {
@@ -152,7 +152,7 @@ TEST(DragReleasePopBackTest, CompositorProducesCorrectOutputAtEveryPhase) {
   }
 
   {
-    // The promoted bitmap is reused via the fast path — its content stays at
+    // The promoted bitmap is reused via the fast path - its content stays at
     // the pre-drag stamped position; `layerComposeOffset` carries the delta.
     const auto& promoted = compositor.layerBitmapOf(entity);
     const auto [bx, by] = canvasToBitmap(kOrigCenterX, kOrigCenterY);
@@ -188,7 +188,7 @@ TEST(DragReleasePopBackTest, CompositorProducesCorrectOutputAtEveryPhase) {
   // ── Phase 4: ReplaceDocument (simulated) ────────────────────────────
   // In the real main loop, loadFromString re-parses the source (which now
   // includes the transform baked in).  Entity handles change.  We simulate
-  // this by resetting layers and re-promoting the same entity — the document
+  // this by resetting layers and re-promoting the same entity - the document
   // already has the transform from Phase 3 so the visual result is identical.
   compositor.resetAllLayers();
   ASSERT_TRUE(compositor.promoteEntity(entity));
@@ -341,7 +341,7 @@ TEST(DragReleasePopBackTest, StateTransitionsNeverShowPreDragImage) {
       // So:
       //   visual position = (DOM position + offset) in doc coords
       //   = (original + 100 + offset)
-      //   = (original + 100 + 100) during settling (Frame 2) — WRONG?
+      //   = (original + 100 + 100) during settling (Frame 2) - WRONG?
       //
       // Actually: before settling render lands, the composited textures are
       // from the DRAG render (element at original DOM position).
@@ -405,7 +405,7 @@ TEST(DragReleasePopBackTest, CpuSnapshotShowsCorrectImageAfterSettling) {
 
   // Simulate state machine: noteFullRenderLanded no longer clears
   // cached textures (the cache-clear here was the root cause of a
-  // mid-drag "snap back to start" regression — see fix notes on
+  // mid-drag "snap back to start" regression - see fix notes on
   // `CompositedPresentation::noteFullRenderLanded`). The
   // settling state itself is still ended, but the cached entity
   // survives so the editor keeps blitting the tiles at zero offset.
@@ -544,7 +544,7 @@ TEST(DragReleasePopBackTest, EndToEndFrameSequence) {
   EXPECT_THAT(getPixel(uploadedSnapshot, kOrigCenterX, kOrigCenterY), IsRed());
 
   // ══════════════════════════════════════════════════════════════════════
-  // Frame 1: Drag — DOM mutated to translate(100, 0).
+  // Frame 1: Drag - DOM mutated to translate(100, 0).
   // ══════════════════════════════════════════════════════════════════════
   target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(100, 0));
   doRender();
@@ -558,14 +558,14 @@ TEST(DragReleasePopBackTest, EndToEndFrameSequence) {
       << "Frame 1: CPU snapshot (composed) shows element at visual position";
 
   // ══════════════════════════════════════════════════════════════════════
-  // Frame 2: Release — SetTransformCommand + beginSettling.
+  // Frame 2: Release - SetTransformCommand + beginSettling.
   //   The display still shows the DRAG textures with settling offset.
   //   Settling render is in flight but hasn't landed.
   // ══════════════════════════════════════════════════════════════════════
   // DOM already has the final transform (applied every drag frame). State
   // machine transitions to settling.
   state.beginSettling(drag, /*targetVersion=*/2);
-  // Do NOT render yet — the settling render is "in flight".
+  // Do NOT render yet - the settling render is "in flight".
   verifyDisplay(std::nullopt, "Frame 2 (release, settling in-flight)");
 
   // ══════════════════════════════════════════════════════════════════════

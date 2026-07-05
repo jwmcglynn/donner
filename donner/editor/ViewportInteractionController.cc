@@ -42,7 +42,7 @@ float FrameProfilerSample::totalProfiledMs() const {
 
 void FrameHistory::push(float ms) {
   deltaMs[writeIndex] = ms;
-  // Reset the worker slot to zero — `setLatestBackendMs` will fill it in when
+  // Reset the worker slot to zero - `setLatestBackendMs` will fill it in when
   // a render result lands during the same UI frame.
   backendMs[writeIndex] = 0.0f;
   profiler[writeIndex] = FrameProfilerSample{};

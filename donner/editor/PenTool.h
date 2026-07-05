@@ -35,8 +35,8 @@ namespace donner::editor {
 /// command.
 ///
 /// The visible path-point chrome is directly editable: anchors and control
-/// points of the active draft — or of a selected, already-committed `<path>`
-/// — are hit targets. Dragging a control point reshapes that handle (aligned
+/// points of the active draft - or of a selected, already-committed `<path>`
+/// - are hit targets. Dragging a control point reshapes that handle (aligned
 /// coupling on smooth anchors; Alt/Option breaks the coupling; Shift
 /// constrains the handle angle to 45-degree increments), dragging an anchor
 /// moves it together with its handles, clicking the draft's last anchor
@@ -81,7 +81,7 @@ public:
   void onMouseUp(EditorApp& editor, const Vector2d& documentPoint) override;
 
   /// Cancel the in-progress path. Restores the document and undo stack to the
-  /// state before the pen session began — Escape / cancel never leaves a
+  /// state before the pen session began - Escape / cancel never leaves a
   /// partial path behind.
   void cancel(EditorApp& editor);
 
@@ -109,7 +109,7 @@ public:
 
   /// Live rubber-band preview of the segment a click at `documentPoint`
   /// would commit: from the draft's last anchor (honoring its outgoing
-  /// handle and the Shift 45-degree constraint) to the pointer — or to the
+  /// handle and the Shift 45-degree constraint) to the pointer - or to the
   /// first anchor when the pointer is within closing range. Returns nullopt
   /// while not drafting, mid-drag, in a point-edit session, or after close.
   ///
@@ -132,7 +132,7 @@ public:
   /// Whether the tool is currently appending to or point-editing a path.
   [[nodiscard]] bool isDrafting() const { return activePath_.has_value(); }
 
-  /// Whether a mouse drag is currently shaping a path point — the most
+  /// Whether a mouse drag is currently shaping a path point - the most
   /// recently placed anchor's handles, an existing anchor, or an existing
   /// control point.
   [[nodiscard]] bool isDraggingAnchor() const { return dragMode_ != DragMode::None; }

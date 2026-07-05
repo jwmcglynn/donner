@@ -94,7 +94,7 @@ GeodeImagePipeline::GeodeImagePipeline(const wgpu::Device& device, wgpu::Texture
   fragmentState.targets = &colorTarget;
 
   // ----- Render pipeline -----
-  // No vertex buffers — the shader generates corners from vertex_index.
+  // No vertex buffers - the shader generates corners from vertex_index.
   wgpu::RenderPipelineDescriptor rpDesc = {};
   rpDesc.label = wgpuLabel("GeodeImageBlit");
   rpDesc.layout = pipelineLayout.get();
@@ -115,7 +115,7 @@ GeodeImagePipeline::GeodeImagePipeline(const wgpu::Device& device, wgpu::Texture
   pipeline_.reset(device.createRenderPipeline(rpDesc));
 
   // ----- Samplers -----
-  // Linear (bilinear) sampler — the default for SVG's "smooth" image
+  // Linear (bilinear) sampler - the default for SVG's "smooth" image
   // rendering.
   //
   // `{wgpu::Default}` runs `SamplerDescriptor::setDefault()` (clamp-to-edge,
@@ -129,7 +129,7 @@ GeodeImagePipeline::GeodeImagePipeline(const wgpu::Device& device, wgpu::Texture
   linearDesc.maxAnisotropy = 1;
   linearSampler_.reset(device.createSampler(linearDesc));
 
-  // Nearest sampler — for `image-rendering: pixelated`.
+  // Nearest sampler - for `image-rendering: pixelated`.
   wgpu::SamplerDescriptor nearestDesc{wgpu::Default};
   nearestDesc.label = wgpuLabel("GeodeImageBlitNearest");
   nearestDesc.maxAnisotropy = 1;

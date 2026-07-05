@@ -205,7 +205,7 @@ StructuredApplyResult TryApplyStructuredSourceEdit(EditorApp& app, std::string_v
 /// Append a structural fingerprint of \p element to \p out: a pre-order
 /// `tag#id(children)` string. It is intentionally robust to formatting,
 /// whitespace, and attribute *values* but sensitive to element
-/// insert/delete/reorder/rename — exactly the desync an ambiguous whole-text
+/// insert/delete/reorder/rename - exactly the desync an ambiguous whole-text
 /// diff can introduce when it misclassifies a structural change as an attribute
 /// edit.
 void AppendStructuralFingerprint(const svg::SVGElement& element, std::string* out) {
@@ -251,7 +251,7 @@ bool TryApplyStructuredSourceChange(EditorApp& app, std::string_view previousSou
   // similar to a sibling can collapse into what looks like a single-character
   // attribute edit, so the structured apply renames the existing sibling and
   // never materializes the new element even though the source bytes are correct.
-  // Skip the check when the apply carried a diagnostic — the source is then
+  // Skip the check when the apply carried a diagnostic - the source is then
   // intentionally mid-error and the editor keeps the last-good DOM. Otherwise
   // compare a structural fingerprint of the live DOM against a fresh parse of the
   // new source; on mismatch the DOM desynced, so fall back to a full reparse.

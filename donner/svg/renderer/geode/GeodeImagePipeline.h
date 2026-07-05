@@ -27,7 +27,7 @@ namespace donner::geode {
  * - binding 5: sampled Phase 3b clip-mask texture
  * - binding 6: clip-mask sampler (always linear clamp-to-edge)
  *
- * The pipeline takes no vertex buffer — the shader generates quad corners
+ * The pipeline takes no vertex buffer - the shader generates quad corners
  * from `@builtin(vertex_index)`. A draw call is `pass.Draw(6, 1, 0, 0)`.
  */
 class GeodeImagePipeline {

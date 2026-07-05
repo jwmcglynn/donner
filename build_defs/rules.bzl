@@ -7,7 +7,8 @@ load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
 load("@rules_python//python:defs.bzl", "py_test")
 
 # Script that enforces banned source patterns (no `long long`, no
-# `std::aligned_storage`, no user-defined literal operators). See
+# `std::aligned_storage`, no user-defined literal operators, no hidden
+# Unicode whitespace / typographic punctuation). See
 # docs/coding_style.md "Language and Library Features".
 _BANNED_PATTERNS_SCRIPT = "//build_defs:check_banned_patterns.py"
 
@@ -209,7 +210,7 @@ def _donner_transitioned_executable_impl(ctx):
     # Forward the dep's run environment so `env`/`env_inherit` set on the
     # underlying test impl actually take effect on the transitioned wrapper.
     # Without this, the variant targets silently drop the impl's `env` (e.g.
-    # the resvg suite's per-case watchdog override) — the symlinked binary
+    # the resvg suite's per-case watchdog override) - the symlinked binary
     # would run with a bare environment.
     if RunEnvironmentInfo in dep_target:
         providers.append(dep_target[RunEnvironmentInfo])
@@ -418,7 +419,7 @@ def donner_cc_binary(name, srcs = [], linkopts = [], deps = [], tags = [], **kwa
 # cc_test, transitioned via `donner_multi_transitioned_test` so the
 # renderer/text feature flags are flipped at test-graph configuration time.
 # This is what makes `bazel test //...` cover the `tiny` / `text-full` /
-# `geode` lanes by default — no `--config=` flag required (doc 0031 M2.3).
+# `geode` lanes by default - no `--config=` flag required (doc 0031 M2.3).
 _VARIANT_SPECS = {
     "tiny": {
         "backend": "tiny_skia",
@@ -726,7 +727,7 @@ def _donner_perf_sensitive_cc_library_impl(ctx):
         feature_configuration = feature_configuration,
         cc_toolchain = cc_toolchain,
         # Use `ctx.files.srcs` / `ctx.files.hdrs` (not `ctx.attr.*`) so
-        # we pass actual File objects — `cc_common.compile` rejects the
+        # we pass actual File objects - `cc_common.compile` rejects the
         # list of Targets returned by `ctx.attr`. Required for
         # perf-sensitive wrappers that carry their own source files,
         # not just deps-only wrappers.

@@ -108,7 +108,7 @@ struct FrameMemorySample {
 };
 
 struct FrameHistory {
-  /// ImGui frame delta per UI-thread frame — populated from
+  /// ImGui frame delta per UI-thread frame - populated from
   /// `ImGui::GetIO().DeltaTime` by `noteFrameDelta`.
   std::array<float, kFrameHistoryCapacity> deltaMs{};
   /// Async-renderer worker/presentation latency (ms) per UI frame, aligned 1:1

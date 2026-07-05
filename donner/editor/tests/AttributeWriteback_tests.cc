@@ -149,7 +149,7 @@ TEST_F(AttributeWritebackTest, UpdatedSourceReparses) {
 }
 
 TEST_F(AttributeWritebackTest, NulValueReturnsNullopt) {
-  // A value containing NUL can't be XML-escaped — buildAttributeWriteback
+  // A value containing NUL can't be XML-escaped - buildAttributeWriteback
   // must return nullopt rather than producing invalid XML.
   auto patch = buildAttributeWriteback(kSimpleSvg, *rect_, "fill", std::string_view("a\0b", 3));
   EXPECT_FALSE(patch.has_value());
@@ -502,7 +502,7 @@ TEST(AttributeWritebackResolveTest, ElementOverloadFallsBackToPathWhenSourceStal
 
 TEST(AttributeWritebackResolveTest, ElementOverloadReturnsNulloptWhenElementMissingFromSource) {
   // The element exists in the document, but the patch source doesn't contain it
-  // at all — neither the tracked offset nor the path/id can resolve it.
+  // at all - neither the tracked offset nor the path/id can resolve it.
   auto document = ParseDocument(kSimpleSvg);
   ASSERT_TRUE(document.has_value());
   const svg::SVGElement rect = GetElementById(*document, "#r1");
@@ -638,7 +638,7 @@ TEST(AttributeWritebackTargetOverloadTest, RemovesAttributeWithLeadingSpaceViaTa
 // --- buildAttributeWriteback inserts before tag close ----------------------
 
 TEST(AttributeWritebackTargetOverloadTest, InsertsBeforeSelfClosingSlash) {
-  // Element written with a space before `/>` — insertion point is just before
+  // Element written with a space before `/>` - insertion point is just before
   // the `/`, exercising the `/>` detection branch in the insert scanner.
   constexpr std::string_view kSource = R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r1" />)"
                                        R"(</svg>)";

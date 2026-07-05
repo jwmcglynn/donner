@@ -53,7 +53,7 @@ TEST(TextPatch, MultiplePatchesAppliedInDescendingOrder) {
 }
 
 TEST(TextPatch, PatchesInForwardOrderStillWork) {
-  // Same patches as above but in forward order — the sort handles it.
+  // Same patches as above but in forward order - the sort handles it.
   std::string source = "fill: red; stroke: green";
   std::vector<TextPatch> patches = {
       {19, 5, "orange"},  // higher offset first in input

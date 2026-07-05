@@ -16,7 +16,7 @@ namespace donner::svg {
 
 namespace {
 
-// Helper matchers to compare the circle’s attributes.
+// Helper matchers to compare the circle's attributes.
 auto CxEq(auto valueMatcher, auto unitMatcher) {
   return testing::Property("cx", &SVGCircleElement::cx, LengthIs(valueMatcher, unitMatcher));
 }
@@ -115,7 +115,7 @@ TEST(SVGCircleElementTests, UpdateCoordinates) {
 }
 
 /**
- * Verify that presentation (CSS) attributes override the element’s raw attribute values
+ * Verify that presentation (CSS) attributes override the element's raw attribute values
  * when computing the final (computed) values.
  */
 TEST(SVGCircleElementTests, ComputedValuesOverrideAttributes) {

@@ -35,7 +35,7 @@ int main() {
   using namespace donner::svg;
   using namespace donner::svg::parser;
 
-  // Phase 1: Direct tiny_skia rendering — verifies the backend works.
+  // Phase 1: Direct tiny_skia rendering - verifies the backend works.
   std::printf("=== Phase 1: Direct tiny_skia ===\n");
   {
     auto maybePm = tiny_skia::Pixmap::fromSize(50, 50);
@@ -71,7 +71,7 @@ int main() {
     std::printf("  PASS\n\n");
   }
 
-  // Phase 2: CompileTimeMap validation — CSS named colors use a perfect hash
+  // Phase 2: CompileTimeMap validation - CSS named colors use a perfect hash
   // map that was broken on 32-bit WASM (splitmix64 >> 33 is UB on 32-bit).
   std::printf("=== Phase 2: Color::ByName (CompileTimeMap) ===\n");
   {

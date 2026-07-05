@@ -36,7 +36,7 @@ struct SubtreeInfo {
  * Remap information for a paint inherited through the SVG2 `context-fill` / `context-stroke`
  * keywords (https://www.w3.org/TR/SVG2/painting.html#SpecifyingPaint).
  *
- * The inherited paint server is evaluated in the context element's user space — the \ref xml_use
+ * The inherited paint server is evaluated in the context element's user space - the \ref xml_use
  * element for `<use>` shadow trees, or the shape referencing a \ref xml_marker for marker content:
  * `objectBoundingBox` paint units resolve against the context element's bounding box, and the
  * resulting paint is transformed into the consuming entity's local space.
@@ -48,7 +48,7 @@ struct PaintContextRemap {
   Box2d contextBounds;
 
   /// Maps the context element's user space into the consuming entity's local space. When \ref
-  /// resolveAtDrawTime is set this value is not yet meaningful — the renderer driver substitutes
+  /// resolveAtDrawTime is set this value is not yet meaningful - the renderer driver substitutes
   /// the concrete per-placement transform before handing the paint to the backend.
   Transform2d entityFromContextTransform;
 

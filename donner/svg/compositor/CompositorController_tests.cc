@@ -170,7 +170,7 @@ TEST_F(CompositorControllerTest, DemoteRemovesLayer) {
   EXPECT_EQ(compositor.layerCount(), 0u);
 }
 
-// Design doc 0033 §M9 — layer-set hysteresis. `demoteEntity` queues the
+// Design doc 0033 §M9 - layer-set hysteresis. `demoteEntity` queues the
 // demotion for `kDemotionHysteresisFrames` and only fires after the
 // counter expires. A `promoteEntity` for the same entity inside the
 // window cancels the queued demotion and reuses the cached layer
@@ -189,7 +189,7 @@ TEST_F(CompositorControllerTest, M9DemoteIsLazyWithinHysteresisWindow) {
   ASSERT_EQ(compositor.layerCount(), 1u);
 
   compositor.demoteEntity(entity);
-  // The hysteresis hasn't expired — the layer + hint linger so the
+  // The hysteresis hasn't expired - the layer + hint linger so the
   // editor's GL textures stay live and a re-promote can short-circuit.
   EXPECT_EQ(compositor.layerCount(), 1u);
   EXPECT_TRUE(compositor.isPromoted(entity));
@@ -224,7 +224,7 @@ TEST_F(CompositorControllerTest, M9RepromoteSameEntityCancelsPendingDemote) {
   const uint64_t generationAfterRepromote =
       compositor.snapshotLayerInspectorRows().front().generation;
   EXPECT_EQ(generationAfterRepromote, generationAfterFirstRender)
-      << "M9 fast path should reuse the cached bitmap — re-rasterizing on every "
+      << "M9 fast path should reuse the cached bitmap - re-rasterizing on every "
          "click-deselect-click is exactly the work the hysteresis prevents.";
 }
 
@@ -245,7 +245,7 @@ TEST_F(CompositorControllerTest, M9DemoteFiresAfterHysteresisExpires) {
   compositor.demoteEntity(entity);
   EXPECT_EQ(compositor.layerCount(), 1u);
 
-  // Render `kDemotionHysteresisFrames` frames — each call ages the
+  // Render `kDemotionHysteresisFrames` frames - each call ages the
   // counter by one. The last call should expire the queue and run
   // the deferred resolver/reconcile that actually drops the layer.
   for (uint32_t i = 0; i < CompositorController::kDemotionHysteresisFrames + 1; ++i) {
@@ -256,7 +256,7 @@ TEST_F(CompositorControllerTest, M9DemoteFiresAfterHysteresisExpires) {
   EXPECT_EQ(compositor.layerCount(), 0u);
 }
 
-// Design doc 0033 §M9 + §M2C — pending-demote entries must NOT make
+// Design doc 0033 §M9 + §M2C - pending-demote entries must NOT make
 // `hasSplitStaticLayers()` return false during the hysteresis window.
 // `skipMainCompose` gates on `hasSplitStaticLayers()`; if it returns
 // false, `composeLayers` runs every fast-path drag frame, doing 2N+1
@@ -292,19 +292,19 @@ TEST_F(CompositorControllerTest, M9PendingDemoteKeepsHasSplitStaticLayersTrue) {
   // for the whole hysteresis window, disabling `skipMainCompose`.
   EXPECT_TRUE(compositor.hasSplitStaticLayers())
       << "Pending-demote A must not mask the live promote B from "
-         "hasSplitStaticLayers() — would otherwise force composeLayers "
+         "hasSplitStaticLayers() - would otherwise force composeLayers "
          "to run every fast-path drag frame.";
 }
 
-// Design doc 0033 §M9 + §M2C — pending-demote entries must NOT keep
+// Design doc 0033 §M9 + §M2C - pending-demote entries must NOT keep
 // the live drag-target tile from being flagged `isDragTarget`. Before
 // this fix, the `activeHints_.size() == 1` check in `renderFrame`'s
 // `splitStaticLayersEntity_` setter saw `{old-pending-demote, new-
 // drag-target}.size() == 2` during the hysteresis window and fell to
-// `entt::null` — the worker's tile snapshot stopped emitting a
+// `entt::null` - the worker's tile snapshot stopped emitting a
 // dragTranslationDoc for the live target, and the editor blitted the
 // content at the pre-drag position while the overlay (driven by the
-// live DOM) moved with the cursor. Symptom: ~5–7s of "content stays
+// live DOM) moved with the cursor. Symptom: ~5-7s of "content stays
 // put while overlay tracks the cursor" until the hysteresis expires.
 TEST_F(CompositorControllerTest, M9PendingDemoteDoesNotMaskLiveDragTarget) {
   SVGDocument document = makeDocument(R"svg(
@@ -495,7 +495,7 @@ TEST_F(CompositorControllerTest, LayerComposeOffsetTracksDomTranslationDelta) {
   viewport.devicePixelRatio = 1.0;
   compositor.renderFrame(viewport);
 
-  // Mutate the DOM — the compositor's fast path detects the pure-translation
+  // Mutate the DOM - the compositor's fast path detects the pure-translation
   // delta and should report it via `layerComposeOffset()`.
   target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(5.0, 10.0));
   compositor.renderFrame(viewport);
@@ -958,7 +958,7 @@ TEST_F(CompositorControllerTest, SnapshotLayerInspectorRowsTracksRasterizeCountA
   ASSERT_EQ(rowsAfterFirst.size(), 1u);
   EXPECT_EQ(rowsAfterFirst.front().rasterizeCount, 1u);
 
-  // A pure-translation drag goes through the fast path — bitmap is reused,
+  // A pure-translation drag goes through the fast path - bitmap is reused,
   // rasterize count does NOT advance.
   target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(5.0, 0.0));
   compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
@@ -1304,7 +1304,7 @@ TEST_F(CompositorControllerTest, SmallGradientStaticSpanPlanCanChooseImmediate) 
   ASSERT_EQ(plans.size(), 2u);
   // A gradient fill is not hard-blocked from immediate: its per-pixel cost is
   // folded into the rasterize estimate as an area term. This 8x8 gradient covers
-  // a tiny area, so the estimate stays well under budget and it goes immediate —
+  // a tiny area, so the estimate stays well under budget and it goes immediate -
   // a large gradient (e.g. a full-width cloud band) would estimate over budget
   // and stay cached instead.
   EXPECT_TRUE(plans[1].visible);
@@ -1402,7 +1402,7 @@ TEST_F(CompositorControllerTest, DynamicImmediateSpanStaysImmediateDespiteSlowMe
   // span: the immediate decision is driven by the deterministic geometry estimate
   // (`EstimateStaticSpanRasterizeMs`), which is unchanged because the span's
   // geometry is unchanged. This is the whole point of removing the measured-time
-  // path — presentation no longer flaps with how slow one render happened to be.
+  // path - presentation no longer flaps with how slow one render happened to be.
   configureMockForCaching();
   compositor.setStaticSpanRasterizeElapsedMsForTesting(5.0);
   compositor.renderFrame(RenderViewport{Vector2i(512, 512)});
@@ -1641,7 +1641,7 @@ TEST_F(CompositorControllerTest, IntrinsicSizeMandatoryFilterLayerHasNonZeroCanv
   // into an offscreen sized to their tight canvas bounds (with 1px AA
   // padding), not the full viewport. The MockRenderer's takeSnapshot
   // returns a stub 1x1 bitmap regardless of viewport, so we can't
-  // inspect dimensions directly — instead pin that `canvasOffset` is
+  // inspect dimensions directly - instead pin that `canvasOffset` is
   // non-zero (the rasterize went through the tight-bound path, which
   // is the architectural invariant we care about). The real-renderer
   // pixel correctness is covered by the `CompositorGolden_tests`.
@@ -1667,7 +1667,7 @@ TEST_F(CompositorControllerTest, IntrinsicSizeMandatoryFilterLayerHasNonZeroCanv
   ASSERT_TRUE(layer->hasValidBitmap());
 
   // The circle is centered at (40, 40), so the tight bound's top-left
-  // should be in the upper-left quadrant of the canvas — well away
+  // should be in the upper-left quadrant of the canvas - well away
   // from origin.
   EXPECT_GT(layer->canvasOffset().x, 0.0)
       << "Expected tight-bound rasterize; canvasOffset.x = " << layer->canvasOffset().x;
@@ -1746,7 +1746,7 @@ TEST_F(CompositorControllerTest, IntrinsicSizeLayerFastPathTranslationStillWorks
   const auto* layerAfter = compositor.findLayerForTest(target->unsafeEntityHandle().entity());
   ASSERT_NE(layerAfter, nullptr);
   EXPECT_EQ(layerAfter->canvasOffset(), offsetAtRasterize)
-      << "canvasOffset stays put — only canvasFromBitmap encodes the drag delta.";
+      << "canvasOffset stays put - only canvasFromBitmap encodes the drag delta.";
   const Transform2d xform = layerAfter->canvasFromBitmap();
   EXPECT_TRUE(xform.isTranslation());
   EXPECT_NEAR(xform.translation().x, 5.0, 1e-10);
@@ -1779,7 +1779,7 @@ TEST_F(CompositorControllerTest, MandatoryFilterLayerSurvivesCanvasResize) {
   ASSERT_FALSE(compositor.snapshotLayerInspectorRows().empty())
       << "Sanity check: mandatory filter detection should have promoted #target on first frame.";
 
-  // Simulate a canvas resize — same code path as the editor's pinch-zoom
+  // Simulate a canvas resize - same code path as the editor's pinch-zoom
   // / window-resize path. `setCanvasSize` calls
   // `invalidateRenderTree()` which wipes every RIC.
   document.setCanvasSize(kTestSvgDefaultSize.x * 2, kTestSvgDefaultSize.y * 2);

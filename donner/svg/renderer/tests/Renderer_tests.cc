@@ -51,7 +51,7 @@ constexpr int kGeodeDefaultMaxMismatchedPixels = 2000;
 ///
 /// Each entry here represents a known divergence between Geode and the
 /// shared (tiny-skia-authored) golden. **A custom Geode golden should be
-/// considered a bug** — the preferred override is a threshold bump with a
+/// considered a bug** - the preferred override is a threshold bump with a
 /// brief note explaining the root cause so we can fix it later. Use
 /// `Params::WithGoldenOverride(...)` only as a last resort, and never add
 /// a per-test golden under `testdata/golden/geode/` without a paired
@@ -67,7 +67,7 @@ const std::map<std::string_view, ImageComparisonParams>& geodeOverrides() {
       // before compositing. Sample-pattern differences between Slug's 4×
       // MSAA and tiny-skia's 16× supersample accumulate along every edge
       // of the embedded SVG, so the per-pixel threshold alone isn't
-      // enough — widen the mismatched-pixel cap to absorb the fringe.
+      // enough - widen the mismatched-pixel cap to absorb the fringe.
       // Actual diff at 0.1 threshold: ~13.7k pixels.
       {"donner/svg/renderer/testdata/golden/feimage-external-svg.png",
        Params::WithThreshold(0.1f, 15000)},
@@ -481,8 +481,8 @@ TEST_F(RendererTests, Z0rlyTest6_MusicNotation) {
 // references `chainLength` links long: `filter0`→`rect0`→`filter1`→`rect1`→…,
 // each rect (except the terminal one) carrying the *next* filter so the renderer
 // must recurse one fragment pre-render per link. Every link is a *distinct*
-// element, so the existing visited-set recursion guard — which keys on the
-// referenced light-tree entity — cannot collapse the chain; only the
+// element, so the existing visited-set recursion guard - which keys on the
+// referenced light-tree entity - cannot collapse the chain; only the
 // fragment-depth cap bounds it.
 std::string MakeChainedFeImageSvg(int chainLength) {
   std::string svg =
@@ -496,7 +496,7 @@ std::string MakeChainedFeImageSvg(int chainLength) {
            "\" width=\"120\" height=\"120\" fill=\"red\" filter=\"url(#filter" +
            std::to_string(i + 1) + ")\"/>";
   }
-  // Terminal filter references a plain rect with no further filter — ends the chain.
+  // Terminal filter references a plain rect with no further filter - ends the chain.
   svg += "<filter id=\"filter" + std::to_string(chainLength) +
          "\" x=\"0\" y=\"0\" width=\"1\" height=\"1\"><feImage xlink:href=\"#rectEnd\"/></filter>";
   svg += R"SVG(<rect id="rectEnd" x="40" y="40" width="120" height="120" fill="green"/></defs>
@@ -519,7 +519,7 @@ RendererBitmap RenderSvgString(const std::string& svg) {
 
 // Regression for issue #552: a long *acyclic* chain of `<feImage>` fragment
 // references recursed once per link in `RendererDriver::preRenderFeImageFragments`
-// — each level standing up a GPU offscreen instance — with no depth bound. The
+// - each level standing up a GPU offscreen instance - with no depth bound. The
 // visited-set guard only stops a *cycle* (it keys on the referenced light-tree
 // entity, which is distinct at every link here), so deep chains recursed
 // unbounded and crashed (`Segmentation fault` on macOS/Metal CI; GPU-resource /
@@ -533,7 +533,7 @@ RendererBitmap RenderSvgString(const std::string& svg) {
 //
 // On the unbounded (pre-fix) code these two renders recurse to different depths,
 // produce different images (and on the CI host, crash), so this test is red→green.
-// The contract — bounded recursion → chain-length-invariant output — is
+// The contract - bounded recursion → chain-length-invariant output - is
 // backend-independent, so it gates both the tiny-skia and Geode variants.
 TEST_F(RendererTests, ChainedFeImageDeepRecursionIsBoundedAndStable) {
   const RendererBitmap shorterChain = RenderSvgString(MakeChainedFeImageSvg(40));
@@ -557,13 +557,13 @@ TEST_F(RendererTests, ChainedFeImageDeepRecursionIsBoundedAndStable) {
 // The resvg golden draws a *butt-capped* (notched) top-left corner on a `40 0`-dashed closed
 // rect. Donner renders an SVG `<rect>` as a genuinely closed path (`M L L L Z`), and tiny-skia
 // (a line-faithful port of Rust tiny-skia) seam-joins the first and last dash across the start
-// vertex into one continuous dash — so the start corner becomes an interior miter join that
+// vertex into one continuous dash - so the start corner becomes an interior miter join that
 // fills the outer corner quadrant. This is the spec-conformant closed-dashed-path behavior
 // (Skia / Chrome / Firefox seam-join closed dashed contours); resvg's golden differs because
 // usvg flattens the rect to a non-closed path before dashing.
 //
-// This test pins the difference to closed-vs-open dash seam handling — NOT a rasterizer,
-// coverage, or transform bug — by rendering the same `40 0`-dashed square three ways and
+// This test pins the difference to closed-vs-open dash seam handling - NOT a rasterizer,
+// coverage, or transform bug - by rendering the same `40 0`-dashed square three ways and
 // measuring green coverage in the outer start-corner quadrant. A `<rect>` and an equivalent
 // closed `<path ... Z>` both miter (fill); only an explicitly open `<path>` butt-caps (empty),
 // reproducing the resvg golden. If a future change makes Donner stop seam-joining closed dashed

@@ -28,7 +28,7 @@ class SVGParser;
  * The `<svg>` element is the container for everything drawn in SVG. It is usually the root of
  * a standalone `.svg` file or the outermost SVG tag inside an HTML document, but it can also be
  * nested inside another `<svg>` to create an embedded sub-viewport with its own coordinate
- * system. Every drawable element — shapes, groups, text, images — must live inside an `<svg>`.
+ * system. Every drawable element - shapes, groups, text, images - must live inside an `<svg>`.
  *
  * A `<svg>` has two related but distinct sizes. The `width` and `height` attributes set its
  * **size on the page** (the rectangle it occupies in the parent layout, measured in CSS

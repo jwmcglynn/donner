@@ -17,7 +17,7 @@ namespace donner::svg {
  * - SVG2 spec: https://drafts.fxtf.org/css-masking-1/#MaskElement
  *
  * A `<mask>` defines a **luminance-based soft mask**. You fill the `<mask>` with arbitrary SVG
- * graphics — shapes, gradients, even images — and at render time SVG uses the brightness
+ * graphics - shapes, gradients, even images - and at render time SVG uses the brightness
  * (luminance) of each pixel of the mask as the alpha value for the corresponding pixel of the
  * masked element. White pixels in the mask leave the target fully visible, black pixels hide
  * it completely, and gray pixels produce partial transparency, so you can author smooth fades

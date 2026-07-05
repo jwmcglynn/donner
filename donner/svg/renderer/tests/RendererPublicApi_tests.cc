@@ -195,7 +195,7 @@ TEST(RendererPublicApiTest, DoubleDrawWithoutMutationProducesSameOutput) {
   const RendererBitmap firstSnapshot = NormalizeSnapshot(renderer.takeSnapshot());
   ASSERT_FALSE(firstSnapshot.empty());
 
-  // Second draw without any DOM mutation — exercises the dirty-flag fast path in
+  // Second draw without any DOM mutation - exercises the dirty-flag fast path in
   // RenderingContext::instantiateRenderTree().
   renderer.draw(document);
   const RendererBitmap secondSnapshot = NormalizeSnapshot(renderer.takeSnapshot());
@@ -316,7 +316,7 @@ TEST(RendererPublicApiTest, ChangeOpacityAttributeInvalidates) {
   renderer.draw(document);
   const RendererBitmap before = NormalizeSnapshot(renderer.takeSnapshot());
 
-  // Change opacity — a presentation attribute that should invalidate correctly.
+  // Change opacity - a presentation attribute that should invalidate correctly.
   auto elem = document.querySelector("#r");
   ASSERT_TRUE(elem.has_value());
   elem->setAttribute("opacity", "0.5");
@@ -347,7 +347,7 @@ TEST(RendererPublicApiTest, MutationThenNoMutationUsesCache) {
   renderer.draw(document);
   const RendererBitmap mutated = NormalizeSnapshot(renderer.takeSnapshot());
 
-  // Render again without mutation — should use the fast path and produce identical output.
+  // Render again without mutation - should use the fast path and produce identical output.
   renderer.draw(document);
   const RendererBitmap cached = NormalizeSnapshot(renderer.takeSnapshot());
 
@@ -517,7 +517,7 @@ TEST(RendererPublicApiTest, MultipleSequentialMutationsAccumulate) {
   renderer.draw(document);
   const RendererBitmap afterOpacity = NormalizeSnapshot(renderer.takeSnapshot());
 
-  // Third render with no mutation — fast path.
+  // Third render with no mutation - fast path.
   renderer.draw(document);
   const RendererBitmap cached = NormalizeSnapshot(renderer.takeSnapshot());
 
@@ -530,7 +530,7 @@ TEST(RendererPublicApiTest, MultipleSequentialMutationsAccumulate) {
 
 // --- Coverage-oriented tests for RenderingContext / RendererTinySkia ---
 
-// 1. Stroke rendering — rect with stroke-width, stroke-linecap, stroke-linejoin
+// 1. Stroke rendering - rect with stroke-width, stroke-linecap, stroke-linejoin
 TEST(RendererPublicApiTest, StrokeRenderingOnRect) {
   SVGDocument document = ParseDocument(R"svg(
       <svg xmlns="http://www.w3.org/2000/svg" width="50" height="50" viewBox="0 0 50 50">
@@ -557,7 +557,7 @@ TEST(RendererPublicApiTest, StrokeRenderingOnRect) {
   EXPECT_THAT(strokePx, IsRedish());
 }
 
-// 2. Stroke-dasharray — verify dashed stroke renders differently from solid
+// 2. Stroke-dasharray - verify dashed stroke renders differently from solid
 TEST(RendererPublicApiTest, StrokeDasharrayDiffersFromSolid) {
   const char* solidSvg = R"svg(
       <svg xmlns="http://www.w3.org/2000/svg" width="60" height="20" viewBox="0 0 60 20">
@@ -633,7 +633,7 @@ TEST(RendererPublicApiTest, FillOpacityAndStrokeOpacity) {
   EXPECT_GT(strokeEdge[3], interior[3]);
 }
 
-// 5. Marker rendering — path with marker-start, marker-mid, marker-end
+// 5. Marker rendering - path with marker-start, marker-mid, marker-end
 TEST(RendererPublicApiTest, MarkerRendering) {
   SVGDocument document = ParseDocument(R"svg(
       <svg xmlns="http://www.w3.org/2000/svg" width="80" height="40" viewBox="0 0 80 40">
@@ -658,10 +658,10 @@ TEST(RendererPublicApiTest, MarkerRendering) {
   // Sample above the polyline stroke (y=20) where only the marker circle extends.
   // The marker is a red circle with r=5 at markerUnits=strokeWidth (stroke-width=2),
   // giving a marker diameter of 6px centered at each vertex. Sample y=17 which is
-  // 3px above the stroke center — within the marker circle but outside the 2px stroke.
+  // 3px above the stroke center - within the marker circle but outside the 2px stroke.
   auto markerPixel = PixelAt(snapshot, 10, 17);
   EXPECT_GT(markerPixel[0], 150);  // Red channel from marker fill
-  EXPECT_GT(markerPixel[3], 0);    // Not transparent — marker drawn here
+  EXPECT_GT(markerPixel[3], 0);    // Not transparent - marker drawn here
 }
 
 TEST(RendererPublicApiTest, RecursiveMarkerStopsAtOneLevel) {
@@ -746,7 +746,7 @@ TEST(RendererPublicApiTest, NestedGroupTransforms) {
 
 // 8. viewBox scaling
 TEST(RendererPublicApiTest, ViewBoxScaling) {
-  // viewBox is 100x100 but output size is 50x50 — everything scales by 0.5.
+  // viewBox is 100x100 but output size is 50x50 - everything scales by 0.5.
   SVGDocument document = ParseDocument(R"svg(
       <svg xmlns="http://www.w3.org/2000/svg" width="50" height="50" viewBox="0 0 100 100">
         <rect width="100" height="100" fill="#00ff00" />
@@ -829,14 +829,14 @@ TEST(RendererPublicApiTest, InlineStyleOverridesAttribute) {
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
   ASSERT_FALSE(snapshot.empty());
 
-  // Style should override the fill attribute — result should be red, not blue.
+  // Style should override the fill attribute - result should be red, not blue.
   auto px = PixelAt(snapshot, 10, 10);
   EXPECT_THAT(px, IsRedish());
 
   EXPECT_GT(px[3], 200);
 }
 
-// 12. Multiple gradients — two shapes with different linear gradient fills
+// 12. Multiple gradients - two shapes with different linear gradient fills
 TEST(RendererPublicApiTest, MultipleLinearGradients) {
   SVGDocument document = ParseDocument(R"svg(
       <svg xmlns="http://www.w3.org/2000/svg" width="40" height="20" viewBox="0 0 40 20">
@@ -902,7 +902,7 @@ TEST(RendererPublicApiTest, RadialGradient) {
   EXPECT_LT(corner[0], center[0]);
 }
 
-// 14. Image element — <image> with data: URI (small inline 2x2 red PNG)
+// 14. Image element - <image> with data: URI (small inline 2x2 red PNG)
 // Exercises the image loading and drawImage code paths in RenderingContext/RendererTinySkia.
 TEST(RendererPublicApiTest, ImageElementDataUri) {
   // A 2x2 solid red PNG encoded as base64 data URI.
@@ -928,7 +928,7 @@ TEST(RendererPublicApiTest, ImageElementDataUri) {
   EXPECT_THAT(px, IsRedish());
 }
 
-// 15. Empty document — render SVG with no visible content
+// 15. Empty document - render SVG with no visible content
 TEST(RendererPublicApiTest, EmptyDocumentProducesValidOutput) {
   SVGDocument document = ParseDocument(R"svg(
       <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 30 30">
@@ -1063,12 +1063,12 @@ TEST(RendererPublicApiTest, MaskElement) {
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
   ASSERT_FALSE(snapshot.empty());
 
-  // Outside the black hole (corner) — mask is white, so green should show.
+  // Outside the black hole (corner) - mask is white, so green should show.
   auto corner = PixelAt(snapshot, 2, 2);
   EXPECT_GT(corner[1], 100);  // Green
   EXPECT_GT(corner[3], 100);
 
-  // Inside the black hole (center) — mask is black, so content should be masked.
+  // Inside the black hole (center) - mask is black, so content should be masked.
   auto center = PixelAt(snapshot, 20, 20);
   EXPECT_LT(center[3], corner[3]);  // More transparent than the corner
 }
@@ -1097,7 +1097,7 @@ TEST(RendererPublicApiTest, MixBlendModeIsolatedLayer) {
   EXPECT_LT(px[2], 30);   // Blue channel ~0
 }
 
-// 22. Visibility hidden — element should not appear
+// 22. Visibility hidden - element should not appear
 TEST(RendererPublicApiTest, VisibilityHidden) {
   SVGDocument document = ParseDocument(R"svg(
       <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20">
@@ -1110,12 +1110,12 @@ TEST(RendererPublicApiTest, VisibilityHidden) {
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
   ASSERT_FALSE(snapshot.empty());
 
-  // Hidden element should not render — pixel should be transparent.
+  // Hidden element should not render - pixel should be transparent.
   auto px = PixelAt(snapshot, 10, 10);
   EXPECT_EQ(px[3], 0);
 }
 
-// 23. Display none — element and children should not appear
+// 23. Display none - element and children should not appear
 TEST(RendererPublicApiTest, DisplayNone) {
   SVGDocument document = ParseDocument(R"svg(
       <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20">

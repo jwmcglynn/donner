@@ -411,7 +411,7 @@ Path::PointOnPath Path::pointAtArcLength(double distance) const {
     }
   }
 
-  // Distance exceeds path length — return endpoint.
+  // Distance exceeds path length - return endpoint.
   return {currentPoint, {}, 0.0, false};
 }
 
@@ -503,7 +503,7 @@ Vector2d Path::tangentAt(size_t index, double t) const {
                                         );
 
       if (NearZero(derivative.lengthSquared())) {
-        // First derivative is zero — degenerate curve with coincident control points.
+        // First derivative is zero - degenerate curve with coincident control points.
         // Adjust t slightly and retry.
         double adjustedT = t;
         if (NearEquals(t, 0.0, 0.000001)) {
@@ -984,14 +984,14 @@ std::vector<Path::Vertex> Path::vertices() const {
   // Whether the current subpath contains at least one straight `LineTo` edge. Used to
   // decide whether a zero-length ClosePath emits an "arrival" marker-mid at the coincident
   // start vertex (corner contours like a rounded rect do; smooth all-curve loops like a
-  // circle/ellipse do not — see the ClosePath branch).
+  // circle/ellipse do not - see the ClosePath branch).
   bool subpathHasLine = false;
 
   bool wasInternal = false;
   for (size_t i = 0; i < commands_.size(); ++i) {
     const Command& command = commands_[i];
 
-    // Skip intermediate arc decomposition segments — only the first and last segments of an arc
+    // Skip intermediate arc decomposition segments - only the first and last segments of an arc
     // produce vertices for marker placement.
     const bool shouldSkip = wasInternal;
     wasInternal = command.isInternal;
@@ -1030,18 +1030,18 @@ std::vector<Path::Vertex> Path::vertices() const {
       const Vector2d endPoint = endPointOfCommand(commands_, points_, i);
 
       // Place a marker-mid vertex at the join between the last drawing segment and the
-      // closing segment — the point where the final drawing command arrives.
+      // closing segment - the point where the final drawing command arrives.
       //
       // - Non-zero-length ClosePath (e.g. a sharp rect `M L L L Z`): `startPoint` is the
       //   distinct vertex before the closing line; the mid orientation bisects the incoming
       //   tangent and the closing line's direction.
       // - Zero-length ClosePath where the last segment already lands on the subpath start
       //   (then `Z`): `startPoint == endPoint == subpath start`. Whether an arrival mid is
-      //   emitted there — stacking with the start and end markers — depends on the contour:
+      //   emitted there - stacking with the start and end markers - depends on the contour:
       //     * Corner contours (a rounded rect: `M L C L C L C L C Z`) DO get the arrival
       //       mid at the start corner, matching resvg / SVG 2 §11.6.2. Issue #623: dropping
       //       it left one fewer marker at the rounded-rect start corner.
-      //     * Smooth all-curve loops (a circle/ellipse: `M C C C C Z`) do NOT — resvg places
+      //     * Smooth all-curve loops (a circle/ellipse: `M C C C C Z`) do NOT - resvg places
       //       only start + end at the seam, so emitting an arrival mid would over-stack.
       //   `subpathHasLine` distinguishes the two: a contour with straight edges is a corner
       //   contour, a pure-curve loop is smooth.
@@ -1449,18 +1449,18 @@ struct MiterResult {
 /// Compute the intersection point of the two offset lines.
 ///
 /// `prevNormal` and `curNormal` are the (unit) outward normals of the two adjacent
-/// segments *on the current contour side* — for the inside-of-turn branch the
+/// segments *on the current contour side* - for the inside-of-turn branch the
 /// caller passes the true normals; for the outside branch the caller also passes
 /// the true outward normals of the contour it's currently tracing. Both offset
 /// lines are `{ x : x·n = vertex·n + halfWidth }`, and their intersection lies
 /// at `vertex + miterUnit * (halfWidth / cosHalfAngle)` where
 /// `cosHalfAngle = |prevNormal + curNormal| / 2`. This is the same formula used
-/// by `ComputeMiter` in `strokeMiterBounds` — expressed as
+/// by `ComputeMiter` in `strokeMiterBounds` - expressed as
 /// `halfWidth / cos(halfAngleBetweenNormals)`, which equals
 /// `halfWidth / sin(interiorHalfAngleAtVertex)` (the textbook SVG miter
 /// formula). Importantly, this is NOT `halfWidth / sinHalfAngle`: that earlier
 /// formulation happened to be correct for 90° corners (where sin=cos at 45°)
-/// but drifts for any other turn — undershooting sharp inside corners of open
+/// but drifts for any other turn - undershooting sharp inside corners of open
 /// paths (the Phase 2C inverted-V symptom) and overshooting gentle outside
 /// corners.
 MiterResult computeMiterPoint(const Vector2d& vertex, const Vector2d& prevNormal,
@@ -1491,7 +1491,7 @@ MiterResult computeMiterPoint(const Vector2d& vertex, const Vector2d& prevNormal
 
 /// Emit a line join between two consecutive offset segments.
 ///
-/// **Calling convention** — the caller MUST NOT pre-emit `prevEnd` before
+/// **Calling convention** - the caller MUST NOT pre-emit `prevEnd` before
 /// calling `emitJoin`. On entry the cursor sits at the previous iteration's
 /// "exit point" (either `curStart` of the last outside join, the miter point
 /// of the last inside join, or `leftStart` for the very first join). The
@@ -1531,7 +1531,7 @@ void emitJoin(const Vector2d& prevEnd, const Vector2d& curStart, const Vector2d&
   // Nearly-parallel normals: the two offset lines are colinear (straight
   // run through `vertex`), so the ribbon has no corner to speak of. Emit
   // `prevEnd` so the polygon edge covers the end of the previous segment,
-  // then fall through — the next iteration's `emitJoin` (or the final
+  // then fall through - the next iteration's `emitJoin` (or the final
   // post-loop `lineTo`) will carry the contour to the next point.
   if (NearZero(cross, 1e-10)) {
     builder.lineTo(prevEnd);
@@ -1547,7 +1547,7 @@ void emitJoin(const Vector2d& prevEnd, const Vector2d& curStart, const Vector2d&
     // Inside of the turn: the two offset lines cross *before* reaching
     // `prevEnd` / `curStart`. The true ribbon boundary terminates the
     // previous segment and restarts the current segment at that
-    // intersection — the miter point. The polygon must NOT visit
+    // intersection - the miter point. The polygon must NOT visit
     // `prevEnd` or `curStart` (they sit on the wrong side of the
     // intersection and tracing to them would self-intersect the ribbon;
     // see the a-stroke-linecap-008/009 resvg regression).
@@ -1562,14 +1562,14 @@ void emitJoin(const Vector2d& prevEnd, const Vector2d& curStart, const Vector2d&
     // a-stroke-miterlimit-001..005 resvg regression).
     //
     // We DO still guard against two degenerate cases:
-    //   1. SMOOTH flattened-curve joins (~1–10° turns) — the miter is
+    //   1. SMOOTH flattened-curve joins (~1-10° turns) - the miter is
     //      geometrically so close to `prevEnd`/`curStart` that using it
     //      adds tiny zig-zag vertices which corrupt ray-cast winding on
     //      dense flattened contours (`StrokeToFillClosedEllipseInteriorIsEmpty`
-    //      regression). Keep the naive connector in that regime — the
+    //      regression). Keep the naive connector in that regime - the
     //      sub-halfWidth zig is imperceptible.
     //   2. NUMERICALLY ill-conditioned miters (near 180° U-turns where
-    //      `cosHalfAngle → 0`) — `computeMiterPoint` returns `invalid`
+    //      `cosHalfAngle → 0`) - `computeMiterPoint` returns `invalid`
     //      for those and we fall through to the naive connector.
     constexpr double kSharpInsideCosThreshold = 0.866;  // turn angle >= 60°
     constexpr double kSharpInsideMiterRatio = 1.0 / kSharpInsideCosThreshold;
@@ -1581,7 +1581,7 @@ void emitJoin(const Vector2d& prevEnd, const Vector2d& curStart, const Vector2d&
       // at perpendicular distance `halfWidth` from its segment, so its
       // distance from the vertex measured ALONG each segment is
       // `sqrt(lengthFromVertex² − halfWidth²)`. Near-reversal joins (a
-      // segment followed by another heading back within a degree or two —
+      // segment followed by another heading back within a degree or two -
       // common where image-traced art butts a tiny connector against a curve)
       // put the intersection tens or hundreds of units past both segment
       // ends; emitting it there traces a long thin spike across the canvas
@@ -1652,7 +1652,7 @@ void emitJoin(const Vector2d& prevEnd, const Vector2d& curStart, const Vector2d&
       // Note: prior revisions used `halfWidth/sinHalfAngle` (where
       // sinHalfAngle is the sine of the half-angle *between the normals*),
       // which happens to coincide with the correct formula at exactly 90°
-      // turns (sin 45° = cos 45°) but drifts for every other angle —
+      // turns (sin 45° = cos 45°) but drifts for every other angle -
       // undershooting sharp outside miters (the inverted-V right contour
       // bug) and rejecting gentle outside miters via a spuriously-large
       // miter ratio.
@@ -1934,11 +1934,11 @@ void computeCurveBoundaryOverrides(const Path& originalPath, std::vector<FlatSub
   // intersecting path revisiting a coordinate) would both attach to the
   // first interior vertex equal to that point, applying the wrong
   // incoming/outgoing normals. Since both `boundaries` and `subpaths` are
-  // built from the original path walk, their traversal orders align — a
+  // built from the original path walk, their traversal orders align - a
   // cursor that only moves forward keeps each boundary anchored to the
   // correct junction.
   size_t cursorSubpath = 0;
-  size_t cursorVertex = 1;  // Interior vertices only — first/last are handled by caps.
+  size_t cursorVertex = 1;  // Interior vertices only - first/last are handled by caps.
   for (const auto& b : boundaries) {
     while (cursorSubpath < subpaths.size()) {
       auto& flat = subpaths[cursorSubpath];
@@ -1952,7 +1952,7 @@ void computeCurveBoundaryOverrides(const Path& originalPath, std::vector<FlatSub
         }
       }
       if (matched) break;
-      // Not present from the cursor onward in this subpath — skip to next.
+      // Not present from the cursor onward in this subpath - skip to next.
       cursorSubpath++;
       cursorVertex = 1;
     }
@@ -2005,7 +2005,7 @@ void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBui
       return;
     }
     // Round: full circle approximated as a polygon. Use the same
-    // step-per-pixel heuristic as `emitCap`'s round-cap branch — 8 minimum,
+    // step-per-pixel heuristic as `emitCap`'s round-cap branch - 8 minimum,
     // otherwise proportional to the circumference.
     const int numSteps = std::max(16, static_cast<int>(std::ceil(halfWidth * 4.0)));
     builder.moveTo(Vector2d(p.x + halfWidth, p.y));
@@ -2048,13 +2048,13 @@ void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBui
   // previous offset segment (`prevEnd`) on OUTSIDE turns and for
   // short-circuiting directly to the miter intersection on sharp INSIDE
   // turns (skipping both `prevEnd` and `curStart`). The caller must NOT
-  // pre-emit `prevEnd` — doing so would cause the polygon to backtrack
+  // pre-emit `prevEnd` - doing so would cause the polygon to backtrack
   // along the previous offset line on inside-turn vertices, producing a
   // self-intersecting ribbon.
   //
   // Trace shape: `leftStart → (joins) → (end of final segment)`.
   // At the entry to each iteration `i`, the cursor is guaranteed to sit
-  // on the SEGMENT(i-1) offset line — either at `leftStart` (i=1), at
+  // on the SEGMENT(i-1) offset line - either at `leftStart` (i=1), at
   // `curStart` from the previous iteration's outside join, or at the
   // previous iteration's inside miter point (which also lies on segment
   // (i-1)'s offset line by construction).
@@ -2104,7 +2104,7 @@ void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBui
       const Vector2d prevEnd = pts[i] - normals[i - 1] * halfWidth;
       const Vector2d curStart = pts[i] - normals[i] * halfWidth;
 
-      // On the right side, the "outside" sense is flipped — feed emitJoin
+      // On the right side, the "outside" sense is flipped - feed emitJoin
       // the flipped normals so its cross-product sign classification
       // points at the right-contour outside.
       emitJoin(prevEnd, curStart, pts[i], Vector2d(-normals[i - 1].x, -normals[i - 1].y),
@@ -2113,7 +2113,7 @@ void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBui
     }
 
     // NOTE: unlike the OPEN case, closed paths do NOT need a post-loop
-    // lineTo here — the following wrap-around emitJoin will emit the end
+    // lineTo here - the following wrap-around emitJoin will emit the end
     // of segment (numSegments-1)'s offset as its own `prevEnd` for outside
     // turns, and will correctly short-circuit on inside turns.
 
@@ -2134,7 +2134,7 @@ void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBui
 
     // End cap: going from the left side to the right side at the last point.
     // On entry the left contour has ended at `pts[n-1] + normals[numSegments-1] * halfWidth`
-    // (the end of the last segment's offset) — the cap sweeps from that
+    // (the end of the last segment's offset) - the cap sweeps from that
     // cursor over to the mirrored point on the right side.
     {
       const Vector2d endDir = (pts[n - 1] - pts[n - 2]).normalize();
@@ -2248,7 +2248,7 @@ std::optional<ResolvedDashPattern> resolveDashPattern(const std::vector<double>&
   // Apply pathLength scaling. When pathLength is set, dash distances are
   // expressed relative to pathLength (the author-declared total length of
   // the ENTIRE path), so we scale by totalPathArc/pathLength. The same
-  // scale factor applies to every subpath — otherwise, multi-subpath
+  // scale factor applies to every subpath - otherwise, multi-subpath
   // strokes would get inconsistent dash sizes. Per SVG2 §12.2 ("moving
   // along a path", stroke-dasharray + pathLength).
   double effectiveOffset = dashOffset;
@@ -2438,7 +2438,7 @@ bool strokeDashedSubpath(const FlatSubpath& subpath, const StrokeStyle& style, d
         // totalArc]. The resulting dashed path has multiple subpaths
         // and is rendered with EvenOdd (see
         // `RendererGeode::drawPath`'s subpath-count heuristic), so the
-        // overlap cancels out to a visible GAP at the seam — the
+        // overlap cancels out to a visible GAP at the seam - the
         // symptom on resvg's `stroke-dasharray/even-count` where the
         // wrap dash appears as two disconnected arcs with a butt-cap
         // notch at angle 0°. Truncating at `totalArc` and letting the
@@ -2484,7 +2484,7 @@ Path Path::strokeToFill(const StrokeStyle& style, double flattenTolerance) const
   //
   // We compute the TOTAL arc length (sum across all subpaths) up front and
   // pass it into the per-subpath dasher. This is the reference length for
-  // the SVG `pathLength` attribute — pathLength describes the entire
+  // the SVG `pathLength` attribute - pathLength describes the entire
   // `<path>`'s length, so the scaling ratio must be consistent for every
   // subpath. Computing it per-subpath would give different-sized dashes on
   // different subpaths of the same stroke.
@@ -2501,7 +2501,7 @@ Path Path::strokeToFill(const StrokeStyle& style, double flattenTolerance) const
       if (strokeDashedSubpath(subpath, style, totalPathArc, builder)) {
         continue;
       }
-      // Fallback: dash pattern was degenerate (all-zero, etc.) — SVG says
+      // Fallback: dash pattern was degenerate (all-zero, etc.) - SVG says
       // render as solid stroke.
     }
     strokeSubpath(subpath, style, builder);
@@ -2655,7 +2655,7 @@ PathBuilder& PathBuilder::arcTo(const Vector2d& radius, double rotationRadians, 
 
 PathBuilder& PathBuilder::closePath() {
   if (!hasMoveTo_) {
-    return *this;  // No open subpath — consecutive closePaths are no-ops.
+    return *this;  // No open subpath - consecutive closePaths are no-ops.
   }
   path_.commands_.push_back({Path::Verb::ClosePath, moveToPointIndex_});
   hasMoveTo_ = false;

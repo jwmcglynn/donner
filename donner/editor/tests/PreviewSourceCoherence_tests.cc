@@ -2,7 +2,7 @@
 /// Preview-vs-source save/reload coherence tests.
 ///
 /// Invariant under test: after any *committed* editor operation, the editor's
-/// live preview render (rendering `AsyncSVGDocument::document()` — the same DOM
+/// live preview render (rendering `AsyncSVGDocument::document()` - the same DOM
 /// the on-screen canvas composites) is pixel-identical to rendering the
 /// document's saved *source* after a save -> reload (reparse) roundtrip
 /// (`SVGParser::ParseSVG(document().source())`). In plain terms: "what you see
@@ -11,7 +11,7 @@
 ///
 /// This is the COMMITTED-state invariant. It deliberately does NOT exercise
 /// mid-drag transient preview (the drag fast-path uses a transient compose
-/// offset before the source is updated — a separate invariant fixed on another
+/// offset before the source is updated - a separate invariant fixed on another
 /// branch). Every operation here is pushed onto the `CommandQueue` and committed
 /// via `AsyncSVGDocument::flushFrame()`, exactly as the editor's per-frame main
 /// loop does.
@@ -102,7 +102,7 @@ void ExpectPreviewMatchesReloadedSource(AsyncSVGDocument& async, std::string_vie
   // Zero-diff identity expectation: the live preview and a save->reload of the
   // current source render the SAME committed document, so any differing pixel is
   // a real coherence bug (wrong attribute writeback, stale source, transform not
-  // serialized, etc.) — never anti-aliasing (pixelmatch already excludes AA).
+  // serialized, etc.) - never anti-aliasing (pixelmatch already excludes AA).
   tests::CompareBitmapToBitmap(preview, reloaded, label, tests::PixelmatchIdentityParams());
 }
 
@@ -197,7 +197,7 @@ TEST(PreviewSourceCoherence, MatchesAfterEachCommittedOperation) {
   // the XML source store (the live drag fast-path's transform is folded back to
   // the `transform` attribute at commit time). We drive that committed form
   // directly via SetAttribute, which `AsyncSVGDocument::applyOne` routes through
-  // `document_->setElementAttribute(...)` — mutating BOTH the live DOM and the
+  // `document_->setElementAttribute(...)` - mutating BOTH the live DOM and the
   // source. (Pure `SetTransformCommand` is the *mid-drag* form and is covered by
   // the drag-coherence suite on another branch; here we test committed state.)
   {

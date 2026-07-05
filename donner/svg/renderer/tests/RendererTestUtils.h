@@ -68,7 +68,7 @@ struct AsciiImage {
         return true;
       }
 
-      // All failed — emit diagnostics for the most specific pattern.
+      // All failed - emit diagnostics for the most specific pattern.
       if (!backendGolden.empty()) {
         return image.matchesImpl(backendGolden, true);
       }

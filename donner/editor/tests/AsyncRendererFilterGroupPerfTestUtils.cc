@@ -100,7 +100,7 @@ void RunFilterGroupSubtreeDragPerfScenario(FilterGroupSubtreeDragPerfResult* res
     ASSERT_TRUE(renderResult.has_value()) << "filter-group drag frame " << i << " didn't land";
     ASSERT_TRUE(renderResult->compositedPreview.has_value())
         << "filter-group drag frame " << i
-        << " produced no composited preview — compositor fell through to the "
+        << " produced no composited preview - compositor fell through to the "
            "non-composited path and will be slow for every subsequent frame";
     sumDragFrameMs += frameMs;
     maxDragFrameMs = std::max(maxDragFrameMs, frameMs);

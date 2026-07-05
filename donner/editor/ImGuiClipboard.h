@@ -5,7 +5,7 @@
 /// clipboard functions (ImGui::GetClipboardText / SetClipboardText).
 ///
 /// This file is the ONLY place in the editor that is permitted to
-/// touch ImGui::*Clipboard* APIs — it is the isolation point that
+/// touch ImGui::*Clipboard* APIs - it is the isolation point that
 /// lets TextEditorCore stay headless-testable. Any other consumer
 /// should depend on ClipboardInterface, not on ImGui directly.
 

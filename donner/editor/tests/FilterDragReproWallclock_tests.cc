@@ -1,15 +1,15 @@
 /// @file
 ///
 /// Wall-clock budget assertions for the `filter_drag_repro` replay.
-/// These numbers are runner-speed-dependent — the same scenario runs
+/// These numbers are runner-speed-dependent - the same scenario runs
 /// at ~2 ms/frame on dev hardware and 40-50 ms/frame avg (with
 /// single-outlier excursions past 200 ms) on shared GitHub CI
 /// runners. Put them in the `_wallclock` target (tagged `manual` +
 /// `perf`) so they run in the nightly `perf` lane instead of on every
 /// PR.
 ///
-/// The CPU-invariant portion — fast-path counters and selection
-/// invariants — lives in `FilterDragReproCorrectness_tests.cc` and
+/// The CPU-invariant portion - fast-path counters and selection
+/// invariants - lives in `FilterDragReproCorrectness_tests.cc` and
 /// does run on the PR gate.
 
 #include "donner/editor/tests/FilterDragReproTestUtils.h"
@@ -28,7 +28,7 @@ TEST(FilterDragReproWallclockTest, DragFramesStayUnderNightlyWallclockBudget) {
   // Budgets tuned for the nightly lane where we can assume roughly
   // dev-machine-class runners. The numbers here are intentionally
   // tighter than the transitional thresholds that the PR-gated test
-  // used — this is where we actually want to catch regressions.
+  // used - this is where we actually want to catch regressions.
   //
   // The original user report was ~250 ms / frame avg during a drag on
   // a `<g filter>` subtree. The primary gate is `avg`, not `max`:

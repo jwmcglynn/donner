@@ -101,7 +101,7 @@ public:
 private:
   struct TreeNodeSnapshot {
     /// Captured element reference. Valid for as long as the underlying
-    /// entity isn't destroyed — for light-tree nodes that only happens
+    /// entity isn't destroyed - for light-tree nodes that only happens
     /// on a full document rebuild (`resetAllLayers` / document reload),
     /// at which point the snapshot is refreshed on the next idle frame.
     std::optional<svg::SVGElement> element;

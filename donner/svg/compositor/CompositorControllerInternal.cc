@@ -86,7 +86,7 @@ std::string EntityDebugLabel(const Registry& registry, Entity entity) {
 ///      `AttributesComponent`. Present immediately after parse.
 ///   2. Resolved fields on `RenderingInstanceComponent` (post-prepare).
 ///   3. `isolatedLayer` on `RenderingInstanceComponent` (opacity<1,
-///      blend-mode, isolation:isolate — any of which make the ancestor a
+///      blend-mode, isolation:isolate - any of which make the ancestor a
 ///      compositing group that can't be extracted from).
 bool HasCompositingBreakingAncestor(Registry& registry, Entity entity) {
   const auto* tree = registry.try_get<donner::components::TreeComponent>(entity);
@@ -190,7 +190,7 @@ LayerRasterGeometry ComputeLayerRasterGeometry(RendererInterface& renderer, Regi
   // layers; M2B drops the gate.
   //
   // `computeEntityRangeBounds` already accounts for filter expansion,
-  // stroke widths, isolated-layer accumulation, and clip rects — see
+  // stroke widths, isolated-layer accumulation, and clip rects - see
   // `RendererDriver.h §computeEntityRangeBounds`. `nullopt` means "fall
   // back to canvas-size"; never "empty".
   std::optional<Box2d> tightBoundsCanvas;
@@ -282,7 +282,7 @@ bool PaintUsesExpensiveResource(const components::ResolvedPaintServer& paint) {
          ref->reference.handle.try_get<components::ComputedGradientComponent>() == nullptr;
 }
 
-// True when @p paint is a resolved gradient — a fill whose rasterize cost scales
+// True when @p paint is a resolved gradient - a fill whose rasterize cost scales
 // with covered pixel area (the shader evaluates per pixel) rather than with the
 // span's draw-op / path-verb counts. Used to add an area term to the immediate
 // rasterize estimate so a large gradient stays cached while a small one does not.
@@ -440,7 +440,7 @@ bool IsCheapDirectGeometry(const StaticSpanCostEstimate& cost) {
 // immediate-vs-cached promotion decision. Measuring the wall clock and then
 // promoting if it happened to be fast made the decision flap with machine load:
 // the same span rendered immediate on an idle machine and cached under a busy
-// one, so editor presentation — and any test that asserted on it — was
+// one, so editor presentation - and any test that asserted on it - was
 // runner-sensitive. Predicting the cost from the span's geometry instead makes
 // the choice identical on every machine.
 //
@@ -462,7 +462,7 @@ double EstimateStaticSpanRasterizeMs(int estimatedDrawOps, int estimatedPathVerb
     // A gradient fill evaluates its shader at every covered pixel, so unlike a
     // solid fill its cost scales with area. Charge per covered kilopixel so a
     // small gradient span (a letter accent) can still go immediate while a large
-    // one (a full-width cloud band) estimates over budget and stays cached —
+    // one (a full-width cloud band) estimates over budget and stays cached -
     // which is also what keeps a dragged gradient layer on the cached
     // texture-transform path instead of re-rasterizing every frame.
     // Calibrated against real splash gradient renders: the DONNER logo span
@@ -521,8 +521,8 @@ bool HasPublicTileBitmap(const RendererBitmap& bitmap) {
 
 // Returns true when two bitmaps are byte-for-byte identical (same format,
 // dimensions, stride, and pixel bytes). Used to detect a no-op re-rasterize
-// of a static segment so its tile generation — the editor's GL-texture-cache
-// invalidation key — isn't advanced when nothing actually changed.
+// of a static segment so its tile generation - the editor's GL-texture-cache
+// invalidation key - isn't advanced when nothing actually changed.
 bool BitmapPixelsEqual(const RendererBitmap& a, const RendererBitmap& b) {
   return a.dimensions == b.dimensions && a.rowBytes == b.rowBytes && a.alphaType == b.alphaType &&
          a.pixels == b.pixels;

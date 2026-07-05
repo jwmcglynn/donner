@@ -8,18 +8,18 @@ namespace donner::svg {
 /**
  * @page xml_feSpotLight "<feSpotLight>"
  *
- * `<feSpotLight>` is a directional, cone-shaped light — think of a flashlight or a theatre
+ * `<feSpotLight>` is a directional, cone-shaped light - think of a flashlight or a theatre
  * spotlight. It sits at a position `(x, y, z)` in filter coordinates, points at a target
  * `(pointsAtX, pointsAtY, pointsAtZ)`, and only illuminates surfaces that fall inside a cone
  * around that pointing direction. Pixels outside the cone are unlit.
  *
  * Two attributes control the shape of the cone. `limitingConeAngle` is the half-angle of the
- * cone in degrees — light outside this angle is clipped to black, giving you a hard edge.
+ * cone in degrees - light outside this angle is clipped to black, giving you a hard edge.
  * `specularExponent` (used for both diffuse and specular spotlights, despite its name) controls
  * how quickly the light fades from the bright centre of the cone to its edge: small values
- * (1–5) give a smooth, soft-edged pool of light, and large values (50+) concentrate the light
+ * (1-5) give a smooth, soft-edged pool of light, and large values (50+) concentrate the light
  * into a tight hotspot. `<feSpotLight>` must appear as a child of \ref xml_feDiffuseLighting or
- * \ref xml_feSpecularLighting — on its own it does nothing. It takes no standard filter
+ * \ref xml_feSpecularLighting - on its own it does nothing. It takes no standard filter
  * primitive attributes.
  *
  * - DOM object: SVGFESpotLightElement
@@ -150,7 +150,7 @@ namespace donner::svg {
  * wide pool that covers most of the bump). The fourth keeps the 40° cone but cranks
  * `specularExponent` from 5 to 60, concentrating the light into a small bright core even though
  * the cone is still wide. The last example keeps the cone narrow but re-aims the spotlight at
- * `(80, 80, 0)` — the hotspot moves to the lower-right.
+ * `(80, 80, 0)` - the hotspot moves to the lower-right.
  *
  * \par Usage
  *
@@ -173,7 +173,7 @@ namespace donner::svg {
  * | `limitingConeAngle`| none    | Half-angle of the cone in degrees. Light outside the cone is clipped to black. If omitted, the cone is unbounded. |
  *
  * `<feSpotLight>` does not take the standard filter primitive attributes (`in`, `result`, `x`,
- * `y`, `width`, `height`) — it is purely a child element of a lighting primitive.
+ * `y`, `width`, `height`) - it is purely a child element of a lighting primitive.
  */
 
 /**

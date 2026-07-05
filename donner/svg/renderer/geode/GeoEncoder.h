@@ -51,12 +51,12 @@ struct LinearGradientParams {
   /// Spread mode at the edges of the gradient range.
   /// 0 = pad, 1 = reflect, 2 = repeat.
   uint32_t spreadMode = 0;
-  /// Gradient stops. Colors are in straight alpha, 0..1 per channel — the
+  /// Gradient stops. Colors are in straight alpha, 0..1 per channel - the
   /// encoder premultiplies before upload. Offsets must be in [0, 1].
   ///
   /// A hard cap of 16 stops is enforced inside the encoder to match the
   /// fixed-size uniform buffer layout in `slug_gradient.wgsl`. Stops beyond
-  /// the cap are silently truncated — a follow-up will move stop storage to
+  /// the cap are silently truncated - a follow-up will move stop storage to
   /// a texture lookup (`GeodeGradientCacheComponent`) to lift this limit.
   /// A single gradient stop: normalized offset and premultiplied linear RGBA.
   struct Stop {
@@ -76,7 +76,7 @@ struct LinearGradientParams {
  * one-circle radial gradient (`t = distance(P, center) / radius`).
  *
  * All geometry fields are in the gradient's own coordinate system, same
- * convention as \ref LinearGradientParams — the caller has already folded
+ * convention as \ref LinearGradientParams - the caller has already folded
  * `gradientUnits` and `gradientTransform` into `gradientFromPath`.
  */
 struct RadialGradientParams {
@@ -93,7 +93,7 @@ struct RadialGradientParams {
   Transform2d gradientFromPath;
   /// Spread mode. 0 = pad, 1 = reflect, 2 = repeat.
   uint32_t spreadMode = 0;
-  /// Gradient stops. Same wire format / cap as @ref LinearGradientParams —
+  /// Gradient stops. Same wire format / cap as @ref LinearGradientParams -
   /// kept as a sibling struct so each gradient kind's C++ API reflects its
   /// natural parameter set without `std::variant`-style dispatch.
   using Stop = LinearGradientParams::Stop;
@@ -108,7 +108,7 @@ struct RadialGradientParams {
  * texture, issue draw calls (`fillPath`, `clear`, etc.), then call `finish()`
  * to submit the command buffer to the GPU.
  *
- * The encoder owns no GPU buffers itself — each draw call allocates fresh
+ * The encoder owns no GPU buffers itself - each draw call allocates fresh
  * vertex / band / curve / uniform buffers. This is the simplest possible
  * implementation; later phases will add buffer pooling and the ECS-backed
  * `GeodePathCacheComponent` for paths whose geometry hasn't changed.
@@ -157,14 +157,14 @@ public:
    * Shared-CommandEncoder constructor (design doc 0030 Milestone 3).
    * Uses the provided `sharedCommandEncoder` instead of creating its own.
    * When this overload is used, `finish()` only ends any open render
-   * pass — it does NOT finish the CommandEncoder or submit to the
+   * pass - it does NOT finish the CommandEncoder or submit to the
    * queue. The caller (typically `RendererGeode`) owns the lifetime of
    * the shared encoder and is responsible for calling
    * `sharedCommandEncoder.finish()` + `queue.submit()` exactly once at
    * the end of the frame.
    *
    * Enables push/pop of isolated layers / filter layers / mask layers
-   * without forcing a queue submit per layer boundary — the whole
+   * without forcing a queue submit per layer boundary - the whole
    * frame's render passes batch into a single command buffer.
    */
   GeoEncoder(GeodeDevice& device, const GeodePipeline& fillPipeline,
@@ -184,7 +184,7 @@ public:
   /**
    * Clear the target texture to the given color.
    *
-   * Must be called before any draw calls — clear is implemented as the load
+   * Must be called before any draw calls - clear is implemented as the load
    * op of the first render pass, so calling it after a draw is a no-op.
    * Subsequent calls override the previous clear color.
    */
@@ -196,7 +196,7 @@ public:
    * is being reused to append draws on top of previously submitted content
    * (e.g., resuming outer-frame drawing after a nested pattern-tile pass).
    *
-   * Must be called before any draws — once a render pass is open it's too
+   * Must be called before any draws - once a render pass is open it's too
    * late to change its load op.
    */
   void setLoadPreserve();
@@ -226,7 +226,7 @@ public:
    * Activate a convex 4-vertex clip polygon (Phase 3a).
    *
    * Unlike `setScissorRect`, this clips to the exact parallelogram
-   * described by the 4 corners — used for `<symbol>` / `<svg>` /
+   * described by the 4 corners - used for `<symbol>` / `<svg>` /
    * `<use>` viewports that have a non-axis-aligned ancestor transform
    * where WebGPU's rectangular scissor can only express the AABB of
    * the transformed rect, not the true polygon. The fragment shader
@@ -284,7 +284,7 @@ public:
   /**
    * Bind `maskView` as the clip mask texture for subsequent fill /
    * gradient draws. The view must reference a 1-sample RGBA8Unorm
-   * texture the same size as the encoder's target — typically the
+   * texture the same size as the encoder's target - typically the
    * resolve texture produced by `beginMaskPass` + `endMaskPass`.
    *
    * The shader samples `.r` at the pixel center and multiplies it
@@ -300,7 +300,7 @@ public:
    * the parent's lifetime by other means.
    *
    * See the `activeClipMaskTexture` field comment (and issue #551) for
-   * the bug this addresses — without the parent keepalive, popping the
+   * the bug this addresses - without the parent keepalive, popping the
    * clip stack can free a VkImage while the encoder's
    * `createBindGroup` still references its view.
    */
@@ -313,7 +313,7 @@ public:
    * Blit an offscreen texture across the entire target with an alpha
    * multiplier. Used by `RendererGeode::popIsolatedLayer` to composite a
    * sub-layer's content back onto the outer target. The source texture
-   * must be the SAME SIZE as this encoder's target — the blit takes the
+   * must be the SAME SIZE as this encoder's target - the blit takes the
    * full texture and maps it 1:1 onto the full target. The current
    * `setTransform` does NOT affect the blit (it's a device-pixel-space
    * operation, not a model-space draw).
@@ -350,19 +350,19 @@ public:
    *
    * Both textures must be the SAME SIZE as this encoder's target
    * and already stored in premultiplied alpha. The encoder's pass
-   * must be in a `LoadOp::Clear` state — the blend shader writes the
+   * must be in a `LoadOp::Clear` state - the blend shader writes the
    * final pixel directly and relies on the render target being
    * zeroed before the draw.
    *
    * @param layer Offscreen RGBA8 layer texture (premultiplied).
    * @param dstSnapshot Frozen copy of the parent target's current
-   *   state (premultiplied) — the blend's backdrop.
+   *   state (premultiplied) - the blend's backdrop.
    * @param blendMode Value in `1..=16` matching the
    *   `donner::svg::MixBlendMode` enumeration. A value of `0`
    *   silently falls through to no-op.
    * @param opacity Group opacity in [0, 1]. Applied to the layer
    *   BEFORE the blend formula so an `opacity` + `mix-blend-mode`
-   *   combo on the same element composes correctly — the source
+   *   combo on the same element composes correctly - the source
    *   colour that enters the blend is `layer * opacity`.
    */
   void blitFullTargetBlended(const wgpu::Texture& layer, const wgpu::Texture& dstSnapshot,
@@ -374,7 +374,7 @@ public:
    * The image's straight-alpha RGBA8 pixels are uploaded to a fresh
    * `wgpu::Texture` and sampled through the image-blit pipeline. The
    * current transform is applied via the MVP matrix, and the destination
-   * rectangle is specified in local (pre-transform) coordinates — i.e.,
+   * rectangle is specified in local (pre-transform) coordinates - i.e.,
    * the transform and the rect compose the same way as any other draw
    * call against this encoder.
    *
@@ -406,11 +406,11 @@ public:
    * current transform.
    *
    * @param path The path to fill.
-   * @param color Solid fill color (NOT premultiplied — the encoder handles
+   * @param color Solid fill color (NOT premultiplied - the encoder handles
    *   premultiplication for the blend pipeline).
    * @param rule Fill rule (NonZero or EvenOdd).
    */
-  /// @param precomputedEncoded Optional M2 cache-hit payload — see
+  /// @param precomputedEncoded Optional M2 cache-hit payload - see
   ///   `GeodePathCacheComponent`. When non-null, skips encode +
   ///   counter bump.
   void fillPath(const Path& path, const css::RGBA& color, FillRule rule,
@@ -435,11 +435,11 @@ public:
    *
    * If `instanceTransforms` is empty the call is a no-op. If
    * `instanceTransforms.size() == 1` this is equivalent to a single
-   * `fillPath` with the given transform folded in — the caller can
+   * `fillPath` with the given transform folded in - the caller can
    * still prefer it when bouncing through the batcher.
    *
    * @param encoded Precomputed `EncodedPath` shared across all
-   *   instances. Required (non-null) — there's no "encode inline"
+   *   instances. Required (non-null) - there's no "encode inline"
    *   path here; the whole point is to amortize one encode across
    *   many draws.
    * @param color Solid fill color (NOT premultiplied).
@@ -455,7 +455,7 @@ public:
    * Fill a path with a linear gradient.
    *
    * Same CPU-side Slug band encoding as @ref fillPath, but the shading stage
-   * uses the linear-gradient pipeline — each pixel inside the path is colored
+   * uses the linear-gradient pipeline - each pixel inside the path is colored
    * by sampling the stop list at a per-pixel parameter `t` computed from
    * `params.gradientFromPath`, `params.startGrad`, and `params.endGrad`, then
    * folded through `params.spreadMode`.
@@ -508,7 +508,7 @@ public:
     Vector2d tileSize;
     /// Transform from path space (where the path being filled lives) to
     /// pattern tile space. Typically `inverse(targetFromPattern)` composed
-    /// with the current encoder transform — the RendererGeode layer builds
+    /// with the current encoder transform - the RendererGeode layer builds
     /// the right composition.
     Transform2d patternFromPath;
     /// Multiplicative alpha applied to the sampled tile color. Usually

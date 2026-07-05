@@ -16,7 +16,7 @@ namespace donner::svg::components {
 
 namespace {
 
-/// Parse a whitespace/comma separated list of lengths (units optional — bare numbers are user
+/// Parse a whitespace/comma separated list of lengths (units optional - bare numbers are user
 /// units), matching the XML parse path's `ParseLengthAttribute` + `ListParser` semantics.
 std::optional<SmallVector<Lengthd, 1>> ParseLengthList(std::string_view value) {
   using donner::parser::LengthParser;

@@ -11,7 +11,7 @@ namespace {
 // DeleteElement commands. Elements can only be produced via public donner
 // APIs (`querySelector`, tree traversal) so each test parses a trivial
 // SVG and references its `<rect>` children by id. This reflects the way
-// real callers build commands in the editor — via hit-test results and
+// real callers build commands in the editor - via hit-test results and
 // source-pane queries, never via raw entity ids.
 
 constexpr std::string_view kThreeRectsSvg =
@@ -90,7 +90,7 @@ TEST_F(CommandQueueTest, MultipleSetTransformsForSameEntityCollapse) {
 
 TEST_F(CommandQueueTest, CoalescingPreservesPerEntityOrderForDistinctEntities) {
   CommandQueue queue;
-  // A, B, A, B — should collapse to two effective entries, A then B in
+  // A, B, A, B - should collapse to two effective entries, A then B in
   // their first-seen order.
   queue.push(EditorCommand::SetTransformCommand(*a, MakeTranslation(1.0, 0.0)));
   queue.push(EditorCommand::SetTransformCommand(*b, MakeTranslation(2.0, 0.0)));

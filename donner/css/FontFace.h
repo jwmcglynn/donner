@@ -10,7 +10,7 @@
 
 namespace donner::css {
 
-/// A single entry listed in `src:`—either a local face, a URL, or inline data.
+/// A single entry listed in `src:`-either a local face, a URL, or inline data.
 struct FontFaceSource {
   /**
    * Specifies the source type for a font face declaration.

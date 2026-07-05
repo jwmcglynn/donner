@@ -934,7 +934,7 @@ private:
 private:
   // Thin wrappers around `stream_`. These preserve the call-site grammar the
   // selector parser was written against while routing all cursor state through
-  // the shared `ComponentValueStream` abstraction — the goal is that any
+  // the shared `ComponentValueStream` abstraction - the goal is that any
   // cursor/peek/advance bookkeeping lives in exactly one place (the stream)
   // and not re-implemented per subparser via span arithmetic.
   bool isEOF() const { return stream_.isEOF(); }

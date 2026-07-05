@@ -293,7 +293,7 @@ TEST(PreserveAspectRatio, EqualityOperator) {
                                  PreserveAspectRatio::MeetOrSlice::Slice};
   EXPECT_NE(par1, par4);
 
-  // “None()” vs. explicit “none” => should be equal.
+  // "None()" vs. explicit "none" => should be equal.
   auto none1 = PreserveAspectRatio::None();
   PreserveAspectRatio none2{PreserveAspectRatio::Align::None,
                             PreserveAspectRatio::MeetOrSlice::Meet};

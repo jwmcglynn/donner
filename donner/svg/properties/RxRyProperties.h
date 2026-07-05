@@ -23,7 +23,7 @@ namespace donner::svg {
  * Percentages resolve against the axis of the property they belong to: `rx` against the viewport
  * width (\ref Lengthd::Extent::X) and `ry` against the viewport height (\ref Lengthd::Extent::Y).
  * The "auto" fallback uses the *other* property's value, which must resolve against the *other*
- * axis — so the primary and fallback extents are distinct.
+ * axis - so the primary and fallback extents are distinct.
  *
  * @param property The property to compute, the storage for either `rx` or `ry`.
  * @param fallbackProperty The other property to use if the first one is "auto".

@@ -50,13 +50,13 @@ struct MenuBarActions {
   bool convertTextToOutlines = false;
   /// Text Select-All in the source/XML pane (fires when the source pane owns keyboard focus).
   bool selectAll = false;
-  /// Canvas Select-All — selects every selectable element (fires when the source pane is not
+  /// Canvas Select-All - selects every selectable element (fires when the source pane is not
   /// focused).
   bool selectAllCanvas = false;
-  /// Text Deselect in the source/XML pane — collapses the text selection to the caret (fires when
+  /// Text Deselect in the source/XML pane - collapses the text selection to the caret (fires when
   /// the source pane owns keyboard focus).
   bool deselectAll = false;
-  /// Canvas Deselect-All — clears the canvas selection (fires when the source pane is not focused).
+  /// Canvas Deselect-All - clears the canvas selection (fires when the source pane is not focused).
   bool deselectAllCanvas = false;
   bool zoomIn = false;
   bool zoomOut = false;

@@ -158,7 +158,7 @@ TEST_F(SelectToolTest, ElementInLockedGroupCannotBeSelected) {
   EXPECT_FALSE(app.hasSelection()) << "a child of a locked group must not be selectable";
   ASSERT_TRUE(tool.lockedRejectionFlash().has_value());
   // The flash targets the entire locked layer (the `<g>` that carries the lock
-  // marker), not the clicked leaf — so the overlay outline and the Layers-panel
+  // marker), not the clicked leaf - so the overlay outline and the Layers-panel
   // row both highlight the whole group.
   EXPECT_EQ(tool.lockedRejectionFlash()->element.id(), "grp")
       << "clicking a leaf inside a locked group must flash the locked group, not the leaf";
@@ -227,7 +227,7 @@ TEST_F(SelectToolTest, ClickOnDifferentElementSwitchesSelection) {
 
 // Pins the elevation contract: clicking inside a `<g filter>` selects
 // the filter group itself, NOT the clicked leaf path. Sibling layers are
-// NOT swept into the selection — auto-expansion to composite peers was
+// NOT swept into the selection - auto-expansion to composite peers was
 // explicitly vetoed (issue #582 follow-up): if a document author wants
 // siblings to move together they wrap them in a `<g>`; the editor
 // respects the DOM and doesn't guess.
@@ -246,7 +246,7 @@ TEST_F(SelectToolTest, ClickInsideFilterGroupSelectsTheGroupNotSiblings) {
   EXPECT_DOUBLE_EQ(transformOf("#anchor").data[4], 30.0);
   EXPECT_DOUBLE_EQ(transformOf("#anchor").data[5], 30.0);
   EXPECT_DOUBLE_EQ(transformOf("#peer_contained").data[4], 0.0)
-      << "contained sibling stays put — no auto-expansion";
+      << "contained sibling stays put - no auto-expansion";
   EXPECT_DOUBLE_EQ(transformOf("#peer_contained").data[5], 0.0);
   EXPECT_DOUBLE_EQ(transformOf("#peer_excluded").data[4], 0.0);
   EXPECT_DOUBLE_EQ(transformOf("#peer_excluded").data[5], 0.0);
@@ -259,7 +259,7 @@ TEST_F(SelectToolTest, NonCompositingGroupSelectsLeafNotGroup) {
 
   ASSERT_EQ(app.selectedElements().size(), 1u);
   EXPECT_EQ(app.selectedElements()[0].id(), "plain_leaf")
-      << "plain `<g>` is not a compositing object — select the leaf path";
+      << "plain `<g>` is not a compositing object - select the leaf path";
 
   drag(Vector2d(12.0, 20.0), Vector2d(32.0, 40.0));
   ASSERT_TRUE(app.flushFrame());
@@ -293,7 +293,7 @@ TEST_F(SelectToolTest, DragPreviewTracksLatestDeltaBeforeMouseUp) {
   ASSERT_TRUE(tool.activeDragPreview().has_value());
   EXPECT_DOUBLE_EQ(tool.activeDragPreview()->translation.x, 35.0);
   EXPECT_DOUBLE_EQ(tool.activeDragPreview()->translation.y, 20.0);
-  // DOM is source of truth during drag — `onMouseMove` queues a
+  // DOM is source of truth during drag - `onMouseMove` queues a
   // `SetTransformCommand` on every move even on the composited path.
   // The compositor's fast path detects the pure-translation delta and
   // reuses the cached drag-layer bitmap via its internal composition
@@ -325,7 +325,7 @@ TEST_F(SelectToolTest, MoveWithoutButtonHeldIsHover) {
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
   tool.onMouseUp(app, Vector2d(15.0, 15.0));
 
-  // Hover after the drag — should NOT translate the element.
+  // Hover after the drag - should NOT translate the element.
   tool.onMouseMove(app, Vector2d(50.0, 50.0), /*buttonHeld=*/false);
 
   EXPECT_EQ(app.document().queue().size(), 0u);
@@ -333,7 +333,7 @@ TEST_F(SelectToolTest, MoveWithoutButtonHeldIsHover) {
 }
 
 TEST_F(SelectToolTest, MoveWithoutDownIsIgnored) {
-  // Mouse move with button held but no preceding mouse-down — could happen
+  // Mouse move with button held but no preceding mouse-down - could happen
   // if the user starts dragging from outside the viewport. Should not
   // crash and should not produce any commands.
   tool.onMouseMove(app, Vector2d(50.0, 50.0), /*buttonHeld=*/true);
@@ -398,7 +398,7 @@ TEST_F(SelectToolTest, UndoOfUndoReappliesTheDrag) {
   ASSERT_TRUE(app.flushFrame());
   EXPECT_DOUBLE_EQ(transformOf("#r1").data[4], 0.0);
 
-  // Break the chain and undo again — should re-apply the drag delta.
+  // Break the chain and undo again - should re-apply the drag delta.
   app.undoTimeline().breakUndoChain();
   app.undo();
   ASSERT_TRUE(app.flushFrame());
@@ -444,7 +444,7 @@ TEST_F(SelectToolTest, UndoRedoCyclesStayConsistent) {
   drag(Vector2d(15.0, 15.0), Vector2d(40.0, 35.0));
   ASSERT_TRUE(app.flushFrame());
 
-  // Three undo/redo cycles — each pair should leave the element at its
+  // Three undo/redo cycles - each pair should leave the element at its
   // post-drag position.
   for (int i = 0; i < 3; ++i) {
     app.undo();
@@ -502,7 +502,7 @@ TEST_F(SelectToolTest, TwoDifferentDragsBothUndoableInOrder) {
 }
 
 // ---------------------------------------------------------------------------
-// Multi-select (shift+click) and marquee selection — Milestone 4.
+// Multi-select (shift+click) and marquee selection - Milestone 4.
 // ---------------------------------------------------------------------------
 
 TEST_F(SelectToolTest, ShiftClickAddsElementsToSelection) {
@@ -537,7 +537,7 @@ TEST_F(SelectToolTest, ShiftClickDoesNotStartDrag) {
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
   tool.onMouseUp(app, Vector2d(15.0, 15.0));
 
-  // Shift+click on r2: should toggle r2 in, but NOT start a drag —
+  // Shift+click on r2: should toggle r2 in, but NOT start a drag -
   // even if the cursor moves before the next mouseup, the element
   // shouldn't translate.
   MouseModifiers shift;
@@ -708,7 +708,7 @@ TEST_F(SelectToolTest, MarqueeGrowsToCoverDraggedRect) {
 }
 
 TEST_F(SelectToolTest, MarqueeNormalizesUpwardDrag) {
-  // Drag *up and left* — marquee should still produce a normalized
+  // Drag *up and left* - marquee should still produce a normalized
   // rect with topLeft having the smaller coordinates.
   tool.onMouseDown(app, Vector2d(150.0, 150.0), MouseModifiers{});
   tool.onMouseMove(app, Vector2d(60.0, 60.0), /*buttonHeld=*/true);
@@ -848,7 +848,7 @@ TEST_F(SelectToolTest, MultiSelectDragMovesAllSelectedElements) {
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
   ASSERT_TRUE(tool.isDragging()) << "click on selected element starts a drag";
   EXPECT_EQ(app.selectedElements().size(), 2u)
-      << "selection preserved — clicking an already-selected element does not collapse";
+      << "selection preserved - clicking an already-selected element does not collapse";
   const auto moveGestureBeforeMove = tool.activeGesturePreview();
   ASSERT_TRUE(moveGestureBeforeMove.has_value());
   EXPECT_EQ(moveGestureBeforeMove->kind, SelectTool::ActiveGestureKind::Move);
@@ -876,7 +876,7 @@ TEST_F(SelectToolTest, ClickOnUnselectedElementCollapsesMultiSelection) {
   app.setSelection(std::vector<svg::SVGElement>{elementById("#r1"), elementById("#r2")});
   ASSERT_EQ(app.selectedElements().size(), 2u);
 
-  // Click on r1 — already in selection — the "grab any, move all" case:
+  // Click on r1 - already in selection - the "grab any, move all" case:
   // selection preserved.
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
   EXPECT_EQ(app.selectedElements().size(), 2u);
@@ -1039,7 +1039,7 @@ TEST_F(SelectToolTest, SingleSelectDragWithCompositingUsesPreview) {
 // Prior to the guard landing here, the drag state held a copy of the
 // element handle taken at mouse-down, so subsequent drag frames kept
 // mutating that element's `transform` attribute even though the app
-// no longer considered it selected — users would see the drag
+// no longer considered it selected - users would see the drag
 // continue on a ghost, and the writeback at mouse-up would still fire
 // against that element, producing a stray undo entry they couldn't
 // correlate to any visible selection on screen.
@@ -1065,7 +1065,7 @@ TEST_F(SelectToolTest, SelectionClearedDuringDragDoesNotCrashOrGhostWriteback) {
 
   // The tool keeps dragging the originally-grabbed element (behavior is
   // "a drag in flight owns its target, independent of the app-level
-  // selection") — that's fine as long as the write survives and
+  // selection") - that's fine as long as the write survives and
   // produces at most ONE undo entry (from this drag's mouseUp commit),
   // not a garbage series tied to the cleared-then-restored selection.
   EXPECT_LE(app.undoTimeline().entryCount(), 1u)
@@ -1083,7 +1083,7 @@ TEST_F(SelectToolTest, SelectionClearedDuringDragDoesNotCrashOrGhostWriteback) {
 // Verifies the drag state machine against a concurrent canvas-size
 // change: the user starts dragging, the window resizes (an ImGui
 // layout pass reshapes the render pane), the drag continues, and
-// finally completes. The drag must remain robust — cursor positions
+// finally completes. The drag must remain robust - cursor positions
 // the editor passes in are already in document space (viewport
 // conversion happens upstream in `RenderPanePresenter`), so the drag
 // state itself should be unaffected by the resize. The test locks in
@@ -1104,7 +1104,7 @@ TEST_F(SelectToolTest, CanvasResizeMidDragDoesNotDisturbFinalTransform) {
   app.document().document().setCanvasSize(400, 400);
 
   // Continue the drag at the new canvas size. Same document-space
-  // positions — because the caller (RenderPanePresenter) already
+  // positions - because the caller (RenderPanePresenter) already
   // projects screen coords → doc coords, and the test feeds doc coords
   // directly.
   tool.onMouseMove(app, Vector2d(45.0, 45.0), /*buttonHeld=*/true);
@@ -1123,7 +1123,7 @@ TEST_F(SelectToolTest, CanvasResizeMidDragDoesNotDisturbFinalTransform) {
   EXPECT_NEAR(translation.y, 40.0, 0.01) << "drag delta corrupted by mid-drag canvas resize";
 }
 
-// Design doc 0033 §M8 — re-drag-of-selected fast path. `tryStartRedragOn
+// Design doc 0033 §M8 - re-drag-of-selected fast path. `tryStartRedragOn
 // Selected` doesn't call `EditorApp::hitTest`; it works off
 // `SnapshotSelectionWorldBounds` of the currently-selected element.
 // EditorShell drops the `!isBusy()` gate for this path so the user
@@ -1138,7 +1138,7 @@ TEST_F(SelectToolTest, TryRedragOnSelectedStartsDragWhenClickIsInsideSelectedBou
   // snapshot-safe re-drag path must start a drag without changing
   // the selection. Pass freshly-snapshotted bounds the way the
   // EditorShell does (in the real flow the bounds come from
-  // `SelectionBoundsCache::displayedBoundsDoc` — race-free even if
+  // `SelectionBoundsCache::displayedBoundsDoc` - race-free even if
   // the worker is currently rendering).
   const auto bounds =
       SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(app.selectedElements()));
@@ -1186,7 +1186,7 @@ TEST_F(SelectToolTest, TryRedragOnSelectedReturnsFalseOnShiftClick) {
   shift.shift = true;
   const auto bounds =
       SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(app.selectedElements()));
-  // Shift-click must NOT start a re-drag — it toggles selection
+  // Shift-click must NOT start a re-drag - it toggles selection
   // membership, which requires the full hitTest path.
   EXPECT_FALSE(tool.tryStartRedragOnSelected(app, Vector2d(20.0, 20.0), shift, bounds));
   EXPECT_FALSE(tool.isDragging());
@@ -1215,7 +1215,7 @@ TEST_F(SelectToolTest, TryRedragOnSelectedReturnsFalseWhenClickIsOutsideSelected
 }
 
 // Design doc 0033 §M8: the cache-based fast path must work with
-// pre-snapshotted bounds — the EditorShell drops the `!isBusy()`
+// pre-snapshotted bounds - the EditorShell drops the `!isBusy()`
 // gate for it, so a live `SnapshotSelectionWorldBounds` call would
 // race the worker. Passing an empty bounds span (e.g. when the
 // bounds cache hasn't been refreshed since selection changed) must
@@ -1225,14 +1225,14 @@ TEST_F(SelectToolTest, TryRedragOnSelectedReturnsFalseOnEmptyCachedBounds) {
   tool.onMouseUp(app, Vector2d(15.0, 15.0));
   ASSERT_TRUE(selectionIs("#r1"));
 
-  // Empty bounds span — the EditorShell hits this when the cache's
+  // Empty bounds span - the EditorShell hits this when the cache's
   // `lastSelection` doesn't match the current selection (cache stale).
   EXPECT_FALSE(tool.tryStartRedragOnSelected(app, Vector2d(20.0, 20.0), MouseModifiers{},
                                              std::span<const Box2d>{}));
   EXPECT_FALSE(tool.isDragging());
 }
 
-// The re-drag fast path is reachable from a plain `onMouseDown` too —
+// The re-drag fast path is reachable from a plain `onMouseDown` too -
 // `SnapshotSelectionWorldBounds` returns the geometric bbox of the
 // selection (no filter expansion), so any click inside that bbox is
 // served by the no-hitTest path. This lets the user re-grab a

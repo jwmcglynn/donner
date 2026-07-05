@@ -11,14 +11,14 @@ namespace donner::svg::compositor {
  * Per-call policy for `LayerResolver::resolve()`. Lets the caller disable
  * specific hint sources without mutating the registry. Disabled-source hints
  * are still collected into the candidate list (for stats) but their
- * contribution to the weight sum is zeroed — so an entity whose only hint
+ * contribution to the weight sum is zeroed - so an entity whose only hint
  * is from a disabled source ends up at layer 0 (root).
  */
 struct ResolveOptions {
   bool enableInteractionHints = true;
   bool enableAnimationHints = true;
   bool enableComplexityBucketHints = true;
-  // Mandatory and Explicit are always honored — they represent SVG semantics
+  // Mandatory and Explicit are always honored - they represent SVG semantics
   // and the explicit escape-hatch API, not optional optimizations.
 };
 
@@ -40,7 +40,7 @@ struct LayerResolverStats {
  * `ComputedLayerAssignmentComponent` assignments, subject to a layer budget.
  *
  * Algorithm (see design doc § Layer Promotion Cascade):
- *   1. Collect candidates — entities with at least one hint.
+ *   1. Collect candidates - entities with at least one hint.
  *   2. Mandatory hints are non-contestable; they always take a layer.
  *   3. Rank remaining candidates by total weight descending, ties broken by
  *      numeric entity id ascending (deterministic; draw-order tie-breaking

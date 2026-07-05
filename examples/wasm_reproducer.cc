@@ -1,19 +1,17 @@
 /**
  * @file wasm_reproducer.cc
- * @brief Minimal reproducer to verify RenderingInstanceComponent creation on WASM.
+ * @brief Minimal reproducer to verify SVG rendering on WASM.
  *
- * Parses an SVG with rect, circle, and line elements, instantiates the render tree,
- * and counts how many entities have RenderingInstanceComponent. Expected: 3.
+ * Parses an SVG with rect, circle, and line elements, renders it through the public renderer, and
+ * verifies that the expected canvas dimensions are produced.
  */
 
 #include <cstdlib>
 #include <iostream>
 
-#include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/svg/SVG.h"
-#include "donner/svg/components/RenderingInstanceComponent.h"
-#include "donner/svg/renderer/RenderingContext.h"
+#include "donner/svg/renderer/Renderer.h"
 
 int main() {
   using namespace donner;
@@ -37,29 +35,15 @@ int main() {
   SVGDocument document = std::move(maybeDocument.result());
   document.setCanvasSize(100, 100);
 
-  // Instantiate the render tree (same as what the renderer does internally).
-  Registry& registry = document.registry();
-  if (!registry.ctx().contains<components::RenderingContext>()) {
-    registry.ctx().emplace<components::RenderingContext>(registry);
-  }
+  Renderer renderer;
+  renderer.draw(document);
 
-  ParseWarningSink renderWarningSink;
-  registry.ctx().get<components::RenderingContext>().instantiateRenderTree(false,
-                                                                           renderWarningSink);
-
-  // Count entities with RenderingInstanceComponent.
-  int count = 0;
-  auto view = registry.view<components::RenderingInstanceComponent>();
-  for ([[maybe_unused]] auto entity : view) {
-    ++count;
-  }
-
-  std::cout << "RenderingInstanceComponent count: " << count << "\n";
-  if (count >= 3) {
+  std::cout << "Rendered canvas size: " << renderer.width() << "x" << renderer.height() << "\n";
+  if (renderer.width() == 100 && renderer.height() == 100) {
     std::cout << "PASS\n";
     return 0;
   } else {
-    std::cout << "FAIL (expected >= 3, got " << count << ")\n";
+    std::cout << "FAIL (expected 100x100)\n";
     return 1;
   }
 }

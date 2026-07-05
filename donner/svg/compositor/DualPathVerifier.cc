@@ -38,7 +38,7 @@ DualPathVerifier::VerifyResult DualPathVerifier::compareBitmaps(const RendererBi
   }
 
   if (a.empty() && b.empty()) {
-    return result;  // Both empty — trivially match.
+    return result;  // Both empty - trivially match.
   }
 
   const int width = a.dimensions.x;

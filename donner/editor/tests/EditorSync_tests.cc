@@ -631,7 +631,7 @@ TEST(EditorSyncTest, StructuredSourceEditAppliesThroughXMLDocumentWithoutCommand
 TEST(EditorSyncTest, StructuredSourceEditInsertsChildElementIncrementally) {
   // Inserting a brand-new child element by typing in the source pane is a
   // *structural* edit. Per #634 ("DOM-aware typing"), it must apply through the
-  // incremental XMLDocument path — NOT a full-document ReplaceDocument — and must
+  // incremental XMLDocument path - NOT a full-document ReplaceDocument - and must
   // preserve the entity identity of the untouched sibling, so selection,
   // compositor caches, and references survive the keystroke.
   EditorApp app;
@@ -1159,7 +1159,7 @@ TEST(EditorSyncTest, SelectionClearsAndDisplayedBoundsClearWhenElementDisappears
 // Interleave of drag + source-pane edit + undo. The user:
 //   1. Drags a shape (mutates DOM directly each frame).
 //   2. The drag-release writeback fires, patching the source text.
-//   3. The user types a character in the source pane — triggers a
+//   3. The user types a character in the source pane - triggers a
 //      full reparse that destroys every entity id the undo timeline's
 //      `UndoSnapshot` references.
 //   4. User hits Cmd+Z expecting their drag to undo.
@@ -1172,11 +1172,11 @@ TEST(EditorSyncTest, SelectionClearsAndDisplayedBoundsClearWhenElementDisappears
 //
 // This test documents the invariant. If undo can't rehydrate across
 // a reparse, either the test skips with a clear explanation (known
-// gap) OR — ideally — the undo replays against a freshly-queried
+// gap) OR - ideally - the undo replays against a freshly-queried
 // element by id/path.
 TEST(EditorSyncTest, DragThenSourceEditThenUndoReplaysAgainstFreshlyParsedElement) {
   // Known gap (documented before we even start the test body, because
-  // the failing path triggers a hard EnTT assertion in `fast_mod` —
+  // the failing path triggers a hard EnTT assertion in `fast_mod` -
   // the undo snapshot holds an `SVGElement` whose `EntityHandle` points
   // into the pre-reparse registry, and any access after the reparse
   // trips the "power of two" assertion deep inside EnTT's storage.
@@ -1238,7 +1238,7 @@ TEST(EditorSyncTest, DragThenSourceEditThenUndoReplaysAgainstFreshlyParsedElemen
   ASSERT_TRUE(rectAfterUndo.has_value());
   const Transform2d finalTransform = rectAfterUndo->cast<svg::SVGGraphicsElement>().transform();
   EXPECT_TRUE(finalTransform.isIdentity())
-      << "undo after source-pane reparse failed to roll back the drag — snapshot dangled";
+      << "undo after source-pane reparse failed to roll back the drag - snapshot dangled";
 }
 
 }  // namespace

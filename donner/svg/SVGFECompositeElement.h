@@ -108,17 +108,17 @@ namespace donner::svg {
  *
  * ## What each operator means
  *
- * - **`over`** (default) — "A drawn on top of B". A wins where both exist; where only B exists,
+ * - **`over`** (default) - "A drawn on top of B". A wins where both exist; where only B exists,
  *   B shows through. This is the normal "paint on top" behavior.
- * - **`in`** — "A clipped to B's shape". A is kept **only where B is opaque**; everywhere else
+ * - **`in`** - "A clipped to B's shape". A is kept **only where B is opaque**; everywhere else
  *   is transparent. Useful for masking a texture to a shape.
- * - **`out`** — "A with B punched out". A is kept **only where B is transparent**. The inverse
- *   of `in` — useful for carving holes.
- * - **`atop`** — "A drawn on top of B, but only inside B's shape". Combines `in` (keeps the
+ * - **`out`** - "A with B punched out". A is kept **only where B is transparent**. The inverse
+ *   of `in` - useful for carving holes.
+ * - **`atop`** - "A drawn on top of B, but only inside B's shape". Combines `in` (keeps the
  *   overlap) with B showing through outside that overlap.
- * - **`xor`** — "Either A or B, but not where they overlap". The overlap region becomes
+ * - **`xor`** - "Either A or B, but not where they overlap". The overlap region becomes
  *   transparent.
- * - **`arithmetic`** — "Pixel-wise formula `k1*A*B + k2*A + k3*B + k4`". Gives you complete
+ * - **`arithmetic`** - "Pixel-wise formula `k1*A*B + k2*A + k3*B + k4`". Gives you complete
  *   control over the per-channel result. Use it for cross-dissolves (`k2=α, k3=1-α`), custom
  *   blends, or specular-style highlights.
  *
@@ -160,7 +160,7 @@ namespace donner::svg {
  * </filter>
  * ```
  *
- * The blur would normally extend outside the shape — `<feComposite operator="in">` with
+ * The blur would normally extend outside the shape - `<feComposite operator="in">` with
  * `in2="SourceAlpha"` keeps only the portion of the blur that falls *inside* the original
  * shape's silhouette, producing the inner-shadow effect.
  *

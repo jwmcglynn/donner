@@ -183,7 +183,7 @@ Path TextBackendSimple::glyphOutline(FontHandle font, int glyphIndex, float scal
 
   for (int i = 0; i < numVertices; ++i) {
     const double x = static_cast<double>(vertices[i].x) * scale;
-    // stb_truetype Y is up, SVG Y is down — flip.
+    // stb_truetype Y is up, SVG Y is down - flip.
     const double y = -static_cast<double>(vertices[i].y) * scale;
 
     switch (vertices[i].type) {

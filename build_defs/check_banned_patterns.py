@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Check C++ source files for banned language patterns documented in
+Check source files for banned language patterns documented in
 docs/coding_style.md "Language and Library Features".
 
 Catches escapes like PR #415 where a `long long` template specialization
@@ -13,6 +13,8 @@ Rules enforced:
   - No `std::aligned_union`: same reason
   - No user-defined literal operators (operator"" _foo): use named helpers
   - No `XMLQualifiedNameRef` / `RcStringOrRef` return types: return owning values instead
+    These C++-specific rules apply to C++/ObjC++ source files.
+  - No typographic hyphens/dashes, smart quotes, or hidden Unicode whitespace
   - No imgui / GLFW / Tracy headers outside `donner/editor/**` (path-scoped)
   - No ImGui `AddImageQuad`: present document textures through direct framebuffer composition
   - No direct TreeComponent structural mutation outside approved low-level code
@@ -27,8 +29,9 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import unicodedata
 from pathlib import Path
-from typing import List, NamedTuple, Tuple
+from typing import Dict, List, NamedTuple, Tuple
 
 
 class _Rule(NamedTuple):
@@ -45,7 +48,7 @@ _RULES: List[_Rule] = [
         pattern=re.compile(r"\blong\s+long\b"),
         description="`long long` type",
         remediation=(
-            "Use std::int64_t / std::uint64_t (width-portable) — int64_t is long long on macOS "
+            "Use std::int64_t / std::uint64_t (width-portable) - int64_t is long long on macOS "
             "but long on Linux, causing template specialization collisions (see PR #415)."
         ),
     ),
@@ -53,14 +56,14 @@ _RULES: List[_Rule] = [
         pattern=re.compile(r"\bstd::aligned_storage\b"),
         description="std::aligned_storage",
         remediation=(
-            "Use `alignas(T) std::byte buffer[N * sizeof(T)]` instead — aligned_storage is "
+            "Use `alignas(T) std::byte buffer[N * sizeof(T)]` instead - aligned_storage is "
             "deprecated in C++23."
         ),
     ),
     _Rule(
         pattern=re.compile(r"\bstd::aligned_union\b"),
         description="std::aligned_union",
-        remediation="Use `alignas` on a byte buffer instead — aligned_union is deprecated in C++23.",
+        remediation="Use `alignas` on a byte buffer instead - aligned_union is deprecated in C++23.",
     ),
     _Rule(
         pattern=re.compile(r"\boperator\s*\"\"\s*_[A-Za-z_][A-Za-z0-9_]*"),
@@ -81,7 +84,7 @@ _RULES: List[_Rule] = [
         # `examples/svg_viewer` covers the canonical //examples:svg_viewer
         # demo binary that wires the editor TextEditor + AsyncSVGDocument
         # together for live demos. `examples/geode_embed` is the Geode
-        # embedding reference app — Phase 6 — whose GLFW window demonstrates
+        # embedding reference app - Phase 6 - whose GLFW window demonstrates
         # how a host integrates wgpu-native + Geode. New non-editor consumers
         # of these headers must add an explicit exemption (and a justification).
         exempt_path_prefixes=(
@@ -122,18 +125,18 @@ _RULES: List[_Rule] = [
         description="wgpu pipeline construction outside GeodeDevice",
         remediation=(
             "wgpu-native retains every `wgpu::RenderPipeline` / `wgpu::ComputePipeline` it "
-            "ever constructs internally — `wgpuDevicePoll(wait=true)` does NOT drain the "
+            "ever constructs internally - `wgpuDevicePoll(wait=true)` does NOT drain the "
             "pending-destroy queue for pipelines. Constructing pipelines per-frame or "
             "per-renderer leaks ~100 KB each until the driver's `maxMemoryAllocationCount` "
             "trips (Mesa lavapipe) or the process hangs (Mesa llvmpipe). See issue #575.\n"
             "    Allowed sites: GeodePipeline.cc, GeodeImagePipeline.cc, GeodeFilterEngine.cc. "
             "All pipelines must be owned by `GeodeDevice` so every renderer that shares the "
             "device reuses them. If you need a new pipeline class, add ownership to "
-            "`GeodeDevice::Impl` and expose it via a `GeodeDevice` accessor — do not call "
+            "`GeodeDevice::Impl` and expose it via a `GeodeDevice` accessor - do not call "
             "`createRenderPipeline` / `createComputePipeline` from anywhere else."
         ),
         # These are the only files that legitimately call the wgpu pipeline
-        # constructors — they are the pipeline *classes* themselves, owned
+        # constructors - they are the pipeline *classes* themselves, owned
         # end-to-end by GeodeDevice. GeoEncoder_tests / GeodeShaders_tests
         # construct test fixtures that compile pipelines for shader-only
         # validation; they're exempt because the test binary's wgpu::Device
@@ -170,6 +173,86 @@ _RULES: List[_Rule] = [
 ]
 
 
+class _BannedCharacter(NamedTuple):
+    character: str
+    description: str
+    remediation: str
+
+
+_BANNED_CHARACTERS: List[_BannedCharacter] = [
+    _BannedCharacter(
+        "\u00ad",
+        "soft hyphen",
+        "Use ASCII '-' in source text; spell intentional Unicode as an escaped code point.",
+    ),
+    _BannedCharacter(
+        "\u2010",
+        "typographic hyphen",
+        "Use ASCII '-' in source text; spell intentional Unicode as an escaped code point.",
+    ),
+    _BannedCharacter(
+        "\u2011",
+        "non-breaking hyphen",
+        "Use ASCII '-' in source text; spell intentional Unicode as an escaped code point.",
+    ),
+    _BannedCharacter(
+        "\u2012",
+        "figure dash",
+        "Use ASCII '-' in source text; spell intentional Unicode as an escaped code point.",
+    ),
+    _BannedCharacter(
+        "\u2013",
+        "en dash",
+        "Use ASCII '-' in source text; spell intentional Unicode as an escaped code point.",
+    ),
+    _BannedCharacter(
+        "\u2014",
+        "em dash",
+        "Use ASCII '-' in source text; spell intentional Unicode as an escaped code point.",
+    ),
+]
+
+_BANNED_CHARACTERS += [
+    _BannedCharacter(
+        chr(codepoint),
+        "smart quote",
+        "Use ASCII quotes in source text; spell intentional Unicode as an escaped code point.",
+    )
+    for codepoint in range(0x2018, 0x2020)
+]
+
+_HIDDEN_WHITESPACE_CODEPOINTS = (
+    0x00A0,  # NO-BREAK SPACE
+    0x1680,  # OGHAM SPACE MARK
+    0x180E,  # MONGOLIAN VOWEL SEPARATOR
+    *range(0x2000, 0x2010),
+    0x2028,  # LINE SEPARATOR
+    0x2029,  # PARAGRAPH SEPARATOR
+    0x202F,  # NARROW NO-BREAK SPACE
+    0x205F,  # MEDIUM MATHEMATICAL SPACE
+    0x2060,  # WORD JOINER
+    0x3000,  # IDEOGRAPHIC SPACE
+    0xFEFF,  # ZERO WIDTH NO-BREAK SPACE
+)
+
+_BANNED_CHARACTERS += [
+    _BannedCharacter(
+        chr(codepoint),
+        "hidden Unicode whitespace",
+        "Use ASCII space/tab/newline in source text; spell intentional Unicode as an escaped "
+        "code point.",
+    )
+    for codepoint in _HIDDEN_WHITESPACE_CODEPOINTS
+]
+
+_BANNED_CHARACTER_BY_CHAR: Dict[str, _BannedCharacter] = {
+    character.character: character for character in _BANNED_CHARACTERS
+}
+_BANNED_CHARACTER_RE = re.compile(
+    "[" + "".join(re.escape(character) for character in _BANNED_CHARACTER_BY_CHAR) + "]"
+)
+
+
 _INCLUDE_LINE_RE = re.compile(r"^\s*#\s*include\b")
 _STRING_LITERAL_RE = re.compile(r'"(?:\\.|[^"\\])*"')
 
@@ -178,7 +261,7 @@ def _strip_comments_and_strings(text: str) -> str:
     """Remove comments and string literals but preserve line counts.
 
     `#include "..."` directives are preserved verbatim so include-path rules
-    can match against the filename — otherwise the quoted include path would
+    can match against the filename - otherwise the quoted include path would
     be stripped to `""` along with every other string literal.
     """
     # Line comments: replace text after // with spaces, keep newlines
@@ -197,6 +280,41 @@ def _strip_comments_and_strings(text: str) -> str:
 
 
 _NOLINT_RE = re.compile(r"//\s*NOLINT\(banned_patterns(?::[^)]*)?\)")
+_CPP_EXTS = {".cc", ".cpp", ".h", ".hpp", ".mm"}
+_SOURCE_EXTS = _CPP_EXTS | {".bzl", ".css", ".html", ".js", ".py", ".sh", ".ts", ".tsx"}
+
+
+def _is_suppressed(raw_lines: List[str], line: int) -> bool:
+    # Check the match line and up to 2 lines after for a NOLINT marker
+    # (clang-format may wrap the signature onto multiple lines).
+    for offset in (0, 1, 2):
+        idx = line - 1 + offset
+        if 0 <= idx < len(raw_lines) and _NOLINT_RE.search(raw_lines[idx]):
+            return True
+    return False
+
+
+def _format_codepoint(character: str) -> str:
+    return f"U+{ord(character):04X} {unicodedata.name(character, 'UNKNOWN')}"
+
+
+def _check_banned_characters(raw: str, raw_lines: List[str]) -> List[Tuple[int, str, str]]:
+    """Check raw source text for banned typographic or hidden Unicode characters."""
+    errors: List[Tuple[int, str, str]] = []
+    for match in _BANNED_CHARACTER_RE.finditer(raw):
+        line = raw.count("\n", 0, match.start()) + 1
+        if _is_suppressed(raw_lines, line):
+            continue
+        banned_character = _BANNED_CHARACTER_BY_CHAR[match.group(0)]
+        errors.append(
+            (
+                line,
+                f"{banned_character.description} ({_format_codepoint(banned_character.character)})",
+                banned_character.remediation,
+            )
+        )
+
+    return errors
 
 _REF_RETURN_RE = re.compile(
     r"""
@@ -260,13 +378,7 @@ def _check_ref_return_types(
             continue
 
         line = stripped.count("\n", 0, m.start()) + 1
-        suppressed = False
-        for offset in (0, 1, 2):
-            idx = line - 1 + offset
-            if 0 <= idx < len(raw_lines) and _NOLINT_RE.search(raw_lines[idx]):
-                suppressed = True
-                break
-        if suppressed:
+        if _is_suppressed(raw_lines, line):
             continue
 
         errors.append(
@@ -291,29 +403,24 @@ def check_file(path: Path) -> List[Tuple[int, str, str]]:
     are exempted.
     """
     try:
-        raw = path.read_text()
+        raw = path.read_text(encoding="utf-8")
     except (UnicodeDecodeError, IOError):
         return []
 
     raw_lines = raw.splitlines()
+    errors = _check_banned_characters(raw, raw_lines)
+    if path.suffix not in _CPP_EXTS:
+        return sorted(errors)
+
     stripped = _strip_comments_and_strings(raw)
     posix_path = path.as_posix()
 
-    errors: List[Tuple[int, str, str]] = []
     for rule in _RULES:
         if any(prefix in posix_path for prefix in rule.exempt_path_prefixes):
             continue
         for m in rule.pattern.finditer(stripped):
             line = stripped.count("\n", 0, m.start()) + 1
-            # Check the match line and up to 2 lines after for a NOLINT marker
-            # (clang-format may wrap the signature onto multiple lines).
-            suppressed = False
-            for offset in (0, 1, 2):
-                idx = line - 1 + offset
-                if 0 <= idx < len(raw_lines) and _NOLINT_RE.search(raw_lines[idx]):
-                    suppressed = True
-                    break
-            if suppressed:
+            if _is_suppressed(raw_lines, line):
                 continue
             errors.append((line, rule.description, rule.remediation))
 
@@ -323,16 +430,15 @@ def check_file(path: Path) -> List[Tuple[int, str, str]]:
 
 
 def _iter_source_files(paths: List[Path]) -> List[Path]:
-    exts = {".cc", ".h", ".hpp", ".cpp"}
     exclude_prefixes = ("third_party/", "bazel-", ".git/")
     result: List[Path] = []
     for p in paths:
         if p.is_file():
-            if p.suffix in exts:
+            if p.suffix in _SOURCE_EXTS:
                 result.append(p)
         elif p.is_dir():
             for sub in p.rglob("*"):
-                if sub.suffix not in exts:
+                if sub.suffix not in _SOURCE_EXTS:
                     continue
                 rel = sub.as_posix()
                 if any(rel.startswith(ex) or f"/{ex}" in rel for ex in exclude_prefixes):

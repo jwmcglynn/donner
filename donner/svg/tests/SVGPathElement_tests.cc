@@ -123,8 +123,8 @@ TEST(SVGPathElementTests, SetAttributeDInvalidatesComputedSpline) {
                   ElementsAre(Vector2d(0, 0), Vector2d(3, 4)),
                   ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1})));
 
-  // Setting "d" through the generic attribute path — the same route the editor's
-  // structured-editing commands use — must invalidate the cached computed spline,
+  // Setting "d" through the generic attribute path - the same route the editor's
+  // structured-editing commands use - must invalidate the cached computed spline,
   // matching setD(). A stale spline here is what made editor overlay chrome lag one
   // gesture behind the live path.
   fragment->setAttribute("d", "M 1 1 L 2 2");

@@ -64,7 +64,7 @@ void logLimitHits(const ParseResult<XMLDocument>& result) {
 
 /// Drive `GetAttributeLocation` with an arbitrary offset + attribute name
 /// derived from the fuzz input. This exercises the "editor calls with a
-/// stale offset" path — historically the inner helper was gated by
+/// stale offset" path - historically the inner helper was gated by
 /// `UTILS_RELEASE_ASSERT`s that would abort on malformed input; now it
 /// must return `std::nullopt` cleanly and cannot crash or read out of
 /// bounds regardless of the offset we pass.
@@ -74,7 +74,7 @@ void fuzzGetAttributeLocation(std::string_view source, const uint8_t* data, size
   }
 
   // Derive an arbitrary offset from the first byte (wrapped into [0, size]
-  // range — the function must accept out-of-range offsets too, but we
+  // range - the function must accept out-of-range offsets too, but we
   // want most runs to land somewhere plausible).
   const std::size_t rawOffset = data[0];
   const std::size_t offset = rawOffset % (source.size() + 1);
@@ -97,7 +97,7 @@ void fuzzGetAttributeLocation(std::string_view source, const uint8_t* data, size
   }
 
   const XMLQualifiedNameRef attrName(name);
-  // Result deliberately ignored — the contract is "no crash, no OOB
+  // Result deliberately ignored - the contract is "no crash, no OOB
   // read" regardless of the input shape.
   (void)XMLParser::GetAttributeLocation(source, fileOffset, attrName);
 
@@ -126,7 +126,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     logLimitHits(XMLParser::Parse(str, options));
   }
 
-  // Exercise GetAttributeLocation — M−1 prerequisite for structured
+  // Exercise GetAttributeLocation - M−1 prerequisite for structured
   // editing. The inner helper previously release-asserted on malformed
   // input; this arm of the fuzzer is the regression net for that fix.
   fuzzGetAttributeLocation(str, data, size);

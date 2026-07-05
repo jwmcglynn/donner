@@ -12,7 +12,7 @@ namespace donner::svg {
  * `<feMergeNode>` references a named filter result via its `in` attribute, and the parent
  * `<feMerge>` layers them in document order, **bottom to top**.
  *
- * On its own, `<feMergeNode>` does nothing — it only has meaning inside a `<feMerge>`. Think
+ * On its own, `<feMergeNode>` does nothing - it only has meaning inside a `<feMerge>`. Think
  * of `<feMerge>` as an ordered list and each `<feMergeNode>` as an entry in that list pointing
  * at an earlier filter result.
  *
@@ -35,7 +35,7 @@ namespace donner::svg {
  * ## Full example: drop shadow
  *
  * The most common place you will see `<feMergeNode>` is inside a drop-shadow filter. (This
- * is the same example shown on the \ref xml_feMerge page — duplicated here so you can read
+ * is the same example shown on the \ref xml_feMerge page - duplicated here so you can read
  * either page stand-alone.)
  *
  * \htmlonly
@@ -55,9 +55,9 @@ namespace donner::svg {
  *         filter="url(#xml_feMergeNode_dropShadow)" />
  *   <text x="70" y="120" text-anchor="middle">Drop shadow</text>
  *   <text x="200" y="60" font-size="11">Node 1 (bottom):</text>
- *   <text x="200" y="76" font-size="11">  offsetBlur — the shadow</text>
+ *   <text x="200" y="76" font-size="11">  offsetBlur - the shadow</text>
  *   <text x="200" y="96" font-size="11">Node 2 (top):</text>
- *   <text x="200" y="112" font-size="11">  SourceGraphic — the shape</text>
+ *   <text x="200" y="112" font-size="11">  SourceGraphic - the shape</text>
  * </svg>
  * \endhtmlonly
  *
@@ -85,10 +85,10 @@ namespace donner::svg {
  *
  * \note Unlike most filter primitives, `<feMergeNode>` **does not** inherit the standard
  *       filter primitive attributes. It has no `x`, `y`, `width`, `height`, or `result`
- *       attribute — its sole job is to point at an existing result and contribute it as a
+ *       attribute - its sole job is to point at an existing result and contribute it as a
  *       layer to the parent `<feMerge>`.
  *
- * \see \ref xml_feMerge — the parent element. `<feMergeNode>` is only valid as a direct child
+ * \see \ref xml_feMerge - the parent element. `<feMergeNode>` is only valid as a direct child
  *      of `<feMerge>` and has no effect outside that context.
  */
 

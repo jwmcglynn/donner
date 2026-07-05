@@ -707,7 +707,7 @@ TEST_F(XMLNodeTests, SerializeToString_RoundTrip) {
   XMLNode textEl = *maybeTextEl;
   EXPECT_THAT(textEl.tagName(), Eq("text"));
 
-  // <text> → first child is a Data node with unescaped value (no block indent — text-only children)
+  // <text> → first child is a Data node with unescaped value (no block indent - text-only children)
   ASSERT_THAT(textEl.firstChild(), Ne(std::nullopt));
   XMLNode dataNode = *textEl.firstChild();
   EXPECT_EQ(dataNode.type(), XMLNode::Type::Data);

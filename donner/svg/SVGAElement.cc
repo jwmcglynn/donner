@@ -10,8 +10,8 @@ SVGAElement SVGAElement::CreateOn(EntityHandle handle) {
 
   // `<a>` is a transparent grouping element: outside of text it groups arbitrary graphics like
   // `<g>`, so it must traverse its children normally (RenderingBehavior::Default). Inside a text
-  // root the renderer never reaches it — the text layout descends through it via the
-  // TextComponent/TextPositioningComponent inherited from SVGTextPositioningElement — so it acts as
+  // root the renderer never reaches it - the text layout descends through it via the
+  // TextComponent/TextPositioningComponent inherited from SVGTextPositioningElement - so it acts as
   // a `<tspan>`-style text-content group without needing NoTraverseChildren.
 
   return SVGAElement(handle);

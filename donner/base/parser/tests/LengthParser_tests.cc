@@ -218,7 +218,7 @@ TEST(LengthParser, RangeNumberParseErrorPropagated) {
   EXPECT_THAT(LengthParser::Parse("abc"), ParseErrorRange(0, 1));
 }
 
-// Round-trip tests for Lengthd::toRcString — parse → serialize → parse
+// Round-trip tests for Lengthd::toRcString - parse → serialize → parse
 // must produce the same Lengthd, for every unit supported by the parser.
 // Locks in the contract that toRcString produces output the parser
 // accepts, which is the whole point of the serializer.

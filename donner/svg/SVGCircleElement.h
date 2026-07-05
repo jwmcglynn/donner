@@ -20,7 +20,7 @@ namespace donner::svg {
  * \ref xml_path. Like all basic shapes, circles can be filled with a solid color, a gradient, or
  * a pattern via the `fill` attribute, and outlined via `stroke`.
  *
- * Use `<circle>` whenever you need a round shape — dots, bullets, pie-chart bases, icon
+ * Use `<circle>` whenever you need a round shape - dots, bullets, pie-chart bases, icon
  * backgrounds, or decorative elements. For an oval shape with independent horizontal and vertical
  * radii, use \ref xml_ellipse instead.
  *

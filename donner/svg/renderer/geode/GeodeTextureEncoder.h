@@ -29,7 +29,7 @@ class ScopedWgpuResourceArena;
  * that tile across the target region (with `srcRect` chosen to implement
  * the `patternContentUnits` / `patternUnits` mapping).
  *
- * The class is pure helpers — no mutable state. It's a class rather than
+ * The class is pure helpers - no mutable state. It's a class rather than
  * free functions only to keep namespacing sensible.
  */
 class GeodeTextureEncoder {
@@ -113,7 +113,7 @@ public:
     /// target's frozen content for the fragment shader to read as
     /// the backdrop.
     uint32_t blendMode = 0;
-    /// Frozen snapshot of the parent render target — see
+    /// Frozen snapshot of the parent render target - see
     /// `RendererGeode::popIsolatedLayer` which copies the prior
     /// parent content into a separate texture before opening the
     /// blend blit pass. Ignored unless `blendMode != 0`.

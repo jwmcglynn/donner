@@ -8,7 +8,7 @@ namespace donner::svg {
 /**
  * @page xml_feImage "<feImage>"
  *
- * `<feImage>` imports an external image — or a fragment of the current document — into the
+ * `<feImage>` imports an external image - or a fragment of the current document - into the
  * filter graph as an additional input. It's how you use a photograph as a lighting source,
  * mask, or displacement map, or how you reuse an existing SVG element's rendering as an input
  * to another primitive like \ref xml_feDisplacementMap or \ref xml_feComposite.
@@ -47,10 +47,10 @@ namespace donner::svg {
  *   `Max` = right); the `Y*` part controls vertical alignment (`Min` = top, `Mid` = middle,
  *   `Max` = bottom).
  * - **`<meetOrSlice>`** picks the fitting mode:
- *   - **`meet`** (the default) — scale the image uniformly so it fits *entirely* inside the
+ *   - **`meet`** (the default) - scale the image uniformly so it fits *entirely* inside the
  *     destination. If aspect ratios differ, you get letterboxing (empty bars on one axis).
  *     Think "fit".
- *   - **`slice`** — scale the image uniformly so it *entirely covers* the destination.
+ *   - **`slice`** - scale the image uniformly so it *entirely covers* the destination.
  *     If aspect ratios differ, the image is cropped on one axis. Think "fill".
  * - **`none`** as the alignment value disables aspect-ratio preservation entirely: the image
  *   is stretched non-uniformly to exactly fill the destination rectangle. `<meetOrSlice>` is

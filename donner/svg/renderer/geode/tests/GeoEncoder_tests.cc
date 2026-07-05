@@ -94,7 +94,7 @@ protected:
   }
 
   /// Read back the rendered texture into a flat RGBA byte array (row-major,
-  /// no padding — `kSize * kSize * 4` bytes).
+  /// no padding - `kSize * kSize * 4` bytes).
   std::vector<uint8_t> readback() {
     // Copy texture → readback buffer.
     wgpu::CommandEncoder enc = device_->device().createCommandEncoder();
@@ -169,7 +169,7 @@ protected:
 
 // ----------------------------------------------------------------------------
 
-/// Just clear and read back — simplest end-to-end test.
+/// Just clear and read back - simplest end-to-end test.
 TEST_F(GeoEncoderTest, ClearOnly) {
   GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, msaaTarget_,
                      target_);
@@ -481,7 +481,7 @@ TEST_F(GeoEncoderTest, DrawImageFillsDestRect) {
 
 /// `opacity` should blend the image with whatever the pass already
 /// contains. Start with a black background, draw a red image at 50%
-/// opacity — the result should read back as ~(128, 0, 0, 255) over black
+/// opacity - the result should read back as ~(128, 0, 0, 255) over black
 /// with premultiplied source-over.
 TEST_F(GeoEncoderTest, DrawImageHonorsOpacity) {
   GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, msaaTarget_,
@@ -506,7 +506,7 @@ TEST_F(GeoEncoderTest, DrawImageHonorsOpacity) {
   EXPECT_EQ(center[3], 255u) << "A";
 }
 
-/// Mixing a fillPath and a drawImage in the same pass must work — after
+/// Mixing a fillPath and a drawImage in the same pass must work - after
 /// this test shipped, future refactors that forget to re-bind the Slug
 /// fill pipeline between pipeline switches will regress here.
 TEST_F(GeoEncoderTest, FillThenImageThenFill) {

@@ -8,7 +8,7 @@ namespace donner::editor {
 namespace {
 
 /// Tolerance below which `pixelsPerDocUnit()` is treated as zero
-/// (degenerate viewport — pane collapsed, zoom clamped, etc.). All
+/// (degenerate viewport - pane collapsed, zoom clamped, etc.). All
 /// transform helpers fall back to a no-op identity in this case so
 /// callers don't have to special-case it.
 constexpr double kEpsilonScale = 1e-12;
@@ -178,7 +178,7 @@ Vector2i ViewportState::desiredCanvasSize() const {
 
 void ViewportState::zoomAround(double newZoom, const Vector2d& focalScreen) {
   // Snapshot the document point currently under `focalScreen` *before*
-  // updating zoom — `screenToDocument` reads `pixelsPerDocUnit()`.
+  // updating zoom - `screenToDocument` reads `pixelsPerDocUnit()`.
   const Vector2d focalDoc = screenToDocument(focalScreen);
   zoom = std::clamp(newZoom, kMinZoom, kMaxZoom);
   // Re-anchor: the same document point is still glued to the same

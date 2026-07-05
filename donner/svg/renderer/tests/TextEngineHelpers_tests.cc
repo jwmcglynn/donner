@@ -1222,7 +1222,7 @@ TEST_F(EffectiveBaselineResolutionTest, AlignmentBaselineOverridesDominantBaseli
 
 TEST_F(EffectiveBaselineResolutionTest, AlignmentBaselineBaselineKeywordDefersToDominant) {
   // `alignment-baseline: baseline` parses to Auto, so the span's own dominant-baseline
-  // (here `hanging`, set on the tspan) applies — matching resvg and Chrome.
+  // (here `hanging`, set on the tspan) applies - matching resvg and Chrome.
   const auto spans = resolveSpans(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
       <text id="t" x="10" y="20" dominant-baseline="middle">

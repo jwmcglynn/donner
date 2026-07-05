@@ -457,7 +457,7 @@ void Renderer::drawImage(const ImageResource& image, const ImageParams& params) 
 }
 
 void Renderer::drawBitmap(const RendererBitmap& bitmap, const ImageParams& params) {
-  // Forward so the backend's zero-copy premultiplied path is reachable —
+  // Forward so the backend's zero-copy premultiplied path is reachable -
   // falling through to the base default here would convert through the
   // unpremultiplied ImageResource contract on every compositor blit.
   impl_->drawBitmap(bitmap, params);

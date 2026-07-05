@@ -334,7 +334,7 @@ private:
   std::unordered_map<std::uint64_t, CachedTextureEntry> thumbnailTextures_;
 
   /// Paint-order view of the most recent `uploadComposited` call.
-  /// Rebuilt every upload (cheap — N tiles, plain values).
+  /// Rebuilt every upload (cheap - N tiles, plain values).
   std::vector<TileView> tiles_;
   /// Paint-order view of `overviewTileTextures_`.
   std::vector<TileView> overviewTiles_;

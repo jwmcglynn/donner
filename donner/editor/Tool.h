@@ -4,7 +4,7 @@
 /// `Tool` is the abstract interface for editor pointer tools (Select,
 /// future Path, future Node-edit, etc.). Tools observe the editor state via
 /// the `EditorApp&` parameter and produce DOM mutations exclusively by
-/// calling `EditorApp::applyMutation()` — they never touch the DOM directly.
+/// calling `EditorApp::applyMutation()` - they never touch the DOM directly.
 ///
 /// Coordinates passed to tool methods are in **document space** (the same
 /// coordinate system as the SVG canvas). Coordinate translation from
@@ -23,13 +23,13 @@ class EditorApp;
 /// etc. Default-constructed = no modifiers, which keeps existing
 /// callsites that don't care about modifiers source-compatible.
 struct MouseModifiers {
-  /// Shift held — used by `SelectTool` to toggle/extend selection
+  /// Shift held - used by `SelectTool` to toggle/extend selection
   /// rather than replacing it, and by `PenTool` for 45-degree constraints.
   bool shift = false;
-  /// Option/Alt held — used by transform handles to resize from center and
+  /// Option/Alt held - used by transform handles to resize from center and
   /// by `PenTool` to break smooth-handle coupling.
   bool option = false;
-  /// Cmd (macOS) / Ctrl held — used by `PenTool` to restrict a gesture to
+  /// Cmd (macOS) / Ctrl held - used by `PenTool` to restrict a gesture to
   /// point editing (drag anchors/handles only, never place anchors).
   bool command = false;
   /// Current viewport scale used for screen-pixel-stable hit testing.
@@ -58,7 +58,7 @@ public:
                            MouseModifiers modifiers) = 0;
 
   /// Mouse moved to `documentPoint`. `buttonHeld` is true while the left
-  /// button is down — i.e., this is a drag continuation rather than a
+  /// button is down - i.e., this is a drag continuation rather than a
   /// hover.
   virtual void onMouseMove(EditorApp& editor, const Vector2d& documentPoint, bool buttonHeld) = 0;
 

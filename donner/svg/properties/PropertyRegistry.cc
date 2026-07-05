@@ -2147,7 +2147,7 @@ ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view 
     return true;
   }
 
-  // Handle 'transform' as a special case — it's stored in TransformComponent, not PropertyRegistry.
+  // Handle 'transform' as a special case - it's stored in TransformComponent, not PropertyRegistry.
   if (handle != EntityHandle() &&
       StringUtils::EqualsLowercase(name, std::string_view("transform"))) {
     auto& transform = handle.get_or_emplace<components::TransformComponent>();
@@ -2211,7 +2211,7 @@ void PropertyRegistry::resolveFontSize(double parentFontSizePx) {
       resolvedPx = fs.value * 12.0;
       break;
     default:
-      // Absolute units (px, pt, cm, etc.) — resolve with empty context.
+      // Absolute units (px, pt, cm, etc.) - resolve with empty context.
       resolvedPx = fs.toPixels(Box2d(), FontMetrics(), Lengthd::Extent::Mixed);
       break;
   }

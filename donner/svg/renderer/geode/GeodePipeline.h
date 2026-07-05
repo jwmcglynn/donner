@@ -13,17 +13,17 @@ namespace donner::geode {
  * bind group layout.
  *
  * One `GeodePipeline` instance is sufficient per `(device, render-target-format)`
- * pair — the actual data (uniforms, vertex buffers, bands, curves) varies per
+ * pair - the actual data (uniforms, vertex buffers, bands, curves) varies per
  * draw call but the pipeline state object can be reused.
  *
  * The bind group layout matches the shader in `shaders/slug_fill.wgsl`:
  * - binding 0: uniform buffer (Uniforms struct: mvp, patternFromPath, viewport,
  *   tileSize, color, fillRule, paintMode, patternOpacity)
- * - binding 1: storage buffer (read-only) — Band[]
- * - binding 2: storage buffer (read-only) — curve data (flat f32[])
- * - binding 3: pattern tile texture (2D, Float sampleType) — sampled only
+ * - binding 1: storage buffer (read-only) - Band[]
+ * - binding 2: storage buffer (read-only) - curve data (flat f32[])
+ * - binding 3: pattern tile texture (2D, Float sampleType) - sampled only
  *   when paintMode == 1. A 1x1 dummy texture is bound in solid-fill draws.
- * - binding 4: pattern sampler (Filtering) — paired with binding 3.
+ * - binding 4: pattern sampler (Filtering) - paired with binding 3.
  *
  * The vertex buffer layout is:
  * - location 0: vec2f position (offset 0)
@@ -117,7 +117,7 @@ private:
  * Caches a compiled `wgpu::RenderPipeline` for the path-clip mask shader
  * (`shaders/slug_mask.wgsl`) plus its bind-group layout.
  *
- * The mask pipeline is a stripped-down sibling of @ref GeodePipeline —
+ * The mask pipeline is a stripped-down sibling of @ref GeodePipeline -
  * it reuses the same vertex shader, the same band/curve storage SSBOs,
  * and the same 4× MSAA coverage path, but the fragment stage writes clip
  * coverage into an `RGBA8Unorm` color attachment. The sample-mask path
@@ -128,10 +128,10 @@ private:
  *
  * The bind group layout is:
  * - binding 0: uniform buffer (mvp, viewport, fillRule).
- * - binding 1: storage buffer (read-only) — Band[].
- * - binding 2: storage buffer (read-only) — curve data (flat f32[]).
+ * - binding 1: storage buffer (read-only) - Band[].
+ * - binding 2: storage buffer (read-only) - curve data (flat f32[]).
  *
- * No texture / sampler bindings — the mask pipeline doesn't read from
+ * No texture / sampler bindings - the mask pipeline doesn't read from
  * any texture input. Multiple paths belonging to a single clip layer
  * are unioned on the hardware side via `BlendOperation::Max`.
  */

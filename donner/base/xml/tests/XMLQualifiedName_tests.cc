@@ -383,7 +383,7 @@ TEST(XMLQualifiedNameRefTest, OutputOperators) {
 //
 // XMLQualifiedNameRef holds RcStringOrRef members. Constructing one from an owning XMLQualifiedName
 // copies the RcString into the RcStringOrRef variant (refcount retained), so the Ref keeps the
-// bytes alive — that path is *safe*. The footgun is narrowing a member of a temporary Ref to a
+// bytes alive - that path is *safe*. The footgun is narrowing a member of a temporary Ref to a
 // std::string_view. RcStringOrRef::operator std::string_view() is now [[clang::lifetimebound]], so
 // `std::string_view sv = makeTemporaryRef().name;` is a compile-time -Wdangling error (and a
 // clang-tidy clang-diagnostic-dangling error under WarningsAsErrors). This test pins the safe

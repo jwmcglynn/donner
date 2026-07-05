@@ -543,7 +543,7 @@ TEST(FilterGraphExecutorTest, NamedResultRoutesCorrectBuffer) {
   };
   graph.nodes.push_back(std::move(greenFloodNode));
 
-  // Node 2: Identity offset referencing "redFlood" by name — should produce red, not green.
+  // Node 2: Identity offset referencing "redFlood" by name - should produce red, not green.
   components::FilterNode offsetNode;
   offsetNode.inputs.push_back(
       components::FilterInput{components::FilterInput::Named{RcString("redFlood")}});
@@ -573,7 +573,7 @@ TEST(FilterGraphExecutorTest, NamedResultCanBeReusedMultipleTimes) {
   floodNode.result = RcString("blueFlood");
   graph.nodes.push_back(std::move(floodNode));
 
-  // Node 1: Merge the named buffer with itself — both inputs reference "blueFlood".
+  // Node 1: Merge the named buffer with itself - both inputs reference "blueFlood".
   components::FilterNode mergeNode;
   mergeNode.inputs.push_back(
       components::FilterInput{components::FilterInput::Named{RcString("blueFlood")}});
@@ -646,7 +646,7 @@ TEST(FilterGraphExecutorTest, EmptyFilterGraphLeavesPixmapUnchanged) {
 }
 
 TEST(FilterGraphExecutorTest, FilterWithNoSourceGraphicContent) {
-  // SourceGraphic is entirely transparent — filter should still execute.
+  // SourceGraphic is entirely transparent - filter should still execute.
   auto maybePixmap = tiny_skia::Pixmap::fromSize(8, 8);
   ASSERT_TRUE(maybePixmap.has_value());
   tiny_skia::Pixmap pixmap = std::move(*maybePixmap);
@@ -677,7 +677,7 @@ TEST(FilterGraphExecutorTest, SourceAlphaInputExtractsAlphaChannel) {
 
   components::FilterGraph graph;
   components::FilterNode node;
-  // Use SourceAlpha as input — should zero out RGB, keep alpha.
+  // Use SourceAlpha as input - should zero out RGB, keep alpha.
   node.inputs.push_back(components::FilterInput{components::FilterStandardInput::SourceAlpha});
   node.primitive = components::filter_primitive::Offset{.dx = 0.0, .dy = 0.0};
   graph.nodes.push_back(std::move(node));
@@ -813,7 +813,7 @@ TEST(FilterGraphExecutorTest, CompositeInOperatorKeepsOverlapOnly) {
   floodNode.result = RcString("greenRegion");
   graph.nodes.push_back(std::move(floodNode));
 
-  // Node 1: Composite SourceGraphic IN greenRegion — only keep source pixels where green is opaque.
+  // Node 1: Composite SourceGraphic IN greenRegion - only keep source pixels where green is opaque.
   components::FilterNode compositeNode;
   compositeNode.inputs.push_back(
       components::FilterInput{components::FilterStandardInput::SourceGraphic});

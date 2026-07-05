@@ -257,7 +257,7 @@ void EnsureProjectedElementComponents(EntityHandle handle,
   if (type == ElementType::A || type == ElementType::Text || type == ElementType::TSpan) {
     // `<a>` is a transparent text-content group: when nested in text its children participate in
     // the text layout (like `<tspan>`), so it needs the text components. Unlike `<tspan>` it is
-    // NOT in UsesNoTraverseChildren — outside of text it groups arbitrary graphics like `<g>`.
+    // NOT in UsesNoTraverseChildren - outside of text it groups arbitrary graphics like `<g>`.
     [[maybe_unused]] auto& text = handle.get_or_emplace<components::TextComponent>();
     [[maybe_unused]] auto& positioning =
         handle.get_or_emplace<components::TextPositioningComponent>();

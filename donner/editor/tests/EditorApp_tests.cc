@@ -189,7 +189,7 @@ TEST(EditorAppTest, MarqueeHitTestRectUnderConcurrentDomHoldsAccess) {
   // thread through `hitTestRect`, whose DOM walk (isa / worldBounds /
   // firstChild / nextSibling) hits guarded `ElementAnchor` accessors. Without a
   // scoped access guard around the walk those reads trip the ConcurrentDom
-  // release assertion — the marquee path flagged in #619 review.
+  // release assertion - the marquee path flagged in #619 review.
   app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
 
   // Marquee covering r1 (10,10 → 30,30) but not r2 (50,50 → 70,70).
@@ -272,7 +272,7 @@ TEST(EditorAppTest, SelectableElementsReturnsEveryGeometryElement) {
   ASSERT_TRUE(r1.has_value());
   ASSERT_TRUE(r2.has_value());
 
-  // "Select All" returns both rects regardless of position, in document order — the same selectable
+  // "Select All" returns both rects regardless of position, in document order - the same selectable
   // set marquee selection uses.
   const std::vector<svg::SVGElement> selectable = app.selectableElements();
   ASSERT_EQ(selectable.size(), 2u);
@@ -1439,7 +1439,7 @@ TEST(EditorAppTest, RevertToCleanSourceReloadsLastSavedDocument) {
 //
 // The pane center must hit the center of the viewBox. `canvasFromDocument`
 // bakes in the preserveAspectRatio scale + letterbox offset, so click math
-// needs its inverse — leaving it un-inverted (or worse, using the old
+// needs its inverse - leaving it un-inverted (or worse, using the old
 // misnamed `documentFromCanvasTransform()`) is exactly the "I keep selecting
 // the background when I'm trying to click on a letter path" failure mode.
 TEST(EditorAppTest, CenterClickOnPaneHitsCenterOfDocumentViewBox) {
@@ -1453,7 +1453,7 @@ TEST(EditorAppTest, CenterClickOnPaneHitsCenterOfDocumentViewBox) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kViewBoxDoc));
 
-  // Pane is 720x800 — narrower than the 892-wide viewBox, so with the
+  // Pane is 720x800 - narrower than the 892-wide viewBox, so with the
   // default preserveAspectRatio="xMidYMid meet" the rendered content is
   // vertically letterboxed inside the pane.
   constexpr int kPaneW = 720;
@@ -1461,7 +1461,7 @@ TEST(EditorAppTest, CenterClickOnPaneHitsCenterOfDocumentViewBox) {
   app.document().document().setCanvasSize(kPaneW, kPaneH);
 
   // Auto-fit may shrink the canvas to preserve the document's aspect
-  // ratio — the renderer draws at this size, not at the pane size.
+  // ratio - the renderer draws at this size, not at the pane size.
   // This is what main.cc re-reads as `currentCanvasSize` after calling
   // `setCanvasSize`.
   const Vector2i renderedCanvas = app.document().document().canvasSize();
@@ -1490,7 +1490,7 @@ TEST(EditorAppTest, CenterClickOnPaneHitsCenterOfDocumentViewBox) {
   EXPECT_DOUBLE_EQ(layout.imageOrigin.y, (kPaneH - renderedCanvas.y) / 2.0);
 
   // A click at the center of the pane must land at the center of the
-  // viewBox (892/2, 512/2) = (446, 256) — which is inside #target.
+  // viewBox (892/2, 512/2) = (446, 256) - which is inside #target.
   const auto center = layout.screenToDocument(Vector2d(kPaneW / 2.0, kPaneH / 2.0));
   ASSERT_TRUE(center.has_value());
   EXPECT_NEAR(center->x, 446.0, 1.0) << "center=" << *center;
@@ -1571,7 +1571,7 @@ TEST(EditorAppReorderTest, ReflectsTheMoveIntoTheSourceText) {
   SelectById(app, "r1");
   EXPECT_TRUE(app.reorderSelectedElement(EditorApp::ZOrder::BringToFront));
   ASSERT_TRUE(app.flushFrame());
-  // The DOM move is reflected back into the source by structured editing — the
+  // The DOM move is reflected back into the source by structured editing - the
   // source order must match the new DOM order (no source-string surgery).
   const std::string source(app.document().document().source());
   const std::size_t r1 = source.find("id=\"r1\"");
@@ -1686,7 +1686,7 @@ TEST(EditorAppRenameTest, RenameLeavesPrefixedHrefReferenceUntouched) {
 }
 
 // `#grad` appears both as a standalone id selector (must repoint) and as the
-// prefix of `#gradient` (must NOT repoint — different, longer token).
+// prefix of `#gradient` (must NOT repoint - different, longer token).
 constexpr std::string_view kStyleSelectorDoc =
     R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
          <style>#grad { fill: red }
@@ -1722,7 +1722,7 @@ TEST(EditorAppRenameTest, RenameRepointsStyleBlockIdSelector) {
 }
 
 // Renaming an element whose id is also a valid hex color (`abc`) must only
-// repoint id *selectors* — `#abc` color literals inside declaration blocks,
+// repoint id *selectors* - `#abc` color literals inside declaration blocks,
 // comments, and strings are unrelated CSS and must survive untouched.
 // `url(#abc)` references inside declarations DO repoint (they reference the
 // element).

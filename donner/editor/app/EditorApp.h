@@ -1,12 +1,12 @@
 #pragma once
 /// @file
 ///
-/// **RenderSession** — the headless render-session core used by REPL and tooling. Owns the
+/// **RenderSession** - the headless render-session core used by REPL and tooling. Owns the
 /// current document state (URI, raw bytes, rendered bitmap) and exposes a narrow
 /// state-transition API that higher layers can call into.
 ///
 /// This is deliberately UI-free: no ImGui, no GLFW, no GL, no stdin/stdout.
-/// The UI layer takes an `EditorApp&` and drives it — tests can do the
+/// The UI layer takes an `EditorApp&` and drives it - tests can do the
 /// same.
 /// right now the only mutation the MVP supports is "navigate to a new URI
 /// and re-render."
@@ -27,7 +27,7 @@ namespace donner::editor::app {
 /// what status chip / prompt decoration to show the user.
 enum class RenderSessionStatus {
   kEmpty,        ///< No document loaded yet.
-  kLoading,      ///< Navigation in flight (rare — rendering is synchronous today).
+  kLoading,      ///< Navigation in flight (rare - rendering is synchronous today).
   kRendered,     ///< A bitmap is available and was rendered cleanly.
   kFetchError,   ///< Source loading failed. Previous bitmap is retained.
   kParseError,   ///< Parser returned an error. Previous bitmap is retained.
@@ -54,7 +54,7 @@ struct RenderSessionOptions {
 };
 
 /// Snapshot of the most recent navigation result. All fields are read-only
-/// after `EditorApp::navigate` returns — subsequent navigations produce a
+/// after `EditorApp::navigate` returns - subsequent navigations produce a
 /// new snapshot.
 struct RenderSessionSnapshot {
   RenderSessionStatus status = RenderSessionStatus::kEmpty;
@@ -97,7 +97,7 @@ public:
 
   /// The most recent successful bitmap, regardless of the current status.
   /// Allows UIs to keep showing the last good render while an error chip
-  /// covers the new failure — matches the address bar's "keep previous
+  /// covers the new failure - matches the address bar's "keep previous
   /// document on screen" behavior from the design doc.
   [[nodiscard]] const svg::RendererBitmap& lastGoodBitmap() const { return lastGoodBitmap_; }
 

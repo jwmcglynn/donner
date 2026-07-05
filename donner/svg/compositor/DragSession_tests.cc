@@ -83,7 +83,7 @@ TEST_F(DragSessionTest, DestructorDemotes) {
     ASSERT_TRUE(session.has_value());
     EXPECT_TRUE(compositor.isPromoted(entity));
   }
-  // Session destroyed — demote is queued, flush to observe.
+  // Session destroyed - demote is queued, flush to observe.
   compositor.flushPendingDemotionsForTesting();
   EXPECT_FALSE(compositor.isPromoted(entity));
   EXPECT_EQ(compositor.layerCount(), 0u);
@@ -143,7 +143,7 @@ TEST_F(DragSessionTest, MoveAssignment) {
   ASSERT_TRUE(sessionA.has_value());
   ASSERT_TRUE(sessionB.has_value());
 
-  // Move-assign B over A — should demote A.
+  // Move-assign B over A - should demote A.
   *sessionA = std::move(*sessionB);
   // §M9: A's demote is queued; flush so the post-assignment committed
   // state is observable. B remains promoted (its hint was never

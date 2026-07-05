@@ -69,7 +69,7 @@ void GlfwErrorCallback(int error, const char* description) {
   }
 #ifdef __EMSCRIPTEN__
   // emscripten-glfw surfaces benign shim-limitation messages through the
-  // error callback with a `[Warning]` prefix — e.g. ImGui's backend calls
+  // error callback with a `[Warning]` prefix - e.g. ImGui's backend calls
   // `glfwSetWindowAttrib(GLFW_MOUSE_PASSTHROUGH)` every frame, which the
   // shim can't honor. Drop those so the console only shows real errors.
   if (description != nullptr && std::string_view(description).substr(0, 9) == "[Warning]") {
@@ -484,7 +484,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
 
 #ifdef __EMSCRIPTEN__
   // emscripten-glfw runs on WebGL2, not desktop GL, so neither the
-  // version hints nor `GLFW_OPENGL_PROFILE` apply — setting them only
+  // version hints nor `GLFW_OPENGL_PROFILE` apply - setting them only
   // produces "Hint ... not currently supported on this platform"
   // warnings at startup.
   glfwWindowHint(GLFW_SCALE_FRAMEBUFFER, GLFW_TRUE);
@@ -502,7 +502,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     // NixOS, without requiring a physical GPU or libOSMesa.
     glfwWindowHint(GLFW_CONTEXT_CREATION_API, GLFW_EGL_CONTEXT_API);
   }
-  // OpenGL 3.3 core is plenty — matches what imgui_impl_opengl3 targets
+  // OpenGL 3.3 core is plenty - matches what imgui_impl_opengl3 targets
   // by default and what glad was generated for.
   glfwWindowHint(GLFW_VISIBLE, options_.visible ? GLFW_TRUE : GLFW_FALSE);
   glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
@@ -910,7 +910,7 @@ void EditorWindow::waitEventsTimeout(double timeoutSeconds) {
 
 void EditorWindow::wakeEventLoop() {
 #ifdef __EMSCRIPTEN__
-  // No-op — the browser's rAF cadence handles wake-ups implicitly.
+  // No-op - the browser's rAF cadence handles wake-ups implicitly.
 #else
   glfwPostEmptyEvent();
 #endif

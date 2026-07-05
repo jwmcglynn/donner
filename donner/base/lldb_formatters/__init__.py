@@ -4,7 +4,7 @@ from .base_formatters import *
 def __lldb_init_module(debugger, internal_dict):
     """
     LLDB calls this automatically when you 'command script import …'.
-    We hook the summaries into a private category so we don’t pollute 'default'.
+    We hook the summaries into a private category so we don't pollute 'default'.
     """
     cat = 'DonnerFormatters'
     debugger.HandleCommand(f'type category define {cat}')

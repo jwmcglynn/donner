@@ -17,8 +17,8 @@ namespace donner::svg {
  *
  * The `<image>` element embeds an external raster image (PNG, JPEG, etc.) or another SVG file
  * into the current document at a specified rectangle. You point it at a source file via the
- * `href` attribute — this can be a normal URL, a relative path, or an inline `data:` URL
- * containing base64-encoded pixel data — and set `x`, `y`, `width`, and `height` to place it
+ * `href` attribute - this can be a normal URL, a relative path, or an inline `data:` URL
+ * containing base64-encoded pixel data - and set `x`, `y`, `width`, and `height` to place it
  * on the canvas. When the image's intrinsic aspect ratio differs from the target rectangle,
  * `preserveAspectRatio` controls how the image is scaled or letterboxed to fit.
  *

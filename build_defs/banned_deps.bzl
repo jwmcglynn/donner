@@ -5,7 +5,7 @@ def banned_deps_test(name, banned, allowed, scope, **kwargs):
     Test that no target in `scope` directly depends on any label in `banned`,
     except for the targets listed in `allowed`.
 
-    Uses genquery (evaluated at analysis time) — no reentrant Bazel calls.
+    Uses genquery (evaluated at analysis time) - no reentrant Bazel calls.
 
     Args:
       name: Test target name.

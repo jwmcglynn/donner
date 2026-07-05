@@ -19,8 +19,8 @@
 ///
 /// The conversion is DOM-first: it builds unattached DOM elements and never
 /// mutates the document. The caller applies it as ordinary structural DOM
-/// edits — insert the group before the `<text>` (preserving paint order),
-/// insert each path into the group, delete the `<text>` — through the
+/// edits - insert the group before the `<text>` (preserving paint order),
+/// insert each path into the group, delete the `<text>` - through the
 /// editor's mutation seam (`EditorCommand::InsertElementCommand` /
 /// `DeleteElementCommand`), so source reflection emits deltas and entity
 /// identity elsewhere in the document survives.
@@ -41,7 +41,7 @@ namespace donner::editor {
 /// Result of preparing a text-to-outline conversion.
 struct ConvertTextToOutlinesResult {
   /// Whether the conversion can be applied. When false, `error` describes why
-  /// and no elements were built — the caller must not mutate the document.
+  /// and no elements were built - the caller must not mutate the document.
   bool ok = false;
 
   /// Human-readable failure reason for the user when `ok` is false. Names the

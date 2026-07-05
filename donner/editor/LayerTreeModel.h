@@ -5,7 +5,7 @@
 /// user-facing Layers panel.
 ///
 /// It walks the editable SVG light tree and produces a flat list of
-/// `LayerTreeRow`s — one per editor-visible layer (document root, groups,
+/// `LayerTreeRow`s - one per editor-visible layer (document root, groups,
 /// subgroups, and renderable leaf shapes). Non-rendered resource subtrees
 /// (`<defs>`, gradients, filters, clip paths, masks, patterns, markers,
 /// symbols, `<style>`, `<title>`, `<desc>`, `<metadata>`) are excluded.

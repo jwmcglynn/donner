@@ -93,7 +93,7 @@ public:
    *
    * The `size` parameter represents the destination rectangle for the element's content, while the
    * optional `viewBox` parameter defines the source coordinate system. If no viewBox is provided,
-   * the transformation is a simple translation to the top‐left of `size`.
+   * the transformation is a simple translation to the top-left of `size`.
    *
    * @see https://www.w3.org/TR/SVG2/coords.html#ComputingAViewportsTransform.
    *

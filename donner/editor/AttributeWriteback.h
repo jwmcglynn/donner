@@ -69,7 +69,7 @@ std::optional<svg::SVGElement> resolveAttributeWritebackTarget(
  * @param source The current source text (from the text editor buffer).
  * @param element The target element.
  * @param attrName The attribute name (e.g. "transform", "fill").
- * @param newValue The new attribute value (unescaped — will be XML-escaped
+ * @param newValue The new attribute value (unescaped - will be XML-escaped
  *   internally).
  * @return A `TextPatch` if the writeback can be performed, or `std::nullopt`
  *   if the element can't be resolved in the current source, the attribute
@@ -88,7 +88,7 @@ std::optional<TextPatch> buildAttributeWriteback(std::string_view source,
  * @param source The current source text (from the text editor buffer).
  * @param target Stable locator for the target element.
  * @param attrName The attribute name (e.g. "transform", "fill").
- * @param newValue The new attribute value (unescaped — will be XML-escaped
+ * @param newValue The new attribute value (unescaped - will be XML-escaped
  *   internally).
  * @return A `TextPatch` if the writeback can be performed, or `std::nullopt`
  *   if the source no longer contains the targeted element or cannot be patched

@@ -45,7 +45,7 @@ void AsyncSVGDocument::setDocument(svg::SVGDocument document) {
 
 AsyncSVGDocument::ReplaceKind AsyncSVGDocument::setDocumentMaybeStructural(
     svg::SVGDocument newDocument) {
-  // If there's no current document, a structural remap isn't meaningful —
+  // If there's no current document, a structural remap isn't meaningful -
   // just install the new one like a regular `setDocument`.
   if (!document_.has_value()) {
     setDocument(std::move(newDocument));
@@ -56,7 +56,7 @@ AsyncSVGDocument::ReplaceKind AsyncSVGDocument::setDocumentMaybeStructural(
   // Build the remap BEFORE the swap. The walker needs both documents'
   // XML trees live; once we move `newDocument` into `document_`, the
   // old document is gone. Note this runs on the UI thread with no
-  // locking — consistent with the existing `setDocument` contract that
+  // locking - consistent with the existing `setDocument` contract that
   // only the UI thread touches the document outside a render.
   auto remap = svg::compositor::BuildStructuralEntityRemap(*document_, newDocument);
   const bool structural = !remap.empty();
@@ -73,7 +73,7 @@ AsyncSVGDocument::ReplaceKind AsyncSVGDocument::setDocumentMaybeStructural(
   }
 
   // Swap the document. We can't call `setDocument` directly because it
-  // clears `pendingStructuralRemap_` — we want to populate it right
+  // clears `pendingStructuralRemap_` - we want to populate it right
   // after.
   document_ = std::move(newDocument);
   queue_.clear();
@@ -186,7 +186,7 @@ bool AsyncSVGDocument::loadFromString(std::string_view svgBytes) {
   auto result = svg::parser::SVGParser::ParseSVG(svgBytes, sink, EditorParseOptions());
   if (result.hasError()) {
     // Stash the diagnostic so the source pane can show a line marker.
-    // Leave the existing document in place — the user can keep editing
+    // Leave the existing document in place - the user can keep editing
     // until the source parses again. We deliberately do NOT bump the
     // frame version: the renderer's view of the document is unchanged,
     // and the source pane polls `lastParseError()` directly.
@@ -205,7 +205,7 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
       }
       // The element handle was captured by a public API (hitTest, tree
       // traversal, or querySelector) so we just cast to the graphics-
-      // element interface and call the public transform setter — no
+      // element interface and call the public transform setter - no
       // direct ECS access.
       svg::SVGGraphicsElement graphics =
           command.element->withReadAccess([&command](svg::DocumentReadAccess&, EntityHandle) {
@@ -221,8 +221,8 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
       // setDocument path which clears the queue (already drained) and bumps
       // the version (which `flushFrame` will bump again, harmlessly).
       //
-      // `preserveUndoOnReparse` commands are self-generated writebacks —
-      // drag-end transforms, delete-element text patches — that mutate
+      // `preserveUndoOnReparse` commands are self-generated writebacks -
+      // drag-end transforms, delete-element text patches - that mutate
       // only attribute values or delete whole subtrees. In the common
       // drag-end case the tree shape is identical, so try the structural
       // remap path: on success the worker's next tick will preserve the
@@ -234,7 +234,7 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
       // Non-writeback `ReplaceDocument`s (file open, user text edit that
       // made the whole thing unparseable until now) aren't tagged
       // `preserveUndoOnReparse`, and go through the straight
-      // `loadFromString` path — they genuinely replace the entity space.
+      // `loadFromString` path - they genuinely replace the entity space.
       if (command.preserveUndoOnReparse) {
         ParseWarningSink sink;
         auto result = svg::parser::SVGParser::ParseSVG(command.bytes, sink, EditorParseOptions());
@@ -254,7 +254,7 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
         return;
       }
       // Apply the attribute change via the public SVGElement::setAttribute
-      // API — the same path the parser uses. This triggers presentation-
+      // API - the same path the parser uses. This triggers presentation-
       // attribute parsing, style cascade, and dirty-flag marking through
       // the same code path as initial parse. The structured-editing M5
       // fast path will eventually replace this with a targeted
@@ -302,7 +302,7 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
       }
       // Detach via the public `SVGElement::remove()` method. The ECS
       // entity stays in the registry (orphaned, not garbage-collected)
-      // so any in-flight references — stale selection, undo snapshots —
+      // so any in-flight references - stale selection, undo snapshots -
       // remain valid but invisible to the renderer because the tree
       // walk stops at the detach point. We copy to a local because
       // `remove()` is non-const and `command` is `const&`.
@@ -318,7 +318,7 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
       // Shape-clipboard structural replaces reparse `bytes` into a fresh
       // document, exactly like ReplaceDocument(preserveUndoOnReparse=true).
       // The kind discriminator is preserved at this layer purely for
-      // labelling — undo entries are recorded by the orchestrator
+      // labelling - undo entries are recorded by the orchestrator
       // (EditorShell), not here. On parse failure we leave the existing
       // document in place and surface a diagnostic.
       ParseWarningSink sink;

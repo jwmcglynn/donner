@@ -252,7 +252,7 @@ public:
    *
    * Replaces the element's tracked text value range when it has one, otherwise inserts the
    * escaped text before the element's closing tag (expanding a self-closing tag). Element
-   * children are not touched, so this only supports elements whose content is text-only —
+   * children are not touched, so this only supports elements whose content is text-only -
    * mixed-content elements replace just the tracked leading text chunk. Emits an
    * \ref XMLMutation::Kind::NodeValueChanged mutation on success.
    *

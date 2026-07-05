@@ -42,7 +42,7 @@ void applySnapshot(const UndoSnapshot& snapshot) {
 
 void UndoTimeline::beginTransaction(std::string_view label, UndoSnapshot before) {
   if (pendingTransaction_.has_value()) {
-    return;  // Nested — outermost wins.
+    return;  // Nested - outermost wins.
   }
   pendingTransaction_ = PendingTransaction{std::string(label), std::move(before)};
 }
@@ -89,7 +89,7 @@ std::optional<UndoSnapshot> UndoTimeline::undo() {
     undoCursor_ = chainStart_ - 1;
   }
 
-  // Copy the target out of the vector before appending — `push_back` can
+  // Copy the target out of the vector before appending - `push_back` can
   // reallocate, invalidating any reference into `entries_`.
   const size_t cursorAtEntry = undoCursor_;
   UndoEntry targetCopy = entries_[cursorAtEntry];

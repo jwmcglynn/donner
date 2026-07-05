@@ -11,7 +11,7 @@ namespace donner::detail {
 ///   formatted without a decimal point or scientific notation.
 /// - All other doubles use `std::format`'s `{}` default specifier, which per C++20
 ///   `[format.string.std]` emits the shortest decimal representation that round-trips
-///   through `std::from_chars`.  The `{:g}` specifier was tried and rejected — it
+///   through `std::from_chars`.  The `{:g}` specifier was tried and rejected - it
 ///   defaults to 6-significant-digit precision, which drops accuracy for values like
 ///   `tan(π/6) = 0.57735026918962562`.
 ///

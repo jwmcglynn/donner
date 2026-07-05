@@ -27,7 +27,7 @@ bool IsGraphicsElement(const svg::SVGElement& element) {
 /// every wheel event (~60 Hz). Each commit through
 /// `SVGDocument::setCanvasSize` calls `invalidateRenderTree`, which forces
 /// the compositor to re-rasterize every promoted layer at the new canvas
-/// size — at high zoom on the splash that's 7–8 layers × seconds each, so
+/// size - at high zoom on the splash that's 7-8 layers × seconds each, so
 /// the editor freezes for the whole gesture. Debouncing the commit lets
 /// the previously-rendered bitmap (at the prior canvas size) keep displaying
 /// stretched until the user stops zooming; the high-quality re-rasterize
@@ -548,7 +548,7 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   overlayCost.handleCount = static_cast<int>(chromeSnapshot.handleBoxesDoc.size());
   overlayCost.hasMarquee = chromeSnapshot.marqueeDoc.has_value();
   // Report the overlay payload this frame so the metric is non-zero whenever the
-  // overlay was re-rasterized with content — independent of presentation
+  // overlay was re-rasterized with content - independent of presentation
   // backend. The TinySkia path uploads the overlay raster texture (its
   // `payloadBytes` is that texture's bytes); the Geode/WGPU path renders the
   // snapshot direct to the framebuffer with no upload, so without this the
@@ -646,7 +646,7 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
   // Forward the worker-measured presentation latency to the frame history so
   // `RenderFrameGraph` can overlay async worker time on the UI frame graph.
   // The frame history's latest slot corresponds to the current UI frame
-  // (pushed at the top of `EditorShell::runFrame` before poll) — a landed
+  // (pushed at the top of `EditorShell::runFrame` before poll) - a landed
   // result belongs to that frame.
   if (frameHistory != nullptr) {
     frameHistory->setLatestBackendMs(static_cast<float>(result.workerMs));
@@ -843,7 +843,7 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   // Structural` call. Non-empty remap lets the worker preserve the
   // compositor's cached state across the document swap instead of
   // falling into the full-reset path. Must be consumed on every render
-  // request — a second render without consumption would re-apply a
+  // request - a second render without consumption would re-apply a
   // stale remap against an already-remapped compositor.
   req.structuralRemap = app.document().consumePendingStructuralRemap();
   req.selection = std::nullopt;

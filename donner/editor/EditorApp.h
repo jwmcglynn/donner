@@ -1,13 +1,13 @@
 #pragma once
 /// @file
 ///
-/// `EditorApp` is the editor's top-level shell — the mutation-seam frontend
+/// `EditorApp` is the editor's top-level shell - the mutation-seam frontend
 /// that tools and the main loop interact with. Owns the `AsyncSVGDocument`,
 /// the active selection, and (eventually) the active tool dispatcher.
 ///
 /// Per `docs/design_docs/0020-editor.md`, all editor-initiated DOM writes flow
 /// through `EditorApp::applyMutation()`. Tools never call
-/// `SVGElement::setTransform()` directly — they build `EditorCommand`s and
+/// `SVGElement::setTransform()` directly - they build `EditorCommand`s and
 /// hand them to the editor.
 ///
 /// This is deliberately **smaller** than the prototype's `SVGState` /
@@ -53,8 +53,8 @@ struct PathOperationAvailability {
 /// Whether @p command is a geometry-changing or destructive mutation targeting
 /// a locked element and must be dropped by the edit-gating path. Returns true
 /// only for `SetTransform` / `DeleteElement` whose target `IsLocked` (which
-/// also covers descendants of a locked group). Everything else — attribute and
-/// visibility/lock toggles, inserts, text edits, document replacement — is
+/// also covers descendants of a locked group). Everything else - attribute and
+/// visibility/lock toggles, inserts, text edits, document replacement - is
 /// allowed, so a locked layer can still be shown/hidden, selected, and
 /// unlocked.
 [[nodiscard]] bool IsLockGatedCommand(const EditorCommand& command);
@@ -197,7 +197,7 @@ public:
   bool deleteSelectionWithUndo(std::string_view currentSourceText);
 
   /// Paint-order ("z-order") move direction for \ref reorderSelectedElement.
-  /// SVG paints in document order — later siblings paint on top — so
+  /// SVG paints in document order - later siblings paint on top - so
   /// "forward"/"front" move the element later among its siblings.
   enum class ZOrder : std::uint8_t {
     BringToFront,  ///< Move to the last sibling (paints on top of all siblings).
@@ -210,9 +210,9 @@ public:
    * Reorder the single selected element among its siblings (paint/z-order),
    * recording one undoable structural edit.
    *
-   * This is a pure DOM move — a single `SVGDocument::insertElement` of the
+   * This is a pure DOM move - a single `SVGDocument::insertElement` of the
    * already-attached element to a new position before a computed reference
-   * sibling — and the structured-editing reflection rewrites the source from the
+   * sibling - and the structured-editing reflection rewrites the source from the
    * DOM change. No source-text surgery (see CLAUDE.md "DOM-Level Editing Only").
    *
    * @param direction Which way to move the element in paint order.
@@ -246,7 +246,7 @@ public:
 
   /**
    * Rename the single selected element's `id` to @p newId, updating every
-   * internal reference so the document keeps rendering the same — one undoable
+   * internal reference so the document keeps rendering the same - one undoable
    * structural edit.
    *
    * All work is DOM-level (per CLAUDE.md "DOM-Level Editing Only"): the element's
@@ -466,7 +466,7 @@ public:
 
   /// Undo the most recent entry. Pops the timeline's next entry and
   /// pushes the restored transform onto the command queue as a
-  /// `SetTransformCommand` — the actual DOM mutation happens on the
+  /// `SetTransformCommand` - the actual DOM mutation happens on the
   /// next `flushFrame()`, keeping every DOM write on the same path.
   /// No-op if there is nothing to undo.
   void undo();

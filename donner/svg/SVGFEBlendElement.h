@@ -28,7 +28,7 @@ namespace donner::svg {
  *
  * \note For the preview images below, browsers render each cell with CSS `mix-blend-mode`
  *       because `<feImage>` references to inline elements are not universally supported across
- *       browsers. The actual `<feBlend>` primitive produces identical pixel results — the XML
+ *       browsers. The actual `<feBlend>` primitive produces identical pixel results - the XML
  *       snippet further down is what Donner executes.
  *
  * \htmlonly
@@ -132,15 +132,15 @@ namespace donner::svg {
  *
  * The 16 modes are grouped into five families by what they do to the underlying pixels:
  *
- * - **Darken family** — `multiply`, `darken`, `color-burn`. The result is never brighter than
+ * - **Darken family** - `multiply`, `darken`, `color-burn`. The result is never brighter than
  *   either input; white acts as a no-op.
- * - **Lighten family** — `screen`, `lighten`, `color-dodge`. The result is never darker than
+ * - **Lighten family** - `screen`, `lighten`, `color-dodge`. The result is never darker than
  *   either input; black acts as a no-op.
- * - **Contrast family** — `overlay`, `hard-light`, `soft-light`. Darkens dark areas and
+ * - **Contrast family** - `overlay`, `hard-light`, `soft-light`. Darkens dark areas and
  *   brightens bright areas, increasing contrast.
- * - **Difference family** — `difference`, `exclusion`. Produce inverting or contrast-reversing
+ * - **Difference family** - `difference`, `exclusion`. Produce inverting or contrast-reversing
  *   effects based on the distance between the two colors.
- * - **HSL family** — `hue`, `saturation`, `color`, `luminosity`. Mix channels of the
+ * - **HSL family** - `hue`, `saturation`, `color`, `luminosity`. Mix channels of the
  *   hue/saturation/luminance color model rather than RGB, letting you transplant one aspect of
  *   one color onto another.
  *

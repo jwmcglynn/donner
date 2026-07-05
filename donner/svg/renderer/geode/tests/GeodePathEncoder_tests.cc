@@ -215,7 +215,7 @@ int VerticalWinding(const std::vector<EncodedPath::Curve>& curves, double px, do
 }  // namespace
 
 // M3: the vertical (X-monotonic) band set must be populated and produce winding
-// numbers consistent with the horizontal set — winding is ray-direction-independent,
+// numbers consistent with the horizontal set - winding is ray-direction-independent,
 // so a point is inside per the horizontal ray iff it is inside per the vertical ray.
 TEST(GeodePathEncoder, VerticalBandsConsistentWinding) {
   // A triangle plus an interior hole exercises non-trivial winding both ways.
@@ -345,7 +345,7 @@ TEST(GeodePathEncoder, OpenSubpathGetsImplicitClose) {
 
 // Multi-subpath regression: a MoveTo in the middle of a path starts a new
 // subpath, and the previous one (if left open) must be closed implicitly
-// at that boundary — not merged with the new subpath's geometry.
+// at that boundary - not merged with the new subpath's geometry.
 //
 // Strategy: encode M-L-M-L (two open horizontal lines) and compare to
 // M-L-Z-M-L-Z (same lines explicitly closed). Horizontal lines are
@@ -353,7 +353,7 @@ TEST(GeodePathEncoder, OpenSubpathGetsImplicitClose) {
 // segment of the second triangle contributes a triangle-shaped fill
 // region. After the fix, both encode identically.
 TEST(GeodePathEncoder, MultipleOpenSubpathsEachGetClosed) {
-  // Two diagonal open lines in disjoint Y ranges — each should get its
+  // Two diagonal open lines in disjoint Y ranges - each should get its
   // own implicit close, without one subpath's close bridging across
   // MoveTo into the next subpath's start.
   Path twoLinesOpen = PathBuilder()

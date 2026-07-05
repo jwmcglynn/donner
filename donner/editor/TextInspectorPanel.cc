@@ -62,7 +62,7 @@ std::optional<svg::SVGElement> SingleSelectedText(EditorApp& app) {
 void TextInspectorPanel::syncBuffersFromSelection(const svg::SVGElement& text) {
   // §concurrent-dom: the live editor keeps the document in ThreadingMode::ConcurrentDom, so reading
   // textContent()/attributes (raw ECS access) from this UI-thread render path needs a scoped read
-  // access — without it `SVGTextContentElement::textContent()` trips the access assert and aborts.
+  // access - without it `SVGTextContentElement::textContent()` trips the access assert and aborts.
   text.withReadAccess([&](svg::DocumentReadAccess&, EntityHandle) {
     if (text.isa<svg::SVGTextElement>()) {
       AssignBuffer(contentBuffer_,

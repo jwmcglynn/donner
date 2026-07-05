@@ -4,7 +4,7 @@
 /// `eliemichel/WebGPU-distribution`'s `webgpu.hpp`) used throughout the
 /// Geode renderer.
 ///
-/// The vendored `webgpu.hpp` wraps wgpu-native's C API directly — its
+/// The vendored `webgpu.hpp` wraps wgpu-native's C API directly - its
 /// `wgpu::StringView` only has a `std::string_view` constructor, which
 /// makes the otherwise-common `descriptor.label = "…"` assignment
 /// verbose. The helpers in this header exist so the rest of the

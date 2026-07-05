@@ -19,7 +19,7 @@ namespace donner::svg {
  *
  * The `<text>` element renders a string of text as a proper graphics primitive. Unlike text
  * rasterized into a bitmap, SVG text is fully live: it remains selectable and searchable,
- * scales cleanly to any resolution, and accepts every normal SVG presentation attribute —
+ * scales cleanly to any resolution, and accepts every normal SVG presentation attribute -
  * `fill`, `stroke`, `opacity`, `transform`, gradients via `url(#id)`, filters, clip paths,
  * and so on. Fonts are loaded through standard CSS `@font-face` rules (TTF, OTF, WOFF, WOFF2)
  * or fall back to a built-in typeface when no match is available.

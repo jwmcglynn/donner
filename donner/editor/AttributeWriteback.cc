@@ -248,7 +248,7 @@ std::optional<TextPatch> buildAttributeWritebackForNode(std::string_view source,
       xml::XMLParser::GetAttributeLocation(source, nodeLocation->start, qualifiedName);
 
   if (attrRange.has_value()) {
-    // Attribute exists — replace its full span (name="value") with the
+    // Attribute exists - replace its full span (name="value") with the
     // new name="escaped_value".
     if (!attrRange->start.offset.has_value() || !attrRange->end.offset.has_value()) {
       return std::nullopt;
@@ -271,7 +271,7 @@ std::optional<TextPatch> buildAttributeWritebackForNode(std::string_view source,
     return TextPatch{start, end - start, std::move(replacement)};
   }
 
-  // Attribute doesn't exist — insert ` name="value"` before the element's
+  // Attribute doesn't exist - insert ` name="value"` before the element's
   // closing `>` or `/>`. Find the `>` by scanning backward from the
   // element's end offset (or forward from start if end isn't useful).
   //
@@ -317,7 +317,7 @@ std::optional<TextPatch> buildAttributeWritebackForNode(std::string_view source,
     }
   }
 
-  // Couldn't find the tag close — source is malformed or stale.
+  // Couldn't find the tag close - source is malformed or stale.
   return std::nullopt;
 }
 

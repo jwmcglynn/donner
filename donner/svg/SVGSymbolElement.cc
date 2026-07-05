@@ -24,7 +24,7 @@ SVGSymbolElement SVGSymbolElement::CreateOn(EntityHandle handle) {
   // Set the rendering behavior for a symbol, which is not rendered directly.
   auto& renderingBehavior = handle.emplace<components::RenderingBehaviorComponent>(
       components::RenderingBehavior::ShadowOnlyChildren);
-  // The resvg suite targets SVG 1.1, where `<symbol>` cannot carry a `transform` — it is
+  // The resvg suite targets SVG 1.1, where `<symbol>` cannot carry a `transform` - it is
   // ignored. (SVG 2 allows it; revisit if the suite moves to SVG 2 semantics.)
   renderingBehavior.appliesSelfTransform = false;
   handle.emplace<components::ViewBoxComponent>();

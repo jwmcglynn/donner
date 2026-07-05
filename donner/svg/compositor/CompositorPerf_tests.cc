@@ -130,7 +130,7 @@ TEST_F(CompositorPerfTest, DragFrameOverhead_1kNodes) {
 
   // Ceiling is a CI-runner-shape absurdity gate, not an aspirational target.
   // GitHub's shared `ubuntu-latest` runners land this test around 11-15 ms
-  // (mock renderer, 1k nodes) — tight-bound rasterize walks every segment
+  // (mock renderer, 1k nodes) - tight-bound rasterize walks every segment
   // once per frame even when no segment is dirty. 30 ms = 2-3x observed, so
   // the gate still catches a real 5x+ regression but doesn't flake on a busy
   // runner.
@@ -205,7 +205,7 @@ TEST_F(CompositorPerfTest, DragFrameOverhead_10kNodes) {
             << kIterations << " iterations, mock renderer)\n";
 
   // CI-runner absurdity gate. GitHub `ubuntu-latest` lands around 60-135 ms
-  // per frame with 10k nodes under a mock renderer — the per-segment dirty
+  // per frame with 10k nodes under a mock renderer - the per-segment dirty
   // walk is still O(entities) even when nothing needs rasterizing. 350 ms
   // = 2.5-3x observed, which still catches a real regression (e.g. full
   // re-rasterize every frame would be seconds) but tolerates runner load.
@@ -213,17 +213,17 @@ TEST_F(CompositorPerfTest, DragFrameOverhead_10kNodes) {
       << "Compositor overhead per frame exceeds 350ms (mock renderer, 10k nodes)";
 }
 
-// Measure click-to-first-drag-update latency — the cold path from "user selects
+// Measure click-to-first-drag-update latency - the cold path from "user selects
 // an entity" through "pre-warm the layer" to "first composited frame with the
 // drag delta applied." This is the user-visible latency the design doc calls
 // out in Goal 6 (p50 < 16 ms, p99 < 33 ms on 10k-node scene).
 //
 // Reports three numbers:
-//   1. Prewarm cost — time to rasterize the selected entity's layer for the
+//   1. Prewarm cost - time to rasterize the selected entity's layer for the
 //      first time (from Selection hint publish through one renderFrame).
-//   2. First drag frame cost — time from drag start (ActiveDrag hint publish
+//   2. First drag frame cost - time from drag start (ActiveDrag hint publish
 //      + first transform applied) through one renderFrame.
-//   3. Combined click-to-first-drag — end-to-end cold path.
+//   3. Combined click-to-first-drag - end-to-end cold path.
 //
 // Budgets are loose: this is a measurement benchmark, not a regression gate.
 // The tight steady-state assertions live in `DragFrameOverhead_*`.
@@ -266,10 +266,10 @@ TEST_F(CompositorPerfTest, ClickToFirstDragUpdate_10kNodes) {
             << " ms, first-drag-frame=" << dragMs << " ms, combined=" << combinedMs
             << " ms (mock renderer)\n";
 
-  // Loose budgets — these are absurdity gates, not tight perf targets. The
+  // Loose budgets - these are absurdity gates, not tight perf targets. The
   // dominant cost at 10k nodes is the first-ever `instantiateRenderTree`
   // (style cascade over every RIC) plus the N+1 static-segment traversals
-  // — both linear in document size. On current hardware that lands around
+  // - both linear in document size. On current hardware that lands around
   // 800-900 ms on the mock renderer; the budget here is "did something
   // blow up by 2x?", not "is compositor overhead negligible?".
   //
@@ -286,7 +286,7 @@ TEST_F(CompositorPerfTest, ClickToFirstDragUpdate_10kNodes) {
   EXPECT_LT(combinedMs, 4000.0) << "Click-to-first-drag-update absurdly slow";
 }
 
-// Click-to-first-drag on a smaller scene — the common editor case.
+// Click-to-first-drag on a smaller scene - the common editor case.
 TEST_F(CompositorPerfTest, ClickToFirstDragUpdate_1kNodes) {
   const std::string svg = generateGridSvg(1000, 32);
   SVGDocument document = makeDocument(svg);
@@ -335,7 +335,7 @@ TEST_F(CompositorPerfTest, ClickToFirstDragUpdate_1kNodes) {
 // ~tens-of-ms on 10k nodes; the bucketer should be well under that.
 //
 // Reports the reconcile time so future regressions are visible. Loose assertion
-// (<100 ms) is a sanity floor — this is a measurement, not a gate.
+// (<100 ms) is a sanity floor - this is a measurement, not a gate.
 TEST_F(CompositorPerfTest, ComplexityBucketerReconcile_10kNodes) {
   const std::string svg = generateGridSvg(10000, 100);
   SVGDocument document = makeDocument(svg);

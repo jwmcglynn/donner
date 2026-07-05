@@ -105,7 +105,7 @@ struct Property {
    * (including the `inherit`/`initial`/`unset` states, which carry no stored value).
    *
    * Footgun-free replacement for the former `getRequiredRef()`: callers null-check the result
-   * instead of relying on an assert. Note this never returns the *initial* value — use \ref get()
+   * instead of relying on an assert. Note this never returns the *initial* value - use \ref get()
    * if you need initial-value resolution.
    *
    * @return Pointer to the stored value, or `nullptr`.
@@ -211,12 +211,12 @@ struct Property {
   }
 
   /**
-   * Whether the cascade assigned this property any state other than \ref PropertyState::NotSet —
+   * Whether the cascade assigned this property any state other than \ref PropertyState::NotSet -
    * i.e. a concrete value OR a CSS-wide keyword (`inherit`/`initial`/`unset`) was specified.
    *
    * This is a *cascade* predicate, NOT a guarantee that \ref get() returns a value: for
    * `inherit`/`initial`/`unset` (and `Set` to `none`) this is true while `get()` may be
-   * `std::nullopt`. Do not use it as a guard before reading the value — use \ref get(), \ref
+   * `std::nullopt`. Do not use it as a guard before reading the value - use \ref get(), \ref
    * getOr(), or \ref getStoredValue() for that.
    *
    * @return true if any cascade state other than NotSet was specified.

@@ -23,7 +23,7 @@ namespace donner::xml {
 namespace {
 
 /// Maximum number of entity declarations to emit.  Kept well below the
-/// parser’s kMaxEntityDepth (10) to avoid pathological run-time cost.
+/// parser's kMaxEntityDepth (10) to avoid pathological run-time cost.
 static constexpr int kMaxEntities = 8;
 
 /// Valid XML 1.0 name characters, kept small for speed.

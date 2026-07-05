@@ -21,7 +21,7 @@ namespace {
 /// Returns true if any ancestor of @p entity carries a clip-path, mask, or
 /// filter on its `RenderingInstanceComponent`. Such an ancestor wraps a
 /// compositing context that would be broken if a descendant were extracted
-/// into its own cached layer — the clip/mask/filter context is applied by the
+/// into its own cached layer - the clip/mask/filter context is applied by the
 /// main tree walk, not replayed when the extracted layer bitmap is composited
 /// back. Returning true is a signal to NOT auto-promote.
 bool HasCompositingBreakingAncestor(Registry& registry, Entity entity) {

@@ -39,7 +39,7 @@ struct ShadowedElementAdapter {
       return std::nullopt;
     }
 
-    // Shadow entities don't carry ElementTypeComponent themselves — resolve through the light
+    // Shadow entities don't carry ElementTypeComponent themselves - resolve through the light
     // (data) entity, otherwise any shadow entity whose parent is also a shadow entity would
     // appear parentless and incorrectly match `:root`.
     const bool isSVGElement = registry_.get().all_of<ElementTypeComponent>(resolveData(target));

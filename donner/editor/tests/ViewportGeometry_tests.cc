@@ -52,7 +52,7 @@ TEST(ViewportGeometryTest, DocumentToScreenRoundTripsThroughViewBox) {
 // the render pane sits inside a larger window at pane-origin (560, 0),
 // with a 720x800 content region. The rendered SVG is 720x800 (canvas
 // matches pane), zoom is 1.0, pan is (0, 0). A click at screen position
-// (920, 400) — the horizontal/vertical center of the image — should land
+// (920, 400) - the horizontal/vertical center of the image - should land
 // at document coordinates (360, 400) when the SVG viewBox is (0 0 720 800).
 TEST(ViewportGeometryTest, EditorClickCenterOfImageMapsToCenterOfDocument) {
   const Vector2d paneOrigin(560.0, 0.0);
@@ -125,7 +125,7 @@ TEST(ViewportGeometryTest, EditorClickWithScaledDocument) {
   const Vector2d paneSize(720.0, 800.0);
   const Vector2d imageSize(720.0, 800.0);  // zoom=1
   const Vector2d panOffset(0.0, 0.0);
-  // Document has viewBox "0 0 200 200" — smaller than the rendered pane.
+  // Document has viewBox "0 0 200 200" - smaller than the rendered pane.
   const Box2d docViewBox = Box2d::FromXYWH(0.0, 0.0, 200.0, 200.0);
 
   const DrawingViewportLayout layout =

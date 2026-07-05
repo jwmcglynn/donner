@@ -24,7 +24,7 @@ SharedGeodeBackendState& SharedTestBackendState() {
 ///
 /// Sharing a single device across all test-constructed renderers avoids the
 /// Mesa llvmpipe (and Intel ANV) hang caused by accumulating hundreds of
-/// WebGPU device creations in a single process — the driver state doesn't
+/// WebGPU device creations in a single process - the driver state doesn't
 /// reclaim cleanly and the process eventually deadlocks.
 std::shared_ptr<geode::GeodeDevice> SharedTestDevice() {
   SharedGeodeBackendState& state = SharedTestBackendState();
@@ -84,7 +84,7 @@ std::unique_ptr<RendererInterface> GeodeCreateInstance(bool verbose) {
 /// Returns a process-wide shared `RendererGeode`. Created on first call,
 /// reused for every subsequent render. Sharing eliminates the per-test
 /// `RendererGeode` allocation churn that would otherwise accumulate
-/// ~2 textures + ~8 buffers per test in wgpu-native's internal tracking —
+/// ~2 textures + ~8 buffers per test in wgpu-native's internal tracking -
 /// enough to trip the driver's `maxMemoryAllocationCount` on Mesa lavapipe /
 /// llvmpipe after a few hundred tests (issue #575). `beginFrame()` fully
 /// resets per-frame state, so a shared renderer behaves identically to a
@@ -122,7 +122,7 @@ RendererBitmap GeodeRender(SVGDocument& document, bool verbose) {
 }
 
 RendererBitmap GeodeRenderForAscii(SVGDocument& document) {
-  // Geode has no anti-aliasing toggle — ASCII snapshots aren't supported,
+  // Geode has no anti-aliasing toggle - ASCII snapshots aren't supported,
   // but routing through the same shared renderer keeps the driver
   // resource budget bounded.
   RendererGeode& renderer = SharedTestRenderer();

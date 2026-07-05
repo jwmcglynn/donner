@@ -270,7 +270,7 @@ void AsyncRenderer::cancelInFlight() {
   }
   if (signalCancel) {
     // Notify in case the worker was still in `cv_.wait` when we
-    // landed — its updated predicate also wakes on `Cancelling`.
+    // landed - its updated predicate also wakes on `Cancelling`.
     cv_.notify_one();
   }
 }
@@ -351,7 +351,7 @@ void AsyncRenderer::workerLoop() {
 
     // §M4: every iteration starts with a fresh (non-cancelled) token.
     // The UI thread sets cancel via `requestRender` ONLY when posting
-    // while busy, and we're idle here right before the render runs —
+    // while busy, and we're idle here right before the render runs -
     // so any cancel signal from a previous iteration is stale.
     cancelRender_.reset();
 
@@ -369,7 +369,7 @@ void AsyncRenderer::workerLoop() {
     // §concurrent-dom: serialize this worker render against UI-thread DOM reads. The lease shares
     // the live registry (it does not snapshot), and the worker cannot touch the document in
     // SingleThreaded mode (owner-thread assert). The document is flipped to ConcurrentDom on first
-    // render and stays there for the editor's lifetime — UI-thread reads are responsible for
+    // render and stays there for the editor's lifetime - UI-thread reads are responsible for
     // holding their own access guard (`withReadAccess` / a scoped `DocumentReadAccess`) where they
     // touch the live document. The worker holds a write guard across the document-reading render
     // work and releases it via `releaseDocumentAccess()` before every `mutex_` section below to
@@ -395,9 +395,9 @@ void AsyncRenderer::workerLoop() {
     //      and `setDocumentMaybeStructural` both bump
     //      `documentGeneration` and produce a fresh `Registry` (the
     //      `SVGDocumentHandle` pointer changes). When that happens we
-    //      try the structural-remap path FIRST — it preserves cached
+    //      try the structural-remap path FIRST - it preserves cached
     //      filter / bucket bitmaps, `canvasFromBitmap` stamps, and
-    //      the pre-warmed bg/fg pair — and only fall back to a
+    //      the pre-warmed bg/fg pair - and only fall back to a
     //      destructive `resetAllLayers(documentReplaced=true)` when
     //      no remap is available or the remap itself fails an
     //      invariant check.
@@ -454,7 +454,7 @@ void AsyncRenderer::workerLoop() {
             }
             compositorEntities_ = std::move(remappedEntities);
           } else {
-            // The drag/selection target didn't survive the remap — fall
+            // The drag/selection target didn't survive the remap - fall
             // through to the reset branch so subsequent promote calls
             // start clean.
             compositorEntity_ = entt::null;
@@ -500,7 +500,7 @@ void AsyncRenderer::workerLoop() {
     // transition. Skipping the kind-change re-promote left the
     // compositor treating an active drag as a Selection prewarm and
     // tripped the descendant-segment dirty cascade every drag frame
-    // post-zoom — sustained > 1 s/frame on the splash.
+    // post-zoom - sustained > 1 s/frame on the splash.
     const bool entityChanged = !SameEntityList(compositorEntities_, desiredEntities);
     // Keep a selected entity in ActiveDrag mode after mouse-up so the
     // layer/segment caches stay hot for release-to-drag cycles. The
@@ -549,7 +549,7 @@ void AsyncRenderer::workerLoop() {
         !desiredEntities.empty() && !ContainsAllEntities(compositorEntities_, desiredEntities);
 
     // The DOM is the sole source of truth for the dragged entity's
-    // position — `SelectTool` mutates the `transform` attribute every
+    // position - `SelectTool` mutates the `transform` attribute every
     // drag frame, so by the time we reach here the compositor's fast
     // path will diff the new DOM transform against the cached bitmap's
     // rasterize-time transform and either reuse the bitmap via a
@@ -809,7 +809,7 @@ void AsyncRenderer::workerLoop() {
       workerTiming.buildPreviewMs = elapsedSince(buildPreviewStart);
     }
 
-    // Selection chrome is no longer baked into the bitmap — main.cc
+    // Selection chrome is no longer baked into the bitmap - main.cc
     // draws it via the ImGui draw list every frame so clicks don't
     // pay the SVG re-rasterize cost. The `request.selection` field
     // is left in place for back-compat callers but ignored here.
@@ -897,7 +897,7 @@ void AsyncRenderer::workerLoop() {
         // chance of deadlock if the caller re-enters AsyncRenderer.
         wake = wakeCallback_;
       } else if (std::holds_alternative<CancellingState>(workerState_)) {
-        // `cancelInFlight` raced with the worker's final lap —
+        // `cancelInFlight` raced with the worker's final lap -
         // renderFrame finished naturally but the user-input event
         // wants the result dropped. Drop it and transition to
         // Idle so the worker's cv_.wait at the top of the loop

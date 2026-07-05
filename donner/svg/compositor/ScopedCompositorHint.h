@@ -11,7 +11,7 @@ namespace donner::svg::compositor {
 
 /**
  * Kind of interaction the editor is signalling to the compositor. See design
- * doc § Interaction hints. `Hover` is intentionally omitted in v1 — whether v2
+ * doc § Interaction hints. `Hover` is intentionally omitted in v1 - whether v2
  * adds it at all is deferred (Non-Goal 8).
  */
 enum class InteractionHint : uint8_t {
@@ -34,7 +34,7 @@ enum class InteractionHint : uint8_t {
  * When the destructor removes the last entry, the component itself is removed
  * so entity storage stays lean and the resolver's view iteration stays tight.
  *
- * Non-copyable; movable. A moved-from handle is inert — its destructor does
+ * Non-copyable; movable. A moved-from handle is inert - its destructor does
  * nothing. The usual RAII pattern.
  */
 class ScopedCompositorHint {
@@ -73,7 +73,7 @@ public:
                                           uint16_t weight = 0x8000);
 
   /// Factory: publish an `Animation` hint. Default weight `0xC000` matches the
-  /// High slot in the design-doc weight hierarchy — higher than Interaction so
+  /// High slot in the design-doc weight hierarchy - higher than Interaction so
   /// an actively-animating entity wins over a merely-selected one under budget
   /// pressure.
   static ScopedCompositorHint Animation(Registry& registry, Entity entity,
@@ -91,7 +91,7 @@ public:
 
   /// Returns the `InteractionHint` kind if this handle was produced by
   /// `Interaction()`; `std::nullopt` otherwise. Recorded for introspection
-  /// only — the resolver ignores it.
+  /// only - the resolver ignores it.
   [[nodiscard]] std::optional<InteractionHint> interactionKind() const {
     return (source_ == HintSource::Interaction) ? std::optional<InteractionHint>(interactionKind_)
                                                 : std::nullopt;
@@ -114,14 +114,14 @@ public:
   /// Returns true if this handle is still live (has not been moved from).
   [[nodiscard]] bool active() const { return registry_ != nullptr; }
 
-  /// Defuse the handle without touching the registry — subsequent
+  /// Defuse the handle without touching the registry - subsequent
   /// destruction becomes a no-op. Used by `CompositorController::
   /// resetAllLayers` when the underlying document has been replaced
   /// (`ReplaceDocumentCommand`): the old Registry was destroyed in place
   /// and the new one at the same storage address has no knowledge of
   /// the entity IDs these hints were built from, so calling
   /// `registry.valid(old_entity)` in the dtor dereferences into entt
-  /// sparse-set pages that don't exist — SIGSEGV. The old `CompositorHint
+  /// sparse-set pages that don't exist - SIGSEGV. The old `CompositorHint
   /// Component`s went down with the old entity space, so there's nothing
   /// to clean up anyway; we just need to make sure the dtor doesn't try.
   void release() {
@@ -134,18 +134,18 @@ public:
   /// remapAfterStructuralReplace` to preserve the hint graph across a
   /// structurally-equivalent `setDocument`.
   ///
-  /// `SVGDocument` owns shared document state — a `setDocument` frees the old Registry
+  /// `SVGDocument` owns shared document state - a `setDocument` frees the old Registry
   /// outright, making any raw
   /// `Registry*` the hint was holding a dangling pointer. The caller
   /// must supply the NEW registry's address (the one backing the
   /// freshly-swapped document) so we re-seat the pointer before
   /// touching any ECS state.
   ///
-  /// The old entity id is NOT touched — the old Registry is destroyed,
+  /// The old entity id is NOT touched - the old Registry is destroyed,
   /// and the old `CompositorHintComponent` went with it.
   ///
   /// Preconditions:
-  ///   - `active()` — the handle is not moved-from.
+  ///   - `active()` - the handle is not moved-from.
   ///   - `newEntity` is a valid entity in `newRegistry`.
   void remapToNewEntity(Registry& newRegistry, Entity newEntity) {
     registry_ = &newRegistry;

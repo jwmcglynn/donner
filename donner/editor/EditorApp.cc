@@ -181,7 +181,7 @@ bool GeometryIntersectsRect(const svg::SVGGeometryElement& geometry, const Box2d
 /// Depth-first walk of the SVG tree rooted at `node`, invoking
 /// `visit(geometry)` on every `SVGGeometryElement` encountered. Used
 /// by `hitTestRect` so marquee selection lives entirely on top of
-/// the public DOM API — no ECS reach-through.
+/// the public DOM API - no ECS reach-through.
 template <typename Visitor>
 void ForEachGeometryElement(const svg::SVGElement& node, Visitor& visit) {
   if (node.isa<svg::SVGGeometryElement>()) {
@@ -542,7 +542,7 @@ void ApplyTimelineSnapshot(EditorApp& app, AsyncSVGDocument& document,
   svg::SVGElement liveElement = ResolveSnapshotElement(document, snapshot);
 
   // Route the restored transform through the command queue so every
-  // DOM write — tool drags, text-pane re-parse, and undo — goes through
+  // DOM write - tool drags, text-pane re-parse, and undo - goes through
   // the same mutation seam. The queue coalesces with any pending
   // commands and applies on the next `flushFrame()`.
   app.applyMutation(EditorCommand::SetTransformCommand(liveElement, snapshot.transform));
@@ -550,7 +550,7 @@ void ApplyTimelineSnapshot(EditorApp& app, AsyncSVGDocument& document,
   // Capture the source-text writeback target BEFORE the command drains
   // so the path-based target resolves against the in-sync document.
   // The writeback will be applied by `main.cc` after `flushFrame()`
-  // lands the undone transform on the element — at that point the
+  // lands the undone transform on the element - at that point the
   // transform the user sees on the canvas and the `transform=` value
   // in the source must agree. Without this the DOM reverts but the
   // source keeps the post-drag text, and the next edit lands on the
@@ -742,7 +742,7 @@ bool EditorApp::loadFromString(std::string_view svgBytes) {
   pendingDocumentSourceUndo_.reset();
   pendingSelectionRestoreTargets_.reset();
   const bool result = document_.loadFromString(svgBytes);
-  // A successful load resets the dirty state — the in-memory document
+  // A successful load resets the dirty state - the in-memory document
   // now matches the last-loaded bytes. `setCurrentFilePath` should be
   // called separately by the caller if the bytes came from a file.
   if (result) {
@@ -848,7 +848,7 @@ bool EditorApp::deleteSelectionWithUndo(std::string_view currentSourceText) {
   }
 
   // Locked elements are protected from deletion. Filter them out before ANY
-  // delete side effect — source undo, remove writebacks, selection change.
+  // delete side effect - source undo, remove writebacks, selection change.
   // Gating only the DOM command (applyMutation's IsLockGatedCommand check)
   // would still let the already-enqueued remove writeback splice the locked
   // element out of the source text.

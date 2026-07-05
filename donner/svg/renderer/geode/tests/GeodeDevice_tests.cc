@@ -186,7 +186,7 @@ TEST(GeodeDevice, DeferredDestroyBufferSurvivesUntilDrain) {
 
   // Move the buffer into the deferred-destroy queue. The wgpu handle is
   // internally reference-counted, so our local variable may still appear
-  // "valid" after the move — what matters is that the deferred queue now
+  // "valid" after the move - what matters is that the deferred queue now
   // holds its own reference.
   geodeDevice->deferDestroy(std::move(buffer));
 
@@ -242,7 +242,7 @@ TEST(GeodeDevice, DeferredDestroyTextureSurvivesUntilDrain) {
 
   geodeDevice->deferDestroy(std::move(texture));
 
-  // Drain after submission — safe because wgpu internally refs submitted resources.
+  // Drain after submission - safe because wgpu internally refs submitted resources.
   geodeDevice->drainDeferredDestroys();
 
   // Verify no validation errors by submitting more work.
@@ -253,7 +253,7 @@ TEST(GeodeDevice, DeferredDestroyTextureSurvivesUntilDrain) {
 
 /// Regression test for issue #575 (pipeline leak through wgpu-native):
 /// `GeodeDevice::pipeline()` / `gradientPipeline()` / `imagePipeline()` /
-/// `filterEngine()` must return the same object on every call — the
+/// `filterEngine()` must return the same object on every call - the
 /// expensive wgpu pipelines live on the device, not on per-renderer
 /// state. If someone moves pipeline construction back into
 /// `RendererGeode::Impl::initPipelines`, the ~1.6 MB/renderer leak that
@@ -268,7 +268,7 @@ TEST(GeodeDevice, SharedPipelinesReturnSameInstance) {
   EXPECT_EQ(&device->gradientPipeline(), &device->gradientPipeline());
   EXPECT_EQ(&device->imagePipeline(), &device->imagePipeline());
   EXPECT_EQ(&device->filterEngine(), &device->filterEngine());
-  // `maskPipeline()` is lazy — two calls must still return the same
+  // `maskPipeline()` is lazy - two calls must still return the same
   // instance (first call constructs, second call returns cached).
   EXPECT_EQ(&device->maskPipeline(), &device->maskPipeline());
 }
@@ -278,7 +278,7 @@ TEST(GeodeDevice, SharedPipelinesReturnSameInstance) {
 /// device's shared pipelines. Ten `countTexture` / `countBuffer`
 /// ticks with no actual wgpu work between them must show exactly the
 /// reported growth in `lifetimeTextureCreates()` / `lifetimeBufferCreates()`
-/// — this locks the accessor contract so a leak-hunt regression
+/// - this locks the accessor contract so a leak-hunt regression
 /// test written against it can't lie to itself.
 TEST(GeodeDevice, LifetimeCountersReflectCountHelpers) {
   auto device = GeodeDevice::CreateHeadless();

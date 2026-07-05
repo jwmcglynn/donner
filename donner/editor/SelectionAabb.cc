@@ -63,7 +63,7 @@ void CollectRenderableGeometryImpl(const svg::SVGElement& root,
   if (root.isa<svg::SVGGeometryElement>()) {
     out.push_back(root.cast<svg::SVGGeometryElement>());
     // Geometry elements have no graphical children worth descending into
-    // for outline purposes — stop here.
+    // for outline purposes - stop here.
     return;
   }
   for (auto child = SafeFirstChild(root); child.has_value();) {

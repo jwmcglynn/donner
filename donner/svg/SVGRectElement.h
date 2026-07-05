@@ -18,7 +18,7 @@ namespace donner::svg {
  *
  * The `<rect>` element draws an axis-aligned rectangle. You give it a top-left corner
  * (`x`, `y`) and a `width` and `height`, and SVG fills the enclosed area with `fill` and
- * outlines it with `stroke`. Set the optional `rx` and `ry` attributes to round the corners —
+ * outlines it with `stroke`. Set the optional `rx` and `ry` attributes to round the corners -
  * useful for buttons, badges, and card backgrounds. To rotate or skew a rectangle, wrap it in a
  * \ref xml_g with a `transform` attribute, or apply `transform` directly.
  *

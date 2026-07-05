@@ -16,7 +16,7 @@ namespace donner::svg {
  *
  * The `<defs>` element is SVG's "library" section: a place to declare reusable building blocks
  * that should not be drawn where they appear. Anything inside `<defs>` is parsed and kept in
- * memory, but is only rendered when something else explicitly references it — paint servers
+ * memory, but is only rendered when something else explicitly references it - paint servers
  * via `fill="url(#id)"` or `stroke="url(#id)"`, `<use>` elements via `href="#id"`, filters via
  * `filter="url(#id)"`, and so on.
  *

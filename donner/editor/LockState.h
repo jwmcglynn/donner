@@ -5,7 +5,7 @@
 /// affordance and toggles it) and `EditorApp`'s edit-gating path (which drops
 /// geometry-changing and destructive mutations targeting a locked element).
 ///
-/// A layer is "locked" when it — or any ancestor — carries the non-standard
+/// A layer is "locked" when it - or any ancestor - carries the non-standard
 /// `data-donner-locked="true"` marker attribute. Using a `data-*` attribute
 /// keeps the marker round-tripping through SVG serialization without colliding
 /// with any presentation attribute or affecting rendering.
@@ -38,8 +38,8 @@ inline constexpr std::string_view kLockedAttributeValue = "true";
 [[nodiscard]] bool IsLocked(const svg::SVGElement& element);
 
 /// The nearest ancestor-or-self of @p element that directly carries the
-/// `data-donner-locked="true"` marker — i.e. the element that actually owns the
-/// lock — or `std::nullopt` if neither @p element nor any ancestor is locked.
+/// `data-donner-locked="true"` marker - i.e. the element that actually owns the
+/// lock - or `std::nullopt` if neither @p element nor any ancestor is locked.
 ///
 /// This walks the same ancestor chain as `IsLocked`, but returns the *locked
 /// layer* rather than a boolean: clicking a `<rect>` inside a locked `<g>`

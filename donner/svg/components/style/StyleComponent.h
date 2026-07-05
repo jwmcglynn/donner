@@ -18,15 +18,15 @@ struct StyleComponent {
   /**
    * Sets the properties from the value of the element's `style=""` attribute, replacing the
    * prior `style=""` contribution on this element. Presentation-attribute-origin properties
-   * (e.g. `fill="red"`) and author-stylesheet properties are left intact — the replacement
+   * (e.g. `fill="red"`) and author-stylesheet properties are left intact - the replacement
    * is scoped to declarations previously tagged with
    * \ref css::Specificity::StyleAttribute().
    *
    * Safe to call from the SVG parse pipeline (where presentation attributes may already
    * be in the registry) and from the editor's text-edit rewrite path.
    *
-   * Callers that want to *merge* new declarations into an existing `style=""` — e.g. a
-   * tool that toggles one property — should use \ref updateStyle instead.
+   * Callers that want to *merge* new declarations into an existing `style=""` - e.g. a
+   * tool that toggles one property - should use \ref updateStyle instead.
    *
    * @param style The value of the `style` attribute.
    */

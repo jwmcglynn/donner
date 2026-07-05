@@ -44,7 +44,7 @@ TEST(InMemoryClipboardTests, OverwritesPreviousContent) {
 }
 
 /**
- * Newlines and other control characters round-trip verbatim — the
+ * Newlines and other control characters round-trip verbatim - the
  * clipboard stores raw bytes, not a single visual line.
  */
 TEST(InMemoryClipboardTests, MultilineStringPreserved) {
@@ -89,7 +89,7 @@ TEST(InMemoryClipboardTests, ExplicitEmptyStringHasNoText) {
 }
 
 /**
- * A single character round-trips as well — guards against the
+ * A single character round-trips as well - guards against the
  * trivial off-by-one where 1-byte inputs might be mishandled.
  */
 TEST(InMemoryClipboardTests, SingleCharacter) {
@@ -100,7 +100,7 @@ TEST(InMemoryClipboardTests, SingleCharacter) {
 }
 
 /**
- * Embedded NUL bytes survive round-trip — the clipboard stores a
+ * Embedded NUL bytes survive round-trip - the clipboard stores a
  * std::string, not a C string, so NULs are payload, not terminators.
  */
 TEST(InMemoryClipboardTests, EmbeddedNulByteSurvives) {
@@ -115,7 +115,7 @@ TEST(InMemoryClipboardTests, EmbeddedNulByteSurvives) {
 }
 
 /**
- * Two separate InMemoryClipboard instances do NOT share state — this
+ * Two separate InMemoryClipboard instances do NOT share state - this
  * is documented behavior and matters for tests that want isolation.
  */
 TEST(InMemoryClipboardTests, InstancesDoNotShareState) {
@@ -128,7 +128,7 @@ TEST(InMemoryClipboardTests, InstancesDoNotShareState) {
 }
 
 /**
- * getText() is const and repeatable — calling it twice returns the
+ * getText() is const and repeatable - calling it twice returns the
  * same value and does not mutate the clipboard.
  */
 TEST(InMemoryClipboardTests, GetTextIsRepeatable) {
@@ -143,7 +143,7 @@ TEST(InMemoryClipboardTests, GetTextIsRepeatable) {
 
 /**
  * Polymorphic access via a ClipboardInterface pointer works the
- * same as direct access — this is the shape TextEditorCore will
+ * same as direct access - this is the shape TextEditorCore will
  * use when it holds a non-owning ClipboardInterface*.
  */
 TEST(InMemoryClipboardTests, PolymorphicAccessThroughInterface) {
@@ -162,7 +162,7 @@ TEST(InMemoryClipboardTests, PolymorphicAccessThroughInterface) {
 
 /**
  * Polymorphic access via std::unique_ptr<ClipboardInterface> also
- * works — covers the common ownership shape in tests.
+ * works - covers the common ownership shape in tests.
  */
 TEST(InMemoryClipboardTests, PolymorphicAccessViaUniquePtr) {
   std::unique_ptr<ClipboardInterface> clipboard = std::make_unique<InMemoryClipboard>();

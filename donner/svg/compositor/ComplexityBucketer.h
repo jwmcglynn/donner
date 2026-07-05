@@ -14,7 +14,7 @@ namespace donner::svg::compositor {
  *
  * Defaults match the design doc's illustrative constants (see
  * § Complexity Bucketing in 0025-composited_rendering.md). They are hand-tuned
- * per Non-Goal 2 ("no ML or user-history heuristics") — adjust values based
+ * per Non-Goal 2 ("no ML or user-history heuristics") - adjust values based
  * on benchmark results as the system matures.
  */
 struct ComplexityBucketerConfig {
@@ -98,7 +98,7 @@ struct ComplexityBucketerStats {
  *   for pathological documents.
  * - Candidates are limited to top-level root children. Deeper cost peaks
  *   (e.g., a deeply-nested `<g>` with many filter children) are not promoted
- *   in v1 — they'd require a deferred-pop walk we're deferring.
+ *   in v1 - they'd require a deferred-pop walk we're deferring.
  * - Each reconcile recomputes from scratch. No incremental update on partial
  *   mutations.
  *
@@ -130,7 +130,7 @@ public:
 
   /// Like `clear()`, but releases each hint's registry pointer first so
   /// the dtor becomes a no-op. Used from `CompositorController::resetAll
-  /// Layers` after `setDocument` has replaced the entity space — the old
+  /// Layers` after `setDocument` has replaced the entity space - the old
   /// `CompositorHintComponent`s are already gone, and `registry.valid()`
   /// on the rebuilt registry would SIGSEGV against the stale entity IDs.
   void releaseAllHintsNoClean() {
@@ -142,7 +142,7 @@ public:
 
   /// Rebuild the bucket hint set against a new entity space after a
   /// structurally-identical `setDocument`. Mirror of `MandatoryHint
-  /// Detector::rebuildForReplacedDocument` — release the stale hints
+  /// Detector::rebuildForReplacedDocument` - release the stale hints
   /// without touching the old entity ids, then run `reconcile` on the
   /// new registry. Because the bucketer's decisions are a pure function
   /// of the render-tree shape + complexity costs, a structurally-equal

@@ -116,7 +116,7 @@ struct PathShape {
   /// Source entity this path was derived from. Set by the driver at the `drawPath` call
   /// site (`RendererDriver::traverseRange`). Backends that cache per-entity state key
   /// off this (see `GeodePathCacheComponent`). A null `EntityHandle` (the default) means
-  /// "no associated entity" — non-driver callers (overlay drawing, test harnesses) leave
+  /// "no associated entity" - non-driver callers (overlay drawing, test harnesses) leave
   /// it null and backends fall back to the un-cached path.
   EntityHandle sourceEntity;
 };
@@ -389,7 +389,7 @@ public:
    * given target rectangle.
    *
    * The `ImageResource` contract is unpremultiplied RGBA, while renderer
-   * snapshots are premultiplied — routing a per-frame compose through
+   * snapshots are premultiplied - routing a per-frame compose through
    * `drawImage` costs an unpremultiply + repremultiply round trip (two full
    * pixel-buffer conversions and three allocations per layer per frame).
    * Backends that can consume premultiplied pixels directly should override

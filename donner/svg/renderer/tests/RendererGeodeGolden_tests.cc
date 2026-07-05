@@ -38,7 +38,7 @@
  *     Geode-side behaviour around the isolated-layer composite path.
  *
  * These per-backend goldens are a temporary concession to coverage
- * gaps, not a design stance — as the shared test SVGs grow to cover
+ * gaps, not a design stance - as the shared test SVGs grow to cover
  * these features, the Geode-only copies should be deleted. Treat every
  * `testdata/golden/geode/` entry as a bug/TODO that the shared suite
  * should absorb eventually.
@@ -53,7 +53,7 @@
  * pixel diff count is dominated by AA drift (look at the saved diff
  * PNG under `/tmp/`). If so, widen the threshold with a comment
  * explaining why. If not, `GeodePathEncoder`, the Slug shaders, or
- * `GeoEncoder`'s state setup has regressed — dig in.
+ * `GeoEncoder`'s state setup has regressed - dig in.
  */
 
 namespace donner::svg {
@@ -74,7 +74,7 @@ ImageComparisonParams strictGeodeParams() {
 /// edge fringe that differs across GPU drivers. The per-backend goldens here
 /// are captured on macOS/Metal; on Linux CI's Mesa lavapipe (llvmpipe) the
 /// WGSL Slug coverage math diverges by a few LSB along edges (ULP-level
-/// `sqrt`/`fma`/derivative precision) — NOT hardware MSAA, which this backend
+/// `sqrt`/`fma`/derivative precision) - NOT hardware MSAA, which this backend
 /// no longer uses (0041, sampleCount=1). Measured: every differing pixel is a
 /// <=1px edge band of magnitude <=28/255; a genuine regression (color flip)
 /// scores ~70x above this threshold's maxDelta, so it still trips loudly. 0.1
@@ -171,36 +171,36 @@ TEST_F(RendererGeodeGoldenTests, Edzample) {
 // follow-up task; re-enable the corresponding tests once the root cause is
 // fixed. Deferred:
 //
-//   - **Dashes** — stroking_dasharray / stroking_dashoffset /
+//   - **Dashes** - stroking_dasharray / stroking_dashoffset /
 //     stroking_pathlength / stroking_complex. `strokeToFill` ignores
 //     `dashArray`; the Geode adapter warns once in verbose mode and draws
 //     the undashed stroke. Needs dash support in `strokeToFill`.
 //
-//   - **Round / square caps** — stroking_linecap. Visual output renders all
+//   - **Round / square caps** - stroking_linecap. Visual output renders all
 //     three cap styles as butt. Either `emitCap` isn't producing the extra
 //     geometry or it's being produced but mis-rendered. (Task #34.)
 //
-//   - **Sharp concave corners on open subpaths** — stroking_linejoin. The
+//   - **Sharp concave corners on open subpaths** - stroking_linejoin. The
 //     inverted-V path hits `emitJoin`'s "inside-turn" branch, which just
 //     draws a line across the two offset endpoints. That creates a
 //     self-intersecting polygon that neither NonZero nor EvenOdd renders
 //     cleanly. Needs proper inner-corner intersection handling in
 //     `Path::strokeToFill`. (Task #32.)
 //
-//   - **Curved flattened strokes on closed subpaths** — rect2 (rounded
+//   - **Curved flattened strokes on closed subpaths** - rect2 (rounded
 //     rect), ellipse1, skew1 (rounded parallelogram), quadbezier1,
 //     size-too-large. These produce diagonal streaks inside the stroke
-//     ring. Root cause is not yet identified — possibly flattened inner
+//     ring. Root cause is not yet identified - possibly flattened inner
 //     contours with crossing-count inconsistencies that defeat EvenOdd, or
 //     a Slug band encoder issue with multi-subpath inputs. (Task #33.)
 //
-//   - **Mixed stroke/miter artifacts** — polygon, stroking_miterlimit.
+//   - **Mixed stroke/miter artifacts** - polygon, stroking_miterlimit.
 //     Visually show small extra extensions beyond the shape boundary.
 //     Probably related to the same curve-stroke root cause as above.
 //
 // The tests below passed pixel-level verification (at sub-pixel resolution,
 // not just visual-comparison-at-thumbnail). The Geode output is correct for
-// each — per-backend goldens catch any regressions.
+// each - per-backend goldens catch any regressions.
 // ----------------------------------------------------------------------------
 
 /// Ellipses with solid strokes.
@@ -231,7 +231,7 @@ TEST_F(RendererGeodeGoldenTests, Polygon) {
                          ImageComparisonParams::WithThreshold(0.1f));
 }
 
-/// Quadratic Bézier annotation figure — fills and strokes on quad-curve paths.
+/// Quadratic Bézier annotation figure - fills and strokes on quad-curve paths.
 TEST_F(RendererGeodeGoldenTests, QuadBezier) {
   // Per-backend golden: Geode's analytic dual-ray Slug coverage (0041) renders
   // the curved stroke's edges with a ~1px-finer band than tiny-skia's
@@ -246,7 +246,7 @@ TEST_F(RendererGeodeGoldenTests, QuadBezier) {
 }
 
 /// `stroke-linecap` variants (butt, round, square). All three are rendering
-/// correctly — the original visual-comparison misidentification was caused by
+/// correctly - the original visual-comparison misidentification was caused by
 /// the 3.5px round/square extensions being only 2 pixels on a 225px canvas,
 /// invisible at thumbnail resolution.
 TEST_F(RendererGeodeGoldenTests, StrokingLinecap) {
@@ -269,7 +269,7 @@ TEST_F(RendererGeodeGoldenTests, StrokingMiterlimit) {
                          ImageComparisonParams::WithThreshold(0.1f));
 }
 
-/// Polyline with solid stroke — exercises open-subpath stroke with default
+/// Polyline with solid stroke - exercises open-subpath stroke with default
 /// (butt) caps and straight-segment bevel joins.
 TEST_F(RendererGeodeGoldenTests, Polyline) {
   compareWithGeodeGolden("donner/svg/renderer/testdata/polyline.svg",
@@ -278,7 +278,7 @@ TEST_F(RendererGeodeGoldenTests, Polyline) {
 }
 
 /// `stroke-width` across a range of values on horizontal lines. Butt caps,
-/// no curves, no joins — smallest possible exercise of variable widths.
+/// no curves, no joins - smallest possible exercise of variable widths.
 TEST_F(RendererGeodeGoldenTests, StrokingStrokewidth) {
   compareWithGeodeGolden("donner/svg/renderer/testdata/stroking_strokewidth.svg",
                          "donner/svg/renderer/testdata/golden/stroking_strokewidth.png");
@@ -341,7 +341,7 @@ TEST_F(RendererGeodeGoldenTests, LinearGradientStroke) {
 /// shifting ~2 interior pixels by one iso-value band. This is cross-architecture
 /// float rounding in the software rasterizer, not an edge/coverage effect: a
 /// genuine regression (wrong `t` derivation or a stop/color flip) recolors the
-/// whole 64x64 fill — thousands of pixels, far above this budget. Allow a small
+/// whole 64x64 fill - thousands of pixels, far above this budget. Allow a small
 /// absolute budget instead of strict identity so both arches pass.
 TEST_F(RendererGeodeGoldenTests, RadialGradientBasic) {
   compareWithGeodeGolden(
@@ -383,7 +383,7 @@ TEST_F(RendererGeodeGoldenTests, RadialGradientSpread) {
       ImageComparisonParams::WithThreshold(0.02f, 40).includeAntiAliasingDifferences());
 }
 
-/// Stroke outline filled with a radial gradient — same dispatch as the
+/// Stroke outline filled with a radial gradient - same dispatch as the
 /// linear stroke test but routed through `fillPathRadialGradient`.
 ///
 /// The stroked shape hits the same x86_64 lavapipe radial math variance as
@@ -446,7 +446,7 @@ TEST_F(RendererGeodeGoldenTests, PatternSolid) {
 }
 
 /// 20x20 checkerboard-style tile with a grey top-left square and a green
-/// bottom-right square. Tests multi-draw tile rendering — the nested
+/// bottom-right square. Tests multi-draw tile rendering - the nested
 /// encoder records two distinct fills into the offscreen tile texture.
 TEST_F(RendererGeodeGoldenTests, PatternChecker) {
   compareWithGeodeGolden("donner/svg/renderer/testdata/geode_pattern_checker.svg",

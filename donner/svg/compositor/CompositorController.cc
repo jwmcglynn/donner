@@ -91,7 +91,7 @@ CompositorController::PromoteResult CompositorController::promoteEntity(
     return PromoteResult{PromoteResult::FullCanvasPreviewRequired};
   }
 
-  // Design doc 0033 §M9 — layer-set hysteresis. If `entity` is in the
+  // Design doc 0033 §M9 - layer-set hysteresis. If `entity` is in the
   // pending-demotion queue, lift the demotion. The layer + hint
   // survived the `demoteEntity` call, so we can fall through to the
   // kind-refresh path below and reuse the cached bitmap / segment
@@ -106,7 +106,7 @@ CompositorController::PromoteResult CompositorController::promoteEntity(
   // Critical for drag-after-zoom: without this, the kind upgrade returned
   // early here, the compositor kept treating the entity as a Selection hint,
   // and the descendant-segment cascade marked unrelated segments dirty every
-  // drag frame — turning a moderately-zoomed drag into 3-second slow frames.
+  // drag frame - turning a moderately-zoomed drag into 3-second slow frames.
   auto activeHintIt = activeHints_.find(entity);
   if (activeHintIt != activeHints_.end()) {
     if (config_.autoPromoteInteractions) {
@@ -132,7 +132,7 @@ CompositorController::PromoteResult CompositorController::promoteEntity(
   // layer (non-zero `ComputedLayerAssignmentComponent::layerId`). A
   // user-promoted layer's range would span those descendants, causing
   // `drawEntityRange` to render them into this layer's bitmap AND into
-  // the sub-layer's bitmap — double-exposed pixels on compose. This
+  // the sub-layer's bitmap - double-exposed pixels on compose. This
   // manifested as crescent-shaped color drift at radial-gradient orb
   // edges when dragging `#Clouds_with_gradients` on the splash, which
   // contains cls-90 / cls-93 clip-path sublayers.
@@ -188,7 +188,7 @@ CompositorController::PromoteResult CompositorController::promoteEntity(
     activeHints_.erase(entity);
     resolver_.resolve(registry, kMaxCompositorLayers);
     reconcileLayers(registry);
-    // The resolver refused the assignment — treat as "descendant
+    // The resolver refused the assignment - treat as "descendant
     // promoted" since that's the only realistic cause of post-
     // emplace resolver rejection (the explicit hint exists, but the
     // resolver picked a different overlapping promote that owns the
@@ -196,7 +196,7 @@ CompositorController::PromoteResult CompositorController::promoteEntity(
     return refuse(PromoteRefusalReason::DescendantPromoted);
   }
 
-  // Don't force a full cache invalidation — `resyncSegmentsToLayerSet`
+  // Don't force a full cache invalidation - `resyncSegmentsToLayerSet`
   // preserves segments whose boundary identity survives the new layer
   // insertion, which is what keeps click-to-first-pixel fast on the
   // splash's first drag-target promote.
@@ -206,7 +206,7 @@ CompositorController::PromoteResult CompositorController::promoteEntity(
 }
 
 void CompositorController::demoteEntity(Entity entity) {
-  // Design doc 0033 §M9 — layer-set hysteresis. Don't run the
+  // Design doc 0033 §M9 - layer-set hysteresis. Don't run the
   // resolver / reconcileLayers immediately; queue the demotion
   // against a frame counter and let the layer + hint linger.
   // `promoteEntity` for the same entity within the window cancels
@@ -244,7 +244,7 @@ void CompositorController::demoteEntity(Entity entity) {
   // The split bg / drag / fg cache is keyed on the editor's current
   // drag entity. Even though the layer lives on through the hysteresis
   // window, the editor's view of "this entity is the drag target" is
-  // over — clear `splitStaticLayersEntity_` so the next
+  // over - clear `splitStaticLayersEntity_` so the next
   // `snapshotTilesForUpload` doesn't mark the about-to-be-demoted
   // layer with `isDragTarget=true`.
   splitStaticLayersEntity_ = entt::null;
@@ -258,7 +258,7 @@ void CompositorController::flushPendingDemotionsForTesting() {
   // Drop the per-entry counters to zero so the next processing pass
   // expires all of them. We can't just `clear()` + erase from
   // `activeHints_` because the deferred resolver / reconcile work
-  // still needs to run — push it through the normal path.
+  // still needs to run - push it through the normal path.
   for (auto& [entity, frames] : pendingDemotions_) {
     frames = 0;
   }
@@ -294,7 +294,7 @@ void CompositorController::processPendingDemotions(Registry& registry) {
     activeHints_.erase(entity);
   }
   // Batch a single resolver + reconcile pass for all expirations
-  // — the loop above might have removed several hints at once, and
+  // - the loop above might have removed several hints at once, and
   // running the resolver per-entity would N² the segment cache
   // rebuild. `resyncSegmentsToLayerSet` (called from
   // `renderFrame`'s normal flow later this tick) preserves every
@@ -479,11 +479,11 @@ CompositorController::snapshotCompositeTiles(SnapshotThumbnails thumbnails) cons
     tiles.push_back(std::move(tile));
   };
 
-  // Always emit the full segments+layers paint-order breakdown — even
+  // Always emit the full segments+layers paint-order breakdown - even
   // when the editor's split-bitmap optimization is active. User
   // feedback on commit `74083723`: "we just split the current segment
   // into three layers and keep the other tiles surrounding it
-  // unmodified" — showing only `bg/drag/fg` collapses the source-of-
+  // unmodified" - showing only `bg/drag/fg` collapses the source-of-
   // truth structure and hides which sibling layers the drag target
   // sits among. Highlight the drag target inline; append the composed
   // bg/fg below as auxiliary views.
@@ -530,7 +530,7 @@ CompositorController::snapshotCompositeTiles(SnapshotThumbnails thumbnails) cons
   }
 
   // Post-§M2C: bg/fg tiles no longer exist (the compositor doesn't
-  // pre-flatten — the editor blits segments and layers directly).
+  // pre-flatten - the editor blits segments and layers directly).
   // The Kind::Background / Kind::Foreground enum values are retained
   // for source compatibility but `snapshotCompositeTiles` no longer
   // emits them.
@@ -627,13 +627,13 @@ bool CompositorController::hasSplitStaticLayers() const {
   // change drag (demote old → promote new) can otherwise disable the
   // `skipMainCompose` optimization for ~30 renderFrames and force
   // `composeLayers` to do 2N+1 bitmap blits every fast-path drag frame
-  // at canvas scale — visible to the operator as "fast path counter
+  // at canvas scale - visible to the operator as "fast path counter
   // bumps but framerate stays low, worse at higher zoom". Count only
   // entries NOT pending demotion.
   // Split-static presentation is a SINGLE-drag-target optimization: the editor
   // blits exactly one promoted layer over the static remainder. It applies
   // only when there is exactly one live (non-pending-demote) promoted hint.
-  // Count all live hints first — do NOT early-return on the first ActiveDrag
+  // Count all live hints first - do NOT early-return on the first ActiveDrag
   // hint, or two simultaneously-promoted layers would both look like a split
   // when only a single drag target is allowed. Pinned by
   // `MultiplePromotedLayersDoNotBuildSplitStaticLayers` (>=2 promoted => false)
@@ -689,7 +689,7 @@ std::unordered_map<Entity, Entity> BuildStructuralEntityRemap(const SVGDocument&
         return;
       }
       // Record this mapping (even for elements without compositor state
-      // — they may be ancestors of layer ranges).
+      // - they may be ancestors of layer ranges).
       remap[oldEl.unsafeEntityHandle().entity()] = newEl.unsafeEntityHandle().entity();
 
       // Walk children in lockstep.
@@ -727,7 +727,7 @@ bool CompositorController::remapAfterStructuralReplace(
   // style caches, etc.) for the new entity space. Skipping this and
   // trying to `get_or_emplace<CompositorHintComponent>` on the bare
   // post-swap registry trips an entt assertion in `dense_map::fast_mod`
-  // — the new registry's internal storage hasn't been warmed, so the
+  // - the new registry's internal storage hasn't been warmed, so the
   // power-of-two capacity invariant isn't established yet. Preparing
   // the doc fixes that, plus sets `documentPrepared_=true` so the
   // post-remap `renderFrame` skips redundant prepare work.
@@ -756,7 +756,7 @@ bool CompositorController::remapAfterStructuralReplace(
   activeHints_ = std::move(newActiveHints);
 
   // §M9: remap the hysteresis queue alongside `activeHints_`. Entries
-  // whose entity id doesn't survive the remap are dropped — the layer
+  // whose entity id doesn't survive the remap are dropped - the layer
   // they were guarding is already gone from the new entity space, so
   // there's nothing left to demote later.
   std::unordered_map<Entity, uint32_t> newPendingDemotions;
@@ -803,7 +803,7 @@ bool CompositorController::remapAfterStructuralReplace(
     if (it != remap.end()) {
       splitStaticLayersEntity_ = it->second;
     } else {
-      // Cache identity lost — drop the split-target id so the next
+      // Cache identity lost - drop the split-target id so the next
       // `snapshotTilesForUpload` re-derives it from `activeHints_`.
       splitStaticLayersEntity_ = entt::null;
     }
@@ -901,7 +901,7 @@ void CompositorController::resetAllLayers(bool documentReplaced) {
     mandatoryDetector_.releaseAllHintsNoClean();
     complexityBucketer_.releaseAllHintsNoClean();
   } else {
-    // Registry is still live — run the normal RAII cleanup so the resolver
+    // Registry is still live - run the normal RAII cleanup so the resolver
     // can see the hints disappear and strip orphan `ComputedLayerAssignment
     // Component`s.
     mandatoryDetector_.clear();
@@ -930,7 +930,7 @@ void CompositorController::resetAllLayers(bool documentReplaced) {
   rootDirty_ = true;
   documentPrepared_ = false;
   hintsScanned_ = false;
-  // Main renderer's cached frame is for the old document — invalidate
+  // Main renderer's cached frame is for the old document - invalidate
   // so the next `composeLayers` does a full first-frame compose.
   mainRendererHasCachedFrame_ = false;
   hasLastSurfaceFromCanvas_ = false;
@@ -942,7 +942,7 @@ void CompositorController::setTightBoundedSegmentsEnabled(bool enabled) {
   }
   config_.tightBoundedSegments = enabled;
   // Existing cached segments were rasterized under the previous policy
-  // — a segment rasterized tight has a non-zero offset that the
+  // - a segment rasterized tight has a non-zero offset that the
   // full-canvas path would mis-apply on compose, and vice versa. Mark
   // every slot dirty so the next frame rebuilds under the new policy.
   markAllSegmentsDirty();
@@ -996,7 +996,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   hasLastSurfaceFromCanvas_ = true;
   Registry& registry = document().registry();
 
-  // Design doc 0033 §M9 — age the hysteresis queue and flush
+  // Design doc 0033 §M9 - age the hysteresis queue and flush
   // expirations before the dirty-flag snapshot. An entity that
   // expires this frame becomes a real demote whose
   // `resyncSegmentsToLayerSet` runs as part of the normal render
@@ -1040,11 +1040,11 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
 
   // Fast path: the drag-release `SetTransformCommand` mutation flips the
   // dragged entity's `DirtyFlagsComponent` with only position-related bits
-  // (Layout / Transform / WorldTransform — no Style / Paint / Filter /
+  // (Layout / Transform / WorldTransform - no Style / Paint / Filter /
   // geometry). The default `prepareDocumentForRendering` handles this by
   // tearing down every `ComputedShadowTreeComponent`, every RIC, and every
   // `ComputedClipPathsComponent`, then recomputing styles / paint servers
-  // / filters across the whole tree — O(N) for the splash that's ~200ms of
+  // / filters across the whole tree - O(N) for the splash that's ~200ms of
   // blocked UI, which is what the user saw as a "2s hang on mouse release"
   // (compounded by any queued prewarm / settle renders).
   //
@@ -1053,7 +1053,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   // rebuild entirely: just refresh their `worldFromEntityTransform` from
   // the freshly-computed `ComputedAbsoluteTransformComponent` (invalidated
   // in place by `LayoutSystem::setTransform`) and mark the layer dirty.
-  // Everything else — filter layer bitmaps, bg/fg split, style cascade —
+  // Everything else - filter layer bitmaps, bg/fg split, style cascade -
   // stays untouched across the mutation.
   if (dirtyEntitySnapshot.empty() && !needsFullRebuild) {
     ++fastPathCounters_.noDirtyFrames;
@@ -1073,7 +1073,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
       Entity entity = entt::null;
       CompositorLayer* layer = nullptr;
       Transform2d newWorldFromEntity;
-      /// `bitmapEntity_from_entity` — the canvas-from-canvas mapping from
+      /// `bitmapEntity_from_entity` - the canvas-from-canvas mapping from
       /// the bitmap's stamped entity frame to the entity's CURRENT frame.
       /// Used as the layer's `canvasFromBitmap` compose offset on the
       /// bitmap-reuse fast path. **Stamp-relative**, NOT per-frame.
@@ -1129,7 +1129,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
           matchedLayer->firstEntity() != entity || matchedLayer->lastEntity() != entity;
       // Both single-entity AND subtree layers (e.g. a filter group like
       // `#Lighting_glow_dark`) carry a non-translation drag delta in
-      // `canvasFromBitmap` and reuse their cached bitmap — the cached pixels
+      // `canvasFromBitmap` and reuse their cached bitmap - the cached pixels
       // (the whole filtered result, for a filter group) are transformed as a
       // live quad in lockstep with the overlay. Re-rendering a filter every
       // rotate/scale frame is exactly the per-frame cost that made filtered
@@ -1249,17 +1249,17 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
         // the entity's transform attribute, but the compositor just writes a
         // single compose matrix rather than going back to the renderer, so the
         // presentation transforms the cached pixels as a live quad that tracks
-        // the drag in lockstep with the overlay — no async-worker round trip.
+        // the drag in lockstep with the overlay - no async-worker round trip.
         //
         // This applies to BOTH a pure-translation delta (the bitmap slides,
-        // pixel-exact) AND a single-entity affine delta (rotate/scale — the
+        // pixel-exact) AND a single-entity affine delta (rotate/scale - the
         // bitmap is transformed as a quad, a soft resample during the gesture
         // that re-rasterizes crisp once the drag settles / the entity leaves
         // ActiveDrag). Re-rasterizing the affine delta every frame instead
         // baked the rotation with `canvasFromBitmap ~= identity`, dropping the
         // shape off the live-tracking path so it lagged the overlay (#6/#7).
-        // Subtree layers with a non-translation delta never reach here — they
-        // were disqualified in `appendLayerResolution` — so the only
+        // Subtree layers with a non-translation delta never reach here - they
+        // were disqualified in `appendLayerResolution` - so the only
         // non-translation case here is a single entity with no descendants to
         // keep consistent.
         res.layer->setCanvasFromBitmap(res.bitmapEntityFromEntity);
@@ -1269,7 +1269,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
       }
       // Clear the dirty flags ourselves since we skipped prepare. Tell
       // the rest of renderFrame that the dirty state is fully resolved
-      // — no need to re-run detectors, re-prepare, or re-resolve.
+      // - no need to re-run detectors, re-prepare, or re-resolve.
       registry.clear<components::DirtyFlagsComponent>();
       documentDirty = false;
       if (unhandledDirtyEntities.empty()) {
@@ -1305,7 +1305,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   const bool deferDetectorsToPostPrepare = needsFullRebuild;
   const bool needsHintRescan = !hintsScanned_ || documentDirty;
   if ((!documentPrepared_ || documentDirty) && documentPrepared_ && !deferDetectorsToPostPrepare) {
-    // Document is already prepared and became dirty — rescan now.
+    // Document is already prepared and became dirty - rescan now.
     {
       ZoneScopedN("Compositor::mandatoryDetector.reconcile");
       mandatoryDetector_.reconcile(registry);
@@ -1316,7 +1316,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
     }
     hintsScanned_ = true;
   } else if (!documentPrepared_ && needsHintRescan) {
-    // First frame, RICs don't exist yet. Skip the detectors — we'll run them
+    // First frame, RICs don't exist yet. Skip the detectors - we'll run them
     // immediately after the first prepare below.
   }
   const ResolveOptions resolveOptions{
@@ -1333,7 +1333,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
     reconcileLayers(registry);
   }
   // Only blow away every cached layer bitmap on a full tree rebuild
-  // (`RenderTreeState::needsFullRebuild`) — that's when every entity handle
+  // (`RenderTreeState::needsFullRebuild`) - that's when every entity handle
   // and RIC has been replaced and none of the old bitmaps are still keyed on
   // anything valid. Per-entity dirty flags (e.g., a single transform attribute
   // mutation from `SetTransformCommand` on drag release) intentionally do
@@ -1353,7 +1353,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   //
   // Eager-warmup optimization: after the detectors pick up mandatory /
   // bucket layers, we rasterize them into their bitmap caches IN THE
-  // SAME FRAME — so the user's first click-and-drag after load lands
+  // SAME FRAME - so the user's first click-and-drag after load lands
   // on a warm compositor and doesn't freeze for several seconds while
   // every filter-group bitmap, every segment, and every bg/fg composite
   // rasterizes for the first time. The flat output the main renderer
@@ -1417,7 +1417,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
       // user's first drag frame) doesn't have to pay the first-time
       // rasterize cost on the critical path. Also pre-rasterize static
       // segments against the new layer set. None of this writes to the
-      // main renderer — all offscreen work.
+      // main renderer - all offscreen work.
       if (offscreenSupported_ ||
           (!offscreenSupportKnown_ && renderer().createOffscreenInstance() != nullptr)) {
         offscreenSupported_ = true;
@@ -1477,7 +1477,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   // which is expensive. During drag (composition transform changes only),
   // we skip preparation since the document content hasn't changed.
   //
-  // `documentDirty` triggers prepare whenever ANY entity changed — we need
+  // `documentDirty` triggers prepare whenever ANY entity changed - we need
   // RICs rebuilt so the subsequent `consumeDirtyFlags` -> rasterize pass
   // sees the updated entity transforms. `rootDirty_` is reserved for the
   // more aggressive "invalidate all caches" path used on full-tree
@@ -1506,7 +1506,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
       registry.ctx().get<components::RenderTreeState>().needsFullRebuild = false;
     }
 
-    // First prepare completed — run detectors now if they haven't yet,
+    // First prepare completed - run detectors now if they haven't yet,
     // OR re-run them when the pre-prepare branch deferred to here
     // because RICs had just been wiped by `invalidateRenderTree()`.
     if (!hintsScanned_ || deferDetectorsToPostPrepare) {
@@ -1606,7 +1606,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   // before `prepareDocumentForRendering` cleared `DirtyFlagsComponent`.
   // This marks just the layers whose range contains a mutated entity;
   // everything else stays cached. Filter layers whose subtree didn't
-  // change — the common case when the user drags an unrelated element —
+  // change - the common case when the user drags an unrelated element -
   // keep their bitmaps through the mutation and the next drag starts
   // with the filter cache already warm.
   {
@@ -1644,7 +1644,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
     ZoneScopedN("Compositor::rasterizeDirtyLayersLoop");
     for (auto& layer : layers_) {
       // An immediate (direct-render) layer normally re-rasterizes every frame.
-      // But on a drag frame the layer's pixel content is unchanged — only its
+      // But on a drag frame the layer's pixel content is unchanged - only its
       // compose transform drifted, which the fast path above already encoded as
       // a non-identity `canvasFromBitmap` against the still-valid rasterize-time
       // stamp. Re-rasterizing such a layer here would call `setBitmap`, which
@@ -1653,10 +1653,10 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
       // reuse on the editor's GL upload path).
       //
       // Reuse the cached bitmap and keep the compose offset whenever the layer
-      // is clean and still has a valid rasterize-time stamp — regardless of
+      // is clean and still has a valid rasterize-time stamp - regardless of
       // whether `canvasFromBitmap` is identity (settled / re-promote within the
       // M9 hysteresis window), a pure translation (the bitmap slides,
-      // pixel-exact), or a single-entity affine (rotate/scale — the bitmap is
+      // pixel-exact), or a single-entity affine (rotate/scale - the bitmap is
       // transformed as a live quad, a soft preview that re-rasterizes crisp once
       // the drag settles). `isDirty()` (consumed above) is the genuine
       // content-change signal that forces a re-raster; the FORM of
@@ -1706,14 +1706,14 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   // Resync `staticSegments_` to the current layer set, preserving
   // cached bitmaps whose boundary identity survived. When the user
   // clicks-to-drag, the ONLY segment that structurally changes is the
-  // one the drag target's paint-order range falls inside of — it
+  // one the drag target's paint-order range falls inside of - it
   // splits in two. Every other segment (before-first-filter-group,
   // between-filter-groups-that-didn't-contain-the-target, after-last-
   // filter-group) keeps its cached bitmap. That's what gets click-to-
   // first-pixel under 100 ms on `donner_splash.svg` instead of
   // rebuilding every filter-group's inline neighbor from scratch.
   //
-  // `rootDirty_` forces a full invalidation — used for structural
+  // `rootDirty_` forces a full invalidation - used for structural
   // rebuilds where we can't trust any cached state (e.g., needsFull
   // Rebuild from a reparse that didn't take the structural remap).
   if (rootDirty_) {
@@ -1753,7 +1753,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
 
   // In the single-drag-target split path, publish the editor-facing
   // bg/fg bitmaps. For `N=1` (just the drag layer promoted) they're
-  // exactly the two cached segments — no composite needed. For `N>1`
+  // exactly the two cached segments - no composite needed. For `N>1`
   // (mandatory filter / bucket layers live alongside the drag target)
   // Design doc 0033 §M2C: the compositor no longer pre-flattens
   // segments + non-drag layers into bg/fg bitmaps. The editor reads
@@ -1767,7 +1767,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   // §M9 wrinkle: pending-demotion entries stay in `activeHints_` for
   // the hysteresis window, so a naive `activeHints_.size() == 1`
   // check would fall to `entt::null` whenever the user is mid-switch
-  // between drag targets — dragTranslationDoc on the live tile would
+  // between drag targets - dragTranslationDoc on the live tile would
   // stay at zero for the whole window (~30 frames; on a slow-path
   // worker at 4fps that's ~7s of "content stays put while overlay
   // tracks the cursor"). Count only entries NOT in
@@ -1911,7 +1911,7 @@ void CompositorController::cascadeTransformDirtyToDescendantSegments(
   Registry& registry = document().registry();
   using TreeComponent = donner::components::TreeComponent;
   for (const Entity entity : transformDirtyEntities) {
-    // Also dirty the segment containing `entity` itself — the baseline
+    // Also dirty the segment containing `entity` itself - the baseline
     // `consumeDirtyFlags` path may have dirtied a layer instead, but if
     // we're here the entity had a transform flag and re-rasterizing its
     // own segment is needed when the entity is in a layer that doesn't
@@ -1920,7 +1920,7 @@ void CompositorController::cascadeTransformDirtyToDescendantSegments(
     // EXCEPTION: if the entity is a promoted layer ROOT (non-zero
     // `ComputedLayerAssignmentComponent::layerId` and the layer is
     // rooted at this entity), its whole subtree lives in the layer's
-    // cached bitmap — NOT in any static segment. The layer's bitmap is
+    // cached bitmap - NOT in any static segment. The layer's bitmap is
     // either reused via a compose-transform (fast path) or re-rasterized
     // via `rasterizeLayer` (slow path). Marking the root or descendants'
     // segments dirty just forces unnecessary static-segment rasterize +
@@ -2180,7 +2180,7 @@ std::pair<Entity, Entity> CompositorController::computeEntityRange(Registry& reg
     }
   }
 
-  // No `SubtreeInfo` — the entity's RIC didn't establish an isolated
+  // No `SubtreeInfo` - the entity's RIC didn't establish an isolated
   // rendering scope (plain `<g>`, e.g.). Walk the DOM tree to find
   // the last RIC-bearing descendant so the promoted layer's
   // paint-order range covers every descendant that paints.
@@ -2191,7 +2191,7 @@ std::pair<Entity, Entity> CompositorController::computeEntityRange(Registry& reg
   // group's transform mutates on drag, `consumeDirtyFlags` matches
   // the entity against its single-entity layer range and stops;
   // segments carrying descendants never get marked dirty, so cached
-  // bitmaps keep the children at pre-drag positions — visible as
+  // bitmaps keep the children at pre-drag positions - visible as
   // "children don't move when I drag their parent." See compositor
   // golden `TwoPhaseDragOfPlainGroupMovesChildren`.
   //
@@ -2208,7 +2208,7 @@ std::pair<Entity, Entity> CompositorController::computeEntityRange(Registry& reg
   // still iterated by `drawEntityRange` and burned into this layer's
   // bitmap AS WELL AS into their own. The double-draw produces
   // crescent-shaped drift at gradient-orb tops on
-  // `#Clouds_with_gradients` drag. Tracked for a follow-up — fix
+  // `#Clouds_with_gradients` drag. Tracked for a follow-up - fix
   // requires making `drawEntityRange` layer-aware or refusing
   // user-promotion when descendants are already promoted.
   using TreeComponent = donner::components::TreeComponent;
@@ -2246,8 +2246,8 @@ void CompositorController::propagateFastPathTranslationToSubtree(
 
     if (auto* instance = registry.try_get<components::RenderingInstanceComponent>(descendant)) {
       // `worldFromEntity` maps entity-local points to world space. Since
-      // only the root's local transform changed — by a pure world-space
-      // translation — every descendant's world transform pre-multiplies
+      // only the root's local transform changed - by a pure world-space
+      // translation - every descendant's world transform pre-multiplies
       // by that same delta (root-from-descendant is unchanged, world-
       // from-root shifts by delta, so world-from-descendant shifts too).
       instance->worldFromEntityTransform =

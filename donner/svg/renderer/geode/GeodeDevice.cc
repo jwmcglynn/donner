@@ -165,7 +165,7 @@ struct GeodeDevice::Impl {
 
   wgpu::Instance instance;
 
-  // Shared dummies used by every GeoEncoder's bind groups — see
+  // Shared dummies used by every GeoEncoder's bind groups - see
   // comment block on `GeodeDevice::dummyPatternTexture()`. Created
   // once at `CreateHeadless` time so they never count against
   // per-frame `textureCreates` ceilings.
@@ -184,16 +184,16 @@ struct GeodeDevice::Impl {
   ScopedWgpuHandle<wgpu::Buffer> identityInstanceTransformBuffer;
 
   // Shared render / compute pipelines. Constructed once per GeodeDevice
-  // in `initSharedPipelines` — see the public `pipeline()` / … / `filterEngine()`
+  // in `initSharedPipelines` - see the public `pipeline()` / … / `filterEngine()`
   // accessors on GeodeDevice for the "why" behind sharing. These fields
   // are at the bottom of Impl so they destruct before the wgpu::Device
   // at the top of GeodeDevice (reverse-declaration order).
   std::unique_ptr<GeodePipeline> pipeline;
-  /// Built lazily on first `checkerboardPipeline()` access — see the header.
+  /// Built lazily on first `checkerboardPipeline()` access - see the header.
   std::unique_ptr<GeodeCheckerboardPipeline> checkerboardPipeline;
   std::unique_ptr<GeodeGradientPipeline> gradientPipeline;
   std::unique_ptr<GeodeImagePipeline> imagePipeline;
-  /// Built lazily on first `maskPipeline()` access — see the header.
+  /// Built lazily on first `maskPipeline()` access - see the header.
   std::unique_ptr<GeodeMaskPipeline> maskPipeline;
   std::unique_ptr<GeodeFilterEngine> filterEngine;
 };
@@ -258,7 +258,7 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
 
   // 2. Request a GPU adapter. The synchronous form in webgpu-cpp
   //    internally calls the async `wgpuInstanceRequestAdapter` with a
-  //    lambda that parks the result on the stack — wgpu-native invokes
+  //    lambda that parks the result on the stack - wgpu-native invokes
   //    the callback before returning from the request, so the sync
   //    form is safe on native targets (Emscripten loops on
   //    `emscripten_sleep` instead).
@@ -276,7 +276,7 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
   //
   // Under Emscripten the wgpuAdapterGetInfo / WGPUAdapterInfo struct
   // layout may differ from wgpu-native v24 (WGPUStringView fields vs raw
-  // char*). Skip the native-specific logging for now — the browser's
+  // char*). Skip the native-specific logging for now - the browser's
   // DevTools console already surfaces adapter info.
 #ifndef __EMSCRIPTEN__
   {
@@ -337,7 +337,7 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
 #endif
 
   // 3. Create the device. Error diagnostics are wired via
-  //    `uncapturedErrorCallbackInfo` on the descriptor — the callback
+  //    `uncapturedErrorCallbackInfo` on the descriptor - the callback
   //    stays valid for the device's lifetime.
   //
   // DeviceLostCallback is intentionally NOT set. wgpu-native fires it
@@ -436,10 +436,10 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateFromExternal(const GeodeEmbedCon
   result->device_ = config.device;
   result->queue_ = config.queue;
   result->textureFormat_ = config.textureFormat;
-  // impl_->instance stays null — host owns the instance.
+  // impl_->instance stays null - host owns the instance.
 
   // Use the host-provided adapter for hardware workaround detection. When no
-  // adapter is supplied, skip detection — the host controls its own device.
+  // adapter is supplied, skip detection - the host controls its own device.
   if (config.adapter) {
     result->adapter_ = config.adapter;
     WGPUAdapterInfo info = {};
@@ -547,7 +547,7 @@ void GeodeDevice::initSharedResources() {
 
 void GeodeDevice::initSharedPipelines() {
   // Requires device_ / queue_ / textureFormat_ / useAlphaCoverageAA_ to
-  // be fully populated — `CreateHeadless` and `CreateFromExternal` both
+  // be fully populated - `CreateHeadless` and `CreateFromExternal` both
   // call this as the final step.
   const wgpu::TextureFormat fmt = textureFormat_;
   const uint32_t samples = sampleCount();  // Always 1 (0041 §8: analytic AA).
@@ -561,7 +561,7 @@ void GeodeDevice::initSharedPipelines() {
   impl_->gradientPipeline =
       std::make_unique<GeodeGradientPipeline>(device_, fmt, /*alphaCoverage=*/true, samples);
   impl_->imagePipeline = std::make_unique<GeodeImagePipeline>(device_, fmt, samples);
-  // Mask pipeline is built on first `maskPipeline()` access — see header.
+  // Mask pipeline is built on first `maskPipeline()` access - see header.
   impl_->filterEngine = std::make_unique<GeodeFilterEngine>(*this, /*verbose=*/false);
 }
 

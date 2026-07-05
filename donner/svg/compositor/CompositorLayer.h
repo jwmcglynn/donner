@@ -97,7 +97,7 @@ struct ImmediateLayerPlan {
   double estimatedRedrawCost = 0.0;
   /// Relative fixed/cache memory cost avoided by immediate presentation.
   double estimatedCacheOverheadCost = 0.0;
-  /// Raster time from the most recent layer render. Telemetry only — NOT used in
+  /// Raster time from the most recent layer render. Telemetry only - NOT used in
   /// the immediate decision (see `estimatedRasterizeMs`).
   double measuredRasterizeMs = 0.0;
   /// Deterministic geometry estimate (ms) of this layer's re-rasterize cost.
@@ -159,7 +159,7 @@ public:
   /// transforms force re-rasterization before compose.
   ///
   /// When the bitmap is *intrinsic-sized* (smaller than the canvas,
-  /// rasterized into a tight bound — see `canvasOffset()`), the full
+  /// rasterized into a tight bound - see `canvasOffset()`), the full
   /// compose transform is `Translate(canvasOffset) * canvasFromBitmap`.
   /// `canvasFromBitmap_` itself still encodes only the post-rasterize
   /// drift, so the fast-path math is unchanged.
@@ -238,9 +238,9 @@ public:
     // additional offset is needed to display it at that position.
     //
     // Any `canvasFromBitmap_` value that was computed against the
-    // PREVIOUS (stale) bitmap stamp — e.g. the update loop in
+    // PREVIOUS (stale) bitmap stamp - e.g. the update loop in
     // `renderFrame` that sets `delta = current_RIC - old_stamp`
-    // before `rasterizeDirtyLayersLoop` fires — is wrong for the new
+    // before `rasterizeDirtyLayersLoop` fires - is wrong for the new
     // bitmap: displaying at `new_stamp + old_delta` double-offsets the
     // element by (current - old). Resetting here brings the post-
     // rasterize compose math back to "draw bitmap at stamped pos."
@@ -267,7 +267,7 @@ public:
     ++rasterizeCount_;
   }
 
-  /// Monotonic version counter — bumped on every `setBitmap`. The
+  /// Monotonic version counter - bumped on every `setBitmap`. The
   /// editor uses it to decide whether to re-upload this layer's
   /// bitmap to its cached GL texture.
   [[nodiscard]] uint64_t generation() const { return generation_; }
@@ -322,11 +322,11 @@ public:
   }
 
   /// Remap the layer's entity ids (`entity_`, `firstEntity_`, `lastEntity_`)
-  /// from old to new — used by `CompositorController::remapAfterStructural
+  /// from old to new - used by `CompositorController::remapAfterStructural
   /// Replace` when a structurally-identical document swap gives every
   /// element a new entity id but leaves the rasterized pixels valid. The
   /// cached `bitmap_`, `canvasFromBitmap_`, `bitmapEntityFromWorld
-  /// Transform_`, and `fallbackReasons_` survive unchanged — they're
+  /// Transform_`, and `fallbackReasons_` survive unchanged - they're
   /// keyed on position-in-paint-order, not entity id.
   void remapEntities(Entity newEntity, Entity newFirstEntity, Entity newLastEntity) {
     entity_ = newEntity;
@@ -350,7 +350,7 @@ private:
   RendererBitmap bitmap_;
   std::shared_ptr<const RendererTextureSnapshot> textureSnapshot_;
   std::optional<Transform2d> bitmapEntityFromWorldTransform_;
-  /// `canvasFromBitmap` transform applied during blitting — see the
+  /// `canvasFromBitmap` transform applied during blitting - see the
   /// public accessor for the full semantics.
   Transform2d canvasFromBitmap_;
   FallbackReason fallbackReasons_ = FallbackReason::None;
