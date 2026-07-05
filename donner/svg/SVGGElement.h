@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_g "<g>"
+ * @page xml_g &lt;g&gt;
  *
  * Creates a group of elements which can be transformed as a single object.
  *

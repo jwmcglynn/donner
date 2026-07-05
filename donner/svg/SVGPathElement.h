@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_path "<path>"
+ * @page xml_path &lt;path&gt;
  *
  * Defines a shape using a path, which can include straight lines, curves, and sub-paths.
  *

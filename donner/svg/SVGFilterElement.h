@@ -9,7 +9,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_filter "<filter>"
+ * @page xml_filter &lt;filter&gt;
  *
  * Defines filter effects which can be applied to graphical elements.
  *

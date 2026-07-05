@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_feDiffuseLighting "<feDiffuseLighting>"
+ * @page xml_feDiffuseLighting &lt;feDiffuseLighting&gt;
  *
  * `<feDiffuseLighting>` uses the input image's alpha channel as a **height map** - the more
  * opaque a pixel, the taller the imaginary "surface" at that spot - and then computes how a
@@ -275,8 +275,10 @@ namespace donner::svg {
  * | ------------------: | :-----: | :---------- |
  * | `surfaceScale`      | `1`     | Height multiplier applied to the alpha channel. Larger values make the bump appear taller. |
  * | `diffuseConstant`   | `1`     | Lambertian reflectance (kd). Overall brightness multiplier. |
- * | `kernelUnitLength`  | auto    | The step size used when computing surface normals. Two numbers, in filter coordinates. Defaults to one device pixel. |
  * | `lighting-color`    | `white` | Color of the light. Presentation attribute; can be set via CSS. |
+ *
+ * `kernelUnitLength` is not implemented; surface normals use the renderer's filter sample
+ * spacing.
  *
  * Inherits standard filter primitive attributes (`in`, `result`, `x`, `y`, `width`, `height`)
  * from \ref donner::svg::SVGFilterPrimitiveStandardAttributes.

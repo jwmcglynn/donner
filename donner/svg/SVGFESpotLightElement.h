@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_feSpotLight "<feSpotLight>"
+ * @page xml_feSpotLight &lt;feSpotLight&gt;
  *
  * `<feSpotLight>` is a directional, cone-shaped light - think of a flashlight or a theatre
  * spotlight. It sits at a position `(x, y, z)` in filter coordinates, points at a target

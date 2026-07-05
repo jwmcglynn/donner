@@ -8,7 +8,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_style "<style>"
+ * @page xml_style &lt;style&gt;
  *
  * Defines a CSS stylesheet for the document. Multiple \ref xml_style elements may be defined in a
  * single document, and the aggregate document style is computed from that using CSS cascading

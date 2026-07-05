@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_feDistantLight "<feDistantLight>"
+ * @page xml_feDistantLight &lt;feDistantLight&gt;
  *
  * `<feDistantLight>` is a parallel light source - think of the sun. All its light rays are
  * parallel, so every pixel on the surface gets hit at the same angle, and the light has no

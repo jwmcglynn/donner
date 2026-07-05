@@ -129,7 +129,7 @@ circle {
 ```
 
 \htmlonly
-<svg width="200" height="100" viewbox="0 0 200 100">
+<svg width="200" height="100" viewBox="0 0 200 100">
 
 <style>
   circle {

@@ -9,9 +9,11 @@ and containers.
 The following structural elements are supported:
 
 - \subpage xml_svg (\ref donner::svg::SVGSVGElement "SVGSVGElement")
+- \subpage xml_a (\ref donner::svg::SVGAElement "SVGAElement")
 - \subpage xml_g (\ref donner::svg::SVGGElement "SVGGElement")
 - \subpage xml_defs (\ref donner::svg::SVGDefsElement "SVGDefsElement")
 - \subpage xml_use (\ref donner::svg::SVGUseElement "SVGUseElement")
+- \subpage xml_switch (\ref donner::svg::SVGSwitchElement "SVGSwitchElement")
 - \subpage xml_symbol (\ref donner::svg::SVGSymbolElement "SVGSymbolElement")
 
 */

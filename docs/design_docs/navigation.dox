@@ -1,0 +1,116 @@
+/**
+@page DesignDocsCoreArchitecture Core Architecture and DOM
+
+\details Core runtime architecture, DOM behavior, parsing, resource loading, and scripting designs.
+
+- \subpage md_docs_2design__docs_20004-external__svg__references
+- \subpage md_docs_2design__docs_20005-incremental__invalidation
+- \subpage md_docs_2design__docs_20019-css__token__stream
+- \subpage md_docs_2design__docs_20027-2-scripting
+- \subpage md_docs_2design__docs_20033-multithreading__and__dom__lifetime
+*/
+
+/**
+@page DesignDocsRendering Rendering, Filters, and Backends
+
+\details Rendering architecture, backend work, filters, GPU conformance, and rendering bug
+investigations.
+
+- \subpage md_docs_2design__docs_20003-renderer__interface__design
+- \subpage md_docs_2design__docs_20014-filter__performance
+- \subpage md_docs_2design__docs_20017-geode__renderer
+- \subpage md_docs_2design__docs_20025-composited__rendering
+- \subpage md_docs_2design__docs_20027-tight__bounded__segments
+- \subpage md_docs_2design__docs_20028-2-tinyskia__premul__internal
+- \subpage md_docs_2design__docs_20030-geode__performance
+- \subpage md_docs_2design__docs_20034-progressive__rendering
+- \subpage md_docs_2design__docs_20035-filter__layer__compose__offset__bug
+- \subpage md_docs_2design__docs_20037-geode__presentation__glitch__investigation
+- \subpage md_docs_2design__docs_20041-geode__analytical__aa
+- \subpage md_docs_2design__docs_20042-geode__slug__conformance
+*/
+
+/**
+@page DesignDocsText Text, CSS, and Fonts
+
+\details Text rendering, font loading, shaping, and text-backend references.
+
+- \subpage md_docs_2design__docs_20006-color__emoji
+- \subpage md_docs_2design__docs_20008-css__fonts
+- \subpage md_docs_2design__docs_20010-text__rendering
+- \subpage md_docs_2design__docs_20038-geode__tinyskia__text__parity
+- \subpage md_docs_2design__docs_2text_20052-overview
+- \subpage md_docs_2design__docs_2text_20052-2-architecture
+- \subpage md_docs_2design__docs_2text_20052-3-rtl__and__complex__scripts
+- \subpage md_docs_2design__docs_2text_20052-4-testing
+- \subpage md_docs_2design__docs_2text_20052-5-text__backend__refactor
+- \subpage md_docs_2design__docs_2text_20052-6-text__v1__release
+- \subpage md_docs_2design__docs_2text_20052-7-textpath
+*/
+
+/**
+@page DesignDocsEditor Editor and Interaction
+
+\details Editor architecture, interaction design, replay files, source focus, and authoring tools.
+
+- \subpage md_docs_2design__docs_20020-editor
+- \subpage md_docs_2design__docs_20023-editor__sandbox
+- \subpage md_docs_2design__docs_20025-2-editor__ux
+- \subpage md_docs_2design__docs_20026-2-drag__end__latency
+- \subpage md_docs_2design__docs_20029-ui__input__repro
+- \subpage md_docs_2design__docs_20033-2-editor__design__tool__responsiveness
+- \subpage md_docs_2design__docs_20039-text__editor__focus__and__flash
+- \subpage md_docs_2design__docs_20040-semantic__text__completion
+- \subpage md_docs_2design__docs_20041-2-path__authoring__and__boolean__operations
+- \subpage md_docs_2design__docs_20044-2-editor__fluid__canvas__rendering
+- \subpage md_docs_2design__docs_20045-editor__geode__chrome__migration
+- \subpage md_docs_2design__docs_20046-editor__group__layers
+- \subpage md_docs_2design__docs_20049-structured__text__editing
+- \subpage md_docs_2design__docs_20050-text__editor__behavior
+- \subpage md_docs_2design__docs_20051-text__editor__refactor
+*/
+
+/**
+@page DesignDocsTesting Testing, CI, and Conformance
+
+\details Test infrastructure, CI hardening, fuzzing, coverage, resvg tracking, and conformance
+planning.
+
+- \subpage md_docs_2design__docs_20002-mcp__test__triage__server
+- \subpage md_docs_2design__docs_20007-coverage__improvement__plan
+- \subpage md_docs_2design__docs_20009-resvg__test__suite__bugs
+- \subpage md_docs_2design__docs_20012-continuous__fuzzing
+- \subpage md_docs_2design__docs_20013-coverage__improvement
+- \subpage md_docs_2design__docs_20016-ci__escape__prevention
+- \subpage md_docs_2design__docs_20021-resvg__feature__gaps
+- \subpage md_docs_2design__docs_20022-resvg__test__suite__upgrade
+- \subpage md_docs_2design__docs_20026-svg__conformance__testing
+- \subpage md_docs_2design__docs_20029-2-ci__runtime
+- \subpage md_docs_2design__docs_20031-ci__hardening__2026q2
+- \subpage md_docs_2design__docs_20043-deterministic__replay__testing
+- \subpage md_docs_2design__docs_20044-coverage__improvement__2026q2
+*/
+
+/**
+@page DesignDocsReleases Releases and Planning
+
+\details Release planning, distribution, roadmaps, and issue planning.
+
+- \subpage md_docs_2design__docs_20011-v0__5__release
+- \subpage md_docs_2design__docs_20018-bcr__release
+- \subpage md_docs_2design__docs_20024-proposed__issues__2026q2
+- \subpage md_docs_2design__docs_20028-v1__0__release
+- \subpage md_docs_2design__docs_20047-v0__8__showcase
+*/
+
+/**
+@page DesignDocsTooling Tooling, Process, and Retrospectives
+
+\details Developer tooling, process notes, branch management, templates, and retrospectives.
+
+- \subpage TerminalImageViewerDesign
+- \subpage md_docs_2design__docs_20032-sandbox__branch__split
+- \subpage md_docs_2design__docs_20036-composited__presentation__retrospective
+- \subpage md_docs_2design__docs_20048-design__doc__hygiene
+- \subpage md_docs_2design__docs_2retrospective__template
+*/

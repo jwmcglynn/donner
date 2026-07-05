@@ -14,7 +14,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_pattern "<pattern>"
+ * @page xml_pattern &lt;pattern&gt;
  *
  * Defines a paint server containing a repeated pattern, which is tiled to fill the area.
  *
@@ -164,7 +164,7 @@ namespace donner::svg {
  * | Attribute | Default | Description  |
  * | --------: | :-----: | :----------- |
  * | `viewBox` | (none)  | A list of four numbers (min-x, min-y, width, height) separated by whitespace and/or a comma, that specify a rectangle in userspace that should be mapped to the SVG viewport bounds established by the pattern. |
- * | `preserveAspectRatio` | `xMidYMid meet` | How to scale the viewport to fit the content. Only applies is `viewBox` is specified. |
+ * | `preserveAspectRatio` | `xMidYMid meet` | How to scale the viewport to fit the content. Only applies if `viewBox` is specified. |
  * | `x`       | `0`     | Defines the top-left X coordinate of a rectangle indicating how pattern tiles are placed and spread. The coordinate system is determined by the combination of the `patternUnits` and `patternTransform` attributes. |
  * | `y`       | `0`     | Defines the top-left Y coordinate of a rectangle indicating how pattern tiles are placed and spread. The coordinate system is determined by the combination of the `patternUnits` and `patternTransform` attributes. |
  * | `width`   | `0`     | Defines the width of a rectangle indicating how pattern tiles are placed and spread. The coordinate system is determined by the combination of the `patternUnits` and `patternTransform` attributes. |

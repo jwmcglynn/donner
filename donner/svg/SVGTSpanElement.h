@@ -9,7 +9,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_tspan "<tspan>"
+ * @page xml_tspan &lt;tspan&gt;
  *
  * The `<tspan>` element defines a sub-string or sub-group of text that can be independently
  * positioned or styled inside an SVG text flow. Common usage includes changing the color,
@@ -23,7 +23,9 @@ namespace donner::svg {
  * a `<tspan>` simply inherits the parent `<text>`'s styling; wrapping a portion in `<tspan>`
  * lets you override properties like `fill`, `font-weight`, or `font-size`, or explicitly move
  * that portion using the per-glyph positioning attributes `x`, `y`, `dx`, `dy`, and `rotate`.
- * `<tspan>` does not exist on its own - it must always be a descendant of `<text>`.
+ * Donner also supports the SVG text-length calibration attributes `textLength` and
+ * `lengthAdjust` on `<tspan>` runs. `<tspan>` does not exist on its own - it must always be a
+ * descendant of `<text>`.
  *
  * ```svg
  * <text x="20" y="40">
@@ -62,6 +64,8 @@ namespace donner::svg {
  * | `dx`      | (none)  | Relative X shift(s) for glyphs                       |
  * | `dy`      | (none)  | Relative Y shift(s) for glyphs                       |
  * | `rotate`  | (none)  | Rotation(s) for each glyph in degrees                |
+ * | `textLength` | (none) | Author-specified total advance length for this run |
+ * | `lengthAdjust` | `spacing` | `spacing` or `spacingAndGlyphs` adjustment mode |
  *
  */
 
@@ -71,7 +75,8 @@ namespace donner::svg {
  * The `<tspan>` element creates a sub-span of text within a `<text>` (or nested `<tspan>`),
  * allowing partial style changes or explicit repositioning of a portion of text.  It
  * supports the per-glyph positioning attributes (`x`, `y`, `dx`, `dy`, `rotate`) that
- * let you fine-tune the layout of text runs.
+ * let you fine-tune the layout of text runs, plus `textLength` / `lengthAdjust` for text-length
+ * calibration.
  *
  * \see https://www.w3.org/TR/SVG2/text.html#TSpanElement
  *

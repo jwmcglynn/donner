@@ -12,6 +12,19 @@ if [ -d "/workspace/doxygen" ]; then
   fi
 fi
 
+DONNER_VERSION=$(
+  sed -n '/^[[:space:]]*module(/{
+    s/.*version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/
+    p
+    q
+  }' MODULE.bazel
+)
+if [ -z "$DONNER_VERSION" ]; then
+  echo "Unable to read Donner version from MODULE.bazel" >&2
+  exit 1
+fi
+export DONNER_VERSION
+
 $DOXYGEN_BIN Doxyfile
 
 echo "Documentation generated in generated-doxygen/html/index.html"

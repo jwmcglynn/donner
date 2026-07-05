@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_feFuncR "<feFuncR>"
+ * @page xml_feFuncR &lt;feFuncR&gt;
  *
  * A child element of \ref xml_feComponentTransfer defining the transfer function for the red
  * channel.

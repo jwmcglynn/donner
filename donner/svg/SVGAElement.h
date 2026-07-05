@@ -9,7 +9,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_a "<a>"
+ * @page xml_a &lt;a&gt;
  *
  * The `<a>` element creates a hyperlink around its child content. It is a transparent grouping
  * container: it draws nothing of its own and does not establish a new coordinate system, but its
@@ -26,6 +26,19 @@ namespace donner::svg {
  *
  * The link target is given by `href` (or the legacy `xlink:href`). Donner has no interactive
  * navigation, so the target is parsed and retained but does not affect rendering.
+ *
+ * ## Attributes
+ *
+ * | Attribute      | Default | Description |
+ * | -------------: | :-----: | :---------- |
+ * | `href`         | (none)  | Link target retained on the DOM element. `xlink:href` is accepted as an alias. |
+ * | `x`            | `0`     | Absolute X position(s) when the link participates in SVG text layout. |
+ * | `y`            | `0`     | Absolute Y position(s) when the link participates in SVG text layout. |
+ * | `dx`           | (none)  | Relative X shift(s) for linked text glyphs. |
+ * | `dy`           | (none)  | Relative Y shift(s) for linked text glyphs. |
+ * | `rotate`       | (none)  | Rotation values for linked text glyphs, in degrees. |
+ * | `textLength`   | (none)  | Author-specified total advance length for linked text. |
+ * | `lengthAdjust` | `spacing` | `spacing` or `spacingAndGlyphs` adjustment mode. |
  *
  * ```svg
  * <text x="20" y="40">

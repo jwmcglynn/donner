@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_feBlend "<feBlend>"
+ * @page xml_feBlend &lt;feBlend&gt;
  *
  * `<feBlend>` combines two inputs using a blend mode, similar to the layer blend modes in
  * Photoshop, GIMP, or Figma. The result takes the colors of `in` (the "top" layer) and `in2`

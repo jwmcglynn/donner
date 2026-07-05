@@ -9,7 +9,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_textPath "<textPath>"
+ * @page xml_textPath &lt;textPath&gt;
  *
  * The `<textPath>` element renders text along an arbitrary path referenced by the `href`
  * attribute. It must be a child of a \ref xml_text element.
@@ -51,9 +51,14 @@ namespace donner::svg {
  * | ------------: | :-------: | :------------------------------------------------------- |
  * | `href`        | (none)    | Reference to a `<path>` element                         |
  * | `startOffset` | `0`       | Offset along the path where text begins                  |
- * | `method`      | `align`   | How glyphs are placed: `align` or `stretch`              |
- * | `side`        | `left`    | Which side of the path: `left` or `right`                |
- * | `spacing`     | `exact`   | Spacing control: `auto` or `exact`                       |
+ * | `method`      | `align`   | Parsed: `align` or `stretch`; rendering implements `align` only. |
+ * | `side`        | `left`    | Parsed: `left` or `right`; rendering implements `left` only. |
+ * | `spacing`     | `exact`   | Parsed: `auto` or `exact`; rendering implements `exact` only. |
+ *
+ * \note The parser accepts `x`, `y`, `dx`, `dy`, and `rotate` on `<textPath>` for DOM fidelity,
+ *       but text layout intentionally ignores those attributes on the `<textPath>` element itself,
+ *       matching the SVG text model. Apply positioning to the parent \ref xml_text or nested
+ *       \ref xml_tspan content instead.
  *
  */
 
@@ -62,7 +67,9 @@ namespace donner::svg {
  *
  * The `<textPath>` element places text along an arbitrary SVG path, allowing text to follow
  * curves and complex shapes. It references a `<path>` element via the `href` attribute and
- * supports positioning along the path via `startOffset`.
+ * supports positioning along the path via `startOffset`. The accepted SVG2 `method`, `side`, and
+ * `spacing` attributes are stored on the DOM object; rendering currently implements the default
+ * `align`, `left`, and `exact` behavior.
  *
  * \see https://www.w3.org/TR/SVG2/text.html#TextPathElement
  */

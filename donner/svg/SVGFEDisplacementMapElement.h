@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_feDisplacementMap "<feDisplacementMap>"
+ * @page xml_feDisplacementMap &lt;feDisplacementMap&gt;
  *
  * Uses the pixel values from a second input to spatially displace the first input image.
  *

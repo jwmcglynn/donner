@@ -1,0 +1,12 @@
+/**
+@page elements_media_and_style Elements: Media and Styling
+
+\details Media and styling elements provide document-level stylesheets and externally referenced
+image content.
+
+The following media and styling elements are supported:
+
+- \subpage xml_image (\ref donner::svg::SVGImageElement "SVGImageElement")
+- \subpage xml_style (\ref donner::svg::SVGStyleElement "SVGStyleElement")
+
+*/

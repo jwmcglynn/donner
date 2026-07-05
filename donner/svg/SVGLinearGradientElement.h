@@ -9,7 +9,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_linearGradient "<linearGradient>"
+ * @page xml_linearGradient &lt;linearGradient&gt;
  *
  * Defines the paint server for a linear gradients.
  *

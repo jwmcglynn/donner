@@ -53,7 +53,7 @@ tools/cloc.sh
 
 ## Editor Visual Debugging
 
-Use \subpage EditorVisualDebugging for the editor replay harness, Geode
+Use \ref EditorVisualDebugging for the editor replay harness, Geode
 direct-texture diagnostics, pixel comparisons, and root-cause patterns for
 one-frame visual bugs.
 

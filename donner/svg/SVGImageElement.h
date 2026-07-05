@@ -8,7 +8,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_image "&lt;image&gt;"
+ * @page xml_image &lt;image&gt;
  *
  * Embeds an image into the SVG document.
  *
@@ -41,7 +41,7 @@ namespace donner::svg {
  * ```
  *
  * \htmlonly
- * <svg viewbox="-2 -2 18 18" width="300" height="300" xmlns="http://www.w3.org/2000/svg">
+ * <svg viewBox="-2 -2 18 18" width="300" height="300" xmlns="http://www.w3.org/2000/svg">
  *   <image style="image-rendering: pixelated" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQBAMAAADt3eJSAAAAFVBMVEUAAAAisUztHCSo5h3/8gD/fgBNbfOxiPXkAAAAAXRSTlMAQObYZgAAAD9JREFUCNdjwASMDIxABGIICEIZQAFBARADDOEMZMCkxMrAwmAMZCmwBrgwM4AZLCzMbAlABlCKmSEBrgYPAACkeQLx8K5PDQAAAABJRU5ErkJggg==" />
  * </svg>
  * \endhtmlonly

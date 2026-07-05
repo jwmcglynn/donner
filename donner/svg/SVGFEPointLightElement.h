@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_fePointLight "<fePointLight>"
+ * @page xml_fePointLight &lt;fePointLight&gt;
  *
  * `<fePointLight>` is a positional light source - think of a bare light bulb floating in space.
  * It emits light in all directions from a single `(x, y, z)` point in the filter's coordinate

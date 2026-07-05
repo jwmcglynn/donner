@@ -1,0 +1,121 @@
+/**
+@page Documentation Documentation
+
+\details The Doxygen tree is organized by audience and task. Public guides and API references are
+kept separate from project-internal developer notes, design history, tooling, and reports.
+
+- \subpage UserGuides
+- \subpage ApiReference
+- \subpage DeveloperDocs
+*/
+
+/**
+@page UserGuides User Guides
+
+\details Start here when embedding Donner or using the SVG DOM from an application.
+
+- \subpage GettingStarted
+- \subpage SvgDomThreadingAndLifetime
+- \subpage UnsupportedSvg1Features
+*/
+
+/**
+@page ApiReference API Reference
+
+\details Public API guides and generated reference pages.
+
+- \subpage DonnerAPI
+- \subpage CssArchitecture
+- \subpage SvgElementReference
+*/
+
+/**
+@page SvgElementReference SVG Element Reference
+
+\details Supported SVG element documentation grouped by element family.
+
+- \subpage elements_structural
+- \subpage elements_basic_shapes
+- \subpage elements_text
+- \subpage elements_painting
+- \subpage elements_masking_clipping
+- \subpage elements_filters
+- \subpage elements_media_and_style
+*/
+
+/**
+@page DeveloperArchitectureDocs Architecture and Runtime
+
+\details Internal architecture, runtime behavior, and subsystem reference material.
+
+- \subpage SystemArchitecture
+- \subpage EcsArchitecture
+  - \subpage ecs_systems
+- \subpage Multithreading
+- \subpage DomElementLifetime
+- \subpage DataFormats
+- \subpage FilterEffectsGuide
+- \subpage CompileTimeMap
+- \subpage EmbeddingGeode
+*/
+
+/**
+@page BuildAndMaintenanceDocs Build and Maintenance
+
+\details Local development, style, and maintenance procedures.
+
+- \subpage CodingStyle
+- \subpage BuildingDonner
+- \subpage Maintenance
+*/
+
+/**
+@page DeveloperToolsDocs Developer Tools
+
+\details Debugging, diagnostics, test tools, and editor-specific developer references.
+
+- \subpage Devtools
+- \subpage ParserDiagnostics
+- \subpage AgentRoster
+- \subpage ToolDocs
+- \subpage EditorDocs
+*/
+
+/**
+@page ToolDocs Tools and Test Suites
+
+\details Command-line tools and testing utilities used during development.
+
+- \subpage DonnerSvgTool
+- \subpage TerminalImageViewerGuide
+- \subpage ReSvgTestSuite
+*/
+
+/**
+@page EditorDocs Editor
+
+\details Donner editor application documentation and visual debugging workflows.
+
+- \subpage md_donner_2editor_2README
+- \subpage md_donner_2editor_2repro_2README
+- \subpage EditorSourceFocus
+- \subpage EditorVisualDebugging
+*/
+
+/**
+@page ProjectPlanningDocs Project Planning
+
+\details Project status, roadmap, build reports, and historical design decisions.
+
+- \subpage DonnerProjectRoadmap
+- \subpage ProjectReports
+- \subpage DonnerDesignDocs
+*/
+
+/**
+@page ProjectReports Project Reports
+
+\details Generated project health reports.
+
+- \subpage DonnerBuildReport
+*/

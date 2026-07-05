@@ -18,7 +18,7 @@ class SVGParser;
 }  // namespace parser
 
 /**
- * @page xml_svg "<svg>"
+ * @page xml_svg &lt;svg&gt;
  *
  * The root element of an SVG document.
  *

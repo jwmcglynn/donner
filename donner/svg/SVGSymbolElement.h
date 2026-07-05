@@ -11,7 +11,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_symbol "&lt;symbol&gt;"
+ * @page xml_symbol &lt;symbol&gt;
  *
  * Defines a symbol element that can be used to define graphical templates which are not rendered
  * directly but can be instantiated by a \ref xml_use element. A symbol element establishes a nested

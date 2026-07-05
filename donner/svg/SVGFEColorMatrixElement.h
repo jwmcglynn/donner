@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_feColorMatrix "<feColorMatrix>"
+ * @page xml_feColorMatrix &lt;feColorMatrix&gt;
  *
  * Defines a filter primitive that applies a matrix transformation on color values.
  *

@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_feDropShadow "<feDropShadow>"
+ * @page xml_feDropShadow &lt;feDropShadow&gt;
  *
  * Defines a filter primitive that creates a drop shadow effect.
  *

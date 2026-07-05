@@ -156,6 +156,7 @@ if (element.isa<SVGCircleElement>()) {
 
 | DOM Type                                   | XML Tag Name            |
 | ------------------------------------------ | ----------------------- |
+| \ref donner::svg::SVGAElement              | \ref xml_a              |
 | \ref donner::svg::SVGCircleElement         | \ref xml_circle         |
 | \ref donner::svg::SVGClipPathElement       | \ref xml_clipPath       |
 | \ref donner::svg::SVGDefsElement           | \ref xml_defs           |
@@ -182,6 +183,7 @@ if (element.isa<SVGCircleElement>()) {
 | \ref donner::svg::SVGStopElement           | \ref xml_stop           |
 | \ref donner::svg::SVGStyleElement          | \ref xml_style          |
 | \ref donner::svg::SVGSVGElement            | \ref xml_svg            |
+| \ref donner::svg::SVGSwitchElement         | \ref xml_switch         |
 | \ref donner::svg::SVGSymbolElement         | \ref xml_symbol         |
 | \ref donner::svg::SVGTextElement           | \ref xml_text           |
 | \ref donner::svg::SVGTextPathElement       | \ref xml_textPath       |

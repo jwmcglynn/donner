@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_feFlood "<feFlood>"
+ * @page xml_feFlood &lt;feFlood&gt;
  *
  * \htmlonly
  * <style>.donner-fe-fig { background-color: white; font-family: sans-serif; font-size: 12px; }</style>
@@ -153,8 +153,9 @@ namespace donner::svg {
  * Note: the *region* filled by the flood is controlled by the standard primitive attributes
  * (`x`, `y`, `width`, `height`), **not** by these attributes.
  *
- * Inherits standard filter primitive attributes (`in`, `result`, `x`, `y`, `width`, `height`)
- * from \ref donner::svg::SVGFilterPrimitiveStandardAttributes.
+ * Uses the standard filter primitive region and naming attributes (`result`, `x`, `y`, `width`,
+ * `height`) from \ref donner::svg::SVGFilterPrimitiveStandardAttributes. The primitive generates
+ * its own pixels, so `in` / `in2` are not sampled.
  */
 
 /**

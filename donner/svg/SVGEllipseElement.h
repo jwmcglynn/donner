@@ -7,7 +7,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_ellipse "<ellipse>"
+ * @page xml_ellipse &lt;ellipse&gt;
  *
  * Creates an ellipse centered on `cx`, `cy`, with radius `rx` and `ry`.
  *

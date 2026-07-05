@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_feComponentTransfer "<feComponentTransfer>"
+ * @page xml_feComponentTransfer &lt;feComponentTransfer&gt;
  *
  * Defines a filter primitive that applies per-channel transfer functions (lookup tables)
  * to modify the RGBA components of the input image.

@@ -10,19 +10,18 @@
 namespace donner::svg {
 
 /**
- * @page xml_text "<text>"
+ * @page xml_text &lt;text&gt;
  *
  * Defines a graphics element consisting of text.
  *
  * - DOM object: SVGTextElement
  * - SVG2 spec: https://www.w3.org/TR/SVG2/text.html#TextElement
  *
- * The `<text>` element renders a string of text as a proper graphics primitive. Unlike text
- * rasterized into a bitmap, SVG text is fully live: it remains selectable and searchable,
- * scales cleanly to any resolution, and accepts every normal SVG presentation attribute -
- * `fill`, `stroke`, `opacity`, `transform`, gradients via `url(#id)`, filters, clip paths,
- * and so on. Fonts are loaded through standard CSS `@font-face` rules (TTF, OTF, WOFF, WOFF2)
- * or fall back to a built-in typeface when no match is available.
+ * The `<text>` element renders a string of text as a graphics primitive while preserving the
+ * original text content in the SVG DOM. Text scales with the rest of the SVG scene and accepts
+ * normal SVG presentation attributes - `fill`, `stroke`, `opacity`, `transform`, gradients via
+ * `url(#id)`, filters, clip paths, and so on. Fonts are loaded through standard CSS `@font-face`
+ * rules (TTF, OTF, WOFF, WOFF2) or fall back to a built-in typeface when no match is available.
  *
  * Use `<text>` for labels, titles, axis tick marks, captions, and any other readable content.
  * Substrings inside a `<text>` can be re-styled or repositioned with \ref xml_tspan, and text
