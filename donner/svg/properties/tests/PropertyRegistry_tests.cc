@@ -1269,6 +1269,107 @@ TEST(PropertyRegistry, DisplayAnchorVisibilityOverflowAndPointerEventsErrors) {
   }
 }
 
+TEST(PropertyRegistry, EmptyComponentDeclarationsReportPropertySpecificErrors) {
+  const std::pair<const char*, const char*> cases[] = {
+      {"display", "Invalid display value"},
+      {"text-anchor", "Invalid text-anchor value"},
+      {"isolation", "Invalid isolation value"},
+      {"image-rendering", "Invalid image-rendering value"},
+      {"paint-order", "Invalid paint-order value"},
+      {"dominant-baseline", "Invalid dominant-baseline value"},
+      {"alignment-baseline", "Invalid alignment-baseline value"},
+      {"mix-blend-mode", "Invalid mix-blend-mode value"},
+      {"writing-mode", "Invalid writing-mode value"},
+      {"visibility", "Invalid display value"},
+      {"overflow", "Invalid overflow value"},
+      {"fill-rule", "Invalid fill rule"},
+      {"color-interpolation-filters", "Invalid color-interpolation-filters value"},
+      {"clip-rule", "Invalid clip-rule value"},
+      {"stroke-linecap", "Invalid linecap"},
+      {"stroke-linejoin", "Invalid linejoin"},
+      {"stroke-miterlimit", "Invalid number"},
+      {"pointer-events", "Invalid pointer-events"},
+  };
+
+  for (const auto& [property, reason] : cases) {
+    PropertyRegistry registry;
+    EXPECT_THAT(registry.parseProperty(css::Declaration(property, {}), Specificity()),
+                ParseErrorIs(reason))
+        << property;
+  }
+}
+
+TEST(PropertyRegistry, NonIdentSingleTokenDeclarationsReportPropertySpecificErrors) {
+  const std::pair<const char*, const char*> cases[] = {
+      {"display", "Invalid display value"},
+      {"text-anchor", "Invalid text-anchor value"},
+      {"isolation", "Invalid isolation value"},
+      {"image-rendering", "Invalid image-rendering value"},
+      {"paint-order", "Invalid paint-order value"},
+      {"dominant-baseline", "Invalid dominant-baseline value"},
+      {"alignment-baseline", "Invalid alignment-baseline value"},
+      {"mix-blend-mode", "Invalid mix-blend-mode value"},
+      {"writing-mode", "Invalid writing-mode value"},
+      {"visibility", "Invalid display value"},
+      {"overflow", "Invalid overflow value"},
+      {"fill-rule", "Invalid fill rule"},
+      {"color-interpolation-filters", "Invalid color-interpolation-filters value"},
+      {"clip-rule", "Invalid clip-rule value"},
+      {"stroke-linecap", "Invalid linecap"},
+      {"stroke-linejoin", "Invalid linejoin"},
+      {"pointer-events", "Invalid pointer-events"},
+  };
+
+  const ComponentValue number(Token(Token::Number(1.0, "1", css::NumberType::Integer), 0));
+  for (const auto& [property, reason] : cases) {
+    PropertyRegistry registry;
+    EXPECT_THAT(registry.parseProperty(css::Declaration(property, {number}), Specificity()),
+                ParseErrorIs(reason))
+        << property;
+  }
+}
+
+TEST(PropertyRegistry, PaintOrderGrammar) {
+  {
+    const std::pair<const char*, PaintOrder> cases[] = {
+        {"normal", PaintOrder{}},
+        {"stroke",
+         PaintOrder{{PaintComponent::Stroke, PaintComponent::Fill, PaintComponent::Markers}}},
+        {"markers fill",
+         PaintOrder{{PaintComponent::Markers, PaintComponent::Fill, PaintComponent::Stroke}}},
+        {"stroke markers fill",
+         PaintOrder{{PaintComponent::Stroke, PaintComponent::Markers, PaintComponent::Fill}}},
+    };
+
+    for (const auto& [value, expected] : cases) {
+      PropertyRegistry registry;
+      registry.parseStyle(std::string("paint-order: ") + value);
+      EXPECT_THAT(registry.paintOrder.get(), Optional(expected)) << value;
+    }
+  }
+
+  {
+    const char* invalidCases[] = {
+        "paint-order: ",
+        "paint-order: fill fill",
+        "paint-order: stroke stroke",
+        "paint-order: markers markers",
+        "paint-order: fill stroke markers fill",
+        "paint-order: fill / stroke",
+        "paint-order: bogus",
+        "paint-order: normal fill",
+    };
+
+    for (const char* property : invalidCases) {
+      PropertyRegistry registry;
+      css::Declaration declaration = css::CSS::ParseStyleAttribute(property).at(0);
+      EXPECT_THAT(registry.parseProperty(declaration, Specificity()),
+                  ParseErrorIs("Invalid paint-order value"))
+          << property;
+    }
+  }
+}
+
 TEST(PropertyRegistry, PaintReferenceTransformOriginAndFilterFunctionEdges) {
   {
     PropertyRegistry registry;
@@ -1662,6 +1763,12 @@ TEST(PropertyRegistry, TransformOriginStrokeMiterlimitAndFilterEdgeCases) {
 
   {
     PropertyRegistry registry;
+    css::Declaration declaration = css::CSS::ParseStyleAttribute("stroke-miterlimit: 1 2").at(0);
+    EXPECT_THAT(registry.parseProperty(declaration, Specificity()), ParseErrorIs("Invalid number"));
+  }
+
+  {
+    PropertyRegistry registry;
     registry.parseStyle("filter: hue-rotate(200grad) hue-rotate(3.141592653589793rad)");
     const auto& effects = (*registry.filter.getStoredValue());
     EXPECT_THAT(effects, testing::ElementsAre(FilterHueRotateIs(180.0, 0.0),
@@ -1688,6 +1795,30 @@ TEST(PropertyRegistry, TransformOriginStrokeMiterlimitAndFilterEdgeCases) {
     const auto& shadow =
         (*registry.filter.getStoredValue()).front().get<FilterEffect::DropShadow>();
     EXPECT_EQ(shadow.color, Color(RGBA(0xFF, 0, 0, 0xFF)));
+  }
+
+  {
+    PropertyRegistry registry;
+    css::Declaration declaration =
+        css::CSS::ParseStyleAttribute("filter: drop-shadow(1% 2px)").at(0);
+    EXPECT_THAT(registry.parseProperty(declaration, Specificity()),
+                ParseErrorIs("Expected offset-x for drop-shadow"));
+  }
+
+  {
+    PropertyRegistry registry;
+    css::Declaration declaration =
+        css::CSS::ParseStyleAttribute("filter: drop-shadow(1px 2%)").at(0);
+    EXPECT_THAT(registry.parseProperty(declaration, Specificity()),
+                ParseErrorIs("Expected offset-y for drop-shadow"));
+  }
+
+  {
+    PropertyRegistry registry;
+    css::Declaration declaration =
+        css::CSS::ParseStyleAttribute("filter: drop-shadow(1px 2px 3%)").at(0);
+    EXPECT_THAT(registry.parseProperty(declaration, Specificity()),
+                ParseErrorIs("Unexpected extra values in drop-shadow()"));
   }
 
   {

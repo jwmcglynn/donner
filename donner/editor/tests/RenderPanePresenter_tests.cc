@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
+#include <limits>
 #include <optional>
 #include <span>
 #include <sstream>
@@ -128,6 +129,32 @@ TEST(RenderPanePresenterTest, SelectionPrewarmLayerMatchesGroupedActiveDragPrevi
          "even though the worker did not mark them as drag targets during the idle prewarm.";
 }
 
+TEST(RenderPanePresenterTest, ActiveDragPreviewMatchingHandlesPrimaryAndMissingPreview) {
+  GlTextureCache::TileView tile;
+  tile.texture = static_cast<ImTextureID>(static_cast<std::uintptr_t>(7));
+  tile.kind = RenderResult::CompositedTile::Kind::Layer;
+  tile.layerEntity = static_cast<Entity>(42);
+  tile.isDragTarget = false;
+
+  EXPECT_FALSE(TileMatchesActiveDragPreview(tile, std::nullopt));
+
+  const SelectTool::ActiveDragPreview activeDrag{
+      .entity = static_cast<Entity>(42),
+      .extraEntities = {},
+      .translation = Vector2d(8.0, 0.0),
+      .documentFromCachedDocument = Transform2d::Translate(Vector2d(8.0, 0.0)),
+      .dragGeneration = 5,
+  };
+  EXPECT_TRUE(TileMatchesActiveDragPreview(tile, activeDrag));
+
+  tile.layerEntity = static_cast<Entity>(7);
+  EXPECT_FALSE(TileMatchesActiveDragPreview(tile, activeDrag));
+
+  tile.layerEntity = entt::null;
+  tile.isDragTarget = true;
+  EXPECT_TRUE(TileMatchesActiveDragPreview(tile, activeDrag));
+}
+
 TEST(RenderPanePresenterTest, OverviewTilesAreOnlyPresentedUnderViewportBoundedActiveTiles) {
   GlTextureCache::TileView overviewTile;
   overviewTile.texture = static_cast<ImTextureID>(static_cast<std::uintptr_t>(7));
@@ -186,6 +213,24 @@ TEST(RenderPanePresenterTest, PresentedTileQuadTouchingPaneEdgeIsCulled) {
       quad, Box2d::FromXYWH(/*x=*/0.0, /*y=*/0.0, /*width=*/20.0, /*height=*/20.0)));
 }
 
+TEST(RenderPanePresenterTest, PresentedTileQuadRejectsNonFiniteAndEmptyScreenRects) {
+  PresentedTileQuad quad;
+  quad.topLeft = Vector2d(10.0, 10.0);
+  quad.topRight = Vector2d(30.0, 10.0);
+  quad.bottomRight = Vector2d(30.0, 30.0);
+  quad.bottomLeft = Vector2d(10.0, 30.0);
+
+  PresentedTileQuad nonFiniteQuad = quad;
+  nonFiniteQuad.bottomRight.x = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_FALSE(PresentedTileQuadIntersectsScreenRect(
+      nonFiniteQuad, Box2d::FromXYWH(/*x=*/0.0, /*y=*/0.0, /*width=*/40.0, /*height=*/40.0)));
+
+  EXPECT_FALSE(PresentedTileQuadIntersectsScreenRect(
+      quad, Box2d(Vector2d(20.0, 0.0), Vector2d(20.0, 40.0))));
+  EXPECT_FALSE(PresentedTileQuadIntersectsScreenRect(
+      quad, Box2d(Vector2d(0.0, 20.0), Vector2d(40.0, 20.0))));
+}
+
 TEST(RenderPanePresenterTest, PresentedImageClipRectIntersectsPaneWithArtboard) {
   const std::optional<Box2d> clip = PresentedImageClipRect(
       Box2d::FromXYWH(/*x=*/0.0, /*y=*/0.0, /*width=*/100.0, /*height=*/80.0),
@@ -199,6 +244,20 @@ TEST(RenderPanePresenterTest, PresentedImageClipRectRejectsDisjointArtboard) {
   EXPECT_FALSE(PresentedImageClipRect(
                    Box2d::FromXYWH(/*x=*/0.0, /*y=*/0.0, /*width=*/100.0, /*height=*/80.0),
                    Box2d::FromXYWH(/*x=*/100.0, /*y=*/10.0, /*width=*/40.0, /*height=*/40.0))
+                   .has_value());
+}
+
+TEST(RenderPanePresenterTest, PresentedImageClipRectRejectsNonFiniteAndEmptyIntersections) {
+  const Box2d paneRect = Box2d::FromXYWH(/*x=*/0.0, /*y=*/0.0, /*width=*/100.0,
+                                         /*height=*/80.0);
+  Box2d nonFiniteImage = Box2d::FromXYWH(/*x=*/20.0, /*y=*/10.0, /*width=*/40.0,
+                                         /*height=*/20.0);
+  nonFiniteImage.bottomRight.y = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_FALSE(PresentedImageClipRect(paneRect, nonFiniteImage).has_value());
+
+  EXPECT_FALSE(PresentedImageClipRect(paneRect, Box2d(Vector2d(20.0, 10.0), Vector2d(80.0, 10.0)))
+                   .has_value());
+  EXPECT_FALSE(PresentedImageClipRect(paneRect, Box2d(Vector2d(20.0, 10.0), Vector2d(20.0, 60.0)))
                    .has_value());
 }
 

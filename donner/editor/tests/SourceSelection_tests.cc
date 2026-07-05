@@ -149,12 +149,35 @@ TEST(SourceSelectionTest, ReturnsEntitySourceByteRangeForReferencedPaintServer) 
   EXPECT_EQ(textEditor.getSelectedText(), selected);
 }
 
+TEST(SourceSelectionTest, SourceByteRangesReturnEmptyForSourcelessElements) {
+  svg::SVGDocument document;
+  const svg::SVGElement root = document.svgElement();
+
+  EXPECT_EQ(ElementSourceByteRange(root, ""), std::nullopt);
+  EXPECT_EQ(EntitySourceByteRange(root.entityHandle(), ""), std::nullopt);
+}
+
 TEST(SourceSelectionTest, RejectsInvalidRawSourceByteRange) {
   TextEditor textEditor;
   textEditor.setText("abc");
 
+  EXPECT_FALSE(HighlightSourceByteRange(textEditor, SourceByteRange{.start = 3, .end = 2}));
   EXPECT_FALSE(HighlightSourceByteRange(textEditor, SourceByteRange{.start = 1, .end = 1}));
   EXPECT_FALSE(HighlightSourceByteRange(textEditor, SourceByteRange{.start = 1, .end = 4}));
+}
+
+TEST(SourceSelectionTest, HighlightElementSourceRejectsStaleEditorText) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+
+  auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  TextEditor textEditor;
+  textEditor.setText("<svg/>");
+
+  EXPECT_FALSE(HighlightElementSource(textEditor, *target));
+  EXPECT_TRUE(textEditor.getSelectedText().empty());
 }
 
 TEST(SourceSelectionTest, ExcludesSelectedElementsFromSourceHoverCandidates) {
@@ -171,6 +194,22 @@ TEST(SourceSelectionTest, ExcludesSelectedElementsFromSourceHoverCandidates) {
 
   ASSERT_EQ(filtered.size(), 1u);
   EXPECT_EQ(filtered.front().id(), "layer");
+}
+
+TEST(SourceSelectionTest, ExcludeSelectedSourceHoverElementsNoOpsForEmptyInputs) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+
+  auto rect = app.document().document().querySelector("#target");
+  ASSERT_TRUE(rect.has_value());
+
+  EXPECT_TRUE(
+      ExcludeSelectedSourceHoverElements({}, std::span<const svg::SVGElement>(&*rect, 1)).empty());
+
+  std::vector<svg::SVGElement> unchanged =
+      ExcludeSelectedSourceHoverElements({*rect}, std::span<const svg::SVGElement>());
+  ASSERT_EQ(unchanged.size(), 1u);
+  EXPECT_EQ(unchanged.front().id(), "target");
 }
 
 TEST(SourceSelectionTest, ExcludesDocumentRootFromSourceHoverCandidates) {
@@ -190,6 +229,13 @@ TEST(SourceSelectionTest, ExcludesDocumentRootFromSourceHoverCandidates) {
   EXPECT_TRUE(filtered.empty());
 }
 
+TEST(SourceSelectionTest, ExcludeDocumentRootSourceHoverElementNoOpsForEmptyInput) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+
+  EXPECT_TRUE(ExcludeDocumentRootSourceHoverElement({}, app.document().document()).empty());
+}
+
 TEST(SourceSelectionTest, RootSvgStillResolvesAtSourceOffsetForExplicitSelection) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kSvg));
@@ -201,6 +247,83 @@ TEST(SourceSelectionTest, RootSvgStillResolvesAtSourceOffsetForExplicitSelection
       FindElementNearSourceOffset(app.document().document(), source, rootOffset + 1);
   ASSERT_TRUE(root.has_value());
   EXPECT_EQ(*root, app.document().document().svgElement());
+}
+
+TEST(SourceSelectionTest, SourceOffsetFindersRejectDocumentEndAndEmptySource) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  const std::string source(app.document().document().source());
+
+  EXPECT_EQ(FindElementAtSourceOffset(app.document().document(), source, source.size()),
+            std::nullopt);
+  EXPECT_EQ(FindElementNearSourceOffset(app.document().document(), source, source.size() + 5),
+            std::nullopt);
+  EXPECT_EQ(FindElementNearSourceOffset(app.document().document(), "", 0), std::nullopt);
+}
+
+TEST(SourceSelectionTest, FindElementNearSourceOffsetAtStartReturnsContainingRoot) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  const std::string source(app.document().document().source());
+
+  std::optional<svg::SVGElement> root =
+      FindElementNearSourceOffset(app.document().document(), source, 0);
+  ASSERT_TRUE(root.has_value());
+  EXPECT_EQ(*root, app.document().document().svgElement());
+}
+
+TEST(SourceSelectionTest, FindElementNearSourceOffsetAtLeadingWhitespaceReturnsEmpty) {
+  constexpr std::string_view source =
+      R"(
+<svg xmlns="http://www.w3.org/2000/svg"><rect id="target"/></svg>)";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(source));
+  const std::string currentSource(app.document().document().source());
+
+  EXPECT_EQ(FindElementNearSourceOffset(app.document().document(), currentSource, 0), std::nullopt);
+
+  const std::size_t rootOffset = currentSource.find("<svg");
+  ASSERT_NE(rootOffset, std::string::npos);
+  std::optional<svg::SVGElement> root =
+      FindElementNearSourceOffset(app.document().document(), currentSource, rootOffset + 1);
+  ASSERT_TRUE(root.has_value());
+  EXPECT_EQ(*root, app.document().document().svgElement());
+}
+
+TEST(SourceSelectionTest, FindsPreviousElementWhenCursorLeavesChildForAncestor) {
+  constexpr std::string_view source =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><g id="layer"><rect id="target"/></g><circle id="next"/></svg>)";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(source));
+  const std::string currentSource(app.document().document().source());
+
+  const std::size_t afterRect = currentSource.find("</g>");
+  ASSERT_NE(afterRect, std::string::npos);
+
+  std::optional<svg::SVGElement> rect =
+      FindElementNearSourceOffset(app.document().document(), currentSource, afterRect);
+  ASSERT_TRUE(rect.has_value());
+  EXPECT_EQ(rect->id(), "target");
+}
+
+TEST(SourceSelectionTest, FindsCurrentElementWhenPreviousSiblingIsNotAncestor) {
+  constexpr std::string_view source =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="first"/>
+<circle id="second"/></svg>)";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(source));
+  const std::string currentSource(app.document().document().source());
+
+  const std::size_t circleOffset = currentSource.find("<circle");
+  ASSERT_NE(circleOffset, std::string::npos);
+
+  std::optional<svg::SVGElement> circle =
+      FindElementNearSourceOffset(app.document().document(), currentSource, circleOffset);
+  ASSERT_TRUE(circle.has_value());
+  EXPECT_EQ(circle->id(), "second");
 }
 
 TEST(SourceSelectionTest, FindsElementAtTextEditorCursor) {

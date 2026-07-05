@@ -182,6 +182,21 @@ TEST(LayersPanelTest, MissingRowPreviewQueriesReturnEmpty) {
   EXPECT_EQ(panel.rowThumbnail(missingStableId), nullptr);
 }
 
+TEST(LayersPanelTest, RefreshSnapshotWithoutDocumentClearsRowsAndThumbnailState) {
+  EditorApp app;
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+
+  EXPECT_EQ(panel.visibleRowCount(), 0u);
+  EXPECT_TRUE(panel.rows().empty());
+  EXPECT_EQ(panel.thumbnailRefreshStats().rowCount, 0u);
+  EXPECT_EQ(panel.thumbnailRefreshStats().renderedCount, 0u);
+  EXPECT_EQ(panel.thumbnailRefreshStats().reusedCount, 0u);
+  EXPECT_EQ(panel.thumbnailRefreshStats().skippedForCanvasInvalidationCount, 0u);
+  EXPECT_FALSE(panel.hasThumbnailOrSwatch(1u));
+}
+
 TEST(LayersPanelTest, BeginRenameFindsVisibleRowsAndIgnoresMissingRows) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kSvg));
@@ -1310,6 +1325,11 @@ protected:
     int imageQuads = 0;
   };
 
+  struct FocusedFrameDiagnostics {
+    int totalVertices = 0;
+    bool popupOpen = false;
+  };
+
   void SetUp() override {
     IMGUI_CHECKVERSION();
     ctx_ = ImGui::CreateContext();
@@ -1341,6 +1361,47 @@ protected:
     panel.render(&app);
     ImGui::End();
     ImGui::Render();
+  }
+
+  FocusedFrameDiagnostics RenderFocusedFrame(
+      LayersPanel& panel, EditorApp* liveApp, const std::vector<ImGuiKey>& pressedKeys = {},
+      std::optional<std::uint64_t> popupStableId = std::nullopt) {
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(400, 300);
+    io.AddMousePosEvent(-1.0f, -1.0f);
+    io.AddMouseButtonEvent(0, false);
+    for (ImGuiKey key : pressedKeys) {
+      io.AddKeyEvent(key, true);
+    }
+
+    ImGui::NewFrame();
+    ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(300, 250), ImGuiCond_Always);
+    ImGui::SetNextWindowFocus();
+    ImGui::Begin("##layers_focused_frame_test", nullptr,
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar);
+    if (popupStableId.has_value()) {
+      ImGui::PushID(static_cast<int>(static_cast<std::uint32_t>(*popupStableId)));
+      ImGui::OpenPopup("##layer_row_menu");
+      ImGui::PopID();
+    }
+    panel.render(liveApp);
+    FocusedFrameDiagnostics diagnostics;
+    if (popupStableId.has_value()) {
+      ImGui::PushID(static_cast<int>(static_cast<std::uint32_t>(*popupStableId)));
+      diagnostics.popupOpen = ImGui::IsPopupOpen("##layer_row_menu");
+      ImGui::PopID();
+    }
+    ImGui::End();
+    ImGui::Render();
+    if (const ImDrawData* drawData = ImGui::GetDrawData(); drawData != nullptr) {
+      diagnostics.totalVertices = drawData->TotalVtxCount;
+    }
+    for (ImGuiKey key : pressedKeys) {
+      io.AddKeyEvent(key, false);
+    }
+    return diagnostics;
   }
 
   int RenderCompositorDebugPanelFrame(
@@ -1935,6 +1996,144 @@ TEST_F(LayersPanelImGuiTest, LayerAffordancesRenderSvgBitmapButtons) {
       << "layer affordance icons are drawn at 14 logical px and must be rasterized at 2x or "
          "higher before ImGui scales them";
   EXPECT_GE(diagnostics.imageQuads, 2) << "eye/lock controls should emit image quads";
+}
+
+TEST_F(LayersPanelImGuiTest, LayerAffordancesRenderHiddenAndLockedIconVariants) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <rect id="rect1" x="0" y="0" width="10" height="10"/>
+  </svg>)");
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const int rectIndex = RowIndex(panel, "rect1");
+  ASSERT_GE(rectIndex, 0);
+
+  panel.handleEyeClick(app, static_cast<std::size_t>(rectIndex));
+  panel.handleLockClick(app, static_cast<std::size_t>(rectIndex));
+  ASSERT_TRUE(app.document().flushFrame());
+  panel.refreshSnapshot(app);
+  const std::optional<LayerTreeRow> row = FindRow(panel, "rect1");
+  ASSERT_TRUE(row.has_value());
+  EXPECT_FALSE(row->isVisible);
+  EXPECT_TRUE(row->isLocked);
+
+  const IconButtonDiagnostics diagnostics = MeasureIconButtons(panel, app);
+  EXPECT_GE(diagnostics.providerCalls, 2)
+      << "hidden/locked rows should request the alternate eye and lock icon textures";
+  EXPECT_EQ(diagnostics.providerCalls, diagnostics.nonEmptyBitmaps);
+  EXPECT_EQ(diagnostics.providerCalls, diagnostics.retinaBitmaps);
+  EXPECT_GE(diagnostics.imageQuads, 2);
+}
+
+TEST_F(LayersPanelImGuiTest, InlineRenameFieldRendersForTheActiveRow) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <rect id="rect1" x="0" y="0" width="10" height="10"/>
+  </svg>)");
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const std::optional<LayerTreeRow> row = FindRow(panel, "rect1");
+  ASSERT_TRUE(row.has_value());
+
+  panel.beginRename(row->stableId);
+  EXPECT_EQ(panel.renamingStableId(), std::optional(row->stableId));
+
+  const FocusedFrameDiagnostics diagnostics = RenderFocusedFrame(panel, &app);
+  EXPECT_GT(diagnostics.totalVertices, 0);
+  EXPECT_EQ(panel.renamingStableId(), std::optional(row->stableId))
+      << "the inline rename edit should stay open until Enter or focus loss";
+}
+
+TEST_F(LayersPanelImGuiTest, RowContextMenusRenderVisibleAndLockedActionsWithoutImplicitMutation) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <rect id="visible" x="0" y="0" width="10" height="10"/>
+    <rect id="hiddenLocked" x="20" y="0" width="10" height="10"/>
+  </svg>)");
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const int hiddenLockedIndex = RowIndex(panel, "hiddenLocked");
+  ASSERT_GE(hiddenLockedIndex, 0);
+  panel.handleEyeClick(app, static_cast<std::size_t>(hiddenLockedIndex));
+  panel.handleLockClick(app, static_cast<std::size_t>(hiddenLockedIndex));
+  ASSERT_TRUE(app.document().flushFrame());
+  EXPECT_TRUE(panel.consumeQueuedMutation());
+  panel.refreshSnapshot(app);
+
+  const std::optional<LayerTreeRow> visible = FindRow(panel, "visible");
+  const std::optional<LayerTreeRow> hiddenLocked = FindRow(panel, "hiddenLocked");
+  ASSERT_TRUE(visible.has_value());
+  ASSERT_TRUE(hiddenLocked.has_value());
+  EXPECT_TRUE(visible->isVisible);
+  EXPECT_FALSE(visible->isLocked);
+  EXPECT_FALSE(hiddenLocked->isVisible);
+  EXPECT_TRUE(hiddenLocked->isLocked);
+
+  EXPECT_TRUE(RenderFocusedFrame(panel, &app, {}, visible->stableId).popupOpen);
+  EXPECT_TRUE(RenderFocusedFrame(panel, &app, {}, hiddenLocked->stableId).popupOpen);
+  EXPECT_FALSE(panel.consumeSelectionChanged());
+  EXPECT_FALSE(panel.consumeQueuedMutation());
+}
+
+TEST_F(LayersPanelImGuiTest, KeyboardNavigationSelectsAdjacentRows) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  ASSERT_GE(panel.visibleRowCount(), 2u);
+  const svg::SVGElement firstRow = panel.rows()[0].element;
+  const svg::SVGElement secondRow = panel.rows()[1].element;
+
+  RenderFocusedFrame(panel, &app, {ImGuiKey_DownArrow});
+  RenderFocusedFrame(panel, &app, {ImGuiKey_Enter});
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+  EXPECT_EQ(app.selectedElements().front(), secondRow);
+  EXPECT_TRUE(panel.consumeSelectionChanged());
+
+  RenderFocusedFrame(panel, &app, {ImGuiKey_UpArrow});
+  RenderFocusedFrame(panel, &app, {ImGuiKey_KeypadEnter});
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+  EXPECT_EQ(app.selectedElements().front(), firstRow);
+  EXPECT_TRUE(panel.consumeSelectionChanged());
+}
+
+TEST_F(LayersPanelImGuiTest, KeyboardLeftAndRightToggleActiveGroupExpansion) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const int groupIndex = RowIndex(panel, "groupA");
+  ASSERT_GE(groupIndex, 0);
+  const LayerTreeRow groupRow = panel.rows()[static_cast<std::size_t>(groupIndex)];
+  ASSERT_TRUE(groupRow.hasChildren);
+  ASSERT_TRUE(groupRow.isExpanded);
+
+  panel.handleRowClick(app, static_cast<std::size_t>(groupIndex), LayersPanel::ClickModifiers{});
+  RenderFocusedFrame(panel, &app, {ImGuiKey_LeftArrow});
+  EXPECT_FALSE(panel.model().isExpanded(groupRow.stableId));
+
+  panel.refreshSnapshot(app);
+  RenderFocusedFrame(panel, &app, {ImGuiKey_RightArrow});
+  EXPECT_TRUE(panel.model().isExpanded(groupRow.stableId));
+}
+
+TEST_F(LayersPanelImGuiTest, KeyboardLeftOnLeafMovesActiveRowToVisibleParent) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const int rectIndex = RowIndex(panel, "rectTop");
+  const int groupIndex = RowIndex(panel, "groupA");
+  ASSERT_GE(rectIndex, 0);
+  ASSERT_GE(groupIndex, 0);
+  const svg::SVGElement groupElement = panel.rows()[static_cast<std::size_t>(groupIndex)].element;
+
+  panel.handleRowClick(app, static_cast<std::size_t>(rectIndex), LayersPanel::ClickModifiers{});
+  RenderFocusedFrame(panel, &app, {ImGuiKey_LeftArrow});
+  RenderFocusedFrame(panel, &app, {ImGuiKey_Enter});
+
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+  EXPECT_EQ(app.selectedElements().front(), groupElement);
 }
 
 TEST_F(LayersPanelImGuiTest, LockButtonReceivesClick) {

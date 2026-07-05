@@ -25,6 +25,10 @@ coverage:
 comment:
   layout: "header, diff, flags, files, footer"
 
+flags:
+  unittests:
+    carryforward: true
+
 parsers:
   gcov:
     branch_detection:

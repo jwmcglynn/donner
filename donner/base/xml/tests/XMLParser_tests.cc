@@ -3,6 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -51,6 +52,26 @@ auto SourceDiagnosticMutationIs(XMLNode node, DiagnosticMatcher diagnosticMatche
                                 ReparseScope scope) {
   return AllOf(MutationIs(XMLMutation::Kind::SourceDiagnosticChanged, node, scope),
                Field("diagnostic", &XMLMutation::diagnostic, diagnosticMatcher));
+}
+
+std::string Utf8(char32_t codepoint) {
+  std::string result;
+  if (codepoint <= 0x7F) {
+    result.push_back(static_cast<char>(codepoint));
+  } else if (codepoint <= 0x7FF) {
+    result.push_back(static_cast<char>(0xC0 | (codepoint >> 6)));
+    result.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+  } else if (codepoint <= 0xFFFF) {
+    result.push_back(static_cast<char>(0xE0 | (codepoint >> 12)));
+    result.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
+    result.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+  } else {
+    result.push_back(static_cast<char>(0xF0 | (codepoint >> 18)));
+    result.push_back(static_cast<char>(0x80 | ((codepoint >> 12) & 0x3F)));
+    result.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
+    result.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+  }
+  return result;
 }
 
 std::string_view SourceText(const XMLDocument& document, SourceRange range) {
@@ -353,6 +374,110 @@ TEST_F(XMLParserTests, ParsedTextLikeNodeValueSubspans) {
   EXPECT_EQ(SourceText(document, *cdata.getClosingTagLocation()), "]]>");
   ASSERT_TRUE(cdata.getValueLocation().has_value());
   EXPECT_EQ(SourceText(document, *cdata.getValueLocation()), "x<y");
+}
+
+TEST_F(XMLParserTests, ParsesRepresentativeUnicodeNameStartRanges) {
+  constexpr std::array<char32_t, 24> kNameStartCodepoints = {
+      U'_',   U'a',   U'Z',   0x00C0, 0x00D6, 0x00D8, 0x00F6, 0x00F8,
+      0x02FF, 0x0370, 0x037D, 0x037F, 0x1FFF, 0x200C, 0x200D, 0x2070,
+      0x218F, 0x2C00, 0x2FEF, 0x3001, 0xD7FF, 0xF900, 0xFDF0, 0xEFFFF,
+  };
+
+  std::string xml = "<root>";
+  for (std::size_t index = 0; index < kNameStartCodepoints.size(); ++index) {
+    xml += "<";
+    xml += Utf8(kNameStartCodepoints[index]);
+    xml += "node";
+    xml += std::to_string(index);
+    xml += "/>";
+  }
+  xml += "</root>";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(xml);
+
+  ASSERT_THAT(maybeDocument, NoParseError());
+  XMLNode root = maybeDocument.result().root().firstChild().value();
+  std::size_t childCount = 0;
+  for (std::optional<XMLNode> child = root.firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    ++childCount;
+  }
+  EXPECT_EQ(childCount, kNameStartCodepoints.size());
+}
+
+TEST_F(XMLParserTests, ParsesRepresentativeUnicodeNameCharRanges) {
+  constexpr std::array<char32_t, 10> kNameCharCodepoints = {
+      U'-', U'.', U'9', 0x00B7, 0x0300, 0x036F, 0x203F, 0x2040, 0x3001, 0xE0100,
+  };
+
+  std::string name = "a";
+  for (char32_t codepoint : kNameCharCodepoints) {
+    name += Utf8(codepoint);
+  }
+  const std::string xml = "<root " + name + R"(="value"/>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(xml);
+
+  ASSERT_THAT(maybeDocument, NoParseError());
+  XMLNode root = maybeDocument.result().root().firstChild().value();
+  EXPECT_THAT(root.getAttribute(XMLQualifiedNameRef(name)), testing::Optional(RcString("value")));
+}
+
+TEST_F(XMLParserTests, RejectsInvalidUnicodeNameStartAndNameChar) {
+  EXPECT_THAT(
+      XMLParser::Parse("<root><" + Utf8(0x0300) + "bad/></root>"),
+      ParseErrorIs("Invalid element name: Expected qualified name, found invalid character"));
+  EXPECT_THAT(XMLParser::Parse("<root a" + Utf8(0xFFFE) + R"(="value"/>)"),
+              ParseErrorIs("Attribute name without value, expected '=' followed by a string"));
+}
+
+TEST_F(XMLParserTests, MalformedUtf8NamesArePreservedAsNameBytes) {
+  std::string invalidElementTagName;
+  invalidElementTagName.push_back(static_cast<char>(0xC3));
+  invalidElementTagName += "bad";
+  std::string invalidElementName = "<root><";
+  invalidElementName += invalidElementTagName;
+  invalidElementName += "/></root>";
+  ParseResult<XMLDocument> maybeElementDocument = XMLParser::Parse(invalidElementName);
+  ASSERT_THAT(maybeElementDocument, NoParseError());
+  XMLNode malformedElement =
+      maybeElementDocument.result().root().firstChild()->firstChild().value();
+  EXPECT_THAT(malformedElement.tagName(), Eq(invalidElementTagName));
+
+  std::string invalidAttributeQualifiedName = "a";
+  invalidAttributeQualifiedName.push_back(static_cast<char>(0xCC));
+  std::string invalidAttributeName = "<root a";
+  invalidAttributeName.push_back(static_cast<char>(0xCC));
+  invalidAttributeName += R"(="value"/>)";
+  ParseResult<XMLDocument> maybeAttributeDocument = XMLParser::Parse(invalidAttributeName);
+  ASSERT_THAT(maybeAttributeDocument, NoParseError());
+  XMLNode root = maybeAttributeDocument.result().root().firstChild().value();
+  EXPECT_THAT(root.getAttribute(XMLQualifiedNameRef(invalidAttributeQualifiedName)),
+              testing::Optional(RcString("value")));
+
+  XMLParser::Options options = XMLParser::Options::ParseAll();
+  std::string invalidInstructionTarget;
+  invalidInstructionTarget.push_back(static_cast<char>(0xC3));
+  std::string invalidProcessingInstructionTarget = "<?";
+  invalidProcessingInstructionTarget += invalidInstructionTarget;
+  invalidProcessingInstructionTarget += " value?><root/>";
+  ParseResult<XMLDocument> maybeInstructionDocument =
+      XMLParser::Parse(invalidProcessingInstructionTarget, options);
+  ASSERT_THAT(maybeInstructionDocument, NoParseError());
+  XMLNode instruction = maybeInstructionDocument.result().root().firstChild().value();
+  EXPECT_THAT(instruction.tagName(), Eq(invalidInstructionTarget));
+}
+
+TEST_F(XMLParserTests, MalformedUtf8EntityNamesRemainLiteral) {
+  std::string invalidEntityStart = "<node>&";
+  invalidEntityStart.push_back(static_cast<char>(0xC3));
+  invalidEntityStart += ";</node>";
+  EXPECT_THAT(parseAndGetNodeContents(invalidEntityStart), ParseResultIs(RcString("&\xC3;")));
+
+  std::string invalidEntityNameChar = "<node>&a";
+  invalidEntityNameChar.push_back(static_cast<char>(0xCC));
+  invalidEntityNameChar += ";</node>";
+  EXPECT_THAT(parseAndGetNodeContents(invalidEntityNameChar), ParseResultIs(RcString("&a\xCC;")));
 }
 
 TEST_F(XMLParserTests, XMLIncrementalParserParsesLocalFragments) {
@@ -2039,6 +2164,26 @@ TEST_F(XMLParserTests, ParseDoctypeSystemEntity) {
   ASSERT_TRUE(result.has_value()) << "SYSTEM entity declaration should parse without error";
 }
 
+TEST_F(XMLParserTests, ParseDoctypeEntityEndSkipsQuotedGreaterThan) {
+  auto result = XMLParser::Parse(R"(<!DOCTYPE test [<!ENTITY custom 'a>b'>]><node>&custom;</node>)",
+                                 optionsCustomEntities());
+
+  ASSERT_THAT(result, NoParseError());
+  XMLNode node = result.result().root().firstChild()->nextSibling().value();
+  ASSERT_TRUE(node.firstChild().has_value());
+  EXPECT_THAT(node.firstChild()->value(), testing::Optional(RcString("a>b")));
+}
+
+TEST_F(XMLParserTests, ParseDoctypePublicEntityAcceptsSingleQuotedSystemLiteral) {
+  XMLParser::Options options = optionsCustomEntities();
+
+  auto result = XMLParser::Parse(
+      R"(<!DOCTYPE svg [<!ENTITY logo PUBLIC "-//W3C//ENTITIES Logo//EN" 'logo.svg'>]><root/>)",
+      options);
+
+  EXPECT_THAT(result, NoParseError());
+}
+
 TEST_F(XMLParserTests, ParseProcessingInstructions) {
   // By default PI parsing is disabled
   {
@@ -2057,6 +2202,54 @@ TEST_F(XMLParserTests, ParseProcessingInstructions) {
   EXPECT_EQ(node.type(), XMLNode::Type::ProcessingInstruction);
   EXPECT_THAT(node.tagName(), Eq("php"));
   EXPECT_THAT(node.value(), Eq("contents "));
+}
+
+TEST_F(XMLParserTests, ParseProcessingInstructionTargetAllowsColonName) {
+  XMLParser::Options options = XMLParser::Options::ParseAll();
+
+  ParseResult<XMLDocument> result = XMLParser::Parse(R"(<?p:q value?><root/>)", options);
+
+  ASSERT_THAT(result, NoParseError());
+  XMLNode instruction = result.result().root().firstChild().value();
+  EXPECT_EQ(instruction.type(), XMLNode::Type::ProcessingInstruction);
+  EXPECT_THAT(instruction.tagName(), Eq("p:q"));
+  EXPECT_THAT(instruction.value(), Eq("value"));
+}
+
+TEST_F(XMLParserTests, ParseProcessingInstructionTargetAllowsLeadingColonName) {
+  XMLParser::Options options = XMLParser::Options::ParseAll();
+
+  ParseResult<XMLDocument> result = XMLParser::Parse(R"(<?:target value?><root/>)", options);
+
+  ASSERT_THAT(result, NoParseError());
+  XMLNode instruction = result.result().root().firstChild().value();
+  EXPECT_EQ(instruction.type(), XMLNode::Type::ProcessingInstruction);
+  EXPECT_THAT(instruction.tagName(), Eq(":target"));
+  EXPECT_THAT(instruction.value(), Eq("value"));
+}
+
+TEST_F(XMLParserTests, ParseProcessingInstructionTargetAllowsUnicodeName) {
+  XMLParser::Options options = XMLParser::Options::ParseAll();
+
+  ParseResult<XMLDocument> result = XMLParser::Parse("<?\xC3\xA9 value?><root/>", options);
+
+  ASSERT_THAT(result, NoParseError());
+  XMLNode instruction = result.result().root().firstChild().value();
+  EXPECT_EQ(instruction.type(), XMLNode::Type::ProcessingInstruction);
+  EXPECT_THAT(instruction.tagName(), Eq("\xC3\xA9"));
+  EXPECT_THAT(instruction.value(), Eq("value"));
+}
+
+TEST_F(XMLParserTests, ParseProcessingInstructionTargetAllowsUnicodeNameChar) {
+  XMLParser::Options options = XMLParser::Options::ParseAll();
+
+  ParseResult<XMLDocument> result = XMLParser::Parse("<?a\xCC\x80 value?><root/>", options);
+
+  ASSERT_THAT(result, NoParseError());
+  XMLNode instruction = result.result().root().firstChild().value();
+  EXPECT_EQ(instruction.type(), XMLNode::Type::ProcessingInstruction);
+  EXPECT_THAT(instruction.tagName(), Eq("a\xCC\x80"));
+  EXPECT_THAT(instruction.value(), Eq("value"));
 }
 
 TEST_F(XMLParserTests, ParseProcessingInstructionsErrors) {
@@ -2115,6 +2308,11 @@ TEST_F(XMLParserTests, EntitiesBuiltin) {
   // Invalid entities are not parsed.
   EXPECT_THAT(parseAndGetNodeContents(R"(<node>&invalid;</node>)"),
               ParseResultIs(RcString("&invalid;")));
+  EXPECT_THAT(parseAndGetNodeContents(R"(<node>&;</node>)"), ParseResultIs(RcString("&;")));
+  EXPECT_THAT(parseAndGetNodeContents(R"(<node>&invalid</node>)"),
+              ParseResultIs(RcString("&invalid")));
+  EXPECT_THAT(parseAndGetNodeContents(R"(<node>&bad-name;</node>)"),
+              ParseResultIs(RcString("&bad-name;")));
 }
 
 TEST_F(XMLParserTests, EntitiesNumeric) {
@@ -2268,6 +2466,20 @@ TEST_F(XMLParserTests, EntitiesCustom) {
   EXPECT_EQ(dataNode->value(), "replacement text");
 }
 
+TEST_F(XMLParserTests, CustomEntityNamesAllowUnicodeStartAndNameChars) {
+  auto result = XMLParser::Parse(
+      "<!DOCTYPE test ["
+      "<!ENTITY \xC3\xA9 \"acute\">"
+      "<!ENTITY n\xCC\x80 \"combining\">"
+      "]><node>&\xC3\xA9; &n\xCC\x80;</node>",
+      optionsCustomEntities());
+
+  ASSERT_THAT(result, NoParseError());
+  XMLNode node = result.result().root().firstChild()->nextSibling().value();
+  ASSERT_TRUE(node.firstChild().has_value());
+  EXPECT_THAT(node.firstChild()->value(), testing::Optional(RcString("acute combining")));
+}
+
 TEST_F(XMLParserTests, EntitiesCustomErrors) {
   using std::string_view_literals::operator""sv;
 
@@ -2300,6 +2512,10 @@ TEST_F(XMLParserTests, EntitiesCustomErrors) {
   EXPECT_THAT(
       XMLParser::Parse(R"(<!DOCTYPE test [<!ENTITY ext OTHER]>)", XMLParser::Options::ParseAll()),
       ParseErrorIs("Expected quoted string in entity decl"));
+
+  EXPECT_THAT(XMLParser::Parse(R"(<!DOCTYPE test [<!ENTITY ext "value" junk>]><node/>)",
+                               optionsCustomEntities()),
+              ParseErrorIs("Expected '>' at end of entity declaration"));
 
   EXPECT_THAT(XMLParser::Parse(R"(<!DOCTYPE [<!ENTITY "
 ">]>)",
@@ -2412,6 +2628,22 @@ TEST_F(XMLParserTests, MaxElementsLimitExceeded) {
 
   // Expect: root <a> (1), <b/> (2), <c/> (3), <d/> (exceeds) → error on <d/>.
   EXPECT_THAT(result, ParseErrorIs("Maximum element count exceeded"));
+}
+
+TEST_F(XMLParserTests, MaxElementsLimitAppliesToNonElementNodes) {
+  XMLParser::Options options = XMLParser::Options::ParseAll();
+  options.maxElements = 0;
+
+  EXPECT_THAT(XMLParser::Parse("<?xml version=\"1.0\"?>", options),
+              ParseErrorIs("Maximum element count exceeded"));
+  EXPECT_THAT(XMLParser::Parse("<!--x-->", options),
+              ParseErrorIs("Maximum element count exceeded"));
+  EXPECT_THAT(XMLParser::Parse("<![CDATA[x]]>", options),
+              ParseErrorIs("Maximum element count exceeded"));
+  EXPECT_THAT(XMLParser::Parse("<!DOCTYPE html>", options),
+              ParseErrorIs("Maximum element count exceeded"));
+  EXPECT_THAT(XMLParser::Parse("<?pi value?>", options),
+              ParseErrorIs("Maximum element count exceeded"));
 }
 
 TEST_F(XMLParserTests, MaxElementsLimitAllowsRealisticDocuments) {
@@ -2689,6 +2921,31 @@ TEST_F(XMLParserTests, NameRejectsInvalidUnicodeRange) {
   EXPECT_THAT(
       XMLParser::Parse("<\xC3\x97tag />"),
       ParseErrorIs("Invalid element name: Expected qualified name, found invalid character"));
+}
+
+TEST_F(XMLParserTests, NameParsingHandlesMalformedUtf8Sequences) {
+  const auto makeXml = [](std::string_view nameStartBytes) {
+    std::string xml = "<";
+    xml.append(nameStartBytes);
+    xml.append("tag />");
+    return xml;
+  };
+
+  // Malformed code points are decoded as U+FFFD, which XML names accept.
+  EXPECT_THAT(XMLParser::Parse(makeXml(std::string_view("\xC3", 1))), NoParseError());
+  EXPECT_THAT(XMLParser::Parse(makeXml(std::string_view("\xC0\xAF", 2))), NoParseError());
+  EXPECT_THAT(XMLParser::Parse(makeXml(std::string_view("\xE0\x80\x80", 3))), NoParseError());
+  EXPECT_THAT(XMLParser::Parse(makeXml(std::string_view("\xF0\x80\x80\x80", 4))), NoParseError());
+  EXPECT_THAT(XMLParser::Parse(makeXml(std::string_view("\xF4\x90\x80\x80", 4))), NoParseError());
+
+  constexpr std::string_view kUnclosedNodeError = "Node not closed with '>' or '/>'";
+
+  EXPECT_THAT(XMLParser::Parse(makeXml(std::string_view("\xC3\x28", 2))),
+              ParseErrorIs(kUnclosedNodeError));
+  EXPECT_THAT(XMLParser::Parse(makeXml(std::string_view("\xE2\x28\xA1", 3))),
+              ParseErrorIs(kUnclosedNodeError));
+  EXPECT_THAT(XMLParser::Parse(makeXml(std::string_view("\xF0\x28\x8C\xBC", 4))),
+              ParseErrorIs(kUnclosedNodeError));
 }
 
 TEST_F(XMLParserTests, NameCharAllowsMiddleDotB7) {

@@ -84,6 +84,16 @@ TEST_F(TextInspectorPanelTest, RendersSelectedTextUnderConcurrentDomWithoutCrash
   EXPECT_EQ(app.selectedElements().size(), 1u);
 }
 
+TEST_F(TextInspectorPanelTest, RenderWithNoLiveAppIsNoOp) {
+  TextInspectorPanel panel;
+
+  ImGui::NewFrame();
+  ImGui::Begin("##text_inspector_null_app", nullptr, ImGuiWindowFlags_NoSavedSettings);
+  EXPECT_FALSE(panel.render(nullptr, /*nowSeconds=*/0.0));
+  ImGui::End();
+  ImGui::Render();
+}
+
 TEST_F(TextInspectorPanelTest, ClearingTrackedTextSelectionCommitsNoCleanMutation) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(std::string(kTextDoc)));

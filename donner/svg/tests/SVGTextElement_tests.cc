@@ -6,6 +6,10 @@
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/SVGTSpanElement.h"
+#include "donner/svg/components/DirtyFlagsComponent.h"
+#include "donner/svg/components/text/ComputedTextComponent.h"
+#include "donner/svg/components/text/ComputedTextGeometryComponent.h"
+#include "donner/svg/components/text/TextPositioningComponent.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
@@ -68,6 +72,56 @@ TEST(SVGTextElementTests, PositionAttributes) {
   EXPECT_THAT(text->xList(), testing::ElementsAre(LengthIs(10.0, Lengthd::Unit::None),
                                                   LengthIs(20.0, Lengthd::Unit::None)));
   EXPECT_THAT(text->rotateList(), testing::ElementsAre(0.0, 45.0, 90.0));
+}
+
+TEST(SVGTextElementTests, SetAttributeUpdatesPositioningAndInvalidatesTextRoot) {
+  SVGDocument document = instantiateSubtree(R"(
+    <svg viewBox="0 0 120 40">
+      <text id="root" x="1" y="2">A<tspan id="span">BC</tspan></text>
+    </svg>
+  )",
+                                            kExperimentalOptions);
+
+  auto root = document.querySelector("#root")->cast<SVGTextElement>();
+  auto span = document.querySelector("#span")->cast<SVGTSpanElement>();
+  auto& registry = document.registry();
+  const Entity rootEntity = root.unsafeEntityHandle().entity();
+  const Entity spanEntity = span.unsafeEntityHandle().entity();
+
+  registry.emplace_or_replace<components::ComputedTextComponent>(rootEntity);
+  registry.emplace_or_replace<components::ComputedTextGeometryComponent>(rootEntity);
+  registry.remove<components::DirtyFlagsComponent>(rootEntity);
+
+  span.setAttribute("dx", "4px, 5%, 6");
+  const auto& positioning = registry.get<components::TextPositioningComponent>(spanEntity);
+
+  EXPECT_THAT(positioning.dx, testing::ElementsAre(LengthIs(4.0, Lengthd::Unit::Px),
+                                                   LengthIs(5.0, Lengthd::Unit::Percent),
+                                                   LengthIs(6.0, Lengthd::Unit::None)));
+  EXPECT_FALSE(registry.any_of<components::ComputedTextComponent>(rootEntity));
+  EXPECT_FALSE(registry.any_of<components::ComputedTextGeometryComponent>(rootEntity));
+  ASSERT_TRUE(registry.any_of<components::DirtyFlagsComponent>(rootEntity));
+  EXPECT_TRUE(registry.get<components::DirtyFlagsComponent>(rootEntity)
+                  .test(components::DirtyFlagsComponent::TextGeometry |
+                        components::DirtyFlagsComponent::RenderInstance));
+
+  span.setAttribute("dy", "7 8");
+  span.setAttribute("rotate", "15, 30");
+  const auto& updatedPositioning = registry.get<components::TextPositioningComponent>(spanEntity);
+  EXPECT_THAT(updatedPositioning.dy, testing::ElementsAre(LengthIs(7.0, Lengthd::Unit::None),
+                                                          LengthIs(8.0, Lengthd::Unit::None)));
+  EXPECT_THAT(updatedPositioning.rotateDegrees, testing::ElementsAre(15.0, 30.0));
+}
+
+TEST(SVGTextElementTests, SetAttributeRejectsInvalidPositioningLists) {
+  auto text = instantiateSubtreeElementAs<SVGTextElement>(R"(<text x="10">ABC</text>)",
+                                                          kExperimentalOptions);
+
+  text->setAttribute("x", "20bogus");
+  text->setAttribute("rotate", "10deg");
+
+  EXPECT_THAT(text->xList(), testing::ElementsAre(LengthIs(10.0, Lengthd::Unit::None)));
+  EXPECT_THAT(text->rotateList(), testing::IsEmpty());
 }
 
 TEST(SVGTextElementTests, TextLengthAndAdjust) {

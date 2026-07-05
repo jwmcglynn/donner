@@ -301,6 +301,7 @@ private:
   bool tryExportViewportSvgToPath(std::string_view path, std::string* error);
   bool synchronizeSourceBeforeSave(std::string* error);
   void updateWindowTitle();
+  void applyMenuActions(const MenuBarActions& menuActions);
   void handleGlobalShortcuts();
   /// True when the document has at least one selectable element (the canonical marquee/Select-All
   /// set). Gates whether Cmd+A / the Edit menu's "Select All" act on the canvas.

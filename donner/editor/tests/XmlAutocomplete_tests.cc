@@ -236,6 +236,16 @@ TEST(XmlAutocomplete, StyleAttributeSecondPropertyAfterSemicolonResetsSegment) {
   EXPECT_TRUE(HasSuggestion(BuildXmlAutocompleteSuggestions(context), "stroke"));
 }
 
+TEST(XmlAutocomplete, SingleQuotedStyleAttributeSuggestsProperties) {
+  constexpr std::string_view kSource = "<svg><rect style='Fi'/></svg>";
+  const std::size_t cursorOffset = kSource.find("Fi") + 2;
+  const XmlAutocompleteContext context = DetectXmlAutocompleteContext(kSource, cursorOffset);
+
+  EXPECT_EQ(context.kind, XmlAutocompleteContextKind::StyleValue);
+  EXPECT_EQ(context.prefix, "Fi");
+  EXPECT_TRUE(HasSuggestion(BuildXmlAutocompleteSuggestions(context), "fill"));
+}
+
 TEST(XmlAutocomplete, StyleAttributeSecondPropertyAfterBraceAndWhitespaceResetsSegment) {
   constexpr std::string_view kSource = "<svg><style>rect {\n\tfill: red;\r\n st</style></svg>";
   const std::size_t cursorOffset = kSource.find("st</style>");
@@ -292,6 +302,17 @@ TEST(XmlAutocomplete, StylePropertyNameReplacementStopsAfterCssNameCharacters) {
   EXPECT_EQ(context.replaceEndOffset, kSource.find("_name"));
 }
 
+TEST(XmlAutocomplete, StylePropertyReplacementAcceptsAllCssNameCharacterClasses) {
+  constexpr std::string_view kSource = "<svg><style>a { Ab9-c: red }</style></svg>";
+  const std::size_t cursorOffset = kSource.find("Ab9") + 1;
+  const XmlAutocompleteContext context = DetectXmlAutocompleteContext(kSource, cursorOffset);
+
+  EXPECT_EQ(context.kind, XmlAutocompleteContextKind::StyleValue);
+  EXPECT_EQ(context.prefix, "A");
+  EXPECT_EQ(context.replaceStartOffset, kSource.find("Ab9-c"));
+  EXPECT_EQ(context.replaceEndOffset, kSource.find(": red"));
+}
+
 TEST(XmlAutocomplete, StyleAttributeCursorOnQuotesUsesTokenBoundaryContexts) {
   constexpr std::string_view kSource = R"(<svg><rect style="fill"/></svg>)";
 
@@ -320,6 +341,35 @@ TEST(XmlAutocomplete, NonStyleAttributeValueOffersNoSuggestions) {
 
   EXPECT_EQ(context.kind, XmlAutocompleteContextKind::Unknown);
   EXPECT_TRUE(BuildXmlAutocompleteSuggestions(context).empty());
+}
+
+TEST(XmlAutocomplete, ClosedStyleElementReturnsToTextContentContext) {
+  constexpr std::string_view kSource = "<svg><style>rect { fill:red }</style>fi</svg>";
+  const std::size_t cursorOffset = kSource.find("fi</svg>") + 2;
+  const XmlAutocompleteContext context = DetectXmlAutocompleteContext(kSource, cursorOffset);
+
+  EXPECT_EQ(context.kind, XmlAutocompleteContextKind::TextContent);
+  EXPECT_TRUE(BuildXmlAutocompleteSuggestions(context).empty());
+}
+
+TEST(XmlAutocomplete, DeclarationDoctypeAndEntityBeforeCursorAreIgnored) {
+  constexpr std::string_view kSource = R"(<?xml version="1.0"?><!DOCTYPE svg><svg>&amp;<rect )";
+  const XmlAutocompleteContext context = DetectXmlAutocompleteContext(kSource, kSource.size());
+
+  EXPECT_EQ(context.kind, XmlAutocompleteContextKind::AttributeName);
+  EXPECT_TRUE(HasSuggestion(BuildXmlAutocompleteSuggestions(context), "class"));
+}
+
+TEST(XmlAutocomplete, CursorOnSelfCloseAndCommentTokensIsUnknown) {
+  constexpr std::string_view kSelfClose = "<svg><rect/>";
+  const XmlAutocompleteContext selfClose =
+      DetectXmlAutocompleteContext(kSelfClose, kSelfClose.size());
+  EXPECT_EQ(selfClose.kind, XmlAutocompleteContextKind::Unknown);
+
+  constexpr std::string_view kComment = "<svg><!--note--></svg>";
+  const XmlAutocompleteContext comment =
+      DetectXmlAutocompleteContext(kComment, kComment.find("note"));
+  EXPECT_EQ(comment.kind, XmlAutocompleteContextKind::Unknown);
 }
 
 // --- Element name partial replacement bounds -------------------------------

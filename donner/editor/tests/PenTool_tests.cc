@@ -233,6 +233,30 @@ TEST_F(PenToolTest, RemoveLastAnchorOnLoneAnchorDiscardsDraft) {
   EXPECT_FALSE(app.hasSelection()) << "discarding a lone-anchor draft removes the created path";
 }
 
+TEST_F(PenToolTest, CancelCreatedDraftRemovesPathAndSelection) {
+  tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_TRUE(tool.isDrafting());
+  ASSERT_TRUE(app.hasSelection());
+
+  tool.cancel(app);
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_FALSE(tool.isDrafting());
+  EXPECT_FALSE(app.hasSelection());
+  EXPECT_FALSE(app.document().document().querySelector("path").has_value());
+}
+
+TEST_F(PenToolTest, CancelWithoutDraftIsNoOp) {
+  const std::string before(app.document().document().source());
+
+  tool.cancel(app);
+
+  EXPECT_FALSE(app.flushFrame());
+  EXPECT_FALSE(tool.isDrafting());
+  EXPECT_EQ(app.document().document().source(), before);
+}
+
 TEST_F(PenToolTest, RemoveLastAnchorIsNoOpDuringDrag) {
   tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
   ASSERT_TRUE(app.flushFrame());
@@ -374,6 +398,19 @@ TEST_F(PenToolTest, FinalizedPenPathStaysInsideSvgRootSource) {
   EXPECT_EQ(*reparsedParent, reparsed.document().document().svgElement()) << source;
 }
 
+TEST_F(PenToolTest, CommitOpenPathIsNoOpWithoutDraftOrSingleAnchor) {
+  EXPECT_FALSE(tool.commitOpenPath(app));
+
+  tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
+  tool.onMouseUp(app, Vector2d(10.0, 20.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_FALSE(tool.commitOpenPath(app));
+  EXPECT_FALSE(app.flushFrame());
+  EXPECT_TRUE(tool.isDrafting());
+  EXPECT_EQ(path().d(), "M 10 20");
+}
+
 TEST_F(PenToolTest, DragControlPointUsesAlignedCouplingOnSmoothAnchor) {
   // Place a corner anchor, then a smooth anchor via click-drag so the path is
   // "M 10 10 C 10 10 50 -10 50 10" with mirrored handles on (50,10).
@@ -443,6 +480,34 @@ TEST_F(PenToolTest, ShiftDragControlPointConstrainsAngle) {
   ASSERT_TRUE(app.flushFrame());
 
   EXPECT_EQ(path().d(), "M 10 10 C 10 10 30 10 50 10");
+}
+
+TEST_F(PenToolTest, DragIncomingControlPointUsesAlignedCouplingOnSmoothAnchor) {
+  tool.onMouseDown(app, Vector2d(10.0, 10.0), MouseModifiers{});
+  tool.onMouseUp(app, Vector2d(10.0, 10.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  tool.onMouseDown(app, Vector2d(50.0, 10.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(50.0, 30.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(50.0, 30.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  // Grab the smooth anchor's incoming handle at (50,-10). Dragging it to the
+  // left keeps the outgoing handle collinear on the opposite side, so the next
+  // appended segment starts with an outgoing handle at (70,10).
+  tool.onMouseDown(app, Vector2d(50.0, -10.0), MouseModifiers{});
+  ASSERT_TRUE(tool.isDraggingAnchor());
+  tool.onMouseMove(app, Vector2d(30.0, 10.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(30.0, 10.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_EQ(path().d(), "M 10 10 C 10 10 30 10 50 10");
+
+  tool.onMouseDown(app, Vector2d(90.0, 10.0), MouseModifiers{});
+  tool.onMouseUp(app, Vector2d(90.0, 10.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_EQ(path().d(), "M 10 10 C 10 10 30 10 50 10 C 70 10 90 10 90 10");
 }
 
 TEST_F(PenToolTest, DragAnchorMovesPointAndHandles) {
@@ -549,6 +614,30 @@ TEST_F(PenToolTest, AltClickCornerAnchorConvertsToSmooth) {
   EXPECT_TRUE(tool.isDrafting());
 }
 
+TEST_F(PenToolTest, AltClickClosedContourEndpointSynthesizesWrappedSmoothHandles) {
+  constexpr std::string_view kClosedPathSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+           <path id="c" d="M 10 10 L 40 10 L 40 40 Z" fill="none" stroke="black"/>
+         </svg>)";
+  ASSERT_TRUE(app.loadFromString(kClosedPathSvg));
+  auto selected = app.document().document().querySelector("#c");
+  ASSERT_TRUE(selected.has_value());
+  app.setSelection(*selected);
+
+  MouseModifiers option;
+  option.option = true;
+  tool.onMouseDown(app, Vector2d(10.0, 10.0), option);
+  tool.onMouseUp(app, Vector2d(10.0, 10.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  const std::string d(std::string_view(selected->cast<svg::SVGPathElement>().d()));
+  EXPECT_THAT(d, ::testing::StartsWith("M 10 10 C "))
+      << "the wrapped next neighbor should give the first segment an outgoing handle: " << d;
+  EXPECT_THAT(d, ::testing::HasSubstr(" Z"))
+      << "smooth conversion of a closed endpoint must preserve closure: " << d;
+  EXPECT_FALSE(tool.isDrafting());
+}
+
 TEST_F(PenToolTest, ClickDragOnCloseShapesClosingAnchorHandles) {
   tool.onMouseDown(app, Vector2d(10.0, 10.0), MouseModifiers{});
   tool.onMouseUp(app, Vector2d(10.0, 10.0));
@@ -577,6 +666,23 @@ TEST_F(PenToolTest, ClickDragOnCloseShapesClosingAnchorHandles) {
   EXPECT_THAT(d, ::testing::HasSubstr("C 40 70 -10 30 10 10 Z"))
       << "the closing segment must serialize as an explicit cubic into the start anchor: " << d;
   EXPECT_FALSE(tool.isDrafting()) << "close-drag finalizes on mouse-up";
+}
+
+TEST_F(PenToolTest, CommitOpenPathWhileDraggingNewestAnchorPersistsDragGeometry) {
+  tool.onMouseDown(app, Vector2d(10.0, 10.0), MouseModifiers{});
+  tool.onMouseUp(app, Vector2d(10.0, 10.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  tool.onMouseDown(app, Vector2d(40.0, 10.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(40.0, 30.0), /*buttonHeld=*/true);
+  ASSERT_TRUE(tool.isDraggingAnchor());
+
+  ASSERT_TRUE(tool.commitOpenPath(app));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_EQ(path().d(), "M 10 10 C 10 10 40 -10 40 10");
+  EXPECT_FALSE(tool.isDrafting());
+  EXPECT_FALSE(tool.isDraggingAnchor());
 }
 
 TEST_F(PenToolTest, ClickOnDraftSegmentInsertsAnchor) {
@@ -616,6 +722,83 @@ TEST_F(PenToolTest, ClickOnCommittedSelectedPathSegmentInsertsAnchor) {
 
   EXPECT_EQ(selected->cast<svg::SVGPathElement>().d(), "M 0 0 L 20 0 L 40 0");
   EXPECT_FALSE(tool.isDrafting());
+}
+
+TEST_F(PenToolTest, CommandClickWithNonEditableSelectionDoesNotStartDraft) {
+  struct Scenario {
+    std::string_view svg;
+    std::vector<std::string_view> selectionIds;
+  };
+  const std::array scenarios = {
+      Scenario{
+          .svg = R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r"/></svg>)",
+          .selectionIds = {"r"},
+      },
+      Scenario{
+          .svg =
+              R"(<svg xmlns="http://www.w3.org/2000/svg"><path id="p" d="M"/><rect id="r"/></svg>)",
+          .selectionIds = {"p"},
+      },
+      Scenario{
+          .svg =
+              R"(<svg xmlns="http://www.w3.org/2000/svg"><path id="p" d=""/><rect id="r"/></svg>)",
+          .selectionIds = {"p"},
+      },
+      Scenario{
+          .svg =
+              R"(<svg xmlns="http://www.w3.org/2000/svg"><path id="p" d="M 0 0 M 10 10"/><rect id="r"/></svg>)",
+          .selectionIds = {"p"},
+      },
+      Scenario{
+          .svg =
+              R"(<svg xmlns="http://www.w3.org/2000/svg"><path id="p" d="M 0 0 L 10 0 Z L 20 0"/><rect id="r"/></svg>)",
+          .selectionIds = {"p"},
+      },
+      Scenario{
+          .svg =
+              R"(<svg xmlns="http://www.w3.org/2000/svg"><path id="p" d="M 0 0 L 10 0"/><rect id="r"/></svg>)",
+          .selectionIds = {"p", "r"},
+      },
+  };
+
+  MouseModifiers command;
+  command.command = true;
+  for (const Scenario& scenario : scenarios) {
+    ASSERT_TRUE(app.loadFromString(scenario.svg));
+    std::vector<svg::SVGElement> selection;
+    for (std::string_view id : scenario.selectionIds) {
+      auto element = app.document().document().querySelector("#" + std::string(id));
+      ASSERT_TRUE(element.has_value()) << id;
+      selection.push_back(*element);
+    }
+    app.setSelection(std::move(selection));
+
+    PenTool localTool;
+    const std::string before(app.document().document().source());
+    localTool.onMouseDown(app, Vector2d(50.0, 50.0), command);
+    localTool.onMouseUp(app, Vector2d(50.0, 50.0));
+
+    EXPECT_FALSE(localTool.isDrafting()) << scenario.svg;
+    EXPECT_FALSE(app.flushFrame()) << scenario.svg;
+    EXPECT_EQ(app.document().document().source(), before) << scenario.svg;
+  }
+}
+
+TEST_F(PenToolTest, ClickOpenEndpointOfQuadraticPathResumesDrafting) {
+  ASSERT_TRUE(app.loadFromString(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+           <path id="q" d="M 0 0 Q 30 30 60 0" fill="none" stroke="black"/>
+         </svg>)"));
+  auto selected = app.document().document().querySelector("#q");
+  ASSERT_TRUE(selected.has_value());
+  app.setSelection(*selected);
+
+  tool.onMouseDown(app, Vector2d(60.0, 0.0), MouseModifiers{});
+  tool.onMouseUp(app, Vector2d(60.0, 0.0));
+
+  EXPECT_FALSE(app.flushFrame());
+  EXPECT_TRUE(tool.isDrafting());
+  EXPECT_EQ(tool.activePathData(), "M 0 0 C 20 20 40 20 60 0");
 }
 
 TEST_F(PenToolTest, EditingCommittedSelectedPathDragsAnchor) {
@@ -733,6 +916,55 @@ TEST_F(PenToolTest, ShiftConstrainsNextSegment) {
   ASSERT_TRUE(app.flushFrame());
 
   EXPECT_EQ(path().d(), "M 10 10 L 40 10");
+}
+
+TEST_F(PenToolTest, PreviewSegmentPathCoversLineCurveShiftAndCloseAffordance) {
+  EXPECT_FALSE(tool.previewSegmentPath(Vector2d(20.0, 20.0), MouseModifiers{}).has_value());
+  EXPECT_FALSE(tool.wouldCloseAt(Vector2d(10.0, 10.0), MouseModifiers{}));
+
+  tool.onMouseDown(app, Vector2d(10.0, 10.0), MouseModifiers{});
+  EXPECT_FALSE(tool.previewSegmentPath(Vector2d(20.0, 20.0), MouseModifiers{}).has_value());
+  tool.onMouseUp(app, Vector2d(10.0, 10.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  std::optional<Path> linePreview = tool.previewSegmentPath(Vector2d(30.0, 10.0), MouseModifiers{});
+  ASSERT_TRUE(linePreview.has_value());
+  EXPECT_EQ(linePreview->toSVGPathData(), "M 10 10 L 30 10");
+
+  MouseModifiers shift;
+  shift.shift = true;
+  std::optional<Path> shiftedPreview = tool.previewSegmentPath(Vector2d(38.0, 32.0), shift);
+  ASSERT_TRUE(shiftedPreview.has_value());
+  EXPECT_EQ(shiftedPreview->toSVGPathData(), "M 10 10 L 35 35");
+
+  tool.onMouseDown(app, Vector2d(40.0, 10.0), MouseModifiers{});
+  tool.onMouseUp(app, Vector2d(40.0, 10.0));
+  ASSERT_TRUE(app.flushFrame());
+  tool.onMouseDown(app, Vector2d(40.0, 40.0), MouseModifiers{});
+  tool.onMouseUp(app, Vector2d(40.0, 40.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  MouseModifiers closeModifiers;
+  closeModifiers.pixelsPerDocUnit = 1.0;
+  EXPECT_TRUE(tool.wouldCloseAt(Vector2d(11.0, 10.0), closeModifiers));
+  std::optional<Path> closePreview = tool.previewSegmentPath(Vector2d(11.0, 10.0), closeModifiers);
+  ASSERT_TRUE(closePreview.has_value());
+  EXPECT_EQ(closePreview->toSVGPathData(), "M 40 40 L 10 10");
+
+  EditorApp curvedApp;
+  ASSERT_TRUE(curvedApp.loadFromString(kEmptySvg));
+  PenTool curvedTool;
+  curvedTool.onMouseDown(curvedApp, Vector2d(10.0, 10.0), MouseModifiers{});
+  curvedTool.onMouseMove(curvedApp, Vector2d(20.0, 10.0), /*buttonHeld=*/true);
+  curvedTool.onMouseUp(curvedApp, Vector2d(20.0, 10.0));
+  ASSERT_TRUE(curvedApp.flushFrame());
+
+  std::optional<Path> curvePreview =
+      curvedTool.previewSegmentPath(Vector2d(30.0, 20.0), MouseModifiers{});
+  ASSERT_TRUE(curvePreview.has_value());
+  ASSERT_EQ(curvePreview->commands().size(), 2u);
+  EXPECT_EQ(curvePreview->commands()[1].verb, Path::Verb::CurveTo);
+  EXPECT_EQ(curvePreview->toSVGPathData(), "M 10 10 C 20 10 30 20 30 20");
 }
 
 TEST_F(PenToolTest, SelectedOpenPathCanBeContinued) {

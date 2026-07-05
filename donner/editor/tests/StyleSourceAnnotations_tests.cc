@@ -264,6 +264,43 @@ TEST(StyleSourceAnnotations, ReferenceResourceClassificationSkipsNonResourceDefi
   EXPECT_EQ(symbol->matchedElementCount, 2);
 }
 
+TEST(StyleSourceAnnotations, ReferenceResourceKindsAreAnnotated) {
+  constexpr std::string_view kSource = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <clipPath id="clip"><rect/></clipPath>
+    <filter id="blur"><feGaussianBlur/></filter>
+    <marker id="arrow"><path d="M0 0L5 5"/></marker>
+    <mask id="mask"><rect/></mask>
+    <pattern id="pattern"><rect/></pattern>
+    <radialGradient id="radial"><stop offset="1"/></radialGradient>
+    <path id="shape"/>
+  </defs>
+  <g clip-path="url(#clip)" filter="url(#blur)" marker-end="url(#arrow)"
+     mask="url(#mask)" fill="url(#pattern)" stroke="url(#radial)">
+    <use href="#shape"/>
+  </g>
+</svg>)svg";
+  svg::SVGDocument document = ParseSvg(kSource);
+
+  const StyleSourceAnnotations annotations = ComputeStyleSourceAnnotations(document, kSource);
+
+  for (const auto [tagName, idNeedle] : {
+           std::pair<std::string_view, std::string_view>{"clipPath", R"(id="clip")"},
+           std::pair<std::string_view, std::string_view>{"filter", R"(id="blur")"},
+           std::pair<std::string_view, std::string_view>{"marker", R"(id="arrow")"},
+           std::pair<std::string_view, std::string_view>{"mask", R"(id="mask")"},
+           std::pair<std::string_view, std::string_view>{"pattern", R"(id="pattern")"},
+           std::pair<std::string_view, std::string_view>{"radialGradient", R"(id="radial")"},
+           std::pair<std::string_view, std::string_view>{"path", R"(id="shape")"},
+       }) {
+    const StyleSourceContribution* contribution = FindContribution(
+        annotations, StyleContributionKind::ReferenceResourceElement, tagName, idNeedle, kSource);
+    ASSERT_NE(contribution, nullptr) << tagName;
+    EXPECT_TRUE(contribution->effective) << tagName;
+    EXPECT_EQ(contribution->matchedElementCount, 1) << tagName;
+  }
+}
+
 TEST(StyleSourceAnnotations, EmptyFragmentReferencesDoNotIncrementResourceCounts) {
   constexpr std::string_view kSource = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
   <defs><path id="shape"/></defs>
@@ -280,6 +317,37 @@ TEST(StyleSourceAnnotations, EmptyFragmentReferencesDoNotIncrementResourceCounts
   ASSERT_NE(shape, nullptr);
   EXPECT_FALSE(shape->effective);
   EXPECT_EQ(shape->matchedElementCount, 0);
+}
+
+TEST(StyleSourceAnnotations, CssUrlReferencesHandleSingleQuotesAndUnquotedWhitespace) {
+  constexpr std::string_view kSource = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .quoted { fill: url( '#paint' ); stroke: url(#stroke ); }
+    .external { filter: url(http://example.invalid/filter); }
+  </style>
+  <defs>
+    <linearGradient id="paint"><stop offset="1"/></linearGradient>
+    <linearGradient id="stroke"><stop offset="1"/></linearGradient>
+  </defs>
+  <rect class="quoted external"/>
+</svg>)svg";
+  svg::SVGDocument document = ParseSvg(kSource);
+
+  const StyleSourceAnnotations annotations = ComputeStyleSourceAnnotations(document, kSource);
+
+  const StyleSourceContribution* paint =
+      FindContribution(annotations, StyleContributionKind::ReferenceResourceElement,
+                       "linearGradient", R"(id="paint")", kSource);
+  ASSERT_NE(paint, nullptr);
+  EXPECT_TRUE(paint->effective);
+  EXPECT_EQ(paint->matchedElementCount, 1);
+
+  const StyleSourceContribution* stroke =
+      FindContribution(annotations, StyleContributionKind::ReferenceResourceElement,
+                       "linearGradient", R"(id="stroke")", kSource);
+  ASSERT_NE(stroke, nullptr);
+  EXPECT_TRUE(stroke->effective);
+  EXPECT_EQ(stroke->matchedElementCount, 1);
 }
 
 TEST(StyleSourceAnnotations, InlineStyleDeclarationDoesNotShowSelectorChip) {
@@ -374,6 +442,19 @@ TEST(StyleSourceAnnotations, PresentationAttributeWithoutSourceLocationIsSkipped
   EXPECT_EQ(FindContribution(annotations, StyleContributionKind::PresentationAttribute, "fill",
                              "fill=\"red\"", kSource),
             nullptr);
+}
+
+TEST(StyleSourceAnnotations, StaleNonEmptySourceRangesAreSkipped) {
+  constexpr std::string_view kSource = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <style>.hit { fill: red; }</style>
+  <defs><linearGradient id="paint"><stop offset="1"/></linearGradient></defs>
+  <rect class="hit" fill="url(#paint)"/>
+</svg>)svg";
+  svg::SVGDocument document = ParseSvg(kSource);
+
+  const StyleSourceAnnotations annotations = ComputeStyleSourceAnnotations(document, "<svg");
+
+  EXPECT_TRUE(annotations.contributions.empty());
 }
 
 TEST(StyleSourceAnnotations, LaterInlineDeclarationWinsEqualSpecificityTie) {

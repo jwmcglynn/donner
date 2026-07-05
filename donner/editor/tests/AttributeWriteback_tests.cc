@@ -352,6 +352,25 @@ TEST(AttributeWritebackRegressionTest, RemoveSelfClosingElementConsumesCrLfLineE
             "<svg xmlns=\"http://www.w3.org/2000/svg\">\r\n  <circle id=\"b\"/>\r\n</svg>\r\n");
 }
 
+TEST(AttributeWritebackRegressionTest, RemoveSelfClosingElementConsumesBareCrLineEnding) {
+  constexpr std::string_view kSource =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\">\r  <circle id=\"a\"/>\r  <circle id=\"b\"/>\r"
+      "</svg>\r";
+  auto document = ParseDocument(kSource);
+  ASSERT_TRUE(document.has_value());
+  const svg::SVGElement circle = GetElementById(*document, "#a");
+  const auto target = captureAttributeWritebackTarget(circle);
+  ASSERT_TRUE(target.has_value());
+
+  auto patch = buildElementRemoveWriteback(kSource, *target);
+  ASSERT_TRUE(patch.has_value());
+
+  std::string source(kSource);
+  const auto result = applyPatches(source, {{*patch}});
+  ASSERT_EQ(result.applied, 1u);
+  EXPECT_EQ(source, "<svg xmlns=\"http://www.w3.org/2000/svg\">\r  <circle id=\"b\"/>\r</svg>\r");
+}
+
 TEST(AttributeWritebackRegressionTest, RemoveInlineElementConsumesFollowingSpaceOnly) {
   constexpr std::string_view kSource =
       R"(<svg xmlns="http://www.w3.org/2000/svg"><circle id="a"/> <circle id="b"/></svg>)";
@@ -572,6 +591,20 @@ TEST(AttributeWritebackResolveTest, ElementOverloadAcceptsOpeningTagWhitespaceTe
   }
 }
 
+TEST(AttributeWritebackResolveTest, ElementOverloadReturnsNulloptForUnterminatedQuotedTag) {
+  auto document = ParseDocument(kSimpleSvg);
+  ASSERT_TRUE(document.has_value());
+  const svg::SVGElement rect = GetElementById(*document, "#r1");
+
+  const std::size_t rectStart = kSimpleSvg.find("<rect");
+  ASSERT_NE(rectStart, std::string_view::npos);
+
+  std::string staleSource(kSimpleSvg.substr(0, rectStart));
+  staleSource += R"(<rect id="r1" data-label="unterminated)";
+
+  EXPECT_FALSE(buildAttributeWriteback(staleSource, rect, "fill", "blue").has_value());
+}
+
 // --- target overload + malformed source ------------------------------------
 
 TEST(AttributeWritebackTargetOverloadTest, MalformedSourceReturnsNullopt) {
@@ -597,6 +630,36 @@ TEST(AttributeWritebackTargetOverloadTest, TargetNotInSourceReturnsNullopt) {
   EXPECT_FALSE(buildAttributeWriteback(kSource, target, "fill", "blue").has_value());
   EXPECT_FALSE(buildAttributeRemoveWriteback(kSource, target, "fill").has_value());
   EXPECT_FALSE(buildElementRemoveWriteback(kSource, target).has_value());
+}
+
+TEST(AttributeWritebackTargetOverloadTest, EmptyTargetReturnsNullopt) {
+  AttributeWritebackTarget target;
+
+  EXPECT_FALSE(buildAttributeWriteback(kSimpleSvg, target, "fill", "blue").has_value());
+  EXPECT_FALSE(buildAttributeRemoveWriteback(kSimpleSvg, target, "fill").has_value());
+  EXPECT_FALSE(buildElementRemoveWriteback(kSimpleSvg, target).has_value());
+}
+
+TEST(AttributeWritebackTargetOverloadTest, IdSearchWinsWhenSiblingOrderChanges) {
+  constexpr std::string_view kOriginalSource =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="a"/><rect id="b"/></svg>)";
+  auto originalDocument = ParseDocument(kOriginalSource);
+  ASSERT_TRUE(originalDocument.has_value());
+  const svg::SVGElement rectB = GetElementById(*originalDocument, "#b");
+  const auto target = captureAttributeWritebackTarget(rectB);
+  ASSERT_TRUE(target.has_value());
+
+  constexpr std::string_view kReorderedSource =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="b"/><rect id="a"/></svg>)";
+  auto patch = buildAttributeWriteback(kReorderedSource, *target, "fill", "blue");
+  ASSERT_TRUE(patch.has_value());
+
+  std::string source(kReorderedSource);
+  const auto result = applyPatches(source, {{*patch}});
+  ASSERT_EQ(result.applied, 1u);
+  EXPECT_EQ(
+      source,
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="b" fill="blue"/><rect id="a"/></svg>)");
 }
 
 TEST(AttributeWritebackTargetOverloadTest, InsertsAttributeViaTargetOverload) {
@@ -682,6 +745,24 @@ TEST(AttributeWritebackTargetOverloadTest, InsertScannerSkipsQuotedTagCloseChara
   EXPECT_THAT(source, testing::HasSubstr(R"(data-note="a > b / c" fill="blue")"));
 }
 
+TEST(AttributeWritebackTargetOverloadTest, InsertScannerSkipsSingleQuotedTagCloseCharacters) {
+  constexpr std::string_view kSource =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r1" data-note='a > b / c'/></svg>)";
+  auto document = ParseDocument(kSource);
+  ASSERT_TRUE(document.has_value());
+  const svg::SVGElement rect = GetElementById(*document, "#r1");
+  const auto target = captureAttributeWritebackTarget(rect);
+  ASSERT_TRUE(target.has_value());
+
+  auto patch = buildAttributeWriteback(kSource, *target, "fill", "blue");
+  ASSERT_TRUE(patch.has_value());
+
+  std::string source(kSource);
+  const auto result = applyPatches(source, {{*patch}});
+  ASSERT_EQ(result.applied, 1u);
+  EXPECT_THAT(source, testing::HasSubstr(R"(data-note='a > b / c' fill="blue")"));
+}
+
 TEST(AttributeWritebackTargetOverloadTest, RemoveInlineElementAfterNonIndentTextKeepsPrefix) {
   constexpr std::string_view kSource =
       R"(<svg xmlns="http://www.w3.org/2000/svg">prefix<circle id="a"/></svg>)";
@@ -698,6 +779,64 @@ TEST(AttributeWritebackTargetOverloadTest, RemoveInlineElementAfterNonIndentText
   const auto result = applyPatches(source, {{*patch}});
   ASSERT_EQ(result.applied, 1u);
   EXPECT_EQ(source, R"(<svg xmlns="http://www.w3.org/2000/svg">prefix</svg>)");
+}
+
+TEST(AttributeWritebackTargetOverloadTest, RemoveAttributeConsumesXmlWhitespaceKinds) {
+  struct Case {
+    std::string_view source;
+    std::string_view expected;
+  };
+
+  constexpr Case kCases[] = {
+      {
+          "<svg xmlns=\"http://www.w3.org/2000/svg\"><circle cx=\"1\"\ttransform=\"translate(5)\" "
+          "r=\"2\"/></svg>",
+          "<svg xmlns=\"http://www.w3.org/2000/svg\"><circle cx=\"1\" r=\"2\"/></svg>",
+      },
+      {
+          "<svg xmlns=\"http://www.w3.org/2000/svg\"><circle cx=\"1\"\ntransform=\"translate(5)\" "
+          "r=\"2\"/></svg>",
+          "<svg xmlns=\"http://www.w3.org/2000/svg\"><circle cx=\"1\" r=\"2\"/></svg>",
+      },
+      {
+          "<svg xmlns=\"http://www.w3.org/2000/svg\"><circle cx=\"1\"\rtransform=\"translate(5)\" "
+          "r=\"2\"/></svg>",
+          "<svg xmlns=\"http://www.w3.org/2000/svg\"><circle cx=\"1\" r=\"2\"/></svg>",
+      },
+  };
+
+  for (const Case& testCase : kCases) {
+    SCOPED_TRACE(testCase.source);
+    auto document = ParseDocument(testCase.source);
+    ASSERT_TRUE(document.has_value());
+    const svg::SVGElement circle = GetElementById(*document, "circle");
+    const auto target = captureAttributeWritebackTarget(circle);
+    ASSERT_TRUE(target.has_value());
+
+    auto patch = buildAttributeRemoveWriteback(testCase.source, *target, "transform");
+    ASSERT_TRUE(patch.has_value());
+
+    std::string source(testCase.source);
+    const auto result = applyPatches(source, {{*patch}});
+    ASSERT_EQ(result.applied, 1u);
+    EXPECT_EQ(source, testCase.expected);
+  }
+}
+
+TEST(AttributeWritebackTargetOverloadTest, RemoveRootElementAtEndOfSource) {
+  constexpr std::string_view kSource = R"(<svg xmlns="http://www.w3.org/2000/svg"/>)";
+  auto document = ParseDocument(kSource);
+  ASSERT_TRUE(document.has_value());
+  const auto target = captureAttributeWritebackTarget(document->svgElement());
+  ASSERT_TRUE(target.has_value());
+
+  auto patch = buildElementRemoveWriteback(kSource, *target);
+  ASSERT_TRUE(patch.has_value());
+
+  std::string source(kSource);
+  const auto result = applyPatches(source, {{*patch}});
+  ASSERT_EQ(result.applied, 1u);
+  EXPECT_TRUE(source.empty());
 }
 
 }  // namespace

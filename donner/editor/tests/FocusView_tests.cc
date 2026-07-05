@@ -9,6 +9,7 @@
 #include <string_view>
 #include <vector>
 
+#include "donner/base/xml/XMLNode.h"
 #include "donner/editor/DocumentSyncController.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/TextEditor.h"
@@ -267,6 +268,24 @@ constexpr std::string_view kLooseReferenceSyntaxSvg =
   <use id="ignored" href=" not-a-fragment "/>
 </svg>)svg";
 
+constexpr std::string_view kAdditionalReferenceSyntaxSvg =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .target { fill: url('#paint'); stroke: url(#accent ); clip-path: url(#); }
+  </style>
+  <defs>
+    <linearGradient id="paint"><stop offset="0"/></linearGradient>
+    <clipPath id="accent"><circle/></clipPath>
+  </defs>
+  <rect id="target" class="target"/>
+</svg>)svg";
+
+constexpr std::string_view kMissingReferenceSvg =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <rect id="target" fill="url(#missing)"/>
+  <rect id="sibling"/>
+</svg>)svg";
+
 std::size_t OffsetForNeedle(std::string_view source, std::string_view needle) {
   const std::size_t offset = source.find(needle);
   EXPECT_NE(offset, std::string_view::npos) << needle;
@@ -492,6 +511,122 @@ TEST(FocusViewTest, ReferenceSummaryHandlesLooseReferenceSyntax) {
   const ReferenceHighlightSummary ignoredSummary = ComputeReferenceHighlightSummary(
       app.document().document(), std::span<const svg::SVGElement>(&*ignored, 1));
   EXPECT_EQ(ignoredSummary.totalCount(), 0u);
+}
+
+TEST(FocusViewTest, ParsesSingleQuotedAndUnquotedUrlReferenceBoundaries) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kAdditionalReferenceSyntaxSvg));
+  std::optional<svg::SVGElement> target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  const FocusPartition partition = ComputeFocusPartition(app.document().document(), *target);
+
+  EXPECT_TRUE(ContainsLine(
+      partition.referenceColor,
+      PointForNeedle(kAdditionalReferenceSyntaxSvg, R"(<linearGradient id="paint")").line));
+  EXPECT_TRUE(
+      ContainsLine(partition.referenceColor,
+                   PointForNeedle(kAdditionalReferenceSyntaxSvg, R"(<clipPath id="accent")").line));
+  EXPECT_TRUE(ContainsLink(partition.referenceLinks,
+                           FocusReferenceLink{
+                               .from = PointForNeedle(kAdditionalReferenceSyntaxSvg, "#paint"),
+                               .to = PointForOpeningTagEnd(kAdditionalReferenceSyntaxSvg,
+                                                           R"(<linearGradient id="paint")"),
+                           }));
+  EXPECT_TRUE(ContainsLink(
+      partition.referenceLinks,
+      FocusReferenceLink{
+          .from = PointForNeedle(kAdditionalReferenceSyntaxSvg, "#accent"),
+          .to = PointForOpeningTagEnd(kAdditionalReferenceSyntaxSvg, R"(<clipPath id="accent")"),
+      }));
+  EXPECT_GE(partition.referenceLinks.size(), 2u);
+}
+
+TEST(FocusViewTest, MissingReferencesDoNotCreateSourceLinksOrSummaryEntries) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kMissingReferenceSvg));
+  std::optional<svg::SVGElement> target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  const FocusPartition partition = ComputeFocusPartition(app.document().document(), *target);
+
+  EXPECT_TRUE(partition.referenceColor.empty());
+  EXPECT_TRUE(partition.referenceLinks.empty());
+
+  const ReferenceHighlightSummary summary = ComputeReferenceHighlightSummary(
+      app.document().document(), std::span<const svg::SVGElement>(&*target, 1));
+  EXPECT_EQ(summary.totalCount(), 0u);
+}
+
+TEST(FocusViewTest, SourceLocationLossDropsFocusRatherThanGuessingRanges) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kReferencedSvg));
+  std::optional<svg::SVGElement> target = app.document().document().querySelector("#target");
+  std::optional<svg::SVGElement> paint = app.document().document().querySelector("#paint");
+  ASSERT_TRUE(target.has_value());
+  ASSERT_TRUE(paint.has_value());
+
+  {
+    std::optional<xml::XMLNode> paintNode = xml::XMLNode::TryCast(paint->entityHandle());
+    ASSERT_TRUE(paintNode.has_value());
+    paintNode->clearSourceLocation();
+  }
+
+  const FocusPartition partitionWithMissingReferenceRange =
+      ComputeFocusPartition(app.document().document(), *target);
+  EXPECT_FALSE(
+      ContainsLink(partitionWithMissingReferenceRange.referenceLinks,
+                   FocusReferenceLink{
+                       .from = PointForNeedle(kReferencedSvg, "#paint"),
+                       .to = PointForOpeningTagEnd(kReferencedSvg, R"(<linearGradient id="paint")"),
+                   }));
+  EXPECT_FALSE(ContainsLine(partitionWithMissingReferenceRange.referenceColor,
+                            PointForNeedle(kReferencedSvg, R"(<linearGradient id="paint")").line));
+
+  {
+    std::optional<xml::XMLNode> targetNode = xml::XMLNode::TryCast(target->entityHandle());
+    ASSERT_TRUE(targetNode.has_value());
+    targetNode->clearSourceLocation();
+  }
+
+  EXPECT_TRUE(ComputeFocusPartition(app.document().document(), *target).empty());
+}
+
+TEST(FocusViewTest, MissingResourceOpeningTagLocationFallsBackToNodeStartForLinks) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kReferencedSvg));
+  std::optional<svg::SVGElement> target = app.document().document().querySelector("#target");
+  std::optional<svg::SVGElement> paint = app.document().document().querySelector("#paint");
+  ASSERT_TRUE(target.has_value());
+  ASSERT_TRUE(paint.has_value());
+
+  std::optional<xml::XMLNode> paintNode = xml::XMLNode::TryCast(paint->entityHandle());
+  ASSERT_TRUE(paintNode.has_value());
+  paintNode->clearOpeningTagLocation();
+
+  const FocusPartition partition = ComputeFocusPartition(app.document().document(), *target);
+
+  EXPECT_TRUE(
+      ContainsLink(partition.referenceLinks,
+                   FocusReferenceLink{
+                       .from = PointForNeedle(kReferencedSvg, "#paint"),
+                       .to = PointForNeedle(kReferencedSvg, R"(<linearGradient id="paint")"),
+                   }));
+}
+
+TEST(FocusViewTest, MissingSelectedAncestorSourceRangeReturnsEmptyPartition) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kNestedSvg));
+  std::optional<svg::SVGElement> target = app.document().document().querySelector("#target");
+  std::optional<svg::SVGElement> inner = app.document().document().querySelector("#inner");
+  ASSERT_TRUE(target.has_value());
+  ASSERT_TRUE(inner.has_value());
+
+  std::optional<xml::XMLNode> innerNode = xml::XMLNode::TryCast(inner->entityHandle());
+  ASSERT_TRUE(innerNode.has_value());
+  innerNode->clearSourceLocation();
+
+  EXPECT_TRUE(ComputeFocusPartition(app.document().document(), *target).empty());
 }
 
 TEST(FocusViewTest, ReferenceHighlightSummaryCountsForwardReferences) {

@@ -166,7 +166,7 @@ jobs:
             esac
 
             case "$path" in
-              .bazelrc|.github/workflows/*|.github/actions/*|docs/*|*.md|tools/binary_size.sh|tools/build_docs.sh|tools/coverage.sh|tools/filter_coverage.py|tools/generate_build_report.py|tools/generate_build_report_tests.py)
+              .bazelrc|.github/workflows/*|.github/actions/*|docs/*|*.md|tools/binary_size.sh|tools/build_docs.sh|tools/coverage.sh|tools/filter_coverage.py|tools/lcov_metrics.py|tools/lcov_metrics_tests.py|tools/generate_build_report.py|tools/generate_build_report_tests.py)
                 ;;
               *)
                 smoke_only=false

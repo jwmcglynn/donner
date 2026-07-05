@@ -1032,21 +1032,12 @@ void TextEditorCore::handleRegularCharacter(UndoState& state, const Coordinates&
 
   // Insert the character(s) at the current cursor position
   for (char ch : chars) {
-    if (ch == '\t' && insertSpaces_) {
-      // If we get a tab and we're using spaces, insert tabSize_ spaces
-      for (int i = 0; i < tabSize_; i++) {
-        line.insert(line.begin() + charIndex++, Glyph(' ', ColorIndex::Default));
-      }
-      added.append(tabSize_, ' ');
-    } else {
-      line.insert(line.begin() + charIndex++, Glyph(ch, ColorIndex::Default));
-      added.push_back(ch);
-    }
+    line.insert(line.begin() + charIndex++, Glyph(ch, ColorIndex::Default));
+    added.push_back(ch);
   }
 
   // Update cursor position
-  // For a tab, move cursor by tab size if using spaces, otherwise by 1
-  const int advance = (chars[0] == '\t' && insertSpaces_) ? tabSize_ : (int)chars.size();
+  const int advance = static_cast<int>(chars.size());
   state_.cursorPosition = Coordinates(coord.line, coord.column + advance);
 
   // Record what was added for undo
@@ -1791,7 +1782,7 @@ void TextEditorCore::colorize(int fromLine, int lines) {
 }
 
 void TextEditorCore::colorizeRange(int fromLine, int toLine) {
-  if (text_.getTotalLines() == 0 || !colorizerEnabled_) {
+  if (!colorizerEnabled_) {
     return;
   }
 

@@ -151,6 +151,37 @@ TEST(RopeSimulationTest, ResetCatenaryHangsBetweenEndpoints) {
   EXPECT_GT(middle.y, 20.0);
 }
 
+TEST(RopeSimulationTest, ResetCatenaryHandlesReversedEndpoints) {
+  RopeSimulationOptions options = TestOptions();
+  options.gravityPxPerSec2 = 0.0;
+  options.catenaryMinSlackPx = 24.0;
+  RopeSimulation rope;
+
+  rope.resetCatenary(Vector2d(120.0, 20.0), Vector2d(0.0, 20.0), options);
+
+  ASSERT_GE(rope.points().size(), 3u);
+  EXPECT_NEAR(rope.points().front().x, 120.0, 1e-9);
+  EXPECT_NEAR(rope.points().back().x, 0.0, 1e-9);
+  const Vector2d middle = rope.points()[rope.points().size() / 2u];
+  EXPECT_NEAR(middle.x, 60.0, 1.0);
+  EXPECT_GT(middle.y, 20.0);
+}
+
+TEST(RopeSimulationTest, ResetCatenaryFallsBackWhenSlackCannotExceedChord) {
+  RopeSimulationOptions options = TestOptions();
+  options.gravityPxPerSec2 = 0.0;
+  options.catenaryMinSlackPx = 0.0;
+  options.catenaryMaxSlackPx = 0.0;
+  RopeSimulation rope;
+
+  rope.resetCatenary(Vector2d(0.0, 0.0), Vector2d(120.0, 0.0), options);
+
+  ASSERT_GE(rope.points().size(), 3u);
+  EXPECT_EQ(rope.points().front(), Vector2d(0.0, 0.0));
+  EXPECT_EQ(rope.points().back(), Vector2d(120.0, 0.0));
+  EXPECT_GT(rope.points()[rope.points().size() / 2u].y, 0.0);
+}
+
 TEST(RopeSimulationTest, ResetCatenaryStartsSettledWithZeroVelocity) {
   RopeSimulationOptions options = TestOptions();
   RopeSimulation rope;
@@ -163,6 +194,38 @@ TEST(RopeSimulationTest, ResetCatenaryStartsSettledWithZeroVelocity) {
 
   EXPECT_EQ(std::vector<Vector2d>(rope.points().begin(), rope.points().end()), before);
   EXPECT_FALSE(rope.needsAnimation());
+}
+
+TEST(RopeSimulationTest, ResetSkipsDegeneratePolylineSegmentsWhenSampling) {
+  RopeSimulationOptions options = TestOptions();
+  options.segmentCount = 4;
+  const std::vector<Vector2d> route = {
+      Vector2d(0.0, 0.0),
+      Vector2d(0.0, 0.0),
+      Vector2d(100.0, 0.0),
+  };
+  RopeSimulation rope;
+
+  rope.reset(route, options);
+
+  ASSERT_EQ(rope.points().size(), 5u);
+  EXPECT_EQ(rope.points().front(), Vector2d(0.0, 0.0));
+  EXPECT_EQ(rope.points().back(), Vector2d(100.0, 0.0));
+  EXPECT_NEAR(rope.points()[2].x, 50.0, 1e-9);
+}
+
+TEST(RopeSimulationTest, TwoParticleUpdateExercisesAverageSpeedBaseCase) {
+  RopeSimulationOptions options = TestOptions();
+  options.segmentCount = 1;
+  options.gravityPxPerSec2 = 0.0;
+  RopeSimulation rope = MakeStraightRope(options);
+
+  rope.update(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), 1.0 / 60.0, 0.0, 1.0 / 60.0, 1u, false,
+              options);
+
+  ASSERT_EQ(rope.points().size(), 2u);
+  EXPECT_EQ(rope.points().front(), Vector2d(0.0, 0.0));
+  EXPECT_EQ(rope.points().back(), Vector2d(100.0, 0.0));
 }
 
 TEST(RopeSimulationTest, ScrollImpulseAffectsInteriorOnly) {
@@ -557,6 +620,20 @@ TEST(RopeSimulationTest, ResetWithCoincidentEndpointsCollapsesToPoint) {
   EXPECT_THAT(rope.points(), testing::Each(Vector2d(7.0, 9.0)));
 }
 
+TEST(RopeSimulationTest, ZeroDeltaCoincidentRouteSolvesZeroLengthConstraints) {
+  const RopeSimulationOptions options = TestOptions();
+  const std::vector<Vector2d> route = {Vector2d(4.0, 5.0), Vector2d(4.0, 5.0)};
+  RopeSimulation rope;
+  rope.reset(route, options);
+
+  rope.update(Vector2d(4.0, 5.0), Vector2d(4.0, 5.0), 0.0, 0.0, 0.0, 1u, false, options);
+
+  ASSERT_GE(rope.points().size(), 2u);
+  for (const Vector2d& point : rope.points()) {
+    EXPECT_EQ(point, Vector2d(4.0, 5.0));
+  }
+}
+
 // --- Self-healing update on an empty/uninitialized rope --------------------
 
 TEST(RopeSimulationTest, UpdateOnEmptyRopeSelfInitializesCatenary) {
@@ -692,6 +769,41 @@ TEST(RopeSimulationTest, CoincidentEndpointCatenaryStaysAtSharedPoint) {
 
   ASSERT_GE(rope.points().size(), 2u);
   EXPECT_THAT(rope.points(), EndpointsAre(Vector2d(10.0, 10.0), Vector2d(10.0, 10.0)));
+}
+
+TEST(RopeSimulationTest, OverdueDampingSupportsImmediateRamp) {
+  RopeSimulationOptions options = TestOptions();
+  options.gravityPxPerSec2 = 0.0;
+  options.settleTimeSeconds = 0.0;
+  options.overdueDampingRampSeconds = 0.0;
+  options.overdueDamping = 0.25;
+  options.settleStillnessSeconds = 10.0;
+  RopeSimulation rope = MakeStraightRope(options);
+
+  rope.applyImpulse(Vector2d(3.0, 0.0));
+  rope.update(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), 1.0 / 60.0, 0.0, 1.0 / 60.0, 1u, false,
+              options);
+
+  EXPECT_TRUE(rope.needsAnimation());
+  EXPECT_EQ(rope.points().front(), Vector2d(0.0, 0.0));
+  EXPECT_EQ(rope.points().back(), Vector2d(100.0, 0.0));
+}
+
+TEST(RopeSimulationTest, EndpointMotionCanClampImpulseToZero) {
+  RopeSimulationOptions options = TestOptions();
+  options.gravityPxPerSec2 = 0.0;
+  options.constraintIterations = 0;
+  options.endpointCatenaryBlend = 0.0;
+  options.endpointImpulse = 1.0;
+  options.maxEndpointImpulsePx = -1.0;
+  RopeSimulation rope = MakeStraightRope(options);
+
+  rope.update(Vector2d(0.0, 5.0), Vector2d(100.0, 5.0), 1.0 / 60.0, 0.0, 1.0 / 60.0, 1u, false,
+              options);
+
+  ASSERT_GE(rope.points().size(), 3u);
+  EXPECT_EQ(rope.points().front(), Vector2d(0.0, 5.0));
+  EXPECT_EQ(rope.points().back(), Vector2d(100.0, 5.0));
 }
 
 TEST(RopeSimulationTest, FrozenUpdateRigidlyCarriesBodyWithMovedEndpoints) {

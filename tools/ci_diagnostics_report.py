@@ -7,10 +7,12 @@ Reads the artifact layout produced by the self-hosted CI jobs:
     <diag_dir>/target-list.txt
     <diag_dir>/{build,test}/profile.gz   Bazel --profile (Chrome trace JSON)
     <diag_dir>/{build,test}/bep.json     Bazel --build_event_json_file
+    <diag_dir>/{build,test}/console.log  Bazel stdout/stderr
 
 and prints markdown with phase timing, the slowest compile/link/test actions,
-and per-test wall times. Stdlib only; safe to run on partial artifacts (a
-failed build uploads whatever exists).
+per-test wall times, and console tails for incomplete Bazel event streams.
+Stdlib only; safe to run on partial artifacts (a failed build uploads whatever
+exists).
 
 Usage: python3 tools/ci_diagnostics_report.py <diag_dir>
 """
@@ -19,8 +21,10 @@ import gzip
 import json
 import os
 import sys
+from collections import deque
 
 TOP_N = 20
+CONSOLE_TAIL_LINES = 80
 
 
 def load_profile_events(path):
@@ -73,6 +77,40 @@ def profile_summary(name, path, lines):
     top("Slowest other actions",
         lambda n: not n.startswith(("Compiling", "Linking", "Archiving",
                                     "Testing")))
+    lines.append("")
+
+
+def has_build_finished(path):
+    if not os.path.exists(path):
+        return False
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("id", {}).get("buildFinished") is not None:
+                return True
+    return False
+
+
+def console_tail_summary(name, bep_path, console_path, lines):
+    if not os.path.exists(console_path) or has_build_finished(bep_path):
+        return
+
+    tail = deque(maxlen=CONSOLE_TAIL_LINES)
+    with open(console_path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            tail.append(line.rstrip("\n"))
+
+    if not tail:
+        return
+
+    lines.append(
+        f"**{name} console tail (no terminal Bazel build event captured):**")
+    lines.append("```")
+    lines.extend(tail)
+    lines.append("```")
     lines.append("")
 
 
@@ -129,8 +167,12 @@ def main():
 
     profile_summary("Build", os.path.join(diag_dir, "build", "profile.gz"),
                     lines)
+    console_tail_summary("Build", os.path.join(diag_dir, "build", "bep.json"),
+                         os.path.join(diag_dir, "build", "console.log"), lines)
     profile_summary("Test", os.path.join(diag_dir, "test", "profile.gz"),
                     lines)
+    console_tail_summary("Test", os.path.join(diag_dir, "test", "bep.json"),
+                         os.path.join(diag_dir, "test", "console.log"), lines)
     test_summary(os.path.join(diag_dir, "test", "bep.json"), lines)
 
     print("\n".join(lines))

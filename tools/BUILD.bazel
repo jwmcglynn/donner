@@ -21,30 +21,38 @@ py_binary(
 genrule(
     name = "generate_embedded_test_resources",
     srcs = ["//third_party/public-sans:PublicSans-Medium.otf"],  # The resource file
-    outs = ["py_embedded_dir/public_sans_embedded.h", "py_embedded_dir/PublicSans_Medium_otf.cpp"],
+    outs = [
+        "py_embedded_dir/public_sans_embedded.h",
+        "py_embedded_dir/PublicSans_Medium_otf.cpp",
+    ],
     cmd = """
         # Create the output dir in case the action is sandboxed
         mkdir -p "$(@D)/py_embedded_dir"
         $(location //tools:embed_resources) --out "$(@D)/py_embedded_dir" --header public_sans_embedded.h kPublicSansMediumOtf=$(SRCS)
     """,
     tools = [":embed_resources"],  # Depends on the py_binary
-    visibility = ["//visibility:private"], # Only used by the test in this file
+    visibility = ["//visibility:private"],  # Only used by the test in this file
 )
 
 py_test(
     name = "embed_resources_tests",
     srcs = ["embed_resources_tests.py"],
     args = [
-        "--generated_header_name", "public_sans_embedded.h",
-        "--generated_cpp_name", "PublicSans_Medium_otf.cpp",
-        "--generated_files_subdir", "donner/tools/py_embedded_dir",
-        "--golden_header_path", "$(location //third_party/public-sans:embedded_header)",
-        "--golden_cpp_path", "$(location //third_party/public-sans:embedded_cpp)",
+        "--generated_header_name",
+        "public_sans_embedded.h",
+        "--generated_cpp_name",
+        "PublicSans_Medium_otf.cpp",
+        "--generated_files_subdir",
+        "donner/tools/py_embedded_dir",
+        "--golden_header_path",
+        "$(location //third_party/public-sans:embedded_header)",
+        "--golden_cpp_path",
+        "$(location //third_party/public-sans:embedded_cpp)",
     ],
     data = [
         ":generate_embedded_test_resources",
-        "//third_party/public-sans:embedded_header",
         "//third_party/public-sans:embedded_cpp",
+        "//third_party/public-sans:embedded_header",
     ],
     deps = ["@rules_python//python/runfiles"],
 )
@@ -62,6 +70,22 @@ py_test(
     srcs = [
         "check_lcov_report.py",
         "check_lcov_report_tests.py",
+    ],
+)
+
+py_test(
+    name = "ci_diagnostics_report_tests",
+    srcs = [
+        "ci_diagnostics_report.py",
+        "ci_diagnostics_report_tests.py",
+    ],
+)
+
+py_test(
+    name = "lcov_metrics_tests",
+    srcs = [
+        "lcov_metrics.py",
+        "lcov_metrics_tests.py",
     ],
 )
 

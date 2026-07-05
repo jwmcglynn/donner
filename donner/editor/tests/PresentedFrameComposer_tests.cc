@@ -234,6 +234,15 @@ TEST(PresentedFrameComposerTest, RejectsInvalidTileGeometry) {
 
   tile.bitmapDimsDoc = Vector2d(30.0, -1.0);
   EXPECT_FALSE(ComputePresentedTileRect(tile, Transform2d::Scale(2.0), std::nullopt).has_value());
+
+  const double infinity = std::numeric_limits<double>::infinity();
+  tile.bitmapDimsDoc = Vector2d(30.0, 40.0);
+  tile.canvasOffsetDoc = Vector2d(10.0, infinity);
+  EXPECT_FALSE(ComputePresentedTileRect(tile, Transform2d::Scale(2.0), std::nullopt).has_value());
+
+  tile.canvasOffsetDoc = Vector2d(10.0, 20.0);
+  tile.dragTranslationDoc = Vector2d(infinity, 0.0);
+  EXPECT_FALSE(ComputePresentedTileRect(tile, Transform2d::Scale(2.0), std::nullopt).has_value());
 }
 
 TEST(PresentedFrameComposerTest, RejectsInvalidOutputTransform) {
@@ -247,6 +256,25 @@ TEST(PresentedFrameComposerTest, RejectsInvalidOutputTransform) {
   EXPECT_FALSE(
       ComputePresentedTileRect(tile, Transform2d::Translate(Vector2d(infinity, 0.0)), std::nullopt)
           .has_value());
+}
+
+TEST(PresentedFrameComposerTest, RejectsInvalidEffectiveDragBaseline) {
+  const double infinity = std::numeric_limits<double>::infinity();
+  PresentedFrameTileGeometry tile;
+  tile.canvasOffsetDoc = Vector2d(0.0, 0.0);
+  tile.bitmapDimsDoc = Vector2d(10.0, 10.0);
+  tile.isDragTarget = true;
+
+  std::optional<PresentedDragBaseline> baseline = PresentedDragBaseline{
+      .entity = Entity{123},
+      .representedTranslationDoc = Vector2d::Zero(),
+      .activeTranslationDoc = Vector2d(infinity, 0.0),
+  };
+  EXPECT_FALSE(ComputePresentedTileQuad(tile, Transform2d(), baseline).has_value());
+
+  baseline->activeTranslationDoc = Vector2d::Zero();
+  baseline->activeDocumentFromCachedDocument = Transform2d::Translate(Vector2d(0.0, infinity));
+  EXPECT_FALSE(ComputePresentedTileQuad(tile, Transform2d(), baseline).has_value());
 }
 
 TEST(PresentedFrameComposerTest, RoundsPresentedRectToPixelRect) {
@@ -264,6 +292,24 @@ TEST(PresentedFrameComposerTest, RoundsPresentedRectToPixelRect) {
                                                      }));
 }
 
+TEST(PresentedFrameComposerTest, RejectsDegeneratePresentedPixelRects) {
+  EXPECT_FALSE(RoundPresentedTileRectToPixelRect(PresentedTileRect{
+                                                     .topLeft = Vector2d(10.0, 10.0),
+                                                     .bottomRight = Vector2d(10.0, 20.0),
+                                                 })
+                   .has_value());
+  EXPECT_FALSE(RoundPresentedTileRectToPixelRect(PresentedTileRect{
+                                                     .topLeft = Vector2d(10.0, 10.0),
+                                                     .bottomRight = Vector2d(20.0, 10.0),
+                                                 })
+                   .has_value());
+  EXPECT_FALSE(RoundPresentedTileRectToPixelRect(PresentedTileRect{
+                                                     .topLeft = Vector2d(10.0, 10.0),
+                                                     .bottomRight = Vector2d(10.2, 10.2),
+                                                 })
+                   .has_value());
+}
+
 TEST(PresentedFrameComposerTest, SubtractsCoveredTileBoundsFromOverviewClip) {
   const Box2d clip = Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0);
   const std::array<Box2d, 1> covered{Box2d::FromXYWH(25.0, 25.0, 50.0, 50.0)};
@@ -277,6 +323,29 @@ TEST(PresentedFrameComposerTest, SubtractsCoveredTileBoundsFromOverviewClip) {
       Box2d::FromXYWH(75.0, 25.0, 25.0, 50.0),
   };
   EXPECT_EQ(uncovered, expected);
+}
+
+TEST(PresentedFrameComposerTest, SubtractIgnoresInvalidAndNonIntersectingCoveredRects) {
+  const Box2d clip = Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0);
+  const std::array<Box2d, 3> covered{
+      Box2d::FromXYWH(150.0, 150.0, 10.0, 10.0),
+      Box2d(Vector2d(25.0, 25.0), Vector2d(25.0, 50.0)),
+      Box2d::FromXYWH(10.0, 10.0, 20.0, 20.0),
+  };
+
+  const std::vector<Box2d> uncovered = SubtractPresentedTileBoundsFromClip(clip, covered);
+
+  EXPECT_EQ(uncovered.size(), 4u);
+}
+
+TEST(PresentedFrameComposerTest, SubtractReturnsEmptyForInvalidClipOrFullCoverage) {
+  EXPECT_TRUE(SubtractPresentedTileBoundsFromClip(Box2d(Vector2d(0.0, 0.0), Vector2d(0.0, 10.0)),
+                                                  std::span<const Box2d>())
+                  .empty());
+
+  const Box2d clip = Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0);
+  const std::array<Box2d, 1> covered{clip};
+  EXPECT_TRUE(SubtractPresentedTileBoundsFromClip(clip, covered).empty());
 }
 
 }  // namespace

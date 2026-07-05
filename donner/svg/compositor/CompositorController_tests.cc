@@ -174,6 +174,25 @@ TEST_F(CompositorControllerTest, PromoteSameEntityTwiceSucceeds) {
   EXPECT_EQ(compositor.layerCount(), 1u);
 }
 
+TEST_F(CompositorControllerTest, PromoteSameEntityWithInteractionGateDisabledStaysExplicit) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" width="10" height="10" fill="red" />
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  CompositorConfig config;
+  config.autoPromoteInteractions = false;
+  CompositorController compositor(document, renderer_, config);
+
+  EXPECT_TRUE(compositor.promoteEntity(entity, InteractionHint::Selection));
+  EXPECT_TRUE(compositor.promoteEntity(entity, InteractionHint::ActiveDrag));
+  EXPECT_TRUE(compositor.isPromoted(entity));
+  EXPECT_EQ(compositor.layerCount(), 1u);
+}
+
 TEST_F(CompositorControllerTest, PromoteInvalidEntityFails) {
   SVGDocument document = makeDocument(R"svg(
     <rect width="10" height="10" fill="red" />
@@ -2021,6 +2040,73 @@ TEST_F(CompositorControllerTest, BuildStructuralEntityRemapRejectsStructuralMism
   EXPECT_TRUE(BuildStructuralEntityRemap(oldDocument, tagMismatch).empty());
   EXPECT_TRUE(BuildStructuralEntityRemap(oldDocument, idMismatch).empty());
   EXPECT_TRUE(BuildStructuralEntityRemap(oldDocument, childCountMismatch).empty());
+}
+
+TEST_F(CompositorControllerTest, RemapAfterStructuralReplaceFailsWhenActiveHintIsMissing) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" width="10" height="10" fill="red" />
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity));
+
+  EXPECT_FALSE(compositor.remapAfterStructuralReplace({}));
+
+  compositor.resetAllLayers();
+}
+
+TEST_F(CompositorControllerTest, RemapAfterStructuralReplaceFailsWhenMandatoryLayerIsMissing) {
+  SVGDocument document = makeDocument(R"svg(
+    <defs>
+      <filter id="blur"><feGaussianBlur stdDeviation="2" /></filter>
+    </defs>
+    <g id="target" filter="url(#blur)">
+      <rect width="10" height="10" fill="red" />
+    </g>
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  configureMockForCaching();
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  ASSERT_NE(compositor.findLayerForTest(entity), nullptr)
+      << "test setup requires a mandatory filter layer";
+
+  EXPECT_FALSE(compositor.remapAfterStructuralReplace({}));
+
+  compositor.resetAllLayers();
+}
+
+TEST_F(CompositorControllerTest, RemapAfterStructuralReplaceFailsWhenLayerRangeIsPartial) {
+  SVGDocument document = makeDocument(R"svg(
+    <g id="group">
+      <rect id="child" width="10" height="10" fill="red" />
+    </g>
+  )svg");
+
+  ParseWarningSink warningSink;
+  RendererUtils::prepareDocumentForRendering(document, /*verbose=*/false, warningSink);
+
+  auto group = document.querySelector("#group");
+  ASSERT_TRUE(group.has_value());
+  const Entity groupEntity = group->unsafeEntityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(groupEntity));
+  const CompositorLayer* layer = compositor.findLayerForTest(groupEntity);
+  ASSERT_NE(layer, nullptr);
+  ASSERT_NE(layer->lastEntity(), groupEntity) << "test setup needs a widened group paint range";
+
+  EXPECT_FALSE(compositor.remapAfterStructuralReplace({{groupEntity, groupEntity}}));
+
+  compositor.resetAllLayers();
 }
 
 }  // namespace donner::svg::compositor

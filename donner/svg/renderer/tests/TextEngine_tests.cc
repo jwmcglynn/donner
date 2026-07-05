@@ -3,13 +3,23 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <fstream>
+#include <iterator>
+#include <memory>
+#include <optional>
+#include <tuple>
+#include <vector>
 
 #include "donner/base/MathUtils.h"
+#include "donner/base/Utf8.h"
 #include "donner/base/tests/Runfiles.h"
+#include "donner/base/xml/components/TreeComponent.h"
 #include "donner/css/FontFace.h"
+#include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/text/TextBackendFull.h"
+#include "donner/svg/text/TextEngineHelpers.h"
 #include "donner/svg/text/TextLayoutParams.h"
 
 namespace donner::svg {
@@ -107,7 +117,637 @@ MATCHER_P(FirstGlyphMatches, glyphMatcher, "first glyph matches") {
   return testing::ExplainMatchResult(glyphMatcher, arg.front(), result_listener);
 }
 
+class FakeTextBackend : public TextBackend {
+public:
+  std::optional<SubSuperMetrics> subSuperMetricsResult;
+
+  FontVMetrics fontVMetrics(FontHandle /*font*/) const override { return {}; }
+
+  float scaleForPixelHeight(FontHandle /*font*/, float pixelHeight) const override {
+    return pixelHeight / 1000.0f;
+  }
+
+  float scaleForEmToPixels(FontHandle /*font*/, float pixelHeight) const override {
+    return pixelHeight / 1000.0f;
+  }
+
+  std::optional<UnderlineMetrics> underlineMetrics(FontHandle /*font*/) const override {
+    return std::nullopt;
+  }
+
+  std::optional<UnderlineMetrics> strikeoutMetrics(FontHandle /*font*/) const override {
+    return std::nullopt;
+  }
+
+  std::optional<SubSuperMetrics> subSuperMetrics(FontHandle /*font*/) const override {
+    return subSuperMetricsResult;
+  }
+
+  Path glyphOutline(FontHandle /*font*/, int /*glyphIndex*/, float /*scale*/) const override {
+    return Path();
+  }
+
+  bool isBitmapOnly(FontHandle /*font*/) const override { return false; }
+
+  bool isCursive(uint32_t /*codepoint*/) const override { return false; }
+
+  bool hasSmallCapsFeature(FontHandle /*font*/) const override { return false; }
+
+  std::optional<BitmapGlyph> bitmapGlyph(FontHandle /*font*/, int /*glyphIndex*/,
+                                         float /*scale*/) const override {
+    return std::nullopt;
+  }
+
+  ShapedRun shapeRun(FontHandle /*font*/, float /*fontSizePx*/, std::string_view /*spanText*/,
+                     size_t /*byteOffset*/, size_t /*byteLength*/, bool /*isVertical*/,
+                     FontVariant /*fontVariant*/, bool /*forceLogicalOrder*/) const override {
+    return {};
+  }
+
+  double crossSpanKern(FontHandle /*prevFont*/, float /*prevSizePx*/, FontHandle /*curFont*/,
+                       float /*curSizePx*/, uint32_t /*prevCodepoint*/, uint32_t /*curCodepoint*/,
+                       bool /*isVertical*/) const override {
+    return 0.0;
+  }
+};
+
+class ScriptedTextBackend : public TextBackend {
+public:
+  bool reverseClusters = false;
+
+  FontVMetrics fontVMetrics(FontHandle /*font*/) const override {
+    return FontVMetrics{
+        .ascent = 1000,
+        .descent = -200,
+        .lineGap = 0,
+        .xHeight = 500,
+    };
+  }
+
+  float scaleForPixelHeight(FontHandle /*font*/, float pixelHeight) const override {
+    return pixelHeight / 1200.0f;
+  }
+
+  float scaleForEmToPixels(FontHandle /*font*/, float pixelHeight) const override {
+    return pixelHeight / 1000.0f;
+  }
+
+  std::optional<UnderlineMetrics> underlineMetrics(FontHandle /*font*/) const override {
+    return UnderlineMetrics{.position = -100.0, .thickness = 50.0};
+  }
+
+  std::optional<UnderlineMetrics> strikeoutMetrics(FontHandle /*font*/) const override {
+    return UnderlineMetrics{.position = 300.0, .thickness = 40.0};
+  }
+
+  std::optional<SubSuperMetrics> subSuperMetrics(FontHandle /*font*/) const override {
+    return std::nullopt;
+  }
+
+  Path glyphOutline(FontHandle /*font*/, int glyphIndex, float /*scale*/) const override {
+    if (glyphIndex == 0) {
+      return Path();
+    }
+    return PathBuilder().addRect(Box2d::FromXYWH(0.0, -8.0, 6.0, 8.0)).build();
+  }
+
+  bool isBitmapOnly(FontHandle /*font*/) const override { return false; }
+
+  bool isCursive(uint32_t codepoint) const override { return codepoint == U'c'; }
+
+  bool hasSmallCapsFeature(FontHandle /*font*/) const override { return false; }
+
+  std::optional<BitmapGlyph> bitmapGlyph(FontHandle /*font*/, int /*glyphIndex*/,
+                                         float /*scale*/) const override {
+    return std::nullopt;
+  }
+
+  ShapedRun shapeRun(FontHandle /*font*/, float /*fontSizePx*/, std::string_view spanText,
+                     size_t byteOffset, size_t byteLength, bool /*isVertical*/,
+                     FontVariant fontVariant, bool forceLogicalOrder) const override {
+    ShapedRun run;
+    const size_t byteEnd = std::min(spanText.size(), byteOffset + byteLength);
+    for (size_t pos = byteOffset; pos < byteEnd;) {
+      const size_t cluster = pos;
+      const auto [codepoint, codepointLength] = Utf8::NextCodepointLenient(spanText.substr(pos));
+      pos += static_cast<size_t>(std::max(codepointLength, 1));
+
+      TextBackend::ShapedGlyph glyph;
+      glyph.glyphIndex = static_cast<int>(codepoint % 997u) + 1;
+      glyph.xAdvance = 10.0;
+      glyph.yAdvance = 12.0;
+      glyph.xKern = run.glyphs.empty() ? 0.0 : 1.0;
+      glyph.yKern = run.glyphs.empty() ? 0.0 : 2.0;
+      glyph.cluster = static_cast<uint32_t>(cluster);
+      glyph.fontSizeScale = fontVariant == FontVariant::SmallCaps ? 0.8f : 1.0f;
+      if (codepoint >= 0x2E80) {
+        glyph.xOffset = 2.0;
+        glyph.yOffset = 3.0;
+      }
+      run.glyphs.push_back(glyph);
+    }
+
+    if (reverseClusters && !forceLogicalOrder) {
+      std::reverse(run.glyphs.begin(), run.glyphs.end());
+    }
+    return run;
+  }
+
+  double crossSpanKern(FontHandle /*prevFont*/, float /*prevSizePx*/, FontHandle /*curFont*/,
+                       float /*curSizePx*/, uint32_t /*prevCodepoint*/, uint32_t /*curCodepoint*/,
+                       bool isVertical) const override {
+    return isVertical ? 4.0 : 3.0;
+  }
+};
+
+TextEngine MakeScriptedEngine(Registry& registry, FontManager& fontManager,
+                              bool reverseClusters = false) {
+  auto backend = std::make_unique<ScriptedTextBackend>();
+  backend->reverseClusters = reverseClusters;
+  return TextEngine(fontManager, registry, std::move(backend));
+}
+
 }  // namespace
+
+TEST(TextEngineHelperTest, ComputeBaselineShiftCoversBaselineKeywords) {
+  const FontVMetrics metrics{
+      .ascent = 1000,
+      .descent = -200,
+      .lineGap = 0,
+      .xHeight = 500,
+  };
+  constexpr float kScale = 0.01f;
+
+  EXPECT_DOUBLE_EQ(
+      text_engine_detail::computeBaselineShift(DominantBaseline::Auto, metrics, kScale), 0.0);
+  EXPECT_DOUBLE_EQ(
+      text_engine_detail::computeBaselineShift(DominantBaseline::Alphabetic, metrics, kScale), 0.0);
+  EXPECT_DOUBLE_EQ(
+      text_engine_detail::computeBaselineShift(DominantBaseline::UseScript, metrics, kScale), 0.0);
+  EXPECT_DOUBLE_EQ(
+      text_engine_detail::computeBaselineShift(DominantBaseline::NoChange, metrics, kScale), 0.0);
+  EXPECT_DOUBLE_EQ(
+      text_engine_detail::computeBaselineShift(DominantBaseline::ResetSize, metrics, kScale), 0.0);
+  EXPECT_NEAR(text_engine_detail::computeBaselineShift(DominantBaseline::Middle, metrics, kScale),
+              2.5, 1e-6);
+  EXPECT_NEAR(text_engine_detail::computeBaselineShift(DominantBaseline::Central, metrics, kScale),
+              4.0, 1e-6);
+  EXPECT_NEAR(text_engine_detail::computeBaselineShift(DominantBaseline::Hanging, metrics, kScale),
+              8.0, 1e-6);
+  EXPECT_NEAR(
+      text_engine_detail::computeBaselineShift(DominantBaseline::Mathematical, metrics, kScale),
+      5.0, 1e-6);
+  EXPECT_NEAR(text_engine_detail::computeBaselineShift(DominantBaseline::TextTop, metrics, kScale),
+              10.0, 1e-6);
+  EXPECT_NEAR(
+      text_engine_detail::computeBaselineShift(DominantBaseline::TextBottom, metrics, kScale), -2.0,
+      1e-6);
+  EXPECT_NEAR(
+      text_engine_detail::computeBaselineShift(DominantBaseline::Ideographic, metrics, kScale),
+      -2.0, 1e-6);
+
+  FontVMetrics noXHeight = metrics;
+  noXHeight.xHeight = 0;
+  EXPECT_NEAR(text_engine_detail::computeBaselineShift(DominantBaseline::Middle, noXHeight, kScale),
+              2.7, 1e-6);
+}
+
+TEST(TextEngineHelperTest, ByteMappingsAndChunkRangesCollapseNonSpacingSequences) {
+  std::string text;
+  std::vector<size_t> offsets;
+  auto append = [&](char32_t cp) {
+    offsets.push_back(text.size());
+    Utf8::Append(cp, std::back_inserter(text));
+  };
+
+  append(U'A');
+  for (const char32_t cp :
+       {U'\u0300', U'\u0483', U'\u0591', U'\u0610', U'\u064B', U'\u0670',    U'\u06D6',
+        U'\u0730', U'\u0E31', U'\u0E34', U'\u0EB1', U'\u0EB4', U'\u1AB0',    U'\u1DC0',
+        U'\u20D0', U'\uFE20', U'\u200C', U'\u034F', U'\uFE00', U'\U000E0100'}) {
+    append(cp);
+  }
+  append(U'\u200D');
+  append(U'B');
+  const size_t cOffsetIndex = offsets.size();
+  append(U'C');
+  const size_t emojiOffsetIndex = offsets.size();
+  append(U'\U0001F600');
+  const size_t dOffsetIndex = offsets.size();
+  append(U'D');
+
+  const auto mappings = text_engine_detail::buildByteIndexMappings(text);
+  for (size_t i = 0; i < cOffsetIndex; ++i) {
+    EXPECT_EQ(mappings.byteToCharIdx[offsets[i]], 0u) << "offset index " << i;
+  }
+  EXPECT_EQ(mappings.byteToCharIdx[offsets[cOffsetIndex]], 1u);
+  EXPECT_EQ(mappings.byteToCharIdx[offsets[emojiOffsetIndex]], 3u);
+  EXPECT_EQ(mappings.byteToCharIdx[offsets[dOffsetIndex]], 4u);
+
+  SmallVector<std::optional<Lengthd>, 1> xList;
+  xList.push_back(std::nullopt);
+  xList.push_back(Lengthd(10.0, Lengthd::Unit::None));
+  xList.push_back(std::nullopt);
+  xList.push_back(Lengthd(20.0, Lengthd::Unit::None));
+  SmallVector<std::optional<Lengthd>, 1> yList;
+
+  const auto chunks = text_engine_detail::findChunkRanges(text, xList, yList);
+
+  ASSERT_EQ(chunks.size(), 3u);
+  EXPECT_EQ(chunks[0].byteStart, 0u);
+  EXPECT_EQ(chunks[0].byteEnd, offsets[cOffsetIndex]);
+  EXPECT_EQ(chunks[1].byteStart, offsets[cOffsetIndex]);
+  EXPECT_EQ(chunks[1].byteEnd, offsets[emojiOffsetIndex]);
+  EXPECT_EQ(chunks[2].byteStart, offsets[emojiOffsetIndex]);
+  EXPECT_EQ(chunks[2].byteEnd, text.size());
+}
+
+TEST(TextEngineHelperTest, ApplyTextLengthAdjustsPerSpanSpacingAndVerticalGlyphScaling) {
+  {
+    std::vector<TextRun> runs = {
+        {.glyphs = {{.xPosition = 10.0, .xAdvance = 10.0}, {.xPosition = 20.0, .xAdvance = 10.0}}},
+    };
+    components::ComputedTextComponent text;
+    text.spans.resize(1);
+    text.spans[0].textLength = Lengthd(40.0, Lengthd::Unit::None);
+    text.spans[0].lengthAdjust = LengthAdjust::Spacing;
+    const std::vector<text_engine_detail::RunPenExtent> extents = {
+        {.startX = 10.0, .endX = 30.0},
+    };
+
+    text_engine_detail::applyTextLength(runs, text, extents, MakeTextParams(10.0),
+                                        /*vertical=*/false, /*currentPenX=*/30.0,
+                                        /*currentPenY=*/0.0);
+
+    EXPECT_DOUBLE_EQ(runs[0].glyphs[0].xPosition, 10.0);
+    EXPECT_DOUBLE_EQ(runs[0].glyphs[1].xPosition, 40.0);
+    EXPECT_DOUBLE_EQ(runs[0].glyphs[1].xAdvance, 10.0);
+  }
+
+  {
+    std::vector<TextRun> runs = {
+        {.glyphs = {{.yPosition = 5.0, .yAdvance = 5.0}, {.yPosition = 15.0, .yAdvance = 5.0}}},
+    };
+    components::ComputedTextComponent text;
+    text.spans.resize(1);
+    text.spans[0].textLength = Lengthd(40.0, Lengthd::Unit::None);
+    text.spans[0].lengthAdjust = LengthAdjust::SpacingAndGlyphs;
+    const std::vector<text_engine_detail::RunPenExtent> extents = {
+        {.startY = 5.0, .endY = 25.0},
+    };
+
+    text_engine_detail::applyTextLength(runs, text, extents, MakeTextParams(10.0),
+                                        /*vertical=*/true, /*currentPenX=*/0.0,
+                                        /*currentPenY=*/25.0);
+
+    EXPECT_DOUBLE_EQ(runs[0].glyphs[0].yPosition, 5.0);
+    EXPECT_DOUBLE_EQ(runs[0].glyphs[1].yPosition, 25.0);
+    EXPECT_DOUBLE_EQ(runs[0].glyphs[1].yAdvance, 10.0);
+    EXPECT_FLOAT_EQ(runs[0].glyphs[1].stretchScaleY, 2.0f);
+  }
+}
+
+TEST(TextEngineHelperTest, ApplyTextLengthAdjustsGlobalSpacing) {
+  std::vector<TextRun> runs = {
+      {.glyphs = {{.xPosition = 10.0, .xAdvance = 10.0}, {.xPosition = 20.0, .xAdvance = 10.0}}},
+      {.glyphs = {{.xPosition = 30.0, .xAdvance = 10.0}}},
+  };
+  components::ComputedTextComponent text;
+  text.spans.resize(2);
+  TextLayoutParams params = MakeTextParams(10.0);
+  params.textLength = Lengthd(50.0, Lengthd::Unit::None);
+  params.lengthAdjust = LengthAdjust::Spacing;
+
+  text_engine_detail::applyTextLength(runs, text, {}, params, /*vertical=*/false,
+                                      /*currentPenX=*/40.0, /*currentPenY=*/0.0);
+
+  EXPECT_DOUBLE_EQ(runs[0].glyphs[0].xPosition, 10.0);
+  EXPECT_DOUBLE_EQ(runs[0].glyphs[1].xPosition, 30.0);
+  EXPECT_DOUBLE_EQ(runs[1].glyphs[0].xPosition, 50.0);
+}
+
+TEST(TextEngineHelperTest, ApplyTextLengthAdjustsGlobalSpacingAndGlyphsHorizontally) {
+  std::vector<TextRun> runs = {
+      {.glyphs = {{.xPosition = 10.0, .xAdvance = 10.0}, {.xPosition = 20.0, .xAdvance = 10.0}}},
+      {.glyphs = {{.xPosition = 30.0, .xAdvance = 10.0}}},
+  };
+  components::ComputedTextComponent text;
+  text.spans.resize(2);
+  TextLayoutParams params = MakeTextParams(10.0);
+  params.textLength = Lengthd(60.0, Lengthd::Unit::None);
+  params.lengthAdjust = LengthAdjust::SpacingAndGlyphs;
+
+  text_engine_detail::applyTextLength(runs, text, {}, params, /*vertical=*/false,
+                                      /*currentPenX=*/40.0, /*currentPenY=*/0.0);
+
+  EXPECT_DOUBLE_EQ(runs[0].glyphs[0].xPosition, 10.0);
+  EXPECT_DOUBLE_EQ(runs[0].glyphs[1].xPosition, 30.0);
+  EXPECT_DOUBLE_EQ(runs[1].glyphs[0].xPosition, 50.0);
+  EXPECT_DOUBLE_EQ(runs[0].glyphs[0].xAdvance, 20.0);
+  EXPECT_FLOAT_EQ(runs[0].glyphs[0].stretchScaleX, 2.0f);
+}
+
+TEST(TextEngineHelperTest, ApplyTextAnchorSkipsOnPathRunsAndUsesFirstGlyphSpanAnchor) {
+  std::vector<TextRun> runs = {
+      {},
+      {.glyphs = {{.xPosition = 10.0, .xAdvance = 5.0}}},
+      {.glyphs = {{.xPosition = 100.0, .xAdvance = 10.0}}, .onPath = true},
+  };
+  components::ComputedTextComponent text;
+  text.spans.resize(3);
+  text.spans[1].textAnchor = TextAnchor::End;
+  std::vector<text_engine_detail::ChunkBoundary> chunks = {
+      {.runIndex = 0, .glyphIndex = 0, .textAnchor = TextAnchor::Start},
+  };
+
+  text_engine_detail::applyTextAnchor(runs, chunks, text, /*vertical=*/false);
+
+  ASSERT_EQ(chunks.size(), 1u);
+  EXPECT_EQ(chunks[0].textAnchor, TextAnchor::End);
+  EXPECT_DOUBLE_EQ(runs[1].glyphs[0].xPosition, 5.0);
+  EXPECT_DOUBLE_EQ(runs[2].glyphs[0].xPosition, 100.0);
+}
+
+TEST(TextEngineHelperTest, ApplyTextAnchorAdjustsVerticalMiddleChunks) {
+  std::vector<TextRun> runs = {
+      {.glyphs = {{.yPosition = 0.0, .yAdvance = 10.0}, {.yPosition = 10.0, .yAdvance = 10.0}}},
+  };
+  components::ComputedTextComponent text;
+  text.spans.resize(1);
+  text.spans[0].textAnchor = TextAnchor::Middle;
+  std::vector<text_engine_detail::ChunkBoundary> chunks = {
+      {.runIndex = 0, .glyphIndex = 0, .textAnchor = TextAnchor::Start},
+  };
+
+  text_engine_detail::applyTextAnchor(runs, chunks, text, /*vertical=*/true);
+
+  EXPECT_EQ(chunks[0].textAnchor, TextAnchor::Middle);
+  EXPECT_DOUBLE_EQ(runs[0].glyphs[0].yPosition, -10.0);
+  EXPECT_DOUBLE_EQ(runs[0].glyphs[1].yPosition, 0.0);
+}
+
+TEST(TextEngineHelperTest, ApplyTextAnchorLeavesEmptyEndChunksUnchanged) {
+  std::vector<TextRun> runs = {
+      {},
+      {.glyphs = {{.xPosition = 20.0, .xAdvance = 10.0}}, .onPath = true},
+  };
+  components::ComputedTextComponent text;
+  text.spans.resize(2);
+  text.spans[1].textAnchor = TextAnchor::End;
+  std::vector<text_engine_detail::ChunkBoundary> chunks = {
+      {.runIndex = 0, .glyphIndex = 0, .textAnchor = TextAnchor::End},
+  };
+
+  text_engine_detail::applyTextAnchor(runs, chunks, text, /*vertical=*/false);
+
+  EXPECT_EQ(chunks[0].textAnchor, TextAnchor::End);
+  EXPECT_DOUBLE_EQ(runs[1].glyphs[0].xPosition, 20.0);
+}
+
+TEST(TextEngineHelperTest, ComputeSpanBaselineShiftUsesFontMetricsAndLengthFallbacks) {
+  using BSK = components::ComputedTextComponent::TextSpan::BaselineShiftKeyword;
+
+  TextLayoutParams params = MakeTextParams(10.0);
+
+  FakeTextBackend backendWithMetrics;
+  backendWithMetrics.subSuperMetricsResult = SubSuperMetrics{
+      .subscriptYOffset = 200,
+      .superscriptYOffset = 300,
+  };
+  components::ComputedTextComponent::TextSpan span;
+  span.baselineShiftKeyword = BSK::Sub;
+  span.baselineShift = Lengthd(-0.33, Lengthd::Unit::Em);
+  span.ancestorBaselineShifts.push_back({BSK::Super, Lengthd(0.4, Lengthd::Unit::Em), 20.0});
+  span.ancestorBaselineShifts.push_back({BSK::Sub, Lengthd(-0.33, Lengthd::Unit::Em), 30.0});
+  span.ancestorBaselineShifts.push_back({BSK::Length, Lengthd(3.0, Lengthd::Unit::None), 12.0});
+
+  EXPECT_NEAR(text_engine_detail::computeSpanBaselineShiftPx(backendWithMetrics, span, FontHandle{},
+                                                             0.01f, params),
+              1.0, 1e-6);
+
+  FakeTextBackend backendWithoutMetrics;
+  components::ComputedTextComponent::TextSpan fallbackSpan;
+  fallbackSpan.fontSize = Lengthd(20.0, Lengthd::Unit::Px);
+  fallbackSpan.baselineShiftKeyword = BSK::Super;
+  fallbackSpan.baselineShift = Lengthd(0.5, Lengthd::Unit::Em);
+  fallbackSpan.ancestorBaselineShifts.push_back(
+      {BSK::Sub, Lengthd(-0.33, Lengthd::Unit::Em), 20.0});
+
+  EXPECT_NEAR(text_engine_detail::computeSpanBaselineShiftPx(backendWithoutMetrics, fallbackSpan,
+                                                             FontHandle{}, 0.01f, params),
+              3.4, 1e-6);
+}
+
+TEST(TextEngineTest, CachedGeometryApisFilterToRequestedSubtree) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+
+  const Entity root = registry.create();
+  const Entity child = registry.create();
+  const Entity outside = registry.create();
+  registry.emplace<donner::components::TreeComponent>(root, xml::XMLQualifiedNameRef("text"));
+  registry.emplace<donner::components::TreeComponent>(child, xml::XMLQualifiedNameRef("tspan"));
+  registry.emplace<donner::components::TreeComponent>(outside, xml::XMLQualifiedNameRef("text"));
+  registry.get<donner::components::TreeComponent>(root).appendChild(registry, child);
+  registry.emplace<components::TextRootComponent>(root);
+
+  components::ComputedTextGeometryComponent cache;
+  cache.glyphs.push_back(components::ComputedTextGeometryComponent::GlyphGeometry{
+      .sourceEntity = root,
+      .path = PathBuilder().addRect(Box2d::FromXYWH(0.0, 0.0, 5.0, 5.0)).build(),
+      .extent = Box2d::FromXYWH(0.0, 0.0, 5.0, 5.0),
+  });
+  cache.glyphs.push_back(components::ComputedTextGeometryComponent::GlyphGeometry{
+      .sourceEntity = child,
+      .path = PathBuilder().addRect(Box2d::FromXYWH(10.0, 0.0, 5.0, 5.0)).build(),
+      .extent = Box2d::FromXYWH(10.0, 0.0, 5.0, 5.0),
+  });
+  cache.glyphs.push_back(components::ComputedTextGeometryComponent::GlyphGeometry{
+      .sourceEntity = outside,
+      .path = PathBuilder().addRect(Box2d::FromXYWH(100.0, 0.0, 5.0, 5.0)).build(),
+      .extent = Box2d::FromXYWH(100.0, 0.0, 5.0, 5.0),
+  });
+  cache.characters.push_back(components::ComputedTextGeometryComponent::CharacterGeometry{
+      .sourceEntity = root,
+      .startPosition = Vector2d(0.0, 0.0),
+      .endPosition = Vector2d(5.0, 0.0),
+      .extent = Box2d::FromXYWH(0.0, 0.0, 5.0, 5.0),
+      .rotation = 0.0,
+      .advance = 5.0,
+      .rendered = true,
+      .hasExtent = true,
+  });
+  cache.characters.push_back(components::ComputedTextGeometryComponent::CharacterGeometry{
+      .sourceEntity = child,
+      .startPosition = Vector2d(10.0, 0.0),
+      .endPosition = Vector2d(16.0, 0.0),
+      .extent = Box2d::FromXYWH(10.0, 0.0, 6.0, 5.0),
+      .rotation = 15.0,
+      .advance = 6.0,
+      .rendered = true,
+      .hasExtent = true,
+  });
+  cache.characters.push_back(components::ComputedTextGeometryComponent::CharacterGeometry{
+      .sourceEntity = outside,
+      .startPosition = Vector2d(100.0, 0.0),
+      .endPosition = Vector2d(108.0, 0.0),
+      .extent = Box2d::FromXYWH(100.0, 0.0, 8.0, 5.0),
+      .rotation = 30.0,
+      .advance = 8.0,
+      .rendered = true,
+      .hasExtent = true,
+  });
+  cache.inkBounds = Box2d::FromXYWH(0.0, 0.0, 105.0, 5.0);
+  cache.emBoxBounds = Box2d::FromXYWH(0.0, -10.0, 16.0, 20.0);
+  registry.emplace<components::ComputedTextGeometryComponent>(root, std::move(cache));
+
+  const EntityHandle rootHandle(registry, root);
+  const EntityHandle childHandle(registry, child);
+  EXPECT_EQ(engine.computedGlyphPaths(rootHandle).size(), 2u);
+  EXPECT_EQ(engine.computedGlyphPaths(childHandle).size(), 1u);
+  EXPECT_EQ(engine.getNumberOfChars(rootHandle), 2);
+  EXPECT_EQ(engine.getNumberOfChars(childHandle), 1);
+  EXPECT_DOUBLE_EQ(engine.getComputedTextLength(rootHandle), 11.0);
+  EXPECT_DOUBLE_EQ(engine.getSubStringLength(rootHandle, 1, 99), 6.0);
+  EXPECT_EQ(engine.getStartPositionOfChar(childHandle, 0), Vector2d(10.0, 0.0));
+  EXPECT_EQ(engine.getStartPositionOfChar(childHandle, 1), Vector2d());
+  EXPECT_EQ(engine.getEndPositionOfChar(childHandle, 0), Vector2d(16.0, 0.0));
+  EXPECT_EQ(engine.getEndPositionOfChar(childHandle, 1), Vector2d());
+  EXPECT_EQ(engine.getExtentOfChar(childHandle, 0), Box2d::FromXYWH(10.0, 0.0, 6.0, 5.0));
+  EXPECT_EQ(engine.getExtentOfChar(childHandle, 1), Box2d());
+  EXPECT_DOUBLE_EQ(engine.getRotationOfChar(childHandle, 0), 15.0);
+  EXPECT_DOUBLE_EQ(engine.getRotationOfChar(childHandle, 1), 0.0);
+  EXPECT_EQ(engine.getCharNumAtPosition(rootHandle, Vector2d(12.0, 2.0)), 1);
+  EXPECT_EQ(engine.getCharNumAtPosition(rootHandle, Vector2d(90.0, 2.0)), -1);
+  EXPECT_EQ(engine.computedObjectBoundingBox(rootHandle), Box2d::FromXYWH(0.0, -10.0, 16.0, 20.0));
+  EXPECT_EQ(engine.computedObjectBoundingBox(childHandle), Box2d::FromXYWH(10.0, 0.0, 5.0, 5.0));
+}
+
+TEST(TextEngineTest, ScriptedHorizontalLayoutCoversChunkAndSpanPositioningBranches) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+
+  components::ComputedTextComponent text;
+  auto span1 = MakeSpan("A");
+  span1.xList = {Lengthd(10.0, Lengthd::Unit::None)};
+  span1.yList = {Lengthd(20.0, Lengthd::Unit::None)};
+  span1.dxList = {Lengthd(1.0, Lengthd::Unit::None)};
+  span1.dyList = {Lengthd(2.0, Lengthd::Unit::None)};
+
+  auto span2 = MakeSpan("B c");
+  span2.startsNewChunk = false;
+  span2.xList = {std::nullopt, std::nullopt, Lengthd(80.0, Lengthd::Unit::None)};
+  span2.yList = {std::nullopt, std::nullopt, Lengthd(40.0, Lengthd::Unit::None)};
+  span2.dxList = {std::nullopt, Lengthd(1.0, Lengthd::Unit::None),
+                  Lengthd(2.0, Lengthd::Unit::None)};
+  span2.dyList = {std::nullopt, Lengthd(3.0, Lengthd::Unit::None),
+                  Lengthd(4.0, Lengthd::Unit::None)};
+  span2.rotateList = {5.0, 15.0};
+  span2.letterSpacingPx = 2.0;
+  span2.wordSpacingPx = 5.0;
+
+  text.spans.push_back(std::move(span1));
+  text.spans.push_back(std::move(span2));
+
+  const auto runs = engine.layout(text, MakeTextParams(20.0));
+
+  ASSERT_EQ(runs.size(), 2u);
+  ASSERT_EQ(runs[0].glyphs.size(), 1u);
+  ASSERT_EQ(runs[1].glyphs.size(), 3u);
+  EXPECT_DOUBLE_EQ(runs[0].glyphs[0].xPosition, 11.0);
+  EXPECT_DOUBLE_EQ(runs[0].glyphs[0].yPosition, 22.0);
+  EXPECT_DOUBLE_EQ(runs[1].glyphs[0].xPosition, 24.0);
+  EXPECT_DOUBLE_EQ(runs[1].glyphs[1].xPosition, 38.0);
+  EXPECT_DOUBLE_EQ(runs[1].glyphs[2].xPosition, 82.0);
+  EXPECT_DOUBLE_EQ(runs[1].glyphs[2].yPosition, 44.0);
+  EXPECT_DOUBLE_EQ(runs[1].glyphs[0].rotateDegrees, 5.0);
+  EXPECT_DOUBLE_EQ(runs[1].glyphs[1].rotateDegrees, 15.0);
+  EXPECT_DOUBLE_EQ(runs[1].glyphs[2].rotateDegrees, 15.0);
+}
+
+TEST(TextEngineTest, ScriptedSupplementaryCoordinateListsUseLowSurrogateSlot) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+
+  std::string textValue = "A";
+  Utf8::Append(U'\U0001F600', std::back_inserter(textValue));
+  textValue += "B";
+
+  components::ComputedTextComponent text;
+  auto span = MakeSpan(textValue);
+  span.xList = {Lengthd(0.0, Lengthd::Unit::None), std::nullopt, std::nullopt,
+                Lengthd(70.0, Lengthd::Unit::None)};
+  span.yList = {Lengthd(0.0, Lengthd::Unit::None), std::nullopt, std::nullopt,
+                Lengthd(90.0, Lengthd::Unit::None)};
+  text.spans.push_back(std::move(span));
+
+  const auto runs = engine.layout(text, MakeTextParams(20.0));
+
+  ASSERT_EQ(runs.size(), 1u);
+  ASSERT_EQ(runs[0].glyphs.size(), 3u);
+  EXPECT_DOUBLE_EQ(runs[0].glyphs[0].xPosition, 0.0);
+  EXPECT_DOUBLE_EQ(runs[0].glyphs[1].xPosition, 13.0);
+  EXPECT_DOUBLE_EQ(runs[0].glyphs[2].xPosition, 70.0);
+  EXPECT_DOUBLE_EQ(runs[0].glyphs[2].yPosition, 90.0);
+}
+
+TEST(TextEngineTest, ScriptedVerticalLayoutCoversSidewaysUprightSpacingAndRotation) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+
+  std::string textValue = "A";
+  Utf8::Append(U'\u65E5', std::back_inserter(textValue));
+  textValue += " ";
+
+  components::ComputedTextComponent text;
+  auto span = MakeSpan(textValue);
+  span.xList = {Lengthd(100.0, Lengthd::Unit::None), Lengthd(110.0, Lengthd::Unit::None)};
+  span.yList = {Lengthd(10.0, Lengthd::Unit::None), Lengthd(40.0, Lengthd::Unit::None)};
+  span.dxList = {Lengthd(1.0, Lengthd::Unit::None), Lengthd(2.0, Lengthd::Unit::None)};
+  span.dyList = {Lengthd(3.0, Lengthd::Unit::None), Lengthd(4.0, Lengthd::Unit::None)};
+  span.rotateList = {7.0, 17.0};
+  span.letterSpacingPx = 2.0;
+  span.wordSpacingPx = 5.0;
+  text.spans.push_back(std::move(span));
+
+  TextLayoutParams params = MakeTextParams(20.0);
+  params.writingMode = WritingMode::VerticalRl;
+  const auto runs = engine.layout(text, params);
+
+  ASSERT_EQ(runs.size(), 1u);
+  ASSERT_EQ(runs[0].glyphs.size(), 3u);
+  EXPECT_DOUBLE_EQ(runs[0].glyphs[0].rotateDegrees, 97.0);
+  EXPECT_DOUBLE_EQ(runs[0].glyphs[1].rotateDegrees, 17.0);
+  EXPECT_DOUBLE_EQ(runs[0].glyphs[2].rotateDegrees, 107.0);
+  EXPECT_DOUBLE_EQ(runs[0].glyphs[1].xPosition, 114.0);
+  EXPECT_DOUBLE_EQ(runs[0].glyphs[1].yPosition, 47.0);
+  EXPECT_GT(runs[0].glyphs[2].yPosition, runs[0].glyphs[1].yPosition);
+}
+
+TEST(TextEngineTest, ScriptedRtlChunkYOverrideKeepsVisualGlyphsOnSameBaseline) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager, /*reverseClusters=*/true);
+
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("ABCD");
+  span.xList = {Lengthd(0.0, Lengthd::Unit::None), std::nullopt,
+                Lengthd(50.0, Lengthd::Unit::None)};
+  span.yList = {Lengthd(0.0, Lengthd::Unit::None), std::nullopt,
+                Lengthd(60.0, Lengthd::Unit::None)};
+  text.spans.push_back(std::move(span));
+
+  const auto runs = engine.layout(text, MakeTextParams(20.0));
+
+  ASSERT_EQ(runs.size(), 1u);
+  ASSERT_EQ(runs[0].glyphs.size(), 4u);
+  EXPECT_DOUBLE_EQ(runs[0].glyphs[2].yPosition, 60.0);
+  EXPECT_DOUBLE_EQ(runs[0].glyphs[3].yPosition, 60.0);
+}
 
 TEST(TextEngineTest, UsesCoverageFallbackForArabicText) {
   Registry registry;

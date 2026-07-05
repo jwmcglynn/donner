@@ -1093,6 +1093,8 @@ TEST(ReproFileTest, RejectsMalformedEventAndHitVariants) {
       {"hit_empty_not_number", R"(,"e":[{"k":"mdown","hit":{"empty":"bad"}}])"},
       {"hit_tag_not_string", R"(,"e":[{"k":"mdown","hit":{"tag":123}}])"},
       {"hit_id_not_string", R"(,"e":[{"k":"mdown","hit":{"id":123}}])"},
+      {"hit_index_not_number", R"(,"e":[{"k":"mdown","hit":{"idx":"bad"}}])"},
+      {"event_array_missing_open_bracket", R"(,"e":{})"},
   };
 
   for (const auto& testCase : cases) {
@@ -1105,6 +1107,66 @@ TEST(ReproFileTest, RejectsMalformedEventAndHitVariants) {
     std::error_code ec;
     std::filesystem::remove(path, ec);
   }
+}
+
+TEST(ReproFileTest, RejectsMalformedActionVariants) {
+  const struct {
+    std::string_view label;
+    std::string_view actionSuffix;
+  } cases[] = {
+      {"action_array_missing_open_bracket", R"(,"a":{})"},
+      {"action_array_non_object", R"(,"a":[42])"},
+      {"action_missing_kind", R"(,"a":[{}])"},
+      {"action_kind_not_string", R"(,"a":[{"k":123}])"},
+      {"action_kind_unknown", R"(,"a":[{"k":"unknown"}])"},
+      {"active_tool_missing_tool", R"(,"a":[{"k":"active_tool"}])"},
+      {"active_tool_tool_not_string", R"(,"a":[{"k":"active_tool","tool":123}])"},
+      {"style_missing_property", R"(,"a":[{"k":"style","v":"red"}])"},
+      {"style_property_not_string", R"(,"a":[{"k":"style","p":123,"v":"red"}])"},
+      {"style_missing_value", R"(,"a":[{"k":"style","p":"fill"}])"},
+      {"style_value_not_string", R"(,"a":[{"k":"style","p":"fill","v":123}])"},
+  };
+
+  for (const auto& testCase : cases) {
+    SCOPED_TRACE(testCase.label);
+    const auto path = TempFile(testCase.label);
+    WriteTextFile(path, MetadataLineWith("") + FrameLineWith(testCase.actionSuffix));
+
+    EXPECT_FALSE(ReadReproFile(path).has_value());
+
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+  }
+}
+
+TEST(ReproFileTest, ReadsWhitespacePrefixedNestedBlocksAndEmptyArrays) {
+  const auto path = TempFile("whitespace_nested_blocks");
+  const std::string viewport =
+      R"("ox":0,"oy":1,"pw":100,"ph":200,"dpr":2,"z":3,)"
+      R"("pdx":4,"pdy":5,"psx":6,"psy":7,"vbx":8,"vby":9,"vbw":10,"vbh":11)";
+  const std::string expect =
+      R"("left_mouse_down_ordinal":1,"frame_offset_after_left_mouse_down":2,)"
+      R"("min_frame_index":3,"max_frame_index":4,"target_selector":"#target",)"
+      R"("crop_mode":"document","crop": 	{"x":5,"y":6,"w":7,"h":8})";
+  WriteTextFile(path,
+                MetadataLineWith(std::string(R"(,"expect": 	{)") + expect + "}") +
+                    FrameLineWith(std::string(R"(,"vp": 	{)") + viewport +
+                                  R"(},"a":[],"e":[{"k":"mdown","hit": 	{"tag":"rect"}}])"));
+
+  auto loaded = ReadReproFile(path);
+  ASSERT_TRUE(loaded.has_value());
+  ASSERT_TRUE(loaded->metadata.expect.has_value());
+  ASSERT_TRUE(loaded->metadata.expect->cropRect.has_value());
+  EXPECT_EQ(loaded->metadata.expect->cropRect->height, 8);
+  ASSERT_EQ(loaded->frames.size(), 1u);
+  ASSERT_TRUE(loaded->frames[0].viewport.has_value());
+  EXPECT_DOUBLE_EQ(loaded->frames[0].viewport->paneOriginY, 1.0);
+  ASSERT_EQ(loaded->frames[0].events.size(), 1u);
+  ASSERT_TRUE(loaded->frames[0].events[0].hit.has_value());
+  EXPECT_EQ(loaded->frames[0].events[0].hit->tag, "rect");
+
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
 }
 
 TEST(ReproFileTest, RejectsMalformedExpectationVariants) {
@@ -1145,6 +1207,7 @@ TEST(ReproFileTest, RejectsMalformedExpectationVariants) {
       {"crop_x_missing", std::string(required) + R"(,"crop":{"y":2,"w":3,"h":4})"},
       {"crop_y_missing", std::string(required) + R"(,"crop":{"x":1,"w":3,"h":4})"},
       {"crop_w_missing", std::string(required) + R"(,"crop":{"x":1,"y":2,"h":4})"},
+      {"crop_h_missing", std::string(required) + R"(,"crop":{"x":1,"y":2,"w":3})"},
       {"crop_x_bad", std::string(required) + R"(,"crop":{"x":bad,"y":2,"w":3,"h":4})"},
       {"active_frame_bad", std::string(required) + R"(,"active_frame_index":"bad")"},
       {"comparison_frame_bad", std::string(required) + R"(,"comparison_frame_index":"bad")"},
@@ -1172,6 +1235,42 @@ TEST(ReproFileTest, RejectsMalformedExpectationVariants) {
     std::error_code ec;
     std::filesystem::remove(path, ec);
   }
+}
+
+TEST(ReproFileTest, ReadsMetadataWithWhitespaceAndWindowFallbacks) {
+  const auto path = TempFile("metadata_whitespace_fallbacks");
+  WriteTextFile(path, R"({"v":3,"svg": 	"\u0041.svg","wnd":[120,bad],"scale": 	2.5,"exp": 	1})"
+                      "\n" +
+                          FrameLineWith(R"(,"mdx":3,"mdy":4)"));
+
+  auto loaded = ReadReproFile(path);
+  ASSERT_TRUE(loaded.has_value());
+  EXPECT_EQ(loaded->metadata.svgPath, "A.svg");
+  EXPECT_EQ(loaded->metadata.windowWidth, 0);
+  EXPECT_EQ(loaded->metadata.windowHeight, 0);
+  EXPECT_DOUBLE_EQ(loaded->metadata.displayScale, 2.5);
+  EXPECT_TRUE(loaded->metadata.experimentalMode);
+  ASSERT_EQ(loaded->frames.size(), 1u);
+  EXPECT_DOUBLE_EQ(*loaded->frames[0].mouseDocX, 3.0);
+  EXPECT_DOUBLE_EQ(*loaded->frames[0].mouseDocY, 4.0);
+
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+}
+
+TEST(ReproFileTest, ReadsMetadataWithoutWindowArray) {
+  const auto path = TempFile("metadata_without_window_array");
+  WriteTextFile(path, R"({"v":3,"svg":"foo.svg","wnd":123,"scale":1.0,"exp":0})"
+                      "\n" +
+                          FrameLineWith(""));
+
+  auto loaded = ReadReproFile(path);
+  ASSERT_TRUE(loaded.has_value());
+  EXPECT_EQ(loaded->metadata.windowWidth, 0);
+  EXPECT_EQ(loaded->metadata.windowHeight, 0);
+
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
 }
 
 TEST(ReproFileTest, WriteFailureWhenDestinationIsDirectory) {

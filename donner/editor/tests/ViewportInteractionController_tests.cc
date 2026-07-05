@@ -16,6 +16,39 @@ TEST(ViewportInteractionControllerTest, FrameHistoryTracksLatestAndMax) {
   EXPECT_FLOAT_EQ(controller.frameHistory().max(), 24.0f);
 }
 
+TEST(ViewportInteractionControllerTest, EmptyFrameHistoryAccessorsAndSettersAreNoOps) {
+  ViewportInteractionController controller;
+  FrameCostBreakdown cost;
+  cost.mainFrame.layoutMs = 5.0;
+
+  controller.frameHistory().setLatestBackendMs(8.0f);
+  controller.frameHistory().setLatestFrameCost(cost);
+  controller.frameHistory().setLatestMemorySample(FrameMemorySample{.totalTrackedBytes = 64u});
+
+  EXPECT_FLOAT_EQ(controller.frameHistory().latest(), 0.0f);
+  EXPECT_FLOAT_EQ(controller.frameHistory().latestBackend(), 0.0f);
+  EXPECT_FLOAT_EQ(controller.frameHistory().max(), 0.0f);
+  EXPECT_FLOAT_EQ(controller.frameHistory().lastBackendMs, 0.0f);
+  EXPECT_EQ(controller.frameHistory().latestNonZeroMemorySample().totalTrackedBytes, 0u);
+}
+
+TEST(ViewportInteractionControllerTest, BackendSamplesResetPerFrameButKeepLastNonZeroLatency) {
+  ViewportInteractionController controller;
+
+  controller.noteFrameDelta(16.0f);
+  controller.frameHistory().setLatestBackendMs(0.0f);
+  EXPECT_FLOAT_EQ(controller.frameHistory().latestBackend(), 0.0f);
+  EXPECT_FLOAT_EQ(controller.frameHistory().lastBackendMs, 0.0f);
+
+  controller.frameHistory().setLatestBackendMs(7.5f);
+  EXPECT_FLOAT_EQ(controller.frameHistory().latestBackend(), 7.5f);
+  EXPECT_FLOAT_EQ(controller.frameHistory().lastBackendMs, 7.5f);
+
+  controller.noteFrameDelta(17.0f);
+  EXPECT_FLOAT_EQ(controller.frameHistory().latestBackend(), 0.0f);
+  EXPECT_FLOAT_EQ(controller.frameHistory().lastBackendMs, 7.5f);
+}
+
 TEST(ViewportInteractionControllerTest, FrameHistoryTracksProfilerCostForLatestFrame) {
   ViewportInteractionController controller;
 
@@ -164,6 +197,25 @@ TEST(ViewportInteractionControllerTest, ApplyZoomUsesViewportCenterMath) {
   EXPECT_NEAR(documentBefore.y, documentAfter.y, 1e-9);
 }
 
+TEST(ViewportInteractionControllerTest, PaneLayoutAndDevicePixelRatioUpdateState) {
+  ViewportInteractionController controller;
+  const Box2d initialDocumentViewBox = controller.viewport().documentViewBox;
+
+  controller.updatePaneLayout(Vector2d(4.0, 5.0), Vector2d(300.0, 200.0), std::nullopt);
+  EXPECT_EQ(controller.viewport().paneOrigin, Vector2d(4.0, 5.0));
+  EXPECT_EQ(controller.viewport().paneSize, Vector2d(300.0, 200.0));
+  EXPECT_EQ(controller.viewport().documentViewBox, initialDocumentViewBox);
+
+  controller.updatePaneLayout(Vector2d(6.0, 7.0), Vector2d(400.0, 250.0),
+                              Box2d::FromXYWH(10.0, 20.0, 30.0, 40.0));
+  EXPECT_EQ(controller.viewport().paneOrigin, Vector2d(6.0, 7.0));
+  EXPECT_EQ(controller.viewport().paneSize, Vector2d(400.0, 250.0));
+  EXPECT_EQ(controller.viewport().documentViewBox, Box2d::FromXYWH(10.0, 20.0, 30.0, 40.0));
+
+  controller.updateDevicePixelRatio(2.5);
+  EXPECT_DOUBLE_EQ(controller.viewport().devicePixelRatio, 2.5);
+}
+
 TEST(ViewportInteractionControllerTest, MousePanReportsViewportChange) {
   ViewportInteractionController controller;
   controller.viewport().paneOrigin = Vector2d::Zero();
@@ -180,6 +232,29 @@ TEST(ViewportInteractionControllerTest, MousePanReportsViewportChange) {
 
   EXPECT_NEAR(controller.viewport().panScreenPoint.x, 108.0, 1e-9);
   EXPECT_NEAR(controller.viewport().panScreenPoint.y, 96.0, 1e-9);
+}
+
+TEST(ViewportInteractionControllerTest, MiddleMousePanStartsWithoutHoverOrSpaceAndStopsOnRelease) {
+  ViewportInteractionController controller;
+  controller.viewport().paneOrigin = Vector2d::Zero();
+  controller.viewport().paneSize = Vector2d(200.0, 200.0);
+  controller.viewport().documentViewBox = Box2d::FromXYWH(0.0, 0.0, 200.0, 200.0);
+  EXPECT_TRUE(controller.resetToActualSize());
+
+  EXPECT_FALSE(controller.updatePanState(/*paneHovered=*/false, /*spaceHeld=*/false,
+                                         /*middleDown=*/true, /*leftDown=*/false,
+                                         ImVec2(25.0f, 25.0f)));
+  EXPECT_TRUE(controller.panning());
+
+  EXPECT_TRUE(controller.updatePanState(/*paneHovered=*/false, /*spaceHeld=*/false,
+                                        /*middleDown=*/true, /*leftDown=*/false,
+                                        ImVec2(30.0f, 35.0f)));
+  EXPECT_TRUE(controller.panning());
+
+  EXPECT_FALSE(controller.updatePanState(/*paneHovered=*/false, /*spaceHeld=*/false,
+                                         /*middleDown=*/false, /*leftDown=*/false,
+                                         ImVec2(30.0f, 35.0f)));
+  EXPECT_FALSE(controller.panning());
 }
 
 TEST(ViewportInteractionControllerTest, PanCursorShowsForSpacePanModeOrActivePan) {
@@ -263,6 +338,35 @@ TEST(ViewportInteractionControllerTest, ConsumeScrollEventsReportsNoChangeWhenMo
   EXPECT_NEAR(controller.viewport().panScreenPoint.y, 100.0, 1e-9);
 }
 
+TEST(ViewportInteractionControllerTest, ConsumeScrollEventsClearsIgnoredEventsWhilePanning) {
+  ViewportInteractionController controller;
+  controller.viewport().paneOrigin = Vector2d::Zero();
+  controller.viewport().paneSize = Vector2d(200.0, 200.0);
+  controller.viewport().documentViewBox = Box2d::FromXYWH(0.0, 0.0, 200.0, 200.0);
+  EXPECT_TRUE(controller.resetToActualSize());
+  ASSERT_FALSE(controller.updatePanState(/*paneHovered=*/false, /*spaceHeld=*/false,
+                                         /*middleDown=*/true, /*leftDown=*/false,
+                                         ImVec2(10.0f, 10.0f)));
+  ASSERT_TRUE(controller.panning());
+
+  std::vector<RenderPaneScrollEvent> events = {
+      RenderPaneScrollEvent{
+          .scrollDelta = Vector2d(0.0, 2.0),
+          .cursorScreen = Vector2d(100.0, 100.0),
+          .zoomModifierHeld = true,
+      },
+  };
+
+  const ScrollConsumptionResult result =
+      controller.consumeScrollEvents(events, Box2d::FromXYWH(0.0, 0.0, 200.0, 200.0),
+                                     /*modalCapturingInput=*/false, /*wheelZoomStep=*/1.1,
+                                     /*panPixelsPerScrollUnit=*/10.0);
+
+  EXPECT_FALSE(result.viewportChanged);
+  EXPECT_FALSE(result.zoomChanged);
+  EXPECT_TRUE(events.empty());
+}
+
 TEST(ViewportInteractionControllerTest, PendingClickBuffersAndClears) {
   ViewportInteractionController controller;
   MouseModifiers modifiers;
@@ -276,6 +380,156 @@ TEST(ViewportInteractionControllerTest, PendingClickBuffersAndClears) {
 
   controller.clearPendingClick();
   EXPECT_FALSE(controller.pendingClick().has_value());
+}
+
+TEST(ViewportStateTest, ZeroZoomScreenToDocumentFallsBackToAnchor) {
+  ViewportState viewport;
+  viewport.zoom = 0.0;
+  viewport.panDocPoint = Vector2d(12.0, 34.0);
+  viewport.panScreenPoint = Vector2d(100.0, 200.0);
+
+  EXPECT_EQ(viewport.screenToDocument(Vector2d(300.0, 400.0)), Vector2d(12.0, 34.0));
+
+  const Box2d documentBox = viewport.screenToDocument(Box2d::FromXYWH(1.0, 2.0, 3.0, 4.0));
+  EXPECT_EQ(documentBox.topLeft, Vector2d(12.0, 34.0));
+  EXPECT_EQ(documentBox.bottomRight, Vector2d(12.0, 34.0));
+}
+
+TEST(ViewportStateTest, RasterViewportClampsDegenerateDocumentAxis) {
+  ViewportState viewport;
+  viewport.documentViewBox = Box2d::FromXYWH(10.0, 20.0, 0.0, 50.0);
+  viewport.zoom = 2.0;
+  viewport.devicePixelRatio = 2.0;
+  viewport.paneSize = Vector2d(100.0, 100.0);
+
+  const EditorRasterViewport raster = viewport.rasterViewport();
+
+  EXPECT_EQ(raster.semanticCanvasSizePx, Vector2i(1, 200));
+  EXPECT_EQ(raster.outputSizePx, Vector2i(1, 200));
+  EXPECT_FALSE(raster.viewportBounded);
+}
+
+TEST(ViewportStateTest, RasterViewportDoesNotViewportBoundWithoutUsablePane) {
+  struct Case {
+    Vector2d paneSize;
+    double devicePixelRatio;
+  };
+
+  constexpr Case kCases[] = {
+      {Vector2d(0.0, 100.0), 1.0},
+      {Vector2d(100.0, 0.0), 1.0},
+      {Vector2d(100.0, 100.0), 0.0},
+  };
+
+  for (const Case& testCase : kCases) {
+    ViewportState viewport;
+    viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 1000.0, 1000.0);
+    viewport.zoom = 20.0;
+    viewport.devicePixelRatio = testCase.devicePixelRatio;
+    viewport.paneSize = testCase.paneSize;
+
+    const EditorRasterViewport raster = viewport.rasterViewport();
+
+    EXPECT_FALSE(raster.viewportBounded);
+  }
+}
+
+TEST(ViewportStateTest, RasterViewportBoundsTallDocumentTargets) {
+  ViewportState viewport;
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 100.0, 1000.0);
+  viewport.zoom = 10.0;
+  viewport.devicePixelRatio = 1.0;
+  viewport.paneOrigin = Vector2d(10.0, 20.0);
+  viewport.paneSize = Vector2d(200.0, 120.0);
+  viewport.resetTo100Percent();
+  viewport.zoomAround(10.0, viewport.paneCenter());
+
+  const EditorRasterViewport raster = viewport.rasterViewport();
+
+  EXPECT_TRUE(raster.viewportBounded);
+  EXPECT_EQ(raster.outputSizePx, Vector2i(200 + 2 * ViewportState::kHighZoomRasterMarginScreenPx,
+                                          120 + 2 * ViewportState::kHighZoomRasterMarginScreenPx));
+}
+
+TEST(ViewportStateTest, SelectedPrewarmExpandsViewportBoundedRaster) {
+  ViewportState viewport;
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 2000.0, 2000.0);
+  viewport.zoom = 12.0;
+  viewport.devicePixelRatio = 1.0;
+  viewport.paneOrigin = Vector2d(50.0, 60.0);
+  viewport.paneSize = Vector2d(100.0, 80.0);
+  viewport.resetTo100Percent();
+  viewport.zoomAround(12.0, viewport.paneCenter());
+
+  const EditorRasterViewport base = viewport.rasterViewport();
+  const EditorRasterViewport prewarm = viewport.selectedPrewarmRasterViewport();
+
+  ASSERT_TRUE(base.viewportBounded);
+  EXPECT_TRUE(prewarm.viewportBounded);
+  EXPECT_GT(prewarm.outputSizePx.x, base.outputSizePx.x);
+  EXPECT_GT(prewarm.outputSizePx.y, base.outputSizePx.y);
+}
+
+TEST(ViewportStateTest, SelectedPrewarmKeepsMaxSizedViewportBoundedRaster) {
+  ViewportState viewport;
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 100000.0, 100000.0);
+  viewport.zoom = 1.0;
+  viewport.devicePixelRatio = 1.0;
+  viewport.paneSize = Vector2d(10000.0, 10000.0);
+
+  const EditorRasterViewport base = viewport.rasterViewport();
+  const EditorRasterViewport prewarm = viewport.selectedPrewarmRasterViewport();
+
+  ASSERT_TRUE(base.viewportBounded);
+  EXPECT_EQ(base.outputSizePx,
+            Vector2i(ViewportState::kMaxCanvasDim, ViewportState::kMaxCanvasDim));
+  EXPECT_EQ(prewarm.outputSizePx, base.outputSizePx);
+  EXPECT_EQ(prewarm.documentRect, base.documentRect);
+}
+
+TEST(ViewportStateTest, SelectedPrewarmKeepsViewportBoundedRasterWhenScaleIsNonPositive) {
+  ViewportState viewport;
+  viewport.documentViewBox = Box2d(Vector2d(1000.0, 1000.0), Vector2d(0.0, 0.0));
+  viewport.zoom = -10.0;
+  viewport.devicePixelRatio = 1.0;
+  viewport.paneSize = Vector2d(100.0, 100.0);
+
+  const EditorRasterViewport base = viewport.rasterViewport();
+  const EditorRasterViewport prewarm = viewport.selectedPrewarmRasterViewport();
+
+  ASSERT_TRUE(base.viewportBounded);
+  EXPECT_EQ(prewarm.outputSizePx, base.outputSizePx);
+  EXPECT_EQ(prewarm.documentRect, base.documentRect);
+}
+
+TEST(ViewportStateTest, OverviewInfillReturnsBaseForDegenerateInputs) {
+  ViewportState zeroDocument;
+  zeroDocument.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 0.0, 0.0);
+  zeroDocument.zoom = 4.0;
+  zeroDocument.devicePixelRatio = 2.0;
+  EXPECT_EQ(zeroDocument.overviewInfillRasterViewport().outputSizePx,
+            zeroDocument.rasterViewport().outputSizePx);
+
+  ViewportState zeroDpr;
+  zeroDpr.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0);
+  zeroDpr.zoom = 4.0;
+  zeroDpr.devicePixelRatio = 0.0;
+  EXPECT_EQ(zeroDpr.overviewInfillRasterViewport().outputSizePx,
+            zeroDpr.rasterViewport().outputSizePx);
+}
+
+TEST(ViewportStateTest, OverviewInfillUsesFullDocumentAtCappedScale) {
+  ViewportState viewport;
+  viewport.documentViewBox = Box2d::FromXYWH(10.0, 20.0, 5000.0, 1000.0);
+  viewport.zoom = 20.0;
+  viewport.devicePixelRatio = 2.0;
+  viewport.paneSize = Vector2d(200.0, 200.0);
+
+  const EditorRasterViewport overview = viewport.overviewInfillRasterViewport();
+
+  EXPECT_FALSE(overview.viewportBounded);
+  EXPECT_EQ(overview.documentRect, viewport.documentViewBox);
+  EXPECT_EQ(overview.outputSizePx, Vector2i(ViewportState::kOverviewInfillMaxCanvasDim, 307));
 }
 
 }  // namespace

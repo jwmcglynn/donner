@@ -3,6 +3,9 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <iterator>
+
+#include "donner/base/Utf8.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -221,6 +224,34 @@ TEST(BuildByteIndexMappingsTest, JoinerAndVariationSelectorShareBaseIndex) {
 
   EXPECT_THAT(m.byteToCharIdx, ElementsAre(0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 1u));
   EXPECT_THAT(m.byteToRawCpIdx, ElementsAre(0u, 1u, 1u, 1u, 2u, 3u, 3u, 3u, 4u));
+}
+
+TEST(BuildByteIndexMappingsTest, RepresentativeNonSpacingRangesShareBaseIndex) {
+  std::string text;
+  std::vector<size_t> offsets;
+  auto append = [&](char32_t cp) {
+    offsets.push_back(text.size());
+    Utf8::Append(cp, std::back_inserter(text));
+  };
+
+  append(U'A');
+  for (const char32_t cp :
+       {U'\u0300', U'\u0483', U'\u0591', U'\u0610', U'\u064B', U'\u0670',    U'\u06D6',
+        U'\u0730', U'\u0E31', U'\u0E34', U'\u0EB1', U'\u0EB4', U'\u1AB0',    U'\u1DC0',
+        U'\u20D0', U'\uFE20', U'\u200C', U'\u034F', U'\uFE00', U'\U000E0100'}) {
+    append(cp);
+  }
+  append(U'\u200D');
+  append(U'B');
+  const size_t cOffsetIndex = offsets.size();
+  append(U'C');
+
+  const auto m = buildByteIndexMappings(text);
+
+  for (size_t i = 0; i < cOffsetIndex; ++i) {
+    EXPECT_EQ(m.byteToCharIdx[offsets[i]], 0u) << "offset index " << i;
+  }
+  EXPECT_EQ(m.byteToCharIdx[offsets[cOffsetIndex]], 1u);
 }
 
 TEST(BuildByteIndexMappingsTest, SupplementaryCharacterConsumeTwoIndices) {
@@ -679,6 +710,45 @@ TEST_F(TextEngineLayoutTest, PerCharacterXPositioning) {
   EXPECT_THAT(runs,
               ElementsAre(RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleNear(10.0, 0.1)),
                                                    GlyphXPositionIs(DoubleNear(50.0, 0.1))))));
+}
+
+TEST_F(TextEngineLayoutTest, SupplementaryCharacterLowSurrogateCoordinatesSetNextPen) {
+  ON_CALL(*mockBackend_, shapeRun(testing::_, testing::_, testing::_, testing::_, testing::_,
+                                  testing::_, testing::_, testing::_))
+      .WillByDefault([](FontHandle, float, std::string_view text, size_t offset, size_t length,
+                        bool, FontVariant, bool) {
+        TextBackend::ShapedRun run;
+        run.glyphs.push_back(TextBackend::ShapedGlyph{
+            .glyphIndex = 1,
+            .xAdvance = 0.0,
+            .cluster = static_cast<uint32_t>(offset),
+        });
+        if (offset + 4 < text.size() && length > 4) {
+          run.glyphs.push_back(TextBackend::ShapedGlyph{
+              .glyphIndex = 2,
+              .xAdvance = 10.0,
+              .cluster = static_cast<uint32_t>(offset + 4),
+          });
+        }
+        return run;
+      });
+
+  components::ComputedTextComponent text;
+  auto span = makeSpan(
+      "\xF0\x9F\x98\x81"
+      "A");
+  span.xList = {Lengthd(10.0, Lengthd::Unit::None), Lengthd(70.0, Lengthd::Unit::None)};
+  span.yList = {Lengthd(20.0, Lengthd::Unit::None), Lengthd(80.0, Lengthd::Unit::None)};
+  text.spans.push_back(std::move(span));
+
+  const auto runs = engine_->layout(text, makeParams());
+
+  ASSERT_EQ(runs.size(), 1u);
+  ASSERT_EQ(runs[0].glyphs.size(), 2u);
+  EXPECT_NEAR(runs[0].glyphs[0].xPosition, 10.0, 0.1);
+  EXPECT_NEAR(runs[0].glyphs[0].yPosition, 20.0, 0.1);
+  EXPECT_NEAR(runs[0].glyphs[1].xPosition, 70.0, 0.1);
+  EXPECT_NEAR(runs[0].glyphs[1].yPosition, 80.0, 0.1);
 }
 
 TEST_F(TextEngineLayoutTest, TextAnchorMiddleShifts) {

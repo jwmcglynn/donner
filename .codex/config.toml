@@ -13,9 +13,9 @@ Do not publish draft PR diffs. Open PRs only when they are ready for review afte
 local validation; keep work-in-progress diffs local until they have a coherent
 reviewable boundary.
 
-When monitoring pull requests, do not expect code-review comments while the PR is
-still a draft. Keep monitoring CI and mergeability, but treat review/comment
-silence as expected until the PR is published and out of draft.
+Do not publish draft diffs or open draft pull requests. Keep unfinished work
+local; once the change is validated and ready for review, open a normal
+reviewable pull request and monitor CI, mergeability, and review comments.
 """
 
 [shell_environment_policy]

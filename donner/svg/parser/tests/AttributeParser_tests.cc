@@ -1667,6 +1667,138 @@ TEST(AttributeParserTest, ExperimentalFilterInvalidNumberBranchesPreserveDefault
   EXPECT_DOUBLE_EQ(offset.dy, 0.0);
 }
 
+TEST(AttributeParserTest, InvalidShapeGradientAndTextPathAttributesPreserveDefaults) {
+  ParseWarningSink warningSink;
+  auto maybeDocument = SVGParser::ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="linear" x1="bad" y1="bad" x2="bad" y2="bad"/>
+        <radialGradient id="radial" cx="bad" cy="bad" r="bad" fx="bad" fy="bad" fr="bad"/>
+      </defs>
+      <line id="line" x1="bad" y1="bad" x2="bad" y2="bad"/>
+      <text>
+        <a id="link-spacing-glyphs" textLength="bad" lengthAdjust="spacingAndGlyphs">link</a>
+      </text>
+      <text>
+        <tspan id="span-spacing" textLength="bad" lengthAdjust="spacing">span</tspan>
+      </text>
+      <text>
+        <textPath id="bad-path-text" href="#path" startOffset="bad" method="bad" side="bad"
+                  spacing="bad" x="bad" y="bad" dx="bad" dy="bad" rotate="bad">path</textPath>
+      </text>
+    </svg>
+  )",
+                                           warningSink);
+  ASSERT_TRUE(maybeDocument.hasResult());
+  auto document = std::move(maybeDocument).result();
+
+  auto line = QueryElement<SVGLineElement>(document, "#line");
+  EXPECT_EQ(line.x1(), Lengthd());
+  EXPECT_EQ(line.y1(), Lengthd());
+  EXPECT_EQ(line.x2(), Lengthd());
+  EXPECT_EQ(line.y2(), Lengthd());
+
+  auto linear = QueryElement<SVGLinearGradientElement>(document, "#linear");
+  EXPECT_EQ(linear.x1(), std::nullopt);
+  EXPECT_EQ(linear.y1(), std::nullopt);
+  EXPECT_EQ(linear.x2(), std::nullopt);
+  EXPECT_EQ(linear.y2(), std::nullopt);
+
+  auto radial = QueryElement<SVGRadialGradientElement>(document, "#radial");
+  EXPECT_EQ(radial.cx(), std::nullopt);
+  EXPECT_EQ(radial.cy(), std::nullopt);
+  EXPECT_EQ(radial.r(), std::nullopt);
+  EXPECT_EQ(radial.fx(), std::nullopt);
+  EXPECT_EQ(radial.fy(), std::nullopt);
+  EXPECT_EQ(radial.fr(), std::nullopt);
+
+  auto link = QueryElement<SVGAElement>(document, "#link-spacing-glyphs");
+  EXPECT_EQ(link.textLength(), std::nullopt);
+  EXPECT_EQ(link.lengthAdjust(), LengthAdjust::SpacingAndGlyphs);
+
+  auto span = QueryElement<SVGTSpanElement>(document, "#span-spacing");
+  EXPECT_EQ(span.textLength(), std::nullopt);
+  EXPECT_EQ(span.lengthAdjust(), LengthAdjust::Spacing);
+
+  auto pathText = QueryElement<SVGTextPathElement>(document, "#bad-path-text");
+  EXPECT_EQ(pathText.startOffset(), std::nullopt);
+  EXPECT_THAT(pathText.xList(), testing::IsEmpty());
+  EXPECT_THAT(pathText.yList(), testing::IsEmpty());
+  EXPECT_THAT(pathText.dxList(), testing::IsEmpty());
+  EXPECT_THAT(pathText.dyList(), testing::IsEmpty());
+  EXPECT_THAT(pathText.rotateList(), testing::IsEmpty());
+
+  const auto& pathTextComponent =
+      QueryComponent<components::TextPathComponent>(document, "#bad-path-text");
+  EXPECT_EQ(pathTextComponent.method, components::TextPathMethod::Align);
+  EXPECT_EQ(pathTextComponent.side, components::TextPathSide::Left);
+  EXPECT_EQ(pathTextComponent.spacing, components::TextPathSpacing::Exact);
+}
+
+TEST(AttributeParserTest, ExperimentalFilterSeparatorAndInvalidEnumFallbackBranches) {
+  auto document = ParseSVGExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <filter id="f">
+          <feComponentTransfer>
+            <feFuncR id="func-separators" type="bad" tableValues="&#10;,&#9;0&#13;,1 "/>
+          </feComponentTransfer>
+          <feColorMatrix id="cm-separators" values="&#10;,&#9;1&#13;,2 "/>
+          <feMorphology id="morph-second-bad" radius="5 bad"/>
+          <feDisplacementMap id="disp-invalid-channels" xChannelSelector="bad"
+                             yChannelSelector="bad"/>
+          <feConvolveMatrix id="conv-order-second-bad" order="2 bad"
+                            kernelMatrix="&#10;,&#9;1&#13;,2 " edgeMode="bad"
+                            preserveAlpha="bad"/>
+          <feTurbulence id="turb-second-bad" baseFrequency="0.25 bad" type="bad"
+                        stitchTiles="bad"/>
+        </filter>
+      </defs>
+    </svg>
+  )");
+
+  const auto funcView = document.registry().view<components::FEFuncComponent>();
+  const components::FEFuncComponent* func = nullptr;
+  for (const Entity entity : funcView) {
+    const auto& candidate = funcView.get<components::FEFuncComponent>(entity);
+    if (candidate.channel == components::FEFuncComponent::Channel::R) {
+      func = &candidate;
+      break;
+    }
+  }
+  ASSERT_NE(func, nullptr);
+  EXPECT_EQ(func->type, components::FEFuncComponent::FuncType::Identity);
+  EXPECT_THAT(func->tableValues, testing::ElementsAre(0.0, 1.0));
+
+  EXPECT_THAT(QueryComponent<components::FEColorMatrixComponent>(document, "#cm-separators").values,
+              testing::ElementsAre(1.0, 2.0));
+
+  const auto& morphology =
+      QueryComponent<components::FEMorphologyComponent>(document, "#morph-second-bad");
+  EXPECT_DOUBLE_EQ(morphology.radiusX, 5.0);
+  EXPECT_DOUBLE_EQ(morphology.radiusY, 5.0);
+
+  const auto& displacement =
+      QueryComponent<components::FEDisplacementMapComponent>(document, "#disp-invalid-channels");
+  EXPECT_EQ(displacement.xChannelSelector, components::FEDisplacementMapComponent::Channel::A);
+  EXPECT_EQ(displacement.yChannelSelector, components::FEDisplacementMapComponent::Channel::A);
+
+  const auto& convolve =
+      QueryComponent<components::FEConvolveMatrixComponent>(document, "#conv-order-second-bad");
+  EXPECT_EQ(convolve.orderX, 2);
+  EXPECT_EQ(convolve.orderY, 2);
+  EXPECT_THAT(convolve.kernelMatrix, testing::ElementsAre(1.0, 2.0));
+  EXPECT_EQ(convolve.edgeMode, components::FEConvolveMatrixComponent::EdgeMode::Duplicate);
+  EXPECT_FALSE(convolve.preserveAlpha);
+
+  const auto& turbulence =
+      QueryComponent<components::FETurbulenceComponent>(document, "#turb-second-bad");
+  EXPECT_DOUBLE_EQ(turbulence.baseFrequencyX, 0.25);
+  EXPECT_DOUBLE_EQ(turbulence.baseFrequencyY, 0.25);
+  EXPECT_EQ(turbulence.type, components::FETurbulenceComponent::Type::Turbulence);
+  EXPECT_FALSE(turbulence.stitchTiles);
+}
+
 TEST(AttributeParserTest, TextAnchorAndPathAttributes) {
   ParseWarningSink warningSink;
   auto maybeDocument = SVGParser::ParseSVG(R"(
