@@ -7,7 +7,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_mask "<mask>"
+ * @page xml_mask &lt;mask&gt;
  *
  * Defines a mask, which is used to apply image-based visibility to graphical elements. Compared to
  * \ref xml_clipPath, which requires the contents to be paths, "<mask>" masking is performed based
@@ -47,7 +47,7 @@ namespace donner::svg {
  * This draws a green rectangle with a circle cut out of the middle of it.
  *
  * \htmlonly
- * <svg viewbox="-10 -10 120 120" width="300" height="300" style="background-color: white">
+ * <svg viewBox="-10 -10 120 120" width="300" height="300" style="background-color: white">
  *   <mask id="MyMask">
  *    <!-- Things under a white pixel will be drawn -->
  *    <rect x="0" y="0" width="100" height="100" fill="white" />

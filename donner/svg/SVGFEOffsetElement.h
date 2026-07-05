@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_feOffset "<feOffset>"
+ * @page xml_feOffset &lt;feOffset&gt;
  *
  * Defines a filter primitive that offsets the input image by (dx, dy).
  *

@@ -37,11 +37,9 @@ Detailed docs: \ref svg_tree_interaction.cc
 
 ## Documentation
 
-- \subpage GettingStarted
+- \subpage Documentation
 - \ref DonnerAPI
-- \subpage SvgDomThreadingAndLifetime
 - [Examples](examples.html)
-- \subpage DeveloperDocs
 
 ## Project Goals
 
@@ -52,7 +50,7 @@ Detailed docs: \ref svg_tree_interaction.cc
 ## Status
 
 - [Project Status](https://github.com/jwmcglynn/donner/issues/149) (github)
-- [Build Report](build_report.md)
+- \ref DonnerBuildReport
 
 ## Building
 

@@ -7,7 +7,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_stop "<stop>"
+ * @page xml_stop &lt;stop&gt;
  *
  * Defines a color stop for a gradient. This is a child element of \ref
  * xml_linearGradient and \ref xml_radialGradient.

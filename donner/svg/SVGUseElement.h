@@ -8,7 +8,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_use "&lt;use&gt;"
+ * @page xml_use &lt;use&gt;
  *
  * `<use>` instantiates another element at a specified position, cloning its rendered output.
  * It's the SVG equivalent of "put another copy of that shape over here" - commonly used for
@@ -42,7 +42,7 @@ namespace donner::svg {
  * </svg>
  * ```
  *
- * ## Example 2: icon library via `<symbol>`
+ * ## Example 2: icon library via symbol
  *
  * A `<symbol>` is a template that isn't rendered on its own - it's only visible through a
  * `<use>` reference. Symbols can declare their own `viewBox`, which makes them resolution
@@ -74,13 +74,16 @@ namespace donner::svg {
  * <use href="#star" x="170" y="20" width="60" height="60" />
  * ```
  *
- * ## How `preserveAspectRatio` works
+ * ## How referenced viewports are fitted
  *
  * When `<use>` references a `<symbol>` or nested `<svg>` element that has its own `viewBox`,
- * the `preserveAspectRatio` attribute decides how the referenced content is fitted into the
- * `<use>` element's `width`/`height` box. It answers the question: *"when the symbol's
- * intrinsic aspect ratio doesn't match the destination rectangle, should we stretch,
+ * the referenced element's `preserveAspectRatio` attribute decides how that content is fitted
+ * into the `<use>` element's `width`/`height` box. It answers the question: *"when the
+ * symbol's intrinsic aspect ratio doesn't match the destination rectangle, should we stretch,
  * letterbox, or crop?"*
+ *
+ * Donner parses `preserveAspectRatio` on the referenced `<symbol>` or `<svg>`, not on the
+ * `<use>` element itself. Put the fitting mode on the element being reused.
  *
  * The attribute is a pair: `<align> <meetOrSlice>`.
  *
@@ -101,50 +104,64 @@ namespace donner::svg {
  *
  * The default is `xMidYMid meet`.
  *
- * ## Example 3: `preserveAspectRatio` comparison
+ * ## Example 3: referenced preserveAspectRatio comparison
  *
- * All three instances reference the same square `<symbol>` (`viewBox="0 0 100 100"`) and are
- * sized into a **wider** 120×60 rectangle (dashed outline). Only `preserveAspectRatio` differs:
+ * All three instances reference square symbols (`viewBox="0 0 100 100"`) and are sized into
+ * a **wider** 120×60 rectangle (dashed outline). Only the referenced symbol's
+ * `preserveAspectRatio` differs:
  *
  * \htmlonly
  * <svg width="420" height="130" viewBox="0 0 420 130" style="background-color: white" font-family="sans-serif" font-size="12">
  *   <defs>
- *     <symbol id="xml_use_par_sym" viewBox="0 0 100 100">
+ *     <symbol id="xml_use_par_meet" viewBox="0 0 100 100"
+ *             preserveAspectRatio="xMidYMid meet">
+ *       <rect x="5" y="5" width="90" height="90" fill="#cfe8ff" stroke="#3b82c4" stroke-width="4"/>
+ *       <circle cx="50" cy="50" r="30" fill="#3b82c4"/>
+ *     </symbol>
+ *     <symbol id="xml_use_par_slice" viewBox="0 0 100 100"
+ *             preserveAspectRatio="xMidYMid slice">
+ *       <rect x="5" y="5" width="90" height="90" fill="#cfe8ff" stroke="#3b82c4" stroke-width="4"/>
+ *       <circle cx="50" cy="50" r="30" fill="#3b82c4"/>
+ *     </symbol>
+ *     <symbol id="xml_use_par_none" viewBox="0 0 100 100" preserveAspectRatio="none">
  *       <rect x="5" y="5" width="90" height="90" fill="#cfe8ff" stroke="#3b82c4" stroke-width="4"/>
  *       <circle cx="50" cy="50" r="30" fill="#3b82c4"/>
  *     </symbol>
  *   </defs>
  *   <g transform="translate(15,15)">
  *     <rect width="120" height="60" fill="none" stroke="#888" stroke-dasharray="3,3"/>
- *     <use href="#xml_use_par_sym" width="120" height="60" preserveAspectRatio="xMidYMid meet"/>
+ *     <use href="#xml_use_par_meet" width="120" height="60"/>
  *     <text x="60" y="85" text-anchor="middle" fill="#444">meet (fit)</text>
  *   </g>
  *   <g transform="translate(150,15)">
  *     <rect width="120" height="60" fill="none" stroke="#888" stroke-dasharray="3,3"/>
  *     <clipPath id="xml_use_par_clip"><rect width="120" height="60"/></clipPath>
  *     <g clip-path="url(#xml_use_par_clip)">
- *       <use href="#xml_use_par_sym" width="120" height="60" preserveAspectRatio="xMidYMid slice"/>
+ *       <use href="#xml_use_par_slice" width="120" height="60"/>
  *     </g>
  *     <text x="60" y="85" text-anchor="middle" fill="#444">slice (fill, cropped)</text>
  *   </g>
  *   <g transform="translate(285,15)">
  *     <rect width="120" height="60" fill="none" stroke="#888" stroke-dasharray="3,3"/>
- *     <use href="#xml_use_par_sym" width="120" height="60" preserveAspectRatio="none"/>
+ *     <use href="#xml_use_par_none" width="120" height="60"/>
  *     <text x="60" y="85" text-anchor="middle" fill="#444">none (stretched)</text>
  *   </g>
  * </svg>
  * \endhtmlonly
  *
  * ```xml
- * <symbol id="s" viewBox="0 0 100 100"> ... </symbol>
+ * <symbol id="fit" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet"> ... </symbol>
+ * <symbol id="fill" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid slice"> ... </symbol>
+ * <symbol id="stretch" viewBox="0 0 100 100" preserveAspectRatio="none"> ... </symbol>
  *
- * <use href="#s" width="120" height="60" preserveAspectRatio="xMidYMid meet"  />
- * <use href="#s" width="120" height="60" preserveAspectRatio="xMidYMid slice" />
- * <use href="#s" width="120" height="60" preserveAspectRatio="none"           />
+ * <use href="#fit" width="120" height="60" />
+ * <use href="#fill" width="120" height="60" />
+ * <use href="#stretch" width="120" height="60" />
  * ```
  *
- * Note: `preserveAspectRatio` only has an effect when the referenced element has an intrinsic
- * coordinate system (a `viewBox`). Referencing a bare `<circle>` or `<path>` ignores it.
+ * Note: the referenced element's `preserveAspectRatio` only has an effect when that element has
+ * an intrinsic coordinate system (a `viewBox`). Referencing a bare `<circle>` or `<path>` does
+ * not create a fitted viewport.
  *
  * ## Attributes
  *
@@ -155,7 +172,6 @@ namespace donner::svg {
  * | `y`                   | `0`             | Y coordinate where the referenced element is placed. |
  * | `width`               | `auto`          | Width of the instance. Only meaningful when the referenced element has a `viewBox` (e.g. `<symbol>` or `<svg>`). |
  * | `height`              | `auto`          | Height of the instance. Only meaningful when the referenced element has a `viewBox`. |
- * | `preserveAspectRatio` | `xMidYMid meet` | How the referenced content is fitted into `width` × `height` when aspect ratios differ. See above. |
  */
 
 /**
@@ -176,10 +192,10 @@ namespace donner::svg {
  *
  * | Attribute | Default | Description  |
  * | --------: | :-----: | :----------- |
- * | `x`       | `0`     | X coordinate to position the referenced element. |
- * | `y`       | `0`     | Y coordinate to position the referenced element. |
- * | `width`   | `auto`  | Width of the referenced element. |
- * | `height`  | `auto`  | Height of the referenced element. |
+ * | `x`       | `0`     | X coordinate where the referenced element is placed. |
+ * | `y`       | `0`     | Y coordinate where the referenced element is placed. |
+ * | `width`   | `auto`  | Width of the instance viewport for referenced `<symbol>` or `<svg>` content. |
+ * | `height`  | `auto`  | Height of the instance viewport for referenced `<symbol>` or `<svg>` content. |
  * | `href`    | (none)  | URI to the element to reuse. |
  */
 class SVGUseElement : public SVGElement {

@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_feConvolveMatrix "<feConvolveMatrix>"
+ * @page xml_feConvolveMatrix &lt;feConvolveMatrix&gt;
  *
  * `<feConvolveMatrix>` applies a **convolution kernel** to the input image. It's the
  * general-purpose primitive behind blur, sharpen, edge detection, emboss, and countless other
@@ -36,7 +36,7 @@ namespace donner::svg {
  * amplifies local differences (sharpen); a kernel that subtracts opposite neighbours highlights
  * intensity gradients (edge detect).
  *
- * ## A critical gotcha: always set `divisor` explicitly
+ * ## A critical gotcha: always set divisor explicitly
  *
  * If you omit the `divisor` attribute, the default is the **sum of the kernel values**.
  * For a Laplacian-style edge-detect kernel like `0 -1 0 / -1 4 -1 / 0 -1 0`, that sum is
@@ -218,8 +218,10 @@ namespace donner::svg {
  * | `targetX`       | `floor(order.x / 2)`     | Which column of the kernel aligns with the output pixel. |
  * | `targetY`       | `floor(order.y / 2)`     | Which row of the kernel aligns with the output pixel. |
  * | `edgeMode`      | `duplicate`              | How pixels outside the input are sampled: `duplicate` (extend edge pixels), `wrap` (tile), or `none` (treat as transparent black). |
- * | `kernelUnitLength` | `1 1`                 | Physical size of one kernel cell in the user coordinate system. Allows resolution-independent kernels. |
  * | `preserveAlpha` | `false`                  | If `true`, the alpha channel is copied through unchanged and convolution only affects RGB. |
+ *
+ * `kernelUnitLength` is not implemented; kernel cells are evaluated at the renderer's filter
+ * sample spacing.
  *
  * Inherits standard filter primitive attributes (`in`, `result`, `x`, `y`, `width`, `height`)
  * from \ref donner::svg::SVGFilterPrimitiveStandardAttributes.

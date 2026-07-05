@@ -11,7 +11,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_marker "<marker>"
+ * @page xml_marker &lt;marker&gt;
  *
  * Creates a marker element that can be used to define graphical objects that can be used repeatedly
  * in a drawing, such as arrowheads or other markers on paths.
@@ -58,9 +58,10 @@ namespace donner::svg {
  * | Attribute      | Default | Description  |
  * | -------------: | :-----: | :----------- |
  * | `viewBox` | (none)  | A list of four numbers (min-x, min-y, width, height) separated by whitespace and/or a comma, that specify a rectangle in userspace that should be mapped to the SVG viewport bounds established by the marker. |
- * | `preserveAspectRatio` | `xMidYMid meet` | How to scale the viewport to fit the content. Only applies is `viewBox` is specified. |
+ * | `preserveAspectRatio` | `xMidYMid meet` | How to scale the viewport to fit the content. Only applies if `viewBox` is specified. |
  * | `markerWidth`  | `3`     | Width of the marker viewport. |
  * | `markerHeight` | `3`     | Height of the marker viewport. |
+ * | `markerUnits`  | `strokeWidth` | Coordinate system for marker size and contents: `strokeWidth` or `userSpaceOnUse`. |
  * | `refX`         | `0`     | X coordinate for the reference point of the marker, where the marker is centered. |
  * | `refY`         | `0`     | Y coordinate for the reference point of the marker, where the marker is centered. |
  * | `orient`       | `0`     | Orientation of the marker relative to the path. Supported values: `auto`, `auto-start-reverse`, or an angle for a fixed rotation such as `45deg` or `3.14rad`. |

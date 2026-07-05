@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_feComposite "<feComposite>"
+ * @page xml_feComposite &lt;feComposite&gt;
  *
  * `<feComposite>` merges two inputs (`in` and `in2`) into a single output using a
  * **Porter-Duff compositing operator**. Unlike \ref xml_feBlend, which mixes the *colors* of
@@ -170,7 +170,7 @@ namespace donner::svg {
  * | ---------: | :--------: | :---------- |
  * | `in`       | *previous* | First input (A). |
  * | `in2`      | *(none)*   | Second input (B). Required. |
- * | `operator` | `over`     | One of `over`, `in`, `out`, `atop`, `xor`, `arithmetic`. |
+ * | `operator` | `over`     | One of `over`, `in`, `out`, `atop`, `xor`, `lighter`, `arithmetic`. |
  * | `k1`       | `0`        | Arithmetic coefficient. Only used when `operator="arithmetic"`. |
  * | `k2`       | `0`        | Arithmetic coefficient. Only used when `operator="arithmetic"`. |
  * | `k3`       | `0`        | Arithmetic coefficient. Only used when `operator="arithmetic"`. |

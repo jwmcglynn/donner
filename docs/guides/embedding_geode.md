@@ -1,4 +1,4 @@
-# Embedding Geode in a host application
+# Embedding Geode in a host application {#EmbeddingGeode}
 
 Geode is Donner's GPU-native SVG rendering backend. In most uses it runs
 **headless** and owns its own `wgpu::Device`, but the public API also supports

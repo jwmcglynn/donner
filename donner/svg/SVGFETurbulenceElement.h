@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_feTurbulence "<feTurbulence>"
+ * @page xml_feTurbulence &lt;feTurbulence&gt;
  *
  * `<feTurbulence>` generates a procedural noise pattern using the Perlin turbulence algorithm.
  * It's the underlying primitive for paper textures, cloud effects, marbling, water distortions,
@@ -20,7 +20,7 @@ namespace donner::svg {
  * - DOM object: SVGFETurbulenceElement
  * - SVG2 spec: https://www.w3.org/TR/filter-effects/#feTurbulenceElement
  *
- * ## `baseFrequency` - the scale of noise features
+ * ## Base frequency: the scale of noise features
  *
  * Controls how "zoomed in" the noise is. Lower values produce larger blobs; higher values
  * produce finer grain. You can specify one number (same for X and Y) or two (separate X and Y
@@ -48,7 +48,7 @@ namespace donner::svg {
  * </svg>
  * \endhtmlonly
  *
- * ## `numOctaves` - how many layers of detail
+ * ## Number of octaves: how many layers of detail
  *
  * Each octave adds a finer layer of noise on top of the previous one. More octaves produces
  * richer, more natural-looking texture at the cost of more computation per pixel.
@@ -75,7 +75,7 @@ namespace donner::svg {
  * </svg>
  * \endhtmlonly
  *
- * ## `type` - turbulence vs fractalNoise
+ * ## Type: turbulence vs fractalNoise
  *
  * The two supported noise types have a visibly different character:
  *
@@ -101,7 +101,7 @@ namespace donner::svg {
  * </svg>
  * \endhtmlonly
  *
- * ## `seed` - choosing a different random pattern
+ * ## Seed: choosing a different random pattern
  *
  * Same frequency and octaves, different `seed`. The structure is identical but the specific
  * pattern of light and dark changes - use this when two identical noises would look too
@@ -124,7 +124,7 @@ namespace donner::svg {
  * </svg>
  * \endhtmlonly
  *
- * ## `stitchTiles` - tileable noise
+ * ## Stitch tiles: tileable noise
  *
  * Normally the noise doesn't line up at the edges of the primitive subregion, so if you tile
  * it you can see seams. Setting `stitchTiles="stitch"` adjusts the frequency slightly so the
@@ -184,8 +184,9 @@ namespace donner::svg {
  * | `stitchTiles`    | `noStitch`    | Either `noStitch` or `stitch`. `stitch` produces a seamlessly tileable result. |
  * | `type`           | `turbulence`  | Either `turbulence` (sharper, cloudier) or `fractalNoise` (softer). |
  *
- * Inherits standard filter primitive attributes (`in`, `result`, `x`, `y`, `width`, `height`)
- * from \ref donner::svg::SVGFilterPrimitiveStandardAttributes.
+ * Uses the standard filter primitive region and naming attributes (`result`, `x`, `y`, `width`,
+ * `height`) from \ref donner::svg::SVGFilterPrimitiveStandardAttributes. The primitive generates
+ * procedural noise, so `in` / `in2` are not sampled.
  */
 
 /**

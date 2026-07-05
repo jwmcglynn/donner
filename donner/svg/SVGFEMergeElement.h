@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_feMerge "<feMerge>"
+ * @page xml_feMerge &lt;feMerge&gt;
  *
  * `<feMerge>` stacks multiple filter results on top of each other like layers in an image
  * editor, producing a final composite. It takes **zero direct attributes of its own** - instead,

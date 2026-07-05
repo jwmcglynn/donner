@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_feMergeNode "<feMergeNode>"
+ * @page xml_feMergeNode &lt;feMergeNode&gt;
  *
  * `<feMergeNode>` is a child of \ref xml_feMerge that names **one layer** to stack. Each
  * `<feMergeNode>` references a named filter result via its `in` attribute, and the parent
@@ -81,7 +81,13 @@ namespace donner::svg {
  *
  * | Attribute | Default       | Description |
  * | --------: | :-----------: | :---------- |
- * | `in`      | *previous*    | Name of the filter result to use as this layer. Either a `result` name defined earlier in the same `<filter>`, or one of the standard sources `SourceGraphic`, `SourceAlpha`, `BackgroundImage`, `BackgroundAlpha`, `FillPaint`, `StrokePaint`. |
+ * | `in`      | *previous*    | Filter result name or implemented standard source keyword. |
+ *
+ * Implemented standard source keywords are `SourceGraphic`, `SourceAlpha`, `FillPaint`, and
+ * `StrokePaint`.
+ *
+ * \note SVG 1.1 `BackgroundImage` and `BackgroundAlpha` filter inputs are not implemented; see
+ *       \ref UnsupportedSvg1Features.
  *
  * \note Unlike most filter primitives, `<feMergeNode>` **does not** inherit the standard
  *       filter primitive attributes. It has no `x`, `y`, `width`, `height`, or `result`

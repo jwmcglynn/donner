@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_feImage "<feImage>"
+ * @page xml_feImage &lt;feImage&gt;
  *
  * `<feImage>` imports an external image - or a fragment of the current document - into the
  * filter graph as an additional input. It's how you use a photograph as a lighting source,
@@ -21,7 +21,7 @@ namespace donner::svg {
  * - DOM object: SVGFEImageElement
  * - SVG2 spec: https://www.w3.org/TR/filter-effects/#feImageElement
  *
- * ## How `href` works
+ * ## How href works
  *
  * The `href` attribute accepts either:
  *
@@ -32,7 +32,7 @@ namespace donner::svg {
  *   document, e.g. `href="#myShape"`. The referenced element is rendered to its own bounding
  *   box, and the resulting pixels are handed to the filter as if they were an image.
  *
- * ## How `preserveAspectRatio` works
+ * ## How preserveAspectRatio works
  *
  * When the source image's aspect ratio doesn't match the destination rectangle (the filter
  * primitive subregion), `preserveAspectRatio` decides whether to stretch, letterbox, or crop
@@ -199,10 +199,10 @@ namespace donner::svg {
  * | --------------------: | :-------------: | :---------- |
  * | `href`                | (none)          | URL or in-document fragment reference (`#id`) for the source image. |
  * | `preserveAspectRatio` | `xMidYMid meet` | How the source is fitted into the primitive subregion when aspect ratios differ. See above. |
- * | `crossorigin`         | (none)          | CORS setting for external URL loads (`anonymous` or `use-credentials`). |
  *
- * Inherits standard filter primitive attributes (`in`, `result`, `x`, `y`, `width`, `height`)
- * from \ref donner::svg::SVGFilterPrimitiveStandardAttributes.
+ * Uses the standard filter primitive region and naming attributes (`result`, `x`, `y`, `width`,
+ * `height`) from \ref donner::svg::SVGFilterPrimitiveStandardAttributes. The source comes from
+ * `href`, so `in` / `in2` are not used by the renderer for this primitive.
  */
 
 /**

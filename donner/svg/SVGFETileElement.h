@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_feTile "<feTile>"
+ * @page xml_feTile &lt;feTile&gt;
  *
  * Defines a filter primitive that tiles the input image across the output region.
  *

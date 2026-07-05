@@ -1,4 +1,4 @@
-# Donner Build Report
+# Donner Build Report {#DonnerBuildReport}
 
 Generated with: tools/generate_build_report.py --all --save docs/build_report.md
 

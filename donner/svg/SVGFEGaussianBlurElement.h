@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_feGaussianBlur "<feGaussianBlur>"
+ * @page xml_feGaussianBlur &lt;feGaussianBlur&gt;
  *
  * Defines a filter primitive that performs a gaussian blur on the input image.
  *

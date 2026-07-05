@@ -8,7 +8,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_polyline "<polyline>"
+ * @page xml_polyline &lt;polyline&gt;
  *
  * Creates a set of connected straight line segments, using the `points` attribute.
  *

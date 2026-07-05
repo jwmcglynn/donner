@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_feMorphology "<feMorphology>"
+ * @page xml_feMorphology &lt;feMorphology&gt;
  *
  * Defines a filter primitive that erodes or dilates the input image.
  *

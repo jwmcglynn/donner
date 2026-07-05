@@ -8,7 +8,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_rect "<rect>"
+ * @page xml_rect &lt;rect&gt;
  *
  * Creates a rectangle with the top-left corner at (`x`, `y`) and the specified `width` and
  * `height`, optionally with rounded corners.

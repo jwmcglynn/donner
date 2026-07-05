@@ -1,4 +1,4 @@
-# Unsupported SVG 1.1 Features
+# Unsupported SVG 1.1 Features {#UnsupportedSvg1Features}
 
 Donner targets **SVG 2** conformance. The following SVG 1.1 features are deprecated or removed
 in SVG 2 and are intentionally not implemented.

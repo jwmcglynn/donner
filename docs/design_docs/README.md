@@ -1,9 +1,19 @@
-# Donner Design Docs
+# Donner Design Docs {#DonnerDesignDocs}
 
 This directory holds every design doc for the Donner project, numbered
 ADR-style in the order they were first written. New docs append the next
 free number — `NNNN-short_name.md` — and existing numbers never change once
 assigned, so external references stay stable.
+
+## Tree Groups
+
+- \subpage DesignDocsCoreArchitecture
+- \subpage DesignDocsRendering
+- \subpage DesignDocsText
+- \subpage DesignDocsEditor
+- \subpage DesignDocsTesting
+- \subpage DesignDocsReleases
+- \subpage DesignDocsTooling
 
 **On number collisions.**
 
@@ -16,19 +26,18 @@ assigned, so external references stay stable.
   doc keeps its bare `NNNN-` form so external links stay stable. No
   renumbering, no history rewrite.
 
-For how Donner's runtime is organized and documented, start with the
-[Developer Docs](../developer_docs.md). Design docs capture _why_ a piece
-of the system looks the way it does (or will look). Developer docs describe
+For how Donner's runtime is organized and documented, start with \ref DeveloperDocs. Design docs
+capture _why_ a piece of the system looks the way it does (or will look). Developer docs describe
 _what_ ships today.
 
 ## Workflow
 
-1. **Draft (Status: Draft)** — Use [`design_template.md`](design_template.md).
+1. **Draft (Status: Draft)** — Use `docs/design_docs/design_template.md`.
    Goals, non-goals, open questions, a first pass at the implementation plan.
 2. **In Progress** — Mark TODOs in the implementation plan. Check them off as
    milestones land. The doc is the single source of truth for "where is this?"
 3. **Shipped / Implemented** — Write the developer-facing documentation the
-   design earned (a new explainer via [`developer_template.md`](developer_template.md),
+   design earned (a new explainer via `docs/design_docs/developer_template.md`,
    or content folded into `../developer_docs.md`). **Never delete the design doc
    or recycle its number.** Instead, rewrite it in place into a short summary:
    set Status to `Implemented`, briefly describe what the design was, and link
@@ -40,13 +49,13 @@ _what_ ships today.
    history, but their output should be concrete decisions, review findings, and
    follow-up actions.
 
-See [`AGENTS.md`](AGENTS.md) in this directory for more detail on the
+See `docs/design_docs/AGENTS.md` for more detail on the
 conventions automated agents should follow when editing design docs.
 
 ## Templates
 
-- [`design_template.md`](design_template.md) — in-flight designs
-- [`developer_template.md`](developer_template.md) — shipped features
+- `design_template.md` — in-flight designs
+- `developer_template.md` — shipped features
 - [`retrospective_template.md`](retrospective_template.md) — bug/workstream retrospectives
 
 ## Document Index
@@ -125,11 +134,11 @@ conventions automated agents should follow when editing design docs.
 Once a design ships and stabilizes, its runtime surface is documented in the
 developer-facing tree under [`docs/`](../). Especially relevant entry points:
 
-- [Developer Docs index](../developer_docs.md) — top-level Doxygen landing
-- [System architecture](../architecture.md)
-- [ECS overview](../ecs.md)
-- [Coding style](../coding_style.md)
-- [Building Donner](../building.md)
-- [Devtools](../devtools.md)
-- [Project roadmap](../ProjectRoadmap.md)
-- [Release checklist](../release_checklist.md)
+- \ref DeveloperDocs — top-level Doxygen landing
+- \ref SystemArchitecture
+- \ref EcsArchitecture
+- \ref CodingStyle
+- \ref BuildingDonner
+- \ref Devtools
+- \ref DonnerProjectRoadmap
+- \ref ReleaseChecklist
