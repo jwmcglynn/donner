@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <optional>
+#include <utility>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/xml/XMLNode.h"
@@ -25,6 +26,114 @@ bool DetachedQueueContains(const SVGDocument& document, Entity entity) {
 
 const NodeLifetimeComponent& LifetimeOf(const SVGElement& element) {
   return element.entityHandle().get<NodeLifetimeComponent>();
+}
+
+TEST(DocumentStateTests, DetachedNodeStateQueuesUniqueNonNullRoots) {
+  Registry registry;
+  const Entity first = registry.create();
+  const Entity second = registry.create();
+
+  DetachedNodeState state;
+  state.queueDetachedRoot(entt::null);
+  EXPECT_TRUE(state.detachedRoots.empty());
+
+  state.queueDetachedRoot(first);
+  state.queueDetachedRoot(first);
+  state.queueDetachedRoot(second);
+  ASSERT_EQ(state.detachedRoots.size(), 2u);
+  EXPECT_EQ(state.detachedRoots[0], first);
+  EXPECT_EQ(state.detachedRoots[1], second);
+
+  state.removeDetachedRoot(entt::null);
+  ASSERT_EQ(state.detachedRoots.size(), 2u);
+
+  state.removeDetachedRoot(first);
+  ASSERT_EQ(state.detachedRoots.size(), 1u);
+  EXPECT_EQ(state.detachedRoots[0], second);
+
+  state.removeDetachedRoot(first);
+  ASSERT_EQ(state.detachedRoots.size(), 1u);
+  EXPECT_EQ(state.detachedRoots[0], second);
+}
+
+TEST(DocumentStateTests, DetachedNodeDiagnosticsReflectPublicState) {
+  Registry registry;
+  const Entity queued = registry.create();
+  const Entity collected = registry.create();
+  const Entity retainedByHandle = registry.create();
+  const Entity retainedByEpoch = registry.create();
+
+  DetachedNodeState state;
+  state.detachedRoots.push_back(queued);
+  state.lastCollectedRoots.push_back(collected);
+  state.lastRetainedByPublicHandles.push_back(retainedByHandle);
+  state.lastRetainedBySnapshotOrObserverEpochs.push_back(retainedByEpoch);
+  state.maxRetainedSnapshotOrObserverEpoch = 7;
+  state.isCollecting = true;
+
+  const DetachedNodeDiagnostics diagnostics = state.diagnostics();
+  EXPECT_EQ(diagnostics.queuedDetachedRoots, 1u);
+  EXPECT_EQ(diagnostics.retainedByPublicHandlesInLastPass, 1u);
+  EXPECT_EQ(diagnostics.retainedBySnapshotOrObserverEpochs, 1u);
+  EXPECT_EQ(diagnostics.maxRetainedSnapshotOrObserverEpoch, 7u);
+  EXPECT_EQ(diagnostics.collectedInLastPass, 1u);
+  EXPECT_TRUE(diagnostics.isCollecting);
+}
+
+TEST(DocumentStateTests, DetachedNodeCollectionDeferralMoveTransfersOwnership) {
+  DocumentState state;
+
+  {
+    DetachedNodeCollectionDeferral deferral = state.deferDetachedNodeCollection();
+    EXPECT_TRUE(state.hasActiveDetachedNodeCollectionDeferral());
+    EXPECT_EQ(deferral.epoch(), 1u);
+
+    DetachedNodeCollectionDeferral moved(std::move(deferral));
+    EXPECT_TRUE(state.hasActiveDetachedNodeCollectionDeferral());
+    EXPECT_EQ(moved.epoch(), 1u);
+  }
+
+  EXPECT_FALSE(state.hasActiveDetachedNodeCollectionDeferral());
+  EXPECT_EQ(state.activeDetachedNodeCollectionEpoch(), 1u);
+}
+
+TEST(DocumentStateTests, MutationBatchCoalescesNestedRevisionBumps) {
+  DocumentState state;
+
+  {
+    DocumentMutationBatch outer(state);
+    state.bumpMutationRevision();
+    {
+      DocumentMutationBatch inner(state);
+      state.bumpMutationRevision();
+    }
+    EXPECT_EQ(state.revision(), 0u);
+  }
+
+  EXPECT_EQ(state.revision(), 1u);
+  DocumentMutationLogSnapshot snapshot = state.mutationRecordsSince(0);
+  ASSERT_EQ(snapshot.records.size(), 1u);
+  EXPECT_EQ(snapshot.records[0].sequence, 1u);
+  EXPECT_EQ(snapshot.records[0].revision, 1u);
+  EXPECT_EQ(snapshot.latestSequence, 1u);
+  EXPECT_FALSE(snapshot.missedRecords);
+
+  { DocumentMutationBatch autoCommit(state, /* commitOnScopeExit */ true); }
+
+  EXPECT_EQ(state.revision(), 2u);
+  snapshot = state.mutationRecordsSince(1);
+  ASSERT_EQ(snapshot.records.size(), 1u);
+  EXPECT_EQ(snapshot.records[0].sequence, 2u);
+  EXPECT_EQ(snapshot.records[0].revision, 2u);
+
+  for (int i = 0; i < 4097; ++i) {
+    state.bumpMutationRevision();
+  }
+
+  snapshot = state.mutationRecordsSince(0);
+  EXPECT_EQ(snapshot.latestSequence, 4099u);
+  EXPECT_TRUE(snapshot.missedRecords);
+  EXPECT_EQ(snapshot.records.size(), 4096u);
 }
 
 TEST(SVGElementLifetimeTests, CopiesAndMovesTrackExternalReferences) {

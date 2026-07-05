@@ -80,6 +80,27 @@ TEST(SidebarPresenterTest, RefreshSnapshotCapturesXmlAttributesAndComputedStyle)
   EXPECT_EQ(*colorValue, "rgba(0, 0, 0, 255) (default)");
 }
 
+TEST(SidebarPresenterTest, RefreshSnapshotKeepsAttributesWhenCleanSourceTextIsMissing) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kInspectorSvg));
+
+  auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+
+  EXPECT_TRUE(presenter.inspectorHasSelectionForTesting());
+  const auto xmlAttributes = presenter.inspectorXmlAttributesForTesting();
+  EXPECT_THAT(xmlAttributes,
+              testing::Contains(testing::Pair(std::string("id"), std::string("target"))));
+  EXPECT_THAT(xmlAttributes,
+              testing::Contains(testing::Pair(std::string("fill"), std::string("red"))));
+  EXPECT_THAT(xmlAttributes,
+              testing::Contains(testing::Pair(std::string("width"), std::string("100"))));
+}
+
 TEST(SidebarPresenterTest, RefreshSnapshotClearsStateWhenNoDocumentLoaded) {
   EditorApp app;
 
@@ -180,6 +201,24 @@ protected:
   }
 
   ImGuiContext* ctx_ = nullptr;
+
+  static bool RenderInspectorFrame(SidebarPresenter& presenter, EditorApp* app,
+                                   const char* windowName) {
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(400, 300);
+    io.AddMousePosEvent(-1.0f, -1.0f);
+    io.AddMouseButtonEvent(0, false);
+    ImGui::NewFrame();
+    ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(360, 280), ImGuiCond_Always);
+    ImGui::Begin(windowName, nullptr,
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar);
+    const bool queuedMutation = presenter.renderInspector(app, ViewportState{});
+    ImGui::End();
+    ImGui::Render();
+    return queuedMutation;
+  }
 };
 
 TEST_F(SidebarPresenterImGuiTest, TreeViewAndInspectorRenderEmptySnapshotReadOnly) {
@@ -257,6 +296,79 @@ TEST_F(SidebarPresenterImGuiTest, InspectorRendersMultiSelectionAndSingleSelecti
   const ImDrawData* singleDrawData = ImGui::GetDrawData();
   ASSERT_NE(singleDrawData, nullptr);
   EXPECT_GT(singleDrawData->TotalVtxCount, 0);
+}
+
+TEST_F(SidebarPresenterImGuiTest, TreeViewOpensAncestorsForPendingScrollTarget) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kInspectorSvg));
+  app.setCleanSourceText(kInspectorSvg);
+
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+
+  TreeViewState treeState;
+  treeState.scrollTarget = *target;
+  treeState.pendingScroll = true;
+
+  ImGuiIO& io = ImGui::GetIO();
+  io.DisplaySize = ImVec2(400, 300);
+  io.AddMousePosEvent(-1.0f, -1.0f);
+  io.AddMouseButtonEvent(0, false);
+  ImGui::NewFrame();
+  ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(360, 280), ImGuiCond_Always);
+  ImGui::Begin("##sidebar_tree_scroll_target_test", nullptr,
+               ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                   ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar);
+  presenter.renderTreeView(nullptr, treeState);
+  ImGui::End();
+  ImGui::Render();
+
+  EXPECT_TRUE(treeState.pendingScroll);
+  EXPECT_FALSE(treeState.selectionChangedInTree);
+  const ImDrawData* drawData = ImGui::GetDrawData();
+  ASSERT_NE(drawData, nullptr);
+  EXPECT_GT(drawData->TotalVtxCount, 0);
+}
+
+TEST_F(SidebarPresenterImGuiTest, InspectorRendersSingleSelectionWithoutElementDetails) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <defs/>
+  </svg>)"));
+
+  const auto defs = app.document().document().querySelector("defs");
+  ASSERT_TRUE(defs.has_value());
+  app.setSelection(*defs);
+
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  ASSERT_TRUE(presenter.inspectorHasSelectionForTesting());
+  EXPECT_EQ(presenter.inspectorTitleForTesting(), "Selected: <defs>");
+  EXPECT_TRUE(presenter.inspectorXmlAttributesForTesting().empty());
+
+  EXPECT_FALSE(RenderInspectorFrame(presenter, &app, "##sidebar_defs_inspector_test"));
+  const ImDrawData* drawData = ImGui::GetDrawData();
+  ASSERT_NE(drawData, nullptr);
+  EXPECT_GT(drawData->TotalVtxCount, 0);
+}
+
+TEST_F(SidebarPresenterImGuiTest, InspectorRendersLiveNoSelectionState) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kInspectorSvg));
+
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  ASSERT_FALSE(presenter.inspectorHasSelectionForTesting());
+
+  EXPECT_FALSE(RenderInspectorFrame(presenter, &app, "##sidebar_no_selection_live_test"));
+  const ImDrawData* drawData = ImGui::GetDrawData();
+  ASSERT_NE(drawData, nullptr);
+  EXPECT_GT(drawData->TotalVtxCount, 0);
 }
 
 TEST_F(SidebarPresenterImGuiTest, PathOperationButtonsRenderSvgBitmapIcons) {

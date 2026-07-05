@@ -522,6 +522,81 @@ TEST_F(SelectorTests, PseudoClassSelectorIsNotWhereHas) {
   EXPECT_TRUE(doesNotMatch(":has(type1)", children["child1"]));
 }
 
+TEST_F(SelectorTests, RelativeSelectorMatchingCoversSiblingAndColumnCombinators) {
+  FakeElement root("root");
+  FakeElement childA("a");
+  FakeElement childB("b");
+  FakeElement childC("c");
+
+  root.appendChild(childA);
+  root.appendChild(childB);
+  root.appendChild(childC);
+
+  SCOPED_TRACE(testing::Message() << "*** Tree structure:\n" << root.printAsTree() << "\n");
+
+  auto typeCompound = [](const char* name) {
+    CompoundSelector compound;
+    compound.entries.emplace_back(TypeSelector(XMLQualifiedNameRef("", name)));
+    return compound;
+  };
+
+  SelectorMatchOptions<FakeElement> options;
+  options.relativeToElement = &childA;
+
+  ComplexSelector relativeNextSiblingSelector;
+  relativeNextSiblingSelector.entries.push_back(
+      ComplexSelector::Entry{Combinator::NextSibling, typeCompound("b")});
+  EXPECT_TRUE(relativeNextSiblingSelector.matches(childB, options));
+  EXPECT_FALSE(relativeNextSiblingSelector.matches(childC, options));
+
+  ComplexSelector relativeSubsequentSiblingSelector;
+  relativeSubsequentSiblingSelector.entries.push_back(
+      ComplexSelector::Entry{Combinator::SubsequentSibling, typeCompound("c")});
+  EXPECT_TRUE(relativeSubsequentSiblingSelector.matches(childC, options));
+  EXPECT_FALSE(relativeSubsequentSiblingSelector.matches(childB, options));
+
+  ComplexSelector relativeColumnSelector;
+  relativeColumnSelector.entries.push_back(
+      ComplexSelector::Entry{Combinator::Column, typeCompound("b")});
+  EXPECT_FALSE(relativeColumnSelector.matches(childB, options));
+
+  ComplexSelector chainedColumnSelector;
+  chainedColumnSelector.entries.push_back(
+      ComplexSelector::Entry{Combinator::Descendant, typeCompound("root")});
+  chainedColumnSelector.entries.push_back(
+      ComplexSelector::Entry{Combinator::Column, typeCompound("b")});
+  EXPECT_FALSE(chainedColumnSelector.matches(childB, SelectorMatchOptions<FakeElement>()));
+}
+
+TEST_F(SelectorTests, PseudoClassSelectorValidityCoversSupportedNames) {
+  for (const char* ident : {"root", "empty", "first-child", "last-child", "only-child",
+                            "first-of-type", "last-of-type", "only-of-type"}) {
+    PseudoClassSelector selector{RcString(ident)};
+    EXPECT_TRUE(selector.isValid()) << ident;
+  }
+
+  PseudoClassSelector invalidNonFunction(RcString("hover"));
+  EXPECT_FALSE(invalidNonFunction.isValid());
+}
+
+TEST_F(SelectorTests, PseudoClassSelectorValidityCoversAnbFunctionNames) {
+  for (const char* ident : {"nth-child", "nth-last-child", "nth-of-type", "nth-last-of-type"}) {
+    PseudoClassSelector selector{RcString(ident)};
+    selector.argsIfFunction.emplace();
+    selector.anbValueIfAnb = AnbValue{2, 1};
+    EXPECT_TRUE(selector.isValid()) << ident;
+  }
+
+  PseudoClassSelector functionWithoutAnb(RcString("is"));
+  functionWithoutAnb.argsIfFunction.emplace();
+  EXPECT_FALSE(functionWithoutAnb.isValid());
+
+  PseudoClassSelector invalidAnbFunction(RcString("nth-unknown"));
+  invalidAnbFunction.argsIfFunction.emplace();
+  invalidAnbFunction.anbValueIfAnb = AnbValue{2, 1};
+  EXPECT_FALSE(invalidAnbFunction.isValid());
+}
+
 TEST_F(SelectorTests, Specificity) {
   EXPECT_THAT(computeSpecificity("test"), SpecificityIs(Specificity::FromABC(0, 0, 1)));
   EXPECT_THAT(computeSpecificity(".test"), SpecificityIs(Specificity::FromABC(0, 1, 0)));

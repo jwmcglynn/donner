@@ -48,6 +48,34 @@ TEST(ViewportGeometryTest, DocumentToScreenRoundTripsThroughViewBox) {
   EXPECT_DOUBLE_EQ(mappedBack->y, documentPoint.y);
 }
 
+TEST(ViewportGeometryTest, ContainsScreenPointIncludesImageEdgesAndRejectsOutside) {
+  const DrawingViewportLayout layout = ComputeDrawingViewportLayout(
+      Vector2d(10.0, 20.0), Vector2d(200.0, 100.0), Vector2d(80.0, 40.0), Vector2d(5.0, -2.0),
+      Box2d::FromXYWH(0.0, 0.0, 80.0, 40.0));
+
+  EXPECT_TRUE(layout.containsScreenPoint(layout.imageOrigin));
+  EXPECT_TRUE(layout.containsScreenPoint(layout.imageOrigin + layout.imageSize));
+  EXPECT_TRUE(layout.containsScreenPoint(layout.imageOrigin + Vector2d(40.0, 20.0)));
+  EXPECT_FALSE(layout.containsScreenPoint(layout.imageOrigin + Vector2d(-1.0, 20.0)));
+  EXPECT_FALSE(layout.containsScreenPoint(layout.imageOrigin + Vector2d(81.0, 20.0)));
+  EXPECT_FALSE(layout.containsScreenPoint(layout.imageOrigin + Vector2d(40.0, -1.0)));
+  EXPECT_FALSE(layout.containsScreenPoint(layout.imageOrigin + Vector2d(40.0, 41.0)));
+}
+
+TEST(ViewportGeometryTest, RejectsDocumentToScreenForDegenerateViewBox) {
+  const DrawingViewportLayout zeroWidth =
+      ComputeDrawingViewportLayout(Vector2d(0.0, 0.0), Vector2d(100.0, 100.0), Vector2d(80.0, 80.0),
+                                   Vector2d(0.0, 0.0), Box2d::FromXYWH(10.0, 20.0, 0.0, 50.0));
+  EXPECT_TRUE(zeroWidth.hasImage());
+  EXPECT_FALSE(zeroWidth.documentToScreen(Vector2d(10.0, 20.0)).has_value());
+
+  const DrawingViewportLayout zeroHeight =
+      ComputeDrawingViewportLayout(Vector2d(0.0, 0.0), Vector2d(100.0, 100.0), Vector2d(80.0, 80.0),
+                                   Vector2d(0.0, 0.0), Box2d::FromXYWH(10.0, 20.0, 50.0, 0.0));
+  EXPECT_TRUE(zeroHeight.hasImage());
+  EXPECT_FALSE(zeroHeight.documentToScreen(Vector2d(10.0, 20.0)).has_value());
+}
+
 // Regression for the M4 click-offset bug. The scenario the editor hits:
 // the render pane sits inside a larger window at pane-origin (560, 0),
 // with a 720x800 content region. The rendered SVG is 720x800 (canvas
@@ -153,6 +181,17 @@ TEST(ViewportGeometryTest, EditorClickWithScaledDocument) {
 TEST(ViewportGeometryTest, RejectsCoordinateConversionWhenImageIsMissing) {
   const DrawingViewportLayout layout =
       ComputeDrawingViewportLayout(Vector2d(0.0, 0.0), Vector2d(100.0, 100.0), Vector2d(0.0, 0.0),
+                                   Vector2d(0.0, 0.0), Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0));
+
+  EXPECT_FALSE(layout.hasImage());
+  EXPECT_FALSE(layout.containsScreenPoint(Vector2d(10.0, 10.0)));
+  EXPECT_FALSE(layout.screenToDocument(Vector2d(10.0, 10.0)).has_value());
+  EXPECT_FALSE(layout.documentToScreen(Vector2d(10.0, 10.0)).has_value());
+}
+
+TEST(ViewportGeometryTest, RejectsCoordinateConversionWhenImageHeightIsMissing) {
+  const DrawingViewportLayout layout =
+      ComputeDrawingViewportLayout(Vector2d(0.0, 0.0), Vector2d(100.0, 100.0), Vector2d(50.0, 0.0),
                                    Vector2d(0.0, 0.0), Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0));
 
   EXPECT_FALSE(layout.hasImage());

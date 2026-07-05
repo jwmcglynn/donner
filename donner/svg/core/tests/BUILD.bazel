@@ -16,14 +16,6 @@ donner_cc_library(
 
 donner_cc_test(
     name = "core_tests",
-    # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
-    # wrappers run automatically under `bazel test //...`.
-    variants = [
-        "tiny",
-        "text_full",
-        "geode",
-    ],
-    shard_count = 4,
     srcs = [
         "ClipPathUnits_tests.cc",
         "ClipRule_tests.cc",
@@ -39,6 +31,7 @@ donner_cc_test(
         "MaskUnits_tests.cc",
         "MixBlendMode_tests.cc",
         "Overflow_tests.cc",
+        "PaintAndFontEnums_tests.cc",
         "Path_tests.cc",
         "PointerEvents_tests.cc",
         "PreserveAspectRatio_tests.cc",
@@ -48,6 +41,14 @@ donner_cc_test(
         "TransformOrigin_tests.cc",
         "Visibility_tests.cc",
         "WritingMode_tests.cc",
+    ],
+    shard_count = 4,
+    # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
+    # wrappers run automatically under `bazel test //...`.
+    variants = [
+        "tiny",
+        "text_full",
+        "geode",
     ],
     deps = [
         ":core_test_utils",

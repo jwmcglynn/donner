@@ -13,6 +13,13 @@ TEST(FrameMissTelemetryTest, ClassifiesBudgets) {
   EXPECT_EQ(ClassifyFrameBudgetMiss(20.0), FrameBudgetMiss::Missed60Hz);
 }
 
+TEST(FrameMissTelemetryTest, NamesBudgetMissClassifications) {
+  EXPECT_STREQ(FrameBudgetMissName(FrameBudgetMiss::WithinBudget), "within_budget");
+  EXPECT_STREQ(FrameBudgetMissName(FrameBudgetMiss::Missed120Hz), "missed_120hz");
+  EXPECT_STREQ(FrameBudgetMissName(FrameBudgetMiss::Missed60Hz), "missed_60hz");
+  EXPECT_STREQ(FrameBudgetMissName(static_cast<FrameBudgetMiss>(255)), "unknown");
+}
+
 TEST(FrameMissTelemetryTest, DoesNotSerializeFramesWithinBudget) {
   FrameMissTelemetryInput input;
   input.frameIndex = 4;
@@ -89,6 +96,53 @@ TEST(FrameMissTelemetryTest, TopLevelFrameCostsReplaceLegacyOther) {
       << "legacy nested renderer details must not double-count top-level UI frame time";
   EXPECT_EQ(json.find(R"({"name":"checkerboard","ms":8})"), std::string::npos)
       << "nested direct-presentation details must not double-count host underlay time";
+}
+
+TEST(FrameMissTelemetryTest, SerializesOverlayStateAndOrdersTiedContributorsByName) {
+  FrameMissTelemetryInput input;
+  input.frameIndex = 51;
+  input.frameMs = 25.0;
+  input.frameCost.overlay.captureMs = 2.0;
+  input.frameCost.overlay.drawMs = 2.0;
+  input.frameCost.overlay.uploadMs = 1.0;
+  input.frameCost.overlay.payloadBytes = 128;
+  input.frameCost.overlay.selectedElementCount = 3;
+  input.frameCost.overlay.sourceHoverElementCount = 2;
+  input.frameCost.overlay.pathCount = 4;
+  input.frameCost.overlay.hoverPathCount = 1;
+  input.frameCost.overlay.aabbCount = 5;
+  input.frameCost.overlay.hoverAabbCount = 6;
+  input.frameCost.overlay.handleCount = 7;
+  input.frameCost.overlay.hasMarquee = true;
+  input.frameCost.overlay.selectionBoundsOnly = true;
+  input.frameCost.overlay.hasRepresentedDragPreview = true;
+  input.frameCost.overlay.liveDragTranslationDoc = Vector2d(1.5, -2.5);
+  input.frameCost.overlay.representedDragTranslationDoc = Vector2d(3.0, 4.0);
+  input.frameCost.overlay.canvasSize = Vector2i(320, 240);
+
+  const std::string json = BuildFrameMissTelemetryJson(input);
+
+  const std::size_t capturePos = json.find(R"({"name":"overlay-capture","ms":2})");
+  const std::size_t drawPos = json.find(R"({"name":"overlay-draw","ms":2})");
+  ASSERT_NE(capturePos, std::string::npos);
+  ASSERT_NE(drawPos, std::string::npos);
+  EXPECT_LT(capturePos, drawPos);
+
+  EXPECT_NE(json.find(R"("payload_bytes":128)"), std::string::npos);
+  EXPECT_NE(json.find(R"("selected_elements":3)"), std::string::npos);
+  EXPECT_NE(json.find(R"("source_hover_elements":2)"), std::string::npos);
+  EXPECT_NE(json.find(R"("paths":4)"), std::string::npos);
+  EXPECT_NE(json.find(R"("hover_paths":1)"), std::string::npos);
+  EXPECT_NE(json.find(R"("aabbs":5)"), std::string::npos);
+  EXPECT_NE(json.find(R"("hover_aabbs":6)"), std::string::npos);
+  EXPECT_NE(json.find(R"("handles":7)"), std::string::npos);
+  EXPECT_NE(json.find(R"("has_marquee":true)"), std::string::npos);
+  EXPECT_NE(json.find(R"("selection_bounds_only":true)"), std::string::npos);
+  EXPECT_NE(json.find(R"("has_live_drag_preview":false)"), std::string::npos);
+  EXPECT_NE(json.find(R"("has_represented_drag_preview":true)"), std::string::npos);
+  EXPECT_NE(json.find(R"("live_drag_translation_doc":[1.5,-2.5])"), std::string::npos);
+  EXPECT_NE(json.find(R"("represented_drag_translation_doc":[3,4])"), std::string::npos);
+  EXPECT_NE(json.find(R"("canvas_size":[320,240])"), std::string::npos);
 }
 
 }  // namespace

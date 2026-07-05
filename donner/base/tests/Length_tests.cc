@@ -2,6 +2,8 @@
 
 #include <gtest/gtest.h>
 
+#include <compare>
+
 #include "donner/base/tests/BaseTestUtils.h"
 
 namespace donner {
@@ -46,6 +48,94 @@ TEST(LengthTest, IsAbsoluteSize) {
   EXPECT_TRUE(length1.isAbsoluteSize());
   EXPECT_FALSE(length2.isAbsoluteSize());
   EXPECT_FALSE(length3.isAbsoluteSize());
+}
+
+TEST(LengthTest, IsAbsoluteSizeCoversAllAbsoluteUnits) {
+  EXPECT_TRUE(Lengthd(1.0, Lengthd::Unit::None).isAbsoluteSize());
+  EXPECT_TRUE(Lengthd(1.0, Lengthd::Unit::Cm).isAbsoluteSize());
+  EXPECT_TRUE(Lengthd(1.0, Lengthd::Unit::Mm).isAbsoluteSize());
+  EXPECT_TRUE(Lengthd(1.0, Lengthd::Unit::Q).isAbsoluteSize());
+  EXPECT_TRUE(Lengthd(1.0, Lengthd::Unit::In).isAbsoluteSize());
+  EXPECT_TRUE(Lengthd(1.0, Lengthd::Unit::Pc).isAbsoluteSize());
+  EXPECT_TRUE(Lengthd(1.0, Lengthd::Unit::Pt).isAbsoluteSize());
+  EXPECT_TRUE(Lengthd(1.0, Lengthd::Unit::Px).isAbsoluteSize());
+
+  EXPECT_FALSE(Lengthd(1.0, Lengthd::Unit::Percent).isAbsoluteSize());
+  EXPECT_FALSE(Lengthd(1.0, Lengthd::Unit::Em).isAbsoluteSize());
+  EXPECT_FALSE(Lengthd(1.0, Lengthd::Unit::Vw).isAbsoluteSize());
+}
+
+TEST(LengthTest, SpaceshipTreatsNearEqualValuesAsEquivalent) {
+  const std::partial_ordering result =
+      Lengthd(1.0, Lengthd::Unit::Px) <=> Lengthd(1.0 + 0.5e-16, Lengthd::Unit::Px);
+  EXPECT_EQ(result, std::partial_ordering::equivalent);
+}
+
+TEST(LengthTest, ToPixelsCoversAbsoluteUnits) {
+  const Box2d viewBox = Box2d::FromXYWH(0.0, 0.0, 200.0, 100.0);
+  const FontMetrics fontMetrics;
+
+  EXPECT_DOUBLE_EQ(Lengthd(12.0).toPixels(viewBox, fontMetrics), 12.0);
+  EXPECT_DOUBLE_EQ(Lengthd(2.0, Lengthd::Unit::Cm).toPixels(viewBox, fontMetrics),
+                   2.0 * AbsoluteLengthMetrics::kCmToPixels);
+  EXPECT_DOUBLE_EQ(Lengthd(20.0, Lengthd::Unit::Mm).toPixels(viewBox, fontMetrics),
+                   2.0 * AbsoluteLengthMetrics::kCmToPixels);
+  EXPECT_DOUBLE_EQ(Lengthd(40.0, Lengthd::Unit::Q).toPixels(viewBox, fontMetrics),
+                   AbsoluteLengthMetrics::kCmToPixels);
+  EXPECT_DOUBLE_EQ(Lengthd(1.5, Lengthd::Unit::In).toPixels(viewBox, fontMetrics), 144.0);
+  EXPECT_DOUBLE_EQ(Lengthd(6.0, Lengthd::Unit::Pc).toPixels(viewBox, fontMetrics), 96.0);
+  EXPECT_DOUBLE_EQ(Lengthd(72.0, Lengthd::Unit::Pt).toPixels(viewBox, fontMetrics), 96.0);
+  EXPECT_DOUBLE_EQ(Lengthd(9.0, Lengthd::Unit::Px).toPixels(viewBox, fontMetrics), 9.0);
+}
+
+TEST(LengthTest, ToPixelsCoversPercentExtents) {
+  const Box2d viewBox = Box2d::FromXYWH(0.0, 0.0, 200.0, 100.0);
+  const FontMetrics fontMetrics;
+
+  EXPECT_DOUBLE_EQ(
+      Lengthd(25.0, Lengthd::Unit::Percent).toPixels(viewBox, fontMetrics, Lengthd::Extent::X),
+      50.0);
+  EXPECT_DOUBLE_EQ(
+      Lengthd(25.0, Lengthd::Unit::Percent).toPixels(viewBox, fontMetrics, Lengthd::Extent::Y),
+      25.0);
+  EXPECT_DOUBLE_EQ(
+      Lengthd(25.0, Lengthd::Unit::Percent).toPixels(viewBox, fontMetrics, Lengthd::Extent::Mixed),
+      25.0 * std::sqrt(200.0 * 200.0 + 100.0 * 100.0) / std::sqrt(2.0) / 100.0);
+}
+
+TEST(LengthTest, ToPixelsCoversFontRelativeUnits) {
+  const Box2d viewBox = Box2d::FromXYWH(0.0, 0.0, 200.0, 100.0);
+  FontMetrics fontMetrics;
+  fontMetrics.fontSize = 20.0;
+  fontMetrics.rootFontSize = 18.0;
+  fontMetrics.exUnitInEm = 0.4;
+  fontMetrics.chUnitInEm = 0.6;
+
+  EXPECT_DOUBLE_EQ(Lengthd(2.0, Lengthd::Unit::Em).toPixels(viewBox, fontMetrics), 40.0);
+  EXPECT_DOUBLE_EQ(Lengthd(2.0, Lengthd::Unit::Ex).toPixels(viewBox, fontMetrics), 16.0);
+  EXPECT_DOUBLE_EQ(Lengthd(2.0, Lengthd::Unit::Ch).toPixels(viewBox, fontMetrics), 24.0);
+  EXPECT_DOUBLE_EQ(Lengthd(2.0, Lengthd::Unit::Rem).toPixels(viewBox, fontMetrics), 36.0);
+}
+
+TEST(LengthTest, ToPixelsCoversViewportUnitsWithoutExplicitViewport) {
+  const Box2d viewBox = Box2d::FromXYWH(0.0, 0.0, 200.0, 100.0);
+  const FontMetrics fontMetrics;
+
+  EXPECT_DOUBLE_EQ(Lengthd(10.0, Lengthd::Unit::Vw).toPixels(viewBox, fontMetrics), 20.0);
+  EXPECT_DOUBLE_EQ(Lengthd(10.0, Lengthd::Unit::Vh).toPixels(viewBox, fontMetrics), 10.0);
+  EXPECT_DOUBLE_EQ(Lengthd(10.0, Lengthd::Unit::Vmin).toPixels(viewBox, fontMetrics), 10.0);
+  EXPECT_DOUBLE_EQ(Lengthd(10.0, Lengthd::Unit::Vmax).toPixels(viewBox, fontMetrics), 20.0);
+}
+
+TEST(LengthTest, ToPixelsCoversViewportUnitsWithExplicitViewport) {
+  const Box2d viewBox = Box2d::FromXYWH(0.0, 0.0, 200.0, 100.0);
+  FontMetrics fontMetrics;
+  fontMetrics.viewportSize = Vector2d(80.0, 160.0);
+
+  EXPECT_DOUBLE_EQ(Lengthd(10.0, Lengthd::Unit::Vw).toPixels(viewBox, fontMetrics), 8.0);
+  EXPECT_DOUBLE_EQ(Lengthd(10.0, Lengthd::Unit::Vh).toPixels(viewBox, fontMetrics), 16.0);
+  EXPECT_DOUBLE_EQ(Lengthd(10.0, Lengthd::Unit::Vmin).toPixels(viewBox, fontMetrics), 8.0);
+  EXPECT_DOUBLE_EQ(Lengthd(10.0, Lengthd::Unit::Vmax).toPixels(viewBox, fontMetrics), 16.0);
 }
 
 /// @test Ostream output \c operator<< for all \ref LengthUnit values.

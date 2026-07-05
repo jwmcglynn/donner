@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <variant>
@@ -50,14 +51,18 @@ std::vector<uint8_t> PngHeaderWithDimensions(int width, int height) {
   return data;
 }
 
+void ExpectImageLoaderError(const ImageLoader::Result& result, UrlLoaderError error) {
+  ASSERT_TRUE(std::holds_alternative<UrlLoaderError>(result));
+  EXPECT_EQ(std::get<UrlLoaderError>(result), error);
+}
+
 TEST(ImageLoader, CorruptRasterDataUrlReturnsDataCorrupt) {
   NullResourceLoader resourceLoader;
   ImageLoader imageLoader(resourceLoader);
 
   ImageLoader::Result result = imageLoader.fromUri("data:image/png;base64,AAAA");
 
-  ASSERT_TRUE(std::holds_alternative<UrlLoaderError>(result));
-  EXPECT_EQ(std::get<UrlLoaderError>(result), UrlLoaderError::DataCorrupt);
+  ExpectImageLoaderError(result, UrlLoaderError::DataCorrupt);
 }
 
 TEST(ImageLoader, OversizedPngHeaderReturnsDataCorruptBeforeDecode) {
@@ -66,8 +71,130 @@ TEST(ImageLoader, OversizedPngHeaderReturnsDataCorruptBeforeDecode) {
 
   ImageLoader::Result result = imageLoader.fromUri("oversized.png");
 
-  ASSERT_TRUE(std::holds_alternative<UrlLoaderError>(result));
-  EXPECT_EQ(std::get<UrlLoaderError>(result), UrlLoaderError::DataCorrupt);
+  ExpectImageLoaderError(result, UrlLoaderError::DataCorrupt);
+}
+
+TEST(ImageLoader, RejectsUnsupportedRasterMimeType) {
+  NullResourceLoader resourceLoader;
+  ImageLoader imageLoader(resourceLoader);
+
+  ImageLoader::Result result = imageLoader.fromUri("data:image/webp;base64,AAAA");
+
+  ExpectImageLoaderError(result, UrlLoaderError::UnsupportedFormat);
+}
+
+TEST(ImageLoader, AllowsSupportedRasterMimeTypesBeforeDecode) {
+  NullResourceLoader resourceLoader;
+  ImageLoader imageLoader(resourceLoader);
+
+  ExpectImageLoaderError(imageLoader.fromUri("data:image/jpeg;base64,AAAA"),
+                         UrlLoaderError::DataCorrupt);
+  ExpectImageLoaderError(imageLoader.fromUri("data:image/jpg;base64,AAAA"),
+                         UrlLoaderError::DataCorrupt);
+  ExpectImageLoaderError(imageLoader.fromUri("data:image/gif;base64,AAAA"),
+                         UrlLoaderError::DataCorrupt);
+}
+
+TEST(ImageLoader, LoadsPngDataUrl) {
+  NullResourceLoader resourceLoader;
+  ImageLoader imageLoader(resourceLoader);
+
+  ImageLoader::Result result = imageLoader.fromUri(
+      "data:image/png;base64,"
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+"
+      "/p9sAAAAASUVORK5CYII=");
+
+  ASSERT_TRUE(std::holds_alternative<ImageResource>(result));
+  const ImageResource& image = std::get<ImageResource>(result);
+  EXPECT_EQ(image.width, 1);
+  EXPECT_EQ(image.height, 1);
+  EXPECT_EQ(image.data.size(), 4u);
+}
+
+TEST(ImageLoader, RoutesExplicitSvgMimeTypeToSvgContent) {
+  NullResourceLoader resourceLoader;
+  ImageLoader imageLoader(resourceLoader);
+
+  ImageLoader::Result result = imageLoader.fromUri("data:image/svg+xml,%3Csvg/%3E");
+
+  ASSERT_TRUE(std::holds_alternative<SvgImageContent>(result));
+  const SvgImageContent& svg = std::get<SvgImageContent>(result);
+  EXPECT_EQ(std::string(svg.data.begin(), svg.data.end()), "<svg/>");
+}
+
+TEST(ImageLoader, SniffsSvgContentWhenMimeTypeIsEmpty) {
+  NullResourceLoader resourceLoader;
+  ImageLoader imageLoader(resourceLoader);
+
+  ImageLoader::Result result = imageLoader.fromUri("data:,%20%09%0D%0A%3Csvg/%3E");
+
+  ASSERT_TRUE(std::holds_alternative<SvgImageContent>(result));
+  const SvgImageContent& svg = std::get<SvgImageContent>(result);
+  EXPECT_EQ(std::string(svg.data.begin(), svg.data.end()), " \t\r\n<svg/>");
+}
+
+TEST(ImageLoader, SniffsSvgzMagicWhenMimeTypeIsEmpty) {
+  StaticResourceLoader resourceLoader({0x1F, 0x8B, 0x08});
+  ImageLoader imageLoader(resourceLoader);
+
+  ImageLoader::Result result = imageLoader.fromUri("image.bin");
+
+  ASSERT_TRUE(std::holds_alternative<SvgImageContent>(result));
+  const SvgImageContent& svg = std::get<SvgImageContent>(result);
+  EXPECT_EQ(svg.data, (std::vector<uint8_t>{0x1F, 0x8B, 0x08}));
+}
+
+TEST(ImageLoader, RejectsPartialSvgzMagicAsRasterData) {
+  StaticResourceLoader resourceLoader({0x1F, 0x00});
+  ImageLoader imageLoader(resourceLoader);
+
+  ExpectImageLoaderError(imageLoader.fromUri("image.bin"), UrlLoaderError::DataCorrupt);
+}
+
+TEST(ImageLoader, EmptyMimeTypeNonSvgContentFallsThroughToRasterDecode) {
+  NullResourceLoader resourceLoader;
+  ImageLoader imageLoader(resourceLoader);
+
+  ExpectImageLoaderError(imageLoader.fromUri("data:,%20%09%0D%0A"), UrlLoaderError::DataCorrupt);
+  ExpectImageLoaderError(imageLoader.fromUri("data:,A"), UrlLoaderError::DataCorrupt);
+  ExpectImageLoaderError(imageLoader.fromUri("data:,AB"), UrlLoaderError::DataCorrupt);
+}
+
+TEST(ImageLoader, RejectsPngHeadersWithInvalidDimensions) {
+  {
+    StaticResourceLoader resourceLoader(PngHeaderWithDimensions(1, 20000));
+    ImageLoader imageLoader(resourceLoader);
+    ExpectImageLoaderError(imageLoader.fromUri("too-tall.png"), UrlLoaderError::DataCorrupt);
+  }
+  {
+    StaticResourceLoader resourceLoader(PngHeaderWithDimensions(16384, 16384));
+    ImageLoader imageLoader(resourceLoader);
+    ExpectImageLoaderError(imageLoader.fromUri("too-large.png"), UrlLoaderError::DataCorrupt);
+  }
+  {
+    StaticResourceLoader resourceLoader(PngHeaderWithDimensions(0, 1));
+    ImageLoader imageLoader(resourceLoader);
+    ExpectImageLoaderError(imageLoader.fromUri("zero-width.png"), UrlLoaderError::DataCorrupt);
+  }
+  {
+    StaticResourceLoader resourceLoader(PngHeaderWithDimensions(1, 0));
+    ImageLoader imageLoader(resourceLoader);
+    ExpectImageLoaderError(imageLoader.fromUri("zero-height.png"), UrlLoaderError::DataCorrupt);
+  }
+}
+
+TEST(ImageLoader, ReturnsDataCorruptWhenInfoSucceedsButDecodeFails) {
+  StaticResourceLoader resourceLoader(PngHeaderWithDimensions(1, 1));
+  ImageLoader imageLoader(resourceLoader);
+
+  ExpectImageLoaderError(imageLoader.fromUri("missing-idat.png"), UrlLoaderError::DataCorrupt);
+}
+
+TEST(ImageLoader, ReturnsUrlLoaderErrors) {
+  NullResourceLoader resourceLoader;
+  ImageLoader imageLoader(resourceLoader);
+
+  ExpectImageLoaderError(imageLoader.fromUri("missing.png"), UrlLoaderError::NotFound);
 }
 
 }  // namespace

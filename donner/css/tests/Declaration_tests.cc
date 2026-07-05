@@ -3,6 +3,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <optional>
+
 #include "donner/css/CSS.h"
 
 namespace donner::css {
@@ -32,6 +34,38 @@ auto DeclarationValueCountIs(std::size_t valueCount) {
   return ResultOf(
       "values.size", [](const Declaration& declaration) { return declaration.values.size(); },
       Eq(valueCount));
+}
+
+TEST(CSSTest, ParseStylesheetReturnsRulesAndDeclarations) {
+  ParseWarningSink warningSink;
+  const Stylesheet stylesheet =
+      CSS::ParseStylesheet("rect, .accent { fill: red; stroke: blue; }", warningSink);
+
+  EXPECT_FALSE(warningSink.hasWarnings());
+  ASSERT_EQ(stylesheet.rules().size(), 1u);
+
+  const SelectorRule& rule = stylesheet.rules()[0];
+  const Specificity::ABC ruleSpecificity = rule.selector.maxSpecificity();
+  EXPECT_EQ(ruleSpecificity.a, 0u);
+  EXPECT_EQ(ruleSpecificity.b, 1u);
+  EXPECT_EQ(ruleSpecificity.c, 0u);
+  ASSERT_EQ(rule.declarations.size(), 2u);
+  EXPECT_EQ(rule.declarations[0].toCssText(), "fill: red");
+  EXPECT_EQ(rule.declarations[1].toCssText(), "stroke: blue");
+}
+
+TEST(CSSTest, ParseSelectorReturnsSelectorForValidInput) {
+  const std::optional<Selector> selector = CSS::ParseSelector("rect.accent > path");
+
+  ASSERT_TRUE(selector.has_value());
+  const Specificity::ABC specificity = selector->maxSpecificity();
+  EXPECT_EQ(specificity.a, 0u);
+  EXPECT_EQ(specificity.b, 1u);
+  EXPECT_EQ(specificity.c, 2u);
+}
+
+TEST(CSSTest, ParseSelectorReturnsNulloptForInvalidInput) {
+  EXPECT_FALSE(CSS::ParseSelector("rect > > path").has_value());
 }
 
 // ===========================================================================

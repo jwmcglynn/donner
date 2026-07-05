@@ -550,6 +550,18 @@ TEST_F(TextEditorCoreTests, InsertMultiLineTextSplitsBuffer) {
   EXPECT_EQ(editor_.buffer().getTotalLines(), 3);
 }
 
+TEST_F(TextEditorCoreTests, InsertTextAddsScrollbarMarkerOncePerLine) {
+  editor_.setText("abc");
+  editor_.setScrollbarMarkers(true);
+  editor_.changedLines() = {0};
+  editor_.setCursorPosition(Coordinates(0, 1));
+
+  editor_.insertText("X");
+
+  EXPECT_THAT(editor_.getText(), Eq("aXbc"));
+  EXPECT_THAT(editor_.changedLines(), ElementsAre(0));
+}
+
 TEST_F(TextEditorCoreTests, InsertEmptyTextWithNoSelectionIsNoOp) {
   editor_.setText("hello");
   editor_.resetTextChanged();
@@ -868,6 +880,17 @@ TEST_F(TextEditorCoreTests, RemoveLineRangeDropsInteriorMarkersAndShiftsFollowin
               ElementsAre(testing::Pair(0, "zero"), testing::Pair(1, "four")));
 }
 
+TEST_F(TextEditorCoreTests, RemoveSingleLineDropsAndShiftsScrollbarMarkers) {
+  editor_.setText("a\nb\nc\nd");
+  editor_.setScrollbarMarkers(true);
+  editor_.changedLines() = {0, 1, 3};
+
+  editor_.removeLine(1);
+
+  EXPECT_THAT(editor_.getText(), Eq("a\nc\nd"));
+  EXPECT_THAT(editor_.changedLines(), ElementsAre(0, 2));
+}
+
 TEST_F(TextEditorCoreTests, RemoveFoldsShiftsFoldsAfterDeletedFullLines) {
   editor_.setText("a\nb\nc\nd");
   editor_.foldBegin() = {Coordinates(0, 0), Coordinates(3, 0)};
@@ -1017,6 +1040,19 @@ TEST_F(TextEditorCoreTests, TabWithMultiLineSelectionIndentsAllLines) {
   editor_.setSelection(Coordinates(0, 0), Coordinates(1, 1));
   editor_.enterCharacter('\t', /*shift=*/false);
   EXPECT_THAT(editor_.getText(), Eq("  a\n  b\nc"));
+}
+
+TEST_F(TextEditorCoreTests, TabWithSelectionEndingAtColumnZeroExcludesFollowingLine) {
+  editor_.setText("a\nb\nc");
+  editor_.setInsertSpaces(true);
+  editor_.setTabSize(2);
+  editor_.setSelection(Coordinates(0, 0), Coordinates(2, 0));
+
+  editor_.enterCharacter('\t', /*shift=*/false);
+
+  EXPECT_THAT(editor_.getText(), Eq("  a\n  b\nc"));
+  EXPECT_EQ(editor_.getSelectionStart(), Coordinates(0, 0));
+  EXPECT_EQ(editor_.getSelectionEnd(), Coordinates(2, 0));
 }
 
 TEST_F(TextEditorCoreTests, ShiftTabWithMultiLineSelectionOutdents) {

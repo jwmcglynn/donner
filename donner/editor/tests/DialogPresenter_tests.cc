@@ -27,6 +27,7 @@ protected:
 
   static void RenderFrame(DialogPresenter& presenter, int* openCalls, int* saveCalls) {
     ImGui::NewFrame();
+    ImGui::Begin("##dialog_presenter_test_host", nullptr, ImGuiWindowFlags_NoSavedSettings);
     presenter.render(
         [openCalls](std::string_view, std::string* error) {
           ++*openCalls;
@@ -38,6 +39,7 @@ protected:
           *error = "save failed";
           return false;
         });
+    ImGui::End();
     ImGui::Render();
   }
 
@@ -51,6 +53,7 @@ TEST_F(DialogPresenterTest, RendersRequestedOpenSaveAndAboutDialogs) {
   presenter.requestSaveFile(std::string("/tmp/save.svg"), "previous save error");
   presenter.requestAbout();
   presenter.setOpenFileError("previous open error");
+  presenter.setSaveFileError("previous save error");
 
   int openCalls = 0;
   int saveCalls = 0;

@@ -71,6 +71,15 @@ donner_cc_library(
     visibility = ["//donner/svg:__subpackages__"],
 )
 
+donner_cc_test(
+    name = "font_metadata_tests",
+    srcs = ["tests/FontMetadata_tests.cc"],
+    deps = [
+        ":font_metadata",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_cc_library(
     name = "font_loader",
     srcs = ["FontLoader.cc"],

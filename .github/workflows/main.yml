@@ -30,10 +30,10 @@ permissions:
 # is identical to the GitHub-hosted-only workflow.
 #
 # Main CI stays GitHub-hosted so a stuck/offline self-hosted runner can never
-# hang main's required check. PR CI uses the self-hosted lane only when the
-# trusted runner gate passes; hosted runners remain the PR fallback for
-# untrusted actors, unavailable self-hosted runners, and `ci:full-test` fanout
-# runs. Other branch refs do not run build/test jobs.
+# hang main's required check. PR CI uses the self-hosted lane only for trusted
+# partial-target runs; hosted runners remain the PR fallback for untrusted
+# actors, unavailable self-hosted runners, fallback //... runs, and
+# `ci:full-test` fanout runs. Other branch refs do not run build/test jobs.
 
 jobs:
   gatekeeper:
@@ -339,7 +339,7 @@ jobs:
     # self-hosted ARM64 lane is active (see gate comment above).
     runs-on: ubuntu-24.04
     needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && (needs.determine-targets.outputs.full_test == 'true' || vars.SELFHOSTED_LINUX_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn'))) && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && (needs.determine-targets.outputs.fallback == 'true' || needs.determine-targets.outputs.full_test == 'true' || vars.SELFHOSTED_LINUX_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn'))) && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -378,6 +378,7 @@ jobs:
           bazelisk build --config=ci $TARGETS
 
       - name: Test
+        id: test
         shell: bash
         run: |
           set -euo pipefail
@@ -402,14 +403,16 @@ jobs:
             //donner/svg/renderer/tests:filter_graph_executor_tests
 
       - name: Upload Bazel test failure artifacts
-        if: failure()
+        if: failure() && steps.test.outcome == 'failure'
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
 
 
   # Operator's ARM64 Linux runs on the operator's self-hosted runner.
-  # Replaces `linux` for operator runs (extra arch coverage + homelab cache).
+  # Replaces `linux` for trusted partial-target operator runs (extra arch
+  # coverage + homelab cache). Full fallback runs stay on hosted Linux because
+  # the self-hosted lane is tuned for affected-target PR checks.
   # The NixOS host pre-provisions the toolchain (fontconfig, freetype, mesa,
   # vulkan, X11, clang-tidy) and writes bazel-cache1 over LAN gRPC, so there
   # is no apt/setup-bazel step. The runner intentionally has no host GPU
@@ -419,7 +422,7 @@ jobs:
   linux-self-hosted:
     runs-on: [self-hosted, linux, arm64]
     needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && github.event_name == 'pull_request' && needs.gatekeeper.outputs.docs_only != 'true' && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && github.event_name == 'pull_request' && needs.gatekeeper.outputs.docs_only != 'true' && needs.determine-targets.outputs.fallback != 'true' && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
     env:
       # The runner host may add the LAN Bazel cache from its home rc. Keep
       # that acceleration when it is healthy, but fall back to local execution
@@ -459,6 +462,40 @@ jobs:
             echo "${{ needs.determine-targets.outputs.affected }}" | tr ' ' '\n' > "$DIAG_DIR/target-list.txt"
           fi
           echo "target_count=$(grep -c . "$DIAG_DIR/target-list.txt")" | tee -a "$DIAG_DIR/manifest.txt"
+          cat > "$DIAG_DIR/run_bazel_with_heartbeat.sh" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          log_path="$1"
+          shift
+          started=$SECONDS
+
+          {
+            "$@" &
+            command_pid=$!
+
+            (
+              while kill -0 "$command_pid" 2>/dev/null; do
+                sleep 60
+                if kill -0 "$command_pid" 2>/dev/null; then
+                  echo "::notice::Bazel command still running for $((SECONDS - started))s"
+                fi
+              done
+            ) &
+            heartbeat_pid=$!
+
+            set +e
+            wait "$command_pid"
+            status=$?
+            set -e
+
+            kill "$heartbeat_pid" 2>/dev/null || true
+            wait "$heartbeat_pid" 2>/dev/null || true
+            exit "$status"
+          } 2>&1 | tee "$log_path"
+          exit "${PIPESTATUS[0]}"
+          EOF
+          chmod +x "$DIAG_DIR/run_bazel_with_heartbeat.sh"
 
       - name: Sync Bazel toolchain
         # NixOS injects include paths via NIX_CFLAGS_COMPILE, which Bazel does
@@ -529,15 +566,18 @@ jobs:
           else
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
-          bazelisk build --config=ci --config=latest_llvm \
+          "$DIAG_DIR/run_bazel_with_heartbeat.sh" "$DIAG_DIR/build/console.log" \
+            bazelisk build --config=ci --config=latest_llvm \
             $BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS \
             $DIAG_BUILD_FLAGS \
             --profile="$DIAG_DIR/build/profile.gz" \
             --build_event_json_file="$DIAG_DIR/build/bep.json" \
+            --nobuild_event_json_file_path_conversion \
             --execution_log_compact_file="$DIAG_DIR/build/exec.log.zst" \
             $TARGETS
 
       - name: Test
+        id: test
         shell: bash
         run: |
           set -euo pipefail
@@ -546,11 +586,13 @@ jobs:
           else
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
-          bazelisk test --config=ci --config=latest_llvm --test_output=errors \
+          "$DIAG_DIR/run_bazel_with_heartbeat.sh" "$DIAG_DIR/test/console.log" \
+            bazelisk test --config=ci --config=latest_llvm --test_output=errors \
             $BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS \
             $DIAG_TEST_FLAGS \
             --profile="$DIAG_DIR/test/profile.gz" \
             --build_event_json_file="$DIAG_DIR/test/bep.json" \
+            --nobuild_event_json_file_path_conversion \
             --execution_log_compact_file="$DIAG_DIR/test/exec.log.zst" \
             $TARGETS
 
@@ -576,7 +618,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload Bazel test failure artifacts
-        if: failure()
+        if: failure() && steps.test.outcome == 'failure'
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
@@ -585,7 +627,7 @@ jobs:
   macos:
     runs-on: macos-26
     needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && (needs.determine-targets.outputs.full_test == 'true' || vars.SELFHOSTED_MACOS_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn'))) && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && (needs.determine-targets.outputs.fallback == 'true' || needs.determine-targets.outputs.full_test == 'true' || vars.SELFHOSTED_MACOS_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn'))) && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
     env:
       # Xcode's libc++ marks std::format floating-point support as macOS 13.3+.
       # Set the CI deployment target explicitly so hosted and self-hosted macOS
@@ -629,6 +671,7 @@ jobs:
           bazelisk build --config=ci $BAZEL_MACOS_BUILD_FLAGS $TARGETS
 
       - name: Test
+        id: test
         shell: bash
         run: |
           set -euo pipefail
@@ -644,19 +687,20 @@ jobs:
         # fuzzer code re-trigger that workflow via path filter.
 
       - name: Upload Bazel test failure artifacts
-        if: failure()
+        if: failure() && steps.test.outcome == 'failure'
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
 
 
   # Operator's ARM64 macOS runs on the operator's self-hosted runner.
-  # Replaces `macos` for operator runs. The host pre-provisions Bazelisk,
-  # Homebrew llvm@19, and Xcode Command Line Tools.
+  # Replaces `macos` for trusted partial-target operator runs. Full fallback
+  # runs stay on hosted macOS. The host pre-provisions Bazelisk, Homebrew
+  # llvm@19, and Xcode Command Line Tools.
   macos-self-hosted:
     runs-on: [self-hosted, macOS, ARM64]
     needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && github.event_name == 'pull_request' && needs.gatekeeper.outputs.docs_only != 'true' && vars.SELFHOSTED_MACOS_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && github.event_name == 'pull_request' && needs.gatekeeper.outputs.docs_only != 'true' && needs.determine-targets.outputs.fallback != 'true' && vars.SELFHOSTED_MACOS_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
     env:
       # The runner host has an operator ~/.bazelrc for interactive RE/cache work.
       # The invocations below use --nohome_rc so CI matches GitHub-hosted macOS
@@ -692,6 +736,7 @@ jobs:
           bazelisk --nohome_rc build --config=ci $BAZEL_MACOS_BUILD_FLAGS $TARGETS
 
       - name: Test
+        id: test
         shell: bash
         run: |
           set -euo pipefail
@@ -707,7 +752,7 @@ jobs:
         # fuzzer code re-trigger that workflow via path filter.
 
       - name: Upload Bazel test failure artifacts
-        if: failure()
+        if: failure() && steps.test.outcome == 'failure'
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}

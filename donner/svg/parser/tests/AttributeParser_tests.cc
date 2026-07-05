@@ -6,6 +6,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <optional>
 #include <string>
 
 #include "donner/base/Length.h"
@@ -1344,6 +1345,172 @@ TEST(AttributeParserTest, ExperimentalFilterRemainingInputAndEnumBranches) {
   EXPECT_DOUBLE_EQ(specular.specularExponent, 5.0);
 }
 
+TEST(AttributeParserTest, ExperimentalFilterAdditionalVariantBranches) {
+  auto document = ParseSVGExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <filter id="f" color-interpolation-filters="linearRGB">
+          <feBlend id="blend-color-dodge" mode="color-dodge"/>
+          <feBlend id="blend-color-burn" mode="color-burn"/>
+          <feBlend id="blend-hard-light" mode="hard-light"/>
+          <feBlend id="blend-soft-light" mode="soft-light"/>
+          <feBlend id="blend-difference" mode="difference"/>
+          <feBlend id="blend-exclusion" mode="exclusion"/>
+          <feBlend id="blend-hue" mode="hue"/>
+          <feBlend id="blend-saturation" mode="saturation"/>
+          <feBlend id="blend-color" mode="color"/>
+          <feBlend id="blend-luminosity" mode="luminosity"/>
+          <feComposite id="comp-arithmetic" operator="arithmetic" k1="1" k2="2" k3="3" k4="4"/>
+          <feComposite id="comp-xor" operator="xor"/>
+          <feDropShadow id="shadow-offset" dx="7" dy="8" stdDeviation="9,10"/>
+          <feMorphology id="morph-dilate" operator="dilate" radius="3,4"/>
+          <feDisplacementMap id="disp-ba" scale="5" xChannelSelector="B" yChannelSelector="A"/>
+          <feImage id="image-href" href="image.png" preserveAspectRatio="xMidYMid meet"/>
+          <feDiffuseLighting id="diff-negative" diffuseConstant="-2" surfaceScale="6">
+            <feDistantLight id="distant" azimuth="45" elevation="30"/>
+          </feDiffuseLighting>
+          <feSpecularLighting id="spec-negative" specularConstant="-3" specularExponent="12"
+                              surfaceScale="7">
+            <fePointLight id="point" x="1" y="2" z="3"/>
+            <feSpotLight id="spot" x="4" y="5" z="6" pointsAtX="7" pointsAtY="8"
+                         pointsAtZ="9" specularExponent="10" limitingConeAngle="11"/>
+          </feSpecularLighting>
+          <feConvolveMatrix id="conv-full" order="2 4" kernelMatrix="1, 2
+3 4" divisor="5" bias="6" targetX="1" targetY="2" edgeMode="wrap" preserveAlpha="true"/>
+          <feConvolveMatrix id="conv-none" edgeMode="none"/>
+          <feConvolveMatrix id="conv-partial-kernel" kernelMatrix="1 bad"/>
+          <feTurbulence id="turb-full" baseFrequency="0.1 0.2" numOctaves="3" seed="4"
+                        type="fractalNoise" stitchTiles="stitch"/>
+          <feOffset id="offset" dx="12" dy="13"/>
+          <feMerge><feMergeNode id="merge-node" in="SourceGraphic"/></feMerge>
+        </filter>
+      </defs>
+    </svg>
+  )");
+
+  EXPECT_EQ(QueryComponent<components::FilterComponent>(document, "#f").colorInterpolationFilters,
+            ColorInterpolationFilters::LinearRGB);
+
+  using BlendMode = components::FEBlendComponent::Mode;
+  EXPECT_EQ(QueryComponent<components::FEBlendComponent>(document, "#blend-color-dodge").mode,
+            BlendMode::ColorDodge);
+  EXPECT_EQ(QueryComponent<components::FEBlendComponent>(document, "#blend-color-burn").mode,
+            BlendMode::ColorBurn);
+  EXPECT_EQ(QueryComponent<components::FEBlendComponent>(document, "#blend-hard-light").mode,
+            BlendMode::HardLight);
+  EXPECT_EQ(QueryComponent<components::FEBlendComponent>(document, "#blend-soft-light").mode,
+            BlendMode::SoftLight);
+  EXPECT_EQ(QueryComponent<components::FEBlendComponent>(document, "#blend-difference").mode,
+            BlendMode::Difference);
+  EXPECT_EQ(QueryComponent<components::FEBlendComponent>(document, "#blend-exclusion").mode,
+            BlendMode::Exclusion);
+  EXPECT_EQ(QueryComponent<components::FEBlendComponent>(document, "#blend-hue").mode,
+            BlendMode::Hue);
+  EXPECT_EQ(QueryComponent<components::FEBlendComponent>(document, "#blend-saturation").mode,
+            BlendMode::Saturation);
+  EXPECT_EQ(QueryComponent<components::FEBlendComponent>(document, "#blend-color").mode,
+            BlendMode::Color);
+  EXPECT_EQ(QueryComponent<components::FEBlendComponent>(document, "#blend-luminosity").mode,
+            BlendMode::Luminosity);
+
+  const auto& composite =
+      QueryComponent<components::FECompositeComponent>(document, "#comp-arithmetic");
+  EXPECT_EQ(composite.op, components::FECompositeComponent::Operator::Arithmetic);
+  EXPECT_DOUBLE_EQ(composite.k1, 1.0);
+  EXPECT_DOUBLE_EQ(composite.k2, 2.0);
+  EXPECT_DOUBLE_EQ(composite.k3, 3.0);
+  EXPECT_DOUBLE_EQ(composite.k4, 4.0);
+  EXPECT_EQ(QueryComponent<components::FECompositeComponent>(document, "#comp-xor").op,
+            components::FECompositeComponent::Operator::Xor);
+
+  const auto& shadow =
+      QueryComponent<components::FEDropShadowComponent>(document, "#shadow-offset");
+  EXPECT_DOUBLE_EQ(shadow.dx, 7.0);
+  EXPECT_DOUBLE_EQ(shadow.dy, 8.0);
+  EXPECT_DOUBLE_EQ(shadow.stdDeviationX, 9.0);
+  EXPECT_DOUBLE_EQ(shadow.stdDeviationY, 10.0);
+
+  const auto& morphology =
+      QueryComponent<components::FEMorphologyComponent>(document, "#morph-dilate");
+  EXPECT_EQ(morphology.op, components::FEMorphologyComponent::Operator::Dilate);
+  EXPECT_DOUBLE_EQ(morphology.radiusX, 3.0);
+  EXPECT_DOUBLE_EQ(morphology.radiusY, 4.0);
+
+  const auto& displacement =
+      QueryComponent<components::FEDisplacementMapComponent>(document, "#disp-ba");
+  EXPECT_DOUBLE_EQ(displacement.scale, 5.0);
+  EXPECT_EQ(displacement.xChannelSelector, components::FEDisplacementMapComponent::Channel::B);
+  EXPECT_EQ(displacement.yChannelSelector, components::FEDisplacementMapComponent::Channel::A);
+
+  EXPECT_EQ(QueryComponent<components::FEImageComponent>(document, "#image-href").href,
+            "image.png");
+  EXPECT_EQ(QueryComponent<components::ImageComponent>(document, "#image-href").href, "image.png");
+
+  const auto& diffuse =
+      QueryComponent<components::FEDiffuseLightingComponent>(document, "#diff-negative");
+  EXPECT_DOUBLE_EQ(diffuse.surfaceScale, 6.0);
+  EXPECT_DOUBLE_EQ(diffuse.diffuseConstant, 0.0);
+  const auto& distant = QueryComponent<components::LightSourceComponent>(document, "#distant");
+  EXPECT_DOUBLE_EQ(distant.azimuth, 45.0);
+  EXPECT_DOUBLE_EQ(distant.elevation, 30.0);
+
+  const auto& specular =
+      QueryComponent<components::FESpecularLightingComponent>(document, "#spec-negative");
+  EXPECT_DOUBLE_EQ(specular.surfaceScale, 7.0);
+  EXPECT_DOUBLE_EQ(specular.specularConstant, 0.0);
+  EXPECT_DOUBLE_EQ(specular.specularExponent, 12.0);
+  const auto& point = QueryComponent<components::LightSourceComponent>(document, "#point");
+  EXPECT_DOUBLE_EQ(point.x, 1.0);
+  EXPECT_DOUBLE_EQ(point.y, 2.0);
+  EXPECT_DOUBLE_EQ(point.z, 3.0);
+  const auto& spot = QueryComponent<components::LightSourceComponent>(document, "#spot");
+  EXPECT_DOUBLE_EQ(spot.x, 4.0);
+  EXPECT_DOUBLE_EQ(spot.y, 5.0);
+  EXPECT_DOUBLE_EQ(spot.z, 6.0);
+  EXPECT_DOUBLE_EQ(spot.pointsAtX, 7.0);
+  EXPECT_DOUBLE_EQ(spot.pointsAtY, 8.0);
+  EXPECT_DOUBLE_EQ(spot.pointsAtZ, 9.0);
+  EXPECT_DOUBLE_EQ(spot.spotExponent, 10.0);
+  EXPECT_THAT(spot.limitingConeAngle, testing::Optional(11.0));
+
+  const auto& convolve =
+      QueryComponent<components::FEConvolveMatrixComponent>(document, "#conv-full");
+  EXPECT_EQ(convolve.orderX, 2);
+  EXPECT_EQ(convolve.orderY, 4);
+  EXPECT_THAT(convolve.kernelMatrix, testing::ElementsAre(1.0, 2.0, 3.0, 4.0));
+  EXPECT_THAT(convolve.divisor, testing::Optional(5.0));
+  EXPECT_DOUBLE_EQ(convolve.bias, 6.0);
+  EXPECT_THAT(convolve.targetX, testing::Optional(1));
+  EXPECT_THAT(convolve.targetY, testing::Optional(2));
+  EXPECT_EQ(convolve.edgeMode, components::FEConvolveMatrixComponent::EdgeMode::Wrap);
+  EXPECT_TRUE(convolve.preserveAlpha);
+  EXPECT_EQ(QueryComponent<components::FEConvolveMatrixComponent>(document, "#conv-none").edgeMode,
+            components::FEConvolveMatrixComponent::EdgeMode::None);
+  EXPECT_THAT(
+      QueryComponent<components::FEConvolveMatrixComponent>(document, "#conv-partial-kernel")
+          .kernelMatrix,
+      testing::ElementsAre(1.0));
+
+  const auto& turbulence =
+      QueryComponent<components::FETurbulenceComponent>(document, "#turb-full");
+  EXPECT_DOUBLE_EQ(turbulence.baseFrequencyX, 0.1);
+  EXPECT_DOUBLE_EQ(turbulence.baseFrequencyY, 0.2);
+  EXPECT_EQ(turbulence.numOctaves, 3);
+  EXPECT_DOUBLE_EQ(turbulence.seed, 4.0);
+  EXPECT_EQ(turbulence.type, components::FETurbulenceComponent::Type::FractalNoise);
+  EXPECT_TRUE(turbulence.stitchTiles);
+
+  const auto& offset = QueryComponent<components::FEOffsetComponent>(document, "#offset");
+  EXPECT_DOUBLE_EQ(offset.dx, 12.0);
+  EXPECT_DOUBLE_EQ(offset.dy, 13.0);
+
+  const auto& mergeNode = QueryComponent<components::FEMergeNodeComponent>(document, "#merge-node");
+  ASSERT_TRUE(mergeNode.in.has_value());
+  EXPECT_TRUE(std::holds_alternative<components::FilterStandardInput>(mergeNode.in->value));
+  EXPECT_EQ(std::get<components::FilterStandardInput>(mergeNode.in->value),
+            components::FilterStandardInput::SourceGraphic);
+}
+
 TEST(AttributeParserTest, CommonInvalidAttributeBranchesWarnAndPreserveDefaults) {
   ParseWarningSink warningSink;
   SVGParser::Options options;
@@ -1388,6 +1555,116 @@ TEST(AttributeParserTest, CommonInvalidAttributeBranchesWarnAndPreserveDefaults)
   EXPECT_THAT(warningSink.warnings(),
               testing::Contains(testing::Field(&ParseDiagnostic::reason,
                                                testing::HasSubstr("Unknown attribute"))));
+}
+
+TEST(AttributeParserTest, ExperimentalFilterInvalidNumberBranchesPreserveDefaults) {
+  auto document = ParseSVGExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <filter id="f">
+        <feComposite id="comp-invalid" operator="lighter" k1="1px" k2="bad" k3="3px" k4="4px"/>
+        <feDropShadow id="shadow-invalid" dx="bad" dy="8px" stdDeviation="bad"/>
+        <feMorphology id="morph-extra" radius="1 2 3"/>
+        <feDisplacementMap id="disp-rg" scale="5px" xChannelSelector="R" yChannelSelector="G"/>
+        <feDiffuseLighting id="diff-invalid" surfaceScale="6px" diffuseConstant="bad"/>
+        <feSpecularLighting id="spec-invalid" surfaceScale="7px" specularConstant="bad"
+                            specularExponent="12px"/>
+        <feDistantLight id="distant-invalid" azimuth="45px" elevation="bad"/>
+        <fePointLight id="point-invalid" x="1px" y="bad" z="3px"/>
+        <feSpotLight id="spot-invalid" x="4px" y="bad" z="6px" pointsAtX="7px"
+                     pointsAtY="bad" pointsAtZ="9px" specularExponent="10px"
+                     limitingConeAngle="11px"/>
+        <feConvolveMatrix id="conv-invalid" order="bad" kernelMatrix=" &#10;&#13;&#9;,1 bad"
+                          divisor="bad" bias="bad" targetX="bad" targetY="bad"
+                          edgeMode="duplicate" preserveAlpha="false"/>
+        <feTurbulence id="turb-invalid" baseFrequency="0.5 bad" numOctaves="3px"
+                      seed="bad" type="turbulence" stitchTiles="noStitch"/>
+        <feOffset id="offset-invalid" dx="12px" dy="bad"/>
+        <feImage id="image-invalid" preserveAspectRatio="bad"/>
+      </filter>
+    </svg>
+  )");
+
+  const auto& composite =
+      QueryComponent<components::FECompositeComponent>(document, "#comp-invalid");
+  EXPECT_EQ(composite.op, components::FECompositeComponent::Operator::Lighter);
+  EXPECT_DOUBLE_EQ(composite.k1, 0.0);
+  EXPECT_DOUBLE_EQ(composite.k2, 0.0);
+  EXPECT_DOUBLE_EQ(composite.k3, 0.0);
+  EXPECT_DOUBLE_EQ(composite.k4, 0.0);
+
+  const auto& shadow =
+      QueryComponent<components::FEDropShadowComponent>(document, "#shadow-invalid");
+  EXPECT_DOUBLE_EQ(shadow.dx, 2.0);
+  EXPECT_DOUBLE_EQ(shadow.dy, 2.0);
+  EXPECT_DOUBLE_EQ(shadow.stdDeviationX, 2.0);
+  EXPECT_DOUBLE_EQ(shadow.stdDeviationY, 2.0);
+
+  const auto& morphology =
+      QueryComponent<components::FEMorphologyComponent>(document, "#morph-extra");
+  EXPECT_DOUBLE_EQ(morphology.radiusX, 0.0);
+  EXPECT_DOUBLE_EQ(morphology.radiusY, 0.0);
+
+  const auto& displacement =
+      QueryComponent<components::FEDisplacementMapComponent>(document, "#disp-rg");
+  EXPECT_DOUBLE_EQ(displacement.scale, 0.0);
+  EXPECT_EQ(displacement.xChannelSelector, components::FEDisplacementMapComponent::Channel::R);
+  EXPECT_EQ(displacement.yChannelSelector, components::FEDisplacementMapComponent::Channel::G);
+
+  const auto& diffuse =
+      QueryComponent<components::FEDiffuseLightingComponent>(document, "#diff-invalid");
+  EXPECT_DOUBLE_EQ(diffuse.surfaceScale, 1.0);
+  EXPECT_DOUBLE_EQ(diffuse.diffuseConstant, 1.0);
+
+  const auto& specular =
+      QueryComponent<components::FESpecularLightingComponent>(document, "#spec-invalid");
+  EXPECT_DOUBLE_EQ(specular.surfaceScale, 1.0);
+  EXPECT_DOUBLE_EQ(specular.specularConstant, 1.0);
+  EXPECT_DOUBLE_EQ(specular.specularExponent, 1.0);
+
+  const auto& distant =
+      QueryComponent<components::LightSourceComponent>(document, "#distant-invalid");
+  EXPECT_DOUBLE_EQ(distant.azimuth, 0.0);
+  EXPECT_DOUBLE_EQ(distant.elevation, 0.0);
+
+  const auto& point = QueryComponent<components::LightSourceComponent>(document, "#point-invalid");
+  EXPECT_DOUBLE_EQ(point.x, 0.0);
+  EXPECT_DOUBLE_EQ(point.y, 0.0);
+  EXPECT_DOUBLE_EQ(point.z, 0.0);
+
+  const auto& spot = QueryComponent<components::LightSourceComponent>(document, "#spot-invalid");
+  EXPECT_DOUBLE_EQ(spot.x, 0.0);
+  EXPECT_DOUBLE_EQ(spot.y, 0.0);
+  EXPECT_DOUBLE_EQ(spot.z, 0.0);
+  EXPECT_DOUBLE_EQ(spot.pointsAtX, 0.0);
+  EXPECT_DOUBLE_EQ(spot.pointsAtY, 0.0);
+  EXPECT_DOUBLE_EQ(spot.pointsAtZ, 0.0);
+  EXPECT_DOUBLE_EQ(spot.spotExponent, 1.0);
+  EXPECT_EQ(spot.limitingConeAngle, std::nullopt);
+
+  const auto& convolve =
+      QueryComponent<components::FEConvolveMatrixComponent>(document, "#conv-invalid");
+  EXPECT_EQ(convolve.orderX, 3);
+  EXPECT_EQ(convolve.orderY, 3);
+  EXPECT_THAT(convolve.kernelMatrix, testing::ElementsAre(1.0));
+  EXPECT_EQ(convolve.divisor, std::nullopt);
+  EXPECT_DOUBLE_EQ(convolve.bias, 0.0);
+  EXPECT_EQ(convolve.targetX, std::nullopt);
+  EXPECT_EQ(convolve.targetY, std::nullopt);
+  EXPECT_EQ(convolve.edgeMode, components::FEConvolveMatrixComponent::EdgeMode::Duplicate);
+  EXPECT_FALSE(convolve.preserveAlpha);
+
+  const auto& turbulence =
+      QueryComponent<components::FETurbulenceComponent>(document, "#turb-invalid");
+  EXPECT_DOUBLE_EQ(turbulence.baseFrequencyX, 0.5);
+  EXPECT_DOUBLE_EQ(turbulence.baseFrequencyY, 0.5);
+  EXPECT_EQ(turbulence.numOctaves, 1);
+  EXPECT_DOUBLE_EQ(turbulence.seed, 0.0);
+  EXPECT_EQ(turbulence.type, components::FETurbulenceComponent::Type::Turbulence);
+  EXPECT_FALSE(turbulence.stitchTiles);
+
+  const auto& offset = QueryComponent<components::FEOffsetComponent>(document, "#offset-invalid");
+  EXPECT_DOUBLE_EQ(offset.dx, 0.0);
+  EXPECT_DOUBLE_EQ(offset.dy, 0.0);
 }
 
 TEST(AttributeParserTest, TextAnchorAndPathAttributes) {

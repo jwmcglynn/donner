@@ -4,10 +4,49 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
+#include "donner/editor/ImGuiClipboard.h"
+#include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/InMemoryClipboard.h"
 
 namespace donner::editor {
+
+namespace {
+
+std::string& ImGuiClipboardStorage() {
+  static std::string storage;
+  return storage;
+}
+
+class ImGuiClipboardTests : public ::testing::Test {
+protected:
+  void SetUp() override {
+    IMGUI_CHECKVERSION();
+    imguiContext_ = ImGui::CreateContext();
+    ImGuiClipboardStorage().clear();
+
+    ImGuiPlatformIO& platformIo = ImGui::GetPlatformIO();
+    platformIo.Platform_SetClipboardTextFn = [](ImGuiContext*, const char* text) {
+      ImGuiClipboardStorage() = text != nullptr ? text : "";
+    };
+    platformIo.Platform_GetClipboardTextFn = [](ImGuiContext*) -> const char* {
+      return ImGuiClipboardStorage().c_str();
+    };
+  }
+
+  void TearDown() override {
+    if (imguiContext_ != nullptr) {
+      ImGui::DestroyContext(imguiContext_);
+      imguiContext_ = nullptr;
+    }
+  }
+
+private:
+  ImGuiContext* imguiContext_ = nullptr;
+};
+
+}  // namespace
 
 /**
  * A freshly constructed InMemoryClipboard starts empty: hasText() is
@@ -170,6 +209,34 @@ TEST(InMemoryClipboardTests, PolymorphicAccessViaUniquePtr) {
   clipboard->setText("owned");
   EXPECT_TRUE(clipboard->hasText());
   EXPECT_EQ(clipboard->getText(), "owned");
+}
+
+TEST_F(ImGuiClipboardTests, SetGetAndHasTextRoundTripThroughPlatformCallbacks) {
+  ImGuiClipboard clipboard;
+  EXPECT_FALSE(clipboard.hasText());
+  EXPECT_EQ(clipboard.getText(), "");
+
+  clipboard.setText("hello");
+  EXPECT_TRUE(clipboard.hasText());
+  EXPECT_EQ(clipboard.getText(), "hello");
+
+  const std::string padded = "prefix-value-suffix";
+  clipboard.setText(std::string_view(padded).substr(7, 5));
+  EXPECT_TRUE(clipboard.hasText());
+  EXPECT_EQ(clipboard.getText(), "value");
+
+  clipboard.setText("");
+  EXPECT_FALSE(clipboard.hasText());
+  EXPECT_EQ(clipboard.getText(), "");
+}
+
+TEST_F(ImGuiClipboardTests, NullPlatformClipboardTextIsEmpty) {
+  ImGuiPlatformIO& platformIo = ImGui::GetPlatformIO();
+  platformIo.Platform_GetClipboardTextFn = [](ImGuiContext*) -> const char* { return nullptr; };
+
+  ImGuiClipboard clipboard;
+  EXPECT_FALSE(clipboard.hasText());
+  EXPECT_EQ(clipboard.getText(), "");
 }
 
 }  // namespace donner::editor

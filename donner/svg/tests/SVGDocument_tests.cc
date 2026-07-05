@@ -163,6 +163,26 @@ TEST(SVGDocument, ApplySourceEditProjectsTextMutation) {
   EXPECT_EQ(textComponent.textChunks[0], "world");
 }
 
+TEST(SVGDocument, ApplySourceEditProjectsCDataTextMutation) {
+  auto document = ParseSVG(
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><text id="label"><![CDATA[hello]]></text></svg>)");
+  SVGElement text = document.querySelector("#label").value();
+  const std::size_t valueOffset = document.source().find("hello");
+  ASSERT_NE(valueOffset, std::string_view::npos);
+
+  xml::ApplySourceEditResult result = document.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(valueOffset), FileOffset::Offset(valueOffset + 5)},
+      .replacement = "world",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+  const auto& textComponent = text.entityHandle().get<components::TextComponent>();
+  EXPECT_EQ(textComponent.text, "world");
+  EXPECT_THAT(textComponent.textChunks, testing::ElementsAre(RcString("world")));
+}
+
 TEST(SVGDocument, TextProjectionPreservesChunkBoundariesAroundChildElements) {
   auto document = ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg">
@@ -205,6 +225,17 @@ TEST(SVGDocument, ApplySourceEditProjectsStyleMutationWithSourceMap) {
   const auto& stylesheet = style.entityHandle().get<components::StylesheetComponent>();
   EXPECT_EQ(stylesheet.stylesheet.rules().size(), 1u);
   EXPECT_TRUE(stylesheet.sourceMap.empty());
+}
+
+TEST(SVGDocument, StyleProjectionRejectsElementChildren) {
+  parser::SVGParser::Options options;
+  options.disableUserAttributes = false;
+
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  auto result = parser::SVGParser::ParseSVG(
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><style><rect/></style></svg>)", disabled, options);
+
+  EXPECT_THAT(result, ParseErrorIs(testing::HasSubstr("Unexpected <style> element contents")));
 }
 
 TEST(SVGDocument, ApplySourceEditProjectsSubtreeReplacement) {
@@ -286,6 +317,59 @@ TEST(SVGDocument, ProgrammaticInvalidAttributeSetReportsDiagnostic) {
   EXPECT_FALSE(result.applied);
   ASSERT_TRUE(result.diagnostic.has_value());
   EXPECT_THAT(result.diagnostic->reason, testing::HasSubstr("Invalid length or percentage"));
+}
+
+TEST(SVGDocument, SourceBackedSetElementTextContentUpdatesSourceAndProjection) {
+  auto document = ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><text id="label"/></svg>)");
+  SVGElement text = document.querySelector("#label").value();
+
+  xml::ApplySourceEditResult result = document.setElementTextContent(text, "hello & goodbye");
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, xml::ReparseScope::TextNode);
+  EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+  EXPECT_THAT(document.source(), testing::HasSubstr("hello &amp; goodbye"));
+  const auto& textComponent = text.entityHandle().get<components::TextComponent>();
+  EXPECT_EQ(textComponent.text, "hello & goodbye");
+  EXPECT_THAT(textComponent.textChunks, testing::ElementsAre(RcString("hello & goodbye")));
+}
+
+TEST(SVGDocument, SourceBackedSetElementTextContentWithElementChildrenStaysComponentOnly) {
+  auto document = ParseSVG(
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><text id="label"><tspan>child</tspan></text></svg>)");
+  SVGElement text = document.querySelector("#label").value();
+
+  xml::ApplySourceEditResult result = document.setElementTextContent(text, "replacement");
+
+  EXPECT_FALSE(result.applied);
+  EXPECT_EQ(result.scope, xml::ReparseScope::TextNode);
+  EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+  EXPECT_THAT(document.source(), testing::HasSubstr("<tspan>child</tspan>"));
+  EXPECT_EQ(text.entityHandle().get<components::TextComponent>().text, "");
+}
+
+TEST(SVGDocument, SourceBackedSetElementTextContentRejectsElementWithoutXmlIdentity) {
+  auto document = ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"/>)");
+  SVGRectElement detached = SVGRectElement::Create(document);
+
+  xml::ApplySourceEditResult result = document.setElementTextContent(detached, "detached");
+
+  EXPECT_FALSE(result.applied);
+  EXPECT_EQ(result.scope, xml::ReparseScope::TextNode);
+  ASSERT_TRUE(result.diagnostic.has_value());
+  EXPECT_THAT(result.diagnostic->reason, testing::HasSubstr("without XML source identity"));
+}
+
+TEST(SVGDocument, SourceLessSetElementTextContentReturnsUnappliedResult) {
+  SVGDocument document;
+  SVGRectElement rect = SVGRectElement::Create(document);
+  document.svgElement().appendChild(rect);
+
+  xml::ApplySourceEditResult result = document.setElementTextContent(rect, "source-less");
+
+  EXPECT_FALSE(result.applied);
+  EXPECT_EQ(result.scope, xml::ReparseScope::TextNode);
+  EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
 }
 
 TEST(SVGDocument, SourceBackedInsertAndRemoveElementUpdateSource) {
