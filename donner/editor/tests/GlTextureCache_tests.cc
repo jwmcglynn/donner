@@ -143,6 +143,134 @@ TEST(GlTextureCacheTest, PayloadIdentityUsesActualBitmapDimensions) {
   EXPECT_EQ(PowerOfTwoTextureDimensionsForPayload(identity.textureDimsPx), Vector2i(8, 16));
 }
 
+TEST(GlTextureCacheTest, PayloadSizeHelpersHandleEmptyAndInvalidDimensions) {
+  svg::RendererBitmap bitmap;
+  EXPECT_EQ(BitmapPayloadBytes(bitmap), 0u);
+
+  bitmap.dimensions = Vector2i(3, 2);
+  bitmap.rowBytes = 0u;
+  bitmap.pixels.resize(24u);
+  EXPECT_EQ(BitmapPayloadBytes(bitmap), 0u);
+
+  bitmap.rowBytes = 12u;
+  bitmap.dimensions = Vector2i(3, 0);
+  EXPECT_EQ(BitmapPayloadBytes(bitmap), 0u);
+
+  EXPECT_EQ(TexturePayloadBytes(Vector2i(-1, 10)), 0u);
+  EXPECT_EQ(TexturePayloadBytes(Vector2i(3, 4)), 48u);
+  EXPECT_EQ(PowerOfTwoTextureDimensionsForPayload(Vector2i((1 << 30) + 1, 3)),
+            Vector2i((1 << 30) + 1, 4));
+
+  EXPECT_EQ(TextureUvBottomRightForPayload(Vector2i(0, 1), Vector2i(2, 2)), Vector2d(1.0, 1.0));
+  EXPECT_EQ(TextureUvBottomRightForPayload(Vector2i(3, 1), Vector2i(4, 0)), Vector2d(1.0, 1.0));
+}
+
+TEST(GlTextureCacheTest, MetadataOnlyCompositedUploadTracksMissesAndViewportDiagnostics) {
+  RenderResult::CompositedPreview preview;
+  RenderResult::CompositedTile tile = MetadataTile(RenderResult::CompositedTile::Kind::Segment, 7,
+                                                   Vector2i(8, 9), Vector2i(20, 20));
+  tile.id = "seg:0";
+  tile.canvasOffsetDoc = Vector2d(1.0, 2.0);
+  tile.bitmapDimsDoc = Vector2d(3.0, 4.0);
+  tile.dragTranslationDoc = Vector2d(5.0, 6.0);
+  preview.tiles.push_back(std::move(tile));
+
+  GlTextureCache cache;
+  cache.uploadComposited(preview, RasterViewportForTest(/*viewportBounded=*/true));
+
+  EXPECT_TRUE(cache.tiles().empty());
+  EXPECT_TRUE(cache.overviewTiles().empty());
+  EXPECT_TRUE(cache.activeTilesViewportBounded());
+  EXPECT_EQ(cache.metadataOnlyMissCount(), 1);
+  EXPECT_EQ(cache.duplicateLiveTextureCount(), 0);
+  EXPECT_EQ(cache.lastCompositedUploadCost().tileCount, 1);
+  EXPECT_EQ(cache.lastCompositedUploadCost().metadataOnlyTileCount, 1);
+  EXPECT_EQ(cache.lastCompositedUploadCost().tilePixelArea, 8u * 9u);
+  EXPECT_EQ(cache.lastCompositedUploadCost().payloadBytes, 0u);
+
+  const PresentationCoverageDiagnostics coverage = cache.coverageDiagnostics();
+  EXPECT_TRUE(coverage.activeTilesViewportBounded);
+  EXPECT_FALSE(coverage.overviewInfillAvailable);
+  EXPECT_EQ(coverage.activeRasterDocumentRect, Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0));
+  EXPECT_EQ(coverage.overviewRasterDocumentRect, Box2d());
+  EXPECT_EQ(coverage.activeOutputSizePx, Vector2i(20, 20));
+  EXPECT_EQ(coverage.overviewOutputSizePx, Vector2i::Zero());
+}
+
+TEST(GlTextureCacheTest, MetadataOnlyOverviewUploadTracksMissAndRetainsViewport) {
+  RenderResult::CompositedPreview preview;
+  RenderResult::CompositedTile tile = MetadataTile(RenderResult::CompositedTile::Kind::Layer, 8,
+                                                   Vector2i(6, 7), Vector2i(100, 100));
+  tile.id = "layer:0";
+  preview.tiles.push_back(std::move(tile));
+
+  GlTextureCache cache;
+  cache.uploadCompositedOverview(preview, RasterViewportForTest(/*viewportBounded=*/false));
+
+  EXPECT_TRUE(cache.tiles().empty());
+  EXPECT_TRUE(cache.overviewTiles().empty());
+  EXPECT_FALSE(cache.activeTilesViewportBounded());
+  EXPECT_EQ(cache.metadataOnlyMissCount(), 1);
+  EXPECT_EQ(cache.lastCompositedUploadCost().tileCount, 1);
+  EXPECT_EQ(cache.lastCompositedUploadCost().metadataOnlyTileCount, 1);
+  EXPECT_EQ(cache.lastCompositedUploadCost().tilePixelArea, 6u * 7u);
+
+  const PresentationCoverageDiagnostics coverage = cache.coverageDiagnostics();
+  EXPECT_FALSE(coverage.activeTilesViewportBounded);
+  EXPECT_FALSE(coverage.overviewInfillAvailable);
+  EXPECT_EQ(coverage.activeRasterDocumentRect, Box2d());
+  EXPECT_EQ(coverage.overviewRasterDocumentRect, Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0));
+  EXPECT_EQ(coverage.activeOutputSizePx, Vector2i::Zero());
+  EXPECT_EQ(coverage.overviewOutputSizePx, Vector2i(100, 100));
+}
+
+TEST(GlTextureCacheTest, ResetCompositedClearsMetadataBookkeepingAndCost) {
+  RenderResult::CompositedPreview preview;
+  RenderResult::CompositedTile tile = MetadataTile(RenderResult::CompositedTile::Kind::Immediate, 9,
+                                                   Vector2i(4, 5), Vector2i(20, 20));
+  tile.id = "immediate:0";
+  preview.tiles.push_back(std::move(tile));
+
+  GlTextureCache cache;
+  cache.uploadComposited(preview, RasterViewportForTest(/*viewportBounded=*/true));
+  ASSERT_TRUE(cache.activeTilesViewportBounded());
+  ASSERT_EQ(cache.metadataOnlyMissCount(), 1);
+  ASSERT_EQ(cache.lastCompositedUploadCost().tileCount, 1);
+
+  cache.resetComposited();
+
+  EXPECT_TRUE(cache.tiles().empty());
+  EXPECT_TRUE(cache.overviewTiles().empty());
+  EXPECT_FALSE(cache.activeTilesViewportBounded());
+  EXPECT_EQ(cache.metadataOnlyMissCount(), 0);
+  EXPECT_EQ(cache.duplicateLiveTextureCount(), 0);
+  EXPECT_EQ(cache.lastCompositedUploadCost().tileCount, 0);
+  EXPECT_EQ(cache.lastCompositedUploadCost().tilePixelArea, 0u);
+
+  const PresentationCoverageDiagnostics coverage = cache.coverageDiagnostics();
+  EXPECT_FALSE(coverage.activeTilesViewportBounded);
+  EXPECT_FALSE(coverage.overviewInfillAvailable);
+  EXPECT_EQ(coverage.activeRasterDocumentRect, Box2d());
+  EXPECT_EQ(coverage.overviewRasterDocumentRect, Box2d());
+  EXPECT_EQ(coverage.activeOutputSizePx, Vector2i::Zero());
+  EXPECT_EQ(coverage.overviewOutputSizePx, Vector2i::Zero());
+}
+
+TEST(GlTextureCacheTest, EmptyThumbnailAndRetainOnEmptyDoNotAllocate) {
+  GlTextureCache cache;
+  svg::RendererBitmap bitmap;
+
+  const GlTextureCache::ThumbnailTextureView view = cache.uploadThumbnail(42u, bitmap);
+
+  EXPECT_EQ(view.texture, 0);
+  EXPECT_EQ(view.uvBottomRight, Vector2d(1.0, 1.0));
+  EXPECT_EQ(cache.thumbnailTextureCount(), 0u);
+
+  cache.retainThumbnailsOnly({42u});
+  EXPECT_EQ(cache.thumbnailTextureCount(), 0u);
+  EXPECT_EQ(cache.presentationResourceStats().totalTrackedBytes, 0u);
+}
+
 #ifdef DONNER_EDITOR_WGPU
 std::shared_ptr<geode::GeodeDevice> SharedGeodeDevice() {
   static const std::shared_ptr<geode::GeodeDevice> device(geode::GeodeDevice::CreateHeadless());

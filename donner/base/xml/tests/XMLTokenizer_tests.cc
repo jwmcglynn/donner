@@ -175,6 +175,20 @@ TEST(XMLTokenizer, WhitespaceAroundEquals) {
                   Tok(T::Whitespace, " "), Tok(T::TagSelfClose, "/>")));
 }
 
+TEST(XMLTokenizer, TabNewlineAndCarriageReturnWhitespaceAroundAttributeEquals) {
+  EXPECT_THAT(TokenizeWithText("<a\tb\n=\r\"c\"/>"),
+              ElementsAre(Tok(T::TagOpen, "<"), Tok(T::TagName, "a"), Tok(T::Whitespace, "\t"),
+                          Tok(T::AttributeName, "b"), Tok(T::Whitespace, "\n"),
+                          Tok(T::Whitespace, "="), Tok(T::Whitespace, "\r"),
+                          Tok(T::AttributeValue, R"("c")"), Tok(T::TagSelfClose, "/>")));
+}
+
+TEST(XMLTokenizer, NonAsciiAndPunctuationNameCharacters) {
+  EXPECT_THAT(
+      TokenizeWithText("<é.attr-1/>"),
+      ElementsAre(Tok(T::TagOpen, "<"), Tok(T::TagName, "é.attr-1"), Tok(T::TagSelfClose, "/>")));
+}
+
 // =============================================================================
 // Special node types
 // =============================================================================
@@ -205,6 +219,16 @@ TEST(XMLTokenizer, XmlDeclaration) {
 TEST(XMLTokenizer, ProcessingInstruction) {
   EXPECT_THAT(TokenizeWithText("<?php echo 1; ?>"),
               ElementsAre(Tok(T::ProcessingInstruction, "<?php echo 1; ?>")));
+}
+
+TEST(XMLTokenizer, UnterminatedSpecialMarkupUsesErrorRecovery) {
+  EXPECT_THAT(TokenizeWithText("<![CDATA[unterminated"),
+              ElementsAre(Tok(T::ErrorRecovery, "<![CDATA[unterminated")));
+  EXPECT_THAT(TokenizeWithText("<!DOCTYPE svg [ <!ENTITY a \"b\"> "),
+              ElementsAre(Tok(T::ErrorRecovery, "<!DOCTYPE svg [ <!ENTITY a \"b\"> ")));
+  EXPECT_THAT(TokenizeWithText(R"(<?xml version="1.0")"),
+              ElementsAre(Tok(T::ErrorRecovery, R"(<?xml version="1.0")")));
+  EXPECT_THAT(TokenizeWithText("<?pi no end"), ElementsAre(Tok(T::ErrorRecovery, "<?pi no end")));
 }
 
 // =============================================================================
@@ -329,6 +353,34 @@ TEST(XMLTokenizer, EntityInTextEmitsEntityRefWithoutExpanding) {
       ElementsAre(Tok(T::TextContent, "a"), Tok(T::EntityRef, "&amp;"), Tok(T::TextContent, "b"),
                   Tok(T::EntityRef, "&#x20;"), Tok(T::TextContent, "c"), Tok(T::EntityRef, "&#32;"),
                   Tok(T::TextContent, "d&notClosed")));
+}
+
+TEST(XMLTokenizer, InvalidEntityFormsRemainTextContent) {
+  EXPECT_THAT(TokenizeWithText("& &#; &#x; &1; &name"),
+              ElementsAre(Tok(T::TextContent, "& &#; &#x; &1; &name")));
+}
+
+TEST(XMLTokenizer, ClosingTagWhitespaceAndMalformedCloseRecover) {
+  EXPECT_THAT(TokenizeWithText("</a \t>"),
+              ElementsAre(Tok(T::TagOpen, "</"), Tok(T::TagName, "a"), Tok(T::Whitespace, " \t"),
+                          Tok(T::TagClose, ">")));
+
+  EXPECT_THAT(TokenizeWithText("</a attr><b/>"),
+              ElementsAre(Tok(T::TagOpen, "</"), Tok(T::TagName, "a"), Tok(T::Whitespace, " "),
+                          Tok(T::ErrorRecovery, "attr>"), Tok(T::TagOpen, "<"),
+                          Tok(T::TagName, "b"), Tok(T::TagSelfClose, "/>")));
+}
+
+TEST(XMLTokenizer, AttributeNameRecoveryAndUnclosedOpeningTag) {
+  EXPECT_THAT(TokenizeWithText(R"(<a ="x"><b/>)"),
+              ElementsAre(Tok(T::TagOpen, "<"), Tok(T::TagName, "a"), Tok(T::Whitespace, " "),
+                          Tok(T::ErrorRecovery, R"(="x">)"), Tok(T::TagOpen, "<"),
+                          Tok(T::TagName, "b"), Tok(T::TagSelfClose, "/>")));
+
+  const auto tokens = TokenizeWithText("<a attr");
+  ASSERT_FALSE(tokens.empty());
+  EXPECT_EQ(tokens.back().type, T::ErrorRecovery);
+  EXPECT_EQ(Reconstruct("<a attr"), "<a attr");
 }
 
 TEST(XMLTokenizer, RepresentativeCorpusReconstructsInputByteForByte) {

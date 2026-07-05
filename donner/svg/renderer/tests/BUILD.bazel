@@ -337,6 +337,21 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "text_engine_scripted_tests",
+    srcs = ["TextEngineScripted_tests.cc"],
+    deps = [
+        "//donner/base/xml/components",
+        "//donner/svg/components/layout:components",
+        "//donner/svg/components/style:components",
+        "//donner/svg/components/text:components",
+        "//donner/svg/text:text_backend",
+        "//donner/svg/text:text_engine",
+        "//donner/svg/text:text_layout_params",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "text_engine_helpers_tests",
     srcs = [
         "MockTextBackend.h",

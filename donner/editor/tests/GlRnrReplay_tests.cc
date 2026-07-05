@@ -164,6 +164,61 @@ std::optional<svg::RendererBitmap> RenderGroundTruth(std::string_view svgSource,
   renderer.draw(referenceApp.document().document());
   return NormalizeBitmap(renderer.takeSnapshot());
 }
+
+TEST(GlRnrReplayTest, CropModeParsingAcceptsAliasesAndRejectsUnknownValues) {
+  EXPECT_EQ(repro::ParseGlRnrReplayCropMode("full"), repro::GlRnrReplayCropMode::Full);
+  EXPECT_EQ(repro::ParseGlRnrReplayCropMode("render-pane"), repro::GlRnrReplayCropMode::RenderPane);
+  EXPECT_EQ(repro::ParseGlRnrReplayCropMode("document-canvas"),
+            repro::GlRnrReplayCropMode::DocumentCanvas);
+  EXPECT_EQ(repro::ParseGlRnrReplayCropMode("canvas"), repro::GlRnrReplayCropMode::DocumentCanvas);
+  EXPECT_EQ(repro::ParseGlRnrReplayCropMode("unknown"), std::nullopt);
+
+  EXPECT_EQ(repro::GlRnrReplayCropModeSuffix(repro::GlRnrReplayCropMode::Full), "");
+  EXPECT_EQ(repro::GlRnrReplayCropModeSuffix(repro::GlRnrReplayCropMode::RenderPane),
+            "render_pane");
+  EXPECT_EQ(repro::GlRnrReplayCropModeSuffix(repro::GlRnrReplayCropMode::DocumentCanvas), "canvas");
+}
+
+TEST(GlRnrReplayTest, RunGlRnrReplayValidatesOptionsBeforeOpeningWindow) {
+  repro::GlRnrReplayOptions options;
+  repro::GlRnrReplayResult result;
+  std::string error;
+
+  EXPECT_FALSE(repro::RunGlRnrReplay(options, nullptr, nullptr));
+
+  EXPECT_FALSE(repro::RunGlRnrReplay(options, &result, &error));
+  EXPECT_EQ(error, "rnrPath is required");
+
+  options.rnrPath = DiagnosticOutputDir() / "missing.rnr";
+  error.clear();
+  EXPECT_FALSE(repro::RunGlRnrReplay(options, &result, &error));
+  EXPECT_EQ(error, "at least one GL capture selector is required");
+
+  options.captureFrames = {1};
+  options.holdFramesBehind = -1;
+  error.clear();
+  EXPECT_FALSE(repro::RunGlRnrReplay(options, &result, &error));
+  EXPECT_EQ(error, "holdFramesBehind must be non-negative");
+
+  options.holdFramesBehind = 0;
+  options.workerRenderDelayMsForTesting = -1;
+  error.clear();
+  EXPECT_FALSE(repro::RunGlRnrReplay(options, &result, &error));
+  EXPECT_EQ(error, "workerRenderDelayMsForTesting must be non-negative");
+
+  options.workerRenderDelayMsForTesting = 0;
+  options.holdFramesBehind = 1;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::Realtime;
+  error.clear();
+  EXPECT_FALSE(repro::RunGlRnrReplay(options, &result, &error));
+  EXPECT_EQ(error, "holdFramesBehind requires HoldFramesBehind worker scheduling");
+
+  options.holdFramesBehind = 0;
+  error.clear();
+  EXPECT_FALSE(repro::RunGlRnrReplay(options, &result, &error));
+  EXPECT_NE(error.find("failed to read .rnr file"), std::string::npos);
+}
+
 constexpr std::string_view kStaticContentOnlySvg =
     "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\" height=\"120\" "
     "viewBox=\"0 0 200 120\"><rect width=\"200\" height=\"120\" "
@@ -2140,7 +2195,11 @@ TEST(GlRnrReplayTest, UsesEmbeddedSvgSourceWhenOriginalPathIsMissing) {
   options.rnrPath = reproPath;
   options.outputDir = outputDir;
   options.captureFrames.insert(0);
+  options.maxFrame = 0;
+  options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
   options.pace = false;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
+  options.contentOnlyCapture = true;
 
   repro::GlRnrReplayResult result;
   std::string error;

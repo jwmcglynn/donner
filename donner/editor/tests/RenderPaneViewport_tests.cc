@@ -2,6 +2,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <limits>
 
 #include "donner/editor/ViewportState.h"
 
@@ -488,6 +489,78 @@ TEST(ViewportStateTest, DesiredCanvasSizeHandlesZeroViewBox) {
   const Vector2i size = v.desiredCanvasSize();
   EXPECT_GE(size.x, 1);
   EXPECT_GE(size.y, 1);
+}
+
+TEST(ViewportStateTest, RasterViewportClampsTinyNegativeAndInvalidDimensions) {
+  {
+    ViewportState v;
+    v.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 0.2, 0.2);
+    v.zoom = 1.0;
+    v.devicePixelRatio = 1.0;
+
+    const EditorRasterViewport raster = v.rasterViewport();
+
+    EXPECT_EQ(raster.outputSizePx, Vector2i(1, 1));
+    EXPECT_FALSE(raster.viewportBounded);
+  }
+
+  {
+    ViewportState v;
+    v.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 100.0, 50.0);
+    v.zoom = 4.0;
+    v.devicePixelRatio = -1.0;
+
+    const EditorRasterViewport raster = v.rasterViewport();
+
+    EXPECT_EQ(raster.outputSizePx, Vector2i(1, 1));
+    EXPECT_FALSE(raster.viewportBounded);
+  }
+
+  {
+    ViewportState v;
+    v.documentViewBox = Box2d::FromXYWH(0.0, 0.0, std::numeric_limits<double>::quiet_NaN(), 10.0);
+
+    const EditorRasterViewport raster = v.rasterViewport();
+
+    EXPECT_EQ(raster.outputSizePx.x, 1);
+    EXPECT_FALSE(raster.viewportBounded);
+  }
+}
+
+TEST(ViewportStateTest, SelectedPrewarmGuardsDegenerateBoundedViewports) {
+  ViewportState bounded = MakeFreshState(Vector2d::Zero(), Vector2d(800.0, 600.0),
+                                         Box2d::FromXYWH(0.0, 0.0, 1000.0, 1000.0),
+                                         /*dpr=*/2.0);
+  bounded.zoomAround(ViewportState::kMaxZoom, Vector2d(400.0, 300.0));
+  ASSERT_TRUE(bounded.rasterViewport().viewportBounded);
+
+  ViewportState noPane = bounded;
+  noPane.paneSize = Vector2d::Zero();
+  EXPECT_EQ(noPane.selectedPrewarmRasterViewport().outputSizePx,
+            noPane.rasterViewport().outputSizePx);
+
+  ViewportState noDpr = bounded;
+  noDpr.devicePixelRatio = 0.0;
+  EXPECT_EQ(noDpr.selectedPrewarmRasterViewport().outputSizePx,
+            noDpr.rasterViewport().outputSizePx);
+
+  ViewportState noScale = bounded;
+  noScale.zoom = 0.0;
+  EXPECT_EQ(noScale.selectedPrewarmRasterViewport().outputSizePx,
+            noScale.rasterViewport().outputSizePx);
+}
+
+TEST(ViewportStateTest, OverviewInfillGuardsDegenerateDocumentAndDpr) {
+  ViewportState emptyDocument;
+  emptyDocument.documentViewBox = Box2d::FromXYWH(0.0, 0.0, -10.0, 0.0);
+  EXPECT_EQ(emptyDocument.overviewInfillRasterViewport().outputSizePx,
+            emptyDocument.rasterViewport().outputSizePx);
+
+  ViewportState invalidDpr = MakeFreshState(Vector2d::Zero(), Vector2d(800.0, 600.0),
+                                            Box2d::FromXYWH(0.0, 0.0, 100.0, 50.0),
+                                            /*dpr=*/-1.0);
+  EXPECT_EQ(invalidDpr.overviewInfillRasterViewport().outputSizePx,
+            invalidDpr.rasterViewport().outputSizePx);
 }
 
 }  // namespace

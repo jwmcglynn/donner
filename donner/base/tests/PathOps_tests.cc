@@ -149,6 +149,26 @@ Path RegionBelowLinePrefixBoundary() {
       .build();
 }
 
+Path RegionAboveReversedLineContainedBoundary() {
+  return PathBuilder()
+      .moveTo({75, 50})
+      .lineTo({25, 50})
+      .lineTo({25, 0})
+      .lineTo({75, 0})
+      .closePath()
+      .build();
+}
+
+Path RegionAboveReversedLineSuffixBoundary() {
+  return PathBuilder()
+      .moveTo({100, 50})
+      .lineTo({25, 50})
+      .lineTo({25, 0})
+      .lineTo({100, 0})
+      .closePath()
+      .build();
+}
+
 Path RegionAboveStraightQuadraticBoundary() {
   return PathBuilder()
       .moveTo({0, 50})
@@ -768,6 +788,49 @@ TEST(PathOpsTest, DifferenceRetainsPartiallySharedLineAndStraightCubicBoundarySi
   EXPECT_THAT(path, IsOutside(Vector2d(90, 75)));
 }
 
+TEST(PathOpsTest, IntersectOfOppositeDirectionContainedLineBoundaryIsEmpty) {
+  const PathBooleanResult result = Boolean(
+      PathBooleanOp::Intersect,
+      {Input(RegionBelowLineBoundary()), Input(RegionAboveReversedLineContainedBoundary())});
+
+  EXPECT_EQ(result.status, PathBooleanStatus::EmptyResult) << Diagnostics(result);
+  EXPECT_TRUE(result.paths.empty());
+}
+
+TEST(PathOpsTest, DifferenceRetainsOppositeDirectionContainedLineBoundarySide) {
+  const PathBooleanResult result = Boolean(
+      PathBooleanOp::Difference,
+      {Input(RegionBelowLineBoundary()), Input(RegionAboveReversedLineContainedBoundary())});
+
+  ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
+  ASSERT_FALSE(result.paths.empty());
+  const Path& path = result.paths.front();
+  EXPECT_TRUE(path.isInside({50, 75}));
+  EXPECT_FALSE(path.isInside({50, 25}));
+}
+
+TEST(PathOpsTest, IntersectOfOppositeDirectionOverlappingLineBoundaryIsEmpty) {
+  const PathBooleanResult result = Boolean(
+      PathBooleanOp::Intersect,
+      {Input(RegionBelowLinePrefixBoundary()), Input(RegionAboveReversedLineSuffixBoundary())});
+
+  EXPECT_EQ(result.status, PathBooleanStatus::EmptyResult) << Diagnostics(result);
+  EXPECT_TRUE(result.paths.empty());
+}
+
+TEST(PathOpsTest, DifferenceRetainsOppositeDirectionOverlappingLineBoundarySide) {
+  const PathBooleanResult result = Boolean(
+      PathBooleanOp::Difference,
+      {Input(RegionBelowLinePrefixBoundary()), Input(RegionAboveReversedLineSuffixBoundary())});
+
+  ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
+  ASSERT_FALSE(result.paths.empty());
+  const Path& path = result.paths.front();
+  EXPECT_TRUE(path.isInside({50, 75}));
+  EXPECT_FALSE(path.isInside({50, 25}));
+  EXPECT_FALSE(path.isInside({90, 75}));
+}
+
 TEST(PathOpsTest, TransformedInputsParticipateInOutputCoordinates) {
   PathBooleanInput translated = Input(RectPath(0, 0, 20, 20));
   translated.outputFromPath = Transform2d::Translate({20, 15});
@@ -1269,6 +1332,68 @@ TEST(PathOpsTest, MultiInputIntersectionRequiresEveryInput) {
   EXPECT_EQ(PathData(result), "M 20 10 L 40 10 L 40 40 L 20 40 Z");
 }
 
+TEST(PathOpsTest, RequiresAtLeastTwoInputs) {
+  const std::array<PathBooleanInput, 1> inputs = {
+      Input(RectPath(0, 0, 20, 20)),
+  };
+
+  const PathBooleanResult result = ApplyPathBoolean(PathBooleanOp::Union, inputs);
+
+  EXPECT_EQ(result.status, PathBooleanStatus::InvalidInput);
+  EXPECT_TRUE(result.paths.empty());
+  EXPECT_FALSE(result.diagnostics.empty());
+}
+
+TEST(PathOpsTest, OpenContoursAreClosedAtMoveToAndPathEnd) {
+  const Path openTriangles = PathBuilder()
+                                 .moveTo({0, 0})
+                                 .lineTo({20, 0})
+                                 .lineTo({0, 20})
+                                 .moveTo({40, 0})
+                                 .lineTo({60, 0})
+                                 .lineTo({40, 20})
+                                 .build();
+
+  const PathBooleanResult result = Boolean(
+      PathBooleanOp::Intersect, {Input(openTriangles), Input(RectPath(-10, -10, 100, 100))});
+
+  EXPECT_EQ(result.status, PathBooleanStatus::EmptyResult);
+  EXPECT_TRUE(result.paths.empty());
+  EXPECT_NE(Diagnostics(result).find("dropping"), std::string::npos);
+}
+
+TEST(PathOpsTest, MoveOnlyContoursDoNotEmitSegments) {
+  const Path path = PathBuilder()
+                        .moveTo({0, 0})
+                        .moveTo({10, 10})
+                        .lineTo({30, 10})
+                        .lineTo({10, 30})
+                        .moveTo({80, 80})
+                        .closePath()
+                        .build();
+
+  const PathBooleanResult result =
+      Boolean(PathBooleanOp::Intersect, {Input(path), Input(RectPath(0, 0, 40, 40))});
+
+  EXPECT_EQ(result.status, PathBooleanStatus::EmptyResult);
+  EXPECT_TRUE(result.paths.empty());
+  EXPECT_NE(Diagnostics(result).find("dropping"), std::string::npos);
+}
+
+TEST(PathOpsTest, RejectsMoveOnlyInputContours) {
+  const Path moveOnly = PathBuilder().moveTo({0, 0}).moveTo({10, 10}).closePath().build();
+  const std::array<PathBooleanInput, 2> inputs = {
+      Input(moveOnly),
+      Input(RectPath(0, 0, 20, 20)),
+  };
+
+  const PathBooleanResult result = ApplyPathBoolean(PathBooleanOp::Union, inputs);
+
+  EXPECT_EQ(result.status, PathBooleanStatus::InvalidInput);
+  EXPECT_TRUE(result.paths.empty());
+  EXPECT_FALSE(result.diagnostics.empty());
+}
+
 TEST(PathOpsTest, RespectsOutputCommandCap) {
   PathBooleanOptions options;
   options.maxOutputCommands = 2;
@@ -1375,6 +1500,48 @@ TEST(PathOpsTest, RejectsNonFiniteInputCoordinates) {
   EXPECT_EQ(result.status, PathBooleanStatus::InvalidInput);
   EXPECT_TRUE(result.paths.empty());
   EXPECT_FALSE(result.diagnostics.empty());
+}
+
+TEST(PathOpsTest, RejectsNonFiniteCurveCoordinates) {
+  const double inf = std::numeric_limits<double>::infinity();
+  const Path invalidQuadratic =
+      PathBuilder().moveTo({0, 0}).quadTo({10, inf}, {20, 0}).closePath().build();
+  const std::array<PathBooleanInput, 2> quadraticInputs = {
+      Input(invalidQuadratic),
+      Input(RectPath(0, 0, 20, 20)),
+  };
+  const PathBooleanResult quadraticResult = ApplyPathBoolean(PathBooleanOp::Union, quadraticInputs);
+  EXPECT_EQ(quadraticResult.status, PathBooleanStatus::InvalidInput);
+  EXPECT_TRUE(quadraticResult.paths.empty());
+  EXPECT_FALSE(quadraticResult.diagnostics.empty());
+
+  const Path invalidCubic =
+      PathBuilder().moveTo({0, 0}).curveTo({10, 0}, {15, 10}, {inf, 20}).closePath().build();
+  const std::array<PathBooleanInput, 2> cubicInputs = {
+      Input(invalidCubic),
+      Input(RectPath(0, 0, 20, 20)),
+  };
+  const PathBooleanResult cubicResult = ApplyPathBoolean(PathBooleanOp::Union, cubicInputs);
+  EXPECT_EQ(cubicResult.status, PathBooleanStatus::InvalidInput);
+  EXPECT_TRUE(cubicResult.paths.empty());
+  EXPECT_FALSE(cubicResult.diagnostics.empty());
+}
+
+TEST(PathOpsTest, InvalidGeometricToleranceUsesDefaultTolerance) {
+  for (double invalidTolerance : {0.0, -1.0, std::numeric_limits<double>::quiet_NaN(),
+                                  std::numeric_limits<double>::infinity()}) {
+    PathBooleanOptions options;
+    options.geometricTolerance = invalidTolerance;
+    const std::array<PathBooleanInput, 2> inputs = {
+        Input(RectPath(0, 0, 20, 20)),
+        Input(RectPath(10, 10, 20, 20)),
+    };
+
+    const PathBooleanResult result = ApplyPathBoolean(PathBooleanOp::Intersect, inputs, options);
+
+    ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
+    EXPECT_EQ(PathData(result), "M 10 10 L 20 10 L 20 20 L 10 20 Z");
+  }
 }
 
 TEST(PathOpsTest, DeterministicCommandOrder) {

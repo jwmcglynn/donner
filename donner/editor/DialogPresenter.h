@@ -25,6 +25,15 @@ public:
   void setSaveFileError(std::string error);
   void clearSaveFileError();
 
+  /// Whether an Open SVG modal has been requested but not yet opened by render().
+  [[nodiscard]] bool openFileModalRequested() const { return openFileModalRequested_; }
+
+  /// Whether a Save SVG modal has been requested but not yet opened by render().
+  [[nodiscard]] bool saveFileModalRequested() const { return saveFileModalRequested_; }
+
+  /// Whether the About modal has been requested but not yet opened by render().
+  [[nodiscard]] bool aboutPopupRequested() const { return openAboutPopup_; }
+
 private:
   bool openFileModalRequested_ = false;
   bool saveFileModalRequested_ = false;

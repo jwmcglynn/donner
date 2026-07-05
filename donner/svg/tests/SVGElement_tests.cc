@@ -84,6 +84,16 @@ MATCHER_P(ElementIdEq, id, "") {
   return arg.id() == id;
 }
 
+void AssignAnchorToSelf(ElementAnchor& anchor) {
+  ElementAnchor& same = anchor;
+  anchor = same;
+}
+
+void MoveAssignAnchorToSelf(ElementAnchor& anchor) {
+  ElementAnchor& same = anchor;
+  anchor = std::move(same);
+}
+
 }  // namespace
 
 TEST_F(SVGElementTests, Equality) {
@@ -108,6 +118,30 @@ TEST_F(SVGElementTests, Assign) {
   element3 = std::move(element2);
   EXPECT_EQ(element1, element3);
   EXPECT_NE(element2, element3);  // element2 should be invalid.
+}
+
+TEST_F(SVGElementTests, ElementAnchorHandlesEmptyAndSelfAssignment) {
+  ElementAnchor empty;
+  EXPECT_FALSE(empty);
+  EXPECT_FALSE(empty.valid());
+  EXPECT_EQ(empty.unsafeRegistry(), nullptr);
+  EXPECT_FALSE(empty.unsafeResolve().valid());
+
+  SVGRectElement rect = createRect();
+  ElementAnchor anchor(rect.entityHandle());
+  ASSERT_TRUE(anchor.valid());
+  const Entity entity = anchor.entity();
+  const std::uint32_t generation = anchor.generation();
+
+  AssignAnchorToSelf(anchor);
+  EXPECT_TRUE(anchor.valid());
+  EXPECT_EQ(anchor.entity(), entity);
+  EXPECT_EQ(anchor.generation(), generation);
+
+  MoveAssignAnchorToSelf(anchor);
+  EXPECT_TRUE(anchor.valid());
+  EXPECT_EQ(anchor.entity(), entity);
+  EXPECT_EQ(anchor.generation(), generation);
 }
 
 TEST_F(SVGElementTests, ScopedAccessExposesResolvedHandle) {
@@ -1053,6 +1087,30 @@ TEST_F(SVGElementTests, TraversalSkipsXmlTextNodes) {
   EXPECT_THAT(label->lastChild(), Optional(ElementIdEq("span")));
   EXPECT_THAT(span->nextSibling(), testing::Eq(std::nullopt));
   EXPECT_THAT(span->previousSibling(), testing::Eq(std::nullopt));
+}
+
+TEST_F(SVGElementTests, TraversalSkipsCommentsAndCDataNodes) {
+  auto document = parseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <!-- before -->
+      <![CDATA[ignored]]>
+      <rect id="a"/>
+      <!-- middle -->
+      <rect id="b"/>
+      <![CDATA[ignored too]]>
+    </svg>
+  )");
+
+  SVGElement root = document.svgElement();
+  ASSERT_THAT(root.firstChild(), Optional(ElementIdEq("a")));
+  ASSERT_THAT(root.lastChild(), Optional(ElementIdEq("b")));
+
+  SVGElement a = root.firstChild().value();
+  SVGElement b = root.lastChild().value();
+  ASSERT_THAT(a.nextSibling(), Optional(ElementIdEq("b")));
+  ASSERT_THAT(b.previousSibling(), Optional(ElementIdEq("a")));
+  EXPECT_THAT(a.previousSibling(), testing::Eq(std::nullopt));
+  EXPECT_THAT(b.nextSibling(), testing::Eq(std::nullopt));
 }
 
 TEST_F(SVGElementTests, IsKnownType) {

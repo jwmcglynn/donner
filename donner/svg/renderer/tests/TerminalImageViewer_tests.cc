@@ -293,12 +293,68 @@ TEST(TerminalImageViewerCapabilityDetectionTest, DetectsTrueColorFromColorterm) 
 TEST(TerminalImageViewerCapabilityDetectionTest, FallsBackTo256ColorWhenUnknown) {
   ScopedEnvVar colorTerm("COLORTERM", "");
   ScopedEnvVar termProgram("TERM_PROGRAM", "xterm");
+  ScopedEnvVar lcTerminal("LC_TERMINAL", "");
+  ScopedEnvVar forceIterm("DONNER_FORCE_ITERM_IMAGES", "");
   ScopedEnvVar term("TERM", "xterm-256color");
 
   TerminalImageViewerConfig config = TerminalImageViewer::DetectConfigFromEnvironment();
 
   EXPECT_FALSE(config.useTrueColor);
   EXPECT_FALSE(config.enableITermInlineImages);
+}
+
+TEST(TerminalImageViewerCapabilityDetectionTest, ForceItermImagesEnablesInlineAndTrueColor) {
+  ScopedEnvVar forceIterm("DONNER_FORCE_ITERM_IMAGES", "true");
+  ScopedEnvVar colorTerm("COLORTERM", "");
+  ScopedEnvVar term("TERM", "xterm-256color");
+  ScopedEnvVar termProgram("TERM_PROGRAM", "xterm");
+  ScopedEnvVar lcTerminal("LC_TERMINAL", "");
+
+  const TerminalImageViewerConfig config = TerminalImageViewer::DetectConfigFromEnvironment();
+
+  EXPECT_TRUE(config.enableITermInlineImages);
+  EXPECT_TRUE(config.useTrueColor);
+}
+
+TEST(TerminalImageViewerCapabilityDetectionTest, ForceItermImagesFalseKeepsColorDetection) {
+  ScopedEnvVar forceIterm("DONNER_FORCE_ITERM_IMAGES", "0");
+  ScopedEnvVar colorTerm("COLORTERM", "24BIT");
+  ScopedEnvVar term("TERM", "xterm-256color");
+  ScopedEnvVar termProgram("TERM_PROGRAM", "xterm");
+  ScopedEnvVar lcTerminal("LC_TERMINAL", "");
+
+  const TerminalImageViewerConfig config = TerminalImageViewer::DetectConfigFromEnvironment();
+
+  EXPECT_FALSE(config.enableITermInlineImages);
+  EXPECT_TRUE(config.useTrueColor);
+}
+
+TEST(TerminalImageViewerCapabilityDetectionTest, DetectsItermFromLcTerminalAndTermTrueColor) {
+  {
+    ScopedEnvVar forceIterm("DONNER_FORCE_ITERM_IMAGES", "");
+    ScopedEnvVar colorTerm("COLORTERM", "");
+    ScopedEnvVar term("TERM", "xterm-256color");
+    ScopedEnvVar termProgram("TERM_PROGRAM", "xterm");
+    ScopedEnvVar lcTerminal("LC_TERMINAL", "iTerm2");
+
+    const TerminalImageViewerConfig config = TerminalImageViewer::DetectConfigFromEnvironment();
+
+    EXPECT_TRUE(config.enableITermInlineImages);
+    EXPECT_TRUE(config.useTrueColor);
+  }
+
+  {
+    ScopedEnvVar forceIterm("DONNER_FORCE_ITERM_IMAGES", "");
+    ScopedEnvVar colorTerm("COLORTERM", "");
+    ScopedEnvVar term("TERM", "xterm-truecolor");
+    ScopedEnvVar termProgram("TERM_PROGRAM", "xterm");
+    ScopedEnvVar lcTerminal("LC_TERMINAL", "");
+
+    const TerminalImageViewerConfig config = TerminalImageViewer::DetectConfigFromEnvironment();
+
+    EXPECT_FALSE(config.enableITermInlineImages);
+    EXPECT_TRUE(config.useTrueColor);
+  }
 }
 
 TEST(TerminalImageViewerCapabilityDetectionTest, AutoDetectionInfluencesRenderingDefaults) {
@@ -425,6 +481,60 @@ TEST(TerminalImageViewerTest, DetectTerminalSizeFromEnv) {
   const TerminalSize size = TerminalImageViewer::DetectTerminalSize();
   EXPECT_EQ(size.columns, 123);
   EXPECT_EQ(size.rows, 45);
+}
+
+TEST(TerminalImageViewerTest, SamplingOverscaledSinglePixelRepeatsLastAvailableSample) {
+  std::vector<uint8_t> pixels;
+  pixels.reserve(4);
+  appendPixel(pixels, makeColor(0x80, 0x40, 0x20));
+  const TerminalImageView view{pixels, 1, 1, 1};
+
+  TerminalImageViewer viewer;
+  const TerminalImage sampled = viewer.sampleImage(
+      view, {.pixelMode = TerminalPixelMode::kHalfPixel, .scale = 2.0, .verticalScaleFactor = 0.5});
+
+  ASSERT_EQ(sampled.columns, 2);
+  ASSERT_EQ(sampled.rows, 1);
+  EXPECT_EQ(sampled.cellAt(0, 0).half.upper, makeColor(0x80, 0x40, 0x20));
+  EXPECT_EQ(sampled.cellAt(0, 0).half.lower, makeColor(0, 0, 0, 0));
+  EXPECT_EQ(sampled.cellAt(1, 0).half.upper, makeColor(0x80, 0x40, 0x20));
+  EXPECT_EQ(sampled.cellAt(1, 0).half.lower, makeColor(0, 0, 0, 0));
+}
+
+TEST(TerminalImageViewerTest, AutoScaleUsesTerminalBounds) {
+  ScopedEnvVar columns("COLUMNS", "2");
+  ScopedEnvVar rows("LINES", "1");
+
+  std::vector<uint8_t> pixels;
+  pixels.reserve(4 * 4 * 4);
+  for (int i = 0; i < 16; ++i) {
+    appendPixel(pixels, makeColor(static_cast<uint8_t>(0x10 + i), 0x20, 0x30));
+  }
+  const TerminalImageView view{pixels, 4, 4, 4};
+
+  TerminalImageViewer viewer;
+  const TerminalImage sampled =
+      viewer.sampleImage(view, {.pixelMode = TerminalPixelMode::kQuarterPixel, .autoScale = true});
+
+  ASSERT_EQ(sampled.columns, 2);
+  ASSERT_EQ(sampled.rows, 1);
+  EXPECT_EQ(sampled.cellAt(0, 0).quarter.topLeft, makeColor(0x10, 0x20, 0x30));
+  EXPECT_EQ(sampled.cellAt(1, 0).quarter.bottomRight, makeColor(0x17, 0x20, 0x30));
+}
+
+TEST(TerminalImageViewerRenderTest, CompositesTransparentAndPartialAlphaHalfPixels) {
+  std::vector<uint8_t> pixels;
+  pixels.reserve(1 * 2 * 4);
+  appendPixel(pixels, makeColor(0x00, 0x00, 0x00, 0x00));
+  appendPixel(pixels, makeColor(0x00, 0x00, 0x00, 0x80));
+
+  const TerminalImageView view{pixels, 1, 2, 1};
+
+  TerminalImageViewer viewer;
+  std::ostringstream stream;
+  viewer.render(view, stream, {.pixelMode = TerminalPixelMode::kHalfPixel, .scale = 1.0});
+
+  EXPECT_EQ(stream.str(), "\x1b[38;2;204;204;204m\x1b[48;2;102;102;102m▀\x1b[0m\n");
 }
 
 TEST(TerminalImageViewerRenderTest, FuzzesRandomFramesAcrossModes) {

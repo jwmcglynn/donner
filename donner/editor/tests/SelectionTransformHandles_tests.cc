@@ -1,6 +1,7 @@
 #include "donner/editor/SelectionTransformHandles.h"
 
 #include <array>
+#include <limits>
 
 #include "gtest/gtest.h"
 
@@ -72,6 +73,70 @@ TEST(SelectionTransformHandlesTest, CombinesMultiSelectionBounds) {
   const Box2d combined = CombinedSelectionBounds(bounds);
 
   EXPECT_EQ(combined, Box2d::FromXYWH(20.0, 30.0, 110.0, 120.0));
+}
+
+TEST(SelectionTransformHandlesTest, EmptyAndDegenerateInputsReturnNoIntent) {
+  const std::array<Box2d, 0> emptyBounds{};
+  EXPECT_EQ(HitTestSelectionTransformHandles(emptyBounds, Vector2d(0.0, 0.0),
+                                             /*pixelsPerDocUnit=*/1.0)
+                .kind,
+            SelectionTransformHandleKind::None);
+
+  const std::array<Box2d, 1> bounds{Box2d::FromXYWH(20.0, 30.0, 80.0, 40.0)};
+  EXPECT_EQ(HitTestSelectionTransformHandles(
+                bounds, Vector2d(std::numeric_limits<double>::infinity(), 30.0),
+                /*pixelsPerDocUnit=*/1.0)
+                .kind,
+            SelectionTransformHandleKind::None);
+  EXPECT_EQ(HitTestSelectionTransformHandles(bounds, Vector2d(20.0, 30.0),
+                                             /*pixelsPerDocUnit=*/0.0)
+                .kind,
+            SelectionTransformHandleKind::None);
+  EXPECT_EQ(HitTestSelectionTransformHandles(bounds, Vector2d(20.0, 30.0),
+                                             /*pixelsPerDocUnit=*/
+                                             std::numeric_limits<double>::quiet_NaN())
+                .kind,
+            SelectionTransformHandleKind::None);
+  const std::array<Box2d, 1> emptyBoxBounds{Box2d()};
+  EXPECT_EQ(HitTestSelectionTransformHandles(emptyBoxBounds, Vector2d(0.0, 0.0),
+                                             /*pixelsPerDocUnit=*/1.0)
+                .kind,
+            SelectionTransformHandleKind::None);
+}
+
+TEST(SelectionTransformHandlesTest, CornerHelpersCoverAllCorners) {
+  const Box2d bounds = Box2d::FromXYWH(10.0, 20.0, 30.0, 40.0);
+
+  EXPECT_EQ(SelectionTransformCornerPoint(bounds, SelectionTransformCorner::TopLeft),
+            Vector2d(10.0, 20.0));
+  EXPECT_EQ(SelectionTransformCornerPoint(bounds, SelectionTransformCorner::TopRight),
+            Vector2d(40.0, 20.0));
+  EXPECT_EQ(SelectionTransformCornerPoint(bounds, SelectionTransformCorner::BottomRight),
+            Vector2d(40.0, 60.0));
+  EXPECT_EQ(SelectionTransformCornerPoint(bounds, SelectionTransformCorner::BottomLeft),
+            Vector2d(10.0, 60.0));
+
+  EXPECT_EQ(OppositeSelectionTransformCorner(SelectionTransformCorner::TopLeft),
+            SelectionTransformCorner::BottomRight);
+  EXPECT_EQ(OppositeSelectionTransformCorner(SelectionTransformCorner::TopRight),
+            SelectionTransformCorner::BottomLeft);
+  EXPECT_EQ(OppositeSelectionTransformCorner(SelectionTransformCorner::BottomRight),
+            SelectionTransformCorner::TopLeft);
+  EXPECT_EQ(OppositeSelectionTransformCorner(SelectionTransformCorner::BottomLeft),
+            SelectionTransformCorner::TopRight);
+}
+
+TEST(SelectionTransformHandlesTest, RotateRingRejectsInsideBoundsAndOutsideOuterRadius) {
+  const std::array<Box2d, 1> bounds{Box2d::FromXYWH(20.0, 30.0, 80.0, 40.0)};
+
+  EXPECT_EQ(HitTestSelectionTransformHandles(bounds, Vector2d(50.0, 50.0),
+                                             /*pixelsPerDocUnit=*/1.0)
+                .kind,
+            SelectionTransformHandleKind::None);
+  EXPECT_EQ(HitTestSelectionTransformHandles(bounds, Vector2d(20.0, 4.0),
+                                             /*pixelsPerDocUnit=*/1.0)
+                .kind,
+            SelectionTransformHandleKind::None);
 }
 
 }  // namespace

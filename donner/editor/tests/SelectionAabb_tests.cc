@@ -66,6 +66,15 @@ TEST(SelectionAabbTest, SnapshotBoundsAllowConcurrentDom) {
   EXPECT_THAT(bounds, testing::ElementsAre(BoxFromXYWHIs(20.0, 20.0, 40.0, 40.0)));
 }
 
+TEST(SelectionAabbTest, SnapshotWorldBoundsRejectsSourcelessElements) {
+  svg::SVGDocument document;
+  const svg::SVGElement root = document.svgElement();
+  const std::vector<svg::SVGElement> selection = {root};
+
+  EXPECT_TRUE(CollectRenderableGeometry(root).empty());
+  EXPECT_TRUE(SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(selection)).empty());
+}
+
 TEST(SelectionAabbTest, SnapshotSelectionWorldBoundsMovesWithDrag) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
@@ -140,6 +149,64 @@ TEST(SelectionAabbTest, SnapshotSkipsNonRenderedContainerDescendants) {
   EXPECT_THAT(bounds, testing::ElementsAre(BoxFromXYWHIs(80.0, 80.0, 40.0, 40.0)));
 }
 
+TEST(SelectionAabbTest, SnapshotSkipsGeometryWithoutWorldBounds) {
+  constexpr std::string_view kSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+              <g id="grp">
+                <path id="empty" d=""/>
+                <rect id="visible" x="80" y="80" width="40" height="40" fill="green"/>
+              </g>
+            </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  auto group = app.document().document().querySelector("#grp");
+  ASSERT_TRUE(group.has_value());
+
+  const std::vector<svg::SVGElement> selection = {*group};
+  const std::vector<Box2d> bounds =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(selection));
+
+  ASSERT_EQ(bounds.size(), 1u);
+  EXPECT_EQ(bounds[0], Box2d::FromXYWH(80.0, 80.0, 40.0, 40.0));
+}
+
+TEST(SelectionAabbTest, CollectRenderableGeometrySkipsAllNonRenderedContainerTypes) {
+  constexpr std::string_view kSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+              <defs id="defs">
+                <rect id="defs_rect" x="1" y="1" width="2" height="2"/>
+              </defs>
+              <clipPath id="clip"><rect id="clip_rect" x="2" y="2" width="2" height="2"/></clipPath>
+              <mask id="mask"><rect id="mask_rect" x="3" y="3" width="2" height="2"/></mask>
+              <filter id="filter"><feGaussianBlur stdDeviation="1"/></filter>
+              <pattern id="pattern"><rect id="pattern_rect" x="4" y="4" width="2" height="2"/></pattern>
+              <linearGradient id="linear"><stop offset="0"/></linearGradient>
+              <radialGradient id="radial"><stop offset="1"/></radialGradient>
+              <symbol id="symbol"><rect id="symbol_rect" x="5" y="5" width="2" height="2"/></symbol>
+              <marker id="marker"><path id="marker_path" d="M0 0 L1 1"/></marker>
+              <style id="style">rect { fill: red; }</style>
+              <rect id="visible" x="80" y="80" width="40" height="40" fill="green"/>
+            </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+
+  constexpr std::string_view kContainerIds[] = {
+      "defs", "clip", "mask", "filter", "pattern", "linear", "radial", "symbol", "marker", "style",
+  };
+  for (std::string_view id : kContainerIds) {
+    auto container = app.document().document().querySelector(std::string("#") + std::string(id));
+    ASSERT_TRUE(container.has_value()) << id;
+    EXPECT_TRUE(CollectRenderableGeometry(*container).empty()) << id;
+  }
+
+  const std::vector<svg::SVGGeometryElement> geometry =
+      CollectRenderableGeometry(app.document().document().svgElement());
+  ASSERT_EQ(geometry.size(), 1u);
+  EXPECT_EQ(geometry.front().id(), "visible");
+}
+
 TEST(SelectionAabbTest, SnapshotUsesTightTransformedPathBounds) {
   constexpr std::string_view kTriangleSvg =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="-20 0 120 120">
@@ -196,6 +263,58 @@ TEST(SelectionAabbTest, SnapshotOccludingWorldBoundsIncludesOnlyLaterPaintedGeom
 
   EXPECT_THAT(bounds, testing::ElementsAre(BoxFromXYWHIs(70.0, 80.0, 10.0, 20.0),
                                            BoxFromXYWHIs(100.0, 110.0, 30.0, 40.0)));
+}
+
+TEST(SelectionAabbTest, SnapshotOccludingWorldBoundsRejectsEmptyAndMultiSelection) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  auto r1 = app.document().document().querySelector("#r1");
+  auto r2 = app.document().document().querySelector("#r2");
+  ASSERT_TRUE(r1.has_value());
+  ASSERT_TRUE(r2.has_value());
+
+  EXPECT_TRUE(SnapshotSelectionOccludingWorldBounds({}).empty());
+
+  const std::vector<svg::SVGElement> multiSelection = {*r1, *r2};
+  EXPECT_TRUE(
+      SnapshotSelectionOccludingWorldBounds(std::span<const svg::SVGElement>(multiSelection))
+          .empty());
+}
+
+TEST(SelectionAabbTest, SnapshotOccludingWorldBoundsRejectsSourcelessElements) {
+  svg::SVGDocument document;
+  const svg::SVGElement root = document.svgElement();
+  const std::vector<svg::SVGElement> selection = {root};
+
+  EXPECT_TRUE(
+      SnapshotSelectionOccludingWorldBounds(std::span<const svg::SVGElement>(selection)).empty());
+}
+
+TEST(SelectionAabbTest, RefreshSelectionBoundsCachePromotesOnlyDisplayedVersionAndClearsEmpty) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  auto rect = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(rect.has_value());
+
+  SelectionBoundsCache cache;
+  const std::vector<svg::SVGElement> selection = {*rect};
+  RefreshSelectionBoundsCache(cache, std::span<const svg::SVGElement>(selection),
+                              /*currentDocVersion=*/7, /*displayedDocVersion=*/6);
+
+  ASSERT_EQ(cache.pendingBoundsDoc.size(), 1u);
+  EXPECT_TRUE(cache.displayedBoundsDoc.empty());
+  PromoteSelectionBoundsIfReady(cache, /*displayedDocVersion=*/6);
+  EXPECT_TRUE(cache.displayedBoundsDoc.empty());
+
+  PromoteSelectionBoundsIfReady(cache, /*displayedDocVersion=*/7);
+  ASSERT_EQ(cache.displayedBoundsDoc.size(), 1u);
+  EXPECT_TRUE(cache.pendingBoundsDoc.empty());
+  EXPECT_EQ(cache.pendingVersion, 0u);
+
+  RefreshSelectionBoundsCache(cache, {}, /*currentDocVersion=*/8, /*displayedDocVersion=*/8);
+  EXPECT_TRUE(cache.lastSelection.empty());
+  EXPECT_TRUE(cache.displayedBoundsDoc.empty());
+  EXPECT_TRUE(cache.displayedOccludingBoundsDoc.empty());
 }
 
 TEST(SelectionAabbTest, SnapshotOccludingBoundsAllowConcurrentDom) {

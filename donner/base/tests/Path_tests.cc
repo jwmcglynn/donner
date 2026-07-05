@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <limits>
 #include <sstream>
 #include <vector>
 
@@ -223,6 +224,22 @@ TEST(Path, BoundsQuadPath) {
   EXPECT_NEAR(box.bottomRight.x, 100.0, 1e-9);
   EXPECT_GT(box.bottomRight.y, 0.0);
   EXPECT_LT(box.bottomRight.y, 100.0);
+}
+
+TEST(Path, BoundsCurvesAfterPreviousSegmentsUsePreviousEndpointAsStart) {
+  Path path = PathBuilder()
+                  .moveTo({2, 3})
+                  .lineTo({4, 5})
+                  .quadTo({6, 12}, {8, 5})
+                  .curveTo({10, -4}, {12, -4}, {14, 5})
+                  .closePath()
+                  .build();
+
+  Box2d box = path.bounds();
+  EXPECT_NEAR(box.topLeft.x, 2.0, 1e-9);
+  EXPECT_LT(box.topLeft.y, 0.0);
+  EXPECT_NEAR(box.bottomRight.x, 14.0, 1e-9);
+  EXPECT_GT(box.bottomRight.y, 8.0);
 }
 
 // =============================================================================
@@ -466,6 +483,25 @@ TEST(Path, FlattenFlatCurvesUseSingleLineSegments) {
   EXPECT_EQ(lineCount, 2u);
 }
 
+TEST(Path, FlattenZeroToleranceStillTerminatesDeepSubdivision) {
+  Path path = PathBuilder()
+                  .moveTo({0, 0})
+                  .quadTo({50, 100}, {100, 0})
+                  .curveTo({100, -100}, {200, -100}, {200, 0})
+                  .build();
+
+  Path result = path.flatten(0.0);
+
+  size_t lineCount = 0;
+  result.forEach([&](Path::Verb verb, std::span<const Vector2d>) {
+    if (verb == Path::Verb::LineTo) {
+      ++lineCount;
+    }
+  });
+  EXPECT_GT(lineCount, 100u);
+  EXPECT_LT(lineCount, 3000u);
+}
+
 // =============================================================================
 // pointsPerVerb
 // =============================================================================
@@ -544,6 +580,22 @@ TEST(Path, TransformedBoundsCurves) {
   Box2d transformedCubic = cubic.transformedBounds(Transform2d::Translate({7, -3}));
   ExpectNear(transformedCubic.topLeft, Vector2d(7, -3));
   ExpectNear(transformedCubic.bottomRight, Vector2d(107, 72));
+}
+
+TEST(Path, TransformedBoundsCurvesAfterPreviousSegmentsUsePreviousEndpointAsStart) {
+  Path path = PathBuilder()
+                  .moveTo({2, 3})
+                  .lineTo({4, 5})
+                  .quadTo({6, 12}, {8, 5})
+                  .curveTo({10, -4}, {12, -4}, {14, 5})
+                  .closePath()
+                  .build();
+
+  Box2d box = path.transformedBounds(Transform2d::Translate({10, -2}));
+  EXPECT_NEAR(box.topLeft.x, 12.0, 1e-9);
+  EXPECT_LT(box.topLeft.y, -2.0);
+  EXPECT_NEAR(box.bottomRight.x, 24.0, 1e-9);
+  EXPECT_GT(box.bottomRight.y, 6.0);
 }
 
 TEST(Path, TransformedBoundsUsesTightTransformedPathNotTransformedLocalAabb) {
@@ -710,6 +762,65 @@ TEST(Path, PointAtArcLengthCurveStartAndEnd) {
   ExpectNear(cubicStart.point, Vector2d(0, 0), 1e-6);
   EXPECT_TRUE(cubicEnd.valid);
   ExpectNear(cubicEnd.point, Vector2d(100, 0), 1e-6);
+}
+
+TEST(Path, PointAtArcLengthCurvesUseBinarySearchAwayFromEndpoints) {
+  Path quad = PathBuilder().moveTo({0, 0}).quadTo({50, 100}, {100, 0}).build();
+  Path::PointOnPath quadMid = quad.pointAtArcLength(quad.pathLength() * 0.5);
+  ASSERT_TRUE(quadMid.valid);
+  EXPECT_NEAR(quadMid.point.x, 50.0, 0.25);
+  EXPECT_GT(quadMid.point.y, 45.0);
+  EXPECT_LT(quadMid.point.y, 55.0);
+  EXPECT_GT(quadMid.tangent.x, 0.0);
+
+  Path cubic = PathBuilder().moveTo({0, 0}).curveTo({0, 100}, {100, 100}, {100, 0}).build();
+  Path::PointOnPath cubicMid = cubic.pointAtArcLength(cubic.pathLength() * 0.5);
+  ASSERT_TRUE(cubicMid.valid);
+  EXPECT_NEAR(cubicMid.point.x, 50.0, 0.25);
+  EXPECT_GT(cubicMid.point.y, 70.0);
+  EXPECT_LT(cubicMid.point.y, 80.0);
+  EXPECT_NEAR(cubicMid.tangent.y, 0.0, 1e-2);
+}
+
+TEST(Path, PointAtArcLengthSkipsCurvesBeforeSamplingLaterSegments) {
+  Path path = PathBuilder()
+                  .moveTo({0, 0})
+                  .quadTo({5, 0}, {10, 0})
+                  .curveTo({10.0 + 10.0 / 3.0, 0}, {10.0 + 20.0 / 3.0, 0}, {20, 0})
+                  .lineTo({30, 0})
+                  .closePath()
+                  .build();
+
+  Path::PointOnPath onCubic = path.pointAtArcLength(15.0);
+  ASSERT_TRUE(onCubic.valid);
+  ExpectNear(onCubic.point, Vector2d(15, 0), 1e-3);
+
+  Path::PointOnPath onLine = path.pointAtArcLength(25.0);
+  ASSERT_TRUE(onLine.valid);
+  ExpectNear(onLine.point, Vector2d(25, 0), 1e-6);
+
+  Path::PointOnPath onClose = path.pointAtArcLength(45.0);
+  ASSERT_TRUE(onClose.valid);
+  ExpectNear(onClose.point, Vector2d(15, 0), 1e-6);
+}
+
+TEST(Path, PointAtArcLengthAsymmetricCurvesAdjustBinarySearchBothWays) {
+  Path path = PathBuilder()
+                  .moveTo({0, 0})
+                  .curveTo({80, 180}, {-40, 20}, {100, 0})
+                  .curveTo({160, -120}, {20, -40}, {180, 0})
+                  .build();
+  const double length = path.pathLength();
+
+  Path::PointOnPath early = path.pointAtArcLength(length * 0.15);
+  Path::PointOnPath late = path.pointAtArcLength(length * 0.85);
+
+  ASSERT_TRUE(early.valid);
+  ASSERT_TRUE(late.valid);
+  EXPECT_GT(early.point.x, -1.0);
+  EXPECT_LT(early.point.x, 100.0);
+  EXPECT_GT(late.point.x, 80.0);
+  EXPECT_LT(late.point.x, 181.0);
 }
 
 // =============================================================================
@@ -881,6 +992,34 @@ TEST(Path, IsInsideTreatsPointsOnCurvesAsInside) {
   EXPECT_TRUE(cubic.isInside({50, 75}));
 }
 
+TEST(Path, IsInsideCurvedContoursCoversBothWindingDirections) {
+  Path clockwise = PathBuilder()
+                       .moveTo({0, 0})
+                       .curveTo({0, 100}, {100, 100}, {100, 0})
+                       .lineTo({0, 0})
+                       .closePath()
+                       .build();
+  Path counterClockwise = PathBuilder()
+                              .moveTo({0, 0})
+                              .lineTo({100, 0})
+                              .curveTo({100, 100}, {0, 100}, {0, 0})
+                              .closePath()
+                              .build();
+
+  EXPECT_TRUE(clockwise.isInside({50, 20}, FillRule::NonZero));
+  EXPECT_TRUE(counterClockwise.isInside({50, 20}, FillRule::NonZero));
+  EXPECT_FALSE(clockwise.isInside({50, -20}, FillRule::NonZero));
+  EXPECT_FALSE(counterClockwise.isInside({50, -20}, FillRule::NonZero));
+}
+
+TEST(Path, IsInsideUsesDownwardClosingEdgeForWinding) {
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({10, 0}).lineTo({10, 10}).closePath().build();
+
+  EXPECT_TRUE(path.isInside({8, 5}, FillRule::NonZero));
+  EXPECT_TRUE(path.isInside({8, 5}, FillRule::EvenOdd));
+  EXPECT_FALSE(path.isInside({2, 5}, FillRule::NonZero));
+}
+
 // =============================================================================
 // Path::isOnPath
 // =============================================================================
@@ -916,6 +1055,12 @@ TEST(Path, IsOnPathClosePath) {
   Path path = PathBuilder().moveTo({0, 0}).lineTo({10, 0}).lineTo({10, 10}).closePath().build();
   // Closing edge goes diagonally from (10,10) to (0,0).
   EXPECT_TRUE(path.isOnPath({5, 5}, 1.0));
+}
+
+TEST(Path, IsOnPathClosePathRejectsPointAwayFromClosingEdge) {
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({10, 0}).lineTo({10, 10}).closePath().build();
+
+  EXPECT_FALSE(path.isOnPath({8, 3}, 0.1));
 }
 
 TEST(Path, IsOnPathMoveOnlyAndDistantCurves) {
@@ -1774,6 +1919,19 @@ TEST(Path, StrokeToFillDashPathLengthScaling) {
   EXPECT_EQ(countSubpaths(filled), 3u);
 }
 
+TEST(Path, StrokeToFillDashInfinitePathLengthFallsBackToSolid) {
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({100, 0}).build();
+  StrokeStyle style;
+  style.width = 1.0;
+  style.dashArray = {10.0, 10.0};
+  style.pathLength = std::numeric_limits<double>::infinity();
+
+  Path filled = path.strokeToFill(style);
+
+  EXPECT_FALSE(filled.empty());
+  EXPECT_EQ(countSubpaths(filled), 1u);
+}
+
 TEST(Path, StrokeToFillDashAllZeroIsSolid) {
   // Per SVG, an all-zero dasharray renders as a solid stroke.
   Path path = PathBuilder().moveTo({0, 0}).lineTo({100, 0}).build();
@@ -1798,6 +1956,19 @@ TEST(Path, StrokeToFillDashZeroEntryDoesNotHang) {
   // Should produce *something*, not hang. (Whether it's one big stroke or
   // chopped up depends on the cycle handling, but it must terminate.)
   EXPECT_FALSE(filled.empty());
+}
+
+TEST(Path, StrokeToFillDashLeadingZeroEntryDoesNotHang) {
+  // {0, 10} starts on a zero-length ON entry. It should terminate without
+  // emitting a visible dash or falling back to a solid stroke.
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({100, 0}).build();
+  StrokeStyle style;
+  style.width = 1.0;
+  style.dashArray = {0.0, 10.0};
+
+  Path filled = path.strokeToFill(style);
+
+  EXPECT_TRUE(filled.empty());
 }
 
 TEST(Path, StrokeToFillDashNegativeIsSolid) {
@@ -1850,6 +2021,20 @@ TEST(Path, StrokeToFillEmptyOrNonPositiveWidthReturnsEmpty) {
 
   style.width = -1.0;
   EXPECT_TRUE(line.strokeToFill(style).empty());
+}
+
+TEST(Path, StrokeToFillMoveOnlySubpathsReturnEmpty) {
+  StrokeStyle style;
+  style.width = 2.0;
+
+  Path moveOnly = PathBuilder().moveTo({5, 5}).build();
+  EXPECT_TRUE(moveOnly.strokeToFill(style).empty());
+
+  Path closedMoveOnly = PathBuilder().moveTo({5, 5}).closePath().build();
+  EXPECT_TRUE(closedMoveOnly.strokeToFill(style).empty());
+
+  style.dashArray = {1.0, 1.0};
+  EXPECT_TRUE(closedMoveOnly.strokeToFill(style).empty());
 }
 
 TEST(Path, StrokeToFillZeroLengthSubpathCaps) {
@@ -1918,6 +2103,47 @@ TEST(Path, StrokeToFillUsesCurveBoundaryTangentsAtMixedJoins) {
   EXPECT_FALSE(filled.empty());
   EXPECT_NE(rayCastWinding(filled, {5, 0}), 0);
   EXPECT_NE(rayCastWinding(filled, {10, 5}), 0);
+}
+
+TEST(Path, StrokeToFillDegenerateCurveBoundaryTangentsFallBackToChord) {
+  Path path = PathBuilder()
+                  .moveTo({0, 0})
+                  .curveTo({0, 0}, {0, 0}, {10, 0})
+                  .quadTo({10, 0}, {10, 10})
+                  .lineTo({20, 10})
+                  .build();
+  StrokeStyle style;
+  style.width = 2.0;
+  style.join = LineJoin::Miter;
+  style.miterLimit = 4.0;
+
+  Path filled = path.strokeToFill(style);
+
+  EXPECT_FALSE(filled.empty());
+  EXPECT_NE(rayCastWinding(filled, {5, 0}), 0);
+  EXPECT_NE(rayCastWinding(filled, {10, 5}), 0);
+}
+
+TEST(Path, StrokeToFillCurveBoundaryTangentsUseAllDegenerateFallbacks) {
+  Path path = PathBuilder()
+                  .moveTo({0, 0})
+                  .curveTo({10, 0}, {10, 0}, {10, 0})
+                  .lineTo({10, 10})
+                  .curveTo({10, 10}, {15, 10}, {20, 10})
+                  .curveTo({20, 10}, {20, 10}, {20, 20})
+                  .build();
+  StrokeStyle style;
+  style.width = 2.0;
+  style.join = LineJoin::Miter;
+  style.miterLimit = 4.0;
+
+  Path filled = path.strokeToFill(style);
+
+  EXPECT_FALSE(filled.empty());
+  EXPECT_NE(rayCastWinding(filled, {5, 0}), 0);
+  EXPECT_NE(rayCastWinding(filled, {10, 5}), 0);
+  EXPECT_NE(rayCastWinding(filled, {15, 10}), 0);
+  EXPECT_NE(rayCastWinding(filled, {20, 15}), 0);
 }
 
 // =============================================================================
@@ -2083,6 +2309,11 @@ TEST(Path, VerticesArcSkipsInternalDecompositionSegments) {
 }
 
 TEST(Path, VerticesInteriorCuspsResolveBothPerpendicularBranches) {
+  Path positiveYHalfPlane = PathBuilder().moveTo({0, 0}).lineTo({0, 10}).lineTo({0, 0}).build();
+  std::vector<Path::Vertex> positiveYVerts = positiveYHalfPlane.vertices();
+  ASSERT_GE(positiveYVerts.size(), 3u);
+  ExpectNear(positiveYVerts[1].orientation, Vector2d(-1, 0));
+
   Path positiveHalfPlane = PathBuilder().moveTo({0, 0}).lineTo({10, 0}).lineTo({0, 0}).build();
   std::vector<Path::Vertex> positiveVerts = positiveHalfPlane.vertices();
   ASSERT_GE(positiveVerts.size(), 3u);
@@ -2101,6 +2332,21 @@ TEST(Path, VerticesClosedDegenerateSubpathKeepsZeroOrientation) {
 
   ASSERT_FALSE(verts.empty());
   ExpectNear(verts.front().orientation, Vector2d(0, 0));
+}
+
+TEST(Path, VerticesDegenerateCurveStartWalksForwardToNextNonZeroTangent) {
+  Path path = PathBuilder()
+                  .moveTo({0, 0})
+                  .quadTo({0, 0}, {0, 0})
+                  .curveTo({0, 0}, {0, 0}, {10, 0})
+                  .lineTo({20, 0})
+                  .build();
+
+  std::vector<Path::Vertex> verts = path.vertices();
+
+  ASSERT_GE(verts.size(), 2u);
+  ExpectNear(verts.front().point, Vector2d(0, 0));
+  ExpectNear(verts.front().orientation, Vector2d(1, 0));
 }
 
 // =============================================================================

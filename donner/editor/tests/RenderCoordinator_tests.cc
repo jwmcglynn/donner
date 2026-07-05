@@ -1,6 +1,7 @@
 #include "donner/editor/RenderCoordinator.h"
 
 #include <chrono>
+#include <limits>
 #include <thread>
 #include <vector>
 
@@ -48,6 +49,15 @@ constexpr std::string_view kHiddenRectSvg =
     R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
          <rect id="visible" x="10" y="10" width="20" height="20" fill="red"/>
          <rect id="hidden" x="50" y="50" width="20" height="20" fill="blue"
+               style="display:none"/>
+       </svg>)";
+
+constexpr std::string_view kMixedSelectionSvg =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <defs id="defs"><rect id="in-defs" x="0" y="0" width="10" height="10"/></defs>
+         <rect id="visible1" x="10" y="10" width="20" height="20" fill="red"/>
+         <rect id="visible2" x="40" y="10" width="20" height="20" fill="green"/>
+         <rect id="hidden" x="70" y="10" width="20" height="20" fill="blue"
                style="display:none"/>
        </svg>)";
 
@@ -147,6 +157,9 @@ TEST(RenderCoordinatorPolicyTest, ReleaseSettleWaitsForQueuedTransformFlush) {
       << "Mouse-up can queue the final transform while the renderer is busy. A stale in-flight "
          "render at the already-flushed version must not close the settle window before that "
          "queued transform is flushed.";
+  EXPECT_EQ(PostReleaseSettleTargetVersion(std::numeric_limits<std::uint64_t>::max(),
+                                           /*hasPendingMutations=*/true),
+            std::numeric_limits<std::uint64_t>::max());
 }
 
 TEST(RenderCoordinatorPolicyTest, PendingSelectedLayerRasterizationBypassesViewportDefer) {
@@ -163,6 +176,35 @@ TEST(RenderCoordinatorPolicyTest, PendingSelectedLayerRasterizationBypassesViewp
       << "A style/fill edit marks the selected layer pixels stale; the coordinator must request "
          "the forced layer rasterization immediately instead of deferring forever on an unsettled "
          "viewport.";
+}
+
+TEST(RenderCoordinatorPolicyTest, SelectedViewportRefreshDeferRequiresEveryPredicate) {
+  const Entity selectedEntity = static_cast<Entity>(7);
+
+  EXPECT_FALSE(ShouldDeferSelectedViewportRefresh(
+      entt::null, /*hasActiveDrag=*/false, /*currentVersion=*/8, /*displayedDocVersion=*/8,
+      /*hasCachedSelectedTexture=*/true, /*rasterViewportSettled=*/false,
+      /*needsOverviewInfill=*/false, /*pendingSelectedLayerRasterization=*/false));
+  EXPECT_FALSE(ShouldDeferSelectedViewportRefresh(
+      selectedEntity, /*hasActiveDrag=*/true, /*currentVersion=*/8, /*displayedDocVersion=*/8,
+      /*hasCachedSelectedTexture=*/true, /*rasterViewportSettled=*/false,
+      /*needsOverviewInfill=*/false, /*pendingSelectedLayerRasterization=*/false));
+  EXPECT_FALSE(ShouldDeferSelectedViewportRefresh(
+      selectedEntity, /*hasActiveDrag=*/false, /*currentVersion=*/9, /*displayedDocVersion=*/8,
+      /*hasCachedSelectedTexture=*/true, /*rasterViewportSettled=*/false,
+      /*needsOverviewInfill=*/false, /*pendingSelectedLayerRasterization=*/false));
+  EXPECT_FALSE(ShouldDeferSelectedViewportRefresh(
+      selectedEntity, /*hasActiveDrag=*/false, /*currentVersion=*/8, /*displayedDocVersion=*/8,
+      /*hasCachedSelectedTexture=*/false, /*rasterViewportSettled=*/false,
+      /*needsOverviewInfill=*/false, /*pendingSelectedLayerRasterization=*/false));
+  EXPECT_FALSE(ShouldDeferSelectedViewportRefresh(
+      selectedEntity, /*hasActiveDrag=*/false, /*currentVersion=*/8, /*displayedDocVersion=*/8,
+      /*hasCachedSelectedTexture=*/true, /*rasterViewportSettled=*/true,
+      /*needsOverviewInfill=*/false, /*pendingSelectedLayerRasterization=*/false));
+  EXPECT_FALSE(ShouldDeferSelectedViewportRefresh(
+      selectedEntity, /*hasActiveDrag=*/false, /*currentVersion=*/8, /*displayedDocVersion=*/8,
+      /*hasCachedSelectedTexture=*/true, /*rasterViewportSettled=*/false,
+      /*needsOverviewInfill=*/true, /*pendingSelectedLayerRasterization=*/false));
 }
 
 TEST(RenderCoordinatorPolicyTest, OnlyForcedSelectedResultClearsPendingLayerRasterization) {
@@ -189,6 +231,30 @@ TEST(RenderCoordinatorPolicyTest, OnlyForcedSelectedResultClearsPendingLayerRast
   forcedSelectionPreview.entity = static_cast<Entity>(8);
   EXPECT_FALSE(ShouldClearPendingSelectedLayerRasterization(
       forcedSelectionPreview, selectedEntity, /*resultVersion=*/8, /*pendingVersion=*/8));
+}
+
+TEST(RenderCoordinatorPolicyTest, PendingSelectedLayerClearRequiresEntityPreviewAndVersion) {
+  const Entity selectedEntity = static_cast<Entity>(7);
+
+  RenderRequest::DragPreview forcedPreview;
+  forcedPreview.entity = selectedEntity;
+  forcedPreview.forceLayerRasterization = true;
+
+  EXPECT_FALSE(ShouldClearPendingSelectedLayerRasterization(
+      forcedPreview, entt::null, /*resultVersion=*/8, /*pendingVersion=*/8));
+  EXPECT_FALSE(ShouldClearPendingSelectedLayerRasterization(
+      forcedPreview, selectedEntity, /*resultVersion=*/7, /*pendingVersion=*/8));
+  EXPECT_FALSE(ShouldClearPendingSelectedLayerRasterization(
+      std::nullopt, selectedEntity, /*resultVersion=*/8, /*pendingVersion=*/8));
+
+  forcedPreview.entity = static_cast<Entity>(8);
+  EXPECT_FALSE(ShouldClearPendingSelectedLayerRasterization(
+      forcedPreview, selectedEntity, /*resultVersion=*/8, /*pendingVersion=*/8));
+
+  forcedPreview.entity = selectedEntity;
+  forcedPreview.forceLayerRasterization = false;
+  EXPECT_FALSE(ShouldClearPendingSelectedLayerRasterization(
+      forcedPreview, selectedEntity, /*resultVersion=*/8, /*pendingVersion=*/8));
 }
 
 TEST(RenderCoordinatorPolicyTest, RepresentedDragPreviewFollowsActiveTargetWhenPresentable) {
@@ -237,6 +303,21 @@ TEST(RenderCoordinatorPolicyTest, RepresentedDragPreviewFallsBackForMismatchedDi
   EXPECT_EQ(represented->dragGeneration, active.dragGeneration);
 }
 
+TEST(RenderCoordinatorPolicyTest, RepresentedDragPreviewFallsBackForGenerationMismatch) {
+  const SelectTool::ActiveDragPreview active =
+      DragPreview(static_cast<Entity>(42), 7, Vector2d(5.0, 2.0));
+  const SelectTool::ActiveDragPreview staleDisplayed =
+      DragPreview(static_cast<Entity>(42), 6, Vector2d(1.0, 1.0));
+
+  const std::optional<SelectTool::ActiveDragPreview> represented =
+      OverlayRepresentedDragPreviewForPresentation(active, staleDisplayed,
+                                                   /*hasPresentableActiveDragTarget=*/false);
+  ASSERT_TRUE(represented.has_value());
+  EXPECT_EQ(represented->entity, active.entity);
+  EXPECT_EQ(represented->translation, Vector2d::Zero());
+  EXPECT_EQ(represented->dragGeneration, active.dragGeneration);
+}
+
 TEST(RenderCoordinatorPolicyTest, RepresentedDocumentTransformRequiresMatchingInvertibleDrag) {
   const SelectTool::ActiveDragPreview live = DragPreview(
       static_cast<Entity>(42), 7, Vector2d(10.0, 0.0), Transform2d::Translate(Vector2d(10.0, 0.0)));
@@ -277,6 +358,28 @@ TEST(RenderCoordinatorPolicyTest, GesturePreviewProjectsOntoRepresentedDragState
   ASSERT_TRUE(projected.has_value());
   EXPECT_EQ(projected->currentDocumentDelta, represented.translation);
   EXPECT_FALSE(projected->documentFromStartDocument.isIdentity());
+}
+
+TEST(RenderCoordinatorPolicyTest, GesturePreviewKeepsLiveDeltaForUnmatchedRepresentedDrag) {
+  SelectTool::ActiveGesturePreview gesture;
+  gesture.kind = SelectTool::ActiveGestureKind::Move;
+  gesture.startBoundsDoc = Box2d::FromXYWH(10.0, 10.0, 20.0, 20.0);
+  gesture.documentFromStartDocument = Transform2d::Translate(Vector2d(10.0, 0.0));
+  gesture.currentDocumentDelta = Vector2d(10.0, 0.0);
+
+  const SelectTool::ActiveDragPreview live = DragPreview(
+      static_cast<Entity>(42), 7, Vector2d(10.0, 0.0), Transform2d::Translate(Vector2d(10.0, 0.0)));
+  const SelectTool::ActiveDragPreview represented = DragPreview(
+      static_cast<Entity>(43), 7, Vector2d(3.0, 0.0), Transform2d::Translate(Vector2d(3.0, 0.0)));
+
+  const std::optional<SelectTool::ActiveGesturePreview> projected =
+      OverlayGesturePreviewForPresentation(gesture, live, represented);
+  ASSERT_TRUE(projected.has_value());
+  EXPECT_EQ(projected->currentDocumentDelta, gesture.currentDocumentDelta);
+  EXPECT_EQ(projected->documentFromStartDocument.data[4],
+            gesture.documentFromStartDocument.data[4]);
+  EXPECT_EQ(projected->documentFromStartDocument.data[5],
+            gesture.documentFromStartDocument.data[5]);
 }
 
 // ---------------------------------------------------------------------------
@@ -341,6 +444,24 @@ TEST(RenderCoordinatorTest, SelectedElementIsDisplayNoneFalseForNonGraphicsSelec
   // display:none graphics selection.
   app.setSelection(QuerySelector(app, "#d1"));
   EXPECT_FALSE(coordinator.selectedElementIsDisplayNone(app));
+}
+
+TEST(RenderCoordinatorTest, SelectedCompositedEntityDiagnosticsSkipsDisplayNoneAndNonGraphics) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kMixedSelectionSvg));
+  RenderCoordinator coordinator;
+
+  const svg::SVGElement visible1 = QuerySelector(app, "#visible1");
+  const svg::SVGElement visible2 = QuerySelector(app, "#visible2");
+  const svg::SVGElement hidden = QuerySelector(app, "#hidden");
+  const svg::SVGElement defs = QuerySelector(app, "#defs");
+  const Entity visible1Entity = visible1.unsafeEntityHandle().entity();
+
+  app.setSelection(hidden);
+  EXPECT_EQ(coordinator.selectedCompositedEntityForDiagnostics(app), kNullEntity);
+
+  app.setSelection({visible1, visible2, visible1, hidden, defs});
+  EXPECT_EQ(coordinator.selectedCompositedEntityForDiagnostics(app), visible1Entity);
 }
 
 // ---------------------------------------------------------------------------
@@ -589,6 +710,80 @@ TEST(RenderCoordinatorTest, RasterizeOverlayWithEmptySelectionIsAccepted) {
   // pending against the undisplayed version.
   EXPECT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport,
                                                               /*marqueeRectDoc=*/std::nullopt));
+}
+
+TEST(RenderCoordinatorTest, RasterizeOverlayTracksTransientChromeAndDegenerateScale) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  RenderCoordinator coordinator;
+  ViewportState viewport = MakeViewport(app);
+  viewport.devicePixelRatio = 0.0;
+
+  const svg::SVGElement r1 = QuerySelector(app, "#r1");
+  const svg::SVGElement r2 = QuerySelector(app, "#r2");
+  app.setSelection(r1);
+  ASSERT_TRUE(coordinator.setSourceHoverElements({r2}));
+  coordinator.setLockedRejectionFlash(SelectTool::LockedRejectionFlash{
+      .element = r2,
+      .intensity = 0.5f,
+  });
+  coordinator.setPenHoverChrome(
+      PathBuilder().moveTo(Vector2d(10.0, 10.0)).lineTo(Vector2d(20.0, 20.0)).build(),
+      Vector2d(12.0, 12.0));
+
+  const Entity entity = r1.unsafeEntityHandle().entity();
+  const SelectTool::ActiveDragPreview represented =
+      DragPreview(entity, 3, Vector2d(2.0, 3.0), Transform2d::Translate(Vector2d(2.0, 3.0)));
+  const SelectTool::ActiveDragPreview live =
+      DragPreview(entity, 3, Vector2d(5.0, 7.0), Transform2d::Translate(Vector2d(5.0, 7.0)));
+
+  EXPECT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(
+      app, viewport, Box2d::FromXYWH(0.0, 0.0, 15.0, 15.0), represented, std::nullopt,
+      SelectionChromeDetail::CombinedBoundsOnly, live));
+
+  const FrameCostBreakdown::Overlay& overlay = coordinator.lastFrameCostBreakdown().overlay;
+  EXPECT_EQ(overlay.canvasSize, Vector2i(1, 1));
+  EXPECT_EQ(overlay.selectedElementCount, 1);
+  EXPECT_EQ(overlay.sourceHoverElementCount, 1);
+  EXPECT_TRUE(overlay.selectionBoundsOnly);
+  EXPECT_TRUE(overlay.hasLiveDragPreview);
+  EXPECT_TRUE(overlay.hasRepresentedDragPreview);
+  EXPECT_EQ(overlay.liveDragTranslationDoc, Vector2d(5.0, 7.0));
+  EXPECT_EQ(overlay.representedDragTranslationDoc, Vector2d(2.0, 3.0));
+  EXPECT_EQ(overlay.payloadBytes, 4u);
+  EXPECT_TRUE(overlay.hasMarquee);
+  EXPECT_TRUE(coordinator.hasLockedRejectionFlash());
+  ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
+  EXPECT_TRUE(coordinator.immediateOverlaySnapshot()->penPreviewSegmentDoc.has_value());
+  EXPECT_TRUE(coordinator.immediateOverlaySnapshot()->penCloseAffordanceDoc.has_value());
+
+  coordinator.setLockedRejectionFlash(SelectTool::LockedRejectionFlash{
+      .element = r2,
+      .intensity = 0.0f,
+  });
+  EXPECT_FALSE(coordinator.hasLockedRejectionFlash());
+}
+
+TEST(RenderCoordinatorTest, RasterizeOverlayForPresentationRejectsInvalidInputsBeforeGl) {
+  EditorApp app;
+  RenderCoordinator coordinator;
+  SelectTool selectTool;
+  GlTextureCache textures;
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(100.0, 100.0);
+
+  EXPECT_FALSE(coordinator.rasterizeOverlayForPresentation(app, selectTool, viewport, textures,
+                                                           std::nullopt, std::nullopt));
+
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  viewport = MakeViewport(app);
+  viewport.paneSize = Vector2d(0.0, 100.0);
+  EXPECT_FALSE(coordinator.rasterizeOverlayForPresentation(app, selectTool, viewport, textures,
+                                                           std::nullopt, std::nullopt));
+
+  viewport.paneSize = Vector2d(100.0, -1.0);
+  EXPECT_FALSE(coordinator.rasterizeOverlayForPresentation(app, selectTool, viewport, textures,
+                                                           std::nullopt, std::nullopt));
 }
 
 // ---------------------------------------------------------------------------

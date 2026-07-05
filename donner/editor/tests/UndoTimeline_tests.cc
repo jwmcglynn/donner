@@ -176,6 +176,36 @@ TEST(UndoTimelineTest, TransactionBeginCommitAppendsEntry) {
   EXPECT_EQ(timeline.entryCount(), 1u);
 }
 
+TEST(UndoTimelineTest, NestedTransactionKeepsOutermostEntry) {
+  auto doc = ParseOrDie();
+  auto rect = FirstRect(doc);
+
+  UndoTimeline timeline;
+  timeline.beginTransaction("Outer", UndoSnapshot{.element = rect, .transform = Transform2d()});
+  timeline.beginTransaction(
+      "Inner",
+      UndoSnapshot{.element = rect, .transform = Transform2d::Translate(Vector2d(5.0, 0.0))});
+
+  timeline.commitTransaction(
+      UndoSnapshot{.element = rect, .transform = Transform2d::Translate(Vector2d(10.0, 0.0))});
+
+  ASSERT_TRUE(timeline.nextUndoLabel().has_value());
+  EXPECT_EQ(*timeline.nextUndoLabel(), "Outer");
+  EXPECT_EQ(timeline.entryCount(), 1u);
+}
+
+TEST(UndoTimelineTest, CommitWithoutTransactionIsNoOp) {
+  auto doc = ParseOrDie();
+  auto rect = FirstRect(doc);
+
+  UndoTimeline timeline;
+  timeline.commitTransaction(UndoSnapshot{.element = rect, .transform = Transform2d()});
+
+  EXPECT_FALSE(timeline.inTransaction());
+  EXPECT_EQ(timeline.entryCount(), 0u);
+  EXPECT_FALSE(timeline.canUndo());
+}
+
 TEST(UndoTimelineTest, AbortTransactionLeavesNoEntry) {
   auto doc = ParseOrDie();
   auto rect = FirstRect(doc);
@@ -188,6 +218,27 @@ TEST(UndoTimelineTest, AbortTransactionLeavesNoEntry) {
   EXPECT_FALSE(timeline.inTransaction());
   EXPECT_EQ(timeline.entryCount(), 0u);
   EXPECT_FALSE(timeline.canUndo());
+}
+
+TEST(UndoTimelineTest, NextUndoLabelTracksUndoChainCursor) {
+  auto doc = ParseOrDie();
+  auto rect = FirstRect(doc);
+
+  UndoTimeline timeline;
+  timeline.record(
+      "A", UndoSnapshot{.element = rect, .transform = Transform2d()},
+      UndoSnapshot{.element = rect, .transform = Transform2d::Translate(Vector2d(1.0, 0.0))});
+  timeline.record(
+      "B", UndoSnapshot{.element = rect, .transform = Transform2d::Translate(Vector2d(1.0, 0.0))},
+      UndoSnapshot{.element = rect, .transform = Transform2d::Translate(Vector2d(2.0, 0.0))});
+
+  ASSERT_TRUE(timeline.nextUndoLabel().has_value());
+  EXPECT_EQ(*timeline.nextUndoLabel(), "B");
+  ASSERT_TRUE(timeline.undo().has_value());
+  ASSERT_TRUE(timeline.nextUndoLabel().has_value());
+  EXPECT_EQ(*timeline.nextUndoLabel(), "A");
+  ASSERT_TRUE(timeline.undo().has_value());
+  EXPECT_FALSE(timeline.nextUndoLabel().has_value());
 }
 
 TEST(UndoTimelineTest, ClearResetsEverything) {

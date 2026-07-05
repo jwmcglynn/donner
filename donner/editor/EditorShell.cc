@@ -1425,6 +1425,110 @@ void EditorShell::updateWindowTitle() {
   }
 }
 
+void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
+  if (menuActions.openAbout) {
+    dialogPresenter_.requestAbout();
+  }
+  if (menuActions.openFile) {
+    dialogPresenter_.requestOpenFile(app_.currentFilePath());
+  }
+  if (menuActions.saveFile) {
+    requestSave();
+  }
+  if (menuActions.saveFileAs) {
+    requestSaveAs();
+  }
+  if (menuActions.exportViewportSvg) {
+    requestExportViewportSvg(/*includeOverlay=*/false);
+  }
+  if (menuActions.exportViewportSvgWithOverlay) {
+    requestExportViewportSvg(/*includeOverlay=*/true);
+  }
+  if (menuActions.revertFile) {
+    requestRevert();
+  }
+  if (menuActions.quit) {
+    glfwSetWindowShouldClose(window_.rawHandle(), GLFW_TRUE);
+  }
+  if (menuActions.undo && app_.canUndo()) {
+    app_.undo();
+  }
+  if (menuActions.redo && app_.canRedo()) {
+    app_.redo();
+  }
+  const bool sourcePaneFocusedForMenu = sourcePaneVisible_ && textEditor_.isFocused();
+  if (menuActions.cut) {
+    if (sourcePaneFocusedForMenu) {
+      textEditor_.cut();
+    } else {
+      cutSelectedShapesToClipboard();
+    }
+  }
+  if (menuActions.copy) {
+    if (sourcePaneFocusedForMenu) {
+      textEditor_.copy();
+    } else {
+      copySelectedShapesToClipboard();
+    }
+  }
+  if (menuActions.paste) {
+    if (sourcePaneFocusedForMenu) {
+      textEditor_.paste();
+    } else {
+      pasteShapesFromClipboard(/*inFront=*/false);
+    }
+  }
+  if (menuActions.pasteInFront) {
+    pasteShapesFromClipboard(/*inFront=*/true);
+  }
+  if (menuActions.convertTextToOutlines) {
+    convertSelectedTextToOutlines();
+  }
+  if (menuActions.selectAll) {
+    textEditor_.selectAll();
+  }
+  if (menuActions.selectAllCanvas) {
+    // Same canonical canvas Select-All path as the Cmd+A shortcut.
+    selectAllCanvasElements();
+  }
+  if (menuActions.deselectAll) {
+    // Source/XML pane focused: collapse the text selection to the caret, mirroring the
+    // focus-aware Cmd+Shift+A shortcut.
+    textEditor_.clearSelection();
+  }
+  if (menuActions.deselectAllCanvas) {
+    // Same canonical clear path as the Cmd+Shift+A shortcut and Escape.
+    app_.clearSelection();
+  }
+  if (menuActions.zoomIn) {
+    if (interactionController_.applyZoom(kKeyboardZoomStep,
+                                         interactionController_.viewport().paneCenter())) {
+      requestRenderAtEndOfFrame_ = true;
+    }
+  }
+  if (menuActions.zoomOut) {
+    if (interactionController_.applyZoom(1.0 / kKeyboardZoomStep,
+                                         interactionController_.viewport().paneCenter())) {
+      requestRenderAtEndOfFrame_ = true;
+    }
+  }
+  if (menuActions.actualSize) {
+    if (interactionController_.resetToActualSize()) {
+      requestRenderAtEndOfFrame_ = true;
+    }
+  }
+  if (menuActions.toggleSourceFocusMode) {
+    toggleSourceFocusMode();
+  }
+  const bool showCompositorDebugPanelBeforeMenu = showCompositorDebugPanel_;
+  const bool showPerfOverlayBeforeMenu = showPerfOverlay_;
+  ApplyViewMenuToggleActions(menuActions, &showCompositorDebugPanel_, &showPerfOverlay_);
+  if (showCompositorDebugPanel_ != showCompositorDebugPanelBeforeMenu ||
+      showPerfOverlay_ != showPerfOverlayBeforeMenu) {
+    window_.wakeEventLoop();
+  }
+}
+
 void EditorShell::handleGlobalShortcuts() {
   const bool anyPopupOpen = ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
   const bool cmd = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
@@ -3999,107 +4103,7 @@ void EditorShell::runFrame() {
       .showPerfOverlay = showPerfOverlay_,
   };
   const MenuBarActions menuActions = menuBarPresenter_.render(menuState, uiFontBold_);
-  if (menuActions.openAbout) {
-    dialogPresenter_.requestAbout();
-  }
-  if (menuActions.openFile) {
-    dialogPresenter_.requestOpenFile(app_.currentFilePath());
-  }
-  if (menuActions.saveFile) {
-    requestSave();
-  }
-  if (menuActions.saveFileAs) {
-    requestSaveAs();
-  }
-  if (menuActions.exportViewportSvg) {
-    requestExportViewportSvg(/*includeOverlay=*/false);
-  }
-  if (menuActions.exportViewportSvgWithOverlay) {
-    requestExportViewportSvg(/*includeOverlay=*/true);
-  }
-  if (menuActions.revertFile) {
-    requestRevert();
-  }
-  if (menuActions.quit) {
-    glfwSetWindowShouldClose(window_.rawHandle(), GLFW_TRUE);
-  }
-  if (menuActions.undo && app_.canUndo()) {
-    app_.undo();
-  }
-  if (menuActions.redo && app_.canRedo()) {
-    app_.redo();
-  }
-  const bool sourcePaneFocusedForMenu = sourcePaneVisible_ && textEditor_.isFocused();
-  if (menuActions.cut) {
-    if (sourcePaneFocusedForMenu) {
-      textEditor_.cut();
-    } else {
-      cutSelectedShapesToClipboard();
-    }
-  }
-  if (menuActions.copy) {
-    if (sourcePaneFocusedForMenu) {
-      textEditor_.copy();
-    } else {
-      copySelectedShapesToClipboard();
-    }
-  }
-  if (menuActions.paste) {
-    if (sourcePaneFocusedForMenu) {
-      textEditor_.paste();
-    } else {
-      pasteShapesFromClipboard(/*inFront=*/false);
-    }
-  }
-  if (menuActions.pasteInFront) {
-    pasteShapesFromClipboard(/*inFront=*/true);
-  }
-  if (menuActions.convertTextToOutlines) {
-    convertSelectedTextToOutlines();
-  }
-  if (menuActions.selectAll) {
-    textEditor_.selectAll();
-  }
-  if (menuActions.selectAllCanvas) {
-    // Same canonical canvas Select-All path as the Cmd+A shortcut.
-    selectAllCanvasElements();
-  }
-  if (menuActions.deselectAll) {
-    // Source/XML pane focused: collapse the text selection to the caret, mirroring the
-    // focus-aware Cmd+Shift+A shortcut.
-    textEditor_.clearSelection();
-  }
-  if (menuActions.deselectAllCanvas) {
-    // Same canonical clear path as the Cmd+Shift+A shortcut and Escape.
-    app_.clearSelection();
-  }
-  if (menuActions.zoomIn) {
-    if (interactionController_.applyZoom(kKeyboardZoomStep,
-                                         interactionController_.viewport().paneCenter())) {
-      requestRenderAtEndOfFrame_ = true;
-    }
-  }
-  if (menuActions.zoomOut) {
-    if (interactionController_.applyZoom(1.0 / kKeyboardZoomStep,
-                                         interactionController_.viewport().paneCenter())) {
-      requestRenderAtEndOfFrame_ = true;
-    }
-  }
-  if (menuActions.actualSize) {
-    if (interactionController_.resetToActualSize()) {
-      requestRenderAtEndOfFrame_ = true;
-    }
-  }
-  if (menuActions.toggleSourceFocusMode) {
-    toggleSourceFocusMode();
-  }
-  const bool showCompositorDebugPanelBeforeMenu = showCompositorDebugPanel_;
-  const bool showPerfOverlayBeforeMenu = showPerfOverlay_;
-  ApplyViewMenuToggleActions(menuActions, &showCompositorDebugPanel_, &showPerfOverlay_);
-  if (showCompositorDebugPanel_ != showCompositorDebugPanelBeforeMenu ||
-      showPerfOverlay_ != showPerfOverlayBeforeMenu) {
-    window_.wakeEventLoop();
-  }
+  applyMenuActions(menuActions);
 
   dialogPresenter_.render(
       [this](std::string_view path, std::string* error) { return tryOpenPath(path, error); },

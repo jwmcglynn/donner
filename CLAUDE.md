@@ -7,6 +7,8 @@
 - Never use merge commits or rebase-and-merge on this repository.
 - **Omit `## Summary` in PR descriptions.** The first paragraph or bullet list is implicitly the
   summary, so start directly with the summary content.
+- **Do not publish draft diffs.** Agents must not open draft PRs. Keep unfinished work local; once
+  the change is validated and ready for review, open a normal reviewable PR.
 
 ## AI Comment Convention
 

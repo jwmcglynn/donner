@@ -1,20 +1,23 @@
 #!/bin/bash -e
 
 function print_help() {
-  echo "Usage: $0 [--quiet] [--no-html] [TARGETS...]"
+  echo "Usage: $0 [--quiet] [--no-html] [--branch-target PERCENT] [--output-dir DIR] [TARGETS...]"
   echo "Run coverage analysis on the specified Bazel targets."
   echo "If no targets are specified, coverage is run on '//donner/...'."
   echo ""
   echo "Options:"
-  echo "  --quiet  Suppress debug output."
-  echo "  --no-html  Skip HTML generation and only emit filtered LCOV output."
-  echo "  --help   Show this help message."
+  echo "  --quiet                  Suppress debug output."
+  echo "  --no-html                Skip HTML generation and only emit filtered LCOV output."
+  echo "  --branch-target PERCENT  Print branch-hit shortfall to this target (default: 85)."
+  echo "  --output-dir DIR         Directory for filtered LCOV/HTML output (default: coverage-report)."
+  echo "  --help                   Show this help message."
   exit 0
 }
 
 TARGETS=()
 BAZEL_COVERAGE_FLAGS=()
 DEFAULT_BAZEL_COVERAGE_FLAGS=()
+read -r -a BAZEL_CMD <<< "${DONNER_BAZEL:-bazel}"
 
 if [[ -n "${DONNER_COVERAGE_BAZEL_FLAGS:-}" ]]; then
   read -r -a BAZEL_COVERAGE_FLAGS <<< "$DONNER_COVERAGE_BAZEL_FLAGS"
@@ -30,17 +33,50 @@ fi
 # Check for --quiet option
 QUIET=false
 NO_HTML=false
-for arg in "$@"; do
-  # --quiet: suppress debug output
-  if [[ $arg == "--quiet" ]]; then
-    QUIET=true
-  elif [[ $arg == "--no-html" ]]; then
-    NO_HTML=true
-  elif [[ $arg == "--help" ]]; then
-    print_help
-  else
-    TARGETS+=("$arg")
-  fi
+BRANCH_TARGET=85
+COVERAGE_OUTPUT_DIR=coverage-report
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --quiet)
+      QUIET=true
+      shift
+      ;;
+    --no-html)
+      NO_HTML=true
+      shift
+      ;;
+    --branch-target)
+      if [[ $# -lt 2 ]]; then
+        echo "ERROR: --branch-target requires a percentage value"
+        exit 1
+      fi
+      BRANCH_TARGET="$2"
+      shift 2
+      ;;
+    --branch-target=*)
+      BRANCH_TARGET="${1#--branch-target=}"
+      shift
+      ;;
+    --output-dir)
+      if [[ $# -lt 2 ]]; then
+        echo "ERROR: --output-dir requires a directory"
+        exit 1
+      fi
+      COVERAGE_OUTPUT_DIR="$2"
+      shift 2
+      ;;
+    --output-dir=*)
+      COVERAGE_OUTPUT_DIR="${1#--output-dir=}"
+      shift
+      ;;
+    --help)
+      print_help
+      ;;
+    *)
+      TARGETS+=("$1")
+      shift
+      ;;
+  esac
 done
 
 # Default to //donner/... if no targets are specified
@@ -65,7 +101,7 @@ if ! which java > /dev/null; then
 fi
 
 JAVA_HOME=$(dirname $(dirname $(which java)))
-WORKSPACE_ROOT=$(bazel info workspace)
+WORKSPACE_ROOT=$("${BAZEL_CMD[@]}" info workspace)
 
 BAZEL_TEST_ENV=()
 if [[ "$(uname)" == "Darwin" ]]; then
@@ -103,10 +139,10 @@ LLVM_COVERAGE_FLAGS=(
 (
   cd "$WORKSPACE_ROOT"
 
-  COVERAGE_HTML_DIR=coverage-report
+  COVERAGE_HTML_DIR="$COVERAGE_OUTPUT_DIR"
   GENHTML_OPTIONS="--legend --branch-coverage --ignore-errors category --ignore-errors inconsistent --output-directory $COVERAGE_HTML_DIR"
 
-  COVERAGE_REPORT=$(bazel info output_path)/_coverage/_coverage_report.dat
+  COVERAGE_REPORT=$("${BAZEL_CMD[@]}" info output_path)/_coverage/_coverage_report.dat
 
   # CI diagnostics: when DONNER_CI_DIAGNOSTICS_DIR is set (self-hosted CI),
   # capture the inner `bazel coverage` profile + BEP there and record phase
@@ -132,14 +168,14 @@ LLVM_COVERAGE_FLAGS=(
   rm -f "$COVERAGE_REPORT"
 
   if [ "$QUIET" = true ]; then
-    bazel coverage --config=latest_llvm --ui_event_filters=-info,-stdout,-stderr --noshow_progress \
+    "${BAZEL_CMD[@]}" coverage --config=latest_llvm --ui_event_filters=-info,-stdout,-stderr --noshow_progress \
       "${DEFAULT_BAZEL_COVERAGE_FLAGS[@]}" \
       "${BAZEL_COVERAGE_FLAGS[@]}" \
       "${LLVM_COVERAGE_FLAGS[@]}" \
       "${DIAG_FLAGS[@]}" \
       "${BAZEL_TEST_ENV[@]}" "${TARGETS[@]}" || true
   else
-    bazel coverage --config=latest_llvm \
+    "${BAZEL_CMD[@]}" coverage --config=latest_llvm \
       "${DEFAULT_BAZEL_COVERAGE_FLAGS[@]}" \
       "${BAZEL_COVERAGE_FLAGS[@]}" \
       "${LLVM_COVERAGE_FLAGS[@]}" \
@@ -163,6 +199,8 @@ LLVM_COVERAGE_FLAGS=(
     python3 tools/filter_coverage.py --verbose "${FILTER_ARGS[@]}"
   fi
   python3 tools/check_lcov_report.py "$COVERAGE_HTML_DIR/filtered_report.dat"
+  python3 tools/lcov_metrics.py "$COVERAGE_HTML_DIR/filtered_report.dat" \
+    --branch-target "$BRANCH_TARGET"
   phase_mark filter_done
 
   if [ "$NO_HTML" = false ]; then
@@ -176,7 +214,7 @@ LLVM_COVERAGE_FLAGS=(
 )
 
 if [ "$NO_HTML" = true ]; then
-  echo "Filtered coverage report saved to coverage-report/filtered_report.dat"
+  echo "Filtered coverage report saved to $COVERAGE_OUTPUT_DIR/filtered_report.dat"
 else
-  echo "Coverage report saved to coverage-report/index.html"
+  echo "Coverage report saved to $COVERAGE_OUTPUT_DIR/index.html"
 fi

@@ -1,5 +1,6 @@
 #include "donner/editor/EditorShell.h"
 
+#include <GLFW/glfw3.h>
 #include <gtest/gtest.h>
 
 #include <chrono>
@@ -11,7 +12,9 @@
 #include <thread>
 #include <vector>
 
+#include "donner/editor/InMemoryClipboard.h"
 #include "donner/editor/gui/EditorWindow.h"
+#include "donner/editor/repro/ReproFile.h"
 
 namespace donner::editor {
 namespace {
@@ -49,6 +52,29 @@ constexpr std::string_view kReferencedSvg = R"svg(
   </defs>
   <rect id="target" x="10" y="12" width="40" height="24" fill="url(#paint)" clip-path="url(#clip)"/>
   <circle id="referrer" cx="80" cy="40" r="10" fill="url(#paint)"/>
+</svg>
+)svg";
+
+constexpr std::string_view kPaintToolbarSvg = R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80" viewBox="0 0 120 80">
+  <defs>
+    <linearGradient id="paint">
+      <stop offset="0" stop-color="red"/>
+    </linearGradient>
+  </defs>
+  <rect id="local" x="10" y="12" width="20" height="20" fill="url(#paint)" stroke="url(#paint)"/>
+  <rect id="missing" x="40" y="12" width="20" height="20" fill="url(#missing)"/>
+  <rect id="contextual" x="70" y="12" width="20" height="20" fill="context-fill"/>
+  <rect id="styled-none-attribute" x="70" y="42" width="20" height="20"
+        fill="context-stroke" style="fill: none"/>
+  <rect id="external" x="10" y="42" width="20" height="20"
+        fill="url(https://example.invalid/paint.svg#paint)"/>
+</svg>
+)svg";
+
+constexpr std::string_view kIntrinsicSizeSvg = R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90">
+  <rect id="target" width="160" height="90"/>
 </svg>
 )svg";
 
@@ -113,6 +139,36 @@ public:
     shell.requestSaveAs(std::move(error));
   }
 
+  static void RequestExportViewportSvg(EditorShell& shell, bool includeOverlay,
+                                       std::string error = std::string()) {
+    shell.requestExportViewportSvg(includeOverlay, std::move(error));
+  }
+
+  static bool TryExportViewportSvgToPath(EditorShell& shell, std::string_view path,
+                                         std::string* error) {
+    return shell.tryExportViewportSvgToPath(path, error);
+  }
+
+  static bool PendingViewportExport(const EditorShell& shell) {
+    return shell.pendingViewportExport_;
+  }
+
+  static bool PendingViewportExportOverlay(const EditorShell& shell) {
+    return shell.pendingViewportExportOverlay_;
+  }
+
+  static bool OpenFileModalRequested(const EditorShell& shell) {
+    return shell.dialogPresenter_.openFileModalRequested();
+  }
+
+  static bool SaveFileModalRequested(const EditorShell& shell) {
+    return shell.dialogPresenter_.saveFileModalRequested();
+  }
+
+  static bool AboutPopupRequested(const EditorShell& shell) {
+    return shell.dialogPresenter_.aboutPopupRequested();
+  }
+
   static void MaybeLogResourceDiagnostics(EditorShell& shell, const FrameCostBreakdown& frameCost) {
     shell.maybeLogResourceDiagnostics(frameCost);
   }
@@ -166,11 +222,15 @@ public:
   static void ConfigureViewport(EditorShell& shell, const Box2d& documentViewBox) {
     shell.interactionController_.updatePaneLayout(Vector2d(20.0, 30.0), Vector2d(400.0, 260.0),
                                                   documentViewBox);
-    shell.interactionController_.resetToActualSize();
+    (void)shell.interactionController_.resetToActualSize();
   }
 
   static void RefreshSelectionBoundsCache(EditorShell& shell) {
     shell.renderCoordinator_.refreshSelectionBoundsCache(shell.app_);
+  }
+
+  static bool FlushQueuedMutationAndRefreshOverlay(EditorShell& shell) {
+    return shell.flushQueuedMutationAndRefreshOverlay();
   }
 
   static std::size_t DisplayedSelectionBoundsCount(const EditorShell& shell) {
@@ -194,6 +254,14 @@ public:
     return shell.styleFocusAtSourceCursor();
   }
 
+  static void ApplyPendingDocumentSpaceReplayInput(EditorShell& shell) {
+    shell.applyPendingDocumentSpaceReplayInputForTesting();
+  }
+
+  static void ApplyReplayAction(EditorShell& shell, const repro::ReproAction& action) {
+    shell.applyReplayActionForTesting(action);
+  }
+
   static void ApplyStyleFocus(EditorShell& shell, StyleFocus styleFocus) {
     shell.applyStyleFocus(std::move(styleFocus));
   }
@@ -204,6 +272,10 @@ public:
 
   static void OpenRenderPaneContextMenu(EditorShell& shell, const Vector2d& documentPoint) {
     shell.openRenderPaneContextMenu(documentPoint);
+  }
+
+  static void RenderRenderPaneContextMenu(EditorShell& shell) {
+    shell.renderRenderPaneContextMenu();
   }
 
   static std::vector<SourceByteRange> SourceHoverRangesForElements(
@@ -251,7 +323,187 @@ public:
     return shell.toolPaletteScreenRect(paneOrigin, contentRegion);
   }
 
+  static bool CanvasHasSelectableElements(EditorShell& shell) {
+    return shell.canvasHasSelectableElements();
+  }
+
+  static void SelectAllCanvasElements(EditorShell& shell) { shell.selectAllCanvasElements(); }
+
+  static bool SelectionIsAllText(const EditorShell& shell) { return shell.selectionIsAllText(); }
+
+  static void ConvertSelectedTextToOutlines(EditorShell& shell) {
+    shell.convertSelectedTextToOutlines();
+  }
+
+  static const std::string& LastConvertTextError(const EditorShell& shell) {
+    return shell.lastConvertTextError_;
+  }
+
+  static void RenderSourcePane(EditorShell& shell, float paneOriginY, float paneHeight,
+                               float paneWidth, ImFont* codeFont) {
+    shell.renderSourcePane(paneOriginY, paneHeight, paneWidth, codeFont);
+  }
+
+  static void RenderRenderPane(EditorShell& shell, const Vector2d& renderPaneOrigin,
+                               const Vector2d& renderPaneSize, ImGuiWindowFlags paneFlags) {
+    shell.renderRenderPane(renderPaneOrigin, renderPaneSize, paneFlags);
+  }
+
+  static void RenderFillStrokeToolbarWidget(EditorShell& shell) {
+    shell.renderFillStrokeToolbarWidget();
+  }
+
+  static void RenderToolPalette(EditorShell& shell, const ImVec2& paneOrigin,
+                                const ImVec2& contentRegion) {
+    shell.renderToolPalette(paneOrigin, contentRegion);
+  }
+
+  static void RenderSourcePaneSplitter(EditorShell& shell, float windowWidth, float paneOriginY,
+                                       float paneHeight, float sourcePaneWidth) {
+    shell.renderSourcePaneSplitter(windowWidth, paneOriginY, paneHeight, sourcePaneWidth);
+  }
+
+  static void RenderRightPaneSplitter(EditorShell& shell, float windowWidth, float paneOriginY,
+                                      float paneHeight) {
+    shell.renderRightPaneSplitter(windowWidth, paneOriginY, paneHeight);
+  }
+
+  static void RenderDockedLayerPanelDragHandle(EditorShell& shell) {
+    shell.renderDockedLayerPanelDragHandle();
+  }
+
+  static void RenderFloatingLayerPanel(EditorShell& shell) { shell.renderFloatingLayerPanel(); }
+
+  static void RenderLayerPanelContents(EditorShell& shell) { shell.renderLayerPanelContents(); }
+
+  static void ApplyMenuActions(EditorShell& shell, const MenuBarActions& actions) {
+    shell.applyMenuActions(actions);
+  }
+
+  static void UseInMemoryShapeClipboard(EditorShell& shell) {
+    shell.shapeClipboard_ = std::make_unique<InMemoryClipboard>();
+  }
+
+  static void ClearShapeClipboard(EditorShell& shell) { shell.shapeClipboard_.reset(); }
+
+  static void SetShapeClipboardText(EditorShell& shell, std::string_view text) {
+    ASSERT_NE(shell.shapeClipboard_, nullptr);
+    shell.shapeClipboard_->setText(text);
+  }
+
+  static std::string ShapeClipboardText(const EditorShell& shell) {
+    return shell.shapeClipboard_ != nullptr ? shell.shapeClipboard_->getText() : std::string();
+  }
+
+  static bool ShapeClipboardHasText(const EditorShell& shell) {
+    return shell.shapeClipboard_ != nullptr && shell.shapeClipboard_->hasText();
+  }
+
+  static void CopySelectedShapesToClipboard(EditorShell& shell) {
+    shell.copySelectedShapesToClipboard();
+  }
+
+  static void CutSelectedShapesToClipboard(EditorShell& shell) {
+    shell.cutSelectedShapesToClipboard();
+  }
+
+  static void PasteShapesFromClipboard(EditorShell& shell, bool inFront) {
+    shell.pasteShapesFromClipboard(inFront);
+  }
+
+  static void HandleGlobalShortcuts(EditorShell& shell) { shell.handleGlobalShortcuts(); }
+
+  static bool ActiveToolIsSelect(const EditorShell& shell) {
+    return shell.activeTool_ == EditorShell::ActiveTool::Select;
+  }
+
+  static bool ActiveToolIsPen(const EditorShell& shell) {
+    return shell.activeTool_ == EditorShell::ActiveTool::Pen;
+  }
+
+  static bool ActiveToolIsText(const EditorShell& shell) {
+    return shell.activeTool_ == EditorShell::ActiveTool::Text;
+  }
+
+  static bool PenToolIsDrafting(const EditorShell& shell) { return shell.penTool_.isDrafting(); }
+
+  static bool PenToolIsDraggingAnchor(const EditorShell& shell) {
+    return shell.penTool_.isDraggingAnchor();
+  }
+
+  static const std::string& PenToolActivePathData(const EditorShell& shell) {
+    return shell.penTool_.activePathData();
+  }
+
+  static bool PenDragFlushedThisFrame(const EditorShell& shell) {
+    return shell.penDragFlushedThisFrame_;
+  }
+
+  static bool SelectToolIsMarqueeing(const EditorShell& shell) {
+    return shell.selectTool_.isMarqueeing();
+  }
+
+  static void BufferPendingClick(EditorShell& shell, const Vector2d& documentPoint,
+                                 MouseModifiers modifiers = MouseModifiers{}) {
+    shell.interactionController_.bufferPendingClick(documentPoint, modifiers);
+  }
+
+  static bool HasPendingClick(const EditorShell& shell) {
+    return shell.interactionController_.pendingClick().has_value();
+  }
+
+  static void SetPendingSelectClickStartSeconds(EditorShell& shell, double seconds) {
+    shell.pendingSelectClickStartSeconds_ = seconds;
+  }
+
+  static bool RequestRenderAtEndOfFrame(const EditorShell& shell) {
+    return shell.requestRenderAtEndOfFrame_;
+  }
+
+  static void ClearRequestRenderAtEndOfFrame(EditorShell& shell) {
+    shell.requestRenderAtEndOfFrame_ = false;
+  }
+
+  static void SetShowCompositorDebugPanel(EditorShell& shell, bool value) {
+    shell.showCompositorDebugPanel_ = value;
+  }
+
+  static bool ShowCompositorDebugPanel(const EditorShell& shell) {
+    return shell.showCompositorDebugPanel_;
+  }
+
+  static bool ShowPerfOverlay(const EditorShell& shell) { return shell.showPerfOverlay_; }
+
+  static void SetLayerPanelDetached(EditorShell& shell, bool value) {
+    shell.layerPanelDetached_ = value;
+  }
+
+  static void SetLayerPanelDetachDragActive(EditorShell& shell, bool value) {
+    shell.layerPanelDetachDragActive_ = value;
+  }
+
+  static void SetLayerPanelFloatingNeedsPlacement(EditorShell& shell, bool value) {
+    shell.layerPanelFloatingNeedsPlacement_ = value;
+  }
+
+  static void SetLayerPanelFloatingGeometry(EditorShell& shell, const ImVec2& pos,
+                                            const ImVec2& size) {
+    shell.layerPanelFloatingPos_ = pos;
+    shell.layerPanelFloatingSize_ = size;
+  }
+
+  static bool LayerPanelDetached(const EditorShell& shell) { return shell.layerPanelDetached_; }
+
+  static bool LayerPanelDetachDragActive(const EditorShell& shell) {
+    return shell.layerPanelDetachDragActive_;
+  }
+
+  static bool LayerPanelFloatingNeedsPlacement(const EditorShell& shell) {
+    return shell.layerPanelFloatingNeedsPlacement_;
+  }
+
   static bool SourcePaneVisible(const EditorShell& shell) { return shell.sourcePaneVisible_; }
+  static float SourcePaneWidth(const EditorShell& shell) { return shell.sourcePaneWidth_; }
   static bool SourceFocusMode(const EditorShell& shell) { return shell.sourceFocusMode_; }
   static bool SourceFocusOriginatedInStyle(const EditorShell& shell) {
     return shell.sourceFocusOriginatedInStyle_;
@@ -319,6 +571,196 @@ void RunFramesUntilDisplayedSelectionBounds(gui::EditorWindow& window, EditorShe
   }
 }
 
+void DriveGlobalShortcut(EditorShell& shell, const std::vector<ImGuiKey>& keys, bool ctrl = false,
+                         bool shift = false, bool super = false) {
+  ImGuiIO& io = ImGui::GetIO();
+  io.DisplaySize = ImVec2(640.0f, 480.0f);
+  io.ConfigMacOSXBehaviors = false;
+  if (!io.Fonts->IsBuilt()) {
+    io.Fonts->Build();
+  }
+  if (ctrl) {
+    io.AddKeyEvent(ImGuiMod_Ctrl, true);
+  }
+  if (shift) {
+    io.AddKeyEvent(ImGuiMod_Shift, true);
+  }
+  if (super) {
+    io.AddKeyEvent(ImGuiMod_Super, true);
+  }
+  for (ImGuiKey key : keys) {
+    io.AddKeyEvent(key, true);
+  }
+
+  ImGui::NewFrame();
+  EditorShellTestAccess::HandleGlobalShortcuts(shell);
+  ImGui::Render();
+
+  for (ImGuiKey key : keys) {
+    io.AddKeyEvent(key, false);
+  }
+  if (super) {
+    io.AddKeyEvent(ImGuiMod_Super, false);
+  }
+  if (shift) {
+    io.AddKeyEvent(ImGuiMod_Shift, false);
+  }
+  if (ctrl) {
+    io.AddKeyEvent(ImGuiMod_Ctrl, false);
+  }
+  ImGui::NewFrame();
+  ImGui::Render();
+}
+
+void RenderToolbarFrame(gui::EditorWindow& window, EditorShell& shell, const ImVec2& cursor,
+                        const ImVec2& mouse, bool mouseDown) {
+  (void)window;
+  ImGuiIO& io = ImGui::GetIO();
+  io.DisplaySize = ImVec2(640.0f, 480.0f);
+  if (!io.Fonts->IsBuilt()) {
+    io.Fonts->Build();
+  }
+  io.AddMousePosEvent(mouse.x, mouse.y);
+  io.AddMouseButtonEvent(0, mouseDown);
+
+  ImGui::NewFrame();
+  constexpr ImGuiWindowFlags kHostFlags =
+      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings;
+  ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(220.0f, 100.0f), ImGuiCond_Always);
+  ImGui::Begin("EditorShellToolbarMouseHost", nullptr, kHostFlags);
+  ImGui::SetCursorScreenPos(cursor);
+  EditorShellTestAccess::RenderFillStrokeToolbarWidget(shell);
+  ImGui::End();
+  ImGui::Render();
+}
+
+void ClickToolbar(gui::EditorWindow& window, EditorShell& shell, const ImVec2& cursor,
+                  const ImVec2& mouse) {
+  RenderToolbarFrame(window, shell, cursor, mouse, /*mouseDown=*/false);
+  RenderToolbarFrame(window, shell, cursor, mouse, /*mouseDown=*/true);
+  RenderToolbarFrame(window, shell, cursor, mouse, /*mouseDown=*/false);
+}
+
+void RenderToolPaletteFrame(gui::EditorWindow& window, EditorShell& shell, const ImVec2& paneOrigin,
+                            const ImVec2& contentRegion, const ImVec2& mouse, bool mouseDown) {
+  ImGuiIO& io = ImGui::GetIO();
+  io.DisplaySize = ImVec2(640.0f, 480.0f);
+  if (!io.Fonts->IsBuilt()) {
+    io.Fonts->Build();
+  }
+  io.AddMousePosEvent(mouse.x, mouse.y);
+  io.AddMouseButtonEvent(0, mouseDown);
+
+  window.beginFrame();
+  constexpr ImGuiWindowFlags kHostFlags =
+      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings;
+  ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(640.0f, 480.0f), ImGuiCond_Always);
+  ImGui::Begin("EditorShellToolPaletteMouseHost", nullptr, kHostFlags);
+  EditorShellTestAccess::RenderToolPalette(shell, paneOrigin, contentRegion);
+  ImGui::End();
+  window.endFrame();
+}
+
+void RenderPaneMouseFrame(gui::EditorWindow& window, EditorShell& shell,
+                          const Vector2d& documentPoint, bool mouseDown,
+                          const Vector2d& renderPaneOrigin = Vector2d(20.0, 30.0),
+                          const Vector2d& renderPaneSize = Vector2d(400.0, 260.0),
+                          bool shift = false, bool option = false, bool command = false,
+                          bool doubleClick = false) {
+  const Vector2d screenPoint = shell.viewportForReadback().documentToScreen(documentPoint);
+
+  ImGuiIO& io = ImGui::GetIO();
+  io.DisplaySize = ImVec2(640.0f, 480.0f);
+  io.AddKeyEvent(ImGuiMod_Shift, shift);
+  io.AddKeyEvent(ImGuiMod_Alt, option);
+  io.AddKeyEvent(ImGuiMod_Ctrl, command);
+  io.AddMousePosEvent(static_cast<float>(screenPoint.x), static_cast<float>(screenPoint.y));
+  io.AddMouseButtonEvent(0, mouseDown);
+
+  window.beginFrame();
+  if (doubleClick) {
+    io.MouseClickedCount[0] = 2;
+  }
+  EditorShellTestAccess::RenderRenderPane(
+      shell, renderPaneOrigin, renderPaneSize,
+      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
+  window.endFrame();
+
+  io.AddKeyEvent(ImGuiMod_Ctrl, false);
+  io.AddKeyEvent(ImGuiMod_Alt, false);
+  io.AddKeyEvent(ImGuiMod_Shift, false);
+}
+
+void RenderContextMenuFrame(gui::EditorWindow& window, EditorShell& shell) {
+  ImGuiIO& io = ImGui::GetIO();
+  io.DisplaySize = ImVec2(640.0f, 480.0f);
+  if (!io.Fonts->IsBuilt()) {
+    io.Fonts->Build();
+  }
+
+  window.beginFrame();
+  ImGui::SetNextWindowPos(ImVec2(20.0f, 20.0f), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(220.0f, 120.0f), ImGuiCond_Always);
+  ImGui::Begin(
+      "EditorShellContextMenuHost", nullptr,
+      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
+  EditorShellTestAccess::RenderRenderPaneContextMenu(shell);
+  ImGui::End();
+  window.endFrame();
+}
+
+Box2d RenderDockedLayerPanelDragHandleFrame(gui::EditorWindow& window, EditorShell& shell,
+                                            const ImVec2& mouse, bool mouseDown) {
+  ImGuiIO& io = ImGui::GetIO();
+  io.DisplaySize = ImVec2(640.0f, 480.0f);
+  io.AddMousePosEvent(mouse.x, mouse.y);
+  io.AddMouseButtonEvent(0, mouseDown);
+
+  window.beginFrame();
+  constexpr ImGuiWindowFlags kHostFlags =
+      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings;
+  ImGui::SetNextWindowPos(ImVec2(80.0f, 60.0f), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(260.0f, 100.0f), ImGuiCond_Always);
+  ImGui::Begin("EditorShellDockedLayerPanelDragHost", nullptr, kHostFlags);
+  EditorShellTestAccess::RenderDockedLayerPanelDragHandle(shell);
+  const ImVec2 itemMin = ImGui::GetItemRectMin();
+  const ImVec2 itemMax = ImGui::GetItemRectMax();
+  ImGui::End();
+  window.endFrame();
+  return Box2d(Vector2d(itemMin.x, itemMin.y), Vector2d(itemMax.x, itemMax.y));
+}
+
+void RenderFloatingLayerPanelFrame(gui::EditorWindow& window, EditorShell& shell,
+                                   const ImVec2& mouse, bool mouseDown) {
+  ImGuiIO& io = ImGui::GetIO();
+  io.DisplaySize = ImVec2(640.0f, 480.0f);
+  io.AddMousePosEvent(mouse.x, mouse.y);
+  io.AddMouseButtonEvent(0, mouseDown);
+
+  window.beginFrame();
+  EditorShellTestAccess::RenderFloatingLayerPanel(shell);
+  window.endFrame();
+}
+
+Box2d RenderSourcePaneSplitterFrame(gui::EditorWindow& window, EditorShell& shell,
+                                    float sourcePaneWidth, const ImVec2& mouse, bool mouseDown,
+                                    float windowWidth = 640.0f) {
+  ImGuiIO& io = ImGui::GetIO();
+  io.DisplaySize = ImVec2(640.0f, 480.0f);
+  io.AddMousePosEvent(mouse.x, mouse.y);
+  io.AddMouseButtonEvent(0, mouseDown);
+
+  window.beginFrame();
+  EditorShellTestAccess::RenderSourcePaneSplitter(shell, windowWidth, /*paneOriginY=*/0.0f,
+                                                  /*paneHeight=*/220.0f, sourcePaneWidth);
+  const ImVec2 itemMin = ImGui::GetItemRectMin();
+  const ImVec2 itemMax = ImGui::GetItemRectMax();
+  window.endFrame();
+  return Box2d(Vector2d(itemMin.x, itemMin.y), Vector2d(itemMax.x, itemMax.y));
+}
+
 TEST(EditorShellTest, HiddenWindowShellConstructsAndRunsFrames) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
@@ -358,6 +800,78 @@ TEST(EditorShellTest, HiddenWindowShellConstructsAndRunsFrames) {
   EXPECT_TRUE(shell.valid());
 }
 
+TEST(EditorShellTest, FullFrameSmokeCoversPanelSourceAndContextMenuStates) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kReferencedSvg, "referenced.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0.0, 0.0, 120.0, 80.0));
+
+  auto target = EditorShellTestAccess::App(shell).document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  EditorShellTestAccess::App(shell).setSelection(*target);
+  RunFramesUntilDisplayedSelectionBounds(window, shell);
+
+  EditorShellTestAccess::SetShowCompositorDebugPanel(shell, true);
+  EditorShellTestAccess::SetLayerPanelDetached(shell, false);
+  window.beginFrame();
+  shell.runFrame();
+  window.endFrame();
+  EXPECT_TRUE(shell.valid());
+
+  EditorShellTestAccess::SetLayerPanelDetached(shell, true);
+  EditorShellTestAccess::SetLayerPanelFloatingNeedsPlacement(shell, true);
+  EditorShellTestAccess::SetLayerPanelFloatingGeometry(shell, ImVec2(80.0f, 60.0f),
+                                                       ImVec2(260.0f, 220.0f));
+  window.beginFrame();
+  shell.runFrame();
+  window.endFrame();
+  EXPECT_TRUE(EditorShellTestAccess::LayerPanelDetached(shell));
+
+  EditorShellTestAccess::SetSourcePaneVisible(shell, false);
+  window.beginFrame();
+  shell.runFrame();
+  window.endFrame();
+  EXPECT_FALSE(EditorShellTestAccess::SourcePaneVisible(shell));
+
+  EditorShellTestAccess::SetSourcePaneVisible(shell, true);
+  EditorShellTestAccess::SetSourceFocusMode(shell, true);
+  EditorShellTestAccess::UpdateSourceFocusView(shell, /*scrollToSelection=*/true);
+  window.beginFrame();
+  shell.runFrame();
+  window.endFrame();
+  EXPECT_TRUE(EditorShellTestAccess::SourceFocusMode(shell));
+
+  EditorShellTestAccess::OpenRenderPaneContextMenu(shell, Vector2d(12.0, 14.0));
+  window.beginFrame();
+  shell.runFrame();
+  window.endFrame();
+  EXPECT_FALSE(EditorShellTestAccess::RenderContextMenuOpenRequested(shell));
+}
+
+TEST(EditorShellTest, IntrinsicSizeDocumentInitializesViewportWithoutViewBox) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kIntrinsicSizeSvg, "intrinsic.svg"));
+  ASSERT_TRUE(shell.valid());
+
+  window.beginFrame();
+  EditorShellTestAccess::RenderRenderPane(
+      shell, Vector2d(0.0, 0.0), Vector2d(320.0, 200.0),
+      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
+  window.endFrame();
+
+  const ViewportState viewport = shell.viewportForReadback();
+  EXPECT_GT(viewport.documentViewBox.width(), 100.0);
+  EXPECT_GT(viewport.documentViewBox.height(), 50.0);
+}
+
 TEST(EditorShellTest, SelectionReadbackAndIdleWakeReflectSourceState) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
@@ -385,6 +899,214 @@ TEST(EditorShellTest, SelectionReadbackAndIdleWakeReflectSourceState) {
   const std::optional<float> idleWake = shell.nextIdleWakeSeconds();
   ASSERT_TRUE(idleWake.has_value());
   EXPECT_GE(*idleWake, 0.0f);
+}
+
+TEST(EditorShellTest, ReplayActionsSwitchToolsAndIgnoreUnknownToolNames) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+  EXPECT_TRUE(EditorShellTestAccess::ActiveToolIsSelect(shell));
+
+  EditorShellTestAccess::ApplyReplayAction(shell,
+                                           repro::ReproAction{
+                                               .kind = repro::ReproAction::Kind::SetActiveTool,
+                                               .tool = "pen",
+                                           });
+  EXPECT_TRUE(EditorShellTestAccess::ActiveToolIsPen(shell));
+
+  EditorShellTestAccess::ApplyReplayAction(shell,
+                                           repro::ReproAction{
+                                               .kind = repro::ReproAction::Kind::SetActiveTool,
+                                               .tool = "text",
+                                           });
+  EXPECT_TRUE(EditorShellTestAccess::ActiveToolIsText(shell));
+
+  EditorShellTestAccess::ApplyReplayAction(shell,
+                                           repro::ReproAction{
+                                               .kind = repro::ReproAction::Kind::SetActiveTool,
+                                               .tool = "select",
+                                           });
+  EXPECT_TRUE(EditorShellTestAccess::ActiveToolIsSelect(shell));
+
+  EditorShellTestAccess::ApplyReplayAction(shell,
+                                           repro::ReproAction{
+                                               .kind = repro::ReproAction::Kind::SetActiveTool,
+                                               .tool = "unsupported",
+                                           });
+  EXPECT_TRUE(EditorShellTestAccess::ActiveToolIsSelect(shell));
+
+  EditorShellTestAccess::ApplyReplayAction(shell,
+                                           repro::ReproAction{
+                                               .kind = repro::ReproAction::Kind::CommitPenPath,
+                                           });
+  EXPECT_TRUE(EditorShellTestAccess::ActiveToolIsSelect(shell));
+}
+
+TEST(EditorShellTest, ReplayActionSelectCommitsDraftPenPath) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+
+  EditorShellTestAccess::ApplyReplayAction(shell,
+                                           repro::ReproAction{
+                                               .kind = repro::ReproAction::Kind::SetActiveTool,
+                                               .tool = "pen",
+                                           });
+  ASSERT_TRUE(EditorShellTestAccess::ActiveToolIsPen(shell));
+
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(5.0, 6.0),
+      .leftMouseDown = true,
+      .leftMousePressed = true,
+  });
+  EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(5.0, 6.0),
+      .leftMouseReleased = true,
+  });
+  EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
+
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(25.0, 16.0),
+      .leftMouseDown = true,
+      .leftMousePressed = true,
+  });
+  EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(25.0, 16.0),
+      .leftMouseReleased = true,
+  });
+  EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
+  ASSERT_TRUE(EditorShellTestAccess::PenToolIsDrafting(shell));
+
+  EditorShellTestAccess::ApplyReplayAction(shell,
+                                           repro::ReproAction{
+                                               .kind = repro::ReproAction::Kind::SetActiveTool,
+                                               .tool = "select",
+                                           });
+
+  EXPECT_TRUE(EditorShellTestAccess::ActiveToolIsSelect(shell));
+  EXPECT_FALSE(EditorShellTestAccess::PenToolIsDrafting(shell));
+  EXPECT_NE(EditorShellTestAccess::App(shell).document().document().source().find("<path"),
+            std::string_view::npos);
+}
+
+TEST(EditorShellTest, ReplayActionCommitPenPathCommitsDraftPathInPlace) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+
+  EditorShellTestAccess::ApplyReplayAction(shell,
+                                           repro::ReproAction{
+                                               .kind = repro::ReproAction::Kind::SetActiveTool,
+                                               .tool = "pen",
+                                           });
+  ASSERT_TRUE(EditorShellTestAccess::ActiveToolIsPen(shell));
+
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(8.0, 9.0),
+      .leftMouseDown = true,
+      .leftMousePressed = true,
+  });
+  EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(8.0, 9.0),
+      .leftMouseReleased = true,
+  });
+  EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
+
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(28.0, 19.0),
+      .leftMouseDown = true,
+      .leftMousePressed = true,
+  });
+  EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(28.0, 19.0),
+      .leftMouseReleased = true,
+  });
+  EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
+  ASSERT_TRUE(EditorShellTestAccess::PenToolIsDrafting(shell));
+
+  EditorShellTestAccess::ApplyReplayAction(shell,
+                                           repro::ReproAction{
+                                               .kind = repro::ReproAction::Kind::CommitPenPath,
+                                           });
+
+  EXPECT_TRUE(EditorShellTestAccess::ActiveToolIsPen(shell));
+  EXPECT_FALSE(EditorShellTestAccess::PenToolIsDrafting(shell));
+  EXPECT_NE(EditorShellTestAccess::App(shell).document().document().source().find("<path"),
+            std::string_view::npos);
+}
+
+TEST(EditorShellTest, ReplayStyleActionsUpdateSelectionAndActivePaintFallbacks) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+  auto target = EditorShellTestAccess::App(shell).document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  EditorShellTestAccess::App(shell).setSelection(*target);
+
+  EditorShellTestAccess::ApplyReplayAction(shell,
+                                           repro::ReproAction{
+                                               .kind = repro::ReproAction::Kind::SetStyleProperty,
+                                               .propertyName = "fill",
+                                               .propertyValue = "#010203",
+                                           });
+  (void)EditorShellTestAccess::App(shell).flushFrame();
+  target = EditorShellTestAccess::App(shell).document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  ASSERT_TRUE(target->getAttribute("style").has_value());
+  EXPECT_NE(target->getAttribute("style")->str().find("fill: #010203"), std::string::npos);
+
+  EditorShellTestAccess::ApplyReplayAction(shell,
+                                           repro::ReproAction{
+                                               .kind = repro::ReproAction::Kind::SetStyleProperty,
+                                               .propertyName = "stroke",
+                                               .propertyValue = "#040506",
+                                           });
+  (void)EditorShellTestAccess::App(shell).flushFrame();
+  target = EditorShellTestAccess::App(shell).document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  ASSERT_TRUE(target->getAttribute("style").has_value());
+  EXPECT_NE(target->getAttribute("style")->str().find("stroke: #040506"), std::string::npos);
+
+  EditorShellTestAccess::ApplyReplayAction(shell,
+                                           repro::ReproAction{
+                                               .kind = repro::ReproAction::Kind::SetStyleProperty,
+                                               .propertyName = "stroke-width",
+                                               .propertyValue = "7.5",
+                                           });
+  (void)EditorShellTestAccess::App(shell).flushFrame();
+  target = EditorShellTestAccess::App(shell).document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  ASSERT_TRUE(target->getAttribute("style").has_value());
+  EXPECT_NE(target->getAttribute("style")->str().find("stroke-width: 7.5"), std::string::npos);
+
+  EditorShellTestAccess::App(shell).clearSelection();
+  EditorShellTestAccess::ApplyReplayAction(shell,
+                                           repro::ReproAction{
+                                               .kind = repro::ReproAction::Kind::SetStyleProperty,
+                                               .propertyName = "stroke-width",
+                                               .propertyValue = "not-a-number",
+                                           });
+  EXPECT_TRUE(EditorShellTestAccess::App(shell).document().queue().empty());
 }
 
 TEST(EditorShellTest, ConstructsFromSvgPathAndKeepsInvalidSourceEditable) {
@@ -459,6 +1181,36 @@ TEST(EditorShellTest, OpenSaveAndRevertUpdateDocumentAndSourceState) {
   EXPECT_NE(EditorShellTestAccess::Source(shell).getText().find("opened"), std::string::npos);
 }
 
+TEST(EditorShellTest, RevertRequestIgnoresGuardStates) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell invalidShell(window, OptionsWithSource("<svg><rect></svg>", "broken.svg"));
+  ASSERT_TRUE(invalidShell.valid());
+  EditorShellTestAccess::RequestRevert(invalidShell);
+  EXPECT_FALSE(EditorShellTestAccess::App(invalidShell).hasDocument());
+
+  EditorShell cleanShell(window, OptionsWithSource(kInitialSvg, "clean.svg"));
+  ASSERT_TRUE(cleanShell.valid());
+  const std::string cleanSource = EditorShellTestAccess::Source(cleanShell).getText();
+  EditorShellTestAccess::RequestRevert(cleanShell);
+  EXPECT_EQ(EditorShellTestAccess::Source(cleanShell).getText(), cleanSource);
+  EXPECT_FALSE(EditorShellTestAccess::App(cleanShell).isDirty());
+
+  EditorShell dirtyWithoutCleanSource(window, OptionsWithSource(kInitialSvg, "dirty.svg"));
+  ASSERT_TRUE(dirtyWithoutCleanSource.valid());
+  EditorShellTestAccess::Source(dirtyWithoutCleanSource).setText("<svg>dirty</svg>");
+  EditorShellTestAccess::App(dirtyWithoutCleanSource).setCleanSourceText("");
+  EditorShellTestAccess::App(dirtyWithoutCleanSource).markDirty();
+
+  EditorShellTestAccess::RequestRevert(dirtyWithoutCleanSource);
+
+  EXPECT_EQ(EditorShellTestAccess::Source(dirtyWithoutCleanSource).getText(), "<svg>dirty</svg>");
+  EXPECT_TRUE(EditorShellTestAccess::App(dirtyWithoutCleanSource).isDirty());
+}
+
 TEST(EditorShellTest, SaveRequestsUseCurrentPathAndFallbackToSaveAs) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
@@ -479,6 +1231,64 @@ TEST(EditorShellTest, SaveRequestsUseCurrentPathAndFallbackToSaveAs) {
   EditorShellTestAccess::RequestSaveAs(untitledShell, "choose a path");
   EditorShellTestAccess::RequestSave(untitledShell);
   EXPECT_TRUE(untitledShell.valid());
+}
+
+TEST(EditorShellTest, ViewportSvgExportRequestsAndWritesCroppedSvg) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  const std::filesystem::path sourcePath = TempPathForTest("source.svg");
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, sourcePath.string()));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0.0, 0.0, 120.0, 80.0));
+
+  EditorShellTestAccess::RequestExportViewportSvg(shell, /*includeOverlay=*/false);
+  EXPECT_TRUE(EditorShellTestAccess::PendingViewportExport(shell));
+  EXPECT_FALSE(EditorShellTestAccess::PendingViewportExportOverlay(shell));
+
+  EditorShellTestAccess::RequestExportViewportSvg(shell, /*includeOverlay=*/true, "try again");
+  EXPECT_TRUE(EditorShellTestAccess::PendingViewportExport(shell));
+  EXPECT_TRUE(EditorShellTestAccess::PendingViewportExportOverlay(shell));
+
+  const std::filesystem::path exportPath = TempPathForTest("viewport.svg");
+  std::string error;
+  EXPECT_TRUE(EditorShellTestAccess::TryExportViewportSvgToPath(shell, exportPath.string(), &error))
+      << error;
+  EXPECT_FALSE(EditorShellTestAccess::PendingViewportExport(shell));
+  EXPECT_FALSE(EditorShellTestAccess::PendingViewportExportOverlay(shell));
+  const std::string exported = ReadTextFile(exportPath);
+  EXPECT_NE(exported.find("<svg"), std::string::npos);
+  EXPECT_NE(exported.find("target"), std::string::npos);
+
+  EditorShell invalidShell(window, OptionsWithSource("<svg><rect></svg>", "broken.svg"));
+  ASSERT_TRUE(invalidShell.valid());
+  error.clear();
+  EXPECT_FALSE(
+      EditorShellTestAccess::TryExportViewportSvgToPath(invalidShell, exportPath.string(), &error));
+  EXPECT_EQ(error, "No document is open to export.");
+
+  error.clear();
+  EXPECT_FALSE(EditorShellTestAccess::TryExportViewportSvgToPath(
+      shell, TempPathForTest("missing_directory/viewport.svg").string(), &error));
+  EXPECT_FALSE(error.empty());
+}
+
+TEST(EditorShellTest, ViewportSvgExportRequestUsesUntitledDocument) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, ""));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::App(shell).setCurrentFilePath("");
+
+  EditorShellTestAccess::RequestExportViewportSvg(shell, /*includeOverlay=*/false);
+
+  EXPECT_TRUE(EditorShellTestAccess::PendingViewportExport(shell));
+  EXPECT_FALSE(EditorShellTestAccess::PendingViewportExportOverlay(shell));
 }
 
 TEST(EditorShellTest, DiagnosticsLoggingHonorsEnvironmentTargets) {
@@ -517,6 +1327,22 @@ TEST(EditorShellTest, DiagnosticsLoggingHonorsEnvironmentTargets) {
   setenv("DONNER_EDITOR_FRAME_MISS_LOG", telemetryPath.string().c_str(), /*overwrite=*/1);
   EditorShellTestAccess::MaybeLogFrameMissTelemetry(shell, frameCost);
   EXPECT_NE(ReadTextFile(telemetryPath).find("frame_budget_miss"), std::string::npos);
+
+  for (std::string_view stderrTarget : {"", "1", "true", "stderr"}) {
+    setenv("DONNER_EDITOR_FRAME_MISS_LOG", std::string(stderrTarget).c_str(), /*overwrite=*/1);
+    EditorShellTestAccess::MaybeLogFrameMissTelemetry(shell, frameCost);
+    EXPECT_FALSE(EditorShellTestAccess::FrameMissTelemetryWriteErrorLogged(shell));
+  }
+
+  setenv("DONNER_EDITOR_FRAME_MISS_LOG", "0", /*overwrite=*/1);
+  EditorShellTestAccess::MaybeLogFrameMissTelemetry(shell, frameCost);
+  EXPECT_FALSE(EditorShellTestAccess::FrameMissTelemetryWriteErrorLogged(shell));
+
+  unsetenv("DONNER_EDITOR_FRAME_MISS_LOG");
+  setenv("DONNER_EDITOR_RESOURCE_LOG", "1", /*overwrite=*/1);
+  EditorShellTestAccess::MaybeLogFrameMissTelemetry(shell, frameCost);
+  EXPECT_FALSE(EditorShellTestAccess::FrameMissTelemetryWriteErrorLogged(shell));
+  unsetenv("DONNER_EDITOR_RESOURCE_LOG");
 
   const std::filesystem::path badTelemetryPath =
       TempPathForTest("missing_directory/frame_miss.jsonl");
@@ -616,6 +1442,208 @@ TEST(EditorShellTest, RenderContextMenuOpenStoresPointAndHitElement) {
   EditorShellTestAccess::OpenRenderPaneContextMenu(invalidShell, Vector2d(1.0, 1.0));
   EXPECT_TRUE(EditorShellTestAccess::RenderContextMenuOpenRequested(invalidShell));
   EXPECT_FALSE(EditorShellTestAccess::RenderContextMenuHasHitElement(invalidShell));
+}
+
+TEST(EditorShellTest, RenderContextMenuRendersHitEmptyAndNoDocumentStates) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::OpenRenderPaneContextMenu(shell, Vector2d(12.0, 14.0));
+  RenderContextMenuFrame(window, shell);
+  EXPECT_FALSE(EditorShellTestAccess::RenderContextMenuOpenRequested(shell));
+  EXPECT_TRUE(EditorShellTestAccess::RenderContextMenuHasHitElement(shell));
+
+  EditorShellTestAccess::OpenRenderPaneContextMenu(shell, Vector2d(400.0, 300.0));
+  RenderContextMenuFrame(window, shell);
+  EXPECT_FALSE(EditorShellTestAccess::RenderContextMenuOpenRequested(shell));
+  EXPECT_FALSE(EditorShellTestAccess::RenderContextMenuHasHitElement(shell));
+
+  EditorShell invalidShell(window, OptionsWithSource("<svg><rect></svg>", "broken.svg"));
+  ASSERT_TRUE(invalidShell.valid());
+  EditorShellTestAccess::OpenRenderPaneContextMenu(invalidShell, Vector2d(1.0, 1.0));
+  RenderContextMenuFrame(window, invalidShell);
+  EXPECT_FALSE(EditorShellTestAccess::RenderContextMenuOpenRequested(invalidShell));
+  EXPECT_FALSE(EditorShellTestAccess::RenderContextMenuHasHitElement(invalidShell));
+}
+
+TEST(EditorShellTest, DocumentSpaceReplayInputSelectsHitElementAndHandlesGuards) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+
+  EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
+  EXPECT_TRUE(EditorShellTestAccess::App(shell).selectedElements().empty());
+
+  EditorShell invalidShell(window, OptionsWithSource("<svg><rect></svg>", "broken.svg"));
+  ASSERT_TRUE(invalidShell.valid());
+  invalidShell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(12.0, 14.0),
+      .hitElementId = std::string("target"),
+  });
+  EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(invalidShell);
+  EXPECT_TRUE(EditorShellTestAccess::App(invalidShell).selectedElements().empty());
+
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(12.0, 14.0),
+      .hitElementId = std::string("target"),
+  });
+  EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
+  ASSERT_TRUE(EditorShellTestAccess::App(shell).selectedElement().has_value());
+  EXPECT_EQ(EditorShellTestAccess::App(shell).selectedElement()->id(), "target");
+
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(12.0, 14.0),
+      .hitElementId = std::string("target"),
+  });
+  EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
+  ASSERT_TRUE(EditorShellTestAccess::App(shell).selectedElement().has_value());
+  EXPECT_EQ(EditorShellTestAccess::App(shell).selectedElement()->id(), "target");
+
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(20.0, 30.0),
+      .hitElementId = std::string(),
+  });
+  EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
+  ASSERT_TRUE(EditorShellTestAccess::App(shell).selectedElement().has_value());
+  EXPECT_EQ(EditorShellTestAccess::App(shell).selectedElement()->id(), "target");
+}
+
+TEST(EditorShellTest, DocumentSpaceReplayInputRoutesSelectPressAndRelease) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0.0, 0.0, 120.0, 80.0));
+  EditorShellTestAccess::ClearRequestRenderAtEndOfFrame(shell);
+
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(12.0, 14.0),
+      .leftMouseDown = true,
+      .leftMousePressed = true,
+      .hitElementId = std::string("target"),
+  });
+  EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
+
+  ASSERT_TRUE(EditorShellTestAccess::App(shell).selectedElement().has_value());
+  EXPECT_EQ(EditorShellTestAccess::App(shell).selectedElement()->id(), "target");
+  EXPECT_TRUE(EditorShellTestAccess::RequestRenderAtEndOfFrame(shell));
+
+  EditorShellTestAccess::ClearRequestRenderAtEndOfFrame(shell);
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(24.0, 22.0),
+      .leftMouseDown = true,
+      .hitElementId = std::string("target"),
+  });
+  EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
+
+  ASSERT_TRUE(EditorShellTestAccess::App(shell).selectedElement().has_value());
+  EXPECT_EQ(EditorShellTestAccess::App(shell).selectedElement()->id(), "target");
+  EXPECT_TRUE(EditorShellTestAccess::RequestRenderAtEndOfFrame(shell));
+
+  EditorShellTestAccess::ClearRequestRenderAtEndOfFrame(shell);
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(12.0, 14.0),
+      .leftMouseReleased = true,
+      .hitElementId = std::string("target"),
+  });
+  EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
+
+  ASSERT_TRUE(EditorShellTestAccess::App(shell).selectedElement().has_value());
+  EXPECT_EQ(EditorShellTestAccess::App(shell).selectedElement()->id(), "target");
+  EXPECT_TRUE(EditorShellTestAccess::RequestRenderAtEndOfFrame(shell));
+}
+
+TEST(EditorShellTest, DocumentSpaceReplayInputRoutesTextToolClick) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  DriveGlobalShortcut(shell, {ImGuiKey_T});
+  ASSERT_TRUE(EditorShellTestAccess::ActiveToolIsText(shell));
+
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(30.0, 40.0),
+      .leftMouseDown = true,
+      .leftMousePressed = true,
+  });
+  EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
+
+  ASSERT_TRUE(EditorShellTestAccess::App(shell).selectedElement().has_value());
+  const svg::SVGElement selected = *EditorShellTestAccess::App(shell).selectedElement();
+  EXPECT_EQ(selected.type(), svg::ElementType::Text);
+  ASSERT_TRUE(selected.getAttribute("x").has_value());
+  EXPECT_EQ(*selected.getAttribute("x"), "30");
+  ASSERT_TRUE(selected.getAttribute("y").has_value());
+  EXPECT_EQ(*selected.getAttribute("y"), "40");
+  EXPECT_TRUE(EditorShellTestAccess::ActiveToolIsSelect(shell));
+  EXPECT_NE(EditorShellTestAccess::App(shell).document().document().source().find(">Text<"),
+            std::string_view::npos);
+}
+
+TEST(EditorShellTest, DocumentSpaceReplayInputRoutesPenPressReleaseAndHover) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  DriveGlobalShortcut(shell, {ImGuiKey_P});
+  ASSERT_TRUE(EditorShellTestAccess::ActiveToolIsPen(shell));
+
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(5.0, 6.0),
+      .leftMouseDown = true,
+      .leftMousePressed = true,
+  });
+  EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
+
+  EXPECT_TRUE(EditorShellTestAccess::PenToolIsDrafting(shell));
+  EXPECT_TRUE(EditorShellTestAccess::PenToolIsDraggingAnchor(shell));
+  EXPECT_FALSE(EditorShellTestAccess::PenToolActivePathData(shell).empty());
+
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(10.0, 12.0),
+      .leftMouseDown = true,
+  });
+  EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
+
+  EXPECT_TRUE(EditorShellTestAccess::PenDragFlushedThisFrame(shell));
+  EXPECT_TRUE(EditorShellTestAccess::PenToolIsDrafting(shell));
+  EXPECT_TRUE(EditorShellTestAccess::PenToolIsDraggingAnchor(shell));
+
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(5.0, 6.0),
+      .leftMouseReleased = true,
+  });
+  EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
+
+  EXPECT_TRUE(EditorShellTestAccess::PenToolIsDrafting(shell));
+  EXPECT_FALSE(EditorShellTestAccess::PenToolIsDraggingAnchor(shell));
+  EXPECT_FALSE(EditorShellTestAccess::PenToolActivePathData(shell).empty());
+  EXPECT_NE(EditorShellTestAccess::App(shell).document().document().source().find("<path"),
+            std::string_view::npos);
+
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(18.0, 24.0),
+  });
+  EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
+
+  EXPECT_TRUE(EditorShellTestAccess::PenToolIsDrafting(shell));
 }
 
 TEST(EditorShellTest, SourcePaneVisibilityRevealAndHoverRangesUseCurrentDocumentSource) {
@@ -759,6 +1787,229 @@ TEST(EditorShellTest, ShellGeometryHelpersClampToViewportAndSelectionCache) {
                                                                      ImVec2(500.0f, 300.0f));
   EXPECT_GT(palette.width(), 0.0);
   EXPECT_GT(palette.height(), 0.0);
+}
+
+TEST(EditorShellTest, PrivateUiRenderHelpersCoverPaneToolbarAndPanelStates) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kReferencedSvg));
+  ASSERT_TRUE(shell.valid());
+  auto target = EditorShellTestAccess::App(shell).document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  EditorShellTestAccess::App(shell).setSelection(*target);
+  EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0.0, 0.0, 120.0, 80.0));
+
+  if (!ImGui::GetIO().Fonts->IsBuilt()) {
+    ImGui::GetIO().Fonts->Build();
+  }
+  window.beginFrame();
+  ImGuiIO& io = ImGui::GetIO();
+  ASSERT_FALSE(io.Fonts->Fonts.empty());
+  EditorShellTestAccess::RenderSourcePane(shell, /*paneOriginY=*/0.0f, /*paneHeight=*/180.0f,
+                                          /*paneWidth=*/260.0f, io.Fonts->Fonts[0]);
+
+  constexpr ImGuiWindowFlags kHostFlags =
+      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings;
+  ImGui::SetNextWindowPos(ImVec2(280.0f, 0.0f), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(340.0f, 220.0f), ImGuiCond_Always);
+  ImGui::Begin("EditorShellPrivateUiHost", nullptr, kHostFlags);
+  EditorShellTestAccess::RenderFillStrokeToolbarWidget(shell);
+  EditorShellTestAccess::RenderLayerPanelContents(shell);
+  ImGui::End();
+
+  EditorShellTestAccess::RenderSourcePaneSplitter(shell, /*windowWidth=*/640.0f,
+                                                  /*paneOriginY=*/0.0f, /*paneHeight=*/220.0f,
+                                                  /*sourcePaneWidth=*/260.0f);
+  EditorShellTestAccess::RenderRightPaneSplitter(shell, /*windowWidth=*/640.0f,
+                                                 /*paneOriginY=*/0.0f, /*paneHeight=*/220.0f);
+  window.endFrame();
+
+  EditorShellTestAccess::SetSourcePaneVisible(shell, false);
+  EditorShellTestAccess::SetSourceFocusMode(shell, true);
+  EditorShell invalidShell(window, OptionsWithSource("<svg><rect></svg>"));
+  ASSERT_TRUE(invalidShell.valid());
+
+  if (!ImGui::GetIO().Fonts->IsBuilt()) {
+    ImGui::GetIO().Fonts->Build();
+  }
+  window.beginFrame();
+  ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(240.0f, 80.0f), ImGuiCond_Always);
+  ImGui::Begin("EditorShellInvalidToolbarHost", nullptr, kHostFlags);
+  EditorShellTestAccess::RenderFillStrokeToolbarWidget(invalidShell);
+  EditorShellTestAccess::RenderLayerPanelContents(invalidShell);
+  ImGui::End();
+  EditorShellTestAccess::RenderSourcePaneSplitter(shell, /*windowWidth=*/640.0f,
+                                                  /*paneOriginY=*/0.0f, /*paneHeight=*/220.0f,
+                                                  /*sourcePaneWidth=*/0.0f);
+  EditorShellTestAccess::RenderRightPaneSplitter(shell, /*windowWidth=*/640.0f,
+                                                 /*paneOriginY=*/0.0f, /*paneHeight=*/220.0f);
+  window.endFrame();
+
+  EXPECT_TRUE(shell.valid());
+  EXPECT_TRUE(invalidShell.valid());
+}
+
+TEST(EditorShellTest, CompositorDebugPanelDragHandleDetachesAndMovesFloatingPanel) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::SetShowCompositorDebugPanel(shell, true);
+
+  const Box2d handleRect =
+      RenderDockedLayerPanelDragHandleFrame(window, shell, ImVec2(-100.0f, -100.0f),
+                                            /*mouseDown=*/false);
+  const ImVec2 handleCenter(
+      static_cast<float>((handleRect.topLeft.x + handleRect.bottomRight.x) * 0.5),
+      static_cast<float>((handleRect.topLeft.y + handleRect.bottomRight.y) * 0.5));
+  RenderDockedLayerPanelDragHandleFrame(window, shell, handleCenter, /*mouseDown=*/true);
+  RenderDockedLayerPanelDragHandleFrame(window, shell,
+                                        ImVec2(handleCenter.x + 30.0f, handleCenter.y + 25.0f),
+                                        /*mouseDown=*/true);
+
+  EXPECT_TRUE(EditorShellTestAccess::LayerPanelDetached(shell));
+  EXPECT_TRUE(EditorShellTestAccess::LayerPanelDetachDragActive(shell));
+  EXPECT_TRUE(EditorShellTestAccess::LayerPanelFloatingNeedsPlacement(shell));
+
+  RenderFloatingLayerPanelFrame(window, shell, ImVec2(150.0f, 125.0f), /*mouseDown=*/true);
+
+  EXPECT_TRUE(EditorShellTestAccess::LayerPanelDetached(shell));
+  EXPECT_FALSE(EditorShellTestAccess::LayerPanelFloatingNeedsPlacement(shell));
+
+  RenderFloatingLayerPanelFrame(window, shell, ImVec2(150.0f, 125.0f), /*mouseDown=*/false);
+
+  EXPECT_TRUE(EditorShellTestAccess::LayerPanelDetached(shell));
+  EXPECT_FALSE(EditorShellTestAccess::LayerPanelDetachDragActive(shell));
+}
+
+TEST(EditorShellTest, SourcePaneSplitterDragCollapsesPane) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+
+  const Box2d sourceRect = RenderSourcePaneSplitterFrame(
+      window, shell, /*sourcePaneWidth=*/260.0f, ImVec2(-100.0f, -100.0f), /*mouseDown=*/false);
+  const ImVec2 sourceCenter(
+      static_cast<float>((sourceRect.topLeft.x + sourceRect.bottomRight.x) * 0.5),
+      static_cast<float>((sourceRect.topLeft.y + sourceRect.bottomRight.y) * 0.5));
+  RenderSourcePaneSplitterFrame(window, shell, /*sourcePaneWidth=*/260.0f, sourceCenter,
+                                /*mouseDown=*/true);
+  RenderSourcePaneSplitterFrame(window, shell, /*sourcePaneWidth=*/260.0f,
+                                ImVec2(sourceCenter.x - 120.0f, sourceCenter.y),
+                                /*mouseDown=*/true);
+
+  EXPECT_FALSE(EditorShellTestAccess::SourcePaneVisible(shell));
+}
+
+TEST(EditorShellTest, FillStrokeToolbarMouseHitTestingCoversChipsSwatchesAndTooltips) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kPaintToolbarSvg, "paint_toolbar.svg"));
+  ASSERT_TRUE(shell.valid());
+  svg::SVGDocument& document = EditorShellTestAccess::App(shell).document().document();
+
+  auto selectById = [&](std::string_view id) {
+    std::optional<svg::SVGElement> element = document.querySelector("#" + std::string(id));
+    ASSERT_TRUE(element.has_value()) << id;
+    EditorShellTestAccess::App(shell).setSelection(*element);
+  };
+
+  constexpr ImVec2 kCursor(20.0f, 40.0f);
+  constexpr ImVec2 kStrokeChip(70.0f, 47.0f);
+  constexpr ImVec2 kFillChip(70.0f, 63.0f);
+  constexpr ImVec2 kStrokeSwatchOnly(50.0f, 47.0f);
+  constexpr ImVec2 kFillSwatchOnly(30.0f, 65.0f);
+  constexpr ImVec2 kWidgetBackground(58.0f, 70.0f);
+
+  selectById("local");
+  RunFramesUntilDisplayedSelectionBounds(window, shell);
+  EditorShellTestAccess::SetSourcePaneVisible(shell, false);
+  ClickToolbar(window, shell, kCursor, kFillChip);
+  ClickToolbar(window, shell, kCursor, kStrokeChip);
+  RenderToolbarFrame(window, shell, kCursor, kStrokeChip, /*mouseDown=*/false);
+  ClickToolbar(window, shell, kCursor, kFillSwatchOnly);
+  ClickToolbar(window, shell, kCursor, kStrokeSwatchOnly);
+  ClickToolbar(window, shell, kCursor, kWidgetBackground);
+
+  for (std::string_view id : {"missing", "contextual", "styled-none-attribute", "external"}) {
+    selectById(id);
+    RenderToolbarFrame(window, shell, kCursor, kFillChip, /*mouseDown=*/false);
+  }
+
+  EXPECT_TRUE(shell.valid());
+}
+
+TEST(EditorShellTest, ToolPaletteSelectCommitsOpenPenPath) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0.0, 0.0, 120.0, 80.0));
+  DriveGlobalShortcut(shell, {ImGuiKey_P});
+  ASSERT_TRUE(EditorShellTestAccess::ActiveToolIsPen(shell));
+
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(5.0, 6.0),
+      .leftMouseDown = true,
+      .leftMousePressed = true,
+  });
+  EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(5.0, 6.0),
+      .leftMouseReleased = true,
+  });
+  EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
+
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(25.0, 16.0),
+      .leftMouseDown = true,
+      .leftMousePressed = true,
+  });
+  EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(25.0, 16.0),
+      .leftMouseReleased = true,
+  });
+  EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
+  ASSERT_TRUE(EditorShellTestAccess::PenToolIsDrafting(shell));
+
+  constexpr ImVec2 kPaneOrigin(20.0f, 30.0f);
+  constexpr ImVec2 kContentRegion(400.0f, 260.0f);
+  const Box2d palette =
+      EditorShellTestAccess::ToolPaletteScreenRect(shell, kPaneOrigin, kContentRegion);
+  const ImVec2 selectCenter(static_cast<float>(palette.topLeft.x + 20.0),
+                            static_cast<float>(palette.topLeft.y + 20.0));
+
+  RenderToolPaletteFrame(window, shell, kPaneOrigin, kContentRegion,
+                         ImVec2(selectCenter.x, selectCenter.y), /*mouseDown=*/false);
+  RenderToolPaletteFrame(window, shell, kPaneOrigin, kContentRegion, selectCenter,
+                         /*mouseDown=*/false);
+  RenderToolPaletteFrame(window, shell, kPaneOrigin, kContentRegion, selectCenter,
+                         /*mouseDown=*/true);
+  RenderToolPaletteFrame(window, shell, kPaneOrigin, kContentRegion, selectCenter,
+                         /*mouseDown=*/false);
+
+  EXPECT_TRUE(EditorShellTestAccess::ActiveToolIsSelect(shell));
+  EXPECT_FALSE(EditorShellTestAccess::PenToolIsDrafting(shell));
+  EXPECT_NE(EditorShellTestAccess::App(shell).document().document().source().find("<path"),
+            std::string_view::npos);
 }
 
 TEST(EditorShellTest, HighlightSelectionSourceHandlesTextOriginAndClearedSelection) {
@@ -916,6 +2167,652 @@ TEST(EditorShellTest, SourcePaneVisibilityNoOpsWhenAlreadyMatching) {
   EXPECT_FALSE(EditorShellTestAccess::SourcePaneVisible(shell));
   EditorShellTestAccess::SetSourcePaneVisible(shell, false);
   EXPECT_FALSE(EditorShellTestAccess::SourcePaneVisible(shell));
+}
+
+TEST(EditorShellTest, SelectAllCanvasAndTextSelectionPreconditions) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+
+  EXPECT_TRUE(EditorShellTestAccess::CanvasHasSelectableElements(shell));
+  EditorShellTestAccess::SelectAllCanvasElements(shell);
+  EXPECT_GT(EditorShellTestAccess::App(shell).selectedElements().size(), 1u);
+  EXPECT_FALSE(EditorShellTestAccess::SelectionIsAllText(shell));
+
+  auto label = EditorShellTestAccess::App(shell).document().document().querySelector("#label");
+  ASSERT_TRUE(label.has_value());
+  EditorShellTestAccess::App(shell).setSelection(*label);
+  EXPECT_TRUE(EditorShellTestAccess::SelectionIsAllText(shell));
+
+  EditorShellTestAccess::App(shell).clearSelection();
+  EXPECT_FALSE(EditorShellTestAccess::SelectionIsAllText(shell));
+
+  EditorShell invalidShell(window, OptionsWithSource("<svg><rect></svg>", "broken.svg"));
+  ASSERT_TRUE(invalidShell.valid());
+  EXPECT_FALSE(EditorShellTestAccess::CanvasHasSelectableElements(invalidShell));
+  EditorShellTestAccess::SelectAllCanvasElements(invalidShell);
+  EXPECT_TRUE(EditorShellTestAccess::App(invalidShell).selectedElements().empty());
+}
+
+TEST(EditorShellTest, ConvertSelectedTextToOutlinesGuardsNonTextSelection) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+
+  auto target = EditorShellTestAccess::App(shell).document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  EditorShellTestAccess::App(shell).setSelection(*target);
+  const std::string sourceBefore(EditorShellTestAccess::App(shell).document().document().source());
+
+  EditorShellTestAccess::ConvertSelectedTextToOutlines(shell);
+  (void)EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell);
+
+  EXPECT_EQ(EditorShellTestAccess::App(shell).document().document().source(), sourceBefore);
+  EXPECT_TRUE(EditorShellTestAccess::LastConvertTextError(shell).empty());
+  EXPECT_TRUE(EditorShellTestAccess::App(shell).document().document().querySelector("#target"));
+}
+
+TEST(EditorShellTest, ConvertSelectedTextToOutlinesReplacesTextWithPathGroup) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+
+  auto label = EditorShellTestAccess::App(shell).document().document().querySelector("#label");
+  ASSERT_TRUE(label.has_value());
+  EditorShellTestAccess::App(shell).setSelection(*label);
+
+  EditorShellTestAccess::ConvertSelectedTextToOutlines(shell);
+  EXPECT_TRUE(EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell));
+
+  svg::SVGDocument& document = EditorShellTestAccess::App(shell).document().document();
+  EXPECT_FALSE(document.querySelector("#label").has_value());
+  ASSERT_TRUE(document.querySelector("#label_outlines").has_value());
+  EXPECT_TRUE(document.querySelector("#label_outlines_0").has_value());
+  EXPECT_NE(document.source().find(R"(id="label_outlines")"), std::string_view::npos);
+  EXPECT_EQ(EditorShellTestAccess::App(shell).selectedElements().size(), 1u);
+  EXPECT_EQ(EditorShellTestAccess::App(shell).selectedElements().front().id(), "label_outlines");
+  EXPECT_TRUE(EditorShellTestAccess::LastConvertTextError(shell).empty());
+}
+
+TEST(EditorShellTest, RenderPaneDeferredEmptyClickStartsMarqueeAfterHold) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::BufferPendingClick(shell, Vector2d(400.0, 300.0));
+  EditorShellTestAccess::SetPendingSelectClickStartSeconds(shell, -1.0);
+
+  ImGuiIO& io = ImGui::GetIO();
+  io.DisplaySize = ImVec2(640.0f, 480.0f);
+  io.AddMousePosEvent(-50.0f, -50.0f);
+  io.AddMouseButtonEvent(0, true);
+
+  window.beginFrame();
+  EditorShellTestAccess::RenderRenderPane(
+      shell, Vector2d(0.0, 0.0), Vector2d(320.0, 220.0),
+      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
+  window.endFrame();
+
+  EXPECT_FALSE(EditorShellTestAccess::HasPendingClick(shell));
+  EXPECT_TRUE(EditorShellTestAccess::SelectToolIsMarqueeing(shell));
+  EXPECT_TRUE(EditorShellTestAccess::RequestRenderAtEndOfFrame(shell));
+
+  io.AddMouseButtonEvent(0, false);
+  window.beginFrame();
+  window.endFrame();
+}
+
+TEST(EditorShellTest, RenderPaneTextToolClickCreatesTextAndReturnsToSelect) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0.0, 0.0, 120.0, 80.0));
+
+  DriveGlobalShortcut(shell, {ImGuiKey_T});
+  ASSERT_TRUE(EditorShellTestAccess::ActiveToolIsText(shell));
+
+  EditorShellTestAccess::BufferPendingClick(shell, Vector2d(24.0, 34.0));
+  RenderPaneMouseFrame(window, shell, Vector2d(24.0, 34.0), /*mouseDown=*/false);
+  EXPECT_TRUE(EditorShellTestAccess::ActiveToolIsSelect(shell));
+  (void)EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell);
+
+  const std::string_view source = EditorShellTestAccess::App(shell).document().document().source();
+  EXPECT_NE(source.find(R"(x="24")"), std::string_view::npos);
+  EXPECT_NE(source.find(R"(y="34")"), std::string_view::npos);
+  EXPECT_NE(source.find(">Text</text>"), std::string_view::npos);
+}
+
+TEST(EditorShellTest, RenderPanePenToolClickDragAndCommitOpenPath) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0.0, 0.0, 120.0, 80.0));
+
+  DriveGlobalShortcut(shell, {ImGuiKey_P});
+  ASSERT_TRUE(EditorShellTestAccess::ActiveToolIsPen(shell));
+
+  EditorShellTestAccess::BufferPendingClick(shell, Vector2d(12.0, 18.0));
+  RenderPaneMouseFrame(window, shell, Vector2d(18.0, 24.0), /*mouseDown=*/false);
+  EXPECT_TRUE(EditorShellTestAccess::PenToolIsDrafting(shell));
+  EXPECT_FALSE(EditorShellTestAccess::PenToolActivePathData(shell).empty());
+
+  MouseModifiers constrainedClick;
+  constrainedClick.shift = true;
+  constrainedClick.pixelsPerDocUnit = shell.viewportForReadback().pixelsPerDocUnit();
+  EditorShellTestAccess::BufferPendingClick(shell, Vector2d(42.0, 24.0), constrainedClick);
+  RenderPaneMouseFrame(window, shell, Vector2d(42.0, 24.0), /*mouseDown=*/false);
+  EXPECT_TRUE(EditorShellTestAccess::PenToolIsDrafting(shell));
+
+  DriveGlobalShortcut(shell, {ImGuiKey_Enter});
+  EXPECT_FALSE(EditorShellTestAccess::PenToolIsDrafting(shell));
+  (void)EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell);
+  EXPECT_NE(EditorShellTestAccess::App(shell).document().document().source().find("<path"),
+            std::string_view::npos);
+}
+
+TEST(EditorShellTest, RenderPanePenToolDragsAnchorAndCommitsOnDoubleClick) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0.0, 0.0, 120.0, 80.0));
+
+  DriveGlobalShortcut(shell, {ImGuiKey_P});
+  ASSERT_TRUE(EditorShellTestAccess::ActiveToolIsPen(shell));
+
+  EditorShellTestAccess::BufferPendingClick(shell, Vector2d(12.0, 18.0));
+  RenderPaneMouseFrame(window, shell, Vector2d(12.0, 18.0), /*mouseDown=*/true);
+  ASSERT_TRUE(EditorShellTestAccess::PenToolIsDrafting(shell));
+  ASSERT_TRUE(EditorShellTestAccess::PenToolIsDraggingAnchor(shell));
+
+  RenderPaneMouseFrame(window, shell, Vector2d(22.0, 28.0), /*mouseDown=*/true);
+  EXPECT_TRUE(EditorShellTestAccess::PenDragFlushedThisFrame(shell));
+  EXPECT_TRUE(EditorShellTestAccess::PenToolIsDraggingAnchor(shell));
+
+  RenderPaneMouseFrame(window, shell, Vector2d(22.0, 28.0), /*mouseDown=*/false);
+  EXPECT_TRUE(EditorShellTestAccess::PenToolIsDrafting(shell));
+  EXPECT_FALSE(EditorShellTestAccess::PenToolIsDraggingAnchor(shell));
+
+  EditorShellTestAccess::BufferPendingClick(shell, Vector2d(42.0, 24.0));
+  RenderPaneMouseFrame(window, shell, Vector2d(42.0, 24.0), /*mouseDown=*/false);
+  ASSERT_TRUE(EditorShellTestAccess::PenToolIsDrafting(shell));
+
+  RenderPaneMouseFrame(window, shell, Vector2d(42.0, 24.0), /*mouseDown=*/true,
+                       Vector2d(20.0, 30.0), Vector2d(400.0, 260.0),
+                       /*shift=*/false, /*option=*/false, /*command=*/false,
+                       /*doubleClick=*/true);
+  EXPECT_FALSE(EditorShellTestAccess::PenToolIsDrafting(shell));
+  EXPECT_NE(EditorShellTestAccess::App(shell).document().document().source().find("<path"),
+            std::string_view::npos);
+}
+
+TEST(EditorShellTest, GlobalShortcutDeleteWhilePenDraftingRemovesAnchorBeforeCanvasDelete) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+
+  DriveGlobalShortcut(shell, {ImGuiKey_P});
+  ASSERT_TRUE(EditorShellTestAccess::ActiveToolIsPen(shell));
+
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(12.0, 18.0),
+      .leftMouseDown = true,
+      .leftMousePressed = true,
+  });
+  EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(12.0, 18.0),
+      .leftMouseReleased = true,
+  });
+  EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
+  ASSERT_TRUE(EditorShellTestAccess::PenToolIsDrafting(shell));
+
+  DriveGlobalShortcut(shell, {ImGuiKey_Delete});
+
+  EXPECT_TRUE(EditorShellTestAccess::ActiveToolIsPen(shell));
+  EXPECT_FALSE(EditorShellTestAccess::PenToolIsDrafting(shell));
+  EXPECT_TRUE(EditorShellTestAccess::App(shell).hasDocument());
+}
+
+TEST(EditorShellTest, GlobalShortcutsSwitchToolsZoomAndSourceFocus) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0.0, 0.0, 120.0, 80.0));
+
+  EXPECT_TRUE(EditorShellTestAccess::ActiveToolIsSelect(shell));
+  DriveGlobalShortcut(shell, {ImGuiKey_P});
+  EXPECT_TRUE(EditorShellTestAccess::ActiveToolIsPen(shell));
+  DriveGlobalShortcut(shell, {ImGuiKey_T});
+  EXPECT_TRUE(EditorShellTestAccess::ActiveToolIsText(shell));
+  DriveGlobalShortcut(shell, {ImGuiKey_Escape});
+  EXPECT_TRUE(EditorShellTestAccess::ActiveToolIsSelect(shell));
+  DriveGlobalShortcut(shell, {ImGuiKey_P});
+  EXPECT_TRUE(EditorShellTestAccess::ActiveToolIsPen(shell));
+  DriveGlobalShortcut(shell, {ImGuiKey_V});
+  EXPECT_TRUE(EditorShellTestAccess::ActiveToolIsSelect(shell));
+
+  const bool sourceFocusBefore = EditorShellTestAccess::SourceFocusMode(shell);
+  DriveGlobalShortcut(shell, {ImGuiKey_Enter}, /*ctrl=*/true);
+  EXPECT_NE(EditorShellTestAccess::SourceFocusMode(shell), sourceFocusBefore);
+
+  EditorShellTestAccess::ClearRequestRenderAtEndOfFrame(shell);
+  DriveGlobalShortcut(shell, {ImGuiKey_Equal}, /*ctrl=*/true);
+  EXPECT_TRUE(EditorShellTestAccess::RequestRenderAtEndOfFrame(shell));
+
+  EditorShellTestAccess::ClearRequestRenderAtEndOfFrame(shell);
+  DriveGlobalShortcut(shell, {ImGuiKey_Minus}, /*ctrl=*/true);
+  EXPECT_TRUE(EditorShellTestAccess::RequestRenderAtEndOfFrame(shell));
+
+  DriveGlobalShortcut(shell, {ImGuiKey_Equal}, /*ctrl=*/true);
+  EditorShellTestAccess::ClearRequestRenderAtEndOfFrame(shell);
+  DriveGlobalShortcut(shell, {ImGuiKey_0}, /*ctrl=*/true);
+  EXPECT_TRUE(EditorShellTestAccess::RequestRenderAtEndOfFrame(shell));
+
+  EditorShellTestAccess::ClearRequestRenderAtEndOfFrame(shell);
+  DriveGlobalShortcut(shell, {ImGuiKey_KeypadAdd}, /*ctrl=*/true);
+  EXPECT_TRUE(EditorShellTestAccess::RequestRenderAtEndOfFrame(shell));
+
+  EditorShellTestAccess::ClearRequestRenderAtEndOfFrame(shell);
+  DriveGlobalShortcut(shell, {ImGuiKey_KeypadSubtract}, /*ctrl=*/true);
+  EXPECT_TRUE(EditorShellTestAccess::RequestRenderAtEndOfFrame(shell));
+
+  const bool sourceFocusBeforeKeypadEnter = EditorShellTestAccess::SourceFocusMode(shell);
+  DriveGlobalShortcut(shell, {ImGuiKey_KeypadEnter}, /*ctrl=*/true);
+  EXPECT_NE(EditorShellTestAccess::SourceFocusMode(shell), sourceFocusBeforeKeypadEnter);
+}
+
+TEST(EditorShellTest, GlobalShortcutsRouteFileDialogsSaveAndQuit) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  const std::filesystem::path savePath = TempPathForTest("shortcut_save.svg");
+  std::filesystem::remove(savePath);
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, savePath.string()));
+  ASSERT_TRUE(shell.valid());
+
+  DriveGlobalShortcut(shell, {ImGuiKey_O}, /*ctrl=*/true);
+  EXPECT_TRUE(EditorShellTestAccess::OpenFileModalRequested(shell));
+
+  DriveGlobalShortcut(shell, {ImGuiKey_S}, /*ctrl=*/true);
+  ASSERT_TRUE(std::filesystem::exists(savePath));
+  EXPECT_NE(ReadTextFile(savePath).find("target"), std::string::npos);
+
+  DriveGlobalShortcut(shell, {ImGuiKey_S}, /*ctrl=*/true, /*shift=*/true);
+  EXPECT_TRUE(EditorShellTestAccess::SaveFileModalRequested(shell));
+
+  glfwSetWindowShouldClose(window.rawHandle(), GLFW_FALSE);
+  DriveGlobalShortcut(shell, {ImGuiKey_Q}, /*ctrl=*/true);
+  EXPECT_NE(glfwWindowShouldClose(window.rawHandle()), 0);
+}
+
+TEST(EditorShellTest, GlobalShortcutsRouteCanvasSelectionAndShapeClipboard) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::UseInMemoryShapeClipboard(shell);
+
+  DriveGlobalShortcut(shell, {ImGuiKey_A}, /*ctrl=*/true);
+  EXPECT_GT(EditorShellTestAccess::App(shell).selectedElements().size(), 1u);
+
+  DriveGlobalShortcut(shell, {ImGuiKey_A}, /*ctrl=*/true, /*shift=*/true);
+  EXPECT_FALSE(EditorShellTestAccess::App(shell).hasSelection());
+
+  auto target = EditorShellTestAccess::App(shell).document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  EditorShellTestAccess::App(shell).setSelection(*target);
+
+  DriveGlobalShortcut(shell, {ImGuiKey_C}, /*ctrl=*/true);
+  ASSERT_TRUE(EditorShellTestAccess::ShapeClipboardHasText(shell));
+  EXPECT_NE(EditorShellTestAccess::ShapeClipboardText(shell).find("target"), std::string::npos);
+
+  DriveGlobalShortcut(shell, {ImGuiKey_V}, /*ctrl=*/true);
+  EXPECT_TRUE(EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell));
+  EXPECT_NE(EditorShellTestAccess::App(shell).document().document().source().find("target_pasted"),
+            std::string_view::npos);
+
+  DriveGlobalShortcut(shell, {ImGuiKey_F}, /*ctrl=*/true);
+  EXPECT_TRUE(EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell));
+  EXPECT_NE(EditorShellTestAccess::App(shell).document().document().source().find("target_pasted2"),
+            std::string_view::npos);
+
+  auto pasted =
+      EditorShellTestAccess::App(shell).document().document().querySelector("#target_pasted");
+  ASSERT_TRUE(pasted.has_value());
+  EditorShellTestAccess::App(shell).setSelection(*pasted);
+  DriveGlobalShortcut(shell, {ImGuiKey_X}, /*ctrl=*/true);
+  EXPECT_TRUE(EditorShellTestAccess::ShapeClipboardHasText(shell));
+  EXPECT_TRUE(EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell));
+  EXPECT_FALSE(
+      EditorShellTestAccess::App(shell).document().document().querySelector("#target_pasted"));
+}
+
+TEST(EditorShellTest, GlobalShortcutsDeleteUndoRedoAndReorderSelection) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  constexpr std::string_view kStackedSvg = R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80" viewBox="0 0 120 80">
+  <rect id="back" x="0" y="0" width="10" height="10"/>
+  <rect id="middle" x="20" y="0" width="10" height="10"/>
+  <rect id="front" x="40" y="0" width="10" height="10"/>
+</svg>
+)svg";
+  EditorShell shell(window, OptionsWithSource(kStackedSvg, "stacked.svg"));
+  ASSERT_TRUE(shell.valid());
+
+  auto middle = EditorShellTestAccess::App(shell).document().document().querySelector("#middle");
+  ASSERT_TRUE(middle.has_value());
+  EditorShellTestAccess::App(shell).setSelection(*middle);
+
+  const std::string beforeForward(EditorShellTestAccess::App(shell).document().document().source());
+  DriveGlobalShortcut(shell, {ImGuiKey_RightBracket}, /*ctrl=*/true);
+  EXPECT_TRUE(EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell));
+  const std::string afterForward(EditorShellTestAccess::App(shell).document().document().source());
+  EXPECT_NE(afterForward, beforeForward);
+
+  DriveGlobalShortcut(shell, {ImGuiKey_LeftBracket}, /*ctrl=*/true);
+  EXPECT_TRUE(EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell));
+  const std::string afterBackward(EditorShellTestAccess::App(shell).document().document().source());
+  EXPECT_NE(afterBackward, afterForward);
+
+  DriveGlobalShortcut(shell, {ImGuiKey_RightBracket}, /*ctrl=*/true, /*shift=*/true);
+  EXPECT_TRUE(EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell));
+  DriveGlobalShortcut(shell, {ImGuiKey_LeftBracket}, /*ctrl=*/true, /*shift=*/true);
+  EXPECT_TRUE(EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell));
+
+  middle = EditorShellTestAccess::App(shell).document().document().querySelector("#middle");
+  ASSERT_TRUE(middle.has_value());
+  EditorShellTestAccess::App(shell).setSelection(*middle);
+  DriveGlobalShortcut(shell, {ImGuiKey_Delete});
+  EXPECT_TRUE(EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell));
+  EXPECT_FALSE(EditorShellTestAccess::App(shell).document().document().querySelector("#middle"));
+
+  DriveGlobalShortcut(shell, {ImGuiKey_Z}, /*ctrl=*/true);
+  EXPECT_TRUE(EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell));
+  EXPECT_TRUE(EditorShellTestAccess::App(shell).document().document().querySelector("#middle"));
+
+  DriveGlobalShortcut(shell, {ImGuiKey_Z}, /*ctrl=*/true, /*shift=*/true);
+  EXPECT_TRUE(EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell));
+  EXPECT_FALSE(EditorShellTestAccess::App(shell).document().document().querySelector("#middle"));
+
+  middle = EditorShellTestAccess::App(shell).document().document().querySelector("#front");
+  ASSERT_TRUE(middle.has_value());
+  EditorShellTestAccess::App(shell).setSelection(*middle);
+  DriveGlobalShortcut(shell, {ImGuiKey_Backspace});
+  EXPECT_TRUE(EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell));
+  EXPECT_FALSE(EditorShellTestAccess::App(shell).document().document().querySelector("#front"));
+}
+
+TEST(EditorShellTest, MenuActionsRouteCanvasClipboardHistorySelectionAndViewState) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0.0, 0.0, 120.0, 80.0));
+  EditorShellTestAccess::UseInMemoryShapeClipboard(shell);
+
+  auto target = EditorShellTestAccess::App(shell).document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  EditorShellTestAccess::App(shell).setSelection(*target);
+
+  MenuBarActions actions;
+  actions.copy = true;
+  EditorShellTestAccess::ApplyMenuActions(shell, actions);
+  ASSERT_TRUE(EditorShellTestAccess::ShapeClipboardHasText(shell));
+  EXPECT_NE(EditorShellTestAccess::ShapeClipboardText(shell).find("target"), std::string::npos);
+
+  actions = MenuBarActions{};
+  actions.cut = true;
+  EditorShellTestAccess::ApplyMenuActions(shell, actions);
+  EXPECT_TRUE(EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell));
+  EXPECT_FALSE(EditorShellTestAccess::App(shell).document().document().querySelector("#target"));
+
+  actions = MenuBarActions{};
+  actions.undo = true;
+  EditorShellTestAccess::ApplyMenuActions(shell, actions);
+  EXPECT_TRUE(EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell));
+  EXPECT_TRUE(EditorShellTestAccess::App(shell).document().document().querySelector("#target"));
+
+  actions = MenuBarActions{};
+  actions.redo = true;
+  EditorShellTestAccess::ApplyMenuActions(shell, actions);
+  EXPECT_TRUE(EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell));
+  EXPECT_FALSE(EditorShellTestAccess::App(shell).document().document().querySelector("#target"));
+
+  actions = MenuBarActions{};
+  actions.revertFile = true;
+  EditorShellTestAccess::ApplyMenuActions(shell, actions);
+  EXPECT_TRUE(EditorShellTestAccess::App(shell).document().document().querySelector("#target"));
+
+  actions = MenuBarActions{};
+  actions.paste = true;
+  EditorShellTestAccess::ApplyMenuActions(shell, actions);
+  EXPECT_TRUE(EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell));
+  EXPECT_TRUE(
+      EditorShellTestAccess::App(shell).document().document().querySelector("#target_pasted"));
+
+  actions = MenuBarActions{};
+  actions.pasteInFront = true;
+  EditorShellTestAccess::ApplyMenuActions(shell, actions);
+  EXPECT_TRUE(EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell));
+  EXPECT_TRUE(
+      EditorShellTestAccess::App(shell).document().document().querySelector("#target_pasted2"));
+
+  actions = MenuBarActions{};
+  actions.selectAllCanvas = true;
+  EditorShellTestAccess::ApplyMenuActions(shell, actions);
+  EXPECT_GT(EditorShellTestAccess::App(shell).selectedElements().size(), 1u);
+
+  actions = MenuBarActions{};
+  actions.deselectAllCanvas = true;
+  EditorShellTestAccess::ApplyMenuActions(shell, actions);
+  EXPECT_FALSE(EditorShellTestAccess::App(shell).hasSelection());
+
+  actions = MenuBarActions{};
+  actions.selectAll = true;
+  EditorShellTestAccess::ApplyMenuActions(shell, actions);
+  EXPECT_EQ(EditorShellTestAccess::Source(shell).getSelectedText(),
+            EditorShellTestAccess::Source(shell).getText());
+
+  actions = MenuBarActions{};
+  actions.deselectAll = true;
+  EditorShellTestAccess::ApplyMenuActions(shell, actions);
+  EXPECT_TRUE(EditorShellTestAccess::Source(shell).getSelectedText().empty());
+
+  auto label = EditorShellTestAccess::App(shell).document().document().querySelector("#label");
+  ASSERT_TRUE(label.has_value());
+  EditorShellTestAccess::App(shell).setSelection(*label);
+  actions = MenuBarActions{};
+  actions.convertTextToOutlines = true;
+  EditorShellTestAccess::ApplyMenuActions(shell, actions);
+  EXPECT_TRUE(EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell));
+  EXPECT_TRUE(
+      EditorShellTestAccess::App(shell).document().document().querySelector("#label_outlines"));
+
+  EditorShellTestAccess::ClearRequestRenderAtEndOfFrame(shell);
+  const bool sourceFocusBefore = EditorShellTestAccess::SourceFocusMode(shell);
+  const bool compositorDebugBefore = EditorShellTestAccess::ShowCompositorDebugPanel(shell);
+  const bool perfOverlayBefore = EditorShellTestAccess::ShowPerfOverlay(shell);
+
+  actions = MenuBarActions{};
+  actions.zoomIn = true;
+  actions.zoomOut = true;
+  actions.actualSize = true;
+  actions.toggleSourceFocusMode = true;
+  actions.toggleCompositorDebugPanel = true;
+  actions.togglePerfOverlay = true;
+  EditorShellTestAccess::ApplyMenuActions(shell, actions);
+
+  EXPECT_TRUE(EditorShellTestAccess::RequestRenderAtEndOfFrame(shell));
+  EXPECT_NE(EditorShellTestAccess::SourceFocusMode(shell), sourceFocusBefore);
+  EXPECT_NE(EditorShellTestAccess::ShowCompositorDebugPanel(shell), compositorDebugBefore);
+  EXPECT_NE(EditorShellTestAccess::ShowPerfOverlay(shell), perfOverlayBefore);
+}
+
+TEST(EditorShellTest, MenuActionsRouteDialogAndExportRequestsWithoutCurrentPath) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShellOptions options;
+  options.initialSource = std::string(kInitialSvg);
+  EditorShell shell(window, std::move(options));
+  ASSERT_TRUE(shell.valid());
+
+  MenuBarActions actions;
+  actions.openAbout = true;
+  actions.openFile = true;
+  actions.saveFile = true;
+  actions.saveFileAs = true;
+  actions.exportViewportSvg = true;
+  actions.exportViewportSvgWithOverlay = true;
+  actions.quit = true;
+  actions.undo = true;
+  actions.redo = true;
+
+  EditorShellTestAccess::ApplyMenuActions(shell, actions);
+
+  EXPECT_TRUE(EditorShellTestAccess::PendingViewportExport(shell));
+  EXPECT_TRUE(EditorShellTestAccess::PendingViewportExportOverlay(shell));
+  EXPECT_TRUE(shell.valid());
+}
+
+TEST(EditorShellTest, ShapeClipboardCopyCutAndPasteUseCanvasSelection) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::UseInMemoryShapeClipboard(shell);
+
+  auto target = EditorShellTestAccess::App(shell).document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  EditorShellTestAccess::App(shell).setSelection(*target);
+
+  EditorShellTestAccess::CopySelectedShapesToClipboard(shell);
+  EXPECT_TRUE(EditorShellTestAccess::ShapeClipboardHasText(shell));
+  EXPECT_NE(EditorShellTestAccess::ShapeClipboardText(shell).find("target"), std::string::npos);
+
+  EditorShellTestAccess::PasteShapesFromClipboard(shell, /*inFront=*/false);
+  EXPECT_TRUE(EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell));
+  EXPECT_NE(EditorShellTestAccess::App(shell).document().document().source().find("target_pasted"),
+            std::string_view::npos);
+
+  auto pasted =
+      EditorShellTestAccess::App(shell).document().document().querySelector("#target_pasted");
+  ASSERT_TRUE(pasted.has_value());
+  EditorShellTestAccess::App(shell).setSelection(*pasted);
+  EditorShellTestAccess::CutSelectedShapesToClipboard(shell);
+  EXPECT_TRUE(EditorShellTestAccess::ShapeClipboardHasText(shell));
+  EXPECT_TRUE(EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell));
+  EXPECT_EQ(EditorShellTestAccess::App(shell).document().document().source().find("target_pasted"),
+            std::string_view::npos);
+
+  EditorShellTestAccess::ClearShapeClipboard(shell);
+  const std::string_view sourceBeforeNullClipboardPaste =
+      EditorShellTestAccess::App(shell).document().document().source();
+  EditorShellTestAccess::CopySelectedShapesToClipboard(shell);
+  EXPECT_FALSE(EditorShellTestAccess::ShapeClipboardHasText(shell));
+  EditorShellTestAccess::PasteShapesFromClipboard(shell, /*inFront=*/true);
+  (void)EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell);
+  EXPECT_EQ(EditorShellTestAccess::App(shell).document().document().source(),
+            sourceBeforeNullClipboardPaste);
+}
+
+TEST(EditorShellTest, ShapeClipboardRejectsMalformedAndPastesIntoSelectedGroup) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  constexpr std::string_view kGroupedSvg = R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80" viewBox="0 0 120 80">
+  <g id="group"><circle id="inside" cx="12" cy="12" r="4"/></g>
+  <rect id="target" x="10" y="12" width="40" height="24" fill="#3366cc"/>
+</svg>
+)svg";
+  EditorShell shell(window, OptionsWithSource(kGroupedSvg, "grouped.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::UseInMemoryShapeClipboard(shell);
+
+  EditorShellTestAccess::SetShapeClipboardText(shell, "<rect");
+  const std::string_view sourceBeforeMalformedPaste =
+      EditorShellTestAccess::App(shell).document().document().source();
+  EditorShellTestAccess::PasteShapesFromClipboard(shell, /*inFront=*/false);
+  (void)EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell);
+  EXPECT_EQ(EditorShellTestAccess::App(shell).document().document().source(),
+            sourceBeforeMalformedPaste);
+
+  auto target = EditorShellTestAccess::App(shell).document().document().querySelector("#target");
+  auto group = EditorShellTestAccess::App(shell).document().document().querySelector("#group");
+  ASSERT_TRUE(target.has_value());
+  ASSERT_TRUE(group.has_value());
+
+  EditorShellTestAccess::App(shell).setSelection(*target);
+  EditorShellTestAccess::CopySelectedShapesToClipboard(shell);
+  ASSERT_TRUE(EditorShellTestAccess::ShapeClipboardHasText(shell));
+
+  EditorShellTestAccess::App(shell).setSelection(*group);
+  EditorShellTestAccess::PasteShapesFromClipboard(shell, /*inFront=*/false);
+  EXPECT_TRUE(EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell));
+  const std::string_view source = EditorShellTestAccess::App(shell).document().document().source();
+  const std::size_t groupOffset = source.find(R"(id="group")");
+  const std::size_t pastedOffset = source.find(R"(id="target_pasted")");
+  const std::size_t groupCloseOffset = source.find("</g>");
+  ASSERT_NE(groupOffset, std::string_view::npos);
+  ASSERT_NE(pastedOffset, std::string_view::npos);
+  ASSERT_NE(groupCloseOffset, std::string_view::npos);
+  EXPECT_GT(pastedOffset, groupOffset);
+  EXPECT_LT(pastedOffset, groupCloseOffset);
 }
 
 }  // namespace donner::editor

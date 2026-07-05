@@ -416,7 +416,58 @@ TEST(EditorAppTest, EmptySelectionMutatorsReturnFalseWithoutQueueingCommands) {
 
   EXPECT_FALSE(app.setAttributeOnSelection("fill", "#112233"));
   EXPECT_FALSE(app.setStylePropertyOnSelection("fill", "#112233"));
+  EXPECT_FALSE(app.setStrokeWidthOnSelection(5.0));
+  EXPECT_FALSE(app.deleteSelectionWithUndo(app.document().document().source()));
   EXPECT_EQ(app.document().queue().size(), 0u);
+}
+
+TEST(EditorAppTest, DeleteSelectionWithUndoKeepsLockedElementsSelected) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+
+  auto r1 = app.document().document().querySelector("#r1");
+  auto r2 = app.document().document().querySelector("#r2");
+  ASSERT_TRUE(r1.has_value());
+  ASSERT_TRUE(r2.has_value());
+
+  app.setElementLocked(*r1, true);
+  ASSERT_TRUE(app.flushFrame());
+  r1 = app.document().document().querySelector("#r1");
+  r2 = app.document().document().querySelector("#r2");
+  ASSERT_TRUE(r1.has_value());
+  ASSERT_TRUE(r2.has_value());
+
+  app.setSelection(std::vector<svg::SVGElement>{*r1, *r2});
+  const std::string sourceBefore(app.document().document().source());
+  EXPECT_TRUE(app.deleteSelectionWithUndo(sourceBefore));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_TRUE(app.document().document().querySelector("#r1").has_value());
+  EXPECT_FALSE(app.document().document().querySelector("#r2").has_value());
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+  EXPECT_EQ(app.selectedElements().front().id(), "r1");
+  ASSERT_EQ(app.undoTimeline().entryCount(), 1u);
+  ASSERT_TRUE(app.undoTimeline().nextUndoLabel().has_value());
+  EXPECT_EQ(*app.undoTimeline().nextUndoLabel(), "Delete element");
+}
+
+TEST(EditorAppTest, DeleteSelectionWithUndoRefusesAllLockedSelection) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+
+  auto r1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(r1.has_value());
+  app.setElementLocked(*r1, true);
+  ASSERT_TRUE(app.flushFrame());
+
+  r1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(r1.has_value());
+  app.setSelection(*r1);
+  EXPECT_FALSE(app.deleteSelectionWithUndo(app.document().document().source()));
+  EXPECT_FALSE(app.flushFrame());
+  EXPECT_TRUE(app.document().document().querySelector("#r1").has_value());
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+  EXPECT_EQ(app.selectedElements().front().id(), "r1");
 }
 
 TEST(EditorAppTest, SetStylePropertyOnSelectionMergesIntoStyleAttribute) {
@@ -1648,6 +1699,28 @@ TEST(EditorAppReorderTest, NoOpWhenElementLocked) {
   EXPECT_THAT(ChildIds(app), ::testing::ElementsAre("r1", "r2", "r3"));
 }
 
+TEST(EditorAppReorderTest, DirectReorderRejectsRootSelfCrossParentAndCurrentPosition) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+    <g id="group"><rect id="child" width="10" height="10"/></g>
+    <rect id="sibling" x="20" width="10" height="10"/>
+  </svg>)svg"));
+
+  svg::SVGElement root = app.document().document().svgElement();
+  auto group = app.document().document().querySelector("#group");
+  auto child = app.document().document().querySelector("#child");
+  auto sibling = app.document().document().querySelector("#sibling");
+  ASSERT_TRUE(group.has_value());
+  ASSERT_TRUE(child.has_value());
+  ASSERT_TRUE(sibling.has_value());
+
+  EXPECT_FALSE(app.reorderElementBeforeSibling(root, std::nullopt));
+  EXPECT_FALSE(app.reorderElementBeforeSibling(*child, *child));
+  EXPECT_FALSE(app.reorderElementBeforeSibling(*child, *sibling));
+  EXPECT_FALSE(app.reorderElementBeforeSibling(*group, *sibling));
+  EXPECT_FALSE(app.flushFrame());
+}
+
 std::optional<std::string> AttrOf(EditorApp& app, std::string_view id, const char* attr) {
   const std::optional<svg::SVGElement> el =
       app.document().document().querySelector("#" + std::string(id));
@@ -1776,6 +1849,48 @@ TEST(EditorAppRenameTest, RenameLeavesHexColorLiteralsAndCommentsUntouched) {
 /* #abc historical note */
 .badge { content: "#abc"; clip-path: url(#brandBox) }
 @media (min-width: 10px) { #brandBox { opacity: 0.5 } })css")));
+}
+
+TEST(EditorAppRenameTest, RenameLeavesEscapedQuotedCssAndUnclosedCommentsUntouched) {
+  constexpr std::string_view kCssStringDoc =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <style>#target { fill: red }
+.badge { content: "#target \"literal\""; clip-path: url(#target); marker: url(#targeted) }
+@supports (display: grid) { #target { opacity: 0.5 } }
+/* #target unfinished comment</style>
+         <rect id="target" x="0" y="0" width="50" height="50"/>
+       </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kCssStringDoc)));
+  SelectById(app, "target");
+  EXPECT_TRUE(app.renameSelectedElement("renamed"));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_THAT(StyleTextOf(app), ::testing::Optional(std::string(
+                                    R"css(#renamed { fill: red }
+.badge { content: "#target \"literal\""; clip-path: url(#renamed); marker: url(#targeted) }
+@supports (display: grid) { #renamed { opacity: 0.5 } }
+/* #target unfinished comment)css")));
+}
+
+TEST(EditorAppRenameTest, RenameRepointsOnlyExactUrlIdTokensWithIdCharSuffixes) {
+  constexpr std::string_view kBoundaryDoc =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <defs><linearGradient id="grad"/></defs>
+         <rect id="r" x="0" y="0" width="50" height="50"
+               data-refs="url(#grad) url(#grad-a) url(#grad_a) url(#grad:variant) url(#grad.variant) url(#grad9) url(#gradA)"/>
+       </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kBoundaryDoc)));
+  SelectById(app, "grad");
+  EXPECT_TRUE(app.renameSelectedElement("g2"));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_EQ(AttrOf(app, "r", "data-refs"),
+            "url(#g2) url(#grad-a) url(#grad_a) url(#grad:variant) "
+            "url(#grad.variant) url(#grad9) url(#gradA)");
 }
 
 TEST(EditorAppRenameTest, RefusesEmptySameAndDuplicateIds) {

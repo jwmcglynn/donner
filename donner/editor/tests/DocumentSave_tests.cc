@@ -8,6 +8,7 @@
 #include <fstream>
 #include <iterator>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
 
@@ -195,6 +196,48 @@ TEST(DocumentSaveTest, RejectsSymlinkDestinationWithoutTouchingTarget) {
   std::filesystem::remove(symlink);
   std::filesystem::remove(target);
 #endif
+}
+
+TEST(DocumentSaveTest, StreamsStatusesAndResultOkFlag) {
+  std::ostringstream statuses;
+  statuses << DocumentSaveStatus::Ok << " " << DocumentSaveStatus::OpenFailed << " "
+           << DocumentSaveStatus::WriteFailed << " " << DocumentSaveStatus::CloseFailed;
+
+  EXPECT_EQ(statuses.str(), "Ok OpenFailed WriteFailed CloseFailed");
+  EXPECT_TRUE(DocumentSaveResult{.status = DocumentSaveStatus::Ok}.ok());
+  EXPECT_FALSE(DocumentSaveResult{.status = DocumentSaveStatus::OpenFailed}.ok());
+}
+
+TEST(DocumentSaveTest, CreatesAndTruncatesDestinationWithoutFollowingSymlinks) {
+  const std::filesystem::path path = UniqueTestPath("created.svg");
+  std::filesystem::remove(path);
+
+  DocumentSaveResult result = SaveSourceToPath(path, "<svg id=\"first\"/>");
+  ASSERT_TRUE(result.ok()) << result.message;
+  EXPECT_EQ(result.bytesWritten, 17u);
+  EXPECT_EQ(ReadFile(path), "<svg id=\"first\"/>");
+
+  result = SaveSourceToPath(path, "");
+  ASSERT_TRUE(result.ok()) << result.message;
+  EXPECT_EQ(result.bytesWritten, 0u);
+  EXPECT_EQ(ReadFile(path), "");
+
+  std::filesystem::remove(path);
+}
+
+TEST(DocumentSaveTest, ReportsOpenFailureForDirectoryDestination) {
+  const std::filesystem::path directory = TestOutputDir() / "document_save_directory_destination";
+  std::filesystem::create_directories(directory);
+
+  const DocumentSaveResult result = SaveSourceToPath(directory, "<svg/>");
+
+  EXPECT_EQ(result.status, DocumentSaveStatus::OpenFailed);
+  EXPECT_NE(result.errorNumber, 0);
+  EXPECT_EQ(result.bytesWritten, 0u);
+  EXPECT_NE(result.message.find("Could not open "), std::string::npos);
+  EXPECT_NE(result.message.find(directory.string()), std::string::npos);
+
+  std::filesystem::remove(directory);
 }
 
 }  // namespace

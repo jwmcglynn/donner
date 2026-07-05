@@ -209,6 +209,22 @@ TEST(ShapeClipboardCommands, CopyProgrammaticElementWithoutSourceMappingReturnsN
   EXPECT_FALSE(copySelectionToPayload(document, {rect}).has_value());
 }
 
+TEST(ShapeClipboardCommands, CopySkipsProgrammaticSiblingsButKeepsSourceBackedSelection) {
+  svg::SVGDocument document = Parse(kTwoRects);
+  std::vector<svg::SVGElement> selection = Select(document, {"a"});
+  svg::SVGRectElement programmatic = svg::SVGRectElement::Create(document);
+  selection.push_back(programmatic);
+
+  std::optional<ShapeClipboardPayload> payload = copySelectionToPayload(document, selection);
+
+  ASSERT_TRUE(payload.has_value());
+  EXPECT_THAT(payload->svgFragment, HasSubstr("id=\"a\""));
+  EXPECT_THAT(payload->svgFragment, Not(HasSubstr("<rect/>")));
+  EXPECT_THAT(payload->sourceElementIds, ::testing::ElementsAre("a"));
+  EXPECT_FALSE(payload->wasGroupSelection);
+  ASSERT_TRUE(payload->documentBounds.has_value());
+}
+
 TEST(ShapeClipboardCommands, CopyGroupSelectionMarksPayloadAsGroupSelection) {
   constexpr std::string_view kGrouped =
       R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
@@ -297,6 +313,23 @@ TEST(ShapeClipboardCommands, PasteUniqueIdsKeepsFragmentIdsAndIgnoresIdSubstring
   EXPECT_THAT(result.mergedSource, Not(HasSubstr("fresh_pasted")));
 }
 
+TEST(ShapeClipboardCommands, PasteIdRepairIgnoresNonReferenceAndEmptyReferenceTokens) {
+  svg::SVGDocument document = Parse(kTwoRects);
+  ShapeClipboardPayload payload;
+  payload.svgFragment =
+      R"SVG(<rect data-id="ignored" id="a" fill="url(#)" href="not-a-fragment" x="1" y="2" width="3" height="4"/>)SVG";
+  payload.sourceElementIds = {"a"};
+
+  PreparePasteResult result = preparePaste(document, payload, PastePlacement::EndOfRootOffset);
+  ASSERT_TRUE(result.ok) << result.error;
+
+  EXPECT_THAT(result.pastedElementIds, ::testing::ElementsAre("a_pasted"));
+  EXPECT_THAT(result.mergedSource, HasSubstr("data-id=\"ignored\""));
+  EXPECT_THAT(result.mergedSource, HasSubstr("id=\"a_pasted\""));
+  EXPECT_THAT(result.mergedSource, HasSubstr("fill=\"url(#)\""));
+  EXPECT_THAT(result.mergedSource, HasSubstr("href=\"not-a-fragment\""));
+}
+
 TEST(ShapeClipboardCommands, PasteRepairsUrlAndHrefReferencesToRenamedIds) {
   constexpr std::string_view kDestination =
       R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
@@ -318,6 +351,30 @@ TEST(ShapeClipboardCommands, PasteRepairsUrlAndHrefReferencesToRenamedIds) {
   EXPECT_THAT(result.mergedSource, HasSubstr("id='grad_pasted'"));
   EXPECT_THAT(result.mergedSource, HasSubstr("fill=\"url(#grad_pasted)\""));
   EXPECT_THAT(result.mergedSource, HasSubstr("xlink:href='#shape_pasted'"));
+}
+
+TEST(ShapeClipboardCommands, PasteRepairsReferencesWithIdTokenCharacters) {
+  constexpr std::string_view kDestination =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+<defs><linearGradient id="a:b.c_d-1"/></defs>
+<rect id="shape" x="0" y="0" width="10" height="10"/>
+</svg>)";
+  svg::SVGDocument document = Parse(kDestination);
+  ShapeClipboardPayload payload;
+  payload.svgFragment =
+      R"SVG(<defs><linearGradient id="a:b.c_d-1"/></defs>
+<style>.shape { fill: url(#a:b.c_d-1); }</style>
+<rect id="shape" x="1" y="1" width="10" height="10" fill="url(#a:b.c_d-1)" href="#shape"/>)SVG";
+  payload.sourceElementIds = {"shape", ""};
+
+  PreparePasteResult result = preparePaste(document, payload, PastePlacement::EndOfRootOffset);
+  ASSERT_TRUE(result.ok) << result.error;
+
+  EXPECT_THAT(result.pastedElementIds, ::testing::ElementsAre("shape_pasted"));
+  EXPECT_THAT(result.mergedSource, HasSubstr("id=\"a:b.c_d-1_pasted\""));
+  EXPECT_THAT(result.mergedSource, HasSubstr("fill=\"url(#a:b.c_d-1_pasted)\""));
+  EXPECT_THAT(result.mergedSource, HasSubstr("fill: url(#a:b.c_d-1_pasted)"));
+  EXPECT_THAT(result.mergedSource, HasSubstr("href=\"#shape_pasted\""));
 }
 
 TEST(ShapeClipboardCommands, PasteIdRepairSkipsAlreadyTakenGeneratedIds) {
@@ -409,6 +466,39 @@ TEST(ShapeClipboardCommands, PasteIntoNestedSelectedGroupUsesMatchingCloseTag) {
   EXPECT_LT(wrapperPos, outerClose);
 }
 
+TEST(ShapeClipboardCommands, PasteIntoSelectedGroupHandlesTabAndNewlineAfterTagName) {
+  constexpr std::string_view kTabGrouped =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\">\n"
+      "<g\tid=\"grp\"><rect id=\"inside\" x=\"0\" y=\"0\" width=\"4\" height=\"4\"/></g>\n"
+      "<rect id=\"loose\" x=\"50\" y=\"50\" width=\"4\" height=\"4\"/>\n"
+      "</svg>";
+  constexpr std::string_view kNewlineGrouped =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\">\n"
+      "<g\nid=\"grp\"><rect id=\"inside\" x=\"0\" y=\"0\" width=\"4\" height=\"4\"/></g>\n"
+      "<rect id=\"loose\" x=\"50\" y=\"50\" width=\"4\" height=\"4\"/>\n"
+      "</svg>";
+
+  for (std::string_view source : {kTabGrouped, kNewlineGrouped}) {
+    SCOPED_TRACE(source);
+    svg::SVGDocument document = Parse(source);
+    std::optional<ShapeClipboardPayload> payload =
+        copySelectionToPayload(document, Select(document, {"loose"}));
+    ASSERT_TRUE(payload.has_value());
+
+    std::optional<svg::SVGElement> group = document.querySelector("#grp");
+    ASSERT_TRUE(group.has_value());
+    PreparePasteResult result =
+        preparePaste(document, *payload, PastePlacement::EndOfRootOffset, group);
+    ASSERT_TRUE(result.ok) << result.error;
+
+    const std::size_t wrapperPos = result.mergedSource.find("loose_pasted");
+    const std::size_t groupClose = result.mergedSource.find("</g>");
+    ASSERT_NE(wrapperPos, std::string::npos);
+    ASSERT_NE(groupClose, std::string::npos);
+    EXPECT_LT(wrapperPos, groupClose);
+  }
+}
+
 TEST(ShapeClipboardCommands, PasteWithNonGroupSelectedElementFallsBackToRoot) {
   svg::SVGDocument document = Parse(kTwoRects);
   std::optional<ShapeClipboardPayload> payload =
@@ -429,6 +519,28 @@ TEST(ShapeClipboardCommands, PasteWithNonGroupSelectedElementFallsBackToRoot) {
   ASSERT_NE(wrapperPos, std::string::npos);
   ASSERT_NE(rootClose, std::string::npos);
   EXPECT_GT(wrapperPos, rectClose);
+  EXPECT_LT(wrapperPos, rootClose);
+}
+
+TEST(ShapeClipboardCommands, PasteWithSelectedGroupFromAnotherDocumentFallsBackToRoot) {
+  svg::SVGDocument document = Parse(kTwoRects);
+  std::optional<ShapeClipboardPayload> payload =
+      copySelectionToPayload(document, Select(document, {"b"}));
+  ASSERT_TRUE(payload.has_value());
+
+  svg::SVGDocument otherDocument =
+      Parse(R"(<svg xmlns="http://www.w3.org/2000/svg"><g id="elsewhere"/></svg>)");
+  std::optional<svg::SVGElement> otherGroup = otherDocument.querySelector("#elsewhere");
+  ASSERT_TRUE(otherGroup.has_value());
+
+  PreparePasteResult result =
+      preparePaste(document, *payload, PastePlacement::EndOfRootOffset, otherGroup);
+  ASSERT_TRUE(result.ok) << result.error;
+
+  const std::size_t wrapperPos = result.mergedSource.find("b_pasted");
+  const std::size_t rootClose = result.mergedSource.rfind("</svg>");
+  ASSERT_NE(wrapperPos, std::string::npos);
+  ASSERT_NE(rootClose, std::string::npos);
   EXPECT_LT(wrapperPos, rootClose);
 }
 

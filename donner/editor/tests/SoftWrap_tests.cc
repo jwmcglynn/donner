@@ -42,5 +42,27 @@ TEST(SoftWrapTest, EmptyLineStillProducesOneVisualRow) {
   EXPECT_EQ(ComputeSoftWrapSegments("", 20), (std::vector<SoftWrapSegment>{SoftWrapSegment{}}));
 }
 
+TEST(SoftWrapTest, XmlContinuationIndentFallsBackForSpecialTagsAndBareOpen) {
+  EXPECT_EQ(ComputeXmlContinuationIndent("\t</g>"), 2);
+  EXPECT_EQ(ComputeXmlContinuationIndent("  <!-- comment -->"), 2);
+  EXPECT_EQ(ComputeXmlContinuationIndent("  <?xml version=\"1.0\"?>"), 2);
+  EXPECT_EQ(ComputeXmlContinuationIndent("<"), 0);
+}
+
+TEST(SoftWrapTest, SegmentsBreakOnTabsAndForceLongUnbrokenRuns) {
+  const std::vector<SoftWrapSegment> tabBreak =
+      ComputeSoftWrapSegments("alpha\tbeta gamma delta", 16);
+  ASSERT_GE(tabBreak.size(), 2u);
+  EXPECT_EQ(tabBreak[0].endColumn, 10);
+  EXPECT_EQ(tabBreak[1].startColumn, 11);
+
+  const std::vector<SoftWrapSegment> unbroken =
+      ComputeSoftWrapSegments("abcdefghijklmnopqrstuvwxyz", 12);
+  ASSERT_GE(unbroken.size(), 2u);
+  EXPECT_EQ(unbroken[0].startColumn, 0);
+  EXPECT_EQ(unbroken[0].endColumn, 12);
+  EXPECT_TRUE(unbroken[1].continuation);
+}
+
 }  // namespace
 }  // namespace donner::editor
