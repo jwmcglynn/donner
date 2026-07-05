@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <optional>
+#include <sstream>
 
 #include "donner/css/CSS.h"
 
@@ -329,6 +330,37 @@ TEST(DeclarationToCssText, MultipleDeclarations) {
 TEST(DeclarationToCssText, PercentageValue) {
   auto decls = parse("opacity: 50%");
   EXPECT_THAT(decls, ElementsAre(DeclarationCssTextIs("opacity: 50%")));
+}
+
+TEST(DeclarationToCssText, LeadingWhitespaceValueDoesNotAddExtraSpace) {
+  Declaration declaration(RcString("custom"), {
+                                                  ComponentValue(Token(Token::Whitespace(" "), 0)),
+                                                  ComponentValue(Token(Token::Ident("value"), 0)),
+                                              });
+
+  EXPECT_EQ(declaration.toCssText(), "custom: value");
+}
+
+TEST(DeclarationStream, WritesDebugDeclarationWithImportantFlag) {
+  auto decls = parse("fill: red !important");
+  ASSERT_EQ(decls.size(), 1u);
+
+  std::ostringstream output;
+  output << decls.front();
+
+  EXPECT_EQ(output.str(), "  fill: Token { Ident(red) offset: FileOffset[offset 6] } !important");
+}
+
+TEST(DeclarationOrAtRule, EqualityComparesVariantValue) {
+  auto decls = parse("fill: red; stroke: blue");
+  ASSERT_EQ(decls.size(), 2u);
+
+  DeclarationOrAtRule fillA(DeclarationOrAtRule::Type{decls[0]});
+  DeclarationOrAtRule fillB(DeclarationOrAtRule::Type{decls[0]});
+  DeclarationOrAtRule stroke(DeclarationOrAtRule::Type{decls[1]});
+
+  EXPECT_EQ(fillA, fillB);
+  EXPECT_NE(fillA, stroke);
 }
 
 // ===========================================================================

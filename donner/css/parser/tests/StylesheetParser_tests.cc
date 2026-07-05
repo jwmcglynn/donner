@@ -145,6 +145,19 @@ TEST(StylesheetParser, SelectorRangesHandleCommentsEscapesAndNestedArguments) {
                                     SourceRangeTextIs(kCss, "path:nth-child(2n + 1)")))));
 }
 
+TEST(StylesheetParser, SelectorRuleSourceRangeUsesStylesheetEndForUnclosedRule) {
+  constexpr std::string_view kCss = R"(rect { fill: "}"; /* unfinished)";
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+
+  const Stylesheet sheet = StylesheetParser::Parse(kCss, disabled);
+
+  EXPECT_THAT(sheet.rules(),
+              ElementsAre(AllOf(Field("ruleSourceRange", &SelectorRule::ruleSourceRange,
+                                      SourceRangeTextIs(kCss, kCss)),
+                                Field("selectorSourceRange", &SelectorRule::selectorSourceRange,
+                                      SourceRangeTextIs(kCss, "rect")))));
+}
+
 TEST(StylesheetParser, InvalidSelectorWarnsAndSkipsRule) {
   ParseWarningSink warningSink;
   const Stylesheet sheet =
@@ -242,6 +255,51 @@ TEST(StylesheetParser, FontFaceSrcUrlTokenAndSkippedInvalidSources) {
 
   EXPECT_THAT(sheet.fontFaces(),
               ElementsAre(FontFaceIs("TokenFont", ElementsAre(UrlFontSourceIs("font.svg")))));
+}
+
+TEST(StylesheetParser, FontFaceSrcSkipsEmptyEntries) {
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  Stylesheet sheet = StylesheetParser::Parse(R"(
+    @font-face {
+      font-family: WhitespaceUrl;
+      src: local(Fallback),,;
+    }
+  )",
+                                             disabled);
+
+  EXPECT_THAT(sheet.fontFaces(),
+              ElementsAre(FontFaceIs("WhitespaceUrl", ElementsAre(LocalFontSourceIs("Fallback")))));
+}
+
+TEST(StylesheetParser, FontFaceSrcSkipsInvalidDataUrls) {
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  Stylesheet sheet = StylesheetParser::Parse(R"(
+    @font-face {
+      font-family: DataUrlFallback;
+      src: local(Fallback), url("data:font/woff;base64,not_base64!");
+    }
+  )",
+                                             disabled);
+
+  EXPECT_THAT(
+      sheet.fontFaces(),
+      ElementsAre(FontFaceIs("DataUrlFallback", ElementsAre(LocalFontSourceIs("Fallback")))));
+}
+
+TEST(StylesheetParser, FontFaceSrcKeepsStringUrlAndIdentFormat) {
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  Stylesheet sheet = StylesheetParser::Parse(R"(
+    @font-face {
+      font-family: urlfallback;
+      src: url("font-string.woff") format(opentype);
+    }
+  )",
+                                             disabled);
+
+  EXPECT_THAT(
+      sheet.fontFaces(),
+      ElementsAre(FontFaceIs(
+          "urlfallback", ElementsAre(UrlFontSourceIs("font-string.woff", "opentype", IsEmpty())))));
 }
 
 }  // namespace donner::css::parser

@@ -120,6 +120,25 @@ TEST_F(SVGElementTests, Assign) {
   EXPECT_NE(element2, element3);  // element2 should be invalid.
 }
 
+TEST_F(SVGElementTests, MovedFromElementQueriesReturnEmptyResults) {
+  SVGElement element = createRect();
+  SVGElement moved = std::move(element);
+  ASSERT_TRUE(moved.unsafeEntityHandle().valid());
+  ASSERT_FALSE(element.unsafeEntityHandle().valid());
+
+  EXPECT_EQ(element.tryType(), std::nullopt);
+  EXPECT_EQ(element.tryTagName(), std::nullopt);
+  EXPECT_TRUE(element.id().empty());
+  EXPECT_FALSE(element.hasAttribute("id"));
+  EXPECT_EQ(element.getAttribute("id"), std::nullopt);
+  EXPECT_TRUE(element.findMatchingAttributes("id").empty());
+  EXPECT_TRUE(element.attributes().empty());
+  EXPECT_EQ(element.firstChild(), std::nullopt);
+  EXPECT_EQ(element.lastChild(), std::nullopt);
+  EXPECT_EQ(element.previousSibling(), std::nullopt);
+  EXPECT_EQ(element.nextSibling(), std::nullopt);
+}
+
 TEST_F(SVGElementTests, ElementAnchorHandlesEmptyAndSelfAssignment) {
   ElementAnchor empty;
   EXPECT_FALSE(empty);

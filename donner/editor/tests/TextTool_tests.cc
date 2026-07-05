@@ -78,6 +78,34 @@ TEST_F(TextToolTest, InsertSelectsNewText) {
   EXPECT_EQ(*tool.insertedTextElement(), svg::SVGElement(text()));
 }
 
+TEST_F(TextToolTest, MouseDownWithoutDocumentCancelsPendingState) {
+  tool.onMouseDown(app, Vector2d(20.0, 30.0), MouseModifiers{});
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_TRUE(tool.insertedTextElement().has_value());
+
+  EditorApp emptyApp;
+  tool.onMouseDown(emptyApp, Vector2d(1.0, 2.0), MouseModifiers{.shift = true});
+
+  EXPECT_FALSE(tool.insertedTextElement().has_value());
+}
+
+TEST_F(TextToolTest, MouseMoveAndMouseUpAreNoOps) {
+  tool.onMouseMove(app, Vector2d(10.0, 10.0), /*buttonHeld=*/false);
+  tool.onMouseUp(app, Vector2d(10.0, 10.0));
+  EXPECT_FALSE(tool.insertedTextElement().has_value());
+
+  tool.onMouseDown(app, Vector2d(20.0, 30.0), MouseModifiers{});
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_TRUE(tool.insertedTextElement().has_value());
+  const svg::SVGElement inserted = *tool.insertedTextElement();
+
+  tool.onMouseMove(app, Vector2d(25.0, 35.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(25.0, 35.0));
+
+  EXPECT_EQ(tool.insertedTextElement(), std::optional<svg::SVGElement>(inserted));
+  EXPECT_TRUE(hasTextElement());
+}
+
 TEST_F(TextToolTest, UndoRemovesAndRestoresSelection) {
   // Pre-select a rect so we can verify the selection is restored on undo.
   ASSERT_TRUE(app.loadFromString(kSvgWithRect));

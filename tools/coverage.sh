@@ -1,17 +1,75 @@
 #!/bin/bash -e
 
 function print_help() {
-  echo "Usage: $0 [--quiet] [--no-html] [--branch-target PERCENT] [--output-dir DIR] [TARGETS...]"
-  echo "Run coverage analysis on the specified Bazel targets."
-  echo "If no targets are specified, coverage is run on '//donner/...'."
-  echo ""
-  echo "Options:"
-  echo "  --quiet                  Suppress debug output."
-  echo "  --no-html                Skip HTML generation and only emit filtered LCOV output."
-  echo "  --branch-target PERCENT  Print branch-hit shortfall to this target (default: 85)."
-  echo "  --output-dir DIR         Directory for filtered LCOV/HTML output (default: coverage-report)."
-  echo "  --help                   Show this help message."
+  cat <<EOF
+Usage: $0 [--quiet] [--no-html] [--coverage-target PERCENT]
+          [--branch-target PERCENT] [--output-dir DIR]
+          [--codecov-reference-json PATH] [TARGETS...]
+Run coverage analysis on the specified Bazel targets.
+If no targets are specified, coverage is run on '//donner/...'.
+
+Options:
+  --quiet                   Suppress debug output, print periodic progress, and save logs.
+  --no-html                 Skip HTML generation and only emit filtered LCOV output.
+  --coverage-target PERCENT Print Codecov-style line shortfall to this target (default: 90).
+  --branch-target PERCENT   Print branch-hit shortfall to this target (default: 85).
+  --output-dir DIR          Directory for filtered LCOV/HTML output (default: coverage-report).
+  --codecov-reference-json PATH
+                            Use a Codecov commit API JSON file as the processed file/line universe.
+  --help                    Show this help message.
+EOF
   exit 0
+}
+
+function run_quiet_with_progress() {
+  local description="$1"
+  local log_file="$2"
+  shift 2
+
+  local progress_interval="${DONNER_COVERAGE_PROGRESS_INTERVAL_SECONDS:-60}"
+  local start_time
+  start_time=$(date +%s)
+
+  echo "$description started; detailed log: $log_file"
+  "$@" > "$log_file" 2>&1 &
+  local command_pid=$!
+
+  (
+    while sleep "$progress_interval"; do
+      if ! kill -0 "$command_pid" 2> /dev/null; then
+        exit 0
+      fi
+
+      local now
+      now=$(date +%s)
+      local elapsed=$((now - start_time))
+      echo "$description still running after ${elapsed}s; detailed log: $log_file"
+    done
+  ) &
+  local progress_pid=$!
+
+  local status=0
+  wait "$command_pid" || status=$?
+  kill "$progress_pid" 2> /dev/null || true
+  wait "$progress_pid" 2> /dev/null || true
+
+  local end_time
+  end_time=$(date +%s)
+  local elapsed=$((end_time - start_time))
+  if [[ "$status" -eq 0 ]]; then
+    echo "$description completed in ${elapsed}s"
+  else
+    echo "$description exited with status $status after ${elapsed}s; detailed log: $log_file"
+  fi
+  return "$status"
+}
+
+function bazel_info() {
+  if [ "$QUIET" = true ]; then
+    "${BAZEL_CMD[@]}" info "$1" 2> /dev/null
+  else
+    "${BAZEL_CMD[@]}" info "$1"
+  fi
 }
 
 TARGETS=()
@@ -33,8 +91,10 @@ fi
 # Check for --quiet option
 QUIET=false
 NO_HTML=false
+COVERAGE_TARGET=90
 BRANCH_TARGET=85
 COVERAGE_OUTPUT_DIR=coverage-report
+CODECOV_REFERENCE_JSON=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --quiet)
@@ -43,6 +103,18 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-html)
       NO_HTML=true
+      shift
+      ;;
+    --coverage-target)
+      if [[ $# -lt 2 ]]; then
+        echo "ERROR: --coverage-target requires a percentage value"
+        exit 1
+      fi
+      COVERAGE_TARGET="$2"
+      shift 2
+      ;;
+    --coverage-target=*)
+      COVERAGE_TARGET="${1#--coverage-target=}"
       shift
       ;;
     --branch-target)
@@ -67,6 +139,18 @@ while [[ $# -gt 0 ]]; do
       ;;
     --output-dir=*)
       COVERAGE_OUTPUT_DIR="${1#--output-dir=}"
+      shift
+      ;;
+    --codecov-reference-json)
+      if [[ $# -lt 2 ]]; then
+        echo "ERROR: --codecov-reference-json requires a file path"
+        exit 1
+      fi
+      CODECOV_REFERENCE_JSON="$2"
+      shift 2
+      ;;
+    --codecov-reference-json=*)
+      CODECOV_REFERENCE_JSON="${1#--codecov-reference-json=}"
       shift
       ;;
     --help)
@@ -101,7 +185,7 @@ if ! which java > /dev/null; then
 fi
 
 JAVA_HOME=$(dirname $(dirname $(which java)))
-WORKSPACE_ROOT=$("${BAZEL_CMD[@]}" info workspace)
+WORKSPACE_ROOT=$(bazel_info workspace)
 
 BAZEL_TEST_ENV=()
 if [[ "$(uname)" == "Darwin" ]]; then
@@ -142,7 +226,12 @@ LLVM_COVERAGE_FLAGS=(
   COVERAGE_HTML_DIR="$COVERAGE_OUTPUT_DIR"
   GENHTML_OPTIONS="--legend --branch-coverage --ignore-errors category --ignore-errors inconsistent --output-directory $COVERAGE_HTML_DIR"
 
-  COVERAGE_REPORT=$("${BAZEL_CMD[@]}" info output_path)/_coverage/_coverage_report.dat
+  COVERAGE_REPORT=$(bazel_info output_path)/_coverage/_coverage_report.dat
+  rm -rf "$COVERAGE_HTML_DIR"
+  mkdir -p "$COVERAGE_HTML_DIR"
+  BAZEL_COVERAGE_LOG="$COVERAGE_HTML_DIR/bazel_coverage.log"
+  FILTER_COVERAGE_LOG="$COVERAGE_HTML_DIR/filter_coverage.log"
+  GENHTML_LOG="$COVERAGE_HTML_DIR/genhtml.log"
 
   # CI diagnostics: when DONNER_CI_DIAGNOSTICS_DIR is set (self-hosted CI),
   # capture the inner `bazel coverage` profile + BEP there and record phase
@@ -168,7 +257,8 @@ LLVM_COVERAGE_FLAGS=(
   rm -f "$COVERAGE_REPORT"
 
   if [ "$QUIET" = true ]; then
-    "${BAZEL_CMD[@]}" coverage --config=latest_llvm --ui_event_filters=-info,-stdout,-stderr --noshow_progress \
+    run_quiet_with_progress "Bazel coverage" "$BAZEL_COVERAGE_LOG" \
+      "${BAZEL_CMD[@]}" coverage --config=latest_llvm --ui_event_filters=-info,-stdout,-stderr --noshow_progress \
       "${DEFAULT_BAZEL_COVERAGE_FLAGS[@]}" \
       "${BAZEL_COVERAGE_FLAGS[@]}" \
       "${LLVM_COVERAGE_FLAGS[@]}" \
@@ -189,23 +279,30 @@ LLVM_COVERAGE_FLAGS=(
     exit 1
   fi
 
-  rm -rf "$COVERAGE_HTML_DIR"
-  mkdir -p "$COVERAGE_HTML_DIR"
   FILTER_ARGS=(--input "$COVERAGE_REPORT" --output "$COVERAGE_HTML_DIR/filtered_report.dat")
 
   if [ "$QUIET" = true ]; then
-    python3 tools/filter_coverage.py "${FILTER_ARGS[@]}"
+    run_quiet_with_progress "LCOV filtering" "$FILTER_COVERAGE_LOG" \
+      python3 tools/filter_coverage.py "${FILTER_ARGS[@]}"
   else
     python3 tools/filter_coverage.py --verbose "${FILTER_ARGS[@]}"
   fi
   python3 tools/check_lcov_report.py "$COVERAGE_HTML_DIR/filtered_report.dat"
-  python3 tools/lcov_metrics.py "$COVERAGE_HTML_DIR/filtered_report.dat" \
+  METRICS_ARGS=(
+    "$COVERAGE_HTML_DIR/filtered_report.dat"
+    --coverage-target "$COVERAGE_TARGET"
     --branch-target "$BRANCH_TARGET"
+  )
+  if [ -n "$CODECOV_REFERENCE_JSON" ]; then
+    METRICS_ARGS+=(--codecov-reference-json "$CODECOV_REFERENCE_JSON")
+  fi
+  python3 tools/lcov_metrics.py "${METRICS_ARGS[@]}"
   phase_mark filter_done
 
   if [ "$NO_HTML" = false ]; then
     if [ "$QUIET" = true ]; then
-      genhtml --quiet "$COVERAGE_HTML_DIR/filtered_report.dat" $GENHTML_OPTIONS
+      run_quiet_with_progress "Coverage HTML generation" "$GENHTML_LOG" \
+        genhtml --quiet "$COVERAGE_HTML_DIR/filtered_report.dat" $GENHTML_OPTIONS
     else
       genhtml "$COVERAGE_HTML_DIR/filtered_report.dat" $GENHTML_OPTIONS
     fi

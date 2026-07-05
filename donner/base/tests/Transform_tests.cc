@@ -349,6 +349,18 @@ TEST(Transform, ToSVGTransformStringGeneralMatrix) {
   const Transform2d skew = Transform2d::SkewX(MathConstants<double>::kPi / 4.0);
   EXPECT_THAT(std::string_view(toSVGTransformString(skew)), testing::StartsWith("matrix("));
 
+  const Transform2d skewY = Transform2d::SkewY(MathConstants<double>::kPi / 4.0);
+  EXPECT_THAT(std::string_view(toSVGTransformString(skewY)), testing::StartsWith("matrix("));
+
+  Transform2d nonUniformWithIdentityColumns(Transform2d::uninitialized);
+  nonUniformWithIdentityColumns.data[0] = 1.0;
+  nonUniformWithIdentityColumns.data[1] = 0.0;
+  nonUniformWithIdentityColumns.data[2] = 0.0;
+  nonUniformWithIdentityColumns.data[3] = 2.0;
+  nonUniformWithIdentityColumns.data[4] = 3.0;
+  nonUniformWithIdentityColumns.data[5] = 0.0;
+  EXPECT_EQ(toSVGTransformString(nonUniformWithIdentityColumns), "matrix(1, 0, 0, 2, 3, 0)");
+
   // A full custom matrix.
   Transform2d t(Transform2d::uninitialized);
   t.data[0] = 1.5;

@@ -470,6 +470,38 @@ TEST(EditorAppTest, DeleteSelectionWithUndoRefusesAllLockedSelection) {
   EXPECT_EQ(app.selectedElements().front().id(), "r1");
 }
 
+TEST(EditorAppTest, VisibilityAndLockTogglesBypassLockGate) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+
+  auto r1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(r1.has_value());
+  app.setElementLocked(*r1, true);
+  ASSERT_TRUE(app.flushFrame());
+
+  r1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(r1.has_value());
+  EXPECT_EQ(r1->getAttribute(kLockedAttributeName), kLockedAttributeValue);
+
+  app.setElementVisible(*r1, false);
+  ASSERT_TRUE(app.flushFrame());
+  r1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(r1.has_value());
+  EXPECT_EQ(r1->getAttribute("display"), "none");
+
+  app.setElementVisible(*r1, true);
+  ASSERT_TRUE(app.flushFrame());
+  r1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(r1.has_value());
+  EXPECT_EQ(r1->getAttribute("display"), "inline");
+
+  app.setElementLocked(*r1, false);
+  ASSERT_TRUE(app.flushFrame());
+  r1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(r1.has_value());
+  EXPECT_FALSE(r1->getAttribute(kLockedAttributeName).has_value());
+}
+
 TEST(EditorAppTest, SetStylePropertyOnSelectionMergesIntoStyleAttribute) {
   constexpr std::string_view kStyledSvg =
       R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
@@ -626,6 +658,24 @@ TEST(EditorAppTest, PathOperationAvailabilityRejectsUnsupportedSelectionMembers)
   EXPECT_EQ(availability.reason, "Selection includes unsupported or empty geometry");
 }
 
+TEST(EditorAppTest, PathOperationAvailabilityRejectsDetachedSelectionMembers) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+
+  svg::SVGPathElement detachedPath = svg::SVGPathElement::Create(app.document().document());
+  detachedPath.setAttribute("d", "M 0 0 L 10 0 L 10 10 Z");
+
+  auto r1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(r1.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{detachedPath, *r1});
+
+  const PathOperationAvailability availability =
+      app.pathOperationAvailability(PathOperationKind::Union);
+  EXPECT_FALSE(availability.canApply);
+  EXPECT_EQ(availability.reason, "Selection includes detached geometry");
+  EXPECT_FALSE(app.applyPathOperation(PathOperationKind::Union));
+}
+
 TEST(EditorAppTest, PathOperationAvailabilityUnderConcurrentDomHoldsAccess) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTrivialSvg));
@@ -728,6 +778,12 @@ TEST(EditorAppTest, CompoundPathUnbundleAvailabilityRejectsUnsupportedTargets) {
   availability = app.compoundPathUnbundleAvailability();
   EXPECT_FALSE(availability.canApply);
   EXPECT_EQ(availability.reason, "Path has no geometry");
+
+  svg::SVGPathElement detachedPath = svg::SVGPathElement::Create(app.document().document());
+  detachedPath.setAttribute("d", "M 20 20 L 30 20 L 30 30 Z M 40 40 L 50 40 L 50 50 Z");
+  availability = app.compoundPathUnbundleAvailability(detachedPath);
+  EXPECT_FALSE(availability.canApply);
+  EXPECT_EQ(availability.reason, "Target path is detached");
 }
 
 TEST(EditorAppTest, UnbundleCompoundPathReplacesExplicitTargetAndRestoresUndoSelection) {
@@ -1402,6 +1458,17 @@ TEST(EditorAppTest, HitTestRectAppliesElementTransformToShapeIntersection) {
 
   auto hits = app.hitTestRect(Box2d::FromXYWH(15.0, 25.0, 30.0, 30.0));
   EXPECT_THAT(ElementIds(hits), ::testing::ElementsAre("triangle"));
+}
+
+TEST(EditorAppTest, HitTestRectSkipsSingularTransformedFill) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120">
+           <path id="collapsed" d="M 0 0 L 100 0 L 0 100 Z" fill="red"
+                 transform="scale(0)"/>
+         </svg>)svg"));
+
+  EXPECT_TRUE(app.hitTestRect(Box2d::FromXYWH(20.0, 20.0, 10.0, 10.0)).empty());
 }
 
 TEST(EditorAppTest, HitTestRectUsesStrokeShapeIntersection) {

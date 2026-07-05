@@ -672,6 +672,20 @@ TEST(ReproFileTest, UnknownEventKindSerializedFromInvalidEnumIsRejectedOnRead) {
   std::filesystem::remove(path, ec);
 }
 
+TEST(ReproFileTest, UnknownActionKindSerializedFromInvalidEnumIsRejectedOnRead) {
+  ReproFile file = MakeFileWithOneFrame();
+  ReproAction action;
+  action.kind = static_cast<ReproAction::Kind>(255);
+  file.frames.front().actions.push_back(action);
+
+  const auto path = TempFile("invalid_action_enum");
+  ASSERT_TRUE(WriteReproFile(path, file));
+  EXPECT_FALSE(ReadReproFile(path).has_value());
+
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+}
+
 TEST(ReproFileTest, ReadsSignedExponentNumbersTabsAndBlankLines) {
   const auto path = TempFile("number_edges");
   WriteTextFile(path,
@@ -1258,6 +1272,21 @@ TEST(ReproFileTest, ReadsMetadataWithWhitespaceAndWindowFallbacks) {
   std::filesystem::remove(path, ec);
 }
 
+TEST(ReproFileTest, MalformedOptionalMetadataStringsAreIgnored) {
+  const auto path = TempFile("metadata_unclosed_string");
+  WriteTextFile(path, R"({"v":3,"svg":"unterminated)"
+                      "\n" +
+                          FrameLineWith(""));
+
+  auto loaded = ReadReproFile(path);
+  ASSERT_TRUE(loaded.has_value());
+  EXPECT_TRUE(loaded->metadata.svgPath.empty());
+  ASSERT_EQ(loaded->frames.size(), 1u);
+
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+}
+
 TEST(ReproFileTest, ReadsMetadataWithoutWindowArray) {
   const auto path = TempFile("metadata_without_window_array");
   WriteTextFile(path, R"({"v":3,"svg":"foo.svg","wnd":123,"scale":1.0,"exp":0})"
@@ -1282,6 +1311,16 @@ TEST(ReproFileTest, WriteFailureWhenDestinationIsDirectory) {
   std::error_code ec;
   std::filesystem::remove(path.string() + ".tmp", ec);
   std::filesystem::remove(path, ec);
+}
+
+TEST(ReproFileTest, WriteFailureWhenTemporaryFileParentIsMissing) {
+  const auto path = std::filesystem::temp_directory_path() /
+                    ("missing_repro_parent_" + std::to_string(std::rand())) / "out.donner-repro";
+
+  EXPECT_FALSE(WriteReproFile(path, MakeFileWithOneFrame()));
+
+  std::error_code ec;
+  std::filesystem::remove(path.string() + ".tmp", ec);
 }
 
 }  // namespace donner::editor::repro

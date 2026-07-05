@@ -18,7 +18,7 @@ namespace donner::xml {
 using components::XMLDocumentContext;
 using components::XMLNamespaceContext;
 
-namespace {
+namespace internal {
 
 struct SourceEditRange {
   std::size_t start = 0;
@@ -1233,7 +1233,9 @@ void AppendAttributeMutations(XMLNode& node, const AttributeMap& currentAttribut
   }
 }
 
-}  // namespace
+}  // namespace internal
+
+using namespace internal;
 
 std::ostream& operator<<(std::ostream& os, ReparseScope scope) {
   switch (scope) {

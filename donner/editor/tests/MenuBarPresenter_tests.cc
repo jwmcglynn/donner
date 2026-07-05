@@ -173,5 +173,130 @@ TEST(MenuBarPresenterActionsTest, ApplyViewMenuToggleActionsHandlesNullAndIndepe
   EXPECT_TRUE(showPerfOverlay);
 }
 
+TEST(MenuBarPresenterActionsTest, ApplyMenuBarCommandIgnoresInactiveAndNullActions) {
+  MenuBarState state;
+  MenuBarActions actions;
+
+  ApplyMenuBarCommand(false, MenuBarCommand::OpenAbout, state, &actions);
+  EXPECT_FALSE(actions.openAbout);
+
+  ApplyMenuBarCommand(true, MenuBarCommand::OpenAbout, state, nullptr);
+  EXPECT_FALSE(actions.openAbout);
+}
+
+TEST(MenuBarPresenterActionsTest, ApplyMenuBarCommandMapsSimpleCommandsToActions) {
+  MenuBarState state;
+
+  MenuBarActions actions;
+  ApplyMenuBarCommand(true, MenuBarCommand::OpenAbout, state, &actions);
+  EXPECT_TRUE(actions.openAbout);
+
+  actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::OpenFile, state, &actions);
+  EXPECT_TRUE(actions.openFile);
+
+  actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::SaveFile, state, &actions);
+  EXPECT_TRUE(actions.saveFile);
+
+  actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::SaveFileAs, state, &actions);
+  EXPECT_TRUE(actions.saveFileAs);
+
+  actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::ExportViewportSvg, state, &actions);
+  EXPECT_TRUE(actions.exportViewportSvg);
+
+  actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::ExportViewportSvgWithOverlay, state, &actions);
+  EXPECT_TRUE(actions.exportViewportSvgWithOverlay);
+
+  actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::RevertFile, state, &actions);
+  EXPECT_TRUE(actions.revertFile);
+
+  actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::Quit, state, &actions);
+  EXPECT_TRUE(actions.quit);
+
+  actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::Undo, state, &actions);
+  EXPECT_TRUE(actions.undo);
+
+  actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::Redo, state, &actions);
+  EXPECT_TRUE(actions.redo);
+
+  actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::Cut, state, &actions);
+  EXPECT_TRUE(actions.cut);
+
+  actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::Copy, state, &actions);
+  EXPECT_TRUE(actions.copy);
+
+  actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::Paste, state, &actions);
+  EXPECT_TRUE(actions.paste);
+
+  actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::PasteInFront, state, &actions);
+  EXPECT_TRUE(actions.pasteInFront);
+
+  actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::ConvertTextToOutlines, state, &actions);
+  EXPECT_TRUE(actions.convertTextToOutlines);
+
+  actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::ZoomIn, state, &actions);
+  EXPECT_TRUE(actions.zoomIn);
+
+  actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::ZoomOut, state, &actions);
+  EXPECT_TRUE(actions.zoomOut);
+
+  actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::ActualSize, state, &actions);
+  EXPECT_TRUE(actions.actualSize);
+
+  actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::ToggleSourceFocusMode, state, &actions);
+  EXPECT_TRUE(actions.toggleSourceFocusMode);
+
+  actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::ToggleCompositorDebugPanel, state, &actions);
+  EXPECT_TRUE(actions.toggleCompositorDebugPanel);
+
+  actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::TogglePerfOverlay, state, &actions);
+  EXPECT_TRUE(actions.togglePerfOverlay);
+}
+
+TEST(MenuBarPresenterActionsTest, ApplyMenuBarCommandRoutesSelectCommandsBySourceFocus) {
+  MenuBarState state;
+  state.sourcePaneFocused = true;
+  MenuBarActions actions;
+
+  ApplyMenuBarCommand(true, MenuBarCommand::SelectAll, state, &actions);
+  EXPECT_TRUE(actions.selectAll);
+  EXPECT_FALSE(actions.selectAllCanvas);
+
+  actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::DeselectAll, state, &actions);
+  EXPECT_TRUE(actions.deselectAll);
+  EXPECT_FALSE(actions.deselectAllCanvas);
+
+  state.sourcePaneFocused = false;
+  actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::SelectAll, state, &actions);
+  EXPECT_FALSE(actions.selectAll);
+  EXPECT_TRUE(actions.selectAllCanvas);
+
+  actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::DeselectAll, state, &actions);
+  EXPECT_FALSE(actions.deselectAll);
+  EXPECT_TRUE(actions.deselectAllCanvas);
+}
+
 }  // namespace
 }  // namespace donner::editor

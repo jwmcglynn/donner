@@ -83,6 +83,31 @@ constexpr std::string_view kVisibilitySvg =
   <rect id="visible" x="40" y="0" width="10" height="10"/>
 </svg>)";
 
+constexpr std::string_view kNonRenderableFallbackSvg =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+  <a id="link"><rect id="linkedRect" x="0" y="0" width="10" height="10"/></a>
+  <switch id="switch"><rect id="switchRect" x="20" y="0" width="10" height="10"/></switch>
+  <feGaussianBlur id="blur" stdDeviation="2"/>
+  <unknown id="custom"/>
+  <rect id="visible" x="40" y="0" width="10" height="10"/>
+</svg>)";
+
+constexpr std::string_view kUnnamedSiblingsSvg =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+  <rect x="0" y="0" width="10" height="10"/>
+  <circle cx="20" cy="5" r="5"/>
+  <rect x="30" y="0" width="10" height="10"/>
+  <rect x="50" y="0" width="10" height="10"/>
+</svg>)";
+
+constexpr std::string_view kLockedRowsSvg =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+  <g id="lockedGroup" data-donner-locked="true">
+    <rect id="lockedChild" x="0" y="0" width="10" height="10"/>
+  </g>
+  <rect id="free" x="20" y="0" width="10" height="10"/>
+</svg>)";
+
 // Find the row whose display name equals `name`, or null.
 const LayerTreeRow* FindRow(const LayerTreeModel& model, std::string_view name) {
   for (const LayerTreeRow& row : model.rows()) {
@@ -191,6 +216,16 @@ TEST(LayerTreeModelTest, ExcludesAllResourceRowTypes) {
   }
 }
 
+TEST(LayerTreeModelTest, ExcludesNonRenderableFallbackTypes) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kNonRenderableFallbackSvg));
+
+  LayerTreeModel model;
+  model.refresh(app);
+
+  EXPECT_THAT(RowNames(model), testing::ElementsAre("visible"));
+}
+
 TEST(LayerTreeModelTest, IncludesAllRenderableLeafTypesAsShapes) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kRenderableLeavesSvg));
@@ -262,6 +297,17 @@ TEST(LayerTreeModelTest, IdFirstNamingWithIndexedFallback) {
   EXPECT_TRUE(foundIndexedG) << "expected the unnamed subgroup to use an indexed fallback name";
 }
 
+TEST(LayerTreeModelTest, IndexedFallbackCountsPreviousSameTagSiblings) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kUnnamedSiblingsSvg));
+
+  LayerTreeModel model;
+  model.refresh(app);
+
+  EXPECT_THAT(RowNames(model),
+              testing::ElementsAre("<rect>[0]", "<circle>[0]", "<rect>[1]", "<rect>[2]"));
+}
+
 TEST(LayerTreeModelTest, StackOrderListsBackToFrontInDocumentOrder) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kSvg));
@@ -301,6 +347,26 @@ TEST(LayerTreeModelTest, VisibilityFlagsReflectDisplayAndVisibilityProperties) {
   const LayerTreeRow* visible = FindRow(model, "visible");
   ASSERT_NE(visible, nullptr);
   EXPECT_TRUE(visible->isVisible);
+}
+
+TEST(LayerTreeModelTest, LockedRowsReflectAncestorLockState) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kLockedRowsSvg));
+
+  LayerTreeModel model;
+  model.refresh(app);
+
+  const LayerTreeRow* lockedGroup = FindRow(model, "lockedGroup");
+  ASSERT_NE(lockedGroup, nullptr);
+  EXPECT_TRUE(lockedGroup->isLocked);
+
+  const LayerTreeRow* lockedChild = FindRow(model, "lockedChild");
+  ASSERT_NE(lockedChild, nullptr);
+  EXPECT_TRUE(lockedChild->isLocked);
+
+  const LayerTreeRow* free = FindRow(model, "free");
+  ASSERT_NE(free, nullptr);
+  EXPECT_FALSE(free->isLocked);
 }
 
 TEST(LayerTreeModelTest, ExpansionAndSelectionPersistAcrossRefresh) {

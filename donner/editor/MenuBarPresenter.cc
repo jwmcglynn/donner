@@ -6,6 +6,55 @@
 
 namespace donner::editor {
 
+void ApplyMenuBarCommand(bool activated, MenuBarCommand command, const MenuBarState& state,
+                         MenuBarActions* actions) {
+  if (!activated || actions == nullptr) {
+    return;
+  }
+
+  switch (command) {
+    case MenuBarCommand::OpenAbout: actions->openAbout = true; return;
+    case MenuBarCommand::OpenFile: actions->openFile = true; return;
+    case MenuBarCommand::SaveFile: actions->saveFile = true; return;
+    case MenuBarCommand::SaveFileAs: actions->saveFileAs = true; return;
+    case MenuBarCommand::ExportViewportSvg: actions->exportViewportSvg = true; return;
+    case MenuBarCommand::ExportViewportSvgWithOverlay:
+      actions->exportViewportSvgWithOverlay = true;
+      return;
+    case MenuBarCommand::RevertFile: actions->revertFile = true; return;
+    case MenuBarCommand::Quit: actions->quit = true; return;
+    case MenuBarCommand::Undo: actions->undo = true; return;
+    case MenuBarCommand::Redo: actions->redo = true; return;
+    case MenuBarCommand::Cut: actions->cut = true; return;
+    case MenuBarCommand::Copy: actions->copy = true; return;
+    case MenuBarCommand::Paste: actions->paste = true; return;
+    case MenuBarCommand::PasteInFront: actions->pasteInFront = true; return;
+    case MenuBarCommand::ConvertTextToOutlines: actions->convertTextToOutlines = true; return;
+    case MenuBarCommand::SelectAll:
+      if (state.sourcePaneFocused) {
+        actions->selectAll = true;
+      } else {
+        actions->selectAllCanvas = true;
+      }
+      return;
+    case MenuBarCommand::DeselectAll:
+      if (state.sourcePaneFocused) {
+        actions->deselectAll = true;
+      } else {
+        actions->deselectAllCanvas = true;
+      }
+      return;
+    case MenuBarCommand::ZoomIn: actions->zoomIn = true; return;
+    case MenuBarCommand::ZoomOut: actions->zoomOut = true; return;
+    case MenuBarCommand::ActualSize: actions->actualSize = true; return;
+    case MenuBarCommand::ToggleSourceFocusMode: actions->toggleSourceFocusMode = true; return;
+    case MenuBarCommand::ToggleCompositorDebugPanel:
+      actions->toggleCompositorDebugPanel = true;
+      return;
+    case MenuBarCommand::TogglePerfOverlay: actions->togglePerfOverlay = true; return;
+  }
+}
+
 void ApplyViewMenuToggleActions(const MenuBarActions& actions, bool* showCompositorDebugPanel,
                                 bool* showPerfOverlay) {
   if (actions.toggleCompositorDebugPanel && showCompositorDebugPanel != nullptr) {
@@ -32,47 +81,36 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
     ImGui::PopFont();
   }
   if (donnerMenuOpen) {
-    if (ImGui::MenuItem("About...")) {
-      actions.openAbout = true;
-    }
-    if (ImGui::MenuItem("Quit Donner", "Cmd+Q")) {
-      actions.quit = true;
-    }
+    ApplyMenuBarCommand(ImGui::MenuItem("About..."), MenuBarCommand::OpenAbout, state, &actions);
+    ApplyMenuBarCommand(ImGui::MenuItem("Quit Donner", "Cmd+Q"), MenuBarCommand::Quit, state,
+                        &actions);
     ImGui::EndMenu();
   }
 
   if (ImGui::BeginMenu("File")) {
-    if (ImGui::MenuItem("Open...", "Cmd+O")) {
-      actions.openFile = true;
-    }
-    if (ImGui::MenuItem("Save", "Cmd+S", false, state.canSave)) {
-      actions.saveFile = true;
-    }
-    if (ImGui::MenuItem("Save As...", "Cmd+Shift+S", false, state.canSave)) {
-      actions.saveFileAs = true;
-    }
+    ApplyMenuBarCommand(ImGui::MenuItem("Open...", "Cmd+O"), MenuBarCommand::OpenFile, state,
+                        &actions);
+    ApplyMenuBarCommand(ImGui::MenuItem("Save", "Cmd+S", false, state.canSave),
+                        MenuBarCommand::SaveFile, state, &actions);
+    ApplyMenuBarCommand(ImGui::MenuItem("Save As...", "Cmd+Shift+S", false, state.canSave),
+                        MenuBarCommand::SaveFileAs, state, &actions);
     ImGui::Separator();
-    if (ImGui::MenuItem("Export Viewport as SVG...", nullptr, false, state.canSave)) {
-      actions.exportViewportSvg = true;
-    }
-    if (ImGui::MenuItem("Export Viewport as SVG (with overlay)...", nullptr, false,
-                        state.canSave)) {
-      actions.exportViewportSvgWithOverlay = true;
-    }
+    ApplyMenuBarCommand(ImGui::MenuItem("Export Viewport as SVG...", nullptr, false, state.canSave),
+                        MenuBarCommand::ExportViewportSvg, state, &actions);
+    ApplyMenuBarCommand(
+        ImGui::MenuItem("Export Viewport as SVG (with overlay)...", nullptr, false, state.canSave),
+        MenuBarCommand::ExportViewportSvgWithOverlay, state, &actions);
     ImGui::Separator();
-    if (ImGui::MenuItem("Revert", nullptr, false, state.canRevert)) {
-      actions.revertFile = true;
-    }
+    ApplyMenuBarCommand(ImGui::MenuItem("Revert", nullptr, false, state.canRevert),
+                        MenuBarCommand::RevertFile, state, &actions);
     ImGui::EndMenu();
   }
 
   if (ImGui::BeginMenu("Edit")) {
-    if (ImGui::MenuItem("Undo", "Cmd+Z", false, state.canUndo)) {
-      actions.undo = true;
-    }
-    if (ImGui::MenuItem("Redo", "Cmd+Shift+Z", false, state.canRedo)) {
-      actions.redo = true;
-    }
+    ApplyMenuBarCommand(ImGui::MenuItem("Undo", "Cmd+Z", false, state.canUndo),
+                        MenuBarCommand::Undo, state, &actions);
+    ApplyMenuBarCommand(ImGui::MenuItem("Redo", "Cmd+Shift+Z", false, state.canRedo),
+                        MenuBarCommand::Redo, state, &actions);
     ImGui::Separator();
 
     // Cut/Copy act on the source pane when it is focused, otherwise on the
@@ -80,69 +118,50 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
     // shape clipboard. Each item enables on the relevant precondition.
     const bool canCutCopy = state.sourcePaneFocused || state.hasShapeSelection;
     const bool canPaste = state.sourcePaneFocused || state.hasShapeClipboard;
-    if (ImGui::MenuItem("Cut", "Cmd+X", false, canCutCopy)) {
-      actions.cut = true;
-    }
-    if (ImGui::MenuItem("Copy", "Cmd+C", false, canCutCopy)) {
-      actions.copy = true;
-    }
-    if (ImGui::MenuItem("Paste", "Cmd+V", false, canPaste)) {
-      actions.paste = true;
-    }
-    if (ImGui::MenuItem("Paste in Front", "Cmd+F", false, state.hasShapeClipboard)) {
-      actions.pasteInFront = true;
-    }
+    ApplyMenuBarCommand(ImGui::MenuItem("Cut", "Cmd+X", false, canCutCopy), MenuBarCommand::Cut,
+                        state, &actions);
+    ApplyMenuBarCommand(ImGui::MenuItem("Copy", "Cmd+C", false, canCutCopy), MenuBarCommand::Copy,
+                        state, &actions);
+    ApplyMenuBarCommand(ImGui::MenuItem("Paste", "Cmd+V", false, canPaste), MenuBarCommand::Paste,
+                        state, &actions);
+    ApplyMenuBarCommand(ImGui::MenuItem("Paste in Front", "Cmd+F", false, state.hasShapeClipboard),
+                        MenuBarCommand::PasteInFront, state, &actions);
     ImGui::Separator();
-    if (ImGui::MenuItem("Convert Text to Outlines", nullptr, false, state.hasTextSelection)) {
-      actions.convertTextToOutlines = true;
-    }
+    ApplyMenuBarCommand(
+        ImGui::MenuItem("Convert Text to Outlines", nullptr, false, state.hasTextSelection),
+        MenuBarCommand::ConvertTextToOutlines, state, &actions);
     // "Select All" routes to the source/XML pane's text Select-All while it owns keyboard focus,
     // and otherwise to the canvas Select-All (every selectable element). Enabled when either path
     // can act.
-    if (ImGui::MenuItem("Select All", "Cmd+A", false,
-                        state.sourcePaneFocused || state.hasSelectableElements)) {
-      if (state.sourcePaneFocused) {
-        actions.selectAll = true;
-      } else {
-        actions.selectAllCanvas = true;
-      }
-    }
+    ApplyMenuBarCommand(ImGui::MenuItem("Select All", "Cmd+A", false,
+                                        state.sourcePaneFocused || state.hasSelectableElements),
+                        MenuBarCommand::SelectAll, state, &actions);
     // "Deselect All" routes to the source/XML pane's text deselect (collapse selection to caret)
     // while it owns keyboard focus, and otherwise clears the canvas selection. Enabled when either
     // path can act: the source pane can always collapse its caret, and the canvas needs a
     // selection. Cmd+Shift+A mirrors the focus-aware shortcut handled in EditorShell.
-    if (ImGui::MenuItem("Deselect All", "Cmd+Shift+A", false,
-                        state.sourcePaneFocused || state.hasShapeSelection)) {
-      if (state.sourcePaneFocused) {
-        actions.deselectAll = true;
-      } else {
-        actions.deselectAllCanvas = true;
-      }
-    }
+    ApplyMenuBarCommand(ImGui::MenuItem("Deselect All", "Cmd+Shift+A", false,
+                                        state.sourcePaneFocused || state.hasShapeSelection),
+                        MenuBarCommand::DeselectAll, state, &actions);
     ImGui::EndMenu();
   }
 
   if (ImGui::BeginMenu("View")) {
-    if (ImGui::MenuItem("Source Focus Mode", "Cmd+Enter", state.sourceFocusMode)) {
-      actions.toggleSourceFocusMode = true;
-    }
+    ApplyMenuBarCommand(ImGui::MenuItem("Source Focus Mode", "Cmd+Enter", state.sourceFocusMode),
+                        MenuBarCommand::ToggleSourceFocusMode, state, &actions);
     ImGui::Separator();
-    if (ImGui::MenuItem("Zoom In", "Cmd+=")) {
-      actions.zoomIn = true;
-    }
-    if (ImGui::MenuItem("Zoom Out", "Cmd+-")) {
-      actions.zoomOut = true;
-    }
-    if (ImGui::MenuItem("Actual Size", "Cmd+0")) {
-      actions.actualSize = true;
-    }
+    ApplyMenuBarCommand(ImGui::MenuItem("Zoom In", "Cmd+="), MenuBarCommand::ZoomIn, state,
+                        &actions);
+    ApplyMenuBarCommand(ImGui::MenuItem("Zoom Out", "Cmd+-"), MenuBarCommand::ZoomOut, state,
+                        &actions);
+    ApplyMenuBarCommand(ImGui::MenuItem("Actual Size", "Cmd+0"), MenuBarCommand::ActualSize, state,
+                        &actions);
     ImGui::Separator();
-    if (ImGui::MenuItem("Compositor Debug", nullptr, state.showCompositorDebugPanel)) {
-      actions.toggleCompositorDebugPanel = true;
-    }
-    if (ImGui::MenuItem("Performance Overlay", nullptr, state.showPerfOverlay)) {
-      actions.togglePerfOverlay = true;
-    }
+    ApplyMenuBarCommand(
+        ImGui::MenuItem("Compositor Debug", nullptr, state.showCompositorDebugPanel),
+        MenuBarCommand::ToggleCompositorDebugPanel, state, &actions);
+    ApplyMenuBarCommand(ImGui::MenuItem("Performance Overlay", nullptr, state.showPerfOverlay),
+                        MenuBarCommand::TogglePerfOverlay, state, &actions);
     ImGui::EndMenu();
   }
 

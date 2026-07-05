@@ -1446,9 +1446,73 @@ TEST(DocumentSyncControllerStructuredTest, InvalidSourceBackedTransformWriteback
   EXPECT_FALSE(textEditor.isTextChanged());
 }
 
+TEST(DocumentSyncControllerStructuredTest, SourceLessElementRemoveWritebackPatchesText) {
+  const auto makeRectTarget = [](std::size_t rectIndex, RcString id) {
+    return AttributeWritebackTarget{
+        .elementPath =
+            {
+                AttributeWritebackPathSegment{0, xml::XMLQualifiedName(RcString("svg"))},
+                AttributeWritebackPathSegment{rectIndex, xml::XMLQualifiedName(RcString("rect"))},
+            },
+        .elementId = std::move(id),
+    };
+  };
+
+  EditorApp app;
+  svg::SVGDocument document;
+  app.document().setDocument(std::move(document));
+  ASSERT_TRUE(app.hasDocument());
+  ASSERT_FALSE(app.document().document().hasSourceStore());
+
+  TextEditor textEditor;
+  textEditor.setText(kTwoRectSvg);
+  textEditor.resetTextChanged();
+  SelectTool tool;
+  DocumentSyncController controller{std::string(kTwoRectSvg)};
+
+  app.enqueueElementRemoveWriteback(EditorApp::CompletedElementRemoveWriteback{
+      .target = AttributeWritebackTarget{},
+  });
+  app.enqueueElementRemoveWriteback(EditorApp::CompletedElementRemoveWriteback{
+      .target = makeRectTarget(0, RcString("r1")),
+  });
+
+  controller.applyPendingWritebacks(app, tool, textEditor);
+
+  EXPECT_EQ(textEditor.getText().find(R"(id="r1")"), std::string::npos);
+  EXPECT_NE(textEditor.getText().find(R"(id="r2")"), std::string::npos);
+  EXPECT_TRUE(textEditor.isTextChanged());
+  EXPECT_FALSE(app.document().queue().empty());
+}
+
+TEST(DocumentSyncControllerStructuredTest, SourceLessInvalidTransformWritebackDrainsWithoutPatch) {
+  EditorApp app;
+  svg::SVGDocument document;
+  app.document().setDocument(std::move(document));
+  ASSERT_TRUE(app.hasDocument());
+  ASSERT_FALSE(app.document().document().hasSourceStore());
+
+  TextEditor textEditor;
+  textEditor.setText(kTwoRectSvg);
+  textEditor.resetTextChanged();
+  SelectTool tool;
+  DocumentSyncController controller{std::string(kTwoRectSvg)};
+
+  app.enqueueTransformWriteback(EditorApp::CompletedTransformWriteback{
+      .target = AttributeWritebackTarget{},
+      .transform = Transform2d::Translate(Vector2d(8.0, 0.0)),
+  });
+
+  controller.applyPendingWritebacks(app, tool, textEditor);
+
+  EXPECT_EQ(textEditor.getText(), std::string(kTwoRectSvg));
+  EXPECT_FALSE(textEditor.isTextChanged());
+  EXPECT_TRUE(app.document().queue().empty());
+}
+
 TEST(DocumentSyncControllerStructuredTest, ProgrammaticDocumentTransformWritebacksPatchText) {
   constexpr std::string_view kSvg =
-      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect id="r1" width="10" height="10"/><rect id="r2" width="10" height="10" transform="translate(2)"/><rect id="r3" width="10" height="10" transform="translate(3)"/></svg>)svg";
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect id="r1" width="10" height="10"/><rect id="r2" width="10" height="10" transform="translate(2)"/><rect id="r3" width="10" height="10" transform="translate(3)"/><rect id="r4" width="10" height="10"/></svg>)svg";
 
   svg::SVGDocument document;
   const auto makeRectTarget = [](std::size_t rectIndex, RcString id) {
@@ -1464,6 +1528,7 @@ TEST(DocumentSyncControllerStructuredTest, ProgrammaticDocumentTransformWritebac
   AttributeWritebackTarget r1Target = makeRectTarget(0, RcString("r1"));
   AttributeWritebackTarget r2Target = makeRectTarget(1, RcString("r2"));
   AttributeWritebackTarget r3Target = makeRectTarget(2, RcString("r3"));
+  AttributeWritebackTarget r4Target = makeRectTarget(3, RcString("r4"));
 
   EditorApp app;
   app.document().setDocument(std::move(document));
@@ -1492,6 +1557,10 @@ TEST(DocumentSyncControllerStructuredTest, ProgrammaticDocumentTransformWritebac
       .target = r3Target,
       .transform = Transform2d(),
   });
+  app.enqueueTransformWriteback(EditorApp::CompletedTransformWriteback{
+      .target = r4Target,
+      .transform = Transform2d::Translate(Vector2d(8.0, 0.0)),
+  });
 
   controller.applyPendingWritebacks(app, tool, textEditor);
 
@@ -1501,6 +1570,9 @@ TEST(DocumentSyncControllerStructuredTest, ProgrammaticDocumentTransformWritebac
             std::string::npos);
   EXPECT_NE(textEditor.getText().find(R"(<rect id="r3" width="10" height="10"/>)"),
             std::string::npos);
+  const std::size_t r4Offset = textEditor.getText().find(R"(id="r4")");
+  ASSERT_NE(r4Offset, std::string::npos);
+  EXPECT_NE(textEditor.getText().find("transform=\"translate(8)\"", r4Offset), std::string::npos);
   EXPECT_FALSE(app.document().queue().empty());
 
   ASSERT_TRUE(app.flushFrame());
@@ -1508,12 +1580,15 @@ TEST(DocumentSyncControllerStructuredTest, ProgrammaticDocumentTransformWritebac
   auto parsedR1 = app.document().document().querySelector("#r1");
   auto parsedR2 = app.document().document().querySelector("#r2");
   auto parsedR3 = app.document().document().querySelector("#r3");
+  auto parsedR4 = app.document().document().querySelector("#r4");
   ASSERT_TRUE(parsedR1.has_value());
   ASSERT_TRUE(parsedR2.has_value());
   ASSERT_TRUE(parsedR3.has_value());
+  ASSERT_TRUE(parsedR4.has_value());
   EXPECT_EQ(parsedR1->getAttribute("transform"), std::optional<RcString>(RcString("translate(9)")));
   EXPECT_FALSE(parsedR2->getAttribute("transform").has_value());
   EXPECT_FALSE(parsedR3->getAttribute("transform").has_value());
+  EXPECT_EQ(parsedR4->getAttribute("transform"), std::optional<RcString>(RcString("translate(8)")));
 }
 
 }  // namespace

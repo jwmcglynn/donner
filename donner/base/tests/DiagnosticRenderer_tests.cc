@@ -151,4 +151,86 @@ TEST(DiagnosticRenderer, DoubleDigitLineNumber) {
             "   | ^\n");
 }
 
+TEST(DiagnosticRenderer, ColorizedWarningIncludesAnsiStyling) {
+  const std::string_view source = "abc\ndef";
+  auto diag =
+      ParseDiagnostic::Warning("Styled", SourceRange{FileOffset::Offset(4), FileOffset::Offset(7)});
+
+  std::string result =
+      DiagnosticRenderer::format(source, diag, {.filename = "test.svg", .colorize = true});
+
+  EXPECT_EQ(result,
+            "\033[1;33mwarning\033[1;37m: Styled\033[0m\n"
+            "\033[1;34m  --> \033[0mtest.svg:2:1\n"
+            "\033[1;34m  |\033[0m\n"
+            "\033[1;34m 2 | \033[0mdef\n"
+            "\033[1;34m  | \033[0m\033[1;33m^~~\033[0m\n");
+}
+
+TEST(DiagnosticRenderer, ColorizedErrorUsesRedSeverityAndCaret) {
+  const std::string_view source = "abc";
+  auto diag = ParseDiagnostic::Error("Styled error",
+                                     SourceRange{FileOffset::Offset(1), FileOffset::Offset(2)});
+
+  std::string result = DiagnosticRenderer::format(source, diag, {.colorize = true});
+
+  EXPECT_NE(result.find("\033[1;31merror"), std::string::npos);
+  EXPECT_NE(result.find("\033[1;31m^"), std::string::npos);
+}
+
+TEST(DiagnosticRenderer, OffsetPastSourceOnlyPrintsMessage) {
+  const std::string_view source = "abc";
+  auto diag = ParseDiagnostic::Error("Past source",
+                                     SourceRange{FileOffset::Offset(4), FileOffset::Offset(5)});
+
+  std::string result = DiagnosticRenderer::format(source, diag);
+
+  EXPECT_EQ(result, "error: Past source\n");
+}
+
+TEST(DiagnosticRenderer, CarriageReturnTerminatesRenderedLine) {
+  const std::string_view source = "abc\rdef";
+  auto diag =
+      ParseDiagnostic::Error("CR line", SourceRange{FileOffset::Offset(1), FileOffset::Offset(3)});
+
+  std::string result = DiagnosticRenderer::format(source, diag);
+
+  EXPECT_EQ(result,
+            "error: CR line\n"
+            "  --> 1:2\n"
+            "  |\n"
+            " 1 | abc\n"
+            "  |  ^~\n");
+}
+
+TEST(DiagnosticRenderer, MissingEndOffsetUsesSingleCaret) {
+  const std::string_view source = "abc";
+  auto diag = ParseDiagnostic::Error("No end",
+                                     SourceRange{FileOffset::Offset(1), FileOffset::EndOfString()});
+
+  std::string result = DiagnosticRenderer::format(source, diag);
+
+  EXPECT_EQ(result,
+            "error: No end\n"
+            "  --> 1:2\n"
+            "  |\n"
+            " 1 | abc\n"
+            "  |  ^\n");
+}
+
+TEST(DiagnosticRenderer, RangeStartingAtLineEndUsesSingleCaret) {
+  const std::string_view source = "abc\nnext";
+  auto diag =
+      ParseDiagnostic::Error("Line end", SourceRange{FileOffset::Offset(3), FileOffset::Offset(4)});
+
+  std::string result = DiagnosticRenderer::format(source, diag);
+
+  EXPECT_EQ(result,
+            "error: Line end\n"
+            "  --> 1:4\n"
+            "  |\n"
+            " 1 | abc\n"
+            "  |    ^\n");
+}
+
 }  // namespace donner

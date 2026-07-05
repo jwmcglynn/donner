@@ -1866,6 +1866,13 @@ TEST(PropertyRegistry, TextDecorationAndDasharrayErrorPaths) {
     EXPECT_THAT(registry.parseProperty(declaration, Specificity()),
                 ParseErrorIs("Unexpected tokens after dasharray value"));
   }
+
+  {
+    PropertyRegistry registry;
+    css::Declaration declaration = css::CSS::ParseStyleAttribute("stroke-dasharray: 1foo").at(0);
+    EXPECT_THAT(registry.parseProperty(declaration, Specificity()),
+                ParseErrorIs("Invalid unit on length"));
+  }
 }
 
 TEST(PropertyRegistry, ResolveFontStretch) {

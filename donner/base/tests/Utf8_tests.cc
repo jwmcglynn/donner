@@ -101,6 +101,8 @@ TEST(Utf8Test, NextCodepoint) {
       // Invalid sequences
       {"\xF0\x28\x8C\x28", Utf8::kUnicodeReplacementCharacter, 1},
       {"\xC0\xAF", Utf8::kUnicodeReplacementCharacter, 1},
+      {"\xE0\x80\x80", Utf8::kUnicodeReplacementCharacter, 1},
+      {"\xF0\x80\x80\x80", Utf8::kUnicodeReplacementCharacter, 1},
       {"\xED\xA0\x80", Utf8::kUnicodeReplacementCharacter, 1},  // Surrogate half
   };
 
@@ -108,6 +110,26 @@ TEST(Utf8Test, NextCodepoint) {
     auto [codepoint, length] = Utf8::NextCodepoint(testCase.input);
     EXPECT_EQ(codepoint, testCase.expectedCodepoint) << "input = " << testCase.input;
     EXPECT_EQ(length, testCase.expectedLength) << "input = " << testCase.input;
+  }
+}
+
+TEST(Utf8Test, NextCodepointRejectsEmptyAndTruncatedSequences) {
+  struct TestCase {
+    std::string_view input;
+    int expectedLength;
+  };
+
+  const std::vector<TestCase> testCases = {
+      {"", 0},
+      {"\xC3", 1},
+      {"\xE2\x82", 1},
+      {"\xF0\x9F\x98", 1},
+  };
+
+  for (const auto& testCase : testCases) {
+    auto [codepoint, length] = Utf8::NextCodepoint(testCase.input);
+    EXPECT_EQ(codepoint, Utf8::kUnicodeReplacementCharacter);
+    EXPECT_EQ(length, testCase.expectedLength);
   }
 }
 

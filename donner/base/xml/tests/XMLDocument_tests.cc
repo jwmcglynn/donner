@@ -13,6 +13,7 @@
 #include "donner/base/xml/XMLNode.h"
 #include "donner/base/xml/XMLParser.h"
 #include "donner/base/xml/XMLQualifiedName.h"
+#include "donner/base/xml/components/TreeMutationContext.h"
 #include "donner/base/xml/components/XMLDocumentContext.h"
 
 using testing::Eq;
@@ -22,6 +23,35 @@ using testing::NotNull;
 using testing::Optional;
 
 namespace donner::xml {
+
+namespace internal {
+
+bool IsXmlWhitespace(char ch);
+void AppendQualifiedName(std::string& out, const XMLQualifiedNameRef& name);
+bool ContainsOffset(const SourceRange& range, std::size_t offset);
+std::optional<std::size_t> FindOpeningTagEnd(std::string_view source, std::size_t tagStart);
+std::optional<std::size_t> FindDirtyOpeningTagEnd(std::string_view source, std::size_t tagStart,
+                                                  std::size_t nodeEnd);
+std::optional<std::size_t> FindClosingTagStart(std::string_view source, std::size_t nodeEnd);
+bool IsRawTextLikeNode(XMLNode::Type type);
+std::string SerializeAttributeInsertion(std::string_view source, std::size_t insertionOffset,
+                                        const XMLQualifiedName& name,
+                                        std::string_view escapedValue);
+std::optional<SourceRange> ShiftRangeLeft(SourceRange range, std::size_t amount);
+bool IsXmlSpace(char ch);
+std::string ClosingTagFor(const XMLNode& node);
+bool SourceHasClosingTagAt(std::string_view source, std::size_t offset,
+                           std::string_view closingTag);
+std::optional<std::size_t> FindParentClosingTagInsertionOffset(const XMLDocument& document,
+                                                               const XMLNode& parent);
+SourceRange OffsetRange(SourceRange range, std::size_t sourceOffsetBase);
+std::optional<RcString> ElementId(const XMLNode& node);
+std::optional<std::size_t> FindReusableChild(const XMLNode& parsedChild,
+                                             const std::vector<XMLNode>& oldChildren,
+                                             const std::vector<bool>& usedChildren);
+bool HasCompatibleNodeIdentity(const XMLNode& target, const XMLNode& parsedNode);
+
+}  // namespace internal
 
 namespace {
 
@@ -51,6 +81,14 @@ std::vector<XMLMutation::Kind> MutationKinds(const ApplySourceEditResult& result
     kinds.push_back(mutation.kind);
   }
   return kinds;
+}
+
+void ExpectSourceRangeOffsets(const SourceRange& range, std::size_t expectedStart,
+                              std::size_t expectedEnd) {
+  ASSERT_TRUE(range.start.offset.has_value());
+  ASSERT_TRUE(range.end.offset.has_value());
+  EXPECT_EQ(*range.start.offset, expectedStart);
+  EXPECT_EQ(*range.end.offset, expectedEnd);
 }
 
 }  // namespace
@@ -99,6 +137,19 @@ TEST_F(XMLDocumentTests, CreateFromRegistryRehydratesSameTree) {
   EXPECT_EQ(rehydrated.root().firstChild()->tagName(), XMLQualifiedNameRef("svg"));
 }
 
+TEST_F(XMLDocumentTests, CreateFromRegistryInstallsMissingTreeMutationContext) {
+  XMLDocument original;
+  XMLNode element = XMLNode::CreateElementNode(original, "svg");
+  original.root().appendChild(element);
+  original.registry().ctx().erase<donner::components::TreeMutationContext>();
+
+  XMLDocument rehydrated = XMLDocument::CreateFromRegistry(original.sharedRegistry());
+
+  EXPECT_TRUE(rehydrated.registry().ctx().contains<donner::components::TreeMutationContext>());
+  ASSERT_TRUE(rehydrated.root().firstChild().has_value());
+  EXPECT_EQ(rehydrated.root().firstChild()->tagName(), XMLQualifiedNameRef("svg"));
+}
+
 TEST_F(XMLDocumentTests, CreateFromRegistryNullRegistryAsserts) {
   EXPECT_DEATH({ XMLDocument::CreateFromRegistry(nullptr); }, "null registry");
 }
@@ -106,6 +157,133 @@ TEST_F(XMLDocumentTests, CreateFromRegistryNullRegistryAsserts) {
 TEST_F(XMLDocumentTests, CreateFromRegistryWithoutDocumentContextAsserts) {
   auto registry = std::make_shared<Registry>();
   EXPECT_DEATH({ XMLDocument::CreateFromRegistry(registry); }, "XMLDocumentContext");
+}
+
+TEST_F(XMLDocumentTests, InternalWhitespaceAndNameHelpersHandleBoundaryCases) {
+  EXPECT_TRUE(internal::IsXmlWhitespace(' '));
+  EXPECT_TRUE(internal::IsXmlWhitespace('\t'));
+  EXPECT_TRUE(internal::IsXmlWhitespace('\n'));
+  EXPECT_TRUE(internal::IsXmlWhitespace('\r'));
+  EXPECT_FALSE(internal::IsXmlWhitespace('\f'));
+
+  EXPECT_TRUE(internal::IsXmlSpace(' '));
+  EXPECT_TRUE(internal::IsXmlSpace('\t'));
+  EXPECT_TRUE(internal::IsXmlSpace('\n'));
+  EXPECT_TRUE(internal::IsXmlSpace('\r'));
+  EXPECT_FALSE(internal::IsXmlSpace('x'));
+
+  std::string name;
+  internal::AppendQualifiedName(name, XMLQualifiedNameRef("rect"));
+  EXPECT_EQ(name, "rect");
+
+  name.clear();
+  internal::AppendQualifiedName(name, XMLQualifiedNameRef("xlink", "href"));
+  EXPECT_EQ(name, "xlink:href");
+}
+
+TEST_F(XMLDocumentTests, InternalOffsetHelpersHandleMissingAndShiftedOffsets) {
+  const SourceRange missingStart{FileOffset::EndOfString(), FileOffset::Offset(4)};
+  const SourceRange missingEnd{FileOffset::Offset(2), FileOffset::EndOfString()};
+  const SourceRange range{FileOffset::Offset(2), FileOffset::Offset(5)};
+
+  EXPECT_FALSE(internal::ContainsOffset(missingStart, 2));
+  EXPECT_FALSE(internal::ContainsOffset(missingEnd, 2));
+  EXPECT_TRUE(internal::ContainsOffset(range, 2));
+  EXPECT_FALSE(internal::ContainsOffset(range, 5));
+
+  EXPECT_THAT(internal::ShiftRangeLeft(missingStart, 1), Eq(std::nullopt));
+  EXPECT_THAT(internal::ShiftRangeLeft(range, 3), Eq(std::nullopt));
+  std::optional<SourceRange> shifted = internal::ShiftRangeLeft(range, 1);
+  ASSERT_TRUE(shifted.has_value());
+  ExpectSourceRangeOffsets(*shifted, 1, 4);
+
+  EXPECT_EQ(internal::OffsetRange(missingStart, 10), missingStart);
+  ExpectSourceRangeOffsets(internal::OffsetRange(range, 10), 12, 15);
+}
+
+TEST_F(XMLDocumentTests, InternalTagScannersHandleMalformedAndQuotedTags) {
+  EXPECT_THAT(internal::FindOpeningTagEnd(R"(<rect data='a>b' label="c>d"/>)", 0),
+              Optional(Eq(30u)));
+  EXPECT_THAT(internal::FindOpeningTagEnd("rect/>", 0), Eq(std::nullopt));
+  EXPECT_THAT(internal::FindOpeningTagEnd("<rect <bad>", 0), Eq(std::nullopt));
+  EXPECT_THAT(internal::FindOpeningTagEnd("<rect", 0), Eq(std::nullopt));
+  EXPECT_THAT(internal::FindOpeningTagEnd("<rect/>", 99), Eq(std::nullopt));
+
+  EXPECT_THAT(internal::FindDirtyOpeningTagEnd("<rect><tail", 0, 6), Optional(Eq(6u)));
+  EXPECT_THAT(internal::FindDirtyOpeningTagEnd("", 0, 0), Eq(std::nullopt));
+  EXPECT_THAT(internal::FindDirtyOpeningTagEnd("<rect>", 0, 0), Eq(std::nullopt));
+  EXPECT_THAT(internal::FindDirtyOpeningTagEnd("<rect", 0, 5), Eq(std::nullopt));
+
+  EXPECT_THAT(internal::FindClosingTagStart("<a></a>", 0), Eq(std::nullopt));
+  EXPECT_THAT(internal::FindClosingTagStart("<a></a>", 99), Eq(std::nullopt));
+  EXPECT_THAT(internal::FindClosingTagStart("<a><b/></a>", 11), Optional(Eq(7u)));
+  EXPECT_TRUE(internal::SourceHasClosingTagAt("<a></a>", 3, "</a>"));
+  EXPECT_FALSE(internal::SourceHasClosingTagAt("<a></a>", 99, "</a>"));
+  EXPECT_FALSE(internal::SourceHasClosingTagAt("<a></a>", 3, "</b>"));
+}
+
+TEST_F(XMLDocumentTests, InternalAttributeAndClosingTagSerializersUseXmlNames) {
+  EXPECT_EQ(internal::SerializeAttributeInsertion("<rect", 5, XMLQualifiedName("fill"), "red"),
+            R"( fill="red")");
+  EXPECT_EQ(internal::SerializeAttributeInsertion("<rect ", 6, XMLQualifiedName("fill"), "red"),
+            R"(fill="red")");
+  EXPECT_EQ(internal::SerializeAttributeInsertion(
+                "<use", 4, XMLQualifiedName(RcString("xlink"), RcString("href")), "#icon"),
+            R"( xlink:href="#icon")");
+
+  XMLDocument doc;
+  XMLNode rect = XMLNode::CreateElementNode(doc, "rect");
+  XMLNode use =
+      XMLNode::CreateElementNode(doc, XMLQualifiedNameRef(RcString("xlink"), RcString("use")));
+
+  EXPECT_EQ(internal::ClosingTagFor(rect), "</rect>");
+  EXPECT_EQ(internal::ClosingTagFor(use), "</xlink:use>");
+}
+
+TEST_F(XMLDocumentTests, InternalClosingTagInsertionOffsetUsesCachedOrScannedTag) {
+  XMLDocument doc = ParseDocument(R"(<svg><g></g></svg>)");
+  XMLNode svg = doc.root().firstChild().value();
+  const std::size_t closingOffset = doc.source().find("</svg>");
+  ASSERT_NE(closingOffset, std::string_view::npos);
+
+  EXPECT_THAT(internal::FindParentClosingTagInsertionOffset(doc, svg), Optional(Eq(closingOffset)));
+
+  svg.setClosingTagLocation(SourceRange{FileOffset::Offset(0), FileOffset::Offset(0)});
+  EXPECT_THAT(internal::FindParentClosingTagInsertionOffset(doc, svg), Optional(Eq(closingOffset)));
+
+  svg.setSourceEndOffset(FileOffset::Offset(3));
+  EXPECT_THAT(internal::FindParentClosingTagInsertionOffset(doc, svg), Eq(std::nullopt));
+}
+
+TEST_F(XMLDocumentTests, InternalNodeIdentityHelpersMatchReusableElementsByStableId) {
+  XMLDocument document;
+  XMLNode rect = XMLNode::CreateElementNode(document, "rect");
+  rect.setAttribute("id", "keep");
+  XMLNode duplicate = XMLNode::CreateElementNode(document, "rect");
+  duplicate.setAttribute("id", "keep");
+  XMLNode circle = XMLNode::CreateElementNode(document, "circle");
+  circle.setAttribute("id", "keep");
+  XMLNode emptyId = XMLNode::CreateElementNode(document, "rect");
+  emptyId.setAttribute("id", "");
+  XMLNode text = XMLNode::CreateDataNode(document, "text");
+
+  EXPECT_THAT(internal::ElementId(rect), Optional(Eq("keep")));
+  EXPECT_THAT(internal::ElementId(text), Eq(std::nullopt));
+  EXPECT_THAT(internal::FindReusableChild(rect, {circle, duplicate}, {false, false}),
+              Optional(Eq(1u)));
+  EXPECT_THAT(internal::FindReusableChild(rect, {circle, duplicate}, {false, true}),
+              Eq(std::nullopt));
+  EXPECT_THAT(internal::FindReusableChild(emptyId, {rect}, {false}), Eq(std::nullopt));
+
+  EXPECT_TRUE(internal::IsRawTextLikeNode(XMLNode::Type::CData));
+  EXPECT_TRUE(internal::IsRawTextLikeNode(XMLNode::Type::Comment));
+  EXPECT_TRUE(internal::IsRawTextLikeNode(XMLNode::Type::ProcessingInstruction));
+  EXPECT_FALSE(internal::IsRawTextLikeNode(XMLNode::Type::Data));
+
+  EXPECT_TRUE(internal::HasCompatibleNodeIdentity(rect, duplicate));
+  EXPECT_FALSE(internal::HasCompatibleNodeIdentity(rect, circle));
+  EXPECT_FALSE(internal::HasCompatibleNodeIdentity(rect, text));
+  EXPECT_TRUE(internal::HasCompatibleNodeIdentity(text, XMLNode::CreateDataNode(document, "new")));
 }
 
 //
@@ -442,6 +620,30 @@ TEST_F(XMLDocumentTests, ApplySourceEditAttributeValueReportsInvalidatedOpeningT
   EXPECT_EQ(doc.source(), R"(<svg><rect fool="red"/></svg>)");
 }
 
+TEST_F(XMLDocumentTests, ApplySourceEditAttributeValueReportsRemovedTargetAttribute) {
+  XMLDocument doc = ParseDocument(R"(<svg><rect fill="red" /></svg>)");
+  XMLNode rect = doc.root().firstChild()->firstChild().value();
+  const std::size_t attributeOffset = doc.source().find("fill");
+  ASSERT_NE(attributeOffset, std::string_view::npos);
+  const std::size_t attributeEnd = attributeOffset + std::string_view(R"(fill="red")").size();
+  rect.setAttributeSourceLocation(
+      "fill",
+      SourceRange{FileOffset::Offset(attributeOffset), FileOffset::Offset(attributeEnd + 1)},
+      SourceRange{FileOffset::Offset(attributeOffset), FileOffset::Offset(attributeEnd)}, '"');
+
+  ApplySourceEditResult result = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(attributeOffset), FileOffset::Offset(attributeEnd)},
+      .replacement = R"(stroke="blue")",
+      .sourceVersion = doc.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::AttributeValue);
+  EXPECT_THAT(result, DiagnosticReasonContains("removed the target attribute"));
+  EXPECT_THAT(rect.getAttribute("fill"), Optional(Eq("red")));
+  EXPECT_EQ(doc.source(), R"(<svg><rect stroke="blue" /></svg>)");
+}
+
 TEST_F(XMLDocumentTests, ApplySourceEditRepeatedDiagnosticDoesNotEmitDuplicateMutation) {
   XMLDocument doc = ParseDocument(R"(<svg><rect fill="red"/></svg>)");
   const std::size_t valueOffset = doc.source().find("red");
@@ -745,6 +947,31 @@ TEST_F(XMLDocumentTests, ApplySourceEditElementTextContentFallbackUpdatesValue) 
   EXPECT_THAT(MutationKinds(result), testing::Contains(XMLMutation::Kind::NodeValueChanged));
 }
 
+TEST_F(XMLDocumentTests, ApplySourceEditChildTextValueLocationUpdatesChildWithoutNodeRange) {
+  XMLDocument doc = ParseDocument(R"(<svg><text>hello</text></svg>)");
+  XMLNode text = doc.root().firstChild()->firstChild().value();
+  XMLNode textChild = text.firstChild().value();
+  const std::size_t textOffset = doc.source().find("hello");
+  ASSERT_NE(textOffset, std::string_view::npos);
+
+  textChild.clearSourceLocation();
+  textChild.setValueLocation(
+      SourceRange{FileOffset::Offset(textOffset), FileOffset::Offset(textOffset + 5)});
+
+  ApplySourceEditResult result = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(textOffset), FileOffset::Offset(textOffset + 5)},
+      .replacement = "world",
+      .sourceVersion = doc.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::TextNode);
+  EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+  EXPECT_THAT(textChild.value(), Optional(Eq("world")));
+  EXPECT_THAT(text.value(), Optional(Eq("world")));
+  EXPECT_EQ(doc.source(), R"(<svg><text>world</text></svg>)");
+}
+
 TEST_F(XMLDocumentTests, ApplySourceEditElementTextFallbackUsesTagBoundaries) {
   XMLDocument doc = ParseDocument(R"(<svg><text>hello</text></svg>)");
   XMLNode text = doc.root().firstChild()->firstChild().value();
@@ -999,6 +1226,30 @@ TEST_F(XMLDocumentTests, ApplySourceEditElementSubtreeReusesAndReplacesChildren)
   EXPECT_THAT(MutationKinds(result), testing::Contains(XMLMutation::Kind::NodeRemoved));
 }
 
+TEST_F(XMLDocumentTests, ApplySourceEditElementSubtreeReusedChildRemovesAttribute) {
+  XMLDocument doc = ParseDocument(R"(<svg><g><rect id="keep" fill="red"/></g></svg>)");
+  XMLNode group = doc.root().firstChild()->firstChild().value();
+  XMLNode rect = group.firstChild().value();
+  const std::size_t editStart = doc.source().find("<rect");
+  const std::size_t editEnd = doc.source().find("</g>");
+  ASSERT_NE(editStart, std::string_view::npos);
+  ASSERT_NE(editEnd, std::string_view::npos);
+
+  ApplySourceEditResult result = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(editStart), FileOffset::Offset(editEnd)},
+      .replacement = R"(<rect id="keep"/>)",
+      .sourceVersion = doc.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::ElementSubtree);
+  EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+  ASSERT_TRUE(group.firstChild().has_value());
+  EXPECT_EQ(*group.firstChild(), rect);
+  EXPECT_FALSE(rect.hasAttribute("fill"));
+  EXPECT_THAT(MutationKinds(result), testing::Contains(XMLMutation::Kind::AttributeRemoved));
+}
+
 TEST_F(XMLDocumentTests, ApplySourceEditElementSubtreeClonesCDataAndElementChildren) {
   XMLDocument doc = ParseDocument(R"(<svg><g><old/></g></svg>)");
   XMLNode group = doc.root().firstChild()->firstChild().value();
@@ -1156,6 +1407,26 @@ TEST_F(XMLDocumentTests, ApplySourceEditMalformedCDataReportsScopedDiagnostic) {
   EXPECT_THAT(cdata.value(), Optional(Eq("hello")));
 }
 
+TEST_F(XMLDocumentTests, ApplySourceEditRawTextWithInvalidatedNodeRangeReportsDiagnostic) {
+  XMLDocument doc = ParseDocument(R"(<svg><![CDATA[hello]]></svg>)");
+  XMLNode cdata = doc.root().firstChild()->firstChild().value();
+  ASSERT_EQ(cdata.type(), XMLNode::Type::CData);
+  std::optional<SourceRange> nodeLocation = cdata.getNodeLocation();
+  ASSERT_TRUE(nodeLocation.has_value());
+  cdata.setValueLocation(*nodeLocation);
+
+  ApplySourceEditResult result = doc.applySourceEdit(XMLEditIntent{
+      .range = *nodeLocation,
+      .replacement = "<![CDATA[world]]>",
+      .sourceVersion = doc.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::TextNode);
+  EXPECT_THAT(result, DiagnosticReasonContains("node source range unavailable"));
+  EXPECT_THAT(cdata.value(), Optional(Eq("hello")));
+}
+
 TEST_F(XMLDocumentTests, ApplySourceEditElementSubtreeMalformedReportsDiagnostic) {
   XMLDocument doc = ParseDocument(R"(<svg><g><rect/></g></svg>)");
   XMLNode group = doc.root().firstChild()->firstChild().value();
@@ -1305,6 +1576,18 @@ TEST_F(XMLDocumentTests, SetAttributeRejectsInvalidXmlAttributeValue) {
   EXPECT_FALSE(result.applied);
   EXPECT_THAT(result, DiagnosticReasonContains("cannot be represented"));
   EXPECT_THAT(rect.getAttribute("label"), Optional(Eq("old")));
+}
+
+TEST_F(XMLDocumentTests, SetAttributeRejectsInvalidXmlAttributeValueForNewAttribute) {
+  XMLDocument doc = ParseDocument(R"(<svg><rect/></svg>)");
+  XMLNode rect = doc.root().firstChild()->firstChild().value();
+  const std::string invalidValue("bad\001value", 9);
+
+  ApplySourceEditResult result = doc.setAttribute(rect, "label", invalidValue);
+
+  EXPECT_FALSE(result.applied);
+  EXPECT_THAT(result, DiagnosticReasonContains("cannot be represented"));
+  EXPECT_FALSE(rect.hasAttribute("label"));
 }
 
 TEST_F(XMLDocumentTests, SetAttributeInsertsNewAttribute) {
@@ -1465,6 +1748,23 @@ TEST_F(XMLDocumentTests, SetAttributeExistingAttributeWithMalformedFallbackRange
   EXPECT_FALSE(result.applied);
   EXPECT_THAT(result, DiagnosticReasonContains("without a source range"));
   EXPECT_THAT(rect.getAttribute("fill"), Optional(Eq("red")));
+}
+
+TEST_F(XMLDocumentTests, SetAttributeRejectsExistingValueWhenOffsetIsNotUtf8Boundary) {
+  XMLDocument doc = ParseDocument(R"(<svg><rect fill="red"/></svg>)");
+  XMLNode rect = doc.root().firstChild()->firstChild().value();
+  std::string corruptSource(doc.source());
+  const std::size_t valueOffset = corruptSource.find("red");
+  ASSERT_NE(valueOffset, std::string::npos);
+  corruptSource.insert(valueOffset, std::string("\x80", 1));
+  doc.setSource(corruptSource);
+
+  ApplySourceEditResult result = doc.setAttribute(rect, "fill", "blue");
+
+  EXPECT_FALSE(result.applied);
+  EXPECT_THAT(result, DiagnosticReasonContains("Invalid source replacement"));
+  EXPECT_THAT(rect.getAttribute("fill"), Optional(Eq("red")));
+  EXPECT_EQ(doc.source(), corruptSource);
 }
 
 TEST_F(XMLDocumentTests, SetAttributeOnSourcelessNodeInSourceDocumentFails) {
@@ -2267,6 +2567,23 @@ TEST_F(XMLDocumentTests, SetElementTextRejectsInsertionWhenEndOffsetIsNotUtf8Bou
   EXPECT_FALSE(result.applied);
   EXPECT_THAT(result, DiagnosticReasonContains("Invalid source replacement"));
   EXPECT_FALSE(text.value().has_value());
+  EXPECT_EQ(doc.source(), corruptSource);
+}
+
+TEST_F(XMLDocumentTests, SetElementTextRejectsExistingTextWhenOffsetIsNotUtf8Boundary) {
+  XMLDocument doc = ParseDocument(R"(<svg><text>hello</text></svg>)");
+  XMLNode text = doc.root().firstChild()->firstChild().value();
+  std::string corruptSource(doc.source());
+  const std::size_t valueOffset = corruptSource.find("hello");
+  ASSERT_NE(valueOffset, std::string::npos);
+  corruptSource.insert(valueOffset, std::string("\x80", 1));
+  doc.setSource(corruptSource);
+
+  ApplySourceEditResult result = doc.setElementText(text, "world");
+
+  EXPECT_FALSE(result.applied);
+  EXPECT_THAT(result, DiagnosticReasonContains("source insertion point"));
+  EXPECT_THAT(text.value(), Optional(Eq("hello")));
   EXPECT_EQ(doc.source(), corruptSource);
 }
 

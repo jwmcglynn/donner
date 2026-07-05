@@ -867,7 +867,6 @@ donner_cc_test(
 filegroup(
     name = "rnr_replay_testdata",
     srcs = [
-        "drag_start_hang_repro.rnr",
         "filter_elm_disappear-2.rnr",
         "filter_elm_disappear-3.rnr",
         "filter_elm_disappear-4.rnr",
@@ -890,16 +889,13 @@ donner_cc_test(
         ":rnr_replay_testdata",
         "//:donner_splash.svg",
     ],
-    # 5 independent replay scenarios ran serially at ~331 s total on the
-    # self-hosted RE lane (CI baseline, 2026-07-01). One shard per
-    # scenario caps the target at its slowest single replay.
-    shard_count = 5,
+    # One shard per scenario caps the target at its slowest single replay.
+    shard_count = 4,
     deps = [
         ":bitmap_golden_compare",
         "//donner/base:base_test_utils",
         "//donner/editor:async_renderer",
         "//donner/editor:attribute_writeback",
-        "//donner/editor:composited_presentation",
         "//donner/editor:editor_app",
         "//donner/editor:imgui_headers",
         "//donner/editor:select_tool",

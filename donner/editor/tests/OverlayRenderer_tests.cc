@@ -57,6 +57,53 @@ auto PathControlLineIs(Vector2d anchorDoc, Vector2d controlDoc) {
                      Vector2dNear(controlDoc, 1e-9)));
 }
 
+Path LinePath(Vector2d start, Vector2d end) {
+  PathBuilder builder;
+  builder.moveTo(start);
+  builder.lineTo(end);
+  return builder.build();
+}
+
+Path RectPath(double x, double y, double width, double height) {
+  PathBuilder builder;
+  builder.moveTo(Vector2d(x, y));
+  builder.lineTo(Vector2d(x + width, y));
+  builder.lineTo(Vector2d(x + width, y + height));
+  builder.lineTo(Vector2d(x, y + height));
+  builder.closePath();
+  return builder.build();
+}
+
+auto DrawSnapshot(const SelectionChromeSnapshot& snapshot) {
+  svg::Renderer renderer;
+  svg::RenderViewport viewport;
+  viewport.size = Vector2d(120.0, 120.0);
+  viewport.devicePixelRatio = 1.0;
+  renderer.beginFrame(viewport);
+  OverlayRenderer::drawChromeFromSnapshot(renderer, snapshot);
+  renderer.endFrame();
+  return renderer.takeSnapshot();
+}
+
+bool HasAnyNonTransparentPixel(const svg::RendererBitmap& bitmap) {
+  for (std::size_t y = 0; y < static_cast<std::size_t>(bitmap.dimensions.y); ++y) {
+    const std::uint8_t* row = bitmap.pixels.data() + y * bitmap.rowBytes;
+    for (std::size_t x = 0; x < static_cast<std::size_t>(bitmap.dimensions.x); ++x) {
+      if (row[x * 4 + 3] != 0) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+SelectionChromeSnapshot CaptureLivePathPreview(const svg::SVGElement& element) {
+  return OverlayRenderer::captureChromeSnapshot(
+      std::span<const svg::SVGElement>(), std::nullopt, Transform2d(), std::nullopt,
+      std::span<const svg::SVGElement>(), std::nullopt, SelectionChromeDetail::Full, Transform2d(),
+      std::nullopt, 1.0, std::optional<svg::SVGElement>(element));
+}
+
 MATCHER(DimmedGrayBlueStrokePixel,
         "a dimmed gray-blue selection-chrome stroke pixel with nonzero red") {
   const std::array<std::uint8_t, 4> pixel = {arg[0], arg[1], arg[2], arg[3]};
@@ -520,6 +567,137 @@ TEST(OverlayRendererTest, CaptureSnapshotCanProjectLiveDragBackToRepresentedDocu
   EXPECT_EQ(snapshot.aabbsDoc.front(), Box2d::FromXYWH(20.0, 30.0, 40.0, 50.0));
   ASSERT_EQ(snapshot.paths.size(), 1u);
   EXPECT_EQ(snapshot.paths.front().pathDoc.bounds(), Box2d::FromXYWH(20.0, 30.0, 40.0, 50.0));
+}
+
+TEST(OverlayRendererTest, DrawChromeFromSnapshotCoversAuxiliaryChromeLayers) {
+  SelectionChromeSnapshot snapshot;
+  snapshot.canvasFromDoc = Transform2d();
+  snapshot.selectionStrokeWidthWorld = 1.25;
+  snapshot.hoverStrokeWidthWorld = 1.5;
+  snapshot.marqueeStrokeWidthWorld = 1.5;
+  snapshot.livePathPreview = SelectionChromeSnapshot::LivePathPreview{
+      .pathDoc = RectPath(4.0, 4.0, 12.0, 8.0),
+      .fillColor = css::RGBA(0x20, 0x80, 0xff, 0xff),
+      .strokeColor = std::nullopt,
+      .strokeWidthDoc = 1.0,
+  };
+  snapshot.hoverPaths.push_back(SelectionChromeSnapshot::PathItem{
+      .pathDoc = RectPath(24.0, 4.0, 16.0, 12.0),
+  });
+  snapshot.pathControlLinesDoc.push_back(SelectionChromeSnapshot::PathControlLine{
+      .anchorDoc = Vector2d(8.0, 36.0), .controlDoc = Vector2d(28.0, 24.0)});
+  snapshot.pathControlPointBoxesDoc.push_back(Box2d::FromXYWH(24.0, 22.0, 4.0, 4.0));
+  snapshot.pathAnchorBoxesDoc.push_back(Box2d::FromXYWH(6.0, 34.0, 5.0, 5.0));
+  snapshot.penPreviewSegmentDoc = LinePath(Vector2d(44.0, 8.0), Vector2d(76.0, 24.0));
+  snapshot.penCloseAffordanceDoc = Vector2d(78.0, 24.0);
+  snapshot.orientedBoundsDoc = SelectionChromeSnapshot::OrientedBox{
+      .cornersDoc =
+          {
+              Vector2d(12.0, 60.0),
+              Vector2d(40.0, 54.0),
+              Vector2d(46.0, 82.0),
+              Vector2d(18.0, 88.0),
+          },
+  };
+  snapshot.handleBoxesDoc.push_back(Box2d::FromXYWH(8.0, 56.0, 8.0, 8.0));
+  snapshot.marqueeDoc = Box2d::FromXYWH(60.0, 60.0, 24.0, 18.0);
+
+  const auto bitmap = DrawSnapshot(snapshot);
+
+  ASSERT_FALSE(bitmap.empty());
+  EXPECT_TRUE(HasAnyNonTransparentPixel(bitmap));
+}
+
+TEST(OverlayRendererTest, DrawChromeFromSnapshotCoversHoverBoundsAndStrokeOnlyPreview) {
+  SelectionChromeSnapshot snapshot;
+  snapshot.canvasFromDoc = Transform2d();
+  snapshot.selectionStrokeWidthWorld = 1.25;
+  snapshot.hoverStrokeWidthWorld = 1.5;
+  snapshot.livePathPreview = SelectionChromeSnapshot::LivePathPreview{
+      .pathDoc = RectPath(12.0, 12.0, 20.0, 16.0),
+      .fillColor = std::nullopt,
+      .strokeColor = css::RGBA(0xff, 0x40, 0x20, 0xff),
+      .strokeWidthDoc = 2.0,
+  };
+  snapshot.hoverAabbsDoc.push_back(Box2d::FromXYWH(50.0, 12.0, 18.0, 18.0));
+
+  const auto bitmap = DrawSnapshot(snapshot);
+
+  ASSERT_FALSE(bitmap.empty());
+  EXPECT_TRUE(HasAnyNonTransparentPixel(bitmap));
+}
+
+TEST(OverlayRendererTest, CaptureSnapshotCullsOffscreenActiveRotationBounds) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+  app.document().document().setCanvasSize(200, 200);
+
+  auto rect = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(rect.has_value());
+  app.setSelection(*rect);
+
+  const SelectionChromeSnapshot snapshot = OverlayRenderer::captureChromeSnapshot(
+      std::span<const svg::SVGElement>(app.selectedElements()), std::nullopt, Transform2d(),
+      SelectionChromeBoundsPreview{
+          .startBoundsDoc = Box2d::FromXYWH(500.0, 500.0, 20.0, 20.0),
+          .documentFromStartDocument = Transform2d(),
+      },
+      std::span<const svg::SVGElement>(), Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0));
+
+  EXPECT_FALSE(snapshot.orientedBoundsDoc.has_value());
+  EXPECT_TRUE(snapshot.aabbsDoc.empty());
+  EXPECT_TRUE(snapshot.handleBoxesDoc.empty());
+}
+
+TEST(OverlayRendererTest, CaptureLivePathPreviewAcceptsSolidPaintedPath) {
+  constexpr std::string_view kPathSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+              <path id="path" d="M 10 10 L 40 10 L 40 30 Z" fill="#102030"
+                    fill-opacity="0.5" stroke="#405060" stroke-width="3"
+                    stroke-opacity="0.75" opacity="0.8"/>
+            </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kPathSvg));
+  auto path = app.document().document().querySelector("#path");
+  ASSERT_TRUE(path.has_value());
+
+  const SelectionChromeSnapshot snapshot = CaptureLivePathPreview(*path);
+
+  ASSERT_TRUE(snapshot.livePathPreview.has_value());
+  EXPECT_FALSE(snapshot.livePathPreview->pathDoc.empty());
+  EXPECT_EQ(snapshot.livePathPreview->fillColor, std::optional(css::RGBA(0x10, 0x20, 0x30, 0xff)));
+  EXPECT_EQ(snapshot.livePathPreview->strokeColor,
+            std::optional(css::RGBA(0x40, 0x50, 0x60, 0xff)));
+  EXPECT_DOUBLE_EQ(snapshot.livePathPreview->strokeWidthDoc, 3.0);
+  EXPECT_DOUBLE_EQ(snapshot.livePathPreview->opacity, 0.8);
+  EXPECT_DOUBLE_EQ(snapshot.livePathPreview->fillOpacity, 0.5);
+  EXPECT_DOUBLE_EQ(snapshot.livePathPreview->strokeOpacity, 0.75);
+}
+
+TEST(OverlayRendererTest, CaptureLivePathPreviewRejectsUnsupportedInputs) {
+  constexpr std::string_view kSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+              <defs>
+                <linearGradient id="grad"><stop offset="0" stop-color="red"/></linearGradient>
+                <clipPath id="clip"><rect width="10" height="10"/></clipPath>
+              </defs>
+              <g id="group"><path d="M 1 1 L 2 2"/></g>
+              <path id="empty" d=""/>
+              <path id="gradient" d="M 10 10 L 20 10 L 20 20 Z" fill="url(#grad)"/>
+              <path id="clipped" d="M 30 10 L 40 10 L 40 20 Z" clip-path="url(#clip)"/>
+              <path id="percent" d="M 50 10 L 60 10 L 60 20 Z" fill="none"
+                    stroke="black" stroke-width="10%"/>
+            </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+
+  for (std::string_view selector : {"#group", "#empty", "#gradient", "#clipped", "#percent"}) {
+    auto element = app.document().document().querySelector(selector);
+    ASSERT_TRUE(element.has_value()) << selector;
+    EXPECT_FALSE(CaptureLivePathPreview(*element).livePathPreview.has_value()) << selector;
+  }
 }
 
 // Calling the overlay-only render path repeatedly (the click→reselect

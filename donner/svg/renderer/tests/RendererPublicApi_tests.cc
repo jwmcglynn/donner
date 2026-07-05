@@ -96,6 +96,53 @@ MATCHER(IsBlueish, "pixel has dominant blue channel") {
   return arg[0] < 100 && arg[1] < 100 && arg[2] > 150 && arg[3] > 0;
 }
 
+class DefaultMethodRenderer final : public RendererInterface {
+public:
+  void draw(SVGDocument&) override {}
+  int width() const override { return 0; }
+  int height() const override { return 0; }
+  void beginFrame(const RenderViewport&) override {}
+  void endFrame() override {}
+  void setTransform(const Transform2d&) override {}
+  void pushTransform(const Transform2d&) override {}
+  void popTransform() override {}
+  void pushClip(const ResolvedClip&) override {}
+  void popClip() override {}
+  void pushIsolatedLayer(double, MixBlendMode) override {}
+  void popIsolatedLayer() override {}
+  void pushFilterLayer(const components::FilterGraph&, const std::optional<Box2d>&) override {}
+  void popFilterLayer() override {}
+  void pushMask(const std::optional<Box2d>&) override {}
+  void transitionMaskToContent() override {}
+  void popMask() override {}
+  void beginPatternTile(const Box2d&, const Transform2d&) override {}
+  void endPatternTile(bool) override {}
+  void setPaint(const PaintParams&) override {}
+  void drawPath(const PathShape&, const StrokeParams&) override {}
+  void drawRect(const Box2d&, const StrokeParams&) override {}
+  void drawEllipse(const Box2d&, const StrokeParams&) override {}
+  void drawImage(const ImageResource& image, const ImageParams&) override {
+    lastImage = image;
+    ++drawImageCount;
+  }
+  void drawText(Registry&, const components::ComputedTextComponent&, const TextParams&) override {}
+  RendererBitmap takeSnapshot() const override { return {}; }
+
+  ImageResource lastImage;
+  int drawImageCount = 0;
+};
+
+class DefaultTextureSnapshot final : public RendererTextureSnapshot {
+public:
+  Vector2i dimensions() const override { return Vector2i(3, 5); }
+  AlphaType alphaType() const override { return AlphaType::Premultiplied; }
+};
+
+void AssignClipToSelf(ResolvedClip& clip) {
+  ResolvedClip& same = clip;
+  clip = same;
+}
+
 TEST(RendererPublicApiTest, DrawProducesSnapshotAndPng) {
   SVGDocument document = ParseDocument(R"svg(
       <svg xmlns="http://www.w3.org/2000/svg" width="8" height="6" viewBox="0 0 8 6">
@@ -247,6 +294,117 @@ TEST(RendererPublicApiTest, DrawBitmapFallbackPacksPaddedRowsBeforeDrawImage) {
   EXPECT_EQ(capturedImage.width, 2);
   EXPECT_EQ(capturedImage.height, 2);
   EXPECT_EQ(capturedImage.data, expectedData);
+}
+
+TEST(RendererPublicApiTest, RendererInterfaceDefaultMethodsRejectUnsupportedTexturePaths) {
+  DefaultMethodRenderer renderer;
+  DefaultTextureSnapshot texture;
+
+  EXPECT_EQ(texture.backend(), RendererTextureSnapshotBackend::Unknown);
+  EXPECT_FALSE(renderer.drawTextureSnapshot(texture, Box2d::FromXYWH(0.0, 0.0, 3.0, 5.0),
+                                            /*opacity=*/0.5,
+                                            /*pixelated=*/true));
+  EXPECT_EQ(renderer.takeTextureSnapshot(), nullptr);
+  EXPECT_FALSE(renderer.requiresTextureSnapshotPresentation());
+  EXPECT_EQ(renderer.createOffscreenInstance(), nullptr);
+}
+
+TEST(RendererPublicApiTest, FacadeForwardsFrameStateAndPrimitiveCalls) {
+  Renderer renderer;
+  renderer.beginFrame(RenderViewport{
+      .size = Vector2d(16.0, 16.0),
+      .devicePixelRatio = 1.0,
+  });
+
+  renderer.setTransform(Transform2d::Translate(Vector2d(1.0, 2.0)));
+  renderer.pushTransform(Transform2d::Scale(Vector2d(1.5, 1.5)));
+
+  ResolvedClip clip;
+  clip.clipRect = Box2d::FromXYWH(0.0, 0.0, 12.0, 12.0);
+  renderer.pushClip(clip);
+  renderer.popClip();
+
+  renderer.pushIsolatedLayer(/*opacity=*/0.75, MixBlendMode::Normal);
+  renderer.popIsolatedLayer();
+
+  components::FilterGraph filterGraph;
+  renderer.pushFilterLayer(filterGraph, Box2d::FromXYWH(0.0, 0.0, 16.0, 16.0));
+  renderer.popFilterLayer();
+
+  renderer.pushMask(Box2d::FromXYWH(0.0, 0.0, 16.0, 16.0));
+  renderer.transitionMaskToContent();
+  renderer.popMask();
+
+  renderer.beginPatternTile(Box2d::FromXYWH(0.0, 0.0, 4.0, 4.0), Transform2d());
+  renderer.endPatternTile(/*forStroke=*/false);
+
+  PaintParams paint;
+  renderer.setPaint(paint);
+
+  PathBuilder builder;
+  builder.moveTo(Vector2d(1.0, 1.0));
+  builder.lineTo(Vector2d(8.0, 1.0));
+  builder.lineTo(Vector2d(8.0, 8.0));
+  builder.closePath();
+  renderer.drawPath(PathShape{.path = builder.build()}, StrokeParams{});
+  renderer.drawRect(Box2d::FromXYWH(2.0, 2.0, 4.0, 5.0), StrokeParams{});
+  renderer.drawEllipse(Box2d::FromXYWH(6.0, 2.0, 5.0, 4.0), StrokeParams{});
+
+  ImageResource image{
+      .data = {255, 0, 0, 255},
+      .width = 1,
+      .height = 1,
+  };
+  ImageParams imageParams;
+  imageParams.targetRect = Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0);
+  renderer.drawImage(image, imageParams);
+
+  RendererBitmap bitmap;
+  bitmap.dimensions = Vector2i(1, 1);
+  bitmap.rowBytes = 4;
+  bitmap.alphaType = AlphaType::Premultiplied;
+  bitmap.pixels = {0, 255, 0, 255};
+  renderer.drawBitmap(bitmap, imageParams);
+
+  renderer.popTransform();
+  renderer.endFrame();
+
+  EXPECT_GE(renderer.width(), 0);
+  EXPECT_GE(renderer.height(), 0);
+}
+
+TEST(RendererPublicApiTest, DrawBitmapDefaultSkipsEmptyAndInvalidRowData) {
+  DefaultMethodRenderer renderer;
+  ImageParams params;
+  params.targetRect = Box2d(Vector2d::Zero(), Vector2d(2, 2));
+
+  renderer.drawBitmap(RendererBitmap(), params);
+  EXPECT_EQ(renderer.drawImageCount, 0);
+
+  RendererBitmap invalidRows;
+  invalidRows.dimensions = Vector2i(2, 2);
+  invalidRows.rowBytes = 4;
+  invalidRows.alphaType = AlphaType::Unpremultiplied;
+  invalidRows.pixels.resize(8);
+  renderer.drawBitmap(invalidRows, params);
+  EXPECT_EQ(renderer.drawImageCount, 0);
+}
+
+TEST(RendererPublicApiTest, ResolvedClipCopyAssignmentCopiesClipState) {
+  ResolvedClip clip;
+  EXPECT_TRUE(clip.empty());
+
+  ResolvedClip source;
+  source.clipRect = Box2d::FromXYWH(1.0, 2.0, 3.0, 4.0);
+
+  clip = source;
+  EXPECT_FALSE(clip.empty());
+  ASSERT_TRUE(clip.clipRect.has_value());
+  EXPECT_EQ(*clip.clipRect, Box2d::FromXYWH(1.0, 2.0, 3.0, 4.0));
+
+  AssignClipToSelf(clip);
+  ASSERT_TRUE(clip.clipRect.has_value());
+  EXPECT_EQ(*clip.clipRect, Box2d::FromXYWH(1.0, 2.0, 3.0, 4.0));
 }
 
 TEST(RendererPublicApiTest, DrawBitmapHonorsPaddedRows) {

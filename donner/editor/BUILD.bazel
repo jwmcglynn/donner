@@ -261,8 +261,8 @@ donner_cc_library(
     srcs = ["AsyncSVGDocument.cc"],
     hdrs = ["AsyncSVGDocument.h"],
     deps = [
-        ":editor_parse_options",
         ":command_queue",
+        ":editor_parse_options",
         "//donner/base",
         "//donner/svg",
         "//donner/svg/compositor",
@@ -670,7 +670,10 @@ donner_cc_library(
         "EditorShellPresentation.cc",
         "EditorShellPresentation.h",
     ],
-    hdrs = ["EditorShell.h"],
+    hdrs = [
+        "EditorShell.h",
+        "EditorShellInternal.h",
+    ],
     defines = select({
         ":wasm_geode_enabled": ["DONNER_EDITOR_WGPU"],
         "//donner/svg/renderer:renderer_backend_geode": ["DONNER_EDITOR_WGPU"],

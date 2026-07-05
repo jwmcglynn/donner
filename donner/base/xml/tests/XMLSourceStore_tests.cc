@@ -94,6 +94,17 @@ TEST(XMLSourceStore, ExplicitInvalidationMakesSpanUnresolvable) {
   EXPECT_EQ(store.resolveSpan(*span), std::nullopt);
 }
 
+TEST(XMLSourceStore, InvalidatedEndAnchorMakesSpanUnresolvable) {
+  XMLSourceStore store("abcdef");
+  std::optional<SourceAnchorSpan> span = store.createSpan(1, 5);
+  ASSERT_TRUE(span.has_value());
+
+  store.invalidateAnchor(span->end);
+
+  EXPECT_EQ(store.resolveAnchor(span->end), std::nullopt);
+  EXPECT_EQ(store.resolveSpan(*span), std::nullopt);
+}
+
 TEST(XMLSourceStore, InvalidAnchorIdsResolveToNullopt) {
   XMLSourceStore store("abcdef");
   ASSERT_TRUE(store.createAnchor(1).has_value());
@@ -101,6 +112,7 @@ TEST(XMLSourceStore, InvalidAnchorIdsResolveToNullopt) {
   EXPECT_EQ(store.resolveAnchor(SourceAnchorId{}), std::nullopt);
   EXPECT_EQ(store.resolveAnchor(SourceAnchorId{999}), std::nullopt);
 
+  store.invalidateAnchor(SourceAnchorId{});
   store.invalidateAnchor(SourceAnchorId{999});
   EXPECT_EQ(store.resolveAnchor(SourceAnchorId{999}), std::nullopt);
 }
@@ -162,6 +174,7 @@ TEST(XMLSourceStore, RejectsOffsetsInsideUtf8Codepoints) {
 TEST(XMLSourceStore, RejectsInvalidUtf8Replacement) {
   XMLSourceStore store("abc");
 
+  EXPECT_FALSE(store.replace(1, 0, std::string_view("\xF8", 1)).has_value());
   EXPECT_FALSE(store.replace(1, 0, std::string_view("\xC3", 1)).has_value());
   EXPECT_FALSE(store.replace(1, 0, std::string_view("\xC3x", 2)).has_value());
   EXPECT_FALSE(store.replace(1, 0, std::string_view("\xE2\x82", 2)).has_value());
@@ -197,6 +210,15 @@ TEST(XMLSourceStore, AcceptsValidMultibyteUtf8Replacement) {
 
   EXPECT_EQ(store.source(), std::string("a\xC3\xA9\xE2\x82\xAC\xF0\x9F\x98\x80", 10) + "c");
   EXPECT_EQ(store.sourceVersion(), 3u);
+}
+
+TEST(XMLSourceStore, AcceptsXmlWhitespaceControlCharacters) {
+  XMLSourceStore store("abc");
+
+  ASSERT_TRUE(store.replace(1, 0, "\t\n\r").has_value());
+
+  EXPECT_EQ(store.source(), "a\t\n\rbc");
+  EXPECT_EQ(store.sourceVersion(), 1u);
 }
 
 TEST(XMLSourceStore, RepeatedEditsBeforeSiblingDoNotRetargetSpan) {

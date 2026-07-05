@@ -106,6 +106,46 @@ To collect coverage without generating the local HTML report:
 tools/coverage.sh --quiet --no-html
 ```
 
+In quiet mode the long phases write detailed output to `coverage-report/*.log` and print a progress
+line about every 60 seconds. Set `DONNER_COVERAGE_PROGRESS_INTERVAL_SECONDS` to shorten that
+interval for local debugging.
+
+`tools/coverage.sh` runs Bazel coverage, filters excluded LCOV records, validates that the
+filtered report is non-empty, and then prints the same line buckets Codecov uses for the project
+percentage. The important distinction is that Codecov does not use raw LCOV line coverage as its
+project percentage:
+
+- Raw LCOV line coverage counts every `DA:<line>,<hits>` record with `hits > 0` as covered.
+- Codecov line coverage has three buckets: hits, misses, and partials.
+- A line is a Codecov hit only when its `DA` counter is positive and every `BRDA` branch counter on
+  that same source line is also covered.
+- A line is a Codecov miss when its `DA` counter is zero.
+- A line is a Codecov partial when its `DA` counter is positive but at least one `BRDA` counter on
+  that line is zero or `-`.
+- The reported Codecov percentage is `hits / (hits + misses + partials)`.
+- Codecov's project UI displays that percentage as a rounded whole number, while
+  `tools/lcov_metrics.py` also prints the exact local value.
+
+That means local raw LCOV line coverage can be several points higher than Codecov when many
+conditionals have only one branch covered. Use `tools/lcov_metrics.py` or the summary printed by
+`tools/coverage.sh` when comparing against Codecov's project target:
+
+```sh
+tools/lcov_metrics.py coverage-report/filtered_report.dat --coverage-target 90
+```
+
+For exact comparisons against a processed Codecov commit, use Codecov's commit API JSON as the
+reference file/line universe. This accounts for Codecov's upload-time normalization of LCOV records,
+including lines that appear in `DA` records locally but are not counted in the processed report:
+
+```sh
+curl -fsSL -o /tmp/codecov-main.json \
+  https://api.codecov.io/api/v2/github/jwmcglynn/repos/donner/commits/<sha>/
+tools/lcov_metrics.py coverage-report/filtered_report.dat \
+  --codecov-reference-json /tmp/codecov-main.json \
+  --coverage-target 90
+```
+
 ## CMake build {#cmake-build}
 
 Bazel is the primary build system, but CMake support is also available through a Bazel-to-CMake
@@ -134,23 +174,23 @@ for the external-consumer setup.
 
 ### CMake configuration options
 
-| Option | Default | Description |
-|--------|---------|-------------|
+| Option                    | Default       | Description                                                        |
+| ------------------------- | ------------- | ------------------------------------------------------------------ |
 | `DONNER_RENDERER_BACKEND` | `"tiny_skia"` | Renderer backend selection; the supported default is `"tiny_skia"` |
-| `DONNER_TEXT` | `ON` | Enable text rendering (`<text>`, `<tspan>`) |
-| `DONNER_TEXT_WOFF2` | `ON` | Enable WOFF2 web font loading |
-| `DONNER_FILTERS` | `ON` | Enable SVG filter effects |
-| `DONNER_BUILD_TESTS` | `OFF` | Build unit tests (adds googletest dependency) |
+| `DONNER_TEXT`             | `ON`          | Enable text rendering (`<text>`, `<tspan>`)                        |
+| `DONNER_TEXT_WOFF2`       | `ON`          | Enable WOFF2 web font loading                                      |
+| `DONNER_FILTERS`          | `ON`          | Enable SVG filter effects                                          |
+| `DONNER_BUILD_TESTS`      | `OFF`         | Build unit tests (adds googletest dependency)                      |
 
 ### Bazel configuration options
 
-| Config / Flag | Description |
-|---------------|-------------|
-| `--config=geode` | Use the Geode GPU backend (WebGPU/Dawn + Slug; the editor's default renderer); also enables `--//donner/svg/renderer/geode:enable_geode=true` |
-| `--config=text-full` | Enable HarfBuzz text shaping + WOFF2 (advanced text layout) |
-| `--config=asan-fuzzer` | Build fuzzers with AddressSanitizer |
-| `--config=latest_llvm` | Use the latest LLVM toolchain (required for coverage) |
-| `--config=lld` | Force the `lld` linker; workaround for dev boxes whose default linker can't link the suite (see FAQ below) |
+| Config / Flag          | Description                                                                                                                                   |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--config=geode`       | Use the Geode GPU backend (WebGPU/Dawn + Slug; the editor's default renderer); also enables `--//donner/svg/renderer/geode:enable_geode=true` |
+| `--config=text-full`   | Enable HarfBuzz text shaping + WOFF2 (advanced text layout)                                                                                   |
+| `--config=asan-fuzzer` | Build fuzzers with AddressSanitizer                                                                                                           |
+| `--config=latest_llvm` | Use the latest LLVM toolchain (required for coverage)                                                                                         |
+| `--config=lld`         | Force the `lld` linker; workaround for dev boxes whose default linker can't link the suite (see FAQ below)                                    |
 
 ## Frequently Asked Questions (FAQ)
 

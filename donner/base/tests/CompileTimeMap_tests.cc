@@ -62,6 +62,21 @@ TEST(CompileTimeMapTest, ResolvesCollidingBucketWithSeed) {
   EXPECT_EQ(mapResult.map.tables().bucketCount, mapResult.map.size());
 }
 
+TEST(CompileTimeMapTest, RuntimeCollidingBucketUsesSecondarySlots) {
+  std::array<std::pair<int, int>, 4> entries{{{1, 10}, {5, 50}, {9, 90}, {13, 130}}};
+  auto mapResult = detail::makeCompileTimeMapWithDiagnostics(entries);
+
+  EXPECT_EQ(mapResult.status, CompileTimeMapStatus::kOk);
+  EXPECT_GT(mapResult.diagnostics.seedAttempts, 0U);
+  EXPECT_EQ(mapResult.diagnostics.maxBucketSize, 4U);
+  EXPECT_EQ(mapResult.map.tables().bucketCount, mapResult.map.size());
+  EXPECT_EQ(mapResult.map.at(1), 10);
+  EXPECT_EQ(mapResult.map.at(5), 50);
+  EXPECT_EQ(mapResult.map.at(9), 90);
+  EXPECT_EQ(mapResult.map.at(13), 130);
+  EXPECT_EQ(mapResult.map.find(17), nullptr);
+}
+
 TEST(CompileTimeMapTest, SupportsEnumKeys) {
   constexpr std::array<std::pair<EnumKey, int>, 3> kEnumEntries{{
       {EnumKey::kFirst, 10},
@@ -178,6 +193,13 @@ TEST(CompileTimeMapTest, ManualTablesRejectInvalidSlotsAndMismatchedKeys) {
   invalidTables.primary[0] = 99;
   const CompileTimeMap<int, int, 1> invalidSlotMap(keys, values, invalidTables);
   EXPECT_EQ(invalidSlotMap.find(1), nullptr);
+
+  CompileTimeMapTables<1> emptyBucketTables;
+  emptyBucketTables.primary.fill(kEmptySlot);
+  emptyBucketTables.secondary.fill(kEmptySlot);
+  emptyBucketTables.bucketCount = 1;
+  const CompileTimeMap<int, int, 1> emptyBucketMap(keys, values, emptyBucketTables);
+  EXPECT_EQ(emptyBucketMap.find(1), nullptr);
 
   CompileTimeMapTables<1> mismatchTables;
   mismatchTables.primary.fill(kEmptySlot);

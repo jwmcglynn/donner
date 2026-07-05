@@ -9,6 +9,7 @@
 #include <string_view>
 #include <vector>
 
+#include "donner/base/FileOffset.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/editor/DocumentSyncController.h"
 #include "donner/editor/EditorApp.h"
@@ -280,10 +281,41 @@ constexpr std::string_view kAdditionalReferenceSyntaxSvg =
   <rect id="target" class="target"/>
 </svg>)svg";
 
+constexpr std::string_view kWhitespaceAfterUrlQuoteSvg =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .target { fill: url( "  #paint" ); }
+  </style>
+  <defs>
+    <linearGradient id="paint"><stop offset="0"/></linearGradient>
+  </defs>
+  <rect id="target" class="target"/>
+</svg>)svg";
+
 constexpr std::string_view kMissingReferenceSvg =
     R"svg(<svg xmlns="http://www.w3.org/2000/svg">
   <rect id="target" fill="url(#missing)"/>
   <rect id="sibling"/>
+</svg>)svg";
+
+constexpr std::string_view kUnknownStyleTargetSvg =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .decorated { fill: url(#paint); }
+  </style>
+  <defs>
+    <linearGradient id="paint"><stop offset="0"/></linearGradient>
+  </defs>
+  <unknown id="custom" class="decorated"/>
+  <rect id="visible"/>
+</svg>)svg";
+
+constexpr std::string_view kNoIdReferenceSvg =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="paint"><stop offset="0"/></linearGradient>
+  </defs>
+  <rect fill="url(#paint)"/>
 </svg>)svg";
 
 std::size_t OffsetForNeedle(std::string_view source, std::string_view needle) {
@@ -542,6 +574,25 @@ TEST(FocusViewTest, ParsesSingleQuotedAndUnquotedUrlReferenceBoundaries) {
   EXPECT_GE(partition.referenceLinks.size(), 2u);
 }
 
+TEST(FocusViewTest, ParsesUrlReferenceWithWhitespaceAfterOpeningQuote) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kWhitespaceAfterUrlQuoteSvg));
+  std::optional<svg::SVGElement> target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  const FocusPartition partition = ComputeFocusPartition(app.document().document(), *target);
+
+  EXPECT_TRUE(ContainsLine(
+      partition.referenceColor,
+      PointForNeedle(kWhitespaceAfterUrlQuoteSvg, R"(<linearGradient id="paint")").line));
+  EXPECT_TRUE(ContainsLink(
+      partition.referenceLinks,
+      FocusReferenceLink{
+          .from = PointForNeedle(kWhitespaceAfterUrlQuoteSvg, "#paint"),
+          .to = PointForOpeningTagEnd(kWhitespaceAfterUrlQuoteSvg, R"(<linearGradient id="paint")"),
+      }));
+}
+
 TEST(FocusViewTest, MissingReferencesDoNotCreateSourceLinksOrSummaryEntries) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kMissingReferenceSvg));
@@ -556,6 +607,23 @@ TEST(FocusViewTest, MissingReferencesDoNotCreateSourceLinksOrSummaryEntries) {
   const ReferenceHighlightSummary summary = ComputeReferenceHighlightSummary(
       app.document().document(), std::span<const svg::SVGElement>(&*target, 1));
   EXPECT_EQ(summary.totalCount(), 0u);
+}
+
+TEST(FocusViewTest, StyleFocusIgnoresUnknownElementTargets) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kUnknownStyleTargetSvg));
+
+  const std::optional<StyleFocus> focus = ComputeStyleFocusAtSourceOffset(
+      app.document().document(), OffsetForNeedle(kUnknownStyleTargetSvg, ".decorated"));
+  ASSERT_TRUE(focus.has_value());
+
+  EXPECT_TRUE(focus->impactedElements.empty());
+  EXPECT_FALSE(
+      ContainsLine(focus->partition.referenceColor,
+                   PointForNeedle(kUnknownStyleTargetSvg, R"(<unknown id="custom")").line));
+  EXPECT_FALSE(
+      ContainsLine(focus->partition.referenceColor,
+                   PointForNeedle(kUnknownStyleTargetSvg, R"(<linearGradient id="paint")").line));
 }
 
 TEST(FocusViewTest, SourceLocationLossDropsFocusRatherThanGuessingRanges) {
@@ -627,6 +695,40 @@ TEST(FocusViewTest, MissingSelectedAncestorSourceRangeReturnsEmptyPartition) {
   innerNode->clearSourceLocation();
 
   EXPECT_TRUE(ComputeFocusPartition(app.document().document(), *target).empty());
+}
+
+TEST(FocusViewTest, ReversedSelectedSourceRangeReturnsEmptyPartition) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kNestedSvg));
+  std::optional<svg::SVGElement> target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  std::optional<xml::XMLNode> targetNode = xml::XMLNode::TryCast(target->entityHandle());
+  ASSERT_TRUE(targetNode.has_value());
+  targetNode->setSourceStartOffset(FileOffset::Offset(app.document().document().source().size()));
+  targetNode->setSourceEndOffset(FileOffset::Offset(0));
+
+  EXPECT_TRUE(ComputeFocusPartition(app.document().document(), *target).empty());
+}
+
+TEST(FocusViewTest, MalformedAncestorTagRangeUsesWholeRange) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kNestedSvg));
+  std::optional<svg::SVGElement> target = app.document().document().querySelector("#target");
+  std::optional<svg::SVGElement> inner = app.document().document().querySelector("#inner");
+  ASSERT_TRUE(target.has_value());
+  ASSERT_TRUE(inner.has_value());
+
+  const std::size_t innerOffset = OffsetForNeedle(kNestedSvg, R"(<g id="inner")");
+  std::optional<xml::XMLNode> innerNode = xml::XMLNode::TryCast(inner->entityHandle());
+  ASSERT_TRUE(innerNode.has_value());
+  innerNode->setSourceStartOffset(FileOffset::Offset(innerOffset));
+  innerNode->setSourceEndOffset(FileOffset::Offset(innerOffset + 2));
+
+  const FocusPartition partition = ComputeFocusPartition(app.document().document(), *target);
+
+  EXPECT_FALSE(partition.empty());
+  EXPECT_TRUE(ContainsLine(partition.dimmed, PointForNeedle(kNestedSvg, R"(<g id="inner")").line));
 }
 
 TEST(FocusViewTest, ReferenceHighlightSummaryCountsForwardReferences) {
@@ -1035,6 +1137,21 @@ TEST(FocusViewTest, ReferenceHighlightSummaryCountsReverseReferences) {
   EXPECT_TRUE(ContainsElement(summary.referencingElements,
                               app.document().document().querySelector("#chained")));
   EXPECT_EQ(summary.totalCount(), 3u);
+}
+
+TEST(FocusViewTest, ReferenceSummaryForNoIdSelectionStillReportsForwardReferences) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kNoIdReferenceSvg));
+  std::optional<svg::SVGElement> rect = app.document().document().querySelector("rect");
+  ASSERT_TRUE(rect.has_value());
+
+  const ReferenceHighlightSummary summary = ComputeReferenceHighlightSummary(
+      app.document().document(), std::span<const svg::SVGElement>(&*rect, 1));
+
+  EXPECT_TRUE(ContainsElement(summary.referencedElements,
+                              app.document().document().querySelector("#paint")));
+  EXPECT_TRUE(summary.referencingElements.empty());
+  EXPECT_EQ(summary.totalCount(), 1u);
 }
 
 TEST(FocusViewTest, ReferenceHighlightSummaryHandlesNestedMultiSelectionOnce) {

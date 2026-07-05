@@ -26,6 +26,7 @@
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/DocumentSave.h"
 #include "donner/editor/DragCoalesce.h"
+#include "donner/editor/EditorShellInternal.h"
 #include "donner/editor/EditorShellPresentation.h"
 #include "donner/editor/FocusView.h"
 #include "donner/editor/FrameMissTelemetry.h"
@@ -62,7 +63,7 @@
 
 namespace donner::editor {
 
-namespace {
+namespace internal {
 
 constexpr float kMinSourcePaneWidth = 240.0f;
 constexpr float kMaxSourcePaneWidth = 900.0f;
@@ -322,25 +323,6 @@ css::RGBA CurrentColorForElement(const svg::SVGElement& element) {
   const css::Color color = element.getComputedStyle().color.get().value();
   return color.isCurrentColor() ? css::RGBA::RGB(0, 0, 0) : color.asRGBA();
 }
-
-struct ToolbarPaintReferenceState {
-  std::string href;
-  bool external = false;
-  std::optional<SourceByteRange> sourceRange;
-};
-
-struct ToolbarPaintSlotState {
-  css::RGBA color = css::RGBA::RGB(0, 0, 0);
-  bool isNone = true;
-  bool isCustom = false;
-  std::optional<ToolbarPaintReferenceState> reference;
-  std::string customLabel;
-};
-
-struct ToolbarPaintState {
-  ToolbarPaintSlotState fill;
-  ToolbarPaintSlotState stroke;
-};
 
 css::RGBA PaintServerFallbackColor() {
   return css::RGBA::RGB(74, 89, 112);
@@ -669,7 +651,9 @@ Box2d ResolveDocumentViewBox(svg::SVGDocument& document) {
   return Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0);
 }
 
-}  // namespace
+}  // namespace internal
+
+using namespace internal;
 
 EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     : window_(window),
@@ -2430,92 +2414,109 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
                                                             pendingClick.modifiers, redragBoundsDoc,
                                                             std::span<const Box2d>());
     }
-    if (tookFastRedrag) {
-      lastPostedScreenPoint_.reset();
-      interactionController_.clearPendingClick();
-      pendingClickFollowupAfterIdle_ = true;
-    } else if (!renderCoordinator_.asyncRenderer().isBusy()) {
-      const bool leftMouseDown = ImGui::IsMouseDown(ImGuiMouseButton_Left);
-      const bool selectHoldElapsed =
-          pendingSelectClickStartSeconds_.has_value() &&
-          ImGui::GetTime() - *pendingSelectClickStartSeconds_ >= kSelectMarqueeHoldDelaySeconds;
-      const bool selectDragIntent = ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f);
-      const bool pendingClickHitsSelection =
-          selectToolActive && pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
-          selectTool_.clickHitsCurrentSelection(app_, pendingClick.documentPoint);
-      // A press that lands on an immediately-selectable element implicitly
-      // selects-and-drags it; a marquee starts when the first click is on empty
-      // space or on something that cannot be selected from the canvas, such as
-      // a locked layer. Without this, a press-drag whose mouse-down was deferred
-      // (worker busy) misclassifies as a marquee and the element is never
-      // selected (gl_rnr GeodeDragZoomRerasterizes... selection-loss). We are in
-      // the `!isBusy()` branch here, so `hitTest` is race-safe (same gate
-      // `onMouseDown` uses).
-      const bool pendingClickHitsImmediatelySelectableElement =
-          selectToolActive && pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
-          !pendingClickHitsSelection &&
-          selectTool_.clickHitsImmediatelySelectableElement(app_, pendingClick.documentPoint);
-      const bool pendingClickCanStartMarquee =
-          selectToolActive && pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
-          !pendingClickHitsSelection && !pendingClickHitsImmediatelySelectableElement;
-      if (leftMouseDown && pendingClickCanStartMarquee && (selectHoldElapsed || selectDragIntent)) {
+    switch (PendingClickBusyActionForState(tookFastRedrag,
+                                           renderCoordinator_.asyncRenderer().isBusy())) {
+      case PendingClickBusyAction::CompleteFastRedrag:
         lastPostedScreenPoint_.reset();
-        selectTool_.beginMarquee(app_, pendingClick.documentPoint, pendingClick.modifiers.shift);
-        renderCoordinator_.refreshSelectionBoundsCache(app_);
-        requestRenderAtEndOfFrame_ = true;
-        renderCoordinator_.rasterizeOverlayForCurrentSelection(
-            app_, interactionController_.viewport(), selectTool_.marqueeRect(),
-            selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview(),
-            selectionChromeDetailForActiveTool());
         interactionController_.clearPendingClick();
-      } else if (leftMouseDown && pendingClickCanStartMarquee) {
-        // Keep the click buffered until mouse-up selects, pointer movement starts marquee, or the
-        // hold delay above starts marquee. This prevents full-canvas/background elements from being
-        // selected just because the user is preparing a marquee drag.
-      } else {
-        // Slow path: full `onMouseDown` (hitTest + selection change +
-        // possible drag start). Race-safe only when the worker is idle.
-        lastPostedScreenPoint_.reset();
-        bool queuedMutationForNextFrame = false;
-        if (selectToolActive) {
-          selectTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
-          if (!leftMouseDown) {
-            selectTool_.onMouseUp(app_, pendingClick.documentPoint);
+        pendingClickFollowupAfterIdle_ = true;
+        break;
+
+      case PendingClickBusyAction::RunIdleClickPath: {
+        const bool leftMouseDown = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+        const bool selectHoldElapsed =
+            pendingSelectClickStartSeconds_.has_value() &&
+            ImGui::GetTime() - *pendingSelectClickStartSeconds_ >= kSelectMarqueeHoldDelaySeconds;
+        const bool selectDragIntent = ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f);
+        const bool pendingClickHitsSelection =
+            selectToolActive && pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
+            selectTool_.clickHitsCurrentSelection(app_, pendingClick.documentPoint);
+        // A press that lands on an immediately-selectable element implicitly
+        // selects-and-drags it; a marquee starts when the first click is on empty
+        // space or on something that cannot be selected from the canvas, such as
+        // a locked layer. Without this, a press-drag whose mouse-down was deferred
+        // (worker busy) misclassifies as a marquee and the element is never
+        // selected (gl_rnr GeodeDragZoomRerasterizes... selection-loss). We are in
+        // the `!isBusy()` branch here, so `hitTest` is race-safe (same gate
+        // `onMouseDown` uses).
+        const bool pendingClickHitsImmediatelySelectableElement =
+            selectToolActive && pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
+            !pendingClickHitsSelection &&
+            selectTool_.clickHitsImmediatelySelectableElement(app_, pendingClick.documentPoint);
+        const bool pendingClickCanStartMarquee =
+            selectToolActive && pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
+            !pendingClickHitsSelection && !pendingClickHitsImmediatelySelectableElement;
+        switch (PendingClickIdleActionForState(leftMouseDown, pendingClickCanStartMarquee,
+                                               selectHoldElapsed, selectDragIntent)) {
+          case PendingClickIdleAction::BeginMarquee:
+            lastPostedScreenPoint_.reset();
+            selectTool_.beginMarquee(app_, pendingClick.documentPoint,
+                                     pendingClick.modifiers.shift);
+            renderCoordinator_.refreshSelectionBoundsCache(app_);
+            requestRenderAtEndOfFrame_ = true;
+            renderCoordinator_.rasterizeOverlayForCurrentSelection(
+                app_, interactionController_.viewport(), selectTool_.marqueeRect(),
+                selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview(),
+                selectionChromeDetailForActiveTool());
+            interactionController_.clearPendingClick();
+            break;
+
+          case PendingClickIdleAction::WaitForMarqueeIntent:
+            // Keep the click buffered until mouse-up selects, pointer movement starts marquee, or
+            // the hold delay above starts marquee. This prevents full-canvas/background elements
+            // from being selected just because the user is preparing a marquee drag.
+            break;
+
+          case PendingClickIdleAction::DispatchSlowPath: {
+            // Slow path: full `onMouseDown` (hitTest + selection change +
+            // possible drag start). Race-safe only when the worker is idle.
+            lastPostedScreenPoint_.reset();
+            bool queuedMutationForNextFrame = false;
+            if (selectToolActive) {
+              selectTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
+              if (!leftMouseDown) {
+                selectTool_.onMouseUp(app_, pendingClick.documentPoint);
+              }
+            } else if (penToolActive) {
+              penTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
+              if (!leftMouseDown && penTool_.isDraggingAnchor()) {
+                penTool_.onMouseUp(app_, pendingClick.documentPoint);
+              }
+              queuedMutationForNextFrame = true;
+            } else if (textToolActive) {
+              // Text placement is a single click: insert the new `<text>` and
+              // switch back to the Select tool so it can be moved and edited.
+              textTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
+              activeTool_ = ActiveTool::Select;
+              queuedMutationForNextFrame = true;
+            }
+            if (queuedMutationForNextFrame) {
+              flushQueuedMutationAndRefreshOverlay();
+            } else {
+              renderCoordinator_.refreshSelectionBoundsCache(app_);
+              requestRenderAtEndOfFrame_ = true;
+              renderCoordinator_.rasterizeOverlayForCurrentSelection(
+                  app_, interactionController_.viewport(), selectTool_.marqueeRect(),
+                  selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview(),
+                  selectionChromeDetailForActiveTool());
+            }
+            interactionController_.clearPendingClick();
+            break;
           }
-        } else if (penToolActive) {
-          penTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
-          if (!leftMouseDown && penTool_.isDraggingAnchor()) {
-            penTool_.onMouseUp(app_, pendingClick.documentPoint);
-          }
-          queuedMutationForNextFrame = true;
-        } else if (textToolActive) {
-          // Text placement is a single click: insert the new `<text>` and
-          // switch back to the Select tool so it can be moved and edited.
-          textTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
-          activeTool_ = ActiveTool::Select;
-          queuedMutationForNextFrame = true;
         }
-        if (queuedMutationForNextFrame) {
-          flushQueuedMutationAndRefreshOverlay();
-        } else {
-          renderCoordinator_.refreshSelectionBoundsCache(app_);
-          requestRenderAtEndOfFrame_ = true;
-          renderCoordinator_.rasterizeOverlayForCurrentSelection(
-              app_, interactionController_.viewport(), selectTool_.marqueeRect(),
-              selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview(),
-              selectionChromeDetailForActiveTool());
-        }
-        interactionController_.clearPendingClick();
+        break;
       }
-    } else {
-      // Worker is busy with a (likely-stale) prewarm render at the
-      // previous canvas size or zoom. Cancel it so the next idle frame
-      // can run the slow-path mouseDown immediately, rather than
-      // waiting up to seconds for the in-flight prewarm to finish at
-      // high zoom. The render in flight is dispensable - it was a
-      // selection prewarm, not a drag, and the click is about to
-      // supersede the selection state anyway.
-      renderCoordinator_.asyncRenderer().cancelInFlight();
+
+      case PendingClickBusyAction::CancelBusyRender:
+        // Worker is busy with a (likely-stale) prewarm render at the
+        // previous canvas size or zoom. Cancel it so the next idle frame
+        // can run the slow-path mouseDown immediately, rather than
+        // waiting up to seconds for the in-flight prewarm to finish at
+        // high zoom. The render in flight is dispensable - it was a
+        // selection prewarm, not a drag, and the click is about to
+        // supersede the selection state anyway.
+        renderCoordinator_.asyncRenderer().cancelInFlight();
+        break;
     }
   }
 
@@ -4184,5 +4185,36 @@ void EditorShell::runFrame() {
   maybeLogResourceDiagnostics(frameCost);
   contentOnlyCaptureThisFrame_ = false;
 }
+
+namespace internal {
+
+PendingClickBusyAction PendingClickBusyActionForState(bool tookFastRedrag, bool rendererBusy) {
+  if (tookFastRedrag) {
+    return PendingClickBusyAction::CompleteFastRedrag;
+  }
+
+  if (rendererBusy) {
+    return PendingClickBusyAction::CancelBusyRender;
+  }
+
+  return PendingClickBusyAction::RunIdleClickPath;
+}
+
+PendingClickIdleAction PendingClickIdleActionForState(bool leftMouseDown,
+                                                      bool pendingClickCanStartMarquee,
+                                                      bool selectHoldElapsed,
+                                                      bool selectDragIntent) {
+  if (!pendingClickCanStartMarquee || !leftMouseDown) {
+    return PendingClickIdleAction::DispatchSlowPath;
+  }
+
+  if (selectHoldElapsed || selectDragIntent) {
+    return PendingClickIdleAction::BeginMarquee;
+  }
+
+  return PendingClickIdleAction::WaitForMarqueeIntent;
+}
+
+}  // namespace internal
 
 }  // namespace donner::editor
