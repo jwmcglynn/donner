@@ -13,14 +13,48 @@
 /// runs in the nightly `perf` lane.
 
 #include "donner/editor/tests/FilterDragReproTestUtils.h"
+#include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
 namespace donner::editor::filter_drag_repro {
 namespace {
 
+using testing::AllOf;
+using testing::Field;
+using testing::Gt;
+using testing::Le;
+
+MATCHER(SelectionChangedAcrossDrags, "") {
+  if (!arg.firstSelectionExists) {
+    *result_listener << "first drag ended without a latched selection";
+    return false;
+  }
+  if (!arg.secondSelectionExists) {
+    *result_listener << "second mouse-down never produced a selection";
+    return false;
+  }
+  if (!arg.selectionChangedAcrossDrags) {
+    *result_listener << "selection stayed on " << arg.firstSelectionId;
+    return false;
+  }
+  return true;
+}
+
+MATCHER(SingleTargetDragUsedFastPath, "") {
+  if (arg.fastPathFrames == 0) {
+    *result_listener << "fastPathFrames is 0";
+    return false;
+  }
+  if (arg.slowPathFramesWithDirty > 1) {
+    *result_listener << "slowPathFramesWithDirty is " << arg.slowPathFramesWithDirty;
+    return false;
+  }
+  return true;
+}
+
 TEST(FilterDragReproCorrectnessTest, ReplayReSelectsAndHitsFastPathWhenEligible) {
   FilterDragReproResult r;
-  RunFilterDragReproScenario(&r);
+  RunFilterDragReproScenario(&r, FilterDragReproReplayMode::CompactCorrectness);
   if (r.skipped) {
     GTEST_SKIP() << "Required data files not available in runfiles";
   }
@@ -33,14 +67,7 @@ TEST(FilterDragReproCorrectnessTest, ReplayReSelectsAndHitsFastPathWhenEligible)
   // failure mode where the first drag's selection sticks because the
   // new mouse-down was dropped (async renderer busy / first drag
   // layer never demoted).
-  EXPECT_TRUE(r.firstSelectionExists)
-      << "first drag ended without a latched selection - hit-test missed or gesture aborted";
-  EXPECT_TRUE(r.secondSelectionExists)
-      << "second mouse-down never produced a selection - user's 'can't select anything else' "
-         "complaint exactly";
-  EXPECT_TRUE(r.selectionChangedAcrossDrags)
-      << "second drag's selection did not differ from the first - second mouse-down was ignored "
-         "(likely dropped because async renderer stayed busy through the entire repro window)";
+  EXPECT_THAT(r, SelectionChangedAcrossDrags());
 
   // With sibling-expansion enabled, a click on a compositing group may
   // intentionally turn into a multi-element drag (halo + bright core +
@@ -53,16 +80,13 @@ TEST(FilterDragReproCorrectnessTest, ReplayReSelectsAndHitsFastPathWhenEligible)
   //   * sibling-expanded composite drags may fall back to the mutation
   //     path without being considered a regression.
   if (r.firstSelectionSize == 1) {
-    EXPECT_GT(r.firstDragCounters.fastPathFrames, 0u)
-        << "single-target first drag never hit the translation-only fast path";
-    EXPECT_LE(r.firstDragCounters.slowPathFramesWithDirty, 1u)
-        << "single-target first drag spent more than the pre-warm frame in the slow path";
+    EXPECT_THAT(r.firstDragCounters, SingleTargetDragUsedFastPath());
   }
 
-  EXPECT_GT(r.secondDragCounters.fastPathFrames, 0u)
-      << "second drag never hit the translation-only fast path";
-  EXPECT_LE(r.secondDragCounters.slowPathFramesWithDirty, 1u)
-      << "second drag spent more than the pre-warm frame in the slow path";
+  EXPECT_THAT(
+      r.secondDragCounters,
+      AllOf(Field("fastPathFrames", &DragCounterStats::fastPathFrames, Gt(0u)),
+            Field("slowPathFramesWithDirty", &DragCounterStats::slowPathFramesWithDirty, Le(1u))));
 }
 
 }  // namespace
