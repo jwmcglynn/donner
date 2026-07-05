@@ -1,7 +1,9 @@
 #include "donner/svg/compositor/ComplexityBucketer.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
 #include <vector>
 
 #include "donner/base/EcsRegistry.h"
@@ -221,19 +223,22 @@ TEST_F(ComplexityBucketerTest, Deterministic) {
 
   ComplexityBucketer bucketer;
   bucketer.reconcile(registry_);
-  const auto after1 = std::vector<bool>{
-      countHints(c1, HintSource::ComplexityBucket) == 1u,
-      countHints(c2, HintSource::ComplexityBucket) == 1u,
-      countHints(c3, HintSource::ComplexityBucket) == 1u,
+  const auto after1 = std::array<size_t, 3>{
+      countHints(c1, HintSource::ComplexityBucket),
+      countHints(c2, HintSource::ComplexityBucket),
+      countHints(c3, HintSource::ComplexityBucket),
   };
 
   for (int i = 0; i < 9; ++i) {
     bucketer.reconcile(registry_);
   }
 
-  EXPECT_EQ(countHints(c1, HintSource::ComplexityBucket) == 1u, after1[0]);
-  EXPECT_EQ(countHints(c2, HintSource::ComplexityBucket) == 1u, after1[1]);
-  EXPECT_EQ(countHints(c3, HintSource::ComplexityBucket) == 1u, after1[2]);
+  EXPECT_THAT((std::array<size_t, 3>{
+                  countHints(c1, HintSource::ComplexityBucket),
+                  countHints(c2, HintSource::ComplexityBucket),
+                  countHints(c3, HintSource::ComplexityBucket),
+              }),
+              testing::ElementsAre(after1[0], after1[1], after1[2]));
 }
 
 TEST_F(ComplexityBucketerTest, ReservedSlotsReduceBudget) {

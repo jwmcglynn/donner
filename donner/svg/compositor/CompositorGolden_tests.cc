@@ -18,16 +18,25 @@
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/compositor/CompositorController.h"
+#include "donner/svg/compositor/CompositorTestMatchers.h"
 #include "donner/svg/compositor/DualPathVerifier.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/common/RenderingInstanceView.h"
+#include "donner/svg/renderer/tests/RendererTestMatchers.h"
 
 namespace donner::svg::compositor {
 
 namespace {
+
+using ::donner::svg::test::EmptyRendererBitmap;
+using ::donner::svg::test::NonEmptyRendererBitmap;
+using ::testing::Contains;
+using ::testing::IsEmpty;
+using ::testing::Not;
+using ::testing::SizeIs;
 
 struct Pixel {
   uint8_t r = 0;
@@ -58,6 +67,11 @@ MATCHER(IsRed, "") {
 MATCHER(IsWhite, "") {
   *result_listener << "pixel is " << arg;
   return arg.r > 200 && arg.g > 200 && arg.b > 200 && arg.a > 200;
+}
+
+MATCHER(IsWarmYellow, "") {
+  *result_listener << "pixel is " << arg;
+  return arg.r > 200 && arg.g > 150 && arg.b < 100;
 }
 
 std::array<double, 6> TransformData(const Transform2d& transform) {
@@ -118,9 +132,7 @@ TEST_F(CompositorGoldenTest, PixelIdentityOnSimpleDocument) {
   DualPathVerifier verifier(compositor, renderer_);
   const auto result = verifier.renderAndVerify(viewport_);
 
-  EXPECT_TRUE(result.isExact()) << result;
-  EXPECT_EQ(result.mismatchCount, 0u);
-  EXPECT_EQ(result.maxChannelDiff, 0);
+  EXPECT_THAT(result, test::ExactVerifyResult());
 }
 
 // With an entity explicitly promoted to its own layer, compositor output is
@@ -143,7 +155,7 @@ TEST_F(CompositorGoldenTest, PromotedEntityMatchesFullRender) {
   DualPathVerifier verifier(compositor, renderer_);
   const auto result = verifier.renderAndVerify(viewport_);
 
-  EXPECT_TRUE(result.isExact()) << result;
+  EXPECT_THAT(result, test::ExactVerifyResult());
 }
 
 // Translation-only drag: composited fast path produces the same pixels as a
@@ -205,8 +217,7 @@ TEST_F(CompositorGoldenTest, RotationDragProducesCorrectPixels) {
 
   DualPathVerifier verifier(compositor, renderer_);
   const auto result = verifier.renderAndVerify(viewport_);
-  EXPECT_TRUE(result.isExact()) << result;
-  EXPECT_EQ(result.mismatchCount, 0u);
+  EXPECT_THAT(result, test::ExactVerifyResult());
 }
 
 // Scale analog of RotationDragProducesCorrectPixels: a scale drag also reuses
@@ -236,8 +247,7 @@ TEST_F(CompositorGoldenTest, ScaleDragProducesCorrectPixels) {
 
   DualPathVerifier verifier(compositor, renderer_);
   const auto result = verifier.renderAndVerify(viewport_);
-  EXPECT_TRUE(result.isExact()) << result;
-  EXPECT_EQ(result.mismatchCount, 0u);
+  EXPECT_THAT(result, test::ExactVerifyResult());
 }
 
 // Editor-reported QA regression (#3, "hiding a layer leaves a ghost"): toggling
@@ -269,8 +279,7 @@ TEST_F(CompositorGoldenTest, HidingElementClearsItsPixelsFromComposite) {
 
   DualPathVerifier verifier(compositor, renderer_);
   const auto result = verifier.renderAndVerify(viewport_);
-  EXPECT_TRUE(result.isExact()) << result;
-  EXPECT_EQ(result.mismatchCount, 0u);
+  EXPECT_THAT(result, test::ExactVerifyResult());
   EXPECT_THAT(getPixel(renderer_.takeSnapshot(), 35, 35), IsWhite())
       << "hidden rect must not leave a ghost";
 }
@@ -842,7 +851,7 @@ TEST_F(CompositorGoldenTest, FilterGroupAutoPromotesOnFirstRender) {
   // not the full canvas. Just check it's populated and ≤ canvas; the
   // exact dims depend on the gaussian blur expansion math.
   const auto& glowBitmap = compositor.layerBitmapOf(glowEntity);
-  EXPECT_FALSE(glowBitmap.empty());
+  EXPECT_THAT(glowBitmap, NonEmptyRendererBitmap());
   EXPECT_LE(glowBitmap.dimensions.x, 200);
   EXPECT_LE(glowBitmap.dimensions.y, 100);
 }
@@ -874,9 +883,7 @@ TEST_F(CompositorGoldenTest, FilteredLayerBoundsStopAtLayerSubtree) {
   compositor.renderFrame(largeViewport);
 
   const RendererBitmap& glowBitmap = compositor.layerBitmapOf(glowEntity);
-  ASSERT_FALSE(glowBitmap.empty());
-  EXPECT_EQ(glowBitmap.dimensions.x, 52);
-  EXPECT_EQ(glowBitmap.dimensions.y, 52);
+  ASSERT_THAT(glowBitmap, test::NonEmptyRendererBitmapWithDimensions(Vector2i(52, 52)));
 
   const Vector2d glowOffset = compositor.layerCanvasOffsetOf(glowEntity);
   EXPECT_DOUBLE_EQ(glowOffset.x, 74.0);
@@ -892,7 +899,7 @@ TEST_F(CompositorGoldenTest, RealSplashLightningBlurLayerUsesFilterBounds) {
   std::ostringstream splashBuf;
   splashBuf << splashStream.rdbuf();
   const std::string splashSource = splashBuf.str();
-  ASSERT_FALSE(splashSource.empty());
+  ASSERT_THAT(splashSource, Not(IsEmpty()));
 
   SVGDocument document = parseDocument(splashSource);
   auto glow = document.querySelector("#Lightning_glow_dark");
@@ -907,7 +914,7 @@ TEST_F(CompositorGoldenTest, RealSplashLightningBlurLayerUsesFilterBounds) {
   compositor.renderFrame(splashViewport);
 
   const RendererBitmap& glowBitmap = compositor.layerBitmapOf(glowEntity);
-  ASSERT_FALSE(glowBitmap.empty());
+  ASSERT_THAT(glowBitmap, NonEmptyRendererBitmap());
   EXPECT_LT(glowBitmap.dimensions.x * glowBitmap.dimensions.y, (892 * 512) / 10);
   EXPECT_LT(glowBitmap.dimensions.x, 160);
   EXPECT_LT(glowBitmap.dimensions.y, 160);
@@ -939,7 +946,7 @@ TEST_F(CompositorGoldenTest, EmptyStaticSegmentsArePrunedFromPublicTileSnapshots
   for (const CompositorTile& tile : uploadTiles) {
     if (tile.layerEntity == entt::null) {
       ++uploadSegmentCount;
-      EXPECT_NE(tile.bitmapDims, Vector2i(1, 1));
+      EXPECT_THAT(tile, test::UploadTileBitmapDimsAreNotPlaceholder());
     } else {
       ++uploadLayerCount;
     }
@@ -953,7 +960,7 @@ TEST_F(CompositorGoldenTest, EmptyStaticSegmentsArePrunedFromPublicTileSnapshots
   for (const auto& tile : inspectorTiles) {
     if (tile.kind == CompositorController::CompositeTileSnapshot::Kind::Segment) {
       ++inspectorSegmentCount;
-      EXPECT_NE(tile.bitmapDims, Vector2i(1, 1));
+      EXPECT_THAT(tile, test::BitmapDimsAreNotPlaceholder());
     } else if (tile.kind == CompositorController::CompositeTileSnapshot::Kind::Layer) {
       ++inspectorLayerCount;
     }
@@ -1393,7 +1400,7 @@ TEST_F(CompositorGoldenTest, SplitBitmapsStableAcrossTranslationOnlyDragFrames) 
       nonDragGenerations[tile.tileId] = tile.generation;
     }
   }
-  ASSERT_FALSE(nonDragGenerations.empty());
+  ASSERT_THAT(nonDragGenerations, Not(IsEmpty()));
 
   // Simulate 10 more drag frames with only translation changes.
   for (int i = 2; i <= 11; ++i) {
@@ -1406,11 +1413,7 @@ TEST_F(CompositorGoldenTest, SplitBitmapsStableAcrossTranslationOnlyDragFrames) 
     if (tile.isDragTarget) {
       continue;
     }
-    auto it = nonDragGenerations.find(tile.tileId);
-    ASSERT_NE(it, nonDragGenerations.end())
-        << "non-drag tile id " << tile.tileId
-        << " disappeared between drag frames — segment cache rebuilt mid-drag";
-    EXPECT_EQ(it->second, tile.generation)
+    EXPECT_THAT(tile, test::CompositorTileGenerationPreservedIn(nonDragGenerations))
         << "non-drag tile id " << tile.tileId
         << " re-rasterized between drag frames — cache invalidated incorrectly";
   }
@@ -1439,24 +1442,19 @@ TEST_F(CompositorGoldenTest, DragTargetOnlySnapshotKeepsNonDragTileMetadata) {
   const auto dragTargetOnlyTiles =
       compositor.snapshotTilesForUpload(CompositorTileBitmapPayload::DragTargetOnly);
 
-  ASSERT_EQ(dragTargetOnlyTiles.size(), fullTiles.size());
+  ASSERT_THAT(dragTargetOnlyTiles, SizeIs(fullTiles.size()));
 
   bool sawDragTargetBitmap = false;
   bool sawNonDragMetadataOnlyTile = false;
   for (size_t i = 0; i < fullTiles.size(); ++i) {
     const CompositorTile& full = fullTiles[i];
     const CompositorTile& partial = dragTargetOnlyTiles[i];
-    EXPECT_EQ(partial.tileId, full.tileId);
-    EXPECT_EQ(partial.generation, full.generation);
-    EXPECT_EQ(partial.bitmapDims, full.bitmapDims);
-    EXPECT_EQ(partial.canvasOffsetPx, full.canvasOffsetPx);
-    EXPECT_EQ(partial.isDragTarget, full.isDragTarget);
     if (partial.isDragTarget) {
       sawDragTargetBitmap = true;
-      EXPECT_FALSE(partial.bitmap.empty());
+      EXPECT_THAT(partial, test::CompositorTileMetadataMatches(full, NonEmptyRendererBitmap()));
     } else {
       sawNonDragMetadataOnlyTile = true;
-      EXPECT_TRUE(partial.bitmap.empty())
+      EXPECT_THAT(partial, test::CompositorTileMetadataMatches(full, EmptyRendererBitmap()))
           << "non-drag tile " << partial.tileId
           << " should keep metadata without forcing a pixel payload";
       EXPECT_GT(partial.bitmapDims.x, 0);
@@ -1464,8 +1462,8 @@ TEST_F(CompositorGoldenTest, DragTargetOnlySnapshotKeepsNonDragTileMetadata) {
     }
   }
 
-  EXPECT_TRUE(sawDragTargetBitmap);
-  EXPECT_TRUE(sawNonDragMetadataOnlyTile);
+  EXPECT_THAT(sawDragTargetBitmap, testing::IsTrue());
+  EXPECT_THAT(sawNonDragMetadataOnlyTile, testing::IsTrue());
 }
 
 TEST_F(CompositorGoldenTest, SelectionToActiveDragDoesNotAdvanceUnchangedTileGenerations) {
@@ -1496,14 +1494,15 @@ TEST_F(CompositorGoldenTest, SelectionToActiveDragDoesNotAdvanceUnchangedTileGen
   std::unordered_map<uint64_t, uint64_t> preDragRetainedGenerations;
   std::unordered_set<uint64_t> preDragImmediateTileIds;
   for (const CompositorTile& tile : preDragTiles) {
-    ASSERT_FALSE(tile.bitmap.empty()) << "prewarmed tile " << tile.tileId << " has no pixels";
+    ASSERT_THAT(tile.bitmap, NonEmptyRendererBitmap())
+        << "prewarmed tile " << tile.tileId << " has no pixels";
     if (tile.immediate) {
       preDragImmediateTileIds.insert(tile.tileId);
       continue;
     }
     preDragRetainedGenerations[tile.tileId] = tile.generation;
   }
-  ASSERT_FALSE(preDragRetainedGenerations.empty());
+  ASSERT_THAT(preDragRetainedGenerations, Not(IsEmpty()));
 
   // Starting an active drag on an already-elevated target changes only presentation
   // geometry: the target's cached pixels are reused through canvasFromBitmap, and unrelated
@@ -1513,32 +1512,32 @@ TEST_F(CompositorGoldenTest, SelectionToActiveDragDoesNotAdvanceUnchangedTileGen
   compositor.renderFrame(viewport_);
 
   const auto activeDragTiles = compositor.snapshotTilesForUpload();
-  ASSERT_EQ(activeDragTiles.size(), preDragTiles.size());
+  ASSERT_THAT(activeDragTiles, SizeIs(preDragTiles.size()));
 
   bool sawTargetLayer = false;
   for (const CompositorTile& tile : activeDragTiles) {
     if (tile.layerEntity == targetEntity) {
       sawTargetLayer = true;
-      EXPECT_TRUE(tile.isDragTarget);
+      EXPECT_THAT(tile.isDragTarget, testing::IsTrue());
     }
     if (tile.immediate) {
       continue;
     }
     const auto it = preDragRetainedGenerations.find(tile.tileId);
     if (it == preDragRetainedGenerations.end()) {
-      EXPECT_TRUE(preDragImmediateTileIds.contains(tile.tileId))
+      EXPECT_THAT(preDragImmediateTileIds, Contains(tile.tileId))
           << "new retained tile id appeared on drag start: " << tile.tileId;
       continue;
     }
-    EXPECT_EQ(tile.generation, it->second)
+    EXPECT_THAT(tile, test::CompositorTileGenerationPreservedIn(preDragRetainedGenerations))
         << "tile " << tile.tileId
         << " advanced generation even though drag start changed only presentation geometry";
     if (tile.layerEntity == targetEntity) {
       sawTargetLayer = true;
-      EXPECT_TRUE(tile.isDragTarget);
+      EXPECT_THAT(tile.isDragTarget, testing::IsTrue());
     }
   }
-  EXPECT_TRUE(sawTargetLayer);
+  EXPECT_THAT(sawTargetLayer, testing::IsTrue());
 }
 
 // A drag-release `SetTransformCommand` mutation must NOT trigger a full
@@ -1846,7 +1845,7 @@ TEST_F(CompositorGoldenTest, NonPromotedMutationInvalidatesOnlyContainingSegment
   // "did this slot re-raster?" that doesn't depend on whether
   // `backgroundBitmap_` was recomposed (which always reallocates).
   const auto tilesBefore = compositor.snapshotTilesForUpload();
-  ASSERT_EQ(tilesBefore.size(), 3u)
+  ASSERT_THAT(tilesBefore, SizeIs(3u))
       << "expected 2 segments (before/after the promoted layer) + 1 layer tile";
   std::uint64_t segment0GenBefore = 0;
   std::uint64_t segment1GenBefore = 0;
@@ -1970,7 +1969,7 @@ TEST_F(CompositorGoldenTest, SplitBitmapsInvalidateOnViewportResize) {
       generationsAtSmall[tile.tileId] = tile.generation;
     }
   }
-  ASSERT_FALSE(generationsAtSmall.empty());
+  ASSERT_THAT(generationsAtSmall, Not(IsEmpty()));
 
   // Simulate a zoom-in: the editor's RenderCoordinator calls setCanvasSize
   // before requestRender when the viewport's desiredCanvasSize changes, so
@@ -2053,9 +2052,8 @@ TEST_F(CompositorGoldenTest, TightBoundedSegmentsProducePixelIdentityWithMultipl
   // transform is identity, so the full-render reference and the
   // composited output are supposed to be byte-for-byte equal.
   const auto result = verifier.renderAndVerify(viewport);
-  EXPECT_TRUE(result.isExact()) << "multi-segment scene with tight-bounded segments: " << result;
-  EXPECT_EQ(result.mismatchCount, 0u);
-  EXPECT_EQ(result.maxChannelDiff, 0);
+  EXPECT_THAT(result, test::ExactVerifyResult())
+      << "multi-segment scene with tight-bounded segments";
 }
 
 // Stronger variant: explicit drag-target promotion on top of the
@@ -2105,9 +2103,7 @@ TEST_F(CompositorGoldenTest, TightBoundedSegmentsSurviveExplicitDragTargetPromot
   // also identity — composited and reference paths render the same
   // scene, so they must produce pixel-identical output.
   const auto result = verifier.renderAndVerify(viewport);
-  EXPECT_TRUE(result.isExact()) << "explicit drag promote with tight segments: " << result;
-  EXPECT_EQ(result.mismatchCount, 0u);
-  EXPECT_EQ(result.maxChannelDiff, 0);
+  EXPECT_THAT(result, test::ExactVerifyResult()) << "explicit drag promote with tight segments";
 }
 
 // Drives the ACTUAL `donner_splash.svg` through the tight-bound
@@ -2131,7 +2127,7 @@ TEST_F(CompositorGoldenTest, TightBoundedSegmentsPixelIdentityOnRealSplashWithDr
   std::ostringstream splashBuf;
   splashBuf << splashStream.rdbuf();
   const std::string splashSource = splashBuf.str();
-  ASSERT_FALSE(splashSource.empty());
+  ASSERT_THAT(splashSource, Not(IsEmpty()));
 
   SVGDocument document = parseDocument(splashSource);
 
@@ -2181,10 +2177,9 @@ TEST_F(CompositorGoldenTest, TightBoundedSegmentsPixelIdentityOnRealSplashWithDr
   // leaking through where content should be). Tolerance 5 catches
   // the shift/crop class of regression without flaking on the
   // premul round-trip drift.
-  EXPECT_TRUE(result.isWithinTolerance(5))
-      << "real-splash tight-bounds pixel identity under drag failed. Mismatch count="
-      << result.mismatchCount << " max channel diff=" << int(result.maxChannelDiff)
-      << ". If non-zero, tight-bound bounds are cropping or shifting "
+  EXPECT_THAT(result, test::VerifyResultWithinTolerance(5))
+      << "real-splash tight-bounds pixel identity under drag failed. If non-zero, tight-bound "
+         "bounds are cropping or shifting "
          "content during the drag composite. Likely candidates: "
          "(a) bounds computed in doc space without applying canvasFromDoc, "
          "(b) bounds applied in canvas space but offset preserved in doc units, "
@@ -2210,7 +2205,7 @@ TEST_F(CompositorGoldenTest, TightBoundedSegmentsPixelIdentityOnRealSplash) {
   std::ostringstream splashBuf;
   splashBuf << splashStream.rdbuf();
   const std::string splashSource = splashBuf.str();
-  ASSERT_FALSE(splashSource.empty());
+  ASSERT_THAT(splashSource, Not(IsEmpty()));
 
   SVGDocument document = parseDocument(splashSource);
 
@@ -3070,11 +3065,11 @@ TEST_F(CompositorGoldenTest, TwoPhaseDragOfPlainGroupMovesChildren) {
   const Pixel originalPos = getPixel(composited, 30, 50);
   const Pixel newPos = getPixel(composited, 70, 50);
 
-  EXPECT_FALSE(originalPos.r > 200 && originalPos.g > 150 && originalPos.b < 100)
+  EXPECT_THAT(originalPos, Not(IsWarmYellow()))
       << "rect is still at original position (30, 50). got: " << originalPos
       << ". The two-phase Selection→ActiveDrag drag left the rect where it was before drag — "
          "DOM transform change didn't move the promoted layer's content.";
-  EXPECT_TRUE(newPos.r > 200 && newPos.g > 150 && newPos.b < 100)
+  EXPECT_THAT(newPos, IsWarmYellow())
       << "rect didn't move to new position (70, 50). got: " << newPos;
 }
 
@@ -3126,23 +3121,9 @@ TEST_F(CompositorGoldenTest, SetTightBoundedSegmentsEnabledTogglesAtRuntime) {
   compositorRef.renderFrame(viewport_);
   const RendererBitmap reference = renderer_.takeSnapshot();
 
-  ASSERT_EQ(afterFlip.dimensions, reference.dimensions);
-  ASSERT_EQ(afterFlip.pixels.size(), reference.pixels.size());
-  int mismatchCount = 0;
-  int maxDiff = 0;
-  for (size_t i = 0; i < afterFlip.pixels.size(); ++i) {
-    const int diff =
-        std::abs(static_cast<int>(afterFlip.pixels[i]) - static_cast<int>(reference.pixels[i]));
-    if (diff > 0) {
-      ++mismatchCount;
-      maxDiff = std::max(maxDiff, diff);
-    }
-  }
-  EXPECT_EQ(mismatchCount, 0)
+  EXPECT_THAT(afterFlip, test::RendererBitmapPixelsEqualTo(reference))
       << "runtime toggle off did not converge to same pixels as construct-time off. "
-         "mismatchCount="
-      << mismatchCount << " maxDiff=" << maxDiff
-      << ". If non-zero, `setTightBoundedSegmentsEnabled(false)` is not fully "
+         "If non-zero, `setTightBoundedSegmentsEnabled(false)` is not fully "
          "invalidating prior tight-bound caches — likely a missing "
          "`markAllSegmentsDirty` call in the setter.";
 }
@@ -3531,8 +3512,7 @@ TEST_F(CompositorGoldenTest, ClippedGroupWithOpacityChildRendersCorrectly) {
   // Pixel identity with the full-render path. If the child were auto-promoted
   // despite the ancestor clip, the composited path would leak rect content
   // past x=100 and this assertion would catch it.
-  EXPECT_TRUE(result.isExact()) << result;
-  EXPECT_EQ(result.mismatchCount, 0u);
+  EXPECT_THAT(result, test::ExactVerifyResult());
 }
 
 // Splash-shape document, real Skia-backed renderer, full-size 892×512
@@ -3782,7 +3762,7 @@ TEST_F(CompositorGoldenTest, RealSplashDragLatencyOnTinySkia) {
   std::ostringstream splashBuf;
   splashBuf << splashStream.rdbuf();
   const std::string splashSource = splashBuf.str();
-  ASSERT_FALSE(splashSource.empty()) << "donner_splash.svg is empty";
+  ASSERT_THAT(splashSource, Not(IsEmpty())) << "donner_splash.svg is empty";
 
   SVGDocument document = parseDocument(splashSource);
 
@@ -3874,7 +3854,7 @@ TEST_F(CompositorGoldenTest, RealSplashBlueCenterBurstEllipseDragLatency) {
   std::ostringstream splashBuf;
   splashBuf << splashStream.rdbuf();
   const std::string splashSource = splashBuf.str();
-  ASSERT_FALSE(splashSource.empty()) << "donner_splash.svg is empty";
+  ASSERT_THAT(splashSource, Not(IsEmpty())) << "donner_splash.svg is empty";
 
   SVGDocument document = parseDocument(splashSource);
   document.setCanvasSize(1784, 1024);
@@ -4182,7 +4162,7 @@ TEST_F(CompositorGoldenTest, BuildStructuralEntityRemapIdenticalTrees) {
   SVGDocument docB = parseDocument(kSource);
 
   const auto remap = BuildStructuralEntityRemap(docA, docB);
-  EXPECT_FALSE(remap.empty())
+  EXPECT_THAT(remap, Not(IsEmpty()))
       << "BuildStructuralEntityRemap returned empty for byte-identical documents";
 
   // Same-doc trivial lookup: every element should have a remap entry.
@@ -4212,7 +4192,7 @@ TEST_F(CompositorGoldenTest, BuildStructuralEntityRemapMismatchReturnsEmpty) {
   )svg");
 
   const auto remap = BuildStructuralEntityRemap(docA, docB);
-  EXPECT_TRUE(remap.empty()) << "remap must be empty when child counts differ";
+  EXPECT_THAT(remap, IsEmpty()) << "remap must be empty when child counts differ";
 }
 
 // Mismatched `id` → empty remap.
@@ -4229,7 +4209,7 @@ TEST_F(CompositorGoldenTest, BuildStructuralEntityRemapIdChangeReturnsEmpty) {
   )svg");
 
   const auto remap = BuildStructuralEntityRemap(docA, docB);
-  EXPECT_TRUE(remap.empty()) << "id rename must break structural equivalence";
+  EXPECT_THAT(remap, IsEmpty()) << "id rename must break structural equivalence";
 }
 
 // Transform-attribute-only change → remap IS valid. This mirrors the
@@ -4248,7 +4228,7 @@ TEST_F(CompositorGoldenTest, BuildStructuralEntityRemapIgnoresAttributeValueChan
   )svg");
 
   const auto remap = BuildStructuralEntityRemap(docA, docB);
-  EXPECT_FALSE(remap.empty())
+  EXPECT_THAT(remap, Not(IsEmpty()))
       << "attribute-value-only change must leave the structural remap intact";
   auto dragA = docA.querySelector("#drag");
   auto dragB = docB.querySelector("#drag");

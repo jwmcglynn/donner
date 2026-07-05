@@ -1,5 +1,6 @@
 #include "donner/svg/compositor/LayerResolver.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -31,6 +32,15 @@ protected:
 
   bool hasAssignment(Entity entity) const {
     return registry_.all_of<ComputedLayerAssignmentComponent>(entity);
+  }
+
+  std::vector<uint32_t> layerIdsOf(const std::vector<Entity>& entities) const {
+    std::vector<uint32_t> layerIds;
+    layerIds.reserve(entities.size());
+    for (Entity entity : entities) {
+      layerIds.push_back(layerIdOf(entity));
+    }
+    return layerIds;
   }
 };
 
@@ -120,10 +130,8 @@ TEST_F(LayerResolverTest, TieInWeightsBrokenByLowerEntityId) {
   std::sort(sorted.begin(), sorted.end(), [](Entity a, Entity b) {
     return static_cast<std::uint32_t>(a) < static_cast<std::uint32_t>(b);
   });
-  for (size_t i = 0; i < sorted.size(); ++i) {
-    EXPECT_EQ(layerIdOf(sorted[i]), static_cast<uint32_t>(i + 1u))
-        << "tie-break must be by ascending entity id; mismatch at index " << i;
-  }
+  EXPECT_THAT(layerIdsOf(sorted), testing::ElementsAre(1u, 2u, 3u, 4u))
+      << "tie-break must be by ascending entity id";
 }
 
 TEST_F(LayerResolverTest, MandatoryAlwaysWinsUnderBudgetPressure) {
@@ -148,8 +156,7 @@ TEST_F(LayerResolverTest, MandatoryAlwaysWinsUnderBudgetPressure) {
 
   // Budget is 2. First two mandatory get layers (by entity id). Third mandatory
   // is evicted and logs; all explicit candidates are evicted.
-  EXPECT_EQ(layerIdOf(mandatoryEntities[0]), 1u);
-  EXPECT_EQ(layerIdOf(mandatoryEntities[1]), 2u);
+  EXPECT_THAT(layerIdsOf(mandatoryEntities), testing::ElementsAre(1u, 2u, 0u));
   EXPECT_FALSE(hasAssignment(mandatoryEntities[2]))
       << "over-budget mandatory should have no assignment";
   for (Entity e : explicitEntities) {
@@ -186,10 +193,8 @@ TEST_F(LayerResolverTest, DeterministicAcrossRepeatedCalls) {
 
   for (int run = 0; run < 10; ++run) {
     resolver_.resolve(registry_, kDefaultBudget);
-    for (size_t i = 0; i < entities.size(); ++i) {
-      EXPECT_EQ(layerIdOf(entities[i]), firstAssignment[i])
-          << "assignment diverged on run " << run << " at index " << i;
-    }
+    EXPECT_THAT(layerIdsOf(entities), testing::ElementsAreArray(firstAssignment))
+        << "assignment diverged on run " << run;
   }
 }
 

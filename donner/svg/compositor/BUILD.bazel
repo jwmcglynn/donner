@@ -70,6 +70,19 @@ donner_cc_library(
     ],
 )
 
+donner_cc_library(
+    name = "compositor_test_matchers",
+    testonly = 1,
+    hdrs = ["CompositorTestMatchers.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        ":compositor",
+        ":dual_path_verifier",
+        "//donner/svg/renderer:renderer_interface",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
 donner_cc_test(
     name = "compositor_tests",
     srcs = [
@@ -84,9 +97,11 @@ donner_cc_test(
     ],
     deps = [
         ":compositor",
+        ":compositor_test_matchers",
         "//donner/svg/renderer:renderer_interface",
         "//donner/svg/renderer:renderer_utils",
         "//donner/svg/renderer/tests:mock_renderer_interface",
+        "//donner/svg/renderer/tests:renderer_test_matchers",
         "//donner/svg/tests:parser_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
@@ -127,6 +142,7 @@ donner_cc_test(
     ],
     deps = [
         ":compositor",
+        ":compositor_test_matchers",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -163,6 +179,7 @@ donner_cc_test(
     ],
     deps = [
         ":compositor",
+        ":compositor_test_matchers",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -214,9 +231,11 @@ donner_cc_test(
     ],
     deps = [
         ":compositor",
+        ":compositor_test_matchers",
         ":dual_path_verifier",
         "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer/tests:renderer_test_matchers",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -237,9 +256,11 @@ donner_cc_test(
     ],
     deps = [
         ":compositor",
+        ":compositor_test_matchers",
         ":dual_path_verifier",
         "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer/tests:renderer_test_matchers",
         "@com_google_gtest//:gtest_main",
     ],
 )
