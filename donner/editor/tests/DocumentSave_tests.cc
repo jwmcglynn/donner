@@ -201,9 +201,10 @@ TEST(DocumentSaveTest, RejectsSymlinkDestinationWithoutTouchingTarget) {
 TEST(DocumentSaveTest, StreamsStatusesAndResultOkFlag) {
   std::ostringstream statuses;
   statuses << DocumentSaveStatus::Ok << " " << DocumentSaveStatus::OpenFailed << " "
-           << DocumentSaveStatus::WriteFailed << " " << DocumentSaveStatus::CloseFailed;
+           << DocumentSaveStatus::WriteFailed << " " << DocumentSaveStatus::CloseFailed << " "
+           << static_cast<DocumentSaveStatus>(-1);
 
-  EXPECT_EQ(statuses.str(), "Ok OpenFailed WriteFailed CloseFailed");
+  EXPECT_EQ(statuses.str(), "Ok OpenFailed WriteFailed CloseFailed Unknown");
   EXPECT_TRUE(DocumentSaveResult{.status = DocumentSaveStatus::Ok}.ok());
   EXPECT_FALSE(DocumentSaveResult{.status = DocumentSaveStatus::OpenFailed}.ok());
 }

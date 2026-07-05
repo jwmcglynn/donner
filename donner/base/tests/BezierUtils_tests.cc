@@ -378,6 +378,20 @@ TEST(BezierUtils, QuadraticYExtremaAsymmetric) {
 }
 
 // =============================================================================
+// QuadraticXExtrema
+// =============================================================================
+
+TEST(BezierUtils, QuadraticXExtremaOneExtremum) {
+  const Vector2d p0(0.0, 0.0);
+  const Vector2d p1(10.0, 1.0);
+  const Vector2d p2(0.0, 2.0);
+
+  const auto result = QuadraticXExtrema(p0, p1, p2);
+
+  EXPECT_THAT(result, ElementsAre(DoubleNear(0.5, 1e-9)));
+}
+
+// =============================================================================
 // CubicYExtrema
 // =============================================================================
 
@@ -418,6 +432,21 @@ TEST(BezierUtils, CubicYExtremaTwoExtrema) {
 }
 
 // =============================================================================
+// CubicXExtrema
+// =============================================================================
+
+TEST(BezierUtils, CubicXExtremaDegenerateLinearDerivative) {
+  const Vector2d p0(0.0, 0.0);
+  const Vector2d p1(1.0, 1.0);
+  const Vector2d p2(1.0, 2.0);
+  const Vector2d p3(0.0, 3.0);
+
+  const auto result = CubicXExtrema(p0, p1, p2, p3);
+
+  EXPECT_THAT(result, ElementsAre(DoubleNear(0.5, 1e-9)));
+}
+
+// =============================================================================
 // QuadraticBounds
 // =============================================================================
 
@@ -429,6 +458,19 @@ TEST(BezierUtils, QuadraticBoundsContainsEndpoints) {
   Box2d box = QuadraticBounds(p0, p1, p2);
   EXPECT_TRUE(box.contains(p0));
   EXPECT_TRUE(box.contains(p2));
+}
+
+TEST(BezierUtils, QuadraticBoundsIncludesXExtremum) {
+  const Vector2d p0(0.0, 0.0);
+  const Vector2d p1(10.0, 1.0);
+  const Vector2d p2(0.0, 2.0);
+
+  Box2d box = QuadraticBounds(p0, p1, p2);
+
+  EXPECT_NEAR(box.topLeft.x, 0.0, 1e-9);
+  EXPECT_NEAR(box.bottomRight.x, 5.0, 1e-9);
+  EXPECT_NEAR(box.topLeft.y, 0.0, 1e-9);
+  EXPECT_NEAR(box.bottomRight.y, 2.0, 1e-9);
 }
 
 TEST(BezierUtils, QuadraticBoundsTighterThanControlHull) {

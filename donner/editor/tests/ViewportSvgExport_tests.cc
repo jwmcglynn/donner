@@ -327,6 +327,29 @@ TEST(ViewportSvgExportTest, RootAttributeEscapingIsDeterministic) {
   EXPECT_TRUE(Contains(result.value, "data-owner=\"Bob&apos;s\"")) << result.value;
 }
 
+TEST(ViewportSvgExportTest, RawLessThanInRootAttributeIsEscapedAfterSourceEdit) {
+  SVGDocument doc = ParseOrDie(
+      "<svg id=\"root\" width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
+      "<rect width=\"10\" height=\"10\"/>"
+      "</svg>");
+  const std::size_t rootOffset = doc.source().find("root");
+  ASSERT_NE(rootOffset, std::string_view::npos);
+
+  const xml::ApplySourceEditResult edit = doc.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(rootOffset), FileOffset::Offset(rootOffset + 4)},
+      .replacement = "a<b",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  ASSERT_TRUE(edit.applied);
+
+  const Result<std::string, std::string> result = ExportViewportAsSvg(
+      doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions{});
+
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_TRUE(Contains(result.value, "source: a&lt;b")) << result.value;
+  EXPECT_TRUE(Contains(result.value, "id=\"a&lt;b\"")) << result.value;
+}
+
 TEST(ViewportSvgExportTest, RootAttributeGreaterThanAndMissingDimensionsAreNormalized) {
   const SVGDocument doc = ParseOrDie(
       "<svg id=\"root\" data-arrow=\"a>b\" xmlns=\"http://www.w3.org/2000/svg\">"
@@ -365,6 +388,29 @@ TEST(ViewportSvgExportTest, RootScannerSkipsPrologCommentsDoctypeAndProcessingIn
   EXPECT_FALSE(Contains(result.value, "svg-not-root")) << result.value;
 }
 
+TEST(ViewportSvgExportTest, RootScannerRejectsUnterminatedPrologMarkup) {
+  for (std::string_view prefix : {"<!--", "<?editor"}) {
+    SCOPED_TRACE(prefix);
+    SVGDocument doc =
+        ParseOrDie("<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\"/>");
+
+    const xml::ApplySourceEditResult edit = doc.applySourceEdit(xml::XMLEditIntent{
+        .range = SourceRange{FileOffset::Offset(0), FileOffset::Offset(0)},
+        .replacement = std::string(prefix),
+        .sourceVersion = doc.sourceVersion(),
+    });
+    ASSERT_TRUE(edit.applied);
+    ASSERT_TRUE(edit.diagnostic.has_value());
+
+    const Result<std::string, std::string> result =
+        ExportViewportAsSvg(doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 100)),
+                            ViewportExportOptions{});
+
+    EXPECT_FALSE(result.ok());
+    EXPECT_TRUE(Contains(result.error, "root <svg>")) << result.error;
+  }
+}
+
 TEST(ViewportSvgExportTest, RootScannerAcceptsSvgNameTerminators) {
   const std::vector<std::string> sources = {
       "<svg xmlns=\"http://www.w3.org/2000/svg\"><rect id=\"plain\" width=\"10\" "
@@ -390,6 +436,28 @@ TEST(ViewportSvgExportTest, RootScannerAcceptsSvgNameTerminators) {
     EXPECT_TRUE(Contains(result.value, "width=\"100\"")) << result.value;
     EXPECT_TRUE(Contains(result.value, "height=\"80\"")) << result.value;
   }
+}
+
+TEST(ViewportSvgExportTest, RootScannerAcceptsRawSlashTerminatedSvgStart) {
+  SVGDocument doc =
+      ParseOrDie("<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\"/>");
+  const std::size_t attributeOffset = doc.source().find(" width=");
+  ASSERT_NE(attributeOffset, std::string_view::npos);
+  const std::size_t slashOffset = doc.source().find("/>");
+  ASSERT_NE(slashOffset, std::string_view::npos);
+
+  const xml::ApplySourceEditResult edit = doc.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(attributeOffset), FileOffset::Offset(slashOffset)},
+      .replacement = "",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  ASSERT_TRUE(edit.applied);
+
+  const Result<std::string, std::string> result = ExportViewportAsSvg(
+      doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 80)), ViewportExportOptions{});
+
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_TRUE(Contains(result.value, "<svg width=\"100\" height=\"80\"")) << result.value;
 }
 
 TEST(ViewportSvgExportTest, SelfClosingRootExportsEmptyContentGroup) {
@@ -434,6 +502,20 @@ TEST(ViewportSvgExportTest, NegativeZeroViewportValuesFormatAsZero) {
   EXPECT_FALSE(Contains(result.value, "-0")) << result.value;
 }
 
+TEST(ViewportSvgExportTest, RoundedNegativeZeroViewportValuesFormatAsZero) {
+  const SVGDocument doc = ParseOrDie(kSelfContainedSvg);
+  ViewportState viewport = IdentityViewport();
+  viewport.panDocPoint = Vector2d(-0.0000001, -0.0000001);
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(0, 0));
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
+
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_TRUE(Contains(result.value, "viewBox=\"0 0 0 0\"")) << result.value;
+  EXPECT_FALSE(Contains(result.value, "-0")) << result.value;
+}
+
 TEST(ViewportSvgExportTest, FractionalViewportValuesTrimTrailingZeros) {
   const SVGDocument doc = ParseOrDie(kSelfContainedSvg);
   const ViewportState viewport =
@@ -468,6 +550,86 @@ TEST(ViewportSvgExportTest, SourceWithoutRootSvgIsRejected) {
 
   EXPECT_FALSE(result.ok());
   EXPECT_TRUE(Contains(result.error, "root <svg>")) << result.error;
+}
+
+TEST(ViewportSvgExportTest, MalformedRootOpenTagWithoutTerminatorIsRejected) {
+  SVGDocument doc =
+      ParseOrDie("<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\"/>");
+  const std::size_t selfCloseOffset = doc.source().rfind("/>");
+  ASSERT_NE(selfCloseOffset, std::string_view::npos);
+
+  const xml::ApplySourceEditResult edit = doc.applySourceEdit(xml::XMLEditIntent{
+      .range =
+          SourceRange{FileOffset::Offset(selfCloseOffset), FileOffset::Offset(doc.source().size())},
+      .replacement = "",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  ASSERT_TRUE(edit.applied);
+  ASSERT_TRUE(edit.diagnostic.has_value());
+
+  const Result<std::string, std::string> result = ExportViewportAsSvg(
+      doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions{});
+
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(Contains(result.error, "root <svg>")) << result.error;
+}
+
+TEST(ViewportSvgExportTest, MalformedRootOpenTagEndingInWhitespaceIsRejected) {
+  SVGDocument doc =
+      ParseOrDie("<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\"/>");
+  const std::size_t selfCloseOffset = doc.source().rfind("/>");
+  ASSERT_NE(selfCloseOffset, std::string_view::npos);
+
+  const xml::ApplySourceEditResult edit = doc.applySourceEdit(xml::XMLEditIntent{
+      .range =
+          SourceRange{FileOffset::Offset(selfCloseOffset), FileOffset::Offset(doc.source().size())},
+      .replacement = " ",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  ASSERT_TRUE(edit.applied);
+  ASSERT_TRUE(edit.diagnostic.has_value());
+
+  const Result<std::string, std::string> result = ExportViewportAsSvg(
+      doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions{});
+
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(Contains(result.error, "root <svg>")) << result.error;
+}
+
+TEST(ViewportSvgExportTest, MalformedSelfClosingRootWithoutCloseAngleIsRejected) {
+  SVGDocument doc =
+      ParseOrDie("<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\"/>");
+  const std::size_t closeAngleOffset = doc.source().rfind('>');
+  ASSERT_NE(closeAngleOffset, std::string_view::npos);
+
+  const xml::ApplySourceEditResult edit = doc.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(closeAngleOffset),
+                           FileOffset::Offset(closeAngleOffset + 1)},
+      .replacement = "",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  ASSERT_TRUE(edit.applied);
+  ASSERT_TRUE(edit.diagnostic.has_value());
+
+  const Result<std::string, std::string> result = ExportViewportAsSvg(
+      doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions{});
+
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(Contains(result.error, "root <svg>")) << result.error;
+}
+
+TEST(ViewportSvgExportTest, EmptyRootIdFallsBackToUntitledProvenance) {
+  const SVGDocument doc = ParseOrDie(
+      "<svg id=\"\" width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
+      "<rect width=\"10\" height=\"10\"/>"
+      "</svg>");
+
+  const Result<std::string, std::string> result = ExportViewportAsSvg(
+      doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions{});
+
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_TRUE(Contains(result.value, "source: untitled;")) << result.value;
+  EXPECT_TRUE(Contains(result.value, "id=\"\"")) << result.value;
 }
 
 TEST(ViewportSvgExportTest, RootScannerSkipsSvgPrefixedElementNamesBeforeRealRoot) {
@@ -525,6 +687,28 @@ TEST(ViewportSvgExportTest, HrefLikeTextWithoutQuotedValueIsIgnored) {
 
   ASSERT_TRUE(result.ok()) << result.error;
   EXPECT_TRUE(Contains(result.value, "not-an-attribute.png")) << result.value;
+}
+
+TEST(ViewportSvgExportTest, HrefScannerIgnoresMalformedRawSuffixes) {
+  SVGDocument doc = ParseOrDie(
+      "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
+      "<defs><rect id=\"shape\" width=\"10\" height=\"10\"/></defs>"
+      "</svg>");
+
+  const xml::ApplySourceEditResult edit = doc.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(doc.source().size()),
+                           FileOffset::Offset(doc.source().size())},
+      .replacement = " href href= href=\"\" href=\"#shape",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  ASSERT_TRUE(edit.applied);
+  ASSERT_TRUE(edit.diagnostic.has_value());
+
+  const Result<std::string, std::string> result = ExportViewportAsSvg(
+      doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions{});
+
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_TRUE(Contains(result.value, "id=\"shape\"")) << result.value;
 }
 
 TEST(ViewportSvgExportTest, ExternalReferenceScannerHandlesWhitespaceAndUppercaseSchemes) {

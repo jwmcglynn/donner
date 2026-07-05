@@ -256,6 +256,17 @@ TEST(XmlAutocomplete, StyleAttributeSecondPropertyAfterBraceAndWhitespaceResetsS
   EXPECT_TRUE(HasSuggestion(BuildXmlAutocompleteSuggestions(context), "stroke"));
 }
 
+TEST(XmlAutocomplete, StyleElementSkipsTabBeforePropertyName) {
+  constexpr std::string_view kSource = "<svg><style>rect {\tst</style></svg>";
+  const std::size_t cursorOffset = kSource.find("st</style>") + 2;
+  const XmlAutocompleteContext context = DetectXmlAutocompleteContext(kSource, cursorOffset);
+
+  EXPECT_EQ(context.kind, XmlAutocompleteContextKind::StyleValue);
+  EXPECT_EQ(context.prefix, "st");
+  EXPECT_EQ(context.replaceStartOffset, kSource.find("st</style>"));
+  EXPECT_TRUE(HasSuggestion(BuildXmlAutocompleteSuggestions(context), "stroke"));
+}
+
 TEST(XmlAutocomplete, StyleAttributeMidPropertyExtendsReplacementToNameEnd) {
   constexpr std::string_view kSource = R"(<svg><rect style="font-size2: 12px"/></svg>)";
   const std::size_t cursorOffset = kSource.find("font") + 2;
@@ -332,6 +343,34 @@ TEST(XmlAutocomplete, UnquotedStyleAttributeValueStaysInAttributeNameContext) {
   EXPECT_EQ(context.kind, XmlAutocompleteContextKind::AttributeName);
 }
 
+TEST(XmlAutocomplete, CompleteUnquotedStyleAttributeValueStaysInAttributeNameRecovery) {
+  constexpr std::string_view kSource = "<svg><rect style=fill/>";
+  const std::size_t cursorOffset = kSource.find("fill") + 2;
+  const XmlAutocompleteContext context = DetectXmlAutocompleteContext(kSource, cursorOffset);
+
+  EXPECT_EQ(context.kind, XmlAutocompleteContextKind::AttributeName);
+  EXPECT_EQ(context.prefix, "fi");
+  EXPECT_TRUE(HasSuggestion(BuildXmlAutocompleteSuggestions(context), "filter"));
+}
+
+TEST(XmlAutocomplete, CompleteQuotedAttributeBeforeCursorClearsAttributeNameState) {
+  constexpr std::string_view kSource = R"(<svg><rect id="target" )";
+  const XmlAutocompleteContext context = DetectXmlAutocompleteContext(kSource, kSource.size());
+
+  EXPECT_EQ(context.kind, XmlAutocompleteContextKind::AttributeName);
+  EXPECT_EQ(context.prefix, "");
+  EXPECT_TRUE(HasSuggestion(BuildXmlAutocompleteSuggestions(context), "fill"));
+}
+
+TEST(XmlAutocomplete, CursorAfterQuotedStyleAttributeValueIsUnknown) {
+  constexpr std::string_view kSource = R"(<svg><rect style="fill"/></svg>)";
+  const std::size_t cursorOffset = kSource.find("\"/>") + 1;
+  const XmlAutocompleteContext context = DetectXmlAutocompleteContext(kSource, cursorOffset);
+
+  EXPECT_EQ(context.kind, XmlAutocompleteContextKind::Unknown);
+  EXPECT_TRUE(BuildXmlAutocompleteSuggestions(context).empty());
+}
+
 TEST(XmlAutocomplete, NonStyleAttributeValueOffersNoSuggestions) {
   // Attribute value autocomplete is only wired for `style`; a `fill="..."`
   // value must produce no suggestions.
@@ -341,6 +380,17 @@ TEST(XmlAutocomplete, NonStyleAttributeValueOffersNoSuggestions) {
 
   EXPECT_EQ(context.kind, XmlAutocompleteContextKind::Unknown);
   EXPECT_TRUE(BuildXmlAutocompleteSuggestions(context).empty());
+}
+
+TEST(XmlAutocomplete, CursorInsideMalformedClosingTagRecoversAsElementName) {
+  constexpr std::string_view kSource = "<svg><rect></rect bogus";
+  const std::size_t cursorOffset = kSource.find("bogus") + 2;
+  const XmlAutocompleteContext context = DetectXmlAutocompleteContext(kSource, cursorOffset);
+
+  EXPECT_EQ(context.kind, XmlAutocompleteContextKind::ElementName);
+  EXPECT_EQ(context.prefix, "");
+  EXPECT_EQ(context.replaceStartOffset, cursorOffset);
+  EXPECT_EQ(context.replaceEndOffset, cursorOffset);
 }
 
 TEST(XmlAutocomplete, ClosedStyleElementReturnsToTextContentContext) {

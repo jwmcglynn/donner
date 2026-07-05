@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -11,6 +12,14 @@
 #include "donner/svg/DocumentState.h"
 
 namespace donner::editor {
+
+namespace internal {
+
+std::string FormatColor(const std::array<float, 4>& color);
+std::optional<svg::SVGElement> SingleSelectedText(EditorApp& app);
+
+}  // namespace internal
+
 namespace {
 
 constexpr std::string_view kTextDoc =
@@ -53,6 +62,38 @@ protected:
     return queuedMutation;
   }
 };
+
+TEST(TextInspectorPanelInternalTest, FormatColorClampsChannelsAndOmitsOpaqueAlpha) {
+  EXPECT_EQ(internal::FormatColor({0.0f, 0.5f, 1.0f, 1.0f}), "#0080ff");
+  EXPECT_EQ(internal::FormatColor({1.0f, 0.0f, 0.0f, 0.5f}), "#ff000080");
+  EXPECT_EQ(internal::FormatColor({2.0f, -1.0f, 0.25f, -0.5f}), "#ff004000");
+}
+
+TEST(TextInspectorPanelInternalTest, SingleSelectedTextRequiresExactlyOneTextElement) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+           <text id="text">Label</text>
+           <rect id="rect" width="10" height="10"/>
+         </svg>)"));
+
+  const std::optional<svg::SVGElement> text = app.document().document().querySelector("#text");
+  const std::optional<svg::SVGElement> rect = app.document().document().querySelector("#rect");
+  ASSERT_TRUE(text.has_value());
+  ASSERT_TRUE(rect.has_value());
+
+  EXPECT_FALSE(internal::SingleSelectedText(app).has_value());
+
+  app.setSelection(*rect);
+  EXPECT_FALSE(internal::SingleSelectedText(app).has_value());
+
+  app.setSelection(*text);
+  ASSERT_TRUE(internal::SingleSelectedText(app).has_value());
+  EXPECT_EQ(*internal::SingleSelectedText(app), *text);
+
+  app.setSelection(std::vector<svg::SVGElement>{*text, *rect});
+  EXPECT_FALSE(internal::SingleSelectedText(app).has_value());
+}
 
 // Regression for a QA-found SIGABRT: selecting a <text> and opening the Text
 // inspector aborted because `syncBuffersFromSelection` read `textContent()` /

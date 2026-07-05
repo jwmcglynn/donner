@@ -57,6 +57,17 @@ TEST(EmbeddedSvgIcon, RendersTintableAlphaMask) {
   EXPECT_THAT(PixelAt(*bitmap, 0, 0), ElementsAre(0, 0, 0, 0));
 }
 
+TEST(EmbeddedSvgIcon, RejectsInvalidOutputSize) {
+  EXPECT_FALSE(RenderEmbeddedSvgIcon(BytesOf(kSquareIconSvg), /*outputSizePx=*/0).has_value());
+  EXPECT_FALSE(RenderEmbeddedSvgIcon(BytesOf(kSquareIconSvg), /*outputSizePx=*/-1).has_value());
+}
+
+TEST(EmbeddedSvgIcon, RejectsMalformedSvg) {
+  constexpr std::string_view kMalformedSvg = "<svg><";
+
+  EXPECT_FALSE(RenderEmbeddedSvgIcon(BytesOf(kMalformedSvg), /*outputSizePx=*/16).has_value());
+}
+
 #ifdef DONNER_GEODE_BACKEND_AVAILABLE
 TEST(EmbeddedSvgIcon, RepeatedRendersShareOneHeadlessDevice) {
   // Prime the shared renderer (first call may create the one shared device).

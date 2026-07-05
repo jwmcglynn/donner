@@ -9,7 +9,11 @@
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGStyleElement.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
+#include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/StylesheetComponent.h"
+#include "donner/svg/components/filter/FilterComponent.h"
+#include "donner/svg/components/filter/FilterPrimitiveComponent.h"
+#include "donner/svg/components/paint/ClipPathComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -356,6 +360,33 @@ TEST(SVGDocument, StyleProjectionSkipsNonCssType) {
   EXPECT_TRUE(stylesheet.stylesheet.rules().empty());
 }
 
+TEST(SVGDocument, ApplySourceEditNonCssStyleMutationLeavesStylesheetEmpty) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <style id="style" type="text/plain">rect { fill: red; }</style>
+      <rect/>
+    </svg>
+  )");
+  SVGElement style = document.querySelector("#style").value();
+  const std::size_t valueOffset = document.source().find("red");
+  ASSERT_NE(valueOffset, std::string_view::npos);
+
+  xml::ApplySourceEditResult result = document.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(valueOffset), FileOffset::Offset(valueOffset + 3)},
+      .replacement = "blue",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, xml::ReparseScope::TextNode);
+  EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+  EXPECT_THAT(document.source(), testing::HasSubstr("blue"));
+  const auto& stylesheet = style.entityHandle().get<components::StylesheetComponent>();
+  EXPECT_FALSE(stylesheet.isCssType());
+  EXPECT_TRUE(stylesheet.text.empty());
+  EXPECT_TRUE(stylesheet.stylesheet.rules().empty());
+}
+
 TEST(SVGDocument, StyleProjectionHandlesEmptyCssStyleElement) {
   auto document = ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg">
@@ -402,6 +433,82 @@ TEST(SVGDocument, ApplySourceEditProjectsSubtreeReplacement) {
   EXPECT_THAT(document.querySelector("#old"), Eq(std::nullopt));
   ASSERT_THAT(document.querySelector("#new"), Optional(ElementIdEq("new")));
   EXPECT_EQ(document.querySelector("#new")->type(), ElementType::Circle);
+}
+
+TEST(SVGDocument, ApplySourceEditProjectsSubtreeElementFamilies) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <g id="group"><old/></g>
+    </svg>
+  )");
+  const std::size_t editStart = document.source().find("<old/>");
+  const std::size_t editEnd = document.source().find("</g>");
+  ASSERT_NE(editStart, std::string_view::npos);
+  ASSERT_NE(editEnd, std::string_view::npos);
+
+  xml::ApplySourceEditResult result = document.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(editStart), FileOffset::Offset(editEnd)},
+      .replacement =
+          R"(<a id="anchor"><tspan id="anchor-tspan">link</tspan></a><clipPath id="clip"><rect id="clip-rect"/></clipPath><defs id="defs"/><ellipse id="ellipse"/><filter id="filter"><feGaussianBlur id="blur"/></filter><line id="line"/><polygon id="polygon"/><polyline id="polyline"/>)",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, xml::ReparseScope::ElementSubtree);
+  EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+
+  ASSERT_THAT(document.querySelector("#anchor"), Optional(ElementIdEq("anchor")));
+  EXPECT_EQ(document.querySelector("#anchor")->type(), ElementType::A);
+  EXPECT_TRUE(
+      document.querySelector("#anchor")->entityHandle().all_of<components::TextComponent>());
+  ASSERT_THAT(document.querySelector("#anchor-tspan"), Optional(ElementIdEq("anchor-tspan")));
+  EXPECT_EQ(document.querySelector("#anchor-tspan")->type(), ElementType::TSpan);
+
+  ASSERT_THAT(document.querySelector("#clip"), Optional(ElementIdEq("clip")));
+  EXPECT_EQ(document.querySelector("#clip")->type(), ElementType::ClipPath);
+  EXPECT_TRUE(
+      document.querySelector("#clip")->entityHandle().all_of<components::ClipPathComponent>());
+  const auto& clipBehavior =
+      document.querySelector("#clip")->entityHandle().get<components::RenderingBehaviorComponent>();
+  EXPECT_EQ(clipBehavior.behavior, components::RenderingBehavior::Nonrenderable);
+  EXPECT_FALSE(clipBehavior.inheritsParentTransform);
+
+  ASSERT_THAT(document.querySelector("#defs"), Optional(ElementIdEq("defs")));
+  EXPECT_EQ(document.querySelector("#defs")->type(), ElementType::Defs);
+  EXPECT_EQ(document.querySelector("#defs")
+                ->entityHandle()
+                .get<components::RenderingBehaviorComponent>()
+                .behavior,
+            components::RenderingBehavior::Nonrenderable);
+
+  ASSERT_THAT(document.querySelector("#filter"), Optional(ElementIdEq("filter")));
+  EXPECT_EQ(document.querySelector("#filter")->type(), ElementType::Filter);
+  EXPECT_TRUE(
+      document.querySelector("#filter")->entityHandle().all_of<components::FilterComponent>());
+  EXPECT_EQ(document.querySelector("#filter")
+                ->entityHandle()
+                .get<components::RenderingBehaviorComponent>()
+                .behavior,
+            components::RenderingBehavior::Nonrenderable);
+
+  ASSERT_THAT(document.querySelector("#blur"), Optional(ElementIdEq("blur")));
+  EXPECT_EQ(document.querySelector("#blur")->type(), ElementType::FeGaussianBlur);
+  EXPECT_TRUE(document.querySelector("#blur")
+                  ->entityHandle()
+                  .all_of<components::FilterPrimitiveComponent>());
+  EXPECT_TRUE(document.querySelector("#blur")
+                  ->entityHandle()
+                  .all_of<components::FEGaussianBlurComponent>());
+  EXPECT_EQ(document.querySelector("#blur")
+                ->entityHandle()
+                .get<components::RenderingBehaviorComponent>()
+                .behavior,
+            components::RenderingBehavior::Nonrenderable);
+
+  EXPECT_EQ(document.querySelector("#ellipse")->type(), ElementType::Ellipse);
+  EXPECT_EQ(document.querySelector("#line")->type(), ElementType::Line);
+  EXPECT_EQ(document.querySelector("#polygon")->type(), ElementType::Polygon);
+  EXPECT_EQ(document.querySelector("#polyline")->type(), ElementType::Polyline);
 }
 
 TEST(SVGDocument, ApplySourceEditReportsOpeningTagRenameUnsupported) {

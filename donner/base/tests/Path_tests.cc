@@ -924,10 +924,22 @@ TEST(Path, TangentAtDegenerateCubicAdjustsEndpointSamples) {
   EXPECT_GT(startTangent.x, 0.0);
   EXPECT_NEAR(startTangent.y, 0.0, 1e-9);
 
+  Path degenerateAtStartControls =
+      PathBuilder().moveTo({0, 0}).curveTo({0, 0}, {0, 0}, {20, 0}).build();
+  Vector2d startControlsTangent = degenerateAtStartControls.tangentAt(1, 0.0);
+  EXPECT_GT(startControlsTangent.x, 0.0);
+  EXPECT_NEAR(startControlsTangent.y, 0.0, 1e-9);
+
   Path degenerateAtEnd = PathBuilder().moveTo({0, 0}).curveTo({10, 0}, {20, 0}, {20, 0}).build();
   Vector2d endTangent = degenerateAtEnd.tangentAt(1, 1.0);
   EXPECT_GT(endTangent.x, 0.0);
   EXPECT_NEAR(endTangent.y, 0.0, 1e-9);
+
+  Path degenerateAtEndControls =
+      PathBuilder().moveTo({0, 0}).curveTo({20, 0}, {20, 0}, {20, 0}).build();
+  Vector2d endControlsTangent = degenerateAtEndControls.tangentAt(1, 1.0);
+  EXPECT_GT(endControlsTangent.x, 0.0);
+  EXPECT_NEAR(endControlsTangent.y, 0.0, 1e-9);
 
   Path fullyDegenerate = PathBuilder().moveTo({4, 4}).curveTo({4, 4}, {4, 4}, {4, 4}).build();
   ExpectNear(fullyDegenerate.tangentAt(1, 0.5), Vector2d(0, 0));

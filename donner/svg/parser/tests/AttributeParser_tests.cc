@@ -426,6 +426,7 @@ TEST(AttributeParserTest, MaskUnitsAndInvalidValues) {
       <defs>
         <mask id="valid" x="1" y="2" width="3" height="4" maskUnits="userSpaceOnUse"
               maskContentUnits="objectBoundingBox"/>
+        <mask id="content-user" maskContentUnits="userSpaceOnUse"/>
         <mask id="invalid" maskUnits="bad" maskContentUnits="bad"/>
       </defs>
     </svg>
@@ -441,6 +442,9 @@ TEST(AttributeParserTest, MaskUnitsAndInvalidValues) {
   EXPECT_EQ(valid.height(), Lengthd(4));
   EXPECT_EQ(valid.maskUnits(), MaskUnits::UserSpaceOnUse);
   EXPECT_EQ(valid.maskContentUnits(), MaskContentUnits::ObjectBoundingBox);
+
+  auto contentUser = QueryElement<SVGMaskElement>(document, "#content-user");
+  EXPECT_EQ(contentUser.maskContentUnits(), MaskContentUnits::UserSpaceOnUse);
 
   auto invalid = QueryElement<SVGMaskElement>(document, "#invalid");
   EXPECT_EQ(invalid.maskUnits(), MaskUnits::ObjectBoundingBox);

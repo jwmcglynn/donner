@@ -12,7 +12,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  workflow_dispatch:  # Re-run on demand (e.g. before final merge)
+  workflow_dispatch: # Re-run on demand (e.g. before final merge)
 
 permissions:
   contents: read
@@ -166,7 +166,7 @@ jobs:
             esac
 
             case "$path" in
-              .bazelrc|.github/workflows/*|.github/actions/*|docs/*|*.md|tools/binary_size.sh|tools/build_docs.sh|tools/coverage.sh|tools/filter_coverage.py|tools/lcov_metrics.py|tools/lcov_metrics_tests.py|tools/generate_build_report.py|tools/generate_build_report_tests.py)
+              .bazelrc|.github/workflows/*|.github/actions/*|docs/*|*.md|tools/binary_size.sh|tools/build_docs.sh|tools/coverage.sh|tools/filter_coverage.py|tools/filter_coverage_tests.py|tools/lcov_metrics.py|tools/lcov_metrics_tests.py|tools/generate_build_report.py|tools/generate_build_report_tests.py)
                 ;;
               *)
                 smoke_only=false
@@ -341,10 +341,19 @@ jobs:
           echo "::group::Disk before coverage"
           df -h / "$GITHUB_WORKSPACE" "$RUNNER_TEMP"
           echo "::endgroup::"
-          tools/coverage.sh --no-html "${TARGETS[@]}"
+          tools/coverage.sh --quiet --no-html "${TARGETS[@]}"
           echo "::group::Disk after coverage"
           df -h / "$GITHUB_WORKSPACE" "$RUNNER_TEMP"
           echo "::endgroup::"
+
+      - name: Upload coverage diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-diagnostics-${{ github.job }}-${{ github.run_attempt }}
+          path: coverage-report/*.log
+          retention-days: 3
+          if-no-files-found: ignore
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v7
@@ -354,7 +363,7 @@ jobs:
           disable_search: true
           flags: unittests
           fail_ci_if_error: true
-          verbose: true
+          verbose: false
 
   coverage-self-hosted:
     runs-on: [self-hosted, linux, arm64]
@@ -436,7 +445,7 @@ jobs:
           echo "DONNER_CI_DIAGNOSTICS_DIR=$DONNER_CI_DIAGNOSTICS_DIR" >> "$GITHUB_ENV"
           read -r -a TARGETS <<< "${{ needs.determine-targets.outputs.targets }}"
           echo "Coverage target selection: fallback=${{ needs.determine-targets.outputs.fallback }} reason=${{ needs.determine-targets.outputs.fallback_reason }} count=${{ needs.determine-targets.outputs.target_count }}"
-          tools/coverage.sh --no-html "${TARGETS[@]}"
+          tools/coverage.sh --quiet --no-html "${TARGETS[@]}"
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v7
@@ -451,7 +460,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ci-diagnostics-${{ github.job }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/donner-ci-diagnostics/
+          path: |
+            ${{ runner.temp }}/donner-ci-diagnostics/
+            coverage-report/*.log
           retention-days: 3
           if-no-files-found: ignore
 
@@ -479,4 +490,4 @@ jobs:
           disable_search: true
           flags: unittests
           fail_ci_if_error: true
-          verbose: true
+          verbose: false

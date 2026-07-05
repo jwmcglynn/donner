@@ -140,6 +140,18 @@ TEST(SmallVector, MoveConstruction) {
   EXPECT_THAT(moved, ElementsAre(1, 2, 3, 4));
 }
 
+TEST(SmallVector, MoveConstructionTransfersLongStorage) {
+  SmallVector<int, 2> original = {1, 2, 3, 4};
+  const std::size_t originalCapacity = original.capacity();
+
+  SmallVector<int, 2> moved = std::move(original);
+
+  EXPECT_THAT(original, IsEmpty());
+  EXPECT_EQ(original.capacity(), 2);
+  EXPECT_THAT(moved, ElementsAre(1, 2, 3, 4));
+  EXPECT_EQ(moved.capacity(), originalCapacity);
+}
+
 /**
  * Validates that elements can be added to and removed from the SmallVector, and that the size is
  * updated accordingly.
@@ -243,6 +255,19 @@ TEST(SmallVector, MoveAssignment) {
   moved = std::move(original);
   EXPECT_THAT(original, IsEmpty());
   EXPECT_THAT(moved, ElementsAre(1, 2, 3, 4));
+}
+
+TEST(SmallVector, MoveAssignmentReplacesLongStorageWithLongStorage) {
+  SmallVector<int, 2> original = {1, 2, 3, 4};
+  const std::size_t originalCapacity = original.capacity();
+  SmallVector<int, 2> moved = {9, 8, 7};
+
+  moved = std::move(original);
+
+  EXPECT_THAT(original, IsEmpty());
+  EXPECT_EQ(original.capacity(), 2);
+  EXPECT_THAT(moved, ElementsAre(1, 2, 3, 4));
+  EXPECT_EQ(moved.capacity(), originalCapacity);
 }
 
 /**

@@ -12,6 +12,8 @@
 #include <thread>
 #include <vector>
 
+#include "donner/css/Color.h"
+#include "donner/editor/EditorShellInternal.h"
 #include "donner/editor/InMemoryClipboard.h"
 #include "donner/editor/gui/EditorWindow.h"
 #include "donner/editor/repro/ReproFile.h"
@@ -115,6 +117,328 @@ EditorShellOptions OptionsWithSource(std::string_view source,
 }
 
 }  // namespace
+
+TEST(EditorShellInternalTest, MapsPresentationResourcesToTelemetrySamples) {
+  PresentationResourceStats resources{
+      .overlayBytes = 11,
+      .activeTileBytes = 22,
+      .overviewTileBytes = 33,
+      .pendingRetiredBytes = 44,
+      .agedRetiredBytes = 55,
+      .totalTrackedBytes = 66,
+      .peakTrackedBytes = 77,
+      .wgpuLifetimeTextureCreates = 88,
+      .wgpuLifetimeBufferCreates = 99,
+  };
+
+  const FrameMemorySample memory = internal::MemorySampleFromPresentationResources(resources);
+  EXPECT_EQ(memory.overlayBytes, 11u);
+  EXPECT_EQ(memory.activeTileBytes, 22u);
+  EXPECT_EQ(memory.overviewTileBytes, 33u);
+  EXPECT_EQ(memory.retiredBytes, 99u);
+  EXPECT_EQ(memory.totalTrackedBytes, 66u);
+  EXPECT_EQ(memory.peakTrackedBytes, 77u);
+  EXPECT_EQ(memory.wgpuLifetimeTextureCreates, 88u);
+  EXPECT_EQ(memory.wgpuLifetimeBufferCreates, 99u);
+
+  const FrameMissResourceTelemetry telemetry =
+      internal::FrameMissTelemetryFromPresentationResources(resources);
+  EXPECT_EQ(telemetry.overlayBytes, memory.overlayBytes);
+  EXPECT_EQ(telemetry.activeTileBytes, memory.activeTileBytes);
+  EXPECT_EQ(telemetry.overviewTileBytes, memory.overviewTileBytes);
+  EXPECT_EQ(telemetry.retiredBytes, memory.retiredBytes);
+  EXPECT_EQ(telemetry.totalTrackedBytes, memory.totalTrackedBytes);
+  EXPECT_EQ(telemetry.peakTrackedBytes, memory.peakTrackedBytes);
+  EXPECT_EQ(telemetry.wgpuLifetimeTextureCreates, memory.wgpuLifetimeTextureCreates);
+  EXPECT_EQ(telemetry.wgpuLifetimeBufferCreates, memory.wgpuLifetimeBufferCreates);
+}
+
+TEST(EditorShellInternalTest, CursorForTransformHandleIntentMapsResizeAndRotateHandles) {
+  EXPECT_EQ(internal::CursorForTransformHandleIntent(
+                SelectionTransformHandleIntent{.kind = SelectionTransformHandleKind::None}),
+            ImGuiMouseCursor_Arrow);
+  EXPECT_EQ(internal::CursorForTransformHandleIntent(
+                SelectionTransformHandleIntent{.kind = SelectionTransformHandleKind::Rotate}),
+            ImGuiMouseCursor_ResizeAll);
+  EXPECT_EQ(internal::CursorForTransformHandleIntent(SelectionTransformHandleIntent{
+                .kind = SelectionTransformHandleKind::Resize,
+                .corner = SelectionTransformCorner::TopLeft,
+            }),
+            ImGuiMouseCursor_ResizeNWSE);
+  EXPECT_EQ(internal::CursorForTransformHandleIntent(SelectionTransformHandleIntent{
+                .kind = SelectionTransformHandleKind::Resize,
+                .corner = SelectionTransformCorner::BottomRight,
+            }),
+            ImGuiMouseCursor_ResizeNWSE);
+  EXPECT_EQ(internal::CursorForTransformHandleIntent(SelectionTransformHandleIntent{
+                .kind = SelectionTransformHandleKind::Resize,
+                .corner = SelectionTransformCorner::TopRight,
+            }),
+            ImGuiMouseCursor_ResizeNESW);
+  EXPECT_EQ(internal::CursorForTransformHandleIntent(SelectionTransformHandleIntent{
+                .kind = SelectionTransformHandleKind::Resize,
+                .corner = SelectionTransformCorner::BottomLeft,
+            }),
+            ImGuiMouseCursor_ResizeNESW);
+}
+
+TEST(EditorShellInternalTest, ActiveAttributePaintSlotHandlesNoneColorAndCustomValues) {
+  const internal::ToolbarPaintSlotState none =
+      internal::ToolbarPaintSlotStateForActiveAttribute("none");
+  EXPECT_TRUE(none.isNone);
+  EXPECT_FALSE(none.isCustom);
+
+  const internal::ToolbarPaintSlotState color =
+      internal::ToolbarPaintSlotStateForActiveAttribute("#123456");
+  EXPECT_FALSE(color.isNone);
+  EXPECT_FALSE(color.isCustom);
+  EXPECT_EQ(color.color, css::RGBA::RGB(0x12, 0x34, 0x56));
+
+  const internal::ToolbarPaintSlotState custom =
+      internal::ToolbarPaintSlotStateForActiveAttribute("url(#paint)");
+  EXPECT_FALSE(custom.isNone);
+  EXPECT_TRUE(custom.isCustom);
+  EXPECT_EQ(custom.color, internal::PaintServerFallbackColor());
+  EXPECT_EQ(custom.customLabel, "url(#paint)");
+}
+
+TEST(EditorShellInternalTest, PaintServerSlotHandlesVariantPaintSources) {
+  const css::RGBA currentColor = css::RGBA::RGB(0x10, 0x20, 0x30);
+
+  const internal::ToolbarPaintSlotState none = internal::ToolbarPaintSlotStateForPaintServer(
+      svg::PaintServer(svg::PaintServer::None{}), currentColor, nullptr, std::nullopt);
+  EXPECT_TRUE(none.isNone);
+
+  const internal::ToolbarPaintSlotState solid = internal::ToolbarPaintSlotStateForPaintServer(
+      svg::PaintServer(svg::PaintServer::Solid(css::Color(css::Color::CurrentColor{}))),
+      currentColor, nullptr, std::nullopt);
+  EXPECT_FALSE(solid.isNone);
+  EXPECT_FALSE(solid.isCustom);
+  EXPECT_EQ(solid.color, currentColor);
+
+  const internal::ToolbarPaintSlotState referenced = internal::ToolbarPaintSlotStateForPaintServer(
+      svg::PaintServer(svg::PaintServer::ElementReference(
+          svg::Reference("other.svg#paint"), css::Color(css::RGBA::RGB(0x80, 0x40, 0x20)))),
+      currentColor, nullptr, std::nullopt);
+  EXPECT_FALSE(referenced.isNone);
+  EXPECT_TRUE(referenced.isCustom);
+  ASSERT_TRUE(referenced.reference.has_value());
+  EXPECT_EQ(referenced.reference->href, "other.svg#paint");
+  EXPECT_TRUE(referenced.reference->external);
+  EXPECT_EQ(referenced.color, css::RGBA::RGB(0x80, 0x40, 0x20));
+
+  const internal::ToolbarPaintSlotState contextFill = internal::ToolbarPaintSlotStateForPaintServer(
+      svg::PaintServer(svg::PaintServer::ContextFill{}), currentColor, nullptr, std::nullopt);
+  EXPECT_FALSE(contextFill.isNone);
+  EXPECT_TRUE(contextFill.isCustom);
+  EXPECT_EQ(contextFill.customLabel, "context-fill");
+
+  const internal::ToolbarPaintSlotState contextStroke =
+      internal::ToolbarPaintSlotStateForPaintServer(
+          svg::PaintServer(svg::PaintServer::ContextStroke{}), currentColor, nullptr, std::nullopt);
+  EXPECT_FALSE(contextStroke.isNone);
+  EXPECT_TRUE(contextStroke.isCustom);
+  EXPECT_EQ(contextStroke.customLabel, "context-stroke");
+}
+
+TEST(EditorShellInternalTest, PaintChipLabelUsesReferenceCustomAndFallbackText) {
+  internal::ToolbarPaintSlotState referenced;
+  referenced.reference = internal::ToolbarPaintReferenceState{.href = "#very_long_gradient_name"};
+  EXPECT_EQ(internal::PaintChipLabel("Fill", referenced), "Fill #very_lon...");
+
+  internal::ToolbarPaintSlotState custom;
+  custom.customLabel = "context-fill";
+  EXPECT_EQ(internal::PaintChipLabel("Stroke", custom), "Stroke context-fill");
+
+  internal::ToolbarPaintSlotState fallback;
+  EXPECT_EQ(internal::PaintChipLabel("Fill", fallback), "Fill custom");
+}
+
+TEST(EditorShellInternalTest, SelectionChipLabelsClampAndNormalizeValues) {
+  EXPECT_EQ(internal::SelectionSizeChipLabel(Box2d::FromXYWH(10.0, 20.0, -13.6, 7.4)), "14 x 7");
+  EXPECT_EQ(internal::SelectionPositionChipLabel(Box2d::FromXYWH(-2.4, 3.6, 10.0, 20.0)),
+            "(-2, 4)");
+  EXPECT_EQ(internal::SelectionAngleChipLabel(Transform2d::Rotate(0.0)), "0 deg");
+  EXPECT_EQ(internal::SelectionAngleChipLabel(Transform2d::Rotate(3.5)), "-159 deg");
+}
+
+TEST(EditorShellInternalTest, GeometryHelpersClampPaneWidthAndTransformBounds) {
+  EXPECT_TRUE(
+      internal::ContainsScreenPoint(Box2d::FromXYWH(10.0, 20.0, 30.0, 40.0), ImVec2(40.0f, 60.0f)));
+  EXPECT_FALSE(
+      internal::ContainsScreenPoint(Box2d::FromXYWH(10.0, 20.0, 30.0, 40.0), ImVec2(40.1f, 60.0f)));
+
+  EXPECT_FLOAT_EQ(internal::ClampSourcePaneWidthForWindow(500.0f, 1100.0f), 500.0f);
+  EXPECT_FLOAT_EQ(internal::ClampSourcePaneWidthForWindow(50.0f, 1100.0f), 240.0f);
+  EXPECT_FLOAT_EQ(internal::ClampSourcePaneWidthForWindow(1200.0f, 1100.0f), 660.0f);
+
+  const Box2d transformed = internal::TransformDocumentBox(
+      Box2d::FromXYWH(0.0, 0.0, 10.0, 20.0), Transform2d::Translate(Vector2d(5.0, -3.0)));
+  EXPECT_EQ(transformed.topLeft, Vector2d(5.0, -3.0));
+  EXPECT_EQ(transformed.bottomRight, Vector2d(15.0, 17.0));
+}
+
+TEST(EditorShellInternalTest, PendingClickBusyActionPrefersFastRedragThenCancelsBusyRender) {
+  EXPECT_EQ(internal::PendingClickBusyActionForState(/*tookFastRedrag=*/true,
+                                                     /*rendererBusy=*/true),
+            internal::PendingClickBusyAction::CompleteFastRedrag);
+  EXPECT_EQ(internal::PendingClickBusyActionForState(/*tookFastRedrag=*/true,
+                                                     /*rendererBusy=*/false),
+            internal::PendingClickBusyAction::CompleteFastRedrag);
+
+  EXPECT_EQ(internal::PendingClickBusyActionForState(/*tookFastRedrag=*/false,
+                                                     /*rendererBusy=*/true),
+            internal::PendingClickBusyAction::CancelBusyRender);
+  EXPECT_EQ(internal::PendingClickBusyActionForState(/*tookFastRedrag=*/false,
+                                                     /*rendererBusy=*/false),
+            internal::PendingClickBusyAction::RunIdleClickPath);
+}
+
+TEST(EditorShellInternalTest, PendingClickIdleActionWaitsForMarqueeIntentBeforeSlowPath) {
+  EXPECT_EQ(internal::PendingClickIdleActionForState(
+                /*leftMouseDown=*/true, /*pendingClickCanStartMarquee=*/true,
+                /*selectHoldElapsed=*/true, /*selectDragIntent=*/false),
+            internal::PendingClickIdleAction::BeginMarquee);
+  EXPECT_EQ(internal::PendingClickIdleActionForState(
+                /*leftMouseDown=*/true, /*pendingClickCanStartMarquee=*/true,
+                /*selectHoldElapsed=*/false, /*selectDragIntent=*/true),
+            internal::PendingClickIdleAction::BeginMarquee);
+
+  EXPECT_EQ(internal::PendingClickIdleActionForState(
+                /*leftMouseDown=*/true, /*pendingClickCanStartMarquee=*/true,
+                /*selectHoldElapsed=*/false, /*selectDragIntent=*/false),
+            internal::PendingClickIdleAction::WaitForMarqueeIntent);
+
+  EXPECT_EQ(internal::PendingClickIdleActionForState(
+                /*leftMouseDown=*/false, /*pendingClickCanStartMarquee=*/true,
+                /*selectHoldElapsed=*/true, /*selectDragIntent=*/true),
+            internal::PendingClickIdleAction::DispatchSlowPath);
+  EXPECT_EQ(internal::PendingClickIdleActionForState(
+                /*leftMouseDown=*/true, /*pendingClickCanStartMarquee=*/false,
+                /*selectHoldElapsed=*/true, /*selectDragIntent=*/true),
+            internal::PendingClickIdleAction::DispatchSlowPath);
+}
+
+TEST(EditorShellInternalTest, ActivePaintStateUsesFillAndStrokeAttributes) {
+  ActivePaintStyle style;
+  style.fill = "#ff0000";
+  style.stroke = "url(#paint)";
+
+  const internal::ToolbarPaintState state = internal::ToolbarPaintStateForActivePaint(style);
+
+  EXPECT_FALSE(state.fill.isNone);
+  EXPECT_FALSE(state.fill.isCustom);
+  EXPECT_EQ(state.fill.color, css::RGBA::RGB(0xff, 0x00, 0x00));
+  EXPECT_FALSE(state.stroke.isNone);
+  EXPECT_TRUE(state.stroke.isCustom);
+  EXPECT_EQ(state.stroke.customLabel, "url(#paint)");
+}
+
+TEST(EditorShellInternalTest, SourceHelpersPreferInitialSourceAndCanonicalizeTrailingNewline) {
+  const std::filesystem::path path = TempPathForTest("initial.svg");
+  WriteTextFile(path, "<svg id=\"from-file\"/>\n");
+
+  EditorShellOptions sourceOptions;
+  sourceOptions.svgPath = path.string();
+  sourceOptions.initialSource = "<svg id=\"from-memory\"/>";
+  EXPECT_EQ(internal::InitialDocumentSyncSource(sourceOptions), "<svg id=\"from-memory\"/>");
+
+  EditorShellOptions fileOptions;
+  fileOptions.svgPath = path.string();
+  EXPECT_EQ(internal::InitialDocumentSyncSource(fileOptions), "<svg id=\"from-file\"/>\n");
+
+  EditorShellOptions missingOptions;
+  missingOptions.svgPath = path.string() + ".missing";
+  EXPECT_TRUE(internal::InitialDocumentSyncSource(missingOptions).empty());
+
+  EXPECT_EQ(internal::CanonicalizeForTextEditor("abc\n"), "abc");
+  EXPECT_EQ(internal::CanonicalizeForTextEditor("abc"), "abc");
+  EXPECT_TRUE(internal::CanonicalizeForTextEditor("").empty());
+}
+
+TEST(EditorShellInternalTest, ReferenceHighlightChipLabelCombinesDirections) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kReferencedSvg));
+  auto target = app.document().document().querySelector("#target");
+  auto paint = app.document().document().querySelector("#paint");
+  auto referrer = app.document().document().querySelector("#referrer");
+  ASSERT_TRUE(target.has_value());
+  ASSERT_TRUE(paint.has_value());
+  ASSERT_TRUE(referrer.has_value());
+
+  ReferenceHighlightSummary summary;
+  EXPECT_TRUE(internal::ReferenceHighlightChipLabel(summary).empty());
+
+  summary.referencedElements = {*target, *paint};
+  EXPECT_EQ(internal::ReferenceHighlightChipLabel(summary), "-> 2");
+
+  summary.referencingElements = {*target, *paint, *referrer};
+  EXPECT_EQ(internal::ReferenceHighlightChipLabel(summary), "-> 2  <- 3");
+
+  summary.referencedElements.clear();
+  EXPECT_EQ(internal::ReferenceHighlightChipLabel(summary), "<- 3");
+}
+
+TEST(EditorShellInternalTest, ElementCollectionHelpersKeepUniqueElementsAndLabels) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kReferencedSvg));
+
+  auto target = app.document().document().querySelector("#target");
+  auto paint = app.document().document().querySelector("#paint");
+  ASSERT_TRUE(target.has_value());
+  ASSERT_TRUE(paint.has_value());
+
+  std::vector<svg::SVGElement> elements;
+  internal::AddUniqueElements(&elements, std::vector<svg::SVGElement>{*target, *paint, *target});
+
+  ASSERT_EQ(elements.size(), 2u);
+  EXPECT_TRUE(internal::ContainsElement(elements, *target));
+  EXPECT_TRUE(internal::ContainsElement(elements, *paint));
+  EXPECT_EQ(internal::ElementContextMenuLabel(*target), "<rect> #target");
+  EXPECT_EQ(internal::ElementContextMenuLabel(*paint), "<linearGradient> #paint");
+}
+
+TEST(EditorShellInternalTest, ResolveDocumentViewBoxUsesViewBoxIntrinsicSizeAndDefault) {
+  EditorApp viewBoxApp;
+  ASSERT_TRUE(viewBoxApp.loadFromString(kInitialSvg));
+  EXPECT_EQ(internal::ResolveDocumentViewBox(viewBoxApp.document().document()),
+            Box2d::FromXYWH(0.0, 0.0, 120.0, 80.0));
+
+  EditorApp intrinsicApp;
+  ASSERT_TRUE(intrinsicApp.loadFromString(kIntrinsicSizeSvg));
+  EXPECT_EQ(internal::ResolveDocumentViewBox(intrinsicApp.document().document()),
+            Box2d::FromXYWH(0.0, 0.0, 160.0, 90.0));
+
+  EditorApp defaultApp;
+  ASSERT_TRUE(defaultApp.loadFromString("<svg xmlns=\"http://www.w3.org/2000/svg\"/>"));
+  EXPECT_EQ(internal::ResolveDocumentViewBox(defaultApp.document().document()),
+            Box2d::FromXYWH(0.0, 0.0, 512.0, 512.0));
+}
+
+TEST(EditorShellInternalTest, PaintReferenceStateIncludesSameDocumentSourceRange) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kPaintToolbarSvg));
+  svg::SVGDocument& document = app.document().document();
+
+  const internal::ToolbarPaintReferenceState local = internal::ToolbarPaintReferenceStateFor(
+      &document, document.source(), svg::Reference("#paint"));
+  EXPECT_EQ(local.href, "#paint");
+  EXPECT_FALSE(local.external);
+  ASSERT_TRUE(local.sourceRange.has_value());
+  EXPECT_NE(std::string_view(document.source())
+                .substr(local.sourceRange->start, local.sourceRange->end - local.sourceRange->start)
+                .find("<linearGradient id=\"paint\""),
+            std::string_view::npos);
+
+  const internal::ToolbarPaintReferenceState withoutSource =
+      internal::ToolbarPaintReferenceStateFor(&document, std::nullopt, svg::Reference("#paint"));
+  EXPECT_FALSE(withoutSource.sourceRange.has_value());
+
+  const internal::ToolbarPaintReferenceState external = internal::ToolbarPaintReferenceStateFor(
+      &document, document.source(), svg::Reference("other.svg#paint"));
+  EXPECT_TRUE(external.external);
+  EXPECT_FALSE(external.sourceRange.has_value());
+}
 
 class EditorShellTestAccess {
 public:
@@ -376,6 +700,16 @@ public:
 
   static void RenderLayerPanelContents(EditorShell& shell) { shell.renderLayerPanelContents(); }
 
+  static void RenderReferenceHighlightChip(EditorShell& shell) {
+    shell.renderReferenceHighlightChip();
+  }
+
+  static void RenderSelectionSizeChip(
+      EditorShell& shell, const SelectionTransformHandleIntent& hoverTransformIntent,
+      const std::optional<SelectTool::ActiveGesturePreview>& activeGesturePreview) {
+    shell.renderSelectionSizeChip(hoverTransformIntent, activeGesturePreview);
+  }
+
   static void ApplyMenuActions(EditorShell& shell, const MenuBarActions& actions) {
     shell.applyMenuActions(actions);
   }
@@ -504,6 +838,9 @@ public:
 
   static bool SourcePaneVisible(const EditorShell& shell) { return shell.sourcePaneVisible_; }
   static float SourcePaneWidth(const EditorShell& shell) { return shell.sourcePaneWidth_; }
+  static void SetSourcePaneWidth(EditorShell& shell, float value) {
+    shell.sourcePaneWidth_ = value;
+  }
   static bool SourceFocusMode(const EditorShell& shell) { return shell.sourceFocusMode_; }
   static bool SourceFocusOriginatedInStyle(const EditorShell& shell) {
     return shell.sourceFocusOriginatedInStyle_;
@@ -761,6 +1098,48 @@ Box2d RenderSourcePaneSplitterFrame(gui::EditorWindow& window, EditorShell& shel
   return Box2d(Vector2d(itemMin.x, itemMin.y), Vector2d(itemMax.x, itemMax.y));
 }
 
+void RenderReferenceHighlightChipFrame(gui::EditorWindow& window, EditorShell& shell,
+                                       const ImVec2& mouse, bool mouseDown) {
+  ImGuiIO& io = ImGui::GetIO();
+  io.DisplaySize = ImVec2(640.0f, 480.0f);
+  if (!io.Fonts->IsBuilt()) {
+    io.Fonts->Build();
+  }
+  io.AddMousePosEvent(mouse.x, mouse.y);
+  io.AddMouseButtonEvent(0, mouseDown);
+
+  window.beginFrame();
+  constexpr ImGuiWindowFlags kHostFlags =
+      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings;
+  ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(640.0f, 480.0f), ImGuiCond_Always);
+  ImGui::Begin("EditorShellReferenceChipHost", nullptr, kHostFlags);
+  EditorShellTestAccess::RenderReferenceHighlightChip(shell);
+  ImGui::End();
+  window.endFrame();
+}
+
+void RenderSelectionSizeChipFrame(
+    gui::EditorWindow& window, EditorShell& shell,
+    const SelectionTransformHandleIntent& hoverTransformIntent,
+    const std::optional<SelectTool::ActiveGesturePreview>& activeGesturePreview) {
+  ImGuiIO& io = ImGui::GetIO();
+  io.DisplaySize = ImVec2(640.0f, 480.0f);
+  if (!io.Fonts->IsBuilt()) {
+    io.Fonts->Build();
+  }
+
+  window.beginFrame();
+  constexpr ImGuiWindowFlags kHostFlags =
+      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings;
+  ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(640.0f, 480.0f), ImGuiCond_Always);
+  ImGui::Begin("EditorShellSelectionChipHost", nullptr, kHostFlags);
+  EditorShellTestAccess::RenderSelectionSizeChip(shell, hoverTransformIntent, activeGesturePreview);
+  ImGui::End();
+  window.endFrame();
+}
+
 TEST(EditorShellTest, HiddenWindowShellConstructsAndRunsFrames) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
@@ -899,6 +1278,39 @@ TEST(EditorShellTest, SelectionReadbackAndIdleWakeReflectSourceState) {
   const std::optional<float> idleWake = shell.nextIdleWakeSeconds();
   ASSERT_TRUE(idleWake.has_value());
   EXPECT_GE(*idleWake, 0.0f);
+}
+
+TEST(EditorShellTest, LayerInspectorReadbackIncludesSelectedStyleAndPathDiagnostics) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  constexpr std::string_view kDiagnosticSvg = R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80" viewBox="0 0 120 80">
+  <path id="target" d="M 10 12 L 50 12 L 50 36 Z" style="fill: #010203; stroke: #040506"/>
+</svg>
+)svg";
+  EditorShell shell(window, OptionsWithSource(kDiagnosticSvg, "diagnostics.svg"));
+  ASSERT_TRUE(shell.valid());
+  auto target = EditorShellTestAccess::App(shell).document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  EditorShellTestAccess::App(shell).setSelection(*target);
+  (void)target->getComputedStyle();
+  RunFramesUntilDisplayedSelectionBounds(window, shell);
+
+  const LayerInspectorStatusReadback status = shell.layerInspectorStatusForReadback();
+
+  ASSERT_TRUE(status.selectedStyleAttribute.has_value());
+  EXPECT_NE(status.selectedStyleAttribute->find("fill: #010203"), std::string::npos);
+  ASSERT_TRUE(status.selectedLocalStyleFill.has_value());
+  EXPECT_FALSE(status.selectedLocalStyleFill->empty());
+  ASSERT_TRUE(status.selectedComputedFill.has_value());
+  EXPECT_FALSE(status.selectedComputedFill->empty());
+  ASSERT_TRUE(status.selectedRenderingInstanceFill.has_value());
+  EXPECT_FALSE(status.selectedRenderingInstanceFill->empty());
+  ASSERT_TRUE(status.selectedPathDataAttribute.has_value());
+  EXPECT_EQ(*status.selectedPathDataAttribute, "M 10 12 L 50 12 L 50 36 Z");
 }
 
 TEST(EditorShellTest, ReplayActionsSwitchToolsAndIgnoreUnknownToolNames) {
@@ -1167,11 +1579,22 @@ TEST(EditorShellTest, OpenSaveAndRevertUpdateDocumentAndSourceState) {
   EXPECT_FALSE(EditorShellTestAccess::TrySavePath(shell, "", &error));
   EXPECT_EQ(error, "Choose a file path.");
 
+  EditorShell invalidSaveShell(window, OptionsWithSource("<svg><rect></svg>", "broken-save.svg"));
+  ASSERT_TRUE(invalidSaveShell.valid());
+  error.clear();
+  EXPECT_FALSE(EditorShellTestAccess::TrySavePath(invalidSaveShell, "ignored.svg", &error));
+  EXPECT_EQ(error, "No SVG document is loaded.");
+
   const std::filesystem::path savePath = TempPathForTest("saved.svg");
   error.clear();
   EXPECT_TRUE(EditorShellTestAccess::TrySavePath(shell, savePath.string(), &error)) << error;
   EXPECT_NE(ReadTextFile(savePath).find("opened"), std::string::npos);
   EXPECT_FALSE(EditorShellTestAccess::App(shell).isDirty());
+
+  error.clear();
+  EXPECT_FALSE(EditorShellTestAccess::TrySavePath(
+      shell, TempPathForTest("missing_directory/saved.svg").string(), &error));
+  EXPECT_FALSE(error.empty());
 
   EditorShellTestAccess::Source(shell).setText("<svg>dirty</svg>");
   EditorShellTestAccess::App(shell).markDirty();
@@ -1315,11 +1738,19 @@ TEST(EditorShellTest, DiagnosticsLoggingHonorsEnvironmentTargets) {
   EXPECT_EQ(EditorShellTestAccess::ResourceDiagnosticsFrame(shell), 1u);
   EditorShellTestAccess::MaybeLogResourceDiagnostics(shell, frameCost);
   EXPECT_EQ(EditorShellTestAccess::ResourceDiagnosticsFrame(shell), 2u);
+  for (int frame = 3; frame <= 60; ++frame) {
+    EditorShellTestAccess::MaybeLogResourceDiagnostics(shell, frameCost);
+  }
+  EXPECT_EQ(EditorShellTestAccess::ResourceDiagnosticsFrame(shell), 60u);
   unsetenv("DONNER_EDITOR_RESOURCE_LOG");
 
-  EditorShellTestAccess::NoteFrameDelta(shell, 25.0f);
   const std::filesystem::path telemetryPath = TempPathForTest("frame_miss.jsonl");
   std::filesystem::remove(telemetryPath);
+  setenv("DONNER_EDITOR_FRAME_MISS_LOG", telemetryPath.string().c_str(), /*overwrite=*/1);
+  EditorShellTestAccess::MaybeLogFrameMissTelemetry(shell, frameCost);
+  EXPECT_FALSE(std::filesystem::exists(telemetryPath));
+
+  EditorShellTestAccess::NoteFrameDelta(shell, 25.0f);
   setenv("DONNER_EDITOR_FRAME_MISS_LOG", "false", /*overwrite=*/1);
   EditorShellTestAccess::MaybeLogFrameMissTelemetry(shell, frameCost);
   EXPECT_FALSE(std::filesystem::exists(telemetryPath));
@@ -1912,6 +2343,33 @@ TEST(EditorShellTest, SourcePaneSplitterDragCollapsesPane) {
   EXPECT_FALSE(EditorShellTestAccess::SourcePaneVisible(shell));
 }
 
+TEST(EditorShellTest, SourcePaneSplitterDragExpandsVisiblePane) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+
+  EditorShellTestAccess::SetSourcePaneWidth(shell, 260.0f);
+  const Box2d sourceRect = RenderSourcePaneSplitterFrame(window, shell, /*sourcePaneWidth=*/260.0f,
+                                                         ImVec2(-100.0f, -100.0f),
+                                                         /*mouseDown=*/false,
+                                                         /*windowWidth=*/1000.0f);
+  const ImVec2 sourceCenter(
+      static_cast<float>((sourceRect.topLeft.x + sourceRect.bottomRight.x) * 0.5),
+      static_cast<float>((sourceRect.topLeft.y + sourceRect.bottomRight.y) * 0.5));
+  RenderSourcePaneSplitterFrame(window, shell, /*sourcePaneWidth=*/260.0f, sourceCenter,
+                                /*mouseDown=*/true, /*windowWidth=*/1000.0f);
+  RenderSourcePaneSplitterFrame(window, shell, /*sourcePaneWidth=*/260.0f,
+                                ImVec2(sourceCenter.x + 80.0f, sourceCenter.y),
+                                /*mouseDown=*/true, /*windowWidth=*/1000.0f);
+
+  EXPECT_TRUE(EditorShellTestAccess::SourcePaneVisible(shell));
+  EXPECT_GT(EditorShellTestAccess::SourcePaneWidth(shell), 260.0f);
+}
+
 TEST(EditorShellTest, FillStrokeToolbarMouseHitTestingCoversChipsSwatchesAndTooltips) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
@@ -2087,6 +2545,42 @@ TEST(EditorShellTest, ReferenceHighlightActiveAndChipRectUseSelectionBoundsCache
   EXPECT_GE(chipRect->topLeft.y, shell.viewportForReadback().imageScreenRect().topLeft.y);
 }
 
+TEST(EditorShellTest, ReferenceHighlightChipRendersHoverAndClickStates) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kReferencedSvg, "referenced.svg"));
+  ASSERT_TRUE(shell.valid());
+  auto target = EditorShellTestAccess::App(shell).document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  EditorShellTestAccess::App(shell).setSelection(*target);
+  RunFramesUntilDisplayedSelectionBounds(window, shell);
+  ASSERT_GT(EditorShellTestAccess::DisplayedSelectionBoundsCount(shell), 0u);
+  EditorShellTestAccess::RefreshReferenceHighlightSummaryIfNeeded(shell);
+
+  const std::optional<Box2d> chipRect =
+      EditorShellTestAccess::ReferenceHighlightChipScreenRect(shell, "-> 2");
+  ASSERT_TRUE(chipRect.has_value());
+  const ImVec2 chipCenter(
+      static_cast<float>((chipRect->topLeft.x + chipRect->bottomRight.x) * 0.5),
+      static_cast<float>((chipRect->topLeft.y + chipRect->bottomRight.y) * 0.5));
+
+  RenderReferenceHighlightChipFrame(window, shell, chipCenter, /*mouseDown=*/false);
+  EXPECT_TRUE(EditorShellTestAccess::ReferenceHighlightChipHovered(shell));
+  EXPECT_FALSE(EditorShellTestAccess::ReferenceHighlightActive(shell));
+
+  RenderReferenceHighlightChipFrame(window, shell, chipCenter, /*mouseDown=*/true);
+  EXPECT_TRUE(EditorShellTestAccess::ReferenceHighlightActive(shell));
+  EXPECT_FALSE(EditorShellTestAccess::ReferenceHighlightElements(shell).empty());
+
+  RenderReferenceHighlightChipFrame(window, shell, ImVec2(-100.0f, -100.0f),
+                                    /*mouseDown=*/false);
+  EXPECT_FALSE(EditorShellTestAccess::ReferenceHighlightChipHovered(shell));
+  EXPECT_TRUE(EditorShellTestAccess::ReferenceHighlightActive(shell));
+}
+
 TEST(EditorShellTest, SelectionChipBoundsUseActiveGesturePreviews) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
@@ -2127,6 +2621,15 @@ TEST(EditorShellTest, SelectionChipBoundsUseActiveGesturePreviews) {
       EditorShellTestAccess::SelectionChipAnchorScreen(shell, rotatePreview);
   ASSERT_TRUE(rotateAnchor.has_value());
   EXPECT_NE(*rotateAnchor, *moveAnchor);
+
+  const SelectionTransformHandleIntent resizeIntent{
+      .kind = SelectionTransformHandleKind::Resize,
+      .corner = SelectionTransformCorner::TopLeft,
+  };
+  RenderSelectionSizeChipFrame(window, shell, resizeIntent, std::nullopt);
+  RenderSelectionSizeChipFrame(window, shell, SelectionTransformHandleIntent{}, movePreview);
+  RenderSelectionSizeChipFrame(window, shell, SelectionTransformHandleIntent{}, rotatePreview);
+  EXPECT_TRUE(shell.valid());
 }
 
 TEST(EditorShellTest, SourceHoverRangeGuardsRejectEmptyNoDocumentAndDirtySource) {

@@ -358,6 +358,10 @@ TEST(SelectorParser, InvalidAttributeSelector) {
 
   EXPECT_THAT(SelectorParser::Parse("[attr/]"),
               ParseErrorIs("Expected attribute matcher ('~=', '|=', '^=', '$=', '*=', or '=')"));
+
+  EXPECT_THAT(SelectorParser::Parse("[attr=~value]"),
+              ParseErrorIs("Expected ident or string after '=', found '=~'. Did you mean '~=', "
+                           "'|=', '^=', '$=', or '*='?"));
 }
 
 // view-source:http://test.csswg.org/suites/selectors-4_dev/nightly-unstable/html/is.htm
@@ -531,6 +535,26 @@ TEST(SelectorParsing, ForgivingRelativeSelectorList) {
                   ComplexSelectorIs(EntryIs(Combinator::Child, TypeSelectorIs("p"))),
                   ComplexSelectorIs(EntryIs(Combinator::NextSibling, TypeSelectorIs("ol"))),
                   ComplexSelectorIs(EntryIs(Combinator::SubsequentSibling, TypeSelectorIs("h2")))));
+
+  EXPECT_THAT(
+      SelectorParser::ParseForgivingRelativeSelectorList(TokenizeString("> p, ?, + ol")),
+      SelectorsAre(ComplexSelectorIs(EntryIs(Combinator::Child, TypeSelectorIs("p"))),
+                   ComplexSelectorIs(EntryIs(Combinator::NextSibling, TypeSelectorIs("ol")))));
+}
+
+TEST(SelectorParser, InvalidNthChildSuffixesDoNotRejectTheSelector) {
+  EXPECT_THAT(SelectorParser::Parse(":nth-child(2n foo)"),
+              ParseResultIs(ComplexSelectorIs(EntryIs(PseudoClassSelectorIs(
+                  "nth-child", ElementsAre(testing::_, testing::_, testing::_))))));
+
+  EXPECT_THAT(SelectorParser::Parse(":nth-child(2n of)"),
+              ParseResultIs(ComplexSelectorIs(EntryIs(PseudoClassSelectorIs(
+                  "nth-child", ElementsAre(testing::_, testing::_, testing::_))))));
+
+  EXPECT_THAT(SelectorParser::Parse(":nth-of-type(2n of .item)"),
+              ParseResultIs(ComplexSelectorIs(EntryIs(PseudoClassSelectorIs(
+                  "nth-of-type", ElementsAre(testing::_, testing::_, testing::_, testing::_,
+                                             testing::_, testing::_))))));
 }
 
 // TODO: Add more tests from

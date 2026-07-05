@@ -14,6 +14,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <system_error>
 
 #include "donner/editor/app/EditorRepl.h"
 
@@ -99,6 +100,59 @@ TEST_F(RenderSessionTest, FetchErrorKeepsPreviousBitmap) {
   EXPECT_EQ(app.lastGoodBitmap().pixels, goodBytes);
 }
 
+TEST_F(RenderSessionTest, NavigateRejectsEmptyUri) {
+  RenderSession app(Options());
+
+  const auto& snap = app.navigate("");
+
+  EXPECT_EQ(snap.status, RenderSessionStatus::kFetchError);
+  EXPECT_NE(snap.message.find("empty uri"), std::string::npos) << snap.message;
+  EXPECT_TRUE(app.lastGoodBitmap().pixels.empty());
+}
+
+TEST_F(RenderSessionTest, NavigateRejectsUnsupportedScheme) {
+  RenderSession app(Options());
+
+  const auto& snap = app.navigate("https://example.test/image.svg");
+
+  EXPECT_EQ(snap.status, RenderSessionStatus::kFetchError);
+  EXPECT_NE(snap.message.find("unsupported scheme"), std::string::npos) << snap.message;
+  EXPECT_TRUE(app.lastGoodBitmap().pixels.empty());
+}
+
+TEST_F(RenderSessionTest, NavigateLoadsFileSchemeUri) {
+  const auto path = WriteSvg("red.svg", kSimpleSvg);
+  RenderSession app(Options());
+
+  const auto& snap = app.navigate("file://" + path.string());
+
+  ASSERT_EQ(snap.status, RenderSessionStatus::kRendered) << snap.message;
+  EXPECT_EQ(snap.bitmap.dimensions.x, 64);
+  EXPECT_EQ(snap.bitmap.dimensions.y, 48);
+}
+
+TEST_F(RenderSessionTest, NavigateRejectsDirectoryInput) {
+  std::filesystem::create_directories(tmpDir_ / "assets");
+  RenderSession app(Options());
+
+  const auto& snap = app.navigate("assets");
+
+  EXPECT_EQ(snap.status, RenderSessionStatus::kFetchError);
+  EXPECT_NE(snap.message.find("not a regular file"), std::string::npos) << snap.message;
+}
+
+TEST_F(RenderSessionTest, NavigateRejectsFilesOverConfiguredLimit) {
+  WriteSvg("large.svg", kSimpleSvg);
+  RenderSessionOptions options = Options();
+  options.sourceOptions.maxFileBytes = 1;
+  RenderSession app(options);
+
+  const auto& snap = app.navigate("large.svg");
+
+  EXPECT_EQ(snap.status, RenderSessionStatus::kFetchError);
+  EXPECT_NE(snap.message.find("maxFileBytes"), std::string::npos) << snap.message;
+}
+
 TEST_F(RenderSessionTest, ParseErrorSurfacesDistinctStatus) {
   WriteSvg("garbage.svg", "this is not svg at all");
   RenderSession app(Options());
@@ -106,6 +160,27 @@ TEST_F(RenderSessionTest, ParseErrorSurfacesDistinctStatus) {
   EXPECT_EQ(snap.status, RenderSessionStatus::kParseError);
   EXPECT_FALSE(snap.message.empty());
   EXPECT_NE(snap.message.find("parse"), std::string::npos);
+}
+
+TEST_F(RenderSessionTest, ReloadWithoutDocumentReportsNoDocument) {
+  RenderSession app(Options());
+
+  const auto& snap = app.reload();
+
+  EXPECT_EQ(snap.status, RenderSessionStatus::kEmpty);
+  EXPECT_NE(snap.message.find("no document loaded"), std::string::npos) << snap.message;
+}
+
+TEST_F(RenderSessionTest, ResizeRejectsInvalidDimensionsAndNoDocument) {
+  RenderSession app(Options());
+
+  const auto& invalid = app.resize(0, 48);
+  EXPECT_EQ(invalid.status, RenderSessionStatus::kEmpty);
+  EXPECT_NE(invalid.message.find("must be positive"), std::string::npos) << invalid.message;
+
+  const auto& noDocument = app.resize(32, 24);
+  EXPECT_EQ(noDocument.status, RenderSessionStatus::kEmpty);
+  EXPECT_NE(noDocument.message.find("no document loaded"), std::string::npos) << noDocument.message;
 }
 
 TEST_F(RenderSessionTest, ResizeReRendersAtNewViewport) {
@@ -227,6 +302,20 @@ TEST_F(RenderSessionTest, PollForChangesDetectsFileModification) {
 
   // A second poll without further edits should return false.
   EXPECT_FALSE(app.pollForChanges());
+}
+
+TEST_F(RenderSessionTest, PollForChangesIgnoresDeletedLoadedFile) {
+  const auto path = WriteSvg("watch.svg", kSimpleSvg);
+  RenderSession app(Options());
+  ASSERT_EQ(app.navigate("watch.svg").status, RenderSessionStatus::kRendered);
+  app.setWatchEnabled(true);
+
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+  ASSERT_FALSE(ec);
+
+  EXPECT_FALSE(app.pollForChanges());
+  EXPECT_EQ(app.current().status, RenderSessionStatus::kRendered);
 }
 
 // -----------------------------------------------------------------------------
@@ -355,6 +444,20 @@ TEST_F(RenderSessionReplTest, ResizeCommandParsesDimensions) {
   EXPECT_NE(text.find("rendered 128x96"), std::string::npos) << text;
 }
 
+TEST_F(RenderSessionReplTest, ReloadCommandPrintsUpdatedStatus) {
+  WriteSvg("red.svg", kSimpleSvg);
+  std::stringstream in("load red.svg\nreload\nquit\n");
+  std::stringstream out;
+
+  RenderSession app(Options());
+  RenderSessionRepl repl(app, in, out, ReplOptions());
+  EXPECT_EQ(repl.run(), 3);
+
+  const std::string text = out.str();
+  EXPECT_NE(text.find("rendered 64x48"), std::string::npos) << text;
+  EXPECT_NE(text.find("uri=red.svg"), std::string::npos) << text;
+}
+
 TEST_F(RenderSessionReplTest, ShowAndSaveReportMissingFrameBeforeLoad) {
   RenderSession app(Options());
   std::stringstream in;
@@ -389,6 +492,23 @@ TEST_F(RenderSessionReplTest, ShowDisabledAndSaveOpenFailureAreReported) {
   EXPECT_NE(text.find("save: cannot open"), std::string::npos) << text;
 }
 
+TEST_F(RenderSessionReplTest, ShowEnabledRendersTerminalPreview) {
+  WriteSvg("red.svg", kSimpleSvg);
+  RenderSession app(Options());
+  ASSERT_EQ(app.navigate("red.svg").status, RenderSessionStatus::kRendered);
+
+  RenderSessionReplOptions options = ReplOptions();
+  options.showEnabled = true;
+  std::stringstream in;
+  std::stringstream out;
+  RenderSessionRepl repl(app, in, out, options);
+
+  EXPECT_TRUE(repl.dispatch("show"));
+
+  EXPECT_EQ(out.str().find("show: disabled"), std::string::npos) << out.str();
+  EXPECT_FALSE(out.str().empty());
+}
+
 TEST_F(RenderSessionReplTest, WatchOnOffCommand) {
   RenderSession app(Options());
   std::stringstream in("watch on\nwatch off\nquit\n");
@@ -401,6 +521,33 @@ TEST_F(RenderSessionReplTest, WatchOnOffCommand) {
   EXPECT_NE(text.find("watch: disabled"), std::string::npos) << text;
   // After "watch off", the app's watch should be disabled.
   EXPECT_FALSE(app.watchEnabled());
+}
+
+TEST_F(RenderSessionReplTest, RunReportsAutoReloadWhenWatchPollDetectsChange) {
+  const auto path = WriteSvg("watch.svg", kSimpleSvg);
+  RenderSession app(Options());
+  ASSERT_EQ(app.navigate("watch.svg").status, RenderSessionStatus::kRendered);
+  app.setWatchEnabled(true);
+
+  {
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    constexpr std::string_view kUpdated =
+        R"(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="48">
+           <rect width="64" height="48" fill="blue"/>
+         </svg>)";
+    out.write(kUpdated.data(), static_cast<std::streamsize>(kUpdated.size()));
+  }
+  std::filesystem::last_write_time(path, std::filesystem::file_time_type::clock::now());
+
+  std::stringstream in("status\nquit\n");
+  std::stringstream out;
+  RenderSessionRepl repl(app, in, out, ReplOptions());
+
+  EXPECT_EQ(repl.run(), 2);
+
+  const std::string text = out.str();
+  EXPECT_NE(text.find("[auto-reloaded]"), std::string::npos) << text;
+  EXPECT_NE(text.find("rendered 64x48"), std::string::npos) << text;
 }
 
 TEST_F(RenderSessionReplTest, WatchInvalidArgPrintsUsage) {

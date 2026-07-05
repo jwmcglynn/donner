@@ -1,11 +1,17 @@
 #include "donner/svg/tool/DonnerSvgTool.h"
 
+#include <fcntl.h>
+#include <unistd.h>
+
 #include <array>
+#include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include "gmock/gmock.h"
@@ -61,6 +67,53 @@ protected:
   }
 
   std::filesystem::path tmpDir_;
+};
+
+class ScopedPseudoTerminalStdin {
+public:
+  ScopedPseudoTerminalStdin() {
+    savedStdin_ = dup(STDIN_FILENO);
+    masterFd_ = posix_openpt(O_RDWR | O_NOCTTY);
+    if (masterFd_ < 0 || grantpt(masterFd_) != 0 || unlockpt(masterFd_) != 0) {
+      return;
+    }
+
+    const char* slaveName = ptsname(masterFd_);
+    if (slaveName == nullptr) {
+      return;
+    }
+
+    slaveFd_ = open(slaveName, O_RDWR | O_NOCTTY);
+    if (savedStdin_ < 0 || slaveFd_ < 0 || dup2(slaveFd_, STDIN_FILENO) < 0) {
+      return;
+    }
+
+    active_ = true;
+  }
+
+  ~ScopedPseudoTerminalStdin() {
+    if (active_) {
+      (void)dup2(savedStdin_, STDIN_FILENO);
+    }
+    if (slaveFd_ >= 0) {
+      close(slaveFd_);
+    }
+    if (masterFd_ >= 0) {
+      close(masterFd_);
+    }
+    if (savedStdin_ >= 0) {
+      close(savedStdin_);
+    }
+  }
+
+  bool active() const { return active_; }
+  int masterFd() const { return masterFd_; }
+
+private:
+  int savedStdin_ = -1;
+  int masterFd_ = -1;
+  int slaveFd_ = -1;
+  bool active_ = false;
 };
 
 constexpr std::string_view kSimpleSvg =
@@ -327,6 +380,37 @@ TEST_F(DonnerSvgToolFileTest, InteractiveModeFallsBackWhenStdinIsNotATty) {
   EXPECT_THAT(out.str(), testing::HasSubstr("Rendered size: 4x3"));
   EXPECT_THAT(out.str(), testing::HasSubstr("Interactive mode needs a TTY terminal."));
   EXPECT_THAT(out.str(), testing::Not(testing::HasSubstr("Saved PNG:")));
+}
+
+TEST_F(DonnerSvgToolFileTest, InteractiveModeReadsMouseEventsFromTerminalAndQuits) {
+  const std::filesystem::path inputPath = WriteSvg("input.svg", kSimpleSvg);
+  ScopedPseudoTerminalStdin stdinTty;
+  if (!stdinTty.active()) {
+    GTEST_SKIP() << "pseudo-terminal setup failed";
+  }
+
+  std::thread inputThread([masterFd = stdinTty.masterFd()] {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    constexpr std::string_view kClick = "\x1b[<0;1;1M";
+    const ssize_t clickBytes = write(masterFd, kClick.data(), kClick.size());
+    (void)clickBytes;
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    constexpr std::string_view kQuit = "q";
+    const ssize_t quitBytes = write(masterFd, kQuit.data(), kQuit.size());
+    (void)quitBytes;
+  });
+
+  std::ostringstream out;
+  std::ostringstream err;
+  const int exitCode = RunTool({"--interactive", inputPath.string()}, &out, &err);
+  inputThread.join();
+
+  EXPECT_EQ(exitCode, 0);
+  EXPECT_TRUE(err.str().empty());
+  EXPECT_THAT(out.str(), testing::HasSubstr("Interactive mode: click with the mouse"));
+  EXPECT_THAT(out.str(), testing::HasSubstr("\x1b[?1000h\x1b[?1006h"));
+  EXPECT_THAT(out.str(), testing::HasSubstr("\x1b[?1000l\x1b[?1006l"));
+  EXPECT_THAT(out.str(), testing::Not(testing::HasSubstr("Interactive mode needs a TTY")));
 }
 
 }  // namespace

@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/xml/XMLNode.h"
 #include "donner/editor/ShapeClipboardCommands.h"
 #include "donner/editor/ShapeClipboardPayload.h"
 #include "donner/svg/SVGDocument.h"
@@ -223,6 +224,41 @@ TEST(ShapeClipboardCommands, CopySkipsProgrammaticSiblingsButKeepsSourceBackedSe
   EXPECT_THAT(payload->sourceElementIds, ::testing::ElementsAre("a"));
   EXPECT_FALSE(payload->wasGroupSelection);
   ASSERT_TRUE(payload->documentBounds.has_value());
+}
+
+TEST(ShapeClipboardCommands, CopySkipsSelectionWithClearedSourceLocation) {
+  svg::SVGDocument document = Parse(kTwoRects);
+  std::vector<svg::SVGElement> selection = Select(document, {"a", "b"});
+  selection.front().withWriteAccess([](svg::DocumentWriteAccess&, EntityHandle handle) {
+    std::optional<xml::XMLNode> xmlNode = xml::XMLNode::TryCast(handle);
+    ASSERT_TRUE(xmlNode.has_value());
+    xmlNode->clearSourceLocation();
+  });
+
+  std::optional<ShapeClipboardPayload> payload = copySelectionToPayload(document, selection);
+
+  ASSERT_TRUE(payload.has_value());
+  EXPECT_THAT(payload->svgFragment, Not(HasSubstr("id=\"a\"")));
+  EXPECT_THAT(payload->svgFragment, HasSubstr("id=\"b\""));
+  EXPECT_THAT(payload->sourceElementIds, ElementsAre("b"));
+}
+
+TEST(ShapeClipboardCommands, CopySkipsSelectionWithInvertedSourceRange) {
+  svg::SVGDocument document = Parse(kTwoRects);
+  std::vector<svg::SVGElement> selection = Select(document, {"a", "b"});
+  selection.front().withWriteAccess([](svg::DocumentWriteAccess&, EntityHandle handle) {
+    std::optional<xml::XMLNode> xmlNode = xml::XMLNode::TryCast(handle);
+    ASSERT_TRUE(xmlNode.has_value());
+    xmlNode->setSourceStartOffset(FileOffset::Offset(10));
+    xmlNode->setSourceEndOffset(FileOffset::Offset(5));
+  });
+
+  std::optional<ShapeClipboardPayload> payload = copySelectionToPayload(document, selection);
+
+  ASSERT_TRUE(payload.has_value());
+  EXPECT_THAT(payload->svgFragment, Not(HasSubstr("id=\"a\"")));
+  EXPECT_THAT(payload->svgFragment, HasSubstr("id=\"b\""));
+  EXPECT_THAT(payload->sourceElementIds, ElementsAre("b"));
 }
 
 TEST(ShapeClipboardCommands, CopyGroupSelectionMarksPayloadAsGroupSelection) {

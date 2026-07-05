@@ -17,7 +17,7 @@
 
 namespace donner::editor {
 
-namespace {
+namespace internal {
 
 /// Copies `value` into a fixed-size, null-terminated buffer.
 template <std::size_t N>
@@ -57,7 +57,11 @@ std::optional<svg::SVGElement> SingleSelectedText(EditorApp& app) {
   return selection.front();
 }
 
-}  // namespace
+}  // namespace internal
+
+using internal::AssignBuffer;
+using internal::FormatColor;
+using internal::SingleSelectedText;
 
 void TextInspectorPanel::syncBuffersFromSelection(const svg::SVGElement& text) {
   // §concurrent-dom: the live editor keeps the document in ThreadingMode::ConcurrentDom, so reading

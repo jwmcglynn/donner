@@ -267,7 +267,61 @@ TextEngine MakeScriptedEngine(Registry& registry, FontManager& fontManager,
   return TextEngine(fontManager, registry, std::move(backend));
 }
 
+css::FontFace LoadResvgFontFace(const std::string& fontFilename, const std::string& familyName) {
+  const std::string fontsDir = Runfiles::instance().Rlocation("third_party/resvg-test-suite/fonts");
+  const std::string fontPath = fontsDir + "/" + fontFilename;
+
+  std::ifstream file(fontPath, std::ios::binary);
+  if (!file.good()) {
+    ADD_FAILURE() << fontPath;
+    return {};
+  }
+
+  file.seekg(0, std::ios::end);
+  const auto size = file.tellg();
+  file.seekg(0);
+
+  auto fontData = std::make_shared<const std::vector<uint8_t>>(static_cast<size_t>(size));
+  file.read(reinterpret_cast<char*>(const_cast<uint8_t*>(fontData->data())), size);
+
+  css::FontFaceSource source;
+  source.kind = css::FontFaceSource::Kind::Data;
+  source.payload = fontData;
+
+  css::FontFace face;
+  face.familyName = RcString(familyName);
+  face.sources.push_back(std::move(source));
+  return face;
+}
+
 }  // namespace
+
+TEST(TextEngineTest, AddFontFaceRegistersFontWithManager) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+
+  engine.addFontFace(LoadResvgFontFace("NotoSans-Regular.ttf", "EngineAddFontFace"));
+
+  EXPECT_TRUE(fontManager.findFont(RcString("EngineAddFontFace")));
+}
+
+TEST(TextEngineTest, SubSuperMetricsForwardsBackendResult) {
+  Registry registry;
+  FontManager fontManager(registry);
+  auto backend = std::make_unique<FakeTextBackend>();
+  backend->subSuperMetricsResult = SubSuperMetrics{
+      .subscriptYOffset = 123,
+      .superscriptYOffset = 456,
+  };
+  TextEngine engine(fontManager, registry, std::move(backend));
+
+  const std::optional<SubSuperMetrics> metrics = engine.subSuperMetrics(FontHandle{});
+
+  ASSERT_TRUE(metrics.has_value());
+  EXPECT_EQ(metrics->subscriptYOffset, 123);
+  EXPECT_EQ(metrics->superscriptYOffset, 456);
+}
 
 TEST(TextEngineHelperTest, ComputeBaselineShiftCoversBaselineKeywords) {
   const FontVMetrics metrics{

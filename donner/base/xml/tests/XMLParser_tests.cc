@@ -2256,6 +2256,8 @@ TEST_F(XMLParserTests, ParseProcessingInstructionsErrors) {
   XMLParser::Options options;
   options.parseProcessingInstructions = true;
 
+  EXPECT_THAT(XMLParser::Parse("<?", options),
+              ParseErrorIs("PI target does not begin with a name, e.g. '<?tag'"));
   EXPECT_THAT(XMLParser::Parse(R"(<?)", options),
               ParseErrorIs("PI target does not begin with a name, e.g. '<?tag'"));
   EXPECT_THAT(XMLParser::Parse(R"(<?php)", options),
@@ -2614,6 +2616,29 @@ TEST_F(XMLParserTests, EntitySubstitutionLimitExceeded) {
                                  options);
 
   EXPECT_THAT(result, ParseErrorIs("Entity substitution limit exceeded"));
+}
+
+TEST_F(XMLParserTests, BuiltInEntitySubstitutionLimitExceeded) {
+  XMLParser::Options options;
+  options.maxEntitySubstitutions = 0;
+
+  EXPECT_THAT(XMLParser::Parse("<node>&amp;</node>", options),
+              ParseErrorIs("Entity substitution limit exceeded"));
+}
+
+TEST_F(XMLParserTests, OversizedCustomEntityExpansionRemainsLiteral) {
+  XMLParser::Options options = optionsCustomEntities();
+  std::string xml = R"(<!DOCTYPE test [<!ENTITY big ")";
+  xml.append(70 * 1024, 'a');
+  xml += R"(">]><node>&big;</node>)";
+
+  ParseResult<XMLDocument> result = XMLParser::Parse(xml, options);
+
+  ASSERT_THAT(result, NoParseError());
+  XMLNode doctype = result.result().root().firstChild().value();
+  ASSERT_EQ(doctype.type(), XMLNode::Type::DocType);
+  XMLNode node = doctype.nextSibling().value();
+  EXPECT_EQ(node.value(), "&big;");
 }
 
 TEST_F(XMLParserTests, MaxElementsLimitExceeded) {

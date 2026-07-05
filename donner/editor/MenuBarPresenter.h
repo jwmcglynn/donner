@@ -68,6 +68,42 @@ struct MenuBarActions {
   bool togglePerfOverlay = false;
 };
 
+/// Semantic command emitted by a top-level menu item.
+enum class MenuBarCommand {
+  OpenAbout,
+  OpenFile,
+  SaveFile,
+  SaveFileAs,
+  ExportViewportSvg,
+  ExportViewportSvgWithOverlay,
+  RevertFile,
+  Quit,
+  Undo,
+  Redo,
+  Cut,
+  Copy,
+  Paste,
+  PasteInFront,
+  ConvertTextToOutlines,
+  SelectAll,
+  DeselectAll,
+  ZoomIn,
+  ZoomOut,
+  ActualSize,
+  ToggleSourceFocusMode,
+  ToggleCompositorDebugPanel,
+  TogglePerfOverlay,
+};
+
+/// Apply an activated semantic menu command to an action accumulator.
+///
+/// @param activated True when the menu item was clicked.
+/// @param command Semantic command represented by the menu item.
+/// @param state Menu state used by focus-dependent commands.
+/// @param actions Action accumulator to update.
+void ApplyMenuBarCommand(bool activated, MenuBarCommand command, const MenuBarState& state,
+                         MenuBarActions* actions);
+
 /// Apply View-menu visibility toggle actions to persistent UI state.
 ///
 /// @param actions Edge-triggered menu actions from \ref MenuBarPresenter::render.

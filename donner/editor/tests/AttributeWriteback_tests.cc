@@ -183,6 +183,31 @@ TEST_F(AttributeWritebackTest, StaleSourceWithExpectedOpenButNoCloseReturnsNullo
   EXPECT_FALSE(buildAttributeWriteback(truncated, *rect_, "stroke", "green").has_value());
 }
 
+TEST(AttributeWritebackRegressionTest, ElementOverloadAcceptsOpeningTagTerminators) {
+  constexpr std::string_view kSources[] = {
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>)",
+      "<svg xmlns=\"http://www.w3.org/2000/svg\"><rect\tid=\"r1\"/></svg>",
+      "<svg xmlns=\"http://www.w3.org/2000/svg\"><rect\nid=\"r1\"/></svg>",
+      "<svg xmlns=\"http://www.w3.org/2000/svg\"><rect\rid=\"r1\"/></svg>",
+  };
+
+  for (std::string_view testSource : kSources) {
+    SCOPED_TRACE(testSource);
+    auto document = ParseDocument(testSource);
+    ASSERT_TRUE(document.has_value());
+    auto rect = document->svgElement().firstChild();
+    ASSERT_TRUE(rect.has_value());
+
+    auto patch = buildAttributeWriteback(testSource, *rect, "fill", "blue");
+    ASSERT_TRUE(patch.has_value());
+
+    std::string source(testSource);
+    const auto result = applyPatches(source, {{*patch}});
+    ASSERT_EQ(result.applied, 1u);
+    EXPECT_THAT(source, testing::HasSubstr(R"(fill="blue")"));
+  }
+}
+
 TEST(AttributeWritebackRegressionTest, PrefixedSvgElementWritebackUsesQualifiedTagName) {
   constexpr std::string_view kSource =
       R"(<svg xmlns="http://www.w3.org/2000/svg" xmlns:svg="http://www.w3.org/2000/svg"><svg:rect svg:id="nsRect"/></svg>)";
@@ -660,6 +685,57 @@ TEST(AttributeWritebackTargetOverloadTest, IdSearchWinsWhenSiblingOrderChanges) 
   EXPECT_EQ(
       source,
       R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="b" fill="blue"/><rect id="a"/></svg>)");
+}
+
+TEST(AttributeWritebackTargetOverloadTest, PathResolutionSkipsNonElementSiblings) {
+  constexpr std::string_view kSource =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><!-- note --><rect width="1"/><rect width="2"/></svg>)";
+  auto document = ParseDocument(kSource);
+  ASSERT_TRUE(document.has_value());
+  auto first = document->svgElement().firstChild();
+  ASSERT_TRUE(first.has_value());
+  auto second = first->nextSibling();
+  ASSERT_TRUE(second.has_value());
+  ASSERT_TRUE(second->id().empty());
+  const auto target = captureAttributeWritebackTarget(*second);
+  ASSERT_TRUE(target.has_value());
+  EXPECT_FALSE(target->elementId.has_value());
+
+  auto patch = buildAttributeWriteback(kSource, *target, "fill", "blue");
+  ASSERT_TRUE(patch.has_value());
+
+  std::string source(kSource);
+  const auto result = applyPatches(source, {{*patch}});
+  ASSERT_EQ(result.applied, 1u);
+  EXPECT_EQ(
+      source,
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><!-- note --><rect width="1"/><rect width="2" fill="blue"/></svg>)");
+}
+
+TEST(AttributeWritebackTargetOverloadTest, ResolveTargetFallsBackToPathWhenIdMisses) {
+  constexpr std::string_view kSource =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><g><rect id="r1"/></g></svg>)";
+  auto document = ParseDocument(kSource);
+  ASSERT_TRUE(document.has_value());
+  svg::SVGElement rect = GetElementById(*document, "#r1");
+  auto target = captureAttributeWritebackTarget(rect);
+  ASSERT_TRUE(target.has_value());
+  target->elementId = RcString("missing");
+
+  std::optional<svg::SVGElement> resolved = resolveAttributeWritebackTarget(*document, *target);
+
+  ASSERT_TRUE(resolved.has_value());
+  EXPECT_EQ(resolved->tagName(), xml::XMLQualifiedNameRef("rect"));
+}
+
+TEST(AttributeWritebackTargetOverloadTest, ResolveTargetRejectsBadRootSegment) {
+  auto document = ParseDocument(kSimpleSvg);
+  ASSERT_TRUE(document.has_value());
+  AttributeWritebackTarget target;
+  target.elementPath.push_back(
+      AttributeWritebackPathSegment{1, xml::XMLQualifiedName(RcString(), RcString("svg"))});
+
+  EXPECT_FALSE(resolveAttributeWritebackTarget(*document, target).has_value());
 }
 
 TEST(AttributeWritebackTargetOverloadTest, InsertsAttributeViaTargetOverload) {
