@@ -11,17 +11,14 @@
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/compositor/CompositorHintComponent.h"
+#include "donner/svg/compositor/CompositorTestMatchers.h"
 
 namespace donner::svg::compositor {
 
 namespace {
 
 using components::RenderingInstanceComponent;
-
-auto HintEntryIs(HintSource source, uint16_t weight) {
-  return testing::AllOf(testing::Field("source", &HintEntry::source, source),
-                        testing::Field("weight", &HintEntry::weight, weight));
-}
+using test::HintEntryIs;
 
 }  // namespace
 
