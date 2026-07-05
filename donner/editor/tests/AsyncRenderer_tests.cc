@@ -1,5 +1,7 @@
 #include "donner/editor/AsyncRenderer.h"
 
+#include <gmock/gmock.h>
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -32,13 +34,24 @@
 #include "donner/svg/compositor/CompositorController.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererInterface.h"
+#include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 #include "gtest/gtest.h"
 
 namespace donner::editor {
+
+void PrintTo(const Vector2d& vector, std::ostream* os) {
+  *os << "Vector2d{x=" << vector.x << ", y=" << vector.y << "}";
+}
+
 namespace {
 
+using svg::test::Rgba;
+using ::testing::AllOf;
 using ::testing::Contains;
+using ::testing::DoubleNear;
+using ::testing::Field;
+using ::testing::Gt;
 
 bool IsGraphicsElement(const svg::SVGElement& element) {
   return element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
@@ -56,6 +69,15 @@ void SetGraphicsElementTranslation(const svg::SVGElement& element, Vector2d tran
   element.withWriteAccess([&element, translation](svg::DocumentWriteAccess&, EntityHandle) {
     element.cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(translation));
   });
+}
+
+auto Vector2dNear(Vector2d expected, double tolerance) {
+  return AllOf(Field("x", &Vector2d::x, DoubleNear(expected.x, tolerance)),
+               Field("y", &Vector2d::y, DoubleNear(expected.y, tolerance)));
+}
+
+Vector2d TransformTranslation(const Transform2d& transform) {
+  return Vector2d(transform.data[4], transform.data[5]);
 }
 
 Entity SelectedGraphicsEntity(EditorApp& app) {
@@ -4076,14 +4098,10 @@ TEST(AsyncRendererE2ETest, DragEndWritebackTakesStructuralRemapPath) {
   };
   const auto movedOnlyPixel = pixelAt(150, 90);
   const auto originalOnlyPixel = pixelAt(60, 90);
-  EXPECT_GT(static_cast<int>(movedOnlyPixel[0]), 200)
+  EXPECT_THAT(movedOnlyPixel, Rgba(Gt(200), ::testing::Lt(80), ::testing::Lt(80), ::testing::_))
       << "post-release CPU snapshot must show #target at its writeback transform";
-  EXPECT_LT(static_cast<int>(movedOnlyPixel[1]), 80);
-  EXPECT_LT(static_cast<int>(movedOnlyPixel[2]), 80);
-  EXPECT_GT(static_cast<int>(originalOnlyPixel[0]), 200)
+  EXPECT_THAT(originalOnlyPixel, Rgba(Gt(200), Gt(200), Gt(200), ::testing::_))
       << "post-release CPU snapshot should have the white background at the old position";
-  EXPECT_GT(static_cast<int>(originalOnlyPixel[1]), 200);
-  EXPECT_GT(static_cast<int>(originalOnlyPixel[2]), 200);
 
   EXPECT_EQ(asyncRenderer.compositorResetCountForTesting(), 0u)
       << "drag-end writeback took the full-reset path instead of the structural remap path - "
@@ -5202,8 +5220,8 @@ TEST(RenderCoordinatorTest, OverlayGesturePreviewUsesRepresentedDragTransformFor
 
   ASSERT_TRUE(representedGesturePreview.has_value());
   EXPECT_EQ(representedGesturePreview->currentDocumentDelta, Vector2d::Zero());
-  EXPECT_NEAR(representedGesturePreview->documentFromStartDocument.data[4], 0.0, 1e-9);
-  EXPECT_NEAR(representedGesturePreview->documentFromStartDocument.data[5], 0.0, 1e-9);
+  EXPECT_THAT(TransformTranslation(representedGesturePreview->documentFromStartDocument),
+              Vector2dNear(Vector2d::Zero(), 1e-9));
 }
 
 TEST(RenderCoordinatorTest, OverlayRepresentedTransformMapsLiveAffinePointsToRepresented) {

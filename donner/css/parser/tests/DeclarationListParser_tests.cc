@@ -5,9 +5,21 @@
 
 #include "donner/css/parser/tests/TokenTestUtils.h"
 
+using testing::AllOf;
 using testing::ElementsAre;
+using testing::Field;
 
 namespace donner::css::parser {
+
+MATCHER_P2(SourceRangeOffsetsAre, startOffset, endOffset, "") {
+  if (!arg.start.offset.has_value() || !arg.end.offset.has_value()) {
+    *result_listener << "whose offsets are missing";
+    return false;
+  }
+
+  *result_listener << "whose offsets are [" << *arg.start.offset << ", " << *arg.end.offset << "]";
+  return *arg.start.offset == startOffset && *arg.end.offset == endOffset;
+}
 
 TEST(DeclarationListParser, Empty) {
   EXPECT_THAT(DeclarationListParser::Parse(""), ElementsAre());
@@ -123,37 +135,34 @@ TEST(DeclarationListParser, SourceRangeSpansNameToLastValueToken) {
   // Single declaration: `fill: red`
   //                      0  3  6
   const auto fillDecls = DeclarationListParser::ParseOnlyDeclarations("fill: red");
-  ASSERT_EQ(fillDecls.size(), 1u);
-  EXPECT_EQ(fillDecls[0].sourceRange.start.offset, 0u);
-  EXPECT_EQ(fillDecls[0].sourceRange.end.offset, 6u)
+  EXPECT_THAT(fillDecls, ElementsAre(Field("sourceRange", &Declaration::sourceRange,
+                                           SourceRangeOffsetsAre(0u, 6u))))
       << "sourceRange.end should point at 'r' in 'red' (the last non-whitespace value)";
 
   // Two declarations: `fill: red; stroke: blue`
   //                    0          11      19
   const auto twoDecls = DeclarationListParser::ParseOnlyDeclarations("fill: red; stroke: blue");
-  ASSERT_EQ(twoDecls.size(), 2u);
-  EXPECT_EQ(twoDecls[0].sourceRange.start.offset, 0u);
-  EXPECT_EQ(twoDecls[0].sourceRange.end.offset, 6u);
-  EXPECT_EQ(twoDecls[1].sourceRange.start.offset, 11u);
-  EXPECT_EQ(twoDecls[1].sourceRange.end.offset, 19u);
+  EXPECT_THAT(
+      twoDecls,
+      ElementsAre(
+          Field("sourceRange", &Declaration::sourceRange, SourceRangeOffsetsAre(0u, 6u)),
+          Field("sourceRange", &Declaration::sourceRange, SourceRangeOffsetsAre(11u, 19u))));
 
   // With !important: `fill: red !important`
   //                   0    5    10   14
   // The !important tokens are popped off `values`; sourceRange.end should
   // stay at the last *value* token (`red`), not at `!` or `important`.
   const auto importantDecls = DeclarationListParser::ParseOnlyDeclarations("fill: red !important");
-  ASSERT_EQ(importantDecls.size(), 1u);
-  EXPECT_TRUE(importantDecls[0].important);
-  EXPECT_EQ(importantDecls[0].sourceRange.start.offset, 0u);
-  EXPECT_EQ(importantDecls[0].sourceRange.end.offset, 6u)
+  EXPECT_THAT(importantDecls, ElementsAre(AllOf(Field("important", &Declaration::important, true),
+                                                Field("sourceRange", &Declaration::sourceRange,
+                                                      SourceRangeOffsetsAre(0u, 6u)))))
       << "!important markers must not pull sourceRange.end past the value";
 
   // Multi-token value: `transform: translate(1, 2)`
   //                     0          11
   const auto fnDecls = DeclarationListParser::ParseOnlyDeclarations("transform: translate(1, 2)");
-  ASSERT_EQ(fnDecls.size(), 1u);
-  EXPECT_EQ(fnDecls[0].sourceRange.start.offset, 0u);
-  EXPECT_EQ(fnDecls[0].sourceRange.end.offset, 11u)
+  EXPECT_THAT(fnDecls, ElementsAre(Field("sourceRange", &Declaration::sourceRange,
+                                         SourceRangeOffsetsAre(0u, 11u))))
       << "function value's sourceRange.end is the function's name offset";
 }
 

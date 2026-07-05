@@ -4,14 +4,106 @@
 #include <gtest/gtest.h>
 
 #include <cstring>
+#include <initializer_list>
+#include <optional>
+#include <ostream>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace donner::editor {
 
+void PrintTo(const Coordinates& coords, std::ostream* os) {
+  *os << "Coordinates(line=" << coords.line << ", column=" << coords.column << ")";
+}
+
+void PrintTo(ColorIndex color, std::ostream* os) {
+  switch (color) {
+    case ColorIndex::Default: *os << "Default"; return;
+    case ColorIndex::Keyword: *os << "Keyword"; return;
+    case ColorIndex::Number: *os << "Number"; return;
+    case ColorIndex::String: *os << "String"; return;
+    case ColorIndex::CharLiteral: *os << "CharLiteral"; return;
+    case ColorIndex::Punctuation: *os << "Punctuation"; return;
+    case ColorIndex::Identifier: *os << "Identifier"; return;
+    case ColorIndex::KnownIdentifier: *os << "KnownIdentifier"; return;
+    case ColorIndex::Comment: *os << "Comment"; return;
+    case ColorIndex::MultiLineComment: *os << "MultiLineComment"; return;
+    case ColorIndex::Background: *os << "Background"; return;
+    case ColorIndex::Cursor: *os << "Cursor"; return;
+    case ColorIndex::Selection: *os << "Selection"; return;
+    case ColorIndex::ErrorMarker: *os << "ErrorMarker"; return;
+    case ColorIndex::Breakpoint: *os << "Breakpoint"; return;
+    case ColorIndex::BreakpointOutline: *os << "BreakpointOutline"; return;
+    case ColorIndex::CurrentLineIndicator: *os << "CurrentLineIndicator"; return;
+    case ColorIndex::CurrentLineIndicatorOutline: *os << "CurrentLineIndicatorOutline"; return;
+    case ColorIndex::LineNumber: *os << "LineNumber"; return;
+    case ColorIndex::CurrentLineFill: *os << "CurrentLineFill"; return;
+    case ColorIndex::CurrentLineFillInactive: *os << "CurrentLineFillInactive"; return;
+    case ColorIndex::CurrentLineEdge: *os << "CurrentLineEdge"; return;
+    case ColorIndex::ErrorMessage: *os << "ErrorMessage"; return;
+    case ColorIndex::BreakpointDisabled: *os << "BreakpointDisabled"; return;
+    case ColorIndex::UserFunction: *os << "UserFunction"; return;
+    case ColorIndex::UserType: *os << "UserType"; return;
+    case ColorIndex::UniformVariable: *os << "UniformVariable"; return;
+    case ColorIndex::GlobalVariable: *os << "GlobalVariable"; return;
+    case ColorIndex::LocalVariable: *os << "LocalVariable"; return;
+    case ColorIndex::FunctionArgument: *os << "FunctionArgument"; return;
+    case ColorIndex::Max: *os << "Max"; return;
+  }
+
+  *os << "ColorIndex(" << static_cast<int>(color) << ")";
+}
+
+void PrintTo(SourceEditIntentKind kind, std::ostream* os) {
+  switch (kind) {
+    case SourceEditIntentKind::Unknown: *os << "Unknown"; return;
+    case SourceEditIntentKind::Insert: *os << "Insert"; return;
+    case SourceEditIntentKind::Delete: *os << "Delete"; return;
+    case SourceEditIntentKind::Replace: *os << "Replace"; return;
+    case SourceEditIntentKind::Undo: *os << "Undo"; return;
+    case SourceEditIntentKind::Redo: *os << "Redo"; return;
+  }
+
+  *os << "SourceEditIntentKind(" << static_cast<int>(kind) << ")";
+}
+
+using ::testing::AllOf;
+using ::testing::Each;
 using ::testing::ElementsAre;
 using ::testing::Eq;
+using ::testing::Field;
+using ::testing::Gt;
 using ::testing::IsEmpty;
+using ::testing::Optional;
+
+auto SourceEditIntentIs(std::size_t offset, std::size_t removedLength, std::string_view replacement,
+                        SourceEditIntentKind kind) {
+  return AllOf(Field("offset", &SourceEditIntent::offset, offset),
+               Field("removedLength", &SourceEditIntent::removedLength, removedLength),
+               Field("replacement", &SourceEditIntent::replacement, std::string(replacement)),
+               Field("kind", &SourceEditIntent::kind, kind),
+               Field("bufferVersion", &SourceEditIntent::bufferVersion, Gt(0u)));
+}
+
+auto SourceEditIntentKindIs(SourceEditIntentKind kind) {
+  return Field("kind", &SourceEditIntent::kind, kind);
+}
+
+std::vector<std::optional<ColorIndex>> ColorIndexesAt(const Line& line,
+                                                      std::initializer_list<std::size_t> indexes) {
+  std::vector<std::optional<ColorIndex>> colors;
+  colors.reserve(indexes.size());
+  for (std::size_t index : indexes) {
+    if (index < line.size()) {
+      colors.emplace_back(line[index].colorIndex);
+    } else {
+      colors.emplace_back(std::nullopt);
+    }
+  }
+
+  return colors;
+}
 
 class TextEditorCoreTests : public ::testing::Test {
 protected:
@@ -95,12 +187,8 @@ TEST_F(TextEditorCoreTests, InsertTextCapturesSourceEditIntent) {
   editor_.insertText("abc");
 
   std::vector<SourceEditIntent> intents = editor_.takePendingSourceEditIntents();
-  ASSERT_EQ(intents.size(), 1u);
-  EXPECT_EQ(intents[0].offset, 14u);
-  EXPECT_EQ(intents[0].removedLength, 0u);
-  EXPECT_EQ(intents[0].replacement, "abc");
-  EXPECT_EQ(intents[0].kind, SourceEditIntentKind::Insert);
-  EXPECT_NE(intents[0].bufferVersion, 0u);
+  EXPECT_THAT(intents,
+              ElementsAre(SourceEditIntentIs(14u, 0u, "abc", SourceEditIntentKind::Insert)));
 }
 
 TEST_F(TextEditorCoreTests, ReplaceSelectionCapturesSourceEditIntent) {
@@ -110,11 +198,8 @@ TEST_F(TextEditorCoreTests, ReplaceSelectionCapturesSourceEditIntent) {
   editor_.insertText("replacement");
 
   std::vector<SourceEditIntent> intents = editor_.takePendingSourceEditIntents();
-  ASSERT_EQ(intents.size(), 1u);
-  EXPECT_EQ(intents[0].offset, 13u);
-  EXPECT_EQ(intents[0].removedLength, 13u);
-  EXPECT_EQ(intents[0].replacement, "replacement");
-  EXPECT_EQ(intents[0].kind, SourceEditIntentKind::Replace);
+  EXPECT_THAT(intents, ElementsAre(SourceEditIntentIs(13u, 13u, "replacement",
+                                                      SourceEditIntentKind::Replace)));
 }
 
 // ---------------------------------------------------------------------------
@@ -585,11 +670,11 @@ TEST_F(TextEditorCoreTests, InsertTextWithIndentUnindentsClosingBrace) {
   editor_.insertText("\n}", /*indent=*/true);
 
   EXPECT_THAT(editor_.getText(), Eq("    {\n  }tail"));
-  ASSERT_TRUE(editor_.hasPendingSourceEditIntents());
   const std::vector<SourceEditIntent> intents = editor_.takePendingSourceEditIntents();
-  ASSERT_EQ(intents.size(), 1u);
-  EXPECT_EQ(intents[0].kind, SourceEditIntentKind::Insert);
-  EXPECT_EQ(intents[0].replacement, "\n}");
+  EXPECT_THAT(
+      intents,
+      ElementsAre(AllOf(SourceEditIntentKindIs(SourceEditIntentKind::Insert),
+                        Field("replacement", &SourceEditIntent::replacement, std::string("\n}")))));
 }
 
 TEST_F(TextEditorCoreTests, OpeningBraceCompletionCreatesIndentedClosingBrace) {
@@ -704,10 +789,10 @@ TEST_F(TextEditorCoreTests, DeleteWithSelectionCapturesDeleteIntent) {
 
   EXPECT_THAT(editor_.getText(), Eq("0156789\n0123456789\n0123456789\n0123456789\n0123456789"));
   const std::vector<SourceEditIntent> intents = editor_.takePendingSourceEditIntents();
-  ASSERT_EQ(intents.size(), 1u);
-  EXPECT_EQ(intents[0].kind, SourceEditIntentKind::Delete);
-  EXPECT_EQ(intents[0].removedLength, 3u);
-  EXPECT_EQ(intents[0].replacement, "");
+  EXPECT_THAT(intents, ElementsAre(AllOf(
+                           SourceEditIntentKindIs(SourceEditIntentKind::Delete),
+                           Field("removedLength", &SourceEditIntent::removedLength, 3u),
+                           Field("replacement", &SourceEditIntent::replacement, std::string("")))));
 }
 
 TEST_F(TextEditorCoreTests, BackspaceAndDeleteRemoveWholeUtf8Clusters) {
@@ -758,16 +843,14 @@ TEST_F(TextEditorCoreTests, InsertAndRemoveLineMaintainFoldAndMarkerBookkeeping)
 
   editor_.insertLine(1, 0);
 
-  EXPECT_EQ(editor_.foldBegin()[0], Coordinates(1, 1));
-  EXPECT_EQ(editor_.foldBegin()[1], Coordinates(2, 0));
-  EXPECT_EQ(editor_.foldEnd()[0], Coordinates(3, 0));
+  EXPECT_THAT(editor_.foldBegin(), ElementsAre(Coordinates(1, 1), Coordinates(2, 0)));
+  EXPECT_THAT(editor_.foldEnd(), ElementsAre(Coordinates(3, 0)));
   ASSERT_TRUE(editor_.getErrorMarkers().contains(3));
 
   editor_.removeLine(1);
 
-  ASSERT_EQ(editor_.foldBegin().size(), 1u);
-  EXPECT_EQ(editor_.foldBegin()[0], Coordinates(1, 0));
-  EXPECT_EQ(editor_.foldEnd()[0], Coordinates(2, 0));
+  EXPECT_THAT(editor_.foldBegin(), ElementsAre(Coordinates(1, 0)));
+  EXPECT_THAT(editor_.foldEnd(), ElementsAre(Coordinates(2, 0)));
   ASSERT_TRUE(editor_.getErrorMarkers().contains(0));
 }
 
@@ -862,8 +945,7 @@ TEST_F(TextEditorCoreTests, RedoEmitsRedoKindSourceEditIntent) {
   editor_.redo();
 
   const std::vector<SourceEditIntent> intents = editor_.takePendingSourceEditIntents();
-  ASSERT_EQ(intents.size(), 1u);
-  EXPECT_EQ(intents[0].kind, SourceEditIntentKind::Redo);
+  EXPECT_THAT(intents, ElementsAre(SourceEditIntentKindIs(SourceEditIntentKind::Redo)));
 }
 
 TEST_F(TextEditorCoreTests, UndoReplaceRestoresOriginalSelectionText) {
@@ -913,8 +995,7 @@ TEST_F(TextEditorCoreTests, UndoEmitsUndoKindSourceEditIntent) {
 
   editor_.undo();
   std::vector<SourceEditIntent> intents = editor_.takePendingSourceEditIntents();
-  ASSERT_EQ(intents.size(), 1u);
-  EXPECT_EQ(intents[0].kind, SourceEditIntentKind::Undo);
+  EXPECT_THAT(intents, ElementsAre(SourceEditIntentKindIs(SourceEditIntentKind::Undo)));
 }
 
 TEST_F(TextEditorCoreTests, UndoWhenEmptyIsNoOp) {
@@ -1123,8 +1204,12 @@ TEST_F(TextEditorCoreTests, AppendSourceEditIntentDeduplicatesAndInvokesHook) {
   editor_.appendSourceEditIntent(SourceEditIntent{});
 
   std::vector<SourceEditIntent> intents = editor_.takePendingSourceEditIntents();
-  ASSERT_EQ(intents.size(), 1u);
-  EXPECT_EQ(intents[0].bufferVersion, 1u);
+  EXPECT_THAT(intents, ElementsAre(AllOf(
+                           Field("offset", &SourceEditIntent::offset, 1u),
+                           Field("removedLength", &SourceEditIntent::removedLength, 0u),
+                           Field("replacement", &SourceEditIntent::replacement, std::string("x")),
+                           SourceEditIntentKindIs(SourceEditIntentKind::Insert),
+                           Field("bufferVersion", &SourceEditIntent::bufferVersion, 1u))));
   EXPECT_EQ(hookCalls, 1);
 }
 
@@ -1202,9 +1287,7 @@ TEST_F(TextEditorCoreTests, ColorizerDisabledLeavesGlyphsDefault) {
   editor_.setColorizerEnabled(false);
   editor_.colorizeInternal();
   const Line& line = editor_.buffer().getLineGlyphs(0);
-  for (const auto& g : line) {
-    EXPECT_EQ(g.colorIndex, ColorIndex::Default);
-  }
+  EXPECT_THAT(line, Each(Field("colorIndex", &Glyph::colorIndex, ColorIndex::Default)));
 }
 
 TEST_F(TextEditorCoreTests, SvgKeywordColorizedAsKeyword) {
@@ -1214,7 +1297,7 @@ TEST_F(TextEditorCoreTests, SvgKeywordColorizedAsKeyword) {
   editor_.colorizeInternal();  // process the colorize range
   const Line& line = editor_.buffer().getLineGlyphs(0);
   // "rect" starts at index 1 (after '<').
-  EXPECT_EQ(line[1].colorIndex, ColorIndex::Keyword);
+  EXPECT_THAT(ColorIndexesAt(line, {1}), ElementsAre(Optional(ColorIndex::Keyword)));
 }
 
 TEST_F(TextEditorCoreTests, GetGlyphColorUsesDefaultWhenColorizerDisabled) {
@@ -1263,9 +1346,9 @@ TEST_F(TextEditorCoreTests, CustomLanguageColorizesCaseInsensitiveIdentifiers) {
   editor_.colorizeInternal();
 
   const Line& line = editor_.buffer().getLineGlyphs(0);
-  EXPECT_EQ(line[0].colorIndex, ColorIndex::Keyword);
-  EXPECT_EQ(line[4].colorIndex, ColorIndex::KnownIdentifier);
-  EXPECT_EQ(line[8].colorIndex, ColorIndex::Identifier);
+  EXPECT_THAT(ColorIndexesAt(line, {0, 4, 8}),
+              ElementsAre(Optional(ColorIndex::Keyword), Optional(ColorIndex::KnownIdentifier),
+                          Optional(ColorIndex::Identifier)));
 }
 
 TEST_F(TextEditorCoreTests, CustomTokenizerTakesPrecedenceOverRegexRules) {
@@ -1287,7 +1370,7 @@ TEST_F(TextEditorCoreTests, CustomTokenizerTakesPrecedenceOverRegexRules) {
   editor_.colorizeInternal();
 
   const Line& line = editor_.buffer().getLineGlyphs(0);
-  EXPECT_EQ(line[0].colorIndex, ColorIndex::UserFunction);
+  EXPECT_THAT(ColorIndexesAt(line, {0}), ElementsAre(Optional(ColorIndex::UserFunction)));
 }
 
 namespace {

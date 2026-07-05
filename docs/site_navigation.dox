@@ -65,6 +65,7 @@ kept separate from project-internal developer notes, design history, tooling, an
 \details Local development, style, and maintenance procedures.
 
 - \subpage CodingStyle
+- \subpage TestDiagnosability
 - \subpage BuildingDonner
 - \subpage Maintenance
 */

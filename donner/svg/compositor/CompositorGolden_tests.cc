@@ -2,6 +2,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <fstream>
@@ -57,6 +58,29 @@ MATCHER(IsRed, "") {
 MATCHER(IsWhite, "") {
   *result_listener << "pixel is " << arg;
   return arg.r > 200 && arg.g > 200 && arg.b > 200 && arg.a > 200;
+}
+
+std::array<double, 6> TransformData(const Transform2d& transform) {
+  return {transform.data[0], transform.data[1], transform.data[2],
+          transform.data[3], transform.data[4], transform.data[5]};
+}
+
+MATCHER_P2(TransformMatrixNear, expected, tolerance, "transform matrix is near expected") {
+  return testing::ExplainMatchResult(
+      testing::ElementsAre(testing::DoubleNear(expected.data[0], tolerance),
+                           testing::DoubleNear(expected.data[1], tolerance),
+                           testing::DoubleNear(expected.data[2], tolerance),
+                           testing::DoubleNear(expected.data[3], tolerance),
+                           testing::DoubleNear(expected.data[4], tolerance),
+                           testing::DoubleNear(expected.data[5], tolerance)),
+      TransformData(arg), result_listener);
+}
+
+MATCHER_P2(Vector2dNear, expected, tolerance, "Vector2d is near expected") {
+  return testing::ExplainMatchResult(
+      testing::AllOf(testing::Field("x", &Vector2d::x, testing::DoubleNear(expected.x, tolerance)),
+                     testing::Field("y", &Vector2d::y, testing::DoubleNear(expected.y, tolerance))),
+      arg, result_listener);
 }
 
 SVGDocument parseDocument(std::string_view svgSource) {
@@ -422,18 +446,16 @@ TEST_F(CompositorGoldenTest, DraggingFilterGroupSubtreeEngagesFastPath) {
   const std::optional<Transform2d> stampAfterDrag =
       layerAfterDrag->bitmapEntityFromWorldTransform();
   ASSERT_TRUE(stampAfterDrag.has_value());
-  EXPECT_NEAR(stampAfterDrag->data[4], stampAfterWarm->data[4], 1e-9)
+  EXPECT_THAT(*stampAfterDrag, TransformMatrixNear(*stampAfterWarm, 1e-9))
       << "filter-group layer was re-rasterized during drag instead of reusing "
          "the cached bitmap - the `firstEntity == lastEntity == e` gate "
          "rejected the subtree layer from the fast path";
-  EXPECT_NEAR(stampAfterDrag->data[5], stampAfterWarm->data[5], 1e-9);
 
   // Fast-path signal #2: `canvasFromBitmap` carries the 10-px
   // delta in canvas-pixel space.
   const Transform2d canvasFromBitmap = layerAfterDrag->canvasFromBitmap();
   ASSERT_TRUE(canvasFromBitmap.isTranslation());
-  EXPECT_NEAR(canvasFromBitmap.translation().x, 10.0, 1e-6);
-  EXPECT_NEAR(canvasFromBitmap.translation().y, 0.0, 1e-6);
+  EXPECT_THAT(canvasFromBitmap.translation(), Vector2dNear(Vector2d(10.0, 0.0), 1e-6));
 }
 
 // Lockstep rotate/scale for a FILTERED group (#6/#7, e.g. #Lighting_glow_dark).
@@ -491,9 +513,8 @@ TEST_F(CompositorGoldenTest, FilterGroupRotationDragReusesCachedBitmapForLockste
   // The cached filtered bitmap must be reused (stamp unchanged) - not re-filtered.
   const std::optional<Transform2d> stampAfterDrag = afterDrag->bitmapEntityFromWorldTransform();
   ASSERT_TRUE(stampAfterDrag.has_value());
-  EXPECT_NEAR(stampAfterDrag->data[4], stampAfterWarm->data[4], 1e-9)
+  EXPECT_THAT(*stampAfterDrag, TransformMatrixNear(*stampAfterWarm, 1e-9))
       << "filter group re-filtered during a rotate drag instead of reusing the cached bitmap";
-  EXPECT_NEAR(stampAfterDrag->data[5], stampAfterWarm->data[5], 1e-9);
 
   // And the rotation is carried as an affine compose offset (live quad), not baked.
   EXPECT_FALSE(afterDrag->canvasFromBitmap().isTranslation())
@@ -550,13 +571,7 @@ TEST_F(CompositorGoldenTest, TranslationDragEngagesFastPathAtMultipleCanvasScale
     const std::optional<Transform2d> stampAfterDrag =
         layerAfterDrag->bitmapEntityFromWorldTransform();
     ASSERT_TRUE(stampAfterDrag.has_value());
-    EXPECT_NEAR(stampAfterDrag->data[0], stampAfterWarm->data[0], 1e-9)
-        << "bitmap stamp regressed: layer was re-rasterized instead of using "
-           "the translation-only fast path";
-    EXPECT_NEAR(stampAfterDrag->data[4], stampAfterWarm->data[4], 1e-9)
-        << "bitmap stamp regressed: layer was re-rasterized instead of using "
-           "the translation-only fast path";
-    EXPECT_NEAR(stampAfterDrag->data[5], stampAfterWarm->data[5], 1e-9)
+    EXPECT_THAT(*stampAfterDrag, TransformMatrixNear(*stampAfterWarm, 1e-9))
         << "bitmap stamp regressed: layer was re-rasterized instead of using "
            "the translation-only fast path";
 
@@ -569,8 +584,8 @@ TEST_F(CompositorGoldenTest, TranslationDragEngagesFastPathAtMultipleCanvasScale
            "produced an affine with scale/shear drift and would have marked "
            "the layer dirty for re-rasterize";
     const Vector2d delta = canvasFromBitmap.translation();
-    EXPECT_NEAR(delta.x, 25.0 * canvasScale, 1e-6) << "delta should be in canvas-pixel space";
-    EXPECT_NEAR(delta.y, 0.0, 1e-6);
+    EXPECT_THAT(delta, Vector2dNear(Vector2d(25.0 * canvasScale, 0.0), 1e-6))
+        << "delta should be in canvas-pixel space";
   }
 }
 

@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <string_view>
+#include <vector>
 
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
@@ -25,6 +26,100 @@ using testing::Contains;
 using testing::Eq;
 using testing::Ne;
 using testing::Optional;
+
+namespace {
+
+MATCHER_P2(LengthValueIs, value, unit, "") {
+  return testing::ExplainMatchResult(LengthIs(testing::DoubleEq(value), Eq(unit)), arg,
+                                     result_listener);
+}
+
+MATCHER_P(StrokeDasharrayIs, expected, "") {
+  if (arg.size() != expected.size()) {
+    *result_listener << "size is " << arg.size();
+    return false;
+  }
+
+  for (std::size_t i = 0; i < expected.size(); ++i) {
+    if (arg[i] != expected[i]) {
+      *result_listener << "dasharray[" << i << "] is " << testing::PrintToString(arg[i]);
+      return false;
+    }
+  }
+
+  return true;
+}
+
+MATCHER_P(FilterReferenceIs, href, "") {
+  if (!arg.template is<FilterEffect::ElementReference>()) {
+    *result_listener << "filter effect is " << testing::PrintToString(arg);
+    return false;
+  }
+
+  return testing::ExplainMatchResult(Eq(Reference(href)),
+                                     arg.template get<FilterEffect::ElementReference>().reference,
+                                     result_listener);
+}
+
+MATCHER_P2(FilterBlurIs, value, unit, "") {
+  if (!arg.template is<FilterEffect::Blur>()) {
+    *result_listener << "filter effect is " << testing::PrintToString(arg);
+    return false;
+  }
+
+  const auto& blur = arg.template get<FilterEffect::Blur>();
+  return testing::ExplainMatchResult(LengthValueIs(value, unit), blur.stdDeviationX,
+                                     result_listener) &&
+         testing::ExplainMatchResult(LengthValueIs(value, unit), blur.stdDeviationY,
+                                     result_listener);
+}
+
+#define DONNER_FILTER_AMOUNT_MATCHER(name, effect_type)                                          \
+  MATCHER_P(name, expected, "") {                                                                \
+    if (!arg.template is<effect_type>()) {                                                       \
+      *result_listener << "filter effect is " << testing::PrintToString(arg);                    \
+      return false;                                                                              \
+    }                                                                                            \
+                                                                                                 \
+    return testing::ExplainMatchResult(testing::DoubleEq(expected),                              \
+                                       arg.template get<effect_type>().amount, result_listener); \
+  }
+
+DONNER_FILTER_AMOUNT_MATCHER(FilterBrightnessIs, FilterEffect::Brightness)
+DONNER_FILTER_AMOUNT_MATCHER(FilterContrastIs, FilterEffect::Contrast)
+DONNER_FILTER_AMOUNT_MATCHER(FilterGrayscaleIs, FilterEffect::Grayscale)
+DONNER_FILTER_AMOUNT_MATCHER(FilterInvertIs, FilterEffect::Invert)
+DONNER_FILTER_AMOUNT_MATCHER(FilterOpacityIs, FilterEffect::FilterOpacity)
+DONNER_FILTER_AMOUNT_MATCHER(FilterSaturateIs, FilterEffect::Saturate)
+DONNER_FILTER_AMOUNT_MATCHER(FilterSepiaIs, FilterEffect::Sepia)
+
+#undef DONNER_FILTER_AMOUNT_MATCHER
+
+MATCHER_P2(FilterHueRotateIs, expected, tolerance, "") {
+  if (!arg.template is<FilterEffect::HueRotate>()) {
+    *result_listener << "filter effect is " << testing::PrintToString(arg);
+    return false;
+  }
+
+  return testing::ExplainMatchResult(testing::DoubleNear(expected, tolerance),
+                                     arg.template get<FilterEffect::HueRotate>().angleDegrees,
+                                     result_listener);
+}
+
+MATCHER_P4(FilterDropShadowIs, offsetX, offsetY, stdDeviation, color, "") {
+  if (!arg.template is<FilterEffect::DropShadow>()) {
+    *result_listener << "filter effect is " << testing::PrintToString(arg);
+    return false;
+  }
+
+  const auto& shadow = arg.template get<FilterEffect::DropShadow>();
+  return testing::ExplainMatchResult(Eq(offsetX), shadow.offsetX, result_listener) &&
+         testing::ExplainMatchResult(Eq(offsetY), shadow.offsetY, result_listener) &&
+         testing::ExplainMatchResult(Eq(stdDeviation), shadow.stdDeviation, result_listener) &&
+         testing::ExplainMatchResult(Eq(color), shadow.color, result_listener);
+}
+
+}  // namespace
 
 TEST(PropertyRegistry, Set) {
   PropertyRegistry registry;
@@ -1293,15 +1388,13 @@ TEST(PropertyRegistry, PaintReferenceTransformOriginAndFilterFunctionEdges) {
     PropertyRegistry registry;
     registry.parseStyle("filter: url(#a), url(#b)");
     const auto& effects = (*registry.filter.getStoredValue());
-    ASSERT_EQ(effects.size(), 2u);
-    EXPECT_EQ(effects[0].get<FilterEffect::ElementReference>().reference, Reference("#a"));
-    EXPECT_EQ(effects[1].get<FilterEffect::ElementReference>().reference, Reference("#b"));
+    EXPECT_THAT(effects, testing::ElementsAre(FilterReferenceIs("#a"), FilterReferenceIs("#b")));
   }
 
   {
     PropertyRegistry registry;
     registry.parseStyle("filter: url(#a) ");
-    ASSERT_EQ((*registry.filter.getStoredValue()).size(), 1u);
+    EXPECT_THAT(*registry.filter.getStoredValue(), testing::ElementsAre(FilterReferenceIs("#a")));
   }
 }
 
@@ -1342,10 +1435,9 @@ TEST(PropertyRegistry, BaselineShiftSpacingAndDasharray) {
     registry.parseStyle("stroke-dasharray: 1 2, 3%");
     ASSERT_TRUE(registry.strokeDasharray.isSpecified());
     const auto& dasharray = (*registry.strokeDasharray.getStoredValue());
-    EXPECT_EQ(dasharray.size(), 3u);
-    EXPECT_EQ(dasharray[0], Lengthd(1, Lengthd::Unit::None));
-    EXPECT_EQ(dasharray[1], Lengthd(2, Lengthd::Unit::None));
-    EXPECT_EQ(dasharray[2], Lengthd(3, Lengthd::Unit::Percent));
+    EXPECT_THAT(dasharray, StrokeDasharrayIs(std::vector<Lengthd>{
+                               Lengthd(1, Lengthd::Unit::None), Lengthd(2, Lengthd::Unit::None),
+                               Lengthd(3, Lengthd::Unit::Percent)}));
   }
 
   {
@@ -1361,7 +1453,7 @@ TEST(PropertyRegistry, FilterParsing) {
     PropertyRegistry registry;
     registry.parseStyle("filter: none");
     ASSERT_TRUE(registry.filter.isSpecified());
-    EXPECT_TRUE((*registry.filter.getStoredValue()).empty());
+    EXPECT_THAT(*registry.filter.getStoredValue(), testing::IsEmpty());
   }
 
   {
@@ -1371,26 +1463,11 @@ TEST(PropertyRegistry, FilterParsing) {
         "invert(25%) opacity(0.4) saturate(3) sepia() url(#f)");
     ASSERT_TRUE(registry.filter.isSpecified());
     const auto& effects = (*registry.filter.getStoredValue());
-    ASSERT_EQ(effects.size(), 10u);
-    EXPECT_TRUE(effects[0].is<FilterEffect::Blur>());
-    EXPECT_EQ(effects[0].get<FilterEffect::Blur>().stdDeviationX, Lengthd(2, Lengthd::Unit::Px));
-    EXPECT_TRUE(effects[1].is<FilterEffect::HueRotate>());
-    EXPECT_DOUBLE_EQ(effects[1].get<FilterEffect::HueRotate>().angleDegrees, 180.0);
-    EXPECT_TRUE(effects[2].is<FilterEffect::Brightness>());
-    EXPECT_DOUBLE_EQ(effects[2].get<FilterEffect::Brightness>().amount, 0.5);
-    EXPECT_TRUE(effects[3].is<FilterEffect::Contrast>());
-    EXPECT_DOUBLE_EQ(effects[3].get<FilterEffect::Contrast>().amount, 2.0);
-    EXPECT_TRUE(effects[4].is<FilterEffect::Grayscale>());
-    EXPECT_DOUBLE_EQ(effects[4].get<FilterEffect::Grayscale>().amount, 1.0);
-    EXPECT_TRUE(effects[5].is<FilterEffect::Invert>());
-    EXPECT_DOUBLE_EQ(effects[5].get<FilterEffect::Invert>().amount, 0.25);
-    EXPECT_TRUE(effects[6].is<FilterEffect::FilterOpacity>());
-    EXPECT_DOUBLE_EQ(effects[6].get<FilterEffect::FilterOpacity>().amount, 0.4);
-    EXPECT_TRUE(effects[7].is<FilterEffect::Saturate>());
-    EXPECT_DOUBLE_EQ(effects[7].get<FilterEffect::Saturate>().amount, 3.0);
-    EXPECT_TRUE(effects[8].is<FilterEffect::Sepia>());
-    EXPECT_DOUBLE_EQ(effects[8].get<FilterEffect::Sepia>().amount, 1.0);
-    EXPECT_TRUE(effects[9].is<FilterEffect::ElementReference>());
+    EXPECT_THAT(effects, testing::ElementsAre(
+                             FilterBlurIs(2.0, Lengthd::Unit::Px), FilterHueRotateIs(180.0, 0.0),
+                             FilterBrightnessIs(0.5), FilterContrastIs(2.0), FilterGrayscaleIs(1.0),
+                             FilterInvertIs(0.25), FilterOpacityIs(0.4), FilterSaturateIs(3.0),
+                             FilterSepiaIs(1.0), FilterReferenceIs("#f")));
   }
 
   {
@@ -1398,12 +1475,9 @@ TEST(PropertyRegistry, FilterParsing) {
     registry.parseStyle("filter: drop-shadow(red 1px 2px 3px)");
     ASSERT_TRUE(registry.filter.isSpecified());
     const auto& effects = (*registry.filter.getStoredValue());
-    ASSERT_EQ(effects.size(), 1u);
-    const auto& shadow = effects.front().get<FilterEffect::DropShadow>();
-    EXPECT_EQ(shadow.offsetX, Lengthd(1, Lengthd::Unit::Px));
-    EXPECT_EQ(shadow.offsetY, Lengthd(2, Lengthd::Unit::Px));
-    EXPECT_EQ(shadow.stdDeviation, Lengthd(3, Lengthd::Unit::Px));
-    EXPECT_EQ(shadow.color, Color(RGBA(0xFF, 0, 0, 0xFF)));
+    EXPECT_THAT(effects, testing::ElementsAre(FilterDropShadowIs(
+                             Lengthd(1, Lengthd::Unit::Px), Lengthd(2, Lengthd::Unit::Px),
+                             Lengthd(3, Lengthd::Unit::Px), Color(RGBA(0xFF, 0, 0, 0xFF)))));
   }
 
   {
@@ -1482,26 +1556,22 @@ TEST(PropertyRegistry, TransformOriginStrokeMiterlimitAndFilterEdgeCases) {
     PropertyRegistry registry;
     registry.parseStyle("filter: hue-rotate(200grad) hue-rotate(3.141592653589793rad)");
     const auto& effects = (*registry.filter.getStoredValue());
-    ASSERT_EQ(effects.size(), 2u);
-    EXPECT_DOUBLE_EQ(effects[0].get<FilterEffect::HueRotate>().angleDegrees, 180.0);
-    EXPECT_NEAR(effects[1].get<FilterEffect::HueRotate>().angleDegrees, 180.0, 1e-9);
+    EXPECT_THAT(effects, testing::ElementsAre(FilterHueRotateIs(180.0, 0.0),
+                                              FilterHueRotateIs(180.0, 1e-9)));
   }
 
   {
     PropertyRegistry registry;
     registry.parseStyle("filter: hue-rotate(0)");
     const auto& effects = (*registry.filter.getStoredValue());
-    ASSERT_EQ(effects.size(), 1u);
-    EXPECT_DOUBLE_EQ(effects[0].get<FilterEffect::HueRotate>().angleDegrees, 0.0);
+    EXPECT_THAT(effects, testing::ElementsAre(FilterHueRotateIs(0.0, 0.0)));
   }
 
   {
     PropertyRegistry registry;
     registry.parseStyle("filter: url(\"#quoted\")");
     const auto& effects = (*registry.filter.getStoredValue());
-    ASSERT_EQ(effects.size(), 1u);
-    EXPECT_TRUE(effects[0].is<FilterEffect::ElementReference>());
-    EXPECT_EQ(effects[0].get<FilterEffect::ElementReference>().reference, Reference("#quoted"));
+    EXPECT_THAT(effects, testing::ElementsAre(FilterReferenceIs("#quoted")));
   }
 
   {

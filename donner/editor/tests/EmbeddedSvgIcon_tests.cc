@@ -9,6 +9,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
 #include <span>
 #include <string_view>
 
@@ -21,16 +22,27 @@
 namespace donner::editor {
 namespace {
 
+using ::testing::ElementsAre;
+
 constexpr std::string_view kSquareIconSvg =
     R"(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">)"
     R"(<rect x="2" y="2" width="12" height="12" fill="#000"/></svg>)";
 
+#ifdef DONNER_GEODE_BACKEND_AVAILABLE
 constexpr std::string_view kCircleIconSvg =
     R"(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">)"
     R"(<circle cx="8" cy="8" r="6" fill="#000"/></svg>)";
+#endif
 
 std::span<const unsigned char> BytesOf(std::string_view svg) {
   return {reinterpret_cast<const unsigned char*>(svg.data()), svg.size()};
+}
+
+std::array<int, 4> PixelAt(const svg::RendererBitmap& bitmap, int x, int y) {
+  const unsigned char* pixel = bitmap.pixels.data() +
+                               static_cast<std::size_t>(y) * bitmap.rowBytes +
+                               static_cast<std::size_t>(x) * 4u;
+  return {pixel[0], pixel[1], pixel[2], pixel[3]};
 }
 
 TEST(EmbeddedSvgIcon, RendersTintableAlphaMask) {
@@ -41,17 +53,8 @@ TEST(EmbeddedSvgIcon, RendersTintableAlphaMask) {
 
   // Center pixel is inside the filled rect: fully opaque, RGB == alpha (white
   // mask). Corner pixel is outside: fully transparent.
-  const auto pixelAt = [&](int x, int y) {
-    return bitmap->pixels.data() + static_cast<std::size_t>(y) * bitmap->rowBytes +
-           static_cast<std::size_t>(x) * 4u;
-  };
-  const unsigned char* center = pixelAt(8, 8);
-  EXPECT_EQ(center[3], 255);
-  EXPECT_EQ(center[0], center[3]);
-  EXPECT_EQ(center[1], center[3]);
-  EXPECT_EQ(center[2], center[3]);
-  const unsigned char* corner = pixelAt(0, 0);
-  EXPECT_EQ(corner[3], 0);
+  EXPECT_THAT(PixelAt(*bitmap, 8, 8), ElementsAre(255, 255, 255, 255));
+  EXPECT_THAT(PixelAt(*bitmap, 0, 0), ElementsAre(0, 0, 0, 0));
 }
 
 #ifdef DONNER_GEODE_BACKEND_AVAILABLE

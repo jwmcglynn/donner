@@ -34,6 +34,20 @@ using testing::SizeIs;
 
 namespace donner::svg::components {
 
+namespace {
+
+using ::testing::AllOf;
+using ::testing::ElementsAre;
+using ::testing::Field;
+using ::testing::FloatEq;
+
+auto GradientStopIs(float offset, css::Color color) {
+  return AllOf(Field("offset", &GradientStop::offset, FloatEq(offset)),
+               Field("color", &GradientStop::color, color));
+}
+
+}  // namespace
+
 class PaintSystemTest : public ::testing::Test {
 protected:
   SVGDocument ParseSVG(std::string_view input) {
@@ -411,15 +425,11 @@ TEST_F(PaintSystemTest, MultipleStopsAtSameOffset) {
   EXPECT_TRUE(computed->initialized);
 
   // All four stops should be preserved, including the two at offset 0.5.
-  ASSERT_THAT(computed->stops, SizeIs(4));
-  EXPECT_FLOAT_EQ(computed->stops[0].offset, 0.0f);
-  EXPECT_FLOAT_EQ(computed->stops[1].offset, 0.5f);
-  EXPECT_FLOAT_EQ(computed->stops[2].offset, 0.5f);
-  EXPECT_FLOAT_EQ(computed->stops[3].offset, 1.0f);
-
-  // Verify colors at the duplicate offset: first is red, second is blue.
-  EXPECT_EQ(computed->stops[1].color, css::Color(css::RGBA(0xFF, 0, 0, 0xFF)));
-  EXPECT_EQ(computed->stops[2].color, css::Color(css::RGBA(0, 0, 0xFF, 0xFF)));
+  EXPECT_THAT(computed->stops,
+              ElementsAre(GradientStopIs(0.0f, css::Color(css::RGBA(0xFF, 0, 0, 0xFF))),
+                          GradientStopIs(0.5f, css::Color(css::RGBA(0xFF, 0, 0, 0xFF))),
+                          GradientStopIs(0.5f, css::Color(css::RGBA(0, 0, 0xFF, 0xFF))),
+                          GradientStopIs(1.0f, css::Color(css::RGBA(0, 128, 0, 0xFF)))));
 }
 
 // --- Gradient with objectBoundingBox coordinates ---
@@ -638,11 +648,11 @@ TEST_F(PaintSystemTest, StopWithExplicitColor) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedGradientComponent>();
   ASSERT_THAT(computed, NotNull());
-  ASSERT_THAT(computed->stops, SizeIs(3));
 
-  EXPECT_EQ(computed->stops[0].color, css::Color(css::RGBA(0, 0xFF, 0, 0xFF)));
-  EXPECT_EQ(computed->stops[1].color, css::Color(css::RGBA(128, 0, 255, 0xFF)));
-  EXPECT_EQ(computed->stops[2].color, css::Color(css::RGBA(0, 0, 0, 0xFF)));
+  EXPECT_THAT(computed->stops,
+              ElementsAre(GradientStopIs(0.0f, css::Color(css::RGBA(0, 0xFF, 0, 0xFF))),
+                          GradientStopIs(0.5f, css::Color(css::RGBA(128, 0, 255, 0xFF))),
+                          GradientStopIs(1.0f, css::Color(css::RGBA(0, 0, 0, 0xFF)))));
 }
 
 TEST_F(PaintSystemTest, StopWithCurrentColor) {
@@ -661,11 +671,11 @@ TEST_F(PaintSystemTest, StopWithCurrentColor) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedGradientComponent>();
   ASSERT_THAT(computed, NotNull());
-  ASSERT_THAT(computed->stops, SizeIs(2));
 
   // currentColor should resolve to the inherited "color" property, which is green.
-  EXPECT_EQ(computed->stops[0].color, css::Color(css::RGBA(0, 128, 0, 0xFF)));
-  EXPECT_EQ(computed->stops[1].color, css::Color(css::RGBA(0, 0, 0xFF, 0xFF)));
+  EXPECT_THAT(computed->stops,
+              ElementsAre(GradientStopIs(0.0f, css::Color(css::RGBA(0, 128, 0, 0xFF))),
+                          GradientStopIs(1.0f, css::Color(css::RGBA(0, 0, 0xFF, 0xFF)))));
 }
 
 // --- Gradient inherits spreadMethod via href ---

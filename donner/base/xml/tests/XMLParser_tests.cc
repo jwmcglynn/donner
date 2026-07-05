@@ -5,6 +5,7 @@
 
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "donner/base/ParseResult.h"
 #include "donner/base/RcString.h"
@@ -16,10 +17,41 @@
 using testing::AllOf;
 using testing::ElementsAre;
 using testing::Eq;
+using testing::Field;
 
 // TODO: Add an ErrorHighlightsText matcher
 
 namespace donner::xml {
+
+auto MutationKindIs(XMLMutation::Kind kind) {
+  return Field("kind", &XMLMutation::kind, kind);
+}
+
+auto MutationIs(XMLMutation::Kind kind, XMLNode node, ReparseScope scope) {
+  return AllOf(MutationKindIs(kind), Field("node", &XMLMutation::node, node),
+               Field("scope", &XMLMutation::scope, scope));
+}
+
+template <typename ValueMatcher>
+auto AttributeMutationIs(XMLMutation::Kind kind, XMLNode node, XMLQualifiedName attributeName,
+                         ValueMatcher valueMatcher, ReparseScope scope) {
+  return AllOf(MutationIs(kind, node, scope),
+               Field("attributeName", &XMLMutation::attributeName, std::move(attributeName)),
+               Field("value", &XMLMutation::value, valueMatcher));
+}
+
+template <typename ValueMatcher>
+auto NodeValueMutationIs(XMLNode node, ValueMatcher valueMatcher, ReparseScope scope) {
+  return AllOf(MutationIs(XMLMutation::Kind::NodeValueChanged, node, scope),
+               Field("value", &XMLMutation::value, valueMatcher));
+}
+
+template <typename DiagnosticMatcher>
+auto SourceDiagnosticMutationIs(XMLNode node, DiagnosticMatcher diagnosticMatcher,
+                                ReparseScope scope) {
+  return AllOf(MutationIs(XMLMutation::Kind::SourceDiagnosticChanged, node, scope),
+               Field("diagnostic", &XMLMutation::diagnostic, diagnosticMatcher));
+}
 
 std::string_view SourceText(const XMLDocument& document, SourceRange range) {
   if (!range.start.offset.has_value() || !range.end.offset.has_value() ||
@@ -429,12 +461,10 @@ TEST_F(XMLParserTests, ApplySourceEditUpdatesAttributeValue) {
                                        .insertedLength = 4,
                                        .sourceVersion = 1,
                                    }));
-  ASSERT_EQ(result.mutations.size(), 1u);
-  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::AttributeSet);
-  EXPECT_EQ(result.mutations[0].node, rect);
-  EXPECT_EQ(result.mutations[0].attributeName, XMLQualifiedName("fill"));
-  EXPECT_THAT(result.mutations[0].value, testing::Optional(RcString("blue")));
-  EXPECT_EQ(result.mutations[0].scope, ReparseScope::AttributeValue);
+  EXPECT_THAT(result.mutations,
+              ElementsAre(AttributeMutationIs(
+                  XMLMutation::Kind::AttributeSet, rect, XMLQualifiedName("fill"),
+                  testing::Optional(RcString("blue")), ReparseScope::AttributeValue)));
   EXPECT_EQ(result.diagnostic, std::nullopt);
 
   EXPECT_EQ(document.source(), R"(<svg><rect fill="blue"/></svg>)");
@@ -488,11 +518,9 @@ TEST_F(XMLParserTests, ApplySourceEditMarksAttributeEntityDirtyAndRecovers) {
   EXPECT_TRUE(dirtyResult.applied);
   EXPECT_EQ(dirtyResult.scope, ReparseScope::AttributeValue);
   ASSERT_TRUE(dirtyResult.diagnostic.has_value());
-  ASSERT_EQ(dirtyResult.mutations.size(), 1u);
-  EXPECT_EQ(dirtyResult.mutations[0].kind, XMLMutation::Kind::SourceDiagnosticChanged);
-  EXPECT_EQ(dirtyResult.mutations[0].node, rect);
-  EXPECT_EQ(dirtyResult.mutations[0].diagnostic, dirtyResult.diagnostic);
-  EXPECT_EQ(dirtyResult.mutations[0].scope, ReparseScope::AttributeValue);
+  EXPECT_THAT(dirtyResult.mutations,
+              ElementsAre(SourceDiagnosticMutationIs(rect, Eq(dirtyResult.diagnostic),
+                                                     ReparseScope::AttributeValue)));
   EXPECT_EQ(SourceText(document, dirtyResult.diagnostic->range), "a&#65b");
   EXPECT_EQ(document.source(), R"(<svg><rect data-label="a&#65b"/></svg>)");
   EXPECT_THAT(rect.getAttribute("data-label"), Eq("aAb"));
@@ -507,13 +535,12 @@ TEST_F(XMLParserTests, ApplySourceEditMarksAttributeEntityDirtyAndRecovers) {
   EXPECT_TRUE(recoveryResult.applied);
   EXPECT_EQ(recoveryResult.scope, ReparseScope::AttributeValue);
   EXPECT_EQ(recoveryResult.diagnostic, std::nullopt);
-  ASSERT_EQ(recoveryResult.mutations.size(), 2u);
-  EXPECT_EQ(recoveryResult.mutations[0].node, rect);
-  EXPECT_THAT(recoveryResult.mutations[0].value, testing::Optional(RcString("aAb")));
-  EXPECT_EQ(recoveryResult.mutations[1].kind, XMLMutation::Kind::SourceDiagnosticChanged);
-  EXPECT_EQ(recoveryResult.mutations[1].node, rect);
-  EXPECT_EQ(recoveryResult.mutations[1].diagnostic, std::nullopt);
-  EXPECT_EQ(recoveryResult.mutations[1].scope, ReparseScope::AttributeValue);
+  EXPECT_THAT(
+      recoveryResult.mutations,
+      ElementsAre(
+          AttributeMutationIs(XMLMutation::Kind::AttributeSet, rect, XMLQualifiedName("data-label"),
+                              testing::Optional(RcString("aAb")), ReparseScope::AttributeValue),
+          SourceDiagnosticMutationIs(rect, Eq(std::nullopt), ReparseScope::AttributeValue)));
   EXPECT_EQ(document.source(), kXml);
   EXPECT_THAT(rect.getAttribute("data-label"), Eq("aAb"));
 }
@@ -541,12 +568,10 @@ TEST_F(XMLParserTests, SetAttributeUpdatesSourceThroughDocument) {
                                        .insertedLength = kEscapedValue.size(),
                                        .sourceVersion = 1,
                                    }));
-  ASSERT_EQ(result.mutations.size(), 1u);
-  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::AttributeSet);
-  EXPECT_EQ(result.mutations[0].node, rect);
-  EXPECT_EQ(result.mutations[0].attributeName, XMLQualifiedName("fill"));
-  EXPECT_THAT(result.mutations[0].value, testing::Optional(RcString(R"(Tom's & "q")")));
-  EXPECT_EQ(result.mutations[0].scope, ReparseScope::AttributeValue);
+  EXPECT_THAT(result.mutations,
+              ElementsAre(AttributeMutationIs(
+                  XMLMutation::Kind::AttributeSet, rect, XMLQualifiedName("fill"),
+                  testing::Optional(RcString(R"(Tom's & "q")")), ReparseScope::AttributeValue)));
   EXPECT_EQ(result.diagnostic, std::nullopt);
 
   EXPECT_EQ(document.source(), R"(<svg><rect fill='Tom&apos;s &amp; "q"' stroke="black"/></svg>)");
@@ -576,12 +601,10 @@ TEST_F(XMLParserTests, SetAttributeInsertsMissingSourceAttributeThroughDocument)
                                        .insertedLength = kInsertedSource.size(),
                                        .sourceVersion = 1,
                                    }));
-  ASSERT_EQ(result.mutations.size(), 1u);
-  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::AttributeSet);
-  EXPECT_EQ(result.mutations[0].node, rect);
-  EXPECT_EQ(result.mutations[0].attributeName, XMLQualifiedName("fill"));
-  EXPECT_THAT(result.mutations[0].value, testing::Optional(RcString("blue & white")));
-  EXPECT_EQ(result.mutations[0].scope, ReparseScope::OpeningTag);
+  EXPECT_THAT(result.mutations,
+              ElementsAre(AttributeMutationIs(
+                  XMLMutation::Kind::AttributeSet, rect, XMLQualifiedName("fill"),
+                  testing::Optional(RcString("blue & white")), ReparseScope::OpeningTag)));
   EXPECT_EQ(result.diagnostic, std::nullopt);
 
   EXPECT_EQ(document.source(), R"(<svg><rect fill="blue &amp; white"/></svg>)");
@@ -631,12 +654,10 @@ TEST_F(XMLParserTests, RemoveAttributeUpdatesSourceThroughDocument) {
                   .insertedLength = 0,
                   .sourceVersion = 1,
               }));
-  ASSERT_EQ(result.mutations.size(), 1u);
-  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::AttributeRemoved);
-  EXPECT_EQ(result.mutations[0].node, rect);
-  EXPECT_EQ(result.mutations[0].attributeName, XMLQualifiedName("fill"));
-  EXPECT_EQ(result.mutations[0].value, std::nullopt);
-  EXPECT_EQ(result.mutations[0].scope, ReparseScope::OpeningTag);
+  EXPECT_THAT(result.mutations,
+              ElementsAre(AttributeMutationIs(XMLMutation::Kind::AttributeRemoved, rect,
+                                              XMLQualifiedName("fill"), Eq(std::nullopt),
+                                              ReparseScope::OpeningTag)));
   EXPECT_EQ(result.diagnostic, std::nullopt);
 
   EXPECT_EQ(document.source(), R"(<svg><rect stroke="blue"/></svg>)");
@@ -692,11 +713,8 @@ TEST_F(XMLParserTests, ApplySourceEditMarksOpeningTagDirtyWhenDeletingAttributeQ
   EXPECT_TRUE(result.applied);
   EXPECT_EQ(result.scope, ReparseScope::OpeningTag);
   ASSERT_TRUE(result.diagnostic.has_value());
-  ASSERT_EQ(result.mutations.size(), 1u);
-  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::SourceDiagnosticChanged);
-  EXPECT_EQ(result.mutations[0].node, rect);
-  EXPECT_EQ(result.mutations[0].diagnostic, result.diagnostic);
-  EXPECT_EQ(result.mutations[0].scope, ReparseScope::OpeningTag);
+  EXPECT_THAT(result.mutations, ElementsAre(SourceDiagnosticMutationIs(rect, Eq(result.diagnostic),
+                                                                       ReparseScope::OpeningTag)));
   EXPECT_EQ(SourceText(document, result.diagnostic->range), R"(<rect fill="red/>)");
   EXPECT_EQ(document.source(), R"(<svg><rect fill="red/></svg>)");
   EXPECT_THAT(rect.getAttribute("fill"), Eq("red"));
@@ -723,11 +741,8 @@ TEST_F(XMLParserTests, ApplySourceEditMarksPartialOpeningTagDirty) {
   EXPECT_TRUE(result.applied);
   EXPECT_EQ(result.scope, ReparseScope::OpeningTag);
   ASSERT_TRUE(result.diagnostic.has_value());
-  ASSERT_EQ(result.mutations.size(), 1u);
-  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::SourceDiagnosticChanged);
-  EXPECT_EQ(result.mutations[0].node, rect);
-  EXPECT_EQ(result.mutations[0].diagnostic, result.diagnostic);
-  EXPECT_EQ(result.mutations[0].scope, ReparseScope::OpeningTag);
+  EXPECT_THAT(result.mutations, ElementsAre(SourceDiagnosticMutationIs(rect, Eq(result.diagnostic),
+                                                                       ReparseScope::OpeningTag)));
   EXPECT_EQ(SourceText(document, result.diagnostic->range), R"(<rect fill="red"/)");
   EXPECT_EQ(document.source(), R"(<svg><rect fill="red"/</svg>)");
   EXPECT_THAT(rect.getAttribute("fill"), Eq("red"));
@@ -766,11 +781,8 @@ TEST_F(XMLParserTests, ApplySourceEditRestoresDirtyOpeningTagWithoutDocumentFall
   EXPECT_TRUE(recoveryResult.applied);
   EXPECT_EQ(recoveryResult.scope, ReparseScope::OpeningTag);
   EXPECT_EQ(recoveryResult.diagnostic, std::nullopt);
-  ASSERT_EQ(recoveryResult.mutations.size(), 1u);
-  EXPECT_EQ(recoveryResult.mutations[0].kind, XMLMutation::Kind::SourceDiagnosticChanged);
-  EXPECT_EQ(recoveryResult.mutations[0].node, rect);
-  EXPECT_EQ(recoveryResult.mutations[0].diagnostic, std::nullopt);
-  EXPECT_EQ(recoveryResult.mutations[0].scope, ReparseScope::OpeningTag);
+  EXPECT_THAT(recoveryResult.mutations, ElementsAre(SourceDiagnosticMutationIs(
+                                            rect, Eq(std::nullopt), ReparseScope::OpeningTag)));
   EXPECT_EQ(document.source(), kXml);
   EXPECT_THAT(rect.getAttribute("fill"), Eq("red"));
 }
@@ -796,12 +808,10 @@ TEST_F(XMLParserTests, ApplySourceEditOpeningTagAddsAttribute) {
   EXPECT_TRUE(result.applied);
   EXPECT_EQ(result.scope, ReparseScope::OpeningTag);
   EXPECT_EQ(result.diagnostic, std::nullopt);
-  ASSERT_EQ(result.mutations.size(), 1u);
-  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::AttributeSet);
-  EXPECT_EQ(result.mutations[0].node, rect);
-  EXPECT_EQ(result.mutations[0].attributeName, XMLQualifiedName("stroke"));
-  EXPECT_THAT(result.mutations[0].value, testing::Optional(RcString("blue")));
-  EXPECT_EQ(result.mutations[0].scope, ReparseScope::OpeningTag);
+  EXPECT_THAT(result.mutations,
+              ElementsAre(AttributeMutationIs(
+                  XMLMutation::Kind::AttributeSet, rect, XMLQualifiedName("stroke"),
+                  testing::Optional(RcString("blue")), ReparseScope::OpeningTag)));
 
   EXPECT_EQ(document.source(), R"(<svg><rect fill="red" stroke="blue"/></svg>)");
   EXPECT_THAT(rect.getAttribute("fill"), Eq("red"));
@@ -828,12 +838,10 @@ TEST_F(XMLParserTests, ApplySourceEditOpeningTagRemovesAttribute) {
   EXPECT_TRUE(result.applied);
   EXPECT_EQ(result.scope, ReparseScope::OpeningTag);
   EXPECT_EQ(result.diagnostic, std::nullopt);
-  ASSERT_EQ(result.mutations.size(), 1u);
-  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::AttributeRemoved);
-  EXPECT_EQ(result.mutations[0].node, rect);
-  EXPECT_EQ(result.mutations[0].attributeName, XMLQualifiedName("fill"));
-  EXPECT_EQ(result.mutations[0].value, std::nullopt);
-  EXPECT_EQ(result.mutations[0].scope, ReparseScope::OpeningTag);
+  EXPECT_THAT(result.mutations,
+              ElementsAre(AttributeMutationIs(XMLMutation::Kind::AttributeRemoved, rect,
+                                              XMLQualifiedName("fill"), Eq(std::nullopt),
+                                              ReparseScope::OpeningTag)));
 
   EXPECT_EQ(document.source(), R"(<svg><rect  stroke="blue"/></svg>)");
   EXPECT_THAT(rect.getAttribute("fill"), Eq(std::nullopt));
@@ -865,10 +873,8 @@ TEST_F(XMLParserTests, RemoveNodeUpdatesSourceThroughDocument) {
                   .insertedLength = 0,
                   .sourceVersion = 1,
               }));
-  ASSERT_EQ(result.mutations.size(), 1u);
-  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::NodeRemoved);
-  EXPECT_EQ(result.mutations[0].node, group);
-  EXPECT_EQ(result.mutations[0].scope, ReparseScope::ElementSubtree);
+  EXPECT_THAT(result.mutations, ElementsAre(MutationIs(XMLMutation::Kind::NodeRemoved, group,
+                                                       ReparseScope::ElementSubtree)));
   EXPECT_EQ(result.diagnostic, std::nullopt);
 
   EXPECT_EQ(document.source(), R"(<svg><circle/></svg>)");
@@ -928,10 +934,8 @@ TEST_F(XMLParserTests, InsertNodeUpdatesSourceThroughDocument) {
                                        .insertedLength = kInserted.size(),
                                        .sourceVersion = 1,
                                    }));
-  ASSERT_EQ(result.mutations.size(), 1u);
-  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::NodeInserted);
-  EXPECT_EQ(result.mutations[0].node, rect);
-  EXPECT_EQ(result.mutations[0].scope, ReparseScope::ElementSubtree);
+  EXPECT_THAT(result.mutations, ElementsAre(MutationIs(XMLMutation::Kind::NodeInserted, rect,
+                                                       ReparseScope::ElementSubtree)));
   EXPECT_EQ(result.diagnostic, std::nullopt);
 
   EXPECT_EQ(document.source(), R"(<svg><g id="parent"><rect id="inserted"/></g><circle/></svg>)");
@@ -975,8 +979,8 @@ TEST_F(XMLParserTests, InsertNodeBeforeReferenceUpdatesSourceThroughDocument) {
                                        .insertedLength = kInserted.size(),
                                        .sourceVersion = 1,
                                    }));
-  ASSERT_EQ(result.mutations.size(), 1u);
-  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::NodeInserted);
+  EXPECT_THAT(result.mutations, ElementsAre(MutationIs(XMLMutation::Kind::NodeInserted, rect,
+                                                       ReparseScope::ElementSubtree)));
 
   EXPECT_EQ(document.source(), R"(<svg><g><rect id="inserted"/><circle id="sibling"/></g></svg>)");
   ASSERT_TRUE(group.firstChild().has_value());
@@ -1036,8 +1040,8 @@ TEST_F(XMLParserTests, InsertNodeExpandsSelfClosingParentThroughDocument) {
                   .insertedLength = std::string_view(R"(><rect id="inserted"/></g>)").size(),
                   .sourceVersion = 1,
               }));
-  ASSERT_EQ(result.mutations.size(), 1u);
-  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::NodeInserted);
+  EXPECT_THAT(result.mutations, ElementsAre(MutationIs(XMLMutation::Kind::NodeInserted, rect,
+                                                       ReparseScope::ElementSubtree)));
   EXPECT_EQ(result.diagnostic, std::nullopt);
 
   EXPECT_EQ(document.source(), R"(<svg><g id="parent"><rect id="inserted"/></g><circle/></svg>)");
@@ -1074,10 +1078,9 @@ TEST_F(XMLParserTests, InsertNodeMovesExistingSourceBackedChildToEnd) {
   EXPECT_TRUE(result.applied);
   EXPECT_EQ(result.scope, ReparseScope::ElementSubtree);
   ASSERT_EQ(result.sourceDeltas.size(), 2u);
-  ASSERT_EQ(result.mutations.size(), 2u);
-  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::NodeRemoved);
-  EXPECT_EQ(result.mutations[1].kind, XMLMutation::Kind::NodeInserted);
-  EXPECT_EQ(result.mutations[1].node, rect);
+  EXPECT_THAT(result.mutations, ElementsAre(MutationKindIs(XMLMutation::Kind::NodeRemoved),
+                                            MutationIs(XMLMutation::Kind::NodeInserted, rect,
+                                                       ReparseScope::ElementSubtree)));
   EXPECT_EQ(result.diagnostic, std::nullopt);
 
   EXPECT_EQ(document.source(), R"(<svg><g><circle id="b"/><rect id="a"/></g></svg>)");
@@ -1106,10 +1109,9 @@ TEST_F(XMLParserTests, InsertNodeMovesExistingSourceBackedChildBeforeReference) 
   EXPECT_TRUE(result.applied);
   EXPECT_EQ(result.scope, ReparseScope::ElementSubtree);
   ASSERT_EQ(result.sourceDeltas.size(), 2u);
-  ASSERT_EQ(result.mutations.size(), 2u);
-  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::NodeRemoved);
-  EXPECT_EQ(result.mutations[1].kind, XMLMutation::Kind::NodeInserted);
-  EXPECT_EQ(result.mutations[1].node, circle);
+  EXPECT_THAT(result.mutations, ElementsAre(MutationKindIs(XMLMutation::Kind::NodeRemoved),
+                                            MutationIs(XMLMutation::Kind::NodeInserted, circle,
+                                                       ReparseScope::ElementSubtree)));
   EXPECT_EQ(result.diagnostic, std::nullopt);
 
   EXPECT_EQ(document.source(), R"(<svg><g><circle id="b"/><rect id="a"/></g></svg>)");
@@ -1137,9 +1139,8 @@ TEST_F(XMLParserTests, InsertNodeMovesExistingSourceBackedChildIntoLaterSelfClos
   EXPECT_TRUE(result.applied);
   EXPECT_EQ(result.scope, ReparseScope::ElementSubtree);
   ASSERT_EQ(result.sourceDeltas.size(), 2u);
-  ASSERT_EQ(result.mutations.size(), 2u);
-  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::NodeRemoved);
-  EXPECT_EQ(result.mutations[1].kind, XMLMutation::Kind::NodeInserted);
+  EXPECT_THAT(result.mutations, ElementsAre(MutationKindIs(XMLMutation::Kind::NodeRemoved),
+                                            MutationKindIs(XMLMutation::Kind::NodeInserted)));
   EXPECT_EQ(result.diagnostic, std::nullopt);
 
   EXPECT_EQ(document.source(), R"(<svg><g id="target"><rect id="a"/></g></svg>)");
@@ -1171,9 +1172,8 @@ TEST_F(XMLParserTests, InsertNodeMovesExistingSourceBackedChildIntoEarlierSelfCl
   EXPECT_TRUE(result.applied);
   EXPECT_EQ(result.scope, ReparseScope::ElementSubtree);
   ASSERT_EQ(result.sourceDeltas.size(), 2u);
-  ASSERT_EQ(result.mutations.size(), 2u);
-  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::NodeRemoved);
-  EXPECT_EQ(result.mutations[1].kind, XMLMutation::Kind::NodeInserted);
+  EXPECT_THAT(result.mutations, ElementsAre(MutationKindIs(XMLMutation::Kind::NodeRemoved),
+                                            MutationKindIs(XMLMutation::Kind::NodeInserted)));
   EXPECT_EQ(result.diagnostic, std::nullopt);
 
   EXPECT_EQ(document.source(), R"(<svg><g id="target"><rect id="a"/></g></svg>)");
@@ -1216,12 +1216,12 @@ TEST_F(XMLParserTests, ApplySourceEditElementSubtreeInsertsChildWithoutDocumentF
   EXPECT_TRUE(result.applied);
   EXPECT_EQ(result.scope, ReparseScope::ElementSubtree);
   EXPECT_EQ(result.diagnostic, std::nullopt);
-  ASSERT_EQ(result.mutations.size(), 2u);
-  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::SubtreeReplaced);
-  EXPECT_EQ(result.mutations[0].node, group);
-  EXPECT_EQ(result.mutations[0].scope, ReparseScope::ElementSubtree);
-  EXPECT_EQ(result.mutations[1].kind, XMLMutation::Kind::NodeInserted);
-  EXPECT_EQ(result.mutations[1].scope, ReparseScope::ElementSubtree);
+  EXPECT_THAT(
+      result.mutations,
+      ElementsAre(
+          MutationIs(XMLMutation::Kind::SubtreeReplaced, group, ReparseScope::ElementSubtree),
+          AllOf(MutationKindIs(XMLMutation::Kind::NodeInserted),
+                Field("scope", &XMLMutation::scope, ReparseScope::ElementSubtree))));
   EXPECT_EQ(document.source(), kExpected);
   EXPECT_EQ(group.entityHandle().entity(), groupEntity);
 
@@ -1299,11 +1299,11 @@ TEST_F(XMLParserTests, ApplySourceEditElementSubtreeDeletionInvalidatesRemovedCh
   EXPECT_TRUE(result.applied);
   EXPECT_EQ(result.scope, ReparseScope::ElementSubtree);
   EXPECT_EQ(result.diagnostic, std::nullopt);
-  ASSERT_EQ(result.mutations.size(), 2u);
-  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::SubtreeReplaced);
-  EXPECT_EQ(result.mutations[0].node, group);
-  EXPECT_EQ(result.mutations[1].kind, XMLMutation::Kind::NodeRemoved);
-  EXPECT_EQ(result.mutations[1].node, rect);
+  EXPECT_THAT(
+      result.mutations,
+      ElementsAre(
+          MutationIs(XMLMutation::Kind::SubtreeReplaced, group, ReparseScope::ElementSubtree),
+          MutationIs(XMLMutation::Kind::NodeRemoved, rect, ReparseScope::ElementSubtree)));
   EXPECT_EQ(rect.parentElement(), std::nullopt);
   EXPECT_EQ(rect.getNodeLocation(), std::nullopt);
   ASSERT_TRUE(group.firstChild().has_value());
@@ -1332,14 +1332,13 @@ TEST_F(XMLParserTests, ApplySourceEditOpeningTagRenamesAttribute) {
   EXPECT_TRUE(result.applied);
   EXPECT_EQ(result.scope, ReparseScope::OpeningTag);
   EXPECT_EQ(result.diagnostic, std::nullopt);
-  ASSERT_EQ(result.mutations.size(), 2u);
-  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::AttributeRemoved);
-  EXPECT_EQ(result.mutations[0].attributeName, XMLQualifiedName("fill"));
-  EXPECT_EQ(result.mutations[0].node, rect);
-  EXPECT_EQ(result.mutations[1].kind, XMLMutation::Kind::AttributeSet);
-  EXPECT_EQ(result.mutations[1].attributeName, XMLQualifiedName("stroke"));
-  EXPECT_EQ(result.mutations[1].node, rect);
-  EXPECT_THAT(result.mutations[1].value, testing::Optional(RcString("red")));
+  EXPECT_THAT(
+      result.mutations,
+      ElementsAre(
+          AttributeMutationIs(XMLMutation::Kind::AttributeRemoved, rect, XMLQualifiedName("fill"),
+                              Eq(std::nullopt), ReparseScope::OpeningTag),
+          AttributeMutationIs(XMLMutation::Kind::AttributeSet, rect, XMLQualifiedName("stroke"),
+                              testing::Optional(RcString("red")), ReparseScope::OpeningTag)));
 
   EXPECT_EQ(document.source(), R"(<svg><rect stroke="red"/></svg>)");
   EXPECT_THAT(rect.getAttribute("fill"), Eq(std::nullopt));
@@ -1402,11 +1401,9 @@ TEST_F(XMLParserTests, ApplySourceEditUpdatesTextNode) {
   EXPECT_TRUE(result.applied);
   EXPECT_EQ(result.scope, ReparseScope::TextNode);
   EXPECT_EQ(result.diagnostic, std::nullopt);
-  ASSERT_EQ(result.mutations.size(), 1u);
-  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::NodeValueChanged);
-  EXPECT_EQ(result.mutations[0].node, data);
-  EXPECT_THAT(result.mutations[0].value, testing::Optional(RcString("Hello there")));
-  EXPECT_EQ(result.mutations[0].scope, ReparseScope::TextNode);
+  EXPECT_THAT(result.mutations,
+              ElementsAre(NodeValueMutationIs(data, testing::Optional(RcString("Hello there")),
+                                              ReparseScope::TextNode)));
 
   EXPECT_EQ(document.source(), R"(<svg><text>Hello there</text></svg>)");
   EXPECT_THAT(data.value(), testing::Optional(RcString("Hello there")));
@@ -1435,9 +1432,9 @@ TEST_F(XMLParserTests, ApplySourceEditInsertsAtTextNodeEnd) {
   EXPECT_TRUE(result.applied);
   EXPECT_EQ(result.scope, ReparseScope::TextNode);
   EXPECT_EQ(result.diagnostic, std::nullopt);
-  ASSERT_EQ(result.mutations.size(), 1u);
-  EXPECT_EQ(result.mutations[0].node, data);
-  EXPECT_THAT(result.mutations[0].value, testing::Optional(RcString("Hello!")));
+  EXPECT_THAT(result.mutations,
+              ElementsAre(NodeValueMutationIs(data, testing::Optional(RcString("Hello!")),
+                                              ReparseScope::TextNode)));
 
   EXPECT_EQ(document.source(), R"(<svg><text>Hello!</text></svg>)");
   EXPECT_THAT(data.value(), testing::Optional(RcString("Hello!")));
@@ -1494,11 +1491,9 @@ TEST_F(XMLParserTests, ApplySourceEditMarksTextEntityDirtyAndRecovers) {
   EXPECT_TRUE(dirtyResult.applied);
   EXPECT_EQ(dirtyResult.scope, ReparseScope::TextNode);
   ASSERT_TRUE(dirtyResult.diagnostic.has_value());
-  ASSERT_EQ(dirtyResult.mutations.size(), 1u);
-  EXPECT_EQ(dirtyResult.mutations[0].kind, XMLMutation::Kind::SourceDiagnosticChanged);
-  EXPECT_EQ(dirtyResult.mutations[0].node, data);
-  EXPECT_EQ(dirtyResult.mutations[0].diagnostic, dirtyResult.diagnostic);
-  EXPECT_EQ(dirtyResult.mutations[0].scope, ReparseScope::TextNode);
+  EXPECT_THAT(dirtyResult.mutations,
+              ElementsAre(SourceDiagnosticMutationIs(data, Eq(dirtyResult.diagnostic),
+                                                     ReparseScope::TextNode)));
   EXPECT_EQ(SourceText(document, dirtyResult.diagnostic->range), "a&#65b");
   EXPECT_EQ(document.source(), R"(<svg><text>a&#65b</text></svg>)");
   EXPECT_THAT(data.value(), testing::Optional(RcString("aAb")));
@@ -1514,13 +1509,11 @@ TEST_F(XMLParserTests, ApplySourceEditMarksTextEntityDirtyAndRecovers) {
   EXPECT_TRUE(recoveryResult.applied);
   EXPECT_EQ(recoveryResult.scope, ReparseScope::TextNode);
   EXPECT_EQ(recoveryResult.diagnostic, std::nullopt);
-  ASSERT_EQ(recoveryResult.mutations.size(), 2u);
-  EXPECT_EQ(recoveryResult.mutations[0].node, data);
-  EXPECT_THAT(recoveryResult.mutations[0].value, testing::Optional(RcString("aAb")));
-  EXPECT_EQ(recoveryResult.mutations[1].kind, XMLMutation::Kind::SourceDiagnosticChanged);
-  EXPECT_EQ(recoveryResult.mutations[1].node, data);
-  EXPECT_EQ(recoveryResult.mutations[1].diagnostic, std::nullopt);
-  EXPECT_EQ(recoveryResult.mutations[1].scope, ReparseScope::TextNode);
+  EXPECT_THAT(
+      recoveryResult.mutations,
+      ElementsAre(
+          NodeValueMutationIs(data, testing::Optional(RcString("aAb")), ReparseScope::TextNode),
+          SourceDiagnosticMutationIs(data, Eq(std::nullopt), ReparseScope::TextNode)));
   EXPECT_EQ(document.source(), kXml);
   EXPECT_THAT(data.value(), testing::Optional(RcString("aAb")));
   EXPECT_THAT(text.value(), testing::Optional(RcString("aAb")));
@@ -1547,11 +1540,9 @@ TEST_F(XMLParserTests, ApplySourceEditUpdatesCDataValueLocally) {
   EXPECT_TRUE(result.applied);
   EXPECT_EQ(result.scope, ReparseScope::TextNode);
   EXPECT_EQ(result.diagnostic, std::nullopt);
-  ASSERT_EQ(result.mutations.size(), 1u);
-  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::NodeValueChanged);
-  EXPECT_EQ(result.mutations[0].node, cdata);
-  EXPECT_THAT(result.mutations[0].value, testing::Optional(RcString("a&b")));
-  EXPECT_EQ(result.mutations[0].scope, ReparseScope::TextNode);
+  EXPECT_THAT(result.mutations,
+              ElementsAre(NodeValueMutationIs(cdata, testing::Optional(RcString("a&b")),
+                                              ReparseScope::TextNode)));
 
   EXPECT_EQ(document.source(), R"(<svg><![CDATA[a&b]]></svg>)");
   EXPECT_THAT(cdata.value(), testing::Optional(RcString("a&b")));
@@ -1580,9 +1571,9 @@ TEST_F(XMLParserTests, ApplySourceEditUpdatesCommentValueLocally) {
   EXPECT_TRUE(result.applied);
   EXPECT_EQ(result.scope, ReparseScope::TextNode);
   EXPECT_EQ(result.diagnostic, std::nullopt);
-  ASSERT_EQ(result.mutations.size(), 1u);
-  EXPECT_EQ(result.mutations[0].node, comment);
-  EXPECT_THAT(result.mutations[0].value, testing::Optional(RcString(" bye ")));
+  EXPECT_THAT(result.mutations,
+              ElementsAre(NodeValueMutationIs(comment, testing::Optional(RcString(" bye ")),
+                                              ReparseScope::TextNode)));
 
   EXPECT_EQ(document.source(), R"(<svg><!-- bye --></svg>)");
   EXPECT_THAT(comment.value(), testing::Optional(RcString(" bye ")));
@@ -1611,9 +1602,9 @@ TEST_F(XMLParserTests, ApplySourceEditUpdatesProcessingInstructionValueLocally) 
   EXPECT_TRUE(result.applied);
   EXPECT_EQ(result.scope, ReparseScope::TextNode);
   EXPECT_EQ(result.diagnostic, std::nullopt);
-  ASSERT_EQ(result.mutations.size(), 1u);
-  EXPECT_EQ(result.mutations[0].node, processingInstruction);
-  EXPECT_THAT(result.mutations[0].value, testing::Optional(RcString("world")));
+  EXPECT_THAT(result.mutations, ElementsAre(NodeValueMutationIs(
+                                    processingInstruction, testing::Optional(RcString("world")),
+                                    ReparseScope::TextNode)));
 
   EXPECT_EQ(document.source(), R"(<svg><?target world?></svg>)");
   EXPECT_THAT(processingInstruction.value(), testing::Optional(RcString("world")));
@@ -1643,11 +1634,8 @@ TEST_F(XMLParserTests, ApplySourceEditKeepsTextValueWhenTextEditChangesStructure
   EXPECT_TRUE(result.applied);
   EXPECT_EQ(result.scope, ReparseScope::TextNode);
   ASSERT_TRUE(result.diagnostic.has_value());
-  ASSERT_EQ(result.mutations.size(), 1u);
-  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::SourceDiagnosticChanged);
-  EXPECT_EQ(result.mutations[0].node, data);
-  EXPECT_EQ(result.mutations[0].diagnostic, result.diagnostic);
-  EXPECT_EQ(result.mutations[0].scope, ReparseScope::TextNode);
+  EXPECT_THAT(result.mutations, ElementsAre(SourceDiagnosticMutationIs(data, Eq(result.diagnostic),
+                                                                       ReparseScope::TextNode)));
   EXPECT_EQ(document.source(), R"(<svg><text>Hello <tspan/></text></svg>)");
   EXPECT_THAT(data.value(), testing::Optional(RcString("Hello world")));
   EXPECT_THAT(text.value(), testing::Optional(RcString("Hello world")));

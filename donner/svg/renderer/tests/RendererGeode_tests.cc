@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -25,6 +26,7 @@
 #include "donner/svg/renderer/RendererUtils.h"
 #include "donner/svg/renderer/StrokeParams.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/resources/ImageResource.h"
 #include "tiny_skia/Pixmap.h"
 #include "tiny_skia/filter/Lighting.h"
@@ -33,6 +35,12 @@ namespace donner::svg {
 namespace {
 
 constexpr double kViewportSize = 64.0;
+
+using test::Alpha;
+using test::IsTransparent;
+using test::Near;
+using test::Rgba;
+using test::RgbaEq;
 
 struct BitmapDiffStats {
   int differingChannels = 0;
@@ -79,75 +87,6 @@ std::array<uint8_t, 4> pixelAt(const RendererBitmap& bitmap, int x, int y) {
   const size_t off = static_cast<size_t>(y) * bitmap.rowBytes + static_cast<size_t>(x) * 4u;
   return {bitmap.pixels[off], bitmap.pixels[off + 1], bitmap.pixels[off + 2],
           bitmap.pixels[off + 3]};
-}
-
-// -- gmock pixel matchers --
-//
-// A failing pixel assertion should print the full expected-vs-actual RGBA, not a
-// bare boolean for one channel. These matchers operate on the `std::array<uint8_t, 4>`
-// returned by `pixelAt` and always describe the *whole* pixel on failure (ToTT:
-// "Testing on the Toilet" - a failure message must localize the bug without a rerun).
-
-/// Render an RGBA pixel as "RGBA(r, g, b, a)" for matcher messages.
-std::string FormatRgba(const std::array<uint8_t, 4>& px) {
-  return testing::PrintToString(std::array<int, 4>{px[0], px[1], px[2], px[3]});
-}
-
-/// Matches a pixel whose channels each satisfy their own sub-matcher. Prefer this
-/// over four separate `EXPECT_EQ`/`EXPECT_NEAR` calls: a mismatch on any channel
-/// prints all four channels at once and names the offending one.
-///
-/// Example: `EXPECT_THAT(center, Rgba(Near(187, 4), Eq(0), Near(188, 4), Near(255, 1)))`.
-MATCHER_P4(Rgba, rMatcher, gMatcher, bMatcher, aMatcher,
-           std::string("pixel RGBA matches {R=") + testing::DescribeMatcher<int>(rMatcher) +
-               ", G=" + testing::DescribeMatcher<int>(gMatcher) +
-               ", B=" + testing::DescribeMatcher<int>(bMatcher) +
-               ", A=" + testing::DescribeMatcher<int>(aMatcher) + "}") {
-  const std::array<uint8_t, 4> px = {arg[0], arg[1], arg[2], arg[3]};
-  const testing::Matcher<int> channelMatchers[4] = {
-      testing::SafeMatcherCast<int>(rMatcher), testing::SafeMatcherCast<int>(gMatcher),
-      testing::SafeMatcherCast<int>(bMatcher), testing::SafeMatcherCast<int>(aMatcher)};
-  static constexpr const char* kNames[4] = {"R", "G", "B", "A"};
-  bool ok = true;
-  for (int c = 0; c < 4; ++c) {
-    if (!channelMatchers[c].Matches(px[c])) {
-      ok = false;
-    }
-  }
-  *result_listener << "actual RGBA=" << FormatRgba(px);
-  if (!ok) {
-    for (int c = 0; c < 4; ++c) {
-      if (!channelMatchers[c].Matches(px[c])) {
-        *result_listener << "; " << kNames[c] << "=" << static_cast<int>(px[c]) << " fails ("
-                         << testing::DescribeMatcher<int>(channelMatchers[c]) << ")";
-      }
-    }
-  }
-  return ok;
-}
-
-/// Convenience: every channel exactly equal to the given RGBA.
-auto RgbaEq(int r, int g, int b, int a) {
-  using testing::Eq;
-  return Rgba(Eq(r), Eq(g), Eq(b), Eq(a));
-}
-
-/// A single-channel matcher: |value - expected| <= tol. Use inside `Rgba(...)`
-/// when channels need different tolerances.
-testing::Matcher<int> Near(int expected, int tol) {
-  return testing::AllOf(testing::Ge(expected - tol), testing::Le(expected + tol));
-}
-
-/// Matches a pixel whose alpha channel satisfies `alphaMatcher`, ignoring RGB.
-MATCHER_P(Alpha, alphaMatcher, "alpha " + testing::DescribeMatcher<int>(alphaMatcher)) {
-  const std::array<uint8_t, 4> px = {arg[0], arg[1], arg[2], arg[3]};
-  *result_listener << "actual RGBA=" << FormatRgba(px);
-  return testing::SafeMatcherCast<int>(alphaMatcher).Matches(static_cast<int>(px[3]));
-}
-
-/// Matches a fully transparent pixel (alpha == 0).
-testing::Matcher<std::array<uint8_t, 4>> IsTransparent() {
-  return Alpha(testing::Eq(0));
 }
 
 BitmapDiffStats DiffBitmapAgainstStraightRgba(const RendererBitmap& actual,
@@ -340,7 +279,7 @@ TEST_F(RendererGeodeTest, EmptyFrameIsTransparent) {
   EXPECT_EQ(snap.dimensions.y, static_cast<int>(kViewportSize));
 
   auto pixel = pixelAt(snap, 32, 32);
-  EXPECT_EQ(pixel[3], 0u) << "Empty frame should be transparent";
+  EXPECT_THAT(pixel, IsTransparent()) << "Empty frame should be transparent";
 }
 
 TEST_F(RendererGeodeTest, EmptyFrameAfterOpaqueFrameClearsReusedTarget) {
@@ -578,10 +517,8 @@ TEST_F(RendererGeodeTest, BgraTargetSnapshotReturnsStraightRgba) {
   EXPECT_EQ(actual.alphaType, AlphaType::Unpremultiplied);
 
   const std::array<uint8_t, 4> center = pixelAt(actual, 32, 32);
-  EXPECT_LE(center[0], 2u) << "BGRA readback must be converted back to logical RGBA";
-  EXPECT_NEAR(static_cast<int>(center[1]), 200, 2);
-  EXPECT_NEAR(static_cast<int>(center[2]), 255, 2);
-  EXPECT_EQ(center[3], 255u);
+  EXPECT_THAT(center, Rgba(testing::Le(2), Near(200, 2), Near(255, 2), testing::Eq(255)))
+      << "BGRA readback must be converted back to logical RGBA";
 }
 
 /// Filling a path with a solid red paint should produce red pixels at the
@@ -605,13 +542,10 @@ TEST_F(RendererGeodeTest, DrawPathWithSolidFill) {
 
   // Center should be red, transparent at the corner.
   auto center = pixelAt(snap, 32, 32);
-  EXPECT_EQ(center[0], 255u) << "Center R";
-  EXPECT_EQ(center[1], 0u) << "Center G";
-  EXPECT_EQ(center[2], 0u) << "Center B";
-  EXPECT_EQ(center[3], 255u) << "Center A";
+  EXPECT_THAT(center, RgbaEq(255, 0, 0, 255));
 
   auto corner = pixelAt(snap, 4, 4);
-  EXPECT_EQ(corner[3], 0u) << "Corner should be transparent";
+  EXPECT_THAT(corner, IsTransparent()) << "Corner should be transparent";
 }
 
 /// `drawRect` is a convenience over `drawPath`. Verify it produces the same
@@ -627,8 +561,7 @@ TEST_F(RendererGeodeTest, DrawRectGreenFill) {
 
   RendererBitmap snap = renderer.takeSnapshot();
   auto center = pixelAt(snap, 32, 32);
-  EXPECT_EQ(center[1], 255u) << "Center G";
-  EXPECT_EQ(center[3], 255u) << "Center A";
+  EXPECT_THAT(center, RgbaEq(0, 255, 0, 255));
 }
 
 /// `drawEllipse` should fill an elliptical area. Center inside, far corners
@@ -644,12 +577,11 @@ TEST_F(RendererGeodeTest, DrawEllipseBlueFill) {
 
   RendererBitmap snap = renderer.takeSnapshot();
   auto center = pixelAt(snap, 32, 32);
-  EXPECT_EQ(center[2], 255u) << "Center B";
-  EXPECT_EQ(center[3], 255u) << "Center A";
+  EXPECT_THAT(center, RgbaEq(0, 0, 255, 255));
 
   // Far corner: outside the inscribed ellipse.
   auto corner = pixelAt(snap, 2, 2);
-  EXPECT_EQ(corner[3], 0u) << "Corner should be transparent";
+  EXPECT_THAT(corner, IsTransparent()) << "Corner should be transparent";
 }
 
 /// Transform stack should compose like the other backends. Apply a translate
@@ -673,10 +605,11 @@ TEST_F(RendererGeodeTest, PushPopTransform) {
 
   RendererBitmap snap = renderer.takeSnapshot();
   auto inside = pixelAt(snap, 28, 28);
-  EXPECT_EQ(inside[0], 255u) << "Translated rect should cover (28, 28)";
+  EXPECT_THAT(inside, Rgba(testing::Eq(255), testing::_, testing::_, testing::_))
+      << "Translated rect should cover (28, 28)";
 
   auto outside = pixelAt(snap, 12, 12);
-  EXPECT_EQ(outside[3], 0u) << "Original rect position should be empty";
+  EXPECT_THAT(outside, IsTransparent()) << "Original rect position should be empty";
 }
 
 /// Stroke a rectangle outline with no fill: the stroke band should be the
@@ -704,17 +637,15 @@ TEST_F(RendererGeodeTest, StrokeRectOutline) {
   // should contribute red. The stroke extends outward by width/2 = 2, so
   // any pixel with y in [14, 18) and x in [14, 50) should be touched.
   auto top = pixelAt(snap, 32, 16);
-  EXPECT_EQ(top[0], 255u) << "Top edge R";
-  EXPECT_EQ(top[1], 0u) << "Top edge G";
-  EXPECT_EQ(top[2], 0u) << "Top edge B";
+  EXPECT_THAT(top, Rgba(testing::Eq(255), testing::Eq(0), testing::Eq(0), testing::_));
 
   // The interior of the rect (center) should be transparent - fill=none.
   auto center = pixelAt(snap, 32, 32);
-  EXPECT_EQ(center[3], 0u) << "Interior should be transparent (fill=none)";
+  EXPECT_THAT(center, IsTransparent()) << "Interior should be transparent (fill=none)";
 
   // Far corner: outside everything.
   auto corner = pixelAt(snap, 2, 2);
-  EXPECT_EQ(corner[3], 0u) << "Corner should be transparent";
+  EXPECT_THAT(corner, IsTransparent()) << "Corner should be transparent";
 }
 
 /// Fill and stroke together: interior should be the fill color, the stroke
@@ -738,18 +669,17 @@ TEST_F(RendererGeodeTest, FillAndStrokeRect) {
 
   // Deep inside: fill (green) only.
   auto inside = pixelAt(snap, 32, 32);
-  EXPECT_EQ(inside[0], 0u) << "Interior R";
-  EXPECT_EQ(inside[1], 255u) << "Interior G";
-  EXPECT_EQ(inside[2], 0u) << "Interior B";
+  EXPECT_THAT(inside, Rgba(testing::Eq(0), testing::Eq(255), testing::Eq(0), testing::_));
 
   // Exactly on the top edge of the rect (y=16), the stroke straddles both
   // sides by width/2 = 2, so this pixel is inside the stroke ring → blue.
   auto topEdge = pixelAt(snap, 32, 16);
-  EXPECT_EQ(topEdge[2], 255u) << "Top edge should be in stroke (B)";
+  EXPECT_THAT(topEdge, Rgba(testing::_, testing::_, testing::Eq(255), testing::_))
+      << "Top edge should be in stroke (B)";
 
   // Far outside the rect is still transparent.
   auto corner = pixelAt(snap, 2, 2);
-  EXPECT_EQ(corner[3], 0u) << "Corner should be transparent";
+  EXPECT_THAT(corner, IsTransparent()) << "Corner should be transparent";
 }
 
 /// A semi-transparent fill must round-trip through `takeSnapshot` in
@@ -772,10 +702,8 @@ TEST_F(RendererGeodeTest, SnapshotReturnsStraightAlpha) {
 
   RendererBitmap snap = renderer.takeSnapshot();
   auto center = pixelAt(snap, 32, 32);
-  EXPECT_NEAR(center[0], 255u, 2u) << "Straight-alpha R should be ~255";
-  EXPECT_EQ(center[1], 0u) << "G";
-  EXPECT_EQ(center[2], 0u) << "B";
-  EXPECT_NEAR(center[3], 128u, 2u) << "Alpha preserved";
+  EXPECT_THAT(center, Rgba(Near(255, 2), testing::Eq(0), testing::Eq(0), Near(128, 2)))
+      << "Straight-alpha color and alpha should be preserved";
 }
 
 /// Drawing a stroked path when `impl_->encoder` is null (e.g.,
@@ -817,7 +745,7 @@ TEST_F(RendererGeodeTest, ZeroWidthStrokeIsNoOp) {
 
   RendererBitmap snap = renderer.takeSnapshot();
   auto center = pixelAt(snap, 32, 32);
-  EXPECT_EQ(center[3], 0u) << "Zero-width stroke should draw nothing";
+  EXPECT_THAT(center, IsTransparent()) << "Zero-width stroke should draw nothing";
 }
 
 /// `drawImage` must upload the RGBA pixels to a texture and render the
@@ -856,27 +784,23 @@ TEST_F(RendererGeodeTest, DrawImageFourColorQuadrants) {
 
   // Top-left quadrant (pixel at ~24, 24) - red.
   auto tl = pixelAt(snap, 24, 24);
-  EXPECT_EQ(tl[0], 255u) << "TL R";
-  EXPECT_EQ(tl[1], 0u) << "TL G";
-  EXPECT_EQ(tl[3], 255u) << "TL A";
+  EXPECT_THAT(tl, RgbaEq(255, 0, 0, 255)) << "Top-left quadrant should be red";
 
   // Top-right quadrant (~40, 24) - green.
   auto tr = pixelAt(snap, 40, 24);
-  EXPECT_EQ(tr[0], 0u) << "TR R";
-  EXPECT_EQ(tr[1], 255u) << "TR G";
+  EXPECT_THAT(tr, RgbaEq(0, 255, 0, 255)) << "Top-right quadrant should be green";
 
   // Bottom-left (~24, 40) - blue.
   auto bl = pixelAt(snap, 24, 40);
-  EXPECT_EQ(bl[2], 255u) << "BL B";
+  EXPECT_THAT(bl, RgbaEq(0, 0, 255, 255)) << "Bottom-left quadrant should be blue";
 
   // Bottom-right (~40, 40) - yellow.
   auto br = pixelAt(snap, 40, 40);
-  EXPECT_EQ(br[0], 255u) << "BR R";
-  EXPECT_EQ(br[1], 255u) << "BR G";
+  EXPECT_THAT(br, RgbaEq(255, 255, 0, 255)) << "Bottom-right quadrant should be yellow";
 
   // Outside the target rect: transparent.
   auto outside = pixelAt(snap, 4, 4);
-  EXPECT_EQ(outside[3], 0u) << "Outside alpha";
+  EXPECT_THAT(outside, IsTransparent()) << "Outside alpha";
 }
 
 /// Transform stack must compose with drawImage. Push a translate, draw
@@ -904,13 +828,11 @@ TEST_F(RendererGeodeTest, DrawImageHonorsTransformStack) {
   RendererBitmap snap = renderer.takeSnapshot();
   // Translated pixel should be magenta.
   auto inside = pixelAt(snap, 20, 20);
-  EXPECT_EQ(inside[0], 255u) << "Translated R";
-  EXPECT_EQ(inside[2], 255u) << "Translated B";
-  EXPECT_EQ(inside[3], 255u) << "Translated A";
+  EXPECT_THAT(inside, RgbaEq(255, 0, 255, 255)) << "Translated image should be magenta";
 
   // Original (unshifted) position should be empty.
   auto unshifted = pixelAt(snap, 4, 4);
-  EXPECT_EQ(unshifted[3], 0u) << "Unshifted origin should be transparent";
+  EXPECT_THAT(unshifted, IsTransparent()) << "Unshifted origin should be transparent";
 }
 
 /// `ImageParams::opacity` controls fade at the draw call; ancestor
@@ -947,8 +869,8 @@ TEST_F(RendererGeodeTest, DrawImageCombinedOpacity) {
   RendererBitmap snap = renderer.takeSnapshot();
   auto center = pixelAt(snap, 32, 32);
   // Straight-alpha: R=255, A≈128 (255 * 0.5 from params.opacity only).
-  EXPECT_NEAR(center[0], 255u, 2u) << "Straight-alpha R preserved";
-  EXPECT_NEAR(center[3], 128u, 2u) << "params.opacity applied once";
+  EXPECT_THAT(center, Rgba(Near(255, 2), testing::_, testing::_, Near(128, 2)))
+      << "params.opacity should be applied once while preserving straight-alpha R";
 }
 
 /// Empty image data (width/height = 0) and a zero-size target rect both
@@ -975,7 +897,7 @@ TEST_F(RendererGeodeTest, DrawImageEmptyIsNoOp) {
   renderer.endFrame();
   RendererBitmap snap = renderer.takeSnapshot();
   auto center = pixelAt(snap, 32, 32);
-  EXPECT_EQ(center[3], 0u) << "Empty image should draw nothing";
+  EXPECT_THAT(center, IsTransparent()) << "Empty image should draw nothing";
 }
 
 /// Popping an isolated layer with a non-Normal blend mode while an outer
@@ -1008,17 +930,12 @@ TEST_F(RendererGeodeTest, BlendedLayerPopPreservesBackdropOutsideClip) {
 
   // Outside the clip (bottom-left quadrant): backdrop must still be red.
   auto outside = pixelAt(snap, 16, 48);
-  EXPECT_EQ(outside[0], 255u) << "Bottom-left R (outside clip)";
-  EXPECT_EQ(outside[1], 0u) << "Bottom-left G (outside clip)";
-  EXPECT_EQ(outside[2], 0u) << "Bottom-left B (outside clip)";
-  EXPECT_EQ(outside[3], 255u) << "Bottom-left A (outside clip)";
+  EXPECT_THAT(outside, RgbaEq(255, 0, 0, 255))
+      << "Bottom-left pixel outside clip should preserve backdrop";
 
   // Inside the clip: Multiply(red=255,0,0 ; blue=0,0,255) = (0, 0, 0).
   auto inside = pixelAt(snap, 48, 16);
-  EXPECT_EQ(inside[0], 0u) << "Multiply result R";
-  EXPECT_EQ(inside[1], 0u) << "Multiply result G";
-  EXPECT_EQ(inside[2], 0u) << "Multiply result B";
-  EXPECT_EQ(inside[3], 255u) << "Multiply result A";
+  EXPECT_THAT(inside, RgbaEq(0, 0, 0, 255)) << "Inside clip should multiply to black";
 }
 
 /// Phase 3b repro: an arbitrary path clip should gate color draws to the mask.
@@ -1051,16 +968,10 @@ TEST_F(RendererGeodeTest, PathClipMaskClipsSolidFillToLeftHalf) {
   ASSERT_FALSE(snap.empty());
 
   auto inside = pixelAt(snap, 16, 32);
-  EXPECT_EQ(inside[0], 0u) << "Inside clip R";
-  EXPECT_EQ(inside[1], 0u) << "Inside clip G";
-  EXPECT_EQ(inside[2], 255u) << "Inside clip B";
-  EXPECT_EQ(inside[3], 255u) << "Inside clip A";
+  EXPECT_THAT(inside, RgbaEq(0, 0, 255, 255)) << "Inside clip should be blue";
 
   auto outside = pixelAt(snap, 48, 32);
-  EXPECT_EQ(outside[0], 0u) << "Outside clip R";
-  EXPECT_EQ(outside[1], 0u) << "Outside clip G";
-  EXPECT_EQ(outside[2], 0u) << "Outside clip B";
-  EXPECT_EQ(outside[3], 0u) << "Outside clip A";
+  EXPECT_THAT(outside, IsTransparent()) << "Outside clip should be transparent";
 }
 
 TEST_F(RendererGeodeTest, PathClipMaskClipsIsolatedLayerComposite) {
@@ -1092,16 +1003,10 @@ TEST_F(RendererGeodeTest, PathClipMaskClipsIsolatedLayerComposite) {
   ASSERT_FALSE(snap.empty());
 
   auto inside = pixelAt(snap, 16, 32);
-  EXPECT_EQ(inside[0], 0u) << "Inside clip R";
-  EXPECT_EQ(inside[1], 0u) << "Inside clip G";
-  EXPECT_EQ(inside[2], 255u) << "Inside clip B";
-  EXPECT_EQ(inside[3], 255u) << "Inside clip A";
+  EXPECT_THAT(inside, RgbaEq(0, 0, 255, 255)) << "Inside clip should be blue";
 
   auto outside = pixelAt(snap, 48, 32);
-  EXPECT_EQ(outside[0], 0u) << "Outside clip R";
-  EXPECT_EQ(outside[1], 0u) << "Outside clip G";
-  EXPECT_EQ(outside[2], 0u) << "Outside clip B";
-  EXPECT_EQ(outside[3], 0u) << "Outside clip A";
+  EXPECT_THAT(outside, IsTransparent()) << "Outside clip should be transparent";
 }
 
 TEST_F(RendererGeodeTest, PathClipMaskClipsIsolatedLayerCompositeForTriangle) {
@@ -1132,16 +1037,10 @@ TEST_F(RendererGeodeTest, PathClipMaskClipsIsolatedLayerCompositeForTriangle) {
   ASSERT_FALSE(snap.empty());
 
   auto inside = pixelAt(snap, 32, 40);
-  EXPECT_EQ(inside[0], 0u) << "Inside clip R";
-  EXPECT_EQ(inside[1], 0u) << "Inside clip G";
-  EXPECT_EQ(inside[2], 255u) << "Inside clip B";
-  EXPECT_EQ(inside[3], 255u) << "Inside clip A";
+  EXPECT_THAT(inside, RgbaEq(0, 0, 255, 255)) << "Inside clip should be blue";
 
   auto outside = pixelAt(snap, 8, 8);
-  EXPECT_EQ(outside[0], 0u) << "Outside clip R";
-  EXPECT_EQ(outside[1], 0u) << "Outside clip G";
-  EXPECT_EQ(outside[2], 0u) << "Outside clip B";
-  EXPECT_EQ(outside[3], 0u) << "Outside clip A";
+  EXPECT_THAT(outside, IsTransparent()) << "Outside clip should be transparent";
 }
 
 TEST_F(RendererGeodeTest, PathClipMaskClipsFilterLayerCompositeForTriangle) {
@@ -1172,16 +1071,10 @@ TEST_F(RendererGeodeTest, PathClipMaskClipsFilterLayerCompositeForTriangle) {
   ASSERT_FALSE(snap.empty());
 
   auto inside = pixelAt(snap, 32, 40);
-  EXPECT_EQ(inside[0], 0u) << "Inside clip R";
-  EXPECT_EQ(inside[1], 0u) << "Inside clip G";
-  EXPECT_EQ(inside[2], 255u) << "Inside clip B";
-  EXPECT_EQ(inside[3], 255u) << "Inside clip A";
+  EXPECT_THAT(inside, RgbaEq(0, 0, 255, 255)) << "Inside clip should be blue";
 
   auto outside = pixelAt(snap, 8, 8);
-  EXPECT_EQ(outside[0], 0u) << "Outside clip R";
-  EXPECT_EQ(outside[1], 0u) << "Outside clip G";
-  EXPECT_EQ(outside[2], 0u) << "Outside clip B";
-  EXPECT_EQ(outside[3], 0u) << "Outside clip A";
+  EXPECT_THAT(outside, IsTransparent()) << "Outside clip should be transparent";
 }
 
 /// Stubbed methods (clip/mask/layer/filter/pattern/image/text) should be
@@ -1208,9 +1101,7 @@ TEST_F(RendererGeodeTest, StubbedMethodsAreNoOps) {
 
   RendererBitmap snap = renderer.takeSnapshot();
   auto center = pixelAt(snap, 32, 32);
-  EXPECT_EQ(center[0], 255u);
-  EXPECT_EQ(center[1], 255u);
-  EXPECT_EQ(center[3], 255u);
+  EXPECT_THAT(center, RgbaEq(255, 255, 0, 255));
 }
 
 /// Smoke test for Phase 7 feGaussianBlur filter layer. Draws a crisp red
@@ -1247,13 +1138,14 @@ TEST_F(RendererGeodeTest, GaussianBlurSmokes) {
 
   // Center pixel should still be red (fully opaque).
   auto center = pixelAt(snap, 32, 32);
-  EXPECT_EQ(center[0], 255u) << "Center red channel should be fully opaque";
-  EXPECT_GT(center[3], 200u) << "Center alpha should still be high";
+  EXPECT_THAT(center, Rgba(testing::Eq(255), testing::_, testing::_, testing::Gt(200)))
+      << "Center pixel should stay red and mostly opaque";
 
   // An edge pixel (just inside the rect boundary) should have reduced
   // alpha compared to the center, proving the blur was applied.
   auto edge = pixelAt(snap, 16, 32);
-  EXPECT_LT(edge[3], center[3]) << "Edge pixel alpha should be less than center (blur applied)";
+  EXPECT_THAT(edge, Alpha(testing::Lt(center[3])))
+      << "Edge pixel alpha should be less than center (blur applied)";
 }
 
 /// Filter layer with zero stdDeviation should pass through unchanged.
@@ -1285,12 +1177,11 @@ TEST_F(RendererGeodeTest, GaussianBlurZeroStdDevPassthrough) {
 
   // Center should be green (the blur is a passthrough).
   auto center = pixelAt(snap, 32, 32);
-  EXPECT_EQ(center[1], 255u) << "Green channel at center";
-  EXPECT_EQ(center[3], 255u) << "Alpha at center should be fully opaque";
+  EXPECT_THAT(center, RgbaEq(0, 255, 0, 255)) << "Zero blur should pass through green";
 
   // Just outside the rect should be transparent (no blur spread).
   auto outside = pixelAt(snap, 14, 32);
-  EXPECT_EQ(outside[3], 0u) << "Outside the rect should be transparent with zero blur";
+  EXPECT_THAT(outside, IsTransparent()) << "Outside the rect should be transparent with zero blur";
 }
 
 /// feOffset: shift a red rect by (4, 4) and verify pixels moved.
@@ -1323,13 +1214,12 @@ TEST_F(RendererGeodeTest, FilterOffsetShiftsPixels) {
   // to effectively be at (32,32) still red (inside shifted rect), but (16,16)
   // should now be transparent (original top-left shifted away).
   auto shifted = pixelAt(snap, 36, 36);
-  EXPECT_EQ(shifted[0], 255u) << "Shifted center should be red";
-  EXPECT_EQ(shifted[3], 255u) << "Shifted center alpha";
+  EXPECT_THAT(shifted, RgbaEq(255, 0, 0, 255)) << "Shifted center should be red";
 
   // Original corner of the rect at (17,17) should now be transparent because
   // the offset shifted content down-right.
   auto original = pixelAt(snap, 17, 17);
-  EXPECT_EQ(original[3], 0u) << "Original top-left should be transparent after offset";
+  EXPECT_THAT(original, IsTransparent()) << "Original top-left should be transparent after offset";
 }
 
 /// feColorMatrix type=luminanceToAlpha: red → alpha based on Y-channel luminance.
@@ -1361,14 +1251,12 @@ TEST_F(RendererGeodeTest, FilterColorMatrixLuminanceToAlpha) {
   // luminanceToAlpha: R'=0, G'=0, B'=0, A'= 0.2126*R + 0.7152*G + 0.0722*B.
   // For pure red (R=1.0): A' = 0.2126 → ~54 in [0, 255].
   auto center = pixelAt(snap, 32, 32);
-  EXPECT_EQ(center[0], 0u) << "R channel should be 0 (luminanceToAlpha)";
-  EXPECT_EQ(center[1], 0u) << "G channel should be 0 (luminanceToAlpha)";
-  EXPECT_EQ(center[2], 0u) << "B channel should be 0 (luminanceToAlpha)";
-  EXPECT_NEAR(center[3], 54u, 3u) << "Alpha should match Y-channel luminance of red";
+  EXPECT_THAT(center, Rgba(testing::Eq(0), testing::Eq(0), testing::Eq(0), Near(54, 3)))
+      << "Alpha should match Y-channel luminance of red";
 
   // Outside the rect: transparent.
   auto outside = pixelAt(snap, 4, 4);
-  EXPECT_EQ(outside[3], 0u) << "Outside should be transparent";
+  EXPECT_THAT(outside, IsTransparent()) << "Outside should be transparent";
 }
 
 TEST_F(RendererGeodeTest, FilterSourceAlphaInputExtractsAlphaChannel) {
@@ -1531,10 +1419,8 @@ TEST_F(RendererGeodeTest, FilterFloodFillsSubregion) {
   // feFlood with red at 50% opacity. The GPU stores premultiplied (128,0,0,128)
   // but takeSnapshot() unpremultiplies to straight alpha: (255,0,0,128).
   auto center = pixelAt(snap, 32, 32);
-  EXPECT_NEAR(center[0], 255u, 2u) << "Flood R (straight alpha)";
-  EXPECT_EQ(center[1], 0u) << "Flood G";
-  EXPECT_EQ(center[2], 0u) << "Flood B";
-  EXPECT_NEAR(center[3], 128u, 2u) << "Flood A (50% opacity)";
+  EXPECT_THAT(center, Rgba(Near(255, 2), testing::Eq(0), testing::Eq(0), Near(128, 2)))
+      << "feFlood should preserve straight-alpha red at 50% opacity";
 }
 
 /// feMerge: composite two feFlood layers via alpha-over.
@@ -1599,10 +1485,8 @@ TEST_F(RendererGeodeTest, FilterMergeCompositesInputs) {
   //   premul result ≈ (64, 0, 128, 192)
   // takeSnapshot() unpremultiplies: R=64*255/192≈85, B=128*255/192≈170, A=192.
   auto center = pixelAt(snap, 32, 32);
-  EXPECT_NEAR(center[0], 85u, 6u) << "Merge R (straight, red behind blue)";
-  EXPECT_EQ(center[1], 0u) << "Merge G";
-  EXPECT_NEAR(center[2], 170u, 6u) << "Merge B (straight, blue on top)";
-  EXPECT_GT(center[3], 170u) << "Merge A should be > 170 (composited alpha)";
+  EXPECT_THAT(center, Rgba(Near(85, 6), testing::Eq(0), Near(170, 6), testing::Gt(170)))
+      << "feMerge should alpha-over red behind blue";
 }
 
 /// feComposite operator=in: result = in1 * in2.a.
@@ -1662,10 +1546,8 @@ TEST_F(RendererGeodeTest, FilterCompositeInOperator) {
   // operator=in: result = in1 * in2.a = (255,0,0,255) * (128/255) ≈ (128,0,0,128).
   // takeSnapshot unpremultiplies: R=128*255/128=255, A=128.
   auto center = pixelAt(snap, 32, 32);
-  EXPECT_NEAR(center[0], 255u, 3u) << "Composite-in R (straight)";
-  EXPECT_EQ(center[1], 0u) << "Composite-in G";
-  EXPECT_EQ(center[2], 0u) << "Composite-in B";
-  EXPECT_NEAR(center[3], 128u, 3u) << "Composite-in A";
+  EXPECT_THAT(center, Rgba(Near(255, 3), testing::Eq(0), testing::Eq(0), Near(128, 3)))
+      << "feComposite operator=in should mask red by green alpha";
 }
 
 /// feComposite defaults to operator=over.
@@ -1792,10 +1674,8 @@ TEST_F(RendererGeodeTest, FilterCompositeArithmetic) {
 
   // k1*red*white = red. Expected: (255,0,0,255).
   auto center = pixelAt(snap, 32, 32);
-  EXPECT_NEAR(center[0], 255u, 2u) << "Arithmetic R (red*white=red)";
-  EXPECT_EQ(center[1], 0u) << "Arithmetic G";
-  EXPECT_EQ(center[2], 0u) << "Arithmetic B";
-  EXPECT_NEAR(center[3], 255u, 2u) << "Arithmetic A";
+  EXPECT_THAT(center, Rgba(Near(255, 2), testing::Eq(0), testing::Eq(0), Near(255, 2)))
+      << "Arithmetic composite should multiply red by white";
 }
 
 /// feBlend mode=multiply: two opaque flood inputs.
@@ -1851,10 +1731,8 @@ TEST_F(RendererGeodeTest, FilterBlendMultiply) {
 
   // Multiply: red(1,0,0)*blue(0,0,1) = (0,0,0), both opaque → black opaque.
   auto center = pixelAt(snap, 32, 32);
-  EXPECT_EQ(center[0], 0u) << "Blend-multiply R";
-  EXPECT_EQ(center[1], 0u) << "Blend-multiply G";
-  EXPECT_EQ(center[2], 0u) << "Blend-multiply B";
-  EXPECT_NEAR(center[3], 255u, 1u) << "Blend-multiply A";
+  EXPECT_THAT(center, Rgba(testing::Eq(0), testing::Eq(0), testing::Eq(0), Near(255, 1)))
+      << "Multiply blend should produce opaque black";
 }
 
 /// feBlend mode=screen: inverse of multiply.
@@ -1910,10 +1788,8 @@ TEST_F(RendererGeodeTest, FilterBlendScreen) {
 
   // Screen: red+blue-red*blue = (1,0,1) = magenta, opaque.
   auto center = pixelAt(snap, 32, 32);
-  EXPECT_NEAR(center[0], 255u, 1u) << "Blend-screen R";
-  EXPECT_EQ(center[1], 0u) << "Blend-screen G";
-  EXPECT_NEAR(center[2], 255u, 1u) << "Blend-screen B";
-  EXPECT_NEAR(center[3], 255u, 1u) << "Blend-screen A";
+  EXPECT_THAT(center, Rgba(Near(255, 1), testing::Eq(0), Near(255, 1), Near(255, 1)))
+      << "Screen blend should produce opaque magenta";
 }
 
 /// feMorphology dilate: expand a small white rect by 4 pixels.
@@ -1947,13 +1823,12 @@ TEST_F(RendererGeodeTest, FilterMorphologyDilateExpands) {
   // After dilate r=4, the rect expands by 4 in each direction.
   // Pixel at (22-3, 32) = (19, 32) should be white (inside expanded region).
   auto expanded = pixelAt(snap, 19, 32);
-  EXPECT_GT(expanded[3], 200u) << "Dilate should expand the shape outward";
-  EXPECT_GT(expanded[0], 200u) << "Dilated pixel should be white (R)";
+  EXPECT_THAT(expanded, Rgba(testing::Gt(200), testing::_, testing::_, testing::Gt(200)))
+      << "Dilate should expand the shape outward";
 
   // Center should still be white.
   auto center = pixelAt(snap, 32, 32);
-  EXPECT_EQ(center[0], 255u) << "Center should remain white";
-  EXPECT_EQ(center[3], 255u) << "Center alpha should be fully opaque";
+  EXPECT_THAT(center, RgbaEq(255, 255, 255, 255)) << "Center should remain white";
 }
 
 /// feMorphology erode: shrink a rect by 4 pixels.
@@ -1987,12 +1862,11 @@ TEST_F(RendererGeodeTest, FilterMorphologyErodeShrinks) {
   // After erode r=4, the rect shrinks by 4 inward from each edge.
   // Corner pixel (17, 17) should now be transparent (eroded away).
   auto corner = pixelAt(snap, 17, 17);
-  EXPECT_EQ(corner[3], 0u) << "Corner should be transparent after erode";
+  EXPECT_THAT(corner, IsTransparent()) << "Corner should be transparent after erode";
 
   // Center (32, 32) should still be white (far from edges).
   auto center = pixelAt(snap, 32, 32);
-  EXPECT_EQ(center[0], 255u) << "Center should remain white";
-  EXPECT_EQ(center[3], 255u) << "Center alpha";
+  EXPECT_THAT(center, RgbaEq(255, 255, 255, 255)) << "Center should remain white";
 }
 
 /// feComponentTransfer identity: all channels pass through unchanged.
@@ -2021,10 +1895,8 @@ TEST_F(RendererGeodeTest, FilterComponentTransferIdentityPasses) {
   ASSERT_FALSE(snap.empty());
 
   auto center = pixelAt(snap, 32, 32);
-  EXPECT_NEAR(center[0], 128u, 2u) << "R should pass through";
-  EXPECT_NEAR(center[1], 64u, 2u) << "G should pass through";
-  EXPECT_NEAR(center[2], 200u, 2u) << "B should pass through";
-  EXPECT_NEAR(center[3], 255u, 1u) << "A should pass through";
+  EXPECT_THAT(center, Rgba(Near(128, 2), Near(64, 2), Near(200, 2), Near(255, 1)))
+      << "Identity component transfer should pass all channels through";
 }
 
 /// feComponentTransfer gamma: apply x² to the red channel.
@@ -2059,10 +1931,8 @@ TEST_F(RendererGeodeTest, FilterComponentTransferGammaInverts) {
 
   auto center = pixelAt(snap, 32, 32);
   // R=128/255≈0.502, R²≈0.252, premultiplied: R*A=0.252*1.0=0.252 → ~64.
-  EXPECT_NEAR(center[0], 64u, 4u) << "R should be squared (~64)";
-  EXPECT_EQ(center[1], 0u) << "G should be zero";
-  EXPECT_EQ(center[2], 0u) << "B should be zero";
-  EXPECT_NEAR(center[3], 255u, 1u) << "A unchanged";
+  EXPECT_THAT(center, Rgba(Near(64, 4), testing::Eq(0), testing::Eq(0), Near(255, 1)))
+      << "Gamma component transfer should square the red channel";
 }
 
 /// feConvolveMatrix box blur: 3×3 kernel of all 1s / divisor=9.
@@ -2099,13 +1969,14 @@ TEST_F(RendererGeodeTest, FilterConvolveMatrixBoxBlur) {
 
   // Center should still be near-white (all neighbours are white).
   auto center = pixelAt(snap, 32, 32);
-  EXPECT_GT(center[0], 240u) << "Center R should be near-white after box blur";
+  EXPECT_THAT(center, Rgba(testing::Gt(240), testing::_, testing::_, testing::_))
+      << "Center R should be near-white after box blur";
 
   // Edge pixel (16, 32): 3×3 kernel straddles the edge, so the value
   // should be intermediate (not fully white, not fully transparent).
   auto edge = pixelAt(snap, 16, 32);
-  EXPECT_GT(edge[3], 50u) << "Edge pixel should have some alpha (box blur averages)";
-  EXPECT_LT(edge[3], 250u) << "Edge pixel should be less than center";
+  EXPECT_THAT(edge, Alpha(testing::AllOf(testing::Gt(50), testing::Lt(250))))
+      << "Edge pixel should have intermediate alpha after box blur";
 }
 
 /// feConvolveMatrix edge detection: Laplacian kernel on a rect.
@@ -2144,7 +2015,8 @@ TEST_F(RendererGeodeTest, FilterConvolveMatrixEdgeDetect) {
   // Interior pixel (32, 32): all neighbours are identical white, so
   // Laplacian = 4*1 - 4*1 = 0. Output should be near-black/transparent.
   auto interior = pixelAt(snap, 32, 32);
-  EXPECT_LT(interior[0], 20u) << "Interior should be near-black (Laplacian=0)";
+  EXPECT_THAT(interior, Rgba(testing::Lt(20), testing::_, testing::_, testing::_))
+      << "Interior should be near-black (Laplacian=0)";
 }
 
 /// SVG 2 §15.5: when an element has BOTH a `clip-path` and a `filter`, the
@@ -2211,11 +2083,10 @@ TEST_F(RendererGeodeTest, FilterAppliedBeforeClipPathSvgRenderingOrder) {
   // path captures only the left-half blue and the blur averages with
   // transparent-black, so the alpha drops to ~50% (~177) here.
   auto nearEdgeInside = pixelAt(snap, 30, 32);
-  EXPECT_GT(nearEdgeInside[3], 240u)
+  EXPECT_THAT(nearEdgeInside, Alpha(testing::Gt(240)))
       << "Near-edge inside-clip alpha should remain near-opaque (≥240). The "
          "buggy path blurs the already-clipped half-rect and pulls alpha "
-         "toward ~50% here. Got "
-      << static_cast<int>(nearEdgeInside[3]);
+         "toward ~50% here.";
 
   // (34, 32): just OUTSIDE the clip rect. Per §15.5 the clip is applied to
   // the FILTERED result, so this pixel must be fully transparent regardless
@@ -2223,23 +2094,22 @@ TEST_F(RendererGeodeTest, FilterAppliedBeforeClipPathSvgRenderingOrder) {
   // boundary because the composite isn't gated by the clip mask, leaving
   // alpha around 50.
   auto justOutside = pixelAt(snap, 34, 32);
-  EXPECT_EQ(justOutside[3], 0u)
+  EXPECT_THAT(justOutside, IsTransparent())
       << "Just-outside-clip alpha must be 0 - clip-path is applied to the "
-         "filtered result. Got "
-      << static_cast<int>(justOutside[3]);
+         "filtered result.";
 
   // (8, 32): well inside the clipped region, far from the boundary. Both
   // correct and buggy paths produce near-opaque blue here, but check anyway
   // as a sanity gate.
   auto deepInside = pixelAt(snap, 8, 32);
-  EXPECT_GT(deepInside[2], 230u) << "Deep-inside B should be ~255 (blue)";
-  EXPECT_GT(deepInside[3], 230u) << "Deep-inside A should be near-opaque";
+  EXPECT_THAT(deepInside, Rgba(testing::_, testing::_, testing::Gt(230), testing::Gt(230)))
+      << "Deep-inside pixel should be near-opaque blue";
 
   // (48, 32): well outside the clip rect, far from the boundary. The clip is
   // applied AFTER the filter, so this pixel must be fully transparent.
   auto outside = pixelAt(snap, 48, 32);
-  EXPECT_EQ(outside[3], 0u) << "Outside the clip must be transparent - the "
-                               "filter result is clipped on composite";
+  EXPECT_THAT(outside, IsTransparent()) << "Outside the clip must be transparent - the "
+                                           "filter result is clipped on composite";
 }
 
 }  // namespace

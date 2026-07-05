@@ -5,9 +5,22 @@
 
 using testing::ElementsAre;
 using testing::IsEmpty;
-using testing::SizeIs;
 
 namespace donner {
+namespace {
+
+MATCHER_P2(WarningAt, expectedReason, expectedOffset, "") {
+  const FileOffset expectedLocation = FileOffset::Offset(expectedOffset);
+  return testing::ExplainMatchResult(testing::Eq(DiagnosticSeverity::Warning), arg.severity,
+                                     result_listener) &&
+         testing::ExplainMatchResult(testing::Eq(std::string(expectedReason)),
+                                     std::string(arg.reason.str()), result_listener) &&
+         testing::ExplainMatchResult(testing::Eq(expectedLocation), arg.range.start,
+                                     result_listener) &&
+         testing::ExplainMatchResult(testing::Eq(expectedLocation), arg.range.end, result_listener);
+}
+
+}  // namespace
 
 TEST(ParseWarningSink, DefaultIsEnabled) {
   ParseWarningSink sink;
@@ -27,18 +40,14 @@ TEST(ParseWarningSink, AddDiagnosticDirect) {
   sink.add(ParseDiagnostic::Warning("test warning", FileOffset::Offset(5)));
 
   EXPECT_TRUE(sink.hasWarnings());
-  ASSERT_THAT(sink.warnings(), SizeIs(1));
-  EXPECT_EQ(sink.warnings()[0].reason, "test warning");
-  EXPECT_EQ(sink.warnings()[0].severity, DiagnosticSeverity::Warning);
-  EXPECT_EQ(sink.warnings()[0].range.start, FileOffset::Offset(5));
+  EXPECT_THAT(sink.warnings(), ElementsAre(WarningAt("test warning", 5)));
 }
 
 TEST(ParseWarningSink, AddDiagnosticViaFactory) {
   ParseWarningSink sink;
   sink.add([&] { return ParseDiagnostic::Warning("lazy warning", FileOffset::Offset(10)); });
 
-  ASSERT_THAT(sink.warnings(), SizeIs(1));
-  EXPECT_EQ(sink.warnings()[0].reason, "lazy warning");
+  EXPECT_THAT(sink.warnings(), ElementsAre(WarningAt("lazy warning", 10)));
 }
 
 TEST(ParseWarningSink, DisabledSinkDropsDirect) {
@@ -85,10 +94,8 @@ TEST(ParseWarningSink, Merge) {
 
   sink1.merge(std::move(sink2));
 
-  ASSERT_THAT(sink1.warnings(), SizeIs(3));
-  EXPECT_EQ(sink1.warnings()[0].reason, "warning 1");
-  EXPECT_EQ(sink1.warnings()[1].reason, "warning 2");
-  EXPECT_EQ(sink1.warnings()[2].reason, "warning 3");
+  EXPECT_THAT(sink1.warnings(), ElementsAre(WarningAt("warning 1", 0), WarningAt("warning 2", 5),
+                                            WarningAt("warning 3", 10)));
 }
 
 TEST(ParseWarningSink, MergeIntoDisabledDrops) {
@@ -108,10 +115,8 @@ TEST(ParseWarningSink, MultipleWarnings) {
   sink.add(ParseDiagnostic::Warning("second", FileOffset::Offset(5)));
   sink.add(ParseDiagnostic::Warning("third", FileOffset::Offset(10)));
 
-  ASSERT_THAT(sink.warnings(), SizeIs(3));
-  EXPECT_EQ(sink.warnings()[0].reason, "first");
-  EXPECT_EQ(sink.warnings()[1].reason, "second");
-  EXPECT_EQ(sink.warnings()[2].reason, "third");
+  EXPECT_THAT(sink.warnings(),
+              ElementsAre(WarningAt("first", 0), WarningAt("second", 5), WarningAt("third", 10)));
 }
 
 }  // namespace donner

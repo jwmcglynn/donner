@@ -1,5 +1,6 @@
 #include "donner/svg/compositor/MandatoryHintDetector.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <utility>
@@ -17,20 +18,9 @@ namespace {
 
 using components::RenderingInstanceComponent;
 
-/// Returns the single `Mandatory` entry on the entity's `CompositorHintComponent`
-/// if exactly one exists. `nullptr` otherwise (test helper).
-const HintEntry* getSingleMandatoryEntry(const Registry& registry, Entity entity) {
-  const auto* component = registry.try_get<CompositorHintComponent>(entity);
-  if (component == nullptr) {
-    return nullptr;
-  }
-  if (component->entries.size() != 1) {
-    return nullptr;
-  }
-  if (component->entries[0].source != HintSource::Mandatory) {
-    return nullptr;
-  }
-  return &component->entries[0];
+auto HintEntryIs(HintSource source, uint16_t weight) {
+  return testing::AllOf(testing::Field("source", &HintEntry::source, source),
+                        testing::Field("weight", &HintEntry::weight, weight));
 }
 
 }  // namespace
@@ -140,10 +130,10 @@ TEST(MandatoryHintDetectorTest, IsolatedLayerQualifies) {
   EXPECT_EQ(detector.stats().hintsDropped, 0u);
   EXPECT_EQ(detector.stats().hintsActive, 1u);
 
-  const HintEntry* entry = getSingleMandatoryEntry(registry, entity);
-  ASSERT_NE(entry, nullptr) << "entity should have exactly one Mandatory hint entry";
-  EXPECT_EQ(entry->source, HintSource::Mandatory);
-  EXPECT_EQ(entry->weight, 0xFFFF) << "Mandatory hints use the infinite-weight sentinel";
+  ASSERT_TRUE(registry.all_of<CompositorHintComponent>(entity));
+  EXPECT_THAT(registry.get<CompositorHintComponent>(entity).entries,
+              testing::ElementsAre(HintEntryIs(HintSource::Mandatory, 0xFFFF)))
+      << "Mandatory hints use the infinite-weight sentinel";
 }
 
 TEST(MandatoryHintDetectorTest, ResolvedFilterQualifies) {
@@ -162,10 +152,9 @@ TEST(MandatoryHintDetectorTest, ResolvedFilterQualifies) {
   EXPECT_EQ(detector.stats().hintsPublished, 1u);
   EXPECT_EQ(detector.stats().hintsActive, 1u);
 
-  const HintEntry* entry = getSingleMandatoryEntry(registry, entity);
-  ASSERT_NE(entry, nullptr);
-  EXPECT_EQ(entry->source, HintSource::Mandatory);
-  EXPECT_EQ(entry->weight, 0xFFFF);
+  ASSERT_TRUE(registry.all_of<CompositorHintComponent>(entity));
+  EXPECT_THAT(registry.get<CompositorHintComponent>(entity).entries,
+              testing::ElementsAre(HintEntryIs(HintSource::Mandatory, 0xFFFF)));
 }
 
 TEST(MandatoryHintDetectorTest, MaskQualifies) {
@@ -183,10 +172,9 @@ TEST(MandatoryHintDetectorTest, MaskQualifies) {
   EXPECT_EQ(detector.stats().hintsPublished, 1u);
   EXPECT_EQ(detector.stats().hintsActive, 1u);
 
-  const HintEntry* entry = getSingleMandatoryEntry(registry, entity);
-  ASSERT_NE(entry, nullptr);
-  EXPECT_EQ(entry->source, HintSource::Mandatory);
-  EXPECT_EQ(entry->weight, 0xFFFF);
+  ASSERT_TRUE(registry.all_of<CompositorHintComponent>(entity));
+  EXPECT_THAT(registry.get<CompositorHintComponent>(entity).entries,
+              testing::ElementsAre(HintEntryIs(HintSource::Mandatory, 0xFFFF)));
 }
 
 TEST(MandatoryHintDetectorTest, ReconcileIsIdempotent) {
@@ -200,7 +188,8 @@ TEST(MandatoryHintDetectorTest, ReconcileIsIdempotent) {
   detector.reconcile(registry);
   ASSERT_EQ(detector.stats().hintsPublished, 1u);
   ASSERT_EQ(detector.stats().hintsActive, 1u);
-  ASSERT_EQ(registry.get<CompositorHintComponent>(entity).entries.size(), 1u);
+  EXPECT_THAT(registry.get<CompositorHintComponent>(entity).entries,
+              testing::ElementsAre(HintEntryIs(HintSource::Mandatory, 0xFFFF)));
 
   detector.reconcile(registry);
 
@@ -209,7 +198,8 @@ TEST(MandatoryHintDetectorTest, ReconcileIsIdempotent) {
   EXPECT_EQ(detector.stats().hintsDropped, 0u);
   EXPECT_EQ(detector.stats().hintsActive, 1u);
 
-  EXPECT_EQ(registry.get<CompositorHintComponent>(entity).entries.size(), 1u)
+  EXPECT_THAT(registry.get<CompositorHintComponent>(entity).entries,
+              testing::ElementsAre(HintEntryIs(HintSource::Mandatory, 0xFFFF)))
       << "idempotent reconcile must not duplicate hint entries";
 }
 
@@ -247,7 +237,8 @@ TEST(MandatoryHintDetectorTest, MoveConstructPreservesHint) {
 
   source.reconcile(registry);
   ASSERT_TRUE(registry.all_of<CompositorHintComponent>(entity));
-  ASSERT_EQ(registry.get<CompositorHintComponent>(entity).entries.size(), 1u);
+  EXPECT_THAT(registry.get<CompositorHintComponent>(entity).entries,
+              testing::ElementsAre(HintEntryIs(HintSource::Mandatory, 0xFFFF)));
 
   MandatoryHintDetector moved(std::move(source));
 
@@ -257,7 +248,8 @@ TEST(MandatoryHintDetectorTest, MoveConstructPreservesHint) {
   // The hint entry must remain attached to the entity.
   EXPECT_TRUE(registry.all_of<CompositorHintComponent>(entity))
       << "the hint should survive the move";
-  EXPECT_EQ(registry.get<CompositorHintComponent>(entity).entries.size(), 1u)
+  EXPECT_THAT(registry.get<CompositorHintComponent>(entity).entries,
+              testing::ElementsAre(HintEntryIs(HintSource::Mandatory, 0xFFFF)))
       << "exactly one hint entry still present after move";
 
   // A reconcile on the moved-from detector should see an empty internal map,
@@ -313,10 +305,8 @@ TEST(MandatoryHintDetectorTest, MultipleSignalsOnSameEntityProduceOneHint) {
   EXPECT_EQ(detector.stats().hintsActive, 1u);
 
   const auto& component = registry.get<CompositorHintComponent>(entity);
-  ASSERT_EQ(component.entries.size(), 1u)
+  EXPECT_THAT(component.entries, testing::ElementsAre(HintEntryIs(HintSource::Mandatory, 0xFFFF)))
       << "multiple qualifying signals must still produce only a single Mandatory entry";
-  EXPECT_EQ(component.entries[0].source, HintSource::Mandatory);
-  EXPECT_EQ(component.entries[0].weight, 0xFFFF);
 }
 
 }  // namespace donner::svg::compositor

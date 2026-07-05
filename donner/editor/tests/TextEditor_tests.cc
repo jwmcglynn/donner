@@ -1,11 +1,13 @@
 #include "donner/editor/TextEditor.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <optional>
+#include <ostream>
 #include <span>
 #include <sstream>
 #include <string>
@@ -18,7 +20,93 @@
 
 namespace donner::editor {
 
+void PrintTo(const SourceByteRange& range, std::ostream* os) {
+  *os << "SourceByteRange{start=" << range.start << ", end=" << range.end << "}";
+}
+
+void PrintTo(const SourcePoint& point, std::ostream* os) {
+  *os << "SourcePoint{line=" << point.line << ", column=" << point.column << "}";
+}
+
+void PrintTo(const Coordinates& coords, std::ostream* os) {
+  *os << "Coordinates{line=" << coords.line << ", column=" << coords.column << "}";
+}
+
+void PrintTo(SourceEditIntentKind kind, std::ostream* os) {
+  switch (kind) {
+    case SourceEditIntentKind::Unknown: *os << "Unknown"; return;
+    case SourceEditIntentKind::Insert: *os << "Insert"; return;
+    case SourceEditIntentKind::Delete: *os << "Delete"; return;
+    case SourceEditIntentKind::Replace: *os << "Replace"; return;
+    case SourceEditIntentKind::Undo: *os << "Undo"; return;
+    case SourceEditIntentKind::Redo: *os << "Redo"; return;
+  }
+
+  *os << "SourceEditIntentKind(" << static_cast<int>(kind) << ")";
+}
+
 namespace {
+
+using ::testing::_;
+using ::testing::AllOf;
+using ::testing::ElementsAre;
+using ::testing::Field;
+using ::testing::Gt;
+
+auto SourceByteRangeIs(std::size_t start, std::size_t end) {
+  return AllOf(Field("start", &SourceByteRange::start, start),
+               Field("end", &SourceByteRange::end, end));
+}
+
+auto SourcePointIs(SourcePoint expected) {
+  return AllOf(Field("line", &SourcePoint::line, expected.line),
+               Field("column", &SourcePoint::column, expected.column));
+}
+
+auto FocusReferenceLinkIs(SourcePoint from, SourcePoint to) {
+  return AllOf(Field("from", &FocusReferenceLink::from, SourcePointIs(from)),
+               Field("to", &FocusReferenceLink::to, SourcePointIs(to)));
+}
+
+auto ActiveFlashIs(std::size_t start, std::size_t end, auto intensityMatcher = Gt(0.0f)) {
+  return AllOf(Field("byteRange", &ActiveFlash::byteRange, SourceByteRangeIs(start, end)),
+               Field("intensity", &ActiveFlash::intensity, intensityMatcher));
+}
+
+auto SourceEditIntentIs(std::size_t offset, std::size_t removedLength, std::string_view replacement,
+                        SourceEditIntentKind kind) {
+  return AllOf(Field("offset", &SourceEditIntent::offset, offset),
+               Field("removedLength", &SourceEditIntent::removedLength, removedLength),
+               Field("replacement", &SourceEditIntent::replacement, std::string(replacement)),
+               Field("kind", &SourceEditIntent::kind, kind));
+}
+
+auto SourceStyleDecorationIs(std::size_t id, SourceByteRange range, bool ineffective, bool showChip,
+                             int chipCount, std::string_view tooltip = "",
+                             std::optional<SourceByteRange> chipRange = std::nullopt) {
+  const SourceByteRange expectedChipRange = chipRange.value_or(range);
+
+  return AllOf(Field("id", &TextEditor::SourceStyleDecoration::id, id),
+               Field("range", &TextEditor::SourceStyleDecoration::range,
+                     SourceByteRangeIs(range.start, range.end)),
+               Field("chipRange", &TextEditor::SourceStyleDecoration::chipRange,
+                     SourceByteRangeIs(expectedChipRange.start, expectedChipRange.end)),
+               Field("ineffective", &TextEditor::SourceStyleDecoration::ineffective, ineffective),
+               Field("showChip", &TextEditor::SourceStyleDecoration::showChip, showChip),
+               Field("chipCount", &TextEditor::SourceStyleDecoration::chipCount, chipCount),
+               Field("tooltip", &TextEditor::SourceStyleDecoration::tooltip, std::string(tooltip)));
+}
+
+std::vector<int> CoordinateColumnWidths(const std::vector<Coordinates>& starts,
+                                        const std::vector<Coordinates>& ends) {
+  std::vector<int> widths;
+  widths.reserve(std::min(starts.size(), ends.size()));
+  for (std::size_t index = 0; index < starts.size() && index < ends.size(); ++index) {
+    widths.push_back(ends[index].column - starts[index].column);
+  }
+
+  return widths;
+}
 
 /// In-memory clipboard backing for the test ImGui context. ImGui's default
 /// clipboard handler can fall back to a host service (window-server pasteboard)
@@ -980,9 +1068,8 @@ TEST_F(TextEditorTests, HoverSourceRangesAreClampedAndDeduplicated) {
       SourceByteRange{.start = 4, .end = 4},
   }));
 
-  ASSERT_EQ(editor.hoverSourceRanges().size(), 2u);
-  EXPECT_EQ(editor.hoverSourceRanges()[0], (SourceByteRange{.start = 2, .end = 5}));
-  EXPECT_EQ(editor.hoverSourceRanges()[1], (SourceByteRange{.start = 5, .end = 6}));
+  EXPECT_THAT(editor.hoverSourceRanges(),
+              ElementsAre(SourceByteRangeIs(2, 5), SourceByteRangeIs(5, 6)));
 
   EXPECT_FALSE(editor.setHoverSourceRanges(editor.hoverSourceRanges()));
   EXPECT_TRUE(editor.clearHoverSourceRanges());
@@ -1013,13 +1100,13 @@ TEST_F(TextEditorTests, SourceStyleDecorationsAreClampedAndCleared) {
       },
   }));
 
-  ASSERT_EQ(editor.sourceStyleDecorations().size(), 2u);
-  EXPECT_EQ(editor.sourceStyleDecorations()[0].id, 1u);
-  EXPECT_EQ(editor.sourceStyleDecorations()[0].range, (SourceByteRange{.start = 2, .end = 5}));
-  EXPECT_TRUE(editor.sourceStyleDecorations()[0].ineffective);
-  EXPECT_EQ(editor.sourceStyleDecorations()[1].id, 2u);
-  EXPECT_EQ(editor.sourceStyleDecorations()[1].range, (SourceByteRange{.start = 5, .end = 6}));
-  EXPECT_EQ(editor.sourceStyleDecorations()[1].chipCount, 0);
+  EXPECT_THAT(editor.sourceStyleDecorations(),
+              ElementsAre(SourceStyleDecorationIs(1, SourceByteRange{.start = 2, .end = 5},
+                                                  /*ineffective=*/true, /*showChip=*/false,
+                                                  /*chipCount=*/0, "fill is overridden"),
+                          SourceStyleDecorationIs(2, SourceByteRange{.start = 5, .end = 6},
+                                                  /*ineffective=*/false, /*showChip=*/true,
+                                                  /*chipCount=*/0, "unused selector")));
 
   EXPECT_FALSE(editor.setSourceStyleDecorations(editor.sourceStyleDecorations()));
   EXPECT_TRUE(editor.clearSourceStyleDecorations());
@@ -1153,11 +1240,12 @@ TEST_F(TextEditorTests, RemapFocusMetadataNoOpLeavesExistingRanges) {
 
   RemapFocusMetadataForSourceEdit(SourceEditIntent{});
 
-  ASSERT_EQ(editor.hoverSourceRanges().size(), 1u);
-  EXPECT_EQ(editor.hoverSourceRanges()[0], (SourceByteRange{.start = 1, .end = 4}));
-  ASSERT_EQ(editor.sourceStyleDecorations().size(), 1u);
-  EXPECT_EQ(editor.sourceStyleDecorations()[0].range, (SourceByteRange{.start = 2, .end = 5}));
-  EXPECT_EQ(editor.sourceStyleDecorations()[0].chipRange, (SourceByteRange{.start = 1, .end = 2}));
+  EXPECT_THAT(editor.hoverSourceRanges(), ElementsAre(SourceByteRangeIs(1, 4)));
+  EXPECT_THAT(editor.sourceStyleDecorations(),
+              ElementsAre(SourceStyleDecorationIs(3, SourceByteRange{.start = 2, .end = 5},
+                                                  /*ineffective=*/false, /*showChip=*/true,
+                                                  /*chipCount=*/0, "",
+                                                  SourceByteRange{.start = 1, .end = 2})));
 }
 
 TEST_F(TextEditorTests, RemapFocusMetadataMapsRangesAndFocusPartitionAfterEdit) {
@@ -1199,16 +1287,17 @@ TEST_F(TextEditorTests, RemapFocusMetadataMapsRangesAndFocusPartitionAfterEdit) 
 
   RemapFocusMetadataForSourceEdit(intent);
 
-  ASSERT_EQ(editor.hoverSourceRanges().size(), 2u);
-  EXPECT_EQ(editor.hoverSourceRanges()[0], (SourceByteRange{.start = 0, .end = 5}));
-  EXPECT_EQ(editor.hoverSourceRanges()[1], (SourceByteRange{.start = 5, .end = 11}));
-  ASSERT_EQ(editor.sourceStyleDecorations().size(), 1u);
-  EXPECT_EQ(editor.sourceStyleDecorations()[0].range, (SourceByteRange{.start = 5, .end = 11}));
-  EXPECT_EQ(editor.sourceStyleDecorations()[0].chipRange, (SourceByteRange{.start = 5, .end = 5}));
+  EXPECT_THAT(editor.hoverSourceRanges(),
+              ElementsAre(SourceByteRangeIs(0, 5), SourceByteRangeIs(5, 11)));
+  EXPECT_THAT(editor.sourceStyleDecorations(),
+              ElementsAre(SourceStyleDecorationIs(9, SourceByteRange{.start = 5, .end = 11},
+                                                  /*ineffective=*/false, /*showChip=*/true,
+                                                  /*chipCount=*/0, "",
+                                                  SourceByteRange{.start = 5, .end = 5})));
   EXPECT_TRUE(editor.hasFocusPartition());
-  ASSERT_EQ(ActiveFocusPartition().referenceLinks.size(), 1u);
-  EXPECT_EQ(ActiveFocusPartition().referenceLinks[0].from, (SourcePoint{.line = 0, .column = 5}));
-  EXPECT_EQ(ActiveFocusPartition().referenceLinks[0].to, (SourcePoint{.line = 2, .column = 0}));
+  EXPECT_THAT(ActiveFocusPartition().referenceLinks,
+              ElementsAre(FocusReferenceLinkIs(SourcePoint{.line = 0, .column = 5},
+                                               SourcePoint{.line = 2, .column = 0})));
 }
 
 TEST_F(TextEditorTests, ContentUpdateHookRunsForShellEdits) {
@@ -1316,9 +1405,7 @@ TEST_F(TextEditorTests, SnippetTypingPropagatesRepeatedPlaceholderText) {
   EXPECT_FALSE(keepAutocompleteOpen);
   EXPECT_TRUE(hasWrittenLetter);
   EXPECT_EQ(editor.getText(), "<x>x</x>");
-  ASSERT_EQ(SnippetStarts().size(), 3u);
-  EXPECT_EQ(SnippetEnds()[0].column - SnippetStarts()[0].column, 1);
-  EXPECT_EQ(SnippetEnds()[1].column - SnippetStarts()[1].column, 1);
+  EXPECT_THAT(CoordinateColumnWidths(SnippetStarts(), SnippetEnds()), ElementsAre(1, 1, 1));
 }
 
 TEST_F(TextEditorTests, AutocompleteSelectReplacesProviderRange) {
@@ -1918,11 +2005,7 @@ TEST_F(TextEditorTests, CutCapturesDeleteIntentAndUndoRestoresText) {
   editor.cut();
 
   std::vector<SourceEditIntent> intents = editor.takePendingSourceEditIntents();
-  ASSERT_EQ(intents.size(), 1u);
-  EXPECT_EQ(intents[0].offset, 0u);
-  EXPECT_EQ(intents[0].removedLength, 5u);
-  EXPECT_EQ(intents[0].replacement, "");
-  EXPECT_EQ(intents[0].kind, SourceEditIntentKind::Delete);
+  EXPECT_THAT(intents, ElementsAre(SourceEditIntentIs(0u, 5u, "", SourceEditIntentKind::Delete)));
 
   editor.undo();
   EXPECT_EQ(editor.getText(), "Hello world");
@@ -1944,11 +2027,8 @@ TEST_F(TextEditorTests, PasteInsertsClipboardText) {
   EXPECT_EQ(editor.getText(), "Hello world") << "paste should insert clipboard text at cursor";
 
   std::vector<SourceEditIntent> intents = editor.takePendingSourceEditIntents();
-  ASSERT_EQ(intents.size(), 1u);
-  EXPECT_EQ(intents[0].offset, 5u);
-  EXPECT_EQ(intents[0].removedLength, 0u);
-  EXPECT_EQ(intents[0].replacement, " world");
-  EXPECT_EQ(intents[0].kind, SourceEditIntentKind::Insert);
+  EXPECT_THAT(intents,
+              ElementsAre(SourceEditIntentIs(5u, 0u, " world", SourceEditIntentKind::Insert)));
 }
 
 TEST_F(TextEditorTests, PasteWithSelectionReplacesSelection) {
@@ -1960,11 +2040,8 @@ TEST_F(TextEditorTests, PasteWithSelectionReplacesSelection) {
   EXPECT_EQ(editor.getText(), "Hi world") << "paste with selection should replace selection";
 
   std::vector<SourceEditIntent> intents = editor.takePendingSourceEditIntents();
-  ASSERT_EQ(intents.size(), 1u);
-  EXPECT_EQ(intents[0].offset, 0u);
-  EXPECT_EQ(intents[0].removedLength, 5u);
-  EXPECT_EQ(intents[0].replacement, "Hi");
-  EXPECT_EQ(intents[0].kind, SourceEditIntentKind::Replace);
+  EXPECT_THAT(intents,
+              ElementsAre(SourceEditIntentIs(0u, 5u, "Hi", SourceEditIntentKind::Replace)));
 
   editor.undo();
   EXPECT_EQ(editor.getText(), "Hello world");
@@ -1978,11 +2055,8 @@ TEST_F(TextEditorTests, ProcessReplaceCapturesReplaceIntentAndUndoRestoresText) 
 
   EXPECT_EQ(editor.getText(), "green blue red");
   std::vector<SourceEditIntent> intents = editor.takePendingSourceEditIntents();
-  ASSERT_EQ(intents.size(), 1u);
-  EXPECT_EQ(intents[0].offset, 0u);
-  EXPECT_EQ(intents[0].removedLength, 3u);
-  EXPECT_EQ(intents[0].replacement, "green");
-  EXPECT_EQ(intents[0].kind, SourceEditIntentKind::Replace);
+  EXPECT_THAT(intents,
+              ElementsAre(SourceEditIntentIs(0u, 3u, "green", SourceEditIntentKind::Replace)));
 
   editor.undo();
   EXPECT_EQ(editor.getText(), "red blue red");
@@ -2042,7 +2116,7 @@ TEST_F(TextEditorTests, FocusPartitionHidesLinesFromRenderedVisualLayout) {
 
   RenderEditorFrame(ImVec2(300.0f, 180.0f));
 
-  EXPECT_EQ(VisualLineLogicalLines(), (std::vector<int>{0, 1, 3, 4}));
+  EXPECT_THAT(VisualLineLogicalLines(), ElementsAre(0, 1, 3, 4));
   ASSERT_GE(VisualLineCount(), 3);
   EXPECT_TRUE(VisualLineIsFocusHiddenPlaceholder(1));
   EXPECT_EQ(VisualLineHiddenRange(1), (LineRange{.startLine = 1, .endLine = 3}));
@@ -2067,14 +2141,14 @@ TEST_F(TextEditorTests, ClickingFocusHiddenPlaceholderExpandsRangeWithoutMovingC
   RenderEditorFrameWithMouse(clickPos, false, ImVec2(300.0f, 180.0f));
   RenderEditorFrameWithMouse(clickPos, true, ImVec2(300.0f, 180.0f));
 
-  EXPECT_EQ(VisualLineLogicalLines(), (std::vector<int>{0, 1, 2, 3, 4}));
+  EXPECT_THAT(VisualLineLogicalLines(), ElementsAre(0, 1, 2, 3, 4));
   EXPECT_FALSE(VisualLineIsFocusHiddenPlaceholder(1));
   EXPECT_EQ(editor.getCursorPosition(), Coordinates(3, 0));
   EXPECT_FALSE(editor.isCursorPositionChanged());
 
   editor.setFocusPartition(partition);
   RenderEditorFrame(ImVec2(300.0f, 180.0f));
-  EXPECT_EQ(VisualLineLogicalLines(), (std::vector<int>{0, 1, 2, 3, 4}));
+  EXPECT_THAT(VisualLineLogicalLines(), ElementsAre(0, 1, 2, 3, 4));
 }
 
 TEST_F(TextEditorTests, CursorInsideFocusRangeTracksVisibleFocusBrightnessLines) {
@@ -2112,9 +2186,7 @@ TEST_F(TextEditorTests, ExternalSourceEditQueuesRenderedFlashDecoration) {
 
   ASSERT_TRUE(HasActiveSourceFlash());
   const std::vector<ActiveFlash> flashes = ActiveSourceFlashes();
-  ASSERT_EQ(flashes.size(), 1u);
-  EXPECT_EQ(flashes[0].byteRange, (SourceByteRange{.start = 5, .end = 9}));
-  EXPECT_GT(flashes[0].intensity, 0.0f);
+  EXPECT_THAT(flashes, ElementsAre(ActiveFlashIs(5, 9, Gt(0.0f))));
 }
 
 TEST_F(TextEditorTests, ExternalSourceEditInsideSelectionExtendsSelection) {
@@ -2524,10 +2596,13 @@ TEST_F(TextEditorTests, TypingRemapsFocusReferenceRopeEndpointsImmediately) {
       .from = SourcePoint{.line = 2, .column = 17},
       .to = SourcePoint{.line = 1, .column = 27},
   };
-  EXPECT_EQ(FocusReferenceLinks(), (std::vector<FocusReferenceLink>{remappedLink}));
-  ASSERT_EQ(editor.sourceStyleDecorations().size(), 1u);
-  EXPECT_EQ(editor.sourceStyleDecorations()[0].chipRange,
-            (SourceByteRange{.start = kInsertedLine.size(), .end = kInsertedLine.size() + 27u}));
+  EXPECT_THAT(FocusReferenceLinks(), ElementsAre(remappedLink));
+  EXPECT_THAT(
+      editor.sourceStyleDecorations(),
+      ElementsAre(SourceStyleDecorationIs(
+          96, SourceByteRange{.start = kInsertedLine.size(), .end = kInsertedLine.size() + 27u},
+          /*ineffective=*/false, /*showChip=*/true, /*chipCount=*/1, "",
+          SourceByteRange{.start = kInsertedLine.size(), .end = kInsertedLine.size() + 27u})));
   EXPECT_EQ(FocusReferenceRope(link), nullptr);
   EXPECT_NE(FocusReferenceRope(remappedLink), nullptr);
 
@@ -2558,7 +2633,7 @@ TEST_F(TextEditorTests, ReferenceOnlyFocusPartitionLeavesAllLinesVisible) {
 
   RenderEditorFrame(ImVec2(520.0f, 180.0f));
 
-  EXPECT_EQ(VisualLineLogicalLines(), (std::vector<int>{0, 1, 2, 3}));
+  EXPECT_THAT(VisualLineLogicalLines(), ElementsAre(0, 1, 2, 3));
   EXPECT_TRUE(FocusReferenceLayout(link, 0).has_value());
 }
 
@@ -2833,10 +2908,10 @@ TEST_F(TextEditorTests, AutocompleteParseSnippetReplacesRepeatedPlaceholders) {
   EXPECT_TRUE(IsSnippet());
   EXPECT_EQ(SnippetIds(), (std::vector<int>{1, 2, 1, 1}));
   EXPECT_EQ(SnippetHighlights(), (std::vector<bool>{true, true, false, false}));
-  ASSERT_EQ(SnippetStarts().size(), 4u);
-  ASSERT_EQ(SnippetEnds().size(), 4u);
-  EXPECT_EQ(SnippetStarts()[0], Coordinates(3, 5));
-  EXPECT_EQ(SnippetEnds()[0], Coordinates(3, 9));
+  EXPECT_THAT(SnippetStarts(), ElementsAre(Coordinates(3, 5), Coordinates(3, 14),
+                                           Coordinates(3, 20), Coordinates(3, 26)));
+  EXPECT_THAT(SnippetEnds(), ElementsAre(Coordinates(3, 9), Coordinates(3, 18), Coordinates(3, 24),
+                                         Coordinates(3, 30)));
 }
 
 TEST_F(TextEditorTests, AutocompleteParseSnippetWithoutTagsClearsSnippetState) {
@@ -3424,7 +3499,7 @@ TEST_F(TextEditorTests, NonWrappedRenderPathDrawsLines) {
   RenderEditorFrame(ImVec2(300.0f, 180.0f));
 
   // With wrapping off the visual layout mirrors logical lines one-for-one.
-  EXPECT_EQ(VisualLineLogicalLines(), (std::vector<int>{0, 1, 2}));
+  EXPECT_THAT(VisualLineLogicalLines(), ElementsAre(0, 1, 2));
 }
 
 TEST_F(TextEditorTests, ScrollbarMarkersRenderWithChangesAndErrors) {

@@ -1,13 +1,22 @@
 #include "donner/editor/AsyncSVGDocument.h"
 
+#include <gmock/gmock.h>
+
 #include <array>
 
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "gtest/gtest.h"
 
 namespace donner::editor {
 namespace {
+
+using ::donner::svg::test::Rgba;
+using ::testing::DoubleNear;
+using ::testing::Field;
+using ::testing::Gt;
+using ::testing::Lt;
 
 constexpr std::string_view kTrivialSvg =
     R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
@@ -34,6 +43,13 @@ svg::RendererBitmap RenderDocument(svg::SVGDocument& document) {
   svg::Renderer renderer;
   renderer.draw(document);
   return renderer.takeSnapshot();
+}
+
+MATCHER_P2(Vector2dNear, expected, tolerance, "") {
+  return testing::ExplainMatchResult(
+      testing::AllOf(Field("x", &Vector2d::x, DoubleNear(expected.x, tolerance)),
+                     Field("y", &Vector2d::y, DoubleNear(expected.y, tolerance))),
+      arg, result_listener);
 }
 
 TEST(AsyncSVGDocumentTest, EmptyByDefault) {
@@ -71,8 +87,7 @@ TEST(AsyncSVGDocumentTest, FlushAppliesQueuedSetTransform) {
 
   auto graphicsElement = rect->cast<svg::SVGGraphicsElement>();
   const Transform2d after = graphicsElement.transform();
-  EXPECT_DOUBLE_EQ(after.data[4], 7.0);
-  EXPECT_DOUBLE_EQ(after.data[5], 11.0);
+  EXPECT_THAT(after.translation(), Vector2dNear(Vector2d(7.0, 11.0), 1e-9));
 }
 
 TEST(AsyncSVGDocumentTest, MultipleSetTransformsCoalesceAtFlush) {
@@ -94,7 +109,7 @@ TEST(AsyncSVGDocumentTest, MultipleSetTransformsCoalesceAtFlush) {
   EXPECT_TRUE(doc.flushFrame());
 
   auto graphicsElement = rect->cast<svg::SVGGraphicsElement>();
-  EXPECT_DOUBLE_EQ(graphicsElement.transform().data[4], 3.0);
+  EXPECT_THAT(graphicsElement.transform().translation(), Vector2dNear(Vector2d(3.0, 0.0), 1e-9));
 }
 
 TEST(AsyncSVGDocumentTest, ReplaceDocumentSwapsTheTreeAndDropsPriorMutations) {
@@ -162,10 +177,7 @@ TEST(AsyncSVGDocumentTest, CommandAfterStructuralWritebackReparseTargetsRemapped
   const svg::RendererBitmap rendered = RenderDocument(doc.document());
   ASSERT_FALSE(rendered.empty());
   const std::array<std::uint8_t, 4> pixel = PixelAt(rendered, 24, 24);
-  EXPECT_GT(pixel[0], 200u);
-  EXPECT_LT(pixel[1], 40u);
-  EXPECT_LT(pixel[2], 40u);
-  EXPECT_GT(pixel[3], 200u);
+  EXPECT_THAT(pixel, Rgba(Gt(200), Lt(40), Lt(40), Gt(200)));
 }
 
 TEST(AsyncSVGDocumentTest, StructuralWritebackPreservesCanvasSize) {

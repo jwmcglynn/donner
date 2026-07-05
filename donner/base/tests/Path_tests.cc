@@ -1,5 +1,6 @@
 #include "donner/base/Path.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <cmath>
@@ -11,6 +12,31 @@
 namespace donner {
 
 namespace {
+
+MATCHER_P(PathCommandVerbIs, expectedVerb, "") {
+  return testing::ExplainMatchResult(testing::Eq(expectedVerb), arg.verb, result_listener);
+}
+
+MATCHER_P(VertexPointIs, expectedPoint, "") {
+  return testing::ExplainMatchResult(testing::Eq(expectedPoint), arg.point, result_listener);
+}
+
+MATCHER_P2(Vector2dNear, expectedPoint, tolerance, "") {
+  return testing::ExplainMatchResult(
+      testing::AllOf(
+          testing::Field("x", &Vector2d::x, testing::DoubleNear(expectedPoint.x, tolerance)),
+          testing::Field("y", &Vector2d::y, testing::DoubleNear(expectedPoint.y, tolerance))),
+      arg, result_listener);
+}
+
+MATCHER_P(VertexPointMatches, pointMatcher, "") {
+  return testing::ExplainMatchResult(pointMatcher, arg.point, result_listener);
+}
+
+MATCHER_P(VertexOrientationIs, expectedOrientation, "") {
+  return testing::ExplainMatchResult(Vector2dNear(expectedOrientation, 1e-9), arg.orientation,
+                                     result_listener);
+}
 
 void ExpectNear(const Vector2d& actual, const Vector2d& expected, double tolerance = 1e-9) {
   EXPECT_NEAR(actual.x, expected.x, tolerance) << "actual=" << actual << " expected=" << expected;
@@ -35,35 +61,36 @@ TEST(PathBuilder, EmptyBuilder) {
 TEST(PathBuilder, MoveToLineTo) {
   Path path = PathBuilder().moveTo({0, 0}).lineTo({100, 0}).lineTo({100, 100}).build();
 
-  EXPECT_EQ(path.verbCount(), 3u);
-  EXPECT_EQ(path.points().size(), 3u);
-  EXPECT_EQ(path.commands()[0].verb, Path::Verb::MoveTo);
-  EXPECT_EQ(path.commands()[1].verb, Path::Verb::LineTo);
-  EXPECT_EQ(path.commands()[2].verb, Path::Verb::LineTo);
+  EXPECT_THAT(path.commands(), testing::ElementsAre(PathCommandVerbIs(Path::Verb::MoveTo),
+                                                    PathCommandVerbIs(Path::Verb::LineTo),
+                                                    PathCommandVerbIs(Path::Verb::LineTo)));
+  EXPECT_THAT(path.points(), testing::SizeIs(3));
 }
 
 TEST(PathBuilder, QuadTo) {
   Path path = PathBuilder().moveTo({0, 0}).quadTo({50, 100}, {100, 0}).build();
 
-  EXPECT_EQ(path.verbCount(), 2u);
-  EXPECT_EQ(path.commands()[1].verb, Path::Verb::QuadTo);
+  EXPECT_THAT(path.commands(), testing::ElementsAre(PathCommandVerbIs(Path::Verb::MoveTo),
+                                                    PathCommandVerbIs(Path::Verb::QuadTo)));
   // QuadTo consumes 2 points (control + end).
-  EXPECT_EQ(path.points().size(), 3u);  // 1 moveTo + 2 quadTo
+  EXPECT_THAT(path.points(), testing::SizeIs(3));  // 1 moveTo + 2 quadTo
 }
 
 TEST(PathBuilder, CurveTo) {
   Path path = PathBuilder().moveTo({0, 0}).curveTo({0, 100}, {100, 100}, {100, 0}).build();
 
-  EXPECT_EQ(path.verbCount(), 2u);
-  EXPECT_EQ(path.commands()[1].verb, Path::Verb::CurveTo);
-  EXPECT_EQ(path.points().size(), 4u);  // 1 moveTo + 3 curveTo
+  EXPECT_THAT(path.commands(), testing::ElementsAre(PathCommandVerbIs(Path::Verb::MoveTo),
+                                                    PathCommandVerbIs(Path::Verb::CurveTo)));
+  EXPECT_THAT(path.points(), testing::SizeIs(4));  // 1 moveTo + 3 curveTo
 }
 
 TEST(PathBuilder, ClosePath) {
   Path path = PathBuilder().moveTo({0, 0}).lineTo({100, 0}).lineTo({100, 100}).closePath().build();
 
-  EXPECT_EQ(path.verbCount(), 4u);
-  EXPECT_EQ(path.commands()[3].verb, Path::Verb::ClosePath);
+  EXPECT_THAT(path.commands(), testing::ElementsAre(PathCommandVerbIs(Path::Verb::MoveTo),
+                                                    PathCommandVerbIs(Path::Verb::LineTo),
+                                                    PathCommandVerbIs(Path::Verb::LineTo),
+                                                    PathCommandVerbIs(Path::Verb::ClosePath)));
 }
 
 TEST(PathBuilder, ClosePathWithoutOpenSubpathIsNoOp) {
@@ -87,10 +114,9 @@ TEST(PathBuilder, ImplicitMoveToOnLineTo) {
   // lineTo without moveTo should auto-insert moveTo at (0,0).
   Path path = PathBuilder().lineTo({100, 0}).build();
 
-  EXPECT_EQ(path.verbCount(), 2u);
-  EXPECT_EQ(path.commands()[0].verb, Path::Verb::MoveTo);
-  EXPECT_EQ(path.commands()[1].verb, Path::Verb::LineTo);
-  ExpectNear(path.points()[0], Vector2d(0, 0));
+  EXPECT_THAT(path.commands(), testing::ElementsAre(PathCommandVerbIs(Path::Verb::MoveTo),
+                                                    PathCommandVerbIs(Path::Verb::LineTo)));
+  EXPECT_THAT(path.points(), testing::ElementsAre(Vector2d(0, 0), Vector2d(100, 0)));
 }
 
 TEST(PathBuilder, CurrentPoint) {
@@ -112,9 +138,11 @@ TEST(PathBuilder, AddRect) {
   Path path = PathBuilder().addRect(Box2d(Vector2d(0, 0), Vector2d(10, 10))).build();
 
   // moveTo + 3 lineTo + closePath = 5 commands
-  EXPECT_EQ(path.verbCount(), 5u);
-  EXPECT_EQ(path.commands()[0].verb, Path::Verb::MoveTo);
-  EXPECT_EQ(path.commands()[4].verb, Path::Verb::ClosePath);
+  EXPECT_THAT(path.commands(), testing::ElementsAre(PathCommandVerbIs(Path::Verb::MoveTo),
+                                                    PathCommandVerbIs(Path::Verb::LineTo),
+                                                    PathCommandVerbIs(Path::Verb::LineTo),
+                                                    PathCommandVerbIs(Path::Verb::LineTo),
+                                                    PathCommandVerbIs(Path::Verb::ClosePath)));
 }
 
 TEST(PathBuilder, AddCircle) {
@@ -148,11 +176,10 @@ TEST(PathBuilder, AddPathCopiesCurvesAndClosePath) {
 
   Path combined = PathBuilder().addPath(sub).build();
 
-  ASSERT_EQ(combined.verbCount(), 4u);
-  EXPECT_EQ(combined.commands()[0].verb, Path::Verb::MoveTo);
-  EXPECT_EQ(combined.commands()[1].verb, Path::Verb::QuadTo);
-  EXPECT_EQ(combined.commands()[2].verb, Path::Verb::CurveTo);
-  EXPECT_EQ(combined.commands()[3].verb, Path::Verb::ClosePath);
+  EXPECT_THAT(combined.commands(), testing::ElementsAre(PathCommandVerbIs(Path::Verb::MoveTo),
+                                                        PathCommandVerbIs(Path::Verb::QuadTo),
+                                                        PathCommandVerbIs(Path::Verb::CurveTo),
+                                                        PathCommandVerbIs(Path::Verb::ClosePath)));
 }
 
 // =============================================================================
@@ -219,18 +246,10 @@ TEST(Path, ForEachVisitsAllCommands) {
     pointCounts.push_back(pts.size());
   });
 
-  ASSERT_EQ(verbs.size(), 5u);
-  EXPECT_EQ(verbs[0], Path::Verb::MoveTo);
-  EXPECT_EQ(verbs[1], Path::Verb::LineTo);
-  EXPECT_EQ(verbs[2], Path::Verb::QuadTo);
-  EXPECT_EQ(verbs[3], Path::Verb::CurveTo);
-  EXPECT_EQ(verbs[4], Path::Verb::ClosePath);
-
-  EXPECT_EQ(pointCounts[0], 1u);
-  EXPECT_EQ(pointCounts[1], 1u);
-  EXPECT_EQ(pointCounts[2], 2u);
-  EXPECT_EQ(pointCounts[3], 3u);
-  EXPECT_EQ(pointCounts[4], 0u);
+  EXPECT_THAT(verbs,
+              testing::ElementsAre(Path::Verb::MoveTo, Path::Verb::LineTo, Path::Verb::QuadTo,
+                                   Path::Verb::CurveTo, Path::Verb::ClosePath));
+  EXPECT_THAT(pointCounts, testing::ElementsAre(1u, 1u, 2u, 3u, 0u));
 }
 
 // =============================================================================
@@ -468,10 +487,9 @@ TEST(Path, CopyPreservesContent) {
 
   Path copy = original;  // NOLINT(performance-unnecessary-copy-initialization)
 
-  EXPECT_EQ(copy.verbCount(), original.verbCount());
-  EXPECT_EQ(copy.points().size(), original.points().size());
-  ExpectNear(copy.points()[0], original.points()[0]);
-  ExpectNear(copy.points()[1], original.points()[1]);
+  EXPECT_THAT(copy.commands(), testing::ElementsAre(PathCommandVerbIs(Path::Verb::MoveTo),
+                                                    PathCommandVerbIs(Path::Verb::LineTo)));
+  EXPECT_THAT(copy.points(), testing::ElementsAre(Vector2d(1, 2), Vector2d(3, 4)));
 }
 
 TEST(Path, MoveTransfersOwnership) {
@@ -1966,10 +1984,8 @@ TEST(Path, VerticesClosedPathDegenerateFirstSegment) {
   Path path = PathBuilder().moveTo({5, 5}).lineTo({5, 5}).lineTo({15, 5}).closePath().build();
   std::vector<Path::Vertex> verts = path.vertices();
   ASSERT_FALSE(verts.empty());
-  EXPECT_EQ(verts.front().point, Vector2d(5, 5));
-  // Orientation should be a unit vector pointing along +X.
-  EXPECT_NEAR(verts.front().orientation.x, 1.0, 1e-9);
-  EXPECT_NEAR(verts.front().orientation.y, 0.0, 1e-9);
+  EXPECT_THAT(verts.front(),
+              testing::AllOf(VertexPointIs(Vector2d(5, 5)), VertexOrientationIs(Vector2d(1, 0))));
 }
 
 // When a closed subpath's final drawing segment already arrives at the subpath start
@@ -1989,11 +2005,10 @@ TEST(Path, VerticesClosedCurveEmitsMidAtCoincidentStart) {
 
   // 8 segment endpoints + the coincident-start mid = 10 vertices total: V0 (marker-start),
   // V1..V8 (marker-mid), V9 (marker-end). V0, V8, V9 all sit on the start point (35,20).
-  ASSERT_EQ(verts.size(), 10u);
-  EXPECT_EQ(verts.front().point, Vector2d(35, 20));  // marker-start
-  EXPECT_EQ(verts.back().point, Vector2d(35, 20));   // marker-end
-  // The second-to-last vertex is the mid emitted for the last curve's arrival at the start.
-  EXPECT_EQ(verts[verts.size() - 2].point, Vector2d(35, 20));
+  EXPECT_THAT(verts, testing::ElementsAre(VertexPointIs(Vector2d(35, 20)), testing::_, testing::_,
+                                          testing::_, testing::_, testing::_, testing::_,
+                                          testing::_, VertexPointIs(Vector2d(35, 20)),
+                                          VertexPointIs(Vector2d(35, 20))));
 
   // Exactly three vertices coincide with the start point (start + arrival-mid + end).
   int atStart = 0;
@@ -2012,7 +2027,7 @@ TEST(Path, VerticesClosedCircleStacksTwiceAtStart) {
   Path path = PathBuilder().addCircle(Vector2d(100, 100), 80).build();
   std::vector<Path::Vertex> verts = path.vertices();
   // start, 3 mids, end = 5 vertices; start + end coincide at (180,100).
-  ASSERT_EQ(verts.size(), 5u);
+  EXPECT_THAT(verts, testing::SizeIs(5));  // start, 3 mids, end.
   int atStart = 0;
   for (const auto& v : verts) {
     if (v.point == Vector2d(180, 100)) {
@@ -2028,7 +2043,7 @@ TEST(Path, VerticesClosedCircleStacksTwiceAtStart) {
 TEST(Path, VerticesSharpRectStartStacksTwice) {
   Path path = PathBuilder().addRect(Box2d(Vector2d(20, 20), Vector2d(180, 180))).build();
   std::vector<Path::Vertex> verts = path.vertices();
-  ASSERT_EQ(verts.size(), 5u);  // start, 3 mids, end.
+  EXPECT_THAT(verts, testing::SizeIs(5));  // start, 3 mids, end.
   int atStart = 0;
   for (const auto& v : verts) {
     if (v.point == Vector2d(20, 20)) {
@@ -2043,11 +2058,9 @@ TEST(Path, VerticesOpenSubpathFinalizesBeforeNextMove) {
 
   std::vector<Path::Vertex> verts = path.vertices();
 
-  ASSERT_EQ(verts.size(), 4u);
-  ExpectNear(verts[0].point, Vector2d(0, 0));
-  ExpectNear(verts[1].point, Vector2d(10, 0));
-  ExpectNear(verts[2].point, Vector2d(20, 0));
-  ExpectNear(verts[3].point, Vector2d(20, 10));
+  EXPECT_THAT(
+      verts, testing::ElementsAre(VertexPointIs(Vector2d(0, 0)), VertexPointIs(Vector2d(10, 0)),
+                                  VertexPointIs(Vector2d(20, 0)), VertexPointIs(Vector2d(20, 10))));
 }
 
 TEST(Path, VerticesSkipEmptyOpenSubpathBeforeRepeatedMove) {
@@ -2055,9 +2068,8 @@ TEST(Path, VerticesSkipEmptyOpenSubpathBeforeRepeatedMove) {
 
   std::vector<Path::Vertex> verts = path.vertices();
 
-  ASSERT_EQ(verts.size(), 2u);
-  ExpectNear(verts[0].point, Vector2d(5, 5));
-  ExpectNear(verts[1].point, Vector2d(10, 5));
+  EXPECT_THAT(verts,
+              testing::ElementsAre(VertexPointIs(Vector2d(5, 5)), VertexPointIs(Vector2d(10, 5))));
 }
 
 TEST(Path, VerticesArcSkipsInternalDecompositionSegments) {
@@ -2066,9 +2078,8 @@ TEST(Path, VerticesArcSkipsInternalDecompositionSegments) {
 
   std::vector<Path::Vertex> verts = path.vertices();
 
-  ASSERT_EQ(verts.size(), 2u);
-  ExpectNear(verts.front().point, Vector2d(10, 0));
-  ExpectNear(verts.back().point, Vector2d(0, 10), 1e-6);
+  EXPECT_THAT(verts, testing::ElementsAre(VertexPointIs(Vector2d(10, 0)),
+                                          VertexPointMatches(Vector2dNear(Vector2d(0, 10), 1e-6))));
 }
 
 TEST(Path, VerticesInteriorCuspsResolveBothPerpendicularBranches) {
@@ -2128,7 +2139,8 @@ TEST(PathBuilder, ArcToZeroYRadiusFallsBackToLine) {
   Path path = PathBuilder().moveTo({0, 0}).arcTo({10, 0}, 0.0, false, false, {10, 10}).build();
 
   ASSERT_EQ(path.verbCount(), 2u);
-  EXPECT_EQ(path.commands()[1].verb, Path::Verb::LineTo);
+  EXPECT_THAT(path.commands(), testing::ElementsAre(PathCommandVerbIs(Path::Verb::MoveTo),
+                                                    PathCommandVerbIs(Path::Verb::LineTo)));
 }
 
 TEST(PathBuilder, ArcToCoincidentEndpoints) {

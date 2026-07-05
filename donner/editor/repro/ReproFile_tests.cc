@@ -1,11 +1,12 @@
 #include "donner/editor/repro/ReproFile.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <ostream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -15,11 +16,72 @@
 
 namespace donner::editor::repro {
 
+void PrintTo(ReproAction::Kind kind, std::ostream* os) {
+  switch (kind) {
+    case ReproAction::Kind::SetActiveTool: *os << "SetActiveTool"; return;
+    case ReproAction::Kind::SetStyleProperty: *os << "SetStyleProperty"; return;
+    case ReproAction::Kind::CommitPenPath: *os << "CommitPenPath"; return;
+  }
+
+  *os << "ReproAction::Kind(" << static_cast<int>(kind) << ")";
+}
+
+void PrintTo(ReproEvent::Kind kind, std::ostream* os) {
+  switch (kind) {
+    case ReproEvent::Kind::MouseDown: *os << "MouseDown"; return;
+    case ReproEvent::Kind::MouseUp: *os << "MouseUp"; return;
+    case ReproEvent::Kind::KeyDown: *os << "KeyDown"; return;
+    case ReproEvent::Kind::KeyUp: *os << "KeyUp"; return;
+    case ReproEvent::Kind::Char: *os << "Char"; return;
+    case ReproEvent::Kind::Wheel: *os << "Wheel"; return;
+    case ReproEvent::Kind::Resize: *os << "Resize"; return;
+    case ReproEvent::Kind::Focus: *os << "Focus"; return;
+  }
+
+  *os << "ReproEvent::Kind(" << static_cast<int>(kind) << ")";
+}
+
 namespace {
+
+using ::testing::_;
+using ::testing::AllOf;
+using ::testing::Contains;
+using ::testing::DoubleEq;
+using ::testing::ElementsAre;
+using ::testing::Eq;
+using ::testing::Field;
+using ::testing::FloatEq;
+using ::testing::IsEmpty;
+using ::testing::Optional;
 
 std::filesystem::path TempFile(std::string_view stem) {
   const auto tmpDir = std::filesystem::temp_directory_path();
   return tmpDir / (std::string(stem) + "_" + std::to_string(std::rand()) + ".donner-repro");
+}
+
+auto ReproHitIs(std::string_view tag, std::string_view id, int docOrderIndex, bool empty) {
+  return AllOf(Field("tag", &ReproHit::tag, std::string(tag)),
+               Field("id", &ReproHit::id, std::string(id)),
+               Field("docOrderIndex", &ReproHit::docOrderIndex, docOrderIndex),
+               Field("empty", &ReproHit::empty, empty));
+}
+
+auto ReproActionIs(ReproAction::Kind kind, std::string_view tool, std::string_view propertyName,
+                   std::string_view propertyValue) {
+  return AllOf(Field("kind", &ReproAction::kind, kind),
+               Field("tool", &ReproAction::tool, std::string(tool)),
+               Field("propertyName", &ReproAction::propertyName, std::string(propertyName)),
+               Field("propertyValue", &ReproAction::propertyValue, std::string(propertyValue)));
+}
+
+auto ReproEventKindIs(ReproEvent::Kind kind) {
+  return Field("kind", &ReproEvent::kind, kind);
+}
+
+auto ReproViewportSummaryIs() {
+  return AllOf(Field("paneOriginX", &ReproViewport::paneOriginX, DoubleEq(560.0)),
+               Field("zoom", &ReproViewport::zoom, DoubleEq(1.5)),
+               Field("viewBoxW", &ReproViewport::viewBoxW, DoubleEq(892.0)));
 }
 
 ReproFile MakeFileWithOneFrame() {
@@ -70,11 +132,6 @@ void BeginImGuiFrame(ImVec2 displaySize, float deltaSeconds = 1.0f / 60.0f) {
   ImGui::NewFrame();
 }
 
-bool HasEventKind(const ReproFrame& frame, ReproEvent::Kind kind) {
-  return std::any_of(frame.events.begin(), frame.events.end(),
-                     [kind](const ReproEvent& event) { return event.kind == kind; });
-}
-
 void WriteTextFile(const std::filesystem::path& path, std::string_view text) {
   std::ofstream os(path);
   os << text;
@@ -109,15 +166,15 @@ TEST(ReproFileTest, RoundTripMetadataOnly) {
   EXPECT_DOUBLE_EQ(loaded->metadata.displayScale, 2.0);
   EXPECT_TRUE(loaded->metadata.experimentalMode);
   EXPECT_EQ(loaded->metadata.startedAtIso8601, "2026-04-19T12:00:00Z");
-  EXPECT_TRUE(loaded->metadata.svgBasename.empty());
-  EXPECT_TRUE(loaded->metadata.svgContentHash.empty());
+  EXPECT_THAT(loaded->metadata.svgBasename, IsEmpty());
+  EXPECT_THAT(loaded->metadata.svgContentHash, IsEmpty());
   EXPECT_FALSE(loaded->metadata.svgSource.has_value());
-  ASSERT_EQ(loaded->frames.size(), 1u);
-  EXPECT_DOUBLE_EQ(loaded->frames[0].mouseX, 123.25);
-  EXPECT_DOUBLE_EQ(loaded->frames[0].mouseY, 456.75);
-  EXPECT_FALSE(loaded->frames[0].mouseDocX.has_value());
-  EXPECT_FALSE(loaded->frames[0].mouseDocY.has_value());
-  EXPECT_FALSE(loaded->frames[0].viewport.has_value());
+  EXPECT_THAT(loaded->frames,
+              ElementsAre(AllOf(Field("mouseX", &ReproFrame::mouseX, DoubleEq(123.25)),
+                                Field("mouseY", &ReproFrame::mouseY, DoubleEq(456.75)),
+                                Field("mouseDocX", &ReproFrame::mouseDocX, Eq(std::nullopt)),
+                                Field("mouseDocY", &ReproFrame::mouseDocY, Eq(std::nullopt)),
+                                Field("viewport", &ReproFrame::viewport, Eq(std::nullopt)))));
   EXPECT_FALSE(loaded->metadata.expect.has_value());
 
   std::error_code ec;
@@ -220,38 +277,26 @@ TEST(ReproFileTest, ReproRecorderSnapshotsInputEdgesAndFrameContext) {
 
   auto loaded = ReadReproFile(path);
   ASSERT_TRUE(loaded.has_value());
-  ASSERT_EQ(loaded->frames.size(), 3u);
-
-  const ReproFrame& baseline = loaded->frames[0];
-  EXPECT_EQ(baseline.index, 0u);
-  EXPECT_DOUBLE_EQ(baseline.mouseX, 12.0);
-  EXPECT_DOUBLE_EQ(baseline.mouseY, 34.0);
-  ASSERT_TRUE(baseline.viewport.has_value());
-  EXPECT_DOUBLE_EQ(baseline.viewport->zoom, 1.5);
-  EXPECT_DOUBLE_EQ(*baseline.mouseDocX, 4.0);
-  EXPECT_DOUBLE_EQ(*baseline.mouseDocY, 8.0);
-
-  const ReproFrame& inputFrame = loaded->frames[1];
-  EXPECT_EQ(inputFrame.mouseButtonMask, 1);
-  EXPECT_TRUE(HasEventKind(inputFrame, ReproEvent::Kind::MouseDown));
-  EXPECT_TRUE(HasEventKind(inputFrame, ReproEvent::Kind::Resize));
-  const auto mouseDown = std::find_if(
-      inputFrame.events.begin(), inputFrame.events.end(),
-      [](const ReproEvent& event) { return event.kind == ReproEvent::Kind::MouseDown; });
-  ASSERT_NE(mouseDown, inputFrame.events.end());
-  ASSERT_TRUE(mouseDown->hit.has_value());
-  EXPECT_EQ(mouseDown->hit->id, "target");
-  EXPECT_EQ(mouseDown->hit->tag, "rect");
-  EXPECT_EQ(mouseDown->hit->docOrderIndex, 3);
-
-  const auto resize =
-      std::find_if(inputFrame.events.begin(), inputFrame.events.end(),
-                   [](const ReproEvent& event) { return event.kind == ReproEvent::Kind::Resize; });
-  ASSERT_NE(resize, inputFrame.events.end());
-  EXPECT_EQ(resize->width, 800);
-  EXPECT_EQ(resize->height, 600);
-
-  EXPECT_EQ(loaded->frames[2].index, 2u);
+  EXPECT_THAT(
+      loaded->frames,
+      ElementsAre(
+          AllOf(Field("index", &ReproFrame::index, 0u),
+                Field("mouseX", &ReproFrame::mouseX, DoubleEq(12.0)),
+                Field("mouseY", &ReproFrame::mouseY, DoubleEq(34.0)),
+                Field("viewport", &ReproFrame::viewport,
+                      Optional(Field("zoom", &ReproViewport::zoom, DoubleEq(1.5)))),
+                Field("mouseDocX", &ReproFrame::mouseDocX, Optional(DoubleEq(4.0))),
+                Field("mouseDocY", &ReproFrame::mouseDocY, Optional(DoubleEq(8.0)))),
+          AllOf(
+              Field("mouseButtonMask", &ReproFrame::mouseButtonMask, 1),
+              Field("events", &ReproFrame::events,
+                    AllOf(Contains(AllOf(ReproEventKindIs(ReproEvent::Kind::MouseDown),
+                                         Field("hit", &ReproEvent::hit,
+                                               Optional(ReproHitIs("rect", "target", 3, false))))),
+                          Contains(AllOf(ReproEventKindIs(ReproEvent::Kind::Resize),
+                                         Field("width", &ReproEvent::width, 800),
+                                         Field("height", &ReproEvent::height, 600)))))),
+          Field("index", &ReproFrame::index, 2u)));
 
   std::error_code ec;
   std::filesystem::remove(path, ec);
@@ -357,8 +402,13 @@ TEST(ReproFileTest, RoundTripSemanticActions) {
   ASSERT_TRUE(WriteReproFile(path, file));
   auto loaded = ReadReproFile(path);
   ASSERT_TRUE(loaded.has_value());
-  ASSERT_EQ(loaded->frames.size(), 1u);
-  EXPECT_EQ(loaded->frames[0].actions, file.frames[0].actions);
+  EXPECT_THAT(
+      loaded->frames,
+      ElementsAre(Field(
+          "actions", &ReproFrame::actions,
+          ElementsAre(ReproActionIs(ReproAction::Kind::SetActiveTool, "pen", "", ""),
+                      ReproActionIs(ReproAction::Kind::SetStyleProperty, "", "fill", "#ff0000"),
+                      ReproActionIs(ReproAction::Kind::CommitPenPath, "", "", "")))));
 
   std::error_code ec;
   std::filesystem::remove(path, ec);
@@ -478,41 +528,36 @@ TEST(ReproFileTest, RoundTripWithAllEventKindsAndV2Fields) {
   ASSERT_TRUE(WriteReproFile(path, file));
   auto loaded = ReadReproFile(path);
   ASSERT_TRUE(loaded.has_value());
-  ASSERT_EQ(loaded->frames.size(), 2u);
-  ASSERT_TRUE(loaded->frames[1].mouseDocX.has_value());
-  EXPECT_DOUBLE_EQ(*loaded->frames[1].mouseDocX, 34.0);
-  ASSERT_TRUE(loaded->frames[1].mouseDocY.has_value());
-  EXPECT_DOUBLE_EQ(*loaded->frames[1].mouseDocY, 12.0);
-  ASSERT_TRUE(loaded->frames[1].viewport.has_value());
-  EXPECT_DOUBLE_EQ(loaded->frames[1].viewport->paneOriginX, 560.0);
-  EXPECT_DOUBLE_EQ(loaded->frames[1].viewport->zoom, 1.5);
-  EXPECT_DOUBLE_EQ(loaded->frames[1].viewport->viewBoxW, 892.0);
-  const auto& loadedEvents = loaded->frames[1].events;
-  ASSERT_EQ(loadedEvents.size(), 8u);
-  EXPECT_EQ(loadedEvents[0].kind, ReproEvent::Kind::MouseDown);
-  EXPECT_EQ(loadedEvents[0].mouseButton, 0);
-  ASSERT_TRUE(loadedEvents[0].hit.has_value());
-  EXPECT_EQ(loadedEvents[0].hit->tag, "g");
-  EXPECT_EQ(loadedEvents[0].hit->id, "big_lightning_glow");
-  EXPECT_EQ(loadedEvents[0].hit->docOrderIndex, 42);
-  EXPECT_FALSE(loadedEvents[0].hit->empty);
-  EXPECT_EQ(loadedEvents[1].kind, ReproEvent::Kind::MouseUp);
-  EXPECT_EQ(loadedEvents[1].mouseButton, 1);
-  EXPECT_EQ(loadedEvents[2].kind, ReproEvent::Kind::KeyDown);
-  EXPECT_EQ(loadedEvents[2].key, 542);
-  EXPECT_EQ(loadedEvents[2].modifiers, 0b0010);
-  EXPECT_EQ(loadedEvents[3].kind, ReproEvent::Kind::KeyUp);
-  EXPECT_EQ(loadedEvents[3].key, 542);
-  EXPECT_EQ(loadedEvents[4].kind, ReproEvent::Kind::Char);
-  EXPECT_EQ(loadedEvents[4].codepoint, 0x1F600u);
-  EXPECT_EQ(loadedEvents[5].kind, ReproEvent::Kind::Wheel);
-  EXPECT_FLOAT_EQ(loadedEvents[5].wheelDeltaX, 0.5f);
-  EXPECT_FLOAT_EQ(loadedEvents[5].wheelDeltaY, -1.25f);
-  EXPECT_EQ(loadedEvents[6].kind, ReproEvent::Kind::Resize);
-  EXPECT_EQ(loadedEvents[6].width, 1920);
-  EXPECT_EQ(loadedEvents[6].height, 1080);
-  EXPECT_EQ(loadedEvents[7].kind, ReproEvent::Kind::Focus);
-  EXPECT_FALSE(loadedEvents[7].focusOn);
+  EXPECT_THAT(
+      loaded->frames,
+      ElementsAre(
+          _,
+          AllOf(Field("mouseDocX", &ReproFrame::mouseDocX, Optional(DoubleEq(34.0))),
+                Field("mouseDocY", &ReproFrame::mouseDocY, Optional(DoubleEq(12.0))),
+                Field("viewport", &ReproFrame::viewport, Optional(ReproViewportSummaryIs())),
+                Field("events", &ReproFrame::events,
+                      ElementsAre(
+                          AllOf(ReproEventKindIs(ReproEvent::Kind::MouseDown),
+                                Field("mouseButton", &ReproEvent::mouseButton, 0),
+                                Field("hit", &ReproEvent::hit,
+                                      Optional(ReproHitIs("g", "big_lightning_glow", 42, false)))),
+                          AllOf(ReproEventKindIs(ReproEvent::Kind::MouseUp),
+                                Field("mouseButton", &ReproEvent::mouseButton, 1)),
+                          AllOf(ReproEventKindIs(ReproEvent::Kind::KeyDown),
+                                Field("key", &ReproEvent::key, 542),
+                                Field("modifiers", &ReproEvent::modifiers, 0b0010)),
+                          AllOf(ReproEventKindIs(ReproEvent::Kind::KeyUp),
+                                Field("key", &ReproEvent::key, 542)),
+                          AllOf(ReproEventKindIs(ReproEvent::Kind::Char),
+                                Field("codepoint", &ReproEvent::codepoint, 0x1F600u)),
+                          AllOf(ReproEventKindIs(ReproEvent::Kind::Wheel),
+                                Field("wheelDeltaX", &ReproEvent::wheelDeltaX, FloatEq(0.5f)),
+                                Field("wheelDeltaY", &ReproEvent::wheelDeltaY, FloatEq(-1.25f))),
+                          AllOf(ReproEventKindIs(ReproEvent::Kind::Resize),
+                                Field("width", &ReproEvent::width, 1920),
+                                Field("height", &ReproEvent::height, 1080)),
+                          AllOf(ReproEventKindIs(ReproEvent::Kind::Focus),
+                                Field("focusOn", &ReproEvent::focusOn, false)))))));
 
   std::error_code ec;
   std::filesystem::remove(path, ec);
@@ -550,10 +595,11 @@ TEST(ReproFileTest, RoundTripEscapedStringsAndEmptyHit) {
   EXPECT_EQ(loaded->metadata.svgBasename, "base\\name\".svg");
   ASSERT_TRUE(loaded->metadata.svgSource.has_value());
   EXPECT_EQ(*loaded->metadata.svgSource, escaped);
-  ASSERT_EQ(loaded->frames.size(), 2u);
-  ASSERT_EQ(loaded->frames[1].events.size(), 1u);
-  ASSERT_TRUE(loaded->frames[1].events[0].hit.has_value());
-  EXPECT_TRUE(loaded->frames[1].events[0].hit->empty);
+  EXPECT_THAT(
+      loaded->frames,
+      ElementsAre(_, Field("events", &ReproFrame::events,
+                           ElementsAre(Field("hit", &ReproEvent::hit,
+                                             Optional(Field("empty", &ReproHit::empty, true)))))));
 
   std::error_code ec;
   std::filesystem::remove(path, ec);
@@ -598,13 +644,15 @@ TEST(ReproFileTest, RoundTripTagOnlyHitFocusOnAndInvalidProofKindFallback) {
   ASSERT_TRUE(loaded.has_value());
   ASSERT_TRUE(loaded->metadata.expect.has_value());
   EXPECT_EQ(loaded->metadata.expect->proofKind, ReproExpectationProofKind::PresentedPixels);
-  ASSERT_EQ(loaded->frames.back().events.size(), 2u);
-  EXPECT_EQ(loaded->frames.back().events[0].kind, ReproEvent::Kind::Focus);
-  EXPECT_TRUE(loaded->frames.back().events[0].focusOn);
-  ASSERT_TRUE(loaded->frames.back().events[1].hit.has_value());
-  EXPECT_EQ(loaded->frames.back().events[1].hit->tag, "path");
-  EXPECT_TRUE(loaded->frames.back().events[1].hit->id.empty());
-  EXPECT_EQ(loaded->frames.back().events[1].hit->docOrderIndex, -1);
+  EXPECT_THAT(
+      loaded->frames,
+      ElementsAre(_,
+                  Field("events", &ReproFrame::events,
+                        ElementsAre(AllOf(ReproEventKindIs(ReproEvent::Kind::Focus),
+                                          Field("focusOn", &ReproEvent::focusOn, true)),
+                                    AllOf(ReproEventKindIs(ReproEvent::Kind::MouseDown),
+                                          Field("hit", &ReproEvent::hit,
+                                                Optional(ReproHitIs("path", "", -1, false))))))));
 
   std::error_code ec;
   std::filesystem::remove(path, ec);
@@ -641,13 +689,15 @@ TEST(ReproFileTest, ReadsSignedExponentNumbersTabsAndBlankLines) {
   EXPECT_EQ(loaded->metadata.windowHeight, 200);
   EXPECT_DOUBLE_EQ(loaded->metadata.displayScale, 1.5);
   EXPECT_TRUE(loaded->metadata.experimentalMode);
-  ASSERT_EQ(loaded->frames.size(), 1u);
-  EXPECT_DOUBLE_EQ(loaded->frames[0].timestampSeconds, 1.25);
-  EXPECT_DOUBLE_EQ(loaded->frames[0].deltaMs, 16.0);
-  EXPECT_DOUBLE_EQ(loaded->frames[0].mouseX, 12.5);
-  EXPECT_DOUBLE_EQ(loaded->frames[0].mouseY, -2.5);
-  ASSERT_EQ(loaded->frames[0].events.size(), 1u);
-  EXPECT_TRUE(loaded->frames[0].events[0].focusOn);
+  EXPECT_THAT(
+      loaded->frames,
+      ElementsAre(AllOf(Field("timestampSeconds", &ReproFrame::timestampSeconds, DoubleEq(1.25)),
+                        Field("deltaMs", &ReproFrame::deltaMs, DoubleEq(16.0)),
+                        Field("mouseX", &ReproFrame::mouseX, DoubleEq(12.5)),
+                        Field("mouseY", &ReproFrame::mouseY, DoubleEq(-2.5)),
+                        Field("events", &ReproFrame::events,
+                              ElementsAre(AllOf(ReproEventKindIs(ReproEvent::Kind::Focus),
+                                                Field("focusOn", &ReproEvent::focusOn, true)))))));
 
   std::error_code ec;
   std::filesystem::remove(path, ec);
@@ -675,17 +725,22 @@ TEST(ReproFileTest, IgnoresMalformedOptionalEventFields) {
 
   auto loaded = ReadReproFile(path);
   ASSERT_TRUE(loaded.has_value());
-  ASSERT_EQ(loaded->frames.size(), 1u);
-  ASSERT_EQ(loaded->frames[0].events.size(), 5u);
-  EXPECT_EQ(loaded->frames[0].events[0].key, 0);
-  EXPECT_EQ(loaded->frames[0].events[0].modifiers, 0);
-  EXPECT_EQ(loaded->frames[0].events[1].codepoint, 0u);
-  EXPECT_FLOAT_EQ(loaded->frames[0].events[2].wheelDeltaX, 0.0f);
-  EXPECT_FLOAT_EQ(loaded->frames[0].events[2].wheelDeltaY, 0.0f);
-  EXPECT_TRUE(loaded->frames[0].events[3].focusOn);
-  ASSERT_TRUE(loaded->frames[0].events[4].hit.has_value());
-  EXPECT_FALSE(loaded->frames[0].events[4].hit->empty);
-  EXPECT_EQ(loaded->frames[0].events[4].hit->tag, "path");
+  EXPECT_THAT(loaded->frames,
+              ElementsAre(Field(
+                  "events", &ReproFrame::events,
+                  ElementsAre(AllOf(ReproEventKindIs(ReproEvent::Kind::KeyDown),
+                                    Field("key", &ReproEvent::key, 0),
+                                    Field("modifiers", &ReproEvent::modifiers, 0)),
+                              AllOf(ReproEventKindIs(ReproEvent::Kind::Char),
+                                    Field("codepoint", &ReproEvent::codepoint, 0u)),
+                              AllOf(ReproEventKindIs(ReproEvent::Kind::Wheel),
+                                    Field("wheelDeltaX", &ReproEvent::wheelDeltaX, FloatEq(0.0f)),
+                                    Field("wheelDeltaY", &ReproEvent::wheelDeltaY, FloatEq(0.0f))),
+                              AllOf(ReproEventKindIs(ReproEvent::Kind::Focus),
+                                    Field("focusOn", &ReproEvent::focusOn, true)),
+                              AllOf(ReproEventKindIs(ReproEvent::Kind::MouseDown),
+                                    Field("hit", &ReproEvent::hit,
+                                          Optional(ReproHitIs("path", "", -1, false))))))));
 
   std::error_code ec;
   std::filesystem::remove(path, ec);
@@ -708,18 +763,18 @@ TEST(ReproFileTest, ReadsV1FileWithV2FieldsDefaultConstructed) {
 
   auto loaded = ReadReproFile(path);
   ASSERT_TRUE(loaded.has_value());
-  ASSERT_EQ(loaded->frames.size(), 1u);
-  const auto& frame = loaded->frames[0];
-  EXPECT_DOUBLE_EQ(frame.mouseX, 100.0);
-  EXPECT_DOUBLE_EQ(frame.mouseY, 50.0);
-  EXPECT_EQ(frame.mouseButtonMask, 1);
-  EXPECT_EQ(frame.modifiers, 2);
-  EXPECT_FALSE(frame.mouseDocX.has_value());
-  EXPECT_FALSE(frame.mouseDocY.has_value());
-  EXPECT_FALSE(frame.viewport.has_value());
-  ASSERT_EQ(frame.events.size(), 2u);
-  EXPECT_FALSE(frame.events[0].hit.has_value());
-  EXPECT_FALSE(frame.events[1].hit.has_value());
+  EXPECT_THAT(
+      loaded->frames,
+      ElementsAre(AllOf(Field("mouseX", &ReproFrame::mouseX, DoubleEq(100.0)),
+                        Field("mouseY", &ReproFrame::mouseY, DoubleEq(50.0)),
+                        Field("mouseButtonMask", &ReproFrame::mouseButtonMask, 1),
+                        Field("modifiers", &ReproFrame::modifiers, 2),
+                        Field("mouseDocX", &ReproFrame::mouseDocX, Eq(std::nullopt)),
+                        Field("mouseDocY", &ReproFrame::mouseDocY, Eq(std::nullopt)),
+                        Field("viewport", &ReproFrame::viewport, Eq(std::nullopt)),
+                        Field("events", &ReproFrame::events,
+                              ElementsAre(Field("hit", &ReproEvent::hit, Eq(std::nullopt)),
+                                          Field("hit", &ReproEvent::hit, Eq(std::nullopt)))))));
 
   std::error_code ec;
   std::filesystem::remove(path, ec);

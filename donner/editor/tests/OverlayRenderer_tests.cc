@@ -1,9 +1,14 @@
 #include "donner/editor/OverlayRenderer.h"
 
+#include <gmock/gmock.h>
+
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <ostream>
 #include <span>
+#include <string>
+#include <string_view>
 
 #include "donner/base/Transform.h"
 #include "donner/editor/EditorApp.h"
@@ -12,10 +17,22 @@
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererInterface.h"
+#include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "gtest/gtest.h"
 
 namespace donner::editor {
+
+void PrintTo(const Vector2d& vector, std::ostream* os) {
+  *os << "Vector2d{x=" << vector.x << ", y=" << vector.y << "}";
+}
+
 namespace {
+
+using ::testing::_;
+using ::testing::AllOf;
+using ::testing::DoubleNear;
+using ::testing::ElementsAre;
+using ::testing::Field;
 
 constexpr double kPi = 3.14159265358979323846;
 
@@ -26,6 +43,27 @@ constexpr std::string_view kTrivialSvg =
 
 bool AnyBoxContains(std::span<const Box2d> boxes, const Vector2d& point) {
   return std::ranges::any_of(boxes, [&](const Box2d& box) { return box.contains(point); });
+}
+
+auto Vector2dNear(Vector2d expected, double tolerance) {
+  return AllOf(Field("x", &Vector2d::x, DoubleNear(expected.x, tolerance)),
+               Field("y", &Vector2d::y, DoubleNear(expected.y, tolerance)));
+}
+
+auto PathControlLineIs(Vector2d anchorDoc, Vector2d controlDoc) {
+  return AllOf(Field("anchorDoc", &SelectionChromeSnapshot::PathControlLine::anchorDoc,
+                     Vector2dNear(anchorDoc, 1e-9)),
+               Field("controlDoc", &SelectionChromeSnapshot::PathControlLine::controlDoc,
+                     Vector2dNear(controlDoc, 1e-9)));
+}
+
+MATCHER(DimmedGrayBlueStrokePixel,
+        "a dimmed gray-blue selection-chrome stroke pixel with nonzero red") {
+  const std::array<std::uint8_t, 4> pixel = {arg[0], arg[1], arg[2], arg[3]};
+  *result_listener << "actual RGBA=" << svg::test::FormatRgba(pixel);
+
+  return pixel[0] > 0 && pixel[1] < 0xc8 && pixel[2] < 0xff && pixel[2] > pixel[0] &&
+         pixel[1] > pixel[0];
 }
 
 // OverlayRenderer is hard to unit-test in isolation because the canvas
@@ -172,11 +210,9 @@ TEST(OverlayRendererTest, SelectedPathSnapshotIncludesAnchorsAndControlLines) {
   EXPECT_TRUE(AnyBoxContains(snapshot.pathControlPointBoxesDoc, Vector2d(20.0, 10.0)));
   EXPECT_TRUE(AnyBoxContains(snapshot.pathControlPointBoxesDoc, Vector2d(40.0, 10.0)));
 
-  ASSERT_EQ(snapshot.pathControlLinesDoc.size(), 2u);
-  EXPECT_EQ(snapshot.pathControlLinesDoc[0].anchorDoc, Vector2d(10.0, 20.0));
-  EXPECT_EQ(snapshot.pathControlLinesDoc[0].controlDoc, Vector2d(20.0, 10.0));
-  EXPECT_EQ(snapshot.pathControlLinesDoc[1].anchorDoc, Vector2d(50.0, 20.0));
-  EXPECT_EQ(snapshot.pathControlLinesDoc[1].controlDoc, Vector2d(40.0, 10.0));
+  EXPECT_THAT(snapshot.pathControlLinesDoc,
+              ElementsAre(PathControlLineIs(Vector2d(10.0, 20.0), Vector2d(20.0, 10.0)),
+                          PathControlLineIs(Vector2d(50.0, 20.0), Vector2d(40.0, 10.0))));
 }
 
 TEST(OverlayRendererTest, FullSelectionChromeOmitsPathPointChrome) {
@@ -452,8 +488,8 @@ TEST(OverlayRendererTest, ActiveRotationUsesOrientedBoundsUntilGestureEnds) {
   ASSERT_EQ(activeSnapshot.handleBoxesDoc.size(), 4u);
   const Vector2d expectedTopLeft =
       rotatedDocumentFromStartDocument.transformPosition(startBounds.topLeft);
-  EXPECT_NEAR(activeSnapshot.orientedBoundsDoc->cornersDoc[0].x, expectedTopLeft.x, 1e-6);
-  EXPECT_NEAR(activeSnapshot.orientedBoundsDoc->cornersDoc[0].y, expectedTopLeft.y, 1e-6);
+  EXPECT_THAT(activeSnapshot.orientedBoundsDoc->cornersDoc,
+              ElementsAre(Vector2dNear(expectedTopLeft, 1e-6), _, _, _));
 
   const SelectionChromeSnapshot settledSnapshot = OverlayRenderer::captureChromeSnapshot(
       std::span<const svg::SVGElement>(app.selectedElements()), std::nullopt, canvasFromDoc);
@@ -659,12 +695,8 @@ TEST(OverlayRendererTest, DisplayNoneSelectionStillDrawsPathOutline) {
   EXPECT_TRUE(foundOutline)
       << "A display:none selection should still expose its path overlay outline for source edits.";
   if (foundOutline) {
-    EXPECT_GT(outlinePixel[0], 0)
+    EXPECT_THAT(outlinePixel, DimmedGrayBlueStrokePixel())
         << "Display-none selection chrome should use the dimmed gray-blue stroke, not pure cyan.";
-    EXPECT_LT(outlinePixel[1], 0xc8);
-    EXPECT_LT(outlinePixel[2], 0xff);
-    EXPECT_GT(outlinePixel[2], outlinePixel[0]);
-    EXPECT_GT(outlinePixel[1], outlinePixel[0]);
   }
 }
 

@@ -25,6 +25,7 @@
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererInterface.h"
+#include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/tests/RenderTreeTestUtils.h"
 
 namespace donner::editor {
@@ -688,8 +689,12 @@ namespace {
 constexpr int kMaxThumbnailWidthPx = 42;
 constexpr int kMaxThumbnailHeightPx = 24;
 
+using svg::test::Alpha;
+using svg::test::Near;
+using svg::test::Rgba;
+
 // Read the RGBA pixel at (x, y) from a renderer bitmap (row-bytes aware).
-std::array<int, 4> ThumbnailPixelAt(const svg::RendererBitmap& bitmap, int x, int y) {
+std::array<uint8_t, 4> ThumbnailPixelAt(const svg::RendererBitmap& bitmap, int x, int y) {
   const std::size_t index =
       static_cast<std::size_t>(y) * bitmap.rowBytes + static_cast<std::size_t>(x) * 4u;
   return {bitmap.pixels[index + 0], bitmap.pixels[index + 1], bitmap.pixels[index + 2],
@@ -724,11 +729,11 @@ double AverageThumbnailXMatching(const svg::RendererBitmap& bitmap, Predicate pr
   return count == 0 ? 0.0 : sumX / static_cast<double>(count);
 }
 
-bool IsBrightWarmThumbnailPixel(const std::array<int, 4>& px) {
+bool IsBrightWarmThumbnailPixel(const std::array<uint8_t, 4>& px) {
   return px[3] > 180 && px[0] > 170 && px[1] > 110 && px[2] < 130;
 }
 
-bool IsDarkOpaqueThumbnailPixel(const std::array<int, 4>& px) {
+bool IsDarkOpaqueThumbnailPixel(const std::array<uint8_t, 4>& px) {
   return px[3] > 220 && px[0] < 45 && px[1] < 60 && px[2] < 80;
 }
 
@@ -761,11 +766,9 @@ TEST(LayersPanelTest, RowThumbnailIsRealRender) {
   ASSERT_FALSE(thumbnail->empty());
   ASSERT_EQ(thumbnail->dimensions, Vector2i(24, 24));
 
-  const std::array<int, 4> center = ThumbnailPixelAt(*thumbnail, 12, 12);
-  EXPECT_NEAR(center[0], 220, 6) << "thumbnail center red channel";
-  EXPECT_NEAR(center[1], 0, 6) << "thumbnail center green channel";
-  EXPECT_NEAR(center[2], 0, 6) << "thumbnail center blue channel";
-  EXPECT_NEAR(center[3], 255, 6) << "thumbnail center alpha";
+  const std::array<uint8_t, 4> center = ThumbnailPixelAt(*thumbnail, 12, 12);
+  EXPECT_THAT(center, Rgba(Near(220, 6), Near(0, 6), Near(0, 6), Near(255, 6)))
+      << "thumbnail center should be red";
 }
 
 TEST(LayersPanelTest, RowThumbnailIsCroppedToElementBounds) {
@@ -788,19 +791,17 @@ TEST(LayersPanelTest, RowThumbnailIsCroppedToElementBounds) {
   ASSERT_FALSE(thumbnail->empty());
   ASSERT_EQ(thumbnail->dimensions, Vector2i(24, 24));
 
-  const std::array<int, 4> center = ThumbnailPixelAt(*thumbnail, 12, 12);
-  EXPECT_NEAR(center[0], 20, 6) << "thumbnail center red channel";
-  EXPECT_NEAR(center[1], 180, 6) << "thumbnail center green channel";
-  EXPECT_NEAR(center[2], 40, 6) << "thumbnail center blue channel";
-  EXPECT_NEAR(center[3], 255, 6) << "thumbnail center alpha";
+  const std::array<uint8_t, 4> center = ThumbnailPixelAt(*thumbnail, 12, 12);
+  EXPECT_THAT(center, Rgba(Near(20, 6), Near(180, 6), Near(40, 6), Near(255, 6)))
+      << "thumbnail center should show the off-origin rect fill";
 
-  EXPECT_NEAR(ThumbnailPixelAt(*thumbnail, 0, 12)[3], 255, 6)
+  EXPECT_THAT(ThumbnailPixelAt(*thumbnail, 0, 12), Alpha(Near(255, 6)))
       << "the returned variable-sized thumbnail should be tight to the square element";
-  EXPECT_NEAR(ThumbnailPixelAt(*thumbnail, 23, 12)[3], 255, 6)
+  EXPECT_THAT(ThumbnailPixelAt(*thumbnail, 23, 12), Alpha(Near(255, 6)))
       << "the returned variable-sized thumbnail should be tight to the square element";
-  EXPECT_NEAR(ThumbnailPixelAt(*thumbnail, 12, 0)[3], 255, 6)
+  EXPECT_THAT(ThumbnailPixelAt(*thumbnail, 12, 0), Alpha(Near(255, 6)))
       << "row thumbnail should not leave top padding";
-  EXPECT_NEAR(ThumbnailPixelAt(*thumbnail, 12, 23)[3], 255, 6)
+  EXPECT_THAT(ThumbnailPixelAt(*thumbnail, 12, 23), Alpha(Near(255, 6)))
       << "row thumbnail should not leave bottom padding";
 }
 
@@ -825,13 +826,12 @@ TEST(LayersPanelTest, GroupThumbnailComposesChildren) {
   ASSERT_FALSE(thumbnail->empty());
   ASSERT_EQ(thumbnail->dimensions, Vector2i(24, 24));
 
-  const std::array<int, 4> leftPixel = ThumbnailPixelAt(*thumbnail, 6, 12);
-  const std::array<int, 4> rightPixel = ThumbnailPixelAt(*thumbnail, 17, 12);
-  EXPECT_NEAR(leftPixel[0], 80, 8) << "left half is blue (red channel)";
-  EXPECT_NEAR(leftPixel[1], 200, 8) << "left half is blue (green channel)";
-  EXPECT_NEAR(leftPixel[2], 255, 8) << "left half is blue";
-  EXPECT_NEAR(rightPixel[0], 210, 8) << "right half is yellow (red channel)";
-  EXPECT_NEAR(rightPixel[1], 210, 8) << "right half is yellow (green channel)";
+  const std::array<uint8_t, 4> leftPixel = ThumbnailPixelAt(*thumbnail, 6, 12);
+  const std::array<uint8_t, 4> rightPixel = ThumbnailPixelAt(*thumbnail, 17, 12);
+  EXPECT_THAT(leftPixel, Rgba(Near(80, 8), Near(200, 8), Near(255, 8), testing::_))
+      << "left half should be blue";
+  EXPECT_THAT(rightPixel, Rgba(Near(210, 8), Near(210, 8), testing::_, testing::_))
+      << "right half should be yellow";
 }
 
 TEST(LayersPanelTest, DonnerSplashDonnerRowThumbnailShowsLetterFill) {
@@ -854,7 +854,7 @@ TEST(LayersPanelTest, DonnerSplashDonnerRowThumbnailShowsLetterFill) {
   ASSERT_LE(thumbnail->dimensions.x, kMaxThumbnailWidthPx);
   ASSERT_LE(thumbnail->dimensions.y, kMaxThumbnailHeightPx);
 
-  EXPECT_NEAR(ThumbnailPixelAt(*thumbnail, 0, 0)[3], 0, 2)
+  EXPECT_THAT(ThumbnailPixelAt(*thumbnail, 0, 0), Alpha(Near(0, 2)))
       << "the Donner row thumbnail should not include the document background";
   EXPECT_GT(CountThumbnailPixelsMatching(*thumbnail, IsBrightWarmThumbnailPixel), 30)
       << "the Donner row thumbnail should show yellow/white letter fill pixels";
