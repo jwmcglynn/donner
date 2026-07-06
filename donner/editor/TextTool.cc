@@ -128,9 +128,21 @@ std::optional<double> ParseNumericAttribute(const svg::SVGElement& element, std:
   return result.result().number;
 }
 
-// Document-space oriented frame corners are provided by the shared
-// `FrameCornersDoc` in SelectionTransformHandles.h (used by both the text
-// tool's editing frame and the select tool's oriented <text> frame).
+/// Document-space corners (local TL, TR, BR, BL order) of @p frameLocal
+/// mapped through @p documentFromText. An oriented quad: for a rotated text
+/// element the corners carry the rotation instead of collapsing to the
+/// axis-aligned envelope.
+std::array<Vector2d, 4> FrameCornersDoc(const Transform2d& documentFromText,
+                                        const Box2d& frameLocal) {
+  const std::array<Vector2d, 4> cornersLocal = {
+      frameLocal.topLeft, Vector2d(frameLocal.bottomRight.x, frameLocal.topLeft.y),
+      frameLocal.bottomRight, Vector2d(frameLocal.topLeft.x, frameLocal.bottomRight.y)};
+  std::array<Vector2d, 4> cornersDoc;
+  for (std::size_t i = 0; i < cornersLocal.size(); ++i) {
+    cornersDoc[i] = documentFromText.transformPosition(cornersLocal[i]);
+  }
+  return cornersDoc;
+}
 
 /// Map a DOM character index (which counts rendered glyphs only) back to a
 /// logical caret index into @p content (which also stores '\n' hard breaks).
