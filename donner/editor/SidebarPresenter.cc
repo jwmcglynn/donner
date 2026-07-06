@@ -281,6 +281,10 @@ bool RenderPathOperationsPanel(EditorApp* liveApp,
   return queuedMutation;
 }
 
+/// Shared width for the inspector's editable numeric fields (stroke width,
+/// transform scalars, raw matrix cells) so every DragFloat lines up.
+constexpr float kInspectorFieldWidth = 96.0f;
+
 double FirstSelectedStrokeWidth(const EditorApp& app) {
   const std::vector<svg::SVGElement>& selection = app.selectedElements();
   if (selection.empty()) {
@@ -300,7 +304,7 @@ bool RenderStrokeControlsPanel(EditorApp* liveApp) {
   if (!canEdit) {
     ImGui::BeginDisabled();
   }
-  ImGui::SetNextItemWidth(96.0f);
+  ImGui::SetNextItemWidth(kInspectorFieldWidth);
   const bool changed = ImGui::DragFloat("Width", &strokeWidth, 0.1f, 0.0f, 200.0f, "%.2f");
   if (!canEdit) {
     ImGui::EndDisabled();
@@ -318,10 +322,6 @@ bool RenderStrokeControlsPanel(EditorApp* liveApp) {
 /// as degenerate and the matching Width / Height field is disabled - a scale
 /// factor against a ~zero span would explode.
 constexpr double kMinimumSpanForScale = 1e-6;
-
-/// Shared width for the transform editor's numeric fields, matching the
-/// stroke-width DragFloat above.
-constexpr float kTransformFieldWidth = 96.0f;
 
 }  // namespace
 
@@ -656,7 +656,7 @@ bool SidebarPresenter::renderTransformPanel(EditorApp* liveApp) {
       if ((i % 2) == 1) {
         ImGui::SameLine();
       }
-      ImGui::SetNextItemWidth(kTransformFieldWidth);
+      ImGui::SetNextItemWidth(kInspectorFieldWidth);
       if (!liveEditable) {
         ImGui::BeginDisabled();
       }
@@ -698,7 +698,7 @@ bool SidebarPresenter::renderTransformFieldDrag(EditorApp* liveApp, TransformFie
                                 !transformEdit_->pendingCommit;
   float value = editingThisField ? static_cast<float>(transformEdit_->fieldValue) : displayValue;
 
-  ImGui::SetNextItemWidth(kTransformFieldWidth);
+  ImGui::SetNextItemWidth(kInspectorFieldWidth);
   if (!canEdit) {
     ImGui::BeginDisabled();
   }
