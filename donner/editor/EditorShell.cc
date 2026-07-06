@@ -27,6 +27,7 @@
 #include "donner/editor/DocumentSave.h"
 #include "donner/editor/DragCoalesce.h"
 #include "donner/editor/EditorShellInternal.h"
+#include "donner/editor/FillStrokeWidget.h"
 #include "donner/editor/EditorShellPresentation.h"
 #include "donner/editor/FocusView.h"
 #include "donner/editor/FrameMissTelemetry.h"
@@ -389,26 +390,6 @@ ToolbarPaintState ToolbarPaintStateForApp(EditorApp& app, std::optional<std::str
                                   app.hasDocument() ? &app.document().document() : nullptr, source);
   }
   return state;
-}
-
-void DrawPaintSwatch(ImDrawList* drawList, const ImVec2& min, const ImVec2& max,
-                     const ToolbarPaintSlotState& state) {
-  drawList->AddRectFilled(min, max, ImGui::GetColorU32(ColorToImVec4(state.color)), 2.0f);
-  if (state.isCustom) {
-    drawList->PushClipRect(min, max, true);
-    for (float x = min.x - (max.y - min.y); x < max.x; x += 5.0f) {
-      drawList->AddLine(ImVec2(x, max.y), ImVec2(x + (max.y - min.y), min.y),
-                        IM_COL32(255, 255, 255, 95), 1.0f);
-    }
-    drawList->PopClipRect();
-  }
-  drawList->AddRect(min, max, IM_COL32(255, 255, 255, 230), 2.0f, 0, 1.0f);
-  drawList->AddRect(min, max, state.isCustom ? IM_COL32(91, 189, 255, 255) : IM_COL32(0, 0, 0, 210),
-                    2.0f, 0, 2.0f);
-  if (state.isNone) {
-    drawList->AddLine(ImVec2(min.x + 2.0f, max.y - 2.0f), ImVec2(max.x - 2.0f, min.y + 2.0f),
-                      IM_COL32(230, 40, 40, 255), 2.2f);
-  }
 }
 
 std::string PaintChipLabel(std::string_view prefix, const ToolbarPaintSlotState& state) {
@@ -2073,24 +2054,18 @@ void EditorShell::renderFillStrokeToolbarWidget() {
   const ImVec2 min = ImGui::GetItemRectMin();
   const ImVec2 max = ImGui::GetItemRectMax();
   const ImVec2 mouse = ImGui::GetMousePos();
-  const ImVec2 strokeMin(min.x + 15.0f, min.y + 3.0f);
-  const ImVec2 strokeMax(strokeMin.x + 19.0f, strokeMin.y + 19.0f);
-  const ImVec2 fillMin(min.x + 5.0f, min.y + 10.0f);
-  const ImVec2 fillMax(fillMin.x + 19.0f, fillMin.y + 19.0f);
-  const ImVec2 chipMin(min.x + 42.0f, min.y + 1.0f);
-  const ImVec2 chipMax(max.x - 3.0f, min.y + 14.0f);
-  const ImVec2 fillChipMin(chipMin.x, min.y + 16.0f);
-  const ImVec2 fillChipMax(chipMax.x, min.y + 29.0f);
-  const ImVec2 strokeChipMin(chipMin.x, chipMin.y);
-  const ImVec2 strokeChipMax(chipMax.x, chipMax.y);
+  const FillStrokeWidgetLayout layout = ComputeFillStrokeWidgetLayout(min, max);
   ImDrawList* drawList = ImGui::GetWindowDrawList();
-  DrawPaintSwatch(drawList, strokeMin, strokeMax, paintState.stroke);
-  DrawPaintSwatch(drawList, fillMin, fillMax, paintState.fill);
+  // Overlap layout: stroke swatch behind, fill swatch in front.
+  DrawFillStrokeSwatch(drawList, layout.strokeMin, layout.strokeMax, paintState.stroke,
+                       /*front=*/false);
+  DrawFillStrokeSwatch(drawList, layout.fillMin, layout.fillMax, paintState.fill, /*front=*/true);
+  DrawSwapAffordance(drawList, layout.swapMin, layout.swapMax, canEditPaint);
+  DrawNoneAffordance(drawList, layout.strokeNoneMin, layout.strokeNoneMax, /*fillVariant=*/false,
+                     paintState.stroke.isNone);
+  DrawNoneAffordance(drawList, layout.fillNoneMin, layout.fillNoneMax, /*fillVariant=*/true,
+                     paintState.fill.isNone);
 
-  const auto contains = [](const ImVec2& rectMin, const ImVec2& rectMax, const ImVec2& point) {
-    return point.x >= rectMin.x && point.x <= rectMax.x && point.y >= rectMin.y &&
-           point.y <= rectMax.y;
-  };
   const auto fitChipLabel = [](std::string label, float maxWidth) {
     if (ImGui::CalcTextSize(label.c_str()).x <= maxWidth) {
       return label;
@@ -2126,56 +2101,99 @@ void EditorShell::renderFillStrokeToolbarWidget() {
         ImVec2(rectMin.x + 4.0f, rectMin.y + (rectMax.y - rectMin.y - textSize.y) * 0.5f - 0.5f),
         IM_COL32(255, 255, 255, 245), label.c_str());
   };
-  renderChip("S", paintState.stroke, strokeChipMin, strokeChipMax);
-  renderChip("F", paintState.fill, fillChipMin, fillChipMax);
+  renderChip("S", paintState.stroke, layout.strokeChipMin, layout.strokeChipMax);
+  renderChip("F", paintState.fill, layout.fillChipMin, layout.fillChipMax);
+
+  const FillStrokeWidgetRegion region = HitTestFillStrokeWidget(
+      layout, mouse, paintState.fill.isCustom, paintState.stroke.isCustom);
+
+  // Swap fill and stroke on the authoring defaults and, when a selection is
+  // present, on the selected element. Authoring defaults swap verbatim; the
+  // selection swaps the resolved SVG paint strings so referenced/none paints
+  // round-trip correctly.
+  const auto performPaintSwap = [&]() {
+    if (app_.hasSelection()) {
+      const std::string fillStr = SvgPaintStringForSlot(paintState.fill);
+      const std::string strokeStr = SvgPaintStringForSlot(paintState.stroke);
+      app_.setActiveFill(strokeStr);
+      app_.setActiveStroke(fillStr);
+      bool changed = app_.setStylePropertyOnSelection("fill", strokeStr);
+      changed = app_.setStylePropertyOnSelection("stroke", fillStr) || changed;
+      if (changed) {
+        flushQueuedMutationAndRefreshOverlay();
+      } else {
+        window_.wakeEventLoop();
+      }
+    } else {
+      const ActivePaintStyle current = app_.activePaintStyle();
+      app_.setActiveFill(current.stroke);
+      app_.setActiveStroke(current.fill);
+      window_.wakeEventLoop();
+    }
+  };
+  const auto setPaintNone = [&](std::string_view attrName) {
+    if (attrName == "fill") {
+      app_.setActiveFill("none");
+    } else {
+      app_.setActiveStroke("none");
+    }
+    const bool changed = app_.hasSelection() && app_.setStylePropertyOnSelection(attrName, "none");
+    if (changed) {
+      flushQueuedMutationAndRefreshOverlay();
+    } else {
+      window_.wakeEventLoop();
+    }
+  };
+  const auto revealChipSource = [&](const ToolbarPaintSlotState& slot) {
+    if (slot.reference.has_value() && slot.reference->sourceRange.has_value()) {
+      revealSourceRange(*slot.reference->sourceRange);
+    }
+  };
 
   if (canEditPaint && ImGui::IsItemClicked()) {
-    const bool clickedFillChip =
-        paintState.fill.isCustom && contains(fillChipMin, fillChipMax, mouse);
-    const bool clickedStrokeChip =
-        paintState.stroke.isCustom && contains(strokeChipMin, strokeChipMax, mouse);
-    bool handledPaintClick = false;
-    if (clickedFillChip || clickedStrokeChip) {
-      const ToolbarPaintSlotState& slot = clickedFillChip ? paintState.fill : paintState.stroke;
-      if (slot.reference.has_value() && slot.reference->sourceRange.has_value()) {
-        revealSourceRange(*slot.reference->sourceRange);
-      }
-      handledPaintClick = true;
-    }
-
-    if (!handledPaintClick) {
-      const bool clickedFill = mouse.x >= fillMin.x && mouse.x <= fillMax.x &&
-                               mouse.y >= fillMin.y && mouse.y <= fillMax.y;
-      const bool clickedStroke = mouse.x >= strokeMin.x && mouse.x <= strokeMax.x &&
-                                 mouse.y >= strokeMin.y && mouse.y <= strokeMax.y;
-      if (clickedFill || !clickedStroke) {
-        ImGui::OpenPopup("##fill_color_picker");
-      } else {
-        ImGui::OpenPopup("##stroke_color_picker");
-      }
+    switch (region) {
+      case FillStrokeWidgetRegion::Swap: performPaintSwap(); break;
+      case FillStrokeWidgetRegion::FillNone: setPaintNone("fill"); break;
+      case FillStrokeWidgetRegion::StrokeNone: setPaintNone("stroke"); break;
+      case FillStrokeWidgetRegion::FillChip: revealChipSource(paintState.fill); break;
+      case FillStrokeWidgetRegion::StrokeChip: revealChipSource(paintState.stroke); break;
+      case FillStrokeWidgetRegion::StrokeSwatch: ImGui::OpenPopup("##stroke_color_picker"); break;
+      case FillStrokeWidgetRegion::FillSwatch:
+      case FillStrokeWidgetRegion::None: ImGui::OpenPopup("##fill_color_picker"); break;
     }
   }
   if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-    const bool hoveredFillChip =
-        paintState.fill.isCustom && contains(fillChipMin, fillChipMax, mouse);
-    const bool hoveredStrokeChip =
-        paintState.stroke.isCustom && contains(strokeChipMin, strokeChipMax, mouse);
-    if (hoveredFillChip || hoveredStrokeChip) {
-      const char* name = hoveredFillChip ? "Fill" : "Stroke";
-      const ToolbarPaintSlotState& slot = hoveredFillChip ? paintState.fill : paintState.stroke;
-      if (slot.reference.has_value() && slot.reference->sourceRange.has_value()) {
-        ImGui::SetTooltip("%s paint server %s. Click to show source.", name,
-                          slot.reference->href.c_str());
-      } else if (slot.reference.has_value() && slot.reference->external) {
-        ImGui::SetTooltip("%s uses external paint server %s.", name, slot.reference->href.c_str());
-      } else if (slot.reference.has_value()) {
-        ImGui::SetTooltip("%s uses unresolved paint server %s.", name,
-                          slot.reference->href.c_str());
-      } else {
-        ImGui::SetTooltip("%s uses custom paint %s.", name, slot.customLabel.c_str());
+    switch (region) {
+      case FillStrokeWidgetRegion::Swap: ImGui::SetTooltip("Swap fill and stroke"); break;
+      case FillStrokeWidgetRegion::FillNone: ImGui::SetTooltip("Set fill to none"); break;
+      case FillStrokeWidgetRegion::StrokeNone: ImGui::SetTooltip("Set stroke to none"); break;
+      case FillStrokeWidgetRegion::FillChip:
+      case FillStrokeWidgetRegion::StrokeChip: {
+        const bool isFill = region == FillStrokeWidgetRegion::FillChip;
+        const char* name = isFill ? "Fill" : "Stroke";
+        const ToolbarPaintSlotState& slot = isFill ? paintState.fill : paintState.stroke;
+        if (slot.reference.has_value() && slot.reference->sourceRange.has_value()) {
+          ImGui::SetTooltip("%s paint server %s. Click to show source.", name,
+                            slot.reference->href.c_str());
+        } else if (slot.reference.has_value() && slot.reference->external) {
+          ImGui::SetTooltip("%s uses external paint server %s.", name, slot.reference->href.c_str());
+        } else if (slot.reference.has_value()) {
+          ImGui::SetTooltip("%s uses unresolved paint server %s.", name,
+                            slot.reference->href.c_str());
+        } else {
+          ImGui::SetTooltip("%s uses custom paint %s.", name, slot.customLabel.c_str());
+        }
+        break;
       }
-    } else {
-      ImGui::SetTooltip("%s", canEditPaint ? "Fill / stroke" : "Open an SVG document");
+      case FillStrokeWidgetRegion::StrokeSwatch:
+        ImGui::SetTooltip("%s", canEditPaint ? "Stroke color" : "Open an SVG document");
+        break;
+      case FillStrokeWidgetRegion::FillSwatch:
+        ImGui::SetTooltip("%s", canEditPaint ? "Fill color" : "Open an SVG document");
+        break;
+      case FillStrokeWidgetRegion::None:
+        ImGui::SetTooltip("%s", canEditPaint ? "Fill / stroke" : "Open an SVG document");
+        break;
     }
   }
   ImGui::EndDisabled();

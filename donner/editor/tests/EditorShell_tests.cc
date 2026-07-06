@@ -14,6 +14,7 @@
 
 #include "donner/css/Color.h"
 #include "donner/editor/EditorShellInternal.h"
+#include "donner/editor/FillStrokeWidget.h"
 #include "donner/editor/InMemoryClipboard.h"
 #include "donner/editor/gui/EditorWindow.h"
 #include "donner/editor/repro/ReproFile.h"
@@ -346,6 +347,87 @@ TEST(EditorShellInternalTest, ActivePaintStateUsesFillAndStrokeAttributes) {
   EXPECT_FALSE(state.stroke.isNone);
   EXPECT_TRUE(state.stroke.isCustom);
   EXPECT_EQ(state.stroke.customLabel, "url(#paint)");
+}
+
+TEST(EditorShellInternalTest, ActivePaintStyleDefaultsToWhiteFillBlackStroke) {
+  const ActivePaintStyle style;
+  EXPECT_EQ(style.fill, "white");
+  EXPECT_EQ(style.stroke, "black");
+}
+
+TEST(EditorShellInternalTest, SwapActivePaintSwapsFillAndStroke) {
+  ActivePaintStyle style;
+  style.fill = "#112233";
+  style.stroke = "#445566";
+  internal::SwapActivePaint(style);
+  EXPECT_EQ(style.fill, "#445566");
+  EXPECT_EQ(style.stroke, "#112233");
+
+  // A fresh document's white fill / black stroke swaps cleanly.
+  ActivePaintStyle fresh;
+  internal::SwapActivePaint(fresh);
+  EXPECT_EQ(fresh.fill, "black");
+  EXPECT_EQ(fresh.stroke, "white");
+}
+
+TEST(EditorShellInternalTest, SvgPaintStringForSlotCoversNoneSolidAndReference) {
+  internal::ToolbarPaintSlotState none;
+  none.isNone = true;
+  EXPECT_EQ(internal::SvgPaintStringForSlot(none), "none");
+
+  internal::ToolbarPaintSlotState solid;
+  solid.isNone = false;
+  solid.color = css::RGBA::RGB(0x11, 0x22, 0x33);
+  EXPECT_EQ(internal::SvgPaintStringForSlot(solid), css::RGBA::RGB(0x11, 0x22, 0x33).toHexString());
+
+  internal::ToolbarPaintSlotState reference;
+  reference.isNone = false;
+  reference.isCustom = true;
+  internal::ToolbarPaintReferenceState ref;
+  ref.href = "#grad";
+  reference.reference = ref;
+  EXPECT_EQ(internal::SvgPaintStringForSlot(reference), "url(#grad)");
+
+  internal::ToolbarPaintSlotState context;
+  context.isNone = false;
+  context.isCustom = true;
+  context.customLabel = "context-fill";
+  EXPECT_EQ(internal::SvgPaintStringForSlot(context), "context-fill");
+}
+
+TEST(EditorShellInternalTest, FillStrokeWidgetLayoutAndHitTestClassifyRegions) {
+  const ImVec2 widgetMin(100.0f, 200.0f);
+  const ImVec2 widgetMax(widgetMin.x + 118.0f, widgetMin.y + 30.0f);
+  const internal::FillStrokeWidgetLayout layout =
+      internal::ComputeFillStrokeWidgetLayout(widgetMin, widgetMax);
+
+  const auto center = [](const ImVec2& a, const ImVec2& b) {
+    return ImVec2((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
+  };
+  const auto hit = [&](const ImVec2& p, bool fillCustom, bool strokeCustom) {
+    return internal::HitTestFillStrokeWidget(layout, p, fillCustom, strokeCustom);
+  };
+
+  EXPECT_EQ(hit(center(layout.swapMin, layout.swapMax), false, false),
+            internal::FillStrokeWidgetRegion::Swap);
+  EXPECT_EQ(hit(center(layout.fillNoneMin, layout.fillNoneMax), false, false),
+            internal::FillStrokeWidgetRegion::FillNone);
+  EXPECT_EQ(hit(center(layout.strokeNoneMin, layout.strokeNoneMax), false, false),
+            internal::FillStrokeWidgetRegion::StrokeNone);
+
+  // Fill sits in front of stroke, so it owns the overlap region.
+  EXPECT_EQ(hit(center(layout.fillMin, layout.fillMax), false, false),
+            internal::FillStrokeWidgetRegion::FillSwatch);
+  // The stroke swatch's upper-right corner is clear of the front fill swatch.
+  const ImVec2 strokeOnly(layout.strokeMax.x - 2.0f, layout.strokeMin.y + 2.0f);
+  EXPECT_EQ(hit(strokeOnly, false, false), internal::FillStrokeWidgetRegion::StrokeSwatch);
+
+  // Chips only classify when their slot carries custom paint (only then drawn).
+  const ImVec2 fillChip = center(layout.fillChipMin, layout.fillChipMax);
+  EXPECT_EQ(hit(fillChip, false, false), internal::FillStrokeWidgetRegion::None);
+  EXPECT_EQ(hit(fillChip, true, false), internal::FillStrokeWidgetRegion::FillChip);
+  const ImVec2 strokeChip = center(layout.strokeChipMin, layout.strokeChipMax);
+  EXPECT_EQ(hit(strokeChip, false, true), internal::FillStrokeWidgetRegion::StrokeChip);
 }
 
 TEST(EditorShellInternalTest, SourceHelpersPreferInitialSourceAndCanonicalizeTrailingNewline) {
