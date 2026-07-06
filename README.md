@@ -17,9 +17,8 @@ size-optimized software renderer.
 ## Why Donner
 
 - An SVG-native editor. Selection and transform tools with oriented bounding boxes, a pen
-  tool, rich text editing with real font support, layers, a dockable panel system, and
-  native macOS chrome. Every icon and cursor is an SVG rendered by Donner itself; the
-  document you edit is the SVG, always.
+  tool, rich text editing with real font support, and layers. Every icon and cursor is an
+  SVG rendered by Donner itself; the document you edit is the SVG, always.
 - High SVG spec conformance. Conformance is tracked continuously against the resvg test suite with visual regression in CI.
 - Fully featured. SVG2 rendering with CSS3 styling, text with a full font stack (FreeType,
   HarfBuzz, WOFF2) or a compact built-in stack, filters, and the first slice of SMIL
@@ -29,8 +28,8 @@ size-optimized software renderer.
 - Secure. Built for untrusted content: 24 fuzzers run continuously, and the
   engine's design lineage includes shipping untrusted SVG and glTF rendering inside
   privileged apps.
-- Embeddable. Available on the Bazel Central Registry as a C++20 module; the tiny variant
-  is tuned for binary size.
+- Embeddable. A C++20 Bazel module with an exception-free, RTTI-free API surface; the tiny
+  variant is tuned for binary size.
 
 ## The editor
 
