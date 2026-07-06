@@ -69,6 +69,16 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "editor_theme_tests",
+    srcs = ["EditorTheme_tests.cc"],
+    deps = [
+        "//donner/editor:editor_theme",
+        "@com_google_gtest//:gtest_main",
+        "@imgui",
+    ],
+)
+
+donner_cc_test(
     name = "file_dialog_state_tests",
     srcs = ["FileDialogState_tests.cc"],
     deps = [

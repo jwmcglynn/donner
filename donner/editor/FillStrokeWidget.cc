@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <utility>
 
+#include "donner/editor/EditorTheme.h"
+
 namespace donner::editor::internal {
 
 namespace {
@@ -140,14 +142,17 @@ void DrawFillStrokeSwatch(ImDrawList* drawList, const ImVec2& min, const ImVec2&
     drawList->PopClipRect();
   }
 
-  // Outlines: a light inner keyline plus a role-colored outer border.
+  // Outlines: a light inner keyline plus a role-colored outer border. W8 routes
+  // the custom-paint accent and the "none" slash through the theme so this
+  // extracted widget tracks the Signal Teal palette with the rest of the shell.
+  const EditorTheme& theme = EditorTheme::Active();
   drawList->AddRect(min, max, IM_COL32(255, 255, 255, 210), kRounding, 0, 1.0f);
-  drawList->AddRect(min, max, state.isCustom ? IM_COL32(91, 189, 255, 255) : IM_COL32(0, 0, 0, 210),
+  drawList->AddRect(min, max, state.isCustom ? theme.accentDefault : IM_COL32(0, 0, 0, 210),
                     kRounding, 0, 1.6f);
 
   if (state.isNone) {
     drawList->AddLine(ImVec2(min.x + 2.0f, max.y - 2.0f), ImVec2(max.x - 2.0f, min.y + 2.0f),
-                      IM_COL32(230, 40, 40, 255), 2.2f);
+                      theme.destructive, 2.2f);
   }
 }
 

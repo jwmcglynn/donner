@@ -5,6 +5,7 @@
 #include <cstring>
 #include <utility>
 
+#include "donner/editor/EditorTheme.h"
 #include "donner/editor/ImGuiIncludes.h"
 
 namespace donner::editor {
@@ -65,7 +66,8 @@ void DialogPresenter::render(
         ImGui::InputText("Path", openFilePathBuffer_.data(), openFilePathBuffer_.size(),
                          ImGuiInputTextFlags_EnterReturnsTrue);
     if (!openFileError_.empty()) {
-      ImGui::TextColored(ImVec4(0.92f, 0.42f, 0.38f, 1.0f), "%s", openFileError_.c_str());
+      ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(EditorTheme::Active().destructive), "%s",
+                         openFileError_.c_str());
     }
 
     if (submitted || ImGui::Button("Open")) {
@@ -93,7 +95,8 @@ void DialogPresenter::render(
         ImGui::InputText("Path", saveFilePathBuffer_.data(), saveFilePathBuffer_.size(),
                          ImGuiInputTextFlags_EnterReturnsTrue);
     if (!saveFileError_.empty()) {
-      ImGui::TextColored(ImVec4(0.92f, 0.42f, 0.38f, 1.0f), "%s", saveFileError_.c_str());
+      ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(EditorTheme::Active().destructive), "%s",
+                         saveFileError_.c_str());
     }
 
     if (submitted || ImGui::Button("Save")) {

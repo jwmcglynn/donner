@@ -536,6 +536,19 @@ donner_cc_library(
     ],
 )
 
+# Donner editor design language (design doc 0054): the single source of truth
+# for the editor chrome palette, spacing grid, rounding, and control metrics.
+donner_cc_library(
+    name = "editor_theme",
+    srcs = ["EditorTheme.cc"],
+    hdrs = ["EditorTheme.h"],
+    deps = [
+        ":imgui_headers",
+        "//donner/css",
+        "@imgui",
+    ],
+)
+
 donner_cc_library(
     name = "drag_coalesce",
     hdrs = ["DragCoalesce.h"],
@@ -725,6 +738,7 @@ donner_cc_library(
         "//conditions:default": [],
     }),
     deps = [
+        ":editor_theme",
         ":gl_texture_cache",
         ":imgui_headers",
         ":layer_inspector_diagnostics",
@@ -755,6 +769,7 @@ donner_cc_library(
     srcs = ["DialogPresenter.cc"],
     hdrs = ["DialogPresenter.h"],
     deps = [
+        ":editor_theme",
         ":imgui_headers",
         "@imgui",
     ],
@@ -856,6 +871,7 @@ donner_cc_library(
         ":editor_app",
         ":editor_input_bridge",
         ":editor_shell_layout",
+        ":editor_theme",
         ":focus_view",
         ":frame_cost_breakdown",
         ":frame_miss_telemetry",
@@ -1049,6 +1065,7 @@ donner_cc_library(
     hdrs = ["OverlayRenderer.h"],
     deps = [
         ":editor_app",
+        ":editor_theme",
         ":selection_aabb",
         ":selection_transform_handles",
         ":tracy_wrapper",
@@ -1349,6 +1366,7 @@ donner_cc_library(
     deps = [
         ":disclosure_chevron",
         ":editor_app",
+        ":editor_theme",
         ":embedded_svg_icon",
         ":imgui_headers",
         ":layer_tree_model",

@@ -38,6 +38,7 @@ extern "C" {
 #include <utility>
 #include <vector>
 
+#include "donner/editor/EditorTheme.h"
 #include "donner/editor/ImGuiBackendIncludes.h"
 #include "donner/editor/TracyWrapper.h"
 #ifdef DONNER_EDITOR_WGPU
@@ -741,7 +742,11 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
                                       static_cast<float>(uiScaleConfig_.displayScale));
   io.FontGlobalScale = uiScaleConfig_.fontGlobalScale();
 
-  ImGui::StyleColorsDark();
+  // Donner editor design language (design doc 0054): apply the Dark Slate token
+  // theme with the operator-approved Signal Teal accent (variant B) in place of
+  // ImGui's stock dark ramp. This also publishes the active theme so raw
+  // ImDrawList widgets (overlay, chips, toolbar selection) read the same tokens.
+  EditorTheme::Dark(Accent::SignalTeal).applyToImGuiStyle(ImGui::GetStyle());
 #ifdef DONNER_EDITOR_WGPU
   if (!ImGui_ImplGlfw_InitForOther(window_, /*install_callbacks=*/true)) {
     std::fprintf(stderr, "EditorWindow: ImGui_ImplGlfw_InitForOther failed\n");
