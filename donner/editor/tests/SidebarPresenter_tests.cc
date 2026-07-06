@@ -353,17 +353,19 @@ TEST(SidebarPresenterTest, RefreshSnapshotCapturesXmlAttributesAndComputedStyle)
   ASSERT_NE(displayValue, nullptr);
   EXPECT_EQ(*displayValue, "inline (default)");
 
+  // QA-F11: computed-style values render as standard CSS, not the debug
+  // operator<< syntax. The trailing (set)/(default) tag is retained.
   const std::string* fillValue = FindInspectorValue(computedStyle, "fill");
   ASSERT_NE(fillValue, nullptr);
-  EXPECT_EQ(*fillValue, "PaintServer(solid rgba(255, 0, 0, 255)) (set)");
+  EXPECT_EQ(*fillValue, "#ff0000 (set)");
 
   const std::string* strokeValue = FindInspectorValue(computedStyle, "stroke");
   ASSERT_NE(strokeValue, nullptr);
-  EXPECT_EQ(*strokeValue, "PaintServer(none) (default)");
+  EXPECT_EQ(*strokeValue, "none (default)");
 
   const std::string* colorValue = FindInspectorValue(computedStyle, "color");
   ASSERT_NE(colorValue, nullptr);
-  EXPECT_EQ(*colorValue, "rgba(0, 0, 0, 255) (default)");
+  EXPECT_EQ(*colorValue, "#000000 (default)");
 }
 
 TEST(SidebarPresenterTest, RefreshSnapshotKeepsAttributesWhenCleanSourceTextIsMissing) {

@@ -10,6 +10,7 @@ donner_cc_test(
         "geode",
     ],
     srcs = [
+        "CssStringifier_tests.cc",
         "PaintServer_tests.cc",
         "PropertyRegistry_tests.cc",
     ],

@@ -74,6 +74,15 @@ public:
     Matrix,     ///< One raw matrix component (see `matrixIndex`).
   };
 
+  /// One-shot transform action for the Position region's rotate / flip
+  /// buttons (QA-F16). Unlike the drag-driven \ref TransformField edits these
+  /// apply a single discrete transform and record one undo entry immediately.
+  enum class DiscreteTransform : std::uint8_t {
+    Rotate90,        ///< Rotate 90 degrees clockwise about the bounds center.
+    FlipHorizontal,  ///< Mirror across the vertical center axis.
+    FlipVertical,    ///< Mirror across the horizontal center axis.
+  };
+
   /// Maps a static path-operation icon bitmap to an ImGui texture handle for
   /// display. The icon bitmaps are rendered from embedded Bootstrap SVG resources
   /// through Donner; ImGui only receives the final raster texture for the image
@@ -114,10 +123,16 @@ public:
    * @param iconTextureProvider Uploads static Donner-rendered path operation
    *   icon bitmaps to ImGui textures for display, or null to keep blank hit
    *   areas in headless tests.
+   * @param renderPaintSections Rendered between the Position region and the
+   *   Path Operations section for a single-element selection (the Fill /
+   *   Stroke sections, QA-F15). Owned by `EditorShell` because it needs the
+   *   shell's paint machinery and color pickers; empty in headless tests.
+   *   Returns true if it queued a document mutation.
    * @return true if an inspector action queued a document mutation.
    */
   bool renderInspector(EditorApp* liveApp, const ViewportState& viewport,
-                       const IconTextureProvider& iconTextureProvider = {});
+                       const IconTextureProvider& iconTextureProvider = {},
+                       const std::function<bool()>& renderPaintSections = {});
 
   [[nodiscard]] bool inspectorHasSelectionForTesting() const {
     return inspectorSnapshot_.hasSelection;
@@ -256,6 +271,13 @@ private:
   /// Capture the edit baseline for @p field from the live element.
   void beginTransformEdit(EditorApp& liveApp, TransformField field, int matrixIndex,
                           const char* undoLabel);
+
+  /// Apply a one-shot rotate-90 / flip transform to the single selected
+  /// element and record one undo entry (Position region buttons, QA-F16).
+  /// Reuses the same SetTransformCommand + undo + source-writeback path as
+  /// \ref commitTransformEdit, so the locking / writeback semantics are
+  /// unchanged. Returns true if a mutation was queued.
+  bool applyDiscreteTransform(EditorApp& liveApp, DiscreteTransform kind);
 
   /// Compose the new local transform for the in-progress edit at @p value.
   [[nodiscard]] Transform2d composeFieldTransform(const TransformEditState& state,

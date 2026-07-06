@@ -712,6 +712,7 @@ donner_cc_library(
         "//donner/base",
         "//donner/base/xml",
         "//donner/svg",
+        "//donner/svg/properties:property_parsing",
         "//donner/svg/renderer:renderer_interface",
         "//third_party/bootstrap-icons:bootstrap_icons",
         "@imgui",

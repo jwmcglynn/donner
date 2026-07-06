@@ -238,6 +238,29 @@ std::string ColorToSvgAttribute(const css::RGBA& color) {
   return color.toHexString();
 }
 
+// Eye visibility glyph for the inspector Fill / Stroke rows (QA-F15), drawn
+// through ImDrawList so it inherits the theme color: an almond outline plus a
+// pupil when open; a slash across the outline when hidden.
+void DrawEyeGlyph(ImDrawList* drawList, const ImVec2& center, float radius, ImU32 color,
+                  bool open) {
+  const float halfWidth = radius * 1.5f;
+  const float halfHeight = radius * 1.0f;
+  const float thickness = std::max(1.0f, radius * 0.2f);
+  const ImVec2 left(center.x - halfWidth, center.y);
+  const ImVec2 right(center.x + halfWidth, center.y);
+  drawList->AddBezierQuadratic(left, ImVec2(center.x, center.y - halfHeight), right, color,
+                               thickness);
+  drawList->AddBezierQuadratic(left, ImVec2(center.x, center.y + halfHeight), right, color,
+                               thickness);
+  if (open) {
+    drawList->AddCircleFilled(center, radius * 0.42f, color, 12);
+  } else {
+    drawList->AddLine(ImVec2(center.x - halfWidth, center.y - halfHeight * 0.95f),
+                      ImVec2(center.x + halfWidth, center.y + halfHeight * 0.95f), color,
+                      thickness);
+  }
+}
+
 std::optional<css::RGBA> ParseColorAttribute(std::string_view value) {
   auto parsed = css::parser::ColorParser::ParseString(value);
   if (parsed.hasError() || !parsed.hasResult()) {
@@ -2121,9 +2144,11 @@ void EditorShell::renderSourcePane(float paneOriginY, float paneHeight, float pa
 
 Box2d EditorShell::toolPaletteScreenRect(const ImVec2& paneOrigin,
                                          const ImVec2& contentRegion) const {
-  constexpr float kButtonCount = 3.0f;
+  // Select, pen, text, path-modify. The paired fill/stroke swatch widget was
+  // removed from the palette (QA-F15), so the row no longer reserves its width.
+  constexpr float kButtonCount = 4.0f;
   const float width = kToolPalettePadding * 2.0f + kToolPaletteButtonSize * kButtonCount +
-                      kToolPalettePaintWidgetWidth + kToolPaletteGap * kButtonCount;
+                      kToolPaletteGap * (kButtonCount - 1.0f);
   const float height = kToolPalettePadding * 2.0f + kToolPaletteButtonSize;
   const float x = paneOrigin.x + std::max(0.0f, (contentRegion.x - width) * 0.5f);
   const float y = paneOrigin.y + kToolPaletteTopInset;
@@ -2331,6 +2356,273 @@ void EditorShell::renderFillStrokeToolbarWidget() {
   renderColorPopup("##stroke_color_picker", "##stroke_picker", "stroke", paintState.stroke);
 }
 
+namespace {
+
+/// Dash-pattern (line-gaps) presets for the stroke section selector (QA-F15).
+/// The value is the `stroke-dasharray` CSS string; `none` is a solid stroke.
+struct DashPreset {
+  const char* label;
+  const char* value;
+};
+constexpr std::array<DashPreset, 4> kDashPresets = {{
+    {.label = "Solid", .value = "none"},
+    {.label = "Dashed", .value = "6 4"},
+    {.label = "Dotted", .value = "1 4"},
+    {.label = "Dash-dot", .value = "6 4 1 4"},
+}};
+
+}  // namespace
+
+bool EditorShell::renderInspectorPaintSection(const char* title, const char* paintAttr,
+                                              const char* opacityAttr,
+                                              const ToolbarPaintSlotState& slot, bool canEdit,
+                                              double opacity, bool isStroke, double strokeWidth,
+                                              int dashIndex) {
+  ImGui::PushID(title);
+  bool queued = false;
+  const auto formatScalar = [](double value) {
+    std::ostringstream os;
+    os << value;
+    return os.str();
+  };
+
+  // Section header: title on the left, a right-aligned "+" add affordance.
+  ImGui::Separator();
+  ImGui::TextUnformatted(title);
+  {
+    const float buttonWidth = ImGui::GetFrameHeight();
+    const float avail = ImGui::GetContentRegionAvail().x;
+    ImGui::SameLine(0.0f, std::max(0.0f, avail - buttonWidth));
+    ImGui::BeginDisabled(!canEdit);
+    if (ImGui::Button("+##add_paint", ImVec2(buttonWidth, 0.0f))) {
+      const std::string def = isStroke ? std::string("#000000") : std::string("#808080");
+      if (std::string_view(paintAttr) == "fill") {
+        app_.setActiveFill(def);
+      } else {
+        app_.setActiveStroke(def);
+      }
+      queued = app_.setStylePropertyOnSelection(paintAttr, def) || queued;
+    }
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      ImGui::SetTooltip("Add %s", title);
+    }
+  }
+
+  if (slot.isNone) {
+    ImGui::TextDisabled("None");
+  } else {
+    const float rowHeight = ImGui::GetFrameHeight();
+
+    // Swatch: opens a color picker popup.
+    ImGui::BeginDisabled(!canEdit);
+    if (ImGui::ColorButton("##paint_swatch", ColorToImVec4(slot.color),
+                           ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoAlpha,
+                           ImVec2(rowHeight, rowHeight))) {
+      ImGui::OpenPopup("##paint_color_picker");
+    }
+    ImGui::EndDisabled();
+
+    // Hex value.
+    char hexBuffer[8] = {};
+    {
+      const std::string hex = slot.color.toHexString();
+      const std::string digits = hex.size() >= 7 ? hex.substr(1, 6) : std::string("000000");
+      for (int i = 0; i < 6; ++i) {
+        hexBuffer[i] = digits[static_cast<std::size_t>(i)];
+      }
+    }
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(72.0f);
+    ImGui::BeginDisabled(!canEdit);
+    constexpr ImGuiInputTextFlags kHexFlags = ImGuiInputTextFlags_CharsHexadecimal |
+                                              ImGuiInputTextFlags_CharsUppercase |
+                                              ImGuiInputTextFlags_EnterReturnsTrue;
+    if (ImGui::InputText("##paint_hex", hexBuffer, sizeof(hexBuffer), kHexFlags)) {
+      const std::string candidate = std::string("#") + hexBuffer;
+      if (ParseColorAttribute(candidate).has_value()) {
+        if (std::string_view(paintAttr) == "fill") {
+          app_.setActiveFill(candidate);
+        } else {
+          app_.setActiveStroke(candidate);
+        }
+        queued = app_.setStylePropertyOnSelection(paintAttr, candidate) || queued;
+      }
+    }
+    ImGui::EndDisabled();
+
+    // Opacity percent.
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(56.0f);
+    int opacityPercent = static_cast<int>(std::lround(opacity * 100.0));
+    ImGui::BeginDisabled(!canEdit);
+    if (ImGui::DragInt("##paint_opacity", &opacityPercent, 1.0f, 0, 100, "%d%%")) {
+      opacityPercent = std::clamp(opacityPercent, 0, 100);
+      queued = app_.setStylePropertyOnSelection(
+                   opacityAttr, formatScalar(static_cast<double>(opacityPercent) / 100.0)) ||
+               queued;
+    }
+    ImGui::EndDisabled();
+
+    // Eye visibility toggle: hides by driving opacity to 0, shows by restoring
+    // it to 100% (the row stays visible because the paint is still a color).
+    ImGui::SameLine();
+    const bool visible = opacity > 0.0;
+    ImGui::BeginDisabled(!canEdit);
+    const bool eyeClicked = ImGui::Button("##paint_eye", ImVec2(rowHeight, rowHeight));
+    ImGui::EndDisabled();
+    {
+      const ImVec2 bmin = ImGui::GetItemRectMin();
+      const ImVec2 bmax = ImGui::GetItemRectMax();
+      const ImVec2 center((bmin.x + bmax.x) * 0.5f, (bmin.y + bmax.y) * 0.5f);
+      const ImU32 color = ImGui::GetColorU32(canEdit ? ImGuiCol_Text : ImGuiCol_TextDisabled);
+      DrawEyeGlyph(ImGui::GetWindowDrawList(), center, rowHeight * 0.26f, color, visible);
+    }
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      ImGui::SetTooltip("%s", visible ? "Hide" : "Show");
+    }
+    if (eyeClicked && canEdit) {
+      queued = app_.setStylePropertyOnSelection(opacityAttr, visible ? "0" : "1") || queued;
+    }
+
+    // Minus: remove the paint (set to none).
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!canEdit);
+    if (ImGui::Button("-##paint_remove", ImVec2(rowHeight, rowHeight))) {
+      if (std::string_view(paintAttr) == "fill") {
+        app_.setActiveFill("none");
+      } else {
+        app_.setActiveStroke("none");
+      }
+      queued = app_.setStylePropertyOnSelection(paintAttr, "none") || queued;
+    }
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      ImGui::SetTooltip("Remove %s", title);
+    }
+
+    // Color picker popup for the swatch.
+    if (ImGui::BeginPopup("##paint_color_picker")) {
+      float pickerColor[4] = {
+          ColorChannelToFloat(slot.color.r),
+          ColorChannelToFloat(slot.color.g),
+          ColorChannelToFloat(slot.color.b),
+          ColorChannelToFloat(slot.color.a),
+      };
+      constexpr ImGuiColorEditFlags kFlags = ImGuiColorEditFlags_AlphaBar |
+                                             ImGuiColorEditFlags_AlphaPreviewHalf |
+                                             ImGuiColorEditFlags_NoSidePreview;
+      if (ImGui::ColorPicker4("##paint_picker", pickerColor, kFlags)) {
+        const css::RGBA chosen = ColorFromPicker(pickerColor);
+        const std::string svgColor = ColorToSvgAttribute(chosen);
+        if (std::string_view(paintAttr) == "fill") {
+          app_.setActiveFill(svgColor);
+        } else {
+          app_.setActiveStroke(svgColor);
+        }
+        queued = app_.setStylePropertyOnSelection(paintAttr, svgColor) || queued;
+      }
+      ImGui::EndPopup();
+    }
+  }
+
+  // Stroke-only controls: Weight (stroke-width) and a dash-pattern selector.
+  // No stroke position / alignment dropdown (scoped out, QA-F15).
+  if (isStroke) {
+    float weight = static_cast<float>(strokeWidth);
+    ImGui::SetNextItemWidth(96.0f);
+    ImGui::BeginDisabled(!canEdit);
+    if (ImGui::DragFloat("Weight##stroke_weight", &weight, 0.1f, 0.0f, 200.0f, "%.2f")) {
+      app_.setActiveStrokeWidth(weight);
+      queued = app_.setStrokeWidthOnSelection(weight) || queued;
+    }
+    ImGui::EndDisabled();
+
+    ImGui::SameLine();
+    int dash = (dashIndex >= 0 && dashIndex < static_cast<int>(kDashPresets.size())) ? dashIndex : 0;
+    ImGui::SetNextItemWidth(120.0f);
+    ImGui::BeginDisabled(!canEdit);
+    if (ImGui::BeginCombo("Dashes##stroke_dashes", kDashPresets[static_cast<std::size_t>(dash)].label)) {
+      for (int i = 0; i < static_cast<int>(kDashPresets.size()); ++i) {
+        const bool selected = i == dash;
+        if (ImGui::Selectable(kDashPresets[static_cast<std::size_t>(i)].label, selected)) {
+          queued = app_.setStylePropertyOnSelection(
+                       "stroke-dasharray", kDashPresets[static_cast<std::size_t>(i)].value) ||
+                   queued;
+        }
+        if (selected) {
+          ImGui::SetItemDefaultFocus();
+        }
+      }
+      ImGui::EndCombo();
+    }
+    ImGui::EndDisabled();
+  }
+
+  ImGui::PopID();
+  return queued;
+}
+
+bool EditorShell::renderInspectorPaintSections() {
+  const bool rendererBusy = renderCoordinator_.asyncRenderer().isBusy();
+  const bool canEditPaint =
+      app_.hasDocument() && !rendererBusy && app_.selectedElements().size() == 1u;
+
+  // Resolve the current fill / stroke presentation from the selected element,
+  // reusing the toolbar's paint resolver. The inspector does not need source
+  // ranges, so no source text is threaded in.
+  const ToolbarPaintState paintState =
+      canEditPaint ? ToolbarPaintStateForApp(app_, std::nullopt) : ToolbarPaintState{};
+
+  // Paint opacity (fill-opacity / stroke-opacity) and stroke width / dash
+  // pattern come from the computed style and the source attributes; read them
+  // under scoped read access, mirroring the transform-edit baseline capture.
+  double fillOpacity = 1.0;
+  double strokeOpacity = 1.0;
+  double strokeWidth = 1.0;
+  int dashIndex = 0;
+  if (canEditPaint) {
+    const svg::SVGElement element = app_.selectedElements().front();
+    // Computed style reads on the UI thread when the renderer is idle need no
+    // explicit access (matching CurrentColorForElement / the toolbar resolver).
+    const auto& style = element.getComputedStyle();
+    if (const auto value = style.fillOpacity.get(); value.has_value()) {
+      fillOpacity = *value;
+    }
+    if (const auto value = style.strokeOpacity.get(); value.has_value()) {
+      strokeOpacity = *value;
+    }
+    if (const auto value = style.strokeWidth.get(); value.has_value()) {
+      strokeWidth = value->value;
+    }
+    // Raw attribute reads DO need scoped read access (§concurrent-dom).
+    const std::optional<RcString> dashAttr =
+        element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
+          return element.getAttribute(xml::XMLQualifiedNameRef("stroke-dasharray"));
+        });
+    if (dashAttr.has_value()) {
+      const std::string_view current(*dashAttr);
+      for (int i = 0; i < static_cast<int>(kDashPresets.size()); ++i) {
+        if (current == kDashPresets[static_cast<std::size_t>(i)].value) {
+          dashIndex = i;
+          break;
+        }
+      }
+    }
+  }
+
+  bool queued = false;
+  queued = renderInspectorPaintSection("Fill", "fill", "fill-opacity", paintState.fill,
+                                       canEditPaint, fillOpacity, /*isStroke=*/false, strokeWidth,
+                                       dashIndex) ||
+           queued;
+  queued = renderInspectorPaintSection("Stroke", "stroke", "stroke-opacity", paintState.stroke,
+                                       canEditPaint, strokeOpacity, /*isStroke=*/true, strokeWidth,
+                                       dashIndex) ||
+           queued;
+  return queued;
+}
+
 void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& contentRegion) {
   const Box2d rect = toolPaletteScreenRect(paneOrigin, contentRegion);
   ImDrawList* drawList = ImGui::GetWindowDrawList();
@@ -2423,8 +2715,10 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
   if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
     ImGui::SetTooltip("%s", "Path edit");
   }
-  ImGui::SameLine(0.0f, kToolPaletteGap);
-  renderFillStrokeToolbarWidget();
+  // QA-F15: the paired fill/stroke swatch widget no longer lives in the tool
+  // palette; fill and stroke editing moved to the inspector's Fill / Stroke
+  // sections (see renderInspectorPaintSections). The widget's pure geometry
+  // helpers (FillStrokeWidget.*) and their tests are retained.
 
   ImGui::PopStyleVar(2);
   ImGui::PopID();
@@ -3399,7 +3693,8 @@ void EditorShell::renderSidebars() {
 
   ImGui::Begin(kInspectorWindowName, nullptr, kDockedPaneFlags);
   const bool inspectorQueuedMutation = sidebarPresenter_.renderInspector(
-      liveAppForClicks, interactionController_.viewport(), sidebarIconTextureProvider);
+      liveAppForClicks, interactionController_.viewport(), sidebarIconTextureProvider,
+      [this]() { return renderInspectorPaintSections(); });
   // Text-property inspector: shown only when the selection is exactly one
   // `<text>` element. Content/style edits route through the mutation seam.
   const bool textInspectorQueuedMutation =

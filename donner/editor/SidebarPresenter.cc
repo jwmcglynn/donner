@@ -22,6 +22,7 @@
 #include "donner/editor/UndoTimeline.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
+#include "donner/svg/properties/CssStringifier.h"
 #include "embed_resources/BootstrapIcons.h"
 
 namespace donner::editor {
@@ -92,26 +93,36 @@ size_t AttributeSortKey(const donner::xml::XMLNode& node, std::string_view sourc
 template <typename T, donner::svg::PropertyCascade kCascade>
 void AppendComputedStyleEntry(std::vector<std::pair<std::string, std::string>>& entries,
                               const donner::svg::Property<T, kCascade>& property) {
-  std::ostringstream os;
-  if (const auto value = property.get(); value.has_value()) {
-    os << *value;
+  // Standard CSS syntax (`#ff0000`, `none`, `1`), not the debug `operator<<`
+  // form (`PaintServer(solid rgba(255, 0, 0, 255))`) - QA-F11. The trailing
+  // (set)/(default) tag records whether the value was authored or inherited /
+  // defaulted.
+  std::string value;
+  if (const auto resolved = property.get(); resolved.has_value()) {
+    value = donner::svg::CssSerialize(*resolved);
   } else {
-    os << "nullopt";
+    value = "unset";
   }
-  os << (property.state == donner::svg::PropertyState::NotSet ? " (default)" : " (set)");
-  entries.emplace_back(std::string(property.name), os.str());
+  value += (property.state == donner::svg::PropertyState::NotSet ? " (default)" : " (set)");
+  entries.emplace_back(std::string(property.name), std::move(value));
 }
 
 void RenderInspectorSection(const char* heading, const char* tableId,
-                            std::span<const std::pair<std::string, std::string>> entries) {
-  ImGui::Separator();
-  ImGui::TextUnformatted(heading);
+                            std::span<const std::pair<std::string, std::string>> entries,
+                            bool defaultOpen) {
+  // A collapsing header so heavy sections (computed style, QA-F11) fold away by
+  // default while the two-column table renders the name / value pairs.
+  const ImGuiTreeNodeFlags headerFlags = defaultOpen ? ImGuiTreeNodeFlags_DefaultOpen : 0;
+  if (!ImGui::CollapsingHeader(heading, headerFlags)) {
+    return;
+  }
   if (entries.empty()) {
     ImGui::TextDisabled("(none)");
     return;
   }
 
-  constexpr ImGuiTableFlags kFlags = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_PadOuterX;
+  constexpr ImGuiTableFlags kFlags = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_PadOuterX |
+                                     ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg;
   if (ImGui::BeginTable(tableId, 2, kFlags)) {
     for (const auto& [name, value] : entries) {
       ImGui::TableNextRow();
@@ -323,6 +334,59 @@ bool RenderStrokeControlsPanel(EditorApp* liveApp) {
 /// as degenerate and the matching Width / Height field is disabled - a scale
 /// factor against a ~zero span would explode.
 constexpr double kMinimumSpanForScale = 1e-6;
+
+// Small vector glyphs for the Position region's rotate / flip buttons
+// (QA-F16), drawn through ImDrawList so they inherit the theme text color and
+// stay crisp, matching the toolbar's affordance-drawing style.
+
+void DrawRotate90Glyph(ImDrawList* drawList, const ImVec2& center, float radius, ImU32 color) {
+  const float thickness = std::max(1.25f, radius * 0.24f);
+  const float a0 = -1.9f;  // radians; arc start
+  const float a1 = 2.5f;   // radians; arc end (leaves a gap so it reads as an arrow)
+  drawList->PathClear();
+  drawList->PathArcTo(center, radius, a0, a1, 24);
+  drawList->PathStroke(color, 0, thickness);
+  // Arrowhead at the arc end, pointing along the (clockwise) tangent.
+  const ImVec2 end(center.x + radius * std::cos(a1), center.y + radius * std::sin(a1));
+  const ImVec2 tangent(-std::sin(a1), std::cos(a1));
+  const ImVec2 normal(std::cos(a1), std::sin(a1));
+  const float head = radius * 0.62f;
+  const ImVec2 tip(end.x + tangent.x * head, end.y + tangent.y * head);
+  const ImVec2 base1(end.x + normal.x * head * 0.6f, end.y + normal.y * head * 0.6f);
+  const ImVec2 base2(end.x - normal.x * head * 0.6f, end.y - normal.y * head * 0.6f);
+  drawList->AddTriangleFilled(tip, base1, base2, color);
+}
+
+void DrawFlipGlyph(ImDrawList* drawList, const ImVec2& center, float extent, ImU32 color,
+                   bool horizontal) {
+  const float gap = extent * 0.28f;
+  const float wide = extent * 0.72f;
+  // Two solid triangles mirrored across the center axis, plus a dashed axis
+  // line: apexes point away from the axis (the mirror direction).
+  if (horizontal) {
+    drawList->AddTriangleFilled(ImVec2(center.x - extent, center.y),
+                                ImVec2(center.x - gap, center.y - wide),
+                                ImVec2(center.x - gap, center.y + wide), color);
+    drawList->AddTriangleFilled(ImVec2(center.x + extent, center.y),
+                                ImVec2(center.x + gap, center.y - wide),
+                                ImVec2(center.x + gap, center.y + wide), color);
+    for (float y = -extent; y <= extent; y += extent * 0.5f) {
+      drawList->AddLine(ImVec2(center.x, center.y + y),
+                        ImVec2(center.x, center.y + y + extent * 0.28f), color, 1.4f);
+    }
+  } else {
+    drawList->AddTriangleFilled(ImVec2(center.x, center.y - extent),
+                                ImVec2(center.x - wide, center.y - gap),
+                                ImVec2(center.x + wide, center.y - gap), color);
+    drawList->AddTriangleFilled(ImVec2(center.x, center.y + extent),
+                                ImVec2(center.x - wide, center.y + gap),
+                                ImVec2(center.x + wide, center.y + gap), color);
+    for (float x = -extent; x <= extent; x += extent * 0.5f) {
+      drawList->AddLine(ImVec2(center.x + x, center.y),
+                        ImVec2(center.x + x + extent * 0.28f, center.y), color, 1.4f);
+    }
+  }
+}
 
 }  // namespace
 
@@ -547,7 +611,8 @@ void SidebarPresenter::renderTreeView(EditorApp* liveApp, TreeViewState& state,
 }
 
 bool SidebarPresenter::renderInspector(EditorApp* liveApp, const ViewportState& viewport,
-                                       const IconTextureProvider& iconTextureProvider) {
+                                       const IconTextureProvider& iconTextureProvider,
+                                       const std::function<bool()>& renderPaintSections) {
   bool queuedMutation = false;
   // Selection left the single-element inspector while a transform edit was
   // still pending (e.g. its commit was deferred past a busy frame); land the
@@ -573,12 +638,20 @@ bool SidebarPresenter::renderInspector(EditorApp* liveApp, const ViewportState& 
                   b.height());
     }
     queuedMutation = renderTransformPanel(liveApp);
-    queuedMutation = RenderStrokeControlsPanel(liveApp) || queuedMutation;
-    RenderInspectorSection("XML attributes", "##inspector_xml_attributes",
-                           inspectorSnapshot_.xmlAttributes);
-    RenderInspectorSection("Computed style", "##inspector_computed_style",
-                           inspectorSnapshot_.computedStyle);
+    // Fill / Stroke sections (QA-F15) sit directly under the Position region.
+    // The shell owns their content (paint resolution, color pickers); the
+    // callback keeps them in the correct inspector order without pulling the
+    // paint machinery into the presenter.
+    if (renderPaintSections) {
+      queuedMutation = renderPaintSections() || queuedMutation;
+    }
+    // Path operations render ABOVE the XML attributes (QA-F12).
     queuedMutation = RenderPathOperationsPanel(liveApp, iconTextureProvider) || queuedMutation;
+    RenderInspectorSection("XML attributes", "##inspector_xml_attributes",
+                           inspectorSnapshot_.xmlAttributes, /*defaultOpen=*/true);
+    // Computed style is a two-column table, collapsed by default (QA-F11).
+    RenderInspectorSection("Computed style", "##inspector_computed_style",
+                           inspectorSnapshot_.computedStyle, /*defaultOpen=*/false);
   }
   ImGui::Separator();
   ImGui::Text("Zoom: %.0f%%", viewport.zoom * 100.0);
@@ -634,8 +707,11 @@ bool SidebarPresenter::renderTransformPanel(EditorApp* liveApp) {
   const bool liveEditable = liveElement.has_value() && !IsLocked(*liveElement);
   const bool decomposable = snapshotDecomposed.has_value();
 
+  // QA-F16: one "Position" region carrying X/Y, a Rotation row (degree field
+  // plus rotate-90 / flip buttons), and the W/H dimensions (no separate Layout
+  // section). No alignment row (scoped out).
   ImGui::Separator();
-  ImGui::TextUnformatted("Transform");
+  ImGui::TextUnformatted("Position");
 
   const bool canEditPosition = liveEditable && decomposable && bounds.has_value();
   const bool canEditWidth =
@@ -643,6 +719,7 @@ bool SidebarPresenter::renderTransformPanel(EditorApp* liveApp) {
   const bool canEditHeight =
       canEditPosition && static_cast<double>(bounds->height()) > kMinimumSpanForScale;
   const bool canEditRotation = liveEditable && decomposable;
+  const bool canDiscrete = liveEditable && bounds.has_value();
 
   const float xValue = bounds.has_value() ? static_cast<float>(bounds->topLeft.x) : 0.0f;
   const float yValue = bounds.has_value() ? static_cast<float>(bounds->topLeft.y) : 0.0f;
@@ -653,6 +730,37 @@ bool SidebarPresenter::renderTransformPanel(EditorApp* liveApp) {
                                                        MathConstants<double>::kRadToDeg)
                                   : 0.0f;
 
+  // A rotate-90 / flip button: an ImGui button with a theme-tinted vector
+  // glyph overlaid, wired to the discrete transform path on click. `glyph`:
+  // 0 = rotate 90, 1 = flip horizontal, 2 = flip vertical.
+  const auto discreteButton = [&](DiscreteTransform kind, const char* id, const char* tooltip,
+                                  int glyph) -> bool {
+    const float size = ImGui::GetFrameHeight();
+    ImGui::BeginDisabled(!canDiscrete);
+    const bool clicked = ImGui::Button(id, ImVec2(size, size));
+    ImGui::EndDisabled();
+    const ImVec2 bmin = ImGui::GetItemRectMin();
+    const ImVec2 bmax = ImGui::GetItemRectMax();
+    const ImVec2 glyphCenter((bmin.x + bmax.x) * 0.5f, (bmin.y + bmax.y) * 0.5f);
+    const float glyphRadius = size * 0.26f;
+    const ImU32 glyphColor =
+        ImGui::GetColorU32(canDiscrete ? ImGuiCol_Text : ImGuiCol_TextDisabled);
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    if (glyph == 0) {
+      DrawRotate90Glyph(drawList, glyphCenter, glyphRadius, glyphColor);
+    } else {
+      DrawFlipGlyph(drawList, glyphCenter, glyphRadius, glyphColor, /*horizontal=*/glyph == 1);
+    }
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      ImGui::SetTooltip("%s", tooltip);
+    }
+    if (clicked && liveApp != nullptr && canDiscrete) {
+      return applyDiscreteTransform(*liveApp, kind);
+    }
+    return false;
+  };
+
+  // Position row: X and Y side by side.
   queuedMutation =
       renderTransformFieldDrag(liveApp, TransformField::PositionX, "X##transform_x", xValue,
                                canEditPosition, "Move element", 1.0f, "%.2f") ||
@@ -662,6 +770,26 @@ bool SidebarPresenter::renderTransformPanel(EditorApp* liveApp) {
       renderTransformFieldDrag(liveApp, TransformField::PositionY, "Y##transform_y", yValue,
                                canEditPosition, "Move element", 1.0f, "%.2f") ||
       queuedMutation;
+
+  // Rotation row: a degree field plus rotate-90 / flip-horizontal / flip-vertical.
+  queuedMutation =
+      renderTransformFieldDrag(liveApp, TransformField::Rotation, "Rotation##transform_r",
+                               rotationValue, canEditRotation, "Rotate element", 0.5f, "%.1f") ||
+      queuedMutation;
+  ImGui::SameLine();
+  queuedMutation = discreteButton(DiscreteTransform::Rotate90, "##transform_rotate90",
+                                  "Rotate 90 degrees", 0) ||
+                   queuedMutation;
+  ImGui::SameLine();
+  queuedMutation = discreteButton(DiscreteTransform::FlipHorizontal, "##transform_flip_h",
+                                  "Flip horizontal", 1) ||
+                   queuedMutation;
+  ImGui::SameLine();
+  queuedMutation = discreteButton(DiscreteTransform::FlipVertical, "##transform_flip_v",
+                                  "Flip vertical", 2) ||
+                   queuedMutation;
+
+  // Dimensions row: W and H, combined into the same Position region (QA-F16).
   queuedMutation =
       renderTransformFieldDrag(liveApp, TransformField::Width, "W##transform_w", widthValue,
                                canEditWidth, "Resize element", 1.0f, "%.2f") ||
@@ -670,10 +798,6 @@ bool SidebarPresenter::renderTransformPanel(EditorApp* liveApp) {
   queuedMutation =
       renderTransformFieldDrag(liveApp, TransformField::Height, "H##transform_h", heightValue,
                                canEditHeight, "Resize element", 1.0f, "%.2f") ||
-      queuedMutation;
-  queuedMutation =
-      renderTransformFieldDrag(liveApp, TransformField::Rotation, "Rotation##transform_r",
-                               rotationValue, canEditRotation, "Rotate element", 0.5f, "%.1f") ||
       queuedMutation;
   if (!decomposable) {
     ImGui::TextDisabled("Matrix has skew; edit the raw values below.");
@@ -958,6 +1082,89 @@ void SidebarPresenter::commitTransformEdit(EditorApp& liveApp) {
         .sourceTransformAttributeValue = state.sourceTransformAttributeValue,
     });
   }
+}
+
+bool SidebarPresenter::applyDiscreteTransform(EditorApp& liveApp, DiscreteTransform kind) {
+  // Land any in-progress drag edit first so its undo entry isn't lost.
+  if (transformEdit_.has_value()) {
+    commitTransformEdit(liveApp);
+  }
+  if (liveApp.selectedElements().size() != 1u) {
+    return false;
+  }
+  const svg::SVGElement element = liveApp.selectedElements().front();
+  if (IsLocked(element)) {
+    return false;
+  }
+
+  // Read the baseline under scoped read access, exactly as beginTransformEdit
+  // does (§concurrent-dom): transform, bounds, and the verbatim source bytes.
+  Transform2d startTransform;
+  std::optional<Box2d> startBounds;
+  std::optional<RcString> sourceTransformAttributeValue;
+  bool isGraphics = false;
+  element.withReadAccess([&](svg::DocumentReadAccess&, EntityHandle) {
+    isGraphics = element.isa<svg::SVGGraphicsElement>();
+    if (!isGraphics) {
+      return;
+    }
+    startTransform = element.cast<svg::SVGGraphicsElement>().transform();
+    if (element.isa<svg::SVGGeometryElement>()) {
+      startBounds = element.cast<svg::SVGGeometryElement>().worldBounds();
+    }
+    sourceTransformAttributeValue = element.getAttribute("transform");
+  });
+  if (!isGraphics) {
+    return false;
+  }
+
+  // Rotate / flip about the bounds center (falling back to the element origin
+  // when it has no geometric bounds), composing in document space onto the
+  // captured transform - the same convention as composeFieldTransform.
+  const Vector2d center = startBounds.has_value()
+                              ? (startBounds->topLeft + startBounds->bottomRight) * 0.5
+                              : startTransform.translation();
+  Transform2d local(Transform2d::uninitialized);
+  switch (kind) {
+    case DiscreteTransform::Rotate90:
+      local = Transform2d::Rotate(90.0 * MathConstants<double>::kDegToRad);
+      break;
+    case DiscreteTransform::FlipHorizontal: local = Transform2d::Scale(-1.0, 1.0); break;
+    case DiscreteTransform::FlipVertical: local = Transform2d::Scale(1.0, -1.0); break;
+  }
+  const Transform2d newTransform =
+      startTransform * Transform2d::Translate(-center) * local * Transform2d::Translate(center);
+  if (std::equal(std::begin(newTransform.data), std::end(newTransform.data),
+                 std::begin(startTransform.data))) {
+    return false;
+  }
+
+  const std::optional<AttributeWritebackTarget> writebackTarget =
+      captureAttributeWritebackTarget(element);
+  liveApp.applyMutation(EditorCommand::SetTransformCommand(element, newTransform));
+
+  const char* undoLabel = kind == DiscreteTransform::Rotate90 ? "Rotate 90 degrees"
+                          : kind == DiscreteTransform::FlipHorizontal ? "Flip horizontal"
+                                                                      : "Flip vertical";
+  UndoSnapshot before{.element = element,
+                      .transform = startTransform,
+                      .writebackTarget = writebackTarget,
+                      .sourceTransformAttributeValue = sourceTransformAttributeValue,
+                      .restoreSourceTransformAttributeValue = true};
+  UndoSnapshot after{.element = element,
+                     .transform = newTransform,
+                     .writebackTarget = writebackTarget,
+                     .sourceTransformAttributeValue = sourceTransformAttributeValue};
+  liveApp.undoTimeline().record(undoLabel, std::move(before), std::move(after));
+
+  if (writebackTarget.has_value()) {
+    liveApp.enqueueTransformWriteback(EditorApp::CompletedTransformWriteback{
+        .target = *writebackTarget,
+        .transform = newTransform,
+        .sourceTransformAttributeValue = sourceTransformAttributeValue,
+    });
+  }
+  return true;
 }
 
 }  // namespace donner::editor

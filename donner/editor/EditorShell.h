@@ -54,6 +54,10 @@ class ReproRecorder;
 struct ReproAction;
 }  // namespace donner::editor::repro
 
+namespace donner::editor::internal {
+struct ToolbarPaintSlotState;
+}  // namespace donner::editor::internal
+
 namespace donner::editor {
 
 #ifdef DONNER_EDITOR_WGPU
@@ -355,6 +359,20 @@ private:
                                             const ImVec2& contentRegion) const;
   void renderToolPalette(const ImVec2& paneOrigin, const ImVec2& contentRegion);
   void renderFillStrokeToolbarWidget();
+
+  /// Render the inspector's Fill and Stroke sections (QA-F15), passed to
+  /// `SidebarPresenter::renderInspector` as its paint-section callback so they
+  /// land in the correct inspector order. Returns true if a paint edit queued
+  /// a document mutation.
+  bool renderInspectorPaintSections();
+
+  /// Render one inspector paint section (Fill or Stroke): the header add
+  /// button plus a `[swatch | hex | opacity | eye | minus]` row, and, for the
+  /// stroke, a Weight field and a dash-pattern selector.
+  bool renderInspectorPaintSection(const char* title, const char* paintAttr,
+                                   const char* opacityAttr,
+                                   const internal::ToolbarPaintSlotState& slot, bool canEdit,
+                                   double opacity, bool isStroke, double strokeWidth, int dashIndex);
   void renderSidebars();
   void renderSourcePaneSplitter(float windowWidth, float paneOriginY, float paneHeight,
                                 float sourcePaneWidth);
