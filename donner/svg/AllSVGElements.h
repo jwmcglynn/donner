@@ -12,6 +12,7 @@
 #include "donner/svg/SVGCircleElement.h"               // IWYU pragma: export
 #include "donner/svg/SVGClipPathElement.h"             // IWYU pragma: export
 #include "donner/svg/SVGDefsElement.h"                 // IWYU pragma: export
+#include "donner/svg/SVGDescElement.h"                 // IWYU pragma: export
 #include "donner/svg/SVGEllipseElement.h"              // IWYU pragma: export
 #include "donner/svg/SVGFEBlendElement.h"              // IWYU pragma: export
 #include "donner/svg/SVGFEColorMatrixElement.h"        // IWYU pragma: export
@@ -45,6 +46,7 @@
 #include "donner/svg/SVGLinearGradientElement.h"       // IWYU pragma: export
 #include "donner/svg/SVGMarkerElement.h"               // IWYU pragma: export
 #include "donner/svg/SVGMaskElement.h"                 // IWYU pragma: export
+#include "donner/svg/SVGMetadataElement.h"             // IWYU pragma: export
 #include "donner/svg/SVGPathElement.h"                 // IWYU pragma: export
 #include "donner/svg/SVGPatternElement.h"              // IWYU pragma: export
 #include "donner/svg/SVGPolygonElement.h"              // IWYU pragma: export
@@ -59,6 +61,7 @@
 #include "donner/svg/SVGTSpanElement.h"                // IWYU pragma: export
 #include "donner/svg/SVGTextElement.h"                 // IWYU pragma: export
 #include "donner/svg/SVGTextPathElement.h"             // IWYU pragma: export
+#include "donner/svg/SVGTitleElement.h"                // IWYU pragma: export
 #include "donner/svg/SVGUseElement.h"                  // IWYU pragma: export
 
 // Types that are not fully-fledged SVG elements by themselves, so they aren't included in \ref
@@ -76,6 +79,7 @@ using AllSVGElements = entt::type_list<  //
     SVGCircleElement,                    //
     SVGClipPathElement,                  //
     SVGDefsElement,                      //
+    SVGDescElement,                      //
     SVGEllipseElement,                   //
     SVGFEBlendElement,                   //
     SVGFEColorMatrixElement,             //
@@ -109,6 +113,7 @@ using AllSVGElements = entt::type_list<  //
     SVGLinearGradientElement,            //
     SVGMarkerElement,                    //
     SVGMaskElement,                      //
+    SVGMetadataElement,                  //
     SVGStopElement,                      //
     SVGRadialGradientElement,            //
     SVGPathElement,                      //
@@ -122,6 +127,7 @@ using AllSVGElements = entt::type_list<  //
     SVGSymbolElement,                    //
     SVGTextElement,                      //
     SVGTextPathElement,                  //
+    SVGTitleElement,                     //
     SVGTSpanElement,                     //
     SVGUseElement>;
 

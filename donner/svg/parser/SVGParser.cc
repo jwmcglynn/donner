@@ -13,6 +13,7 @@
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/svg/AllSVGElements.h"
 #include "donner/svg/SVGElement.h"
+#include "donner/svg/components/DescriptiveTextComponent.h"
 #include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/parser/AttributeParser.h"
 #include "donner/svg/parser/details/SVGParserContext.h"
@@ -187,6 +188,57 @@ std::optional<ParseDiagnostic> ParseNodeContents<SVGTextPathElement>(SVGParserCo
       element.advanceTextChunk();
     }
   }
+  return std::nullopt;
+}
+
+/**
+ * Concatenate the direct text/CDATA children of a descriptive element (\ref xml_title, \ref
+ * xml_desc, \ref xml_metadata) and store them on a \ref components::DescriptiveTextComponent so the
+ * text can later be surfaced through the DOM. These elements are never rendered, so the text is
+ * retained purely for accessibility and metadata tooling.
+ *
+ * @param element The descriptive element to capture text for.
+ * @param node The XML node containing the text content.
+ */
+template <typename T>
+void ParseDescriptiveText(T element, const XMLNode& node) {
+  std::string combined;
+  for (auto child = node.firstChild(); child; child = child->nextSibling()) {
+    if (child->type() == XMLNode::Type::Data || child->type() == XMLNode::Type::CData) {
+      if (auto value = child->value()) {
+        combined += value.value();
+      }
+    }
+  }
+
+  if (!combined.empty()) {
+    auto& component =
+        element.entityHandle().template get_or_emplace<components::DescriptiveTextComponent>();
+    component.text = RcString(combined);
+  }
+}
+
+template <>
+std::optional<ParseDiagnostic> ParseNodeContents<SVGTitleElement>(SVGParserContext& context,
+                                                                  SVGTitleElement element,
+                                                                  const XMLNode& node) {
+  ParseDescriptiveText(element, node);
+  return std::nullopt;
+}
+
+template <>
+std::optional<ParseDiagnostic> ParseNodeContents<SVGDescElement>(SVGParserContext& context,
+                                                                 SVGDescElement element,
+                                                                 const XMLNode& node) {
+  ParseDescriptiveText(element, node);
+  return std::nullopt;
+}
+
+template <>
+std::optional<ParseDiagnostic> ParseNodeContents<SVGMetadataElement>(SVGParserContext& context,
+                                                                     SVGMetadataElement element,
+                                                                     const XMLNode& node) {
+  ParseDescriptiveText(element, node);
   return std::nullopt;
 }
 
