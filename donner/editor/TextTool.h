@@ -89,6 +89,20 @@ public:
   /// True while a frame handle gesture (frame resize or rotate) is active.
   /// The editing session stays open underneath it.
   [[nodiscard]] bool isAdjustingFrame() const { return frameGesture_ != FrameGesture::None; }
+  /// True while the active frame gesture is a rotate (subset of
+  /// `isAdjustingFrame`); drives the rotate cursor during the drag.
+  [[nodiscard]] bool isRotatingFrame() const { return frameGesture_ == FrameGesture::Rotate; }
+  /// Corner of the active frame gesture, for cursor feedback.
+  [[nodiscard]] SelectionTransformCorner frameCorner() const { return frameCorner_; }
+
+  /// Hit-test the session frame's transform handles at @p documentPoint for
+  /// hover cursor feedback: `Resize` over a corner handle, `Rotate` in the
+  /// ring outside it, `None` elsewhere or when no session is editing. Reads
+  /// the session's computed ink bounds for point text — call only while the
+  /// async render worker is idle.
+  [[nodiscard]] SelectionTransformHandleIntent frameHandleIntentAt(const Vector2d& documentPoint,
+                                                                   double pixelsPerDocUnit,
+                                                                   bool includeRotate) const;
   /// The box being dragged, for drag-preview chrome.
   [[nodiscard]] const std::optional<Box2d>& dragBoxDoc() const { return dragBoxDoc_; }
 

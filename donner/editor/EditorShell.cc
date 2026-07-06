@@ -2437,6 +2437,32 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       rotateCursorSet_.clearIfActive();
       SetImGuiOsCursorManagementEnabled(true);
     }
+  } else if (textToolActive && !rotateCursorLocked && toolEligible) {
+    // Text-tool cursor feedback: resize/rotate cursors over the session
+    // frame's handles (held through an active frame gesture), and the
+    // I-beam everywhere else on the canvas.
+    SelectionTransformHandleIntent textFrameIntent;
+    if (textTool_.isAdjustingFrame()) {
+      textFrameIntent.kind = textTool_.isRotatingFrame() ? SelectionTransformHandleKind::Rotate
+                                                         : SelectionTransformHandleKind::Resize;
+      textFrameIntent.corner = textTool_.frameCorner();
+    } else if (textTool_.isEditing() && !ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+               !renderCoordinator_.asyncRenderer().isBusy()) {
+      textFrameIntent = textTool_.frameHandleIntentAt(
+          screenToDocument(ImGui::GetMousePos()),
+          interactionController_.viewport().pixelsPerDocUnit(),
+          /*includeRotate=*/!ImGui::GetIO().KeyShift);
+    }
+    if (textFrameIntent.kind == SelectionTransformHandleKind::Rotate &&
+        rotateCursorSet_.setRotateCursor(textFrameIntent.corner)) {
+      SetImGuiOsCursorManagementEnabled(false);
+    } else {
+      rotateCursorSet_.clearIfActive();
+      SetImGuiOsCursorManagementEnabled(true);
+      ImGui::SetMouseCursor(textFrameIntent.kind != SelectionTransformHandleKind::None
+                                ? CursorForTransformHandleIntent(textFrameIntent)
+                                : ImGuiMouseCursor_TextInput);
+    }
   } else if (!rotateCursorLocked && !toolEligible && !showPanCursor) {
     rotateCursorSet_.clearIfActive();
     SetImGuiOsCursorManagementEnabled(true);

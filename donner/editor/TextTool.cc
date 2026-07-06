@@ -425,20 +425,35 @@ std::optional<Box2d> TextTool::sessionFrameLocal() const {
   return inkLocal;
 }
 
-bool TextTool::beginFrameGestureAtPoint(const Vector2d& documentPoint, MouseModifiers modifiers) {
+SelectionTransformHandleIntent TextTool::frameHandleIntentAt(const Vector2d& documentPoint,
+                                                             double pixelsPerDocUnit,
+                                                             bool includeRotate) const {
+  if (state_ != State::Editing || !sessionText_.has_value()) {
+    return {};
+  }
   const std::optional<Box2d> frameLocal = sessionFrameLocal();
   if (!frameLocal.has_value()) {
-    return false;
+    return {};
   }
 
   const Box2d frameDoc = FrameDocAabb(documentFromText_, *frameLocal);
   const std::array<Box2d, 1> bounds{frameDoc};
-  const SelectionTransformHandleIntent intent = HitTestSelectionTransformHandles(
-      std::span<const Box2d>(bounds), documentPoint, modifiers.pixelsPerDocUnit,
-      /*includeRotate=*/!modifiers.shift);
+  return HitTestSelectionTransformHandles(std::span<const Box2d>(bounds), documentPoint,
+                                          pixelsPerDocUnit, includeRotate);
+}
+
+bool TextTool::beginFrameGestureAtPoint(const Vector2d& documentPoint, MouseModifiers modifiers) {
+  const SelectionTransformHandleIntent intent = frameHandleIntentAt(
+      documentPoint, modifiers.pixelsPerDocUnit, /*includeRotate=*/!modifiers.shift);
   if (intent.kind == SelectionTransformHandleKind::None) {
     return false;
   }
+
+  const std::optional<Box2d> frameLocal = sessionFrameLocal();
+  if (!frameLocal.has_value()) {
+    return false;
+  }
+  const Box2d frameDoc = FrameDocAabb(documentFromText_, *frameLocal);
 
   frameStartLocal_ = *frameLocal;
   frameStartDocumentFromText_ = documentFromText_;

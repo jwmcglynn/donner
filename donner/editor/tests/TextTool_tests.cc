@@ -651,6 +651,49 @@ TEST_F(TextToolTest, RotateRingRotatesElementKeepingFrameAttributes) {
   EXPECT_THAT(attr(element, "font-size"), Eq("32"));
 }
 
+TEST_F(TextToolTest, FrameHandleIntentReportsResizeRotateAndNoneForHover) {
+  // Box (10,20)-(70,120); the intent drives the shell's hover cursor.
+  tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(70.0, 120.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(70.0, 120.0));
+  ASSERT_TRUE(tool.isEditing());
+  type("Hi");
+
+  const auto intentAt = [&](const Vector2d& documentPoint) {
+    return tool.frameHandleIntentAt(documentPoint, /*pixelsPerDocUnit=*/1.0,
+                                    /*includeRotate=*/true);
+  };
+
+  // On the bottom-right corner handle.
+  EXPECT_EQ(intentAt(Vector2d(70.0, 120.0)).kind, SelectionTransformHandleKind::Resize);
+  EXPECT_EQ(intentAt(Vector2d(70.0, 120.0)).corner, SelectionTransformCorner::BottomRight);
+  // In the rotate ring outside the corner.
+  EXPECT_EQ(intentAt(Vector2d(84.0, 134.0)).kind, SelectionTransformHandleKind::Rotate);
+  // Inside the frame, away from every handle.
+  EXPECT_EQ(intentAt(Vector2d(40.0, 70.0)).kind, SelectionTransformHandleKind::None);
+  // Far outside.
+  EXPECT_EQ(intentAt(Vector2d(300.0, 300.0)).kind, SelectionTransformHandleKind::None);
+
+  // No rotate intents when the ring is excluded (shift held).
+  EXPECT_EQ(tool.frameHandleIntentAt(Vector2d(84.0, 134.0), 1.0, /*includeRotate=*/false).kind,
+            SelectionTransformHandleKind::None);
+}
+
+TEST_F(TextToolTest, RotatingFrameExposesGestureForCursorLock) {
+  tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(70.0, 120.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(70.0, 120.0));
+  ASSERT_TRUE(tool.isEditing());
+  type("Hi");
+
+  tool.onMouseDown(app, Vector2d(84.0, 134.0), MouseModifiers{});
+  ASSERT_TRUE(tool.isAdjustingFrame());
+  EXPECT_TRUE(tool.isRotatingFrame());
+  EXPECT_EQ(tool.frameCorner(), SelectionTransformCorner::BottomRight);
+  tool.onMouseUp(app, Vector2d(84.0, 134.0));
+  EXPECT_FALSE(tool.isRotatingFrame());
+}
+
 TEST_F(TextToolTest, ClickInsideFrameOffGlyphsParksCaretAtEnd) {
   tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
   tool.onMouseMove(app, Vector2d(70.0, 120.0), /*buttonHeld=*/true);
