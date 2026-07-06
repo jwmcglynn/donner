@@ -8,7 +8,7 @@ namespace donner::editor {
 
 namespace {
 
-constexpr double kHandleSizePixels = 9.0;
+constexpr double kHandleSizePixels = kSelectionHandleSizePixels;
 constexpr double kRotateOuterRadiusPixels = 24.0;
 constexpr double kRotateInnerRadiusPixels = 10.0;
 constexpr double kMinPixelsPerDocUnit = 1e-9;
@@ -133,6 +133,36 @@ SelectionTransformHandleIntent HitTestSelectionTransformHandles(
   }
 
   return {};
+}
+
+std::array<Vector2d, 4> FrameCornersDoc(const Transform2d& documentFromText,
+                                       const Box2d& frameLocal) {
+  const std::array<Vector2d, 4> cornersLocal = {
+      frameLocal.topLeft, Vector2d(frameLocal.bottomRight.x, frameLocal.topLeft.y),
+      frameLocal.bottomRight, Vector2d(frameLocal.topLeft.x, frameLocal.bottomRight.y)};
+  std::array<Vector2d, 4> cornersDoc;
+  for (std::size_t i = 0; i < cornersLocal.size(); ++i) {
+    cornersDoc[i] = documentFromText.transformPosition(cornersLocal[i]);
+  }
+  return cornersDoc;
+}
+
+SelectionTransformHandleIntent HitTestOrientedFrameHandles(const Box2d& frameLocal,
+                                                           const Transform2d& documentFromText,
+                                                           const Vector2d& documentPoint,
+                                                           double pixelsPerDocUnit,
+                                                           bool includeRotate) {
+  // Hit-test in the element's LOCAL space, where the frame is axis-aligned.
+  // On a rotated frame this makes the handle zones (and the rotate ring)
+  // track the oriented corners instead of the axis-aligned envelope, and it
+  // keeps the returned corner identity in the frame's local space - exactly
+  // the space a resize gesture operates in.
+  const Vector2d localPoint = documentFromText.inverse().transformPosition(documentPoint);
+  const double docUnitsPerLocalUnit = documentFromText.transformVector(Vector2d(1.0, 0.0)).length();
+  const double pixelsPerLocalUnit = pixelsPerDocUnit * docUnitsPerLocalUnit;
+  const std::array<Box2d, 1> bounds{frameLocal};
+  return HitTestSelectionTransformHandles(std::span<const Box2d>(bounds), localPoint,
+                                          pixelsPerLocalUnit, includeRotate);
 }
 
 double PixelsPerDocUnitFromTransform(const Transform2d& canvasFromDoc) {

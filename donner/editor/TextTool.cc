@@ -128,22 +128,6 @@ std::optional<double> ParseNumericAttribute(const svg::SVGElement& element, std:
   return result.result().number;
 }
 
-/// Document-space corners (local TL, TR, BR, BL order) of @p frameLocal
-/// mapped through @p documentFromText. An oriented quad: for a rotated text
-/// element the corners carry the rotation instead of collapsing to the
-/// axis-aligned envelope.
-std::array<Vector2d, 4> FrameCornersDoc(const Transform2d& documentFromText,
-                                        const Box2d& frameLocal) {
-  const std::array<Vector2d, 4> cornersLocal = {
-      frameLocal.topLeft, Vector2d(frameLocal.bottomRight.x, frameLocal.topLeft.y),
-      frameLocal.bottomRight, Vector2d(frameLocal.topLeft.x, frameLocal.bottomRight.y)};
-  std::array<Vector2d, 4> cornersDoc;
-  for (std::size_t i = 0; i < cornersLocal.size(); ++i) {
-    cornersDoc[i] = documentFromText.transformPosition(cornersLocal[i]);
-  }
-  return cornersDoc;
-}
-
 /// Map a DOM character index (which counts rendered glyphs only) back to a
 /// logical caret index into @p content (which also stores '\n' hard breaks).
 std::size_t LogicalIndexForDomChar(const std::u32string& content, std::size_t domChar) {
@@ -444,17 +428,13 @@ SelectionTransformHandleIntent TextTool::frameHandleIntentAt(const Vector2d& doc
     return {};
   }
 
-  // Hit-test in the text's LOCAL space, where the frame is axis-aligned.
-  // On a rotated frame this makes the handle zones (and the rotate ring)
-  // track the oriented corners instead of the axis-aligned envelope, and it
-  // keeps the returned corner identity in the frame's local space - which is
-  // exactly the space the resize gesture operates in.
-  const Vector2d localPoint = documentFromText_.inverse().transformPosition(documentPoint);
-  const double docUnitsPerLocalUnit = documentFromText_.transformVector(Vector2d(1.0, 0.0)).length();
-  const double pixelsPerLocalUnit = pixelsPerDocUnit * docUnitsPerLocalUnit;
-  const std::array<Box2d, 1> bounds{*frameLocal};
-  return HitTestSelectionTransformHandles(std::span<const Box2d>(bounds), localPoint,
-                                          pixelsPerLocalUnit, includeRotate);
+  // Shared local-space oriented hit-test (also used by the select tool's
+  // oriented `<text>` frame): on a rotated frame the handle zones and rotate
+  // ring track the oriented corners, and the returned corner identity is in
+  // the frame's local space - exactly the space the resize gesture operates
+  // in.
+  return HitTestOrientedFrameHandles(*frameLocal, documentFromText_, documentPoint,
+                                     pixelsPerDocUnit, includeRotate);
 }
 
 bool TextTool::beginFrameGestureAtPoint(const Vector2d& documentPoint, MouseModifiers modifiers) {

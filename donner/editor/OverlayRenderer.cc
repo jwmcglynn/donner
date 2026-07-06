@@ -44,11 +44,6 @@ constexpr double kHoverStrokeLogicalPixels = 1.5;
 /// Marquee stroke thickness, in logical UI pixels.
 constexpr double kMarqueeStrokeLogicalPixels = 1.5;
 
-/// Corner handle square size for the text session frame, in logical UI
-/// pixels. Matches SelectionTransformHandles' kHandleSizePixels so the text
-/// frame's handles read identically to the select tool's.
-constexpr double kHandleSizeLogicalPixels = 9.0;
-
 /// Selected path anchor square size, in logical UI pixels.
 constexpr double kPathAnchorLogicalPixels = 5.0;
 
@@ -764,7 +759,32 @@ SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
     return snapshot;
   }
 
-  if (activeBoundsPreview.has_value() && !snapshot.aabbsDoc.empty()) {
+  // W12: a single `<text>` whose frame is oriented (its transform rotates or
+  // skews it) gets an ORIENTED selection frame + handles derived from the live
+  // DOM, so the select-tool frame follows the text line at its rotation. Read
+  // from the live document each frame, it also tracks an in-progress
+  // rotate/resize (whose transform mutations are applied to the DOM per frame)
+  // and, after the gesture ends, keeps the frame oriented instead of snapping
+  // back to the axis-aligned envelope. It therefore takes precedence over the
+  // axis-aligned rotate preview below.
+  const std::optional<TextFramePlacement> orientedTextPlacement =
+      snapshot.aabbsDoc.empty() ? std::nullopt : SingleOrientedTextSelectionPlacement(selection);
+  if (orientedTextPlacement.has_value()) {
+    std::array<Vector2d, 4> representedCorners = FrameCornersDoc(
+        orientedTextPlacement->documentFromText, orientedTextPlacement->frameLocal);
+    for (Vector2d& corner : representedCorners) {
+      corner = representedDocumentFromLiveDocument.transformPosition(corner);
+    }
+    snapshot.orientedBoundsDoc = CullOrientedBox(
+        SelectionChromeSnapshot::OrientedBox{.cornersDoc = representedCorners}, cullRectDoc);
+    if (!snapshot.orientedBoundsDoc.has_value()) {
+      snapshot.aabbsDoc.clear();
+    }
+    snapshot.handleBoxesDoc.reserve(representedCorners.size());
+    for (const Vector2d& corner : representedCorners) {
+      snapshot.handleBoxesDoc.push_back(HandleBoxForCorner(corner, scale));
+    }
+  } else if (activeBoundsPreview.has_value() && !snapshot.aabbsDoc.empty()) {
     const auto corners = TransformedBoxCorners(activeBoundsPreview->startBoundsDoc,
                                                activeBoundsPreview->documentFromStartDocument);
     std::array<Vector2d, 4> representedCorners;
@@ -981,17 +1001,17 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
     frameShape.parentFromEntity = Transform2d();
     renderer.drawPath(frameShape, framePaint.strokeParams);
 
-    // Screen-stable handle squares centered on the oriented corners. Sized
-    // to match SelectionTransformHandleBoxesForBounds (9 logical px) via the
-    // selection stroke's world width (1.25 logical px).
+    // Screen-stable handle squares centered on the oriented corners. QA-F4:
+    // size them from the same shared constant and viewport scale as the select
+    // tool's handles (HandleBoxForCorner / SelectionTransformHandleBoxesFor-
+    // Bounds) so the text frame's handles read identically to the select
+    // tool's on every display, including HiDPI. (Previously they were derived
+    // from the device-pixel-scaled stroke width and rendered visibly larger.)
     const svg::PaintParams handlePaint = MakeHandlePaint(snapshot.selectionStrokeWidthWorld);
     renderer.setPaint(handlePaint);
-    const double halfHandleWorld = snapshot.selectionStrokeWidthWorld *
-                                   (kHandleSizeLogicalPixels * 0.5 / kSelectionStrokeLogicalPixels);
-    const Vector2d halfHandle(halfHandleWorld, halfHandleWorld);
+    const double handleScale = LinearScale(snapshot.canvasFromDoc);
     for (const Vector2d& corner : *snapshot.textFrameCornersDoc) {
-      renderer.drawRect(Box2d(corner - halfHandle, corner + halfHandle),
-                        handlePaint.strokeParams);
+      renderer.drawRect(HandleBoxForCorner(corner, handleScale), handlePaint.strokeParams);
     }
   }
   if (snapshot.textCaretDoc.has_value()) {

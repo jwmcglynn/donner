@@ -88,6 +88,75 @@ std::optional<Transform2d> RotateTransform(const Vector2d& center, double startA
   return rotatedDocumentFromStartDocument;
 }
 
+/// Document-space point of @p corner among oriented frame @p corners (local
+/// TL, TR, BR, BL order - matching \ref FrameCornersDoc).
+Vector2d OrientedCornerPoint(const std::array<Vector2d, 4>& corners,
+                             SelectionTransformCorner corner) {
+  switch (corner) {
+    case SelectionTransformCorner::TopLeft: return corners[0];
+    case SelectionTransformCorner::TopRight: return corners[1];
+    case SelectionTransformCorner::BottomRight: return corners[2];
+    case SelectionTransformCorner::BottomLeft: return corners[3];
+  }
+  return corners[0];
+}
+
+/// Resize transform for an ORIENTED frame (a rotated `<text>` selected with
+/// the select tool). Unlike \ref ResizeTransform, which scales along the
+/// document axes and would shear a rotated frame, this scales along the
+/// frame's own (rotated) local axes about the anchor corner, so the frame
+/// grows along the text line and stays oriented. @p startCorners are the
+/// oriented frame corners at gesture start (\ref FrameCornersDoc order).
+std::optional<Transform2d> OrientedResizeTransform(const std::array<Vector2d, 4>& startCorners,
+                                                   SelectionTransformCorner corner,
+                                                   const Vector2d& documentPoint,
+                                                   bool preserveAspectRatio, bool resizeFromCenter) {
+  const Vector2d topEdge = startCorners[1] - startCorners[0];
+  const Vector2d sideEdge = startCorners[3] - startCorners[0];
+  const double width = topEdge.length();
+  const double height = sideEdge.length();
+  if (width < kMinScaleDenominator || height < kMinScaleDenominator) {
+    return std::nullopt;
+  }
+  // Unit document-space directions of the frame's local +x and +y axes.
+  const Vector2d ex = topEdge / width;
+  const Vector2d ey = sideEdge / height;
+
+  const Vector2d center = (startCorners[0] + startCorners[2]) * 0.5;
+  const Vector2d anchor =
+      resizeFromCenter
+          ? center
+          : OrientedCornerPoint(startCorners, OppositeSelectionTransformCorner(corner));
+  const Vector2d startVector = OrientedCornerPoint(startCorners, corner) - anchor;
+  const Vector2d currentVector = documentPoint - anchor;
+  const double startX = startVector.dot(ex);
+  const double startY = startVector.dot(ey);
+  if (std::abs(startX) < kMinScaleDenominator || std::abs(startY) < kMinScaleDenominator) {
+    return std::nullopt;
+  }
+
+  double scaleX = currentVector.dot(ex) / startX;
+  double scaleY = currentVector.dot(ey) / startY;
+  if (preserveAspectRatio) {
+    const double uniformScale = std::abs(scaleX) >= std::abs(scaleY) ? scaleX : scaleY;
+    scaleX = uniformScale;
+    scaleY = uniformScale;
+  }
+
+  // Scale along the oriented axes about the anchor: rotate the frame's axes
+  // onto the document axes, scale, then rotate back. For an axis-aligned frame
+  // (theta = 0) this reduces exactly to `ResizeTransform`.
+  const double theta = std::atan2(ex.y, ex.x);
+  const Transform2d orientedScale = Transform2d::Rotate(-theta) *
+                                    Transform2d::Scale(scaleX, scaleY) * Transform2d::Rotate(theta);
+  const Transform2d resizedDocumentFromStartDocument =
+      TransformDocumentAroundPoint(anchor, orientedScale);
+  if (!IsFinite(resizedDocumentFromStartDocument)) {
+    return std::nullopt;
+  }
+  return resizedDocumentFromStartDocument;
+}
+
 /// Elements that don't contribute geometry to the rendered tree.
 /// `<defs>` / `<title>` / `<desc>` / `<metadata>` / `<style>` / `<script>`
 /// live under an SVG document but paint nothing - they must be excluded
@@ -335,10 +404,21 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
 
   const auto selectedBoundsDoc =
       SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(editor.selectedElements()));
+  // A single rotated `<text>` selection carries an ORIENTED frame (W12): its
+  // handles track the oriented corners, so hit-test in the text's local space
+  // and drive the gesture from the oriented frame. Everything else keeps the
+  // axis-aligned envelope.
+  const std::optional<TextFramePlacement> orientedText = SingleOrientedTextSelectionPlacement(
+      std::span<const svg::SVGElement>(editor.selectedElements()));
   if (!selectedBoundsDoc.empty() && !editor.selectedElements().empty()) {
-    const SelectionTransformHandleIntent handleIntent = HitTestSelectionTransformHandles(
-        selectedBoundsDoc, documentPoint, modifiers.pixelsPerDocUnit,
-        /*includeRotate=*/!modifiers.shift);
+    const SelectionTransformHandleIntent handleIntent =
+        orientedText.has_value()
+            ? HitTestOrientedFrameHandles(orientedText->frameLocal, orientedText->documentFromText,
+                                          documentPoint, modifiers.pixelsPerDocUnit,
+                                          /*includeRotate=*/!modifiers.shift)
+            : HitTestSelectionTransformHandles(selectedBoundsDoc, documentPoint,
+                                               modifiers.pixelsPerDocUnit,
+                                               /*includeRotate=*/!modifiers.shift);
     if (handleIntent.kind != SelectionTransformHandleKind::None) {
       const auto& selection = editor.selectedElements();
       const bool allGraphics = std::all_of(selection.begin(), selection.end(), isGraphicsElement);
@@ -350,7 +430,15 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
         }
 
         const Box2d startBounds = CombinedSelectionBounds(selectedBoundsDoc);
-        const Vector2d center = CenterOf(startBounds);
+        // Pivot the rotate (and anchor the oriented resize) about the oriented
+        // frame's center, not the axis-aligned envelope's center, so the frame
+        // rotates in place and never snaps back to the AABB.
+        const Vector2d center =
+            orientedText.has_value()
+                ? orientedText->documentFromText.transformPosition(
+                      (orientedText->frameLocal.topLeft + orientedText->frameLocal.bottomRight) *
+                      0.5)
+                : CenterOf(startBounds);
         dragState_ = DragState{
             .primary = makeDragParticipant(selection.front()),
             .extras = std::move(extras),
@@ -358,6 +446,7 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
                                ? DragState::GestureKind::Resize
                                : DragState::GestureKind::Rotate,
             .corner = handleIntent.corner,
+            .orientedTextFrame = orientedText,
             .startDocumentPoint = documentPoint,
             .startBoundsDoc = startBounds,
             .centerDocumentPoint = center,
@@ -579,8 +668,20 @@ void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, b
       documentFromStartDocument = Transform2d::Translate(deltaDoc);
       break;
     case DragState::GestureKind::Resize:
-      documentFromStartDocument = ResizeTransform(dragState_->startBoundsDoc, dragState_->corner,
-                                                  documentPoint, modifiers.shift, modifiers.option);
+      if (dragState_->orientedTextFrame.has_value()) {
+        // Resize in the text's local (rotated) space so the frame follows the
+        // text line and stays oriented instead of shearing along the document
+        // axes. The oriented start corners are re-derived from the placement
+        // captured at gesture start.
+        const std::array<Vector2d, 4> startCorners =
+            FrameCornersDoc(dragState_->orientedTextFrame->documentFromText,
+                            dragState_->orientedTextFrame->frameLocal);
+        documentFromStartDocument = OrientedResizeTransform(
+            startCorners, dragState_->corner, documentPoint, modifiers.shift, modifiers.option);
+      } else {
+        documentFromStartDocument = ResizeTransform(dragState_->startBoundsDoc, dragState_->corner,
+                                                    documentPoint, modifiers.shift, modifiers.option);
+      }
       break;
     case DragState::GestureKind::Rotate:
       documentFromStartDocument = RotateTransform(dragState_->centerDocumentPoint,

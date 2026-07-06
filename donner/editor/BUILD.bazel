@@ -101,6 +101,7 @@ donner_cc_library(
     deps = [
         "//donner/base",
         "//donner/base/parser",
+        "//donner/editor:selection_transform_handles",
         "//donner/svg",
     ],
 )

@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <array>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -8,6 +9,8 @@
 #include <vector>
 
 #include "donner/base/Box.h"
+#include "donner/base/Transform.h"
+#include "donner/base/Vector2.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGTextElement.h"
@@ -50,6 +53,40 @@ namespace donner::editor {
 /// computed extent of a point-text span). This is the rect that selection
 /// chrome and transform handles anchor to.
 [[nodiscard]] std::optional<Box2d> TextWorldFrameBounds(const svg::SVGTextElement& text);
+
+/// Text-local frame rect of @p text: the authored text box when present,
+/// otherwise the laid-out ink bounds - the same choice as
+/// \ref TextWorldFrameBounds but in the text's LOCAL (pre-transform) space,
+/// where it is axis-aligned. Nullopt when the text has no frame.
+[[nodiscard]] std::optional<Box2d> TextFrameLocal(const svg::SVGTextElement& text);
+
+/// ORIENTED document-space corners (local TL, TR, BR, BL order) of @p text's
+/// frame: the local frame mapped corner-by-corner through the text's
+/// transform. Unlike \ref TextWorldFrameBounds this carries the rotation
+/// instead of collapsing to the axis-aligned envelope. Nullopt when the text
+/// has no frame.
+[[nodiscard]] std::optional<std::array<Vector2d, 4>> TextWorldFrameCorners(
+    const svg::SVGTextElement& text);
+
+/// Local frame + local-to-document transform for a `<text>` element, the
+/// inputs an oriented selection frame and its transform handles are built
+/// from.
+struct TextFramePlacement {
+  /// Axis-aligned frame in the text's local (pre-transform) space.
+  Box2d frameLocal;
+  /// Local-to-document transform for the text element.
+  Transform2d documentFromText;
+};
+
+/// Placement for the select tool's ORIENTED `<text>` frame: returned only when
+/// @p selection is a single renderable `<text>` (or an element resolving to
+/// one) whose frame is actually oriented - its transform rotates or skews the
+/// frame off the axis-aligned envelope. Nullopt for multi-selection, non-text
+/// selections, text with no frame, or an axis-aligned text frame; in those
+/// cases callers keep the existing axis-aligned selection chrome. The oriented
+/// corners are \ref FrameCornersDoc of the returned placement.
+[[nodiscard]] std::optional<TextFramePlacement> SingleOrientedTextSelectionPlacement(
+    std::span<const svg::SVGElement> selection);
 
 /// Snapshot world-space bounds for every selected element that has
 /// renderable content. Elements that are themselves geometry contribute

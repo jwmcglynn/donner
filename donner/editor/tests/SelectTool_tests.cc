@@ -2,7 +2,11 @@
 
 #include <gmock/gmock.h>
 
+#include <array>
+#include <cmath>
 #include <cstdint>
+#include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -1691,6 +1695,128 @@ TEST_F(SelectToolTest, RotateAfterScaleUsesDocumentCenter) {
   EXPECT_NEAR(localCenter.y, 40.0, 1e-6);
   EXPECT_NEAR(localTopRight.x, 60.0, 1e-6);
   EXPECT_NEAR(localTopRight.y, 60.0, 1e-6);
+}
+
+// -- W12: oriented `<text>` selection frame --------------------------------
+
+constexpr std::string_view kRotatedTextSvg =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+         <text id="label" x="10" y="36" font-size="16"
+               data-donner-text-box-width="60" data-donner-text-box-height="100"
+               transform="rotate(30 40 70)">Hi</text>
+       </svg>)svg";
+
+std::optional<TextFramePlacement> RotatedTextPlacement(EditorApp& app) {
+  return SingleOrientedTextSelectionPlacement(
+      std::span<const svg::SVGElement>(app.selectedElements()));
+}
+
+// The oriented frame's handle zones track the rotated corners (hit-tested in
+// local space), and the axis-aligned envelope's own corner - which is NOT a
+// corner of the rotated quad - is deliberately dead. This is the hard
+// never-AABB invariant the select tool relies on in `onMouseDown`.
+TEST_F(SelectToolTest, RotatedTextHandlesTrackOrientedCornersNotAabb) {
+  loadSvg(kRotatedTextSvg);
+  app.setSelection(elementById("#label"));
+
+  const auto placement = RotatedTextPlacement(app);
+  ASSERT_TRUE(placement.has_value());
+  const std::array<Vector2d, 4> corners =
+      FrameCornersDoc(placement->documentFromText, placement->frameLocal);
+
+  const auto intentAt = [&](const Vector2d& point) {
+    return HitTestOrientedFrameHandles(placement->frameLocal, placement->documentFromText, point,
+                                       /*pixelsPerDocUnit=*/1.0, /*includeRotate=*/true);
+  };
+  EXPECT_EQ(intentAt(corners[2]).kind, SelectionTransformHandleKind::Resize);
+  EXPECT_EQ(intentAt(corners[2]).corner, SelectionTransformCorner::BottomRight);
+
+  Box2d envelope = Box2d::CreateEmpty(corners[0]);
+  for (const Vector2d& corner : corners) {
+    envelope.addPoint(corner);
+  }
+  EXPECT_EQ(intentAt(envelope.bottomRight).kind, SelectionTransformHandleKind::None)
+      << "the axis-aligned envelope corner must not be a live handle";
+}
+
+// Rotating a rotated `<text>` via the select tool's rotate ring keeps the
+// frame an oriented 60x100 box through and after the gesture - it never snaps
+// back to the axis-aligned envelope.
+TEST_F(SelectToolTest, RotatedTextRotateGestureKeepsFrameOriented) {
+  loadSvg(kRotatedTextSvg);
+  app.setSelection(elementById("#label"));
+
+  auto placement = RotatedTextPlacement(app);
+  ASSERT_TRUE(placement.has_value());
+  const std::array<Vector2d, 4> corners =
+      FrameCornersDoc(placement->documentFromText, placement->frameLocal);
+  const Vector2d center = (corners[0] + corners[2]) * 0.5;
+  const Vector2d ex = (corners[1] - corners[0]).normalize();
+  const Vector2d ey = (corners[3] - corners[0]).normalize();
+  // Press in the rotate ring just outside the oriented bottom-right corner.
+  const Vector2d ringStart = corners[2] + (ex + ey).normalize() * 15.0;
+  const Vector2d fromCenter = ringStart - center;
+  const double angle = 0.4;  // radians
+  const Vector2d ringEnd =
+      center + Vector2d(fromCenter.x * std::cos(angle) - fromCenter.y * std::sin(angle),
+                        fromCenter.x * std::sin(angle) + fromCenter.y * std::cos(angle));
+
+  tool.onMouseDown(app, ringStart, MouseModifiers{});
+  tool.onMouseMove(app, ringEnd, /*buttonHeld=*/true);
+  const auto gesture = tool.activeGesturePreview();
+  ASSERT_TRUE(gesture.has_value());
+  EXPECT_EQ(gesture->kind, SelectTool::ActiveGestureKind::Rotate);
+  tool.onMouseUp(app, ringEnd);
+  ASSERT_TRUE(app.flushFrame());
+
+  auto after = RotatedTextPlacement(app);
+  ASSERT_TRUE(after.has_value()) << "frame must still be oriented after the rotate";
+  const std::array<Vector2d, 4> rotated =
+      FrameCornersDoc(after->documentFromText, after->frameLocal);
+  EXPECT_NEAR((rotated[1] - rotated[0]).length(), 60.0, 1e-6);
+  EXPECT_NEAR((rotated[3] - rotated[0]).length(), 100.0, 1e-6);
+  const Vector2d topEdge = rotated[1] - rotated[0];
+  EXPECT_GT(std::abs(topEdge.x), 1.0) << "frame must not be axis-aligned after rotate";
+  EXPECT_GT(std::abs(topEdge.y), 1.0) << "frame must not be axis-aligned after rotate";
+}
+
+// Resizing a rotated `<text>` via a corner handle scales along the frame's own
+// (rotated) local axes: the box grows to the dragged local size, the anchored
+// corner stays put, and the frame stays oriented (it never shears along the
+// document axes).
+TEST_F(SelectToolTest, RotatedTextResizeOperatesInLocalSpace) {
+  loadSvg(kRotatedTextSvg);
+  app.setSelection(elementById("#label"));
+
+  auto placement = RotatedTextPlacement(app);
+  ASSERT_TRUE(placement.has_value());
+  const std::array<Vector2d, 4> corners =
+      FrameCornersDoc(placement->documentFromText, placement->frameLocal);
+  const Vector2d ex = (corners[1] - corners[0]).normalize();
+  const Vector2d ey = (corners[3] - corners[0]).normalize();
+  // Drag the bottom-right corner so the local box grows from 60x100 to 90x130,
+  // anchored at the top-left corner.
+  const Vector2d target = corners[0] + ex * 90.0 + ey * 130.0;
+
+  tool.onMouseDown(app, corners[2], MouseModifiers{});
+  tool.onMouseMove(app, target, /*buttonHeld=*/true);
+  const auto gesture = tool.activeGesturePreview();
+  ASSERT_TRUE(gesture.has_value());
+  EXPECT_EQ(gesture->kind, SelectTool::ActiveGestureKind::Resize);
+  tool.onMouseUp(app, target);
+  ASSERT_TRUE(app.flushFrame());
+
+  auto after = RotatedTextPlacement(app);
+  ASSERT_TRUE(after.has_value());
+  const std::array<Vector2d, 4> resized =
+      FrameCornersDoc(after->documentFromText, after->frameLocal);
+  EXPECT_NEAR((resized[1] - resized[0]).length(), 90.0, 1e-4);
+  EXPECT_NEAR((resized[3] - resized[0]).length(), 130.0, 1e-4);
+  EXPECT_THAT(resized[0], Vector2NearExact(corners[0].x, corners[0].y))
+      << "anchored top-left corner must stay put";
+  const Vector2d topEdge = resized[1] - resized[0];
+  EXPECT_GT(std::abs(topEdge.x), 1.0) << "resize must not flatten the rotation";
+  EXPECT_GT(std::abs(topEdge.y), 1.0) << "resize must not flatten the rotation";
 }
 
 }  // namespace

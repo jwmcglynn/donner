@@ -26,6 +26,7 @@
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/editor/AttributeWriteback.h"
+#include "donner/editor/SelectionAabb.h"
 #include "donner/editor/SelectionTransformHandles.h"
 #include "donner/editor/Tool.h"
 #include "donner/svg/SVGElement.h"
@@ -255,6 +256,13 @@ private:
 
     GestureKind gestureKind = GestureKind::Move;
     SelectionTransformCorner corner = SelectionTransformCorner::TopLeft;
+    /// When this gesture targets a single oriented `<text>` frame (W12), the
+    /// placement captured at gesture start: the frame in the text's local
+    /// space plus its local-to-document transform. Drives local-space
+    /// (oriented) resize and an oriented rotate pivot so the frame follows the
+    /// text line instead of shearing or snapping to the axis-aligned envelope.
+    /// Empty for axis-aligned, multi-selection, and non-text gestures.
+    std::optional<TextFramePlacement> orientedTextFrame;
     Vector2d startDocumentPoint;
     Box2d startBoundsDoc;
     Vector2d centerDocumentPoint = Vector2d::Zero();

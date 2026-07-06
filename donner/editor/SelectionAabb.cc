@@ -1,11 +1,14 @@
 #include "donner/editor/SelectionAabb.h"
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <optional>
 
 #include "donner/base/Transform.h"
 #include "donner/base/parser/NumberParser.h"
 #include "donner/base/xml/XMLNode.h"
+#include "donner/editor/SelectionTransformHandles.h"
 #include "donner/svg/ElementType.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGeometryElement.h"
@@ -126,6 +129,20 @@ Box2d TextWorldAabbOfLocalRect(const svg::SVGTextElement& text, const Box2d& loc
     worldRect.addPoint(documentFromText.transformPosition(corners[i]));
   }
   return worldRect;
+}
+
+/// True when @p corners (local TL, TR, BR, BL order) form an axis-aligned
+/// rectangle - i.e. the text's transform carries no rotation or skew, so its
+/// oriented frame is identical to its axis-aligned envelope and the select
+/// tool should keep the plain AABB chrome.
+bool IsAxisAlignedQuad(const std::array<Vector2d, 4>& corners) {
+  const Vector2d topEdge = corners[1] - corners[0];
+  const Vector2d sideEdge = corners[3] - corners[0];
+  constexpr double kEpsilon = 1e-6;
+  const double topScale = std::max({std::abs(topEdge.x), std::abs(topEdge.y), 1.0});
+  const double sideScale = std::max({std::abs(sideEdge.x), std::abs(sideEdge.y), 1.0});
+  return std::abs(topEdge.y) <= kEpsilon * topScale &&
+         std::abs(sideEdge.x) <= kEpsilon * sideScale;
 }
 
 /// Merge the document-space bounds of every renderable leaf (geometry world
@@ -252,6 +269,68 @@ std::optional<Box2d> TextWorldFrameBounds(const svg::SVGTextElement& text) {
     return TextWorldAabbOfLocalRect(text, *boxLocal);
   }
   return TextWorldInkBounds(text);
+}
+
+std::optional<Box2d> TextFrameLocal(const svg::SVGTextElement& text) {
+  if (const std::optional<Box2d> boxLocal = AuthoredTextBoxLocal(text); boxLocal.has_value()) {
+    return boxLocal;
+  }
+  const Box2d inkLocal = text.inkBoundingBox();
+  if (inkLocal.isEmpty()) {
+    return std::nullopt;
+  }
+  return inkLocal;
+}
+
+std::optional<std::array<Vector2d, 4>> TextWorldFrameCorners(const svg::SVGTextElement& text) {
+  const std::optional<Box2d> frameLocal = TextFrameLocal(text);
+  if (!frameLocal.has_value()) {
+    return std::nullopt;
+  }
+  return FrameCornersDoc(text.elementFromWorld(), *frameLocal);
+}
+
+std::optional<TextFramePlacement> SingleOrientedTextSelectionPlacement(
+    std::span<const svg::SVGElement> selection) {
+  if (selection.size() != 1u) {
+    return std::nullopt;
+  }
+
+  svg::SVGElement element = selection.front();
+  return element.withWriteAccess(
+      [&element](svg::DocumentWriteAccess&, EntityHandle) -> std::optional<TextFramePlacement> {
+        if (!HasLiveSvgTreeComponents(element)) {
+          return std::nullopt;
+        }
+
+        // The selection must resolve to exactly one text root and nothing
+        // else: a bare `<text>`, or a wrapper whose only renderable leaf is a
+        // single text run. A mixed group keeps the axis-aligned envelope.
+        std::vector<svg::SVGGeometryElement> geometry;
+        CollectRenderableGeometryImpl(element, geometry);
+        if (!geometry.empty()) {
+          return std::nullopt;
+        }
+        std::vector<svg::SVGTextElement> textRoots;
+        CollectRenderableTextRootsImpl(element, textRoots);
+        if (textRoots.size() != 1u) {
+          return std::nullopt;
+        }
+
+        const svg::SVGTextElement& text = textRoots.front();
+        const std::optional<Box2d> frameLocal = TextFrameLocal(text);
+        if (!frameLocal.has_value()) {
+          return std::nullopt;
+        }
+        const Transform2d documentFromText = text.elementFromWorld();
+        // Only take the oriented path when the frame is actually rotated or
+        // skewed off the axis-aligned envelope; otherwise the plain AABB
+        // chrome is identical and cheaper.
+        if (IsAxisAlignedQuad(FrameCornersDoc(documentFromText, *frameLocal))) {
+          return std::nullopt;
+        }
+        return TextFramePlacement{.frameLocal = *frameLocal, .documentFromText = documentFromText};
+      });
 }
 
 std::vector<Box2d> SnapshotSelectionWorldBounds(std::span<const svg::SVGElement> selection) {

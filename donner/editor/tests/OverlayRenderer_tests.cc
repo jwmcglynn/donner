@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <ostream>
 #include <span>
@@ -12,9 +13,12 @@
 
 #include "donner/base/Transform.h"
 #include "donner/editor/EditorApp.h"
+#include "donner/editor/SelectionAabb.h"
+#include "donner/editor/SelectionTransformHandles.h"
 #include "donner/svg/DocumentState.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
+#include "donner/svg/SVGTextElement.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
@@ -1733,6 +1737,89 @@ TEST(OverlayRendererTest, TextBoxDragPreviewDrawsFrameBaselineAndIbeamDistinctFr
   // point away from the baseline and I-beam.
   EXPECT_EQ(pixelAt(120, 110, 3), 0)
       << "drag preview interior must not carry the marquee's translucent fill";
+}
+
+// W12: selecting a single rotated `<text>` with the select tool derives an
+// ORIENTED selection frame (and oriented handle squares) from the text's
+// geometry, so the frame follows the text line at its rotation instead of
+// collapsing to the axis-aligned envelope.
+TEST(OverlayRendererTest, RotatedTextSelectionFrameIsOriented) {
+  constexpr std::string_view kRotatedTextSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+           <text id="label" x="10" y="36" font-size="16"
+                 data-donner-text-box-width="60" data-donner-text-box-height="100"
+                 transform="rotate(30 40 70)">Hi</text>
+         </svg>)svg";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kRotatedTextSvg));
+  auto label = app.document().document().querySelector("#label");
+  ASSERT_TRUE(label.has_value());
+  app.setSelection(*label);
+
+  const SelectionChromeSnapshot snapshot = OverlayRenderer::captureChromeSnapshot(
+      std::span<const svg::SVGElement>(app.selectedElements()), std::nullopt, Transform2d(),
+      std::nullopt, std::span<const svg::SVGElement>(), std::nullopt, SelectionChromeDetail::Full,
+      Transform2d(), std::nullopt, 1.0, std::optional<svg::SVGElement>());
+
+  // The frame is an oriented quad: its corners equal the text's geometry-
+  // derived oriented corners, its side lengths match the authored 60x100 box,
+  // and its edges are NOT axis-aligned.
+  ASSERT_TRUE(snapshot.orientedBoundsDoc.has_value());
+  const std::optional<std::array<Vector2d, 4>> expected =
+      TextWorldFrameCorners(label->cast<svg::SVGTextElement>());
+  ASSERT_TRUE(expected.has_value());
+  const std::array<Vector2d, 4>& corners = snapshot.orientedBoundsDoc->cornersDoc;
+  for (std::size_t i = 0; i < 4; ++i) {
+    EXPECT_THAT(corners[i], Vector2dNear((*expected)[i], 1e-6));
+  }
+  const Vector2d topEdge = corners[1] - corners[0];
+  const Vector2d sideEdge = corners[3] - corners[0];
+  EXPECT_NEAR(topEdge.length(), 60.0, 1e-6);
+  EXPECT_NEAR(sideEdge.length(), 100.0, 1e-6);
+  EXPECT_GT(std::abs(topEdge.x), 1.0) << "rotated frame edge must not be axis-aligned";
+  EXPECT_GT(std::abs(topEdge.y), 1.0) << "rotated frame edge must not be axis-aligned";
+
+  // Four handle squares, centered on the ORIENTED corners (not the axis-
+  // aligned envelope), sized from the shared select-tool handle constant.
+  ASSERT_EQ(snapshot.handleBoxesDoc.size(), 4u);
+  Box2d envelope = Box2d::CreateEmpty(corners[0]);
+  for (const Vector2d& corner : corners) {
+    envelope.addPoint(corner);
+  }
+  for (std::size_t i = 0; i < 4; ++i) {
+    const Box2d& handle = snapshot.handleBoxesDoc[i];
+    const Vector2d center = (handle.topLeft + handle.bottomRight) * 0.5;
+    EXPECT_THAT(center, Vector2dNear(corners[i], 1e-6));
+    // At scale 1.0 the handle is kSelectionHandleSizePixels wide.
+    EXPECT_NEAR(handle.width(), kSelectionHandleSizePixels, 1e-6);
+    EXPECT_NEAR(handle.height(), kSelectionHandleSizePixels, 1e-6);
+    // Never-AABB: no handle sits on the axis-aligned envelope's own corner.
+    EXPECT_GT((center - envelope.topLeft).length(), 1.0);
+  }
+}
+
+// The oriented frame is reserved for rotated `<text>`: an axis-aligned text
+// (and every non-text selection) keeps the plain axis-aligned chrome.
+TEST(OverlayRendererTest, AxisAlignedTextSelectionKeepsAabbChrome) {
+  constexpr std::string_view kUprightTextSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+           <text id="label" x="10" y="36" font-size="16"
+                 data-donner-text-box-width="60" data-donner-text-box-height="100">Hi</text>
+         </svg>)";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kUprightTextSvg));
+  auto label = app.document().document().querySelector("#label");
+  ASSERT_TRUE(label.has_value());
+  app.setSelection(*label);
+
+  const SelectionChromeSnapshot snapshot = OverlayRenderer::captureChromeSnapshot(
+      std::span<const svg::SVGElement>(app.selectedElements()), std::nullopt, Transform2d(),
+      std::nullopt, std::span<const svg::SVGElement>(), std::nullopt, SelectionChromeDetail::Full,
+      Transform2d(), std::nullopt, 1.0, std::optional<svg::SVGElement>());
+
+  EXPECT_FALSE(snapshot.orientedBoundsDoc.has_value());
+  EXPECT_FALSE(snapshot.aabbsDoc.empty());
+  EXPECT_EQ(snapshot.handleBoxesDoc.size(), 4u);
 }
 
 }  // namespace
