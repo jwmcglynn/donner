@@ -587,3 +587,17 @@ any `t` with no re-parse of the whole document, matches the already-validated so
 implementation (reducing port risk), and slots cleanly between style and layout. Its cost is
 that the applier must enumerate the geometry/transform/path special cases, which is acceptable
 for the slice-1 attribute set and is where future animatable attributes will be registered.
+
+Two port-specific corrections were required relative to the tiny-skia implementation, because the
+current architecture does not rebuild base components on `invalidateRenderTree()`:
+
+1. **Base-component backup/restore.** `ComputedStyleComponent` is regenerated each render, so CSS
+   overrides revert for free. Base geometry (`CircleComponent` etc.), `PathComponent::d`, and
+   `TransformComponent` are not regenerated; mutating them would leak across time samples once an
+   animation ends with `fill="remove"`. The applier lazily captures an `AnimationBaseBackup` per
+   mutated entity and restores it at the start of every apply pass. The
+   `RendererAnimation.GeometryRemoveReverts` golden test locks this behavior in.
+2. **Computed-transform cache invalidation.** `ComputedLocalTransformComponent` and the cascaded
+   `ComputedAbsoluteTransformComponent` are cached across renders; applying or restoring a
+   transform override calls `LayoutSystem::invalidate()` so the animated transform actually
+   reaches the render.
