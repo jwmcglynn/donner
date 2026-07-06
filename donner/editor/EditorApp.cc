@@ -14,6 +14,7 @@
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/LockState.h"
 #include "donner/editor/TextPatch.h"
+#include "donner/svg/ElementType.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/SVGPathElement.h"
@@ -761,6 +762,105 @@ void CollectElements(const svg::SVGElement& root, std::vector<svg::SVGElement>& 
   }
 }
 
+/// Whether @p element type contributes to the rendered paint order (i.e. is not
+/// a non-rendered resource container such as `<defs>` / gradients / `<style>`).
+/// Used by the tree-aware Bring-to-Front / Send-to-Back "already at the extreme"
+/// checks so a trailing `<defs>` does not count as "something paints after me".
+bool ArrangeElementPaints(const svg::SVGElement& element) {
+  const std::optional<svg::ElementType> type = element.tryType();
+  if (!type.has_value()) {
+    return false;
+  }
+  switch (*type) {
+    case svg::ElementType::Defs:
+    case svg::ElementType::LinearGradient:
+    case svg::ElementType::RadialGradient:
+    case svg::ElementType::Pattern:
+    case svg::ElementType::Filter:
+    case svg::ElementType::ClipPath:
+    case svg::ElementType::Mask:
+    case svg::ElementType::Marker:
+    case svg::ElementType::Symbol:
+    case svg::ElementType::Style:
+    case svg::ElementType::Stop: return false;
+    default: return true;
+  }
+}
+
+/// A `<g>` a child can be lifted out of without changing how it paints: it
+/// carries only structural attributes (an `id` and the editor lock marker).
+/// Any transform, paint, style/class, clip/mask/filter, opacity, or visibility
+/// attribute means the child inherits state from the group, so lifting it out
+/// would silently change the rendering - we refuse to cross such a group.
+bool IsLiftableStructuralGroup(const svg::SVGElement& element) {
+  if (element.tryType() != svg::ElementType::G) {
+    return false;
+  }
+  constexpr std::string_view kIdAttr = "id";
+  for (const xml::XMLQualifiedNameRef& attr : element.attributes()) {
+    if (!attr.namespacePrefix.empty()) {
+      return false;  // A namespaced attribute is not one of the two we allow.
+    }
+    if (attr.name == kIdAttr || attr.name == kLockedAttributeName) {
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
+/// Whether @p element can be losslessly lifted out to @p root: every ancestor
+/// strictly between it and the root is a liftable structural `<g>`, and the
+/// chain terminates at the root.
+bool CanLiftToRoot(const svg::SVGElement& element, const svg::SVGElement& root) {
+  std::optional<svg::SVGElement> cur = element.parentElement();
+  while (cur.has_value() && *cur != root) {
+    if (!IsLiftableStructuralGroup(*cur)) {
+      return false;
+    }
+    cur = cur->parentElement();
+  }
+  return cur.has_value() && *cur == root;
+}
+
+/// Whether any painting element is stacked after @p element anywhere in the
+/// document paint order (walks later siblings at every level up to @p root).
+bool HasLaterPaintingElement(const svg::SVGElement& element, const svg::SVGElement& root) {
+  for (svg::SVGElement cur = element; cur != root;) {
+    for (std::optional<svg::SVGElement> sib = cur.nextSibling(); sib.has_value();
+         sib = sib->nextSibling()) {
+      if (ArrangeElementPaints(*sib)) {
+        return true;
+      }
+    }
+    const std::optional<svg::SVGElement> parent = cur.parentElement();
+    if (!parent.has_value()) {
+      break;
+    }
+    cur = *parent;
+  }
+  return false;
+}
+
+/// Whether any painting element is stacked before @p element anywhere in the
+/// document paint order (walks earlier siblings at every level up to @p root).
+bool HasEarlierPaintingElement(const svg::SVGElement& element, const svg::SVGElement& root) {
+  for (svg::SVGElement cur = element; cur != root;) {
+    for (std::optional<svg::SVGElement> sib = cur.previousSibling(); sib.has_value();
+         sib = sib->previousSibling()) {
+      if (ArrangeElementPaints(*sib)) {
+        return true;
+      }
+    }
+    const std::optional<svg::SVGElement> parent = cur.parentElement();
+    if (!parent.has_value()) {
+      break;
+    }
+    cur = *parent;
+  }
+  return false;
+}
+
 }  // namespace
 
 EditorApp::EditorApp() = default;
@@ -963,6 +1063,31 @@ bool EditorApp::reorderSelectedElement(ZOrder direction) {
     return false;  // The document root has no siblings to reorder among.
   }
   const svg::SVGElement parent = *parentOpt;
+
+  // Tree-aware Bring to Front / Send to Back. A naive sibling swap only reaches
+  // the front/back of the element's *own* group, so for a nested element "Bring
+  // to Front" appeared to do nothing (or left it behind other groups) - the
+  // "does not do what it says" report. When the element is nested inside
+  // purely-structural groups, lift it out to the document root so it lands at
+  // the absolute front/back of the whole paint-order tree. We only lift when it
+  // is visually lossless (every crossed group carries nothing but id/lock, so
+  // the child inherits no transform, paint, clip, or opacity from it);
+  // otherwise we fall through to the within-parent sibling reorder below, which
+  // never changes how the element paints.
+  const svg::SVGElement root = document_.document().svgElement();
+  if (parent != root && (direction == ZOrder::BringToFront || direction == ZOrder::SendToBack) &&
+      CanLiftToRoot(element, root)) {
+    if (direction == ZOrder::BringToFront) {
+      if (!HasLaterPaintingElement(element, root)) {
+        return false;  // Already the front-most painted element in the document.
+      }
+      return applyElementMove(element, root, std::nullopt, "Bring to front");
+    }
+    if (!HasEarlierPaintingElement(element, root)) {
+      return false;  // Already the back-most painted element in the document.
+    }
+    return applyElementMove(element, root, root.firstChild(), "Send to back");
+  }
 
   // Compute the insert-before reference sibling for the requested move.
   // `std::nullopt` reference means "append" (move to the last sibling). SVG

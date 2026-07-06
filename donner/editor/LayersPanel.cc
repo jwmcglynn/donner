@@ -554,11 +554,19 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
     ImGui::Dummy(ImVec2(slotMax.x - slotMin.x, slotMax.y - slotMin.y));
     ImGui::SameLine();
 
-    // Row name as a selectable. Partial selection gets a dimmer highlight.
-    if (row.isPartiallySelected && !row.isSelected) {
-      ImGui::PushStyleColor(ImGuiCol_Header, ImGui::GetColorU32(ImGuiCol_HeaderHovered, 0.35f));
-    }
-    bool selected = row.isSelected || row.isPartiallySelected;
+    // Selection highlight. Only a *truly* selected row gets the filled row
+    // highlight. A group that merely contains the selection (partial) gets a
+    // subtle left-edge accent bar instead (drawn after the row), so selecting a
+    // nested shape no longer paints every ancestor group - down to the
+    // top-level `<g>[0]` - as if it were selected. That ancestor-fill was the
+    // "selection defaults to the top <g>[0] at all times" report.
+    const bool partialOnly = row.isPartiallySelected && !row.isSelected;
+    const bool selected = row.isSelected;
+    // Subtle hover/active tint for the row: the stock ImGui header-hover fill is
+    // too bright for a dense layer list, so scale its alpha well down.
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered,
+                          ImGui::GetColorU32(ImGuiCol_HeaderHovered, 0.28f));
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImGui::GetColorU32(ImGuiCol_HeaderActive, 0.45f));
     const bool isRenamingThisRow =
         renamingStableId_.has_value() && *renamingStableId_ == row.stableId;
     if (isRenamingThisRow) {
@@ -629,8 +637,15 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
         ImGui::EndDragDropTarget();
       }
     }
-    if (row.isPartiallySelected && !row.isSelected) {
-      ImGui::PopStyleColor();
+    ImGui::PopStyleColor(2);
+    // Subtle partial-selection affordance: a thin accent bar at the row's left
+    // edge marks a group that contains the selection, without the loud
+    // full-row highlight a real selection gets.
+    if (partialOnly) {
+      const ImU32 accent = ImGui::GetColorU32(ImGuiCol_Header, 0.9f);
+      const ImVec2 barMin(ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMin().x, slotMin.y);
+      const ImVec2 barMax(barMin.x + 2.0f, slotMin.y + kPreviewHeight);
+      drawList->AddRectFilled(barMin, barMax, accent, 1.0f);
     }
 
     // Right-aligned per-row affordances: a visibility (eye) toggle and a lock

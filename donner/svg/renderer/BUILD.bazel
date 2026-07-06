@@ -447,6 +447,8 @@ donner_cc_library(
         ":renderer_utils",
         "//donner/svg",
         "//donner/svg/components",
+        "//donner/svg/resources:font_manager",
+        "//donner/svg/text:text_engine",
     ] + select({
         ":renderer_backend_geode": [":renderer_geode"],
         "//conditions:default": [":renderer_tiny_skia"],

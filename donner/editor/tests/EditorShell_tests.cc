@@ -429,6 +429,27 @@ TEST(EditorShellInternalTest, ResolveDocumentViewBoxUsesViewBoxIntrinsicSizeAndD
             Box2d::FromXYWH(0.0, 0.0, 512.0, 512.0));
 }
 
+TEST(EditorShellInternalTest, ResolveDocumentViewBoxIgnoresCommittedRasterCanvasSize) {
+  // RenderCoordinator commits zoom/DPR-scaled raster canvas sizes into the
+  // document via setCanvasSize. For a viewBox-less document the resolved
+  // viewBox must stay pinned to the intrinsic width/height attributes.
+  // Reading the committed canvas back instead inflates the viewBox by the
+  // device pixel ratio on every commit until the max-canvas clamp, which
+  // starves zoom-driven re-rasters and froze zoom/scroll rendering on
+  // viewBox-less documents such as z0rly_test6.svg.
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kIntrinsicSizeSvg));
+  app.document().document().setCanvasSize(320, 180);  // A 2x-DPR raster commit.
+  EXPECT_EQ(internal::ResolveDocumentViewBox(app.document().document()),
+            Box2d::FromXYWH(0.0, 0.0, 160.0, 90.0));
+
+  // Even a wildly inflated committed canvas (the runaway feedback fixed
+  // point) must not leak into the resolved viewBox.
+  app.document().document().setCanvasSize(8192, 4608);
+  EXPECT_EQ(internal::ResolveDocumentViewBox(app.document().document()),
+            Box2d::FromXYWH(0.0, 0.0, 160.0, 90.0));
+}
+
 TEST(EditorShellInternalTest, PaintReferenceStateIncludesSameDocumentSourceRange) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kPaintToolbarSvg));

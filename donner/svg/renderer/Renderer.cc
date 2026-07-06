@@ -11,16 +11,20 @@
 #include <vector>
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/RendererInternal.h"
 #include "donner/svg/renderer/RendererUtils.h"
+#include "donner/svg/resources/FontManager.h"
+#include "donner/svg/text/TextEngine.h"
 
 namespace donner::svg {
 
@@ -251,6 +255,60 @@ private:
   RenderInvalidationSnapshot snapshot_;
 };
 
+/// True when walking the tree parent chain from @p entity reaches an entity in
+/// @p subtreeEntities. Rendering instances for shadow-tree content (e.g. the
+/// expansion of a `<use>`) are stored on shadow entities whose tree parent
+/// chain passes through the instantiating light element (the shadow root is a
+/// tree child of the `<use>` itself), so this resolves both light and shadow
+/// instances to their position in the light tree. Matching only
+/// `instance.dataEntity` against the light subtree is wrong in both
+/// directions: it drops shadow instances whose host `<use>` is inside the
+/// subtree (the shadow instance's dataEntity is the referenced element, which
+/// usually lives in `<defs>` elsewhere), and it wrongly claims instances whose
+/// `<use>` is outside the subtree but whose referenced element is inside it.
+bool InstanceIsInSubtree(Registry& registry, Entity storageEntity,
+                         const std::unordered_set<Entity>& subtreeEntities) {
+  for (Entity current = storageEntity; current != entt::null;) {
+    if (subtreeEntities.count(current) != 0) {
+      return true;
+    }
+    const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
+    if (tree == nullptr) {
+      break;
+    }
+    current = tree->parent();
+  }
+  return false;
+}
+
+/// Local-space ink bounds for a `<text>` root entity, or nullopt when the
+/// entity is not a laid-out text root (or has no rendered glyphs). Text draws
+/// through the text engine rather than `ComputedPathComponent`, so the subtree
+/// bounds scan needs this separate source or text-bearing subtrees get cropped
+/// to their shape content only.
+std::optional<Box2d> TextRootLocalInkBounds(Registry& registry, Entity entity) {
+  if (registry.try_get<components::ComputedTextComponent>(entity) == nullptr) {
+    return std::nullopt;
+  }
+
+  auto& fontManager = registry.ctx().contains<FontManager>()
+                          ? registry.ctx().get<FontManager>()
+                          : registry.ctx().emplace<FontManager>(registry);
+  auto* textEngine = registry.ctx().find<TextEngine>();
+  if (textEngine == nullptr) {
+    textEngine = &registry.ctx().emplace<TextEngine>(fontManager, registry);
+  }
+
+  const EntityHandle handle(registry, entity);
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  textEngine->prepareForElement(handle, warnings);
+  const Box2d inkBounds = textEngine->computedInkBounds(handle);
+  if (inkBounds.isEmpty()) {
+    return std::nullopt;
+  }
+  return inkBounds;
+}
+
 SubtreeRenderSpan ResolveSubtreeRenderSpan(Registry& registry,
                                            const std::unordered_set<Entity>& subtreeEntities) {
   SubtreeRenderSpan span;
@@ -259,7 +317,7 @@ SubtreeRenderSpan ResolveSubtreeRenderSpan(Registry& registry,
   for (auto view = registry.view<const components::RenderingInstanceComponent>();
        auto storageEntity : view) {
     const auto& instance = view.get<const components::RenderingInstanceComponent>(storageEntity);
-    if (subtreeEntities.count(instance.dataEntity) == 0) {
+    if (!InstanceIsInSubtree(registry, storageEntity, subtreeEntities)) {
       continue;
     }
 
@@ -278,6 +336,19 @@ SubtreeRenderSpan ResolveSubtreeRenderSpan(Registry& registry,
     const auto* path =
         instance.dataHandle(registry).template try_get<components::ComputedPathComponent>();
     if (path == nullptr) {
+      // Text roots draw through the text engine rather than
+      // `ComputedPathComponent`; contribute their ink bounds here or a
+      // text-bearing subtree's thumbnail crops to its shape content only.
+      if (const std::optional<Box2d> textLocal =
+              TextRootLocalInkBounds(registry, instance.dataEntity);
+          textLocal.has_value()) {
+        const Box2d world = instance.worldFromEntityTransform.transformBox(*textLocal);
+        if (!span.worldBounds) {
+          span.worldBounds = world;
+        } else {
+          span.worldBounds->addBox(world);
+        }
+      }
       continue;
     }
     const auto& style = instance.styleHandle(registry).get<components::ComputedStyleComponent>();

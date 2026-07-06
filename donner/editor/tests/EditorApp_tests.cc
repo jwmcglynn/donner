@@ -1832,6 +1832,97 @@ TEST(EditorAppReorderTest, DirectReorderRejectsRootSelfCrossParentAndCurrentPosi
   EXPECT_FALSE(app.flushFrame());
 }
 
+void CollectFlatIds(const svg::SVGElement& el, std::vector<std::string>& out) {
+  if (const std::optional<RcString> id = el.getAttribute("id"); id.has_value()) {
+    out.push_back(std::string(id->str()));
+  }
+  for (auto c = el.firstChild(); c.has_value(); c = c->nextSibling()) {
+    CollectFlatIds(*c, out);
+  }
+}
+
+// Depth-first (paint order) list of every id in the document.
+std::vector<std::string> FlatIds(EditorApp& app) {
+  std::vector<std::string> out;
+  CollectFlatIds(app.document().document().svgElement(), out);
+  return out;
+}
+
+std::optional<std::string> ParentIdOf(EditorApp& app, std::string_view id) {
+  const std::optional<svg::SVGElement> el =
+      app.document().document().querySelector("#" + std::string(id));
+  if (!el.has_value()) {
+    return std::nullopt;
+  }
+  const std::optional<svg::SVGElement> parent = el->parentElement();
+  if (!parent.has_value()) {
+    return std::nullopt;
+  }
+  const std::optional<RcString> pid = parent->getAttribute("id");
+  return pid.has_value() ? std::optional<std::string>(std::string(pid->str()))
+                         : std::optional<std::string>("<svg>");
+}
+
+// Two structural groups, no transforms/paint on the groups themselves.
+constexpr std::string_view kNestedGroups =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <g id="gA"><rect id="a1" width="10" height="10"/><rect id="a2" width="10" height="10"/></g>
+         <g id="gB"><rect id="b1" width="10" height="10"/><rect id="b2" width="10" height="10"/></g>
+       </svg>)";
+
+TEST(EditorAppReorderTest, BringToFrontLiftsNestedLeafToDocumentFront) {
+  // a2 is the last child of gA, so a naive within-group swap is a no-op and the
+  // element stays behind gB. Tree-aware Bring to Front lifts it out to the
+  // document root so it paints in front of everything ("does what it says").
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kNestedGroups)));
+  SelectById(app, "a2");
+  EXPECT_TRUE(app.reorderSelectedElement(EditorApp::ZOrder::BringToFront));
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_THAT(FlatIds(app), ::testing::ElementsAre("gA", "a1", "gB", "b1", "b2", "a2"));
+  EXPECT_EQ(ParentIdOf(app, "a2"), std::optional<std::string>("<svg>"));
+}
+
+TEST(EditorAppReorderTest, SendToBackLiftsNestedLeafToDocumentBack) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kNestedGroups)));
+  SelectById(app, "b1");
+  EXPECT_TRUE(app.reorderSelectedElement(EditorApp::ZOrder::SendToBack));
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_THAT(FlatIds(app), ::testing::ElementsAre("b1", "gA", "a1", "a2", "gB", "b2"));
+  EXPECT_EQ(ParentIdOf(app, "b1"), std::optional<std::string>("<svg>"));
+}
+
+TEST(EditorAppReorderTest, TreeAwareArrangeIsNoOpAtDocumentExtremes) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kNestedGroups)));
+  // b2 already paints last in the whole document; a1 already paints first.
+  SelectById(app, "b2");
+  EXPECT_FALSE(app.reorderSelectedElement(EditorApp::ZOrder::BringToFront));
+  SelectById(app, "a1");
+  EXPECT_FALSE(app.reorderSelectedElement(EditorApp::ZOrder::SendToBack));
+  EXPECT_FALSE(app.flushFrame()) << "no move was queued";
+  EXPECT_THAT(FlatIds(app), ::testing::ElementsAre("gA", "a1", "a2", "gB", "b1", "b2"));
+}
+
+TEST(EditorAppReorderTest, BringToFrontDoesNotLiftAcrossANonStructuralGroup) {
+  // gA carries a transform, so lifting a child out would drop inherited state.
+  // The move must fall back to a within-group reorder (never a silent visual
+  // change): a1 fronts within gA and stays parented to gA.
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+           <g id="gA" transform="translate(5,5)"><rect id="a1" width="10" height="10"/><rect id="a2" width="10" height="10"/></g>
+           <g id="gB"><rect id="b1" width="10" height="10"/></g>
+         </svg>)svg"));
+  SelectById(app, "a1");
+  EXPECT_TRUE(app.reorderSelectedElement(EditorApp::ZOrder::BringToFront));
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(ParentIdOf(app, "a1"), std::optional<std::string>("gA"))
+      << "a child of a transformed group must not be lifted out";
+  EXPECT_THAT(FlatIds(app), ::testing::ElementsAre("gA", "a2", "a1", "gB", "b1"));
+}
+
 std::optional<std::string> AttrOf(EditorApp& app, std::string_view id, const char* attr) {
   const std::optional<svg::SVGElement> el =
       app.document().document().querySelector("#" + std::string(id));
