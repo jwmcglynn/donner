@@ -153,6 +153,12 @@ donner_cc_library(
         ],
         "//conditions:default": [],
     }),
+    # The embedded font bytes come from dev-only http_file repos; BCR consumers
+    # skip this target (and, transitively, the editor targets that consume it).
+    target_compatible_with = select({
+        "//third_party/google_fonts:google_fonts_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
     visibility = [
         "//donner/editor:__subpackages__",
         "//donner/svg:__subpackages__",

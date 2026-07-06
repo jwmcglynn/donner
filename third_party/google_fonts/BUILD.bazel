@@ -1,3 +1,4 @@
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@rules_cc//cc:defs.bzl", "cc_library")
 load("//build_defs:embed_resources.bzl", "embed_resources")
 load(
@@ -9,12 +10,34 @@ load(
 
 package(default_visibility = ["//visibility:private"])
 
+# The gfont_* repos are fetched by a dev_dependency module extension, so BCR
+# consumers never see them. Per the non-BCR dep rule (third_party/bazel/
+# non_bcr_deps.bzl), every target referencing them must be incompatible unless
+# this flag is on. The root module flips it on in .bazelrc; incompatibility
+# propagates to dependents (font_catalog and the editor), which wildcard
+# builds then skip.
+bool_flag(
+    name = "google_fonts_available",
+    build_setting_default = False,
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "google_fonts_enabled",
+    flag_values = {":google_fonts_available": "True"},
+    visibility = ["//visibility:public"],
+)
+
 # Embeds the fetched font bytes as C arrays, exposing
 # `donner::embedded::kGF<Family>Ttf` spans (see fonts.bzl `var` fields).
 embed_resources(
     name = "google_fonts_data",
     header_output = "embed_resources/GoogleFontsData.h",
     resources = embedded_resources_dict(),
+    target_compatible_with = select({
+        ":google_fonts_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
     visibility = ["//donner:__subpackages__"],
 )
 
