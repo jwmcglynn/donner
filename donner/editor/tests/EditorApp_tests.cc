@@ -1542,7 +1542,7 @@ TEST(EditorAppTest, HitTestRectCoversStrokeCapAndJoinVariants) {
          </svg>)svg"));
 
   std::vector<std::string> hitIds;
-  for (const svg::SVGGeometryElement& hit :
+  for (const svg::SVGGraphicsElement& hit :
        app.hitTestRect(Box2d::FromXYWH(0.0, 0.0, 220.0, 120.0))) {
     hitIds.push_back(std::string(hit.id().str()));
   }
