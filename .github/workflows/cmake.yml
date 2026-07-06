@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [main, feature/ci-hardening-2026q2]
 
+# Superseded PR pushes cancel their in-flight CMake run so a rapid push storm
+# does not pile up redundant hosted builds. Push runs stay unique (never
+# cancel each other) via run_id in the group key.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.workflow, github.event.pull_request.number) || format('push-{0}-{1}', github.workflow, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   gatekeeper:
     runs-on: ubuntu-24.04
