@@ -1975,6 +1975,73 @@ bool EditorShell::selectionIsAllText() const {
   return true;
 }
 
+FormatBarState EditorShell::computeFormatBarState() {
+  FormatBarState state;
+
+  const std::vector<svg::SVGElement>& selection = app_.selectedElements();
+  const bool hasSingleTextSelection =
+      selection.size() == 1u && selection.front().type() == svg::ElementType::Text;
+  const bool textEditingActive = activeTool_ == ActiveTool::Text && textTool_.isEditing();
+  state.visible = FormatBarShouldShow(hasSingleTextSelection, textEditingActive);
+  if (!state.visible) {
+    return state;
+  }
+
+  // Read the current family/size/B/I/U from the styled element. During an
+  // editing session the TextTool keeps that element as the single selection, so
+  // the same read path serves both the selection and editing cases.
+  if (hasSingleTextSelection) {
+    ReadTextFormatState(selection.front(), &state);
+  }
+
+  // Family picker faces: the three embedded TTFs the editor loads today
+  // (Roboto Regular as the default UI face, Roboto Bold, Fira Code). Families
+  // the editor lacks a face for preview in the default font; the free-text box
+  // still round-trips them. W3 replaces this with the real embedded + macOS
+  // system font pipeline.
+  ImFont* regularFace =
+      ImGui::GetIO().Fonts->Fonts.empty() ? nullptr : ImGui::GetIO().Fonts->Fonts[0];
+  state.boldToggleFont = uiFontBold_;
+  state.families = {
+      {"Roboto", regularFace}, {"Fira Code", codeFont_},  {"sans-serif", regularFace},
+      {"serif", nullptr},      {"monospace", codeFont_},
+  };
+  return state;
+}
+
+void EditorShell::applyFormatBarActions(const FormatBarState& state,
+                                        const FormatBarActions& actions) {
+  const bool editing = activeTool_ == ActiveTool::Text && textTool_.isEditing();
+
+  bool changed = false;
+  // Bold/Italic/Underline during an active editing session route to the
+  // TextTool style toggles (they add/remove the attribute and flush). Family
+  // and size, plus the selection-only B/I/U path, route to the attribute-write
+  // seam shared with the Text inspector.
+  if (editing) {
+    if (actions.toggleBold) {
+      textTool_.toggleBold(app_);
+      changed = true;
+    }
+    if (actions.toggleItalic) {
+      textTool_.toggleItalic(app_);
+      changed = true;
+    }
+    if (actions.toggleUnderline) {
+      textTool_.toggleUnderline(app_);
+      changed = true;
+    }
+  }
+
+  changed = ApplyFormatBarActionsToSelection(actions, state, /*routeTogglesToSelection=*/!editing,
+                                             app_) ||
+            changed;
+
+  if (changed) {
+    flushQueuedMutationAndRefreshOverlay();
+  }
+}
+
 void EditorShell::convertSelectedTextToOutlines() {
   if (!app_.hasDocument() || !selectionIsAllText()) {
     return;
@@ -4518,8 +4585,16 @@ void EditorShell::runFrame() {
 
   const Vector2i windowSize = window_.windowSize();
   const float menuBarHeight = ImGui::GetFrameHeight();
-  const float paneOriginY = menuBarHeight;
-  const float paneHeight = std::max(0.0f, static_cast<float>(windowSize.y) - menuBarHeight);
+  // W2: the contextual text-formatting bar sits directly below the menu bar and
+  // reserves its own strip of vertical space while text styling is in context
+  // (a single <text> is selected or an editing session is active). Compute its
+  // visibility/height here so the panes below start beneath it; the bar itself
+  // is rendered next to the menu bar further down.
+  const FormatBarState formatBarState = computeFormatBarState();
+  const float formatBarHeight =
+      formatBarState.visible ? TextFormatBarPresenter::BarHeight() : 0.0f;
+  const float paneOriginY = menuBarHeight + formatBarHeight;
+  const float paneHeight = std::max(0.0f, static_cast<float>(windowSize.y) - paneOriginY);
   const EditorMainPaneLayout mainPaneLayout = ComputeEditorMainPaneLayout({
       .windowWidth = static_cast<float>(windowSize.x),
       .sourcePaneVisible = sourcePaneVisible_,
@@ -4574,6 +4649,15 @@ void EditorShell::runFrame() {
   };
   const MenuBarActions menuActions = menuBarPresenter_.render(menuState, uiFontBold_);
   applyMenuActions(menuActions);
+
+  // W2: render the contextual text-formatting bar beneath the menu bar and
+  // route its actions to the existing styling commands. Space for it was
+  // already reserved above via `formatBarHeight`.
+  if (formatBarState.visible) {
+    const FormatBarActions formatBarActions = textFormatBarPresenter_.render(
+        formatBarState, menuBarHeight, static_cast<float>(windowSize.x));
+    applyFormatBarActions(formatBarState, formatBarActions);
+  }
 
   dialogPresenter_.render(
       [this](std::string_view path, std::string* error) { return tryOpenPath(path, error); },

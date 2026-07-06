@@ -747,6 +747,7 @@ donner_cc_library(
         ":source_selection",
         ":style_source_annotations",
         ":text_editor",
+        ":text_format_bar_presenter",
         ":text_inspector_panel",
         ":text_to_outlines",
         ":text_tool",
