@@ -1223,5 +1223,61 @@ TEST(EditorSyncTest, DragThenSourceEditThenUndoReplaysAgainstFreshlyParsedElemen
       << "undo after source-pane reparse failed to roll back the drag - snapshot dangled";
 }
 
+// Companion to `DragThenSourceEditThenUndoReplaysAgainstFreshlyParsedElement`,
+// covering the failure side of rehydration: a structural edit (element
+// deletion) after the snapshot was captured means the snapshot's
+// `writebackTarget` can no longer resolve in the reparsed document.
+// `ApplyTimelineSnapshot`/`ResolveSnapshotElement` in EditorApp.cc must skip
+// this entry gracefully - it must NOT fall back to dereferencing the stale
+// pre-reparse `snapshot.element` (which would otherwise risk applying a
+// mutation, or computing a writeback target, against an orphaned document
+// disconnected from what the user is looking at).
+TEST(EditorSyncTest, UndoSkipsGracefullyWhenSnapshotTargetNoLongerResolvesAfterReparse) {
+  constexpr std::string_view kSvg = R"svg(<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+  <rect id="r" x="10" y="10" width="20" height="20" fill="red"/>
+</svg>
+)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  app.setCleanSourceText(kSvg);
+
+  auto rect = app.document().document().querySelector("#r");
+  ASSERT_TRUE(rect.has_value());
+
+  const Transform2d before = Transform2d();
+  const Transform2d after = Transform2d::Translate(Vector2d(25.0, 0.0));
+  rect->cast<svg::SVGGraphicsElement>().setTransform(after);
+  UndoSnapshot beforeSnapshot{.element = *rect,
+                              .transform = before,
+                              .writebackTarget = captureAttributeWritebackTarget(*rect)};
+  UndoSnapshot afterSnapshot{.element = *rect,
+                             .transform = after,
+                             .writebackTarget = captureAttributeWritebackTarget(*rect)};
+  ASSERT_TRUE(beforeSnapshot.writebackTarget.has_value());
+  app.undoTimeline().record("Drag r", std::move(beforeSnapshot), std::move(afterSnapshot));
+
+  ASSERT_TRUE(app.canUndo());
+
+  // Structural edit deletes `#r` entirely - the writeback target this undo
+  // entry captured can never resolve again.
+  constexpr std::string_view kSvgAfterDelete = R"svg(<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+</svg>
+)svg";
+  app.applyMutation(EditorCommand::ReplaceDocumentCommand(std::string(kSvgAfterDelete),
+                                                          /*preserveUndoOnReparse=*/true));
+  ASSERT_TRUE(app.flushFrame());
+
+  // Must not crash, and must not resurrect `#r` or otherwise touch the live
+  // (now-empty) document - the entry is skipped as unresolvable, so nothing
+  // is queued and this is a no-op flush.
+  app.undo();
+  EXPECT_FALSE(app.flushFrame());
+
+  EXPECT_FALSE(app.document().document().querySelector("#r").has_value());
+}
+
 }  // namespace
 }  // namespace donner::editor

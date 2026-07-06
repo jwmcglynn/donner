@@ -552,16 +552,31 @@ std::vector<AttributeWritebackTarget> CaptureSelectionTargets(
   return targets;
 }
 
-svg::SVGElement ResolveSnapshotElement(AsyncSVGDocument& document, const UndoSnapshot& snapshot) {
-  svg::SVGElement liveElement = snapshot.element;
-  if (document.hasDocument() && snapshot.writebackTarget.has_value()) {
-    if (auto resolved =
-            resolveAttributeWritebackTarget(document.document(), *snapshot.writebackTarget);
-        resolved.has_value()) {
-      liveElement = *resolved;
-    }
+// Rehydrate a snapshot's target element against the live document.
+//
+// - If the snapshot never captured a `writebackTarget` (the element had no
+//   XML node backing at capture time), there is nothing to rehydrate against;
+//   trust the originally captured element - this is the common case for
+//   snapshots that never survive a reparse.
+// - If a `writebackTarget` was captured but the document has since been
+//   reparsed (or is momentarily absent) such that the target no longer
+//   resolves, return `std::nullopt` rather than silently falling back to the
+//   pre-reparse `snapshot.element`. That handle may still be a technically
+//   live reference into an orphaned pre-reparse document (kept alive only by
+//   this snapshot's own reference), so applying a mutation - or worse,
+//   computing a fresh writeback target - against it risks writing a
+//   correctly-shaped but wrongly-targeted patch into the live source text.
+std::optional<svg::SVGElement> ResolveSnapshotElement(AsyncSVGDocument& document,
+                                                       const UndoSnapshot& snapshot) {
+  if (!snapshot.writebackTarget.has_value()) {
+    return snapshot.element;
   }
-  return liveElement;
+
+  if (!document.hasDocument()) {
+    return std::nullopt;
+  }
+
+  return resolveAttributeWritebackTarget(document.document(), *snapshot.writebackTarget);
 }
 
 void ApplyTimelineSnapshot(EditorApp& app, AsyncSVGDocument& document,
@@ -573,13 +588,26 @@ void ApplyTimelineSnapshot(EditorApp& app, AsyncSVGDocument& document,
     return;
   }
 
-  svg::SVGElement liveElement = ResolveSnapshotElement(document, snapshot);
+  const std::optional<svg::SVGElement> liveElement = ResolveSnapshotElement(document, snapshot);
+  if (!liveElement.has_value()) {
+    // Rehydration was attempted (the snapshot carried a `writebackTarget`)
+    // but failed - a structural edit since this entry was captured means
+    // the target no longer resolves in the live document. There is nothing
+    // safe to replay this entry against; skip it gracefully instead of
+    // dereferencing the stale pre-reparse handle. Extras (grouped
+    // multi-element gestures) are independent snapshots, so still give each
+    // of them a chance to resolve on their own.
+    for (const UndoSnapshot& extra : snapshot.extras) {
+      ApplyTimelineSnapshot(app, document, extra);
+    }
+    return;
+  }
 
   // Route the restored transform through the command queue so every
   // DOM write - tool drags, text-pane re-parse, and undo - goes through
   // the same mutation seam. The queue coalesces with any pending
   // commands and applies on the next `flushFrame()`.
-  app.applyMutation(EditorCommand::SetTransformCommand(liveElement, snapshot.transform));
+  app.applyMutation(EditorCommand::SetTransformCommand(*liveElement, snapshot.transform));
 
   // Capture the source-text writeback target BEFORE the command drains
   // so the path-based target resolves against the in-sync document.
@@ -595,7 +623,7 @@ void ApplyTimelineSnapshot(EditorApp& app, AsyncSVGDocument& document,
         .transform = snapshot.transform,
         .sourceTransformAttributeValue = snapshot.sourceTransformAttributeValue,
         .restoreSourceTransformAttributeValue = snapshot.restoreSourceTransformAttributeValue});
-  } else if (auto target = captureAttributeWritebackTarget(liveElement); target.has_value()) {
+  } else if (auto target = captureAttributeWritebackTarget(*liveElement); target.has_value()) {
     app.enqueueTransformWriteback(EditorApp::CompletedTransformWriteback{
         .target = std::move(*target),
         .transform = snapshot.transform,
