@@ -919,9 +919,9 @@ std::optional<NodeInsertionPlan> GetNodeInsertionPlan(const XMLDocument& documen
     const std::size_t offset = *closingTagOffset;
 
     if (structural) {
-      // Consume the whitespace run that currently indents the closing tag, then re-emit it
-      // as: a newline plus the sibling indentation for the new child, followed by a newline
-      // plus the closing tag's own indentation so the closing tag keeps its place.
+      // Append the child on its own line right after the last existing sibling, leaving the
+      // whitespace that already indents the closing tag untouched. This stays a pure
+      // insertion (nothing removed), which the text-mirror's echo-suppression relies on.
       std::size_t wsStart = offset;
       while (wsStart > 0 && IsXmlSpace(source[wsStart - 1])) {
         --wsStart;
@@ -940,16 +940,12 @@ std::optional<NodeInsertionPlan> GetNodeInsertionPlan(const XMLDocument& documen
 
         std::string prefix = "\n";
         prefix.append(childIndent);
-        std::string suffix = "\n";
-        suffix.append(closingIndent);
 
-        const std::size_t insertedOffset = wsStart + prefix.size();
         return NodeInsertionPlan{
             .replacementOffset = wsStart,
-            .replacementLength = offset - wsStart,
+            .replacementLength = 0,
             .prefix = std::move(prefix),
-            .suffix = std::move(suffix),
-            .insertedNodeOffset = insertedOffset,
+            .insertedNodeOffset = wsStart + 1 + childIndent.size(),
         };
       }
     }
