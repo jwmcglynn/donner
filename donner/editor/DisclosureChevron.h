@@ -3,10 +3,11 @@
 /// Shared tree-disclosure chevron used by both the inspector tree and the
 /// LayersPanel so the two trees present one consistent disclosure style.
 ///
-/// The chevron art is an editor-authored SVG (donner/editor/icons/chevron.svg),
-/// Donner-rendered to a tintable white mask via `RenderEmbeddedSvgIcon`. The
-/// same right-pointing mask is reused for the expanded state by rotating it a
-/// quarter turn at draw time, so callers only manage a single texture.
+/// The chevron art is editor-authored SVG (donner/editor/icons/chevron.svg and
+/// chevron-down.svg), Donner-rendered to a tintable white mask via
+/// `RenderEmbeddedSvgIcon`. Two axis-aligned assets (right for collapsed, down
+/// for expanded) are used so the mask can be blitted with the sanctioned
+/// `AddImage` path rather than a rotated quad.
 
 #include <optional>
 
@@ -16,23 +17,24 @@
 
 namespace donner::editor {
 
-/// Raster size (device px) for the shared chevron mask. Rendered once and
+/// Raster size (device px) for the shared chevron masks. Rendered once each and
 /// scaled down at draw time.
 inline constexpr int kDisclosureChevronRasterSizePx = 32;
 
-/// Cached white-mask bitmap for the (right-pointing, collapsed) chevron, or
+/// Cached white-mask bitmap for the disclosure chevron in the given state
+/// (right-pointing when collapsed, down-pointing when expanded), or
 /// `std::nullopt` if rendering failed. Rendered lazily on first use.
-[[nodiscard]] const std::optional<svg::RendererBitmap>& CachedDisclosureChevronBitmap();
+[[nodiscard]] const std::optional<svg::RendererBitmap>& CachedDisclosureChevronBitmap(
+    bool expanded);
 
-/// Quarter turns (clockwise) to apply to the right-pointing chevron for a given
-/// disclosure state: 0 (points right) when collapsed, 1 (points down) when
-/// expanded.
-[[nodiscard]] int DisclosureChevronQuarterTurns(bool expanded);
+/// Stable texture-cache key suffix (0 collapsed, 1 expanded) so callers upload
+/// and reuse the two chevron masks as distinct textures.
+[[nodiscard]] int DisclosureChevronTextureVariant(bool expanded);
 
-/// Draw the chevron centered at @p center within a @p sizePx square, rotated for
-/// @p expanded and tinted @p tint, from an already-uploaded @p texture whose
-/// valid payload UV range is `[0, uvBottomRight]`.
+/// Blit an already-uploaded chevron @p texture centered at @p center within a
+/// @p sizePx square, tinted @p tint. The texture's valid payload UV range is
+/// `[0, uvBottomRight]`.
 void DrawDisclosureChevron(ImDrawList* drawList, ImTextureID texture, const Vector2d& uvBottomRight,
-                           const ImVec2& center, float sizePx, bool expanded, ImU32 tint);
+                           const ImVec2& center, float sizePx, ImU32 tint);
 
 }  // namespace donner::editor

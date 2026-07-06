@@ -14,6 +14,7 @@
 
 #include "donner/base/MathUtils.h"
 #include "donner/base/xml/XMLNode.h"
+#include "donner/editor/DisclosureChevron.h"
 #include "donner/editor/EditorCommand.h"
 #include "donner/editor/EmbeddedSvgIcon.h"
 #include "donner/editor/ImGuiIncludes.h"
@@ -452,34 +453,69 @@ void SidebarPresenter::refreshSnapshot(const EditorApp& app) {
   inspectorSnapshot_ = std::move(inspector);
 }
 
+void SidebarPresenter::toggleTreeNodeExpanded(std::uint32_t entityId) const {
+  if (const auto it = treeExpandedEntities_.find(entityId); it != treeExpandedEntities_.end()) {
+    treeExpandedEntities_.erase(it);
+  } else {
+    treeExpandedEntities_.insert(entityId);
+  }
+}
+
 void SidebarPresenter::renderTreeNode(EditorApp* liveApp, const TreeNodeSnapshot& node,
-                                      TreeViewState& state) const {
+                                      TreeViewState& state,
+                                      const IconTextureProvider& iconTextureProvider) const {
   const bool hasChildren = !node.children.empty();
+  const std::uint32_t entityId =
+      static_cast<std::uint32_t>(node.element->unsafeEntityHandle().entity());
+
+  // Auto-expand ancestors of a pending scroll target so the selection is
+  // revealed, matching the former SetNextItemOpen behavior.
   const bool onSelectionPath = state.pendingScroll && state.scrollTarget.has_value() &&
                                IsAncestorOrSelf(*node.element, *state.scrollTarget);
   if (hasChildren && onSelectionPath) {
-    ImGui::SetNextItemOpen(true, ImGuiCond_Always);
+    treeExpandedEntities_.insert(entityId);
+  }
+  const bool expanded = hasChildren && treeExpandedEntities_.count(entityId) != 0;
+
+  ImGui::PushID(static_cast<int>(entityId));
+
+  const float rowHeight = ImGui::GetFrameHeight();
+  const float chevronCell = rowHeight;
+
+  // Disclosure chevron shared with the LayersPanel: a right-pointing chevron
+  // when collapsed, rotated to point down when expanded. Non-expandable rows
+  // get a same-width spacer so labels stay aligned. Clicking the chevron
+  // toggles the persistent disclosure state (only when a live app is present,
+  // matching the selection click gating).
+  if (hasChildren) {
+    const ImVec2 cellMin = ImGui::GetCursorScreenPos();
+    if (ImGui::InvisibleButton("##disclosure", ImVec2(chevronCell, rowHeight)) &&
+        liveApp != nullptr) {
+      toggleTreeNodeExpanded(entityId);
+    }
+    if (iconTextureProvider) {
+      const std::optional<svg::RendererBitmap>& bitmap = CachedDisclosureChevronBitmap(expanded);
+      if (bitmap.has_value()) {
+        const IconTexture chevronTexture = iconTextureProvider(
+            0xf600000000000000ull + 9u +
+                static_cast<std::uint64_t>(DisclosureChevronTextureVariant(expanded)),
+            *bitmap);
+        const ImVec2 center(cellMin.x + chevronCell * 0.5f, cellMin.y + rowHeight * 0.5f);
+        DrawDisclosureChevron(ImGui::GetWindowDrawList(), chevronTexture.texture,
+                              chevronTexture.uvBottomRight, center, 11.0f,
+                              ImGui::GetColorU32(ImGuiCol_Text));
+      }
+    }
+    ImGui::SameLine(0.0f, 2.0f);
+  } else {
+    ImGui::Dummy(ImVec2(chevronCell, 0.0f));
+    ImGui::SameLine(0.0f, 2.0f);
   }
 
-  ImGuiTreeNodeFlags nodeFlags = ImGuiTreeNodeFlags_OpenOnArrow |
-                                 ImGuiTreeNodeFlags_OpenOnDoubleClick |
-                                 ImGuiTreeNodeFlags_SpanAvailWidth;
-  if (!hasChildren) {
-    nodeFlags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
-  }
-  if (node.isSelected) {
-    nodeFlags |= ImGuiTreeNodeFlags_Selected;
-  }
-
-  const donner::Entity entity = node.element->unsafeEntityHandle().entity();
-  ImGui::PushID(static_cast<int>(static_cast<std::uint32_t>(entity)));
-  const bool nodeOpen = ImGui::TreeNodeEx(node.label.c_str(), nodeFlags);
-
-  // Click handling: only valid when we have live access to the EditorApp.
-  // When `liveApp` is null (async renderer is busy), clicks are dropped -
-  // the selection state freezes along with the rest of the snapshot until
-  // the worker finishes and the main loop catches up next frame.
-  if (liveApp != nullptr && ImGui::IsItemClicked()) {
+  // Row label + selection highlight. A default-size selectable already spans
+  // the remaining content width, giving the same hit box and highlight the tree
+  // node used to.
+  if (ImGui::Selectable(node.label.c_str(), node.isSelected) && liveApp != nullptr) {
     const bool toggleSelection = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
     if (toggleSelection) {
       liveApp->toggleInSelection(*node.element);
@@ -490,22 +526,24 @@ void SidebarPresenter::renderTreeNode(EditorApp* liveApp, const TreeNodeSnapshot
     state.pendingScroll = false;
   }
 
-  if (nodeOpen && hasChildren) {
-    for (const auto& child : node.children) {
-      renderTreeNode(liveApp, child, state);
-    }
-    ImGui::TreePop();
-  }
-
   ImGui::PopID();
+
+  if (expanded) {
+    ImGui::Indent(chevronCell);
+    for (const auto& child : node.children) {
+      renderTreeNode(liveApp, child, state, iconTextureProvider);
+    }
+    ImGui::Unindent(chevronCell);
+  }
 }
 
-void SidebarPresenter::renderTreeView(EditorApp* liveApp, TreeViewState& state) const {
+void SidebarPresenter::renderTreeView(EditorApp* liveApp, TreeViewState& state,
+                                      const IconTextureProvider& iconTextureProvider) const {
   if (!treeSnapshot_.has_value()) {
     ImGui::TextDisabled("(no document)");
     return;
   }
-  renderTreeNode(liveApp, *treeSnapshot_, state);
+  renderTreeNode(liveApp, *treeSnapshot_, state, iconTextureProvider);
 }
 
 bool SidebarPresenter::renderInspector(EditorApp* liveApp, const ViewportState& viewport,

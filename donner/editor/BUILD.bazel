@@ -547,6 +547,7 @@ embed_resources(
     name = "editor_icons",
     header_output = "embed_resources/EditorIcons.h",
     resources = {
+        "kEditorChevronDownSvg": "icons/chevron-down.svg",
         "kEditorChevronSvg": "icons/chevron.svg",
     },
     visibility = ["//donner:__subpackages__"],
@@ -576,6 +577,7 @@ donner_cc_library(
     deps = [
         ":attribute_writeback",
         ":command_queue",
+        ":disclosure_chevron",
         ":editor_app",
         ":embedded_svg_icon",
         ":imgui_headers",
@@ -1182,6 +1184,7 @@ donner_cc_library(
     srcs = ["LayersPanel.cc"],
     hdrs = ["LayersPanel.h"],
     deps = [
+        ":disclosure_chevron",
         ":editor_app",
         ":embedded_svg_icon",
         ":imgui_headers",
