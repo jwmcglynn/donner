@@ -33,7 +33,7 @@ jobs:
             //donner/editor/wasm:wasm_tiny_skia_web_package
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 20
 
