@@ -23,6 +23,12 @@ donner_cc_library(
     name = "animation_system",
     srcs = ["AnimationSystem.cc"],
     hdrs = ["AnimationSystem.h"],
+    # AnimationSystem::advance is referenced by //donner/svg/renderer:rendering_context
+    # (RenderingContext.cc). Under gold (linker canary), RenderingContext.o is pulled
+    # from its archive after libanimation_system.a has already been scanned, so gold
+    # discards AnimationSystem.o and the reference goes undefined. lld tolerates this via
+    # iterative archive resolution; gold does not. Force the object in via whole-archive.
+    alwayslink = True,
     visibility = [
         "//donner/svg:__subpackages__",
     ],
