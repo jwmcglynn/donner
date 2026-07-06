@@ -3,7 +3,9 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <vector>
 
+#include "donner/base/RcString.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/ComputedClipPathsComponent.h"
 #include "donner/svg/components/ConditionalProcessingComponent.h"
@@ -136,6 +138,13 @@ public:
     canvasFromDocumentWorldTransform_ =
         layoutSystem ? layoutSystem->getCanvasFromDocumentTransform(registry)
                      : LayoutSystem().getCanvasFromDocumentTransform(registry);
+
+    // Cache the user's preferred languages, used to evaluate the `systemLanguage` conditional
+    // processing attribute (see ConditionalProcessingComponent). Defaults to {"en"} when unset.
+    if (registry_.ctx().contains<SVGDocumentContext>()) {
+      userLanguages_ = registry_.ctx().get<SVGDocumentContext>().userLanguages;
+    }
+
     if (verbose_) {
       std::cout << "Canvas from document-world transform: " << canvasFromDocumentWorldTransform_
                 << "\n";
@@ -172,7 +181,7 @@ public:
     // referenced by IRI (gradients, <clipPath>, <defs> content) are resolved elsewhere and are
     // intentionally not affected, matching resvg.
     if (const auto* conditional = dataHandle.try_get<ConditionalProcessingComponent>();
-        conditional && !EvaluateConditionalProcessing(*conditional)) {
+        conditional && !EvaluateConditionalProcessing(*conditional, userLanguages_)) {
       return;
     }
 
@@ -450,7 +459,7 @@ public:
       }
 
       if (const auto* conditional = childDataHandle.try_get<ConditionalProcessingComponent>();
-          conditional && !EvaluateConditionalProcessing(*conditional)) {
+          conditional && !EvaluateConditionalProcessing(*conditional, userLanguages_)) {
         continue;
       }
 
@@ -882,6 +891,10 @@ private:
 
   /// Transform from the canvas to the SVG document root, for the current canvas scale.
   Transform2d canvasFromDocumentWorldTransform_;
+
+  /// User's preferred languages for evaluating the `systemLanguage` conditional processing
+  /// attribute. Defaults to {"en"} when the document context is unavailable.
+  std::vector<RcString> userLanguages_ = {RcString("en")};
 
   /// Tracks mask elements currently being rendered to detect mutual recursion
   /// (e.g., mask1→mask2→mask1). When a mask reference resolves to an element already in this

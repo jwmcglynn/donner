@@ -12,6 +12,7 @@
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/RcString.h"
 #include "donner/base/Utils.h"
 #include "donner/base/xml/XMLDocument.h"
 #include "donner/base/xml/XMLQualifiedName.h"
@@ -328,6 +329,26 @@ public:
    * click math in editors/viewers) should invert it.
    */
   Transform2d canvasFromDocumentTransform() const;
+
+  /**
+   * Set the user's preferred languages, in priority order, used to evaluate the `systemLanguage`
+   * conditional processing attribute (on \ref xml_switch children and on renderable elements).
+   *
+   * Each entry is a BCP 47 language tag such as `"en"` or `"en-US"`. A `systemLanguage` value
+   * matches when it equals (case-insensitive) one of these languages, or begins with one of these
+   * languages followed by `-` (e.g. user language `"en"` matches `systemLanguage="en-GB"`).
+   *
+   * Defaults to `{"en"}` when not set. Passing an empty list disables all `systemLanguage` matches.
+   *
+   * @param languages User's preferred languages, in priority order.
+   */
+  void setUserLanguages(std::vector<RcString> languages);
+
+  /**
+   * Get the user's preferred languages used to evaluate the `systemLanguage` conditional processing
+   * attribute. Defaults to `{"en"}`.
+   */
+  std::vector<RcString> userLanguages() const;
 
   /**
    * Returns true if the two SVGDocument handles reference the same underlying document.

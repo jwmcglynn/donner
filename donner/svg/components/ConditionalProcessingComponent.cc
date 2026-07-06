@@ -6,12 +6,6 @@ namespace donner::svg::components {
 
 namespace {
 
-/**
- * The user-preferred language used to evaluate `systemLanguage`, matching resvg's default
- * language list of `["en"]`, which the resvg-test-suite goldens are rendered with.
- */
-constexpr std::string_view kUserLanguage = "en";
-
 using ConditionalProcessingField = std::optional<RcString> ConditionalProcessingComponent::*;
 
 ConditionalProcessingField FieldForConditionalProcessingAttribute(
@@ -88,7 +82,8 @@ bool SystemLanguageMatches(std::string_view systemLanguage, std::string_view use
   return false;
 }
 
-bool EvaluateConditionalProcessing(const ConditionalProcessingComponent& conditional) {
+bool EvaluateConditionalProcessing(const ConditionalProcessingComponent& conditional,
+                                   std::span<const RcString> userLanguages) {
   // `requiredFeatures` is deprecated in SVG2 and always evaluates to true (matching resvg, which
   // ignores it) - intentionally not checked here.
 
@@ -101,12 +96,28 @@ bool EvaluateConditionalProcessing(const ConditionalProcessingComponent& conditi
   }
 
   if (conditional.systemLanguage.has_value()) {
-    if (!SystemLanguageMatches(*conditional.systemLanguage, kUserLanguage)) {
+    // The attribute passes if any user-preferred language matches. An empty language list
+    // therefore evaluates any present `systemLanguage` to false.
+    bool matched = false;
+    for (const RcString& userLanguage : userLanguages) {
+      if (SystemLanguageMatches(*conditional.systemLanguage, userLanguage)) {
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) {
       return false;
     }
   }
 
   return true;
+}
+
+bool EvaluateConditionalProcessing(const ConditionalProcessingComponent& conditional) {
+  // Default user language list of `{"en"}`, matching resvg's default (the resvg-test-suite goldens
+  // are rendered with it).
+  static const std::vector<RcString> kDefaultUserLanguages = {RcString("en")};
+  return EvaluateConditionalProcessing(conditional, kDefaultUserLanguages);
 }
 
 }  // namespace donner::svg::components

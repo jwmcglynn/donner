@@ -2,7 +2,9 @@
 /// @file
 
 #include <optional>
+#include <span>
 #include <string_view>
+#include <vector>
 
 #include "donner/base/RcString.h"
 #include "donner/base/xml/XMLQualifiedName.h"
@@ -85,6 +87,19 @@ bool HasConditionalProcessingAttributes(const ConditionalProcessingComponent& co
  * - `requiredExtensions` evaluates to true only when empty (no extensions are supported).
  * - `systemLanguage` evaluates to true if any comma-separated tag equals a user language or is a
  *   sub-tag of it (e.g. both "en" and "en-GB" match the default user language "en").
+ *
+ * @param conditional Conditional-processing attribute values to evaluate.
+ * @param userLanguages User's preferred languages, in priority order (see \ref
+ *   SVGDocument::setUserLanguages). A `systemLanguage` value matches if any of these languages
+ *   matches per \ref SystemLanguageMatches. An empty list disables all `systemLanguage` matches.
+ * @return true if all present attributes evaluate to true (the element may render).
+ */
+bool EvaluateConditionalProcessing(const ConditionalProcessingComponent& conditional,
+                                   std::span<const RcString> userLanguages);
+
+/**
+ * Overload of \ref EvaluateConditionalProcessing that uses the default user language list of
+ * `{"en"}`, matching resvg's default (the resvg-test-suite goldens are rendered with it).
  *
  * @param conditional Conditional-processing attribute values to evaluate.
  * @return true if all present attributes evaluate to true (the element may render).

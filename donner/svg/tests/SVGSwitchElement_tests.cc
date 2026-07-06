@@ -6,9 +6,11 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "donner/base/FileOffset.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/RcString.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
@@ -352,6 +354,33 @@ TEST(SVGSwitchElementTests, FailingConditionalOnContainerDisablesSubtree) {
   )");
 
   EXPECT_TRUE(generatedAscii.matches(kAllEmpty));
+}
+
+/**
+ * `systemLanguage` is evaluated against the document's configured user language list. The default
+ * `{"en"}` does not match `systemLanguage="ru"`, but configuring the list to `{"ru"}` does.
+ */
+TEST(SVGSwitchElementTests, SystemLanguageHonorsConfiguredLanguages) {
+  constexpr std::string_view kSvg = R"(
+    <svg width="16" height="16">
+      <rect x="0" y="0" width="16" height="16" fill="black" systemLanguage="ru"/>
+    </svg>
+  )";
+
+  // Default user language "en" does not match systemLanguage="ru".
+  {
+    SVGDocument document = instantiateSubtree(kSvg);
+    const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(std::move(document));
+    EXPECT_TRUE(generatedAscii.matches(kAllEmpty));
+  }
+
+  // After configuring the user language list to {"ru"}, the rect renders.
+  {
+    SVGDocument document = instantiateSubtree(kSvg);
+    document.setUserLanguages({RcString("ru")});
+    const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(std::move(document));
+    EXPECT_TRUE(generatedAscii.matches(kAllFilled));
+  }
 }
 
 }  // namespace donner::svg
