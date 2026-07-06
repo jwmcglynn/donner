@@ -23,10 +23,19 @@ AccentTints TintsFor(Accent accent) {
     case Accent::UltraViolet:  // C: #7B5CE6 / #9A7CF7 / #B29AF9
       return {IM_COL32(0x7B, 0x5C, 0xE6, 0xFF), IM_COL32(0x9A, 0x7C, 0xF7, 0xFF),
               IM_COL32(0xB2, 0x9A, 0xF9, 0xFF), css::RGBA(0x9A, 0x7C, 0xF7, 0xFF)};
+    case Accent::MacBlue:
+      // D: #086ACC / #0A84FF / #47A3FF (QA-F8, 2026-07-06). #0A84FF is Apple's
+      // macOS system blue, specified exactly by QA-F8; the active/hover tints
+      // are not itemized by QA-F8, so they are derived the same way the other
+      // three variants derive theirs (active = 20% darker, hover = 25% toward
+      // white; B's own channel is already saturated at 0xFF so hover lightens
+      // via desaturation instead of a further blue increase).
+      return {IM_COL32(0x08, 0x6A, 0xCC, 0xFF), IM_COL32(0x0A, 0x84, 0xFF, 0xFF),
+              IM_COL32(0x47, 0xA3, 0xFF, 0xFF), css::RGBA(0x0A, 0x84, 0xFF, 0xFF)};
   }
   // Unreachable for valid enum values; fall back to the shipped default.
-  return {IM_COL32(0x24, 0x9E, 0x8C, 0xFF), IM_COL32(0x31, 0xC6, 0xB3, 0xFF),
-          IM_COL32(0x54, 0xD9, 0xC8, 0xFF), css::RGBA(0x31, 0xC6, 0xB3, 0xFF)};
+  return {IM_COL32(0x08, 0x6A, 0xCC, 0xFF), IM_COL32(0x0A, 0x84, 0xFF, 0xFF),
+          IM_COL32(0x47, 0xA3, 0xFF, 0xFF), css::RGBA(0x0A, 0x84, 0xFF, 0xFF)};
 }
 
 }  // namespace
@@ -34,40 +43,46 @@ AccentTints TintsFor(Accent accent) {
 EditorTheme EditorTheme::Dark(Accent accent) {
   EditorTheme t{};
 
-  // Surfaces (Dark Slate ramp).
-  t.surfaceCanvas = IM_COL32(0x0E, 0x11, 0x16, 0xFF);
-  t.surfaceSunken = IM_COL32(0x12, 0x16, 0x1D, 0xFF);
-  t.surfaceBase = IM_COL32(0x16, 0x1B, 0x22, 0xFF);
-  t.surfaceRaised = IM_COL32(0x1E, 0x25, 0x2E, 0xFF);
-  t.surfaceOverlay = IM_COL32(0x23, 0x2B, 0x36, 0xFF);
-  t.surfaceHover = IM_COL32(0x2A, 0x33, 0x3F, 0xFF);
-  t.surfaceActive = IM_COL32(0x31, 0x3C, 0x4A, 0xFF);
+  // Surfaces (QA-F8 macOS-dark-mode-like ramp, 2026-07-06). base/raised/
+  // overlay/hover are the exact QA-F8 hexes (matching Apple's dark-mode
+  // systemGray6/5/4/3); canvas and active are not itemized by QA-F8 and
+  // continue the same ramp one step darker / one step lighter (systemGray2).
+  t.surfaceCanvas = IM_COL32(0x10, 0x10, 0x12, 0xFF);
+  t.surfaceSunken = IM_COL32(0x16, 0x16, 0x18, 0xFF);
+  t.surfaceBase = IM_COL32(0x1C, 0x1C, 0x1E, 0xFF);
+  t.surfaceRaised = IM_COL32(0x2C, 0x2C, 0x2E, 0xFF);
+  t.surfaceOverlay = IM_COL32(0x3A, 0x3A, 0x3C, 0xFF);
+  t.surfaceHover = IM_COL32(0x48, 0x48, 0x4A, 0xFF);
+  t.surfaceActive = IM_COL32(0x63, 0x63, 0x66, 0xFF);
 
-  // Borders.
-  t.borderSubtle = IM_COL32(0x2D, 0x35, 0x42, 0xFF);
-  t.borderStrong = IM_COL32(0x3A, 0x44, 0x53, 0xFF);
+  // Borders. Not itemized by QA-F8; mapped onto the same ramp as the
+  // surfaces they divide (raised/overlay) rather than left at the old hexes.
+  t.borderSubtle = IM_COL32(0x2C, 0x2C, 0x2E, 0xFF);
+  t.borderStrong = IM_COL32(0x3A, 0x3A, 0x3C, 0xFF);
 
-  // Text.
-  t.textPrimary = IM_COL32(0xE6, 0xEA, 0xF0, 0xFF);
-  t.textMuted = IM_COL32(0x9A, 0xA5, 0xB4, 0xFF);
-  t.textDisabled = IM_COL32(0x5C, 0x66, 0x75, 0xFF);
+  // Text (QA-F8 hexes; muted/disabled alpha-blend over surfaceBase rather
+  // than being pre-flattened, matching Apple's secondary/tertiaryLabelColor).
+  t.textPrimary = IM_COL32(0xFF, 0xFF, 0xFF, 0xFF);
+  t.textMuted = IM_COL32(0xEB, 0xEB, 0xF5, 0x99);     // 0x99/0xFF = 60%.
+  t.textDisabled = IM_COL32(0xEB, 0xEB, 0xF5, 0x4D);  // 0x4D/0xFF = 30%.
 
-  // Accent (chosen variant) + dark ink.
+  // Accent (chosen variant) + dark ink. Ink is not itemized by QA-F8 beyond
+  // "dark ink on fills"; it matches surfaceCanvas, as before.
   const AccentTints tints = TintsFor(accent);
   t.accentActive = tints.active;
   t.accentDefault = tints.defaultTint;
   t.accentHover = tints.hover;
-  t.accentInk = IM_COL32(0x0E, 0x11, 0x16, 0xFF);
+  t.accentInk = IM_COL32(0x10, 0x10, 0x12, 0xFF);
   t.accentColor = tints.defaultRgba;
 
-  // Selection is derived from the accent.
+  // Selection is derived from the accent; QA-F8 keeps stroke + 22% fill.
   t.selectionStroke = tints.defaultTint;
   t.selectionFillAlpha = 0.22f;
 
-  // Semantic states.
-  t.warning = IM_COL32(0xE3, 0xB3, 0x41, 0xFF);
-  t.destructive = IM_COL32(0xF0, 0x61, 0x6A, 0xFF);
-  t.success = IM_COL32(0x3F, 0xB9, 0x84, 0xFF);
+  // Semantic states (QA-F8 hexes).
+  t.warning = IM_COL32(0xFF, 0xD6, 0x0A, 0xFF);
+  t.destructive = IM_COL32(0xFF, 0x45, 0x3A, 0xFF);
+  t.success = IM_COL32(0x32, 0xD7, 0x4B, 0xFF);
 
   // Metrics keep their in-struct defaults (4 px grid, radii, control sizes).
   return t;
@@ -128,7 +143,8 @@ void EditorTheme::applyToImGuiStyle(ImGuiStyle& style) const {
   set(ImGuiCol_ScrollbarGrabHovered, surfaceActive);
   set(ImGuiCol_ScrollbarGrabActive, accentDefault);
 
-  // Rounding.
+  // Rounding (QA-F8 nudged radiusContainer 6 -> 8 for a rounder macOS-panel
+  // feel; radiusControl is unchanged).
   style.FrameRounding = radiusControl;
   style.GrabRounding = radiusControl;
   style.WindowRounding = radiusContainer;
@@ -146,7 +162,7 @@ void EditorTheme::applyToImGuiStyle(ImGuiStyle& style) const {
 }
 
 const EditorTheme& EditorTheme::Active() {
-  static EditorTheme active = EditorTheme::Dark(Accent::SignalTeal);
+  static EditorTheme active = EditorTheme::Dark(Accent::MacBlue);
   return active;
 }
 

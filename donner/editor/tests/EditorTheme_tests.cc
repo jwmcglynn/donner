@@ -9,7 +9,7 @@ namespace donner::editor {
 namespace {
 
 constexpr std::array<Accent, kAccentCount> kAllAccents = {
-    Accent::AzimuthBlue, Accent::SignalTeal, Accent::UltraViolet};
+    Accent::AzimuthBlue, Accent::SignalTeal, Accent::UltraViolet, Accent::MacBlue};
 
 /// Every color token, so completeness can be asserted without listing each one
 /// at every call site. None of the design-doc tokens is transparent-black
@@ -37,50 +37,65 @@ TEST(EditorTheme, TokenCompletenessForEveryAccent) {
     EXPECT_FLOAT_EQ(theme.space2, 8.0f);
     EXPECT_FLOAT_EQ(theme.space4, 16.0f);
     EXPECT_FLOAT_EQ(theme.radiusControl, 4.0f);
-    EXPECT_FLOAT_EQ(theme.radiusContainer, 6.0f);
+    // QA-F8 (2026-07-06): radiusContainer nudged 6 -> 8 for a rounder
+    // macOS-panel feel.
+    EXPECT_FLOAT_EQ(theme.radiusContainer, 8.0f);
     EXPECT_FLOAT_EQ(theme.scrollbarSize, 12.0f);
     EXPECT_FLOAT_EQ(theme.selectionFillAlpha, 0.22f);
-    // Ink on accent fills is the dark ink for every accent.
-    EXPECT_EQ(theme.accentInk, IM_COL32(0x0E, 0x11, 0x16, 0xFF));
+    // Ink on accent fills is the dark ink for every accent (QA-F8 hex).
+    EXPECT_EQ(theme.accentInk, IM_COL32(0x10, 0x10, 0x12, 0xFF));
     // Selection derives from the accent.
     EXPECT_EQ(theme.selectionStroke, theme.accentDefault);
   }
 }
 
-// The shipped default is SignalTeal (variant B), and each accent is distinct.
+// The shipped default is MacBlue (variant D, QA-F8 2026-07-06), and each
+// accent is distinct.
 TEST(EditorTheme, AccentEnumCoverage) {
   const EditorTheme defaulted = EditorTheme::Dark();
-  const EditorTheme teal = EditorTheme::Dark(Accent::SignalTeal);
-  EXPECT_EQ(defaulted.accentDefault, teal.accentDefault);
-  EXPECT_EQ(teal.accentDefault, IM_COL32(0x31, 0xC6, 0xB3, 0xFF));
+  const EditorTheme macBlue = EditorTheme::Dark(Accent::MacBlue);
+  EXPECT_EQ(defaulted.accentDefault, macBlue.accentDefault);
+  EXPECT_EQ(macBlue.accentDefault, IM_COL32(0x0A, 0x84, 0xFF, 0xFF));
 
+  // The prior default (SignalTeal, variant B) and the other pre-existing
+  // variants stay selectable, unchanged.
+  const EditorTheme teal = EditorTheme::Dark(Accent::SignalTeal);
   const EditorTheme blue = EditorTheme::Dark(Accent::AzimuthBlue);
   const EditorTheme violet = EditorTheme::Dark(Accent::UltraViolet);
+  EXPECT_EQ(teal.accentDefault, IM_COL32(0x31, 0xC6, 0xB3, 0xFF));
   EXPECT_EQ(blue.accentDefault, IM_COL32(0x4C, 0x8D, 0xF6, 0xFF));
   EXPECT_EQ(violet.accentDefault, IM_COL32(0x9A, 0x7C, 0xF7, 0xFF));
 
-  // All three accents are distinct on their default tint.
+  // All four accents are distinct on their default tint.
   EXPECT_NE(blue.accentDefault, teal.accentDefault);
   EXPECT_NE(teal.accentDefault, violet.accentDefault);
   EXPECT_NE(blue.accentDefault, violet.accentDefault);
+  EXPECT_NE(macBlue.accentDefault, blue.accentDefault);
+  EXPECT_NE(macBlue.accentDefault, teal.accentDefault);
+  EXPECT_NE(macBlue.accentDefault, violet.accentDefault);
 
   // Surfaces / semantics are accent-independent.
   EXPECT_EQ(blue.surfaceBase, teal.surfaceBase);
   EXPECT_EQ(blue.destructive, violet.destructive);
+  EXPECT_EQ(macBlue.surfaceBase, teal.surfaceBase);
 }
 
-// The named palette values match design doc 0054 exactly.
+// The named palette values match the QA-F8 macOS-dark-mode-like revision
+// (2026-07-06) exactly. Surface/text/semantic tokens are accent-independent,
+// so this is checked against the shipped default (MacBlue).
 TEST(EditorTheme, PaletteMatchesDoc) {
-  const EditorTheme t = EditorTheme::Dark(Accent::SignalTeal);
-  EXPECT_EQ(t.surfaceCanvas, IM_COL32(0x0E, 0x11, 0x16, 0xFF));
-  EXPECT_EQ(t.surfaceBase, IM_COL32(0x16, 0x1B, 0x22, 0xFF));
-  EXPECT_EQ(t.surfaceRaised, IM_COL32(0x1E, 0x25, 0x2E, 0xFF));
-  EXPECT_EQ(t.surfaceOverlay, IM_COL32(0x23, 0x2B, 0x36, 0xFF));
-  EXPECT_EQ(t.textPrimary, IM_COL32(0xE6, 0xEA, 0xF0, 0xFF));
-  EXPECT_EQ(t.textMuted, IM_COL32(0x9A, 0xA5, 0xB4, 0xFF));
-  EXPECT_EQ(t.warning, IM_COL32(0xE3, 0xB3, 0x41, 0xFF));
-  EXPECT_EQ(t.destructive, IM_COL32(0xF0, 0x61, 0x6A, 0xFF));
-  EXPECT_EQ(t.success, IM_COL32(0x3F, 0xB9, 0x84, 0xFF));
+  const EditorTheme t = EditorTheme::Dark(Accent::MacBlue);
+  EXPECT_EQ(t.surfaceCanvas, IM_COL32(0x10, 0x10, 0x12, 0xFF));
+  EXPECT_EQ(t.surfaceBase, IM_COL32(0x1C, 0x1C, 0x1E, 0xFF));
+  EXPECT_EQ(t.surfaceRaised, IM_COL32(0x2C, 0x2C, 0x2E, 0xFF));
+  EXPECT_EQ(t.surfaceOverlay, IM_COL32(0x3A, 0x3A, 0x3C, 0xFF));
+  EXPECT_EQ(t.surfaceHover, IM_COL32(0x48, 0x48, 0x4A, 0xFF));
+  EXPECT_EQ(t.textPrimary, IM_COL32(0xFF, 0xFF, 0xFF, 0xFF));
+  EXPECT_EQ(t.textMuted, IM_COL32(0xEB, 0xEB, 0xF5, 0x99));
+  EXPECT_EQ(t.accentDefault, IM_COL32(0x0A, 0x84, 0xFF, 0xFF));
+  EXPECT_EQ(t.warning, IM_COL32(0xFF, 0xD6, 0x0A, 0xFF));
+  EXPECT_EQ(t.destructive, IM_COL32(0xFF, 0x45, 0x3A, 0xFF));
+  EXPECT_EQ(t.success, IM_COL32(0x32, 0xD7, 0x4B, 0xFF));
 }
 
 // The css seam returns the accent tinted to the requested alpha.
@@ -135,8 +150,9 @@ TEST(EditorTheme, ApplyToImGuiStyleSetsMappedSlots) {
 
   EXPECT_FLOAT_EQ(style.FrameRounding, 4.0f);
   EXPECT_FLOAT_EQ(style.GrabRounding, 4.0f);
-  EXPECT_FLOAT_EQ(style.WindowRounding, 6.0f);
-  EXPECT_FLOAT_EQ(style.PopupRounding, 6.0f);
+  // QA-F8 (2026-07-06): container rounding nudged 6 -> 8.
+  EXPECT_FLOAT_EQ(style.WindowRounding, 8.0f);
+  EXPECT_FLOAT_EQ(style.PopupRounding, 8.0f);
   EXPECT_FLOAT_EQ(style.FramePadding.x, 8.0f);
   EXPECT_FLOAT_EQ(style.FramePadding.y, 4.0f);
   EXPECT_FLOAT_EQ(style.ItemSpacing.x, 8.0f);
@@ -158,8 +174,9 @@ TEST(EditorTheme, ApplyPublishesActiveTheme) {
   EditorTheme::SetActive(violet);
   EXPECT_EQ(EditorTheme::Active().accentDefault, violet.accentDefault);
 
-  // Restore the shipped default so test ordering cannot leak state.
-  EditorTheme::SetActive(EditorTheme::Dark(Accent::SignalTeal));
+  // Restore the shipped default (MacBlue, QA-F8) so test ordering cannot
+  // leak state.
+  EditorTheme::SetActive(EditorTheme::Dark(Accent::MacBlue));
 }
 
 }  // namespace donner::editor
