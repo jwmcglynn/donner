@@ -38,7 +38,7 @@ struct AnimationStateComponent {
   double activeDuration = 0.0;
 
   /// Whether this animation has completed at least one full cycle.
-  /// Used to enforce restart="never" — once ended, never restarts.
+  /// Used to enforce restart="never": once ended, never restarts.
   bool hasCompleted = false;
 
   /// Whether this animation was active in the previous frame.

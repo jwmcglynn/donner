@@ -486,7 +486,7 @@ TEST(SVGAnimateElement, NegativeBeginFrozen) {
 }
 
 TEST(SVGAnimateElement, MultipleBeginValues) {
-  // begin="1s;5s" — should start at the earliest qualifying time (1s).
+  // begin="1s;5s" should start at the earliest qualifying time (1s).
   auto document = parseSVGWithExperimental(R"(
     <svg xmlns="http://www.w3.org/2000/svg">
       <rect id="r" width="100" height="100">

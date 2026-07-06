@@ -116,13 +116,13 @@ void computeTimingState(AnimationStateComponent& state, const AnimationTimingCom
   // Enforce restart attribute.
   // restart="never": once the animation has completed, it cannot restart.
   if (timing.restart == AnimationRestart::Never && state.hasCompleted) {
-    // Keep the After phase — animation stays frozen or removed.
+    // Keep the After phase; animation stays frozen or removed.
     newPhase = AnimationPhase::After;
   }
   // restart="whenNotActive": can only restart when not currently active.
   if (timing.restart == AnimationRestart::WhenNotActive && state.wasActive &&
       newPhase == AnimationPhase::Active && state.phase == AnimationPhase::After) {
-    // Was active, ended, now a new begin wants to make it active again — suppress.
+    // Was active, ended, now a new begin wants to make it active again; suppress.
     newPhase = AnimationPhase::After;
   }
 
