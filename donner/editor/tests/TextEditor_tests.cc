@@ -52,6 +52,7 @@ using ::testing::AllOf;
 using ::testing::ElementsAre;
 using ::testing::Field;
 using ::testing::Gt;
+using ::testing::IsEmpty;
 
 auto SourceByteRangeIs(std::size_t start, std::size_t end) {
   return AllOf(Field("start", &SourceByteRange::start, start),
@@ -61,6 +62,11 @@ auto SourceByteRangeIs(std::size_t start, std::size_t end) {
 auto SourcePointIs(SourcePoint expected) {
   return AllOf(Field("line", &SourcePoint::line, expected.line),
                Field("column", &SourcePoint::column, expected.column));
+}
+
+auto LineRangeIs(int startLine, int endLine) {
+  return AllOf(Field("startLine", &LineRange::startLine, startLine),
+               Field("endLine", &LineRange::endLine, endLine));
 }
 
 auto FocusReferenceLinkIs(SourcePoint from, SourcePoint to) {
@@ -1379,14 +1385,19 @@ TEST_F(TextEditorTests, SourceStyleDecorationsSortByEndThenId) {
       },
   }));
 
-  ASSERT_EQ(editor.sourceStyleDecorations().size(), 4u);
-  EXPECT_EQ(editor.sourceStyleDecorations()[0].id, 1u);
-  EXPECT_EQ(editor.sourceStyleDecorations()[0].range, (SourceByteRange{.start = 0, .end = 3}));
-  EXPECT_EQ(editor.sourceStyleDecorations()[0].chipRange, (SourceByteRange{.start = 0, .end = 3}));
-  EXPECT_EQ(editor.sourceStyleDecorations()[1].id, 2u);
-  EXPECT_EQ(editor.sourceStyleDecorations()[2].id, 3u);
-  EXPECT_EQ(editor.sourceStyleDecorations()[3].id, 4u);
-  EXPECT_EQ(editor.sourceStyleDecorations()[3].range, (SourceByteRange{.start = 0, .end = 5}));
+  EXPECT_THAT(editor.sourceStyleDecorations(),
+              ElementsAre(SourceStyleDecorationIs(1, SourceByteRange{.start = 0, .end = 3},
+                                                  /*ineffective=*/false, /*showChip=*/false,
+                                                  /*chipCount=*/0),
+                          SourceStyleDecorationIs(2, SourceByteRange{.start = 0, .end = 3},
+                                                  /*ineffective=*/false, /*showChip=*/false,
+                                                  /*chipCount=*/0),
+                          SourceStyleDecorationIs(3, SourceByteRange{.start = 0, .end = 3},
+                                                  /*ineffective=*/false, /*showChip=*/false,
+                                                  /*chipCount=*/0),
+                          SourceStyleDecorationIs(4, SourceByteRange{.start = 0, .end = 5},
+                                                  /*ineffective=*/false, /*showChip=*/false,
+                                                  /*chipCount=*/0)));
 }
 
 TEST_F(TextEditorTests, IneffectiveStyleLookupSkipsEffectiveDecorationsAtSameOffset) {
@@ -1650,15 +1661,16 @@ TEST_F(TextEditorTests, RemapFocusMetadataHandlesInsertionAtRangeBoundary) {
 
   RemapFocusMetadataForSourceEdit(intent);
 
-  ASSERT_EQ(editor.hoverSourceRanges().size(), 2u);
-  EXPECT_EQ(editor.hoverSourceRanges()[0], (SourceByteRange{.start = 5, .end = 6}));
-  EXPECT_EQ(editor.hoverSourceRanges()[1], (SourceByteRange{.start = 0, .end = 1}));
-  ASSERT_EQ(editor.sourceStyleDecorations().size(), 1u);
-  EXPECT_EQ(editor.sourceStyleDecorations()[0].range, (SourceByteRange{.start = 5, .end = 7}));
-  EXPECT_EQ(editor.sourceStyleDecorations()[0].chipRange, (SourceByteRange{.start = 5, .end = 5}));
-  ASSERT_EQ(ActiveFocusPartition().referenceLinks.size(), 1u);
-  EXPECT_EQ(ActiveFocusPartition().referenceLinks[0].from, (SourcePoint{.line = 0, .column = 5}));
-  EXPECT_EQ(ActiveFocusPartition().referenceLinks[0].to, (SourcePoint{.line = 1, .column = 0}));
+  EXPECT_THAT(editor.hoverSourceRanges(),
+              ElementsAre(SourceByteRangeIs(5, 6), SourceByteRangeIs(0, 1)));
+  EXPECT_THAT(editor.sourceStyleDecorations(),
+              ElementsAre(SourceStyleDecorationIs(12, SourceByteRange{.start = 5, .end = 7},
+                                                  /*ineffective=*/false, /*showChip=*/true,
+                                                  /*chipCount=*/0, "",
+                                                  SourceByteRange{.start = 5, .end = 5})));
+  EXPECT_THAT(ActiveFocusPartition().referenceLinks,
+              ElementsAre(FocusReferenceLinkIs(SourcePoint{.line = 0, .column = 5},
+                                               SourcePoint{.line = 1, .column = 0})));
 }
 
 TEST_F(TextEditorTests, RemapFocusMetadataHandlesShrinkingDeletionAndRawInvalidRanges) {
@@ -1689,12 +1701,11 @@ TEST_F(TextEditorTests, RemapFocusMetadataHandlesShrinkingDeletionAndRawInvalidR
 
   RemapFocusMetadataForSourceEdit(intent);
 
-  ASSERT_EQ(editor.hoverSourceRanges().size(), 1u);
-  EXPECT_EQ(editor.hoverSourceRanges()[0], (SourceByteRange{.start = 4, .end = 6}));
-  EXPECT_TRUE(ActiveFocusPartition().fullColor.empty());
-  ASSERT_EQ(ActiveFocusPartition().referenceLinks.size(), 1u);
-  EXPECT_EQ(ActiveFocusPartition().referenceLinks[0].from, (SourcePoint{.line = 0, .column = 2}));
-  EXPECT_EQ(ActiveFocusPartition().referenceLinks[0].to, (SourcePoint{.line = 2, .column = 0}));
+  EXPECT_THAT(editor.hoverSourceRanges(), ElementsAre(SourceByteRangeIs(4, 6)));
+  EXPECT_THAT(ActiveFocusPartition().fullColor, IsEmpty());
+  EXPECT_THAT(ActiveFocusPartition().referenceLinks,
+              ElementsAre(FocusReferenceLinkIs(SourcePoint{.line = 0, .column = 2},
+                                               SourcePoint{.line = 2, .column = 0})));
 }
 
 TEST_F(TextEditorTests, ContentUpdateHookRunsForShellEdits) {
@@ -2924,25 +2935,25 @@ TEST_F(TextEditorTests, FocusPartitionDirectPredicatesCoverOverlapAndExpansion) 
   EXPECT_FALSE(FocusHiddenRangeForLineDirect(5).has_value());
 
   ExpandFocusHiddenRangeDirect(LineRange{.startLine = 5, .endLine = 5});
-  EXPECT_TRUE(ExpandedFocusHiddenRanges().empty());
+  EXPECT_THAT(ExpandedFocusHiddenRanges(), IsEmpty());
 
   ExpandFocusHiddenRangeDirect(hiddenRange);
-  ASSERT_EQ(ExpandedFocusHiddenRanges().size(), 1u);
+  EXPECT_THAT(ExpandedFocusHiddenRanges(), ElementsAre(LineRangeIs(4, 5)));
   EXPECT_TRUE(IsFocusHiddenRangeExpandedDirect(hiddenRange));
   EXPECT_TRUE(IsLineExpandedHiddenByFocusDirect(4));
   EXPECT_FALSE(IsLineHiddenByFocusDirect(4));
   EXPECT_TRUE(IsLineDimmedByFocusDirect(4));
 
   ExpandFocusHiddenRangeDirect(hiddenRange);
-  EXPECT_EQ(ExpandedFocusHiddenRanges().size(), 1u);
+  EXPECT_THAT(ExpandedFocusHiddenRanges(), ElementsAre(LineRangeIs(4, 5)));
 
   editor.setFocusPartition(partition);
-  EXPECT_EQ(ExpandedFocusHiddenRanges().size(), 1u);
+  EXPECT_THAT(ExpandedFocusHiddenRanges(), ElementsAre(LineRangeIs(4, 5)));
 
   FocusPartition changed = partition;
   changed.hidden = {LineRange{.startLine = 4, .endLine = 6}};
   editor.setFocusPartition(changed);
-  EXPECT_TRUE(ExpandedFocusHiddenRanges().empty());
+  EXPECT_THAT(ExpandedFocusHiddenRanges(), IsEmpty());
 }
 
 TEST_F(TextEditorTests, ClickingFocusHiddenPlaceholderExpandsRangeWithoutMovingCursor) {

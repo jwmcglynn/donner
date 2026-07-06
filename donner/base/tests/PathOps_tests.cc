@@ -17,6 +17,10 @@
 namespace donner {
 namespace {
 
+using ::testing::HasSubstr;
+using ::testing::IsEmpty;
+using ::testing::Not;
+
 Path RectPath(double x, double y, double width, double height) {
   return PathBuilder().addRect(Box2d::FromXYWH(x, y, width, height)).build();
 }
@@ -492,7 +496,7 @@ TEST(PathOpsTest, UnionPreservesNonZeroCompoundPathHole) {
       PathBooleanOp::Union, {Input(NonZeroRectDonutPath()), Input(RectPath(150, 0, 20, 20))});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_FALSE(result.paths.empty());
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
   const Path& path = result.paths.front();
   EXPECT_THAT(path, IsInside(Vector2d(10, 10)));
   EXPECT_THAT(path, IsOutside(Vector2d(50, 50)));
@@ -505,7 +509,7 @@ TEST(PathOpsTest, DifferencePreservesNonOverlappingNonZeroCompoundPathLobes) {
               {Input(NonZeroRectDonutPath()), Input(RectPath(75, -10, 50, 120))});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_FALSE(result.paths.empty());
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
   const Path& path = result.paths.front();
   EXPECT_THAT(path, IsInside(Vector2d(10, 10)));
   EXPECT_THAT(path, IsOutside(Vector2d(50, 50)));
@@ -599,7 +603,7 @@ TEST(PathOpsTest, DifferenceOfCircleCoveredByLargerCircleIsEmpty) {
               {Input(CirclePath({50, 50}, 15)), Input(CirclePath({50, 50}, 40))});
 
   EXPECT_EQ(result.status, PathBooleanStatus::EmptyResult) << Diagnostics(result);
-  EXPECT_TRUE(result.paths.empty());
+  EXPECT_THAT(result.paths, IsEmpty());
 }
 
 TEST(PathOpsTest, IntersectRespectsEvenOddInputFillRule) {
@@ -617,7 +621,7 @@ TEST(PathOpsTest, IntersectRespectsEvenOddInputFillRule) {
   const PathBooleanResult result = ApplyPathBoolean(PathBooleanOp::Intersect, inputs);
 
   EXPECT_EQ(result.status, PathBooleanStatus::EmptyResult);
-  EXPECT_TRUE(result.paths.empty());
+  EXPECT_THAT(result.paths, IsEmpty());
 }
 
 TEST(PathOpsTest, IntersectRespectsEvenOddCurvedInputHole) {
@@ -631,7 +635,7 @@ TEST(PathOpsTest, IntersectRespectsEvenOddCurvedInputHole) {
   const PathBooleanResult result = ApplyPathBoolean(PathBooleanOp::Intersect, inputs);
 
   EXPECT_EQ(result.status, PathBooleanStatus::EmptyResult) << Diagnostics(result);
-  EXPECT_TRUE(result.paths.empty());
+  EXPECT_THAT(result.paths, IsEmpty());
 }
 
 TEST(PathOpsTest, IntersectKeepsCurvedDonutRingOutsideHole) {
@@ -645,7 +649,7 @@ TEST(PathOpsTest, IntersectKeepsCurvedDonutRingOutsideHole) {
   const PathBooleanResult result = ApplyPathBoolean(PathBooleanOp::Intersect, inputs);
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_FALSE(result.paths.empty());
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
   const Path& path = result.paths.front();
   EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
   EXPECT_THAT(path, IsInside(Vector2d(50, 25)));
@@ -669,7 +673,7 @@ TEST(PathOpsTest, EmptyIntersectionReportsEmptyWithoutOutput) {
       PathBooleanOp::Intersect, {Input(RectPath(10, 10, 20, 20)), Input(RectPath(50, 50, 20, 20))});
 
   EXPECT_EQ(result.status, PathBooleanStatus::EmptyResult);
-  EXPECT_TRUE(result.paths.empty());
+  EXPECT_THAT(result.paths, IsEmpty());
 }
 
 TEST(PathOpsTest, PointTouchingIntersectionIsEmpty) {
@@ -677,7 +681,7 @@ TEST(PathOpsTest, PointTouchingIntersectionIsEmpty) {
       PathBooleanOp::Intersect, {Input(RectPath(0, 0, 10, 10)), Input(RectPath(10, 10, 10, 10))});
 
   EXPECT_EQ(result.status, PathBooleanStatus::EmptyResult);
-  EXPECT_TRUE(result.paths.empty());
+  EXPECT_THAT(result.paths, IsEmpty());
 }
 
 TEST(PathOpsTest, SharedEdgeIntersectionIsEmpty) {
@@ -685,7 +689,7 @@ TEST(PathOpsTest, SharedEdgeIntersectionIsEmpty) {
       PathBooleanOp::Intersect, {Input(RectPath(0, 0, 10, 10)), Input(RectPath(10, 0, 10, 10))});
 
   EXPECT_EQ(result.status, PathBooleanStatus::EmptyResult);
-  EXPECT_TRUE(result.paths.empty());
+  EXPECT_THAT(result.paths, IsEmpty());
 }
 
 TEST(PathOpsTest, SharedEdgeUnionProducesSingleExteriorContour) {
@@ -708,7 +712,7 @@ TEST(PathOpsTest, IntersectOfLineAndStraightQuadraticSharedBoundaryIsEmpty) {
               {Input(RegionBelowLineBoundary()), Input(RegionAboveStraightQuadraticBoundary())});
 
   EXPECT_EQ(result.status, PathBooleanStatus::EmptyResult) << Diagnostics(result);
-  EXPECT_TRUE(result.paths.empty());
+  EXPECT_THAT(result.paths, IsEmpty());
 }
 
 TEST(PathOpsTest, DifferenceRetainsLineAndStraightQuadraticSharedBoundarySide) {
@@ -717,7 +721,7 @@ TEST(PathOpsTest, DifferenceRetainsLineAndStraightQuadraticSharedBoundarySide) {
               {Input(RegionBelowLineBoundary()), Input(RegionAboveStraightQuadraticBoundary())});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_FALSE(result.paths.empty());
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
   const Path& path = result.paths.front();
   EXPECT_THAT(path, IsInside(Vector2d(50, 75)));
   EXPECT_THAT(path, IsOutside(Vector2d(50, 25)));
@@ -729,7 +733,7 @@ TEST(PathOpsTest, IntersectOfLineAndStraightCubicSharedBoundaryIsEmpty) {
               {Input(RegionBelowLineBoundary()), Input(RegionAboveStraightCubicBoundary())});
 
   EXPECT_EQ(result.status, PathBooleanStatus::EmptyResult) << Diagnostics(result);
-  EXPECT_TRUE(result.paths.empty());
+  EXPECT_THAT(result.paths, IsEmpty());
 }
 
 TEST(PathOpsTest, DifferenceRetainsLineAndStraightCubicSharedBoundarySide) {
@@ -738,7 +742,7 @@ TEST(PathOpsTest, DifferenceRetainsLineAndStraightCubicSharedBoundarySide) {
               {Input(RegionBelowLineBoundary()), Input(RegionAboveStraightCubicBoundary())});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_FALSE(result.paths.empty());
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
   const Path& path = result.paths.front();
   EXPECT_THAT(path, IsInside(Vector2d(50, 75)));
   EXPECT_THAT(path, IsOutside(Vector2d(50, 25)));
@@ -750,7 +754,7 @@ TEST(PathOpsTest, IntersectOfPartiallySharedLineAndStraightQuadraticBoundaryIsEm
                                          Input(RegionAboveStraightQuadraticSuffixBoundary())});
 
   EXPECT_EQ(result.status, PathBooleanStatus::EmptyResult) << Diagnostics(result);
-  EXPECT_TRUE(result.paths.empty());
+  EXPECT_THAT(result.paths, IsEmpty());
 }
 
 TEST(PathOpsTest, DifferenceRetainsPartiallySharedLineAndStraightQuadraticBoundarySide) {
@@ -759,7 +763,7 @@ TEST(PathOpsTest, DifferenceRetainsPartiallySharedLineAndStraightQuadraticBounda
                                           Input(RegionAboveStraightQuadraticSuffixBoundary())});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_FALSE(result.paths.empty());
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
   const Path& path = result.paths.front();
   EXPECT_THAT(path, IsInside(Vector2d(50, 75)));
   EXPECT_THAT(path, IsOutside(Vector2d(50, 25)));
@@ -772,7 +776,7 @@ TEST(PathOpsTest, IntersectOfPartiallySharedLineAndStraightCubicBoundaryIsEmpty)
       {Input(RegionBelowLinePrefixBoundary()), Input(RegionAboveStraightCubicSuffixBoundary())});
 
   EXPECT_EQ(result.status, PathBooleanStatus::EmptyResult) << Diagnostics(result);
-  EXPECT_TRUE(result.paths.empty());
+  EXPECT_THAT(result.paths, IsEmpty());
 }
 
 TEST(PathOpsTest, DifferenceRetainsPartiallySharedLineAndStraightCubicBoundarySide) {
@@ -781,7 +785,7 @@ TEST(PathOpsTest, DifferenceRetainsPartiallySharedLineAndStraightCubicBoundarySi
       {Input(RegionBelowLinePrefixBoundary()), Input(RegionAboveStraightCubicSuffixBoundary())});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_FALSE(result.paths.empty());
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
   const Path& path = result.paths.front();
   EXPECT_THAT(path, IsInside(Vector2d(50, 75)));
   EXPECT_THAT(path, IsOutside(Vector2d(50, 25)));
@@ -794,7 +798,7 @@ TEST(PathOpsTest, IntersectOfOppositeDirectionContainedLineBoundaryIsEmpty) {
       {Input(RegionBelowLineBoundary()), Input(RegionAboveReversedLineContainedBoundary())});
 
   EXPECT_EQ(result.status, PathBooleanStatus::EmptyResult) << Diagnostics(result);
-  EXPECT_TRUE(result.paths.empty());
+  EXPECT_THAT(result.paths, IsEmpty());
 }
 
 TEST(PathOpsTest, DifferenceRetainsOppositeDirectionContainedLineBoundarySide) {
@@ -803,10 +807,10 @@ TEST(PathOpsTest, DifferenceRetainsOppositeDirectionContainedLineBoundarySide) {
       {Input(RegionBelowLineBoundary()), Input(RegionAboveReversedLineContainedBoundary())});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_FALSE(result.paths.empty());
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
   const Path& path = result.paths.front();
-  EXPECT_TRUE(path.isInside({50, 75}));
-  EXPECT_FALSE(path.isInside({50, 25}));
+  EXPECT_THAT(path, IsInside(Vector2d(50, 75)));
+  EXPECT_THAT(path, IsOutside(Vector2d(50, 25)));
 }
 
 TEST(PathOpsTest, IntersectOfOppositeDirectionOverlappingLineBoundaryIsEmpty) {
@@ -815,7 +819,7 @@ TEST(PathOpsTest, IntersectOfOppositeDirectionOverlappingLineBoundaryIsEmpty) {
       {Input(RegionBelowLinePrefixBoundary()), Input(RegionAboveReversedLineSuffixBoundary())});
 
   EXPECT_EQ(result.status, PathBooleanStatus::EmptyResult) << Diagnostics(result);
-  EXPECT_TRUE(result.paths.empty());
+  EXPECT_THAT(result.paths, IsEmpty());
 }
 
 TEST(PathOpsTest, DifferenceRetainsOppositeDirectionOverlappingLineBoundarySide) {
@@ -824,11 +828,11 @@ TEST(PathOpsTest, DifferenceRetainsOppositeDirectionOverlappingLineBoundarySide)
       {Input(RegionBelowLinePrefixBoundary()), Input(RegionAboveReversedLineSuffixBoundary())});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_FALSE(result.paths.empty());
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
   const Path& path = result.paths.front();
-  EXPECT_TRUE(path.isInside({50, 75}));
-  EXPECT_FALSE(path.isInside({50, 25}));
-  EXPECT_FALSE(path.isInside({90, 75}));
+  EXPECT_THAT(path, IsInside(Vector2d(50, 75)));
+  EXPECT_THAT(path, IsOutside(Vector2d(50, 25)));
+  EXPECT_THAT(path, IsOutside(Vector2d(90, 75)));
 }
 
 TEST(PathOpsTest, TransformedInputsParticipateInOutputCoordinates) {
@@ -848,7 +852,7 @@ TEST(PathOpsTest, RotatedAndScaledInputParticipatesInOutputCoordinates) {
       Boolean(PathBooleanOp::Intersect, {Input(RectPath(-20, 0, 20, 20)), transformed});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok);
-  ASSERT_FALSE(result.paths.empty());
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
   const Path& path = result.paths.front();
   EXPECT_THAT(path, IsInside(Vector2d(-10, 5)));
   EXPECT_THAT(path, IsOutside(Vector2d(5, 5)));
@@ -861,7 +865,7 @@ TEST(PathOpsTest, TransformedCircleInputParticipatesInCurveIntersection) {
       Boolean(PathBooleanOp::Intersect, {Input(CirclePath({40, 50}, 25)), translated});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_FALSE(result.paths.empty());
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
   const Path& path = result.paths.front();
   EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
   EXPECT_THAT(path, IsInside(Vector2d(50, 50)));
@@ -876,7 +880,7 @@ TEST(PathOpsTest, ScaledCircleInputParticipatesInContainment) {
       Boolean(PathBooleanOp::Difference, {Input(CirclePath({50, 50}, 40)), scaled});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_FALSE(result.paths.empty());
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
   const Path& path = result.paths.front();
   EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
   EXPECT_THAT(path, IsInside(Vector2d(50, 25)));
@@ -891,7 +895,7 @@ TEST(PathOpsTest, ReflectedInputParticipatesInOutputCoordinates) {
       Boolean(PathBooleanOp::Intersect, {Input(RectPath(15, 0, 20, 10)), reflected});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_FALSE(result.paths.empty());
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
   const Path& path = result.paths.front();
   EXPECT_THAT(path, IsInside(Vector2d(17, 5)));
   EXPECT_THAT(path, IsOutside(Vector2d(12, 5)));
@@ -905,7 +909,7 @@ TEST(PathOpsTest, SkewedInputParticipatesInOutputCoordinates) {
       Boolean(PathBooleanOp::Intersect, {Input(RectPath(15, 5, 20, 10)), skewed});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_FALSE(result.paths.empty());
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
   const Path& path = result.paths.front();
   EXPECT_THAT(path, IsInside(Vector2d(25, 10)));
   EXPECT_THAT(path, IsOutside(Vector2d(10, 10)));
@@ -918,7 +922,7 @@ TEST(PathOpsTest, RetainedCurvesStayBezierSegments) {
       Boolean(PathBooleanOp::Union, {Input(circle), Input(RectPath(50, 50, 10, 10))});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok);
-  ASSERT_FALSE(result.paths.empty());
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
   EXPECT_THAT(result.paths.front(), HasCommandVerb(Path::Verb::CurveTo));
 }
 
@@ -927,7 +931,7 @@ TEST(PathOpsTest, IntersectOverlappingCirclesProducesCurvedLens) {
       PathBooleanOp::Intersect, {Input(CirclePath({40, 50}, 25)), Input(CirclePath({60, 50}, 25))});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_FALSE(result.paths.empty());
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
   const Path& path = result.paths.front();
   EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
   EXPECT_THAT(path, IsInside(Vector2d(50, 50)));
@@ -940,7 +944,7 @@ TEST(PathOpsTest, UnionOfOverlappingCirclesCoversBothLobes) {
       PathBooleanOp::Union, {Input(CirclePath({40, 50}, 25)), Input(CirclePath({60, 50}, 25))});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_FALSE(result.paths.empty());
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
   const Path& path = result.paths.front();
   EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
   EXPECT_THAT(path, IsInside(Vector2d(25, 50)));
@@ -955,7 +959,7 @@ TEST(PathOpsTest, DifferenceOfOverlappingCirclesRemovesLens) {
               {Input(CirclePath({40, 50}, 25)), Input(CirclePath({60, 50}, 25))});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_FALSE(result.paths.empty());
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
   const Path& path = result.paths.front();
   EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
   EXPECT_THAT(path, IsInside(Vector2d(25, 50)));
@@ -968,7 +972,7 @@ TEST(PathOpsTest, XorOfOverlappingCirclesExcludesLens) {
       PathBooleanOp::Xor, {Input(CirclePath({40, 50}, 25)), Input(CirclePath({60, 50}, 25))});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_FALSE(result.paths.empty());
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
   const Path& path = result.paths.front();
   EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
   EXPECT_THAT(path, IsInside(Vector2d(25, 50)));
@@ -981,7 +985,7 @@ TEST(PathOpsTest, TangentCurvedIntersectionIsEmpty) {
       PathBooleanOp::Intersect, {Input(CirclePath({0, 0}, 10)), Input(CirclePath({20, 0}, 10))});
 
   EXPECT_EQ(result.status, PathBooleanStatus::EmptyResult) << Diagnostics(result);
-  EXPECT_TRUE(result.paths.empty());
+  EXPECT_THAT(result.paths, IsEmpty());
 }
 
 TEST(PathOpsTest, DisjointCurvedIntersectionIsEmpty) {
@@ -989,7 +993,7 @@ TEST(PathOpsTest, DisjointCurvedIntersectionIsEmpty) {
       PathBooleanOp::Intersect, {Input(CirclePath({0, 0}, 10)), Input(CirclePath({40, 0}, 10))});
 
   EXPECT_EQ(result.status, PathBooleanStatus::EmptyResult) << Diagnostics(result);
-  EXPECT_TRUE(result.paths.empty());
+  EXPECT_THAT(result.paths, IsEmpty());
 }
 
 TEST(PathOpsTest, UnionOfDuplicateCurvedContoursKeepsSingleContour) {
@@ -1027,7 +1031,7 @@ TEST(PathOpsTest, DifferenceOfDuplicateCurvedContoursIsEmpty) {
       Boolean(PathBooleanOp::Difference, {Input(circle), Input(circle)});
 
   EXPECT_EQ(result.status, PathBooleanStatus::EmptyResult) << Diagnostics(result);
-  EXPECT_TRUE(result.paths.empty());
+  EXPECT_THAT(result.paths, IsEmpty());
 }
 
 TEST(PathOpsTest, XorOfDuplicateCurvedContoursIsEmpty) {
@@ -1035,7 +1039,7 @@ TEST(PathOpsTest, XorOfDuplicateCurvedContoursIsEmpty) {
   const PathBooleanResult result = Boolean(PathBooleanOp::Xor, {Input(circle), Input(circle)});
 
   EXPECT_EQ(result.status, PathBooleanStatus::EmptyResult) << Diagnostics(result);
-  EXPECT_TRUE(result.paths.empty());
+  EXPECT_THAT(result.paths, IsEmpty());
 }
 
 TEST(PathOpsTest, UnionOfOppositeDirectionCurvedContoursKeepsSingleRegion) {
@@ -1043,7 +1047,7 @@ TEST(PathOpsTest, UnionOfOppositeDirectionCurvedContoursKeepsSingleRegion) {
       Boolean(PathBooleanOp::Union, {Input(CubicCapPath()), Input(ReversedCubicCapPath())});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_FALSE(result.paths.empty());
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
   const Path& path = result.paths.front();
   EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
   EXPECT_THAT(path, IsInside(Vector2d(50, 70)));
@@ -1055,7 +1059,7 @@ TEST(PathOpsTest, DifferenceOfOppositeDirectionCurvedContoursIsEmpty) {
       Boolean(PathBooleanOp::Difference, {Input(CubicCapPath()), Input(ReversedCubicCapPath())});
 
   EXPECT_EQ(result.status, PathBooleanStatus::EmptyResult) << Diagnostics(result);
-  EXPECT_TRUE(result.paths.empty());
+  EXPECT_THAT(result.paths, IsEmpty());
 }
 
 TEST(PathOpsTest, IntersectOfSharedQuadraticBoundaryIsEmpty) {
@@ -1064,7 +1068,7 @@ TEST(PathOpsTest, IntersectOfSharedQuadraticBoundaryIsEmpty) {
               {Input(RegionBelowQuadraticArch()), Input(RegionAboveSharedQuadraticArch())});
 
   EXPECT_EQ(result.status, PathBooleanStatus::EmptyResult) << Diagnostics(result);
-  EXPECT_TRUE(result.paths.empty());
+  EXPECT_THAT(result.paths, IsEmpty());
 }
 
 TEST(PathOpsTest, UnionOfSharedQuadraticBoundaryCoversBothSides) {
@@ -1073,7 +1077,7 @@ TEST(PathOpsTest, UnionOfSharedQuadraticBoundaryCoversBothSides) {
               {Input(RegionBelowQuadraticArch()), Input(RegionAboveSharedQuadraticArch())});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_FALSE(result.paths.empty());
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
   const Path& path = result.paths.front();
   EXPECT_THAT(path, IsInside(Vector2d(50, 10)));
   EXPECT_THAT(path, IsInside(Vector2d(50, 70)));
@@ -1087,7 +1091,7 @@ TEST(PathOpsTest, DifferenceRetainsSharedQuadraticBoundarySide) {
               {Input(RegionBelowQuadraticArch()), Input(RegionAboveSharedQuadraticArch())});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_FALSE(result.paths.empty());
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
   const Path& path = result.paths.front();
   EXPECT_THAT(path, HasCommandVerb(Path::Verb::QuadTo));
   EXPECT_THAT(path, IsOutside(Vector2d(50, 10)));
@@ -1100,7 +1104,7 @@ TEST(PathOpsTest, IntersectOfSharedCubicBoundaryIsEmpty) {
               {Input(RegionBelowCubicArch()), Input(RegionAboveSharedCubicArch())});
 
   EXPECT_EQ(result.status, PathBooleanStatus::EmptyResult) << Diagnostics(result);
-  EXPECT_TRUE(result.paths.empty());
+  EXPECT_THAT(result.paths, IsEmpty());
 }
 
 TEST(PathOpsTest, DifferenceRetainsSharedCubicBoundarySide) {
@@ -1109,7 +1113,7 @@ TEST(PathOpsTest, DifferenceRetainsSharedCubicBoundarySide) {
               {Input(RegionBelowCubicArch()), Input(RegionAboveSharedCubicArch())});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_FALSE(result.paths.empty());
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
   const Path& path = result.paths.front();
   EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
   EXPECT_THAT(path, IsOutside(Vector2d(50, 5)));
@@ -1122,7 +1126,7 @@ TEST(PathOpsTest, IntersectOfPartialSharedQuadraticBoundaryIsEmpty) {
               {Input(RegionBelowQuadraticArch()), Input(RegionAbovePartialQuadraticArch())});
 
   EXPECT_EQ(result.status, PathBooleanStatus::EmptyResult) << Diagnostics(result);
-  EXPECT_TRUE(result.paths.empty());
+  EXPECT_THAT(result.paths, IsEmpty());
 }
 
 TEST(PathOpsTest, DifferenceRetainsPartialSharedQuadraticBoundarySide) {
@@ -1131,7 +1135,7 @@ TEST(PathOpsTest, DifferenceRetainsPartialSharedQuadraticBoundarySide) {
               {Input(RegionBelowQuadraticArch()), Input(RegionAbovePartialQuadraticArch())});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_FALSE(result.paths.empty());
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
   const Path& path = result.paths.front();
   EXPECT_THAT(path, HasCommandVerb(Path::Verb::QuadTo));
   EXPECT_THAT(path, IsOutside(Vector2d(50, 10)));
@@ -1144,7 +1148,7 @@ TEST(PathOpsTest, IntersectOfOverlappingPartialSharedQuadraticBoundaryIsEmpty) {
               {Input(RegionBelowQuadraticPrefixArch()), Input(RegionAboveQuadraticSuffixArch())});
 
   EXPECT_EQ(result.status, PathBooleanStatus::EmptyResult) << Diagnostics(result);
-  EXPECT_TRUE(result.paths.empty());
+  EXPECT_THAT(result.paths, IsEmpty());
 }
 
 TEST(PathOpsTest, DifferenceRetainsOverlappingPartialSharedQuadraticBoundarySide) {
@@ -1153,7 +1157,7 @@ TEST(PathOpsTest, DifferenceRetainsOverlappingPartialSharedQuadraticBoundarySide
               {Input(RegionBelowQuadraticPrefixArch()), Input(RegionAboveQuadraticSuffixArch())});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_FALSE(result.paths.empty());
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
   const Path& path = result.paths.front();
   EXPECT_THAT(path, HasCommandVerb(Path::Verb::QuadTo));
   EXPECT_THAT(path, IsOutside(Vector2d(50, 10)));
@@ -1166,7 +1170,7 @@ TEST(PathOpsTest, IntersectOfOppositeDirectionOverlappingPartialSharedQuadraticB
       {Input(RegionBelowQuadraticPrefixArch()), Input(RegionAboveReversedQuadraticSuffixArch())});
 
   EXPECT_EQ(result.status, PathBooleanStatus::EmptyResult) << Diagnostics(result);
-  EXPECT_TRUE(result.paths.empty());
+  EXPECT_THAT(result.paths, IsEmpty());
 }
 
 TEST(PathOpsTest, DifferenceRetainsOppositeDirectionOverlappingPartialSharedQuadraticBoundarySide) {
@@ -1175,7 +1179,7 @@ TEST(PathOpsTest, DifferenceRetainsOppositeDirectionOverlappingPartialSharedQuad
       {Input(RegionBelowQuadraticPrefixArch()), Input(RegionAboveReversedQuadraticSuffixArch())});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_FALSE(result.paths.empty());
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
   const Path& path = result.paths.front();
   EXPECT_THAT(path, HasCommandVerb(Path::Verb::QuadTo));
   EXPECT_THAT(path, IsOutside(Vector2d(50, 10)));
@@ -1188,7 +1192,7 @@ TEST(PathOpsTest, IntersectOfPartialSharedCubicBoundaryIsEmpty) {
               {Input(RegionBelowCubicArch()), Input(RegionAbovePartialCubicArch())});
 
   EXPECT_EQ(result.status, PathBooleanStatus::EmptyResult) << Diagnostics(result);
-  EXPECT_TRUE(result.paths.empty());
+  EXPECT_THAT(result.paths, IsEmpty());
 }
 
 TEST(PathOpsTest, DifferenceRetainsPartialSharedCubicBoundarySide) {
@@ -1197,7 +1201,7 @@ TEST(PathOpsTest, DifferenceRetainsPartialSharedCubicBoundarySide) {
               {Input(RegionBelowCubicArch()), Input(RegionAbovePartialCubicArch())});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_FALSE(result.paths.empty());
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
   const Path& path = result.paths.front();
   EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
   EXPECT_THAT(path, IsOutside(Vector2d(50, 5)));
@@ -1210,7 +1214,7 @@ TEST(PathOpsTest, IntersectOfOverlappingPartialSharedCubicBoundaryIsEmpty) {
               {Input(RegionBelowCubicPrefixArch()), Input(RegionAboveCubicSuffixArch())});
 
   EXPECT_EQ(result.status, PathBooleanStatus::EmptyResult) << Diagnostics(result);
-  EXPECT_TRUE(result.paths.empty());
+  EXPECT_THAT(result.paths, IsEmpty());
 }
 
 TEST(PathOpsTest, DifferenceRetainsOverlappingPartialSharedCubicBoundarySide) {
@@ -1219,7 +1223,7 @@ TEST(PathOpsTest, DifferenceRetainsOverlappingPartialSharedCubicBoundarySide) {
               {Input(RegionBelowCubicPrefixArch()), Input(RegionAboveCubicSuffixArch())});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_FALSE(result.paths.empty());
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
   const Path& path = result.paths.front();
   EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
   EXPECT_THAT(path, IsOutside(Vector2d(50, 5)));
@@ -1232,7 +1236,7 @@ TEST(PathOpsTest, IntersectOfOppositeDirectionOverlappingPartialSharedCubicBound
               {Input(RegionBelowCubicPrefixArch()), Input(RegionAboveReversedCubicSuffixArch())});
 
   EXPECT_EQ(result.status, PathBooleanStatus::EmptyResult) << Diagnostics(result);
-  EXPECT_TRUE(result.paths.empty());
+  EXPECT_THAT(result.paths, IsEmpty());
 }
 
 TEST(PathOpsTest, DifferenceRetainsOppositeDirectionOverlappingPartialSharedCubicBoundarySide) {
@@ -1241,7 +1245,7 @@ TEST(PathOpsTest, DifferenceRetainsOppositeDirectionOverlappingPartialSharedCubi
               {Input(RegionBelowCubicPrefixArch()), Input(RegionAboveReversedCubicSuffixArch())});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_FALSE(result.paths.empty());
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
   const Path& path = result.paths.front();
   EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
   EXPECT_THAT(path, IsOutside(Vector2d(50, 5)));
@@ -1253,7 +1257,7 @@ TEST(PathOpsTest, IntersectRetainsQuadraticBoundarySpan) {
       PathBooleanOp::Intersect, {Input(QuadraticCapPath()), Input(RectPath(25, -10, 50, 100))});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok);
-  ASSERT_FALSE(result.paths.empty());
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
   EXPECT_THAT(result.paths.front(), HasCommandVerb(Path::Verb::QuadTo));
   EXPECT_THAT(result.paths.front(), IsInside(Vector2d(50, 40)));
   EXPECT_THAT(result.paths.front(), IsOutside(Vector2d(10, 40)));
@@ -1264,7 +1268,7 @@ TEST(PathOpsTest, IntersectRetainsCubicBoundarySpan) {
       Boolean(PathBooleanOp::Intersect, {Input(CubicCapPath()), Input(RectPath(25, -10, 50, 110))});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok);
-  ASSERT_FALSE(result.paths.empty());
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
   EXPECT_THAT(result.paths.front(), HasCommandVerb(Path::Verb::CurveTo));
   EXPECT_THAT(result.paths.front(), IsInside(Vector2d(50, 70)));
   EXPECT_THAT(result.paths.front(), IsOutside(Vector2d(10, 50)));
@@ -1276,7 +1280,7 @@ TEST(PathOpsTest, IntersectSplitsInteriorQuadraticQuadraticCrossings) {
               {Input(RegionBelowQuadraticArch()), Input(RegionAboveQuadraticArch())});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_FALSE(result.paths.empty());
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
   EXPECT_THAT(result.paths.front(), HasCommandVerb(Path::Verb::QuadTo));
   EXPECT_THAT(result.paths.front(), IsInside(Vector2d(50, 50)));
   EXPECT_THAT(result.paths.front(), IsOutside(Vector2d(50, 20)));
@@ -1288,7 +1292,7 @@ TEST(PathOpsTest, IntersectSplitsInteriorQuadraticCubicCrossings) {
       PathBooleanOp::Intersect, {Input(RegionBelowQuadraticArch()), Input(RegionAboveCubicArch())});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_FALSE(result.paths.empty());
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
   EXPECT_THAT(result.paths.front(), HasCommandVerb(Path::Verb::QuadTo));
   EXPECT_THAT(result.paths.front(), HasCommandVerb(Path::Verb::CurveTo));
   EXPECT_THAT(result.paths.front(), IsInside(Vector2d(50, 50)));
@@ -1301,7 +1305,7 @@ TEST(PathOpsTest, IntersectSplitsInteriorCubicCubicCrossings) {
       PathBooleanOp::Intersect, {Input(RegionBelowCubicArch()), Input(RegionAboveCubicArch())});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_FALSE(result.paths.empty());
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
   EXPECT_THAT(result.paths.front(), HasCommandVerb(Path::Verb::CurveTo));
   EXPECT_THAT(result.paths.front(), IsInside(Vector2d(50, 50)));
   EXPECT_THAT(result.paths.front(), IsOutside(Vector2d(50, 10)));
@@ -1314,7 +1318,7 @@ TEST(PathOpsTest, MultiInputDifferenceSubtractsEveryLaterInput) {
                                   Input(RectPath(60, 0, 20, 30))});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok);
-  ASSERT_FALSE(result.paths.empty());
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
   const Path& path = result.paths.front();
   EXPECT_THAT(path, IsInside(Vector2d(10, 15)));
   EXPECT_THAT(path, IsOutside(Vector2d(30, 15)));
@@ -1340,8 +1344,8 @@ TEST(PathOpsTest, RequiresAtLeastTwoInputs) {
   const PathBooleanResult result = ApplyPathBoolean(PathBooleanOp::Union, inputs);
 
   EXPECT_EQ(result.status, PathBooleanStatus::InvalidInput);
-  EXPECT_TRUE(result.paths.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_THAT(result.paths, IsEmpty());
+  EXPECT_THAT(result.diagnostics, Not(IsEmpty()));
 }
 
 TEST(PathOpsTest, OpenContoursAreClosedAtMoveToAndPathEnd) {
@@ -1358,8 +1362,8 @@ TEST(PathOpsTest, OpenContoursAreClosedAtMoveToAndPathEnd) {
       PathBooleanOp::Intersect, {Input(openTriangles), Input(RectPath(-10, -10, 100, 100))});
 
   EXPECT_EQ(result.status, PathBooleanStatus::EmptyResult);
-  EXPECT_TRUE(result.paths.empty());
-  EXPECT_NE(Diagnostics(result).find("dropping"), std::string::npos);
+  EXPECT_THAT(result.paths, IsEmpty());
+  EXPECT_THAT(Diagnostics(result), HasSubstr("dropping"));
 }
 
 TEST(PathOpsTest, MoveOnlyContoursDoNotEmitSegments) {
@@ -1376,8 +1380,8 @@ TEST(PathOpsTest, MoveOnlyContoursDoNotEmitSegments) {
       Boolean(PathBooleanOp::Intersect, {Input(path), Input(RectPath(0, 0, 40, 40))});
 
   EXPECT_EQ(result.status, PathBooleanStatus::EmptyResult);
-  EXPECT_TRUE(result.paths.empty());
-  EXPECT_NE(Diagnostics(result).find("dropping"), std::string::npos);
+  EXPECT_THAT(result.paths, IsEmpty());
+  EXPECT_THAT(Diagnostics(result), HasSubstr("dropping"));
 }
 
 TEST(PathOpsTest, RejectsMoveOnlyInputContours) {
@@ -1390,8 +1394,8 @@ TEST(PathOpsTest, RejectsMoveOnlyInputContours) {
   const PathBooleanResult result = ApplyPathBoolean(PathBooleanOp::Union, inputs);
 
   EXPECT_EQ(result.status, PathBooleanStatus::InvalidInput);
-  EXPECT_TRUE(result.paths.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_THAT(result.paths, IsEmpty());
+  EXPECT_THAT(result.diagnostics, Not(IsEmpty()));
 }
 
 TEST(PathOpsTest, RespectsOutputCommandCap) {
@@ -1405,7 +1409,7 @@ TEST(PathOpsTest, RespectsOutputCommandCap) {
   const PathBooleanResult result = ApplyPathBoolean(PathBooleanOp::Union, inputs, options);
 
   EXPECT_EQ(result.status, PathBooleanStatus::TooComplex);
-  EXPECT_TRUE(result.paths.empty());
+  EXPECT_THAT(result.paths, IsEmpty());
 }
 
 TEST(PathOpsTest, RespectsInputCurveCap) {
@@ -1419,8 +1423,8 @@ TEST(PathOpsTest, RespectsInputCurveCap) {
   const PathBooleanResult result = ApplyPathBoolean(PathBooleanOp::Union, inputs, options);
 
   EXPECT_EQ(result.status, PathBooleanStatus::TooComplex);
-  EXPECT_TRUE(result.paths.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_THAT(result.paths, IsEmpty());
+  EXPECT_THAT(result.diagnostics, Not(IsEmpty()));
 }
 
 TEST(PathOpsTest, RespectsIntersectionCap) {
@@ -1434,8 +1438,8 @@ TEST(PathOpsTest, RespectsIntersectionCap) {
   const PathBooleanResult result = ApplyPathBoolean(PathBooleanOp::Union, inputs, options);
 
   EXPECT_EQ(result.status, PathBooleanStatus::TooComplex);
-  EXPECT_TRUE(result.paths.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_THAT(result.paths, IsEmpty());
+  EXPECT_THAT(result.diagnostics, Not(IsEmpty()));
 }
 
 TEST(PathOpsTest, FuzzerTimeoutDegenerateCurveSearchReturnsTooComplex) {
@@ -1460,8 +1464,8 @@ TEST(PathOpsTest, FuzzerTimeoutDegenerateCurveSearchReturnsTooComplex) {
   const PathBooleanResult result = ApplyPathBoolean(PathBooleanOp::Xor, inputs, options);
 
   EXPECT_EQ(result.status, PathBooleanStatus::TooComplex);
-  EXPECT_TRUE(result.paths.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_THAT(result.paths, IsEmpty());
+  EXPECT_THAT(result.diagnostics, Not(IsEmpty()));
 }
 
 TEST(PathOpsTest, FuzzerTimeoutCubicDifferenceReturnsTooComplex) {
@@ -1483,8 +1487,8 @@ TEST(PathOpsTest, FuzzerTimeoutCubicDifferenceReturnsTooComplex) {
   const PathBooleanResult result = ApplyPathBoolean(PathBooleanOp::Difference, inputs, options);
 
   EXPECT_EQ(result.status, PathBooleanStatus::TooComplex);
-  EXPECT_TRUE(result.paths.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_THAT(result.paths, IsEmpty());
+  EXPECT_THAT(result.diagnostics, Not(IsEmpty()));
 }
 
 TEST(PathOpsTest, RejectsNonFiniteInputCoordinates) {
@@ -1498,8 +1502,8 @@ TEST(PathOpsTest, RejectsNonFiniteInputCoordinates) {
   const PathBooleanResult result = ApplyPathBoolean(PathBooleanOp::Union, inputs);
 
   EXPECT_EQ(result.status, PathBooleanStatus::InvalidInput);
-  EXPECT_TRUE(result.paths.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_THAT(result.paths, IsEmpty());
+  EXPECT_THAT(result.diagnostics, Not(IsEmpty()));
 }
 
 TEST(PathOpsTest, RejectsNonFiniteCurveCoordinates) {
@@ -1512,8 +1516,8 @@ TEST(PathOpsTest, RejectsNonFiniteCurveCoordinates) {
   };
   const PathBooleanResult quadraticResult = ApplyPathBoolean(PathBooleanOp::Union, quadraticInputs);
   EXPECT_EQ(quadraticResult.status, PathBooleanStatus::InvalidInput);
-  EXPECT_TRUE(quadraticResult.paths.empty());
-  EXPECT_FALSE(quadraticResult.diagnostics.empty());
+  EXPECT_THAT(quadraticResult.paths, IsEmpty());
+  EXPECT_THAT(quadraticResult.diagnostics, Not(IsEmpty()));
 
   const Path invalidCubic =
       PathBuilder().moveTo({0, 0}).curveTo({10, 0}, {15, 10}, {inf, 20}).closePath().build();
@@ -1523,8 +1527,8 @@ TEST(PathOpsTest, RejectsNonFiniteCurveCoordinates) {
   };
   const PathBooleanResult cubicResult = ApplyPathBoolean(PathBooleanOp::Union, cubicInputs);
   EXPECT_EQ(cubicResult.status, PathBooleanStatus::InvalidInput);
-  EXPECT_TRUE(cubicResult.paths.empty());
-  EXPECT_FALSE(cubicResult.diagnostics.empty());
+  EXPECT_THAT(cubicResult.paths, IsEmpty());
+  EXPECT_THAT(cubicResult.diagnostics, Not(IsEmpty()));
 }
 
 TEST(PathOpsTest, InvalidGeometricToleranceUsesDefaultTolerance) {

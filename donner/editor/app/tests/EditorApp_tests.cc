@@ -7,8 +7,10 @@
 
 #include "donner/editor/app/EditorApp.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -20,6 +22,11 @@
 
 namespace donner::editor::app {
 namespace {
+
+using ::testing::ElementsAreArray;
+using ::testing::HasSubstr;
+using ::testing::IsEmpty;
+using ::testing::Not;
 
 class RenderSessionTest : public ::testing::Test {
 protected:
@@ -64,8 +71,8 @@ constexpr std::string_view kSimpleSvg =
 TEST_F(RenderSessionTest, EmptyStateBeforeNavigate) {
   RenderSession app(Options());
   EXPECT_EQ(app.current().status, RenderSessionStatus::kEmpty);
-  EXPECT_TRUE(app.current().uri.empty());
-  EXPECT_TRUE(app.lastGoodBitmap().pixels.empty());
+  EXPECT_THAT(app.current().uri, IsEmpty());
+  EXPECT_THAT(app.lastGoodBitmap().pixels, IsEmpty());
 }
 
 TEST_F(RenderSessionTest, NavigateSucceedsOnValidFile) {
@@ -87,13 +94,13 @@ TEST_F(RenderSessionTest, FetchErrorKeepsPreviousBitmap) {
   RenderSession app(Options());
   app.navigate("red.svg");
   const auto goodBytes = app.lastGoodBitmap().pixels;
-  ASSERT_FALSE(goodBytes.empty());
+  ASSERT_THAT(goodBytes, Not(IsEmpty()));
 
   // Second navigation fails at the fetch step.
   const auto& bad = app.navigate("does_not_exist.svg");
   EXPECT_EQ(bad.status, RenderSessionStatus::kFetchError);
-  EXPECT_TRUE(bad.bitmap.pixels.empty());
-  EXPECT_FALSE(bad.message.empty());
+  EXPECT_THAT(bad.bitmap.pixels, IsEmpty());
+  EXPECT_THAT(bad.message, Not(IsEmpty()));
 
   // But lastGoodBitmap still holds the previous successful frame - this
   // is the "keep previous document on screen" contract from the design doc.
@@ -106,8 +113,8 @@ TEST_F(RenderSessionTest, NavigateRejectsEmptyUri) {
   const auto& snap = app.navigate("");
 
   EXPECT_EQ(snap.status, RenderSessionStatus::kFetchError);
-  EXPECT_NE(snap.message.find("empty uri"), std::string::npos) << snap.message;
-  EXPECT_TRUE(app.lastGoodBitmap().pixels.empty());
+  EXPECT_THAT(snap.message, HasSubstr("empty uri"));
+  EXPECT_THAT(app.lastGoodBitmap().pixels, IsEmpty());
 }
 
 TEST_F(RenderSessionTest, NavigateRejectsUnsupportedScheme) {
@@ -116,8 +123,8 @@ TEST_F(RenderSessionTest, NavigateRejectsUnsupportedScheme) {
   const auto& snap = app.navigate("https://example.test/image.svg");
 
   EXPECT_EQ(snap.status, RenderSessionStatus::kFetchError);
-  EXPECT_NE(snap.message.find("unsupported scheme"), std::string::npos) << snap.message;
-  EXPECT_TRUE(app.lastGoodBitmap().pixels.empty());
+  EXPECT_THAT(snap.message, HasSubstr("unsupported scheme"));
+  EXPECT_THAT(app.lastGoodBitmap().pixels, IsEmpty());
 }
 
 TEST_F(RenderSessionTest, NavigateLoadsFileSchemeUri) {
@@ -138,7 +145,7 @@ TEST_F(RenderSessionTest, NavigateRejectsDirectoryInput) {
   const auto& snap = app.navigate("assets");
 
   EXPECT_EQ(snap.status, RenderSessionStatus::kFetchError);
-  EXPECT_NE(snap.message.find("not a regular file"), std::string::npos) << snap.message;
+  EXPECT_THAT(snap.message, HasSubstr("not a regular file"));
 }
 
 TEST_F(RenderSessionTest, NavigateRejectsFilesOverConfiguredLimit) {
@@ -150,7 +157,7 @@ TEST_F(RenderSessionTest, NavigateRejectsFilesOverConfiguredLimit) {
   const auto& snap = app.navigate("large.svg");
 
   EXPECT_EQ(snap.status, RenderSessionStatus::kFetchError);
-  EXPECT_NE(snap.message.find("maxFileBytes"), std::string::npos) << snap.message;
+  EXPECT_THAT(snap.message, HasSubstr("maxFileBytes"));
 }
 
 TEST_F(RenderSessionTest, ParseErrorSurfacesDistinctStatus) {
@@ -158,8 +165,8 @@ TEST_F(RenderSessionTest, ParseErrorSurfacesDistinctStatus) {
   RenderSession app(Options());
   const auto& snap = app.navigate("garbage.svg");
   EXPECT_EQ(snap.status, RenderSessionStatus::kParseError);
-  EXPECT_FALSE(snap.message.empty());
-  EXPECT_NE(snap.message.find("parse"), std::string::npos);
+  EXPECT_THAT(snap.message, Not(IsEmpty()));
+  EXPECT_THAT(snap.message, HasSubstr("parse"));
 }
 
 TEST_F(RenderSessionTest, ReloadWithoutDocumentReportsNoDocument) {
@@ -168,7 +175,7 @@ TEST_F(RenderSessionTest, ReloadWithoutDocumentReportsNoDocument) {
   const auto& snap = app.reload();
 
   EXPECT_EQ(snap.status, RenderSessionStatus::kEmpty);
-  EXPECT_NE(snap.message.find("no document loaded"), std::string::npos) << snap.message;
+  EXPECT_THAT(snap.message, HasSubstr("no document loaded"));
 }
 
 TEST_F(RenderSessionTest, ResizeRejectsInvalidDimensionsAndNoDocument) {
@@ -176,11 +183,11 @@ TEST_F(RenderSessionTest, ResizeRejectsInvalidDimensionsAndNoDocument) {
 
   const auto& invalid = app.resize(0, 48);
   EXPECT_EQ(invalid.status, RenderSessionStatus::kEmpty);
-  EXPECT_NE(invalid.message.find("must be positive"), std::string::npos) << invalid.message;
+  EXPECT_THAT(invalid.message, HasSubstr("must be positive"));
 
   const auto& noDocument = app.resize(32, 24);
   EXPECT_EQ(noDocument.status, RenderSessionStatus::kEmpty);
-  EXPECT_NE(noDocument.message.find("no document loaded"), std::string::npos) << noDocument.message;
+  EXPECT_THAT(noDocument.message, HasSubstr("no document loaded"));
 }
 
 TEST_F(RenderSessionTest, ResizeReRendersAtNewViewport) {
@@ -277,7 +284,7 @@ TEST_F(RenderSessionTest, PollForChangesDetectsFileModification) {
   app.navigate("watch.svg");
   app.setWatchEnabled(true);
   const auto firstPixels = app.lastGoodBitmap().pixels;
-  ASSERT_FALSE(firstPixels.empty());
+  ASSERT_THAT(firstPixels, Not(IsEmpty()));
 
   // No change yet - poll should return false.
   EXPECT_FALSE(app.pollForChanges());
@@ -342,7 +349,7 @@ TEST_F(RenderSessionReplTest, HelpListsAllCommands) {
 
   const auto text = out.str();
   for (const auto* cmd : {"load ", "reload", "resize", "show", "save ", "watch", "quit"}) {
-    EXPECT_NE(text.find(cmd), std::string::npos) << "help missing: " << cmd;
+    EXPECT_THAT(text, HasSubstr(cmd)) << "help missing: " << cmd;
   }
 }
 
@@ -359,9 +366,9 @@ TEST_F(RenderSessionReplTest, BannerPromptAndBlankLinesDoNotCountAsCommands) {
   EXPECT_EQ(repl.run(), 2);
 
   const std::string text = out.str();
-  EXPECT_NE(text.find("Donner Editor MVP"), std::string::npos) << text;
-  EXPECT_NE(text.find("donner-test> "), std::string::npos) << text;
-  EXPECT_NE(text.find("Commands:"), std::string::npos) << text;
+  EXPECT_THAT(text, HasSubstr("Donner Editor MVP"));
+  EXPECT_THAT(text, HasSubstr("donner-test> "));
+  EXPECT_THAT(text, HasSubstr("Commands:"));
 }
 
 TEST_F(RenderSessionReplTest, LoadStatusSaveCycle) {
@@ -381,19 +388,18 @@ TEST_F(RenderSessionReplTest, LoadStatusSaveCycle) {
   EXPECT_EQ(dispatched, 4);
 
   const auto text = out.str();
-  EXPECT_NE(text.find("rendered 64x48"), std::string::npos) << text;
-  EXPECT_NE(text.find("uri=red.svg"), std::string::npos);
-  EXPECT_NE(text.find("save: wrote"), std::string::npos);
+  EXPECT_THAT(text, HasSubstr("rendered 64x48"));
+  EXPECT_THAT(text, HasSubstr("uri=red.svg"));
+  EXPECT_THAT(text, HasSubstr("save: wrote"));
 
   // PNG file exists and starts with the PNG magic.
   ASSERT_TRUE(std::filesystem::exists(pngPath));
   std::ifstream png(pngPath, std::ios::binary);
-  char magic[8] = {};
-  png.read(magic, 8);
-  const unsigned char expected[] = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
-  for (int i = 0; i < 8; ++i) {
-    EXPECT_EQ(static_cast<unsigned char>(magic[i]), expected[i]) << "byte " << i;
-  }
+  std::array<unsigned char, 8> magic = {};
+  png.read(reinterpret_cast<char*>(magic.data()), static_cast<std::streamsize>(magic.size()));
+  constexpr std::array<unsigned char, 8> expected = {0x89, 0x50, 0x4E, 0x47,
+                                                     0x0D, 0x0A, 0x1A, 0x0A};
+  EXPECT_THAT(magic, ElementsAreArray(expected));
 }
 
 TEST_F(RenderSessionReplTest, UnknownCommandDoesNotCrash) {
@@ -402,7 +408,7 @@ TEST_F(RenderSessionReplTest, UnknownCommandDoesNotCrash) {
   std::stringstream out;
   RenderSessionRepl repl(app, in, out, ReplOptions());
   repl.run();
-  EXPECT_NE(out.str().find("unknown command"), std::string::npos);
+  EXPECT_THAT(out.str(), HasSubstr("unknown command"));
 }
 
 TEST_F(RenderSessionReplTest, InvalidCommandArityAndDimensionsReturnFalse) {
@@ -421,13 +427,13 @@ TEST_F(RenderSessionReplTest, InvalidCommandArityAndDimensionsReturnFalse) {
   EXPECT_FALSE(repl.dispatch("bogus"));
 
   const std::string text = out.str();
-  EXPECT_NE(text.find("usage: load <uri>"), std::string::npos) << text;
-  EXPECT_NE(text.find("usage: resize <width> <height>"), std::string::npos) << text;
-  EXPECT_NE(text.find("resize: invalid dimension 'wide'"), std::string::npos) << text;
-  EXPECT_NE(text.find("resize: invalid dimension '0'"), std::string::npos) << text;
-  EXPECT_NE(text.find("usage: save <out.png>"), std::string::npos) << text;
-  EXPECT_NE(text.find("usage: watch on|off"), std::string::npos) << text;
-  EXPECT_NE(text.find("unknown command 'bogus'"), std::string::npos) << text;
+  EXPECT_THAT(text, HasSubstr("usage: load <uri>"));
+  EXPECT_THAT(text, HasSubstr("usage: resize <width> <height>"));
+  EXPECT_THAT(text, HasSubstr("resize: invalid dimension 'wide'"));
+  EXPECT_THAT(text, HasSubstr("resize: invalid dimension '0'"));
+  EXPECT_THAT(text, HasSubstr("usage: save <out.png>"));
+  EXPECT_THAT(text, HasSubstr("usage: watch on|off"));
+  EXPECT_THAT(text, HasSubstr("unknown command 'bogus'"));
 }
 
 TEST_F(RenderSessionReplTest, ResizeCommandParsesDimensions) {
@@ -441,7 +447,7 @@ TEST_F(RenderSessionReplTest, ResizeCommandParsesDimensions) {
   repl.run();
 
   const auto text = out.str();
-  EXPECT_NE(text.find("rendered 128x96"), std::string::npos) << text;
+  EXPECT_THAT(text, HasSubstr("rendered 128x96"));
 }
 
 TEST_F(RenderSessionReplTest, ReloadCommandPrintsUpdatedStatus) {
@@ -454,8 +460,8 @@ TEST_F(RenderSessionReplTest, ReloadCommandPrintsUpdatedStatus) {
   EXPECT_EQ(repl.run(), 3);
 
   const std::string text = out.str();
-  EXPECT_NE(text.find("rendered 64x48"), std::string::npos) << text;
-  EXPECT_NE(text.find("uri=red.svg"), std::string::npos) << text;
+  EXPECT_THAT(text, HasSubstr("rendered 64x48"));
+  EXPECT_THAT(text, HasSubstr("uri=red.svg"));
 }
 
 TEST_F(RenderSessionReplTest, ShowAndSaveReportMissingFrameBeforeLoad) {
@@ -468,8 +474,8 @@ TEST_F(RenderSessionReplTest, ShowAndSaveReportMissingFrameBeforeLoad) {
   EXPECT_TRUE(repl.dispatch("save out.png"));
 
   const std::string text = out.str();
-  EXPECT_NE(text.find("show: no frame available"), std::string::npos) << text;
-  EXPECT_NE(text.find("save: no frame available"), std::string::npos) << text;
+  EXPECT_THAT(text, HasSubstr("show: no frame available"));
+  EXPECT_THAT(text, HasSubstr("save: no frame available"));
 }
 
 TEST_F(RenderSessionReplTest, ShowDisabledAndSaveOpenFailureAreReported) {
@@ -488,8 +494,8 @@ TEST_F(RenderSessionReplTest, ShowDisabledAndSaveOpenFailureAreReported) {
   EXPECT_TRUE(repl.dispatch("save " + outputDirectory.string()));
 
   const std::string text = out.str();
-  EXPECT_NE(text.find("show: disabled in this repl session"), std::string::npos) << text;
-  EXPECT_NE(text.find("save: cannot open"), std::string::npos) << text;
+  EXPECT_THAT(text, HasSubstr("show: disabled in this repl session"));
+  EXPECT_THAT(text, HasSubstr("save: cannot open"));
 }
 
 TEST_F(RenderSessionReplTest, ShowEnabledRendersTerminalPreview) {
@@ -505,8 +511,8 @@ TEST_F(RenderSessionReplTest, ShowEnabledRendersTerminalPreview) {
 
   EXPECT_TRUE(repl.dispatch("show"));
 
-  EXPECT_EQ(out.str().find("show: disabled"), std::string::npos) << out.str();
-  EXPECT_FALSE(out.str().empty());
+  EXPECT_THAT(out.str(), Not(HasSubstr("show: disabled")));
+  EXPECT_THAT(out.str(), Not(IsEmpty()));
 }
 
 TEST_F(RenderSessionReplTest, WatchOnOffCommand) {
@@ -517,8 +523,8 @@ TEST_F(RenderSessionReplTest, WatchOnOffCommand) {
   repl.run();
 
   const auto text = out.str();
-  EXPECT_NE(text.find("watch: enabled"), std::string::npos) << text;
-  EXPECT_NE(text.find("watch: disabled"), std::string::npos) << text;
+  EXPECT_THAT(text, HasSubstr("watch: enabled"));
+  EXPECT_THAT(text, HasSubstr("watch: disabled"));
   // After "watch off", the app's watch should be disabled.
   EXPECT_FALSE(app.watchEnabled());
 }
@@ -546,8 +552,8 @@ TEST_F(RenderSessionReplTest, RunReportsAutoReloadWhenWatchPollDetectsChange) {
   EXPECT_EQ(repl.run(), 2);
 
   const std::string text = out.str();
-  EXPECT_NE(text.find("[auto-reloaded]"), std::string::npos) << text;
-  EXPECT_NE(text.find("rendered 64x48"), std::string::npos) << text;
+  EXPECT_THAT(text, HasSubstr("[auto-reloaded]"));
+  EXPECT_THAT(text, HasSubstr("rendered 64x48"));
 }
 
 TEST_F(RenderSessionReplTest, WatchInvalidArgPrintsUsage) {
@@ -558,7 +564,7 @@ TEST_F(RenderSessionReplTest, WatchInvalidArgPrintsUsage) {
   repl.run();
 
   const auto text = out.str();
-  EXPECT_NE(text.find("usage: watch on|off"), std::string::npos) << text;
+  EXPECT_THAT(text, HasSubstr("usage: watch on|off"));
 }
 
 TEST_F(RenderSessionReplTest, HelpListsWatchCommand) {
@@ -569,7 +575,7 @@ TEST_F(RenderSessionReplTest, HelpListsWatchCommand) {
   repl.run();
 
   const auto text = out.str();
-  EXPECT_NE(text.find("watch"), std::string::npos) << text;
+  EXPECT_THAT(text, HasSubstr("watch"));
 }
 
 }  // namespace
