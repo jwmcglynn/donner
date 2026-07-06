@@ -1124,7 +1124,9 @@ bool SidebarPresenter::applyDiscreteTransform(EditorApp& liveApp, DiscreteTransf
   const Vector2d center = startBounds.has_value()
                               ? (startBounds->topLeft + startBounds->bottomRight) * 0.5
                               : startTransform.translation();
-  Transform2d local(Transform2d::uninitialized);
+  // Identity default so the value is initialized on every path (the switch
+  // below is exhaustive over DiscreteTransform and overwrites it).
+  Transform2d local = Transform2d::Translate(0.0, 0.0);
   switch (kind) {
     case DiscreteTransform::Rotate90:
       local = Transform2d::Rotate(90.0 * MathConstants<double>::kDegToRad);
