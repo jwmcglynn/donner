@@ -40,6 +40,7 @@
 #include "donner/editor/StyleSourceAnnotations.h"
 #include "donner/editor/TextToOutlines.h"
 #include "donner/editor/ToolKeybinding.h"
+#include "donner/editor/ToolbarIconSet.h"
 #include "donner/editor/TracyWrapper.h"
 #include "donner/editor/UndoTimeline.h"
 #include "donner/editor/ViewportSvgExport.h"
@@ -205,76 +206,6 @@ void SetImGuiOsCursorManagementEnabled(bool enabled) {
 bool ContainsScreenPoint(const Box2d& rect, const ImVec2& point) {
   return point.x >= rect.topLeft.x && point.x <= rect.bottomRight.x && point.y >= rect.topLeft.y &&
          point.y <= rect.bottomRight.y;
-}
-
-ImVec2 PenToolIconPoint(const ImVec2& origin, float scale, float x, float y) {
-  return ImVec2(origin.x + x * scale, origin.y + y * scale);
-}
-
-void StrokePenToolButtonIcon(ImDrawList* drawList, const ImVec2& min, const ImVec2& max,
-                             ImU32 color, float strokeWidth) {
-  const float buttonSize = std::min(max.x - min.x, max.y - min.y);
-  const float iconSize = buttonSize - 9.0f;
-  const float scale = iconSize / 24.0f;
-  const ImVec2 origin(min.x + (max.x - min.x - iconSize) * 0.5f,
-                      min.y + (max.y - min.y - iconSize) * 0.5f);
-  const auto point = [&](float x, float y) { return PenToolIconPoint(origin, scale, x, y); };
-
-  drawList->PathClear();
-  drawList->PathLineTo(point(14.4153f, 18.6964f));
-  drawList->PathLineTo(point(7.88293f, 19.2352f));
-  drawList->PathLineTo(point(3.80865f, 3.84719f));
-  drawList->PathLineTo(point(19.1966f, 7.92147f));
-  drawList->PathLineTo(point(18.3043f, 14.8073f));
-  drawList->PathStroke(color, ImDrawFlags_None, strokeWidth);
-
-  constexpr float kCosMinus45 = 0.70710678f;
-  constexpr float kSinMinus45 = -0.70710678f;
-  constexpr float kRectX = 13.7081f;
-  constexpr float kRectY = 19.4036f;
-  const auto rectPoint = [&](float dx, float dy) {
-    return point(kRectX + dx * kCosMinus45 - dy * kSinMinus45,
-                 kRectY + dx * kSinMinus45 + dy * kCosMinus45);
-  };
-  drawList->PathClear();
-  drawList->PathLineTo(rectPoint(0.0f, 0.0f));
-  drawList->PathLineTo(rectPoint(7.22447f, 0.0f));
-  drawList->PathLineTo(rectPoint(7.22447f, 3.0f));
-  drawList->PathLineTo(rectPoint(0.0f, 3.0f));
-  drawList->PathStroke(color, ImDrawFlags_Closed, strokeWidth);
-
-  drawList->AddLine(point(5.92996f, 5.96852f), point(10.8797f, 10.9183f), color, strokeWidth);
-  drawList->AddCircle(point(12.2939f, 12.3325f), 2.0f * scale, color, 0, strokeWidth);
-}
-
-void DrawPenToolButtonIcon(ImDrawList* drawList, const ImVec2& min, const ImVec2& max) {
-  StrokePenToolButtonIcon(drawList, min, max, IM_COL32(255, 255, 255, 255), 3.0f);
-  StrokePenToolButtonIcon(drawList, min, max, IM_COL32(0, 0, 0, 255), 1.75f);
-}
-
-void DrawSelectToolButtonIcon(ImDrawList* drawList, const ImVec2& min, const ImVec2& max) {
-  const float buttonSize = std::min(max.x - min.x, max.y - min.y);
-  const float iconSize = buttonSize - 8.0f;
-  const float scale = iconSize / 24.0f;
-  const ImVec2 origin(min.x + (max.x - min.x - iconSize) * 0.5f,
-                      min.y + (max.y - min.y - iconSize) * 0.5f);
-  const auto point = [&](float x, float y) {
-    return ImVec2(origin.x + x * scale, origin.y + y * scale);
-  };
-  const std::array<ImVec2, 7> points = {
-      point(5.5f, 3.5f),   point(5.5f, 21.0f),  point(10.2f, 16.4f), point(12.9f, 22.0f),
-      point(15.8f, 20.6f), point(13.0f, 15.1f), point(19.5f, 15.1f),
-  };
-
-  drawList->AddTriangleFilled(points[0], points[1], points[2], IM_COL32(0, 0, 0, 255));
-  drawList->AddTriangleFilled(points[0], points[2], points[6], IM_COL32(0, 0, 0, 255));
-  drawList->AddTriangleFilled(points[2], points[3], points[5], IM_COL32(0, 0, 0, 255));
-  drawList->AddTriangleFilled(points[3], points[4], points[5], IM_COL32(0, 0, 0, 255));
-
-  drawList->AddPolyline(points.data(), static_cast<int>(points.size()),
-                        IM_COL32(255, 255, 255, 255), ImDrawFlags_Closed, 3.2f);
-  drawList->AddPolyline(points.data(), static_cast<int>(points.size()), IM_COL32(0, 0, 0, 255),
-                        ImDrawFlags_Closed, 1.7f);
 }
 
 // Build the "<label> (<key>)" tooltip string for a tool button from the shared
@@ -712,6 +643,7 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       textEditor_(),
       textures_(window.geodeDevice()),
       thumbnailTextures_(window.geodeDevice()),
+      toolbarIconTextures_(window.geodeDevice()),
       layerThumbnailRenderer_(window.geodeDevice()),
       renderCoordinator_(window.geodeDevice()),
       rotateCursorSet_(),
@@ -2262,13 +2194,21 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
   ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 5.0f);
   ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
 
-  enum class ToolButtonIcon {
-    None,
-    SelectPointer,
-    PenTool,
-    Text,
+  // Tool icons are Donner-rendered SVG masks (art/tool_*_icon.svg), uploaded
+  // once to a persistent texture cache and tinted with the text color, so the
+  // toolbar reads as one family with the OS cursors instead of hand-stroked
+  // ImDrawList primitives.
+  const ToolbarIconTextureProvider toolbarIconProvider =
+      [this](std::uint64_t stableId, const svg::RendererBitmap& bitmap) -> ToolbarIconTexture {
+    const GlTextureCache::ThumbnailTextureView uploaded =
+        toolbarIconTextures_.uploadThumbnail(stableId, bitmap);
+    return ToolbarIconTexture{
+        .texture = uploaded.texture,
+        .uvBottomRight = uploaded.uvBottomRight,
+    };
   };
-  const auto renderButton = [&](ActiveTool tool, const char* label, ToolButtonIcon icon,
+
+  const auto renderButton = [&](ActiveTool tool, const char* label, ToolbarIcon icon,
                                 const char* tooltip) {
     const bool selected = activeTool_ == tool;
     if (selected) {
@@ -2287,19 +2227,8 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
       }
       activeTool_ = tool;
     }
-    if (icon == ToolButtonIcon::SelectPointer) {
-      DrawSelectToolButtonIcon(drawList, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
-    } else if (icon == ToolButtonIcon::PenTool) {
-      DrawPenToolButtonIcon(drawList, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
-    } else if (icon == ToolButtonIcon::Text) {
-      const ImVec2 buttonMin = ImGui::GetItemRectMin();
-      const ImVec2 buttonMax = ImGui::GetItemRectMax();
-      const char* glyph = "T";
-      const ImVec2 textSize = ImGui::CalcTextSize(glyph);
-      drawList->AddText(ImVec2((buttonMin.x + buttonMax.x - textSize.x) * 0.5f,
-                               (buttonMin.y + buttonMax.y - textSize.y) * 0.5f),
-                        IM_COL32(230, 230, 230, 255), glyph);
-    }
+    DrawToolbarIcon(icon, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+                    ImGui::GetColorU32(ImGuiCol_Text), toolbarIconProvider);
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("%s", tooltip);
     }
@@ -2311,15 +2240,16 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
   const std::string selectTooltip = ToolTooltipText(ToolId::Select);
   const std::string penTooltip = ToolTooltipText(ToolId::Pen);
   const std::string textTooltip = ToolTooltipText(ToolId::Text);
-  renderButton(ActiveTool::Select, "##select_tool", ToolButtonIcon::SelectPointer,
-               selectTooltip.c_str());
+  renderButton(ActiveTool::Select, "##select_tool", ToolbarIcon::Select, selectTooltip.c_str());
   ImGui::SameLine(0.0f, kToolPaletteGap);
-  renderButton(ActiveTool::Pen, "##pen_tool", ToolButtonIcon::PenTool, penTooltip.c_str());
+  renderButton(ActiveTool::Pen, "##pen_tool", ToolbarIcon::Pen, penTooltip.c_str());
   ImGui::SameLine(0.0f, kToolPaletteGap);
-  renderButton(ActiveTool::Text, "##text_tool", ToolButtonIcon::Text, textTooltip.c_str());
+  renderButton(ActiveTool::Text, "##text_tool", ToolbarIcon::Text, textTooltip.c_str());
   ImGui::SameLine(0.0f, kToolPaletteGap);
   ImGui::BeginDisabled(true);
-  (void)ImGui::Button("△", ImVec2(kToolPaletteButtonSize, kToolPaletteButtonSize));
+  (void)ImGui::Button("##path_modify_tool", ImVec2(kToolPaletteButtonSize, kToolPaletteButtonSize));
+  DrawToolbarIcon(ToolbarIcon::PathModify, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+                  ImGui::GetColorU32(ImGuiCol_TextDisabled), toolbarIconProvider);
   ImGui::EndDisabled();
   if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
     ImGui::SetTooltip("%s", "Path edit");
@@ -2398,14 +2328,27 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
 
   const bool spaceHeld = ImGui::IsKeyDown(ImGuiKey_Space);
   const bool middleDown = ImGui::IsMouseDown(ImGuiMouseButton_Middle);
-  const auto setActiveRotateCursor =
+  // Hold the matching custom cursor for the whole rotate/scale drag, not just
+  // while hovering the handle, so it doesn't flicker back to the arrow as the
+  // pointer leaves the handle mid-gesture.
+  const auto setActiveGestureCursor =
       [&](const std::optional<SelectTool::ActiveGesturePreview>& activeGesturePreview) {
-        if (!activeGesturePreview.has_value() ||
-            activeGesturePreview->kind != SelectTool::ActiveGestureKind::Rotate) {
+        if (!activeGesturePreview.has_value()) {
+          return false;
+        }
+        const SelectTool::ActiveGestureKind kind = activeGesturePreview->kind;
+        const bool applied =
+            kind == SelectTool::ActiveGestureKind::Rotate
+                ? rotateCursorSet_.setRotateCursor(activeGesturePreview->corner)
+            : kind == SelectTool::ActiveGestureKind::Resize
+                ? rotateCursorSet_.setScaleCursor(activeGesturePreview->corner)
+                : false;
+        if (kind != SelectTool::ActiveGestureKind::Rotate &&
+            kind != SelectTool::ActiveGestureKind::Resize) {
           return false;
         }
 
-        if (rotateCursorSet_.setRotateCursor(activeGesturePreview->corner)) {
+        if (applied) {
           SetImGuiOsCursorManagementEnabled(false);
         } else {
           rotateCursorSet_.clearIfActive();
@@ -2415,7 +2358,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
         return true;
       };
   const auto activeGesturePreviewBeforeInput = selectTool_.activeGesturePreview();
-  const bool rotateCursorLocked = setActiveRotateCursor(activeGesturePreviewBeforeInput);
+  const bool rotateCursorLocked = setActiveGestureCursor(activeGesturePreviewBeforeInput);
   std::ignore = interactionController_.updatePanState(canvasHovered, spaceHeld, middleDown,
                                                       ImGui::IsMouseDown(ImGuiMouseButton_Left),
                                                       ImGui::GetMousePos());
@@ -2479,7 +2422,21 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
   };
   SelectionTransformHandleIntent hoverTransformIntent;
   if (penToolActive && !rotateCursorLocked && toolEligible) {
-    if (rotateCursorSet_.setPenCursor()) {
+    // Contextual pen hint: the close-path cursor when a click would close the
+    // active contour, otherwise the base nib. (Add/remove-anchor hints exist in
+    // the cursor set but await a pen hover-intent query to wire live.)
+    PenCursorHint penHint = PenCursorHint::Base;
+    if (penTool_.isDrafting()) {
+      MouseModifiers hoverModifiers;
+      hoverModifiers.shift = ImGui::GetIO().KeyShift;
+      hoverModifiers.option = ImGui::GetIO().KeyAlt;
+      hoverModifiers.command = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
+      hoverModifiers.pixelsPerDocUnit = interactionController_.viewport().pixelsPerDocUnit();
+      if (penTool_.wouldCloseAt(screenToDocument(ImGui::GetMousePos()), hoverModifiers)) {
+        penHint = PenCursorHint::Close;
+      }
+    }
+    if (rotateCursorSet_.setPenCursor(penHint)) {
       SetImGuiOsCursorManagementEnabled(false);
     } else {
       rotateCursorSet_.clearIfActive();
@@ -2491,14 +2448,25 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     hoverTransformIntent = cachedHandleIntentAt(screenToDocument(ImGui::GetMousePos()),
                                                 /*includeRotate=*/!ImGui::GetIO().KeyShift);
     if (hoverTransformIntent.kind != SelectionTransformHandleKind::None) {
-      if (hoverTransformIntent.kind == SelectionTransformHandleKind::Rotate &&
-          rotateCursorSet_.setRotateCursor(hoverTransformIntent.corner)) {
+      // Custom cursors over the selection handles: rotate glyph on a rotate
+      // handle, scale glyph on a resize handle; fall back to ImGui's built-in
+      // cursor only if the custom one can't be applied.
+      const bool appliedCustomHandleCursor =
+          hoverTransformIntent.kind == SelectionTransformHandleKind::Rotate
+              ? rotateCursorSet_.setRotateCursor(hoverTransformIntent.corner)
+          : hoverTransformIntent.kind == SelectionTransformHandleKind::Resize
+              ? rotateCursorSet_.setScaleCursor(hoverTransformIntent.corner)
+              : false;
+      if (appliedCustomHandleCursor) {
         SetImGuiOsCursorManagementEnabled(false);
       } else {
         rotateCursorSet_.clearIfActive();
         SetImGuiOsCursorManagementEnabled(true);
         ImGui::SetMouseCursor(CursorForTransformHandleIntent(hoverTransformIntent));
       }
+    } else if (rotateCursorSet_.setSelectCursor()) {
+      // Custom arrow (no tail) over empty canvas in the select tool.
+      SetImGuiOsCursorManagementEnabled(false);
     } else {
       rotateCursorSet_.clearIfActive();
       SetImGuiOsCursorManagementEnabled(true);

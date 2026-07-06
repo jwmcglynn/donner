@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <memory>
 #include <optional>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -14,8 +15,11 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/editor/PanClosedCursorSvg.h"
 #include "donner/editor/PanCursorSvg.h"
+#include "donner/editor/PathModifyCursorSvg.h"
 #include "donner/editor/PenCursorSvg.h"
 #include "donner/editor/RotateCursorSvg.h"
+#include "donner/editor/ScaleCursorSvg.h"
+#include "donner/editor/SelectCursorSvg.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
 
@@ -60,6 +64,26 @@ std::size_t PanCursorIndex(PanCursorKind kind) {
   return 0;
 }
 
+std::size_t PenCursorIndex(PenCursorHint hint) {
+  switch (hint) {
+    case PenCursorHint::Base: return 0;
+    case PenCursorHint::Add: return 1;
+    case PenCursorHint::Remove: return 2;
+    case PenCursorHint::Close: return 3;
+  }
+  return 0;
+}
+
+std::span<const unsigned char> PenCursorSvgBytes(PenCursorHint hint) {
+  switch (hint) {
+    case PenCursorHint::Base: return embedded::kPenCursorSvg;
+    case PenCursorHint::Add: return embedded::kPenAddCursorSvg;
+    case PenCursorHint::Remove: return embedded::kPenRemoveCursorSvg;
+    case PenCursorHint::Close: return embedded::kPenCloseCursorSvg;
+  }
+  return embedded::kPenCursorSvg;
+}
+
 double RotationDegreesForCorner(SelectionTransformCorner corner) {
   switch (corner) {
     case SelectionTransformCorner::TopLeft: return 0.0;
@@ -70,52 +94,41 @@ double RotationDegreesForCorner(SelectionTransformCorner corner) {
   return 0.0;
 }
 
-std::string BuildRotateCursorSvg(SelectionTransformCorner corner) {
-  std::string svg(reinterpret_cast<const char*>(embedded::kRotateCursorSvg.data()),
-                  embedded::kRotateCursorSvg.size());
+// Substitute the source SVG's declared 32px width/height for the 4x raster
+// size, so Donner rasterizes the art at kCursorRasterSizePx before downsample.
+void ApplyRasterSize(std::string* svg) {
+  std::ostringstream rasterSize;
+  rasterSize << kCursorRasterSizePx;
+  const std::string rasterSizeText = rasterSize.str();
+  ReplaceFirst(svg, R"svg(width="32")svg", std::string("width=\"") + rasterSizeText + "\"");
+  ReplaceFirst(svg, R"svg(height="32")svg", std::string("height=\"") + rasterSizeText + "\"");
+}
+
+// Raster-sized SVG for a fixed-orientation cursor.
+std::string SizedCursorSvg(std::span<const unsigned char> bytes) {
+  std::string svg(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+  ApplyRasterSize(&svg);
+  return svg;
+}
+
+// Raster-sized SVG for a corner-oriented cursor: rewrites the
+// `rotate(0,16,16)` placeholder on the glyph group to the corner's angle.
+std::string SizedRotatedCursorSvg(std::span<const unsigned char> bytes,
+                                  SelectionTransformCorner corner) {
+  std::string svg(reinterpret_cast<const char*>(bytes.data()), bytes.size());
   std::ostringstream replacement;
   replacement << "rotate(" << RotationDegreesForCorner(corner) << ",16,16)";
   ReplaceFirst(&svg, kRotationPlaceholder, replacement.str());
-
-  std::ostringstream rasterSize;
-  rasterSize << kCursorRasterSizePx;
-  const std::string rasterSizeText = rasterSize.str();
-  ReplaceFirst(&svg, R"svg(width="32")svg", std::string("width=\"") + rasterSizeText + "\"");
-  ReplaceFirst(&svg, R"svg(height="32")svg", std::string("height=\"") + rasterSizeText + "\"");
+  ApplyRasterSize(&svg);
   return svg;
 }
 
-std::string BuildPanCursorSvg(PanCursorKind kind) {
-  std::string svg;
+std::span<const unsigned char> PanCursorSvgBytes(PanCursorKind kind) {
   switch (kind) {
-    case PanCursorKind::OpenHand:
-      svg.assign(reinterpret_cast<const char*>(embedded::kPanCursorSvg.data()),
-                 embedded::kPanCursorSvg.size());
-      break;
-    case PanCursorKind::ClosedHand:
-      svg.assign(reinterpret_cast<const char*>(embedded::kPanClosedCursorSvg.data()),
-                 embedded::kPanClosedCursorSvg.size());
-      break;
+    case PanCursorKind::OpenHand: return embedded::kPanCursorSvg;
+    case PanCursorKind::ClosedHand: return embedded::kPanClosedCursorSvg;
   }
-
-  std::ostringstream rasterSize;
-  rasterSize << kCursorRasterSizePx;
-  const std::string rasterSizeText = rasterSize.str();
-  ReplaceFirst(&svg, R"svg(width="32")svg", std::string("width=\"") + rasterSizeText + "\"");
-  ReplaceFirst(&svg, R"svg(height="32")svg", std::string("height=\"") + rasterSizeText + "\"");
-  return svg;
-}
-
-std::string BuildPenCursorSvg() {
-  std::string svg(reinterpret_cast<const char*>(embedded::kPenCursorSvg.data()),
-                  embedded::kPenCursorSvg.size());
-
-  std::ostringstream rasterSize;
-  rasterSize << kCursorRasterSizePx;
-  const std::string rasterSizeText = rasterSize.str();
-  ReplaceFirst(&svg, R"svg(width="32")svg", std::string("width=\"") + rasterSizeText + "\"");
-  ReplaceFirst(&svg, R"svg(height="32")svg", std::string("height=\"") + rasterSizeText + "\"");
-  return svg;
+  return embedded::kPanCursorSvg;
 }
 
 std::optional<std::vector<unsigned char>> DownsampleToStraightAlphaTightRgba(
@@ -207,17 +220,82 @@ std::optional<RotateCursorImage> RenderImageFromSvg(
 
 std::optional<RotateCursorImage> RenderRotateCursorImage(
     SelectionTransformCorner corner, std::shared_ptr<geode::GeodeDevice> geodeDevice) {
-  return RenderImageFromSvg(BuildRotateCursorSvg(corner), std::move(geodeDevice));
+  return RenderImageFromSvg(SizedRotatedCursorSvg(embedded::kRotateCursorSvg, corner),
+                            std::move(geodeDevice));
+}
+
+std::optional<RotateCursorImage> RenderScaleCursorImage(
+    SelectionTransformCorner corner, std::shared_ptr<geode::GeodeDevice> geodeDevice) {
+  return RenderImageFromSvg(SizedRotatedCursorSvg(embedded::kScaleCursorSvg, corner),
+                            std::move(geodeDevice));
+}
+
+std::optional<RotateCursorImage> RenderSelectCursorImage(
+    std::shared_ptr<geode::GeodeDevice> geodeDevice) {
+  return RenderImageFromSvg(SizedCursorSvg(embedded::kSelectCursorSvg), std::move(geodeDevice));
+}
+
+std::optional<RotateCursorImage> RenderPathModifyCursorImage(
+    std::shared_ptr<geode::GeodeDevice> geodeDevice) {
+  return RenderImageFromSvg(SizedCursorSvg(embedded::kPathModifyCursorSvg), std::move(geodeDevice));
 }
 
 std::optional<RotateCursorImage> RenderPanCursorImage(
     PanCursorKind kind, std::shared_ptr<geode::GeodeDevice> geodeDevice) {
-  return RenderImageFromSvg(BuildPanCursorSvg(kind), std::move(geodeDevice));
+  return RenderImageFromSvg(SizedCursorSvg(PanCursorSvgBytes(kind)), std::move(geodeDevice));
 }
 
 std::optional<RotateCursorImage> RenderPenCursorImage(
     std::shared_ptr<geode::GeodeDevice> geodeDevice) {
-  return RenderImageFromSvg(BuildPenCursorSvg(), std::move(geodeDevice));
+  return RenderPenCursorImage(PenCursorHint::Base, std::move(geodeDevice));
+}
+
+std::optional<RotateCursorImage> RenderPenCursorImage(
+    PenCursorHint hint, std::shared_ptr<geode::GeodeDevice> geodeDevice) {
+  return RenderImageFromSvg(SizedCursorSvg(PenCursorSvgBytes(hint)), std::move(geodeDevice));
+}
+
+CursorHotspot HotspotForCursor(EditorCursor cursor) {
+  switch (cursor) {
+    case EditorCursor::Select: return CursorHotspot{5, 4};
+    case EditorCursor::Pen:
+    case EditorCursor::PenAdd:
+    case EditorCursor::PenRemove:
+    case EditorCursor::PenClose: return CursorHotspot{4, 4};
+    case EditorCursor::Rotate:
+    case EditorCursor::Scale: return CursorHotspot{16, 16};
+    case EditorCursor::PathModify: return CursorHotspot{6, 6};
+    case EditorCursor::PanOpen:
+    case EditorCursor::PanClosed: return CursorHotspot{15, 15};
+  }
+  return CursorHotspot{0, 0};
+}
+
+bool CursorUsesCorner(EditorCursor cursor) {
+  return cursor == EditorCursor::Rotate || cursor == EditorCursor::Scale;
+}
+
+std::optional<RotateCursorImage> RenderEditorCursorImage(
+    EditorCursor cursor, SelectionTransformCorner corner,
+    std::shared_ptr<geode::GeodeDevice> geodeDevice) {
+  switch (cursor) {
+    case EditorCursor::Select: return RenderSelectCursorImage(std::move(geodeDevice));
+    case EditorCursor::Pen: return RenderPenCursorImage(PenCursorHint::Base, std::move(geodeDevice));
+    case EditorCursor::PenAdd:
+      return RenderPenCursorImage(PenCursorHint::Add, std::move(geodeDevice));
+    case EditorCursor::PenRemove:
+      return RenderPenCursorImage(PenCursorHint::Remove, std::move(geodeDevice));
+    case EditorCursor::PenClose:
+      return RenderPenCursorImage(PenCursorHint::Close, std::move(geodeDevice));
+    case EditorCursor::Rotate: return RenderRotateCursorImage(corner, std::move(geodeDevice));
+    case EditorCursor::Scale: return RenderScaleCursorImage(corner, std::move(geodeDevice));
+    case EditorCursor::PathModify: return RenderPathModifyCursorImage(std::move(geodeDevice));
+    case EditorCursor::PanOpen:
+      return RenderPanCursorImage(PanCursorKind::OpenHand, std::move(geodeDevice));
+    case EditorCursor::PanClosed:
+      return RenderPanCursorImage(PanCursorKind::ClosedHand, std::move(geodeDevice));
+  }
+  return std::nullopt;
 }
 
 RotateCursorSet::~RotateCursorSet() {
@@ -232,6 +310,27 @@ bool RotateCursorSet::initialize(GLFWwindow* window,
     return false;
   }
 
+  // Render an image and create a GLFW cursor with the given hotspot, storing it
+  // in @p slot. Returns false (and leaves the caller to `destroy()`) on any
+  // failure, so a partial cursor set never goes live.
+  const auto createCursor = [&](std::optional<RotateCursorImage> image, int hotspotX, int hotspotY,
+                                GLFWcursor*& slot) -> bool {
+    if (!image.has_value()) {
+      return false;
+    }
+    GLFWimage glfwImage{
+        .width = image->width,
+        .height = image->height,
+        .pixels = image->rgba.data(),
+    };
+    GLFWcursor* cursor = glfwCreateCursor(&glfwImage, hotspotX, hotspotY);
+    if (cursor == nullptr) {
+      return false;
+    }
+    slot = cursor;
+    return true;
+  };
+
   const std::array<SelectionTransformCorner, 4> corners = {
       SelectionTransformCorner::TopLeft,
       SelectionTransformCorner::TopRight,
@@ -240,58 +339,38 @@ bool RotateCursorSet::initialize(GLFWwindow* window,
   };
 
   for (SelectionTransformCorner corner : corners) {
-    std::optional<RotateCursorImage> image = RenderRotateCursorImage(corner, geodeDevice);
-    if (!image.has_value()) {
+    if (!createCursor(RenderRotateCursorImage(corner, geodeDevice), kCursorHotspotPx,
+                      kCursorHotspotPx, rotateCursors_[CornerIndex(corner)]) ||
+        !createCursor(RenderScaleCursorImage(corner, geodeDevice), kCursorHotspotPx,
+                      kCursorHotspotPx, scaleCursors_[CornerIndex(corner)])) {
       destroy();
       return false;
     }
-
-    GLFWimage glfwImage{
-        .width = image->width,
-        .height = image->height,
-        .pixels = image->rgba.data(),
-    };
-    GLFWcursor* cursor = glfwCreateCursor(&glfwImage, kCursorHotspotPx, kCursorHotspotPx);
-    if (cursor == nullptr) {
-      destroy();
-      return false;
-    }
-    rotateCursors_[CornerIndex(corner)] = cursor;
   }
 
   for (PanCursorKind kind : {PanCursorKind::OpenHand, PanCursorKind::ClosedHand}) {
-    std::optional<RotateCursorImage> panImage = RenderPanCursorImage(kind, geodeDevice);
-    if (!panImage.has_value()) {
+    if (!createCursor(RenderPanCursorImage(kind, geodeDevice), kPanCursorHotspotPx,
+                      kPanCursorHotspotPx, panCursors_[PanCursorIndex(kind)])) {
       destroy();
       return false;
     }
+  }
 
-    GLFWimage glfwImage{
-        .width = panImage->width,
-        .height = panImage->height,
-        .pixels = panImage->rgba.data(),
-    };
-    GLFWcursor* cursor = glfwCreateCursor(&glfwImage, kPanCursorHotspotPx, kPanCursorHotspotPx);
-    if (cursor == nullptr) {
+  for (PenCursorHint hint :
+       {PenCursorHint::Base, PenCursorHint::Add, PenCursorHint::Remove, PenCursorHint::Close}) {
+    if (!createCursor(RenderPenCursorImage(hint, geodeDevice), kPenCursorHotspotXPx,
+                      kPenCursorHotspotYPx, penCursors_[PenCursorIndex(hint)])) {
       destroy();
       return false;
     }
-    panCursors_[PanCursorIndex(kind)] = cursor;
   }
 
-  std::optional<RotateCursorImage> penImage = RenderPenCursorImage(geodeDevice);
-  if (!penImage.has_value()) {
-    destroy();
-    return false;
-  }
-
-  GLFWimage glfwImage{
-      .width = penImage->width,
-      .height = penImage->height,
-      .pixels = penImage->rgba.data(),
-  };
-  penCursor_ = glfwCreateCursor(&glfwImage, kPenCursorHotspotXPx, kPenCursorHotspotYPx);
-  if (penCursor_ == nullptr) {
+  const CursorHotspot selectHotspot = HotspotForCursor(EditorCursor::Select);
+  const CursorHotspot pathModifyHotspot = HotspotForCursor(EditorCursor::PathModify);
+  if (!createCursor(RenderSelectCursorImage(geodeDevice), selectHotspot.x, selectHotspot.y,
+                    selectCursor_) ||
+      !createCursor(RenderPathModifyCursorImage(geodeDevice), pathModifyHotspot.x,
+                    pathModifyHotspot.y, pathModifyCursor_)) {
     destroy();
     return false;
   }
@@ -315,6 +394,41 @@ bool RotateCursorSet::setRotateCursor(SelectionTransformCorner corner) {
   return true;
 }
 
+bool RotateCursorSet::setScaleCursor(SelectionTransformCorner corner) {
+  if (!valid_ || window_ == nullptr) {
+    return false;
+  }
+
+  GLFWcursor* cursor = scaleCursors_[CornerIndex(corner)];
+  if (cursor == nullptr) {
+    return false;
+  }
+
+  glfwSetCursor(window_, cursor);
+  customCursorActive_ = true;
+  return true;
+}
+
+bool RotateCursorSet::setSelectCursor() {
+  if (!valid_ || window_ == nullptr || selectCursor_ == nullptr) {
+    return false;
+  }
+
+  glfwSetCursor(window_, selectCursor_);
+  customCursorActive_ = true;
+  return true;
+}
+
+bool RotateCursorSet::setPathModifyCursor() {
+  if (!valid_ || window_ == nullptr || pathModifyCursor_ == nullptr) {
+    return false;
+  }
+
+  glfwSetCursor(window_, pathModifyCursor_);
+  customCursorActive_ = true;
+  return true;
+}
+
 bool RotateCursorSet::setPanCursor(PanCursorKind kind) {
   if (!valid_ || window_ == nullptr) {
     return false;
@@ -331,11 +445,20 @@ bool RotateCursorSet::setPanCursor(PanCursorKind kind) {
 }
 
 bool RotateCursorSet::setPenCursor() {
-  if (!valid_ || window_ == nullptr || penCursor_ == nullptr) {
+  return setPenCursor(PenCursorHint::Base);
+}
+
+bool RotateCursorSet::setPenCursor(PenCursorHint hint) {
+  if (!valid_ || window_ == nullptr) {
     return false;
   }
 
-  glfwSetCursor(window_, penCursor_);
+  GLFWcursor* cursor = penCursors_[PenCursorIndex(hint)];
+  if (cursor == nullptr) {
+    return false;
+  }
+
+  glfwSetCursor(window_, cursor);
   customCursorActive_ = true;
   return true;
 }
@@ -351,22 +474,26 @@ void RotateCursorSet::clearIfActive() {
 
 void RotateCursorSet::destroy() {
   clearIfActive();
-  for (GLFWcursor*& cursor : rotateCursors_) {
+  const auto destroyOne = [](GLFWcursor*& cursor) {
     if (cursor != nullptr) {
       glfwDestroyCursor(cursor);
       cursor = nullptr;
     }
+  };
+  for (GLFWcursor*& cursor : rotateCursors_) {
+    destroyOne(cursor);
+  }
+  for (GLFWcursor*& cursor : scaleCursors_) {
+    destroyOne(cursor);
   }
   for (GLFWcursor*& cursor : panCursors_) {
-    if (cursor != nullptr) {
-      glfwDestroyCursor(cursor);
-      cursor = nullptr;
-    }
+    destroyOne(cursor);
   }
-  if (penCursor_ != nullptr) {
-    glfwDestroyCursor(penCursor_);
-    penCursor_ = nullptr;
+  for (GLFWcursor*& cursor : penCursors_) {
+    destroyOne(cursor);
   }
+  destroyOne(selectCursor_);
+  destroyOne(pathModifyCursor_);
   window_ = nullptr;
   valid_ = false;
 }
