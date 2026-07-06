@@ -29,6 +29,7 @@ donner_cc_library(
     deps = [
         ":components",
         "//donner/base",
+        "//donner/base/parser",
         "//donner/base/xml/components",
         "//donner/svg/components:components_core",
         "//donner/svg/components:svg_document_context",

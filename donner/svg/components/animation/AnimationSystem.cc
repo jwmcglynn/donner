@@ -2,13 +2,13 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdlib>
 #include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
 
 #include "donner/base/Path.h"
+#include "donner/base/parser/NumberParser.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/animation/AnimateTransformComponent.h"
@@ -151,22 +151,23 @@ bool shouldApplyValue(AnimationPhase phase, AnimationFill fill) {
          (phase == AnimationPhase::After && fill == AnimationFill::Freeze);
 }
 
-/// Try to parse a string as a double. Returns false on failure.
-bool tryParseDouble(const std::string& str, double& out) {
-  if (str.empty()) {
+/// Try to parse an entire string as a single number, ignoring surrounding whitespace.
+/// Returns false on failure (trailing garbage or multiple numbers).
+bool tryParseDouble(std::string_view str, double& out) {
+  while (!str.empty() && (str.front() == ' ' || str.front() == '\t')) {
+    str.remove_prefix(1);
+  }
+  while (!str.empty() && (str.back() == ' ' || str.back() == '\t')) {
+    str.remove_suffix(1);
+  }
+
+  const auto maybeNumber = donner::parser::NumberParser::Parse(str);
+  if (maybeNumber.hasError() || maybeNumber.result().consumedChars != str.size()) {
     return false;
   }
-  char* endPtr = nullptr;
-  out = std::strtod(str.c_str(), &endPtr);
-  if (endPtr == str.c_str()) {
-    return false;
-  }
-  // Skip trailing whitespace.
-  while (*endPtr == ' ' || *endPtr == '\t') {
-    ++endPtr;
-  }
-  // Only succeed if the entire string was consumed (single number, not a list).
-  return *endPtr == '\0';
+
+  out = maybeNumber.result().number;
+  return true;
 }
 
 /// Format a double as string, avoiding unnecessary trailing zeros.
@@ -210,24 +211,20 @@ double computeProgress(double documentTime, double beginTime, double simpleDurat
 }
 
 /// Parse a space/comma-separated list of doubles from a string.
-std::vector<double> parseNumbers(const std::string& str) {
+std::vector<double> parseNumbers(std::string_view str) {
   std::vector<double> result;
-  const char* ptr = str.c_str();
-  const char* end = ptr + str.size();
-  while (ptr < end) {
-    while (ptr < end && (*ptr == ' ' || *ptr == '\t' || *ptr == ',')) {
-      ++ptr;
+  while (!str.empty()) {
+    if (str.front() == ' ' || str.front() == '\t' || str.front() == ',') {
+      str.remove_prefix(1);
+      continue;
     }
-    if (ptr >= end) {
+
+    const auto maybeNumber = donner::parser::NumberParser::Parse(str);
+    if (maybeNumber.hasError()) {
       break;
     }
-    char* endPtr = nullptr;
-    double val = std::strtod(ptr, &endPtr);
-    if (endPtr == ptr) {
-      break;
-    }
-    result.push_back(val);
-    ptr = endPtr;
+    result.push_back(maybeNumber.result().number);
+    str.remove_prefix(maybeNumber.result().consumedChars);
   }
   return result;
 }
@@ -632,7 +629,7 @@ void AnimationSystem::advance(Registry& registry, double documentTime,
     const double progress =
         computeProgress(sampleTime, state.beginTime, state.simpleDuration, state.activeDuration);
 
-    std::string attributeName;
+    std::string_view attributeName;
     std::string newValue;
     if (setComp) {
       if (setComp->attributeName.empty()) {
@@ -656,7 +653,7 @@ void AnimationSystem::advance(Registry& registry, double documentTime,
     }
 
     auto& animValues = registry.get_or_emplace<AnimatedValuesComponent>(state.targetEntity);
-    animValues.overrides[attributeName] = std::move(newValue);
+    animValues.overrides[std::string(attributeName)] = std::move(newValue);
   }
 
   // Clean up empty AnimatedValuesComponent instances.
