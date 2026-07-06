@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <!-- Scale/resize: a double-headed diagonal arrow, centered on (16,16).
+       Authored NW-SE; the pipeline rotates it per corner (0/90/180/270),
+       which lands NW-SE on the TL/BR corners and NE-SW on the TR/BL corners. -->
+  <g id="scale-cursor-glyph" transform="rotate(0,16,16)" fill="none"
+     stroke-linecap="round" stroke-linejoin="round">
+    <g stroke="#ffffff" stroke-width="3.35">
+      <path d="M 7 7 L 25 25" />
+      <path d="M 11.5 7 L 7 7 L 7 11.5" />
+      <path d="M 20.5 25 L 25 25 L 25 20.5" />
+    </g>
+    <g stroke="#000000" stroke-width="2">
+      <path d="M 7 7 L 25 25" />
+      <path d="M 11.5 7 L 7 7 L 7 11.5" />
+      <path d="M 20.5 25 L 25 25 L 25 20.5" />
+    </g>
+  </g>
+</svg>
