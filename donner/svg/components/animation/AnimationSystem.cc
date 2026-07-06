@@ -499,58 +499,85 @@ std::string formatTransform(TransformAnimationType type, const std::vector<doubl
   return oss.str();
 }
 
+/// The neutral (identity) value tuple for a transform type: no translation, rotation, or skew,
+/// and unit scale.
+std::vector<double> identityTransformValues(TransformAnimationType type) {
+  switch (type) {
+    case TransformAnimationType::Translate: return {0.0, 0.0};
+    case TransformAnimationType::Scale: return {1.0, 1.0};
+    case TransformAnimationType::Rotate: return {0.0, 0.0, 0.0};
+    case TransformAnimationType::SkewX:
+    case TransformAnimationType::SkewY: return {0.0};
+  }
+  return {0.0};
+}
+
 /// Interpolate transform values for <animateTransform>.
 std::string interpolateTransformValue(double progress,
                                       const AnimateTransformComponent& transformComp) {
-  // Build effective value list.
-  std::vector<const std::string*> effectiveValues;
+  const TransformAnimationType type = transformComp.type;
+
+  // Build the effective keyframe list as parsed and padded number tuples. Precedence per SMIL:
+  // values, from/to, from/by, by, then to.
+  std::vector<std::vector<double>> keyframes;
+
+  const auto parsePadded = [type](const std::string& str) {
+    std::vector<double> nums = parseNumbers(str);
+    padToExpected(nums, type);
+    return nums;
+  };
 
   if (!transformComp.values.empty()) {
+    keyframes.reserve(transformComp.values.size());
     for (const auto& v : transformComp.values) {
-      effectiveValues.push_back(&v);
+      keyframes.push_back(parsePadded(v));
     }
   } else if (transformComp.from.has_value() && transformComp.to.has_value()) {
-    effectiveValues.push_back(&transformComp.from.value());
-    effectiveValues.push_back(&transformComp.to.value());
+    keyframes.push_back(parsePadded(*transformComp.from));
+    keyframes.push_back(parsePadded(*transformComp.to));
+  } else if (transformComp.by.has_value()) {
+    // by-animation: from -> from + by. An absent from is the neutral value for this transform
+    // type, so e.g. a by-only scale animates from scale(1) to scale(1 + by).
+    std::vector<double> fromNums = transformComp.from.has_value()
+                                       ? parsePadded(*transformComp.from)
+                                       : identityTransformValues(type);
+    const std::vector<double> byNums = parsePadded(*transformComp.by);
+    std::vector<double> toNums = fromNums;
+    for (size_t i = 0; i < toNums.size() && i < byNums.size(); ++i) {
+      toNums[i] += byNums[i];
+    }
+    keyframes.push_back(std::move(fromNums));
+    keyframes.push_back(std::move(toNums));
   } else if (transformComp.to.has_value()) {
-    effectiveValues.push_back(&transformComp.to.value());
+    keyframes.push_back(parsePadded(*transformComp.to));
   } else {
     return {};
   }
 
-  if (effectiveValues.empty()) {
-    return {};
-  }
-
-  if (effectiveValues.size() == 1) {
-    auto nums = parseNumbers(*effectiveValues[0]);
-    padToExpected(nums, transformComp.type);
-    return formatTransform(transformComp.type, nums);
+  if (keyframes.size() == 1) {
+    return formatTransform(type, keyframes[0]);
   }
 
   // Find interval and local t (evenly spaced).
-  size_t numValues = effectiveValues.size();
-  size_t numIntervals = numValues - 1;
-  double scaled = progress * static_cast<double>(numIntervals);
+  const size_t numIntervals = keyframes.size() - 1;
+  const double scaled = progress * static_cast<double>(numIntervals);
   size_t interval = static_cast<size_t>(scaled);
   if (interval >= numIntervals) {
     interval = numIntervals - 1;
   }
-  double localT = std::clamp(scaled - static_cast<double>(interval), 0.0, 1.0);
+  const double localT = std::clamp(scaled - static_cast<double>(interval), 0.0, 1.0);
 
-  // Parse and interpolate the number tuples.
-  auto fromNums = parseNumbers(*effectiveValues[interval]);
-  auto toNums = parseNumbers(*effectiveValues[interval + 1]);
-  padToExpected(fromNums, transformComp.type);
-  padToExpected(toNums, transformComp.type);
+  // Interpolate the number tuples.
+  const std::vector<double>& fromNums = keyframes[interval];
+  const std::vector<double>& toNums = keyframes[interval + 1];
 
-  size_t count = std::min(fromNums.size(), toNums.size());
+  const size_t count = std::min(fromNums.size(), toNums.size());
   std::vector<double> result(count);
   for (size_t i = 0; i < count; ++i) {
     result[i] = fromNums[i] + (toNums[i] - fromNums[i]) * localT;
   }
 
-  return formatTransform(transformComp.type, result);
+  return formatTransform(type, result);
 }
 
 }  // namespace

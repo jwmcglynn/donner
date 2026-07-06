@@ -176,6 +176,73 @@ TEST(SVGAnimateTransformElement, SkewXInterpolation) {
   EXPECT_EQ(val.value(), "skewX(15)");
 }
 
+TEST(SVGAnimateTransformElement, ByOnlyTranslate) {
+  // A by-only animation goes from the neutral value (translate 0 0) to `by`.
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="r" width="100" height="100">
+        <animateTransform attributeName="transform" type="translate"
+                          by="100 50" begin="0s" dur="2s" />
+      </rect>
+    </svg>
+  )");
+
+  // At t=1s (50%): translate(50, 25)
+  auto val = getAnimatedTransform(document, "#r", 1.0);
+  ASSERT_TRUE(val.has_value());
+  EXPECT_EQ(val.value(), "translate(50, 25)");
+}
+
+TEST(SVGAnimateTransformElement, FromByTranslate) {
+  // A from/by animation goes from `from` to `from + by`.
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="r" width="100" height="100">
+        <animateTransform attributeName="transform" type="translate"
+                          from="10 20" by="100 50" begin="0s" dur="2s" />
+      </rect>
+    </svg>
+  )");
+
+  // At t=1s (50%): from (10, 20) halfway to (110, 70) is translate(60, 45)
+  auto val = getAnimatedTransform(document, "#r", 1.0);
+  ASSERT_TRUE(val.has_value());
+  EXPECT_EQ(val.value(), "translate(60, 45)");
+}
+
+TEST(SVGAnimateTransformElement, ByOnlyScale) {
+  // For scale, the neutral value is 1, so by="2" animates from scale(1) to scale(3).
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="r" width="100" height="100">
+        <animateTransform attributeName="transform" type="scale"
+                          by="2" begin="0s" dur="2s" />
+      </rect>
+    </svg>
+  )");
+
+  // At t=1s (50%): scale(2)
+  auto val = getAnimatedTransform(document, "#r", 1.0);
+  ASSERT_TRUE(val.has_value());
+  EXPECT_EQ(val.value(), "scale(2)");
+}
+
+TEST(SVGAnimateTransformElement, ByOnlyRotate) {
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="r" width="100" height="100">
+        <animateTransform attributeName="transform" type="rotate"
+                          by="90" begin="0s" dur="2s" />
+      </rect>
+    </svg>
+  )");
+
+  // At t=1s (50%): rotate(45)
+  auto val = getAnimatedTransform(document, "#r", 1.0);
+  ASSERT_TRUE(val.has_value());
+  EXPECT_EQ(val.value(), "rotate(45)");
+}
+
 TEST(SVGAnimateTransformElement, FreezeAfterEnd) {
   auto document = parseSVGWithExperimental(R"(
     <svg xmlns="http://www.w3.org/2000/svg">
