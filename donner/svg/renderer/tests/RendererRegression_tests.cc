@@ -38,6 +38,15 @@ TEST_F(RendererRegressionTests, TextDecorationUnderlineRenders) {
   renderAndCompare(document, svg, golden, GoldenParams());
 }
 
+TEST_F(RendererRegressionTests, InlineSizeAutoFlowWrapsText) {
+  // SVG2 inline-size: text greedily wraps to the 150px measure into stacked lines.
+  const char* svg = "donner/svg/renderer/testdata/text_inline_size_wrap.svg";
+  const char* golden = "donner/svg/renderer/testdata/golden/text_inline_size_wrap.png";
+
+  SVGDocument document = loadSVG(svg, ResvgResourceRoot());
+  renderAndCompare(document, svg, golden, GoldenParams());
+}
+
 TEST_F(RendererRegressionTests, PatternFillOnTextDoesNotLeakToNextShape) {
   const char* svg = "donner/svg/renderer/testdata/geode_text_pattern_fill.svg";
   const char* golden = "donner/svg/renderer/testdata/golden/geode_text_pattern_fill.png";
