@@ -1,5 +1,6 @@
 #include "donner/svg/text/TextEngine.h"
 
+#include <algorithm>
 #include <cmath>
 #include <string>
 
@@ -213,6 +214,13 @@ TextLayoutParams buildTextLayoutParams(Registry& registry, EntityHandle handle,
       params.viewBox, params.fontMetrics, Lengthd::Extent::X);
   params.textLength = textComp.textLength;
   params.lengthAdjust = textComp.lengthAdjust;
+
+  // SVG2 inline-size: resolve the length to pixels in the inline (X) axis. A value <= 0 means no
+  // wrapping area. inline-size is non-inherited and applies to the <text> root, so it is read from
+  // the root element's computed style here.
+  const Lengthd inlineSize = properties.inlineSize.get().value();
+  params.inlineSizePx =
+      inlineSize.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
   return params;
 }
 
@@ -693,6 +701,137 @@ double computeSpanBaselineShiftPx(const TextBackend& backend,
   }
 
   return spanBaselineShiftPx;
+}
+
+bool applyInlineSizeWrap(std::vector<TextRun>& runs,
+                         const components::ComputedTextComponent& text,
+                         const TextLayoutParams& params, double measurePx, double lineHeightPx) {
+  if (measurePx <= 0.0) {
+    return false;
+  }
+
+  // A flat, document-order view of every rendered glyph, tagged with whether it is a soft-wrap
+  // opportunity (whitespace). Runs with no glyphs (hidden/empty spans) contribute nothing.
+  struct FlatGlyph {
+    size_t run;
+    size_t glyph;
+    double origX;    ///< Original xPosition from the flat single-line layout.
+    double advance;  ///< Glyph xAdvance.
+    double origY;    ///< Original yPosition (carries per-glyph baseline-shift).
+    bool isSpace;    ///< Whitespace: a soft-wrap opportunity between words.
+  };
+
+  std::vector<FlatGlyph> flat;
+  for (size_t ri = 0; ri < runs.size() && ri < text.spans.size(); ++ri) {
+    const auto& run = runs[ri];
+    if (run.onPath) {
+      return false;  // inline-size does not combine with text-on-path.
+    }
+    const auto& span = text.spans[ri];
+    const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
+    for (size_t gi = 0; gi < run.glyphs.size(); ++gi) {
+      const auto& g = run.glyphs[gi];
+      size_t clusterPos = g.cluster;
+      const uint32_t cp = clusterPos < spanText.size() ? decodeUtf8(spanText, clusterPos) : 0;
+      const bool isSpace = (cp == 0x20 || cp == 0x09 || cp == 0x0A || cp == 0x0D);
+      flat.push_back({ri, gi, g.xPosition, g.xAdvance, g.yPosition, isSpace});
+    }
+  }
+
+  if (flat.size() < 2) {
+    return false;  // Nothing to wrap.
+  }
+
+  const double originX = flat.front().origX;
+  const double originY = flat.front().origY;
+
+  // ── Phase A: assign each glyph a line index via greedy word wrapping ──
+  std::vector<size_t> lineOf(flat.size(), 0);
+  size_t line = 0;
+  double lineWidthUsed = 0.0;  // Committed width on the current line, excluding trailing spaces.
+  double pendingSpace = 0.0;   // Width of spaces since the last committed word.
+
+  size_t i = 0;
+  while (i < flat.size()) {
+    if (flat[i].isSpace) {
+      // Spaces stay (tentatively) on the current line; their width is pending until the next
+      // word commits it or a wrap discards it (trailing spaces hang).
+      lineOf[i] = line;
+      pendingSpace += flat[i].advance;
+      ++i;
+      continue;
+    }
+
+    // Gather a maximal word (run of non-space glyphs).
+    const size_t wordStart = i;
+    while (i < flat.size() && !flat[i].isSpace) {
+      ++i;
+    }
+    const size_t wordEnd = i;  // Exclusive.
+    const double wordWidth =
+        (flat[wordEnd - 1].origX + flat[wordEnd - 1].advance) - flat[wordStart].origX;
+
+    if (lineWidthUsed > 0.0 && lineWidthUsed + pendingSpace + wordWidth > measurePx + 1e-3) {
+      // Break before this word: start a new line. Pending trailing spaces hang on the old line.
+      ++line;
+      lineWidthUsed = wordWidth;
+    } else if (lineWidthUsed == 0.0) {
+      lineWidthUsed = wordWidth;  // First word on the line: no leading space counted.
+    } else {
+      lineWidthUsed += pendingSpace + wordWidth;
+    }
+    pendingSpace = 0.0;
+
+    for (size_t w = wordStart; w < wordEnd; ++w) {
+      lineOf[w] = line;
+    }
+  }
+
+  const size_t numLines = line + 1;
+  if (numLines < 2) {
+    return false;  // Everything fit on one line: leave the flat layout (and its global
+                   // text-anchor pass) untouched.
+  }
+
+  // ── Phase B: position glyphs line by line, preserving intra-line spacing ──
+  std::vector<double> newX(flat.size(), 0.0);
+  for (size_t k = 0; k < flat.size(); ++k) {
+    if (k == 0 || lineOf[k] != lineOf[k - 1]) {
+      newX[k] = originX;  // First glyph of a line starts at the block origin.
+    } else {
+      newX[k] = newX[k - 1] + (flat[k].origX - flat[k - 1].origX);
+    }
+  }
+
+  // ── Phase C: per-line text-anchor shift ──
+  // Each line's used width is the right edge of its last non-space glyph minus the origin.
+  std::vector<double> lineRightEdge(numLines, originX);
+  for (size_t k = 0; k < flat.size(); ++k) {
+    if (!flat[k].isSpace) {
+      lineRightEdge[lineOf[k]] = std::max(lineRightEdge[lineOf[k]], newX[k] + flat[k].advance);
+    }
+  }
+
+  std::vector<double> lineShift(numLines, 0.0);
+  for (size_t l = 0; l < numLines; ++l) {
+    const double used = lineRightEdge[l] - originX;
+    if (params.textAnchor == TextAnchor::Middle) {
+      lineShift[l] = -used / 2.0;
+    } else if (params.textAnchor == TextAnchor::End) {
+      lineShift[l] = -used;
+    }
+  }
+
+  // ── Write back positions ──
+  for (size_t k = 0; k < flat.size(); ++k) {
+    const size_t l = lineOf[k];
+    auto& g = runs[flat[k].run].glyphs[flat[k].glyph];
+    g.xPosition = newX[k] + lineShift[l];
+    // Preserve each glyph's baseline-shift delta from the original baseline, then stack the line.
+    g.yPosition = originY + static_cast<double>(l) * lineHeightPx + (flat[k].origY - originY);
+  }
+
+  return true;
 }
 
 }  // namespace text_engine_detail
@@ -1431,8 +1570,25 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     runs.push_back(std::move(run));
   }
 
+  // ── inline-size auto-flow (SVG2) ──────────────────────────────────────────────
+  // Wrapping is supported only for horizontal writing modes (documented limitation). When it
+  // applies it rewrites glyph positions into stacked lines and performs per-line text-anchor,
+  // so the global text-anchor / textLength passes are skipped.
+  bool wrapped = false;
+  if (!runs.empty() && params.inlineSizePx > 0.0 && !isVertical(params.writingMode)) {
+    // "normal" line-height derived from the base font's vertical metrics.
+    const FontVMetrics vm = backend_->fontVMetrics(font);
+    const float phScale = backend_->scaleForPixelHeight(font, fontSizePx);
+    double lineHeightPx =
+        static_cast<double>(vm.ascent - vm.descent + vm.lineGap) * static_cast<double>(phScale);
+    if (!(lineHeightPx > 0.0)) {
+      lineHeightPx = static_cast<double>(fontSizePx) * 1.2;
+    }
+    wrapped = applyInlineSizeWrap(runs, text, params, params.inlineSizePx, lineHeightPx);
+  }
+
   // ── textLength and text-anchor adjustments ────────────────────────────────────
-  if (!runs.empty()) {
+  if (!runs.empty() && !wrapped) {
     const bool vertical = isVertical(params.writingMode);
     applyTextLength(runs, text, runExtents, params, vertical, currentPenX, currentPenY);
     applyTextAnchor(runs, chunkBoundaries, text, vertical);

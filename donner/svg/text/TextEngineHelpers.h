@@ -70,6 +70,31 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
 void applyTextAnchor(std::vector<TextRun>& runs, std::vector<ChunkBoundary>& chunkBoundaries,
                      const components::ComputedTextComponent& text, bool vertical);
 
+/// Break horizontally-laid-out runs into stacked lines for SVG2 `inline-size` auto-flow, rewriting
+/// glyph positions in place. Called after the flat single-line layout and before text-anchor
+/// adjustment; when it wraps it applies text-anchor per line itself.
+///
+/// Wrap rules (slice 1, horizontal writing modes only):
+///  - Soft-wrap opportunities are whitespace (U+0020/tab/newline) between words; there is no
+///    mid-word breaking, hyphenation, or CJK per-character breaking.
+///  - Greedy line filling: a word is placed on the current line when it fits within \p measurePx,
+///    otherwise it starts a new line. The first word of a line is always placed even when it
+///    overflows the measure.
+///  - Whitespace at a soft-wrap break hangs on the previous line and is not counted toward the
+///    next line's width; intra-line spacing is preserved from the original layout.
+///  - Each line is independently anchored by `text-anchor` (from \p params) about the block origin
+///    (the first glyph's position) and stacked downward by \p lineHeightPx.
+///
+/// @param runs Runs produced by the flat horizontal layout; glyph positions are rewritten.
+/// @param text Computed text tree, parallel to \p runs (span i ↔ run i), used for span text.
+/// @param params Layout params; `textAnchor` selects per-line anchoring.
+/// @param measurePx The inline-size measure in pixels (must be > 0).
+/// @param lineHeightPx Vertical advance between line baselines in pixels.
+/// @return true if wrapping was applied.
+bool applyInlineSizeWrap(std::vector<TextRun>& runs,
+                         const components::ComputedTextComponent& text,
+                         const TextLayoutParams& params, double measurePx, double lineHeightPx);
+
 /// Compute per-span baseline-shift in pixels, including OS/2 sub/super metrics
 /// and ancestor baseline-shift accumulation.
 double computeSpanBaselineShiftPx(const TextBackend& backend,
