@@ -544,6 +544,28 @@ TEST(SVGAnimateElement, FreezeSamplesRepeatDurTruncatedMidIteration) {
   EXPECT_NEAR(std::stod(val.value()), 50.0, 0.5);
 }
 
+TEST(SVGAnimateElement, FreezeSamplesMaxTruncatedActiveEnd) {
+  // max="2s" caps the 4s simple duration to a 2s active duration. fill="freeze" must hold the
+  // value sampled at the truncated active end (t=2s, 50% progress -> 50), not the
+  // simple-duration end value (100).
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="r" width="100" height="100">
+        <animate attributeName="width" from="0" to="100" begin="0s" dur="4s" max="2s"
+                 fill="freeze" />
+      </rect>
+    </svg>
+  )");
+
+  auto val3 = getAnimatedValue(document, "#r", "width", 3.0);
+  ASSERT_TRUE(val3.has_value());
+  EXPECT_NEAR(std::stod(val3.value()), 50.0, 0.5);
+
+  auto val10 = getAnimatedValue(document, "#r", "width", 10.0);
+  ASSERT_TRUE(val10.has_value());
+  EXPECT_NEAR(std::stod(val10.value()), 50.0, 0.5);
+}
+
 TEST(SVGAnimateElement, SandwichOrderSetAfterAnimate) {
   // Replace-mode sandwich priority is document order across all animation element types: a later
   // <set> must win over an earlier <animate> targeting the same attribute.
