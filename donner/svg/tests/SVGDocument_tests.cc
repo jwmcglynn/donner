@@ -549,6 +549,26 @@ TEST(SVGDocument, SourceBackedElementAttributeHelpersUpdateSourceAndProjection) 
   EXPECT_THAT(document.source(), testing::Not(testing::HasSubstr("fill=")));
 }
 
+TEST(SVGDocument, SourceBackedInlineSizeAttributeRoundTrips) {
+  // SVG2 inline-size round-trips through source writeback: it is parsed as an attribute, readable
+  // via getAttribute, updatable via setElementAttribute (patching the source), and removable.
+  auto document = ParseSVG(
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><text id="t" inline-size="150">Hello world</text></svg>)");
+  SVGElement text = document.querySelector("#t").value();
+
+  EXPECT_THAT(text.getAttribute("inline-size"), Optional(Eq("150")));
+
+  xml::ApplySourceEditResult setResult = document.setElementAttribute(text, "inline-size", "200");
+  EXPECT_TRUE(setResult.applied);
+  EXPECT_THAT(text.getAttribute("inline-size"), Optional(Eq("200")));
+  EXPECT_THAT(document.source(), testing::HasSubstr(R"(inline-size="200")"));
+
+  xml::ApplySourceEditResult removeResult = document.removeElementAttribute(text, "inline-size");
+  EXPECT_TRUE(removeResult.applied);
+  EXPECT_FALSE(text.hasAttribute("inline-size"));
+  EXPECT_THAT(document.source(), testing::Not(testing::HasSubstr("inline-size=")));
+}
+
 TEST(SVGDocument, SourceBackedInvalidAttributeSetReportsProjectionDiagnostic) {
   auto document =
       ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r" width="1"/></svg>)");
