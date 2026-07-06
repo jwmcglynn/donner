@@ -1,0 +1,8 @@
+<svg viewBox="0 0 220 160" xmlns="http://www.w3.org/2000/svg"
+     font-family="Noto Sans" font-size="20">
+    <!-- SVG2 inline-size auto-flow: a positive inline-size on <text> establishes an
+         automatic wrapping area. The text greedily wraps to the 150px measure,
+         producing several stacked lines. Rendered from Donner's text engine. -->
+    <rect x="10" y="10" width="150" height="140" fill="none" stroke="#cccccc"/>
+    <text x="10" y="30" fill="black" inline-size="150">The quick brown fox jumps over the lazy dog</text>
+</svg>

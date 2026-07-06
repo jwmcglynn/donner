@@ -32,6 +32,12 @@ struct TextLayoutParams {
   double wordSpacingPx = 0.0;
   std::optional<Lengthd> textLength;
   LengthAdjust lengthAdjust = LengthAdjust::Default;
+
+  /// SVG2 `inline-size` measure in pixels. When greater than 0 (and the writing mode is
+  /// horizontal), the text engine wraps glyph runs to this measure, producing multiple stacked
+  /// lines. 0 means no wrapping area (ordinary single-line SVG text).
+  /// @see https://www.w3.org/TR/SVG2/text.html#InlineSizeProperty
+  double inlineSizePx = 0.0;
 };
 
 }  // namespace donner::svg
