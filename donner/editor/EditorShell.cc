@@ -22,6 +22,7 @@
 
 #include "GLFW/glfw3.h"
 #include "donner/base/RcString.h"
+#include "donner/base/StringUtils.h"
 #include "donner/css/parser/ColorParser.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/DocumentSave.h"
@@ -1957,18 +1958,30 @@ FormatBarState EditorShell::computeFormatBarState() {
     ReadTextFormatState(selection.front(), &state);
   }
 
-  // Family picker faces: the three embedded TTFs the editor loads today
-  // (Roboto Regular as the default UI face, Roboto Bold, Fira Code). Families
-  // the editor lacks a face for preview in the default font; the free-text box
-  // still round-trips them. W3 replaces this with the real embedded + macOS
-  // system font pipeline.
-  ImFont* regularFace =
+  // W3: the family picker now lists the real font catalog (embedded curated
+  // Google Fonts, then macOS system fonts), grouped Embedded-then-System as
+  // `FontCatalog::families()` orders them. A menu entry previews in its own
+  // face only where the editor already has that face loaded as an ImGui font:
+  // the default UI face (Roboto) and the code face (Fira Code). Other families
+  // render their label in the default UI font, and the free-text box still
+  // round-trips any family the catalog lacks. Building preview faces for
+  // arbitrary catalog entries from `fontCatalog().loadFace()` bytes would need
+  // a mid-session ImGui atlas rebuild, out of scope for this bar.
+  ImFont* const regularFace =
       ImGui::GetIO().Fonts->Fonts.empty() ? nullptr : ImGui::GetIO().Fonts->Fonts[0];
   state.boldToggleFont = uiFontBold_;
-  state.families = {
-      {"Roboto", regularFace}, {"Fira Code", codeFont_},  {"sans-serif", regularFace},
-      {"serif", nullptr},      {"monospace", codeFont_},
-  };
+  state.families = BuildFormatBarFamilies(
+      fontCatalog().families(), [&](const svg::FontFamilyInfo& info) -> ImFont* {
+        if (StringUtils::Equals<StringComparison::IgnoreCase>(info.family,
+                                                              std::string_view("Roboto"))) {
+          return regularFace;
+        }
+        if (StringUtils::Equals<StringComparison::IgnoreCase>(info.family,
+                                                              std::string_view("Fira Code"))) {
+          return codeFont_;
+        }
+        return nullptr;
+      });
   return state;
 }
 

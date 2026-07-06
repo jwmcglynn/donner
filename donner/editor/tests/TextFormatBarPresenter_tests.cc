@@ -5,9 +5,11 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/ImGuiIncludes.h"
+#include "donner/svg/resources/FontCatalogTypes.h"
 
 namespace donner::editor {
 namespace {
@@ -218,6 +220,60 @@ TEST(TextFormatBarPresenterActionsTest, NoActionsQueueNoMutation) {
   EXPECT_FALSE(ApplyFormatBarActionsToSelection(FormatBarActions{}, FormatBarState{},
                                                 /*routeTogglesToSelection=*/true, app));
   EXPECT_FALSE(app.flushFrame());
+}
+
+// ---------------------------------------------------------------------------
+// Family list construction (W3 catalog wiring)
+// ---------------------------------------------------------------------------
+
+TEST(TextFormatBarPresenterActionsTest, BuildFormatBarFamiliesGroupsEmbeddedThenSystem) {
+  // Distinct sentinel pointers stand in for loaded ImGui faces; the builder only
+  // stores them, never dereferences them.
+  ImFont* const robotoFace = reinterpret_cast<ImFont*>(0x10);
+  ImFont* const codeFace = reinterpret_cast<ImFont*>(0x20);
+
+  // Mirror FontCatalog::families(): the Embedded group first, then System, each
+  // already sorted within its group.
+  const std::vector<svg::FontFamilyInfo> catalog = {
+      {"Fira Code", svg::FontSource::Embedded, svg::FontCategory::Monospace},
+      {"Roboto", svg::FontSource::Embedded, svg::FontCategory::SansSerif},
+      {"Helvetica", svg::FontSource::System, svg::FontCategory::SansSerif},
+  };
+
+  const std::vector<FormatBarFontFamily> built =
+      BuildFormatBarFamilies(catalog, [&](const svg::FontFamilyInfo& info) -> ImFont* {
+        if (info.family == "Roboto") {
+          return robotoFace;
+        }
+        if (info.family == "Fira Code") {
+          return codeFace;
+        }
+        return nullptr;
+      });
+
+  ASSERT_EQ(built.size(), 3u);
+  // Grouping/order is preserved so the picker's Embedded/System headers land on
+  // the right rows.
+  EXPECT_EQ(built[0].name, "Fira Code");
+  EXPECT_EQ(built[0].source, svg::FontSource::Embedded);
+  EXPECT_EQ(built[0].previewFont, codeFace);
+  EXPECT_EQ(built[1].name, "Roboto");
+  EXPECT_EQ(built[1].source, svg::FontSource::Embedded);
+  EXPECT_EQ(built[1].previewFont, robotoFace);
+  EXPECT_EQ(built[2].name, "Helvetica");
+  EXPECT_EQ(built[2].source, svg::FontSource::System);
+  // A System family with no loaded face previews in the default UI font (null).
+  EXPECT_EQ(built[2].previewFont, nullptr);
+}
+
+TEST(TextFormatBarPresenterActionsTest, BuildFormatBarFamiliesToleratesNullPreviewResolver) {
+  const std::vector<svg::FontFamilyInfo> catalog = {
+      {"Roboto", svg::FontSource::Embedded, svg::FontCategory::SansSerif},
+  };
+  const std::vector<FormatBarFontFamily> built = BuildFormatBarFamilies(catalog, {});
+  ASSERT_EQ(built.size(), 1u);
+  EXPECT_EQ(built[0].name, "Roboto");
+  EXPECT_EQ(built[0].previewFont, nullptr);
 }
 
 // ---------------------------------------------------------------------------

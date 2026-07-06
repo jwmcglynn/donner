@@ -830,6 +830,7 @@ donner_cc_test(
         "//donner/editor:editor_app",
         "//donner/editor:text_format_bar_presenter",
         "//donner/svg",
+        "//donner/svg/resources:font_catalog_types",
         "@com_google_gtest//:gtest_main",
         "@imgui",
     ],

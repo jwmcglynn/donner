@@ -620,6 +620,7 @@ donner_cc_library(
         "//donner/base",
         "//donner/base/parser",
         "//donner/svg",
+        "//donner/svg/resources:font_catalog_types",
         "@imgui",
     ],
 )
