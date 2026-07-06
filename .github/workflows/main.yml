@@ -423,11 +423,17 @@ jobs:
     runs-on: [self-hosted, linux, arm64]
     needs: [gatekeeper, determine-targets]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && github.event_name == 'pull_request' && needs.gatekeeper.outputs.docs_only != 'true' && needs.determine-targets.outputs.fallback != 'true' && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
+    # RE-availability SLA lane. A healthy affected-target run is ~21 min; bound
+    # it at 30 so healthy runs can finish while a wedged/degraded RE endpoint
+    # still fast-fails instead of silently tailing for hours.
+    timeout-minutes: 30
     env:
-      # The runner host may add the LAN Bazel cache from its home rc. Keep
-      # that acceleration when it is healthy, but fall back to local execution
-      # if the private gRPC endpoint is down.
-      BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS: "--remote_local_fallback=true --incompatible_remote_local_fallback_for_remote_cache=true --remote_timeout=5s"
+      # The runner host may add the LAN Bazel cache from its home rc. Use that
+      # acceleration when healthy, but do NOT fall back to local execution when
+      # remote execution is down/degraded: a CPU-capped runner executing the
+      # whole graph locally is the measured 2-3 h tail. Fast-fail on RE
+      # degradation; the wedge-watch + rerun recover.
+      BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS: "--remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=5s"
       # Every self-hosted run uploads Bazel profiles + BEP + compact execution
       # logs so slow runs can be attributed to targets/actions without live
       # SSH. Keep artifacts small; retention is 3 days. DIAG_DIR is exported
@@ -701,12 +707,18 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64]
     needs: [gatekeeper, determine-targets]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && github.event_name == 'pull_request' && needs.gatekeeper.outputs.docs_only != 'true' && needs.determine-targets.outputs.fallback != 'true' && vars.SELFHOSTED_MACOS_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
+    # RE-availability SLA lane. Bound at 30 min so healthy affected-target
+    # runs can finish while RE degradation still fast-fails instead of tailing
+    # for hours on the capped host.
+    timeout-minutes: 30
     env:
       # The runner host has an operator ~/.bazelrc for interactive RE/cache work.
       # The invocations below use --nohome_rc so CI matches GitHub-hosted macOS
-      # and only picks up cache settings declared in this workflow. Cache/RE
-      # outages degrade to local execution instead of failing the CI gate.
-      BAZEL_MACOS_BUILD_FLAGS: "--macos_minimum_os=13.3 --remote_cache=grpc://192.168.1.63:9092 --remote_upload_local_results=true --remote_local_fallback=true --incompatible_remote_local_fallback_for_remote_cache=true --remote_timeout=5s"
+      # and only picks up cache settings declared in this workflow. RE/cache
+      # outages now FAST-FAIL (no local fallback) rather than degrading to a
+      # multi-hour local build on the capped host. The wedge-watch + rerun
+      # handle recovery.
+      BAZEL_MACOS_BUILD_FLAGS: "--macos_minimum_os=13.3 --remote_cache=grpc://192.168.1.63:9092 --remote_upload_local_results=true --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=5s"
       BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME"
     steps:
       - name: Checkout

@@ -1,12 +1,27 @@
 name: Coverage
 
-# Runs coverage on: main merges, every PR push (so Codecov has data to
-# annotate the patch with), and on-demand via workflow_dispatch.
+# Runs coverage on: main merges (the Codecov baseline), PR pushes (INCREMENTAL:
+# only the changed code's affected targets, so Codecov can still patch-annotate),
+# and on-demand via workflow_dispatch.
 #
-# We previously dropped the pull_request trigger thinking Codecov could
-# patch-annotate without a PR-side run, but Codecov's patch-coverage signal
-# requires the PR head's own `coverage.dat` upload to compute "X% of changed
-# lines covered" against the main-branch baseline.
+# Codecov's patch-coverage signal ("X% of changed lines covered") requires the
+# PR head's own coverage upload measured against the main-branch baseline, so we
+# cannot simply drop the pull_request trigger. But the FULL instrumented re-run
+# on every PR was the single worst violator of the 15-minute PR CI budget: the
+# A 40-run CI speed profile measured it at ~21 min median with a 3.3 h tail,
+# ~99% of that being one instrumented re-run of tests CI already runs, whose
+# only unique output is the Codecov patch percentage.
+#
+# So PR coverage is scoped to the affected-target subset via the same bazel-diff
+# mechanism as CI (see determine-targets below); the patch annotation survives
+# on the subset that actually changed. When the diff cannot be scoped to a
+# genuine subset (infra-file changes, bazel-diff failure, missing/empty diff),
+# the reason resolves to a FULL //... target set: running that on a PR is exactly
+# the 21-min re-run we are eliminating, so the PR coverage jobs SKIP instead --
+# the main-push baseline already covers those lines. Only the affected subset
+# (fallback_reason == bazel_diff), the cheap smoke subset (coverage_smoke), and
+# the explicit ci:full-test opt-in still produce PR coverage. Future readers:
+# do not silently re-add a full instrumented PR coverage run.
 on:
   push:
     branches: [main]
@@ -275,7 +290,13 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     needs: determine-targets
-    if: ${{ github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && (needs.determine-targets.outputs.fallback_reason == 'full_test_label' || vars.SELFHOSTED_LINUX_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn')) }}
+    # Hosted PR coverage fallback (untrusted actors / self-hosted unavailable /
+    # ci:full-test fanout). On PRs it runs ONLY when the target set is a genuine
+    # incremental subset (fallback == false => bazel_diff), the cheap smoke
+    # subset, or an explicit ci:full-test opt-in. A full //... fallback on a PR
+    # (infra change, bazel-diff failure, empty diff) is SKIPPED here -- the
+    # main-push baseline covers those lines under the 15-minute PR budget.
+    if: ${{ github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && (needs.determine-targets.outputs.fallback == 'false' || needs.determine-targets.outputs.fallback_reason == 'coverage_smoke' || needs.determine-targets.outputs.fallback_reason == 'full_test_label') && (needs.determine-targets.outputs.fallback_reason == 'full_test_label' || vars.SELFHOSTED_LINUX_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn')) }}
 
     steps:
       - uses: actions/checkout@v7
@@ -368,18 +389,26 @@ jobs:
   coverage-self-hosted:
     runs-on: [self-hosted, linux, arm64]
     needs: determine-targets
-    if: ${{ github.event_name == 'pull_request' && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
+    # Only the incremental (bazel_diff) subset or the cheap smoke subset run
+    # here. A full //... fallback is skipped on PRs (main-push baseline covers
+    # it); ci:full-test routes to the hosted `build` job. See header.
+    if: ${{ github.event_name == 'pull_request' && (needs.determine-targets.outputs.fallback == 'false' || needs.determine-targets.outputs.fallback_reason == 'coverage_smoke') && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
+    # Coverage healthy median is ~21 min, so bound this SLA lane at 30 min:
+    # RE degradation fast-fails (no local fallback, below) instead of the
+    # CPU-capped 2-3 h local re-run that produced the 3.3 h tail.
+    timeout-minutes: 30
     env:
-      # The runner host may add the LAN Bazel cache from its home rc. Keep
-      # coverage resilient when the private gRPC endpoint is down
-      # (remote_local_fallback), but do NOT use an aggressive call deadline:
-      # --remote_timeout applies to every remote call, and a healthy-but-busy
-      # RE endpoint can legitimately take >5s to accept large coverage
-      # uploads under a multi-job burst (observed 2026-07-02 as
-      # DEADLINE_EXCEEDED upload failures). 60s fails fast enough on a dead
-      # endpoint while tolerating a loaded one.
-      BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS: "--remote_local_fallback=true --incompatible_remote_local_fallback_for_remote_cache=true --remote_timeout=60s"
-      DONNER_COVERAGE_BAZEL_FLAGS: "--remote_local_fallback=true --incompatible_remote_local_fallback_for_remote_cache=true --remote_timeout=60s"
+      # RE-availability SLA: do NOT fall back to local execution when remote
+      # execution is unavailable or degraded. A CPU-capped self-hosted runner
+      # executing an instrumented coverage build
+      # locally is exactly the measured 2-3 h tail; fast-fail and let the
+      # wedge-watch + rerun handle RE recovery instead. --remote_timeout
+      # stays at 60s (not 5s): a healthy-but-busy endpoint can legitimately take
+      # >5s to accept large coverage uploads under a multi-job burst (observed
+      # 2026-07-02 as DEADLINE_EXCEEDED upload failures); 60s fails fast enough
+      # on a dead endpoint while tolerating a loaded one.
+      BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS: "--remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s"
+      DONNER_COVERAGE_BAZEL_FLAGS: "--remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s"
 
     steps:
       - uses: actions/checkout@v7
@@ -467,9 +496,11 @@ jobs:
           if-no-files-found: ignore
 
   upload-self-hosted-coverage:
-    needs: coverage-self-hosted
+    needs: [determine-targets, coverage-self-hosted]
     runs-on: ubuntu-24.04
-    if: ${{ github.event_name == 'pull_request' && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
+    # Mirrors coverage-self-hosted's gate so the upload skips whenever the
+    # self-hosted coverage job skips (full-fallback PRs produce no artifact).
+    if: ${{ github.event_name == 'pull_request' && (needs.determine-targets.outputs.fallback == 'false' || needs.determine-targets.outputs.fallback_reason == 'coverage_smoke') && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
 
     steps:
       - uses: actions/checkout@v7
