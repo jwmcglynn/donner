@@ -1,0 +1,53 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+load("//build_defs:embed_resources.bzl", "embed_resources")
+load(
+    ":fonts.bzl",
+    "embedded_resources_dict",
+    "google_fonts_catalog_inc",
+    "google_fonts_manifest",
+)
+
+package(default_visibility = ["//visibility:private"])
+
+# Embeds the fetched font bytes as C arrays, exposing
+# `donner::embedded::kGF<Family>Ttf` spans (see fonts.bzl `var` fields).
+embed_resources(
+    name = "google_fonts_data",
+    header_output = "embed_resources/GoogleFontsData.h",
+    resources = embedded_resources_dict(),
+    visibility = ["//donner:__subpackages__"],
+)
+
+# Generated DONNER_GF_ENTRY(family, category, span) x-macro table, kept in sync
+# with GOOGLE_FONTS. Consumed by donner/svg/resources/EmbeddedFontProvider.cc.
+google_fonts_catalog_inc(
+    name = "catalog_inc_gen",
+    out = "embed_resources/GoogleFontsCatalog.inc",
+)
+
+cc_library(
+    name = "google_fonts_catalog_inc",
+    testonly = False,
+    textual_hdrs = ["embed_resources/GoogleFontsCatalog.inc"],
+    include_prefix = "embed_resources",
+    strip_include_prefix = "embed_resources",
+    visibility = ["//donner:__subpackages__"],
+)
+
+# JSON dump of the pin table for the integrity test.
+google_fonts_manifest(
+    name = "manifest_json_gen",
+    out = "fonts_manifest.json",
+)
+
+py_test(
+    name = "integrity_test",
+    srcs = ["integrity_test.py"],
+    args = ["$(location :manifest_json_gen)"],
+    data = [":manifest_json_gen"],
+)
+
+exports_files([
+    "LICENSES.md",
+    "fonts.bzl",
+])
