@@ -22,9 +22,17 @@ enum class VectorEffect : uint8_t {
   NonScalingStroke,  ///< The stroke width (and dash pattern) is held constant in the coordinate
                      ///< system of the referencing viewport, ignoring the element's own transform
                      ///< and viewBox scaling.
-  NonScalingSize,  ///< At-risk in SVG 2 CR. Parses but is treated as `none`.
-  NonRotation,     ///< At-risk in SVG 2 CR. Parses but is treated as `none`.
-  FixedPosition,   ///< At-risk in SVG 2 CR. Parses but is treated as `none`.
+                     ///<
+                     ///< Known limitation: the implementation compensates with a scalar factor,
+                     ///< `sqrt(|det(CTM)|)`, which is exact for uniform scale and rotation but
+                     ///< averages a non-uniform scale (e.g. `scale(2, 1)` or
+                     ///< `preserveAspectRatio="none"`), so strokes under an anisotropic CTM are
+                     ///< not held at a constant device width. Full conformance would require
+                     ///< stroking the path in device space instead of pre-dividing the local
+                     ///< stroke width; see `toStrokeParams` in RendererDriver.cc.
+  NonScalingSize,    ///< At-risk in SVG 2 CR. Parses but is treated as `none`.
+  NonRotation,       ///< At-risk in SVG 2 CR. Parses but is treated as `none`.
+  FixedPosition,     ///< At-risk in SVG 2 CR. Parses but is treated as `none`.
 };
 
 /// Output stream operator for \ref VectorEffect, outputs the CSS string representation for this
