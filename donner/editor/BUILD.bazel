@@ -697,6 +697,16 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "editor_dock_layout",
+    srcs = ["EditorDockLayout.cc"],
+    hdrs = ["EditorDockLayout.h"],
+    deps = [
+        ":imgui_headers",
+        "@imgui",
+    ],
+)
+
+donner_cc_library(
     name = "editor_shell",
     srcs = [
         "EditorShell.cc",
@@ -722,6 +732,7 @@ donner_cc_library(
         ":document_sync_controller",
         ":drag_coalesce",
         ":editor_app",
+        ":editor_dock_layout",
         ":editor_input_bridge",
         ":editor_shell_layout",
         ":focus_view",

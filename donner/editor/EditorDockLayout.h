@@ -16,6 +16,11 @@ inline constexpr const char* kCompositorDebugWindowName = "Compositor Debug";
 /// Stable string hashed into the editor's root DockSpace id.
 inline constexpr const char* kEditorDockSpaceName = "EditorDockSpace";
 
+/// The editor's root DockSpace id. Hashed directly from \ref
+/// kEditorDockSpaceName so it is stable and independent of the ImGui window
+/// stack (unlike `ImGui::GetID`, which dereferences the current window).
+[[nodiscard]] ImGuiID EditorDockSpaceId();
+
 /// Node ids produced by \ref BuildDefaultDockLayout. Ids of zero mean the node
 /// was not created (e.g. \ref EditorDockNodes::rightBottom when the compositor
 /// debug panel is excluded from the layout).

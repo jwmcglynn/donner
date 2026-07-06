@@ -4,6 +4,10 @@
 
 namespace donner::editor {
 
+ImGuiID EditorDockSpaceId() {
+  return ImHashStr(kEditorDockSpaceName);
+}
+
 EditorDockNodes BuildDefaultDockLayout(ImGuiID dockspaceId, const EditorDockLayoutParams& params) {
   EditorDockNodes nodes;
   nodes.root = dockspaceId;
