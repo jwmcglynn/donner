@@ -18,6 +18,10 @@ std::vector<Path> SVGTextElement::convertToPath() const {
   return computedGlyphPaths();
 }
 
+std::vector<TextGlyphOutline> SVGTextElement::convertToOutlineGlyphs() const {
+  return computedGlyphOutlines();
+}
+
 Box2d SVGTextElement::inkBoundingBox() const {
   return computedInkBounds();
 }

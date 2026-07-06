@@ -231,11 +231,12 @@ TEST(TextToOutlines, PreservesStyleAndPaintOrder) {
   ASSERT_TRUE(result.ok) << result.error;
   const std::string mergedSource = ApplyConversion(document, text, result);
 
-  // Style is carried onto the `<g>` group.
+  // Style is carried onto the `<g>` group. Paint is resolved from computed style, so named colors
+  // serialize to their canonical hex form (`black` -> `#000000`); `transform` is carried verbatim.
   EXPECT_THAT(mergedSource, HasSubstr("fill=\"#0033aa\""));
   EXPECT_THAT(mergedSource, HasSubstr("fill-rule=\"evenodd\""));
   EXPECT_THAT(mergedSource, HasSubstr("opacity=\"0.5\""));
-  EXPECT_THAT(mergedSource, HasSubstr("stroke=\"black\""));
+  EXPECT_THAT(mergedSource, HasSubstr("stroke=\"#000000\""));
   EXPECT_THAT(mergedSource, HasSubstr("stroke-width=\"2\""));
   EXPECT_THAT(mergedSource, HasSubstr("transform=\"translate(5,5)\""));
 
