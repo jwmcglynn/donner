@@ -357,6 +357,27 @@ TEST(SVGSwitchElementTests, FailingConditionalOnContainerDisablesSubtree) {
 }
 
 /**
+ * A child that is not a directly-rendered element type (here `<defs>`) is not eligible for
+ * selection and does not consume the selection slot, so the following `<rect>` is selected. This
+ * distinguishes the whitelist behavior from skipping only unknown element types: `<defs>` is a
+ * known element type but is still not rendered by a `<switch>`.
+ */
+TEST(SVGSwitchElementTests, SwitchSkipsNonRenderedChildTypes) {
+  const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"(
+    <svg width="16" height="16">
+      <switch>
+        <defs>
+          <rect x="0" y="0" width="16" height="16" fill="black"/>
+        </defs>
+        <rect x="0" y="0" width="8" height="16" fill="black"/>
+      </switch>
+    </svg>
+  )");
+
+  EXPECT_TRUE(generatedAscii.matches(kLeftHalfFilled));
+}
+
+/**
  * `systemLanguage` is evaluated against the document's configured user language list. The default
  * `{"en"}` does not match `systemLanguage="ru"`, but configuring the list to `{"ru"}` does.
  */

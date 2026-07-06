@@ -120,6 +120,38 @@ bool IsValidMarker(EntityHandle handle) {
   return handle.all_of<MarkerComponent>();
 }
 
+/**
+ * Returns true if the element type participates in `<switch>` child selection. Per the SVG spec,
+ * `<switch>` evaluates conditional processing attributes only on its direct children that are
+ * directly-rendered element types (`a`, `g`, `svg`, `switch`, `text`, `use`, `image`, and
+ * graphical shape elements). Any other child (descriptive elements such as `title`/`desc`/
+ * `metadata`, `defs`, `symbol`, and unknown elements) is ignored and does not consume the selection
+ * slot.
+ *
+ * This is a positive whitelist of directly-rendered types, so non-rendered children are excluded
+ * regardless of whether they are currently typed as \ref ElementType::Unknown or gain a dedicated
+ * element type later (e.g. `title`/`desc`/`metadata`).
+ */
+bool IsSwitchProcessedElementType(ElementType type) {
+  switch (type) {
+    case ElementType::A:
+    case ElementType::Circle:
+    case ElementType::Ellipse:
+    case ElementType::G:
+    case ElementType::Image:
+    case ElementType::Line:
+    case ElementType::Path:
+    case ElementType::Polygon:
+    case ElementType::Polyline:
+    case ElementType::Rect:
+    case ElementType::SVG:
+    case ElementType::Switch:
+    case ElementType::Text:
+    case ElementType::Use: return true;
+    default: return false;
+  }
+}
+
 class RenderingContextImpl {
 public:
   explicit RenderingContextImpl(Registry& registry, bool verbose,
@@ -439,9 +471,10 @@ public:
 
   /**
    * Select the first direct child of a \ref xml_switch whose conditional-processing attributes
-   * all evaluate to true. Non-element children (comments, text) and unknown (non-SVG) elements
-   * are never selected. `display` does not participate in selection, so a selected child with
-   * `display: none` still wins and renders nothing.
+   * all evaluate to true. Non-element children (comments, text) and children that are not
+   * directly-rendered element types (descriptive elements, `defs`, `symbol`, unknown elements) are
+   * never selected and do not consume the selection slot. `display` does not participate in
+   * selection, so a selected child with `display: none` still wins and renders nothing.
    *
    * @param switchTree Tree component of the `<switch>` element (or its shadow instance).
    * @return The selected child entity, or `entt::null` if no child matches.
@@ -454,7 +487,7 @@ public:
           registry_, shadowEntityComponent ? shadowEntityComponent->lightEntity : cur);
 
       const auto* typeComponent = childDataHandle.try_get<ElementTypeComponent>();
-      if (!typeComponent || typeComponent->type() == ElementType::Unknown) {
+      if (!typeComponent || !IsSwitchProcessedElementType(typeComponent->type())) {
         continue;
       }
 
