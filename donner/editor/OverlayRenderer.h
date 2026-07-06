@@ -196,8 +196,11 @@ struct SelectionChromeSnapshot {
   };
   /// The active text-editing caret, or nullopt when no text session is open.
   std::optional<TextCaret> textCaretDoc;
-  /// Text-box frame for the active editing session's box text.
-  std::optional<Box2d> textBoxDoc;
+  /// Session frame for the active text-editing session: local TL, TR, BR, BL
+  /// corners mapped through the text's transform. An ORIENTED quad - after a
+  /// rotate it stays aligned to the text's rotation, never the axis-aligned
+  /// envelope. Corner resize/rotate handles are drawn at these corners.
+  std::optional<std::array<Vector2d, 4>> textFrameCornersDoc;
 
   /// Drag-to-create text-box preview: the live rectangle the text tool is
   /// dragging out, plus the first baseline it would create and an I-beam

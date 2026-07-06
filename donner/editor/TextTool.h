@@ -15,6 +15,7 @@
 /// empty session on a newly created element deletes it, leaving the document
 /// unchanged; emptying an existing element deletes it as an undoable edit).
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <optional>
@@ -64,8 +65,12 @@ public:
     /// Caret line endpoints (top, bottom).
     Vector2d caretTopDoc;
     Vector2d caretBottomDoc;
-    /// Text-box frame for box text (absent for point text).
-    std::optional<Box2d> boxDoc;
+    /// Session frame corners (local TL, TR, BR, BL mapped through the text's
+    /// transform): the authored box for box text, the laid-out ink bounds for
+    /// point text. An ORIENTED quad - after a rotate it stays aligned to the
+    /// text's rotation, never the axis-aligned envelope. Absent when the
+    /// session has no frame yet (empty point text).
+    std::optional<std::array<Vector2d, 4>> frameCornersDoc;
   };
 
   /// Drag-to-create preview chrome (document space): the live box being
@@ -118,7 +123,9 @@ public:
 
   /// Hit-test the session frame's transform handles at @p documentPoint for
   /// hover cursor feedback: `Resize` over a corner handle, `Rotate` in the
-  /// ring outside it, `None` elsewhere or when no session is editing. Reads
+  /// ring outside it, `None` elsewhere or when no session is editing. The
+  /// test runs in the text's local space, so on a rotated frame the handle
+  /// zones track the ORIENTED corners, not the axis-aligned envelope. Reads
   /// the session's computed ink bounds for point text - call only while the
   /// async render worker is idle.
   [[nodiscard]] SelectionTransformHandleIntent frameHandleIntentAt(const Vector2d& documentPoint,

@@ -1,5 +1,7 @@
 #include "donner/editor/TextTool.h"
 
+#include <array>
+#include <cmath>
 #include <string>
 #include <string_view>
 
@@ -371,11 +373,12 @@ TEST_F(TextToolTest, EditingChromeTracksCaretAndBox) {
   EXPECT_DOUBLE_EQ(chrome->caretTopDoc.x, 10.0);
   EXPECT_DOUBLE_EQ(chrome->caretBottomDoc.x, 10.0);
   EXPECT_LT(chrome->caretTopDoc.y, chrome->caretBottomDoc.y);
-  ASSERT_TRUE(chrome->boxDoc.has_value());
-  EXPECT_DOUBLE_EQ(chrome->boxDoc->topLeft.x, 10.0);
-  EXPECT_DOUBLE_EQ(chrome->boxDoc->topLeft.y, 20.0);
-  EXPECT_DOUBLE_EQ(chrome->boxDoc->bottomRight.x, 210.0);
-  EXPECT_DOUBLE_EQ(chrome->boxDoc->bottomRight.y, 120.0);
+  ASSERT_TRUE(chrome->frameCornersDoc.has_value());
+  const std::array<Vector2d, 4>& corners = *chrome->frameCornersDoc;
+  EXPECT_EQ(corners[0], Vector2d(10.0, 20.0));    // Top-left.
+  EXPECT_EQ(corners[1], Vector2d(210.0, 20.0));   // Top-right.
+  EXPECT_EQ(corners[2], Vector2d(210.0, 120.0));  // Bottom-right.
+  EXPECT_EQ(corners[3], Vector2d(10.0, 120.0));   // Bottom-left.
 
   // Typing a character advances the caret X by its measured width.
   type("M");
@@ -649,6 +652,96 @@ TEST_F(TextToolTest, RotateRingRotatesElementKeepingFrameAttributes) {
   EXPECT_THAT(attr(element, "data-donner-text-box-width"), Eq("60"));
   EXPECT_THAT(attr(element, "data-donner-text-box-height"), Eq("100"));
   EXPECT_THAT(attr(element, "font-size"), Eq("32"));
+}
+
+TEST_F(TextToolTest, RotatedFrameStaysOrientedAndResizesInLocalSpace) {
+  // Box (10,20)-(70,120), center (40,70). Rotate ~45 degrees via the rotate
+  // ring, then verify the hard invariant: the frame chrome and its handles
+  // stay an oriented bounding box aligned to the text's rotation (never the
+  // axis-aligned envelope), and a subsequent resize operates in the box's
+  // local rotated space.
+  tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(70.0, 120.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(70.0, 120.0));
+  ASSERT_TRUE(tool.isEditing());
+  type("Hi");
+
+  // Press in the rotate ring outside the bottom-right corner, then sweep the
+  // pointer 45 degrees around the frame center.
+  const Vector2d center(40.0, 70.0);
+  const Vector2d ringStart(84.0, 134.0);
+  tool.onMouseDown(app, ringStart, MouseModifiers{});
+  ASSERT_TRUE(tool.isRotatingFrame());
+  const Vector2d startDelta = ringStart - center;
+  const double startAngle = std::atan2(startDelta.y, startDelta.x);
+  const double radius = startDelta.length();
+  const double angle = startAngle + MathConstants<double>::kPi / 4.0;
+  const Vector2d ringEnd = center + Vector2d(std::cos(angle), std::sin(angle)) * radius;
+  tool.onMouseMove(app, ringEnd, /*buttonHeld=*/true);
+  tool.onMouseUp(app, ringEnd);
+  ASSERT_TRUE(tool.isEditing());
+
+  // The frame chrome is an oriented quad: side lengths match the authored
+  // box (60 x 100) and the edges are NOT axis-aligned. It must never snap
+  // back to the axis-aligned envelope after the gesture ends.
+  const auto chrome = tool.editingChrome(app);
+  ASSERT_TRUE(chrome.has_value());
+  ASSERT_TRUE(chrome->frameCornersDoc.has_value());
+  const std::array<Vector2d, 4>& corners = *chrome->frameCornersDoc;
+  const Vector2d topEdge = corners[1] - corners[0];
+  const Vector2d sideEdge = corners[3] - corners[0];
+  EXPECT_NEAR(topEdge.length(), 60.0, 1e-6);
+  EXPECT_NEAR(sideEdge.length(), 100.0, 1e-6);
+  EXPECT_GT(std::abs(topEdge.x), 1.0) << "rotated top edge must not be axis-aligned";
+  EXPECT_GT(std::abs(topEdge.y), 1.0) << "rotated top edge must not be axis-aligned";
+
+  // Handle hit-testing tracks the ORIENTED corners: the rotated bottom-right
+  // corner reports a resize handle with its local corner identity...
+  const auto intentAt = [&](const Vector2d& documentPoint) {
+    return tool.frameHandleIntentAt(documentPoint, /*pixelsPerDocUnit=*/1.0,
+                                    /*includeRotate=*/true);
+  };
+  EXPECT_EQ(intentAt(corners[2]).kind, SelectionTransformHandleKind::Resize);
+  EXPECT_EQ(intentAt(corners[2]).corner, SelectionTransformCorner::BottomRight);
+  // ...while the axis-aligned envelope's corner (which is NOT a corner of
+  // the rotated quad) reports nothing.
+  Box2d envelope = Box2d::CreateEmpty(corners[0]);
+  for (const Vector2d& corner : corners) {
+    envelope.addPoint(corner);
+  }
+  EXPECT_EQ(intentAt(envelope.bottomRight).kind, SelectionTransformHandleKind::None);
+
+  // A subsequent resize operates in the box's LOCAL rotated space: drag the
+  // rotated bottom-right corner to the document position of local point
+  // (80, 140) - the local frame grows by (10, 20) and the box attributes
+  // reflect the local size, unaffected by the rotation.
+  const Vector2d exDoc = topEdge / 60.0;    // Doc direction of one local x unit.
+  const Vector2d eyDoc = sideEdge / 100.0;  // Doc direction of one local y unit.
+  const Vector2d resizeTargetDoc = corners[0] + exDoc * (80.0 - 10.0) + eyDoc * (140.0 - 20.0);
+  tool.onMouseDown(app, corners[2], MouseModifiers{});
+  ASSERT_TRUE(tool.isAdjustingFrame());
+  ASSERT_FALSE(tool.isRotatingFrame());
+  tool.onMouseMove(app, resizeTargetDoc, /*buttonHeld=*/true);
+  tool.onMouseUp(app, resizeTargetDoc);
+  ASSERT_TRUE(tool.isEditing());
+
+  svg::SVGTextElement element = text();
+  EXPECT_NEAR(std::stod(attr(element, "data-donner-text-box-width")), 70.0, 0.01);
+  EXPECT_NEAR(std::stod(attr(element, "data-donner-text-box-height")), 120.0, 0.01);
+  // The anchored top-left corner stays put in local space.
+  EXPECT_NEAR(std::stod(attr(element, "x")), 10.0, 0.01);
+  EXPECT_NEAR(std::stod(attr(element, "y")), 52.0, 0.01);
+
+  // And the frame is STILL oriented after the resize - resizing never
+  // flattens the rotation back to the axis-aligned envelope.
+  const auto afterResize = tool.editingChrome(app);
+  ASSERT_TRUE(afterResize.has_value());
+  ASSERT_TRUE(afterResize->frameCornersDoc.has_value());
+  const Vector2d topEdgeAfter =
+      (*afterResize->frameCornersDoc)[1] - (*afterResize->frameCornersDoc)[0];
+  EXPECT_NEAR(topEdgeAfter.length(), 70.0, 1e-6);
+  EXPECT_GT(std::abs(topEdgeAfter.x), 1.0);
+  EXPECT_GT(std::abs(topEdgeAfter.y), 1.0);
 }
 
 TEST_F(TextToolTest, FrameHandleIntentReportsResizeRotateAndNoneForHover) {

@@ -1184,7 +1184,7 @@ void EditorShell::applyPendingDocumentSpaceReplayInputForTesting() {
               ? std::make_optional(SelectionChromeSnapshot::TextCaret{textChrome->caretTopDoc,
                                                                       textChrome->caretBottomDoc})
               : std::nullopt,
-          textChrome->boxDoc);
+          textChrome->frameCornersDoc);
     }
     renderCoordinator_.setTextBoxDragPreview(std::nullopt);
   } else if (activeTool_ == ActiveTool::Text) {
@@ -2819,7 +2819,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
               ? std::make_optional(SelectionChromeSnapshot::TextCaret{textChrome->caretTopDoc,
                                                                       textChrome->caretBottomDoc})
               : std::nullopt,
-          textChrome->boxDoc);
+          textChrome->frameCornersDoc);
     }
     renderCoordinator_.setTextBoxDragPreview(std::nullopt);
   } else {
@@ -3822,6 +3822,14 @@ void EditorShell::renderReferenceHighlightChip() {
 
 SelectionChromeDetail EditorShell::selectionChromeDetailForActiveTool() const {
   if (activeTool_ == ActiveTool::Pen) {
+    return SelectionChromeDetail::PathOutlinesOnly;
+  }
+  if (activeTool_ == ActiveTool::Text && textTool_.isEditing()) {
+    // The session frame (an oriented quad with its own corner handles,
+    // pushed via setTextEditingChrome) is the selection UI while a text
+    // session is open. Skip the generic axis-aligned bounds + handles: on a
+    // rotated frame they would draw the axis-aligned envelope on top of the
+    // oriented frame.
     return SelectionChromeDetail::PathOutlinesOnly;
   }
   return SelectionChromeDetail::Full;

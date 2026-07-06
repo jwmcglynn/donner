@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <limits>
@@ -181,11 +182,12 @@ public:
   }
 
   /// Set (or clear) the text tool's editing chrome for the next overlay
-  /// capture: the caret bar and the text-box frame, in document space.
+  /// capture: the caret bar and the session frame's oriented corners (local
+  /// TL, TR, BR, BL mapped through the text's transform), in document space.
   void setTextEditingChrome(std::optional<SelectionChromeSnapshot::TextCaret> caretDoc,
-                            std::optional<Box2d> boxDoc) {
+                            std::optional<std::array<Vector2d, 4>> frameCornersDoc) {
     textEditingCaretDoc_ = caretDoc;
-    textEditingBoxDoc_ = boxDoc;
+    textEditingFrameCornersDoc_ = frameCornersDoc;
   }
 
   /// Set (or clear) the text tool's drag-to-create preview chrome for the
@@ -336,7 +338,7 @@ private:
   std::optional<Path> penHoverPreviewSegmentDoc_;
   std::optional<Vector2d> penHoverCloseAffordanceDoc_;
   std::optional<SelectionChromeSnapshot::TextCaret> textEditingCaretDoc_;
-  std::optional<Box2d> textEditingBoxDoc_;
+  std::optional<std::array<Vector2d, 4>> textEditingFrameCornersDoc_;
   /// Text-box drag-to-create preview pushed by the shell each frame.
   std::optional<SelectionChromeSnapshot::TextBoxDragPreview> textBoxDragPreviewDoc_;
   /// Pen hover chrome baked into the current immediate overlay snapshot;
@@ -345,7 +347,7 @@ private:
   std::optional<Path> lastOverlayPenHoverPreviewSegmentDoc_;
   std::optional<Vector2d> lastOverlayPenHoverCloseAffordanceDoc_;
   std::optional<SelectionChromeSnapshot::TextCaret> lastOverlayTextEditingCaretDoc_;
-  std::optional<Box2d> lastOverlayTextEditingBoxDoc_;
+  std::optional<std::array<Vector2d, 4>> lastOverlayTextEditingFrameCornersDoc_;
   std::optional<SelectionChromeSnapshot::TextBoxDragPreview> lastOverlayTextBoxDragPreviewDoc_;
 
   PresentationRenderScheduler renderScheduler_;
