@@ -425,6 +425,16 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "transform_syntax_preserving",
+    srcs = ["TransformSyntaxPreserving.cc"],
+    hdrs = ["TransformSyntaxPreserving.h"],
+    deps = [
+        "//donner/base",
+        "//donner/svg/parser",
+    ],
+)
+
+donner_cc_library(
     name = "async_renderer",
     srcs = ["AsyncRenderer.cc"],
     hdrs = ["AsyncRenderer.h"],
@@ -570,6 +580,7 @@ donner_cc_library(
         ":source_sync",
         ":text_editor",
         ":text_patch",
+        ":transform_syntax_preserving",
         "//donner/base",
     ],
 )

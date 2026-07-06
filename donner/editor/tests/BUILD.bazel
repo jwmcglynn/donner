@@ -184,6 +184,17 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "transform_syntax_preserving_tests",
+    srcs = ["TransformSyntaxPreserving_tests.cc"],
+    deps = [
+        "//donner/base",
+        "//donner/editor:transform_syntax_preserving",
+        "//donner/svg/parser",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "document_sync_controller_tests",
     srcs = ["DocumentSyncController_tests.cc"],
     deps = [
