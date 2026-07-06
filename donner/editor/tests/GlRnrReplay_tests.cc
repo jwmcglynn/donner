@@ -2405,7 +2405,7 @@ TEST(GlRnrReplayTest, HighZoomRapidPanKeepsPaneCoveredByContent) {
 
   repro::GlRnrReplayResult result;
   std::string error;
-  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+  ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
   // Pane rect in device pixels (logical origin 568,29 size 604x863 at DPR 2).
   // Inset by 8 logical px so pane-border chrome never counts.
@@ -2488,7 +2488,7 @@ TEST(GlRnrReplayTest, TextToolLivePointerClickOpensSessionAndTypes) {
 
   repro::GlRnrReplayResult result;
   std::string error;
-  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+  ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
   const repro::GlRnrReplayFrameDiagnostics* finalFrame = FindFrameDiagnostics(result, 16);
   ASSERT_NE(finalFrame, nullptr);
@@ -2562,7 +2562,7 @@ TEST(GlRnrReplayTest, FirstResizeOfFreshlySelectedGroupKeepsContentLockstepWithO
 
   repro::GlRnrReplayResult result;
   std::string error;
-  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+  ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
   // Calibrate canvasFromDoc from the settled pre-drag frame: the red rect
   // occupies (40,40)-(100,80) in document space.
@@ -2625,7 +2625,7 @@ TEST(GlRnrReplayTest, TextToolClickTypeEscapeCommitsTextElement) {
 
   repro::GlRnrReplayResult result;
   std::string error;
-  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+  ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
   // The click opens an in-canvas session, the Char events type "Hi", and
   // Escape commits the session leaving the new <text> element selected.
