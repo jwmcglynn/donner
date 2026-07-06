@@ -378,6 +378,48 @@ TEST(SVGSwitchElementTests, SwitchSkipsNonRenderedChildTypes) {
 }
 
 /**
+ * When no direct child passes conditional processing, the `<switch>` renders nothing.
+ */
+TEST(SVGSwitchElementTests, SwitchNoValidChildRendersNothing) {
+  const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"(
+    <svg width="16" height="16">
+      <switch>
+        <rect x="0" y="0" width="16" height="16" fill="black"
+              requiredExtensions="http://example.org/bogus"/>
+        <rect x="0" y="0" width="16" height="16" fill="black"
+              systemLanguage="zz"/>
+      </switch>
+    </svg>
+  )");
+
+  EXPECT_TRUE(generatedAscii.matches(kAllEmpty));
+}
+
+/**
+ * A `<switch>` nested as the first child of another `<switch>` is itself a directly-rendered
+ * element type, so the outer switch selects it and the inner switch selects its own first valid
+ * child. The outer switch's later children are never rendered.
+ */
+TEST(SVGSwitchElementTests, NestedSwitch) {
+  const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"(
+    <svg width="16" height="16">
+      <switch>
+        <switch>
+          <rect x="0" y="0" width="16" height="16" fill="black"
+                requiredExtensions="http://example.org/bogus"/>
+          <rect x="0" y="0" width="16" height="16" fill="black"/>
+        </switch>
+        <rect x="0" y="0" width="8" height="16" fill="black"/>
+      </switch>
+    </svg>
+  )");
+
+  // The inner switch selects its full-size second child; the outer switch's 8-wide child is never
+  // rendered.
+  EXPECT_TRUE(generatedAscii.matches(kAllFilled));
+}
+
+/**
  * `systemLanguage` is evaluated against the document's configured user language list. The default
  * `{"en"}` does not match `systemLanguage="ru"`, but configuring the list to `{"ru"}` does.
  */
