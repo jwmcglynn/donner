@@ -44,6 +44,21 @@ const kFatalRuntimePattern =
 const kSourcePaneWidth = 560;
 const kRightPaneWidth = 420;
 
+// Which renderer backend the served package was built with. The Geode/WebGPU
+// lane publishes window.__donnerWgpuReadbackStats (its swapchain pixels never
+// reach a headless screenshot); the tiny_skia software lane draws into the
+// WebGL canvas, so the screenshot fallback carries real pixels. Default to
+// "geode" so existing invocations keep their behavior.
+const kBackend = (process.env.DONNER_WASM_BACKEND || "geode").toLowerCase();
+
+// Pin the viewport to the native editor calibration size (1600x900). The
+// sample regions in readRenderPaneColorStats / readLayerPreviewColorStats use
+// the same CSS geometry the native EditorWindow uses to compute readback stats
+// (source pane 560px, right pane 420px, layer preview at 0.72h..0.96h), so the
+// browser canvas must match that window size for the regions to land on the
+// document render and the layer thumbnails.
+test.use({ viewport: { width: 1600, height: 900 } });
+
 function paethPredictor(left: number, up: number, upLeft: number): number {
   const estimate = left + up - upLeft;
   const leftDistance = Math.abs(estimate - left);
@@ -222,11 +237,17 @@ async function readLayerPreviewColorStats(page: Page): Promise<CanvasColorStats>
       throw new Error("canvas not found");
     }
 
+    // The Layers panel thumbnail swatches sit in a narrow column at the left
+    // edge of the right sidebar, just inside its border. In the software
+    // (tiny_skia) screenshot lane the layers list renders at the TOP of the
+    // sidebar (below the menu bar), so scan the upper portion of that column.
+    // The Geode lane never reaches this branch: it returns the natively
+    // published __donnerWgpuReadbackStats above.
     return {
       x: canvas.clientWidth - rightPaneWidth + 8,
-      y: canvas.clientHeight * 0.72,
+      y: Math.max(1, canvas.clientHeight * 0.05),
       width: 90,
-      height: canvas.clientHeight * 0.24,
+      height: Math.max(1, canvas.clientHeight * 0.42),
     };
   }, { rightPaneWidth: kRightPaneWidth });
 
@@ -250,8 +271,12 @@ async function openEditor(page: Page): Promise<string[]> {
   });
 
   await page.goto(url.toString(), { waitUntil: "domcontentloaded" });
-  const hasWebGpu = await page.evaluate(() => "gpu" in navigator);
-  test.skip(!hasWebGpu, "Browser does not expose navigator.gpu");
+  // The tiny_skia software lane renders through WebGL and does not require
+  // WebGPU, so only gate the Geode lane on navigator.gpu.
+  if (kBackend !== "tiny_skia") {
+    const hasWebGpu = await page.evaluate(() => "gpu" in navigator);
+    test.skip(!hasWebGpu, "Browser does not expose navigator.gpu");
+  }
 
   await expect(page.locator("canvas#canvas")).toBeVisible();
   await expect(page.locator("#status")).toBeHidden({ timeout: 20000 });
