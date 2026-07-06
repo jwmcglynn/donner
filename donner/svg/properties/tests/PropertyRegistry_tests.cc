@@ -885,6 +885,8 @@ TEST(PropertyRegistry, IsPresentationAttributeInherited) {
   EXPECT_FALSE(PropertyRegistry::isPresentationAttributeInherited("not-a-property"));
   // inline-size is a non-inherited SVG2 property.
   EXPECT_FALSE(PropertyRegistry::isPresentationAttributeInherited("inline-size"));
+  // vector-effect is not inherited per the SVG2 spec.
+  EXPECT_FALSE(PropertyRegistry::isPresentationAttributeInherited("vector-effect"));
 }
 
 TEST(PropertyRegistry, InlineSize) {
@@ -929,6 +931,75 @@ TEST(PropertyRegistry, InlineSize) {
     PropertyRegistry registry;
     EXPECT_THAT(registry.parsePresentationAttribute("inline-size", "-40"), ParseResultIs(true));
     EXPECT_THAT(registry.inlineSize.get()->value, testing::DoubleEq(0.0));
+  }
+}
+
+TEST(PropertyRegistry, VectorEffectParsing) {
+  // Initial value is None, and vector-effect is not specified until set.
+  {
+    PropertyRegistry registry;
+    EXPECT_FALSE(registry.vectorEffect.isSpecified());
+    EXPECT_THAT(registry.vectorEffect.get(), Optional(VectorEffect::None));
+  }
+
+  const std::pair<const char*, VectorEffect> cases[] = {
+      {"none", VectorEffect::None},
+      {"non-scaling-stroke", VectorEffect::NonScalingStroke},
+      {"non-scaling-size", VectorEffect::NonScalingSize},
+      {"non-rotation", VectorEffect::NonRotation},
+      {"fixed-position", VectorEffect::FixedPosition},
+  };
+
+  // Parsing from a CSS declaration (e.g. `style="..."`).
+  for (const auto& [value, expected] : cases) {
+    PropertyRegistry registry;
+    registry.parseStyle(std::string("vector-effect: ") + value);
+    EXPECT_THAT(registry.vectorEffect.get(), Optional(expected)) << "css value: " << value;
+    EXPECT_TRUE(registry.vectorEffect.isSpecified()) << "css value: " << value;
+  }
+
+  // Parsing from a presentation attribute. Case-insensitive per CSS ident matching.
+  for (const auto& [value, expected] : cases) {
+    PropertyRegistry registry;
+    EXPECT_THAT(registry.parsePresentationAttribute("vector-effect", value), ParseResultIs(true))
+        << "attr value: " << value;
+    EXPECT_THAT(registry.vectorEffect.get(), Optional(expected)) << "attr value: " << value;
+  }
+
+  // Invalid values are rejected and leave the property unset (initial value retained).
+  {
+    PropertyRegistry registry;
+    EXPECT_THAT(registry.parsePresentationAttribute("vector-effect", "bogus"),
+                ParseErrorIs("Invalid vector-effect"));
+    EXPECT_FALSE(registry.vectorEffect.isSpecified());
+    EXPECT_THAT(registry.vectorEffect.get(), Optional(VectorEffect::None));
+  }
+}
+
+TEST(PropertyRegistry, VectorEffectDoesNotInherit) {
+  // vector-effect is a non-inherited property: a child does NOT pick up the parent's value
+  // unless it explicitly requests `inherit`.
+  {
+    PropertyRegistry parent;
+    parent.parseStyle("vector-effect: non-scaling-stroke");
+
+    PropertyRegistry child;
+    const PropertyRegistry inherited = child.inheritFrom(parent);
+
+    EXPECT_FALSE(inherited.vectorEffect.isSpecified());
+    EXPECT_THAT(inherited.vectorEffect.get(), Optional(VectorEffect::None));
+  }
+
+  // An explicit `inherit` keyword does pull the parent value.
+  {
+    PropertyRegistry parent;
+    parent.parseStyle("vector-effect: non-scaling-stroke");
+
+    PropertyRegistry child;
+    child.parseStyle("vector-effect: inherit");
+    const PropertyRegistry inherited = child.inheritFrom(parent);
+
+    EXPECT_THAT(inherited.vectorEffect.get(), Optional(VectorEffect::NonScalingStroke));
   }
 }
 

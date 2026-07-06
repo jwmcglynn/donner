@@ -16,4 +16,12 @@ The following structural elements are supported:
 - \subpage xml_switch (\ref donner::svg::SVGSwitchElement "SVGSwitchElement")
 - \subpage xml_symbol (\ref donner::svg::SVGSymbolElement "SVGSymbolElement")
 
+Descriptive elements provide human-readable and machine-readable information about the document or
+their parent element. They are never rendered, but their text content is retained and exposed
+through the DOM for accessibility and metadata tooling:
+
+- \subpage xml_title (\ref donner::svg::SVGTitleElement "SVGTitleElement")
+- \subpage xml_desc (\ref donner::svg::SVGDescElement "SVGDescElement")
+- \subpage xml_metadata (\ref donner::svg::SVGMetadataElement "SVGMetadataElement")
+
 */

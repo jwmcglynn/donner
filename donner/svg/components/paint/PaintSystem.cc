@@ -2,6 +2,7 @@
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/xml/components/TreeComponent.h"
+#include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/EvaluatedReferenceComponent.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
@@ -32,7 +33,16 @@ bool HasNoStructuralChildren(EntityHandle handle) {
   const auto& tree = handle.get<donner::components::TreeComponent>();
   for (auto cur = tree.firstChild(); cur != entt::null;
        cur = registry.get<donner::components::TreeComponent>(cur).nextSibling()) {
-    // TODO(jwmcglynn): Detect <desc>, <metadata>, <title> elements.
+    // Descriptive elements (<title>, <desc>, <metadata>) are never rendered and do not count as
+    // structural content per https://www.w3.org/TR/SVG2/pservers.html#PaintServerTemplates.
+    if (const auto* elementType = registry.try_get<ElementTypeComponent>(cur)) {
+      const ElementType type = elementType->type();
+      if (type == ElementType::Title || type == ElementType::Desc ||
+          type == ElementType::Metadata) {
+        continue;
+      }
+    }
+
     return false;
   }
 
