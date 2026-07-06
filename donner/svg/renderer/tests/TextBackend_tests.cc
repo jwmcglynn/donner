@@ -9,6 +9,7 @@
 
 #include "donner/base/tests/Runfiles.h"
 #include "donner/css/FontFace.h"
+#include "donner/svg/resources/EmbeddedFontProvider.h"
 #include "donner/svg/text/TextBackendFull.h"
 #include "donner/svg/text/TextBackendSimple.h"
 
@@ -478,6 +479,54 @@ TEST(TextBackendFullCapabilities, DetectsSmallCapsFeature) {
   const FontHandle mplus = LoadResvgFont(fontManager, "MPLUS1p-Regular.ttf", "MPLUS 1p");
   ASSERT_TRUE(static_cast<bool>(mplus));
   EXPECT_FALSE(backend.hasSmallCapsFeature(mplus));
+}
+
+// QA-F23 layer 3 (font resolution) red-then-green: the embedded catalog ships
+// variable fonts (e.g. `Inter[opsz,wght].ttf`). FreeType renders their default
+// (regular) instance unless the `wght` axis is instantiated, so before the fix a
+// `font-weight: bold` request looked identical to normal. FontManager records
+// the requested instance on the provider path and TextBackendFull instantiates
+// the axis on the FreeType face, so bold "H" shapes with heavier stems and a
+// wider advance than regular "H" from the same variable family.
+TEST(TextBackendFullCapabilities, VariableFontWeightInstantiatesHeavierGlyphs) {
+  Registry registry;
+  FontManager fontManager(registry);
+  EmbeddedFontProvider provider;
+  fontManager.setFontProvider(&provider);
+
+  // Inter exposes a `wght` axis in the embedded catalog. Skip honestly if the
+  // curated Google Fonts set was not compiled into this configuration.
+  static constexpr std::string_view kFamily = "Inter";
+  if (!provider.hasFamily(kFamily)) {
+    GTEST_SKIP() << "Embedded family '" << kFamily << "' not built in this config.";
+  }
+
+  TextBackendFull backend(fontManager, registry);
+
+  const FontHandle regular = fontManager.findFont(kFamily, 400);
+  const FontHandle bold = fontManager.findFont(kFamily, 700);
+  ASSERT_TRUE(static_cast<bool>(regular));
+  ASSERT_TRUE(static_cast<bool>(bold));
+  // Distinct weights must resolve to distinct faces so each can carry its own
+  // instantiated axis coordinates.
+  ASSERT_NE(regular, bold);
+
+  const auto totalAdvance = [&](FontHandle font) {
+    const auto shaped =
+        backend.shapeRun(font, 64.0f, "HHHHHH", 0, 6, false, FontVariant::Normal, false);
+    double advance = 0.0;
+    for (const auto& glyph : shaped.glyphs) {
+      advance += glyph.xAdvance;
+    }
+    return advance;
+  };
+
+  const double regularAdvance = totalAdvance(regular);
+  const double boldAdvance = totalAdvance(bold);
+  ASSERT_GT(regularAdvance, 0.0);
+  EXPECT_GT(boldAdvance, regularAdvance)
+      << "regular(wght=400)=" << regularAdvance << ", bold(wght=700)=" << boldAdvance
+      << " -- the wght axis was not instantiated (variable font stuck at default instance).";
 }
 
 TEST(TextBackendFullCapabilities, BitmapGlyphReturnsEmojiBitmap) {

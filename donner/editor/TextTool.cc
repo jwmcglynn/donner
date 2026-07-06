@@ -647,7 +647,16 @@ void TextTool::toggleBold(EditorApp& editor) {
   editor.applyMutation(
       bold ? EditorCommand::RemoveAttributeCommand(*sessionText_, "font-weight")
            : EditorCommand::SetAttributeCommand(*sessionText_, "font-weight", "bold"));
-  editor.flushFrame();
+  // QA-F23 layer 2: do NOT flush here. Flushing internally consumes the command
+  // queue and populates AsyncSVGDocument::lastFlushResult() with this edit's
+  // cacheInvalidatedElements, but the shell's follow-up flush
+  // (flushQueuedMutationAndRefreshOverlay / refreshAfterToolDrivenFlush) then
+  // re-runs flushFrame() on an empty queue, which wipes lastFlushResult_ before
+  // invalidatePresentationAfterDocumentFlush ever reads it -- so the selected
+  // text layer's cached texture is never discarded and the style change is
+  // invisible. Leaving the command queued lets the shell flush apply AND
+  // invalidate it on the same pass. The wipe itself stays intact (it guards
+  // against stale re-invalidation / content blanking on idle no-op flushes).
 }
 
 void TextTool::toggleItalic(EditorApp& editor) {
@@ -661,7 +670,7 @@ void TextTool::toggleItalic(EditorApp& editor) {
   editor.applyMutation(
       italic ? EditorCommand::RemoveAttributeCommand(*sessionText_, "font-style")
              : EditorCommand::SetAttributeCommand(*sessionText_, "font-style", "italic"));
-  editor.flushFrame();
+  // QA-F23 layer 2: leave the edit queued for the shell flush; see toggleBold.
 }
 
 void TextTool::toggleUnderline(EditorApp& editor) {
@@ -677,7 +686,7 @@ void TextTool::toggleUnderline(EditorApp& editor) {
       underline
           ? EditorCommand::RemoveAttributeCommand(*sessionText_, "text-decoration")
           : EditorCommand::SetAttributeCommand(*sessionText_, "text-decoration", "underline"));
-  editor.flushFrame();
+  // QA-F23 layer 2: leave the edit queued for the shell flush; see toggleBold.
 }
 
 bool TextTool::commit(EditorApp& editor) {

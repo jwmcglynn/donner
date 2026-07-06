@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -135,6 +136,28 @@ public:
    * @return A valid FontHandle, or falls back to findFont(family, weight) if no match.
    */
   FontHandle findFont(std::string_view family, int weight, int style, int stretch);
+
+  /**
+   * A requested variable-font instance recorded when a font entity is resolved
+   * from the external provider (embedded/system catalog) for a non-default
+   * weight/style/stretch. QA-F23 layer 3: the provider serves one file per
+   * family (the embedded families are variable fonts), so the requested axis
+   * values are carried here and instantiated by the text backend when it builds
+   * the FreeType face. Without this, a `font-weight: bold` request rendered the
+   * variable font's default (regular) instance and looked identical to normal.
+   */
+  struct FontVariationRequest {
+    int weight = 400;   ///< CSS font-weight (100-900).
+    int style = 0;      ///< CSS font-style (0=normal, 1=italic, 2=oblique).
+    int stretch = 5;    ///< CSS font-stretch (1-9, 5=normal).
+  };
+
+  /**
+   * Returns the variable-font instance requested when \p handle was resolved, or
+   * `std::nullopt` when no specific instance was requested (a plain 400/normal
+   * lookup, a document `@font-face` match, or the fallback font).
+   */
+  std::optional<FontVariationRequest> requestedVariation(FontHandle handle) const;
 
   /**
    * Load a font from raw TTF/OTF/WOFF data.

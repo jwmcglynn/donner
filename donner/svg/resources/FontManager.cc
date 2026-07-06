@@ -300,6 +300,16 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
     if (!data.empty()) {
       const Entity entity = registry_.create();
       if (loadFontDataIntoEntity(entity, data)) {
+        // QA-F23 layer 3: the provider serves a single (usually variable) font
+        // file per family regardless of weight/style. Record the requested
+        // instance so the text backend can instantiate the matching variation
+        // axes (e.g. `wght`). Only record non-default requests; a plain
+        // 400/normal lookup renders the default instance and needs no variation,
+        // so existing regular-weight rendering is byte-for-byte unchanged.
+        if (weight != 400 || style != 0 || stretch != 5) {
+          registry_.emplace<FontVariationRequest>(entity,
+                                                  FontVariationRequest{weight, style, stretch});
+        }
         FontHandle handle(entity);
         cache_[cacheKey] = handle;
         return handle;
@@ -366,6 +376,17 @@ std::span<const uint8_t> FontManager::fontData(FontHandle handle) const {
 
   const auto* font = registry_.try_get<LoadedFontComponent>(handle.entity());
   return font ? font->fontData() : std::span<const uint8_t>();
+}
+
+std::optional<FontManager::FontVariationRequest> FontManager::requestedVariation(
+    FontHandle handle) const {
+  if (!isValidHandle(handle)) {
+    return std::nullopt;
+  }
+  if (const auto* request = registry_.try_get<FontVariationRequest>(handle.entity())) {
+    return *request;
+  }
+  return std::nullopt;
 }
 
 FontHandle FontManager::fallbackFont() {

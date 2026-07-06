@@ -4,9 +4,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <string>
+#include <vector>
 
 #include FT_FREETYPE_H
+#include FT_MULTIPLE_MASTERS_H
 #include FT_OUTLINE_H
 #include FT_TRUETYPE_TABLES_H
 #include <hb-ft.h>
@@ -14,6 +17,7 @@
 #include <hb.h>
 
 #include "donner/base/Utf8.h"
+#include "donner/svg/resources/FontManager.h"
 #include "donner/svg/text/FontDataUtils.h"
 
 namespace donner::svg {
@@ -28,6 +32,62 @@ FT_Library getFtLibrary() {
     return l;
   }();
   return lib;
+}
+
+/// QA-F23 layer 3: instantiate a variable font's design axes to match a requested
+/// weight/style. The embedded catalog ships variable fonts (`Family[wght].ttf`);
+/// FreeType otherwise renders their default (regular) instance, so a
+/// `font-weight: bold` request looked identical to normal. We set the `wght` axis
+/// from the CSS weight, and `ital`/`slnt` when the font exposes such an axis.
+/// Fonts without a matching axis (the embedded set has no italic axis) are left
+/// at their default instance: synthetic bold/italic is deliberately out of scope,
+/// so an unsatisfiable request renders honestly rather than faking a slant.
+/// Returns true if any axis coordinate was changed.
+bool applyVariationInstance(FT_Face face, const FontManager::FontVariationRequest& request) {
+  if (face == nullptr || (face->face_flags & FT_FACE_FLAG_MULTIPLE_MASTERS) == 0) {
+    return false;
+  }
+
+  FT_MM_Var* mmVar = nullptr;
+  if (FT_Get_MM_Var(face, &mmVar) != 0 || mmVar == nullptr) {
+    return false;
+  }
+
+  std::vector<FT_Fixed> coords(mmVar->num_axis, 0);
+  // Seed with the face's current design coordinates so untouched axes (e.g.
+  // optical size) keep their default rather than snapping to zero.
+  if (FT_Get_Var_Design_Coordinates(face, mmVar->num_axis, coords.data()) != 0) {
+    FT_Done_MM_Var(getFtLibrary(), mmVar);
+    return false;
+  }
+
+  const bool wantSlant = request.style != 0;  // italic (1) or oblique (2)
+  bool changed = false;
+  for (FT_UInt i = 0; i < mmVar->num_axis; ++i) {
+    const FT_ULong tag = mmVar->axis[i].tag;
+    FT_Fixed desired = coords[i];
+    if (tag == FT_MAKE_TAG('w', 'g', 'h', 't')) {
+      desired = static_cast<FT_Fixed>(request.weight) << 16;  // CSS weight -> design coord.
+    } else if (tag == FT_MAKE_TAG('i', 't', 'a', 'l')) {
+      desired = wantSlant ? (static_cast<FT_Fixed>(1) << 16) : 0;
+    } else if (tag == FT_MAKE_TAG('s', 'l', 'n', 't')) {
+      // Slant axis is expressed in degrees; a typical italic is about -10deg.
+      desired = wantSlant ? (static_cast<FT_Fixed>(-10) << 16) : 0;
+    } else {
+      continue;
+    }
+    desired = std::clamp(desired, mmVar->axis[i].minimum, mmVar->axis[i].maximum);
+    if (desired != coords[i]) {
+      coords[i] = desired;
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    FT_Set_Var_Design_Coordinates(face, mmVar->num_axis, coords.data());
+  }
+  FT_Done_MM_Var(getFtLibrary(), mmVar);
+  return changed;
 }
 
 /// Returns true if the codepoint belongs to a cursive/joining script where letter-spacing
@@ -184,6 +244,17 @@ hb_font_t* TextBackendFull::getOrCreateHbFont(FontHandle handle) const {
     FT_Select_Size(entry.ftFace, 0);
   } else {
     FT_Set_Char_Size(entry.ftFace, 0, 16 * 64, 72, 72);
+  }
+
+  // QA-F23 layer 3: instantiate the requested variable-font instance (weight/
+  // style) on the FreeType face BEFORE wrapping it with HarfBuzz, so both glyph
+  // outlines (FT_Load_Glyph) and shaping advances (hb-ft) reflect the axis. Each
+  // (family, weight, style, stretch) request resolves to its own font entity, so
+  // this per-face instantiation never collides across weights.
+  if (const std::optional<FontManager::FontVariationRequest> variation =
+          fontManager_.requestedVariation(handle);
+      variation.has_value()) {
+    applyVariationInstance(entry.ftFace, *variation);
   }
 
   // Create HarfBuzz font backed by FreeType for GSUB/GPOS shaping.

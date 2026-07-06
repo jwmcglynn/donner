@@ -274,20 +274,78 @@ TEST_F(TextToolTest, ToggleBoldItalicUnderlineSetAndRemoveAttributes) {
   doubleClickAt(Vector2d(20.0, 30.0));
   type("Hi");
 
+  // QA-F23 layer 2: the toggle methods queue the attribute edit but no longer
+  // flush internally (the shell owns the flush + presentation invalidation), so
+  // the test flushes between toggles exactly as the shell does per user action.
   tool.toggleBold(app);
+  app.flushFrame();
   EXPECT_THAT(attr(text(), "font-weight"), Eq("bold"));
   tool.toggleBold(app);
+  app.flushFrame();
   EXPECT_THAT(attr(text(), "font-weight"), Eq(""));
 
   tool.toggleItalic(app);
+  app.flushFrame();
   EXPECT_THAT(attr(text(), "font-style"), Eq("italic"));
   tool.toggleItalic(app);
+  app.flushFrame();
   EXPECT_THAT(attr(text(), "font-style"), Eq(""));
 
   tool.toggleUnderline(app);
+  app.flushFrame();
   EXPECT_THAT(attr(text(), "text-decoration"), Eq("underline"));
   tool.toggleUnderline(app);
+  app.flushFrame();
   EXPECT_THAT(attr(text(), "text-decoration"), Eq(""));
+}
+
+// QA-F23 layer 2 (invalidation) red-then-green: a style toggle during an editing
+// session must leave the edited text entity in the flush's
+// cacheInvalidatedElements AFTER the shell's follow-up flush, so
+// RenderCoordinator::invalidatePresentationAfterDocumentFlush discards the
+// selected text layer's cached texture and the style change becomes visible.
+//
+// Before the fix, toggleBold() flushed internally: the edit applied and this
+// entity landed in that flush's result, but the shell's follow-up flushFrame()
+// (modeled here by the direct app.flushFrame() below) ran on an empty queue,
+// returned false, and wiped lastFlushResult_ to empty -- so the invalidation was
+// lost and the canvas kept the stale (unbolded) texture.
+TEST_F(TextToolTest, StyleToggleInvalidationSurvivesShellFollowupFlush) {
+  doubleClickAt(Vector2d(20.0, 30.0));
+  type("Hi");
+  ASSERT_TRUE(app.flushFrame());  // land the created text before toggling.
+
+  const auto textEntity = text().unsafeEntityHandle().entity();
+
+  tool.toggleBold(app);
+  // The shell's follow-up flush applies the queued edit AND records its
+  // invalidation. This must return true (there was real queued work) and the
+  // edited text entity must be reported as cache-invalidated.
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_THAT(app.document().lastFlushResult().cacheInvalidatedElements,
+              testing::Contains(textEntity));
+}
+
+// QA-F23 layer 2 characterization: document WHY the lastFlushResult_ wipe exists
+// so a future refactor does not "fix" invalidation by removing it. A no-op flush
+// (empty queue) must clear the prior flush's cacheInvalidatedElements; otherwise
+// every idle frame's invalidatePresentationAfterDocumentFlush would re-discard
+// the same layer's textures, blanking content mid-edit. This is the blanking
+// risk the W1 report warned about; the layer-2 fix keeps the wipe and instead
+// stops the toggle path from pre-consuming the queue.
+TEST_F(TextToolTest, NoOpFlushClearsPriorInvalidationToGuardAgainstBlanking) {
+  doubleClickAt(Vector2d(20.0, 30.0));
+  type("Hi");
+  ASSERT_TRUE(app.flushFrame());
+
+  tool.toggleBold(app);
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_FALSE(app.document().lastFlushResult().cacheInvalidatedElements.empty());
+
+  // A second flush with nothing queued is a no-op and must reset the result, so
+  // the invalidation is consumed exactly once rather than re-applied every frame.
+  EXPECT_FALSE(app.flushFrame());
+  EXPECT_TRUE(app.document().lastFlushResult().cacheInvalidatedElements.empty());
 }
 
 TEST_F(TextToolTest, CommitKeepsTextAndEndsSession) {

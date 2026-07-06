@@ -245,6 +245,41 @@ TEST(FontManagerTest, ProviderResolvesFamilyMissingFromFontFaces) {
   EXPECT_FALSE(mgr.fontData(handle).empty());
 }
 
+// QA-F23 layer 3 (font resolution) plumbing: the provider serves one font file
+// per family regardless of weight/style, so findFont must record the requested
+// variable-font instance on non-default lookups. The text backend consumes this
+// to instantiate the `wght` axis; without it a bold request rendered the default
+// (regular) instance and looked identical to normal. A default 400/normal lookup
+// records nothing, so regular-weight rendering stays byte-for-byte unchanged.
+TEST(FontManagerTest, RecordsVariationRequestForNonDefaultProviderLookup) {
+  Registry registry;
+  FontManager mgr(registry);
+
+  FakeFontProvider provider({"ProviderFamily"});
+  mgr.setFontProvider(&provider);
+
+  const FontHandle regular = mgr.findFont("ProviderFamily", 400);
+  ASSERT_TRUE(static_cast<bool>(regular));
+  EXPECT_FALSE(mgr.requestedVariation(regular).has_value())
+      << "A default 400/normal lookup must not request a variation instance.";
+
+  const FontHandle bold = mgr.findFont("ProviderFamily", 700);
+  ASSERT_TRUE(static_cast<bool>(bold));
+  // Distinct weights resolve to distinct font entities, so the bold instance can
+  // carry its own axis coordinates without disturbing the regular one.
+  EXPECT_NE(regular, bold);
+  const auto boldRequest = mgr.requestedVariation(bold);
+  ASSERT_TRUE(boldRequest.has_value());
+  EXPECT_EQ(boldRequest->weight, 700);
+  EXPECT_EQ(boldRequest->style, 0);
+
+  const FontHandle italic = mgr.findFont("ProviderFamily", 400, /*style=*/1, /*stretch=*/5);
+  const auto italicRequest = mgr.requestedVariation(italic);
+  ASSERT_TRUE(italicRequest.has_value());
+  EXPECT_EQ(italicRequest->weight, 400);
+  EXPECT_EQ(italicRequest->style, 1);
+}
+
 TEST(FontManagerTest, FontFaceTakesPrecedenceOverProvider) {
   Registry registry;
   FontManager mgr(registry);

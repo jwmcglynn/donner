@@ -397,6 +397,9 @@ donner_cc_test(
     }),
     deps = [
         "//donner/base:base_test_utils",
+        # QA-F23 layer 3: exercises variable-font weight instantiation through the
+        # embedded font provider (Inter[wght]).
+        "//donner/svg/resources:font_catalog",
         "//donner/svg/text:text_backend",
         "//donner/svg/text:text_backend_full",
         "//donner/svg/text:text_backend_simple",
