@@ -462,6 +462,18 @@ private:
   /// shares the editor's Geode device but is never bound to the live framebuffer,
   /// so row previews cannot inherit presentation state from the main renderer.
   svg::Renderer layerThumbnailRenderer_;
+  /// Embedded + system font catalog, installed as the FontManager default provider so document
+  /// text resolves font-family names against embedded and system fonts.
+  ///
+  /// Ownership-order guarantee (Codex review of #797 / Design 0021 C5): a FontManager captures
+  /// this catalog's address permanently at construction time (see `FontManager::provider_`),
+  /// including the FontManager owned by `renderCoordinator_`'s async render worker's document
+  /// registry. Declaring `fontCatalog_` before `renderCoordinator_` means it is *destroyed after*
+  /// `renderCoordinator_` (C++ tears down non-static members in the reverse of declaration
+  /// order), so the async worker thread is always joined (see `AsyncRenderer::~AsyncRenderer()`)
+  /// before this catalog goes away. Do not reorder these two members; see the static_assert in
+  /// EditorShell.cc that pins this invariant.
+  svg::FontCatalog fontCatalog_;
   RenderCoordinator renderCoordinator_;
   RotateCursorSet rotateCursorSet_;
   DocumentSyncController documentSyncController_;
@@ -494,9 +506,6 @@ private:
   TextFormatBarPresenter textFormatBarPresenter_;
   SidebarPresenter sidebarPresenter_;
   TextInspectorPanel textInspectorPanel_;
-  /// Embedded + system font catalog, installed as the FontManager default provider so document
-  /// text resolves font-family names against embedded and system fonts.
-  svg::FontCatalog fontCatalog_;
   LayersPanel layersPanel_;
   /// Element hovered in the Layers panel as of the last frame, fed into the
   /// source-hover preview so the canvas and source pane highlight the element

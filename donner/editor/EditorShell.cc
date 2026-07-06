@@ -6,6 +6,7 @@
 #include <cfloat>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -770,7 +771,30 @@ std::optional<float> EditorShell::nextIdleWakeSeconds() const {
 }
 
 EditorShell::~EditorShell() {
-  // Detach our font catalog from the global default before it is destroyed.
+  // Ownership-order guarantee (Codex review of #797 / Design 0021 C5): fontCatalog_ is installed
+  // as the process-wide FontManager default provider below, and any FontManager constructed while
+  // it is installed (including the one owned by renderCoordinator_'s async render worker's
+  // document registry) caches its address permanently - see FontManager::provider_. C++ destroys
+  // non-static data members in the reverse of declaration order, so fontCatalog_ must be declared
+  // *before* renderCoordinator_ in EditorShell.h: that makes fontCatalog_ the one destroyed
+  // *after* renderCoordinator_ (and the async worker thread it joins in
+  // AsyncRenderer::~AsyncRenderer()), closing the shutdown-time use-after-free window. If this
+  // fires, someone reordered the two members back into the unsafe order.
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Winvalid-offsetof"
+#endif
+  static_assert(offsetof(EditorShell, fontCatalog_) < offsetof(EditorShell, renderCoordinator_),
+                "fontCatalog_ must be declared (and destroyed after) renderCoordinator_ to avoid "
+                "a font-provider use-after-free on shutdown");
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
+
+  // Detach our font catalog from the global default before it is destroyed. This only protects
+  // FontManagers constructed *after* this point (e.g. via a later EditorShell instance); it does
+  // not retroactively fix any FontManager that cached fontCatalog_'s address earlier (see the
+  // ownership-order guarantee above, which is what actually keeps those safe).
   if (svg::FontManager::DefaultFontProvider() == &fontCatalog_) {
     svg::FontManager::SetDefaultFontProvider(nullptr);
   }

@@ -3422,4 +3422,49 @@ TEST(EditorShellTest, ShapeClipboardRejectsMalformedAndPastesIntoSelectedGroup) 
   EXPECT_LT(pastedOffset, groupCloseOffset);
 }
 
+// Regression test for the FontCatalog destruction-order bug (Codex review of #797 / Design 0021
+// C5): fontCatalog_ is installed as the process-wide FontManager default provider, and the async
+// render worker's FontManager caches that raw pointer permanently the first time it resolves a
+// font (see FontManager::provider_, set once at construction from the process-wide default). If
+// fontCatalog_ were destroyed before the async worker thread is joined, a still-in-flight render
+// using that already-warm FontManager would dereference freed memory.
+//
+// The warm-up frame below renders `kInitialSvg`'s `<text id="label">` once, with no artificial
+// delay, so the worker's document registry gets a FontManager that has already cached
+// fontCatalog_'s address. (A *fresh* FontManager constructed only after shutdown's detach call
+// would safely see a null provider, which is why the race must be armed against an already-warm
+// one, not the first render ever.) The second render nudges the viewport to force a fresh render
+// request, then `setReplayRenderDelayForTesting` stalls the worker before it re-resolves fonts,
+// well past this scope's exit - so `shell`'s destructor always races that stalled render. This is
+// deterministic, not timing-dependent: `~AsyncRenderer()` cannot signal the worker to stop until
+// `renderCoordinator_`'s member destructor runs, and the ownership-order fix guarantees that
+// happens before `fontCatalog_` is destroyed. Run under `--config=asan` to observe the
+// heap-use-after-free directly if the ownership order ever regresses.
+TEST(EditorShellTest, DestroysFontCatalogAfterAsyncRenderWorkerStops) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  {
+    EditorShell shell(window, OptionsWithSource(kInitialSvg));
+    ASSERT_TRUE(shell.valid());
+
+    window.beginFrame();
+    shell.runFrame();
+    window.endFrame();
+    const auto warmupDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(warmupDeadline))
+        << "warm-up render did not complete in time";
+
+    EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0.0, 0.0, 60.0, 40.0));
+    shell.asyncRendererForReplay().setReplayRenderDelayForTesting(std::chrono::milliseconds(200));
+    window.beginFrame();
+    shell.runFrame();
+    window.endFrame();
+    ASSERT_TRUE(shell.asyncRendererForReplay().isBusy())
+        << "expected the viewport change to queue a second async render so the shutdown race "
+           "below is armed";
+
+    // `shell` is destroyed at the end of this scope while the worker is still stalled in the
+    // artificial delay above, before this second render has re-resolved any fonts.
+  }
+}
+
 }  // namespace donner::editor
