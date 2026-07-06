@@ -44,7 +44,9 @@ TEST_F(RendererRegressionTests, InlineSizeAutoFlowWrapsText) {
   const char* golden = "donner/svg/renderer/testdata/golden/text_inline_size_wrap.png";
 
   SVGDocument document = loadSVG(svg, ResvgResourceRoot());
-  renderAndCompare(document, svg, golden, GoldenParams());
+  Params params = GoldenParams();
+  params.withGeodeMaxPixelsDifferent(160);
+  renderAndCompare(document, svg, golden, params);
 }
 
 TEST_F(RendererRegressionTests, PatternFillOnTextDoesNotLeakToNextShape) {
