@@ -160,6 +160,7 @@ if (element.isa<SVGCircleElement>()) {
 | \ref donner::svg::SVGCircleElement         | \ref xml_circle         |
 | \ref donner::svg::SVGClipPathElement       | \ref xml_clipPath       |
 | \ref donner::svg::SVGDefsElement           | \ref xml_defs           |
+| \ref donner::svg::SVGDescElement           | \ref xml_desc           |
 | \ref donner::svg::SVGElement               | (none, base class)      |
 | \ref donner::svg::SVGEllipseElement        | \ref xml_ellipse        |
 | \ref donner::svg::SVGFEGaussianBlurElement | \ref xml_feGaussianBlur |
@@ -174,6 +175,7 @@ if (element.isa<SVGCircleElement>()) {
 | \ref donner::svg::SVGLineElement           | \ref xml_line           |
 | \ref donner::svg::SVGMarkerElement         | \ref xml_marker         |
 | \ref donner::svg::SVGMaskElement           | \ref xml_mask           |
+| \ref donner::svg::SVGMetadataElement       | \ref xml_metadata       |
 | \ref donner::svg::SVGPathElement           | \ref xml_path           |
 | \ref donner::svg::SVGPatternElement        | \ref xml_pattern        |
 | \ref donner::svg::SVGPolygonElement        | \ref xml_polygon        |
@@ -187,6 +189,7 @@ if (element.isa<SVGCircleElement>()) {
 | \ref donner::svg::SVGSymbolElement         | \ref xml_symbol         |
 | \ref donner::svg::SVGTextElement           | \ref xml_text           |
 | \ref donner::svg::SVGTextPathElement       | \ref xml_textPath       |
+| \ref donner::svg::SVGTitleElement          | \ref xml_title          |
 | \ref donner::svg::SVGTSpanElement          | \ref xml_tspan          |
 | \ref donner::svg::SVGUnknownElement        | _any unknown tag_       |
 | \ref donner::svg::SVGUseElement            | \ref xml_use            |

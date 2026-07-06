@@ -37,6 +37,7 @@ cc_library(
         "TextDecoration.h",
         "TransformOrigin.h",
         "UserAgentStylesheet.h",
+        "VectorEffect.h",
         "Visibility.h",
         "WritingMode.h",
     ],

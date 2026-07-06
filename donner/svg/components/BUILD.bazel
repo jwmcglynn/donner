@@ -62,6 +62,7 @@ donner_cc_library(
         "ClassComponent.h",
         "ComputedClipPathsComponent.h",
         "ConditionalProcessingComponent.h",
+        "DescriptiveTextComponent.h",
         "DirtyFlagsComponent.h",
         "ElementTypeComponent.h",
         "EvaluatedReferenceComponent.h",

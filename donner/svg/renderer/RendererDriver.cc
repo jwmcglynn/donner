@@ -1,6 +1,7 @@
 #include "donner/svg/renderer/RendererDriver.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <iostream>
 #include <optional>
@@ -84,8 +85,15 @@ inline constexpr double kViewportCullSlackDevicePx = 1.0;
 /// Stroke-width expansion uses a uniform half-stroke inflate - it over-counts
 /// at miter joins but never under-counts, which is the only direction that
 /// matters for a culling decision.
+///
+/// \p worldFromEntity is the entity's canvas CTM; it is needed because
+/// `vector-effect: non-scaling-stroke` renders with the local stroke width
+/// pre-divided by the CTM's scale factor (see `toStrokeParams`), so the cull
+/// inflate must use that same adjusted width or a downscaling CTM would make
+/// the bounds under-count and wrongly cull a visible stroke.
 std::optional<Box2d> LocalDrawableBoundsWithStroke(
-    const EntityHandle& dataHandle, const components::ComputedStyleComponent& style) {
+    const EntityHandle& dataHandle, const components::ComputedStyleComponent& style,
+    const Transform2d& worldFromEntity) {
   const auto* path = dataHandle.try_get<components::ComputedPathComponent>();
   if (!path) {
     // Text and <image> draws are not culled by this path for now: text
@@ -117,7 +125,23 @@ std::optional<Box2d> LocalDrawableBoundsWithStroke(
     return box;
   }
 
-  const double halfStroke = strokeWidth * 0.5;
+  double halfStroke = strokeWidth * 0.5;
+
+  // Mirror the non-scaling-stroke width adjustment applied at draw time in
+  // `toStrokeParams`: the effective local stroke width is the authored width
+  // divided by the CTM's scale factor. Under a downscaling CTM the effective
+  // width is *larger* than the authored one, so inflating by the authored
+  // width would under-count and could cull a stroke that still reaches into
+  // the viewport. The guard conditions match `toStrokeParams` exactly so the
+  // cull bounds always cover what is actually drawn.
+  if (props.vectorEffect.getOr(VectorEffect::None) == VectorEffect::NonScalingStroke) {
+    const double det = worldFromEntity.determinant();
+    const double scale = std::sqrt(std::abs(det));
+    if (std::isfinite(scale) && scale > 0.0) {
+      halfStroke /= scale;
+    }
+  }
+
   return Box2d(box.topLeft - Vector2d(halfStroke, halfStroke),
                box.bottomRight + Vector2d(halfStroke, halfStroke));
 }
@@ -364,6 +388,29 @@ StrokeParams toStrokeParams(Registry& registry,
   if (const auto* pathLengthComp =
           instance.dataHandle(registry).try_get<components::PathLengthComponent>()) {
     stroke.pathLength = pathLengthComp->value;
+  }
+
+  // `vector-effect: non-scaling-stroke` keeps the stroke geometry constant in the coordinate
+  // system of the referencing viewport, ignoring the element's own transform and any viewBox
+  // scaling. Both renderer backends stroke by expanding the path outline in local (pre-transform)
+  // coordinates using this local stroke width, and then apply the element->canvas CTM to the
+  // resulting outline (so the stroke normally scales with the CTM like the geometry does). To hold
+  // the stroke constant in device/canvas space we therefore pre-divide the local stroke width (and
+  // the dash pattern) by the CTM's scale factor, so that after the CTM is applied the stroke lands
+  // at its authored width. We use sqrt(|det|) as the scalar scale, which is exact for uniform scale
+  // (the common viewBox / scale() case) and rotation-invariant; anisotropy under a non-uniform CTM
+  // is not preserved (that would require stroking in device space). See VectorEffect.h.
+  if (properties.vectorEffect.getOr(VectorEffect::None) == VectorEffect::NonScalingStroke) {
+    const double det = instance.worldFromEntityTransform.determinant();
+    const double scale = std::sqrt(std::abs(det));
+    if (std::isfinite(scale) && scale > 0.0) {
+      const double invScale = 1.0 / scale;
+      stroke.strokeWidth *= invScale;
+      stroke.dashOffset *= invScale;
+      for (double& dashLength : stroke.dashArray) {
+        dashLength *= invScale;
+      }
+    }
   }
 
   return stroke;
@@ -1628,7 +1675,8 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
                       [](const DeferredPop& m) { return m.hasFilterLayer; });
       if (!insideFilterLayer) {
         if (const auto localBounds =
-                LocalDrawableBoundsWithStroke(instance.dataHandle(registry), style);
+                LocalDrawableBoundsWithStroke(instance.dataHandle(registry), style,
+                                              instance.worldFromEntityTransform);
             localBounds.has_value()) {
           const Transform2d deviceFromLocal =
               instance.worldFromEntityTransform * surfaceFromCanvasTransform_;
@@ -1900,7 +1948,8 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
                       [](const DeferredPop& m) { return m.hasFilterLayer; });
       if (!insideFilterLayer) {
         if (const auto localBounds =
-                LocalDrawableBoundsWithStroke(instance.dataHandle(registry), style);
+                LocalDrawableBoundsWithStroke(instance.dataHandle(registry), style,
+                                              instance.worldFromEntityTransform);
             localBounds.has_value()) {
           const Transform2d deviceFromLocal =
               instance.worldFromEntityTransform * surfaceFromCanvasTransform_;

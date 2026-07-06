@@ -300,8 +300,13 @@ donner_perf_sensitive_cc_library(
         "//donner/svg:__subpackages__",
     ],
     deps = [
+        "//donner/base/parser",
         "//donner/svg/components",
+        "//donner/svg/components/animation:animation_system",
+        "//donner/svg/components/animation:components",
         "//donner/svg/components/filter:filter_system",
+        "//donner/svg/core",
+        "//donner/svg/parser:parser_core",
     ] + select({
         ":text_enabled": [
             "//donner/svg/resources:font_manager",

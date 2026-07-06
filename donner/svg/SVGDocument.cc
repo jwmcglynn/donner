@@ -565,9 +565,49 @@ void SVGDocument::setCanvasSize(int width, int height) {
   documentContext.canvasSize = Vector2i(width, height);
 }
 
+void SVGDocument::setTime(double seconds) {
+  DocumentMutationBatch mutation(*documentState_, true);
+  DocumentWriteAccess& access = mutation.access();
+  Registry& registry = access.registry();
+  auto& documentContext = registry.ctx().get<components::SVGDocumentContext>();
+  if (documentContext.documentTime == seconds) {
+    // No-op when the time is unchanged: avoid a spurious render-tree invalidation and mutation
+    // revision bump.
+    mutation.cancel();
+    return;
+  }
+  components::RenderingContext(registry).invalidateRenderTree();
+  documentContext.documentTime = seconds;
+}
+
+double SVGDocument::currentTime() const {
+  DocumentReadAccess access = documentState_->read();
+  return access.registry().ctx().get<components::SVGDocumentContext>().documentTime;
+}
+
 Transform2d SVGDocument::canvasFromDocumentTransform() const {
   DocumentReadAccess access = documentState_->read();
   return components::LayoutSystem().getCanvasFromDocumentTransform(access.registry());
+}
+
+void SVGDocument::setUserLanguages(std::vector<RcString> languages) {
+  DocumentMutationBatch mutation(*documentState_, true);
+  DocumentWriteAccess& access = mutation.access();
+  Registry& registry = access.registry();
+  auto& documentContext = registry.ctx().get<components::SVGDocumentContext>();
+  if (documentContext.userLanguages == languages) {
+    mutation.cancel();
+    return;
+  }
+  // Changing the language list changes which conditional-processing branches render, so the render
+  // tree (and any downstream text layout) must be rebuilt.
+  components::RenderingContext(registry).invalidateRenderTree();
+  documentContext.userLanguages = std::move(languages);
+}
+
+std::vector<RcString> SVGDocument::userLanguages() const {
+  DocumentReadAccess access = documentState_->read();
+  return access.registry().ctx().get<components::SVGDocumentContext>().userLanguages;
 }
 
 void SVGDocument::useAutomaticCanvasSize() {

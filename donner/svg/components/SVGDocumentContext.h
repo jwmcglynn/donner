@@ -2,6 +2,7 @@
 /// @file
 
 #include <cstdint>
+#include <vector>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/RcString.h"
@@ -75,6 +76,16 @@ public:
   /// Current canvas size, if set. Equivalent to the window size, which controls how the SVG
   /// contents are rendered.
   std::optional<Vector2i> canvasSize;
+
+  /// Current document time in seconds, advanced by \ref SVGDocument::setTime(). Used by the
+  /// animation system to evaluate animation state.
+  double documentTime = 0.0;
+
+  /// User's preferred languages, in priority order, used to evaluate the `systemLanguage`
+  /// conditional processing attribute (see \ref
+  /// donner::svg::components::ConditionalProcessingComponent and \ref xml_switch). Defaults to
+  /// `{"en"}`. Configure via \ref SVGDocument::setUserLanguages.
+  std::vector<RcString> userLanguages = {RcString("en")};
 
   /// Root entity of the document, which contains the \ref xml_svg element.
   Entity rootEntity = entt::null;
