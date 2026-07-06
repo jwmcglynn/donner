@@ -1410,23 +1410,6 @@ bool EditorShell::trySavePath(std::string_view path, std::string* error) {
 
 void EditorShell::requestSaveAs(std::string error) {
   pendingViewportExport_ = false;
-
-  if (nativeDialogs_.available()) {
-    const std::optional<std::string> chosen =
-        nativeDialogs_.saveFile(window_.rawHandle(), app_.currentFilePath());
-    if (!chosen.has_value()) {
-      return;  // User cancelled.
-    }
-    std::string saveError;
-    if (!trySavePath(*chosen, &saveError)) {
-      // Fall back to the in-editor modal so the error is visible and the
-      // user can retry.
-      dialogPresenter_.requestSaveFile(std::make_optional(*chosen), std::move(saveError));
-    }
-    window_.wakeEventLoop();
-    return;
-  }
-
   dialogPresenter_.requestSaveFile(app_.currentFilePath(), std::move(error));
 }
 
@@ -1444,23 +1427,6 @@ void EditorShell::requestExportViewportSvg(bool includeOverlay, std::string erro
   } else {
     defaultPath = "untitled_viewport.svg";
   }
-
-  if (nativeDialogs_.available()) {
-    const std::optional<std::string> chosen =
-        nativeDialogs_.saveFile(window_.rawHandle(), std::make_optional(defaultPath));
-    if (!chosen.has_value()) {
-      pendingViewportExport_ = false;
-      pendingViewportExportOverlay_ = false;
-      return;  // User cancelled.
-    }
-    std::string saveError;
-    if (!tryExportViewportSvgToPath(*chosen, &saveError)) {
-      dialogPresenter_.requestSaveFile(std::make_optional(*chosen), std::move(saveError));
-    }
-    window_.wakeEventLoop();
-    return;
-  }
-
   dialogPresenter_.requestSaveFile(std::make_optional(defaultPath), std::move(error));
 }
 
@@ -1520,28 +1486,6 @@ bool EditorShell::tryExportViewportSvgToPath(std::string_view path, std::string*
   return true;
 }
 
-void EditorShell::promptOpenFile() {
-  if (!nativeDialogs_.available()) {
-    dialogPresenter_.requestOpenFile(app_.currentFilePath());
-    return;
-  }
-
-  const std::optional<std::string> chosen =
-      nativeDialogs_.openFile(window_.rawHandle(), app_.currentFilePath());
-  if (!chosen.has_value()) {
-    return;  // User cancelled.
-  }
-
-  std::string error;
-  if (!tryOpenPath(*chosen, &error)) {
-    // Surface the failure through the in-editor modal, pre-filled with the
-    // path and error so the user can retry or correct it.
-    dialogPresenter_.requestOpenFile(std::make_optional(*chosen));
-    dialogPresenter_.setOpenFileError(std::move(error));
-  }
-  window_.wakeEventLoop();
-}
-
 void EditorShell::requestSave() {
   if (!app_.currentFilePath().has_value()) {
     requestSaveAs();
@@ -1571,6 +1515,46 @@ void EditorShell::requestRevert() {
   window_.wakeEventLoop();
 }
 
+void EditorShell::serviceNativeDialogs() {
+  if (!nativeDialogs_.available()) {
+    return;  // Non-macOS: the ImGui modal handles open/save.
+  }
+
+  if (dialogPresenter_.openFileModalRequested()) {
+    dialogPresenter_.consumeOpenFileModalRequest();
+    if (const std::optional<std::string> chosen =
+            nativeDialogs_.openFile(window_.rawHandle(), app_.currentFilePath())) {
+      std::string error;
+      if (!tryOpenPath(*chosen, &error)) {
+        // Surface the failure through the in-editor modal, pre-filled so the
+        // user can retry or correct the path.
+        dialogPresenter_.requestOpenFile(std::make_optional(*chosen));
+        dialogPresenter_.setOpenFileError(std::move(error));
+      }
+    }
+    window_.wakeEventLoop();
+  }
+
+  if (dialogPresenter_.saveFileModalRequested()) {
+    const std::string suggested = dialogPresenter_.pendingSaveFilePath();
+    dialogPresenter_.consumeSaveFileModalRequest();
+    const std::optional<std::string> suggestedOpt =
+        suggested.empty() ? std::nullopt : std::make_optional(suggested);
+    if (const std::optional<std::string> chosen =
+            nativeDialogs_.saveFile(window_.rawHandle(), suggestedOpt)) {
+      std::string error;
+      // Mirror the render() callback's routing: an in-flight viewport export
+      // writes cropped SVG, otherwise this is a normal document save.
+      const bool ok = pendingViewportExport_ ? tryExportViewportSvgToPath(*chosen, &error)
+                                             : trySavePath(*chosen, &error);
+      if (!ok) {
+        dialogPresenter_.requestSaveFile(std::make_optional(*chosen), std::move(error));
+      }
+    }
+    window_.wakeEventLoop();
+  }
+}
+
 void EditorShell::updateWindowTitle() {
   const WindowChromeState chromeState{.filePath = app_.currentFilePath(),
                                       .edited = app_.isDirty()};
@@ -1592,7 +1576,7 @@ void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
     dialogPresenter_.requestAbout();
   }
   if (menuActions.openFile) {
-    promptOpenFile();
+    dialogPresenter_.requestOpenFile(app_.currentFilePath());
   }
   if (menuActions.saveFile) {
     requestSave();
@@ -1712,7 +1696,7 @@ void EditorShell::handleGlobalShortcuts() {
   }
 
   if (!anyPopupOpen && cmd && !shift && ImGui::IsKeyPressed(ImGuiKey_O, /*repeat=*/false)) {
-    promptOpenFile();
+    dialogPresenter_.requestOpenFile(app_.currentFilePath());
   }
 
   if (!anyPopupOpen && cmd && !shift && ImGui::IsKeyPressed(ImGuiKey_Q, /*repeat=*/false)) {
@@ -4631,6 +4615,10 @@ void EditorShell::runFrame() {
   const MenuBarActions menuActions = menuBarPresenter_.render(menuState, uiFontBold_);
   applyMenuActions(menuActions);
 
+  // On macOS, service any pending open/save with a native OS panel; this
+  // consumes the request so the ImGui modal below stays closed. On other
+  // platforms it is a no-op and the ImGui modal renders as before.
+  serviceNativeDialogs();
   dialogPresenter_.render(
       [this](std::string_view path, std::string* error) { return tryOpenPath(path, error); },
       [this](std::string_view path, std::string* error) {

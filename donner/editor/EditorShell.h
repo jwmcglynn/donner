@@ -307,9 +307,13 @@ private:
   [[nodiscard]] bool selectionIsAllText() const;
   void resetPresentationForLoadedDocument(std::string_view canonicalSource);
   void requestRevert();
-  /// Present the "Open SVG" chooser. Uses the native OS dialog when
-  /// available (macOS), otherwise the in-editor ImGui path modal.
-  void promptOpenFile();
+  /// When native OS file dialogs are available (macOS), consume any pending
+  /// open/save request and service it with a native `NSOpenPanel` /
+  /// `NSSavePanel` instead of the in-editor ImGui modal. No-op on other
+  /// platforms, where the ImGui modal renders as before. Called each frame
+  /// just before the ImGui dialog render pass, so headless callers that only
+  /// drive the request/try-path methods never present native UI.
+  void serviceNativeDialogs();
   void requestSave();
   void requestSaveAs(std::string error = std::string());
   /// Open the save dialog to export the current viewport as a cropped SVG.
