@@ -17,7 +17,9 @@ namespace donner::editor {
 
 namespace {
 
-/// Identifier for the clip path injected into exported documents.
+/// Preferred identifier for the clip path injected into exported documents.
+/// If the source document already uses this id, a numeric suffix is appended
+/// (see \ref UniqueClipPathId) so the injected clip path never collides.
 constexpr std::string_view kClipPathId = "donner-viewport-clip";
 /// Identifier for the editor overlay group.
 constexpr std::string_view kOverlayGroupId = "donner-editor-overlay";
@@ -308,6 +310,36 @@ void AppendControlLine(std::string* out, const SelectionChromeSnapshot::PathCont
           "\" stroke-width=\"1\" vector-effect=\"non-scaling-stroke\"/>";
 }
 
+/// Returns true if \p source appears to declare an element with the given
+/// \p id. This is a conservative textual scan over the raw source (matching
+/// `id="<id>"` and `id='<id>'`), so it can report a false positive for text
+/// that merely looks like an id attribute (e.g. inside a comment); that only
+/// causes an unnecessary suffix on the injected id, which is harmless.
+bool SourceDeclaresId(std::string_view source, std::string_view id) {
+  for (const char quote : {'"', '\''}) {
+    std::string needle = "id=";
+    needle += quote;
+    needle += id;
+    needle += quote;
+    if (source.find(needle) != std::string_view::npos) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// Pick an id for the injected viewport clip path that does not collide with
+/// any id already declared in the source document. Prefers \ref kClipPathId
+/// and appends an increasing numeric suffix ("donner-viewport-clip-2", ...)
+/// until the id is unused.
+std::string UniqueClipPathId(std::string_view source) {
+  std::string id(kClipPathId);
+  for (int suffix = 2; SourceDeclaresId(source, id); ++suffix) {
+    id = std::string(kClipPathId) + "-" + std::to_string(suffix);
+  }
+  return id;
+}
+
 }  // namespace
 
 std::string SerializeOverlaySnapshotToSvg(const SelectionChromeSnapshot& snapshot) {
@@ -383,6 +415,11 @@ Result<std::string, std::string> ExportViewportAsSvg(
   if (!rootTag.found) {
     return ResultType::Err("Viewport export could not find the root <svg> element in the source.");
   }
+
+  // Id for the injected clip path, uniquified against ids already declared in
+  // the source so a document that defines "donner-viewport-clip" itself does
+  // not collide with the injected definition.
+  const std::string clipPathId = UniqueClipPathId(source);
 
   // Compute the document-space viewport rect from the screen-space pane rect.
   // `ViewportState` is the single source of truth for crop and scale.
@@ -462,7 +499,7 @@ Result<std::string, std::string> ExportViewportAsSvg(
 
   // Defs: clip path covering the document-space viewport rect.
   output += "  <defs><clipPath id=\"";
-  output += kClipPathId;
+  output += clipPathId;
   output += "\"><rect x=\"" + FormatNumber(viewBoxMinX) + "\" y=\"" + FormatNumber(viewBoxMinY) +
             "\" width=\"" + FormatNumber(viewBoxWidth) + "\" height=\"" +
             FormatNumber(viewBoxHeight) + "\"/></clipPath></defs>\n";
@@ -476,7 +513,7 @@ Result<std::string, std::string> ExportViewportAsSvg(
 
   // Document content: source children verbatim, wrapped in a clipped group.
   output += "  <g clip-path=\"url(#";
-  output += kClipPathId;
+  output += clipPathId;
   output += ")\">";
   if (rootTag.bodyEnd > rootTag.bodyStart) {
     output += source.substr(rootTag.bodyStart, rootTag.bodyEnd - rootTag.bodyStart);
@@ -492,7 +529,7 @@ Result<std::string, std::string> ExportViewportAsSvg(
     output += kOverlayGroupId;
     output +=
         "\" data-donner-export-role=\"editor-overlay\" pointer-events=\"none\" clip-path=\"url(#";
-    output += kClipPathId;
+    output += clipPathId;
     output += ")\">";
     if (overlaySnapshot != nullptr) {
       output += SerializeOverlaySnapshotToSvg(*overlaySnapshot);

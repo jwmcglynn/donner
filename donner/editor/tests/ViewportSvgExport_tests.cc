@@ -136,6 +136,43 @@ TEST(ViewportSvgExportTest, ContentIsClippedToViewportRect) {
   EXPECT_THAT(result.value, HasSubstr("<circle cx=\"300\" cy=\"300\" r=\"40\""));
 }
 
+TEST(ViewportSvgExportTest, InjectedClipPathIdIsUniquifiedAgainstSourceIds) {
+  // Source document that already declares the preferred injected clip id.
+  constexpr std::string_view kClipIdCollisionSvg =
+      "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+      "<svg width=\"600\" height=\"600\" viewBox=\"0 0 600 600\" "
+      "xmlns=\"http://www.w3.org/2000/svg\">\n"
+      "  <clipPath id=\"donner-viewport-clip\">"
+      "<rect x=\"0\" y=\"0\" width=\"50\" height=\"50\"/></clipPath>\n"
+      "  <rect x=\"10\" y=\"20\" width=\"100\" height=\"50\" fill=\"red\" "
+      "clip-path=\"url(#donner-viewport-clip)\"/>\n"
+      "</svg>\n";
+
+  const SVGDocument doc = ParseOrDie(kClipIdCollisionSvg);
+  const ViewportState viewport = MakeViewport(1.0, Vector2d(0.0, 0.0), Vector2d(0.0, 0.0),
+                                              Vector2d(0.0, 0.0), Vector2d(400.0, 300.0));
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(400, 300));
+
+  ViewportExportOptions options;
+  options.includeSelectionOverlay = true;
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, options);
+  ASSERT_TRUE(result.ok()) << result.error;
+
+  // The injected clip path picks a suffixed id instead of colliding with the
+  // source-declared one, and every injected reference uses the suffixed id.
+  EXPECT_THAT(result.value, HasSubstr("<defs><clipPath id=\"donner-viewport-clip-2\">"));
+  EXPECT_THAT(result.value, HasSubstr("<g clip-path=\"url(#donner-viewport-clip-2)\">"));
+  EXPECT_THAT(result.value,
+              HasSubstr("pointer-events=\"none\" clip-path=\"url(#donner-viewport-clip-2)\">"));
+
+  // The source-declared clip path and its reference are preserved verbatim.
+  EXPECT_THAT(result.value, HasSubstr("<clipPath id=\"donner-viewport-clip\">"
+                                      "<rect x=\"0\" y=\"0\" width=\"50\" height=\"50\"/>"));
+  EXPECT_THAT(result.value,
+              HasSubstr("clip-path=\"url(#donner-viewport-clip)\"/>"));
+}
+
 TEST(ViewportSvgExportTest, OverlayGroupAbsentByDefault) {
   const SVGDocument doc = ParseOrDie(kSelfContainedSvg);
   const ViewportState viewport = MakeViewport(1.0, Vector2d(0.0, 0.0), Vector2d(0.0, 0.0),
