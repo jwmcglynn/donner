@@ -1170,31 +1170,13 @@ TEST(EditorSyncTest, SelectionClearsAndDisplayedBoundsClearWhenElementDisappears
 // rehydration (matching the snapshot's `writebackTarget` against the
 // current DOM), the undo silently does nothing or crashes.
 //
-// This test documents the invariant. If undo can't rehydrate across
-// a reparse, either the test skips with a clear explanation (known
-// gap) OR - ideally - the undo replays against a freshly-queried
-// element by id/path.
+// This test documents the invariant. `EditorApp::undo` rehydrates a stale
+// `UndoSnapshot::element` by resolving `snapshot.writebackTarget` against the
+// live post-reparse document (see `ResolveSnapshotElement` in EditorApp.cc)
+// before replaying the transform, so the drag survives the reparse. This is
+// the same rehydration story as `SelectionRemapsByIdAcrossStructuralSourceEdit`,
+// but for the undo timeline instead of the selection.
 TEST(EditorSyncTest, DragThenSourceEditThenUndoReplaysAgainstFreshlyParsedElement) {
-  // Known gap (documented before we even start the test body, because
-  // the failing path triggers a hard EnTT assertion in `fast_mod` -
-  // the undo snapshot holds an `SVGElement` whose `EntityHandle` points
-  // into the pre-reparse registry, and any access after the reparse
-  // trips the "power of two" assertion deep inside EnTT's storage.
-  // That crash isn't skippable mid-flow, so document the gap up front
-  // and have the fix flip the `if (true)` below to `if (false)` once
-  // `UndoSnapshot` rehydration across `ReplaceDocumentCommand` lands.
-  //
-  // The fix belongs in `EditorApp::undo`: when an `UndoSnapshot` has
-  // a `writebackTarget`, resolve that against the live document and
-  // rebind `snapshot.element` before calling `applySnapshot`. This is
-  // the same rehydration story as `SelectionRemapsByIdAcrossStructuralSourceEdit`,
-  // but for the undo timeline instead of the selection.
-  if (true) {
-    GTEST_SKIP() << "Known gap: `EditorApp::undo` dereferences a stale `SVGElement` "
-                    "handle after `ReplaceDocumentCommand` reparse. Needs snapshot "
-                    "rehydration via `writebackTarget` before apply. Design 0026 B3.";
-  }
-
   constexpr std::string_view kSvg = R"svg(<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
   <rect id="r" x="10" y="10" width="20" height="20" fill="red"/>
