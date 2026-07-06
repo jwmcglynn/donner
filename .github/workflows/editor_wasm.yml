@@ -35,7 +35,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
 
       # JS-glue size safety gate. This is the only CI exercise of
       # --config=wasm-size (--closure=1 + -sFILESYSTEM=0): it builds the
