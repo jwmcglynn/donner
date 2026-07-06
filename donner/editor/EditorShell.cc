@@ -2839,7 +2839,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
 
   const auto liveActiveDragPreview = selectTool_.activeDragPreview();
   const auto activeGesturePreview = selectTool_.activeGesturePreview();
-  if (!setActiveRotateCursor(activeGesturePreview) && rotateCursorLocked) {
+  if (!setActiveGestureCursor(activeGesturePreview) && rotateCursorLocked) {
     rotateCursorSet_.clearIfActive();
     SetImGuiOsCursorManagementEnabled(true);
   }
