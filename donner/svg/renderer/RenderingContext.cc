@@ -3,11 +3,16 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <vector>
 
+#include "donner/base/parser/LengthParser.h"
+#include "donner/base/RcString.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/ComputedClipPathsComponent.h"
 #include "donner/svg/components/ConditionalProcessingComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
+#include "donner/svg/components/animation/AnimatedValuesComponent.h"
+#include "donner/svg/components/animation/AnimationSystem.h"
 #include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
@@ -17,6 +22,7 @@
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/layout/SymbolComponent.h"
+#include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/paint/ClipPathComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/MarkerComponent.h"
@@ -49,8 +55,10 @@
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/components/text/TextSystem.h"
+#include "donner/svg/core/CssTransform.h"
 #include "donner/svg/graph/RecursionGuard.h"
 #include "donner/svg/graph/Reference.h"
+#include "donner/svg/parser/TransformParser.h"
 
 namespace donner::svg::components {
 
@@ -62,6 +70,242 @@ RenderTreeState& getRenderTreeState(Registry& registry) {
     registry.ctx().emplace<RenderTreeState>();
   }
   return registry.ctx().get<RenderTreeState>();
+}
+
+/// Set of animatable geometry length attribute names.
+bool isGeometryLengthAttribute(std::string_view attrName) {
+  return attrName == "cx" || attrName == "cy" || attrName == "r" || attrName == "rx" ||
+         attrName == "ry" || attrName == "x" || attrName == "y" || attrName == "width" ||
+         attrName == "height" || attrName == "x1" || attrName == "y1" || attrName == "x2" ||
+         attrName == "y2";
+}
+
+/**
+ * Backs up base component values that the animation override applier mutates in place, so the
+ * mutation can be reverted on a later frame when the animation is no longer active (or targets a
+ * different value). Without this, base-component mutations would "stick" across time samples of the
+ * same live document. Captured lazily the first time an entity is animated; see
+ * docs/design_docs/animation.md ("Resolved question").
+ */
+struct AnimationBaseBackup {
+  std::optional<CircleComponent> circle;
+  std::optional<EllipseComponent> ellipse;
+  std::optional<RectComponent> rect;
+  std::optional<LineComponent> line;
+  std::optional<PathComponent> path;
+  bool transformCaptured = false;
+  bool transformExisted = false;
+  std::optional<TransformComponent> transform;
+};
+
+/// Remove the computed shape components for an entity so they are recomputed from the (restored or
+/// overridden) base shape components on the next shape pass.
+void invalidateComputedShape(Registry& registry, Entity entity) {
+  registry.remove<ComputedPathComponent>(entity);
+  registry.remove<ComputedCircleComponent>(entity);
+  registry.remove<ComputedEllipseComponent>(entity);
+  registry.remove<ComputedRectComponent>(entity);
+}
+
+/// Restore base components previously mutated by the animation override applier back to their
+/// captured original values, so reverted/changed animations do not leak across time samples.
+void restoreAnimationBaseBackup(Registry& registry, Entity entity, AnimationBaseBackup& backup) {
+  bool shapeChanged = false;
+  if (backup.circle) {
+    registry.get<CircleComponent>(entity) = *backup.circle;
+    shapeChanged = true;
+  }
+  if (backup.ellipse) {
+    registry.get<EllipseComponent>(entity) = *backup.ellipse;
+    shapeChanged = true;
+  }
+  if (backup.rect) {
+    registry.get<RectComponent>(entity) = *backup.rect;
+    shapeChanged = true;
+  }
+  if (backup.line) {
+    registry.get<LineComponent>(entity) = *backup.line;
+    shapeChanged = true;
+  }
+  if (backup.path) {
+    registry.get<PathComponent>(entity) = *backup.path;
+    shapeChanged = true;
+  }
+  if (shapeChanged) {
+    invalidateComputedShape(registry, entity);
+  }
+  if (backup.transformCaptured) {
+    if (backup.transformExisted) {
+      registry.get_or_emplace<TransformComponent>(entity) = *backup.transform;
+    } else {
+      registry.remove<TransformComponent>(entity);
+    }
+    // Drop cached computed transforms (local + cascaded absolute) so they are recomputed from the
+    // restored base transform.
+    LayoutSystem().invalidate(EntityHandle(registry, entity));
+  }
+}
+
+/**
+ * Advance the animation system to the current document time and apply the resulting animated value
+ * overrides on top of the just-computed styles/geometry.
+ *
+ * This runs immediately after StyleSystem::computeAllStyles() and before layout/shape computation,
+ * so that animated transforms participate in the transform hierarchy and animated geometry feeds
+ * the shape pass. Overrides are applied post-style (the tiny-skia model); see
+ * docs/design_docs/animation.md.
+ */
+void applyAnimationOverrides(Registry& registry) {
+  const double documentTime = registry.ctx().get<SVGDocumentContext>().documentTime;
+
+  // 1. Advance animations: populate AnimatedValuesComponent overrides on target entities.
+  AnimationSystem().advance(registry, documentTime, nullptr);
+
+  // 2. Restore base components mutated by a previous apply so reverted animations do not leak
+  //    across time samples of the same live document. Iterating the view directly is safe: the
+  //    restore only mutates other component storages, never AnimationBaseBackup itself.
+  for (auto [entity, backup] : registry.view<AnimationBaseBackup>().each()) {
+    restoreAnimationBaseBackup(registry, entity, backup);
+  }
+
+  // 3. Apply the current frame's overrides. The loop body only touches storages other than
+  //    AnimatedValuesComponent, so the view can be iterated directly.
+  donner::parser::LengthParser::Options lengthOpts;
+  lengthOpts.unitOptional = true;
+  const auto overrideSpec = css::Specificity::Override();
+
+  for (auto [entity, animValues] : registry.view<AnimatedValuesComponent>().each()) {
+    bool geometryChanged = false;
+
+    for (const auto& [attrName, attrValue] : animValues.overrides) {
+      if (attrName == "transform") {
+        auto result = donner::svg::parser::TransformParser::Parse(attrValue);
+        if (result.hasResult()) {
+          auto& backup = registry.get_or_emplace<AnimationBaseBackup>(entity);
+          if (!backup.transformCaptured) {
+            backup.transformCaptured = true;
+            backup.transformExisted = registry.all_of<TransformComponent>(entity);
+            if (backup.transformExisted) {
+              backup.transform = registry.get<TransformComponent>(entity);
+            }
+          }
+          auto& transform = registry.get_or_emplace<TransformComponent>(entity);
+          transform.transform.set(CssTransform(result.result()), overrideSpec);
+          // Drop any cached computed transforms (local + cascaded absolute) so the animated
+          // transform is recomputed by the layout pass.
+          LayoutSystem().invalidate(EntityHandle(registry, entity));
+        }
+      } else if (attrName == "d") {
+        if (auto* pathComp = registry.try_get<PathComponent>(entity)) {
+          auto& backup = registry.get_or_emplace<AnimationBaseBackup>(entity);
+          if (!backup.path) {
+            backup.path = *pathComp;
+          }
+          pathComp->d.set(RcString(attrValue), overrideSpec);
+          pathComp->splineOverride.reset();
+          registry.remove<ComputedPathComponent>(entity);
+        }
+      } else if (isGeometryLengthAttribute(attrName)) {
+        auto lengthResult = donner::parser::LengthParser::Parse(attrValue, lengthOpts);
+        if (!lengthResult.hasResult()) {
+          continue;
+        }
+        const Lengthd len = lengthResult.result().length;
+
+        if (auto* circle = registry.try_get<CircleComponent>(entity)) {
+          auto& backup = registry.get_or_emplace<AnimationBaseBackup>(entity);
+          if (!backup.circle) {
+            backup.circle = *circle;
+          }
+          if (attrName == "cx") {
+            circle->properties.cx.set(len, overrideSpec);
+            geometryChanged = true;
+          } else if (attrName == "cy") {
+            circle->properties.cy.set(len, overrideSpec);
+            geometryChanged = true;
+          } else if (attrName == "r") {
+            circle->properties.r.set(len, overrideSpec);
+            geometryChanged = true;
+          }
+        }
+        if (auto* ellipse = registry.try_get<EllipseComponent>(entity)) {
+          auto& backup = registry.get_or_emplace<AnimationBaseBackup>(entity);
+          if (!backup.ellipse) {
+            backup.ellipse = *ellipse;
+          }
+          if (attrName == "cx") {
+            ellipse->properties.cx.set(len, overrideSpec);
+            geometryChanged = true;
+          } else if (attrName == "cy") {
+            ellipse->properties.cy.set(len, overrideSpec);
+            geometryChanged = true;
+          } else if (attrName == "rx") {
+            ellipse->properties.rx.set(len, overrideSpec);
+            geometryChanged = true;
+          } else if (attrName == "ry") {
+            ellipse->properties.ry.set(len, overrideSpec);
+            geometryChanged = true;
+          }
+        }
+        if (auto* rect = registry.try_get<RectComponent>(entity)) {
+          auto& backup = registry.get_or_emplace<AnimationBaseBackup>(entity);
+          if (!backup.rect) {
+            backup.rect = *rect;
+          }
+          if (attrName == "x") {
+            rect->properties.x.set(len, overrideSpec);
+            geometryChanged = true;
+          } else if (attrName == "y") {
+            rect->properties.y.set(len, overrideSpec);
+            geometryChanged = true;
+          } else if (attrName == "width") {
+            rect->properties.width.set(len, overrideSpec);
+            geometryChanged = true;
+          } else if (attrName == "height") {
+            rect->properties.height.set(len, overrideSpec);
+            geometryChanged = true;
+          } else if (attrName == "rx") {
+            rect->properties.rx.set(len, overrideSpec);
+            geometryChanged = true;
+          } else if (attrName == "ry") {
+            rect->properties.ry.set(len, overrideSpec);
+            geometryChanged = true;
+          }
+        }
+        if (auto* line = registry.try_get<LineComponent>(entity)) {
+          auto& backup = registry.get_or_emplace<AnimationBaseBackup>(entity);
+          if (!backup.line) {
+            backup.line = *line;
+          }
+          if (attrName == "x1") {
+            line->x1 = len;
+            geometryChanged = true;
+          } else if (attrName == "y1") {
+            line->y1 = len;
+            geometryChanged = true;
+          } else if (attrName == "x2") {
+            line->x2 = len;
+            geometryChanged = true;
+          } else if (attrName == "y2") {
+            line->y2 = len;
+            geometryChanged = true;
+          }
+        }
+      } else {
+        // CSS presentation attribute (opacity, fill, stroke-width, stroke-dasharray, ...).
+        // ComputedStyleComponent is regenerated each render, so no backup is needed.
+        if (auto* style = registry.try_get<ComputedStyleComponent>(entity)) {
+          if (style->properties.has_value()) {
+            style->properties->parsePresentationAttribute(attrName, attrValue);
+          }
+        }
+      }
+    }
+
+    if (geometryChanged) {
+      invalidateComputedShape(registry, entity);
+    }
+  }
 }
 
 /**
@@ -119,6 +363,38 @@ bool IsValidMarker(EntityHandle handle) {
   return handle.all_of<MarkerComponent>();
 }
 
+/**
+ * Returns true if the element type participates in `<switch>` child selection. Per the SVG spec,
+ * `<switch>` evaluates conditional processing attributes only on its direct children that are
+ * directly-rendered element types (`a`, `g`, `svg`, `switch`, `text`, `use`, `image`, and
+ * graphical shape elements). Any other child (descriptive elements such as `title`/`desc`/
+ * `metadata`, `defs`, `symbol`, and unknown elements) is ignored and does not consume the selection
+ * slot.
+ *
+ * This is a positive whitelist of directly-rendered types, so non-rendered children are excluded
+ * regardless of whether they are currently typed as \ref ElementType::Unknown or gain a dedicated
+ * element type later (e.g. `title`/`desc`/`metadata`).
+ */
+bool IsSwitchProcessedElementType(ElementType type) {
+  switch (type) {
+    case ElementType::A:
+    case ElementType::Circle:
+    case ElementType::Ellipse:
+    case ElementType::G:
+    case ElementType::Image:
+    case ElementType::Line:
+    case ElementType::Path:
+    case ElementType::Polygon:
+    case ElementType::Polyline:
+    case ElementType::Rect:
+    case ElementType::SVG:
+    case ElementType::Switch:
+    case ElementType::Text:
+    case ElementType::Use: return true;
+    default: return false;
+  }
+}
+
 class RenderingContextImpl {
 public:
   explicit RenderingContextImpl(Registry& registry, bool verbose,
@@ -137,6 +413,13 @@ public:
     canvasFromDocumentWorldTransform_ =
         layoutSystem ? layoutSystem->getCanvasFromDocumentTransform(registry)
                      : LayoutSystem().getCanvasFromDocumentTransform(registry);
+
+    // Cache the user's preferred languages, used to evaluate the `systemLanguage` conditional
+    // processing attribute (see ConditionalProcessingComponent). Defaults to {"en"} when unset.
+    if (registry_.ctx().contains<SVGDocumentContext>()) {
+      userLanguages_ = registry_.ctx().get<SVGDocumentContext>().userLanguages;
+    }
+
     if (verbose_) {
       std::cout << "Canvas from document-world transform: " << canvasFromDocumentWorldTransform_
                 << "\n";
@@ -173,7 +456,7 @@ public:
     // referenced by IRI (gradients, <clipPath>, <defs> content) are resolved elsewhere and are
     // intentionally not affected, matching resvg.
     if (const auto* conditional = dataHandle.try_get<ConditionalProcessingComponent>();
-        conditional && !EvaluateConditionalProcessing(*conditional)) {
+        conditional && !EvaluateConditionalProcessing(*conditional, userLanguages_)) {
       return;
     }
 
@@ -431,9 +714,10 @@ public:
 
   /**
    * Select the first direct child of a \ref xml_switch whose conditional-processing attributes
-   * all evaluate to true. Non-element children (comments, text) and unknown (non-SVG) elements
-   * are never selected. `display` does not participate in selection, so a selected child with
-   * `display: none` still wins and renders nothing.
+   * all evaluate to true. Non-element children (comments, text) and children that are not
+   * directly-rendered element types (descriptive elements, `defs`, `symbol`, unknown elements) are
+   * never selected and do not consume the selection slot. `display` does not participate in
+   * selection, so a selected child with `display: none` still wins and renders nothing.
    *
    * @param switchTree Tree component of the `<switch>` element (or its shadow instance).
    * @return The selected child entity, or `entt::null` if no child matches.
@@ -446,12 +730,12 @@ public:
           registry_, shadowEntityComponent ? shadowEntityComponent->lightEntity : cur);
 
       const auto* typeComponent = childDataHandle.try_get<ElementTypeComponent>();
-      if (!typeComponent || typeComponent->type() == ElementType::Unknown) {
+      if (!typeComponent || !IsSwitchProcessedElementType(typeComponent->type())) {
         continue;
       }
 
       if (const auto* conditional = childDataHandle.try_get<ConditionalProcessingComponent>();
-          conditional && !EvaluateConditionalProcessing(*conditional)) {
+          conditional && !EvaluateConditionalProcessing(*conditional, userLanguages_)) {
         continue;
       }
 
@@ -884,6 +1168,10 @@ private:
   /// Transform from the canvas to the SVG document root, for the current canvas scale.
   Transform2d canvasFromDocumentWorldTransform_;
 
+  /// User's preferred languages for evaluating the `systemLanguage` conditional processing
+  /// attribute. Defaults to {"en"} when the document context is unavailable.
+  std::vector<RcString> userLanguages_ = {RcString("en")};
+
   /// Tracks mask elements currently being rendered to detect mutual recursion
   /// (e.g., mask1→mask2→mask1). When a mask reference resolves to an element already in this
   /// set, the cycle is broken by treating the mask attribute as "none".
@@ -1230,6 +1518,10 @@ void RenderingContext::createComputedComponents(ParseWarningSink& warningSink) {
   }
 
   StyleSystem().computeAllStyles(registry_, warningSink);
+
+  // Advance SMIL animations and apply their value overrides on top of the computed styles/geometry,
+  // before layout and shape computation. See docs/design_docs/animation.md.
+  applyAnimationOverrides(registry_);
 
   // After styles are computed, we can load fonts and other embedded resources.
   registry_.ctx().get<components::ResourceManagerContext>().loadResources(warningSink);

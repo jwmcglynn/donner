@@ -9,6 +9,7 @@
 #include "donner/base/xml/components/AttributesComponent.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/ConditionalProcessingComponent.h"
+#include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/PathComponent.h"
@@ -365,6 +366,13 @@ void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
 
   std::vector<PendingSpan> pendingSpans;
 
+  // User's preferred languages, used to evaluate the `systemLanguage` conditional processing
+  // attribute on text spans. Defaults to {"en"} when the document context is unavailable.
+  std::vector<RcString> userLanguages = {RcString("en")};
+  if (registry.ctx().contains<SVGDocumentContext>()) {
+    userLanguages = registry.ctx().get<SVGDocumentContext>().userLanguages;
+  }
+
   std::function<void(EntityHandle, size_t, bool)> collectSpans = [&](EntityHandle handle,
                                                                      size_t depth,
                                                                      bool parentHidden) {
@@ -388,7 +396,7 @@ void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
     // its children when they evaluate to false, e.g. `<tspan systemLanguage="ru-RU">`.
     if (!isHidden) {
       if (const auto* conditional = handle.try_get<ConditionalProcessingComponent>();
-          conditional && !EvaluateConditionalProcessing(*conditional)) {
+          conditional && !EvaluateConditionalProcessing(*conditional, userLanguages)) {
         isHidden = true;
       }
     }

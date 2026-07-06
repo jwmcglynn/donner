@@ -1317,6 +1317,32 @@ ParseResult<PointerEvents> ParsePointerEvents(std::span<const css::ComponentValu
   return err;
 }
 
+ParseResult<VectorEffect> ParseVectorEffect(std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    const css::ComponentValue& component = components.front();
+    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
+      const RcString& value = ident->value;
+
+      if (value.equalsLowercase("none")) {
+        return VectorEffect::None;
+      } else if (value.equalsLowercase("non-scaling-stroke")) {
+        return VectorEffect::NonScalingStroke;
+      } else if (value.equalsLowercase("non-scaling-size")) {
+        return VectorEffect::NonScalingSize;
+      } else if (value.equalsLowercase("non-rotation")) {
+        return VectorEffect::NonRotation;
+      } else if (value.equalsLowercase("fixed-position")) {
+        return VectorEffect::FixedPosition;
+      }
+    }
+  }
+
+  ParseDiagnostic err;
+  err.reason = "Invalid vector-effect";
+  err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  return err;
+}
+
 // List of valid presentation attributes from
 // https://www.w3.org/TR/SVG2/styling.html#PresentationAttributes
 constexpr std::array<std::pair<std::string_view, bool>, 72> kValidPresentationAttributeEntries{{
@@ -1387,7 +1413,8 @@ constexpr std::array<std::pair<std::string_view, bool>, 72> kValidPresentationAt
     {"text-overflow", true},
     {"text-rendering", true},
     {"unicode-bidi", true},
-    {"vector-effect", true},
+    {"vector-effect", true},  // Parsed into registry.vectorEffect; non-scaling-stroke is honored
+                              // in stroke rendering (see toStrokeParams in RendererDriver.cc).
     {"visibility", true},
     {"white-space", true},
     {"word-spacing", true},
@@ -1923,6 +1950,15 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                                                               params.allowUserUnits());
                        },
                        &registry.strokeDashoffset);
+                 }},  //
+                {"vector-effect",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) {
+                         return ParseVectorEffect(params.components());
+                       },
+                       &registry.vectorEffect);
                  }},  //
                 {"clip-path",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
