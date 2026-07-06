@@ -27,8 +27,8 @@
 #include "donner/editor/DocumentSave.h"
 #include "donner/editor/DragCoalesce.h"
 #include "donner/editor/EditorShellInternal.h"
-#include "donner/editor/FillStrokeWidget.h"
 #include "donner/editor/EditorShellPresentation.h"
+#include "donner/editor/FillStrokeWidget.h"
 #include "donner/editor/FocusView.h"
 #include "donner/editor/FrameMissTelemetry.h"
 #include "donner/editor/ImGuiClipboard.h"
@@ -62,6 +62,7 @@
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #endif
+#include "donner/svg/resources/FontManager.h"
 #include "embed_resources/FiraCodeFont.h"
 #include "embed_resources/RobotoFont.h"
 
@@ -615,7 +616,6 @@ std::optional<SelectionChromeSnapshot::TextBoxDragPreview> TextBoxDragPreviewFro
   };
 }
 
-
 EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     : window_(window),
       options_(std::move(options)),
@@ -634,6 +634,11 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       inputBridge_(window_, kWheelZoomStep),
       compositorDebugPanel_(window.geodeDevice()),
       dialogPresenter_(options_.editorNoticeText) {
+  // Install the embedded + system font catalog as the process-wide default provider, so every
+  // document FontManager created by the render paths resolves font-family names against embedded
+  // Google Fonts and macOS system fonts before falling back to Public Sans (Design 0013 W3).
+  svg::FontManager::SetDefaultFontProvider(&fontCatalog_);
+
   std::optional<std::string> initialSource = options_.initialSource;
   if (!initialSource.has_value() && !options_.svgPath.empty()) {
     initialSource = LoadFile(options_.svgPath);
@@ -766,6 +771,10 @@ std::optional<float> EditorShell::nextIdleWakeSeconds() const {
 }
 
 EditorShell::~EditorShell() {
+  // Detach our font catalog from the global default before it is destroyed.
+  if (svg::FontManager::DefaultFontProvider() == &fontCatalog_) {
+    svg::FontManager::SetDefaultFontProvider(nullptr);
+  }
 #ifdef DONNER_EDITOR_WGPU
   window_.setWgpuDirectRenderCallback({});
 #endif
@@ -1124,10 +1133,9 @@ void EditorShell::applyPendingDocumentSpaceReplayInputForTesting() {
   } else if (activeTool_ == ActiveTool::Text && textTool_.isEditing()) {
     if (const auto textChrome = textTool_.editingChrome(app_); textChrome.has_value()) {
       renderCoordinator_.setTextEditingChrome(
-          textTool_.caretBlinkVisible()
-              ? std::make_optional(SelectionChromeSnapshot::TextCaret{textChrome->caretTopDoc,
-                                                                      textChrome->caretBottomDoc})
-              : std::nullopt,
+          textTool_.caretBlinkVisible() ? std::make_optional(SelectionChromeSnapshot::TextCaret{
+                                              textChrome->caretTopDoc, textChrome->caretBottomDoc})
+                                        : std::nullopt,
           textChrome->frameCornersDoc);
     }
     renderCoordinator_.setTextBoxDragPreview(std::nullopt);
@@ -1469,8 +1477,7 @@ void EditorShell::serviceNativeDialogs() {
 }
 
 void EditorShell::updateWindowTitle() {
-  const WindowChromeState chromeState{.filePath = app_.currentFilePath(),
-                                      .edited = app_.isDirty()};
+  const WindowChromeState chromeState{.filePath = app_.currentFilePath(), .edited = app_.isDirty()};
 
   // On platforms with native title-bar chrome (macOS) the edited "dot" and
   // proxy icon are shown by the OS, so keep them out of the title text.
@@ -1928,6 +1935,73 @@ bool EditorShell::selectionIsAllText() const {
   return true;
 }
 
+FormatBarState EditorShell::computeFormatBarState() {
+  FormatBarState state;
+
+  const std::vector<svg::SVGElement>& selection = app_.selectedElements();
+  const bool hasSingleTextSelection =
+      selection.size() == 1u && selection.front().type() == svg::ElementType::Text;
+  const bool textEditingActive = activeTool_ == ActiveTool::Text && textTool_.isEditing();
+  state.visible = FormatBarShouldShow(hasSingleTextSelection, textEditingActive);
+  if (!state.visible) {
+    return state;
+  }
+
+  // Read the current family/size/B/I/U from the styled element. During an
+  // editing session the TextTool keeps that element as the single selection, so
+  // the same read path serves both the selection and editing cases.
+  if (hasSingleTextSelection) {
+    ReadTextFormatState(selection.front(), &state);
+  }
+
+  // Family picker faces: the three embedded TTFs the editor loads today
+  // (Roboto Regular as the default UI face, Roboto Bold, Fira Code). Families
+  // the editor lacks a face for preview in the default font; the free-text box
+  // still round-trips them. W3 replaces this with the real embedded + macOS
+  // system font pipeline.
+  ImFont* regularFace =
+      ImGui::GetIO().Fonts->Fonts.empty() ? nullptr : ImGui::GetIO().Fonts->Fonts[0];
+  state.boldToggleFont = uiFontBold_;
+  state.families = {
+      {"Roboto", regularFace}, {"Fira Code", codeFont_}, {"sans-serif", regularFace},
+      {"serif", nullptr},      {"monospace", codeFont_},
+  };
+  return state;
+}
+
+void EditorShell::applyFormatBarActions(const FormatBarState& state,
+                                        const FormatBarActions& actions) {
+  const bool editing = activeTool_ == ActiveTool::Text && textTool_.isEditing();
+
+  bool changed = false;
+  // Bold/Italic/Underline during an active editing session route to the
+  // TextTool style toggles (they add/remove the attribute and flush). Family
+  // and size, plus the selection-only B/I/U path, route to the attribute-write
+  // seam shared with the Text inspector.
+  if (editing) {
+    if (actions.toggleBold) {
+      textTool_.toggleBold(app_);
+      changed = true;
+    }
+    if (actions.toggleItalic) {
+      textTool_.toggleItalic(app_);
+      changed = true;
+    }
+    if (actions.toggleUnderline) {
+      textTool_.toggleUnderline(app_);
+      changed = true;
+    }
+  }
+
+  changed = ApplyFormatBarActionsToSelection(actions, state, /*routeTogglesToSelection=*/!editing,
+                                             app_) ||
+            changed;
+
+  if (changed) {
+    flushQueuedMutationAndRefreshOverlay();
+  }
+}
+
 void EditorShell::convertSelectedTextToOutlines() {
   if (!app_.hasDocument() || !selectionIsAllText()) {
     return;
@@ -2104,8 +2178,8 @@ void EditorShell::renderFillStrokeToolbarWidget() {
   renderChip("S", paintState.stroke, layout.strokeChipMin, layout.strokeChipMax);
   renderChip("F", paintState.fill, layout.fillChipMin, layout.fillChipMax);
 
-  const FillStrokeWidgetRegion region = HitTestFillStrokeWidget(
-      layout, mouse, paintState.fill.isCustom, paintState.stroke.isCustom);
+  const FillStrokeWidgetRegion region =
+      HitTestFillStrokeWidget(layout, mouse, paintState.fill.isCustom, paintState.stroke.isCustom);
 
   // Swap fill and stroke on the authoring defaults and, when a selection is
   // present, on the selected element. Authoring defaults swap verbatim; the
@@ -2176,7 +2250,8 @@ void EditorShell::renderFillStrokeToolbarWidget() {
           ImGui::SetTooltip("%s paint server %s. Click to show source.", name,
                             slot.reference->href.c_str());
         } else if (slot.reference.has_value() && slot.reference->external) {
-          ImGui::SetTooltip("%s uses external paint server %s.", name, slot.reference->href.c_str());
+          ImGui::SetTooltip("%s uses external paint server %s.", name,
+                            slot.reference->href.c_str());
         } else if (slot.reference.has_value()) {
           ImGui::SetTooltip("%s uses unresolved paint server %s.", name,
                             slot.reference->href.c_str());
@@ -2395,12 +2470,11 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
           return false;
         }
         const SelectTool::ActiveGestureKind kind = activeGesturePreview->kind;
-        const bool applied =
-            kind == SelectTool::ActiveGestureKind::Rotate
-                ? rotateCursorSet_.setRotateCursor(activeGesturePreview->corner)
-            : kind == SelectTool::ActiveGestureKind::Resize
-                ? rotateCursorSet_.setScaleCursor(activeGesturePreview->corner)
-                : false;
+        const bool applied = kind == SelectTool::ActiveGestureKind::Rotate
+                                 ? rotateCursorSet_.setRotateCursor(activeGesturePreview->corner)
+                             : kind == SelectTool::ActiveGestureKind::Resize
+                                 ? rotateCursorSet_.setScaleCursor(activeGesturePreview->corner)
+                                 : false;
         if (kind != SelectTool::ActiveGestureKind::Rotate &&
             kind != SelectTool::ActiveGestureKind::Resize) {
           return false;
@@ -2540,10 +2614,10 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       textFrameIntent.corner = textTool_.frameCorner();
     } else if (textTool_.isEditing() && !ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
                !renderCoordinator_.asyncRenderer().isBusy()) {
-      textFrameIntent = textTool_.frameHandleIntentAt(
-          screenToDocument(ImGui::GetMousePos()),
-          interactionController_.viewport().pixelsPerDocUnit(),
-          /*includeRotate=*/!ImGui::GetIO().KeyShift);
+      textFrameIntent =
+          textTool_.frameHandleIntentAt(screenToDocument(ImGui::GetMousePos()),
+                                        interactionController_.viewport().pixelsPerDocUnit(),
+                                        /*includeRotate=*/!ImGui::GetIO().KeyShift);
     }
     if (textFrameIntent.kind == SelectionTransformHandleKind::Rotate &&
         rotateCursorSet_.setRotateCursor(textFrameIntent.corner)) {
@@ -2877,10 +2951,9 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       // wake schedule + overlay-chrome recapture only - never a content
       // render.
       renderCoordinator_.setTextEditingChrome(
-          textTool_.caretBlinkVisible()
-              ? std::make_optional(SelectionChromeSnapshot::TextCaret{textChrome->caretTopDoc,
-                                                                      textChrome->caretBottomDoc})
-              : std::nullopt,
+          textTool_.caretBlinkVisible() ? std::make_optional(SelectionChromeSnapshot::TextCaret{
+                                              textChrome->caretTopDoc, textChrome->caretBottomDoc})
+                                        : std::nullopt,
           textChrome->frameCornersDoc);
     }
     renderCoordinator_.setTextBoxDragPreview(std::nullopt);
@@ -2925,8 +2998,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     // version gate drops the overlay snapshot for the whole typing burst,
     // blinking the caret/selection chrome off until the worker catches up.
     const bool allowLiveGeometryOverlay =
-        penToolActive ||
-        (textToolActive && (textTool_.isEditing() || textTool_.isDraggingBox()));
+        penToolActive || (textToolActive && (textTool_.isEditing() || textTool_.isDraggingBox()));
     updatePenLivePreviewTarget();
     renderCoordinator_.rasterizeOverlayForPresentation(
         app_, selectTool_, interactionController_.viewport(), textures_, activeDragPreview,
@@ -3073,13 +3145,11 @@ void EditorShell::renderTextToolHint() {
 
   // Bottom-center of the render pane, above the canvas scrollbar rail.
   const ViewportState& viewport = interactionController_.viewport();
-  const ImVec2 textSize =
-      ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, 0.0f, label.data(),
-                                      label.data() + label.size());
+  const ImVec2 textSize = ImGui::GetFont()->CalcTextSizeA(
+      ImGui::GetFontSize(), FLT_MAX, 0.0f, label.data(), label.data() + label.size());
   const float width = textSize.x + 2.0f * kReferenceChipPaddingX;
   const float height = textSize.y + 2.0f * kReferenceChipPaddingY;
-  const float paneCenterX =
-      static_cast<float>(viewport.paneOrigin.x + viewport.paneSize.x * 0.5);
+  const float paneCenterX = static_cast<float>(viewport.paneOrigin.x + viewport.paneSize.x * 0.5);
   const float x = paneCenterX - width * 0.5f;
   const float y = static_cast<float>(viewport.paneOrigin.y + viewport.paneSize.y) - height -
                   static_cast<float>(kCanvasScrollbarRailPx) - 10.0f;
@@ -3274,7 +3344,7 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
   // Text-property inspector: shown only when the selection is exactly one
   // `<text>` element. Content/style edits route through the mutation seam.
   const bool textInspectorQueuedMutation =
-      textInspectorPanel_.render(liveAppForClicks, ImGui::GetTime());
+      textInspectorPanel_.render(liveAppForClicks, ImGui::GetTime(), &fontCatalog_);
   ImGui::End();
   if (inspectorQueuedMutation || textInspectorQueuedMutation) {
     flushQueuedMutationAndRefreshOverlay();
@@ -4544,8 +4614,15 @@ void EditorShell::runFrame() {
 
   const Vector2i windowSize = window_.windowSize();
   const float menuBarHeight = ImGui::GetFrameHeight();
-  const float paneOriginY = menuBarHeight;
-  const float paneHeight = std::max(0.0f, static_cast<float>(windowSize.y) - menuBarHeight);
+  // W2: the contextual text-formatting bar sits directly below the menu bar and
+  // reserves its own strip of vertical space while text styling is in context
+  // (a single <text> is selected or an editing session is active). Compute its
+  // visibility/height here so the panes below start beneath it; the bar itself
+  // is rendered next to the menu bar further down.
+  const FormatBarState formatBarState = computeFormatBarState();
+  const float formatBarHeight = formatBarState.visible ? TextFormatBarPresenter::BarHeight() : 0.0f;
+  const float paneOriginY = menuBarHeight + formatBarHeight;
+  const float paneHeight = std::max(0.0f, static_cast<float>(windowSize.y) - paneOriginY);
   const EditorMainPaneLayout mainPaneLayout = ComputeEditorMainPaneLayout({
       .windowWidth = static_cast<float>(windowSize.x),
       .sourcePaneVisible = sourcePaneVisible_,
@@ -4605,6 +4682,16 @@ void EditorShell::runFrame() {
   // consumes the request so the ImGui modal below stays closed. On other
   // platforms it is a no-op and the ImGui modal renders as before.
   serviceNativeDialogs();
+
+  // W2: render the contextual text-formatting bar beneath the menu bar and
+  // route its actions to the existing styling commands. Space for it was
+  // already reserved above via `formatBarHeight`.
+  if (formatBarState.visible) {
+    const FormatBarActions formatBarActions = textFormatBarPresenter_.render(
+        formatBarState, menuBarHeight, static_cast<float>(windowSize.x));
+    applyFormatBarActions(formatBarState, formatBarActions);
+  }
+
   dialogPresenter_.render(
       [this](std::string_view path, std::string* error) { return tryOpenPath(path, error); },
       [this](std::string_view path, std::string* error) {

@@ -60,6 +60,26 @@ std::vector<Path> SVGTextContentElement::computedGlyphPaths() const {
   return getPreparedTextEngine(handle_).computedGlyphPaths(handle_);
 }
 
+std::vector<TextGlyphOutline> SVGTextContentElement::computedGlyphOutlines() const {
+  [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
+  Registry& registry = *handle_.registry();
+  const std::vector<TextEngine::GlyphOutline> raw =
+      getPreparedTextEngine(handle_).computedGlyphOutlines(handle_);
+
+  std::vector<TextGlyphOutline> result;
+  result.reserve(raw.size());
+  for (const TextEngine::GlyphOutline& glyph : raw) {
+    // Wrap the glyph's painting source (text/tspan) as a public element so callers can resolve its
+    // computed style. Fall back to this element when the source is unresolvable.
+    SVGElement source =
+        glyph.sourceEntity != entt::null
+            ? SVGElement::CreateFromEntityHandle(EntityHandle(registry, glyph.sourceEntity))
+            : SVGElement::CreateFromEntityHandle(handle_);
+    result.push_back(TextGlyphOutline{glyph.path, source});
+  }
+  return result;
+}
+
 Box2d SVGTextContentElement::computedInkBounds() const {
   [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
   return getPreparedTextEngine(handle_).computedInkBounds(handle_);

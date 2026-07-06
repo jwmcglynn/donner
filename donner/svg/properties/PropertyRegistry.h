@@ -30,6 +30,7 @@
 #include "donner/svg/core/TextAnchor.h"
 #include "donner/svg/core/TextDecoration.h"
 #include "donner/svg/core/TransformOrigin.h"
+#include "donner/svg/core/VectorEffect.h"
 #include "donner/svg/core/Visibility.h"
 #include "donner/svg/core/WritingMode.h"
 #include "donner/svg/properties/PaintServer.h"
@@ -118,6 +119,7 @@ auto as_mutable(const std::tuple<Args...>& tuple) {
  * | `text-anchor` | \ref textAnchor | `start` |
  * | `text-decoration` | \ref textDecoration | `none` |
  * | `dominant-baseline` | \ref dominantBaseline | `auto` |
+ * | `inline-size` | \ref inlineSize | `0` |
  */
 class PropertyRegistry {
 public:
@@ -217,6 +219,12 @@ public:
   Property<Lengthd, PropertyCascade::Inherit> strokeDashoffset{
       "stroke-dashoffset",
       []() -> std::optional<Lengthd> { return Lengthd(0, Lengthd::Unit::None); }};
+
+  /// `vector-effect` property, which modifies how the element is affected by coordinate system
+  /// transformations. Not inherited per spec. Defaults to \ref VectorEffect::None. Only
+  /// \ref VectorEffect::NonScalingStroke is honored during rendering.
+  Property<VectorEffect> vectorEffect{
+      "vector-effect", []() -> std::optional<VectorEffect> { return VectorEffect::None; }};
 
   //
   // Clipping and masking
@@ -372,6 +380,17 @@ public:
   Property<WritingMode, PropertyCascade::Inherit> writingMode{
       "writing-mode", []() -> std::optional<WritingMode> { return WritingMode::HorizontalTb; }};
 
+  /// `inline-size` property (SVG2). When set to a positive length on a `<text>` element it
+  /// establishes an automatic wrapping area whose measure (extent in the inline axis) is the
+  /// given length; text greedily wraps to that measure. Not inherited. The initial value `0`
+  /// means "no wrapping area" (the text behaves as ordinary single-line SVG text).
+  ///
+  /// Donner supports auto-flow only for horizontal writing modes today; see
+  /// \ref donner::svg::TextEngine for the documented limitation.
+  /// @see https://www.w3.org/TR/SVG2/text.html#InlineSizeProperty
+  Property<Lengthd> inlineSize{
+      "inline-size", []() -> std::optional<Lengthd> { return Lengthd(0, Lengthd::Unit::None); }};
+
   /// `mix-blend-mode` property. Controls how an element composites with its backdrop.
   /// Not inherited. Defaults to Normal (SourceOver).
   Property<MixBlendMode> mixBlendMode{
@@ -421,11 +440,11 @@ public:
     return std::forward_as_tuple(
         color, display, opacity, visibility, overflow, transformOrigin, fill, fillRule, fillOpacity,
         stroke, strokeOpacity, strokeWidth, strokeLinecap, strokeLinejoin, strokeMiterlimit,
-        strokeDasharray, strokeDashoffset, clipPath, clipRule, mask, filter,
+        strokeDasharray, strokeDashoffset, vectorEffect, clipPath, clipRule, mask, filter,
         colorInterpolationFilters, pointerEvents, cursor, markerStart, markerMid, markerEnd,
         fontFamily, fontSize, fontWeight, fontStyle, fontStretch, fontVariant, textAnchor,
-        textDecoration, dominantBaseline, writingMode, letterSpacing, wordSpacing, baselineShift,
-        alignmentBaseline, mixBlendMode, isolation, imageRendering, paintOrder);
+        textDecoration, dominantBaseline, writingMode, inlineSize, letterSpacing, wordSpacing,
+        baselineShift, alignmentBaseline, mixBlendMode, isolation, imageRendering, paintOrder);
   }
 
   /**

@@ -50,6 +50,7 @@ TextLayoutParams toTextLayoutParams(const TextParams& params) {
   layoutParams.wordSpacingPx = params.wordSpacingPx;
   layoutParams.textLength = params.textLength;
   layoutParams.lengthAdjust = params.lengthAdjust;
+  layoutParams.inlineSizePx = params.inlineSizePx;
   return layoutParams;
 }
 #endif

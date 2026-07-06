@@ -1031,4 +1031,73 @@ TEST(TextEngineTest, TextAfterTextPathStartsAfterLastVisiblePathGlyph) {
               FirstGlyphMatches(GlyphXPositionIs(AllOf(Gt(lastPathGlyphX), Lt(180.0)))));
 }
 
+// End-to-end (engine.layout) coverage of the SVG2 inline-size auto-flow path, exercising the
+// property → TextLayoutParams::inlineSizePx → wrap dispatch, including line-height derived from
+// the backend's vertical metrics. The ScriptedTextBackend gives each glyph a 10px advance and a
+// 20px normal line-height at font-size 20 ((ascent 1000 - descent -200) * (20/1200) = 20).
+namespace {
+
+// Distinct, rounded glyph baseline Y values across all runs, sorted ascending.
+std::vector<long> DistinctBaselines(const std::vector<TextRun>& runs) {
+  std::vector<long> ys;
+  for (const auto& run : runs) {
+    for (const auto& g : run.glyphs) {
+      ys.push_back(std::lround(g.yPosition));
+    }
+  }
+  std::sort(ys.begin(), ys.end());
+  ys.erase(std::unique(ys.begin(), ys.end()), ys.end());
+  return ys;
+}
+
+}  // namespace
+
+TEST(TextEngineTest, InlineSizeUnsetKeepsSingleLine) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+
+  components::ComputedTextComponent text;
+  text.spans.push_back(MakeSpan("aaa bbb ccc"));
+
+  TextLayoutParams params = MakeTextParams(20.0);  // inlineSizePx defaults to 0 (no wrapping).
+  const auto runs = engine.layout(text, params);
+
+  EXPECT_THAT(DistinctBaselines(runs), SizeIs(1));
+}
+
+TEST(TextEngineTest, InlineSizeWrapsIntoStackedLines) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+
+  components::ComputedTextComponent text;
+  text.spans.push_back(MakeSpan("aaa bbb ccc"));
+
+  TextLayoutParams params = MakeTextParams(20.0);
+  params.inlineSizePx = 45.0;  // Each 3-glyph word (~32px) fits alone; two words do not.
+  const auto runs = engine.layout(text, params);
+
+  // Three words → three stacked baselines spaced by the 20px line-height.
+  const auto baselines = DistinctBaselines(runs);
+  ASSERT_THAT(baselines, SizeIs(3));
+  EXPECT_EQ(baselines[1] - baselines[0], 20);
+  EXPECT_EQ(baselines[2] - baselines[1], 20);
+}
+
+TEST(TextEngineTest, InlineSizeLargeMeasureDoesNotWrap) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+
+  components::ComputedTextComponent text;
+  text.spans.push_back(MakeSpan("aaa bbb ccc"));
+
+  TextLayoutParams params = MakeTextParams(20.0);
+  params.inlineSizePx = 1000.0;  // Everything fits on one line.
+  const auto runs = engine.layout(text, params);
+
+  EXPECT_THAT(DistinctBaselines(runs), SizeIs(1));
+}
+
 }  // namespace donner::svg

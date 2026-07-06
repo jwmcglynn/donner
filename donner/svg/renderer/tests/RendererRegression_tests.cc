@@ -38,6 +38,15 @@ TEST_F(RendererRegressionTests, TextDecorationUnderlineRenders) {
   renderAndCompare(document, svg, golden, GoldenParams());
 }
 
+TEST_F(RendererRegressionTests, InlineSizeAutoFlowWrapsText) {
+  // SVG2 inline-size: text greedily wraps to the 150px measure into stacked lines.
+  const char* svg = "donner/svg/renderer/testdata/text_inline_size_wrap.svg";
+  const char* golden = "donner/svg/renderer/testdata/golden/text_inline_size_wrap.png";
+
+  SVGDocument document = loadSVG(svg, ResvgResourceRoot());
+  renderAndCompare(document, svg, golden, GoldenParams());
+}
+
 TEST_F(RendererRegressionTests, PatternFillOnTextDoesNotLeakToNextShape) {
   const char* svg = "donner/svg/renderer/testdata/geode_text_pattern_fill.svg";
   const char* golden = "donner/svg/renderer/testdata/golden/geode_text_pattern_fill.png";
@@ -86,6 +95,39 @@ TEST_F(RendererRegressionTests, FeImageFragmentRedrawIsIdempotent) {
   ASSERT_FALSE(first.empty());
   ASSERT_FALSE(second.empty());
   ExpectBitmapsIdentical(second, first, "feimage_fragment_redraw");
+}
+
+// vector-effect: non-scaling-stroke keeps the stroke a constant device width under a scaled
+// viewBox and an additional transform. The golden captures the correct rendering: thin (2px) blue
+// non-scaling strokes next to thick (8px / 16px) red strokes that scale with the transform.
+TEST_F(RendererRegressionTests, VectorEffectNonScalingStrokeIsConstantWidth) {
+  const char* svg = "donner/svg/renderer/testdata/vector_effect_non_scaling_stroke.svg";
+  const char* golden = "donner/svg/renderer/testdata/golden/vector_effect_non_scaling_stroke.png";
+
+  SVGDocument document = loadSVG(svg, ResvgResourceRoot());
+  renderAndCompare(document, svg, golden, GoldenParams());
+}
+
+// Self-validating guard against a silent no-op: the same document with and without the
+// vector-effect attribute must render differently. If non-scaling-stroke were ignored, the two
+// renders would be identical.
+TEST_F(RendererRegressionTests, VectorEffectNonScalingStrokeChangesOutput) {
+  const char* nonScalingSvg = "donner/svg/renderer/testdata/vector_effect_non_scaling_stroke.svg";
+  const char* controlSvg = "donner/svg/renderer/testdata/vector_effect_scaling_stroke_control.svg";
+
+  SVGDocument nonScalingDoc = loadSVG(nonScalingSvg, ResvgResourceRoot());
+  SVGDocument controlDoc = loadSVG(controlSvg, ResvgResourceRoot());
+
+  const RendererBitmap nonScaling =
+      RenderDocumentWithBackend(nonScalingDoc, RendererBackend::TinySkia);
+  const RendererBitmap control = RenderDocumentWithBackend(controlDoc, RendererBackend::TinySkia);
+
+  ASSERT_FALSE(nonScaling.empty());
+  ASSERT_FALSE(control.empty());
+  ASSERT_EQ(nonScaling.dimensions, control.dimensions);
+  ASSERT_EQ(nonScaling.pixels.size(), control.pixels.size());
+  EXPECT_NE(nonScaling.pixels, control.pixels)
+      << "vector-effect: non-scaling-stroke had no effect on the rendered output";
 }
 
 }  // namespace

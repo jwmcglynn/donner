@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="280" height="100" viewBox="0 0 70 25">
+    <!-- vector-effect: non-scaling-stroke conformance golden.
+
+         The viewBox scales user units by 4x (280/70). Each pair of boxes has the
+         same authored stroke-width="2", so a normal stroke renders at 8px in device
+         space while a non-scaling-stroke renders at a constant 2px regardless of the
+         viewBox scale or any additional transform. The blue (non-scaling) boxes stay
+         thin; the red (normal) boxes grow with the transform. -->
+
+    <!-- A: normal stroke under the 4x viewBox -> 8px device stroke. -->
+    <rect x="2" y="2" width="8" height="8" fill="none" stroke="#cc0000" stroke-width="2"/>
+
+    <!-- B: non-scaling-stroke under the 4x viewBox -> constant 2px device stroke. -->
+    <rect x="16" y="2" width="8" height="8" fill="none" stroke="#0066cc" stroke-width="2"
+          vector-effect="non-scaling-stroke"/>
+
+    <!-- C: non-scaling-stroke under an ADDITIONAL scale(2) transform (8x total) ->
+         still a constant 2px device stroke. -->
+    <g transform="translate(30 2) scale(2)">
+        <rect x="0" y="0" width="4" height="4" fill="none" stroke="#0066cc" stroke-width="2"
+              vector-effect="non-scaling-stroke"/>
+    </g>
+
+    <!-- D: normal stroke under the same scale(2) transform (8x total) -> 16px device
+         stroke, the thickest box, showing the un-corrected scaling behavior. -->
+    <g transform="translate(46 2) scale(2)">
+        <rect x="0" y="0" width="4" height="4" fill="none" stroke="#cc0000" stroke-width="2"/>
+    </g>
+</svg>

@@ -27,6 +27,16 @@ build --enable_platform_specific_config
 ## Build config
 ##
 
+# rules_python has deprecated implicitly creating empty __init__.py files in
+# the runfiles tree for py_binary/py_library/py_test targets (on by default
+# today, will flip in a future release). Opt in to the future default
+# repo-wide now: every py_binary/py_library/py_test in this repo (the
+# generated per-target _lint checks plus tools/* and build_defs/*) builds and
+# tests clean under this flag with no explicit __init__.py additions needed,
+# since none of these targets do package-relative imports across directory
+# boundaries. See https://github.com/bazel-contrib/rules_python/issues/2945.
+common --incompatible_default_to_explicit_init_py
+
 # Force clang to be the default compiler for all Bazel C/C++ actions.
 # Propagates CC/CXX so every action (including host tools) uses clang/clang++.
 build --action_env=CC=clang
@@ -58,6 +68,12 @@ build --incompatible_enable_cc_toolchain_resolution
 # .bazelrc) cleanly skip those tests instead of failing to resolve
 # @resvg-test-suite, which lives in the dev-only non_bcr_deps extension.
 common --//donner/svg/renderer:resvg_test_suite_available=true
+
+# Same pattern for the curated embedded Google Fonts (Design 0013 W3): the
+# gfont_* http_file repos live behind a dev_dependency module extension, so
+# BCR consumers cleanly skip the font catalog targets instead of failing to
+# resolve them.
+common --//third_party/google_fonts:google_fonts_available=true
 
 # Enable the latest LLVM toolchain for Linux exec platforms. macOS exec falls
 # through to apple_support's Xcode clang so ObjC targets keep working.

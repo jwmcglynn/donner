@@ -7,9 +7,12 @@ namespace donner::svg {
 std::ostream& operator<<(std::ostream& os, ElementType type) {
   switch (type) {
     case ElementType::A: return os << "A";
+    case ElementType::Animate: return os << "Animate";
+    case ElementType::AnimateTransform: return os << "AnimateTransform";
     case ElementType::Circle: return os << "Circle";
     case ElementType::ClipPath: return os << "ClipPath";
     case ElementType::Defs: return os << "Defs";
+    case ElementType::Desc: return os << "Desc";
     case ElementType::Ellipse: return os << "Ellipse";
     case ElementType::FeBlend: return os << "FeBlend";
     case ElementType::FeColorMatrix: return os << "FeColorMatrix";
@@ -43,12 +46,14 @@ std::ostream& operator<<(std::ostream& os, ElementType type) {
     case ElementType::LinearGradient: return os << "LinearGradient";
     case ElementType::Marker: return os << "Marker";
     case ElementType::Mask: return os << "Mask";
+    case ElementType::Metadata: return os << "Metadata";
     case ElementType::Path: return os << "Path";
     case ElementType::Pattern: return os << "Pattern";
     case ElementType::Polygon: return os << "Polygon";
     case ElementType::Polyline: return os << "Polyline";
     case ElementType::RadialGradient: return os << "RadialGradient";
     case ElementType::Rect: return os << "Rect";
+    case ElementType::Set: return os << "Set";
     case ElementType::Stop: return os << "Stop";
     case ElementType::Style: return os << "Style";
     case ElementType::SVG: return os << "SVG";
@@ -56,6 +61,7 @@ std::ostream& operator<<(std::ostream& os, ElementType type) {
     case ElementType::Symbol: return os << "Symbol";
     case ElementType::Text: return os << "Text";
     case ElementType::TextPath: return os << "TextPath";
+    case ElementType::Title: return os << "Title";
     case ElementType::TSpan: return os << "TSpan";
     case ElementType::Unknown: return os << "Unknown";
     case ElementType::Use: return os << "Use";

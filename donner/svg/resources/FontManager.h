@@ -10,6 +10,7 @@
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/css/FontFace.h"
+#include "donner/svg/resources/FontCatalogTypes.h"
 
 namespace donner::svg {
 
@@ -175,6 +176,33 @@ public:
    */
   FontHandle fallbackFont();
 
+  /**
+   * Attach an external font provider (typically a \ref FontCatalog) consulted during `findFont()`
+   * for family names not satisfied by a registered `@font-face` rule, before falling back to the
+   * embedded Public Sans font.
+   *
+   * The provider is borrowed, not owned, and must outlive this FontManager. Pass nullptr to detach.
+   *
+   * Resolution order for `findFont(family)`:
+   *   1. Matching `@font-face` rule registered via `addFontFace()` (document-provided fonts win).
+   *   2. The attached provider (a `FontCatalog` tries Embedded families, then System families).
+   *   3. Embedded Public Sans fallback.
+   */
+  void setFontProvider(const FontFamilyProvider* provider) { provider_ = provider; }
+
+  /**
+   * Set the process-wide default font provider. Every FontManager constructed afterwards adopts it
+   * (existing instances are unaffected). The editor installs its \ref FontCatalog here so document
+   * render paths that create their own FontManager resolve embedded and system fonts without
+   * threading the catalog through every call site.
+   *
+   * The provider is borrowed, not owned, and must outlive all FontManagers that adopt it.
+   */
+  static void SetDefaultFontProvider(const FontFamilyProvider* provider);
+
+  /// Returns the current process-wide default font provider (may be nullptr).
+  static const FontFamilyProvider* DefaultFontProvider();
+
 private:
   struct FontFaceComponent;
   struct LoadedFontComponent;
@@ -236,6 +264,9 @@ private:
 
   /// Handle for the embedded Public Sans fallback, lazily loaded.
   FontHandle fallbackHandle_;
+
+  /// Optional external provider (embedded/system catalog), borrowed. May be nullptr.
+  const FontFamilyProvider* provider_ = nullptr;
 };
 
 }  // namespace donner::svg

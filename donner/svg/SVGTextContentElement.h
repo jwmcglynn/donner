@@ -14,6 +14,20 @@
 namespace donner::svg {
 
 /**
+ * A single placed glyph outline paired with the element that painted it.
+ *
+ * `source` is the `<text>` or `<tspan>` whose computed style (fill, stroke,
+ * opacity, paint-server reference, currentColor, ...) colors this glyph. Callers
+ * that must preserve per-span paint - such as "Convert Text to Outlines" -
+ * resolve paint from `source.getComputedStyle()` rather than from the text
+ * root's attributes alone.
+ */
+struct TextGlyphOutline {
+  Path path;          ///< Glyph outline in text-element local coordinates.
+  SVGElement source;  ///< Element (text/tspan) whose computed style paints this glyph.
+};
+
+/**
  * Base class for elements that support rendering child text content.
  *
  * This class matches the behavior of the IDL interface `SVGTextContentElement`.
@@ -37,6 +51,12 @@ protected:
    * Return glyph outlines for this text subtree, in local coordinates.
    */
   std::vector<Path> computedGlyphPaths() const;
+
+  /**
+   * Return glyph outlines with their painting source elements for this text
+   * subtree, in local coordinates. See \ref TextGlyphOutline.
+   */
+  std::vector<TextGlyphOutline> computedGlyphOutlines() const;
 
   /**
    * Return the ink bounds for this text subtree, in local coordinates.

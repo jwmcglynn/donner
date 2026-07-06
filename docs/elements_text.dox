@@ -16,4 +16,26 @@ The DOM base classes for text are
 - \subpage xml_tspan (\ref donner::svg::SVGTSpanElement "SVGTSpanElement")
 - \subpage xml_textPath (\ref donner::svg::SVGTextPathElement "SVGTextPathElement")
 
+\section text_font_resolution Font resolution and fallback
+
+A `font-family` name is resolved by \ref donner::svg::FontManager "FontManager" in this order:
+
+1. **Document `@font-face` rules** registered from the document's stylesheets (data sources,
+   WOFF/WOFF2 where enabled). The document's own fonts always win.
+2. **The attached font provider**, if one is installed via
+   `FontManager::setFontProvider()` / `FontManager::SetDefaultFontProvider()`. The Donner editor
+   installs a \ref donner::svg::FontCatalog "FontCatalog", which consults its providers in order:
+   - *Embedded*: the curated Google Fonts set baked into the build
+     (`third_party/google_fonts/fonts.bzl`).
+   - *System*: fonts installed on the host OS (CoreText enumeration on macOS; none elsewhere).
+3. **Public Sans**, the embedded last-resort fallback.
+
+Consequences for portability: a file that names a font the viewer lacks (not in the document,
+not embedded, not installed) renders in Public Sans, so text stays legible but metrics and
+appearance differ from the authoring machine. A file that names a *system* font renders
+correctly on machines that have it and falls back elsewhere; only document `@font-face` data
+and the embedded set are guaranteed to travel. Lookups are case-insensitive, and generic CSS
+families (`serif`, `sans-serif`, `monospace`, ...) resolve through
+`FontManager::setGenericFamilyMapping()` before this cascade.
+
 */

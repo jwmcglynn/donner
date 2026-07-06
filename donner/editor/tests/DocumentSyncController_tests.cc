@@ -7,6 +7,8 @@
 #include <string>
 #include <utility>
 
+#include "donner/base/MathUtils.h"
+#include "donner/base/Transform.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
@@ -287,6 +289,60 @@ TEST_F(DocumentSyncControllerTest, SourceBackedDragWritebackExtendsSelectedSourc
   EXPECT_NE(selectedText.find("transform=\"translate(10)\""), std::string::npos);
   EXPECT_TRUE(selectedText.ends_with("/>")) << selectedText;
   EXPECT_EQ(textEditor_.getCursorPosition(), textEditor_.getCoordinatesAtByteOffset(rectStart));
+}
+
+TEST_F(DocumentSyncControllerTest, ForwardWritebackPreservesAuthorSyntaxAndUndoRestoresBytes) {
+  // A forward transform edit on an authored rotate(45) must rewrite the source
+  // as rotate(60) (author form), not canonicalize to matrix(); a subsequent
+  // verbatim restore must return the exact original bytes.
+  constexpr std::string_view kSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <rect id="r1" x="0" y="0" width="10" height="10" transform="rotate(45)"/>
+       </svg>)svg";
+
+  EditorApp app;
+  TextEditor textEditor;
+  SelectTool tool;
+  DocumentSyncController controller{std::string(kSvg)};
+
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  app.setCurrentFilePath("test.svg");
+  app.setCleanSourceText(kSvg);
+  textEditor.setText(kSvg);
+  textEditor.resetTextChanged();
+
+  auto r1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(r1.has_value());
+  auto r1Target = captureAttributeWritebackTarget(*r1);
+  ASSERT_TRUE(r1Target.has_value());
+
+  // Forward edit: rotate(45) -> rotate(60), carrying the author's bytes.
+  app.enqueueTransformWriteback(EditorApp::CompletedTransformWriteback{
+      .target = *r1Target,
+      .transform = Transform2d::Rotate(60.0 * MathConstants<double>::kDegToRad),
+      .sourceTransformAttributeValue = RcString("rotate(45)"),
+  });
+  controller.applyPendingWritebacks(app, tool, textEditor);
+
+  r1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(r1.has_value());
+  EXPECT_EQ(r1->getAttribute("transform"), std::optional<RcString>(RcString("rotate(60)")));
+  EXPECT_EQ(textEditor.getText().find("matrix("), std::string::npos);
+  EXPECT_NE(textEditor.getText().find("transform=\"rotate(60)\""), std::string::npos);
+
+  // Verbatim restore (the undo path): exact original bytes come back.
+  app.enqueueTransformWriteback(EditorApp::CompletedTransformWriteback{
+      .target = *r1Target,
+      .transform = Transform2d::Rotate(45.0 * MathConstants<double>::kDegToRad),
+      .sourceTransformAttributeValue = RcString("rotate(45)"),
+      .restoreSourceTransformAttributeValue = true,
+  });
+  controller.applyPendingWritebacks(app, tool, textEditor);
+
+  r1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(r1.has_value());
+  EXPECT_EQ(r1->getAttribute("transform"), std::optional<RcString>(RcString("rotate(45)")));
+  EXPECT_NE(textEditor.getText().find("transform=\"rotate(45)\""), std::string::npos);
 }
 
 TEST_F(DocumentSyncControllerTest, AppTransformWritebacksDrainAllQueuedEntries) {
@@ -1364,9 +1420,12 @@ TEST(DocumentSyncControllerStructuredTest, MirrorSourceDeltasFallsBackWhenInsert
   textEditor.resetTextChanged();
   DocumentSyncController controller{std::string(kTwoRectSvg)};
 
-  const std::size_t closeOffset = textEditor.getText().find("</svg>");
-  ASSERT_NE(closeOffset, std::string::npos);
-  textEditor.setSelection(textEditor.getCoordinatesAtByteOffset(closeOffset - 1),
+  // The append lands on its own line right after the last child, so delete that whole tail
+  // locally (the last <rect> through </svg>). The insertion context is now gone, and the
+  // mirror must fall back to a full resync rather than patch into a stale offset.
+  const std::size_t lastRectOffset = textEditor.getText().rfind("<rect");
+  ASSERT_NE(lastRectOffset, std::string::npos);
+  textEditor.setSelection(textEditor.getCoordinatesAtByteOffset(lastRectOffset),
                           textEditor.getCoordinatesAtByteOffset(textEditor.getText().size()));
   textEditor.insertText("");
   textEditor.resetTextChanged();

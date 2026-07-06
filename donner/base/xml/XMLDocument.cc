@@ -757,6 +757,77 @@ bool SourceHasClosingTagAt(std::string_view source, std::size_t offset,
          source.substr(offset, closingTag.size()) == closingTag;
 }
 
+// How a structural mutation should format the whitespace around a newly serialized node.
+enum class InsertionFormatting {
+  // Text content: keep it inline (e.g. `<text>hello</text>`). Never introduces newlines,
+  // matching how a human authors a text run.
+  kInline,
+  // Structural child (element inserted/moved via the layer tree): lay the child out on its
+  // own indented line when the surrounding source is already spread across multiple lines,
+  // and stay compact when the author wrote it on a single line.
+  kStructural,
+};
+
+// The indentation (a run of spaces/tabs) of the line that `offset` begins on: the
+// whitespace between the newline preceding `offset` and `offset` itself. Returns nullopt
+// when `offset` is not at the start of its line (an inline / single-line context), which
+// signals that structural insertion should stay compact and synthesize no whitespace.
+std::optional<std::string_view> LineIndentBefore(std::string_view source, std::size_t offset) {
+  if (offset > source.size()) {
+    return std::nullopt;
+  }
+  std::size_t indentStart = offset;
+  while (indentStart > 0 && (source[indentStart - 1] == ' ' || source[indentStart - 1] == '\t')) {
+    --indentStart;
+  }
+  if (indentStart == 0 || source[indentStart - 1] != '\n') {
+    return std::nullopt;
+  }
+  return source.substr(indentStart, offset - indentStart);
+}
+
+// The leading indentation (run of spaces/tabs at the start of the line) of the line that
+// contains `pos`. Unlike LineIndentBefore, `pos` may sit anywhere on the line.
+std::string_view LineIndentContaining(std::string_view source, std::size_t pos) {
+  if (pos > source.size()) {
+    pos = source.size();
+  }
+  std::size_t lineStart = pos;
+  while (lineStart > 0 && source[lineStart - 1] != '\n') {
+    --lineStart;
+  }
+  std::size_t indentEnd = lineStart;
+  while (indentEnd < source.size() && (source[indentEnd] == ' ' || source[indentEnd] == '\t')) {
+    ++indentEnd;
+  }
+  return source.substr(lineStart, indentEnd - lineStart);
+}
+
+// Detect the document's indentation unit (a tab, or a run of N spaces) from the first
+// indented, non-blank line. Falls back to two spaces when there is no indentation to learn
+// from. This keeps synthesized indentation faithful to the author's chosen style (tabs vs
+// spaces, and width) instead of imposing a global default.
+std::string DetectIndentUnit(std::string_view source) {
+  const std::size_t size = source.size();
+  std::size_t i = 0;
+  while (i < size) {
+    if (source[i] != '\n') {
+      ++i;
+      continue;
+    }
+    ++i;  // Move past the newline to the start of the next line.
+    std::size_t j = i;
+    while (j < size && (source[j] == ' ' || source[j] == '\t')) {
+      ++j;
+    }
+    if (j > i && j < size && source[j] != '\n' && source[j] != '\r') {
+      return std::string(source.substr(i, j - i));
+    }
+    i = j;
+  }
+  return "  ";
+}
+
 std::optional<std::size_t> FindParentClosingTagInsertionOffset(const XMLDocument& document,
                                                                const XMLNode& parent) {
   const std::string closingTag = ClosingTagFor(parent);
@@ -806,7 +877,14 @@ void ApplyParentInsertionPlan(XMLNode& parent, const NodeInsertionPlan& plan) {
 std::optional<NodeInsertionPlan> GetNodeInsertionPlan(const XMLDocument& document,
                                                       const XMLNode& parent,
                                                       const std::optional<XMLNode>& referenceNode,
-                                                      std::string_view serializedNode) {
+                                                      std::string_view serializedNode,
+                                                      InsertionFormatting formatting) {
+  const std::string_view source = document.source();
+  const bool structural = (formatting == InsertionFormatting::kStructural);
+
+  // Scenario A: insert before an existing sibling. The whitespace already in front of the
+  // reference node becomes the new node's leading indentation; a trailing newline plus the
+  // reference node's own indentation pushes the reference node back onto its own line.
   if (referenceNode.has_value()) {
     std::optional<XMLNode> referenceParent = referenceNode->parentElement();
     if (!referenceParent.has_value() || *referenceParent != parent) {
@@ -819,17 +897,59 @@ std::optional<NodeInsertionPlan> GetNodeInsertionPlan(const XMLDocument& documen
     }
 
     const std::size_t offset = *referenceLocation->start.offset;
+    std::string suffix;
+    if (structural) {
+      if (std::optional<std::string_view> refIndent = LineIndentBefore(source, offset)) {
+        suffix.push_back('\n');
+        suffix.append(*refIndent);
+      }
+    }
     return NodeInsertionPlan{
         .replacementOffset = offset,
         .replacementLength = 0,
+        .suffix = std::move(suffix),
         .insertedNodeOffset = offset,
     };
   }
 
+  // Scenario B: append as the last child, immediately before the parent's closing tag.
   if (std::optional<std::size_t> closingTagOffset =
           FindParentClosingTagInsertionOffset(document, parent);
       closingTagOffset.has_value()) {
     const std::size_t offset = *closingTagOffset;
+
+    if (structural) {
+      // Append the child on its own line right after the last existing sibling, leaving the
+      // whitespace that already indents the closing tag untouched. This stays a pure
+      // insertion (nothing removed), which the text-mirror's echo-suppression relies on.
+      std::size_t wsStart = offset;
+      while (wsStart > 0 && IsXmlSpace(source[wsStart - 1])) {
+        --wsStart;
+      }
+      const std::string_view whitespace = source.substr(wsStart, offset - wsStart);
+      if (whitespace.find('\n') != std::string_view::npos) {
+        const std::string_view closingIndent = LineIndentContaining(source, offset);
+        std::string_view childIndent = LineIndentContaining(source, wsStart);
+        std::string childIndentStorage;
+        if (childIndent.size() <= closingIndent.size()) {
+          // No deeper existing sibling to match (an empty but multi-line parent): indent one
+          // detected unit past the closing tag.
+          childIndentStorage = std::string(closingIndent) + DetectIndentUnit(source);
+          childIndent = childIndentStorage;
+        }
+
+        std::string prefix = "\n";
+        prefix.append(childIndent);
+
+        return NodeInsertionPlan{
+            .replacementOffset = wsStart,
+            .replacementLength = 0,
+            .prefix = std::move(prefix),
+            .insertedNodeOffset = wsStart + 1 + childIndent.size(),
+        };
+      }
+    }
+
     return NodeInsertionPlan{
         .replacementOffset = offset,
         .replacementLength = 0,
@@ -837,36 +957,51 @@ std::optional<NodeInsertionPlan> GetNodeInsertionPlan(const XMLDocument& documen
     };
   }
 
+  // Scenario C: the parent is self-closing (`<g/>`); expand it into an open/close pair with
+  // the new child inside.
   std::optional<SourceRange> nodeLocation = parent.getNodeLocation();
   if (!nodeLocation.has_value() || !nodeLocation->start.offset.has_value() ||
       !nodeLocation->end.offset.has_value() || *nodeLocation->end.offset < 2 ||
-      *nodeLocation->end.offset > document.source().size()) {
+      *nodeLocation->end.offset > source.size()) {
     return std::nullopt;
   }
 
   const std::size_t selfCloseStart = *nodeLocation->end.offset - 2;
-  if (document.source().substr(selfCloseStart, 2) != "/>") {
+  if (source.substr(selfCloseStart, 2) != "/>") {
     return std::nullopt;
   }
 
   std::size_t replacementStart = selfCloseStart;
   while (replacementStart > *nodeLocation->start.offset &&
-         IsXmlSpace(document.source()[replacementStart - 1])) {
+         IsXmlSpace(source[replacementStart - 1])) {
     --replacementStart;
   }
 
   const std::string closingTag = ClosingTagFor(parent);
 
-  const std::size_t insertedOffset = replacementStart + 1;
-  const std::size_t closingTagStart = insertedOffset + serializedNode.size();
+  std::string prefix = ">";
+  std::string suffix = closingTag;
+  if (structural) {
+    if (std::optional<std::string_view> parentIndent =
+            LineIndentBefore(source, *nodeLocation->start.offset)) {
+      const std::string childIndent = std::string(*parentIndent) + DetectIndentUnit(source);
+      prefix = ">\n" + childIndent;
+      suffix = "\n" + std::string(*parentIndent) + closingTag;
+    }
+  }
+
+  const std::size_t openingTagEnd = replacementStart + 1;  // Just past the emitted '>'.
+  const std::size_t insertedOffset = replacementStart + prefix.size();
+  const std::size_t closingTagStart =
+      insertedOffset + serializedNode.size() + (suffix.size() - closingTag.size());
   return NodeInsertionPlan{
       .replacementOffset = replacementStart,
       .replacementLength = *nodeLocation->end.offset - replacementStart,
-      .prefix = ">",
-      .suffix = closingTag,
+      .prefix = std::move(prefix),
+      .suffix = std::move(suffix),
       .insertedNodeOffset = insertedOffset,
       .parentOpeningTagLocation = SourceRange{FileOffset::Offset(*nodeLocation->start.offset),
-                                              FileOffset::Offset(insertedOffset)},
+                                              FileOffset::Offset(openingTagEnd)},
       .parentClosingTagLocation =
           SourceRange{FileOffset::Offset(closingTagStart),
                       FileOffset::Offset(closingTagStart + closingTag.size())},
@@ -1939,8 +2074,23 @@ ApplySourceEditResult XMLDocument::insertNode(XMLNode parent, XMLNode node,
 
     const std::string serialized(
         source().substr(removalRange->start, removalRange->end - removalRange->start));
+
+    // Absorb the newline and indentation that put the node on its own line so moving it out
+    // does not leave an orphaned, over-indented blank line behind. The serialized bytes above
+    // are the node itself; the expanded range is only what gets deleted from the old spot.
+    SourceEditRange effectiveRemoval = *removalRange;
+    if (std::optional<std::string_view> nodeIndent = LineIndentBefore(source(), removalRange->start);
+        nodeIndent.has_value()) {
+      const std::size_t lineStart = removalRange->start - nodeIndent->size();
+      if (lineStart > 0 && source()[lineStart - 1] == '\n') {
+        effectiveRemoval.start = lineStart - 1;
+      }
+    }
+    const std::size_t effectiveRemovalLength = effectiveRemoval.end - effectiveRemoval.start;
+
     std::optional<NodeInsertionPlan> insertionPlan =
-        GetNodeInsertionPlan(*this, parent, referenceNode, serialized);
+        GetNodeInsertionPlan(*this, parent, referenceNode, serialized,
+                             InsertionFormatting::kStructural);
     if (!insertionPlan.has_value()) {
       result.diagnostic =
           MakeEditDiagnostic("Cannot move node without a source insertion point", diagnosticRange);
@@ -1985,8 +2135,8 @@ ApplySourceEditResult XMLDocument::insertNode(XMLNode parent, XMLNode node,
       const std::size_t replacementNetLength =
           replacement.size() - appliedInsertionPlan.replacementLength;
       std::optional<XMLSourceDelta> removeDelta =
-          store->replace(removalRange->start + replacementNetLength,
-                         removalRange->end - removalRange->start, std::string_view());
+          store->replace(effectiveRemoval.start + replacementNetLength, effectiveRemovalLength,
+                         std::string_view());
       if (!removeDelta.has_value()) {
         result.diagnostic =
             MakeEditDiagnostic("Invalid source removal for node move", diagnosticRange);
@@ -1994,8 +2144,8 @@ ApplySourceEditResult XMLDocument::insertNode(XMLNode parent, XMLNode node,
       }
       result.sourceDeltas.push_back(*removeDelta);
     } else {
-      std::optional<XMLSourceDelta> removeDelta = store->replace(
-          removalRange->start, removalRange->end - removalRange->start, std::string_view());
+      std::optional<XMLSourceDelta> removeDelta =
+          store->replace(effectiveRemoval.start, effectiveRemovalLength, std::string_view());
       if (!removeDelta.has_value()) {
         result.diagnostic =
             MakeEditDiagnostic("Invalid source removal for node move", diagnosticRange);
@@ -2003,8 +2153,7 @@ ApplySourceEditResult XMLDocument::insertNode(XMLNode parent, XMLNode node,
       }
       result.sourceDeltas.push_back(*removeDelta);
 
-      const std::size_t removalLength = removalRange->end - removalRange->start;
-      if (!ShiftPlanLeft(appliedInsertionPlan, removalLength)) {
+      if (!ShiftPlanLeft(appliedInsertionPlan, effectiveRemovalLength)) {
         result.diagnostic =
             MakeEditDiagnostic("Invalid source insertion plan for node move", diagnosticRange);
         return result;
@@ -2048,7 +2197,8 @@ ApplySourceEditResult XMLDocument::insertNode(XMLNode parent, XMLNode node,
 
   const std::string serialized(std::string_view(node.serializeToString(0, false)));
   std::optional<NodeInsertionPlan> insertionPlan =
-      GetNodeInsertionPlan(*this, parent, referenceNode, serialized);
+      GetNodeInsertionPlan(*this, parent, referenceNode, serialized,
+                           InsertionFormatting::kStructural);
   if (!insertionPlan.has_value()) {
     result.diagnostic =
         MakeEditDiagnostic("Cannot insert node without a source insertion point", diagnosticRange);
@@ -2235,8 +2385,10 @@ ApplySourceEditResult XMLDocument::setElementText(XMLNode element, std::string_v
     return result;
   }
 
-  std::optional<NodeInsertionPlan> plan =
-      GetNodeInsertionPlan(*this, element, std::nullopt, std::string_view(*escaped));
+  // Text content stays inline (`<text>hello</text>`) regardless of the surrounding layout;
+  // that is how a human authors a text run, so no block indentation is synthesized here.
+  std::optional<NodeInsertionPlan> plan = GetNodeInsertionPlan(
+      *this, element, std::nullopt, std::string_view(*escaped), InsertionFormatting::kInline);
   if (!plan.has_value()) {
     result.diagnostic = MakeEditDiagnostic(
         "Cannot set text on a node without a source insertion point", diagnosticRange);

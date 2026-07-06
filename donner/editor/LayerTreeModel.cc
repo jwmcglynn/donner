@@ -172,6 +172,21 @@ std::string BuildDisplayName(const svg::SVGElement& element) {
 }
 
 bool IsVisible(const svg::SVGElement& element) {
+  // `EditorApp::setElementVisible` (the Layers panel eye toggle) reads and
+  // writes the element's own `display` presentation attribute directly - not
+  // the cascaded computed style. Check that same local override first so the
+  // eye state agrees with what the toggle actually controls: an element the
+  // user just hid (or showed) reads correctly even if a stylesheet rule with
+  // higher specificity would otherwise win the cascade and make computed
+  // style disagree with the attribute. Only when there is no local `display`
+  // override does this fall back to computed style (which also covers
+  // `visibility`), so an element hidden purely via a stylesheet rule - no
+  // local `display` attribute at all - still shows a closed eye.
+  if (const std::optional<RcString> localDisplay = element.getAttribute("display");
+      localDisplay.has_value()) {
+    return *localDisplay != "none";
+  }
+
   const svg::PropertyRegistry& style = element.getComputedStyle();
   if (const auto display = style.display.get();
       display.has_value() && *display == svg::Display::None) {

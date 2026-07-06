@@ -23,6 +23,44 @@ std::vector<uint8_t> readFile(const std::string& path) {
                               std::istreambuf_iterator<char>());
 }
 
+/// A FontFamilyProvider that serves a fixed set of family names (Public Sans bytes for all) and
+/// counts calls, so tests can prove exactly when the provider is consulted.
+class FakeFontProvider : public FontFamilyProvider {
+public:
+  explicit FakeFontProvider(std::vector<std::string> families) : families_(std::move(families)) {}
+
+  std::vector<FontFamilyInfo> families() const override {
+    std::vector<FontFamilyInfo> out;
+    for (const std::string& name : families_) {
+      out.push_back(FontFamilyInfo{name, FontSource::Embedded, FontCategory::SansSerif});
+    }
+    return out;
+  }
+
+  bool hasFamily(std::string_view family) const override {
+    for (const std::string& name : families_) {
+      if (name == family) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  std::vector<uint8_t> loadFamilyData(std::string_view family) const override {
+    ++loadCalls;
+    if (!hasFamily(family)) {
+      return {};
+    }
+    return std::vector<uint8_t>(embedded::kPublicSansMediumOtf.begin(),
+                                embedded::kPublicSansMediumOtf.end());
+  }
+
+  mutable int loadCalls = 0;
+
+private:
+  std::vector<std::string> families_;
+};
+
 }  // namespace
 
 TEST(FontManagerTest, FallbackFontLoads) {
@@ -190,6 +228,75 @@ TEST(FontManagerTest, AllowsAttachingAndRemovingCustomCacheComponents) {
 
   EXPECT_EQ(registry.remove<TestCacheComponent>(handle.entity()), 1u);
   EXPECT_EQ(registry.try_get<TestCacheComponent>(handle.entity()), nullptr);
+}
+
+TEST(FontManagerTest, ProviderResolvesFamilyMissingFromFontFaces) {
+  Registry registry;
+  FontManager mgr(registry);
+
+  FakeFontProvider provider({"ProviderFamily"});
+  mgr.setFontProvider(&provider);
+
+  const FontHandle handle = mgr.findFont("ProviderFamily");
+  ASSERT_TRUE(static_cast<bool>(handle));
+  // Resolved through the provider, not the Public Sans fallback entity.
+  EXPECT_NE(handle, mgr.fallbackFont());
+  EXPECT_EQ(provider.loadCalls, 1);
+  EXPECT_FALSE(mgr.fontData(handle).empty());
+}
+
+TEST(FontManagerTest, FontFaceTakesPrecedenceOverProvider) {
+  Registry registry;
+  FontManager mgr(registry);
+
+  // Both a document @font-face and the provider claim "Shared".
+  css::FontFace face;
+  face.familyName = RcString("Shared");
+  css::FontFaceSource source;
+  source.kind = css::FontFaceSource::Kind::Data;
+  source.payload = std::make_shared<const std::vector<uint8_t>>(
+      embedded::kPublicSansMediumOtf.begin(), embedded::kPublicSansMediumOtf.end());
+  face.sources.push_back(std::move(source));
+  mgr.addFontFace(face);
+
+  FakeFontProvider provider({"Shared"});
+  mgr.setFontProvider(&provider);
+
+  const FontHandle handle = mgr.findFont("Shared");
+  ASSERT_TRUE(static_cast<bool>(handle));
+  EXPECT_NE(handle, mgr.fallbackFont());
+  // The @font-face satisfied the lookup, so the provider was never consulted.
+  EXPECT_EQ(provider.loadCalls, 0);
+}
+
+TEST(FontManagerTest, FallsBackToPublicSansWhenProviderLacksFamily) {
+  Registry registry;
+  FontManager mgr(registry);
+
+  FakeFontProvider provider({"ProviderFamily"});
+  mgr.setFontProvider(&provider);
+
+  const FontHandle handle = mgr.findFont("SomethingElse");
+  EXPECT_TRUE(static_cast<bool>(handle));
+  EXPECT_EQ(handle, mgr.fallbackFont());
+  EXPECT_EQ(provider.loadCalls, 0);
+}
+
+TEST(FontManagerTest, DefaultProviderAdoptedByNewInstances) {
+  FakeFontProvider provider({"ProviderFamily"});
+  FontManager::SetDefaultFontProvider(&provider);
+
+  {
+    Registry registry;
+    FontManager mgr(registry);
+    const FontHandle handle = mgr.findFont("ProviderFamily");
+    EXPECT_TRUE(static_cast<bool>(handle));
+    EXPECT_NE(handle, mgr.fallbackFont());
+  }
+
+  // Reset so the global does not leak into other tests.
+  FontManager::SetDefaultFontProvider(nullptr);
+  EXPECT_EQ(FontManager::DefaultFontProvider(), nullptr);
 }
 
 #ifdef DONNER_TEXT_WOFF2_ENABLED

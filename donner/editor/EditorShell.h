@@ -32,10 +32,12 @@
 #include "donner/editor/SidebarPresenter.h"
 #include "donner/editor/StyleSourceAnnotations.h"
 #include "donner/editor/TextEditor.h"
+#include "donner/editor/TextFormatBarPresenter.h"
 #include "donner/editor/TextInspectorPanel.h"
 #include "donner/editor/TextTool.h"
 #include "donner/editor/ViewportInteractionController.h"
 #include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/resources/FontCatalog.h"
 
 namespace donner::editor::gui {
 class EditorWindow;
@@ -231,6 +233,10 @@ public:
 
   [[nodiscard]] bool valid() const { return valid_; }
   void runFrame();
+
+  /// Font catalog (embedded Google Fonts + macOS system fonts) backing document font resolution
+  /// and the font picker (Design 0013 W2 consumes this).
+  [[nodiscard]] svg::FontCatalog& fontCatalog() { return fontCatalog_; }
   /// Return the next idle-loop wake interval needed for throttled UI work.
   [[nodiscard]] std::optional<float> nextIdleWakeSeconds() const;
 
@@ -326,6 +332,16 @@ private:
   bool synchronizeSourceBeforeSave(std::string* error);
   void updateWindowTitle();
   void applyMenuActions(const MenuBarActions& menuActions);
+  /// Build the contextual text-formatting bar's state for this frame: whether
+  /// it is visible (single `<text>` selected or an active editing session), the
+  /// current family/size/B/I/U values read from that element, and the embedded
+  /// font faces offered in the family picker.
+  [[nodiscard]] FormatBarState computeFormatBarState();
+  /// Route the format bar's actions to the existing styling commands: B/I/U
+  /// through the `TextTool` toggles while an editing session is active,
+  /// otherwise (and always for family/size) through the selection attribute
+  /// writes.
+  void applyFormatBarActions(const FormatBarState& state, const FormatBarActions& actions);
   void handleGlobalShortcuts();
   /// True when the document has at least one selectable element (the canonical marquee/Select-All
   /// set). Gates whether Cmd+A / the Edit menu's "Select All" act on the canvas.
@@ -478,8 +494,12 @@ private:
   bool penDragFlushedThisFrame_ = false;
   EditorInputBridge inputBridge_;
   MenuBarPresenter menuBarPresenter_;
+  TextFormatBarPresenter textFormatBarPresenter_;
   SidebarPresenter sidebarPresenter_;
   TextInspectorPanel textInspectorPanel_;
+  /// Embedded + system font catalog, installed as the FontManager default provider so document
+  /// text resolves font-family names against embedded and system fonts.
+  svg::FontCatalog fontCatalog_;
   LayersPanel layersPanel_;
   /// Element hovered in the Layers panel as of the last frame, fed into the
   /// source-hover preview so the canvas and source pane highlight the element
