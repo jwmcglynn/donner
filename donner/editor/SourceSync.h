@@ -4,6 +4,7 @@
 /// Helpers for keeping the source pane, command queue, and DOM parse state
 /// in sync when editor-owned code writes bytes back into the text buffer.
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -13,6 +14,15 @@
 #include "donner/editor/SourceEditIntent.h"
 
 namespace donner::editor {
+
+/// Number of times the structural-fingerprint fallback in
+/// `TryApplyStructuredSourceChange` (SourceSync.cc) has fired in this process: an incremental
+/// structured apply produced a DOM whose fingerprint disagreed with a fresh parse of the same
+/// source, so the editor fell back to a full-document reparse. That fallback is O(document)
+/// (a full reparse plus walking both trees), so this counter - together with the
+/// `[SourceSync] fingerprint fallback #N` log line emitted alongside each increment - makes the
+/// fallback rate observable instead of silent.
+[[nodiscard]] std::uint64_t FingerprintFallbackCountForTesting();
 
 /// Outcome from dispatching a source-pane text change.
 struct DispatchSourceTextChangeResult {

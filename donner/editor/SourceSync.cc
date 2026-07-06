@@ -1,6 +1,10 @@
 #include "donner/editor/SourceSync.h"
 
 #include <algorithm>
+#include <atomic>
+#include <cinttypes>
+#include <cstdint>
+#include <cstdio>
 #include <optional>
 #include <string>
 #include <utility>
@@ -16,6 +20,14 @@
 namespace donner::editor {
 
 namespace {
+
+/// Count of full-document reparse fallbacks triggered by the structural-fingerprint mismatch
+/// check in \ref TryApplyStructuredSourceChange (see that function for why the fallback exists).
+/// Atomic defensively - this file's callers are expected to run on the editor's main thread, but
+/// nothing here enforces that. Exposed read-only via \ref FingerprintFallbackCountForTesting so
+/// the fallback rate is observable (this path is O(document): it reparses the whole source and
+/// walks both resulting trees, so how often it fires in practice matters).
+std::atomic<std::uint64_t> g_fingerprintFallbackCount{0};
 
 struct SourceTextEdit {
   std::size_t offset = 0;
@@ -255,12 +267,24 @@ bool TryApplyStructuredSourceChange(EditorApp& app, std::string_view previousSou
   // intentionally mid-error and the editor keeps the last-good DOM. Otherwise
   // compare a structural fingerprint of the live DOM against a fresh parse of the
   // new source; on mismatch the DOM desynced, so fall back to a full reparse.
+  //
+  // That fallback is O(document): it reparses the entire new source and walks
+  // both the live and freshly-parsed trees to build their fingerprints, on
+  // every incremental apply this check runs for (not just the ones that end up
+  // desynced). `g_fingerprintFallbackCount` and the log line below make how
+  // often it actually fires observable rather than silent.
   if (!result.hadDiagnostic) {
     ParseWarningSink warningSink;
     ParseResult<svg::SVGDocument> freshParse =
         svg::parser::SVGParser::ParseSVG(newSource, warningSink);
     if (freshParse.hasResult() && StructuralFingerprint(app.document().document().svgElement()) !=
                                       StructuralFingerprint(freshParse.result().svgElement())) {
+      const std::uint64_t fallbackCount =
+          g_fingerprintFallbackCount.fetch_add(1, std::memory_order_relaxed) + 1;
+      std::fprintf(stderr,
+                   "[SourceSync] fingerprint fallback #%" PRIu64 ": incremental apply desynced "
+                   "from a fresh parse, falling back to a full-document reparse\n",
+                   fallbackCount);
       app.applyMutation(EditorCommand::ReplaceDocumentCommand(std::string(newSource)));
     }
   }
@@ -269,6 +293,10 @@ bool TryApplyStructuredSourceChange(EditorApp& app, std::string_view previousSou
 }
 
 }  // namespace
+
+std::uint64_t FingerprintFallbackCountForTesting() {
+  return g_fingerprintFallbackCount.load(std::memory_order_relaxed);
+}
 
 void QueueSourceWritebackReparse(EditorApp& app, std::string_view newSource,
                                  std::string* previousSourceText,
