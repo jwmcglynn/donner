@@ -349,6 +349,46 @@ TEST(LayerTreeModelTest, VisibilityFlagsReflectDisplayAndVisibilityProperties) {
   EXPECT_TRUE(visible->isVisible);
 }
 
+// The Layers panel eye toggle (`EditorApp::setElementVisible`) reads and
+// writes the `display` presentation attribute directly, not the cascaded
+// computed style. This covers both ends of that pairing:
+//  - An element hidden purely via a stylesheet rule (no local `display`
+//    attribute at all) still shows a closed eye through the computed-style
+//    fallback.
+//  - After the eye toggles Show (writing a local `display="inline"`
+//    override), the eye reflects that local override rather than lagging
+//    behind whatever the stylesheet rule would otherwise compute.
+TEST(LayerTreeModelTest, EyeStateMatchesToggleForCssHiddenElement) {
+  constexpr std::string_view kCssHiddenSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+  <style>.cssHidden { display: none; }</style>
+  <rect id="target" class="cssHidden" x="0" y="0" width="10" height="10"/>
+</svg>)";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kCssHiddenSvg));
+
+  LayerTreeModel model;
+  model.refresh(app);
+
+  const LayerTreeRow* target = FindRow(model, "target");
+  ASSERT_NE(target, nullptr);
+  EXPECT_FALSE(target->isVisible)
+      << "element hidden purely via a stylesheet rule should still read as hidden";
+
+  auto element = app.document().document().querySelector("#target");
+  ASSERT_TRUE(element.has_value());
+  app.setElementVisible(*element, /*visible=*/true);
+  ASSERT_TRUE(app.flushFrame());
+
+  model.refresh(app);
+  target = FindRow(model, "target");
+  ASSERT_NE(target, nullptr);
+  EXPECT_TRUE(target->isVisible)
+      << "eye state must match what the toggle just wrote (a local display override), not "
+         "whatever the stylesheet rule would otherwise compute";
+}
+
 TEST(LayerTreeModelTest, LockedRowsReflectAncestorLockState) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kLockedRowsSvg));
