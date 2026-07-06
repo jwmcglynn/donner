@@ -1,0 +1,70 @@
+name: Debug 778 CMake Segfault
+
+# Temporary debugging workflow for PR #778's linux (tiny_skia) cmake consumer
+# segfault. Runs the same build as cmake.yml's linux job, then reruns the
+# consumer under gdb and with ASan/UBSan to capture a backtrace.
+# DELETE THIS FILE AND ITS BRANCH once the crash is diagnosed.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  gdb-backtrace:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build gdb
+
+      - name: Build with CMake (tiny_skia, debug info)
+        run: |
+          python3 tools/cmake/gen_cmakelists.py
+          cmake -S examples/cmake_consumer -B build -G Ninja \
+            -DDONNER_SOURCE_DIR="${PWD}" \
+            -DDONNER_RENDERER_BACKEND=tiny_skia \
+            -DCMAKE_CXX_FLAGS="-g"
+          cmake --build build --target donner_cmake_consumer --parallel
+
+      - name: Run under gdb
+        run: |
+          cd build
+          set +e
+          ./donner_cmake_consumer
+          echo "direct exit: $?"
+          gdb -batch -ex run -ex bt -ex 'info registers' -ex 'x/2i $pc' \
+            ./donner_cmake_consumer
+          exit 0
+
+  asan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+
+      - name: Build with CMake (tiny_skia, asan+ubsan)
+        run: |
+          python3 tools/cmake/gen_cmakelists.py
+          cmake -S examples/cmake_consumer -B build-asan -G Ninja \
+            -DDONNER_SOURCE_DIR="${PWD}" \
+            -DDONNER_RENDERER_BACKEND=tiny_skia \
+            -DCMAKE_CXX_FLAGS="-g -fsanitize=address,undefined -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+          cmake --build build-asan --target donner_cmake_consumer --parallel
+
+      - name: Run under sanitizers
+        run: |
+          cd build-asan
+          set +e
+          UBSAN_OPTIONS=print_stacktrace=1 ASAN_OPTIONS=abort_on_error=0 \
+            ./donner_cmake_consumer
+          echo "sanitizer exit: $?"
+          exit 0
