@@ -715,7 +715,15 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   ImGui::CreateContext();
   ImGuiIO& io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-  io.IniFilename = nullptr;  // no persistent layout file on disk
+  // Enable native ImGui docking (the vendored imgui is the docking branch). The
+  // editor's panel layout is a locked DockSpace. Multi-viewport (OS-window
+  // tear-off) intentionally stays OFF - we never set ImGuiConfigFlags_ViewportsEnable.
+  io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+  // Persist the dock layout to a scoped .ini path when one was provided (the
+  // desktop app), otherwise keep ImGui settings in-memory only so tests and
+  // replay stay hermetic. `options_` outlives the context, so the c_str()
+  // pointer stays valid for ImGui's lifetime.
+  io.IniFilename = options_.imguiIniPath.empty() ? nullptr : options_.imguiIniPath.c_str();
 
   int logicalWindowWidth = 0;
   int logicalWindowHeight = 0;

@@ -705,7 +705,15 @@ public:
 
   static void RenderRenderPane(EditorShell& shell, const Vector2d& renderPaneOrigin,
                                const Vector2d& renderPaneSize, ImGuiWindowFlags paneFlags) {
-    shell.renderRenderPane(renderPaneOrigin, renderPaneSize, paneFlags);
+    // The render pane now docks itself; outside a DockSpace it Begins as a
+    // floating "Render" window, so position it explicitly for the test frame.
+    ImGui::SetNextWindowPos(ImVec2(static_cast<float>(renderPaneOrigin.x),
+                                   static_cast<float>(renderPaneOrigin.y)),
+                            ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(static_cast<float>(renderPaneSize.x),
+                                    static_cast<float>(renderPaneSize.y)),
+                             ImGuiCond_Always);
+    shell.renderRenderPane(paneFlags | ImGuiWindowFlags_NoSavedSettings);
   }
 
   static void RenderFillStrokeToolbarWidget(EditorShell& shell) {
@@ -721,17 +729,6 @@ public:
                                        float paneHeight, float sourcePaneWidth) {
     shell.renderSourcePaneSplitter(windowWidth, paneOriginY, paneHeight, sourcePaneWidth);
   }
-
-  static void RenderRightPaneSplitter(EditorShell& shell, float windowWidth, float paneOriginY,
-                                      float paneHeight) {
-    shell.renderRightPaneSplitter(windowWidth, paneOriginY, paneHeight);
-  }
-
-  static void RenderDockedLayerPanelDragHandle(EditorShell& shell) {
-    shell.renderDockedLayerPanelDragHandle();
-  }
-
-  static void RenderFloatingLayerPanel(EditorShell& shell) { shell.renderFloatingLayerPanel(); }
 
   static void RenderLayerPanelContents(EditorShell& shell) { shell.renderLayerPanelContents(); }
 
@@ -845,32 +842,18 @@ public:
     return shell.perfOverlayMode_;
   }
 
-  static void SetLayerPanelDetached(EditorShell& shell, bool value) {
-    shell.layerPanelDetached_ = value;
+  static void SetDockLayoutLocked(EditorShell& shell, bool value) {
+    shell.dockLayoutLocked_ = value;
   }
 
-  static void SetLayerPanelDetachDragActive(EditorShell& shell, bool value) {
-    shell.layerPanelDetachDragActive_ = value;
+  static bool DockLayoutLocked(const EditorShell& shell) { return shell.dockLayoutLocked_; }
+
+  static void RequestDockLayoutReset(EditorShell& shell) {
+    shell.dockLayoutResetRequested_ = true;
   }
 
-  static void SetLayerPanelFloatingNeedsPlacement(EditorShell& shell, bool value) {
-    shell.layerPanelFloatingNeedsPlacement_ = value;
-  }
-
-  static void SetLayerPanelFloatingGeometry(EditorShell& shell, const ImVec2& pos,
-                                            const ImVec2& size) {
-    shell.layerPanelFloatingPos_ = pos;
-    shell.layerPanelFloatingSize_ = size;
-  }
-
-  static bool LayerPanelDetached(const EditorShell& shell) { return shell.layerPanelDetached_; }
-
-  static bool LayerPanelDetachDragActive(const EditorShell& shell) {
-    return shell.layerPanelDetachDragActive_;
-  }
-
-  static bool LayerPanelFloatingNeedsPlacement(const EditorShell& shell) {
-    return shell.layerPanelFloatingNeedsPlacement_;
+  static bool DockLayoutResetRequested(const EditorShell& shell) {
+    return shell.dockLayoutResetRequested_;
   }
 
   static bool SourcePaneVisible(const EditorShell& shell) { return shell.sourcePaneVisible_; }
@@ -1085,39 +1068,6 @@ void RenderContextMenuFrame(gui::EditorWindow& window, EditorShell& shell) {
   window.endFrame();
 }
 
-Box2d RenderDockedLayerPanelDragHandleFrame(gui::EditorWindow& window, EditorShell& shell,
-                                            const ImVec2& mouse, bool mouseDown) {
-  ImGuiIO& io = ImGui::GetIO();
-  io.DisplaySize = ImVec2(640.0f, 480.0f);
-  io.AddMousePosEvent(mouse.x, mouse.y);
-  io.AddMouseButtonEvent(0, mouseDown);
-
-  window.beginFrame();
-  constexpr ImGuiWindowFlags kHostFlags =
-      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings;
-  ImGui::SetNextWindowPos(ImVec2(80.0f, 60.0f), ImGuiCond_Always);
-  ImGui::SetNextWindowSize(ImVec2(260.0f, 100.0f), ImGuiCond_Always);
-  ImGui::Begin("EditorShellDockedLayerPanelDragHost", nullptr, kHostFlags);
-  EditorShellTestAccess::RenderDockedLayerPanelDragHandle(shell);
-  const ImVec2 itemMin = ImGui::GetItemRectMin();
-  const ImVec2 itemMax = ImGui::GetItemRectMax();
-  ImGui::End();
-  window.endFrame();
-  return Box2d(Vector2d(itemMin.x, itemMin.y), Vector2d(itemMax.x, itemMax.y));
-}
-
-void RenderFloatingLayerPanelFrame(gui::EditorWindow& window, EditorShell& shell,
-                                   const ImVec2& mouse, bool mouseDown) {
-  ImGuiIO& io = ImGui::GetIO();
-  io.DisplaySize = ImVec2(640.0f, 480.0f);
-  io.AddMousePosEvent(mouse.x, mouse.y);
-  io.AddMouseButtonEvent(0, mouseDown);
-
-  window.beginFrame();
-  EditorShellTestAccess::RenderFloatingLayerPanel(shell);
-  window.endFrame();
-}
-
 Box2d RenderSourcePaneSplitterFrame(gui::EditorWindow& window, EditorShell& shell,
                                     float sourcePaneWidth, const ImVec2& mouse, bool mouseDown,
                                     float windowWidth = 640.0f) {
@@ -1231,21 +1181,27 @@ TEST(EditorShellTest, FullFrameSmokeCoversPanelSourceAndContextMenuStates) {
   EditorShellTestAccess::App(shell).setSelection(*target);
   RunFramesUntilDisplayedSelectionBounds(window, shell);
 
+  // Showing the Compositor Debug panel rebuilds the DockSpace layout to add its
+  // node; a full frame exercises the docked-panel path.
   EditorShellTestAccess::SetShowCompositorDebugPanel(shell, true);
-  EditorShellTestAccess::SetLayerPanelDetached(shell, false);
   window.beginFrame();
   shell.runFrame();
   window.endFrame();
   EXPECT_TRUE(shell.valid());
 
-  EditorShellTestAccess::SetLayerPanelDetached(shell, true);
-  EditorShellTestAccess::SetLayerPanelFloatingNeedsPlacement(shell, true);
-  EditorShellTestAccess::SetLayerPanelFloatingGeometry(shell, ImVec2(80.0f, 60.0f),
-                                                       ImVec2(260.0f, 220.0f));
+  // Unlocking the layout and requesting a reset both flow through runFrame's
+  // DockSpace host; the reset request is consumed within the frame.
+  EditorShellTestAccess::SetDockLayoutLocked(shell, false);
   window.beginFrame();
   shell.runFrame();
   window.endFrame();
-  EXPECT_TRUE(EditorShellTestAccess::LayerPanelDetached(shell));
+  EXPECT_FALSE(EditorShellTestAccess::DockLayoutLocked(shell));
+
+  EditorShellTestAccess::RequestDockLayoutReset(shell);
+  window.beginFrame();
+  shell.runFrame();
+  window.endFrame();
+  EXPECT_FALSE(EditorShellTestAccess::DockLayoutResetRequested(shell));
 
   EditorShellTestAccess::SetSourcePaneVisible(shell, false);
   window.beginFrame();
@@ -2329,8 +2285,6 @@ TEST(EditorShellTest, PrivateUiRenderHelpersCoverPaneToolbarAndPanelStates) {
   EditorShellTestAccess::RenderSourcePaneSplitter(shell, /*windowWidth=*/640.0f,
                                                   /*paneOriginY=*/0.0f, /*paneHeight=*/220.0f,
                                                   /*sourcePaneWidth=*/260.0f);
-  EditorShellTestAccess::RenderRightPaneSplitter(shell, /*windowWidth=*/640.0f,
-                                                 /*paneOriginY=*/0.0f, /*paneHeight=*/220.0f);
   window.endFrame();
 
   EditorShellTestAccess::SetSourcePaneVisible(shell, false);
@@ -2351,48 +2305,10 @@ TEST(EditorShellTest, PrivateUiRenderHelpersCoverPaneToolbarAndPanelStates) {
   EditorShellTestAccess::RenderSourcePaneSplitter(shell, /*windowWidth=*/640.0f,
                                                   /*paneOriginY=*/0.0f, /*paneHeight=*/220.0f,
                                                   /*sourcePaneWidth=*/0.0f);
-  EditorShellTestAccess::RenderRightPaneSplitter(shell, /*windowWidth=*/640.0f,
-                                                 /*paneOriginY=*/0.0f, /*paneHeight=*/220.0f);
   window.endFrame();
 
   EXPECT_TRUE(shell.valid());
   EXPECT_TRUE(invalidShell.valid());
-}
-
-TEST(EditorShellTest, CompositorDebugPanelDragHandleDetachesAndMovesFloatingPanel) {
-  gui::EditorWindow window = MakeHiddenWindow();
-  if (!window.valid()) {
-    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
-  }
-
-  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
-  ASSERT_TRUE(shell.valid());
-  EditorShellTestAccess::SetShowCompositorDebugPanel(shell, true);
-
-  const Box2d handleRect =
-      RenderDockedLayerPanelDragHandleFrame(window, shell, ImVec2(-100.0f, -100.0f),
-                                            /*mouseDown=*/false);
-  const ImVec2 handleCenter(
-      static_cast<float>((handleRect.topLeft.x + handleRect.bottomRight.x) * 0.5),
-      static_cast<float>((handleRect.topLeft.y + handleRect.bottomRight.y) * 0.5));
-  RenderDockedLayerPanelDragHandleFrame(window, shell, handleCenter, /*mouseDown=*/true);
-  RenderDockedLayerPanelDragHandleFrame(window, shell,
-                                        ImVec2(handleCenter.x + 30.0f, handleCenter.y + 25.0f),
-                                        /*mouseDown=*/true);
-
-  EXPECT_TRUE(EditorShellTestAccess::LayerPanelDetached(shell));
-  EXPECT_TRUE(EditorShellTestAccess::LayerPanelDetachDragActive(shell));
-  EXPECT_TRUE(EditorShellTestAccess::LayerPanelFloatingNeedsPlacement(shell));
-
-  RenderFloatingLayerPanelFrame(window, shell, ImVec2(150.0f, 125.0f), /*mouseDown=*/true);
-
-  EXPECT_TRUE(EditorShellTestAccess::LayerPanelDetached(shell));
-  EXPECT_FALSE(EditorShellTestAccess::LayerPanelFloatingNeedsPlacement(shell));
-
-  RenderFloatingLayerPanelFrame(window, shell, ImVec2(150.0f, 125.0f), /*mouseDown=*/false);
-
-  EXPECT_TRUE(EditorShellTestAccess::LayerPanelDetached(shell));
-  EXPECT_FALSE(EditorShellTestAccess::LayerPanelDetachDragActive(shell));
 }
 
 TEST(EditorShellTest, SourcePaneSplitterDragCollapsesPane) {

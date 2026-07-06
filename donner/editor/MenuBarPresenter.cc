@@ -63,6 +63,8 @@ void ApplyMenuBarCommand(bool activated, MenuBarCommand command, const MenuBarSt
       actions->setPerfOverlayMode = true;
       actions->perfOverlayMode = PerfOverlayMode::FullGraph;
       return;
+    case MenuBarCommand::ToggleLayoutLock: actions->toggleLayoutLock = true; return;
+    case MenuBarCommand::ResetLayout: actions->resetLayout = true; return;
   }
 }
 
@@ -171,6 +173,11 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
     ApplyMenuBarCommand(
         ImGui::MenuItem("Compositor Debug", nullptr, state.showCompositorDebugPanel),
         MenuBarCommand::ToggleCompositorDebugPanel, state, &actions);
+    ImGui::Separator();
+    ApplyMenuBarCommand(ImGui::MenuItem("Lock Panel Layout", nullptr, state.panelLayoutLocked),
+                        MenuBarCommand::ToggleLayoutLock, state, &actions);
+    ApplyMenuBarCommand(ImGui::MenuItem("Reset Layout"), MenuBarCommand::ResetLayout, state,
+                        &actions);
     if (ImGui::BeginMenu("Performance Overlay")) {
       ApplyMenuBarCommand(
           ImGui::MenuItem("Off", nullptr, state.perfOverlayMode == PerfOverlayMode::Off),

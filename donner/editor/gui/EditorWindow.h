@@ -82,6 +82,12 @@ struct EditorWindowOptions {
   /// Enable framebuffer CPU readback from \ref endFrameAndReadPixels. Intended for replay tests;
   /// disabled by default so production WGPU editor frames cannot read back by accident.
   bool enableFramebufferReadback = false;
+  /// Absolute path to the ImGui settings (.ini) file used to persist the dock
+  /// layout and window state across sessions. Empty (the default) keeps ImGui
+  /// settings in-memory only, so tests and replay stay hermetic; the desktop app
+  /// sets a scoped per-user path. A missing or corrupt file falls back to the
+  /// editor's default locked layout.
+  std::string imguiIniPath;
 };
 
 /// Host-frame timing captured by `EditorWindow`.
