@@ -7,14 +7,14 @@ namespace donner::svg {
 
 DonnerController::DonnerController(SVGDocument document) : document_(std::move(document)) {}
 
-std::optional<SVGGeometryElement> DonnerController::findIntersecting(const Vector2d& point) {
+std::optional<SVGGraphicsElement> DonnerController::findIntersecting(const Vector2d& point) {
   DocumentWriteAccess access = document_.writeAccess();
   Registry& registry = access.registry();
   Entity entity = components::RenderingContext(registry).findIntersecting(point);
   if (entity != entt::null) {
     SVGElement element(EntityHandle(registry, entity));
-    UTILS_RELEASE_ASSERT(element.isa<SVGGeometryElement>());
-    return element.cast<SVGGeometryElement>();
+    UTILS_RELEASE_ASSERT(element.isa<SVGGraphicsElement>());
+    return element.cast<SVGGraphicsElement>();
   }
 
   return std::nullopt;

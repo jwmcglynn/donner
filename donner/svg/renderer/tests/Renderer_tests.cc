@@ -478,7 +478,7 @@ TEST_F(RendererTests, Z0rlyTest6_MusicNotation) {
 }
 
 // Builds a document whose root `<rect>` applies a chain of `<feImage>` fragment
-// references `chainLength` links long: `filter0`→`rect0`→`filter1`→`rect1`→…,
+// references `chainLength` links long: `filter0`→`rect0`→`filter1`→`rect1`→...,
 // each rect (except the terminal one) carrying the *next* filter so the renderer
 // must recurse one fragment pre-render per link. Every link is a *distinct*
 // element, so the existing visited-set recursion guard - which keys on the

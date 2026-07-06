@@ -22,6 +22,15 @@ donner_cc_library(
 )
 
 donner_cc_test(
+    name = "canvas_scrollbars_tests",
+    srcs = ["CanvasScrollbars_tests.cc"],
+    deps = [
+        "//donner/editor:canvas_scrollbars",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "drag_coalesce_tests",
     srcs = ["DragCoalesce_tests.cc"],
     deps = [

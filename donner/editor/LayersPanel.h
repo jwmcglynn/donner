@@ -194,7 +194,7 @@ public:
 
   /// Rename the element at @p rowIndex to @p newId via the shared
   /// `EditorApp::renameSelectedElement` path - a DOM-level id change that also
-  /// repoints `url(#…)` / `href` references and `<style>` selectors. The row's
+  /// repoints `url(#...)` / `href` references and `<style>` selectors. The row's
   /// element is selected first (renaming the thing you double-clicked), then the
   /// engine runs. Factored out so the inline-edit affordance is unit-testable
   /// without an ImGui frame.

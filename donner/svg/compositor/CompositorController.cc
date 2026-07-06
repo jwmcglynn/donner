@@ -1133,14 +1133,15 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
       // (the whole filtered result, for a filter group) are transformed as a
       // live quad in lockstep with the overlay. Re-rendering a filter every
       // rotate/scale frame is exactly the per-frame cost that made filtered
-      // elements glitchy (#6/#7). For a pure-translation delta the apply phase
-      // additionally propagates the offset to descendant RICs cheaply; a
-      // non-translation delta skips that propagation (the descendant RICs
-      // re-sync on settle), and any independently-promoted descendant layer in
-      // the subtree gets its own affine compose offset via the descendant loop
-      // below. The bitmap is a soft preview during the gesture and re-rasterizes
-      // crisp once the drag settles. Pinned by
-      // `FilterGroupRotationDragReusesCachedBitmapForLockstep`.
+      // elements glitchy (#6/#7). The apply phase propagates the world-space
+      // delta (translation OR affine) to descendant RICs so a later forced
+      // re-rasterize draws the subtree at its current positions, and any
+      // independently-promoted descendant layer in the subtree gets its own
+      // affine compose offset via the descendant loop below. The bitmap is a
+      // soft preview during the gesture and re-rasterizes crisp once the drag
+      // settles. Pinned by
+      // `FilterGroupRotationDragReusesCachedBitmapForLockstep` and
+      // `GroupScaleDragSettleRerasterUsesCurrentChildTransforms`.
 
       resolutions.push_back(FastPathResolution{
           .entity = entity,
@@ -1252,19 +1253,21 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
         // the drag in lockstep with the overlay - no async-worker round trip.
         //
         // This applies to BOTH a pure-translation delta (the bitmap slides,
-        // pixel-exact) AND a single-entity affine delta (rotate/scale - the
-        // bitmap is transformed as a quad, a soft resample during the gesture
-        // that re-rasterizes crisp once the drag settles / the entity leaves
+        // pixel-exact) AND an affine delta (rotate/scale - the bitmap is
+        // transformed as a quad, a soft resample during the gesture that
+        // re-rasterizes crisp once the drag settles / the entity leaves
         // ActiveDrag). Re-rasterizing the affine delta every frame instead
         // baked the rotation with `canvasFromBitmap ~= identity`, dropping the
         // shape off the live-tracking path so it lagged the overlay (#6/#7).
-        // Subtree layers with a non-translation delta never reach here - they
-        // were disqualified in `appendLayerResolution` - so the only
-        // non-translation case here is a single entity with no descendants to
-        // keep consistent.
         res.layer->setCanvasFromBitmap(res.bitmapEntityFromEntity);
-        if (res.isSubtree && res.bitmapEntityFromEntity.isTranslation()) {
-          propagateFastPathTranslationToSubtree(registry, res.entity, worldFromPreviousWorld);
+        if (res.isSubtree) {
+          // Keep descendant RICs current for ANY delta shape. The dirty
+          // flags are cleared below, so nothing re-syncs them before the
+          // settle re-raster draws the layer's entity range from the RICs -
+          // a translation-only propagation left scale/rotate gestures baking
+          // the pre-gesture child positions into the settled bitmap (the
+          // "first resize of a group pops back" editor bug).
+          propagateFastPathDeltaToSubtree(registry, res.entity, worldFromPreviousWorld);
         }
       }
       // Clear the dirty flags ourselves since we skipped prepare. Tell
@@ -2230,7 +2233,7 @@ std::pair<Entity, Entity> CompositorController::computeEntityRange(Registry& reg
   return {entity, lastPainting != entt::null ? lastPainting : entity};
 }
 
-void CompositorController::propagateFastPathTranslationToSubtree(
+void CompositorController::propagateFastPathDeltaToSubtree(
     Registry& registry, Entity root, const Transform2d& worldFromPreviousWorld) {
   using TreeComponent = donner::components::TreeComponent;
   std::vector<Entity> stack;
@@ -2246,10 +2249,11 @@ void CompositorController::propagateFastPathTranslationToSubtree(
 
     if (auto* instance = registry.try_get<components::RenderingInstanceComponent>(descendant)) {
       // `worldFromEntity` maps entity-local points to world space. Since
-      // only the root's local transform changed - by a pure world-space
-      // translation - every descendant's world transform pre-multiplies
-      // by that same delta (root-from-descendant is unchanged, world-
-      // from-root shifts by delta, so world-from-descendant shifts too).
+      // only the root's local transform changed - by a world-space delta
+      // (translation or affine) - every descendant's world transform
+      // pre-multiplies by that same delta (root-from-descendant is
+      // unchanged, world-from-root changes by the delta, so
+      // world-from-descendant changes by it too).
       instance->worldFromEntityTransform =
           worldFromPreviousWorld * instance->worldFromEntityTransform;
       // Invalidate the cached absolute-transform so any later

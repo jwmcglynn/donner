@@ -48,6 +48,7 @@
 #include "donner/editor/repro/ReproFile.h"
 #include "donner/editor/repro/ReproRecorder.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/SVGTSpanElement.h"
 #include "donner/svg/SVGTextElement.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/properties/PaintServer.h"
@@ -827,10 +828,19 @@ void EditorShell::applyReplayActionForTesting(const repro::ReproAction& action) 
         if (penTool_.commitOpenPath(app_)) {
           flushQueuedMutationAndRefreshOverlay();
         }
+        if (textTool_.commit(app_)) {
+          refreshAfterToolDrivenFlush();
+        }
         activeTool_ = ActiveTool::Select;
       } else if (action.tool == "pen") {
+        if (textTool_.commit(app_)) {
+          refreshAfterToolDrivenFlush();
+        }
         activeTool_ = ActiveTool::Pen;
       } else if (action.tool == "text") {
+        if (penTool_.commitOpenPath(app_)) {
+          flushQueuedMutationAndRefreshOverlay();
+        }
         activeTool_ = ActiveTool::Text;
       }
       break;
@@ -869,6 +879,13 @@ std::optional<std::string> EditorShell::selectedElementLabelForReadback() const 
   return ElementContextMenuLabel(*selected);
 }
 
+std::optional<std::string> EditorShell::documentSourceForReadback() const {
+  if (!app_.hasDocument() || !app_.document().document().hasSourceStore()) {
+    return std::nullopt;
+  }
+  return std::string(app_.document().document().source());
+}
+
 LayerInspectorStatusReadback EditorShell::layerInspectorStatusForReadback() const {
   const auto& viewport = interactionController_.viewport();
   const Vector2i viewportDesiredCanvas = viewport.desiredCanvasSize();
@@ -905,6 +922,10 @@ LayerInspectorStatusReadback EditorShell::layerInspectorStatusForReadback() cons
       .pendingSelectedLayerRasterizationVersion =
           renderCoordinator_.pendingSelectedLayerRasterizationVersionForDiagnostics(),
       .presentationResources = textures_.presentationResourceStats(),
+      .presentationCoverage = textures_.coverageDiagnostics(),
+      .overviewTileCount = textures_.overviewTiles().size(),
+      .renderPaneScrollY = renderPaneScrollYForDiagnostics_,
+      .renderPaneScrollMaxY = renderPaneScrollMaxYForDiagnostics_,
       .frameCost = frameCost,
   };
   const std::optional<SelectTool::ActiveDragPreview> liveActiveDragPreview =
@@ -942,6 +963,19 @@ LayerInspectorStatusReadback EditorShell::layerInspectorStatusForReadback() cons
       if (const std::optional<RcString> pathData = selected->getAttribute("d");
           pathData.has_value()) {
         readback.selectedPathDataAttribute = std::string(std::string_view(*pathData));
+      }
+      if (selected->type() == svg::ElementType::Text) {
+        // Concatenate direct text plus per-line <tspan> children so multi-line
+        // sessions read back as one string. Already inside withReadAccess, so
+        // read the children directly.
+        std::string textContent(selected->cast<svg::SVGTextElement>().textContent());
+        for (std::optional<svg::SVGElement> child = selected->firstChild(); child.has_value();
+             child = child->nextSibling()) {
+          if (child->type() == svg::ElementType::TSpan) {
+            textContent += std::string(child->cast<svg::SVGTSpanElement>().textContent());
+          }
+        }
+        readback.selectedTextContent = textContent;
       }
     });
   }
@@ -1042,7 +1076,6 @@ void EditorShell::applyPendingDocumentSpaceReplayInputForTesting() {
       flushQueuedMutationAndRefreshOverlay();
     } else if (activeTool_ == ActiveTool::Text) {
       textTool_.onMouseDown(app_, input.documentPoint, input.modifiers);
-      activeTool_ = ActiveTool::Select;
       flushQueuedMutationAndRefreshOverlay();
     } else {
       selectTool_.onMouseDown(app_, input.documentPoint, input.modifiers);
@@ -1053,6 +1086,15 @@ void EditorShell::applyPendingDocumentSpaceReplayInputForTesting() {
     if (app_.document().hasPendingMutations() && flushQueuedMutationAndRefreshOverlay()) {
       penDragFlushedThisFrame_ = true;
     }
+  } else if (input.leftMouseDown && activeTool_ == ActiveTool::Text &&
+             (textTool_.isDraggingBox() || textTool_.isAdjustingFrame())) {
+    const bool adjustingFrame = textTool_.isAdjustingFrame();
+    textTool_.onMouseMove(app_, input.documentPoint, /*buttonHeld=*/true);
+    if (adjustingFrame) {
+      // Frame gestures mutate the DOM each move; keep the selection chrome
+      // (frame rect + handles) tracking the live frame.
+      refreshAfterToolDrivenFlush();
+    }
   } else if (input.leftMouseDown && (selectTool_.isDragging() || selectTool_.isMarqueeing())) {
     selectTool_.onMouseMove(app_, input.documentPoint, /*buttonHeld=*/true, input.modifiers);
     if (!renderCoordinator_.asyncRenderer().isBusy()) {
@@ -1062,6 +1104,12 @@ void EditorShell::applyPendingDocumentSpaceReplayInputForTesting() {
   }
 
   if (input.leftMouseReleased) {
+    if (activeTool_ == ActiveTool::Text &&
+        (textTool_.isDraggingBox() || textTool_.isAdjustingFrame())) {
+      textTool_.onMouseUp(app_, input.documentPoint);
+      refreshAfterToolDrivenFlush();
+      return;
+    }
     if (activeTool_ == ActiveTool::Pen) {
       penTool_.onMouseUp(app_, input.documentPoint);
       lastPostedScreenPoint_.reset();
@@ -1098,6 +1146,20 @@ void EditorShell::applyPendingDocumentSpaceReplayInputForTesting() {
         penTool_.wouldCloseAt(input.documentPoint, input.modifiers)
             ? std::make_optional(penTool_.draftStartPoint())
             : std::nullopt);
+  }
+
+  // Text-editing chrome for document-space input, mirroring the live-pointer
+  // update in renderRenderPane.
+  if (activeTool_ == ActiveTool::Text && textTool_.isDraggingBox()) {
+    renderCoordinator_.setTextEditingChrome(std::nullopt, textTool_.dragBoxDoc());
+  } else if (activeTool_ == ActiveTool::Text && textTool_.isEditing()) {
+    if (const auto textChrome = textTool_.editingChrome(app_); textChrome.has_value()) {
+      renderCoordinator_.setTextEditingChrome(
+          SelectionChromeSnapshot::TextCaret{textChrome->caretTopDoc, textChrome->caretBottomDoc},
+          textChrome->boxDoc);
+    }
+  } else if (activeTool_ == ActiveTool::Text) {
+    renderCoordinator_.setTextEditingChrome(std::nullopt, std::nullopt);
   }
 }
 
@@ -1522,6 +1584,17 @@ void EditorShell::handleGlobalShortcuts() {
                             ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, /*repeat=*/false);
   const bool sourcePaneFocused = sourcePaneVisible_ && textEditor_.isFocused();
 
+  // An in-canvas text editing session captures the keyboard: typing, caret
+  // movement, style toggles, and Escape all act on the session, and no
+  // global shortcut may fire underneath it (Backspace would otherwise
+  // delete the text element being edited). An active ImGui text widget
+  // (e.g. the inspector's font fields) keeps its own keyboard focus.
+  if (activeTool_ == ActiveTool::Text && textTool_.isEditing() && !anyPopupOpen &&
+      !sourcePaneFocused && !ImGui::GetIO().WantTextInput) {
+    handleTextEditingKeyboard();
+    return;
+  }
+
   if (!anyPopupOpen && cmd && !shift && ImGui::IsKeyPressed(ImGuiKey_O, /*repeat=*/false)) {
     dialogPresenter_.requestOpenFile(app_.currentFilePath());
   }
@@ -1594,12 +1667,17 @@ void EditorShell::handleGlobalShortcuts() {
     // command instead of discarding it.
     penTool_.commitOpenPath(app_);
     flushQueuedMutationAndRefreshOverlay();
+    if (textTool_.commit(app_)) {
+      refreshAfterToolDrivenFlush();
+    }
     activeTool_ = ActiveTool::Select;
-    textTool_.cancel();
   }
 
   if (!sourcePaneFocused && !anyPopupOpen && !cmd &&
       ImGui::IsKeyPressed(ImGuiKey_P, /*repeat=*/false)) {
+    if (textTool_.commit(app_)) {
+      refreshAfterToolDrivenFlush();
+    }
     activeTool_ = ActiveTool::Pen;
   }
 
@@ -1614,6 +1692,9 @@ void EditorShell::handleGlobalShortcuts() {
 
   if (!sourcePaneFocused && !anyPopupOpen && !cmd &&
       ImGui::IsKeyPressed(ImGuiKey_T, /*repeat=*/false)) {
+    if (penTool_.commitOpenPath(app_)) {
+      flushQueuedMutationAndRefreshOverlay();
+    }
     activeTool_ = ActiveTool::Text;
   }
 
@@ -1633,7 +1714,11 @@ void EditorShell::handleGlobalShortcuts() {
 
   if (!anyPopupOpen && ImGui::IsKeyPressed(ImGuiKey_Escape, /*repeat=*/false) &&
       activeTool_ == ActiveTool::Text) {
-    textTool_.cancel();
+    // Escape commits the in-canvas text session (an empty session deletes the
+    // element) and returns to Select.
+    if (textTool_.commit(app_)) {
+      refreshAfterToolDrivenFlush();
+    }
     activeTool_ = ActiveTool::Select;
     return;
   }
@@ -2132,12 +2217,13 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
       ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.14f, 0.35f, 0.78f, 1.0f));
     }
     if (ImGui::Button(label, ImVec2(kToolPaletteButtonSize, kToolPaletteButtonSize))) {
-      if (tool == ActiveTool::Select) {
-        // Leaving the Pen tool commits any in-progress path as one undoable
-        // command rather than dropping it.
-        if (penTool_.commitOpenPath(app_)) {
-          flushQueuedMutationAndRefreshOverlay();
-        }
+      // Leaving a tool commits its in-progress session as one undoable
+      // command rather than dropping it.
+      if (tool != ActiveTool::Pen && penTool_.commitOpenPath(app_)) {
+        flushQueuedMutationAndRefreshOverlay();
+      }
+      if (tool != ActiveTool::Text && textTool_.commit(app_)) {
+        refreshAfterToolDrivenFlush();
       }
       activeTool_ = tool;
     }
@@ -2195,6 +2281,8 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       ImGuiCond_Always);
   ImGui::Begin("Render", nullptr, paneFlags);
 
+  renderPaneScrollYForDiagnostics_ = ImGui::GetScrollY();
+  renderPaneScrollMaxYForDiagnostics_ = ImGui::GetScrollMaxY();
   const ImVec2 contentRegion = ImGui::GetContentRegionAvail();
   const ImVec2 paneOriginImGui = ImGui::GetCursorScreenPos();
   interactionController_.updatePaneLayout(
@@ -2303,7 +2391,11 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     openRenderPaneContextMenu(screenToDocument(ImGui::GetMousePos()));
   }
 
-  const bool toolEligible = canvasHovered && !interactionController_.panning() && !spaceHeld;
+  const ImVec2 hoverMousePos = ImGui::GetMousePos();
+  const bool overCanvasScrollbar = CanvasScrollbarsContain(
+      interactionController_.viewport(), Vector2d(hoverMousePos.x, hoverMousePos.y));
+  const bool toolEligible =
+      canvasHovered && !interactionController_.panning() && !spaceHeld && !overCanvasScrollbar;
   const bool selectToolActive = activeTool_ == ActiveTool::Select;
   const bool penToolActive = activeTool_ == ActiveTool::Pen;
   const bool textToolActive = activeTool_ == ActiveTool::Text;
@@ -2345,6 +2437,32 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       rotateCursorSet_.clearIfActive();
       SetImGuiOsCursorManagementEnabled(true);
     }
+  } else if (textToolActive && !rotateCursorLocked && toolEligible) {
+    // Text-tool cursor feedback: resize/rotate cursors over the session
+    // frame's handles (held through an active frame gesture), and the
+    // I-beam everywhere else on the canvas.
+    SelectionTransformHandleIntent textFrameIntent;
+    if (textTool_.isAdjustingFrame()) {
+      textFrameIntent.kind = textTool_.isRotatingFrame() ? SelectionTransformHandleKind::Rotate
+                                                         : SelectionTransformHandleKind::Resize;
+      textFrameIntent.corner = textTool_.frameCorner();
+    } else if (textTool_.isEditing() && !ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+               !renderCoordinator_.asyncRenderer().isBusy()) {
+      textFrameIntent = textTool_.frameHandleIntentAt(
+          screenToDocument(ImGui::GetMousePos()),
+          interactionController_.viewport().pixelsPerDocUnit(),
+          /*includeRotate=*/!ImGui::GetIO().KeyShift);
+    }
+    if (textFrameIntent.kind == SelectionTransformHandleKind::Rotate &&
+        rotateCursorSet_.setRotateCursor(textFrameIntent.corner)) {
+      SetImGuiOsCursorManagementEnabled(false);
+    } else {
+      rotateCursorSet_.clearIfActive();
+      SetImGuiOsCursorManagementEnabled(true);
+      ImGui::SetMouseCursor(textFrameIntent.kind != SelectionTransformHandleKind::None
+                                ? CursorForTransformHandleIntent(textFrameIntent)
+                                : ImGuiMouseCursor_TextInput);
+    }
   } else if (!rotateCursorLocked && !toolEligible && !showPanCursor) {
     rotateCursorSet_.clearIfActive();
     SetImGuiOsCursorManagementEnabled(true);
@@ -2362,6 +2480,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     modifiers.shift = ImGui::GetIO().KeyShift;
     modifiers.option = ImGui::GetIO().KeyAlt;
     modifiers.command = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
+    modifiers.doubleClick = ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
     modifiers.pixelsPerDocUnit = interactionController_.viewport().pixelsPerDocUnit();
     interactionController_.bufferPendingClick(screenToDocument(ImGui::GetMousePos()), modifiers);
     pendingSelectClickStartSeconds_ = ImGui::GetTime();
@@ -2484,11 +2603,15 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
               }
               queuedMutationForNextFrame = true;
             } else if (textToolActive) {
-              // Text placement is a single click: insert the new `<text>` and
-              // switch back to the Select tool so it can be moved and edited.
               textTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
-              activeTool_ = ActiveTool::Select;
-              queuedMutationForNextFrame = true;
+              if (!leftMouseDown) {
+                // Click already released: finish the gesture (double-click opens
+                // a point-text session; a plain click on empty canvas is a
+                // no-op). The tool flushes internally, so refresh the
+                // presentation directly instead of through the queued-flush helper.
+                textTool_.onMouseUp(app_, pendingClick.documentPoint);
+                refreshAfterToolDrivenFlush();
+              }
             }
             if (queuedMutationForNextFrame) {
               flushQueuedMutationAndRefreshOverlay();
@@ -2591,6 +2714,26 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     pendingSelectClickStartSeconds_.reset();
   }
 
+  // Text-tool live pointer path: the pending-click buffer delivers the
+  // mousedown (starting the box drag or a frame handle gesture), but the
+  // drag extension and the release come from the live ImGui pointer, exactly
+  // like the pen tool's anchor drag below.
+  if (textToolActive && (textTool_.isDraggingBox() || textTool_.isAdjustingFrame())) {
+    if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && !spaceHeld) {
+      const bool adjustingFrame = textTool_.isAdjustingFrame();
+      textTool_.onMouseMove(app_, screenToDocument(ImGui::GetMousePos()), /*buttonHeld=*/true);
+      if (adjustingFrame) {
+        // Frame gestures mutate the DOM each move; keep the selection chrome
+        // (frame rect + handles) tracking the live frame.
+        refreshAfterToolDrivenFlush();
+      }
+    }
+    if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+      textTool_.onMouseUp(app_, screenToDocument(ImGui::GetMousePos()));
+      refreshAfterToolDrivenFlush();
+    }
+  }
+
   if (penToolActive && penTool_.isDraggingAnchor()) {
     if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && !spaceHeld) {
       MouseModifiers dragModifiers;
@@ -2627,6 +2770,20 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
                                              : std::nullopt);
   } else {
     renderCoordinator_.setPenHoverChrome(std::nullopt, std::nullopt);
+  }
+
+  // Text-editing chrome: caret + box frame while a session is active, or the
+  // live rectangle while a text box is being dragged out.
+  if (textToolActive && textTool_.isDraggingBox()) {
+    renderCoordinator_.setTextEditingChrome(std::nullopt, textTool_.dragBoxDoc());
+  } else if (textToolActive && textTool_.isEditing()) {
+    if (const auto textChrome = textTool_.editingChrome(app_); textChrome.has_value()) {
+      renderCoordinator_.setTextEditingChrome(
+          SelectionChromeSnapshot::TextCaret{textChrome->caretTopDoc, textChrome->caretBottomDoc},
+          textChrome->boxDoc);
+    }
+  } else {
+    renderCoordinator_.setTextEditingChrome(std::nullopt, std::nullopt);
   }
 
   applyPendingDocumentSpaceReplayInputForTesting();
@@ -2786,10 +2943,79 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     renderSelectionSizeChip(hoverTransformIntent, representedGesturePreview);
     renderReferenceHighlightChip();
     renderToolPalette(paneOriginImGui, contentRegion);
+    renderCanvasScrollbars();
     renderRenderPaneContextMenu();
   }
 
   ImGui::End();
+}
+
+void EditorShell::renderCanvasScrollbars() {
+  const ViewportState& viewport = interactionController_.viewport();
+  const CanvasScrollbars bars = ComputeCanvasScrollbars(viewport);
+  if (!bars.horizontal.visible && !bars.vertical.visible) {
+    return;
+  }
+
+  const float kRailThickness = static_cast<float>(kCanvasScrollbarRailPx);
+  constexpr float kThumbPadding = 2.0f;
+  constexpr float kThumbRounding = 3.0f;
+  const ImU32 kRailColor = IM_COL32(28, 28, 32, 150);
+  const ImU32 kThumbColor = IM_COL32(112, 116, 126, 200);
+  const ImU32 kThumbActiveColor = IM_COL32(156, 160, 170, 230);
+  ImDrawList* drawList = ImGui::GetWindowDrawList();
+  const Vector2d paneOrigin = viewport.paneOrigin;
+  const Vector2d paneSize = viewport.paneSize;
+
+  // Scrollbars represent the DOCUMENT extent relative to the viewport and
+  // pan the canvas when dragged - they never window-scroll the pane (which
+  // would move the overlay chrome instead of the document).
+  if (bars.horizontal.visible) {
+    const float railTop = static_cast<float>(paneOrigin.y + paneSize.y) - kRailThickness;
+    ImGui::SetCursorScreenPos(ImVec2(static_cast<float>(bars.horizontal.thumbStart), railTop));
+    ImGui::InvisibleButton("##canvas_scroll_h",
+                           ImVec2(static_cast<float>(bars.horizontal.thumbLength), kRailThickness));
+    const bool active = ImGui::IsItemActive();
+    if (active && ImGui::GetIO().MouseDelta.x != 0.0f) {
+      interactionController_.viewport().panBy(Vector2d(
+          -static_cast<double>(ImGui::GetIO().MouseDelta.x) * bars.horizontal.contentPerThumbPx,
+          0.0));
+      requestRenderAtEndOfFrame_ = true;
+    }
+    drawList->AddRectFilled(
+        ImVec2(static_cast<float>(bars.horizontal.railStart), railTop),
+        ImVec2(static_cast<float>(bars.horizontal.railStart + bars.horizontal.railLength),
+               railTop + kRailThickness),
+        kRailColor);
+    drawList->AddRectFilled(
+        ImVec2(static_cast<float>(bars.horizontal.thumbStart), railTop + kThumbPadding),
+        ImVec2(static_cast<float>(bars.horizontal.thumbStart + bars.horizontal.thumbLength),
+               railTop + kRailThickness - kThumbPadding),
+        active ? kThumbActiveColor : kThumbColor, kThumbRounding);
+  }
+  if (bars.vertical.visible) {
+    const float railLeft = static_cast<float>(paneOrigin.x + paneSize.x) - kRailThickness;
+    ImGui::SetCursorScreenPos(ImVec2(railLeft, static_cast<float>(bars.vertical.thumbStart)));
+    ImGui::InvisibleButton("##canvas_scroll_v",
+                           ImVec2(kRailThickness, static_cast<float>(bars.vertical.thumbLength)));
+    const bool active = ImGui::IsItemActive();
+    if (active && ImGui::GetIO().MouseDelta.y != 0.0f) {
+      interactionController_.viewport().panBy(Vector2d(
+          0.0,
+          -static_cast<double>(ImGui::GetIO().MouseDelta.y) * bars.vertical.contentPerThumbPx));
+      requestRenderAtEndOfFrame_ = true;
+    }
+    drawList->AddRectFilled(
+        ImVec2(railLeft, static_cast<float>(bars.vertical.railStart)),
+        ImVec2(railLeft + kRailThickness,
+               static_cast<float>(bars.vertical.railStart + bars.vertical.railLength)),
+        kRailColor);
+    drawList->AddRectFilled(
+        ImVec2(railLeft + kThumbPadding, static_cast<float>(bars.vertical.thumbStart)),
+        ImVec2(railLeft + kRailThickness - kThumbPadding,
+               static_cast<float>(bars.vertical.thumbStart + bars.vertical.thumbLength)),
+        active ? kThumbActiveColor : kThumbColor, kThumbRounding);
+  }
 }
 
 void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float paneOriginY,
@@ -2804,7 +3030,7 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
   // during render the worker thread may be mutating registry state the
   // snapshot walk would read. The snapshot persists across the busy window
   // so the panes keep showing their last-known content instead of flashing
-  // to "(rendering…)" placeholders.
+  // to "(rendering...)" placeholders.
   const bool rendererBusy = renderCoordinator_.asyncRenderer().isBusy();
   if (!rendererBusy) {
     sidebarPresenter_.refreshSnapshot(app_);
@@ -3539,6 +3765,99 @@ void EditorShell::updatePenLivePreviewTarget() {
   renderCoordinator_.setPenLivePreviewElement(std::move(target));
 }
 
+void EditorShell::handleTextEditingKeyboard() {
+  ImGuiIO& io = ImGui::GetIO();
+  const bool cmd = io.KeyCtrl || io.KeySuper;
+  bool edited = false;
+
+  if (ImGui::IsKeyPressed(ImGuiKey_Escape, /*repeat=*/false)) {
+    if (textTool_.commit(app_)) {
+      refreshAfterToolDrivenFlush();
+    }
+    activeTool_ = ActiveTool::Select;
+    return;
+  }
+
+  if (cmd) {
+    if (ImGui::IsKeyPressed(ImGuiKey_B, /*repeat=*/false)) {
+      textTool_.toggleBold(app_);
+      edited = true;
+    } else if (ImGui::IsKeyPressed(ImGuiKey_I, /*repeat=*/false)) {
+      textTool_.toggleItalic(app_);
+      edited = true;
+    } else if (ImGui::IsKeyPressed(ImGuiKey_U, /*repeat=*/false)) {
+      textTool_.toggleUnderline(app_);
+      edited = true;
+    }
+    // Other Cmd shortcuts are swallowed while editing.
+    if (edited) {
+      refreshAfterToolDrivenFlush();
+    }
+    return;
+  }
+
+  if (ImGui::IsKeyPressed(ImGuiKey_Enter, /*repeat=*/true) ||
+      ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, /*repeat=*/true)) {
+    textTool_.insertNewline(app_);
+    edited = true;
+  }
+  if (ImGui::IsKeyPressed(ImGuiKey_Backspace, /*repeat=*/true)) {
+    textTool_.backspace(app_);
+    edited = true;
+  }
+  if (ImGui::IsKeyPressed(ImGuiKey_Delete, /*repeat=*/true)) {
+    textTool_.deleteForward(app_);
+    edited = true;
+  }
+  if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, /*repeat=*/true)) {
+    textTool_.moveCaret(app_, TextTool::CaretMove::Left);
+  }
+  if (ImGui::IsKeyPressed(ImGuiKey_RightArrow, /*repeat=*/true)) {
+    textTool_.moveCaret(app_, TextTool::CaretMove::Right);
+  }
+  if (ImGui::IsKeyPressed(ImGuiKey_UpArrow, /*repeat=*/true)) {
+    textTool_.moveCaret(app_, TextTool::CaretMove::Up);
+  }
+  if (ImGui::IsKeyPressed(ImGuiKey_DownArrow, /*repeat=*/true)) {
+    textTool_.moveCaret(app_, TextTool::CaretMove::Down);
+  }
+  if (ImGui::IsKeyPressed(ImGuiKey_Home, /*repeat=*/false)) {
+    textTool_.moveCaret(app_, TextTool::CaretMove::LineStart);
+  }
+  if (ImGui::IsKeyPressed(ImGuiKey_End, /*repeat=*/false)) {
+    textTool_.moveCaret(app_, TextTool::CaretMove::LineEnd);
+  }
+
+  for (int i = 0; i < io.InputQueueCharacters.Size; ++i) {
+    const ImWchar character = io.InputQueueCharacters[i];
+    textTool_.insertCodepoint(app_, static_cast<char32_t>(character));
+    edited = true;
+  }
+  io.InputQueueCharacters.resize(0);
+
+  if (edited) {
+    refreshAfterToolDrivenFlush();
+  }
+}
+
+void EditorShell::refreshAfterToolDrivenFlush() {
+  // TextTool flushes internally (its wrap measurement needs the flushed DOM),
+  // so the usual flush helper's early-return would skip presentation
+  // invalidation. Re-run the post-flush refresh unconditionally.
+  app_.flushFrame();
+  renderCoordinator_.invalidatePresentationAfterDocumentFlush(app_,
+                                                              app_.document().lastFlushResult());
+  documentSyncController_.applyPendingWritebacks(app_, selectTool_, textEditor_);
+  renderCoordinator_.refreshSelectionBoundsCache(app_);
+  updatePenLivePreviewTarget();
+  renderCoordinator_.rasterizeOverlayForCurrentSelection(
+      app_, interactionController_.viewport(), selectTool_.marqueeRect(),
+      selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview(),
+      selectionChromeDetailForActiveTool());
+  requestRenderAtEndOfFrame_ = true;
+  window_.wakeEventLoop();
+}
+
 bool EditorShell::flushQueuedMutationAndRefreshOverlay() {
   if (renderCoordinator_.asyncRenderer().isBusy()) {
     window_.wakeEventLoop();
@@ -3578,7 +3897,7 @@ void EditorShell::openRenderPaneContextMenu(const Vector2d& documentPoint) {
   renderContextMenuHitElement_.reset();
 
   if (app_.hasDocument() && !renderCoordinator_.asyncRenderer().isBusy()) {
-    if (std::optional<svg::SVGGeometryElement> hit = app_.hitTest(documentPoint)) {
+    if (std::optional<svg::SVGGraphicsElement> hit = app_.hitTest(documentPoint)) {
       renderContextMenuHitElement_ = *hit;
     }
   }
@@ -3673,6 +3992,29 @@ void EditorShell::renderRenderPaneContextMenu() {
       app_.compoundPathUnbundleAvailability(unbundleTarget);
   if (ImGui::MenuItem("Unbundle Compound Path", nullptr, false, unbundleAvailability.canApply)) {
     selectionChanged = app_.unbundleCompoundPath(unbundleTarget);
+  }
+
+  // Convert Text to Outlines: acts on the right-clicked <text>, or on the
+  // current all-text selection when the menu opened over empty canvas.
+  // Reuses the same DOM-level conversion as the menu-bar action.
+  std::optional<svg::SVGElement> convertTextTarget;
+  if (renderContextMenuHitElement_.has_value()) {
+    const svg::SVGElement hitElement = *renderContextMenuHitElement_;
+    const bool hitIsText =
+        hitElement.withReadAccess([&hitElement](svg::DocumentReadAccess&, EntityHandle) {
+          return hitElement.tagName().name == svg::SVGTextElement::Tag;
+        });
+    if (hitIsText) {
+      convertTextTarget = hitElement;
+    }
+  }
+  if (ImGui::MenuItem("Convert Text to Outlines", nullptr, false,
+                      convertTextTarget.has_value() || selectionIsAllText())) {
+    if (convertTextTarget.has_value()) {
+      app_.setSelection(*convertTextTarget);
+    }
+    convertSelectedTextToOutlines();
+    selectionChanged = true;
   }
   if (referenceHighlightSummary_.totalCount() > 1) {
     if (ImGui::MenuItem("Highlight Refs", nullptr, referenceHighlightActive_)) {
@@ -4121,7 +4463,17 @@ void EditorShell::runFrame() {
     renderSourcePane(paneOriginY, paneHeight, mainPaneLayout.sourcePaneWidth, codeFont_);
   }
   markPhase(mainFrameCost.sourcePaneMs);
-  renderRenderPane(renderPaneOrigin, renderPaneSize, kPaneFlags | ImGuiWindowFlags_NoBackground);
+  // The canvas pane must never window-scroll: an ImGui scrollbar here would
+  // scroll the in-pane overlay chrome (toolbar, perf HUD) away from the
+  // canvas. Canvas scrolling is the emulated document-extent scrollbars +
+  // wheel panning instead.
+  // The canvas pane must never window-scroll: an ImGui scrollbar here would
+  // scroll the in-pane overlay chrome (toolbar, perf HUD) away from the
+  // canvas. Canvas scrolling is the emulated document-extent scrollbars +
+  // wheel panning instead.
+  renderRenderPane(renderPaneOrigin, renderPaneSize,
+                   kPaneFlags | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar |
+                       ImGuiWindowFlags_NoScrollWithMouse);
   markPhase(mainFrameCost.renderPaneMs);
   renderSidebars(rightPaneX, rightPaneWidth_, paneOriginY, rightSidebarLayout, kPaneFlags);
   if (highlightSelectionSourceIfNeeded()) {

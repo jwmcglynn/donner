@@ -15,6 +15,7 @@ kept separate from project-internal developer notes, design history, tooling, an
 \details Start here when embedding Donner or using the SVG DOM from an application.
 
 - \subpage GettingStarted
+- \subpage faq
 - \subpage SvgDomThreadingAndLifetime
 - \subpage UnsupportedSvg1Features
 */

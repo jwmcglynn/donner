@@ -44,17 +44,6 @@ Vector2d CenterOf(const Box2d& box) {
   return (box.topLeft + box.bottomRight) * 0.5;
 }
 
-Transform2d TransformDocumentAroundPoint(const Vector2d& fixedDocumentPoint,
-                                         const Transform2d& centeredDocumentFromDocument) {
-  return Transform2d::Translate(-fixedDocumentPoint) * centeredDocumentFromDocument *
-         Transform2d::Translate(fixedDocumentPoint);
-}
-
-double AngleFromCenter(const Vector2d& center, const Vector2d& point) {
-  const Vector2d delta = point - center;
-  return std::atan2(delta.y, delta.x);
-}
-
 std::optional<Transform2d> ResizeTransform(const Box2d& startBounds,
                                            SelectionTransformCorner corner,
                                            const Vector2d& documentPoint, bool preserveAspectRatio,
@@ -155,7 +144,7 @@ svg::SVGElement DeepestWrappingContainer(svg::SVGElement root) {
     }
 
     // Stop at non-`<g>` children (terminal geometry) and at `<g>`s that
-    // carry semantic attributes - a `<g id="Foo">` or `<g filter="…">`
+    // carry semantic attributes - a `<g id="Foo">` or `<g filter="...">`
     // is itself a top-level object, not a wrapper.
     const RcString tag = soleRenderChild->tagName().name;
     if (tag != RcString("g")) {
@@ -281,7 +270,7 @@ bool SelectTool::clickHitsCurrentSelection(EditorApp& editor, const Vector2d& do
     return false;
   }
 
-  const std::optional<svg::SVGGeometryElement> hit = editor.hitTest(documentPoint);
+  const std::optional<svg::SVGGraphicsElement> hit = editor.hitTest(documentPoint);
   if (!hit.has_value()) {
     return false;
   }
@@ -307,7 +296,7 @@ bool SelectTool::clickHitsCurrentSelection(EditorApp& editor, const Vector2d& do
 
 bool SelectTool::clickHitsImmediatelySelectableElement(EditorApp& editor,
                                                        const Vector2d& documentPoint) const {
-  const std::optional<svg::SVGGeometryElement> hit = editor.hitTest(documentPoint);
+  const std::optional<svg::SVGGraphicsElement> hit = editor.hitTest(documentPoint);
   return hit.has_value() && !IsLocked(*hit);
 }
 

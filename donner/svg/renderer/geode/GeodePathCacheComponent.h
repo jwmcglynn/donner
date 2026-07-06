@@ -30,7 +30,7 @@ namespace donner::geode {
 /// `ComputedPathComponent` updates or is destroyed.
 ///
 /// Lives in `donner::geode` (not `donner::svg::geode`) to match the
-/// other Geode types (`EncodedPath`, `LinearGradientParams`, …) that
+/// other Geode types (`EncodedPath`, `LinearGradientParams`, ...) that
 /// `RendererGeode.cc` references unqualified via `geode::` inside the
 /// `donner::svg` namespace.
 struct GeodePathCacheComponent {

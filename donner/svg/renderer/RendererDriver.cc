@@ -62,7 +62,7 @@ namespace {
 inline constexpr double kMinCullableExtentDevicePx = 0.25;
 
 /// Maximum nesting depth for chained `<feImage>` fragment references
-/// (filter1→rect3→filter2→rect4→…). The visited-set guard already stops a true
+/// (filter1→rect3→filter2→rect4→...). The visited-set guard already stops a true
 /// *cycle*, but an arbitrarily long *acyclic* chain would otherwise recurse once
 /// per link - each level standing up a GPU offscreen instance - and can exhaust
 /// the native stack (issue #552, segfault on macOS/Metal). Past this depth the

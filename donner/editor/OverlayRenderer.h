@@ -186,6 +186,34 @@ struct SelectionChromeSnapshot {
   /// point is highlighted (the pointer is within closing range).
   std::optional<Vector2d> penCloseAffordanceDoc;
 
+  /// Text-editing caret for the in-canvas text session: document-space
+  /// endpoints of the caret bar (top, bottom).
+  struct TextCaret {
+    Vector2d topDoc;
+    Vector2d bottomDoc;
+
+    bool operator==(const TextCaret&) const = default;
+  };
+  /// The active text-editing caret, or nullopt when no text session is open.
+  std::optional<TextCaret> textCaretDoc;
+  /// Text-box frame: the session's box-text bounds, or the live rectangle
+  /// while a text box is being dragged out.
+  std::optional<Box2d> textBoxDoc;
+
+  /// One baseline segment of a selected text run, in document space.
+  struct TextBaseline {
+    /// Baseline start (pen position of the line's first glyph).
+    Vector2d startDoc;
+    /// Baseline end (advance end of the line's last glyph).
+    Vector2d endDoc;
+
+    bool operator==(const TextBaseline&) const = default;
+  };
+  /// Baseline underlay for selected text: one document-space segment per
+  /// laid-out text line, drawn beneath the selection chrome so the span of
+  /// each line reads at a glance.
+  std::vector<TextBaseline> textBaselinesDoc;
+
   /// Per-element AABBs in document space (from
   /// `SnapshotSelectionWorldBounds`). Drawn with `canvasFromDoc`
   /// applied at compose time so they line up with the rendered

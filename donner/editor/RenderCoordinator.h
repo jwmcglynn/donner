@@ -180,6 +180,14 @@ public:
     penHoverCloseAffordanceDoc_ = closeAffordanceDoc;
   }
 
+  /// Set (or clear) the text tool's editing chrome for the next overlay
+  /// capture: the caret bar and the text-box frame, in document space.
+  void setTextEditingChrome(std::optional<SelectionChromeSnapshot::TextCaret> caretDoc,
+                            std::optional<Box2d> boxDoc) {
+    textEditingCaretDoc_ = caretDoc;
+    textEditingBoxDoc_ = boxDoc;
+  }
+
   void resetForLoadedDocument();
   void refreshSelectionBoundsCache(EditorApp& app);
   void promoteSelectionBoundsIfReady();
@@ -319,11 +327,15 @@ private:
   /// preview + close-path affordance (document space).
   std::optional<Path> penHoverPreviewSegmentDoc_;
   std::optional<Vector2d> penHoverCloseAffordanceDoc_;
+  std::optional<SelectionChromeSnapshot::TextCaret> textEditingCaretDoc_;
+  std::optional<Box2d> textEditingBoxDoc_;
   /// Pen hover chrome baked into the current immediate overlay snapshot;
   /// hover moves must re-capture even though the document version is
   /// unchanged.
   std::optional<Path> lastOverlayPenHoverPreviewSegmentDoc_;
   std::optional<Vector2d> lastOverlayPenHoverCloseAffordanceDoc_;
+  std::optional<SelectionChromeSnapshot::TextCaret> lastOverlayTextEditingCaretDoc_;
+  std::optional<Box2d> lastOverlayTextEditingBoxDoc_;
 
   PresentationRenderScheduler renderScheduler_;
   /// Live selected display:none entity whose stale promoted layer is currently hidden.

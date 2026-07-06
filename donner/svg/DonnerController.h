@@ -3,6 +3,7 @@
 
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGeometryElement.h"
+#include "donner/svg/SVGGraphicsElement.h"
 
 namespace donner::svg {
 
@@ -39,7 +40,7 @@ public:
    * @param point Position in canvas coordinates.
    * @return The topmost intersecting geometry element, or \c std::nullopt if no element is hit.
    */
-  std::optional<SVGGeometryElement> findIntersecting(const Vector2d& point);
+  std::optional<SVGGraphicsElement> findIntersecting(const Vector2d& point);
 
 private:
   SVGDocument document_;

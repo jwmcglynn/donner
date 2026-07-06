@@ -1,0 +1,109 @@
+{
+  "reference": "/Users/jwm/Projects/donner/tools/vectorize/example/reference.png",
+  "candidate_svg": "/Users/jwm/Projects/donner/tools/vectorize/example/candidate_v2.svg",
+  "renderer": "/Users/jwm/Projects/donner/bazel-bin/donner/svg/tool/donner-svg",
+  "rendered_png": "/Users/jwm/Projects/donner/tools/vectorize/example/run_v2/rendered.png",
+  "diff_png": "/Users/jwm/Projects/donner/tools/vectorize/example/run_v2/diff.png",
+  "width": 256,
+  "height": 256,
+  "background": "white",
+  "rmse": 0.0,
+  "rmse_normalized": 0.0,
+  "diff_pixel_percent": 0.0,
+  "diff_threshold": 16,
+  "quality_score": 100.0,
+  "grid": [
+    8,
+    8
+  ],
+  "worst_tiles": [
+    {
+      "tile": [
+        0,
+        0
+      ],
+      "x": 0,
+      "y": 0,
+      "w": 32,
+      "h": 32,
+      "rmse": 0.0
+    },
+    {
+      "tile": [
+        1,
+        0
+      ],
+      "x": 32,
+      "y": 0,
+      "w": 32,
+      "h": 32,
+      "rmse": 0.0
+    },
+    {
+      "tile": [
+        2,
+        0
+      ],
+      "x": 64,
+      "y": 0,
+      "w": 32,
+      "h": 32,
+      "rmse": 0.0
+    },
+    {
+      "tile": [
+        3,
+        0
+      ],
+      "x": 96,
+      "y": 0,
+      "w": 32,
+      "h": 32,
+      "rmse": 0.0
+    },
+    {
+      "tile": [
+        4,
+        0
+      ],
+      "x": 128,
+      "y": 0,
+      "w": 32,
+      "h": 32,
+      "rmse": 0.0
+    },
+    {
+      "tile": [
+        5,
+        0
+      ],
+      "x": 160,
+      "y": 0,
+      "w": 32,
+      "h": 32,
+      "rmse": 0.0
+    },
+    {
+      "tile": [
+        6,
+        0
+      ],
+      "x": 192,
+      "y": 0,
+      "w": 32,
+      "h": 32,
+      "rmse": 0.0
+    },
+    {
+      "tile": [
+        7,
+        0
+      ],
+      "x": 224,
+      "y": 0,
+      "w": 32,
+      "h": 32,
+      "rmse": 0.0
+    }
+  ]
+}

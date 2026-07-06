@@ -734,7 +734,7 @@ public:
   ///     The bg/fg already subsume the static segments and non-drag
   ///     layers below / above the drag entity.
   ///   - Otherwise: `Segment 0`, `Layer 0`, `Segment 1`, `Layer 1`,
-  ///     …, `Segment N`. (Editor-facing bg/fg are inactive in this
+  ///     ..., `Segment N`. (Editor-facing bg/fg are inactive in this
   ///     mode.)
   [[nodiscard]] std::vector<CompositeTileSnapshot> snapshotCompositeTiles(
       SnapshotThumbnails thumbnails = SnapshotThumbnails::Include) const;
@@ -1053,17 +1053,21 @@ private:
   static FallbackReason detectFallbackReasons(
       const components::RenderingInstanceComponent& instance);
 
-  /// Fast-path helper: a promoted subtree layer's root just shifted by a pure
-  /// world-space translation. Descendants' local transforms are unchanged, so
-  /// their world transforms shift by the same delta. Pre-multiply every
-  /// descendant RIC's `worldFromEntityTransform` by @p worldFromPreviousWorld
-  /// - the per-frame world-from-world delta that maps a point at its previous
-  /// frame's world position to its current world position - so subsequent
-  /// reads (e.g. a forced re-rasterize later in the session, or the next
-  /// frame's fast-path delta computation against a descendant-rooted layer)
-  /// see up-to-date world positions.
-  static void propagateFastPathTranslationToSubtree(Registry& registry, Entity root,
-                                                    const Transform2d& worldFromPreviousWorld);
+  /// Fast-path helper: a promoted subtree layer's root just moved by a
+  /// world-space delta (translation, scale, or rotation). Descendants' local
+  /// transforms are unchanged, so their world transforms change by the same
+  /// delta. Pre-multiply every descendant RIC's `worldFromEntityTransform` by
+  /// @p worldFromPreviousWorld - the per-frame world-from-world delta that
+  /// maps a point at its previous frame's world position to its current world
+  /// position - so subsequent reads (e.g. the settle re-rasterize after the
+  /// drag, which draws the layer's entity range straight from the RICs, or
+  /// the next frame's fast-path delta computation against a descendant-rooted
+  /// layer) see up-to-date world positions. Skipping this for non-translation
+  /// deltas made the settle re-raster bake the pre-gesture child positions
+  /// (the "first resize of a group pops back" editor bug - see
+  /// `GroupScaleDragSettleRerasterUsesCurrentChildTransforms`).
+  static void propagateFastPathDeltaToSubtree(Registry& registry, Entity root,
+                                              const Transform2d& worldFromPreviousWorld);
 
   std::reference_wrapper<SVGDocument> document_;
   std::reference_wrapper<RendererInterface> renderer_;

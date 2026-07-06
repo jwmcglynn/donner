@@ -70,4 +70,14 @@ struct SelectionTransformHandleBoxes {
 /// Return pixels per document unit from a document-to-canvas transform.
 [[nodiscard]] double PixelsPerDocUnitFromTransform(const Transform2d& canvasFromDoc);
 
+/// Compose @p centeredDocumentFromDocument so it acts around
+/// @p fixedDocumentPoint instead of the document origin: translate the fixed
+/// point to the origin, apply the transform, translate back. Shared by the
+/// select tool's resize/rotate gestures and the text tool's frame rotate.
+[[nodiscard]] Transform2d TransformDocumentAroundPoint(
+    const Vector2d& fixedDocumentPoint, const Transform2d& centeredDocumentFromDocument);
+
+/// Angle of @p point around @p center in radians, measured from +x.
+[[nodiscard]] double AngleFromCenter(const Vector2d& center, const Vector2d& point);
+
 }  // namespace donner::editor

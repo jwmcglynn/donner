@@ -81,12 +81,26 @@ donner_cc_library(
     ],
 )
 
+# Geometry for the render pane's emulated canvas scrollbars: rails/thumbs
+# representing the document extent relative to the viewport. Pure math over
+# ViewportState — unit-testable headlessly.
+donner_cc_library(
+    name = "canvas_scrollbars",
+    srcs = ["CanvasScrollbars.cc"],
+    hdrs = ["CanvasScrollbars.h"],
+    deps = [
+        ":viewport_state",
+        "//donner/base",
+    ],
+)
+
 donner_cc_library(
     name = "selection_aabb",
     srcs = ["SelectionAabb.cc"],
     hdrs = ["SelectionAabb.h"],
     deps = [
         "//donner/base",
+        "//donner/base/parser",
         "//donner/svg",
     ],
 )
@@ -680,6 +694,7 @@ donner_cc_library(
         "//conditions:default": [],
     }),
     deps = [
+        ":canvas_scrollbars",
         ":attribute_writeback",
         ":clipboard_interface",
         ":compositor_debug_panel",
@@ -840,8 +855,11 @@ donner_cc_library(
     deps = [
         ":command_queue",
         ":editor_app",
+        ":lock_state",
+        ":selection_transform_handles",
         ":tool",
         "//donner/base",
+        "//donner/base/parser",
         "//donner/svg",
     ],
 )

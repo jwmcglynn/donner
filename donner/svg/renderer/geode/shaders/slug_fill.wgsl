@@ -238,7 +238,7 @@ fn solve_quadratic(a: f32, b: f32, c: f32) -> vec2f {
 // curve in the band we solve for the t where the curve's Y equals sample.y,
 // evaluate the X distance from the pixel center, scale to pixels, and
 // accumulate `saturate(r + 0.5)` signed by the crossing direction (sign of
-// dy/dt — a downward crossing winds +1, upward −1, matching the integer
+// dy/dt - a downward crossing winds +1, upward −1, matching the integer
 // `curve_winding` convention). The weight is `saturate(1 - 2|r|)`, reduced
 // over the band via `max`.
 //
@@ -387,7 +387,7 @@ fn fs_main(in: VertexOutput) -> FragOutput {
 
   // Fill rule. Non-zero clamps the (signed) winding coverage; even-odd folds
   // the RAW coverage via a triangle wave (the fold must see the unsaturated
-  // value — a hole has combined coverage ≈ 2, which the wave maps to 0).
+  // value - a hole has combined coverage ≈ 2, which the wave maps to 0).
   if (uniforms.fillRule == 0u) {
     coverage = saturate(coverage);
   } else {

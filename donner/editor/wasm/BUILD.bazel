@@ -149,3 +149,61 @@ serve_http(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
 )
+
+# tiny_skia (software-fallback) editor WASM variant. Build with
+# --config=editor-wasm-tiny-skia. This reuses :_editor_wasm_binary, whose
+# emdawnwebgpu JS libraries are select()-gated to the Geode backend; under the
+# tiny_skia renderer backend that select resolves to the empty default, so this
+# binary never links the WebGPU bindings. The tiny_skia renderer draws the
+# document into the WebGL canvas, so headless screenshots capture real pixels.
+#
+# Outputs land under a `tiny_skia/` subdirectory so their file labels do not
+# collide with the Geode `:wasm` rule's editor.js/editor.wasm outputs, while
+# their basenames stay editor.js/editor.wasm so index.html loads them unchanged.
+wasm_cc_binary(
+    name = "wasm_tiny_skia",
+    cc_target = ":_editor_wasm_binary",
+    outputs = [
+        "tiny_skia/editor.js",
+        "tiny_skia/editor.wasm",
+    ],
+    tags = [
+        "manual",
+        "wasm",
+    ],
+    target_compatible_with = select({
+        ":wasm_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+)
+
+web_package(
+    name = "wasm_tiny_skia_web_package",
+    srcs = [
+        "enable-threads.js",
+        "index.html",
+        "//:donner_icon.svg",
+    ],
+    tags = [
+        "manual",
+        "wasm",
+    ],
+    target_compatible_with = select({
+        ":wasm_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    wasm_deps = [":wasm_tiny_skia"],
+)
+
+serve_http(
+    name = "serve_http_tiny_skia",
+    dir = ":wasm_tiny_skia_web_package",
+    tags = [
+        "manual",
+        "wasm",
+    ],
+    target_compatible_with = select({
+        ":wasm_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+)

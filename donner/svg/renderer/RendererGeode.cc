@@ -47,7 +47,7 @@
 namespace donner::svg {
 
 // Pull the Geode-local label helper into this namespace so that the many
-// `.label = wgpuLabel("…")` sites below can stay unqualified. See
+// `.label = wgpuLabel("...")` sites below can stay unqualified. See
 // GeodeWgpuUtil.h for the helper rationale.
 using ::donner::geode::wgpuLabel;
 
@@ -1407,7 +1407,7 @@ struct RendererGeode::Impl {
   /// call appends its `deviceFromLocalTransform` into `transforms`; the batch
   /// is flushed by `flushPendingBatch()` whenever state changes in a
   /// way that invalidates the batch (paint-key mismatch on the next
-  /// drawPath, any push/pop, end of frame, …). A flush of size >= 2
+  /// drawPath, any push/pop, end of frame, ...). A flush of size >= 2
   /// routes through `GeoEncoder::fillPathInstanced` - one GPU draw
   /// with `instanceCount == N`. Size-1 flushes degrade to the regular
   /// single-draw path so we don't pay the per-instance-buffer cost for

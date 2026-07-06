@@ -18,6 +18,7 @@
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/SVGPathElement.h"
 #include "donner/svg/SVGStyleElement.h"
+#include "donner/svg/SVGTextElement.h"
 #include "donner/svg/core/Stroke.h"
 #include "donner/svg/properties/PaintServer.h"
 
@@ -198,6 +199,38 @@ void ForEachElement(const svg::SVGElement& node, Visitor& visit) {
   visit(node);
   for (auto child = node.firstChild(); child.has_value(); child = child->nextSibling()) {
     ForEachElement(*child, visit);
+  }
+}
+
+/// Whether the laid-out ink bounds of text root @p text intersect
+/// @p documentRect. The local ink box is transformed to document space and
+/// tested conservatively as an axis-aligned box, matching the pointer
+/// contract for selecting text (any point inside the glyph extents hits).
+bool TextIntersectsRect(const svg::SVGTextElement& text, const Box2d& documentRect) {
+  const Box2d inkLocal = text.inkBoundingBox();
+  if (inkLocal.isEmpty()) {
+    return false;
+  }
+  const Transform2d documentFromText = text.elementFromWorld();
+  Box2d inkDoc(documentFromText.transformPosition(inkLocal.topLeft),
+               documentFromText.transformPosition(inkLocal.topLeft));
+  for (const Vector2d& corner : BoxCorners(inkLocal)) {
+    inkDoc.addPoint(documentFromText.transformPosition(corner));
+  }
+  return BoxesIntersect(inkDoc, documentRect);
+}
+
+/// Depth-first walk of the SVG tree rooted at `node`, invoking
+/// `visit(element)` on every selectable leaf: geometry elements and `<text>`
+/// roots (tspans select through their text root). Shared by `hitTestRect`
+/// and `selectableElements` so marquee selection and "Select All" agree.
+template <typename Visitor>
+void ForEachSelectableElement(const svg::SVGElement& node, Visitor& visit) {
+  if (node.isa<svg::SVGGeometryElement>() || node.isa<svg::SVGTextElement>()) {
+    visit(node.cast<svg::SVGGraphicsElement>());
+  }
+  for (auto child = node.firstChild(); child.has_value(); child = child->nextSibling()) {
+    ForEachSelectableElement(*child, visit);
   }
 }
 
@@ -784,6 +817,10 @@ bool EditorApp::flushFrame() {
   }
 
   if (!document_.flushFrame()) {
+    // A no-op flush still consumes a deferred source-undo entry: a tool that
+    // flushes per keystroke (a text session) reaches its commit with nothing
+    // queued, and the entry itself compares before/after source.
+    consumePendingDocumentSourceUndo();
     return false;
   }
 
@@ -825,21 +862,26 @@ bool EditorApp::flushFrame() {
     pendingSelectionRestoreTargets_.reset();
   }
 
-  if (pendingDocumentSourceUndo_.has_value()) {
-    if (document_.hasDocument() && document_.document().hasSourceStore()) {
-      std::string sourceAfter(document_.document().source());
-      if (sourceAfter != pendingDocumentSourceUndo_->before.documentSource) {
-        UndoSnapshot after =
-            captureDocumentSourceSnapshot(pendingDocumentSourceUndo_->before.element, sourceAfter);
-        after.selectionTargets = CaptureSelectionTargets(selection_);
-        undoTimeline_.record(pendingDocumentSourceUndo_->label,
-                             std::move(pendingDocumentSourceUndo_->before), std::move(after));
-      }
-    }
-    pendingDocumentSourceUndo_.reset();
-  }
+  consumePendingDocumentSourceUndo();
 
   return true;
+}
+
+void EditorApp::consumePendingDocumentSourceUndo() {
+  if (!pendingDocumentSourceUndo_.has_value()) {
+    return;
+  }
+  if (document_.hasDocument() && document_.document().hasSourceStore()) {
+    std::string sourceAfter(document_.document().source());
+    if (sourceAfter != pendingDocumentSourceUndo_->before.documentSource) {
+      UndoSnapshot after =
+          captureDocumentSourceSnapshot(pendingDocumentSourceUndo_->before.element, sourceAfter);
+      after.selectionTargets = CaptureSelectionTargets(selection_);
+      undoTimeline_.record(pendingDocumentSourceUndo_->label,
+                           std::move(pendingDocumentSourceUndo_->before), std::move(after));
+    }
+  }
+  pendingDocumentSourceUndo_.reset();
 }
 
 bool EditorApp::deleteSelectionWithUndo(std::string_view currentSourceText) {
@@ -1050,7 +1092,7 @@ bool EditorApp::renameSelectedElement(std::string_view newId) {
       for (const xml::XMLQualifiedNameRef& attrName : candidate.attributes()) {
         // We round-trip the rewritten attribute through SetAttributeCommand,
         // which only carries an unprefixed local name. The references we care
-        // about (url(#…) in presentation/style attributes, SVG2 `href`) are all
+        // about (url(#...) in presentation/style attributes, SVG2 `href`) are all
         // in the default namespace; skip prefixed attributes (e.g. legacy
         // `xlink:href`) rather than risk dropping their prefix.
         if (!attrName.namespacePrefix.empty()) {
@@ -1459,7 +1501,7 @@ void EditorApp::redo() {
   ApplyTimelineSnapshot(*this, document_, *snapshot);
 }
 
-std::optional<svg::SVGGeometryElement> EditorApp::hitTest(const Vector2d& documentPoint) {
+std::optional<svg::SVGGraphicsElement> EditorApp::hitTest(const Vector2d& documentPoint) {
   if (!document_.hasDocument()) {
     return std::nullopt;
   }
@@ -1477,8 +1519,8 @@ std::optional<svg::SVGGeometryElement> EditorApp::hitTest(const Vector2d& docume
   return controller_->findIntersecting(documentPoint);
 }
 
-std::vector<svg::SVGGeometryElement> EditorApp::hitTestRect(const Box2d& documentRect) {
-  std::vector<svg::SVGGeometryElement> hits;
+std::vector<svg::SVGGraphicsElement> EditorApp::hitTestRect(const Box2d& documentRect) {
+  std::vector<svg::SVGGraphicsElement> hits;
   if (!document_.hasDocument()) {
     return hits;
   }
@@ -1494,12 +1536,18 @@ std::vector<svg::SVGGeometryElement> EditorApp::hitTestRect(const Box2d& documen
   svg::SVGDocument doc = document_.document();
   doc.withWriteAccess([&](svg::DocumentWriteAccess&) {
     const svg::SVGElement root = doc.svgElement();
-    auto visit = [&](const svg::SVGGeometryElement& geometry) {
-      if (GeometryIntersectsRect(geometry, documentRect)) {
-        hits.push_back(geometry);
+    auto visit = [&](const svg::SVGGraphicsElement& element) {
+      if (element.isa<svg::SVGGeometryElement>()) {
+        if (GeometryIntersectsRect(element.cast<svg::SVGGeometryElement>(), documentRect)) {
+          hits.push_back(element);
+        }
+      } else if (element.isa<svg::SVGTextElement>()) {
+        if (TextIntersectsRect(element.cast<svg::SVGTextElement>(), documentRect)) {
+          hits.push_back(element);
+        }
       }
     };
-    ForEachGeometryElement(root, visit);
+    ForEachSelectableElement(root, visit);
   });
   return hits;
 }
@@ -1510,20 +1558,18 @@ std::vector<svg::SVGElement> EditorApp::selectableElements() {
     return selectable;
   }
 
-  // Mirror `hitTestRect`'s traversal exactly so the "Select All" set and marquee selection agree on
-  // what is selectable: every `SVGGeometryElement` in the tree, in document order. Non-geometry
-  // nodes (`<defs>`, gradients, plain containers, XML text nodes) are skipped by
-  // `ForEachGeometryElement`.
+  // Mirror `hitTestRect`'s traversal exactly so the "Select All" set and marquee selection agree
+  // on what is selectable: every geometry element and `<text>` root in the tree, in document
+  // order. Non-selectable nodes (`<defs>`, gradients, plain containers, XML text nodes) are
+  // skipped by `ForEachSelectableElement`.
   //
   // §concurrent-dom: like `hitTestRect`, the DOM reads (isa / firstChild / nextSibling) need a
   // scoped access guard against the live ConcurrentDom document.
   svg::SVGDocument doc = document_.document();
   doc.withWriteAccess([&](svg::DocumentWriteAccess&) {
     const svg::SVGElement root = doc.svgElement();
-    auto visit = [&](const svg::SVGGeometryElement& geometry) {
-      selectable.emplace_back(geometry);
-    };
-    ForEachGeometryElement(root, visit);
+    auto visit = [&](const svg::SVGGraphicsElement& element) { selectable.emplace_back(element); };
+    ForEachSelectableElement(root, visit);
   });
   return selectable;
 }

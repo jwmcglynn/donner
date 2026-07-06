@@ -142,6 +142,18 @@ common:editor-wasm --//donner/editor/wasm:enable_wasm=true
 build:editor-wasm --copt=-pthread
 build:editor-wasm --linkopt=-pthread
 
+# Software-fallback editor WASM build. Uses the tiny_skia CPU backend (via
+# --config=wasm) so the rendered document is drawn into the WebGL canvas and is
+# capturable through headless screenshots — unlike the Geode/WebGPU present
+# path, whose swapchain pixels never reach a screenshot under headless Chrome.
+# This lane exists so CI can validate desktop-parity software rendering; it does
+# NOT exercise the production Geode/WebGPU present path. Usage:
+#   bazel build --config=editor-wasm-tiny-skia //donner/editor/wasm:wasm_tiny_skia_web_package
+common:editor-wasm-tiny-skia --config=wasm
+common:editor-wasm-tiny-skia --//donner/editor/wasm:enable_wasm=true
+build:editor-wasm-tiny-skia --copt=-pthread
+build:editor-wasm-tiny-skia --linkopt=-pthread
+
 # Geode (WebGPU) WASM build. Usage:
 #   bazel build --config=wasm-geode //donner/svg/renderer/wasm:donner_wasm_geode
 # Inherits --config=wasm (Emscripten toolchain + text disables + perf-opt

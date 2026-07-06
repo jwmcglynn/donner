@@ -1,11 +1,11 @@
 # Donner
 
-## v0.8 — Donner SVG Editor & Toolkit
+## v0.8 — Donner SVG Editor & Engine
 
-*Date: <unreleased>*
+*Date: 2026-07-06*
 
-v0.8 rebrands Donner as **Donner SVG Editor & Toolkit**: an editor application plus reusable SVG
-rendering, geometry, and toolkit libraries. It releases the accumulated editor, Geode, and path work
+v0.8 rebrands Donner as **Donner SVG Editor & Engine**: an editor application plus a reusable SVG
+rendering, geometry, and DOM engine. It releases the accumulated editor, Geode, and path work
 and ships a showcase asset authored in the editor itself.
 
 ### Highlights
@@ -60,6 +60,16 @@ See the [Project Roadmap](ProjectRoadmap.md) and
 
 - Full-Skia renderer backend removed. `tiny-skia` remains the default backend and Geode remains
   available.
+
+**Full Changelog**: https://github.com/jwmcglynn/donner/compare/v0.5.0...v0.8.0
+
+### What's Included
+
+- The Donner SVG Editor, shipping as both a native desktop application and a WebAssembly edition.
+- `donner-svg`, a CLI tool for rendering and previewing SVG files.
+- An embeddable C++ API for parsing, inspecting, modifying, and rendering SVGs.
+- Prebuilt `donner-svg_linux_x86_64` and `donner-svg_darwin_arm64` binaries, attached to the
+  release by release automation.
 
 ## v0.5.0
 

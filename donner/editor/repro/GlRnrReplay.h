@@ -188,8 +188,18 @@ struct GlRnrReplayFrameDiagnostics {
   std::optional<std::string> selectedRenderingInstanceFill;
   /// Selected element's raw `d` attribute, if present.
   std::optional<std::string> selectedPathDataAttribute;
+  /// Selected element's text content, if it is a `<text>` element.
+  std::optional<std::string> selectedTextContent;
   /// Presentation-cache resource counters captured after the frame.
   PresentationResourceStats presentationResources;
+  /// Presentation coverage (bounded raster + overview infill) after the frame.
+  PresentationCoverageDiagnostics presentationCoverage;
+  /// Number of retained overview tiles available as zoom/pan infill.
+  std::size_t overviewTileCount = 0;
+  /// Render-pane ImGui window scroll state (must stay zero; the canvas pane
+  /// never window-scrolls).
+  float renderPaneScrollY = 0.0f;
+  float renderPaneScrollMaxY = 0.0f;
   /// Latest editor rendering cost counters.
   FrameCostBreakdown frameCost;
   /// Active drag transform driving the presenter, if any.
@@ -222,6 +232,10 @@ struct GlRnrReplayResult {
   std::vector<GlRnrReplayFrameDiagnostics> frameDiagnostics;
   /// Selection label after the last replayed frame.
   std::optional<std::string> finalSelectedElementLabel;
+  /// Document source after the last replayed frame, for asserting that
+  /// gesture writebacks durably reached the DOM + source (nullopt when no
+  /// document was loaded).
+  std::optional<std::string> finalDocumentSource;
   /// True when replay could not run because the host provides no usable GL
   /// context (a headless / GPU-less environment with no software-GL fallback,
   /// e.g. GitHub-hosted macOS). Callers should treat this as "skip" rather than

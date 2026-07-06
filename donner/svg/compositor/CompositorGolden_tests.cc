@@ -240,6 +240,131 @@ TEST_F(CompositorGoldenTest, ScaleDragProducesCorrectPixels) {
   EXPECT_EQ(result.mismatchCount, 0u);
 }
 
+// Editor-reported QA regression ("first resize of the group is misaligned"):
+// after a first frame populates the compositor's caches, changing the
+// `transform` of a plain <g> (no filter/opacity - the shape
+// convert-text-to-outlines produces) must re-position the group's children in
+// the next composite. The group is NOT promoted - this is the default state
+// right after a conversion selects the fresh group.
+TEST_F(CompositorGoldenTest, GroupTransformChangeAfterCachedFrameProducesCorrectPixels) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <rect width="200" height="100" fill="white"/>
+      <g id="group">
+        <rect x="10" y="10" width="40" height="30" fill="red"/>
+        <rect x="20" y="50" width="30" height="20" fill="blue"/>
+      </g>
+    </svg>
+  )svg");
+
+  auto group = document.querySelector("#group");
+  ASSERT_TRUE(group.has_value());
+
+  CompositorController compositor(document, renderer_);
+  // First frame populates the static-segment caches at identity.
+  compositor.renderFrame(viewport_);
+
+  group->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(100.0, 0.0)) *
+                                                 Transform2d::Scale(1.5, 1.5) *
+                                                 Transform2d::Translate(Vector2d(-100.0, 0.0)));
+
+  DualPathVerifier verifier(compositor, renderer_);
+  const auto result = verifier.renderAndVerify(viewport_);
+  EXPECT_TRUE(result.isExact()) << result;
+  EXPECT_EQ(result.mismatchCount, 0u);
+}
+
+// Promoted-group variant of the above: the editor promotes the selected
+// entity, so a resize right after convert-text-to-outlines transforms a
+// promoted plain <g>.
+TEST_F(CompositorGoldenTest, PromotedGroupTransformChangeAfterCachedFrameProducesCorrectPixels) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <rect width="200" height="100" fill="white"/>
+      <g id="group">
+        <rect x="10" y="10" width="40" height="30" fill="red"/>
+        <rect x="20" y="50" width="30" height="20" fill="blue"/>
+      </g>
+    </svg>
+  )svg");
+
+  auto group = document.querySelector("#group");
+  ASSERT_TRUE(group.has_value());
+  const Entity entity = group->unsafeEntityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity));
+  compositor.renderFrame(viewport_);
+
+  group->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(100.0, 0.0)) *
+                                                 Transform2d::Scale(1.5, 1.5) *
+                                                 Transform2d::Translate(Vector2d(-100.0, 0.0)));
+
+  DualPathVerifier verifier(compositor, renderer_);
+  const auto result = verifier.renderAndVerify(viewport_);
+  EXPECT_TRUE(result.isExact()) << result;
+  EXPECT_EQ(result.mismatchCount, 0u);
+}
+
+// Editor-reported QA regression ("first resize of a converted-outlines group
+// is misaligned"): during a resize drag of a promoted GROUP layer, the
+// transform-only fast path reuses the cached bitmap with an affine
+// `canvasFromBitmap` and clears the dirty flags. The settle re-raster
+// (`markPromotedLayerDirty`, the editor's post-release forceLayerRasterization
+// signal) then re-renders the subtree from the descendant
+// `RenderingInstanceComponent`s - which must carry the CURRENT transforms.
+// Before the fix, non-translation deltas never propagated to descendants
+// ("re-sync on settle" never happened because the fast path had cleared the
+// dirty flags), so the settle raster baked the pre-resize child positions and
+// the content popped back while the overlay stayed at the resized bounds.
+TEST_F(CompositorGoldenTest, GroupScaleDragSettleRerasterUsesCurrentChildTransforms) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <rect width="200" height="100" fill="white"/>
+      <g id="group">
+        <rect x="10" y="10" width="40" height="30" fill="red"/>
+        <rect x="20" y="50" width="30" height="20" fill="blue"/>
+      </g>
+    </svg>
+  )svg");
+
+  auto group = document.querySelector("#group");
+  ASSERT_TRUE(group.has_value());
+  const Entity entity = group->unsafeEntityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity));
+  compositor.renderFrame(viewport_);
+
+  // Two resize-gesture steps, each flushed through a renderFrame like the
+  // editor's per-mouse-move DOM writes - these take the bitmap-reuse fast
+  // path (affine canvasFromBitmap, dirty flags cleared).
+  group->cast<SVGGraphicsElement>().setTransform(Transform2d::Scale(1.25, 1.2));
+  compositor.renderFrame(viewport_);
+  group->cast<SVGGraphicsElement>().setTransform(Transform2d::Scale(1.5, 1.375));
+  compositor.renderFrame(viewport_);
+  ASSERT_GT(compositor.fastPathCountersForTesting().fastPathFrames, 0u)
+      << "gesture frames must engage the transform-only fast path for this repro to be faithful";
+
+  // Drag release: the editor forces a crisp re-raster of the drag layer
+  // (`forceLayerRasterization` on the settle render). The re-raster draws the
+  // layer's entity range from the RenderingInstanceComponents - which must
+  // reflect the CURRENT group transform, not the pre-drag one.
+  //
+  // Probe the composited pixels directly (no DualPathVerifier here: its
+  // reference render re-prepares the registry and would repair the stale
+  // descendant RICs before the compositor composes, masking the bug).
+  compositor.markPromotedLayerDirty(entity);
+  compositor.renderFrame(viewport_);
+
+  const RendererBitmap flat = renderer_.takeSnapshot();
+  // scale(1.5, 1.375) about the origin: red (10,10 40x30) → (15,13.75)-(75,55).
+  EXPECT_THAT(getPixel(flat, 70, 50), IsRed())
+      << "settle re-raster must place the red rect at its resized position";
+  EXPECT_THAT(getPixel(flat, 12, 12), IsWhite())
+      << "settle re-raster must vacate the red rect's pre-resize position";
+}
+
 // Editor-reported QA regression (#3, "hiding a layer leaves a ghost"): toggling
 // an element to display:none must drop its pixels from the next composited
 // frame. The bug: the cached static segment / layer holding the element's
@@ -808,7 +933,7 @@ TEST_F(CompositorGoldenTest, MultiBucketCompositionMatchesFullRender) {
 // Filter groups should auto-promote after the first `renderFrame` completes -
 // i.e. the moment `RenderingInstanceComponent`s exist, the
 // `MandatoryHintDetector` should have noticed and published a Mandatory hint
-// for any `<g filter="…">` in the document. This guards against the earlier
+// for any `<g filter="...">` in the document. This guards against the earlier
 // regression where the detector ran before `prepareDocumentForRendering`,
 // saw an empty component view, and never got a second chance.
 TEST_F(CompositorGoldenTest, FilterGroupAutoPromotesOnFirstRender) {

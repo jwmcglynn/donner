@@ -388,6 +388,10 @@ void RenderCoordinator::resetForLoadedDocument() {
   penHoverCloseAffordanceDoc_.reset();
   lastOverlayPenHoverPreviewSegmentDoc_.reset();
   lastOverlayPenHoverCloseAffordanceDoc_.reset();
+  textEditingCaretDoc_.reset();
+  textEditingBoxDoc_.reset();
+  lastOverlayTextEditingCaretDoc_.reset();
+  lastOverlayTextEditingBoxDoc_.reset();
   renderScheduler_.reset();
   displayNoneSuppressedSelectionEntity_ = entt::null;
   displayNoneSuppressedLayerEntity_ = entt::null;
@@ -471,7 +475,9 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
       overlayInteractionActive != lastOverlayInteractionActive_ ||
       penLivePreviewElement_ != lastOverlayPenLivePreviewElement_ ||
       penHoverPreviewSegmentDoc_ != lastOverlayPenHoverPreviewSegmentDoc_ ||
-      penHoverCloseAffordanceDoc_ != lastOverlayPenHoverCloseAffordanceDoc_;
+      penHoverCloseAffordanceDoc_ != lastOverlayPenHoverCloseAffordanceDoc_ ||
+      textEditingCaretDoc_ != lastOverlayTextEditingCaretDoc_ ||
+      textEditingBoxDoc_ != lastOverlayTextEditingBoxDoc_;
   if (!selectionDetail.has_value()) {
     if (overlayGeometryDiffers || IsUnsetTimePoint(overlayStableSince_)) {
       overlayStableSince_ = now;
@@ -540,6 +546,8 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   // snapshot after capture.
   chromeSnapshot.penPreviewSegmentDoc = penHoverPreviewSegmentDoc_;
   chromeSnapshot.penCloseAffordanceDoc = penHoverCloseAffordanceDoc_;
+  chromeSnapshot.textCaretDoc = textEditingCaretDoc_;
+  chromeSnapshot.textBoxDoc = textEditingBoxDoc_;
   overlayCost.captureMs = MillisecondsSince(captureStart);
   overlayCost.pathCount = static_cast<int>(chromeSnapshot.paths.size());
   overlayCost.hoverPathCount = static_cast<int>(chromeSnapshot.hoverPaths.size());
@@ -562,7 +570,8 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
       !chromeSnapshot.pathControlPointBoxesDoc.empty() || chromeSnapshot.marqueeDoc.has_value() ||
       chromeSnapshot.orientedBoundsDoc.has_value() || chromeSnapshot.livePathPreview.has_value() ||
       chromeSnapshot.penPreviewSegmentDoc.has_value() ||
-      chromeSnapshot.penCloseAffordanceDoc.has_value();
+      chromeSnapshot.penCloseAffordanceDoc.has_value() || chromeSnapshot.textCaretDoc.has_value() ||
+      chromeSnapshot.textBoxDoc.has_value();
   overlayCost.payloadBytes =
       overlayHasContent
           ? static_cast<std::uint64_t>(std::max(0, currentOverlayRasterSize.x)) *
@@ -583,6 +592,8 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   lastOverlayPenLivePreviewElement_ = penLivePreviewElement_;
   lastOverlayPenHoverPreviewSegmentDoc_ = penHoverPreviewSegmentDoc_;
   lastOverlayPenHoverCloseAffordanceDoc_ = penHoverCloseAffordanceDoc_;
+  lastOverlayTextEditingCaretDoc_ = textEditingCaretDoc_;
+  lastOverlayTextEditingBoxDoc_ = textEditingBoxDoc_;
   lastFrameCostBreakdown_.overlay = overlayCost;
   return true;
 }
@@ -856,6 +867,7 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   if (!requestOverviewInfill && schedule.dragPreview.has_value()) {
     req.dragPreview = *schedule.dragPreview;
   }
+  ++lastFrameCostBreakdown_.renderRequestsPosted;
   renderWorker_.asyncRenderer.requestRender(req);
 }
 

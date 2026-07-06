@@ -1,0 +1,109 @@
+{
+  "reference": "/Users/jwm/Projects/donner/tools/vectorize/example/reference.png",
+  "candidate_svg": "/Users/jwm/Projects/donner/tools/vectorize/example/candidate_v1.svg",
+  "renderer": "/Users/jwm/Projects/donner/bazel-bin/donner/svg/tool/donner-svg",
+  "rendered_png": "/Users/jwm/Projects/donner/tools/vectorize/example/run_v1/rendered.png",
+  "diff_png": "/Users/jwm/Projects/donner/tools/vectorize/example/run_v1/diff.png",
+  "width": 256,
+  "height": 256,
+  "background": "white",
+  "rmse": 58.5727,
+  "rmse_normalized": 0.229697,
+  "diff_pixel_percent": 29.5731,
+  "diff_threshold": 16,
+  "quality_score": 77.0303,
+  "grid": [
+    8,
+    8
+  ],
+  "worst_tiles": [
+    {
+      "tile": [
+        5,
+        4
+      ],
+      "x": 160,
+      "y": 128,
+      "w": 32,
+      "h": 32,
+      "rmse": 139.02
+    },
+    {
+      "tile": [
+        3,
+        5
+      ],
+      "x": 96,
+      "y": 160,
+      "w": 32,
+      "h": 32,
+      "rmse": 117.96
+    },
+    {
+      "tile": [
+        4,
+        5
+      ],
+      "x": 128,
+      "y": 160,
+      "w": 32,
+      "h": 32,
+      "rmse": 117.261
+    },
+    {
+      "tile": [
+        5,
+        1
+      ],
+      "x": 160,
+      "y": 32,
+      "w": 32,
+      "h": 32,
+      "rmse": 115.199
+    },
+    {
+      "tile": [
+        5,
+        2
+      ],
+      "x": 160,
+      "y": 64,
+      "w": 32,
+      "h": 32,
+      "rmse": 110.528
+    },
+    {
+      "tile": [
+        2,
+        4
+      ],
+      "x": 64,
+      "y": 128,
+      "w": 32,
+      "h": 32,
+      "rmse": 110.088
+    },
+    {
+      "tile": [
+        5,
+        3
+      ],
+      "x": 160,
+      "y": 96,
+      "w": 32,
+      "h": 32,
+      "rmse": 105.859
+    },
+    {
+      "tile": [
+        5,
+        6
+      ],
+      "x": 160,
+      "y": 192,
+      "w": 32,
+      "h": 32,
+      "rmse": 104.91
+    }
+  ]
+}

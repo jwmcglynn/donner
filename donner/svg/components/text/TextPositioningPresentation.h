@@ -15,7 +15,7 @@ namespace donner::svg::components {
  * invalidate the text root's cached layout so the next render picks the new positions up.
  *
  * This is the programmatic-mutation counterpart of the XML parse path
- * (`ParseAttribute<SVGTextElement>` in `AttributeParser.cc`): without it, a `setAttribute("x", …)`
+ * (`ParseAttribute<SVGTextElement>` in `AttributeParser.cc`): without it, a `setAttribute("x", ...)`
  * on a text element stores the raw attribute but never updates the layout input, so
  * programmatically positioned text renders at the origin.
  *

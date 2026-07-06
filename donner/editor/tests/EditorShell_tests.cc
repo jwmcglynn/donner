@@ -1995,7 +1995,37 @@ TEST(EditorShellTest, DocumentSpaceReplayInputRoutesSelectPressAndRelease) {
   EXPECT_TRUE(EditorShellTestAccess::RequestRenderAtEndOfFrame(shell));
 }
 
-TEST(EditorShellTest, DocumentSpaceReplayInputRoutesTextToolClick) {
+TEST(EditorShellTest, DocumentSpaceReplayInputRoutesTextToolPlainClickCreatesNothing) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  const std::string sourceBefore(EditorShellTestAccess::App(shell).document().document().source());
+
+  DriveGlobalShortcut(shell, {ImGuiKey_T});
+  ASSERT_TRUE(EditorShellTestAccess::ActiveToolIsText(shell));
+
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(30.0, 40.0),
+      .leftMouseDown = true,
+      .leftMousePressed = true,
+  });
+  EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(30.0, 40.0),
+      .leftMouseReleased = true,
+  });
+  EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
+
+  EXPECT_FALSE(EditorShellTestAccess::App(shell).selectedElement().has_value());
+  EXPECT_TRUE(EditorShellTestAccess::ActiveToolIsText(shell));
+  EXPECT_EQ(EditorShellTestAccess::App(shell).document().document().source(), sourceBefore);
+}
+
+TEST(EditorShellTest, DocumentSpaceReplayInputRoutesTextToolDoubleClick) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
     GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
@@ -2006,10 +2036,18 @@ TEST(EditorShellTest, DocumentSpaceReplayInputRoutesTextToolClick) {
   DriveGlobalShortcut(shell, {ImGuiKey_T});
   ASSERT_TRUE(EditorShellTestAccess::ActiveToolIsText(shell));
 
+  MouseModifiers doubleClick;
+  doubleClick.doubleClick = true;
   shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
       .documentPoint = Vector2d(30.0, 40.0),
       .leftMouseDown = true,
       .leftMousePressed = true,
+      .modifiers = doubleClick,
+  });
+  EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(30.0, 40.0),
+      .leftMouseReleased = true,
   });
   EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
 
@@ -2020,8 +2058,8 @@ TEST(EditorShellTest, DocumentSpaceReplayInputRoutesTextToolClick) {
   EXPECT_EQ(*selected.getAttribute("x"), "30");
   ASSERT_TRUE(selected.getAttribute("y").has_value());
   EXPECT_EQ(*selected.getAttribute("y"), "40");
-  EXPECT_TRUE(EditorShellTestAccess::ActiveToolIsSelect(shell));
-  EXPECT_NE(EditorShellTestAccess::App(shell).document().document().source().find(">Text<"),
+  EXPECT_TRUE(EditorShellTestAccess::ActiveToolIsText(shell));
+  EXPECT_NE(EditorShellTestAccess::App(shell).document().document().source().find(R"(<text)"),
             std::string_view::npos);
 }
 
@@ -2780,7 +2818,30 @@ TEST(EditorShellTest, RenderPaneDeferredEmptyClickStartsMarqueeAfterHold) {
   window.endFrame();
 }
 
-TEST(EditorShellTest, RenderPaneTextToolClickCreatesTextAndReturnsToSelect) {
+TEST(EditorShellTest, RenderPaneTextToolPlainClickCreatesNothing) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0.0, 0.0, 120.0, 80.0));
+  const std::string sourceBefore(EditorShellTestAccess::App(shell).document().document().source());
+
+  DriveGlobalShortcut(shell, {ImGuiKey_T});
+  ASSERT_TRUE(EditorShellTestAccess::ActiveToolIsText(shell));
+
+  EditorShellTestAccess::BufferPendingClick(shell, Vector2d(24.0, 34.0));
+  RenderPaneMouseFrame(window, shell, Vector2d(24.0, 34.0), /*mouseDown=*/false);
+  (void)EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell);
+
+  EXPECT_TRUE(EditorShellTestAccess::ActiveToolIsText(shell));
+  EXPECT_FALSE(EditorShellTestAccess::App(shell).selectedElement().has_value());
+  EXPECT_EQ(EditorShellTestAccess::App(shell).document().document().source(), sourceBefore);
+}
+
+TEST(EditorShellTest, RenderPaneTextToolDoubleClickCreatesTextSession) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
     GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
@@ -2793,15 +2854,21 @@ TEST(EditorShellTest, RenderPaneTextToolClickCreatesTextAndReturnsToSelect) {
   DriveGlobalShortcut(shell, {ImGuiKey_T});
   ASSERT_TRUE(EditorShellTestAccess::ActiveToolIsText(shell));
 
-  EditorShellTestAccess::BufferPendingClick(shell, Vector2d(24.0, 34.0));
-  RenderPaneMouseFrame(window, shell, Vector2d(24.0, 34.0), /*mouseDown=*/false);
-  EXPECT_TRUE(EditorShellTestAccess::ActiveToolIsSelect(shell));
+  MouseModifiers doubleClick;
+  doubleClick.doubleClick = true;
+  EditorShellTestAccess::BufferPendingClick(shell, Vector2d(24.0, 34.0), doubleClick);
+  RenderPaneMouseFrame(window, shell, Vector2d(24.0, 34.0), /*mouseDown=*/false,
+                       /*renderPaneOrigin=*/Vector2d(20.0, 30.0),
+                       /*renderPaneSize=*/Vector2d(400.0, 260.0), /*shift=*/false,
+                       /*option=*/false, /*command=*/false, /*doubleClick=*/true);
   (void)EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell);
 
+  ASSERT_TRUE(EditorShellTestAccess::App(shell).selectedElement().has_value());
   const std::string_view source = EditorShellTestAccess::App(shell).document().document().source();
   EXPECT_NE(source.find(R"(x="24")"), std::string_view::npos);
   EXPECT_NE(source.find(R"(y="34")"), std::string_view::npos);
-  EXPECT_NE(source.find(">Text</text>"), std::string_view::npos);
+  EXPECT_NE(source.find(R"(<text)"), std::string_view::npos);
+  EXPECT_TRUE(EditorShellTestAccess::ActiveToolIsText(shell));
 }
 
 TEST(EditorShellTest, RenderPanePenToolClickDragAndCommitOpenPath) {

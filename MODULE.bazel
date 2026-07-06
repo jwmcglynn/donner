@@ -1,10 +1,10 @@
-"""Donner SVG Editor & Toolkit: an SVG editor application plus reusable SVG libraries.
+"""Donner SVG Editor & Engine: an SVG editor application plus a reusable SVG rendering, geometry, and DOM engine.
 
 A C++20 SVG editor plus rendering, geometry, and toolkit libraries providing full SVG DOM
 access with complete rendering support including text, filters, and animation."""
 
 # ReleaseBot: bump `version` to the published v0.8 version string when stamping the
-# "Donner SVG Editor & Toolkit" release. Currently the v0.8 pre-release line; bump to the
+# "Donner SVG Editor & Engine" release. Currently the v0.8 pre-release line; bump to the
 # final "0.8.0" at stamp time.
 module(name = "donner", version = "0.8.0-pre")
 

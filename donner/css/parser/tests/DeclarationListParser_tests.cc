@@ -127,7 +127,7 @@ TEST(DeclarationListParser, SourceRangeSpansNameToLastValueToken) {
   // Declaration must carry a `sourceRange` spanning the name offset to
   // the start of the last consumed value token. The editor's inline-style
   // surgical patcher uses this to locate a specific declaration inside a
-  // `style="…"` attribute and splice a new value into it.
+  // `style="..."` attribute and splice a new value into it.
   //
   // Byte offsets below are manually asserted so the test fails loudly if
   // the offset plumbing drifts.

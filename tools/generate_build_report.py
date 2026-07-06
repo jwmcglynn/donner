@@ -914,7 +914,7 @@ def make_documentation_section(links: LinkTargets) -> SectionResult:
     """
     content = "\n".join(
         [
-            "Doxygen-generated API documentation for the Donner SVG library.",
+            "Doxygen-generated API documentation for Donner SVG Editor & Engine.",
             "",
             f"Browse: [API documentation]({links.doxygen_index})",
             "",

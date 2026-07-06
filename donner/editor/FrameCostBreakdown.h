@@ -195,6 +195,9 @@ struct FrameCostBreakdown {
 
   /// Cumulative number of full-document canvas-size commits since document load.
   std::uint64_t documentCanvasCommitCount = 0;
+  /// Cumulative number of render requests posted to the async worker since
+  /// document load. Lets tests assert gesture-time scheduling behavior.
+  std::uint64_t renderRequestsPosted = 0;
   /// Most recent full-document canvas size committed through the SVG document.
   Vector2i lastCommittedCanvasSize = Vector2i::Zero();
 };

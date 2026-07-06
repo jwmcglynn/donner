@@ -1,19 +1,19 @@
-# Donner SVG Editor & Toolkit Project Roadmap {#DonnerProjectRoadmap}
+# Donner SVG Editor & Engine Project Roadmap {#DonnerProjectRoadmap}
 
 **Status:** Active
 **Updated:** 2026-05-30
 
 ## Summary
 
-Donner is now positioned as **Donner SVG Editor & Toolkit**: an SVG editor application plus the
-rendering, geometry, parsing, and authoring libraries needed to build SVG tooling.
+Donner is now positioned as **Donner SVG Editor & Engine**: an SVG editor application plus the
+rendering, geometry, parsing, and authoring engine needed to build SVG tooling.
 
 After v0.1 established the static rendering baseline, a large body of work landed covering renderer
 abstraction, a complete software rasterizer, text shaping, and all 17 SVG filter primitives. This is
 collected as **v0.5**, skipping intermediate milestones that were overtaken by the pace of
 development.
 
-The next release target is **v0.8: Donner SVG Editor & Toolkit**. Its scope is everything completed
+The next release target is **v0.8: Donner SVG Editor & Engine**. Its scope is everything completed
 since v0.5, plus the editor showcase work needed to honestly demonstrate Donner authoring its own
 new splash: a complete Layers panel, shape cut/copy/paste, a tuned Pen tool, text creation,
 text-to-outline conversion, viewport SVG export, and optional editor overlay export. The broader
@@ -68,14 +68,14 @@ Renderer abstraction, software rasterizer, text rendering, and filter effects.
 
 ---
 
-## v0.8 — Donner SVG Editor & Toolkit (next release)
+## v0.8 — Donner SVG Editor & Engine (next release)
 
 Focus: rebrand Donner around the editor and toolkit, release the accumulated editor/Geode/path work,
 and ship a self-authored SVG showcase.
 
 ### Release Positioning
 
-- Product name: **Donner SVG Editor & Toolkit**.
+- Product name: **Donner SVG Editor & Engine**.
 - Public story: Donner is both a native SVG editor and a reusable C++ SVG toolkit.
 - Showcase story: the v0.8 splash is made in Donner Editor, exported by Donner Editor, and checked
   in as SVG.
@@ -123,7 +123,7 @@ showcase branch `v0_8_drive` (PR #635, pending a manual QA pass + merge):
 - [x] **Provenance** — include a concise record of the editor operations used to create the final
       showcase asset.
 - [x] **Rebrand updates** — update public docs, release notes, and user-facing labels to
-      **Donner SVG Editor & Toolkit**.
+      **Donner SVG Editor & Engine**.
 
 ### v0.8 Release Criteria
 
@@ -148,7 +148,7 @@ See [v0_8_showcase](design_docs/0047-v0_8_showcase.md) for the detailed executio
 
 ## v1.0 — Production Release (future)
 
-The production-quality milestone that follows the v0.8 **Donner SVG Editor & Toolkit** release.
+The production-quality milestone that follows the v0.8 **Donner SVG Editor & Engine** release.
 
 Focus: interactive editing, conformance, parser hardening, and ecosystem integration.
 

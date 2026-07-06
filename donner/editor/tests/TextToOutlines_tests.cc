@@ -159,6 +159,35 @@ TEST(TextToOutlines, PixelCompareBeforeAndAfterMatches) {
                                tests::PixelmatchIdentityParams());
 }
 
+// Text authored by the editor's text tool: box text with per-line <tspan>
+// children (x + dy line advance), the box-size data attributes, and bold
+// styling. Conversion must produce path geometry that renders pixel-identical
+// to the live text.
+TEST(TextToOutlines, ConvertsTextToolBoxTextPixelIdentical) {
+  constexpr std::string_view kToolAuthoredSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<text x="10" y="52" font-family="sans-serif" font-size="32" fill="black" font-weight="bold" data-donner-text-box-width="180" data-donner-text-box-height="100"><tspan x="10">Hello</tspan><tspan x="10" dy="38.4">world</tspan></text>
+</svg>)";
+  svg::SVGDocument converted = Parse(kToolAuthoredSvg);
+  svg::SVGElement text = TextElement(converted);
+
+  ConvertTextToOutlinesResult result = convertTextToOutlines(converted, text);
+  ASSERT_TRUE(result.ok) << result.error;
+  const std::string mergedSource = ApplyConversion(converted, text, result);
+
+  EXPECT_FALSE(converted.querySelector("text").has_value())
+      << "converted document must contain no live <text>";
+  EXPECT_FALSE(converted.querySelector("tspan").has_value())
+      << "converted document must contain no live <tspan>";
+
+  svg::SVGDocument beforeFresh = Parse(kToolAuthoredSvg);
+  svg::SVGDocument after = Parse(mergedSource);
+  const svg::RendererBitmap beforeBitmap = RenderToBitmap(beforeFresh);
+  const svg::RendererBitmap afterBitmap = RenderToBitmap(after);
+  tests::CompareBitmapToBitmap(afterBitmap, beforeBitmap, "text_to_outlines_tool_box_text",
+                               tests::PixelmatchIdentityParams());
+}
+
 // Preserves fill, opacity, transform, fill-rule, stroke, and paint order: the
 // authored presentation attributes on `<text>` are carried onto the outline
 // group, and the group replaces the text in situ (same source position).

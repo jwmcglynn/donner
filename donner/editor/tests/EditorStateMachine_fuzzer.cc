@@ -415,7 +415,7 @@ private:
   void SelectByHitTestOrRect() {
     const Vector2d start = ConsumeDocumentPoint(provider_);
     if (!provider_.ConsumeBool()) {
-      if (std::optional<svg::SVGGeometryElement> hit = app_.hitTest(start)) {
+      if (std::optional<svg::SVGGraphicsElement> hit = app_.hitTest(start)) {
         app_.setSelection(hit->cast<svg::SVGElement>());
       } else {
         app_.clearSelection();
@@ -426,10 +426,10 @@ private:
     const Vector2d end = ConsumeDocumentPoint(provider_);
     const Box2d box = Box2d::FromXYWH(std::min(start.x, end.x), std::min(start.y, end.y),
                                       std::abs(end.x - start.x), std::abs(end.y - start.y));
-    const std::vector<svg::SVGGeometryElement> hits = app_.hitTestRect(box);
+    const std::vector<svg::SVGGraphicsElement> hits = app_.hitTestRect(box);
     std::vector<svg::SVGElement> elements;
     elements.reserve(hits.size());
-    for (const svg::SVGGeometryElement& hit : hits) {
+    for (const svg::SVGGraphicsElement& hit : hits) {
       elements.push_back(hit.cast<svg::SVGElement>());
     }
     app_.setSelection(std::move(elements));

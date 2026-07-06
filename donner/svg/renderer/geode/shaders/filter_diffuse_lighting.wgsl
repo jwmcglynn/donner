@@ -18,7 +18,7 @@ struct LightingParams {
   _pad0: f32,
   _pad1: f32,
 
-  // Light color (linear RGB, premultiplied by nothing — straight).
+  // Light color (linear RGB, premultiplied by nothing - straight).
   light_r: f32,
   light_g: f32,
   light_b: f32,

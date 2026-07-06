@@ -415,12 +415,12 @@ public:
   /// Find the topmost geometry element at the given document-space point,
   /// or `std::nullopt` if no element is hit. Coordinates are in the SVG
   /// canvas space (the same space as the root `<svg>` viewBox).
-  [[nodiscard]] std::optional<svg::SVGGeometryElement> hitTest(const Vector2d& documentPoint);
+  [[nodiscard]] std::optional<svg::SVGGraphicsElement> hitTest(const Vector2d& documentPoint);
 
   /// Find every geometry element whose painted shape intersects `documentRect`. Used by marquee
   /// selection. Returns elements in document order (root-to-leaf depth-first), so callers that care
   /// about z-order can rely on a stable sequence.
-  [[nodiscard]] std::vector<svg::SVGGeometryElement> hitTestRect(const Box2d& documentRect);
+  [[nodiscard]] std::vector<svg::SVGGraphicsElement> hitTestRect(const Box2d& documentRect);
 
   /// Return every selectable geometry element in the document, in document order (root-to-leaf
   /// depth-first). This is the canonical "Select All" set: the same elements `hitTestRect` would
@@ -559,6 +559,11 @@ private:
   /// `const optional&`. Centralized so we can't forget it on a new
   /// mutation path.
   void refreshFirstSelectionCache();
+
+  /// Records the entry deferred by \ref recordDocumentSourceUndoOnNextFlush
+  /// (when the source actually changed) and clears it. Called on every
+  /// `flushFrame()`, including no-op flushes with nothing queued.
+  void consumePendingDocumentSourceUndo();
 
   /// Shared tail of the structural-move paths (\ref reorderSelectedElement and
   /// \ref reorderElementBeforeSibling): records an undo snapshot labelled
