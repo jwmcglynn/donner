@@ -16,6 +16,7 @@
 #include "donner/base/Utf8.h"
 #include "donner/base/Utils.h"
 #include "donner/editor/ImGuiInternalIncludes.h"
+#include "donner/editor/TextChipIconSet.h"
 #include "misc/cpp/imgui_stdlib.h"
 
 namespace donner::editor {
@@ -2354,8 +2355,18 @@ void TextEditor::renderFocusReferenceStyleSourceChip(ImDrawList* drawList,
   drawList->AddRectFilled(bounds.min, bounds.max, fillColor, rounding);
   drawList->AddRect(bounds.min, bounds.max, borderColor, rounding, ImDrawFlags_None,
                     std::max(1.0f, uiScale_));
-  drawList->AddText(ImVec2(bounds.min.x + paddingX, bounds.min.y + paddingY), borderColor,
-                    kStyleSourceChipIcon);
+
+  // QA-F22: draw the chip mark as a Donner-rendered SVG icon tinted with the
+  // rope color. The embedded fonts lack the "✦" glyph, so the text draw below
+  // is only a headless-test fallback (no icon-texture provider available).
+  const ImVec2 iconOrigin(bounds.min.x + paddingX, bounds.min.y + paddingY);
+  const ImVec2 glyphSize = StyleSourceChipTextSize();
+  const float iconSide = glyphSize.x < glyphSize.y ? glyphSize.x : glyphSize.y;
+  const ImVec2 iconMax(iconOrigin.x + iconSide, iconOrigin.y + iconSide);
+  if (!DrawTextChipIcon(drawList, TextChipIcon::StyleSource, iconOrigin, iconMax, borderColor,
+                        chipIconTextureProvider_)) {
+    drawList->AddText(iconOrigin, borderColor, kStyleSourceChipIcon);
+  }
 }
 
 void TextEditor::renderSourceStyleDecorationChips(ImDrawList* drawList) {
@@ -2405,8 +2416,15 @@ void TextEditor::renderSourceStyleDecorationChips(ImDrawList* drawList) {
           ImGui::GetFont()->CalcTextSizeA(markerFontSize, FLT_MAX, -1.0f, kOverflowMarker);
       const ImVec2 markerMin(max.x + markerGap, min.y + (chipSize.y - markerSize.y) * 0.5f);
       const ImVec2 markerMax(markerMin.x + markerSize.x, markerMin.y + markerSize.y);
-      drawList->AddText(ImGui::GetFont(), markerFontSize, markerMin, SourceStyleChipFillColor(),
-                        kOverflowMarker);
+      // QA-F22: SVG icon for the overflow marker (the "✱" glyph is absent from
+      // the embedded fonts); text draw is a headless-test fallback only.
+      const float markerSide = markerSize.x < markerSize.y ? markerSize.x : markerSize.y;
+      const ImVec2 markerIconMax(markerMin.x + markerSide, markerMin.y + markerSide);
+      if (!DrawTextChipIcon(drawList, TextChipIcon::Overflow, markerMin, markerIconMax,
+                            SourceStyleChipFillColor(), chipIconTextureProvider_)) {
+        drawList->AddText(ImGui::GetFont(), markerFontSize, markerMin, SourceStyleChipFillColor(),
+                          kOverflowMarker);
+      }
 
       sourceStyleChipHitRects_.push_back(SourceStyleChipHitRect{
           .id = decoration.id,

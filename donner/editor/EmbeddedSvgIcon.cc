@@ -45,10 +45,11 @@ svg::Renderer& SharedIconRenderer() {
   return renderer;
 }
 
-}  // namespace
-
-std::optional<svg::RendererBitmap> RenderEmbeddedSvgIcon(std::span<const unsigned char> svgBytes,
-                                                         int outputSizePx) {
+// Parse and rasterize @p svgBytes through the shared Donner renderer at a
+// square @p outputSizePx. Returns the raw premultiplied-RGBA snapshot (authored
+// colors intact); callers decide whether to collapse it to a tintable mask.
+std::optional<svg::RendererBitmap> RenderIconBitmap(std::span<const unsigned char> svgBytes,
+                                                    int outputSizePx) {
   if (outputSizePx <= 0) {
     return std::nullopt;
   }
@@ -71,8 +72,25 @@ std::optional<svg::RendererBitmap> RenderEmbeddedSvgIcon(std::span<const unsigne
     return std::nullopt;
   }
 
-  NormalizeIconBitmapToTintableAlphaMask(&bitmap);
   return bitmap;
+}
+
+}  // namespace
+
+std::optional<svg::RendererBitmap> RenderEmbeddedSvgIcon(std::span<const unsigned char> svgBytes,
+                                                         int outputSizePx) {
+  std::optional<svg::RendererBitmap> bitmap = RenderIconBitmap(svgBytes, outputSizePx);
+  if (!bitmap.has_value()) {
+    return std::nullopt;
+  }
+
+  NormalizeIconBitmapToTintableAlphaMask(&bitmap.value());
+  return bitmap;
+}
+
+std::optional<svg::RendererBitmap> RenderEmbeddedSvgIconColor(std::span<const unsigned char> svgBytes,
+                                                              int outputSizePx) {
+  return RenderIconBitmap(svgBytes, outputSizePx);
 }
 
 }  // namespace donner::editor

@@ -671,6 +671,19 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     return response;
   });
 
+  // QA-F22: the focus-reference rope chips draw their marks as Donner-rendered
+  // SVG icons instead of Unicode font glyphs (which showed as "?"). Reuse the
+  // toolbar icon texture cache to upload the chip masks.
+  textEditor_.setChipIconTextureProvider(
+      [this](std::uint64_t stableId, const svg::RendererBitmap& bitmap) -> ToolbarIconTexture {
+        const GlTextureCache::ThumbnailTextureView uploaded =
+            toolbarIconTextures_.uploadThumbnail(stableId, bitmap);
+        return ToolbarIconTexture{
+            .texture = uploaded.texture,
+            .uvBottomRight = uploaded.uvBottomRight,
+        };
+      });
+
   ImGuiIO& io = ImGui::GetIO();
   ImFontConfig fontCfg;
   fontCfg.FontDataOwnedByAtlas = false;
@@ -2369,7 +2382,7 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
     const bool selected = activeTool_ == tool;
     if (selected) {
       // Selected tool reads as accent-at-22%-fill (not a solid accent fill) so
-      // the tool-icon mask stays legible; an accent stroke is added below.
+      // the two-tone tool icon stays legible; an accent stroke is added below.
       ImVec4 fill = ImGui::ColorConvertU32ToFloat4(theme.accentDefault);
       fill.w = theme.selectionFillAlpha;
       ImVec4 fillActive = fill;
@@ -2389,11 +2402,13 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
       }
       activeTool_ = tool;
     }
-    // W6: the tool icon is a Donner-rendered SVG mask tinted with the text
-    // color (replaces the old hand-stroked per-icon primitives). W8: the
-    // selected tool gets an accent stroke on top, routed through the theme.
+    // QA-F7: the tool icon is a Donner-rendered TWO-TONE SVG glyph (solid black
+    // core, white outline) that reads as the same shape as the tool's OS cursor
+    // and carries its own contrast on any button state, so it is drawn
+    // untinted. W8: the selected tool gets an accent stroke on top, routed
+    // through the theme, plus an accent-at-22%-fill button background.
     DrawToolbarIcon(icon, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
-                    ImGui::GetColorU32(ImGuiCol_Text), toolbarIconProvider);
+                    toolbarIconProvider);
     if (selected) {
       drawList->AddRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), theme.accentDefault,
                         theme.radiusControl, 0, 1.5f);
@@ -2414,15 +2429,11 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
   renderButton(ActiveTool::Pen, "##pen_tool", ToolbarIcon::Pen, penTooltip.c_str());
   ImGui::SameLine(0.0f, kToolPaletteGap);
   renderButton(ActiveTool::Text, "##text_tool", ToolbarIcon::Text, textTooltip.c_str());
-  ImGui::SameLine(0.0f, kToolPaletteGap);
-  ImGui::BeginDisabled(true);
-  (void)ImGui::Button("##path_modify_tool", ImVec2(kToolPaletteButtonSize, kToolPaletteButtonSize));
-  DrawToolbarIcon(ToolbarIcon::PathModify, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
-                  ImGui::GetColorU32(ImGuiCol_TextDisabled), toolbarIconProvider);
-  ImGui::EndDisabled();
-  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-    ImGui::SetTooltip("%s", "Path edit");
-  }
+  // QA-F14: the "Path edit" (path-modify) tool is hidden from the v0.8 toolbar.
+  // The tool is unimplemented/untested for v0.8, so its palette button (and any
+  // way to activate it) is removed. The art (ToolbarIcon::PathModify /
+  // EditorCursor::PathModify) and tool plumbing are kept for a later Path Edit
+  // mode.
   ImGui::SameLine(0.0f, kToolPaletteGap);
   renderFillStrokeToolbarWidget();
 
@@ -2603,19 +2614,22 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   };
   SelectionTransformHandleIntent hoverTransformIntent;
   if (penToolActive && !rotateCursorLocked && toolEligible) {
-    // Contextual pen hint: the close-path cursor when a click would close the
-    // active contour, otherwise the base nib. (Add/remove-anchor hints exist in
-    // the cursor set but await a pen hover-intent query to wire live.)
+    // QA-F13: contextual pen cursor, driven by the pen tool's live hover-intent
+    // query. It reports whether a click at the pointer would insert an anchor on
+    // the hovered segment (Add), sits over an existing anchor (Remove), or would
+    // close the active contour (Close); map each to the matching cursor asset,
+    // falling back to the plain nib.
     PenCursorHint penHint = PenCursorHint::Base;
-    if (penTool_.isDrafting()) {
-      MouseModifiers hoverModifiers;
-      hoverModifiers.shift = ImGui::GetIO().KeyShift;
-      hoverModifiers.option = ImGui::GetIO().KeyAlt;
-      hoverModifiers.command = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
-      hoverModifiers.pixelsPerDocUnit = interactionController_.viewport().pixelsPerDocUnit();
-      if (penTool_.wouldCloseAt(screenToDocument(ImGui::GetMousePos()), hoverModifiers)) {
-        penHint = PenCursorHint::Close;
-      }
+    MouseModifiers hoverModifiers;
+    hoverModifiers.shift = ImGui::GetIO().KeyShift;
+    hoverModifiers.option = ImGui::GetIO().KeyAlt;
+    hoverModifiers.command = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
+    hoverModifiers.pixelsPerDocUnit = interactionController_.viewport().pixelsPerDocUnit();
+    switch (penTool_.hoverIntentAt(app_, screenToDocument(ImGui::GetMousePos()), hoverModifiers)) {
+      case PenTool::PenHoverIntent::CloseContour: penHint = PenCursorHint::Close; break;
+      case PenTool::PenHoverIntent::AddAnchor: penHint = PenCursorHint::Add; break;
+      case PenTool::PenHoverIntent::RemoveAnchor: penHint = PenCursorHint::Remove; break;
+      case PenTool::PenHoverIntent::None: penHint = PenCursorHint::Base; break;
     }
     if (rotateCursorSet_.setPenCursor(penHint)) {
       SetImGuiOsCursorManagementEnabled(false);

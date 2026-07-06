@@ -279,6 +279,16 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "text_chip_icon_set_tests",
+    srcs = ["TextChipIconSet_tests.cc"],
+    deps = [
+        "//donner/editor:text_chip_icon_set",
+        "//donner/svg/renderer:renderer_interface",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "source_selection_tests",
     srcs = ["SourceSelection_tests.cc"],
     data = ["//:donner_splash.svg"],

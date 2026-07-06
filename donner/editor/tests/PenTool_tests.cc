@@ -724,6 +724,84 @@ TEST_F(PenToolTest, ClickOnCommittedSelectedPathSegmentInsertsAnchor) {
   EXPECT_FALSE(tool.isDrafting());
 }
 
+// QA-F13: the contextual pen cursor is driven by hoverIntentAt. The query must
+// mirror onMouseDown's precedence so the cursor predicts the click.
+TEST_F(PenToolTest, HoverIntentOnDraftReportsAddRemoveAndNone) {
+  MouseModifiers mods;
+  mods.pixelsPerDocUnit = 1.0;
+  tool.onMouseDown(app, Vector2d(10.0, 10.0), mods);
+  tool.onMouseUp(app, Vector2d(10.0, 10.0));
+  ASSERT_TRUE(app.flushFrame());
+  tool.onMouseDown(app, Vector2d(90.0, 10.0), mods);
+  tool.onMouseUp(app, Vector2d(90.0, 10.0));
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_EQ(path().d(), "M 10 10 L 90 10");
+  ASSERT_TRUE(tool.isDrafting());
+
+  // Over the segment: a click would insert an anchor.
+  EXPECT_EQ(tool.hoverIntentAt(app, Vector2d(50.0, 10.0), mods),
+            PenTool::PenHoverIntent::AddAnchor);
+  // Over an existing anchor: remove-anchor hint.
+  EXPECT_EQ(tool.hoverIntentAt(app, Vector2d(90.0, 10.0), mods),
+            PenTool::PenHoverIntent::RemoveAnchor);
+  // Empty canvas: plain nib.
+  EXPECT_EQ(tool.hoverIntentAt(app, Vector2d(50.0, 80.0), mods), PenTool::PenHoverIntent::None);
+}
+
+TEST_F(PenToolTest, HoverIntentReportsCloseOverStartOfClosableDraft) {
+  MouseModifiers mods;
+  mods.pixelsPerDocUnit = 1.0;
+  for (const Vector2d& point :
+       {Vector2d(10.0, 10.0), Vector2d(90.0, 10.0), Vector2d(90.0, 90.0)}) {
+    tool.onMouseDown(app, point, mods);
+    tool.onMouseUp(app, point);
+    ASSERT_TRUE(app.flushFrame());
+  }
+  ASSERT_EQ(path().d(), "M 10 10 L 90 10 L 90 90");
+
+  // Near the first anchor of a 3+ anchor draft: close wins over the anchor's
+  // own remove hint (matching onMouseDown precedence).
+  EXPECT_EQ(tool.hoverIntentAt(app, Vector2d(11.0, 10.0), mods),
+            PenTool::PenHoverIntent::CloseContour);
+}
+
+TEST_F(PenToolTest, HoverIntentDuringDragIsNone) {
+  MouseModifiers mods;
+  mods.pixelsPerDocUnit = 1.0;
+  // onMouseDown with no mouseUp leaves the tool mid new-anchor drag.
+  tool.onMouseDown(app, Vector2d(10.0, 10.0), mods);
+  ASSERT_TRUE(tool.isDraggingAnchor());
+  EXPECT_EQ(tool.hoverIntentAt(app, Vector2d(10.0, 10.0), mods), PenTool::PenHoverIntent::None);
+}
+
+TEST_F(PenToolTest, HoverIntentOnSelectedCommittedPathReportsAddAndRemove) {
+  ASSERT_TRUE(app.loadFromString(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+           <path id="p" d="M 0 0 L 40 0" fill="none" stroke="black"/>
+         </svg>)"));
+  auto selected = app.document().document().querySelector("#p");
+  ASSERT_TRUE(selected.has_value());
+  app.setSelection(*selected);
+
+  MouseModifiers mods;
+  mods.pixelsPerDocUnit = 1.0;
+  EXPECT_FALSE(tool.isDrafting());
+  // Mid-segment: add-anchor; over the endpoint anchor: remove-anchor.
+  EXPECT_EQ(tool.hoverIntentAt(app, Vector2d(20.0, 0.0), mods),
+            PenTool::PenHoverIntent::AddAnchor);
+  EXPECT_EQ(tool.hoverIntentAt(app, Vector2d(0.0, 0.0), mods),
+            PenTool::PenHoverIntent::RemoveAnchor);
+  // Away from the path: no hint.
+  EXPECT_EQ(tool.hoverIntentAt(app, Vector2d(80.0, 80.0), mods), PenTool::PenHoverIntent::None);
+}
+
+TEST_F(PenToolTest, HoverIntentWithNoDraftOrSelectionIsNone) {
+  MouseModifiers mods;
+  mods.pixelsPerDocUnit = 1.0;
+  EXPECT_FALSE(tool.isDrafting());
+  EXPECT_EQ(tool.hoverIntentAt(app, Vector2d(50.0, 50.0), mods), PenTool::PenHoverIntent::None);
+}
+
 TEST_F(PenToolTest, CommandClickWithNonEditableSelectionDoesNotStartDraft) {
   struct Scenario {
     std::string_view svg;

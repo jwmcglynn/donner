@@ -1,11 +1,20 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
-  <!-- Path Modify tool: a path segment between two square anchor points with a
-       round control handle, the standard "edit path nodes" motif. -->
-  <g fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M 5 18 C 5 10 11 5.5 19 5.5" />
-    <line x1="5" y1="18" x2="10" y2="12" />
-    <circle cx="11" cy="10.5" r="1.6" fill="#000000" />
+  <!-- Path Modify tool: a path segment between two square anchors with a round
+       control handle, two-tone (black core, white outline). Hidden from the
+       v0.8 toolbar (QA-F14) but kept in the icon set for a later Path Edit mode. -->
+  <g stroke-linecap="round" stroke-linejoin="round">
+    <g fill="none">
+      <g stroke="#ffffff" stroke-width="3.4">
+        <path d="M 5 18 C 5 10 11 5.5 19 5.5" />
+        <line x1="5" y1="18" x2="10" y2="12" />
+      </g>
+      <g stroke="#000000" stroke-width="2">
+        <path d="M 5 18 C 5 10 11 5.5 19 5.5" />
+        <line x1="5" y1="18" x2="10" y2="12" />
+      </g>
+    </g>
+    <circle cx="11" cy="10.5" r="1.9" fill="#000000" stroke="#ffffff" stroke-width="1" />
+    <rect x="2.6" y="15.6" width="4.8" height="4.8" fill="#000000" stroke="#ffffff" stroke-width="1.1" />
+    <rect x="16.6" y="3.1" width="4.8" height="4.8" fill="#000000" stroke="#ffffff" stroke-width="1.1" />
   </g>
-  <rect x="3" y="16" width="4" height="4" fill="#000000" />
-  <rect x="17" y="3.5" width="4" height="4" fill="#000000" />
 </svg>

@@ -661,6 +661,9 @@ embed_resources(
     resources = {
         "kEditorChevronDownSvg": "icons/chevron-down.svg",
         "kEditorChevronSvg": "icons/chevron.svg",
+        # QA-F22: text-region rope chip marks (were missing-font "?" glyphs).
+        "kEditorChipStyleSourceSvg": "art/chip_style_source_icon.svg",
+        "kEditorChipOverflowSvg": "art/chip_overflow_icon.svg",
     },
     visibility = ["//donner:__subpackages__"],
 )
@@ -690,6 +693,22 @@ donner_cc_library(
         ":embedded_svg_icon",
         ":imgui_headers",
         ":tool_icons_svg",
+        "//donner/base",
+        "//donner/svg/renderer:renderer_interface",
+    ],
+)
+
+# QA-F22: text-region rope chip marks, rendered from editor-owned SVG art
+# through the EmbeddedSvgIcon mask pipeline (replaces missing-font "?" glyphs).
+donner_cc_library(
+    name = "text_chip_icon_set",
+    srcs = ["TextChipIconSet.cc"],
+    hdrs = ["TextChipIconSet.h"],
+    deps = [
+        ":editor_icons",
+        ":embedded_svg_icon",
+        ":imgui_headers",
+        ":toolbar_icon_set",
         "//donner/base",
         "//donner/svg/renderer:renderer_interface",
     ],
@@ -1330,7 +1349,9 @@ donner_cc_library(
         ":soft_wrap",
         ":source_edit_intent",
         ":text_buffer",
+        ":text_chip_icon_set",
         ":text_editor_core",
+        ":toolbar_icon_set",
         "//donner/base",
         "@imgui",
     ],

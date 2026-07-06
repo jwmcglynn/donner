@@ -1,39 +1,13 @@
-<!-- Visual reference: https://www.svgrepo.com/svg/437972/pen-tool -->
 <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
-  <g id="pen-cursor-glyph" fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <g stroke="#ffffff" stroke-width="3.35">
-      <path
-        d="
-          M 14.4153 18.6964
-          L 7.88293 19.2352
-          L 3.80865 3.84719
-          L 19.1966 7.92147
-          L 18.3043 14.8073" />
-      <rect
-        x="13.7081"
-        y="19.4036"
-        width="7.22447"
-        height="3"
-        transform="rotate(-45 13.7081 19.4036)" />
-      <line x1="5.92996" y1="5.96852" x2="10.8797" y2="10.9183" />
-      <circle cx="12.2939" cy="12.3325" r="2" transform="rotate(-45 12.2939 12.3325)" />
-    </g>
-    <g stroke="#000000" stroke-width="2">
-      <path
-        d="
-          M 14.4153 18.6964
-          L 7.88293 19.2352
-          L 3.80865 3.84719
-          L 19.1966 7.92147
-          L 18.3043 14.8073" />
-      <rect
-        x="13.7081"
-        y="19.4036"
-        width="7.22447"
-        height="3"
-        transform="rotate(-45 13.7081 19.4036)" />
-      <line x1="5.92996" y1="5.96852" x2="10.8797" y2="10.9183" />
-      <circle cx="12.2939" cy="12.3325" r="2" transform="rotate(-45 12.2939 12.3325)" />
-    </g>
+  <!-- Pen tool: the classic fountain-nib silhouette (solid black core, white
+       outline), matching the QA2 reference. The nib tip is the hotspot at the
+       top-left (4,4); the body runs down-right to a rounded shoulder, with a
+       slit from the tip and a small vent hole near the shoulder. -->
+  <g id="pen-cursor-glyph" stroke-linejoin="round" stroke-linecap="round">
+    <path
+      d="M 4.5 4.5 C 13 6 19 11 19.5 19.5 C 11 19 6 13 4.5 4.5 Z"
+      fill="#000000" stroke="#ffffff" stroke-width="1.75" />
+    <line x1="6.6" y1="6.6" x2="12.8" y2="12.8" stroke="#ffffff" stroke-width="1.2" />
+    <circle cx="15.4" cy="15.4" r="1.5" fill="#ffffff" />
   </g>
 </svg>

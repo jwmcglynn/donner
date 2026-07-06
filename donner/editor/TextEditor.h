@@ -20,6 +20,7 @@
 #include "donner/editor/RopeSimulation.h"
 #include "donner/editor/SoftWrap.h"
 #include "donner/editor/TextBuffer.h"
+#include "donner/editor/TextChipIconSet.h"
 #include "donner/editor/TextEditorCore.h"
 
 #define IMGUI_DEFINE_MATH_OPERATORS
@@ -770,6 +771,18 @@ public:
     autocompleteProvider_ = std::move(provider);
   }
 
+  /**
+   * Install the texture-upload provider used to draw the focus-reference rope
+   * chip marks as Donner-rendered SVG icons (QA-F22) instead of Unicode font
+   * glyphs. When unset (e.g. headless tests), the chips fall back to their text
+   * glyph.
+   *
+   * @param provider Icon texture-upload callback, or empty to disable.
+   */
+  void setChipIconTextureProvider(ToolbarIconTextureProvider provider) {
+    chipIconTextureProvider_ = std::move(provider);
+  }
+
   // Static utilities
 
   /**
@@ -1077,6 +1090,7 @@ private:
   std::string autocompleteObject_;              //!< Object for member completion
   Coordinates autocompletePosition_;            //!< Position of completion
   AutocompleteProvider autocompleteProvider_;   //!< Syntax-aware autocomplete source
+  ToolbarIconTextureProvider chipIconTextureProvider_;  //!< Rope chip icon texture upload (QA-F22)
   bool autocompleteReplacementActive_ = false;  //!< Provider supplied an explicit replace range
   std::size_t autocompleteReplacementStartOffset_ = 0;  //!< Provider replacement start
   std::size_t autocompleteReplacementEndOffset_ = 0;    //!< Provider replacement end

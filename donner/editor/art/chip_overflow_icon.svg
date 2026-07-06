@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <!-- Overflow chip marker (QA-F22): a six-spoke asterisk/burst, replacing the
+       missing-font "?" glyph. Single ink color; tinted through the mask
+       pipeline like the style-source mark. -->
+  <g stroke="#000000" stroke-width="2.6" stroke-linecap="round">
+    <line x1="12" y1="3" x2="12" y2="21" />
+    <line x1="4.2" y1="7.5" x2="19.8" y2="16.5" />
+    <line x1="4.2" y1="16.5" x2="19.8" y2="7.5" />
+  </g>
+</svg>

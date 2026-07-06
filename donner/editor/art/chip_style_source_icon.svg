@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <!-- Style-source chip mark (QA-F22): a four-point sparkle, replacing the
+       missing-font "?" glyph the text-region ropes fell back to. Single ink
+       color; EmbeddedSvgIcon collapses it to a white mask that the chip tints
+       with the rope/chip color. -->
+  <path
+    d="M 12 2 C 12.8 7.4 16.6 11.2 22 12 C 16.6 12.8 12.8 16.6 12 22 C 11.2 16.6 7.4 12.8 2 12 C 7.4 11.2 11.2 7.4 12 2 Z"
+    fill="#000000" />
+</svg>

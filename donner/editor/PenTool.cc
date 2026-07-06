@@ -973,6 +973,49 @@ bool PenTool::wouldCloseAt(const Vector2d& documentPoint, const MouseModifiers& 
          shouldCloseAt(documentPoint, modifiers);
 }
 
+PenTool::PenHoverIntent PenTool::hoverIntentAt(const EditorApp& editor,
+                                               const Vector2d& documentPoint,
+                                               const MouseModifiers& modifiers) const {
+  const double toleranceDoc =
+      kPointHitScreenTolerance / std::max(modifiers.pixelsPerDocUnit, 0.000001);
+
+  if (activePath_.has_value()) {
+    // A drag or an existing-path point-edit session already owns the pointer;
+    // no contextual hint until it ends.
+    if (editingExistingPath_ || dragMode_ != DragMode::None) {
+      return PenHoverIntent::None;
+    }
+    // Precedence follows onMouseDown: close wins, then an existing anchor, then
+    // a segment.
+    if (wouldCloseAt(documentPoint, modifiers)) {
+      return PenHoverIntent::CloseContour;
+    }
+    if (const std::optional<PointHit> hit = HitTestPoints(anchors_, documentPoint, toleranceDoc);
+        hit.has_value() && hit->mode == DragMode::MoveAnchor) {
+      return PenHoverIntent::RemoveAnchor;
+    }
+    if (HitTestSegments(anchors_, closed_, documentPoint, toleranceDoc).has_value()) {
+      return PenHoverIntent::AddAnchor;
+    }
+    return PenHoverIntent::None;
+  }
+
+  // Not drafting: a selected single-contour <path> is editable, so hovering its
+  // anchors/segments previews the same add/remove gestures onMouseDown performs.
+  if (const std::optional<SelectedPathState> state = stateForSelectedPath(editor);
+      state.has_value()) {
+    if (const std::optional<PointHit> hit =
+            HitTestPoints(state->anchors, documentPoint, toleranceDoc);
+        hit.has_value() && hit->mode == DragMode::MoveAnchor) {
+      return PenHoverIntent::RemoveAnchor;
+    }
+    if (HitTestSegments(state->anchors, state->closed, documentPoint, toleranceDoc).has_value()) {
+      return PenHoverIntent::AddAnchor;
+    }
+  }
+  return PenHoverIntent::None;
+}
+
 void PenTool::convertAnchorSmoothness(std::size_t index) {
   Anchor& anchor = anchors_[index];
   const bool hasHandles = HasMeaningfulHandle(anchor.point, anchor.inHandle) ||

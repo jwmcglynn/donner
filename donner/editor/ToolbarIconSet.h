@@ -2,11 +2,15 @@
 /// @file
 ///
 /// Toolbar tool icons, rendered from embedded SVG art through Donner's
-/// `EmbeddedSvgIcon` white-mask pipeline (the same one `LayersPanel` and
-/// `SidebarPresenter` use for their affordance icons). This replaces the
-/// hand-drawn `ImDrawList` primitives the tool palette used to stroke per
-/// frame, so the toolbar icons and the OS cursors are authored from one SVG
-/// art family (see `donner/editor/art/STYLE.md`).
+/// `EmbeddedSvgIcon` COLOR pipeline (`RenderEmbeddedSvgIconColor`). Unlike the
+/// affordance icons in `LayersPanel` / `SidebarPresenter` (single-color tintable
+/// masks), tool icons preserve their authored two-tone paint - a solid black
+/// core with a white outline - so a tool's toolbar icon reads as the exact same
+/// glyph as its OS cursor (QA-F7). The white outline carries its own contrast on
+/// any button state, so the icon is drawn with an identity (white) tint rather
+/// than recolored. This replaces the hand-drawn `ImDrawList` primitives the tool
+/// palette used to stroke per frame; toolbar icons and OS cursors are authored
+/// from one SVG art family (see `donner/editor/art/STYLE.md`).
 
 #include <array>
 #include <cstdint>
@@ -58,15 +62,17 @@ using ToolbarIconTextureProvider =
 /// Stable texture-cache key for @p icon.
 [[nodiscard]] std::uint64_t ToolbarIconTextureKey(ToolbarIcon icon);
 
-/// The Donner-rendered white-mask bitmap for @p icon, rendered once and cached
-/// for the process lifetime. `std::nullopt` if parsing/rendering failed.
+/// The Donner-rendered two-tone (black-core/white-outline) color bitmap for
+/// @p icon, rendered once and cached for the process lifetime. `std::nullopt`
+/// if parsing/rendering failed.
 [[nodiscard]] const std::optional<svg::RendererBitmap>& CachedToolbarIconBitmap(ToolbarIcon icon);
 
-/// Draw @p icon centered within the button rect `[min, max]`, tinted with
-/// @p tintColor. No-op when @p provider is null or the icon can't be uploaded
-/// (e.g. headless tests with no GL context), leaving the button blank rather
-/// than crashing.
-void DrawToolbarIcon(ToolbarIcon icon, const ImVec2& min, const ImVec2& max, ImU32 tintColor,
+/// Draw @p icon centered within the button rect `[min, max]`. The icon is a
+/// two-tone glyph carrying its own contrast, so it is drawn with an identity
+/// (white) tint rather than recolored. No-op when @p provider is null or the
+/// icon can't be uploaded (e.g. headless tests with no GL context), leaving the
+/// button blank rather than crashing.
+void DrawToolbarIcon(ToolbarIcon icon, const ImVec2& min, const ImVec2& max,
                      const ToolbarIconTextureProvider& provider);
 
 }  // namespace donner::editor

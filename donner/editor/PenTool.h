@@ -14,6 +14,7 @@
 /// commit, or a tool switch).
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -125,6 +126,28 @@ public:
   /// @param modifiers Modifier-key state for the hover.
   [[nodiscard]] bool wouldCloseAt(const Vector2d& documentPoint,
                                   const MouseModifiers& modifiers) const;
+
+  /// What a pen-tool click at a hovered point would do, used to drive the
+  /// contextual pen cursor (QA-F13).
+  enum class PenHoverIntent : std::uint8_t {
+    None,          //!< Plain nib: a click places or continues an anchor.
+    CloseContour,  //!< A click would close the active contour.
+    AddAnchor,     //!< A click would insert an anchor on the hovered segment.
+    RemoveAnchor,  //!< The pointer is over an existing anchor.
+  };
+
+  /// Classify what a click at @p documentPoint would do, for the contextual pen
+  /// cursor. Mirrors `onMouseDown`'s precedence (close wins, then an existing
+  /// anchor, then a segment) across both an in-progress draft and a selected,
+  /// committed single-contour `<path>`. Returns `None` mid-drag, mid
+  /// point-edit, and when neither a draft nor an editable selected path is
+  /// under the pointer.
+  ///
+  /// @param editor Editor state (read-only; used to resolve a selected path).
+  /// @param documentPoint Pointer location in SVG document coordinates.
+  /// @param modifiers Modifier-key state for the hover.
+  [[nodiscard]] PenHoverIntent hoverIntentAt(const EditorApp& editor, const Vector2d& documentPoint,
+                                             const MouseModifiers& modifiers) const;
 
   /// First anchor of the active draft (the close-path target).
   [[nodiscard]] const Vector2d& draftStartPoint() const { return startPoint_; }
