@@ -13,6 +13,10 @@
 
 #include "donner/svg/SVGElement.h"
 
+namespace donner::svg {
+class FontCatalog;
+}  // namespace donner::svg
+
 namespace donner::editor {
 
 class EditorApp;
@@ -31,9 +35,13 @@ public:
    *   renderer owns the document (renders nothing).
    * @param nowSeconds Monotonic time in seconds, used for content-edit
    *   debouncing. Pass `ImGui::GetTime()` from the shell.
+   * @param fontCatalog Optional font catalog used to annotate the free-text
+   *   font-family field with how it resolves (Embedded / System / Public Sans
+   *   fallback). Pass null to skip the annotation.
    * @return true if a document mutation was queued this frame.
    */
-  bool render(EditorApp* liveApp, double nowSeconds);
+  bool render(EditorApp* liveApp, double nowSeconds,
+              const svg::FontCatalog* fontCatalog = nullptr);
 
 private:
   /// Re-seed the local edit buffers from the currently-selected element.

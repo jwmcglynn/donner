@@ -764,6 +764,8 @@ donner_cc_library(
         "//donner/svg",
         "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/resources:font_catalog",
+        "//donner/svg/resources:font_manager",
         "//third_party/fira-code",
         "//third_party/roboto",
         "@imgui",
@@ -895,6 +897,7 @@ donner_cc_library(
         "//donner/base",
         "//donner/base/xml",
         "//donner/svg",
+        "//donner/svg/resources:font_catalog",
         "@imgui",
     ],
 )
