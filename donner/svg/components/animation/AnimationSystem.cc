@@ -594,13 +594,16 @@ void AnimationSystem::advance(Registry& registry, double documentTime,
       continue;
     }
 
-    // Compute the interpolation progress: current time while active, or the final value
-    // (progress = 1.0) when frozen.
+    // While active, sample at the current time. When frozen (After phase with fill="freeze"),
+    // sample at the end of the active interval, so an active duration truncated by end/max/
+    // repeatDur freezes at the last value actually reached instead of the simple-duration
+    // endpoint.
+    const double sampleTime =
+        (state.phase == AnimationPhase::Active || !std::isfinite(state.activeDuration))
+            ? documentTime
+            : state.beginTime + state.activeDuration;
     const double progress =
-        (state.phase == AnimationPhase::Active)
-            ? computeProgress(documentTime, state.beginTime, state.simpleDuration,
-                              state.activeDuration)
-            : 1.0;
+        computeProgress(sampleTime, state.beginTime, state.simpleDuration, state.activeDuration);
 
     std::string attributeName;
     std::string newValue;
