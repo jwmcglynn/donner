@@ -2603,11 +2603,15 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
               }
               queuedMutationForNextFrame = true;
             } else if (textToolActive) {
-              // Text placement is a single click: insert the new `<text>` and
-              // switch back to the Select tool so it can be moved and edited.
               textTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
-              activeTool_ = ActiveTool::Select;
-              queuedMutationForNextFrame = true;
+              if (!leftMouseDown) {
+                // Click already released: finish the gesture (double-click opens
+                // a point-text session; a plain click on empty canvas is a
+                // no-op). The tool flushes internally, so refresh the
+                // presentation directly instead of through the queued-flush helper.
+                textTool_.onMouseUp(app_, pendingClick.documentPoint);
+                refreshAfterToolDrivenFlush();
+              }
             }
             if (queuedMutationForNextFrame) {
               flushQueuedMutationAndRefreshOverlay();
@@ -2621,22 +2625,6 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
             }
             interactionController_.clearPendingClick();
             break;
-          }
-        } else if (penToolActive) {
-          penTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
-          if (!leftMouseDown && penTool_.isDraggingAnchor()) {
-            penTool_.onMouseUp(app_, pendingClick.documentPoint);
-          }
-          queuedMutationForNextFrame = true;
-        } else if (textToolActive) {
-          textTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
-          if (!leftMouseDown) {
-            // Click already released: finish the gesture (double-click opens
-            // a point-text session; a plain click on empty canvas is a
-            // no-op). The tool flushes internally, so refresh the
-            // presentation directly instead of through the queued-flush helper.
-            textTool_.onMouseUp(app_, pendingClick.documentPoint);
-            refreshAfterToolDrivenFlush();
           }
         }
         break;
