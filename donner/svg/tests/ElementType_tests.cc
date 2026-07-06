@@ -16,6 +16,7 @@ TEST(ElementTypeTest, OstreamOutput) {
   EXPECT_THAT(ElementType::Circle, ToStringIs("Circle"));
   EXPECT_THAT(ElementType::ClipPath, ToStringIs("ClipPath"));
   EXPECT_THAT(ElementType::Defs, ToStringIs("Defs"));
+  EXPECT_THAT(ElementType::Desc, ToStringIs("Desc"));
   EXPECT_THAT(ElementType::Ellipse, ToStringIs("Ellipse"));
   EXPECT_THAT(ElementType::FeBlend, ToStringIs("FeBlend"));
   EXPECT_THAT(ElementType::FeColorMatrix, ToStringIs("FeColorMatrix"));
@@ -49,6 +50,7 @@ TEST(ElementTypeTest, OstreamOutput) {
   EXPECT_THAT(ElementType::LinearGradient, ToStringIs("LinearGradient"));
   EXPECT_THAT(ElementType::Marker, ToStringIs("Marker"));
   EXPECT_THAT(ElementType::Mask, ToStringIs("Mask"));
+  EXPECT_THAT(ElementType::Metadata, ToStringIs("Metadata"));
   EXPECT_THAT(ElementType::Path, ToStringIs("Path"));
   EXPECT_THAT(ElementType::Pattern, ToStringIs("Pattern"));
   EXPECT_THAT(ElementType::Polygon, ToStringIs("Polygon"));
@@ -62,6 +64,7 @@ TEST(ElementTypeTest, OstreamOutput) {
   EXPECT_THAT(ElementType::Symbol, ToStringIs("Symbol"));
   EXPECT_THAT(ElementType::Text, ToStringIs("Text"));
   EXPECT_THAT(ElementType::TextPath, ToStringIs("TextPath"));
+  EXPECT_THAT(ElementType::Title, ToStringIs("Title"));
   EXPECT_THAT(ElementType::TSpan, ToStringIs("TSpan"));
   EXPECT_THAT(ElementType::Unknown, ToStringIs("Unknown"));
   EXPECT_THAT(ElementType::Use, ToStringIs("Use"));

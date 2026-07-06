@@ -15,6 +15,7 @@ enum class ElementType : uint8_t {
   Circle,               //!< \ref xml_circle
   ClipPath,             //!< \ref xml_clipPath
   Defs,                 //!< \ref xml_defs
+  Desc,                 //!< \ref xml_desc
   Ellipse,              //!< \ref xml_ellipse
   FeBlend,              //!< \ref xml_feBlend
   FeColorMatrix,        //!< \ref xml_feColorMatrix
@@ -48,6 +49,7 @@ enum class ElementType : uint8_t {
   LinearGradient,       //!< \ref xml_linearGradient
   Marker,               //!< \ref xml_marker
   Mask,                 //!< \ref xml_mask
+  Metadata,             //!< \ref xml_metadata
   Path,                 //!< \ref xml_path
   Pattern,              //!< \ref xml_pattern
   Polygon,              //!< \ref xml_polygon
@@ -61,6 +63,7 @@ enum class ElementType : uint8_t {
   Symbol,               //!< \ref xml_symbol
   Text,                 //!< \ref xml_text
   TextPath,             //!< \ref xml_textPath
+  Title,                //!< \ref xml_title
   TSpan,                //!< \ref xml_tspan
   Unknown,              //!< For unknown elements.
   Use,                  //!< \ref xml_use
@@ -110,6 +113,7 @@ ReturnType ToConstexpr(ElementType type, FnT fn) {
     case ElementType::ClipPath:
       return fn(std::integral_constant<ElementType, ElementType::ClipPath>());
     case ElementType::Defs: return fn(std::integral_constant<ElementType, ElementType::Defs>());
+    case ElementType::Desc: return fn(std::integral_constant<ElementType, ElementType::Desc>());
     case ElementType::Ellipse:
       return fn(std::integral_constant<ElementType, ElementType::Ellipse>());
     case ElementType::FeBlend:
@@ -170,6 +174,8 @@ ReturnType ToConstexpr(ElementType type, FnT fn) {
       return fn(std::integral_constant<ElementType, ElementType::LinearGradient>());
     case ElementType::Marker: return fn(std::integral_constant<ElementType, ElementType::Marker>());
     case ElementType::Mask: return fn(std::integral_constant<ElementType, ElementType::Mask>());
+    case ElementType::Metadata:
+      return fn(std::integral_constant<ElementType, ElementType::Metadata>());
     case ElementType::Path: return fn(std::integral_constant<ElementType, ElementType::Path>());
     case ElementType::Pattern:
       return fn(std::integral_constant<ElementType, ElementType::Pattern>());
@@ -188,6 +194,7 @@ ReturnType ToConstexpr(ElementType type, FnT fn) {
     case ElementType::Text: return fn(std::integral_constant<ElementType, ElementType::Text>());
     case ElementType::TextPath:
       return fn(std::integral_constant<ElementType, ElementType::TextPath>());
+    case ElementType::Title: return fn(std::integral_constant<ElementType, ElementType::Title>());
     case ElementType::TSpan: return fn(std::integral_constant<ElementType, ElementType::TSpan>());
     case ElementType::Unknown:
       return fn(std::integral_constant<ElementType, ElementType::Unknown>());
