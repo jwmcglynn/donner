@@ -761,7 +761,13 @@ def _donner_perf_sensitive_cc_library_impl(ctx):
         )
 
         if linking_outputs.library_to_link != None:
-            linking_contexts.append(linking_context)
+            # Place this library's own archive BEFORE its deps (matching
+            # native cc_library semantics). Appending it after the deps puts
+            # the consumer archive later on the link line than its providers,
+            # which lld tolerates (backward references from archives) but
+            # single-pass GNU linkers (gold, bfd) reject with undefined
+            # references. Caught by the CI "Linker canary" step.
+            linking_contexts.insert(0, linking_context)
 
     cc_info = CcInfo(
         compilation_context = compilation_context,
