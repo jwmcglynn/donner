@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <!-- Iteration 2: after inspecting diff.png from v1.
+       Fixes: recentered/resized the circle to (128,104) r=72, corrected the
+       fill to the reference purple, added the dark rim stroke, and added the
+       "Donner" wordmark. Structure is kept editable: a named group, real
+       shapes, a live <text> element, no rasters. -->
+  <rect x="0" y="0" width="256" height="256" fill="#ffffff"/>
+  <g id="geode-mark">
+    <circle id="shell" cx="128" cy="104" r="72" fill="#6b4fd8"/>
+    <circle id="rim" cx="128" cy="104" r="72" fill="none" stroke="#2a1c66" stroke-width="6"/>
+  </g>
+  <text id="wordmark" x="128" y="212" font-family="sans-serif" font-size="40"
+        font-weight="bold" text-anchor="middle" fill="#2a1c66">Donner</text>
+</svg>

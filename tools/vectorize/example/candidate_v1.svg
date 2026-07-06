@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <!-- Iteration 1: rough first pass.
+       Known problems (visible in diff.png): circle is the wrong blue, too
+       small and offset up-left, no dark rim stroke, and no wordmark yet. -->
+  <rect x="0" y="0" width="256" height="256" fill="#ffffff"/>
+  <circle cx="116" cy="96" r="60" fill="#3050c0"/>
+</svg>
