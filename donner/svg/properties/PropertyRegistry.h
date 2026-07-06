@@ -30,6 +30,7 @@
 #include "donner/svg/core/TextAnchor.h"
 #include "donner/svg/core/TextDecoration.h"
 #include "donner/svg/core/TransformOrigin.h"
+#include "donner/svg/core/VectorEffect.h"
 #include "donner/svg/core/Visibility.h"
 #include "donner/svg/core/WritingMode.h"
 #include "donner/svg/properties/PaintServer.h"
@@ -217,6 +218,12 @@ public:
   Property<Lengthd, PropertyCascade::Inherit> strokeDashoffset{
       "stroke-dashoffset",
       []() -> std::optional<Lengthd> { return Lengthd(0, Lengthd::Unit::None); }};
+
+  /// `vector-effect` property, which modifies how the element is affected by coordinate system
+  /// transformations. Not inherited per spec. Defaults to \ref VectorEffect::None. Only
+  /// \ref VectorEffect::NonScalingStroke is honored during rendering.
+  Property<VectorEffect> vectorEffect{
+      "vector-effect", []() -> std::optional<VectorEffect> { return VectorEffect::None; }};
 
   //
   // Clipping and masking
@@ -421,7 +428,7 @@ public:
     return std::forward_as_tuple(
         color, display, opacity, visibility, overflow, transformOrigin, fill, fillRule, fillOpacity,
         stroke, strokeOpacity, strokeWidth, strokeLinecap, strokeLinejoin, strokeMiterlimit,
-        strokeDasharray, strokeDashoffset, clipPath, clipRule, mask, filter,
+        strokeDasharray, strokeDashoffset, vectorEffect, clipPath, clipRule, mask, filter,
         colorInterpolationFilters, pointerEvents, cursor, markerStart, markerMid, markerEnd,
         fontFamily, fontSize, fontWeight, fontStyle, fontStretch, fontVariant, textAnchor,
         textDecoration, dominantBaseline, writingMode, letterSpacing, wordSpacing, baselineShift,
