@@ -125,8 +125,8 @@ void DialogPresenter::render(
       ImGui::TextUnformatted("(c) 2024-2026 Jeff McGlynn");
       ImGui::Spacing();
       ImGui::TextWrapped(
-          "Part of Donner SVG Editor & Toolkit: an SVG editor application plus reusable SVG "
-          "rendering, geometry, and toolkit libraries, written in C++20.");
+          "Part of Donner SVG Editor & Engine: an SVG editor application plus a reusable SVG "
+          "rendering, geometry, and DOM engine, written in C++20.");
       ImGui::TextUnformatted("https://github.com/jwmcglynn/donner");
       ImGui::Separator();
       if (ImGui::Button("Show Licenses")) {

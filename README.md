@@ -3,7 +3,7 @@
 [![Build Status](https://github.com/jwmcglynn/donner/actions/workflows/main.yml/badge.svg)](https://github.com/jwmcglynn/donner/actions/workflows/main.yml) [![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](https://opensource.org/licenses/ISC) [![Code coverage %](https://codecov.io/gh/jwmcglynn/donner/branch/main/graph/badge.svg?token=Z3YJZNKGU0)](https://codecov.io/gh/jwmcglynn/donner) ![Product lines of code](https://gist.githubusercontent.com/jwmcglynn/91f7f490a72af9c06506c8176729d218/raw/loc.svg) ![Test lines of code](https://gist.githubusercontent.com/jwmcglynn/91f7f490a72af9c06506c8176729d218/raw/loc-tests.svg)
 ![Comments %](https://gist.githubusercontent.com/jwmcglynn/91f7f490a72af9c06506c8176729d218/raw/comments.svg)
 
-Donner SVG Editor & Toolkit is an editor application plus reusable SVG rendering, geometry, and toolkit libraries. At its core is an embeddable browser-grade SVG2 engine in C++20, providing full access to the SVG DOM. [Try it out online!](https://jwmcglynn.github.io/donner-editor/)
+Donner SVG Editor & Engine is an editor application plus an embeddable, reusable SVG rendering, geometry, and DOM engine, providing full access to the SVG DOM. [Try it out online!](https://jwmcglynn.github.io/donner-editor/)
 
 ![Donner splash image](donner_splash.svg)
 
