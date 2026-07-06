@@ -354,6 +354,8 @@ private:
   [[nodiscard]] Box2d toolPaletteScreenRect(const ImVec2& paneOrigin,
                                             const ImVec2& contentRegion) const;
   void renderToolPalette(const ImVec2& paneOrigin, const ImVec2& contentRegion);
+  void renderTextFormatBar(const Box2d& toolPaletteRect, const ImVec2& paneOrigin,
+                           const ImVec2& contentRegion);
   void renderFillStrokeToolbarWidget();
   void renderSidebars();
   void renderSourcePaneSplitter(float windowWidth, float paneOriginY, float paneHeight,

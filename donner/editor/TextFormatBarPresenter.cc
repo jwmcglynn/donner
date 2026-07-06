@@ -12,6 +12,7 @@
 #include "donner/base/RcString.h"
 #include "donner/base/parser/NumberParser.h"
 #include "donner/editor/EditorApp.h"
+#include "donner/editor/EditorTheme.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/svg/SVGElement.h"
 
@@ -147,13 +148,8 @@ std::vector<FormatBarFontFamily> BuildFormatBarFamilies(
   return families;
 }
 
-float TextFormatBarPresenter::BarHeight() {
-  const ImGuiStyle& style = ImGui::GetStyle();
-  return ImGui::GetFrameHeight() + style.WindowPadding.y * 2.0f;
-}
-
-FormatBarActions TextFormatBarPresenter::render(const FormatBarState& state, float originY,
-                                                float width) {
+FormatBarActions TextFormatBarPresenter::render(const FormatBarState& state,
+                                                const FormatBarPlacement& placement) {
   FormatBarActions actions;
   if (!state.visible) {
     return actions;
@@ -168,15 +164,38 @@ FormatBarActions TextFormatBarPresenter::render(const FormatBarState& state, flo
     trackedFamily_ = true;
   }
 
-  ImGui::SetNextWindowPos(ImVec2(0.0f, originY));
-  ImGui::SetNextWindowSize(ImVec2(width, BarHeight()));
+  // Anchor the palette just below the tool palette, then clamp so an auto-sized
+  // bar wider/taller than the toolbar never spills outside the canvas pane. The
+  // clamp uses last frame's measured size; the content is stable, so this
+  // converges in one frame and reads as instant.
+  constexpr float kEdgeMargin = 4.0f;
+  float posX = placement.anchorX;
+  float posY = placement.anchorY;
+  if (lastBarWidth_ > 0.0f) {
+    posX = std::min(posX, placement.clampMaxX - lastBarWidth_ - kEdgeMargin);
+  }
+  if (lastBarHeight_ > 0.0f) {
+    posY = std::min(posY, placement.clampMaxY - lastBarHeight_ - kEdgeMargin);
+  }
+  posX = std::max(posX, placement.clampMinX + kEdgeMargin);
+  posY = std::max(posY, placement.clampMinY + kEdgeMargin);
+
+  ImGui::SetNextWindowPos(ImVec2(posX, posY));
   constexpr ImGuiWindowFlags kBarFlags =
       ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
       ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
       ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoSavedSettings |
-      ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoBringToFrontOnFocus;
+      ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoBringToFrontOnFocus |
+      ImGuiWindowFlags_AlwaysAutoResize;
 
-  if (ImGui::Begin("##text_format_bar", nullptr, kBarFlags)) {
+  // Floating-palette chrome from the editor theme: rounded container on the
+  // raised surface, so the bar reads as a palette over the canvas rather than a
+  // full-width strip.
+  const EditorTheme& theme = EditorTheme::Active();
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, theme.radiusContainer);
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, theme.surfaceRaised);
+  const bool open = ImGui::Begin("##text_format_bar", nullptr, kBarFlags);
+  if (open) {
     // --- Font family: free-text input plus a searchable preview dropdown. ---
     ImGui::SetNextItemWidth(180.0f);
     ImGui::InputTextWithHint("##format_bar_font_family", "Font family", fontFamilyBuffer_.data(),
@@ -282,8 +301,16 @@ FormatBarActions TextFormatBarPresenter::render(const FormatBarState& state, flo
     if (toggle("U##format_bar_underline", state.underline, nullptr)) {
       actions.toggleUnderline = true;
     }
+
+    // Remember the auto-sized palette footprint so next frame can clamp it
+    // within the canvas pane before committing its position.
+    const ImVec2 barSize = ImGui::GetWindowSize();
+    lastBarWidth_ = barSize.x;
+    lastBarHeight_ = barSize.y;
   }
   ImGui::End();
+  ImGui::PopStyleColor();
+  ImGui::PopStyleVar();
 
   return actions;
 }

@@ -2430,6 +2430,26 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
   ImGui::PopID();
 }
 
+void EditorShell::renderTextFormatBar(const Box2d& toolPaletteRect, const ImVec2& paneOrigin,
+                                      const ImVec2& contentRegion) {
+  // QA-F2: the format bar is a floating, context-aware palette. Show it only
+  // while text styling is in context, and float it one gap below the tool
+  // palette, left-aligned to it, clamped within the canvas pane.
+  const FormatBarState formatBarState = computeFormatBarState();
+  if (!formatBarState.visible) {
+    return;
+  }
+  FormatBarPlacement placement;
+  placement.anchorX = static_cast<float>(toolPaletteRect.topLeft.x);
+  placement.anchorY = static_cast<float>(toolPaletteRect.bottomRight.y) + kToolPaletteGap;
+  placement.clampMinX = paneOrigin.x;
+  placement.clampMinY = paneOrigin.y;
+  placement.clampMaxX = paneOrigin.x + contentRegion.x;
+  placement.clampMaxY = paneOrigin.y + contentRegion.y;
+  const FormatBarActions actions = textFormatBarPresenter_.render(formatBarState, placement);
+  applyFormatBarActions(formatBarState, actions);
+}
+
 void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   // The render pane is docked into the DockSpace central node (see
   // renderDockSpaceHost); the DockSpace owns its position and size, so we no
@@ -3177,6 +3197,7 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
     renderReferenceHighlightChip();
     renderTextToolHint();
     renderToolPalette(paneOriginImGui, contentRegion);
+    renderTextFormatBar(toolPaletteRect, paneOriginImGui, contentRegion);
     renderCanvasScrollbars();
     renderRenderPaneContextMenu();
   }
@@ -4579,15 +4600,11 @@ void EditorShell::runFrame() {
 
   const Vector2i windowSize = window_.windowSize();
   const float menuBarHeight = ImGui::GetFrameHeight();
-  // W2: the contextual text-formatting bar sits directly below the menu bar and
-  // reserves its own strip of vertical space while text styling is in context
-  // (a single <text> is selected or an editing session is active). Compute its
-  // visibility/height here so the panes below start beneath it; the bar itself
-  // is rendered next to the menu bar further down.
-  const FormatBarState formatBarState = computeFormatBarState();
-  const float formatBarHeight =
-      formatBarState.visible ? TextFormatBarPresenter::BarHeight() : 0.0f;
-  const float paneOriginY = menuBarHeight + formatBarHeight;
+  // QA-F2: the contextual text-formatting bar is a floating palette anchored
+  // below the tool palette (rendered in renderRenderPane); it overlays the
+  // canvas and reserves no layout space, so the panes start directly under the
+  // menu bar.
+  const float paneOriginY = menuBarHeight;
   const float paneHeight = std::max(0.0f, static_cast<float>(windowSize.y) - paneOriginY);
   const EditorMainPaneLayout mainPaneLayout = ComputeEditorMainPaneLayout({
       .windowWidth = static_cast<float>(windowSize.x),
@@ -4648,15 +4665,6 @@ void EditorShell::runFrame() {
   };
   const MenuBarActions menuActions = menuBarPresenter_.render(menuState, uiFontBold_);
   applyMenuActions(menuActions);
-
-  // W2: render the contextual text-formatting bar beneath the menu bar and
-  // route its actions to the existing styling commands. Space for it was
-  // already reserved above via `formatBarHeight`.
-  if (formatBarState.visible) {
-    const FormatBarActions formatBarActions = textFormatBarPresenter_.render(
-        formatBarState, menuBarHeight, static_cast<float>(windowSize.x));
-    applyFormatBarActions(formatBarState, formatBarActions);
-  }
 
   // On macOS, service any pending open/save with a native OS panel; this
   // consumes the request so the ImGui modal below stays closed. On other

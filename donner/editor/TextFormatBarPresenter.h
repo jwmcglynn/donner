@@ -1,8 +1,10 @@
 #pragma once
 /// @file
 ///
-/// `TextFormatBarPresenter` renders a contextual text-formatting bar directly
-/// beneath the editor menu bar. The bar is shown only while text styling is in
+/// `TextFormatBarPresenter` renders a contextual text-formatting bar that
+/// floats just below the editor's tool palette, overlaying the canvas as a
+/// rounded palette. It reserves no layout space and never shifts the panes.
+/// The bar is shown only while text styling is in
 /// context: when the canvas selection is a single `<text>` element or an
 /// in-canvas text editing session is active. It offers a searchable font-family
 /// picker (each known family previewed in its own face, with a free-text
@@ -133,26 +135,36 @@ void ReadTextFormatState(const svg::SVGElement& text, FormatBarState* state);
 bool ApplyFormatBarActionsToSelection(const FormatBarActions& actions, const FormatBarState& state,
                                       bool routeTogglesToSelection, EditorApp& app);
 
-/// Contextual text-formatting bar shown beneath the menu bar.
+/// Placement for the floating format bar: where to anchor its top-left corner
+/// (just below the tool palette) and the canvas-pane rectangle it must stay
+/// inside. All values are window-space pixels. Kept ImGui-free so the header
+/// need not pull in imgui; the presenter maps these onto `ImVec2` internally.
+struct FormatBarPlacement {
+  float anchorX = 0.0f;    ///< Desired top-left X (tool palette left edge).
+  float anchorY = 0.0f;    ///< Desired top-left Y (just below the tool palette).
+  float clampMinX = 0.0f;  ///< Canvas pane left edge.
+  float clampMinY = 0.0f;  ///< Canvas pane top edge.
+  float clampMaxX = 0.0f;  ///< Canvas pane right edge.
+  float clampMaxY = 0.0f;  ///< Canvas pane bottom edge.
+};
+
+/// Contextual text-formatting bar that floats below the tool palette.
 class TextFormatBarPresenter {
 public:
-  /// Height (pixels) the bar occupies for the current imgui style, so the shell
-  /// can reserve space below the menu bar. Valid only inside a frame (reads the
-  /// active style/frame height).
-  [[nodiscard]] static float BarHeight();
-
   /**
-   * Render the bar and report the actions requested this frame.
+   * Render the floating bar and report the actions requested this frame.
    *
    * Draws nothing and returns an empty result when `state.visible` is false.
-   * The bar is a fixed, full-width strip at @p originY spanning @p width.
+   * The bar is an auto-sized, rounded floating palette anchored just below the
+   * tool palette (see @p placement); it reserves no layout space and clamps
+   * itself within the canvas pane so it never spills outside the window.
    *
    * @param state Current formatting context (visibility, values, families).
-   * @param originY Top edge of the bar in window pixels (menu-bar height).
-   * @param width Bar width in window pixels (the window width).
+   * @param placement Anchor and clamp rectangle for the floating palette.
    * @return Edge-triggered actions to route to the styling commands.
    */
-  [[nodiscard]] FormatBarActions render(const FormatBarState& state, float originY, float width);
+  [[nodiscard]] FormatBarActions render(const FormatBarState& state,
+                                        const FormatBarPlacement& placement);
 
 private:
   /// Free-text font-family buffer, re-seeded when the underlying value changes.
@@ -166,6 +178,11 @@ private:
   /// control is idle, so an in-progress drag is not clobbered each frame.
   float sizeEditValue_ = 0.0f;
   bool sizeControlActive_ = false;
+  /// Palette size measured last frame, used to clamp the auto-sized window
+  /// within the canvas pane before this frame's position is committed. Zero
+  /// until the first frame has measured the content.
+  float lastBarWidth_ = 0.0f;
+  float lastBarHeight_ = 0.0f;
 };
 
 }  // namespace donner::editor

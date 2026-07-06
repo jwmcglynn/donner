@@ -849,6 +849,7 @@ donner_cc_test(
     deps = [
         "//donner/base",
         "//donner/editor:editor_app",
+        "//donner/editor:imgui_headers",
         "//donner/editor:text_format_bar_presenter",
         "//donner/svg",
         "//donner/svg/resources:font_catalog_types",

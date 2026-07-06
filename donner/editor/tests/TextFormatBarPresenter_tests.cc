@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "donner/editor/EditorApp.h"
-#include "donner/editor/ImGuiIncludes.h"
+#include "donner/editor/ImGuiInternalIncludes.h"
 #include "donner/svg/resources/FontCatalogTypes.h"
 
 namespace donner::editor {
@@ -298,7 +298,16 @@ protected:
 
   static FormatBarActions RenderFrame(TextFormatBarPresenter& bar, const FormatBarState& state) {
     ImGui::NewFrame();
-    const FormatBarActions actions = bar.render(state, /*originY=*/20.0f, /*width=*/1280.0f);
+    // Placement mirrors the shell: a floating palette anchored below the tool
+    // palette, inside a 1280x720 canvas pane.
+    FormatBarPlacement placement;
+    placement.anchorX = 40.0f;
+    placement.anchorY = 60.0f;
+    placement.clampMinX = 0.0f;
+    placement.clampMinY = 0.0f;
+    placement.clampMaxX = 1280.0f;
+    placement.clampMaxY = 720.0f;
+    const FormatBarActions actions = bar.render(state, placement);
     ImGui::Render();
     return actions;
   }
@@ -342,6 +351,49 @@ TEST_F(TextFormatBarPresenterTest, VisibleBarRendersControlsWithoutImplicitActio
   EXPECT_FALSE(actions.toggleBold);
   EXPECT_FALSE(actions.toggleItalic);
   EXPECT_FALSE(actions.toggleUnderline);
+}
+
+// QA-F2: the bar is a floating palette, not a reserved full-width strip. It
+// auto-sizes to its controls and clamps itself inside the canvas pane even when
+// anchored near the pane's far corner.
+TEST_F(TextFormatBarPresenterTest, VisibleBarFloatsAutoSizedAndClampedInPane) {
+  TextFormatBarPresenter bar;
+  ImFont* face = ImGui::GetIO().Fonts->Fonts[0];
+
+  FormatBarState state;
+  state.visible = true;
+  state.fontFamily = "Roboto";
+  state.fontSize = 16.0f;
+  state.hasFontSize = true;
+  state.families = {FormatBarFontFamily{"Roboto", face}};
+
+  // Anchor near the bottom-right corner to force the clamp to pull the palette
+  // back inside the pane. Two frames so the second sees the measured size.
+  const auto renderAt = [&](float anchorX, float anchorY) {
+    ImGui::NewFrame();
+    FormatBarPlacement placement;
+    placement.anchorX = anchorX;
+    placement.anchorY = anchorY;
+    placement.clampMinX = 0.0f;
+    placement.clampMinY = 0.0f;
+    placement.clampMaxX = 1280.0f;
+    placement.clampMaxY = 720.0f;
+    bar.render(state, placement);
+    ImGui::Render();
+  };
+  renderAt(1200.0f, 690.0f);
+  renderAt(1200.0f, 690.0f);
+
+  const ImGuiWindow* window = ImGui::FindWindowByName("##text_format_bar");
+  ASSERT_NE(window, nullptr);
+  // Auto-sized: far narrower than the full 1280px pane (the old bar spanned it).
+  EXPECT_LT(window->Size.x, 1280.0f);
+  EXPECT_GT(window->Size.x, 0.0f);
+  // Clamped fully inside the pane on both axes.
+  EXPECT_GE(window->Pos.x, 0.0f);
+  EXPECT_GE(window->Pos.y, 0.0f);
+  EXPECT_LE(window->Pos.x + window->Size.x, 1280.0f);
+  EXPECT_LE(window->Pos.y + window->Size.y, 720.0f);
 }
 
 }  // namespace

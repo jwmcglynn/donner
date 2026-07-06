@@ -629,6 +629,7 @@ donner_cc_library(
     hdrs = ["TextFormatBarPresenter.h"],
     deps = [
         ":editor_app",
+        ":editor_theme",
         ":imgui_headers",
         "//donner/base",
         "//donner/base/parser",
