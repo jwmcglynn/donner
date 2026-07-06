@@ -51,17 +51,28 @@ void ApplyMenuBarCommand(bool activated, MenuBarCommand command, const MenuBarSt
     case MenuBarCommand::ToggleCompositorDebugPanel:
       actions->toggleCompositorDebugPanel = true;
       return;
-    case MenuBarCommand::TogglePerfOverlay: actions->togglePerfOverlay = true; return;
+    case MenuBarCommand::SetPerfOverlayOff:
+      actions->setPerfOverlayMode = true;
+      actions->perfOverlayMode = PerfOverlayMode::Off;
+      return;
+    case MenuBarCommand::SetPerfOverlayFpsPill:
+      actions->setPerfOverlayMode = true;
+      actions->perfOverlayMode = PerfOverlayMode::FpsPill;
+      return;
+    case MenuBarCommand::SetPerfOverlayFullGraph:
+      actions->setPerfOverlayMode = true;
+      actions->perfOverlayMode = PerfOverlayMode::FullGraph;
+      return;
   }
 }
 
 void ApplyViewMenuToggleActions(const MenuBarActions& actions, bool* showCompositorDebugPanel,
-                                bool* showPerfOverlay) {
+                                PerfOverlayMode* perfOverlayMode) {
   if (actions.toggleCompositorDebugPanel && showCompositorDebugPanel != nullptr) {
     *showCompositorDebugPanel = !*showCompositorDebugPanel;
   }
-  if (actions.togglePerfOverlay && showPerfOverlay != nullptr) {
-    *showPerfOverlay = !*showPerfOverlay;
+  if (actions.setPerfOverlayMode && perfOverlayMode != nullptr) {
+    *perfOverlayMode = actions.perfOverlayMode;
   }
 }
 
@@ -160,8 +171,19 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
     ApplyMenuBarCommand(
         ImGui::MenuItem("Compositor Debug", nullptr, state.showCompositorDebugPanel),
         MenuBarCommand::ToggleCompositorDebugPanel, state, &actions);
-    ApplyMenuBarCommand(ImGui::MenuItem("Performance Overlay", nullptr, state.showPerfOverlay),
-                        MenuBarCommand::TogglePerfOverlay, state, &actions);
+    if (ImGui::BeginMenu("Performance Overlay")) {
+      ApplyMenuBarCommand(
+          ImGui::MenuItem("Off", nullptr, state.perfOverlayMode == PerfOverlayMode::Off),
+          MenuBarCommand::SetPerfOverlayOff, state, &actions);
+      ApplyMenuBarCommand(
+          ImGui::MenuItem("FPS Pill", nullptr, state.perfOverlayMode == PerfOverlayMode::FpsPill),
+          MenuBarCommand::SetPerfOverlayFpsPill, state, &actions);
+      ApplyMenuBarCommand(
+          ImGui::MenuItem("Full Graph", nullptr,
+                          state.perfOverlayMode == PerfOverlayMode::FullGraph),
+          MenuBarCommand::SetPerfOverlayFullGraph, state, &actions);
+      ImGui::EndMenu();
+    }
     ImGui::EndMenu();
   }
 

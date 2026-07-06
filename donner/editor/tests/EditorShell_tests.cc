@@ -820,7 +820,9 @@ public:
     return shell.showCompositorDebugPanel_;
   }
 
-  static bool ShowPerfOverlay(const EditorShell& shell) { return shell.showPerfOverlay_; }
+  static PerfOverlayMode GetPerfOverlayMode(const EditorShell& shell) {
+    return shell.perfOverlayMode_;
+  }
 
   static void SetLayerPanelDetached(EditorShell& shell, bool value) {
     shell.layerPanelDetached_ = value;
@@ -3262,7 +3264,8 @@ TEST(EditorShellTest, MenuActionsRouteCanvasClipboardHistorySelectionAndViewStat
   EditorShellTestAccess::ClearRequestRenderAtEndOfFrame(shell);
   const bool sourceFocusBefore = EditorShellTestAccess::SourceFocusMode(shell);
   const bool compositorDebugBefore = EditorShellTestAccess::ShowCompositorDebugPanel(shell);
-  const bool perfOverlayBefore = EditorShellTestAccess::ShowPerfOverlay(shell);
+  const PerfOverlayMode perfOverlayBefore = EditorShellTestAccess::GetPerfOverlayMode(shell);
+  ASSERT_EQ(perfOverlayBefore, PerfOverlayMode::Off);
 
   actions = MenuBarActions{};
   actions.zoomIn = true;
@@ -3270,13 +3273,14 @@ TEST(EditorShellTest, MenuActionsRouteCanvasClipboardHistorySelectionAndViewStat
   actions.actualSize = true;
   actions.toggleSourceFocusMode = true;
   actions.toggleCompositorDebugPanel = true;
-  actions.togglePerfOverlay = true;
+  actions.setPerfOverlayMode = true;
+  actions.perfOverlayMode = PerfOverlayMode::FullGraph;
   EditorShellTestAccess::ApplyMenuActions(shell, actions);
 
   EXPECT_TRUE(EditorShellTestAccess::RequestRenderAtEndOfFrame(shell));
   EXPECT_NE(EditorShellTestAccess::SourceFocusMode(shell), sourceFocusBefore);
   EXPECT_NE(EditorShellTestAccess::ShowCompositorDebugPanel(shell), compositorDebugBefore);
-  EXPECT_NE(EditorShellTestAccess::ShowPerfOverlay(shell), perfOverlayBefore);
+  EXPECT_EQ(EditorShellTestAccess::GetPerfOverlayMode(shell), PerfOverlayMode::FullGraph);
 }
 
 TEST(EditorShellTest, MenuActionsRouteDialogAndExportRequestsWithoutCurrentPath) {
