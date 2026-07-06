@@ -27,10 +27,8 @@ google_fonts_catalog_inc(
 
 cc_library(
     name = "google_fonts_catalog_inc",
-    testonly = False,
     textual_hdrs = ["embed_resources/GoogleFontsCatalog.inc"],
-    include_prefix = "embed_resources",
-    strip_include_prefix = "embed_resources",
+    includes = ["."],
     visibility = ["//donner:__subpackages__"],
 )
 

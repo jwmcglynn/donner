@@ -92,6 +92,18 @@ donner_cc_library(
     ],
 )
 
+# Lightweight font-catalog interface + value types. Depended on by both the core
+# FontManager (so it can resolve through an injected provider without pulling in
+# any font bytes) and the concrete FontCatalog (editor).
+donner_cc_library(
+    name = "font_catalog_types",
+    hdrs = ["FontCatalogTypes.h"],
+    visibility = [
+        "//donner/editor:__subpackages__",
+        "//donner/svg:__subpackages__",
+    ],
+)
+
 donner_cc_library(
     name = "font_manager",
     srcs = ["FontManager.cc"],
@@ -105,6 +117,7 @@ donner_cc_library(
         "//donner/svg:__subpackages__",
     ],
     deps = [
+        ":font_catalog_types",
         "//donner/base",
         "//donner/base/fonts",
         "//donner/css:core",
@@ -114,6 +127,42 @@ donner_cc_library(
         "//donner/svg/renderer:text_full_enabled": ["//donner/base/fonts:woff2_parser"],
         "//conditions:default": [],
     }),
+)
+
+# Concrete font catalog: curated embedded Google Fonts + macOS system fonts (stub
+# elsewhere). This is the surface the editor's font picker (Design 0013 W2)
+# consumes, and what the editor installs on FontManager as the default provider.
+donner_cc_library(
+    name = "font_catalog",
+    srcs = [
+        "EmbeddedFontProvider.cc",
+        "FontCatalog.cc",
+        "SystemFontProvider.cc",
+    ],
+    hdrs = [
+        "EmbeddedFontProvider.h",
+        "FontCatalog.h",
+        "SystemFontProvider.h",
+    ],
+    linkopts = select({
+        "@platforms//os:macos": [
+            "-framework",
+            "CoreText",
+            "-framework",
+            "CoreFoundation",
+        ],
+        "//conditions:default": [],
+    }),
+    visibility = [
+        "//donner/editor:__subpackages__",
+        "//donner/svg:__subpackages__",
+    ],
+    deps = [
+        ":font_catalog_types",
+        "//donner/base",
+        "//third_party/google_fonts:google_fonts_catalog_inc",
+        "//third_party/google_fonts:google_fonts_data",
+    ],
 )
 
 donner_cc_test(
