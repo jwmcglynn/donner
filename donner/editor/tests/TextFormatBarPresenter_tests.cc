@@ -381,8 +381,11 @@ TEST_F(TextFormatBarPresenterTest, VisibleBarFloatsAutoSizedAndClampedInPane) {
     bar.render(state, placement);
     ImGui::Render();
   };
-  renderAt(1200.0f, 690.0f);
-  renderAt(1200.0f, 690.0f);
+  // ImGui auto-resize publishes the measured size one frame late, and the
+  // clamp uses last frame's size, so let both converge over several frames.
+  for (int frame = 0; frame < 6; ++frame) {
+    renderAt(1200.0f, 690.0f);
+  }
 
   const ImGuiWindow* window = ImGui::FindWindowByName("##text_format_bar");
   ASSERT_NE(window, nullptr);
