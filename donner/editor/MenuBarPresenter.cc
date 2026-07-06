@@ -29,6 +29,7 @@ void ApplyMenuBarCommand(bool activated, MenuBarCommand command, const MenuBarSt
     case MenuBarCommand::Copy: actions->copy = true; return;
     case MenuBarCommand::Paste: actions->paste = true; return;
     case MenuBarCommand::PasteInFront: actions->pasteInFront = true; return;
+    case MenuBarCommand::Duplicate: actions->duplicate = true; return;
     case MenuBarCommand::ConvertTextToOutlines: actions->convertTextToOutlines = true; return;
     case MenuBarCommand::SelectAll:
       if (state.sourcePaneFocused) {
@@ -137,6 +138,11 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
                         state, &actions);
     ApplyMenuBarCommand(ImGui::MenuItem("Paste in Front", "Cmd+F", false, state.hasShapeClipboard),
                         MenuBarCommand::PasteInFront, state, &actions);
+    // Duplicate: an offset copy of the canvas shape selection in one undo step
+    // (canvas-only; the source pane has no analogous concept here).
+    ApplyMenuBarCommand(
+        ImGui::MenuItem("Duplicate", "Cmd+D", false, !state.sourcePaneFocused && state.hasShapeSelection),
+        MenuBarCommand::Duplicate, state, &actions);
     ImGui::Separator();
     ApplyMenuBarCommand(
         ImGui::MenuItem("Convert Text to Outlines", nullptr, false, state.hasTextSelection),

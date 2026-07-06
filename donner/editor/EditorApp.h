@@ -245,6 +245,67 @@ public:
                                    std::optional<svg::SVGElement> referenceSibling);
 
   /**
+   * Move @p element out of its current parent and into @p newParent, positioned
+   * immediately before @p referenceSibling among @p newParent's children (or
+   * appended as @p newParent's last child when @p referenceSibling is
+   * `std::nullopt`), recording one undoable structural edit. This is the
+   * cross-parent generalization of \ref reorderElementBeforeSibling used by the
+   * Layers-panel drag-and-drop affordance (drop between rows / drop onto a
+   * group).
+   *
+   * Like the sibling reorder it is a pure DOM `SVGDocument::insertElement` and
+   * the structured-editing reflection rewrites the source (no source-text
+   * surgery, per CLAUDE.md "DOM-Level Editing Only").
+   *
+   * Refuses (returns false) when @p element is locked or the document root, when
+   * @p newParent is @p element itself or a descendant of @p element (which would
+   * detach the moved subtree from the document), when @p referenceSibling is set
+   * but is not a child of @p newParent, or when the move is a no-op (the element
+   * already sits in exactly that position).
+   *
+   * @param element The element to move (selection is left to the caller).
+   * @param newParent The destination parent to move @p element under.
+   * @param referenceSibling Insert @p element before this child of @p newParent,
+   *   or append when `std::nullopt`.
+   * @return true if the element moved.
+   */
+  bool moveElementIntoParentBeforeSibling(svg::SVGElement element, svg::SVGElement newParent,
+                                          std::optional<svg::SVGElement> referenceSibling);
+
+  /// Why a proposed id rename was (or would be) rejected. `None` means the
+  /// rename is applicable. The Layers panel surfaces the reason as inline
+  /// feedback; keeping the classification here is the single source of truth so
+  /// the panel message can never drift from \ref renameSelectedElement's actual
+  /// refusal logic.
+  enum class RenameRejection : std::uint8_t {
+    None,         ///< The rename can be applied.
+    Locked,       ///< The element (or an ancestor group) is locked.
+    Empty,        ///< The requested id is empty.
+    Unchanged,    ///< The requested id equals the current id (a no-op).
+    DuplicateId,  ///< The requested id is already used by a different element.
+  };
+
+  /**
+   * Classify whether renaming @p element's `id` to @p newId would be accepted,
+   * without mutating anything. Mirrors the refusal checks in
+   * \ref renameSelectedElement (locked / empty / unchanged / duplicate) so the
+   * UI can explain a rejection.
+   *
+   * @param element The element whose id would change.
+   * @param newId The requested new id.
+   * @return The rejection reason, or `RenameRejection::None` when acceptable.
+   */
+  // Not const: id lookup goes through `SVGDocument::querySelector`, which is not
+  // a const query.
+  [[nodiscard]] RenameRejection classifyRenameRejection(const svg::SVGElement& element,
+                                                        std::string_view newId);
+
+  /// A short human-readable message for a rename rejection reason, or an empty
+  /// string for `RenameRejection::None`. Used by the Layers panel's inline
+  /// rename-rejection feedback.
+  [[nodiscard]] static std::string_view DescribeRenameRejection(RenameRejection reason);
+
+  /**
    * Rename the single selected element's `id` to @p newId, updating every
    * internal reference so the document keeps rendering the same - one undoable
    * structural edit.

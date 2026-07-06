@@ -2407,5 +2407,196 @@ TEST(LayersPanelSubtreePreviewTest, SubtreeThumbnailsViaPanelForNestedRows) {
   EXPECT_EQ(redInRight, 0) << "right subgroup thumbnail contains left subgroup content";
 }
 
+// ---------------------------------------------------------------------------
+// P4: cross-parent drag, delete-from-menu routing, reveal, rename-rejection
+// ---------------------------------------------------------------------------
+
+TEST(LayersPanelTest, DropTargetComputationBetweenRowsAndOntoGroup) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <g id="g1"><rect id="a" x="0" y="0" width="10" height="10"/></g>
+    <g id="g2"><rect id="b" x="0" y="20" width="10" height="10"/></g>
+  </svg>)");
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const int aIndex = RowIndex(panel, "a");
+  const int bIndex = RowIndex(panel, "b");
+  const int g2Index = RowIndex(panel, "g2");
+  ASSERT_GE(aIndex, 0);
+  ASSERT_GE(bIndex, 0);
+  ASSERT_GE(g2Index, 0);
+  const svg::SVGElement b = panel.rows()[static_cast<std::size_t>(bIndex)].element;
+  const svg::SVGElement g2 = panel.rows()[static_cast<std::size_t>(g2Index)].element;
+
+  // Dropping "a" Before "b" targets b's parent (g2), inserting before b.
+  const LayersPanel::LayerDropTarget before = panel.computeDropTarget(
+      static_cast<std::size_t>(aIndex), static_cast<std::size_t>(bIndex),
+      LayersPanel::LayerDropMode::Before);
+  ASSERT_TRUE(before.valid);
+  EXPECT_EQ(*before.parent, g2);
+  ASSERT_TRUE(before.referenceSibling.has_value());
+  EXPECT_EQ(*before.referenceSibling, b);
+
+  // Dropping "a" After "b" targets g2, inserting before b's next sibling (none,
+  // so append).
+  const LayersPanel::LayerDropTarget after = panel.computeDropTarget(
+      static_cast<std::size_t>(aIndex), static_cast<std::size_t>(bIndex),
+      LayersPanel::LayerDropMode::After);
+  ASSERT_TRUE(after.valid);
+  EXPECT_EQ(*after.parent, g2);
+  EXPECT_FALSE(after.referenceSibling.has_value());
+
+  // Dropping "a" Into the g2 group row appends as g2's last child.
+  const LayersPanel::LayerDropTarget into = panel.computeDropTarget(
+      static_cast<std::size_t>(aIndex), static_cast<std::size_t>(g2Index),
+      LayersPanel::LayerDropMode::Into);
+  ASSERT_TRUE(into.valid);
+  EXPECT_EQ(*into.parent, g2);
+  EXPECT_FALSE(into.referenceSibling.has_value());
+
+  // Into a non-group (leaf) row does not resolve.
+  const LayersPanel::LayerDropTarget intoLeaf = panel.computeDropTarget(
+      static_cast<std::size_t>(aIndex), static_cast<std::size_t>(bIndex),
+      LayersPanel::LayerDropMode::Into);
+  EXPECT_FALSE(intoLeaf.valid);
+}
+
+TEST(LayersPanelTest, CrossParentDropBetweenRowsMovesElementAsOneUndoEntry) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <g id="g1"><rect id="a" x="0" y="0" width="10" height="10"/></g>
+    <g id="g2"><rect id="b" x="0" y="20" width="10" height="10"/></g>
+  </svg>)");
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const int aIndex = RowIndex(panel, "a");
+  const int bIndex = RowIndex(panel, "b");
+  ASSERT_GE(aIndex, 0);
+  ASSERT_GE(bIndex, 0);
+  const svg::SVGElement a = panel.rows()[static_cast<std::size_t>(aIndex)].element;
+  const svg::SVGElement g2 = *app.document().document().querySelector("#g2");
+
+  // Drop "a" (under g1) Before "b" (under g2): a re-parents into g2 before b.
+  EXPECT_TRUE(panel.handleRowDrop(app, static_cast<std::size_t>(aIndex),
+                                  static_cast<std::size_t>(bIndex),
+                                  LayersPanel::LayerDropMode::Before));
+  EXPECT_TRUE(app.flushFrame());
+
+  ASSERT_TRUE(a.parentElement().has_value());
+  EXPECT_EQ(*a.parentElement(), g2) << "a should now live under g2";
+  ASSERT_TRUE(a.nextSibling().has_value()) << "a should sit before b";
+  EXPECT_EQ(a.nextSibling()->id(), RcString("b"));
+  EXPECT_EQ(app.undoTimeline().entryCount(), 1u) << "a cross-parent move is one undo entry";
+  ASSERT_TRUE(app.undoTimeline().nextUndoLabel().has_value());
+  EXPECT_EQ(*app.undoTimeline().nextUndoLabel(), "Move element");
+}
+
+TEST(LayersPanelTest, CrossParentDropOntoGroupAppendsAsLastChildAsOneUndoEntry) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <g id="g1"><rect id="a" x="0" y="0" width="10" height="10"/></g>
+    <g id="g2"><rect id="b" x="0" y="20" width="10" height="10"/></g>
+  </svg>)");
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const int aIndex = RowIndex(panel, "a");
+  const int g2Index = RowIndex(panel, "g2");
+  ASSERT_GE(aIndex, 0);
+  ASSERT_GE(g2Index, 0);
+  const svg::SVGElement a = panel.rows()[static_cast<std::size_t>(aIndex)].element;
+  const svg::SVGElement g2 = *app.document().document().querySelector("#g2");
+
+  // Drop "a" ONTO the g2 group row: a lands as g2's last child (after b), rather
+  // than as a sibling after the group (the old lands-as-sibling bug).
+  EXPECT_TRUE(panel.handleRowDrop(app, static_cast<std::size_t>(aIndex),
+                                  static_cast<std::size_t>(g2Index),
+                                  LayersPanel::LayerDropMode::Into));
+  EXPECT_TRUE(app.flushFrame());
+
+  ASSERT_TRUE(a.parentElement().has_value());
+  EXPECT_EQ(*a.parentElement(), g2) << "a should now be a child of g2";
+  ASSERT_TRUE(a.previousSibling().has_value());
+  EXPECT_EQ(a.previousSibling()->id(), RcString("b")) << "a should be g2's LAST child";
+  EXPECT_FALSE(a.nextSibling().has_value());
+  EXPECT_EQ(app.undoTimeline().entryCount(), 1u) << "an into-group move is one undo entry";
+}
+
+TEST(LayersPanelTest, DeleteFromMenuRoutesSelectionAndDeleteRequest) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <rect id="a" x="0" y="0" width="10" height="10"/>
+    <rect id="b" x="0" y="20" width="10" height="10"/>
+  </svg>)");
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const int bIndex = RowIndex(panel, "b");
+  ASSERT_GE(bIndex, 0);
+  const svg::SVGElement b = panel.rows()[static_cast<std::size_t>(bIndex)].element;
+
+  panel.requestDeleteRow(app, static_cast<std::size_t>(bIndex));
+  // The panel selects the row's element and raises a delete request the shell
+  // consumes (routing only - the shell owns the delete-with-undo engine).
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+  EXPECT_EQ(app.selectedElements().front(), b);
+  EXPECT_TRUE(panel.consumeDeleteRequested());
+  EXPECT_FALSE(panel.consumeDeleteRequested()) << "the delete request is consumed once";
+}
+
+TEST(LayersPanelTest, RevealExpandsAncestorGroupsAndEmitsDeepRow) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <g id="outer">
+      <g id="inner">
+        <rect id="deep" x="0" y="0" width="10" height="10"/>
+      </g>
+    </g>
+  </svg>)");
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  // Only the top-level group auto-expands, so the nested "inner" group starts
+  // collapsed and "deep" has no row.
+  EXPECT_EQ(RowIndex(panel, "deep"), -1);
+
+  const svg::SVGElement deep = *app.document().document().querySelector("#deep");
+  panel.revealElement(deep);
+  panel.refreshSnapshot(app);
+
+  EXPECT_GE(RowIndex(panel, "inner"), 0);
+  EXPECT_GE(RowIndex(panel, "deep"), 0)
+      << "revealElement must expand ancestor groups so the deep row appears";
+}
+
+TEST(LayersPanelTest, RenameRejectionSurfacesReasonAndClearsOnSuccess) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <rect id="a" x="0" y="0" width="10" height="10"/>
+    <rect id="b" x="0" y="20" width="10" height="10"/>
+  </svg>)");
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const int aIndex = RowIndex(panel, "a");
+  ASSERT_GE(aIndex, 0);
+
+  // No rejection yet.
+  EXPECT_EQ(panel.renameRejectionMessage(), std::nullopt);
+
+  // Renaming "a" to the taken id "b" is refused; the reason is surfaced.
+  EXPECT_FALSE(panel.handleRowRename(app, static_cast<std::size_t>(aIndex), "b"));
+  ASSERT_TRUE(panel.renameRejectionMessage().has_value());
+  EXPECT_EQ(*panel.renameRejectionMessage(), "Name already in use");
+
+  // A subsequent accepted rename clears the rejection feedback.
+  const int aIndexAfter = RowIndex(panel, "a");
+  ASSERT_GE(aIndexAfter, 0);
+  EXPECT_TRUE(panel.handleRowRename(app, static_cast<std::size_t>(aIndexAfter), "c"));
+  EXPECT_EQ(panel.renameRejectionMessage(), std::nullopt);
+}
+
 }  // namespace
 }  // namespace donner::editor

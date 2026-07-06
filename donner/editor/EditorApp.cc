@@ -1154,6 +1154,50 @@ bool EditorApp::reorderElementBeforeSibling(svg::SVGElement element,
   return applyElementMove(element, parent, referenceSibling, "Reorder element");
 }
 
+bool EditorApp::moveElementIntoParentBeforeSibling(svg::SVGElement element,
+                                                   svg::SVGElement newParent,
+                                                   std::optional<svg::SVGElement> referenceSibling) {
+  if (IsLocked(element)) {
+    return false;  // Locked elements (or descendants of a locked group) don't move.
+  }
+  const std::optional<svg::SVGElement> parentOpt = element.parentElement();
+  if (!parentOpt.has_value()) {
+    return false;  // The document root cannot be re-parented.
+  }
+  const svg::SVGElement currentParent = *parentOpt;
+
+  // Refuse to move an element into itself or into its own subtree: that would
+  // detach the moved branch (and everything under it) from the document.
+  if (newParent == element) {
+    return false;
+  }
+  for (std::optional<svg::SVGElement> ancestor = newParent.parentElement(); ancestor.has_value();
+       ancestor = ancestor->parentElement()) {
+    if (*ancestor == element) {
+      return false;
+    }
+  }
+
+  if (referenceSibling.has_value()) {
+    if (*referenceSibling == element) {
+      return false;  // Inserting before yourself is a no-op.
+    }
+    const std::optional<svg::SVGElement> refParent = referenceSibling->parentElement();
+    if (!refParent.has_value() || *refParent != newParent) {
+      return false;  // The reference must be a child of the destination parent.
+    }
+  }
+
+  // No-op when the element already sits in exactly the requested position under
+  // the same parent (immediately before the reference, or already the last
+  // child when appending).
+  if (currentParent == newParent && element.nextSibling() == referenceSibling) {
+    return false;
+  }
+
+  return applyElementMove(element, newParent, referenceSibling, "Move element");
+}
+
 bool EditorApp::applyElementMove(svg::SVGElement element, svg::SVGElement parent,
                                  std::optional<svg::SVGElement> referenceElement,
                                  std::string_view undoLabel) {
@@ -1174,27 +1218,52 @@ bool EditorApp::applyElementMove(svg::SVGElement element, svg::SVGElement parent
   return true;
 }
 
+EditorApp::RenameRejection EditorApp::classifyRenameRejection(const svg::SVGElement& element,
+                                                             std::string_view newId) {
+  if (IsLocked(element)) {
+    return RenameRejection::Locked;
+  }
+  const std::string oldId(element.id().str());
+  const std::string newIdStr(newId);
+  if (newIdStr.empty()) {
+    return RenameRejection::Empty;
+  }
+  if (newIdStr == oldId) {
+    return RenameRejection::Unchanged;
+  }
+  // Reject a collision with a DIFFERENT element (renaming to your own id is the
+  // Unchanged no-op above; an empty oldId means nothing references it yet).
+  svg::SVGDocument& doc = document_.document();
+  if (const std::optional<svg::SVGElement> existing = doc.querySelector("#" + newIdStr);
+      existing.has_value() && *existing != element) {
+    return RenameRejection::DuplicateId;
+  }
+  return RenameRejection::None;
+}
+
+std::string_view EditorApp::DescribeRenameRejection(RenameRejection reason) {
+  switch (reason) {
+    case RenameRejection::None: return "";
+    case RenameRejection::Locked: return "Layer is locked";
+    case RenameRejection::Empty: return "Name cannot be empty";
+    case RenameRejection::Unchanged: return "Name unchanged";
+    case RenameRejection::DuplicateId: return "Name already in use";
+  }
+  return "";
+}
+
 bool EditorApp::renameSelectedElement(std::string_view newId) {
   if (selection_.size() != 1u) {
     return false;
   }
   svg::SVGElement element = selection_.front();
-  if (IsLocked(element)) {
+  if (classifyRenameRejection(element, newId) != RenameRejection::None) {
     return false;
   }
   const std::string oldId(element.id().str());
   const std::string newIdStr(newId);
-  if (newIdStr.empty() || newIdStr == oldId) {
-    return false;
-  }
 
   svg::SVGDocument& doc = document_.document();
-  // Reject a collision with a DIFFERENT element (renaming to your own id is the
-  // no-op above; an empty oldId means nothing references it yet, which is fine).
-  if (const std::optional<svg::SVGElement> existing = doc.querySelector("#" + newIdStr);
-      existing.has_value() && *existing != element) {
-    return false;
-  }
 
   // Collect every reference that must be repointed, DOM-level: walk all elements
   // and every attribute value, rewriting `url(#oldId)` / `href="#oldId"`. Only

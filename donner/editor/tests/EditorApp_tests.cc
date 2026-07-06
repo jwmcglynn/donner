@@ -1832,6 +1832,82 @@ TEST(EditorAppReorderTest, DirectReorderRejectsRootSelfCrossParentAndCurrentPosi
   EXPECT_FALSE(app.flushFrame());
 }
 
+TEST(EditorAppReorderTest, MoveIntoParentBeforeSiblingCrossParentIsOneUndoEntry) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+    <g id="g1"><rect id="a" width="10" height="10"/></g>
+    <g id="g2"><rect id="b" x="20" width="10" height="10"/></g>
+  </svg>)svg"));
+
+  const svg::SVGElement a = *app.document().document().querySelector("#a");
+  const svg::SVGElement b = *app.document().document().querySelector("#b");
+  const svg::SVGElement g2 = *app.document().document().querySelector("#g2");
+
+  // Move "a" from g1 into g2, before "b".
+  EXPECT_TRUE(app.moveElementIntoParentBeforeSibling(a, g2, b));
+  EXPECT_TRUE(app.flushFrame());
+
+  ASSERT_TRUE(a.parentElement().has_value());
+  EXPECT_EQ(*a.parentElement(), g2);
+  ASSERT_TRUE(a.nextSibling().has_value());
+  EXPECT_EQ(a.nextSibling()->id(), RcString("b"));
+  EXPECT_EQ(app.undoTimeline().entryCount(), 1u);
+  ASSERT_TRUE(app.undoTimeline().nextUndoLabel().has_value());
+  EXPECT_EQ(*app.undoTimeline().nextUndoLabel(), "Move element");
+}
+
+TEST(EditorAppReorderTest, MoveIntoParentAppendsAsLastChildWhenNoReference) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+    <g id="g1"><rect id="a" width="10" height="10"/></g>
+    <g id="g2"><rect id="b" x="20" width="10" height="10"/></g>
+  </svg>)svg"));
+
+  const svg::SVGElement a = *app.document().document().querySelector("#a");
+  const svg::SVGElement g2 = *app.document().document().querySelector("#g2");
+
+  // std::nullopt reference => append as g2's last child (after "b").
+  EXPECT_TRUE(app.moveElementIntoParentBeforeSibling(a, g2, std::nullopt));
+  EXPECT_TRUE(app.flushFrame());
+
+  ASSERT_TRUE(a.parentElement().has_value());
+  EXPECT_EQ(*a.parentElement(), g2);
+  ASSERT_TRUE(a.previousSibling().has_value());
+  EXPECT_EQ(a.previousSibling()->id(), RcString("b"));
+  EXPECT_FALSE(a.nextSibling().has_value());
+  EXPECT_EQ(app.undoTimeline().entryCount(), 1u);
+}
+
+TEST(EditorAppReorderTest, MoveIntoParentRejectsSelfDescendantLockedAndNoOp) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+    <g id="outer"><g id="inner"><rect id="a" width="10" height="10"/></g></g>
+    <rect id="sibling" x="40" width="10" height="10"/>
+  </svg>)svg"));
+
+  const svg::SVGElement root = app.document().document().svgElement();
+  const svg::SVGElement outer = *app.document().document().querySelector("#outer");
+  const svg::SVGElement inner = *app.document().document().querySelector("#inner");
+  const svg::SVGElement sibling = *app.document().document().querySelector("#sibling");
+
+  // The document root cannot be re-parented.
+  EXPECT_FALSE(app.moveElementIntoParentBeforeSibling(root, outer, std::nullopt));
+  // Moving a group into itself, or into its own descendant, would detach it.
+  EXPECT_FALSE(app.moveElementIntoParentBeforeSibling(outer, outer, std::nullopt));
+  EXPECT_FALSE(app.moveElementIntoParentBeforeSibling(outer, inner, std::nullopt));
+  // Reference sibling must be a child of the destination parent.
+  EXPECT_FALSE(app.moveElementIntoParentBeforeSibling(sibling, inner, outer));
+  // No-op: "sibling" is already the last child of root when appending to root.
+  EXPECT_FALSE(app.moveElementIntoParentBeforeSibling(sibling, root, std::nullopt));
+
+  // A locked element does not move.
+  app.setElementLocked(inner, true);
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_FALSE(app.moveElementIntoParentBeforeSibling(inner, root, std::nullopt));
+
+  EXPECT_FALSE(app.flushFrame());
+}
+
 void CollectFlatIds(const svg::SVGElement& el, std::vector<std::string>& out) {
   if (const std::optional<RcString> id = el.getAttribute("id"); id.has_value()) {
     out.push_back(std::string(id->str()));

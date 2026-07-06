@@ -60,6 +60,8 @@ struct MenuBarActions {
   bool copy = false;
   bool paste = false;
   bool pasteInFront = false;
+  /// Duplicate the canvas shape selection (offset copy, one undo step).
+  bool duplicate = false;
   bool convertTextToOutlines = false;
   /// Text Select-All in the source/XML pane (fires when the source pane owns keyboard focus).
   bool selectAll = false;
@@ -100,6 +102,7 @@ enum class MenuBarCommand {
   Copy,
   Paste,
   PasteInFront,
+  Duplicate,
   ConvertTextToOutlines,
   SelectAll,
   DeselectAll,

@@ -294,6 +294,11 @@ private:
   void copySelectedShapesToClipboard();
   void cutSelectedShapesToClipboard();
   void pasteShapesFromClipboard(bool inFront);
+  /// Duplicate the current canvas shape selection: an offset copy spliced at the
+  /// end of the root as one undo step, reusing the copy + paste-with-offset
+  /// machinery (`copySelectionToPayload` + `preparePaste`). Bound to Cmd+D and
+  /// the Edit > Duplicate menu item.
+  void duplicateSelectedShapes();
   // Convert Text to Outlines. Runs
   // when the selection is exactly one or more `<text>` elements. Builds the
   // outline group via `convertTextToOutlines`, applies it as structural DOM

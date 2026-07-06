@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cfloat>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <optional>
@@ -386,10 +387,28 @@ bool LayersPanel::handleRowRename(EditorApp& app, std::size_t rowIndex, std::str
   }
   // Select the row's element (you rename the thing you double-clicked), then run
   // the shared DOM-level rename engine, which also repoints references.
-  app.setSelection(rows[rowIndex].element);
+  const svg::SVGElement element = rows[rowIndex].element;
+  const std::uint64_t stableId = rows[rowIndex].stableId;
+  app.setSelection(element);
   selectionChanged_ = true;
   const bool renamed = app.renameSelectedElement(newId);
   mutationQueued_ = mutationQueued_ || renamed;
+  if (renamed) {
+    renameRejection_.reset();
+  } else {
+    // Surface *why* the rename was refused so the user is not left guessing.
+    // An unchanged name is a silent no-op (the user committed the same id), not
+    // an error worth flashing.
+    const EditorApp::RenameRejection reason = app.classifyRenameRejection(element, newId);
+    if (reason != EditorApp::RenameRejection::None &&
+        reason != EditorApp::RenameRejection::Unchanged) {
+      renameRejection_ = RenameRejectionFeedback{
+          .stableId = stableId,
+          .message = std::string(EditorApp::DescribeRenameRejection(reason)),
+          .ageSeconds = 0.0f,
+      };
+    }
+  }
   return renamed;
 }
 
@@ -419,6 +438,102 @@ bool LayersPanel::handleRowReorder(EditorApp& app, std::size_t fromIndex, std::s
     return true;
   }
   return false;
+}
+
+LayersPanel::LayerDropTarget LayersPanel::computeDropTarget(std::size_t fromIndex,
+                                                           std::size_t targetIndex,
+                                                           LayerDropMode mode) const {
+  LayerDropTarget target;
+  const std::vector<LayerTreeRow>& rows = model_.rows();
+  if (fromIndex >= rows.size() || targetIndex >= rows.size()) {
+    return target;  // Out of range: invalid.
+  }
+  const svg::SVGElement targetElement = rows[targetIndex].element;
+
+  if (mode == LayerDropMode::Into) {
+    // Only group-like rows (a `<g>`/nested `<svg>` group or the root) accept an
+    // into-drop; the dragged element lands as the group's last child.
+    const LayerRowKind kind = rows[targetIndex].kind;
+    if (kind != LayerRowKind::Group && kind != LayerRowKind::Root) {
+      return target;  // Non-group target: invalid.
+    }
+    target.parent = targetElement;
+    target.referenceSibling = std::nullopt;  // Append as the last child.
+    target.valid = true;
+    return target;
+  }
+
+  // Before/After: the dragged element becomes a sibling of the target row's
+  // element under the target's parent (this is what makes cross-parent drops
+  // work - dropping between two rows re-parents into the row's parent).
+  const std::optional<svg::SVGElement> parent = targetElement.parentElement();
+  if (!parent.has_value()) {
+    return target;  // The target is the document root: no sibling context.
+  }
+  target.parent = *parent;
+  target.referenceSibling =
+      mode == LayerDropMode::Before ? std::optional<svg::SVGElement>(targetElement)
+                                    : targetElement.nextSibling();
+  target.valid = true;
+  return target;
+}
+
+bool LayersPanel::handleRowDrop(EditorApp& app, std::size_t fromIndex, std::size_t targetIndex,
+                                LayerDropMode mode) {
+  const std::vector<LayerTreeRow>& rows = model_.rows();
+  if (fromIndex >= rows.size()) {
+    return false;
+  }
+  const LayerDropTarget target = computeDropTarget(fromIndex, targetIndex, mode);
+  if (!target.valid) {
+    return false;
+  }
+  const svg::SVGElement moved = rows[fromIndex].element;
+  if (app.moveElementIntoParentBeforeSibling(moved, *target.parent, target.referenceSibling)) {
+    app.setSelection(moved);
+    selectionChanged_ = true;
+    mutationQueued_ = true;
+    return true;
+  }
+  return false;
+}
+
+void LayersPanel::requestDeleteRow(EditorApp& app, std::size_t rowIndex) {
+  const std::vector<LayerTreeRow>& rows = model_.rows();
+  if (rowIndex >= rows.size()) {
+    return;
+  }
+  // Select the row's element, then flag the shell to run its delete-with-undo
+  // path (the same path the global Delete key uses). The panel intentionally
+  // owns no delete engine of its own.
+  app.setSelection(rows[rowIndex].element);
+  selectionChanged_ = true;
+  deleteRequested_ = true;
+}
+
+bool LayersPanel::consumeDeleteRequested() {
+  const bool requested = deleteRequested_;
+  deleteRequested_ = false;
+  return requested;
+}
+
+void LayersPanel::revealElement(const svg::SVGElement& element) {
+  // The model only recurses into expanded groups, so expand every ancestor so a
+  // row for `element` is emitted on the next refresh. Walk from the element's
+  // parent up through the tree (expanding the root's id is harmless - it has no
+  // row - and covers deeply nested selections).
+  for (std::optional<svg::SVGElement> ancestor = element.parentElement(); ancestor.has_value();
+       ancestor = ancestor->parentElement()) {
+    model_.setExpanded(LayerTreeModel::StableIdFor(*ancestor), true);
+  }
+  pendingScrollStableId_ = LayerTreeModel::StableIdFor(element);
+}
+
+std::optional<std::string> LayersPanel::renameRejectionMessage() const {
+  if (!renameRejection_.has_value()) {
+    return std::nullopt;
+  }
+  return renameRejection_->message;
 }
 
 bool LayersPanel::handleRowZOrder(EditorApp& app, std::size_t rowIndex,
@@ -627,11 +742,47 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
         ImGui::EndDragDropSource();
       }
       if (ImGui::BeginDragDropTarget()) {
-        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DND_LAYER_ROW")) {
-          std::size_t fromIndex = 0;
-          std::memcpy(&fromIndex, payload->Data, sizeof(fromIndex));
-          if (liveApp != nullptr) {
-            handleRowReorder(*liveApp, fromIndex, i);
+        // Peek at the in-flight payload (without accepting it) so the drop
+        // indicator reflects where the release will land this frame.
+        const ImGuiPayload* peek = ImGui::GetDragDropPayload();
+        if (peek != nullptr && peek->IsDataType("DND_LAYER_ROW")) {
+          const float rowTop = rowFlashTopLeft.y;
+          const float rowBottom = rowTop + kPreviewHeight;
+          const float mouseY = ImGui::GetIO().MousePos.y;
+          const bool targetIsGroup =
+              row.kind == LayerRowKind::Group || row.kind == LayerRowKind::Root;
+          // A group row's middle band drops INTO the group (append last child);
+          // the top/bottom bands (and any band of a non-group row) drop the
+          // dragged element as a sibling Before/After the target row - which is
+          // how a drag re-parents across groups.
+          const float band = kPreviewHeight / 3.0f;
+          LayerDropMode mode = LayerDropMode::Before;
+          if (targetIsGroup && mouseY > rowTop + band && mouseY < rowBottom - band) {
+            mode = LayerDropMode::Into;
+          } else if (mouseY >= (rowTop + rowBottom) * 0.5f) {
+            mode = LayerDropMode::After;
+          }
+
+          const float leftX = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMin().x;
+          const float rightX = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+          const ImU32 accent = ImGui::GetColorU32(ImGuiCol_DragDropTarget);
+          if (mode == LayerDropMode::Into) {
+            // Into-group highlight: outline the whole target group row.
+            drawList->AddRect(ImVec2(leftX, rowTop), ImVec2(rightX, rowBottom), accent, 3.0f, 0,
+                              2.0f);
+          } else {
+            // Drop-position indicator line at the row's top (Before) or bottom (After).
+            const float lineY = mode == LayerDropMode::Before ? rowTop : rowBottom;
+            drawList->AddLine(ImVec2(leftX, lineY), ImVec2(rightX, lineY), accent, 2.0f);
+            drawList->AddCircleFilled(ImVec2(leftX + 1.0f, lineY), 3.0f, accent);
+          }
+
+          if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DND_LAYER_ROW")) {
+            std::size_t fromIndex = 0;
+            std::memcpy(&fromIndex, payload->Data, sizeof(fromIndex));
+            if (liveApp != nullptr) {
+              handleRowDrop(*liveApp, fromIndex, i, mode);
+            }
           }
         }
         ImGui::EndDragDropTarget();
@@ -675,6 +826,14 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
     }
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("%s", row.isLocked ? "Unlock layer" : "Lock layer");
+    }
+
+    // Reveal-on-selection: when a canvas (or other) selection change asked to
+    // scroll this row into view, do so now that its widgets are laid out, then
+    // clear the request so the panel does not fight the user's manual scroll.
+    if (pendingScrollStableId_.has_value() && *pendingScrollStableId_ == row.stableId) {
+      ImGui::SetScrollHereY(0.5f);
+      pendingScrollStableId_.reset();
     }
 
     // Right-click context menu with selection actions.
@@ -744,10 +903,14 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
         }
         ImGui::EndMenu();
       }
-      // TODO(v0.8): Delete from the Layers panel - needs the in-sync source
-      // text that lives in EditorShell, so it is wired at the shell level
-      // rather than inventing a new EditorApp API here.
-      ImGui::MenuItem("Delete", nullptr, false, false);
+      // Delete routes through the shell's delete-with-undo path (the same path
+      // the global Delete key uses): the panel selects the row's element and
+      // raises a delete request the shell consumes, since the in-sync source
+      // text lives in EditorShell. Disabled for locked rows, matching the
+      // engine's own refusal.
+      if (ImGui::MenuItem("Delete", nullptr, false, !row.isLocked) && liveApp != nullptr) {
+        requestDeleteRow(*liveApp, i);
+      }
       ImGui::EndPopup();
     }
 
@@ -770,7 +933,52 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
       drawList->ChannelsMerge();
     }
 
+    // Visible keyboard cursor: draw a focus outline around the active row so
+    // the arrow-key selection cursor is actually visible (it previously moved
+    // `activeRowIndex_` invisibly). Only while the panel window is focused.
+    if (ImGui::IsWindowFocused() && activeRowIndex_.has_value() && *activeRowIndex_ == i) {
+      const float leftX = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMin().x;
+      const float rightX = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+      drawList->AddRect(ImVec2(leftX, rowFlashTopLeft.y),
+                        ImVec2(rightX, rowFlashTopLeft.y + kPreviewHeight),
+                        ImGui::GetColorU32(ImGuiCol_NavHighlight), 2.0f, 0, 1.5f);
+    }
+
+    // Rename-rejection feedback: a shaking red outline plus a floating message
+    // pill on the row whose inline rename the engine just refused, so the reason
+    // (duplicate id, locked, etc.) is not silently swallowed. Fades over ~2s.
+    if (renameRejection_.has_value() && renameRejection_->stableId == row.stableId) {
+      const float age = renameRejection_->ageSeconds;
+      const float decay = std::max(0.0f, 1.0f - age / 2.0f);
+      const float shake = std::sin(age * 40.0f) * 4.0f * decay;
+      const ImU32 red = IM_COL32(0xff, 0x5a, 0x5a, 255);
+      const float leftX = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMin().x;
+      const float rightX = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+      drawList->AddRect(ImVec2(leftX + shake, rowFlashTopLeft.y),
+                        ImVec2(rightX + shake, rowFlashTopLeft.y + kPreviewHeight), red, 2.0f, 0,
+                        1.5f);
+      // Float the message above all panel content so it is readable regardless
+      // of row clipping; it tracks the row and shakes with the outline.
+      ImDrawList* foreground = ImGui::GetForegroundDrawList();
+      const char* message = renameRejection_->message.c_str();
+      const ImVec2 textSize = ImGui::CalcTextSize(message);
+      const float pillX = rightX - textSize.x - 12.0f + shake;
+      const float pillY = rowFlashTopLeft.y + (kPreviewHeight - textSize.y) * 0.5f;
+      foreground->AddRectFilled(ImVec2(pillX - 4.0f, pillY - 2.0f),
+                                ImVec2(pillX + textSize.x + 4.0f, pillY + textSize.y + 2.0f),
+                                IM_COL32(0x2a, 0x10, 0x10, 235), 3.0f);
+      foreground->AddText(ImVec2(pillX, pillY), red, message);
+    }
+
     ImGui::PopID();
+  }
+
+  // Advance / expire the transient rename-rejection feedback.
+  if (renameRejection_.has_value()) {
+    renameRejection_->ageSeconds += ImGui::GetIO().DeltaTime;
+    if (renameRejection_->ageSeconds >= 2.0f) {
+      renameRejection_.reset();
+    }
   }
 
   noteRowHovered(hoveredRowIndex);

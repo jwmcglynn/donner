@@ -111,6 +111,31 @@ public:
     bool ctrl = false;   ///< Ctrl/Cmd toggles the clicked row in the selection.
   };
 
+  /// Where a layer drag drops relative to a target row. `Before`/`After` place
+  /// the dragged element as a sibling of the target row's element (supporting
+  /// cross-parent moves - the destination parent is the target row's parent);
+  /// `Into` drops the dragged element in as the *last child* of the target group
+  /// row.
+  enum class LayerDropMode : std::uint8_t {
+    Before,  ///< Insert immediately before the target row's element.
+    After,   ///< Insert immediately after the target row's element.
+    Into,    ///< Append as the last child of the target group row.
+  };
+
+  /// A resolved drag-and-drop destination: the parent to move under and the
+  /// reference sibling to insert before (`std::nullopt` = append as last child).
+  /// Non-ImGui seam so the target computation is unit-testable.
+  struct LayerDropTarget {
+    /// Destination parent element (set only when `valid`; `svg::SVGElement` is
+    /// not default-constructible, hence the optional).
+    std::optional<svg::SVGElement> parent;
+    /// Insert before this child of `parent`, or append when `std::nullopt`.
+    std::optional<svg::SVGElement> referenceSibling;
+    /// False when the drop cannot resolve (out-of-range, or an `Into` drop onto
+    /// a non-group row).
+    bool valid = false;
+  };
+
   /// Rebuild the row snapshot, per-row preview swatches, and per-row rendered
   /// thumbnail bitmaps from live editor state. Safe to call only when the async
   /// renderer is idle (delegates to `LayerTreeModel::refresh` and renders each
@@ -217,6 +242,65 @@ public:
   /// @param toIndex Index of the drop-target row.
   /// @return True if a move was applied; false on out-of-range/no-op/rejected.
   bool handleRowReorder(EditorApp& app, std::size_t fromIndex, std::size_t toIndex);
+
+  /// Resolve the DOM destination (parent + reference sibling) for dropping the
+  /// row at @p fromIndex relative to the row at @p targetIndex with drop mode
+  /// @p mode. This is the pure target-computation seam behind the cross-parent
+  /// drag gesture, exposed so the between-rows and onto-group cases are
+  /// unit-testable without an ImGui frame. The returned target's `valid` flag is
+  /// false for out-of-range indices or a drop that cannot resolve (e.g. an
+  /// `Into` drop onto a non-group row, or a `Before`/`After` drop relative to a
+  /// top-level row whose parent is the omitted document root).
+  ///
+  /// @param fromIndex Index of the dragged row.
+  /// @param targetIndex Index of the drop-target row.
+  /// @param mode Where the drop lands relative to the target row.
+  /// @return The resolved destination; `valid == false` when it cannot resolve.
+  [[nodiscard]] LayerDropTarget computeDropTarget(std::size_t fromIndex, std::size_t targetIndex,
+                                                  LayerDropMode mode) const;
+
+  /// Apply a (possibly cross-parent) drag-and-drop move of the row at
+  /// @p fromIndex relative to the row at @p targetIndex, using drop mode
+  /// @p mode, via the shared `EditorApp::moveElementIntoParentBeforeSibling` DOM
+  /// move (source-reflecting, one undo entry). Factored out so the drag gesture
+  /// is unit-testable without an ImGui frame.
+  ///
+  /// @param app Live editor app the mutation is applied to.
+  /// @param fromIndex Index of the dragged row.
+  /// @param targetIndex Index of the drop-target row.
+  /// @param mode Where the drop lands relative to the target row.
+  /// @return True if a move was applied; false on invalid/no-op/rejected.
+  bool handleRowDrop(EditorApp& app, std::size_t fromIndex, std::size_t targetIndex,
+                     LayerDropMode mode);
+
+  /// Select the row at @p rowIndex's element and request that the shell delete
+  /// the current selection through its existing delete-with-undo path (the same
+  /// path the global Delete key uses). The panel has no source text of its own,
+  /// so it routes the request to `EditorShell` via \ref consumeDeleteRequested
+  /// rather than inventing a second delete engine. No-op for an out-of-range
+  /// index.
+  ///
+  /// @param app Live editor app the selection is applied to.
+  /// @param rowIndex Index into `rows()`.
+  void requestDeleteRow(EditorApp& app, std::size_t rowIndex);
+
+  /// Whether the most recent render/menu interaction requested a delete of the
+  /// selected element (via the Layers context-menu Delete). Consumes the flag.
+  /// `EditorShell` calls `deleteSelectionWithUndo` when this is set.
+  [[nodiscard]] bool consumeDeleteRequested();
+
+  /// Expand every ancestor group of @p element so a row exists for it, and mark
+  /// the row to be scrolled into view on the next `render`. Called by
+  /// `EditorShell` when the canvas (or another surface) changes the selection,
+  /// so the Layers panel reveals and scrolls to the selected element. Safe to
+  /// call without an ImGui frame (the scroll is deferred to `render`).
+  void revealElement(const svg::SVGElement& element);
+
+  /// The active rename-rejection message (e.g. "Name already in use"), or
+  /// `std::nullopt` when the most recent inline rename was accepted or none has
+  /// been attempted. Set by \ref handleRowRename when the engine refuses a
+  /// rename; surfaced inline by `render` and asserted by tests.
+  [[nodiscard]] std::optional<std::string> renameRejectionMessage() const;
 
   /// Reorder the element at @p rowIndex in paint order (z-order) via the shared
   /// `EditorApp::reorderSelectedElement` engine - the same path as the canvas
@@ -330,6 +414,21 @@ private:
   /// One-shot: request keyboard focus on the rename `InputText` the next frame
   /// it is drawn (set when an edit begins, cleared once focus is taken).
   bool renameFocusPending_ = false;
+  /// Set when the Layers context-menu Delete was chosen; cleared by
+  /// `consumeDeleteRequested`. The shell performs the actual delete.
+  bool deleteRequested_ = false;
+  /// Stable id of a row to scroll into view on the next `render` (set by
+  /// `revealElement` when the canvas selection changes), or nullopt.
+  std::optional<std::uint64_t> pendingScrollStableId_;
+  /// Transient inline feedback for a rejected inline rename: the row it applies
+  /// to, the human-readable reason, and a fade age in seconds advanced by
+  /// `render`. Cleared when it fades out or a new rename succeeds.
+  struct RenameRejectionFeedback {
+    std::uint64_t stableId = 0;  ///< Row the rejection applies to.
+    std::string message;         ///< Human-readable reason.
+    float ageSeconds = 0.0f;     ///< Time since the rejection, advanced in render.
+  };
+  std::optional<RenameRejectionFeedback> renameRejection_;
 };
 
 }  // namespace donner::editor

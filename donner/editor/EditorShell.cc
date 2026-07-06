@@ -1587,6 +1587,9 @@ void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
   if (menuActions.pasteInFront) {
     pasteShapesFromClipboard(/*inFront=*/true);
   }
+  if (menuActions.duplicate) {
+    duplicateSelectedShapes();
+  }
   if (menuActions.convertTextToOutlines) {
     convertSelectedTextToOutlines();
   }
@@ -1826,6 +1829,8 @@ void EditorShell::handleGlobalShortcuts() {
       pasteShapesFromClipboard(/*inFront=*/false);
     } else if (ImGui::IsKeyPressed(ImGuiKey_F, /*repeat=*/false)) {
       pasteShapesFromClipboard(/*inFront=*/true);
+    } else if (ImGui::IsKeyPressed(ImGuiKey_D, /*repeat=*/false)) {
+      duplicateSelectedShapes();
     }
   }
 
@@ -1956,6 +1961,63 @@ void EditorShell::pasteShapesFromClipboard(bool inFront) {
   // source-edit undo used by delete / path operations.
   const svg::SVGElement undoAnchor = document.svgElement();
   app_.undoTimeline().record("Paste shapes",
+                             captureDocumentSourceSnapshot(undoAnchor, sourceBefore),
+                             captureDocumentSourceSnapshot(undoAnchor, prepared.mergedSource));
+
+  app_.restoreSelectionAfterNextDocumentReplace(std::move(selectionTargets));
+  app_.applyMutation(EditorCommand::PasteShapesCommand(std::move(prepared.mergedSource)));
+}
+
+void EditorShell::duplicateSelectedShapes() {
+  if (!app_.hasDocument() || !app_.hasSelection()) {
+    return;
+  }
+  svg::SVGDocument& document = app_.document().document();
+  if (!document.hasSourceStore()) {
+    return;
+  }
+
+  // Reuse the copy + paste-with-offset machinery: serialize the current
+  // selection to a payload, then splice an offset copy at the end of the root.
+  // The duplicates land as top-level siblings (no group nesting), matching Cmd+D
+  // in vector editors, and the whole thing is one undoable step.
+  std::optional<ShapeClipboardPayload> payload =
+      copySelectionToPayload(document, app_.selectedElements());
+  if (!payload.has_value()) {
+    return;
+  }
+
+  PreparePasteResult prepared = preparePaste(document, *payload, PastePlacement::EndOfRootOffset,
+                                             /*selectedGroup=*/std::nullopt);
+  if (!prepared.ok) {
+    std::cerr << prepared.error << '\n';
+    return;
+  }
+
+  const std::string sourceBefore(document.source());
+
+  // Selection-restore targets from a scratch parse of the merged source, so the
+  // duplicated elements become the new selection after the reparse (same
+  // mechanism the paste path uses).
+  std::vector<AttributeWritebackTarget> selectionTargets;
+  {
+    ParseWarningSink sink;
+    auto scratch = svg::parser::SVGParser::ParseSVG(prepared.mergedSource, sink);
+    if (scratch.hasResult()) {
+      svg::SVGDocument scratchDoc = scratch.result();
+      for (const std::string& id : prepared.pastedElementIds) {
+        if (auto element = scratchDoc.querySelector("#" + id); element.has_value()) {
+          if (auto target = captureAttributeWritebackTarget(*element); target.has_value()) {
+            selectionTargets.push_back(std::move(*target));
+          }
+        }
+      }
+    }
+  }
+
+  // One undo entry spanning the whole duplicate.
+  const svg::SVGElement undoAnchor = document.svgElement();
+  app_.undoTimeline().record("Duplicate shapes",
                              captureDocumentSourceSnapshot(undoAnchor, sourceBefore),
                              captureDocumentSourceSnapshot(undoAnchor, prepared.mergedSource));
 
@@ -3140,6 +3202,12 @@ void EditorShell::renderCanvasScrollbars() {
 void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float paneOriginY,
                                  const RightSidebarLayout& layout, ImGuiWindowFlags paneFlags) {
   const auto& selectionBeforeTree = app_.selectedElement();
+  // A selection change that did NOT originate in the Layers panel / tree (i.e. a
+  // canvas or menu selection) should reveal and scroll to the element in the
+  // Layers panel.
+  const bool externalSelectionChange = selectionBeforeTree != lastTreeSelection_ &&
+                                       selectionBeforeTree.has_value() &&
+                                       !treeSelectionOriginatedInTree_;
   if (selectionBeforeTree != lastTreeSelection_) {
     treeviewPendingScroll_ = selectionBeforeTree.has_value() && !treeSelectionOriginatedInTree_;
   }
@@ -3152,6 +3220,11 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
   // to "(rendering...)" placeholders.
   const bool rendererBusy = renderCoordinator_.asyncRenderer().isBusy();
   if (!rendererBusy) {
+    // Expand ancestor groups and queue a scroll so the externally-selected
+    // element is visible in the Layers panel, before the snapshot rebuilds rows.
+    if (externalSelectionChange) {
+      layersPanel_.revealElement(*selectionBeforeTree);
+    }
     sidebarPresenter_.refreshSnapshot(app_);
     layersPanel_.refreshSnapshot(app_, &layerThumbnailRenderer_);
   }
@@ -3235,6 +3308,12 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
   // and the canvas keeps presenting the pre-mutation frame (the hidden-layer
   // "ghost").
   if (layersPanel_.consumeQueuedMutation()) {
+    flushQueuedMutationAndRefreshOverlay();
+  }
+  // A Layers context-menu Delete routes here (the panel owns no source text):
+  // run the same delete-with-undo path the global Delete key uses, then flush.
+  if (layersPanel_.consumeDeleteRequested()) {
+    std::ignore = app_.deleteSelectionWithUndo(textEditor_.getText());
     flushQueuedMutationAndRefreshOverlay();
   }
   ImGui::End();
