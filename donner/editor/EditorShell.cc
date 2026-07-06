@@ -62,6 +62,7 @@
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #endif
+#include "donner/svg/resources/FontManager.h"
 #include "embed_resources/FiraCodeFont.h"
 #include "embed_resources/RobotoFont.h"
 
@@ -634,6 +635,11 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       inputBridge_(window_, kWheelZoomStep),
       compositorDebugPanel_(window.geodeDevice()),
       dialogPresenter_(options_.editorNoticeText) {
+  // Install the embedded + system font catalog as the process-wide default provider, so every
+  // document FontManager created by the render paths resolves font-family names against embedded
+  // Google Fonts and macOS system fonts before falling back to Public Sans (Design 0013 W3).
+  svg::FontManager::SetDefaultFontProvider(&fontCatalog_);
+
   std::optional<std::string> initialSource = options_.initialSource;
   if (!initialSource.has_value() && !options_.svgPath.empty()) {
     initialSource = LoadFile(options_.svgPath);
@@ -766,6 +772,10 @@ std::optional<float> EditorShell::nextIdleWakeSeconds() const {
 }
 
 EditorShell::~EditorShell() {
+  // Detach our font catalog from the global default before it is destroyed.
+  if (svg::FontManager::DefaultFontProvider() == &fontCatalog_) {
+    svg::FontManager::SetDefaultFontProvider(nullptr);
+  }
 #ifdef DONNER_EDITOR_WGPU
   window_.setWgpuDirectRenderCallback({});
 #endif
@@ -3341,7 +3351,7 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
   // Text-property inspector: shown only when the selection is exactly one
   // `<text>` element. Content/style edits route through the mutation seam.
   const bool textInspectorQueuedMutation =
-      textInspectorPanel_.render(liveAppForClicks, ImGui::GetTime());
+      textInspectorPanel_.render(liveAppForClicks, ImGui::GetTime(), &fontCatalog_);
   ImGui::End();
   if (inspectorQueuedMutation || textInspectorQueuedMutation) {
     flushQueuedMutationAndRefreshOverlay();

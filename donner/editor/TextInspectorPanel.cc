@@ -14,6 +14,7 @@
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGTextElement.h"
+#include "donner/svg/resources/FontCatalog.h"
 
 namespace donner::editor {
 
@@ -107,7 +108,8 @@ bool TextInspectorPanel::commitPendingContent(EditorApp& liveApp) {
   return true;
 }
 
-bool TextInspectorPanel::render(EditorApp* liveApp, double nowSeconds) {
+bool TextInspectorPanel::render(EditorApp* liveApp, double nowSeconds,
+                                const svg::FontCatalog* fontCatalog) {
   if (liveApp == nullptr) {
     return false;
   }
@@ -153,6 +155,20 @@ bool TextInspectorPanel::render(EditorApp* liveApp, double nowSeconds) {
   if (ImGui::IsItemDeactivatedAfterEdit()) {
     queuedMutation =
         liveApp->setAttributeOnSelection("font-family", fontFamilyBuffer_.data()) || queuedMutation;
+  }
+
+  // Resolve the free-text family through the catalog so the operator sees how it will render:
+  // an Embedded or System font, or the Public Sans fallback for a family the viewer lacks.
+  if (fontCatalog != nullptr) {
+    const std::string_view typedFamily(fontFamilyBuffer_.data());
+    if (!typedFamily.empty()) {
+      if (const std::optional<svg::FontFamilyInfo> resolved = fontCatalog->find(typedFamily)) {
+        ImGui::TextDisabled("Resolves to %s (%s)", resolved->family.c_str(),
+                            resolved->source == svg::FontSource::Embedded ? "embedded" : "system");
+      } else {
+        ImGui::TextDisabled("Not installed - falls back to Public Sans");
+      }
+    }
   }
 
   // Font size.

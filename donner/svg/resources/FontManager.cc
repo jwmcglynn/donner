@@ -1,6 +1,7 @@
 #include "donner/svg/resources/FontManager.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <cstring>
 #include <iostream>
@@ -143,7 +144,23 @@ struct FontManager::LoadedFontComponent {
   }
 };
 
-FontManager::FontManager(Registry& registry) : registry_(registry) {}
+namespace {
+/// Process-wide default font provider adopted by newly constructed FontManagers. Borrowed, never
+/// owned. Atomic so a render thread constructing a FontManager races safely against the editor's
+/// one-time install on the main thread.
+std::atomic<const FontFamilyProvider*> g_defaultFontProvider{nullptr};
+}  // namespace
+
+void FontManager::SetDefaultFontProvider(const FontFamilyProvider* provider) {
+  g_defaultFontProvider.store(provider, std::memory_order_release);
+}
+
+const FontFamilyProvider* FontManager::DefaultFontProvider() {
+  return g_defaultFontProvider.load(std::memory_order_acquire);
+}
+
+FontManager::FontManager(Registry& registry)
+    : registry_(registry), provider_(g_defaultFontProvider.load(std::memory_order_acquire)) {}
 FontManager::~FontManager() = default;
 
 void FontManager::addFontFace(const css::FontFace& face) {
@@ -273,6 +290,21 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
           return handle;
         }
       }
+    }
+  }
+
+  // No document @font-face matched. Consult the external provider (embedded/system catalog) before
+  // falling back to Public Sans. The provider itself orders Embedded before System.
+  if (provider_ != nullptr && provider_->hasFamily(family)) {
+    std::vector<uint8_t> data = provider_->loadFamilyData(family);
+    if (!data.empty()) {
+      const Entity entity = registry_.create();
+      if (loadFontDataIntoEntity(entity, data)) {
+        FontHandle handle(entity);
+        cache_[cacheKey] = handle;
+        return handle;
+      }
+      registry_.destroy(entity);
     }
   }
 
