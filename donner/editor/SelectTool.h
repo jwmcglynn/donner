@@ -88,6 +88,12 @@ public:
     AttributeWritebackTarget target;
     Transform2d transform;
 
+    /// The element's `transform=` bytes as authored at drag start, used by the
+    /// source writeback to preserve the author's function syntax instead of
+    /// canonicalizing to `matrix()`. `std::nullopt` when the element had no
+    /// transform attribute before the drag.
+    std::optional<RcString> sourceTransformAttributeValue;
+
     /// Additional writeback entries for extra elements in a multi-element
     /// drag. One per non-primary element that had a capturable writeback
     /// target. Empty for single-element drags.
