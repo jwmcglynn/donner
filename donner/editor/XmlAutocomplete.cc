@@ -245,8 +245,10 @@ XmlAutocompleteContext ContextForToken(const XMLToken& token, std::string_view s
 
     case XMLTokenType::AttributeName:
       if (state.inTag && !state.closingTag) {
-        return MakeNameContext(XmlAutocompleteContextKind::AttributeName, source, start, end,
-                               cursorOffset);
+        XmlAutocompleteContext context = MakeNameContext(XmlAutocompleteContextKind::AttributeName,
+                                                         source, start, end, cursorOffset);
+        context.currentTagName = state.currentTagName;
+        return context;
       }
       break;
 
@@ -258,7 +260,10 @@ XmlAutocompleteContext ContextForToken(const XMLToken& token, std::string_view s
 
     case XMLTokenType::Whitespace:
       if (state.inTag && !state.closingTag && !state.currentTagName.empty()) {
-        return MakeEmptyContext(XmlAutocompleteContextKind::AttributeName, cursorOffset);
+        XmlAutocompleteContext context =
+            MakeEmptyContext(XmlAutocompleteContextKind::AttributeName, cursorOffset);
+        context.currentTagName = state.currentTagName;
+        return context;
       }
       break;
 
@@ -273,7 +278,10 @@ XmlAutocompleteContext ContextForToken(const XMLToken& token, std::string_view s
         return MakeEmptyContext(XmlAutocompleteContextKind::ElementName, cursorOffset);
       }
       if (state.inTag && !state.closingTag) {
-        return MakeEmptyContext(XmlAutocompleteContextKind::AttributeName, cursorOffset);
+        XmlAutocompleteContext context =
+            MakeEmptyContext(XmlAutocompleteContextKind::AttributeName, cursorOffset);
+        context.currentTagName = state.currentTagName;
+        return context;
       }
       break;
 
@@ -288,6 +296,89 @@ XmlAutocompleteContext ContextForToken(const XMLToken& token, std::string_view s
   }
 
   return MakeEmptyContext(XmlAutocompleteContextKind::Unknown, cursorOffset);
+}
+
+/// Whether \p tagName's open tag accepts a `viewBox` attribute. Small, fixed
+/// set (SVG2 lists exactly these five elements), so this is gated regardless
+/// of the current element - unlike the shape-only geometry gating below, a
+/// wrong guess here can't be excused as "unknown element, be permissive".
+bool TagAcceptsViewBox(std::string_view tagName) {
+  return tagName == "svg" || tagName == "symbol" || tagName == "marker" ||
+         tagName == "pattern" || tagName == "view";
+}
+
+/// Whether \p tagName's open tag accepts a `points` attribute (also a small,
+/// fixed set).
+bool TagAcceptsPoints(std::string_view tagName) {
+  return tagName == "polygon" || tagName == "polyline";
+}
+
+/// The seven SVG basic-shape elements that get positive geometry-attribute
+/// gating below. Every other element (gradients, containers, text, `<image>`,
+/// `<use>`, etc. - several of which also use `x`/`y`/`width`/`height`) keeps
+/// today's permissive, element-insensitive suggestions: building a complete
+/// attribute-by-element matrix for all of SVG is out of scope here.
+bool IsGatedShapeElement(std::string_view tagName) {
+  return tagName == "path" || tagName == "rect" || tagName == "circle" || tagName == "ellipse" ||
+         tagName == "line" || tagName == "polygon" || tagName == "polyline";
+}
+
+/// The basic-shape geometry attribute names gated by \ref IsGatedShapeElement
+/// (a subset of \ref donner::svg::kSVGPresentationAttributeNames, which lists
+/// them all in one flat, element-agnostic pool).
+bool IsShapeGeometryAttributeName(std::string_view name) {
+  static constexpr std::array<std::string_view, 10> kNames{
+      {"d", "x", "y", "width", "height", "rx", "ry", "cx", "cy", "r"}};
+  return std::find(kNames.begin(), kNames.end(), name) != kNames.end();
+}
+
+/// Whether \p tagName (one of the seven \ref IsGatedShapeElement tags) accepts
+/// geometry attribute \p attributeName, per the SVG2 basic-shape geometry
+/// attribute definitions:
+///  - `path`: `d`.
+///  - `rect`: `x`, `y`, `width`, `height`, `rx`, `ry`.
+///  - `circle`: `cx`, `cy`, `r`.
+///  - `ellipse`: `cx`, `cy`, `rx`, `ry`.
+///  - `line`: `x1`, `y1`, `x2`, `y2`.
+///  - `polygon` / `polyline`: `points`.
+bool ShapeGeometryAttributeAllowed(std::string_view tagName, std::string_view attributeName) {
+  if (tagName == "path") {
+    return attributeName == "d";
+  }
+  if (tagName == "rect") {
+    return attributeName == "x" || attributeName == "y" || attributeName == "width" ||
+           attributeName == "height" || attributeName == "rx" || attributeName == "ry";
+  }
+  if (tagName == "circle") {
+    return attributeName == "cx" || attributeName == "cy" || attributeName == "r";
+  }
+  if (tagName == "ellipse") {
+    return attributeName == "cx" || attributeName == "cy" || attributeName == "rx" ||
+           attributeName == "ry";
+  }
+  if (tagName == "line") {
+    return attributeName == "x1" || attributeName == "y1" || attributeName == "x2" ||
+           attributeName == "y2";
+  }
+  if (tagName == "polygon" || tagName == "polyline") {
+    return attributeName == "points";
+  }
+  return false;
+}
+
+/// Whether \p name should be suppressed as an attribute suggestion given the
+/// enclosing element \p tagName (empty when unknown).
+bool SuppressAttributeForElement(std::string_view tagName, std::string_view name) {
+  if (name == "viewBox") {
+    return !TagAcceptsViewBox(tagName);
+  }
+  if (name == "points") {
+    return !TagAcceptsPoints(tagName);
+  }
+  if (IsShapeGeometryAttributeName(name) && IsGatedShapeElement(tagName)) {
+    return !ShapeGeometryAttributeAllowed(tagName, name);
+  }
+  return false;
 }
 
 void AddSuggestionIfMatching(std::vector<XmlAutocompleteSuggestion>& suggestions,
@@ -361,10 +452,16 @@ std::vector<XmlAutocompleteSuggestion> BuildXmlAutocompleteSuggestions(
       }};
 
       for (std::string_view name : kStructuralAttributeNames) {
+        if (SuppressAttributeForElement(context.currentTagName, name)) {
+          continue;
+        }
         AddSuggestionIfMatching(suggestions, name, name, context.prefix,
                                 svg::PropertyRegistry::isPresentationAttributeName(name));
       }
       for (std::string_view name : svg::kSVGPresentationAttributeNames) {
+        if (SuppressAttributeForElement(context.currentTagName, name)) {
+          continue;
+        }
         const auto alreadyAdded = std::any_of(suggestions.begin(), suggestions.end(),
                                               [name](const XmlAutocompleteSuggestion& suggestion) {
                                                 return suggestion.displayText == name;
@@ -372,6 +469,16 @@ std::vector<XmlAutocompleteSuggestion> BuildXmlAutocompleteSuggestions(
         if (!alreadyAdded) {
           AddSuggestionIfMatching(suggestions, name, name, context.prefix,
                                   svg::PropertyRegistry::isPresentationAttributeName(name));
+        }
+      }
+      // `x1`/`y1`/`x2`/`y2` are `<line>`-only geometry attributes with no
+      // entry in the shared presentation-attribute pool above (unlike the
+      // other gated geometry names, which are already listed there for every
+      // other element to draw from).
+      if (context.currentTagName == "line") {
+        for (std::string_view name : {"x1", "y1", "x2", "y2"}) {
+          AddSuggestionIfMatching(suggestions, name, name, context.prefix,
+                                  /*alsoPresentationAttribute=*/false);
         }
       }
       break;

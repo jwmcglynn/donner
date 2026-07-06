@@ -506,4 +506,129 @@ TEST(XmlAutocomplete, AttributeSuggestionsFilterStructuralNamespaceNames) {
   EXPECT_FALSE(HasSuggestion(suggestions, "href"));
 }
 
+TEST(XmlAutocomplete, DetectedContextCarriesEnclosingTagName) {
+  constexpr std::string_view kSource = "<svg><rect ";
+  const XmlAutocompleteContext context = DetectXmlAutocompleteContext(kSource, kSource.size());
+
+  EXPECT_EQ(context.kind, XmlAutocompleteContextKind::AttributeName);
+  EXPECT_EQ(context.currentTagName, "rect");
+}
+
+TEST(XmlAutocomplete, CircleAttributeSuggestionsAreGeometryGated) {
+  constexpr std::string_view kSource = "<svg><circle ";
+  const XmlAutocompleteContext context = DetectXmlAutocompleteContext(kSource, kSource.size());
+  ASSERT_EQ(context.kind, XmlAutocompleteContextKind::AttributeName);
+
+  const std::vector<XmlAutocompleteSuggestion> suggestions =
+      BuildXmlAutocompleteSuggestions(context);
+  EXPECT_TRUE(HasSuggestion(suggestions, "cx"));
+  EXPECT_TRUE(HasSuggestion(suggestions, "cy"));
+  EXPECT_TRUE(HasSuggestion(suggestions, "r"));
+  EXPECT_TRUE(HasSuggestion(suggestions, "fill"));
+  EXPECT_TRUE(HasSuggestion(suggestions, "id"));
+
+  // A circle has no `d`, `points`, `x`/`y`/`width`/`height`, or `viewBox`.
+  EXPECT_FALSE(HasSuggestion(suggestions, "d"));
+  EXPECT_FALSE(HasSuggestion(suggestions, "points"));
+  EXPECT_FALSE(HasSuggestion(suggestions, "x"));
+  EXPECT_FALSE(HasSuggestion(suggestions, "y"));
+  EXPECT_FALSE(HasSuggestion(suggestions, "width"));
+  EXPECT_FALSE(HasSuggestion(suggestions, "height"));
+  EXPECT_FALSE(HasSuggestion(suggestions, "viewBox"));
+}
+
+TEST(XmlAutocomplete, RectAttributeSuggestionsOfferBoxGeometryNotPathOrPoints) {
+  constexpr std::string_view kSource = "<svg><rect ";
+  const XmlAutocompleteContext context = DetectXmlAutocompleteContext(kSource, kSource.size());
+  ASSERT_EQ(context.kind, XmlAutocompleteContextKind::AttributeName);
+
+  const std::vector<XmlAutocompleteSuggestion> suggestions =
+      BuildXmlAutocompleteSuggestions(context);
+  EXPECT_TRUE(HasSuggestion(suggestions, "x"));
+  EXPECT_TRUE(HasSuggestion(suggestions, "y"));
+  EXPECT_TRUE(HasSuggestion(suggestions, "width"));
+  EXPECT_TRUE(HasSuggestion(suggestions, "height"));
+  EXPECT_TRUE(HasSuggestion(suggestions, "rx"));
+  EXPECT_TRUE(HasSuggestion(suggestions, "ry"));
+
+  EXPECT_FALSE(HasSuggestion(suggestions, "d"));
+  EXPECT_FALSE(HasSuggestion(suggestions, "points"));
+  EXPECT_FALSE(HasSuggestion(suggestions, "cx"));
+  EXPECT_FALSE(HasSuggestion(suggestions, "cy"));
+  EXPECT_FALSE(HasSuggestion(suggestions, "viewBox"));
+}
+
+TEST(XmlAutocomplete, LineAttributeSuggestionsOfferEndpointCoordinates) {
+  constexpr std::string_view kSource = "<svg><line ";
+  const XmlAutocompleteContext context = DetectXmlAutocompleteContext(kSource, kSource.size());
+  ASSERT_EQ(context.kind, XmlAutocompleteContextKind::AttributeName);
+
+  const std::vector<XmlAutocompleteSuggestion> suggestions =
+      BuildXmlAutocompleteSuggestions(context);
+  EXPECT_TRUE(HasSuggestion(suggestions, "x1"));
+  EXPECT_TRUE(HasSuggestion(suggestions, "y1"));
+  EXPECT_TRUE(HasSuggestion(suggestions, "x2"));
+  EXPECT_TRUE(HasSuggestion(suggestions, "y2"));
+  EXPECT_FALSE(HasSuggestion(suggestions, "x"));
+  EXPECT_FALSE(HasSuggestion(suggestions, "d"));
+}
+
+TEST(XmlAutocomplete, PolygonAndPolylineOfferPointsNotOtherShapesGeometry) {
+  for (std::string_view tag : {"polygon", "polyline"}) {
+    SCOPED_TRACE(tag);
+    const std::string source = "<svg><" + std::string(tag) + " ";
+    const XmlAutocompleteContext context =
+        DetectXmlAutocompleteContext(source, source.size());
+    ASSERT_EQ(context.kind, XmlAutocompleteContextKind::AttributeName);
+
+    const std::vector<XmlAutocompleteSuggestion> suggestions =
+        BuildXmlAutocompleteSuggestions(context);
+    EXPECT_TRUE(HasSuggestion(suggestions, "points"));
+    EXPECT_FALSE(HasSuggestion(suggestions, "d"));
+    EXPECT_FALSE(HasSuggestion(suggestions, "cx"));
+  }
+}
+
+TEST(XmlAutocomplete, PathAttributeSuggestionsOfferDNotOtherShapesGeometry) {
+  constexpr std::string_view kSource = "<svg><path ";
+  const XmlAutocompleteContext context = DetectXmlAutocompleteContext(kSource, kSource.size());
+  ASSERT_EQ(context.kind, XmlAutocompleteContextKind::AttributeName);
+
+  const std::vector<XmlAutocompleteSuggestion> suggestions =
+      BuildXmlAutocompleteSuggestions(context);
+  EXPECT_TRUE(HasSuggestion(suggestions, "d"));
+  EXPECT_FALSE(HasSuggestion(suggestions, "points"));
+  EXPECT_FALSE(HasSuggestion(suggestions, "x"));
+  EXPECT_FALSE(HasSuggestion(suggestions, "cx"));
+}
+
+TEST(XmlAutocomplete, SvgRootOffersViewBoxButRectDoesNot) {
+  constexpr std::string_view kSvgSource = "<svg ";
+  const XmlAutocompleteContext svgContext =
+      DetectXmlAutocompleteContext(kSvgSource, kSvgSource.size());
+  ASSERT_EQ(svgContext.kind, XmlAutocompleteContextKind::AttributeName);
+  EXPECT_TRUE(HasSuggestion(BuildXmlAutocompleteSuggestions(svgContext), "viewBox"));
+
+  constexpr std::string_view kRectSource = "<svg><rect ";
+  const XmlAutocompleteContext rectContext =
+      DetectXmlAutocompleteContext(kRectSource, kRectSource.size());
+  ASSERT_EQ(rectContext.kind, XmlAutocompleteContextKind::AttributeName);
+  EXPECT_FALSE(HasSuggestion(BuildXmlAutocompleteSuggestions(rectContext), "viewBox"));
+}
+
+TEST(XmlAutocomplete, NonShapeElementKeepsPermissiveGeometryAttributeSuggestions) {
+  // <image> is not one of the seven gated shape elements, so it keeps the
+  // pre-existing permissive suggestions (including x/y/width/height, which it
+  // genuinely accepts, at the cost of also still offering unrelated geometry
+  // attributes this table does not attempt to gate for it).
+  constexpr std::string_view kSource = "<svg><image ";
+  const XmlAutocompleteContext context = DetectXmlAutocompleteContext(kSource, kSource.size());
+  ASSERT_EQ(context.kind, XmlAutocompleteContextKind::AttributeName);
+
+  const std::vector<XmlAutocompleteSuggestion> suggestions =
+      BuildXmlAutocompleteSuggestions(context);
+  EXPECT_TRUE(HasSuggestion(suggestions, "x"));
+  EXPECT_TRUE(HasSuggestion(suggestions, "width"));
+}
+
 }  // namespace donner::editor

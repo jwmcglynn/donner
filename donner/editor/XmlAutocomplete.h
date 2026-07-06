@@ -23,6 +23,13 @@ struct XmlAutocompleteContext {
   std::size_t replaceStartOffset = 0;  ///< Inclusive byte offset to replace.
   std::size_t replaceEndOffset = 0;    ///< Exclusive byte offset to replace.
   std::string prefix;                  ///< Already-typed completion prefix.
+
+  /// Tag name of the element whose open tag the cursor is inside, when \ref kind is
+  /// \ref XmlAutocompleteContextKind::AttributeName. Empty when the enclosing element is unknown
+  /// (e.g. a context built directly rather than through \ref DetectXmlAutocompleteContext), in
+  /// which case \ref BuildXmlAutocompleteSuggestions falls back to its permissive,
+  /// element-insensitive attribute set.
+  std::string currentTagName;
 };
 
 /// A single XML autocomplete suggestion.
@@ -49,7 +56,12 @@ XmlAutocompleteContext DetectXmlAutocompleteContext(std::string_view source,
  * Build SVG-aware suggestions for a detected XML context.
  *
  * Element names come from the SVG element registry; attribute names come from SVG presentation
- * attributes plus structural XML/SVG attributes; CSS names come from PropertyRegistry.
+ * attributes plus structural XML/SVG attributes; CSS names come from PropertyRegistry. Attribute
+ * suggestions are element-aware for the primitive shape elements (`path`, `rect`, `circle`,
+ * `ellipse`, `line`, `polygon`, `polyline`): a shape only gets its own geometry attributes (e.g. a
+ * `<circle>` is offered `cx`/`cy`/`r`, not `d` or `points`), and `viewBox`/`points` are only
+ * offered on elements that actually accept them, regardless of tag. Every other element keeps the
+ * permissive, element-insensitive attribute set.
  *
  * @param context Context returned by \ref DetectXmlAutocompleteContext.
  * @return Matching suggestions, filtered by the context prefix.
