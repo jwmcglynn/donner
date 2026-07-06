@@ -1331,13 +1331,46 @@ bool IsLockGatedCommand(const EditorCommand& command) {
 }
 
 void EditorApp::setElementVisible(const svg::SVGElement& element, bool visible) {
-  // Toggle the `display` presentation attribute. Hiding writes
-  // `display="none"`; showing writes `display="inline"` (a definitively
-  // visible value) so the change is observable through the computed-style
-  // visibility check regardless of whether the surrounding stylesheet sets
-  // display.
-  applyMutation(
-      EditorCommand::SetAttributeCommand(element, "display", visible ? "inline" : "none"));
+  const auto entryIt =
+      std::find_if(hiddenElementAuthorDisplay_.begin(), hiddenElementAuthorDisplay_.end(),
+                   [&element](const auto& entry) { return entry.first == element; });
+
+  if (!visible) {
+    // Capture the author's `display` value (if any) BEFORE clobbering it, so
+    // the matching Show can restore it later instead of forcing
+    // `display="inline"` over e.g. an authored `display="block"`. Replace any
+    // stale entry from a previous hide/show cycle for this element.
+    std::optional<RcString> authorDisplay = element.getAttribute("display");
+    std::optional<std::string> capturedValue =
+        authorDisplay.has_value() ? std::optional<std::string>(std::string(*authorDisplay))
+                                   : std::nullopt;
+    if (entryIt != hiddenElementAuthorDisplay_.end()) {
+      entryIt->second = std::move(capturedValue);
+    } else {
+      hiddenElementAuthorDisplay_.emplace_back(element, std::move(capturedValue));
+    }
+    applyMutation(EditorCommand::SetAttributeCommand(element, "display", "none"));
+    return;
+  }
+
+  // Showing: restore the captured author value when it is a genuine,
+  // non-`none` override we clobbered - this is the common "author wrote
+  // display=block" case the round trip must preserve. When there is no
+  // captured entry (this element was never hidden through this toggle this
+  // session) or the captured value was itself absent/`"none"` (restoring it
+  // literally would leave the element hidden, defeating the Show action),
+  // fall back to writing a definitively-visible `display="inline"`.
+  if (entryIt != hiddenElementAuthorDisplay_.end()) {
+    std::optional<std::string> authorDisplay = std::move(entryIt->second);
+    hiddenElementAuthorDisplay_.erase(entryIt);
+    if (authorDisplay.has_value() && *authorDisplay != "none") {
+      applyMutation(EditorCommand::SetAttributeCommand(element, "display",
+                                                        std::move(*authorDisplay)));
+      return;
+    }
+  }
+
+  applyMutation(EditorCommand::SetAttributeCommand(element, "display", "inline"));
 }
 
 void EditorApp::setElementLocked(const svg::SVGElement& element, bool locked) {
