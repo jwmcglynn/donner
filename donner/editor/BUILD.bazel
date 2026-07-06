@@ -136,8 +136,11 @@ donner_cc_library(
     deps = [
         ":pan_closed_cursor_svg",
         ":pan_cursor_svg",
+        ":path_modify_cursor_svg",
         ":pen_cursor_svg",
         ":rotate_cursor_svg",
+        ":scale_cursor_svg",
+        ":select_cursor_svg",
         ":selection_transform_handles",
         "//donner/base",
         "//donner/svg",
@@ -554,6 +557,19 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "toolbar_icon_set",
+    srcs = ["ToolbarIconSet.cc"],
+    hdrs = ["ToolbarIconSet.h"],
+    deps = [
+        ":embedded_svg_icon",
+        ":imgui_headers",
+        ":tool_icons_svg",
+        "//donner/base",
+        "//donner/svg/renderer:renderer_interface",
+    ],
+)
+
+donner_cc_library(
     name = "sidebar_presenter",
     srcs = ["SidebarPresenter.cc"],
     hdrs = ["SidebarPresenter.h"],
@@ -752,6 +768,7 @@ donner_cc_library(
         ":text_to_outlines",
         ":text_tool",
         ":tool_keybinding",
+        ":toolbar_icon_set",
         ":tracy_wrapper",
         ":undo_timeline",
         ":viewport_interaction_controller",
@@ -932,7 +949,7 @@ embed_resources(
     name = "pan_closed_cursor_svg",
     header_output = "donner/editor/PanClosedCursorSvg.h",
     resources = {
-        "kPanClosedCursorSvg": "pan_closed_cursor.svg",
+        "kPanClosedCursorSvg": "art/pan_closed_cursor.svg",
     },
 )
 
@@ -940,7 +957,7 @@ embed_resources(
     name = "pan_cursor_svg",
     header_output = "donner/editor/PanCursorSvg.h",
     resources = {
-        "kPanCursorSvg": "pan_cursor.svg",
+        "kPanCursorSvg": "art/pan_cursor.svg",
     },
 )
 
@@ -948,7 +965,10 @@ embed_resources(
     name = "pen_cursor_svg",
     header_output = "donner/editor/PenCursorSvg.h",
     resources = {
-        "kPenCursorSvg": "pen_cursor.svg",
+        "kPenCursorSvg": "art/pen_cursor.svg",
+        "kPenAddCursorSvg": "art/pen_add_cursor.svg",
+        "kPenRemoveCursorSvg": "art/pen_remove_cursor.svg",
+        "kPenCloseCursorSvg": "art/pen_close_cursor.svg",
     },
 )
 
@@ -956,7 +976,42 @@ embed_resources(
     name = "rotate_cursor_svg",
     header_output = "donner/editor/RotateCursorSvg.h",
     resources = {
-        "kRotateCursorSvg": "rotate_cursor.svg",
+        "kRotateCursorSvg": "art/rotate_cursor.svg",
+    },
+)
+
+embed_resources(
+    name = "select_cursor_svg",
+    header_output = "donner/editor/SelectCursorSvg.h",
+    resources = {
+        "kSelectCursorSvg": "art/select_cursor.svg",
+    },
+)
+
+embed_resources(
+    name = "scale_cursor_svg",
+    header_output = "donner/editor/ScaleCursorSvg.h",
+    resources = {
+        "kScaleCursorSvg": "art/scale_cursor.svg",
+    },
+)
+
+embed_resources(
+    name = "path_modify_cursor_svg",
+    header_output = "donner/editor/PathModifyCursorSvg.h",
+    resources = {
+        "kPathModifyCursorSvg": "art/path_modify_cursor.svg",
+    },
+)
+
+embed_resources(
+    name = "tool_icons_svg",
+    header_output = "donner/editor/ToolIconsSvg.h",
+    resources = {
+        "kToolSelectIconSvg": "art/tool_select_icon.svg",
+        "kToolPenIconSvg": "art/tool_pen_icon.svg",
+        "kToolTextIconSvg": "art/tool_text_icon.svg",
+        "kToolPathModifyIconSvg": "art/tool_path_modify_icon.svg",
     },
 )
 

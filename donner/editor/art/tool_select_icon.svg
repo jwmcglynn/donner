@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <!-- Selection tool: the classic arrow pointer WITH tail (distinct from the
+       tail-less selection cursor). Single-color mask; the toolbar tints it. -->
+  <path
+    d="
+      M 5.5 3.5
+      L 5.5 21
+      L 10.2 16.4
+      L 12.9 22
+      L 15.8 20.6
+      L 13 15.1
+      L 19.5 15.1
+      Z"
+    fill="#000000" />
+</svg>

@@ -443,6 +443,11 @@ private:
   /// preview bitmap to a GL/WGPU texture (same path as the render pane) keyed by
   /// row stable id, so ImGui can blit the real thumbnail instead of a swatch.
   GlTextureCache thumbnailTextures_;
+  /// Toolbar tool-icon texture cache. Holds the Donner-rendered white-mask
+  /// bitmaps for the palette icons, keyed by a stable per-icon id. Never
+  /// retention-swept (unlike `thumbnailTextures_`), so the four icons upload
+  /// once and persist for the process lifetime.
+  GlTextureCache toolbarIconTextures_;
   /// Clean offscreen renderer used only for Layers-panel thumbnails. This
   /// shares the editor's Geode device but is never bound to the live framebuffer,
   /// so row previews cannot inherit presentation state from the main renderer.

@@ -219,6 +219,16 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "toolbar_icon_set_tests",
+    srcs = ["ToolbarIconSet_tests.cc"],
+    deps = [
+        "//donner/editor:toolbar_icon_set",
+        "//donner/svg/renderer:renderer_interface",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "source_selection_tests",
     srcs = ["SourceSelection_tests.cc"],
     data = ["//:donner_splash.svg"],
