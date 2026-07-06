@@ -1,0 +1,147 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="700" viewBox="0 0 960 700">
+  <defs>
+    <style>
+      .h   { font-family: Roboto, Helvetica, Arial, sans-serif; font-size: 20px; fill: #E6EAF0; }
+      .sec { font-family: Roboto, Helvetica, Arial, sans-serif; font-size: 12px; fill: #9AA5B4; letter-spacing: 1px; }
+      .lbl { font-family: Roboto, Helvetica, Arial, sans-serif; font-size: 13px; fill: #E6EAF0; }
+      .mut { font-family: Roboto, Helvetica, Arial, sans-serif; font-size: 12px; fill: #9AA5B4; }
+      .dis { font-family: Roboto, Helvetica, Arial, sans-serif; font-size: 12px; fill: #5C6675; }
+      .mono{ font-family: 'Fira Code', monospace; font-size: 12px; fill: #E6EAF0; }
+      .cap { font-family: 'Fira Code', monospace; font-size: 10px; fill: #6BA0F8; }
+    </style>
+  </defs>
+
+  <rect width="960" height="700" fill="#0E1116"/>
+  <text x="24" y="40" class="h">Control Styling — states, rounding (r), borders, per-surface notes</text>
+  <text x="24" y="60" class="cap">Annotated mock, not a screenshot. Accent shown = Variant A Azimuth Blue. r = corner radius token.</text>
+
+  <!-- ============ FORMATTING BAR ============ -->
+  <text x="24" y="92" class="sec">FORMATTING BAR  (surface.raised, r=control 4, 1px border.subtle bottom)</text>
+  <rect x="24" y="102" width="912" height="46" rx="4" fill="#1E252E" stroke="#2D3542"/>
+  <!-- font family dropdown -->
+  <rect x="36" y="112" width="180" height="26" rx="4" fill="#161B22" stroke="#3A4453"/>
+  <text x="48" y="129" class="lbl">Roboto</text>
+  <text x="196" y="129" class="mut">v</text>
+  <!-- size combo -->
+  <rect x="226" y="112" width="62" height="26" rx="4" fill="#161B22" stroke="#3A4453"/>
+  <text x="238" y="129" class="mono">16</text>
+  <text x="276" y="129" class="mut">v</text>
+  <!-- B I U toggles: B active(accent), I hover, U default -->
+  <rect x="300" y="112" width="30" height="26" rx="4" fill="#4C8DF6"/>
+  <text x="309" y="130" font-family="Roboto" font-size="14" font-weight="700" fill="#0E1116">B</text>
+  <rect x="334" y="112" width="30" height="26" rx="4" fill="#2A333F"/>
+  <text x="342" y="130" font-family="Roboto" font-size="14" font-style="italic" fill="#E6EAF0">I</text>
+  <rect x="368" y="112" width="30" height="26" rx="4" fill="#1E252E"/>
+  <text x="376" y="130" font-family="Roboto" font-size="14" fill="#E6EAF0">U</text>
+  <text x="300" y="160" class="cap">active</text>
+  <text x="336" y="160" class="cap">hover</text>
+  <text x="368" y="160" class="cap">default</text>
+
+  <!-- ============ TOOLBAR ============ -->
+  <text x="24" y="200" class="sec">TOOLBAR  (button 30px, r=4, tintable W6 icons)</text>
+  <rect x="24" y="210" width="70" height="270" rx="6" fill="#161B22" stroke="#2D3542"/>
+  <!-- default -->
+  <rect x="42" y="222" width="34" height="34" rx="4" fill="#1E252E"/>
+  <path d="M 52 230 L 52 250 L 57 245 L 60 252 L 63 251 L 60 244 L 66 244 Z" fill="#E6EAF0"/>
+  <!-- hover -->
+  <rect x="42" y="264" width="34" height="34" rx="4" fill="#2A333F"/>
+  <rect x="49" y="271" width="20" height="20" rx="3" fill="none" stroke="#E6EAF0" stroke-width="2"/>
+  <!-- active/selected (accent tint bg) -->
+  <rect x="42" y="306" width="34" height="34" rx="4" fill="#4C8DF6" fill-opacity="0.22" stroke="#4C8DF6"/>
+  <circle cx="59" cy="323" r="9" fill="none" stroke="#6BA0F8" stroke-width="2"/>
+  <!-- focus ring -->
+  <rect x="42" y="348" width="34" height="34" rx="4" fill="#1E252E" stroke="#4C8DF6" stroke-width="2"/>
+  <path d="M 51 356 h 16 M 59 356 v 16" stroke="#E6EAF0" stroke-width="2"/>
+  <!-- disabled -->
+  <rect x="42" y="390" width="34" height="34" rx="4" fill="#1E252E"/>
+  <path d="M 51 398 l 16 16 M 67 398 l -16 16" stroke="#5C6675" stroke-width="2"/>
+  <text x="104" y="243" class="cap">default  (surface.raised)</text>
+  <text x="104" y="285" class="cap">hover    (surface.hover)</text>
+  <text x="104" y="327" class="cap">selected (accent 22% + accent stroke)</text>
+  <text x="104" y="369" class="cap">focus    (2px accent ring)</text>
+  <text x="104" y="411" class="cap">disabled (text.disabled ink)</text>
+
+  <!-- ============ TREE ROWS ============ -->
+  <text x="360" y="200" class="sec">TREE ROWS  (indent 16, chevron, row h=24)</text>
+  <rect x="360" y="210" width="290" height="150" rx="6" fill="#161B22" stroke="#2D3542"/>
+  <!-- row default -->
+  <text x="374" y="235" class="mut">v</text>
+  <rect x="392" y="224" width="12" height="12" rx="2" fill="#4C8DF6"/>
+  <text x="412" y="235" class="lbl">Group</text>
+  <!-- row child hover -->
+  <rect x="368" y="242" width="274" height="24" rx="3" fill="#2A333F"/>
+  <text x="390" y="259" class="mut">v</text>
+  <rect x="408" y="248" width="12" height="12" rx="2" fill="#31C6B3"/>
+  <text x="428" y="259" class="lbl">rect.frame</text>
+  <!-- row selected (accent tint) -->
+  <rect x="368" y="270" width="274" height="24" rx="3" fill="#4C8DF6" fill-opacity="0.22"/>
+  <text x="406" y="287" class="mut">></text>
+  <rect x="424" y="276" width="12" height="12" rx="2" fill="#E3B341"/>
+  <text x="444" y="287" class="lbl">text.title</text>
+  <!-- row default 2 -->
+  <text x="406" y="315" class="mut">></text>
+  <rect x="424" y="304" width="12" height="12" rx="2" fill="#F0616A"/>
+  <text x="444" y="315" class="lbl">path.badge</text>
+  <text x="374" y="345" class="cap">default / hover surface.hover / selected accent 22%</text>
+
+  <!-- ============ INSPECTOR FIELDS ============ -->
+  <text x="360" y="410" class="sec">INSPECTOR — numeric transform</text>
+  <rect x="360" y="420" width="290" height="150" rx="6" fill="#161B22" stroke="#2D3542"/>
+  <text x="374" y="446" class="mut">X</text>
+  <rect x="392" y="432" width="80" height="24" rx="4" fill="#161B22" stroke="#3A4453"/>
+  <text x="402" y="449" class="mono">128</text>
+  <text x="486" y="446" class="mut">Y</text>
+  <rect x="504" y="432" width="80" height="24" rx="4" fill="#161B22" stroke="#3A4453"/>
+  <text x="514" y="449" class="mono">64</text>
+  <text x="374" y="480" class="mut">W</text>
+  <rect x="392" y="466" width="80" height="24" rx="4" fill="#161B22" stroke="#4C8DF6" stroke-width="2"/>
+  <text x="402" y="483" class="mono">240</text>
+  <text x="486" y="480" class="mut">H</text>
+  <rect x="504" y="466" width="80" height="24" rx="4" fill="#161B22" stroke="#3A4453"/>
+  <text x="514" y="483" class="mono">96</text>
+  <text x="374" y="514" class="mut">R</text>
+  <rect x="392" y="500" width="80" height="24" rx="4" fill="#161B22" stroke="#3A4453"/>
+  <text x="402" y="517" class="mono">0deg</text>
+  <text x="374" y="548" class="cap">focused field = 2px accent border (W)</text>
+  <text x="374" y="562" class="cap">field bg surface.base, border.strong idle</text>
+
+  <!-- ============ FILL / STROKE WIDGET ============ -->
+  <text x="680" y="200" class="sec">FILL / STROKE  (paired, white default)</text>
+  <rect x="680" y="210" width="256" height="150" rx="6" fill="#161B22" stroke="#2D3542"/>
+  <!-- stroke swatch behind -->
+  <rect x="740" y="248" width="64" height="64" rx="6" fill="#161B22" stroke="#E6EAF0" stroke-width="6"/>
+  <!-- fill swatch front (white default) -->
+  <rect x="708" y="234" width="64" height="64" rx="6" fill="#FFFFFF" stroke="#3A4453"/>
+  <text x="820" y="262" class="lbl">Fill</text>
+  <text x="820" y="280" class="mono">#FFFFFF</text>
+  <text x="820" y="308" class="lbl">Stroke</text>
+  <text x="820" y="326" class="mono">2px</text>
+  <!-- none / swap affordances -->
+  <rect x="708" y="322" width="28" height="20" rx="4" fill="#1E252E" stroke="#3A4453"/>
+  <path d="M 712 338 l 20 -12" stroke="#F0616A" stroke-width="2"/>
+  <rect x="744" y="322" width="28" height="20" rx="4" fill="#1E252E" stroke="#3A4453"/>
+  <path d="M 749 328 h 12 M 758 325 l 5 3 l -5 3 M 761 336 h -12 M 752 333 l -5 3 l 5 3" stroke="#9AA5B4" stroke-width="1.4" fill="none"/>
+  <text x="700" y="356" class="cap">none (X) / swap affordances per slot</text>
+
+  <!-- ============ PANEL + POPOVER ============ -->
+  <text x="680" y="410" class="sec">PANEL / POPOVER</text>
+  <rect x="680" y="420" width="256" height="150" rx="6" fill="#161B22" stroke="#2D3542"/>
+  <rect x="680" y="420" width="256" height="30" rx="6" fill="#1E252E"/>
+  <text x="696" y="440" class="lbl">Inspector</text>
+  <rect x="696" y="464" width="224" height="1" fill="#2D3542"/>
+  <text x="696" y="486" class="mut">Section header (muted)</text>
+  <rect x="696" y="498" width="224" height="30" rx="4" fill="#232B36" stroke="#3A4453"/>
+  <text x="710" y="518" class="lbl">Popover / dropdown = surface.overlay</text>
+  <text x="696" y="548" class="cap">panel bg base · titlebar raised · divider border.subtle</text>
+
+  <!-- ============ BUTTONS ROW ============ -->
+  <text x="24" y="530" class="sec">BUTTONS</text>
+  <rect x="24" y="540" width="120" height="30" rx="4" fill="#4C8DF6"/>
+  <text x="52" y="560" font-family="Roboto" font-size="13" fill="#0E1116">Primary</text>
+  <rect x="156" y="540" width="120" height="30" rx="4" fill="#1E252E" stroke="#3A4453"/>
+  <text x="188" y="560" class="lbl">Secondary</text>
+  <rect x="288" y="540" width="40" height="30" rx="4" fill="#F0616A"/>
+  <path d="M 302 548 v 10 M 302 562 v 2" stroke="#0E1116" stroke-width="2"/>
+  <text x="24" y="592" class="cap">primary=accent+ink · secondary=raised+border.strong · destructive=semantic red</text>
+  <text x="24" y="612" class="cap">All controls: hover -> surface.hover, active -> surface.active, focus -> 2px accent ring, r=control 4.</text>
+</svg>
