@@ -7,7 +7,7 @@ name: Debug 778 CMake Segfault
 
 on:
   push:
-    branches: ["anim/smil-778-cmake-debug"]
+    branches: ["anim/smil-778-cmake-debug-base"]
 
 jobs:
   gdb-backtrace:
