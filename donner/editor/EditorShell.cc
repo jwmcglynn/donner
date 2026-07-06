@@ -2990,12 +2990,47 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
   if (!contentOnlyCaptureThisFrame_) {
     renderSelectionSizeChip(hoverTransformIntent, representedGesturePreview);
     renderReferenceHighlightChip();
+    renderTextToolHint();
     renderToolPalette(paneOriginImGui, contentRegion);
     renderCanvasScrollbars();
     renderRenderPaneContextMenu();
   }
 
   ImGui::End();
+}
+
+void EditorShell::renderTextToolHint() {
+  if (activeTool_ != ActiveTool::Text) {
+    return;
+  }
+  const std::string_view label =
+      internal::TextToolHintLabel(textTool_.isEditing(), textTool_.isDraggingBox());
+  if (label.empty()) {
+    return;
+  }
+
+  // Bottom-center of the render pane, above the canvas scrollbar rail.
+  const ViewportState& viewport = interactionController_.viewport();
+  const ImVec2 textSize =
+      ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, 0.0f, label.data(),
+                                      label.data() + label.size());
+  const float width = textSize.x + 2.0f * kReferenceChipPaddingX;
+  const float height = textSize.y + 2.0f * kReferenceChipPaddingY;
+  const float paneCenterX =
+      static_cast<float>(viewport.paneOrigin.x + viewport.paneSize.x * 0.5);
+  const float x = paneCenterX - width * 0.5f;
+  const float y = static_cast<float>(viewport.paneOrigin.y + viewport.paneSize.y) - height -
+                  static_cast<float>(kCanvasScrollbarRailPx) - 10.0f;
+  if (width > static_cast<float>(viewport.paneSize.x) || y < viewport.paneOrigin.y) {
+    return;  // Pane too small for the hint.
+  }
+
+  ImDrawList* drawList = ImGui::GetWindowDrawList();
+  drawList->AddRectFilled(ImVec2(x, y), ImVec2(x + width, y + height), IM_COL32(34, 48, 54, 235),
+                          kReferenceChipRadius);
+  drawList->AddText(ImGui::GetFont(), ImGui::GetFontSize(),
+                    ImVec2(x + kReferenceChipPaddingX, y + kReferenceChipPaddingY),
+                    IM_COL32(255, 255, 255, 220), label.data(), label.data() + label.size());
 }
 
 void EditorShell::renderCanvasScrollbars() {
@@ -4587,6 +4622,13 @@ void EditorShell::runFrame() {
 }
 
 namespace internal {
+
+std::string_view TextToolHintLabel(bool isEditing, bool isDraggingBox) {
+  if (isEditing || isDraggingBox) {
+    return {};
+  }
+  return "Double-click to place text. Drag to draw a text box.";
+}
 
 PendingClickBusyAction PendingClickBusyActionForState(bool tookFastRedrag, bool rendererBusy) {
   if (tookFastRedrag) {
