@@ -114,7 +114,7 @@ TEST_F(MenuBarPresenterTest, RendersEachOpenMenuWithoutImplicitActions) {
   state.hasSelectableElements = true;
   state.sourceFocusMode = true;
   state.showCompositorDebugPanel = true;
-  state.showPerfOverlay = true;
+  state.perfOverlayMode = PerfOverlayMode::FullGraph;
 
   for (const char* menuLabel : {"Donner SVG Editor", "File", "Edit", "View"}) {
     PrimeMainMenuPopup(menuLabel);
@@ -143,34 +143,36 @@ TEST_F(MenuBarPresenterTest, RendersEachOpenMenuWithoutImplicitActions) {
     EXPECT_FALSE(actions.actualSize) << menuLabel;
     EXPECT_FALSE(actions.toggleSourceFocusMode) << menuLabel;
     EXPECT_FALSE(actions.toggleCompositorDebugPanel) << menuLabel;
-    EXPECT_FALSE(actions.togglePerfOverlay) << menuLabel;
+    EXPECT_FALSE(actions.setPerfOverlayMode) << menuLabel;
   }
 }
 
 TEST(MenuBarPresenterActionsTest, ApplyViewMenuToggleActionsHandlesNullAndIndependentToggles) {
   bool showCompositorDebugPanel = false;
-  bool showPerfOverlay = true;
+  PerfOverlayMode perfOverlayMode = PerfOverlayMode::Off;
 
-  ApplyViewMenuToggleActions(MenuBarActions{}, &showCompositorDebugPanel, &showPerfOverlay);
+  ApplyViewMenuToggleActions(MenuBarActions{}, &showCompositorDebugPanel, &perfOverlayMode);
   EXPECT_FALSE(showCompositorDebugPanel);
-  EXPECT_TRUE(showPerfOverlay);
+  EXPECT_EQ(perfOverlayMode, PerfOverlayMode::Off);
 
   MenuBarActions actions;
   actions.toggleCompositorDebugPanel = true;
   ApplyViewMenuToggleActions(actions, &showCompositorDebugPanel, nullptr);
   EXPECT_TRUE(showCompositorDebugPanel);
-  EXPECT_TRUE(showPerfOverlay);
+  EXPECT_EQ(perfOverlayMode, PerfOverlayMode::Off);
 
   actions = MenuBarActions{};
-  actions.togglePerfOverlay = true;
-  ApplyViewMenuToggleActions(actions, nullptr, &showPerfOverlay);
+  actions.setPerfOverlayMode = true;
+  actions.perfOverlayMode = PerfOverlayMode::FpsPill;
+  ApplyViewMenuToggleActions(actions, nullptr, &perfOverlayMode);
   EXPECT_TRUE(showCompositorDebugPanel);
-  EXPECT_FALSE(showPerfOverlay);
+  EXPECT_EQ(perfOverlayMode, PerfOverlayMode::FpsPill);
 
   actions.toggleCompositorDebugPanel = true;
-  ApplyViewMenuToggleActions(actions, &showCompositorDebugPanel, &showPerfOverlay);
+  actions.perfOverlayMode = PerfOverlayMode::FullGraph;
+  ApplyViewMenuToggleActions(actions, &showCompositorDebugPanel, &perfOverlayMode);
   EXPECT_FALSE(showCompositorDebugPanel);
-  EXPECT_TRUE(showPerfOverlay);
+  EXPECT_EQ(perfOverlayMode, PerfOverlayMode::FullGraph);
 }
 
 TEST(MenuBarPresenterActionsTest, ApplyMenuBarCommandIgnoresInactiveAndNullActions) {
@@ -268,8 +270,19 @@ TEST(MenuBarPresenterActionsTest, ApplyMenuBarCommandMapsSimpleCommandsToActions
   EXPECT_TRUE(actions.toggleCompositorDebugPanel);
 
   actions = MenuBarActions{};
-  ApplyMenuBarCommand(true, MenuBarCommand::TogglePerfOverlay, state, &actions);
-  EXPECT_TRUE(actions.togglePerfOverlay);
+  ApplyMenuBarCommand(true, MenuBarCommand::SetPerfOverlayOff, state, &actions);
+  EXPECT_TRUE(actions.setPerfOverlayMode);
+  EXPECT_EQ(actions.perfOverlayMode, PerfOverlayMode::Off);
+
+  actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::SetPerfOverlayFpsPill, state, &actions);
+  EXPECT_TRUE(actions.setPerfOverlayMode);
+  EXPECT_EQ(actions.perfOverlayMode, PerfOverlayMode::FpsPill);
+
+  actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::SetPerfOverlayFullGraph, state, &actions);
+  EXPECT_TRUE(actions.setPerfOverlayMode);
+  EXPECT_EQ(actions.perfOverlayMode, PerfOverlayMode::FullGraph);
 }
 
 TEST(MenuBarPresenterActionsTest, ApplyMenuBarCommandRoutesSelectCommandsBySourceFocus) {

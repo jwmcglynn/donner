@@ -544,9 +544,13 @@ donner_cc_library(
     srcs = ["SidebarPresenter.cc"],
     hdrs = ["SidebarPresenter.h"],
     deps = [
+        ":attribute_writeback",
+        ":command_queue",
         ":editor_app",
         ":embedded_svg_icon",
         ":imgui_headers",
+        ":lock_state",
+        ":undo_timeline",
         ":viewport_state",
         "//donner/base",
         "//donner/base/xml",
@@ -628,6 +632,7 @@ donner_cc_library(
     deps = [
         ":gl_texture_cache",
         ":imgui_headers",
+        ":menu_bar_presenter",
         ":presented_frame_composer",
         ":select_tool",
         ":selection_aabb",

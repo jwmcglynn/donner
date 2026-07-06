@@ -5,16 +5,18 @@
 namespace donner::editor {
 
 // The Compositor Debug panel is a developer diagnostics view and must default
-// to hidden; the render-pane performance overlay defaults to visible. EditorShell
-// mirrors these defaults into its `showCompositorDebugPanel_` / `showPerfOverlay_`
-// members and seeds the View-menu checkmarks from them via `MenuBarState`. Asserting
-// the `MenuBarState` defaults pins the user-visible default-visibility contract
-// without needing a live ImGui/GL context to construct an `EditorShell`.
+// to hidden; the render-pane performance overlay likewise defaults to off.
+// EditorShell mirrors these defaults into its `showCompositorDebugPanel_` /
+// `perfOverlayMode_` members and seeds the View-menu checkmarks from them via
+// `MenuBarState`. Asserting the `MenuBarState` defaults pins the user-visible
+// default-visibility contract without needing a live ImGui/GL context to
+// construct an `EditorShell`.
 TEST(ViewMenuVisibility, MenuBarStateDefaultsMatchVisibilityContract) {
   const MenuBarState state;
   EXPECT_FALSE(state.showCompositorDebugPanel)
       << "Compositor Debug panel must default to hidden (developer diagnostics only)";
-  EXPECT_TRUE(state.showPerfOverlay) << "Performance overlay must default to visible";
+  EXPECT_EQ(state.perfOverlayMode, PerfOverlayMode::Off)
+      << "Performance overlay must default to off";
 }
 
 // The toggle actions are edge-triggered requests, so they must default to false
@@ -22,61 +24,70 @@ TEST(ViewMenuVisibility, MenuBarStateDefaultsMatchVisibilityContract) {
 TEST(ViewMenuVisibility, MenuBarActionsToggleRequestsDefaultFalse) {
   const MenuBarActions actions;
   EXPECT_FALSE(actions.toggleCompositorDebugPanel);
-  EXPECT_FALSE(actions.togglePerfOverlay);
+  EXPECT_FALSE(actions.setPerfOverlayMode);
 }
 
 TEST(ViewMenuVisibility, ToggleActionsFlipCompositorDebugPanel) {
   bool showCompositorDebugPanel = false;
-  bool showPerfOverlay = true;
+  PerfOverlayMode perfOverlayMode = PerfOverlayMode::Off;
   MenuBarActions actions;
   actions.toggleCompositorDebugPanel = true;
 
-  ApplyViewMenuToggleActions(actions, &showCompositorDebugPanel, &showPerfOverlay);
+  ApplyViewMenuToggleActions(actions, &showCompositorDebugPanel, &perfOverlayMode);
 
   EXPECT_TRUE(showCompositorDebugPanel);
-  EXPECT_TRUE(showPerfOverlay);
+  EXPECT_EQ(perfOverlayMode, PerfOverlayMode::Off);
 
-  ApplyViewMenuToggleActions(actions, &showCompositorDebugPanel, &showPerfOverlay);
+  ApplyViewMenuToggleActions(actions, &showCompositorDebugPanel, &perfOverlayMode);
 
   EXPECT_FALSE(showCompositorDebugPanel);
-  EXPECT_TRUE(showPerfOverlay);
+  EXPECT_EQ(perfOverlayMode, PerfOverlayMode::Off);
 }
 
-TEST(ViewMenuVisibility, ToggleActionsFlipPerfOverlay) {
+TEST(ViewMenuVisibility, SetActionsApplyPerfOverlayMode) {
   bool showCompositorDebugPanel = false;
-  bool showPerfOverlay = true;
+  PerfOverlayMode perfOverlayMode = PerfOverlayMode::Off;
   MenuBarActions actions;
-  actions.togglePerfOverlay = true;
+  actions.setPerfOverlayMode = true;
+  actions.perfOverlayMode = PerfOverlayMode::FpsPill;
 
-  ApplyViewMenuToggleActions(actions, &showCompositorDebugPanel, &showPerfOverlay);
-
-  EXPECT_FALSE(showCompositorDebugPanel);
-  EXPECT_FALSE(showPerfOverlay);
-
-  ApplyViewMenuToggleActions(actions, &showCompositorDebugPanel, &showPerfOverlay);
+  ApplyViewMenuToggleActions(actions, &showCompositorDebugPanel, &perfOverlayMode);
 
   EXPECT_FALSE(showCompositorDebugPanel);
-  EXPECT_TRUE(showPerfOverlay);
+  EXPECT_EQ(perfOverlayMode, PerfOverlayMode::FpsPill);
+
+  actions.perfOverlayMode = PerfOverlayMode::FullGraph;
+  ApplyViewMenuToggleActions(actions, &showCompositorDebugPanel, &perfOverlayMode);
+
+  EXPECT_FALSE(showCompositorDebugPanel);
+  EXPECT_EQ(perfOverlayMode, PerfOverlayMode::FullGraph);
+
+  actions.perfOverlayMode = PerfOverlayMode::Off;
+  ApplyViewMenuToggleActions(actions, &showCompositorDebugPanel, &perfOverlayMode);
+
+  EXPECT_EQ(perfOverlayMode, PerfOverlayMode::Off);
 }
 
 TEST(ViewMenuVisibility, ToggleActionsIgnoreNullVisibilityPointers) {
   bool showCompositorDebugPanel = false;
-  bool showPerfOverlay = true;
+  PerfOverlayMode perfOverlayMode = PerfOverlayMode::Off;
   MenuBarActions actions;
   actions.toggleCompositorDebugPanel = true;
-  actions.togglePerfOverlay = true;
+  actions.setPerfOverlayMode = true;
+  actions.perfOverlayMode = PerfOverlayMode::FullGraph;
 
-  ApplyViewMenuToggleActions(actions, nullptr, &showPerfOverlay);
+  ApplyViewMenuToggleActions(actions, nullptr, &perfOverlayMode);
   EXPECT_FALSE(showCompositorDebugPanel);
-  EXPECT_FALSE(showPerfOverlay);
+  EXPECT_EQ(perfOverlayMode, PerfOverlayMode::FullGraph);
 
+  perfOverlayMode = PerfOverlayMode::Off;
   ApplyViewMenuToggleActions(actions, &showCompositorDebugPanel, nullptr);
   EXPECT_TRUE(showCompositorDebugPanel);
-  EXPECT_FALSE(showPerfOverlay);
+  EXPECT_EQ(perfOverlayMode, PerfOverlayMode::Off);
 
   ApplyViewMenuToggleActions(actions, nullptr, nullptr);
   EXPECT_TRUE(showCompositorDebugPanel);
-  EXPECT_FALSE(showPerfOverlay);
+  EXPECT_EQ(perfOverlayMode, PerfOverlayMode::Off);
 }
 
 }  // namespace donner::editor

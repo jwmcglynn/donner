@@ -2231,5 +2231,181 @@ TEST_F(LayersPanelImGuiTest, LockedFlashPaintsRowBackgroundRed) {
       << "row stayed red after the locked-rejection flash was cleared";
 }
 
+// --------------------------------------------------------------------------
+// Subtree preview regression tests: row thumbnails must reflect exactly the
+// row's subtree, including shadow-tree (<use>) expansions and text content.
+// --------------------------------------------------------------------------
+
+TEST(LayersPanelSubtreePreviewTest, LeafThumbnailExcludesOverlappingSibling) {
+  EditorApp app;
+  ASSERT_TRUE(
+      app.loadFromString(R"SVG(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+    <g id="grp">
+      <rect id="under" x="0" y="0" width="60" height="60" fill="rgb(220,0,0)"/>
+      <rect id="over" x="30" y="30" width="60" height="60" fill="rgb(0,0,220)"/>
+    </g>
+  </svg>)SVG"));
+
+  svg::Renderer renderer;
+  auto under = app.document().document().querySelector("#under");
+  auto over = app.document().document().querySelector("#over");
+  ASSERT_TRUE(under.has_value());
+  ASSERT_TRUE(over.has_value());
+
+  const svg::RendererBitmap underBitmap = renderer.renderElementToBitmap(*under, Vector2i(42, 24));
+  ASSERT_FALSE(underBitmap.empty());
+  const int bluePixelsInUnder = CountThumbnailPixelsMatching(
+      underBitmap, [](const std::array<uint8_t, 4>& px) { return px[2] > 150 && px[0] < 100; });
+  EXPECT_EQ(bluePixelsInUnder, 0) << "sibling content leaked into leaf thumbnail";
+
+  const svg::RendererBitmap overBitmap = renderer.renderElementToBitmap(*over, Vector2i(42, 24));
+  ASSERT_FALSE(overBitmap.empty());
+  const int redPixelsInOver = CountThumbnailPixelsMatching(
+      overBitmap, [](const std::array<uint8_t, 4>& px) { return px[0] > 150 && px[2] < 100; });
+  EXPECT_EQ(redPixelsInOver, 0) << "sibling content leaked into leaf thumbnail";
+}
+
+TEST(LayersPanelSubtreePreviewTest, NestedGroupThumbnailUnderTransformedParent) {
+  EditorApp app;
+  ASSERT_TRUE(
+      app.loadFromString(R"SVG(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+    <g id="outer" transform="translate(100,100)">
+      <g id="inner">
+        <rect x="0" y="0" width="40" height="40" fill="rgb(0,200,0)"/>
+      </g>
+    </g>
+  </svg>)SVG"));
+
+  svg::Renderer renderer;
+  auto inner = app.document().document().querySelector("#inner");
+  ASSERT_TRUE(inner.has_value());
+  const svg::RendererBitmap bitmap = renderer.renderElementToBitmap(*inner, Vector2i(42, 24));
+  ASSERT_FALSE(bitmap.empty());
+  const std::array<uint8_t, 4> center =
+      ThumbnailPixelAt(bitmap, bitmap.dimensions.x / 2, bitmap.dimensions.y / 2);
+  EXPECT_THAT(center, Rgba(Near(0, 8), Near(200, 8), Near(0, 8), Near(255, 8)))
+      << "nested group thumbnail should be tightly cropped to its own content";
+}
+
+TEST(LayersPanelSubtreePreviewTest, GroupThumbnailIncludesUseChild) {
+  EditorApp app;
+  ASSERT_TRUE(
+      app.loadFromString(R"SVG(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+    <defs>
+      <rect id="proto" x="0" y="0" width="50" height="100" fill="rgb(0,0,220)"/>
+    </defs>
+    <g id="grp">
+      <rect x="50" y="0" width="50" height="100" fill="rgb(220,0,0)"/>
+      <use href="#proto"/>
+    </g>
+  </svg>)SVG"));
+
+  svg::Renderer renderer;
+  auto grp = app.document().document().querySelector("#grp");
+  ASSERT_TRUE(grp.has_value());
+  const svg::RendererBitmap bitmap = renderer.renderElementToBitmap(*grp, Vector2i(42, 24));
+  ASSERT_FALSE(bitmap.empty());
+  const int bluePixels = CountThumbnailPixelsMatching(
+      bitmap, [](const std::array<uint8_t, 4>& px) { return px[2] > 150 && px[0] < 100; });
+  EXPECT_GT(bluePixels, 0) << "use child missing from group thumbnail";
+}
+
+TEST(LayersPanelSubtreePreviewTest, HiddenSiblingExcludedFromGroupThumbnail) {
+  EditorApp app;
+  ASSERT_TRUE(
+      app.loadFromString(R"SVG(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+    <g id="grp">
+      <rect id="shown" x="0" y="0" width="100" height="100" fill="rgb(220,0,0)"/>
+      <rect id="hidden" x="0" y="0" width="100" height="100" fill="rgb(0,0,220)" visibility="hidden"/>
+    </g>
+  </svg>)SVG"));
+
+  svg::Renderer renderer;
+  auto grp = app.document().document().querySelector("#grp");
+  ASSERT_TRUE(grp.has_value());
+  const svg::RendererBitmap bitmap = renderer.renderElementToBitmap(*grp, Vector2i(42, 24));
+  ASSERT_FALSE(bitmap.empty());
+  const int bluePixels = CountThumbnailPixelsMatching(
+      bitmap, [](const std::array<uint8_t, 4>& px) { return px[2] > 150 && px[0] < 100; });
+  EXPECT_EQ(bluePixels, 0) << "visibility:hidden sibling rendered into group thumbnail";
+}
+
+TEST(LayersPanelSubtreePreviewTest, GroupThumbnailIncludesTextChild) {
+  EditorApp app;
+  ASSERT_TRUE(
+      app.loadFromString(R"SVG(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+    <g id="grp">
+      <rect x="0" y="0" width="10" height="10" fill="rgb(220,0,0)"/>
+      <text x="20" y="60" font-size="40" fill="rgb(0,0,220)">Hello</text>
+    </g>
+  </svg>)SVG"));
+
+  svg::Renderer renderer;
+  auto grp = app.document().document().querySelector("#grp");
+  ASSERT_TRUE(grp.has_value());
+  const svg::RendererBitmap bitmap = renderer.renderElementToBitmap(*grp, Vector2i(42, 24));
+  ASSERT_FALSE(bitmap.empty());
+  const int bluePixels = CountThumbnailPixelsMatching(
+      bitmap, [](const std::array<uint8_t, 4>& px) { return px[2] > 150 && px[0] < 100; });
+  EXPECT_GT(bluePixels, 0) << "text child missing from group thumbnail";
+}
+
+TEST(LayersPanelSubtreePreviewTest, UseLeafRowThumbnailShowsReferencedContent) {
+  EditorApp app;
+  ASSERT_TRUE(
+      app.loadFromString(R"SVG(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+    <defs>
+      <rect id="proto" x="0" y="0" width="100" height="100" fill="rgb(0,0,220)"/>
+    </defs>
+    <use id="theUse" href="#proto"/>
+  </svg>)SVG"));
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const std::optional<LayerTreeRow> useRow = FindRow(panel, "theUse");
+  ASSERT_TRUE(useRow.has_value());
+  const svg::RendererBitmap* bitmap = panel.rowThumbnail(useRow->stableId);
+  ASSERT_NE(bitmap, nullptr) << "use row has no rendered thumbnail (fell back to swatch)";
+  const int bluePixels = CountThumbnailPixelsMatching(
+      *bitmap, [](const std::array<uint8_t, 4>& px) { return px[2] > 150 && px[0] < 100; });
+  EXPECT_GT(bluePixels, 0) << "use row thumbnail missing referenced content";
+}
+
+TEST(LayersPanelSubtreePreviewTest, SubtreeThumbnailsViaPanelForNestedRows) {
+  // Drive the real panel path: the outer top-level group default-expands, so
+  // the nested subgroup rows are visible and get their own thumbnails.
+  EditorApp app;
+  ASSERT_TRUE(
+      app.loadFromString(R"SVG(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+    <g id="outer">
+      <g id="left">
+        <rect x="0" y="0" width="100" height="100" fill="rgb(220,0,0)"/>
+      </g>
+      <g id="right">
+        <rect x="100" y="0" width="100" height="100" fill="rgb(0,0,220)"/>
+      </g>
+    </g>
+  </svg>)SVG"));
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const std::optional<LayerTreeRow> left = FindRow(panel, "left");
+  const std::optional<LayerTreeRow> right = FindRow(panel, "right");
+  ASSERT_TRUE(left.has_value());
+  ASSERT_TRUE(right.has_value());
+
+  const svg::RendererBitmap* leftBitmap = panel.rowThumbnail(left->stableId);
+  ASSERT_NE(leftBitmap, nullptr);
+  const int blueInLeft = CountThumbnailPixelsMatching(
+      *leftBitmap, [](const std::array<uint8_t, 4>& px) { return px[2] > 150 && px[0] < 100; });
+  EXPECT_EQ(blueInLeft, 0) << "left subgroup thumbnail contains right subgroup content";
+
+  const svg::RendererBitmap* rightBitmap = panel.rowThumbnail(right->stableId);
+  ASSERT_NE(rightBitmap, nullptr);
+  const int redInRight = CountThumbnailPixelsMatching(
+      *rightBitmap, [](const std::array<uint8_t, 4>& px) { return px[0] > 150 && px[2] < 100; });
+  EXPECT_EQ(redInRight, 0) << "right subgroup thumbnail contains left subgroup content";
+}
+
 }  // namespace
 }  // namespace donner::editor

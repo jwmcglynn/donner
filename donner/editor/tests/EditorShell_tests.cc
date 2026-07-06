@@ -182,6 +182,20 @@ TEST(EditorShellInternalTest, CursorForTransformHandleIntentMapsResizeAndRotateH
             ImGuiMouseCursor_ResizeNESW);
 }
 
+TEST(EditorShellInternalTest, TextToolHintShowsOnlyWhileIdle) {
+  // Idle text tool: the double-click / drag affordances are invisible, so
+  // the hint must teach them.
+  const std::string_view idleHint =
+      internal::TextToolHintLabel(/*isEditing=*/false, /*isDraggingBox=*/false);
+  EXPECT_NE(idleHint.find("Double-click"), std::string_view::npos) << idleHint;
+  EXPECT_NE(idleHint.find("Drag"), std::string_view::npos) << idleHint;
+
+  // While a session or a box drag is active the hint would be noise.
+  EXPECT_TRUE(internal::TextToolHintLabel(/*isEditing=*/true, /*isDraggingBox=*/false).empty());
+  EXPECT_TRUE(internal::TextToolHintLabel(/*isEditing=*/false, /*isDraggingBox=*/true).empty());
+  EXPECT_TRUE(internal::TextToolHintLabel(/*isEditing=*/true, /*isDraggingBox=*/true).empty());
+}
+
 TEST(EditorShellInternalTest, ActiveAttributePaintSlotHandlesNoneColorAndCustomValues) {
   const internal::ToolbarPaintSlotState none =
       internal::ToolbarPaintSlotStateForActiveAttribute("none");
@@ -413,6 +427,27 @@ TEST(EditorShellInternalTest, ResolveDocumentViewBoxUsesViewBoxIntrinsicSizeAndD
   ASSERT_TRUE(defaultApp.loadFromString("<svg xmlns=\"http://www.w3.org/2000/svg\"/>"));
   EXPECT_EQ(internal::ResolveDocumentViewBox(defaultApp.document().document()),
             Box2d::FromXYWH(0.0, 0.0, 512.0, 512.0));
+}
+
+TEST(EditorShellInternalTest, ResolveDocumentViewBoxIgnoresCommittedRasterCanvasSize) {
+  // RenderCoordinator commits zoom/DPR-scaled raster canvas sizes into the
+  // document via setCanvasSize. For a viewBox-less document the resolved
+  // viewBox must stay pinned to the intrinsic width/height attributes.
+  // Reading the committed canvas back instead inflates the viewBox by the
+  // device pixel ratio on every commit until the max-canvas clamp, which
+  // starves zoom-driven re-rasters and froze zoom/scroll rendering on
+  // viewBox-less documents such as z0rly_test6.svg.
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kIntrinsicSizeSvg));
+  app.document().document().setCanvasSize(320, 180);  // A 2x-DPR raster commit.
+  EXPECT_EQ(internal::ResolveDocumentViewBox(app.document().document()),
+            Box2d::FromXYWH(0.0, 0.0, 160.0, 90.0));
+
+  // Even a wildly inflated committed canvas (the runaway feedback fixed
+  // point) must not leak into the resolved viewBox.
+  app.document().document().setCanvasSize(8192, 4608);
+  EXPECT_EQ(internal::ResolveDocumentViewBox(app.document().document()),
+            Box2d::FromXYWH(0.0, 0.0, 160.0, 90.0));
 }
 
 TEST(EditorShellInternalTest, PaintReferenceStateIncludesSameDocumentSourceRange) {
@@ -806,7 +841,9 @@ public:
     return shell.showCompositorDebugPanel_;
   }
 
-  static bool ShowPerfOverlay(const EditorShell& shell) { return shell.showPerfOverlay_; }
+  static PerfOverlayMode GetPerfOverlayMode(const EditorShell& shell) {
+    return shell.perfOverlayMode_;
+  }
 
   static void SetLayerPanelDetached(EditorShell& shell, bool value) {
     shell.layerPanelDetached_ = value;
@@ -3248,7 +3285,8 @@ TEST(EditorShellTest, MenuActionsRouteCanvasClipboardHistorySelectionAndViewStat
   EditorShellTestAccess::ClearRequestRenderAtEndOfFrame(shell);
   const bool sourceFocusBefore = EditorShellTestAccess::SourceFocusMode(shell);
   const bool compositorDebugBefore = EditorShellTestAccess::ShowCompositorDebugPanel(shell);
-  const bool perfOverlayBefore = EditorShellTestAccess::ShowPerfOverlay(shell);
+  const PerfOverlayMode perfOverlayBefore = EditorShellTestAccess::GetPerfOverlayMode(shell);
+  ASSERT_EQ(perfOverlayBefore, PerfOverlayMode::Off);
 
   actions = MenuBarActions{};
   actions.zoomIn = true;
@@ -3256,13 +3294,14 @@ TEST(EditorShellTest, MenuActionsRouteCanvasClipboardHistorySelectionAndViewStat
   actions.actualSize = true;
   actions.toggleSourceFocusMode = true;
   actions.toggleCompositorDebugPanel = true;
-  actions.togglePerfOverlay = true;
+  actions.setPerfOverlayMode = true;
+  actions.perfOverlayMode = PerfOverlayMode::FullGraph;
   EditorShellTestAccess::ApplyMenuActions(shell, actions);
 
   EXPECT_TRUE(EditorShellTestAccess::RequestRenderAtEndOfFrame(shell));
   EXPECT_NE(EditorShellTestAccess::SourceFocusMode(shell), sourceFocusBefore);
   EXPECT_NE(EditorShellTestAccess::ShowCompositorDebugPanel(shell), compositorDebugBefore);
-  EXPECT_NE(EditorShellTestAccess::ShowPerfOverlay(shell), perfOverlayBefore);
+  EXPECT_EQ(EditorShellTestAccess::GetPerfOverlayMode(shell), PerfOverlayMode::FullGraph);
 }
 
 TEST(EditorShellTest, MenuActionsRouteDialogAndExportRequestsWithoutCurrentPath) {

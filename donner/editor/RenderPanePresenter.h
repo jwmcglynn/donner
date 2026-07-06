@@ -10,6 +10,7 @@
 #include "donner/base/Path.h"
 #include "donner/base/Vector2.h"
 #include "donner/editor/GlTextureCache.h"
+#include "donner/editor/MenuBarPresenter.h"
 #include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/PresentedFrameComposer.h"
 #include "donner/editor/SelectTool.h"
@@ -32,7 +33,7 @@ struct RenderPanePresenterState {
   Entity suppressedLayerEntity = entt::null;
   bool suppressDragTargetTiles = false;
   bool documentPresentedDirectly = false;
-  bool showFrameGraph = true;
+  PerfOverlayMode perfOverlayMode = PerfOverlayMode::Off;
 };
 
 /**
@@ -109,7 +110,8 @@ struct RenderPanePresenterState {
 class RenderPanePresenter {
 public:
   /**
-   * Draw the advanced editor render pane's composited document tiles and frame graph.
+   * Draw the advanced editor render pane's composited document tiles and, when
+   * enabled, the performance overlay (compact FPS pill or full frame graph).
    *
    * Selection chrome is not drawn here: it is rendered by Donner's OverlayRenderer
    * straight onto the Geode framebuffer (see

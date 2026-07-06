@@ -15,6 +15,8 @@
 /// empty session on a newly created element deletes it, leaving the document
 /// unchanged; emptying an existing element deletes it as an undoable edit).
 
+#include <array>
+#include <chrono>
 #include <cstddef>
 #include <optional>
 #include <string>
@@ -43,6 +45,10 @@ public:
   /// Minimum drag extent (document units, at zoom 1) that turns a click into
   /// a text-box drag instead of point text.
   static constexpr double kBoxDragScreenTolerance = 4.0;
+  /// Caret blink cadence: visible for this long, then hidden for the same,
+  /// repeating. The phase resets to visible on every caret-affecting edit so
+  /// the caret never blinks away right after input.
+  static constexpr double kCaretBlinkHalfPeriodSeconds = 0.5;
 
   /// Caret movement gestures.
   enum class CaretMove {
@@ -59,8 +65,28 @@ public:
     /// Caret line endpoints (top, bottom).
     Vector2d caretTopDoc;
     Vector2d caretBottomDoc;
-    /// Text-box frame for box text (absent for point text).
-    std::optional<Box2d> boxDoc;
+    /// Session frame corners (local TL, TR, BR, BL mapped through the text's
+    /// transform): the authored box for box text, the laid-out ink bounds for
+    /// point text. An ORIENTED quad - after a rotate it stays aligned to the
+    /// text's rotation, never the axis-aligned envelope. Absent when the
+    /// session has no frame yet (empty point text).
+    std::optional<std::array<Vector2d, 4>> frameCornersDoc;
+  };
+
+  /// Drag-to-create preview chrome (document space): the live box being
+  /// dragged out, the first text baseline it would create (one default font
+  /// size below the box top, clamped into the box), and an I-beam marker at
+  /// the future caret position. Distinct from the selection marquee so the
+  /// gesture reads as "creating a text box".
+  struct DragPreviewChrome {
+    /// The live drag rectangle.
+    Box2d boxDoc;
+    /// First-baseline segment endpoints (left, right - inset from the frame).
+    Vector2d baselineStartDoc;
+    Vector2d baselineEndDoc;
+    /// I-beam bar endpoints at the future caret position (top, bottom).
+    Vector2d ibeamTopDoc;
+    Vector2d ibeamBottomDoc;
   };
 
   /// Begin a gesture: a press on the session frame's transform handles
@@ -97,7 +123,9 @@ public:
 
   /// Hit-test the session frame's transform handles at @p documentPoint for
   /// hover cursor feedback: `Resize` over a corner handle, `Rotate` in the
-  /// ring outside it, `None` elsewhere or when no session is editing. Reads
+  /// ring outside it, `None` elsewhere or when no session is editing. The
+  /// test runs in the text's local space, so on a rotated frame the handle
+  /// zones track the ORIENTED corners, not the axis-aligned envelope. Reads
   /// the session's computed ink bounds for point text - call only while the
   /// async render worker is idle.
   [[nodiscard]] SelectionTransformHandleIntent frameHandleIntentAt(const Vector2d& documentPoint,
@@ -105,6 +133,9 @@ public:
                                                                    bool includeRotate) const;
   /// The box being dragged, for drag-preview chrome.
   [[nodiscard]] const std::optional<Box2d>& dragBoxDoc() const { return dragBoxDoc_; }
+  /// Text-box drag preview chrome (frame + first baseline + I-beam marker),
+  /// or nullopt when no box drag has produced a live rectangle yet.
+  [[nodiscard]] std::optional<DragPreviewChrome> dragPreviewChrome() const;
 
   /// Insert one code point at the caret.
   void insertCodepoint(EditorApp& editor, char32_t codepoint);
@@ -138,6 +169,23 @@ public:
   /// editing. Reads the element's computed character geometry - call only
   /// while the async render worker is idle.
   [[nodiscard]] std::optional<EditingChrome> editingChrome(EditorApp& editor) const;
+
+  /// Pure blink-phase math: true while the caret is in a visible half-period
+  /// at @p secondsSincePhaseReset since the last caret-affecting edit.
+  [[nodiscard]] static bool CaretBlinkVisibleAtPhase(double secondsSincePhaseReset);
+  /// Pure blink-phase math: seconds from @p secondsSincePhaseReset until the
+  /// caret's visibility next flips. Always in (0, kCaretBlinkHalfPeriodSeconds].
+  [[nodiscard]] static double SecondsUntilCaretBlinkFlip(double secondsSincePhaseReset);
+
+  /// True while the blinking caret is currently in its visible phase. Always
+  /// true right after a caret-affecting edit (typing, caret movement, session
+  /// open) because those reset the blink phase.
+  [[nodiscard]] bool caretBlinkVisible() const;
+  /// Seconds until the caret's blink phase next flips, or nullopt when no
+  /// editing session is active. Feeds the shell's idle-wake schedule so blink
+  /// redraws happen via overlay-chrome recapture only - the timed wake never
+  /// forces a full-scene re-render.
+  [[nodiscard]] std::optional<float> nextCaretBlinkWakeSeconds() const;
 
   /// Logical content of the active session (hard breaks as '\n'); for tests.
   [[nodiscard]] const std::u32string& sessionContent() const { return content_; }
@@ -193,6 +241,9 @@ private:
       const std::vector<std::u32string>& lines) const;
   /// Record the pre-session source baseline for the single session undo.
   void beginSessionUndo(EditorApp& editor);
+  /// Restart the caret blink phase (caret becomes visible immediately).
+  /// Called on every caret-affecting edit.
+  void resetCaretBlinkPhase() { caretBlinkPhaseStart_ = std::chrono::steady_clock::now(); }
 
   /// Active frame handle gesture (session stays in Editing underneath).
   enum class FrameGesture {
@@ -251,6 +302,9 @@ private:
   std::optional<std::string> sessionBeforeSource_;
   /// Selection to restore when an empty session is discarded.
   std::vector<svg::SVGElement> previousSelection_;
+  /// Start of the current caret blink phase; reset on every caret-affecting
+  /// edit so the caret is visible immediately after input.
+  std::chrono::steady_clock::time_point caretBlinkPhaseStart_{};
 };
 
 }  // namespace donner::editor

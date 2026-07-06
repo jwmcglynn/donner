@@ -40,11 +40,14 @@ Lengthd SVGSVGElement::y() const {
 }
 
 std::optional<Lengthd> SVGSVGElement::width() const {
-  return handle_.get<components::SizedElementComponent>().properties.width.get().value();
+  // `width` has no initial value; `.get()` is already `std::nullopt` when the
+  // attribute is unset. Calling `.value()` here would throw for viewBox-only
+  // documents.
+  return handle_.get<components::SizedElementComponent>().properties.width.get();
 }
 
 std::optional<Lengthd> SVGSVGElement::height() const {
-  return handle_.get<components::SizedElementComponent>().properties.height.get().value();
+  return handle_.get<components::SizedElementComponent>().properties.height.get();
 }
 
 void SVGSVGElement::setViewBox(std::optional<Box2d> viewBox) {

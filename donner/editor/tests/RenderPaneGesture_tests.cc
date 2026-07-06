@@ -158,5 +158,24 @@ TEST(RenderPaneGestureTest, GestureSequenceMutatesViewportToExpectedEndState) {
   EXPECT_NEAR_VEC(viewport.documentToScreen(focalDocBeforeZoom), focalScreen, 1e-9);
 }
 
+TEST(RenderPaneGestureTest, CanvasOwnsScrollEventInsideCaptureRect) {
+  const std::optional<Box2d> captureRect = Box2d::FromXYWH(100.0, 50.0, 800.0, 600.0);
+
+  // Inside the render pane: the canvas owns the event (UI must not scroll).
+  EXPECT_TRUE(CanvasOwnsScrollEvent(captureRect, Vector2d(400.0, 300.0)));
+
+  // Outside the pane (e.g. over the source pane or sidebars): the UI layer
+  // keeps the event.
+  EXPECT_FALSE(CanvasOwnsScrollEvent(captureRect, Vector2d(50.0, 300.0)));
+  EXPECT_FALSE(CanvasOwnsScrollEvent(captureRect, Vector2d(950.0, 300.0)));
+  EXPECT_FALSE(CanvasOwnsScrollEvent(captureRect, Vector2d(400.0, 20.0)));
+}
+
+TEST(RenderPaneGestureTest, CanvasNeverOwnsScrollEventWhileCaptureDisabled) {
+  // Capture disabled (popup/modal open, or no pane yet): everything goes to
+  // the UI layer, even inside where the pane sits.
+  EXPECT_FALSE(CanvasOwnsScrollEvent(std::nullopt, Vector2d(400.0, 300.0)));
+}
+
 }  // namespace
 }  // namespace donner::editor

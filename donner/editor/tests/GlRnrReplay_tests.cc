@@ -709,6 +709,95 @@ std::optional<std::filesystem::path> WriteTextTypingReplay(const std::filesystem
   return replayPath;
 }
 
+// Typing into an existing text element one character per frame, like real
+// keyboard input: switch to the text tool, click into the green text to open
+// an editing session on it, then deliver one Char event per frame followed by
+// idle settle frames. Document-space input; the async worker scheduling is
+// controlled by the test's replay options.
+std::optional<std::filesystem::path> WriteTextTypingIntoExistingTextReplay(
+    const std::filesystem::path& outputDir, std::string_view name) {
+  std::error_code createDirError;
+  std::filesystem::create_directories(outputDir, createDirError);
+  if (createDirError) {
+    ADD_FAILURE() << "failed to create " << outputDir << ": " << createDirError.message();
+    return std::nullopt;
+  }
+
+  repro::ReproFile file;
+  file.metadata.svgPath = "missing_text_typing_existing.svg";
+  file.metadata.svgBasename = "text_typing_existing.svg";
+  file.metadata.svgContentHash = "fnv1a64:text-typing-existing";
+  file.metadata.svgSource =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">)"
+      R"(<text id="msg" x="20" y="60" font-family="sans-serif" font-size="32" )"
+      R"(fill="#00cc00">Hello</text></svg>)";
+  file.metadata.windowWidth = 640;
+  file.metadata.windowHeight = 480;
+  file.metadata.displayScale = 1.0;
+
+  const auto pushFrame = [&](std::uint64_t index, Vector2d mouseDoc, int mouseButtonMask,
+                             std::vector<repro::ReproAction> actions = {},
+                             std::vector<repro::ReproEvent> events = {}) {
+    repro::ReproFrame frame;
+    frame.index = index;
+    frame.timestampSeconds = static_cast<double>(index) / 60.0;
+    frame.deltaMs = 1000.0 / 60.0;
+    frame.mouseX = mouseDoc.x;
+    frame.mouseY = mouseDoc.y;
+    frame.mouseDocX = mouseDoc.x;
+    frame.mouseDocY = mouseDoc.y;
+    frame.mouseButtonMask = mouseButtonMask;
+    frame.actions = std::move(actions);
+    frame.events = std::move(events);
+    file.frames.push_back(std::move(frame));
+  };
+
+  pushFrame(0, Vector2d::Zero(), 0,
+            {repro::ReproAction{
+                .kind = repro::ReproAction::Kind::SetActiveTool,
+                .tool = "text",
+            }});
+  // Let the initial document render land before interacting.
+  const Vector2d clickDoc(60.0, 50.0);
+  for (std::uint64_t index = 1; index <= 9; ++index) {
+    pushFrame(index, clickDoc, 0);
+  }
+
+  // Click inside the existing text: opens the session with the caret at the
+  // clicked character.
+  repro::ReproEvent mouseDown;
+  mouseDown.kind = repro::ReproEvent::Kind::MouseDown;
+  mouseDown.mouseButton = 0;
+  mouseDown.hit = repro::ReproHit{.id = "msg", .tag = "text"};
+  repro::ReproEvent mouseUp;
+  mouseUp.kind = repro::ReproEvent::Kind::MouseUp;
+  mouseUp.mouseButton = 0;
+  pushFrame(10, clickDoc, 1, {}, {mouseDown});
+  pushFrame(11, clickDoc, 0, {}, {mouseUp});
+  for (std::uint64_t index = 12; index <= 17; ++index) {
+    pushFrame(index, clickDoc, 0);
+  }
+
+  // One character per frame, like real typing.
+  std::uint64_t index = 18;
+  for (const char c : std::string_view("altogether")) {
+    repro::ReproEvent event;
+    event.kind = repro::ReproEvent::Kind::Char;
+    event.codepoint = static_cast<std::uint32_t>(c);
+    pushFrame(index++, clickDoc, 0, {}, {event});
+  }
+  for (; index <= 40; ++index) {
+    pushFrame(index, clickDoc, 0);
+  }
+
+  const std::filesystem::path replayPath = outputDir / std::string(name);
+  if (!repro::WriteReproFile(replayPath, file)) {
+    ADD_FAILURE() << "failed to write " << replayPath;
+    return std::nullopt;
+  }
+  return replayPath;
+}
+
 // Text-tool session driven through the LIVE ImGui pointer path (screen-space
 // mouse events, no document-space replay input): switch to the text tool,
 // click the canvas, type "Hi" via Char events, then Escape to commit. This is
@@ -2499,6 +2588,138 @@ TEST(GlRnrReplayTest, TextToolLivePointerClickOpensSessionAndTypes) {
 
   std::error_code ec;
   std::filesystem::remove_all(outputDir, ec);
+}
+
+// Typing must never blank the text being edited NOR its editing chrome (the
+// caret bar and the session's selection outline). Each keystroke rewrites the
+// session <text> element's DOM content; until the async render of the new
+// content lands, the presenter must keep showing the previous text pixels AND
+// keep drawing the caret/selection chrome from the live post-flush DOM. Runs
+// with the worker lagging a couple of frames behind (like a real machine
+// under fast typing) and counts green text pixels plus cyan chrome pixels in
+// the document region on every frame: a frame where either population
+// collapses and later recovers is the per-keystroke flicker this reproduces.
+//
+// Observed failure mode (2026-07-06, Geode presentation): the text pixels
+// hold steady, but the cyan chrome collapses to zero for the entire typing
+// burst because `RenderCoordinator::rasterizeOverlayForPresentation` resets
+// the immediate overlay snapshot whenever the flushed document version is
+// ahead of the displayed version with no drag projection - and fast typing
+// keeps the document perpetually ahead of the async renderer.
+TEST(GlRnrReplayTest, TypingIntoTextKeepsTextPixelsPresentEveryFrame) {
+  svg::Renderer probeRenderer;
+  if (!probeRenderer.requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "Chrome pixels require the Geode direct presentation path.";
+  }
+
+  const std::filesystem::path outputDir = DiagnosticOutputDir() / "text_typing_flicker";
+  const std::optional<std::filesystem::path> replayPath =
+      WriteTextTypingIntoExistingTextReplay(outputDir, "text_typing_flicker.rnr");
+  ASSERT_TRUE(replayPath.has_value());
+
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = *replayPath;
+  options.outputDir = outputDir;
+  constexpr std::uint64_t kBaselineFrame = 17;
+  constexpr std::uint64_t kLastFrame = 40;
+  for (std::uint64_t frame = kBaselineFrame; frame <= kLastFrame; ++frame) {
+    options.captureFrames.insert(frame);
+  }
+  options.maxFrame = kLastFrame;
+  options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
+  options.pace = false;
+  options.driveDocumentSpaceInput = true;
+  // The worker stays busy across several keystroke frames, like a real
+  // machine under fast typing: keystrokes flush while the previous
+  // keystroke's render is still in flight.
+  options.workerRenderDelayMsForTesting = 25;
+
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+
+  const auto greenPixels = [](const svg::RendererBitmap& bitmap) {
+    int count = 0;
+    for (std::size_t i = 0; i + 3 < bitmap.pixels.size(); i += 4) {
+      const std::uint8_t r = bitmap.pixels[i];
+      const std::uint8_t g = bitmap.pixels[i + 1];
+      const std::uint8_t b = bitmap.pixels[i + 2];
+      if (g > 110 && r < 110 && b < 110) {
+        ++count;
+      }
+    }
+    return count;
+  };
+  // Bright-cyan selection/caret chrome (MakeSelectionStrokePaint 0,200,255).
+  // Counted only in the top half of the document-canvas crop: the text (and
+  // its chrome) sits at the top of the 200x200 document while the perf HUD's
+  // frame graph - which also renders cyan-ish pixels - overlays the bottom.
+  const auto cyanChromePixels = [](const svg::RendererBitmap& bitmap) {
+    int count = 0;
+    const int chromeRows = bitmap.dimensions.y / 2;
+    for (int y = 0; y < chromeRows; ++y) {
+      const std::uint8_t* row = bitmap.pixels.data() + static_cast<std::size_t>(y) * bitmap.rowBytes;
+      for (int x = 0; x < bitmap.dimensions.x; ++x) {
+        const std::uint8_t r = row[x * 4];
+        const std::uint8_t g = row[x * 4 + 1];
+        const std::uint8_t b = row[x * 4 + 2];
+        if (b > 180 && g > 140 && r < 110) {
+          ++count;
+        }
+      }
+    }
+    return count;
+  };
+
+  for (std::uint64_t frame = kBaselineFrame; frame <= kLastFrame; ++frame) {
+    const repro::GlRnrReplayFrameDiagnostics* diag = FindFrameDiagnostics(result, frame);
+    if (diag == nullptr) continue;
+    std::optional<svg::RendererBitmap> bmp = LoadCaptureBitmap(result, frame);
+    std::cerr << "[diag] f=" << frame << " docV=" << diag->documentFrameVersion
+              << " dispV=" << diag->displayedDocVersion
+              << " fresh=" << static_cast<int>(diag->canvasFreshness)
+              << " pendRasterE=" << static_cast<std::uint64_t>(diag->pendingSelectedLayerRasterizationEntity)
+              << " removed=" << diag->lastFlushRemovedElements
+              << " invalidated=" << diag->lastFlushCacheInvalidatedElements.size()
+              << " green=" << (bmp.has_value() ? greenPixels(*bmp) : -1)
+              << " cyanChrome=" << (bmp.has_value() ? cyanChromePixels(*bmp) : -1)
+              << " tiles=";
+    for (const auto& tile : diag->tiles) {
+      std::cerr << tile.id << "(g" << tile.generation << ",grn" << tile.textureGreenPixels << ") ";
+    }
+    std::cerr << "\n";
+  }
+
+  std::optional<svg::RendererBitmap> baseline = LoadCaptureBitmap(result, kBaselineFrame);
+  ASSERT_TRUE(baseline.has_value());
+  const int baselineGreen = greenPixels(*baseline);
+  ASSERT_GT(baselineGreen, 200) << "settled session frame must show the green text";
+  const int baselineChrome = cyanChromePixels(*baseline);
+  ASSERT_GT(baselineChrome, 100)
+      << "settled session frame must show the caret + selection chrome around the text";
+
+  // Typing only appends glyphs, so the settled baseline is a floor for every
+  // subsequent frame (with headroom for antialiasing differences). The chrome
+  // floor is looser: the caret moves and the selection outline tracks the
+  // growing text, but the chrome must never collapse to (near) nothing.
+  const int floorGreen = baselineGreen / 2;
+  const int floorChrome = baselineChrome / 4;
+  for (std::uint64_t frame = kBaselineFrame + 1; frame <= kLastFrame; ++frame) {
+    std::optional<svg::RendererBitmap> bitmap = LoadCaptureBitmap(result, frame);
+    ASSERT_TRUE(bitmap.has_value());
+    const int green = greenPixels(*bitmap);
+    if (green < floorGreen) {
+      ADD_FAILURE() << "frame " << frame << " dropped the edited text: " << green
+                    << " green pixels (settled baseline " << baselineGreen
+                    << "): " << FindCapture(result, frame)->path;
+    }
+    const int chrome = cyanChromePixels(*bitmap);
+    if (chrome < floorChrome) {
+      ADD_FAILURE() << "frame " << frame << " dropped the caret/selection chrome: " << chrome
+                    << " cyan chrome pixels (settled baseline " << baselineChrome
+                    << "): " << FindCapture(result, frame)->path;
+    }
+  }
 }
 
 /// Inclusive pixel bounds of the bright-red pixels in @p bitmap, or nullopt

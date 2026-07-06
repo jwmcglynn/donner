@@ -368,6 +368,9 @@ private:
       const SelectionTransformHandleIntent& hoverTransformIntent,
       const std::optional<SelectTool::ActiveGesturePreview>& activeGesturePreview);
   void renderReferenceHighlightChip();
+  /// Discoverability hint while the text tool is idle: double-click places
+  /// point text, drag draws a text box. Bottom-center of the render pane.
+  void renderTextToolHint();
   [[nodiscard]] SelectionChromeDetail selectionChromeDetailForActiveTool() const;
   bool flushQueuedMutationAndRefreshOverlay();
   /// Re-run the post-flush presentation refresh after a tool that flushes the
@@ -547,9 +550,9 @@ private:
   /// developer-facing composite-tile diagnostics view, toggled on via the View
   /// menu. The user-facing Layers panel is unrelated and always visible.
   bool showCompositorDebugPanel_ = false;
-  /// Whether the render-pane frame-timing/perf overlay renders. On by default;
-  /// toggled via the View menu.
-  bool showPerfOverlay_ = true;
+  /// Render-pane frame-timing/perf overlay mode. Off by default; set via the
+  /// View menu's Performance Overlay submenu.
+  PerfOverlayMode perfOverlayMode_ = PerfOverlayMode::Off;
 
   ImFont* uiFontBold_ = nullptr;
   ImFont* codeFont_ = nullptr;

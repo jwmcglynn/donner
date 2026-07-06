@@ -389,9 +389,11 @@ void RenderCoordinator::resetForLoadedDocument() {
   lastOverlayPenHoverPreviewSegmentDoc_.reset();
   lastOverlayPenHoverCloseAffordanceDoc_.reset();
   textEditingCaretDoc_.reset();
-  textEditingBoxDoc_.reset();
+  textEditingFrameCornersDoc_.reset();
+  textBoxDragPreviewDoc_.reset();
   lastOverlayTextEditingCaretDoc_.reset();
-  lastOverlayTextEditingBoxDoc_.reset();
+  lastOverlayTextEditingFrameCornersDoc_.reset();
+  lastOverlayTextBoxDragPreviewDoc_.reset();
   renderScheduler_.reset();
   displayNoneSuppressedSelectionEntity_ = entt::null;
   displayNoneSuppressedLayerEntity_ = entt::null;
@@ -477,7 +479,8 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
       penHoverPreviewSegmentDoc_ != lastOverlayPenHoverPreviewSegmentDoc_ ||
       penHoverCloseAffordanceDoc_ != lastOverlayPenHoverCloseAffordanceDoc_ ||
       textEditingCaretDoc_ != lastOverlayTextEditingCaretDoc_ ||
-      textEditingBoxDoc_ != lastOverlayTextEditingBoxDoc_;
+      textEditingFrameCornersDoc_ != lastOverlayTextEditingFrameCornersDoc_ ||
+      textBoxDragPreviewDoc_ != lastOverlayTextBoxDragPreviewDoc_;
   if (!selectionDetail.has_value()) {
     if (overlayGeometryDiffers || IsUnsetTimePoint(overlayStableSince_)) {
       overlayStableSince_ = now;
@@ -547,7 +550,8 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   chromeSnapshot.penPreviewSegmentDoc = penHoverPreviewSegmentDoc_;
   chromeSnapshot.penCloseAffordanceDoc = penHoverCloseAffordanceDoc_;
   chromeSnapshot.textCaretDoc = textEditingCaretDoc_;
-  chromeSnapshot.textBoxDoc = textEditingBoxDoc_;
+  chromeSnapshot.textFrameCornersDoc = textEditingFrameCornersDoc_;
+  chromeSnapshot.textBoxDragPreviewDoc = textBoxDragPreviewDoc_;
   overlayCost.captureMs = MillisecondsSince(captureStart);
   overlayCost.pathCount = static_cast<int>(chromeSnapshot.paths.size());
   overlayCost.hoverPathCount = static_cast<int>(chromeSnapshot.hoverPaths.size());
@@ -571,7 +575,8 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
       chromeSnapshot.orientedBoundsDoc.has_value() || chromeSnapshot.livePathPreview.has_value() ||
       chromeSnapshot.penPreviewSegmentDoc.has_value() ||
       chromeSnapshot.penCloseAffordanceDoc.has_value() || chromeSnapshot.textCaretDoc.has_value() ||
-      chromeSnapshot.textBoxDoc.has_value();
+      chromeSnapshot.textFrameCornersDoc.has_value() ||
+      chromeSnapshot.textBoxDragPreviewDoc.has_value();
   overlayCost.payloadBytes =
       overlayHasContent
           ? static_cast<std::uint64_t>(std::max(0, currentOverlayRasterSize.x)) *
@@ -593,7 +598,8 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   lastOverlayPenHoverPreviewSegmentDoc_ = penHoverPreviewSegmentDoc_;
   lastOverlayPenHoverCloseAffordanceDoc_ = penHoverCloseAffordanceDoc_;
   lastOverlayTextEditingCaretDoc_ = textEditingCaretDoc_;
-  lastOverlayTextEditingBoxDoc_ = textEditingBoxDoc_;
+  lastOverlayTextEditingFrameCornersDoc_ = textEditingFrameCornersDoc_;
+  lastOverlayTextBoxDragPreviewDoc_ = textBoxDragPreviewDoc_;
   lastFrameCostBreakdown_.overlay = overlayCost;
   return true;
 }
@@ -619,9 +625,12 @@ bool RenderCoordinator::rasterizeOverlayForPresentation(
                                          activeBoundsPreview.has_value();
   const std::uint64_t currentVersion = app.document().currentFrameVersion();
   // Non-transforming geometry edits usually have no presenter-side projection that can make live
-  // chrome line up with older document pixels. Active PenTool drags are the exception: the selected
-  // path is itself the live interaction surface, so the renderer-backed path chrome must track the
-  // live path directly.
+  // chrome line up with older document pixels. Live-geometry tools are the exception (the caller
+  // passes `allowLiveGeometryOverlay`): active PenTool editing, where the selected path is itself
+  // the live interaction surface, and active TextTool sessions, where every keystroke flushes the
+  // DOM ahead of the async renderer and the caret/frame chrome comes from the live post-flush DOM.
+  // For those the chrome must keep tracking the live document; resetting the snapshot here would
+  // blink the caret/selection chrome off for the whole typing or drafting burst.
   if (displayedDocVersion_ != 0u && currentVersion > displayedDocVersion_ &&
       !hasPresentationProjection && !allowLiveGeometryOverlay) {
     if (immediateOverlaySnapshot_.has_value() && lastOverlayVersion_ > displayedDocVersion_) {

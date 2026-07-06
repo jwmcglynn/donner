@@ -8,6 +8,8 @@
 #include <string_view>
 #include <vector>
 
+#include "donner/base/MathUtils.h"
+#include "donner/base/Transform.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/svg/DocumentState.h"
 
@@ -33,6 +35,290 @@ const std::string* FindInspectorValue(std::span<const std::pair<std::string, std
   }
 
   return nullptr;
+}
+
+/// Builds a transform from its six raw matrix components (a b c d e f).
+Transform2d MakeMatrix(double a, double b, double c, double d, double e, double f) {
+  Transform2d result(Transform2d::uninitialized);
+  result.data[0] = a;
+  result.data[1] = b;
+  result.data[2] = c;
+  result.data[3] = d;
+  result.data[4] = e;
+  result.data[5] = f;
+  return result;
+}
+
+void ExpectTransformNear(const Transform2d& actual, const Transform2d& expected, double tolerance) {
+  for (int i = 0; i < 6; ++i) {
+    EXPECT_NEAR(actual.data[i], expected.data[i], tolerance) << "matrix component " << i;
+  }
+}
+
+TEST(SidebarTransformDecomposeTest, IdentityRoundTrips) {
+  const std::optional<DecomposedTransform> decomposed = DecomposeTransform(Transform2d());
+  ASSERT_TRUE(decomposed.has_value());
+  EXPECT_DOUBLE_EQ(decomposed->translation.x, 0.0);
+  EXPECT_DOUBLE_EQ(decomposed->translation.y, 0.0);
+  EXPECT_DOUBLE_EQ(decomposed->rotationRadians, 0.0);
+  EXPECT_DOUBLE_EQ(decomposed->scale.x, 1.0);
+  EXPECT_DOUBLE_EQ(decomposed->scale.y, 1.0);
+  ExpectTransformNear(ComposeTransform(*decomposed), Transform2d(), 0.0);
+}
+
+TEST(SidebarTransformDecomposeTest, TranslateRotateScaleRoundTrips) {
+  const DecomposedTransform fields{
+      .translation = Vector2d(12.5, -3.75),
+      .rotationRadians = 30.0 * MathConstants<double>::kDegToRad,
+      .scale = Vector2d(2.0, 0.5),
+  };
+  const Transform2d matrix = ComposeTransform(fields);
+
+  const std::optional<DecomposedTransform> roundTrip = DecomposeTransform(matrix);
+  ASSERT_TRUE(roundTrip.has_value());
+  EXPECT_NEAR(roundTrip->translation.x, fields.translation.x, 1e-12);
+  EXPECT_NEAR(roundTrip->translation.y, fields.translation.y, 1e-12);
+  EXPECT_NEAR(roundTrip->rotationRadians, fields.rotationRadians, 1e-12);
+  EXPECT_NEAR(roundTrip->scale.x, fields.scale.x, 1e-12);
+  EXPECT_NEAR(roundTrip->scale.y, fields.scale.y, 1e-12);
+
+  ExpectTransformNear(ComposeTransform(*roundTrip), matrix, 1e-12);
+}
+
+TEST(SidebarTransformDecomposeTest, PureRotationDecomposes) {
+  const Transform2d matrix = Transform2d::Rotate(1.0);
+  const std::optional<DecomposedTransform> decomposed = DecomposeTransform(matrix);
+  ASSERT_TRUE(decomposed.has_value());
+  EXPECT_NEAR(decomposed->rotationRadians, 1.0, 1e-12);
+  EXPECT_NEAR(decomposed->scale.x, 1.0, 1e-12);
+  EXPECT_NEAR(decomposed->scale.y, 1.0, 1e-12);
+  ExpectTransformNear(ComposeTransform(*decomposed), matrix, 1e-15);
+}
+
+TEST(SidebarTransformDecomposeTest, FlipRoundTripsThroughSignedScale) {
+  // A horizontal flip decomposes as a negative y scale plus a half-turn; the
+  // fields differ from the authored scale(-2, 3) but the matrix round-trips.
+  const Transform2d matrix = Transform2d::Scale(-2.0, 3.0);
+  const std::optional<DecomposedTransform> decomposed = DecomposeTransform(matrix);
+  ASSERT_TRUE(decomposed.has_value());
+  EXPECT_LT(decomposed->scale.y, 0.0);
+  ExpectTransformNear(ComposeTransform(*decomposed), matrix, 1e-12);
+}
+
+TEST(SidebarTransformDecomposeTest, LargeTranslationIsExact) {
+  const Transform2d matrix = Transform2d::Rotate(0.25) * Transform2d::Translate(1.0e6, -2.0e6);
+  const std::optional<DecomposedTransform> decomposed = DecomposeTransform(matrix);
+  ASSERT_TRUE(decomposed.has_value());
+  // Translation components pass through decompose/compose verbatim.
+  EXPECT_EQ(ComposeTransform(*decomposed).data[4], matrix.data[4]);
+  EXPECT_EQ(ComposeTransform(*decomposed).data[5], matrix.data[5]);
+}
+
+TEST(SidebarTransformDecomposeTest, SkewReturnsNullopt) {
+  EXPECT_FALSE(DecomposeTransform(Transform2d::SkewX(0.3)).has_value());
+  EXPECT_FALSE(DecomposeTransform(Transform2d::SkewY(-0.2)).has_value());
+  // Rotation times skew is not orthogonal either.
+  EXPECT_FALSE(DecomposeTransform(Transform2d::SkewX(0.3) * Transform2d::Rotate(0.5)).has_value());
+}
+
+TEST(SidebarTransformDecomposeTest, SingularReturnsNullopt) {
+  EXPECT_FALSE(DecomposeTransform(MakeMatrix(0, 0, 0, 0, 10, 20)).has_value());
+  EXPECT_FALSE(DecomposeTransform(Transform2d::Scale(0.0, 5.0)).has_value());
+}
+
+TEST(SidebarTransformDecomposeTest, CollapsedYAxisStillRoundTrips) {
+  // scale(3, 0) zeroes the y basis column but keeps a valid x basis; it
+  // decomposes to a zero y scale and composes back exactly.
+  const Transform2d matrix = Transform2d::Scale(3.0, 0.0);
+  const std::optional<DecomposedTransform> decomposed = DecomposeTransform(matrix);
+  ASSERT_TRUE(decomposed.has_value());
+  EXPECT_DOUBLE_EQ(decomposed->scale.y, 0.0);
+  ExpectTransformNear(ComposeTransform(*decomposed), matrix, 1e-15);
+}
+
+// -----------------------------------------------------------------------------
+// Decomposed-edit round trips: drive the transform-edit state machine the way
+// the DragFloat widgets do (begin -> apply -> commit), flush the queued
+// mutation, and verify the refreshed snapshot re-derives the edited field.
+
+constexpr std::string_view kRotatedEditSvg =
+    R"SVG(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+         <rect id="target" x="10" y="20" width="40" height="30" transform="rotate(30)"/>
+       </svg>)SVG";
+
+/// Loads @p source, selects `#target`, and refreshes @p presenter's snapshot.
+void LoadAndSelectTarget(EditorApp& app, SidebarPresenter& presenter, std::string_view source) {
+  ASSERT_TRUE(app.loadFromString(source));
+  app.setCleanSourceText(source);
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+  presenter.refreshSnapshot(app);
+  ASSERT_TRUE(presenter.inspectorHasSelectionForTesting());
+  ASSERT_TRUE(presenter.inspectorBoundsForTesting().has_value());
+}
+
+/// Runs one complete edit on @p field: begin, write @p value, commit, flush
+/// the queued SetTransformCommand, and refresh the snapshot.
+void EditTransformField(EditorApp& app, SidebarPresenter& presenter,
+                        SidebarPresenter::TransformField field, double value,
+                        int matrixIndex = 0) {
+  presenter.beginTransformEditForTesting(app, field, matrixIndex);
+  ASSERT_TRUE(presenter.hasTransformEditForTesting());
+  EXPECT_TRUE(presenter.applyTransformEditForTesting(app, value));
+  presenter.commitTransformEditForTesting(app);
+  EXPECT_FALSE(presenter.hasTransformEditForTesting());
+  EXPECT_TRUE(app.flushFrame());
+  presenter.refreshSnapshot(app);
+}
+
+TEST(SidebarTransformEditTest, PositionXEditRoundTripsThroughSnapshot) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kInspectorSvg));
+  EXPECT_NEAR(presenter.inspectorBoundsForTesting()->topLeft.x, 10.0, 1e-9);
+
+  ASSERT_NO_FATAL_FAILURE(
+      EditTransformField(app, presenter, SidebarPresenter::TransformField::PositionX, 35.0));
+
+  const std::optional<Box2d>& bounds = presenter.inspectorBoundsForTesting();
+  ASSERT_TRUE(bounds.has_value());
+  EXPECT_NEAR(bounds->topLeft.x, 35.0, 1e-6);
+  EXPECT_NEAR(bounds->topLeft.y, 20.0, 1e-6);
+  EXPECT_NEAR(bounds->width(), 100.0, 1e-6);
+  EXPECT_NEAR(bounds->height(), 50.0, 1e-6);
+  EXPECT_TRUE(app.canUndo()) << "a completed edit records exactly one undo entry";
+}
+
+TEST(SidebarTransformEditTest, WidthEditScalesAboutTopLeftAndRederives) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kInspectorSvg));
+
+  ASSERT_NO_FATAL_FAILURE(
+      EditTransformField(app, presenter, SidebarPresenter::TransformField::Width, 150.0));
+
+  const std::optional<Box2d>& bounds = presenter.inspectorBoundsForTesting();
+  ASSERT_TRUE(bounds.has_value());
+  EXPECT_NEAR(bounds->width(), 150.0, 1e-6);
+  EXPECT_NEAR(bounds->topLeft.x, 10.0, 1e-6) << "width scales about the bounds top-left";
+  EXPECT_NEAR(bounds->topLeft.y, 20.0, 1e-6);
+  EXPECT_NEAR(bounds->height(), 50.0, 1e-6);
+}
+
+TEST(SidebarTransformEditTest, RotationEditOnRotatedElementRederivesAngle) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kRotatedEditSvg));
+
+  const std::optional<Transform2d>& startTransform = presenter.inspectorTransformForTesting();
+  ASSERT_TRUE(startTransform.has_value());
+  const std::optional<DecomposedTransform> startDecomposed = DecomposeTransform(*startTransform);
+  ASSERT_TRUE(startDecomposed.has_value());
+  EXPECT_NEAR(startDecomposed->rotationRadians * MathConstants<double>::kRadToDeg, 30.0, 1e-6);
+  const Box2d startBounds = *presenter.inspectorBoundsForTesting();
+  const Vector2d startCenter = (startBounds.topLeft + startBounds.bottomRight) * 0.5;
+
+  ASSERT_NO_FATAL_FAILURE(
+      EditTransformField(app, presenter, SidebarPresenter::TransformField::Rotation, 45.0));
+
+  const std::optional<Transform2d>& endTransform = presenter.inspectorTransformForTesting();
+  ASSERT_TRUE(endTransform.has_value());
+  const std::optional<DecomposedTransform> endDecomposed = DecomposeTransform(*endTransform);
+  ASSERT_TRUE(endDecomposed.has_value()) << "rotating keeps the matrix decomposable";
+  EXPECT_NEAR(endDecomposed->rotationRadians * MathConstants<double>::kRadToDeg, 45.0, 1e-6)
+      << "the rotation field re-derives the edited angle";
+  EXPECT_NEAR(endDecomposed->scale.x, startDecomposed->scale.x, 1e-9);
+  EXPECT_NEAR(endDecomposed->scale.y, startDecomposed->scale.y, 1e-9);
+
+  // Rotation pivots on the bounds center, so the center stays put.
+  const Box2d endBounds = *presenter.inspectorBoundsForTesting();
+  const Vector2d endCenter = (endBounds.topLeft + endBounds.bottomRight) * 0.5;
+  EXPECT_NEAR(endCenter.x, startCenter.x, 1e-6);
+  EXPECT_NEAR(endCenter.y, startCenter.y, 1e-6);
+}
+
+TEST(SidebarTransformEditTest, PositionEditOnRotatedElementMovesBoundsAndKeepsRotation) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kRotatedEditSvg));
+
+  const Box2d startBounds = *presenter.inspectorBoundsForTesting();
+  const double newX = startBounds.topLeft.x + 15.0;
+  ASSERT_NO_FATAL_FAILURE(
+      EditTransformField(app, presenter, SidebarPresenter::TransformField::PositionX, newX));
+
+  const std::optional<Box2d>& bounds = presenter.inspectorBoundsForTesting();
+  ASSERT_TRUE(bounds.has_value());
+  EXPECT_NEAR(bounds->topLeft.x, newX, 1e-6) << "X re-derives the edited document-space value";
+  EXPECT_NEAR(bounds->topLeft.y, startBounds.topLeft.y, 1e-6);
+  EXPECT_NEAR(bounds->width(), startBounds.width(), 1e-6);
+  EXPECT_NEAR(bounds->height(), startBounds.height(), 1e-6);
+
+  const std::optional<DecomposedTransform> decomposed =
+      DecomposeTransform(*presenter.inspectorTransformForTesting());
+  ASSERT_TRUE(decomposed.has_value());
+  EXPECT_NEAR(decomposed->rotationRadians * MathConstants<double>::kRadToDeg, 30.0, 1e-6)
+      << "translating must not disturb the rotation field";
+}
+
+TEST(SidebarTransformEditTest, WidthEditOnRotatedElementResizesBoundsButIntroducesSkew) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kRotatedEditSvg));
+
+  const Box2d startBounds = *presenter.inspectorBoundsForTesting();
+  const double newWidth = startBounds.width() * 2.0;
+  ASSERT_NO_FATAL_FAILURE(
+      EditTransformField(app, presenter, SidebarPresenter::TransformField::Width, newWidth));
+
+  const std::optional<Box2d>& bounds = presenter.inspectorBoundsForTesting();
+  ASSERT_TRUE(bounds.has_value());
+  EXPECT_NEAR(bounds->width(), newWidth, 1e-6);
+  EXPECT_NEAR(bounds->topLeft.x, startBounds.topLeft.x, 1e-6);
+
+  // Scaling document-space X across a rotated matrix shears it; the scalar
+  // fields fall back to disabled and the raw matrix stays the editing route.
+  EXPECT_FALSE(DecomposeTransform(*presenter.inspectorTransformForTesting()).has_value());
+}
+
+TEST(SidebarTransformEditTest, MatrixCellEditWritesRawComponent) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kInspectorSvg));
+
+  ASSERT_NO_FATAL_FAILURE(EditTransformField(
+      app, presenter, SidebarPresenter::TransformField::Matrix, 99.0, /*matrixIndex=*/4));
+
+  const std::optional<Transform2d>& transform = presenter.inspectorTransformForTesting();
+  ASSERT_TRUE(transform.has_value());
+  EXPECT_DOUBLE_EQ(transform->data[4], 99.0);
+  // Untouched cells keep identity.
+  EXPECT_DOUBLE_EQ(transform->data[0], 1.0);
+  EXPECT_DOUBLE_EQ(transform->data[3], 1.0);
+}
+
+TEST(SidebarTransformEditTest, UndoRestoresPreEditTransform) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kRotatedEditSvg));
+  const Box2d startBounds = *presenter.inspectorBoundsForTesting();
+  const Transform2d startTransform = *presenter.inspectorTransformForTesting();
+
+  ASSERT_NO_FATAL_FAILURE(
+      EditTransformField(app, presenter, SidebarPresenter::TransformField::Rotation, 60.0));
+  ASSERT_TRUE(app.canUndo());
+
+  app.undo();
+  app.flushFrame();
+  presenter.refreshSnapshot(app);
+
+  ASSERT_TRUE(presenter.inspectorTransformForTesting().has_value());
+  ExpectTransformNear(*presenter.inspectorTransformForTesting(), startTransform, 1e-9);
+  const std::optional<Box2d>& bounds = presenter.inspectorBoundsForTesting();
+  ASSERT_TRUE(bounds.has_value());
+  EXPECT_NEAR(bounds->topLeft.x, startBounds.topLeft.x, 1e-6);
+  EXPECT_NEAR(bounds->topLeft.y, startBounds.topLeft.y, 1e-6);
 }
 
 TEST(SidebarPresenterTest, RefreshSnapshotCapturesXmlAttributesAndComputedStyle) {
@@ -437,6 +723,81 @@ TEST_F(SidebarPresenterImGuiTest, PathOperationButtonsRenderSvgBitmapIcons) {
       << "path operation icons are drawn at 18 logical px and must be rasterized at 2x or "
          "higher before ImGui scales them";
   EXPECT_EQ(imageQuads, 4) << "path operation buttons should render as image quads";
+}
+
+TEST_F(SidebarPresenterImGuiTest, InspectorRendersEditableTransformFields) {
+  constexpr std::string_view kRotatedSvg =
+      R"SVG(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">
+           <rect id="target" x="10" y="20" width="40" height="30" transform="rotate(30)"/>
+         </svg>)SVG";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kRotatedSvg));
+  app.setCleanSourceText(kRotatedSvg);
+
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  ASSERT_TRUE(presenter.inspectorHasSelectionForTesting());
+
+  // Rendering the editable fields must not queue a mutation when nothing is
+  // activated, and must draw geometry for the added widgets.
+  EXPECT_FALSE(RenderInspectorFrame(presenter, &app, "##sidebar_transform_fields_test"));
+  const ImDrawData* drawData = ImGui::GetDrawData();
+  ASSERT_NE(drawData, nullptr);
+  EXPECT_GT(drawData->TotalVtxCount, 0);
+  EXPECT_FALSE(app.canUndo()) << "rendering alone must not record undo entries";
+}
+
+TEST_F(SidebarPresenterImGuiTest, InspectorRendersSkewedTransformDisabledFields) {
+  constexpr std::string_view kSkewedSvg =
+      R"SVG(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">
+           <rect id="target" x="10" y="20" width="40" height="30" transform="skewX(20)"/>
+         </svg>)SVG";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSkewedSvg));
+  app.setCleanSourceText(kSkewedSvg);
+
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  ASSERT_TRUE(presenter.inspectorHasSelectionForTesting());
+
+  // A skewed matrix is not decomposable; the fields render disabled and the
+  // frame must not crash or queue mutations.
+  EXPECT_FALSE(RenderInspectorFrame(presenter, &app, "##sidebar_transform_skew_test"));
+  const ImDrawData* drawData = ImGui::GetDrawData();
+  ASSERT_NE(drawData, nullptr);
+  EXPECT_GT(drawData->TotalVtxCount, 0);
+  EXPECT_FALSE(app.canUndo());
+}
+
+TEST_F(SidebarPresenterImGuiTest, InspectorRendersTransformFieldsWithoutLiveApp) {
+  constexpr std::string_view kRotatedSvg =
+      R"SVG(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">
+           <rect id="target" x="10" y="20" width="40" height="30" transform="rotate(30)"/>
+         </svg>)SVG";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kRotatedSvg));
+  app.setCleanSourceText(kRotatedSvg);
+
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+
+  // Null live app (async renderer busy): the snapshot renders read-only.
+  EXPECT_FALSE(RenderInspectorFrame(presenter, nullptr, "##sidebar_transform_busy_test"));
+  const ImDrawData* drawData = ImGui::GetDrawData();
+  ASSERT_NE(drawData, nullptr);
+  EXPECT_GT(drawData->TotalVtxCount, 0);
 }
 
 }  // namespace
