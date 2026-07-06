@@ -60,6 +60,24 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "native_window_chrome_tests",
+    srcs = ["NativeWindowChrome_tests.cc"],
+    deps = [
+        "//donner/editor:native_window_chrome",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "file_dialog_state_tests",
+    srcs = ["FileDialogState_tests.cc"],
+    deps = [
+        "//donner/editor:file_dialog_state",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "editor_shell_tests",
     srcs = ["EditorShell_tests.cc"],
     deps = [

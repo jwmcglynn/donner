@@ -23,6 +23,7 @@
 #include "donner/editor/LayerInspectorDiagnostics.h"
 #include "donner/editor/LayersPanel.h"
 #include "donner/editor/MenuBarPresenter.h"
+#include "donner/editor/NativeDialogCoordinator.h"
 #include "donner/editor/PenTool.h"
 #include "donner/editor/RenderCoordinator.h"
 #include "donner/editor/RenderPanePresenter.h"
@@ -306,6 +307,9 @@ private:
   [[nodiscard]] bool selectionIsAllText() const;
   void resetPresentationForLoadedDocument(std::string_view canonicalSource);
   void requestRevert();
+  /// Present the "Open SVG" chooser. Uses the native OS dialog when
+  /// available (macOS), otherwise the in-editor ImGui path modal.
+  void promptOpenFile();
   void requestSave();
   void requestSaveAs(std::string error = std::string());
   /// Open the save dialog to export the current viewport as a cropped SVG.
@@ -476,6 +480,7 @@ private:
   CompositorDebugPanel compositorDebugPanel_;
   RenderPanePresenter renderPanePresenter_;
   DialogPresenter dialogPresenter_;
+  NativeDialogCoordinator nativeDialogs_;
 #ifdef DONNER_EDITOR_WGPU
   std::unique_ptr<FramebufferCheckerboardRenderer> directCheckerboardRenderer_;
   std::unique_ptr<svg::RendererGeode> directDocumentRenderer_;

@@ -32,6 +32,7 @@
 #include "donner/editor/FrameMissTelemetry.h"
 #include "donner/editor/ImGuiClipboard.h"
 #include "donner/editor/KeyboardShortcutPolicy.h"
+#include "donner/editor/NativeWindowChrome.h"
 #include "donner/editor/SelectionTransformHandles.h"
 #include "donner/editor/ShapeClipboardCommands.h"
 #include "donner/editor/ShapeClipboardPayload.h"
@@ -1409,6 +1410,23 @@ bool EditorShell::trySavePath(std::string_view path, std::string* error) {
 
 void EditorShell::requestSaveAs(std::string error) {
   pendingViewportExport_ = false;
+
+  if (nativeDialogs_.available()) {
+    const std::optional<std::string> chosen =
+        nativeDialogs_.saveFile(window_.rawHandle(), app_.currentFilePath());
+    if (!chosen.has_value()) {
+      return;  // User cancelled.
+    }
+    std::string saveError;
+    if (!trySavePath(*chosen, &saveError)) {
+      // Fall back to the in-editor modal so the error is visible and the
+      // user can retry.
+      dialogPresenter_.requestSaveFile(std::make_optional(*chosen), std::move(saveError));
+    }
+    window_.wakeEventLoop();
+    return;
+  }
+
   dialogPresenter_.requestSaveFile(app_.currentFilePath(), std::move(error));
 }
 
@@ -1426,6 +1444,23 @@ void EditorShell::requestExportViewportSvg(bool includeOverlay, std::string erro
   } else {
     defaultPath = "untitled_viewport.svg";
   }
+
+  if (nativeDialogs_.available()) {
+    const std::optional<std::string> chosen =
+        nativeDialogs_.saveFile(window_.rawHandle(), std::make_optional(defaultPath));
+    if (!chosen.has_value()) {
+      pendingViewportExport_ = false;
+      pendingViewportExportOverlay_ = false;
+      return;  // User cancelled.
+    }
+    std::string saveError;
+    if (!tryExportViewportSvgToPath(*chosen, &saveError)) {
+      dialogPresenter_.requestSaveFile(std::make_optional(*chosen), std::move(saveError));
+    }
+    window_.wakeEventLoop();
+    return;
+  }
+
   dialogPresenter_.requestSaveFile(std::make_optional(defaultPath), std::move(error));
 }
 
@@ -1485,6 +1520,28 @@ bool EditorShell::tryExportViewportSvgToPath(std::string_view path, std::string*
   return true;
 }
 
+void EditorShell::promptOpenFile() {
+  if (!nativeDialogs_.available()) {
+    dialogPresenter_.requestOpenFile(app_.currentFilePath());
+    return;
+  }
+
+  const std::optional<std::string> chosen =
+      nativeDialogs_.openFile(window_.rawHandle(), app_.currentFilePath());
+  if (!chosen.has_value()) {
+    return;  // User cancelled.
+  }
+
+  std::string error;
+  if (!tryOpenPath(*chosen, &error)) {
+    // Surface the failure through the in-editor modal, pre-filled with the
+    // path and error so the user can retry or correct it.
+    dialogPresenter_.requestOpenFile(std::make_optional(*chosen));
+    dialogPresenter_.setOpenFileError(std::move(error));
+  }
+  window_.wakeEventLoop();
+}
+
 void EditorShell::requestSave() {
   if (!app_.currentFilePath().has_value()) {
     requestSaveAs();
@@ -1515,20 +1572,19 @@ void EditorShell::requestRevert() {
 }
 
 void EditorShell::updateWindowTitle() {
-  std::string title;
-  if (app_.isDirty()) {
-    title += "● ";
-  }
-  if (app_.currentFilePath().has_value()) {
-    title += std::filesystem::path(*app_.currentFilePath()).filename().string();
-  } else {
-    title += "untitled";
-  }
-  title += " - Donner SVG Editor";
+  const WindowChromeState chromeState{.filePath = app_.currentFilePath(),
+                                      .edited = app_.isDirty()};
+
+  // On platforms with native title-bar chrome (macOS) the edited "dot" and
+  // proxy icon are shown by the OS, so keep them out of the title text.
+  const bool nativeChrome = NativeWindowChromeAvailable();
+  std::string title = ComposeWindowTitle(chromeState, /*showEditedDotInText=*/!nativeChrome);
   if (title != lastWindowTitle_) {
     window_.setTitle(title);
     lastWindowTitle_ = std::move(title);
   }
+
+  ApplyNativeWindowChrome(window_.rawHandle(), chromeState);
 }
 
 void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
@@ -1536,7 +1592,7 @@ void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
     dialogPresenter_.requestAbout();
   }
   if (menuActions.openFile) {
-    dialogPresenter_.requestOpenFile(app_.currentFilePath());
+    promptOpenFile();
   }
   if (menuActions.saveFile) {
     requestSave();
@@ -1656,7 +1712,7 @@ void EditorShell::handleGlobalShortcuts() {
   }
 
   if (!anyPopupOpen && cmd && !shift && ImGui::IsKeyPressed(ImGuiKey_O, /*repeat=*/false)) {
-    dialogPresenter_.requestOpenFile(app_.currentFilePath());
+    promptOpenFile();
   }
 
   if (!anyPopupOpen && cmd && !shift && ImGui::IsKeyPressed(ImGuiKey_Q, /*repeat=*/false)) {
