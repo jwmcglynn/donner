@@ -123,6 +123,20 @@ public:
     return inspectorSnapshot_.hasSelection;
   }
 
+  /// Resolved display state of the inspector's stroke and transform widgets on
+  /// the most recent `renderInspector` call. Captured so a test can assert the
+  /// displayed state does not collapse to disabled/default on the busy frames
+  /// that pepper an active resize gesture (the QA-F1 regression seam).
+  struct InspectorDisplaySample {
+    std::size_t selectionCount = 0;
+    bool strokeEditableLook = false;
+    float strokeWidthShown = 0.0f;
+    bool transformEditableLook = false;
+  };
+  [[nodiscard]] const InspectorDisplaySample& lastInspectorDisplaySampleForTesting() const {
+    return lastInspectorDisplaySample_;
+  }
+
   [[nodiscard]] bool hasTreeSnapshotForTesting() const { return treeSnapshot_.has_value(); }
 
   /// Whether the tree node for @p entityId is expanded. Keyed by the element's
@@ -206,6 +220,17 @@ private:
     std::optional<Transform2d> transform;
     std::vector<std::pair<std::string, std::string>> xmlAttributes;
     std::vector<std::pair<std::string, std::string>> computedStyle;
+    // Stable display fields. The snapshot only refreshes on idle frames, so
+    // these hold the selection's real state steady through the busy frames that
+    // pepper an active resize/rotate gesture. The inspector's stroke and
+    // transform widgets read their displayed value and enabled-look from here
+    // instead of from the live app, which is null on busy frames and made the
+    // fields collapse to a disabled default every busy frame (the QA-F1
+    // flicker). Mutation still gates on a live app.
+    std::size_t selectionCount = 0;      ///< Number of selected elements.
+    bool singleSelectionLocked = false;  ///< Lock state of the lone selection.
+    bool hasStrokeWidth = false;         ///< Whether `strokeWidth` was captured.
+    float strokeWidth = 1.0f;            ///< First selection's computed stroke width.
   };
 
   /// State for the transform edit currently in progress (one ImGui item can
@@ -243,6 +268,11 @@ private:
   /// chevron drives), shared by the click handler and the testing hook.
   void toggleTreeNodeExpanded(std::uint32_t entityId) const;
 
+  /// Render the stroke-width control. Display value and enabled-look come from
+  /// the stable snapshot so the field does not flicker on busy frames; mutation
+  /// gates on a live app. Returns true if a mutation was queued.
+  bool renderStrokeControls(EditorApp* liveApp);
+
   /// Render the editable transform section (decomposed fields plus the raw
   /// matrix disclosure). Returns true if a mutation was queued.
   bool renderTransformPanel(EditorApp* liveApp);
@@ -271,6 +301,10 @@ private:
   std::optional<TreeNodeSnapshot> treeSnapshot_;
   InspectorSnapshot inspectorSnapshot_;
   std::optional<TransformEditState> transformEdit_;
+
+  /// Last resolved inspector display state; see InspectorDisplaySample. Updated
+  /// on every `renderInspector` so tests can pin the anti-flicker invariant.
+  InspectorDisplaySample lastInspectorDisplaySample_;
 
   /// Persistent tree-disclosure state, keyed by 32-bit entity id. A node is
   /// expanded iff present. Mutable because the tree renders from a const

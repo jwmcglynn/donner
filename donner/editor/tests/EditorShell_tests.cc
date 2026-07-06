@@ -256,6 +256,40 @@ TEST(EditorShellInternalTest, PaintServerSlotHandlesVariantPaintSources) {
   EXPECT_EQ(contextStroke.customLabel, "context-stroke");
 }
 
+TEST(EditorShellInternalTest, ResolveDisplayedToolbarPaintStateHoldsLastGoodWhenBusy) {
+  // QA-F1: while resizing, the async renderer is busy on most frames and no live
+  // paint can be read. The swatch must keep drawing the last good paint on those
+  // frames instead of collapsing to an empty slot and blinking.
+  std::optional<internal::ToolbarPaintState> lastGood;
+
+  // Before any good state: falls back to the default (empty) state.
+  const internal::ToolbarPaintState initialBusy =
+      internal::ResolveDisplayedToolbarPaintState(std::nullopt, lastGood);
+  EXPECT_TRUE(initialBusy.fill.isNone);
+  EXPECT_FALSE(lastGood.has_value());
+
+  // An idle frame supplies a real paint; it becomes the cached last-good state.
+  internal::ToolbarPaintState live;
+  live.fill.isNone = false;
+  live.fill.color = css::RGBA::RGB(10, 20, 30);
+  live.stroke.isNone = false;
+  live.stroke.color = css::RGBA::RGB(40, 50, 60);
+  const internal::ToolbarPaintState idle =
+      internal::ResolveDisplayedToolbarPaintState(live, lastGood);
+  EXPECT_FALSE(idle.fill.isNone);
+  EXPECT_EQ(idle.fill.color, css::RGBA::RGB(10, 20, 30));
+  ASSERT_TRUE(lastGood.has_value());
+
+  // Subsequent busy frames (null live state) reuse that paint verbatim - the
+  // swatch does not blink to empty.
+  const internal::ToolbarPaintState busy =
+      internal::ResolveDisplayedToolbarPaintState(std::nullopt, lastGood);
+  EXPECT_FALSE(busy.fill.isNone);
+  EXPECT_EQ(busy.fill.color, css::RGBA::RGB(10, 20, 30));
+  EXPECT_FALSE(busy.stroke.isNone);
+  EXPECT_EQ(busy.stroke.color, css::RGBA::RGB(40, 50, 60));
+}
+
 TEST(EditorShellInternalTest, PaintChipLabelUsesReferenceCustomAndFallbackText) {
   internal::ToolbarPaintSlotState referenced;
   referenced.reference = internal::ToolbarPaintReferenceState{.href = "#very_long_gradient_name"};

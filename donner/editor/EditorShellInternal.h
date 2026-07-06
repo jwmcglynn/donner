@@ -89,6 +89,16 @@ enum class PendingClickIdleAction {
     const svg::PaintServer& paint, const css::RGBA& currentColor, svg::SVGDocument* document,
     std::optional<std::string_view> source);
 [[nodiscard]] ToolbarPaintState ToolbarPaintStateForActivePaint(const ActivePaintStyle& paintStyle);
+/// Choose the fill/stroke toolbar paint state to draw this frame and refresh
+/// the persistent last-good cache. `liveState` holds a freshly computed paint
+/// only on frames where reading the document is safe (renderer idle, document
+/// loaded); it is nullopt on the busy frames that pepper an active resize
+/// gesture. On those frames the cached last-good state is reused so the swatch
+/// keeps showing the selection's real paint instead of blinking to an empty
+/// slot every busy frame (QA-F1). Before any good state is seen it returns a
+/// default (empty) state.
+[[nodiscard]] ToolbarPaintState ResolveDisplayedToolbarPaintState(
+    std::optional<ToolbarPaintState> liveState, std::optional<ToolbarPaintState>& lastGood);
 [[nodiscard]] std::string PaintChipLabel(std::string_view prefix,
                                          const ToolbarPaintSlotState& state);
 [[nodiscard]] std::string SelectionSizeChipLabel(const Box2d& screenBounds);

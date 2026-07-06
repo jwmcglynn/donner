@@ -286,38 +286,6 @@ bool RenderPathOperationsPanel(EditorApp* liveApp,
 /// transform scalars, raw matrix cells) so every DragFloat lines up.
 constexpr float kInspectorFieldWidth = 96.0f;
 
-double FirstSelectedStrokeWidth(const EditorApp& app) {
-  const std::vector<svg::SVGElement>& selection = app.selectedElements();
-  if (selection.empty()) {
-    return 1.0;
-  }
-
-  return selection.front().getComputedStyle().strokeWidth.get().value().value;
-}
-
-bool RenderStrokeControlsPanel(EditorApp* liveApp) {
-  ImGui::Separator();
-  ImGui::TextUnformatted("Stroke");
-
-  const bool canEdit = liveApp != nullptr && liveApp->hasSelection();
-  float strokeWidth = canEdit ? static_cast<float>(FirstSelectedStrokeWidth(*liveApp)) : 1.0f;
-
-  if (!canEdit) {
-    ImGui::BeginDisabled();
-  }
-  ImGui::SetNextItemWidth(kInspectorFieldWidth);
-  const bool changed = ImGui::DragFloat("Width", &strokeWidth, 0.1f, 0.0f, 200.0f, "%.2f");
-  if (!canEdit) {
-    ImGui::EndDisabled();
-  }
-
-  if (changed && liveApp != nullptr) {
-    liveApp->setActiveStrokeWidth(strokeWidth);
-    return liveApp->setStrokeWidthOnSelection(strokeWidth);
-  }
-
-  return false;
-}
 
 /// Below this document-space span (in user units), a bounds axis is treated
 /// as degenerate and the matching Width / Height field is disabled - a scale
@@ -394,9 +362,21 @@ void SidebarPresenter::refreshSnapshot(const EditorApp& app) {
 
   // Inspector snapshot.
   InspectorSnapshot inspector;
+  // Stable display fields captured for any selection size. The stroke control
+  // and transform fields read these (not the live app) so they hold steady
+  // through the busy frames of an active gesture (QA-F1).
+  inspector.selectionCount = selectionList.size();
+  if (!selectionList.empty()) {
+    if (const auto strokeWidth = selectionList.front().getComputedStyle().strokeWidth.get();
+        strokeWidth.has_value()) {
+      inspector.strokeWidth = static_cast<float>(strokeWidth.value().value);
+      inspector.hasStrokeWidth = true;
+    }
+  }
   if (selectionList.size() == 1) {
     inspector.hasSelection = true;
     const donner::svg::SVGElement& selected = selectionList.front();
+    inspector.singleSelectionLocked = IsLocked(selected);
     const donner::RcString selectedTagName = selected.tagName().name;
     const std::string_view tagSv = selectedTagName;
     const donner::RcString idStr = selected.id();
@@ -556,13 +536,15 @@ bool SidebarPresenter::renderInspector(EditorApp* liveApp, const ViewportState& 
     commitTransformEdit(*liveApp);
   }
   if (!inspectorSnapshot_.hasSelection) {
-    if (liveApp != nullptr && liveApp->selectedElements().size() > 1u) {
-      ImGui::Text("%zu elements selected", liveApp->selectedElements().size());
-      queuedMutation = RenderStrokeControlsPanel(liveApp);
+    // Selection count comes from the frozen snapshot, not the live app, so the
+    // "N elements selected" line does not blank on busy frames.
+    if (inspectorSnapshot_.selectionCount > 1u) {
+      ImGui::Text("%zu elements selected", inspectorSnapshot_.selectionCount);
+      queuedMutation = renderStrokeControls(liveApp);
       queuedMutation = RenderPathOperationsPanel(liveApp, iconTextureProvider) || queuedMutation;
     } else {
       ImGui::TextDisabled("Select a single element to inspect attributes.");
-      queuedMutation = RenderStrokeControlsPanel(liveApp);
+      queuedMutation = renderStrokeControls(liveApp);
       queuedMutation = RenderPathOperationsPanel(liveApp, iconTextureProvider) || queuedMutation;
     }
   } else {
@@ -573,7 +555,7 @@ bool SidebarPresenter::renderInspector(EditorApp* liveApp, const ViewportState& 
                   b.height());
     }
     queuedMutation = renderTransformPanel(liveApp);
-    queuedMutation = RenderStrokeControlsPanel(liveApp) || queuedMutation;
+    queuedMutation = renderStrokeControls(liveApp) || queuedMutation;
     RenderInspectorSection("XML attributes", "##inspector_xml_attributes",
                            inspectorSnapshot_.xmlAttributes);
     RenderInspectorSection("Computed style", "##inspector_computed_style",
@@ -590,6 +572,41 @@ bool SidebarPresenter::renderInspector(EditorApp* liveApp, const ViewportState& 
   ImGui::TextDisabled("space+drag = pan");
   ImGui::TextDisabled("Cmd+0 = 100%%");
   return queuedMutation;
+}
+
+bool SidebarPresenter::renderStrokeControls(EditorApp* liveApp) {
+  ImGui::Separator();
+  ImGui::TextUnformatted("Stroke");
+
+  // Display comes from the frozen snapshot, not the live app. During a resize
+  // (or any gesture that keeps the async renderer busy) `liveApp` is null on
+  // most frames; reading the width and enabled-look from it there collapsed the
+  // field to a disabled 1.0 every busy frame and snapped it back on the idle
+  // ones - the inspector half of the QA-F1 flicker. The snapshot only refreshes
+  // on idle frames, so it holds the selection's real stroke width steady across
+  // the gesture. Mutation still requires a live app.
+  const bool editableLook = inspectorSnapshot_.selectionCount >= 1u;
+  float strokeWidth = inspectorSnapshot_.hasStrokeWidth ? inspectorSnapshot_.strokeWidth : 1.0f;
+
+  lastInspectorDisplaySample_.selectionCount = inspectorSnapshot_.selectionCount;
+  lastInspectorDisplaySample_.strokeEditableLook = editableLook;
+  lastInspectorDisplaySample_.strokeWidthShown = strokeWidth;
+
+  if (!editableLook) {
+    ImGui::BeginDisabled();
+  }
+  ImGui::SetNextItemWidth(kInspectorFieldWidth);
+  const bool changed = ImGui::DragFloat("Width", &strokeWidth, 0.1f, 0.0f, 200.0f, "%.2f");
+  if (!editableLook) {
+    ImGui::EndDisabled();
+  }
+
+  if (changed && liveApp != nullptr) {
+    liveApp->setActiveStrokeWidth(strokeWidth);
+    return liveApp->setStrokeWidthOnSelection(strokeWidth);
+  }
+
+  return false;
 }
 
 bool SidebarPresenter::renderTransformPanel(EditorApp* liveApp) {
@@ -634,15 +651,26 @@ bool SidebarPresenter::renderTransformPanel(EditorApp* liveApp) {
   const bool liveEditable = liveElement.has_value() && !IsLocked(*liveElement);
   const bool decomposable = snapshotDecomposed.has_value();
 
+  // The enabled-look of the fields is driven by the stable snapshot, not by
+  // `liveElement` (which is null on the busy frames of a resize gesture). That
+  // stops the fields from flashing disabled every busy frame - the transform
+  // half of the QA-F1 flicker. Mutation still requires `liveElement`/`liveApp`
+  // (guarded in renderTransformFieldDrag and the matrix loop), so keeping the
+  // look enabled on a busy frame is purely cosmetic: edits are dropped as
+  // before until the renderer is idle again.
+  const bool displayEditable = !inspectorSnapshot_.singleSelectionLocked;
+
   ImGui::Separator();
   ImGui::TextUnformatted("Transform");
 
-  const bool canEditPosition = liveEditable && decomposable && bounds.has_value();
+  const bool canEditPosition = displayEditable && decomposable && bounds.has_value();
   const bool canEditWidth =
       canEditPosition && static_cast<double>(bounds->width()) > kMinimumSpanForScale;
   const bool canEditHeight =
       canEditPosition && static_cast<double>(bounds->height()) > kMinimumSpanForScale;
-  const bool canEditRotation = liveEditable && decomposable;
+  const bool canEditRotation = displayEditable && decomposable;
+
+  lastInspectorDisplaySample_.transformEditableLook = canEditPosition;
 
   const float xValue = bounds.has_value() ? static_cast<float>(bounds->topLeft.x) : 0.0f;
   const float yValue = bounds.has_value() ? static_cast<float>(bounds->topLeft.y) : 0.0f;
@@ -695,12 +723,15 @@ bool SidebarPresenter::renderTransformPanel(EditorApp* liveApp) {
         ImGui::SameLine();
       }
       ImGui::SetNextItemWidth(kInspectorFieldWidth);
-      if (!liveEditable) {
+      // Disabled-look from the stable snapshot (see displayEditable above) so
+      // the matrix cells do not flash disabled on a resize gesture's busy
+      // frames; activation/mutation below still require a live element.
+      if (!displayEditable) {
         ImGui::BeginDisabled();
       }
       const bool changed = ImGui::DragScalar(kMatrixLabels[i], ImGuiDataType_Double, &value, 0.01f,
                                              nullptr, nullptr, "%.6g");
-      if (!liveEditable) {
+      if (!displayEditable) {
         ImGui::EndDisabled();
       }
 

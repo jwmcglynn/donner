@@ -391,6 +391,14 @@ ToolbarPaintState ToolbarPaintStateForApp(EditorApp& app, std::optional<std::str
   return state;
 }
 
+ToolbarPaintState ResolveDisplayedToolbarPaintState(std::optional<ToolbarPaintState> liveState,
+                                                    std::optional<ToolbarPaintState>& lastGood) {
+  if (liveState.has_value()) {
+    lastGood = std::move(liveState);
+  }
+  return lastGood.value_or(ToolbarPaintState{});
+}
+
 std::string PaintChipLabel(std::string_view prefix, const ToolbarPaintSlotState& state) {
   std::string value = state.reference.has_value() ? state.reference->href : state.customLabel;
   if (value.empty()) {
@@ -2143,8 +2151,16 @@ void EditorShell::renderFillStrokeToolbarWidget() {
       sourceForRanges = std::string_view(editorSource);
     }
   }
+  // Compute the paint only on frames where reading the document is safe; on the
+  // busy frames of a resize gesture reuse the last-good state so the swatch does
+  // not blink to an empty slot every busy frame (QA-F1). The BeginDisabled below
+  // still greys interactivity while busy; only the drawn swatch stays stable.
+  std::optional<ToolbarPaintState> liveState;
+  if (canEditPaint) {
+    liveState = ToolbarPaintStateForApp(app_, sourceForRanges);
+  }
   const ToolbarPaintState paintState =
-      rendererBusy ? ToolbarPaintState{} : ToolbarPaintStateForApp(app_, sourceForRanges);
+      ResolveDisplayedToolbarPaintState(std::move(liveState), lastToolbarPaintState_);
   ImGui::BeginDisabled(!canEditPaint);
   ImGui::InvisibleButton("##fill_stroke_widget",
                          ImVec2(kToolPalettePaintWidgetWidth, kToolPaletteButtonSize));

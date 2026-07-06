@@ -840,5 +840,62 @@ TEST_F(SidebarPresenterImGuiTest, InspectorRendersTransformFieldsWithoutLiveApp)
   EXPECT_GT(drawData->TotalVtxCount, 0);
 }
 
+// QA-F1 regression. A resize gesture keeps the async renderer busy on most
+// frames, so `renderInspector` sees a null live app on those frames while the
+// snapshot stays frozen from the last idle frame. The stroke-width field and
+// the transform fields must keep showing the selection's real value and stay
+// enabled-looking across that busy/idle alternation; otherwise the inspector
+// (and the paired toolbar swatch) flicker every busy frame. This pins the
+// displayed state to the frozen snapshot rather than the transient live app.
+//
+// Pre-fix, the busy frame collapsed the stroke field to a disabled 1.0 and the
+// transform fields to disabled, so the busy sample differed from the idle one
+// and this test failed. The stabilized display keeps them equal.
+TEST_F(SidebarPresenterImGuiTest, ResizeGestureDoesNotFlickerInspectorDisplay) {
+  constexpr std::string_view kStrokedSvg =
+      R"SVG(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">
+           <rect id="target" x="10" y="20" width="40" height="30" stroke="blue"
+                 stroke-width="7"/>
+         </svg>)SVG";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kStrokedSvg));
+  app.setCleanSourceText(kStrokedSvg);
+
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+
+  SidebarPresenter presenter;
+  // Snapshot captured on an idle frame, as the real loop does before a gesture
+  // makes the renderer busy. It is intentionally NOT refreshed again below:
+  // during a resize the renderer is busy and refreshSnapshot is skipped.
+  presenter.refreshSnapshot(app);
+  ASSERT_TRUE(presenter.inspectorHasSelectionForTesting());
+
+  // Idle frame: live app present.
+  EXPECT_FALSE(RenderInspectorFrame(presenter, &app, "##sidebar_resize_idle_frame"));
+  const SidebarPresenter::InspectorDisplaySample idle =
+      presenter.lastInspectorDisplaySampleForTesting();
+
+  // Sanity: the idle frame shows the selection's real stroke width and enabled
+  // fields, so a collapse on the busy frame would be detectable.
+  EXPECT_EQ(idle.selectionCount, 1u);
+  EXPECT_TRUE(idle.strokeEditableLook);
+  EXPECT_FLOAT_EQ(idle.strokeWidthShown, 7.0f);
+  EXPECT_TRUE(idle.transformEditableLook);
+
+  // Busy frame during the same gesture: null live app, snapshot unchanged. The
+  // displayed state must be identical to the idle frame - no flicker to a
+  // disabled 1.0 stroke or disabled transform fields.
+  EXPECT_FALSE(RenderInspectorFrame(presenter, nullptr, "##sidebar_resize_busy_frame"));
+  const SidebarPresenter::InspectorDisplaySample busy =
+      presenter.lastInspectorDisplaySampleForTesting();
+
+  EXPECT_EQ(busy.selectionCount, idle.selectionCount);
+  EXPECT_EQ(busy.strokeEditableLook, idle.strokeEditableLook);
+  EXPECT_FLOAT_EQ(busy.strokeWidthShown, idle.strokeWidthShown);
+  EXPECT_EQ(busy.transformEditableLook, idle.transformEditableLook);
+}
+
 }  // namespace
 }  // namespace donner::editor

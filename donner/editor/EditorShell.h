@@ -16,6 +16,7 @@
 #include "donner/editor/DocumentSyncController.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorInputBridge.h"
+#include "donner/editor/EditorShellInternal.h"
 #include "donner/editor/EditorShellLayout.h"
 #include "donner/editor/FrameCostBreakdown.h"
 #include "donner/editor/GlTextureCache.h"
@@ -464,6 +465,11 @@ private:
   svg::Renderer layerThumbnailRenderer_;
   RenderCoordinator renderCoordinator_;
   RotateCursorSet rotateCursorSet_;
+
+  /// Last fill/stroke toolbar paint state computed on an idle frame. Reused on
+  /// the busy frames of an active gesture so the swatch keeps showing the
+  /// selection's real paint instead of collapsing to an empty slot (QA-F1).
+  std::optional<internal::ToolbarPaintState> lastToolbarPaintState_;
   DocumentSyncController documentSyncController_;
   ViewportInteractionController interactionController_;
   std::optional<ViewportState> pendingViewportReplayOverride_;
