@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <span>
 #include <string>
@@ -127,17 +128,20 @@ std::optional<double> ParseNumericAttribute(const svg::SVGElement& element, std:
   return result.result().number;
 }
 
-/// Document-space AABB covering @p frameLocal mapped corner-by-corner
-/// through @p documentFromText.
-Box2d FrameDocAabb(const Transform2d& documentFromText, const Box2d& frameLocal) {
-  const std::array<Vector2d, 4> corners = {
+/// Document-space corners (local TL, TR, BR, BL order) of @p frameLocal
+/// mapped through @p documentFromText. An oriented quad: for a rotated text
+/// element the corners carry the rotation instead of collapsing to the
+/// axis-aligned envelope.
+std::array<Vector2d, 4> FrameCornersDoc(const Transform2d& documentFromText,
+                                        const Box2d& frameLocal) {
+  const std::array<Vector2d, 4> cornersLocal = {
       frameLocal.topLeft, Vector2d(frameLocal.bottomRight.x, frameLocal.topLeft.y),
       frameLocal.bottomRight, Vector2d(frameLocal.topLeft.x, frameLocal.bottomRight.y)};
-  Box2d frameDoc = Box2d::CreateEmpty(documentFromText.transformPosition(corners[0]));
-  for (std::size_t i = 1; i < corners.size(); ++i) {
-    frameDoc.addPoint(documentFromText.transformPosition(corners[i]));
+  std::array<Vector2d, 4> cornersDoc;
+  for (std::size_t i = 0; i < cornersLocal.size(); ++i) {
+    cornersDoc[i] = documentFromText.transformPosition(cornersLocal[i]);
   }
-  return frameDoc;
+  return cornersDoc;
 }
 
 /// Map a DOM character index (which counts rendered glyphs only) back to a
@@ -180,12 +184,14 @@ void TextTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
       if (const std::optional<std::size_t> caret = caretIndexAtPoint(documentPoint);
           caret.has_value()) {
         caretIndex_ = *caret;
+        resetCaretBlinkPhase();
         return;
       }
       if (const std::optional<Box2d> frameLocal = sessionFrameLocal(); frameLocal.has_value()) {
         const Vector2d localPoint = documentFromText_.inverse().transformPosition(documentPoint);
         if (frameLocal->contains(localPoint)) {
           caretIndex_ = content_.size();
+          resetCaretBlinkPhase();
           return;
         }
       }
@@ -302,6 +308,7 @@ void TextTool::beginEditingSession(EditorApp& editor, const Vector2d& originDoc,
   cachedCharWidths_.clear();
   caretIndex_ = 0;
   state_ = State::Editing;
+  resetCaretBlinkPhase();
 
   editor.applyMutation(EditorCommand::InsertTextCommand(parent, text, ""));
   editor.setSelection(text);
@@ -374,6 +381,7 @@ void TextTool::beginEditingSessionForExisting(EditorApp& editor, const svg::SVGT
   state_ = State::Editing;
   cachedCharWidths_ = measureCharacterWidths(editor);
   caretIndex_ = caretIndexAtPoint(documentPoint).value_or(content_.size());
+  resetCaretBlinkPhase();
 
   editor.setSelection(text);
   editor.flushFrame();
@@ -436,10 +444,17 @@ SelectionTransformHandleIntent TextTool::frameHandleIntentAt(const Vector2d& doc
     return {};
   }
 
-  const Box2d frameDoc = FrameDocAabb(documentFromText_, *frameLocal);
-  const std::array<Box2d, 1> bounds{frameDoc};
-  return HitTestSelectionTransformHandles(std::span<const Box2d>(bounds), documentPoint,
-                                          pixelsPerDocUnit, includeRotate);
+  // Hit-test in the text's LOCAL space, where the frame is axis-aligned.
+  // On a rotated frame this makes the handle zones (and the rotate ring)
+  // track the oriented corners instead of the axis-aligned envelope, and it
+  // keeps the returned corner identity in the frame's local space - which is
+  // exactly the space the resize gesture operates in.
+  const Vector2d localPoint = documentFromText_.inverse().transformPosition(documentPoint);
+  const double docUnitsPerLocalUnit = documentFromText_.transformVector(Vector2d(1.0, 0.0)).length();
+  const double pixelsPerLocalUnit = pixelsPerDocUnit * docUnitsPerLocalUnit;
+  const std::array<Box2d, 1> bounds{*frameLocal};
+  return HitTestSelectionTransformHandles(std::span<const Box2d>(bounds), localPoint,
+                                          pixelsPerLocalUnit, includeRotate);
 }
 
 bool TextTool::beginFrameGestureAtPoint(const Vector2d& documentPoint, MouseModifiers modifiers) {
@@ -453,7 +468,6 @@ bool TextTool::beginFrameGestureAtPoint(const Vector2d& documentPoint, MouseModi
   if (!frameLocal.has_value()) {
     return false;
   }
-  const Box2d frameDoc = FrameDocAabb(documentFromText_, *frameLocal);
 
   frameStartLocal_ = *frameLocal;
   frameStartDocumentFromText_ = documentFromText_;
@@ -462,7 +476,10 @@ bool TextTool::beginFrameGestureAtPoint(const Vector2d& documentPoint, MouseModi
     frameGesture_ = FrameGesture::Resize;
   } else {
     frameGesture_ = FrameGesture::Rotate;
-    rotateCenterDoc_ = (frameDoc.topLeft + frameDoc.bottomRight) * 0.5;
+    // Pivot around the frame's center mapped through the text's transform -
+    // for an already-rotated frame this is the oriented quad's center.
+    rotateCenterDoc_ = documentFromText_.transformPosition(
+        (frameLocal->topLeft + frameLocal->bottomRight) * 0.5);
     rotateStartAngleRadians_ = AngleFromCenter(rotateCenterDoc_, documentPoint);
     rotateStartTransform_ =
         sessionText_->withReadAccess([this](svg::DocumentReadAccess&, EntityHandle) {
@@ -539,6 +556,7 @@ void TextTool::insertCodepoint(EditorApp& editor, char32_t codepoint) {
   }
   content_.insert(content_.begin() + static_cast<std::ptrdiff_t>(caretIndex_), codepoint);
   ++caretIndex_;
+  resetCaretBlinkPhase();
   syncContentToDom(editor);
 }
 
@@ -548,6 +566,7 @@ void TextTool::insertNewline(EditorApp& editor) {
   }
   content_.insert(content_.begin() + static_cast<std::ptrdiff_t>(caretIndex_), U'\n');
   ++caretIndex_;
+  resetCaretBlinkPhase();
   syncContentToDom(editor);
 }
 
@@ -557,6 +576,7 @@ void TextTool::backspace(EditorApp& editor) {
   }
   content_.erase(content_.begin() + static_cast<std::ptrdiff_t>(caretIndex_) - 1);
   --caretIndex_;
+  resetCaretBlinkPhase();
   syncContentToDom(editor);
 }
 
@@ -565,6 +585,7 @@ void TextTool::deleteForward(EditorApp& editor) {
     return;
   }
   content_.erase(content_.begin() + static_cast<std::ptrdiff_t>(caretIndex_));
+  resetCaretBlinkPhase();
   syncContentToDom(editor);
 }
 
@@ -905,6 +926,73 @@ void TextTool::beginSessionUndo(EditorApp& editor) {
   }
 }
 
+std::optional<TextTool::DragPreviewChrome> TextTool::dragPreviewChrome() const {
+  if (state_ != State::DraggingBox || !dragBoxDoc_.has_value()) {
+    return std::nullopt;
+  }
+
+  const Box2d& box = *dragBoxDoc_;
+  // Mirror the creation rule from onMouseUp: the first baseline sits one
+  // default font size below the box top. While the drag is still shallower
+  // than that, clamp the baseline (and the I-beam that hangs off it) into
+  // the box so the preview never pokes outside the frame.
+  const double baselineY = std::min(box.topLeft.y + kDefaultFontSize, box.bottomRight.y);
+  // Inset the baseline and I-beam slightly so they read as content guides,
+  // not part of the frame.
+  const double inset = std::min(kDefaultFontSize * 0.15, box.size().x * 0.25);
+
+  DragPreviewChrome preview;
+  preview.boxDoc = box;
+  preview.baselineStartDoc = Vector2d(box.topLeft.x + inset, baselineY);
+  preview.baselineEndDoc = Vector2d(box.bottomRight.x - inset, baselineY);
+
+  const double ibeamX = box.topLeft.x + inset;
+  const double ibeamTop = std::max(baselineY - kDefaultFontSize * 0.9, box.topLeft.y);
+  const double ibeamBottom = std::min(baselineY + kDefaultFontSize * 0.25, box.bottomRight.y);
+  preview.ibeamTopDoc = Vector2d(ibeamX, ibeamTop);
+  preview.ibeamBottomDoc = Vector2d(ibeamX, ibeamBottom);
+  return preview;
+}
+
+bool TextTool::CaretBlinkVisibleAtPhase(double secondsSincePhaseReset) {
+  if (secondsSincePhaseReset <= 0.0) {
+    return true;
+  }
+  const double phase =
+      std::fmod(secondsSincePhaseReset, 2.0 * kCaretBlinkHalfPeriodSeconds);
+  return phase < kCaretBlinkHalfPeriodSeconds;
+}
+
+double TextTool::SecondsUntilCaretBlinkFlip(double secondsSincePhaseReset) {
+  if (secondsSincePhaseReset <= 0.0) {
+    return kCaretBlinkHalfPeriodSeconds;
+  }
+  const double phase =
+      std::fmod(secondsSincePhaseReset, kCaretBlinkHalfPeriodSeconds);
+  const double untilFlip = kCaretBlinkHalfPeriodSeconds - phase;
+  return untilFlip > 0.0 ? untilFlip : kCaretBlinkHalfPeriodSeconds;
+}
+
+bool TextTool::caretBlinkVisible() const {
+  if (state_ != State::Editing) {
+    return true;
+  }
+  const double elapsed =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - caretBlinkPhaseStart_)
+          .count();
+  return CaretBlinkVisibleAtPhase(elapsed);
+}
+
+std::optional<float> TextTool::nextCaretBlinkWakeSeconds() const {
+  if (state_ != State::Editing) {
+    return std::nullopt;
+  }
+  const double elapsed =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - caretBlinkPhaseStart_)
+          .count();
+  return static_cast<float>(SecondsUntilCaretBlinkFlip(elapsed));
+}
+
 std::optional<TextTool::EditingChrome> TextTool::editingChrome(EditorApp& editor) const {
   if (state_ != State::Editing || !sessionText_.has_value()) {
     return std::nullopt;
@@ -940,9 +1028,9 @@ std::optional<TextTool::EditingChrome> TextTool::editingChrome(EditorApp& editor
       documentFromText_.transformPosition(Vector2d(caretX, baselineY - fontSize_ * 0.9));
   chrome.caretBottomDoc =
       documentFromText_.transformPosition(Vector2d(caretX, baselineY + fontSize_ * 0.25));
-  chrome.boxDoc = boxText_.has_value()
-                      ? std::make_optional(documentFromText_.transformBox(*boxText_))
-                      : std::nullopt;
+  if (const std::optional<Box2d> frameLocal = sessionFrameLocal(); frameLocal.has_value()) {
+    chrome.frameCornersDoc = FrameCornersDoc(documentFromText_, *frameLocal);
+  }
   return chrome;
 }
 

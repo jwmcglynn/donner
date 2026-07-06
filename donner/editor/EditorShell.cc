@@ -656,6 +656,23 @@ Box2d ResolveDocumentViewBox(svg::SVGDocument& document) {
 
 using namespace internal;
 
+/// Convert the text tool's drag-to-create preview into the overlay
+/// snapshot's pushed-state form.
+std::optional<SelectionChromeSnapshot::TextBoxDragPreview> TextBoxDragPreviewFromTool(
+    const std::optional<TextTool::DragPreviewChrome>& preview) {
+  if (!preview.has_value()) {
+    return std::nullopt;
+  }
+  return SelectionChromeSnapshot::TextBoxDragPreview{
+      .boxDoc = preview->boxDoc,
+      .baselineStartDoc = preview->baselineStartDoc,
+      .baselineEndDoc = preview->baselineEndDoc,
+      .ibeamTopDoc = preview->ibeamTopDoc,
+      .ibeamBottomDoc = preview->ibeamBottomDoc,
+  };
+}
+
+
 EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     : window_(window),
       options_(std::move(options)),
@@ -795,6 +812,12 @@ std::optional<float> EditorShell::nextIdleWakeSeconds() const {
   includeWake(documentSyncController_.nextTextSyncWakeSeconds());
   includeWake(textEditor_.nextFlashWakeSeconds());
   includeWake(textEditor_.nextRopeAnimationWakeSeconds());
+  // Caret blink: wake at the next visibility flip while a text session is
+  // editing. The flip only re-pushes the caret chrome and recaptures the
+  // overlay snapshot; it never schedules a content render.
+  if (activeTool_ == ActiveTool::Text) {
+    includeWake(textTool_.nextCaretBlinkWakeSeconds());
+  }
   return result;
 }
 
@@ -1151,15 +1174,22 @@ void EditorShell::applyPendingDocumentSpaceReplayInputForTesting() {
   // Text-editing chrome for document-space input, mirroring the live-pointer
   // update in renderRenderPane.
   if (activeTool_ == ActiveTool::Text && textTool_.isDraggingBox()) {
-    renderCoordinator_.setTextEditingChrome(std::nullopt, textTool_.dragBoxDoc());
+    renderCoordinator_.setTextEditingChrome(std::nullopt, std::nullopt);
+    renderCoordinator_.setTextBoxDragPreview(
+        TextBoxDragPreviewFromTool(textTool_.dragPreviewChrome()));
   } else if (activeTool_ == ActiveTool::Text && textTool_.isEditing()) {
     if (const auto textChrome = textTool_.editingChrome(app_); textChrome.has_value()) {
       renderCoordinator_.setTextEditingChrome(
-          SelectionChromeSnapshot::TextCaret{textChrome->caretTopDoc, textChrome->caretBottomDoc},
-          textChrome->boxDoc);
+          textTool_.caretBlinkVisible()
+              ? std::make_optional(SelectionChromeSnapshot::TextCaret{textChrome->caretTopDoc,
+                                                                      textChrome->caretBottomDoc})
+              : std::nullopt,
+          textChrome->frameCornersDoc);
     }
+    renderCoordinator_.setTextBoxDragPreview(std::nullopt);
   } else if (activeTool_ == ActiveTool::Text) {
     renderCoordinator_.setTextEditingChrome(std::nullopt, std::nullopt);
+    renderCoordinator_.setTextBoxDragPreview(std::nullopt);
   }
 }
 
@@ -2775,15 +2805,26 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
   // Text-editing chrome: caret + box frame while a session is active, or the
   // live rectangle while a text box is being dragged out.
   if (textToolActive && textTool_.isDraggingBox()) {
-    renderCoordinator_.setTextEditingChrome(std::nullopt, textTool_.dragBoxDoc());
+    renderCoordinator_.setTextEditingChrome(std::nullopt, std::nullopt);
+    renderCoordinator_.setTextBoxDragPreview(
+        TextBoxDragPreviewFromTool(textTool_.dragPreviewChrome()));
   } else if (textToolActive && textTool_.isEditing()) {
     if (const auto textChrome = textTool_.editingChrome(app_); textChrome.has_value()) {
+      // The caret blinks on a timed phase (hidden half-periods push no
+      // caret); the box frame stays solid. Blink redraws come from the idle
+      // wake schedule + overlay-chrome recapture only - never a content
+      // render.
       renderCoordinator_.setTextEditingChrome(
-          SelectionChromeSnapshot::TextCaret{textChrome->caretTopDoc, textChrome->caretBottomDoc},
-          textChrome->boxDoc);
+          textTool_.caretBlinkVisible()
+              ? std::make_optional(SelectionChromeSnapshot::TextCaret{textChrome->caretTopDoc,
+                                                                      textChrome->caretBottomDoc})
+              : std::nullopt,
+          textChrome->frameCornersDoc);
     }
+    renderCoordinator_.setTextBoxDragPreview(std::nullopt);
   } else {
     renderCoordinator_.setTextEditingChrome(std::nullopt, std::nullopt);
+    renderCoordinator_.setTextBoxDragPreview(std::nullopt);
   }
 
   applyPendingDocumentSpaceReplayInputForTesting();
@@ -2815,12 +2856,19 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     // While the Pen tool is active the selected path is itself the live
     // interaction surface, so chrome must track the live DOM even between
     // anchor drags (close-path clicks, deferred clicks processed after
-    // mouse-release).
-    const bool allowLivePenOverlay = penToolActive;
+    // mouse-release). An active text session is the same shape: every
+    // keystroke flushes the DOM ahead of the async renderer, and the caret +
+    // session frame chrome comes from the live post-flush DOM
+    // (TextTool::editingChrome). Without this exception the coordinator's
+    // version gate drops the overlay snapshot for the whole typing burst,
+    // blinking the caret/selection chrome off until the worker catches up.
+    const bool allowLiveGeometryOverlay =
+        penToolActive ||
+        (textToolActive && (textTool_.isEditing() || textTool_.isDraggingBox()));
     updatePenLivePreviewTarget();
     renderCoordinator_.rasterizeOverlayForPresentation(
         app_, selectTool_, interactionController_.viewport(), textures_, activeDragPreview,
-        representedDragPreview, selectionChromeDetailForActiveTool(), allowLivePenOverlay);
+        representedDragPreview, selectionChromeDetailForActiveTool(), allowLiveGeometryOverlay);
   }
   // While the pen live preview is active, the overlay snapshot itself presents
   // the edited path's document pixels (captured from the same post-flush DOM
@@ -2942,12 +2990,47 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
   if (!contentOnlyCaptureThisFrame_) {
     renderSelectionSizeChip(hoverTransformIntent, representedGesturePreview);
     renderReferenceHighlightChip();
+    renderTextToolHint();
     renderToolPalette(paneOriginImGui, contentRegion);
     renderCanvasScrollbars();
     renderRenderPaneContextMenu();
   }
 
   ImGui::End();
+}
+
+void EditorShell::renderTextToolHint() {
+  if (activeTool_ != ActiveTool::Text) {
+    return;
+  }
+  const std::string_view label =
+      internal::TextToolHintLabel(textTool_.isEditing(), textTool_.isDraggingBox());
+  if (label.empty()) {
+    return;
+  }
+
+  // Bottom-center of the render pane, above the canvas scrollbar rail.
+  const ViewportState& viewport = interactionController_.viewport();
+  const ImVec2 textSize =
+      ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, 0.0f, label.data(),
+                                      label.data() + label.size());
+  const float width = textSize.x + 2.0f * kReferenceChipPaddingX;
+  const float height = textSize.y + 2.0f * kReferenceChipPaddingY;
+  const float paneCenterX =
+      static_cast<float>(viewport.paneOrigin.x + viewport.paneSize.x * 0.5);
+  const float x = paneCenterX - width * 0.5f;
+  const float y = static_cast<float>(viewport.paneOrigin.y + viewport.paneSize.y) - height -
+                  static_cast<float>(kCanvasScrollbarRailPx) - 10.0f;
+  if (width > static_cast<float>(viewport.paneSize.x) || y < viewport.paneOrigin.y) {
+    return;  // Pane too small for the hint.
+  }
+
+  ImDrawList* drawList = ImGui::GetWindowDrawList();
+  drawList->AddRectFilled(ImVec2(x, y), ImVec2(x + width, y + height), IM_COL32(34, 48, 54, 235),
+                          kReferenceChipRadius);
+  drawList->AddText(ImGui::GetFont(), ImGui::GetFontSize(),
+                    ImVec2(x + kReferenceChipPaddingX, y + kReferenceChipPaddingY),
+                    IM_COL32(255, 255, 255, 220), label.data(), label.data() + label.size());
 }
 
 void EditorShell::renderCanvasScrollbars() {
@@ -3739,6 +3822,14 @@ void EditorShell::renderReferenceHighlightChip() {
 
 SelectionChromeDetail EditorShell::selectionChromeDetailForActiveTool() const {
   if (activeTool_ == ActiveTool::Pen) {
+    return SelectionChromeDetail::PathOutlinesOnly;
+  }
+  if (activeTool_ == ActiveTool::Text && textTool_.isEditing()) {
+    // The session frame (an oriented quad with its own corner handles,
+    // pushed via setTextEditingChrome) is the selection UI while a text
+    // session is open. Skip the generic axis-aligned bounds + handles: on a
+    // rotated frame they would draw the axis-aligned envelope on top of the
+    // oriented frame.
     return SelectionChromeDetail::PathOutlinesOnly;
   }
   return SelectionChromeDetail::Full;
@@ -4539,6 +4630,13 @@ void EditorShell::runFrame() {
 }
 
 namespace internal {
+
+std::string_view TextToolHintLabel(bool isEditing, bool isDraggingBox) {
+  if (isEditing || isDraggingBox) {
+    return {};
+  }
+  return "Double-click to place text. Drag to draw a text box.";
+}
 
 PendingClickBusyAction PendingClickBusyActionForState(bool tookFastRedrag, bool rendererBusy) {
   if (tookFastRedrag) {

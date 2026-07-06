@@ -182,6 +182,20 @@ TEST(EditorShellInternalTest, CursorForTransformHandleIntentMapsResizeAndRotateH
             ImGuiMouseCursor_ResizeNESW);
 }
 
+TEST(EditorShellInternalTest, TextToolHintShowsOnlyWhileIdle) {
+  // Idle text tool: the double-click / drag affordances are invisible, so
+  // the hint must teach them.
+  const std::string_view idleHint =
+      internal::TextToolHintLabel(/*isEditing=*/false, /*isDraggingBox=*/false);
+  EXPECT_NE(idleHint.find("Double-click"), std::string_view::npos) << idleHint;
+  EXPECT_NE(idleHint.find("Drag"), std::string_view::npos) << idleHint;
+
+  // While a session or a box drag is active the hint would be noise.
+  EXPECT_TRUE(internal::TextToolHintLabel(/*isEditing=*/true, /*isDraggingBox=*/false).empty());
+  EXPECT_TRUE(internal::TextToolHintLabel(/*isEditing=*/false, /*isDraggingBox=*/true).empty());
+  EXPECT_TRUE(internal::TextToolHintLabel(/*isEditing=*/true, /*isDraggingBox=*/true).empty());
+}
+
 TEST(EditorShellInternalTest, ActiveAttributePaintSlotHandlesNoneColorAndCustomValues) {
   const internal::ToolbarPaintSlotState none =
       internal::ToolbarPaintSlotStateForActiveAttribute("none");

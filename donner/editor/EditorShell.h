@@ -368,6 +368,9 @@ private:
       const SelectionTransformHandleIntent& hoverTransformIntent,
       const std::optional<SelectTool::ActiveGesturePreview>& activeGesturePreview);
   void renderReferenceHighlightChip();
+  /// Discoverability hint while the text tool is idle: double-click places
+  /// point text, drag draws a text box. Bottom-center of the render pane.
+  void renderTextToolHint();
   [[nodiscard]] SelectionChromeDetail selectionChromeDetailForActiveTool() const;
   bool flushQueuedMutationAndRefreshOverlay();
   /// Re-run the post-flush presentation refresh after a tool that flushes the

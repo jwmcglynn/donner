@@ -43,6 +43,11 @@ constexpr double kHoverStrokeLogicalPixels = 1.5;
 /// Marquee stroke thickness, in logical UI pixels.
 constexpr double kMarqueeStrokeLogicalPixels = 1.5;
 
+/// Corner handle square size for the text session frame, in logical UI
+/// pixels. Matches SelectionTransformHandles' kHandleSizePixels so the text
+/// frame's handles read identically to the select tool's.
+constexpr double kHandleSizeLogicalPixels = 9.0;
+
 /// Selected path anchor square size, in logical UI pixels.
 constexpr double kPathAnchorLogicalPixels = 5.0;
 
@@ -794,7 +799,8 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
       !snapshot.marqueeDoc.has_value() && !snapshot.lockedFlash.has_value() &&
       !snapshot.livePathPreview.has_value() && !snapshot.penPreviewSegmentDoc.has_value() &&
       !snapshot.penCloseAffordanceDoc.has_value() && !snapshot.textCaretDoc.has_value() &&
-      !snapshot.textBoxDoc.has_value() && snapshot.textBaselinesDoc.empty()) {
+      !snapshot.textFrameCornersDoc.has_value() && !snapshot.textBoxDragPreviewDoc.has_value() &&
+      snapshot.textBaselinesDoc.empty()) {
     return;
   }
 
@@ -911,13 +917,81 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
                       affordancePaint.strokeParams);
   }
 
-  // Text-editing chrome: the box frame reads as guidance (hover-bounds
-  // style); the caret is a solid vertical bar in the selection stroke style.
-  if (snapshot.textBoxDoc.has_value()) {
-    const svg::PaintParams boxPaint = MakeSourceHoverBoundsPaint(snapshot.hoverStrokeWidthWorld);
-    renderer.setPaint(boxPaint);
+  // Drag-to-create text-box preview: a crisp cyan frame (no fill - the
+  // marquee is the one with the translucent fill + white outline), a
+  // guidance first-baseline segment, and an I-beam marker (bar + serifs) at
+  // the future caret position, so the gesture reads as creating a text box.
+  if (snapshot.textBoxDragPreviewDoc.has_value()) {
+    const SelectionChromeSnapshot::TextBoxDragPreview& preview = *snapshot.textBoxDragPreviewDoc;
     renderer.setTransform(snapshot.canvasFromDoc);
-    renderer.drawRect(*snapshot.textBoxDoc, boxPaint.strokeParams);
+
+    const svg::PaintParams framePaint =
+        MakeSelectionStrokePaint(snapshot.selectionStrokeWidthWorld);
+    renderer.setPaint(framePaint);
+    renderer.drawRect(preview.boxDoc, framePaint.strokeParams);
+
+    const svg::PaintParams baselinePaint =
+        MakePathControlLinePaint(snapshot.selectionStrokeWidthWorld);
+    renderer.setPaint(baselinePaint);
+    {
+      PathBuilder builder;
+      builder.moveTo(preview.baselineStartDoc);
+      builder.lineTo(preview.baselineEndDoc);
+      svg::PathShape shape;
+      shape.path = builder.build();
+      shape.parentFromEntity = Transform2d();
+      renderer.drawPath(shape, baselinePaint.strokeParams);
+    }
+
+    const svg::PaintParams ibeamPaint =
+        MakeSelectionStrokePaint(snapshot.selectionStrokeWidthWorld * 1.5);
+    renderer.setPaint(ibeamPaint);
+    {
+      // Serif half-length scales with the bar height so the I-beam keeps its
+      // proportions across zoom levels.
+      const double serifHalf =
+          std::abs(preview.ibeamBottomDoc.y - preview.ibeamTopDoc.y) * 0.15;
+      PathBuilder builder;
+      builder.moveTo(preview.ibeamTopDoc);
+      builder.lineTo(preview.ibeamBottomDoc);
+      builder.moveTo(preview.ibeamTopDoc - Vector2d(serifHalf, 0.0));
+      builder.lineTo(preview.ibeamTopDoc + Vector2d(serifHalf, 0.0));
+      builder.moveTo(preview.ibeamBottomDoc - Vector2d(serifHalf, 0.0));
+      builder.lineTo(preview.ibeamBottomDoc + Vector2d(serifHalf, 0.0));
+      svg::PathShape shape;
+      shape.path = builder.build();
+      shape.parentFromEntity = Transform2d();
+      renderer.drawPath(shape, ibeamPaint.strokeParams);
+    }
+  }
+
+  // Text-editing chrome: the session frame is an oriented quad stroked in
+  // the selection style with resize/rotate handle squares at its corners -
+  // after a rotate it stays aligned to the text's rotation instead of
+  // snapping back to the axis-aligned envelope. The caret is a solid
+  // vertical bar in the selection stroke style.
+  if (snapshot.textFrameCornersDoc.has_value()) {
+    renderer.setTransform(snapshot.canvasFromDoc);
+    const svg::PaintParams framePaint =
+        MakeSelectionStrokePaint(snapshot.selectionStrokeWidthWorld);
+    renderer.setPaint(framePaint);
+    svg::PathShape frameShape;
+    frameShape.path = PathForCorners(*snapshot.textFrameCornersDoc);
+    frameShape.parentFromEntity = Transform2d();
+    renderer.drawPath(frameShape, framePaint.strokeParams);
+
+    // Screen-stable handle squares centered on the oriented corners. Sized
+    // to match SelectionTransformHandleBoxesForBounds (9 logical px) via the
+    // selection stroke's world width (1.25 logical px).
+    const svg::PaintParams handlePaint = MakeHandlePaint(snapshot.selectionStrokeWidthWorld);
+    renderer.setPaint(handlePaint);
+    const double halfHandleWorld = snapshot.selectionStrokeWidthWorld *
+                                   (kHandleSizeLogicalPixels * 0.5 / kSelectionStrokeLogicalPixels);
+    const Vector2d halfHandle(halfHandleWorld, halfHandleWorld);
+    for (const Vector2d& corner : *snapshot.textFrameCornersDoc) {
+      renderer.drawRect(Box2d(corner - halfHandle, corner + halfHandle),
+                        handlePaint.strokeParams);
+    }
   }
   if (snapshot.textCaretDoc.has_value()) {
     const svg::PaintParams caretPaint =
