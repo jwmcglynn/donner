@@ -1,46 +1,40 @@
-# Donner SVG: Embeddable browser-grade SVG2 engine for your application
+# Donner SVG Editor & Engine
 
 [![Build Status](https://github.com/jwmcglynn/donner/actions/workflows/main.yml/badge.svg)](https://github.com/jwmcglynn/donner/actions/workflows/main.yml) [![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](https://opensource.org/licenses/ISC) [![Code coverage %](https://codecov.io/gh/jwmcglynn/donner/branch/main/graph/badge.svg?token=Z3YJZNKGU0)](https://codecov.io/gh/jwmcglynn/donner) ![Product lines of code](https://gist.githubusercontent.com/jwmcglynn/91f7f490a72af9c06506c8176729d218/raw/loc.svg) ![Test lines of code](https://gist.githubusercontent.com/jwmcglynn/91f7f490a72af9c06506c8176729d218/raw/loc-tests.svg)
 ![Comments %](https://gist.githubusercontent.com/jwmcglynn/91f7f490a72af9c06506c8176729d218/raw/comments.svg)
 
-Donner SVG Editor & Engine is an editor application plus an embeddable, reusable SVG rendering, geometry, and DOM engine, providing full access to the SVG DOM. [Try it out online!](https://jwmcglynn.github.io/donner-editor/)
+A native SVG editor, built on its own SVG2 + CSS3 engine, written from scratch in C++20.
+
+Donner is an SVG-native editor: a fast, native tool for creating and editing SVG, backed by an engine
+built for browser-grade correctness, security, and performance. The same engine that powers
+the editor embeds cleanly into your application, from a full GPU-rendered canvas down to a
+size-optimized software renderer.
 
 ![Donner splash image](donner_splash.svg)
 
-```cpp
-ParseWarningSink warnings;
-ParseResult<SVGDocument> maybeDocument = SVGParser::ParseSVG(
-    loadFile("donner_splash.svg"), warnings);
+[Try it out online!](https://jwmcglynn.github.io/donner-editor/)
 
-if (maybeDocument.hasError()) {
-  std::cerr << "Parse Error: " << maybeDocument.error() << "\n";
-  std::abort();
-}
+## Why Donner
 
-Renderer renderer;
-renderer.draw(maybeDocument.result());
+- An SVG-native editor. Selection and transform tools with oriented bounding boxes, a pen
+  tool, rich text editing with real font support, layers, a dockable panel system, and
+  native macOS chrome. Every icon and cursor is an SVG rendered by Donner itself; the
+  document you edit is the SVG, always.
+- High SVG spec conformance. Conformance is tracked continuously against the resvg test suite with visual regression in CI.
+- Fully featured. SVG2 rendering with CSS3 styling, text with a full font stack (FreeType,
+  HarfBuzz, WOFF2) or a compact built-in stack, filters, and the first slice of SMIL
+  animation with time-sampled rendering.
+- High performance. Geode, a GPU renderer built on WebGPU, drives the editor canvas; a
+  tiny_skia-based CPU backend serves the size-optimized embeddable build.
+- Secure. Built for untrusted content: 24 fuzzers run continuously, and the
+  engine's design lineage includes shipping untrusted SVG and glTF rendering inside
+  privileged apps.
+- Embeddable. Available on the Bazel Central Registry as a C++20 module; the tiny variant
+  is tuned for binary size.
 
-const bool success = renderer.save("output.png");
-```
+## The editor
 
-## Why Donner?
-
-- It's designed to be embeddable, and provides an exception-free API surface
-- For malformed files, it produces detailed parse errors, which includes file/line information
-- Donner provides an extensive and well-documented SVG API surface, which enables inspecting and modifying the SVG in-memory
-- Donner implements the latest standards, SVG2 and CSS3 and aims for high-conformance
-
-Donner supports:
-
-- SVG2 core functionality, such as shapes, fills, strokes, and gradients
-- Text rendering with `<text>`, `<tspan>`, and `<textPath>`, including WOFF2 web fonts and optional HarfBuzz shaping
-- All 17 SVG filter primitives (feGaussianBlur, feColorMatrix, feComposite, etc.)
-- CSS3 parsing and cascading support, with a hand-rolled library
-- Detailed validation and diagnostics, errors point to the exact location
-- A game-engine-inspired [EnTT](https://github.com/skypjack/entt) ECS-backed document tree, optimized for performance
-- A SVG DOM-style API to traverse, inspect, and modify documents in memory
-- A two-phase renderer, which builds and caches a rendering tree for efficient frame-based rendering
-- Two renderer backends: **tiny-skia** (default, a lightweight software renderer) and **Skia** (Chromium's renderer)
+The editor ships with the engine and is under active development. Open a file, edit visually or in the built-in XML view with two-way sync, and export clean SVG.
 
 ## Supported Elements
 
