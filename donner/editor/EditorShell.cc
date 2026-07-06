@@ -27,8 +27,10 @@
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/DocumentSave.h"
 #include "donner/editor/DragCoalesce.h"
+#include "donner/editor/EditorDockLayout.h"
 #include "donner/editor/EditorShellInternal.h"
 #include "donner/editor/FillStrokeWidget.h"
+#include "donner/editor/ImGuiInternalIncludes.h"
 #include "donner/editor/EditorShellPresentation.h"
 #include "donner/editor/EditorTheme.h"
 #include "donner/editor/FocusView.h"
@@ -77,15 +79,9 @@ constexpr float kMaxSourcePaneWidth = 900.0f;
 constexpr float kSourcePaneSplitterThickness = 6.0f;
 constexpr float kSourcePaneRevealHandleWidth = 10.0f;
 constexpr float kSourcePaneCollapseThreshold = kMinSourcePaneWidth;
-constexpr float kTreeViewHeightFraction = 0.33f;
 constexpr float kKeyboardZoomStep = 1.5f;
-constexpr float kRightPaneSplitterThickness = 6.0f;
-constexpr float kLayerPanelSplitterThickness = 6.0f;
-constexpr float kLayerPanelDragHandleHeight = 26.0f;
 constexpr float kMinRightPaneWidth = 220.0f;
 constexpr float kMaxRightPaneWidth = 900.0f;
-constexpr float kMinInspectorPaneHeight = 96.0f;
-constexpr float kMinLayerPanelHeight = 140.0f;
 constexpr double kTrackpadPanPixelsPerScrollUnit = 10.0;
 constexpr double kWheelZoomStep = 1.1;
 constexpr double kSelectMarqueeHoldDelaySeconds = 0.20;
@@ -1594,6 +1590,16 @@ void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
   const bool showCompositorDebugPanelBeforeMenu = showCompositorDebugPanel_;
   const PerfOverlayMode perfOverlayModeBeforeMenu = perfOverlayMode_;
   ApplyViewMenuToggleActions(menuActions, &showCompositorDebugPanel_, &perfOverlayMode_);
+  // DockSpace layout controls: toggle the lock or request a rebuild of the
+  // default layout. renderDockSpaceHost consumes the reset request next frame.
+  if (menuActions.toggleLayoutLock) {
+    dockLayoutLocked_ = !dockLayoutLocked_;
+    window_.wakeEventLoop();
+  }
+  if (menuActions.resetLayout) {
+    dockLayoutResetRequested_ = true;
+    window_.wakeEventLoop();
+  }
   if (showCompositorDebugPanel_ != showCompositorDebugPanelBeforeMenu ||
       perfOverlayMode_ != perfOverlayModeBeforeMenu) {
     window_.wakeEventLoop();
@@ -2424,15 +2430,12 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
   ImGui::PopID();
 }
 
-void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vector2d& renderPaneSize,
-                                   ImGuiWindowFlags paneFlags) {
-  ImGui::SetNextWindowPos(
-      ImVec2(static_cast<float>(renderPaneOrigin.x), static_cast<float>(renderPaneOrigin.y)),
-      ImGuiCond_Always);
-  ImGui::SetNextWindowSize(
-      ImVec2(static_cast<float>(renderPaneSize.x), static_cast<float>(renderPaneSize.y)),
-      ImGuiCond_Always);
-  ImGui::Begin("Render", nullptr, paneFlags);
+void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
+  // The render pane is docked into the DockSpace central node (see
+  // renderDockSpaceHost); the DockSpace owns its position and size, so we no
+  // longer place it manually. The window's content region below still drives the
+  // authoritative viewport pane layout.
+  ImGui::Begin(kRenderPaneWindowName, nullptr, paneFlags);
 
   renderPaneScrollYForDiagnostics_ = ImGui::GetScrollY();
   renderPaneScrollMaxYForDiagnostics_ = ImGui::GetScrollMaxY();
@@ -2450,10 +2453,25 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     viewportInitialized_ = true;
   }
 
+  // The canvas is docked into the DockSpace central node, whose size only
+  // settles after ImGui has run a dock update. On the very first frame the
+  // freshly-docked "Render" window briefly reports the full host width before
+  // the right-column split is applied. Fit-to-actual-size must not latch on that
+  // transient size (it would center the document for the wrong pane and clip it
+  // once the pane settles), so we keep re-fitting until the pane size is stable
+  // across two consecutive frames, then latch.
+  const bool renderPaneSizeStable =
+      std::abs(contentRegion.x - lastRenderPaneContentSize_.x) < 1.0f &&
+      std::abs(contentRegion.y - lastRenderPaneContentSize_.y) < 1.0f;
+  lastRenderPaneContentSize_ = Vector2d(contentRegion.x, contentRegion.y);
   if (!viewportInitialized_ && interactionController_.viewport().paneSize.x > 0.0 &&
       interactionController_.viewport().paneSize.y > 0.0 && app_.hasDocument()) {
     std::ignore = interactionController_.resetToActualSize();
-    viewportInitialized_ = true;
+    if (renderPaneSizeStable) {
+      viewportInitialized_ = true;
+    } else {
+      window_.wakeEventLoop();
+    }
   }
 
   // Capture chrome for the document version that is already being presented before this frame's
@@ -3273,8 +3291,13 @@ void EditorShell::renderCanvasScrollbars() {
   }
 }
 
-void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float paneOriginY,
-                                 const RightSidebarLayout& layout, ImGuiWindowFlags paneFlags) {
+void EditorShell::renderSidebars() {
+  // The right-column panels are dockable windows owned by the DockSpace (see
+  // renderDockSpaceHost); their position, size, and tab bars are managed by
+  // docking, so we no longer place them with SetNextWindowPos/Size. NoCollapse
+  // keeps the docked tab from adding a collapse arrow; scrollbars stay enabled
+  // so long panel content scrolls within its own node.
+  constexpr ImGuiWindowFlags kDockedPaneFlags = ImGuiWindowFlags_NoCollapse;
   const auto& selectionBeforeTree = app_.selectedElement();
   if (selectionBeforeTree != lastTreeSelection_) {
     treeviewPendingScroll_ = selectionBeforeTree.has_value() && !treeSelectionOriginatedInTree_;
@@ -3297,9 +3320,7 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
   // sidebar window. `SidebarPresenter` is still the
   // Inspector backend below (`renderInspector`), and its `renderTreeView` /
   // tests remain; it is simply no longer the user-facing outline.
-  ImGui::SetNextWindowPos(ImVec2(rightPaneX, paneOriginY), ImGuiCond_Always);
-  ImGui::SetNextWindowSize(ImVec2(rightPaneWidth, layout.treePaneHeight), ImGuiCond_Always);
-  ImGui::Begin("Layers", nullptr, paneFlags);
+  ImGui::Begin(kLayersWindowName, nullptr, kDockedPaneFlags);
   std::vector<std::uint64_t> liveThumbnailKeys;
   liveThumbnailKeys.reserve(layersPanel_.rows().size() + 4u);
   // Donner renders each row's preview to a bitmap during refreshSnapshot; here
@@ -3376,9 +3397,7 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
   ImGui::End();
   lastTreeSelection_ = app_.selectedElement();
 
-  ImGui::SetNextWindowPos(ImVec2(rightPaneX, layout.inspectorPaneY), ImGuiCond_Always);
-  ImGui::SetNextWindowSize(ImVec2(rightPaneWidth, layout.inspectorPaneHeight), ImGuiCond_Always);
-  ImGui::Begin("Inspector", nullptr, paneFlags);
+  ImGui::Begin(kInspectorWindowName, nullptr, kDockedPaneFlags);
   const bool inspectorQueuedMutation = sidebarPresenter_.renderInspector(
       liveAppForClicks, interactionController_.viewport(), sidebarIconTextureProvider);
   // Text-property inspector: shown only when the selection is exactly one
@@ -3397,19 +3416,15 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
   thumbnailTextures_.retainThumbnailsOnly(liveThumbnailKeys);
 
   // The Compositor Debug panel is a developer diagnostics view, hidden unless
-  // toggled on from the View menu. The user-facing Layers/Inspector panes above
-  // are unaffected.
-  if (!showCompositorDebugPanel_ || layerPanelDetached_) {
+  // toggled on from the View menu. It is now an ordinary dockable window in the
+  // same DockSpace (its content is unchanged); the homegrown detach/float host
+  // is gone - unlock the layout to tear it off into a floating imgui window.
+  if (!showCompositorDebugPanel_) {
     return;
   }
 
-  ImGui::SetNextWindowPos(ImVec2(rightPaneX, layout.layerPanelPaneY), ImGuiCond_Always);
-  ImGui::SetNextWindowSize(ImVec2(rightPaneWidth, layout.layerPanelHeight), ImGuiCond_Always);
-  ImGui::Begin("Compositor Debug##docked_compositor_debug", nullptr, paneFlags);
-  renderDockedLayerPanelDragHandle();
-  if (!layerPanelDetached_) {
-    renderLayerPanelContents();
-  }
+  ImGui::Begin(kCompositorDebugWindowName, nullptr, kDockedPaneFlags);
+  renderLayerPanelContents();
   ImGui::End();
 }
 
@@ -3498,140 +3513,49 @@ void EditorShell::renderSourcePaneSplitter(float windowWidth, float paneOriginY,
   ImGui::PopStyleVar(2);
 }
 
-void EditorShell::renderRightPaneSplitter(float windowWidth, float paneOriginY, float paneHeight) {
-  const float splitterCenterX = windowWidth - rightPaneWidth_;
-  const float splitterLeft = splitterCenterX - kRightPaneSplitterThickness * 0.5f;
+void EditorShell::renderDockSpaceHost(float hostX, float hostY, float hostWidth, float hostHeight) {
+  const ImGuiID dockspaceId = EditorDockSpaceId();
 
-  ImGui::SetNextWindowPos(ImVec2(splitterLeft, paneOriginY), ImGuiCond_Always);
-  ImGui::SetNextWindowSize(ImVec2(kRightPaneSplitterThickness, paneHeight), ImGuiCond_Always);
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+  ImGui::SetNextWindowPos(ImVec2(hostX, hostY), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(hostWidth, hostHeight), ImGuiCond_Always);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
   ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-  constexpr ImGuiWindowFlags kSplitterFlags =
-      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
-      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar |
-      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground;
-  ImGui::Begin("##right_pane_splitter", nullptr, kSplitterFlags);
-  ImGui::InvisibleButton("##right_pane_splitter_handle",
-                         ImVec2(kRightPaneSplitterThickness, paneHeight));
-  if (ImGui::IsItemActive()) {
-    const float deltaX = ImGui::GetIO().MouseDelta.x;
-    // Dragging the splitter LEFT (negative deltaX) widens the right pane.
-    rightPaneWidth_ = std::clamp(rightPaneWidth_ - deltaX, kMinRightPaneWidth, kMaxRightPaneWidth);
-  }
-  if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
-    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-  }
-  ImGui::End();
+  // The host is a fixed, chromeless container that only carries the DockSpace.
+  // NoBringToFrontOnFocus keeps it behind any floating (torn-off) panel; its own
+  // NoDocking stops it being dragged into the DockSpace.
+  constexpr ImGuiWindowFlags kHostFlags =
+      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus |
+      ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoScrollbar |
+      ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoBackground;
+  ImGui::Begin("##editor_dock_host", nullptr, kHostFlags);
   ImGui::PopStyleVar(2);
-}
 
-void EditorShell::renderLayerPanelSplitter(float rightPaneX, float rightPaneWidth,
-                                           const RightSidebarLayout& layout) {
-  ImGui::SetNextWindowPos(ImVec2(rightPaneX, layout.layerPanelSplitterY), ImGuiCond_Always);
-  ImGui::SetNextWindowSize(ImVec2(rightPaneWidth, kLayerPanelSplitterThickness), ImGuiCond_Always);
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-  constexpr ImGuiWindowFlags kSplitterFlags =
-      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
-      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar |
-      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground;
-  ImGui::Begin("##layer_panel_splitter", nullptr, kSplitterFlags);
-  ImGui::InvisibleButton("##layer_panel_splitter_handle",
-                         ImVec2(rightPaneWidth, kLayerPanelSplitterThickness));
-  if (ImGui::IsItemActive()) {
-    layerPanelHeightFraction_ = ResizeLayerPanelHeightFraction(
-        layerPanelHeightFraction_, layout.lowerPaneHeight, layout.minLayerPanelHeight,
-        layout.maxLayerPanelHeight, ImGui::GetIO().MouseDelta.y);
-  }
-  if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
-    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
-  }
-
-  const bool splitterActive = ImGui::IsItemActive();
-  const bool splitterHovered = ImGui::IsItemHovered();
-  const ImU32 color = ImGui::GetColorU32(splitterActive    ? ImGuiCol_SeparatorActive
-                                         : splitterHovered ? ImGuiCol_SeparatorHovered
-                                                           : ImGuiCol_Separator);
-  ImGui::GetWindowDrawList()->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
-                                            color);
-  ImGui::End();
-  ImGui::PopStyleVar(2);
-}
-
-void EditorShell::renderDockedLayerPanelDragHandle() {
-  const ImGuiStyle& style = ImGui::GetStyle();
-  const ImVec2 start = ImGui::GetCursorScreenPos();
-  const ImVec2 size(ImGui::GetContentRegionAvail().x, kLayerPanelDragHandleHeight);
-  ImGui::InvisibleButton("##layer_panel_detach_handle", size);
-
-  const bool handleActive = ImGui::IsItemActive();
-  const bool handleHovered = ImGui::IsItemHovered();
-  if (handleHovered || handleActive) {
-    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
-  }
-
-  const ImU32 background = ImGui::GetColorU32(handleActive    ? ImGuiCol_HeaderActive
-                                              : handleHovered ? ImGuiCol_HeaderHovered
-                                                              : ImGuiCol_Header);
-  const ImU32 textColor = ImGui::GetColorU32(ImGuiCol_Text);
-  const ImVec2 end(start.x + size.x, start.y + size.y);
-  ImDrawList* drawList = ImGui::GetWindowDrawList();
-  drawList->AddRectFilled(start, end, background);
-  drawList->AddText(ImVec2(start.x + style.FramePadding.x, start.y + style.FramePadding.y),
-                    textColor, "Compositor Debug");
-
-  const char* handleText = "::";
-  const ImVec2 handleTextSize = ImGui::CalcTextSize(handleText);
-  drawList->AddText(
-      ImVec2(end.x - handleTextSize.x - style.FramePadding.x, start.y + style.FramePadding.y),
-      textColor, handleText);
-
-  if (handleActive && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f)) {
-    layerPanelDetached_ = true;
-    layerPanelDetachDragActive_ = true;
-    layerPanelFloatingNeedsPlacement_ = true;
-    layerPanelFloatingPos_ = ImGui::GetWindowPos();
-    layerPanelFloatingSize_ = ImGui::GetWindowSize();
-  }
-}
-
-void EditorShell::renderFloatingLayerPanel() {
-  if (!showCompositorDebugPanel_ || !layerPanelDetached_) {
-    return;
-  }
-
-  if (layerPanelDetachDragActive_) {
-    const ImGuiIO& io = ImGui::GetIO();
-    layerPanelFloatingPos_.x += io.MouseDelta.x;
-    layerPanelFloatingPos_.y += io.MouseDelta.y;
-    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-      layerPanelDetachDragActive_ = false;
+  // Decide whether to (re)build the default layout. On the first frame a valid
+  // node loaded from the persisted .ini is adopted as-is (persistence); a
+  // missing/corrupt ini leaves no node, so we fall back to the default layout.
+  // A reset request or a change to the docked-panel set always rebuilds.
+  const bool hasNode = ImGui::DockBuilderGetNode(dockspaceId) != nullptr;
+  const bool compositorSetChanged = dockCompositorIncludedInLayout_ != showCompositorDebugPanel_;
+  const bool needBuild =
+      dockLayoutResetRequested_ || !dockLayoutBuilt_ || !hasNode || compositorSetChanged;
+  if (needBuild) {
+    const bool adoptPersisted =
+        hasNode && !dockLayoutResetRequested_ && !dockLayoutBuilt_ && !compositorSetChanged;
+    if (!adoptPersisted) {
+      EditorDockLayoutParams params;
+      params.size = ImVec2(hostWidth, hostHeight);
+      params.rightColumnRatio =
+          hostWidth > 0.0f ? std::clamp(rightPaneWidth_ / hostWidth, 0.15f, 0.5f) : 0.26f;
+      params.includeCompositorDebug = showCompositorDebugPanel_;
+      BuildDefaultDockLayout(dockspaceId, params);
     }
+    dockLayoutBuilt_ = true;
+    dockLayoutResetRequested_ = false;
+    dockCompositorIncludedInLayout_ = showCompositorDebugPanel_;
   }
 
-  if (layerPanelFloatingNeedsPlacement_ || layerPanelDetachDragActive_) {
-    ImGui::SetNextWindowPos(layerPanelFloatingPos_, ImGuiCond_Always);
-  }
-  if (layerPanelFloatingNeedsPlacement_) {
-    ImGui::SetNextWindowSize(layerPanelFloatingSize_, ImGuiCond_Always);
-  }
-
-  bool layerPanelOpen = true;
-  constexpr ImGuiWindowFlags kFloatingFlags = ImGuiWindowFlags_NoCollapse;
-  ImGui::Begin("Compositor Debug##floating_compositor_debug", &layerPanelOpen, kFloatingFlags);
-  layerPanelFloatingNeedsPlacement_ = false;
-  layerPanelFloatingPos_ = ImGui::GetWindowPos();
-  layerPanelFloatingSize_ = ImGui::GetWindowSize();
-
-  if (!layerPanelOpen || ImGui::Button("Dock")) {
-    layerPanelDetached_ = false;
-    layerPanelDetachDragActive_ = false;
-    layerPanelFloatingNeedsPlacement_ = false;
-    ImGui::End();
-    return;
-  }
-
-  renderLayerPanelContents();
+  ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f), EditorDockSpaceFlags(dockLayoutLocked_));
   ImGui::End();
 }
 
@@ -4677,23 +4601,27 @@ void EditorShell::runFrame() {
       .minRenderPaneWidth = kMinRightPaneWidth,
   });
   rightPaneWidth_ = mainPaneLayout.rightPaneWidth;
-  const float rightPaneX = mainPaneLayout.rightPaneX;
-  const float rightPaneGap = ImGui::GetStyle().ItemSpacing.y;
-  const RightSidebarLayout rightSidebarLayout = ComputeRightSidebarLayout({
-      .paneOriginY = paneOriginY,
-      .paneHeight = paneHeight,
-      .rightPaneGap = rightPaneGap,
-      .treeViewHeightFraction = kTreeViewHeightFraction,
-      .layerPanelHeightFraction = layerPanelHeightFraction_,
-      .layerPanelDetached = layerPanelDetached_,
-      .layerPanelSplitterThickness = kLayerPanelSplitterThickness,
-      .minLayerPanelHeight = kMinLayerPanelHeight,
-      .minInspectorPaneHeight = kMinInspectorPaneHeight,
-  });
-  layerPanelHeightFraction_ = rightSidebarLayout.layerPanelHeightFraction;
-  const Vector2d renderPaneOrigin(mainPaneLayout.renderPaneX, paneOriginY);
-  const Vector2d renderPaneSize(mainPaneLayout.renderPaneWidth, paneHeight);
+  const float dockHostX = mainPaneLayout.renderPaneX;
+  const float dockHostWidth = std::max(0.0f, static_cast<float>(windowSize.x) - dockHostX);
 
+  // Submit the DockSpace host that owns the canvas (central node) and the
+  // right-column dockable panels, (re)building and locking the layout as needed.
+  // This replaces the former manual pixel splitters and the homegrown Compositor
+  // Debug float.
+  renderDockSpaceHost(dockHostX, paneOriginY, dockHostWidth, paneHeight);
+
+  // Pre-seed the viewport pane layout from the canvas central node so global
+  // shortcuts (zoom-to-cursor, etc.) see the right geometry this frame;
+  // renderRenderPane re-runs updatePaneLayout authoritatively from the docked
+  // window's content region below.
+  Vector2d renderPaneOrigin(dockHostX, paneOriginY);
+  Vector2d renderPaneSize(dockHostWidth, paneHeight);
+  if (const ImGuiDockNode* centralNode = ImGui::DockBuilderGetCentralNode(EditorDockSpaceId())) {
+    if (centralNode->Size.x > 0.0f && centralNode->Size.y > 0.0f) {
+      renderPaneOrigin = Vector2d(centralNode->Pos.x, centralNode->Pos.y);
+      renderPaneSize = Vector2d(centralNode->Size.x, centralNode->Size.y);
+    }
+  }
   interactionController_.updatePaneLayout(
       renderPaneOrigin, renderPaneSize,
       app_.hasDocument() ? std::make_optional(ResolveDocumentViewBox(app_.document().document()))
@@ -4716,6 +4644,7 @@ void EditorShell::runFrame() {
       .hasSelectableElements = canvasHasSelectableElements(),
       .showCompositorDebugPanel = showCompositorDebugPanel_,
       .perfOverlayMode = perfOverlayMode_,
+      .panelLayoutLocked = dockLayoutLocked_,
   };
   const MenuBarActions menuActions = menuBarPresenter_.render(menuState, uiFontBold_);
   applyMenuActions(menuActions);
@@ -4741,8 +4670,6 @@ void EditorShell::runFrame() {
       });
   markPhase(mainFrameCost.menusDialogsMs);
 
-  constexpr ImGuiWindowFlags kPaneFlags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
-                                          ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar;
   std::ignore = highlightSelectionSourceIfNeeded();
   if (sourcePaneVisible_) {
     renderSourcePane(paneOriginY, paneHeight, mainPaneLayout.sourcePaneWidth, codeFont_);
@@ -4756,22 +4683,19 @@ void EditorShell::runFrame() {
   // scroll the in-pane overlay chrome (toolbar, perf HUD) away from the
   // canvas. Canvas scrolling is the emulated document-extent scrollbars +
   // wheel panning instead.
-  renderRenderPane(renderPaneOrigin, renderPaneSize,
-                   kPaneFlags | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar |
-                       ImGuiWindowFlags_NoScrollWithMouse);
+  renderRenderPane(ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBackground |
+                   ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
   markPhase(mainFrameCost.renderPaneMs);
-  renderSidebars(rightPaneX, rightPaneWidth_, paneOriginY, rightSidebarLayout, kPaneFlags);
+  renderSidebars();
   if (highlightSelectionSourceIfNeeded()) {
     window_.wakeEventLoop();
   }
   markPhase(mainFrameCost.sidebarsMs);
+  // The left source/render splitter stays manual (its collapse/reveal behavior is
+  // out of scope for docking); the right-column splitters and the Compositor
+  // Debug float are now owned by the DockSpace submitted above.
   renderSourcePaneSplitter(static_cast<float>(windowSize.x), paneOriginY, paneHeight,
                            mainPaneLayout.sourcePaneWidth);
-  renderRightPaneSplitter(static_cast<float>(windowSize.x), paneOriginY, paneHeight);
-  if (!layerPanelDetached_) {
-    renderLayerPanelSplitter(rightPaneX, rightPaneWidth_, rightSidebarLayout);
-  }
-  renderFloatingLayerPanel();
   markPhase(mainFrameCost.splittersMs);
   if (requestRenderAtEndOfFrame_) {
     if (!app_.hasDocument()) {

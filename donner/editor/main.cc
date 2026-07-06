@@ -34,6 +34,36 @@ std::string EmbeddedBytesToString(std::span<const unsigned char> bytes) {
   return text;
 }
 
+#ifndef __EMSCRIPTEN__
+// Scoped per-user path for the ImGui settings (.ini) file that persists the
+// editor's dock layout and window state across sessions. Returns an empty string
+// if no writable config directory can be resolved, in which case the editor
+// keeps its settings in-memory and always starts from the default layout.
+std::string ScopedImguiIniPath() {
+  std::error_code ec;
+  std::filesystem::path configDir;
+#if defined(__APPLE__)
+  if (const char* home = std::getenv("HOME")) {
+    configDir = std::filesystem::path(home) / "Library" / "Application Support" / "Donner";
+  }
+#else
+  if (const char* xdg = std::getenv("XDG_CONFIG_HOME"); xdg != nullptr && xdg[0] != '\0') {
+    configDir = std::filesystem::path(xdg) / "donner";
+  } else if (const char* home = std::getenv("HOME")) {
+    configDir = std::filesystem::path(home) / ".config" / "donner";
+  }
+#endif
+  if (configDir.empty()) {
+    return {};
+  }
+  std::filesystem::create_directories(configDir, ec);
+  if (ec) {
+    return {};
+  }
+  return (configDir / "editor_imgui.ini").string();
+}
+#endif
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -92,9 +122,14 @@ int main(int argc, char** argv) {
   }
 #endif
 
+  std::string imguiIniPath;
+#ifndef __EMSCRIPTEN__
+  imguiIniPath = ScopedImguiIniPath();
+#endif
   donner::editor::gui::EditorWindow window({.title = "Donner SVG Editor",
                                             .initialWidth = kInitialWindowWidth,
-                                            .initialHeight = kInitialWindowHeight});
+                                            .initialHeight = kInitialWindowHeight,
+                                            .imguiIniPath = imguiIniPath});
   if (!window.valid()) {
     std::cerr << "Failed to initialize editor window\n";
     return 1;

@@ -79,6 +79,17 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "editor_dock_layout_tests",
+    srcs = ["EditorDockLayout_tests.cc"],
+    deps = [
+        "//donner/editor:editor_dock_layout",
+        "//donner/editor:imgui_headers",
+        "@com_google_gtest//:gtest_main",
+        "@imgui",
+    ],
+)
+
+donner_cc_test(
     name = "file_dialog_state_tests",
     srcs = ["FileDialogState_tests.cc"],
     deps = [

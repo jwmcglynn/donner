@@ -43,6 +43,9 @@ struct MenuBarState {
   /// Current render-pane performance overlay mode (drives the View-menu
   /// checkmarks). Off by default.
   PerfOverlayMode perfOverlayMode = PerfOverlayMode::Off;
+  /// Whether the dockable panel layout is locked (drives the View-menu "Lock
+  /// Panel Layout" checkmark). Locked by default.
+  bool panelLayoutLocked = true;
 };
 
 struct MenuBarActions {
@@ -82,6 +85,10 @@ struct MenuBarActions {
   /// Requested performance overlay mode; meaningful only while
   /// `setPerfOverlayMode` is true.
   PerfOverlayMode perfOverlayMode = PerfOverlayMode::Off;
+  /// Set when the user toggles the panel-layout lock via the View menu.
+  bool toggleLayoutLock = false;
+  /// Set when the user picks "Reset Layout" to restore the default dock layout.
+  bool resetLayout = false;
 };
 
 /// Semantic command emitted by a top-level menu item.
@@ -111,6 +118,8 @@ enum class MenuBarCommand {
   SetPerfOverlayOff,
   SetPerfOverlayFpsPill,
   SetPerfOverlayFullGraph,
+  ToggleLayoutLock,
+  ResetLayout,
 };
 
 /// Apply an activated semantic menu command to an action accumulator.
