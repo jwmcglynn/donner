@@ -128,21 +128,9 @@ std::optional<double> ParseNumericAttribute(const svg::SVGElement& element, std:
   return result.result().number;
 }
 
-/// Document-space corners (local TL, TR, BR, BL order) of @p frameLocal
-/// mapped through @p documentFromText. An oriented quad: for a rotated text
-/// element the corners carry the rotation instead of collapsing to the
-/// axis-aligned envelope.
-std::array<Vector2d, 4> FrameCornersDoc(const Transform2d& documentFromText,
-                                        const Box2d& frameLocal) {
-  const std::array<Vector2d, 4> cornersLocal = {
-      frameLocal.topLeft, Vector2d(frameLocal.bottomRight.x, frameLocal.topLeft.y),
-      frameLocal.bottomRight, Vector2d(frameLocal.topLeft.x, frameLocal.bottomRight.y)};
-  std::array<Vector2d, 4> cornersDoc;
-  for (std::size_t i = 0; i < cornersLocal.size(); ++i) {
-    cornersDoc[i] = documentFromText.transformPosition(cornersLocal[i]);
-  }
-  return cornersDoc;
-}
+// Document-space oriented frame corners are provided by the shared
+// `FrameCornersDoc` in SelectionTransformHandles.h (used by both the text
+// tool's editing frame and the select tool's oriented <text> frame).
 
 /// Map a DOM character index (which counts rendered glyphs only) back to a
 /// logical caret index into @p content (which also stores '\n' hard breaks).
@@ -183,7 +171,22 @@ void TextTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
       }
       if (const std::optional<std::size_t> caret = caretIndexAtPoint(documentPoint);
           caret.has_value()) {
+        // Double-click selects the word under the pointer; shift+press extends
+        // the existing selection to the pointer; a plain press moves the caret
+        // and arms a drag-selection anchored at the press.
+        if (modifiers.doubleClick) {
+          selectWordAt(documentPoint);
+          return;
+        }
+        if (modifiers.shift) {
+          if (!selectionAnchor_.has_value()) {
+            selectionAnchor_ = caretIndex_;
+          }
+        } else {
+          selectionAnchor_ = *caret;
+        }
         caretIndex_ = *caret;
+        draggingSelection_ = true;
         resetCaretBlinkPhase();
         return;
       }
@@ -191,6 +194,8 @@ void TextTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
         const Vector2d localPoint = documentFromText_.inverse().transformPosition(documentPoint);
         if (frameLocal->contains(localPoint)) {
           caretIndex_ = content_.size();
+          selectionAnchor_ = caretIndex_;
+          draggingSelection_ = true;
           resetCaretBlinkPhase();
           return;
         }
@@ -231,6 +236,20 @@ void TextTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, boo
     return;
   }
 
+  if (draggingSelection_ && state_ == State::Editing) {
+    // Extend the selection to the pointer's caret position. When the pointer
+    // is off every glyph the caret holds its last position (the anchor stays
+    // pinned), so the highlight does not jump.
+    if (buttonHeld) {
+      if (const std::optional<std::size_t> caret = caretIndexAtPoint(documentPoint);
+          caret.has_value()) {
+        caretIndex_ = *caret;
+        resetCaretBlinkPhase();
+      }
+    }
+    return;
+  }
+
   if (state_ != State::DraggingBox || !buttonHeld) {
     return;
   }
@@ -243,6 +262,16 @@ void TextTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, boo
 }
 
 void TextTool::onMouseUp(EditorApp& editor, const Vector2d& documentPoint) {
+  if (draggingSelection_) {
+    draggingSelection_ = false;
+    // A press-release with no motion leaves a zero-width range; drop the
+    // anchor so it reads as a plain collapsed caret.
+    if (!hasSelection()) {
+      collapseSelection();
+    }
+    return;
+  }
+
   if (frameGesture_ != FrameGesture::None) {
     // Frame gestures end on release; the editing session stays open.
     frameGesture_ = FrameGesture::None;
@@ -307,6 +336,8 @@ void TextTool::beginEditingSession(EditorApp& editor, const Vector2d& originDoc,
   content_.clear();
   cachedCharWidths_.clear();
   caretIndex_ = 0;
+  selectionAnchor_.reset();
+  draggingSelection_ = false;
   state_ = State::Editing;
   resetCaretBlinkPhase();
 
@@ -381,6 +412,8 @@ void TextTool::beginEditingSessionForExisting(EditorApp& editor, const svg::SVGT
   state_ = State::Editing;
   cachedCharWidths_ = measureCharacterWidths(editor);
   caretIndex_ = caretIndexAtPoint(documentPoint).value_or(content_.size());
+  selectionAnchor_.reset();
+  draggingSelection_ = false;
   resetCaretBlinkPhase();
 
   editor.setSelection(text);
@@ -550,10 +583,25 @@ void TextTool::updateFrameGesture(EditorApp& editor, const Vector2d& documentPoi
   syncContentToDom(editor);
 }
 
+bool TextTool::deleteSelection(EditorApp& editor) {
+  (void)editor;
+  if (!hasSelection()) {
+    return false;
+  }
+  const std::size_t start = selectionStart();
+  const std::size_t end = selectionEnd();
+  content_.erase(content_.begin() + static_cast<std::ptrdiff_t>(start),
+                 content_.begin() + static_cast<std::ptrdiff_t>(end));
+  caretIndex_ = start;
+  collapseSelection();
+  return true;
+}
+
 void TextTool::insertCodepoint(EditorApp& editor, char32_t codepoint) {
   if (state_ != State::Editing || !IsInsertableCodepoint(codepoint)) {
     return;
   }
+  deleteSelection(editor);
   content_.insert(content_.begin() + static_cast<std::ptrdiff_t>(caretIndex_), codepoint);
   ++caretIndex_;
   resetCaretBlinkPhase();
@@ -564,6 +612,7 @@ void TextTool::insertNewline(EditorApp& editor) {
   if (state_ != State::Editing) {
     return;
   }
+  deleteSelection(editor);
   content_.insert(content_.begin() + static_cast<std::ptrdiff_t>(caretIndex_), U'\n');
   ++caretIndex_;
   resetCaretBlinkPhase();
@@ -571,7 +620,15 @@ void TextTool::insertNewline(EditorApp& editor) {
 }
 
 void TextTool::backspace(EditorApp& editor) {
-  if (state_ != State::Editing || caretIndex_ == 0) {
+  if (state_ != State::Editing) {
+    return;
+  }
+  if (deleteSelection(editor)) {
+    resetCaretBlinkPhase();
+    syncContentToDom(editor);
+    return;
+  }
+  if (caretIndex_ == 0) {
     return;
   }
   content_.erase(content_.begin() + static_cast<std::ptrdiff_t>(caretIndex_) - 1);
@@ -581,7 +638,15 @@ void TextTool::backspace(EditorApp& editor) {
 }
 
 void TextTool::deleteForward(EditorApp& editor) {
-  if (state_ != State::Editing || caretIndex_ >= content_.size()) {
+  if (state_ != State::Editing) {
+    return;
+  }
+  if (deleteSelection(editor)) {
+    resetCaretBlinkPhase();
+    syncContentToDom(editor);
+    return;
+  }
+  if (caretIndex_ >= content_.size()) {
     return;
   }
   content_.erase(content_.begin() + static_cast<std::ptrdiff_t>(caretIndex_));
@@ -589,9 +654,30 @@ void TextTool::deleteForward(EditorApp& editor) {
   syncContentToDom(editor);
 }
 
-void TextTool::moveCaret(EditorApp& editor, CaretMove move) {
+void TextTool::moveCaret(EditorApp& editor, CaretMove move, bool extend) {
   if (state_ != State::Editing) {
     return;
+  }
+
+  if (extend) {
+    // Pin the anchor at the current caret the first time a shift-move starts a
+    // selection; subsequent shift-moves keep growing from that anchor.
+    if (!selectionAnchor_.has_value()) {
+      selectionAnchor_ = caretIndex_;
+    }
+  } else if (hasSelection()) {
+    // A plain directional move over a selection snaps to the edge in the move
+    // direction and collapses, without an additional one-code-point nudge.
+    const bool toStart = move == CaretMove::Left || move == CaretMove::LineStart ||
+                         move == CaretMove::Up || move == CaretMove::WordLeft;
+    caretIndex_ = toStart ? selectionStart() : selectionEnd();
+    collapseSelection();
+    if (move == CaretMove::Left || move == CaretMove::Right ||
+        move == CaretMove::WordLeft || move == CaretMove::WordRight) {
+      return;
+    }
+  } else {
+    collapseSelection();
   }
 
   const std::vector<std::u32string> lines = displayLines(editor);
@@ -606,6 +692,20 @@ void TextTool::moveCaret(EditorApp& editor, CaretMove move) {
     case CaretMove::Right:
       if (caretIndex_ < content_.size()) {
         ++caretIndex_;
+      }
+      break;
+    case CaretMove::WordLeft:
+      if (caretIndex_ > 0) {
+        const auto [begin, end] = wordRangeAt(caretIndex_ - 1u);
+        (void)end;
+        caretIndex_ = begin < caretIndex_ ? begin : caretIndex_ - 1u;
+      }
+      break;
+    case CaretMove::WordRight:
+      if (caretIndex_ < content_.size()) {
+        const auto [begin, end] = wordRangeAt(caretIndex_);
+        (void)begin;
+        caretIndex_ = end > caretIndex_ ? end : caretIndex_ + 1u;
       }
       break;
     case CaretMove::LineStart: caretIndex_ -= column; break;
@@ -634,6 +734,106 @@ void TextTool::moveCaret(EditorApp& editor, CaretMove move) {
       break;
     }
   }
+}
+
+void TextTool::selectAll() {
+  if (state_ != State::Editing) {
+    return;
+  }
+  selectionAnchor_ = 0u;
+  caretIndex_ = content_.size();
+  draggingSelection_ = false;
+  resetCaretBlinkPhase();
+}
+
+void TextTool::selectWordAt(const Vector2d& documentPoint) {
+  if (state_ != State::Editing || content_.empty()) {
+    return;
+  }
+  const std::optional<std::size_t> hit = caretIndexAtPoint(documentPoint);
+  if (!hit.has_value()) {
+    return;
+  }
+  // caretIndexAtPoint can land one past the last glyph (trailing-half click);
+  // anchor the word lookup on the code point the caret sits within.
+  const std::size_t index = *hit >= content_.size() && *hit > 0 ? *hit - 1u : *hit;
+  const auto [begin, end] = wordRangeAt(index);
+  selectionAnchor_ = begin;
+  caretIndex_ = end;
+  draggingSelection_ = false;
+  resetCaretBlinkPhase();
+}
+
+std::pair<std::size_t, std::size_t> TextTool::wordRangeAt(std::size_t index) const {
+  if (content_.empty()) {
+    return {0u, 0u};
+  }
+  index = std::min(index, content_.size() - 1u);
+  const auto isWordChar = [](char32_t c) {
+    return (c >= U'0' && c <= U'9') || (c >= U'A' && c <= U'Z') || (c >= U'a' && c <= U'z') ||
+           c == U'_' || c >= 0x80;
+  };
+  if (content_[index] == U'\n') {
+    return {index, index + 1u};
+  }
+  const bool word = isWordChar(content_[index]);
+  std::size_t begin = index;
+  while (begin > 0u && content_[begin - 1u] != U'\n' && isWordChar(content_[begin - 1u]) == word) {
+    --begin;
+  }
+  std::size_t end = index + 1u;
+  while (end < content_.size() && content_[end] != U'\n' && isWordChar(content_[end]) == word) {
+    ++end;
+  }
+  return {begin, end};
+}
+
+std::vector<std::array<Vector2d, 4>> TextTool::selectionQuadsDoc(EditorApp& editor) const {
+  std::vector<std::array<Vector2d, 4>> quads;
+  if (!hasSelection()) {
+    return quads;
+  }
+  const std::size_t selStart = selectionStart();
+  const std::size_t selEnd = selectionEnd();
+  const std::vector<std::u32string> lines = displayLines(editor);
+  const double lineHeight = fontSize_ * kLineHeightFactor;
+
+  std::size_t globalIndex = 0;  // code-point index into content_ (incl '\n').
+  std::size_t widthIndex = 0;   // index into cachedCharWidths_ (excl '\n').
+  for (std::size_t lineIdx = 0; lineIdx < lines.size(); ++lineIdx) {
+    const std::u32string& lineText = lines[lineIdx];
+    const double baselineY = originText_.y + static_cast<double>(lineIdx) * lineHeight;
+    const double top = baselineY - fontSize_ * 0.9;
+    const double bottom = baselineY + fontSize_ * 0.25;
+    double x = originText_.x;
+    double runLeft = 0.0;
+    bool inRun = false;
+    for (const char32_t cp : lineText) {
+      const bool isNewline = cp == U'\n';
+      const double width =
+          !isNewline && widthIndex < cachedCharWidths_.size() ? cachedCharWidths_[widthIndex] : 0.0;
+      const bool selected =
+          !isNewline && globalIndex >= selStart && globalIndex < selEnd;
+      if (selected && !inRun) {
+        runLeft = x;
+        inRun = true;
+      } else if (!selected && inRun) {
+        quads.push_back(FrameCornersDoc(documentFromText_,
+                                        Box2d(Vector2d(runLeft, top), Vector2d(x, bottom))));
+        inRun = false;
+      }
+      if (!isNewline) {
+        x += width;
+        ++widthIndex;
+      }
+      ++globalIndex;
+    }
+    if (inRun) {
+      quads.push_back(FrameCornersDoc(documentFromText_,
+                                      Box2d(Vector2d(runLeft, top), Vector2d(x, bottom))));
+    }
+  }
+  return quads;
 }
 
 void TextTool::toggleBold(EditorApp& editor) {
@@ -734,6 +934,8 @@ void TextTool::cancel() {
   content_.clear();
   cachedCharWidths_.clear();
   caretIndex_ = 0;
+  selectionAnchor_.reset();
+  draggingSelection_ = false;
   sessionBeforeSource_.reset();
   previousSelection_.clear();
 }
@@ -1031,6 +1233,7 @@ std::optional<TextTool::EditingChrome> TextTool::editingChrome(EditorApp& editor
   if (const std::optional<Box2d> frameLocal = sessionFrameLocal(); frameLocal.has_value()) {
     chrome.frameCornersDoc = FrameCornersDoc(documentFromText_, *frameLocal);
   }
+  chrome.selectionQuadsDoc = selectionQuadsDoc(const_cast<EditorApp&>(editor));
   return chrome;
 }
 

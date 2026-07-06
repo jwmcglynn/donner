@@ -15,11 +15,13 @@
 /// empty session on a newly created element deletes it, leaving the document
 /// unchanged; emptying an existing element deletes it as an undoable edit).
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "donner/base/Box.h"
@@ -58,6 +60,8 @@ public:
     Down,
     LineStart,
     LineEnd,
+    WordLeft,
+    WordRight,
   };
 
   /// Caret + frame chrome for the active editing session, in document space.
@@ -71,6 +75,12 @@ public:
     /// text's rotation, never the axis-aligned envelope. Absent when the
     /// session has no frame yet (empty point text).
     std::optional<std::array<Vector2d, 4>> frameCornersDoc;
+    /// Selection highlight quads (document space), one oriented quad per
+    /// selected glyph run on each display line the selection spans. Each quad
+    /// is local TL, TR, BR, BL mapped through the text's transform, so after a
+    /// rotate the highlight stays aligned to the text. Empty when there is no
+    /// selection. Drawn as translucent accent fill behind the glyphs.
+    std::vector<std::array<Vector2d, 4>> selectionQuadsDoc;
   };
 
   /// Drag-to-create preview chrome (document space): the live box being
@@ -145,8 +155,37 @@ public:
   void backspace(EditorApp& editor);
   /// Delete the code point after the caret.
   void deleteForward(EditorApp& editor);
-  /// Move the caret.
-  void moveCaret(EditorApp& editor, CaretMove move);
+  /// Move the caret. When @p extend is true (shift held) the selection grows
+  /// from a pinned anchor to the moved caret; when false the caret moves and
+  /// the selection collapses. A non-extending move with an active selection
+  /// snaps the caret to the selection edge in the move's direction (standard
+  /// text-editing behavior) rather than nudging one code point.
+  void moveCaret(EditorApp& editor, CaretMove move, bool extend = false);
+
+  /// Select the whole session content (Cmd/Ctrl+A): anchor at the start, caret
+  /// at the end.
+  void selectAll();
+  /// Select the word under @p documentPoint (double-click inside the session's
+  /// text). No-op when the click misses every glyph.
+  void selectWordAt(const Vector2d& documentPoint);
+
+  /// True when the session has a non-empty selection range.
+  [[nodiscard]] bool hasSelection() const {
+    return selectionAnchor_.has_value() && *selectionAnchor_ != caretIndex_;
+  }
+  /// Selection start (inclusive) in code points; equals the caret when there is
+  /// no selection.
+  [[nodiscard]] std::size_t selectionStart() const {
+    return selectionAnchor_.has_value() ? std::min(*selectionAnchor_, caretIndex_) : caretIndex_;
+  }
+  /// Selection end (exclusive) in code points; equals the caret when there is
+  /// no selection.
+  [[nodiscard]] std::size_t selectionEnd() const {
+    return selectionAnchor_.has_value() ? std::max(*selectionAnchor_, caretIndex_) : caretIndex_;
+  }
+  /// Selection anchor in code points, or nullopt when the selection is
+  /// collapsed; for tests.
+  [[nodiscard]] std::optional<std::size_t> selectionAnchor() const { return selectionAnchor_; }
 
   /// Toggle `font-weight: bold` on the session's text element.
   void toggleBold(EditorApp& editor);
@@ -245,6 +284,21 @@ private:
   /// Called on every caret-affecting edit.
   void resetCaretBlinkPhase() { caretBlinkPhaseStart_ = std::chrono::steady_clock::now(); }
 
+  /// Collapse the selection to the caret (drop the anchor).
+  void collapseSelection() { selectionAnchor_.reset(); }
+  /// When a selection is active, delete it, park the caret at the range start,
+  /// and collapse. Shared by typing, newline, backspace, and delete-forward so
+  /// input replaces the selection. Returns true when a range was removed.
+  bool deleteSelection(EditorApp& editor);
+  /// Word boundaries [begin, end) around code-point @p index in content_,
+  /// treating runs of word characters and runs of non-word characters as
+  /// words (hard breaks split words). Used by double-click word selection.
+  [[nodiscard]] std::pair<std::size_t, std::size_t> wordRangeAt(std::size_t index) const;
+  /// Selection highlight quads in document space for the active selection.
+  /// One oriented quad per selected glyph run on each display line the
+  /// selection spans; empty when there is no selection.
+  [[nodiscard]] std::vector<std::array<Vector2d, 4>> selectionQuadsDoc(EditorApp& editor) const;
+
   /// Active frame handle gesture (session stays in Editing underneath).
   enum class FrameGesture {
     None,    //!< No frame gesture.
@@ -294,6 +348,13 @@ private:
   std::u32string content_;
   /// Caret position in code points (0..content_.size()).
   std::size_t caretIndex_ = 0;
+  /// Selection anchor in code points; the caret is the moving extent. Nullopt
+  /// when the selection is collapsed (a plain caret). The selected range is
+  /// [min(anchor, caret), max(anchor, caret)).
+  std::optional<std::size_t> selectionAnchor_;
+  /// True while a mouse drag inside the session's text is extending the
+  /// selection (started on mouse-down over a glyph, ended on mouse-up).
+  bool draggingSelection_ = false;
   /// Font size in document units (drives baseline offset and line height).
   double fontSize_ = kDefaultFontSize;
   /// Cached per-code-point widths from the last sync, for wrapping.

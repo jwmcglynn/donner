@@ -912,5 +912,161 @@ TEST_F(TextToolTest, CaretBlinkVisibleImmediatelyAfterTypingAndSchedulesWake) {
   EXPECT_FALSE(tool.nextCaretBlinkWakeSeconds().has_value());
 }
 
+// --- W11 selection model ---------------------------------------------------
+
+TEST_F(TextToolTest, ShiftArrowExtendsSelectionFromAnchor) {
+  doubleClickAt(Vector2d(20.0, 30.0));
+  type("Hello");
+  tool.moveCaret(app, TextTool::CaretMove::LineStart);
+  EXPECT_FALSE(tool.hasSelection());
+
+  tool.moveCaret(app, TextTool::CaretMove::Right, /*extend=*/true);
+  tool.moveCaret(app, TextTool::CaretMove::Right, /*extend=*/true);
+  EXPECT_TRUE(tool.hasSelection());
+  EXPECT_THAT(tool.selectionAnchor(), Optional(Eq(0u)));
+  EXPECT_EQ(tool.selectionStart(), 0u);
+  EXPECT_EQ(tool.selectionEnd(), 2u);
+  EXPECT_EQ(tool.caretIndex(), 2u);
+}
+
+TEST_F(TextToolTest, PlainMoveCollapsesSelectionToEdge) {
+  doubleClickAt(Vector2d(20.0, 30.0));
+  type("Hello");
+  tool.selectAll();
+  ASSERT_TRUE(tool.hasSelection());
+
+  // Left collapses to the start; the caret does not nudge past it.
+  tool.moveCaret(app, TextTool::CaretMove::Left);
+  EXPECT_FALSE(tool.hasSelection());
+  EXPECT_EQ(tool.caretIndex(), 0u);
+
+  tool.selectAll();
+  tool.moveCaret(app, TextTool::CaretMove::Right);
+  EXPECT_FALSE(tool.hasSelection());
+  EXPECT_EQ(tool.caretIndex(), 5u);
+}
+
+TEST_F(TextToolTest, SelectAllSpansContent) {
+  doubleClickAt(Vector2d(20.0, 30.0));
+  type("Hello");
+  tool.selectAll();
+  EXPECT_TRUE(tool.hasSelection());
+  EXPECT_EQ(tool.selectionStart(), 0u);
+  EXPECT_EQ(tool.selectionEnd(), 5u);
+}
+
+TEST_F(TextToolTest, WordMotionAndWordSelectStopAtBoundaries) {
+  doubleClickAt(Vector2d(20.0, 30.0));
+  type("foo bar");
+  tool.moveCaret(app, TextTool::CaretMove::LineStart);
+
+  tool.moveCaret(app, TextTool::CaretMove::WordRight);
+  EXPECT_EQ(tool.caretIndex(), 3u);  // End of "foo".
+  tool.moveCaret(app, TextTool::CaretMove::WordRight);
+  EXPECT_EQ(tool.caretIndex(), 4u);  // Past the space.
+  tool.moveCaret(app, TextTool::CaretMove::WordRight);
+  EXPECT_EQ(tool.caretIndex(), 7u);  // End of "bar".
+
+  // Shift+WordLeft selects the last word.
+  tool.moveCaret(app, TextTool::CaretMove::WordLeft, /*extend=*/true);
+  EXPECT_TRUE(tool.hasSelection());
+  EXPECT_EQ(tool.selectionStart(), 4u);
+  EXPECT_EQ(tool.selectionEnd(), 7u);
+}
+
+TEST_F(TextToolTest, TypingReplacesSelection) {
+  doubleClickAt(Vector2d(20.0, 30.0));
+  type("Hello");
+  tool.selectAll();
+  type("Bye");
+
+  EXPECT_EQ(tool.sessionContent(), U"Bye");
+  EXPECT_EQ(text().textContent(), "Bye");
+  EXPECT_EQ(tool.caretIndex(), 3u);
+  EXPECT_FALSE(tool.hasSelection());
+}
+
+TEST_F(TextToolTest, BackspaceDeletesSelectionAsOneEdit) {
+  doubleClickAt(Vector2d(20.0, 30.0));
+  type("Hello");
+  // Select "ell" ([1,4)).
+  tool.moveCaret(app, TextTool::CaretMove::LineStart);
+  tool.moveCaret(app, TextTool::CaretMove::Right);
+  tool.moveCaret(app, TextTool::CaretMove::Right, /*extend=*/true);
+  tool.moveCaret(app, TextTool::CaretMove::Right, /*extend=*/true);
+  tool.moveCaret(app, TextTool::CaretMove::Right, /*extend=*/true);
+  ASSERT_EQ(tool.selectionStart(), 1u);
+  ASSERT_EQ(tool.selectionEnd(), 4u);
+
+  tool.backspace(app);
+  EXPECT_EQ(tool.sessionContent(), U"Ho");
+  EXPECT_EQ(tool.caretIndex(), 1u);
+  EXPECT_FALSE(tool.hasSelection());
+}
+
+TEST_F(TextToolTest, DragSelectsRangeAcrossGlyphs) {
+  doubleClickAt(Vector2d(20.0, 30.0));
+  type("Hello");
+
+  // Center points of glyph 0 and glyph 3 in document space.
+  const auto centerOf = [this](std::size_t charIndex) {
+    svg::SVGTextElement t = text();
+    return t.withWriteAccess([&](auto&, auto) {
+      const Box2d ext = t.getExtentOfChar(charIndex);
+      return Vector2d((ext.topLeft.x + ext.bottomRight.x) * 0.5,
+                      (ext.topLeft.y + ext.bottomRight.y) * 0.5);
+    });
+  };
+  const Vector2d start = centerOf(0);
+  const Vector2d end = centerOf(3);
+
+  tool.onMouseDown(app, start, MouseModifiers{});
+  tool.onMouseMove(app, end, /*buttonHeld=*/true);
+  tool.onMouseUp(app, end);
+
+  EXPECT_TRUE(tool.hasSelection());
+  EXPECT_EQ(tool.selectionStart(), 0u);
+  EXPECT_EQ(tool.selectionEnd(), 3u);
+}
+
+TEST_F(TextToolTest, DoubleClickInTextSelectsWord) {
+  doubleClickAt(Vector2d(20.0, 30.0));
+  type("foo bar");
+
+  svg::SVGTextElement t = text();
+  const Vector2d inBar = t.withWriteAccess([&](auto&, auto) {
+    const Box2d ext = t.getExtentOfChar(5);  // 'a' of "bar".
+    return Vector2d((ext.topLeft.x + ext.bottomRight.x) * 0.5,
+                    (ext.topLeft.y + ext.bottomRight.y) * 0.5);
+  });
+
+  MouseModifiers modifiers;
+  modifiers.doubleClick = true;
+  tool.onMouseDown(app, inBar, modifiers);
+  tool.onMouseUp(app, inBar);
+
+  EXPECT_TRUE(tool.hasSelection());
+  EXPECT_EQ(tool.selectionStart(), 4u);
+  EXPECT_EQ(tool.selectionEnd(), 7u);
+}
+
+TEST_F(TextToolTest, EditingChromeEmitsSelectionHighlightQuads) {
+  doubleClickAt(Vector2d(20.0, 30.0));
+  type("Hello");
+
+  // No selection: no highlight quads.
+  auto chrome = tool.editingChrome(app);
+  ASSERT_TRUE(chrome.has_value());
+  EXPECT_TRUE(chrome->selectionQuadsDoc.empty());
+
+  tool.selectAll();
+  chrome = tool.editingChrome(app);
+  ASSERT_TRUE(chrome.has_value());
+  // Single visual line -> exactly one highlight quad spanning the run.
+  ASSERT_EQ(chrome->selectionQuadsDoc.size(), 1u);
+  const std::array<Vector2d, 4>& quad = chrome->selectionQuadsDoc.front();
+  EXPECT_GT(quad[1].x, quad[0].x);  // Non-empty width (TL -> TR).
+}
+
 }  // namespace
 }  // namespace donner::editor

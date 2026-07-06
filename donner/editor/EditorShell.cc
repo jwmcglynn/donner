@@ -3956,6 +3956,9 @@ void EditorShell::updatePenLivePreviewTarget() {
 void EditorShell::handleTextEditingKeyboard() {
   ImGuiIO& io = ImGui::GetIO();
   const bool cmd = io.KeyCtrl || io.KeySuper;
+  const bool shift = io.KeyShift;
+  // Option/Alt turns arrow motion into word motion (macOS convention).
+  const bool word = io.KeyAlt;
   bool edited = false;
 
   if (ImGui::IsKeyPressed(ImGuiKey_Escape, /*repeat=*/false)) {
@@ -3967,6 +3970,14 @@ void EditorShell::handleTextEditingKeyboard() {
   }
 
   if (cmd) {
+    if (ImGui::IsKeyPressed(ImGuiKey_A, /*repeat=*/false)) {
+      // Cmd/Ctrl+A selects the whole session content (not the canvas). This is
+      // a selection-only change, so re-rasterize the overlay to show the
+      // highlight without a document mutation.
+      textTool_.selectAll();
+      refreshAfterToolDrivenFlush();
+      return;
+    }
     if (ImGui::IsKeyPressed(ImGuiKey_B, /*repeat=*/false)) {
       textTool_.toggleBold(app_);
       edited = true;
@@ -3998,22 +4009,24 @@ void EditorShell::handleTextEditingKeyboard() {
     edited = true;
   }
   if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, /*repeat=*/true)) {
-    textTool_.moveCaret(app_, TextTool::CaretMove::Left);
+    textTool_.moveCaret(app_, word ? TextTool::CaretMove::WordLeft : TextTool::CaretMove::Left,
+                        shift);
   }
   if (ImGui::IsKeyPressed(ImGuiKey_RightArrow, /*repeat=*/true)) {
-    textTool_.moveCaret(app_, TextTool::CaretMove::Right);
+    textTool_.moveCaret(app_, word ? TextTool::CaretMove::WordRight : TextTool::CaretMove::Right,
+                        shift);
   }
   if (ImGui::IsKeyPressed(ImGuiKey_UpArrow, /*repeat=*/true)) {
-    textTool_.moveCaret(app_, TextTool::CaretMove::Up);
+    textTool_.moveCaret(app_, TextTool::CaretMove::Up, shift);
   }
   if (ImGui::IsKeyPressed(ImGuiKey_DownArrow, /*repeat=*/true)) {
-    textTool_.moveCaret(app_, TextTool::CaretMove::Down);
+    textTool_.moveCaret(app_, TextTool::CaretMove::Down, shift);
   }
   if (ImGui::IsKeyPressed(ImGuiKey_Home, /*repeat=*/false)) {
-    textTool_.moveCaret(app_, TextTool::CaretMove::LineStart);
+    textTool_.moveCaret(app_, TextTool::CaretMove::LineStart, shift);
   }
   if (ImGui::IsKeyPressed(ImGuiKey_End, /*repeat=*/false)) {
-    textTool_.moveCaret(app_, TextTool::CaretMove::LineEnd);
+    textTool_.moveCaret(app_, TextTool::CaretMove::LineEnd, shift);
   }
 
   for (int i = 0; i < io.InputQueueCharacters.Size; ++i) {
