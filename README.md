@@ -196,7 +196,7 @@ Detailed docs: [svg_to_png.cc](https://jwmcglynn.github.io/donner/svg_to_png_8cc
 
 ## CMake Support
 
-CMake support is available for integrating Donner into CMake-based projects. The CMake build fetches dependencies and builds the library. Both the Skia and tiny-skia backends are supported.
+CMake support is available for integrating Donner into CMake-based projects. The CMake build fetches dependencies and builds the library. Both the tiny_skia (CPU) and Geode (WebGPU) backends are selectable via `DONNER_RENDERER_BACKEND` (default `tiny_skia`).
 
 See the [CMake Documentation](https://jwmcglynn.github.io/donner/BuildingDonner.html#cmake-build) for more details.
 
