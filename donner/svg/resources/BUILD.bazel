@@ -184,10 +184,28 @@ donner_cc_test(
         "geode",
     ],
     deps = [
+        ":font_catalog_types",
         ":font_manager",
         "//third_party/public-sans",
         "@com_google_gtest//:gtest_main",
         "@stb//:truetype",
+    ],
+)
+
+donner_cc_test(
+    name = "font_catalog_tests",
+    srcs = ["tests/FontCatalog_tests.cc"],
+    # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
+    # wrappers run automatically under `bazel test //...`.
+    variants = [
+        "tiny",
+        "text_full",
+        "geode",
+    ],
+    deps = [
+        ":font_catalog",
+        ":font_catalog_types",
+        "@com_google_gtest//:gtest_main",
     ],
 )
 
