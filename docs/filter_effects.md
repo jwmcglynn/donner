@@ -12,7 +12,7 @@ TinySkia rendering backend; the removed full-Skia backend had its own native low
 - `filterUnits` (objectBoundingBox, userSpaceOnUse) and `primitiveUnits` are fully supported.
 - `color-interpolation-filters` (linearRGB/sRGB) is handled per-primitive.
 - CSS shorthand filter functions map to the same filter graph as SVG `<filter>` elements.
-- The resvg test suite passes on both backends.
+- The resvg test suite passes on both backends, excluding documented skips for unimplemented features and known bugs (see the skip list in `donner/svg/renderer/tests/resvg_test_suite.cc`).
 
 **Tracking:** [#151](https://github.com/jwmcglynn/donner/issues/151)
 
