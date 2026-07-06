@@ -639,11 +639,41 @@ std::string CanonicalizeForTextEditor(std::string_view source) {
 }
 
 Box2d ResolveDocumentViewBox(svg::SVGDocument& document) {
-  const std::optional<Box2d> viewBox = document.withReadAccess(
-      [&document](svg::DocumentReadAccess&) { return document.svgElement().viewBox(); });
+  std::optional<Box2d> viewBox;
+  std::optional<Lengthd> rootWidth;
+  std::optional<Lengthd> rootHeight;
+  document.withReadAccess([&](svg::DocumentReadAccess&) {
+    const svg::SVGSVGElement svgElement = document.svgElement();
+    viewBox = svgElement.viewBox();
+    rootWidth = svgElement.width();
+    rootHeight = svgElement.height();
+  });
   if (viewBox.has_value()) {
     return *viewBox;
   }
+  // No viewBox attribute: per SVG semantics the implied document coordinate
+  // system is `0 0 width height` from the root's intrinsic size attributes.
+  // This must NOT read `document.canvasSize()` first: the editor commits
+  // zoom/DPR-scaled raster canvas sizes into the document
+  // (RenderCoordinator's setCanvasSize), and reading the committed canvas
+  // back as the viewBox inflates it by the device pixel ratio on every
+  // commit until it hits the max-canvas clamp. That runaway viewBox forces
+  // viewport-bounded rasters at 100%, keeps the canvas commit oscillating,
+  // and pins the presented raster at a stale zoom (the zoom/scroll
+  // "popiness" and wrong-scale rendering on viewBox-less documents such as
+  // z0rly_test6.svg).
+  if (rootWidth.has_value() && rootHeight.has_value() && rootWidth->isAbsoluteSize() &&
+      rootHeight->isAbsoluteSize()) {
+    const Box2d zeroViewBox(Vector2d::Zero(), Vector2d::Zero());
+    const double width = rootWidth->toPixels(zeroViewBox, FontMetrics());
+    const double height = rootHeight->toPixels(zeroViewBox, FontMetrics());
+    if (width > 0.0 && height > 0.0) {
+      return Box2d::FromXYWH(0.0, 0.0, width, height);
+    }
+  }
+  // Last resort (no viewBox, no usable absolute width/height): the canvas
+  // size. This can reflect a previously committed raster canvas, but there is
+  // no better intrinsic geometry left to derive.
   const Vector2i intrinsic = document.canvasSize();
   if (intrinsic.x > 0 && intrinsic.y > 0) {
     return Box2d::FromXYWH(0.0, 0.0, static_cast<double>(intrinsic.x),
