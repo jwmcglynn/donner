@@ -552,16 +552,31 @@ std::vector<AttributeWritebackTarget> CaptureSelectionTargets(
   return targets;
 }
 
-svg::SVGElement ResolveSnapshotElement(AsyncSVGDocument& document, const UndoSnapshot& snapshot) {
-  svg::SVGElement liveElement = snapshot.element;
-  if (document.hasDocument() && snapshot.writebackTarget.has_value()) {
-    if (auto resolved =
-            resolveAttributeWritebackTarget(document.document(), *snapshot.writebackTarget);
-        resolved.has_value()) {
-      liveElement = *resolved;
-    }
+// Rehydrate a snapshot's target element against the live document.
+//
+// - If the snapshot never captured a `writebackTarget` (the element had no
+//   XML node backing at capture time), there is nothing to rehydrate against;
+//   trust the originally captured element - this is the common case for
+//   snapshots that never survive a reparse.
+// - If a `writebackTarget` was captured but the document has since been
+//   reparsed (or is momentarily absent) such that the target no longer
+//   resolves, return `std::nullopt` rather than silently falling back to the
+//   pre-reparse `snapshot.element`. That handle may still be a technically
+//   live reference into an orphaned pre-reparse document (kept alive only by
+//   this snapshot's own reference), so applying a mutation - or worse,
+//   computing a fresh writeback target - against it risks writing a
+//   correctly-shaped but wrongly-targeted patch into the live source text.
+std::optional<svg::SVGElement> ResolveSnapshotElement(AsyncSVGDocument& document,
+                                                       const UndoSnapshot& snapshot) {
+  if (!snapshot.writebackTarget.has_value()) {
+    return snapshot.element;
   }
-  return liveElement;
+
+  if (!document.hasDocument()) {
+    return std::nullopt;
+  }
+
+  return resolveAttributeWritebackTarget(document.document(), *snapshot.writebackTarget);
 }
 
 void ApplyTimelineSnapshot(EditorApp& app, AsyncSVGDocument& document,
@@ -573,13 +588,26 @@ void ApplyTimelineSnapshot(EditorApp& app, AsyncSVGDocument& document,
     return;
   }
 
-  svg::SVGElement liveElement = ResolveSnapshotElement(document, snapshot);
+  const std::optional<svg::SVGElement> liveElement = ResolveSnapshotElement(document, snapshot);
+  if (!liveElement.has_value()) {
+    // Rehydration was attempted (the snapshot carried a `writebackTarget`)
+    // but failed - a structural edit since this entry was captured means
+    // the target no longer resolves in the live document. There is nothing
+    // safe to replay this entry against; skip it gracefully instead of
+    // dereferencing the stale pre-reparse handle. Extras (grouped
+    // multi-element gestures) are independent snapshots, so still give each
+    // of them a chance to resolve on their own.
+    for (const UndoSnapshot& extra : snapshot.extras) {
+      ApplyTimelineSnapshot(app, document, extra);
+    }
+    return;
+  }
 
   // Route the restored transform through the command queue so every
   // DOM write - tool drags, text-pane re-parse, and undo - goes through
   // the same mutation seam. The queue coalesces with any pending
   // commands and applies on the next `flushFrame()`.
-  app.applyMutation(EditorCommand::SetTransformCommand(liveElement, snapshot.transform));
+  app.applyMutation(EditorCommand::SetTransformCommand(*liveElement, snapshot.transform));
 
   // Capture the source-text writeback target BEFORE the command drains
   // so the path-based target resolves against the in-sync document.
@@ -595,7 +623,7 @@ void ApplyTimelineSnapshot(EditorApp& app, AsyncSVGDocument& document,
         .transform = snapshot.transform,
         .sourceTransformAttributeValue = snapshot.sourceTransformAttributeValue,
         .restoreSourceTransformAttributeValue = snapshot.restoreSourceTransformAttributeValue});
-  } else if (auto target = captureAttributeWritebackTarget(liveElement); target.has_value()) {
+  } else if (auto target = captureAttributeWritebackTarget(*liveElement); target.has_value()) {
     app.enqueueTransformWriteback(EditorApp::CompletedTransformWriteback{
         .target = std::move(*target),
         .transform = snapshot.transform,
@@ -1303,13 +1331,46 @@ bool IsLockGatedCommand(const EditorCommand& command) {
 }
 
 void EditorApp::setElementVisible(const svg::SVGElement& element, bool visible) {
-  // Toggle the `display` presentation attribute. Hiding writes
-  // `display="none"`; showing writes `display="inline"` (a definitively
-  // visible value) so the change is observable through the computed-style
-  // visibility check regardless of whether the surrounding stylesheet sets
-  // display.
-  applyMutation(
-      EditorCommand::SetAttributeCommand(element, "display", visible ? "inline" : "none"));
+  const auto entryIt =
+      std::find_if(hiddenElementAuthorDisplay_.begin(), hiddenElementAuthorDisplay_.end(),
+                   [&element](const auto& entry) { return entry.first == element; });
+
+  if (!visible) {
+    // Capture the author's `display` value (if any) BEFORE clobbering it, so
+    // the matching Show can restore it later instead of forcing
+    // `display="inline"` over e.g. an authored `display="block"`. Replace any
+    // stale entry from a previous hide/show cycle for this element.
+    std::optional<RcString> authorDisplay = element.getAttribute("display");
+    std::optional<std::string> capturedValue =
+        authorDisplay.has_value() ? std::optional<std::string>(std::string(*authorDisplay))
+                                   : std::nullopt;
+    if (entryIt != hiddenElementAuthorDisplay_.end()) {
+      entryIt->second = std::move(capturedValue);
+    } else {
+      hiddenElementAuthorDisplay_.emplace_back(element, std::move(capturedValue));
+    }
+    applyMutation(EditorCommand::SetAttributeCommand(element, "display", "none"));
+    return;
+  }
+
+  // Showing: restore the captured author value when it is a genuine,
+  // non-`none` override we clobbered - this is the common "author wrote
+  // display=block" case the round trip must preserve. When there is no
+  // captured entry (this element was never hidden through this toggle this
+  // session) or the captured value was itself absent/`"none"` (restoring it
+  // literally would leave the element hidden, defeating the Show action),
+  // fall back to writing a definitively-visible `display="inline"`.
+  if (entryIt != hiddenElementAuthorDisplay_.end()) {
+    std::optional<std::string> authorDisplay = std::move(entryIt->second);
+    hiddenElementAuthorDisplay_.erase(entryIt);
+    if (authorDisplay.has_value() && *authorDisplay != "none") {
+      applyMutation(EditorCommand::SetAttributeCommand(element, "display",
+                                                        std::move(*authorDisplay)));
+      return;
+    }
+  }
+
+  applyMutation(EditorCommand::SetAttributeCommand(element, "display", "inline"));
 }
 
 void EditorApp::setElementLocked(const svg::SVGElement& element, bool locked) {
