@@ -19,6 +19,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "donner/base/Box.h"
@@ -170,11 +171,16 @@ public:
   }
 
   /// Set the visibility of @p element by toggling its `display` presentation
-  /// attribute: hiding writes `display="none"`, showing writes
-  /// `display="inline"` (a definitively visible value, observable through the
-  /// computed-style visibility check). Routes through `applyMutation` so the
-  /// Layers panel eye button and context menu share one code path. Visibility
-  /// toggles are intentionally NOT lock-gated.
+  /// attribute. Hiding captures the element's current author `display` value
+  /// (if any) before overwriting it with `display="none"`. Showing restores
+  /// that captured value when it is a genuine, non-`none` author value (e.g.
+  /// `display="block"`), so a hide/show round trip does not clobber it;
+  /// otherwise (no captured value, or the element was never hidden through
+  /// this toggle this session) it writes `display="inline"` (a definitively
+  /// visible value, observable through the computed-style visibility check).
+  /// Routes through `applyMutation` so the Layers panel eye button and
+  /// context menu share one code path. Visibility toggles are intentionally
+  /// NOT lock-gated.
   void setElementVisible(const svg::SVGElement& element, bool visible);
 
   /// Lock or unlock @p element by toggling the `data-donner-locked` marker
@@ -597,6 +603,14 @@ private:
 
   std::vector<CompletedTransformWriteback> pendingTransformWritebacks_;
   std::vector<CompletedElementRemoveWriteback> pendingElementRemoveWritebacks_;
+  /// Per-session memory of the author `display` value an element carried
+  /// immediately before `setElementVisible` hid it, so the matching Show
+  /// restores that value instead of clobbering it with `display="inline"`.
+  /// `std::nullopt` for the captured value means the element had no author
+  /// `display` attribute at all. Cleared for an element once its Show
+  /// consumes the entry. A stale entry (element deleted/reparsed away) is
+  /// simply never matched again and is harmless.
+  std::vector<std::pair<svg::SVGElement, std::optional<std::string>>> hiddenElementAuthorDisplay_;
   std::optional<PendingDocumentSourceUndo> pendingDocumentSourceUndo_;
   std::optional<std::vector<AttributeWritebackTarget>> pendingSelectionRestoreTargets_;
 

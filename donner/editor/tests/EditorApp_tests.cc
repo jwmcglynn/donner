@@ -543,6 +543,58 @@ TEST(EditorAppTest, VisibilityAndLockTogglesBypassLockGate) {
   EXPECT_FALSE(r1->getAttribute(kLockedAttributeName).has_value());
 }
 
+// Hiding an element with an authored non-`none` `display` value (e.g.
+// `display="block"`) must not clobber it: showing again should restore the
+// author's exact value rather than forcing `display="inline"`.
+TEST(EditorAppTest, SetElementVisibleRestoresAuthorDisplayValueOnShow) {
+  constexpr std::string_view kSvgWithBlockDisplay =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+           <rect id="r1" x="10" y="10" width="20" height="20" fill="red" display="block"/>
+         </svg>)";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvgWithBlockDisplay));
+
+  auto r1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(r1.has_value());
+  ASSERT_EQ(r1->getAttribute("display"), "block");
+
+  app.setElementVisible(*r1, false);
+  ASSERT_TRUE(app.flushFrame());
+  r1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(r1.has_value());
+  EXPECT_EQ(r1->getAttribute("display"), "none");
+
+  app.setElementVisible(*r1, true);
+  ASSERT_TRUE(app.flushFrame());
+  r1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(r1.has_value());
+  EXPECT_EQ(r1->getAttribute("display"), "block")
+      << "Show should restore the author's display=block instead of forcing display=inline";
+}
+
+// When the element had no author `display` value to begin with (the common
+// case), Show still falls back to writing a definitively-visible
+// `display="inline"` - covered already by
+// `VisibilityAndLockTogglesBypassLockGate` above. This test covers the other
+// fallback: showing an element that was never hidden through this toggle
+// (no captured entry at all, e.g. a fresh element or a second, redundant Show
+// call) still lands on `display="inline"` rather than crashing or no-oping.
+TEST(EditorAppTest, SetElementVisibleShowWithoutPriorHideWritesInline) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+
+  auto r1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(r1.has_value());
+  ASSERT_FALSE(r1->getAttribute("display").has_value());
+
+  app.setElementVisible(*r1, true);
+  ASSERT_TRUE(app.flushFrame());
+  r1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(r1.has_value());
+  EXPECT_EQ(r1->getAttribute("display"), "inline");
+}
+
 TEST(EditorAppTest, SetStylePropertyOnSelectionMergesIntoStyleAttribute) {
   constexpr std::string_view kStyledSvg =
       R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">

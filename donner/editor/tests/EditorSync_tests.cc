@@ -1170,31 +1170,13 @@ TEST(EditorSyncTest, SelectionClearsAndDisplayedBoundsClearWhenElementDisappears
 // rehydration (matching the snapshot's `writebackTarget` against the
 // current DOM), the undo silently does nothing or crashes.
 //
-// This test documents the invariant. If undo can't rehydrate across
-// a reparse, either the test skips with a clear explanation (known
-// gap) OR - ideally - the undo replays against a freshly-queried
-// element by id/path.
+// This test documents the invariant. `EditorApp::undo` rehydrates a stale
+// `UndoSnapshot::element` by resolving `snapshot.writebackTarget` against the
+// live post-reparse document (see `ResolveSnapshotElement` in EditorApp.cc)
+// before replaying the transform, so the drag survives the reparse. This is
+// the same rehydration story as `SelectionRemapsByIdAcrossStructuralSourceEdit`,
+// but for the undo timeline instead of the selection.
 TEST(EditorSyncTest, DragThenSourceEditThenUndoReplaysAgainstFreshlyParsedElement) {
-  // Known gap (documented before we even start the test body, because
-  // the failing path triggers a hard EnTT assertion in `fast_mod` -
-  // the undo snapshot holds an `SVGElement` whose `EntityHandle` points
-  // into the pre-reparse registry, and any access after the reparse
-  // trips the "power of two" assertion deep inside EnTT's storage.
-  // That crash isn't skippable mid-flow, so document the gap up front
-  // and have the fix flip the `if (true)` below to `if (false)` once
-  // `UndoSnapshot` rehydration across `ReplaceDocumentCommand` lands.
-  //
-  // The fix belongs in `EditorApp::undo`: when an `UndoSnapshot` has
-  // a `writebackTarget`, resolve that against the live document and
-  // rebind `snapshot.element` before calling `applySnapshot`. This is
-  // the same rehydration story as `SelectionRemapsByIdAcrossStructuralSourceEdit`,
-  // but for the undo timeline instead of the selection.
-  if (true) {
-    GTEST_SKIP() << "Known gap: `EditorApp::undo` dereferences a stale `SVGElement` "
-                    "handle after `ReplaceDocumentCommand` reparse. Needs snapshot "
-                    "rehydration via `writebackTarget` before apply. Design 0026 B3.";
-  }
-
   constexpr std::string_view kSvg = R"svg(<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
   <rect id="r" x="10" y="10" width="20" height="20" fill="red"/>
@@ -1239,6 +1221,62 @@ TEST(EditorSyncTest, DragThenSourceEditThenUndoReplaysAgainstFreshlyParsedElemen
   const Transform2d finalTransform = rectAfterUndo->cast<svg::SVGGraphicsElement>().transform();
   EXPECT_TRUE(finalTransform.isIdentity())
       << "undo after source-pane reparse failed to roll back the drag - snapshot dangled";
+}
+
+// Companion to `DragThenSourceEditThenUndoReplaysAgainstFreshlyParsedElement`,
+// covering the failure side of rehydration: a structural edit (element
+// deletion) after the snapshot was captured means the snapshot's
+// `writebackTarget` can no longer resolve in the reparsed document.
+// `ApplyTimelineSnapshot`/`ResolveSnapshotElement` in EditorApp.cc must skip
+// this entry gracefully - it must NOT fall back to dereferencing the stale
+// pre-reparse `snapshot.element` (which would otherwise risk applying a
+// mutation, or computing a writeback target, against an orphaned document
+// disconnected from what the user is looking at).
+TEST(EditorSyncTest, UndoSkipsGracefullyWhenSnapshotTargetNoLongerResolvesAfterReparse) {
+  constexpr std::string_view kSvg = R"svg(<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+  <rect id="r" x="10" y="10" width="20" height="20" fill="red"/>
+</svg>
+)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  app.setCleanSourceText(kSvg);
+
+  auto rect = app.document().document().querySelector("#r");
+  ASSERT_TRUE(rect.has_value());
+
+  const Transform2d before = Transform2d();
+  const Transform2d after = Transform2d::Translate(Vector2d(25.0, 0.0));
+  rect->cast<svg::SVGGraphicsElement>().setTransform(after);
+  UndoSnapshot beforeSnapshot{.element = *rect,
+                              .transform = before,
+                              .writebackTarget = captureAttributeWritebackTarget(*rect)};
+  UndoSnapshot afterSnapshot{.element = *rect,
+                             .transform = after,
+                             .writebackTarget = captureAttributeWritebackTarget(*rect)};
+  ASSERT_TRUE(beforeSnapshot.writebackTarget.has_value());
+  app.undoTimeline().record("Drag r", std::move(beforeSnapshot), std::move(afterSnapshot));
+
+  ASSERT_TRUE(app.canUndo());
+
+  // Structural edit deletes `#r` entirely - the writeback target this undo
+  // entry captured can never resolve again.
+  constexpr std::string_view kSvgAfterDelete = R"svg(<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+</svg>
+)svg";
+  app.applyMutation(EditorCommand::ReplaceDocumentCommand(std::string(kSvgAfterDelete),
+                                                          /*preserveUndoOnReparse=*/true));
+  ASSERT_TRUE(app.flushFrame());
+
+  // Must not crash, and must not resurrect `#r` or otherwise touch the live
+  // (now-empty) document - the entry is skipped as unresolvable, so nothing
+  // is queued and this is a no-op flush.
+  app.undo();
+  EXPECT_FALSE(app.flushFrame());
+
+  EXPECT_FALSE(app.document().document().querySelector("#r").has_value());
 }
 
 }  // namespace
