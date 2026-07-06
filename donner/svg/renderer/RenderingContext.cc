@@ -139,6 +139,9 @@ void restoreAnimationBaseBackup(Registry& registry, Entity entity, AnimationBase
     } else {
       registry.remove<TransformComponent>(entity);
     }
+    // Drop cached computed transforms (local + cascaded absolute) so they are recomputed from the
+    // restored base transform.
+    LayoutSystem().invalidate(EntityHandle(registry, entity));
   }
 }
 
@@ -197,6 +200,9 @@ void applyAnimationOverrides(Registry& registry) {
           }
           auto& transform = registry.get_or_emplace<TransformComponent>(entity);
           transform.transform.set(CssTransform(result.result()), overrideSpec);
+          // Drop any cached computed transforms (local + cascaded absolute) so the animated
+          // transform is recomputed by the layout pass.
+          LayoutSystem().invalidate(EntityHandle(registry, entity));
         }
       } else if (attrName == "d") {
         if (auto* pathComp = registry.try_get<PathComponent>(entity)) {
