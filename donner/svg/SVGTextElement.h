@@ -120,6 +120,14 @@ public:
   std::vector<Path> convertToPath() const;
 
   /**
+   * Convert this text element to positioned glyph outlines paired with the element that painted
+   * each glyph. Unlike \ref convertToPath, this retains the per-glyph painting source (the `<text>`
+   * or `<tspan>` whose computed style colors the glyph), so callers can preserve per-span paint
+   * when the geometry is detached from the text tree. See \ref TextGlyphOutline.
+   */
+  std::vector<TextGlyphOutline> convertToOutlineGlyphs() const;
+
+  /**
    * Return the tight bounding box of the actual rendered glyphs (ink extents). This is the
    * smallest rectangle that encloses all painted pixels.
    */

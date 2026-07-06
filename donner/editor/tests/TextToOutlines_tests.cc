@@ -90,6 +90,29 @@ std::string ApplyConversion(svg::SVGDocument& document, svg::SVGElement text,
   return std::string(document.source());
 }
 
+/// Paint-retention matrix helper. Parses \p svg, converts its first `<text>` to
+/// outlines, applies the structural edit, and asserts the converted document
+/// renders pixel-identical to the original text. This is the load-bearing
+/// assertion for W4: whatever styling form painted the source text (presentation
+/// attribute, CSS rule, inline style, inheritance, per-tspan override, paint
+/// server, currentColor, or an opacity interaction) must survive the conversion.
+void ExpectPaintRetained(std::string_view svg, std::string_view label) {
+  svg::SVGDocument converted = Parse(svg);
+  svg::SVGElement text = TextElement(converted);
+
+  ConvertTextToOutlinesResult result = convertTextToOutlines(converted, text);
+  ASSERT_TRUE(result.ok) << result.error;
+  const std::string mergedSource = ApplyConversion(converted, text, result);
+
+  svg::SVGDocument beforeFresh = Parse(svg);
+  svg::SVGDocument after = Parse(mergedSource);
+  const svg::RendererBitmap beforeBitmap = RenderToBitmap(beforeFresh);
+  const svg::RendererBitmap afterBitmap = RenderToBitmap(after);
+
+  tests::CompareBitmapToBitmap(afterBitmap, beforeBitmap, std::string(label),
+                               tests::PixelmatchIdentityParams());
+}
+
 }  // namespace
 
 // Converts `SVG` text to path geometry: the converted source contains `<path>`
@@ -208,11 +231,12 @@ TEST(TextToOutlines, PreservesStyleAndPaintOrder) {
   ASSERT_TRUE(result.ok) << result.error;
   const std::string mergedSource = ApplyConversion(document, text, result);
 
-  // Style is carried onto the `<g>` group.
+  // Style is carried onto the `<g>` group. Paint is resolved from computed style, so named colors
+  // serialize to their canonical hex form (`black` -> `#000000`); `transform` is carried verbatim.
   EXPECT_THAT(mergedSource, HasSubstr("fill=\"#0033aa\""));
   EXPECT_THAT(mergedSource, HasSubstr("fill-rule=\"evenodd\""));
   EXPECT_THAT(mergedSource, HasSubstr("opacity=\"0.5\""));
-  EXPECT_THAT(mergedSource, HasSubstr("stroke=\"black\""));
+  EXPECT_THAT(mergedSource, HasSubstr("stroke=\"#000000\""));
   EXPECT_THAT(mergedSource, HasSubstr("stroke-width=\"2\""));
   EXPECT_THAT(mergedSource, HasSubstr("transform=\"translate(5,5)\""));
 
@@ -319,6 +343,134 @@ TEST(TextToOutlines, ThreeGlyphConversionWithinBudget) {
   ASSERT_TRUE(result.ok) << result.error;
   // Design-doc target is 100 ms; CI ceiling is intentionally generous.
   EXPECT_LT(elapsedMs, 500) << "three-glyph conversion took " << elapsedMs << " ms";
+}
+
+// ---------------------------------------------------------------------------
+// W4 paint-retention matrix (Design 0013). One case per styling form. Each
+// asserts the outlined result renders pixel-identical to the source text, so a
+// dropped or mis-resolved paint is a hard failure. Forms that historically lost
+// paint (CSS/inline style, per-tspan, currentColor, fill-opacity, CSS stroke)
+// are the red-then-green regression cases.
+// ---------------------------------------------------------------------------
+
+// Presentation attribute on <text>: the historically-supported path. Green
+// before and after the fix - a guard that the computed-style rewrite does not
+// regress the plain case.
+TEST(TextToOutlinesPaint, PresentationAttributeFill) {
+  ExpectPaintRetained(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<rect x="0" y="0" width="200" height="200" fill="white"/>
+<text x="10" y="120" font-size="64" fill="#0033aa">SVG</text>
+</svg>)",
+      "paint_matrix_presentation_fill");
+}
+
+// CSS class rule: `.brand { fill: ... }`. `getAttribute("fill")` never sees a
+// class-cascaded paint, so the pre-fix converter dropped it (rendered default
+// black). Requires resolving computed style.
+TEST(TextToOutlinesPaint, CssClassFill) {
+  ExpectPaintRetained(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<style>.brand { fill: #0033aa; }</style>
+<rect x="0" y="0" width="200" height="200" fill="white"/>
+<text class="brand" x="10" y="120" font-size="64">SVG</text>
+</svg>)",
+      "paint_matrix_css_class_fill");
+}
+
+// Inline `style="fill:..."`: the fill lives in the style attribute, not the
+// `fill` presentation attribute, so the pre-fix attribute copy dropped it.
+TEST(TextToOutlinesPaint, InlineStyleFill) {
+  ExpectPaintRetained(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<rect x="0" y="0" width="200" height="200" fill="white"/>
+<text style="fill:#0033aa" x="10" y="120" font-size="64">SVG</text>
+</svg>)",
+      "paint_matrix_inline_style_fill");
+}
+
+// Paint inherited from an ancestor <g>. The outline group is inserted into the
+// same parent, so inheritance already carries the paint; this pins that.
+TEST(TextToOutlinesPaint, InheritedFillFromAncestor) {
+  ExpectPaintRetained(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<rect x="0" y="0" width="200" height="200" fill="white"/>
+<g fill="#0033aa"><text x="10" y="120" font-size="64">SVG</text></g>
+</svg>)",
+      "paint_matrix_inherited_fill");
+}
+
+// Per-<tspan> paint overrides: each glyph run carries its own fill. A single
+// group-level paint cannot represent per-run color, so the pre-fix converter
+// collapsed all glyphs to one paint.
+TEST(TextToOutlinesPaint, PerTspanFillOverrides) {
+  ExpectPaintRetained(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<rect x="0" y="0" width="200" height="200" fill="white"/>
+<text x="10" y="120" font-size="64" fill="#aa0000"><tspan fill="#0033aa">S</tspan><tspan fill="#008a33">V</tspan><tspan fill="#aa00aa">G</tspan></text>
+</svg>)",
+      "paint_matrix_per_tspan_fill");
+}
+
+// Paint-server reference via presentation attribute: `fill="url(#grad)"`. Uses
+// userSpaceOnUse so the gradient maps identically regardless of which element
+// carries the reference (isolating retention from bbox-unit semantics).
+TEST(TextToOutlinesPaint, GradientPaintServerPresentation) {
+  ExpectPaintRetained(
+      R"SVG(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<defs><linearGradient id="grad" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="200" y2="0"><stop offset="0" stop-color="#0033aa"/><stop offset="1" stop-color="#008a33"/></linearGradient></defs>
+<rect x="0" y="0" width="200" height="200" fill="white"/>
+<text x="10" y="120" font-size="64" fill="url(#grad)">SVG</text>
+</svg>)SVG",
+      "paint_matrix_gradient_presentation");
+}
+
+// Paint-server reference through a CSS class: `.g { fill: url(#grad) }`.
+// Exercises paint-server retention AND computed-style resolution together.
+TEST(TextToOutlinesPaint, GradientPaintServerViaCss) {
+  ExpectPaintRetained(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<defs><linearGradient id="grad" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="200" y2="0"><stop offset="0" stop-color="#0033aa"/><stop offset="1" stop-color="#008a33"/></linearGradient></defs>
+<style>.g { fill: url(#grad); }</style>
+<rect x="0" y="0" width="200" height="200" fill="white"/>
+<text class="g" x="10" y="120" font-size="64">SVG</text>
+</svg>)",
+      "paint_matrix_gradient_css");
+}
+
+// currentColor: `fill="currentColor"` resolved against the element's `color`.
+// The pre-fix converter copied `fill="currentColor"` but not the `color` that
+// defines it, so the group resolved currentColor against a different (default)
+// color.
+TEST(TextToOutlinesPaint, CurrentColorFill) {
+  ExpectPaintRetained(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<rect x="0" y="0" width="200" height="200" fill="white"/>
+<text style="color:#0033aa" fill="currentColor" x="10" y="120" font-size="64">SVG</text>
+</svg>)",
+      "paint_matrix_current_color");
+}
+
+// fill-opacity was absent from the pre-fix preserved-attribute list, so a
+// semi-transparent fill became fully opaque after conversion.
+TEST(TextToOutlinesPaint, FillOpacityInteraction) {
+  ExpectPaintRetained(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<rect x="0" y="0" width="200" height="200" fill="white"/>
+<text x="10" y="120" font-size="64" fill="#0033aa" fill-opacity="0.45">SVG</text>
+</svg>)",
+      "paint_matrix_fill_opacity");
+}
+
+// Stroke declared through inline CSS with stroke-width and stroke-opacity. The
+// pre-fix attribute copy missed style-declared stroke entirely.
+TEST(TextToOutlinesPaint, StrokeViaCss) {
+  ExpectPaintRetained(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<rect x="0" y="0" width="200" height="200" fill="white"/>
+<text style="fill:#0033aa;stroke:#aa0000;stroke-width:3;stroke-opacity:0.8" x="10" y="120" font-size="64">SVG</text>
+</svg>)",
+      "paint_matrix_stroke_css");
 }
 
 }  // namespace donner::editor
