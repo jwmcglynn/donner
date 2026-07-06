@@ -69,6 +69,20 @@ std::vector<uint8_t> FontCatalog::loadFamilyData(std::string_view family) const 
   return {};
 }
 
+std::optional<FontFamilyInfo> FontCatalog::find(std::string_view family) const {
+  for (const auto& provider : providers_) {
+    if (!provider->hasFamily(family)) {
+      continue;
+    }
+    for (FontFamilyInfo& info : provider->families()) {
+      if (StringUtils::Equals<StringComparison::IgnoreCase>(info.family, family)) {
+        return info;
+      }
+    }
+  }
+  return std::nullopt;
+}
+
 std::vector<FontFamilyInfo> FontCatalog::familiesBySource(FontSource source) const {
   std::vector<FontFamilyInfo> result;
   for (const auto& provider : providers_) {

@@ -2,6 +2,7 @@
 /// @file
 
 #include <memory>
+#include <optional>
 
 #include "donner/svg/resources/FontCatalogTypes.h"
 
@@ -50,6 +51,14 @@ public:
 
   /// True if any provider supplies \p family (case-insensitive).
   bool hasFamily(std::string_view family) const override;
+
+  /**
+   * Resolve \p family (case-insensitive) to its catalog entry, or `std::nullopt` if no provider
+   * supplies it (in which case a document naming this family renders through the Public Sans
+   * fallback). The returned \ref FontFamilyInfo::source tells the caller whether it resolved to an
+   * Embedded or System font, mirroring `findFont()` precedence.
+   */
+  std::optional<FontFamilyInfo> find(std::string_view family) const;
 
   /// Raw sfnt bytes for \p family from the first provider that has it (Embedded before System).
   std::vector<uint8_t> loadFamilyData(std::string_view family) const override;

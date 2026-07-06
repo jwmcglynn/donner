@@ -35,6 +35,7 @@
 #include "donner/editor/TextTool.h"
 #include "donner/editor/ViewportInteractionController.h"
 #include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/resources/FontCatalog.h"
 
 namespace donner::editor::gui {
 class EditorWindow;
@@ -230,6 +231,10 @@ public:
 
   [[nodiscard]] bool valid() const { return valid_; }
   void runFrame();
+
+  /// Font catalog (embedded Google Fonts + macOS system fonts) backing document font resolution
+  /// and the font picker (Design 0013 W2 consumes this).
+  [[nodiscard]] svg::FontCatalog& fontCatalog() { return fontCatalog_; }
   /// Return the next idle-loop wake interval needed for throttled UI work.
   [[nodiscard]] std::optional<float> nextIdleWakeSeconds() const;
 
@@ -467,6 +472,9 @@ private:
   MenuBarPresenter menuBarPresenter_;
   SidebarPresenter sidebarPresenter_;
   TextInspectorPanel textInspectorPanel_;
+  /// Embedded + system font catalog, installed as the FontManager default provider so document
+  /// text resolves font-family names against embedded and system fonts.
+  svg::FontCatalog fontCatalog_;
   LayersPanel layersPanel_;
   /// Element hovered in the Layers panel as of the last frame, fed into the
   /// source-hover preview so the canvas and source pane highlight the element
