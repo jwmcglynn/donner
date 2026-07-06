@@ -9,6 +9,7 @@
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/SourceSync.h"
 #include "donner/editor/TextPatch.h"
+#include "donner/editor/TransformSyntaxPreserving.h"
 
 namespace donner::editor {
 
@@ -399,11 +400,13 @@ void DocumentSyncController::applyPendingWritebacks(EditorApp& app, SelectTool& 
     pendingTransformWritebacks_.push_back(EditorApp::CompletedTransformWriteback{
         .target = std::move(completed->target),
         .transform = completed->transform,
+        .sourceTransformAttributeValue = std::move(completed->sourceTransformAttributeValue),
     });
     for (auto& extra : completed->extras) {
       pendingTransformWritebacks_.push_back(EditorApp::CompletedTransformWriteback{
           .target = std::move(extra.target),
           .transform = extra.transform,
+          .sourceTransformAttributeValue = std::move(extra.sourceTransformAttributeValue),
       });
     }
   }
@@ -473,7 +476,8 @@ void DocumentSyncController::applyPendingWritebacks(EditorApp& app, SelectTool& 
           result = document.removeElementAttribute(*element, "transform");
         }
       } else {
-        const RcString serialized = toSVGTransformString(writeback.transform);
+        const RcString serialized = serializeTransformForWriteback(
+            writeback.sourceTransformAttributeValue, writeback.transform);
         if (std::string_view(serialized).empty()) {
           result = document.removeElementAttribute(*element, "transform");
         } else {
@@ -506,7 +510,8 @@ void DocumentSyncController::applyPendingWritebacks(EditorApp& app, SelectTool& 
         patch = buildAttributeRemoveWriteback(source, writeback.target, "transform");
       }
     } else {
-      const RcString serialized = toSVGTransformString(writeback.transform);
+      const RcString serialized = serializeTransformForWriteback(
+          writeback.sourceTransformAttributeValue, writeback.transform);
       if (std::string_view(serialized).empty()) {
         patch = buildAttributeRemoveWriteback(source, writeback.target, "transform");
       } else {

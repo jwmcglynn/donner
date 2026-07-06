@@ -352,6 +352,16 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "transform_syntax_preserving",
+    srcs = ["TransformSyntaxPreserving.cc"],
+    hdrs = ["TransformSyntaxPreserving.h"],
+    deps = [
+        "//donner/base",
+        "//donner/svg/parser",
+    ],
+)
+
+donner_cc_library(
     name = "async_renderer",
     srcs = ["AsyncRenderer.cc"],
     hdrs = ["AsyncRenderer.h"],
@@ -497,6 +507,7 @@ donner_cc_library(
         ":source_sync",
         ":text_editor",
         ":text_patch",
+        ":transform_syntax_preserving",
         "//donner/base",
     ],
 )
@@ -522,6 +533,20 @@ donner_cc_library(
     hdrs = ["MenuBarPresenter.h"],
     deps = [
         ":imgui_headers",
+        "@imgui",
+    ],
+)
+
+donner_cc_library(
+    name = "text_format_bar_presenter",
+    srcs = ["TextFormatBarPresenter.cc"],
+    hdrs = ["TextFormatBarPresenter.h"],
+    deps = [
+        ":editor_app",
+        ":imgui_headers",
+        "//donner/base",
+        "//donner/base/parser",
+        "//donner/svg",
         "@imgui",
     ],
 )
@@ -733,6 +758,7 @@ donner_cc_library(
         ":source_selection",
         ":style_source_annotations",
         ":text_editor",
+        ":text_format_bar_presenter",
         ":text_inspector_panel",
         ":text_to_outlines",
         ":text_tool",
@@ -749,6 +775,8 @@ donner_cc_library(
         "//donner/svg",
         "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/resources:font_catalog",
+        "//donner/svg/resources:font_manager",
         "//third_party/fira-code",
         "//third_party/roboto",
         "@imgui",
@@ -880,6 +908,7 @@ donner_cc_library(
         "//donner/base",
         "//donner/base/xml",
         "//donner/svg",
+        "//donner/svg/resources:font_catalog",
         "@imgui",
     ],
 )

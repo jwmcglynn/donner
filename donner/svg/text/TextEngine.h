@@ -88,8 +88,19 @@ public:
   const components::ComputedTextGeometryComponent& ensureComputedTextGeometryComponent(
       EntityHandle handle) const;
 
+  /// A placed glyph outline paired with the source element that produced it.
+  struct GlyphOutline {
+    Path path;                         ///< Glyph outline in text-element local coordinates.
+    Entity sourceEntity = entt::null;  ///< Span source entity (text/tspan) that owns this glyph.
+  };
+
   /// Return glyph outlines for the text subtree rooted at \p handle.
   std::vector<Path> computedGlyphPaths(EntityHandle handle) const;
+
+  /// Return glyph outlines paired with their source entities for the subtree rooted at \p handle.
+  /// The paint that colored each glyph lives on its source entity's computed style; callers that
+  /// must preserve per-span paint (e.g. text-to-outlines) resolve style from `sourceEntity`.
+  std::vector<GlyphOutline> computedGlyphOutlines(EntityHandle handle) const;
 
   /// Return the ink bounds for the text subtree rooted at \p handle.
   Box2d computedInkBounds(EntityHandle handle) const;

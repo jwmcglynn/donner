@@ -111,3 +111,16 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
     ],
 )
+
+donner_cc_test(
+    name = "inline_size_wrap_tests",
+    srcs = ["tests/InlineSizeWrap_tests.cc"],
+    deps = [
+        ":text_engine",
+        ":text_layout_params",
+        ":text_types",
+        "//donner/svg/components/text:components",
+        "//donner/svg/core",
+        "@com_google_gtest//:gtest_main",
+    ],
+)

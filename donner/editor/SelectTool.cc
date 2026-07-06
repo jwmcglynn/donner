@@ -695,9 +695,14 @@ void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/)
         .writebackTarget = dragState_->primary.writebackTarget,
         .sourceTransformAttributeValue = dragState_->primary.sourceTransformAttributeValue,
         .restoreSourceTransformAttributeValue = true};
+    // The forward ("after") snapshot carries the author's original bytes too so
+    // redo re-derives the same syntax-preserving writeback (restore stays
+    // false: this is a forward apply, not a verbatim restore).
     UndoSnapshot after{.element = dragState_->primary.element,
                        .transform = dragState_->primary.currentTransform,
-                       .writebackTarget = dragState_->primary.writebackTarget};
+                       .writebackTarget = dragState_->primary.writebackTarget,
+                       .sourceTransformAttributeValue =
+                           dragState_->primary.sourceTransformAttributeValue};
     before.extras.reserve(dragState_->extras.size());
     after.extras.reserve(dragState_->extras.size());
     for (const auto& extra : dragState_->extras) {
@@ -707,11 +712,11 @@ void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/)
                        .writebackTarget = extra.writebackTarget,
                        .sourceTransformAttributeValue = extra.sourceTransformAttributeValue,
                        .restoreSourceTransformAttributeValue = true});
-      after.extras.push_back(UndoSnapshot{
-          .element = extra.element,
-          .transform = extra.currentTransform,
-          .writebackTarget = extra.writebackTarget,
-      });
+      after.extras.push_back(
+          UndoSnapshot{.element = extra.element,
+                       .transform = extra.currentTransform,
+                       .writebackTarget = extra.writebackTarget,
+                       .sourceTransformAttributeValue = extra.sourceTransformAttributeValue});
     }
     editor.undoTimeline().record(undoLabel, std::move(before), std::move(after));
 
@@ -723,12 +728,14 @@ void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/)
           extraWritebacks.push_back(CompletedDragWriteback{
               .target = *extra.writebackTarget,
               .transform = extra.currentTransform,
+              .sourceTransformAttributeValue = extra.sourceTransformAttributeValue,
           });
         }
       }
       completedDragWriteback_ = CompletedDragWriteback{
           .target = *dragState_->primary.writebackTarget,
           .transform = dragState_->primary.currentTransform,
+          .sourceTransformAttributeValue = dragState_->primary.sourceTransformAttributeValue,
           .extras = std::move(extraWritebacks),
       };
     }

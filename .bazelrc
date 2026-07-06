@@ -69,6 +69,12 @@ build --incompatible_enable_cc_toolchain_resolution
 # @resvg-test-suite, which lives in the dev-only non_bcr_deps extension.
 common --//donner/svg/renderer:resvg_test_suite_available=true
 
+# Same pattern for the curated embedded Google Fonts (Design 0013 W3): the
+# gfont_* http_file repos live behind a dev_dependency module extension, so
+# BCR consumers cleanly skip the font catalog targets instead of failing to
+# resolve them.
+common --//third_party/google_fonts:google_fonts_available=true
+
 # Enable the latest LLVM toolchain for Linux exec platforms. macOS exec falls
 # through to apple_support's Xcode clang so ObjC targets keep working.
 common:latest_llvm --extra_toolchains=@llvm_toolchain_linux_aarch64//:all

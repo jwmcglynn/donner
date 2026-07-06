@@ -9,13 +9,20 @@
 ///
 /// - `convertTextToOutlines` resolves the computed glyph outlines for a single
 ///   selected `<text>` element using Donner's renderer-facing text geometry
-///   (`SVGTextElement::convertToPath()`, which drives the same
-///   `TextEngine::computedGlyphPaths()` the renderer consumes), serializes each
-///   placed glyph `Path` to an SVG `<path d="...">` in paint order, and builds
-///   a detached replacement `<g>` group carrying one `<path>` per glyph. Visual
-///   style (`fill`, `fill-rule`, `opacity`, `stroke`, `stroke-width`,
-///   `transform`) is carried onto the group so the outlined geometry lands
-///   exactly where the text rendered.
+///   (`SVGTextElement::convertToOutlineGlyphs()`, which drives the same
+///   `TextEngine` geometry the renderer consumes and retains the source element
+///   that painted each glyph), serializes each placed glyph `Path` to an SVG
+///   `<path d="...">` in paint order, and builds a detached replacement `<g>`
+///   group carrying one `<path>` per glyph.
+/// - Paint is preserved from the text element's *computed style* (via
+///   `SVGElement::getComputedStyle()`), not just its presentation attributes, so
+///   every styling form survives: presentation attributes, CSS rules (class and
+///   inline `style`), inherited paint, `currentColor` (resolved against the
+///   element's `color`), and `url(#id)` paint-server references. The group
+///   carries the text root's resolved `fill`, `fill-rule`, `fill-opacity`,
+///   `stroke`, `stroke-width`, `stroke-opacity`, `opacity`, and `transform`;
+///   per-`<tspan>` paint that differs from the group is applied on the
+///   individual glyph `<path>`s so multi-color runs are not collapsed.
 ///
 /// The conversion is DOM-first: it builds unattached DOM elements and never
 /// mutates the document. The caller applies it as ordinary structural DOM

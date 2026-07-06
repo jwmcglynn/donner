@@ -851,6 +851,10 @@ TextParams toTextParams(Registry& registry, const components::RenderingInstanceC
   params.wordSpacingPx = properties.wordSpacing.get().value().toPixels(
       params.viewBox, params.fontMetrics, Lengthd::Extent::X);
 
+  // SVG2 inline-size auto-flow measure (inline/X axis). <= 0 means no wrapping area.
+  params.inlineSizePx = properties.inlineSize.get().value().toPixels(
+      params.viewBox, params.fontMetrics, Lengthd::Extent::X);
+
   if (textComp) {
     params.textLength = textComp->textLength;
     params.lengthAdjust = textComp->lengthAdjust;

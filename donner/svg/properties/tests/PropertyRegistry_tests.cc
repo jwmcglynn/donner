@@ -883,8 +883,55 @@ TEST(PropertyRegistry, IsPresentationAttributeInherited) {
   EXPECT_FALSE(PropertyRegistry::isPresentationAttributeInherited("clip-path"));
   EXPECT_FALSE(PropertyRegistry::isPresentationAttributeInherited("transform"));
   EXPECT_FALSE(PropertyRegistry::isPresentationAttributeInherited("not-a-property"));
+  // inline-size is a non-inherited SVG2 property.
+  EXPECT_FALSE(PropertyRegistry::isPresentationAttributeInherited("inline-size"));
   // vector-effect is not inherited per the SVG2 spec.
   EXPECT_FALSE(PropertyRegistry::isPresentationAttributeInherited("vector-effect"));
+}
+
+TEST(PropertyRegistry, InlineSize) {
+  // Default (unspecified) resolves to 0 (no wrapping area) and is not marked specified.
+  {
+    PropertyRegistry registry;
+    EXPECT_FALSE(registry.inlineSize.isSpecified());
+    EXPECT_THAT(registry.inlineSize.get(), Optional(LengthValueIs(0.0, Lengthd::Unit::None)));
+  }
+
+  // Recognized as a valid presentation attribute (parsed from both attributes and CSS).
+  EXPECT_TRUE(PropertyRegistry::isPresentationAttributeName("inline-size"));
+
+  // A plain length via presentation attribute.
+  {
+    PropertyRegistry registry;
+    EXPECT_THAT(registry.parsePresentationAttribute("inline-size", "200"), ParseResultIs(true));
+    EXPECT_THAT(registry.inlineSize.get(), Optional(LengthValueIs(200.0, Lengthd::Unit::None)));
+  }
+
+  // A length with px units via CSS `style=""`.
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("inline-size: 150px");
+    EXPECT_THAT(registry.inlineSize.get(), Optional(LengthValueIs(150.0, Lengthd::Unit::Px)));
+  }
+
+  // Percentage.
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("inline-size: 50%");
+    EXPECT_THAT(registry.inlineSize.get(), Optional(LengthValueIs(50.0, Lengthd::Unit::Percent)));
+  }
+
+  // `auto` and negative values both collapse to 0 (no wrapping area).
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("inline-size: auto");
+    EXPECT_THAT(registry.inlineSize.get(), Optional(LengthValueIs(0.0, Lengthd::Unit::None)));
+  }
+  {
+    PropertyRegistry registry;
+    EXPECT_THAT(registry.parsePresentationAttribute("inline-size", "-40"), ParseResultIs(true));
+    EXPECT_THAT(registry.inlineSize.get()->value, testing::DoubleEq(0.0));
+  }
 }
 
 TEST(PropertyRegistry, VectorEffectParsing) {

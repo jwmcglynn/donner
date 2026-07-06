@@ -60,6 +60,26 @@ use_repo(
     "wgpu_native_macos_x86_64",
     "woff2",
 )
+
+# Curated embedded Google Fonts (Design 0013 W3). Fetched at build time via
+# pinned-hash http_file repos; dev_dependency so BCR consumers never fetch them
+# (only the editor links the embedded bytes). See third_party/google_fonts.
+google_fonts = use_extension("//third_party/google_fonts:fonts.bzl", "google_fonts", dev_dependency = True)
+use_repo(
+    google_fonts,
+    "gfont_bebas_neue",
+    "gfont_bitter",
+    "gfont_inter",
+    "gfont_jetbrains_mono",
+    "gfont_lato",
+    "gfont_lora",
+    "gfont_montserrat",
+    "gfont_open_sans",
+    "gfont_oswald",
+    "gfont_pacifico",
+    "gfont_playfair_display",
+    "gfont_roboto_mono",
+)
 ##
 ## Third-party dependencies
 ##
