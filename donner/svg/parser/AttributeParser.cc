@@ -1,7 +1,6 @@
 #include "donner/svg/parser/AttributeParser.h"
 
 #include <cctype>
-#include <cstdlib>
 #include <entt/entity/fwd.hpp>  // entt::type_list, entt::type_list_element
 #include <limits>
 #include <string>
@@ -1759,24 +1758,20 @@ std::vector<std::string> parseSemicolonList(std::string_view str) {
 /// whitespace/comma-separated numbers (e.g., keyTimes "0; 0.5; 1").
 std::vector<double> parseDoubleList(std::string_view str) {
   std::vector<double> result;
-  auto items = parseSemicolonList(str);
-  for (const auto& item : items) {
-    const char* ptr = item.c_str();
-    const char* end = ptr + item.size();
-    while (ptr < end) {
-      while (ptr < end && (*ptr == ' ' || *ptr == '\t' || *ptr == ',')) {
-        ++ptr;
+  for (const std::string& item : parseSemicolonList(str)) {
+    std::string_view remaining = item;
+    while (!remaining.empty()) {
+      if (remaining.front() == ' ' || remaining.front() == '\t' || remaining.front() == ',') {
+        remaining.remove_prefix(1);
+        continue;
       }
-      if (ptr >= end) {
-        break;
-      }
-      char* endPtr = nullptr;
-      double val = std::strtod(ptr, &endPtr);
-      if (endPtr == ptr) {
+
+      const auto maybeNumber = donner::parser::NumberParser::Parse(remaining);
+      if (maybeNumber.hasError()) {
         break;  // No more numbers.
       }
-      result.push_back(val);
-      ptr = endPtr;
+      result.push_back(maybeNumber.result().number);
+      remaining.remove_prefix(maybeNumber.result().consumedChars);
     }
   }
   return result;
@@ -1792,21 +1787,8 @@ void parseAnimationTimingAttribute(components::AnimationTimingComponent& timing,
   auto parseEarliestOffset =
       [](std::string_view listValue) -> std::optional<components::ClockValue> {
     std::optional<components::ClockValue> bestOffset;
-    std::string_view remaining = listValue;
-    while (!remaining.empty()) {
-      auto semi = remaining.find(';');
-      std::string_view item = remaining.substr(0, semi);
-      remaining =
-          (semi != std::string_view::npos) ? remaining.substr(semi + 1) : std::string_view{};
-
-      while (!item.empty() && (item.front() == ' ' || item.front() == '\t')) {
-        item.remove_prefix(1);
-      }
-      while (!item.empty() && (item.back() == ' ' || item.back() == '\t')) {
-        item.remove_suffix(1);
-      }
-
-      if (item.empty() || item == "indefinite") {
+    for (const std::string& item : parseSemicolonList(listValue)) {
+      if (item == "indefinite") {
         continue;
       }
 

@@ -159,29 +159,19 @@ void applyAnimationOverrides(Registry& registry) {
   AnimationSystem().advance(registry, documentTime, nullptr);
 
   // 2. Restore base components mutated by a previous apply so reverted animations do not leak
-  //    across time samples of the same live document.
-  {
-    std::vector<Entity> backupEntities;
-    for (auto [entity, backup] : registry.view<AnimationBaseBackup>().each()) {
-      backupEntities.push_back(entity);
-    }
-    for (const Entity entity : backupEntities) {
-      restoreAnimationBaseBackup(registry, entity, registry.get<AnimationBaseBackup>(entity));
-    }
+  //    across time samples of the same live document. Iterating the view directly is safe: the
+  //    restore only mutates other component storages, never AnimationBaseBackup itself.
+  for (auto [entity, backup] : registry.view<AnimationBaseBackup>().each()) {
+    restoreAnimationBaseBackup(registry, entity, backup);
   }
 
-  // 3. Apply the current frame's overrides.
-  std::vector<Entity> targets;
-  for (auto [entity, animValues] : registry.view<AnimatedValuesComponent>().each()) {
-    targets.push_back(entity);
-  }
-
+  // 3. Apply the current frame's overrides. The loop body only touches storages other than
+  //    AnimatedValuesComponent, so the view can be iterated directly.
   donner::parser::LengthParser::Options lengthOpts;
   lengthOpts.unitOptional = true;
   const auto overrideSpec = css::Specificity::Override();
 
-  for (const Entity entity : targets) {
-    auto& animValues = registry.get<AnimatedValuesComponent>(entity);
+  for (auto [entity, animValues] : registry.view<AnimatedValuesComponent>().each()) {
     bool geometryChanged = false;
 
     for (const auto& [attrName, attrValue] : animValues.overrides) {
