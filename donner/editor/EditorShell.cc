@@ -32,6 +32,7 @@
 #include "donner/editor/FrameMissTelemetry.h"
 #include "donner/editor/ImGuiClipboard.h"
 #include "donner/editor/KeyboardShortcutPolicy.h"
+#include "donner/editor/NativeWindowChrome.h"
 #include "donner/editor/SelectionTransformHandles.h"
 #include "donner/editor/ShapeClipboardCommands.h"
 #include "donner/editor/ShapeClipboardPayload.h"
@@ -1446,21 +1447,60 @@ void EditorShell::requestRevert() {
   window_.wakeEventLoop();
 }
 
+void EditorShell::serviceNativeDialogs() {
+  if (!nativeDialogs_.available()) {
+    return;  // Non-macOS: the ImGui modal handles open/save.
+  }
+
+  if (dialogPresenter_.openFileModalRequested()) {
+    dialogPresenter_.consumeOpenFileModalRequest();
+    if (const std::optional<std::string> chosen =
+            nativeDialogs_.openFile(window_.rawHandle(), app_.currentFilePath())) {
+      std::string error;
+      if (!tryOpenPath(*chosen, &error)) {
+        // Surface the failure through the in-editor modal, pre-filled so the
+        // user can retry or correct the path.
+        dialogPresenter_.requestOpenFile(std::make_optional(*chosen));
+        dialogPresenter_.setOpenFileError(std::move(error));
+      }
+    }
+    window_.wakeEventLoop();
+  }
+
+  if (dialogPresenter_.saveFileModalRequested()) {
+    const std::string suggested = dialogPresenter_.pendingSaveFilePath();
+    dialogPresenter_.consumeSaveFileModalRequest();
+    const std::optional<std::string> suggestedOpt =
+        suggested.empty() ? std::nullopt : std::make_optional(suggested);
+    if (const std::optional<std::string> chosen =
+            nativeDialogs_.saveFile(window_.rawHandle(), suggestedOpt)) {
+      std::string error;
+      // Mirror the render() callback's routing: an in-flight viewport export
+      // writes cropped SVG, otherwise this is a normal document save.
+      const bool ok = pendingViewportExport_ ? tryExportViewportSvgToPath(*chosen, &error)
+                                             : trySavePath(*chosen, &error);
+      if (!ok) {
+        dialogPresenter_.requestSaveFile(std::make_optional(*chosen), std::move(error));
+      }
+    }
+    window_.wakeEventLoop();
+  }
+}
+
 void EditorShell::updateWindowTitle() {
-  std::string title;
-  if (app_.isDirty()) {
-    title += "● ";
-  }
-  if (app_.currentFilePath().has_value()) {
-    title += std::filesystem::path(*app_.currentFilePath()).filename().string();
-  } else {
-    title += "untitled";
-  }
-  title += " - Donner SVG Editor";
+  const WindowChromeState chromeState{.filePath = app_.currentFilePath(),
+                                      .edited = app_.isDirty()};
+
+  // On platforms with native title-bar chrome (macOS) the edited "dot" and
+  // proxy icon are shown by the OS, so keep them out of the title text.
+  const bool nativeChrome = NativeWindowChromeAvailable();
+  std::string title = ComposeWindowTitle(chromeState, /*showEditedDotInText=*/!nativeChrome);
   if (title != lastWindowTitle_) {
     window_.setTitle(title);
     lastWindowTitle_ = std::move(title);
   }
+
+  ApplyNativeWindowChrome(window_.rawHandle(), chromeState);
 }
 
 void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
@@ -4627,6 +4667,10 @@ void EditorShell::runFrame() {
     applyFormatBarActions(formatBarState, formatBarActions);
   }
 
+  // On macOS, service any pending open/save with a native OS panel; this
+  // consumes the request so the ImGui modal below stays closed. On other
+  // platforms it is a no-op and the ImGui modal renders as before.
+  serviceNativeDialogs();
   dialogPresenter_.render(
       [this](std::string_view path, std::string* error) { return tryOpenPath(path, error); },
       [this](std::string_view path, std::string* error) {

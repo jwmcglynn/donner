@@ -261,6 +261,76 @@ objc_library(
 )
 
 donner_cc_library(
+    name = "file_dialog_state",
+    srcs = ["FileDialogState.cc"],
+    hdrs = ["FileDialogState.h"],
+    deps = [],
+)
+
+donner_cc_library(
+    name = "native_file_dialog",
+    srcs = select({
+        "@platforms//os:macos": [],
+        "//conditions:default": ["NativeFileDialogStub.cc"],
+    }),
+    hdrs = ["NativeFileDialog.h"],
+    deps = [
+        ":file_dialog_state",
+    ],
+)
+
+objc_library(
+    name = "native_file_dialog_macos",
+    srcs = ["NativeFileDialogMac.mm"],
+    sdk_frameworks = [
+        "Cocoa",
+        "UniformTypeIdentifiers",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":native_file_dialog",
+        "@glfw",
+    ],
+)
+
+donner_cc_library(
+    name = "native_window_chrome",
+    srcs = ["NativeWindowChrome.cc"] + select({
+        "@platforms//os:macos": [],
+        "//conditions:default": ["NativeWindowChromeStub.cc"],
+    }),
+    hdrs = ["NativeWindowChrome.h"],
+    deps = [],
+)
+
+objc_library(
+    name = "native_window_chrome_macos",
+    srcs = ["NativeWindowChromeMac.mm"],
+    sdk_frameworks = ["Cocoa"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":native_window_chrome",
+        "@glfw",
+    ],
+)
+
+donner_cc_library(
+    name = "native_dialog_coordinator",
+    srcs = ["NativeDialogCoordinator.cc"],
+    hdrs = ["NativeDialogCoordinator.h"],
+    deps = [
+        ":file_dialog_state",
+        ":native_file_dialog",
+    ],
+)
+
+donner_cc_library(
     name = "command_queue",
     srcs = ["CommandQueue.cc"],
     hdrs = [
@@ -751,6 +821,8 @@ donner_cc_library(
         ":layer_tree_model",
         ":layers_panel",
         ":menu_bar_presenter",
+        ":native_dialog_coordinator",
+        ":native_window_chrome",
         ":pen_tool",
         ":render_coordinator",
         ":render_pane_presenter",
@@ -799,6 +871,12 @@ donner_cc_library(
         "//conditions:default": [
             "@glfw",
         ],
+    }) + select({
+        "@platforms//os:macos": [
+            ":native_file_dialog_macos",
+            ":native_window_chrome_macos",
+        ],
+        "//conditions:default": [],
     }),
 )
 
