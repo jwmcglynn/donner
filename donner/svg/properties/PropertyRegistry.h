@@ -118,6 +118,7 @@ auto as_mutable(const std::tuple<Args...>& tuple) {
  * | `text-anchor` | \ref textAnchor | `start` |
  * | `text-decoration` | \ref textDecoration | `none` |
  * | `dominant-baseline` | \ref dominantBaseline | `auto` |
+ * | `inline-size` | \ref inlineSize | `0` |
  */
 class PropertyRegistry {
 public:
@@ -372,6 +373,17 @@ public:
   Property<WritingMode, PropertyCascade::Inherit> writingMode{
       "writing-mode", []() -> std::optional<WritingMode> { return WritingMode::HorizontalTb; }};
 
+  /// `inline-size` property (SVG2). When set to a positive length on a `<text>` element it
+  /// establishes an automatic wrapping area whose measure (extent in the inline axis) is the
+  /// given length; text greedily wraps to that measure. Not inherited. The initial value `0`
+  /// means "no wrapping area" (the text behaves as ordinary single-line SVG text).
+  ///
+  /// Donner supports auto-flow only for horizontal writing modes today; see
+  /// \ref donner::svg::TextEngine for the documented limitation.
+  /// @see https://www.w3.org/TR/SVG2/text.html#InlineSizeProperty
+  Property<Lengthd> inlineSize{
+      "inline-size", []() -> std::optional<Lengthd> { return Lengthd(0, Lengthd::Unit::None); }};
+
   /// `mix-blend-mode` property. Controls how an element composites with its backdrop.
   /// Not inherited. Defaults to Normal (SourceOver).
   Property<MixBlendMode> mixBlendMode{
@@ -424,8 +436,8 @@ public:
         strokeDasharray, strokeDashoffset, clipPath, clipRule, mask, filter,
         colorInterpolationFilters, pointerEvents, cursor, markerStart, markerMid, markerEnd,
         fontFamily, fontSize, fontWeight, fontStyle, fontStretch, fontVariant, textAnchor,
-        textDecoration, dominantBaseline, writingMode, letterSpacing, wordSpacing, baselineShift,
-        alignmentBaseline, mixBlendMode, isolation, imageRendering, paintOrder);
+        textDecoration, dominantBaseline, writingMode, inlineSize, letterSpacing, wordSpacing,
+        baselineShift, alignmentBaseline, mixBlendMode, isolation, imageRendering, paintOrder);
   }
 
   /**
