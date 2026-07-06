@@ -196,9 +196,29 @@ struct SelectionChromeSnapshot {
   };
   /// The active text-editing caret, or nullopt when no text session is open.
   std::optional<TextCaret> textCaretDoc;
-  /// Text-box frame: the session's box-text bounds, or the live rectangle
-  /// while a text box is being dragged out.
+  /// Text-box frame for the active editing session's box text.
   std::optional<Box2d> textBoxDoc;
+
+  /// Drag-to-create text-box preview: the live rectangle the text tool is
+  /// dragging out, plus the first baseline it would create and an I-beam
+  /// marker at the future caret position. Drawn as dedicated text-box chrome
+  /// (crisp frame + guidance baseline + I-beam), visually distinct from the
+  /// selection marquee's translucent fill + white outline.
+  struct TextBoxDragPreview {
+    /// The live drag rectangle.
+    Box2d boxDoc;
+    /// First-baseline segment endpoints.
+    Vector2d baselineStartDoc;
+    Vector2d baselineEndDoc;
+    /// I-beam bar endpoints at the future caret position (top, bottom).
+    Vector2d ibeamTopDoc;
+    Vector2d ibeamBottomDoc;
+
+    bool operator==(const TextBoxDragPreview&) const = default;
+  };
+  /// The active drag-to-create preview, or nullopt when the text tool is not
+  /// dragging out a box.
+  std::optional<TextBoxDragPreview> textBoxDragPreviewDoc;
 
   /// One baseline segment of a selected text run, in document space.
   struct TextBaseline {

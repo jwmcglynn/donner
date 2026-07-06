@@ -656,6 +656,23 @@ Box2d ResolveDocumentViewBox(svg::SVGDocument& document) {
 
 using namespace internal;
 
+/// Convert the text tool's drag-to-create preview into the overlay
+/// snapshot's pushed-state form.
+std::optional<SelectionChromeSnapshot::TextBoxDragPreview> TextBoxDragPreviewFromTool(
+    const std::optional<TextTool::DragPreviewChrome>& preview) {
+  if (!preview.has_value()) {
+    return std::nullopt;
+  }
+  return SelectionChromeSnapshot::TextBoxDragPreview{
+      .boxDoc = preview->boxDoc,
+      .baselineStartDoc = preview->baselineStartDoc,
+      .baselineEndDoc = preview->baselineEndDoc,
+      .ibeamTopDoc = preview->ibeamTopDoc,
+      .ibeamBottomDoc = preview->ibeamBottomDoc,
+  };
+}
+
+
 EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     : window_(window),
       options_(std::move(options)),
@@ -1157,7 +1174,9 @@ void EditorShell::applyPendingDocumentSpaceReplayInputForTesting() {
   // Text-editing chrome for document-space input, mirroring the live-pointer
   // update in renderRenderPane.
   if (activeTool_ == ActiveTool::Text && textTool_.isDraggingBox()) {
-    renderCoordinator_.setTextEditingChrome(std::nullopt, textTool_.dragBoxDoc());
+    renderCoordinator_.setTextEditingChrome(std::nullopt, std::nullopt);
+    renderCoordinator_.setTextBoxDragPreview(
+        TextBoxDragPreviewFromTool(textTool_.dragPreviewChrome()));
   } else if (activeTool_ == ActiveTool::Text && textTool_.isEditing()) {
     if (const auto textChrome = textTool_.editingChrome(app_); textChrome.has_value()) {
       renderCoordinator_.setTextEditingChrome(
@@ -1167,8 +1186,10 @@ void EditorShell::applyPendingDocumentSpaceReplayInputForTesting() {
               : std::nullopt,
           textChrome->boxDoc);
     }
+    renderCoordinator_.setTextBoxDragPreview(std::nullopt);
   } else if (activeTool_ == ActiveTool::Text) {
     renderCoordinator_.setTextEditingChrome(std::nullopt, std::nullopt);
+    renderCoordinator_.setTextBoxDragPreview(std::nullopt);
   }
 }
 
@@ -2784,7 +2805,9 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
   // Text-editing chrome: caret + box frame while a session is active, or the
   // live rectangle while a text box is being dragged out.
   if (textToolActive && textTool_.isDraggingBox()) {
-    renderCoordinator_.setTextEditingChrome(std::nullopt, textTool_.dragBoxDoc());
+    renderCoordinator_.setTextEditingChrome(std::nullopt, std::nullopt);
+    renderCoordinator_.setTextBoxDragPreview(
+        TextBoxDragPreviewFromTool(textTool_.dragPreviewChrome()));
   } else if (textToolActive && textTool_.isEditing()) {
     if (const auto textChrome = textTool_.editingChrome(app_); textChrome.has_value()) {
       // The caret blinks on a timed phase (hidden half-periods push no
@@ -2798,8 +2821,10 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
               : std::nullopt,
           textChrome->boxDoc);
     }
+    renderCoordinator_.setTextBoxDragPreview(std::nullopt);
   } else {
     renderCoordinator_.setTextEditingChrome(std::nullopt, std::nullopt);
+    renderCoordinator_.setTextBoxDragPreview(std::nullopt);
   }
 
   applyPendingDocumentSpaceReplayInputForTesting();

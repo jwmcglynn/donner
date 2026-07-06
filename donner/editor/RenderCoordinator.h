@@ -188,6 +188,14 @@ public:
     textEditingBoxDoc_ = boxDoc;
   }
 
+  /// Set (or clear) the text tool's drag-to-create preview chrome for the
+  /// next overlay capture: the live box being dragged out plus its first
+  /// baseline and I-beam marker, in document space.
+  void setTextBoxDragPreview(
+      std::optional<SelectionChromeSnapshot::TextBoxDragPreview> previewDoc) {
+    textBoxDragPreviewDoc_ = previewDoc;
+  }
+
   void resetForLoadedDocument();
   void refreshSelectionBoundsCache(EditorApp& app);
   void promoteSelectionBoundsIfReady();
@@ -329,6 +337,8 @@ private:
   std::optional<Vector2d> penHoverCloseAffordanceDoc_;
   std::optional<SelectionChromeSnapshot::TextCaret> textEditingCaretDoc_;
   std::optional<Box2d> textEditingBoxDoc_;
+  /// Text-box drag-to-create preview pushed by the shell each frame.
+  std::optional<SelectionChromeSnapshot::TextBoxDragPreview> textBoxDragPreviewDoc_;
   /// Pen hover chrome baked into the current immediate overlay snapshot;
   /// hover moves must re-capture even though the document version is
   /// unchanged.
@@ -336,6 +346,7 @@ private:
   std::optional<Vector2d> lastOverlayPenHoverCloseAffordanceDoc_;
   std::optional<SelectionChromeSnapshot::TextCaret> lastOverlayTextEditingCaretDoc_;
   std::optional<Box2d> lastOverlayTextEditingBoxDoc_;
+  std::optional<SelectionChromeSnapshot::TextBoxDragPreview> lastOverlayTextBoxDragPreviewDoc_;
 
   PresentationRenderScheduler renderScheduler_;
   /// Live selected display:none entity whose stale promoted layer is currently hidden.

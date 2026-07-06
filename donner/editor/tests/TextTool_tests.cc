@@ -723,6 +723,49 @@ TEST_F(TextToolTest, CancelResetsWithoutTouchingDocument) {
   EXPECT_TRUE(hasTextElement());
 }
 
+TEST_F(TextToolTest, DragPreviewChromeShowsFrameBaselineAndIbeam) {
+  // No drag: no preview.
+  EXPECT_FALSE(tool.dragPreviewChrome().has_value());
+
+  tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
+  // Before any movement there is no live rectangle yet.
+  EXPECT_FALSE(tool.dragPreviewChrome().has_value());
+
+  tool.onMouseMove(app, Vector2d(210.0, 120.0), /*buttonHeld=*/true);
+  const auto preview = tool.dragPreviewChrome();
+  ASSERT_TRUE(preview.has_value());
+  EXPECT_EQ(preview->boxDoc.topLeft, Vector2d(10.0, 20.0));
+  EXPECT_EQ(preview->boxDoc.bottomRight, Vector2d(210.0, 120.0));
+
+  // The first baseline sits one default font size below the box top and is
+  // inset from the frame edges.
+  EXPECT_DOUBLE_EQ(preview->baselineStartDoc.y, 20.0 + TextTool::kDefaultFontSize);
+  EXPECT_DOUBLE_EQ(preview->baselineEndDoc.y, preview->baselineStartDoc.y);
+  EXPECT_GT(preview->baselineStartDoc.x, preview->boxDoc.topLeft.x);
+  EXPECT_LT(preview->baselineEndDoc.x, preview->boxDoc.bottomRight.x);
+
+  // The I-beam bar hangs on the baseline at the future caret position, inside
+  // the box.
+  EXPECT_DOUBLE_EQ(preview->ibeamTopDoc.x, preview->baselineStartDoc.x);
+  EXPECT_DOUBLE_EQ(preview->ibeamBottomDoc.x, preview->ibeamTopDoc.x);
+  EXPECT_LT(preview->ibeamTopDoc.y, preview->baselineStartDoc.y);
+  EXPECT_GT(preview->ibeamBottomDoc.y, preview->baselineStartDoc.y);
+  EXPECT_GE(preview->ibeamTopDoc.y, preview->boxDoc.topLeft.y);
+  EXPECT_LE(preview->ibeamBottomDoc.y, preview->boxDoc.bottomRight.y);
+
+  // A shallow drag clamps the baseline and I-beam into the box.
+  tool.onMouseMove(app, Vector2d(210.0, 30.0), /*buttonHeld=*/true);
+  const auto shallow = tool.dragPreviewChrome();
+  ASSERT_TRUE(shallow.has_value());
+  EXPECT_LE(shallow->baselineStartDoc.y, shallow->boxDoc.bottomRight.y);
+  EXPECT_GE(shallow->ibeamTopDoc.y, shallow->boxDoc.topLeft.y);
+  EXPECT_LE(shallow->ibeamBottomDoc.y, shallow->boxDoc.bottomRight.y);
+
+  // Releasing (creating the session) clears the preview.
+  tool.onMouseUp(app, Vector2d(210.0, 30.0));
+  EXPECT_FALSE(tool.dragPreviewChrome().has_value());
+}
+
 TEST(TextToolCaretBlinkTest, VisibleDuringFirstHalfPeriodHiddenDuringSecond) {
   constexpr double kHalf = TextTool::kCaretBlinkHalfPeriodSeconds;
 

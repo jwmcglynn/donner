@@ -68,6 +68,22 @@ public:
     std::optional<Box2d> boxDoc;
   };
 
+  /// Drag-to-create preview chrome (document space): the live box being
+  /// dragged out, the first text baseline it would create (one default font
+  /// size below the box top, clamped into the box), and an I-beam marker at
+  /// the future caret position. Distinct from the selection marquee so the
+  /// gesture reads as "creating a text box".
+  struct DragPreviewChrome {
+    /// The live drag rectangle.
+    Box2d boxDoc;
+    /// First-baseline segment endpoints (left, right - inset from the frame).
+    Vector2d baselineStartDoc;
+    Vector2d baselineEndDoc;
+    /// I-beam bar endpoints at the future caret position (top, bottom).
+    Vector2d ibeamTopDoc;
+    Vector2d ibeamBottomDoc;
+  };
+
   /// Begin a gesture: a press on the session frame's transform handles
   /// starts a frame resize (reflow - glyphs never scale) or a rotate; a
   /// click inside the session's text moves the caret (clicks inside the
@@ -110,6 +126,9 @@ public:
                                                                    bool includeRotate) const;
   /// The box being dragged, for drag-preview chrome.
   [[nodiscard]] const std::optional<Box2d>& dragBoxDoc() const { return dragBoxDoc_; }
+  /// Text-box drag preview chrome (frame + first baseline + I-beam marker),
+  /// or nullopt when no box drag has produced a live rectangle yet.
+  [[nodiscard]] std::optional<DragPreviewChrome> dragPreviewChrome() const;
 
   /// Insert one code point at the caret.
   void insertCodepoint(EditorApp& editor, char32_t codepoint);

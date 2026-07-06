@@ -794,7 +794,8 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
       !snapshot.marqueeDoc.has_value() && !snapshot.lockedFlash.has_value() &&
       !snapshot.livePathPreview.has_value() && !snapshot.penPreviewSegmentDoc.has_value() &&
       !snapshot.penCloseAffordanceDoc.has_value() && !snapshot.textCaretDoc.has_value() &&
-      !snapshot.textBoxDoc.has_value() && snapshot.textBaselinesDoc.empty()) {
+      !snapshot.textBoxDoc.has_value() && !snapshot.textBoxDragPreviewDoc.has_value() &&
+      snapshot.textBaselinesDoc.empty()) {
     return;
   }
 
@@ -909,6 +910,54 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
     renderer.drawRect(Box2d(*snapshot.penCloseAffordanceDoc - halfSize,
                             *snapshot.penCloseAffordanceDoc + halfSize),
                       affordancePaint.strokeParams);
+  }
+
+  // Drag-to-create text-box preview: a crisp cyan frame (no fill - the
+  // marquee is the one with the translucent fill + white outline), a
+  // guidance first-baseline segment, and an I-beam marker (bar + serifs) at
+  // the future caret position, so the gesture reads as creating a text box.
+  if (snapshot.textBoxDragPreviewDoc.has_value()) {
+    const SelectionChromeSnapshot::TextBoxDragPreview& preview = *snapshot.textBoxDragPreviewDoc;
+    renderer.setTransform(snapshot.canvasFromDoc);
+
+    const svg::PaintParams framePaint =
+        MakeSelectionStrokePaint(snapshot.selectionStrokeWidthWorld);
+    renderer.setPaint(framePaint);
+    renderer.drawRect(preview.boxDoc, framePaint.strokeParams);
+
+    const svg::PaintParams baselinePaint =
+        MakePathControlLinePaint(snapshot.selectionStrokeWidthWorld);
+    renderer.setPaint(baselinePaint);
+    {
+      PathBuilder builder;
+      builder.moveTo(preview.baselineStartDoc);
+      builder.lineTo(preview.baselineEndDoc);
+      svg::PathShape shape;
+      shape.path = builder.build();
+      shape.parentFromEntity = Transform2d();
+      renderer.drawPath(shape, baselinePaint.strokeParams);
+    }
+
+    const svg::PaintParams ibeamPaint =
+        MakeSelectionStrokePaint(snapshot.selectionStrokeWidthWorld * 1.5);
+    renderer.setPaint(ibeamPaint);
+    {
+      // Serif half-length scales with the bar height so the I-beam keeps its
+      // proportions across zoom levels.
+      const double serifHalf =
+          std::abs(preview.ibeamBottomDoc.y - preview.ibeamTopDoc.y) * 0.15;
+      PathBuilder builder;
+      builder.moveTo(preview.ibeamTopDoc);
+      builder.lineTo(preview.ibeamBottomDoc);
+      builder.moveTo(preview.ibeamTopDoc - Vector2d(serifHalf, 0.0));
+      builder.lineTo(preview.ibeamTopDoc + Vector2d(serifHalf, 0.0));
+      builder.moveTo(preview.ibeamBottomDoc - Vector2d(serifHalf, 0.0));
+      builder.lineTo(preview.ibeamBottomDoc + Vector2d(serifHalf, 0.0));
+      svg::PathShape shape;
+      shape.path = builder.build();
+      shape.parentFromEntity = Transform2d();
+      renderer.drawPath(shape, ibeamPaint.strokeParams);
+    }
   }
 
   // Text-editing chrome: the box frame reads as guidance (hover-bounds

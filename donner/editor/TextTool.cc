@@ -914,6 +914,34 @@ void TextTool::beginSessionUndo(EditorApp& editor) {
   }
 }
 
+std::optional<TextTool::DragPreviewChrome> TextTool::dragPreviewChrome() const {
+  if (state_ != State::DraggingBox || !dragBoxDoc_.has_value()) {
+    return std::nullopt;
+  }
+
+  const Box2d& box = *dragBoxDoc_;
+  // Mirror the creation rule from onMouseUp: the first baseline sits one
+  // default font size below the box top. While the drag is still shallower
+  // than that, clamp the baseline (and the I-beam that hangs off it) into
+  // the box so the preview never pokes outside the frame.
+  const double baselineY = std::min(box.topLeft.y + kDefaultFontSize, box.bottomRight.y);
+  // Inset the baseline and I-beam slightly so they read as content guides,
+  // not part of the frame.
+  const double inset = std::min(kDefaultFontSize * 0.15, box.size().x * 0.25);
+
+  DragPreviewChrome preview;
+  preview.boxDoc = box;
+  preview.baselineStartDoc = Vector2d(box.topLeft.x + inset, baselineY);
+  preview.baselineEndDoc = Vector2d(box.bottomRight.x - inset, baselineY);
+
+  const double ibeamX = box.topLeft.x + inset;
+  const double ibeamTop = std::max(baselineY - kDefaultFontSize * 0.9, box.topLeft.y);
+  const double ibeamBottom = std::min(baselineY + kDefaultFontSize * 0.25, box.bottomRight.y);
+  preview.ibeamTopDoc = Vector2d(ibeamX, ibeamTop);
+  preview.ibeamBottomDoc = Vector2d(ibeamX, ibeamBottom);
+  return preview;
+}
+
 bool TextTool::CaretBlinkVisibleAtPhase(double secondsSincePhaseReset) {
   if (secondsSincePhaseReset <= 0.0) {
     return true;

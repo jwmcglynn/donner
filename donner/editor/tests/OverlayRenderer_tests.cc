@@ -1671,5 +1671,69 @@ TEST(OverlayRendererTest, MultiLineTextCapturesOneBaselinePerLine) {
   EXPECT_NEAR(snapshot.textBaselinesDoc[1].startDoc.y, 104.0, 1.0);
 }
 
+
+TEST(OverlayRendererTest, TextBoxDragPreviewDrawsFrameBaselineAndIbeamDistinctFromMarquee) {
+  // Pure pushed-state chrome: no document registry reads are involved, so
+  // build the snapshot directly the way RenderCoordinator stamps it.
+  SelectionChromeSnapshot snapshot;
+  snapshot.canvasFromDoc = Transform2d();
+  snapshot.selectionStrokeWidthWorld = 1.5;
+  snapshot.hoverStrokeWidthWorld = 1.5;
+  snapshot.marqueeStrokeWidthWorld = 1.5;
+  snapshot.textBoxDragPreviewDoc = SelectionChromeSnapshot::TextBoxDragPreview{
+      .boxDoc = Box2d(Vector2d(40.0, 40.0), Vector2d(160.0, 140.0)),
+      .baselineStartDoc = Vector2d(45.0, 72.0),
+      .baselineEndDoc = Vector2d(155.0, 72.0),
+      .ibeamTopDoc = Vector2d(45.0, 43.0),
+      .ibeamBottomDoc = Vector2d(45.0, 80.0),
+  };
+
+  svg::Renderer renderer;
+  svg::RenderViewport viewport;
+  viewport.size = Vector2d(200.0, 200.0);
+  viewport.devicePixelRatio = 1.0;
+  renderer.beginFrame(viewport);
+  OverlayRenderer::drawChromeFromSnapshot(renderer, snapshot);
+  renderer.endFrame();
+  const auto bitmap = renderer.takeSnapshot();
+  ASSERT_FALSE(bitmap.empty());
+
+  const auto pixelAt = [&](int x, int y, int channel) -> std::uint8_t {
+    const std::uint8_t* row = bitmap.pixels.data() + y * bitmap.rowBytes;
+    return row[x * 4 + channel];
+  };
+  const auto isCyanAt = [&](int x, int y) {
+    return pixelAt(x, y, 2) > 150 && pixelAt(x, y, 1) > 120 && pixelAt(x, y, 0) < 110 &&
+           pixelAt(x, y, 3) > 0;
+  };
+  const auto anyCyanNear = [&](int x, int y) {
+    for (int dy = -2; dy <= 2; ++dy) {
+      for (int dx = -2; dx <= 2; ++dx) {
+        if (isCyanAt(x + dx, y + dy)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+
+  // Frame edges (crisp cyan stroke, no marquee-style fill).
+  EXPECT_TRUE(anyCyanNear(100, 40)) << "top frame edge missing";
+  EXPECT_TRUE(anyCyanNear(100, 140)) << "bottom frame edge missing";
+  EXPECT_TRUE(anyCyanNear(40, 90)) << "left frame edge missing";
+  EXPECT_TRUE(anyCyanNear(160, 90)) << "right frame edge missing";
+
+  // First-baseline guidance segment.
+  EXPECT_TRUE(anyCyanNear(100, 72)) << "baseline indicator missing";
+
+  // I-beam bar at the future caret position.
+  EXPECT_TRUE(anyCyanNear(45, 60)) << "I-beam bar missing";
+
+  // Distinct from the marquee: the box interior stays unfilled. Sample a
+  // point away from the baseline and I-beam.
+  EXPECT_EQ(pixelAt(120, 110, 3), 0)
+      << "drag preview interior must not carry the marquee's translucent fill";
+}
+
 }  // namespace
 }  // namespace donner::editor
