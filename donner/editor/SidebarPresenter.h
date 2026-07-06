@@ -63,6 +63,16 @@ struct DecomposedTransform {
 /// can't race the worker.
 class SidebarPresenter {
 public:
+  /// Which inspector transform widget owns the in-progress edit.
+  enum class TransformField : std::uint8_t {
+    PositionX,  ///< Bounds left edge, document space.
+    PositionY,  ///< Bounds top edge, document space.
+    Width,      ///< Bounds width, document space.
+    Height,     ///< Bounds height, document space.
+    Rotation,   ///< Decomposed rotation, degrees.
+    Matrix,     ///< One raw matrix component (see `matrixIndex`).
+  };
+
   /// Maps a static path-operation icon bitmap to an ImGui texture handle for
   /// display. The icon bitmaps are rendered from embedded Bootstrap SVG resources
   /// through Donner; ImGui only receives the final raster texture for the image
@@ -123,6 +133,42 @@ public:
     return inspectorSnapshot_.computedStyle;
   }
 
+  [[nodiscard]] const std::optional<Box2d>& inspectorBoundsForTesting() const {
+    return inspectorSnapshot_.bounds;
+  }
+
+  [[nodiscard]] const std::optional<Transform2d>& inspectorTransformForTesting() const {
+    return inspectorSnapshot_.transform;
+  }
+
+  // Testing hooks that drive the transform-edit state machine directly,
+  // mirroring the widget lifecycle (activate -> per-frame value writes ->
+  // deactivate) without an interactive ImGui frame.
+
+  /// Capture the edit baseline for @p field, as widget activation does.
+  void beginTransformEditForTesting(EditorApp& app, TransformField field, int matrixIndex = 0) {
+    beginTransformEdit(app, field, matrixIndex, "Edit transform");
+  }
+
+  /// Whether a transform edit is currently in progress.
+  [[nodiscard]] bool hasTransformEditForTesting() const { return transformEdit_.has_value(); }
+
+  /// Write @p value into the active edit and queue the resulting mutation,
+  /// as one frame of dragging does. Returns true if a mutation was queued.
+  bool applyTransformEditForTesting(EditorApp& app, double value) {
+    if (!transformEdit_.has_value()) {
+      return false;
+    }
+    if (transformEdit_->field == TransformField::Matrix) {
+      transformEdit_->matrixValues[static_cast<std::size_t>(transformEdit_->matrixIndex)] = value;
+    }
+    transformEdit_->fieldValue = value;
+    return applyTransformEdit(app, value);
+  }
+
+  /// Finalize the active edit into one undo entry, as widget deactivation does.
+  void commitTransformEditForTesting(EditorApp& app) { commitTransformEdit(app); }
+
 private:
   struct TreeNodeSnapshot {
     /// Captured element reference. Valid for as long as the underlying
@@ -142,16 +188,6 @@ private:
     std::optional<Transform2d> transform;
     std::vector<std::pair<std::string, std::string>> xmlAttributes;
     std::vector<std::pair<std::string, std::string>> computedStyle;
-  };
-
-  /// Which inspector transform widget owns the in-progress edit.
-  enum class TransformField : std::uint8_t {
-    PositionX,  ///< Bounds left edge, document space.
-    PositionY,  ///< Bounds top edge, document space.
-    Width,      ///< Bounds width, document space.
-    Height,     ///< Bounds height, document space.
-    Rotation,   ///< Decomposed rotation, degrees.
-    Matrix,     ///< One raw matrix component (see `matrixIndex`).
   };
 
   /// State for the transform edit currently in progress (one ImGui item can
