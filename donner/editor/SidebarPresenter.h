@@ -46,11 +46,6 @@ struct DecomposedTransform {
 /// that case rather than force-fitting the fields.
 [[nodiscard]] std::optional<DecomposedTransform> DecomposeTransform(const Transform2d& transform);
 
-/// Compose the decomposed fields back into a matrix: scale is applied first,
-/// then rotation, then translation. Inverse of \ref DecomposeTransform for
-/// every decomposable matrix.
-[[nodiscard]] Transform2d ComposeTransform(const DecomposedTransform& decomposed);
-
 /// Renders the editor's tree view and inspector panes.
 ///
 /// The panes are always rendered from an internal snapshot so they stay

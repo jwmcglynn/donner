@@ -356,11 +356,6 @@ std::optional<DecomposedTransform> DecomposeTransform(const Transform2d& transfo
   return result;
 }
 
-Transform2d ComposeTransform(const DecomposedTransform& decomposed) {
-  return Transform2d::Scale(decomposed.scale) * Transform2d::Rotate(decomposed.rotationRadians) *
-         Transform2d::Translate(decomposed.translation);
-}
-
 void SidebarPresenter::captureTreeNode(const donner::svg::SVGElement& element,
                                        std::span<const donner::svg::SVGElement> selection,
                                        TreeNodeSnapshot& out) {

@@ -55,6 +55,19 @@ void ExpectTransformNear(const Transform2d& actual, const Transform2d& expected,
   }
 }
 
+/// Compose decomposed fields back into a matrix: scale is applied first, then rotation, then
+/// translation. Inverse of `DecomposeTransform` for every decomposable matrix.
+///
+/// This mirrors the production `ComposeTransform` free function that used to live in
+/// SidebarPresenter.h/.cc; that function was removed as dead production code (its only caller was
+/// this test file - the live compose path is `SidebarPresenter::composeFieldTransform`, which
+/// composes per-field drag deltas rather than a `DecomposedTransform`). It is kept here,
+/// test-local, purely to verify `DecomposeTransform` round-trips.
+Transform2d ComposeTransformForTest(const DecomposedTransform& decomposed) {
+  return Transform2d::Scale(decomposed.scale) * Transform2d::Rotate(decomposed.rotationRadians) *
+         Transform2d::Translate(decomposed.translation);
+}
+
 TEST(SidebarTransformDecomposeTest, IdentityRoundTrips) {
   const std::optional<DecomposedTransform> decomposed = DecomposeTransform(Transform2d());
   ASSERT_TRUE(decomposed.has_value());
@@ -63,7 +76,7 @@ TEST(SidebarTransformDecomposeTest, IdentityRoundTrips) {
   EXPECT_DOUBLE_EQ(decomposed->rotationRadians, 0.0);
   EXPECT_DOUBLE_EQ(decomposed->scale.x, 1.0);
   EXPECT_DOUBLE_EQ(decomposed->scale.y, 1.0);
-  ExpectTransformNear(ComposeTransform(*decomposed), Transform2d(), 0.0);
+  ExpectTransformNear(ComposeTransformForTest(*decomposed), Transform2d(), 0.0);
 }
 
 TEST(SidebarTransformDecomposeTest, TranslateRotateScaleRoundTrips) {
@@ -72,7 +85,7 @@ TEST(SidebarTransformDecomposeTest, TranslateRotateScaleRoundTrips) {
       .rotationRadians = 30.0 * MathConstants<double>::kDegToRad,
       .scale = Vector2d(2.0, 0.5),
   };
-  const Transform2d matrix = ComposeTransform(fields);
+  const Transform2d matrix = ComposeTransformForTest(fields);
 
   const std::optional<DecomposedTransform> roundTrip = DecomposeTransform(matrix);
   ASSERT_TRUE(roundTrip.has_value());
@@ -82,7 +95,7 @@ TEST(SidebarTransformDecomposeTest, TranslateRotateScaleRoundTrips) {
   EXPECT_NEAR(roundTrip->scale.x, fields.scale.x, 1e-12);
   EXPECT_NEAR(roundTrip->scale.y, fields.scale.y, 1e-12);
 
-  ExpectTransformNear(ComposeTransform(*roundTrip), matrix, 1e-12);
+  ExpectTransformNear(ComposeTransformForTest(*roundTrip), matrix, 1e-12);
 }
 
 TEST(SidebarTransformDecomposeTest, PureRotationDecomposes) {
@@ -92,7 +105,7 @@ TEST(SidebarTransformDecomposeTest, PureRotationDecomposes) {
   EXPECT_NEAR(decomposed->rotationRadians, 1.0, 1e-12);
   EXPECT_NEAR(decomposed->scale.x, 1.0, 1e-12);
   EXPECT_NEAR(decomposed->scale.y, 1.0, 1e-12);
-  ExpectTransformNear(ComposeTransform(*decomposed), matrix, 1e-15);
+  ExpectTransformNear(ComposeTransformForTest(*decomposed), matrix, 1e-15);
 }
 
 TEST(SidebarTransformDecomposeTest, FlipRoundTripsThroughSignedScale) {
@@ -102,7 +115,7 @@ TEST(SidebarTransformDecomposeTest, FlipRoundTripsThroughSignedScale) {
   const std::optional<DecomposedTransform> decomposed = DecomposeTransform(matrix);
   ASSERT_TRUE(decomposed.has_value());
   EXPECT_LT(decomposed->scale.y, 0.0);
-  ExpectTransformNear(ComposeTransform(*decomposed), matrix, 1e-12);
+  ExpectTransformNear(ComposeTransformForTest(*decomposed), matrix, 1e-12);
 }
 
 TEST(SidebarTransformDecomposeTest, LargeTranslationIsExact) {
@@ -110,8 +123,8 @@ TEST(SidebarTransformDecomposeTest, LargeTranslationIsExact) {
   const std::optional<DecomposedTransform> decomposed = DecomposeTransform(matrix);
   ASSERT_TRUE(decomposed.has_value());
   // Translation components pass through decompose/compose verbatim.
-  EXPECT_EQ(ComposeTransform(*decomposed).data[4], matrix.data[4]);
-  EXPECT_EQ(ComposeTransform(*decomposed).data[5], matrix.data[5]);
+  EXPECT_EQ(ComposeTransformForTest(*decomposed).data[4], matrix.data[4]);
+  EXPECT_EQ(ComposeTransformForTest(*decomposed).data[5], matrix.data[5]);
 }
 
 TEST(SidebarTransformDecomposeTest, SkewReturnsNullopt) {
@@ -133,7 +146,7 @@ TEST(SidebarTransformDecomposeTest, CollapsedYAxisStillRoundTrips) {
   const std::optional<DecomposedTransform> decomposed = DecomposeTransform(matrix);
   ASSERT_TRUE(decomposed.has_value());
   EXPECT_DOUBLE_EQ(decomposed->scale.y, 0.0);
-  ExpectTransformNear(ComposeTransform(*decomposed), matrix, 1e-15);
+  ExpectTransformNear(ComposeTransformForTest(*decomposed), matrix, 1e-15);
 }
 
 // -----------------------------------------------------------------------------
