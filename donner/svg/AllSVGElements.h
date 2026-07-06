@@ -9,6 +9,8 @@
 #include <entt/entity/fwd.hpp>  // entt::type_list
 
 #include "donner/svg/SVGAElement.h"                    // IWYU pragma: export
+#include "donner/svg/SVGAnimateElement.h"              // IWYU pragma: export
+#include "donner/svg/SVGAnimateTransformElement.h"     // IWYU pragma: export
 #include "donner/svg/SVGCircleElement.h"               // IWYU pragma: export
 #include "donner/svg/SVGClipPathElement.h"             // IWYU pragma: export
 #include "donner/svg/SVGDefsElement.h"                 // IWYU pragma: export
@@ -51,6 +53,7 @@
 #include "donner/svg/SVGPolylineElement.h"             // IWYU pragma: export
 #include "donner/svg/SVGRadialGradientElement.h"       // IWYU pragma: export
 #include "donner/svg/SVGRectElement.h"                 // IWYU pragma: export
+#include "donner/svg/SVGSetElement.h"                  // IWYU pragma: export
 #include "donner/svg/SVGSVGElement.h"                  // IWYU pragma: export
 #include "donner/svg/SVGStopElement.h"                 // IWYU pragma: export
 #include "donner/svg/SVGStyleElement.h"                // IWYU pragma: export
@@ -73,6 +76,8 @@ namespace donner::svg {
  */
 using AllSVGElements = entt::type_list<  //
     SVGAElement,                         //
+    SVGAnimateElement,                   //
+    SVGAnimateTransformElement,          //
     SVGCircleElement,                    //
     SVGClipPathElement,                  //
     SVGDefsElement,                      //
@@ -116,6 +121,7 @@ using AllSVGElements = entt::type_list<  //
     SVGPolygonElement,                   //
     SVGPolylineElement,                  //
     SVGRectElement,                      //
+    SVGSetElement,                       //
     SVGStyleElement,                     //
     SVGSVGElement,                       //
     SVGSwitchElement,                    //

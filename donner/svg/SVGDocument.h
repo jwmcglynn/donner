@@ -290,6 +290,21 @@ public:
   void setCanvasSize(int width, int height);
 
   /**
+   * Set the current document time for animations, in seconds from the document start.
+   *
+   * Advancing the document time causes the animation system to update animated attribute values
+   * on the next render. This invalidates the render tree.
+   *
+   * @param seconds Document time in seconds.
+   */
+  void setTime(double seconds);
+
+  /**
+   * Get the current document time in seconds.
+   */
+  double currentTime() const;
+
+  /**
    * Automatically determine the canvas size from the root `<svg>` element's `width` and `height`
    * attributes. If those attributes are not set, falls back to the default size (512x512).
    */
