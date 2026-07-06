@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <span>
 #include <string>
@@ -180,12 +181,14 @@ void TextTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
       if (const std::optional<std::size_t> caret = caretIndexAtPoint(documentPoint);
           caret.has_value()) {
         caretIndex_ = *caret;
+        resetCaretBlinkPhase();
         return;
       }
       if (const std::optional<Box2d> frameLocal = sessionFrameLocal(); frameLocal.has_value()) {
         const Vector2d localPoint = documentFromText_.inverse().transformPosition(documentPoint);
         if (frameLocal->contains(localPoint)) {
           caretIndex_ = content_.size();
+          resetCaretBlinkPhase();
           return;
         }
       }
@@ -302,6 +305,7 @@ void TextTool::beginEditingSession(EditorApp& editor, const Vector2d& originDoc,
   cachedCharWidths_.clear();
   caretIndex_ = 0;
   state_ = State::Editing;
+  resetCaretBlinkPhase();
 
   editor.applyMutation(EditorCommand::InsertTextCommand(parent, text, ""));
   editor.setSelection(text);
@@ -374,6 +378,7 @@ void TextTool::beginEditingSessionForExisting(EditorApp& editor, const svg::SVGT
   state_ = State::Editing;
   cachedCharWidths_ = measureCharacterWidths(editor);
   caretIndex_ = caretIndexAtPoint(documentPoint).value_or(content_.size());
+  resetCaretBlinkPhase();
 
   editor.setSelection(text);
   editor.flushFrame();
@@ -539,6 +544,7 @@ void TextTool::insertCodepoint(EditorApp& editor, char32_t codepoint) {
   }
   content_.insert(content_.begin() + static_cast<std::ptrdiff_t>(caretIndex_), codepoint);
   ++caretIndex_;
+  resetCaretBlinkPhase();
   syncContentToDom(editor);
 }
 
@@ -548,6 +554,7 @@ void TextTool::insertNewline(EditorApp& editor) {
   }
   content_.insert(content_.begin() + static_cast<std::ptrdiff_t>(caretIndex_), U'\n');
   ++caretIndex_;
+  resetCaretBlinkPhase();
   syncContentToDom(editor);
 }
 
@@ -557,6 +564,7 @@ void TextTool::backspace(EditorApp& editor) {
   }
   content_.erase(content_.begin() + static_cast<std::ptrdiff_t>(caretIndex_) - 1);
   --caretIndex_;
+  resetCaretBlinkPhase();
   syncContentToDom(editor);
 }
 
@@ -565,6 +573,7 @@ void TextTool::deleteForward(EditorApp& editor) {
     return;
   }
   content_.erase(content_.begin() + static_cast<std::ptrdiff_t>(caretIndex_));
+  resetCaretBlinkPhase();
   syncContentToDom(editor);
 }
 
@@ -903,6 +912,45 @@ void TextTool::beginSessionUndo(EditorApp& editor) {
   if (editor.document().hasDocument() && editor.document().document().hasSourceStore()) {
     sessionBeforeSource_ = std::string(editor.document().document().source());
   }
+}
+
+bool TextTool::CaretBlinkVisibleAtPhase(double secondsSincePhaseReset) {
+  if (secondsSincePhaseReset <= 0.0) {
+    return true;
+  }
+  const double phase =
+      std::fmod(secondsSincePhaseReset, 2.0 * kCaretBlinkHalfPeriodSeconds);
+  return phase < kCaretBlinkHalfPeriodSeconds;
+}
+
+double TextTool::SecondsUntilCaretBlinkFlip(double secondsSincePhaseReset) {
+  if (secondsSincePhaseReset <= 0.0) {
+    return kCaretBlinkHalfPeriodSeconds;
+  }
+  const double phase =
+      std::fmod(secondsSincePhaseReset, kCaretBlinkHalfPeriodSeconds);
+  const double untilFlip = kCaretBlinkHalfPeriodSeconds - phase;
+  return untilFlip > 0.0 ? untilFlip : kCaretBlinkHalfPeriodSeconds;
+}
+
+bool TextTool::caretBlinkVisible() const {
+  if (state_ != State::Editing) {
+    return true;
+  }
+  const double elapsed =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - caretBlinkPhaseStart_)
+          .count();
+  return CaretBlinkVisibleAtPhase(elapsed);
+}
+
+std::optional<float> TextTool::nextCaretBlinkWakeSeconds() const {
+  if (state_ != State::Editing) {
+    return std::nullopt;
+  }
+  const double elapsed =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - caretBlinkPhaseStart_)
+          .count();
+  return static_cast<float>(SecondsUntilCaretBlinkFlip(elapsed));
 }
 
 std::optional<TextTool::EditingChrome> TextTool::editingChrome(EditorApp& editor) const {

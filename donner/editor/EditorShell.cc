@@ -795,6 +795,12 @@ std::optional<float> EditorShell::nextIdleWakeSeconds() const {
   includeWake(documentSyncController_.nextTextSyncWakeSeconds());
   includeWake(textEditor_.nextFlashWakeSeconds());
   includeWake(textEditor_.nextRopeAnimationWakeSeconds());
+  // Caret blink: wake at the next visibility flip while a text session is
+  // editing. The flip only re-pushes the caret chrome and recaptures the
+  // overlay snapshot; it never schedules a content render.
+  if (activeTool_ == ActiveTool::Text) {
+    includeWake(textTool_.nextCaretBlinkWakeSeconds());
+  }
   return result;
 }
 
@@ -1155,7 +1161,10 @@ void EditorShell::applyPendingDocumentSpaceReplayInputForTesting() {
   } else if (activeTool_ == ActiveTool::Text && textTool_.isEditing()) {
     if (const auto textChrome = textTool_.editingChrome(app_); textChrome.has_value()) {
       renderCoordinator_.setTextEditingChrome(
-          SelectionChromeSnapshot::TextCaret{textChrome->caretTopDoc, textChrome->caretBottomDoc},
+          textTool_.caretBlinkVisible()
+              ? std::make_optional(SelectionChromeSnapshot::TextCaret{textChrome->caretTopDoc,
+                                                                      textChrome->caretBottomDoc})
+              : std::nullopt,
           textChrome->boxDoc);
     }
   } else if (activeTool_ == ActiveTool::Text) {
@@ -2778,8 +2787,15 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     renderCoordinator_.setTextEditingChrome(std::nullopt, textTool_.dragBoxDoc());
   } else if (textToolActive && textTool_.isEditing()) {
     if (const auto textChrome = textTool_.editingChrome(app_); textChrome.has_value()) {
+      // The caret blinks on a timed phase (hidden half-periods push no
+      // caret); the box frame stays solid. Blink redraws come from the idle
+      // wake schedule + overlay-chrome recapture only - never a content
+      // render.
       renderCoordinator_.setTextEditingChrome(
-          SelectionChromeSnapshot::TextCaret{textChrome->caretTopDoc, textChrome->caretBottomDoc},
+          textTool_.caretBlinkVisible()
+              ? std::make_optional(SelectionChromeSnapshot::TextCaret{textChrome->caretTopDoc,
+                                                                      textChrome->caretBottomDoc})
+              : std::nullopt,
           textChrome->boxDoc);
     }
   } else {

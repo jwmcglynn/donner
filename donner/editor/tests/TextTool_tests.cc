@@ -723,5 +723,58 @@ TEST_F(TextToolTest, CancelResetsWithoutTouchingDocument) {
   EXPECT_TRUE(hasTextElement());
 }
 
+TEST(TextToolCaretBlinkTest, VisibleDuringFirstHalfPeriodHiddenDuringSecond) {
+  constexpr double kHalf = TextTool::kCaretBlinkHalfPeriodSeconds;
+
+  // Phase start (and negative clock skew) is visible.
+  EXPECT_TRUE(TextTool::CaretBlinkVisibleAtPhase(0.0));
+  EXPECT_TRUE(TextTool::CaretBlinkVisibleAtPhase(-1.0));
+
+  EXPECT_TRUE(TextTool::CaretBlinkVisibleAtPhase(kHalf * 0.5));
+  EXPECT_FALSE(TextTool::CaretBlinkVisibleAtPhase(kHalf * 1.5));
+  // The cycle repeats: visible again in the third half-period.
+  EXPECT_TRUE(TextTool::CaretBlinkVisibleAtPhase(kHalf * 2.5));
+  EXPECT_FALSE(TextTool::CaretBlinkVisibleAtPhase(kHalf * 3.5));
+}
+
+TEST(TextToolCaretBlinkTest, SecondsUntilFlipCountsDownWithinHalfPeriod) {
+  constexpr double kHalf = TextTool::kCaretBlinkHalfPeriodSeconds;
+
+  EXPECT_DOUBLE_EQ(TextTool::SecondsUntilCaretBlinkFlip(0.0), kHalf);
+  EXPECT_DOUBLE_EQ(TextTool::SecondsUntilCaretBlinkFlip(kHalf * 0.25), kHalf * 0.75);
+  // Just after a flip, nearly a full half-period remains.
+  EXPECT_NEAR(TextTool::SecondsUntilCaretBlinkFlip(kHalf * 1.001), kHalf * 0.999, 1e-9);
+  // The wake interval is always positive and never longer than a half-period,
+  // and advancing by it always flips visibility.
+  for (double t = 0.0; t < kHalf * 6.0; t += kHalf / 7.0) {
+    const double untilFlip = TextTool::SecondsUntilCaretBlinkFlip(t);
+    EXPECT_GT(untilFlip, 0.0) << "t=" << t;
+    EXPECT_LE(untilFlip, kHalf) << "t=" << t;
+    EXPECT_NE(TextTool::CaretBlinkVisibleAtPhase(t),
+              TextTool::CaretBlinkVisibleAtPhase(t + untilFlip + 1e-9))
+        << "t=" << t;
+  }
+}
+
+TEST_F(TextToolTest, CaretBlinkVisibleImmediatelyAfterTypingAndSchedulesWake) {
+  // No session: no blink wake, caret reported visible (nothing to hide).
+  EXPECT_FALSE(tool.nextCaretBlinkWakeSeconds().has_value());
+  EXPECT_TRUE(tool.caretBlinkVisible());
+
+  doubleClickAt(Vector2d(20.0, 30.0));
+  type("Hi");
+
+  // Right after input the caret is in its visible phase, and a wake is
+  // scheduled no further out than the half-period.
+  EXPECT_TRUE(tool.caretBlinkVisible());
+  const std::optional<float> wake = tool.nextCaretBlinkWakeSeconds();
+  ASSERT_TRUE(wake.has_value());
+  EXPECT_GT(*wake, 0.0f);
+  EXPECT_LE(*wake, static_cast<float>(TextTool::kCaretBlinkHalfPeriodSeconds));
+
+  tool.commit(app);
+  EXPECT_FALSE(tool.nextCaretBlinkWakeSeconds().has_value());
+}
+
 }  // namespace
 }  // namespace donner::editor

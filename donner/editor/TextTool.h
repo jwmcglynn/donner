@@ -15,6 +15,7 @@
 /// empty session on a newly created element deletes it, leaving the document
 /// unchanged; emptying an existing element deletes it as an undoable edit).
 
+#include <chrono>
 #include <cstddef>
 #include <optional>
 #include <string>
@@ -43,6 +44,10 @@ public:
   /// Minimum drag extent (document units, at zoom 1) that turns a click into
   /// a text-box drag instead of point text.
   static constexpr double kBoxDragScreenTolerance = 4.0;
+  /// Caret blink cadence: visible for this long, then hidden for the same,
+  /// repeating. The phase resets to visible on every caret-affecting edit so
+  /// the caret never blinks away right after input.
+  static constexpr double kCaretBlinkHalfPeriodSeconds = 0.5;
 
   /// Caret movement gestures.
   enum class CaretMove {
@@ -139,6 +144,23 @@ public:
   /// while the async render worker is idle.
   [[nodiscard]] std::optional<EditingChrome> editingChrome(EditorApp& editor) const;
 
+  /// Pure blink-phase math: true while the caret is in a visible half-period
+  /// at @p secondsSincePhaseReset since the last caret-affecting edit.
+  [[nodiscard]] static bool CaretBlinkVisibleAtPhase(double secondsSincePhaseReset);
+  /// Pure blink-phase math: seconds from @p secondsSincePhaseReset until the
+  /// caret's visibility next flips. Always in (0, kCaretBlinkHalfPeriodSeconds].
+  [[nodiscard]] static double SecondsUntilCaretBlinkFlip(double secondsSincePhaseReset);
+
+  /// True while the blinking caret is currently in its visible phase. Always
+  /// true right after a caret-affecting edit (typing, caret movement, session
+  /// open) because those reset the blink phase.
+  [[nodiscard]] bool caretBlinkVisible() const;
+  /// Seconds until the caret's blink phase next flips, or nullopt when no
+  /// editing session is active. Feeds the shell's idle-wake schedule so blink
+  /// redraws happen via overlay-chrome recapture only - the timed wake never
+  /// forces a full-scene re-render.
+  [[nodiscard]] std::optional<float> nextCaretBlinkWakeSeconds() const;
+
   /// Logical content of the active session (hard breaks as '\n'); for tests.
   [[nodiscard]] const std::u32string& sessionContent() const { return content_; }
   /// Caret position in code points; for tests.
@@ -193,6 +215,9 @@ private:
       const std::vector<std::u32string>& lines) const;
   /// Record the pre-session source baseline for the single session undo.
   void beginSessionUndo(EditorApp& editor);
+  /// Restart the caret blink phase (caret becomes visible immediately).
+  /// Called on every caret-affecting edit.
+  void resetCaretBlinkPhase() { caretBlinkPhaseStart_ = std::chrono::steady_clock::now(); }
 
   /// Active frame handle gesture (session stays in Editing underneath).
   enum class FrameGesture {
@@ -251,6 +276,9 @@ private:
   std::optional<std::string> sessionBeforeSource_;
   /// Selection to restore when an empty session is discarded.
   std::vector<svg::SVGElement> previousSelection_;
+  /// Start of the current caret blink phase; reset on every caret-affecting
+  /// edit so the caret is visible immediately after input.
+  std::chrono::steady_clock::time_point caretBlinkPhaseStart_{};
 };
 
 }  // namespace donner::editor
