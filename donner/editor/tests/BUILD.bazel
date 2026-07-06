@@ -784,6 +784,19 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "text_format_bar_presenter_tests",
+    srcs = ["TextFormatBarPresenter_tests.cc"],
+    deps = [
+        "//donner/base",
+        "//donner/editor:editor_app",
+        "//donner/editor:text_format_bar_presenter",
+        "//donner/svg",
+        "@com_google_gtest//:gtest_main",
+        "@imgui",
+    ],
+)
+
+donner_cc_test(
     name = "drag_release_pop_back_tests",
     srcs = ["DragReleasePopBack_tests.cc"],
     deps = [
