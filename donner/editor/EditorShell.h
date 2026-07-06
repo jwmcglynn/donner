@@ -23,6 +23,7 @@
 #include "donner/editor/LayerInspectorDiagnostics.h"
 #include "donner/editor/LayersPanel.h"
 #include "donner/editor/MenuBarPresenter.h"
+#include "donner/editor/NativeDialogCoordinator.h"
 #include "donner/editor/PenTool.h"
 #include "donner/editor/RenderCoordinator.h"
 #include "donner/editor/RenderPanePresenter.h"
@@ -306,6 +307,13 @@ private:
   [[nodiscard]] bool selectionIsAllText() const;
   void resetPresentationForLoadedDocument(std::string_view canonicalSource);
   void requestRevert();
+  /// When native OS file dialogs are available (macOS), consume any pending
+  /// open/save request and service it with a native `NSOpenPanel` /
+  /// `NSSavePanel` instead of the in-editor ImGui modal. No-op on other
+  /// platforms, where the ImGui modal renders as before. Called each frame
+  /// just before the ImGui dialog render pass, so headless callers that only
+  /// drive the request/try-path methods never present native UI.
+  void serviceNativeDialogs();
   void requestSave();
   void requestSaveAs(std::string error = std::string());
   /// Open the save dialog to export the current viewport as a cropped SVG.
@@ -481,6 +489,7 @@ private:
   CompositorDebugPanel compositorDebugPanel_;
   RenderPanePresenter renderPanePresenter_;
   DialogPresenter dialogPresenter_;
+  NativeDialogCoordinator nativeDialogs_;
 #ifdef DONNER_EDITOR_WGPU
   std::unique_ptr<FramebufferCheckerboardRenderer> directCheckerboardRenderer_;
   std::unique_ptr<svg::RendererGeode> directDocumentRenderer_;
