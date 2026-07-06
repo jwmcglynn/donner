@@ -1754,6 +1754,41 @@ TEST(EditorAppReorderTest, SendToBackMovesElementToFirst) {
   EXPECT_THAT(ChildIds(app), ::testing::ElementsAre("r3", "r1", "r2"));
 }
 
+TEST(EditorAppReorderTest, ReorderIsOneUndoEntryAndUndoRestoresExactSourceBytes) {
+  // A cleanly-indented document: after the reorder the moved element must land on its own
+  // indented line (no orphaned blank line), and a single undo must restore the exact prior
+  // bytes. loadFromString clears the undo timeline, so the reorder is the only entry.
+  constexpr std::string_view kIndentedThreeRects =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"100\">\n"
+      "  <rect id=\"r1\" x=\"0\" y=\"0\" width=\"10\" height=\"10\"/>\n"
+      "  <rect id=\"r2\" x=\"10\" y=\"0\" width=\"10\" height=\"10\"/>\n"
+      "  <rect id=\"r3\" x=\"20\" y=\"0\" width=\"10\" height=\"10\"/>\n"
+      "</svg>";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kIndentedThreeRects)));
+  const std::string before(app.document().document().source());
+  EXPECT_FALSE(app.canUndo());
+
+  SelectById(app, "r1");
+  EXPECT_TRUE(app.reorderSelectedElement(EditorApp::ZOrder::BringToFront));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_EQ(std::string(app.document().document().source()),
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"100\">\n"
+            "  <rect id=\"r2\" x=\"10\" y=\"0\" width=\"10\" height=\"10\"/>\n"
+            "  <rect id=\"r3\" x=\"20\" y=\"0\" width=\"10\" height=\"10\"/>\n"
+            "  <rect id=\"r1\" x=\"0\" y=\"0\" width=\"10\" height=\"10\"/>\n"
+            "</svg>");
+
+  ASSERT_TRUE(app.canUndo());
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_EQ(std::string(app.document().document().source()), before);
+  EXPECT_FALSE(app.canUndo()) << "a reorder must be a single undo entry";
+  EXPECT_TRUE(app.canRedo());
+}
+
 TEST(EditorAppReorderTest, ReflectsTheMoveIntoTheSourceText) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(std::string(kThreeRects)));

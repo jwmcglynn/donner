@@ -62,6 +62,25 @@ XMLDocument ParseDocument(std::string_view xml) {
   return std::move(maybeDocument.result());
 }
 
+/// The \p index-th element child of \p parent, skipping any whitespace/text nodes. Used by
+/// the source-formatting tests, whose fixtures are laid out across indented lines and thus
+/// carry inter-element whitespace text nodes.
+XMLNode ElementChild(const XMLNode& parent, std::size_t index) {
+  std::size_t seen = 0;
+  for (std::optional<XMLNode> child = parent.firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    if (child->type() != XMLNode::Type::Element) {
+      continue;
+    }
+    if (seen == index) {
+      return *child;
+    }
+    ++seen;
+  }
+  ADD_FAILURE() << "no element child at index " << index;
+  return parent;
+}
+
 /// Returns true when \p result carries a diagnostic whose reason contains \p needle.
 MATCHER_P(DiagnosticReasonContains, needle, "") {
   if (!arg.diagnostic.has_value()) {
@@ -2428,6 +2447,96 @@ TEST_F(XMLDocumentTests, RemoveNodeWithStaleSourceRangeFails) {
 }
 
 //
+// Structural source-formatting fidelity.
+//
+// These assert the exact source bytes produced by each structural mutation kind when the
+// document is already laid out across indented lines. The fidelity standard mirrors
+// attribute writeback: a mutation must leave the surrounding whitespace as a human would.
+//
+
+TEST_F(XMLDocumentTests, InsertNodeIntoEmptyParentIndentsChildOnItsOwnLine) {
+  XMLDocument doc = ParseDocument("<svg>\n  <g/>\n</svg>");
+  XMLNode g = ElementChild(doc.root().firstChild().value(), 0);
+  XMLNode rect = XMLNode::CreateElementNode(doc, "rect");
+
+  ApplySourceEditResult result = doc.insertNode(g, rect);
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(doc.source(), "<svg>\n  <g>\n    <rect/>\n  </g>\n</svg>");
+}
+
+TEST_F(XMLDocumentTests, InsertNodeBetweenSiblingsMatchesSiblingIndent) {
+  XMLDocument doc = ParseDocument("<svg>\n  <a/>\n  <b/>\n</svg>");
+  XMLNode svg = doc.root().firstChild().value();
+  XMLNode b = ElementChild(svg, 1);
+  XMLNode rect = XMLNode::CreateElementNode(doc, "rect");
+
+  ApplySourceEditResult result = doc.insertNode(svg, rect, b);
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(doc.source(), "<svg>\n  <a/>\n  <rect/>\n  <b/>\n</svg>");
+}
+
+TEST_F(XMLDocumentTests, InsertNodeAppendsAtSiblingIndentBeforeClosingTag) {
+  XMLDocument doc = ParseDocument("<svg>\n  <a/>\n  <b/>\n</svg>");
+  XMLNode svg = doc.root().firstChild().value();
+  XMLNode rect = XMLNode::CreateElementNode(doc, "rect");
+
+  ApplySourceEditResult result = doc.insertNode(svg, rect);
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(doc.source(), "<svg>\n  <a/>\n  <b/>\n  <rect/>\n</svg>");
+}
+
+TEST_F(XMLDocumentTests, InsertNodeDetectsTabIndentUnit) {
+  XMLDocument doc = ParseDocument("<svg>\n\t<g/>\n</svg>");
+  XMLNode g = ElementChild(doc.root().firstChild().value(), 0);
+  XMLNode rect = XMLNode::CreateElementNode(doc, "rect");
+
+  ApplySourceEditResult result = doc.insertNode(g, rect);
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(doc.source(), "<svg>\n\t<g>\n\t\t<rect/>\n\t</g>\n</svg>");
+}
+
+TEST_F(XMLDocumentTests, InsertNodeStaysCompactForSingleLineSource) {
+  XMLDocument doc = ParseDocument(R"(<svg><g/></svg>)");
+  XMLNode g = ElementChild(doc.root().firstChild().value(), 0);
+  XMLNode rect = XMLNode::CreateElementNode(doc, "rect");
+
+  ApplySourceEditResult result = doc.insertNode(g, rect);
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(doc.source(), R"(<svg><g><rect/></g></svg>)");
+}
+
+TEST_F(XMLDocumentTests, MoveNodeToEndCarriesWhitespaceWithoutOrphaningOldLine) {
+  XMLDocument doc = ParseDocument("<svg>\n  <a/>\n  <b/>\n  <c/>\n</svg>");
+  XMLNode svg = doc.root().firstChild().value();
+  XMLNode a = ElementChild(svg, 0);
+
+  // Move <a> to the end of its parent. The old line must not be left orphaned.
+  ApplySourceEditResult result = doc.insertNode(svg, a);
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(doc.source(), "<svg>\n  <b/>\n  <c/>\n  <a/>\n</svg>");
+}
+
+TEST_F(XMLDocumentTests, MoveNodeBeforeSiblingCarriesWhitespace) {
+  XMLDocument doc = ParseDocument("<svg>\n  <a/>\n  <b/>\n  <c/>\n</svg>");
+  XMLNode svg = doc.root().firstChild().value();
+  XMLNode a = ElementChild(svg, 0);
+  XMLNode c = ElementChild(svg, 2);
+  ASSERT_EQ(c.tagName(), XMLQualifiedNameRef("c"));
+
+  // Move <c> to before <a>. The old <c> line must collapse cleanly.
+  ApplySourceEditResult result = doc.insertNode(svg, c, a);
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(doc.source(), "<svg>\n  <c/>\n  <a/>\n  <b/>\n</svg>");
+}
+
+//
 // setElementText.
 //
 
@@ -2468,6 +2577,18 @@ TEST_F(XMLDocumentTests, SetElementTextInsertsIntoEmptyElement) {
   EXPECT_EQ(result.scope, ReparseScope::TextNode);
   EXPECT_THAT(text.value(), Optional(Eq("hello")));
   EXPECT_EQ(doc.source(), R"(<svg><text>hello</text></svg>)");
+}
+
+TEST_F(XMLDocumentTests, SetElementTextStaysInlineEvenInBlockLaidOutSource) {
+  // Text content is authored inline regardless of the surrounding block layout: expanding a
+  // self-closing <text/> yields <text>hello</text>, not a text node on its own line.
+  XMLDocument doc = ParseDocument("<svg>\n  <text/>\n</svg>");
+  XMLNode text = ElementChild(doc.root().firstChild().value(), 0);
+
+  ApplySourceEditResult result = doc.setElementText(text, "hello");
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(doc.source(), "<svg>\n  <text>hello</text>\n</svg>");
 }
 
 TEST_F(XMLDocumentTests, SetElementTextExpandsSelfClosingElement) {

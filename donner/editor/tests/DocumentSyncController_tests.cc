@@ -1364,9 +1364,12 @@ TEST(DocumentSyncControllerStructuredTest, MirrorSourceDeltasFallsBackWhenInsert
   textEditor.resetTextChanged();
   DocumentSyncController controller{std::string(kTwoRectSvg)};
 
-  const std::size_t closeOffset = textEditor.getText().find("</svg>");
-  ASSERT_NE(closeOffset, std::string::npos);
-  textEditor.setSelection(textEditor.getCoordinatesAtByteOffset(closeOffset - 1),
+  // The append lands on its own line right after the last child, so delete that whole tail
+  // locally (the last <rect> through </svg>). The insertion context is now gone, and the
+  // mirror must fall back to a full resync rather than patch into a stale offset.
+  const std::size_t lastRectOffset = textEditor.getText().rfind("<rect");
+  ASSERT_NE(lastRectOffset, std::string::npos);
+  textEditor.setSelection(textEditor.getCoordinatesAtByteOffset(lastRectOffset),
                           textEditor.getCoordinatesAtByteOffset(textEditor.getText().size()));
   textEditor.insertText("");
   textEditor.resetTextChanged();
