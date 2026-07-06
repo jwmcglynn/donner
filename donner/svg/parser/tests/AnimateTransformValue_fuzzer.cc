@@ -1,5 +1,6 @@
 #include <string_view>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/svg/components/animation/AnimationSystem.h"
 #include "donner/svg/parser/SVGParser.h"
 
@@ -19,7 +20,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
 
   parser::SVGParser::Options options;
   options.enableExperimental = true;
-  auto result = parser::SVGParser::ParseSVG(svg, nullptr, options);
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto result = parser::SVGParser::ParseSVG(svg, warnings, options);
   if (result.hasResult()) {
     auto& registry = result.result().registry();
     components::AnimationSystem().advance(registry, 0.5, nullptr);
