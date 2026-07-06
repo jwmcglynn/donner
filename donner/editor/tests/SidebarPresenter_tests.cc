@@ -621,6 +621,46 @@ TEST_F(SidebarPresenterImGuiTest, TreeViewOpensAncestorsForPendingScrollTarget) 
   EXPECT_GT(drawData->TotalVtxCount, 0);
 }
 
+TEST_F(SidebarPresenterImGuiTest, TreeDisclosureStateRoundTripsForInspectorTree) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kInspectorSvg));
+  app.setCleanSourceText(kInspectorSvg);
+
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+
+  const svg::SVGElement root = app.document().document().svgElement();
+  const std::uint32_t rootId = static_cast<std::uint32_t>(root.unsafeEntityHandle().entity());
+
+  // The disclosure state that the shared chevron drives round-trips: collapsed
+  // by default (matching the former imgui default-closed node), expands on
+  // toggle, and collapses again.
+  EXPECT_FALSE(presenter.isTreeNodeExpandedForTesting(rootId));
+  presenter.toggleTreeNodeExpandedForTesting(rootId);
+  EXPECT_TRUE(presenter.isTreeNodeExpandedForTesting(rootId));
+
+  TreeViewState treeState;
+  ImGuiIO& io = ImGui::GetIO();
+  io.DisplaySize = ImVec2(400, 300);
+  io.AddMousePosEvent(-1.0f, -1.0f);
+  io.AddMouseButtonEvent(0, false);
+  ImGui::NewFrame();
+  ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(360, 280), ImGuiCond_Always);
+  ImGui::Begin("##sidebar_tree_disclosure_roundtrip_test", nullptr,
+               ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                   ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar);
+  presenter.renderTreeView(nullptr, treeState);
+  ImGui::End();
+  ImGui::Render();
+  const ImDrawData* drawData = ImGui::GetDrawData();
+  ASSERT_NE(drawData, nullptr);
+  EXPECT_GT(drawData->TotalVtxCount, 0);
+
+  presenter.toggleTreeNodeExpandedForTesting(rootId);
+  EXPECT_FALSE(presenter.isTreeNodeExpandedForTesting(rootId));
+}
+
 TEST_F(SidebarPresenterImGuiTest, InspectorRendersSingleSelectionWithoutElementDetails) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(R"(<svg xmlns="http://www.w3.org/2000/svg">
