@@ -6,7 +6,8 @@ name: Debug 778 CMake Segfault
 # DELETE THIS FILE AND ITS BRANCH once the crash is diagnosed.
 
 on:
-  workflow_dispatch:
+  push:
+    branches: ["anim/smil-778-cmake-debug"]
 
 jobs:
   gdb-backtrace:
