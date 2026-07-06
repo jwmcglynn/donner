@@ -553,26 +553,6 @@ std::string interpolateTransformValue(double progress,
   return formatTransform(transformComp.type, result);
 }
 
-/// Compute the active-interval progress for a transform/simple animation.
-double simpleProgress(double documentTime, const AnimationStateComponent& state) {
-  double elapsed = documentTime - state.beginTime;
-  if (std::isfinite(state.activeDuration)) {
-    elapsed = std::min(elapsed, state.activeDuration);
-  }
-  double simpleTime = elapsed;
-  if (std::isfinite(state.simpleDuration) && state.simpleDuration > 0.0) {
-    simpleTime = std::fmod(elapsed, state.simpleDuration);
-    if (simpleTime == 0.0 && elapsed > 0.0) {
-      simpleTime = state.simpleDuration;
-    }
-  }
-  double progress = 0.0;
-  if (std::isfinite(state.simpleDuration) && state.simpleDuration > 0.0) {
-    progress = simpleTime / state.simpleDuration;
-  }
-  return std::clamp(progress, 0.0, 1.0);
-}
-
 }  // namespace
 
 void AnimationSystem::advance(Registry& registry, double documentTime,
@@ -582,139 +562,71 @@ void AnimationSystem::advance(Registry& registry, double documentTime,
     animValues.overrides.clear();
   }
 
-  // Compute timing states for all animation entities.
-  for (auto [entity, setComp, timing] :
-       registry.view<SetAnimationComponent, AnimationTimingComponent>().each()) {
+  // Collect all animation entities and process them in document order (ascending entity ID).
+  // Replace-mode sandwich priority: the last animation in document order wins, regardless of
+  // element type, so all animation element types share a single ordered pass.
+  std::vector<Entity> animationEntities;
+  for (auto [entity, timing] : registry.view<AnimationTimingComponent>().each()) {
+    if (registry.any_of<SetAnimationComponent, AnimateValueComponent, AnimateTransformComponent>(
+            entity)) {
+      animationEntities.push_back(entity);
+    }
+  }
+  std::sort(animationEntities.begin(), animationEntities.end());
+
+  for (const Entity entity : animationEntities) {
+    const auto& timing = registry.get<AnimationTimingComponent>(entity);
     auto& state = registry.get_or_emplace<AnimationStateComponent>(entity);
+
+    const auto* setComp = registry.try_get<SetAnimationComponent>(entity);
+    const auto* valueComp = registry.try_get<AnimateValueComponent>(entity);
+    const auto* transformComp = registry.try_get<AnimateTransformComponent>(entity);
+
     if (state.targetEntity == entt::null) {
-      state.targetEntity = resolveTargetByHrefOrParent(registry, entity, setComp.href);
+      const std::optional<std::string>& href =
+          setComp ? setComp->href : (valueComp ? valueComp->href : transformComp->href);
+      state.targetEntity = resolveTargetByHrefOrParent(registry, entity, href);
     }
-    computeTimingState(state, timing, documentTime, /*isSetElement=*/true);
-  }
 
-  for (auto [entity, valueComp, timing] :
-       registry.view<AnimateValueComponent, AnimationTimingComponent>().each()) {
-    auto& state = registry.get_or_emplace<AnimationStateComponent>(entity);
-    if (state.targetEntity == entt::null) {
-      state.targetEntity = resolveTargetByHrefOrParent(registry, entity, valueComp.href);
+    computeTimingState(state, timing, documentTime, /*isSetElement=*/setComp != nullptr);
+
+    if (!registry.valid(state.targetEntity) || !shouldApplyValue(state.phase, timing.fill)) {
+      continue;
     }
-    computeTimingState(state, timing, documentTime, /*isSetElement=*/false);
-  }
 
-  for (auto [entity, transformComp, timing] :
-       registry.view<AnimateTransformComponent, AnimationTimingComponent>().each()) {
-    auto& state = registry.get_or_emplace<AnimationStateComponent>(entity);
-    if (state.targetEntity == entt::null) {
-      state.targetEntity = resolveTargetByHrefOrParent(registry, entity, transformComp.href);
-    }
-    computeTimingState(state, timing, documentTime, /*isSetElement=*/false);
-  }
+    // Compute the interpolation progress: current time while active, or the final value
+    // (progress = 1.0) when frozen.
+    const double progress =
+        (state.phase == AnimationPhase::Active)
+            ? computeProgress(documentTime, state.beginTime, state.simpleDuration,
+                              state.activeDuration)
+            : 1.0;
 
-  // Process all <set> animation entities in document order (ascending entity ID).
-  {
-    auto view = registry.view<SetAnimationComponent, AnimationTimingComponent>();
-    std::vector<Entity> setEntities;
-    for (auto entity : view) {
-      setEntities.push_back(entity);
-    }
-    std::sort(setEntities.begin(), setEntities.end());
-
-    for (auto entity : setEntities) {
-      auto& setComp = registry.get<SetAnimationComponent>(entity);
-      auto& timing = registry.get<AnimationTimingComponent>(entity);
-      auto& state = registry.get<AnimationStateComponent>(entity);
-
-      if (state.targetEntity == entt::null) {
+    std::string attributeName;
+    std::string newValue;
+    if (setComp) {
+      if (setComp->attributeName.empty()) {
         continue;
       }
-
-      if (shouldApplyValue(state.phase, timing.fill) && !setComp.attributeName.empty() &&
-          registry.valid(state.targetEntity)) {
-        auto& animValues = registry.get_or_emplace<AnimatedValuesComponent>(state.targetEntity);
-        animValues.overrides[setComp.attributeName] = setComp.to;
+      attributeName = setComp->attributeName;
+      newValue = setComp->to;
+    } else if (valueComp) {
+      if (valueComp->attributeName.empty()) {
+        continue;
       }
+      attributeName = valueComp->attributeName;
+      newValue = interpolateAnimateValue(progress, *valueComp);
+    } else {
+      attributeName = "transform";
+      newValue = interpolateTransformValue(progress, *transformComp);
     }
-  }
 
-  // Process all <animate> animation entities in document order (ascending entity ID).
-  {
-    auto view = registry.view<AnimateValueComponent, AnimationTimingComponent>();
-    std::vector<Entity> animateEntities;
-    for (auto entity : view) {
-      animateEntities.push_back(entity);
+    if (newValue.empty()) {
+      continue;
     }
-    std::sort(animateEntities.begin(), animateEntities.end());
 
-    for (auto entity : animateEntities) {
-      auto& valueComp = registry.get<AnimateValueComponent>(entity);
-      auto& timing = registry.get<AnimationTimingComponent>(entity);
-      auto& state = registry.get<AnimationStateComponent>(entity);
-
-      if (state.targetEntity == entt::null) {
-        continue;
-      }
-
-      if (!shouldApplyValue(state.phase, timing.fill) || valueComp.attributeName.empty() ||
-          !registry.valid(state.targetEntity)) {
-        continue;
-      }
-
-      // Compute interpolation progress.
-      double progress = 0.0;
-      if (state.phase == AnimationPhase::Active) {
-        progress = computeProgress(documentTime, state.beginTime, state.simpleDuration,
-                                   state.activeDuration);
-      } else {
-        // Frozen: use final value (progress = 1.0).
-        progress = 1.0;
-      }
-
-      std::string interpolated = interpolateAnimateValue(progress, valueComp);
-      if (interpolated.empty()) {
-        continue;
-      }
-
-      auto& animValues = registry.get_or_emplace<AnimatedValuesComponent>(state.targetEntity);
-      // Replace-mode sandwich: last animation in document order wins.
-      animValues.overrides[valueComp.attributeName] = std::move(interpolated);
-    }
-  }
-
-  // Process all <animateTransform> animation entities in document order.
-  {
-    auto view = registry.view<AnimateTransformComponent, AnimationTimingComponent>();
-    std::vector<Entity> transformEntities;
-    for (auto entity : view) {
-      transformEntities.push_back(entity);
-    }
-    std::sort(transformEntities.begin(), transformEntities.end());
-
-    for (auto entity : transformEntities) {
-      auto& transformComp = registry.get<AnimateTransformComponent>(entity);
-      auto& timing = registry.get<AnimationTimingComponent>(entity);
-      auto& state = registry.get<AnimationStateComponent>(entity);
-
-      if (state.targetEntity == entt::null) {
-        continue;
-      }
-
-      if (!shouldApplyValue(state.phase, timing.fill) || !registry.valid(state.targetEntity)) {
-        continue;
-      }
-
-      double progress = (state.phase == AnimationPhase::Active)
-                            ? simpleProgress(documentTime, state)
-                            : 1.0;
-
-      std::string interpolated = interpolateTransformValue(progress, transformComp);
-      if (interpolated.empty()) {
-        continue;
-      }
-
-      auto& animValues = registry.get_or_emplace<AnimatedValuesComponent>(state.targetEntity);
-      // Replace-mode sandwich: last animation in document order wins.
-      animValues.overrides["transform"] = std::move(interpolated);
-    }
+    auto& animValues = registry.get_or_emplace<AnimatedValuesComponent>(state.targetEntity);
+    animValues.overrides[attributeName] = std::move(newValue);
   }
 
   // Clean up empty AnimatedValuesComponent instances.

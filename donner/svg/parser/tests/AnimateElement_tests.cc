@@ -505,6 +505,39 @@ TEST(SVGAnimateElement, MultipleBeginValues) {
   EXPECT_NEAR(std::stod(val15.value()), 25.0, 0.5);
 }
 
+TEST(SVGAnimateElement, SandwichOrderSetAfterAnimate) {
+  // Replace-mode sandwich priority is document order across all animation element types: a later
+  // <set> must win over an earlier <animate> targeting the same attribute.
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="r" width="100" height="100">
+        <animate attributeName="width" from="10" to="10" begin="0s" dur="4s" />
+        <set attributeName="width" to="99" begin="0s" dur="4s" />
+      </rect>
+    </svg>
+  )");
+
+  auto val = getAnimatedValue(document, "#r", "width", 1.0);
+  ASSERT_TRUE(val.has_value());
+  EXPECT_EQ(val.value(), "99");
+}
+
+TEST(SVGAnimateElement, SandwichOrderAnimateAfterSet) {
+  // The reverse document order: a later <animate> must win over an earlier <set>.
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="r" width="100" height="100">
+        <set attributeName="width" to="99" begin="0s" dur="4s" />
+        <animate attributeName="width" from="10" to="10" begin="0s" dur="4s" />
+      </rect>
+    </svg>
+  )");
+
+  auto val = getAnimatedValue(document, "#r", "width", 1.0);
+  ASSERT_TRUE(val.has_value());
+  EXPECT_EQ(val.value(), "10");
+}
+
 TEST(SVGAnimateElement, BeginIndefiniteNeverStarts) {
   // begin="indefinite" means the begin time is present but unresolved: the animation never
   // starts. This is distinct from an absent begin attribute, which defaults to an offset of 0.
