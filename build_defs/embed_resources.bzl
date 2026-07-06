@@ -149,6 +149,10 @@ def embed_resources(name, resources, header_output, **kwargs):
             src = src,
             out = _sanitize_filename(src) + ".cpp",
             variable_name = "__donner_embedded_" + variable_name,
+            # Propagate incompatibility so wildcard builds skip the per-asset
+            # targets when the sources come from repos that are not fetched
+            # (e.g. dev-only http_file repos hidden from BCR consumers).
+            target_compatible_with = kwargs.get("target_compatible_with"),
         )
         assets.append(":" + name + "_embedded_" + filename)
 

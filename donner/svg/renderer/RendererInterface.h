@@ -220,6 +220,9 @@ struct TextParams {
   /// If set, stretches or compresses text to fill the given length.
   std::optional<Lengthd> textLength;
   LengthAdjust lengthAdjust = LengthAdjust::Default;
+  /// SVG2 `inline-size` measure in pixels. > 0 wraps text to this measure (horizontal only);
+  /// 0 = no wrapping area. @see https://www.w3.org/TR/SVG2/text.html#InlineSizeProperty
+  double inlineSizePx = 0.0;
   /// `@font-face` declarations for custom font resolution.
   std::span<const css::FontFace> fontFaces;
   /// Entity of the text root element, for cached layout lookup. entt::null if unknown.

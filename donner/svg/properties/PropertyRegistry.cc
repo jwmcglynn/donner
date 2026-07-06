@@ -477,6 +477,26 @@ ParseResult<Lengthd> ParseSpacingValue(std::span<const css::ComponentValue> comp
   return parser::ParseLengthPercentage(components, allowUserUnits);
 }
 
+/// Parse the SVG2 `inline-size` value: a `<length-percentage>`. The `auto` keyword is treated as
+/// `0` (no wrapping area), matching the property's initial value. Negative lengths are clamped to
+/// `0` per the spec's non-negative requirement.
+ParseResult<Lengthd> ParseInlineSize(std::span<const css::ComponentValue> components,
+                                     bool allowUserUnits) {
+  if (components.size() == 1) {
+    if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
+      if (ident->value.equalsLowercase("auto")) {
+        return Lengthd(0, Lengthd::Unit::None);
+      }
+    }
+  }
+
+  auto result = parser::ParseLengthPercentage(components, allowUserUnits);
+  if (result.hasResult() && result.result().value < 0.0) {
+    return Lengthd(0, result.result().unit);
+  }
+  return result;
+}
+
 ParseResult<Visibility> ParseVisibility(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
     const css::ComponentValue& component = components.front();
@@ -1299,7 +1319,7 @@ ParseResult<PointerEvents> ParsePointerEvents(std::span<const css::ComponentValu
 
 // List of valid presentation attributes from
 // https://www.w3.org/TR/SVG2/styling.html#PresentationAttributes
-constexpr std::array<std::pair<std::string_view, bool>, 71> kValidPresentationAttributeEntries{{
+constexpr std::array<std::pair<std::string_view, bool>, 72> kValidPresentationAttributeEntries{{
     {"cx", true},
     {"cy", true},
     {"height", true},
@@ -1340,6 +1360,7 @@ constexpr std::array<std::pair<std::string_view, bool>, 71> kValidPresentationAt
     {"glyph-orientation-horizontal", true},
     {"glyph-orientation-vertical", true},
     {"image-rendering", true},
+    {"inline-size", true},
     {"letter-spacing", true},
     {"lighting-color", true},
     {"marker-end", true},
@@ -1711,6 +1732,15 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                          return ParseWritingMode(params.components());
                        },
                        &registry.writingMode);
+                 }},  //
+                {"inline-size",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) {
+                         return ParseInlineSize(params.components(), params.allowUserUnits());
+                       },
+                       &registry.inlineSize);
                  }},  //
                 {"isolation",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
