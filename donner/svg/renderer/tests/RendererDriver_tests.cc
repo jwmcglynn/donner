@@ -648,6 +648,42 @@ TEST_F(RendererDriverTest, SurfaceTransformCullUsesEntityThenSurfaceOrder) {
          "transform before the canvas-to-surface transform.";
 }
 
+TEST_F(RendererDriverTest, CullingUsesNonScalingStrokeAdjustedWidth) {
+  // Under `vector-effect: non-scaling-stroke` with a downscaling CTM the
+  // effective stroke width is larger than the authored value (the draw path
+  // divides the local width by the CTM scale). The rect body lies entirely
+  // left of the viewport: with scale(0.1), its device-space geometry spans
+  // x in [-8, -2] and the authored 6px stroke only inflates that to
+  // [-8.3, -1.7] - fully outside even with cull slack. The *effective* local
+  // stroke is 6 / 0.1 = 60, whose right half reaches device x = 1, inside the
+  // viewport. Culling must use the adjusted width, or this visible stroke
+  // sliver is dropped.
+  SVGDocument document = makeDocument(R"svg(
+    <rect x="-80" y="0" width="60" height="1000" fill="none" stroke="red" stroke-width="6"
+          vector-effect="non-scaling-stroke" transform="scale(0.1)" />
+  )svg",
+                                      Vector2i(100, 100));
+
+  int drawPathCount = 0;
+
+  EXPECT_CALL(renderer, beginFrame(_)).Times(1);
+  EXPECT_CALL(renderer, endFrame()).Times(1);
+  EXPECT_CALL(renderer, setPaint(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, setTransform(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, drawPath(_, _)).WillRepeatedly([&](const PathShape&, const StrokeParams&) {
+    ++drawPathCount;
+  });
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(100, 100);
+  viewport.devicePixelRatio = 1.0;
+  driver.draw(document, viewport, Transform2d());
+
+  EXPECT_GE(drawPathCount, 1)
+      << "A non-scaling-stroke whose effective width reaches into the viewport must not be "
+         "culled based on the narrower authored stroke width.";
+}
+
 TEST_F(RendererDriverTest, EmitsIsolatedLayerForOpacityWithBlendMode) {
   SVGDocument document = makeDocument(R"svg(
     <g opacity="0.7" style="mix-blend-mode: screen">
