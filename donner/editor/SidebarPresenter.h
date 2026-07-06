@@ -268,31 +268,6 @@ private:
   /// then clear the edit state. No-ops (state cleared) if nothing changed.
   void commitTransformEdit(EditorApp& liveApp);
 
-  /// Render the editable transform section (decomposed fields plus the raw
-  /// matrix disclosure). Returns true if a mutation was queued.
-  bool renderTransformPanel(EditorApp* liveApp);
-
-  /// Render one decomposed-field DragFloat, wiring activation, write-back,
-  /// and commit. Returns true if a mutation was queued.
-  bool renderTransformFieldDrag(EditorApp* liveApp, TransformField field, const char* label,
-                                float displayValue, bool canEdit, const char* undoLabel,
-                                float dragSpeed, const char* format);
-
-  /// Capture the edit baseline for @p field from the live element.
-  void beginTransformEdit(EditorApp& liveApp, TransformField field, int matrixIndex,
-                          const char* undoLabel);
-
-  /// Compose the new local transform for the in-progress edit at @p value.
-  [[nodiscard]] Transform2d composeFieldTransform(const TransformEditState& state,
-                                                  double value) const;
-
-  /// Queue a SetTransformCommand for the in-progress edit at @p value.
-  bool applyTransformEdit(EditorApp& liveApp, double value);
-
-  /// Record the single undo entry and source writeback for a completed edit,
-  /// then clear the edit state. No-ops (state cleared) if nothing changed.
-  void commitTransformEdit(EditorApp& liveApp);
-
   std::optional<TreeNodeSnapshot> treeSnapshot_;
   InspectorSnapshot inspectorSnapshot_;
   std::optional<TransformEditState> transformEdit_;
