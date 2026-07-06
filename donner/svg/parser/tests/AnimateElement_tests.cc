@@ -505,6 +505,38 @@ TEST(SVGAnimateElement, MultipleBeginValues) {
   EXPECT_NEAR(std::stod(val15.value()), 25.0, 0.5);
 }
 
+TEST(SVGAnimateElement, BeginIndefiniteNeverStarts) {
+  // begin="indefinite" means the begin time is present but unresolved: the animation never
+  // starts. This is distinct from an absent begin attribute, which defaults to an offset of 0.
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="r" width="100" height="100">
+        <animate attributeName="width" from="0" to="100" begin="indefinite" dur="2s" />
+      </rect>
+    </svg>
+  )");
+
+  EXPECT_FALSE(getAnimatedValue(document, "#r", "width", 0.0).has_value());
+  EXPECT_FALSE(getAnimatedValue(document, "#r", "width", 1.0).has_value());
+  EXPECT_FALSE(getAnimatedValue(document, "#r", "width", 100.0).has_value());
+}
+
+TEST(SVGAnimateElement, BeginListWithNoResolvableOffsetNeverStarts) {
+  // A begin list containing only unsupported (syncbase/event) values has no resolvable offset,
+  // so the animation never starts rather than starting at t=0.
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="r" width="100" height="100">
+        <animate attributeName="width" from="0" to="100" begin="other.end; r.click" dur="2s" />
+      </rect>
+    </svg>
+  )");
+
+  EXPECT_FALSE(getAnimatedValue(document, "#r", "width", 0.0).has_value());
+  EXPECT_FALSE(getAnimatedValue(document, "#r", "width", 1.0).has_value());
+  EXPECT_FALSE(getAnimatedValue(document, "#r", "width", 100.0).has_value());
+}
+
 TEST(SVGAnimateElement, ZeroDurationNoEffect) {
   // Explicit dur="0s" produces no animation effect.
   auto document = parseSVGWithExperimental(R"(

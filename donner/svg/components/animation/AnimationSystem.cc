@@ -108,6 +108,16 @@ AnimationPhase computePhase(double documentTime, double beginTime, double active
 /// Compute timing state for an animation entity.
 void computeTimingState(AnimationStateComponent& state, const AnimationTimingComponent& timing,
                         double documentTime, bool isSetElement) {
+  // A `begin` attribute that yielded no resolvable offset (e.g. begin="indefinite", or a list
+  // containing only unsupported syncbase/event values) means the begin time is unresolved: the
+  // animation never starts. This is distinct from an absent `begin` attribute, which defaults to
+  // an offset of 0.
+  if (timing.beginValue.has_value() && !timing.beginOffset.has_value()) {
+    state.phase = AnimationPhase::Before;
+    state.wasActive = false;
+    return;
+  }
+
   state.beginTime = timing.beginOffset.has_value() ? timing.beginOffset->seconds() : 0.0;
   state.simpleDuration = computeSimpleDuration(timing, isSetElement);
   state.activeDuration = computeActiveDuration(timing, state.simpleDuration);
