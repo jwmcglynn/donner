@@ -49,4 +49,9 @@ void ApplyRenderPaneGesture(ViewportState& viewport, const RenderPaneGestureActi
   viewport.panBy(action.panScreenDelta);
 }
 
+bool CanvasOwnsScrollEvent(const std::optional<Box2d>& canvasScrollCaptureRect,
+                           const Vector2d& cursorScreen) {
+  return canvasScrollCaptureRect.has_value() && canvasScrollCaptureRect->contains(cursorScreen);
+}
+
 }  // namespace donner::editor

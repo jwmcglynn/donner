@@ -113,13 +113,20 @@ void EditorInputBridge::ScrollCallback(GLFWwindow* window, double xoffset, doubl
     return;
   }
 
-  if (state->previousCallback != nullptr) {
-    state->previousCallback(window, xoffset, yoffset);
-  }
-
   double cursorX = 0.0;
   double cursorY = 0.0;
   glfwGetCursorPos(window, &cursorX, &cursorY);
+
+  // Forward to the previous callback (the ImGui backend, which feeds
+  // io.MouseWheel and scrolls whatever UI window is hovered) only when the
+  // canvas does NOT own the event. Over the render pane the canvas consumes
+  // the wheel as pan/zoom, and forwarding it too would also scroll the
+  // surrounding UI panes.
+  if (state->previousCallback != nullptr &&
+      !CanvasOwnsScrollEvent(state->canvasScrollCaptureRect, Vector2d(cursorX, cursorY))) {
+    state->previousCallback(window, xoffset, yoffset);
+  }
+
   const bool zoomModifierHeld = IsZoomModifierHeld(window);
 #ifdef __EMSCRIPTEN__
   RecordWasmScrollDebug(zoomModifierHeld ? 1 : 0, xoffset, yoffset);

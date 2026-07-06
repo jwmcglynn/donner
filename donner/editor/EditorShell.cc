@@ -2375,6 +2375,12 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
 
   const bool modalCapturingInput = referenceChipHovered || toolPaletteHovered ||
                                    ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
+  // Publish the canvas scroll-capture rect for the raw GLFW scroll callback:
+  // wheel events inside the render pane are consumed by the canvas (pan/zoom)
+  // and must not also reach ImGui window scrolling, or scrolling the canvas
+  // drags the surrounding UI along. Popups/modals re-enable UI scrolling.
+  inputBridge_.setCanvasScrollCaptureRect(modalCapturingInput ? std::nullopt
+                                                              : std::make_optional(paneRect));
   const ScrollConsumptionResult scrollResult = interactionController_.consumeScrollEvents(
       inputBridge_.events(), paneRect, modalCapturingInput, kWheelZoomStep,
       kTrackpadPanPixelsPerScrollUnit);

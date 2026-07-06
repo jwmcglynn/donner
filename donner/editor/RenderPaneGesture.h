@@ -74,4 +74,17 @@ struct RenderPaneGestureAction {
 ///   `ClassifyRenderPaneScrollGesture`.
 void ApplyRenderPaneGesture(ViewportState& viewport, const RenderPaneGestureAction& action);
 
+/// True when the canvas owns a raw scroll event at @p cursorScreen: the event
+/// must not be forwarded to the UI layer (ImGui window scrolling), because the
+/// canvas pane consumes it as a pan/zoom gesture. The shell publishes the
+/// capture rect each frame: the render-pane rect normally, or `std::nullopt`
+/// while a popup/modal is capturing input so UI scrolling keeps working over
+/// the canvas.
+///
+/// @param canvasScrollCaptureRect Render-pane rect in screen pixels, or
+///   `std::nullopt` when canvas capture is disabled.
+/// @param cursorScreen Cursor position in the same screen-pixel space.
+[[nodiscard]] bool CanvasOwnsScrollEvent(const std::optional<Box2d>& canvasScrollCaptureRect,
+                                         const Vector2d& cursorScreen);
+
 }  // namespace donner::editor
