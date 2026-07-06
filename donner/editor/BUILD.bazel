@@ -527,6 +527,20 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "text_format_bar_presenter",
+    srcs = ["TextFormatBarPresenter.cc"],
+    hdrs = ["TextFormatBarPresenter.h"],
+    deps = [
+        ":editor_app",
+        ":imgui_headers",
+        "//donner/base",
+        "//donner/base/parser",
+        "//donner/svg",
+        "@imgui",
+    ],
+)
+
+donner_cc_library(
     name = "embedded_svg_icon",
     srcs = ["EmbeddedSvgIcon.cc"],
     hdrs = ["EmbeddedSvgIcon.h"],
