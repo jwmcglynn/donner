@@ -262,6 +262,18 @@ protected:
    */
   explicit SVGElement(EntityHandle handle);
 
+  /**
+   * Wrap an arbitrary existing entity as a generic \ref SVGElement.
+   *
+   * Unlike the protected constructor (which the language only permits for constructing a base
+   * subobject), this lets a derived class produce a standalone \ref SVGElement reference to
+   * *another* entity - e.g. wrapping a glyph's source `<tspan>` so callers can read its computed
+   * style. The entity must belong to \p handle's document.
+   *
+   * @param handle EntityHandle to wrap.
+   */
+  static SVGElement CreateFromEntityHandle(EntityHandle handle) { return SVGElement(handle); }
+
 public:
   /// Create another reference to the same SVGElement.
   SVGElement(const SVGElement& other);

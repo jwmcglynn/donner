@@ -1664,6 +1664,17 @@ std::vector<Path> TextEngine::computedGlyphPaths(EntityHandle handle) const {
   return result;
 }
 
+std::vector<TextEngine::GlyphOutline> TextEngine::computedGlyphOutlines(EntityHandle handle) const {
+  const auto& cache = ensureComputedTextGeometryComponent(handle);
+  std::vector<GlyphOutline> result;
+  for (const auto& glyph : cache.glyphs) {
+    if (isDescendantOf(registry_, glyph.sourceEntity, handle.entity())) {
+      result.push_back(GlyphOutline{glyph.path, glyph.sourceEntity});
+    }
+  }
+  return result;
+}
+
 Box2d TextEngine::computedInkBounds(EntityHandle handle) const {
   const auto& cache = ensureComputedTextGeometryComponent(handle);
   Box2d result;
