@@ -77,6 +77,10 @@ public:
   /// contents are rendered.
   std::optional<Vector2i> canvasSize;
 
+  /// Current document time in seconds, advanced by \ref SVGDocument::setTime(). Used by the
+  /// animation system to evaluate animation state.
+  double documentTime = 0.0;
+
   /// User's preferred languages, in priority order, used to evaluate the `systemLanguage`
   /// conditional processing attribute (see \ref
   /// donner::svg::components::ConditionalProcessingComponent and \ref xml_switch). Defaults to
