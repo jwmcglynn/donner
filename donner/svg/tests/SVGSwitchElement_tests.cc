@@ -6,9 +6,11 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "donner/base/FileOffset.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/RcString.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
@@ -352,6 +354,96 @@ TEST(SVGSwitchElementTests, FailingConditionalOnContainerDisablesSubtree) {
   )");
 
   EXPECT_TRUE(generatedAscii.matches(kAllEmpty));
+}
+
+/**
+ * A child that is not a directly-rendered element type (here `<defs>`) is not eligible for
+ * selection and does not consume the selection slot, so the following `<rect>` is selected. This
+ * distinguishes the whitelist behavior from skipping only unknown element types: `<defs>` is a
+ * known element type but is still not rendered by a `<switch>`.
+ */
+TEST(SVGSwitchElementTests, SwitchSkipsNonRenderedChildTypes) {
+  const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"(
+    <svg width="16" height="16">
+      <switch>
+        <defs>
+          <rect x="0" y="0" width="16" height="16" fill="black"/>
+        </defs>
+        <rect x="0" y="0" width="8" height="16" fill="black"/>
+      </switch>
+    </svg>
+  )");
+
+  EXPECT_TRUE(generatedAscii.matches(kLeftHalfFilled));
+}
+
+/**
+ * When no direct child passes conditional processing, the `<switch>` renders nothing.
+ */
+TEST(SVGSwitchElementTests, SwitchNoValidChildRendersNothing) {
+  const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"(
+    <svg width="16" height="16">
+      <switch>
+        <rect x="0" y="0" width="16" height="16" fill="black"
+              requiredExtensions="http://example.org/bogus"/>
+        <rect x="0" y="0" width="16" height="16" fill="black"
+              systemLanguage="zz"/>
+      </switch>
+    </svg>
+  )");
+
+  EXPECT_TRUE(generatedAscii.matches(kAllEmpty));
+}
+
+/**
+ * A `<switch>` nested as the first child of another `<switch>` is itself a directly-rendered
+ * element type, so the outer switch selects it and the inner switch selects its own first valid
+ * child. The outer switch's later children are never rendered.
+ */
+TEST(SVGSwitchElementTests, NestedSwitch) {
+  const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"(
+    <svg width="16" height="16">
+      <switch>
+        <switch>
+          <rect x="0" y="0" width="16" height="16" fill="black"
+                requiredExtensions="http://example.org/bogus"/>
+          <rect x="0" y="0" width="16" height="16" fill="black"/>
+        </switch>
+        <rect x="0" y="0" width="8" height="16" fill="black"/>
+      </switch>
+    </svg>
+  )");
+
+  // The inner switch selects its full-size second child; the outer switch's 8-wide child is never
+  // rendered.
+  EXPECT_TRUE(generatedAscii.matches(kAllFilled));
+}
+
+/**
+ * `systemLanguage` is evaluated against the document's configured user language list. The default
+ * `{"en"}` does not match `systemLanguage="ru"`, but configuring the list to `{"ru"}` does.
+ */
+TEST(SVGSwitchElementTests, SystemLanguageHonorsConfiguredLanguages) {
+  constexpr std::string_view kSvg = R"(
+    <svg width="16" height="16">
+      <rect x="0" y="0" width="16" height="16" fill="black" systemLanguage="ru"/>
+    </svg>
+  )";
+
+  // Default user language "en" does not match systemLanguage="ru".
+  {
+    SVGDocument document = instantiateSubtree(kSvg);
+    const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(std::move(document));
+    EXPECT_TRUE(generatedAscii.matches(kAllEmpty));
+  }
+
+  // After configuring the user language list to {"ru"}, the rect renders.
+  {
+    SVGDocument document = instantiateSubtree(kSvg);
+    document.setUserLanguages({RcString("ru")});
+    const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(std::move(document));
+    EXPECT_TRUE(generatedAscii.matches(kAllFilled));
+  }
 }
 
 }  // namespace donner::svg

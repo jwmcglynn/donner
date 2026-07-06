@@ -570,6 +570,26 @@ Transform2d SVGDocument::canvasFromDocumentTransform() const {
   return components::LayoutSystem().getCanvasFromDocumentTransform(access.registry());
 }
 
+void SVGDocument::setUserLanguages(std::vector<RcString> languages) {
+  DocumentMutationBatch mutation(*documentState_, true);
+  DocumentWriteAccess& access = mutation.access();
+  Registry& registry = access.registry();
+  auto& documentContext = registry.ctx().get<components::SVGDocumentContext>();
+  if (documentContext.userLanguages == languages) {
+    mutation.cancel();
+    return;
+  }
+  // Changing the language list changes which conditional-processing branches render, so the render
+  // tree (and any downstream text layout) must be rebuilt.
+  components::RenderingContext(registry).invalidateRenderTree();
+  documentContext.userLanguages = std::move(languages);
+}
+
+std::vector<RcString> SVGDocument::userLanguages() const {
+  DocumentReadAccess access = documentState_->read();
+  return access.registry().ctx().get<components::SVGDocumentContext>().userLanguages;
+}
+
 void SVGDocument::useAutomaticCanvasSize() {
   DocumentMutationBatch mutation(*documentState_, true);
   DocumentWriteAccess& access = mutation.access();
