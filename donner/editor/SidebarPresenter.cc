@@ -900,17 +900,24 @@ void SidebarPresenter::commitTransformEdit(EditorApp& liveApp) {
                       .writebackTarget = state.writebackTarget,
                       .sourceTransformAttributeValue = state.sourceTransformAttributeValue,
                       .restoreSourceTransformAttributeValue = true};
+  // Carry the author's original transform bytes on the forward ("after")
+  // snapshot too so redo re-derives the same syntax-preserving writeback the
+  // original edit produced (restore stays false: this is a forward apply).
   UndoSnapshot after{.element = state.element,
                      .transform = state.currentTransform,
-                     .writebackTarget = state.writebackTarget};
+                     .writebackTarget = state.writebackTarget,
+                     .sourceTransformAttributeValue = state.sourceTransformAttributeValue};
   liveApp.undoTimeline().record(state.undoLabel, std::move(before), std::move(after));
 
   // Keep the source pane's transform= attribute in lock-step with the DOM;
-  // DocumentSyncController drains this queue once per frame.
+  // DocumentSyncController drains this queue once per frame. The original
+  // attribute bytes let the writeback preserve the author's function syntax
+  // (rotate()/translate()/scale()) instead of canonicalizing to matrix().
   if (state.writebackTarget.has_value()) {
     liveApp.enqueueTransformWriteback(EditorApp::CompletedTransformWriteback{
         .target = *state.writebackTarget,
         .transform = state.currentTransform,
+        .sourceTransformAttributeValue = state.sourceTransformAttributeValue,
     });
   }
 }
