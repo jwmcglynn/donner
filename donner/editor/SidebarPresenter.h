@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -13,6 +14,7 @@
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
+#include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/ViewportState.h"
@@ -25,6 +27,29 @@ struct TreeViewState {
   bool pendingScroll = false;
   bool selectionChangedInTree = false;
 };
+
+/// Scale-rotate-translate view of a transform, used by the inspector's
+/// editable transform fields. The equivalent matrix is
+/// `Scale(scale) * Rotate(rotationRadians) * Translate(translation)` with
+/// Donner's apply-left-to-right composition (scale first, translation last).
+struct DecomposedTransform {
+  Vector2d translation;                 ///< Translation components (e, f).
+  double rotationRadians = 0.0;         ///< Rotation angle, in radians.
+  Vector2d scale = Vector2d(1.0, 1.0);  ///< Per-axis scale. `scale.y` is negative for flips.
+};
+
+/// Decompose @p transform into scale, rotation, and translation.
+///
+/// Returns `std::nullopt` when the matrix cannot be represented without a
+/// skew component (its basis columns are not orthogonal) or is singular
+/// (zero-length x basis). Callers should fall back to raw matrix editing in
+/// that case rather than force-fitting the fields.
+[[nodiscard]] std::optional<DecomposedTransform> DecomposeTransform(const Transform2d& transform);
+
+/// Compose the decomposed fields back into a matrix: scale is applied first,
+/// then rotation, then translation. Inverse of \ref DecomposeTransform for
+/// every decomposable matrix.
+[[nodiscard]] Transform2d ComposeTransform(const DecomposedTransform& decomposed);
 
 /// Renders the editor's tree view and inspector panes.
 ///
@@ -76,7 +101,7 @@ public:
    * @return true if an inspector action queued a document mutation.
    */
   bool renderInspector(EditorApp* liveApp, const ViewportState& viewport,
-                       const IconTextureProvider& iconTextureProvider = {}) const;
+                       const IconTextureProvider& iconTextureProvider = {});
 
   [[nodiscard]] bool inspectorHasSelectionForTesting() const {
     return inspectorSnapshot_.hasSelection;
@@ -119,12 +144,74 @@ private:
     std::vector<std::pair<std::string, std::string>> computedStyle;
   };
 
+  /// Which inspector transform widget owns the in-progress edit.
+  enum class TransformField : std::uint8_t {
+    PositionX,  ///< Bounds left edge, document space.
+    PositionY,  ///< Bounds top edge, document space.
+    Width,      ///< Bounds width, document space.
+    Height,     ///< Bounds height, document space.
+    Rotation,   ///< Decomposed rotation, degrees.
+    Matrix,     ///< One raw matrix component (see `matrixIndex`).
+  };
+
+  /// State for the transform edit currently in progress (one ImGui item can
+  /// be active at a time, so a single slot suffices). Captured on item
+  /// activation while the document is in sync; committed as one undo entry
+  /// when the item deactivates after an edit.
+  struct TransformEditState {
+    svg::SVGElement element;           ///< Element being edited.
+    TransformField field;              ///< Active field.
+    int matrixIndex = 0;               ///< Matrix component index for `TransformField::Matrix`.
+    const char* undoLabel = "";        ///< Undo timeline label for the completed edit.
+    Transform2d startTransform;        ///< Local transform at activation.
+    Transform2d currentTransform;      ///< Last transform queued via SetTransformCommand.
+    std::optional<Box2d> startBounds;  ///< Document-space bounds at activation, if any.
+    std::optional<DecomposedTransform> startDecomposed;  ///< Decomposition of `startTransform`.
+    /// Stable locator so undo / source writeback survive document identity changes.
+    std::optional<AttributeWritebackTarget> writebackTarget;
+    /// Verbatim `transform=` source bytes at activation, restored on undo.
+    std::optional<RcString> sourceTransformAttributeValue;
+    double fieldValue = 0.0;  ///< Current value of the active scalar field.
+    /// Raw matrix components being edited for `TransformField::Matrix`.
+    std::array<double, 6> matrixValues{};
+    bool changed = false;  ///< Whether any mutation was queued for this edit.
+    /// Set when the edit deactivated on a frame without live app access;
+    /// the commit is finalized on the next frame that has it.
+    bool pendingCommit = false;
+  };
+
   void captureTreeNode(const svg::SVGElement& element, std::span<const svg::SVGElement> selection,
                        TreeNodeSnapshot& out);
   void renderTreeNode(EditorApp* liveApp, const TreeNodeSnapshot& node, TreeViewState& state) const;
 
+  /// Render the editable transform section (decomposed fields plus the raw
+  /// matrix disclosure). Returns true if a mutation was queued.
+  bool renderTransformPanel(EditorApp* liveApp);
+
+  /// Render one decomposed-field DragFloat, wiring activation, write-back,
+  /// and commit. Returns true if a mutation was queued.
+  bool renderTransformFieldDrag(EditorApp* liveApp, TransformField field, const char* label,
+                                float displayValue, bool canEdit, const char* undoLabel,
+                                float dragSpeed, const char* format);
+
+  /// Capture the edit baseline for @p field from the live element.
+  void beginTransformEdit(EditorApp& liveApp, TransformField field, int matrixIndex,
+                          const char* undoLabel);
+
+  /// Compose the new local transform for the in-progress edit at @p value.
+  [[nodiscard]] Transform2d composeFieldTransform(const TransformEditState& state,
+                                                  double value) const;
+
+  /// Queue a SetTransformCommand for the in-progress edit at @p value.
+  bool applyTransformEdit(EditorApp& liveApp, double value);
+
+  /// Record the single undo entry and source writeback for a completed edit,
+  /// then clear the edit state. No-ops (state cleared) if nothing changed.
+  void commitTransformEdit(EditorApp& liveApp);
+
   std::optional<TreeNodeSnapshot> treeSnapshot_;
   InspectorSnapshot inspectorSnapshot_;
+  std::optional<TransformEditState> transformEdit_;
 };
 
 }  // namespace donner::editor
