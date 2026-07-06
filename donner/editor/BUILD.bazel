@@ -628,6 +628,7 @@ donner_cc_library(
     deps = [
         ":gl_texture_cache",
         ":imgui_headers",
+        ":menu_bar_presenter",
         ":presented_frame_composer",
         ":select_tool",
         ":selection_aabb",

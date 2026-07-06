@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <optional>
 #include <span>
 #include <vector>
@@ -33,26 +34,26 @@ constexpr float kMemoryGraphHeight = 28.0f;
 constexpr std::uint64_t kBytesPerKiB = 1024u;
 constexpr std::uint64_t kBytesPerMiB = 1024u * 1024u;
 constexpr std::uint64_t kMinimumMemoryGraphScaleBytes = 64u * kBytesPerMiB;
-constexpr ImU32 kFrameGraphOtherColor = IM_COL32(85, 140, 95, 255);
-constexpr ImU32 kFrameGraphHostEndOtherColor = IM_COL32(135, 110, 98, 255);
-constexpr ImU32 kFrameGraphHostPresentColor = IM_COL32(238, 86, 86, 255);
-constexpr ImU32 kFrameGraphHostDirectColor = IM_COL32(255, 145, 61, 255);
-constexpr ImU32 kFrameGraphHostUnderlayColor = IM_COL32(0, 190, 215, 255);
-constexpr ImU32 kFrameGraphHostReadbackColor = IM_COL32(212, 92, 255, 255);
-constexpr ImU32 kFrameGraphHostImguiColor = IM_COL32(255, 205, 86, 255);
-constexpr ImU32 kFrameGraphMainMiscColor = IM_COL32(95, 155, 130, 255);
-constexpr ImU32 kFrameGraphMainSourceColor = IM_COL32(117, 132, 255, 255);
-constexpr ImU32 kFrameGraphMainRenderPaneColor = IM_COL32(70, 155, 255, 255);
-constexpr ImU32 kFrameGraphMainSidebarsColor = IM_COL32(175, 120, 255, 255);
+/// Screen-edge margin shared by the FPS pill and the full graph.
+constexpr float kPerfOverlayMargin = 8.0f;
+// Frame-cost bucket colors, stacked bottom to top: main render, remaining UI
+// work, host frame begin/end, unprofiled remainder. Muted categorical palette
+// picked for adjacent-pair color-vision-deficiency separation against the
+// dark graph surface; "other" is deliberately neutral gray because it
+// aggregates unprofiled time.
+constexpr ImU32 kFrameGraphRenderColor = IM_COL32(57, 135, 229, 255);
+constexpr ImU32 kFrameGraphUiColor = IM_COL32(25, 158, 112, 255);
+constexpr ImU32 kFrameGraphHostColor = IM_COL32(201, 133, 0, 255);
+constexpr ImU32 kFrameGraphOtherColor = IM_COL32(137, 135, 129, 255);
 constexpr ImU32 kFrameGraphBudget120Color = IM_COL32(255, 190, 82, 145);
 constexpr ImU32 kFrameGraphBudget60Color = IM_COL32(255, 255, 255, 90);
 constexpr ImU32 kFrameGraphMiss120Color = IM_COL32(255, 176, 48, 230);
 constexpr ImU32 kFrameGraphMiss60Color = IM_COL32(220, 60, 60, 235);
-constexpr ImU32 kMemoryOtherColor = IM_COL32(90, 98, 112, 255);
-constexpr ImU32 kMemoryActiveTileColor = IM_COL32(0, 190, 215, 255);
-constexpr ImU32 kMemoryOverviewTileColor = IM_COL32(78, 170, 116, 255);
-constexpr ImU32 kMemoryRetiredColor = IM_COL32(215, 110, 64, 255);
-constexpr ImU32 kMemoryOverlayColor = IM_COL32(212, 92, 255, 255);
+// Memory bucket colors from the same muted palette: tile textures (active +
+// overview), retired textures awaiting aging, and all other tracked bytes.
+constexpr ImU32 kMemoryTilesColor = IM_COL32(144, 133, 233, 255);
+constexpr ImU32 kMemoryRetiredColor = IM_COL32(201, 133, 0, 255);
+constexpr ImU32 kMemoryOtherColor = IM_COL32(137, 135, 129, 255);
 constexpr ImU32 kMemoryPeakColor = IM_COL32(255, 255, 255, 90);
 ImVec4 ImU32ToImVec4(ImU32 color) {
   return ImGui::ColorConvertU32ToFloat4(color);
@@ -101,31 +102,23 @@ void DrawStackSegment(ImDrawList* dl, const ImVec2& barTopLeft, float barWidth, 
   }
 }
 
-float HostImguiMs(const FrameProfilerSample& profiler) {
-  return profiler.hostBeginFrameMs + profiler.hostPreviousImguiRenderMs +
-         profiler.hostPreviousImguiDrawMs;
+// The frame graph groups the profiled per-phase costs into a few buckets so
+// the biggest costs read at a glance: main-thread document/pane rendering,
+// the remaining main-thread UI work, host frame begin/end (surface acquire,
+// uploads, ImGui draw, present), and the unprofiled remainder.
+float MainRenderMs(const FrameProfilerSample& profiler) {
+  return profiler.mainSourcePaneMs + profiler.mainRenderPaneMs + profiler.mainSidebarsMs;
 }
 
-float HostProfiledEndMs(const FrameProfilerSample& profiler) {
-  return profiler.hostPreviousSurfaceAcquireMs + profiler.hostPreviousUnderlayMs +
-         profiler.hostPreviousImguiRenderMs + profiler.hostPreviousImguiDrawMs +
-         profiler.hostPreviousDirectMs + profiler.hostPreviousReadbackMs +
-         profiler.hostPreviousPresentMs;
-}
-
-float HostEndOtherMs(const FrameProfilerSample& profiler) {
-  return std::max(0.0f, profiler.hostPreviousEndFrameMs - HostProfiledEndMs(profiler));
-}
-
-float HostPresentMs(const FrameProfilerSample& profiler) {
-  return profiler.hostPreviousSurfaceAcquireMs + profiler.hostPreviousPresentMs;
-}
-
-float MainMiscMs(const FrameProfilerSample& profiler) {
+float MainUiMs(const FrameProfilerSample& profiler) {
   return profiler.mainPreparationMs + profiler.mainRenderPollMs + profiler.mainDocumentFlushMs +
          profiler.mainOverlayRefreshMs + profiler.mainDocumentSyncMs + profiler.mainLayoutMs +
          profiler.mainShortcutsMs + profiler.mainMenusDialogsMs + profiler.mainSplittersMs +
          profiler.mainEndRenderRequestMs;
+}
+
+float HostMs(const FrameProfilerSample& profiler) {
+  return profiler.hostBeginFrameMs + profiler.hostPreviousEndFrameMs;
 }
 
 ImU32 FrameBudgetMissColor(float frameMs) {
@@ -214,16 +207,21 @@ void RenderMemoryReadout(const FrameMemorySample& latest) {
               BytesToMiB(latest.peakTrackedBytes));
 }
 
-void RenderFrameGraph(const FrameHistory& history) {
-  const ImVec2 origin = ImGui::GetCursorScreenPos();
-  ImDrawList* dl = ImGui::GetWindowDrawList();
-  const float latestMs = history.latest();
+/// Smoothed frame-timing readout shared by the FPS pill and the full graph.
+struct FrameReadout {
+  float frameMs = 0.0f;
+  float fps = 0.0f;
+  float workerMs = 0.0f;
+};
+
+FrameReadout UpdateFrameReadout(const FrameHistory& history) {
   static float msEma = 0.0f;
   static double lastDisplayUpdateTime = 0.0;
   static float displayedMs = 0.0f;
-  static float backendMsEma = 0.0f;
-  static float displayedBackendMs = 0.0f;
+  static float workerMsEma = 0.0f;
+  static float displayedWorkerMs = 0.0f;
 
+  const float latestMs = history.latest();
   msEma = msEma == 0.0f ? latestMs : 0.9f * msEma + 0.1f * latestMs;
   // Feed the worker EMA only from non-zero samples - between drag bursts we go
   // idle and stop emitting worker results; smoothing zero into the EMA would
@@ -231,16 +229,48 @@ void RenderFrameGraph(const FrameHistory& history) {
   // 5-10 ms. Keep the EMA "sticky" at the most recent real measurement
   // instead.
   if (history.lastBackendMs > 0.0f) {
-    backendMsEma = backendMsEma == 0.0f ? history.lastBackendMs
-                                        : 0.9f * backendMsEma + 0.1f * history.lastBackendMs;
+    workerMsEma = workerMsEma == 0.0f ? history.lastBackendMs
+                                      : 0.9f * workerMsEma + 0.1f * history.lastBackendMs;
   }
   const double now = ImGui::GetTime();
   if (displayedMs == 0.0f || now - lastDisplayUpdateTime > 0.25) {
     displayedMs = msEma;
-    displayedBackendMs = backendMsEma;
+    displayedWorkerMs = workerMsEma;
     lastDisplayUpdateTime = now;
   }
-  const float displayedFps = displayedMs > 0.0f ? 1000.0f / displayedMs : 0.0f;
+
+  return FrameReadout{
+      .frameMs = displayedMs,
+      .fps = displayedMs > 0.0f ? 1000.0f / displayedMs : 0.0f,
+      .workerMs = displayedWorkerMs,
+  };
+}
+
+void RenderFpsPill(const FrameHistory& history, const Vector2d& contentRegion) {
+  const FrameReadout readout = UpdateFrameReadout(history);
+  char text[32];
+  std::snprintf(text, sizeof(text), "%.0f FPS  %.1f ms", readout.fps, readout.frameMs);
+
+  constexpr float kPillPaddingX = 8.0f;
+  constexpr float kPillPaddingY = 3.0f;
+  const ImVec2 textSize = ImGui::CalcTextSize(text);
+  const ImVec2 pillSize(textSize.x + 2.0f * kPillPaddingX, textSize.y + 2.0f * kPillPaddingY);
+  ImGui::SetCursorPos(
+      ImVec2(static_cast<float>(contentRegion.x) - pillSize.x - kPerfOverlayMargin,
+             static_cast<float>(contentRegion.y) - pillSize.y - kPerfOverlayMargin));
+  const ImVec2 origin = ImGui::GetCursorScreenPos();
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  dl->AddRectFilled(origin, ImVec2(origin.x + pillSize.x, origin.y + pillSize.y),
+                    IM_COL32(30, 30, 30, 215), pillSize.y * 0.5f);
+  dl->AddText(ImVec2(origin.x + kPillPaddingX, origin.y + kPillPaddingY),
+              FrameReadoutColor(readout.frameMs), text);
+  ImGui::Dummy(pillSize);
+}
+
+void RenderFrameGraph(const FrameHistory& history) {
+  const ImVec2 origin = ImGui::GetCursorScreenPos();
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  const FrameReadout readout = UpdateFrameReadout(history);
 
   const ImVec2 bottomRight(origin.x + kFrameGraphWidth, origin.y + kFrameGraphHeight);
   dl->AddRectFilled(origin, bottomRight, IM_COL32(30, 30, 30, 255));
@@ -252,32 +282,17 @@ void RenderFrameGraph(const FrameHistory& history) {
     const float ms = history.deltaMs[readIdx];
     const float x = origin.x + static_cast<float>(i) * barWidth;
     const FrameProfilerSample& profiler = history.profiler[readIdx];
-    const float profiledMs = profiler.totalProfiledMs();
-    const float otherMs = std::max(0.0f, ms - profiledMs);
+    const float otherMs = std::max(0.0f, ms - profiler.totalProfiledMs());
     float stackedMs = 0.0f;
     const ImVec2 barOrigin(x, origin.y);
     DrawStackSegment(dl, barOrigin, barWidth, kFrameGraphHeight, kFrameGraphScaleMs, &stackedMs,
+                     MainRenderMs(profiler), kFrameGraphRenderColor);
+    DrawStackSegment(dl, barOrigin, barWidth, kFrameGraphHeight, kFrameGraphScaleMs, &stackedMs,
+                     MainUiMs(profiler), kFrameGraphUiColor);
+    DrawStackSegment(dl, barOrigin, barWidth, kFrameGraphHeight, kFrameGraphScaleMs, &stackedMs,
+                     HostMs(profiler), kFrameGraphHostColor);
+    DrawStackSegment(dl, barOrigin, barWidth, kFrameGraphHeight, kFrameGraphScaleMs, &stackedMs,
                      otherMs, kFrameGraphOtherColor);
-    DrawStackSegment(dl, barOrigin, barWidth, kFrameGraphHeight, kFrameGraphScaleMs, &stackedMs,
-                     HostEndOtherMs(profiler), kFrameGraphHostEndOtherColor);
-    DrawStackSegment(dl, barOrigin, barWidth, kFrameGraphHeight, kFrameGraphScaleMs, &stackedMs,
-                     HostPresentMs(profiler), kFrameGraphHostPresentColor);
-    DrawStackSegment(dl, barOrigin, barWidth, kFrameGraphHeight, kFrameGraphScaleMs, &stackedMs,
-                     profiler.hostPreviousDirectMs, kFrameGraphHostDirectColor);
-    DrawStackSegment(dl, barOrigin, barWidth, kFrameGraphHeight, kFrameGraphScaleMs, &stackedMs,
-                     profiler.hostPreviousUnderlayMs, kFrameGraphHostUnderlayColor);
-    DrawStackSegment(dl, barOrigin, barWidth, kFrameGraphHeight, kFrameGraphScaleMs, &stackedMs,
-                     profiler.hostPreviousReadbackMs, kFrameGraphHostReadbackColor);
-    DrawStackSegment(dl, barOrigin, barWidth, kFrameGraphHeight, kFrameGraphScaleMs, &stackedMs,
-                     HostImguiMs(profiler), kFrameGraphHostImguiColor);
-    DrawStackSegment(dl, barOrigin, barWidth, kFrameGraphHeight, kFrameGraphScaleMs, &stackedMs,
-                     MainMiscMs(profiler), kFrameGraphMainMiscColor);
-    DrawStackSegment(dl, barOrigin, barWidth, kFrameGraphHeight, kFrameGraphScaleMs, &stackedMs,
-                     profiler.mainSourcePaneMs, kFrameGraphMainSourceColor);
-    DrawStackSegment(dl, barOrigin, barWidth, kFrameGraphHeight, kFrameGraphScaleMs, &stackedMs,
-                     profiler.mainRenderPaneMs, kFrameGraphMainRenderPaneColor);
-    DrawStackSegment(dl, barOrigin, barWidth, kFrameGraphHeight, kFrameGraphScaleMs, &stackedMs,
-                     profiler.mainSidebarsMs, kFrameGraphMainSidebarsColor);
     const ImU32 missColor = FrameBudgetMissColor(ms);
     if (missColor != 0) {
       dl->AddRectFilled(ImVec2(x, origin.y), ImVec2(x + barWidth, origin.y + 2.0f), missColor);
@@ -323,27 +338,20 @@ void RenderFrameGraph(const FrameHistory& history) {
   }
 
   ImGui::Dummy(ImVec2(kFrameGraphWidth, kFrameGraphHeight));
-  const ImU32 textColor = FrameReadoutColor(displayedMs);
+  const ImU32 textColor = FrameReadoutColor(readout.frameMs);
   ImGui::PushStyleColor(ImGuiCol_Text, textColor);
-  ImGui::Text("%.2f ms / %.1f FPS", displayedMs, displayedFps);
+  ImGui::Text("%.2f ms / %.1f FPS", readout.frameMs, readout.fps);
   ImGui::PopStyleColor();
-  if (displayedBackendMs > 0.0f) {
+  if (readout.workerMs > 0.0f) {
     ImGui::SameLine();
     ImGui::PushStyleColor(ImGuiCol_Text, kBackendColor);
-    ImGui::Text("  worker %.2f ms", displayedBackendMs);
+    ImGui::Text("  worker %.2f ms", readout.workerMs);
     ImGui::PopStyleColor();
   }
-  DrawProfilerLegendItem(kFrameGraphOtherColor, "other", /*sameLine=*/false);
-  DrawProfilerLegendItem(kFrameGraphHostEndOtherColor, "host-rest", /*sameLine=*/true);
-  DrawProfilerLegendItem(kFrameGraphHostPresentColor, "present", /*sameLine=*/true);
-  DrawProfilerLegendItem(kFrameGraphHostDirectColor, "direct", /*sameLine=*/false);
-  DrawProfilerLegendItem(kFrameGraphHostUnderlayColor, "underlay", /*sameLine=*/true);
-  DrawProfilerLegendItem(kFrameGraphHostReadbackColor, "readback", /*sameLine=*/true);
-  DrawProfilerLegendItem(kFrameGraphHostImguiColor, "imgui", /*sameLine=*/false);
-  DrawProfilerLegendItem(kFrameGraphMainMiscColor, "ui-misc", /*sameLine=*/true);
-  DrawProfilerLegendItem(kFrameGraphMainRenderPaneColor, "render-pane", /*sameLine=*/false);
-  DrawProfilerLegendItem(kFrameGraphMainSidebarsColor, "sidebars", /*sameLine=*/true);
-  DrawProfilerLegendItem(kFrameGraphMainSourceColor, "source", /*sameLine=*/true);
+  DrawProfilerLegendItem(kFrameGraphRenderColor, "render", /*sameLine=*/false);
+  DrawProfilerLegendItem(kFrameGraphUiColor, "ui", /*sameLine=*/true);
+  DrawProfilerLegendItem(kFrameGraphHostColor, "host", /*sameLine=*/true);
+  DrawProfilerLegendItem(kFrameGraphOtherColor, "other", /*sameLine=*/true);
 }
 
 void RenderMemoryGraph(const FrameHistory& history) {
@@ -361,16 +369,12 @@ void RenderMemoryGraph(const FrameHistory& history) {
     const float x = origin.x + static_cast<float>(i) * barWidth;
     const ImVec2 barOrigin(x, origin.y);
     std::uint64_t stackedBytes = 0;
+    const std::uint64_t tileBytes = memory.activeTileBytes + memory.overviewTileBytes;
     DrawMemoryStackSegment(dl, barOrigin, barWidth, kMemoryGraphHeight, scaleBytes, &stackedBytes,
-                           memory.activeTileBytes, kMemoryActiveTileColor);
-    DrawMemoryStackSegment(dl, barOrigin, barWidth, kMemoryGraphHeight, scaleBytes, &stackedBytes,
-                           memory.overviewTileBytes, kMemoryOverviewTileColor);
+                           tileBytes, kMemoryTilesColor);
     DrawMemoryStackSegment(dl, barOrigin, barWidth, kMemoryGraphHeight, scaleBytes, &stackedBytes,
                            memory.retiredBytes, kMemoryRetiredColor);
-    DrawMemoryStackSegment(dl, barOrigin, barWidth, kMemoryGraphHeight, scaleBytes, &stackedBytes,
-                           memory.overlayBytes, kMemoryOverlayColor);
-    const std::uint64_t knownBytes = memory.activeTileBytes + memory.overviewTileBytes +
-                                     memory.retiredBytes + memory.overlayBytes;
+    const std::uint64_t knownBytes = tileBytes + memory.retiredBytes;
     if (memory.totalTrackedBytes > knownBytes) {
       DrawMemoryStackSegment(dl, barOrigin, barWidth, kMemoryGraphHeight, scaleBytes, &stackedBytes,
                              memory.totalTrackedBytes - knownBytes, kMemoryOtherColor);
@@ -388,10 +392,9 @@ void RenderMemoryGraph(const FrameHistory& history) {
 
   ImGui::Dummy(ImVec2(kFrameGraphWidth, kMemoryGraphHeight));
   RenderMemoryReadout(latest);
-  DrawProfilerLegendItem(kMemoryActiveTileColor, "active", /*sameLine=*/false);
-  DrawProfilerLegendItem(kMemoryOverviewTileColor, "overview", /*sameLine=*/true);
+  DrawProfilerLegendItem(kMemoryTilesColor, "tiles", /*sameLine=*/false);
   DrawProfilerLegendItem(kMemoryRetiredColor, "retired", /*sameLine=*/true);
-  DrawProfilerLegendItem(kMemoryOverlayColor, "overlay", /*sameLine=*/true);
+  DrawProfilerLegendItem(kMemoryOtherColor, "other", /*sameLine=*/true);
 }
 
 void DrawCheckerboard(ImDrawList* drawList, const ImVec2& topLeft, const ImVec2& bottomRight) {
@@ -685,12 +688,14 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
   }
   paneDrawList->PopClipRect();
 
-  if (state.showFrameGraph) {
-    constexpr float kFramePadding = 8.0f;
+  if (state.perfOverlayMode == PerfOverlayMode::FpsPill) {
+    RenderFpsPill(state.frameHistory, state.contentRegion);
+  } else if (state.perfOverlayMode == PerfOverlayMode::FullGraph) {
     const float graphHeight = kFrameGraphHeight + kMemoryGraphHeight +
-                              6.0f * ImGui::GetTextLineHeightWithSpacing() + 4.0f;
-    ImGui::SetCursorPos(ImVec2(
-        kFramePadding, static_cast<float>(state.contentRegion.y - graphHeight - kFramePadding)));
+                              4.0f * ImGui::GetTextLineHeightWithSpacing() + 4.0f;
+    ImGui::SetCursorPos(ImVec2(kPerfOverlayMargin, static_cast<float>(state.contentRegion.y -
+                                                                      graphHeight -
+                                                                      kPerfOverlayMargin)));
     RenderFrameGraph(state.frameHistory);
     ImGui::Dummy(ImVec2(0.0f, 4.0f));
     RenderMemoryGraph(state.frameHistory);

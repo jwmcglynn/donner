@@ -1567,10 +1567,10 @@ void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
     toggleSourceFocusMode();
   }
   const bool showCompositorDebugPanelBeforeMenu = showCompositorDebugPanel_;
-  const bool showPerfOverlayBeforeMenu = showPerfOverlay_;
-  ApplyViewMenuToggleActions(menuActions, &showCompositorDebugPanel_, &showPerfOverlay_);
+  const PerfOverlayMode perfOverlayModeBeforeMenu = perfOverlayMode_;
+  ApplyViewMenuToggleActions(menuActions, &showCompositorDebugPanel_, &perfOverlayMode_);
   if (showCompositorDebugPanel_ != showCompositorDebugPanelBeforeMenu ||
-      showPerfOverlay_ != showPerfOverlayBeforeMenu) {
+      perfOverlayMode_ != perfOverlayModeBeforeMenu) {
     window_.wakeEventLoop();
   }
 }
@@ -2936,7 +2936,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       .suppressedLayerEntity = presentSuppressedLayerEntity,
       .suppressDragTargetTiles = suppressDragTargetTiles,
       .documentPresentedDirectly = documentPresentedDirectly,
-      .showFrameGraph = showPerfOverlay_ && !contentOnlyCaptureThisFrame_,
+      .perfOverlayMode = contentOnlyCaptureThisFrame_ ? PerfOverlayMode::Off : perfOverlayMode_,
   };
   renderPanePresenter_.render(paneState);
   if (!contentOnlyCaptureThisFrame_) {
@@ -4443,7 +4443,7 @@ void EditorShell::runFrame() {
       .hasTextSelection = selectionIsAllText(),
       .hasSelectableElements = canvasHasSelectableElements(),
       .showCompositorDebugPanel = showCompositorDebugPanel_,
-      .showPerfOverlay = showPerfOverlay_,
+      .perfOverlayMode = perfOverlayMode_,
   };
   const MenuBarActions menuActions = menuBarPresenter_.render(menuState, uiFontBold_);
   applyMenuActions(menuActions);

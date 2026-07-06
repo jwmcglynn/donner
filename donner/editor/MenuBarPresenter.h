@@ -1,9 +1,22 @@
 #pragma once
 /// @file
 
+#include <cstdint>
+
 struct ImFont;
 
 namespace donner::editor {
+
+/// Display mode for the render-pane performance overlay, selected via the
+/// View menu's "Performance Overlay" submenu.
+enum class PerfOverlayMode : std::uint8_t {
+  /// No performance UI is drawn over the render pane.
+  Off,
+  /// Compact rounded chip showing only smoothed FPS and frame ms.
+  FpsPill,
+  /// Full stacked frame-cost graph plus the presentation-memory graph.
+  FullGraph,
+};
 
 struct MenuBarState {
   bool sourcePaneFocused = false;
@@ -27,9 +40,9 @@ struct MenuBarState {
   /// Current visibility of the Compositor Debug panel (drives the View-menu
   /// checkmark). Off by default.
   bool showCompositorDebugPanel = false;
-  /// Current visibility of the render-pane performance overlay (drives the
-  /// View-menu checkmark). On by default.
-  bool showPerfOverlay = true;
+  /// Current render-pane performance overlay mode (drives the View-menu
+  /// checkmarks). Off by default.
+  PerfOverlayMode perfOverlayMode = PerfOverlayMode::Off;
 };
 
 struct MenuBarActions {
@@ -64,8 +77,11 @@ struct MenuBarActions {
   bool toggleSourceFocusMode = false;
   /// Set when the user toggles the Compositor Debug panel via the View menu.
   bool toggleCompositorDebugPanel = false;
-  /// Set when the user toggles the performance overlay via the View menu.
-  bool togglePerfOverlay = false;
+  /// Set when the user picks a performance overlay mode via the View menu.
+  bool setPerfOverlayMode = false;
+  /// Requested performance overlay mode; meaningful only while
+  /// `setPerfOverlayMode` is true.
+  PerfOverlayMode perfOverlayMode = PerfOverlayMode::Off;
 };
 
 /// Semantic command emitted by a top-level menu item.
@@ -92,7 +108,9 @@ enum class MenuBarCommand {
   ActualSize,
   ToggleSourceFocusMode,
   ToggleCompositorDebugPanel,
-  TogglePerfOverlay,
+  SetPerfOverlayOff,
+  SetPerfOverlayFpsPill,
+  SetPerfOverlayFullGraph,
 };
 
 /// Apply an activated semantic menu command to an action accumulator.
@@ -108,9 +126,9 @@ void ApplyMenuBarCommand(bool activated, MenuBarCommand command, const MenuBarSt
 ///
 /// @param actions Edge-triggered menu actions from \ref MenuBarPresenter::render.
 /// @param showCompositorDebugPanel Current Compositor Debug panel visibility.
-/// @param showPerfOverlay Current performance overlay visibility.
+/// @param perfOverlayMode Current performance overlay mode.
 void ApplyViewMenuToggleActions(const MenuBarActions& actions, bool* showCompositorDebugPanel,
-                                bool* showPerfOverlay);
+                                PerfOverlayMode* perfOverlayMode);
 
 /// Renders the app's top menu bar and reports semantic actions back to the shell.
 class MenuBarPresenter {
