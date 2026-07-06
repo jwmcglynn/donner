@@ -616,6 +616,7 @@ std::optional<SelectionChromeSnapshot::TextBoxDragPreview> TextBoxDragPreviewFro
   };
 }
 
+
 EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     : window_(window),
       options_(std::move(options)),
@@ -1133,9 +1134,10 @@ void EditorShell::applyPendingDocumentSpaceReplayInputForTesting() {
   } else if (activeTool_ == ActiveTool::Text && textTool_.isEditing()) {
     if (const auto textChrome = textTool_.editingChrome(app_); textChrome.has_value()) {
       renderCoordinator_.setTextEditingChrome(
-          textTool_.caretBlinkVisible() ? std::make_optional(SelectionChromeSnapshot::TextCaret{
-                                              textChrome->caretTopDoc, textChrome->caretBottomDoc})
-                                        : std::nullopt,
+          textTool_.caretBlinkVisible()
+              ? std::make_optional(SelectionChromeSnapshot::TextCaret{textChrome->caretTopDoc,
+                                                                      textChrome->caretBottomDoc})
+              : std::nullopt,
           textChrome->frameCornersDoc);
     }
     renderCoordinator_.setTextBoxDragPreview(std::nullopt);
@@ -2951,9 +2953,10 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       // wake schedule + overlay-chrome recapture only - never a content
       // render.
       renderCoordinator_.setTextEditingChrome(
-          textTool_.caretBlinkVisible() ? std::make_optional(SelectionChromeSnapshot::TextCaret{
-                                              textChrome->caretTopDoc, textChrome->caretBottomDoc})
-                                        : std::nullopt,
+          textTool_.caretBlinkVisible()
+              ? std::make_optional(SelectionChromeSnapshot::TextCaret{textChrome->caretTopDoc,
+                                                                      textChrome->caretBottomDoc})
+              : std::nullopt,
           textChrome->frameCornersDoc);
     }
     renderCoordinator_.setTextBoxDragPreview(std::nullopt);
@@ -2998,7 +3001,8 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     // version gate drops the overlay snapshot for the whole typing burst,
     // blinking the caret/selection chrome off until the worker catches up.
     const bool allowLiveGeometryOverlay =
-        penToolActive || (textToolActive && (textTool_.isEditing() || textTool_.isDraggingBox()));
+        penToolActive ||
+        (textToolActive && (textTool_.isEditing() || textTool_.isDraggingBox()));
     updatePenLivePreviewTarget();
     renderCoordinator_.rasterizeOverlayForPresentation(
         app_, selectTool_, interactionController_.viewport(), textures_, activeDragPreview,
@@ -3145,11 +3149,13 @@ void EditorShell::renderTextToolHint() {
 
   // Bottom-center of the render pane, above the canvas scrollbar rail.
   const ViewportState& viewport = interactionController_.viewport();
-  const ImVec2 textSize = ImGui::GetFont()->CalcTextSizeA(
-      ImGui::GetFontSize(), FLT_MAX, 0.0f, label.data(), label.data() + label.size());
+  const ImVec2 textSize =
+      ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, 0.0f, label.data(),
+                                      label.data() + label.size());
   const float width = textSize.x + 2.0f * kReferenceChipPaddingX;
   const float height = textSize.y + 2.0f * kReferenceChipPaddingY;
-  const float paneCenterX = static_cast<float>(viewport.paneOrigin.x + viewport.paneSize.x * 0.5);
+  const float paneCenterX =
+      static_cast<float>(viewport.paneOrigin.x + viewport.paneSize.x * 0.5);
   const float x = paneCenterX - width * 0.5f;
   const float y = static_cast<float>(viewport.paneOrigin.y + viewport.paneSize.y) - height -
                   static_cast<float>(kCanvasScrollbarRailPx) - 10.0f;
