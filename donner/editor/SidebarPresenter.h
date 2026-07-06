@@ -30,7 +30,7 @@ struct TreeViewState {
 ///
 /// The panes are always rendered from an internal snapshot so they stay
 /// visible even while the async renderer is mutating the document (the
-/// "(rendering…)" placeholder used to cover this gap, which made the panes
+/// "(rendering...)" placeholder used to cover this gap, which made the panes
 /// flash to a disabled message on every render). The snapshot is refreshed
 /// from the live `EditorApp` when the caller indicates the worker thread
 /// isn't touching the document; otherwise the most recent capture is

@@ -281,8 +281,8 @@ void TextTool::beginEditingSession(EditorApp& editor, const Vector2d& originDoc,
   text.setAttribute("y", donner::detail::FormatNumberForSVG(originDoc.y));
   text.setAttribute("font-family", std::string(kDefaultFontFamily));
   text.setAttribute("font-size", donner::detail::FormatNumberForSVG(kDefaultFontSize));
-  // Fill goes through the style attribute — the same channel the editor's
-  // fill-color picker edits — rather than a presentation attribute.
+  // Fill goes through the style attribute - the same channel the editor's
+  // fill-color picker edits - rather than a presentation attribute.
   text.setAttribute("style", "fill: " + std::string(kDefaultFill));
   if (boxDoc.has_value()) {
     text.setAttribute("data-donner-text-box-width",
@@ -325,7 +325,7 @@ void TextTool::beginEditingSessionForExisting(EditorApp& editor, const svg::SVGT
     // Reconstruct the logical content from the DOM. Tool-authored text is
     // either a bare text node or one <tspan> per display line, where
     // soft-wrapped continuation lines carry `data-donner-soft-wrap` (joined
-    // back without a break — the wrap is recomputed). Foreign tspans without
+    // back without a break - the wrap is recomputed). Foreign tspans without
     // the marker reconstruct as hard line breaks.
     content_.clear();
     bool sawTspan = false;
@@ -485,7 +485,7 @@ void TextTool::updateFrameGesture(EditorApp& editor, const Vector2d& documentPoi
     editor.applyMutation(EditorCommand::SetTransformCommand(
         *sessionText_, rotateStartTransform_ * documentFromStartDocument));
     editor.flushFrame();
-    // The element transform changed under the session — refresh the local→
+    // The element transform changed under the session - refresh the local→
     // document mapping so caret math and subsequent frame hit-tests track
     // the rotated frame.
     documentFromText_ =
@@ -496,7 +496,7 @@ void TextTool::updateFrameGesture(EditorApp& editor, const Vector2d& documentPoi
   }
 
   // Frame resize: recompute the frame in the text's local space with the
-  // corner opposite the grab anchored. The glyphs never scale — the box
+  // corner opposite the grab anchored. The glyphs never scale - the box
   // attributes change and the content rewraps to the new width. A resize of
   // point text writes box attributes for the first time, converting the
   // computed frame into a user-sized one.
@@ -680,7 +680,7 @@ bool TextTool::commit(EditorApp& editor) {
     }
     editor.flushFrame();
   } else if (empty && sessionText_.has_value()) {
-    // Emptying an existing element deletes it — as a real undoable edit,
+    // Emptying an existing element deletes it - as a real undoable edit,
     // since the pre-session document had content here.
     editor.applyMutation(EditorCommand::DeleteElementCommand(*sessionText_));
     editor.clearSelection();

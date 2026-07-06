@@ -13,7 +13,7 @@ namespace donner::svg::components {
  * can be sourced from the `transform="..."` XML attribute, or from the `transform` CSS property.
  */
 struct TransformComponent {
-  /// Parsed value of the `transform="…"` presentation attribute / CSS
+  /// Parsed value of the `transform="..."` presentation attribute / CSS
   /// `transform` property. Applied to entity-local coords, returns
   /// parent-space coords (i.e. `parentFromEntity`).
   Property<CssTransform> transform{"transform",
@@ -28,7 +28,7 @@ struct ComputedLocalTransformComponent {
   /// Local transform that maps entity coords to the parent's coord system.
   /// Applying `parentFromEntity` to a point expressed in the entity's own
   /// coord system yields its position in the parent coord system. For
-  /// `<rect x=0 y=0 … transform="translate(100, 0)"/>`, this matrix is
+  /// `<rect x=0 y=0 ... transform="translate(100, 0)"/>`, this matrix is
   /// `Translate(100, 0)`, and the rect ends up at x=100 in the parent.
   Transform2d parentFromEntity;
   /// Raw CSS transform value, before resolving percentages relative to the viewport.

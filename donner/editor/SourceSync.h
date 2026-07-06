@@ -25,7 +25,7 @@ struct DispatchSourceTextChangeResult {
 };
 
 /// Queue the editor-side sync for source text that was written by the
-/// editor itself (drag-end transform writeback, delete-element patch…).
+/// editor itself (drag-end transform writeback, delete-element patch...).
 ///
 /// Self-generated writebacks happen AFTER the DOM has already been
 /// mutated by the editor. Re-classifying the text patch back onto that

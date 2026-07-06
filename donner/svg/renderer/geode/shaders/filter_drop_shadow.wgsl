@@ -15,7 +15,7 @@
 
 struct DropShadowParams {
   // Flood color, already multiplied by flood-opacity. Straight alpha
-  // (r, g, b are NOT pre-multiplied by a — the shader multiplies by
+  // (r, g, b are NOT pre-multiplied by a - the shader multiplies by
   // blurA which acts as the premultiplied alpha).
   color: vec4f,
   dx: f32,

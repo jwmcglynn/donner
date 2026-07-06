@@ -14,7 +14,7 @@
 ///   what the user authored.
 /// - `preparePaste` parses a payload, detects id collisions against the current
 ///   document, deterministically renames colliding ids (`_pasted`, `_pasted2`,
-///   …), rewrites internal `href` / `xlink:href` / `url(#id)` references, and
+///   ...), rewrites internal `href` / `xlink:href` / `url(#id)` references, and
 ///   produces the merged full-document SVG source plus the ids that should be
 ///   selected after the paste. It fails (returning an error, leaving its inputs
 ///   untouched) when a reference cannot be repaired safely.

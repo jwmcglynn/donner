@@ -439,7 +439,7 @@ TEST_F(TextToolExistingTextTest, ClickOnExistingTextOpensEditSessionWithCaretAtC
 TEST_F(TextToolExistingTextTest, ClickToEditUsesScopedAccessUnderConcurrentDom) {
   // The live editor runs with ConcurrentDom threading, where every DOM read
   // (children, textContent, attributes, transforms) must happen inside a
-  // scoped access — the session-open path SIGABRTs on
+  // scoped access - the session-open path SIGABRTs on
   // assertScopedEntityHandleAccessAllowed otherwise.
   app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
 
@@ -598,7 +598,7 @@ TEST_F(TextToolTest, FrameResizeConvertsPointTextToUserSizedBox) {
   ASSERT_THAT(attr(text(), "data-donner-text-box-width"), Eq(""));
 
   // Point text: the frame is the computed ink rect. Grab its bottom-right
-  // corner and drag outward — the text becomes user-sized box text.
+  // corner and drag outward - the text becomes user-sized box text.
   svg::SVGTextElement element = text();
   const Box2d ink = element.withWriteAccess(
       [&element](svg::DocumentWriteAccess&, EntityHandle) { return element.inkBoundingBox(); });

@@ -218,7 +218,7 @@ FrameCostBreakdown::DirectPresentation DrawDocumentPresentationToFramebuffer(
       svg::ResolvedClip overviewClip;
       overviewClip.clipRect = overviewClipRect;
       // pushClip composes the rect with the CURRENT transform, and drawTile
-      // leaves the previous tile's texture transform active — reset to
+      // leaves the previous tile's texture transform active - reset to
       // identity so every subtract-rect scissors in framebuffer pixels.
       // Without this only the first rect clips correctly and the remaining
       // overview infill regions show checkerboard (high-zoom zoom/pan

@@ -146,7 +146,7 @@ int main(int argc, char** argv) {
 #ifdef __EMSCRIPTEN__
     // Emscripten-glfw's `glfwSwapBuffers` is a no-op, so we need an
     // explicit asyncify yield every frame; otherwise the main loop
-    // would block the browser forever (preventing `Loading…` from
+    // would block the browser forever (preventing `Loading...` from
     // clearing and freezing the canvas).
     emscripten_sleep(0);
 #endif

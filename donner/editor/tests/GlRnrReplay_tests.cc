@@ -809,7 +809,7 @@ std::optional<std::filesystem::path> WriteTextTypingLivePointerReplay(
   return replayPath;
 }
 
-// First resize of a freshly selected <g> — the state convert-text-to-outlines
+// First resize of a freshly selected <g> - the state convert-text-to-outlines
 // leaves the editor in (selection jumps to a group whose own layer raster has
 // never been produced). Selects the group via the mouse-down hit checkpoint,
 // grabs the bottom-right transform handle at (100,120) in the same press, and
@@ -1269,7 +1269,7 @@ void PushDonnerDReplayFrame(repro::ReproFile& file, std::uint64_t index,
 
 // High-zoom rapid pan: a solid-green document viewed at zoom 4 (well past the
 // viewport-bounded raster threshold), settled, then panned 400 screen px over
-// 10 frames while completed worker results are withheld 6 polls — the async
+// 10 frames while completed worker results are withheld 6 polls - the async
 // pipeline lags the gesture like a real high-zoom pan. Every pane pixel maps
 // to a green document point the whole time, so any non-green pane region in a
 // mid-pan capture is presentation clipping (evicted or missing fallback
@@ -1322,7 +1322,7 @@ std::optional<std::filesystem::path> WriteHighZoomPanReplay(const std::filesyste
   }
   // Frames 12-19: grab the pane's right-edge scrollbar strip and drag it
   // down. The canvas scrollbar must pan the DOCUMENT (or do nothing), never
-  // window-scroll the pane's overlay chrome (toolbar, perf HUD) — dragging
+  // window-scroll the pane's overlay chrome (toolbar, perf HUD) - dragging
   // the old ImGui window scrollbar here scrolled the chrome away from the
   // canvas. Screen x=1165 sits in the scrollbar strip (pane right edge is
   // 568+604=1172); the doc points below map to (1165, 300..420) at this
@@ -2371,7 +2371,7 @@ TEST(GlRnrReplayTest, PenBackspaceRemovesLastAnchorNotWholeDraft) {
 // The LIVE ImGui pointer path: a plain canvas click (button held across
 // frames, then released) must open the text session so typing lands in a new
 // <text> element. Reproduces the report that selecting the Text tool and
-// clicking showed nothing — the pending-click path started the gesture but
+// clicking showed nothing - the pending-click path started the gesture but
 // the live pointer path never delivered the release.
 // During a rapid pan at high zoom, every pane pixel must keep showing
 // document content: the still-covered part of the previous bounded raster
@@ -2577,7 +2577,7 @@ TEST(GlRnrReplayTest, FirstResizeOfFreshlySelectedGroupKeepsContentLockstepWithO
 
   // The bottom-right corner handle was dragged from (100,120) to (130,150),
   // anchored at the opposite corner (40,40): scale 1.5 in x, 1.375 in y. The
-  // red rect (40,40)-(100,80) must therefore present at (40,40)-(130,95) —
+  // red rect (40,40)-(100,80) must therefore present at (40,40)-(130,95) -
   // both mid-drag (bridged from the cached tile) and settled.
   const auto expectRedBoundsNear = [&](std::uint64_t frameIndex, std::string_view label) {
     const std::optional<svg::RendererBitmap> capture = LoadCaptureBitmap(result, frameIndex);

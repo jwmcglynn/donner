@@ -81,7 +81,7 @@ fn svgPow(base: f32, exponent: f32) -> f32 {
   return pow(base, exponent);
 }
 
-// Same normal computation as diffuse lighting — shared algorithm per the spec.
+// Same normal computation as diffuse lighting - shared algorithm per the spec.
 fn computeNormal(coord: vec2i, size: vec2i) -> vec3f {
   let x = coord.x;
   let y = coord.y;

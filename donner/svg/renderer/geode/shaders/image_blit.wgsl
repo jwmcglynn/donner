@@ -4,7 +4,7 @@
 //   - `drawImage`: SVG <image> elements (via GeoEncoder::drawImage).
 //   - Phase 2H patterns: pattern tile sampled as repeating fill.
 //
-// Unlike the Slug fill pipeline, this shader does *no* coverage computation —
+// Unlike the Slug fill pipeline, this shader does *no* coverage computation -
 // it's a straightforward 2-triangle textured quad. The vertex shader maps
 // unit-square corners into target-pixel space using the host-supplied
 // destination rectangle and MVP, then the fragment shader samples the
@@ -16,7 +16,7 @@
 // (that's what `ImageResource` stores); the premultiply happens here.
 
 struct Uniforms {
-  // Model-view-projection matrix — maps target-pixel space to clip space.
+  // Model-view-projection matrix - maps target-pixel space to clip space.
   // Built by the host exactly like the Slug fill pipeline's MVP.
   mvp: mat4x4f,
   // Destination rectangle in target-pixel space (x0, y0, x1, y1).
@@ -36,7 +36,7 @@ struct Uniforms {
   // `<image>` elements sourced from `ImageResource`). The fragment
   // shader will premultiply by `alpha * opacity` before writing.
   // 1 = texture already stores PREMULTIPLIED alpha (used by
-  // `blitFullTarget` for layer/pattern compositing — offscreen render
+  // `blitFullTarget` for layer/pattern compositing - offscreen render
   // targets always end up premultiplied because the Geode render
   // pipeline's blend state is premultiplied source-over). The shader
   // will multiply the entire texel by `opacity` and write the result
@@ -53,7 +53,7 @@ struct Uniforms {
   // unused. Used to honour the `<mask>` element's x/y/width/height
   // attributes.
   applyMaskBounds: u32,
-  // Mask bounds rectangle (x0, y0, x1, y1) in target-pixel space —
+  // Mask bounds rectangle (x0, y0, x1, y1) in target-pixel space -
   // only read when `applyMaskBounds != 0`. Sits at offset 112 so it
   // remains 16-byte (`vec4f`) aligned without explicit padding.
   maskBounds: vec4f,
@@ -75,7 +75,7 @@ struct Uniforms {
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var imageSampler: sampler;
 @group(0) @binding(2) var imageTexture: texture_2d<f32>;
-// Phase 3c luminance mask input — bound to a 1x1 dummy when
+// Phase 3c luminance mask input - bound to a 1x1 dummy when
 // `maskMode == 0`. Sampled with the same `imageSampler` so texels are
 // interpolated between source pixels consistently with the content.
 @group(0) @binding(3) var maskTexture: texture_2d<f32>;
@@ -99,7 +99,7 @@ fn clip_mask_coverage(pixel_center: vec2f) -> f32 {
 }
 
 // The vertex shader uses `@builtin(vertex_index)` to pick one of the six
-// corners of the quad — no vertex buffer is needed. Layout:
+// corners of the quad - no vertex buffer is needed. Layout:
 //
 //   0: (0,0)   1: (1,0)   2: (0,1)
 //   3: (1,0)   4: (1,1)   5: (0,1)
@@ -143,7 +143,7 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VertexOutput {
 }
 
 // ============================================================================
-// W3C Compositing 1 — mix-blend-mode formulas
+// W3C Compositing 1 - mix-blend-mode formulas
 // ============================================================================
 //
 // All blend functions `B(Cb, Cs)` operate on STRAIGHT-alpha RGB values.
@@ -179,7 +179,7 @@ fn blend_hard_light(cb: vec3f, cs: vec3f) -> vec3f {
 }
 
 fn blend_overlay(cb: vec3f, cs: vec3f) -> vec3f {
-  // Overlay(cb, cs) = HardLight(cs, cb) — roles swapped.
+  // Overlay(cb, cs) = HardLight(cs, cb) - roles swapped.
   return blend_hard_light(cs, cb);
 }
 
@@ -269,7 +269,7 @@ fn blend_exclusion(cb: vec3f, cs: vec3f) -> vec3f {
 // --- Non-separable modes (HSL) --------------------------------------------
 //
 // Lum, Sat, SetLum, SetSat, ClipColor follow W3C Compositing 1 §9.2.
-// The coefficients are the SVG / W3C spec values — NOT BT.709 — and are
+// The coefficients are the SVG / W3C spec values - NOT BT.709 - and are
 // applied to STRAIGHT RGB.
 
 fn lum_of(c: vec3f) -> f32 {
@@ -321,7 +321,7 @@ fn set_sat(c_in: vec3f, s: f32) -> vec3f {
 
   // Rebuild componentwise by comparing each input channel to the
   // identified extremes. Exact-equality checks match the W3C
-  // reference — ties preserve the input ordering.
+  // reference - ties preserve the input ordering.
   var out: vec3f;
   out.x = select(new_min, select(new_max, new_mid, r == cmid), r == cmax);
   out.y = select(new_min, select(new_max, new_mid, g == cmid), g == cmax);
@@ -403,7 +403,7 @@ fn composite_with_blend(mode: u32, src_pm: vec4f, dst_pm: vec4f) -> vec4f {
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
   let sampled = textureSample(imageTexture, imageSampler, in.uv);
 
-  // Base colour — premultiplied by the pipeline's blend expectations.
+  // Base colour - premultiplied by the pipeline's blend expectations.
   var color: vec4f;
   if (uniforms.sourceIsPremult != 0u) {
     // Source is already premultiplied. Just scale the whole texel by
@@ -427,7 +427,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     // Phase 3d `mix-blend-mode`. `color` is the layer being composited
     // (premultiplied), `dstSnapshotTexture` is the frozen parent
     // target captured before the blend blit pass. The fragment
-    // output REPLACES the parent pixel — the pipeline is configured
+    // output REPLACES the parent pixel - the pipeline is configured
     // with `srcFactor=One, dstFactor=Zero` so this shader output
     // lands verbatim in the render target.
     let dstSample = textureSample(dstSnapshotTexture, imageSampler, in.uv);
@@ -442,7 +442,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     //   0.2126*R_pm + 0.7152*G_pm + 0.0722*B_pm
     //     = a * (0.2126*R + 0.7152*G + 0.0722*B)
     //     = luma * a = mask_value
-    // exactly the tiny-skia formula — no division, no branching.
+    // exactly the tiny-skia formula - no division, no branching.
     let maskSample = textureSample(maskTexture, imageSampler, in.uv);
     let maskValue = maskSample.r * 0.2126
                   + maskSample.g * 0.7152

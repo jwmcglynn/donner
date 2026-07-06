@@ -295,7 +295,7 @@ private:
 
   /// Nesting depth of the current feImage fragment pre-render. The visited-set above stops a
   /// *cyclic* reference (A→A, A→B→A) because it keys on the light-tree entity, but a sufficiently
-  /// long *acyclic* chain (filter1→rect3→filter2→rect4→…) still recurses once per link and could
+  /// long *acyclic* chain (filter1→rect3→filter2→rect4→...) still recurses once per link and could
   /// exhaust the native stack - observed as a segfault on macOS/Metal CI (issue #552), where every
   /// nested fragment pre-render also stands up a GPU offscreen instance and amplifies per-frame
   /// stack usage. This counter caps the chain length so an over-deep fragment renders as empty

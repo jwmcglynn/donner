@@ -734,7 +734,7 @@ public:
   ///     The bg/fg already subsume the static segments and non-drag
   ///     layers below / above the drag entity.
   ///   - Otherwise: `Segment 0`, `Layer 0`, `Segment 1`, `Layer 1`,
-  ///     …, `Segment N`. (Editor-facing bg/fg are inactive in this
+  ///     ..., `Segment N`. (Editor-facing bg/fg are inactive in this
   ///     mode.)
   [[nodiscard]] std::vector<CompositeTileSnapshot> snapshotCompositeTiles(
       SnapshotThumbnails thumbnails = SnapshotThumbnails::Include) const;

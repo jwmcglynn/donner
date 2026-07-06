@@ -184,7 +184,7 @@ struct GeodeDevice::Impl {
   ScopedWgpuHandle<wgpu::Buffer> identityInstanceTransformBuffer;
 
   // Shared render / compute pipelines. Constructed once per GeodeDevice
-  // in `initSharedPipelines` - see the public `pipeline()` / … / `filterEngine()`
+  // in `initSharedPipelines` - see the public `pipeline()` / ... / `filterEngine()`
   // accessors on GeodeDevice for the "why" behind sharing. These fields
   // are at the bottom of Impl so they destruct before the wgpu::Device
   // at the top of GeodeDevice (reverse-declaration order).
@@ -272,7 +272,7 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
 
   // Log adapter selection so it is obvious at a glance whether we landed
   // on a discrete GPU / integrated GPU / software rasterizer, and which
-  // native backend (Vulkan / Metal / D3D12 / …) is driving it.
+  // native backend (Vulkan / Metal / D3D12 / ...) is driving it.
   //
   // Under Emscripten the wgpuAdapterGetInfo / WGPUAdapterInfo struct
   // layout may differ from wgpu-native v24 (WGPUStringView fields vs raw

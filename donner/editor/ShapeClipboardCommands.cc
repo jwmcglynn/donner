@@ -201,7 +201,7 @@ std::string applyRenames(std::string_view text,
   return out;
 }
 
-/// Generate a unique id from \p base by appending `_pasted`, `_pasted2`, … until
+/// Generate a unique id from \p base by appending `_pasted`, `_pasted2`, ... until
 /// it does not appear in \p taken. The chosen id is inserted into \p taken.
 std::string makePastedId(const std::string& base, std::unordered_set<std::string>& taken) {
   const std::string root = base.empty() ? "shape" : base;

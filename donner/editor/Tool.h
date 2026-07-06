@@ -32,7 +32,7 @@ struct MouseModifiers {
   /// Cmd (macOS) / Ctrl held - used by `PenTool` to restrict a gesture to
   /// point editing (drag anchors/handles only, never place anchors).
   bool command = false;
-  /// True when this mouse-down is the second click of a double-click — used
+  /// True when this mouse-down is the second click of a double-click - used
   /// by `TextTool` to start point text on empty canvas.
   bool doubleClick = false;
   /// Current viewport scale used for screen-pixel-stable hit testing.

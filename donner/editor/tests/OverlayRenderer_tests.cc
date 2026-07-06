@@ -1167,7 +1167,7 @@ TEST(OverlayRendererTest, MultiSelectDrawsCombinedAabbInSkiaOverlay) {
 
 // Marquee chrome also moved to the ImGui draw list. The path overlay
 // should stay transparent when there is no selected geometry.
-// Selecting a `<g filter="…">` elevates picker-wise to the group, but
+// Selecting a `<g filter="...">` elevates picker-wise to the group, but
 // the group itself isn't a geometry element - pre-fix, the overlay
 // drew nothing. Users expect selection chrome to show the outlines of
 // every visible shape inside the group (matches Figma / Illustrator /

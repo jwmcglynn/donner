@@ -88,7 +88,7 @@ void CollectRenderableTextRootsImpl(const svg::SVGElement& root,
   }
   if (root.isa<svg::SVGTextElement>()) {
     out.push_back(root.cast<svg::SVGTextElement>());
-    // Text content (tspans) contributes chrome through its root — stop here.
+    // Text content (tspans) contributes chrome through its root - stop here.
     return;
   }
   if (root.isa<svg::SVGGeometryElement>()) {

@@ -92,7 +92,7 @@ TEST(ShouldPostDragMove, MeaningfulMoveAllowedWhenWireFrees) {
 }
 
 // Simulate a fast-cursor sweep against a slow backend: positions
-// 100→101→…→105 issued every frame while a single in-flight kMove
+// 100→101→...→105 issued every frame while a single in-flight kMove
 // holds the wire. None should fire. After the wire frees, the LAST
 // requested position fires (the previous lastPostedPoint hasn't
 // moved because the suppressed posts didn't update it).

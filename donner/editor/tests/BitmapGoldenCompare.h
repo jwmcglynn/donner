@@ -69,8 +69,8 @@ struct BitmapGoldenCompareParams {
 /// returns without comparing.
 ///
 /// `testLabel` appears in log output to distinguish checkpoints. On
-/// mismatch, writes `actual_…`, `expected_…`, `diff_…`, and
-/// `side_by_side_…` PNGs to `$TEST_UNDECLARED_OUTPUTS_DIR` (or `/tmp`)
+/// mismatch, writes `actual_...`, `expected_...`, `diff_...`, and
+/// `side_by_side_...` PNGs to `$TEST_UNDECLARED_OUTPUTS_DIR` (or `/tmp`)
 /// so CI + local runs can inspect the divergence immediately.
 void CompareBitmapToGolden(const svg::RendererBitmap& bitmap, std::string_view goldenPath,
                            std::string_view testLabel,

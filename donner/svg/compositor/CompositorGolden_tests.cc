@@ -242,9 +242,9 @@ TEST_F(CompositorGoldenTest, ScaleDragProducesCorrectPixels) {
 
 // Editor-reported QA regression ("first resize of the group is misaligned"):
 // after a first frame populates the compositor's caches, changing the
-// `transform` of a plain <g> (no filter/opacity — the shape
+// `transform` of a plain <g> (no filter/opacity - the shape
 // convert-text-to-outlines produces) must re-position the group's children in
-// the next composite. The group is NOT promoted — this is the default state
+// the next composite. The group is NOT promoted - this is the default state
 // right after a conversion selects the fresh group.
 TEST_F(CompositorGoldenTest, GroupTransformChangeAfterCachedFrameProducesCorrectPixels) {
   SVGDocument document = parseDocument(R"svg(
@@ -312,7 +312,7 @@ TEST_F(CompositorGoldenTest, PromotedGroupTransformChangeAfterCachedFrameProduce
 // `canvasFromBitmap` and clears the dirty flags. The settle re-raster
 // (`markPromotedLayerDirty`, the editor's post-release forceLayerRasterization
 // signal) then re-renders the subtree from the descendant
-// `RenderingInstanceComponent`s — which must carry the CURRENT transforms.
+// `RenderingInstanceComponent`s - which must carry the CURRENT transforms.
 // Before the fix, non-translation deltas never propagated to descendants
 // ("re-sync on settle" never happened because the fast path had cleared the
 // dirty flags), so the settle raster baked the pre-resize child positions and
@@ -337,7 +337,7 @@ TEST_F(CompositorGoldenTest, GroupScaleDragSettleRerasterUsesCurrentChildTransfo
   compositor.renderFrame(viewport_);
 
   // Two resize-gesture steps, each flushed through a renderFrame like the
-  // editor's per-mouse-move DOM writes — these take the bitmap-reuse fast
+  // editor's per-mouse-move DOM writes - these take the bitmap-reuse fast
   // path (affine canvasFromBitmap, dirty flags cleared).
   group->cast<SVGGraphicsElement>().setTransform(Transform2d::Scale(1.25, 1.2));
   compositor.renderFrame(viewport_);
@@ -348,7 +348,7 @@ TEST_F(CompositorGoldenTest, GroupScaleDragSettleRerasterUsesCurrentChildTransfo
 
   // Drag release: the editor forces a crisp re-raster of the drag layer
   // (`forceLayerRasterization` on the settle render). The re-raster draws the
-  // layer's entity range from the RenderingInstanceComponents — which must
+  // layer's entity range from the RenderingInstanceComponents - which must
   // reflect the CURRENT group transform, not the pre-drag one.
   //
   // Probe the composited pixels directly (no DualPathVerifier here: its
@@ -933,7 +933,7 @@ TEST_F(CompositorGoldenTest, MultiBucketCompositionMatchesFullRender) {
 // Filter groups should auto-promote after the first `renderFrame` completes -
 // i.e. the moment `RenderingInstanceComponent`s exist, the
 // `MandatoryHintDetector` should have noticed and published a Mandatory hint
-// for any `<g filter="…">` in the document. This guards against the earlier
+// for any `<g filter="...">` in the document. This guards against the earlier
 // regression where the detector ran before `prepareDocumentForRendering`,
 // saw an empty component view, and never got a second chance.
 TEST_F(CompositorGoldenTest, FilterGroupAutoPromotesOnFirstRender) {

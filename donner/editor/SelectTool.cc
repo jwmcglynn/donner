@@ -144,7 +144,7 @@ svg::SVGElement DeepestWrappingContainer(svg::SVGElement root) {
     }
 
     // Stop at non-`<g>` children (terminal geometry) and at `<g>`s that
-    // carry semantic attributes - a `<g id="Foo">` or `<g filter="…">`
+    // carry semantic attributes - a `<g id="Foo">` or `<g filter="...">`
     // is itself a top-level object, not a wrapper.
     const RcString tag = soleRenderChild->tagName().name;
     if (tag != RcString("g")) {

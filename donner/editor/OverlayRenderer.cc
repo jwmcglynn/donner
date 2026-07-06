@@ -493,9 +493,9 @@ std::optional<Box2d> AppendChromeItems(
         }
       }
 
-      // Text roots have no spline outline; they contribute their frame — the
+      // Text roots have no spline outline; they contribute their frame - the
       // authored text box for box text, or the laid-out ink bounds for point
-      // text — so text gets the same selection rectangle + transform handles
+      // text - so text gets the same selection rectangle + transform handles
       // as shapes, plus a baseline underlay segment per line.
       for (const auto& text : CollectRenderableTextRoots(element)) {
         const std::optional<Box2d> frameBoundsDoc = TextWorldFrameBounds(text);

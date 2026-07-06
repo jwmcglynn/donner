@@ -105,7 +105,7 @@ public:
   /// Rebuild the hint set against a new entity space after a structurally-
   /// identical `setDocument`. The detector's hints are derived from
   /// `RenderingInstanceComponent` features (opacity < 1, filter, mask,
-  /// isolation…) - rather than surgical-remap the old hint set, we release
+  /// isolation...) - rather than surgical-remap the old hint set, we release
   /// the stale hints (they point into a destroyed entt sparse set) and
   /// run `reconcile()` against the new registry. The detector's `reconcile`
   /// is deterministic on the ECS state, so a structurally-identical

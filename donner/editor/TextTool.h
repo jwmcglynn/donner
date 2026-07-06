@@ -5,7 +5,7 @@
 /// design-tool contract: a click on existing text opens an in-canvas editing
 /// session on that element with the caret at the clicked character, a
 /// click-drag on empty canvas draws a text box, and a double-click on empty
-/// canvas starts point text (a plain click on empty canvas creates nothing —
+/// canvas starts point text (a plain click on empty canvas creates nothing -
 /// it only commits any active session). Typing, Enter (hard line break),
 /// Backspace/Delete, and caret movement edit the live `<text>` element
 /// through the DOM mutation seam; box text wraps greedily to the box width
@@ -64,7 +64,7 @@ public:
   };
 
   /// Begin a gesture: a press on the session frame's transform handles
-  /// starts a frame resize (reflow — glyphs never scale) or a rotate; a
+  /// starts a frame resize (reflow - glyphs never scale) or a rotate; a
   /// click inside the session's text moves the caret (clicks inside the
   /// frame but off every glyph land the caret at the end); otherwise commit
   /// any active session, then either open an editing session on the
@@ -98,7 +98,7 @@ public:
   /// Hit-test the session frame's transform handles at @p documentPoint for
   /// hover cursor feedback: `Resize` over a corner handle, `Rotate` in the
   /// ring outside it, `None` elsewhere or when no session is editing. Reads
-  /// the session's computed ink bounds for point text — call only while the
+  /// the session's computed ink bounds for point text - call only while the
   /// async render worker is idle.
   [[nodiscard]] SelectionTransformHandleIntent frameHandleIntentAt(const Vector2d& documentPoint,
                                                                    double pixelsPerDocUnit,
@@ -135,7 +135,7 @@ public:
   void cancel();
 
   /// Caret + frame chrome for the active session, or nullopt when not
-  /// editing. Reads the element's computed character geometry — call only
+  /// editing. Reads the element's computed character geometry - call only
   /// while the async render worker is idle.
   [[nodiscard]] std::optional<EditingChrome> editingChrome(EditorApp& editor) const;
 

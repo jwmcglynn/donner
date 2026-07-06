@@ -28,7 +28,7 @@ namespace donner::editor {
 
 /// Collect every renderable `<text>` root in @p root's subtree (including
 /// @p root itself if it is one). Skips the same non-rendered containers as
-/// \ref CollectRenderableGeometry and does not descend into text content —
+/// \ref CollectRenderableGeometry and does not descend into text content -
 /// tspans contribute chrome through their text root.
 [[nodiscard]] std::vector<svg::SVGTextElement> CollectRenderableTextRoots(
     const svg::SVGElement& root);

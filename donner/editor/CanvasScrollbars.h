@@ -3,7 +3,7 @@
 ///
 /// Geometry for the render pane's emulated canvas scrollbars. The canvas pane
 /// never window-scrolls (an ImGui window scrollbar would move the in-pane
-/// overlay chrome — toolbar, perf HUD — instead of the document), so the pane
+/// overlay chrome - toolbar, perf HUD - instead of the document), so the pane
 /// draws its own scrollbars that represent the document extent relative to
 /// the viewport and pan the canvas when dragged.
 

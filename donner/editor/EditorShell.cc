@@ -2980,7 +2980,7 @@ void EditorShell::renderCanvasScrollbars() {
   const Vector2d paneSize = viewport.paneSize;
 
   // Scrollbars represent the DOCUMENT extent relative to the viewport and
-  // pan the canvas when dragged — they never window-scroll the pane (which
+  // pan the canvas when dragged - they never window-scroll the pane (which
   // would move the overlay chrome instead of the document).
   if (bars.horizontal.visible) {
     const float railTop = static_cast<float>(paneOrigin.y + paneSize.y) - kRailThickness;
@@ -3042,7 +3042,7 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
   // during render the worker thread may be mutating registry state the
   // snapshot walk would read. The snapshot persists across the busy window
   // so the panes keep showing their last-known content instead of flashing
-  // to "(rendering…)" placeholders.
+  // to "(rendering...)" placeholders.
   const bool rendererBusy = renderCoordinator_.asyncRenderer().isBusy();
   if (!rendererBusy) {
     sidebarPresenter_.refreshSnapshot(app_);

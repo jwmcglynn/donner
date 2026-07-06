@@ -9,7 +9,7 @@
 ///     `FloatPixmap::fromPixmap`) rejected allocations > 64 MiB →
 ///     viewport-sized main pixmaps above 4096×4096 RGBA failed and
 ///     `takeSnapshot` returned empty.
-///   - `tiny_skia::filter::gaussianBlur(FloatPixmap&, …)` (and the uint8
+///   - `tiny_skia::filter::gaussianBlur(FloatPixmap&, ...)` (and the uint8
 ///     overload, and `Morphology`) returned early if the buffer exceeded
 ///     64 MiB → the SourceGraphic flowed through unblurred, so the user
 ///     saw lightning bolts rendered as hard paths instead of soft halos.
@@ -171,7 +171,7 @@ TEST(ZoomFilterRepro, SplashAtEditorClampBoundaryRenders) {
 TEST(ZoomFilterRepro, SplashHaloSurvivesHighZoom) {
   // The gaussian blur halos around the splash's lightning bolts must
   // survive a high-canvas render. Without the filter-primitive cap raises,
-  // `gaussianBlur(FloatPixmap&, …)` silently returns early on viewport-
+  // `gaussianBlur(FloatPixmap&, ...)` silently returns early on viewport-
   // sized SourceGraphic float buffers above ~2048×2048 floats - the blur
   // disappears while every other element renders normally. This produces a
   // luma swing of ~37+ at the Lightning_glow_dark halo probe; with the

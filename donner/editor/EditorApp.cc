@@ -1092,7 +1092,7 @@ bool EditorApp::renameSelectedElement(std::string_view newId) {
       for (const xml::XMLQualifiedNameRef& attrName : candidate.attributes()) {
         // We round-trip the rewritten attribute through SetAttributeCommand,
         // which only carries an unprefixed local name. The references we care
-        // about (url(#…) in presentation/style attributes, SVG2 `href`) are all
+        // about (url(#...) in presentation/style attributes, SVG2 `href`) are all
         // in the default namespace; skip prefixed attributes (e.g. legacy
         // `xlink:href`) rather than risk dropping their prefix.
         if (!attrName.namespacePrefix.empty()) {

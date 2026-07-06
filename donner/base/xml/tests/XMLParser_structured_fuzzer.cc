@@ -47,7 +47,7 @@ std::string ConsumeName(FuzzedDataProvider& provider, bool withNamespacePrefix) 
   return name;
 }
 
-/// Emit a <!ENTITY …> declaration.  Returns the declared name.
+/// Emit a <!ENTITY ...> declaration.  Returns the declared name.
 std::string EmitEntityDecl(FuzzedDataProvider& provider, std::string& outDoctypeInternalSubset,
                            const std::vector<std::string>& earlierEntities) {
   const bool external = provider.ConsumeBool();
