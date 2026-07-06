@@ -539,6 +539,36 @@ donner_cc_library(
     ],
 )
 
+# Editor-authored SVG icon assets (Donner-rendered through EmbeddedSvgIcon).
+# W6's cursor/icon suite folds these into the shared icon family; see
+# donner/editor/icons/. Keep new editor icons here rather than reusing the
+# third-party Bootstrap set.
+embed_resources(
+    name = "editor_icons",
+    header_output = "embed_resources/EditorIcons.h",
+    resources = {
+        "kEditorChevronSvg": "icons/chevron.svg",
+    },
+    visibility = ["//donner:__subpackages__"],
+)
+
+# Shared tree-disclosure chevron rendered from the editor_icons chevron asset,
+# used by both the inspector tree (SidebarPresenter) and the LayersPanel so the
+# two trees share one disclosure style.
+donner_cc_library(
+    name = "disclosure_chevron",
+    srcs = ["DisclosureChevron.cc"],
+    hdrs = ["DisclosureChevron.h"],
+    deps = [
+        ":editor_icons",
+        ":embedded_svg_icon",
+        ":imgui_headers",
+        "//donner/base",
+        "//donner/svg/renderer:renderer_interface",
+        "@imgui",
+    ],
+)
+
 donner_cc_library(
     name = "sidebar_presenter",
     srcs = ["SidebarPresenter.cc"],
@@ -688,10 +718,12 @@ donner_cc_library(
         "EditorShell.cc",
         "EditorShellPresentation.cc",
         "EditorShellPresentation.h",
+        "FillStrokeWidget.cc",
     ],
     hdrs = [
         "EditorShell.h",
         "EditorShellInternal.h",
+        "FillStrokeWidget.h",
     ],
     defines = select({
         ":wasm_geode_enabled": ["DONNER_EDITOR_WGPU"],
