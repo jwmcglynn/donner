@@ -2815,12 +2815,19 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     // While the Pen tool is active the selected path is itself the live
     // interaction surface, so chrome must track the live DOM even between
     // anchor drags (close-path clicks, deferred clicks processed after
-    // mouse-release).
-    const bool allowLivePenOverlay = penToolActive;
+    // mouse-release). An active text session is the same shape: every
+    // keystroke flushes the DOM ahead of the async renderer, and the caret +
+    // session frame chrome comes from the live post-flush DOM
+    // (TextTool::editingChrome). Without this exception the coordinator's
+    // version gate drops the overlay snapshot for the whole typing burst,
+    // blinking the caret/selection chrome off until the worker catches up.
+    const bool allowLiveGeometryOverlay =
+        penToolActive ||
+        (textToolActive && (textTool_.isEditing() || textTool_.isDraggingBox()));
     updatePenLivePreviewTarget();
     renderCoordinator_.rasterizeOverlayForPresentation(
         app_, selectTool_, interactionController_.viewport(), textures_, activeDragPreview,
-        representedDragPreview, selectionChromeDetailForActiveTool(), allowLivePenOverlay);
+        representedDragPreview, selectionChromeDetailForActiveTool(), allowLiveGeometryOverlay);
   }
   // While the pen live preview is active, the overlay snapshot itself presents
   // the edited path's document pixels (captured from the same post-flush DOM

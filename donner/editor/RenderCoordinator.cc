@@ -619,9 +619,12 @@ bool RenderCoordinator::rasterizeOverlayForPresentation(
                                          activeBoundsPreview.has_value();
   const std::uint64_t currentVersion = app.document().currentFrameVersion();
   // Non-transforming geometry edits usually have no presenter-side projection that can make live
-  // chrome line up with older document pixels. Active PenTool drags are the exception: the selected
-  // path is itself the live interaction surface, so the renderer-backed path chrome must track the
-  // live path directly.
+  // chrome line up with older document pixels. Live-geometry tools are the exception (the caller
+  // passes `allowLiveGeometryOverlay`): active PenTool editing, where the selected path is itself
+  // the live interaction surface, and active TextTool sessions, where every keystroke flushes the
+  // DOM ahead of the async renderer and the caret/frame chrome comes from the live post-flush DOM.
+  // For those the chrome must keep tracking the live document; resetting the snapshot here would
+  // blink the caret/selection chrome off for the whole typing or drafting burst.
   if (displayedDocVersion_ != 0u && currentVersion > displayedDocVersion_ &&
       !hasPresentationProjection && !allowLiveGeometryOverlay) {
     if (immediateOverlaySnapshot_.has_value() && lastOverlayVersion_ > displayedDocVersion_) {
