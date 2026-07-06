@@ -107,4 +107,9 @@ struct EditorTheme {
   static void SetActive(const EditorTheme& theme);
 };
 
+/// Returns `color` with its alpha channel replaced by `alpha` (ImGui packing).
+/// Lets raw `ImDrawList` chrome reuse an opaque theme token at reduced opacity
+/// (e.g. translucent scrollbar rails and info chips).
+ImU32 WithAlpha(ImU32 color, uint8_t alpha);
+
 }  // namespace donner::editor

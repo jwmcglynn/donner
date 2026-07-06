@@ -28,6 +28,7 @@
 #include "donner/editor/DragCoalesce.h"
 #include "donner/editor/EditorShellInternal.h"
 #include "donner/editor/EditorShellPresentation.h"
+#include "donner/editor/EditorTheme.h"
 #include "donner/editor/FocusView.h"
 #include "donner/editor/FrameMissTelemetry.h"
 #include "donner/editor/ImGuiClipboard.h"
@@ -471,11 +472,12 @@ void DrawPaintSwatch(ImDrawList* drawList, const ImVec2& min, const ImVec2& max,
     drawList->PopClipRect();
   }
   drawList->AddRect(min, max, IM_COL32(255, 255, 255, 230), 2.0f, 0, 1.0f);
-  drawList->AddRect(min, max, state.isCustom ? IM_COL32(91, 189, 255, 255) : IM_COL32(0, 0, 0, 210),
-                    2.0f, 0, 2.0f);
+  drawList->AddRect(
+      min, max,
+      state.isCustom ? EditorTheme::Active().accentDefault : IM_COL32(0, 0, 0, 210), 2.0f, 0, 2.0f);
   if (state.isNone) {
     drawList->AddLine(ImVec2(min.x + 2.0f, max.y - 2.0f), ImVec2(max.x - 2.0f, min.y + 2.0f),
-                      IM_COL32(230, 40, 40, 255), 2.2f);
+                      EditorTheme::Active().destructive, 2.2f);
   }
 }
 
@@ -2259,7 +2261,8 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
   ImGui::SetCursorScreenPos(ImVec2(static_cast<float>(rect.topLeft.x) + kToolPalettePadding,
                                    static_cast<float>(rect.topLeft.y) + kToolPalettePadding));
   ImGui::PushID("tool_palette");
-  ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 5.0f);
+  const EditorTheme& theme = EditorTheme::Active();
+  ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, theme.radiusControl);
   ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
 
   enum class ToolButtonIcon {
@@ -2272,9 +2275,15 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
                                 const char* tooltip) {
     const bool selected = activeTool_ == tool;
     if (selected) {
-      ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.43f, 0.90f, 1.0f));
-      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.22f, 0.50f, 1.0f, 1.0f));
-      ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.14f, 0.35f, 0.78f, 1.0f));
+      // Selected tool reads as accent-at-22%-fill (not a solid accent fill) so
+      // the tool-icon mask stays legible; an accent stroke is added below.
+      ImVec4 fill = ImGui::ColorConvertU32ToFloat4(theme.accentDefault);
+      fill.w = theme.selectionFillAlpha;
+      ImVec4 fillActive = fill;
+      fillActive.w = theme.selectionFillAlpha + 0.12f;
+      ImGui::PushStyleColor(ImGuiCol_Button, fill);
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, fill);
+      ImGui::PushStyleColor(ImGuiCol_ButtonActive, fillActive);
     }
     if (ImGui::Button(label, ImVec2(kToolPaletteButtonSize, kToolPaletteButtonSize))) {
       // Leaving a tool commits its in-progress session as one undoable
@@ -2286,6 +2295,10 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
         refreshAfterToolDrivenFlush();
       }
       activeTool_ = tool;
+    }
+    if (selected) {
+      drawList->AddRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), theme.accentDefault,
+                        theme.radiusControl, 0, 1.5f);
     }
     if (icon == ToolButtonIcon::SelectPointer) {
       DrawSelectToolButtonIcon(drawList, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
@@ -3062,7 +3075,8 @@ void EditorShell::renderTextToolHint() {
   }
 
   ImDrawList* drawList = ImGui::GetWindowDrawList();
-  drawList->AddRectFilled(ImVec2(x, y), ImVec2(x + width, y + height), IM_COL32(34, 48, 54, 235),
+  drawList->AddRectFilled(ImVec2(x, y), ImVec2(x + width, y + height),
+                          WithAlpha(EditorTheme::Active().surfaceOverlay, 235),
                           kReferenceChipRadius);
   drawList->AddText(ImGui::GetFont(), ImGui::GetFontSize(),
                     ImVec2(x + kReferenceChipPaddingX, y + kReferenceChipPaddingY),
@@ -3078,10 +3092,14 @@ void EditorShell::renderCanvasScrollbars() {
 
   const float kRailThickness = static_cast<float>(kCanvasScrollbarRailPx);
   constexpr float kThumbPadding = 2.0f;
-  constexpr float kThumbRounding = 3.0f;
-  const ImU32 kRailColor = IM_COL32(28, 28, 32, 150);
-  const ImU32 kThumbColor = IM_COL32(112, 116, 126, 200);
-  const ImU32 kThumbActiveColor = IM_COL32(156, 160, 170, 230);
+  // Canvas scrollbars are custom ImDrawList chrome (not ImGui scrollbars), so
+  // they read the theme's surface ramp directly, keeping the prior translucency
+  // so canvas content shows faintly through the rail.
+  const EditorTheme& theme = EditorTheme::Active();
+  const float kThumbRounding = theme.radiusControl;
+  const ImU32 kRailColor = WithAlpha(theme.surfaceSunken, 150);
+  const ImU32 kThumbColor = WithAlpha(theme.surfaceHover, 200);
+  const ImU32 kThumbActiveColor = WithAlpha(theme.surfaceActive, 230);
   ImDrawList* drawList = ImGui::GetWindowDrawList();
   const Vector2d paneOrigin = viewport.paneOrigin;
   const Vector2d paneSize = viewport.paneSize;
@@ -3784,7 +3802,7 @@ void EditorShell::renderSelectionSizeChip(
   drawList->AddRectFilled(
       ImVec2(static_cast<float>(rect->topLeft.x), static_cast<float>(rect->topLeft.y)),
       ImVec2(static_cast<float>(rect->bottomRight.x), static_cast<float>(rect->bottomRight.y)),
-      IM_COL32(0, 111, 149, 255), kSelectionSizeChipRadius);
+      EditorTheme::Active().surfaceOverlay, kSelectionSizeChipRadius);
   drawList->AddText(chipFont, SelectionSizeChipFontSize(),
                     ImVec2(static_cast<float>(rect->topLeft.x) + kSelectionSizeChipPaddingX,
                            static_cast<float>(rect->topLeft.y) + kSelectionSizeChipPaddingY),
@@ -3843,9 +3861,10 @@ void EditorShell::renderReferenceHighlightChip() {
   }
 
   ImDrawList* drawList = ImGui::GetWindowDrawList();
-  const ImU32 bg = referenceHighlightActive_ ? IM_COL32(0, 135, 170, 245)
-                   : hovered                 ? IM_COL32(48, 70, 78, 245)
-                                             : IM_COL32(34, 48, 54, 235);
+  const EditorTheme& theme = EditorTheme::Active();
+  const ImU32 bg = referenceHighlightActive_ ? WithAlpha(theme.surfaceActive, 245)
+                   : hovered                 ? WithAlpha(theme.surfaceHover, 245)
+                                             : WithAlpha(theme.surfaceOverlay, 235);
   drawList->AddRectFilled(
       ImVec2(static_cast<float>(rect->topLeft.x), static_cast<float>(rect->topLeft.y)),
       ImVec2(static_cast<float>(rect->bottomRight.x), static_cast<float>(rect->bottomRight.y)), bg,

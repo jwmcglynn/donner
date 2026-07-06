@@ -155,4 +155,8 @@ void EditorTheme::SetActive(const EditorTheme& theme) {
   const_cast<EditorTheme&>(Active()) = theme;
 }
 
+ImU32 WithAlpha(ImU32 color, uint8_t alpha) {
+  return (color & ~IM_COL32_A_MASK) | (static_cast<ImU32>(alpha) << IM_COL32_A_SHIFT);
+}
+
 }  // namespace donner::editor
