@@ -1,6 +1,7 @@
 #include "donner/svg/renderer/RendererDriver.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <iostream>
 #include <optional>
@@ -364,6 +365,29 @@ StrokeParams toStrokeParams(Registry& registry,
   if (const auto* pathLengthComp =
           instance.dataHandle(registry).try_get<components::PathLengthComponent>()) {
     stroke.pathLength = pathLengthComp->value;
+  }
+
+  // `vector-effect: non-scaling-stroke` keeps the stroke geometry constant in the coordinate
+  // system of the referencing viewport, ignoring the element's own transform and any viewBox
+  // scaling. Both renderer backends stroke by expanding the path outline in local (pre-transform)
+  // coordinates using this local stroke width, and then apply the element->canvas CTM to the
+  // resulting outline (so the stroke normally scales with the CTM like the geometry does). To hold
+  // the stroke constant in device/canvas space we therefore pre-divide the local stroke width (and
+  // the dash pattern) by the CTM's scale factor, so that after the CTM is applied the stroke lands
+  // at its authored width. We use sqrt(|det|) as the scalar scale, which is exact for uniform scale
+  // (the common viewBox / scale() case) and rotation-invariant; anisotropy under a non-uniform CTM
+  // is not preserved (that would require stroking in device space). See VectorEffect.h.
+  if (properties.vectorEffect.getOr(VectorEffect::None) == VectorEffect::NonScalingStroke) {
+    const double det = instance.worldFromEntityTransform.determinant();
+    const double scale = std::sqrt(std::abs(det));
+    if (std::isfinite(scale) && scale > 0.0) {
+      const double invScale = 1.0 / scale;
+      stroke.strokeWidth *= invScale;
+      stroke.dashOffset *= invScale;
+      for (double& dashLength : stroke.dashArray) {
+        dashLength *= invScale;
+      }
+    }
   }
 
   return stroke;
