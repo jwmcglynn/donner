@@ -105,6 +105,19 @@ donner_cc_library(
     ],
 )
 
+# Shared DOM-based id scanning and id-reference rewrite helpers, used by
+# ViewportSvgExport, ShapeClipboardCommands, and EditorApp's rename path so
+# each does not grow its own textual id/depth scanner.
+donner_cc_library(
+    name = "element_id_scan",
+    srcs = ["ElementIdScan.cc"],
+    hdrs = ["ElementIdScan.h"],
+    deps = [
+        "//donner/base",
+        "//donner/svg",
+    ],
+)
+
 # Viewport SVG export. Content-only: copies source SVG children into a clipped
 # group cropped to the viewport, with an optional overlay group for the
 # serialized selection chrome.
@@ -113,6 +126,7 @@ donner_cc_library(
     srcs = ["ViewportSvgExport.cc"],
     hdrs = ["ViewportSvgExport.h"],
     deps = [
+        ":element_id_scan",
         ":overlay_renderer",
         ":viewport_state",
         "//donner/base",
@@ -300,6 +314,7 @@ donner_cc_library(
     hdrs = ["ShapeClipboardCommands.h"],
     deps = [
         ":editor_parse_options",
+        ":element_id_scan",
         ":shape_clipboard_payload",
         "//donner/base",
         "//donner/base/xml",
@@ -796,6 +811,7 @@ donner_cc_library(
         ":async_svg_document",
         ":attribute_writeback",
         ":command_queue",
+        ":element_id_scan",
         ":lock_state",
         ":undo_timeline",
         "//donner/base",

@@ -659,4 +659,85 @@ TEST(ShapeClipboardCommands, CopyModifyPasteRoundTripPreservesGeometryAtOffset) 
   EXPECT_THAT(result.mergedSource, HasSubstr("translate(20,20)"));
 }
 
+TEST(ShapeClipboardCommands, PasteIgnoresIdLookalikeInsideFragmentComment) {
+  // The destination already declares id="collide". A naive textual id scan
+  // over the pasted fragment would also "discover" id="collide" inside the
+  // fragment's comment and (wrongly) treat it as a real fragment-defined id
+  // colliding with the destination, renaming and rewriting the comment text.
+  // A comment is never a real declaration, so nothing here should collide.
+  constexpr std::string_view kWithCollidingId =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="collide" x="0" y="0" width="1" height="1"/></svg>)";
+  svg::SVGDocument document = Parse(kWithCollidingId);
+
+  ShapeClipboardPayload payload;
+  payload.svgFragment =
+      "<rect id=\"keep\" x=\"0\" y=\"0\" width=\"1\" height=\"1\"/>"
+      "<!-- placeholder id=\"collide\" -->";
+  payload.sourceElementIds = {"keep"};
+
+  PreparePasteResult result = preparePaste(document, payload, PastePlacement::EndOfRootOffset);
+  ASSERT_TRUE(result.ok) << result.error;
+
+  // The comment survives byte-for-byte: its id-lookalike text was never a
+  // rename target.
+  EXPECT_THAT(result.mergedSource, HasSubstr("<!-- placeholder id=\"collide\" -->"));
+  // The real fragment id has no destination collision, so it is untouched.
+  EXPECT_THAT(result.mergedSource, HasSubstr("id=\"keep\""));
+  EXPECT_THAT(result.mergedSource, Not(HasSubstr("keep_pasted")));
+}
+
+TEST(ShapeClipboardCommands, PasteIgnoresIdLookalikeInsideFragmentCData) {
+  constexpr std::string_view kWithCollidingId =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="collide" x="0" y="0" width="1" height="1"/></svg>)";
+  svg::SVGDocument document = Parse(kWithCollidingId);
+
+  ShapeClipboardPayload payload;
+  payload.svgFragment =
+      "<rect id=\"keep\" x=\"0\" y=\"0\" width=\"1\" height=\"1\"/>"
+      "<![CDATA[ var s = 'id=\"collide\"'; ]]>";
+  payload.sourceElementIds = {"keep"};
+
+  PreparePasteResult result = preparePaste(document, payload, PastePlacement::EndOfRootOffset);
+  ASSERT_TRUE(result.ok) << result.error;
+
+  EXPECT_THAT(result.mergedSource, HasSubstr("var s = 'id=\"collide\"';"));
+  EXPECT_THAT(result.mergedSource, HasSubstr("id=\"keep\""));
+  EXPECT_THAT(result.mergedSource, Not(HasSubstr("keep_pasted")));
+}
+
+TEST(ShapeClipboardCommands, PasteIntoSelectedGroupIgnoresMisleadingGroupTagsInComments) {
+  // A textual `id="grp"` search finds the decoy comment's occurrence first
+  // (it appears earlier in the source), and a textual `<g>`/`</g>` depth
+  // count starting from that decoy would terminate inside the comment,
+  // landing the paste in the comment text. The DOM-based lookup instead
+  // resolves the real `#grp` element directly, ignoring the decoy entirely.
+  constexpr std::string_view kGroupedWithDecoyComment =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+<!-- decoy: <g id="grp">forget me</g> -->
+<g id="grp"><rect id="inside" x="0" y="0" width="4" height="4"/></g>
+<rect id="loose" x="50" y="50" width="4" height="4"/>
+</svg>)";
+  svg::SVGDocument document = Parse(kGroupedWithDecoyComment);
+  std::optional<ShapeClipboardPayload> payload =
+      copySelectionToPayload(document, Select(document, {"loose"}));
+  ASSERT_TRUE(payload.has_value());
+
+  std::optional<svg::SVGElement> group = document.querySelector("#grp");
+  ASSERT_TRUE(group.has_value());
+  PreparePasteResult result =
+      preparePaste(document, *payload, PastePlacement::EndOfRootOffset, group);
+  ASSERT_TRUE(result.ok) << result.error;
+
+  // The wrapper lands inside the *real* group's closing tag, which comes
+  // after the decoy comment in the source, not inside the comment.
+  const std::size_t decoyEnd = result.mergedSource.find("-->");
+  const std::size_t wrapperPos = result.mergedSource.find("loose_pasted");
+  const std::size_t realGroupClose = result.mergedSource.find("</g>", decoyEnd);
+  ASSERT_NE(decoyEnd, std::string::npos);
+  ASSERT_NE(wrapperPos, std::string::npos);
+  ASSERT_NE(realGroupClose, std::string::npos);
+  EXPECT_GT(wrapperPos, decoyEnd);
+  EXPECT_LT(wrapperPos, realGroupClose);
+}
+
 }  // namespace donner::editor

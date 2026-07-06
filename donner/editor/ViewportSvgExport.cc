@@ -6,11 +6,13 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 #include "donner/base/Box.h"
 #include "donner/base/RcString.h"
 #include "donner/base/Vector2.h"
+#include "donner/editor/ElementIdScan.h"
 #include "donner/editor/OverlayRenderer.h"
 
 namespace donner::editor {
@@ -310,31 +312,23 @@ void AppendControlLine(std::string* out, const SelectionChromeSnapshot::PathCont
           "\" stroke-width=\"1\" vector-effect=\"non-scaling-stroke\"/>";
 }
 
-/// Returns true if \p source appears to declare an element with the given
-/// \p id. This is a conservative textual scan over the raw source (matching
-/// `id="<id>"` and `id='<id>'`), so it can report a false positive for text
-/// that merely looks like an id attribute (e.g. inside a comment); that only
-/// causes an unnecessary suffix on the injected id, which is harmless.
-bool SourceDeclaresId(std::string_view source, std::string_view id) {
-  for (const char quote : {'"', '\''}) {
-    std::string needle = "id=";
-    needle += quote;
-    needle += id;
-    needle += quote;
-    if (source.find(needle) != std::string_view::npos) {
-      return true;
-    }
-  }
-  return false;
-}
-
 /// Pick an id for the injected viewport clip path that does not collide with
-/// any id already declared in the source document. Prefers \ref kClipPathId
-/// and appends an increasing numeric suffix ("donner-viewport-clip-2", ...)
-/// until the id is unused.
-std::string UniqueClipPathId(std::string_view source) {
+/// any id already declared in \p doc. Prefers \ref kClipPathId and appends an
+/// increasing numeric suffix ("donner-viewport-clip-2", ...) until the id is
+/// unused.
+///
+/// DOM-based (via the shared \ref CollectSubtreeIds utility), not a textual
+/// scan of the raw source: a plain substring search for `id="<id>"` can
+/// false-positive-match text that merely looks like an id attribute (e.g.
+/// inside a comment or CDATA section), which would pick an unnecessarily
+/// suffixed id. \p doc is already parsed here, so there is no reason to fall
+/// back to scanning its serialized text.
+std::string UniqueClipPathId(const svg::SVGDocument& doc) {
+  std::unordered_set<std::string> ids;
+  CollectSubtreeIds(doc.svgElement(), ids);
+
   std::string id(kClipPathId);
-  for (int suffix = 2; SourceDeclaresId(source, id); ++suffix) {
+  for (int suffix = 2; ids.count(id) != 0; ++suffix) {
     id = std::string(kClipPathId) + "-" + std::to_string(suffix);
   }
   return id;
@@ -417,9 +411,9 @@ Result<std::string, std::string> ExportViewportAsSvg(
   }
 
   // Id for the injected clip path, uniquified against ids already declared in
-  // the source so a document that defines "donner-viewport-clip" itself does
+  // the document so a document that defines "donner-viewport-clip" itself does
   // not collide with the injected definition.
-  const std::string clipPathId = UniqueClipPathId(source);
+  const std::string clipPathId = UniqueClipPathId(doc);
 
   // Compute the document-space viewport rect from the screen-space pane rect.
   // `ViewportState` is the single source of truth for crop and scale.

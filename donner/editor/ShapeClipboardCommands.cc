@@ -8,6 +8,7 @@
 #include "donner/base/FileOffset.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/editor/EditorParseOptions.h"
+#include "donner/editor/ElementIdScan.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -49,17 +50,6 @@ std::optional<std::pair<std::size_t, std::size_t>> elementSourceRange(
       });
 }
 
-/// Recursively collect every `id` attribute in the subtree rooted at \p element.
-void collectIds(const svg::SVGElement& element, std::unordered_set<std::string>& out) {
-  const RcString id = element.id();
-  if (!id.empty()) {
-    out.insert(id.str());
-  }
-  for (auto child = element.firstChild(); child; child = child->nextSibling()) {
-    collectIds(*child, out);
-  }
-}
-
 /// Whether \p c can appear in an SVG id / fragment identifier token.
 bool isIdChar(char c) {
   return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '-' || c == '_' || c == '.' ||
@@ -74,10 +64,60 @@ bool boundaryBefore(std::string_view text, std::size_t pos) {
          text[pos - 1] == '\r';
 }
 
+/// Byte ranges in \p text that must not be treated as real attribute/tag
+/// syntax when scanning for id/reference tokens below: XML comments
+/// (`<!--...-->`) and CDATA sections (`<![CDATA[...]]>`). An
+/// `id=`/`url(#`/`href=`-shaped substring inside either is never a real
+/// declaration or reference - it can be a commented-out element, or literal
+/// markup-as-text inside a CDATA block. (Quoted attribute-value strings are
+/// deliberately *not* masked here: `url(#id)` legitimately lives inside one,
+/// e.g. `fill="url(#id)"`, so masking every quoted span would hide the
+/// references this scan exists to find.) These scanners restart a fresh
+/// substring search rather than tracking full attribute-value context, so a
+/// candidate match has to be checked against this list before it is trusted.
+std::vector<std::pair<std::size_t, std::size_t>> findInertRegions(std::string_view text) {
+  std::vector<std::pair<std::size_t, std::size_t>> regions;
+  std::size_t i = 0;
+  while (i < text.size()) {
+    if (text.compare(i, 4, "<!--") == 0) {
+      const std::size_t end = text.find("-->", i + 4);
+      const std::size_t stop = end == std::string_view::npos ? text.size() : end + 3;
+      regions.emplace_back(i, stop);
+      i = stop;
+    } else if (text.compare(i, 9, "<![CDATA[") == 0) {
+      const std::size_t end = text.find("]]>", i + 9);
+      const std::size_t stop = end == std::string_view::npos ? text.size() : end + 3;
+      regions.emplace_back(i, stop);
+      i = stop;
+    } else {
+      ++i;
+    }
+  }
+  return regions;
+}
+
+/// If \p pos falls strictly inside one of \p regions (as produced by \ref
+/// findInertRegions), returns that region's end offset so the caller can skip
+/// past it; otherwise returns \p pos unchanged.
+std::size_t skipInertRegion(const std::vector<std::pair<std::size_t, std::size_t>>& regions,
+                            std::size_t pos) {
+  for (const auto& [start, end] : regions) {
+    if (pos >= start && pos < end) {
+      return end;
+    }
+  }
+  return pos;
+}
+
 /// Scan \p text for every `id="..."` attribute value and append them to \p out.
 void scanDefinedIds(std::string_view text, std::vector<std::string>& out) {
+  const std::vector<std::pair<std::size_t, std::size_t>> inertRegions = findInertRegions(text);
   std::size_t pos = 0;
   while ((pos = text.find("id=", pos)) != std::string_view::npos) {
+    if (const std::size_t skipTo = skipInertRegion(inertRegions, pos); skipTo != pos) {
+      pos = skipTo;
+      continue;
+    }
     const std::size_t valueStart = pos + 3;
     if (!boundaryBefore(text, pos) || valueStart >= text.size() ||
         (text[valueStart] != '"' && text[valueStart] != '\'')) {
@@ -97,9 +137,15 @@ void scanDefinedIds(std::string_view text, std::vector<std::string>& out) {
 /// Find every internal reference target (`#id`) used in \p text, via
 /// `href="#id"`, `xlink:href="#id"`, and `url(#id)`.
 void scanReferencedIds(std::string_view text, std::unordered_set<std::string>& out) {
+  const std::vector<std::pair<std::size_t, std::size_t>> inertRegions = findInertRegions(text);
+
   // url(#id)
   std::size_t pos = 0;
   while ((pos = text.find("url(#", pos)) != std::string_view::npos) {
+    if (const std::size_t skipTo = skipInertRegion(inertRegions, pos); skipTo != pos) {
+      pos = skipTo;
+      continue;
+    }
     const std::size_t start = pos + 5;
     std::size_t end = start;
     while (end < text.size() && isIdChar(text[end])) {
@@ -113,6 +159,10 @@ void scanReferencedIds(std::string_view text, std::unordered_set<std::string>& o
   // href="#id" and xlink:href="#id" (both end in `href=`).
   pos = 0;
   while ((pos = text.find("href=", pos)) != std::string_view::npos) {
+    if (const std::size_t skipTo = skipInertRegion(inertRegions, pos); skipTo != pos) {
+      pos = skipTo;
+      continue;
+    }
     const std::size_t valueStart = pos + 5;
     if (valueStart < text.size() && (text[valueStart] == '"' || text[valueStart] == '\'') &&
         valueStart + 1 < text.size() && text[valueStart + 1] == '#') {
@@ -136,6 +186,24 @@ std::string applyRenames(std::string_view text,
   std::size_t i = 0;
   while (i < text.size()) {
     bool rewrote = false;
+
+    // Comments and CDATA sections copy through verbatim: an id/reference
+    // token that merely *looks* like one inside either (e.g. a commented-out
+    // `<rect id="...">`) is not a real declaration or reference.
+    if (text.compare(i, 4, "<!--") == 0) {
+      const std::size_t end = text.find("-->", i + 4);
+      const std::size_t stop = end == std::string_view::npos ? text.size() : end + 3;
+      out.append(text.substr(i, stop - i));
+      i = stop;
+      continue;
+    }
+    if (text.compare(i, 9, "<![CDATA[") == 0) {
+      const std::size_t end = text.find("]]>", i + 9);
+      const std::size_t stop = end == std::string_view::npos ? text.size() : end + 3;
+      out.append(text.substr(i, stop - i));
+      i = stop;
+      continue;
+    }
 
     // id="oldId" / id='oldId'
     if (text.compare(i, 3, "id=") == 0 && boundaryBefore(text, i)) {
@@ -314,9 +382,12 @@ PreparePasteResult preparePaste(const svg::SVGDocument& document,
   std::unordered_set<std::string> referencedIds;
   scanReferencedIds(payload.svgFragment, referencedIds);
 
-  // Collect ids already present in the destination document.
+  // Collect ids already present in the destination document. DOM-based (not a
+  // textual scan of the destination source) via the shared ElementIdScan
+  // utility: the destination has a live DOM available, unlike the raw
+  // clipboard fragment scanned below.
   std::unordered_set<std::string> existingIds;
-  collectIds(document.svgElement(), existingIds);
+  CollectSubtreeIds(document.svgElement(), existingIds);
 
   // A reference to an id that is neither defined in the fragment nor present in
   // the destination document cannot be repaired safely → fail without mutating.
@@ -382,37 +453,37 @@ PreparePasteResult preparePaste(const svg::SVGDocument& document,
   }
   std::size_t insertAt = rootClose;
 
-  // Default paste into a single selected group: insert just before that group's
-  // matching `</g>` so the paste lands inside the group's subtree.
-  if (placement == PastePlacement::EndOfRootOffset && selectedGroup.has_value() &&
-      !selectedGroup->id().empty()) {
-    const std::string anchor = "id=\"" + selectedGroup->id().str() + "\"";
-    const std::size_t idPos = source.find(anchor);
-    if (idPos != std::string::npos) {
-      const std::size_t tagOpen = source.rfind('<', idPos);
-      if (tagOpen != std::string::npos && source.compare(tagOpen, 2, "<g") == 0) {
-        std::size_t depth = 0;
-        std::size_t scan = tagOpen;
-        std::size_t matchedClose = std::string::npos;
-        while (scan < source.size()) {
-          if (source.compare(scan, 2, "<g") == 0 &&
-              (scan + 2 >= source.size() || source[scan + 2] == ' ' || source[scan + 2] == '>' ||
-               source[scan + 2] == '\t' || source[scan + 2] == '\n')) {
-            ++depth;
-            scan += 2;
-          } else if (source.compare(scan, 4, "</g>") == 0) {
-            --depth;
-            if (depth == 0) {
-              matchedClose = scan;
-              break;
-            }
-            scan += 4;
-          } else {
-            ++scan;
-          }
-        }
-        if (matchedClose != std::string::npos) {
-          insertAt = matchedClose;
+  // Default paste into a single selected group: insert just before that
+  // group's own closing tag so the paste lands inside its subtree.
+  //
+  // This is resolved from the group's own XML node source range (DOM-level,
+  // via `elementSourceRange`, the same helper the copy path above uses) -
+  // not by re-finding the group's `id="..."` text and manually counting
+  // `<g>`/`</g>` depth. A textual depth count can miscount when a `<g` or
+  // `</g>` substring happens to appear inside a comment, a CDATA section, or
+  // unrelated text/attribute content elsewhere in the document; it can also
+  // misidentify the anchor `id="..."` text itself if that literal substring
+  // occurs somewhere the id attribute doesn't (e.g. inside a comment).
+  if (placement == PastePlacement::EndOfRootOffset && selectedGroup.has_value()) {
+    if (const std::optional<std::pair<std::size_t, std::size_t>> groupRange =
+            elementSourceRange(*selectedGroup, source);
+        groupRange.has_value()) {
+      // Guard against a range that does not actually describe this element in
+      // `source`: `elementSourceRange` resolves the element's own stored byte
+      // offsets, which are meaningless (or, worse, coincidentally in-bounds
+      // for an unrelated element) if `selectedGroup` belongs to a different
+      // document than `source`. Confirm the range starts with this element's
+      // own opening tag before trusting it.
+      const std::string openTag = "<" + std::string(selectedGroup->tagName().name.str());
+      if (groupRange->first + openTag.size() <= source.size() &&
+          source.compare(groupRange->first, openTag.size(), openTag) == 0) {
+        // The range ends right after the node's own closing tag (`</tag>`) or
+        // its own self-closing `/>`; the last `<` before that position is
+        // that tag's start either way.
+        const std::size_t closeTagStart = source.rfind('<', groupRange->second - 1);
+        if (closeTagStart != std::string::npos && closeTagStart >= groupRange->first &&
+            source.compare(closeTagStart, 2, "</") == 0) {
+          insertAt = closeTagStart;
         }
       }
     }

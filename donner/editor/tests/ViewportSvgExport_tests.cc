@@ -173,6 +173,32 @@ TEST(ViewportSvgExportTest, InjectedClipPathIdIsUniquifiedAgainstSourceIds) {
               HasSubstr("clip-path=\"url(#donner-viewport-clip)\"/>"));
 }
 
+TEST(ViewportSvgExportTest, InjectedClipPathIdIgnoresLookalikeIdInsideComment) {
+  // A textual scan for `id="donner-viewport-clip"` would match this comment
+  // and needlessly suffix the injected id even though nothing in the actual
+  // document declares that id. The DOM-based id check does not see comment
+  // text at all, so the preferred id is used unsuffixed.
+  constexpr std::string_view kCommentLookalikeSvg =
+      "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+      "<svg width=\"600\" height=\"600\" viewBox=\"0 0 600 600\" "
+      "xmlns=\"http://www.w3.org/2000/svg\">\n"
+      "  <!-- decoy: id=\"donner-viewport-clip\" -->\n"
+      "  <rect x=\"10\" y=\"20\" width=\"100\" height=\"50\" fill=\"red\"/>\n"
+      "</svg>\n";
+
+  const SVGDocument doc = ParseOrDie(kCommentLookalikeSvg);
+  const ViewportState viewport = MakeViewport(1.0, Vector2d(0.0, 0.0), Vector2d(0.0, 0.0),
+                                              Vector2d(0.0, 0.0), Vector2d(400.0, 300.0));
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(400, 300));
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions());
+  ASSERT_TRUE(result.ok()) << result.error;
+
+  EXPECT_THAT(result.value, HasSubstr("<defs><clipPath id=\"donner-viewport-clip\">"));
+  EXPECT_THAT(result.value, Not(HasSubstr("donner-viewport-clip-2")));
+}
+
 TEST(ViewportSvgExportTest, OverlayGroupAbsentByDefault) {
   const SVGDocument doc = ParseOrDie(kSelfContainedSvg);
   const ViewportState viewport = MakeViewport(1.0, Vector2d(0.0, 0.0), Vector2d(0.0, 0.0),

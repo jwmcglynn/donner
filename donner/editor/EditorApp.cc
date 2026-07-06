@@ -12,6 +12,7 @@
 #include "donner/css/CSS.h"
 #include "donner/css/Declaration.h"
 #include "donner/editor/AttributeWriteback.h"
+#include "donner/editor/ElementIdScan.h"
 #include "donner/editor/LockState.h"
 #include "donner/editor/TextPatch.h"
 #include "donner/svg/ElementType.h"
@@ -608,159 +609,12 @@ void ApplyTimelineSnapshot(EditorApp& app, AsyncSVGDocument& document,
   }
 }
 
-/// Characters allowed in an SVG id (matches the clipboard id scanner).
-bool IsIdChar(char c) {
-  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' ||
-         c == '_' || c == ':' || c == '.';
-}
-
-/// If @p value references @p oldId via `url(#oldId)` or a whole-value `#oldId`
-/// (an `href` target), return the value with every such reference repointed to
-/// @p newId; otherwise return `std::nullopt` (no reference, no change).
-std::optional<std::string> RewriteIdReferenceInValue(std::string_view value, std::string_view oldId,
-                                                     std::string_view newId) {
-  // Whole-value local reference, e.g. href="#oldId".
-  if (value.size() == oldId.size() + 1u && value.front() == '#' && value.substr(1) == oldId) {
-    return "#" + std::string(newId);
-  }
-
-  // url(#oldId) occurrences anywhere in the value (covers presentation
-  // attributes and inline `style="fill:url(#oldId)"`).
-  std::string out;
-  bool changed = false;
-  std::size_t i = 0;
-  while (i < value.size()) {
-    if (value.compare(i, 5, "url(#") == 0) {
-      const std::size_t start = i + 5;
-      std::size_t end = start;
-      while (end < value.size() && IsIdChar(value[end])) {
-        ++end;
-      }
-      if (value.substr(start, end - start) == oldId) {
-        out.append("url(#").append(newId);
-        i = end;
-        changed = true;
-        continue;
-      }
-    }
-    out.push_back(value[i]);
-    ++i;
-  }
-  return changed ? std::optional<std::string>(std::move(out)) : std::nullopt;
-}
-
-/// Rewrite `#oldId` CSS id tokens to `#newId` inside a `<style>` element's
-/// text content, in the positions where a `#token` can actually reference the
-/// element: id selectors (selector preludes, including inside conditional
-/// group rules like `@media`) and `url(#id)` references inside declaration
-/// values. A `#token` elsewhere in a declaration value is a hex color literal
-/// (an id like `abc` is also a valid color), so it is left untouched, as are
-/// comments and quoted strings. A match requires the exact token: `#` +
-/// @p oldId + a non-id-character boundary, so `#oldIdSuffix` never matches.
-/// Returns the rewritten text if anything changed, otherwise `std::nullopt`.
-std::optional<std::string> RewriteIdSelectorInStyle(std::string_view value, std::string_view oldId,
-                                                    std::string_view newId) {
-  std::string out;
-  bool changed = false;
-  std::size_t i = 0;
-  // Stack of open blocks: `true` = the block holds nested rules (an at-rule
-  // body such as `@media { ... }`), so `#token`s inside it are back in
-  // selector position; `false` = a qualified rule's declaration block.
-  std::vector<bool> blockHoldsRules;
-  // True when the current block context is selector/prelude position.
-  const auto inSelectorPosition = [&]() {
-    return blockHoldsRules.empty() || blockHoldsRules.back();
-  };
-  // Whether the prelude currently being scanned starts with '@' (an at-rule,
-  // whose `{` opens a rule-holding block rather than declarations).
-  bool preludeIsAtRule = false;
-  bool preludeSeenNonSpace = false;
-
-  while (i < value.size()) {
-    const char c = value[i];
-    // Comments copy through verbatim.
-    if (c == '/' && i + 1 < value.size() && value[i + 1] == '*') {
-      const std::size_t end = value.find("*/", i + 2);
-      const std::size_t stop = end == std::string_view::npos ? value.size() : end + 2;
-      out.append(value.substr(i, stop - i));
-      i = stop;
-      continue;
-    }
-    // Quoted strings copy through verbatim (backslash escapes respected).
-    if (c == '"' || c == '\'') {
-      std::size_t end = i + 1;
-      while (end < value.size() && value[end] != c) {
-        end += (value[end] == '\\' && end + 1 < value.size()) ? 2 : 1;
-      }
-      const std::size_t stop = std::min(end + 1, value.size());
-      out.append(value.substr(i, stop - i));
-      i = stop;
-      continue;
-    }
-    if (c == '{') {
-      blockHoldsRules.push_back(inSelectorPosition() && preludeIsAtRule);
-      preludeIsAtRule = false;
-      preludeSeenNonSpace = false;
-      out.push_back(c);
-      ++i;
-      continue;
-    }
-    if (c == '}') {
-      if (!blockHoldsRules.empty()) {
-        blockHoldsRules.pop_back();
-      }
-      preludeIsAtRule = false;
-      preludeSeenNonSpace = false;
-      out.push_back(c);
-      ++i;
-      continue;
-    }
-    if (c == ';') {
-      preludeIsAtRule = false;
-      preludeSeenNonSpace = false;
-      out.push_back(c);
-      ++i;
-      continue;
-    }
-    if (!preludeSeenNonSpace && !std::isspace(static_cast<unsigned char>(c))) {
-      preludeSeenNonSpace = true;
-      preludeIsAtRule = c == '@';
-    }
-    if (c == '#' && value.compare(i + 1, oldId.size(), oldId) == 0) {
-      const std::size_t after = i + 1 + oldId.size();
-      const bool tokenBoundary = after >= value.size() || !IsIdChar(value[after]);
-      // Inside a declaration block, only a `url(#id)` functional reference
-      // repoints; a bare `#token` there is a color literal.
-      bool isUrlReference = false;
-      if (!inSelectorPosition()) {
-        std::size_t back = out.size();
-        while (back > 0 && std::isspace(static_cast<unsigned char>(out[back - 1]))) {
-          --back;
-        }
-        isUrlReference = back >= 4 && out.compare(back - 4, 4, "url(") == 0;
-      }
-      if (tokenBoundary && (inSelectorPosition() || isUrlReference)) {
-        out.push_back('#');
-        out.append(newId);
-        i = after;
-        changed = true;
-        continue;
-      }
-    }
-    out.push_back(c);
-    ++i;
-  }
-  return changed ? std::optional<std::string>(std::move(out)) : std::nullopt;
-}
-
-/// Depth-first list of every element in the document tree rooted at @p root.
-void CollectElements(const svg::SVGElement& root, std::vector<svg::SVGElement>& out) {
-  out.push_back(root);
-  for (std::optional<svg::SVGElement> child = root.firstChild(); child.has_value();
-       child = child->nextSibling()) {
-    CollectElements(*child, out);
-  }
-}
+// `IsIdChar`, `RewriteIdReferenceInValue`, `RewriteIdSelectorInStyle`, and the
+// subtree-element walk used below (`CollectSubtreeElements`) now live in
+// `ElementIdScan.h` as a shared, tested utility: `ShapeClipboardCommands.cc`
+// used to carry its own near-duplicate of the id-collecting walk, and
+// `ViewportSvgExport.cc` used to id-check via a raw textual source scan
+// instead of the DOM. See that header's file comment for the full rationale.
 
 /// Whether @p element type contributes to the rendered paint order (i.e. is not
 /// a non-rendered resource container such as `<defs>` / gradients / `<style>`).
@@ -1212,7 +1066,7 @@ bool EditorApp::renameSelectedElement(std::string_view newId) {
   std::vector<PendingStyle> styleUpdates;
   if (!oldId.empty()) {
     std::vector<svg::SVGElement> all;
-    CollectElements(doc.svgElement(), all);
+    CollectSubtreeElements(doc.svgElement(), all);
     for (const svg::SVGElement& candidate : all) {
       for (const xml::XMLQualifiedNameRef& attrName : candidate.attributes()) {
         // We round-trip the rewritten attribute through SetAttributeCommand,

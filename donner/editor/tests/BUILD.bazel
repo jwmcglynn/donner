@@ -1024,6 +1024,17 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "element_id_scan_tests",
+    srcs = ["ElementIdScan_tests.cc"],
+    deps = [
+        "//donner/editor:element_id_scan",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "render_element_to_bitmap_tests",
     srcs = ["RenderElementToBitmap_tests.cc"],
     data = ["//:donner_splash.svg"],
