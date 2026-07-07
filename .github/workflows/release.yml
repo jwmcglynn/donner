@@ -91,7 +91,7 @@ jobs:
       id-token: write       # Needed to attest provenance
       attestations: write   # Needed to attest provenance
       contents: write       # Needed to upload release files
-    uses: bazel-contrib/publish-to-bcr/.github/workflows/publish.yaml@v1.4.1
+    uses: bazel-contrib/publish-to-bcr/.github/workflows/publish.yaml@v1.4.2
     with:
       tag_name: ${{ github.event.release.tag_name }}
       registry_fork: jwmcglynn/bazel-central-registry
