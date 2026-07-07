@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <!-- Selection pointer: a solid arrowhead with NO tail, distinct from the
+       tailed selection toolbar icon. Tip (hotspot) at top-left. -->
+  <path
+    d="
+      M 5 3.5
+      L 5 20.5
+      L 9.8 15.7
+      L 17 15.7
+      Z"
+    fill="#000000"
+    stroke="#ffffff"
+    stroke-width="1.75"
+    stroke-linejoin="round"
+    stroke-linecap="round" />
+</svg>

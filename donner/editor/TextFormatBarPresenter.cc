@@ -101,9 +101,8 @@ bool ApplyFormatBarActionsToSelection(const FormatBarActions& actions, const For
     queued = app.setAttributeOnSelection("font-family", actions.fontFamily) || queued;
   }
   if (actions.setFontSize) {
-    queued = app.setAttributeOnSelection(
-                 "font-size", donner::detail::FormatNumberForSVG(
-                                  static_cast<double>(actions.fontSize))) ||
+    queued = app.setAttributeOnSelection("font-size", donner::detail::FormatNumberForSVG(
+                                                          static_cast<double>(actions.fontSize))) ||
              queued;
   }
 
@@ -112,21 +111,38 @@ bool ApplyFormatBarActionsToSelection(const FormatBarActions& actions, const For
     // writes the explicit reset value so this stays on the attribute-write path
     // (the editing-session path in TextTool removes the attribute instead).
     if (actions.toggleBold) {
-      queued =
-          app.setAttributeOnSelection("font-weight", state.bold ? "normal" : "bold") || queued;
+      queued = app.setAttributeOnSelection("font-weight", state.bold ? "normal" : "bold") || queued;
     }
     if (actions.toggleItalic) {
       queued =
           app.setAttributeOnSelection("font-style", state.italic ? "normal" : "italic") || queued;
     }
     if (actions.toggleUnderline) {
-      queued = app.setAttributeOnSelection("text-decoration",
-                                           state.underline ? "none" : "underline") ||
-               queued;
+      queued =
+          app.setAttributeOnSelection("text-decoration", state.underline ? "none" : "underline") ||
+          queued;
     }
   }
 
   return queued;
+}
+
+std::vector<FormatBarFontFamily> BuildFormatBarFamilies(
+    const std::vector<svg::FontFamilyInfo>& catalogFamilies,
+    const std::function<ImFont*(const svg::FontFamilyInfo&)>& previewForFamily) {
+  std::vector<FormatBarFontFamily> families;
+  families.reserve(catalogFamilies.size());
+  // Preserve the catalog's ordering (Embedded group first, then System, sorted
+  // within each), so the picker shows the same grouping the header separators
+  // key off of.
+  for (const svg::FontFamilyInfo& info : catalogFamilies) {
+    families.push_back(FormatBarFontFamily{
+        .name = info.family,
+        .previewFont = previewForFamily ? previewForFamily(info) : nullptr,
+        .source = info.source,
+    });
+  }
+  return families;
 }
 
 float TextFormatBarPresenter::BarHeight() {
@@ -174,9 +190,17 @@ FormatBarActions TextFormatBarPresenter::render(const FormatBarState& state, flo
       ImGui::InputTextWithHint("##format_bar_font_search", "Search fonts",
                                familySearchBuffer_.data(), familySearchBuffer_.size());
       const std::string_view filter(familySearchBuffer_.data());
+      std::optional<svg::FontSource> shownGroup;
       for (const FormatBarFontFamily& family : state.families) {
         if (!ContainsCaseInsensitive(family.name, filter)) {
           continue;
+        }
+        // Header at each Embedded/System boundary. Because `state.families` is
+        // grouped (Embedded then System), the source changes at most once among
+        // the filtered rows, so this prints one header per non-empty group.
+        if (!shownGroup.has_value() || *shownGroup != family.source) {
+          ImGui::TextDisabled(family.source == svg::FontSource::Embedded ? "Embedded" : "System");
+          shownGroup = family.source;
         }
         const bool selected = family.name == state.fontFamily;
         // Preview each family in its own face where the editor has one loaded.
@@ -212,8 +236,8 @@ FormatBarActions TextFormatBarPresenter::render(const FormatBarState& state, flo
     ImGui::SameLine(0.0f, 0.0f);
     if (ImGui::BeginCombo("##format_bar_font_size_menu", "", ImGuiComboFlags_NoPreview)) {
       for (const int preset : kFormatBarFontSizePresets) {
-        const bool selected = state.hasFontSize &&
-                              static_cast<int>(state.fontSize + 0.5f) == preset;
+        const bool selected =
+            state.hasFontSize && static_cast<int>(state.fontSize + 0.5f) == preset;
         char label[8];
         std::snprintf(label, sizeof(label), "%d", preset);
         if (ImGui::Selectable(label, selected)) {

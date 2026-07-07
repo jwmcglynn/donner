@@ -136,8 +136,11 @@ donner_cc_library(
     deps = [
         ":pan_closed_cursor_svg",
         ":pan_cursor_svg",
+        ":path_modify_cursor_svg",
         ":pen_cursor_svg",
         ":rotate_cursor_svg",
+        ":scale_cursor_svg",
+        ":select_cursor_svg",
         ":selection_transform_handles",
         "//donner/base",
         "//donner/svg",
@@ -254,6 +257,76 @@ objc_library(
     deps = [
         ":pinch_event_monitor",
         "@glfw",
+    ],
+)
+
+donner_cc_library(
+    name = "file_dialog_state",
+    srcs = ["FileDialogState.cc"],
+    hdrs = ["FileDialogState.h"],
+    deps = [],
+)
+
+donner_cc_library(
+    name = "native_file_dialog",
+    srcs = select({
+        "@platforms//os:macos": [],
+        "//conditions:default": ["NativeFileDialogStub.cc"],
+    }),
+    hdrs = ["NativeFileDialog.h"],
+    deps = [
+        ":file_dialog_state",
+    ],
+)
+
+objc_library(
+    name = "native_file_dialog_macos",
+    srcs = ["NativeFileDialogMac.mm"],
+    sdk_frameworks = [
+        "Cocoa",
+        "UniformTypeIdentifiers",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":native_file_dialog",
+        "@glfw",
+    ],
+)
+
+donner_cc_library(
+    name = "native_window_chrome",
+    srcs = ["NativeWindowChrome.cc"] + select({
+        "@platforms//os:macos": [],
+        "//conditions:default": ["NativeWindowChromeStub.cc"],
+    }),
+    hdrs = ["NativeWindowChrome.h"],
+    deps = [],
+)
+
+objc_library(
+    name = "native_window_chrome_macos",
+    srcs = ["NativeWindowChromeMac.mm"],
+    sdk_frameworks = ["Cocoa"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":native_window_chrome",
+        "@glfw",
+    ],
+)
+
+donner_cc_library(
+    name = "native_dialog_coordinator",
+    srcs = ["NativeDialogCoordinator.cc"],
+    hdrs = ["NativeDialogCoordinator.h"],
+    deps = [
+        ":file_dialog_state",
+        ":native_file_dialog",
     ],
 )
 
@@ -463,6 +536,19 @@ donner_cc_library(
     ],
 )
 
+# Donner editor design language (design doc 0054): the single source of truth
+# for the editor chrome palette, spacing grid, rounding, and control metrics.
+donner_cc_library(
+    name = "editor_theme",
+    srcs = ["EditorTheme.cc"],
+    hdrs = ["EditorTheme.h"],
+    deps = [
+        ":imgui_headers",
+        "//donner/css",
+        "@imgui",
+    ],
+)
+
 donner_cc_library(
     name = "drag_coalesce",
     hdrs = ["DragCoalesce.h"],
@@ -547,6 +633,7 @@ donner_cc_library(
         "//donner/base",
         "//donner/base/parser",
         "//donner/svg",
+        "//donner/svg/resources:font_catalog_types",
         "@imgui",
     ],
 )
@@ -564,6 +651,50 @@ donner_cc_library(
     ],
 )
 
+# Editor-authored SVG icon assets (Donner-rendered through EmbeddedSvgIcon).
+# W6's cursor/icon suite folds these into the shared icon family; see
+# donner/editor/icons/. Keep new editor icons here rather than reusing the
+# third-party Bootstrap set.
+embed_resources(
+    name = "editor_icons",
+    header_output = "embed_resources/EditorIcons.h",
+    resources = {
+        "kEditorChevronDownSvg": "icons/chevron-down.svg",
+        "kEditorChevronSvg": "icons/chevron.svg",
+    },
+    visibility = ["//donner:__subpackages__"],
+)
+
+# Shared tree-disclosure chevron rendered from the editor_icons chevron asset,
+# used by both the inspector tree (SidebarPresenter) and the LayersPanel so the
+# two trees share one disclosure style.
+donner_cc_library(
+    name = "disclosure_chevron",
+    srcs = ["DisclosureChevron.cc"],
+    hdrs = ["DisclosureChevron.h"],
+    deps = [
+        ":editor_icons",
+        ":embedded_svg_icon",
+        ":imgui_headers",
+        "//donner/base",
+        "//donner/svg/renderer:renderer_interface",
+        "@imgui",
+    ],
+)
+
+donner_cc_library(
+    name = "toolbar_icon_set",
+    srcs = ["ToolbarIconSet.cc"],
+    hdrs = ["ToolbarIconSet.h"],
+    deps = [
+        ":embedded_svg_icon",
+        ":imgui_headers",
+        ":tool_icons_svg",
+        "//donner/base",
+        "//donner/svg/renderer:renderer_interface",
+    ],
+)
+
 donner_cc_library(
     name = "sidebar_presenter",
     srcs = ["SidebarPresenter.cc"],
@@ -571,6 +702,7 @@ donner_cc_library(
     deps = [
         ":attribute_writeback",
         ":command_queue",
+        ":disclosure_chevron",
         ":editor_app",
         ":embedded_svg_icon",
         ":imgui_headers",
@@ -606,6 +738,7 @@ donner_cc_library(
         "//conditions:default": [],
     }),
     deps = [
+        ":editor_theme",
         ":gl_texture_cache",
         ":imgui_headers",
         ":layer_inspector_diagnostics",
@@ -636,6 +769,7 @@ donner_cc_library(
     srcs = ["DialogPresenter.cc"],
     hdrs = ["DialogPresenter.h"],
     deps = [
+        ":editor_theme",
         ":imgui_headers",
         "@imgui",
     ],
@@ -708,15 +842,27 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "editor_dock_layout",
+    srcs = ["EditorDockLayout.cc"],
+    hdrs = ["EditorDockLayout.h"],
+    deps = [
+        ":imgui_headers",
+        "@imgui",
+    ],
+)
+
+donner_cc_library(
     name = "editor_shell",
     srcs = [
         "EditorShell.cc",
         "EditorShellPresentation.cc",
         "EditorShellPresentation.h",
+        "FillStrokeWidget.cc",
     ],
     hdrs = [
         "EditorShell.h",
         "EditorShellInternal.h",
+        "FillStrokeWidget.h",
     ],
     defines = select({
         ":wasm_geode_enabled": ["DONNER_EDITOR_WGPU"],
@@ -733,8 +879,10 @@ donner_cc_library(
         ":document_sync_controller",
         ":drag_coalesce",
         ":editor_app",
+        ":editor_dock_layout",
         ":editor_input_bridge",
         ":editor_shell_layout",
+        ":editor_theme",
         ":focus_view",
         ":frame_cost_breakdown",
         ":frame_miss_telemetry",
@@ -746,6 +894,8 @@ donner_cc_library(
         ":layer_tree_model",
         ":layers_panel",
         ":menu_bar_presenter",
+        ":native_dialog_coordinator",
+        ":native_window_chrome",
         ":pen_tool",
         ":render_coordinator",
         ":render_pane_presenter",
@@ -763,6 +913,7 @@ donner_cc_library(
         ":text_to_outlines",
         ":text_tool",
         ":tool_keybinding",
+        ":toolbar_icon_set",
         ":tracy_wrapper",
         ":undo_timeline",
         ":viewport_interaction_controller",
@@ -795,6 +946,12 @@ donner_cc_library(
         "//conditions:default": [
             "@glfw",
         ],
+    }) + select({
+        "@platforms//os:macos": [
+            ":native_file_dialog_macos",
+            ":native_window_chrome_macos",
+        ],
+        "//conditions:default": [],
     }),
 )
 
@@ -919,6 +1076,7 @@ donner_cc_library(
     hdrs = ["OverlayRenderer.h"],
     deps = [
         ":editor_app",
+        ":editor_theme",
         ":selection_aabb",
         ":selection_transform_handles",
         ":tracy_wrapper",
@@ -946,7 +1104,7 @@ embed_resources(
     name = "pan_closed_cursor_svg",
     header_output = "donner/editor/PanClosedCursorSvg.h",
     resources = {
-        "kPanClosedCursorSvg": "pan_closed_cursor.svg",
+        "kPanClosedCursorSvg": "art/pan_closed_cursor.svg",
     },
 )
 
@@ -954,7 +1112,7 @@ embed_resources(
     name = "pan_cursor_svg",
     header_output = "donner/editor/PanCursorSvg.h",
     resources = {
-        "kPanCursorSvg": "pan_cursor.svg",
+        "kPanCursorSvg": "art/pan_cursor.svg",
     },
 )
 
@@ -962,7 +1120,10 @@ embed_resources(
     name = "pen_cursor_svg",
     header_output = "donner/editor/PenCursorSvg.h",
     resources = {
-        "kPenCursorSvg": "pen_cursor.svg",
+        "kPenCursorSvg": "art/pen_cursor.svg",
+        "kPenAddCursorSvg": "art/pen_add_cursor.svg",
+        "kPenRemoveCursorSvg": "art/pen_remove_cursor.svg",
+        "kPenCloseCursorSvg": "art/pen_close_cursor.svg",
     },
 )
 
@@ -970,7 +1131,42 @@ embed_resources(
     name = "rotate_cursor_svg",
     header_output = "donner/editor/RotateCursorSvg.h",
     resources = {
-        "kRotateCursorSvg": "rotate_cursor.svg",
+        "kRotateCursorSvg": "art/rotate_cursor.svg",
+    },
+)
+
+embed_resources(
+    name = "select_cursor_svg",
+    header_output = "donner/editor/SelectCursorSvg.h",
+    resources = {
+        "kSelectCursorSvg": "art/select_cursor.svg",
+    },
+)
+
+embed_resources(
+    name = "scale_cursor_svg",
+    header_output = "donner/editor/ScaleCursorSvg.h",
+    resources = {
+        "kScaleCursorSvg": "art/scale_cursor.svg",
+    },
+)
+
+embed_resources(
+    name = "path_modify_cursor_svg",
+    header_output = "donner/editor/PathModifyCursorSvg.h",
+    resources = {
+        "kPathModifyCursorSvg": "art/path_modify_cursor.svg",
+    },
+)
+
+embed_resources(
+    name = "tool_icons_svg",
+    header_output = "donner/editor/ToolIconsSvg.h",
+    resources = {
+        "kToolSelectIconSvg": "art/tool_select_icon.svg",
+        "kToolPenIconSvg": "art/tool_pen_icon.svg",
+        "kToolTextIconSvg": "art/tool_text_icon.svg",
+        "kToolPathModifyIconSvg": "art/tool_path_modify_icon.svg",
     },
 )
 
@@ -1179,7 +1375,9 @@ donner_cc_library(
     srcs = ["LayersPanel.cc"],
     hdrs = ["LayersPanel.h"],
     deps = [
+        ":disclosure_chevron",
         ":editor_app",
+        ":editor_theme",
         ":embedded_svg_icon",
         ":imgui_headers",
         ":layer_tree_model",

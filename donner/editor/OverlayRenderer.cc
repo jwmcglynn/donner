@@ -13,6 +13,7 @@
 #include "donner/base/Transform.h"
 #include "donner/css/Color.h"
 #include "donner/editor/EditorApp.h"
+#include "donner/editor/EditorTheme.h"
 #include "donner/editor/SelectionAabb.h"
 #include "donner/editor/SelectionTransformHandles.h"
 #include "donner/editor/TracyWrapper.h"
@@ -56,8 +57,8 @@ constexpr double kPathControlPointLogicalPixels = 4.0;
 
 svg::PaintParams MakeSelectionStrokePaint(double worldStrokeWidth) {
   svg::PaintParams paint;
-  // Bright cyan stroke, no fill.
-  paint.stroke = svg::PaintServer::Solid(css::Color(css::RGBA(0x00, 0xc8, 0xff, 0xff)));
+  // Accent-tinted selection stroke, no fill (EditorTheme selection token).
+  paint.stroke = svg::PaintServer::Solid(css::Color(EditorTheme::Active().selectionRgba(0xff)));
   paint.fill = svg::PaintServer::None{};
   paint.strokeOpacity = 1.0;
   paint.strokeParams.strokeWidth = worldStrokeWidth;
@@ -70,7 +71,7 @@ svg::PaintParams MakeSelectionStrokePaint(double worldStrokeWidth) {
 svg::PaintParams MakePathControlLinePaint(double worldStrokeWidth) {
   svg::PaintParams paint;
   paint.fill = svg::PaintServer::None{};
-  paint.stroke = svg::PaintServer::Solid(css::Color(css::RGBA(0x00, 0xc8, 0xff, 0xa0)));
+  paint.stroke = svg::PaintServer::Solid(css::Color(EditorTheme::Active().selectionRgba(0xa0)));
   paint.strokeOpacity = 1.0;
   paint.strokeParams.strokeWidth = worldStrokeWidth;
   paint.strokeParams.lineCap = svg::StrokeLinecap::Round;
@@ -88,7 +89,7 @@ svg::PaintParams MakeDisplayNoneSelectionStrokePaint(double worldStrokeWidth) {
 svg::PaintParams MakeHandlePaint(double worldStrokeWidth) {
   svg::PaintParams paint;
   paint.fill = svg::PaintServer::Solid(css::Color(css::RGBA(0xff, 0xff, 0xff, 0xff)));
-  paint.stroke = svg::PaintServer::Solid(css::Color(css::RGBA(0x00, 0xc8, 0xff, 0xff)));
+  paint.stroke = svg::PaintServer::Solid(css::Color(EditorTheme::Active().selectionRgba(0xff)));
   paint.fillOpacity = 1.0;
   paint.strokeOpacity = 1.0;
   paint.strokeParams.strokeWidth = worldStrokeWidth;
@@ -100,7 +101,7 @@ svg::PaintParams MakeHandlePaint(double worldStrokeWidth) {
 
 svg::PaintParams MakePathPointPaint() {
   svg::PaintParams paint;
-  paint.fill = svg::PaintServer::Solid(css::Color(css::RGBA(0x00, 0xc8, 0xff, 0xff)));
+  paint.fill = svg::PaintServer::Solid(css::Color(EditorTheme::Active().selectionRgba(0xff)));
   paint.stroke = svg::PaintServer::None{};
   paint.fillOpacity = 1.0;
   return paint;
@@ -108,7 +109,7 @@ svg::PaintParams MakePathPointPaint() {
 
 svg::PaintParams MakeSourceHoverShapePaint(double worldStrokeWidth) {
   svg::PaintParams paint;
-  paint.fill = svg::PaintServer::Solid(css::Color(css::RGBA(0x00, 0xc8, 0xff, 0x30)));
+  paint.fill = svg::PaintServer::Solid(css::Color(EditorTheme::Active().selectionRgba(0x30)));
   paint.stroke = svg::PaintServer::Solid(css::Color(css::RGBA(0xff, 0xff, 0xff, 0xd0)));
   paint.fillOpacity = 1.0;
   paint.strokeOpacity = 1.0;
@@ -122,7 +123,7 @@ svg::PaintParams MakeSourceHoverShapePaint(double worldStrokeWidth) {
 svg::PaintParams MakeSourceHoverBoundsPaint(double worldStrokeWidth) {
   svg::PaintParams paint;
   paint.fill = svg::PaintServer::None{};
-  paint.stroke = svg::PaintServer::Solid(css::Color(css::RGBA(0x00, 0xc8, 0xff, 0xc8)));
+  paint.stroke = svg::PaintServer::Solid(css::Color(EditorTheme::Active().selectionRgba(0xc8)));
   paint.strokeOpacity = 1.0;
   paint.strokeParams.strokeWidth = worldStrokeWidth;
   paint.strokeParams.lineCap = svg::StrokeLinecap::Round;
@@ -151,12 +152,12 @@ svg::PaintParams MakeLockedFlashStrokePaint(double worldStrokeWidth, float inten
   return paint;
 }
 
-/// Translucent cyan fill, no stroke - used for the marquee fill pass.
-/// Alpha 0x33 matches the prior `IM_COL32(0x00, 0xc8, 0xff, 0x33)` in
-/// `RenderPanePresenter`.
+/// Translucent accent fill, no stroke - used for the marquee fill pass.
+/// Alpha 0x33 keeps the prior marquee weight, now tinted from the EditorTheme
+/// selection token instead of the hard-coded cyan.
 svg::PaintParams MakeMarqueeFillPaint() {
   svg::PaintParams paint;
-  paint.fill = svg::PaintServer::Solid(css::Color(css::RGBA(0x00, 0xc8, 0xff, 0x33)));
+  paint.fill = svg::PaintServer::Solid(css::Color(EditorTheme::Active().selectionRgba(0x33)));
   paint.stroke = svg::PaintServer::None{};
   paint.fillOpacity = 1.0;
   return paint;

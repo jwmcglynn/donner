@@ -22,16 +22,22 @@
 
 #include "GLFW/glfw3.h"
 #include "donner/base/RcString.h"
+#include "donner/base/StringUtils.h"
 #include "donner/css/parser/ColorParser.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/DocumentSave.h"
 #include "donner/editor/DragCoalesce.h"
+#include "donner/editor/EditorDockLayout.h"
 #include "donner/editor/EditorShellInternal.h"
 #include "donner/editor/EditorShellPresentation.h"
+#include "donner/editor/EditorTheme.h"
+#include "donner/editor/FillStrokeWidget.h"
 #include "donner/editor/FocusView.h"
 #include "donner/editor/FrameMissTelemetry.h"
 #include "donner/editor/ImGuiClipboard.h"
+#include "donner/editor/ImGuiInternalIncludes.h"
 #include "donner/editor/KeyboardShortcutPolicy.h"
+#include "donner/editor/NativeWindowChrome.h"
 #include "donner/editor/SelectionTransformHandles.h"
 #include "donner/editor/ShapeClipboardCommands.h"
 #include "donner/editor/ShapeClipboardPayload.h"
@@ -40,6 +46,7 @@
 #include "donner/editor/StyleSourceAnnotations.h"
 #include "donner/editor/TextToOutlines.h"
 #include "donner/editor/ToolKeybinding.h"
+#include "donner/editor/ToolbarIconSet.h"
 #include "donner/editor/TracyWrapper.h"
 #include "donner/editor/UndoTimeline.h"
 #include "donner/editor/ViewportSvgExport.h"
@@ -72,15 +79,9 @@ constexpr float kMaxSourcePaneWidth = 900.0f;
 constexpr float kSourcePaneSplitterThickness = 6.0f;
 constexpr float kSourcePaneRevealHandleWidth = 10.0f;
 constexpr float kSourcePaneCollapseThreshold = kMinSourcePaneWidth;
-constexpr float kTreeViewHeightFraction = 0.33f;
 constexpr float kKeyboardZoomStep = 1.5f;
-constexpr float kRightPaneSplitterThickness = 6.0f;
-constexpr float kLayerPanelSplitterThickness = 6.0f;
-constexpr float kLayerPanelDragHandleHeight = 26.0f;
 constexpr float kMinRightPaneWidth = 220.0f;
 constexpr float kMaxRightPaneWidth = 900.0f;
-constexpr float kMinInspectorPaneHeight = 96.0f;
-constexpr float kMinLayerPanelHeight = 140.0f;
 constexpr double kTrackpadPanPixelsPerScrollUnit = 10.0;
 constexpr double kWheelZoomStep = 1.1;
 constexpr double kSelectMarqueeHoldDelaySeconds = 0.20;
@@ -206,76 +207,6 @@ void SetImGuiOsCursorManagementEnabled(bool enabled) {
 bool ContainsScreenPoint(const Box2d& rect, const ImVec2& point) {
   return point.x >= rect.topLeft.x && point.x <= rect.bottomRight.x && point.y >= rect.topLeft.y &&
          point.y <= rect.bottomRight.y;
-}
-
-ImVec2 PenToolIconPoint(const ImVec2& origin, float scale, float x, float y) {
-  return ImVec2(origin.x + x * scale, origin.y + y * scale);
-}
-
-void StrokePenToolButtonIcon(ImDrawList* drawList, const ImVec2& min, const ImVec2& max,
-                             ImU32 color, float strokeWidth) {
-  const float buttonSize = std::min(max.x - min.x, max.y - min.y);
-  const float iconSize = buttonSize - 9.0f;
-  const float scale = iconSize / 24.0f;
-  const ImVec2 origin(min.x + (max.x - min.x - iconSize) * 0.5f,
-                      min.y + (max.y - min.y - iconSize) * 0.5f);
-  const auto point = [&](float x, float y) { return PenToolIconPoint(origin, scale, x, y); };
-
-  drawList->PathClear();
-  drawList->PathLineTo(point(14.4153f, 18.6964f));
-  drawList->PathLineTo(point(7.88293f, 19.2352f));
-  drawList->PathLineTo(point(3.80865f, 3.84719f));
-  drawList->PathLineTo(point(19.1966f, 7.92147f));
-  drawList->PathLineTo(point(18.3043f, 14.8073f));
-  drawList->PathStroke(color, ImDrawFlags_None, strokeWidth);
-
-  constexpr float kCosMinus45 = 0.70710678f;
-  constexpr float kSinMinus45 = -0.70710678f;
-  constexpr float kRectX = 13.7081f;
-  constexpr float kRectY = 19.4036f;
-  const auto rectPoint = [&](float dx, float dy) {
-    return point(kRectX + dx * kCosMinus45 - dy * kSinMinus45,
-                 kRectY + dx * kSinMinus45 + dy * kCosMinus45);
-  };
-  drawList->PathClear();
-  drawList->PathLineTo(rectPoint(0.0f, 0.0f));
-  drawList->PathLineTo(rectPoint(7.22447f, 0.0f));
-  drawList->PathLineTo(rectPoint(7.22447f, 3.0f));
-  drawList->PathLineTo(rectPoint(0.0f, 3.0f));
-  drawList->PathStroke(color, ImDrawFlags_Closed, strokeWidth);
-
-  drawList->AddLine(point(5.92996f, 5.96852f), point(10.8797f, 10.9183f), color, strokeWidth);
-  drawList->AddCircle(point(12.2939f, 12.3325f), 2.0f * scale, color, 0, strokeWidth);
-}
-
-void DrawPenToolButtonIcon(ImDrawList* drawList, const ImVec2& min, const ImVec2& max) {
-  StrokePenToolButtonIcon(drawList, min, max, IM_COL32(255, 255, 255, 255), 3.0f);
-  StrokePenToolButtonIcon(drawList, min, max, IM_COL32(0, 0, 0, 255), 1.75f);
-}
-
-void DrawSelectToolButtonIcon(ImDrawList* drawList, const ImVec2& min, const ImVec2& max) {
-  const float buttonSize = std::min(max.x - min.x, max.y - min.y);
-  const float iconSize = buttonSize - 8.0f;
-  const float scale = iconSize / 24.0f;
-  const ImVec2 origin(min.x + (max.x - min.x - iconSize) * 0.5f,
-                      min.y + (max.y - min.y - iconSize) * 0.5f);
-  const auto point = [&](float x, float y) {
-    return ImVec2(origin.x + x * scale, origin.y + y * scale);
-  };
-  const std::array<ImVec2, 7> points = {
-      point(5.5f, 3.5f),   point(5.5f, 21.0f),  point(10.2f, 16.4f), point(12.9f, 22.0f),
-      point(15.8f, 20.6f), point(13.0f, 15.1f), point(19.5f, 15.1f),
-  };
-
-  drawList->AddTriangleFilled(points[0], points[1], points[2], IM_COL32(0, 0, 0, 255));
-  drawList->AddTriangleFilled(points[0], points[2], points[6], IM_COL32(0, 0, 0, 255));
-  drawList->AddTriangleFilled(points[2], points[3], points[5], IM_COL32(0, 0, 0, 255));
-  drawList->AddTriangleFilled(points[3], points[4], points[5], IM_COL32(0, 0, 0, 255));
-
-  drawList->AddPolyline(points.data(), static_cast<int>(points.size()),
-                        IM_COL32(255, 255, 255, 255), ImDrawFlags_Closed, 3.2f);
-  drawList->AddPolyline(points.data(), static_cast<int>(points.size()), IM_COL32(0, 0, 0, 255),
-                        ImDrawFlags_Closed, 1.7f);
 }
 
 // Build the "<label> (<key>)" tooltip string for a tool button from the shared
@@ -458,26 +389,6 @@ ToolbarPaintState ToolbarPaintStateForApp(EditorApp& app, std::optional<std::str
                                   app.hasDocument() ? &app.document().document() : nullptr, source);
   }
   return state;
-}
-
-void DrawPaintSwatch(ImDrawList* drawList, const ImVec2& min, const ImVec2& max,
-                     const ToolbarPaintSlotState& state) {
-  drawList->AddRectFilled(min, max, ImGui::GetColorU32(ColorToImVec4(state.color)), 2.0f);
-  if (state.isCustom) {
-    drawList->PushClipRect(min, max, true);
-    for (float x = min.x - (max.y - min.y); x < max.x; x += 5.0f) {
-      drawList->AddLine(ImVec2(x, max.y), ImVec2(x + (max.y - min.y), min.y),
-                        IM_COL32(255, 255, 255, 95), 1.0f);
-    }
-    drawList->PopClipRect();
-  }
-  drawList->AddRect(min, max, IM_COL32(255, 255, 255, 230), 2.0f, 0, 1.0f);
-  drawList->AddRect(min, max, state.isCustom ? IM_COL32(91, 189, 255, 255) : IM_COL32(0, 0, 0, 210),
-                    2.0f, 0, 2.0f);
-  if (state.isNone) {
-    drawList->AddLine(ImVec2(min.x + 2.0f, max.y - 2.0f), ImVec2(max.x - 2.0f, min.y + 2.0f),
-                      IM_COL32(230, 40, 40, 255), 2.2f);
-  }
 }
 
 std::string PaintChipLabel(std::string_view prefix, const ToolbarPaintSlotState& state) {
@@ -703,7 +614,6 @@ std::optional<SelectionChromeSnapshot::TextBoxDragPreview> TextBoxDragPreviewFro
   };
 }
 
-
 EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     : window_(window),
       options_(std::move(options)),
@@ -713,6 +623,7 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       textEditor_(),
       textures_(window.geodeDevice()),
       thumbnailTextures_(window.geodeDevice()),
+      toolbarIconTextures_(window.geodeDevice()),
       layerThumbnailRenderer_(window.geodeDevice()),
       renderCoordinator_(window.geodeDevice()),
       rotateCursorSet_(),
@@ -1220,10 +1131,9 @@ void EditorShell::applyPendingDocumentSpaceReplayInputForTesting() {
   } else if (activeTool_ == ActiveTool::Text && textTool_.isEditing()) {
     if (const auto textChrome = textTool_.editingChrome(app_); textChrome.has_value()) {
       renderCoordinator_.setTextEditingChrome(
-          textTool_.caretBlinkVisible()
-              ? std::make_optional(SelectionChromeSnapshot::TextCaret{textChrome->caretTopDoc,
-                                                                      textChrome->caretBottomDoc})
-              : std::nullopt,
+          textTool_.caretBlinkVisible() ? std::make_optional(SelectionChromeSnapshot::TextCaret{
+                                              textChrome->caretTopDoc, textChrome->caretBottomDoc})
+                                        : std::nullopt,
           textChrome->frameCornersDoc);
     }
     renderCoordinator_.setTextBoxDragPreview(std::nullopt);
@@ -1524,21 +1434,59 @@ void EditorShell::requestRevert() {
   window_.wakeEventLoop();
 }
 
+void EditorShell::serviceNativeDialogs() {
+  if (!nativeDialogs_.available()) {
+    return;  // Non-macOS: the ImGui modal handles open/save.
+  }
+
+  if (dialogPresenter_.openFileModalRequested()) {
+    dialogPresenter_.consumeOpenFileModalRequest();
+    if (const std::optional<std::string> chosen =
+            nativeDialogs_.openFile(window_.rawHandle(), app_.currentFilePath())) {
+      std::string error;
+      if (!tryOpenPath(*chosen, &error)) {
+        // Surface the failure through the in-editor modal, pre-filled so the
+        // user can retry or correct the path.
+        dialogPresenter_.requestOpenFile(std::make_optional(*chosen));
+        dialogPresenter_.setOpenFileError(std::move(error));
+      }
+    }
+    window_.wakeEventLoop();
+  }
+
+  if (dialogPresenter_.saveFileModalRequested()) {
+    const std::string suggested = dialogPresenter_.pendingSaveFilePath();
+    dialogPresenter_.consumeSaveFileModalRequest();
+    const std::optional<std::string> suggestedOpt =
+        suggested.empty() ? std::nullopt : std::make_optional(suggested);
+    if (const std::optional<std::string> chosen =
+            nativeDialogs_.saveFile(window_.rawHandle(), suggestedOpt)) {
+      std::string error;
+      // Mirror the render() callback's routing: an in-flight viewport export
+      // writes cropped SVG, otherwise this is a normal document save.
+      const bool ok = pendingViewportExport_ ? tryExportViewportSvgToPath(*chosen, &error)
+                                             : trySavePath(*chosen, &error);
+      if (!ok) {
+        dialogPresenter_.requestSaveFile(std::make_optional(*chosen), std::move(error));
+      }
+    }
+    window_.wakeEventLoop();
+  }
+}
+
 void EditorShell::updateWindowTitle() {
-  std::string title;
-  if (app_.isDirty()) {
-    title += "● ";
-  }
-  if (app_.currentFilePath().has_value()) {
-    title += std::filesystem::path(*app_.currentFilePath()).filename().string();
-  } else {
-    title += "untitled";
-  }
-  title += " - Donner SVG Editor";
+  const WindowChromeState chromeState{.filePath = app_.currentFilePath(), .edited = app_.isDirty()};
+
+  // On platforms with native title-bar chrome (macOS) the edited "dot" and
+  // proxy icon are shown by the OS, so keep them out of the title text.
+  const bool nativeChrome = NativeWindowChromeAvailable();
+  std::string title = ComposeWindowTitle(chromeState, /*showEditedDotInText=*/!nativeChrome);
   if (title != lastWindowTitle_) {
     window_.setTitle(title);
     lastWindowTitle_ = std::move(title);
   }
+
+  ApplyNativeWindowChrome(window_.rawHandle(), chromeState);
 }
 
 void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
@@ -1639,6 +1587,16 @@ void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
   const bool showCompositorDebugPanelBeforeMenu = showCompositorDebugPanel_;
   const PerfOverlayMode perfOverlayModeBeforeMenu = perfOverlayMode_;
   ApplyViewMenuToggleActions(menuActions, &showCompositorDebugPanel_, &perfOverlayMode_);
+  // DockSpace layout controls: toggle the lock or request a rebuild of the
+  // default layout. renderDockSpaceHost consumes the reset request next frame.
+  if (menuActions.toggleLayoutLock) {
+    dockLayoutLocked_ = !dockLayoutLocked_;
+    window_.wakeEventLoop();
+  }
+  if (menuActions.resetLayout) {
+    dockLayoutResetRequested_ = true;
+    window_.wakeEventLoop();
+  }
   if (showCompositorDebugPanel_ != showCompositorDebugPanelBeforeMenu ||
       perfOverlayMode_ != perfOverlayModeBeforeMenu) {
     window_.wakeEventLoop();
@@ -2004,18 +1962,30 @@ FormatBarState EditorShell::computeFormatBarState() {
     ReadTextFormatState(selection.front(), &state);
   }
 
-  // Family picker faces: the three embedded TTFs the editor loads today
-  // (Roboto Regular as the default UI face, Roboto Bold, Fira Code). Families
-  // the editor lacks a face for preview in the default font; the free-text box
-  // still round-trips them. W3 replaces this with the real embedded + macOS
-  // system font pipeline.
-  ImFont* regularFace =
+  // The family picker lists the real font catalog (embedded curated Google
+  // Fonts, then macOS system fonts), grouped Embedded-then-System as
+  // `FontCatalog::families()` orders them. A menu entry previews in its own
+  // face only where the editor already has that face loaded as an ImGui font:
+  // the default UI face (Roboto) and the code face (Fira Code). Other families
+  // render their label in the default UI font, and the free-text box still
+  // round-trips any family the catalog lacks. Building preview faces for
+  // arbitrary catalog entries from `fontCatalog().loadFace()` bytes would need
+  // a mid-session ImGui atlas rebuild, out of scope for this bar.
+  ImFont* const regularFace =
       ImGui::GetIO().Fonts->Fonts.empty() ? nullptr : ImGui::GetIO().Fonts->Fonts[0];
   state.boldToggleFont = uiFontBold_;
-  state.families = {
-      {"Roboto", regularFace}, {"Fira Code", codeFont_},  {"sans-serif", regularFace},
-      {"serif", nullptr},      {"monospace", codeFont_},
-  };
+  state.families = BuildFormatBarFamilies(fontCatalog().families(),
+                                          [&](const svg::FontFamilyInfo& info) -> ImFont* {
+                                            if (StringUtils::Equals<StringComparison::IgnoreCase>(
+                                                    info.family, std::string_view("Roboto"))) {
+                                              return regularFace;
+                                            }
+                                            if (StringUtils::Equals<StringComparison::IgnoreCase>(
+                                                    info.family, std::string_view("Fira Code"))) {
+                                              return codeFont_;
+                                            }
+                                            return nullptr;
+                                          });
   return state;
 }
 
@@ -2178,24 +2148,18 @@ void EditorShell::renderFillStrokeToolbarWidget() {
   const ImVec2 min = ImGui::GetItemRectMin();
   const ImVec2 max = ImGui::GetItemRectMax();
   const ImVec2 mouse = ImGui::GetMousePos();
-  const ImVec2 strokeMin(min.x + 15.0f, min.y + 3.0f);
-  const ImVec2 strokeMax(strokeMin.x + 19.0f, strokeMin.y + 19.0f);
-  const ImVec2 fillMin(min.x + 5.0f, min.y + 10.0f);
-  const ImVec2 fillMax(fillMin.x + 19.0f, fillMin.y + 19.0f);
-  const ImVec2 chipMin(min.x + 42.0f, min.y + 1.0f);
-  const ImVec2 chipMax(max.x - 3.0f, min.y + 14.0f);
-  const ImVec2 fillChipMin(chipMin.x, min.y + 16.0f);
-  const ImVec2 fillChipMax(chipMax.x, min.y + 29.0f);
-  const ImVec2 strokeChipMin(chipMin.x, chipMin.y);
-  const ImVec2 strokeChipMax(chipMax.x, chipMax.y);
+  const FillStrokeWidgetLayout layout = ComputeFillStrokeWidgetLayout(min, max);
   ImDrawList* drawList = ImGui::GetWindowDrawList();
-  DrawPaintSwatch(drawList, strokeMin, strokeMax, paintState.stroke);
-  DrawPaintSwatch(drawList, fillMin, fillMax, paintState.fill);
+  // Overlap layout: stroke swatch behind, fill swatch in front.
+  DrawFillStrokeSwatch(drawList, layout.strokeMin, layout.strokeMax, paintState.stroke,
+                       /*front=*/false);
+  DrawFillStrokeSwatch(drawList, layout.fillMin, layout.fillMax, paintState.fill, /*front=*/true);
+  DrawSwapAffordance(drawList, layout.swapMin, layout.swapMax, canEditPaint);
+  DrawNoneAffordance(drawList, layout.strokeNoneMin, layout.strokeNoneMax, /*fillVariant=*/false,
+                     paintState.stroke.isNone);
+  DrawNoneAffordance(drawList, layout.fillNoneMin, layout.fillNoneMax, /*fillVariant=*/true,
+                     paintState.fill.isNone);
 
-  const auto contains = [](const ImVec2& rectMin, const ImVec2& rectMax, const ImVec2& point) {
-    return point.x >= rectMin.x && point.x <= rectMax.x && point.y >= rectMin.y &&
-           point.y <= rectMax.y;
-  };
   const auto fitChipLabel = [](std::string label, float maxWidth) {
     if (ImGui::CalcTextSize(label.c_str()).x <= maxWidth) {
       return label;
@@ -2231,56 +2195,100 @@ void EditorShell::renderFillStrokeToolbarWidget() {
         ImVec2(rectMin.x + 4.0f, rectMin.y + (rectMax.y - rectMin.y - textSize.y) * 0.5f - 0.5f),
         IM_COL32(255, 255, 255, 245), label.c_str());
   };
-  renderChip("S", paintState.stroke, strokeChipMin, strokeChipMax);
-  renderChip("F", paintState.fill, fillChipMin, fillChipMax);
+  renderChip("S", paintState.stroke, layout.strokeChipMin, layout.strokeChipMax);
+  renderChip("F", paintState.fill, layout.fillChipMin, layout.fillChipMax);
+
+  const FillStrokeWidgetRegion region =
+      HitTestFillStrokeWidget(layout, mouse, paintState.fill.isCustom, paintState.stroke.isCustom);
+
+  // Swap fill and stroke on the authoring defaults and, when a selection is
+  // present, on the selected element. Authoring defaults swap verbatim; the
+  // selection swaps the resolved SVG paint strings so referenced/none paints
+  // round-trip correctly.
+  const auto performPaintSwap = [&]() {
+    if (app_.hasSelection()) {
+      const std::string fillStr = SvgPaintStringForSlot(paintState.fill);
+      const std::string strokeStr = SvgPaintStringForSlot(paintState.stroke);
+      app_.setActiveFill(strokeStr);
+      app_.setActiveStroke(fillStr);
+      bool changed = app_.setStylePropertyOnSelection("fill", strokeStr);
+      changed = app_.setStylePropertyOnSelection("stroke", fillStr) || changed;
+      if (changed) {
+        flushQueuedMutationAndRefreshOverlay();
+      } else {
+        window_.wakeEventLoop();
+      }
+    } else {
+      const ActivePaintStyle current = app_.activePaintStyle();
+      app_.setActiveFill(current.stroke);
+      app_.setActiveStroke(current.fill);
+      window_.wakeEventLoop();
+    }
+  };
+  const auto setPaintNone = [&](std::string_view attrName) {
+    if (attrName == "fill") {
+      app_.setActiveFill("none");
+    } else {
+      app_.setActiveStroke("none");
+    }
+    const bool changed = app_.hasSelection() && app_.setStylePropertyOnSelection(attrName, "none");
+    if (changed) {
+      flushQueuedMutationAndRefreshOverlay();
+    } else {
+      window_.wakeEventLoop();
+    }
+  };
+  const auto revealChipSource = [&](const ToolbarPaintSlotState& slot) {
+    if (slot.reference.has_value() && slot.reference->sourceRange.has_value()) {
+      revealSourceRange(*slot.reference->sourceRange);
+    }
+  };
 
   if (canEditPaint && ImGui::IsItemClicked()) {
-    const bool clickedFillChip =
-        paintState.fill.isCustom && contains(fillChipMin, fillChipMax, mouse);
-    const bool clickedStrokeChip =
-        paintState.stroke.isCustom && contains(strokeChipMin, strokeChipMax, mouse);
-    bool handledPaintClick = false;
-    if (clickedFillChip || clickedStrokeChip) {
-      const ToolbarPaintSlotState& slot = clickedFillChip ? paintState.fill : paintState.stroke;
-      if (slot.reference.has_value() && slot.reference->sourceRange.has_value()) {
-        revealSourceRange(*slot.reference->sourceRange);
-      }
-      handledPaintClick = true;
-    }
-
-    if (!handledPaintClick) {
-      const bool clickedFill = mouse.x >= fillMin.x && mouse.x <= fillMax.x &&
-                               mouse.y >= fillMin.y && mouse.y <= fillMax.y;
-      const bool clickedStroke = mouse.x >= strokeMin.x && mouse.x <= strokeMax.x &&
-                                 mouse.y >= strokeMin.y && mouse.y <= strokeMax.y;
-      if (clickedFill || !clickedStroke) {
-        ImGui::OpenPopup("##fill_color_picker");
-      } else {
-        ImGui::OpenPopup("##stroke_color_picker");
-      }
+    switch (region) {
+      case FillStrokeWidgetRegion::Swap: performPaintSwap(); break;
+      case FillStrokeWidgetRegion::FillNone: setPaintNone("fill"); break;
+      case FillStrokeWidgetRegion::StrokeNone: setPaintNone("stroke"); break;
+      case FillStrokeWidgetRegion::FillChip: revealChipSource(paintState.fill); break;
+      case FillStrokeWidgetRegion::StrokeChip: revealChipSource(paintState.stroke); break;
+      case FillStrokeWidgetRegion::StrokeSwatch: ImGui::OpenPopup("##stroke_color_picker"); break;
+      case FillStrokeWidgetRegion::FillSwatch:
+      case FillStrokeWidgetRegion::None: ImGui::OpenPopup("##fill_color_picker"); break;
     }
   }
   if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-    const bool hoveredFillChip =
-        paintState.fill.isCustom && contains(fillChipMin, fillChipMax, mouse);
-    const bool hoveredStrokeChip =
-        paintState.stroke.isCustom && contains(strokeChipMin, strokeChipMax, mouse);
-    if (hoveredFillChip || hoveredStrokeChip) {
-      const char* name = hoveredFillChip ? "Fill" : "Stroke";
-      const ToolbarPaintSlotState& slot = hoveredFillChip ? paintState.fill : paintState.stroke;
-      if (slot.reference.has_value() && slot.reference->sourceRange.has_value()) {
-        ImGui::SetTooltip("%s paint server %s. Click to show source.", name,
-                          slot.reference->href.c_str());
-      } else if (slot.reference.has_value() && slot.reference->external) {
-        ImGui::SetTooltip("%s uses external paint server %s.", name, slot.reference->href.c_str());
-      } else if (slot.reference.has_value()) {
-        ImGui::SetTooltip("%s uses unresolved paint server %s.", name,
-                          slot.reference->href.c_str());
-      } else {
-        ImGui::SetTooltip("%s uses custom paint %s.", name, slot.customLabel.c_str());
+    switch (region) {
+      case FillStrokeWidgetRegion::Swap: ImGui::SetTooltip("Swap fill and stroke"); break;
+      case FillStrokeWidgetRegion::FillNone: ImGui::SetTooltip("Set fill to none"); break;
+      case FillStrokeWidgetRegion::StrokeNone: ImGui::SetTooltip("Set stroke to none"); break;
+      case FillStrokeWidgetRegion::FillChip:
+      case FillStrokeWidgetRegion::StrokeChip: {
+        const bool isFill = region == FillStrokeWidgetRegion::FillChip;
+        const char* name = isFill ? "Fill" : "Stroke";
+        const ToolbarPaintSlotState& slot = isFill ? paintState.fill : paintState.stroke;
+        if (slot.reference.has_value() && slot.reference->sourceRange.has_value()) {
+          ImGui::SetTooltip("%s paint server %s. Click to show source.", name,
+                            slot.reference->href.c_str());
+        } else if (slot.reference.has_value() && slot.reference->external) {
+          ImGui::SetTooltip("%s uses external paint server %s.", name,
+                            slot.reference->href.c_str());
+        } else if (slot.reference.has_value()) {
+          ImGui::SetTooltip("%s uses unresolved paint server %s.", name,
+                            slot.reference->href.c_str());
+        } else {
+          ImGui::SetTooltip("%s uses custom paint %s.", name, slot.customLabel.c_str());
+        }
+        break;
       }
-    } else {
-      ImGui::SetTooltip("%s", canEditPaint ? "Fill / stroke" : "Open an SVG document");
+      case FillStrokeWidgetRegion::StrokeSwatch:
+        ImGui::SetTooltip("%s", canEditPaint ? "Stroke color" : "Open an SVG document");
+        break;
+      case FillStrokeWidgetRegion::FillSwatch:
+        ImGui::SetTooltip("%s", canEditPaint ? "Fill color" : "Open an SVG document");
+        break;
+      case FillStrokeWidgetRegion::None:
+        ImGui::SetTooltip("%s", canEditPaint ? "Fill / stroke" : "Open an SVG document");
+        break;
     }
   }
   ImGui::EndDisabled();
@@ -2336,22 +2344,37 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
   ImGui::SetCursorScreenPos(ImVec2(static_cast<float>(rect.topLeft.x) + kToolPalettePadding,
                                    static_cast<float>(rect.topLeft.y) + kToolPalettePadding));
   ImGui::PushID("tool_palette");
-  ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 5.0f);
+  const EditorTheme& theme = EditorTheme::Active();
+  ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, theme.radiusControl);
   ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
 
-  enum class ToolButtonIcon {
-    None,
-    SelectPointer,
-    PenTool,
-    Text,
+  // Tool icons are Donner-rendered SVG masks (art/tool_*_icon.svg), uploaded
+  // once to a persistent texture cache and tinted with the text color, so the
+  // toolbar reads as one family with the OS cursors instead of hand-stroked
+  // ImDrawList primitives.
+  const ToolbarIconTextureProvider toolbarIconProvider =
+      [this](std::uint64_t stableId, const svg::RendererBitmap& bitmap) -> ToolbarIconTexture {
+    const GlTextureCache::ThumbnailTextureView uploaded =
+        toolbarIconTextures_.uploadThumbnail(stableId, bitmap);
+    return ToolbarIconTexture{
+        .texture = uploaded.texture,
+        .uvBottomRight = uploaded.uvBottomRight,
+    };
   };
-  const auto renderButton = [&](ActiveTool tool, const char* label, ToolButtonIcon icon,
+
+  const auto renderButton = [&](ActiveTool tool, const char* label, ToolbarIcon icon,
                                 const char* tooltip) {
     const bool selected = activeTool_ == tool;
     if (selected) {
-      ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.43f, 0.90f, 1.0f));
-      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.22f, 0.50f, 1.0f, 1.0f));
-      ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.14f, 0.35f, 0.78f, 1.0f));
+      // Selected tool reads as accent-at-22%-fill (not a solid accent fill) so
+      // the tool-icon mask stays legible; an accent stroke is added below.
+      ImVec4 fill = ImGui::ColorConvertU32ToFloat4(theme.accentDefault);
+      fill.w = theme.selectionFillAlpha;
+      ImVec4 fillActive = fill;
+      fillActive.w = theme.selectionFillAlpha + 0.12f;
+      ImGui::PushStyleColor(ImGuiCol_Button, fill);
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, fill);
+      ImGui::PushStyleColor(ImGuiCol_ButtonActive, fillActive);
     }
     if (ImGui::Button(label, ImVec2(kToolPaletteButtonSize, kToolPaletteButtonSize))) {
       // Leaving a tool commits its in-progress session as one undoable
@@ -2364,18 +2387,14 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
       }
       activeTool_ = tool;
     }
-    if (icon == ToolButtonIcon::SelectPointer) {
-      DrawSelectToolButtonIcon(drawList, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
-    } else if (icon == ToolButtonIcon::PenTool) {
-      DrawPenToolButtonIcon(drawList, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
-    } else if (icon == ToolButtonIcon::Text) {
-      const ImVec2 buttonMin = ImGui::GetItemRectMin();
-      const ImVec2 buttonMax = ImGui::GetItemRectMax();
-      const char* glyph = "T";
-      const ImVec2 textSize = ImGui::CalcTextSize(glyph);
-      drawList->AddText(ImVec2((buttonMin.x + buttonMax.x - textSize.x) * 0.5f,
-                               (buttonMin.y + buttonMax.y - textSize.y) * 0.5f),
-                        IM_COL32(230, 230, 230, 255), glyph);
+    // W6: the tool icon is a Donner-rendered SVG mask tinted with the text
+    // color (replaces the old hand-stroked per-icon primitives). W8: the
+    // selected tool gets an accent stroke on top, routed through the theme.
+    DrawToolbarIcon(icon, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+                    ImGui::GetColorU32(ImGuiCol_Text), toolbarIconProvider);
+    if (selected) {
+      drawList->AddRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), theme.accentDefault,
+                        theme.radiusControl, 0, 1.5f);
     }
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("%s", tooltip);
@@ -2388,15 +2407,16 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
   const std::string selectTooltip = ToolTooltipText(ToolId::Select);
   const std::string penTooltip = ToolTooltipText(ToolId::Pen);
   const std::string textTooltip = ToolTooltipText(ToolId::Text);
-  renderButton(ActiveTool::Select, "##select_tool", ToolButtonIcon::SelectPointer,
-               selectTooltip.c_str());
+  renderButton(ActiveTool::Select, "##select_tool", ToolbarIcon::Select, selectTooltip.c_str());
   ImGui::SameLine(0.0f, kToolPaletteGap);
-  renderButton(ActiveTool::Pen, "##pen_tool", ToolButtonIcon::PenTool, penTooltip.c_str());
+  renderButton(ActiveTool::Pen, "##pen_tool", ToolbarIcon::Pen, penTooltip.c_str());
   ImGui::SameLine(0.0f, kToolPaletteGap);
-  renderButton(ActiveTool::Text, "##text_tool", ToolButtonIcon::Text, textTooltip.c_str());
+  renderButton(ActiveTool::Text, "##text_tool", ToolbarIcon::Text, textTooltip.c_str());
   ImGui::SameLine(0.0f, kToolPaletteGap);
   ImGui::BeginDisabled(true);
-  (void)ImGui::Button("△", ImVec2(kToolPaletteButtonSize, kToolPaletteButtonSize));
+  (void)ImGui::Button("##path_modify_tool", ImVec2(kToolPaletteButtonSize, kToolPaletteButtonSize));
+  DrawToolbarIcon(ToolbarIcon::PathModify, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+                  ImGui::GetColorU32(ImGuiCol_TextDisabled), toolbarIconProvider);
   ImGui::EndDisabled();
   if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
     ImGui::SetTooltip("%s", "Path edit");
@@ -2408,15 +2428,12 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
   ImGui::PopID();
 }
 
-void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vector2d& renderPaneSize,
-                                   ImGuiWindowFlags paneFlags) {
-  ImGui::SetNextWindowPos(
-      ImVec2(static_cast<float>(renderPaneOrigin.x), static_cast<float>(renderPaneOrigin.y)),
-      ImGuiCond_Always);
-  ImGui::SetNextWindowSize(
-      ImVec2(static_cast<float>(renderPaneSize.x), static_cast<float>(renderPaneSize.y)),
-      ImGuiCond_Always);
-  ImGui::Begin("Render", nullptr, paneFlags);
+void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
+  // The render pane is docked into the DockSpace central node (see
+  // renderDockSpaceHost); the DockSpace owns its position and size, so we no
+  // longer place it manually. The window's content region below still drives the
+  // authoritative viewport pane layout.
+  ImGui::Begin(kRenderPaneWindowName, nullptr, paneFlags);
 
   renderPaneScrollYForDiagnostics_ = ImGui::GetScrollY();
   renderPaneScrollMaxYForDiagnostics_ = ImGui::GetScrollMaxY();
@@ -2434,10 +2451,25 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     viewportInitialized_ = true;
   }
 
+  // The canvas is docked into the DockSpace central node, whose size only
+  // settles after ImGui has run a dock update. On the very first frame the
+  // freshly-docked "Render" window briefly reports the full host width before
+  // the right-column split is applied. Fit-to-actual-size must not latch on that
+  // transient size (it would center the document for the wrong pane and clip it
+  // once the pane settles), so we keep re-fitting until the pane size is stable
+  // across two consecutive frames, then latch.
+  const bool renderPaneSizeStable =
+      std::abs(contentRegion.x - lastRenderPaneContentSize_.x) < 1.0f &&
+      std::abs(contentRegion.y - lastRenderPaneContentSize_.y) < 1.0f;
+  lastRenderPaneContentSize_ = Vector2d(contentRegion.x, contentRegion.y);
   if (!viewportInitialized_ && interactionController_.viewport().paneSize.x > 0.0 &&
       interactionController_.viewport().paneSize.y > 0.0 && app_.hasDocument()) {
     std::ignore = interactionController_.resetToActualSize();
-    viewportInitialized_ = true;
+    if (renderPaneSizeStable) {
+      viewportInitialized_ = true;
+    } else {
+      window_.wakeEventLoop();
+    }
   }
 
   // Capture chrome for the document version that is already being presented before this frame's
@@ -2475,14 +2507,26 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
 
   const bool spaceHeld = ImGui::IsKeyDown(ImGuiKey_Space);
   const bool middleDown = ImGui::IsMouseDown(ImGuiMouseButton_Middle);
-  const auto setActiveRotateCursor =
+  // Hold the matching custom cursor for the whole rotate/scale drag, not just
+  // while hovering the handle, so it doesn't flicker back to the arrow as the
+  // pointer leaves the handle mid-gesture.
+  const auto setActiveGestureCursor =
       [&](const std::optional<SelectTool::ActiveGesturePreview>& activeGesturePreview) {
-        if (!activeGesturePreview.has_value() ||
-            activeGesturePreview->kind != SelectTool::ActiveGestureKind::Rotate) {
+        if (!activeGesturePreview.has_value()) {
+          return false;
+        }
+        const SelectTool::ActiveGestureKind kind = activeGesturePreview->kind;
+        const bool applied = kind == SelectTool::ActiveGestureKind::Rotate
+                                 ? rotateCursorSet_.setRotateCursor(activeGesturePreview->corner)
+                             : kind == SelectTool::ActiveGestureKind::Resize
+                                 ? rotateCursorSet_.setScaleCursor(activeGesturePreview->corner)
+                                 : false;
+        if (kind != SelectTool::ActiveGestureKind::Rotate &&
+            kind != SelectTool::ActiveGestureKind::Resize) {
           return false;
         }
 
-        if (rotateCursorSet_.setRotateCursor(activeGesturePreview->corner)) {
+        if (applied) {
           SetImGuiOsCursorManagementEnabled(false);
         } else {
           rotateCursorSet_.clearIfActive();
@@ -2492,7 +2536,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
         return true;
       };
   const auto activeGesturePreviewBeforeInput = selectTool_.activeGesturePreview();
-  const bool rotateCursorLocked = setActiveRotateCursor(activeGesturePreviewBeforeInput);
+  const bool rotateCursorLocked = setActiveGestureCursor(activeGesturePreviewBeforeInput);
   std::ignore = interactionController_.updatePanState(canvasHovered, spaceHeld, middleDown,
                                                       ImGui::IsMouseDown(ImGuiMouseButton_Left),
                                                       ImGui::GetMousePos());
@@ -2556,7 +2600,21 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
   };
   SelectionTransformHandleIntent hoverTransformIntent;
   if (penToolActive && !rotateCursorLocked && toolEligible) {
-    if (rotateCursorSet_.setPenCursor()) {
+    // Contextual pen hint: the close-path cursor when a click would close the
+    // active contour, otherwise the base nib. (Add/remove-anchor hints exist in
+    // the cursor set but await a pen hover-intent query to wire live.)
+    PenCursorHint penHint = PenCursorHint::Base;
+    if (penTool_.isDrafting()) {
+      MouseModifiers hoverModifiers;
+      hoverModifiers.shift = ImGui::GetIO().KeyShift;
+      hoverModifiers.option = ImGui::GetIO().KeyAlt;
+      hoverModifiers.command = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
+      hoverModifiers.pixelsPerDocUnit = interactionController_.viewport().pixelsPerDocUnit();
+      if (penTool_.wouldCloseAt(screenToDocument(ImGui::GetMousePos()), hoverModifiers)) {
+        penHint = PenCursorHint::Close;
+      }
+    }
+    if (rotateCursorSet_.setPenCursor(penHint)) {
       SetImGuiOsCursorManagementEnabled(false);
     } else {
       rotateCursorSet_.clearIfActive();
@@ -2568,14 +2626,25 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     hoverTransformIntent = cachedHandleIntentAt(screenToDocument(ImGui::GetMousePos()),
                                                 /*includeRotate=*/!ImGui::GetIO().KeyShift);
     if (hoverTransformIntent.kind != SelectionTransformHandleKind::None) {
-      if (hoverTransformIntent.kind == SelectionTransformHandleKind::Rotate &&
-          rotateCursorSet_.setRotateCursor(hoverTransformIntent.corner)) {
+      // Custom cursors over the selection handles: rotate glyph on a rotate
+      // handle, scale glyph on a resize handle; fall back to ImGui's built-in
+      // cursor only if the custom one can't be applied.
+      const bool appliedCustomHandleCursor =
+          hoverTransformIntent.kind == SelectionTransformHandleKind::Rotate
+              ? rotateCursorSet_.setRotateCursor(hoverTransformIntent.corner)
+          : hoverTransformIntent.kind == SelectionTransformHandleKind::Resize
+              ? rotateCursorSet_.setScaleCursor(hoverTransformIntent.corner)
+              : false;
+      if (appliedCustomHandleCursor) {
         SetImGuiOsCursorManagementEnabled(false);
       } else {
         rotateCursorSet_.clearIfActive();
         SetImGuiOsCursorManagementEnabled(true);
         ImGui::SetMouseCursor(CursorForTransformHandleIntent(hoverTransformIntent));
       }
+    } else if (rotateCursorSet_.setSelectCursor()) {
+      // Custom arrow (no tail) over empty canvas in the select tool.
+      SetImGuiOsCursorManagementEnabled(false);
     } else {
       rotateCursorSet_.clearIfActive();
       SetImGuiOsCursorManagementEnabled(true);
@@ -2591,10 +2660,10 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       textFrameIntent.corner = textTool_.frameCorner();
     } else if (textTool_.isEditing() && !ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
                !renderCoordinator_.asyncRenderer().isBusy()) {
-      textFrameIntent = textTool_.frameHandleIntentAt(
-          screenToDocument(ImGui::GetMousePos()),
-          interactionController_.viewport().pixelsPerDocUnit(),
-          /*includeRotate=*/!ImGui::GetIO().KeyShift);
+      textFrameIntent =
+          textTool_.frameHandleIntentAt(screenToDocument(ImGui::GetMousePos()),
+                                        interactionController_.viewport().pixelsPerDocUnit(),
+                                        /*includeRotate=*/!ImGui::GetIO().KeyShift);
     }
     if (textFrameIntent.kind == SelectionTransformHandleKind::Rotate &&
         rotateCursorSet_.setRotateCursor(textFrameIntent.corner)) {
@@ -2928,10 +2997,9 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       // wake schedule + overlay-chrome recapture only - never a content
       // render.
       renderCoordinator_.setTextEditingChrome(
-          textTool_.caretBlinkVisible()
-              ? std::make_optional(SelectionChromeSnapshot::TextCaret{textChrome->caretTopDoc,
-                                                                      textChrome->caretBottomDoc})
-              : std::nullopt,
+          textTool_.caretBlinkVisible() ? std::make_optional(SelectionChromeSnapshot::TextCaret{
+                                              textChrome->caretTopDoc, textChrome->caretBottomDoc})
+                                        : std::nullopt,
           textChrome->frameCornersDoc);
     }
     renderCoordinator_.setTextBoxDragPreview(std::nullopt);
@@ -2948,7 +3016,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
 
   const auto liveActiveDragPreview = selectTool_.activeDragPreview();
   const auto activeGesturePreview = selectTool_.activeGesturePreview();
-  if (!setActiveRotateCursor(activeGesturePreview) && rotateCursorLocked) {
+  if (!setActiveGestureCursor(activeGesturePreview) && rotateCursorLocked) {
     rotateCursorSet_.clearIfActive();
     SetImGuiOsCursorManagementEnabled(true);
   }
@@ -2976,8 +3044,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     // version gate drops the overlay snapshot for the whole typing burst,
     // blinking the caret/selection chrome off until the worker catches up.
     const bool allowLiveGeometryOverlay =
-        penToolActive ||
-        (textToolActive && (textTool_.isEditing() || textTool_.isDraggingBox()));
+        penToolActive || (textToolActive && (textTool_.isEditing() || textTool_.isDraggingBox()));
     updatePenLivePreviewTarget();
     renderCoordinator_.rasterizeOverlayForPresentation(
         app_, selectTool_, interactionController_.viewport(), textures_, activeDragPreview,
@@ -3124,13 +3191,11 @@ void EditorShell::renderTextToolHint() {
 
   // Bottom-center of the render pane, above the canvas scrollbar rail.
   const ViewportState& viewport = interactionController_.viewport();
-  const ImVec2 textSize =
-      ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, 0.0f, label.data(),
-                                      label.data() + label.size());
+  const ImVec2 textSize = ImGui::GetFont()->CalcTextSizeA(
+      ImGui::GetFontSize(), FLT_MAX, 0.0f, label.data(), label.data() + label.size());
   const float width = textSize.x + 2.0f * kReferenceChipPaddingX;
   const float height = textSize.y + 2.0f * kReferenceChipPaddingY;
-  const float paneCenterX =
-      static_cast<float>(viewport.paneOrigin.x + viewport.paneSize.x * 0.5);
+  const float paneCenterX = static_cast<float>(viewport.paneOrigin.x + viewport.paneSize.x * 0.5);
   const float x = paneCenterX - width * 0.5f;
   const float y = static_cast<float>(viewport.paneOrigin.y + viewport.paneSize.y) - height -
                   static_cast<float>(kCanvasScrollbarRailPx) - 10.0f;
@@ -3139,7 +3204,8 @@ void EditorShell::renderTextToolHint() {
   }
 
   ImDrawList* drawList = ImGui::GetWindowDrawList();
-  drawList->AddRectFilled(ImVec2(x, y), ImVec2(x + width, y + height), IM_COL32(34, 48, 54, 235),
+  drawList->AddRectFilled(ImVec2(x, y), ImVec2(x + width, y + height),
+                          WithAlpha(EditorTheme::Active().surfaceOverlay, 235),
                           kReferenceChipRadius);
   drawList->AddText(ImGui::GetFont(), ImGui::GetFontSize(),
                     ImVec2(x + kReferenceChipPaddingX, y + kReferenceChipPaddingY),
@@ -3155,10 +3221,14 @@ void EditorShell::renderCanvasScrollbars() {
 
   const float kRailThickness = static_cast<float>(kCanvasScrollbarRailPx);
   constexpr float kThumbPadding = 2.0f;
-  constexpr float kThumbRounding = 3.0f;
-  const ImU32 kRailColor = IM_COL32(28, 28, 32, 150);
-  const ImU32 kThumbColor = IM_COL32(112, 116, 126, 200);
-  const ImU32 kThumbActiveColor = IM_COL32(156, 160, 170, 230);
+  // Canvas scrollbars are custom ImDrawList chrome (not ImGui scrollbars), so
+  // they read the theme's surface ramp directly, keeping the prior translucency
+  // so canvas content shows faintly through the rail.
+  const EditorTheme& theme = EditorTheme::Active();
+  const float kThumbRounding = theme.radiusControl;
+  const ImU32 kRailColor = WithAlpha(theme.surfaceSunken, 150);
+  const ImU32 kThumbColor = WithAlpha(theme.surfaceHover, 200);
+  const ImU32 kThumbActiveColor = WithAlpha(theme.surfaceActive, 230);
   ImDrawList* drawList = ImGui::GetWindowDrawList();
   const Vector2d paneOrigin = viewport.paneOrigin;
   const Vector2d paneSize = viewport.paneSize;
@@ -3214,8 +3284,13 @@ void EditorShell::renderCanvasScrollbars() {
   }
 }
 
-void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float paneOriginY,
-                                 const RightSidebarLayout& layout, ImGuiWindowFlags paneFlags) {
+void EditorShell::renderSidebars() {
+  // The right-column panels are dockable windows owned by the DockSpace (see
+  // renderDockSpaceHost); their position, size, and tab bars are managed by
+  // docking, so we no longer place them with SetNextWindowPos/Size. NoCollapse
+  // keeps the docked tab from adding a collapse arrow; scrollbars stay enabled
+  // so long panel content scrolls within its own node.
+  constexpr ImGuiWindowFlags kDockedPaneFlags = ImGuiWindowFlags_NoCollapse;
   const auto& selectionBeforeTree = app_.selectedElement();
   if (selectionBeforeTree != lastTreeSelection_) {
     treeviewPendingScroll_ = selectionBeforeTree.has_value() && !treeSelectionOriginatedInTree_;
@@ -3238,9 +3313,7 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
   // sidebar window. `SidebarPresenter` is still the
   // Inspector backend below (`renderInspector`), and its `renderTreeView` /
   // tests remain; it is simply no longer the user-facing outline.
-  ImGui::SetNextWindowPos(ImVec2(rightPaneX, paneOriginY), ImGuiCond_Always);
-  ImGui::SetNextWindowSize(ImVec2(rightPaneWidth, layout.treePaneHeight), ImGuiCond_Always);
-  ImGui::Begin("Layers", nullptr, paneFlags);
+  ImGui::Begin(kLayersWindowName, nullptr, kDockedPaneFlags);
   std::vector<std::uint64_t> liveThumbnailKeys;
   liveThumbnailKeys.reserve(layersPanel_.rows().size() + 4u);
   // Donner renders each row's preview to a bitmap during refreshSnapshot; here
@@ -3317,9 +3390,7 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
   ImGui::End();
   lastTreeSelection_ = app_.selectedElement();
 
-  ImGui::SetNextWindowPos(ImVec2(rightPaneX, layout.inspectorPaneY), ImGuiCond_Always);
-  ImGui::SetNextWindowSize(ImVec2(rightPaneWidth, layout.inspectorPaneHeight), ImGuiCond_Always);
-  ImGui::Begin("Inspector", nullptr, paneFlags);
+  ImGui::Begin(kInspectorWindowName, nullptr, kDockedPaneFlags);
   const bool inspectorQueuedMutation = sidebarPresenter_.renderInspector(
       liveAppForClicks, interactionController_.viewport(), sidebarIconTextureProvider);
   // Text-property inspector: shown only when the selection is exactly one
@@ -3338,19 +3409,15 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
   thumbnailTextures_.retainThumbnailsOnly(liveThumbnailKeys);
 
   // The Compositor Debug panel is a developer diagnostics view, hidden unless
-  // toggled on from the View menu. The user-facing Layers/Inspector panes above
-  // are unaffected.
-  if (!showCompositorDebugPanel_ || layerPanelDetached_) {
+  // toggled on from the View menu. It is now an ordinary dockable window in the
+  // same DockSpace (its content is unchanged); the homegrown detach/float host
+  // is gone - unlock the layout to tear it off into a floating imgui window.
+  if (!showCompositorDebugPanel_) {
     return;
   }
 
-  ImGui::SetNextWindowPos(ImVec2(rightPaneX, layout.layerPanelPaneY), ImGuiCond_Always);
-  ImGui::SetNextWindowSize(ImVec2(rightPaneWidth, layout.layerPanelHeight), ImGuiCond_Always);
-  ImGui::Begin("Compositor Debug##docked_compositor_debug", nullptr, paneFlags);
-  renderDockedLayerPanelDragHandle();
-  if (!layerPanelDetached_) {
-    renderLayerPanelContents();
-  }
+  ImGui::Begin(kCompositorDebugWindowName, nullptr, kDockedPaneFlags);
+  renderLayerPanelContents();
   ImGui::End();
 }
 
@@ -3439,140 +3506,49 @@ void EditorShell::renderSourcePaneSplitter(float windowWidth, float paneOriginY,
   ImGui::PopStyleVar(2);
 }
 
-void EditorShell::renderRightPaneSplitter(float windowWidth, float paneOriginY, float paneHeight) {
-  const float splitterCenterX = windowWidth - rightPaneWidth_;
-  const float splitterLeft = splitterCenterX - kRightPaneSplitterThickness * 0.5f;
+void EditorShell::renderDockSpaceHost(float hostX, float hostY, float hostWidth, float hostHeight) {
+  const ImGuiID dockspaceId = EditorDockSpaceId();
 
-  ImGui::SetNextWindowPos(ImVec2(splitterLeft, paneOriginY), ImGuiCond_Always);
-  ImGui::SetNextWindowSize(ImVec2(kRightPaneSplitterThickness, paneHeight), ImGuiCond_Always);
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+  ImGui::SetNextWindowPos(ImVec2(hostX, hostY), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(hostWidth, hostHeight), ImGuiCond_Always);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
   ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-  constexpr ImGuiWindowFlags kSplitterFlags =
-      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
-      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar |
-      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground;
-  ImGui::Begin("##right_pane_splitter", nullptr, kSplitterFlags);
-  ImGui::InvisibleButton("##right_pane_splitter_handle",
-                         ImVec2(kRightPaneSplitterThickness, paneHeight));
-  if (ImGui::IsItemActive()) {
-    const float deltaX = ImGui::GetIO().MouseDelta.x;
-    // Dragging the splitter LEFT (negative deltaX) widens the right pane.
-    rightPaneWidth_ = std::clamp(rightPaneWidth_ - deltaX, kMinRightPaneWidth, kMaxRightPaneWidth);
-  }
-  if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
-    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-  }
-  ImGui::End();
+  // The host is a fixed, chromeless container that only carries the DockSpace.
+  // NoBringToFrontOnFocus keeps it behind any floating (torn-off) panel; its own
+  // NoDocking stops it being dragged into the DockSpace.
+  constexpr ImGuiWindowFlags kHostFlags =
+      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus |
+      ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoScrollbar |
+      ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoBackground;
+  ImGui::Begin("##editor_dock_host", nullptr, kHostFlags);
   ImGui::PopStyleVar(2);
-}
 
-void EditorShell::renderLayerPanelSplitter(float rightPaneX, float rightPaneWidth,
-                                           const RightSidebarLayout& layout) {
-  ImGui::SetNextWindowPos(ImVec2(rightPaneX, layout.layerPanelSplitterY), ImGuiCond_Always);
-  ImGui::SetNextWindowSize(ImVec2(rightPaneWidth, kLayerPanelSplitterThickness), ImGuiCond_Always);
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-  constexpr ImGuiWindowFlags kSplitterFlags =
-      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
-      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar |
-      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground;
-  ImGui::Begin("##layer_panel_splitter", nullptr, kSplitterFlags);
-  ImGui::InvisibleButton("##layer_panel_splitter_handle",
-                         ImVec2(rightPaneWidth, kLayerPanelSplitterThickness));
-  if (ImGui::IsItemActive()) {
-    layerPanelHeightFraction_ = ResizeLayerPanelHeightFraction(
-        layerPanelHeightFraction_, layout.lowerPaneHeight, layout.minLayerPanelHeight,
-        layout.maxLayerPanelHeight, ImGui::GetIO().MouseDelta.y);
-  }
-  if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
-    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
-  }
-
-  const bool splitterActive = ImGui::IsItemActive();
-  const bool splitterHovered = ImGui::IsItemHovered();
-  const ImU32 color = ImGui::GetColorU32(splitterActive    ? ImGuiCol_SeparatorActive
-                                         : splitterHovered ? ImGuiCol_SeparatorHovered
-                                                           : ImGuiCol_Separator);
-  ImGui::GetWindowDrawList()->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
-                                            color);
-  ImGui::End();
-  ImGui::PopStyleVar(2);
-}
-
-void EditorShell::renderDockedLayerPanelDragHandle() {
-  const ImGuiStyle& style = ImGui::GetStyle();
-  const ImVec2 start = ImGui::GetCursorScreenPos();
-  const ImVec2 size(ImGui::GetContentRegionAvail().x, kLayerPanelDragHandleHeight);
-  ImGui::InvisibleButton("##layer_panel_detach_handle", size);
-
-  const bool handleActive = ImGui::IsItemActive();
-  const bool handleHovered = ImGui::IsItemHovered();
-  if (handleHovered || handleActive) {
-    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
-  }
-
-  const ImU32 background = ImGui::GetColorU32(handleActive    ? ImGuiCol_HeaderActive
-                                              : handleHovered ? ImGuiCol_HeaderHovered
-                                                              : ImGuiCol_Header);
-  const ImU32 textColor = ImGui::GetColorU32(ImGuiCol_Text);
-  const ImVec2 end(start.x + size.x, start.y + size.y);
-  ImDrawList* drawList = ImGui::GetWindowDrawList();
-  drawList->AddRectFilled(start, end, background);
-  drawList->AddText(ImVec2(start.x + style.FramePadding.x, start.y + style.FramePadding.y),
-                    textColor, "Compositor Debug");
-
-  const char* handleText = "::";
-  const ImVec2 handleTextSize = ImGui::CalcTextSize(handleText);
-  drawList->AddText(
-      ImVec2(end.x - handleTextSize.x - style.FramePadding.x, start.y + style.FramePadding.y),
-      textColor, handleText);
-
-  if (handleActive && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f)) {
-    layerPanelDetached_ = true;
-    layerPanelDetachDragActive_ = true;
-    layerPanelFloatingNeedsPlacement_ = true;
-    layerPanelFloatingPos_ = ImGui::GetWindowPos();
-    layerPanelFloatingSize_ = ImGui::GetWindowSize();
-  }
-}
-
-void EditorShell::renderFloatingLayerPanel() {
-  if (!showCompositorDebugPanel_ || !layerPanelDetached_) {
-    return;
-  }
-
-  if (layerPanelDetachDragActive_) {
-    const ImGuiIO& io = ImGui::GetIO();
-    layerPanelFloatingPos_.x += io.MouseDelta.x;
-    layerPanelFloatingPos_.y += io.MouseDelta.y;
-    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-      layerPanelDetachDragActive_ = false;
+  // Decide whether to (re)build the default layout. On the first frame a valid
+  // node loaded from the persisted .ini is adopted as-is (persistence); a
+  // missing/corrupt ini leaves no node, so we fall back to the default layout.
+  // A reset request or a change to the docked-panel set always rebuilds.
+  const bool hasNode = ImGui::DockBuilderGetNode(dockspaceId) != nullptr;
+  const bool compositorSetChanged = dockCompositorIncludedInLayout_ != showCompositorDebugPanel_;
+  const bool needBuild =
+      dockLayoutResetRequested_ || !dockLayoutBuilt_ || !hasNode || compositorSetChanged;
+  if (needBuild) {
+    const bool adoptPersisted =
+        hasNode && !dockLayoutResetRequested_ && !dockLayoutBuilt_ && !compositorSetChanged;
+    if (!adoptPersisted) {
+      EditorDockLayoutParams params;
+      params.size = ImVec2(hostWidth, hostHeight);
+      params.rightColumnRatio =
+          hostWidth > 0.0f ? std::clamp(rightPaneWidth_ / hostWidth, 0.15f, 0.5f) : 0.26f;
+      params.includeCompositorDebug = showCompositorDebugPanel_;
+      BuildDefaultDockLayout(dockspaceId, params);
     }
+    dockLayoutBuilt_ = true;
+    dockLayoutResetRequested_ = false;
+    dockCompositorIncludedInLayout_ = showCompositorDebugPanel_;
   }
 
-  if (layerPanelFloatingNeedsPlacement_ || layerPanelDetachDragActive_) {
-    ImGui::SetNextWindowPos(layerPanelFloatingPos_, ImGuiCond_Always);
-  }
-  if (layerPanelFloatingNeedsPlacement_) {
-    ImGui::SetNextWindowSize(layerPanelFloatingSize_, ImGuiCond_Always);
-  }
-
-  bool layerPanelOpen = true;
-  constexpr ImGuiWindowFlags kFloatingFlags = ImGuiWindowFlags_NoCollapse;
-  ImGui::Begin("Compositor Debug##floating_compositor_debug", &layerPanelOpen, kFloatingFlags);
-  layerPanelFloatingNeedsPlacement_ = false;
-  layerPanelFloatingPos_ = ImGui::GetWindowPos();
-  layerPanelFloatingSize_ = ImGui::GetWindowSize();
-
-  if (!layerPanelOpen || ImGui::Button("Dock")) {
-    layerPanelDetached_ = false;
-    layerPanelDetachDragActive_ = false;
-    layerPanelFloatingNeedsPlacement_ = false;
-    ImGui::End();
-    return;
-  }
-
-  renderLayerPanelContents();
+  ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f), EditorDockSpaceFlags(dockLayoutLocked_));
   ImGui::End();
 }
 
@@ -3861,7 +3837,7 @@ void EditorShell::renderSelectionSizeChip(
   drawList->AddRectFilled(
       ImVec2(static_cast<float>(rect->topLeft.x), static_cast<float>(rect->topLeft.y)),
       ImVec2(static_cast<float>(rect->bottomRight.x), static_cast<float>(rect->bottomRight.y)),
-      IM_COL32(0, 111, 149, 255), kSelectionSizeChipRadius);
+      EditorTheme::Active().surfaceOverlay, kSelectionSizeChipRadius);
   drawList->AddText(chipFont, SelectionSizeChipFontSize(),
                     ImVec2(static_cast<float>(rect->topLeft.x) + kSelectionSizeChipPaddingX,
                            static_cast<float>(rect->topLeft.y) + kSelectionSizeChipPaddingY),
@@ -3920,9 +3896,10 @@ void EditorShell::renderReferenceHighlightChip() {
   }
 
   ImDrawList* drawList = ImGui::GetWindowDrawList();
-  const ImU32 bg = referenceHighlightActive_ ? IM_COL32(0, 135, 170, 245)
-                   : hovered                 ? IM_COL32(48, 70, 78, 245)
-                                             : IM_COL32(34, 48, 54, 235);
+  const EditorTheme& theme = EditorTheme::Active();
+  const ImU32 bg = referenceHighlightActive_ ? WithAlpha(theme.surfaceActive, 245)
+                   : hovered                 ? WithAlpha(theme.surfaceHover, 245)
+                                             : WithAlpha(theme.surfaceOverlay, 235);
   drawList->AddRectFilled(
       ImVec2(static_cast<float>(rect->topLeft.x), static_cast<float>(rect->topLeft.y)),
       ImVec2(static_cast<float>(rect->bottomRight.x), static_cast<float>(rect->bottomRight.y)), bg,
@@ -4601,8 +4578,7 @@ void EditorShell::runFrame() {
   // visibility/height here so the panes below start beneath it; the bar itself
   // is rendered next to the menu bar further down.
   const FormatBarState formatBarState = computeFormatBarState();
-  const float formatBarHeight =
-      formatBarState.visible ? TextFormatBarPresenter::BarHeight() : 0.0f;
+  const float formatBarHeight = formatBarState.visible ? TextFormatBarPresenter::BarHeight() : 0.0f;
   const float paneOriginY = menuBarHeight + formatBarHeight;
   const float paneHeight = std::max(0.0f, static_cast<float>(windowSize.y) - paneOriginY);
   const EditorMainPaneLayout mainPaneLayout = ComputeEditorMainPaneLayout({
@@ -4617,23 +4593,27 @@ void EditorShell::runFrame() {
       .minRenderPaneWidth = kMinRightPaneWidth,
   });
   rightPaneWidth_ = mainPaneLayout.rightPaneWidth;
-  const float rightPaneX = mainPaneLayout.rightPaneX;
-  const float rightPaneGap = ImGui::GetStyle().ItemSpacing.y;
-  const RightSidebarLayout rightSidebarLayout = ComputeRightSidebarLayout({
-      .paneOriginY = paneOriginY,
-      .paneHeight = paneHeight,
-      .rightPaneGap = rightPaneGap,
-      .treeViewHeightFraction = kTreeViewHeightFraction,
-      .layerPanelHeightFraction = layerPanelHeightFraction_,
-      .layerPanelDetached = layerPanelDetached_,
-      .layerPanelSplitterThickness = kLayerPanelSplitterThickness,
-      .minLayerPanelHeight = kMinLayerPanelHeight,
-      .minInspectorPaneHeight = kMinInspectorPaneHeight,
-  });
-  layerPanelHeightFraction_ = rightSidebarLayout.layerPanelHeightFraction;
-  const Vector2d renderPaneOrigin(mainPaneLayout.renderPaneX, paneOriginY);
-  const Vector2d renderPaneSize(mainPaneLayout.renderPaneWidth, paneHeight);
+  const float dockHostX = mainPaneLayout.renderPaneX;
+  const float dockHostWidth = std::max(0.0f, static_cast<float>(windowSize.x) - dockHostX);
 
+  // Submit the DockSpace host that owns the canvas (central node) and the
+  // right-column dockable panels, (re)building and locking the layout as needed.
+  // This replaces the former manual pixel splitters and the homegrown Compositor
+  // Debug float.
+  renderDockSpaceHost(dockHostX, paneOriginY, dockHostWidth, paneHeight);
+
+  // Pre-seed the viewport pane layout from the canvas central node so global
+  // shortcuts (zoom-to-cursor, etc.) see the right geometry this frame;
+  // renderRenderPane re-runs updatePaneLayout authoritatively from the docked
+  // window's content region below.
+  Vector2d renderPaneOrigin(dockHostX, paneOriginY);
+  Vector2d renderPaneSize(dockHostWidth, paneHeight);
+  if (const ImGuiDockNode* centralNode = ImGui::DockBuilderGetCentralNode(EditorDockSpaceId())) {
+    if (centralNode->Size.x > 0.0f && centralNode->Size.y > 0.0f) {
+      renderPaneOrigin = Vector2d(centralNode->Pos.x, centralNode->Pos.y);
+      renderPaneSize = Vector2d(centralNode->Size.x, centralNode->Size.y);
+    }
+  }
   interactionController_.updatePaneLayout(
       renderPaneOrigin, renderPaneSize,
       app_.hasDocument() ? std::make_optional(ResolveDocumentViewBox(app_.document().document()))
@@ -4656,19 +4636,24 @@ void EditorShell::runFrame() {
       .hasSelectableElements = canvasHasSelectableElements(),
       .showCompositorDebugPanel = showCompositorDebugPanel_,
       .perfOverlayMode = perfOverlayMode_,
+      .panelLayoutLocked = dockLayoutLocked_,
   };
   const MenuBarActions menuActions = menuBarPresenter_.render(menuState, uiFontBold_);
   applyMenuActions(menuActions);
 
-  // W2: render the contextual text-formatting bar beneath the menu bar and
-  // route its actions to the existing styling commands. Space for it was
-  // already reserved above via `formatBarHeight`.
+  // Render the contextual text-formatting bar beneath the menu bar and route
+  // its actions to the existing styling commands. Space for it was already
+  // reserved above via `formatBarHeight`.
   if (formatBarState.visible) {
     const FormatBarActions formatBarActions = textFormatBarPresenter_.render(
         formatBarState, menuBarHeight, static_cast<float>(windowSize.x));
     applyFormatBarActions(formatBarState, formatBarActions);
   }
 
+  // On macOS, service any pending open/save with a native OS panel; this
+  // consumes the request so the ImGui modal below stays closed. On other
+  // platforms it is a no-op and the ImGui modal renders as before.
+  serviceNativeDialogs();
   dialogPresenter_.render(
       [this](std::string_view path, std::string* error) { return tryOpenPath(path, error); },
       [this](std::string_view path, std::string* error) {
@@ -4677,8 +4662,6 @@ void EditorShell::runFrame() {
       });
   markPhase(mainFrameCost.menusDialogsMs);
 
-  constexpr ImGuiWindowFlags kPaneFlags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
-                                          ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar;
   std::ignore = highlightSelectionSourceIfNeeded();
   if (sourcePaneVisible_) {
     renderSourcePane(paneOriginY, paneHeight, mainPaneLayout.sourcePaneWidth, codeFont_);
@@ -4692,22 +4675,19 @@ void EditorShell::runFrame() {
   // scroll the in-pane overlay chrome (toolbar, perf HUD) away from the
   // canvas. Canvas scrolling is the emulated document-extent scrollbars +
   // wheel panning instead.
-  renderRenderPane(renderPaneOrigin, renderPaneSize,
-                   kPaneFlags | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar |
-                       ImGuiWindowFlags_NoScrollWithMouse);
+  renderRenderPane(ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBackground |
+                   ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
   markPhase(mainFrameCost.renderPaneMs);
-  renderSidebars(rightPaneX, rightPaneWidth_, paneOriginY, rightSidebarLayout, kPaneFlags);
+  renderSidebars();
   if (highlightSelectionSourceIfNeeded()) {
     window_.wakeEventLoop();
   }
   markPhase(mainFrameCost.sidebarsMs);
+  // The left source/render splitter stays manual (its collapse/reveal behavior is
+  // out of scope for docking); the right-column splitters and the Compositor
+  // Debug float are now owned by the DockSpace submitted above.
   renderSourcePaneSplitter(static_cast<float>(windowSize.x), paneOriginY, paneHeight,
                            mainPaneLayout.sourcePaneWidth);
-  renderRightPaneSplitter(static_cast<float>(windowSize.x), paneOriginY, paneHeight);
-  if (!layerPanelDetached_) {
-    renderLayerPanelSplitter(rightPaneX, rightPaneWidth_, rightSidebarLayout);
-  }
-  renderFloatingLayerPanel();
   markPhase(mainFrameCost.splittersMs);
   if (requestRenderAtEndOfFrame_) {
     if (!app_.hasDocument()) {

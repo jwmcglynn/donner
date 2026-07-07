@@ -18,10 +18,12 @@
 /// bar is a second surface over those commands, not a new styling pipeline.
 
 #include <array>
+#include <functional>
 #include <string>
 #include <vector>
 
 #include "donner/svg/SVGElement.h"
+#include "donner/svg/resources/FontCatalogTypes.h"
 
 struct ImFont;
 
@@ -37,7 +39,21 @@ struct FormatBarFontFamily {
   /// default UI font. Lets each family render in its own face when the editor
   /// has it loaded (the embedded Roboto and Fira Code faces today).
   ImFont* previewFont = nullptr;
+  /// Origin of this family in the catalog. The picker lists the Embedded group
+  /// before the System group and shows a header at each group boundary.
+  svg::FontSource source = svg::FontSource::Embedded;
 };
+
+/// Build the picker's family list from a catalog listing (see
+/// `FontCatalog::families()`, which already orders Embedded before System and
+/// sorts within each group). Each entry keeps its CSS family name and source;
+/// `previewFont` is filled from @p previewForFamily for families the editor has
+/// a loaded face for, and left null otherwise (the entry then renders in the
+/// default UI font). Families the catalog lacks are still reachable through the
+/// bar's free-text box, so this list is additive, not a whitelist.
+[[nodiscard]] std::vector<FormatBarFontFamily> BuildFormatBarFamilies(
+    const std::vector<svg::FontFamilyInfo>& catalogFamilies,
+    const std::function<ImFont*(const svg::FontFamilyInfo&)>& previewForFamily);
 
 /// Snapshot of the current text formatting context, driving the bar's controls.
 ///

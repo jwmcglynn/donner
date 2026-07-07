@@ -300,8 +300,7 @@ TEST(SVGTextElementPublicApiTests, TextGeometryApisReturnComputedValues) {
   // golden-image) glyph-metrics check: what matters here is whether HarfBuzz
   // + FreeType shaping was actually compiled in for this variant, which is
   // exactly what DONNER_TEXT_FULL means, independent of which backend is
-  // active (Design 0018 Packet B retargeted the text_full variant from
-  // tiny_skia to geode).
+  // active.
   const Box2d inkBounds = textElement.inkBoundingBox();
 #ifdef DONNER_TEXT_FULL
   // HarfBuzz v14 + FreeType produces slightly wider glyph advances.

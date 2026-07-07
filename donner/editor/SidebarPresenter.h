@@ -7,6 +7,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -97,7 +98,12 @@ public:
   /// non-null, click-induced selection mutations are applied to it; when
   /// null, clicks are dropped (the render is "read-only" because the worker
   /// thread owns the document).
-  void renderTreeView(EditorApp* liveApp, TreeViewState& state) const;
+  ///
+  /// @param iconTextureProvider Uploads the shared disclosure-chevron mask to an
+  ///   ImGui texture; pass null (e.g. headless tests) to skip chevron art while
+  ///   keeping the disclosure interaction.
+  void renderTreeView(EditorApp* liveApp, TreeViewState& state,
+                      const IconTextureProvider& iconTextureProvider = {}) const;
 
   /**
    * Render the inspector pane from the current snapshot.
@@ -118,6 +124,18 @@ public:
   }
 
   [[nodiscard]] bool hasTreeSnapshotForTesting() const { return treeSnapshot_.has_value(); }
+
+  /// Whether the tree node for @p entityId is expanded. Keyed by the element's
+  /// 32-bit entity id (`entity` cast). Drives the disclosure round-trip test.
+  [[nodiscard]] bool isTreeNodeExpandedForTesting(std::uint32_t entityId) const {
+    return treeExpandedEntities_.count(entityId) != 0;
+  }
+
+  /// Toggle the tree disclosure for @p entityId, exactly as clicking the row's
+  /// chevron does.
+  void toggleTreeNodeExpandedForTesting(std::uint32_t entityId) {
+    toggleTreeNodeExpanded(entityId);
+  }
 
   [[nodiscard]] std::string_view inspectorTitleForTesting() const {
     return inspectorSnapshot_.titleText;
@@ -218,7 +236,12 @@ private:
 
   void captureTreeNode(const svg::SVGElement& element, std::span<const svg::SVGElement> selection,
                        TreeNodeSnapshot& out);
-  void renderTreeNode(EditorApp* liveApp, const TreeNodeSnapshot& node, TreeViewState& state) const;
+  void renderTreeNode(EditorApp* liveApp, const TreeNodeSnapshot& node, TreeViewState& state,
+                      const IconTextureProvider& iconTextureProvider) const;
+
+  /// Flip the persistent disclosure state for @p entityId (the model the tree
+  /// chevron drives), shared by the click handler and the testing hook.
+  void toggleTreeNodeExpanded(std::uint32_t entityId) const;
 
   /// Render the editable transform section (decomposed fields plus the raw
   /// matrix disclosure). Returns true if a mutation was queued.
@@ -248,6 +271,12 @@ private:
   std::optional<TreeNodeSnapshot> treeSnapshot_;
   InspectorSnapshot inspectorSnapshot_;
   std::optional<TransformEditState> transformEdit_;
+
+  /// Persistent tree-disclosure state, keyed by 32-bit entity id. A node is
+  /// expanded iff present. Mutable because the tree renders from a const
+  /// snapshot but owns its own view state (like imgui's former internal open
+  /// state). Reset implicitly as entities change across document reloads.
+  mutable std::unordered_set<std::uint32_t> treeExpandedEntities_;
 };
 
 }  // namespace donner::editor

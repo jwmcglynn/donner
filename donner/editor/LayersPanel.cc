@@ -12,6 +12,8 @@
 #include <utility>
 #include <vector>
 
+#include "donner/editor/DisclosureChevron.h"
+#include "donner/editor/EditorTheme.h"
 #include "donner/editor/EmbeddedSvgIcon.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/svg/ElementType.h"
@@ -89,6 +91,41 @@ const std::optional<svg::RendererBitmap>& CachedBootstrapIconBitmap(LayerAfforda
 
   static const std::optional<svg::RendererBitmap> empty;
   return empty;
+}
+
+/// Display size (px) of the tree-disclosure chevron drawn in each expandable
+/// row. Shared visual with the inspector tree via DisclosureChevron.
+constexpr float kDisclosureChevronDisplayPx = 11.0f;
+
+/// Texture-cache key for a shared disclosure chevron mask. Lives in the same
+/// high `0xf5..` reserved space as the affordance icons so it can't collide
+/// with per-row thumbnail stable ids; the low bit distinguishes the collapsed
+/// and expanded variants.
+std::uint64_t DisclosureChevronTextureKey(bool expanded) {
+  return 0xf500000000000000ull + 5u +
+         static_cast<std::uint64_t>(DisclosureChevronTextureVariant(expanded));
+}
+
+/// Draw the shared tree-disclosure chevron as a clickable cell. Returns true on
+/// click. The chevron points right when collapsed and down when expanded, drawn
+/// from the Donner-rendered chevron mask and tinted with the current text color.
+bool DrawDisclosureChevronButton(const char* id, bool expanded,
+                                 const LayersPanel::IconTextureProvider& iconTextureProvider) {
+  const ImVec2 cellSize(ImGui::GetFrameHeight(), ImGui::GetFrameHeight());
+  const ImVec2 cellMin = ImGui::GetCursorScreenPos();
+  const bool clicked = ImGui::InvisibleButton(id, cellSize);
+  if (iconTextureProvider) {
+    const std::optional<svg::RendererBitmap>& bitmap = CachedDisclosureChevronBitmap(expanded);
+    if (bitmap.has_value()) {
+      const LayersPanel::IconTexture iconTexture =
+          iconTextureProvider(DisclosureChevronTextureKey(expanded), *bitmap);
+      const ImVec2 center(cellMin.x + cellSize.x * 0.5f, cellMin.y + cellSize.y * 0.5f);
+      DrawDisclosureChevron(ImGui::GetWindowDrawList(), iconTexture.texture,
+                            iconTexture.uvBottomRight, center, kDisclosureChevronDisplayPx,
+                            ImGui::GetColorU32(ImGuiCol_Text));
+    }
+  }
+  return clicked;
 }
 
 bool DrawLayerIconButton(const char* id, LayerAffordanceIcon icon,
@@ -488,8 +525,7 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
     // the owned model. A non-expandable row gets a same-width spacer so names
     // stay aligned.
     if (row.hasChildren) {
-      const char* chevron = row.isExpanded ? "v" : ">";
-      if (ImGui::SmallButton(chevron)) {
+      if (DrawDisclosureChevronButton("##layer_disclosure", row.isExpanded, iconTextureProvider)) {
         model_.toggleExpanded(row.stableId);
       }
     } else {
@@ -563,10 +599,23 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
     const bool partialOnly = row.isPartiallySelected && !row.isSelected;
     const bool selected = row.isSelected;
     // Subtle hover/active tint for the row: the stock ImGui header-hover fill is
-    // too bright for a dense layer list, so scale its alpha well down.
+    // too bright for a dense layer list, so scale its alpha well down. These
+    // derive from the EditorTheme surface ramp (design doc 0054) via the active
+    // ImGui style, preserving the W10 subtle-hover subtlety.
     ImGui::PushStyleColor(ImGuiCol_HeaderHovered,
                           ImGui::GetColorU32(ImGuiCol_HeaderHovered, 0.28f));
     ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImGui::GetColorU32(ImGuiCol_HeaderActive, 0.45f));
+    // A truly selected row reads as accent-at-22%-fill rather than the neutral
+    // surface (design doc 0054 decision 6: selection is a tinted fill, never a
+    // solid accent). Only the selected fill is re-tinted; unselected rows keep
+    // the neutral ramp, so the accent stays reserved for real selection.
+    int pushedRowColors = 2;
+    if (selected) {
+      ImVec4 selectionFill = ImGui::ColorConvertU32ToFloat4(EditorTheme::Active().accentDefault);
+      selectionFill.w = EditorTheme::Active().selectionFillAlpha;
+      ImGui::PushStyleColor(ImGuiCol_Header, selectionFill);
+      ++pushedRowColors;
+    }
     const bool isRenamingThisRow =
         renamingStableId_.has_value() && *renamingStableId_ == row.stableId;
     if (isRenamingThisRow) {
@@ -637,12 +686,13 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
         ImGui::EndDragDropTarget();
       }
     }
-    ImGui::PopStyleColor(2);
+    ImGui::PopStyleColor(pushedRowColors);
     // Subtle partial-selection affordance: a thin accent bar at the row's left
     // edge marks a group that contains the selection, without the loud
-    // full-row highlight a real selection gets.
+    // full-row highlight a real selection gets. The bar uses the real accent
+    // (design doc 0054 selection token), not the neutral header surface.
     if (partialOnly) {
-      const ImU32 accent = ImGui::GetColorU32(ImGuiCol_Header, 0.9f);
+      const ImU32 accent = WithAlpha(EditorTheme::Active().accentDefault, 230);
       const ImVec2 barMin(ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMin().x, slotMin.y);
       const ImVec2 barMax(barMin.x + 2.0f, slotMin.y + kPreviewHeight);
       drawList->AddRectFilled(barMin, barMax, accent, 1.0f);
