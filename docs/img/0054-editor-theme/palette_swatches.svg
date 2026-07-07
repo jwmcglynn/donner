@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="720" viewBox="0 0 920 720">
+  <defs>
+    <style>
+      .h  { font-family: Roboto, Helvetica, Arial, sans-serif; font-size: 22px; fill: #E6EAF0; }
+      .sec{ font-family: Roboto, Helvetica, Arial, sans-serif; font-size: 14px; fill: #9AA5B4; letter-spacing: 1px; }
+      .n  { font-family: Roboto, Helvetica, Arial, sans-serif; font-size: 12px; fill: #E6EAF0; }
+      .x  { font-family: 'Fira Code', monospace; font-size: 11px; fill: #9AA5B4; }
+      .cr { font-family: 'Fira Code', monospace; font-size: 11px; fill: #6BA0F8; }
+      .ink{ font-family: Roboto, Helvetica, Arial, sans-serif; font-size: 12px; fill: #0E1116; }
+    </style>
+  </defs>
+
+  <rect width="920" height="720" fill="#0E1116"/>
+  <rect x="16" y="16" width="888" height="688" rx="8" fill="#12161D" stroke="#2D3542" stroke-width="1"/>
+
+  <text x="40" y="58" class="h">Donner Editor Design Language — Dark Slate</text>
+  <text x="40" y="80" class="x">Contrast ratios stated vs surface.base #161B22 unless noted. WCAG AA body = 4.5:1, AAA = 7:1.</text>
+
+  <!-- SURFACES -->
+  <text x="40" y="118" class="sec">SURFACES</text>
+  <!-- 7 swatches -->
+  <g>
+    <rect x="40"  y="130" width="112" height="58" rx="5" fill="#0E1116" stroke="#2D3542"/>
+    <text x="40"  y="204" class="n">canvas</text><text x="40" y="220" class="x">#0E1116</text>
+    <rect x="164" y="130" width="112" height="58" rx="5" fill="#12161D" stroke="#2D3542"/>
+    <text x="164" y="204" class="n">sunken</text><text x="164" y="220" class="x">#12161D</text>
+    <rect x="288" y="130" width="112" height="58" rx="5" fill="#161B22" stroke="#2D3542"/>
+    <text x="288" y="204" class="n">base</text><text x="288" y="220" class="x">#161B22</text>
+    <rect x="412" y="130" width="112" height="58" rx="5" fill="#1E252E" stroke="#2D3542"/>
+    <text x="412" y="204" class="n">raised</text><text x="412" y="220" class="x">#1E252E</text>
+    <rect x="536" y="130" width="112" height="58" rx="5" fill="#232B36" stroke="#2D3542"/>
+    <text x="536" y="204" class="n">overlay</text><text x="536" y="220" class="x">#232B36</text>
+    <rect x="660" y="130" width="112" height="58" rx="5" fill="#2A333F" stroke="#2D3542"/>
+    <text x="660" y="204" class="n">hover</text><text x="660" y="220" class="x">#2A333F</text>
+    <rect x="784" y="130" width="112" height="58" rx="5" fill="#313C4A" stroke="#2D3542"/>
+    <text x="784" y="204" class="n">active</text><text x="784" y="220" class="x">#313C4A</text>
+  </g>
+
+  <!-- TEXT + BORDERS -->
+  <text x="40" y="262" class="sec">TEXT ON BASE</text>
+  <rect x="40" y="274" width="420" height="120" rx="6" fill="#161B22" stroke="#2D3542"/>
+  <text x="60" y="308" font-family="Roboto, Arial, sans-serif" font-size="16" fill="#E6EAF0">Primary body text</text>
+  <text x="300" y="308" class="cr">14.3:1</text>
+  <text x="60" y="336" font-family="Roboto, Arial, sans-serif" font-size="14" fill="#9AA5B4">Muted / secondary label</text>
+  <text x="300" y="336" class="cr">6.9:1</text>
+  <text x="60" y="364" font-family="Roboto, Arial, sans-serif" font-size="14" fill="#5C6675">Disabled text (non-content)</text>
+  <text x="300" y="364" class="cr">3.0:1</text>
+  <text x="60" y="386" class="x">#E6EAF0 primary   #9AA5B4 muted   #5C6675 disabled</text>
+
+  <text x="500" y="262" class="sec">BORDERS</text>
+  <rect x="500" y="274" width="180" height="56" rx="6" fill="#161B22" stroke="#2D3542" stroke-width="1"/>
+  <text x="516" y="306" class="n">subtle</text><text x="600" y="306" class="x">#2D3542</text>
+  <rect x="500" y="338" width="180" height="56" rx="6" fill="#161B22" stroke="#3A4453" stroke-width="1"/>
+  <text x="516" y="370" class="n">strong</text><text x="600" y="370" class="x">#3A4453</text>
+
+  <!-- ACCENT VARIANTS -->
+  <text x="40" y="440" class="sec">ACCENT VARIANTS — PICK ONE</text>
+  <!-- Variant A -->
+  <rect x="40" y="452" width="272" height="150" rx="6" fill="#161B22" stroke="#3A4453"/>
+  <text x="58" y="480" class="n">A · Azimuth Blue (default)</text>
+  <rect x="58" y="492" width="52" height="34" rx="4" fill="#3B79E0"/>
+  <rect x="116" y="492" width="52" height="34" rx="4" fill="#4C8DF6"/>
+  <rect x="174" y="492" width="52" height="34" rx="4" fill="#6BA0F8"/>
+  <text x="58" y="542" class="x">#4C8DF6</text><text x="150" y="542" class="cr">5.3:1 vs base</text>
+  <rect x="58" y="556" width="120" height="30" rx="4" fill="#4C8DF6"/>
+  <text x="74" y="576" class="ink">Primary action</text>
+  <text x="188" y="576" class="x">ink 5.8:1</text>
+  <!-- Variant B -->
+  <rect x="324" y="452" width="272" height="150" rx="6" fill="#161B22" stroke="#3A4453"/>
+  <text x="342" y="480" class="n">B · Signal Teal</text>
+  <rect x="342" y="492" width="52" height="34" rx="4" fill="#249E8C"/>
+  <rect x="400" y="492" width="52" height="34" rx="4" fill="#31C6B3"/>
+  <rect x="458" y="492" width="52" height="34" rx="4" fill="#54D9C8"/>
+  <text x="342" y="542" class="x">#31C6B3</text><text x="434" y="542" class="cr">8.1:1 vs base</text>
+  <rect x="342" y="556" width="120" height="30" rx="4" fill="#31C6B3"/>
+  <text x="358" y="576" class="ink">Primary action</text>
+  <text x="472" y="576" class="x">ink 8.9:1</text>
+  <!-- Variant C -->
+  <rect x="608" y="452" width="272" height="150" rx="6" fill="#161B22" stroke="#3A4453"/>
+  <text x="626" y="480" class="n">C · Ultra Violet</text>
+  <rect x="626" y="492" width="52" height="34" rx="4" fill="#7B5CE6"/>
+  <rect x="684" y="492" width="52" height="34" rx="4" fill="#9A7CF7"/>
+  <rect x="742" y="492" width="52" height="34" rx="4" fill="#B29AF9"/>
+  <text x="626" y="542" class="x">#9A7CF7</text><text x="718" y="542" class="cr">5.4:1 vs base</text>
+  <rect x="626" y="556" width="120" height="30" rx="4" fill="#9A7CF7"/>
+  <text x="642" y="576" class="ink">Primary action</text>
+  <text x="756" y="576" class="x">ink 5.9:1</text>
+
+  <!-- SEMANTIC STATES -->
+  <text x="40" y="642" class="sec">SEMANTIC STATES</text>
+  <!-- selection: wash + stroke -->
+  <rect x="40" y="654" width="150" height="46" rx="5" fill="#161B22" stroke="#4C8DF6" stroke-width="1.5"/>
+  <rect x="48" y="662" width="134" height="30" rx="3" fill="#4C8DF6" fill-opacity="0.20"/>
+  <text x="60" y="682" class="n">selection</text>
+  <!-- warning -->
+  <rect x="204" y="654" width="150" height="46" rx="5" fill="#E3B341"/>
+  <text x="220" y="682" class="ink">warning #E3B341</text>
+  <!-- destructive -->
+  <rect x="368" y="654" width="150" height="46" rx="5" fill="#F0616A"/>
+  <text x="384" y="682" class="ink">destructive #F0616A</text>
+  <!-- success (optional) -->
+  <rect x="532" y="654" width="150" height="46" rx="5" fill="#3FB984"/>
+  <text x="548" y="682" class="ink">success #3FB984</text>
+  <!-- info uses accent -->
+  <rect x="696" y="654" width="184" height="46" rx="5" fill="#161B22" stroke="#3A4453"/>
+  <text x="712" y="676" class="x">warn 8.9:1 · destr 5.5:1</text>
+  <text x="712" y="692" class="x">success 6.8:1 (vs base)</text>
+</svg>

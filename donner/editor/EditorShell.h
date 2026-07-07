@@ -350,21 +350,18 @@ private:
   /// canvas highlight, source-pane sync, and overlay all update together. No-op without a document.
   void selectAllCanvasElements();
   void renderSourcePane(float paneOriginY, float paneHeight, float paneWidth, ImFont* codeFont);
-  void renderRenderPane(const Vector2d& renderPaneOrigin, const Vector2d& renderPaneSize,
-                        ImGuiWindowFlags paneFlags);
+  void renderRenderPane(ImGuiWindowFlags paneFlags);
   [[nodiscard]] Box2d toolPaletteScreenRect(const ImVec2& paneOrigin,
                                             const ImVec2& contentRegion) const;
   void renderToolPalette(const ImVec2& paneOrigin, const ImVec2& contentRegion);
   void renderFillStrokeToolbarWidget();
-  void renderSidebars(float rightPaneX, float rightPaneWidth, float paneOriginY,
-                      const RightSidebarLayout& layout, ImGuiWindowFlags paneFlags);
+  void renderSidebars();
   void renderSourcePaneSplitter(float windowWidth, float paneOriginY, float paneHeight,
                                 float sourcePaneWidth);
-  void renderRightPaneSplitter(float windowWidth, float paneOriginY, float paneHeight);
-  void renderLayerPanelSplitter(float rightPaneX, float rightPaneWidth,
-                                const RightSidebarLayout& layout);
-  void renderDockedLayerPanelDragHandle();
-  void renderFloatingLayerPanel();
+  /// Submit the host window and DockSpace that own the canvas (central node) and
+  /// the right-column dockable panels, (re)building the default locked layout on
+  /// first frame, after a reset, or when the docked-panel set changes.
+  void renderDockSpaceHost(float hostX, float hostY, float hostWidth, float hostHeight);
   void renderLayerPanelContents();
   void maybeLogResourceDiagnostics(const FrameCostBreakdown& frameCost);
   void maybeLogFrameMissTelemetry(const FrameCostBreakdown& frameCost);
@@ -518,26 +515,28 @@ private:
 
   std::string lastWindowTitle_;
   bool viewportInitialized_ = false;
-  /// Width (in pixels) of the right-side column hosting the tree view,
-  /// inspector, and compositor layer panel. Mutated by the
-  /// drag-to-resize splitter rendered between the render pane and the
-  /// right column.
+  /// Previous frame's canvas (render pane) content-region size, used to detect
+  /// when the docked central node has settled before latching the initial
+  /// fit-to-actual-size.
+  Vector2d lastRenderPaneContentSize_ = Vector2d(-1.0, -1.0);
+  /// Requested width (in pixels) of the right-side panel column. Seeds the
+  /// initial DockSpace right-column split; after the layout is built the
+  /// DockSpace owns panel sizing.
   float rightPaneWidth_ = 420.0f;
-  /// Fraction of the lower right column assigned to the compositor tile
-  /// panel. Mutated by the horizontal splitter between Inspector and
-  /// Layers.
-  float layerPanelHeightFraction_ = 0.5f;
-  /// Whether the compositor tile panel is detached from the right column.
-  bool layerPanelDetached_ = false;
-  /// Set while the mouse drag that detached the panel is still in progress.
-  bool layerPanelDetachDragActive_ = false;
-  /// Force the floating Layers window to use \ref layerPanelFloatingPos_
-  /// and \ref layerPanelFloatingSize_ on its next frame.
-  bool layerPanelFloatingNeedsPlacement_ = false;
-  /// Last floating Layers window position in screen pixels.
-  ImVec2 layerPanelFloatingPos_ = ImVec2(0.0f, 0.0f);
-  /// Last floating Layers window size in screen pixels.
-  ImVec2 layerPanelFloatingSize_ = ImVec2(420.0f, 360.0f);
+  /// Whether the DockSpace panel layout is locked (default). While locked the
+  /// splitters, resizing, and tear-off are all disabled; an unlock toggle lives
+  /// in the View menu.
+  bool dockLayoutLocked_ = true;
+  /// Set for one frame by the View menu's "Reset Layout" item to rebuild the
+  /// default layout, discarding any persisted/rearranged state.
+  bool dockLayoutResetRequested_ = false;
+  /// Whether the DockSpace layout has been built (or adopted from the persisted
+  /// .ini) at least once this session.
+  bool dockLayoutBuilt_ = false;
+  /// Whether the currently built layout reserves a node for the Compositor Debug
+  /// panel. Tracks \ref showCompositorDebugPanel_ so toggling the panel rebuilds
+  /// the layout to add or reclaim its slot.
+  bool dockCompositorIncludedInLayout_ = false;
   std::vector<svg::SVGElement> lastHighlightedSelection_;
   std::optional<svg::SVGElement> lastTreeSelection_;
   std::optional<ImVec2> lastPostedScreenPoint_;

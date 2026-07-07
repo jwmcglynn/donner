@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "donner/editor/DisclosureChevron.h"
+#include "donner/editor/EditorTheme.h"
 #include "donner/editor/EmbeddedSvgIcon.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/svg/ElementType.h"
@@ -598,10 +599,23 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
     const bool partialOnly = row.isPartiallySelected && !row.isSelected;
     const bool selected = row.isSelected;
     // Subtle hover/active tint for the row: the stock ImGui header-hover fill is
-    // too bright for a dense layer list, so scale its alpha well down.
+    // too bright for a dense layer list, so scale its alpha well down. These
+    // derive from the EditorTheme surface ramp (design doc 0054) via the active
+    // ImGui style, preserving the W10 subtle-hover subtlety.
     ImGui::PushStyleColor(ImGuiCol_HeaderHovered,
                           ImGui::GetColorU32(ImGuiCol_HeaderHovered, 0.28f));
     ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImGui::GetColorU32(ImGuiCol_HeaderActive, 0.45f));
+    // A truly selected row reads as accent-at-22%-fill rather than the neutral
+    // surface (design doc 0054 decision 6: selection is a tinted fill, never a
+    // solid accent). Only the selected fill is re-tinted; unselected rows keep
+    // the neutral ramp, so the accent stays reserved for real selection.
+    int pushedRowColors = 2;
+    if (selected) {
+      ImVec4 selectionFill = ImGui::ColorConvertU32ToFloat4(EditorTheme::Active().accentDefault);
+      selectionFill.w = EditorTheme::Active().selectionFillAlpha;
+      ImGui::PushStyleColor(ImGuiCol_Header, selectionFill);
+      ++pushedRowColors;
+    }
     const bool isRenamingThisRow =
         renamingStableId_.has_value() && *renamingStableId_ == row.stableId;
     if (isRenamingThisRow) {
@@ -672,12 +686,13 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
         ImGui::EndDragDropTarget();
       }
     }
-    ImGui::PopStyleColor(2);
+    ImGui::PopStyleColor(pushedRowColors);
     // Subtle partial-selection affordance: a thin accent bar at the row's left
     // edge marks a group that contains the selection, without the loud
-    // full-row highlight a real selection gets.
+    // full-row highlight a real selection gets. The bar uses the real accent
+    // (design doc 0054 selection token), not the neutral header surface.
     if (partialOnly) {
-      const ImU32 accent = ImGui::GetColorU32(ImGuiCol_Header, 0.9f);
+      const ImU32 accent = WithAlpha(EditorTheme::Active().accentDefault, 230);
       const ImVec2 barMin(ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMin().x, slotMin.y);
       const ImVec2 barMax(barMin.x + 2.0f, slotMin.y + kPreviewHeight);
       drawList->AddRectFilled(barMin, barMax, accent, 1.0f);

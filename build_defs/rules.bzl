@@ -427,7 +427,10 @@ _VARIANT_SPECS = {
         "text_full": "false",
     },
     "text_full": {
-        "backend": "tiny_skia",
+        # The tiny_skia backend pairs only with the tiny, size-optimized
+        # variant. The full text stack (FreeType+HarfBuzz+WOFF2) exercises the
+        # geode backend instead.
+        "backend": "geode",
         "text": "true",
         "text_full": "true",
     },

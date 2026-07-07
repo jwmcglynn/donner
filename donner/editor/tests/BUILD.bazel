@@ -69,6 +69,27 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "editor_theme_tests",
+    srcs = ["EditorTheme_tests.cc"],
+    deps = [
+        "//donner/editor:editor_theme",
+        "@com_google_gtest//:gtest_main",
+        "@imgui",
+    ],
+)
+
+donner_cc_test(
+    name = "editor_dock_layout_tests",
+    srcs = ["EditorDockLayout_tests.cc"],
+    deps = [
+        "//donner/editor:editor_dock_layout",
+        "//donner/editor:imgui_headers",
+        "@com_google_gtest//:gtest_main",
+        "@imgui",
+    ],
+)
+
+donner_cc_test(
     name = "file_dialog_state_tests",
     srcs = ["FileDialogState_tests.cc"],
     deps = [
@@ -830,6 +851,7 @@ donner_cc_test(
         "//donner/editor:editor_app",
         "//donner/editor:text_format_bar_presenter",
         "//donner/svg",
+        "//donner/svg/resources:font_catalog_types",
         "@com_google_gtest//:gtest_main",
         "@imgui",
     ],

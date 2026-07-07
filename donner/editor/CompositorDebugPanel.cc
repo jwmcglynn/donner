@@ -14,6 +14,7 @@
 #include <unordered_set>
 #include <utility>
 
+#include "donner/editor/EditorTheme.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/LayerInspectorDiagnostics.h"
 #ifdef DONNER_EDITOR_WGPU
@@ -424,10 +425,11 @@ void CompositorDebugPanel::render(
   const bool commitStalled = canvasFreshness == CanvasFreshness::CommitStalled;
   const bool rasterizeBehind = canvasFreshness == CanvasFreshness::CompositorBehind;
   ImGui::TextColored(
-      commitStalled ? ImVec4(1.0f, 0.4f, 0.4f, 1.0f) : ImGui::GetStyle().Colors[ImGuiCol_Text],
+      commitStalled ? ImGui::ColorConvertU32ToFloat4(EditorTheme::Active().destructive)
+                    : ImGui::GetStyle().Colors[ImGuiCol_Text],
       "  viewport: zoom=%.3f  dpr=%.3f  → desired %d×%d", viewportZoom, viewportDpr,
       viewportDesiredCanvas.x, viewportDesiredCanvas.y);
-  ImGui::TextColored(commitStalled     ? ImVec4(1.0f, 0.4f, 0.4f, 1.0f)
+  ImGui::TextColored(commitStalled ? ImGui::ColorConvertU32ToFloat4(EditorTheme::Active().destructive)
                      : rasterizeBehind ? ImVec4(1.0f, 0.7f, 0.4f, 1.0f)
                                        : ImGui::GetStyle().Colors[ImGuiCol_Text],
                      "  document canvas: %d×%d%s", documentCanvas.x, documentCanvas.y,

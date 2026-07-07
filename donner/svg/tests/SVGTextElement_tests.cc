@@ -291,20 +291,30 @@ TEST(SVGTextElementPublicApiTests, TextGeometryApisReturnComputedValues) {
 
   const std::vector<Path> paths = textElement.convertToPath();
   EXPECT_FALSE(paths.empty());
+  // NOTE: branches on the compile-time DONNER_TEXT_FULL flag, not
+  // ActiveRendererSupportsFeature(TextFull). That runtime query answers a
+  // different question for the Geode backend: GeodeSupportsFeature always
+  // reports TextFull as unsupported so the resvg golden-image suite skips
+  // categories where Geode is not yet Multisample-tuned to match tiny-skia
+  // (see RendererTestBackendGeode.cc). This assertion is a plain (non
+  // golden-image) glyph-metrics check: what matters here is whether HarfBuzz
+  // + FreeType shaping was actually compiled in for this variant, which is
+  // exactly what DONNER_TEXT_FULL means, independent of which backend is
+  // active.
   const Box2d inkBounds = textElement.inkBoundingBox();
-  if (ActiveRendererSupportsFeature(RendererBackendFeature::TextFull)) {
-    // HarfBuzz v14 + FreeType produces slightly wider glyph advances.
-    EXPECT_THAT(inkBounds, BoxEq(Vector2Near(10.45, 11.20), Vector2Near(34.375, 20.125)));
-  } else {
-    EXPECT_THAT(inkBounds, BoxEq(Vector2Near(10.45, 11.204), Vector2Near(34.36, 20.12)));
-  }
+#ifdef DONNER_TEXT_FULL
+  // HarfBuzz v14 + FreeType produces slightly wider glyph advances.
+  EXPECT_THAT(inkBounds, BoxEq(Vector2Near(10.45, 11.20), Vector2Near(34.375, 20.125)));
+#else
+  EXPECT_THAT(inkBounds, BoxEq(Vector2Near(10.45, 11.204), Vector2Near(34.36, 20.12)));
+#endif
 
   const Box2d objectBounds = textElement.objectBoundingBox();
-  if (ActiveRendererSupportsFeature(RendererBackendFeature::TextFull)) {
-    EXPECT_THAT(objectBounds, BoxEq(Vector2Near(10.0, 8.6), Vector2Near(35.0, 22.7)));
-  } else {
-    EXPECT_THAT(objectBounds, BoxEq(Vector2Near(10.0, 8.6), Vector2Near(34.984, 22.7)));
-  }
+#ifdef DONNER_TEXT_FULL
+  EXPECT_THAT(objectBounds, BoxEq(Vector2Near(10.0, 8.6), Vector2Near(35.0, 22.7)));
+#else
+  EXPECT_THAT(objectBounds, BoxEq(Vector2Near(10.0, 8.6), Vector2Near(34.984, 22.7)));
+#endif
 }
 
 TEST(SVGTextElementPublicApiTests, AppendTextAndAdvanceTextChunkUpdateTextContent) {

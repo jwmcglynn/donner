@@ -38,6 +38,7 @@ extern "C" {
 #include <utility>
 #include <vector>
 
+#include "donner/editor/EditorTheme.h"
 #include "donner/editor/ImGuiBackendIncludes.h"
 #include "donner/editor/TracyWrapper.h"
 #ifdef DONNER_EDITOR_WGPU
@@ -715,7 +716,15 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   ImGui::CreateContext();
   ImGuiIO& io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-  io.IniFilename = nullptr;  // no persistent layout file on disk
+  // Enable native ImGui docking (the vendored imgui is the docking branch). The
+  // editor's panel layout is a locked DockSpace. Multi-viewport (OS-window
+  // tear-off) intentionally stays OFF - we never set ImGuiConfigFlags_ViewportsEnable.
+  io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+  // Persist the dock layout to a scoped .ini path when one was provided (the
+  // desktop app), otherwise keep ImGui settings in-memory only so tests and
+  // replay stay hermetic. `options_` outlives the context, so the c_str()
+  // pointer stays valid for ImGui's lifetime.
+  io.IniFilename = options_.imguiIniPath.empty() ? nullptr : options_.imguiIniPath.c_str();
 
   int logicalWindowWidth = 0;
   int logicalWindowHeight = 0;
@@ -741,7 +750,11 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
                                       static_cast<float>(uiScaleConfig_.displayScale));
   io.FontGlobalScale = uiScaleConfig_.fontGlobalScale();
 
-  ImGui::StyleColorsDark();
+  // Donner editor design language (design doc 0054): apply the Dark Slate token
+  // theme with the operator-approved Signal Teal accent (variant B) in place of
+  // ImGui's stock dark ramp. This also publishes the active theme so raw
+  // ImDrawList widgets (overlay, chips, toolbar selection) read the same tokens.
+  EditorTheme::Dark(Accent::SignalTeal).applyToImGuiStyle(ImGui::GetStyle());
 #ifdef DONNER_EDITOR_WGPU
   if (!ImGui_ImplGlfw_InitForOther(window_, /*install_callbacks=*/true)) {
     std::fprintf(stderr, "EditorWindow: ImGui_ImplGlfw_InitForOther failed\n");
