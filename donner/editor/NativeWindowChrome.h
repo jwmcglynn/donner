@@ -5,7 +5,8 @@
 ///
 /// Two concerns live here:
 ///   1. `ComposeWindowTitle` - pure derivation of the title-bar text from
-///      the open file and unsaved-changes state. Testable headlessly.
+///      the open file, unsaved-changes state, and native chrome availability.
+///      Testable headlessly.
 ///   2. The platform hooks - on macOS these drive the native title bar's
 ///      edited "dot" (`setDocumentEdited:`) and proxy icon
 ///      (`setRepresentedURL:`), so the editor behaves like a real Mac app.
@@ -29,15 +30,16 @@ struct WindowChromeState {
 /// Compose the window title-bar text.
 ///
 /// @param state Current document/edited state.
-/// @param showEditedDotInText When true, an unsaved document is prefixed
-///   with a bullet ("● ") in the text itself. Callers pass false on
-///   platforms that show the edited state natively (macOS), where the dot
-///   is rendered by the OS via `setDocumentEdited:` instead.
+/// @param showDocumentStateInText When true, the title text includes the open
+///   filename and, for unsaved documents, a bullet ("● "). Callers pass false
+///   on platforms that show document state natively (macOS), where the title is
+///   exactly "Donner SVG Editor" and the OS owns the edited dot/proxy icon.
 /// @return Title such as "diagram.svg - Donner SVG Editor" or, for an
-///   unsaved untitled buffer with `showEditedDotInText`, "● untitled -
-///   Donner SVG Editor".
+///   unsaved untitled buffer with `showDocumentStateInText`, "● untitled -
+///   Donner SVG Editor". On native chrome platforms, returns exactly
+///   "Donner SVG Editor".
 [[nodiscard]] std::string ComposeWindowTitle(const WindowChromeState& state,
-                                             bool showEditedDotInText);
+                                             bool showDocumentStateInText);
 
 /// Whether this platform/build drives native title-bar chrome (the edited
 /// dot and proxy icon). True only on macOS.

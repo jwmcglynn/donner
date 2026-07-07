@@ -1,7 +1,7 @@
 #include "donner/editor/NativeWindowChrome.h"
 
 // Non-macOS fallback: no native title-bar chrome. The edited state is shown
-// in the title text instead (see ComposeWindowTitle's showEditedDotInText).
+// in the title text instead (see ComposeWindowTitle's showDocumentStateInText).
 
 namespace donner::editor {
 
