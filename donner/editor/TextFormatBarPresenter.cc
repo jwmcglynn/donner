@@ -101,9 +101,8 @@ bool ApplyFormatBarActionsToSelection(const FormatBarActions& actions, const For
     queued = app.setAttributeOnSelection("font-family", actions.fontFamily) || queued;
   }
   if (actions.setFontSize) {
-    queued = app.setAttributeOnSelection(
-                 "font-size", donner::detail::FormatNumberForSVG(
-                                  static_cast<double>(actions.fontSize))) ||
+    queued = app.setAttributeOnSelection("font-size", donner::detail::FormatNumberForSVG(
+                                                          static_cast<double>(actions.fontSize))) ||
              queued;
   }
 
@@ -112,17 +111,16 @@ bool ApplyFormatBarActionsToSelection(const FormatBarActions& actions, const For
     // writes the explicit reset value so this stays on the attribute-write path
     // (the editing-session path in TextTool removes the attribute instead).
     if (actions.toggleBold) {
-      queued =
-          app.setAttributeOnSelection("font-weight", state.bold ? "normal" : "bold") || queued;
+      queued = app.setAttributeOnSelection("font-weight", state.bold ? "normal" : "bold") || queued;
     }
     if (actions.toggleItalic) {
       queued =
           app.setAttributeOnSelection("font-style", state.italic ? "normal" : "italic") || queued;
     }
     if (actions.toggleUnderline) {
-      queued = app.setAttributeOnSelection("text-decoration",
-                                           state.underline ? "none" : "underline") ||
-               queued;
+      queued =
+          app.setAttributeOnSelection("text-decoration", state.underline ? "none" : "underline") ||
+          queued;
     }
   }
 
@@ -238,8 +236,8 @@ FormatBarActions TextFormatBarPresenter::render(const FormatBarState& state, flo
     ImGui::SameLine(0.0f, 0.0f);
     if (ImGui::BeginCombo("##format_bar_font_size_menu", "", ImGuiComboFlags_NoPreview)) {
       for (const int preset : kFormatBarFontSizePresets) {
-        const bool selected = state.hasFontSize &&
-                              static_cast<int>(state.fontSize + 0.5f) == preset;
+        const bool selected =
+            state.hasFontSize && static_cast<int>(state.fontSize + 0.5f) == preset;
         char label[8];
         std::snprintf(label, sizeof(label), "%d", preset);
         if (ImGui::Selectable(label, selected)) {

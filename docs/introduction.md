@@ -2,7 +2,14 @@
 
 \tableofcontents
 
-Donner is an embeddable browser-grade SVG2 engine in C++20, providing full access to the SVG DOM with complete rendering support including text and filters.
+Donner SVG Editor & Engine is an SVG-native editor and the C++20 engine underneath it,
+designed to be embedded. The engine renders
+SVG2 with CSS3 styling through either Geode (a GPU renderer built on WebGPU) or a compact
+CPU backend, tracks conformance against the resvg test suite, and treats all input as
+untrusted: fuzzing runs continuously across the parser, style, and text subsystems.
+
+These pages document the engine API. Start with the core document model below; the editor
+is documented separately in the repository.
 
 \htmlonly <style>img[src="donner_splash.svg"]{max-width:800px;}</style> \endhtmlonly
 ![Donner splash image](donner_splash.svg)
@@ -17,7 +24,7 @@ Donner supports:
 - A performance-oriented document tree optimized for dynamic inspection, mutation, and rendering.
 - A SVG DOM-style API to traverse, inspect, and modify documents in memory.
 - A two-phase renderer, which builds and caches a rendering tree for efficient frame-based rendering.
-- Two renderer backends: **tiny-skia** (default, a lightweight software renderer) and **Skia** (Chromium's renderer).
+- Two renderer backends: **tiny_skia** (a compact CPU software renderer) and **Geode** (a GPU renderer built on WebGPU).
 
 Donner focuses on security and performance, which is validated with code coverage and fuzz testing.
 

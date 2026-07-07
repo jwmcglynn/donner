@@ -29,13 +29,13 @@
 #include "donner/editor/DragCoalesce.h"
 #include "donner/editor/EditorDockLayout.h"
 #include "donner/editor/EditorShellInternal.h"
-#include "donner/editor/FillStrokeWidget.h"
-#include "donner/editor/ImGuiInternalIncludes.h"
 #include "donner/editor/EditorShellPresentation.h"
 #include "donner/editor/EditorTheme.h"
+#include "donner/editor/FillStrokeWidget.h"
 #include "donner/editor/FocusView.h"
 #include "donner/editor/FrameMissTelemetry.h"
 #include "donner/editor/ImGuiClipboard.h"
+#include "donner/editor/ImGuiInternalIncludes.h"
 #include "donner/editor/KeyboardShortcutPolicy.h"
 #include "donner/editor/NativeWindowChrome.h"
 #include "donner/editor/SelectionTransformHandles.h"
@@ -614,7 +614,6 @@ std::optional<SelectionChromeSnapshot::TextBoxDragPreview> TextBoxDragPreviewFro
   };
 }
 
-
 EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     : window_(window),
       options_(std::move(options)),
@@ -1132,10 +1131,9 @@ void EditorShell::applyPendingDocumentSpaceReplayInputForTesting() {
   } else if (activeTool_ == ActiveTool::Text && textTool_.isEditing()) {
     if (const auto textChrome = textTool_.editingChrome(app_); textChrome.has_value()) {
       renderCoordinator_.setTextEditingChrome(
-          textTool_.caretBlinkVisible()
-              ? std::make_optional(SelectionChromeSnapshot::TextCaret{textChrome->caretTopDoc,
-                                                                      textChrome->caretBottomDoc})
-              : std::nullopt,
+          textTool_.caretBlinkVisible() ? std::make_optional(SelectionChromeSnapshot::TextCaret{
+                                              textChrome->caretTopDoc, textChrome->caretBottomDoc})
+                                        : std::nullopt,
           textChrome->frameCornersDoc);
     }
     renderCoordinator_.setTextBoxDragPreview(std::nullopt);
@@ -1477,8 +1475,7 @@ void EditorShell::serviceNativeDialogs() {
 }
 
 void EditorShell::updateWindowTitle() {
-  const WindowChromeState chromeState{.filePath = app_.currentFilePath(),
-                                      .edited = app_.isDirty()};
+  const WindowChromeState chromeState{.filePath = app_.currentFilePath(), .edited = app_.isDirty()};
 
   // On platforms with native title-bar chrome (macOS) the edited "dot" and
   // proxy icon are shown by the OS, so keep them out of the title text.
@@ -1965,8 +1962,8 @@ FormatBarState EditorShell::computeFormatBarState() {
     ReadTextFormatState(selection.front(), &state);
   }
 
-  // W3: the family picker now lists the real font catalog (embedded curated
-  // Google Fonts, then macOS system fonts), grouped Embedded-then-System as
+  // The family picker lists the real font catalog (embedded curated Google
+  // Fonts, then macOS system fonts), grouped Embedded-then-System as
   // `FontCatalog::families()` orders them. A menu entry previews in its own
   // face only where the editor already has that face loaded as an ImGui font:
   // the default UI face (Roboto) and the code face (Fira Code). Other families
@@ -1977,18 +1974,18 @@ FormatBarState EditorShell::computeFormatBarState() {
   ImFont* const regularFace =
       ImGui::GetIO().Fonts->Fonts.empty() ? nullptr : ImGui::GetIO().Fonts->Fonts[0];
   state.boldToggleFont = uiFontBold_;
-  state.families = BuildFormatBarFamilies(
-      fontCatalog().families(), [&](const svg::FontFamilyInfo& info) -> ImFont* {
-        if (StringUtils::Equals<StringComparison::IgnoreCase>(info.family,
-                                                              std::string_view("Roboto"))) {
-          return regularFace;
-        }
-        if (StringUtils::Equals<StringComparison::IgnoreCase>(info.family,
-                                                              std::string_view("Fira Code"))) {
-          return codeFont_;
-        }
-        return nullptr;
-      });
+  state.families = BuildFormatBarFamilies(fontCatalog().families(),
+                                          [&](const svg::FontFamilyInfo& info) -> ImFont* {
+                                            if (StringUtils::Equals<StringComparison::IgnoreCase>(
+                                                    info.family, std::string_view("Roboto"))) {
+                                              return regularFace;
+                                            }
+                                            if (StringUtils::Equals<StringComparison::IgnoreCase>(
+                                                    info.family, std::string_view("Fira Code"))) {
+                                              return codeFont_;
+                                            }
+                                            return nullptr;
+                                          });
   return state;
 }
 
@@ -2201,8 +2198,8 @@ void EditorShell::renderFillStrokeToolbarWidget() {
   renderChip("S", paintState.stroke, layout.strokeChipMin, layout.strokeChipMax);
   renderChip("F", paintState.fill, layout.fillChipMin, layout.fillChipMax);
 
-  const FillStrokeWidgetRegion region = HitTestFillStrokeWidget(
-      layout, mouse, paintState.fill.isCustom, paintState.stroke.isCustom);
+  const FillStrokeWidgetRegion region =
+      HitTestFillStrokeWidget(layout, mouse, paintState.fill.isCustom, paintState.stroke.isCustom);
 
   // Swap fill and stroke on the authoring defaults and, when a selection is
   // present, on the selected element. Authoring defaults swap verbatim; the
@@ -2273,7 +2270,8 @@ void EditorShell::renderFillStrokeToolbarWidget() {
           ImGui::SetTooltip("%s paint server %s. Click to show source.", name,
                             slot.reference->href.c_str());
         } else if (slot.reference.has_value() && slot.reference->external) {
-          ImGui::SetTooltip("%s uses external paint server %s.", name, slot.reference->href.c_str());
+          ImGui::SetTooltip("%s uses external paint server %s.", name,
+                            slot.reference->href.c_str());
         } else if (slot.reference.has_value()) {
           ImGui::SetTooltip("%s uses unresolved paint server %s.", name,
                             slot.reference->href.c_str());
@@ -2518,12 +2516,11 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
           return false;
         }
         const SelectTool::ActiveGestureKind kind = activeGesturePreview->kind;
-        const bool applied =
-            kind == SelectTool::ActiveGestureKind::Rotate
-                ? rotateCursorSet_.setRotateCursor(activeGesturePreview->corner)
-            : kind == SelectTool::ActiveGestureKind::Resize
-                ? rotateCursorSet_.setScaleCursor(activeGesturePreview->corner)
-                : false;
+        const bool applied = kind == SelectTool::ActiveGestureKind::Rotate
+                                 ? rotateCursorSet_.setRotateCursor(activeGesturePreview->corner)
+                             : kind == SelectTool::ActiveGestureKind::Resize
+                                 ? rotateCursorSet_.setScaleCursor(activeGesturePreview->corner)
+                                 : false;
         if (kind != SelectTool::ActiveGestureKind::Rotate &&
             kind != SelectTool::ActiveGestureKind::Resize) {
           return false;
@@ -2663,10 +2660,10 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
       textFrameIntent.corner = textTool_.frameCorner();
     } else if (textTool_.isEditing() && !ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
                !renderCoordinator_.asyncRenderer().isBusy()) {
-      textFrameIntent = textTool_.frameHandleIntentAt(
-          screenToDocument(ImGui::GetMousePos()),
-          interactionController_.viewport().pixelsPerDocUnit(),
-          /*includeRotate=*/!ImGui::GetIO().KeyShift);
+      textFrameIntent =
+          textTool_.frameHandleIntentAt(screenToDocument(ImGui::GetMousePos()),
+                                        interactionController_.viewport().pixelsPerDocUnit(),
+                                        /*includeRotate=*/!ImGui::GetIO().KeyShift);
     }
     if (textFrameIntent.kind == SelectionTransformHandleKind::Rotate &&
         rotateCursorSet_.setRotateCursor(textFrameIntent.corner)) {
@@ -3000,10 +2997,9 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
       // wake schedule + overlay-chrome recapture only - never a content
       // render.
       renderCoordinator_.setTextEditingChrome(
-          textTool_.caretBlinkVisible()
-              ? std::make_optional(SelectionChromeSnapshot::TextCaret{textChrome->caretTopDoc,
-                                                                      textChrome->caretBottomDoc})
-              : std::nullopt,
+          textTool_.caretBlinkVisible() ? std::make_optional(SelectionChromeSnapshot::TextCaret{
+                                              textChrome->caretTopDoc, textChrome->caretBottomDoc})
+                                        : std::nullopt,
           textChrome->frameCornersDoc);
     }
     renderCoordinator_.setTextBoxDragPreview(std::nullopt);
@@ -3048,8 +3044,7 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
     // version gate drops the overlay snapshot for the whole typing burst,
     // blinking the caret/selection chrome off until the worker catches up.
     const bool allowLiveGeometryOverlay =
-        penToolActive ||
-        (textToolActive && (textTool_.isEditing() || textTool_.isDraggingBox()));
+        penToolActive || (textToolActive && (textTool_.isEditing() || textTool_.isDraggingBox()));
     updatePenLivePreviewTarget();
     renderCoordinator_.rasterizeOverlayForPresentation(
         app_, selectTool_, interactionController_.viewport(), textures_, activeDragPreview,
@@ -3196,13 +3191,11 @@ void EditorShell::renderTextToolHint() {
 
   // Bottom-center of the render pane, above the canvas scrollbar rail.
   const ViewportState& viewport = interactionController_.viewport();
-  const ImVec2 textSize =
-      ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, 0.0f, label.data(),
-                                      label.data() + label.size());
+  const ImVec2 textSize = ImGui::GetFont()->CalcTextSizeA(
+      ImGui::GetFontSize(), FLT_MAX, 0.0f, label.data(), label.data() + label.size());
   const float width = textSize.x + 2.0f * kReferenceChipPaddingX;
   const float height = textSize.y + 2.0f * kReferenceChipPaddingY;
-  const float paneCenterX =
-      static_cast<float>(viewport.paneOrigin.x + viewport.paneSize.x * 0.5);
+  const float paneCenterX = static_cast<float>(viewport.paneOrigin.x + viewport.paneSize.x * 0.5);
   const float x = paneCenterX - width * 0.5f;
   const float y = static_cast<float>(viewport.paneOrigin.y + viewport.paneSize.y) - height -
                   static_cast<float>(kCanvasScrollbarRailPx) - 10.0f;
@@ -4585,8 +4578,7 @@ void EditorShell::runFrame() {
   // visibility/height here so the panes below start beneath it; the bar itself
   // is rendered next to the menu bar further down.
   const FormatBarState formatBarState = computeFormatBarState();
-  const float formatBarHeight =
-      formatBarState.visible ? TextFormatBarPresenter::BarHeight() : 0.0f;
+  const float formatBarHeight = formatBarState.visible ? TextFormatBarPresenter::BarHeight() : 0.0f;
   const float paneOriginY = menuBarHeight + formatBarHeight;
   const float paneHeight = std::max(0.0f, static_cast<float>(windowSize.y) - paneOriginY);
   const EditorMainPaneLayout mainPaneLayout = ComputeEditorMainPaneLayout({
@@ -4649,9 +4641,9 @@ void EditorShell::runFrame() {
   const MenuBarActions menuActions = menuBarPresenter_.render(menuState, uiFontBold_);
   applyMenuActions(menuActions);
 
-  // W2: render the contextual text-formatting bar beneath the menu bar and
-  // route its actions to the existing styling commands. Space for it was
-  // already reserved above via `formatBarHeight`.
+  // Render the contextual text-formatting bar beneath the menu bar and route
+  // its actions to the existing styling commands. Space for it was already
+  // reserved above via `formatBarHeight`.
   if (formatBarState.visible) {
     const FormatBarActions formatBarActions = textFormatBarPresenter_.render(
         formatBarState, menuBarHeight, static_cast<float>(windowSize.x));

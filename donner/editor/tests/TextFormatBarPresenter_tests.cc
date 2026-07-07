@@ -223,7 +223,7 @@ TEST(TextFormatBarPresenterActionsTest, NoActionsQueueNoMutation) {
 }
 
 // ---------------------------------------------------------------------------
-// Family list construction (W3 catalog wiring)
+// Family list construction (catalog wiring)
 // ---------------------------------------------------------------------------
 
 TEST(TextFormatBarPresenterActionsTest, BuildFormatBarFamiliesGroupsEmbeddedThenSystem) {
