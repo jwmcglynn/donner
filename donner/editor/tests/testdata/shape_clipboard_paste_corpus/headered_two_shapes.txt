@@ -1,0 +1,7 @@
+# donner-shape-clipboard v1
+bounds: 10 10 60 60
+ids: box,circle
+group-selection: 0
+
+<rect id="box" x="10" y="10" width="40" height="40" fill="red"/>
+<circle id="circle" cx="80" cy="80" r="20" fill="blue"/>

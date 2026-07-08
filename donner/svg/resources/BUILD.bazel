@@ -283,3 +283,15 @@ donner_cc_fuzzer(
         ":url_loader",
     ],
 )
+
+donner_cc_fuzzer(
+    name = "image_loader_fuzzer",
+    srcs = [
+        "tests/ImageLoader_fuzzer.cc",
+    ],
+    corpus = "tests/image_loader_corpus",
+    deps = [
+        ":image_loader",
+        ":resource_loader_interface",
+    ],
+)

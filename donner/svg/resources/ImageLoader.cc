@@ -34,6 +34,31 @@ bool LooksLikeSvgContent(const std::vector<uint8_t>& data) {
   return false;
 }
 
+/// Returns true if \p data begins with the magic bytes of a raster format we
+/// intend to decode (PNG, JPEG, or GIF). stb_image also auto-detects magic-less
+/// formats such as TGA whose decoders iterate the full declared width*height
+/// regardless of how many input bytes are present, so a tiny input declaring
+/// huge dimensions triggers a large decode loop (CPU-exhaustion DoS, hit
+/// synchronously during document render). We only ever intend to accept the
+/// three formats in the supported MIME list, so gate stb on their magic bytes.
+bool HasSupportedRasterMagic(const std::vector<uint8_t>& data) {
+  // PNG: 89 50 4E 47 0D 0A 1A 0A
+  if (data.size() >= 8 && data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E &&
+      data[3] == 0x47 && data[4] == 0x0D && data[5] == 0x0A && data[6] == 0x1A && data[7] == 0x0A) {
+    return true;
+  }
+  // JPEG: FF D8 FF
+  if (data.size() >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF) {
+    return true;
+  }
+  // GIF: "GIF87a" or "GIF89a"
+  if (data.size() >= 6 && data[0] == 'G' && data[1] == 'I' && data[2] == 'F' && data[3] == '8' &&
+      (data[4] == '7' || data[4] == '9') && data[5] == 'a') {
+    return true;
+  }
+  return false;
+}
+
 std::optional<int> StbiInputLength(size_t byteCount) {
   if (byteCount > static_cast<size_t>(std::numeric_limits<int>::max())) {
     return std::nullopt;
@@ -64,6 +89,15 @@ std::variant<ImageResource, UrlLoaderError> LoadImage(std::string_view mimeType,
   if (mimeType != "" && mimeType != "image/png" && mimeType != "image/jpeg" &&
       mimeType != "image/jpg" && mimeType != "image/gif") {
     return UrlLoaderError::UnsupportedFormat;
+  }
+
+  // Only hand stb inputs that begin with a supported format's magic bytes. This
+  // rejects magic-less formats (e.g. TGA) whose decoders would otherwise run a
+  // full width*height loop on a tiny declared-huge input (decode-bomb DoS). This
+  // is a raster-path decode failure, not an unsupported MIME type, so it returns
+  // DataCorrupt to match the loader's error contract.
+  if (!HasSupportedRasterMagic(fileContents)) {
+    return UrlLoaderError::DataCorrupt;
   }
 
   const std::optional<int> inputLength = StbiInputLength(fileContents.size());

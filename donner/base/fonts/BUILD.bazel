@@ -80,3 +80,17 @@ donner_cc_fuzzer(
         ":fonts",
     ],
 )
+
+# woff2_parser_fuzzer inherits its text_full_enabled gating transitively from the
+# :woff2_parser dependency (see the target_compatible_with select() above): Bazel
+# propagates incompatibility from a dependency up to targets that depend on it, so
+# no separate select() is needed (and none can be added here without colliding with
+# donner_cc_fuzzer's own target_compatible_with kwarg).
+donner_cc_fuzzer(
+    name = "woff2_parser_fuzzer",
+    srcs = ["tests/Woff2Parser_fuzzer.cc"],
+    corpus = "tests/woff2_corpus",
+    deps = [
+        ":woff2_parser",
+    ],
+)

@@ -1,5 +1,6 @@
 load(
     "//build_defs:rules.bzl",
+    "donner_cc_fuzzer",
     "donner_cc_library",
     "donner_cc_test",
     "donner_multi_transitioned_test",
@@ -593,6 +594,18 @@ donner_variant_cc_test(
     # (CI baseline, 2026-07-01) and sat on the test-step critical path. 8 shards
     # per variant turn that into parallel ~35 s RE actions.
     shard_count = 8,
+)
+
+donner_cc_fuzzer(
+    name = "svg_document_render_fuzzer",
+    srcs = [
+        "SVGDocumentRender_fuzzer.cc",
+    ],
+    corpus = "svg_document_render_corpus",
+    deps = [
+        "//donner/svg",
+        "//donner/svg/renderer:renderer_utils",
+    ],
 )
 
 donner_cc_test(

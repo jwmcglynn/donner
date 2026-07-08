@@ -136,3 +136,25 @@ donner_cc_fuzzer(
         ":parser",
     ],
 )
+
+donner_cc_fuzzer(
+    name = "rule_parser_fuzzer",
+    srcs = [
+        "tests/RuleParser_fuzzer.cc",
+    ],
+    corpus = "tests/rule_parser_corpus",
+    deps = [
+        ":parser",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "value_parser_fuzzer",
+    srcs = [
+        "tests/ValueParser_fuzzer.cc",
+    ],
+    corpus = "tests/value_parser_corpus",
+    deps = [
+        ":parser",
+    ],
+)

@@ -65,6 +65,21 @@ TEST(ImageLoader, CorruptRasterDataUrlReturnsDataCorrupt) {
   ExpectImageLoaderError(result, UrlLoaderError::DataCorrupt);
 }
 
+TEST(ImageLoader, RejectsMagiclessTgaDecodeBomb) {
+  // Regression: an 18-byte TGA header declaring 8000x8000. TGA has no magic
+  // bytes, so stb auto-detects it and its decoder iterates the full declared
+  // pixel grid regardless of input size (CPU-exhaustion decode-bomb). Only
+  // PNG/JPEG/GIF are supported, so this must be rejected before any decode.
+  StaticResourceLoader resourceLoader(std::vector<uint8_t>{0x00, 0x00, 0x03, 0x00, 0x00, 0x00,
+                                                           0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                                                           0x40, 0x1F, 0x40, 0x1F, 0x08, 0x00});
+  ImageLoader imageLoader(resourceLoader);
+
+  ImageLoader::Result result = imageLoader.fromUri("bomb");
+
+  ExpectImageLoaderError(result, UrlLoaderError::DataCorrupt);
+}
+
 TEST(ImageLoader, OversizedPngHeaderReturnsDataCorruptBeforeDecode) {
   StaticResourceLoader resourceLoader(PngHeaderWithDimensions(20000, 1));
   ImageLoader imageLoader(resourceLoader);
