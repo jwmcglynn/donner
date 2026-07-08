@@ -56,3 +56,6 @@ imgui.ini
 !third_party/tiny-skia-cpp/CMakeLists.txt
 third_party/public-sans/embed_resources/
 examples/svg_viewer_screenshot.png
+
+# Local git worktrees used for parallel agent work (never tracked)
+.worktrees/
