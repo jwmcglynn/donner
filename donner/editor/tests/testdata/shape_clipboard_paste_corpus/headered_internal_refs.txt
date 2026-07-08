@@ -1,0 +1,5 @@
+# donner-shape-clipboard v1
+ids: g1
+group-selection: 1
+
+<g id="g1"><rect x="0" y="0" width="10" height="10" fill="url(#grad)"/><use xlink:href="#box"/></g>
