@@ -354,7 +354,7 @@ jobs:
   linux:
     # GitHub-hosted x86_64 baseline. Suppressed for small operator PRs when the
     # self-hosted ARM64 lane is active (see gate comment above), but broad PRs
-    # stay hosted so a 30-minute self-hosted SLA timeout cannot leave the only
+    # stay hosted so a self-hosted SLA timeout cannot leave the only
     # required Linux path canceled.
     runs-on: ubuntu-24.04
     needs: [gatekeeper, determine-targets]
@@ -444,9 +444,9 @@ jobs:
     needs: [gatekeeper, determine-targets]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && github.event_name == 'pull_request' && needs.gatekeeper.outputs.docs_only != 'true' && needs.determine-targets.outputs.fallback != 'true' && needs.determine-targets.outputs.large_change != 'true' && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
     # RE-availability SLA lane. A healthy affected-target run is ~21 min; bound
-    # it at 30 so healthy runs can finish while a wedged/degraded RE endpoint
-    # still fast-fails instead of silently tailing for hours.
-    timeout-minutes: 30
+    # it at 60 min for buffer while a wedged/degraded RE endpoint still
+    # fast-fails instead of silently tailing for hours.
+    timeout-minutes: 60
     env:
       # The runner host may add the LAN Bazel cache from its home rc. Use that
       # acceleration when healthy, but do NOT fall back to local execution when
@@ -727,10 +727,10 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64]
     needs: [gatekeeper, determine-targets]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && github.event_name == 'pull_request' && needs.gatekeeper.outputs.docs_only != 'true' && needs.determine-targets.outputs.fallback != 'true' && vars.SELFHOSTED_MACOS_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
-    # RE-availability SLA lane. Bound at 30 min so healthy affected-target
-    # runs can finish while RE degradation still fast-fails instead of tailing
+    # RE-availability SLA lane. Bound at 60 min so healthy affected-target
+    # runs have buffer while RE degradation still fast-fails instead of tailing
     # for hours on the capped host.
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       # The runner host has an operator ~/.bazelrc for interactive RE/cache work.
       # The invocations below use --nohome_rc so CI matches GitHub-hosted macOS

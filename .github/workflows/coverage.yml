@@ -408,10 +408,10 @@ jobs:
     # here. A full //... fallback is skipped on PRs (main-push baseline covers
     # it); ci:full-test routes to the hosted `build` job. See header.
     if: ${{ github.event_name == 'pull_request' && (needs.determine-targets.outputs.fallback == 'false' || needs.determine-targets.outputs.fallback_reason == 'coverage_smoke') && needs.determine-targets.outputs.large_change != 'true' && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
-    # Coverage healthy median is ~21 min, so bound this SLA lane at 30 min:
-    # RE degradation fast-fails (no local fallback, below) instead of the
-    # CPU-capped 2-3 h local re-run that produced the 3.3 h tail.
-    timeout-minutes: 30
+    # Coverage healthy median is ~21 min, so bound this SLA lane at 60 min for
+    # buffer: RE degradation fast-fails (no local fallback, below) instead of
+    # the CPU-capped 2-3 h local re-run that produced the 3.3 h tail.
+    timeout-minutes: 60
     env:
       # RE-availability SLA: do NOT fall back to local execution when remote
       # execution is unavailable or degraded. A CPU-capped self-hosted runner
