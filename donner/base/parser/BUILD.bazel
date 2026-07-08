@@ -61,3 +61,36 @@ donner_cc_fuzzer(
         ":parser",
     ],
 )
+
+donner_cc_fuzzer(
+    name = "integer_parser_fuzzer",
+    srcs = [
+        "tests/IntegerParser_fuzzer.cc",
+    ],
+    corpus = "tests/integer_parser_corpus",
+    deps = [
+        ":parser",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "length_parser_fuzzer",
+    srcs = [
+        "tests/LengthParser_fuzzer.cc",
+    ],
+    corpus = "tests/length_parser_corpus",
+    deps = [
+        ":parser",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "data_url_parser_fuzzer",
+    srcs = [
+        "tests/DataUrlParser_fuzzer.cc",
+    ],
+    corpus = "tests/data_url_parser_corpus",
+    deps = [
+        ":parser",
+    ],
+)

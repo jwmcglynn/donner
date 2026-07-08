@@ -646,6 +646,42 @@ donner_cc_fuzzer(
     ],
 )
 
+# Round-trips untrusted SVG through the viewport export/serialization path
+# (parse -> ExportViewportAsSvg -> re-parse). ExportViewportAsSvg hand-writes
+# XML as strings (attribute carry-over, injected <defs><clipPath>, wrapping
+# <g>), so this is the editor's highest-value serializer-escaping target:
+# a crash or a re-parse failure indicates the exporter emitted invalid XML
+# from untrusted attribute/text content.
+donner_cc_fuzzer(
+    name = "viewport_svg_export_roundtrip_fuzzer",
+    srcs = ["ViewportSvgExportRoundTrip_fuzzer.cc"],
+    corpus = "testdata/viewport_svg_export_roundtrip_corpus",
+    deps = [
+        "//donner/editor:viewport_state",
+        "//donner/editor:viewport_svg_export",
+        "//donner/svg",
+        "//donner/svg/parser",
+    ],
+)
+
+# Deserializes untrusted clipboard text (ShapeClipboardPayload::parse) and runs
+# the string-spliced paste merge (preparePaste), which hand-builds a merged
+# full-document SVG from the untrusted fragment. Asserts the payload
+# serialization is idempotent and that any successful paste re-parses cleanly -
+# a re-parse failure would flag an injection/escaping bug in the paste splice.
+donner_cc_fuzzer(
+    name = "shape_clipboard_paste_fuzzer",
+    srcs = ["ShapeClipboardPaste_fuzzer.cc"],
+    corpus = "testdata/shape_clipboard_paste_corpus",
+    deps = [
+        "//donner/editor:editor_parse_options",
+        "//donner/editor:shape_clipboard_commands",
+        "//donner/editor:shape_clipboard_payload",
+        "//donner/svg",
+        "//donner/svg/parser",
+    ],
+)
+
 donner_perf_cc_test(
     name = "async_renderer_filter_group_perf_tests",
     srcs = [

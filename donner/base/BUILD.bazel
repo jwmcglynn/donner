@@ -225,3 +225,14 @@ donner_cc_fuzzer(
         ":base",
     ],
 )
+
+donner_cc_fuzzer(
+    name = "utf8_fuzzer",
+    srcs = [
+        "tests/Utf8_fuzzer.cc",
+    ],
+    corpus = "tests/utf8_corpus",
+    deps = [
+        ":base",
+    ],
+)
