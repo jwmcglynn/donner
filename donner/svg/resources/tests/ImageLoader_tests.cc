@@ -77,7 +77,7 @@ TEST(ImageLoader, RejectsMagiclessTgaDecodeBomb) {
 
   ImageLoader::Result result = imageLoader.fromUri("bomb");
 
-  ExpectImageLoaderError(result, UrlLoaderError::UnsupportedFormat);
+  ExpectImageLoaderError(result, UrlLoaderError::DataCorrupt);
 }
 
 TEST(ImageLoader, OversizedPngHeaderReturnsDataCorruptBeforeDecode) {

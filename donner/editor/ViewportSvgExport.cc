@@ -76,18 +76,17 @@ std::string EscapeXml(std::string_view input) {
   return output;
 }
 
-/// Sanitize a string for inclusion in an XML comment body. XML forbids the
-/// sequence "--" inside a comment and a comment must not end with '-', so any
-/// run of hyphens is broken up with a space. Other characters are left as-is
-/// because a comment body does not interpret markup; do NOT use this for
-/// attribute or text content (use \ref EscapeXml for those). Without this an
-/// untrusted root `id` containing "--" produces invalid XML that conformant
-/// consumers reject.
+/// Sanitize a string for inclusion in an XML comment body. Applies the same
+/// entity escaping as \ref EscapeXml, then additionally breaks up the sequence
+/// "--" (forbidden inside an XML comment) and a trailing '-' (which would create
+/// "--->"). Without the "--" handling an untrusted root `id` containing "--"
+/// produces invalid XML that conformant consumers reject.
 std::string EscapeXmlComment(std::string_view input) {
+  const std::string escaped = EscapeXml(input);
   std::string output;
-  output.reserve(input.size());
+  output.reserve(escaped.size());
   char previous = '\0';
-  for (const char ch : input) {
+  for (const char ch : escaped) {
     if (ch == '-' && previous == '-') {
       output += ' ';
     }

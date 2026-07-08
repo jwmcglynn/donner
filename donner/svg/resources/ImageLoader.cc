@@ -93,9 +93,11 @@ std::variant<ImageResource, UrlLoaderError> LoadImage(std::string_view mimeType,
 
   // Only hand stb inputs that begin with a supported format's magic bytes. This
   // rejects magic-less formats (e.g. TGA) whose decoders would otherwise run a
-  // full width*height loop on a tiny declared-huge input (decode-bomb DoS).
+  // full width*height loop on a tiny declared-huge input (decode-bomb DoS). This
+  // is a raster-path decode failure, not an unsupported MIME type, so it returns
+  // DataCorrupt to match the loader's error contract.
   if (!HasSupportedRasterMagic(fileContents)) {
-    return UrlLoaderError::UnsupportedFormat;
+    return UrlLoaderError::DataCorrupt;
   }
 
   const std::optional<int> inputLength = StbiInputLength(fileContents.size());
