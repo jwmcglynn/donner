@@ -87,3 +87,10 @@ donner_cc_fuzzer(
     corpus = "tests/base64_corpus",
     deps = [":base64"],
 )
+
+donner_cc_fuzzer(
+    name = "url_decode_fuzzer",
+    srcs = ["tests/UrlDecode_fuzzer.cc"],
+    corpus = "tests/url_decode_corpus",
+    deps = [":url_decode"],
+)
