@@ -80,3 +80,10 @@ donner_cc_fuzzer(
     corpus = "tests/decompress_corpus",
     deps = [":decompress"],
 )
+
+donner_cc_fuzzer(
+    name = "base64_fuzzer",
+    srcs = ["tests/Base64_fuzzer.cc"],
+    corpus = "tests/base64_corpus",
+    deps = [":base64"],
+)
