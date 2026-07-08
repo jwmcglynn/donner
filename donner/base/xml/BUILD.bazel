@@ -124,3 +124,14 @@ donner_cc_fuzzer(
         ":xml",
     ],
 )
+
+donner_cc_fuzzer(
+    name = "xml_incremental_parser_fuzzer",
+    srcs = [
+        "tests/XMLIncrementalParser_fuzzer.cc",
+    ],
+    corpus = "tests/xml_incremental_parser_corpus",
+    deps = [
+        ":xml",
+    ],
+)
