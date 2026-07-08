@@ -135,3 +135,14 @@ donner_cc_fuzzer(
         ":xml",
     ],
 )
+
+donner_cc_fuzzer(
+    name = "xml_escape_fuzzer",
+    srcs = [
+        "tests/XMLEscape_fuzzer.cc",
+    ],
+    corpus = "tests/xml_escape_corpus",
+    deps = [
+        ":xml",
+    ],
+)
