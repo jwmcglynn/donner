@@ -134,6 +134,8 @@ jobs:
       fallback: ${{ steps.determine.outputs.fallback }}
       affected: ${{ steps.determine.outputs.affected }}
       full_test: ${{ steps.determine.outputs.full_test }}
+      large_change: ${{ steps.determine.outputs.large_change }}
+      changed_file_count: ${{ steps.determine.outputs.changed_file_count }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -188,12 +190,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          SELF_HOSTED_MAX_CHANGED_FILES=75
 
           if [[ "${{ github.event_name }}" != "pull_request" ]]; then
             echo "Non-PR event; keeping full //... coverage."
             echo "fallback=true" >> "$GITHUB_OUTPUT"
             echo "affected=" >> "$GITHUB_OUTPUT"
             echo "full_test=false" >> "$GITHUB_OUTPUT"
+            echo "large_change=false" >> "$GITHUB_OUTPUT"
+            echo "changed_file_count=0" >> "$GITHUB_OUTPUT"
 
             if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
               cached="$HOME/.cache/bazel-diff-base-hashes/${{ github.sha }}.json"
@@ -219,6 +224,8 @@ jobs:
             echo "fallback=true" >> "$GITHUB_OUTPUT"
             echo "affected=" >> "$GITHUB_OUTPUT"
             echo "full_test=false" >> "$GITHUB_OUTPUT"
+            echo "large_change=false" >> "$GITHUB_OUTPUT"
+            echo "changed_file_count=0" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -227,12 +234,22 @@ jobs:
             echo "fallback=true" >> "$GITHUB_OUTPUT"
             echo "affected=" >> "$GITHUB_OUTPUT"
             echo "full_test=true" >> "$GITHUB_OUTPUT"
+            echo "large_change=false" >> "$GITHUB_OUTPUT"
+            echo "changed_file_count=0" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           echo "full_test=false" >> "$GITHUB_OUTPUT"
 
           changed_files="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
+          changed_file_count="$(printf '%s\n' "$changed_files" | sed '/^$/d' | wc -l | tr -d ' ')"
+          large_change=false
+          if (( changed_file_count > SELF_HOSTED_MAX_CHANGED_FILES )); then
+            large_change=true
+            echo "Large PR (${changed_file_count} changed files) exceeds self-hosted routing cap (${SELF_HOSTED_MAX_CHANGED_FILES}); using hosted Linux lane."
+          fi
+          echo "large_change=$large_change" >> "$GITHUB_OUTPUT"
+          echo "changed_file_count=$changed_file_count" >> "$GITHUB_OUTPUT"
 
           if [[ -z "$changed_files" ]]; then
             echo "No changed files detected; falling back to //...."
@@ -335,11 +352,13 @@ jobs:
           echo "affected=$affected" >> "$GITHUB_OUTPUT"
 
   linux:
-    # GitHub-hosted x86_64 baseline. Suppressed for operator runs when the
-    # self-hosted ARM64 lane is active (see gate comment above).
+    # GitHub-hosted x86_64 baseline. Suppressed for small operator PRs when the
+    # self-hosted ARM64 lane is active (see gate comment above), but broad PRs
+    # stay hosted so a 30-minute self-hosted SLA timeout cannot leave the only
+    # required Linux path canceled.
     runs-on: ubuntu-24.04
     needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && (needs.determine-targets.outputs.fallback == 'true' || needs.determine-targets.outputs.full_test == 'true' || vars.SELFHOSTED_LINUX_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn'))) && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && (needs.determine-targets.outputs.fallback == 'true' || needs.determine-targets.outputs.full_test == 'true' || needs.determine-targets.outputs.large_change == 'true' || vars.SELFHOSTED_LINUX_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn'))) && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -410,9 +429,10 @@ jobs:
 
 
   # Operator's ARM64 Linux runs on the operator's self-hosted runner.
-  # Replaces `linux` for trusted partial-target operator runs (extra arch
-  # coverage + homelab cache). Full fallback runs stay on hosted Linux because
-  # the self-hosted lane is tuned for affected-target PR checks.
+  # Replaces `linux` for small trusted partial-target operator runs (extra arch
+  # coverage + homelab cache). Full fallback and broad PR runs stay on hosted
+  # Linux because the self-hosted lane is tuned for narrow affected-target
+  # checks.
   # The NixOS host pre-provisions the toolchain (fontconfig, freetype, mesa,
   # vulkan, X11, clang-tidy) and writes bazel-cache1 over LAN gRPC, so there
   # is no apt/setup-bazel step. The runner intentionally has no host GPU
@@ -422,7 +442,7 @@ jobs:
   linux-self-hosted:
     runs-on: [self-hosted, linux, arm64]
     needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && github.event_name == 'pull_request' && needs.gatekeeper.outputs.docs_only != 'true' && needs.determine-targets.outputs.fallback != 'true' && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && github.event_name == 'pull_request' && needs.gatekeeper.outputs.docs_only != 'true' && needs.determine-targets.outputs.fallback != 'true' && needs.determine-targets.outputs.large_change != 'true' && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
     # RE-availability SLA lane. A healthy affected-target run is ~21 min; bound
     # it at 30 so healthy runs can finish while a wedged/degraded RE endpoint
     # still fast-fails instead of silently tailing for hours.

@@ -61,6 +61,8 @@ jobs:
       fallback_reason: ${{ steps.determine.outputs.fallback_reason }}
       targets: ${{ steps.determine.outputs.targets }}
       target_count: ${{ steps.determine.outputs.target_count }}
+      large_change: ${{ steps.determine.outputs.large_change }}
+      changed_file_count: ${{ steps.determine.outputs.changed_file_count }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -108,6 +110,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          SELF_HOSTED_MAX_CHANGED_FILES=75
+          large_change=false
+          changed_file_count=0
 
           diagnostics_dir="$RUNNER_TEMP/coverage-target-selection"
           mkdir -p "$diagnostics_dir"
@@ -124,12 +129,16 @@ jobs:
               echo "fallback_reason=$reason"
               echo "targets=$targets"
               echo "target_count=$count"
+              echo "large_change=$large_change"
+              echo "changed_file_count=$changed_file_count"
             } >> "$GITHUB_OUTPUT"
 
             {
               echo "fallback=$fallback"
               echo "fallback_reason=$reason"
               echo "target_count=$count"
+              echo "large_change=$large_change"
+              echo "changed_file_count=$changed_file_count"
               echo
               echo "$targets" | tr ' ' '\n'
             } > "$diagnostics_dir/summary.txt"
@@ -159,6 +168,11 @@ jobs:
 
           changed_files="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
           printf "%s\n" "$changed_files" > "$diagnostics_dir/changed-files.txt"
+          changed_file_count="$(printf '%s\n' "$changed_files" | sed '/^$/d' | wc -l | tr -d ' ')"
+          if (( changed_file_count > SELF_HOSTED_MAX_CHANGED_FILES )); then
+            large_change=true
+            echo "Large PR (${changed_file_count} changed files) exceeds self-hosted coverage cap (${SELF_HOSTED_MAX_CHANGED_FILES}); using hosted coverage lane."
+          fi
 
           if [[ -z "$changed_files" ]]; then
             echo "No changed files detected; using full coverage target set."
@@ -290,13 +304,14 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     needs: determine-targets
-    # Hosted PR coverage fallback (untrusted actors / self-hosted unavailable /
-    # ci:full-test fanout). On PRs it runs ONLY when the target set is a genuine
-    # incremental subset (fallback == false => bazel_diff), the cheap smoke
-    # subset, or an explicit ci:full-test opt-in. A full //... fallback on a PR
-    # (infra change, bazel-diff failure, empty diff) is SKIPPED here -- the
-    # main-push baseline covers those lines under the 15-minute PR budget.
-    if: ${{ github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && (needs.determine-targets.outputs.fallback == 'false' || needs.determine-targets.outputs.fallback_reason == 'coverage_smoke' || needs.determine-targets.outputs.fallback_reason == 'full_test_label') && (needs.determine-targets.outputs.fallback_reason == 'full_test_label' || vars.SELFHOSTED_LINUX_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn')) }}
+    # Hosted PR coverage fallback (broad PRs, untrusted actors, self-hosted
+    # unavailable, or ci:full-test fanout). On PRs it runs ONLY when the target
+    # set is a genuine incremental subset (fallback == false => bazel_diff),
+    # the cheap smoke subset, or an explicit ci:full-test opt-in. A full //...
+    # fallback on a PR (infra change, bazel-diff failure, empty diff) is SKIPPED
+    # here because the main-push baseline covers those lines under the 15-minute
+    # PR budget.
+    if: ${{ github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && (needs.determine-targets.outputs.fallback == 'false' || needs.determine-targets.outputs.fallback_reason == 'coverage_smoke' || needs.determine-targets.outputs.fallback_reason == 'full_test_label') && (needs.determine-targets.outputs.large_change == 'true' || needs.determine-targets.outputs.fallback_reason == 'full_test_label' || vars.SELFHOSTED_LINUX_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn')) }}
 
     steps:
       - uses: actions/checkout@v7
@@ -392,7 +407,7 @@ jobs:
     # Only the incremental (bazel_diff) subset or the cheap smoke subset run
     # here. A full //... fallback is skipped on PRs (main-push baseline covers
     # it); ci:full-test routes to the hosted `build` job. See header.
-    if: ${{ github.event_name == 'pull_request' && (needs.determine-targets.outputs.fallback == 'false' || needs.determine-targets.outputs.fallback_reason == 'coverage_smoke') && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
+    if: ${{ github.event_name == 'pull_request' && (needs.determine-targets.outputs.fallback == 'false' || needs.determine-targets.outputs.fallback_reason == 'coverage_smoke') && needs.determine-targets.outputs.large_change != 'true' && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
     # Coverage healthy median is ~21 min, so bound this SLA lane at 30 min:
     # RE degradation fast-fails (no local fallback, below) instead of the
     # CPU-capped 2-3 h local re-run that produced the 3.3 h tail.
@@ -500,7 +515,7 @@ jobs:
     runs-on: ubuntu-24.04
     # Mirrors coverage-self-hosted's gate so the upload skips whenever the
     # self-hosted coverage job skips (full-fallback PRs produce no artifact).
-    if: ${{ github.event_name == 'pull_request' && (needs.determine-targets.outputs.fallback == 'false' || needs.determine-targets.outputs.fallback_reason == 'coverage_smoke') && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
+    if: ${{ github.event_name == 'pull_request' && (needs.determine-targets.outputs.fallback == 'false' || needs.determine-targets.outputs.fallback_reason == 'coverage_smoke') && needs.determine-targets.outputs.large_change != 'true' && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
 
     steps:
       - uses: actions/checkout@v7
