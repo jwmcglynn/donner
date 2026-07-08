@@ -646,6 +646,24 @@ donner_cc_fuzzer(
     ],
 )
 
+# Round-trips untrusted SVG through the viewport export/serialization path
+# (parse -> ExportViewportAsSvg -> re-parse). ExportViewportAsSvg hand-writes
+# XML as strings (attribute carry-over, injected <defs><clipPath>, wrapping
+# <g>), so this is the editor's highest-value serializer-escaping target:
+# a crash or a re-parse failure indicates the exporter emitted invalid XML
+# from untrusted attribute/text content.
+donner_cc_fuzzer(
+    name = "viewport_svg_export_roundtrip_fuzzer",
+    srcs = ["ViewportSvgExportRoundTrip_fuzzer.cc"],
+    corpus = "testdata/viewport_svg_export_roundtrip_corpus",
+    deps = [
+        "//donner/editor:viewport_state",
+        "//donner/editor:viewport_svg_export",
+        "//donner/svg",
+        "//donner/svg/parser",
+    ],
+)
+
 donner_perf_cc_test(
     name = "async_renderer_filter_group_perf_tests",
     srcs = [
