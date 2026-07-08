@@ -1,0 +1,156 @@
+name: BCR Dry Run
+
+# Manual, side-effect-free validation of the Bazel Central Registry publish
+# path. It exercises everything the real release does EXCEPT pushing to the
+# BCR fork or opening a PR:
+#
+#   1. .bcr/ template syntax (JSON + YAML)
+#   2. semantic checks of source.template.json / metadata.template.json /
+#      presubmit.yml against the "donner" module
+#   3. template expansion for a chosen version (prints the resolved source.json)
+#   4. a live integrity computation from a real, already-existing git ref's
+#      source tarball (proves the archive is fetchable + hashable)
+#   5. the real bazel-contrib/publish-to-bcr composite action generating a BCR
+#      entry into a LOCAL clone of bazel-central-registry (no push, no PR)
+#
+# Run it from the Actions tab before cutting a release. It needs no secrets and
+# never writes to the fork or to bazelbuild/bazel-central-registry.
+#
+# See docs/design_docs/0018-bcr_release.md for the full runbook.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Module version to validate (no leading v), e.g. 0.8.0"
+        required: true
+        default: "0.8.0"
+      ref:
+        description: "Existing git ref (branch/tag/sha) to fetch a real source tarball from for the live integrity + action test"
+        required: true
+        default: "main"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout module repository
+        uses: actions/checkout@v7
+
+      - name: Validate .bcr template syntax
+        run: |
+          set -euo pipefail
+          echo "== JSON templates =="
+          jq empty .bcr/metadata.template.json
+          jq empty .bcr/source.template.json
+          echo "== YAML templates =="
+          yq eval '.' .bcr/config.yml > /dev/null
+          yq eval '.' .bcr/presubmit.yml > /dev/null
+          echo "OK: all .bcr templates parse."
+
+      - name: Semantic checks against the donner module
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          URL_TMPL=$(jq -r '.url' .bcr/source.template.json)
+          STRIP_TMPL=$(jq -r '.strip_prefix' .bcr/source.template.json)
+          echo "source url template:          ${URL_TMPL}"
+          echo "source strip_prefix template: ${STRIP_TMPL}"
+          case "${URL_TMPL}" in
+            *"{VERSION}"*) ;;
+            *) echo "ERROR: source.template.json url is missing the {VERSION} placeholder"; exit 1 ;;
+          esac
+          test "${STRIP_TMPL}" = "donner-{VERSION}" \
+            || { echo "ERROR: strip_prefix must be 'donner-{VERSION}' to match the GitHub tarball layout"; exit 1; }
+          # metadata references the right repo / module owner
+          jq -e '.repository | index("github:jwmcglynn/donner")' .bcr/metadata.template.json > /dev/null \
+            || { echo "ERROR: metadata.template.json repository must include github:jwmcglynn/donner"; exit 1; }
+          jq -e '.versions | length == 0' .bcr/metadata.template.json > /dev/null \
+            || { echo "ERROR: metadata.template.json versions[] must be empty (BCR fills it in)"; exit 1; }
+          # presubmit must actually build something
+          yq eval -e '.tasks.verify_targets.build_targets | length > 0' .bcr/presubmit.yml > /dev/null \
+            || { echo "ERROR: presubmit.yml has no build_targets"; exit 1; }
+          echo "OK: semantic checks passed."
+
+      - name: Show expanded source.json for this version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          echo "Resolved source.json that a real v${VERSION} release would publish:"
+          sed "s/{VERSION}/${VERSION}/g" .bcr/source.template.json
+
+      - name: Live integrity check from an existing ref
+        id: integrity
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          URL="https://github.com/jwmcglynn/donner/archive/${REF}.tar.gz"
+          echo "Fetching ${URL}"
+          curl -fsSL "${URL}" -o source.tar.gz
+          INTEGRITY="sha256-$(openssl dgst -sha256 -binary source.tar.gz | openssl base64 -A)"
+          TOP=$(tar tzf source.tar.gz | head -1 | cut -d/ -f1)
+          echo "integrity:   ${INTEGRITY}"
+          echo "tarball top: ${TOP}"
+          case "${TOP}" in
+            donner-*) echo "OK: tarball top-level dir uses the expected donner- prefix." ;;
+            *) echo "ERROR: unexpected tarball top-level dir '${TOP}'"; exit 1 ;;
+          esac
+          echo "integrity=${INTEGRITY}" >> "$GITHUB_OUTPUT"
+          echo "top=${TOP}" >> "$GITHUB_OUTPUT"
+
+      - name: Clone bazel-central-registry locally (no push)
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --single-branch \
+            https://github.com/bazelbuild/bazel-central-registry.git bcr
+          echo "Existing donner entry in BCR (expected: none yet):"
+          ls bcr/modules/donner 2>/dev/null || echo "  (donner not yet in BCR)"
+
+      - name: Generate BCR entry with publish-to-bcr action (local only)
+        # This is the real contract test. It runs the same composite action the
+        # reusable publish workflow uses, writing into the local BCR clone. It
+        # never pushes or opens a PR. `attest: false` matches release.yml.
+        #
+        # We override the source template so the URL points at the existing
+        # `ref` we just hashed (the real vX.Y.Z tag does not exist until release
+        # day), keeping url / strip_prefix / integrity self-consistent.
+        uses: bazel-contrib/publish-to-bcr@v1.4.1
+        with:
+          attest: false
+          tag: ${{ inputs.ref }}
+          module-version: ${{ inputs.version }}
+          local-registry: bcr
+          templates-dir: .bcr
+          source-template: |
+            {
+              "integrity": "",
+              "strip_prefix": "${{ steps.integrity.outputs.top }}",
+              "url": "https://github.com/jwmcglynn/donner/archive/${{ inputs.ref }}.tar.gz"
+            }
+
+      - name: Show generated entry (dry run only)
+        run: |
+          set -euo pipefail
+          VERSION="${{ inputs.version }}"
+          echo "=== changes staged in local BCR clone (never pushed) ==="
+          git -C bcr status --porcelain
+          echo
+          echo "=== generated files ==="
+          find bcr/modules/donner -type f | sort
+          echo
+          for f in "bcr/modules/donner/metadata.json" \
+                   "bcr/modules/donner/${VERSION}/source.json" \
+                   "bcr/modules/donner/${VERSION}/presubmit.yml"; do
+            if [ -f "$f" ]; then
+              echo "----- $f -----"
+              cat "$f"
+              echo
+            fi
+          done
+          echo "Dry run complete: entry generated locally, nothing pushed."

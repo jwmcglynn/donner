@@ -112,6 +112,35 @@ TEST(ViewportSvgExportTest, ViewBoxMatchesScreenToDocumentOfRenderPaneRect) {
   EXPECT_THAT(result.value, HasSubstr("height=\"300\""));
 }
 
+TEST(ViewportSvgExportTest, RootIdWithDoubleHyphenSanitizedInComment) {
+  // Regression: an untrusted root id containing "--" must not appear verbatim in
+  // the provenance XML comment body, which XML forbids and which makes the
+  // exported document invalid for conformant consumers.
+  constexpr std::string_view kDoubleHyphenIdSvg =
+      "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+      "<svg id=\"a--b\" width=\"600\" height=\"600\" viewBox=\"0 0 600 600\" "
+      "xmlns=\"http://www.w3.org/2000/svg\">\n"
+      "  <rect x=\"10\" y=\"20\" width=\"100\" height=\"50\" fill=\"red\"/>\n"
+      "</svg>\n";
+  const SVGDocument doc = ParseOrDie(kDoubleHyphenIdSvg);
+
+  ViewportExportOptions options;
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(400, 300)), options);
+  ASSERT_TRUE(result.ok()) << result.error;
+
+  // The comment body (between "<!--" and "-->") must not contain "--".
+  const std::string& out = result.value;
+  const size_t commentStart = out.find("<!--");
+  const size_t commentEnd = out.find("-->", commentStart);
+  ASSERT_NE(commentStart, std::string::npos);
+  ASSERT_NE(commentEnd, std::string::npos);
+  const std::string commentBody = out.substr(commentStart + 4, commentEnd - (commentStart + 4));
+  EXPECT_THAT(commentBody, Not(HasSubstr("--")));
+  // The id is preserved in a sanitized, readable form.
+  EXPECT_THAT(commentBody, HasSubstr("source: a- -b;"));
+}
+
 TEST(ViewportSvgExportTest, ContentIsClippedToViewportRect) {
   const SVGDocument doc = ParseOrDie(kSelfContainedSvg);
   const ViewportState viewport =

@@ -70,6 +70,21 @@ TEST(Woff2ParserTest, InvalidMagic) {
   EXPECT_TRUE(result.hasError());
 }
 
+TEST(Woff2ParserTest, RejectsOversizedDeclaredSize) {
+  // Regression: a 20-byte input whose total_length header field (bytes 16-19)
+  // declares ~4 GiB. ComputeWOFF2FinalSize returns that value verbatim, so
+  // without the size guard this attempts a multi-gigabyte allocation before any
+  // real decompression work (hang / OOM DoS).
+  std::vector<uint8_t> data(20, 0);
+  data[16] = 0xFF;
+  data[17] = 0xFF;
+  data[18] = 0xFF;
+  data[19] = 0xFF;
+  auto result = Woff2Parser::Decompress(data);
+  ASSERT_TRUE(result.hasError());
+  EXPECT_THAT(result.error().reason, testing::HasSubstr("exceeds limit"));
+}
+
 TEST(Woff2ParserTest, TruncatedWoff2) {
   // Start with a valid WOFF2 file, then truncate it.
   auto woff2Data = readFile("donner/base/fonts/testdata/valid-001.woff2");
