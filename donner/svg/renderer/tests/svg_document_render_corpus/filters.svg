@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <filter id="f">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="3"/>
+      <feColorMatrix type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 1 0"/>
+      <feOffset dx="2" dy="2"/>
+      <feComposite operator="over"/>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect x="10" y="10" width="30" height="30" fill="orange" filter="url(#f)"/>
+</svg>

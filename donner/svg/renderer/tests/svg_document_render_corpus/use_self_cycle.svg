@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <use id="loop" href="#loop"/>
+  <pattern id="p1" href="#p2" width="1" height="1"/>
+  <pattern id="p2" href="#p1" width="1" height="1"/>
+  <rect x="0" y="0" width="10" height="10" fill="url(#p1)"/>
+</svg>
