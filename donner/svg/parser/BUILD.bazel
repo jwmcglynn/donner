@@ -229,3 +229,59 @@ donner_cc_fuzzer(
         "//donner/svg/components/animation:animation_system",
     ],
 )
+
+donner_cc_fuzzer(
+    name = "points_list_parser_fuzzer",
+    srcs = [
+        "tests/PointsListParser_fuzzer.cc",
+    ],
+    corpus = "tests/points_list_parser_corpus",
+    deps = [
+        ":parser_core",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "view_box_parser_fuzzer",
+    srcs = [
+        "tests/ViewBoxParser_fuzzer.cc",
+    ],
+    corpus = "tests/view_box_parser_corpus",
+    deps = [
+        ":parser_core",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "preserve_aspect_ratio_parser_fuzzer",
+    srcs = [
+        "tests/PreserveAspectRatioParser_fuzzer.cc",
+    ],
+    corpus = "tests/preserve_aspect_ratio_parser_corpus",
+    deps = [
+        ":parser_core",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "number2d_parser_fuzzer",
+    srcs = [
+        "tests/Number2dParser_fuzzer.cc",
+    ],
+    corpus = "tests/number2d_parser_corpus",
+    deps = [
+        ":parser_core",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "css_transform_parser_fuzzer",
+    srcs = [
+        "tests/CssTransformParser_fuzzer.cc",
+    ],
+    corpus = "tests/css_transform_parser_corpus",
+    deps = [
+        ":parser_core",
+        "//donner/css/parser:parser",
+    ],
+)
