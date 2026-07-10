@@ -33,19 +33,19 @@ layout, touch-first controls, mobile toolbars, and other user-interface changes 
 
 ## Next Steps
 
-- Land the red renderer-selection contract tests.
-- Implement the combined package and capability selector.
-- Add an iPhone-profile WebKit startup lane and stage the combined package as the candidate.
+- Add an iPhone-profile WebKit startup lane.
+- Stage the combined package as the immutable CI candidate.
+- Complete the release gates and real-device startup check.
 
 ## Implementation Plan
 
-- [ ] Milestone 1: Define and implement runtime backend selection.
-  - [ ] Add red unit tests for WebGPU preference, fallback, overrides, and unsupported browsers.
-  - [ ] Add a capability selector that returns only `geode/` or `tiny_skia/` package roots.
-  - [ ] Move bootstrap code and CSS out of inline HTML so a strict CSP needs no inline exceptions.
+- [x] Milestone 1: Define and implement runtime backend selection.
+  - [x] Add red unit tests for WebGPU preference, fallback, overrides, and unsupported browsers.
+  - [x] Add a capability selector that returns only `geode/` or `tiny_skia/` package roots.
+  - [x] Move bootstrap code and CSS out of inline HTML so a strict CSP needs no inline exceptions.
 - [ ] Milestone 2: Build one compatible static package.
-  - [ ] Add a Bazel tree-artifact rule that keeps each backend in its own directory.
-  - [ ] Remove the service-worker fallback and require host-provided COOP and COEP.
+  - [x] Add a deterministic staging tool that keeps each backend in its own directory.
+  - [x] Remove the service-worker fallback and require host-provided COOP and COEP.
   - [ ] Include both backend binaries and their hashes in deployment provenance.
 - [ ] Milestone 3: Add iOS-shaped browser verification.
   - [ ] Run the combined package under Chromium with automatic Geode selection.
@@ -60,7 +60,8 @@ layout, touch-first controls, mobile toolbars, and other user-interface changes 
 
 ## Proposed Architecture
 
-The combined package has one bootstrap surface and two immutable backend directories:
+The two existing Bazel web packages remain independently testable. A deterministic staging tool
+combines their byte-identical shared files with two immutable backend directories:
 
 ```text
 index.html
