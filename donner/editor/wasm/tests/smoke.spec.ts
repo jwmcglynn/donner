@@ -44,7 +44,7 @@ interface OpenEditorOptions {
 }
 
 const kFatalRuntimePattern =
-  /Aborted|Assertion failed|RuntimeError|Pthread .* sent an error|getJsObject/i;
+  /Aborted|Assertion failed|RuntimeError|Pthread .* sent an error|getJsObject|No available adapters|WebGPU on Linux requires|WebGPU adapter (?:request )?(?:failed|unavailable)/i;
 const kSourcePaneWidth = 560;
 const kRightPaneWidth = 420;
 
@@ -54,6 +54,12 @@ const kRightPaneWidth = 420;
 // WebGL canvas, so the screenshot fallback carries real pixels. Default to
 // "geode" so existing invocations keep their behavior.
 const kBackend = (process.env.DONNER_WASM_BACKEND || "geode").toLowerCase();
+const kLinuxGeodeLaunchArgs = [
+  "--enable-unsafe-webgpu",
+  "--enable-features=Vulkan",
+  "--use-webgpu-adapter=swiftshader",
+  "--use-gpu-in-tests",
+];
 
 // Pin the viewport to the native editor calibration size (1600x900). The
 // sample regions in readRenderPaneColorStats / readLayerPreviewColorStats use
@@ -61,7 +67,45 @@ const kBackend = (process.env.DONNER_WASM_BACKEND || "geode").toLowerCase();
 // (source pane 560px, right pane 420px, layer preview at 0.72h..0.96h), so the
 // browser canvas must match that window size for the regions to land on the
 // document render and the layer thumbnails.
-test.use({ viewport: { width: 1600, height: 900 } });
+test.use({
+  viewport: { width: 1600, height: 900 },
+  ...(process.platform === "linux" && kBackend === "geode"
+    ? { launchOptions: { args: kLinuxGeodeLaunchArgs } }
+    : {}),
+});
+
+async function readWebGpuDiagnostics(page: Page) {
+  const browser = await page.evaluate(async () => {
+    const gpu = navigator.gpu;
+    let fallbackAdapterAvailable = false;
+    let adapterRequestError: string | null = null;
+    if (gpu) {
+      try {
+        fallbackAdapterAvailable =
+          (await gpu.requestAdapter({ forceFallbackAdapter: true })) !== null;
+      } catch (error) {
+        adapterRequestError = String(error);
+      }
+    }
+
+    return {
+      isSecureContext,
+      crossOriginIsolated,
+      hasSharedArrayBuffer: typeof SharedArrayBuffer !== "undefined",
+      hasNavigatorGpu: Boolean(gpu),
+      fallbackAdapterAvailable,
+      adapterRequestError,
+      userAgent: navigator.userAgent,
+    };
+  });
+
+  return {
+    ...browser,
+    backend: kBackend,
+    platform: process.platform,
+    launchArgs: process.platform === "linux" && kBackend === "geode" ? kLinuxGeodeLaunchArgs : [],
+  };
+}
 
 function paethPredictor(left: number, up: number, upLeft: number): number {
   const estimate = left + up - upLeft;
@@ -300,6 +344,11 @@ test("wasm editor starts without runtime abort", async ({ page }) => {
 test("production Geode wasm presents visible editor pixels", async ({ page }) => {
   test.skip(kBackend !== "geode", "production WebGPU presentation is Geode-specific");
   const fatalMessages = await openEditor(page, { wgpuReadbackStats: false });
+  const gpuDiagnostics = await readWebGpuDiagnostics(page);
+  await test.info().attach("browser-gpu-diagnostics", {
+    body: JSON.stringify(gpuDiagnostics, null, 2),
+    contentType: "application/json",
+  });
   const canvasBox = await page.locator("canvas#canvas").boundingBox();
   expect(canvasBox).not.toBeNull();
   if (canvasBox === null) {
