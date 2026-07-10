@@ -19,6 +19,7 @@
 
 namespace donner::editor {
 
+#ifdef DONNER_EDITOR_WGPU
 namespace {
 
 double ElapsedMs(std::chrono::steady_clock::time_point start) {
@@ -27,6 +28,7 @@ double ElapsedMs(std::chrono::steady_clock::time_point start) {
 }
 
 }  // namespace
+#endif
 
 PresentedFrameTileGeometry PresentedGeometryFromTileView(
     const GlTextureCache::TileView& tile,

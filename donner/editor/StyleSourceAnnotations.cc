@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <iterator>
 #include <optional>
 #include <span>
 #include <string>
@@ -13,6 +14,7 @@
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/FileOffset.h"
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/css/CSS.h"
@@ -21,6 +23,7 @@
 #include "donner/editor/ReferenceFanout.h"
 #include "donner/svg/ElementType.h"
 #include "donner/svg/SVGStyleQuery.h"
+#include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/properties/PropertyRegistry.h"
 
 namespace donner::editor {
@@ -811,6 +814,42 @@ StyleSourceAnnotations ComputeStyleSourceAnnotations(svg::SVGDocument& document,
 
     return annotations;
   });
+}
+
+DetachedStyleSourceAnnotations ComputeDetachedStyleSourceAnnotations(std::string source) {
+  ParseWarningSink warnings;
+  auto parseResult = svg::parser::SVGParser::ParseSVG(source, warnings);
+  if (parseResult.hasError()) {
+    return {};
+  }
+
+  svg::SVGDocument document = std::move(parseResult).result();
+  StyleSourceAnnotations annotations = ComputeStyleSourceAnnotations(document, source);
+
+  DetachedStyleSourceAnnotations detached;
+  detached.valid = true;
+  detached.contributions.reserve(annotations.contributions.size());
+  for (StyleSourceContribution& contribution : annotations.contributions) {
+    DetachedStyleSourceContribution detachedContribution;
+    detachedContribution.matchedElementTargetIndices.reserve(contribution.matchedElements.size());
+    for (const svg::SVGElement& element : contribution.matchedElements) {
+      if (std::optional<AttributeWritebackTarget> target =
+              captureAttributeWritebackTarget(element)) {
+        auto targetIter =
+            std::find(detached.elementTargets.begin(), detached.elementTargets.end(), *target);
+        if (targetIter == detached.elementTargets.end()) {
+          detached.elementTargets.push_back(std::move(*target));
+          targetIter = std::prev(detached.elementTargets.end());
+        }
+        detachedContribution.matchedElementTargetIndices.push_back(
+            static_cast<std::size_t>(targetIter - detached.elementTargets.begin()));
+      }
+    }
+    contribution.matchedElements.clear();
+    detachedContribution.contribution = std::move(contribution);
+    detached.contributions.push_back(std::move(detachedContribution));
+  }
+  return detached;
 }
 
 }  // namespace donner::editor

@@ -11,6 +11,8 @@ EditorMainPaneLayout ComputeEditorMainPaneLayout(const EditorMainPaneLayoutInput
   const float minRightPaneWidth = std::max(0.0f, input.minRightPaneWidth);
   const float minRenderPaneWidth = std::max(0.0f, input.minRenderPaneWidth);
   const float maxRightPaneWidth = std::max(minRightPaneWidth, input.maxRightPaneWidth);
+  const float sourcePaneRailWidth =
+      input.sourcePaneVisible ? 0.0f : std::clamp(input.sourcePaneRailWidth, 0.0f, windowWidth);
   const float sourcePaneUpperBound = std::max(
       0.0f, std::min(maxSourcePaneWidth, windowWidth - minRightPaneWidth - minRenderPaneWidth));
   const float sourcePaneLowerBound = std::min(minSourcePaneWidth, sourcePaneUpperBound);
@@ -18,15 +20,17 @@ EditorMainPaneLayout ComputeEditorMainPaneLayout(const EditorMainPaneLayoutInput
       input.sourcePaneVisible
           ? std::clamp(input.sourcePaneWidth, sourcePaneLowerBound, sourcePaneUpperBound)
           : 0.0f;
+  const float leftChromeWidth = sourcePaneWidth + sourcePaneRailWidth;
   const float rightPaneUpperBound =
       std::max(minRightPaneWidth,
-               std::min(maxRightPaneWidth, windowWidth - sourcePaneWidth - minRenderPaneWidth));
+               std::min(maxRightPaneWidth, windowWidth - leftChromeWidth - minRenderPaneWidth));
 
   EditorMainPaneLayout layout;
   layout.sourcePaneWidth = sourcePaneWidth;
+  layout.sourcePaneRailWidth = sourcePaneRailWidth;
   layout.rightPaneWidth = std::clamp(input.rightPaneWidth, minRightPaneWidth, rightPaneUpperBound);
-  layout.renderPaneX = sourcePaneWidth;
-  layout.renderPaneWidth = std::max(0.0f, windowWidth - sourcePaneWidth - layout.rightPaneWidth);
+  layout.renderPaneX = leftChromeWidth;
+  layout.renderPaneWidth = std::max(0.0f, windowWidth - leftChromeWidth - layout.rightPaneWidth);
   layout.rightPaneX = windowWidth - layout.rightPaneWidth;
   return layout;
 }

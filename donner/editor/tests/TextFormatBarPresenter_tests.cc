@@ -298,7 +298,8 @@ protected:
 
   static FormatBarActions RenderFrame(TextFormatBarPresenter& bar, const FormatBarState& state) {
     ImGui::NewFrame();
-    const FormatBarActions actions = bar.render(state, /*originY=*/20.0f, /*width=*/1280.0f);
+    const FormatBarActions actions =
+        bar.render(state, ImVec2(320.0f, 80.0f), TextFormatBarPresenter::PreferredWidth());
     ImGui::Render();
     return actions;
   }

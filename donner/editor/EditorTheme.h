@@ -27,31 +27,31 @@ enum class Accent {
 /// Number of `Accent` values, for token-completeness tests and iteration.
 inline constexpr int kAccentCount = 3;
 
-/// Named design tokens for the editor chrome (design doc 0054, Dark Slate).
+/// Named design tokens for the editor chrome (design doc 0054, Graphite).
 struct EditorTheme {
-  // --- Surfaces: dark slate ramp, deepest to lightest ---
-  ImU32 surfaceCanvas;   ///< #0E1116 artboard letterbox / deepest backdrop.
-  ImU32 surfaceSunken;   ///< #12161D scroll troughs, wells, inset regions.
-  ImU32 surfaceBase;     ///< #161B22 panels, sidebar, primary window bg.
-  ImU32 surfaceRaised;   ///< #1E252E toolbar, menu bar, titlebars, field idle.
-  ImU32 surfaceOverlay;  ///< #232B36 popovers, dropdowns, tooltips, chips.
-  ImU32 surfaceHover;    ///< #2A333F row / button hover.
-  ImU32 surfaceActive;   ///< #313C4A pressed / selected row background.
+  // --- Surfaces: neutral graphite ramp, deepest to lightest ---
+  ImU32 surfaceCanvas;   ///< #111215 artboard letterbox / deepest backdrop.
+  ImU32 surfaceSunken;   ///< #151619 scroll troughs, wells, inset regions.
+  ImU32 surfaceBase;     ///< #1B1D20 panels, sidebar, primary window bg.
+  ImU32 surfaceRaised;   ///< #24272B toolbar, menu bar, titlebars, field idle.
+  ImU32 surfaceOverlay;  ///< #2B2F34 popovers, dropdowns, tooltips, chips.
+  ImU32 surfaceHover;    ///< #343940 row / button hover.
+  ImU32 surfaceActive;   ///< #3C424A pressed / selected row background.
 
   // --- Borders ---
-  ImU32 borderSubtle;  ///< #2D3542 hairline dividers, panel edges.
-  ImU32 borderStrong;  ///< #3A4453 field outlines, focused container.
+  ImU32 borderSubtle;  ///< #30343A hairline dividers, panel edges.
+  ImU32 borderStrong;  ///< #464C55 field outlines, focused container.
 
   // --- Text (on surfaceBase) ---
-  ImU32 textPrimary;   ///< #E6EAF0 body text, values (AAA).
-  ImU32 textMuted;     ///< #9AA5B4 secondary labels, meta (AA).
-  ImU32 textDisabled;  ///< #5C6675 disabled controls only (intentionally sub-AA).
+  ImU32 textPrimary;   ///< #F1F2F4 body text, values (AAA).
+  ImU32 textMuted;     ///< #A8ADB5 secondary labels, meta (AA).
+  ImU32 textDisabled;  ///< #656B74 disabled controls only (intentionally sub-AA).
 
   // --- Accent: the chosen variant, three tints + dark ink ---
   ImU32 accentActive;   ///< Darker, pressed.
   ImU32 accentDefault;  ///< Base accent (foreground icons, focus ring, links).
   ImU32 accentHover;    ///< Lighter, hover.
-  ImU32 accentInk;      ///< #0E1116 dark ink for labels ON accent fills.
+  ImU32 accentInk;      ///< #111215 dark ink for labels ON accent fills.
 
   // --- Selection: derived from the accent ---
   ImU32 selectionStroke;     ///< = accentDefault, opaque; marquee / handle stroke.
@@ -75,7 +75,7 @@ struct EditorTheme {
   float radiusContainer{6.0f};  ///< Panels, cards, popovers, tooltips.
 
   // --- Control metrics (logical px) ---
-  float toolButtonSize{30.0f};
+  float toolButtonSize{32.0f};
   float treeRowHeight{24.0f};
   float scrollbarSize{12.0f};
 

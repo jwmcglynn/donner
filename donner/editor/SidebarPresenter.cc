@@ -16,6 +16,7 @@
 #include "donner/base/xml/XMLNode.h"
 #include "donner/editor/DisclosureChevron.h"
 #include "donner/editor/EditorCommand.h"
+#include "donner/editor/EditorTheme.h"
 #include "donner/editor/EmbeddedSvgIcon.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/LockState.h"
@@ -25,6 +26,37 @@
 #include "embed_resources/BootstrapIcons.h"
 
 namespace donner::editor {
+
+InspectorStyleDisplayValue FormatInspectorStyleValue(std::string_view serializedValue) {
+  constexpr std::string_view kDefaultSuffix = " (default)";
+  constexpr std::string_view kSetSuffix = " (set)";
+
+  InspectorStyleState state = InspectorStyleState::Unspecified;
+  if (serializedValue.ends_with(kDefaultSuffix)) {
+    serializedValue.remove_suffix(kDefaultSuffix.size());
+    state = InspectorStyleState::Default;
+  } else if (serializedValue.ends_with(kSetSuffix)) {
+    serializedValue.remove_suffix(kSetSuffix.size());
+    state = InspectorStyleState::Set;
+  }
+
+  const auto removeWrapper = [&](std::string_view prefix) {
+    if (serializedValue.starts_with(prefix) && serializedValue.ends_with(')')) {
+      serializedValue.remove_prefix(prefix.size());
+      serializedValue.remove_suffix(1);
+    }
+  };
+  removeWrapper("PaintServer(");
+  if (serializedValue.starts_with("solid ")) {
+    serializedValue.remove_prefix(std::string_view("solid ").size());
+  }
+  removeWrapper("Color(");
+
+  return InspectorStyleDisplayValue{
+      .value = serializedValue == "nullopt" ? "not set" : std::string(serializedValue),
+      .state = state,
+  };
+}
 
 namespace {
 
@@ -102,26 +134,127 @@ void AppendComputedStyleEntry(std::vector<std::pair<std::string, std::string>>& 
   entries.emplace_back(std::string(property.name), os.str());
 }
 
+enum class InspectorSectionKind : std::uint8_t {
+  XmlAttributes,
+  ComputedCss,
+};
+
+ImU32 PackInspectorColor(const css::RGBA& color) {
+  return IM_COL32(color.r, color.g, color.b, color.a);
+}
+
+template <svg::PropertyCascade kCascade>
+std::optional<ImU32> InspectorPaintSwatch(const svg::Property<svg::PaintServer, kCascade>& property,
+                                          const css::RGBA& currentColor) {
+  const std::optional<svg::PaintServer> paint = property.get();
+  if (!paint.has_value() || !paint->is<svg::PaintServer::Solid>()) {
+    return std::nullopt;
+  }
+
+  return PackInspectorColor(
+      paint->get<svg::PaintServer::Solid>().color.resolve(currentColor, 1.0f));
+}
+
+void RenderInspectorColorSwatch(ImU32 color) {
+  const EditorTheme& theme = EditorTheme::Active();
+  constexpr float kSwatchSize = 12.0f;
+  const ImVec2 cursor = ImGui::GetCursorScreenPos();
+  const float lineHeight = ImGui::GetTextLineHeight();
+  const ImVec2 min(cursor.x, cursor.y + (lineHeight - kSwatchSize) * 0.5f);
+  const ImVec2 max(min.x + kSwatchSize, min.y + kSwatchSize);
+  ImDrawList* drawList = ImGui::GetWindowDrawList();
+  drawList->AddRectFilled(min, max, color, theme.radiusControl * 0.5f);
+  drawList->AddRect(min, max, theme.borderStrong, theme.radiusControl * 0.5f);
+  ImGui::Dummy(ImVec2(kSwatchSize, lineHeight));
+  ImGui::SameLine(0.0f, theme.space2);
+}
+
+void RenderInspectorValue(std::string_view value, ImU32 textColor,
+                          std::optional<ImU32> swatchColor) {
+  if (swatchColor.has_value()) {
+    RenderInspectorColorSwatch(*swatchColor);
+  }
+
+  const float availableWidth = ImGui::GetContentRegionAvail().x;
+  const bool clipped =
+      ImGui::CalcTextSize(value.data(), value.data() + value.size()).x > availableWidth;
+  ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(textColor));
+  ImGui::TextUnformatted(value.data(), value.data() + value.size());
+  ImGui::PopStyleColor();
+  if (clipped && ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("%.*s", static_cast<int>(value.size()), value.data());
+  }
+}
+
 void RenderInspectorSection(const char* heading, const char* tableId,
-                            std::span<const std::pair<std::string, std::string>> entries) {
+                            std::span<const std::pair<std::string, std::string>> entries,
+                            InspectorSectionKind kind,
+                            std::span<const std::optional<ImU32>> swatches = {}) {
+  const EditorTheme& theme = EditorTheme::Active();
+  const bool computedCss = kind == InspectorSectionKind::ComputedCss;
+
   ImGui::Separator();
-  ImGui::TextUnformatted(heading);
+  ImGui::Dummy(ImVec2(0.0f, theme.space1));
+  ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(theme.textPrimary), "%s", heading);
+  const std::string count = std::to_string(entries.size());
+  const float countWidth = ImGui::CalcTextSize(count.c_str()).x;
+  const float countX = ImGui::GetWindowContentRegionMax().x - countWidth;
+  if (countX > ImGui::GetCursorPosX() + theme.space2) {
+    ImGui::SameLine();
+    ImGui::SetCursorPosX(countX);
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(theme.textDisabled), "%s", count.c_str());
+  }
+
   if (entries.empty()) {
-    ImGui::TextDisabled("(none)");
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(theme.textDisabled), "%s",
+                       computedCss ? "No computed properties" : "No attributes");
     return;
   }
 
-  constexpr ImGuiTableFlags kFlags = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_PadOuterX;
-  if (ImGui::BeginTable(tableId, 2, kFlags)) {
-    for (const auto& [name, value] : entries) {
-      ImGui::TableNextRow();
+  constexpr ImGuiTableFlags kFlags = ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_PadOuterX |
+                                     ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg |
+                                     ImGuiTableFlags_NoSavedSettings;
+  const int columnCount = computedCss ? 3 : 2;
+  const float availableWidth = ImGui::GetContentRegionAvail().x;
+  const float nameWidth = std::clamp(availableWidth * 0.34f, 76.0f, 124.0f);
+  ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(theme.space2, theme.space1));
+  if (ImGui::BeginTable(tableId, columnCount, kFlags)) {
+    ImGui::TableSetupColumn("##inspector_property_name", ImGuiTableColumnFlags_WidthFixed,
+                            nameWidth);
+    ImGui::TableSetupColumn("##inspector_property_value", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+    if (computedCss) {
+      ImGui::TableSetupColumn("##inspector_property_state", ImGuiTableColumnFlags_WidthFixed,
+                              66.0f);
+    }
+
+    for (std::size_t index = 0; index < entries.size(); ++index) {
+      const auto& [name, value] = entries[index];
+      const InspectorStyleDisplayValue cssValue = computedCss
+                                                      ? FormatInspectorStyleValue(value)
+                                                      : InspectorStyleDisplayValue{.value = value};
+      const bool isDefault = cssValue.state == InspectorStyleState::Default;
+      const std::optional<ImU32> swatch = index < swatches.size() ? swatches[index] : std::nullopt;
+
+      ImGui::TableNextRow(ImGuiTableRowFlags_None, ImGui::GetTextLineHeight() + theme.space2);
       ImGui::TableSetColumnIndex(0);
-      ImGui::TextUnformatted(name.c_str());
+      ImGui::TextColored(
+          ImGui::ColorConvertU32ToFloat4(isDefault ? theme.textDisabled : theme.textMuted), "%s",
+          name.c_str());
       ImGui::TableSetColumnIndex(1);
-      ImGui::TextUnformatted(value.c_str());
+      RenderInspectorValue(cssValue.value, isDefault ? theme.textMuted : theme.textPrimary, swatch);
+      if (computedCss) {
+        ImGui::TableSetColumnIndex(2);
+        if (cssValue.state != InspectorStyleState::Unspecified) {
+          const bool isSet = cssValue.state == InspectorStyleState::Set;
+          ImGui::TextColored(
+              ImGui::ColorConvertU32ToFloat4(isSet ? theme.accentDefault : theme.textDisabled),
+              "%s", isSet ? "SET" : "DEFAULT");
+        }
+      }
     }
     ImGui::EndTable();
   }
+  ImGui::PopStyleVar();
 }
 
 struct PathOperationButton {
@@ -440,15 +573,32 @@ void SidebarPresenter::refreshSnapshot(const EditorApp& app) {
 
     const auto& computedStyle = selected.getComputedStyle();
     inspector.computedStyle.reserve(9);
+    inspector.computedStyleSwatches.reserve(9);
+    const css::RGBA fallbackCurrentColor = css::RGBA::RGB(0, 0, 0);
+    const std::optional<css::Color> computedColor = computedStyle.color.get();
+    const css::RGBA currentColor = computedColor.has_value()
+                                       ? computedColor->resolve(fallbackCurrentColor, 1.0f)
+                                       : fallbackCurrentColor;
     AppendComputedStyleEntry(inspector.computedStyle, computedStyle.display);
+    inspector.computedStyleSwatches.push_back(std::nullopt);
     AppendComputedStyleEntry(inspector.computedStyle, computedStyle.visibility);
+    inspector.computedStyleSwatches.push_back(std::nullopt);
     AppendComputedStyleEntry(inspector.computedStyle, computedStyle.opacity);
+    inspector.computedStyleSwatches.push_back(std::nullopt);
     AppendComputedStyleEntry(inspector.computedStyle, computedStyle.fill);
+    inspector.computedStyleSwatches.push_back(
+        InspectorPaintSwatch(computedStyle.fill, currentColor));
     AppendComputedStyleEntry(inspector.computedStyle, computedStyle.fillOpacity);
+    inspector.computedStyleSwatches.push_back(std::nullopt);
     AppendComputedStyleEntry(inspector.computedStyle, computedStyle.stroke);
+    inspector.computedStyleSwatches.push_back(
+        InspectorPaintSwatch(computedStyle.stroke, currentColor));
     AppendComputedStyleEntry(inspector.computedStyle, computedStyle.strokeWidth);
+    inspector.computedStyleSwatches.push_back(std::nullopt);
     AppendComputedStyleEntry(inspector.computedStyle, computedStyle.strokeOpacity);
+    inspector.computedStyleSwatches.push_back(std::nullopt);
     AppendComputedStyleEntry(inspector.computedStyle, computedStyle.color);
+    inspector.computedStyleSwatches.push_back(PackInspectorColor(currentColor));
   }
   inspectorSnapshot_ = std::move(inspector);
 }
@@ -546,7 +696,7 @@ void SidebarPresenter::renderTreeView(EditorApp* liveApp, TreeViewState& state,
   renderTreeNode(liveApp, *treeSnapshot_, state, iconTextureProvider);
 }
 
-bool SidebarPresenter::renderInspector(EditorApp* liveApp, const ViewportState& viewport,
+bool SidebarPresenter::renderInspector(EditorApp* liveApp, const ViewportState&,
                                        const IconTextureProvider& iconTextureProvider) {
   bool queuedMutation = false;
   // Selection left the single-element inspector while a transform edit was
@@ -566,29 +716,31 @@ bool SidebarPresenter::renderInspector(EditorApp* liveApp, const ViewportState& 
       queuedMutation = RenderPathOperationsPanel(liveApp, iconTextureProvider) || queuedMutation;
     }
   } else {
-    ImGui::TextUnformatted(inspectorSnapshot_.titleText.c_str());
+    const EditorTheme& theme = EditorTheme::Active();
+    constexpr std::string_view kSelectedPrefix = "Selected: ";
+    std::string_view elementLabel = inspectorSnapshot_.titleText;
+    if (elementLabel.starts_with(kSelectedPrefix)) {
+      elementLabel.remove_prefix(kSelectedPrefix.size());
+    }
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(theme.textMuted), "ELEMENT");
+    ImGui::SameLine(0.0f, theme.space2);
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(theme.accentDefault), "%.*s",
+                       static_cast<int>(elementLabel.size()), elementLabel.data());
     if (inspectorSnapshot_.bounds.has_value()) {
       const auto& b = *inspectorSnapshot_.bounds;
-      ImGui::Text("Bounds: (%.1f, %.1f) %.1f × %.1f", b.topLeft.x, b.topLeft.y, b.width(),
-                  b.height());
+      ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(theme.textMuted),
+                         "Bounds  %.1f x %.1f at %.1f, %.1f", b.width(), b.height(), b.topLeft.x,
+                         b.topLeft.y);
     }
     queuedMutation = renderTransformPanel(liveApp);
     queuedMutation = RenderStrokeControlsPanel(liveApp) || queuedMutation;
     RenderInspectorSection("XML attributes", "##inspector_xml_attributes",
-                           inspectorSnapshot_.xmlAttributes);
-    RenderInspectorSection("Computed style", "##inspector_computed_style",
-                           inspectorSnapshot_.computedStyle);
+                           inspectorSnapshot_.xmlAttributes, InspectorSectionKind::XmlAttributes);
+    RenderInspectorSection("Computed CSS", "##inspector_computed_style",
+                           inspectorSnapshot_.computedStyle, InspectorSectionKind::ComputedCss,
+                           inspectorSnapshot_.computedStyleSwatches);
     queuedMutation = RenderPathOperationsPanel(liveApp, iconTextureProvider) || queuedMutation;
   }
-  ImGui::Separator();
-  ImGui::Text("Zoom: %.0f%%", viewport.zoom * 100.0);
-  ImGui::Text("Pan anchor: doc=(%.1f, %.1f) screen=(%.0f, %.0f)", viewport.panDocPoint.x,
-              viewport.panDocPoint.y, viewport.panScreenPoint.x, viewport.panScreenPoint.y);
-  ImGui::Text("DPR: %.2fx", viewport.devicePixelRatio);
-  ImGui::TextDisabled("scroll = pan");
-  ImGui::TextDisabled("Cmd+scroll = zoom");
-  ImGui::TextDisabled("space+drag = pan");
-  ImGui::TextDisabled("Cmd+0 = 100%%");
   return queuedMutation;
 }
 
@@ -598,6 +750,7 @@ bool SidebarPresenter::renderTransformPanel(EditorApp* liveApp) {
   }
 
   bool queuedMutation = false;
+  transformFieldRects_.fill(std::nullopt);
 
   // The single selected element, when the app is live this frame. All edits
   // target this element; when `liveApp` is null (async renderer busy) the
@@ -653,28 +806,62 @@ bool SidebarPresenter::renderTransformPanel(EditorApp* liveApp) {
                                                        MathConstants<double>::kRadToDeg)
                                   : 0.0f;
 
-  queuedMutation =
-      renderTransformFieldDrag(liveApp, TransformField::PositionX, "X##transform_x", xValue,
-                               canEditPosition, "Move element", 1.0f, "%.2f") ||
-      queuedMutation;
-  ImGui::SameLine();
-  queuedMutation =
-      renderTransformFieldDrag(liveApp, TransformField::PositionY, "Y##transform_y", yValue,
-                               canEditPosition, "Move element", 1.0f, "%.2f") ||
-      queuedMutation;
-  queuedMutation =
-      renderTransformFieldDrag(liveApp, TransformField::Width, "W##transform_w", widthValue,
-                               canEditWidth, "Resize element", 1.0f, "%.2f") ||
-      queuedMutation;
-  ImGui::SameLine();
-  queuedMutation =
-      renderTransformFieldDrag(liveApp, TransformField::Height, "H##transform_h", heightValue,
-                               canEditHeight, "Resize element", 1.0f, "%.2f") ||
-      queuedMutation;
-  queuedMutation =
-      renderTransformFieldDrag(liveApp, TransformField::Rotation, "Rotation##transform_r",
-                               rotationValue, canEditRotation, "Rotate element", 0.5f, "%.1f") ||
-      queuedMutation;
+  const EditorTheme& theme = EditorTheme::Active();
+  constexpr ImGuiTableFlags kTransformTableFlags = ImGuiTableFlags_SizingStretchProp |
+                                                   ImGuiTableFlags_PadOuterX |
+                                                   ImGuiTableFlags_NoSavedSettings;
+  ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(theme.space2, theme.space1));
+  if (ImGui::BeginTable("##transform_fields", 5, kTransformTableFlags)) {
+    ImGui::TableSetupColumn("##transform_group", ImGuiTableColumnFlags_WidthFixed, 72.0f);
+    ImGui::TableSetupColumn("##transform_axis_first", ImGuiTableColumnFlags_WidthFixed, 18.0f);
+    ImGui::TableSetupColumn("##transform_value_first", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+    ImGui::TableSetupColumn("##transform_axis_second", ImGuiTableColumnFlags_WidthFixed, 18.0f);
+    ImGui::TableSetupColumn("##transform_value_second", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+
+    const auto renderGroupLabel = [&](const char* label) {
+      ImGui::TableSetColumnIndex(0);
+      ImGui::AlignTextToFramePadding();
+      ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(theme.textMuted), "%s", label);
+    };
+    const auto renderField = [&](int axisColumn, int valueColumn, const char* axisLabel,
+                                 TransformField field, const char* id, float value, bool canEdit,
+                                 const char* undoLabel, float speed, const char* format) {
+      ImGui::TableSetColumnIndex(axisColumn);
+      if (axisLabel[0] != '\0') {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(theme.textMuted), "%s", axisLabel);
+      }
+      ImGui::TableSetColumnIndex(valueColumn);
+      queuedMutation =
+          renderTransformFieldDrag(liveApp, field, id, value, canEdit, undoLabel, speed, format) ||
+          queuedMutation;
+      const ImVec2 min = ImGui::GetItemRectMin();
+      const ImVec2 max = ImGui::GetItemRectMax();
+      transformFieldRects_[static_cast<std::size_t>(field)] =
+          Box2d(Vector2d(min.x, min.y), Vector2d(max.x, max.y));
+    };
+
+    ImGui::TableNextRow(ImGuiTableRowFlags_None, ImGui::GetFrameHeight() + theme.space1);
+    renderGroupLabel("Position");
+    renderField(1, 2, "X", TransformField::PositionX, "##transform_x", xValue, canEditPosition,
+                "Move element", 0.1f, "%.2f");
+    renderField(3, 4, "Y", TransformField::PositionY, "##transform_y", yValue, canEditPosition,
+                "Move element", 0.1f, "%.2f");
+
+    ImGui::TableNextRow(ImGuiTableRowFlags_None, ImGui::GetFrameHeight() + theme.space1);
+    renderGroupLabel("Size");
+    renderField(1, 2, "W", TransformField::Width, "##transform_w", widthValue, canEditWidth,
+                "Resize element", 0.1f, "%.2f");
+    renderField(3, 4, "H", TransformField::Height, "##transform_h", heightValue, canEditHeight,
+                "Resize element", 0.1f, "%.2f");
+
+    ImGui::TableNextRow(ImGuiTableRowFlags_None, ImGui::GetFrameHeight() + theme.space1);
+    renderGroupLabel("Rotation");
+    renderField(1, 2, "", TransformField::Rotation, "##transform_r", rotationValue, canEditRotation,
+                "Rotate element", 0.1f, "%.1f deg");
+    ImGui::EndTable();
+  }
+  ImGui::PopStyleVar();
   if (!decomposable) {
     ImGui::TextDisabled("Matrix has skew; edit the raw values below.");
   }
@@ -685,42 +872,59 @@ bool SidebarPresenter::renderTransformPanel(EditorApp* liveApp) {
     static constexpr std::array<const char*, 6> kMatrixLabels = {
         "a##transform_mat0", "b##transform_mat1", "c##transform_mat2",
         "d##transform_mat3", "e##transform_mat4", "f##transform_mat5"};
-    for (int i = 0; i < 6; ++i) {
-      const bool editingThisCell =
-          transformEdit_.has_value() && transformEdit_->field == TransformField::Matrix &&
-          transformEdit_->matrixIndex == i && !transformEdit_->pendingCommit;
-      double value = editingThisCell ? transformEdit_->matrixValues[i] : snapshotTransform.data[i];
+    if (ImGui::BeginTable("##transform_matrix_fields", 4, kTransformTableFlags)) {
+      ImGui::TableSetupColumn("##transform_matrix_axis_first", ImGuiTableColumnFlags_WidthFixed,
+                              18.0f);
+      ImGui::TableSetupColumn("##transform_matrix_value_first", ImGuiTableColumnFlags_WidthStretch,
+                              1.0f);
+      ImGui::TableSetupColumn("##transform_matrix_axis_second", ImGuiTableColumnFlags_WidthFixed,
+                              18.0f);
+      ImGui::TableSetupColumn("##transform_matrix_value_second", ImGuiTableColumnFlags_WidthStretch,
+                              1.0f);
+      for (int i = 0; i < 6; ++i) {
+        const bool editingThisCell =
+            transformEdit_.has_value() && transformEdit_->field == TransformField::Matrix &&
+            transformEdit_->matrixIndex == i && !transformEdit_->pendingCommit;
+        double value =
+            editingThisCell ? transformEdit_->matrixValues[i] : snapshotTransform.data[i];
 
-      if ((i % 2) == 1) {
-        ImGui::SameLine();
-      }
-      ImGui::SetNextItemWidth(kInspectorFieldWidth);
-      if (!liveEditable) {
-        ImGui::BeginDisabled();
-      }
-      const bool changed = ImGui::DragScalar(kMatrixLabels[i], ImGuiDataType_Double, &value, 0.01f,
-                                             nullptr, nullptr, "%.6g");
-      if (!liveEditable) {
-        ImGui::EndDisabled();
-      }
+        if ((i % 2) == 0) {
+          ImGui::TableNextRow(ImGuiTableRowFlags_None, ImGui::GetFrameHeight() + theme.space1);
+        }
+        const int axisColumn = (i % 2) * 2;
+        ImGui::TableSetColumnIndex(axisColumn);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(theme.textMuted), "%c", 'a' + i);
+        ImGui::TableSetColumnIndex(axisColumn + 1);
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        if (!liveEditable) {
+          ImGui::BeginDisabled();
+        }
+        const bool changed = ImGui::DragScalar(kMatrixLabels[i], ImGuiDataType_Double, &value,
+                                               0.01f, nullptr, nullptr, "%.6g");
+        if (!liveEditable) {
+          ImGui::EndDisabled();
+        }
 
-      if (liveApp == nullptr) {
-        continue;
-      }
-      if (liveEditable && ImGui::IsItemActivated()) {
-        beginTransformEdit(*liveApp, TransformField::Matrix, i, "Edit transform");
-      }
-      if (transformEdit_.has_value() && transformEdit_->field == TransformField::Matrix &&
-          transformEdit_->matrixIndex == i && !transformEdit_->pendingCommit) {
-        if (changed && std::isfinite(value)) {
-          transformEdit_->matrixValues[i] = value;
-          transformEdit_->fieldValue = value;
-          queuedMutation = applyTransformEdit(*liveApp, value) || queuedMutation;
+        if (liveApp == nullptr) {
+          continue;
         }
-        if (ImGui::IsItemDeactivated()) {
-          commitTransformEdit(*liveApp);
+        if (liveEditable && ImGui::IsItemActivated()) {
+          beginTransformEdit(*liveApp, TransformField::Matrix, i, "Edit transform");
+        }
+        if (transformEdit_.has_value() && transformEdit_->field == TransformField::Matrix &&
+            transformEdit_->matrixIndex == i && !transformEdit_->pendingCommit) {
+          if (changed && std::isfinite(value)) {
+            transformEdit_->matrixValues[i] = value;
+            transformEdit_->fieldValue = value;
+            queuedMutation = applyTransformEdit(*liveApp, value) || queuedMutation;
+          }
+          if (ImGui::IsItemDeactivated()) {
+            commitTransformEdit(*liveApp);
+          }
         }
       }
+      ImGui::EndTable();
     }
     ImGui::TreePop();
   }
@@ -736,7 +940,7 @@ bool SidebarPresenter::renderTransformFieldDrag(EditorApp* liveApp, TransformFie
                                 !transformEdit_->pendingCommit;
   float value = editingThisField ? static_cast<float>(transformEdit_->fieldValue) : displayValue;
 
-  ImGui::SetNextItemWidth(kInspectorFieldWidth);
+  ImGui::SetNextItemWidth(-FLT_MIN);
   if (!canEdit) {
     ImGui::BeginDisabled();
   }
@@ -778,27 +982,23 @@ void SidebarPresenter::beginTransformEdit(EditorApp& liveApp, TransformField fie
   }
   const svg::SVGElement element = liveApp.selectedElements().front();
 
-  // §concurrent-dom: raw ECS reads from the UI thread need a scoped read
-  // access while the document runs in ThreadingMode::ConcurrentDom.
-  const bool isGraphics =
-      element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
-        return element.isa<svg::SVGGraphicsElement>();
-      });
-  if (!isGraphics) {
+  if (!element.isa<svg::SVGGraphicsElement>()) {
     return;
   }
 
   TransformEditState state{
       .element = element, .field = field, .matrixIndex = matrixIndex, .undoLabel = undoLabel};
-  element.withReadAccess([&element, &state](svg::DocumentReadAccess&, EntityHandle) {
-    state.startTransform = element.cast<svg::SVGGraphicsElement>().transform();
-    if (element.isa<svg::SVGGeometryElement>()) {
-      state.startBounds = element.cast<svg::SVGGeometryElement>().worldBounds();
-    }
-    // Verbatim attribute bytes so undo restores the user's original source
-    // text instead of the canonical serializer output.
-    state.sourceTransformAttributeValue = element.getAttribute("transform");
-  });
+  // `transform()` and `worldBounds()` may materialize lazy layout state and
+  // therefore acquire document write access. Do not wrap these DOM getters in
+  // a read scope: ConcurrentDom uses a non-recursive lock, so upgrading that
+  // scope would deadlock on field activation.
+  state.startTransform = element.cast<svg::SVGGraphicsElement>().transform();
+  if (element.isa<svg::SVGGeometryElement>()) {
+    state.startBounds = element.cast<svg::SVGGeometryElement>().worldBounds();
+  }
+  // Verbatim attribute bytes so undo restores the user's original source
+  // text instead of the canonical serializer output.
+  state.sourceTransformAttributeValue = element.getAttribute("transform");
   state.currentTransform = state.startTransform;
   state.startDecomposed = DecomposeTransform(state.startTransform);
   // Captured now, while the source is still in sync with the DOM, so undo

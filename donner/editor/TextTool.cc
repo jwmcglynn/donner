@@ -244,6 +244,12 @@ void TextTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, boo
 
 void TextTool::onMouseUp(EditorApp& editor, const Vector2d& documentPoint) {
   if (frameGesture_ != FrameGesture::None) {
+    if (frameGesture_ == FrameGesture::Resize) {
+      // Capture the release position even when the platform did not deliver a
+      // final move, then pay the DOM rewrap cost exactly once.
+      updateFrameGesture(editor, documentPoint);
+      commitFrameResize(editor);
+    }
     // Frame gestures end on release; the editing session stays open.
     frameGesture_ = FrameGesture::None;
     return;
@@ -288,8 +294,11 @@ void TextTool::beginEditingSession(EditorApp& editor, const Vector2d& originDoc,
   text.setAttribute("font-family", std::string(kDefaultFontFamily));
   text.setAttribute("font-size", donner::detail::FormatNumberForSVG(kDefaultFontSize));
   // Fill goes through the style attribute - the same channel the editor's
-  // fill-color picker edits - rather than a presentation attribute.
-  text.setAttribute("style", "fill: " + std::string(kDefaultFill));
+  // fill-color picker edits - rather than a presentation attribute. New text
+  // inherits the current authoring foreground instead of resetting to black.
+  const std::string& activeFill = editor.activePaintStyle().fill;
+  text.setAttribute("style",
+                    "fill: " + (activeFill.empty() ? std::string(kDefaultFill) : activeFill));
   if (boxDoc.has_value()) {
     text.setAttribute("data-donner-text-box-width",
                       donner::detail::FormatNumberForSVG(boxDoc->size().x));
@@ -308,6 +317,9 @@ void TextTool::beginEditingSession(EditorApp& editor, const Vector2d& originDoc,
   cachedCharWidths_.clear();
   caretIndex_ = 0;
   state_ = State::Editing;
+  pointFrameVisible_ = boxDoc.has_value();
+  pointFrameFadeStart_.reset();
+  pointFramePointerAnchorDoc_ = boxDoc.has_value() ? std::nullopt : std::make_optional(originDoc);
   resetCaretBlinkPhase();
 
   editor.applyMutation(EditorCommand::InsertTextCommand(parent, text, ""));
@@ -379,7 +391,11 @@ void TextTool::beginEditingSessionForExisting(EditorApp& editor, const svg::SVGT
 
   dragBoxDoc_.reset();
   state_ = State::Editing;
-  cachedCharWidths_ = measureCharacterWidths(editor);
+  pointFrameVisible_ = boxText_.has_value() || !createdBySession_;
+  pointFrameFadeStart_.reset();
+  pointFramePointerAnchorDoc_ =
+      boxText_.has_value() ? std::nullopt : std::make_optional(documentPoint);
+  cachedCharWidths_ = boxText_.has_value() ? measureCharacterWidths(editor) : std::vector<double>{};
   caretIndex_ = caretIndexAtPoint(documentPoint).value_or(content_.size());
   resetCaretBlinkPhase();
 
@@ -424,19 +440,23 @@ std::optional<Box2d> TextTool::sessionFrameLocal() const {
     return boxText_;
   }
 
-  // Point text: the frame is the computed ink extent.
-  const Box2d inkLocal = sessionText_->withWriteAccess(
-      [this](svg::DocumentWriteAccess&, EntityHandle) { return sessionText_->inkBoundingBox(); });
-  if (inkLocal.isEmpty()) {
+  // Point text: use the font em-box rather than glyph ink. Ascender and
+  // descender extents then stay stable as the typed characters change.
+  const Box2d emBoxLocal =
+      sessionText_->withWriteAccess([this](svg::DocumentWriteAccess&, EntityHandle) {
+        return sessionText_->objectBoundingBox();
+      });
+  if (emBoxLocal.isEmpty()) {
     return std::nullopt;
   }
-  return inkLocal;
+  return emBoxLocal;
 }
 
 SelectionTransformHandleIntent TextTool::frameHandleIntentAt(const Vector2d& documentPoint,
                                                              double pixelsPerDocUnit,
                                                              bool includeRotate) const {
-  if (state_ != State::Editing || !sessionText_.has_value()) {
+  if (state_ != State::Editing || !sessionText_.has_value() ||
+      (!boxText_.has_value() && !pointFrameVisible_)) {
     return {};
   }
   const std::optional<Box2d> frameLocal = sessionFrameLocal();
@@ -450,7 +470,8 @@ SelectionTransformHandleIntent TextTool::frameHandleIntentAt(const Vector2d& doc
   // keeps the returned corner identity in the frame's local space - which is
   // exactly the space the resize gesture operates in.
   const Vector2d localPoint = documentFromText_.inverse().transformPosition(documentPoint);
-  const double docUnitsPerLocalUnit = documentFromText_.transformVector(Vector2d(1.0, 0.0)).length();
+  const double docUnitsPerLocalUnit =
+      documentFromText_.transformVector(Vector2d(1.0, 0.0)).length();
   const double pixelsPerLocalUnit = pixelsPerDocUnit * docUnitsPerLocalUnit;
   const std::array<Box2d, 1> bounds{*frameLocal};
   return HitTestSelectionTransformHandles(std::span<const Box2d>(bounds), localPoint,
@@ -478,8 +499,8 @@ bool TextTool::beginFrameGestureAtPoint(const Vector2d& documentPoint, MouseModi
     frameGesture_ = FrameGesture::Rotate;
     // Pivot around the frame's center mapped through the text's transform -
     // for an already-rotated frame this is the oriented quad's center.
-    rotateCenterDoc_ = documentFromText_.transformPosition(
-        (frameLocal->topLeft + frameLocal->bottomRight) * 0.5);
+    rotateCenterDoc_ =
+        documentFromText_.transformPosition((frameLocal->topLeft + frameLocal->bottomRight) * 0.5);
     rotateStartAngleRadians_ = AngleFromCenter(rotateCenterDoc_, documentPoint);
     rotateStartTransform_ =
         sessionText_->withReadAccess([this](svg::DocumentReadAccess&, EntityHandle) {
@@ -512,11 +533,9 @@ void TextTool::updateFrameGesture(EditorApp& editor, const Vector2d& documentPoi
     return;
   }
 
-  // Frame resize: recompute the frame in the text's local space with the
-  // corner opposite the grab anchored. The glyphs never scale - the box
-  // attributes change and the content rewraps to the new width. A resize of
-  // point text writes box attributes for the first time, converting the
-  // computed frame into a user-sized one.
+  // Frame resize: recompute a UI-thread preview in text-local space with the
+  // opposite corner anchored. Glyphs never scale. DOM attributes and rewrap
+  // are deferred to release so pointer moves do no text layout work.
   const Vector2d localPoint =
       frameStartDocumentFromText_.inverse().transformPosition(documentPoint);
   const Vector2d anchor = SelectionTransformCornerPoint(
@@ -537,6 +556,14 @@ void TextTool::updateFrameGesture(EditorApp& editor, const Vector2d& documentPoi
 
   boxText_ = newFrame;
   originText_ = Vector2d(newFrame.topLeft.x, newFrame.topLeft.y + fontSize_);
+}
+
+void TextTool::commitFrameResize(EditorApp& editor) {
+  if (!sessionText_.has_value() || !boxText_.has_value()) {
+    return;
+  }
+
+  const Box2d newFrame = *boxText_;
   editor.applyMutation(EditorCommand::SetAttributeCommand(
       *sessionText_, "x", donner::detail::FormatNumberForSVG(originText_.x)));
   editor.applyMutation(EditorCommand::SetAttributeCommand(
@@ -551,12 +578,31 @@ void TextTool::updateFrameGesture(EditorApp& editor, const Vector2d& documentPoi
 }
 
 void TextTool::insertCodepoint(EditorApp& editor, char32_t codepoint) {
-  if (state_ != State::Editing || !IsInsertableCodepoint(codepoint)) {
+  const std::array<char32_t, 1> codepoints{codepoint};
+  insertCodepoints(editor, codepoints);
+}
+
+void TextTool::insertCodepoints(EditorApp& editor, std::span<const char32_t> codepoints) {
+  if (state_ != State::Editing || codepoints.empty()) {
     return;
   }
-  content_.insert(content_.begin() + static_cast<std::ptrdiff_t>(caretIndex_), codepoint);
-  ++caretIndex_;
+
+  std::u32string inserted;
+  inserted.reserve(codepoints.size());
+  for (const char32_t codepoint : codepoints) {
+    if (IsInsertableCodepoint(codepoint)) {
+      inserted.push_back(codepoint);
+    }
+  }
+  if (inserted.empty()) {
+    return;
+  }
+
+  content_.insert(content_.begin() + static_cast<std::ptrdiff_t>(caretIndex_), inserted.begin(),
+                  inserted.end());
+  caretIndex_ += inserted.size();
   resetCaretBlinkPhase();
+  hidePointFrameAfterTyping();
   syncContentToDom(editor);
 }
 
@@ -567,6 +613,7 @@ void TextTool::insertNewline(EditorApp& editor) {
   content_.insert(content_.begin() + static_cast<std::ptrdiff_t>(caretIndex_), U'\n');
   ++caretIndex_;
   resetCaretBlinkPhase();
+  hidePointFrameAfterTyping();
   syncContentToDom(editor);
 }
 
@@ -577,6 +624,7 @@ void TextTool::backspace(EditorApp& editor) {
   content_.erase(content_.begin() + static_cast<std::ptrdiff_t>(caretIndex_) - 1);
   --caretIndex_;
   resetCaretBlinkPhase();
+  hidePointFrameAfterTyping();
   syncContentToDom(editor);
 }
 
@@ -586,6 +634,7 @@ void TextTool::deleteForward(EditorApp& editor) {
   }
   content_.erase(content_.begin() + static_cast<std::ptrdiff_t>(caretIndex_));
   resetCaretBlinkPhase();
+  hidePointFrameAfterTyping();
   syncContentToDom(editor);
 }
 
@@ -736,6 +785,9 @@ void TextTool::cancel() {
   caretIndex_ = 0;
   sessionBeforeSource_.reset();
   previousSelection_.clear();
+  pointFrameVisible_ = false;
+  pointFrameFadeStart_.reset();
+  pointFramePointerAnchorDoc_.reset();
 }
 
 void TextTool::syncContentToDom(EditorApp& editor) {
@@ -788,18 +840,22 @@ void TextTool::syncContentToDom(EditorApp& editor) {
     editor.flushFrame();
   };
 
-  // First pass with the current cached widths; then re-measure (used by both
-  // caret math and wrapping) and re-wrap once if the new content changed the
-  // break points (box text only).
+  // Point text does not wrap, and its caret can query the one adjacent glyph
+  // directly. Avoid the old O(n) full-run geometry scan on every keystroke.
   const std::vector<std::u32string> lines = displayLines(editor);
   rebuild(lines);
+  if (!boxText_.has_value()) {
+    cachedCharWidths_.clear();
+    return;
+  }
+
+  // Box text needs per-character widths for wrapping. Re-measure after the
+  // first pass and re-wrap once if the new content changed the break points.
   cachedCharWidths_ = measureCharacterWidths(editor);
-  if (boxText_.has_value()) {
-    const std::vector<std::u32string> rewrapped = displayLines(editor);
-    if (rewrapped != lines) {
-      rebuild(rewrapped);
-      cachedCharWidths_ = measureCharacterWidths(editor);
-    }
+  const std::vector<std::u32string> rewrapped = displayLines(editor);
+  if (rewrapped != lines) {
+    rebuild(rewrapped);
+    cachedCharWidths_ = measureCharacterWidths(editor);
   }
 }
 
@@ -958,8 +1014,7 @@ bool TextTool::CaretBlinkVisibleAtPhase(double secondsSincePhaseReset) {
   if (secondsSincePhaseReset <= 0.0) {
     return true;
   }
-  const double phase =
-      std::fmod(secondsSincePhaseReset, 2.0 * kCaretBlinkHalfPeriodSeconds);
+  const double phase = std::fmod(secondsSincePhaseReset, 2.0 * kCaretBlinkHalfPeriodSeconds);
   return phase < kCaretBlinkHalfPeriodSeconds;
 }
 
@@ -967,8 +1022,7 @@ double TextTool::SecondsUntilCaretBlinkFlip(double secondsSincePhaseReset) {
   if (secondsSincePhaseReset <= 0.0) {
     return kCaretBlinkHalfPeriodSeconds;
   }
-  const double phase =
-      std::fmod(secondsSincePhaseReset, kCaretBlinkHalfPeriodSeconds);
+  const double phase = std::fmod(secondsSincePhaseReset, kCaretBlinkHalfPeriodSeconds);
   const double untilFlip = kCaretBlinkHalfPeriodSeconds - phase;
   return untilFlip > 0.0 ? untilFlip : kCaretBlinkHalfPeriodSeconds;
 }
@@ -993,6 +1047,55 @@ std::optional<float> TextTool::nextCaretBlinkWakeSeconds() const {
   return static_cast<float>(SecondsUntilCaretBlinkFlip(elapsed));
 }
 
+void TextTool::notifyPointerMoved(const Vector2d& documentPoint) {
+  if (state_ != State::Editing || boxText_.has_value()) {
+    return;
+  }
+  if (pointFramePointerAnchorDoc_.has_value() &&
+      (documentPoint - *pointFramePointerAnchorDoc_).lengthSquared() <= 1e-12) {
+    return;
+  }
+  pointFramePointerAnchorDoc_ = documentPoint;
+  pointFrameVisible_ = true;
+  pointFrameFadeStart_.reset();
+}
+
+void TextTool::hidePointFrameAfterTyping() {
+  if (boxText_.has_value() || !pointFrameVisible_) {
+    return;
+  }
+  pointFrameVisible_ = false;
+  pointFrameFadeStart_ = std::chrono::steady_clock::now();
+}
+
+float TextTool::pointFrameOpacity() const {
+  if (boxText_.has_value() || pointFrameVisible_) {
+    return 1.0f;
+  }
+  if (!pointFrameFadeStart_.has_value()) {
+    return 0.0f;
+  }
+  const double elapsed =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - *pointFrameFadeStart_)
+          .count();
+  return static_cast<float>(std::clamp(1.0 - elapsed / kPointFrameFadeSeconds, 0.0, 1.0));
+}
+
+std::optional<float> TextTool::nextPointFrameFadeWakeSeconds() const {
+  if (state_ != State::Editing || !pointFrameFadeStart_.has_value()) {
+    return std::nullopt;
+  }
+  const double elapsed =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - *pointFrameFadeStart_)
+          .count();
+  const double remaining = kPointFrameFadeSeconds - elapsed;
+  if (remaining <= 0.0) {
+    return std::nullopt;
+  }
+  constexpr float kAnimationFrameSeconds = 1.0f / 60.0f;
+  return std::min(kAnimationFrameSeconds, static_cast<float>(remaining));
+}
+
 std::optional<TextTool::EditingChrome> TextTool::editingChrome(EditorApp& editor) const {
   if (state_ != State::Editing || !sessionText_.has_value()) {
     return std::nullopt;
@@ -1013,9 +1116,25 @@ std::optional<TextTool::EditingChrome> TextTool::editingChrome(EditorApp& editor
       }
     }
   }
-  for (std::size_t i = 0; i < column; ++i) {
-    caretX += widthIndex < cachedCharWidths_.size() ? cachedCharWidths_[widthIndex] : 0.0;
-    ++widthIndex;
+  if (!boxText_.has_value() && column > 0u) {
+    // Point text has no wrapping dependency on cached widths. Read just the
+    // glyph adjacent to the caret instead of scanning every glyph after each
+    // edit. DOM character indices exclude the logical hard-break markers.
+    std::size_t domCharsBeforeCaret = 0u;
+    for (std::size_t i = 0; i < caretIndex_ && i < content_.size(); ++i) {
+      domCharsBeforeCaret += content_[i] != U'\n' ? 1u : 0u;
+    }
+    if (domCharsBeforeCaret > 0u) {
+      caretX = sessionText_->withWriteAccess(
+          [this, domChar = domCharsBeforeCaret - 1u](svg::DocumentWriteAccess&, EntityHandle) {
+            return sessionText_->getEndPositionOfChar(domChar).x;
+          });
+    }
+  } else {
+    for (std::size_t i = 0; i < column; ++i) {
+      caretX += widthIndex < cachedCharWidths_.size() ? cachedCharWidths_[widthIndex] : 0.0;
+      ++widthIndex;
+    }
   }
 
   const double lineHeight = fontSize_ * kLineHeightFactor;
@@ -1028,8 +1147,10 @@ std::optional<TextTool::EditingChrome> TextTool::editingChrome(EditorApp& editor
       documentFromText_.transformPosition(Vector2d(caretX, baselineY - fontSize_ * 0.9));
   chrome.caretBottomDoc =
       documentFromText_.transformPosition(Vector2d(caretX, baselineY + fontSize_ * 0.25));
+  const float frameOpacity = pointFrameOpacity();
   if (const std::optional<Box2d> frameLocal = sessionFrameLocal(); frameLocal.has_value()) {
     chrome.frameCornersDoc = FrameCornersDoc(documentFromText_, *frameLocal);
+    chrome.frameOpacity = frameOpacity;
   }
   return chrome;
 }

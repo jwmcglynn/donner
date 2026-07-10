@@ -4,6 +4,40 @@ The Donner editor is a browser-based and desktop SVG editor built on top of the
 Donner SVG engine. The interactive editor parses and renders in-process through
 the selected `Renderer` backend.
 
+## Visual design language
+
+The editor uses the shared Graphite design language documented in
+[Editor Design Language](../../docs/editor_design_language.md). `EditorTheme`
+owns surfaces, text, Signal Teal interaction state, semantic colors, spacing,
+radii, and fixed control dimensions. Custom canvas chrome reads the active
+theme instead of introducing widget-local colors.
+
+When extending the UI:
+
+- reuse `EditorTheme` tokens instead of raw product-chrome color literals
+- keep spacing and fixed control dimensions on the 4 px grid
+- use Donner-rendered SVG assets for tool icons
+- keep debug telemetry in explicit diagnostics surfaces
+- update the focused theme or visual replay coverage for changed contracts
+
+The source pane is collapsed on startup behind the left reveal rail. Source-navigation commands
+open it automatically. Transform controls use responsive Position, Size, and Rotation rows; the
+advanced matrix remains available through its disclosure. Numeric fields drag to adjust and enter
+text mode on a simple click-release. Tool and cursor SVGs use black cores with white halos so they
+remain legible over light and dark content. The toolbar exposes only ready tools; unfinished path
+editing remains hidden until its interaction is complete.
+
+New text inherits the current fill. Selecting or editing one text element opens a compact floating
+font toolbar below the canvas tools. Point-text frames use stable font em-box height, reveal on
+pointer movement, and fade while typing. Frame resize keeps its preview on the UI thread and performs
+DOM rewrap and source writeback once on release; text and select handles share the same dimensions.
+
+Text input is coalesced into one document synchronization per UI frame. Active move chrome uses
+gesture-owned bounds instead of rewalking selected path geometry, and cached drag pixels are matched
+to live selections by entity identity. Source reveal preserves the canvas center and keeps the
+existing full-document raster when a pane-bounded raster would be larger. CSS source annotations run
+against an isolated source snapshot and are applied only after revision validation.
+
 ## Building
 
 ### Desktop (default - Geode/WebGPU backend)
@@ -60,3 +94,15 @@ Desktop presentation is also selected at build time:
 ```sh
 bazel test //donner/editor/...
 ```
+
+Run an Inspector UI mutation campaign under AddressSanitizer with a disposable corpus:
+
+```sh
+CORPUS="$(mktemp -d)"
+cp -R donner/editor/tests/testdata/inspector_ui_fuzzer_corpus/. "$CORPUS/"
+bazel run --config=asan-fuzzer //donner/editor/tests:inspector_ui_fuzzer_bin -- "$CORPUS" \
+  -max_total_time=30 -max_len=4096 -timeout=5
+```
+
+The `//donner/editor/tests:inspector_ui_fuzzer` target replays the checked-in seed files once. Use
+the `_bin` target with a writable corpus directory when mutation fuzzing is required.

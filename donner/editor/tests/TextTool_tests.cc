@@ -1,9 +1,11 @@
 #include "donner/editor/TextTool.h"
 
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <string>
 #include <string_view>
+#include <thread>
 
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/editor/EditorApp.h"
@@ -112,12 +114,36 @@ TEST_F(TextToolTest, DoubleClickOpensPointTextSession) {
   EXPECT_THAT(attr(inserted, "font-size"), Eq("32"));
   // Fill lands in the style attribute (the channel the fill-color picker
   // edits), not as a presentation attribute.
-  EXPECT_THAT(attr(inserted, "style"), Eq("fill: black"));
+  EXPECT_THAT(attr(inserted, "style"), Eq("fill: white"));
   EXPECT_THAT(attr(inserted, "fill"), Eq(""));
   EXPECT_THAT(attr(inserted, "data-donner-text-box-width"), Eq(""));
 
   ASSERT_EQ(app.selectedElements().size(), 1u);
   EXPECT_EQ(app.selectedElements().front(), inserted);
+}
+
+TEST_F(TextToolTest, NewTextKeepsCurrentForegroundFill) {
+  app.setActiveFill("#31c6b3");
+
+  doubleClickAt(Vector2d(20.0, 30.0));
+
+  EXPECT_THAT(attr(text(), "style"), Eq("fill: #31c6b3"));
+}
+
+TEST_F(TextToolTest, QueuedPointTextCharactersFlushAsOneBatch) {
+  doubleClickAt(Vector2d(20.0, 30.0));
+  const std::uint64_t versionBefore = app.document().currentFrameVersion();
+  constexpr std::array<char32_t, 4> kCharacters{U'D', U'o', U'n', U'n'};
+
+  tool.insertCodepoints(app, kCharacters);
+
+  EXPECT_EQ(app.document().currentFrameVersion(), versionBefore + 1u);
+  EXPECT_EQ(tool.sessionContent(), U"Donn");
+  EXPECT_EQ(tool.caretIndex(), 4u);
+  EXPECT_EQ(text().textContent(), "Donn");
+  const auto chrome = tool.editingChrome(app);
+  ASSERT_TRUE(chrome.has_value());
+  EXPECT_GT(chrome->caretTopDoc.x, 20.0);
 }
 
 TEST_F(TextToolTest, DragOpensBoxTextSessionWithBoxAttributes) {
@@ -387,6 +413,52 @@ TEST_F(TextToolTest, EditingChromeTracksCaretAndBox) {
   EXPECT_GT(afterTyping->caretTopDoc.x, chrome->caretTopDoc.x);
 }
 
+TEST_F(TextToolTest, PointTextFrameUsesStableFontExtentsAndFadesAfterTyping) {
+  doubleClickAt(Vector2d(50.0, 80.0));
+
+  // Empty point text has no frame. Typing creates font geometry, but the
+  // frame remains hidden until pointer movement.
+  ASSERT_TRUE(tool.editingChrome(app).has_value());
+  EXPECT_FALSE(tool.editingChrome(app)->frameCornersDoc.has_value());
+  type("x");
+  const auto hidden = tool.editingChrome(app);
+  ASSERT_TRUE(hidden.has_value());
+  ASSERT_TRUE(hidden->frameCornersDoc.has_value());
+  EXPECT_FLOAT_EQ(hidden->frameOpacity, 0.0f);
+  const Vector2d topLeft = (*hidden->frameCornersDoc)[0];
+  EXPECT_EQ(tool.frameHandleIntentAt(topLeft, /*pixelsPerDocUnit=*/1.0,
+                                     /*includeRotate=*/true)
+                .kind,
+            SelectionTransformHandleKind::None);
+
+  tool.notifyPointerMoved(Vector2d(50.0, 80.0));
+  EXPECT_FLOAT_EQ(tool.editingChrome(app)->frameOpacity, 0.0f);
+  tool.notifyPointerMoved(Vector2d(52.0, 80.0));
+  const auto revealed = tool.editingChrome(app);
+  ASSERT_TRUE(revealed.has_value());
+  ASSERT_TRUE(revealed->frameCornersDoc.has_value());
+  EXPECT_FLOAT_EQ(revealed->frameOpacity, 1.0f);
+  EXPECT_EQ(tool.frameHandleIntentAt(topLeft, /*pixelsPerDocUnit=*/1.0,
+                                     /*includeRotate=*/true)
+                .kind,
+            SelectionTransformHandleKind::Resize);
+  const double stableHeight = (*revealed->frameCornersDoc)[3].y - (*revealed->frameCornersDoc)[0].y;
+
+  // A glyph with different ink extents must not change the em-box height.
+  type("A");
+  const auto fading = tool.editingChrome(app);
+  ASSERT_TRUE(fading.has_value());
+  ASSERT_TRUE(fading->frameCornersDoc.has_value());
+  const double heightAfterTyping =
+      (*fading->frameCornersDoc)[3].y - (*fading->frameCornersDoc)[0].y;
+  EXPECT_NEAR(heightAfterTyping, stableHeight, 1e-6);
+  EXPECT_TRUE(tool.nextPointFrameFadeWakeSeconds().has_value());
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(220));
+  EXPECT_FLOAT_EQ(tool.editingChrome(app)->frameOpacity, 0.0f);
+  EXPECT_FALSE(tool.nextPointFrameFadeWakeSeconds().has_value());
+}
+
 TEST_F(TextToolTest, BoxTextWrapsToBoxWidth) {
   // A narrow box: a handful of 32px characters exceeds 60 doc units.
   tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
@@ -578,6 +650,14 @@ TEST_F(TextToolTest, FrameHandleResizeReflowsBoxWithoutScalingGlyphs) {
   tool.onMouseDown(app, Vector2d(70.0, 120.0), MouseModifiers{});
   EXPECT_TRUE(tool.isAdjustingFrame());
   tool.onMouseMove(app, Vector2d(410.0, 140.0), /*buttonHeld=*/true);
+  // Pointer moves update only the local frame preview. DOM rewrap and source
+  // writeback are deferred until release so the drag path stays cheap.
+  EXPECT_THAT(attr(text(), "data-donner-text-box-width"), Eq("60"));
+  EXPECT_FALSE(app.document().hasPendingMutations());
+  const auto resizePreview = tool.editingChrome(app);
+  ASSERT_TRUE(resizePreview.has_value());
+  ASSERT_TRUE(resizePreview->frameCornersDoc.has_value());
+  EXPECT_EQ((*resizePreview->frameCornersDoc)[2], Vector2d(410.0, 140.0));
   tool.onMouseUp(app, Vector2d(410.0, 140.0));
   EXPECT_FALSE(tool.isAdjustingFrame());
   EXPECT_TRUE(tool.isEditing());
@@ -600,25 +680,29 @@ TEST_F(TextToolTest, FrameResizeConvertsPointTextToUserSizedBox) {
   type("Hello");
   ASSERT_THAT(attr(text(), "data-donner-text-box-width"), Eq(""));
 
-  // Point text: the frame is the computed ink rect. Grab its bottom-right
-  // corner and drag outward - the text becomes user-sized box text.
+  // Point text: grab the stable font em-box frame's bottom-right corner and
+  // drag outward. The text becomes user-sized box text.
   svg::SVGTextElement element = text();
-  const Box2d ink = element.withWriteAccess(
-      [&element](svg::DocumentWriteAccess&, EntityHandle) { return element.inkBoundingBox(); });
-  ASSERT_FALSE(ink.isEmpty());
+  const auto chrome = tool.editingChrome(app);
+  ASSERT_TRUE(chrome.has_value());
+  ASSERT_TRUE(chrome->frameCornersDoc.has_value());
+  const std::array<Vector2d, 4>& corners = *chrome->frameCornersDoc;
+  const Box2d pointFrame(corners[0], corners[2]);
 
-  tool.onMouseDown(app, ink.bottomRight, MouseModifiers{});
+  tool.notifyPointerMoved(pointFrame.bottomRight);
+  ASSERT_FLOAT_EQ(tool.editingChrome(app)->frameOpacity, 1.0f);
+  tool.onMouseDown(app, pointFrame.bottomRight, MouseModifiers{});
   EXPECT_TRUE(tool.isAdjustingFrame());
-  tool.onMouseMove(app, ink.bottomRight + Vector2d(60.0, 40.0), /*buttonHeld=*/true);
-  tool.onMouseUp(app, ink.bottomRight + Vector2d(60.0, 40.0));
+  tool.onMouseMove(app, pointFrame.bottomRight + Vector2d(60.0, 40.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, pointFrame.bottomRight + Vector2d(60.0, 40.0));
   EXPECT_TRUE(tool.isEditing());
 
   const std::string widthAttr = attr(text(), "data-donner-text-box-width");
   const std::string heightAttr = attr(text(), "data-donner-text-box-height");
   ASSERT_FALSE(widthAttr.empty());
   ASSERT_FALSE(heightAttr.empty());
-  EXPECT_NEAR(std::stod(widthAttr), ink.size().x + 60.0, 1e-6);
-  EXPECT_NEAR(std::stod(heightAttr), ink.size().y + 40.0, 1e-6);
+  EXPECT_NEAR(std::stod(widthAttr), pointFrame.size().x + 60.0, 1e-6);
+  EXPECT_NEAR(std::stod(heightAttr), pointFrame.size().y + 40.0, 1e-6);
   EXPECT_EQ(text().textContent(), "Hello");
   EXPECT_THAT(attr(text(), "font-size"), Eq("32"));
   EXPECT_THAT(attr(text(), "transform"), Eq(""));

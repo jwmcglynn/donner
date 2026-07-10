@@ -6,9 +6,9 @@
 namespace donner::editor {
 namespace {
 
-/// Raster size for toolbar icon masks. Buttons are 30px and icons display at
-/// ~20px, so a 64px raster stays crisp through downscale at 1x and 2x DPR.
-constexpr int kToolbarIconRasterSizePx = 64;
+/// Raster size for toolbar artwork. Icons display at 20 logical px, so 80 px
+/// gives exact 4:1 and 2:1 downsampling at the common 1x and 2x scales.
+constexpr int kToolbarIconRasterSizePx = 80;
 
 /// Icon display size inside the button, in logical px.
 constexpr float kToolbarIconDisplaySize = 20.0f;
@@ -20,7 +20,6 @@ std::span<const unsigned char> ToolbarIconSvg(ToolbarIcon icon) {
     case ToolbarIcon::Select: return embedded::kToolSelectIconSvg;
     case ToolbarIcon::Pen: return embedded::kToolPenIconSvg;
     case ToolbarIcon::Text: return embedded::kToolTextIconSvg;
-    case ToolbarIcon::PathModify: return embedded::kToolPathModifyIconSvg;
   }
   return embedded::kToolSelectIconSvg;
 }
@@ -31,7 +30,6 @@ std::uint64_t ToolbarIconTextureKey(ToolbarIcon icon) {
     case ToolbarIcon::Select: return kIconTextureKeyBase + 1u;
     case ToolbarIcon::Pen: return kIconTextureKeyBase + 2u;
     case ToolbarIcon::Text: return kIconTextureKeyBase + 3u;
-    case ToolbarIcon::PathModify: return kIconTextureKeyBase + 4u;
   }
   return kIconTextureKeyBase;
 }
@@ -40,22 +38,17 @@ const std::optional<svg::RendererBitmap>& CachedToolbarIconBitmap(ToolbarIcon ic
   switch (icon) {
     case ToolbarIcon::Select: {
       static const std::optional<svg::RendererBitmap> bitmap =
-          RenderEmbeddedSvgIcon(ToolbarIconSvg(ToolbarIcon::Select), kToolbarIconRasterSizePx);
+          RenderEmbeddedSvgArtwork(ToolbarIconSvg(ToolbarIcon::Select), kToolbarIconRasterSizePx);
       return bitmap;
     }
     case ToolbarIcon::Pen: {
       static const std::optional<svg::RendererBitmap> bitmap =
-          RenderEmbeddedSvgIcon(ToolbarIconSvg(ToolbarIcon::Pen), kToolbarIconRasterSizePx);
+          RenderEmbeddedSvgArtwork(ToolbarIconSvg(ToolbarIcon::Pen), kToolbarIconRasterSizePx);
       return bitmap;
     }
     case ToolbarIcon::Text: {
       static const std::optional<svg::RendererBitmap> bitmap =
-          RenderEmbeddedSvgIcon(ToolbarIconSvg(ToolbarIcon::Text), kToolbarIconRasterSizePx);
-      return bitmap;
-    }
-    case ToolbarIcon::PathModify: {
-      static const std::optional<svg::RendererBitmap> bitmap =
-          RenderEmbeddedSvgIcon(ToolbarIconSvg(ToolbarIcon::PathModify), kToolbarIconRasterSizePx);
+          RenderEmbeddedSvgArtwork(ToolbarIconSvg(ToolbarIcon::Text), kToolbarIconRasterSizePx);
       return bitmap;
     }
   }

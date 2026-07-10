@@ -93,8 +93,11 @@ gui::EditorWindow MakeHiddenWindow() {
 std::filesystem::path TempPathForTest(std::string_view suffix) {
   const testing::TestInfo* testInfo = testing::UnitTest::GetInstance()->current_test_info();
   const std::string testName = testInfo != nullptr ? testInfo->name() : "unknown";
-  return std::filesystem::temp_directory_path() /
-         ("donner_editor_shell_" + testName + "_" + std::string(suffix));
+  const char* testTmpDir = std::getenv("TEST_TMPDIR");
+  const std::filesystem::path writableTempDirectory = testTmpDir != nullptr && testTmpDir[0] != '\0'
+                                                          ? std::filesystem::path(testTmpDir)
+                                                          : std::filesystem::temp_directory_path();
+  return writableTempDirectory / ("donner_editor_shell_" + testName + "_" + std::string(suffix));
 }
 
 void WriteTextFile(const std::filesystem::path& path, std::string_view text) {
@@ -291,6 +294,30 @@ TEST(EditorShellInternalTest, GeometryHelpersClampPaneWidthAndTransformBounds) {
       Box2d::FromXYWH(0.0, 0.0, 10.0, 20.0), Transform2d::Translate(Vector2d(5.0, -3.0)));
   EXPECT_EQ(transformed.topLeft, Vector2d(5.0, -3.0));
   EXPECT_EQ(transformed.bottomRight, Vector2d(15.0, 17.0));
+}
+
+TEST(EditorShellInternalTest, TextFormatBarCapturesCanvasInputWithinItsLayoutRect) {
+  const Box2d toolPaletteRect = Box2d::FromXYWH(210.0, 40.0, 180.0, 44.0);
+  const std::optional<Box2d> formatBarRect = internal::TextFormatBarScreenRect(
+      ImVec2(10.0f, 20.0f), ImVec2(580.0f, 360.0f), toolPaletteRect,
+      /*visible=*/true, /*barHeight=*/48.0f);
+  ASSERT_TRUE(formatBarRect.has_value());
+  EXPECT_DOUBLE_EQ(formatBarRect->topLeft.y, 92.0);
+  EXPECT_DOUBLE_EQ(formatBarRect->width(), TextFormatBarPresenter::PreferredWidth());
+
+  const Box2d referenceChipRect = Box2d::FromXYWH(20.0, 300.0, 80.0, 24.0);
+  const Box2d zoomControlRect = Box2d::FromXYWH(520.0, 320.0, 48.0, 28.0);
+  const ImVec2 formatControlPoint(static_cast<float>(formatBarRect->topLeft.x + 20.0),
+                                  static_cast<float>(formatBarRect->topLeft.y + 20.0));
+  EXPECT_TRUE(internal::CanvasChromeCapturesInput(formatControlPoint, referenceChipRect,
+                                                  toolPaletteRect, formatBarRect, zoomControlRect));
+  EXPECT_FALSE(internal::CanvasChromeCapturesInput(
+      ImVec2(150.0f, 220.0f), referenceChipRect, toolPaletteRect, formatBarRect, zoomControlRect));
+
+  EXPECT_FALSE(internal::TextFormatBarScreenRect(ImVec2(10.0f, 20.0f), ImVec2(580.0f, 360.0f),
+                                                 toolPaletteRect,
+                                                 /*visible=*/false, /*barHeight=*/48.0f)
+                   .has_value());
 }
 
 TEST(EditorShellInternalTest, PendingClickBusyActionPrefersFastRedragThenCancelsBusyRender) {
@@ -789,12 +816,12 @@ public:
                                const Vector2d& renderPaneSize, ImGuiWindowFlags paneFlags) {
     // The render pane now docks itself; outside a DockSpace it Begins as a
     // floating "Render" window, so position it explicitly for the test frame.
-    ImGui::SetNextWindowPos(ImVec2(static_cast<float>(renderPaneOrigin.x),
-                                   static_cast<float>(renderPaneOrigin.y)),
-                            ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(static_cast<float>(renderPaneSize.x),
-                                    static_cast<float>(renderPaneSize.y)),
-                             ImGuiCond_Always);
+    ImGui::SetNextWindowPos(
+        ImVec2(static_cast<float>(renderPaneOrigin.x), static_cast<float>(renderPaneOrigin.y)),
+        ImGuiCond_Always);
+    ImGui::SetNextWindowSize(
+        ImVec2(static_cast<float>(renderPaneSize.x), static_cast<float>(renderPaneSize.y)),
+        ImGuiCond_Always);
     shell.renderRenderPane(paneFlags | ImGuiWindowFlags_NoSavedSettings);
   }
 
@@ -930,9 +957,7 @@ public:
 
   static bool DockLayoutLocked(const EditorShell& shell) { return shell.dockLayoutLocked_; }
 
-  static void RequestDockLayoutReset(EditorShell& shell) {
-    shell.dockLayoutResetRequested_ = true;
-  }
+  static void RequestDockLayoutReset(EditorShell& shell) { shell.dockLayoutResetRequested_ = true; }
 
   static bool DockLayoutResetRequested(const EditorShell& shell) {
     return shell.dockLayoutResetRequested_;
@@ -974,6 +999,9 @@ public:
   static std::size_t StyleSourceContributionCount(const EditorShell& shell) {
     return shell.styleSourceContributions_.size();
   }
+  static std::uint64_t StyleSourceDecorationDocumentGeneration(const EditorShell& shell) {
+    return shell.styleSourceDecorationDocumentGeneration_;
+  }
   static std::optional<Vector2d> RenderContextMenuDocumentPoint(const EditorShell& shell) {
     return shell.renderContextMenuDocumentPoint_;
   }
@@ -1008,6 +1036,19 @@ void RunFramesUntilDisplayedSelectionBounds(gui::EditorWindow& window, EditorShe
 
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
+}
+
+bool WaitForStyleSourceDecorations(EditorShell& shell) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  do {
+    EditorShellTestAccess::UpdateSourceStyleDecorations(shell);
+    if (EditorShellTestAccess::StyleSourceDecorationsValid(shell)) {
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  } while (std::chrono::steady_clock::now() < deadline);
+
+  return false;
 }
 
 void DriveGlobalShortcut(EditorShell& shell, const std::vector<ImGuiKey>& keys, bool ctrl = false,
@@ -1875,8 +1916,7 @@ TEST(EditorShellTest, SourceFocusAndStyleDecorationsTrackSelectionAndDirtySource
   EXPECT_TRUE(EditorShellTestAccess::SourceFocusMode(shell));
   EXPECT_TRUE(EditorShellTestAccess::Source(shell).hasFocusPartition());
 
-  EditorShellTestAccess::UpdateSourceStyleDecorations(shell);
-  EXPECT_TRUE(EditorShellTestAccess::StyleSourceDecorationsValid(shell));
+  EXPECT_TRUE(WaitForStyleSourceDecorations(shell));
   EXPECT_GT(EditorShellTestAccess::StyleSourceContributionCount(shell), 0u);
   EXPECT_GT(EditorShellTestAccess::Source(shell).sourceStyleDecorations().size(), 0u);
 
@@ -1889,6 +1929,41 @@ TEST(EditorShellTest, SourceFocusAndStyleDecorationsTrackSelectionAndDirtySource
   source.insertText(" ");
   EditorShellTestAccess::UpdateSourceStyleDecorations(shell);
   EXPECT_FALSE(EditorShellTestAccess::StyleSourceDecorationsValid(shell));
+  EXPECT_TRUE(source.sourceStyleDecorations().empty());
+}
+
+TEST(EditorShellTest, SourceStyleDecorationsDiscardReplacedDocumentResult) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kStyledSvg, "styled.svg"));
+  ASSERT_TRUE(shell.valid());
+  ASSERT_TRUE(WaitForStyleSourceDecorations(shell));
+  ASSERT_GT(EditorShellTestAccess::StyleSourceContributionCount(shell), 0u);
+
+  ASSERT_TRUE(EditorShellTestAccess::App(shell).document().loadFromString(kStyledSvg));
+  TextEditor& source = EditorShellTestAccess::Source(shell);
+  source.setText(internal::CanonicalizeForTextEditor(kStyledSvg));
+  source.resetTextChanged();
+  EditorShellTestAccess::UpdateSourceStyleDecorations(shell);
+  EXPECT_FALSE(EditorShellTestAccess::StyleSourceDecorationsValid(shell));
+  EXPECT_TRUE(source.sourceStyleDecorations().empty());
+
+  constexpr std::string_view kReplacementSvg = R"svg(
+<svg xmlns="http://www.w3.org/2000/svg">
+  <g id="replacement"/>
+</svg>
+)svg";
+  ASSERT_TRUE(EditorShellTestAccess::App(shell).document().loadFromString(kReplacementSvg));
+  source.setText(internal::CanonicalizeForTextEditor(kReplacementSvg));
+  source.resetTextChanged();
+
+  ASSERT_TRUE(WaitForStyleSourceDecorations(shell));
+  EXPECT_EQ(EditorShellTestAccess::StyleSourceDecorationDocumentGeneration(shell),
+            EditorShellTestAccess::App(shell).document().documentGeneration());
+  EXPECT_EQ(EditorShellTestAccess::StyleSourceContributionCount(shell), 0u);
   EXPECT_TRUE(source.sourceStyleDecorations().empty());
 }
 
@@ -2206,6 +2281,7 @@ TEST(EditorShellTest, SourcePaneVisibilityRevealAndHoverRangesUseCurrentDocument
   ASSERT_FALSE(ranges.empty());
   EXPECT_LT(ranges.front().start, ranges.front().end);
 
+  EditorShellTestAccess::SetSourcePaneVisible(shell, true);
   ASSERT_TRUE(EditorShellTestAccess::Source(shell).setHoverSourceRanges(ranges));
   EditorShellTestAccess::SetSourcePaneVisible(shell, false);
   EXPECT_FALSE(EditorShellTestAccess::SourcePaneVisible(shell));
@@ -2401,6 +2477,7 @@ TEST(EditorShellTest, SourcePaneSplitterDragCollapsesPane) {
 
   EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
   ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::SetSourcePaneVisible(shell, true);
 
   const Box2d sourceRect = RenderSourcePaneSplitterFrame(
       window, shell, /*sourcePaneWidth=*/260.0f, ImVec2(-100.0f, -100.0f), /*mouseDown=*/false);
@@ -2425,6 +2502,7 @@ TEST(EditorShellTest, SourcePaneSplitterDragExpandsVisiblePane) {
   EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
   ASSERT_TRUE(shell.valid());
 
+  EditorShellTestAccess::SetSourcePaneVisible(shell, true);
   EditorShellTestAccess::SetSourcePaneWidth(shell, 260.0f);
   const Box2d sourceRect = RenderSourcePaneSplitterFrame(window, shell, /*sourcePaneWidth=*/260.0f,
                                                          ImVec2(-100.0f, -100.0f),
@@ -2441,6 +2519,29 @@ TEST(EditorShellTest, SourcePaneSplitterDragExpandsVisiblePane) {
 
   EXPECT_TRUE(EditorShellTestAccess::SourcePaneVisible(shell));
   EXPECT_GT(EditorShellTestAccess::SourcePaneWidth(shell), 260.0f);
+}
+
+TEST(EditorShellTest, SourcePaneRevealRailOpensOnClick) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  ASSERT_FALSE(EditorShellTestAccess::SourcePaneVisible(shell));
+
+  RenderSourcePaneSplitterFrame(window, shell, /*sourcePaneWidth=*/0.0f, ImVec2(-100.0f, -100.0f),
+                                /*mouseDown=*/false);
+  const ImVec2 center(16.0f, 110.0f);
+  RenderSourcePaneSplitterFrame(window, shell, /*sourcePaneWidth=*/0.0f, center,
+                                /*mouseDown=*/false);
+  RenderSourcePaneSplitterFrame(window, shell, /*sourcePaneWidth=*/0.0f, center,
+                                /*mouseDown=*/true);
+  RenderSourcePaneSplitterFrame(window, shell, /*sourcePaneWidth=*/0.0f, center,
+                                /*mouseDown=*/false);
+
+  EXPECT_TRUE(EditorShellTestAccess::SourcePaneVisible(shell));
 }
 
 TEST(EditorShellTest, FillStrokeToolbarMouseHitTestingCoversChipsSwatchesAndTooltips) {
@@ -2735,14 +2836,14 @@ TEST(EditorShellTest, SourcePaneVisibilityNoOpsWhenAlreadyMatching) {
   EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
   ASSERT_TRUE(shell.valid());
 
-  ASSERT_TRUE(EditorShellTestAccess::SourcePaneVisible(shell));
+  ASSERT_FALSE(EditorShellTestAccess::SourcePaneVisible(shell));
+  EditorShellTestAccess::SetSourcePaneVisible(shell, false);
+  EXPECT_FALSE(EditorShellTestAccess::SourcePaneVisible(shell));
+
   EditorShellTestAccess::SetSourcePaneVisible(shell, true);
   EXPECT_TRUE(EditorShellTestAccess::SourcePaneVisible(shell));
-
-  EditorShellTestAccess::SetSourcePaneVisible(shell, false);
-  EXPECT_FALSE(EditorShellTestAccess::SourcePaneVisible(shell));
-  EditorShellTestAccess::SetSourcePaneVisible(shell, false);
-  EXPECT_FALSE(EditorShellTestAccess::SourcePaneVisible(shell));
+  EditorShellTestAccess::SetSourcePaneVisible(shell, true);
+  EXPECT_TRUE(EditorShellTestAccess::SourcePaneVisible(shell));
 }
 
 TEST(EditorShellTest, SelectAllCanvasAndTextSelectionPreconditions) {

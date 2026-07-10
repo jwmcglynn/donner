@@ -73,6 +73,9 @@ enum class SelectionChromeDetail {
   PathOutlinesOnly,
   /// Capture only the combined selection bounds, skipping path extraction.
   CombinedBoundsOnly,
+  /// Skip selection geometry entirely. Dedicated editing chrome (for example
+  /// a text caret and session frame) is attached to the snapshot separately.
+  EditingChromeOnly,
 };
 
 /// Frozen view of everything `OverlayRenderer::drawChromeWithTransform`
@@ -201,6 +204,9 @@ struct SelectionChromeSnapshot {
   /// rotate it stays aligned to the text's rotation, never the axis-aligned
   /// envelope. Corner resize/rotate handles are drawn at these corners.
   std::optional<std::array<Vector2d, 4>> textFrameCornersDoc;
+  /// Opacity of the text frame and its handles. Point text animates this
+  /// value after pointer movement and typing; box text remains at 1.
+  float textFrameOpacity = 1.0f;
 
   /// Drag-to-create text-box preview: the live rectangle the text tool is
   /// dragging out, plus the first baseline it would create and an I-beam

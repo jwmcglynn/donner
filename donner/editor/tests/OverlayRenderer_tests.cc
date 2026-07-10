@@ -225,6 +225,48 @@ TEST(OverlayRendererTest, PathOutlinesOnlyOmitsSelectionBoundsAndHandles) {
   EXPECT_TRUE(snapshot.handleBoxesDoc.empty());
 }
 
+TEST(OverlayRendererTest, EditingChromeOnlySkipsSelectionGeometry) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+  auto rect = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(rect.has_value());
+  app.setSelection(*rect);
+
+  const SelectionChromeSnapshot snapshot = OverlayRenderer::captureChromeSnapshot(
+      std::span<const svg::SVGElement>(app.selectedElements()), std::nullopt, Transform2d(),
+      std::nullopt, std::span<const svg::SVGElement>(), std::nullopt,
+      SelectionChromeDetail::EditingChromeOnly);
+
+  EXPECT_TRUE(snapshot.paths.empty());
+  EXPECT_TRUE(snapshot.aabbsDoc.empty());
+  EXPECT_TRUE(snapshot.textBaselinesDoc.empty());
+  EXPECT_TRUE(snapshot.handleBoxesDoc.empty());
+}
+
+TEST(OverlayRendererTest, ActiveCombinedBoundsPreviewAvoidsSelectionPathCapture) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+  auto rect = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(rect.has_value());
+  app.setSelection(*rect);
+
+  const SelectionChromeBoundsPreview boundsPreview{
+      .startBoundsDoc = Box2d::FromXYWH(20.0, 30.0, 40.0, 50.0),
+      .documentFromStartDocument = Transform2d::Translate(Vector2d(15.0, 5.0)),
+  };
+  const SelectionChromeSnapshot snapshot = OverlayRenderer::captureChromeSnapshot(
+      std::span<const svg::SVGElement>(app.selectedElements()), std::nullopt, Transform2d(),
+      boundsPreview, std::span<const svg::SVGElement>(), std::nullopt,
+      SelectionChromeDetail::CombinedBoundsOnly);
+
+  EXPECT_TRUE(snapshot.paths.empty());
+  EXPECT_TRUE(snapshot.aabbsDoc.empty());
+  ASSERT_TRUE(snapshot.orientedBoundsDoc.has_value());
+  EXPECT_EQ(snapshot.orientedBoundsDoc->cornersDoc[0], Vector2d(35.0, 35.0));
+  EXPECT_EQ(snapshot.orientedBoundsDoc->cornersDoc[2], Vector2d(75.0, 85.0));
+  EXPECT_EQ(snapshot.handleBoxesDoc.size(), 4u);
+}
+
 TEST(OverlayRendererTest, SelectedPathSnapshotIncludesAnchorsAndControlLines) {
   constexpr std::string_view kPathSvg =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
@@ -1170,9 +1212,8 @@ TEST(OverlayRendererTest, MultiSelectDrawsCombinedAabbInSkiaOverlay) {
 // Selecting a `<g filter="...">` elevates picker-wise to the group, but
 // the group itself isn't a geometry element - pre-fix, the overlay
 // drew nothing. Users expect selection chrome to show the outlines of
-// every visible shape inside the group (matches Figma / Illustrator /
-// Inkscape). The AABB must also envelope the full group, not come back
-// empty.
+// every visible shape inside the group, matching established vector-editor
+// behavior. The AABB must also envelope the full group, not come back empty.
 TEST(OverlayRendererTest, SelectingFilterGroupDrawsOutlinesOfAllGeometryDescendants) {
   constexpr std::string_view kFilterGroupSvg =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
@@ -1625,6 +1666,38 @@ TEST(OverlayRendererTest, TextSelectionCapturesBoundsAndTransformHandles) {
   EXPECT_FALSE(snapshot.handleBoxesDoc.empty());
 }
 
+TEST(OverlayRendererTest, TextFrameHandlesMatchSelectHandleSizeAtTwoXScale) {
+  SelectionChromeSnapshot snapshot;
+  snapshot.canvasFromDoc = Transform2d::Scale(2.0);
+  snapshot.selectionStrokeWidthWorld = 1.25;
+  snapshot.textFrameCornersDoc = std::array<Vector2d, 4>{
+      Vector2d(20.0, 20.0), Vector2d(40.0, 20.0), Vector2d(40.0, 40.0), Vector2d(20.0, 40.0)};
+
+  const svg::RendererBitmap bitmap = DrawSnapshot(snapshot);
+  ASSERT_FALSE(bitmap.empty());
+  const auto alphaAt = [&](int x, int y) {
+    const std::uint8_t* row = bitmap.pixels.data() + y * bitmap.rowBytes;
+    return row[x * 4 + 3];
+  };
+
+  // Top-left corner maps to (40,40). A 9px select-style handle covers the
+  // near diagonal but not a point seven pixels out. The old text-specific
+  // DPR calculation produced an 18px handle and covered both.
+  EXPECT_GT(alphaAt(43, 43), 0);
+  EXPECT_EQ(alphaAt(47, 47), 0);
+}
+
+TEST(OverlayRendererTest, ZeroOpacityPointFrameDrawsNoFrameOrHandles) {
+  SelectionChromeSnapshot snapshot;
+  snapshot.canvasFromDoc = Transform2d();
+  snapshot.selectionStrokeWidthWorld = 1.25;
+  snapshot.textFrameCornersDoc = std::array<Vector2d, 4>{
+      Vector2d(20.0, 20.0), Vector2d(80.0, 20.0), Vector2d(80.0, 80.0), Vector2d(20.0, 80.0)};
+  snapshot.textFrameOpacity = 0.0f;
+
+  EXPECT_FALSE(HasAnyNonTransparentPixel(DrawSnapshot(snapshot)));
+}
+
 TEST(OverlayRendererTest, TextSelectionCapturesBaselineUnderlay) {
   constexpr std::string_view kTextSvg =
       R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
@@ -1670,7 +1743,6 @@ TEST(OverlayRendererTest, MultiLineTextCapturesOneBaselinePerLine) {
   EXPECT_NEAR(snapshot.textBaselinesDoc[0].startDoc.y, 80.0, 1.0);
   EXPECT_NEAR(snapshot.textBaselinesDoc[1].startDoc.y, 104.0, 1.0);
 }
-
 
 TEST(OverlayRendererTest, TextBoxDragPreviewDrawsFrameBaselineAndIbeamDistinctFromMarquee) {
   // Pure pushed-state chrome: no document registry reads are involved, so

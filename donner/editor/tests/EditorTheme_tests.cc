@@ -8,18 +8,17 @@ namespace donner::editor {
 
 namespace {
 
-constexpr std::array<Accent, kAccentCount> kAllAccents = {
-    Accent::AzimuthBlue, Accent::SignalTeal, Accent::UltraViolet};
+constexpr std::array<Accent, kAccentCount> kAllAccents = {Accent::AzimuthBlue, Accent::SignalTeal,
+                                                          Accent::UltraViolet};
 
 /// Every color token, so completeness can be asserted without listing each one
 /// at every call site. None of the design-doc tokens is transparent-black
 /// (IM_COL32 == 0), so "nonzero" is a sound "was populated" proxy.
 std::array<ImU32, 20> AllColorTokens(const EditorTheme& t) {
-  return {t.surfaceCanvas,   t.surfaceSunken, t.surfaceBase,   t.surfaceRaised,
-          t.surfaceOverlay,  t.surfaceHover,  t.surfaceActive, t.borderSubtle,
-          t.borderStrong,    t.textPrimary,   t.textMuted,     t.textDisabled,
-          t.accentActive,    t.accentDefault, t.accentHover,   t.accentInk,
-          t.selectionStroke, t.warning,       t.destructive,   t.success};
+  return {t.surfaceCanvas, t.surfaceSunken,   t.surfaceBase,  t.surfaceRaised, t.surfaceOverlay,
+          t.surfaceHover,  t.surfaceActive,   t.borderSubtle, t.borderStrong,  t.textPrimary,
+          t.textMuted,     t.textDisabled,    t.accentActive, t.accentDefault, t.accentHover,
+          t.accentInk,     t.selectionStroke, t.warning,      t.destructive,   t.success};
 }
 
 }  // namespace
@@ -39,9 +38,10 @@ TEST(EditorTheme, TokenCompletenessForEveryAccent) {
     EXPECT_FLOAT_EQ(theme.radiusControl, 4.0f);
     EXPECT_FLOAT_EQ(theme.radiusContainer, 6.0f);
     EXPECT_FLOAT_EQ(theme.scrollbarSize, 12.0f);
+    EXPECT_FLOAT_EQ(theme.toolButtonSize, 32.0f);
     EXPECT_FLOAT_EQ(theme.selectionFillAlpha, 0.22f);
     // Ink on accent fills is the dark ink for every accent.
-    EXPECT_EQ(theme.accentInk, IM_COL32(0x0E, 0x11, 0x16, 0xFF));
+    EXPECT_EQ(theme.accentInk, IM_COL32(0x11, 0x12, 0x15, 0xFF));
     // Selection derives from the accent.
     EXPECT_EQ(theme.selectionStroke, theme.accentDefault);
   }
@@ -72,12 +72,12 @@ TEST(EditorTheme, AccentEnumCoverage) {
 // The named palette values match design doc 0054 exactly.
 TEST(EditorTheme, PaletteMatchesDoc) {
   const EditorTheme t = EditorTheme::Dark(Accent::SignalTeal);
-  EXPECT_EQ(t.surfaceCanvas, IM_COL32(0x0E, 0x11, 0x16, 0xFF));
-  EXPECT_EQ(t.surfaceBase, IM_COL32(0x16, 0x1B, 0x22, 0xFF));
-  EXPECT_EQ(t.surfaceRaised, IM_COL32(0x1E, 0x25, 0x2E, 0xFF));
-  EXPECT_EQ(t.surfaceOverlay, IM_COL32(0x23, 0x2B, 0x36, 0xFF));
-  EXPECT_EQ(t.textPrimary, IM_COL32(0xE6, 0xEA, 0xF0, 0xFF));
-  EXPECT_EQ(t.textMuted, IM_COL32(0x9A, 0xA5, 0xB4, 0xFF));
+  EXPECT_EQ(t.surfaceCanvas, IM_COL32(0x11, 0x12, 0x15, 0xFF));
+  EXPECT_EQ(t.surfaceBase, IM_COL32(0x1B, 0x1D, 0x20, 0xFF));
+  EXPECT_EQ(t.surfaceRaised, IM_COL32(0x24, 0x27, 0x2B, 0xFF));
+  EXPECT_EQ(t.surfaceOverlay, IM_COL32(0x2B, 0x2F, 0x34, 0xFF));
+  EXPECT_EQ(t.textPrimary, IM_COL32(0xF1, 0xF2, 0xF4, 0xFF));
+  EXPECT_EQ(t.textMuted, IM_COL32(0xA8, 0xAD, 0xB5, 0xFF));
   EXPECT_EQ(t.warning, IM_COL32(0xE3, 0xB3, 0x41, 0xFF));
   EXPECT_EQ(t.destructive, IM_COL32(0xF0, 0x61, 0x6A, 0xFF));
   EXPECT_EQ(t.success, IM_COL32(0x3F, 0xB9, 0x84, 0xFF));
@@ -132,6 +132,9 @@ TEST(EditorTheme, ApplyToImGuiStyleSetsMappedSlots) {
   EXPECT_EQ(slotU32(ImGuiCol_NavHighlight), t.accentDefault);
   EXPECT_EQ(slotU32(ImGuiCol_ScrollbarBg), t.surfaceSunken);
   EXPECT_EQ(slotU32(ImGuiCol_ScrollbarGrab), t.surfaceHover);
+  EXPECT_EQ(slotU32(ImGuiCol_TabSelected), t.surfaceBase);
+  EXPECT_EQ(slotU32(ImGuiCol_TabSelectedOverline), t.accentDefault);
+  EXPECT_EQ(slotU32(ImGuiCol_TableHeaderBg), t.surfaceRaised);
 
   EXPECT_FLOAT_EQ(style.FrameRounding, 4.0f);
   EXPECT_FLOAT_EQ(style.GrabRounding, 4.0f);
@@ -145,6 +148,12 @@ TEST(EditorTheme, ApplyToImGuiStyleSetsMappedSlots) {
   EXPECT_FLOAT_EQ(style.WindowPadding.y, 8.0f);
   EXPECT_FLOAT_EQ(style.IndentSpacing, 16.0f);
   EXPECT_FLOAT_EQ(style.ScrollbarSize, 12.0f);
+  EXPECT_FLOAT_EQ(style.WindowBorderSize, 0.0f);
+  EXPECT_FLOAT_EQ(style.FrameBorderSize, 1.0f);
+  EXPECT_FLOAT_EQ(style.TabBorderSize, 0.0f);
+  EXPECT_FLOAT_EQ(style.TabBarBorderSize, 1.0f);
+  EXPECT_FLOAT_EQ(style.TabBarOverlineSize, 2.0f);
+  EXPECT_FLOAT_EQ(style.DockingSeparatorSize, 1.0f);
 }
 
 // applyToImGuiStyle publishes the active theme for raw-draw widgets.

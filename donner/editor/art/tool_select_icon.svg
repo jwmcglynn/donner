@@ -1,15 +1,21 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
-  <!-- Selection tool: the classic arrow pointer WITH tail (distinct from the
-       tail-less selection cursor). Single-color mask; the toolbar tints it. -->
+  <!-- Selection tool: the same tailless pointer silhouette as the canvas cursor.
+       Separate outer and inner shapes keep the black core inside a clean white halo. -->
   <path
     d="
-      M 5.5 3.5
-      L 5.5 21
-      L 10.2 16.4
-      L 12.9 22
-      L 15.8 20.6
-      L 13 15.1
-      L 19.5 15.1
+      M 8.327 3.097
+      L 8.327 20.097
+      L 13.127 15.297
+      L 20.327 15.297
       Z"
-    fill="#000000" />
+    fill="#ffffff" />
+  <path
+    d="
+      M 8.327 3.097
+      L 8.327 20.097
+      L 13.127 15.297
+      L 20.327 15.297
+      Z"
+    fill="#000000"
+    transform="translate(12 12) scale(0.82) translate(-12 -12)" />
 </svg>

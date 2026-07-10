@@ -191,12 +191,14 @@ donner_cc_library(
     srcs = ["StyleSourceAnnotations.cc"],
     hdrs = ["StyleSourceAnnotations.h"],
     deps = [
+        ":attribute_writeback",
         ":flash_decorations",
         ":reference_fanout",
         "//donner/base",
         "//donner/base/xml",
         "//donner/css",
         "//donner/svg",
+        "//donner/svg/parser",
     ],
 )
 
@@ -618,6 +620,7 @@ donner_cc_library(
     srcs = ["MenuBarPresenter.cc"],
     hdrs = ["MenuBarPresenter.h"],
     deps = [
+        ":editor_theme",
         ":imgui_headers",
         "@imgui",
     ],
@@ -629,6 +632,7 @@ donner_cc_library(
     hdrs = ["TextFormatBarPresenter.h"],
     deps = [
         ":editor_app",
+        ":editor_theme",
         ":imgui_headers",
         "//donner/base",
         "//donner/base/parser",
@@ -704,6 +708,7 @@ donner_cc_library(
         ":command_queue",
         ":disclosure_chevron",
         ":editor_app",
+        ":editor_theme",
         ":embedded_svg_icon",
         ":imgui_headers",
         ":lock_state",
@@ -870,8 +875,8 @@ donner_cc_library(
         "//conditions:default": [],
     }),
     deps = [
-        ":canvas_scrollbars",
         ":attribute_writeback",
+        ":canvas_scrollbars",
         ":clipboard_interface",
         ":compositor_debug_panel",
         ":dialog_presenter",
@@ -1166,7 +1171,6 @@ embed_resources(
         "kToolSelectIconSvg": "art/tool_select_icon.svg",
         "kToolPenIconSvg": "art/tool_pen_icon.svg",
         "kToolTextIconSvg": "art/tool_text_icon.svg",
-        "kToolPathModifyIconSvg": "art/tool_path_modify_icon.svg",
     },
 )
 

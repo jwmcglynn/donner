@@ -6,6 +6,7 @@
 #include <string_view>
 #include <vector>
 
+#include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/FlashDecorations.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
@@ -42,6 +43,24 @@ struct StyleSourceAnnotations {
   std::vector<StyleSourceContribution> contributions;
 };
 
+/// One annotation contribution detached from a document registry.
+///
+/// Background annotation work cannot return SVG element handles to the UI
+/// thread. Stable writeback targets preserve chip-action identity without
+/// sharing the parsed worker document.
+struct DetachedStyleSourceContribution {
+  StyleSourceContribution contribution;
+  std::vector<std::size_t> matchedElementTargetIndices;
+};
+
+/// Registry-independent result of a source-only annotation computation.
+struct DetachedStyleSourceAnnotations {
+  bool valid = false;  ///< False when the source could not be parsed.
+  /// Deduplicated targets shared by contribution match lists.
+  std::vector<AttributeWritebackTarget> elementTargets;
+  std::vector<DetachedStyleSourceContribution> contributions;
+};
+
 /**
  * Compute source-editor style annotations for \p document.
  *
@@ -54,5 +73,18 @@ struct StyleSourceAnnotations {
  */
 [[nodiscard]] StyleSourceAnnotations ComputeStyleSourceAnnotations(svg::SVGDocument& document,
                                                                    std::string_view source);
+
+/**
+ * Parse source in an isolated document and compute registry-independent style annotations.
+ *
+ * Intended for background editor work. The returned element locators must be
+ * resolved against the current UI document after its source revision is
+ * revalidated.
+ *
+ * @param source Complete SVG source to parse and inspect.
+ * @return Detached annotations, or a result with `valid == false` on parse failure.
+ */
+[[nodiscard]] DetachedStyleSourceAnnotations ComputeDetachedStyleSourceAnnotations(
+    std::string source);
 
 }  // namespace donner::editor

@@ -3,6 +3,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
+
 #include "donner/editor/TextPatch.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGraphicsElement.h"
@@ -473,6 +475,27 @@ TEST(AttributeWritebackResolveTest, ResolvesNestedElementByPathWhenIdAbsent) {
   const auto resolved = resolveAttributeWritebackTarget(*document, *target);
   ASSERT_TRUE(resolved.has_value());
   EXPECT_EQ(resolved->tagName().name, "circle");
+}
+
+TEST(AttributeWritebackResolveTest, BatchResolutionPreservesTargetOrderAndMisses) {
+  auto document = ParseDocument(kGroupedCircleSvg);
+  ASSERT_TRUE(document.has_value());
+  const svg::SVGElement circle = GetElementById(*document, "#c1");
+  const auto circleTarget = captureAttributeWritebackTarget(circle);
+  ASSERT_TRUE(circleTarget.has_value());
+
+  AttributeWritebackTarget missing = *circleTarget;
+  missing.elementId.reset();
+  missing.elementPath.back().elementChildIndex = 99;
+  const std::array targets{*circleTarget, missing};
+
+  const std::vector<std::optional<svg::SVGElement>> resolved =
+      resolveAttributeWritebackTargets(*document, targets);
+
+  ASSERT_EQ(resolved.size(), 2u);
+  ASSERT_TRUE(resolved[0].has_value());
+  EXPECT_EQ(resolved[0]->id(), "c1");
+  EXPECT_FALSE(resolved[1].has_value());
 }
 
 TEST(AttributeWritebackResolveTest, EmptyPathResolvesToNullopt) {

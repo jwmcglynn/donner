@@ -19,6 +19,7 @@
 #include <chrono>
 #include <cstddef>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -49,6 +50,8 @@ public:
   /// repeating. The phase resets to visible on every caret-affecting edit so
   /// the caret never blinks away right after input.
   static constexpr double kCaretBlinkHalfPeriodSeconds = 0.5;
+  /// Point-text frames fade out over this interval after text input.
+  static constexpr double kPointFrameFadeSeconds = 0.18;
 
   /// Caret movement gestures.
   enum class CaretMove {
@@ -71,6 +74,10 @@ public:
     /// text's rotation, never the axis-aligned envelope. Absent when the
     /// session has no frame yet (empty point text).
     std::optional<std::array<Vector2d, 4>> frameCornersDoc;
+    /// Opacity for the point-text frame and handles. Box-text frames remain
+    /// fully opaque. New point text starts at zero, pointer movement reveals
+    /// it, and text input fades it back to zero.
+    float frameOpacity = 1.0f;
   };
 
   /// Drag-to-create preview chrome (document space): the live box being
@@ -118,6 +125,8 @@ public:
   /// True while the active frame gesture is a rotate (subset of
   /// `isAdjustingFrame`); drives the rotate cursor during the drag.
   [[nodiscard]] bool isRotatingFrame() const { return frameGesture_ == FrameGesture::Rotate; }
+  /// True while the active frame gesture is a resize.
+  [[nodiscard]] bool isResizingFrame() const { return frameGesture_ == FrameGesture::Resize; }
   /// Corner of the active frame gesture, for cursor feedback.
   [[nodiscard]] SelectionTransformCorner frameCorner() const { return frameCorner_; }
 
@@ -127,7 +136,7 @@ public:
   /// test runs in the text's local space, so on a rotated frame the handle
   /// zones track the ORIENTED corners, not the axis-aligned envelope. Reads
   /// the session's computed ink bounds for point text - call only while the
-  /// async render worker is idle.
+  /// async render worker is idle. Hidden point-text chrome is not hit-testable.
   [[nodiscard]] SelectionTransformHandleIntent frameHandleIntentAt(const Vector2d& documentPoint,
                                                                    double pixelsPerDocUnit,
                                                                    bool includeRotate) const;
@@ -137,8 +146,18 @@ public:
   /// or nullopt when no box drag has produced a live rectangle yet.
   [[nodiscard]] std::optional<DragPreviewChrome> dragPreviewChrome() const;
 
+  /// Reveal point-text frame chrome after pointer movement. Box-text frames
+  /// are always visible, so this is a no-op for them.
+  void notifyPointerMoved(const Vector2d& documentPoint);
+
   /// Insert one code point at the caret.
   void insertCodepoint(EditorApp& editor, char32_t codepoint);
+  /// Insert a frame's queued code points with one DOM synchronization.
+  ///
+  /// ImGui may deliver multiple characters in one input frame (paste, key
+  /// repeat, or an input method). Batching them avoids rebuilding and flushing
+  /// the text subtree once per code point.
+  void insertCodepoints(EditorApp& editor, std::span<const char32_t> codepoints);
   /// Insert a hard line break at the caret.
   void insertNewline(EditorApp& editor);
   /// Delete the code point before the caret.
@@ -186,6 +205,8 @@ public:
   /// redraws happen via overlay-chrome recapture only - the timed wake never
   /// forces a full-scene re-render.
   [[nodiscard]] std::optional<float> nextCaretBlinkWakeSeconds() const;
+  /// Wake cadence while a point-text frame is fading after input.
+  [[nodiscard]] std::optional<float> nextPointFrameFadeWakeSeconds() const;
 
   /// Logical content of the active session (hard breaks as '\n'); for tests.
   [[nodiscard]] const std::u32string& sessionContent() const { return content_; }
@@ -213,16 +234,17 @@ private:
   /// half of a glyph place the caret after it.
   [[nodiscard]] std::optional<std::size_t> caretIndexAtPoint(const Vector2d& documentPoint) const;
   /// The session frame in the text's local space: the authored box for box
-  /// text, or the laid-out ink bounds for point text. Nullopt when the ink
-  /// is empty and no box is authored.
+  /// text, or the font em-box bounds for point text. Nullopt when no glyph
+  /// geometry exists and no box is authored.
   [[nodiscard]] std::optional<Box2d> sessionFrameLocal() const;
   /// Start a frame resize/rotate when @p documentPoint lands on the session
   /// frame's transform handles. Returns true when a gesture began.
   bool beginFrameGestureAtPoint(const Vector2d& documentPoint, MouseModifiers modifiers);
   /// Advance the active frame gesture to @p documentPoint: resize rewrites
-  /// the box attributes and rewraps (converting point text to a user-sized
-  /// box on the first move); rotate sets the element transform.
+  /// only the UI-thread preview; rotate sets the element transform.
   void updateFrameGesture(EditorApp& editor, const Vector2d& documentPoint);
+  /// Commit the current resize preview to DOM attributes and rewrap once.
+  void commitFrameResize(EditorApp& editor);
   /// Rebuild the element's content from `content_` (single text node for one
   /// line; one `<tspan>` per line otherwise), wrapping box text to the box
   /// width using measured character advances. Flushes so subsequent
@@ -244,6 +266,10 @@ private:
   /// Restart the caret blink phase (caret becomes visible immediately).
   /// Called on every caret-affecting edit.
   void resetCaretBlinkPhase() { caretBlinkPhaseStart_ = std::chrono::steady_clock::now(); }
+  /// Start fading point-text frame chrome after a content edit.
+  void hidePointFrameAfterTyping();
+  /// Current point-frame opacity, including an in-progress fade.
+  [[nodiscard]] float pointFrameOpacity() const;
 
   /// Active frame handle gesture (session stays in Editing underneath).
   enum class FrameGesture {
@@ -305,6 +331,14 @@ private:
   /// Start of the current caret blink phase; reset on every caret-affecting
   /// edit so the caret is visible immediately after input.
   std::chrono::steady_clock::time_point caretBlinkPhaseStart_{};
+  /// Point text starts with hidden frame chrome. Pointer movement reveals it;
+  /// typing starts a short fade back to hidden.
+  bool pointFrameVisible_ = false;
+  std::optional<std::chrono::steady_clock::time_point> pointFrameFadeStart_;
+  /// Pointer position that opened or last revealed a point-text session.
+  /// Prevents placement-gesture mouse delta from revealing the frame in the
+  /// same frame the session starts.
+  std::optional<Vector2d> pointFramePointerAnchorDoc_;
 };
 
 }  // namespace donner::editor

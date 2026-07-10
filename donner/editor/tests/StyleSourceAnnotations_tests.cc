@@ -2,6 +2,9 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <optional>
+#include <string>
 #include <string_view>
 
 #include "donner/base/ParseWarningSink.h"
@@ -89,6 +92,34 @@ TEST(StyleSourceAnnotations, ComputeAllowsConcurrentDom) {
       annotations, StyleContributionKind::StylesheetDeclaration, "fill", "fill: red", kSource);
   ASSERT_NE(fill, nullptr);
   EXPECT_EQ(fill->matchedElementCount, 1);
+}
+
+TEST(StyleSourceAnnotations, DetachedComputationReturnsResolvableElementTargets) {
+  constexpr std::string_view kSource = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <style>.hit { fill: red; }</style>
+  <rect id="target" class="hit"/>
+</svg>)svg";
+
+  DetachedStyleSourceAnnotations detached =
+      ComputeDetachedStyleSourceAnnotations(std::string(kSource));
+
+  ASSERT_TRUE(detached.valid);
+  const auto contributionIter = std::find_if(
+      detached.contributions.begin(), detached.contributions.end(),
+      [](const DetachedStyleSourceContribution& contribution) {
+        return contribution.contribution.kind == StyleContributionKind::StylesheetDeclaration &&
+               contribution.contribution.propertyName == "fill";
+      });
+  ASSERT_NE(contributionIter, detached.contributions.end());
+  EXPECT_TRUE(contributionIter->contribution.matchedElements.empty());
+  ASSERT_EQ(contributionIter->matchedElementTargetIndices.size(), 1u);
+  ASSERT_EQ(detached.elementTargets.size(), 1u);
+
+  svg::SVGDocument liveDocument = ParseSvg(kSource);
+  const std::optional<svg::SVGElement> resolved =
+      resolveAttributeWritebackTarget(liveDocument, detached.elementTargets.front());
+  ASSERT_TRUE(resolved.has_value());
+  EXPECT_EQ(resolved->getAttribute("id"), "target");
 }
 
 TEST(StyleSourceAnnotations, StylesheetChipAnchorsToSelectorRange) {

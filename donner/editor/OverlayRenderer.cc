@@ -44,23 +44,18 @@ constexpr double kHoverStrokeLogicalPixels = 1.5;
 /// Marquee stroke thickness, in logical UI pixels.
 constexpr double kMarqueeStrokeLogicalPixels = 1.5;
 
-/// Corner handle square size for the text session frame, in logical UI
-/// pixels. Matches SelectionTransformHandles' kHandleSizePixels so the text
-/// frame's handles read identically to the select tool's.
-constexpr double kHandleSizeLogicalPixels = 9.0;
-
 /// Selected path anchor square size, in logical UI pixels.
 constexpr double kPathAnchorLogicalPixels = 5.0;
 
 /// Selected path control-point square size, in logical UI pixels.
 constexpr double kPathControlPointLogicalPixels = 4.0;
 
-svg::PaintParams MakeSelectionStrokePaint(double worldStrokeWidth) {
+svg::PaintParams MakeSelectionStrokePaint(double worldStrokeWidth, double opacity = 1.0) {
   svg::PaintParams paint;
   // Accent-tinted selection stroke, no fill (EditorTheme selection token).
   paint.stroke = svg::PaintServer::Solid(css::Color(EditorTheme::Active().selectionRgba(0xff)));
   paint.fill = svg::PaintServer::None{};
-  paint.strokeOpacity = 1.0;
+  paint.strokeOpacity = opacity;
   paint.strokeParams.strokeWidth = worldStrokeWidth;
   paint.strokeParams.lineCap = svg::StrokeLinecap::Butt;
   paint.strokeParams.lineJoin = svg::StrokeLinejoin::Miter;
@@ -86,12 +81,12 @@ svg::PaintParams MakeDisplayNoneSelectionStrokePaint(double worldStrokeWidth) {
   return paint;
 }
 
-svg::PaintParams MakeHandlePaint(double worldStrokeWidth) {
+svg::PaintParams MakeHandlePaint(double worldStrokeWidth, double opacity = 1.0) {
   svg::PaintParams paint;
   paint.fill = svg::PaintServer::Solid(css::Color(css::RGBA(0xff, 0xff, 0xff, 0xff)));
   paint.stroke = svg::PaintServer::Solid(css::Color(EditorTheme::Active().selectionRgba(0xff)));
-  paint.fillOpacity = 1.0;
-  paint.strokeOpacity = 1.0;
+  paint.fillOpacity = opacity;
+  paint.strokeOpacity = opacity;
   paint.strokeParams.strokeWidth = worldStrokeWidth;
   paint.strokeParams.lineCap = svg::StrokeLinecap::Butt;
   paint.strokeParams.lineJoin = svg::StrokeLinejoin::Miter;
@@ -727,7 +722,7 @@ SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
                       AppendChromeItemsOptions{.includePathPointChrome = false});
   }
 
-  if (selection.empty()) {
+  if (selection.empty() || selectionDetail == SelectionChromeDetail::EditingChromeOnly) {
     return snapshot;
   }
 
@@ -737,6 +732,31 @@ SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
   const bool combinedBoundsOnly = selectionDetail == SelectionChromeDetail::CombinedBoundsOnly;
   const bool pathOutlinesOnly = selectionDetail == SelectionChromeDetail::PathOutlinesOnly;
   const bool includePathPointChrome = pathOutlinesOnly;
+
+  // A live select gesture already carries immutable start bounds and the
+  // exact current document transform. Build its lightweight bounds chrome
+  // directly from that state instead of traversing selected geometry while
+  // the async renderer may hold the document. Besides avoiding contention,
+  // this keeps converted text (one path per glyph) at constant overlay cost.
+  if (combinedBoundsOnly && activeBoundsPreview.has_value()) {
+    const auto corners = TransformedBoxCorners(activeBoundsPreview->startBoundsDoc,
+                                               activeBoundsPreview->documentFromStartDocument);
+    std::array<Vector2d, 4> representedCorners;
+    for (std::size_t i = 0; i < corners.size(); ++i) {
+      representedCorners[i] = representedDocumentFromLiveDocument.transformPosition(corners[i]);
+    }
+    snapshot.orientedBoundsDoc = CullOrientedBox(
+        SelectionChromeSnapshot::OrientedBox{.cornersDoc = representedCorners}, cullRectDoc);
+    if (snapshot.orientedBoundsDoc.has_value()) {
+      snapshot.handleBoxesDoc.reserve(representedCorners.size());
+      for (const Vector2d& corner : representedCorners) {
+        snapshot.handleBoxesDoc.push_back(HandleBoxForCorner(corner, scale));
+      }
+      CullBoxesInPlace(&snapshot.handleBoxesDoc, cullRectDoc);
+    }
+    return snapshot;
+  }
+
   const std::optional<Box2d> combinedSelectionBounds = AppendChromeItems(
       selection, cullRectDoc, &snapshot.paths, &snapshot.aabbsDoc, &snapshot.pathAnchorBoxesDoc,
       &snapshot.pathControlLinesDoc, &snapshot.pathControlPointBoxesDoc, &snapshot.textBaselinesDoc,
@@ -950,8 +970,7 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
     {
       // Serif half-length scales with the bar height so the I-beam keeps its
       // proportions across zoom levels.
-      const double serifHalf =
-          std::abs(preview.ibeamBottomDoc.y - preview.ibeamTopDoc.y) * 0.15;
+      const double serifHalf = std::abs(preview.ibeamBottomDoc.y - preview.ibeamTopDoc.y) * 0.15;
       PathBuilder builder;
       builder.moveTo(preview.ibeamTopDoc);
       builder.lineTo(preview.ibeamBottomDoc);
@@ -973,25 +992,24 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
   // vertical bar in the selection stroke style.
   if (snapshot.textFrameCornersDoc.has_value()) {
     renderer.setTransform(snapshot.canvasFromDoc);
+    const double frameOpacity =
+        std::clamp(static_cast<double>(snapshot.textFrameOpacity), 0.0, 1.0);
     const svg::PaintParams framePaint =
-        MakeSelectionStrokePaint(snapshot.selectionStrokeWidthWorld);
+        MakeSelectionStrokePaint(snapshot.selectionStrokeWidthWorld, frameOpacity);
     renderer.setPaint(framePaint);
     svg::PathShape frameShape;
     frameShape.path = PathForCorners(*snapshot.textFrameCornersDoc);
     frameShape.parentFromEntity = Transform2d();
     renderer.drawPath(frameShape, framePaint.strokeParams);
 
-    // Screen-stable handle squares centered on the oriented corners. Sized
-    // to match SelectionTransformHandleBoxesForBounds (9 logical px) via the
-    // selection stroke's world width (1.25 logical px).
-    const svg::PaintParams handlePaint = MakeHandlePaint(snapshot.selectionStrokeWidthWorld);
+    // Use the select tool's handle-box helper directly. Deriving this size
+    // from stroke width double-counted device scale on high-density displays.
+    const svg::PaintParams handlePaint =
+        MakeHandlePaint(snapshot.selectionStrokeWidthWorld, frameOpacity);
     renderer.setPaint(handlePaint);
-    const double halfHandleWorld = snapshot.selectionStrokeWidthWorld *
-                                   (kHandleSizeLogicalPixels * 0.5 / kSelectionStrokeLogicalPixels);
-    const Vector2d halfHandle(halfHandleWorld, halfHandleWorld);
+    const double canvasScale = LinearScale(snapshot.canvasFromDoc);
     for (const Vector2d& corner : *snapshot.textFrameCornersDoc) {
-      renderer.drawRect(Box2d(corner - halfHandle, corner + halfHandle),
-                        handlePaint.strokeParams);
+      renderer.drawRect(HandleBoxForCorner(corner, canvasScale), handlePaint.strokeParams);
     }
   }
   if (snapshot.textCaretDoc.has_value()) {

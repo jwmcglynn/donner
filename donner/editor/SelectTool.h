@@ -195,7 +195,9 @@ public:
   /// Returns the current selection gesture preview, if a drag is in progress.
   [[nodiscard]] std::optional<ActiveGesturePreview> activeGesturePreview() const;
 
-  /// Returns active oriented-bounds chrome for in-progress rotation.
+  /// Returns bounds chrome derived from the gesture's immutable start bounds
+  /// and current transform. Available for every moved drag so the overlay does
+  /// not need to walk live geometry while the render worker is active.
   [[nodiscard]] std::optional<ActiveTransformBoundsPreview> activeTransformBoundsPreview() const;
 
   /// A transient "this element is locked, you can't select it" flash on the

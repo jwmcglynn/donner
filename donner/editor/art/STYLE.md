@@ -3,8 +3,9 @@
 One family of SVG art, rendered by Donner itself, covering the editor's OS
 cursors and toolbar tool icons. Cursors rasterize through the
 `RotateCursorSet` pipeline (Donner render at 4x, box downsample, GLFW cursor
-with a hotspot); toolbar icons rasterize through `EmbeddedSvgIcon` (Donner
-render, normalized to a white tintable alpha mask). Authoring both against one
+with a hotspot). Toolbar icons preserve authored colors through
+`RenderEmbeddedSvgArtwork` and rasterize at 80 px for exact downsampling to
+20 logical px at common 1x and 2x display scales. Authoring both against one
 spec is what makes the two suites read as a set.
 
 ## Shared grid
@@ -29,14 +30,21 @@ spec is what makes the two suites read as a set.
   the existing pen cursor.
 - `stroke-linejoin="round"`, `stroke-linecap="round"` everywhere.
 
-## Icons: single-color tintable mask
+## Icons: two-tone contrast
 
-- Author in a single ink color (`#000000` fill / stroke); alpha carries the
-  shape. `EmbeddedSvgIcon` collapses RGB to a white mask that ImGui tints with
-  the current text color, so the source color is irrelevant beyond coverage.
-- No halo: the toolbar draws icons on a flat button, and the tint provides
-  contrast. Icon stroke weight 2 on the 24 grid, round joins/caps, matching
-  Bootstrap.
+- Use the cursor contrast system in the toolbar: black core `#000000`, white
+  halo `#ffffff`.
+- Filled glyphs use either a black fill with a 1.25 to 1.5 white outline on the
+  24 grid or concentric white-outer and black-inner silhouettes when acute
+  joins would let the core leak through the halo. Line glyphs use a wider white
+  underlay with a 2 to 2.4 black core.
+- Keep geometry simple enough to retain both opaque black and opaque white
+  pixels after downsampling to 20 logical px. Raster tests reject clipped,
+  single-tone, or empty artwork.
+- Normal toolbar state preserves both colors. Disabled state applies a muted
+  tint without replacing the black core.
+- Expose only ready tools. Do not reserve a disabled toolbar slot for an
+  unfinished interaction.
 
 ## Hotspots (cursor pointer origin, in 32-grid px)
 
@@ -49,7 +57,7 @@ spec is what makes the two suites read as a set.
 | pen close     | (4, 4)  | Base pen tip; `o` badge bottom-right.              |
 | rotate        | (16,16) | Centered; art rotated per corner by the pipeline.  |
 | scale         | (16,16) | Centered double arrow; rotated per corner.         |
-| path modify   | (6, 6)  | Angle vertex, top-left (Illustrator anchor tool).  |
+| path modify   | (6, 6)  | Angle vertex at the top-left.                      |
 | pan open/close| (15,15) | Palm center.                                       |
 
 ## Adding art

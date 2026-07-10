@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <future>
 #include <memory>
 #include <optional>
 #include <string>
@@ -342,6 +343,9 @@ private:
   /// otherwise (and always for family/size) through the selection attribute
   /// writes.
   void applyFormatBarActions(const FormatBarState& state, const FormatBarActions& actions);
+  /// Whether the contextual text-format bar should participate in this frame's
+  /// input and presentation passes.
+  [[nodiscard]] bool formatBarShouldShow() const;
   void handleGlobalShortcuts();
   /// True when the document has at least one selectable element (the canonical marquee/Select-All
   /// set). Gates whether Cmd+A / the Edit menu's "Select All" act on the canvas.
@@ -353,7 +357,9 @@ private:
   void renderRenderPane(ImGuiWindowFlags paneFlags);
   [[nodiscard]] Box2d toolPaletteScreenRect(const ImVec2& paneOrigin,
                                             const ImVec2& contentRegion) const;
+  [[nodiscard]] Box2d canvasZoomControlScreenRect() const;
   void renderToolPalette(const ImVec2& paneOrigin, const ImVec2& contentRegion);
+  void renderCanvasZoomControl();
   void renderFillStrokeToolbarWidget();
   void renderSidebars();
   void renderSourcePaneSplitter(float windowWidth, float paneOriginY, float paneHeight,
@@ -397,6 +403,10 @@ private:
   /// Re-run the post-flush presentation refresh after a tool that flushes the
   /// document internally (the text tool's wrap measurement).
   void refreshAfterToolDrivenFlush();
+  /// Low-latency post-flush path for ordinary text entry. Source mirroring and
+  /// selection-bounds refresh are deferred to the next frame; caret/session
+  /// chrome is already driven directly by TextTool state.
+  void refreshAfterTextTypingFlush();
   /// Keyboard handling while the in-canvas text editing session is active:
   /// typing, caret movement, Cmd+B/I/U style toggles, Escape commit.
   void handleTextEditingKeyboard();
@@ -559,9 +569,12 @@ private:
   bool referenceHighlightActive_ = false;
   bool referenceHighlightChipHovered_ = false;
   std::vector<StyleSourceContribution> styleSourceContributions_;
+  std::future<DetachedStyleSourceAnnotations> styleSourceAnnotationsFuture_;
+  std::uint64_t styleSourceAnnotationPendingDocumentGeneration_ = 0;
+  std::uint64_t styleSourceAnnotationPendingSourceVersion_ = 0;
   bool styleSourceDecorationsValid_ = false;
+  std::uint64_t styleSourceDecorationDocumentGeneration_ = 0;
   std::uint64_t styleSourceDecorationSourceVersion_ = 0;
-  std::string styleSourceDecorationText_;
   std::optional<Vector2d> renderContextMenuDocumentPoint_;
   std::optional<svg::SVGElement> renderContextMenuHitElement_;
   bool renderContextMenuOpenRequested_ = false;
@@ -578,7 +591,7 @@ private:
   bool sourceFocusMode_ = true;
   /// Preferred width for the source pane when it is visible.
   float sourcePaneWidth_ = 560.0f;
-  bool sourcePaneVisible_ = true;
+  bool sourcePaneVisible_ = false;
   /// Whether the Compositor Debug panel window renders. Off by default: it is a
   /// developer-facing composite-tile diagnostics view, toggled on via the View
   /// menu. The user-facing Layers panel is unrelated and always visible.

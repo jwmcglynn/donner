@@ -1,8 +1,8 @@
 #pragma once
 /// @file
 ///
-/// `TextFormatBarPresenter` renders a contextual text-formatting bar directly
-/// beneath the editor menu bar. The bar is shown only while text styling is in
+/// `TextFormatBarPresenter` renders a contextual floating text-formatting bar
+/// below the canvas tool palette. The bar is shown only while text styling is in
 /// context: when the canvas selection is a single `<text>` element or an
 /// in-canvas text editing session is active. It offers a searchable font-family
 /// picker (each known family previewed in its own face, with a free-text
@@ -26,6 +26,7 @@
 #include "donner/svg/resources/FontCatalogTypes.h"
 
 struct ImFont;
+struct ImVec2;
 
 namespace donner::editor {
 
@@ -133,26 +134,27 @@ void ReadTextFormatState(const svg::SVGElement& text, FormatBarState* state);
 bool ApplyFormatBarActionsToSelection(const FormatBarActions& actions, const FormatBarState& state,
                                       bool routeTogglesToSelection, EditorApp& app);
 
-/// Contextual text-formatting bar shown beneath the menu bar.
+/// Contextual text-formatting bar shown as a floating canvas toolbar.
 class TextFormatBarPresenter {
 public:
-  /// Height (pixels) the bar occupies for the current imgui style, so the shell
-  /// can reserve space below the menu bar. Valid only inside a frame (reads the
-  /// active style/frame height).
+  /// Preferred width of the compact single-row toolbar.
+  [[nodiscard]] static constexpr float PreferredWidth() { return 460.0f; }
+  /// Toolbar height for the current ImGui frame metrics.
   [[nodiscard]] static float BarHeight();
 
   /**
    * Render the bar and report the actions requested this frame.
    *
    * Draws nothing and returns an empty result when `state.visible` is false.
-   * The bar is a fixed, full-width strip at @p originY spanning @p width.
+   * The bar is a floating rounded container at @p topLeft with a stable width.
    *
    * @param state Current formatting context (visibility, values, families).
-   * @param originY Top edge of the bar in window pixels (menu-bar height).
-   * @param width Bar width in window pixels (the window width).
+   * @param topLeft Top-left edge in screen coordinates.
+   * @param width Bar width in pixels, normally `PreferredWidth()`.
    * @return Edge-triggered actions to route to the styling commands.
    */
-  [[nodiscard]] FormatBarActions render(const FormatBarState& state, float originY, float width);
+  [[nodiscard]] FormatBarActions render(const FormatBarState& state, const ImVec2& topLeft,
+                                        float width);
 
 private:
   /// Free-text font-family buffer, re-seeded when the underlying value changes.

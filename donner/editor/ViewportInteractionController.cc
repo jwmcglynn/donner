@@ -157,11 +157,19 @@ bool ShouldShowRenderPanePanCursor(bool canvasHovered, bool spaceHeld, bool pann
 
 void ViewportInteractionController::updatePaneLayout(const Vector2d& paneOrigin,
                                                      const Vector2d& paneSize,
-                                                     const std::optional<Box2d>& documentViewBox) {
+                                                     const std::optional<Box2d>& documentViewBox,
+                                                     bool preservePaneCenterDocumentPoint) {
+  const bool hadUsablePane = viewport_.paneSize.x > 0.0 && viewport_.paneSize.y > 0.0;
+  const bool hasUsablePane = paneSize.x > 0.0 && paneSize.y > 0.0;
+  const Vector2d documentAtPreviousPaneCenter = viewport_.screenToDocument(viewport_.paneCenter());
   viewport_.paneOrigin = paneOrigin;
   viewport_.paneSize = paneSize;
   if (documentViewBox.has_value()) {
     viewport_.documentViewBox = *documentViewBox;
+  }
+  if (preservePaneCenterDocumentPoint && hadUsablePane && hasUsablePane) {
+    viewport_.panDocPoint = documentAtPreviousPaneCenter;
+    viewport_.panScreenPoint = viewport_.paneCenter();
   }
 }
 

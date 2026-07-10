@@ -34,30 +34,30 @@ AccentTints TintsFor(Accent accent) {
 EditorTheme EditorTheme::Dark(Accent accent) {
   EditorTheme t{};
 
-  // Surfaces (Dark Slate ramp).
-  t.surfaceCanvas = IM_COL32(0x0E, 0x11, 0x16, 0xFF);
-  t.surfaceSunken = IM_COL32(0x12, 0x16, 0x1D, 0xFF);
-  t.surfaceBase = IM_COL32(0x16, 0x1B, 0x22, 0xFF);
-  t.surfaceRaised = IM_COL32(0x1E, 0x25, 0x2E, 0xFF);
-  t.surfaceOverlay = IM_COL32(0x23, 0x2B, 0x36, 0xFF);
-  t.surfaceHover = IM_COL32(0x2A, 0x33, 0x3F, 0xFF);
-  t.surfaceActive = IM_COL32(0x31, 0x3C, 0x4A, 0xFF);
+  // Neutral graphite keeps the chrome quiet around colorful SVG artwork.
+  t.surfaceCanvas = IM_COL32(0x11, 0x12, 0x15, 0xFF);
+  t.surfaceSunken = IM_COL32(0x15, 0x16, 0x19, 0xFF);
+  t.surfaceBase = IM_COL32(0x1B, 0x1D, 0x20, 0xFF);
+  t.surfaceRaised = IM_COL32(0x24, 0x27, 0x2B, 0xFF);
+  t.surfaceOverlay = IM_COL32(0x2B, 0x2F, 0x34, 0xFF);
+  t.surfaceHover = IM_COL32(0x34, 0x39, 0x40, 0xFF);
+  t.surfaceActive = IM_COL32(0x3C, 0x42, 0x4A, 0xFF);
 
   // Borders.
-  t.borderSubtle = IM_COL32(0x2D, 0x35, 0x42, 0xFF);
-  t.borderStrong = IM_COL32(0x3A, 0x44, 0x53, 0xFF);
+  t.borderSubtle = IM_COL32(0x30, 0x34, 0x3A, 0xFF);
+  t.borderStrong = IM_COL32(0x46, 0x4C, 0x55, 0xFF);
 
   // Text.
-  t.textPrimary = IM_COL32(0xE6, 0xEA, 0xF0, 0xFF);
-  t.textMuted = IM_COL32(0x9A, 0xA5, 0xB4, 0xFF);
-  t.textDisabled = IM_COL32(0x5C, 0x66, 0x75, 0xFF);
+  t.textPrimary = IM_COL32(0xF1, 0xF2, 0xF4, 0xFF);
+  t.textMuted = IM_COL32(0xA8, 0xAD, 0xB5, 0xFF);
+  t.textDisabled = IM_COL32(0x65, 0x6B, 0x74, 0xFF);
 
   // Accent (chosen variant) + dark ink.
   const AccentTints tints = TintsFor(accent);
   t.accentActive = tints.active;
   t.accentDefault = tints.defaultTint;
   t.accentHover = tints.hover;
-  t.accentInk = IM_COL32(0x0E, 0x11, 0x16, 0xFF);
+  t.accentInk = IM_COL32(0x11, 0x12, 0x15, 0xFF);
   t.accentColor = tints.defaultRgba;
 
   // Selection is derived from the accent.
@@ -111,6 +111,7 @@ void EditorTheme::applyToImGuiStyle(ImGuiStyle& style) const {
   set(ImGuiCol_Separator, borderSubtle);
   set(ImGuiCol_SeparatorHovered, borderStrong);
   set(ImGuiCol_SeparatorActive, accentDefault);
+  set(ImGuiCol_BorderShadow, IM_COL32(0, 0, 0, 0));
 
   // Text.
   set(ImGuiCol_Text, textPrimary);
@@ -121,6 +122,28 @@ void EditorTheme::applyToImGuiStyle(ImGuiStyle& style) const {
   set(ImGuiCol_SliderGrab, accentDefault);
   set(ImGuiCol_SliderGrabActive, accentHover);
   set(ImGuiCol_NavHighlight, accentDefault);
+  set(ImGuiCol_TextSelectedBg, WithAlpha(accentDefault, 88));
+  set(ImGuiCol_DragDropTarget, accentHover);
+
+  // Dock tabs read as a restrained panel header with one teal overline instead
+  // of Dear ImGui's stock blue selected tab.
+  set(ImGuiCol_Tab, surfaceRaised);
+  set(ImGuiCol_TabHovered, surfaceHover);
+  set(ImGuiCol_TabSelected, surfaceBase);
+  set(ImGuiCol_TabSelectedOverline, accentDefault);
+  set(ImGuiCol_TabDimmed, surfaceRaised);
+  set(ImGuiCol_TabDimmedSelected, surfaceBase);
+  set(ImGuiCol_TabDimmedSelectedOverline, borderStrong);
+  set(ImGuiCol_DockingPreview, WithAlpha(accentDefault, 120));
+  set(ImGuiCol_DockingEmptyBg, surfaceCanvas);
+
+  // Tables and modal surfaces stay in the same graphite hierarchy.
+  set(ImGuiCol_TableHeaderBg, surfaceRaised);
+  set(ImGuiCol_TableBorderStrong, borderStrong);
+  set(ImGuiCol_TableBorderLight, borderSubtle);
+  set(ImGuiCol_TableRowBg, surfaceBase);
+  set(ImGuiCol_TableRowBgAlt, WithAlpha(surfaceRaised, 110));
+  set(ImGuiCol_ModalWindowDimBg, IM_COL32(0, 0, 0, 184));
 
   // Scrollbars.
   set(ImGuiCol_ScrollbarBg, surfaceSunken);
@@ -134,6 +157,19 @@ void EditorTheme::applyToImGuiStyle(ImGuiStyle& style) const {
   style.WindowRounding = radiusContainer;
   style.PopupRounding = radiusContainer;
   style.ChildRounding = radiusContainer;
+  style.TabRounding = radiusControl;
+
+  // Crisp professional-tool chrome: containers separate through hierarchy and
+  // one-pixel rules, while editable fields retain a visible boundary.
+  style.WindowBorderSize = 0.0f;
+  style.ChildBorderSize = 0.0f;
+  style.PopupBorderSize = 1.0f;
+  style.FrameBorderSize = 1.0f;
+  style.TabBorderSize = 0.0f;
+  style.TabBarBorderSize = 1.0f;
+  style.TabBarOverlineSize = 2.0f;
+  style.DockingSeparatorSize = 1.0f;
+  style.GrabMinSize = space3;
 
   // Padding / spacing (4 px grid).
   style.FramePadding = ImVec2(space2, space1);
@@ -141,6 +177,8 @@ void EditorTheme::applyToImGuiStyle(ImGuiStyle& style) const {
   style.WindowPadding = ImVec2(space2, space2);
   style.IndentSpacing = space4;
   style.ScrollbarSize = scrollbarSize;
+  style.SeparatorTextBorderSize = 1.0f;
+  style.SeparatorTextPadding = ImVec2(space1, space1);
 
   SetActive(*this);
 }

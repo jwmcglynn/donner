@@ -1,6 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
-  <!-- Selection pointer: a solid arrowhead with NO tail, distinct from the
-       tailed selection toolbar icon. Tip (hotspot) at top-left. -->
+  <!-- Selection pointer: a solid arrowhead with no tail. Tip (hotspot) at top-left. -->
   <path
     d="
       M 5 3.5

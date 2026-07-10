@@ -187,7 +187,8 @@ public:
   void noteFrameDelta(float deltaMs) { frameHistory_.push(deltaMs); }
 
   void updatePaneLayout(const Vector2d& paneOrigin, const Vector2d& paneSize,
-                        const std::optional<Box2d>& documentViewBox);
+                        const std::optional<Box2d>& documentViewBox,
+                        bool preservePaneCenterDocumentPoint = false);
   void updateDevicePixelRatio(double devicePixelRatio);
   /// Reset the viewport to 100%.
   ///

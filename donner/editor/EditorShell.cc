@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iostream>
 #include <optional>
 #include <span>
@@ -77,7 +78,7 @@ namespace internal {
 constexpr float kMinSourcePaneWidth = 240.0f;
 constexpr float kMaxSourcePaneWidth = 900.0f;
 constexpr float kSourcePaneSplitterThickness = 6.0f;
-constexpr float kSourcePaneRevealHandleWidth = 10.0f;
+constexpr float kSourcePaneRevealHandleWidth = 32.0f;
 constexpr float kSourcePaneCollapseThreshold = kMinSourcePaneWidth;
 constexpr float kKeyboardZoomStep = 1.5f;
 constexpr float kMinRightPaneWidth = 220.0f;
@@ -105,11 +106,14 @@ constexpr float kReferenceChipPaddingY = 5.0f;
 constexpr float kReferenceChipRadius = 6.0f;
 constexpr float kReferenceChipGapFromAabb = 30.0f;
 constexpr float kReferenceChipMinFontSize = 15.0f;
-constexpr float kToolPaletteButtonSize = 30.0f;
+constexpr float kToolPaletteButtonSize = 32.0f;
 constexpr float kToolPaletteGap = 4.0f;
-constexpr float kToolPalettePadding = 5.0f;
-constexpr float kToolPalettePaintWidgetWidth = 118.0f;
-constexpr float kToolPaletteTopInset = 8.0f;
+constexpr float kToolPalettePadding = 8.0f;
+constexpr float kToolPalettePaintWidgetWidth = 120.0f;
+constexpr float kToolPaletteTopInset = 12.0f;
+constexpr float kCanvasZoomPaddingX = 8.0f;
+constexpr float kCanvasZoomPaddingY = 4.0f;
+constexpr float kCanvasZoomInset = 12.0f;
 constexpr std::string_view kRenderPaneContextMenuName = "Render Context Menu";
 
 constexpr ImWchar kEditorGlyphRanges[] = {
@@ -207,6 +211,40 @@ void SetImGuiOsCursorManagementEnabled(bool enabled) {
 bool ContainsScreenPoint(const Box2d& rect, const ImVec2& point) {
   return point.x >= rect.topLeft.x && point.x <= rect.bottomRight.x && point.y >= rect.topLeft.y &&
          point.y <= rect.bottomRight.y;
+}
+
+std::optional<Box2d> TextFormatBarScreenRect(const ImVec2& paneOrigin, const ImVec2& contentRegion,
+                                             const Box2d& toolPaletteRect, bool visible,
+                                             float barHeight) {
+  if (!visible) {
+    return std::nullopt;
+  }
+
+  constexpr float kHorizontalInset = 8.0f;
+  const float maxWidth = std::max(0.0f, contentRegion.x - 2.0f * kHorizontalInset);
+  const float barWidth = std::min(TextFormatBarPresenter::PreferredWidth(), maxWidth);
+  if (barWidth <= 0.0f || barHeight <= 0.0f) {
+    return std::nullopt;
+  }
+
+  const float idealX =
+      static_cast<float>((toolPaletteRect.topLeft.x + toolPaletteRect.bottomRight.x) * 0.5) -
+      barWidth * 0.5f;
+  const float minX = paneOrigin.x + kHorizontalInset;
+  const float maxX = paneOrigin.x + contentRegion.x - kHorizontalInset - barWidth;
+  const float barX = std::clamp(idealX, minX, std::max(minX, maxX));
+  const float barY = static_cast<float>(toolPaletteRect.bottomRight.y) + 8.0f;
+  return Box2d::FromXYWH(barX, barY, barWidth, barHeight);
+}
+
+bool CanvasChromeCapturesInput(const ImVec2& point, const std::optional<Box2d>& referenceChipRect,
+                               const Box2d& toolPaletteRect,
+                               const std::optional<Box2d>& textFormatBarRect,
+                               const Box2d& canvasZoomControlRect) {
+  return (referenceChipRect.has_value() && ContainsScreenPoint(*referenceChipRect, point)) ||
+         ContainsScreenPoint(toolPaletteRect, point) ||
+         (textFormatBarRect.has_value() && ContainsScreenPoint(*textFormatBarRect, point)) ||
+         ContainsScreenPoint(canvasZoomControlRect, point);
 }
 
 // Build the "<label> (<key>)" tooltip string for a tool button from the shared
@@ -764,6 +802,7 @@ std::optional<float> EditorShell::nextIdleWakeSeconds() const {
   // overlay snapshot; it never schedules a content render.
   if (activeTool_ == ActiveTool::Text) {
     includeWake(textTool_.nextCaretBlinkWakeSeconds());
+    includeWake(textTool_.nextPointFrameFadeWakeSeconds());
   }
   return result;
 }
@@ -1062,12 +1101,14 @@ void EditorShell::applyPendingDocumentSpaceReplayInputForTesting() {
     }
   } else if (input.leftMouseDown && activeTool_ == ActiveTool::Text &&
              (textTool_.isDraggingBox() || textTool_.isAdjustingFrame())) {
-    const bool adjustingFrame = textTool_.isAdjustingFrame();
+    const bool rotatingFrame = textTool_.isRotatingFrame();
     textTool_.onMouseMove(app_, input.documentPoint, /*buttonHeld=*/true);
-    if (adjustingFrame) {
-      // Frame gestures mutate the DOM each move; keep the selection chrome
-      // (frame rect + handles) tracking the live frame.
+    if (rotatingFrame) {
       refreshAfterToolDrivenFlush();
+    } else {
+      // Box creation and frame resize are local previews. The frame is pushed
+      // into overlay chrome later this frame; no DOM flush or rewrap is needed.
+      window_.wakeEventLoop();
     }
   } else if (input.leftMouseDown && (selectTool_.isDragging() || selectTool_.isMarqueeing())) {
     selectTool_.onMouseMove(app_, input.documentPoint, /*buttonHeld=*/true, input.modifiers);
@@ -1134,7 +1175,7 @@ void EditorShell::applyPendingDocumentSpaceReplayInputForTesting() {
           textTool_.caretBlinkVisible() ? std::make_optional(SelectionChromeSnapshot::TextCaret{
                                               textChrome->caretTopDoc, textChrome->caretBottomDoc})
                                         : std::nullopt,
-          textChrome->frameCornersDoc);
+          textChrome->frameCornersDoc, textChrome->frameOpacity);
     }
     renderCoordinator_.setTextBoxDragPreview(std::nullopt);
   } else if (activeTool_ == ActiveTool::Text) {
@@ -1953,14 +1994,21 @@ bool EditorShell::selectionIsAllText() const {
   return true;
 }
 
+bool EditorShell::formatBarShouldShow() const {
+  const std::vector<svg::SVGElement>& selection = app_.selectedElements();
+  const bool hasSingleTextSelection =
+      selection.size() == 1u && selection.front().type() == svg::ElementType::Text;
+  const bool textEditingActive = activeTool_ == ActiveTool::Text && textTool_.isEditing();
+  return FormatBarShouldShow(hasSingleTextSelection, textEditingActive);
+}
+
 FormatBarState EditorShell::computeFormatBarState() {
   FormatBarState state;
 
   const std::vector<svg::SVGElement>& selection = app_.selectedElements();
   const bool hasSingleTextSelection =
       selection.size() == 1u && selection.front().type() == svg::ElementType::Text;
-  const bool textEditingActive = activeTool_ == ActiveTool::Text && textTool_.isEditing();
-  state.visible = FormatBarShouldShow(hasSingleTextSelection, textEditingActive);
+  state.visible = formatBarShouldShow();
   if (!state.visible) {
     return state;
   }
@@ -2106,7 +2154,6 @@ void EditorShell::renderSourcePane(float paneOriginY, float paneHeight, float pa
   updateSourceStyleDecorations();
   textEditor_.render("##source");
   applySourceStyleDecorationChipClick();
-  updateSourceHoverPreview();
   if (textEditor_.takeSourceFocusModeContextMenuToggleRequest()) {
     toggleSourceFocusMode();
   }
@@ -2134,6 +2181,19 @@ Box2d EditorShell::toolPaletteScreenRect(const ImVec2& paneOrigin,
   const float height = kToolPalettePadding * 2.0f + kToolPaletteButtonSize;
   const float x = paneOrigin.x + std::max(0.0f, (contentRegion.x - width) * 0.5f);
   const float y = paneOrigin.y + kToolPaletteTopInset;
+  return Box2d::FromXYWH(x, y, width, height);
+}
+
+Box2d EditorShell::canvasZoomControlScreenRect() const {
+  const ViewportState& viewport = interactionController_.viewport();
+  char label[16];
+  std::snprintf(label, sizeof(label), "%.0f%%", viewport.zoom * 100.0);
+  const ImVec2 textSize = ImGui::CalcTextSize(label);
+  const float width = textSize.x + kCanvasZoomPaddingX * 2.0f;
+  const float height = textSize.y + kCanvasZoomPaddingY * 2.0f;
+  const float x = static_cast<float>(viewport.paneOrigin.x) + kCanvasZoomInset;
+  const float y = static_cast<float>(viewport.paneOrigin.y + viewport.paneSize.y) - height -
+                  static_cast<float>(kCanvasScrollbarRailPx) - kCanvasZoomInset;
   return Box2d::FromXYWH(x, y, width, height);
 }
 
@@ -2192,18 +2252,19 @@ void EditorShell::renderFillStrokeToolbarWidget() {
     }
 
     const bool actionable = slot.reference.has_value() && slot.reference->sourceRange.has_value();
-    const ImU32 fillColor = actionable ? IM_COL32(37, 112, 172, 245) : IM_COL32(61, 72, 86, 225);
-    const ImU32 borderColor =
-        actionable ? IM_COL32(127, 203, 255, 255) : IM_COL32(119, 132, 150, 235);
-    drawList->AddRectFilled(rectMin, rectMax, fillColor, 4.0f);
-    drawList->AddRect(rectMin, rectMax, borderColor, 4.0f, 0, 1.0f);
+    const EditorTheme& theme = EditorTheme::Active();
+    const ImU32 fillColor =
+        actionable ? WithAlpha(theme.accentDefault, 210) : WithAlpha(theme.surfaceActive, 230);
+    const ImU32 borderColor = actionable ? theme.accentHover : theme.borderStrong;
+    drawList->AddRectFilled(rectMin, rectMax, fillColor, theme.radiusControl);
+    drawList->AddRect(rectMin, rectMax, borderColor, theme.radiusControl, 0, 1.0f);
 
     const std::string label =
         fitChipLabel(PaintChipLabel(prefix, slot), rectMax.x - rectMin.x - 8.0f);
     const ImVec2 textSize = ImGui::CalcTextSize(label.c_str());
     drawList->AddText(
         ImVec2(rectMin.x + 4.0f, rectMin.y + (rectMax.y - rectMin.y - textSize.y) * 0.5f - 0.5f),
-        IM_COL32(255, 255, 255, 245), label.c_str());
+        actionable ? theme.accentInk : theme.textPrimary, label.c_str());
   };
   renderChip("S", paintState.stroke, layout.strokeChipMin, layout.strokeChipMax);
   renderChip("F", paintState.fill, layout.fillChipMin, layout.fillChipMax);
@@ -2342,26 +2403,29 @@ void EditorShell::renderFillStrokeToolbarWidget() {
 void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& contentRegion) {
   const Box2d rect = toolPaletteScreenRect(paneOrigin, contentRegion);
   ImDrawList* drawList = ImGui::GetWindowDrawList();
+  const EditorTheme& theme = EditorTheme::Active();
+  drawList->AddRectFilled(
+      ImVec2(static_cast<float>(rect.topLeft.x), static_cast<float>(rect.topLeft.y) + 2.0f),
+      ImVec2(static_cast<float>(rect.bottomRight.x), static_cast<float>(rect.bottomRight.y) + 2.0f),
+      WithAlpha(theme.surfaceCanvas, 180), theme.radiusContainer);
   drawList->AddRectFilled(
       ImVec2(static_cast<float>(rect.topLeft.x), static_cast<float>(rect.topLeft.y)),
       ImVec2(static_cast<float>(rect.bottomRight.x), static_cast<float>(rect.bottomRight.y)),
-      ImGui::GetColorU32(ImVec4(0.11f, 0.12f, 0.14f, 0.92f)), 7.0f);
+      WithAlpha(theme.surfaceOverlay, 246), theme.radiusContainer);
   drawList->AddRect(
       ImVec2(static_cast<float>(rect.topLeft.x), static_cast<float>(rect.topLeft.y)),
       ImVec2(static_cast<float>(rect.bottomRight.x), static_cast<float>(rect.bottomRight.y)),
-      ImGui::GetColorU32(ImVec4(1.0f, 1.0f, 1.0f, 0.14f)), 7.0f);
+      WithAlpha(theme.borderStrong, 220), theme.radiusContainer);
 
   ImGui::SetCursorScreenPos(ImVec2(static_cast<float>(rect.topLeft.x) + kToolPalettePadding,
                                    static_cast<float>(rect.topLeft.y) + kToolPalettePadding));
   ImGui::PushID("tool_palette");
-  const EditorTheme& theme = EditorTheme::Active();
   ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, theme.radiusControl);
   ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
 
-  // Tool icons are Donner-rendered SVG masks (art/tool_*_icon.svg), uploaded
-  // once to a persistent texture cache and tinted with the text color, so the
-  // toolbar reads as one family with the OS cursors instead of hand-stroked
-  // ImDrawList primitives.
+  // Tool icons are Donner-rendered two-tone SVGs (art/tool_*_icon.svg),
+  // uploaded once to a persistent texture cache. Their black core and white
+  // halo match the OS cursors and stay legible on every button state.
   const ToolbarIconTextureProvider toolbarIconProvider =
       [this](std::uint64_t stableId, const svg::RendererBitmap& bitmap) -> ToolbarIconTexture {
     const GlTextureCache::ThumbnailTextureView uploaded =
@@ -2397,11 +2461,10 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
       }
       activeTool_ = tool;
     }
-    // W6: the tool icon is a Donner-rendered SVG mask tinted with the text
-    // color (replaces the old hand-stroked per-icon primitives). W8: the
-    // selected tool gets an accent stroke on top, routed through the theme.
-    DrawToolbarIcon(icon, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
-                    ImGui::GetColorU32(ImGuiCol_Text), toolbarIconProvider);
+    // The icon preserves its authored black core and white halo. The selected
+    // tool gets an accent stroke on top, routed through the theme.
+    DrawToolbarIcon(icon, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), theme.textPrimary,
+                    toolbarIconProvider);
     if (selected) {
       drawList->AddRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), theme.accentDefault,
                         theme.radiusControl, 0, 1.5f);
@@ -2423,15 +2486,6 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
   ImGui::SameLine(0.0f, kToolPaletteGap);
   renderButton(ActiveTool::Text, "##text_tool", ToolbarIcon::Text, textTooltip.c_str());
   ImGui::SameLine(0.0f, kToolPaletteGap);
-  ImGui::BeginDisabled(true);
-  (void)ImGui::Button("##path_modify_tool", ImVec2(kToolPaletteButtonSize, kToolPaletteButtonSize));
-  DrawToolbarIcon(ToolbarIcon::PathModify, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
-                  ImGui::GetColorU32(ImGuiCol_TextDisabled), toolbarIconProvider);
-  ImGui::EndDisabled();
-  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-    ImGui::SetTooltip("%s", "Path edit");
-  }
-  ImGui::SameLine(0.0f, kToolPaletteGap);
   renderFillStrokeToolbarWidget();
 
   ImGui::PopStyleVar(2);
@@ -2452,7 +2506,8 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   interactionController_.updatePaneLayout(
       Vector2d(paneOriginImGui.x, paneOriginImGui.y), Vector2d(contentRegion.x, contentRegion.y),
       app_.hasDocument() ? std::make_optional(ResolveDocumentViewBox(app_.document().document()))
-                         : std::nullopt);
+                         : std::nullopt,
+      /*preservePaneCenterDocumentPoint=*/true);
   interactionController_.updateDevicePixelRatio(window_.contentScale().x);
 
   if (pendingViewportReplayOverride_.has_value()) {
@@ -2501,15 +2556,19 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   const std::optional<Box2d> referenceChipRect =
       hideReferenceChip ? std::nullopt : referenceHighlightChipScreenRect(referenceChipLabel);
   const Box2d toolPaletteRect = toolPaletteScreenRect(paneOriginImGui, contentRegion);
-  const bool toolPaletteHovered = ContainsScreenPoint(toolPaletteRect, ImGui::GetMousePos());
-  const bool referenceChipHovered = referenceChipRect.has_value() &&
-                                    ContainsScreenPoint(*referenceChipRect, ImGui::GetMousePos());
+  const std::optional<Box2d> textFormatBarRect =
+      TextFormatBarScreenRect(paneOriginImGui, contentRegion, toolPaletteRect,
+                              formatBarShouldShow(), TextFormatBarPresenter::BarHeight());
+  const Box2d canvasZoomControlRect = canvasZoomControlScreenRect();
+  const bool canvasChromeHovered =
+      CanvasChromeCapturesInput(ImGui::GetMousePos(), referenceChipRect, toolPaletteRect,
+                                textFormatBarRect, canvasZoomControlRect);
 
   ImGui::SetNextItemAllowOverlap();
   ImGui::InvisibleButton("##render_canvas", contentRegion,
                          ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonMiddle);
   const bool paneHovered = ImGui::IsItemHovered();
-  const bool canvasHovered = paneHovered && !referenceChipHovered && !toolPaletteHovered;
+  const bool canvasHovered = paneHovered && !canvasChromeHovered;
   const Box2d paneRect = Box2d::FromXYWH(interactionController_.viewport().paneOrigin.x,
                                          interactionController_.viewport().paneOrigin.y,
                                          interactionController_.viewport().paneSize.x,
@@ -2564,8 +2623,8 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
     }
   }
 
-  const bool modalCapturingInput = referenceChipHovered || toolPaletteHovered ||
-                                   ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
+  const bool modalCapturingInput =
+      canvasChromeHovered || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
   // Publish the canvas scroll-capture rect for the raw GLFW scroll callback:
   // wheel events inside the render pane are consumed by the canvas (pan/zoom)
   // and must not also reach ImGui window scrolling, or scrolling the canvas
@@ -2891,7 +2950,6 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
                                 modifiers);
         lastPostedScreenPoint_ = currentScreen;
         if (!renderCoordinator_.asyncRenderer().isBusy() && app_.flushFrame()) {
-          renderCoordinator_.refreshSelectionBoundsCache(app_);
           renderCoordinator_.rasterizeOverlayForCurrentSelection(
               app_, interactionController_.viewport(), selectTool_.marqueeRect(),
               selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview(),
@@ -2942,12 +3000,12 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   // like the pen tool's anchor drag below.
   if (textToolActive && (textTool_.isDraggingBox() || textTool_.isAdjustingFrame())) {
     if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && !spaceHeld) {
-      const bool adjustingFrame = textTool_.isAdjustingFrame();
+      const bool rotatingFrame = textTool_.isRotatingFrame();
       textTool_.onMouseMove(app_, screenToDocument(ImGui::GetMousePos()), /*buttonHeld=*/true);
-      if (adjustingFrame) {
-        // Frame gestures mutate the DOM each move; keep the selection chrome
-        // (frame rect + handles) tracking the live frame.
+      if (rotatingFrame) {
         refreshAfterToolDrivenFlush();
+      } else {
+        window_.wakeEventLoop();
       }
     }
     if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
@@ -2994,6 +3052,11 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
     renderCoordinator_.setPenHoverChrome(std::nullopt, std::nullopt);
   }
 
+  if (textToolActive && textTool_.isEditing() &&
+      (ImGui::GetIO().MouseDelta.x != 0.0f || ImGui::GetIO().MouseDelta.y != 0.0f)) {
+    textTool_.notifyPointerMoved(screenToDocument(ImGui::GetMousePos()));
+  }
+
   // Text-editing chrome: caret + box frame while a session is active, or the
   // live rectangle while a text box is being dragged out.
   if (textToolActive && textTool_.isDraggingBox()) {
@@ -3002,15 +3065,13 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
         TextBoxDragPreviewFromTool(textTool_.dragPreviewChrome()));
   } else if (textToolActive && textTool_.isEditing()) {
     if (const auto textChrome = textTool_.editingChrome(app_); textChrome.has_value()) {
-      // The caret blinks on a timed phase (hidden half-periods push no
-      // caret); the box frame stays solid. Blink redraws come from the idle
-      // wake schedule + overlay-chrome recapture only - never a content
-      // render.
+      // Caret blink and point-frame fade redraw through timed overlay wakes;
+      // neither animation schedules a content render.
       renderCoordinator_.setTextEditingChrome(
           textTool_.caretBlinkVisible() ? std::make_optional(SelectionChromeSnapshot::TextCaret{
                                               textChrome->caretTopDoc, textChrome->caretBottomDoc})
                                         : std::nullopt,
-          textChrome->frameCornersDoc);
+          textChrome->frameCornersDoc, textChrome->frameOpacity);
     }
     renderCoordinator_.setTextBoxDragPreview(std::nullopt);
   } else {
@@ -3182,11 +3243,55 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
     renderReferenceHighlightChip();
     renderTextToolHint();
     renderToolPalette(paneOriginImGui, contentRegion);
+    const FormatBarState formatBarState = computeFormatBarState();
+    const std::optional<Box2d> formatBarRect =
+        TextFormatBarScreenRect(paneOriginImGui, contentRegion, toolPaletteRect,
+                                formatBarState.visible, TextFormatBarPresenter::BarHeight());
+    if (formatBarRect.has_value()) {
+      const FormatBarActions actions =
+          textFormatBarPresenter_.render(formatBarState,
+                                         ImVec2(static_cast<float>(formatBarRect->topLeft.x),
+                                                static_cast<float>(formatBarRect->topLeft.y)),
+                                         static_cast<float>(formatBarRect->width()));
+      applyFormatBarActions(formatBarState, actions);
+    }
+    renderCanvasZoomControl();
     renderCanvasScrollbars();
     renderRenderPaneContextMenu();
   }
 
   ImGui::End();
+}
+
+void EditorShell::renderCanvasZoomControl() {
+  const Box2d rect = canvasZoomControlScreenRect();
+  const ImVec2 min(static_cast<float>(rect.topLeft.x), static_cast<float>(rect.topLeft.y));
+  const ImVec2 max(static_cast<float>(rect.bottomRight.x), static_cast<float>(rect.bottomRight.y));
+  ImGui::SetCursorScreenPos(min);
+  ImGui::InvisibleButton("##canvas_zoom_actual_size", max - min);
+  const bool hovered = ImGui::IsItemHovered();
+  if (ImGui::IsItemClicked()) {
+    if (interactionController_.resetToActualSize()) {
+      requestRenderAtEndOfFrame_ = true;
+    }
+  }
+  if (hovered) {
+    ImGui::SetTooltip("Reset zoom to 100%%");
+  }
+
+  const EditorTheme& theme = EditorTheme::Active();
+  ImDrawList* drawList = ImGui::GetWindowDrawList();
+  drawList->AddRectFilled(min, max,
+                          WithAlpha(hovered ? theme.surfaceHover : theme.surfaceOverlay, 238),
+                          theme.radiusControl);
+  drawList->AddRect(min, max, hovered ? theme.accentDefault : theme.borderStrong,
+                    theme.radiusControl, 0, 1.0f);
+  char label[16];
+  std::snprintf(label, sizeof(label), "%.0f%%", interactionController_.viewport().zoom * 100.0);
+  const ImVec2 textSize = ImGui::CalcTextSize(label);
+  drawList->AddText(ImVec2(min.x + (max.x - min.x - textSize.x) * 0.5f,
+                           min.y + (max.y - min.y - textSize.y) * 0.5f),
+                    theme.textPrimary, label);
 }
 
 void EditorShell::renderTextToolHint() {
@@ -3219,7 +3324,8 @@ void EditorShell::renderTextToolHint() {
                           kReferenceChipRadius);
   drawList->AddText(ImGui::GetFont(), ImGui::GetFontSize(),
                     ImVec2(x + kReferenceChipPaddingX, y + kReferenceChipPaddingY),
-                    IM_COL32(255, 255, 255, 220), label.data(), label.data() + label.size());
+                    WithAlpha(EditorTheme::Active().textPrimary, 220), label.data(),
+                    label.data() + label.size());
 }
 
 void EditorShell::renderCanvasScrollbars() {
@@ -3458,14 +3564,16 @@ void EditorShell::renderLayerPanelContents() {
 
 void EditorShell::renderSourcePaneSplitter(float windowWidth, float paneOriginY, float paneHeight,
                                            float sourcePaneWidth) {
+  const EditorTheme& theme = EditorTheme::Active();
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
   ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
   constexpr ImGuiWindowFlags kSplitterFlags =
       ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
       ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar |
       ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground;
+  const bool renderedVisibleSplitter = sourcePaneVisible_ && sourcePaneWidth > 0.0f;
 
-  if (sourcePaneVisible_ && sourcePaneWidth > 0.0f) {
+  if (renderedVisibleSplitter) {
     const float splitterLeft = sourcePaneWidth - kSourcePaneSplitterThickness * 0.5f;
     ImGui::SetNextWindowPos(ImVec2(splitterLeft, paneOriginY), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(kSourcePaneSplitterThickness, paneHeight), ImGuiCond_Always);
@@ -3487,6 +3595,9 @@ void EditorShell::renderSourcePaneSplitter(float windowWidth, float paneOriginY,
     ImGui::Begin("##source_pane_reveal_handle", nullptr, kSplitterFlags);
     ImGui::InvisibleButton("##source_pane_reveal_handle",
                            ImVec2(kSourcePaneRevealHandleWidth, paneHeight));
+    if (ImGui::IsItemClicked()) {
+      setSourcePaneVisible(true);
+    }
     if (ImGui::IsItemActive()) {
       const float nextWidth = std::max(0.0f, ImGui::GetMousePos().x);
       if (nextWidth >= kSourcePaneCollapseThreshold) {
@@ -3496,8 +3607,11 @@ void EditorShell::renderSourcePaneSplitter(float windowWidth, float paneOriginY,
     }
   }
 
-  if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
+  if (renderedVisibleSplitter && (ImGui::IsItemHovered() || ImGui::IsItemActive())) {
     ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+  } else if (!renderedVisibleSplitter && ImGui::IsItemHovered()) {
+    ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    ImGui::SetTooltip("Show source");
   }
 
   const bool splitterActive = ImGui::IsItemActive();
@@ -3507,10 +3621,29 @@ void EditorShell::renderSourcePaneSplitter(float windowWidth, float paneOriginY,
                                                            : ImGuiCol_Separator);
   const ImVec2 itemMin = ImGui::GetItemRectMin();
   const ImVec2 itemMax = ImGui::GetItemRectMax();
-  if (sourcePaneVisible_) {
-    ImGui::GetWindowDrawList()->AddRectFilled(itemMin, itemMax, color);
-  } else if (splitterHovered || splitterActive) {
-    ImGui::GetWindowDrawList()->AddRectFilled(itemMin, ImVec2(itemMin.x + 2.0f, itemMax.y), color);
+  ImDrawList* drawList = ImGui::GetWindowDrawList();
+  if (renderedVisibleSplitter) {
+    drawList->AddRectFilled(itemMin, itemMax, color);
+  } else {
+    drawList->AddRectFilled(itemMin, itemMax,
+                            splitterHovered ? theme.surfaceHover : theme.surfaceRaised);
+    drawList->AddLine(ImVec2(itemMax.x - 1.0f, itemMin.y), ImVec2(itemMax.x - 1.0f, itemMax.y),
+                      splitterHovered ? theme.accentDefault : theme.borderStrong);
+    drawList->AddRectFilled(itemMin, ImVec2(itemMax.x, itemMin.y + 2.0f), theme.accentDefault);
+
+    constexpr std::string_view kCodeGlyph = "<>";
+    const ImVec2 glyphSize = ImGui::CalcTextSize(kCodeGlyph.data(), kCodeGlyph.data() + 2);
+    drawList->AddText(ImVec2(itemMin.x + (kSourcePaneRevealHandleWidth - glyphSize.x) * 0.5f,
+                             itemMin.y + theme.space3),
+                      splitterHovered ? theme.textPrimary : theme.textMuted, kCodeGlyph.data(),
+                      kCodeGlyph.data() + kCodeGlyph.size());
+    const float lineX = itemMin.x + theme.space2;
+    const float lineY = itemMin.y + 44.0f;
+    drawList->AddLine(ImVec2(lineX, lineY), ImVec2(lineX + 16.0f, lineY), theme.textDisabled, 2.0f);
+    drawList->AddLine(ImVec2(lineX, lineY + theme.space2),
+                      ImVec2(lineX + 11.0f, lineY + theme.space2), theme.textDisabled, 2.0f);
+    drawList->AddLine(ImVec2(lineX, lineY + theme.space4),
+                      ImVec2(lineX + 18.0f, lineY + theme.space4), theme.textDisabled, 2.0f);
   }
   ImGui::End();
   ImGui::PopStyleVar(2);
@@ -3851,7 +3984,7 @@ void EditorShell::renderSelectionSizeChip(
   drawList->AddText(chipFont, SelectionSizeChipFontSize(),
                     ImVec2(static_cast<float>(rect->topLeft.x) + kSelectionSizeChipPaddingX,
                            static_cast<float>(rect->topLeft.y) + kSelectionSizeChipPaddingY),
-                    IM_COL32(255, 255, 255, 255), label.c_str(), label.c_str() + label.size());
+                    EditorTheme::Active().textPrimary, label.c_str(), label.c_str() + label.size());
 }
 
 std::optional<Box2d> EditorShell::referenceHighlightChipScreenRect(std::string_view label) const {
@@ -3917,20 +4050,25 @@ void EditorShell::renderReferenceHighlightChip() {
   drawList->AddText(ImGui::GetFont(), ReferenceHighlightChipFontSize(),
                     ImVec2(static_cast<float>(rect->topLeft.x) + kReferenceChipPaddingX,
                            static_cast<float>(rect->topLeft.y) + kReferenceChipPaddingY),
-                    IM_COL32(255, 255, 255, 255), label.c_str(), label.c_str() + label.size());
+                    theme.textPrimary, label.c_str(), label.c_str() + label.size());
 }
 
 SelectionChromeDetail EditorShell::selectionChromeDetailForActiveTool() const {
   if (activeTool_ == ActiveTool::Pen) {
     return SelectionChromeDetail::PathOutlinesOnly;
   }
+  if (activeTool_ == ActiveTool::Select && selectTool_.isDragging()) {
+    // Drag chrome is projected from the immutable gesture bounds. Avoid
+    // rebuilding every selected path (notably one path per outlined glyph)
+    // while the compositor and DOM are advancing asynchronously.
+    return SelectionChromeDetail::CombinedBoundsOnly;
+  }
   if (activeTool_ == ActiveTool::Text && textTool_.isEditing()) {
-    // The session frame (an oriented quad with its own corner handles,
-    // pushed via setTextEditingChrome) is the selection UI while a text
-    // session is open. Skip the generic axis-aligned bounds + handles: on a
-    // rotated frame they would draw the axis-aligned envelope on top of the
-    // oriented frame.
-    return SelectionChromeDetail::PathOutlinesOnly;
+    // The caret and oriented session frame are pushed explicitly through
+    // setTextEditingChrome. Skip generic text baselines/bounds/path traversal:
+    // they duplicate that UI and force synchronous text geometry work after
+    // every keystroke.
+    return SelectionChromeDetail::EditingChromeOnly;
   }
   return SelectionChromeDetail::Full;
 }
@@ -4019,16 +4157,37 @@ void EditorShell::handleTextEditingKeyboard() {
     textTool_.moveCaret(app_, TextTool::CaretMove::LineEnd);
   }
 
+  std::u32string queuedCharacters;
+  queuedCharacters.reserve(static_cast<std::size_t>(io.InputQueueCharacters.Size));
   for (int i = 0; i < io.InputQueueCharacters.Size; ++i) {
     const ImWchar character = io.InputQueueCharacters[i];
-    textTool_.insertCodepoint(app_, static_cast<char32_t>(character));
+    queuedCharacters.push_back(static_cast<char32_t>(character));
+  }
+  if (!queuedCharacters.empty()) {
+    textTool_.insertCodepoints(app_, queuedCharacters);
     edited = true;
   }
   io.InputQueueCharacters.resize(0);
 
   if (edited) {
-    refreshAfterToolDrivenFlush();
+    refreshAfterTextTypingFlush();
   }
+}
+
+void EditorShell::refreshAfterTextTypingFlush() {
+  // The text mutation is already flushed by TextTool. Keep this input frame
+  // focused on presentation: source deltas and selection bounds are consumed
+  // at the start of the next frame, while the caret/session frame comes from
+  // TextTool's local editing state immediately.
+  renderCoordinator_.invalidatePresentationAfterDocumentFlush(app_,
+                                                              app_.document().lastFlushResult());
+  updatePenLivePreviewTarget();
+  renderCoordinator_.rasterizeOverlayForCurrentSelection(
+      app_, interactionController_.viewport(), selectTool_.marqueeRect(),
+      selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview(),
+      selectionChromeDetailForActiveTool());
+  requestRenderAtEndOfFrame_ = true;
+  window_.wakeEventLoop();
 }
 
 void EditorShell::refreshAfterToolDrivenFlush() {
@@ -4340,13 +4499,21 @@ void EditorShell::updateSourceStyleDecorations() {
   const auto clearDecorations = [this]() {
     styleSourceContributions_.clear();
     styleSourceDecorationsValid_ = false;
+    styleSourceDecorationDocumentGeneration_ = 0;
     styleSourceDecorationSourceVersion_ = 0;
-    styleSourceDecorationText_.clear();
     std::ignore = textEditor_.clearSourceStyleDecorations();
   };
 
   if (!app_.hasDocument() || textEditor_.isTextChanged() || app_.document().hasPendingMutations()) {
     clearDecorations();
+    return;
+  }
+
+  const std::uint64_t documentGeneration = app_.document().documentGeneration();
+  const std::uint64_t sourceVersion = app_.document().document().sourceVersion();
+  if (styleSourceDecorationsValid_ &&
+      styleSourceDecorationDocumentGeneration_ == documentGeneration &&
+      styleSourceDecorationSourceVersion_ == sourceVersion) {
     return;
   }
 
@@ -4356,15 +4523,49 @@ void EditorShell::updateSourceStyleDecorations() {
     return;
   }
 
-  const std::uint64_t sourceVersion = app_.document().document().sourceVersion();
-  if (styleSourceDecorationsValid_ && styleSourceDecorationSourceVersion_ == sourceVersion &&
-      styleSourceDecorationText_ == documentSource) {
+  // Never leave ranges and clickable chips from an older source revision in
+  // the editor while its replacement annotations are being computed.
+  clearDecorations();
+
+  if (!styleSourceAnnotationsFuture_.valid()) {
+    styleSourceAnnotationPendingDocumentGeneration_ = documentGeneration;
+    styleSourceAnnotationPendingSourceVersion_ = sourceVersion;
+    styleSourceAnnotationsFuture_ =
+        std::async(std::launch::async, [source = documentSource]() mutable {
+          return ComputeDetachedStyleSourceAnnotations(std::move(source));
+        });
+    window_.wakeEventLoop();
     return;
   }
 
-  StyleSourceAnnotations annotations =
-      ComputeStyleSourceAnnotations(app_.document().document(), documentSource);
-  styleSourceContributions_ = std::move(annotations.contributions);
+  if (styleSourceAnnotationsFuture_.wait_for(std::chrono::seconds(0)) !=
+      std::future_status::ready) {
+    window_.wakeEventLoop();
+    return;
+  }
+
+  DetachedStyleSourceAnnotations detached = styleSourceAnnotationsFuture_.get();
+  if (styleSourceAnnotationPendingDocumentGeneration_ != documentGeneration ||
+      styleSourceAnnotationPendingSourceVersion_ != sourceVersion) {
+    window_.wakeEventLoop();
+    return;
+  }
+
+  const std::vector<std::optional<svg::SVGElement>> resolvedElements =
+      resolveAttributeWritebackTargets(app_.document().document(), detached.elementTargets);
+
+  styleSourceContributions_.clear();
+  styleSourceContributions_.reserve(detached.contributions.size());
+  for (DetachedStyleSourceContribution& detachedContribution : detached.contributions) {
+    StyleSourceContribution& contribution = detachedContribution.contribution;
+    contribution.matchedElements.reserve(detachedContribution.matchedElementTargetIndices.size());
+    for (const std::size_t targetIndex : detachedContribution.matchedElementTargetIndices) {
+      if (targetIndex < resolvedElements.size() && resolvedElements[targetIndex].has_value()) {
+        contribution.matchedElements.push_back(*resolvedElements[targetIndex]);
+      }
+    }
+    styleSourceContributions_.push_back(std::move(contribution));
+  }
 
   std::vector<TextEditor::SourceStyleDecoration> decorations;
   decorations.reserve(styleSourceContributions_.size());
@@ -4388,8 +4589,8 @@ void EditorShell::updateSourceStyleDecorations() {
 
   std::ignore = textEditor_.setSourceStyleDecorations(std::move(decorations));
   styleSourceDecorationsValid_ = true;
+  styleSourceDecorationDocumentGeneration_ = documentGeneration;
   styleSourceDecorationSourceVersion_ = sourceVersion;
-  styleSourceDecorationText_ = documentSource;
 }
 
 void EditorShell::applySourceStyleDecorationChipClick() {
@@ -4552,9 +4753,23 @@ void EditorShell::runFrame() {
 
   if (!renderCoordinator_.asyncRenderer().isBusy()) {
     if (app_.flushFrame()) {
-      renderCoordinator_.invalidatePresentationAfterDocumentFlush(
-          app_, app_.document().lastFlushResult());
-      renderCoordinator_.refreshSelectionBoundsCache(app_);
+      const bool preserveActiveDragCache =
+          selectTool_.isDragging() ||
+          renderCoordinator_.compositedPresentation().isWaitingForFullRender() ||
+          renderCoordinator_.compositedPresentation().isWaitingForChromeRefresh();
+      if (preserveActiveDragCache) {
+        // Transform-only drag flushes are intentionally represented by the
+        // promoted tile's compose transform. Discarding that cache here makes
+        // a queued group drag fall back to stale full-document pixels.
+        renderCoordinator_.invalidatePresentationAfterDocumentFlush(
+            app_.document().lastFlushResult());
+      } else {
+        renderCoordinator_.invalidatePresentationAfterDocumentFlush(
+            app_, app_.document().lastFlushResult());
+      }
+      if (!selectTool_.isDragging()) {
+        renderCoordinator_.refreshSelectionBoundsCache(app_);
+      }
       // UI mutations can be queued while the async renderer is busy. When they flush here, the
       // DOM/source panes already reflect the edit, so request a matching document render instead of
       // continuing to present stale composited textures.
@@ -4582,14 +4797,7 @@ void EditorShell::runFrame() {
 
   const Vector2i windowSize = window_.windowSize();
   const float menuBarHeight = ImGui::GetFrameHeight();
-  // W2: the contextual text-formatting bar sits directly below the menu bar and
-  // reserves its own strip of vertical space while text styling is in context
-  // (a single <text> is selected or an editing session is active). Compute its
-  // visibility/height here so the panes below start beneath it; the bar itself
-  // is rendered next to the menu bar further down.
-  const FormatBarState formatBarState = computeFormatBarState();
-  const float formatBarHeight = formatBarState.visible ? TextFormatBarPresenter::BarHeight() : 0.0f;
-  const float paneOriginY = menuBarHeight + formatBarHeight;
+  const float paneOriginY = menuBarHeight;
   const float paneHeight = std::max(0.0f, static_cast<float>(windowSize.y) - paneOriginY);
   const EditorMainPaneLayout mainPaneLayout = ComputeEditorMainPaneLayout({
       .windowWidth = static_cast<float>(windowSize.x),
@@ -4597,6 +4805,7 @@ void EditorShell::runFrame() {
       .sourcePaneWidth = sourcePaneWidth_,
       .minSourcePaneWidth = kMinSourcePaneWidth,
       .maxSourcePaneWidth = kMaxSourcePaneWidth,
+      .sourcePaneRailWidth = kSourcePaneRevealHandleWidth,
       .rightPaneWidth = rightPaneWidth_,
       .minRightPaneWidth = kMinRightPaneWidth,
       .maxRightPaneWidth = kMaxRightPaneWidth,
@@ -4627,7 +4836,8 @@ void EditorShell::runFrame() {
   interactionController_.updatePaneLayout(
       renderPaneOrigin, renderPaneSize,
       app_.hasDocument() ? std::make_optional(ResolveDocumentViewBox(app_.document().document()))
-                         : std::nullopt);
+                         : std::nullopt,
+      /*preservePaneCenterDocumentPoint=*/true);
   markPhase(mainFrameCost.layoutMs);
 
   handleGlobalShortcuts();
@@ -4652,15 +4862,6 @@ void EditorShell::runFrame() {
   const MenuBarActions menuActions = menuBarPresenter_.render(menuState, uiFontBold_);
   applyMenuActions(menuActions);
 
-  // Render the contextual text-formatting bar beneath the menu bar and route
-  // its actions to the existing styling commands. Space for it was already
-  // reserved above via `formatBarHeight`.
-  if (formatBarState.visible) {
-    const FormatBarActions formatBarActions = textFormatBarPresenter_.render(
-        formatBarState, menuBarHeight, static_cast<float>(windowSize.x));
-    applyFormatBarActions(formatBarState, formatBarActions);
-  }
-
   // On macOS, service any pending open/save with a native OS panel; this
   // consumes the request so the ImGui modal below stays closed. On other
   // platforms it is a no-op and the ImGui modal renders as before.
@@ -4678,10 +4879,6 @@ void EditorShell::runFrame() {
     renderSourcePane(paneOriginY, paneHeight, mainPaneLayout.sourcePaneWidth, codeFont_);
   }
   markPhase(mainFrameCost.sourcePaneMs);
-  // The canvas pane must never window-scroll: an ImGui scrollbar here would
-  // scroll the in-pane overlay chrome (toolbar, perf HUD) away from the
-  // canvas. Canvas scrolling is the emulated document-extent scrollbars +
-  // wheel panning instead.
   // The canvas pane must never window-scroll: an ImGui scrollbar here would
   // scroll the in-pane overlay chrome (toolbar, perf HUD) away from the
   // canvas. Canvas scrolling is the emulated document-extent scrollbars +

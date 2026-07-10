@@ -15,6 +15,8 @@ struct EditorMainPaneLayoutInput {
   float minSourcePaneWidth = 0.0f;
   /// Maximum source pane width while visible.
   float maxSourcePaneWidth = 0.0f;
+  /// Width of the persistent source reveal rail while the pane is hidden.
+  float sourcePaneRailWidth = 0.0f;
   /// Persisted/requested right sidebar width.
   float rightPaneWidth = 0.0f;
   /// Minimum right sidebar width.
@@ -29,6 +31,8 @@ struct EditorMainPaneLayoutInput {
 struct EditorMainPaneLayout {
   /// Effective source pane width. Zero when the source pane is hidden.
   float sourcePaneWidth = 0.0f;
+  /// Effective source reveal-rail width. Zero while the source pane is visible.
+  float sourcePaneRailWidth = 0.0f;
   /// Clamped right sidebar width.
   float rightPaneWidth = 0.0f;
   /// Left edge of the render pane.

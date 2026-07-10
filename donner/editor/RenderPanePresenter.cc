@@ -490,11 +490,13 @@ bool TileMatchesActiveDragPreview(
   if (!activeDragPreview.has_value()) {
     return false;
   }
-  if (tile.isDragTarget) {
-    return true;
+  if (tile.layerEntity != entt::null) {
+    // isDragTarget is metadata from the worker frame that produced this tile.
+    // It may outlive a group-to-child selection change, so entity identity is
+    // authoritative for a new live drag.
+    return DragPreviewContainsEntity(*activeDragPreview, tile.layerEntity);
   }
-  return tile.layerEntity != entt::null &&
-         DragPreviewContainsEntity(*activeDragPreview, tile.layerEntity);
+  return tile.isDragTarget;
 }
 
 bool HasPresentableDragTargetTile(
@@ -693,9 +695,9 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
   } else if (state.perfOverlayMode == PerfOverlayMode::FullGraph) {
     const float graphHeight = kFrameGraphHeight + kMemoryGraphHeight +
                               4.0f * ImGui::GetTextLineHeightWithSpacing() + 4.0f;
-    ImGui::SetCursorPos(ImVec2(kPerfOverlayMargin, static_cast<float>(state.contentRegion.y -
-                                                                      graphHeight -
-                                                                      kPerfOverlayMargin)));
+    ImGui::SetCursorPos(
+        ImVec2(kPerfOverlayMargin,
+               static_cast<float>(state.contentRegion.y - graphHeight - kPerfOverlayMargin)));
     RenderFrameGraph(state.frameHistory);
     ImGui::Dummy(ImVec2(0.0f, 4.0f));
     RenderMemoryGraph(state.frameHistory);

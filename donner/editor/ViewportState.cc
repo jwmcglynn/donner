@@ -90,8 +90,14 @@ EditorRasterViewport ViewportState::rasterViewport() const {
     maxTarget.y = std::min(maxTarget.y, paneSize.y * devicePixelRatio + 2.0 * marginDevicePx);
   }
 
+  const bool exceedsViewportTarget = fullTarget.x > maxTarget.x || fullTarget.y > maxTarget.y;
+  const bool exceedsHardDimensionCap = fullTarget.x > static_cast<double>(kMaxCanvasDim) ||
+                                       fullTarget.y > static_cast<double>(kMaxCanvasDim);
+  const bool viewportBoundedRasterIsSmaller =
+      maxTarget.x * maxTarget.y < fullTarget.x * fullTarget.y;
   const bool shouldViewportBound = paneSize.x > 0.0 && paneSize.y > 0.0 && devicePixelRatio > 0.0 &&
-                                   (fullTarget.x > maxTarget.x || fullTarget.y > maxTarget.y);
+                                   exceedsViewportTarget &&
+                                   (exceedsHardDimensionCap || viewportBoundedRasterIsSmaller);
   if (!shouldViewportBound) {
     return result;
   }

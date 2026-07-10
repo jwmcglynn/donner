@@ -649,6 +649,22 @@ donner_cc_fuzzer(
     ],
 )
 
+donner_cc_fuzzer(
+    name = "inspector_ui_fuzzer",
+    srcs = ["InspectorUi_fuzzer.cc"],
+    corpus = "testdata/inspector_ui_fuzzer_corpus",
+    deps = [
+        "//donner/editor:editor_app",
+        "//donner/editor:editor_theme",
+        "//donner/editor:imgui_headers",
+        "//donner/editor:sidebar_presenter",
+        "//donner/editor:text_tool",
+        "//donner/editor:viewport_state",
+        "//donner/svg",
+        "@imgui",
+    ],
+)
+
 # Round-trips untrusted SVG through the viewport export/serialization path
 # (parse -> ExportViewportAsSvg -> re-parse). ExportViewportAsSvg hand-writes
 # XML as strings (attribute carry-over, injected <defs><clipPath>, wrapping
@@ -723,6 +739,7 @@ donner_cc_test(
     deps = [
         "//donner/base",
         "//donner/editor:editor_app",
+        "//donner/editor:imgui_headers",
         "//donner/editor:sidebar_presenter",
         "//donner/svg",
         "@com_google_gtest//:gtest_main",

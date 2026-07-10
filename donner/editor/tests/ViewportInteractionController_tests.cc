@@ -216,6 +216,21 @@ TEST(ViewportInteractionControllerTest, PaneLayoutAndDevicePixelRatioUpdateState
   EXPECT_DOUBLE_EQ(controller.viewport().devicePixelRatio, 2.5);
 }
 
+TEST(ViewportInteractionControllerTest, PaneResizeCanPreserveDocumentPointAtPaneCenter) {
+  ViewportInteractionController controller;
+  controller.updatePaneLayout(Vector2d(20.0, 10.0), Vector2d(1000.0, 700.0),
+                              Box2d::FromXYWH(0.0, 0.0, 892.0, 512.0));
+  controller.viewport().resetTo100Percent();
+  const Vector2d documentAtOldCenter =
+      controller.viewport().screenToDocument(controller.viewport().paneCenter());
+
+  controller.updatePaneLayout(Vector2d(560.0, 10.0), Vector2d(460.0, 700.0), std::nullopt,
+                              /*preservePaneCenterDocumentPoint=*/true);
+
+  EXPECT_EQ(controller.viewport().screenToDocument(controller.viewport().paneCenter()),
+            documentAtOldCenter);
+}
+
 TEST(ViewportInteractionControllerTest, MousePanReportsViewportChange) {
   ViewportInteractionController controller;
   controller.viewport().paneOrigin = Vector2d::Zero();
@@ -449,6 +464,21 @@ TEST(ViewportStateTest, RasterViewportBoundsTallDocumentTargets) {
   EXPECT_TRUE(raster.viewportBounded);
   EXPECT_EQ(raster.outputSizePx, Vector2i(200 + 2 * ViewportState::kHighZoomRasterMarginScreenPx,
                                           120 + 2 * ViewportState::kHighZoomRasterMarginScreenPx));
+}
+
+TEST(ViewportStateTest, RasterViewportKeepsFullDocumentWhenBoundingWouldAllocateMorePixels) {
+  ViewportState viewport;
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 892.0, 512.0);
+  viewport.zoom = 1.0;
+  viewport.devicePixelRatio = 2.0;
+  viewport.paneOrigin = Vector2d(560.0, 20.0);
+  viewport.paneSize = Vector2d(603.0, 861.0);
+
+  const EditorRasterViewport raster = viewport.rasterViewport();
+
+  EXPECT_FALSE(raster.viewportBounded);
+  EXPECT_EQ(raster.outputSizePx, Vector2i(1784, 1024));
+  EXPECT_EQ(raster.documentRect, viewport.documentViewBox);
 }
 
 TEST(ViewportStateTest, SelectedPrewarmExpandsViewportBoundedRaster) {
