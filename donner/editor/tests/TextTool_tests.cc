@@ -425,6 +425,11 @@ TEST_F(TextToolTest, PointTextFrameUsesStableFontExtentsAndFadesAfterTyping) {
   ASSERT_TRUE(hidden.has_value());
   ASSERT_TRUE(hidden->frameCornersDoc.has_value());
   EXPECT_FLOAT_EQ(hidden->frameOpacity, 0.0f);
+  const Vector2d topLeft = (*hidden->frameCornersDoc)[0];
+  EXPECT_EQ(tool.frameHandleIntentAt(topLeft, /*pixelsPerDocUnit=*/1.0,
+                                     /*includeRotate=*/true)
+                .kind,
+            SelectionTransformHandleKind::None);
 
   tool.notifyPointerMoved(Vector2d(50.0, 80.0));
   EXPECT_FLOAT_EQ(tool.editingChrome(app)->frameOpacity, 0.0f);
@@ -433,6 +438,10 @@ TEST_F(TextToolTest, PointTextFrameUsesStableFontExtentsAndFadesAfterTyping) {
   ASSERT_TRUE(revealed.has_value());
   ASSERT_TRUE(revealed->frameCornersDoc.has_value());
   EXPECT_FLOAT_EQ(revealed->frameOpacity, 1.0f);
+  EXPECT_EQ(tool.frameHandleIntentAt(topLeft, /*pixelsPerDocUnit=*/1.0,
+                                     /*includeRotate=*/true)
+                .kind,
+            SelectionTransformHandleKind::Resize);
   const double stableHeight = (*revealed->frameCornersDoc)[3].y - (*revealed->frameCornersDoc)[0].y;
 
   // A glyph with different ink extents must not change the em-box height.
@@ -680,6 +689,8 @@ TEST_F(TextToolTest, FrameResizeConvertsPointTextToUserSizedBox) {
   const std::array<Vector2d, 4>& corners = *chrome->frameCornersDoc;
   const Box2d pointFrame(corners[0], corners[2]);
 
+  tool.notifyPointerMoved(pointFrame.bottomRight);
+  ASSERT_FLOAT_EQ(tool.editingChrome(app)->frameOpacity, 1.0f);
   tool.onMouseDown(app, pointFrame.bottomRight, MouseModifiers{});
   EXPECT_TRUE(tool.isAdjustingFrame());
   tool.onMouseMove(app, pointFrame.bottomRight + Vector2d(60.0, 40.0), /*buttonHeld=*/true);

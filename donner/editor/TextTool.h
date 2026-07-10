@@ -136,7 +136,7 @@ public:
   /// test runs in the text's local space, so on a rotated frame the handle
   /// zones track the ORIENTED corners, not the axis-aligned envelope. Reads
   /// the session's computed ink bounds for point text - call only while the
-  /// async render worker is idle.
+  /// async render worker is idle. Hidden point-text chrome is not hit-testable.
   [[nodiscard]] SelectionTransformHandleIntent frameHandleIntentAt(const Vector2d& documentPoint,
                                                                    double pixelsPerDocUnit,
                                                                    bool includeRotate) const;

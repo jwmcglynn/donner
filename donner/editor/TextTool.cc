@@ -455,7 +455,8 @@ std::optional<Box2d> TextTool::sessionFrameLocal() const {
 SelectionTransformHandleIntent TextTool::frameHandleIntentAt(const Vector2d& documentPoint,
                                                              double pixelsPerDocUnit,
                                                              bool includeRotate) const {
-  if (state_ != State::Editing || !sessionText_.has_value()) {
+  if (state_ != State::Editing || !sessionText_.has_value() ||
+      (!boxText_.has_value() && !pointFrameVisible_)) {
     return {};
   }
   const std::optional<Box2d> frameLocal = sessionFrameLocal();
