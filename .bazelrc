@@ -368,17 +368,18 @@ build:ci --repository_cache=~/.cache/bazel-repo
 # Avoids needing the `ci:full-test` PR label as a workaround.
 build:ci --skip_incompatible_explicit_targets
 
-# CI yields remote-execution scheduler priority to interactive dev builds.
-# The shared RE backend's NativeLink scheduler orders its queue by REAPI
-# ExecutionPolicy.priority, and a HIGHER integer is scheduled sooner (source-
-# verified in nativelink v1.5.2 AwaitedActionSortKey: priority is the primary
-# sort key, insert order the tiebreaker). Interactive dev builds set a high
-# priority in their user bazelrc; pinning CI below that means an interactive
-# build jumps ahead of queued CI actions on the shared worker pool instead of
-# waiting behind them. This is queue ordering only, not preemption: actions
-# already running still hold their slot until done. The flag is inert when no
-# remote executor is configured, so `--config=ci` lanes that only use the
-# remote cache are unaffected.
+# CI remote-execution actions run at reduced scheduler priority so interactive
+# development builds on the shared backend always win queue position; see
+# docs/design_docs/0029-2-ci_runtime.md. NativeLink's scheduler orders its
+# queue by REAPI ExecutionPolicy.priority, and a HIGHER integer is scheduled
+# sooner (source-verified in nativelink v1.5.2 AwaitedActionSortKey: priority
+# is the primary sort key, insert order the tiebreaker). Interactive builds
+# set a higher priority in their user bazelrc, so pinning CI below that means
+# an interactive build jumps ahead of queued CI actions on the shared worker
+# pool instead of waiting behind them. This is queue ordering only, not
+# preemption: actions already running still hold their slot until done. The
+# flag is inert when no remote executor is configured, so `--config=ci` lanes
+# that only use the remote cache are unaffected.
 build:ci --remote_execution_priority=-20
 
 # Keep runner-sensitive wall-clock perf tests OFF the PR gate — they belong on
