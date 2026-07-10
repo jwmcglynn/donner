@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <regex>
 #include <span>
 #include <stack>
@@ -1411,7 +1412,12 @@ void TextEditor::renderLineBackground(int lineNo, const ImVec2& lineStart,
 
   // Error markers
   auto errorIt = errorMarkers_.find(lineNo + 1);
-  if (errorIt != errorMarkers_.end()) {
+  const bool hasExactDiagnostic =
+      std::any_of(sourceDiagnostics_.begin(), sourceDiagnostics_.end(),
+                  [lineNo](const SourceDiagnostic& diagnostic) {
+                    return diagnostic.line == static_cast<std::size_t>(lineNo + 1);
+                  });
+  if (errorIt != errorMarkers_.end() && !hasExactDiagnostic) {
     const ImVec2 end{lineStart.x + contentSize.x + 2.0f * ImGui::GetScrollX(),
                      lineStart.y + charAdvance_.y};
 
@@ -1482,6 +1488,17 @@ void TextEditor::renderLineBackground(const VisualLine& visualLine, const ImVec2
   const ImU32 hoverColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.22f, 0.62f, 1.0f, 0.13f));
   for (const SourceByteRange& range : hoverSourceRanges_) {
     drawSourceRange(range, hoverColor);
+  }
+
+  const std::optional<std::uint64_t> hoveredDiagnostic = hoveredSourceDiagnosticId();
+  for (const SourceDiagnostic& diagnostic : sourceDiagnostics_) {
+    const bool active =
+        diagnostic.id == activeSourceDiagnosticId_ || diagnostic.id == hoveredDiagnostic;
+    const float alpha = active ? 0.34f : 0.14f;
+    const ImVec4 color = diagnostic.severity == DiagnosticSeverity::Error
+                             ? ImVec4(0.95f, 0.24f, 0.22f, alpha)
+                             : ImVec4(1.0f, 0.68f, 0.16f, alpha);
+    drawSourceRange(diagnostic.range, ImGui::ColorConvertFloat4ToU32(color));
   }
 
   const std::vector<ActiveFlash> flashes =
@@ -1950,6 +1967,23 @@ void TextEditor::remapFocusMetadataForSourceEdit(const SourceEditIntent& intent)
   }
   std::erase_if(hoverSourceRanges_,
                 [](const SourceByteRange& range) { return range.end <= range.start; });
+
+  for (SourceDiagnostic& diagnostic : sourceDiagnostics_) {
+    diagnostic.range = MapSourceByteRangeForEdit(diagnostic.range, intent, bufferSize);
+    const Coordinates start = getCoordinatesAtByteOffset(diagnostic.range.start);
+    diagnostic.line = static_cast<std::size_t>(start.line + 1);
+    diagnostic.column = static_cast<std::size_t>(start.column);
+  }
+  std::erase_if(sourceDiagnostics_, [](const SourceDiagnostic& diagnostic) {
+    return diagnostic.range.end <= diagnostic.range.start;
+  });
+  if (activeSourceDiagnosticId_.has_value() &&
+      std::none_of(sourceDiagnostics_.begin(), sourceDiagnostics_.end(),
+                   [this](const SourceDiagnostic& diagnostic) {
+                     return diagnostic.id == activeSourceDiagnosticId_;
+                   })) {
+    activeSourceDiagnosticId_.reset();
+  }
 
   for (SourceStyleDecoration& decoration : sourceStyleDecorations_) {
     decoration.range = MapSourceByteRangeForEdit(decoration.range, intent, bufferSize);
@@ -2566,6 +2600,109 @@ bool TextEditor::setHoverSourceRanges(std::vector<SourceByteRange> ranges) {
 
   hoverSourceRanges_ = std::move(ranges);
   return true;
+}
+
+bool TextEditor::setSourceDiagnostics(std::vector<SourceDiagnostic> diagnostics) {
+  const std::size_t bufferSize = getText().size();
+  for (SourceDiagnostic& diagnostic : diagnostics) {
+    diagnostic.range.start = std::min(diagnostic.range.start, bufferSize);
+    diagnostic.range.end = std::min(diagnostic.range.end, bufferSize);
+    const Coordinates start = getCoordinatesAtByteOffset(diagnostic.range.start);
+    diagnostic.line = static_cast<std::size_t>(start.line + 1);
+    diagnostic.column = static_cast<std::size_t>(start.column);
+  }
+  std::erase_if(diagnostics, [](const SourceDiagnostic& diagnostic) {
+    return diagnostic.range.end <= diagnostic.range.start;
+  });
+  std::sort(diagnostics.begin(), diagnostics.end(),
+            [](const SourceDiagnostic& lhs, const SourceDiagnostic& rhs) {
+              if (lhs.range.start != rhs.range.start) {
+                return lhs.range.start < rhs.range.start;
+              }
+              if (lhs.range.end != rhs.range.end) {
+                return lhs.range.end < rhs.range.end;
+              }
+              return lhs.id < rhs.id;
+            });
+
+  if (sourceDiagnostics_ == diagnostics) {
+    return false;
+  }
+
+  sourceDiagnostics_ = std::move(diagnostics);
+  if (activeSourceDiagnosticId_.has_value() &&
+      std::none_of(sourceDiagnostics_.begin(), sourceDiagnostics_.end(),
+                   [this](const SourceDiagnostic& diagnostic) {
+                     return diagnostic.id == activeSourceDiagnosticId_;
+                   })) {
+    activeSourceDiagnosticId_.reset();
+  }
+  return true;
+}
+
+std::optional<std::uint64_t> TextEditor::sourceDiagnosticAtByteOffset(
+    std::size_t byteOffset) const {
+  const SourceDiagnostic* best = nullptr;
+  for (const SourceDiagnostic& diagnostic : sourceDiagnostics_) {
+    if (byteOffset < diagnostic.range.start || byteOffset >= diagnostic.range.end) {
+      continue;
+    }
+    const std::size_t width = diagnostic.range.end - diagnostic.range.start;
+    const std::size_t bestWidth = best == nullptr ? std::numeric_limits<std::size_t>::max()
+                                                  : best->range.end - best->range.start;
+    if (best == nullptr || width < bestWidth ||
+        (width == bestWidth && diagnostic.severity == DiagnosticSeverity::Error &&
+         best->severity != DiagnosticSeverity::Error)) {
+      best = &diagnostic;
+    }
+  }
+  return best == nullptr ? std::nullopt : std::optional<std::uint64_t>(best->id);
+}
+
+std::optional<std::uint64_t> TextEditor::hoveredSourceDiagnosticId() const {
+  if (!hoveredTextPosition_.has_value()) {
+    return std::nullopt;
+  }
+  return sourceDiagnosticAtByteOffset(getByteOffsetAtCoordinates(*hoveredTextPosition_));
+}
+
+bool TextEditor::setActiveSourceDiagnosticId(std::optional<std::uint64_t> id) {
+  if (id.has_value() &&
+      std::none_of(sourceDiagnostics_.begin(), sourceDiagnostics_.end(),
+                   [id](const SourceDiagnostic& diagnostic) { return diagnostic.id == id; })) {
+    activeSourceDiagnosticId_.reset();
+    return false;
+  }
+  const bool changed = activeSourceDiagnosticId_ != id;
+  activeSourceDiagnosticId_ = id;
+  return changed || id.has_value();
+}
+
+void TextEditor::renderSourceDiagnosticTooltip() {
+  const std::optional<std::uint64_t> hovered = hoveredSourceDiagnosticId();
+  if (!hovered.has_value()) {
+    return;
+  }
+  const auto it = std::find_if(
+      sourceDiagnostics_.begin(), sourceDiagnostics_.end(),
+      [hovered](const SourceDiagnostic& diagnostic) { return diagnostic.id == hovered; });
+  if (it == sourceDiagnostics_.end()) {
+    return;
+  }
+
+  ImGui::BeginTooltip();
+  const ImVec4 color = it->severity == DiagnosticSeverity::Error ? ImVec4(0.95f, 0.34f, 0.31f, 1.0f)
+                                                                 : ImVec4(1.0f, 0.72f, 0.24f, 1.0f);
+  ImGui::PushStyleColor(ImGuiCol_Text, color);
+  ImGui::TextUnformatted(it->severity == DiagnosticSeverity::Error ? "Error" : "Warning");
+  ImGui::PopStyleColor();
+  ImGui::SameLine();
+  ImGui::TextDisabled("%zu:%zu", it->line, it->column + 1);
+  ImGui::Separator();
+  ImGui::PushTextWrapPos(420.0f * uiScale_);
+  ImGui::TextUnformatted(it->message.c_str());
+  ImGui::PopTextWrapPos();
+  ImGui::EndTooltip();
 }
 
 bool TextEditor::setSourceStyleDecorations(std::vector<SourceStyleDecoration> decorations) {
@@ -3731,6 +3868,7 @@ void TextEditor::render(std::string_view title, const ImVec2& size, bool showBor
   colorizeInternal();
   readyForAutocomplete_ = true;
   renderInternal(title);
+  renderSourceDiagnosticTooltip();
 
   // Scrollbar markers
   if (scrollbarMarkers_) {

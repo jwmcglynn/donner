@@ -13,6 +13,10 @@ namespace donner::editor {
 
 namespace {
 
+std::vector<ParseDiagnostic> CopyWarnings(const ParseWarningSink& sink) {
+  return std::vector<ParseDiagnostic>(sink.warnings().begin(), sink.warnings().end());
+}
+
 bool InvalidatesExistingCompositedPixels(const EditorCommand& command) {
   switch (command.kind) {
     case EditorCommand::Kind::SetAttribute:
@@ -34,10 +38,20 @@ bool InvalidatesExistingCompositedPixels(const EditorCommand& command) {
 
 AsyncSVGDocument::AsyncSVGDocument() = default;
 
+void AsyncSVGDocument::publishParseDiagnostics(std::vector<ParseDiagnostic> warnings,
+                                               std::optional<ParseDiagnostic> fatalError) {
+  lastParseError_ = fatalError;
+  parseDiagnostics_ = std::move(warnings);
+  if (fatalError.has_value()) {
+    parseDiagnostics_.push_back(std::move(*fatalError));
+  }
+  ++parseDiagnosticsRevision_;
+}
+
 void AsyncSVGDocument::setDocument(svg::SVGDocument document) {
   document_ = std::move(document);
   queue_.clear();
-  lastParseError_.reset();
+  publishParseDiagnostics({}, std::nullopt);
   pendingStructuralRemap_.clear();
   frameVersion_.fetch_add(1, std::memory_order_release);
   documentGeneration_.fetch_add(1, std::memory_order_release);
@@ -77,7 +91,7 @@ AsyncSVGDocument::ReplaceKind AsyncSVGDocument::setDocumentMaybeStructural(
   // after.
   document_ = std::move(newDocument);
   queue_.clear();
-  lastParseError_.reset();
+  publishParseDiagnostics({}, std::nullopt);
   frameVersion_.fetch_add(1, std::memory_order_release);
   documentGeneration_.fetch_add(1, std::memory_order_release);
 
@@ -163,16 +177,12 @@ xml::ApplySourceEditResult AsyncSVGDocument::applySourceEdit(const xml::XMLEditI
     xml::ApplySourceEditResult result;
     result.diagnostic =
         ParseDiagnostic::Error("Cannot apply source edit without a loaded document", intent.range);
-    lastParseError_ = result.diagnostic;
+    publishParseDiagnostics({}, result.diagnostic);
     return result;
   }
 
   xml::ApplySourceEditResult result = document_->applySourceEdit(intent);
-  if (result.diagnostic.has_value()) {
-    lastParseError_ = result.diagnostic;
-  } else {
-    lastParseError_.reset();
-  }
+  publishParseDiagnostics({}, result.diagnostic);
 
   if (result.applied || !result.mutations.empty()) {
     frameVersion_.fetch_add(1, std::memory_order_release);
@@ -190,10 +200,11 @@ bool AsyncSVGDocument::loadFromString(std::string_view svgBytes) {
     // until the source parses again. We deliberately do NOT bump the
     // frame version: the renderer's view of the document is unchanged,
     // and the source pane polls `lastParseError()` directly.
-    lastParseError_ = std::move(result.error());
+    publishParseDiagnostics(CopyWarnings(sink), std::move(result.error()));
     return false;
   }
   setDocument(std::move(result.result()));
+  publishParseDiagnostics(CopyWarnings(sink), std::nullopt);
   return true;
 }
 
@@ -239,10 +250,11 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
         ParseWarningSink sink;
         auto result = svg::parser::SVGParser::ParseSVG(command.bytes, sink, EditorParseOptions());
         if (result.hasError()) {
-          lastParseError_ = std::move(result.error());
+          publishParseDiagnostics(CopyWarnings(sink), std::move(result.error()));
           return;
         }
         (void)setDocumentMaybeStructural(std::move(result).result());
+        publishParseDiagnostics(CopyWarnings(sink), std::nullopt);
       } else {
         (void)loadFromString(command.bytes);
       }
@@ -291,7 +303,7 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
       lastFlushResult_.sourceDeltas.insert(lastFlushResult_.sourceDeltas.end(),
                                            result.sourceDeltas.begin(), result.sourceDeltas.end());
       if (result.diagnostic.has_value()) {
-        lastParseError_ = std::move(result.diagnostic);
+        publishParseDiagnostics({}, std::move(result.diagnostic));
       }
       break;
     }
@@ -324,10 +336,11 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
       ParseWarningSink sink;
       auto result = svg::parser::SVGParser::ParseSVG(command.bytes, sink, EditorParseOptions());
       if (result.hasError()) {
-        lastParseError_ = std::move(result.error());
+        publishParseDiagnostics(CopyWarnings(sink), std::move(result.error()));
         return;
       }
       (void)setDocumentMaybeStructural(std::move(result).result());
+      publishParseDiagnostics(CopyWarnings(sink), std::nullopt);
       break;
     }
 
@@ -345,7 +358,7 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
       lastFlushResult_.sourceDeltas.insert(lastFlushResult_.sourceDeltas.end(),
                                            result.sourceDeltas.begin(), result.sourceDeltas.end());
       if (result.diagnostic.has_value()) {
-        lastParseError_ = std::move(result.diagnostic);
+        publishParseDiagnostics({}, std::move(result.diagnostic));
       }
       if (textElement.isa<svg::SVGTextContentElement>()) {
         // Mirror the initial content into the XML tree/source as well: the
@@ -358,7 +371,7 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
                                                textResult.sourceDeltas.begin(),
                                                textResult.sourceDeltas.end());
           if (textResult.diagnostic.has_value() && !lastParseError_.has_value()) {
-            lastParseError_ = std::move(textResult.diagnostic);
+            publishParseDiagnostics({}, std::move(textResult.diagnostic));
           }
         }
         textElement.cast<svg::SVGTextContentElement>().setTextContent(command.textContent);
@@ -383,7 +396,7 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
       lastFlushResult_.sourceDeltas.insert(lastFlushResult_.sourceDeltas.end(),
                                            result.sourceDeltas.begin(), result.sourceDeltas.end());
       if (result.diagnostic.has_value() && !lastParseError_.has_value()) {
-        lastParseError_ = std::move(result.diagnostic);
+        publishParseDiagnostics({}, std::move(result.diagnostic));
       }
       if (textElement.isa<svg::SVGTextContentElement>()) {
         textElement.cast<svg::SVGTextContentElement>().setTextContent(command.textContent);

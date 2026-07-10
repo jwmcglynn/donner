@@ -360,6 +360,27 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "source_diagnostics",
+    srcs = ["SourceDiagnostics.cc"],
+    hdrs = ["SourceDiagnostics.h"],
+    deps = [
+        ":flash_decorations",
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
+    name = "source_diagnostics_panel",
+    srcs = ["SourceDiagnosticsPanel.cc"],
+    hdrs = ["SourceDiagnosticsPanel.h"],
+    deps = [
+        ":imgui_headers",
+        ":source_diagnostics",
+        "@imgui",
+    ],
+)
+
+donner_cc_library(
     name = "shape_clipboard_payload",
     srcs = ["ShapeClipboardPayload.cc"],
     hdrs = ["ShapeClipboardPayload.h"],
@@ -591,6 +612,7 @@ donner_cc_library(
         ":editor_app",
         ":imgui_headers",
         ":select_tool",
+        ":source_diagnostics",
         ":source_edit_intent",
         ":source_sync",
         ":text_editor",
@@ -910,6 +932,7 @@ donner_cc_library(
         ":shape_clipboard_commands",
         ":shape_clipboard_payload",
         ":sidebar_presenter",
+        ":source_diagnostics_panel",
         ":source_selection",
         ":style_source_annotations",
         ":text_editor",
@@ -1332,6 +1355,7 @@ donner_cc_library(
         ":imgui_headers",
         ":rope_simulation",
         ":soft_wrap",
+        ":source_diagnostics",
         ":source_edit_intent",
         ":text_buffer",
         ":text_editor_core",
