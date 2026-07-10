@@ -213,6 +213,40 @@ bool ContainsScreenPoint(const Box2d& rect, const ImVec2& point) {
          point.y <= rect.bottomRight.y;
 }
 
+std::optional<Box2d> TextFormatBarScreenRect(const ImVec2& paneOrigin, const ImVec2& contentRegion,
+                                             const Box2d& toolPaletteRect, bool visible,
+                                             float barHeight) {
+  if (!visible) {
+    return std::nullopt;
+  }
+
+  constexpr float kHorizontalInset = 8.0f;
+  const float maxWidth = std::max(0.0f, contentRegion.x - 2.0f * kHorizontalInset);
+  const float barWidth = std::min(TextFormatBarPresenter::PreferredWidth(), maxWidth);
+  if (barWidth <= 0.0f || barHeight <= 0.0f) {
+    return std::nullopt;
+  }
+
+  const float idealX =
+      static_cast<float>((toolPaletteRect.topLeft.x + toolPaletteRect.bottomRight.x) * 0.5) -
+      barWidth * 0.5f;
+  const float minX = paneOrigin.x + kHorizontalInset;
+  const float maxX = paneOrigin.x + contentRegion.x - kHorizontalInset - barWidth;
+  const float barX = std::clamp(idealX, minX, std::max(minX, maxX));
+  const float barY = static_cast<float>(toolPaletteRect.bottomRight.y) + 8.0f;
+  return Box2d::FromXYWH(barX, barY, barWidth, barHeight);
+}
+
+bool CanvasChromeCapturesInput(const ImVec2& point, const std::optional<Box2d>& referenceChipRect,
+                               const Box2d& toolPaletteRect,
+                               const std::optional<Box2d>& textFormatBarRect,
+                               const Box2d& canvasZoomControlRect) {
+  return (referenceChipRect.has_value() && ContainsScreenPoint(*referenceChipRect, point)) ||
+         ContainsScreenPoint(toolPaletteRect, point) ||
+         (textFormatBarRect.has_value() && ContainsScreenPoint(*textFormatBarRect, point)) ||
+         ContainsScreenPoint(canvasZoomControlRect, point);
+}
+
 // Build the "<label> (<key>)" tooltip string for a tool button from the shared
 // keybinding table, so the tooltip and the keyboard shortcut handler can never
 // disagree about which key activates the tool.
@@ -1950,14 +1984,21 @@ bool EditorShell::selectionIsAllText() const {
   return true;
 }
 
+bool EditorShell::formatBarShouldShow() const {
+  const std::vector<svg::SVGElement>& selection = app_.selectedElements();
+  const bool hasSingleTextSelection =
+      selection.size() == 1u && selection.front().type() == svg::ElementType::Text;
+  const bool textEditingActive = activeTool_ == ActiveTool::Text && textTool_.isEditing();
+  return FormatBarShouldShow(hasSingleTextSelection, textEditingActive);
+}
+
 FormatBarState EditorShell::computeFormatBarState() {
   FormatBarState state;
 
   const std::vector<svg::SVGElement>& selection = app_.selectedElements();
   const bool hasSingleTextSelection =
       selection.size() == 1u && selection.front().type() == svg::ElementType::Text;
-  const bool textEditingActive = activeTool_ == ActiveTool::Text && textTool_.isEditing();
-  state.visible = FormatBarShouldShow(hasSingleTextSelection, textEditingActive);
+  state.visible = formatBarShouldShow();
   if (!state.visible) {
     return state;
   }
@@ -2505,19 +2546,19 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   const std::optional<Box2d> referenceChipRect =
       hideReferenceChip ? std::nullopt : referenceHighlightChipScreenRect(referenceChipLabel);
   const Box2d toolPaletteRect = toolPaletteScreenRect(paneOriginImGui, contentRegion);
-  const bool toolPaletteHovered = ContainsScreenPoint(toolPaletteRect, ImGui::GetMousePos());
+  const std::optional<Box2d> textFormatBarRect =
+      TextFormatBarScreenRect(paneOriginImGui, contentRegion, toolPaletteRect,
+                              formatBarShouldShow(), TextFormatBarPresenter::BarHeight());
   const Box2d canvasZoomControlRect = canvasZoomControlScreenRect();
-  const bool canvasZoomControlHovered =
-      ContainsScreenPoint(canvasZoomControlRect, ImGui::GetMousePos());
-  const bool referenceChipHovered = referenceChipRect.has_value() &&
-                                    ContainsScreenPoint(*referenceChipRect, ImGui::GetMousePos());
+  const bool canvasChromeHovered =
+      CanvasChromeCapturesInput(ImGui::GetMousePos(), referenceChipRect, toolPaletteRect,
+                                textFormatBarRect, canvasZoomControlRect);
 
   ImGui::SetNextItemAllowOverlap();
   ImGui::InvisibleButton("##render_canvas", contentRegion,
                          ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonMiddle);
   const bool paneHovered = ImGui::IsItemHovered();
-  const bool canvasHovered =
-      paneHovered && !referenceChipHovered && !toolPaletteHovered && !canvasZoomControlHovered;
+  const bool canvasHovered = paneHovered && !canvasChromeHovered;
   const Box2d paneRect = Box2d::FromXYWH(interactionController_.viewport().paneOrigin.x,
                                          interactionController_.viewport().paneOrigin.y,
                                          interactionController_.viewport().paneSize.x,
@@ -2572,9 +2613,8 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
     }
   }
 
-  const bool modalCapturingInput = referenceChipHovered || toolPaletteHovered ||
-                                   canvasZoomControlHovered ||
-                                   ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
+  const bool modalCapturingInput =
+      canvasChromeHovered || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
   // Publish the canvas scroll-capture rect for the raw GLFW scroll callback:
   // wheel events inside the render pane are consumed by the canvas (pan/zoom)
   // and must not also reach ImGui window scrolling, or scrolling the canvas
@@ -3194,20 +3234,15 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
     renderTextToolHint();
     renderToolPalette(paneOriginImGui, contentRegion);
     const FormatBarState formatBarState = computeFormatBarState();
-    if (formatBarState.visible) {
-      const Box2d paletteRect = toolPaletteScreenRect(paneOriginImGui, contentRegion);
-      const float horizontalInset = 8.0f;
-      const float maxWidth = std::max(0.0f, contentRegion.x - 2.0f * horizontalInset);
-      const float barWidth = std::min(TextFormatBarPresenter::PreferredWidth(), maxWidth);
-      const float idealX =
-          static_cast<float>((paletteRect.topLeft.x + paletteRect.bottomRight.x) * 0.5) -
-          barWidth * 0.5f;
-      const float minX = paneOriginImGui.x + horizontalInset;
-      const float maxX = paneOriginImGui.x + contentRegion.x - horizontalInset - barWidth;
-      const float barX = std::clamp(idealX, minX, std::max(minX, maxX));
-      const float barY = static_cast<float>(paletteRect.bottomRight.y) + 8.0f;
+    const std::optional<Box2d> formatBarRect =
+        TextFormatBarScreenRect(paneOriginImGui, contentRegion, toolPaletteRect,
+                                formatBarState.visible, TextFormatBarPresenter::BarHeight());
+    if (formatBarRect.has_value()) {
       const FormatBarActions actions =
-          textFormatBarPresenter_.render(formatBarState, ImVec2(barX, barY), barWidth);
+          textFormatBarPresenter_.render(formatBarState,
+                                         ImVec2(static_cast<float>(formatBarRect->topLeft.x),
+                                                static_cast<float>(formatBarRect->topLeft.y)),
+                                         static_cast<float>(formatBarRect->width()));
       applyFormatBarActions(formatBarState, actions);
     }
     renderCanvasZoomControl();

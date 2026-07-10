@@ -71,6 +71,15 @@ enum class PendingClickIdleAction {
 [[nodiscard]] ImGuiMouseCursor CursorForTransformHandleIntent(
     const SelectionTransformHandleIntent& intent);
 [[nodiscard]] bool ContainsScreenPoint(const Box2d& rect, const ImVec2& point);
+[[nodiscard]] std::optional<Box2d> TextFormatBarScreenRect(const ImVec2& paneOrigin,
+                                                           const ImVec2& contentRegion,
+                                                           const Box2d& toolPaletteRect,
+                                                           bool visible, float barHeight);
+[[nodiscard]] bool CanvasChromeCapturesInput(const ImVec2& point,
+                                             const std::optional<Box2d>& referenceChipRect,
+                                             const Box2d& toolPaletteRect,
+                                             const std::optional<Box2d>& textFormatBarRect,
+                                             const Box2d& canvasZoomControlRect);
 [[nodiscard]] PendingClickBusyAction PendingClickBusyActionForState(bool tookFastRedrag,
                                                                     bool rendererBusy);
 [[nodiscard]] PendingClickIdleAction PendingClickIdleActionForState(

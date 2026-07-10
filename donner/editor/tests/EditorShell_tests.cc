@@ -296,6 +296,30 @@ TEST(EditorShellInternalTest, GeometryHelpersClampPaneWidthAndTransformBounds) {
   EXPECT_EQ(transformed.bottomRight, Vector2d(15.0, 17.0));
 }
 
+TEST(EditorShellInternalTest, TextFormatBarCapturesCanvasInputWithinItsLayoutRect) {
+  const Box2d toolPaletteRect = Box2d::FromXYWH(210.0, 40.0, 180.0, 44.0);
+  const std::optional<Box2d> formatBarRect = internal::TextFormatBarScreenRect(
+      ImVec2(10.0f, 20.0f), ImVec2(580.0f, 360.0f), toolPaletteRect,
+      /*visible=*/true, /*barHeight=*/48.0f);
+  ASSERT_TRUE(formatBarRect.has_value());
+  EXPECT_DOUBLE_EQ(formatBarRect->topLeft.y, 92.0);
+  EXPECT_DOUBLE_EQ(formatBarRect->width(), TextFormatBarPresenter::PreferredWidth());
+
+  const Box2d referenceChipRect = Box2d::FromXYWH(20.0, 300.0, 80.0, 24.0);
+  const Box2d zoomControlRect = Box2d::FromXYWH(520.0, 320.0, 48.0, 28.0);
+  const ImVec2 formatControlPoint(static_cast<float>(formatBarRect->topLeft.x + 20.0),
+                                  static_cast<float>(formatBarRect->topLeft.y + 20.0));
+  EXPECT_TRUE(internal::CanvasChromeCapturesInput(formatControlPoint, referenceChipRect,
+                                                  toolPaletteRect, formatBarRect, zoomControlRect));
+  EXPECT_FALSE(internal::CanvasChromeCapturesInput(
+      ImVec2(150.0f, 220.0f), referenceChipRect, toolPaletteRect, formatBarRect, zoomControlRect));
+
+  EXPECT_FALSE(internal::TextFormatBarScreenRect(ImVec2(10.0f, 20.0f), ImVec2(580.0f, 360.0f),
+                                                 toolPaletteRect,
+                                                 /*visible=*/false, /*barHeight=*/48.0f)
+                   .has_value());
+}
+
 TEST(EditorShellInternalTest, PendingClickBusyActionPrefersFastRedragThenCancelsBusyRender) {
   EXPECT_EQ(internal::PendingClickBusyActionForState(/*tookFastRedrag=*/true,
                                                      /*rendererBusy=*/true),

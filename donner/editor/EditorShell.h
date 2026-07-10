@@ -343,6 +343,9 @@ private:
   /// otherwise (and always for family/size) through the selection attribute
   /// writes.
   void applyFormatBarActions(const FormatBarState& state, const FormatBarActions& actions);
+  /// Whether the contextual text-format bar should participate in this frame's
+  /// input and presentation passes.
+  [[nodiscard]] bool formatBarShouldShow() const;
   void handleGlobalShortcuts();
   /// True when the document has at least one selectable element (the canonical marquee/Select-All
   /// set). Gates whether Cmd+A / the Edit menu's "Select All" act on the canvas.
