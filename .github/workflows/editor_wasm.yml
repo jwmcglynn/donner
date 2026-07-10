@@ -53,6 +53,7 @@ jobs:
         env:
           DONNER_WASM_BASE_URL: http://127.0.0.1:8000
           DONNER_WASM_BACKEND: geode
+          DONNER_WASM_REQUIRE_WEBGPU: "1"
         run: |
           set -euo pipefail
 

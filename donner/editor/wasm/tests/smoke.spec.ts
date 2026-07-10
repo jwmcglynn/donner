@@ -54,6 +54,7 @@ const kRightPaneWidth = 420;
 // WebGL canvas, so the screenshot fallback carries real pixels. Default to
 // "geode" so existing invocations keep their behavior.
 const kBackend = (process.env.DONNER_WASM_BACKEND || "geode").toLowerCase();
+const kRequireWebGpu = process.env.DONNER_WASM_REQUIRE_WEBGPU === "1";
 const kLinuxGeodeLaunchArgs = [
   "--enable-unsafe-webgpu",
   "--enable-features=Vulkan",
@@ -325,6 +326,9 @@ async function openEditor(page: Page, options: OpenEditorOptions = {}): Promise<
   // WebGPU, so only gate the Geode lane on navigator.gpu.
   if (kBackend !== "tiny_skia") {
     const hasWebGpu = await page.evaluate(() => "gpu" in navigator);
+    if (!hasWebGpu && kRequireWebGpu) {
+      throw new Error("Geode smoke suite requires WebGPU, but navigator.gpu is unavailable");
+    }
     test.skip(!hasWebGpu, "Browser does not expose navigator.gpu");
   }
 
