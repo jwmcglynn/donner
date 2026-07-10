@@ -1,0 +1,4 @@
+interface:
+  display_name: "Donner Web Editor"
+  short_description: "Build and deploy the Donner browser editor"
+  default_prompt: "Use $donner-web-editor to build, validate, and deploy the Donner web editor safely."

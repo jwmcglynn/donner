@@ -155,8 +155,14 @@ int WindingNumberContribution(const Vector2d& p0, const Vector2d& p1, const Vect
 int WindingNumberContributionCurve(const Vector2d& p0, const Vector2d& p1, const Vector2d& p2,
                                    const Vector2d& p3, const Vector2d& point, double tolerance,
                                    int depth = 0) {
-  constexpr int kMaxDepth = 16;
-  if (depth > kMaxDepth || IsCurveFlatEnough(p0, p1, p2, p3, tolerance)) {
+  // A cubic Bezier crosses a horizontal ray at most three times, so a modestly
+  // subdivided polyline already isolates every winding crossing. IsCurveFlatEnough
+  // uses an absolute tolerance, so near-degenerate cubics never flatten and always
+  // recurse to the cap; keeping the cap low bounds the per-curve work (2^depth leaf
+  // evaluations) and prevents adversarial inputs from exhausting the fuzzer timeout
+  // while StrictPathContains classifies many edges.
+  constexpr int kMaxDepth = 10;
+  if (depth >= kMaxDepth || IsCurveFlatEnough(p0, p1, p2, p3, tolerance)) {
     return WindingNumberContribution(p0, p3, point);
   }
 

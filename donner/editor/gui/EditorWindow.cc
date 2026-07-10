@@ -402,7 +402,8 @@ void PublishWgpuReadbackStatsForSmokeTests(const svg::RendererBitmap& bitmap) {
   const WgpuReadbackStats renderStats = ComputeWgpuReadbackStatsForCssRegion(
       bitmap, renderPaneX, 80.0, renderPaneWidth, std::max(1.0, cssHeight - 220.0));
   const WgpuReadbackStats layerStats = ComputeWgpuReadbackStatsForCssRegion(
-      bitmap, cssWidth - 420.0 + 8.0, cssHeight * 0.72, 90.0, cssHeight * 0.24);
+      bitmap, cssWidth - 420.0 + 8.0, std::max(1.0, cssHeight * 0.05), 90.0,
+      std::max(1.0, cssHeight * 0.42));
   PublishWgpuReadbackStats(renderStats.samples, renderStats.coloredPixels,
                            renderStats.nonBlackPixels, renderStats.maxChannel, layerStats.samples,
                            layerStats.coloredPixels, layerStats.nonBlackPixels,

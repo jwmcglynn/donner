@@ -39,8 +39,12 @@ interface PngImage {
   data: Uint8Array;
 }
 
+interface OpenEditorOptions {
+  wgpuReadbackStats?: boolean;
+}
+
 const kFatalRuntimePattern =
-  /Aborted|Assertion failed|RuntimeError|Pthread .* sent an error|getJsObject/i;
+  /Aborted|Assertion failed|RuntimeError|Pthread .* sent an error|getJsObject|No available adapters|WebGPU on Linux requires|WebGPU adapter (?:request )?(?:failed|unavailable)/i;
 const kSourcePaneWidth = 560;
 const kRightPaneWidth = 420;
 
@@ -50,6 +54,19 @@ const kRightPaneWidth = 420;
 // WebGL canvas, so the screenshot fallback carries real pixels. Default to
 // "geode" so existing invocations keep their behavior.
 const kBackend = (process.env.DONNER_WASM_BACKEND || "geode").toLowerCase();
+const kRequireWebGpu = process.env.DONNER_WASM_REQUIRE_WEBGPU === "1";
+// Match Chromium's webgpu-swiftshader test configuration. In particular, do
+// not force the browser compositor onto Vulkan: Dawn selects SwiftShader for
+// WebGPU independently, while Chromium keeps a display path Xvfb can present.
+const kLinuxGeodeLaunchArgs = [
+  "--enable-unsafe-webgpu",
+  "--use-webgpu-adapter=swiftshader",
+  "--enable-dawn-features=allow_unsafe_apis",
+  "--disable-dawn-features=use_dxc",
+  "--enable-webgpu-developer-features",
+  "--use-gpu-in-tests",
+  "--enable-accelerated-2d-canvas",
+];
 
 // Pin the viewport to the native editor calibration size (1600x900). The
 // sample regions in readRenderPaneColorStats / readLayerPreviewColorStats use
@@ -57,7 +74,45 @@ const kBackend = (process.env.DONNER_WASM_BACKEND || "geode").toLowerCase();
 // (source pane 560px, right pane 420px, layer preview at 0.72h..0.96h), so the
 // browser canvas must match that window size for the regions to land on the
 // document render and the layer thumbnails.
-test.use({ viewport: { width: 1600, height: 900 } });
+test.use({
+  viewport: { width: 1600, height: 900 },
+  ...(process.platform === "linux" && kBackend === "geode"
+    ? { launchOptions: { args: kLinuxGeodeLaunchArgs } }
+    : {}),
+});
+
+async function readWebGpuDiagnostics(page: Page) {
+  const browser = await page.evaluate(async () => {
+    const gpu = navigator.gpu;
+    let fallbackAdapterAvailable = false;
+    let adapterRequestError: string | null = null;
+    if (gpu) {
+      try {
+        fallbackAdapterAvailable =
+          (await gpu.requestAdapter({ forceFallbackAdapter: true })) !== null;
+      } catch (error) {
+        adapterRequestError = String(error);
+      }
+    }
+
+    return {
+      isSecureContext,
+      crossOriginIsolated,
+      hasSharedArrayBuffer: typeof SharedArrayBuffer !== "undefined",
+      hasNavigatorGpu: Boolean(gpu),
+      fallbackAdapterAvailable,
+      adapterRequestError,
+      userAgent: navigator.userAgent,
+    };
+  });
+
+  return {
+    ...browser,
+    backend: kBackend,
+    platform: process.platform,
+    launchArgs: process.platform === "linux" && kBackend === "geode" ? kLinuxGeodeLaunchArgs : [],
+  };
+}
 
 function paethPredictor(left: number, up: number, upLeft: number): number {
   const estimate = left + up - upLeft;
@@ -254,10 +309,12 @@ async function readLayerPreviewColorStats(page: Page): Promise<CanvasColorStats>
   return readCanvasColorStats(page, region);
 }
 
-async function openEditor(page: Page): Promise<string[]> {
+async function openEditor(page: Page, options: OpenEditorOptions = {}): Promise<string[]> {
   const baseUrl = process.env.DONNER_WASM_BASE_URL || "http://127.0.0.1:8000";
   const url = new URL(baseUrl);
-  url.searchParams.set("wgpuReadbackStats", "1");
+  if (options.wgpuReadbackStats !== false) {
+    url.searchParams.set("wgpuReadbackStats", "1");
+  }
   const fatalMessages: string[] = [];
 
   page.on("console", (message) => {
@@ -275,6 +332,9 @@ async function openEditor(page: Page): Promise<string[]> {
   // WebGPU, so only gate the Geode lane on navigator.gpu.
   if (kBackend !== "tiny_skia") {
     const hasWebGpu = await page.evaluate(() => "gpu" in navigator);
+    if (!hasWebGpu && kRequireWebGpu) {
+      throw new Error("Geode smoke suite requires WebGPU, but navigator.gpu is unavailable");
+    }
     test.skip(!hasWebGpu, "Browser does not expose navigator.gpu");
   }
 
@@ -291,17 +351,54 @@ test("wasm editor starts without runtime abort", async ({ page }) => {
   expect(fatalMessages).toEqual([]);
 });
 
+test("production Geode wasm presents visible editor pixels", async ({ page }) => {
+  test.skip(kBackend !== "geode", "production WebGPU presentation is Geode-specific");
+  const fatalMessages = await openEditor(page, { wgpuReadbackStats: false });
+  const gpuDiagnostics = await readWebGpuDiagnostics(page);
+  console.log(`browser-gpu-diagnostics=${JSON.stringify(gpuDiagnostics)}`);
+  await test.info().attach("browser-gpu-diagnostics", {
+    body: JSON.stringify(gpuDiagnostics, null, 2),
+    contentType: "application/json",
+  });
+  const canvasBox = await page.locator("canvas#canvas").boundingBox();
+  expect(canvasBox).not.toBeNull();
+  if (canvasBox === null) {
+    return;
+  }
+
+  const fullCanvasRegion = { x: 0, y: 0, width: canvasBox.width, height: canvasBox.height };
+  try {
+    await expect
+      .poll(async () => (await readCanvasColorStats(page, fullCanvasRegion)).coloredPixels, {
+        message: "expected the production WebGPU canvas to present colored document pixels",
+        timeout: 20000,
+      })
+      .toBeGreaterThan(1000);
+  } catch (error) {
+    console.log(
+      `full-canvas-stats=${JSON.stringify(await readCanvasColorStats(page, fullCanvasRegion))}`,
+    );
+    throw error;
+  }
+  expect(fatalMessages).toEqual([]);
+});
+
 test("wasm editor renders colored document pixels", async ({ page }) => {
   const fatalMessages = await openEditor(page);
-  await expect
-    .poll(async () => {
-      const stats = await readRenderPaneColorStats(page);
-      return stats.nonBlackPixels > 1000 && stats.coloredPixels > 500 && stats.maxChannel > 80;
-    }, {
-      message: "expected non-black, colored pixels in the render pane",
-      timeout: 20000,
-    })
-    .toBe(true);
+  try {
+    await expect
+      .poll(async () => {
+        const stats = await readRenderPaneColorStats(page);
+        return stats.nonBlackPixels > 1000 && stats.coloredPixels > 500 && stats.maxChannel > 80;
+      }, {
+        message: "expected non-black, colored pixels in the render pane",
+        timeout: 20000,
+      })
+      .toBe(true);
+  } catch (error) {
+    console.log(`render-pane-stats=${JSON.stringify(await readRenderPaneColorStats(page))}`);
+    throw error;
+  }
 
   expect(fatalMessages).toEqual([]);
 });

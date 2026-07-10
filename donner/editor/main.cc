@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -61,6 +62,48 @@ std::string ScopedImguiIniPath() {
     return {};
   }
   return (configDir / "editor_imgui.ini").string();
+}
+#endif
+
+void RunEditorFrame(donner::editor::gui::EditorWindow& window, donner::editor::EditorShell& shell) {
+  {
+    ZoneScopedN("waitEvents");
+    if (const std::optional<float> wakeSeconds = shell.nextIdleWakeSeconds()) {
+      window.waitEventsTimeout(*wakeSeconds);
+    } else {
+      window.waitEvents();
+    }
+  }
+  {
+    ZoneScopedN("beginFrame");
+    window.beginFrame();
+  }
+  {
+    ZoneScopedN("shell.runFrame");
+    shell.runFrame();
+  }
+  {
+    ZoneScopedN("endFrame");
+    window.endFrame();
+  }
+  FrameMark;
+}
+
+#ifdef __EMSCRIPTEN__
+struct WasmEditorLoopState {
+  std::unique_ptr<donner::editor::gui::EditorWindow> window;
+  std::unique_ptr<donner::editor::EditorShell> shell;
+};
+
+void RunWasmEditorFrame(void* userdata) {
+  auto* state = static_cast<WasmEditorLoopState*>(userdata);
+  if (state->window->shouldClose()) {
+    emscripten_cancel_main_loop();
+    delete state;
+    return;
+  }
+
+  RunEditorFrame(*state->window, *state->shell);
 }
 #endif
 
@@ -126,22 +169,24 @@ int main(int argc, char** argv) {
 #ifndef __EMSCRIPTEN__
   imguiIniPath = ScopedImguiIniPath();
 #endif
-  donner::editor::gui::EditorWindow window({.title = "Donner SVG Editor",
-                                            .initialWidth = kInitialWindowWidth,
-                                            .initialHeight = kInitialWindowHeight,
-                                            .imguiIniPath = imguiIniPath});
-  if (!window.valid()) {
+  auto window = std::make_unique<donner::editor::gui::EditorWindow>(
+      donner::editor::gui::EditorWindowOptions{.title = "Donner SVG Editor",
+                                               .initialWidth = kInitialWindowWidth,
+                                               .initialHeight = kInitialWindowHeight,
+                                               .imguiIniPath = imguiIniPath});
+  if (!window->valid()) {
     std::cerr << "Failed to initialize editor window\n";
     return 1;
   }
 
-  donner::editor::EditorShell shell(
-      window, {.svgPath = svgPath.value_or(""),
-               .initialSource = initialSource,
-               .initialPath = initialPath,
-               .editorNoticeText = EmbeddedBytesToString(donner::embedded::kEditorNoticeText),
-               .reproOutputPath = reproOutputPath});
-  if (!shell.valid()) {
+  auto shell = std::make_unique<donner::editor::EditorShell>(
+      *window, donner::editor::EditorShellOptions{
+                   .svgPath = svgPath.value_or(""),
+                   .initialSource = initialSource,
+                   .initialPath = initialPath,
+                   .editorNoticeText = EmbeddedBytesToString(donner::embedded::kEditorNoticeText),
+                   .reproOutputPath = reproOutputPath});
+  if (!shell->valid()) {
     if (svgPath.has_value()) {
       std::cerr << "Could not open file " << *svgPath << "\n";
     } else {
@@ -150,43 +195,16 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  while (!window.shouldClose()) {
-    {
-      ZoneScopedN("waitEvents");
-      // On native this blocks until a user input, window event, timed
-      // UI wake, or a `wakeEventLoop()` post from the render worker.
-      // The editor is event-driven: no frames are produced between user
-      // inputs, worker results, and active timed UI work.
-      //
-      // On Emscripten `waitEvents` falls through to `glfwPollEvents`
-      // since the browser drives the loop via `requestAnimationFrame`.
-      if (const std::optional<float> wakeSeconds = shell.nextIdleWakeSeconds()) {
-        window.waitEventsTimeout(*wakeSeconds);
-      } else {
-        window.waitEvents();
-      }
-    }
-    {
-      ZoneScopedN("beginFrame");
-      window.beginFrame();
-    }
-    {
-      ZoneScopedN("shell.runFrame");
-      shell.runFrame();
-    }
-    {
-      ZoneScopedN("endFrame");
-      window.endFrame();
-    }
 #ifdef __EMSCRIPTEN__
-    // Emscripten-glfw's `glfwSwapBuffers` is a no-op, so we need an
-    // explicit asyncify yield every frame; otherwise the main loop
-    // would block the browser forever (preventing `Loading...` from
-    // clearing and freezing the canvas).
-    emscripten_sleep(0);
-#endif
-    FrameMark;
+  auto* loopState = new WasmEditorLoopState{std::move(window), std::move(shell)};
+  // The browser presents the WebGPU canvas when the requestAnimationFrame callback returns.
+  emscripten_set_main_loop_arg(&RunWasmEditorFrame, loopState, /*fps=*/0,
+                               /*simulateInfiniteLoop=*/true);
+#else
+  while (!window->shouldClose()) {
+    RunEditorFrame(*window, *shell);
   }
+#endif
 
   return 0;
 }

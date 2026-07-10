@@ -233,8 +233,10 @@ bazel run   --config=editor-wasm //donner/editor/wasm:serve_http
 bazel run   --config=editor-wasm //donner/editor/wasm:serve_http -- --https   # LAN + local cert
 ```
 
-Then open the served `index.html`. CI parity: `editor_wasm.yml` builds
-`--config=editor-wasm //donner/editor/wasm:wasm_web_package` nightly on ubuntu-24.04.
+Then open the served `index.html`. CI parity: `editor_wasm.yml` builds both editor backends, runs
+the headed Geode and headless TinySkia Playwright suites, and uploads the tested Geode static-site
+candidate with provenance and SHA-256 manifests. Use the `donner-web-editor` skill for immutable
+packaging, security review, static hosting, deployment verification, and rollback.
 
 Gating: all wasm targets are `target_compatible_with`-gated on an `enable_wasm` flag that only
 the wasm configs set, so plain `bazel build //...` never touches them — and a bazel-diff target

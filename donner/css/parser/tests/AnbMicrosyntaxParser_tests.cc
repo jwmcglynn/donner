@@ -3,6 +3,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <limits>
+
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/css/parser/details/ComponentValueParser.h"
@@ -128,6 +130,32 @@ TEST(AnbMicrosyntaxParser, DigitParsing) {
               ParseResultIs(AllOf(AnbValueIs(3, -6234), NoComponentsRemaining())));
   EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("3n-6a")),
               ParseErrorIs("Unexpected token when parsing An+B microsyntax"));
+}
+
+TEST(AnbMicrosyntaxParser, RejectsIntegersOutsideRepresentableRange) {
+  constexpr int kIntMax = std::numeric_limits<int>::max();
+  constexpr int kIntMin = std::numeric_limits<int>::min();
+
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("2147483647")),
+              ParseResultIs(AllOf(AnbValueIs(0, kIntMax), NoComponentsRemaining())));
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("-2147483648")),
+              ParseResultIs(AllOf(AnbValueIs(0, kIntMin), NoComponentsRemaining())));
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("2147483648")),
+              ParseErrorIs("An+B microsyntax integer out of range"));
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("7777777777")),
+              ParseErrorIs("An+B microsyntax integer out of range"));
+
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("2147483647n")),
+              ParseResultIs(AllOf(AnbValueIs(kIntMax, 0), NoComponentsRemaining())));
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("-2147483648n")),
+              ParseResultIs(AllOf(AnbValueIs(kIntMin, 0), NoComponentsRemaining())));
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("2147483648n")),
+              ParseErrorIs("An+B microsyntax integer out of range"));
+
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("n-2147483647")),
+              ParseResultIs(AllOf(AnbValueIs(1, -kIntMax), NoComponentsRemaining())));
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("n-2147483648")),
+              ParseErrorIs("An+B microsyntax integer out of range"));
 }
 
 TEST(AnbMicrosyntaxParser, SpecialTokens) {

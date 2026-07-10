@@ -622,7 +622,7 @@ def donner_cc_library(name, srcs = [], hdrs = [], copts = [], tags = [], visibil
         tags = tags,
     )
 
-def donner_cc_fuzzer(name, corpus, deps = [], **kwargs):
+def donner_cc_fuzzer(name, corpus, deps = [], per_input_timeout_seconds = 2, **kwargs):
     """
     Create a libfuzzer-based fuzz target.
 
@@ -630,8 +630,12 @@ def donner_cc_fuzzer(name, corpus, deps = [], **kwargs):
       name: Rule name.
       corpus: Path to a corpus directory, or a filegroup rule for the corpus.
       deps: List of dependencies.
+      per_input_timeout_seconds: Maximum time for one generated input in the timed fuzz test.
       **kwargs: Additional arguments, matching the implementation of cc_test.
     """
+    if per_input_timeout_seconds <= 0:
+        fail("per_input_timeout_seconds must be positive")
+
     if not (corpus.startswith("//") or corpus.startswith(":")):
         corpus_name = name + "_corpus"
         corpus = native.glob([corpus + "/**"])
@@ -660,7 +664,7 @@ def donner_cc_fuzzer(name, corpus, deps = [], **kwargs):
         linkopts = fuzzer_runtime_linkopts,
         args = [
             "-max_total_time=10",
-            "-timeout=2",
+            "-timeout=%d" % per_input_timeout_seconds,
         ],
         linkstatic = 1,
         deps = deps,

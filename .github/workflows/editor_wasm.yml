@@ -5,9 +5,12 @@ on:
     - cron: "18 7 * * *"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v7
 
@@ -20,10 +23,9 @@ jobs:
           external-cache: true
           cache-save: true
 
-      # The Geode/WebGPU package is the production present path. Under headless
-      # Chrome its swapchain pixels never reach a screenshot, so this lane is
-      # compile-only: it proves the WebGPU editor still links, nothing more.
-      - name: Build editor wasm package (Geode, compile-only)
+      # The Geode/WebGPU package is the production presentation path. A headed
+      # browser test below verifies its swapchain pixels through the visible canvas.
+      - name: Build editor wasm package (Geode)
         run: |
           bazelisk build --config=editor-wasm //donner/editor/wasm:wasm_web_package
 
@@ -45,11 +47,51 @@ jobs:
         working-directory: donner/editor/wasm/tests
         run: |
           npm ci
-          npx playwright install --with-deps chromium
+          npx playwright install chromium
+
+      - name: Serve Geode package and run headed Playwright suite
+        env:
+          DONNER_WASM_BACKEND: geode
+          DONNER_WASM_REQUIRE_WEBGPU: "1"
+        run: |
+          set -euo pipefail
+
+          pkg_dir=$(bazelisk cquery --config=editor-wasm --output=files \
+            //donner/editor/wasm:wasm_web_package | head -n1)
+          echo "Serving package: ${pkg_dir}"
+          test -d "${pkg_dir}"
+
+          server_log="${RUNNER_TEMP}/editor-wasm-geode-server.log"
+          PYTHONUNBUFFERED=1 python3 tools/http/simple_webserver.py --no-https --host 127.0.0.1 \
+            --dir "${pkg_dir}" >"${server_log}" 2>&1 &
+          server_pid=$!
+          cleanup() {
+            kill "${server_pid}" 2>/dev/null || true
+            wait "${server_pid}" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          server_url=""
+          for _ in $(seq 1 60); do
+            server_url=$(sed -n 's/^Serving at //p' "${server_log}" | head -n1)
+            if [[ -n "${server_url}" ]]; then break; fi
+            if ! kill -0 "${server_pid}" 2>/dev/null; then
+              cat "${server_log}"
+              wait "${server_pid}" 2>/dev/null || true
+              exit 1
+            fi
+            sleep 1
+          done
+          test -n "${server_url}"
+          export DONNER_WASM_BASE_URL="${server_url}"
+          curl -fsS -o /dev/null "${DONNER_WASM_BASE_URL}/index.html"
+
+          bash donner/editor/wasm/tests/run_tests.sh --headed
+          cleanup
+          trap - EXIT
 
       - name: Serve tiny_skia package and run Playwright suite
         env:
-          DONNER_WASM_BASE_URL: http://127.0.0.1:8000
           DONNER_WASM_BACKEND: tiny_skia
         run: |
           set -euo pipefail
@@ -62,18 +104,93 @@ jobs:
 
           # Plain-HTTP local server (127.0.0.1 is a secure context, and the
           # server still sends COOP/COEP so SharedArrayBuffer/pthreads work).
-          python3 tools/http/simple_webserver.py --no-https --host 127.0.0.1 \
-            --dir "${pkg_dir}" &
+          server_log="${RUNNER_TEMP}/editor-wasm-tiny-skia-server.log"
+          PYTHONUNBUFFERED=1 python3 tools/http/simple_webserver.py --no-https --host 127.0.0.1 \
+            --dir "${pkg_dir}" >"${server_log}" 2>&1 &
           server_pid=$!
-          trap 'kill "${server_pid}" 2>/dev/null || true' EXIT
+          cleanup() {
+            kill "${server_pid}" 2>/dev/null || true
+            wait "${server_pid}" 2>/dev/null || true
+          }
+          trap cleanup EXIT
 
-          # Wait for the server to accept connections.
+          # Read the actual URL because the server selects the first free port.
+          server_url=""
           for _ in $(seq 1 60); do
-            if curl -fsS -o /dev/null "${DONNER_WASM_BASE_URL}/index.html"; then
-              break
+            server_url=$(sed -n 's/^Serving at //p' "${server_log}" | head -n1)
+            if [[ -n "${server_url}" ]]; then break; fi
+            if ! kill -0 "${server_pid}" 2>/dev/null; then
+              cat "${server_log}"
+              wait "${server_pid}" 2>/dev/null || true
+              exit 1
             fi
             sleep 1
           done
+          test -n "${server_url}"
+          export DONNER_WASM_BASE_URL="${server_url}"
           curl -fsS -o /dev/null "${DONNER_WASM_BASE_URL}/index.html"
 
           bash donner/editor/wasm/tests/run_tests.sh
+          cleanup
+          trap - EXIT
+
+      - name: Upload Playwright failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: editor-wasm-playwright-failure-${{ github.sha }}
+          path: donner/editor/wasm/tests/test-results
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Stage immutable Geode deployment candidate
+        id: stage-geode-candidate
+        run: |
+          set -euo pipefail
+
+          pkg_dir=$(bazelisk cquery --config=editor-wasm --output=files \
+            //donner/editor/wasm:wasm_web_package | head -n1)
+          candidate_dir="${RUNNER_TEMP}/donner-editor-wasm-geode-${GITHUB_SHA}"
+          site_dir="${candidate_dir}/site"
+          deploy_dir="${candidate_dir}/deploy"
+          mkdir -p "${site_dir}" "${deploy_dir}"
+          cp -R "${pkg_dir}/." "${site_dir}/"
+
+          for required_file in index.html editor.js editor.wasm enable-threads.js donner_icon.svg; do
+            test -f "${site_dir}/${required_file}"
+          done
+
+          for deploy_file in index.html editor.js enable-threads.js donner_icon.svg; do
+            cp "${site_dir}/${deploy_file}" "${deploy_dir}/${deploy_file}"
+          done
+          gzip -n -9 -c "${site_dir}/editor.wasm" > "${deploy_dir}/editor.wasm.gz"
+          test "$(wc -c < "${deploy_dir}/editor.wasm.gz")" -le 26214400
+
+          lockfile_sha256=$(shasum -a 256 donner/editor/wasm/tests/package-lock.json | awk '{print $1}')
+          printf '{"source_revision":"%s","lockfile_sha256":"%s","bazel_config":"editor-wasm","target":"//donner/editor/wasm:wasm_web_package","transport_encoding":"gzip"}\n' \
+            "${GITHUB_SHA}" "${lockfile_sha256}" > "${candidate_dir}/provenance.json"
+
+          (
+            cd "${candidate_dir}"
+            find site deploy -type f | LC_ALL=C sort | while IFS= read -r file; do
+              shasum -a 256 "${file}"
+            done > SHA256SUMS
+          )
+
+          echo "candidate_dir=${candidate_dir}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload Geode deployment candidate
+        id: upload-geode-candidate
+        uses: actions/upload-artifact@v7
+        with:
+          name: donner-editor-wasm-geode-${{ github.sha }}
+          path: ${{ steps.stage-geode-candidate.outputs.candidate_dir }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Record deployment candidate digest
+        run: |
+          echo "### Geode deployment candidate" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- Source revision: \`${GITHUB_SHA}\`" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- Artifact digest: \`${{ steps.upload-geode-candidate.outputs.artifact-digest }}\`" \
+            >> "${GITHUB_STEP_SUMMARY}"
