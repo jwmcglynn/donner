@@ -20,10 +20,9 @@ jobs:
           external-cache: true
           cache-save: true
 
-      # The Geode/WebGPU package is the production present path. Under headless
-      # Chrome its swapchain pixels never reach a screenshot, so this lane is
-      # compile-only: it proves the WebGPU editor still links, nothing more.
-      - name: Build editor wasm package (Geode, compile-only)
+      # The Geode/WebGPU package is the production presentation path. A headed
+      # browser test below verifies its swapchain pixels through the visible canvas.
+      - name: Build editor wasm package (Geode)
         run: |
           bazelisk build --config=editor-wasm //donner/editor/wasm:wasm_web_package
 
@@ -46,6 +45,33 @@ jobs:
         run: |
           npm ci
           npx playwright install --with-deps chromium
+
+      - name: Serve Geode package and run headed Playwright suite
+        env:
+          DONNER_WASM_BASE_URL: http://127.0.0.1:8000
+          DONNER_WASM_BACKEND: geode
+        run: |
+          set -euo pipefail
+
+          pkg_dir=$(bazelisk cquery --config=editor-wasm --output=files \
+            //donner/editor/wasm:wasm_web_package | head -n1)
+          echo "Serving package: ${pkg_dir}"
+          test -d "${pkg_dir}"
+
+          python3 tools/http/simple_webserver.py --no-https --host 127.0.0.1 \
+            --dir "${pkg_dir}" &
+          server_pid=$!
+          trap 'kill "${server_pid}" 2>/dev/null || true' EXIT
+
+          for _ in $(seq 1 60); do
+            if curl -fsS -o /dev/null "${DONNER_WASM_BASE_URL}/index.html"; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS -o /dev/null "${DONNER_WASM_BASE_URL}/index.html"
+
+          xvfb-run --auto-servernum bash donner/editor/wasm/tests/run_tests.sh --headed
 
       - name: Serve tiny_skia package and run Playwright suite
         env:
