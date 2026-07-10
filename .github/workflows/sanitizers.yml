@@ -56,7 +56,9 @@ jobs:
     runs-on: ubuntu-24.04
     needs: gatekeeper
     if: needs.gatekeeper.outputs.should_run == 'true'
-    timeout-minutes: 60
+    # A cold sanitizer build plus the full sharded suite has exceeded 60 minutes while still
+    # making forward progress. Keep the test command bounded without truncating its results.
+    timeout-minutes: 120
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -94,7 +96,9 @@ jobs:
     runs-on: ubuntu-24.04
     needs: gatekeeper
     if: needs.gatekeeper.outputs.should_run == 'true'
-    timeout-minutes: 60
+    # A cold sanitizer build plus the full sharded suite has exceeded 60 minutes while still
+    # making forward progress. Keep the test command bounded without truncating its results.
+    timeout-minutes: 120
     steps:
       - name: Checkout
         uses: actions/checkout@v7
