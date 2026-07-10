@@ -198,7 +198,15 @@ struct GeodeDevice::Impl {
   std::unique_ptr<GeodeFilterEngine> filterEngine;
 };
 
-GeodeDevice::GeodeDevice() : impl_(std::make_unique<Impl>()) {}
+namespace {
+/// Monotonic source for `GeodeDevice::deviceId()`. Never reused, starts at 1
+/// (0 is the "no device" sentinel on a `GeodeResidentSlot`).
+std::atomic<uint64_t> g_nextDeviceId{0};
+}  // namespace
+
+GeodeDevice::GeodeDevice()
+    : impl_(std::make_unique<Impl>()),
+      deviceId_(g_nextDeviceId.fetch_add(1, std::memory_order_relaxed) + 1) {}
 GeodeDevice::~GeodeDevice() {
   // Release all resources that were created from the device before releasing the
   // root queue/device/adapter/instance handles. `webgpu.hpp` handles are raw

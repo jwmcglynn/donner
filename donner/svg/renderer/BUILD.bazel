@@ -367,6 +367,7 @@ donner_cc_library(
         # (see that target's comment).
         "//donner/svg/renderer/geode:geode_device",
         "//donner/svg/renderer/geode:geode_path_cache_component",
+        "//donner/svg/renderer/geode:geode_resident_path_component",
         "//donner/svg/renderer/geode:geode_path_encoder",
         "//donner/svg/renderer/geode:geode_wgpu_util",
         "//donner/svg/resources:image_resource",

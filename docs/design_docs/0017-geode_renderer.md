@@ -867,6 +867,24 @@ removed (or its version key is compared), triggering re-encoding on the next fra
 destroys its cache components. GPU buffer destruction is deferred to the next frame boundary to
 avoid destroying in-flight resources.
 
+**As-built (wave 1 + wave 2).** The path cache landed in two layers. Wave 1's
+`GeodePathCacheComponent` caches the CPU-side `EncodedPath` (bands / curves /
+grids / quad vertices) per entity, not raw GPU buffers, so re-rendering an
+unchanged document skips the encode. Wave 2 adds a sibling
+`GeodeResidentPathComponent` that gives that cached geometry persistent GPU
+residence: a fill slot and a stroke slot, each owning one combined
+`Vertex | Storage | Uniform` buffer plus a cached fill bind group. An
+unchanged frame then re-uploads zero geometry bytes and creates zero bind
+groups; only the per-draw uniform is rewritten, and only when it changed.
+Both components are removed together by the `ComputedPathComponent`
+on_update / on_destroy listener (the incremental-invalidation hook), so GPU
+residence invalidates exactly when the geometry does, and registry teardown
+frees the buffers (RAII, safe post-submit). `GeoEncoder::fillPathResident`
+drives residence for solid fills / strokes with no active clip, one draw per
+slot per frame; clipped, masked, gradient, pattern, and instanced draws keep
+the per-frame arena path. See design doc 0030 (wave 2 as-built appendix) for
+the measured profile.
+
 ### Embeddability Design
 
 Geode is designed to be embedded in host applications that own the GPU context:

@@ -2,6 +2,7 @@
 /// @file
 /// RAII wrapper around a WebGPU device - headless or host-provided.
 
+#include <atomic>
 #include <memory>
 #include <vector>
 #include <webgpu/webgpu.hpp>
@@ -197,6 +198,22 @@ public:
   uint32_t sampleCount() const { return 1u; }
 
   /**
+   * Process-unique identity for this device instance, assigned at
+   * construction from a monotonic counter (never reused, starts at 1).
+   *
+   * Used by GPU-residence slots (design doc 0030 wave 2) to detect when a
+   * cached buffer / bind group belongs to a DIFFERENT device than the one
+   * now rendering: a document (and its ECS `GeodeResidentPathComponent`s)
+   * can outlive the device that filled them and later be rendered by a
+   * second `RendererGeode` / `GeodeDevice`. WebGPU rejects cross-device
+   * resources inside a render pass, so a slot whose stored id does not match
+   * `deviceId()` is treated as non-resident and re-uploaded. A monotonic
+   * counter (rather than a raw `this` pointer) avoids the ABA hazard of a
+   * freed device's address being recycled by a later allocation.
+   */
+  uint64_t deviceId() const { return deviceId_; }
+
+  /**
    * Install a `GeodeCounters` struct for this device. Non-owning; the
    * caller must keep the struct alive for as long as the device might
    * increment it. Pass `nullptr` to disable instrumentation.
@@ -258,6 +275,28 @@ public:
   /// Record one `wgpu::Queue::writeTexture` call of `bytes` payload bytes.
   void countTextureWrite(uint64_t bytes) const {
     if (counters_) counters_->textureWriteBytes += bytes;
+  }
+
+  /// Shared live-resident-bytes gauge (design doc 0030 wave 2: GPU
+  /// residence). Co-owned with each `GeodeResidentSlot`'s buffer so
+  /// resident-memory accounting stays lifetime-safe even if a document
+  /// (and its ECS registry) outlives this device. Lazily created on first
+  /// access. `GeoEncoder` bumps it when a slot gains residence; the slot
+  /// decrements it on reset / destruction (geometry change or document
+  /// teardown), which is the eviction signal for "many distinct
+  /// documents".
+  const std::shared_ptr<std::atomic<int64_t>>& residentBytesGauge() const {
+    if (!residentBytesGauge_) {
+      residentBytesGauge_ = std::make_shared<std::atomic<int64_t>>(0);
+    }
+    return residentBytesGauge_;
+  }
+
+  /// Current live resident-geometry bytes across every `GeodeResidentSlot`
+  /// buffer created against this device. Zero at construction and after
+  /// all resident documents are torn down; used by eviction tests.
+  int64_t liveResidentBytesForTesting() const {
+    return residentBytesGauge_ ? residentBytesGauge_->load(std::memory_order_relaxed) : 0;
   }
 
   /**
@@ -376,6 +415,9 @@ private:
   /// skips releasing the instance/adapter since the host owns them.
   bool external_ = false;
 
+  /// Process-unique identity assigned at construction. See `deviceId()`.
+  const uint64_t deviceId_ = 0;
+
   GeodeCounters* counters_ = nullptr;
 
   // Process-lifetime cumulative totals - see `lifetimeTextureCreates()`
@@ -384,6 +426,11 @@ private:
   // (the caller is reporting, not mutating visible state).
   mutable uint64_t lifetimeTextureCreates_ = 0;
   mutable uint64_t lifetimeBufferCreates_ = 0;
+
+  // Shared live-resident-bytes gauge (design doc 0030 wave 2). Mutable +
+  // lazily created so `residentBytesGauge()` stays const like the other
+  // reporting accessors.
+  mutable std::shared_ptr<std::atomic<int64_t>> residentBytesGauge_;
 
   // Deferred-destroy queues: resources enqueued via deferDestroy() are held
   // alive until drainDeferredDestroys() drops them at the next frame boundary.

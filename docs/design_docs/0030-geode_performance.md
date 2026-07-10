@@ -815,3 +815,82 @@ Counters `bufferWrites` / `bufferWriteBytes` / `textureWriteBytes` are
 the regression signal for items 1 and 5; `bufferCreates` for item 3
 (pooled, ceilings asserted); `bindgroupCreates` for item 2. Ceilings
 are asserted in `GeodePerf_tests.cc` and tighten as each fix lands.
+
+### Wave 2 as-built: persistent GPU residence (items 1 and 2 resolved)
+
+Wave 2 gives each cached `EncodedPath` a persistent per-entity GPU buffer
+that survives frames, plus a cached bind group, so an unchanged document
+re-uploads ~zero geometry and creates ~zero bind groups in steady state.
+This directly attacks items 1 and 2 above.
+
+Design as-built:
+
+- `GeodeResidentPathComponent` sits beside `GeodePathCacheComponent` on
+  the same entity, holding a fill slot and a stroke slot. Each
+  `GeodeResidentSlot` owns ONE combined `Vertex | Storage | Uniform |
+  CopyDst` buffer laid out as `[ vertex quad | bands | curves | vBands |
+  vCurves | hBandGrid | vBandGrid | uniform ]` (each sub-region aligned to
+  its binding requirement), plus a cached twelve-entry fill bind group
+  whose bindings all reference stable objects (this slot's buffer
+  sub-ranges and the device-owned dummy texture / sampler / identity
+  instance buffer).
+- `GeoEncoder::fillPathResident` uploads the geometry once (one
+  `createBuffer` + one `writeBuffer`), then on every later frame rewrites
+  only the 288-byte uniform, and only when it actually changed. A static
+  re-render at the same viewport produces byte-identical uniforms, so the
+  write is skipped entirely and the frame emits zero buffer writes. The
+  cached bind group is reused, so `bindgroupCreates` is zero.
+- Invalidation reuses the M2 `ComputedPathComponent` on_update / on_destroy
+  listener, which now removes the resident component in lock-step with the
+  encode cache. The `GeodeResidentSlot` destructor frees the buffer, so
+  registry teardown (closing a document) is the eviction path for "many
+  distinct documents"; a device-owned shared live-resident-bytes gauge
+  makes that measurable (`GpuResidence_*` tests).
+- Correctness fences: residence is taken only for solid fills / strokes
+  with no active clip mask, clip polygon, or open mask pass (otherwise the
+  wave-1 arena path runs, keeping clipped and masked draws bit-exact), and
+  only ONCE per slot per frame (a slot's single uniform buffer cannot hold
+  distinct per-instance uniforms, so markers and non-adjacent repeated
+  `<use>` route their repeat draws through the arena path). `populateFillUniform`
+  is shared by both paths so a draw that flips between them is byte-identical.
+  Gradients, patterns, and instanced `<use>` batches keep the arena path.
+
+Measured steady-state (frame 2, unchanged document), same environment as
+above, versus the wave-1 profile:
+
+| Fixture (frame 2) | draws | bindgroupCreates (was) | bufferWrites (was) | bufferWriteBytes (was) |
+|---|---|---|---|---|
+| SimpleShapes  | 3   | 0 (3)   | 0 (24)    | 0 (4,128)         |
+| Moderate      | 3   | 2 (3)   | 9 (17)    | 2,780 (5,372)     |
+| lion.svg      | 132 | 0 (132) | 0 (1,056) | 0 (172,776)       |
+| Ghostscript_Tiger | 304 | 0 (304) | 0 (2,432) | 0 (1,473,888) |
+
+Tiger, the headline fixture, drops from ~1.44 MB re-uploaded per steady
+frame across 2,432 `writeBuffer` calls and 304 bind-group creates to
+literally zero of each, while `drawCalls` stays 304 (the draws still
+happen, they just bind cached resident buffers). That is a >99% reduction,
+far past the 90% acceptance floor. Lion and SimpleShapes reach zero the
+same way. Moderate keeps a small residual: its rounded-rect gradient fill
+stays on the arena path (gradient residence is future work) and its
+`opacity="0.8"` isolated layer runs a composite blit whose per-frame
+uniform is written through `GeodeTextureEncoder`. Both residuals are the
+explained, non-geometry writes called out as items 2 (gradient) and 4
+(blit uniform) rather than re-uploaded path geometry.
+
+Trade-off: residence front-loads the persistent buffers on frame 1, so
+first-frame `bufferCreates` rises from the pooled 1 to one buffer per
+resident solid slot (measured Lion frame 1: 133 = 132 resident + readback).
+This is a one-time cost that buys the zero-write steady state; the
+`Lion_BaselineCeilings` ceiling was raised to match, and the
+`*_NoDirtyPath_*` frame-2 ceilings still hold (frame-2 `bufferCreates == 1`,
+the readback). Collapsing the per-slot buffers into a shared suballocated
+arena to cut the frame-1 buffer count is a ranked future opportunity.
+
+Remaining ranked opportunities after wave 2 (highest first): (1) gradient
+and pattern residence (Moderate's residual, and any gradient-heavy scene);
+(2) route the per-blit composite uniform through resident/pooled storage;
+(3) suballocate resident slots from a shared arena to cut frame-1
+`bufferCreates`; (4) wave-1 carryovers still open - snapshot readback
+`submits` 2 -> 1, band-curve duplication in the vertical SSBO,
+`<use>`-instancing widening, and removing the vestigial
+`useAlphaCoverageAA_` flag (sample count is always 1).
