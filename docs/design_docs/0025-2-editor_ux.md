@@ -20,7 +20,7 @@ The scope is everything inside the render pane window in `donner/editor/main.cc`
 ## Goals
 
 1. **Zoom preserves the point under the cursor / focal point.** Cmd+wheel zoom, Cmd+Plus / Cmd+Minus, pinch-to-zoom on a trackpad, and menu zoom all keep the focal document point stationary on screen, to within sub-pixel rounding error.
-2. **Cmd+0 returns to 100% (1 document unit = 1 screen pixel)**, centered in the pane. 100% is also the *initial* state when the editor opens — not "fit to pane". The user can scroll/pan freely if the document doesn't fit the window. This matches Illustrator's "Actual Size" command and the way Figma opens new files.
+2. **Cmd+0 returns to 100% (1 document unit = 1 screen pixel)**, centered in the pane. 100% is also the *initial* state when the editor opens — not "fit to pane". The user can scroll/pan freely if the document doesn't fit the window. This matches established actual-size behavior in professional vector editors.
 3. **Click math is exact at any zoom, pan, and device pixel ratio.** Clicking on a visible pixel of an element selects that element, end of story. Tested headlessly for zoom levels {0.25, 1, 4, 16}, with non-zero pan, with mismatched aspect ratios, and with `devicePixelRatio ∈ {1, 2, 3}`.
 4. **No size-flicker on edit.** The on-screen image size and position stay constant across a frame in which only the document content changed. Only canvas-size changes (pane resize, zoom step) are allowed to change the on-screen image size.
 5. **Selection chrome (path outline + AABB) tracks the element through drags and zoom.** The outline must follow the element's transform within one frame of the underlying SVG content updating.
@@ -256,7 +256,7 @@ struct ViewportState {
 
 ### Why `(panDocPoint, panScreenPoint)` instead of `(zoom, pan)`?
 
-The Illustrator-style invariant we want is *"a specific document point is anchored at a specific screen point"*. The current code expresses this as a screen-pixel `pan` offset, but that representation has to be re-derived against the centered image origin every time `imageSize` changes, and `imageSize` changes whenever zoom changes. Storing `(panDocPoint, panScreenPoint)` directly means **zoom changes leave the anchor untouched** — the scale changes, but the document point stays glued to the screen point.
+The focal-point invariant we want is *"a specific document point is anchored at a specific screen point"*. The current code expresses this as a screen-pixel `pan` offset, but that representation has to be re-derived against the centered image origin every time `imageSize` changes, and `imageSize` changes whenever zoom changes. Storing `(panDocPoint, panScreenPoint)` directly means **zoom changes leave the anchor untouched** — the scale changes, but the document point stays glued to the screen point.
 
 The math falls out cleanly:
 
@@ -370,7 +370,7 @@ The `EditorApp` selection becomes a *set* (`std::vector<SVGElement>` with set se
 
 1. **Click** (no modifier) — replaces the selection with the hit element, or clears it if the hit landed on empty space.
 2. **Shift+click** — toggles the hit element in the current selection. Hits on empty space are no-ops.
-3. **Drag from empty space** — marquee mode. The first `onMouseMove` after a `onMouseDown` that hit empty space starts a marquee; subsequent moves update its rect; `onMouseUp` resolves the rect to a set of hit elements (every geometry element whose `worldBounds()` *intersects* the marquee rect — not strict containment, matching Illustrator's behavior) and assigns / appends them to the selection.
+3. **Drag from empty space** — marquee mode. The first `onMouseMove` after a `onMouseDown` that hit empty space starts a marquee; subsequent moves update its rect; `onMouseUp` resolves the rect to a set of hit elements (every geometry element whose `worldBounds()` *intersects* the marquee rect — not strict containment, matching standard crossing-selection behavior) and assigns / appends them to the selection.
 
 Marquee rendering: the overlay renderer gets a new `drawMarquee(canvasFromDoc, marqueeRect)` entry point that draws a translucent fill + dashed stroke. `OverlayRenderer::drawChromeWithTransform` is generalized to take both the selection vector and an optional marquee rect.
 

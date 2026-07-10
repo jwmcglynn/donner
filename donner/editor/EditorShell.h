@@ -353,7 +353,9 @@ private:
   void renderRenderPane(ImGuiWindowFlags paneFlags);
   [[nodiscard]] Box2d toolPaletteScreenRect(const ImVec2& paneOrigin,
                                             const ImVec2& contentRegion) const;
+  [[nodiscard]] Box2d canvasZoomControlScreenRect() const;
   void renderToolPalette(const ImVec2& paneOrigin, const ImVec2& contentRegion);
+  void renderCanvasZoomControl();
   void renderFillStrokeToolbarWidget();
   void renderSidebars();
   void renderSourcePaneSplitter(float windowWidth, float paneOriginY, float paneHeight,
@@ -578,7 +580,7 @@ private:
   bool sourceFocusMode_ = true;
   /// Preferred width for the source pane when it is visible.
   float sourcePaneWidth_ = 560.0f;
-  bool sourcePaneVisible_ = true;
+  bool sourcePaneVisible_ = false;
   /// Whether the Compositor Debug panel window renders. Off by default: it is a
   /// developer-facing composite-tile diagnostics view, toggled on via the View
   /// menu. The user-facing Layers panel is unrelated and always visible.

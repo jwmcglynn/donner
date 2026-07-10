@@ -717,6 +717,10 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   ImGui::CreateContext();
   ImGuiIO& io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+  // Numeric fields retain drag-to-adjust, but a click-release without a drag
+  // enters text input immediately. This removes ImGui's default requirement
+  // for Ctrl-click or double-click on transform and other DragScalar fields.
+  io.ConfigDragClickToInputText = true;
   // Enable native ImGui docking (the vendored imgui is the docking branch). The
   // editor's panel layout is a locked DockSpace. Multi-viewport (OS-window
   // tear-off) intentionally stays OFF - we never set ImGuiConfigFlags_ViewportsEnable.

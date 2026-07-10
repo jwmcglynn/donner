@@ -4092,37 +4092,40 @@ void TextEditor::redo(int steps) {
 }
 
 const TextEditor::Palette& TextEditor::getDarkPalette() {
+  // Coordinated Graphite syntax palette. It keeps the XML source pane neutral
+  // around artwork, then uses teal, amber, green, and coral only for semantic
+  // distinction instead of the legacy saturated primary-color ramp.
   static constexpr Palette kPalette = {{
-      0xff7f7f7f,  // Default
-      0xffd69c56,  // Keyword
-      0xff00ff00,  // Number
-      0xff7070e0,  // String
-      0xff70a0e0,  // Char literal
-      0xffffffff,  // Punctuation
-      0xffaaaaaa,  // Identifier
-      0xff9bc64d,  // Known identifier
-      0xff206020,  // Comment (single line)
-      0xff406020,  // Comment (multi line)
-      0xff101010,  // Background
-      0xffe0e0e0,  // Cursor
-      0x80a06020,  // Selection
-      0x800020ff,  // ErrorMarker
-      0xff0000ff,  // Breakpoint
-      0xffffffff,  // Breakpoint outline
-      0xFF1DD8FF,  // Current line indicator
-      0xFF696969,  // Current line indicator outline
-      0xff707000,  // Line number
-      0x40000000,  // Current line fill
-      0x40808080,  // Current line fill (inactive)
-      0x40a0a0a0,  // Current line edge
-      0xff33ffff,  // Error message
-      0xffffffff,  // BreakpointDisabled
-      0xffaaaaaa,  // UserFunction
-      0xffb0c94e,  // UserType
-      0xffaaaaaa,  // UniformType
-      0xffaaaaaa,  // GlobalVariable
-      0xffaaaaaa,  // LocalVariable
-      0xff888888   // FunctionArgument
+      0xffb5b0aa,  // Default #aab0b5
+      0xffb7d135,  // Keyword #35d1b7
+      0xffaede78,  // Number #78deae
+      0xff74b7f0,  // String #f0b774
+      0xff8dc9f2,  // Char literal #f2c98d
+      0xffdcd8d6,  // Punctuation #d6d8dc
+      0xffc2bcb5,  // Identifier #b5bcc2
+      0xffc7db6d,  // Known identifier #6ddbc7
+      0xff797169,  // Comment (single line) #697179
+      0xff716a63,  // Comment (multi line) #636a71
+      0xff191615,  // Background #151619
+      0xfff4f2f1,  // Cursor #f1f2f4
+      0x8031c6b3,  // Selection, Signal Teal at 50% alpha
+      0x705c61f0,  // ErrorMarker, coral at low alpha
+      0xff6a61f0,  // Breakpoint #f0616a
+      0xfff4f2f1,  // Breakpoint outline
+      0xffb7d135,  // Current line indicator, Signal Teal
+      0xff554c46,  // Current line indicator outline #464c55
+      0xff746b65,  // Line number #656b74
+      0x702b2724,  // Current line fill #24272b
+      0x482b2724,  // Current line fill (inactive)
+      0x803a3430,  // Current line edge #30343a
+      0xff6a61f0,  // Error message #f0616a
+      0xff746b65,  // BreakpointDisabled
+      0xffc7db6d,  // UserFunction
+      0xff41b3e3,  // UserType #e3b341
+      0xffc2bcb5,  // UniformType
+      0xffc2bcb5,  // GlobalVariable
+      0xffc2bcb5,  // LocalVariable
+      0xffb5ada8   // FunctionArgument #a8adb5
   }};
 
   return kPalette;

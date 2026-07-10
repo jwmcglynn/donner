@@ -12,6 +12,7 @@
 #include "donner/base/RcString.h"
 #include "donner/base/parser/NumberParser.h"
 #include "donner/editor/EditorApp.h"
+#include "donner/editor/EditorTheme.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/svg/SVGElement.h"
 
@@ -146,11 +147,10 @@ std::vector<FormatBarFontFamily> BuildFormatBarFamilies(
 }
 
 float TextFormatBarPresenter::BarHeight() {
-  const ImGuiStyle& style = ImGui::GetStyle();
-  return ImGui::GetFrameHeight() + style.WindowPadding.y * 2.0f;
+  return ImGui::GetFrameHeight() + 16.0f;
 }
 
-FormatBarActions TextFormatBarPresenter::render(const FormatBarState& state, float originY,
+FormatBarActions TextFormatBarPresenter::render(const FormatBarState& state, const ImVec2& topLeft,
                                                 float width) {
   FormatBarActions actions;
   if (!state.visible) {
@@ -166,13 +166,27 @@ FormatBarActions TextFormatBarPresenter::render(const FormatBarState& state, flo
     trackedFamily_ = true;
   }
 
-  ImGui::SetNextWindowPos(ImVec2(0.0f, originY));
+  const EditorTheme& theme = EditorTheme::Active();
+  const ImVec2 size(width, BarHeight());
+  const ImVec2 shadowOffset(0.0f, 3.0f);
+  ImGui::GetBackgroundDrawList()->AddRectFilled(
+      ImVec2(topLeft.x + shadowOffset.x, topLeft.y + shadowOffset.y),
+      ImVec2(topLeft.x + size.x + shadowOffset.x, topLeft.y + size.y + shadowOffset.y),
+      WithAlpha(theme.surfaceCanvas, 150), theme.radiusContainer);
+  ImGui::SetNextWindowPos(topLeft);
   ImGui::SetNextWindowSize(ImVec2(width, BarHeight()));
   constexpr ImGuiWindowFlags kBarFlags =
       ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
       ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
       ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoSavedSettings |
-      ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoBringToFrontOnFocus;
+      ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoBringToFrontOnFocus |
+      ImGuiWindowFlags_NoDocking;
+
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, theme.radiusContainer);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 8.0f));
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, ImGui::ColorConvertU32ToFloat4(theme.surfaceOverlay));
+  ImGui::PushStyleColor(ImGuiCol_Border, ImGui::ColorConvertU32ToFloat4(theme.borderStrong));
 
   if (ImGui::Begin("##text_format_bar", nullptr, kBarFlags)) {
     // --- Font family: free-text input plus a searchable preview dropdown. ---
@@ -185,6 +199,7 @@ FormatBarActions TextFormatBarPresenter::render(const FormatBarState& state, flo
       lastSyncedFamily_ = actions.fontFamily;
     }
     ImGui::SameLine(0.0f, 0.0f);
+    ImGui::SetNextItemWidth(ImGui::GetFrameHeight());
     if (ImGui::BeginCombo("##format_bar_font_family_menu", "", ImGuiComboFlags_NoPreview)) {
       ImGui::SetNextItemWidth(200.0f);
       ImGui::InputTextWithHint("##format_bar_font_search", "Search fonts",
@@ -234,6 +249,7 @@ FormatBarActions TextFormatBarPresenter::render(const FormatBarState& state, flo
       actions.fontSize = sizeEditValue_;
     }
     ImGui::SameLine(0.0f, 0.0f);
+    ImGui::SetNextItemWidth(ImGui::GetFrameHeight());
     if (ImGui::BeginCombo("##format_bar_font_size_menu", "", ImGuiComboFlags_NoPreview)) {
       for (const int preset : kFormatBarFontSizePresets) {
         const bool selected =
@@ -282,6 +298,8 @@ FormatBarActions TextFormatBarPresenter::render(const FormatBarState& state, flo
     }
   }
   ImGui::End();
+  ImGui::PopStyleColor(2);
+  ImGui::PopStyleVar(3);
 
   return actions;
 }

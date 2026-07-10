@@ -93,8 +93,11 @@ gui::EditorWindow MakeHiddenWindow() {
 std::filesystem::path TempPathForTest(std::string_view suffix) {
   const testing::TestInfo* testInfo = testing::UnitTest::GetInstance()->current_test_info();
   const std::string testName = testInfo != nullptr ? testInfo->name() : "unknown";
-  return std::filesystem::temp_directory_path() /
-         ("donner_editor_shell_" + testName + "_" + std::string(suffix));
+  const char* testTmpDir = std::getenv("TEST_TMPDIR");
+  const std::filesystem::path writableTempDirectory = testTmpDir != nullptr && testTmpDir[0] != '\0'
+                                                          ? std::filesystem::path(testTmpDir)
+                                                          : std::filesystem::temp_directory_path();
+  return writableTempDirectory / ("donner_editor_shell_" + testName + "_" + std::string(suffix));
 }
 
 void WriteTextFile(const std::filesystem::path& path, std::string_view text) {
@@ -789,12 +792,12 @@ public:
                                const Vector2d& renderPaneSize, ImGuiWindowFlags paneFlags) {
     // The render pane now docks itself; outside a DockSpace it Begins as a
     // floating "Render" window, so position it explicitly for the test frame.
-    ImGui::SetNextWindowPos(ImVec2(static_cast<float>(renderPaneOrigin.x),
-                                   static_cast<float>(renderPaneOrigin.y)),
-                            ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(static_cast<float>(renderPaneSize.x),
-                                    static_cast<float>(renderPaneSize.y)),
-                             ImGuiCond_Always);
+    ImGui::SetNextWindowPos(
+        ImVec2(static_cast<float>(renderPaneOrigin.x), static_cast<float>(renderPaneOrigin.y)),
+        ImGuiCond_Always);
+    ImGui::SetNextWindowSize(
+        ImVec2(static_cast<float>(renderPaneSize.x), static_cast<float>(renderPaneSize.y)),
+        ImGuiCond_Always);
     shell.renderRenderPane(paneFlags | ImGuiWindowFlags_NoSavedSettings);
   }
 
@@ -930,9 +933,7 @@ public:
 
   static bool DockLayoutLocked(const EditorShell& shell) { return shell.dockLayoutLocked_; }
 
-  static void RequestDockLayoutReset(EditorShell& shell) {
-    shell.dockLayoutResetRequested_ = true;
-  }
+  static void RequestDockLayoutReset(EditorShell& shell) { shell.dockLayoutResetRequested_ = true; }
 
   static bool DockLayoutResetRequested(const EditorShell& shell) {
     return shell.dockLayoutResetRequested_;
@@ -2206,6 +2207,7 @@ TEST(EditorShellTest, SourcePaneVisibilityRevealAndHoverRangesUseCurrentDocument
   ASSERT_FALSE(ranges.empty());
   EXPECT_LT(ranges.front().start, ranges.front().end);
 
+  EditorShellTestAccess::SetSourcePaneVisible(shell, true);
   ASSERT_TRUE(EditorShellTestAccess::Source(shell).setHoverSourceRanges(ranges));
   EditorShellTestAccess::SetSourcePaneVisible(shell, false);
   EXPECT_FALSE(EditorShellTestAccess::SourcePaneVisible(shell));
@@ -2401,6 +2403,7 @@ TEST(EditorShellTest, SourcePaneSplitterDragCollapsesPane) {
 
   EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
   ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::SetSourcePaneVisible(shell, true);
 
   const Box2d sourceRect = RenderSourcePaneSplitterFrame(
       window, shell, /*sourcePaneWidth=*/260.0f, ImVec2(-100.0f, -100.0f), /*mouseDown=*/false);
@@ -2425,6 +2428,7 @@ TEST(EditorShellTest, SourcePaneSplitterDragExpandsVisiblePane) {
   EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
   ASSERT_TRUE(shell.valid());
 
+  EditorShellTestAccess::SetSourcePaneVisible(shell, true);
   EditorShellTestAccess::SetSourcePaneWidth(shell, 260.0f);
   const Box2d sourceRect = RenderSourcePaneSplitterFrame(window, shell, /*sourcePaneWidth=*/260.0f,
                                                          ImVec2(-100.0f, -100.0f),
@@ -2441,6 +2445,29 @@ TEST(EditorShellTest, SourcePaneSplitterDragExpandsVisiblePane) {
 
   EXPECT_TRUE(EditorShellTestAccess::SourcePaneVisible(shell));
   EXPECT_GT(EditorShellTestAccess::SourcePaneWidth(shell), 260.0f);
+}
+
+TEST(EditorShellTest, SourcePaneRevealRailOpensOnClick) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  ASSERT_FALSE(EditorShellTestAccess::SourcePaneVisible(shell));
+
+  RenderSourcePaneSplitterFrame(window, shell, /*sourcePaneWidth=*/0.0f, ImVec2(-100.0f, -100.0f),
+                                /*mouseDown=*/false);
+  const ImVec2 center(16.0f, 110.0f);
+  RenderSourcePaneSplitterFrame(window, shell, /*sourcePaneWidth=*/0.0f, center,
+                                /*mouseDown=*/false);
+  RenderSourcePaneSplitterFrame(window, shell, /*sourcePaneWidth=*/0.0f, center,
+                                /*mouseDown=*/true);
+  RenderSourcePaneSplitterFrame(window, shell, /*sourcePaneWidth=*/0.0f, center,
+                                /*mouseDown=*/false);
+
+  EXPECT_TRUE(EditorShellTestAccess::SourcePaneVisible(shell));
 }
 
 TEST(EditorShellTest, FillStrokeToolbarMouseHitTestingCoversChipsSwatchesAndTooltips) {
@@ -2735,14 +2762,14 @@ TEST(EditorShellTest, SourcePaneVisibilityNoOpsWhenAlreadyMatching) {
   EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
   ASSERT_TRUE(shell.valid());
 
-  ASSERT_TRUE(EditorShellTestAccess::SourcePaneVisible(shell));
+  ASSERT_FALSE(EditorShellTestAccess::SourcePaneVisible(shell));
+  EditorShellTestAccess::SetSourcePaneVisible(shell, false);
+  EXPECT_FALSE(EditorShellTestAccess::SourcePaneVisible(shell));
+
   EditorShellTestAccess::SetSourcePaneVisible(shell, true);
   EXPECT_TRUE(EditorShellTestAccess::SourcePaneVisible(shell));
-
-  EditorShellTestAccess::SetSourcePaneVisible(shell, false);
-  EXPECT_FALSE(EditorShellTestAccess::SourcePaneVisible(shell));
-  EditorShellTestAccess::SetSourcePaneVisible(shell, false);
-  EXPECT_FALSE(EditorShellTestAccess::SourcePaneVisible(shell));
+  EditorShellTestAccess::SetSourcePaneVisible(shell, true);
+  EXPECT_TRUE(EditorShellTestAccess::SourcePaneVisible(shell));
 }
 
 TEST(EditorShellTest, SelectAllCanvasAndTextSelectionPreconditions) {

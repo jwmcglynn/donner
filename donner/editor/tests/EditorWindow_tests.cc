@@ -522,6 +522,20 @@ TEST(EditorWindowTest, ComputeUiScaleConfigClampsToOne) {
 }
 
 #if defined(DONNER_EDITOR_WGPU)
+TEST(EditorWindowTest, NumericDragFieldsSupportSimpleClickToEdit) {
+  EditorWindow window(EditorWindowOptions{
+      .title = "Numeric Click To Edit Test",
+      .initialWidth = 64,
+      .initialHeight = 64,
+      .visible = false,
+  });
+  if (!window.valid()) {
+    GTEST_SKIP() << "Editor window is unavailable on this host";
+  }
+
+  EXPECT_TRUE(ImGui::GetIO().ConfigDragClickToInputText);
+}
+
 TEST(EditorWindowTest, WgpuDirectRenderCallbackAppendsToFramebuffer) {
   EditorWindow window(EditorWindowOptions{
       .title = "Direct WGPU Framebuffer Append Test",

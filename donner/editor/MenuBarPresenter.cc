@@ -2,6 +2,7 @@
 
 #include <utility>
 
+#include "donner/editor/EditorTheme.h"
 #include "donner/editor/ImGuiIncludes.h"
 
 namespace donner::editor {
@@ -85,11 +86,21 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
     return actions;
   }
 
+  const EditorTheme& theme = EditorTheme::Active();
+  ImDrawList* drawList = ImGui::GetWindowDrawList();
+  const ImVec2 brandOrigin = ImGui::GetCursorScreenPos();
+  const float markerHeight = ImGui::GetFrameHeight() - theme.space2;
+  drawList->AddRectFilled(
+      ImVec2(brandOrigin.x, brandOrigin.y + theme.space1),
+      ImVec2(brandOrigin.x + theme.space1, brandOrigin.y + theme.space1 + markerHeight),
+      theme.accentDefault, 2.0f);
+  ImGui::SetCursorPosX(ImGui::GetCursorPosX() + theme.space3);
+
   const bool pushedBoldDonnerMenuFont = boldMenuFont != nullptr;
   if (pushedBoldDonnerMenuFont) {
     ImGui::PushFont(boldMenuFont);
   }
-  const bool donnerMenuOpen = ImGui::BeginMenu("Donner SVG Editor");
+  const bool donnerMenuOpen = ImGui::BeginMenu("DONNER");
   if (pushedBoldDonnerMenuFont) {
     ImGui::PopFont();
   }
@@ -99,6 +110,10 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
                         &actions);
     ImGui::EndMenu();
   }
+
+  ImGui::SameLine(0.0f, theme.space1);
+  ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(theme.textMuted), "SVG EDITOR");
+  ImGui::SameLine(0.0f, theme.space4);
 
   if (ImGui::BeginMenu("File")) {
     ApplyMenuBarCommand(ImGui::MenuItem("Open...", "Cmd+O"), MenuBarCommand::OpenFile, state,
@@ -185,15 +200,19 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
       ApplyMenuBarCommand(
           ImGui::MenuItem("FPS Pill", nullptr, state.perfOverlayMode == PerfOverlayMode::FpsPill),
           MenuBarCommand::SetPerfOverlayFpsPill, state, &actions);
-      ApplyMenuBarCommand(
-          ImGui::MenuItem("Full Graph", nullptr,
-                          state.perfOverlayMode == PerfOverlayMode::FullGraph),
-          MenuBarCommand::SetPerfOverlayFullGraph, state, &actions);
+      ApplyMenuBarCommand(ImGui::MenuItem("Full Graph", nullptr,
+                                          state.perfOverlayMode == PerfOverlayMode::FullGraph),
+                          MenuBarCommand::SetPerfOverlayFullGraph, state, &actions);
       ImGui::EndMenu();
     }
     ImGui::EndMenu();
   }
 
+  const ImVec2 barPosition = ImGui::GetWindowPos();
+  const ImVec2 barSize = ImGui::GetWindowSize();
+  drawList->AddLine(ImVec2(barPosition.x, barPosition.y + barSize.y - 1.0f),
+                    ImVec2(barPosition.x + barSize.x, barPosition.y + barSize.y - 1.0f),
+                    theme.borderSubtle);
   ImGui::EndMainMenuBar();
   return actions;
 }

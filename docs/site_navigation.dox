@@ -101,6 +101,7 @@ kept separate from project-internal developer notes, design history, tooling, an
 - \subpage md_donner_2editor_2README
 - \subpage md_donner_2editor_2repro_2README
 - \subpage EditorSourceFocus
+- \subpage EditorDesignLanguage
 - \subpage EditorVisualDebugging
 */
 

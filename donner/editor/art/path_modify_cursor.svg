@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
-  <!-- Path Modify (anchor-point tool): an open angle bracket, vertex (hotspot)
-       at top-left, echoing Illustrator's angle-shaped anchor cursor. A small
-       square anchor sits in the crook to read as "edit a path point". -->
+  <!-- Path Modify (anchor-point tool): an open angle bracket with its hotspot
+       at the top-left vertex. A small square anchor in the crook reads as
+       "edit a path point". -->
   <g id="path-modify-cursor-glyph" fill="none" stroke-linecap="round" stroke-linejoin="round">
     <g stroke="#ffffff" stroke-width="3.35">
       <path d="M 6 17.5 L 6 6 L 17.5 6" />

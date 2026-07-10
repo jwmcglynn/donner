@@ -618,6 +618,7 @@ donner_cc_library(
     srcs = ["MenuBarPresenter.cc"],
     hdrs = ["MenuBarPresenter.h"],
     deps = [
+        ":editor_theme",
         ":imgui_headers",
         "@imgui",
     ],
@@ -629,6 +630,7 @@ donner_cc_library(
     hdrs = ["TextFormatBarPresenter.h"],
     deps = [
         ":editor_app",
+        ":editor_theme",
         ":imgui_headers",
         "//donner/base",
         "//donner/base/parser",
@@ -704,6 +706,7 @@ donner_cc_library(
         ":command_queue",
         ":disclosure_chevron",
         ":editor_app",
+        ":editor_theme",
         ":embedded_svg_icon",
         ":imgui_headers",
         ":lock_state",
@@ -1166,7 +1169,6 @@ embed_resources(
         "kToolSelectIconSvg": "art/tool_select_icon.svg",
         "kToolPenIconSvg": "art/tool_pen_icon.svg",
         "kToolTextIconSvg": "art/tool_text_icon.svg",
-        "kToolPathModifyIconSvg": "art/tool_path_modify_icon.svg",
     },
 )
 

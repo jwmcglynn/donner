@@ -1,20 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
-  <!-- Pen tool, close-path state: base pen nib (hotspot 4,4) plus a small "o"
-       badge at bottom-right (a click would close the active contour). -->
-  <g id="pen-close-cursor-glyph" fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <g stroke="#ffffff" stroke-width="3.35">
-      <path d="M 14.4153 18.6964 L 7.88293 19.2352 L 3.80865 3.84719 L 19.1966 7.92147 L 18.3043 14.8073" />
-      <rect x="13.7081" y="19.4036" width="7.22447" height="3" transform="rotate(-45 13.7081 19.4036)" />
-      <line x1="5.92996" y1="5.96852" x2="10.8797" y2="10.9183" />
-      <circle cx="12.2939" cy="12.3325" r="2" transform="rotate(-45 12.2939 12.3325)" />
-    </g>
-    <g stroke="#000000" stroke-width="2">
-      <path d="M 14.4153 18.6964 L 7.88293 19.2352 L 3.80865 3.84719 L 19.1966 7.92147 L 18.3043 14.8073" />
-      <rect x="13.7081" y="19.4036" width="7.22447" height="3" transform="rotate(-45 13.7081 19.4036)" />
-      <line x1="5.92996" y1="5.96852" x2="10.8797" y2="10.9183" />
-      <circle cx="12.2939" cy="12.3325" r="2" transform="rotate(-45 12.2939 12.3325)" />
-    </g>
-    <circle cx="24" cy="23.5" r="3.4" fill="none" stroke="#ffffff" stroke-width="3" />
-    <circle cx="24" cy="23.5" r="3.4" fill="none" stroke="#000000" stroke-width="1.6" />
+  <!-- Close-path cursor: filled pen nib plus a black, white-ringed badge. -->
+  <g stroke-linecap="round" stroke-linejoin="round">
+    <path d="M 14.4153 18.6964 L 7.88293 19.2352 L 3.80865 3.84719 L 19.1966 7.92147 L 18.3043 14.8073 Z"
+          fill="#000000" stroke="#ffffff" stroke-width="1.75" />
+    <rect x="13.7081" y="19.4036" width="7.22447" height="3"
+          transform="rotate(-45 13.7081 19.4036)"
+          fill="#000000" stroke="#ffffff" stroke-width="1.75" />
+    <line x1="5.92996" y1="5.96852" x2="10.8797" y2="10.9183"
+          stroke="#ffffff" stroke-width="1.35" />
+    <circle cx="12.2939" cy="12.3325" r="1.7" fill="#ffffff" />
+    <circle cx="24" cy="24" r="4.5" fill="#000000" stroke="#ffffff" stroke-width="1.5" />
+    <circle cx="24" cy="24" r="2" fill="none" stroke="#ffffff" stroke-width="1.25" />
   </g>
 </svg>

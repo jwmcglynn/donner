@@ -38,6 +38,7 @@ TEST(EditorShellLayoutTest, MainLayoutUsesSourcePaneWidthWhenVisible) {
       .sourcePaneWidth = 560.0f,
       .minSourcePaneWidth = 240.0f,
       .maxSourcePaneWidth = 900.0f,
+      .sourcePaneRailWidth = 32.0f,
       .rightPaneWidth = 420.0f,
       .minRightPaneWidth = 220.0f,
       .maxRightPaneWidth = 900.0f,
@@ -58,6 +59,7 @@ TEST(EditorShellLayoutTest, MainLayoutGivesSourceWidthBackToRenderPaneWhenHidden
       .sourcePaneWidth = 560.0f,
       .minSourcePaneWidth = 240.0f,
       .maxSourcePaneWidth = 900.0f,
+      .sourcePaneRailWidth = 32.0f,
       .rightPaneWidth = 420.0f,
       .minRightPaneWidth = 220.0f,
       .maxRightPaneWidth = 900.0f,
@@ -65,8 +67,9 @@ TEST(EditorShellLayoutTest, MainLayoutGivesSourceWidthBackToRenderPaneWhenHidden
   });
 
   EXPECT_FLOAT_EQ(layout.sourcePaneWidth, 0.0f);
-  EXPECT_FLOAT_EQ(layout.renderPaneX, 0.0f);
-  EXPECT_FLOAT_EQ(layout.renderPaneWidth, 1180.0f);
+  EXPECT_FLOAT_EQ(layout.sourcePaneRailWidth, 32.0f);
+  EXPECT_FLOAT_EQ(layout.renderPaneX, 32.0f);
+  EXPECT_FLOAT_EQ(layout.renderPaneWidth, 1148.0f);
   EXPECT_FLOAT_EQ(layout.rightPaneX, 1180.0f);
   EXPECT_FLOAT_EQ(layout.rightPaneWidth, 420.0f);
 }

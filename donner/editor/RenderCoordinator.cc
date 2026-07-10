@@ -390,9 +390,11 @@ void RenderCoordinator::resetForLoadedDocument() {
   lastOverlayPenHoverCloseAffordanceDoc_.reset();
   textEditingCaretDoc_.reset();
   textEditingFrameCornersDoc_.reset();
+  textEditingFrameOpacity_ = 1.0f;
   textBoxDragPreviewDoc_.reset();
   lastOverlayTextEditingCaretDoc_.reset();
   lastOverlayTextEditingFrameCornersDoc_.reset();
+  lastOverlayTextEditingFrameOpacity_ = 1.0f;
   lastOverlayTextBoxDragPreviewDoc_.reset();
   renderScheduler_.reset();
   displayNoneSuppressedSelectionEntity_ = entt::null;
@@ -480,6 +482,7 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
       penHoverCloseAffordanceDoc_ != lastOverlayPenHoverCloseAffordanceDoc_ ||
       textEditingCaretDoc_ != lastOverlayTextEditingCaretDoc_ ||
       textEditingFrameCornersDoc_ != lastOverlayTextEditingFrameCornersDoc_ ||
+      textEditingFrameOpacity_ != lastOverlayTextEditingFrameOpacity_ ||
       textBoxDragPreviewDoc_ != lastOverlayTextBoxDragPreviewDoc_;
   if (!selectionDetail.has_value()) {
     if (overlayGeometryDiffers || IsUnsetTimePoint(overlayStableSince_)) {
@@ -551,6 +554,7 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   chromeSnapshot.penCloseAffordanceDoc = penHoverCloseAffordanceDoc_;
   chromeSnapshot.textCaretDoc = textEditingCaretDoc_;
   chromeSnapshot.textFrameCornersDoc = textEditingFrameCornersDoc_;
+  chromeSnapshot.textFrameOpacity = textEditingFrameOpacity_;
   chromeSnapshot.textBoxDragPreviewDoc = textBoxDragPreviewDoc_;
   overlayCost.captureMs = MillisecondsSince(captureStart);
   overlayCost.pathCount = static_cast<int>(chromeSnapshot.paths.size());
@@ -599,6 +603,7 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   lastOverlayPenHoverCloseAffordanceDoc_ = penHoverCloseAffordanceDoc_;
   lastOverlayTextEditingCaretDoc_ = textEditingCaretDoc_;
   lastOverlayTextEditingFrameCornersDoc_ = textEditingFrameCornersDoc_;
+  lastOverlayTextEditingFrameOpacity_ = textEditingFrameOpacity_;
   lastOverlayTextBoxDragPreviewDoc_ = textBoxDragPreviewDoc_;
   lastFrameCostBreakdown_.overlay = overlayCost;
   return true;

@@ -1,0 +1,197 @@
+# Editor Design Language {#EditorDesignLanguage}
+
+The Donner editor uses a neutral Graphite visual system so SVG artwork remains the most colorful
+object on screen. Signal Teal identifies focus, selection, and primary interactive state. Amber,
+coral, and green are reserved for semantic status.
+
+The implementation lives in `donner/editor/EditorTheme.{h,cc}`. The active theme configures ImGui
+and supplies tokens to custom `ImDrawList` chrome, the canvas overlay, and source-editor colors.
+
+## Principles
+
+- **Artwork first.** Neutral chrome surrounds the document without tinting or competing with it.
+- **One focus color.** Signal Teal marks selection, focus, active tools, links, and docking previews.
+- **Structure through tone.** Surface elevation and one-pixel rules separate regions. Heavy borders
+  and card-like containers are avoided.
+- **Compact and stable.** Controls use fixed dimensions on a 4 px grid, so hover, labels, and state
+  changes do not move surrounding UI.
+- **SVG-native icons.** Tool icons are SVG assets rendered through Donner, then tinted from theme
+  tokens. Cursors retain their black-and-white halo for canvas contrast.
+
+## Core Tokens
+
+| Role | Token | Value |
+| --- | --- | --- |
+| Canvas surround | `surfaceCanvas` | `#111215` |
+| Inset well | `surfaceSunken` | `#151619` |
+| Panel background | `surfaceBase` | `#1B1D20` |
+| Menu, tab, field | `surfaceRaised` | `#24272B` |
+| Floating chrome | `surfaceOverlay` | `#2B2F34` |
+| Hover | `surfaceHover` | `#343940` |
+| Active | `surfaceActive` | `#3C424A` |
+| Subtle rule | `borderSubtle` | `#30343A` |
+| Strong rule | `borderStrong` | `#464C55` |
+| Primary text | `textPrimary` | `#F1F2F4` |
+| Secondary text | `textMuted` | `#A8ADB5` |
+| Disabled text | `textDisabled` | `#656B74` |
+| Focus and selection | `accentDefault` | `#31C6B3` |
+| Warning | `warning` | `#E3B341` |
+| Error or destructive | `destructive` | `#F0616A` |
+| Success | `success` | `#3FB984` |
+
+The shipped accent is `Accent::SignalTeal`. Other accent variants remain test-covered theme inputs,
+but product chrome should not choose a different accent per widget.
+
+## Geometry And Type
+
+Spacing uses 4, 8, 12, 16, 24, and 32 px tokens. Controls use a 4 px radius; floating containers
+use a 6 px radius. Tool buttons are 32 px square. New fixed-format controls should use stable
+dimensions and reserve enough room for their longest label.
+
+Roboto is the UI face and Fira Code is the source face. UI text uses regular weight for values and
+bold weight for identity or compact section emphasis. Large display type does not belong in panels,
+toolbars, dialogs, or diagnostics surfaces.
+
+## Application Chrome
+
+The top application bar uses a teal identity mark, `DONNER`, a muted `SVG EDITOR` descriptor, and
+compact menus. Dock tabs use neutral surfaces and a teal selected overline. They do not use ImGui's
+stock blue tab fill.
+
+The canvas toolbar is a floating overlay with one subtle shadow and one strong edge. Tool buttons
+use Donner-rendered two-tone SVG artwork with a black core and white halo, a translucent teal
+selected fill, and a teal selected outline. Toolbar art rasterizes at 80 px before display at 20
+logical px so 1x and 2x output use exact downsampling ratios. The Fill/Stroke widget shares the same
+container and token set. Only ready tools appear in the toolbar; unfinished interactions do not
+occupy disabled slots. Acute pointer artwork uses concentric silhouettes so the black core cannot
+leak through the white halo during downsampling.
+
+The Inspector contains document and selection controls only. Viewport implementation telemetry does
+not occupy the Inspector. Zoom state lives on the canvas in a compact control that resets to 100
+percent when clicked.
+
+### Text Authoring
+
+New text keeps the current authoring fill instead of resetting to a tool-local color. When one text
+element is selected or edited, font family, size, and emphasis controls appear in a compact rounded
+toolbar centered below the canvas tool palette. It floats over the canvas and does not consume a
+full-width layout strip.
+
+Point text uses font em-box extents for frame height so ascenders, descenders, and the typed glyph mix
+cannot make the frame jump. A newly placed point-text frame starts hidden. Pointer movement reveals
+it immediately; subsequent text input fades the frame and handles away while leaving the caret
+visible. Drag-created box text keeps its authored frame visible.
+
+Text frame handles use the same handle-box calculation as select-tool handles at every display
+scale. During frame resize, pointer moves update only local frame chrome. DOM attributes, text
+rewrap, source writeback, and document rendering occur once on release.
+
+### Canvas-First Source Access
+
+The source pane starts collapsed so the document canvas is the primary workspace. A persistent
+32 px rail remains on the left edge with a source glyph and line motif. Clicking the rail opens the
+source pane; the View menu and source-navigation actions also reveal it. The rail reserves layout
+space rather than overlaying document content, and its hover state uses the standard focus color.
+
+### Transform Editing
+
+The Transform section uses stable rows for Position, Size, and Rotation. A five-column grid gives
+X/W, Y/H, and Rotation fixed field starts and matching widths; variable label glyphs cannot shift
+the input rectangles. Rotation includes its unit, and the advanced matrix remains behind a
+disclosure with the same fixed axis/value alignment. Fields fill the available Inspector width
+without changing row geometry during hover or editing.
+
+Numeric drag fields support both interaction styles. Dragging adjusts a value at fine resolution;
+a click-release without movement enters text input directly, without requiring a modifier or
+double-click. Enter commits typed input and field deactivation records one undo step.
+
+Transform activation must not hold a document read scope while reading `transform()` or
+`worldBounds()`. Those SVG accessors may materialize lazy layout state and acquire write access in
+concurrent-DOM mode. Each accessor owns its required lock so field activation cannot attempt a
+non-recursive read-to-write lock upgrade.
+
+### Inspector Property Lists
+
+The Inspector presents XML attributes and computed CSS as compact property lists:
+
+- XML attributes retain source order and use separate name and value columns.
+- Computed values use CSS-shaped text. Internal wrapper names such as `PaintServer(...)` are not
+  product UI.
+- CSS provenance has a dedicated `SET` or `DEFAULT` column. It is not appended to the value.
+- Default properties are visually quieter than values set by the active cascade.
+- Solid computed fill, stroke, and color values include a swatch derived from the typed computed
+  style. Paint-server references remain textual.
+- Long values stay within their column and expose the full value on hover.
+
+These lists are read-only in the visual MVP. Attribute editing must remain DOM-first and use the
+editor's structured source-writeback path when it is added.
+
+## Source Palette
+
+`TextEditor::getDarkPalette()` follows the same Graphite base while using semantic hues for syntax:
+
+- teal for structural keywords and known identifiers
+- warm amber for strings and type-like values
+- green for numeric values
+- coral for errors and breakpoints
+- neutral gray for comments, punctuation, line numbers, and ordinary identifiers
+
+Selection remains Signal Teal at 50 percent alpha so focus-reference connectors and selected source
+ranges remain legible.
+
+## Extension Rules
+
+1. Reuse an existing `EditorTheme` token before adding a token.
+2. Do not add a raw color literal to product chrome. Test fixtures and actual document colors are
+   exempt.
+3. Keep spacing and fixed control dimensions on the 4 px grid.
+4. Use SVG assets for editor tool icons when a suitable icon does not already exist.
+5. Preserve black-core/white-halo contrast for tool and cursor artwork.
+6. Keep debug telemetry behind an explicit diagnostics surface or performance overlay.
+7. Add or update a focused test when a token, mapped ImGui slot, palette value, or control contract
+   changes.
+
+## Verification
+
+Theme, menu, and source-palette contracts run in:
+
+```sh
+bazel test //donner/editor/tests:editor_theme_tests \
+  //donner/editor/tests:menu_bar_presenter_tests \
+  //donner/editor/tests:sidebar_presenter_tests \
+  //donner/editor/tests:text_editor_tests
+```
+
+The Inspector UI fuzzer exercises real ImGui frames, Transform lifecycle transitions, selection,
+reload, undo, lock state, and busy snapshots under concurrent-DOM access:
+
+```sh
+bazel run --config=asan-fuzzer //donner/editor/tests:inspector_ui_fuzzer -- \
+  -max_total_time=30 -max_len=4096 -timeout=5
+```
+
+For mutation-based local runs, invoke the built fuzzer with a writable corpus directory. The Bazel
+wrapper's checked-in corpus arguments are also useful as deterministic seed replays.
+
+Full-shell visual verification uses the Geode replay harness with a worker-settled frame:
+
+```sh
+bazel run --config=geode //donner/editor/tests:editor_rnr_gl_replay -- \
+  --rnr zoom-out-drag-jump.rnr \
+  --capture-frame 10 --max-frame 10 --crop full \
+  --worker-scheduling drain-each-frame
+```
+
+The visual pass checks app-bar identity, tab colors, the collapsed source rail, source contrast,
+toolbar fit and icon contrast, canvas framing, zoom-control placement, Transform alignment, panel
+density, and absence of debug-only Inspector content. Raster tests also require every custom cursor
+and toolbar icon to retain visible opaque black and white pixels without touching the bitmap edge.
+Text-tool tests additionally require no DOM mutation during resize moves, stable point-text em-box
+height, frame reveal/fade transitions, and high-density handle-size parity. The Inspector UI fuzzer
+includes text creation, active fill, typing, frame reveal, resize, release, reload, and undo.
+
+## Security And Privacy
+
+The design language does not add file, network, clipboard, or document mutation paths. SVG icon
+assets continue through Donner's renderer. Public captures and documentation must use public sample
+documents and must not include private paths, host data, credentials, or operator content.

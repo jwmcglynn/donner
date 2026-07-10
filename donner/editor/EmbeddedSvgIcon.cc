@@ -45,10 +45,9 @@ svg::Renderer& SharedIconRenderer() {
   return renderer;
 }
 
-}  // namespace
-
-std::optional<svg::RendererBitmap> RenderEmbeddedSvgIcon(std::span<const unsigned char> svgBytes,
-                                                         int outputSizePx) {
+std::optional<svg::RendererBitmap> RenderEmbeddedSvgBitmap(std::span<const unsigned char> svgBytes,
+                                                           int outputSizePx,
+                                                           bool normalizeToTintableMask) {
   if (outputSizePx <= 0) {
     return std::nullopt;
   }
@@ -71,8 +70,22 @@ std::optional<svg::RendererBitmap> RenderEmbeddedSvgIcon(std::span<const unsigne
     return std::nullopt;
   }
 
-  NormalizeIconBitmapToTintableAlphaMask(&bitmap);
+  if (normalizeToTintableMask) {
+    NormalizeIconBitmapToTintableAlphaMask(&bitmap);
+  }
   return bitmap;
+}
+
+}  // namespace
+
+std::optional<svg::RendererBitmap> RenderEmbeddedSvgIcon(std::span<const unsigned char> svgBytes,
+                                                         int outputSizePx) {
+  return RenderEmbeddedSvgBitmap(svgBytes, outputSizePx, /*normalizeToTintableMask=*/true);
+}
+
+std::optional<svg::RendererBitmap> RenderEmbeddedSvgArtwork(std::span<const unsigned char> svgBytes,
+                                                            int outputSizePx) {
+  return RenderEmbeddedSvgBitmap(svgBytes, outputSizePx, /*normalizeToTintableMask=*/false);
 }
 
 }  // namespace donner::editor

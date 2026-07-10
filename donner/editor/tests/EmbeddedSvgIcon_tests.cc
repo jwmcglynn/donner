@@ -28,6 +28,11 @@ constexpr std::string_view kSquareIconSvg =
     R"(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">)"
     R"(<rect x="2" y="2" width="12" height="12" fill="#000"/></svg>)";
 
+constexpr std::string_view kTwoToneIconSvg =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">)"
+    R"(<rect x="2" y="2" width="6" height="12" fill="#000"/>)"
+    R"(<rect x="8" y="2" width="6" height="12" fill="#fff"/></svg>)";
+
 #ifdef DONNER_GEODE_BACKEND_AVAILABLE
 constexpr std::string_view kCircleIconSvg =
     R"(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">)"
@@ -57,15 +62,27 @@ TEST(EmbeddedSvgIcon, RendersTintableAlphaMask) {
   EXPECT_THAT(PixelAt(*bitmap, 0, 0), ElementsAre(0, 0, 0, 0));
 }
 
+TEST(EmbeddedSvgIcon, PreservesAuthoredArtworkColors) {
+  const std::optional<svg::RendererBitmap> bitmap =
+      RenderEmbeddedSvgArtwork(BytesOf(kTwoToneIconSvg), /*outputSizePx=*/16);
+  ASSERT_TRUE(bitmap.has_value());
+  EXPECT_EQ(bitmap->dimensions, Vector2i(16, 16));
+  EXPECT_THAT(PixelAt(*bitmap, 4, 8), ElementsAre(0, 0, 0, 255));
+  EXPECT_THAT(PixelAt(*bitmap, 11, 8), ElementsAre(255, 255, 255, 255));
+  EXPECT_THAT(PixelAt(*bitmap, 0, 0), ElementsAre(0, 0, 0, 0));
+}
+
 TEST(EmbeddedSvgIcon, RejectsInvalidOutputSize) {
   EXPECT_FALSE(RenderEmbeddedSvgIcon(BytesOf(kSquareIconSvg), /*outputSizePx=*/0).has_value());
   EXPECT_FALSE(RenderEmbeddedSvgIcon(BytesOf(kSquareIconSvg), /*outputSizePx=*/-1).has_value());
+  EXPECT_FALSE(RenderEmbeddedSvgArtwork(BytesOf(kSquareIconSvg), /*outputSizePx=*/0).has_value());
 }
 
 TEST(EmbeddedSvgIcon, RejectsMalformedSvg) {
   constexpr std::string_view kMalformedSvg = "<svg><";
 
   EXPECT_FALSE(RenderEmbeddedSvgIcon(BytesOf(kMalformedSvg), /*outputSizePx=*/16).has_value());
+  EXPECT_FALSE(RenderEmbeddedSvgArtwork(BytesOf(kMalformedSvg), /*outputSizePx=*/16).has_value());
 }
 
 #ifdef DONNER_GEODE_BACKEND_AVAILABLE

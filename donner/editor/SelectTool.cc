@@ -113,8 +113,8 @@ bool IsNonRenderChild(const svg::SVGElement& element) {
 /// would select the entire document. Descending through them to reach
 /// the *real* top-level grouping (e.g. `<g id="Donner">`,
 /// `<g id="Lightning_glow_dark">`, `<g id="Big_lightning_glow">` on the
-/// splash) matches what Figma / Illustrator / Inkscape do - and what a
-/// user expects when they click on a composed object.
+/// splash) matches established professional vector-editor behavior and what
+/// a user expects when they click on a composed object.
 ///
 /// Stop conditions, each "top-level object(s) live here" signal:
 ///   * current element has ≠ 1 render child (zero or multiple distinct
@@ -698,11 +698,11 @@ void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/)
     // The forward ("after") snapshot carries the author's original bytes too so
     // redo re-derives the same syntax-preserving writeback (restore stays
     // false: this is a forward apply, not a verbatim restore).
-    UndoSnapshot after{.element = dragState_->primary.element,
-                       .transform = dragState_->primary.currentTransform,
-                       .writebackTarget = dragState_->primary.writebackTarget,
-                       .sourceTransformAttributeValue =
-                           dragState_->primary.sourceTransformAttributeValue};
+    UndoSnapshot after{
+        .element = dragState_->primary.element,
+        .transform = dragState_->primary.currentTransform,
+        .writebackTarget = dragState_->primary.writebackTarget,
+        .sourceTransformAttributeValue = dragState_->primary.sourceTransformAttributeValue};
     before.extras.reserve(dragState_->extras.size());
     after.extras.reserve(dragState_->extras.size());
     for (const auto& extra : dragState_->extras) {

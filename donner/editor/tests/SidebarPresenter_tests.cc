@@ -11,6 +11,7 @@
 #include "donner/base/MathUtils.h"
 #include "donner/base/Transform.h"
 #include "donner/editor/ImGuiIncludes.h"
+#include "donner/editor/ImGuiInternalIncludes.h"
 #include "donner/svg/DocumentState.h"
 
 namespace donner::editor {
@@ -161,8 +162,7 @@ void LoadAndSelectTarget(EditorApp& app, SidebarPresenter& presenter, std::strin
 /// Runs one complete edit on @p field: begin, write @p value, commit, flush
 /// the queued SetTransformCommand, and refresh the snapshot.
 void EditTransformField(EditorApp& app, SidebarPresenter& presenter,
-                        SidebarPresenter::TransformField field, double value,
-                        int matrixIndex = 0) {
+                        SidebarPresenter::TransformField field, double value, int matrixIndex = 0) {
   presenter.beginTransformEditForTesting(app, field, matrixIndex);
   ASSERT_TRUE(presenter.hasTransformEditForTesting());
   EXPECT_TRUE(presenter.applyTransformEditForTesting(app, value));
@@ -188,6 +188,18 @@ TEST(SidebarTransformEditTest, PositionXEditRoundTripsThroughSnapshot) {
   EXPECT_NEAR(bounds->width(), 100.0, 1e-6);
   EXPECT_NEAR(bounds->height(), 50.0, 1e-6);
   EXPECT_TRUE(app.canUndo()) << "a completed edit records exactly one undo entry";
+}
+
+TEST(SidebarTransformEditTest, ConcurrentDomActivationDoesNotReenterDocumentLock) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kInspectorSvg));
+  app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+
+  presenter.beginTransformEditForTesting(app, SidebarPresenter::TransformField::PositionX);
+
+  EXPECT_TRUE(presenter.hasTransformEditForTesting());
+  presenter.commitTransformEditForTesting(app);
 }
 
 TEST(SidebarTransformEditTest, WidthEditScalesAboutTopLeftAndRederives) {
@@ -364,6 +376,33 @@ TEST(SidebarPresenterTest, RefreshSnapshotCapturesXmlAttributesAndComputedStyle)
   const std::string* colorValue = FindInspectorValue(computedStyle, "color");
   ASSERT_NE(colorValue, nullptr);
   EXPECT_EQ(*colorValue, "rgba(0, 0, 0, 255) (default)");
+
+  const auto swatches = presenter.inspectorComputedStyleSwatchesForTesting();
+  ASSERT_EQ(swatches.size(), computedStyle.size());
+  EXPECT_EQ(swatches[3], std::optional<ImU32>(IM_COL32(255, 0, 0, 255)));
+  EXPECT_EQ(swatches[5], std::nullopt);
+  EXPECT_EQ(swatches[8], std::optional<ImU32>(IM_COL32(0, 0, 0, 255)));
+}
+
+TEST(SidebarPresenterTest, FormatsComputedStyleValuesAsCssWithSeparateProvenance) {
+  const InspectorStyleDisplayValue solid =
+      FormatInspectorStyleValue("PaintServer(solid rgba(255, 0, 0, 255)) (set)");
+  EXPECT_EQ(solid.value, "rgba(255, 0, 0, 255)");
+  EXPECT_EQ(solid.state, InspectorStyleState::Set);
+
+  const InspectorStyleDisplayValue reference =
+      FormatInspectorStyleValue("PaintServer(url(#gradient)) (set)");
+  EXPECT_EQ(reference.value, "url(#gradient)");
+  EXPECT_EQ(reference.state, InspectorStyleState::Set);
+
+  const InspectorStyleDisplayValue defaultPaint =
+      FormatInspectorStyleValue("PaintServer(none) (default)");
+  EXPECT_EQ(defaultPaint.value, "none");
+  EXPECT_EQ(defaultPaint.state, InspectorStyleState::Default);
+
+  const InspectorStyleDisplayValue unset = FormatInspectorStyleValue("nullopt");
+  EXPECT_EQ(unset.value, "not set");
+  EXPECT_EQ(unset.state, InspectorStyleState::Unspecified);
 }
 
 TEST(SidebarPresenterTest, RefreshSnapshotKeepsAttributesWhenCleanSourceTextIsMissing) {
@@ -476,6 +515,7 @@ protected:
     ImGuiIO& io = ImGui::GetIO();
     io.DisplaySize = ImVec2(400, 300);
     io.ConfigMacOSXBehaviors = false;
+    io.ConfigDragClickToInputText = true;
     io.Fonts->Build();
   }
 
@@ -489,11 +529,13 @@ protected:
   ImGuiContext* ctx_ = nullptr;
 
   static bool RenderInspectorFrame(SidebarPresenter& presenter, EditorApp* app,
-                                   const char* windowName) {
+                                   const char* windowName,
+                                   const ImVec2 mouse = ImVec2(-1.0f, -1.0f),
+                                   bool mouseDown = false) {
     ImGuiIO& io = ImGui::GetIO();
     io.DisplaySize = ImVec2(400, 300);
-    io.AddMousePosEvent(-1.0f, -1.0f);
-    io.AddMouseButtonEvent(0, false);
+    io.AddMousePosEvent(mouse.x, mouse.y);
+    io.AddMouseButtonEvent(0, mouseDown);
     ImGui::NewFrame();
     ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(360, 280), ImGuiCond_Always);
@@ -789,6 +831,71 @@ TEST_F(SidebarPresenterImGuiTest, InspectorRendersEditableTransformFields) {
   ASSERT_NE(drawData, nullptr);
   EXPECT_GT(drawData->TotalVtxCount, 0);
   EXPECT_FALSE(app.canUndo()) << "rendering alone must not record undo entries";
+}
+
+TEST_F(SidebarPresenterImGuiTest, TransformFieldsUseAlignedValueColumns) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kInspectorSvg));
+  app.setCleanSourceText(kInspectorSvg);
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  ASSERT_FALSE(RenderInspectorFrame(presenter, &app, "##sidebar_transform_alignment_test"));
+
+  const auto x =
+      presenter.transformFieldRectForTesting(SidebarPresenter::TransformField::PositionX);
+  const auto y =
+      presenter.transformFieldRectForTesting(SidebarPresenter::TransformField::PositionY);
+  const auto width =
+      presenter.transformFieldRectForTesting(SidebarPresenter::TransformField::Width);
+  const auto height =
+      presenter.transformFieldRectForTesting(SidebarPresenter::TransformField::Height);
+  const auto rotation =
+      presenter.transformFieldRectForTesting(SidebarPresenter::TransformField::Rotation);
+  ASSERT_TRUE(x.has_value());
+  ASSERT_TRUE(y.has_value());
+  ASSERT_TRUE(width.has_value());
+  ASSERT_TRUE(height.has_value());
+  ASSERT_TRUE(rotation.has_value());
+
+  EXPECT_DOUBLE_EQ(x->topLeft.x, width->topLeft.x);
+  EXPECT_DOUBLE_EQ(x->bottomRight.x, width->bottomRight.x);
+  EXPECT_DOUBLE_EQ(x->topLeft.x, rotation->topLeft.x);
+  EXPECT_DOUBLE_EQ(x->bottomRight.x, rotation->bottomRight.x);
+  EXPECT_DOUBLE_EQ(y->topLeft.x, height->topLeft.x);
+  EXPECT_DOUBLE_EQ(y->bottomRight.x, height->bottomRight.x);
+}
+
+TEST_F(SidebarPresenterImGuiTest, TransformFieldSimpleClickEntersTextInput) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kInspectorSvg));
+  app.setCleanSourceText(kInspectorSvg);
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  constexpr char kWindowName[] = "##sidebar_transform_click_to_edit_test";
+  ASSERT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName));
+  const auto x =
+      presenter.transformFieldRectForTesting(SidebarPresenter::TransformField::PositionX);
+  ASSERT_TRUE(x.has_value());
+  const ImVec2 center(static_cast<float>((x->topLeft.x + x->bottomRight.x) * 0.5),
+                      static_cast<float>((x->topLeft.y + x->bottomRight.y) * 0.5));
+
+  EXPECT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName, center, /*mouseDown=*/true));
+  EXPECT_TRUE(presenter.hasTransformEditForTesting());
+  EXPECT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName, center, /*mouseDown=*/false));
+
+  ASSERT_NE(ImGui::GetCurrentContext(), nullptr);
+  EXPECT_NE(ImGui::GetCurrentContext()->TempInputId, 0u)
+      << "A click-release without dragging should enter numeric text input";
+  EXPECT_TRUE(presenter.hasTransformEditForTesting());
+  EXPECT_FALSE(app.canUndo()) << "Entering text mode alone must not mutate the document";
 }
 
 TEST_F(SidebarPresenterImGuiTest, InspectorRendersSkewedTransformDisabledFields) {

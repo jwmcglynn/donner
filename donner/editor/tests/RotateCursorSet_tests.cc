@@ -86,7 +86,7 @@ TEST(RotateCursorSetTest, PenCursorUsesBlackGlyphWithWhiteOutline) {
   EXPECT_EQ(image->rgba.size(), 32u * 32u * 4u);
   EXPECT_GT(CountNonTransparentPixels(*image), 90u);
   EXPECT_LT(CountNonTransparentPixels(*image), 32u * 32u);
-  EXPECT_GT(CountOpaqueBlackPixels(*image), 25u);
+  EXPECT_GT(CountOpaqueBlackPixels(*image), 45u);
   EXPECT_GT(CountOpaqueWhitePixels(*image), 8u);
 }
 
@@ -119,19 +119,20 @@ TEST(RotateCursorSetTest, RotatedCornersProduceDifferentBitmaps) {
 // wiring its art fails here.
 TEST(RotateCursorSetTest, EveryEditorCursorRendersWithAnInBoundsHotspot) {
   for (EditorCursor cursor : kEditorCursors) {
-    const SelectionTransformCorner corner =
-        CursorUsesCorner(cursor) ? SelectionTransformCorner::TopRight
-                                 : SelectionTransformCorner::TopLeft;
+    const SelectionTransformCorner corner = CursorUsesCorner(cursor)
+                                                ? SelectionTransformCorner::TopRight
+                                                : SelectionTransformCorner::TopLeft;
     std::optional<RotateCursorImage> image = RenderEditorCursorImage(cursor, corner, nullptr);
     ASSERT_TRUE(image.has_value()) << "cursor index " << static_cast<int>(cursor);
     EXPECT_EQ(image->width, kCursorSizePx);
     EXPECT_EQ(image->height, kCursorSizePx);
-    EXPECT_EQ(image->rgba.size(),
-              static_cast<std::size_t>(kCursorSizePx) * kCursorSizePx * 4u);
+    EXPECT_EQ(image->rgba.size(), static_cast<std::size_t>(kCursorSizePx) * kCursorSizePx * 4u);
     EXPECT_GT(CountNonTransparentPixels(*image), 40u)
         << "cursor index " << static_cast<int>(cursor);
     EXPECT_LT(CountNonTransparentPixels(*image),
               static_cast<std::size_t>(kCursorSizePx) * kCursorSizePx);
+    EXPECT_GT(CountOpaqueBlackPixels(*image), 8u) << "cursor index " << static_cast<int>(cursor);
+    EXPECT_GT(CountOpaqueWhitePixels(*image), 4u) << "cursor index " << static_cast<int>(cursor);
 
     const CursorHotspot hotspot = HotspotForCursor(cursor);
     EXPECT_GE(hotspot.x, 0);

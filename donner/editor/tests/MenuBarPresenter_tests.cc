@@ -116,7 +116,7 @@ TEST_F(MenuBarPresenterTest, RendersEachOpenMenuWithoutImplicitActions) {
   state.showCompositorDebugPanel = true;
   state.perfOverlayMode = PerfOverlayMode::FullGraph;
 
-  for (const char* menuLabel : {"Donner SVG Editor", "File", "Edit", "View"}) {
+  for (const char* menuLabel : {"DONNER", "File", "Edit", "View"}) {
     PrimeMainMenuPopup(menuLabel);
     const MenuBarActions actions = RenderFrame(state);
     EXPECT_FALSE(actions.openAbout) << menuLabel;

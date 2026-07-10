@@ -800,7 +800,7 @@ Captured during the design review with the operator (2026-05-12):
   `GlTextureCache` (per-tile texture cache), `RenderPanePresenter`
   (iterates tiles), and the compositor (drops `recomposeSplitBitmaps`).
 - **Tile-based caching for very large documents.** Splash is small; once
-  Donner takes on multi-MB documents (illustrator-class export), the
+  Donner takes on multi-MB production vector-editor exports, the
   per-layer cache budget will pressure RAM. Tile-based caching split
   layers into `1024×1024` tiles each cached independently is the next
   scaling step. Not needed for the splash corpus.

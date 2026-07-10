@@ -1,12 +1,9 @@
 #pragma once
 /// @file
 ///
-/// Toolbar tool icons, rendered from embedded SVG art through Donner's
-/// `EmbeddedSvgIcon` white-mask pipeline (the same one `LayersPanel` and
-/// `SidebarPresenter` use for their affordance icons). This replaces the
-/// hand-drawn `ImDrawList` primitives the tool palette used to stroke per
-/// frame, so the toolbar icons and the OS cursors are authored from one SVG
-/// art family (see `donner/editor/art/STYLE.md`).
+/// Toolbar tool icons, rendered from embedded two-tone SVG art through Donner.
+/// Black cores and white halos are preserved so the toolbar and OS cursors use
+/// one contrast system on every surface (see `donner/editor/art/STYLE.md`).
 
 #include <array>
 #include <cstdint>
@@ -24,19 +21,17 @@ namespace donner::editor {
 /// order; kept standalone so the registry-coverage test can iterate it without
 /// a live ImGui context.
 enum class ToolbarIcon : std::uint8_t {
-  Select,      ///< Selection / arrow tool.
-  Pen,         ///< Pen (path) tool.
-  Text,        ///< Type / text tool.
-  PathModify,  ///< Path-modify (anchor-point) tool.
+  Select,  ///< Selection / arrow tool.
+  Pen,     ///< Pen (path) tool.
+  Text,    ///< Type / text tool.
 };
 
 /// Every toolbar icon, in palette order. The single source of truth for the
 /// icon registry and its coverage test.
-inline constexpr std::array<ToolbarIcon, 4> kToolbarIcons = {
+inline constexpr std::array<ToolbarIcon, 3> kToolbarIcons = {
     ToolbarIcon::Select,
     ToolbarIcon::Pen,
     ToolbarIcon::Text,
-    ToolbarIcon::PathModify,
 };
 
 /// An uploaded icon texture plus the valid payload UV range (icon bitmaps may
@@ -58,7 +53,7 @@ using ToolbarIconTextureProvider =
 /// Stable texture-cache key for @p icon.
 [[nodiscard]] std::uint64_t ToolbarIconTextureKey(ToolbarIcon icon);
 
-/// The Donner-rendered white-mask bitmap for @p icon, rendered once and cached
+/// The Donner-rendered two-tone bitmap for @p icon, rendered once and cached
 /// for the process lifetime. `std::nullopt` if parsing/rendering failed.
 [[nodiscard]] const std::optional<svg::RendererBitmap>& CachedToolbarIconBitmap(ToolbarIcon icon);
 

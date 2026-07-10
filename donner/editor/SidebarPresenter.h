@@ -7,6 +7,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -51,6 +52,29 @@ struct DecomposedTransform {
 /// then rotation, then translation. Inverse of \ref DecomposeTransform for
 /// every decomposable matrix.
 [[nodiscard]] Transform2d ComposeTransform(const DecomposedTransform& decomposed);
+
+/// Provenance shown beside a computed CSS value in the Inspector.
+enum class InspectorStyleState : std::uint8_t {
+  Unspecified,  ///< The serialized value did not include provenance metadata.
+  Default,      ///< The computed value comes from the property's default.
+  Set,          ///< The computed value was set by the active style cascade.
+};
+
+/// User-facing form of a computed CSS value and its provenance.
+struct InspectorStyleDisplayValue {
+  std::string value;  ///< CSS-shaped value without internal wrapper names.
+  InspectorStyleState state = InspectorStyleState::Unspecified;  ///< Display provenance.
+};
+
+/// Convert the Inspector's serialized computed-style value to user-facing CSS.
+///
+/// Removes the snapshot's provenance suffix and internal `PaintServer(...)` or
+/// `Color(...)` wrappers while preserving the actual CSS value.
+///
+/// @param serializedValue Value captured by the Inspector snapshot.
+/// @return CSS-shaped value plus the captured provenance state.
+[[nodiscard]] InspectorStyleDisplayValue FormatInspectorStyleValue(
+    std::string_view serializedValue);
 
 /// Renders the editor's tree view and inspector panes.
 ///
@@ -151,12 +175,26 @@ public:
     return inspectorSnapshot_.computedStyle;
   }
 
+  [[nodiscard]] std::span<const std::optional<ImU32>> inspectorComputedStyleSwatchesForTesting()
+      const {
+    return inspectorSnapshot_.computedStyleSwatches;
+  }
+
   [[nodiscard]] const std::optional<Box2d>& inspectorBoundsForTesting() const {
     return inspectorSnapshot_.bounds;
   }
 
   [[nodiscard]] const std::optional<Transform2d>& inspectorTransformForTesting() const {
     return inspectorSnapshot_.transform;
+  }
+
+  /// Last rendered screen rectangle for one decomposed Transform field.
+  /// Matrix cells are excluded because they are indexed separately.
+  [[nodiscard]] std::optional<Box2d> transformFieldRectForTesting(TransformField field) const {
+    if (field == TransformField::Matrix) {
+      return std::nullopt;
+    }
+    return transformFieldRects_[static_cast<std::size_t>(field)];
   }
 
   // Testing hooks that drive the transform-edit state machine directly,
@@ -206,6 +244,7 @@ private:
     std::optional<Transform2d> transform;
     std::vector<std::pair<std::string, std::string>> xmlAttributes;
     std::vector<std::pair<std::string, std::string>> computedStyle;
+    std::vector<std::optional<ImU32>> computedStyleSwatches;
   };
 
   /// State for the transform edit currently in progress (one ImGui item can
@@ -247,8 +286,8 @@ private:
   /// matrix disclosure). Returns true if a mutation was queued.
   bool renderTransformPanel(EditorApp* liveApp);
 
-  /// Render one decomposed-field DragFloat, wiring activation, write-back,
-  /// and commit. Returns true if a mutation was queued.
+  /// Render one decomposed numeric field, wiring activation, write-back, and
+  /// commit. The field supports both drag adjustment and click-to-type.
   bool renderTransformFieldDrag(EditorApp* liveApp, TransformField field, const char* label,
                                 float displayValue, bool canEdit, const char* undoLabel,
                                 float dragSpeed, const char* format);
@@ -271,6 +310,7 @@ private:
   std::optional<TreeNodeSnapshot> treeSnapshot_;
   InspectorSnapshot inspectorSnapshot_;
   std::optional<TransformEditState> transformEdit_;
+  std::array<std::optional<Box2d>, 5> transformFieldRects_;
 
   /// Persistent tree-disclosure state, keyed by 32-bit entity id. A node is
   /// expanded iff present. Mutable because the tree renders from a const
