@@ -496,6 +496,54 @@ jobs:
           bazelisk test --config=ci --test_output=errors \
             $TARGETS
 
+      - name: Upload Bazel test failure artifacts
+        if: failure() && steps.test.outcome == 'failure'
+        uses: ./.github/actions/upload-bazel-test-artifacts
+        with:
+          name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
+
+
+  # Non-lld linker canary, split into its own always-on hosted job so it runs
+  # regardless of Linux runner routing. The hosted `linux` lane is suppressed
+  # for small operator PRs when self-hosted routing is active, and the
+  # self-hosted lane's hermetic LLVM toolchain ships lld (not gold), so the gold
+  # canary has no home there. Keeping it on a dedicated ubuntu-24.04 job runs it
+  # on the runner that actually has gold and preserves coverage on every
+  # non-docs PR and main push. It shares the `linux` lane's Bazel disk-cache key
+  # so the compile actions are warm cache hits and only the final gold relink is
+  # new; this is a link-only check on a fixed minimal target set. See #665.
+  linker-canary:
+    runs-on: ubuntu-24.04
+    needs: [gatekeeper]
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install system dependencies
+        uses: nick-fields/retry@v4
+        with:
+          timeout_minutes: 5
+          max_attempts: 3
+          retry_wait_seconds: 15
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends \
+              pkg-config libfontconfig1-dev libfreetype6-dev \
+              mesa-vulkan-drivers libvulkan1 libvulkan-dev \
+              libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+              libgl1-mesa-dev libosmesa6 clang-tidy-19
+            sudo apt-get clean
+
+      - name: Setup Bazel
+        uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-${{ runner.os }}-default
+          repository-cache: true
+          external-cache: true
+          cache-save: ${{ github.ref == 'refs/heads/main' }}
+
       # Forces a single-pass linker (gold) so a diamond-dependency archive that
       # loses its alwayslink (or a new one that needs it) is caught immediately
       # instead of only surfacing on a dev box whose default linker isn't lld.
@@ -507,12 +555,6 @@ jobs:
           bazelisk build --config=ci --linkopt=-fuse-ld=gold \
             //donner/svg/tool:donner-svg \
             //donner/svg/renderer/tests:filter_graph_executor_tests
-
-      - name: Upload Bazel test failure artifacts
-        if: failure() && steps.test.outcome == 'failure'
-        uses: ./.github/actions/upload-bazel-test-artifacts
-        with:
-          name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
 
 
   # Operator's ARM64 Linux runs on the operator's self-hosted runner.
