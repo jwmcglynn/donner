@@ -457,6 +457,7 @@ private:
   std::optional<svg::SVGElement> sourceStructuralDragElement_;
   std::optional<svg::SVGElement> sourceStructuralMoveTarget_;
   std::optional<SourceStructuralMovePlan> sourceStructuralMovePlan_;
+  std::optional<bool> sourceFocusModeBeforeStructuralDrag_;
   /// Backing store for shape Cut/Copy/Paste. Holds the headered
   /// `# donner-shape-clipboard v1` payload (see `ShapeClipboardPayload`).
   std::unique_ptr<ClipboardInterface> shapeClipboard_;

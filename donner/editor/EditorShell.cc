@@ -3875,6 +3875,13 @@ void EditorShell::clearSourceStructuralDrag() {
   sourceStructuralMoveTarget_.reset();
   sourceStructuralMovePlan_.reset();
   textEditor_.setSourceStructuralMoveDecoration(std::nullopt);
+  if (sourceFocusModeBeforeStructuralDrag_.has_value()) {
+    sourceFocusMode_ = *sourceFocusModeBeforeStructuralDrag_;
+    sourceFocusModeBeforeStructuralDrag_.reset();
+    if (sourceFocusMode_ && app_.hasDocument() && !app_.document().hasPendingMutations()) {
+      updateSourceFocusView(/*scrollToSelection=*/false);
+    }
+  }
 }
 
 void EditorShell::updateSourceStructuralDrag() {
@@ -3885,14 +3892,19 @@ void EditorShell::updateSourceStructuralDrag() {
   const std::string source = textEditor_.getText();
   if (const std::optional<int> startedLine = textEditor_.takeSourceGutterDragStartedLine()) {
     clearSourceStructuralDrag();
+    sourceFocusModeBeforeStructuralDrag_ = sourceFocusMode_;
+    sourceFocusMode_ = false;
+    textEditor_.clearFocusPartition();
     if (!app_.hasDocument() || textEditor_.isTextChanged() ||
         app_.document().hasPendingMutations()) {
+      clearSourceStructuralDrag();
       textEditor_.cancelSourceGutterDrag();
       return;
     }
     const std::string documentSource =
         CanonicalizeForTextEditor(app_.document().document().source());
     if (source != documentSource) {
+      clearSourceStructuralDrag();
       textEditor_.cancelSourceGutterDrag();
       return;
     }
@@ -3906,7 +3918,6 @@ void EditorShell::updateSourceStructuralDrag() {
       textEditor_.cancelSourceGutterDrag();
       return;
     }
-    textEditor_.clearFocusPartition();
   }
 
   const std::optional<Coordinates> dragTarget = textEditor_.sourceGutterDragTarget();
