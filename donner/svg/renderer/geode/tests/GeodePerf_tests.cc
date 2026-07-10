@@ -295,8 +295,13 @@ TEST_F(GeodePerfTest, Lion_BaselineCeilings) {
   //                       drawCalls for `<use>`-heavy fixtures; Lion
   //                       has no `<use>` so this ceiling stays at 132.
   EXPECT_LE(c.pathEncodes, 200u);  // M2: target = 0.
-  // 0041 analytic dual-ray fill: 4 extra SSBO arenas grow once on first use.
-  EXPECT_LE(c.bufferCreates, 14u);
+  // Wave 2 (GPU residence): frame 1 now front-loads ONE persistent
+  // combined buffer per cached solid-fill path (132 for Lion) so that
+  // steady-state frames re-upload zero geometry. This trades a one-time
+  // frame-1 buffer-create spike for the steady-state win asserted in
+  // `Lion_NoDirtyPath_ZeroEncodes` (frame-2 bufferCreates == 1, the
+  // readback). Ceiling = 132 resident + readback + arena slack.
+  EXPECT_LE(c.bufferCreates, 150u);
   EXPECT_LE(c.bindgroupCreates, 200u);   // M1.f.2: target <= #pipelines.
   EXPECT_LE(c.textureCreates, 3u);       // Target on first render; 0 on repeat.
   EXPECT_LE(c.submits, 3u);              // M3: target = 1.
@@ -453,6 +458,16 @@ TEST_F(GeodePerfTest, SimpleShapes_NoDirtyPath_ZeroEncodes) {
   // frames. The remaining create is the takeSnapshot readback buffer.
   EXPECT_LE(c.bufferCreates, 2u) << "Arena buffer churn on an unchanged second render: the "
                                     "cross-frame GeodeBufferPool should serve all arena growth.";
+  // Wave 2 (GPU residence) steady-state: the three solid fills are
+  // GPU-resident from frame 1, so frame 2 writes zero geometry AND zero
+  // uniform bytes (same viewport => byte-identical uniforms) and reuses
+  // its cached bind groups. Wave-1 baseline was bufferWriteBytes=4128,
+  // bindgroupCreates=3.
+  EXPECT_LE(c.bufferWriteBytes, 512u)
+      << "Steady-state buffer writes on an unchanged second render: resident geometry "
+         "should not re-upload.";
+  EXPECT_LE(c.bindgroupCreates, 1u)
+      << "Steady-state bind-group creates: resident fills should reuse cached bind groups.";
 }
 
 TEST_F(GeodePerfTest, Moderate_NoDirtyPath_ZeroEncodes) {
@@ -470,6 +485,14 @@ TEST_F(GeodePerfTest, Moderate_NoDirtyPath_ZeroEncodes) {
   // M1 (GeodeBufferPool): readback + one per-blit uniform buffer remain
   // (layer composite blits create a fresh uniform buffer per call).
   EXPECT_LE(c.bufferCreates, 4u) << "Arena buffer churn on an unchanged second render.";
+  // Wave 2 (GPU residence): the opacity-layer solid path is resident, so
+  // the steady-state residual is only the gradient rect (arena path) plus
+  // the isolated-layer composite blit's per-frame uniform. Wave-1 baseline
+  // was bufferWriteBytes=5372, bindgroupCreates=3.
+  EXPECT_LE(c.bufferWriteBytes, 3200u)
+      << "Steady-state buffer writes: only the gradient + layer-blit uniforms should remain.";
+  EXPECT_LE(c.bindgroupCreates, 3u) << "Steady-state bind-group creates: the resident solid fill "
+                                       "should reuse its cached bind group.";
 }
 
 TEST_F(GeodePerfTest, Lion_NoDirtyPath_ZeroEncodes) {
@@ -497,6 +520,17 @@ TEST_F(GeodePerfTest, Lion_NoDirtyPath_ZeroEncodes) {
   // readback buffer only.
   EXPECT_LE(c.bufferCreates, 3u)
       << "Arena buffer churn on an unchanged second render of lion.svg.";
+  // Wave 2 (GPU residence) - the headline steady-state win. All 132 solid
+  // fills are GPU-resident from frame 1, so an unchanged second render
+  // re-uploads zero geometry bytes and creates zero bind groups. Wave-1
+  // baseline was bufferWriteBytes=172776 across 1056 writes, and
+  // bindgroupCreates=132 (one per draw). drawCalls stays 132 - the draws
+  // still happen, they just bind cached resident buffers.
+  EXPECT_LE(c.bufferWriteBytes, 4096u)
+      << "Steady-state geometry re-upload on an unchanged second render of lion.svg: resident "
+         "buffers should serve every draw.";
+  EXPECT_LE(c.bindgroupCreates, 2u)
+      << "Steady-state bind-group creates no longer proportional to draw calls (was 132).";
 }
 
 TEST_F(GeodePerfTest, GhostscriptTiger_NoDirtyPath_ZeroEncodes) {
@@ -524,6 +558,19 @@ TEST_F(GeodePerfTest, GhostscriptTiger_NoDirtyPath_ZeroEncodes) {
   // with a little margin.
   EXPECT_LE(c.bufferCreates, 8u)
       << "Arena buffer churn on an unchanged second render of Ghostscript_Tiger.svg.";
+  // Wave 2 (GPU residence) - THE headline acceptance target. The wave-1
+  // measured profile (design doc 0030 appendix) was ~1.44 MB re-uploaded
+  // per steady-state frame across 2,432 writeBuffer calls, plus 304 bind
+  // group creates (one per draw). With persistent per-entity residence an
+  // unchanged second render re-uploads zero geometry bytes and creates
+  // zero bind groups - a >99% reduction, far past the 90% acceptance
+  // floor (which would be <= 147388 bytes). Both fill AND stroke slots
+  // are exercised (Tiger has strokes). drawCalls stays 304.
+  EXPECT_LE(c.bufferWriteBytes, 8192u)
+      << "Steady-state geometry re-upload on an unchanged second render of Ghostscript_Tiger.svg. "
+         "Wave-1 baseline was 1,473,888 bytes; residency should drive this to ~0.";
+  EXPECT_LE(c.bindgroupCreates, 2u)
+      << "Steady-state bind-group creates no longer proportional to draw calls (was 304).";
 }
 
 // ---------------------------------------------------------------------------
@@ -691,6 +738,94 @@ TEST_F(GeodePerfTest, TextureSnapshotStressReleasesMsaaTargets) {
   EXPECT_GE(textureReleaseDelta, static_cast<uint64_t>(kFrameCount * 2))
       << "Repeated texture snapshots should release both resolved and MSAA targets. "
          "A lower count means the MSAA target is still being overwritten as a raw handle.";
+}
+
+// ---------------------------------------------------------------------------
+// Wave 2 (GPU residence): eviction / no-unbounded-growth.
+//
+// Persistent per-entity GPU buffers must not accumulate across distinct
+// documents. Each document owns its own ECS registry; when the document is
+// torn down its `GeodeResidentPathComponent`s are destroyed and their GPU
+// buffers freed (RAII, settling the device's live-resident-bytes gauge).
+// This test renders a series of distinct documents on the shared device and
+// asserts the live resident bytes return to baseline after each teardown -
+// i.e. GPU memory is bounded no matter how many documents pass through.
+// ---------------------------------------------------------------------------
+
+TEST_F(GeodePerfTest, GpuResidence_FreesResidentBuffersOnDocumentTeardown) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  // Baseline: any residence from earlier tests has already been freed
+  // (their renderers + documents were destroyed), so this is the floor we
+  // must return to after every document below.
+  const int64_t baseline = device->liveResidentBytesForTesting();
+
+  int64_t peakWhileLive = baseline;
+  for (int i = 0; i < 8; ++i) {
+    // Distinct documents (varying shape count) => distinct registries and
+    // distinct resident buffers.
+    std::ostringstream svg;
+    svg << R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">)";
+    const int shapes = 3 + i;
+    for (int s = 0; s < shapes; ++s) {
+      svg << "<rect x=\"" << (10 + s * 5) << "\" y=\"" << (10 + s * 7) << "\" width=\"40\" "
+          << "height=\"30\" fill=\"rgb(" << (s * 20 % 256) << ",64,128)\"/>";
+    }
+    svg << "</svg>";
+
+    ParseWarningSink sink = ParseWarningSink::Disabled();
+    auto parsed = parser::SVGParser::ParseSVG(svg.str(), sink);
+    ASSERT_FALSE(parsed.hasError()) << parsed.error().reason;
+
+    {
+      SVGDocument document = std::move(parsed.result());
+      RendererGeode renderer(device);
+      renderer.draw(document);
+      (void)renderer.takeSnapshot();
+      peakWhileLive = std::max(peakWhileLive, device->liveResidentBytesForTesting());
+    }  // document + renderer destroyed => resident components freed.
+
+    EXPECT_EQ(device->liveResidentBytesForTesting(), baseline)
+        << "Resident GPU buffers from document " << i
+        << " were not freed on teardown - residence is leaking across documents.";
+  }
+
+  EXPECT_GT(peakWhileLive, baseline)
+      << "Sanity: at least one document should have held live resident GPU buffers.";
+  EXPECT_EQ(device->liveResidentBytesForTesting(), baseline)
+      << "Live resident bytes must return to baseline after all documents are torn down.";
+}
+
+// ---------------------------------------------------------------------------
+// Wave 2 (GPU residence): repeated same-document renders hold residence
+// steady - they must not grow the live resident-bytes gauge frame over
+// frame (the buffers are reused, not reallocated).
+// ---------------------------------------------------------------------------
+
+TEST_F(GeodePerfTest, GpuResidence_SteadyAcrossRepeatedRenders) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  const int64_t baseline = device->liveResidentBytesForTesting();
+
+  ParseWarningSink sink = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(kSimpleShapesSvg, sink);
+  ASSERT_FALSE(parsed.hasError());
+  SVGDocument document = std::move(parsed.result());
+
+  RendererGeode renderer(device);
+  renderer.draw(document);
+  (void)renderer.takeSnapshot();
+  const int64_t afterFirst = device->liveResidentBytesForTesting();
+  EXPECT_GT(afterFirst, baseline) << "First render should establish GPU residence.";
+
+  for (int i = 0; i < 6; ++i) {
+    renderer.draw(document);
+    (void)renderer.takeSnapshot();
+    EXPECT_EQ(device->liveResidentBytesForTesting(), afterFirst)
+        << "Repeated unchanged render must not grow resident GPU memory (frame " << i << ").";
+  }
 }
 
 }  // namespace

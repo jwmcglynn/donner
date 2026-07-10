@@ -33,6 +33,7 @@
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePathCacheComponent.h"
+#include "donner/svg/renderer/geode/GeodeResidentPathComponent.h"
 #include "donner/svg/renderer/geode/GeodePathEncoder.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
@@ -1521,6 +1522,11 @@ struct RendererGeode::Impl {
     /// uploaded as per-instance transforms (see
     /// `flushPendingBatch` for the math).
     std::vector<Transform2d> deviceFromLocalTransforms;
+    /// Wave 2 GPU-residence slot for this source entity's fill (captured
+    /// when the batch starts). Used only by the size-1 flush path - a
+    /// size >= 2 flush routes through the instanced arena path, which has
+    /// no per-entity residence.
+    geode::GeodeResidentSlot* residentFillSlot = nullptr;
   };
   std::optional<PendingBatch> pendingBatch;
 
@@ -1591,6 +1597,43 @@ struct RendererGeode::Impl {
     return &*cache.fillEncode;
   }
 
+  /// GPU-residence slot for `source`'s fill encode (design doc 0030 wave
+  /// 2). Returns null for a null source (editor/overlay draws stay on the
+  /// arena path). The slot lives on a `GeodeResidentPathComponent` beside
+  /// the M2 encode cache and is invalidated by the same listener.
+  geode::GeodeResidentSlot* residentFillSlot(EntityHandle source) {
+    if (!source) {
+      return nullptr;
+    }
+    ensureCacheInvalidationWired(*source.registry());
+    return &source.get_or_emplace<geode::GeodeResidentPathComponent>().fillSlot;
+  }
+
+  /// GPU-residence slot for `source`'s stroke encode. See `residentFillSlot`.
+  geode::GeodeResidentSlot* residentStrokeSlot(EntityHandle source) {
+    if (!source) {
+      return nullptr;
+    }
+    ensureCacheInvalidationWired(*source.registry());
+    return &source.get_or_emplace<geode::GeodeResidentPathComponent>().strokeSlot;
+  }
+
+  /// Emit a solid fill, preferring the persistent-residence path when a
+  /// resident slot and a cached encode are both available. Falls back to
+  /// the wave-1 arena `fillPath` otherwise (null source, no cached encode,
+  /// or gradient/pattern fallbacks). `GeoEncoder::fillPathResident` itself
+  /// falls back to the arena path when a clip / mask is active, so this is
+  /// always correct.
+  void emitSolidFill(const Path& drawPath, const css::RGBA& color, FillRule rule,
+                     const geode::EncodedPath* precomputedEncoded,
+                     geode::GeodeResidentSlot* residentSlot) {
+    if (residentSlot != nullptr && precomputedEncoded != nullptr) {
+      encoder->fillPathResident(*residentSlot, *precomputedEncoded, color, rule);
+    } else {
+      encoder->fillPath(drawPath, color, rule, precomputedEncoded);
+    }
+  }
+
   /// Pack a 2D affine into the 8-float wire format the shader expects
   /// (two `vec4f` rows, `(a, c, e, 0)` / `(b, d, f, 0)` - see
   /// `struct InstanceTransform` in `shaders/slug_fill.wgsl`).
@@ -1633,10 +1676,13 @@ struct RendererGeode::Impl {
 
     if (batch.deviceFromLocalTransforms.size() == 1) {
       // Single draw - restore the captured transform + use the
-      // non-instanced path.
+      // non-instanced path. Wave 2: prefer the persistent-residence path
+      // so an unbatched solid fill re-uploads zero geometry on an
+      // unchanged frame (the common Lion / Tiger case: distinct source
+      // entities never batch, so almost every solid fill flushes here).
       deviceFromLocalTransform = batch.deviceFromLocalTransforms.front();
       syncTransform();
-      encoder->fillPath(*batch.path, batch.color, batch.rule, batch.encoded);
+      emitSolidFill(*batch.path, batch.color, batch.rule, batch.encoded, batch.residentFillSlot);
     } else {
       // Instanced: set encoder transform to identity so the shader's
       // `uniforms.mvp` carries only the orthographic screen-pixel mapping.
@@ -1672,7 +1718,8 @@ struct RendererGeode::Impl {
   /// "batch-compatible" (solid paint, no stroke, has source entity,
   /// has cached fill encode, no in-flight pattern).
   bool tryAppendOrStartBatch(Entity sourceEntity, const Path& path, const css::RGBA& color,
-                             FillRule rule, const geode::EncodedPath* encoded) {
+                             FillRule rule, const geode::EncodedPath* encoded,
+                             geode::GeodeResidentSlot* residentFillSlot) {
     const bool matches = pendingBatch.has_value() && pendingBatch->sourceEntity == sourceEntity &&
                          pendingBatch->color == color && pendingBatch->rule == rule;
     if (matches) {
@@ -1687,6 +1734,7 @@ struct RendererGeode::Impl {
     pendingBatch->rule = rule;
     pendingBatch->encoded = encoded;
     pendingBatch->path = &path;
+    pendingBatch->residentFillSlot = residentFillSlot;
     pendingBatch->deviceFromLocalTransforms.push_back(deviceFromLocalTransform);
     return true;
   }
@@ -1738,6 +1786,15 @@ struct RendererGeode::Impl {
             .strokedEncode = std::move(encoded),
             .strokeFillRule = fillRule,
         };
+        // The stroke encode was rebuilt in place (stroke-param change)
+        // without removing the entity's components, so the entt listener
+        // does not fire. Drop the stale GPU residence explicitly so the
+        // next draw re-uploads the new stroked geometry (design doc 0030
+        // wave 2). The `GeoEncoder` fingerprint guard is a second line of
+        // defense; this keeps the invariant obvious at the mutation site.
+        if (auto* resident = source.try_get<geode::GeodeResidentPathComponent>()) {
+          resident->strokeSlot.reset();
+        }
       }
       result.strokedPath = &cache.strokeSlot->strokedPath;
       result.encoded = &cache.strokeSlot->strokedEncode;
@@ -1764,7 +1821,8 @@ struct RendererGeode::Impl {
   /// `GeodePathEncoder::encode` + `countPathEncode()` pair; otherwise
   /// `GeoEncoder` runs the inline encode path.
   void fillResolved(const Path& path, FillRule rule,
-                    const geode::EncodedPath* precomputedEncoded = nullptr) {
+                    const geode::EncodedPath* precomputedEncoded = nullptr,
+                    geode::GeodeResidentSlot* residentSlot = nullptr) {
     if (!encoder) {
       return;
     }
@@ -1783,15 +1841,17 @@ struct RendererGeode::Impl {
       return;
     }
     const double effectiveOpacity = paint.fillOpacity;
-    drawPaintedPath(path, paint.fill, effectiveOpacity, rule, precomputedEncoded);
+    drawPaintedPath(path, paint.fill, effectiveOpacity, rule, precomputedEncoded, residentSlot);
   }
 
   /// Core dispatch: given a path and a resolved paint server, emit the
   /// appropriate fill call (solid color or gradient).
   void drawPaintedPath(const Path& path, const components::ResolvedPaintServer& server,
                        double effectiveOpacity, FillRule rule,
-                       const geode::EncodedPath* precomputedEncoded = nullptr) {
-    drawPaintedPathAgainst(path, path, server, effectiveOpacity, rule, precomputedEncoded);
+                       const geode::EncodedPath* precomputedEncoded = nullptr,
+                       geode::GeodeResidentSlot* residentSlot = nullptr) {
+    drawPaintedPathAgainst(path, path, server, effectiveOpacity, rule, precomputedEncoded,
+                           residentSlot);
   }
 
   /// Same as `drawPaintedPath`, but the gradient's objectBoundingBox is
@@ -1803,7 +1863,8 @@ struct RendererGeode::Impl {
   void drawPaintedPathAgainst(const Path& geometryPath, const Path& drawPath,
                               const components::ResolvedPaintServer& server,
                               double effectiveOpacity, FillRule rule,
-                              const geode::EncodedPath* precomputedEncoded = nullptr) {
+                              const geode::EncodedPath* precomputedEncoded = nullptr,
+                              geode::GeodeResidentSlot* residentSlot = nullptr) {
     if (!encoder || drawPath.empty()) {
       return;
     }
@@ -1817,8 +1878,8 @@ struct RendererGeode::Impl {
     // Solid color: straight through the flat fill pipeline.
     if (const auto* solid = std::get_if<PaintServer::Solid>(&server)) {
       syncTransform();
-      encoder->fillPath(drawPath, solid->color.resolve(currentColor, opacity), rule,
-                        precomputedEncoded);
+      emitSolidFill(drawPath, solid->color.resolve(currentColor, opacity), rule, precomputedEncoded,
+                    residentSlot);
       return;
     }
 
@@ -1858,7 +1919,7 @@ struct RendererGeode::Impl {
           // SVG2 degenerate radial (r=0): paint the last stop color as a
           // solid fill so the element remains visible.
           syncTransform();
-          encoder->fillPath(drawPath, *radial->solidFallback, rule, precomputedEncoded);
+          emitSolidFill(drawPath, *radial->solidFallback, rule, precomputedEncoded, residentSlot);
           return;
         }
         // Recognized as radial but otherwise unusable (empty stops, focal
@@ -1877,8 +1938,8 @@ struct RendererGeode::Impl {
       // solid fallback color if one was declared, otherwise drop the draw.
       if (ref->fallback.has_value()) {
         syncTransform();
-        encoder->fillPath(drawPath, ref->fallback->resolve(currentColor, opacity), rule,
-                          precomputedEncoded);
+        emitSolidFill(drawPath, ref->fallback->resolve(currentColor, opacity), rule,
+                      precomputedEncoded, residentSlot);
         return;
       }
 
@@ -2043,6 +2104,13 @@ void RendererGeode::Impl::onComputedPathChanged(Registry& registry, Entity entit
   // entt allows `remove` on a component the entity doesn't hold - it's a
   // cheap no-op in that case. We don't need an `all_of` guard.
   registry.remove<geode::GeodePathCacheComponent>(entity);
+  // Wave 2: drop the GPU residence in lock-step with the CPU encode cache.
+  // Removing the component runs `GeodeResidentSlot::reset()`, which frees
+  // the persistent buffer and settles the live-bytes gauge. This fires on
+  // geometry change (on_update) and entity/registry teardown (on_destroy),
+  // both after the previous frame's submit, so destroying the buffer is
+  // safe (wgpu-native keeps submitted resources alive until GPU-complete).
+  registry.remove<geode::GeodeResidentPathComponent>(entity);
 }
 
 RendererGeode::RendererGeode(bool verbose) : impl_(std::make_unique<Impl>()) {
@@ -3685,12 +3753,23 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
                          std::holds_alternative<PaintServer::Solid>(impl_->paint.fill) &&
                          !impl_->patternFillPaint.has_value() && impl_->encoder != nullptr &&
                          impl_->paint.drawFillComponent;
+
+  // Wave 2 GPU residence: a persistent per-entity fill slot, eligible for
+  // any solid fill with a cached encode. Shared by the batch size-1 flush
+  // and the direct `fillResolved` path so almost every solid fill (which
+  // never batches across distinct source entities) re-uploads zero
+  // geometry on an unchanged frame.
+  geode::GeodeResidentSlot* residentFill =
+      (fillEncoded != nullptr && std::holds_alternative<PaintServer::Solid>(impl_->paint.fill))
+          ? impl_->residentFillSlot(path.sourceEntity)
+          : nullptr;
+
   if (batchable) {
     const auto& solid = std::get<PaintServer::Solid>(impl_->paint.fill);
     const css::RGBA color = solid.color.resolve(impl_->paint.currentColor.rgba(),
                                                 static_cast<float>(impl_->paint.fillOpacity));
     impl_->tryAppendOrStartBatch(path.sourceEntity.entity(), path.path, color, path.fillRule,
-                                 fillEncoded);
+                                 fillEncoded, residentFill);
     return;
   }
 
@@ -3701,7 +3780,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // the fill on stroke-only passes so Geode reorders rather than double-paints.
   // Both default to true, so this is a no-op for ordinary fill-then-stroke draws.
   if (impl_->paint.drawFillComponent) {
-    impl_->fillResolved(path.path, path.fillRule, fillEncoded);
+    impl_->fillResolved(path.path, path.fillRule, fillEncoded, residentFill);
     if (impl_->debugGeometryOverlay &&
         !std::holds_alternative<PaintServer::None>(impl_->paint.fill)) {
       if (fillEncoded != nullptr) {
@@ -3784,8 +3863,14 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // `strokedOutline.bounds()` here).
   const double effectiveOpacity = impl_->paint.strokeOpacity;
   auto strokeServer = impl_->paint.stroke;
+  // Wave 2 GPU residence for solid strokes (the stroked outline is a solid
+  // fill of the cached stroke encode).
+  geode::GeodeResidentSlot* residentStroke =
+      (strokeDerived.encoded != nullptr && std::holds_alternative<PaintServer::Solid>(strokeServer))
+          ? impl_->residentStrokeSlot(path.sourceEntity)
+          : nullptr;
   impl_->drawPaintedPathAgainst(path.path, strokedOutline, strokeServer, effectiveOpacity,
-                                strokeDerived.fillRule, strokeDerived.encoded);
+                                strokeDerived.fillRule, strokeDerived.encoded, residentStroke);
   if (impl_->debugGeometryOverlay) {
     impl_->drawStrokeOverlay(strokedOutline, strokeDerived);
   }

@@ -2,6 +2,7 @@
 /// @file
 /// RAII wrapper around a WebGPU device - headless or host-provided.
 
+#include <atomic>
 #include <memory>
 #include <vector>
 #include <webgpu/webgpu.hpp>
@@ -260,6 +261,28 @@ public:
     if (counters_) counters_->textureWriteBytes += bytes;
   }
 
+  /// Shared live-resident-bytes gauge (design doc 0030 wave 2: GPU
+  /// residence). Co-owned with each `GeodeResidentSlot`'s buffer so
+  /// resident-memory accounting stays lifetime-safe even if a document
+  /// (and its ECS registry) outlives this device. Lazily created on first
+  /// access. `GeoEncoder` bumps it when a slot gains residence; the slot
+  /// decrements it on reset / destruction (geometry change or document
+  /// teardown), which is the eviction signal for "many distinct
+  /// documents".
+  const std::shared_ptr<std::atomic<int64_t>>& residentBytesGauge() const {
+    if (!residentBytesGauge_) {
+      residentBytesGauge_ = std::make_shared<std::atomic<int64_t>>(0);
+    }
+    return residentBytesGauge_;
+  }
+
+  /// Current live resident-geometry bytes across every `GeodeResidentSlot`
+  /// buffer created against this device. Zero at construction and after
+  /// all resident documents are torn down; used by eviction tests.
+  int64_t liveResidentBytesForTesting() const {
+    return residentBytesGauge_ ? residentBytesGauge_->load(std::memory_order_relaxed) : 0;
+  }
+
   /**
    * Whether the driver supports GPU timestamp queries. Always false
    * today - reserved for future work (design doc 0030, "Future Work").
@@ -384,6 +407,11 @@ private:
   // (the caller is reporting, not mutating visible state).
   mutable uint64_t lifetimeTextureCreates_ = 0;
   mutable uint64_t lifetimeBufferCreates_ = 0;
+
+  // Shared live-resident-bytes gauge (design doc 0030 wave 2). Mutable +
+  // lazily created so `residentBytesGauge()` stays const like the other
+  // reporting accessors.
+  mutable std::shared_ptr<std::atomic<int64_t>> residentBytesGauge_;
 
   // Deferred-destroy queues: resources enqueued via deferDestroy() are held
   // alive until drainDeferredDestroys() drops them at the next frame boundary.

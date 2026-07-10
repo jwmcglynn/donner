@@ -69,6 +69,19 @@ donner_cc_library(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
+# Header-only ECS component for wave-2 GPU residence: persistent per-entity
+# GPU buffers for cached encoded paths. See design doc 0030 (wave 2).
+donner_cc_library(
+    name = "geode_resident_path_component",
+    hdrs = ["GeodeResidentPathComponent.h"],
+    target_compatible_with = _GEODE_ONLY,
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+    deps = [
+        ":geode_wgpu_util",
+        "//third_party/webgpu-cpp:webgpu_cpp",
+    ],
+)
+
 donner_cc_test(
     name = "geode_path_encoder_tests",
     srcs = ["tests/GeodePathEncoder_tests.cc"],
@@ -511,6 +524,7 @@ donner_cc_library(
     deps = [
         ":geode_device",
         ":geode_path_encoder",
+        ":geode_resident_path_component",
         ":geode_texture_encoder",
         "//donner/base",
         "//donner/css",

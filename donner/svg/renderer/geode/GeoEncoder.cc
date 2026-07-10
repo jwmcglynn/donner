@@ -9,6 +9,7 @@
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePathEncoder.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
+#include "donner/svg/renderer/geode/GeodeResidentPathComponent.h"
 #include "donner/svg/renderer/geode/GeodeTextureEncoder.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "donner/svg/resources/ImageResource.h"
@@ -21,6 +22,11 @@ namespace {
 /// multiples of 4 for COPY_SRC/COPY_DST operations).
 constexpr uint64_t roundUp4(uint64_t size) {
   return (size + 3u) & ~uint64_t{3u};
+}
+
+/// Round `value` up to a multiple of `alignment` (a power of two).
+constexpr uint64_t alignUp(uint64_t value, uint64_t alignment) {
+  return (value + alignment - 1u) & ~(alignment - 1u);
 }
 
 // WebGPU binding offset alignment requirements for the per-draw arenas
@@ -362,6 +368,46 @@ struct GeoEncoder::Impl {
       return allocInArena(arena, &kZero, sizeof(kZero), kStorageOffsetAlignment);
     }
     return allocInArena(arena, data, roundUp4(byteCount), kStorageOffsetAlignment);
+  }
+
+  // ---- GPU residence (design doc 0030 wave 2) ------------------------
+  // Defined out-of-line below `FillDrawArgs` (they reference it). See the
+  // `GeodeResidentSlot` header and `submitResidentFillDraw` for the flow.
+
+  /// Populate a solid-fill `Uniforms` block from `args` + `encoded`. The
+  /// single source of truth shared by the arena `submitFillDraw` and the
+  /// resident `submitResidentFillDraw`, so a path that flips between the
+  /// two paths (clip toggling) produces byte-identical uniforms.
+  void populateFillUniform(Uniforms& u, const EncodedPath& encoded, const FillDrawArgs& args);
+
+  /// (Re)upload `encoded` into `slot`'s persistent combined buffer and
+  /// reset its cached bind group. Bumps `bufferCreates` + one
+  /// `bufferWrite` (geometry only; the uniform is written separately).
+  void uploadResidentGeometry(GeodeResidentSlot& slot, const EncodedPath& encoded);
+
+  /// Build + cache the twelve-entry fill bind group for `slot` (all
+  /// bindings reference `slot.buffer` sub-ranges + device dummies).
+  void buildResidentBindGroup(GeodeResidentSlot& slot);
+
+  /// Resident solid-fill draw: ensure geometry residence, rewrite the
+  /// uniform only if it changed, reuse the cached bind group, and record
+  /// the draw. Steady-state (unchanged) frame: zero writes, zero bind
+  /// group creates.
+  void submitResidentFillDraw(GeodeResidentSlot& slot, const EncodedPath& encoded,
+                              const FillDrawArgs& args);
+
+  /// Cheap size fingerprint of an encode, used alongside the
+  /// `EncodedPath*` address to defend a resident slot against a missed
+  /// invalidation (e.g. the in-place stroke-slot rebuild).
+  static uint64_t residentFingerprint(const EncodedPath& e) {
+    uint64_t h = e.quadVertices.size();
+    h = h * 1000003u + e.bands.size();
+    h = h * 1000003u + e.curves.size();
+    h = h * 1000003u + e.vBands.size();
+    h = h * 1000003u + e.vCurves.size();
+    h = h * 1000003u + e.hBandGrid.size();
+    h = h * 1000003u + e.vBandGrid.size();
+    return h;
   }
 
   /// Upload the analytic dual-ray buffers + grid params for a gradient draw,
@@ -1236,6 +1282,232 @@ void GeoEncoder::fillPath(const Path& path, const css::RGBA& color, FillRule rul
   submitFillDraw(args);
 }
 
+// ============================================================================
+// GPU residence (design doc 0030 wave 2)
+// ============================================================================
+
+void GeoEncoder::Impl::populateFillUniform(Uniforms& u, const EncodedPath& encoded,
+                                           const FillDrawArgs& args) {
+  buildMvp(u.mvp);
+  affineToMat4(args.patternFromPath, u.patternFromPath);
+  u.viewport[0] = static_cast<float>(targetWidth);
+  u.viewport[1] = static_cast<float>(targetHeight);
+  u.tileSize[0] = static_cast<float>(args.tileSize.x);
+  u.tileSize[1] = static_cast<float>(args.tileSize.y);
+  u.color[0] = args.solidColor[0];
+  u.color[1] = args.solidColor[1];
+  u.color[2] = args.solidColor[2];
+  u.color[3] = args.solidColor[3];
+  u.fillRule = (args.rule == FillRule::EvenOdd) ? 1u : 0u;
+  u.paintMode = args.paintMode;
+  u.patternOpacity = args.patternOpacity;
+  writeClipPolygonUniforms(u.hasClipPolygon, u.clipPolygonPlanes);
+  u.hasClipMask = activeClipMaskView ? 1u : 0u;
+  u.gridYBase = encoded.yBase;
+  u.gridHStride = encoded.hStride;
+  u.gridHBandCount = encoded.hBandCount;
+  u.gridXBase = encoded.xBase;
+  u.gridVStride = encoded.vStride;
+  u.gridVBandCount = encoded.vBandCount;
+}
+
+void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const EncodedPath& encoded) {
+  // Drop any previous residence (first upload, or a re-upload after the
+  // stroke slot rebuilt in place). Frees the old buffer and settles the
+  // live-bytes gauge before we account the new allocation.
+  slot.reset();
+
+  const uint64_t vBytes = encoded.quadVertices.size() * sizeof(EncodedPath::Vertex);
+  const uint64_t bandsBytes = encoded.bands.size() * sizeof(EncodedPath::Band);
+  const uint64_t curvesBytes = encoded.curves.size() * 6u * sizeof(float);
+  const uint64_t vBandsBytes = encoded.vBands.size() * sizeof(EncodedPath::Band);
+  const uint64_t vCurvesBytes = encoded.vCurves.size() * 6u * sizeof(float);
+  const uint64_t hGridBytes = encoded.hBandGrid.size() * sizeof(uint32_t);
+  const uint64_t vGridBytes = encoded.vBandGrid.size() * sizeof(uint32_t);
+
+  // Lay out the combined buffer. Each storage region's offset satisfies
+  // `kStorageOffsetAlignment`; the vertex region needs 4-byte alignment;
+  // the uniform region needs `kUniformOffsetAlignment`. Empty storage
+  // regions reserve a 4-byte zero-filled dummy slot (the shader's
+  // band-count gate never dereferences them), mirroring the arena
+  // `allocStorageOrDummy` dummy.
+  uint64_t cursor = 0;
+  auto place = [&](GeodeResidentSlot::Region& r, uint64_t bytes, uint64_t alignment,
+                   bool storageDummy) {
+    cursor = alignUp(cursor, alignment);
+    r.offset = cursor;
+    r.size = (storageDummy && bytes == 0) ? uint64_t{4} : roundUp4(bytes);
+    cursor += r.size;
+  };
+  place(slot.vertex, vBytes, kVertexOffsetAlignment, /*storageDummy=*/false);
+  place(slot.bands, bandsBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
+  place(slot.curves, curvesBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
+  place(slot.vBands, vBandsBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
+  place(slot.vCurves, vCurvesBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
+  place(slot.hGrid, hGridBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
+  place(slot.vGrid, vGridBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
+  place(slot.uniform, sizeof(Uniforms), kUniformOffsetAlignment, /*storageDummy=*/false);
+
+  const uint64_t totalSize = cursor;
+  const uint64_t geometrySize = slot.uniform.offset;  // everything before the uniform.
+
+  wgpu::BufferDescriptor desc = {};
+  desc.label = wgpuLabel("GeodeResidentPath");
+  desc.size = totalSize;
+  desc.usage = wgpu::BufferUsage::Vertex | wgpu::BufferUsage::Storage |
+               wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
+  slot.buffer.reset(device->device().createBuffer(desc));
+  device->countBuffer();
+
+  // Assemble the geometry portion in one zero-filled staging blob so
+  // padding + dummy regions read as zero, then upload it in a single
+  // `writeBuffer`. The uniform region is written separately by the draw
+  // path (so a camera/color-only change rewrites just 288 bytes).
+  std::vector<uint8_t> staging(geometrySize, 0u);
+  auto blit = [&](const GeodeResidentSlot::Region& r, const void* data, uint64_t bytes) {
+    if (bytes > 0) {
+      std::memcpy(staging.data() + r.offset, data, bytes);
+    }
+  };
+  blit(slot.vertex, encoded.quadVertices.data(), vBytes);
+  blit(slot.bands, encoded.bands.data(), bandsBytes);
+  blit(slot.curves, encoded.curves.data(), curvesBytes);
+  blit(slot.vBands, encoded.vBands.data(), vBandsBytes);
+  blit(slot.vCurves, encoded.vCurves.data(), vCurvesBytes);
+  blit(slot.hGrid, encoded.hBandGrid.data(), hGridBytes);
+  blit(slot.vGrid, encoded.vBandGrid.data(), vGridBytes);
+
+  device->queue().writeBuffer(slot.buffer.get(), 0, staging.data(), geometrySize);
+  device->countBufferWrite(geometrySize);
+
+  slot.vertexCount = static_cast<uint32_t>(encoded.quadVertices.size());
+  slot.resident = true;
+  slot.lastUniform.clear();  // Force the first uniform write below.
+
+  slot.liveBytesGauge = device->residentBytesGauge();
+  slot.accountedBytes = static_cast<int64_t>(totalSize);
+  slot.liveBytesGauge->fetch_add(slot.accountedBytes, std::memory_order_relaxed);
+}
+
+void GeoEncoder::Impl::buildResidentBindGroup(GeodeResidentSlot& slot) {
+  const wgpu::Device& dev = device->device();
+  const wgpu::Buffer& buf = slot.buffer.get();
+
+  wgpu::BindGroupEntry entries[12] = {};
+  auto bufEntry = [&](int i, uint32_t binding, const GeodeResidentSlot::Region& r) {
+    entries[i].binding = binding;
+    entries[i].buffer = buf;
+    entries[i].offset = r.offset;
+    entries[i].size = r.size;
+  };
+  bufEntry(0, 0, slot.uniform);
+  bufEntry(1, 1, slot.bands);
+  bufEntry(2, 2, slot.curves);
+  entries[3].binding = 3;
+  entries[3].textureView = device->dummyPatternTextureView();
+  entries[4].binding = 4;
+  entries[4].sampler = device->dummyPatternSampler();
+  // Residence is only taken with no active clip, so the clip-mask slot is
+  // always the device's identity-coverage dummy - bind it directly so the
+  // cached bind group is deterministic.
+  entries[5].binding = 5;
+  entries[5].textureView = device->dummyClipMaskTextureView();
+  entries[6].binding = 6;
+  entries[6].sampler = device->dummyClipMaskSampler();
+  entries[7].binding = 7;
+  entries[7].buffer = device->identityInstanceTransformBuffer();
+  entries[7].offset = 0;
+  entries[7].size = 32u;
+  bufEntry(8, 8, slot.vBands);
+  bufEntry(9, 9, slot.vCurves);
+  bufEntry(10, 10, slot.hGrid);
+  bufEntry(11, 11, slot.vGrid);
+
+  wgpu::BindGroupDescriptor bgDesc = {};
+  bgDesc.label = wgpuLabel("GeodeResidentBindGroup");
+  bgDesc.layout = pipeline->bindGroupLayout();
+  bgDesc.entryCount = 12;
+  bgDesc.entries = entries;
+  slot.bindGroup.reset(dev.createBindGroup(bgDesc));
+  device->countBindGroup();
+}
+
+void GeoEncoder::Impl::submitResidentFillDraw(GeodeResidentSlot& slot, const EncodedPath& encoded,
+                                              const FillDrawArgs& args) {
+  ensurePassOpen();
+  bindSolidPipeline();
+
+  // Ensure the geometry is resident and current. Component removal is the
+  // primary invalidation; the pointer + fingerprint guard catches the
+  // in-place stroke-slot rebuild (which replaces the encode contents
+  // without removing the component).
+  const uint64_t fingerprint = residentFingerprint(encoded);
+  const bool needUpload = !slot.resident || !slot.buffer || slot.encodedKey != &encoded ||
+                          slot.encodedFingerprint != fingerprint;
+  if (needUpload) {
+    uploadResidentGeometry(slot, encoded);
+    slot.encodedKey = &encoded;
+    slot.encodedFingerprint = fingerprint;
+  }
+
+  // Rewrite the uniform only when it actually changed. A static
+  // re-render (same viewport, same paint) produces byte-identical
+  // uniforms, so this write is skipped entirely and the frame emits zero
+  // buffer writes.
+  Uniforms u = {};
+  populateFillUniform(u, encoded, args);
+  const auto* uBytes = reinterpret_cast<const uint8_t*>(&u);
+  if (slot.lastUniform.size() != sizeof(Uniforms) ||
+      std::memcmp(slot.lastUniform.data(), uBytes, sizeof(Uniforms)) != 0) {
+    device->queue().writeBuffer(slot.buffer.get(), slot.uniform.offset, &u, sizeof(Uniforms));
+    device->countBufferWrite(sizeof(Uniforms));
+    slot.lastUniform.assign(uBytes, uBytes + sizeof(Uniforms));
+  }
+
+  if (!slot.bindGroup) {
+    buildResidentBindGroup(slot);
+  }
+
+  pass.get().setVertexBuffer(0, slot.buffer.get(), slot.vertex.offset, slot.vertex.size);
+  pass.get().setBindGroup(0, slot.bindGroup.get(), 0, nullptr);
+  pass.get().draw(slot.vertexCount, 1, 0, 0);
+  device->countDraw();
+}
+
+void GeoEncoder::fillPathResident(GeodeResidentSlot& slot, const EncodedPath& encoded,
+                                  const css::RGBA& color, FillRule rule) {
+  if (encoded.empty()) {
+    return;
+  }
+
+  // Build the same solid-fill args `fillPath` would, so both paths share
+  // `populateFillUniform` and the fallback stays bit-exact.
+  FillDrawArgs args = {};
+  args.path = nullptr;
+  args.rule = rule;
+  args.precomputedEncoded = &encoded;
+  args.paintMode = 0u;
+  const float alpha = color.a / 255.0f;
+  args.solidColor[0] = (color.r / 255.0f) * alpha;
+  args.solidColor[1] = (color.g / 255.0f) * alpha;
+  args.solidColor[2] = (color.b / 255.0f) * alpha;
+  args.solidColor[3] = alpha;
+  args.patternOpacity = 1.0f;
+  args.patternView = impl_->device->dummyPatternTextureView();
+  args.patternSampler = impl_->device->dummyPatternSampler();
+  args.tileSize = Vector2d(1.0, 1.0);
+  args.patternFromPath = Transform2d();
+
+  // Residence is only safe (bind group stable, uniform clip flags zero)
+  // when no clip mask / clip polygon / mask pass is active. Otherwise fall
+  // back to the wave-1 arena path so clipped / masked draws stay exact.
+  if (impl_->activeClipMaskView || impl_->clipPolygonActive || impl_->maskPassOpen) {
+    submitFillDraw(args);
+    return;
+  }
+  impl_->submitResidentFillDraw(slot, encoded, args);
+}
+
 void GeoEncoder::fillPathInstanced(const EncodedPath& encoded, const css::RGBA& color,
                                    FillRule rule, std::span<const float> instanceTransforms) {
   if (encoded.empty() || instanceTransforms.empty()) {
@@ -1368,29 +1640,10 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
                                                      encoded.vBandGrid.size() * sizeof(uint32_t));
 
   // Uniform buffer - still per-draw today; Milestone 1.f lifts it into
-  // a ring buffer with dynamic offsets.
+  // a ring buffer with dynamic offsets. `populateFillUniform` is shared
+  // with the resident fill path so both produce byte-identical uniforms.
   Uniforms u = {};
-  impl_->buildMvp(u.mvp);
-  affineToMat4(args.patternFromPath, u.patternFromPath);
-  u.viewport[0] = static_cast<float>(impl_->targetWidth);
-  u.viewport[1] = static_cast<float>(impl_->targetHeight);
-  u.tileSize[0] = static_cast<float>(args.tileSize.x);
-  u.tileSize[1] = static_cast<float>(args.tileSize.y);
-  u.color[0] = args.solidColor[0];
-  u.color[1] = args.solidColor[1];
-  u.color[2] = args.solidColor[2];
-  u.color[3] = args.solidColor[3];
-  u.fillRule = (args.rule == FillRule::EvenOdd) ? 1u : 0u;
-  u.paintMode = args.paintMode;
-  u.patternOpacity = args.patternOpacity;
-  impl_->writeClipPolygonUniforms(u.hasClipPolygon, u.clipPolygonPlanes);
-  u.hasClipMask = impl_->activeClipMaskView ? 1u : 0u;
-  u.gridYBase = encoded.yBase;
-  u.gridHStride = encoded.hStride;
-  u.gridHBandCount = encoded.hBandCount;
-  u.gridXBase = encoded.xBase;
-  u.gridVStride = encoded.vStride;
-  u.gridVBandCount = encoded.vBandCount;
+  impl_->populateFillUniform(u, encoded, args);
 
   const auto uniAlloc =
       impl_->allocInArena(impl_->uniformArena, &u, sizeof(Uniforms), kUniformOffsetAlignment);

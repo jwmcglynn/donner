@@ -24,6 +24,7 @@ struct ImageResource;
 namespace donner::geode {
 
 struct EncodedPath;
+struct GeodeResidentSlot;
 
 class GeodeBufferPool;
 class GeodeDevice;
@@ -429,6 +430,37 @@ public:
   ///   counter bump.
   void fillPath(const Path& path, const css::RGBA& color, FillRule rule,
                 const EncodedPath* precomputedEncoded = nullptr);
+
+  /**
+   * Solid fill of a cached path with persistent GPU residence (design doc
+   * 0030 wave 2: GPU residence).
+   *
+   * `slot` is a per-entity `GeodeResidentSlot` (owned by
+   * `GeodeResidentPathComponent`, invalidated by the same
+   * `ComputedPathComponent` listener that clears the M2 encode cache). On
+   * first use the encoder uploads `encoded` into a persistent combined
+   * Vertex|Storage|Uniform buffer and builds a cached bind group; on every
+   * subsequent unchanged frame it re-uses both and writes zero geometry
+   * bytes. Only the 288-byte per-draw uniform is rewritten, and only when
+   * it actually changed (camera/color move), so a static document's
+   * steady-state frame writes ~zero bytes and creates zero bind groups.
+   *
+   * Residency is taken ONLY for the fast, cacheable case: no active clip
+   * mask, no clip polygon, no open mask pass. When any of those hold the
+   * call transparently falls back to the wave-1 arena path (a fresh
+   * per-draw bind group) so clipped / masked draws stay bit-exact.
+   *
+   * @param slot Persistent residence for this entity's fill or stroke
+   *   encode. Must outlive the frame's submit (it does: the ECS component
+   *   is only removed on geometry change, after the prior frame submitted).
+   * @param encoded Cached encode (stable across frames). Must be non-empty
+   *   for a draw to land.
+   * @param color Solid fill color (NOT premultiplied - premultiplied here,
+   *   identically to `fillPath`).
+   * @param rule Fill rule.
+   */
+  void fillPathResident(GeodeResidentSlot& slot, const EncodedPath& encoded,
+                        const css::RGBA& color, FillRule rule);
 
   /**
    * Fill N copies of the same encoded path at N different affine
