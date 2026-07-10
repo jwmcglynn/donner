@@ -288,21 +288,6 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
     result.vBandCount = vBandCount;
   }
 
-  // Legacy per-band bounding quads (2 triangles = 6 vertices each) for the 4-sample
-  // alpha-coverage gradient/mask shaders.
-  result.vertices.reserve(result.bands.size() * 6);
-  for (size_t i = 0; i < result.bands.size(); ++i) {
-    const auto& band = result.bands[i];
-    const auto bandIdx = static_cast<uint32_t>(i);
-    // Quad corners with outward normals for the vertex-shader half-pixel dilation.
-    result.vertices.push_back({band.xMin, band.yMin, -1.0f, -1.0f, bandIdx});
-    result.vertices.push_back({band.xMax, band.yMin, 1.0f, -1.0f, bandIdx});
-    result.vertices.push_back({band.xMax, band.yMax, 1.0f, 1.0f, bandIdx});
-    result.vertices.push_back({band.xMin, band.yMin, -1.0f, -1.0f, bandIdx});
-    result.vertices.push_back({band.xMax, band.yMax, 1.0f, 1.0f, bandIdx});
-    result.vertices.push_back({band.xMin, band.yMax, -1.0f, 1.0f, bandIdx});
-  }
-
   // Single bounding quad over the whole path for the analytic dual-ray fill shader.
   // One quad → each pixel shaded once → folded coverage composes (no seam double-count).
   {

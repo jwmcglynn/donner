@@ -4,6 +4,7 @@
 #include <cstring>
 #include <vector>
 
+#include "donner/svg/renderer/geode/GeodeBufferPool.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePathEncoder.h"
@@ -250,7 +251,23 @@ struct GeoEncoder::Impl {
   /// since the binding is storage read-only.
   Arena instanceTransformArena;
 
+  /// Optional cross-frame buffer pool (owned by `RendererGeode::Impl`).
+  /// When set, arena growth prefers recycled buffers and arena teardown
+  /// returns the fully-grown buffers instead of destroying them. See
+  /// `GeodeBufferPool` and design doc 0030 M1.
+  GeodeBufferPool* bufferPool = nullptr;
+
   void destroyArenaBackings(Arena& arena) {
+    // With a pool installed, the current (largest, fully-grown) buffer
+    // is recycled for the next frame's encoders instead of destroyed.
+    // Retired buffers are the outgrown smaller generations - steady
+    // state has none - so they are destroyed as before. Safe because
+    // encoder destruction only happens after the commands referencing
+    // these buffers were submitted (same invariant the eager destroy
+    // below already relies on).
+    if (bufferPool != nullptr && arena.buffer) {
+      bufferPool->release(std::move(arena.buffer), arena.usage, arena.label, arena.capacity);
+    }
     DestroyResourceBacking(arena.buffer);
     arena.buffer.reset();
     for (ScopedWgpuHandle<wgpu::Buffer>& buffer : arena.retired) {
@@ -303,13 +320,27 @@ struct GeoEncoder::Impl {
       constexpr uint64_t kMinGrow = uint64_t{64} * 1024;
       uint64_t newCap = std::max(arena.capacity * 2u, kMinGrow);
       while (newCap < size) newCap *= 2;
-      wgpu::BufferDescriptor desc = {};
-      desc.label = wgpuLabel(arena.label);
-      desc.size = newCap;
-      desc.usage = arena.usage;
-      arena.buffer.reset(device->device().createBuffer(desc));
-      device->countBuffer();
-      arena.capacity = newCap;
+      // Prefer a pooled buffer recycled from a previous frame's encoder
+      // (design doc 0030 M1: steady-state bufferCreates -> 0). Falls
+      // back to a fresh allocation when the pool has no fit.
+      if (bufferPool != nullptr) {
+        uint64_t pooledCapacity = 0;
+        ScopedWgpuHandle<wgpu::Buffer> pooled =
+            bufferPool->acquire(arena.usage, arena.label, newCap, &pooledCapacity);
+        if (pooled) {
+          arena.buffer = std::move(pooled);
+          arena.capacity = pooledCapacity;
+        }
+      }
+      if (!arena.buffer) {
+        wgpu::BufferDescriptor desc = {};
+        desc.label = wgpuLabel(arena.label);
+        desc.size = newCap;
+        desc.usage = arena.usage;
+        arena.buffer.reset(device->device().createBuffer(desc));
+        device->countBuffer();
+        arena.capacity = newCap;
+      }
       arena.offset = 0;
       alignedOffset = 0;
     }
@@ -1124,6 +1155,10 @@ void GeoEncoder::setClipMask(const wgpu::Texture& maskTexture, const wgpu::Textu
 void GeoEncoder::clearClipMask() {
   impl_->activeClipMaskView = wgpu::TextureView{};
   impl_->activeClipMaskTexture = wgpu::Texture{};
+}
+
+void GeoEncoder::setBufferPool(GeodeBufferPool* pool) {
+  impl_->bufferPool = pool;
 }
 
 void GeoEncoder::setLoadPreserve() {

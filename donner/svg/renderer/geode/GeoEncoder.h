@@ -25,6 +25,7 @@ namespace donner::geode {
 
 struct EncodedPath;
 
+class GeodeBufferPool;
 class GeodeDevice;
 class GeodeImagePipeline;
 class GeodePipeline;
@@ -173,6 +174,19 @@ public:
              wgpu::CommandEncoder sharedCommandEncoder);
 
   ~GeoEncoder();
+
+  /**
+   * Install a cross-frame buffer pool (design doc 0030 M1). When set,
+   * arena buffer growth prefers recycled buffers from the pool and the
+   * destructor returns the fully-grown arena buffers to it instead of
+   * destroying them, driving steady-state per-frame `bufferCreates`
+   * toward zero.
+   *
+   * Call before the first draw. The pool (typically owned by
+   * `RendererGeode::Impl`) must outlive this encoder. Pass `nullptr`
+   * to disable (default).
+   */
+  void setBufferPool(GeodeBufferPool* pool);
 
   GeoEncoder(const GeoEncoder&) = delete;
   GeoEncoder& operator=(const GeoEncoder&) = delete;
