@@ -174,7 +174,14 @@ Path TextBackendSimple::glyphOutline(FontHandle font, int glyphIndex, float scal
   stbtt_vertex* vertices = nullptr;
   const int numVertices = stbtt_GetGlyphShape(info, glyphIndex, &vertices);
 
-  if (numVertices <= 0 || vertices == nullptr) {
+  if (numVertices <= 0) {
+    if (vertices != nullptr) {
+      stbtt_FreeShape(info, vertices);
+    }
+    return {};
+  }
+
+  if (vertices == nullptr) {
     return {};
   }
 
