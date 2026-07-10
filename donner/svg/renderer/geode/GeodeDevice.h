@@ -198,6 +198,22 @@ public:
   uint32_t sampleCount() const { return 1u; }
 
   /**
+   * Process-unique identity for this device instance, assigned at
+   * construction from a monotonic counter (never reused, starts at 1).
+   *
+   * Used by GPU-residence slots (design doc 0030 wave 2) to detect when a
+   * cached buffer / bind group belongs to a DIFFERENT device than the one
+   * now rendering: a document (and its ECS `GeodeResidentPathComponent`s)
+   * can outlive the device that filled them and later be rendered by a
+   * second `RendererGeode` / `GeodeDevice`. WebGPU rejects cross-device
+   * resources inside a render pass, so a slot whose stored id does not match
+   * `deviceId()` is treated as non-resident and re-uploaded. A monotonic
+   * counter (rather than a raw `this` pointer) avoids the ABA hazard of a
+   * freed device's address being recycled by a later allocation.
+   */
+  uint64_t deviceId() const { return deviceId_; }
+
+  /**
    * Install a `GeodeCounters` struct for this device. Non-owning; the
    * caller must keep the struct alive for as long as the device might
    * increment it. Pass `nullptr` to disable instrumentation.
@@ -398,6 +414,9 @@ private:
   /// True when this device was created via CreateFromExternal(). The destructor
   /// skips releasing the instance/adapter since the host owns them.
   bool external_ = false;
+
+  /// Process-unique identity assigned at construction. See `deviceId()`.
+  const uint64_t deviceId_ = 0;
 
   GeodeCounters* counters_ = nullptr;
 

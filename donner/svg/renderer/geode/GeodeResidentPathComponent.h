@@ -85,6 +85,17 @@ struct GeodeResidentSlot {
   /// once per frame (Tiger / Lion). Sentinel `~0` means "never drawn".
   uint64_t lastResidentFrame = ~uint64_t{0};
 
+  /// Process-unique id (see `GeodeDevice::deviceId()`) of the device that
+  /// created `buffer` / `bindGroup`. A document's ECS residence components
+  /// can outlive the device that filled them and later be rendered by a
+  /// second `RendererGeode` / `GeodeDevice`; WebGPU rejects a bind group or
+  /// buffer from device A inside device B's render pass. When this id does
+  /// not match the current device at draw time the slot is treated as
+  /// non-resident and re-uploaded onto the current device (the stale handles
+  /// are released without touching the old device). `0` means "no device
+  /// owns this slot yet".
+  uint64_t owningDeviceId = 0;
+
   /// True once `buffer` + `bindGroup` hold the current encode. Cleared
   /// when the slot is reset or when a re-upload is required.
   bool resident = false;
@@ -133,12 +144,14 @@ struct GeodeResidentSlot {
       resident = other.resident;
       encodedKey = other.encodedKey;
       encodedFingerprint = other.encodedFingerprint;
+      owningDeviceId = other.owningDeviceId;
       lastUniform = std::move(other.lastUniform);
       liveBytesGauge = std::move(other.liveBytesGauge);
       accountedBytes = other.accountedBytes;
       other.accountedBytes = 0;
       other.resident = false;
       other.encodedKey = nullptr;
+      other.owningDeviceId = 0;
     }
     return *this;
   }
@@ -149,19 +162,28 @@ struct GeodeResidentSlot {
   /// used the buffer was submitted, so dropping the handle is safe
   /// (wgpu-native ref-counts resources referenced by submitted command
   /// buffers).
-  void reset() {
+  void reset(bool destroyBuffer = true) {
     if (accountedBytes != 0 && liveBytesGauge) {
       liveBytesGauge->fetch_sub(accountedBytes, std::memory_order_relaxed);
     }
     accountedBytes = 0;
     bindGroup.reset();
     if (buffer) {
-      buffer.get().destroy();
+      // `destroyBuffer` is false only when the buffer was created by a
+      // DIFFERENT (possibly already-destroyed) device than the one now
+      // rendering - see `owningDeviceId`. In that case we must not call
+      // `wgpu::Buffer::destroy()`, which routes into the owning device;
+      // dropping our ref via `buffer.reset()` is the only safe teardown
+      // (wgpu-native frees the backing when the last ref drops).
+      if (destroyBuffer) {
+        buffer.get().destroy();
+      }
       buffer.reset();
     }
     resident = false;
     encodedKey = nullptr;
     encodedFingerprint = 0;
+    owningDeviceId = 0;
     lastUniform.clear();
   }
 };

@@ -19,6 +19,7 @@
 #include <cinttypes>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <memory>
 #include <sstream>
@@ -826,6 +827,114 @@ TEST_F(GeodePerfTest, GpuResidence_SteadyAcrossRepeatedRenders) {
     EXPECT_EQ(device->liveResidentBytesForTesting(), afterFirst)
         << "Repeated unchanged render must not grow resident GPU memory (frame " << i << ").";
   }
+}
+
+// ---------------------------------------------------------------------------
+// Wave 2 (GPU residence): cross-device safety.
+//
+// A `GeodeResidentPathComponent` lives on the SVGDocument's ECS registry, so
+// it survives the `RendererGeode` that filled it. If the SAME document is
+// later rendered by a SECOND `RendererGeode` backed by a DIFFERENT
+// `GeodeDevice`, the resident buffer + bind group created by the first device
+// must NOT be bound into the second device's render pass - WebGPU rejects
+// cross-device resources. The fix scopes residence to the owning device
+// (`GeodeDevice::deviceId()`) and forces a re-upload when the device changes.
+//
+// Regression: on the pre-fix branch tip device B binds device A's stale
+// handles, so its output diverges from device A's (dropped draw / validation
+// error). This test renders one document on two independent devices and
+// asserts bit-identical output; it FAILS on the pre-fix tip and PASSES with
+// the fix.
+// ---------------------------------------------------------------------------
+
+// Identical dimensions and identical visible pixels (each bitmap's own
+// `rowBytes` absorbs any inter-row padding difference).
+bool bitmapsEqual(const RendererBitmap& a, const RendererBitmap& b) {
+  if (a.dimensions != b.dimensions) {
+    return false;
+  }
+  const int w = a.dimensions.x;
+  const int h = a.dimensions.y;
+  for (int y = 0; y < h; ++y) {
+    const uint8_t* ra = a.pixels.data() + static_cast<size_t>(y) * a.rowBytes;
+    const uint8_t* rb = b.pixels.data() + static_cast<size_t>(y) * b.rowBytes;
+    if (std::memcmp(ra, rb, static_cast<size_t>(w) * 4u) != 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Count pixels with non-zero alpha - a cheap "did anything render" check.
+size_t nonTransparentPixels(const RendererBitmap& bmp) {
+  size_t count = 0;
+  for (int y = 0; y < bmp.dimensions.y; ++y) {
+    const uint8_t* row = bmp.pixels.data() + static_cast<size_t>(y) * bmp.rowBytes;
+    for (int x = 0; x < bmp.dimensions.x; ++x) {
+      if (row[x * 4 + 3] != 0) {
+        ++count;
+      }
+    }
+  }
+  return count;
+}
+
+TEST_F(GeodePerfTest, GpuResidence_ReUploadsWhenDeviceChanges) {
+  // Two INDEPENDENT headless devices (not the shared fixture device): this is
+  // the "document crosses devices" scenario.
+  auto deviceA = std::shared_ptr<geode::GeodeDevice>(geode::GeodeDevice::CreateHeadless());
+  auto deviceB = std::shared_ptr<geode::GeodeDevice>(geode::GeodeDevice::CreateHeadless());
+  ASSERT_TRUE(deviceA) << "GeodeDevice::CreateHeadless (A) failed";
+  ASSERT_TRUE(deviceB) << "GeodeDevice::CreateHeadless (B) failed";
+  ASSERT_NE(deviceA->deviceId(), deviceB->deviceId());
+
+  ParseWarningSink sink = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(kSimpleShapesSvg, sink);
+  ASSERT_FALSE(parsed.hasError()) << parsed.error().reason;
+  // ONE document, rendered by both devices - its GeodeResidentPathComponents
+  // are filled by device A and then re-encountered by device B.
+  SVGDocument document = std::move(parsed.result());
+
+  // Device A establishes residence and produces the reference image. Drive TWO
+  // frames on the SAME renderer so its per-renderer frame index advances to 2.
+  // This matters for the regression: `fillPathResident`'s same-frame gate
+  // diverts a repeat draw whose frame index equals `slot.lastResidentFrame` to
+  // the (correct) arena path. Device B is a fresh renderer whose first frame
+  // index is 1; if device A had also stopped at frame index 1 the pre-fix gate
+  // would coincidentally send device B down the arena path and mask the
+  // cross-device bug. Advancing device A to frame index 2 guarantees device B
+  // exercises the resident path on the pre-fix code.
+  RendererGeode rendererA(deviceA);
+  rendererA.draw(document);  // frame index 1: establishes residence on A.
+  rendererA.draw(document);  // frame index 2: steady residence, lastResidentFrame=2.
+  const RendererBitmap referenceA = rendererA.takeSnapshot();
+  ASSERT_FALSE(referenceA.empty()) << "device A produced no snapshot";
+  ASSERT_GT(nonTransparentPixels(referenceA), 0u)
+      << "device A rendered nothing - fixture no longer exercises solid fills";
+
+  // Device B (fresh renderer, frame index 1) renders the SAME document. Pre-fix,
+  // the resident slots still hold device A's buffer + bind group; binding those
+  // into device B's pass is a cross-device violation and the draws are dropped,
+  // so the output diverges. With the fix the device-id mismatch forces a
+  // re-upload onto device B and the output matches.
+  RendererGeode rendererB(deviceB);
+  rendererB.draw(document);  // frame index 1 != lastResidentFrame(2): resident path.
+  const RendererBitmap resultB = rendererB.takeSnapshot();
+  ASSERT_FALSE(resultB.empty()) << "device B produced no snapshot";
+
+  EXPECT_TRUE(bitmapsEqual(referenceA, resultB))
+      << "device B output diverged from device A: resident GPU resources from "
+         "device A leaked into device B's render pass (cross-device residence). "
+         "device A non-transparent px="
+      << nonTransparentPixels(referenceA)
+      << ", device B non-transparent px=" << nonTransparentPixels(resultB);
+
+  // A render back on device A must still match (residence re-homes to A).
+  RendererGeode rendererA2(deviceA);
+  rendererA2.draw(document);
+  const RendererBitmap reReferenceA = rendererA2.takeSnapshot();
+  EXPECT_TRUE(bitmapsEqual(referenceA, reReferenceA))
+      << "device A output changed after a device-B render round-trip";
 }
 
 }  // namespace

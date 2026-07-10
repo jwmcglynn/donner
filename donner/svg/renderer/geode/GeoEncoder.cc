@@ -1312,10 +1312,15 @@ void GeoEncoder::Impl::populateFillUniform(Uniforms& u, const EncodedPath& encod
 }
 
 void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const EncodedPath& encoded) {
-  // Drop any previous residence (first upload, or a re-upload after the
-  // stroke slot rebuilt in place). Frees the old buffer and settles the
-  // live-bytes gauge before we account the new allocation.
-  slot.reset();
+  // Drop any previous residence (first upload, a re-upload after the stroke
+  // slot rebuilt in place, or a re-upload because a DIFFERENT device now
+  // renders this document). Frees the old buffer and settles the live-bytes
+  // gauge before we account the new allocation. When the existing buffer
+  // belongs to a different device we release our ref WITHOUT calling
+  // `destroy()`: that device may already be gone, and destroy() would route
+  // into it (see `GeodeResidentSlot::owningDeviceId`).
+  const bool ownedByCurrentDevice = slot.owningDeviceId == device->deviceId();
+  slot.reset(/*destroyBuffer=*/ownedByCurrentDevice);
 
   const uint64_t vBytes = encoded.quadVertices.size() * sizeof(EncodedPath::Vertex);
   const uint64_t bandsBytes = encoded.bands.size() * sizeof(EncodedPath::Band);
@@ -1387,6 +1392,11 @@ void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const Enc
   slot.liveBytesGauge = device->residentBytesGauge();
   slot.accountedBytes = static_cast<int64_t>(totalSize);
   slot.liveBytesGauge->fetch_add(slot.accountedBytes, std::memory_order_relaxed);
+
+  // Stamp the current device's identity so a later render by a different
+  // device re-uploads instead of binding this device's buffer / bind group
+  // into the other device's render pass (WebGPU rejects that).
+  slot.owningDeviceId = device->deviceId();
 }
 
 void GeoEncoder::Impl::buildResidentBindGroup(GeodeResidentSlot& slot) {
@@ -1437,13 +1447,16 @@ void GeoEncoder::Impl::submitResidentFillDraw(GeodeResidentSlot& slot, const Enc
   ensurePassOpen();
   bindSolidPipeline();
 
-  // Ensure the geometry is resident and current. Component removal is the
-  // primary invalidation; the pointer + fingerprint guard catches the
-  // in-place stroke-slot rebuild (which replaces the encode contents
-  // without removing the component).
+  // Ensure the geometry is resident and current AND owned by THIS device.
+  // Component removal is the primary invalidation; the pointer + fingerprint
+  // guard catches the in-place stroke-slot rebuild (which replaces the encode
+  // contents without removing the component); the device-id guard catches a
+  // second device rendering a document whose residence was filled by a
+  // now-different device (WebGPU rejects cross-device buffers / bind groups).
   const uint64_t fingerprint = residentFingerprint(encoded);
   const bool needUpload = !slot.resident || !slot.buffer || slot.encodedKey != &encoded ||
-                          slot.encodedFingerprint != fingerprint;
+                          slot.encodedFingerprint != fingerprint ||
+                          slot.owningDeviceId != device->deviceId();
   if (needUpload) {
     uploadResidentGeometry(slot, encoded);
     slot.encodedKey = &encoded;
@@ -1509,8 +1522,13 @@ void GeoEncoder::fillPathResident(GeodeResidentSlot& slot, const EncodedPath& en
   // frame. If this slot was already drawn resident this frame (markers,
   // non-adjacent repeated `<use>` at distinct transforms), route the
   // repeat through the arena path so it gets its own uniform + bind group
-  // instead of clobbering the first draw's transform.
-  if (slot.lastResidentFrame == frameId) {
+  // instead of clobbering the first draw's transform. The frame counter is
+  // per-renderer, so this same-frame gate only applies when the slot is
+  // already resident ON THIS device; a matching frame index carried over
+  // from a DIFFERENT device that previously rendered this document is not a
+  // same-frame repeat and must re-upload (submitResidentFillDraw re-uploads
+  // on the device-id mismatch) rather than fall back.
+  if (slot.owningDeviceId == impl_->device->deviceId() && slot.lastResidentFrame == frameId) {
     submitFillDraw(args);
     return;
   }
