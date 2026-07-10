@@ -1,8 +1,10 @@
 # Design: Design Doc Hygiene — 2026-06-30 Audit Follow-Up
 
-**Status:** In Progress — Milestones 1–5 complete; Milestone 6 blocked on `v08/*` merges.
-**Author:** Claude Sonnet 5
+**Status:** In Progress — Milestones 1–5 and 7 complete; Milestone 6 blocked on `v08/*` merges.
+**Author:** GPT-5.6 Sol
+**Drafted by:** Claude Sonnet 5
 **Created:** 2026-06-30
+**Updated:** 2026-07-10
 
 ## Summary
 
@@ -15,6 +17,10 @@ collisions, and ten docs not yet numbered in the index (three top-level editor-t
 docs plus the seven files under `text/`) — that are mechanical cleanup, not
 judgment calls, and were deliberately left unfixed by the audit pass pending review.
 This doc tracks that cleanup to completion.
+
+A subsequent provenance audit added exact model identifiers to recoverable records and introduced a
+CI ratchet for the unresolved historical set. The ratchet rejects missing or generic authorship on
+new designs and rejects stale debt entries after a historical record is corrected.
 
 ## Goals
 
@@ -34,6 +40,8 @@ This doc tracks that cleanup to completion.
   design work is complete, then replaced with a live-CI pointer at finalization.
 - The v0.8 feature-branch docs (`0041-2`, `0044-2`, `0046`, `0047`) get a follow-up
   status pass once `v08/*` branches merge to `main`.
+- Every model-authored design records the exact accountable model identifier. Human-only designs
+  identify the author and explicitly set `Model` to `None (human-only)`.
 
 ## Non-Goals
 
@@ -44,13 +52,13 @@ This doc tracks that cleanup to completion.
 - Deciding the v0.8 vs v1.0 release re-sequencing itself (0028 already flags that
   `ProjectRoadmap.md` has pivoted to v0.8 next) — only re-auditing the affected design
   docs once the merge actually happens.
-- Building tooling/CI to auto-detect stale docs. Worth a future doc if this class of
-  drift recurs, but out of scope here.
+- Automatically deciding whether implementation claims have become stale. CI checks structural
+  metadata and known invariants; implementation-status review still requires source inspection.
 
 ## Next Steps
 
-- Milestones 1–5 are complete and validated (collisions, `0015`, unnumbered-doc
-  numbering, the four Finalization rewrites, and the resvg snapshot re-scoping).
+- Milestones 1–5 and 7 are complete and validated (collisions, `0015`, unnumbered-doc
+  numbering, the four Finalization rewrites, resvg snapshot re-scoping, and model provenance).
 - Only Milestone 6 remains, and it is blocked: re-audit the v0.8 feature-branch docs
   (`0041-2`, `0044-2`, `0046`, `0047`) once the `v08/*` branches merge to `main`.
 
@@ -167,15 +175,24 @@ This doc tracks that cleanup to completion.
         `0044-2-editor_fluid_canvas_rendering.md`, `0046-editor_group_layers.md`, and
         `0047-v0_8_showcase.md` against the merged code, the same way the 2026-06-30
         audit did for everything else.
+- [x] Milestone 7: Model provenance ratchet
+  - [x] Require an exact model identifier in new design and retrospective templates.
+  - [x] Normalize historical `Codex` plus `GPT-5` aliases to `GPT-5`.
+  - [x] Restore exact authorship where the pre-finalization document or parent design provides
+        direct evidence.
+  - [x] Record unresolved historical metadata in `provenance_debt.txt` without guessing.
+  - [x] Add `tools/check_design_doc_provenance.py`, unit coverage, a Bazel test target, and the
+        repository lint workflow gate. New debt and stale allowlist entries both fail.
 
 ## Security / Privacy
 
-N/A — documentation-only changes (renames, index rows, prose). No code, trust
-boundaries, or data handling are touched.
+The checker reads only tracked Markdown and the debt text file, performs no network access, and
+executes no document content. It runs with the existing read-only lint job permissions and emits
+only public repository paths and metadata values. The check is repository-local.
 
 ## Testing and Validation
 
-- No code changes — this is documentation hygiene. "Passing" means: every top-level
+- Structural hygiene passes when every top-level
   number resolves to exactly one logical doc (treating `NNNN-` and `NNNN-2-`/`NNNN-3-`
   as one intentional group, **not** a collision — a naive uniqueness check will
   false-positive on `0033-2`, `0041-2`, `0044-2` otherwise), every number in the
@@ -183,6 +200,9 @@ boundaries, or data handling are touched.
   `docs/design_docs/` (including subdirectories) has a row in the Document Index. These
   are mechanically checkable; commit the check as a small script and run it as the
   closing gate on Milestones 1–3, rather than eyeballing the table.
+- Model provenance is checked by `bazel test //tools:check_design_doc_provenance_tests` and
+  `python3 tools/check_design_doc_provenance.py`. The first verifies parser and ratchet behavior;
+  the second validates the live design corpus and runs in the lint workflow.
 
 ## Open Questions
 
@@ -193,5 +213,5 @@ boundaries, or data handling are touched.
   parent number (`0052`, hub `overview` bare + `-2…-7`) and stay in the `text/`
   subdirectory so their `../00NN` parent links remain valid.
 
-All open questions are resolved; the remaining work (Milestones 4–6) is tracked in the
+All open questions are resolved; the remaining work (Milestone 6) is tracked in the
 Implementation Plan.

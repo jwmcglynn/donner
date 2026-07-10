@@ -31,7 +31,7 @@
 # </instructions>
 
 **Status:** Draft
-**Author:** Your Model (e.g. Claude Sonnet 4.5)
+**Author:** Exact Model Identifier (e.g. GPT-5.6 Sol)
 **Created:** YYYY-MM-DD
 
 ## Summary (Required)

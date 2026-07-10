@@ -1,7 +1,8 @@
 ## Design: Filter Layer Compose-Offset Bug — Resolution and Stress Coverage
 
 **Status:** Fixed for the 0035 replay; drag+zoom stress coverage added
-**Author:** Claude Opus 4.7 (1M context)
+**Author:** Claude Opus 4.7
+**Context window:** 1M tokens
 **Created:** 2026-05-14
 **Updated:** 2026-05-15
 

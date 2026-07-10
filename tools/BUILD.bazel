@@ -121,3 +121,17 @@ py_test(
     data = ["binary_size.sh"],
     deps = ["@rules_python//python/runfiles"],
 )
+
+py_binary(
+    name = "check_design_doc_provenance",
+    srcs = ["check_design_doc_provenance.py"],
+    visibility = ["//visibility:public"],
+)
+
+py_test(
+    name = "check_design_doc_provenance_tests",
+    srcs = [
+        "check_design_doc_provenance.py",
+        "check_design_doc_provenance_tests.py",
+    ],
+)

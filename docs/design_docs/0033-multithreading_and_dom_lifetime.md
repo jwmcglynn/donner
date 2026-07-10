@@ -1,7 +1,7 @@
 # Design: Multithreading and DOM Lifetime
 
 **Status:** Implemented
-**Author:** Codex (GPT-5)
+**Author:** GPT-5
 **Created:** 2026-05-16
 
 > **This design shipped.** It is summarized here; the living documentation is in

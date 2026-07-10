@@ -9,7 +9,7 @@ implemented. Donner-level boolean path operations (M6, `PathBooleanOp`/`ApplyPat
 right-side Path Operations panel (M5) is partially wired (actions + undo + selection-preserve
 land; Arrange controls and paint-order commands don't). The Path Edit tool (M4) has not been
 started — no `PathEditTool` exists.
-**Author:** Codex GPT-5
+**Author:** GPT-5
 **Created:** 2026-05-25
 
 ## Summary

@@ -1,7 +1,8 @@
 # Design: Sandbox Branch Split
 
 **Status:** Design
-**Author:** Claude Opus 4.7 (1M context)
+**Author:** Claude Opus 4.7
+**Context window:** 1M tokens
 **Created:** 2026-05-10
 
 ## Summary

@@ -1,7 +1,8 @@
 # Design: Editor Design-Tool-Grade Responsiveness
 
 **Status:** Implementing (M1, M2, M4, M5, M7, M8, M9 landed; M3/M6/M10 open)
-**Author:** Claude Opus 4.7 (1M context)
+**Author:** Claude Opus 4.7
+**Context window:** 1M tokens
 **Created:** 2026-05-12
 **Last updated:** 2026-07-10
 

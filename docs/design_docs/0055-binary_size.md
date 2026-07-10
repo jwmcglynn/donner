@@ -1,7 +1,8 @@
 # Design: Binary Size Reduction
 
 **Status:** Draft
-**Author:** Claude Fable 5 (reviewed; drafted by Claude Opus 4.8)
+**Author:** Claude Fable 5
+**Drafted by:** Claude Opus 4.8
 **Created:** 2026-07-10
 
 ## Summary

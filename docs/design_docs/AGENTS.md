@@ -12,6 +12,24 @@ All design documents live under `docs/design_docs/`.
   not renumber the landed doc — external references stay stable.
 - Update the Document Index in [README.md](README.md) when adding a doc.
 
+## Model Provenance
+
+- Every new model-authored design or retrospective must include an `**Author:**` line containing the
+  exact accountable model identifier, for example `GPT-5.6 Sol`. Generic surface names such as
+  `Codex`, broad family names, tier aliases, team names, and `Owner` fields are not substitutes.
+  Put context-window, role, helper-agent, and requester annotations on separate metadata lines; they
+  are not part of the model identifier.
+- If a later model performs a real upgrade review and becomes accountable for the design, update
+  `Author` to that exact model identifier and preserve the drafting model in a `**Drafted by:**`
+  line. Never erase or guess provenance.
+- Human requesters, sponsors, and project owners are not written into the model `Author` field. A
+  human-led, model-assisted design may keep the person in `Author` only when an exact `**Model:**`
+  line records the assisting model. A genuinely human-only design uses the person's name and
+  `**Model:** None (human-only)` so future
+  upgrade audits can distinguish it from missing metadata.
+- When touching an older design with incomplete metadata, backfill only identifiers supported by the
+  document or repository history. Leave unknown provenance explicit instead of inventing a model.
+
 ## Workflow
 
 1. **Goals first.** Write a design doc driven by user/requester goals. Capture scope, constraints, open questions. **Non-goals matter as much as goals** — explicitly state what's out of scope to prevent scope creep, anchor review discussions, and give future readers a clear boundary. Iterate until user confirms ready before planning implementation.

@@ -1,7 +1,7 @@
 # Design: Semantic Text Editing
 
 **Status:** Design
-**Author:** Codex GPT-5
+**Author:** GPT-5
 **Created:** 2026-05-25
 
 ## Summary

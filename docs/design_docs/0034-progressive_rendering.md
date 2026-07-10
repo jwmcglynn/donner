@@ -1,7 +1,8 @@
 # Design: Progressive Rendering for High-Zoom Drag-Start
 
 **Status:** Removed
-**Author:** Claude Opus 4.7 (1M context)
+**Author:** Claude Opus 4.7
+**Context window:** 1M tokens
 **Created:** 2026-05-13
 
 > **Removed 2026-05-20.** This design was implemented experimentally and then

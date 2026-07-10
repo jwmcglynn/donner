@@ -8,7 +8,8 @@ with v1.0 following it. Several items this doc scoped into v1.0 — notably
 "Editor v1 (the app)" (Phase 8) — have since moved into the v0.8 milestone
 in the roadmap. The phase list below has not been re-sequenced to match;
 treat it as directional until reconciled with the roadmap.
-**Author:** Jeff McGlynn (with Claude Opus 4.7)
+**Author:** Jeff McGlynn
+**Model:** Claude Opus 4.7
 **Created:** 2026-04-17
 
 ## Summary
@@ -41,7 +42,11 @@ in [0011-v0_5_release.md](0011-v0_5_release.md#v05-retrospective):
   [0026-svg_conformance_testing.md](0026-svg_conformance_testing.md), plus contributing Donner
   back to the upstream resvg test harness.
 - **Geode on real GPUs** — finishing [0017-geode_renderer.md](0017-geode_renderer.md) beyond
-  software adapters / CI validation.
+  software adapters / CI validation, then replacing the native GPU dependency with the clean-room
+  Donner runtime in [0053-native_gpu_hal.md](0053-native_gpu_hal.md).
+- **Rust-independent release build** — remove Rust toolchains, Cargo execution, Rust-built
+  libraries, and transitive Rust requirements. Inert upstream resvg/tiny-skia reference source is
+  allowed only behind the explicit third-party corpus boundary in design 0053.
 - **Parser hardening, DOM gaps, and entity lifecycle** — the items listed under each of those
   headings in the ProjectRoadmap.
 - **Release-process + docs cleanup** — the retrospective items from 0011: BCR publish,
@@ -86,6 +91,8 @@ re-scoped down later if the schedule demands it.
     documented.
   - Performance and binary-size profiles documented; the "Donner Tiny" tier is usable.
   - Release documentation complete for embedders (embedding guide).
+  - Native GPU builds use the Donner-owned Metal/Vulkan runtime and the complete release build passes
+    the no-Rust-dependency gate from [0053](0053-native_gpu_hal.md).
 - Close out every item from the [v0.5 retrospective](0011-v0_5_release.md#v05-retrospective).
 - Establish scripting and conformance as first-class Donner subsystems, so third-party parity
   checks against browsers and resvg are a routine part of CI.
@@ -102,7 +109,8 @@ re-scoped down later if the schedule demands it.
 - A 100% resvg pass rate. Known architectural gaps (e.g. feImage float rendering path) stay
   tracked in [0021-resvg_feature_gaps.md](0021-resvg_feature_gaps.md).
 - Running the full WPT repository in CI. The conformance design vendors a curated subset.
-- New rendering backends beyond Skia / tiny-skia / Geode.
+- New SVG rendering algorithms beyond tiny-skia and Geode. Replacing Geode's hardware runtime per
+  [0053](0053-native_gpu_hal.md) is required infrastructure, not a new SVG renderer.
 
 ## Next Steps
 
@@ -122,7 +130,7 @@ this doc only tracks "is the v1.0-gating slice of that work done".
 
 - [ ] **Phase 1** — Release-process + docs cleanup (v0.5 retrospective carry-over).
 - [ ] **Phase 2** — Finish in-flight vNext workstreams (sandboxing, composited rendering,
-  Geode-on-GPU) — never shipped in v0.5, land them for v1.0.
+  Geode-on-GPU, and the clean-room native GPU runtime) — never shipped in v0.5, land them for v1.0.
 - [ ] **Phase 3** — SVG feature gaps: `<a>`, `<switch>`, and the P0/P1 items from
   [0024-proposed_issues_2026q2.md](0024-proposed_issues_2026q2.md).
 - [ ] **Phase 4** — Animation (SMIL Phases 1–9) + animation test suite.
@@ -188,6 +196,10 @@ the first feature work to finish for v1.0.
 - [ ] **Geode renderer on a real GPU** — Finish [0017-geode_renderer.md](0017-geode_renderer.md).
   Phase 0–2 and resvg MSAA are green on software adapters; Geode is not yet a user-facing
   backend and has not been validated on physical GPU hardware.
+- [ ] **Clean-room native GPU runtime and Rust dependency purge** — Complete
+  [0053-native_gpu_hal.md](0053-native_gpu_hal.md): native Metal/Vulkan backends, the browser
+  bridge, shader IR and emitters, editor presentation migration, removal of `wgpu-native`, and the
+  repository-wide no-Rust-dependency release gate.
 
 ### Phase 3: SVG feature gaps
 
@@ -417,6 +429,8 @@ Plus the v0.5 retrospective items (all addressed in Phase 1):
 - BCR publish working end-to-end on the v1.0 tag.
 - Doxygen sidebar organized; binary-size report rendering; element lists condensed.
 - Public-target visibility tightened, particularly under `//donner/editor/...`.
+- Native GPU runtime cut over on supported platforms, and the source/archive/artifact
+  no-Rust-dependency gate passes.
 
 ## Proposed Architecture
 
@@ -431,6 +445,7 @@ per-phase design docs:
 - Editor sandbox → [0023-editor_sandbox.md](0023-editor_sandbox.md) records the removed prototype;
   Phase 2 needs a replacement design for the v1.0 sandbox boundary.
 - Geode → [0017-geode_renderer.md](0017-geode_renderer.md).
+- Native GPU runtime and Rust-independent build → [0053-native_gpu_hal.md](0053-native_gpu_hal.md).
 - Incremental invalidation → [0005-incremental_invalidation.md](0005-incremental_invalidation.md).
 - BCR → [0018-bcr_release.md](0018-bcr_release.md).
 - Continuous fuzzing → [0012-continuous_fuzzing.md](0012-continuous_fuzzing.md).
@@ -446,13 +461,17 @@ serialization.
 
 ## Security / Privacy
 
-v1.0 adds two major new trust boundaries beyond v0.5's parser / renderer surface:
+v1.0 adds three major new trust boundaries beyond v0.5's parser / renderer surface:
 
 - **Scripting.** Untrusted JS running inside Donner. The threat model, sandbox, and fuzz
   strategy are owned by [0027-2-scripting.md](0027-2-scripting.md) §Security / privacy.
 - **Editor sandbox.** Process isolation for editor parser/renderer work remains in scope for
   v1.0. The previous prototype was removed, so Phase 2 must define the replacement threat model,
   IPC boundary, and validation strategy before implementation.
+- **Native GPU runtime.** Donner owns descriptor validation, resource lifetime, synchronization,
+  device loss, memory budgets, generated shader artifacts, and native embedding handles. Design
+  [0053](0053-native_gpu_hal.md) owns the threat model, validation layers, fuzzing, provenance, and
+  driver qualification.
 Donner's global invariant — "must safely handle untrusted input and must never crash" — extends
 unchanged across the scripting and editor-sandbox boundaries. Phase 12 (Security pass) is the
 verification step.
@@ -469,6 +488,9 @@ verification step.
 - **Coverage target**: ≥90% line coverage across production code (v0.5 shipped at 81.7%).
 - **Binary-size, build-time, and perf profiles** (Phase 13) are captured in the build report
   and become a release-gate artifact.
+- **GPU and dependency qualification** runs the [0053](0053-native_gpu_hal.md) backend matrix,
+  shader-emitter tests, device-loss/fuzzing suites, provenance audit, and blocking
+  no-Rust-dependency verifier.
 
 ## Dependencies
 
@@ -476,7 +498,9 @@ verification step.
   `non_bcr_deps`. See [0027-2-scripting.md](0027-2-scripting.md) §Dependencies.
 - **WPT subset** — vendored curated snapshot added by the conformance program (Phase 11). See
   [0026-svg_conformance_testing.md](0026-svg_conformance_testing.md) §Dependencies.
-- **Existing deps** unchanged.
+- **Dependency contraction** — [0053](0053-native_gpu_hal.md) removes `wgpu-native`, Rust
+  toolchains, and Rust cross-validation fixtures before v1.0. Inert upstream resvg/tiny-skia
+  reference source may remain only outside every build and runtime dependency path.
 
 ## Open Questions
 

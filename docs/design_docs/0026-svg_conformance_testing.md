@@ -1,7 +1,7 @@
 # Design: SVG Conformance Testing
 
 **Status:** Draft
-**Author:** GPT-5 Codex
+**Author:** GPT-5
 **Created:** 2026-04-16
 
 ## Summary

@@ -3,6 +3,7 @@
 [Back to hub](../0010-text_rendering.md)
 
 **Status:** Shipped for Text v1
+**Author:** Claude Opus 4.6
 
 ## Overview
 

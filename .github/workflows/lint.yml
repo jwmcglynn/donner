@@ -14,6 +14,7 @@ concurrency:
 #
 # - build_defs/check_banned_patterns.py (covers the examples/ dir which
 #   is not fully enumerated by the donner_cc_* py_test lint macros)
+# - check_design_doc_provenance.py (ratchets exact model metadata on design docs)
 # - gen_cmakelists.py unit tests + full --check validator (reentrant bazel
 #   prevents running --check from inside bazel test; see design doc 0016)
 jobs:
@@ -79,6 +80,9 @@ jobs:
           )
 
           python3 build_defs/check_banned_patterns.py donner "${example_sources[@]}"
+
+      - name: Check design document provenance
+        run: python3 tools/check_design_doc_provenance.py
 
   cmake-validate:
     runs-on: ubuntu-24.04
