@@ -1628,7 +1628,7 @@ struct RendererGeode::Impl {
                      const geode::EncodedPath* precomputedEncoded,
                      geode::GeodeResidentSlot* residentSlot) {
     if (residentSlot != nullptr && precomputedEncoded != nullptr) {
-      encoder->fillPathResident(*residentSlot, *precomputedEncoded, color, rule);
+      encoder->fillPathResident(*residentSlot, *precomputedEncoded, color, rule, currentFrameIndex);
     } else {
       encoder->fillPath(drawPath, color, rule, precomputedEncoded);
     }

@@ -1475,7 +1475,7 @@ void GeoEncoder::Impl::submitResidentFillDraw(GeodeResidentSlot& slot, const Enc
 }
 
 void GeoEncoder::fillPathResident(GeodeResidentSlot& slot, const EncodedPath& encoded,
-                                  const css::RGBA& color, FillRule rule) {
+                                  const css::RGBA& color, FillRule rule, uint64_t frameId) {
   if (encoded.empty()) {
     return;
   }
@@ -1505,6 +1505,16 @@ void GeoEncoder::fillPathResident(GeodeResidentSlot& slot, const EncodedPath& en
     submitFillDraw(args);
     return;
   }
+  // A slot's single uniform buffer can only carry one draw's uniform per
+  // frame. If this slot was already drawn resident this frame (markers,
+  // non-adjacent repeated `<use>` at distinct transforms), route the
+  // repeat through the arena path so it gets its own uniform + bind group
+  // instead of clobbering the first draw's transform.
+  if (slot.lastResidentFrame == frameId) {
+    submitFillDraw(args);
+    return;
+  }
+  slot.lastResidentFrame = frameId;
   impl_->submitResidentFillDraw(slot, encoded, args);
 }
 

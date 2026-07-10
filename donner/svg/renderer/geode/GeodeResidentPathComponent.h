@@ -74,6 +74,17 @@ struct GeodeResidentSlot {
 
   uint32_t vertexCount = 0;  ///< Number of quad vertices (draw count).
 
+  /// Frame index in which this slot was last drawn via the resident path.
+  /// A slot's single uniform buffer + cached bind group can only serve ONE
+  /// draw per frame (all draws recorded against a frame's command buffer
+  /// read the buffer's final contents at submit time). When the same slot
+  /// is drawn again in the same frame at a different transform/color
+  /// (markers, non-adjacent repeated `<use>`), the second and later draws
+  /// fall back to the wave-1 arena path so each gets its own uniform. The
+  /// steady-state win is unaffected for the common case of a path drawn
+  /// once per frame (Tiger / Lion). Sentinel `~0` means "never drawn".
+  uint64_t lastResidentFrame = ~uint64_t{0};
+
   /// True once `buffer` + `bindGroup` hold the current encode. Cleared
   /// when the slot is reset or when a re-upload is required.
   bool resident = false;
@@ -118,6 +129,7 @@ struct GeodeResidentSlot {
       vGrid = other.vGrid;
       uniform = other.uniform;
       vertexCount = other.vertexCount;
+      lastResidentFrame = other.lastResidentFrame;
       resident = other.resident;
       encodedKey = other.encodedKey;
       encodedFingerprint = other.encodedFingerprint;

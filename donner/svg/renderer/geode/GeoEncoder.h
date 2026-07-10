@@ -458,9 +458,13 @@ public:
    * @param color Solid fill color (NOT premultiplied - premultiplied here,
    *   identically to `fillPath`).
    * @param rule Fill rule.
+   * @param frameId Monotonic frame index. A slot serves at most one
+   *   resident draw per frame (its single uniform buffer cannot hold
+   *   distinct per-instance uniforms); repeat draws in the same frame fall
+   *   back to the arena path.
    */
   void fillPathResident(GeodeResidentSlot& slot, const EncodedPath& encoded,
-                        const css::RGBA& color, FillRule rule);
+                        const css::RGBA& color, FillRule rule, uint64_t frameId);
 
   /**
    * Fill N copies of the same encoded path at N different affine
