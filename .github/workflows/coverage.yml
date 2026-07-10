@@ -310,8 +310,20 @@ jobs:
           # skip only when nothing instrumentable is affected. Fail closed: any
           # query/classifier error, or any unrecognized rule kind, keeps the
           # guard by running the bazel_diff subset as before.
+          # Resolve aliases to their `actual` targets before classifying: an
+          # alias can point at an instrumentable cc_* target (for example the
+          # default alias donner_variant_cc_test emits, whose actual is a
+          # cc_test), so an alias-only affected set must be judged by what it
+          # resolves to, not by the `alias` kind. The query replaces every
+          # alias in the set with its actual; an alias that cannot be resolved
+          # stays an `alias` kind and the classifier treats it as instrumentable
+          # (fail closed).
           kind_query_file="$work_dir/affected-query.txt"
-          { printf 'set('; tr '\n' ' ' < "$work_dir/affected.txt"; printf ')\n'; } > "$kind_query_file"
+          {
+            printf 'let a = set('
+            tr '\n' ' ' < "$work_dir/affected.txt"
+            printf ') in ($a - kind("^alias rule$", $a)) + labels("actual", kind("^alias rule$", $a))\n'
+          } > "$kind_query_file"
           label_kind_file="$work_dir/affected-label-kind.txt"
           if ( cd "$head_dir" && bazelisk query --query_file="$kind_query_file" \
               --output label_kind --keep_going ) > "$label_kind_file" 2> "$diagnostics_dir/kind-query.log"; then
