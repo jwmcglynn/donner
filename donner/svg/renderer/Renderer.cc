@@ -560,6 +560,14 @@ std::unique_ptr<RendererInterface> Renderer::createOffscreenInstance() const {
   return impl_->createOffscreenInstance();
 }
 
+void Renderer::setDebugGeometryOverlay(bool enabled) {
+  impl_->setDebugGeometryOverlay(enabled);
+}
+
+bool Renderer::debugGeometryOverlay() const {
+  return impl_->debugGeometryOverlay();
+}
+
 bool Renderer::save(const char* filename) {
   const RendererBitmap snapshot = takeSnapshot();
   if (snapshot.empty()) {

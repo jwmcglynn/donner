@@ -1586,7 +1586,16 @@ void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
   }
   const bool showCompositorDebugPanelBeforeMenu = showCompositorDebugPanel_;
   const PerfOverlayMode perfOverlayModeBeforeMenu = perfOverlayMode_;
-  ApplyViewMenuToggleActions(menuActions, &showCompositorDebugPanel_, &perfOverlayMode_);
+  const bool geometryDebugOverlayBeforeMenu = geometryDebugOverlay_;
+  ApplyViewMenuToggleActions(menuActions, &showCompositorDebugPanel_, &perfOverlayMode_,
+                             &geometryDebugOverlay_);
+  if (geometryDebugOverlay_ != geometryDebugOverlayBeforeMenu) {
+    // Push the new overlay state to the render worker and post a render:
+    // the worker re-rasterizes every cached segment with the overlay
+    // state on its next iteration (see AsyncRenderer::workerLoop).
+    renderCoordinator_.asyncRenderer().setGeometryDebugOverlayEnabled(geometryDebugOverlay_);
+    requestRenderAtEndOfFrame_ = true;
+  }
   // DockSpace layout controls: toggle the lock or request a rebuild of the
   // default layout. renderDockSpaceHost consumes the reset request next frame.
   if (menuActions.toggleLayoutLock) {
@@ -1598,7 +1607,8 @@ void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
     window_.wakeEventLoop();
   }
   if (showCompositorDebugPanel_ != showCompositorDebugPanelBeforeMenu ||
-      perfOverlayMode_ != perfOverlayModeBeforeMenu) {
+      perfOverlayMode_ != perfOverlayModeBeforeMenu ||
+      geometryDebugOverlay_ != geometryDebugOverlayBeforeMenu) {
     window_.wakeEventLoop();
   }
 }
@@ -4635,6 +4645,7 @@ void EditorShell::runFrame() {
       .hasTextSelection = selectionIsAllText(),
       .hasSelectableElements = canvasHasSelectableElements(),
       .showCompositorDebugPanel = showCompositorDebugPanel_,
+      .geometryDebugOverlay = geometryDebugOverlay_,
       .perfOverlayMode = perfOverlayMode_,
       .panelLayoutLocked = dockLayoutLocked_,
   };

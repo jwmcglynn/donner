@@ -281,10 +281,10 @@ public:
    * Default off. When off, rendering behavior and performance are
    * unchanged; the only cost is one boolean test per draw.
    */
-  void setDebugGeometryOverlay(bool enabled);
+  void setDebugGeometryOverlay(bool enabled) override;
 
   /// Whether the geometry debug overlay is enabled.
-  [[nodiscard]] bool debugGeometryOverlay() const;
+  [[nodiscard]] bool debugGeometryOverlay() const override;
 
   /**
    * Returns per-frame instrumentation for the most recently completed

@@ -393,6 +393,25 @@ public:
     return tightBoundedSegments_.load(std::memory_order_acquire);
   }
 
+  /// Toggle the Geode geometry debug overlay
+  /// (`RendererInterface::setDebugGeometryOverlay`) on the document
+  /// renderer. The change applies at the start of the next worker
+  /// iteration; on a flip the worker also calls
+  /// `CompositorController::resetAllLayers()` so every cached segment
+  /// re-rasterizes with the new overlay state.
+  ///
+  /// Same threading contract as \ref setTightBoundedSegmentsEnabled:
+  /// safe to call from the UI thread while a render is in flight.
+  void setGeometryDebugOverlayEnabled(bool enabled) {
+    geometryDebugOverlay_.store(enabled, std::memory_order_release);
+  }
+
+  /// Mirror of the current overlay state. UI reads this to render the
+  /// correct check state in the View menu without racing the worker.
+  [[nodiscard]] bool geometryDebugOverlayEnabled() const {
+    return geometryDebugOverlay_.load(std::memory_order_acquire);
+  }
+
   /// Number of times the worker has called `CompositorController::resetAllLayers()`
   /// since construction. Tests use this to assert that frame-version mutations
   /// do not masquerade as document replacements.
@@ -645,6 +664,16 @@ private:
   /// Default-true matches `CompositorConfig::tightBoundedSegments`. See
   /// `setTightBoundedSegmentsEnabled`.
   std::atomic<bool> tightBoundedSegments_{true};
+
+  /// Geode geometry debug overlay request from the UI thread. See
+  /// `setGeometryDebugOverlayEnabled`. Default-off matches the
+  /// renderer's default.
+  std::atomic<bool> geometryDebugOverlay_{false};
+
+  /// Worker-thread-only: the overlay state last applied to the request
+  /// renderer, so the worker can detect flips and invalidate cached
+  /// segments exactly once per change.
+  bool appliedGeometryDebugOverlay_ = false;
 
   /// Replay/test-only fixed delay injected into each worker render attempt.
   std::atomic<std::chrono::milliseconds::rep> replayRenderDelayMsForTesting_{0};
