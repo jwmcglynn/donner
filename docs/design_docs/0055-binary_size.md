@@ -43,10 +43,10 @@ noted as follow-on surfaces but are not the primary focus.
 
 ## Next Steps
 
-- Land this baseline plus the extended `tools/binary_size.sh` (native + wasm)
-  so the report is regenerable by anyone with one command.
-- First reduction: build the shipped wasm optimized for size (`-Oz`), which the
-  measurements below show is the single largest lever.
+- Baseline plus the extended `tools/binary_size.sh` (native + wasm) landed so
+  the report is regenerable by anyone with one command.
+- First reduction (R1) landed: size-optimized `--config=wasm-size` cuts the wasm
+  gzip transfer 48.5%. Next: native identical-code folding and LTO.
 
 ## Implementation Plan
 
@@ -56,11 +56,14 @@ noted as follow-on surfaces but are not the primary focus.
         section/symbol breakdown of the `.wasm`).
   - [x] Record the measured baseline for all representative targets (below).
   - [x] Commit and push before starting reductions.
-- [ ] Milestone 2: WebAssembly size reduction (largest lever)
-  - [ ] Build the shipped wasm optimized for size (`-c opt` + `-Oz` compile and
-        link) instead of the current unoptimized default; measure the delta.
-  - [ ] Evaluate `emmalloc` (small, safe) and surface `--closure=1` /
-        `-sFILESYSTEM=0` as JS-glue wins gated on a headless render test.
+- [x] Milestone 2: WebAssembly size reduction (largest lever)
+  - [x] Add a size-optimized `--config=wasm-size` (`-c opt` + `-Oz` compile and
+        link) layered on `--config=wasm`; point `tools/binary_size.sh` at it as
+        the shipping build. Measured delta below.
+  - [x] Add `emmalloc` to the tiny_skia renderer wasm binary (safe: it sets
+        `USE_PTHREADS=0`).
+  - [ ] Surface `--closure=1` / `-sFILESYSTEM=0` as JS-glue wins gated on a
+        headless render test (deferred; needs the test harness first).
 - [ ] Milestone 3: Native reductions
   - [ ] Evaluate identical-code folding (lld `--icf=all`) and confirm
         `--gc-sections` / `-dead_strip` behavior on each platform.
@@ -133,10 +136,33 @@ Reading: `-Oz` on the wasm build is the single largest lever, cutting the raw
 check before it ships, since the tiny_skia renderer wasm has no automated
 browser test today (only a manual `test.html`).
 
+## Landed reductions
+
+### R1: size-optimized wasm (`--config=wasm-size` + emmalloc)
+
+Adds a `--config=wasm-size` that layers `-c opt --copt=-Oz --linkopt=-Oz` on
+`--config=wasm`, plus `-sMALLOC=emmalloc` on the tiny_skia renderer wasm binary.
+`--config=wasm` alone is left unoptimized so dev iteration and the editor wasm
+CI lanes are unchanged. Measured with `bash tools/binary_size.sh`:
+
+| Artifact               | Baseline raw | R1 raw    | Baseline gzip | R1 gzip |
+| ---------------------- | ------------ | --------- | ------------- | ------- |
+| `donner_wasm_bin.wasm` | 5,688,030    | 1,603,318 | 1,184,620     | 614,919 |
+| `donner_wasm_bin.js`   | 154,601      | 57,617    | 41,847        | 16,358  |
+| Total transfer         | 5,842,631    | 1,660,935 | 1,226,467     | 631,277 |
+
+Raw `.wasm` down 71.8%; total gzip transfer down 48.5% (1.23 MiB to 631 KiB).
+Validation: the module validates under `wasm-opt --all-features`, and the
+optimized JS glue exposes the same public C API (`donner_init`,
+`donner_render_svg`, `donner_free_pixels`, `donner_get_last_error`) as the
+baseline. No source, API, or feature changes; `-Oz` and `emmalloc` are
+behavior-preserving optimizer/allocator flags (no closure minification).
+
 ## Ranked opportunities
 
-1. Build the shipped wasm with `-Oz` (largest lever; safe). ~72% raw, ~48% gzip.
-2. `emmalloc` on the wasm build (safe, small; a few KiB of `.wasm`).
+1. DONE (R1): Build the shipped wasm with `-Oz` (largest lever; safe). Realized
+   ~72% raw, ~48% gzip.
+2. DONE (R1): `emmalloc` on the tiny_skia wasm binary (safe, small).
 3. `--closure=1` + `-sFILESYSTEM=0` for the JS glue (10x on `.js`, gated on a
    headless render test that does not exist yet; build the test first).
 4. Native identical-code folding (`lld --icf=all`) and LTO for the shipped

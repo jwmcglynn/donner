@@ -49,6 +49,8 @@ cc_binary(
         "-sENVIRONMENT=web",
         "-sALLOW_MEMORY_GROWTH=1",
         "-sEXPORTED_FUNCTIONS=_donner_init,_donner_render_svg,_donner_free_pixels,_donner_get_last_error,_malloc,_free",
+        # Smaller allocator than the default dlmalloc; safe with USE_PTHREADS=0.
+        "-sMALLOC=emmalloc",
         "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString",
         "-sUSE_PTHREADS=0",
         "-sSTACK_SIZE=1048576",

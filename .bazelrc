@@ -150,6 +150,18 @@ common:wasm --//donner/svg/renderer:text_full=false
 # toolchain without cross-configuration link conflicts.
 common:wasm --//build_defs:disable_perf_opt_transition=true
 
+# Size-optimized production wasm. The .wasm + JS glue is a browser download, so
+# the shipped/downloaded artifact should be built for size. This layers size
+# optimization on --config=wasm: -c opt compiles every translation unit
+# optimized, and -Oz (compile + link) minimizes code size and drives
+# Emscripten's whole-module wasm-opt pass. --config=wasm alone stays
+# unoptimized for fast iteration. Usage:
+#   bazel build --config=wasm-size //donner/svg/renderer/wasm:donner_wasm
+common:wasm-size --config=wasm
+build:wasm-size -c opt
+build:wasm-size --copt=-Oz
+build:wasm-size --linkopt=-Oz
+
 # Full editor WASM build. Uses Geode/WebGPU by default because the editor
 # presentation and performance work target Geode. Usage:
 #   bazel build --config=editor-wasm //donner/editor/wasm:wasm
