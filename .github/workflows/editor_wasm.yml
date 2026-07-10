@@ -61,20 +61,32 @@ jobs:
           echo "Serving package: ${pkg_dir}"
           test -d "${pkg_dir}"
 
+          server_log="${RUNNER_TEMP}/editor-wasm-geode-server.log"
           python3 tools/http/simple_webserver.py --no-https --host 127.0.0.1 \
-            --dir "${pkg_dir}" &
+            --dir "${pkg_dir}" >"${server_log}" 2>&1 &
           server_pid=$!
-          trap 'kill "${server_pid}" 2>/dev/null || true' EXIT
+          cleanup() {
+            kill "${server_pid}" 2>/dev/null || true
+            wait "${server_pid}" 2>/dev/null || true
+          }
+          trap cleanup EXIT
 
           for _ in $(seq 1 60); do
             if curl -fsS -o /dev/null "${DONNER_WASM_BASE_URL}/index.html"; then
               break
+            fi
+            if ! kill -0 "${server_pid}" 2>/dev/null; then
+              cat "${server_log}"
+              wait "${server_pid}" 2>/dev/null || true
+              exit 1
             fi
             sleep 1
           done
           curl -fsS -o /dev/null "${DONNER_WASM_BASE_URL}/index.html"
 
           xvfb-run --auto-servernum bash donner/editor/wasm/tests/run_tests.sh --headed
+          cleanup
+          trap - EXIT
 
       - name: Serve tiny_skia package and run Playwright suite
         env:
@@ -91,21 +103,33 @@ jobs:
 
           # Plain-HTTP local server (127.0.0.1 is a secure context, and the
           # server still sends COOP/COEP so SharedArrayBuffer/pthreads work).
+          server_log="${RUNNER_TEMP}/editor-wasm-tiny-skia-server.log"
           python3 tools/http/simple_webserver.py --no-https --host 127.0.0.1 \
-            --dir "${pkg_dir}" &
+            --dir "${pkg_dir}" >"${server_log}" 2>&1 &
           server_pid=$!
-          trap 'kill "${server_pid}" 2>/dev/null || true' EXIT
+          cleanup() {
+            kill "${server_pid}" 2>/dev/null || true
+            wait "${server_pid}" 2>/dev/null || true
+          }
+          trap cleanup EXIT
 
           # Wait for the server to accept connections.
           for _ in $(seq 1 60); do
             if curl -fsS -o /dev/null "${DONNER_WASM_BASE_URL}/index.html"; then
               break
             fi
+            if ! kill -0 "${server_pid}" 2>/dev/null; then
+              cat "${server_log}"
+              wait "${server_pid}" 2>/dev/null || true
+              exit 1
+            fi
             sleep 1
           done
           curl -fsS -o /dev/null "${DONNER_WASM_BASE_URL}/index.html"
 
           bash donner/editor/wasm/tests/run_tests.sh
+          cleanup
+          trap - EXIT
 
       - name: Upload Playwright failure artifacts
         if: failure()
