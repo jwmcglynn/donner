@@ -78,6 +78,26 @@ struct GeodeCounters {
   /// will collapse into one GPU draw call per group.
   uint64_t sameSourceDrawPairs = 0;
 
+  /// `wgpu::Queue::writeBuffer` calls. Together with `bufferWriteBytes`
+  /// this measures the CPU -> GPU buffer-upload traffic of a frame.
+  /// Steady-state today: one write per arena region per draw (vertex,
+  /// bands, curves, vBands, vCurves, hGrid, vGrid, uniforms), because
+  /// cached `EncodedPath` data has no persistent GPU residence and is
+  /// re-uploaded every frame.
+  uint64_t bufferWrites = 0;
+
+  /// Total payload bytes passed to `wgpu::Queue::writeBuffer`. The
+  /// per-frame GPU transfer volume for buffer data. An unchanged-
+  /// geometry frame should converge toward 0 once encoded path data
+  /// gains persistent GPU residence.
+  uint64_t bufferWriteBytes = 0;
+
+  /// Total payload bytes passed to `wgpu::Queue::writeTexture` (image
+  /// decode uploads, gradient ramps, filter LUTs, dummy textures).
+  /// Steady-state target: 0 on an unchanged frame (texture uploads are
+  /// already cached; this counter verifies that claim).
+  uint64_t textureWriteBytes = 0;
+
   /// Reset all counters to zero. Called at `RendererGeode::beginFrame`.
   void reset() { *this = {}; }
 };

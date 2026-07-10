@@ -314,6 +314,7 @@ struct GeoEncoder::Impl {
       alignedOffset = 0;
     }
     device->queue().writeBuffer(arena.buffer.get(), alignedOffset, data, size);
+    device->countBufferWrite(size);
     arena.offset = alignedOffset + size;
     return {&arena.buffer.get(), alignedOffset, size};
   }

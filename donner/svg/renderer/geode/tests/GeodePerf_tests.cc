@@ -96,9 +96,11 @@ void printCounters(const char* label, const geode::GeodeCounters& c) {
                "[GeodePerf] %-40s  pathEncodes=%4" PRIu64 "  bufferCreates=%5" PRIu64
                "  bindgroupCreates=%5" PRIu64 "  textureCreates=%3" PRIu64 "  submits=%3" PRIu64
                "  drawCalls=%4" PRIu64 "  pipelineSwitches=%3" PRIu64
-               "  sameSourceDrawPairs=%3" PRIu64 "\n",
+               "  sameSourceDrawPairs=%3" PRIu64 "  bufferWrites=%5" PRIu64
+               "  bufferWriteBytes=%9" PRIu64 "  textureWriteBytes=%9" PRIu64 "\n",
                label, c.pathEncodes, c.bufferCreates, c.bindgroupCreates, c.textureCreates,
-               c.submits, c.drawCalls, c.pipelineSwitches, c.sameSourceDrawPairs);
+               c.submits, c.drawCalls, c.pipelineSwitches, c.sameSourceDrawPairs, c.bufferWrites,
+               c.bufferWriteBytes, c.textureWriteBytes);
 }
 
 /// Read a file from disk. Returns the empty string on any I/O error -
@@ -173,6 +175,9 @@ TEST_F(GeodePerfTest, SimpleShapes_BaselineCeilings) {
   RecordProperty("pathEncodes", std::to_string(c.pathEncodes));
   RecordProperty("drawCalls", std::to_string(c.drawCalls));
   RecordProperty("pipelineSwitches", std::to_string(c.pipelineSwitches));
+  RecordProperty("bufferWrites", std::to_string(c.bufferWrites));
+  RecordProperty("bufferWriteBytes", std::to_string(c.bufferWriteBytes));
+  RecordProperty("textureWriteBytes", std::to_string(c.textureWriteBytes));
   printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), c);
 
   // Observed 2026-04-19 on macOS/Metal, M4 Pro:
@@ -215,6 +220,9 @@ TEST_F(GeodePerfTest, Moderate_BaselineCeilings) {
   RecordProperty("pathEncodes", std::to_string(c.pathEncodes));
   RecordProperty("drawCalls", std::to_string(c.drawCalls));
   RecordProperty("pipelineSwitches", std::to_string(c.pipelineSwitches));
+  RecordProperty("bufferWrites", std::to_string(c.bufferWrites));
+  RecordProperty("bufferWriteBytes", std::to_string(c.bufferWriteBytes));
+  RecordProperty("textureWriteBytes", std::to_string(c.textureWriteBytes));
   printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), c);
 
   // Observed 2026-04-19:
@@ -266,6 +274,9 @@ TEST_F(GeodePerfTest, Lion_BaselineCeilings) {
   RecordProperty("pathEncodes", std::to_string(c.pathEncodes));
   RecordProperty("drawCalls", std::to_string(c.drawCalls));
   RecordProperty("pipelineSwitches", std::to_string(c.pipelineSwitches));
+  RecordProperty("bufferWrites", std::to_string(c.bufferWrites));
+  RecordProperty("bufferWriteBytes", std::to_string(c.bufferWriteBytes));
+  RecordProperty("textureWriteBytes", std::to_string(c.textureWriteBytes));
   printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), c);
 
   // Observed 2026-04-19:
@@ -316,6 +327,9 @@ TEST_F(GeodePerfTest, UseHeavy_BaselineCeilings) {
   RecordProperty("pathEncodes", std::to_string(c.pathEncodes));
   RecordProperty("drawCalls", std::to_string(c.drawCalls));
   RecordProperty("pipelineSwitches", std::to_string(c.pipelineSwitches));
+  RecordProperty("bufferWrites", std::to_string(c.bufferWrites));
+  RecordProperty("bufferWriteBytes", std::to_string(c.bufferWriteBytes));
+  RecordProperty("textureWriteBytes", std::to_string(c.textureWriteBytes));
   RecordProperty("sameSourceDrawPairs", std::to_string(c.sameSourceDrawPairs));
   printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), c);
 
