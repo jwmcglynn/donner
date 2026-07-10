@@ -2,8 +2,9 @@
 """Decide whether an affected-target set contains instrumentable C/C++ code.
 
 Reads the output of `bazel query --output label_kind` for the affected-target
-set (as produced by the coverage lane's bazel-diff step) and reports whether any
-affected target is an instrumentable C/C++ compilation unit.
+set (as produced by the coverage lane's bazel-diff step, with aliases already
+resolved to their `actual` targets) and reports whether any affected target is
+an instrumentable C/C++ compilation unit.
 
 The coverage lane uses this to skip PR coverage when a change's affected targets
 are all non-instrumentable (docs, shell/python tooling, filegroups, build
@@ -41,11 +42,18 @@ NON_INSTRUMENTABLE_RULE_KINDS = frozenset(
         "java_binary",
         "java_test",
         "proto_library",
-        # Grouping / aliasing / query rules (no compilation of their own).
+        # Grouping / query rules (no compilation of their own). NOTE: `alias`
+        # is deliberately NOT listed. An alias can resolve to an instrumentable
+        # C++ target (for example the default alias donner_variant_cc_test emits,
+        # whose `actual` is a cc_test), so classifying `alias` as
+        # non-instrumentable would wrongly skip coverage on a BUILD-only change
+        # that only touches such an alias. The coverage lane resolves aliases to
+        # their `actual` targets before calling this tool; any `alias` kind that
+        # still reaches here could not be resolved and is treated as
+        # instrumentable below (fail closed: uncertainty never skips the gate).
         "filegroup",
         "genrule",
         "genquery",
-        "alias",
         "test_suite",
         "serve_http",
         # Configuration, flags, and platform/toolchain declarations.
