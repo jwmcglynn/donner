@@ -55,11 +55,17 @@ const kRightPaneWidth = 420;
 // "geode" so existing invocations keep their behavior.
 const kBackend = (process.env.DONNER_WASM_BACKEND || "geode").toLowerCase();
 const kRequireWebGpu = process.env.DONNER_WASM_REQUIRE_WEBGPU === "1";
+// Match Chromium's webgpu-swiftshader test configuration. In particular, do
+// not force the browser compositor onto Vulkan: Dawn selects SwiftShader for
+// WebGPU independently, while Chromium keeps a display path Xvfb can present.
 const kLinuxGeodeLaunchArgs = [
   "--enable-unsafe-webgpu",
-  "--enable-features=Vulkan",
   "--use-webgpu-adapter=swiftshader",
+  "--enable-dawn-features=allow_unsafe_apis",
+  "--disable-dawn-features=use_dxc",
+  "--enable-webgpu-developer-features",
   "--use-gpu-in-tests",
+  "--enable-accelerated-2d-canvas",
 ];
 
 // Pin the viewport to the native editor calibration size (1600x900). The
@@ -349,6 +355,7 @@ test("production Geode wasm presents visible editor pixels", async ({ page }) =>
   test.skip(kBackend !== "geode", "production WebGPU presentation is Geode-specific");
   const fatalMessages = await openEditor(page, { wgpuReadbackStats: false });
   const gpuDiagnostics = await readWebGpuDiagnostics(page);
+  console.log(`browser-gpu-diagnostics=${JSON.stringify(gpuDiagnostics)}`);
   await test.info().attach("browser-gpu-diagnostics", {
     body: JSON.stringify(gpuDiagnostics, null, 2),
     contentType: "application/json",
@@ -359,34 +366,39 @@ test("production Geode wasm presents visible editor pixels", async ({ page }) =>
     return;
   }
 
-  await expect
-    .poll(async () => {
-      const stats = await readCanvasColorStats(page, {
-        x: 0,
-        y: 0,
-        width: canvasBox.width,
-        height: canvasBox.height,
-      });
-      return stats.coloredPixels;
-    }, {
-      message: "expected the production WebGPU canvas to present colored document pixels",
-      timeout: 20000,
-    })
-    .toBeGreaterThan(1000);
+  const fullCanvasRegion = { x: 0, y: 0, width: canvasBox.width, height: canvasBox.height };
+  try {
+    await expect
+      .poll(async () => (await readCanvasColorStats(page, fullCanvasRegion)).coloredPixels, {
+        message: "expected the production WebGPU canvas to present colored document pixels",
+        timeout: 20000,
+      })
+      .toBeGreaterThan(1000);
+  } catch (error) {
+    console.log(
+      `full-canvas-stats=${JSON.stringify(await readCanvasColorStats(page, fullCanvasRegion))}`,
+    );
+    throw error;
+  }
   expect(fatalMessages).toEqual([]);
 });
 
 test("wasm editor renders colored document pixels", async ({ page }) => {
   const fatalMessages = await openEditor(page);
-  await expect
-    .poll(async () => {
-      const stats = await readRenderPaneColorStats(page);
-      return stats.nonBlackPixels > 1000 && stats.coloredPixels > 500 && stats.maxChannel > 80;
-    }, {
-      message: "expected non-black, colored pixels in the render pane",
-      timeout: 20000,
-    })
-    .toBe(true);
+  try {
+    await expect
+      .poll(async () => {
+        const stats = await readRenderPaneColorStats(page);
+        return stats.nonBlackPixels > 1000 && stats.coloredPixels > 500 && stats.maxChannel > 80;
+      }, {
+        message: "expected non-black, colored pixels in the render pane",
+        timeout: 20000,
+      })
+      .toBe(true);
+  } catch (error) {
+    console.log(`render-pane-stats=${JSON.stringify(await readRenderPaneColorStats(page))}`);
+    throw error;
+  }
 
   expect(fatalMessages).toEqual([]);
 });
