@@ -21,6 +21,7 @@ test fails loudly rather than silently passing.
 """
 
 import os
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -74,6 +75,14 @@ class WasmRenderTest(unittest.TestCase):
         return located
 
     def _run_driver(self, glue_path, wasm_path):
+        env = os.environ.copy()
+        node_options = shlex.split(env.get("NODE_OPTIONS", ""))
+        node_options = [option for option in node_options if option != "--jitless"]
+        if node_options:
+            env["NODE_OPTIONS"] = shlex.join(node_options)
+        else:
+            env.pop("NODE_OPTIONS", None)
+
         result = subprocess.run(
             [
                 self.node,
@@ -84,6 +93,7 @@ class WasmRenderTest(unittest.TestCase):
                 str(_HEIGHT),
             ],
             capture_output=True,
+            env=env,
             text=True,
         )
         return result
