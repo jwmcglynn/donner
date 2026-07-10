@@ -7,9 +7,9 @@
 ## Summary
 
 The web editor ships one static package that selects the best available renderer at runtime. Safari
-26 and newer use the Geode WebGPU backend when WebGPU exposes an adapter. Safari versions without
-WebGPU fall back to the TinySkia WebGL2 backend. Both paths retain the existing pthread build and
-therefore require HTTPS plus cross-origin isolation.
+26 and newer use the Geode WebGPU backend when WebGPU exposes an adapter. Safari 15.4 and newer
+without WebGPU fall back to the TinySkia WebGL2 backend. Both paths retain the existing pthread
+build and therefore require HTTPS plus cross-origin isolation.
 
 This design covers runtime startup and renderer selection on iPhone-class browsers. Responsive
 layout, touch-first controls, mobile toolbars, and other user-interface changes are separate work.
@@ -26,7 +26,8 @@ layout, touch-first controls, mobile toolbars, and other user-interface changes 
 ## Non-Goals
 
 - Responsive or touch-first editor UI.
-- Supporting Safari older than 15.2, which cannot run this pthread build securely.
+- Supporting Safari older than 15.4. Safari 15.2 adds the cross-origin isolation required by this
+  pthread build; Safari 15.4 adds the narrow `wasm-unsafe-eval` CSP source used by the host.
 - Replacing pthreads with a single-threaded build.
 - Making Geode run where Safari does not expose WebGPU.
 - Adding service-worker-based isolation. Hosts must send COOP and COEP directly.
@@ -47,7 +48,9 @@ layout, touch-first controls, mobile toolbars, and other user-interface changes 
   - [x] Include both backend binaries and their hashes in deployment provenance.
 - [x] Milestone 3: Add iOS-shaped browser verification.
   - [x] Run the combined package under Chromium with automatic Geode selection.
-  - [x] Run TinySkia under Playwright WebKit with an iPhone device profile.
+  - [x] Run automatic TinySkia fallback under Playwright WebKit with an iPhone device profile.
+  - [x] Prove WebKit TinySkia document pixels at the desktop calibration without changing mobile
+        layout.
   - [x] Assert secure context, cross-origin isolation, shared memory, WebGL2, backend selection, and
         successful runtime initialization.
 - [ ] Milestone 4: Complete release gates.
@@ -99,8 +102,9 @@ candidate is produced once in CI, records each file hash, and is promoted withou
 - `node --test donner/editor/wasm/tests/backend-selector.spec.mjs` enforces deterministic selection
   and unsupported-capability errors.
 - Existing Chromium suites continue to verify both Geode presentation and TinySkia pixels.
-- A Playwright WebKit project uses an iPhone device profile and the TinySkia fallback. It verifies
-  runtime initialization without claiming responsive UI support.
+- A Playwright WebKit project uses a real iPhone viewport and device pixel ratio to verify automatic
+  TinySkia fallback and stable runtime initialization. A second DPR-1 presentation case verifies
+  document pixels at the desktop calibration without claiming responsive UI support.
 - The Editor WASM workflow stages the combined package only after all three browser lanes pass.
 - `bazel test //...`, CMake generation validation, fuzzing, ASan, and UBSan remain release gates.
 
