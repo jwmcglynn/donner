@@ -43,6 +43,19 @@ jobs:
         with:
           node-version: 20
 
+      # JS-glue size safety gate. This is the only CI exercise of
+      # --config=wasm-size (--closure=1 + -sFILESYSTEM=0): it builds the
+      # tiny_skia svg-renderer wasm module with the shipped glue minification,
+      # then loads it under Node and asserts on rendered pixels. Without this a
+      # closure/filesystem-trim glue regression would pass CI silently. The
+      # render_test target keeps its `manual` tag (so plain wildcard builds under
+      # the wrong config do not pull in the wasm outputs); it is invoked here
+      # explicitly under the wasm-size config, in the same lane that builds wasm.
+      - name: WASM JS-glue render gate (closure + FILESYSTEM=0)
+        run: |
+          bazelisk test --config=wasm-size --test_output=errors \
+            //donner/svg/renderer/wasm:render_test
+
       - name: Install Playwright
         working-directory: donner/editor/wasm/tests
         run: |
