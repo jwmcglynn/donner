@@ -101,7 +101,9 @@ jobs:
             -- \
             //donner/... \
             -//donner/editor/tests:gl_rnr_replay_tests \
-            -//donner/svg/renderer/geode/...
+            -//donner/svg/renderer/geode/... \
+            -//donner/svg/renderer/tests:renderer_geode_golden_tests \
+            -//donner/svg/renderer/tests:renderer_geode_tests
 
           bazelisk test \
             --config=asan \
@@ -109,7 +111,9 @@ jobs:
             --test_env=ASAN_OPTIONS=detect_leaks=0 \
             --test_tag_filters=-fuzz_target \
             --build_tag_filters=-fuzz_target \
-            //donner/svg/renderer/geode/...
+            //donner/svg/renderer/geode/... \
+            //donner/svg/renderer/tests:renderer_geode_golden_tests \
+            //donner/svg/renderer/tests:renderer_geode_tests
 
   ubsan:
     runs-on: ubuntu-24.04
