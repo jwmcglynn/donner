@@ -274,16 +274,16 @@ this measurement repeatable. Optional but recommended before starting M1.
    the other levers.
 
 
-## Appendix: 2026-07-10 timing profile and RE-topology inventory
+## Appendix: 2026-07-10 timing profile and RE-backend analysis
 
 **Author:** Claude Opus 4.8 (CI-runtime agent)
 **Scope:** Root-cause the `linux-self-hosted` and `coverage-self-hosted` lanes
 that ran past 60 minutes under queue contention and were cancelled at the job
 timeout (PRs #808, #809). Timeouts were raised 60 -> 120 as a stopgap on
 affected branches by another agent; this appendix targets the root cause so the
-stopgap becomes unnecessary. Aligns with
-[0018: Donner Build, Test and CI Speed P0] (Verification section) and its
-Packet C (event-horizon capacity).
+stopgap becomes unnecessary. Aligns with the project's CI
+build/test speed and stability goals (the P95/P99 targets below) and the
+shared-backend capacity follow-ups.
 
 ### Stated goal (operator, 2026-07-10)
 
@@ -295,12 +295,13 @@ check finishing and INCLUDING queue wait:
 
 Primary metric is end-to-end run completion on that definition; a per-lane view
 is reported alongside it. Speed is the target, never coverage: no test removed,
-no lane skipped, no required check made optional. Governing infra principle
-(operator Packet C): all build/test executes on RE (NativeLink workers); GHA
-runner hosts stay thin dispatchers; solve tail latency by shifting cores to the
-RE backend, not by multiplying runner hosts. dev1 (the interactive dev host)
-has PRIORITY on shared RE capacity: if CI and dev1 contend, dev1 wins and the
-cost is paid in CI tail latency, stated here rather than eroding dev1 priority.
+no lane skipped, no required check made optional. Governing infra principle:
+all build/test executes on a shared remote-execution (RE)
+backend; runner hosts stay thin dispatchers; solve tail latency by shifting
+cores to the RE backend, not by multiplying runner hosts. An interactive
+development host has PRIORITY on shared RE capacity: if CI and interactive
+development contend, interactive development wins and the cost is paid in CI
+tail latency, stated here rather than eroding that priority.
 
 ### Method
 
@@ -310,20 +311,21 @@ cost is paid in CI tail latency, stated here rather than eroding dev1 priority.
   run. Execution = job started -> completed. Queue = run created -> job started.
   End-to-end per PR = latest run per workflow at a head SHA, max(job completed)
   - min(run created), non-skipped jobs only.
-- Split at Packet A (#799, "CI: PR lane under 15 minutes", merged 2026-07-06
-  ~19:00Z). Post-A is the state that matters; pre-A kept for contrast.
+- Split at the #799 PR-lane speedup ("CI: PR lane under 15 minutes", merged
+  2026-07-06 ~19:00Z). Post-#799 is the state that matters; pre-#799 kept for
+  contrast.
 
 ### End-to-end per PR (PR events, trigger -> last check, incl queue)
 
 | Window | n (head SHAs) | median | p90 | p95 | p99 | max | >15m | >30m |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| PRE Packet A (06-26..07-06) | 267 | 58.1 | 254 | 688 | 1028 | 1067 | 85% | 72% |
-| POST Packet A (07-06..07-10) | 43 | 15.3 | 71.0 | 270.6 | 304.0 | 306.6 | 51% | 33% |
+| PRE #799 (06-26..07-06) | 267 | 58.1 | 254 | 688 | 1028 | 1067 | 85% | 72% |
+| POST #799 (07-06..07-10) | 43 | 15.3 | 71.0 | 270.6 | 304.0 | 306.6 | 51% | 33% |
 
-All minutes. **Gap to goal (post-A): P95 270.6 vs 15; P99 304 vs 30.** Packet A
-fixed the median (58 -> 15.3); the entire remaining gap is tail.
+All minutes. **Gap to goal (post-#799): P95 270.6 vs 15; P99 304 vs 30.** The
+#799 speedup fixed the median (58 -> 15.3); the entire remaining gap is tail.
 
-### Per-lane wall-clock, POST Packet A (PR events, minutes)
+### Per-lane wall-clock, POST #799 (PR events, minutes)
 
 | Workflow:job | n | exec med | exec p90 | exec p95 | exec max | queue med | queue p90 | queue p95 | queue max |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -340,41 +342,32 @@ fixed the median (58 -> 15.3); the entire remaining gap is tail.
 `exec max = 60` on both self-hosted lanes is the timeout firing, not a real
 completion. exec med 0.0 means the lane was gated off (skipped) on that SHA.
 
-### Measured RE topology (event-horizon / deep-thought, read-only via ssh + incus)
+### Measured RE-backend structure
 
 The self-hosted lanes are NOT a single flat backend; correcting an earlier draft
-of this appendix that attributed the Linux lanes to deep-thought:
+of this appendix that attributed the Linux lanes to the macOS backend. The
+relevant structure, stated without private per-host capacity or identity:
 
-- **event-horizon**: 128 physical cores, 125 GB, Ampere Altra (aarch64), running
-  Incus/qemu VMs. Host load average was ~5-8 of 128 during this profiling (the
-  host itself is far from saturated). It hosts the RE executor, the runner host,
-  the CAS cache, AND the dev host, all as guests:
-  - `bazel-re1` VM: **96 vcpu / 80 GiB** = the RE executor at
-    `grpcs://bazel-re1.mcglynn.dev:50051` (192.168.1.83). This is the executor
-    the Linux `--config=ci` lanes use: gha-host1's bazelrc chains `--config=ci`
-    -> `--config=ci-re` -> `--remote_executor=grpcs://bazel-re1...:50051` for
-    build, test, AND coverage.
-  - `gha-host1` VM: **8 vcpu / 40 GiB** = the GitHub Actions runner host. All
-    four Linux runners (`donner-runner-linux-06..09`) share these 8 vcpu.
-  - `dev1` VM: **unlimited cpu (up to 128) / 80 GiB** = the interactive dev host.
-    dev1 also targets bazel-re1 for RE (`build:re --remote_executor=...1.83:50051`).
-  - `bazel-cache1` VM + `bazel-remote` (grpc `192.168.1.63:9092`, 100 GB zstd)
-    = the shared CAS/AC cache.
-  - Plus ~10 small service VMs (hub1, code1, zk1, sites1, etc., 1-8 vcpu each).
-- **deep-thought**: 14 cores / 64 GB, Apple silicon, runs `bazel-re2`
-  (nativelink launchd, `/opt/mcglynn/bazel-re2/nativelink-config.json5`, config
-  root-owned/unreadable without sudo) + the single macOS self-hosted runner.
-  bazel-re2 is the **macOS** executor (`build:re-macos ->
-  bazel-re2.mcglynn.dev:50051`), NOT the Linux/coverage executor.
+- The Linux `--config=ci` lanes (build, test, AND coverage) execute on a shared
+  remote-execution backend, reached via the runner bazelrc chain `--config=ci`
+  -> `--config=ci-re` -> `--remote_executor=...`.
+- The runner-side work runs on a runner host with limited shared cores; several
+  Linux runners share that host.
+- An interactive development host with priority targets the SAME shared RE
+  backend for its interactive builds.
+- The macOS lanes use a SEPARATE macOS remote-execution backend, NOT the
+  Linux/coverage backend.
 
-**Allocation math:** bazel-re1 (96 vcpu) + dev1 (up to 128 vcpu) alone
-overcommit the 128 physical cores ~1.75x before counting gha-host1 and the
-service VMs. So the executor and the dev host structurally compete for the same
-silicon, which is exactly the dev1-vs-CI RE contention the operator flagged.
+**Allocation:** the shared RE backend and the priority interactive host are
+provisioned to overcommit the underlying shared build host, so the executor and
+the interactive host structurally compete for the same cores. That is exactly
+the interactive-vs-CI RE contention the operator flagged. The shared build host
+itself ran at low average load during this profiling, so the bottleneck is
+contention on the shared path, not a saturated host.
 
 ### Dominant cost: two contention points on the shared RE path (drives P95/P99)
 
-The three worst post-A PR SHAs decompose as queue 232-270 min + a 30-60 min
+The three worst post-#799 PR SHAs decompose as queue 232-270 min + a 30-60 min
 (timeout) exec on a self-hosted lane, e2e 292-307 min. Step-level on the two
 60-min cancellations (runs 29076327250, 29077015684, two different PRs started
 within one second at 11:24:44-45Z): checkout 11s, toolchain sync 10s, LLVM fetch
@@ -382,23 +375,25 @@ within one second at 11:24:44-45Z): checkout 11s, toolchain sync 10s, LLVM fetch
 timeout. Setup is ~1 minute; 100% of the wasted hour is one coverage step that
 never finished.
 
-Uncontended, an incremental `coverage-self-hosted` run is ~2.5 min (post-A
+Uncontended, an incremental `coverage-self-hosted` run is ~2.5 min (post-#799
 median). Under concurrency it blows up ~20x (superlinear) into the timeout. Two
-contention points compound, neither of them raw executor cores (96 is ample):
+contention points compound, neither of them raw executor cores (the
+executor is not core-starved):
 
-1. **Runner-side, gha-host1 8 vcpu.** The coverage lane is not a thin client:
-   `tools/coverage.sh` pulls coverage outputs back and runs the profdata/lcov
-   merge LOCALLY on the runner (the coverage lane does not set
+1. **Runner-side, limited shared runner cores.** The coverage lane is not a
+   thin client: `tools/coverage.sh` pulls coverage outputs back and runs the
+   profdata/lcov merge LOCALLY on the runner (the coverage lane does not set
    `--remote_download_outputs=minimal`, unlike the CI build lane which does).
-   Up to four runners share 8 vcpu on gha-host1, so N concurrent coverage merges
-   get ~8/N vcpu and thrash. LIVE evidence 2026-07-10: with three
-   `coverage-self-hosted` jobs running at once (branches ci/runtime-opt,
-   size/binary-size-pass, editor-v08-ux-polish), a SMOKE-subset
-   (`//donner/base/...`) coverage run sat in `Generate coverage` for 45+ minutes
-   versus its ~2-3 min uncontended cost.
-2. **Executor-side, bazel-re1 shared with dev1.** CI coverage/linux actions and
-   dev1 interactive builds both execute on bazel-re1, whose 96 vcpu overcommit
-   the host against dev1's unlimited allocation. When dev1 (priority) or several
+   Several Linux runners share the runner host's limited cores, so N concurrent
+   coverage merges get ~1/N of that budget and thrash. LIVE evidence
+   2026-07-10: with three `coverage-self-hosted` jobs running at once (three
+   concurrent operator PRs), a SMOKE-subset (`//donner/base/...`) coverage run
+   sat in `Generate coverage` for 45+ minutes versus its ~2-3 min uncontended
+   cost.
+2. **Executor-side, RE backend shared with interactive development.** CI
+   coverage/linux actions and interactive builds both execute on the shared RE
+   backend, which is provisioned to overcommit the underlying host against the
+   interactive host's allocation. When the priority interactive host or several
    CI jobs are active, CI RE actions are descheduled.
 
 The huge queue wait (self-hosted p95 239-240 min, max 270) is the same pathology
@@ -407,17 +402,17 @@ jobs wait hours for a slot. Queue and execution are coupled through contention.
 
 The self-hosted lanes are gated on `github.actor == jwmcglynn &&
 github.triggering_actor == jwmcglynn`, so this is the operator's own concurrent
-PRs (and dev1) contending, not third-party load.
+PRs (and interactive development) contending, not third-party load.
 
 ### Secondary cost: hosted full //... fallback on infra-file PRs (drives P90)
 
-A cluster of post-A PR SHAs sits at e2e 66-78 min with near-zero queue, exec in
+A cluster of post-#799 PR SHAs sits at e2e 66-78 min with near-zero queue, exec in
 the hosted `CI:linux` (66-77 min) or hosted `Co:build` (71 min). These are PRs
 touching build-graph infra (`MODULE.bazel`, `WORKSPACE*`, `.bazelrc`,
 `build_defs/*`, `.github/workflows/*`, `.github/actions/*`): `determine-targets`
 correctly forces a full `//...`, the self-hosted lanes skip by design (gate
 requires `fallback != 'true'`), and the hosted lane runs the whole graph on
-GitHub's disk cache. About 19% of post-A PR SHAs. Separate population from the
+GitHub's disk cache. About 19% of post-#799 PR SHAs. Separate population from the
 self-hosted tail; matters for P90, not the P95/P99 gap.
 
 ### Not significant (ruled out with numbers)
@@ -425,10 +420,11 @@ self-hosted tail; matters for P90, not the P95/P99 gap.
 - Checkout / toolchain sync / LLVM fetch on self-hosted: ~1 min total (measured
   11s + 10s + 32-45s). Not a lever.
 - `determine-targets` / `gatekeeper` / `bazel-diff`: ~1 min. Not a lever.
-- Raw executor cores: bazel-re1 has 96 vcpu; the crawl is contention (runner
-  8-vcpu merge + dev1 overcommit), not an undersized executor.
-- Packet A incremental scoping works: coverage-self-hosted exec median fell
-  17 -> 2.5 min pre->post Packet A.
+- Raw executor cores: the shared RE backend is not core-starved; the crawl is
+  contention (runner-local merge on limited cores + overcommit against
+  interactive development), not an undersized executor.
+- The #799 incremental scoping works: coverage-self-hosted exec median fell
+  17 -> 2.5 min pre->post #799.
 - macos-self-hosted: exec p95 4.1 min. Healthy; leave unchanged.
 
 ### Ranked levers toward the P95<=15 / P99<=30 goal
@@ -437,33 +433,35 @@ self-hosted tail; matters for P90, not the P95/P99 gap.
    agent; landed as PR #817).** Per-lane GitHub Actions job concurrency groups
    (`donner-selfhosted-linux-re`, `donner-selfhosted-coverage-re`,
    `cancel-in-progress: false`) so at most one coverage build and one linux
-   build hit bazel-re1 at a time across all of the operator's in-flight PRs.
-   This removes the superlinear oversubscription that produces the 35-60 min
-   crawls and the 60-min timeouts, and it DIRECTLY serves dev1 priority by
-   bounding CI's demand on the shared bazel-re1. Per-lane (not one shared) group
+   build hit the shared RE backend at a time across all of the operator's
+   in-flight PRs. This removes the superlinear oversubscription that produces
+   the 35-60 min crawls and the 60-min timeouts, and it DIRECTLY serves
+   interactive-development priority by bounding CI's demand on the shared RE
+   backend. Per-lane (not one shared) group
    keeps the common two-PR burst free of pending-eviction while making the
    measured failure (two concurrent coverage builds) impossible. Caveat: for
    `pull_request`, GitHub runs the base-branch workflow, so this validates on
    the first post-merge bursts (ci-times monitor red-count), not on the
    introducing PR.
 2. **Make the coverage lane a thin RE client (software, follow-up).** The
-   coverage merge runs locally on gha-host1's 8 vcpu. Either move the
-   profdata/lcov merge into a bazel-executed (RE) action, or scope
-   `--remote_download_*` so only the merged report returns, keeping gha-host1
-   thin per the Packet C principle. Needs care to preserve the exact Codecov
-   output; not attempted here.
-3. **RE-vs-dev1 capacity rebalance on event-horizon (operator, Packet C;
-   RECOMMEND, do not self-apply while CI is in flight).** The host has 128 cores
-   at ~5-8 load but bazel-re1 (96) and dev1 (unlimited) overcommit it. Options,
-   each reversible via `incus config set` but each requiring a dev1-latency
-   measurement under CI load before/after: (a) give dev1 a guaranteed cpu
-   reservation / higher scheduler weight so its interactive builds always
-   preempt CI on bazel-re1 (encodes dev1 priority in the scheduler instead of by
-   luck); (b) cap bazel-re1 to leave physical-core headroom for dev1; (c) if
-   NativeLink on bazel-re1 supports action priority/queue tiers, give dev1 a
-   higher tier than CI. Requires reading bazel-re1's nativelink config (inside
-   the VM; needs operator access). This is the lever that closes the burst tail
-   once lever 1 caps CI concurrency.
+   coverage merge runs locally on the runner host's limited cores. Either move
+   the profdata/lcov merge into a bazel-executed (RE) action, or scope
+   `--remote_download_*` so only the merged report returns, keeping the runner
+   host thin per that principle. Needs care to preserve the exact
+   Codecov output; not attempted here.
+3. **RE-vs-interactive capacity rebalance on the shared build host (operator;
+   RECOMMEND, do not self-apply while CI is in flight).** The shared
+   host runs at low average load, but the RE backend and the interactive host
+   are provisioned to overcommit it. Options, each reversible via host config
+   but each requiring an interactive-latency measurement under CI load
+   before/after: (a) give the interactive host a guaranteed cpu reservation /
+   higher scheduler weight so its interactive builds always preempt CI on the
+   shared RE backend (encodes the priority in the scheduler instead of by luck);
+   (b) cap the RE backend to leave core headroom for the interactive host; (c)
+   if the RE backend supports action priority/queue tiers, give interactive
+   development a higher tier than CI. Requires operator access to the RE backend
+   config. This is the lever that closes the burst tail once lever 1 caps CI
+   concurrency.
 4. **Hosted full //... fallback cost (secondary, P90).** An internal
    authenticated remote cache/executor for hosted runs (0029-2 Milestone 6)
    would cut the 60-78 min infra-change fallback; larger change, off the
@@ -471,10 +469,11 @@ self-hosted tail; matters for P90, not the P95/P99 gap.
 
 ### Reconciliation with the 60 -> 120 timeout stopgap
 
-With lever 1 the lanes no longer oversubscribe bazel-re1, so uncontended exec
+With lever 1 the lanes no longer oversubscribe the shared RE backend, so
+uncontended exec
 stays well under 60 min and the raise is unnecessary; the 60 min bound stays as
 a fast-fail on a genuinely wedged endpoint (paired with
-`remote_local_fallback=false`), matching the 0018 end-state.
+`remote_local_fallback=false`), matching the intended CI end-state.
 
 ### Projected P95/P99 after lever 1 (and required for the goal)
 
@@ -485,9 +484,10 @@ a fast-fail on a genuinely wedged endpoint (paired with
   ~15-25 min and P99 from 304 min toward ~25-35 min. This is a projection: the
   base-branch workflow semantics above mean it is confirmed on post-merge
   traffic, not pre-merge.
-- Reaching P99 <= 30 under heavier bursts, without eroding dev1 priority, needs
-  lever 3 (protect dev1 in the scheduler so CI can safely use more of bazel-re1
-  when dev1 is idle) and/or lever 2 (thin coverage client). Software alone
-  (lever 1) is projected to clear P95 <= 15 for the common case and get P99
-  close to 30; the last margin and the dev1-priority guarantee are operator
-  infra decisions, quantified above.
+- Reaching P99 <= 30 under heavier bursts, without eroding interactive-
+  development priority, needs lever 3 (protect interactive development in the
+  scheduler so CI can safely use more of the shared RE backend when the
+  interactive host is idle) and/or lever 2 (thin coverage client). Software
+  alone (lever 1) is projected to clear P95 <= 15 for the common case and get
+  P99 close to 30; the last margin and the interactive-priority guarantee are
+  operator infra decisions, quantified above.
