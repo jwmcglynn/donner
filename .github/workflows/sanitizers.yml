@@ -98,6 +98,7 @@ jobs:
             --test_output=errors \
             --test_tag_filters=-fuzz_target \
             --build_tag_filters=-fuzz_target \
+            -- \
             //donner/... \
             -//donner/editor/tests:gl_rnr_replay_tests \
             -//donner/svg/renderer/geode/...
