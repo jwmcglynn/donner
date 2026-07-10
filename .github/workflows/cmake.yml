@@ -76,9 +76,22 @@ jobs:
             return 1
           }
 
+          base_sha="${{ github.event.pull_request.base.sha }}"
+          head_sha="${{ github.event.pull_request.head.sha }}"
+          # Diff from the merge-base, not the base tip: base.sha is the base
+          # branch's CURRENT tip, so a two-dot diff attributes post-fork drift
+          # on main to the PR and can wrongly clear docs_only for a genuine
+          # docs-only branch. Fail closed: if merge-base cannot be computed,
+          # keep the base-tip diff (drift can only flip docs_only to false,
+          # which runs MORE CI, never less).
+          if diff_base="$(git merge-base "$base_sha" "$head_sha")"; then
+            echo "Using merge-base $diff_base as diff basis."
+          else
+            echo "git merge-base failed; using base tip $base_sha as diff basis."
+            diff_base="$base_sha"
+          fi
           changed_files="$(git diff --name-only --diff-filter=ACMR \
-            "${{ github.event.pull_request.base.sha }}" \
-            "${{ github.event.pull_request.head.sha }}")"
+            "$diff_base" "$head_sha")"
 
           if [[ -z "$changed_files" ]]; then
             echo "docs_only=false" >> "$GITHUB_OUTPUT"
