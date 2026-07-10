@@ -3122,6 +3122,8 @@ TEST(GlRnrReplayTest, ReplaysSourcePaneCharacterInput) {
     file.frames.push_back(std::move(frame));
   };
 
+  // Source starts collapsed by design. First click the reveal rail, then click
+  // again after the pane is visible to focus the editor before typing.
   pushFrame(0, 30.0, 70.0, 0, 0);
   repro::ReproEvent mouseDown;
   mouseDown.kind = repro::ReproEvent::Kind::MouseDown;
@@ -3131,15 +3133,18 @@ TEST(GlRnrReplayTest, ReplaysSourcePaneCharacterInput) {
   mouseUp.kind = repro::ReproEvent::Kind::MouseUp;
   mouseUp.mouseButton = 0;
   pushFrame(2, 30.0, 70.0, 0, 0, {mouseUp});
+  pushFrame(3, 30.0, 70.0, 0, 0);
+  pushFrame(4, 30.0, 70.0, 1, 0, {mouseDown});
+  pushFrame(5, 30.0, 70.0, 0, 0, {mouseUp});
   repro::ReproEvent selectAllDown;
   selectAllDown.kind = repro::ReproEvent::Kind::KeyDown;
   selectAllDown.key = static_cast<int>(ImGuiKey_A);
   selectAllDown.modifiers = 1 << 0;
-  pushFrame(3, 30.0, 70.0, 0, 1 << 0, {selectAllDown});
+  pushFrame(6, 30.0, 70.0, 0, 1 << 0, {selectAllDown});
   repro::ReproEvent selectAllUp;
   selectAllUp.kind = repro::ReproEvent::Kind::KeyUp;
   selectAllUp.key = static_cast<int>(ImGuiKey_A);
-  pushFrame(4, 30.0, 70.0, 0, 0, {selectAllUp});
+  pushFrame(7, 30.0, 70.0, 0, 0, {selectAllUp});
 
   std::vector<repro::ReproEvent> characterEvents;
   for (const unsigned char c : kEditedSource) {
@@ -3148,8 +3153,8 @@ TEST(GlRnrReplayTest, ReplaysSourcePaneCharacterInput) {
     event.codepoint = c;
     characterEvents.push_back(event);
   }
-  pushFrame(5, 30.0, 70.0, 0, 0, std::move(characterEvents));
-  for (std::uint64_t index = 6; index <= 60; ++index) {
+  pushFrame(8, 30.0, 70.0, 0, 0, std::move(characterEvents));
+  for (std::uint64_t index = 9; index <= 63; ++index) {
     pushFrame(index, 30.0, 70.0, 0, 0);
   }
 
@@ -3158,17 +3163,17 @@ TEST(GlRnrReplayTest, ReplaysSourcePaneCharacterInput) {
   repro::GlRnrReplayOptions options;
   options.rnrPath = reproPath;
   options.outputDir = outputDir;
-  options.captureFrames.insert(60);
+  options.captureFrames.insert(63);
   options.cropMode = repro::GlRnrReplayCropMode::Full;
   options.pace = false;
   options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
-  options.maxFrame = 60;
+  options.maxFrame = 63;
 
   repro::GlRnrReplayResult result;
   std::string error;
   ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
-  std::optional<svg::RendererBitmap> bitmap = LoadCaptureBitmap(result, 60);
+  std::optional<svg::RendererBitmap> bitmap = LoadCaptureBitmap(result, 63);
   ASSERT_TRUE(bitmap.has_value());
   const svg::RendererBitmap renderPaneCrop =
       CropBitmap(*bitmap, PixelCrop{.x = 560, .y = 0, .width = 500, .height = 600});
@@ -3286,7 +3291,7 @@ TEST(GlRnrReplayTest, GeodeDragZoomOReplayCoversTextureReuseWindow) {
   }
 }
 
-TEST(GlRnrReplayTest, GeodeDragZoomRerasterizesDonnerDOverlayEveryPresentedFrame) {
+TEST(GlRnrReplayTest, GeodeDragZoomRebuildsDonnerDGestureBoundsEveryPresentedFrame) {
   constexpr std::uint64_t kFirstZoomFrame = 31;
   constexpr std::uint64_t kLastZoomFrame = 40;
 
@@ -3325,8 +3330,10 @@ TEST(GlRnrReplayTest, GeodeDragZoomRerasterizesDonnerDOverlayEveryPresentedFrame
     ASSERT_NE(diagnostics, nullptr) << "missing diagnostics for replay frame " << frame;
     EXPECT_EQ(diagnostics->frameCost.overlay.selectedElementCount, 1)
         << "Selection overlay was not rebuilt for presented zoom frame " << frame;
-    EXPECT_EQ(diagnostics->frameCost.overlay.pathCount, 1)
-        << "Selection path overlay was not rebuilt for presented zoom frame " << frame;
+    EXPECT_TRUE(diagnostics->frameCost.overlay.selectionBoundsOnly)
+        << "Active drag should use gesture-owned bounds chrome on presented zoom frame " << frame;
+    EXPECT_EQ(diagnostics->frameCost.overlay.pathCount, 0)
+        << "Active drag re-traversed selected path geometry on presented zoom frame " << frame;
     EXPECT_EQ(diagnostics->frameCost.overlay.handleCount, 4)
         << "Selection transform handles were not rebuilt for presented zoom frame " << frame;
     EXPECT_GT(diagnostics->frameCost.overlay.payloadBytes, 0u)
