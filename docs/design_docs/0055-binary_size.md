@@ -111,7 +111,7 @@ Node-driven bazel `py_test` that renders through the public C API and asserts on
 a pixel hash; it is what makes closure minification safe to ship (R2). Run it
 with `bazel test --config=wasm-size //donner/svg/renderer/wasm:render_test`.
 
-## Baseline (measured 2026-07-10, deep-thought, macOS arm64)
+## Baseline (measured 2026-07-10, an internal build host, macOS arm64)
 
 Native, `--config=macos-binary-size`, stripped, arm64 Mach-O:
 
@@ -244,8 +244,8 @@ Two other native levers were evaluated and not taken:
   buys almost nothing on these statically linked executables. Not taken.
 - lld `--icf=all`: a Linux/ELF lld lever. This host links macOS with Apple `ld`
   (via xcrun), which rejects `--icf` and already deduplicates identical code by
-  default, so there is no macOS ICF win to capture and the deep-thought host
-  cannot measure the Linux delta. Ranked as pending a Linux measurement.
+  default, so there is no macOS ICF win to capture and this
+  macOS host cannot measure the Linux delta. Ranked as pending a Linux measurement.
 
 While adding the LTO reporting, two latent bugs in the macOS attribution path
 were fixed in `tools/binary_size.sh`: it now explicitly builds the unstripped
@@ -257,7 +257,7 @@ remote-cache host).
 
 ## Final sizes vs baseline (waves 1 and 2)
 
-All measured on deep-thought (macOS arm64) with `bash tools/binary_size.sh`.
+All measured on an internal build host (macOS arm64) with `bash tools/binary_size.sh`.
 
 Native, stripped arm64 Mach-O. "Shipped" is the ThinLTO
 (`--config=binary-size-lto`) build:
@@ -314,7 +314,7 @@ Remaining, ranked (not taken this pass):
 
 5. Native identical-code folding (`lld --icf=all`): a Linux-only lever this
    macOS host cannot measure (Apple ld rejects it and already deduplicates).
-   Needs a Linux measurement on dev1/event-horizon to size the win before it
+   Needs a Linux measurement on an internal Linux build host to size the win before it
    lands in `--config=linux-binary-size`. Cheap to try, unquantified here.
 6. Compile-unit audits of the heaviest units (`AttributeParser.cc` 374 KiB,
    `SVGParser.cc` 270 KiB, `SVGDocument.cc` 176 KiB, `PropertyRegistry.cc`
