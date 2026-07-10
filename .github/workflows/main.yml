@@ -447,6 +447,25 @@ jobs:
     # it at 60 min for buffer while a wedged/degraded RE endpoint still
     # fast-fails instead of silently tailing for hours.
     timeout-minutes: 60
+    # Admission control on the shared RE path. The Linux self-hosted lanes
+    # execute on bazel-re1 (a 96-vcpu Incus VM on event-horizon, reached via the
+    # runner bazelrc --config=ci -> ci-re -> remote_executor=bazel-re1:50051),
+    # which the priority dev host dev1 also uses; the runner-side work runs on
+    # gha-host1 (8 vcpu shared by all four runners). Two-plus concurrent operator
+    # PRs oversubscribe that path ~20x and crawl into the 60 min timeout (measured
+    # 2026-07-10; see docs/design_docs/0029-2-ci_runtime.md appendix). This
+    # per-lane group serializes linux-self-hosted across all of the operator's
+    # in-flight PRs so at most one runs at a time; the sibling
+    # coverage-self-hosted lane has its own group, so a Linux build and a
+    # coverage build may overlap but two of the same heavy lane never do.
+    # Bounding CI's demand on bazel-re1 also protects dev1's interactive
+    # latency. cancel-in-progress: false never kills a running build (a
+    # superseded push to the SAME PR is already cancelled by the workflow-level
+    # concurrency group). This job-level group composes with the workflow-level
+    # group and with the centralized routing in PR #818 (it is gate-agnostic).
+    concurrency:
+      group: donner-selfhosted-linux-re
+      cancel-in-progress: false
     env:
       # The runner host may add the LAN Bazel cache from its home rc. Use that
       # acceleration when healthy, but do NOT fall back to local execution when
