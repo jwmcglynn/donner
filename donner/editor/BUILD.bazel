@@ -381,6 +381,20 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "source_structural_move",
+    srcs = ["SourceStructuralMove.cc"],
+    hdrs = ["SourceStructuralMove.h"],
+    deps = [
+        ":editor_app",
+        ":flash_decorations",
+        ":lock_state",
+        ":source_selection",
+        "//donner/base/xml",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
     name = "shape_clipboard_payload",
     srcs = ["ShapeClipboardPayload.cc"],
     hdrs = ["ShapeClipboardPayload.h"],
@@ -934,6 +948,7 @@ donner_cc_library(
         ":sidebar_presenter",
         ":source_diagnostics_panel",
         ":source_selection",
+        ":source_structural_move",
         ":style_source_annotations",
         ":text_editor",
         ":text_format_bar_presenter",

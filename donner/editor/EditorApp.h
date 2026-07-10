@@ -254,6 +254,23 @@ public:
                                    std::optional<svg::SVGElement> referenceSibling);
 
   /**
+   * Move \p element into \p parent before \p referenceElement as one undoable DOM edit.
+   *
+   * Unlike \ref reorderElementBeforeSibling, this supports cross-parent moves. It rejects roots,
+   * locked subtrees, non-container parents, cycles, foreign elements, invalid references, and
+   * no-op positions. Structured editing reflects the committed DOM move into source.
+   *
+   * @param element Element to move.
+   * @param parent Destination container in the current document.
+   * @param referenceElement Destination sibling, or \c std::nullopt to append.
+   * @param undoLabel Label for the single undo entry.
+   * @return True when the move was queued.
+   */
+  bool moveElementBefore(svg::SVGElement element, svg::SVGElement parent,
+                         std::optional<svg::SVGElement> referenceElement,
+                         std::string_view undoLabel = "Move element");
+
+  /**
    * Rename the single selected element's `id` to @p newId, updating every
    * internal reference so the document keeps rendering the same - one undoable
    * structural edit.

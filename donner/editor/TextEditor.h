@@ -225,6 +225,16 @@ public:
     bool operator==(const SourceStyleDecoration& other) const = default;
   };
 
+  /// Source structural-drag decoration supplied by the editor shell.
+  struct SourceStructuralMoveDecoration {
+    SourceByteRange elementRange;
+    std::size_t insertionOffset = 0;
+    bool valid = false;
+    std::string message;
+
+    bool operator==(const SourceStructuralMoveDecoration&) const = default;
+  };
+
   // Constants
   static constexpr int kLineNumberSpace = 20;  //!< Width of line number margin in pixels
 
@@ -332,6 +342,18 @@ public:
   [[nodiscard]] std::optional<Coordinates> hoveredTextPosition() const {
     return hoveredTextPosition_;
   }
+  /// Return and clear the line whose gutter handle began a structural drag.
+  [[nodiscard]] std::optional<int> takeSourceGutterDragStartedLine();
+  /// Current source position under an active gutter drag.
+  [[nodiscard]] std::optional<Coordinates> sourceGutterDragTarget() const {
+    return sourceGutterDragTarget_;
+  }
+  /// Return and clear a completed gutter drop position.
+  [[nodiscard]] std::optional<Coordinates> takeSourceGutterDropTarget();
+  /// Return and clear the gutter-drag cancellation flag.
+  [[nodiscard]] bool takeSourceGutterDragCancelled();
+  /// Cancel any active gutter drag without emitting a drop.
+  void cancelSourceGutterDrag();
   void resetTextChanged() { core_.resetTextChanged(); }
   /// True if user-facing edits have pending byte-level source intents.
   bool hasPendingSourceEditIntents() const { return core_.hasPendingSourceEditIntents(); }
@@ -622,6 +644,12 @@ public:
   bool setActiveSourceDiagnosticId(std::optional<std::uint64_t> id);
   [[nodiscard]] std::optional<std::uint64_t> activeSourceDiagnosticId() const {
     return activeSourceDiagnosticId_;
+  }
+  /// Set the current source structural-move preview decoration.
+  bool setSourceStructuralMoveDecoration(std::optional<SourceStructuralMoveDecoration> decoration);
+  [[nodiscard]] const std::optional<SourceStructuralMoveDecoration>&
+  sourceStructuralMoveDecoration() const {
+    return sourceStructuralMoveDecoration_;
   }
   /// Set source style/cascade decorations.
   bool setSourceStyleDecorations(std::vector<SourceStyleDecoration> decorations);
@@ -1110,6 +1138,7 @@ private:
   std::vector<SourceByteRange> hoverSourceRanges_;   //!< Source ranges highlighted on hover
   std::vector<SourceDiagnostic> sourceDiagnostics_;  //!< Exact parser diagnostic ranges.
   std::optional<std::uint64_t> activeSourceDiagnosticId_;
+  std::optional<SourceStructuralMoveDecoration> sourceStructuralMoveDecoration_;
   std::vector<SourceStyleDecoration> sourceStyleDecorations_;  //!< Style source decorations.
   FocusPartition focusPartition_;
   bool focusPartitionActive_ = false;
@@ -1216,15 +1245,20 @@ private:
   // `scrollbarMarkers_`, and `changedLines_` all moved into
   // `TextEditorCore`. The reference aliases below preserve the short
   // names used by the render / input-handling code.
-  bool horizontalScroll_ = false;                           //!< Enable horizontal scrolling
-  bool wordWrapEnabled_ = true;                             //!< Enable source-pane soft wrapping
-  bool showLineNumbers_ = true;                             //!< Show line numbers
-  bool highlightLine_ = true;                               //!< Highlight current line
-  bool highlightBrackets_ = false;                          //!< Highlight matching brackets
-  bool focused_ = false;                                    //!< Editor has keyboard focus
-  bool withinRender_ = false;                               //!< Currently rendering
-  bool cursorPositionChangedByMouse_ = false;               //!< Mouse moved cursor this frame
-  std::optional<Coordinates> hoveredTextPosition_;          //!< Text coordinates under the mouse
+  bool horizontalScroll_ = false;                   //!< Enable horizontal scrolling
+  bool wordWrapEnabled_ = true;                     //!< Enable source-pane soft wrapping
+  bool showLineNumbers_ = true;                     //!< Show line numbers
+  bool highlightLine_ = true;                       //!< Highlight current line
+  bool highlightBrackets_ = false;                  //!< Highlight matching brackets
+  bool focused_ = false;                            //!< Editor has keyboard focus
+  bool withinRender_ = false;                       //!< Currently rendering
+  bool cursorPositionChangedByMouse_ = false;       //!< Mouse moved cursor this frame
+  std::optional<Coordinates> hoveredTextPosition_;  //!< Text coordinates under the mouse
+  std::optional<int> sourceGutterDragLine_;
+  std::optional<int> sourceGutterDragStartedLine_;
+  std::optional<Coordinates> sourceGutterDragTarget_;
+  std::optional<Coordinates> sourceGutterDropTarget_;
+  bool sourceGutterDragCancelled_ = false;
   float textStart_ = 20.0f;                                 //!< X offset where text begins
   int leftMargin_ = kLineNumberSpace;                       //!< Left margin width
   bool handleKeyboardInputs_ = true;                        //!< Process keyboard input
@@ -1402,6 +1436,7 @@ private:
   void expandFocusHiddenRange(LineRange range);
   [[nodiscard]] bool tryExpandFocusHiddenPlaceholderAt(const ImVec2& position);
   void updateHoveredTextPosition();
+  void updateSourceGutterDragInput();
   [[nodiscard]] int visualLineIndexForCoordinates(const Coordinates& position) const;
   [[nodiscard]] Coordinates visualScreenPosToCoordinates(const ImVec2& position) const;
   [[nodiscard]] Coordinates visibleSelectionEndCoordinates() const;
@@ -1445,6 +1480,7 @@ private:
   void renderLineBackground(const VisualLine& visualLine, const ImVec2& start,
                             const ImVec2& contentSize, ImDrawList* drawList);
   void renderSourceDiagnosticTooltip();
+  void renderSourceStructuralMoveTooltip();
   void renderFocusReferenceLinks(ImDrawList* drawList);
 
   /**

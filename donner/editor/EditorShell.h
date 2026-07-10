@@ -32,6 +32,7 @@
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/SidebarPresenter.h"
 #include "donner/editor/SourceDiagnosticsPanel.h"
+#include "donner/editor/SourceStructuralMove.h"
 #include "donner/editor/StyleSourceAnnotations.h"
 #include "donner/editor/TextEditor.h"
 #include "donner/editor/TextFormatBarPresenter.h"
@@ -378,6 +379,8 @@ private:
       const std::vector<svg::SVGElement>& elements) const;
   [[nodiscard]] std::vector<svg::SVGElement> referenceHighlightElements() const;
   [[nodiscard]] std::vector<svg::SVGElement> combinedSourcePreviewElements() const;
+  void updateSourceStructuralDrag();
+  void clearSourceStructuralDrag();
   void updateSourceHoverPreview();
   void refreshReferenceHighlightSummaryIfNeeded();
   void applyReferenceHighlightPreview();
@@ -451,6 +454,9 @@ private:
   ActiveTool activeTool_ = ActiveTool::Select;
   TextEditor textEditor_;
   SourceDiagnosticsPanel sourceDiagnosticsPanel_;
+  std::optional<svg::SVGElement> sourceStructuralDragElement_;
+  std::optional<svg::SVGElement> sourceStructuralMoveTarget_;
+  std::optional<SourceStructuralMovePlan> sourceStructuralMovePlan_;
   /// Backing store for shape Cut/Copy/Paste. Holds the headered
   /// `# donner-shape-clipboard v1` payload (see `ShapeClipboardPayload`).
   std::unique_ptr<ClipboardInterface> shapeClipboard_;

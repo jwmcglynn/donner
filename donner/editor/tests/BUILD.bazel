@@ -248,6 +248,17 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "source_structural_move_tests",
+    srcs = ["SourceStructuralMove_tests.cc"],
+    deps = [
+        "//donner/editor:editor_app",
+        "//donner/editor:source_structural_move",
+        "//donner/svg",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "viewport_interaction_controller_tests",
     srcs = ["ViewportInteractionController_tests.cc"],
     deps = [
