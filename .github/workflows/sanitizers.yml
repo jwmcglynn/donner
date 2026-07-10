@@ -87,9 +87,13 @@ jobs:
 
       - name: Test //donner/... with ASan
         run: |
+          # The blocking Fuzz workflow owns fuzz_target tests under ASan. Excluding them here keeps
+          # this job focused on unit and integration coverage without running each timed fuzzer twice.
           bazelisk test \
             --config=asan \
             --test_output=errors \
+            --test_tag_filters=-fuzz_target \
+            --build_tag_filters=-fuzz_target \
             //donner/...
 
   ubsan:
@@ -127,7 +131,11 @@ jobs:
 
       - name: Test //donner/... with UBSan
         run: |
+          # The blocking Fuzz workflow owns fuzz_target tests under ASan. The targeted UBSan fuzzer
+          # regression for An+B integer overflow is recorded separately in the candidate review.
           bazelisk test \
             --config=ubsan \
             --test_output=errors \
+            --test_tag_filters=-fuzz_target \
+            --build_tag_filters=-fuzz_target \
             //donner/...

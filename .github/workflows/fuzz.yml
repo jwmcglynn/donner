@@ -65,9 +65,7 @@ jobs:
             --test_output=errors \
             --test_tag_filters=fuzz_target \
             --build_tag_filters=fuzz_target \
-            //... || true
-        # Marked informational for now: drop `|| true` once the fuzzer corpus
-        # passes cleanly across all platforms.
+            //...
 
   macos:
     runs-on: macos-26
@@ -94,6 +92,4 @@ jobs:
             --test_output=errors \
             --test_tag_filters=fuzz_target \
             --build_tag_filters=fuzz_target \
-            //... || true
-        # Marked informational for now: drop `|| true` once the fuzzer corpus
-        # passes cleanly across all platforms.
+            //...
