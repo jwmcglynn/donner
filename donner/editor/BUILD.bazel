@@ -922,6 +922,7 @@ donner_cc_library(
         ":editor_app",
         ":editor_dock_layout",
         ":editor_input_bridge",
+        ":editor_sample_catalog",
         ":editor_shell_layout",
         ":editor_theme",
         ":focus_view",
@@ -941,6 +942,7 @@ donner_cc_library(
         ":render_coordinator",
         ":render_pane_presenter",
         ":rotate_cursor_set",
+        ":sample_picker_presenter",
         ":select_tool",
         ":selection_transform_handles",
         ":shape_clipboard_commands",
@@ -1236,6 +1238,18 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "sample_picker_presenter",
+    srcs = ["SamplePickerPresenter.cc"],
+    hdrs = ["SamplePickerPresenter.h"],
+    deps = [
+        ":editor_sample_catalog",
+        ":editor_theme",
+        ":imgui_headers",
+        "@imgui",
+    ],
+)
+
+donner_cc_library(
     name = "editor_notice_inputs",
     target_compatible_with = select({
         "@platforms//os:macos": [],
@@ -1262,6 +1276,7 @@ donner_cc_binary(
     visibility = ["//visibility:private"],
     deps = [
         ":editor_shell",
+        ":editor_splash",
         ":notice",
         ":tracy_wrapper",
         "//donner/base",

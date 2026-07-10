@@ -112,15 +112,23 @@ structural moves, and arrange commands to the active group.
   - [x] Add a compact multi-selection state that shows partially selected groups.
   - [x] Keep row hover/selection highlights in lockstep with canvas overlay selection.
 - [ ] **Milestone 5: Structural group editing**
-  - [ ] Add Group Selection: wrap compatible selected siblings in a `<g>` while preserving paint
+  - [x] Add Group Selection: wrap compatible selected siblings in a `<g>` while preserving paint
         order and visual output.
-  - [ ] Add Ungroup: splice children into the parent while preserving effective transforms and
-        styles.
+  - [x] Add lossless Ungroup: splice children from an attribute-free `<g>` into its parent. Groups
+        carrying transform, style, class, paint, filter, clip, mask, opacity, visibility, or other
+        attributes remain grouped with an explanatory disabled state until semantic composition is
+        implemented.
   - [ ] Add drag-to-reorder after group/ungroup source writeback is covered by undo, source sync,
         and preview invalidation tests.
   - [x] Add isolated group editing with double-click entry, one-level Escape/breadcrumb exit,
         scope-aware exact hit testing, marquee/Select All filtering, scoped Layers rows, and
         scope-relative arrange/source-drag behavior.
+
+Group and Ungroup are available from the Edit menu, canvas context menu, and `Cmd+G` /
+`Cmd+Shift+G`. Group requires at least two adjacent, unlocked, source-backed siblings under the
+same editable parent; refusing nonadjacent siblings avoids changing their paint order relative to
+unselected content. Each operation is one source-level undo entry and defers its resulting selection
+until the structural command batch has committed, including inside isolated group editing.
 
 ## User Stories
 
@@ -407,6 +415,12 @@ CI targets for core invariants:
 - `//donner/editor/tests:editor_sync_tests`
   - Row selection focuses the corresponding source range.
   - Source edits that preserve structure keep layer expansion and selection remapped.
+- `//donner/editor/tests:editor_app_tests`
+  - Group preserves sibling paint order, source reflection, undo, selection, and isolated scope.
+  - Ungroup accepts only attribute-free groups and selects the lifted children.
+- `//donner/editor/tests:editor_shell_tests`
+  - Group dispatch and deferred document replacement wait for exclusive DOM ownership.
+  - A newer Open or Revert request cancels an older deferred sample replacement.
 
 Manual validation:
 

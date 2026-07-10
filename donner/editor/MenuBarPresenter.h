@@ -34,6 +34,8 @@ struct MenuBarState {
   /// True when the canvas selection is exactly one or more `<text>` elements,
   /// the precondition for "Convert Text to Outlines".
   bool hasTextSelection = false;
+  bool canGroup = false;
+  bool canUngroup = false;
   /// True when the document has at least one selectable element. Enables the canvas "Select All"
   /// when the source pane is not focused.
   bool hasSelectableElements = false;
@@ -57,6 +59,7 @@ struct MenuBarState {
 struct MenuBarActions {
   bool openAbout = false;
   bool openFile = false;
+  bool openSamples = false;
   bool saveFile = false;
   bool saveFileAs = false;
   bool exportViewportSvg = false;
@@ -70,6 +73,8 @@ struct MenuBarActions {
   bool paste = false;
   bool pasteInFront = false;
   bool convertTextToOutlines = false;
+  bool group = false;
+  bool ungroup = false;
   /// Text Select-All in the source/XML pane (fires when the source pane owns keyboard focus).
   bool selectAll = false;
   /// Canvas Select-All - selects every selectable element (fires when the source pane is not
@@ -106,6 +111,7 @@ struct MenuBarActions {
 enum class MenuBarCommand {
   OpenAbout,
   OpenFile,
+  OpenSamples,
   SaveFile,
   SaveFileAs,
   ExportViewportSvg,
@@ -119,6 +125,8 @@ enum class MenuBarCommand {
   Paste,
   PasteInFront,
   ConvertTextToOutlines,
+  Group,
+  Ungroup,
   SelectAll,
   DeselectAll,
   ZoomIn,

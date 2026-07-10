@@ -142,6 +142,15 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "sample_picker_presenter_tests",
+    srcs = ["SamplePickerPresenter_tests.cc"],
+    deps = [
+        "//donner/editor:sample_picker_presenter",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "editor_window_tests",
     srcs = ["EditorWindow_tests.cc"],
     data = [

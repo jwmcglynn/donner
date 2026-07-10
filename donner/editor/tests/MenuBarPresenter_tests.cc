@@ -121,6 +121,7 @@ TEST_F(MenuBarPresenterTest, RendersEachOpenMenuWithoutImplicitActions) {
     const MenuBarActions actions = RenderFrame(state);
     EXPECT_FALSE(actions.openAbout) << menuLabel;
     EXPECT_FALSE(actions.openFile) << menuLabel;
+    EXPECT_FALSE(actions.openSamples) << menuLabel;
     EXPECT_FALSE(actions.saveFile) << menuLabel;
     EXPECT_FALSE(actions.saveFileAs) << menuLabel;
     EXPECT_FALSE(actions.exportViewportSvg) << menuLabel;
@@ -134,6 +135,8 @@ TEST_F(MenuBarPresenterTest, RendersEachOpenMenuWithoutImplicitActions) {
     EXPECT_FALSE(actions.paste) << menuLabel;
     EXPECT_FALSE(actions.pasteInFront) << menuLabel;
     EXPECT_FALSE(actions.convertTextToOutlines) << menuLabel;
+    EXPECT_FALSE(actions.group) << menuLabel;
+    EXPECT_FALSE(actions.ungroup) << menuLabel;
     EXPECT_FALSE(actions.selectAll) << menuLabel;
     EXPECT_FALSE(actions.selectAllCanvas) << menuLabel;
     EXPECT_FALSE(actions.deselectAll) << menuLabel;
@@ -205,6 +208,10 @@ TEST(MenuBarPresenterActionsTest, ApplyMenuBarCommandMapsSimpleCommandsToActions
   EXPECT_TRUE(actions.openFile);
 
   actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::OpenSamples, state, &actions);
+  EXPECT_TRUE(actions.openSamples);
+
+  actions = MenuBarActions{};
   ApplyMenuBarCommand(true, MenuBarCommand::SaveFile, state, &actions);
   EXPECT_TRUE(actions.saveFile);
 
@@ -255,6 +262,14 @@ TEST(MenuBarPresenterActionsTest, ApplyMenuBarCommandMapsSimpleCommandsToActions
   actions = MenuBarActions{};
   ApplyMenuBarCommand(true, MenuBarCommand::ConvertTextToOutlines, state, &actions);
   EXPECT_TRUE(actions.convertTextToOutlines);
+
+  actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::Group, state, &actions);
+  EXPECT_TRUE(actions.group);
+
+  actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::Ungroup, state, &actions);
+  EXPECT_TRUE(actions.ungroup);
 
   actions = MenuBarActions{};
   ApplyMenuBarCommand(true, MenuBarCommand::ZoomIn, state, &actions);

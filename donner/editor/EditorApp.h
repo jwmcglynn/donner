@@ -51,6 +51,12 @@ struct PathOperationAvailability {
   std::string reason;     ///< Short disabled-state reason for tooltips and tests.
 };
 
+/// Whether a lossless group or ungroup operation can currently be applied.
+struct GroupOperationAvailability {
+  bool canApply = false;
+  std::string reason;
+};
+
 /// Whether @p command is a geometry-changing or destructive mutation targeting
 /// a locked element and must be dropped by the edit-gating path. Returns true
 /// only for `SetTransform` / `DeleteElement` whose target `IsLocked` (which
@@ -114,6 +120,12 @@ public:
   /// loop when a file is loaded. Clears the dirty flag.
   void setCurrentFilePath(std::string path) {
     currentFilePath_ = std::move(path);
+    isDirty_ = false;
+  }
+
+  /// Clear the backing path for an untitled or built-in document.
+  void clearCurrentFilePath() {
+    currentFilePath_.reset();
     isDirty_ = false;
   }
 
@@ -269,6 +281,18 @@ public:
   bool moveElementBefore(svg::SVGElement element, svg::SVGElement parent,
                          std::optional<svg::SVGElement> referenceElement,
                          std::string_view undoLabel = "Move element");
+
+  /// Return whether the current selection can be wrapped in one lossless structural group.
+  [[nodiscard]] GroupOperationAvailability groupSelectionAvailability() const;
+
+  /// Wrap the current contiguous same-parent selection in an attribute-free `<g>`.
+  bool groupSelection();
+
+  /// Return whether the selected attribute-free `<g>` can be removed losslessly.
+  [[nodiscard]] GroupOperationAvailability ungroupSelectionAvailability() const;
+
+  /// Lift the selected attribute-free group's children into its parent.
+  bool ungroupSelection();
 
   /**
    * Rename the single selected element's `id` to @p newId, updating every
@@ -647,6 +671,7 @@ private:
   /// simply never matched again and is harmless.
   std::vector<std::pair<svg::SVGElement, std::optional<std::string>>> hiddenElementAuthorDisplay_;
   std::optional<PendingDocumentSourceUndo> pendingDocumentSourceUndo_;
+  std::optional<std::vector<svg::SVGElement>> pendingSelectionAfterFlush_;
   std::optional<std::vector<AttributeWritebackTarget>> pendingSelectionRestoreTargets_;
 
   std::optional<std::string> currentFilePath_;
