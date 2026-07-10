@@ -42,6 +42,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.workflow, github.event.pull_request.number) || format('push-{0}-{1}', github.workflow, github.run_id) }}
@@ -55,10 +56,10 @@ concurrency:
 # runner or seeing the Codecov secret there. Everyone else stays on hosted
 # Ubuntu.
 #
-# Main coverage stays GitHub-hosted. PR coverage uses the self-hosted lane
-# only when the trusted runner gate passes; hosted Ubuntu remains the PR
-# fallback for untrusted actors, unavailable self-hosted runners, and
-# `ci:full-test` fanout runs.
+# Trusted operator PRs and main pushes generate coverage on the self-hosted
+# runner when SELFHOSTED_LINUX_RUNNER is enabled. Renovate and non-operator
+# diffs stay on hosted Ubuntu. The Codecov upload remains a tiny hosted handoff
+# for self-hosted coverage so the Codecov secret is not exposed to the runner.
 jobs:
   determine-targets:
     runs-on: ubuntu-24.04
@@ -74,6 +75,7 @@ jobs:
       target_count: ${{ steps.determine.outputs.target_count }}
       large_change: ${{ steps.determine.outputs.large_change }}
       changed_file_count: ${{ steps.determine.outputs.changed_file_count }}
+      use_self_hosted_linux: ${{ steps.determine.outputs.use_self_hosted_linux }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -119,6 +121,15 @@ jobs:
       - id: determine
         name: Determine coverage targets
         shell: bash
+        env:
+          ACTOR: ${{ github.actor }}
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ github.ref }}
+          REPOSITORY: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          SELFHOSTED_LINUX_RUNNER: ${{ vars.SELFHOSTED_LINUX_RUNNER }}
         run: |
           set -euo pipefail
           SELF_HOSTED_MAX_CHANGED_FILES=75
@@ -127,6 +138,67 @@ jobs:
 
           diagnostics_dir="$RUNNER_TEMP/coverage-target-selection"
           mkdir -p "$diagnostics_dir"
+
+          is_renovate="$(
+            python3 - <<'PY'
+          import json
+          import os
+
+          event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8"))
+          paths = [
+              ("sender", "login"),
+              ("pull_request", "user", "login"),
+              ("head_commit", "author", "username"),
+              ("head_commit", "author", "name"),
+              ("head_commit", "author", "email"),
+              ("head_commit", "committer", "username"),
+              ("head_commit", "committer", "name"),
+              ("head_commit", "committer", "email"),
+              ("pusher", "name"),
+              ("pusher", "email"),
+          ]
+
+          values = []
+          for path in paths:
+              value = event
+              for key in path:
+                  if not isinstance(value, dict):
+                      value = None
+                      break
+                  value = value.get(key)
+              if value:
+                  values.append(str(value))
+
+          print("true" if any("renovate" in value.lower() for value in values) else "false")
+          PY
+          )"
+
+          pr_author="$(
+            python3 - <<'PY'
+          import json
+          import os
+
+          event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8"))
+          print(event.get("pull_request", {}).get("user", {}).get("login", ""))
+          PY
+          )"
+
+          if [[ -z "$pr_author" && "$EVENT_NAME" == "push" && "$REF" == "refs/heads/main" ]]; then
+            if ! pr_author="$(gh api -H "Accept: application/vnd.github+json" \
+              "/repos/$REPOSITORY/commits/$SHA/pulls" \
+              --jq '.[0].user.login // ""')"; then
+              pr_author="unknown"
+            fi
+          fi
+
+          use_self_hosted_linux=false
+          if [[ "$ACTOR" == "jwmcglynn" && "$TRIGGERING_ACTOR" == "jwmcglynn" && "$is_renovate" != "true" && "$SELFHOSTED_LINUX_RUNNER" == "true" ]]; then
+            if [[ -z "$pr_author" || "$pr_author" == "jwmcglynn" ]]; then
+              use_self_hosted_linux=true
+            fi
+          fi
+          echo "use_self_hosted_linux=$use_self_hosted_linux" >> "$GITHUB_OUTPUT"
+          echo "coverage_runner=self_hosted_linux:$use_self_hosted_linux renovate:$is_renovate pr_author:$pr_author"
 
           emit_targets() {
             local fallback="$1"
@@ -347,14 +419,14 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     needs: determine-targets
-    # Hosted PR coverage fallback (broad PRs, untrusted actors, self-hosted
-    # unavailable, or ci:full-test fanout). On PRs it runs ONLY when the target
-    # set is a genuine incremental subset (fallback == false => bazel_diff),
-    # the cheap smoke subset, or an explicit ci:full-test opt-in. A full //...
-    # fallback on a PR (infra change, bazel-diff failure, empty diff) is SKIPPED
-    # here because the main-push baseline covers those lines under the 15-minute
-    # PR budget.
-    if: ${{ github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && (needs.determine-targets.outputs.fallback == 'false' || needs.determine-targets.outputs.fallback_reason == 'coverage_smoke' || needs.determine-targets.outputs.fallback_reason == 'full_test_label') && (needs.determine-targets.outputs.large_change == 'true' || needs.determine-targets.outputs.fallback_reason == 'full_test_label' || vars.SELFHOSTED_LINUX_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn')) }}
+    # Hosted PR coverage fallback (large-change PRs, untrusted actors,
+    # self-hosted unavailable, or ci:full-test fanout). On PRs it runs ONLY when
+    # the target set is a genuine incremental subset (fallback == false =>
+    # bazel_diff), the cheap smoke subset, or an explicit ci:full-test opt-in. A
+    # full //... fallback on a PR (infra change, bazel-diff failure, empty diff)
+    # is SKIPPED here -- the main-push baseline covers those lines under the
+    # 15-minute PR budget.
+    if: ${{ (needs.determine-targets.outputs.use_self_hosted_linux != 'true' || needs.determine-targets.outputs.large_change == 'true') && (github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && (needs.determine-targets.outputs.fallback == 'false' || needs.determine-targets.outputs.fallback_reason == 'coverage_smoke' || needs.determine-targets.outputs.fallback_reason == 'full_test_label'))) }}
 
     steps:
       - uses: actions/checkout@v7
@@ -403,7 +475,8 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libncurses-dev pkg-config libfontconfig1-dev libfreetype6-dev \
+          sudo apt-get install -y --no-install-recommends \
+            libncurses-dev pkg-config libfontconfig1-dev libfreetype6-dev \
             mesa-vulkan-drivers libvulkan1 libvulkan-dev \
             libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
             libgl1-mesa-dev libosmesa6-dev
@@ -447,28 +520,25 @@ jobs:
   coverage-self-hosted:
     runs-on: [self-hosted, linux, arm64]
     needs: determine-targets
-    # Only the incremental (bazel_diff) subset or the cheap smoke subset run
-    # here. A full //... fallback is skipped on PRs (main-push baseline covers
-    # it); ci:full-test routes to the hosted `build` job. See header.
-    if: ${{ github.event_name == 'pull_request' && (needs.determine-targets.outputs.fallback == 'false' || needs.determine-targets.outputs.fallback_reason == 'coverage_smoke') && needs.determine-targets.outputs.large_change != 'true' && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
+    # here on PRs, plus explicit ci:full-test opt-ins. A full //... fallback is
+    # skipped on PRs (main-push baseline covers it). Trusted main pushes run
+    # here instead of hosted Ubuntu. Large-change PRs (over the changed-file
+    # cap) stay on the hosted coverage lane.
+    if: ${{ needs.determine-targets.outputs.use_self_hosted_linux == 'true' && needs.determine-targets.outputs.large_change != 'true' && (github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && (needs.determine-targets.outputs.fallback == 'false' || needs.determine-targets.outputs.fallback_reason == 'coverage_smoke' || needs.determine-targets.outputs.fallback_reason == 'full_test_label'))) }}
     # Coverage healthy median is ~21 min, so bound this SLA lane at 60 min for
     # buffer: RE degradation fast-fails (no local fallback, below) instead of
     # the CPU-capped 2-3 h local re-run that produced the 3.3 h tail.
     timeout-minutes: 60
-    # Admission control on the shared RE path. TWO concurrent instrumented
-    # coverage builds were the measured failure that hit the 60 min timeout on
-    # #808/#809. The coverage lane merges lcov LOCALLY on gha-host1 (8 vcpu
-    # shared by four runners) and executes actions on bazel-re1 (96-vcpu VM on
-    # event-horizon, shared with the priority dev host dev1); N concurrent
-    # coverage jobs thrash both (uncontended median 2.5 min; two concurrent =
-    # 60 min timeout; live 2026-07-10 a smoke subset sat 45+ min under 3-way
-    # contention). See docs/design_docs/0029-2-ci_runtime.md appendix. This
-    # group serializes coverage-self-hosted across all of the operator's
-    # in-flight PRs so at most one instrumented coverage build runs at a time,
-    # which also protects dev1's bazel-re1 latency; the CI linux-self-hosted
-    # lane uses a separate group. cancel-in-progress: false never kills a
-    # running build (a superseded push to the SAME PR is already cancelled by
-    # the workflow-level group).
+    # Admission control on the shared remote-execution backend. Two concurrent
+    # instrumented coverage builds were the measured failure that hit the
+    # timeout: both self-hosted lanes execute on a shared remote-execution
+    # backend that an interactive development host also uses with priority, so
+    # two-plus concurrent instrumented builds oversubscribe it and crawl into
+    # the timeout (measured). This group serializes coverage-self-hosted across
+    # all of the operator's in-flight PRs so at most one instrumented coverage
+    # build runs at a time; the CI linux-self-hosted lane uses a separate group.
+    # cancel-in-progress: false never kills a running build (a superseded push
+    # to the SAME PR is already cancelled by the workflow-level group).
     concurrency:
       group: donner-selfhosted-coverage-re
       cancel-in-progress: false
@@ -574,8 +644,9 @@ jobs:
     needs: [determine-targets, coverage-self-hosted]
     runs-on: ubuntu-24.04
     # Mirrors coverage-self-hosted's gate so the upload skips whenever the
-    # self-hosted coverage job skips (full-fallback PRs produce no artifact).
-    if: ${{ github.event_name == 'pull_request' && (needs.determine-targets.outputs.fallback == 'false' || needs.determine-targets.outputs.fallback_reason == 'coverage_smoke') && needs.determine-targets.outputs.large_change != 'true' && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
+    # self-hosted coverage job skips or fails (large-change and full-fallback
+    # PRs produce no artifact).
+    if: ${{ needs.coverage-self-hosted.result == 'success' }}
 
     steps:
       - uses: actions/checkout@v7
