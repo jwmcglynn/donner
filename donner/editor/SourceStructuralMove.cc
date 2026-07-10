@@ -85,6 +85,11 @@ SourceStructuralMoveEvaluation BuildSourceStructuralMovePlan(
   if (element == root) {
     return {.status = SourceStructuralMoveStatus::RootElement};
   }
+  if (app.editingScope().has_value() &&
+      (!app.isElementInEditingScope(element) ||
+       (parent != *app.editingScope() && !app.isElementInEditingScope(parent)))) {
+    return {.status = SourceStructuralMoveStatus::InvalidParent};
+  }
   if (!IsElementOrDescendant(root, element) || !IsElementOrDescendant(root, parent) ||
       !IsMoveContainer(parent)) {
     return {.status = SourceStructuralMoveStatus::InvalidParent};

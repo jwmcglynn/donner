@@ -238,13 +238,34 @@ std::optional<Box2d> TextFormatBarScreenRect(const ImVec2& paneOrigin, const ImV
   return Box2d::FromXYWH(barX, barY, barWidth, barHeight);
 }
 
+std::optional<Box2d> EditingScopeBreadcrumbScreenRect(
+    const ImVec2& paneOrigin, const Box2d& toolPaletteRect,
+    const std::optional<svg::SVGElement>& editingScope) {
+  if (!editingScope.has_value()) {
+    return std::nullopt;
+  }
+  const std::string scopeName =
+      editingScope->id().empty() ? std::string("Group") : editingScope->id().str();
+  const float width = ImGui::CalcTextSize(("<  " + scopeName).c_str()).x + 20.0f;
+  const float height = ImGui::GetFrameHeight() + 6.0f;
+  const float x = paneOrigin.x + 12.0f;
+  float y = paneOrigin.y + kToolPaletteTopInset;
+  if (x + width + 8.0f > toolPaletteRect.topLeft.x) {
+    y = static_cast<float>(toolPaletteRect.bottomRight.y) + 8.0f;
+  }
+  return Box2d::FromXYWH(x, y, width, height);
+}
+
 bool CanvasChromeCapturesInput(const ImVec2& point, const std::optional<Box2d>& referenceChipRect,
                                const Box2d& toolPaletteRect,
                                const std::optional<Box2d>& textFormatBarRect,
+                               const std::optional<Box2d>& editingScopeBreadcrumbRect,
                                const Box2d& canvasZoomControlRect) {
   return (referenceChipRect.has_value() && ContainsScreenPoint(*referenceChipRect, point)) ||
          ContainsScreenPoint(toolPaletteRect, point) ||
          (textFormatBarRect.has_value() && ContainsScreenPoint(*textFormatBarRect, point)) ||
+         (editingScopeBreadcrumbRect.has_value() &&
+          ContainsScreenPoint(*editingScopeBreadcrumbRect, point)) ||
          ContainsScreenPoint(canvasZoomControlRect, point);
 }
 
@@ -1812,9 +1833,12 @@ void EditorShell::handleGlobalShortcuts() {
     return;
   }
 
-  if (!anyPopupOpen && ImGui::IsKeyPressed(ImGuiKey_Escape, /*repeat=*/false) &&
-      app_.hasSelection()) {
-    app_.setSelection(std::nullopt);
+  if (!anyPopupOpen && ImGui::IsKeyPressed(ImGuiKey_Escape, /*repeat=*/false)) {
+    if (app_.hasSelection()) {
+      app_.clearSelection();
+    } else if (app_.exitGroupEdit()) {
+      window_.wakeEventLoop();
+    }
   }
 
   // Cmd+A ("Select All") is focus-aware. When the source pane owns keyboard focus it selects all
@@ -2601,10 +2625,12 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   const std::optional<Box2d> textFormatBarRect =
       TextFormatBarScreenRect(paneOriginImGui, contentRegion, toolPaletteRect,
                               formatBarShouldShow(), TextFormatBarPresenter::BarHeight());
+  const std::optional<Box2d> editingScopeBreadcrumbRect =
+      EditingScopeBreadcrumbScreenRect(paneOriginImGui, toolPaletteRect, app_.editingScope());
   const Box2d canvasZoomControlRect = canvasZoomControlScreenRect();
-  const bool canvasChromeHovered =
-      CanvasChromeCapturesInput(ImGui::GetMousePos(), referenceChipRect, toolPaletteRect,
-                                textFormatBarRect, canvasZoomControlRect);
+  const bool canvasChromeHovered = CanvasChromeCapturesInput(
+      ImGui::GetMousePos(), referenceChipRect, toolPaletteRect, textFormatBarRect,
+      editingScopeBreadcrumbRect, canvasZoomControlRect);
 
   ImGui::SetNextItemAllowOverlap();
   ImGui::InvisibleButton("##render_canvas", contentRegion,
@@ -3285,6 +3311,7 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
     renderReferenceHighlightChip();
     renderTextToolHint();
     renderToolPalette(paneOriginImGui, contentRegion);
+    renderEditingScopeBreadcrumb();
     const FormatBarState formatBarState = computeFormatBarState();
     const std::optional<Box2d> formatBarRect =
         TextFormatBarScreenRect(paneOriginImGui, contentRegion, toolPaletteRect,
@@ -3303,6 +3330,46 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   }
 
   ImGui::End();
+}
+
+void EditorShell::renderEditingScopeBreadcrumb() {
+  if (!app_.editingScope().has_value()) {
+    return;
+  }
+
+  const EditorTheme& theme = EditorTheme::Active();
+  const svg::SVGElement& scope = *app_.editingScope();
+  const std::string scopeName = scope.id().empty() ? std::string("Group") : scope.id().str();
+  const ViewportState& viewport = interactionController_.viewport();
+  const Box2d toolPaletteRect = toolPaletteScreenRect(
+      ImVec2(static_cast<float>(viewport.paneOrigin.x), static_cast<float>(viewport.paneOrigin.y)),
+      ImVec2(static_cast<float>(viewport.paneSize.x), static_cast<float>(viewport.paneSize.y)));
+  const std::optional<Box2d> rect = EditingScopeBreadcrumbScreenRect(
+      ImVec2(static_cast<float>(viewport.paneOrigin.x), static_cast<float>(viewport.paneOrigin.y)),
+      toolPaletteRect, app_.editingScope());
+  if (!rect.has_value()) {
+    return;
+  }
+  ImGui::SetCursorScreenPos(
+      ImVec2(static_cast<float>(rect->topLeft.x), static_cast<float>(rect->topLeft.y)));
+  ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, theme.radiusControl);
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f, 7.0f));
+  ImGui::PushStyleColor(ImGuiCol_Button, ImGui::ColorConvertU32ToFloat4(theme.surfaceOverlay));
+  ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                        ImGui::ColorConvertU32ToFloat4(theme.surfaceRaised));
+  ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImGui::ColorConvertU32ToFloat4(theme.surfaceCanvas));
+  const std::string label = "<  " + scopeName + "##exit_group_edit";
+  if (ImGui::Button(label.c_str(), ImVec2(static_cast<float>(rect->width()),
+                                          static_cast<float>(rect->height())))) {
+    if (app_.exitGroupEdit()) {
+      window_.wakeEventLoop();
+    }
+  }
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Exit group edit");
+  }
+  ImGui::PopStyleColor(3);
+  ImGui::PopStyleVar(2);
 }
 
 void EditorShell::renderCanvasZoomControl() {

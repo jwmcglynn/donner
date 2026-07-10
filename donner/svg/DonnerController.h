@@ -1,6 +1,8 @@
 #pragma once
 /// @file
 
+#include <vector>
+
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
@@ -41,6 +43,14 @@ public:
    * @return The topmost intersecting geometry element, or \c std::nullopt if no element is hit.
    */
   std::optional<SVGGraphicsElement> findIntersecting(const Vector2d& point);
+
+  /**
+   * Return every painted element intersecting p point, front to back.
+   *
+   * This supports scoped editor hit testing without allowing an element
+   * outside the active scope to occlude an eligible descendant.
+   */
+  std::vector<SVGGraphicsElement> findAllIntersecting(const Vector2d& point);
 
 private:
   SVGDocument document_;

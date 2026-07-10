@@ -2210,5 +2210,115 @@ TEST(EditorAppRenameTest, RefusesWithoutSingleSelectionOrWhenLocked) {
   EXPECT_TRUE(app.document().document().querySelector("#r").has_value());
 }
 
+TEST(EditorAppGroupEditTest, ConstrainsSelectionMarqueeAndSelectAllToScope) {
+  constexpr std::string_view kScopedSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120">
+        <g id="scope">
+          <rect id="inside" x="10" y="10" width="30" height="30"/>
+          <g id="nested"><circle id="nestedChild" cx="80" cy="25" r="15"/></g>
+        </g>
+        <rect id="outside" x="140" y="10" width="30" height="30"/>
+      </svg>)svg";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kScopedSvg));
+  const svg::SVGElement scope = *app.document().document().querySelector("#scope");
+  const svg::SVGElement inside = *app.document().document().querySelector("#inside");
+  const svg::SVGElement outside = *app.document().document().querySelector("#outside");
+
+  ASSERT_TRUE(app.enterGroupEdit(scope));
+  EXPECT_EQ(app.editingScope(), std::optional<svg::SVGElement>(scope));
+  EXPECT_FALSE(app.hasSelection());
+
+  app.setSelection(outside);
+  EXPECT_FALSE(app.hasSelection());
+  app.setSelection(std::vector<svg::SVGElement>{inside, outside, scope});
+  EXPECT_THAT(ElementIds(app.selectedElements()), ::testing::ElementsAre("inside"));
+
+  EXPECT_THAT(ElementIds(app.selectableElements()),
+              ::testing::ElementsAre("inside", "nestedChild"));
+  EXPECT_THAT(ElementIds(app.hitTestRect(Box2d::FromXYWH(0, 0, 200, 120))),
+              ::testing::ElementsAre("inside", "nestedChild"));
+  EXPECT_THAT(app.hitTest(Vector2d(20, 20)),
+              ::testing::Optional(::testing::Property(&svg::SVGElement::id, RcString("inside"))));
+  EXPECT_FALSE(app.hitTest(Vector2d(150, 20)).has_value());
+}
+
+TEST(EditorAppGroupEditTest, ScopedHitTestingPassesThroughOutOfScopeOccluders) {
+  constexpr std::string_view kOccludedSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+        <g id="scope"><rect id="inside" x="10" y="10" width="60" height="60" fill="red"/></g>
+        <rect id="outside" x="10" y="10" width="60" height="60" fill="blue"/>
+      </svg>)svg";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kOccludedSvg));
+  EXPECT_EQ(app.hitTest(Vector2d(20, 20))->id(), "outside");
+  ASSERT_TRUE(app.enterGroupEdit(*app.document().document().querySelector("#scope")));
+
+  const std::optional<svg::SVGGraphicsElement> hit = app.hitTest(Vector2d(20, 20));
+  ASSERT_TRUE(hit.has_value());
+  EXPECT_EQ(hit->id(), "inside");
+}
+
+TEST(EditorAppGroupEditTest, SupportsNestedEntryAndOneLevelExit) {
+  constexpr std::string_view kNestedSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg"><g id="outer"><g id="inner"><rect id="leaf" width="10" height="10"/></g></g></svg>)svg";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kNestedSvg));
+  const svg::SVGElement outer = *app.document().document().querySelector("#outer");
+  const svg::SVGElement inner = *app.document().document().querySelector("#inner");
+
+  ASSERT_TRUE(app.enterGroupEdit(outer));
+  ASSERT_TRUE(app.enterGroupEdit(inner));
+  EXPECT_EQ(app.editingScope(), std::optional<svg::SVGElement>(inner));
+
+  ASSERT_TRUE(app.exitGroupEdit());
+  EXPECT_EQ(app.editingScope(), std::optional<svg::SVGElement>(outer));
+  EXPECT_EQ(app.selectedElement(), std::optional<svg::SVGElement>(inner));
+
+  ASSERT_TRUE(app.exitGroupEdit());
+  EXPECT_FALSE(app.editingScope().has_value());
+  EXPECT_EQ(app.selectedElement(), std::optional<svg::SVGElement>(outer));
+  EXPECT_FALSE(app.exitGroupEdit());
+}
+
+TEST(EditorAppGroupEditTest, RejectsNonGroupDetachedLockedAndOutsideNestedScopes) {
+  constexpr std::string_view kScopedSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg"><g id="a"><g id="nested"/></g><g id="b"/><rect id="leaf"/></svg>)svg";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kScopedSvg));
+  const svg::SVGElement a = *app.document().document().querySelector("#a");
+  const svg::SVGElement b = *app.document().document().querySelector("#b");
+  const svg::SVGElement leaf = *app.document().document().querySelector("#leaf");
+
+  EXPECT_FALSE(app.enterGroupEdit(leaf));
+  ASSERT_TRUE(app.enterGroupEdit(a));
+  EXPECT_FALSE(app.enterGroupEdit(b));
+  EXPECT_FALSE(app.enterGroupEdit(a));
+  ASSERT_TRUE(app.exitGroupEdit());
+
+  app.setElementLocked(b, true);
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_FALSE(app.enterGroupEdit(b));
+}
+
+TEST(EditorAppGroupEditTest, AbsoluteArrangeStopsAtActiveScope) {
+  constexpr std::string_view kArrangeSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg"><g id="scope"><g id="wrapper"><rect id="moving"/></g><rect id="fixed"/></g><rect id="outside"/></svg>)svg";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kArrangeSvg));
+  const svg::SVGElement scope = *app.document().document().querySelector("#scope");
+  const svg::SVGElement moving = *app.document().document().querySelector("#moving");
+  ASSERT_TRUE(app.enterGroupEdit(scope));
+  app.setSelection(moving);
+
+  ASSERT_TRUE(app.reorderSelectedElement(EditorApp::ZOrder::BringToFront));
+  ASSERT_TRUE(app.flushFrame());
+
+  const svg::SVGElement moved = *app.document().document().querySelector("#moving");
+  EXPECT_EQ(moved.parentElement(), std::optional<svg::SVGElement>(scope));
+  EXPECT_EQ(scope.lastChild(), std::optional<svg::SVGElement>(moved));
+  EXPECT_EQ(app.editingScope(), std::optional<svg::SVGElement>(scope));
+}
+
 }  // namespace
 }  // namespace donner::editor

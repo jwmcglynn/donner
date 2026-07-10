@@ -289,10 +289,10 @@ void LayerTreeModel::refresh(const EditorApp& app) {
   [[maybe_unused]] const svg::DocumentWriteAccess snapshotWriteAccess =
       app.document().document().writeAccess();
 
-  const svg::SVGElement root = app.document().document().svgElement();
+  const svg::SVGElement root = app.editingScope().value_or(app.document().document().svgElement());
 
-  // The Layers panel omits the document root `<svg>` row entirely and shows its
-  // editor-visible children (top-level groups and shapes) as the tree's roots.
+  // The Layers panel omits the current editing root (`<svg>` normally, or the
+  // isolated `<g>`) and shows its editor-visible children as the tree's roots.
   std::vector<svg::SVGElement> topLevel;
   for (std::optional<svg::SVGElement> child = root.firstChild(); child.has_value();
        child = child->nextSibling()) {

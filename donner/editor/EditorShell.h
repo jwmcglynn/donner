@@ -361,6 +361,7 @@ private:
                                             const ImVec2& contentRegion) const;
   [[nodiscard]] Box2d canvasZoomControlScreenRect() const;
   void renderToolPalette(const ImVec2& paneOrigin, const ImVec2& contentRegion);
+  void renderEditingScopeBreadcrumb();
   void renderCanvasZoomControl();
   void renderFillStrokeToolbarWidget();
   void renderSidebars();

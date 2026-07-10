@@ -186,6 +186,20 @@ svg::SVGElement TopLevelAncestor(svg::SVGElement hit, const svg::SVGElement& con
   return hit;
 }
 
+std::optional<svg::SVGElement> NearestEditableGroupAncestor(
+    const svg::SVGElement& hit, const std::optional<svg::SVGElement>& currentScope) {
+  for (std::optional<svg::SVGElement> current = hit.parentElement(); current.has_value();
+       current = current->parentElement()) {
+    if (currentScope.has_value() && *current == *currentScope) {
+      return std::nullopt;
+    }
+    if (current->tryType() == svg::ElementType::G) {
+      return current;
+    }
+  }
+  return std::nullopt;
+}
+
 }  // namespace
 
 bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& documentPoint,
@@ -407,6 +421,15 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
         .additive = modifiers.shift,
     };
     return;
+  }
+
+  if (modifiers.doubleClick && !IsLocked(*hit)) {
+    if (const std::optional<svg::SVGElement> group =
+            NearestEditableGroupAncestor(*hit, editor.editingScope());
+        group.has_value() && editor.enterGroupEdit(*group)) {
+      editor.setSelection(*hit);
+      return;
+    }
   }
 
   // Shift+click on an element → toggle membership in the current
