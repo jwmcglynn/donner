@@ -19,6 +19,11 @@ BAZEL_LOCAL_OPTIONS=(
   --remote_executor=
   --remote_cache=
   --noremote_upload_local_results
+  # Force every output to materialize locally. On macOS, bloaty attribution runs
+  # through dsymutil, which reads the per-.o debug map embedded in the unstripped
+  # binary; without this those object files can stay in the cache unmaterialized
+  # and attribution comes back empty.
+  --remote_download_all
 )
 BLOATY_BIN="$(command -v bloaty || true)"
 
@@ -28,6 +33,15 @@ if [[ "$(uname)" == "Darwin" ]]; then
   BAZEL_CONFIGS=(--config=macos-binary-size)
 elif [[ "$(uname)" == "Linux" ]]; then
   BAZEL_CONFIGS=(--config=linux-binary-size)
+fi
+# Same size-optimized build plus ThinLTO. ThinLTO shrinks the stripped binaries
+# further but drops the debug info bloaty needs, so it is measured separately
+# (headline shipped size only, no per-compile-unit attribution).
+LTO_CONFIGS=(--config=binary-size-lto)
+if [[ "$(uname)" == "Darwin" ]]; then
+  LTO_CONFIGS=(--config=macos-binary-size-lto)
+elif [[ "$(uname)" == "Linux" ]]; then
+  LTO_CONFIGS=(--config=linux-binary-size-lto)
 fi
 
 function run_bloaty() {
@@ -41,7 +55,7 @@ function run_bloaty() {
 
 # Build the binaries to analyze. Always measure the stripped outputs, and keep an
 # unstripped parser binary around separately so bloaty can attribute sizes using symbols.
-bazel build "${BAZEL_QUIET_OPTIONS[@]}" "${BAZEL_LOCAL_OPTIONS[@]}" "${BAZEL_CONFIGS[@]}" //donner/svg/parser:svg_parser_tool.stripped
+bazel build "${BAZEL_QUIET_OPTIONS[@]}" "${BAZEL_LOCAL_OPTIONS[@]}" "${BAZEL_CONFIGS[@]}" //donner/svg/parser:svg_parser_tool //donner/svg/parser:svg_parser_tool.stripped
 cp -f bazel-bin/donner/svg/parser/svg_parser_tool.stripped build-binary-size/svg_parser_tool
 
 bazel build "${BAZEL_QUIET_OPTIONS[@]}" "${BAZEL_LOCAL_OPTIONS[@]}" "${BAZEL_CONFIGS[@]}" //donner/svg/tool:donner-svg.stripped
@@ -99,6 +113,39 @@ run_bloaty -c tools/binary_size_config.bloaty -d donner_package,compileunits -n 
 
 echo '```'
 
+
+##
+## ThinLTO shipped-size build (native).
+##
+## ThinLTO folds and inlines across translation units for a smaller shipped
+## binary, but its debug info points at transient .thinlto.o files that dsymutil
+## and bloaty cannot open, so it is built separately from the attribution build
+## above and reported as headline sizes only. Set SKIP_LTO=1 to skip.
+##
+if [[ -z "$SKIP_LTO" ]]; then
+  echo ""
+  echo "### ThinLTO shipped native sizes (${LTO_CONFIGS[*]})"
+  echo ""
+
+  bazel build "${BAZEL_QUIET_OPTIONS[@]}" "${BAZEL_LOCAL_OPTIONS[@]}" "${LTO_CONFIGS[@]}" //donner/svg/parser:svg_parser_tool.stripped
+  cp -f bazel-bin/donner/svg/parser/svg_parser_tool.stripped build-binary-size/svg_parser_tool.lto
+  bazel build "${BAZEL_QUIET_OPTIONS[@]}" "${BAZEL_LOCAL_OPTIONS[@]}" "${LTO_CONFIGS[@]}" //donner/svg/tool:donner-svg.stripped
+  cp -f bazel-bin/donner/svg/tool/donner-svg.stripped build-binary-size/donner-svg.lto
+
+  parser_base=$(wc -c < build-binary-size/svg_parser_tool)
+  parser_lto=$(wc -c < build-binary-size/svg_parser_tool.lto)
+  donnersvg_base=$(wc -c < build-binary-size/donner-svg)
+  donnersvg_lto=$(wc -c < build-binary-size/donner-svg.lto)
+
+  parser_delta=$(awk "BEGIN{printf \"%.1f\", ($parser_lto-$parser_base)*100.0/$parser_base}")
+  donnersvg_delta=$(awk "BEGIN{printf \"%.1f\", ($donnersvg_lto-$donnersvg_base)*100.0/$donnersvg_base}")
+
+  echo '```'
+  printf '%-16s %14s %14s %10s\n' "target" "non-LTO" "ThinLTO" "delta"
+  printf '%-16s %14s %14s %9s%%\n' "svg_parser_tool" "$parser_base" "$parser_lto" "$parser_delta"
+  printf '%-16s %14s %14s %9s%%\n' "donner-svg" "$donnersvg_base" "$donnersvg_lto" "$donnersvg_delta"
+  echo '```'
+fi
 ##
 ## WebAssembly transfer size (Emscripten).
 ##
