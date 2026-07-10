@@ -368,6 +368,22 @@ build:ci --repository_cache=~/.cache/bazel-repo
 # Avoids needing the `ci:full-test` PR label as a workaround.
 build:ci --skip_incompatible_explicit_targets
 
+# Remote-execution queue priority convention (see
+# docs/design_docs/0029-2-ci_runtime.md): CI actions run at priority 0, the
+# floor of the server-supported range (0-2147483647; the backend rejects
+# negative values), while interactive development clients set higher values in
+# their user bazelrc, so an interactive build always wins queue position over
+# queued CI work. NativeLink's scheduler orders its queue by REAPI
+# ExecutionPolicy.priority; a HIGHER integer is scheduled sooner (verified in
+# nativelink v1.5.2 AwaitedActionSortKey: priority is the primary sort key,
+# insert order the tiebreaker). The explicit `--remote_execution_priority=0`
+# for CI lives in the CI runner's system bazelrc `build:ci` stanza, next to
+# the remote-executor endpoint it applies to; it is deliberately NOT repeated
+# here, because the same option expanding from `--config=ci` in two rc files
+# fires a duplicate-expansion warning on every CI invocation. This is queue
+# ordering only, not preemption: actions already running hold their slot
+# until done.
+
 # Keep runner-sensitive wall-clock perf tests OFF the PR gate — they belong on
 # the nightly `perf.yml` (which runs them via an explicit `--test_tag_filters=perf`
 # that overrides this). The `perf` tests are tagged `["manual", "perf"]` so the
