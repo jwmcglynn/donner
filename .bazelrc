@@ -368,19 +368,21 @@ build:ci --repository_cache=~/.cache/bazel-repo
 # Avoids needing the `ci:full-test` PR label as a workaround.
 build:ci --skip_incompatible_explicit_targets
 
-# CI remote-execution actions run at reduced scheduler priority so interactive
-# development builds on the shared backend always win queue position; see
-# docs/design_docs/0029-2-ci_runtime.md. NativeLink's scheduler orders its
-# queue by REAPI ExecutionPolicy.priority, and a HIGHER integer is scheduled
-# sooner (source-verified in nativelink v1.5.2 AwaitedActionSortKey: priority
-# is the primary sort key, insert order the tiebreaker). Interactive builds
-# set a higher priority in their user bazelrc, so pinning CI below that means
-# an interactive build jumps ahead of queued CI actions on the shared worker
-# pool instead of waiting behind them. This is queue ordering only, not
-# preemption: actions already running still hold their slot until done. The
-# flag is inert when no remote executor is configured, so `--config=ci` lanes
-# that only use the remote cache are unaffected.
-build:ci --remote_execution_priority=-20
+# Remote-execution queue priority convention (see
+# docs/design_docs/0029-2-ci_runtime.md): CI actions run at priority 0, the
+# floor of the server-supported range (0-2147483647; the backend rejects
+# negative values), while interactive development clients set higher values in
+# their user bazelrc, so an interactive build always wins queue position over
+# queued CI work. NativeLink's scheduler orders its queue by REAPI
+# ExecutionPolicy.priority; a HIGHER integer is scheduled sooner (verified in
+# nativelink v1.5.2 AwaitedActionSortKey: priority is the primary sort key,
+# insert order the tiebreaker). The explicit `--remote_execution_priority=0`
+# for CI lives in the CI runner's system bazelrc `build:ci` stanza, next to
+# the remote-executor endpoint it applies to; it is deliberately NOT repeated
+# here, because the same option expanding from `--config=ci` in two rc files
+# fires a duplicate-expansion warning on every CI invocation. This is queue
+# ordering only, not preemption: actions already running hold their slot
+# until done.
 
 # Keep runner-sensitive wall-clock perf tests OFF the PR gate — they belong on
 # the nightly `perf.yml` (which runs them via an explicit `--test_tag_filters=perf`
