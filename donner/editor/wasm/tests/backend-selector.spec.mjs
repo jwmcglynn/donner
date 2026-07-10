@@ -31,6 +31,36 @@ async function loadBrowserSelector({ hasWebGl2 }) {
   return { selection: window.__donnerBackendPromise };
 }
 
+async function runBootstrapWithoutThreads() {
+  const source = await readFile(new URL("../editor-bootstrap.js", import.meta.url), "utf8");
+  const elements = {
+    canvas: {
+      addEventListener() {},
+      focus() {},
+      hidden: false,
+    },
+    status: { hidden: false, textContent: "" },
+    "capability-error": { hidden: true },
+    "capability-error-detail": { textContent: "" },
+  };
+  const window = {
+    __donnerBackendPromise: Promise.reject(new Error("WebGL2 is unavailable")),
+    isSecureContext: false,
+  };
+  const context = vm.createContext({
+    console,
+    document: {
+      body: { appendChild() {} },
+      getElementById: (id) => elements[id],
+    },
+    SharedArrayBuffer: undefined,
+    window,
+  });
+  vm.runInContext(source, context, { filename: "editor-bootstrap.js" });
+  await new Promise((resolve) => setImmediate(resolve));
+  return { elements, window };
+}
+
 test("auto mode prefers Geode when WebGPU has an adapter", async () => {
   const selectBackend = await loadSelector();
   const result = await selectBackend({
@@ -116,4 +146,18 @@ test("browser capability rejection is handled by the published promise", async (
   const { selection } = await loadBrowserSelector({ hasWebGl2: false });
   await assert.rejects(selection, /WebGL2/);
   await new Promise((resolve) => setImmediate(resolve));
+});
+
+test("bootstrap consumes backend rejection when threads are unavailable", async () => {
+  let unhandledRejection;
+  const onUnhandledRejection = (reason) => {
+    unhandledRejection = reason;
+  };
+  process.on("unhandledRejection", onUnhandledRejection);
+  const { elements } = await runBootstrapWithoutThreads();
+  process.off("unhandledRejection", onUnhandledRejection);
+
+  assert.equal(unhandledRejection, undefined);
+  assert.equal(elements["capability-error"].hidden, false);
+  assert.match(elements["capability-error-detail"].textContent, /SharedArrayBuffer/);
 });

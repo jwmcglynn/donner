@@ -60,19 +60,22 @@ canvas.addEventListener("webglcontextlost", function(event) {
   event.preventDefault();
 }, false);
 
-if (window.__donnerCanStartWasm) {
-  window.__donnerBackendPromise
-    .then((backend) => {
-      const loader = document.createElement("script");
-      loader.async = true;
-      loader.type = "text/javascript";
-      loader.src = backend.base + "editor.js";
-      loader.addEventListener("error", () => {
-        ShowCapabilityError(`Unable to load the ${backend.name} renderer package.`);
-      });
-      document.body.appendChild(loader);
-    })
-    .catch((error) => {
-      ShowCapabilityError(String(error));
+window.__donnerBackendPromise
+  .then((backend) => {
+    if (!window.__donnerCanStartWasm) {
+      return;
+    }
+    const loader = document.createElement("script");
+    loader.async = true;
+    loader.type = "text/javascript";
+    loader.src = backend.base + "editor.js";
+    loader.addEventListener("error", () => {
+      ShowCapabilityError(`Unable to load the ${backend.name} renderer package.`);
     });
-}
+    document.body.appendChild(loader);
+  })
+  .catch((error) => {
+    if (window.__donnerCanStartWasm) {
+      ShowCapabilityError(String(error));
+    }
+  });
