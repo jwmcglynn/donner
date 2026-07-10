@@ -3,6 +3,7 @@ import { inflateSync } from "node:zlib";
 
 declare global {
   interface Window {
+    __donnerBackend?: string;
     __donnerLastScrollEvent?: {
       zoomModifierHeld?: boolean;
       yoffset?: number;
@@ -102,6 +103,7 @@ async function readWebGpuDiagnostics(page: Page) {
       hasNavigatorGpu: Boolean(gpu),
       fallbackAdapterAvailable,
       adapterRequestError,
+      selectedBackend: window.__donnerBackend,
       userAgent: navigator.userAgent,
     };
   });
@@ -340,6 +342,10 @@ async function openEditor(page: Page, options: OpenEditorOptions = {}): Promise<
 
   await expect(page.locator("canvas#canvas")).toBeVisible();
   await expect(page.locator("#status")).toBeHidden({ timeout: 20000 });
+  const selectedBackend = await page.evaluate(() => window.__donnerBackend);
+  if (selectedBackend !== "packaged") {
+    expect(selectedBackend).toBe(kBackend);
+  }
   await page.waitForTimeout(2000);
 
   return fatalMessages;

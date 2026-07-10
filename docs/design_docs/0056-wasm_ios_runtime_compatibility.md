@@ -33,8 +33,6 @@ layout, touch-first controls, mobile toolbars, and other user-interface changes 
 
 ## Next Steps
 
-- Add an iPhone-profile WebKit startup lane.
-- Stage the combined package as the immutable CI candidate.
 - Complete the release gates and real-device startup check.
 
 ## Implementation Plan
@@ -43,14 +41,14 @@ layout, touch-first controls, mobile toolbars, and other user-interface changes 
   - [x] Add red unit tests for WebGPU preference, fallback, overrides, and unsupported browsers.
   - [x] Add a capability selector that returns only `geode/` or `tiny_skia/` package roots.
   - [x] Move bootstrap code and CSS out of inline HTML so a strict CSP needs no inline exceptions.
-- [ ] Milestone 2: Build one compatible static package.
+- [x] Milestone 2: Build one compatible static package.
   - [x] Add a deterministic staging tool that keeps each backend in its own directory.
   - [x] Remove the service-worker fallback and require host-provided COOP and COEP.
-  - [ ] Include both backend binaries and their hashes in deployment provenance.
-- [ ] Milestone 3: Add iOS-shaped browser verification.
-  - [ ] Run the combined package under Chromium with automatic Geode selection.
-  - [ ] Run TinySkia under Playwright WebKit with an iPhone device profile.
-  - [ ] Assert secure context, cross-origin isolation, shared memory, WebGL2, backend selection, and
+  - [x] Include both backend binaries and their hashes in deployment provenance.
+- [x] Milestone 3: Add iOS-shaped browser verification.
+  - [x] Run the combined package under Chromium with automatic Geode selection.
+  - [x] Run TinySkia under Playwright WebKit with an iPhone device profile.
+  - [x] Assert secure context, cross-origin isolation, shared memory, WebGL2, backend selection, and
         successful runtime initialization.
 - [ ] Milestone 4: Complete release gates.
   - [ ] Run both existing backend browser suites, the full Bazel gate, CMake validation, and format

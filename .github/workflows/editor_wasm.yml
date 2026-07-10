@@ -23,16 +23,10 @@ jobs:
           external-cache: true
           cache-save: true
 
-      # The Geode/WebGPU package is the production presentation path. A headed
-      # browser test below verifies its swapchain pixels through the visible canvas.
       - name: Build editor wasm package (Geode)
         run: |
           bazelisk build --config=editor-wasm //donner/editor/wasm:wasm_web_package
 
-      # The tiny_skia software-fallback package draws the document into the
-      # WebGL canvas, so headless screenshots capture real pixels. We build AND
-      # run the Playwright smoke suite against it to validate desktop-parity
-      # software rendering end to end.
       - name: Build editor wasm package (tiny_skia)
         run: |
           bazelisk build --config=editor-wasm-tiny-skia \
@@ -47,21 +41,37 @@ jobs:
         working-directory: donner/editor/wasm/tests
         run: |
           npm ci
-          npx playwright install chromium
+          npx playwright install chromium webkit
 
-      - name: Serve Geode package and run headed Playwright suite
+      - name: Verify renderer selector
+        working-directory: donner/editor/wasm/tests
+        run: npm run test:selector
+
+      - name: Stage compatible browser package
+        id: stage-compatible-package
+        run: |
+          set -euo pipefail
+
+          geode_rel=$(bazelisk cquery --config=editor-wasm --output=files \
+            //donner/editor/wasm:wasm_web_package | head -n1)
+          geode_dir=$(cd "${geode_rel}" && pwd -P)
+          tiny_skia_rel=$(bazelisk cquery --config=editor-wasm-tiny-skia --output=files \
+            //donner/editor/wasm:wasm_tiny_skia_web_package | head -n1)
+          tiny_skia_dir=$(cd "${tiny_skia_rel}" && pwd -P)
+          compatible_dir="${RUNNER_TEMP}/donner-editor-wasm-compatible-site-${GITHUB_SHA}"
+          donner/editor/wasm/stage-compatible-package.sh \
+            "${geode_dir}" "${tiny_skia_dir}" "${compatible_dir}"
+          echo "compatible_dir=${compatible_dir}" >> "${GITHUB_OUTPUT}"
+
+      - name: Serve compatible package and run headed Geode suite
         env:
           DONNER_WASM_BACKEND: geode
           DONNER_WASM_REQUIRE_WEBGPU: "1"
         run: |
           set -euo pipefail
 
-          pkg_dir=$(bazelisk cquery --config=editor-wasm --output=files \
-            //donner/editor/wasm:wasm_web_package | head -n1)
-          echo "Serving package: ${pkg_dir}"
-          test -d "${pkg_dir}"
-
-          server_log="${RUNNER_TEMP}/editor-wasm-geode-server.log"
+          pkg_dir="${{ steps.stage-compatible-package.outputs.compatible_dir }}"
+          server_log="${RUNNER_TEMP}/editor-wasm-compatible-geode-server.log"
           PYTHONUNBUFFERED=1 python3 tools/http/simple_webserver.py --no-https --host 127.0.0.1 \
             --dir "${pkg_dir}" >"${server_log}" 2>&1 &
           server_pid=$!
@@ -90,20 +100,14 @@ jobs:
           cleanup
           trap - EXIT
 
-      - name: Serve tiny_skia package and run Playwright suite
+      - name: Serve tiny_skia package and run Chromium suite
         env:
           DONNER_WASM_BACKEND: tiny_skia
         run: |
           set -euo pipefail
 
-          # Resolve the built web-package directory (a Bazel tree artifact).
           pkg_dir=$(bazelisk cquery --config=editor-wasm-tiny-skia --output=files \
             //donner/editor/wasm:wasm_tiny_skia_web_package | head -n1)
-          echo "Serving package: ${pkg_dir}"
-          test -d "${pkg_dir}"
-
-          # Plain-HTTP local server (127.0.0.1 is a secure context, and the
-          # server still sends COOP/COEP so SharedArrayBuffer/pthreads work).
           server_log="${RUNNER_TEMP}/editor-wasm-tiny-skia-server.log"
           PYTHONUNBUFFERED=1 python3 tools/http/simple_webserver.py --no-https --host 127.0.0.1 \
             --dir "${pkg_dir}" >"${server_log}" 2>&1 &
@@ -114,7 +118,6 @@ jobs:
           }
           trap cleanup EXIT
 
-          # Read the actual URL because the server selects the first free port.
           server_url=""
           for _ in $(seq 1 60); do
             server_url=$(sed -n 's/^Serving at //p' "${server_log}" | head -n1)
@@ -134,6 +137,40 @@ jobs:
           cleanup
           trap - EXIT
 
+      - name: Serve compatible package and run iPhone-profile WebKit suite
+        run: |
+          set -euo pipefail
+
+          pkg_dir="${{ steps.stage-compatible-package.outputs.compatible_dir }}"
+          server_log="${RUNNER_TEMP}/editor-wasm-compatible-ios-server.log"
+          PYTHONUNBUFFERED=1 python3 tools/http/simple_webserver.py --no-https --host 127.0.0.1 \
+            --dir "${pkg_dir}" >"${server_log}" 2>&1 &
+          server_pid=$!
+          cleanup() {
+            kill "${server_pid}" 2>/dev/null || true
+            wait "${server_pid}" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          server_url=""
+          for _ in $(seq 1 60); do
+            server_url=$(sed -n 's/^Serving at //p' "${server_log}" | head -n1)
+            if [[ -n "${server_url}" ]]; then break; fi
+            if ! kill -0 "${server_pid}" 2>/dev/null; then
+              cat "${server_log}"
+              wait "${server_pid}" 2>/dev/null || true
+              exit 1
+            fi
+            sleep 1
+          done
+          test -n "${server_url}"
+          export DONNER_WASM_BASE_URL="${server_url}"
+          curl -fsS -o /dev/null "${DONNER_WASM_BASE_URL}/index.html"
+
+          npm --prefix donner/editor/wasm/tests run test:ios
+          cleanup
+          trap - EXIT
+
       - name: Upload Playwright failure artifacts
         if: failure()
         uses: actions/upload-artifact@v7
@@ -143,32 +180,46 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Stage immutable Geode deployment candidate
-        id: stage-geode-candidate
+      - name: Stage immutable compatible deployment candidate
+        id: stage-compatible-candidate
         run: |
           set -euo pipefail
 
-          pkg_dir=$(bazelisk cquery --config=editor-wasm --output=files \
-            //donner/editor/wasm:wasm_web_package | head -n1)
-          candidate_dir="${RUNNER_TEMP}/donner-editor-wasm-geode-${GITHUB_SHA}"
+          pkg_dir="${{ steps.stage-compatible-package.outputs.compatible_dir }}"
+          candidate_dir="${RUNNER_TEMP}/donner-editor-wasm-compatible-${GITHUB_SHA}"
           site_dir="${candidate_dir}/site"
           deploy_dir="${candidate_dir}/deploy"
-          mkdir -p "${site_dir}" "${deploy_dir}"
+          mkdir -p "${site_dir}" "${deploy_dir}/geode" "${deploy_dir}/tiny_skia"
           cp -R "${pkg_dir}/." "${site_dir}/"
 
-          for required_file in index.html editor.js editor.wasm enable-threads.js donner_icon.svg; do
-            test -f "${site_dir}/${required_file}"
-          done
+          expected_site_files=$(printf '%s\n' \
+            backend-selector.js \
+            donner_icon.svg \
+            editor-bootstrap.js \
+            editor.css \
+            geode/editor.js \
+            geode/editor.wasm \
+            index.html \
+            tiny_skia/editor.js \
+            tiny_skia/editor.wasm)
+          actual_site_files=$(cd "${site_dir}" && find . -type f | sed 's|^./||' | LC_ALL=C sort)
+          test "${actual_site_files}" = "${expected_site_files}"
 
-          for deploy_file in index.html editor.js enable-threads.js donner_icon.svg; do
-            cp "${site_dir}/${deploy_file}" "${deploy_dir}/${deploy_file}"
+          for shared_file in \
+            backend-selector.js donner_icon.svg editor-bootstrap.js editor.css index.html; do
+            cp "${site_dir}/${shared_file}" "${deploy_dir}/${shared_file}"
           done
-          gzip -n -9 -c "${site_dir}/editor.wasm" > "${deploy_dir}/editor.wasm.gz"
-          test "$(wc -c < "${deploy_dir}/editor.wasm.gz")" -le 26214400
+          for backend in geode tiny_skia; do
+            cp "${site_dir}/${backend}/editor.js" "${deploy_dir}/${backend}/editor.js"
+            gzip -n -9 -c "${site_dir}/${backend}/editor.wasm" \
+              > "${deploy_dir}/${backend}/editor.wasm.gz"
+            test "$(wc -c < "${deploy_dir}/${backend}/editor.wasm.gz")" -le 20971520
+          done
 
           lockfile_sha256=$(shasum -a 256 donner/editor/wasm/tests/package-lock.json | awk '{print $1}')
-          printf '{"source_revision":"%s","lockfile_sha256":"%s","bazel_config":"editor-wasm","target":"//donner/editor/wasm:wasm_web_package","transport_encoding":"gzip"}\n' \
-            "${GITHUB_SHA}" "${lockfile_sha256}" > "${candidate_dir}/provenance.json"
+          printf '%s\n' \
+            "{\"source_revision\":\"${GITHUB_SHA}\",\"lockfile_sha256\":\"${lockfile_sha256}\",\"bazel_configs\":[\"editor-wasm\",\"editor-wasm-tiny-skia\"],\"targets\":[\"//donner/editor/wasm:wasm_web_package\",\"//donner/editor/wasm:wasm_tiny_skia_web_package\"],\"transport_encoding\":\"gzip\"}" \
+            > "${candidate_dir}/provenance.json"
 
           (
             cd "${candidate_dir}"
@@ -179,18 +230,18 @@ jobs:
 
           echo "candidate_dir=${candidate_dir}" >> "${GITHUB_OUTPUT}"
 
-      - name: Upload Geode deployment candidate
-        id: upload-geode-candidate
+      - name: Upload compatible deployment candidate
+        id: upload-compatible-candidate
         uses: actions/upload-artifact@v7
         with:
-          name: donner-editor-wasm-geode-${{ github.sha }}
-          path: ${{ steps.stage-geode-candidate.outputs.candidate_dir }}
+          name: donner-editor-wasm-compatible-${{ github.sha }}
+          path: ${{ steps.stage-compatible-candidate.outputs.candidate_dir }}
           if-no-files-found: error
           retention-days: 30
 
       - name: Record deployment candidate digest
         run: |
-          echo "### Geode deployment candidate" >> "${GITHUB_STEP_SUMMARY}"
+          echo "### Compatible deployment candidate" >> "${GITHUB_STEP_SUMMARY}"
           echo "- Source revision: \`${GITHUB_SHA}\`" >> "${GITHUB_STEP_SUMMARY}"
-          echo "- Artifact digest: \`${{ steps.upload-geode-candidate.outputs.artifact-digest }}\`" \
+          echo "- Artifact digest: \`${{ steps.upload-compatible-candidate.outputs.artifact-digest }}\`" \
             >> "${GITHUB_STEP_SUMMARY}"
