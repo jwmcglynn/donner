@@ -633,6 +633,9 @@ donner_cc_fuzzer(
     name = "editor_state_machine_fuzzer",
     srcs = ["EditorStateMachine_fuzzer.cc"],
     corpus = "testdata/editor_state_machine_fuzzer_corpus",
+    # Cold startup constructs and parses a complete headless editor document. ASan on hosted macOS
+    # can spend more than two seconds on the empty input before the mutation loop begins.
+    per_input_timeout_seconds = 10,
     deps = [
         "//donner/editor:attribute_writeback",
         "//donner/editor:editor_app",
