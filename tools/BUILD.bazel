@@ -112,3 +112,12 @@ py_test(
         "feature_loc_tests.py",
     ],
 )
+
+# Smoke test for the binary-size report tooling. Keeps binary_size.sh mapped to
+# a real Bazel test target (see binary_size_tests.py for why).
+py_test(
+    name = "binary_size_tests",
+    srcs = ["binary_size_tests.py"],
+    data = ["binary_size.sh"],
+    deps = ["@rules_python//python/runfiles"],
+)
