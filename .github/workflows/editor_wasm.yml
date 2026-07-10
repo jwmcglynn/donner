@@ -5,6 +5,9 @@ on:
     - cron: "18 7 * * *"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -103,3 +106,46 @@ jobs:
           curl -fsS -o /dev/null "${DONNER_WASM_BASE_URL}/index.html"
 
           bash donner/editor/wasm/tests/run_tests.sh
+
+      - name: Stage immutable Geode deployment candidate
+        id: stage-geode-candidate
+        run: |
+          set -euo pipefail
+
+          pkg_dir=$(bazelisk cquery --config=editor-wasm --output=files \
+            //donner/editor/wasm:wasm_web_package | head -n1)
+          candidate_dir="${RUNNER_TEMP}/donner-editor-wasm-geode-${GITHUB_SHA}"
+          site_dir="${candidate_dir}/site"
+          mkdir -p "${site_dir}"
+          cp -R "${pkg_dir}/." "${site_dir}/"
+
+          for required_file in index.html editor.js editor.wasm enable-threads.js donner_icon.svg; do
+            test -f "${site_dir}/${required_file}"
+          done
+
+          lockfile_sha256=$(sha256sum donner/editor/wasm/tests/package-lock.json | awk '{print $1}')
+          printf '{"source_revision":"%s","lockfile_sha256":"%s","bazel_config":"editor-wasm","target":"//donner/editor/wasm:wasm_web_package"}\n' \
+            "${GITHUB_SHA}" "${lockfile_sha256}" > "${candidate_dir}/provenance.json"
+
+          (
+            cd "${candidate_dir}"
+            find site -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS
+          )
+
+          echo "candidate_dir=${candidate_dir}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload Geode deployment candidate
+        id: upload-geode-candidate
+        uses: actions/upload-artifact@v7
+        with:
+          name: donner-editor-wasm-geode-${{ github.sha }}
+          path: ${{ steps.stage-geode-candidate.outputs.candidate_dir }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Record deployment candidate digest
+        run: |
+          echo "### Geode deployment candidate" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- Source revision: \`${GITHUB_SHA}\`" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- Artifact digest: \`${{ steps.upload-geode-candidate.outputs.artifact-digest }}\`" \
+            >> "${GITHUB_STEP_SUMMARY}"
