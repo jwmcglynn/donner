@@ -28,7 +28,7 @@ async function loadBrowserSelector({ hasWebGl2 }) {
     window,
   });
   vm.runInContext(source, context, { filename: "backend-selector.js" });
-  return window.__donnerBackendPromise;
+  return { selection: window.__donnerBackendPromise };
 }
 
 test("auto mode prefers Geode when WebGPU has an adapter", async () => {
@@ -113,7 +113,7 @@ test("rejects unknown backend overrides", async () => {
 });
 
 test("browser capability rejection is handled by the published promise", async () => {
-  const selection = await loadBrowserSelector({ hasWebGl2: false });
+  const { selection } = await loadBrowserSelector({ hasWebGl2: false });
   await assert.rejects(selection, /WebGL2/);
   await new Promise((resolve) => setImmediate(resolve));
 });

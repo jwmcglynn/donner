@@ -51,8 +51,8 @@ if (typeof window !== "undefined") {
     requestedBackend,
     requestWebGpuAdapter,
     hasWebGl2,
-  });
-  window.__donnerBackendPromise.then((backend) => {
+  }).then((backend) => {
     window.__donnerBackend = backend.name;
+    return backend;
   });
 }
