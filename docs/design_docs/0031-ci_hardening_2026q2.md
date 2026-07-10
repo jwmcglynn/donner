@@ -10,7 +10,8 @@ toolchain wiring — this is further along than Milestone 5's "stretch"
 framing anticipated and is not fully reflected in the milestone list below.
 Remaining open items: M1.8b (branch-protection), M2.6 (scheduled triage
 agent), M2.9 (per-library `misc-include-cleaner`), and all of Milestones 3–5.
-**Author:** Claude Opus 4.7 (MiscBot)
+**Author:** Claude Opus 4.7
+**Agent:** MiscBot
 **Created:** 2026-04-20
 **Supersedes:** [0029](0029-2-ci_runtime.md) (runtime reduction scope folded in here)
 **Related:** [0016](0016-ci_escape_prevention.md) (Phase 1 escape-prevention taxonomy)

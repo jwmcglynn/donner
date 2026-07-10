@@ -2,7 +2,7 @@
 
 **Status:** Retrospective
 **Type:** Retrospective
-**Author:** Your Model (e.g. Codex GPT-5)
+**Author:** Exact Model Identifier (e.g. GPT-5.6 Sol)
 **Created:** YYYY-MM-DD
 
 ## Summary

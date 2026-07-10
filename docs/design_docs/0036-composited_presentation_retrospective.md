@@ -2,7 +2,7 @@
 
 **Status:** Retrospective
 **Type:** Retrospective
-**Author:** Codex GPT-5
+**Author:** GPT-5
 **Created:** 2026-05-19
 
 ## Summary

@@ -1,7 +1,9 @@
 # Design: CSS Parser `TokenStream` — Pull-Based Subparser Handoff
 
 **Status:** Implemented (Milestones 1–3 complete; Milestone 4 verdict: STOP HERE)
-**Author:** Claude Opus 4.6 (drafting on behalf of Jeff McGlynn, with input from DuckBot)
+**Author:** Claude Opus 4.6
+**Requested by:** Jeff McGlynn
+**Reviewed by:** DuckBot
 **Created:** 2026-04-10
 
 **Naming note (2026-04-10):** the concept is named `ComponentValueStream` in code to

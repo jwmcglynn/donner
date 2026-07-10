@@ -5,6 +5,14 @@ ADR-style in the order they were first written. New docs append the next
 free number — `NNNN-short_name.md` — and existing numbers never change once
 assigned, so external references stay stable.
 
+Every model-authored design records the exact accountable model identifier on its `Author` line;
+a human-led, model-assisted design records it on a separate `Model` line.
+This provenance is preserved across later review and upgrade passes; see
+[AGENTS.md](AGENTS.md).
+`tools/check_design_doc_provenance.py` enforces the rule in CI. Historical records whose exact
+model cannot be established from the document or repository history are ratcheted in
+`provenance_debt.txt`; that list may shrink but cannot silently grow.
+
 ## Tree Groups
 
 - \subpage DesignDocsCoreArchitecture
@@ -128,6 +136,7 @@ conventions automated agents should follow when editing design docs.
 | 0052-5 | [text/text_backend_refactor](text/0052-5-text_backend_refactor.md)                         | Reference                                                         | stb / FreeType+HarfBuzz backend tier split.                                                                                                 |
 | 0052-6 | [text/text_v1_release](text/0052-6-text_v1_release.md)                                     | Reference                                                         | Text v1 release checklist.                                                                                                                  |
 | 0052-7 | [text/textpath](text/0052-7-textpath.md)                                                   | Reference                                                         | `<textPath>` implementation notes.                                                                                                          |
+| 0053   | [native_gpu_hal](0053-native_gpu_hal.md)                                                   | Design                                                            | Clean-room Donner GPU runtime, native Metal/Vulkan backends, browser bridge, shader IR, and a Rust-independent build graph.                 |
 | 0054   | [editor_design_language](0054-editor_design_language.md)                                   | In Progress                                                       | Graphite editor chrome, Signal Teal interaction states, source palette, fixed control geometry, and deterministic visual verification.       |
 | 0055   | [binary_size](0055-binary_size.md)                                                         | Draft                                                             | Binary size reduction: reproducible native + wasm size report tooling, measured baseline, and ranked reduction plan.                        |
 

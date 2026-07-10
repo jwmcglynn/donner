@@ -2,6 +2,8 @@
 
 **Status:** Implemented — structured editing is on by default
 (`EditorApp::structuredEditingEnabled()` returns `true`).
+**Author:** Claude Opus 4.6
+**Context window:** 1M tokens
 
 ## Summary
 

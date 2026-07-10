@@ -6,7 +6,8 @@
 incomplete: `TextEditor.h` still declares `friend class TextEditorTests` and
 `TextEditor_tests.cc` still carries non-rendering tests rather than having fully migrated to
 `TextEditorCore_tests.cc`.
-**Author:** Claude Opus 4.6 (1M context)
+**Author:** Claude Opus 4.6
+**Context window:** 1M tokens
 **Created:** 2026-04-12
 
 ## Summary

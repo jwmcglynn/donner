@@ -2,6 +2,8 @@
 
 [Back to hub](../0010-text_rendering.md)
 
+**Author:** Claude Opus 4.6
+
 ## Testing and Validation
 
 ### Unit tests

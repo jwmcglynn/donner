@@ -2,7 +2,7 @@
 
 **Status:** Root cause identified
 **Type:** Retrospective / Handoff
-**Author:** Codex GPT-5
+**Author:** GPT-5
 **Created:** 2026-05-21
 
 ## Summary

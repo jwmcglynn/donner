@@ -9,7 +9,8 @@ PRs #515/#609 rather than filed issues; remaining gaps are tracked live in
 deliberately left unset for self-hosted runners rather than raised per B3. This doc
 is kept as a historical proposal snapshot, not an active backlog — see 0021 and 0031
 for current state.
-**Author:** Claude Opus 4.6 (with SpecBot, PerfBot, BazelBot)
+**Author:** Claude Opus 4.6
+**Reviewed by:** SpecBot, PerfBot, BazelBot
 **Created:** 2026-04-12
 
 ## Summary
