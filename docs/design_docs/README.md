@@ -129,6 +129,7 @@ conventions automated agents should follow when editing design docs.
 | 0052-6 | [text/text_v1_release](text/0052-6-text_v1_release.md)                                     | Reference                                                         | Text v1 release checklist.                                                                                                                  |
 | 0052-7 | [text/textpath](text/0052-7-textpath.md)                                                   | Reference                                                         | `<textPath>` implementation notes.                                                                                                          |
 | 0054   | [editor_design_language](0054-editor_design_language.md)                                   | In Progress                                                       | Graphite editor chrome, Signal Teal interaction states, source palette, fixed control geometry, and deterministic visual verification.       |
+| 0055   | [binary_size](0055-binary_size.md)                                                         | Draft                                                             | Binary size reduction: reproducible native + wasm size report tooling, measured baseline, and ranked reduction plan.                        |
 
 ## Cross-reference: developer docs
 

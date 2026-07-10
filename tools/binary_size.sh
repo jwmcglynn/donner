@@ -98,3 +98,47 @@ echo '```'
 run_bloaty -c tools/binary_size_config.bloaty -d donner_package,compileunits -n 20 "${DEBUG_FILE_ARG[@]}" build-binary-size/svg_parser_tool
 
 echo '```'
+
+##
+## WebAssembly transfer size (Emscripten).
+##
+## The .wasm + JS glue is the artifact a browser downloads, so the number that
+## matters for the "downloadable as wasm" story is the gzip-compressed transfer
+## size, not the on-disk size. Measure the tiny_skia SVG renderer wasm target
+## (the minimal embedder surface: parser + svg + software renderer + a thin
+## bridge). Skipped automatically when emcc is not on PATH.
+##
+if [[ -z "$SKIP_WASM" ]] && command -v emcc >/dev/null 2>&1; then
+  echo ""
+  echo "### WebAssembly build (\`//donner/svg/renderer/wasm:donner_wasm\`)"
+  echo ""
+
+  bazel build "${BAZEL_QUIET_OPTIONS[@]}" "${BAZEL_LOCAL_OPTIONS[@]}" --config=wasm //donner/svg/renderer/wasm:donner_wasm
+
+  cp -f bazel-bin/donner/svg/renderer/wasm/donner_wasm_bin.wasm build-binary-size/donner_wasm.wasm
+  cp -f bazel-bin/donner/svg/renderer/wasm/donner_wasm_bin.js build-binary-size/donner_wasm.js
+
+  wasm_raw=$(wc -c < build-binary-size/donner_wasm.wasm)
+  wasm_gz=$(gzip -9 -c build-binary-size/donner_wasm.wasm | wc -c)
+  js_raw=$(wc -c < build-binary-size/donner_wasm.js)
+  js_gz=$(gzip -9 -c build-binary-size/donner_wasm.js | wc -c)
+
+  echo '```'
+  printf '%-24s %14s %14s\n' "artifact" "raw bytes" "gzip -9"
+  printf '%-24s %14s %14s\n' "donner_wasm_bin.wasm" "$wasm_raw" "$wasm_gz"
+  printf '%-24s %14s %14s\n' "donner_wasm_bin.js" "$js_raw" "$js_gz"
+  printf '%-24s %14s %14s\n' "total transfer" "$((wasm_raw + js_raw))" "$((wasm_gz + js_gz))"
+  echo '```'
+  echo ""
+
+  # Section-level attribution of the .wasm. Symbol attribution is best-effort:
+  # it only appears when the module still carries a name section.
+  echo '`bloaty -d sections,symbols -n 20` output for donner_wasm_bin.wasm'
+  echo '```'
+  run_bloaty -d sections,symbols -n 20 build-binary-size/donner_wasm.wasm || \
+    run_bloaty -d sections -n 20 build-binary-size/donner_wasm.wasm || true
+  echo '```'
+else
+  echo ""
+  echo "_emcc not found on PATH (or SKIP_WASM set); skipping WebAssembly size measurement._"
+fi
