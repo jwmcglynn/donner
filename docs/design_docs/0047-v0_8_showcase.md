@@ -2,8 +2,9 @@
 
 **Status:** Implemented (v0.8 drive)
 **Author:** Codex
+**Reviewed by:** GPT-5.6 Sol
 **Created:** 2026-05-30
-**Updated:** 2026-07-02
+**Updated:** 2026-07-10
 **Related:** [0010-text_rendering](0010-text_rendering.md),
 [0033-2-editor_design_tool_responsiveness](0033-2-editor_design_tool_responsiveness.md),
 [0041-2-path_authoring_and_boolean_operations](0041-2-path_authoring_and_boolean_operations.md),
@@ -50,12 +51,12 @@ Per-milestone outcome:
     `//donner/editor/tests:pen_tool_tests`. (See also the Pen tool crash fix below.)
 - **M3 — Complete Layers panel:** `LayerTreeModel` + `LayersPanel`; the old `LayerInspectorPanel` was
   renamed to `CompositorDebugPanel` (keeping render diagnostics separate). Covered by
-  `//donner/editor/tests:layer_tree_model_tests` and `:layers_panel_tests`. *Caveat:* per-row preview
+  `//donner/editor/tests:layer_tree_model_tests` and `:layers_panel_tests`. _Caveat:_ per-row preview
   ships as a deterministic fill-swatch fallback in this prototype; real per-row subtree thumbnails are
   a follow-up.
 - **M4 — Text authoring UI:** `TextTool` + `TextInspectorPanel`, `Kind::InsertText` /
   `SetTextContent`, `ActiveTool::Text`, covered by `//donner/editor/tests:text_tool_tests`.
-  *Caveat:* editing is inspector-only with no in-canvas caret — matches the design's Non-Goal.
+  _Caveat:_ editing is inspector-only with no in-canvas caret — matches the design's Non-Goal.
 - **M5 — Convert Text to Outlines:** `donner/editor/TextToOutlines.{h,cc}` (`convertTextToOutlines`),
   which reuses `TextEngine::computedGlyphPaths()` via `SVGTextElement::convertToPath()`;
   `Kind::ConvertTextToOutlines`; covered by `//donner/editor/tests:text_outline_tests` with an exact
@@ -68,7 +69,7 @@ Per-milestone outcome:
   stroke `#1ea7fd` / handle `#fff`, reusing the M6 clipPath.
 - **M8 — Produce the v0.8 showcase:** the runnable tool
   `//donner/editor/tools:generate_showcase_asset` produced `donner_splash_v0_8.svg` (outlined `SVG`
-  letters, no live `<text>`, `donner-editor-overlay` chrome). *Repro mechanism:* the final asset was
+  letters, no live `<text>`, `donner-editor-overlay` chrome). _Repro mechanism:_ the final asset was
   produced **programmatically** via the merged `convertTextToOutlines` (M5) + `ExportViewportAsSvg`
   (M6) code paths, not by driving the editor GUI — the editor GUI cannot run headless in CI.
 - **M9 — Rebrand and release packaging:** README / RELEASE_NOTES / docs / About updated to
@@ -79,7 +80,7 @@ Per-milestone outcome:
 The v0.8 drive added work that was not in the original milestone list:
 
 - **Preview-vs-source save/reload coherence test**
-  (`//donner/editor/tests:preview_source_coherence_tests`). Proves that after *every* committed
+  (`//donner/editor/tests:preview_source_coherence_tests`). Proves that after _every_ committed
   editor op, the live preview render is pixel-identical (zero-diff) to rendering the
   saved-then-reloaded source. This guarantees the "what you see == what you save" invariant across
   the whole authoring surface, not just per-feature.
@@ -92,7 +93,7 @@ The v0.8 drive added work that was not in the original milestone list:
 
 ### Preexisting compositor bug surfaced (not a v0.8 regression)
 
-Running the full `bazel test //...` gate across the *entire* repo for the first time as part of this
+Running the full `bazel test //...` gate across the _entire_ repo for the first time as part of this
 drive revealed ~11 failing targets, all tracing to a single **preexisting** bug — a broken
 translation-only drag compose-offset / layer fast path
 (`composeOffset.translation()` / `dragTranslationDoc` / golden delta all reported `(0,0)`, so
@@ -182,20 +183,20 @@ These are process mistakes that cost hours across the drive. They are documented
 starts clean instead of re-learning them.
 
 1. **Believing test results that came through the corrupted channel.** The human-readable
-   `PASSED`/`FAILED` lines were garbled, elided, and — worst — *replayed from earlier runs interleaved
-   with new output*. This produced **three** confidently-wrong status claims: "5 of 7 green" when all 7
+   `PASSED`/`FAILED` lines were garbled, elided, and — worst — _replayed from earlier runs interleaved
+   with new output_. This produced **three** confidently-wrong status claims: "5 of 7 green" when all 7
    were red; "all 2530 pass" when the suite hadn't passed; "async is contention-flaky" when it was
    deterministic. **Rule: a test is green only if its captured `bazel` exit code says so.** Do
-   `cmd > /tmp/log 2>&1; echo "rc=$?" > /tmp/rc; ` then Read `/tmp/rc`. Never report pass/fail from the
+   `cmd > /tmp/log 2>&1; echo "rc=$?" > /tmp/rc;` then Read `/tmp/rc`. Never report pass/fail from the
    streamed stdout of a multi-line bazel run.
 
 2. **Misreading a failing exit code as success.** The ASan run was reported as "passed, segfault is a
-   symptom" — but it had `ASAN_RC=3` (failed) with zero sanitizer reports, which actually *disproves*
+   symptom" — but it had `ASAN_RC=3` (failed) with zero sanitizer reports, which actually _disproves_
    the heap-overflow theory and points to a deterministic logic bug. The agent that re-ran it caught
    this. **Rule: read the rc number before forming a conclusion; rc=0 is the only "passed".**
 
 3. **Over-batching tool calls that cascade-cancel.** Multiple times a single message fired ~10+
-   parallel Bash/Edit/Agent calls; when any one errored or the user interrupted, the *entire batch* was
+   parallel Bash/Edit/Agent calls; when any one errored or the user interrupted, the _entire batch_ was
    cancelled, leaving edits half-applied (e.g. a duplicated `noteRowHovered` definition, a stray brace
    in `PenTool.cc`, an uncompilable `EditorShell.cc` that got committed). **Rule: when the channel is
    flaky, ONE Bash per message for anything stateful (git, edits, builds). Verify each before the next.**
@@ -206,7 +207,7 @@ starts clean instead of re-learning them.
    amend only after green.**
 
 5. **Editing tests to encode the wrong contract, then "fixing" them again.** The layer-order test was
-   first updated to assert reverse order, failed, then had to be re-fixed — because there were *two*
+   first updated to assert reverse order, failed, then had to be re-fixed — because there were _two_
    emission loops (nested recursion AND top-level) and only one was changed. **Rule: when changing a
    behavior, grep for ALL sites that implement it before editing the test; let the test define the
    contract and make production match it, not vice-versa.**
@@ -484,8 +485,8 @@ flowchart LR
 
 ### Text Authoring
 
-*(Updated 2026-07-02: in-canvas editing sessions shipped, superseding the
-inspector-only plan below.)* The Text tool now follows the standard design-tool
+_(Updated 2026-07-02: in-canvas editing sessions shipped, superseding the
+inspector-only plan below.)_ The Text tool now follows the standard design-tool
 contract:
 
 - A click places point text; a click-drag draws a text box. Either opens an
@@ -544,7 +545,7 @@ The Pen tool must be good enough to author the showcase without source edits:
 - Closing a path is predictable and creates a valid closed contour.
 - Escape ends the session committing the placed anchors as an open path (same as Enter, one
   undoable operation) — undo is the discard mechanism. A segmentless single-anchor draft is
-  discarded, leaving the document unchanged. *(Contract updated 2026-07-02, matching 0041-2.)*
+  discarded, leaving the document unchanged. _(Contract updated 2026-07-02, matching 0041-2.)_
 - Every placed point updates the path bounds and overlay **in the same presented frame as the
   gesture's document flush** — this includes plain clicks, close-path clicks, and commits, not
   only active handle drags. The overlay must be captured from the post-flush DOM geometry; it
@@ -925,13 +926,13 @@ Manual validation:
 
 Captured after the stabilization pass that took `v0_8_drive` green (segfault, gl_rnr
 selection-loss, the #633 paint-leak compose bug, and the deterministic immediate
-heuristic all landed). The v0.8 *functional* milestones shipped, but the following
+heuristic all landed). The v0.8 _functional_ milestones shipped, but the following
 UX/polish gaps remain before the showcase feels finished — plus one milestone that
 was marked done but is not actually usable.
 
 ### ✅ Resolved: Text tool (M4) is reachable in the live editor
 
-*(Updated 2026-07-02.)* The Text tool now has a toolbar button (Select / Pen /
+_(Updated 2026-07-02.)_ The Text tool now has a toolbar button (Select / Pen /
 Text palette) and the `T` single-key shortcut; a canvas click (or box drag)
 opens an in-canvas editing session with a live caret — see "Text Authoring"
 above for the full session contract. Covered by `TextTool_tests.cc`, the
@@ -971,6 +972,27 @@ land, and about 4.0 ms steady-state. Viewport, document, compositor, and tile ca
 gesture bounds, stale tile identity, replacement-document annotation rejection, locator batching,
 and pane-center preservation. The Inspector UI fuzzer completed a 31-second ASan mutation run with
 138 executions and no crash.
+
+### Resolved: adaptive touch UI shell (2026-07-10)
+
+The editor now has a tested compact profile for constrained windows and touch-preferred WebAssembly
+builds. It keeps the canvas primary, replaces the desktop menu with a 52 px command bar, uses 44 px
+tool and command targets, and presents one Layers or Inspector sheet at a time. The sheet uses the
+right edge in landscape and the bottom edge in portrait. Layer rows, visibility, lock, disclosure,
+Inspector fields, zoom, and the close action receive touch-sized targets; transform and pen hit
+tolerance expands without changing crisp overlay artwork.
+
+The command bar keeps Open/Samples reachable after a document loads. Wide desktop WebAssembly
+windows retain full desktop chrome unless the browser reports touch points or a coarse pointer.
+
+The compact canvas uses a separate DockSpace root. Entering or leaving the profile therefore does
+not destroy the desktop dock tree or overwrite source/sidebar preferences. A right-side sheet also
+recenters the floating tool palette in the visible canvas region instead of covering it.
+
+This milestone owns UI policy and ImGui interaction geometry only. The WebAssembly platform layer
+owns Safari resize, touch-event, virtual-keyboard, and lifecycle translation into the existing
+editor input seam. The compact subset intentionally omits source editing, paint controls, the text
+format bar, canvas scrollbars, and compositor diagnostics for the first pass.
 
 ### Iconography + toolbar
 
@@ -1049,7 +1071,7 @@ and the chrome fully renderer-backed. The gap slate was implemented on
       `ClickLastAnchorRetractsOnlyOutgoingHandle`.
 - [ ] **Contextual cursors**: one static pen cursor; no close-path / add /
       delete / continue-endpoint variants. (Remaining follow-up; a dedicated
-      delete-anchor *gesture* beyond Backspace also remains open.)
+      delete-anchor _gesture_ beyond Backspace also remains open.)
 - [x] **Escape semantics doc conflict** — resolved 2026-07-02 (operator
       decision): Escape commits the open path, same as Enter (the standard
       design-tool contract, matching 0041-2); a segmentless draft is
@@ -1084,7 +1106,7 @@ and the chrome fully renderer-backed. The gap slate was implemented on
 
 The intended model (see `CLAUDE.md` / `AGENTS.md` § "DOM-Level Editing Only") is
 that **even typing in the source pane is DOM-aware**: an edit should be
-incrementally reparsed and applied to the *live DOM tree in place*, preserving
+incrementally reparsed and applied to the _live DOM tree in place_, preserving
 entity identity so selection, compositor caches, and references survive the
 keystroke.
 
@@ -1105,12 +1127,12 @@ The original `ChangeClassifier::classifyTextChange` gate this section used to
 describe was **superseded** by `applySourceEdit` and had been off every live path
 (only its own unit test consumed it); it has now been **deleted**.
 
-**Remaining gap (narrow):** the whole-text *diff fallback*
+**Remaining gap (narrow):** the whole-text _diff fallback_
 (`DispatchSourceTextChange` → `BuildSingleSourceTextEdit`) is only reached when an
 edit arrives without precise `SourceEditIntent`s (e.g. a programmatic `setText`
 that bypasses the text editor's intent recording — normal typing/undo/paste all
 record intents and take the correct precise path). For that fallback, inserting an
-element *textually similar to an adjacent sibling* collapses under minimal
+element _textually similar to an adjacent sibling_ collapses under minimal
 prefix/suffix diffing into what looks like a single-character attribute-value edit,
 so the structured apply renames the existing sibling and never materializes the new
 element in the DOM even though the source bytes are correct — a silent DOM/source

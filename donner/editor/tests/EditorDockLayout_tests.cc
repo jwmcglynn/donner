@@ -125,9 +125,8 @@ TEST_F(EditorDockLayoutTest, DocksEachPanelIntoItsDefaultNode) {
   const ImGuiID dockspaceId = EditorDockSpaceId();
   const EditorDockLayoutParams params = DefaultParams(/*includeCompositorDebug=*/true);
 
-  const EditorDockNodes nodes =
-      RenderDockFrame(dockspaceId, /*locked=*/true, /*showCompositorDebug=*/true, /*build=*/true,
-                      params);
+  const EditorDockNodes nodes = RenderDockFrame(
+      dockspaceId, /*locked=*/true, /*showCompositorDebug=*/true, /*build=*/true, params);
   // A second frame lets the freshly-submitted windows settle into their nodes.
   RenderDockFrame(dockspaceId, /*locked=*/true, /*showCompositorDebug=*/true, /*build=*/false);
 
@@ -152,13 +151,36 @@ TEST_F(EditorDockLayoutTest, ExcludesCompositorDebugNodeWhenNotRequested) {
   EXPECT_EQ(DockNodeIdForWindow(kCompositorDebugWindowName), 0u);
 }
 
+TEST_F(EditorDockLayoutTest, CompactLayoutReservesEntireDockspaceForCanvas) {
+  const ImGuiID dockspaceId = EditorCompactDockSpaceId();
+  EXPECT_NE(dockspaceId, EditorDockSpaceId());
+  EditorDockLayoutParams params = DefaultParams(/*includeCompositorDebug=*/false);
+  params.includeSidebars = false;
+
+  const EditorDockNodes nodes =
+      RenderDockFrame(dockspaceId, /*locked=*/true, /*showCompositorDebug=*/false,
+                      /*build=*/true, params);
+  RenderDockFrame(dockspaceId, /*locked=*/true, /*showCompositorDebug=*/false,
+                  /*build=*/false);
+
+  EXPECT_EQ(nodes.central, dockspaceId);
+  EXPECT_EQ(nodes.rightTop, 0u);
+  EXPECT_EQ(nodes.rightMid, 0u);
+  EXPECT_EQ(nodes.rightBottom, 0u);
+  ImGuiDockNode* central = ImGui::DockBuilderGetNode(nodes.central);
+  ASSERT_NE(central, nullptr);
+  EXPECT_TRUE(central->IsCentralNode());
+  EXPECT_TRUE(central->IsNoTabBar());
+  EXPECT_TRUE(central->IsLeafNode());
+  EXPECT_EQ(DockNodeIdForWindow(kRenderPaneWindowName), nodes.central);
+}
+
 TEST_F(EditorDockLayoutTest, ResetRestoresDefaultLayoutAfterRearrange) {
   const ImGuiID dockspaceId = EditorDockSpaceId();
   const EditorDockLayoutParams params = DefaultParams(/*includeCompositorDebug=*/true);
 
-  const EditorDockNodes original =
-      RenderDockFrame(dockspaceId, /*locked=*/false, /*showCompositorDebug=*/true, /*build=*/true,
-                      params);
+  const EditorDockNodes original = RenderDockFrame(
+      dockspaceId, /*locked=*/false, /*showCompositorDebug=*/true, /*build=*/true, params);
   RenderDockFrame(dockspaceId, /*locked=*/false, /*showCompositorDebug=*/true, /*build=*/false);
 
   // Simulate a user rearrange: move the Inspector into the canvas/central node.
@@ -168,9 +190,8 @@ TEST_F(EditorDockLayoutTest, ResetRestoresDefaultLayoutAfterRearrange) {
   EXPECT_EQ(DockNodeIdForWindow(kInspectorWindowName), original.central);
 
   // Reset rebuilds the default layout; the Inspector returns to its own node.
-  const EditorDockNodes rebuilt =
-      RenderDockFrame(dockspaceId, /*locked=*/false, /*showCompositorDebug=*/true, /*build=*/true,
-                      params);
+  const EditorDockNodes rebuilt = RenderDockFrame(
+      dockspaceId, /*locked=*/false, /*showCompositorDebug=*/true, /*build=*/true, params);
   RenderDockFrame(dockspaceId, /*locked=*/false, /*showCompositorDebug=*/true, /*build=*/false);
   EXPECT_EQ(DockNodeIdForWindow(kInspectorWindowName), rebuilt.rightMid);
   EXPECT_NE(DockNodeIdForWindow(kInspectorWindowName), original.central);

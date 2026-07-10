@@ -374,6 +374,7 @@ private:
   void renderEditingScopeBreadcrumb();
   void renderCanvasZoomControl();
   void renderFillStrokeToolbarWidget();
+  void renderCompactTopBar();
   void renderSidebars();
   void renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& contentRegion);
   void renderSourcePaneSplitter(float windowWidth, float paneOriginY, float paneHeight,
@@ -382,6 +383,7 @@ private:
   /// the right-column dockable panels, (re)building the default locked layout on
   /// first frame, after a reset, or when the docked-panel set changes.
   void renderDockSpaceHost(float hostX, float hostY, float hostWidth, float hostHeight);
+  [[nodiscard]] std::optional<Box2d> compactPanelScreenRect() const;
   void renderLayerPanelContents();
   void maybeLogResourceDiagnostics(const FrameCostBreakdown& frameCost);
   void maybeLogFrameMissTelemetry(const FrameCostBreakdown& frameCost);
@@ -565,6 +567,11 @@ private:
   /// Whether the DockSpace layout has been built (or adopted from the persisted
   /// .ini) at least once this session.
   bool dockLayoutBuilt_ = false;
+  /// Whether the canvas-only compact DockSpace has been built this session.
+  bool compactDockLayoutBuilt_ = false;
+  /// Whether the active DockSpace includes persistent sidebars. Used to rebind
+  /// the canvas between separate desktop and compact roots on profile changes.
+  bool dockSidebarsIncludedInLayout_ = true;
   /// Whether the currently built layout reserves a node for the Compositor Debug
   /// panel. Tracks \ref showCompositorDebugPanel_ so toggling the panel rebuilds
   /// the layout to add or reclaim its slot.
@@ -619,6 +626,11 @@ private:
   std::string pendingSampleLoadId_;
   bool pendingSampleLoadNeedsConfirmation_ = false;
   bool pendingSampleLoadDiscardConfirmed_ = false;
+  /// Current compact sheet state. Desktop keeps the source/sidebar preferences
+  /// above intact so switching profiles does not rewrite user layout choices.
+  bool compactPanelVisible_ = false;
+  bool compactInspectorSheet_ = false;
+  EditorAdaptiveUiLayout adaptiveUiLayout_;
   /// Whether the Compositor Debug panel window renders. Off by default: it is a
   /// developer-facing composite-tile diagnostics view, toggled on via the View
   /// menu. The user-facing Layers panel is unrelated and always visible.

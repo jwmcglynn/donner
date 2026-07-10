@@ -49,8 +49,9 @@ Guarantees callers can rely on:
   GL textures via `RenderCoordinator::pollRenderResult`; (2) if `!isBusy()`, flush
   queued edits (`EditorApp::flushFrame`) and refresh selection bounds; (3) sync
   parse-error markers and apply pending canvas→source writebacks through
-  `DocumentSyncController`; (4) compute pane layout, handle shortcuts, and render
-  the menu bar; (5) render the panes; (6) if `!isBusy()`, request the next render
+  `DocumentSyncController`; (4) compute the adaptive UI profile and pane layout,
+  handle shortcuts, and render the desktop menu bar or compact command bar; (5)
+  render the panes; (6) if `!isBusy()`, request the next render
   via `RenderCoordinator::maybeRequestRender`; (7) collect a `FrameCostBreakdown`
   and emit frame-miss/resource telemetry. Queued canvas-text characters are
   coalesced before the mutation flush, so one UI frame performs one text-content
@@ -87,12 +88,12 @@ immediately.
 - **`AsyncRenderer`** (`donner/editor/AsyncRenderer.h`) owns a dedicated worker
   thread that owns the `svg::Renderer` and a `CompositorController` for its
   lifetime. Its state is a variant over `Idle`/`Rendering`/`Cancelling`/`Done`/
-  `Shutdown`. `isBusy()` is true while a render is in flight *or* a finished result
+  `Shutdown`. `isBusy()` is true while a render is in flight _or_ a finished result
   awaits polling; the UI thread must not mutate the document or touch the renderer
   while it is true. `requestRender()` is non-blocking and cancels+replaces an
   in-flight request; cancellation is delivered through a
   `svg::compositor::CancellationToken` polled at compositor safe points.
-- **Threading model.** The worker shares the *live* registry rather than deep-copying
+- **Threading model.** The worker shares the _live_ registry rather than deep-copying
   (`SVGDocument` is a value facade over a `shared_ptr<Registry>`). On first render
   the document is flipped to `svg::ThreadingMode::ConcurrentDom` for the editor's
   lifetime; the worker takes a `DocumentWriteAccess` guard across the render and
@@ -133,13 +134,12 @@ describes the editor's consumption of it.
 - **Panes** are immediate-mode borderless ImGui windows; layout math lives in
   `EditorShellLayout`. The **render pane** (`RenderPanePresenter`) blits tiles and
   overlay chrome and owns pointer capture; the **source pane** is `TextEditor`
-  (headless core split into `TextEditorCore`); the **sidebar**
-  (`SidebarPresenter`) renders the element tree and attribute inspector from a
-  snapshot refreshed only while the worker is idle; the **layers panel**
-  (`LayerInspectorPanel`) is a read-only view of the compositor's paint-order
-  tiles; the **menu bar** (`MenuBarPresenter`) returns a semantic `MenuBarActions`
-  struct the shell acts on; **dialogs** (Open/Save/About/Licenses) are
-  `DialogPresenter`.
+  (headless core split into `TextEditorCore`); **Layers** (`LayersPanel`) renders
+  the user-facing document tree; **Inspector** (`SidebarPresenter`) renders XML,
+  CSS, and transform state from a snapshot refreshed only while the worker is
+  idle; `LayerInspectorPanel` is the separate compositor diagnostics view; the
+  **menu bar** (`MenuBarPresenter`) returns a semantic `MenuBarActions` struct the
+  shell acts on; **dialogs** (Open/Save/About/Licenses) are `DialogPresenter`.
 - **Tools** implement the `Tool` interface (`onMouseDown`/`onMouseMove`/`onMouseUp`
   in document-space coordinates) and only ever call `EditorApp::applyMutation` —
   never the DOM directly. `SelectTool` handles select / marquee / move / resize /
@@ -158,6 +158,27 @@ describes the editor's consumption of it.
   `ViewportState` selects a pane-bounded raster only when its pixel area is smaller
   than the full-document raster, unless a backend dimension cap requires bounds.
 
+### Adaptive UI profile
+
+`ComputeEditorAdaptiveUiLayout` in `EditorShellLayout` is the pure policy boundary
+between desktop and `CompactTouch` chrome. It receives logical window dimensions
+and a platform touch preference, then returns top-bar, tool-size, sheet-placement,
+and feature-subset decisions. Native constrained windows use the compact profile;
+the WebAssembly shell prefers it when the browser reports touch points or a coarse pointer.
+
+Compact mode gives the render pane the full DockSpace and presents one Layers or
+Inspector sheet over it. Portrait uses a bottom sheet; landscape uses a right
+sheet clamped to a useful reading width. Desktop and compact layouts have distinct
+DockSpace ids. The shell rebinds only the Render window when switching profiles,
+leaving the desktop dock tree, source visibility, and sidebar width intact.
+
+Touch adaptation is deliberately above the document and renderer layers. Compact
+commands call the same `EditorApp`, tool, and presenter seams as desktop commands.
+The shell increases hit tolerance without increasing selection-handle artwork and
+uses 44 logical pixel command, row, and field targets. Browser code remains
+responsible for mapping Safari touch, resize, and virtual-keyboard events into the
+ordinary ImGui input stream.
+
 ## API Surface
 
 The editor is an application, not a reusable library API, but the load-bearing
@@ -167,6 +188,8 @@ entry points are:
 - `EditorApp::loadFromString(std::string_view)` / `AsyncSVGDocument::flushFrame()`
   / `currentFrameVersion()` — document lifecycle used by the frame loop.
 - `EditorShell::runFrame()` / `nextIdleWakeSeconds()` — the per-frame tick.
+- `ComputeEditorAdaptiveUiLayout()` - pure desktop/compact profile selection and
+  sheet geometry.
 - `AsyncRenderer::requestRender()` / `pollResult()` / `isBusy()` — the render
   handoff; plus the replay-only test hooks documented in
   \ref DeterministicReplayTesting.
@@ -190,6 +213,9 @@ entry points are:
 - **Dynamic strings** are rendered with `ImGui::TextUnformatted(...)` rather than as
   format strings; this is an enforced-by-convention practice in the editor code, not
   a separate lint rule.
+- **Adaptive chrome adds no authority.** Compact commands reuse existing mutation,
+  file-dialog, and render seams. The profile itself performs no network, storage,
+  clipboard, or document access.
 - **`stb_image`** is not used anywhere under `donner/editor/`; image decoding runs
   behind `svg::Renderer` on the worker.
 - **Profiling.** Tracy instrumentation compiles to no-ops unless `ENABLE_TRACY` is
@@ -210,7 +236,9 @@ Tests live under `donner/editor/tests/`. By area:
   `RenderPaneClick_tests.cc`, `RenderPaneGesture_tests.cc`, `DragCoalesce_tests.cc`,
   `ViewportInteractionController_tests.cc`.
 - **Presenters / UI:** `SidebarPresenter_tests.cc`, `RenderPanePresenter_tests.cc`,
-  `OverlayRenderer_tests.cc`, `LayerInspectorDiagnostics_tests.cc`.
+  `OverlayRenderer_tests.cc`, `LayerInspectorDiagnostics_tests.cc`,
+  `EditorShellLayout_tests.cc`, `EditorDockLayout_tests.cc`, and
+  `LayersPanel_tests.cc`.
 - **Persistence / replay:** `DocumentSave_tests.cc`, `RnrReplay_tests.cc`,
   `GlRnrReplay_tests.cc` (see \ref DeterministicReplayTesting).
 - **Fuzz / telemetry:** `EditorStateMachine_fuzzer.cc`,
@@ -225,5 +253,8 @@ surfaced for both the live layers panel and the replay/readback harnesses.
   lands.
 - `PenTool` is a prototype path-authoring tool; richer path editing and boolean
   operations are tracked in their own design docs.
+- Compact touch mode intentionally omits source editing, paint controls, the
+  contextual text format bar, canvas scrollbars, and compositor diagnostics. It
+  is a canvas-first editing subset, not a compressed copy of every desktop panel.
 - The editor is an application binary, not a stable embedding API; the entry points
   above are internal contracts, not a supported external interface.

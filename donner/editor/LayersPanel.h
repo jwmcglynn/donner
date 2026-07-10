@@ -131,8 +131,12 @@ public:
   /// @param iconTextureProvider Uploads the static Donner-rendered layer icon
   ///   bitmaps to ImGui textures for display, or null to keep a blank hit area
   ///   in headless tests.
+  /// @param minimumInteractionHeight Minimum row and icon-button target height.
+  ///   Compact touch sheets pass 44 logical pixels; desktop keeps the dense
+  ///   default by passing zero.
   void render(EditorApp* liveApp, const ThumbnailTextureProvider& textureProvider = {},
-              const IconTextureProvider& iconTextureProvider = {});
+              const IconTextureProvider& iconTextureProvider = {},
+              float minimumInteractionHeight = 0.0f);
 
   /// Set the current locked-rejection flash (or clear it with `std::nullopt`).
   /// When set with a positive intensity and the flashed element matches a

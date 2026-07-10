@@ -3,6 +3,66 @@
 
 namespace donner::editor {
 
+/// Editor chrome profile selected from viewport constraints and input type.
+enum class EditorUiMode {
+  Desktop,       ///< Persistent desktop menus, source access, and docked panels.
+  CompactTouch,  ///< Canvas-first chrome with touch-sized controls and one panel sheet.
+};
+
+/// Edge used for the compact Layers or Inspector sheet.
+enum class CompactPanelPlacement {
+  Right,   ///< Landscape viewport: panel overlays the right edge.
+  Bottom,  ///< Portrait or square viewport: panel overlays the bottom edge.
+};
+
+/// Inputs used to select and size the adaptive editor chrome.
+struct EditorAdaptiveUiInput {
+  /// Full editor window width in logical screen pixels.
+  float windowWidth = 0.0f;
+  /// Full editor window height in logical screen pixels.
+  float windowHeight = 0.0f;
+  /// Whether the current platform or pointer source should prefer touch controls.
+  bool preferTouch = false;
+};
+
+/// Adaptive editor chrome geometry and feature subset for one frame.
+struct EditorAdaptiveUiLayout {
+  /// Selected desktop or compact-touch profile.
+  EditorUiMode mode = EditorUiMode::Desktop;
+  /// Edge used by the compact panel sheet.
+  CompactPanelPlacement panelPlacement = CompactPanelPlacement::Right;
+  /// Height reserved for compact top-level commands. Zero in desktop mode.
+  float topBarHeight = 0.0f;
+  /// Square tool-button size in logical pixels.
+  float toolButtonSize = 32.0f;
+  /// Compact sheet origin and size. Zero-sized in desktop mode.
+  float panelX = 0.0f;
+  float panelY = 0.0f;
+  float panelWidth = 0.0f;
+  float panelHeight = 0.0f;
+  /// Whether the canvas palette includes the combined fill/stroke control.
+  bool showPaintControls = true;
+  /// Whether the contextual text format bar is available.
+  bool showTextFormatBar = true;
+  /// Whether mouse-oriented canvas scrollbars are drawn.
+  bool showCanvasScrollbars = true;
+
+  /// Return true when the compact touch profile is active.
+  [[nodiscard]] bool compactTouch() const { return mode == EditorUiMode::CompactTouch; }
+};
+
+/**
+ * Select and size the editor's desktop or compact-touch chrome.
+ *
+ * Constrained native windows use the compact profile even before a touch event.
+ * Touch-preferred platforms use it at every size so controls never shrink after
+ * the first gesture.
+ *
+ * @param input Window geometry and input preference.
+ */
+[[nodiscard]] EditorAdaptiveUiLayout ComputeEditorAdaptiveUiLayout(
+    const EditorAdaptiveUiInput& input);
+
 /// Inputs used to compute the editor's horizontal source/render/sidebar layout.
 struct EditorMainPaneLayoutInput {
   /// Full editor window width in screen pixels.
@@ -19,6 +79,8 @@ struct EditorMainPaneLayoutInput {
   float sourcePaneRailWidth = 0.0f;
   /// Persisted/requested right sidebar width.
   float rightPaneWidth = 0.0f;
+  /// Whether the persistent right sidebar participates in the layout.
+  bool rightPaneVisible = true;
   /// Minimum right sidebar width.
   float minRightPaneWidth = 0.0f;
   /// Maximum right sidebar width.

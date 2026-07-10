@@ -8,6 +8,10 @@ ImGuiID EditorDockSpaceId() {
   return ImHashStr(kEditorDockSpaceName);
 }
 
+ImGuiID EditorCompactDockSpaceId() {
+  return ImHashStr(kEditorCompactDockSpaceName);
+}
+
 EditorDockNodes BuildDefaultDockLayout(ImGuiID dockspaceId, const EditorDockLayoutParams& params) {
   EditorDockNodes nodes;
   nodes.root = dockspaceId;
@@ -17,6 +21,17 @@ EditorDockNodes BuildDefaultDockLayout(ImGuiID dockspaceId, const EditorDockLayo
   ImGui::DockBuilderRemoveNode(dockspaceId);
   ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
   ImGui::DockBuilderSetNodeSize(dockspaceId, params.size);
+
+  if (!params.includeSidebars) {
+    nodes.central = dockspaceId;
+    if (ImGuiDockNode* centralNode = ImGui::DockBuilderGetNode(dockspaceId)) {
+      centralNode->SetLocalFlags(centralNode->LocalFlags | ImGuiDockNodeFlags_CentralNode |
+                                 ImGuiDockNodeFlags_NoTabBar);
+    }
+    ImGui::DockBuilderDockWindow(kRenderPaneWindowName, dockspaceId);
+    ImGui::DockBuilderFinish(dockspaceId);
+    return nodes;
+  }
 
   // Split the right panel column off the canvas. The opposite side is the
   // central node that hosts the canvas / render pane.

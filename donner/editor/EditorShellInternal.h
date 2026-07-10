@@ -75,12 +75,11 @@ enum class PendingClickIdleAction {
                                                            const ImVec2& contentRegion,
                                                            const Box2d& toolPaletteRect,
                                                            bool visible, float barHeight);
-[[nodiscard]] bool CanvasChromeCapturesInput(const ImVec2& point,
-                                             const std::optional<Box2d>& referenceChipRect,
-                                             const Box2d& toolPaletteRect,
-                                             const std::optional<Box2d>& textFormatBarRect,
-                                             const std::optional<Box2d>& editingScopeBreadcrumbRect,
-                                             const Box2d& canvasZoomControlRect);
+[[nodiscard]] bool CanvasChromeCapturesInput(
+    const ImVec2& point, const std::optional<Box2d>& referenceChipRect,
+    const Box2d& toolPaletteRect, const std::optional<Box2d>& textFormatBarRect,
+    const std::optional<Box2d>& editingScopeBreadcrumbRect, const Box2d& canvasZoomControlRect,
+    const std::optional<Box2d>& compactPanelRect = std::nullopt);
 [[nodiscard]] bool GroupOperationCanDispatch(
     bool rendererBusy, const GroupOperationAvailability& availability) noexcept;
 [[nodiscard]] bool PendingDocumentReplacementCanProcess(bool hasPendingRequest, bool rendererBusy,
@@ -93,7 +92,8 @@ enum class PendingClickIdleAction {
 /// Discoverability hint for the idle text tool ("double-click places point
 /// text, drag draws a box"). Empty while a session or box drag is active -
 /// the hint only shows when the next click/drag would act on empty canvas.
-[[nodiscard]] std::string_view TextToolHintLabel(bool isEditing, bool isDraggingBox);
+[[nodiscard]] std::string_view TextToolHintLabel(bool isEditing, bool isDraggingBox,
+                                                 bool touchPreferred = false);
 [[nodiscard]] css::RGBA PaintServerFallbackColor();
 [[nodiscard]] ToolbarPaintSlotState ToolbarPaintSlotStateForActiveAttribute(std::string_view value);
 [[nodiscard]] ToolbarPaintReferenceState ToolbarPaintReferenceStateFor(

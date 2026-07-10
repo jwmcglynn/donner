@@ -265,13 +265,15 @@ bool CanvasChromeCapturesInput(const ImVec2& point, const std::optional<Box2d>& 
                                const Box2d& toolPaletteRect,
                                const std::optional<Box2d>& textFormatBarRect,
                                const std::optional<Box2d>& editingScopeBreadcrumbRect,
-                               const Box2d& canvasZoomControlRect) {
+                               const Box2d& canvasZoomControlRect,
+                               const std::optional<Box2d>& compactPanelRect) {
   return (referenceChipRect.has_value() && ContainsScreenPoint(*referenceChipRect, point)) ||
          ContainsScreenPoint(toolPaletteRect, point) ||
          (textFormatBarRect.has_value() && ContainsScreenPoint(*textFormatBarRect, point)) ||
          (editingScopeBreadcrumbRect.has_value() &&
           ContainsScreenPoint(*editingScopeBreadcrumbRect, point)) ||
-         ContainsScreenPoint(canvasZoomControlRect, point);
+         ContainsScreenPoint(canvasZoomControlRect, point) ||
+         (compactPanelRect.has_value() && ContainsScreenPoint(*compactPanelRect, point));
 }
 
 bool GroupOperationCanDispatch(bool rendererBusy,
@@ -1704,7 +1706,8 @@ void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
   if (menuActions.redo && app_.canRedo()) {
     app_.redo();
   }
-  const bool sourcePaneFocusedForMenu = sourcePaneVisible_ && textEditor_.isFocused();
+  const bool sourcePaneFocusedForMenu =
+      !adaptiveUiLayout_.compactTouch() && sourcePaneVisible_ && textEditor_.isFocused();
   if (menuActions.cut) {
     if (sourcePaneFocusedForMenu) {
       textEditor_.cut();
@@ -1812,7 +1815,8 @@ void EditorShell::handleGlobalShortcuts() {
   const bool pressedZ = ImGui::IsKeyPressed(ImGuiKey_Z, /*repeat=*/false);
   const bool pressedEnter = ImGui::IsKeyPressed(ImGuiKey_Enter, /*repeat=*/false) ||
                             ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, /*repeat=*/false);
-  const bool sourcePaneFocused = sourcePaneVisible_ && textEditor_.isFocused();
+  const bool sourcePaneFocused =
+      !adaptiveUiLayout_.compactTouch() && sourcePaneVisible_ && textEditor_.isFocused();
 
   // An in-canvas text editing session captures the keyboard: typing, caret
   // movement, style toggles, and Escape all act on the session, and no
@@ -2366,12 +2370,31 @@ void EditorShell::renderSourcePane(float paneOriginY, float paneHeight, float pa
 Box2d EditorShell::toolPaletteScreenRect(const ImVec2& paneOrigin,
                                          const ImVec2& contentRegion) const {
   constexpr float kButtonCount = 3.0f;
-  const float width = kToolPalettePadding * 2.0f + kToolPaletteButtonSize * kButtonCount +
-                      kToolPalettePaintWidgetWidth + kToolPaletteGap * kButtonCount;
-  const float height = kToolPalettePadding * 2.0f + kToolPaletteButtonSize;
-  const float x = paneOrigin.x + std::max(0.0f, (contentRegion.x - width) * 0.5f);
+  const float buttonSize = adaptiveUiLayout_.toolButtonSize;
+  const float paintWidth =
+      adaptiveUiLayout_.showPaintControls ? kToolPalettePaintWidgetWidth : 0.0f;
+  const float gapCount = adaptiveUiLayout_.showPaintControls ? kButtonCount : kButtonCount - 1.0f;
+  const float width = kToolPalettePadding * 2.0f + buttonSize * kButtonCount + paintWidth +
+                      kToolPaletteGap * gapCount;
+  const float height = kToolPalettePadding * 2.0f + buttonSize;
+  float visibleContentWidth = contentRegion.x;
+  if (const std::optional<Box2d> panelRect = compactPanelScreenRect();
+      panelRect.has_value() && adaptiveUiLayout_.panelPlacement == CompactPanelPlacement::Right) {
+    visibleContentWidth =
+        std::min(visibleContentWidth,
+                 std::max(0.0f, static_cast<float>(panelRect->topLeft.x) - paneOrigin.x));
+  }
+  const float x = paneOrigin.x + std::max(0.0f, (visibleContentWidth - width) * 0.5f);
   const float y = paneOrigin.y + kToolPaletteTopInset;
   return Box2d::FromXYWH(x, y, width, height);
+}
+
+std::optional<Box2d> EditorShell::compactPanelScreenRect() const {
+  if (!adaptiveUiLayout_.compactTouch() || !compactPanelVisible_) {
+    return std::nullopt;
+  }
+  return Box2d::FromXYWH(adaptiveUiLayout_.panelX, adaptiveUiLayout_.panelY,
+                         adaptiveUiLayout_.panelWidth, adaptiveUiLayout_.panelHeight);
 }
 
 Box2d EditorShell::canvasZoomControlScreenRect() const {
@@ -2379,11 +2402,15 @@ Box2d EditorShell::canvasZoomControlScreenRect() const {
   char label[16];
   std::snprintf(label, sizeof(label), "%.0f%%", viewport.zoom * 100.0);
   const ImVec2 textSize = ImGui::CalcTextSize(label);
-  const float width = textSize.x + kCanvasZoomPaddingX * 2.0f;
-  const float height = textSize.y + kCanvasZoomPaddingY * 2.0f;
+  const float width = std::max(textSize.x + kCanvasZoomPaddingX * 2.0f,
+                               adaptiveUiLayout_.compactTouch() ? 44.0f : 0.0f);
+  const float height = std::max(textSize.y + kCanvasZoomPaddingY * 2.0f,
+                                adaptiveUiLayout_.compactTouch() ? 44.0f : 0.0f);
   const float x = static_cast<float>(viewport.paneOrigin.x) + kCanvasZoomInset;
+  const float scrollbarInset =
+      adaptiveUiLayout_.showCanvasScrollbars ? static_cast<float>(kCanvasScrollbarRailPx) : 0.0f;
   const float y = static_cast<float>(viewport.paneOrigin.y + viewport.paneSize.y) - height -
-                  static_cast<float>(kCanvasScrollbarRailPx) - kCanvasZoomInset;
+                  scrollbarInset - kCanvasZoomInset;
   return Box2d::FromXYWH(x, y, width, height);
 }
 
@@ -2640,7 +2667,8 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
       ImGui::PushStyleColor(ImGuiCol_ButtonHovered, fill);
       ImGui::PushStyleColor(ImGuiCol_ButtonActive, fillActive);
     }
-    if (ImGui::Button(label, ImVec2(kToolPaletteButtonSize, kToolPaletteButtonSize))) {
+    if (ImGui::Button(label,
+                      ImVec2(adaptiveUiLayout_.toolButtonSize, adaptiveUiLayout_.toolButtonSize))) {
       // Leaving a tool commits its in-progress session as one undoable
       // command rather than dropping it.
       if (tool != ActiveTool::Pen && penTool_.commitOpenPath(app_)) {
@@ -2675,8 +2703,10 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
   renderButton(ActiveTool::Pen, "##pen_tool", ToolbarIcon::Pen, penTooltip.c_str());
   ImGui::SameLine(0.0f, kToolPaletteGap);
   renderButton(ActiveTool::Text, "##text_tool", ToolbarIcon::Text, textTooltip.c_str());
-  ImGui::SameLine(0.0f, kToolPaletteGap);
-  renderFillStrokeToolbarWidget();
+  if (adaptiveUiLayout_.showPaintControls) {
+    ImGui::SameLine(0.0f, kToolPaletteGap);
+    renderFillStrokeToolbarWidget();
+  }
 
   ImGui::PopStyleVar(2);
   ImGui::PopID();
@@ -2748,13 +2778,15 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   const Box2d toolPaletteRect = toolPaletteScreenRect(paneOriginImGui, contentRegion);
   const std::optional<Box2d> textFormatBarRect =
       TextFormatBarScreenRect(paneOriginImGui, contentRegion, toolPaletteRect,
-                              formatBarShouldShow(), TextFormatBarPresenter::BarHeight());
+                              adaptiveUiLayout_.showTextFormatBar && formatBarShouldShow(),
+                              TextFormatBarPresenter::BarHeight());
   const std::optional<Box2d> editingScopeBreadcrumbRect =
       EditingScopeBreadcrumbScreenRect(paneOriginImGui, toolPaletteRect, app_.editingScope());
   const Box2d canvasZoomControlRect = canvasZoomControlScreenRect();
+  const std::optional<Box2d> compactPanelRect = compactPanelScreenRect();
   const bool canvasChromeHovered = CanvasChromeCapturesInput(
       ImGui::GetMousePos(), referenceChipRect, toolPaletteRect, textFormatBarRect,
-      editingScopeBreadcrumbRect, canvasZoomControlRect);
+      editingScopeBreadcrumbRect, canvasZoomControlRect, compactPanelRect);
 
   ImGui::SetNextItemAllowOverlap();
   ImGui::InvisibleButton("##render_canvas", contentRegion,
@@ -2834,6 +2866,12 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
     return interactionController_.viewport().screenToDocument(
         Vector2d(screenPoint.x, screenPoint.y));
   };
+  // Keep handles visually crisp while making their invisible hit regions more
+  // forgiving under touch. The tools express hit sizes in screen pixels by
+  // dividing by this scale, so halving it doubles only interaction tolerance.
+  const double pointerHitTestPixelsPerDocUnit =
+      interactionController_.viewport().pixelsPerDocUnit() /
+      (adaptiveUiLayout_.compactTouch() ? 2.0 : 1.0);
 
   if (canvasHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right, /*repeat=*/false)) {
     openRenderPaneContextMenu(screenToDocument(ImGui::GetMousePos()));
@@ -2856,8 +2894,7 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
                                               ? boundsCache.displayedBoundsDoc
                                               : boundsCache.pendingBoundsDoc;
     return HitTestSelectionTransformHandles(boundsDoc, documentPoint,
-                                            interactionController_.viewport().pixelsPerDocUnit(),
-                                            includeRotate);
+                                            pointerHitTestPixelsPerDocUnit, includeRotate);
   };
   SelectionTransformHandleIntent hoverTransformIntent;
   if (penToolActive && !rotateCursorLocked && toolEligible) {
@@ -2870,7 +2907,7 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
       hoverModifiers.shift = ImGui::GetIO().KeyShift;
       hoverModifiers.option = ImGui::GetIO().KeyAlt;
       hoverModifiers.command = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
-      hoverModifiers.pixelsPerDocUnit = interactionController_.viewport().pixelsPerDocUnit();
+      hoverModifiers.pixelsPerDocUnit = pointerHitTestPixelsPerDocUnit;
       if (penTool_.wouldCloseAt(screenToDocument(ImGui::GetMousePos()), hoverModifiers)) {
         penHint = PenCursorHint::Close;
       }
@@ -2921,10 +2958,9 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
       textFrameIntent.corner = textTool_.frameCorner();
     } else if (textTool_.isEditing() && !ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
                !renderCoordinator_.asyncRenderer().isBusy()) {
-      textFrameIntent =
-          textTool_.frameHandleIntentAt(screenToDocument(ImGui::GetMousePos()),
-                                        interactionController_.viewport().pixelsPerDocUnit(),
-                                        /*includeRotate=*/!ImGui::GetIO().KeyShift);
+      textFrameIntent = textTool_.frameHandleIntentAt(screenToDocument(ImGui::GetMousePos()),
+                                                      pointerHitTestPixelsPerDocUnit,
+                                                      /*includeRotate=*/!ImGui::GetIO().KeyShift);
     }
     if (textFrameIntent.kind == SelectionTransformHandleKind::Rotate &&
         rotateCursorSet_.setRotateCursor(textFrameIntent.corner)) {
@@ -2954,7 +2990,7 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
     modifiers.option = ImGui::GetIO().KeyAlt;
     modifiers.command = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
     modifiers.doubleClick = ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
-    modifiers.pixelsPerDocUnit = interactionController_.viewport().pixelsPerDocUnit();
+    modifiers.pixelsPerDocUnit = pointerHitTestPixelsPerDocUnit;
     interactionController_.bufferPendingClick(screenToDocument(ImGui::GetMousePos()), modifiers);
     pendingSelectClickStartSeconds_ = ImGui::GetTime();
   }
@@ -3137,7 +3173,7 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
         MouseModifiers modifiers;
         modifiers.shift = ImGui::GetIO().KeyShift;
         modifiers.option = ImGui::GetIO().KeyAlt;
-        modifiers.pixelsPerDocUnit = interactionController_.viewport().pixelsPerDocUnit();
+        modifiers.pixelsPerDocUnit = pointerHitTestPixelsPerDocUnit;
         selectTool_.onMouseMove(app_, screenToDocument(currentScreen), /*buttonHeld=*/true,
                                 modifiers);
         lastPostedScreenPoint_ = currentScreen;
@@ -3212,7 +3248,7 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
       dragModifiers.shift = ImGui::GetIO().KeyShift;
       dragModifiers.option = ImGui::GetIO().KeyAlt;
       dragModifiers.command = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
-      dragModifiers.pixelsPerDocUnit = interactionController_.viewport().pixelsPerDocUnit();
+      dragModifiers.pixelsPerDocUnit = pointerHitTestPixelsPerDocUnit;
       penTool_.onMouseMove(app_, screenToDocument(ImGui::GetMousePos()), /*buttonHeld=*/true,
                            dragModifiers);
       if (app_.document().hasPendingMutations() && flushQueuedMutationAndRefreshOverlay()) {
@@ -3234,7 +3270,7 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
     hoverModifiers.shift = ImGui::GetIO().KeyShift;
     hoverModifiers.option = ImGui::GetIO().KeyAlt;
     hoverModifiers.command = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
-    hoverModifiers.pixelsPerDocUnit = interactionController_.viewport().pixelsPerDocUnit();
+    hoverModifiers.pixelsPerDocUnit = pointerHitTestPixelsPerDocUnit;
     const Vector2d hoverDocPoint = screenToDocument(ImGui::GetMousePos());
     renderCoordinator_.setPenHoverChrome(penTool_.previewSegmentPath(hoverDocPoint, hoverModifiers),
                                          penTool_.wouldCloseAt(hoverDocPoint, hoverModifiers)
@@ -3440,7 +3476,8 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
     const FormatBarState formatBarState = computeFormatBarState();
     const std::optional<Box2d> formatBarRect =
         TextFormatBarScreenRect(paneOriginImGui, contentRegion, toolPaletteRect,
-                                formatBarState.visible, TextFormatBarPresenter::BarHeight());
+                                adaptiveUiLayout_.showTextFormatBar && formatBarState.visible,
+                                TextFormatBarPresenter::BarHeight());
     if (formatBarRect.has_value()) {
       const FormatBarActions actions =
           textFormatBarPresenter_.render(formatBarState,
@@ -3450,7 +3487,9 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
       applyFormatBarActions(formatBarState, actions);
     }
     renderCanvasZoomControl();
-    renderCanvasScrollbars();
+    if (adaptiveUiLayout_.showCanvasScrollbars) {
+      renderCanvasScrollbars();
+    }
     renderRenderPaneContextMenu();
   }
   ImGui::End();
@@ -3604,8 +3643,8 @@ void EditorShell::renderTextToolHint() {
   if (activeTool_ != ActiveTool::Text) {
     return;
   }
-  const std::string_view label =
-      internal::TextToolHintLabel(textTool_.isEditing(), textTool_.isDraggingBox());
+  const std::string_view label = internal::TextToolHintLabel(
+      textTool_.isEditing(), textTool_.isDraggingBox(), adaptiveUiLayout_.compactTouch());
   if (label.empty()) {
     return;
   }
@@ -3618,8 +3657,10 @@ void EditorShell::renderTextToolHint() {
   const float height = textSize.y + 2.0f * kReferenceChipPaddingY;
   const float paneCenterX = static_cast<float>(viewport.paneOrigin.x + viewport.paneSize.x * 0.5);
   const float x = paneCenterX - width * 0.5f;
-  const float y = static_cast<float>(viewport.paneOrigin.y + viewport.paneSize.y) - height -
-                  static_cast<float>(kCanvasScrollbarRailPx) - 10.0f;
+  const float y =
+      static_cast<float>(viewport.paneOrigin.y + viewport.paneSize.y) - height -
+      (adaptiveUiLayout_.showCanvasScrollbars ? static_cast<float>(kCanvasScrollbarRailPx) : 0.0f) -
+      10.0f;
   if (width > static_cast<float>(viewport.paneSize.x) || y < viewport.paneOrigin.y) {
     return;  // Pane too small for the hint.
   }
@@ -3635,6 +3676,9 @@ void EditorShell::renderTextToolHint() {
 }
 
 void EditorShell::renderCanvasScrollbars() {
+  if (!adaptiveUiLayout_.showCanvasScrollbars) {
+    return;
+  }
   const ViewportState& viewport = interactionController_.viewport();
   const CanvasScrollbars bars = ComputeCanvasScrollbars(viewport);
   if (!bars.horizontal.visible && !bars.vertical.visible) {
@@ -3706,13 +3750,185 @@ void EditorShell::renderCanvasScrollbars() {
   }
 }
 
+void EditorShell::renderCompactTopBar() {
+  if (!adaptiveUiLayout_.compactTouch()) {
+    return;
+  }
+
+  const Vector2i windowSize = window_.windowSize();
+  const EditorTheme& theme = EditorTheme::Active();
+  constexpr ImGuiWindowFlags kTopBarFlags =
+      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking |
+      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+  ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(static_cast<float>(windowSize.x), adaptiveUiLayout_.topBarHeight),
+                           ImGuiCond_Always);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 4.0f));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, theme.surfaceRaised);
+  ImGui::Begin("##compact_top_bar", nullptr, kTopBarFlags);
+  ImGui::PopStyleColor();
+  ImGui::PopStyleVar(2);
+
+  const float targetSize = std::max(44.0f, adaptiveUiLayout_.toolButtonSize);
+  constexpr float kButtonGap = 4.0f;
+  constexpr int kButtonCount = 5;
+  const float controlsWidth = targetSize * kButtonCount + kButtonGap * (kButtonCount - 1);
+  const float controlsX = std::max(8.0f, static_cast<float>(windowSize.x) - controlsWidth - 8.0f);
+
+  if (controlsX >= 84.0f) {
+    const ImVec2 brandSize = ImGui::CalcTextSize("DONNER");
+    ImGui::SetCursorPos(ImVec2(12.0f, (adaptiveUiLayout_.topBarHeight - brandSize.y) * 0.5f));
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(theme.textMuted), "DONNER");
+  }
+
+  enum class CompactIcon { Open, Undo, Redo, Layers, Inspector };
+  const auto drawIcon = [&](CompactIcon icon, const ImVec2& min, const ImVec2& max, ImU32 color) {
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    const ImVec2 center((min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f);
+    constexpr float kStroke = 2.0f;
+    switch (icon) {
+      case CompactIcon::Open:
+        drawList->AddRect(ImVec2(center.x - 9.0f, center.y - 5.0f),
+                          ImVec2(center.x + 9.0f, center.y + 8.0f), color, 2.0f, 0, kStroke);
+        drawList->AddLine(ImVec2(center.x - 8.0f, center.y - 5.0f),
+                          ImVec2(center.x - 4.0f, center.y - 9.0f), color, kStroke);
+        drawList->AddLine(ImVec2(center.x - 4.0f, center.y - 9.0f),
+                          ImVec2(center.x + 2.0f, center.y - 9.0f), color, kStroke);
+        break;
+      case CompactIcon::Undo:
+      case CompactIcon::Redo: {
+        const float direction = icon == CompactIcon::Undo ? -1.0f : 1.0f;
+        const std::array<ImVec2, 5> points = {
+            ImVec2(center.x + direction * 8.0f, center.y - 2.0f),
+            ImVec2(center.x + direction * 3.0f, center.y - 7.0f),
+            ImVec2(center.x - direction * 4.0f, center.y - 7.0f),
+            ImVec2(center.x - direction * 8.0f, center.y - 2.0f),
+            ImVec2(center.x - direction * 7.0f, center.y + 6.0f),
+        };
+        drawList->AddPolyline(points.data(), static_cast<int>(points.size()), color, 0, kStroke);
+        drawList->AddLine(points.front(), ImVec2(points.front().x, points.front().y - 7.0f), color,
+                          kStroke);
+        drawList->AddLine(points.front(),
+                          ImVec2(points.front().x - direction * 7.0f, points.front().y), color,
+                          kStroke);
+        break;
+      }
+      case CompactIcon::Layers:
+        for (int row = -1; row <= 1; ++row) {
+          const float y = center.y + static_cast<float>(row) * 6.0f;
+          drawList->AddRect(ImVec2(center.x - 9.0f, y - 2.0f), ImVec2(center.x - 5.0f, y + 2.0f),
+                            color, 1.0f, 0, kStroke);
+          drawList->AddLine(ImVec2(center.x - 1.0f, y), ImVec2(center.x + 9.0f, y), color, kStroke);
+        }
+        break;
+      case CompactIcon::Inspector: {
+        constexpr std::array<float, 3> kKnobOffsets = {-4.0f, 5.0f, -1.0f};
+        for (int row = 0; row < 3; ++row) {
+          const float y = center.y - 6.0f + static_cast<float>(row) * 6.0f;
+          drawList->AddLine(ImVec2(center.x - 9.0f, y), ImVec2(center.x + 9.0f, y), color, kStroke);
+          drawList->AddCircleFilled(ImVec2(center.x + kKnobOffsets[row], y), 2.5f, color);
+        }
+        break;
+      }
+    }
+  };
+  const auto button = [&](const char* id, CompactIcon icon, const char* tooltip, bool enabled,
+                          bool selected) {
+    if (selected) {
+      ImVec4 selectedFill = ImGui::ColorConvertU32ToFloat4(theme.accentDefault);
+      selectedFill.w = theme.selectionFillAlpha;
+      ImGui::PushStyleColor(ImGuiCol_Button, selectedFill);
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, selectedFill);
+    }
+    ImGui::BeginDisabled(!enabled);
+    const bool clicked = ImGui::Button(id, ImVec2(targetSize, targetSize));
+    const ImVec2 itemMin = ImGui::GetItemRectMin();
+    const ImVec2 itemMax = ImGui::GetItemRectMax();
+    const bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
+    ImGui::EndDisabled();
+    drawIcon(icon, itemMin, itemMax,
+             enabled ? (selected ? theme.accentDefault : theme.textPrimary) : theme.textDisabled);
+    if (selected) {
+      ImGui::GetWindowDrawList()->AddRect(itemMin, itemMax, theme.accentDefault,
+                                          theme.radiusControl, 0, 1.5f);
+    }
+    if (hovered) {
+      ImGui::SetTooltip("%s", tooltip);
+    }
+    if (selected) {
+      ImGui::PopStyleColor(2);
+    }
+    return enabled && clicked;
+  };
+
+  ImGui::SetCursorPos(ImVec2(controlsX, 4.0f));
+  if (button("##compact_open", CompactIcon::Open, "Open or sample", true, false)) {
+    pendingSampleLoadId_.clear();
+    compactPanelVisible_ = false;
+    showSamplePicker_ = true;
+    window_.wakeEventLoop();
+  }
+  ImGui::SameLine(0.0f, kButtonGap);
+  if (button("##compact_undo", CompactIcon::Undo, "Undo", app_.canUndo(), false)) {
+    app_.undo();
+    requestRenderAtEndOfFrame_ = true;
+  }
+  ImGui::SameLine(0.0f, kButtonGap);
+  if (button("##compact_redo", CompactIcon::Redo, "Redo", app_.canRedo(), false)) {
+    app_.redo();
+    requestRenderAtEndOfFrame_ = true;
+  }
+  ImGui::SameLine(0.0f, kButtonGap);
+  if (button("##compact_layers", CompactIcon::Layers, "Layers", true,
+             compactPanelVisible_ && !compactInspectorSheet_)) {
+    if (compactPanelVisible_ && !compactInspectorSheet_) {
+      compactPanelVisible_ = false;
+    } else {
+      compactPanelVisible_ = true;
+      compactInspectorSheet_ = false;
+    }
+  }
+  ImGui::SameLine(0.0f, kButtonGap);
+  if (button("##compact_inspector", CompactIcon::Inspector, "Inspector", true,
+             compactPanelVisible_ && compactInspectorSheet_)) {
+    if (compactPanelVisible_ && compactInspectorSheet_) {
+      compactPanelVisible_ = false;
+    } else {
+      compactPanelVisible_ = true;
+      compactInspectorSheet_ = true;
+    }
+  }
+  ImGui::GetWindowDrawList()->AddLine(
+      ImVec2(0.0f, adaptiveUiLayout_.topBarHeight - 1.0f),
+      ImVec2(static_cast<float>(windowSize.x), adaptiveUiLayout_.topBarHeight - 1.0f),
+      theme.borderSubtle);
+  ImGui::End();
+}
+
 void EditorShell::renderSidebars() {
   // The right-column panels are dockable windows owned by the DockSpace (see
   // renderDockSpaceHost); their position, size, and tab bars are managed by
   // docking, so we no longer place them with SetNextWindowPos/Size. NoCollapse
   // keeps the docked tab from adding a collapse arrow; scrollbars stay enabled
   // so long panel content scrolls within its own node.
+  const bool compactSheet = adaptiveUiLayout_.compactTouch() && compactPanelVisible_;
+  if (adaptiveUiLayout_.compactTouch() && !compactSheet) {
+    layersPanelHoverElement_.reset();
+    updateSourceHoverPreview();
+    return;
+  }
   constexpr ImGuiWindowFlags kDockedPaneFlags = ImGuiWindowFlags_NoCollapse;
+  if (compactSheet) {
+    const Box2d sheetRect = *compactPanelScreenRect();
+    ImGui::SetNextWindowPos(
+        ImVec2(static_cast<float>(sheetRect.topLeft.x), static_cast<float>(sheetRect.topLeft.y)),
+        ImGuiCond_Always);
+    ImGui::SetNextWindowSize(
+        ImVec2(static_cast<float>(sheetRect.width()), static_cast<float>(sheetRect.height())),
+        ImGuiCond_Always);
+  }
   const auto& selectionBeforeTree = app_.selectedElement();
   if (selectionBeforeTree != lastTreeSelection_) {
     treeviewPendingScroll_ = selectionBeforeTree.has_value() && !treeSelectionOriginatedInTree_;
@@ -3735,7 +3951,39 @@ void EditorShell::renderSidebars() {
   // sidebar window. `SidebarPresenter` is still the
   // Inspector backend below (`renderInspector`), and its `renderTreeView` /
   // tests remain; it is simply no longer the user-facing outline.
-  ImGui::Begin(kLayersWindowName, nullptr, kDockedPaneFlags);
+  const char* firstPanelWindowName = compactSheet ? "##compact_panel_sheet" : kLayersWindowName;
+  const ImGuiWindowFlags firstPanelFlags =
+      compactSheet ? kDockedPaneFlags | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
+                         ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings |
+                         ImGuiWindowFlags_NoDocking
+                   : kDockedPaneFlags;
+  ImGui::Begin(firstPanelWindowName, nullptr, firstPanelFlags);
+  if (compactSheet) {
+    const EditorTheme& theme = EditorTheme::Active();
+    const ImVec2 headerStart = ImGui::GetCursorScreenPos();
+    const float headerWidth = ImGui::GetContentRegionAvail().x;
+    const float headerHeight = std::max(44.0f, adaptiveUiLayout_.toolButtonSize);
+    ImGui::SetCursorScreenPos(
+        ImVec2(headerStart.x, headerStart.y + (headerHeight - ImGui::GetTextLineHeight()) * 0.5f));
+    ImGui::TextUnformatted(compactInspectorSheet_ ? "Inspector" : "Layers");
+    const ImVec2 closeMin(headerStart.x + std::max(0.0f, headerWidth - headerHeight),
+                          headerStart.y);
+    ImGui::SetCursorScreenPos(closeMin);
+    if (ImGui::InvisibleButton("##compact_panel_close", ImVec2(headerHeight, headerHeight))) {
+      compactPanelVisible_ = false;
+    }
+    const ImVec2 closeMax = ImGui::GetItemRectMax();
+    const ImVec2 closeCenter((closeMin.x + closeMax.x) * 0.5f, (closeMin.y + closeMax.y) * 0.5f);
+    const ImU32 closeColor = ImGui::IsItemHovered() ? theme.textPrimary : theme.textMuted;
+    ImGui::GetWindowDrawList()->AddLine(ImVec2(closeCenter.x - 6.0f, closeCenter.y - 6.0f),
+                                        ImVec2(closeCenter.x + 6.0f, closeCenter.y + 6.0f),
+                                        closeColor, 2.0f);
+    ImGui::GetWindowDrawList()->AddLine(ImVec2(closeCenter.x + 6.0f, closeCenter.y - 6.0f),
+                                        ImVec2(closeCenter.x - 6.0f, closeCenter.y + 6.0f),
+                                        closeColor, 2.0f);
+    ImGui::SetCursorScreenPos(ImVec2(headerStart.x, headerStart.y + headerHeight));
+    ImGui::Separator();
+  }
   std::vector<std::uint64_t> liveThumbnailKeys;
   liveThumbnailKeys.reserve(layersPanel_.rows().size() + 4u);
   // Donner renders each row's preview to a bitmap during refreshSnapshot; here
@@ -3787,7 +4035,28 @@ void EditorShell::renderSidebars() {
   } else {
     layersPanel_.setLockedRejectionFlash(std::nullopt);
   }
-  layersPanel_.render(liveAppForClicks, thumbnailTextureProvider, layerIconTextureProvider);
+  if (compactSheet && compactInspectorSheet_) {
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float touchPaddingY =
+        std::max(style.FramePadding.y, (44.0f - ImGui::GetTextLineHeight()) * 0.5f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(style.FramePadding.x, touchPaddingY));
+    const bool inspectorQueuedMutation = sidebarPresenter_.renderInspector(
+        liveAppForClicks, interactionController_.viewport(), sidebarIconTextureProvider);
+    const bool textInspectorQueuedMutation =
+        textInspectorPanel_.render(liveAppForClicks, ImGui::GetTime(), &fontCatalog_);
+    ImGui::PopStyleVar();
+    ImGui::End();
+    layersPanelHoverElement_.reset();
+    updateSourceHoverPreview();
+    if (inspectorQueuedMutation || textInspectorQueuedMutation) {
+      flushQueuedMutationAndRefreshOverlay();
+    }
+    thumbnailTextures_.retainThumbnailsOnly(liveThumbnailKeys);
+    lastTreeSelection_ = app_.selectedElement();
+    return;
+  }
+  layersPanel_.render(liveAppForClicks, thumbnailTextureProvider, layerIconTextureProvider,
+                      compactSheet ? 44.0f : 0.0f);
   // Feed the Layers-panel hover into the shared source-hover preview so the
   // canvas (and source pane) highlight the hovered element, the same way
   // hovering a source-pane token does.
@@ -3811,6 +4080,11 @@ void EditorShell::renderSidebars() {
   }
   ImGui::End();
   lastTreeSelection_ = app_.selectedElement();
+
+  if (compactSheet) {
+    thumbnailTextures_.retainThumbnailsOnly(liveThumbnailKeys);
+    return;
+  }
 
   ImGui::Begin(kInspectorWindowName, nullptr, kDockedPaneFlags);
   const bool inspectorQueuedMutation = sidebarPresenter_.renderInspector(
@@ -3956,7 +4230,8 @@ void EditorShell::renderSourcePaneSplitter(float windowWidth, float paneOriginY,
 }
 
 void EditorShell::renderDockSpaceHost(float hostX, float hostY, float hostWidth, float hostHeight) {
-  const ImGuiID dockspaceId = EditorDockSpaceId();
+  const bool sidebarsIncluded = !adaptiveUiLayout_.compactTouch();
+  const ImGuiID dockspaceId = sidebarsIncluded ? EditorDockSpaceId() : EditorCompactDockSpaceId();
 
   ImGui::SetNextWindowPos(ImVec2(hostX, hostY), ImGuiCond_Always);
   ImGui::SetNextWindowSize(ImVec2(hostWidth, hostHeight), ImGuiCond_Always);
@@ -3978,24 +4253,49 @@ void EditorShell::renderDockSpaceHost(float hostX, float hostY, float hostWidth,
   // missing/corrupt ini leaves no node, so we fall back to the default layout.
   // A reset request or a change to the docked-panel set always rebuilds.
   const bool hasNode = ImGui::DockBuilderGetNode(dockspaceId) != nullptr;
-  const bool compositorSetChanged = dockCompositorIncludedInLayout_ != showCompositorDebugPanel_;
+  const bool compositorSetChanged =
+      sidebarsIncluded && dockCompositorIncludedInLayout_ != showCompositorDebugPanel_;
+  const bool sidebarSetChanged = dockSidebarsIncludedInLayout_ != sidebarsIncluded;
   const bool needBuild =
-      dockLayoutResetRequested_ || !dockLayoutBuilt_ || !hasNode || compositorSetChanged;
+      sidebarsIncluded
+          ? dockLayoutResetRequested_ || !dockLayoutBuilt_ || !hasNode || compositorSetChanged
+          : dockLayoutResetRequested_ || !compactDockLayoutBuilt_ || !hasNode;
   if (needBuild) {
-    const bool adoptPersisted =
-        hasNode && !dockLayoutResetRequested_ && !dockLayoutBuilt_ && !compositorSetChanged;
+    const bool adoptPersisted = sidebarsIncluded && hasNode && !dockLayoutResetRequested_ &&
+                                !dockLayoutBuilt_ && !compositorSetChanged;
     if (!adoptPersisted) {
       EditorDockLayoutParams params;
       params.size = ImVec2(hostWidth, hostHeight);
       params.rightColumnRatio =
           hostWidth > 0.0f ? std::clamp(rightPaneWidth_ / hostWidth, 0.15f, 0.5f) : 0.26f;
       params.includeCompositorDebug = showCompositorDebugPanel_;
+      params.includeSidebars = sidebarsIncluded;
       BuildDefaultDockLayout(dockspaceId, params);
     }
-    dockLayoutBuilt_ = true;
-    dockLayoutResetRequested_ = false;
-    dockCompositorIncludedInLayout_ = showCompositorDebugPanel_;
+    if (sidebarsIncluded) {
+      dockLayoutBuilt_ = true;
+      dockLayoutResetRequested_ = false;
+      dockCompositorIncludedInLayout_ = showCompositorDebugPanel_;
+    } else {
+      compactDockLayoutBuilt_ = true;
+      if (dockLayoutResetRequested_) {
+        // Consume the request now, but force the preserved desktop tree to be
+        // rebuilt when desktop mode is next active.
+        dockLayoutBuilt_ = false;
+        dockLayoutResetRequested_ = false;
+      }
+    }
   }
+
+  if (sidebarSetChanged && !needBuild) {
+    // Compact mode temporarily docks Render into its canvas-only root. On the
+    // way back, restore it to the still-intact desktop central node without
+    // rebuilding or otherwise disturbing customized desktop panel nodes.
+    if (const ImGuiDockNode* centralNode = ImGui::DockBuilderGetCentralNode(dockspaceId)) {
+      ImGui::DockBuilderDockWindow(kRenderPaneWindowName, centralNode->ID);
+    }
+  }
+  dockSidebarsIncludedInLayout_ = sidebarsIncluded;
 
   ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f), EditorDockSpaceFlags(dockLayoutLocked_));
   ImGui::End();
@@ -5240,22 +5540,42 @@ void EditorShell::runFrame() {
   markPhase(mainFrameCost.documentSyncMs);
 
   const Vector2i windowSize = window_.windowSize();
-  const float menuBarHeight = ImGui::GetFrameHeight();
+#ifdef __EMSCRIPTEN__
+  static const bool kPreferTouchInput =
+      EM_ASM_INT({
+        const hasTouchPoints = typeof navigator != = 'undefined' && navigator.maxTouchPoints > 0;
+        const hasCoarsePointer = typeof window != = 'undefined' && typeof window.matchMedia ==
+            = 'function' && window.matchMedia('(pointer: coarse)').matches;
+        return hasTouchPoints || hasCoarsePointer ? 1 : 0;
+      }) != 0;
+#else
+  constexpr bool kPreferTouchInput = false;
+#endif
+  adaptiveUiLayout_ = ComputeEditorAdaptiveUiLayout({
+      .windowWidth = static_cast<float>(windowSize.x),
+      .windowHeight = static_cast<float>(windowSize.y),
+      .preferTouch = kPreferTouchInput,
+  });
+  const bool compactUi = adaptiveUiLayout_.compactTouch();
+  const float menuBarHeight = compactUi ? adaptiveUiLayout_.topBarHeight : ImGui::GetFrameHeight();
   const float paneOriginY = menuBarHeight;
   const float paneHeight = std::max(0.0f, static_cast<float>(windowSize.y) - paneOriginY);
   const EditorMainPaneLayout mainPaneLayout = ComputeEditorMainPaneLayout({
       .windowWidth = static_cast<float>(windowSize.x),
-      .sourcePaneVisible = sourcePaneVisible_,
+      .sourcePaneVisible = !compactUi && sourcePaneVisible_,
       .sourcePaneWidth = sourcePaneWidth_,
       .minSourcePaneWidth = kMinSourcePaneWidth,
       .maxSourcePaneWidth = kMaxSourcePaneWidth,
       .sourcePaneRailWidth = kSourcePaneRevealHandleWidth,
       .rightPaneWidth = rightPaneWidth_,
+      .rightPaneVisible = !compactUi,
       .minRightPaneWidth = kMinRightPaneWidth,
       .maxRightPaneWidth = kMaxRightPaneWidth,
       .minRenderPaneWidth = kMinRightPaneWidth,
   });
-  rightPaneWidth_ = mainPaneLayout.rightPaneWidth;
+  if (!compactUi) {
+    rightPaneWidth_ = mainPaneLayout.rightPaneWidth;
+  }
   const float dockHostX = mainPaneLayout.renderPaneX;
   const float dockHostWidth = std::max(0.0f, static_cast<float>(windowSize.x) - dockHostX);
 
@@ -5271,7 +5591,8 @@ void EditorShell::runFrame() {
   // window's content region below.
   Vector2d renderPaneOrigin(dockHostX, paneOriginY);
   Vector2d renderPaneSize(dockHostWidth, paneHeight);
-  if (const ImGuiDockNode* centralNode = ImGui::DockBuilderGetCentralNode(EditorDockSpaceId())) {
+  const ImGuiID activeDockspaceId = compactUi ? EditorCompactDockSpaceId() : EditorDockSpaceId();
+  if (const ImGuiDockNode* centralNode = ImGui::DockBuilderGetCentralNode(activeDockspaceId)) {
     if (centralNode->Size.x > 0.0f && centralNode->Size.y > 0.0f) {
       renderPaneOrigin = Vector2d(centralNode->Pos.x, centralNode->Pos.y);
       renderPaneSize = Vector2d(centralNode->Size.x, centralNode->Size.y);
@@ -5289,7 +5610,7 @@ void EditorShell::runFrame() {
 
   const bool rendererIdle = !renderCoordinator_.asyncRenderer().isBusy();
   MenuBarState menuState{
-      .sourcePaneFocused = sourcePaneVisible_ && textEditor_.isFocused(),
+      .sourcePaneFocused = !compactUi && sourcePaneVisible_ && textEditor_.isFocused(),
       .canSave = app_.hasDocument(),
       .canRevert = app_.hasDocument() && app_.isDirty() && !app_.cleanSourceText().empty(),
       .canUndo = app_.canUndo(),
@@ -5307,7 +5628,12 @@ void EditorShell::runFrame() {
       .perfOverlayMode = perfOverlayMode_,
       .panelLayoutLocked = dockLayoutLocked_,
   };
-  const MenuBarActions menuActions = menuBarPresenter_.render(menuState, uiFontBold_);
+  MenuBarActions menuActions;
+  if (compactUi) {
+    renderCompactTopBar();
+  } else {
+    menuActions = menuBarPresenter_.render(menuState, uiFontBold_);
+  }
   applyMenuActions(menuActions);
 
   // On macOS, service any pending open/save with a native OS panel; this
@@ -5323,7 +5649,7 @@ void EditorShell::runFrame() {
   markPhase(mainFrameCost.menusDialogsMs);
 
   std::ignore = highlightSelectionSourceIfNeeded();
-  if (sourcePaneVisible_) {
+  if (!compactUi && sourcePaneVisible_) {
     renderSourcePane(paneOriginY, paneHeight, mainPaneLayout.sourcePaneWidth, codeFont_);
   }
   markPhase(mainFrameCost.sourcePaneMs);
@@ -5342,8 +5668,10 @@ void EditorShell::runFrame() {
   // The left source/render splitter stays manual (its collapse/reveal behavior is
   // out of scope for docking); the right-column splitters and the Compositor
   // Debug float are now owned by the DockSpace submitted above.
-  renderSourcePaneSplitter(static_cast<float>(windowSize.x), paneOriginY, paneHeight,
-                           mainPaneLayout.sourcePaneWidth);
+  if (!compactUi) {
+    renderSourcePaneSplitter(static_cast<float>(windowSize.x), paneOriginY, paneHeight,
+                             mainPaneLayout.sourcePaneWidth);
+  }
   if (!contentOnlyCaptureThisFrame_ && showSamplePicker_) {
     renderSamplePicker(ImVec2(0.0f, paneOriginY),
                        ImVec2(static_cast<float>(windowSize.x), paneHeight));
@@ -5401,11 +5729,12 @@ void EditorShell::runFrame() {
 
 namespace internal {
 
-std::string_view TextToolHintLabel(bool isEditing, bool isDraggingBox) {
+std::string_view TextToolHintLabel(bool isEditing, bool isDraggingBox, bool touchPreferred) {
   if (isEditing || isDraggingBox) {
     return {};
   }
-  return "Double-click to place text. Drag to draw a text box.";
+  return touchPreferred ? "Double-tap to place text. Drag to draw a text box."
+                        : "Double-click to place text. Drag to draw a text box.";
 }
 
 PendingClickBusyAction PendingClickBusyActionForState(bool tookFastRedrag, bool rendererBusy) {

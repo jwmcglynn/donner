@@ -45,8 +45,9 @@ but product chrome should not choose a different accent per widget.
 ## Geometry And Type
 
 Spacing uses 4, 8, 12, 16, 24, and 32 px tokens. Controls use a 4 px radius; floating containers
-use a 6 px radius. Tool buttons are 32 px square. New fixed-format controls should use stable
-dimensions and reserve enough room for their longest label.
+use a 6 px radius. Tool buttons are 32 px square on desktop and 44 px square in the compact touch
+profile. New fixed-format controls should use stable dimensions and reserve enough room for their
+longest label.
 
 Roboto is the UI face and Fira Code is the source face. UI text uses regular weight for values and
 bold weight for identity or compact section emphasis. Large display type does not belong in panels,
@@ -69,6 +70,35 @@ leak through the white halo during downsampling.
 The Inspector contains document and selection controls only. Viewport implementation telemetry does
 not occupy the Inspector. Zoom state lives on the canvas in a compact control that resets to 100
 percent when clicked.
+
+### Adaptive Touch Profile
+
+`ComputeEditorAdaptiveUiLayout` selects a canvas-first compact profile for constrained windows and
+touch-preferred builds. Native windows enter it below 760 px wide or 520 px high. WebAssembly enters
+it at those constraints or when the browser reports touch points or a coarse pointer, so desktop
+browsers retain the full editor while iOS starts with stable touch geometry.
+
+The compact profile keeps the same Graphite language but changes the command hierarchy:
+
+- a fixed 52 px top bar presents `DONNER` plus icon-only Open/Samples, Undo, Redo, Layers, and
+  Inspector actions;
+- the canvas tool palette keeps Select, Pen, and Text with 44 px buttons, while the dense paint
+  widget, source pane, text format bar, canvas scrollbars, and compositor diagnostics are omitted;
+- Layers and Inspector open one at a time in an overlay sheet, on the right in landscape and at the
+  bottom in portrait, with a 44 px close target;
+- layer rows and their disclosure, visibility, and lock controls use at least 44 px interaction
+  targets; compact Inspector fields receive equivalent vertical padding;
+- selection, text-frame, and pen geometry stays visually unchanged while invisible pointer hit
+  tolerance doubles for touch.
+
+Opening a right-side sheet recenters the tool palette within the unobscured canvas region. Compact
+and desktop modes use separate DockSpace roots, so resizing into the touch profile cannot rewrite a
+custom desktop panel arrangement. Source visibility and desktop sidebar width remain preferences,
+not transient compact state.
+
+The UI profile consumes ordinary ImGui pointer and resize events. Browser touch translation,
+viewport sizing, and Safari lifecycle integration belong to the WebAssembly platform layer; they
+must feed that existing input seam rather than add touch-specific document mutation paths.
 
 ### Text Authoring
 
@@ -195,6 +225,9 @@ Theme, menu, and source-palette contracts run in:
 ```sh
 bazel test //donner/editor/tests:editor_theme_tests \
   //donner/editor/tests:editor_shell_tests \
+  //donner/editor/tests:editor_shell_layout_tests \
+  //donner/editor/tests:editor_dock_layout_tests \
+  //donner/editor/tests:layers_panel_tests \
   //donner/editor/tests:menu_bar_presenter_tests \
   //donner/editor/tests:sample_picker_presenter_tests \
   //donner/editor/tests:sidebar_presenter_tests \
