@@ -1,7 +1,7 @@
 # Design: Binary Size Reduction
 
 **Status:** Draft
-**Author:** Claude Opus 4.8
+**Author:** Claude Fable 5 (reviewed; drafted by Claude Opus 4.8)
 **Created:** 2026-07-10
 
 ## Summary
@@ -87,7 +87,7 @@ file. The wasm target builds under `--config=wasm` and is measured both raw and
 gzip -9 (the transfer-size proxy), with a bloaty section/symbol breakdown of the
 `.wasm`.
 
-## Baseline (measured 2026-07-10, deep-thought, macOS arm64)
+## Baseline (measured 2026-07-10, an internal build host, macOS arm64)
 
 Native, `--config=macos-binary-size`, stripped, arm64 Mach-O:
 
