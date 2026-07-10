@@ -2454,13 +2454,7 @@ TEST(AsyncRendererE2ETest, BackgroundStickerDragPresentsLiveDeltaFromStaleCache)
   };
   asyncRenderer.requestRender(request);
 
-  std::optional<RenderResult> result;
-  for (int i = 0; i < 300 && !result.has_value(); ++i) {
-    result = asyncRenderer.pollResult();
-    if (!result.has_value()) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-  }
+  std::optional<RenderResult> result = WaitForRenderResult(asyncRenderer);
   ASSERT_TRUE(result.has_value());
   ASSERT_TRUE(result->compositedPreview.has_value());
   ASSERT_TRUE(result->compositedPreview->representedDragPreview.has_value());
