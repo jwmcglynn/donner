@@ -30,8 +30,14 @@ name: Coverage
 # detected from target KINDS via a bazel query over the affected set
 # (fallback_reason == no_instrumentable_targets), never from file extensions,
 # and the detection fails closed: any query/classifier error or unrecognized
-# rule kind runs coverage with the guard intact. A subset that DOES touch
-# instrumentable code keeps the guard at full strength. Future readers:
+# rule kind runs coverage with the guard intact. "Instrumentable" means
+# HOST-instrumentable: wasm-platform targets (the emsdk wasm_cc_binary
+# wrapper and its host-incompatible cc_binary shim, detected via a host
+# cquery) never emit host profile data, so a wasm-packaging-only subset
+# also skips instead of failing on a guaranteed-empty report. A subset
+# that DOES touch host-instrumentable code keeps the guard at full
+# strength: shared C++ sources always impact their host cc_library/cc_test
+# owners too, which classify as instrumentable. Future readers:
 # do not silently re-add a full instrumented PR coverage run.
 on:
   push:
@@ -414,13 +420,51 @@ jobs:
           if ( cd "$head_dir" && bazelisk query --query_file="$kind_query_file" \
               --output label_kind --keep_going ) > "$label_kind_file" 2> "$diagnostics_dir/kind-query.log"; then
             cp "$label_kind_file" "$diagnostics_dir/affected-label-kind.txt"
+            instrumentable_file="$work_dir/instrumentable-label-kind.txt"
             if instrumentable_decision="$(python3 tools/coverage_instrumentable_targets.py \
-                --label-kind-file "$label_kind_file" 2> "$diagnostics_dir/instrumentability.log")"; then
+                --label-kind-file "$label_kind_file" \
+                --instrumentable-out "$instrumentable_file" 2> "$diagnostics_dir/instrumentability.log")"; then
               cat "$diagnostics_dir/instrumentability.log" || true
               if [[ "$instrumentable_decision" == "instrumentable_present=false" ]]; then
                 echo "Affected subset has no instrumentable C/C++ targets; skipping PR coverage."
                 emit_targets true no_instrumentable_targets ""
                 exit 0
+              fi
+              # Host-compatibility recheck. "Instrumentable" means HOST-
+              # instrumentable: a wasm bridge shim is a plain cc_binary by
+              # kind but is target_compatible_with @platforms//:incompatible
+              # on the host, so --skip_incompatible_explicit_targets (set in
+              # --config=ci) silently drops it from the coverage build and
+              # the run is guaranteed to produce an empty report (the #810
+              # false RUN). Only when EVERY remaining instrumentable target
+              # is a cc_binary do we spend a cquery to test host
+              # compatibility; sets containing cc_library/cc_test/wrapper
+              # kinds are host code and run coverage with zero extra cost.
+              # Fail closed: cquery failure, or any label the cquery does
+              # not report as incompatible, keeps the coverage run.
+              if [[ -s "$instrumentable_file" ]] && ! grep -qv '^cc_binary rule ' "$instrumentable_file"; then
+                echo "All instrumentable targets are cc_binary; rechecking host compatibility."
+                compat_file="$work_dir/host-compat.txt"
+                sed 's/^cc_binary rule //' "$instrumentable_file" | tr '\n' ' ' > "$work_dir/compat-labels.txt"
+                if ( cd "$head_dir" && bazelisk cquery "set($(cat "$work_dir/compat-labels.txt"))" \
+                    --output=starlark \
+                    --starlark:expr='"{} {}".format(target.label, "HOST_INCOMPATIBLE" if "IncompatiblePlatformProvider" in providers(target) else "HOST_COMPATIBLE")' \
+                    ) > "$compat_file" 2> "$diagnostics_dir/compat-query.log"; then
+                  cp "$compat_file" "$diagnostics_dir/host-compat.txt"
+                  grep ' HOST_INCOMPATIBLE$' "$compat_file" | sed 's/ HOST_INCOMPATIBLE$//' > "$work_dir/host-incompatible.txt" || true
+                  if recheck_decision="$(python3 tools/coverage_instrumentable_targets.py \
+                      --label-kind-file "$label_kind_file" \
+                      --host-incompatible-file "$work_dir/host-incompatible.txt" 2>> "$diagnostics_dir/instrumentability.log")"; then
+                    if [[ "$recheck_decision" == "instrumentable_present=false" ]]; then
+                      echo "All remaining instrumentable targets are host-incompatible (wasm-platform); skipping PR coverage."
+                      emit_targets true no_instrumentable_targets ""
+                      exit 0
+                    fi
+                  fi
+                else
+                  echo "Host-compatibility cquery failed; running coverage (guard intact)."
+                  cat "$diagnostics_dir/compat-query.log" || true
+                fi
               fi
               echo "Affected subset includes instrumentable C/C++ targets; running coverage."
             else

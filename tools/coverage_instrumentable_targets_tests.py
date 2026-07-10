@@ -44,12 +44,85 @@ class ClassifyTest(unittest.TestCase):
         lines = [
             "donner_multi_transitioned_test rule //donner/svg:bar_skia",
             "_donner_perf_sensitive_cc_library rule //donner/svg:hot",
-            "_wasm_cc_binary rule //donner/svg:wasm_thing",
         ]
         result = mod.classify(lines)
         self.assertTrue(result.instrumentable_present)
-        self.assertEqual(len(result.instrumentable), 3)
+        self.assertEqual(len(result.instrumentable), 2)
         self.assertEqual(result.non_instrumentable, [])
+
+    def test_wasm_wrapper_rule_is_not_host_instrumentable(self):
+        # Regression (#810 shape): the emsdk wasm_cc_binary wrapper transitions
+        # to the wasm platform and emits .js/.wasm only. It can never produce
+        # host profile data, so a wasm-packaging-only affected set must SKIP
+        # coverage instead of building a guaranteed-empty report that trips the
+        # empty-coverage guard (a deterministic false RUN).
+        lines = [
+            "_wasm_cc_binary rule //donner/svg/renderer/wasm:donner_wasm",
+            "serve_http rule //donner/svg/renderer/wasm:serve_test",
+            "filegroup rule //donner/svg/renderer/wasm:test_page",
+        ]
+        result = mod.classify(lines)
+        self.assertFalse(result.instrumentable_present)
+        self.assertEqual(result.instrumentable, [])
+
+    def test_host_incompatible_cc_binary_is_not_instrumentable(self):
+        # The wasm bridge shim is a plain cc_binary by kind but is marked
+        # target_compatible_with @platforms//:incompatible on the host; bazel's
+        # --skip_incompatible_explicit_targets silently drops it from the
+        # coverage build. With the cquery result supplied, PR #810's real
+        # affected set classifies as skip.
+        lines = [
+            "filegroup rule //:docs_files",
+            "_wasm_cc_binary rule //donner/svg/renderer/wasm:donner_wasm",
+            "cc_binary rule //donner/svg/renderer/wasm:donner_wasm_bin",
+            "serve_http rule //donner/svg/renderer/wasm:serve_test",
+            "filegroup rule //donner/svg/renderer/wasm:test_page",
+            "py_test rule //tools:binary_size_tests",
+            "py_test rule //tools:coverage_instrumentable_targets_tests",
+        ]
+        incompatible = frozenset(["//donner/svg/renderer/wasm:donner_wasm_bin"])
+        result = mod.classify(lines, incompatible)
+        self.assertFalse(result.instrumentable_present)
+        self.assertEqual(result.instrumentable, [])
+
+    def test_host_incompatible_labels_normalize_canonical_form(self):
+        # cquery prints canonical labels (@@//pkg:name); query prints
+        # apparent ones (//pkg:name). They must match after normalization.
+        self.assertEqual(
+            mod.normalize_label("@@//donner/svg/renderer/wasm:donner_wasm_bin"),
+            "//donner/svg/renderer/wasm:donner_wasm_bin",
+        )
+        lines = ["cc_binary rule //donner/svg/renderer/wasm:donner_wasm_bin"]
+        incompatible = frozenset(
+            [mod.normalize_label("@@//donner/svg/renderer/wasm:donner_wasm_bin")]
+        )
+        result = mod.classify(lines, incompatible)
+        self.assertFalse(result.instrumentable_present)
+
+    def test_cc_binary_not_listed_incompatible_stays_instrumentable(self):
+        # Fail closed: a cc_binary absent from the host-incompatible list keeps
+        # its kind-based classification and forces a coverage run.
+        lines = [
+            "cc_binary rule //donner/svg/tool:donner-svg",
+            "cc_binary rule //donner/svg/renderer/wasm:donner_wasm_bin",
+        ]
+        incompatible = frozenset(["//donner/svg/renderer/wasm:donner_wasm_bin"])
+        result = mod.classify(lines, incompatible)
+        self.assertTrue(result.instrumentable_present)
+        self.assertEqual(result.instrumentable, ["//donner/svg/tool:donner-svg"])
+
+    def test_instrumentable_lines_expose_kinds(self):
+        # The coverage lane's recheck gate needs the KINDS of the instrumentable
+        # residue (it only cqueries cc_binary-only sets).
+        lines = [
+            "filegroup rule //:docs_files",
+            "cc_binary rule //donner/svg/renderer/wasm:donner_wasm_bin",
+        ]
+        result = mod.classify(lines)
+        self.assertEqual(
+            result.instrumentable_lines,
+            ["cc_binary rule //donner/svg/renderer/wasm:donner_wasm_bin"],
+        )
 
     def test_unknown_rule_kind_fails_closed(self):
         # An unrecognized rule kind must run coverage (uncertainty never skips).
