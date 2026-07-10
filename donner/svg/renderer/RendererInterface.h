@@ -472,6 +472,18 @@ public:
   [[nodiscard]] virtual std::unique_ptr<RendererInterface> createOffscreenInstance() const {
     return nullptr;
   }
+
+  /**
+   * Enable or disable the backend's geometry debug overlay, which
+   * visualizes the internal geometry the backend emits per draw (for
+   * Geode: Slug band strips and the per-path bounding-quad triangles).
+   * Default off. Backends without a debug overlay ignore the call.
+   */
+  virtual void setDebugGeometryOverlay(bool /*enabled*/) {}
+
+  /// Whether the backend's geometry debug overlay is enabled. Backends
+  /// without an overlay always report false.
+  [[nodiscard]] virtual bool debugGeometryOverlay() const { return false; }
 };
 
 }  // namespace donner::svg

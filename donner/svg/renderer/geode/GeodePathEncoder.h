@@ -26,8 +26,8 @@ namespace donner::geode {
  * - **Curves**: Quadratic Bézier control points (3 × Vector2f per curve), packed contiguously.
  * - **Bands**: Horizontal slices through the path. Each band references a contiguous range of
  *   curves and has a bounding quad for rasterization.
- * - **Vertices**: The bounding quads for each band (6 vertices per band = 2 triangles), with
- *   position, outward normal, and band index attributes for the vertex shader.
+ * - **quadVertices**: A single bounding quad over the whole path (6 vertices = 2 triangles),
+ *   with position, outward normal, and band index attributes for the vertex shader.
  */
 struct EncodedPath {
   /// A quadratic Bézier curve segment (3 control points) stored as floats for GPU consumption.
@@ -55,18 +55,16 @@ struct EncodedPath {
   };
   static_assert(sizeof(Band) == 32, "Band struct must match WGSL layout");
 
-  /// Vertex for the band bounding quad (input to the Slug vertex shader).
+  /// Vertex for the path bounding quad (input to the Slug vertex shader).
   struct Vertex {
     float posX, posY;        ///< Position in path space.
     float normalX, normalY;  ///< Outward normal (for dynamic half-pixel dilation).
-    uint32_t bandIndex;      ///< Which band this vertex belongs to.
+    uint32_t bandIndex;      ///< Which band this vertex belongs to (unused by the dual-ray fill).
   };
 
-  std::vector<Curve> curves;     ///< Horizontal (Y-monotonic) curves, sorted by band.
-  std::vector<Band> bands;       ///< Horizontal band metadata (Y-strips), for the horizontal ray.
-  std::vector<Vertex> vertices;  ///< Per-band bounding quad vertices (6 per band) - legacy
-                                 ///< 4-sample path (gradient/mask alpha-coverage shaders).
-  Box2d pathBounds;              ///< Axis-aligned bounding box of the path.
+  std::vector<Curve> curves;  ///< Horizontal (Y-monotonic) curves, sorted by band.
+  std::vector<Band> bands;    ///< Horizontal band metadata (Y-strips), for the horizontal ray.
+  Box2d pathBounds;           ///< Axis-aligned bounding box of the path.
 
   /// Single bounding quad (6 verts) over the whole path, for the analytic dual-ray fill
   /// shader (0041 §8.1). One quad per path means each pixel is rasterized by exactly one
@@ -114,7 +112,7 @@ struct EncodedPath {
  * 2. Split curves at Y-monotone points (Path::toMonotonic)
  * 3. Compute path bounds and determine band count
  * 4. Assign curves to bands and sort
- * 5. Generate bounding quad vertices for each band
+ * 5. Generate the whole-path bounding quad (6 vertices = 2 triangles)
  *
  * The output EncodedPath contains all data needed to fill the path on the GPU.
  */

@@ -18,7 +18,8 @@ consistent with Donner's composited-editor targets (`DragFrameOverhead` budgets
 in 0025) and unblock Phase 5 of 0017.
 
 Scope: Geode only (`donner/svg/renderer/geode/**`, `RendererGeode.{cc,h}`).
-Boundary: no pipeline algorithm changes (Slug stays Slug, MSAA stays 4×, WGSL
+Boundary: no pipeline algorithm changes (Slug stays Slug; the analytic
+dual-ray coverage fill at `sampleCount == 1` from 0041 stays as-is; WGSL
 stays stable). This is a wiring/caching/batching design, not a new rendering
 algorithm.
 
@@ -54,8 +55,9 @@ algorithm.
   `donner/svg/renderer/geode/shaders/**` stays byte-identical for v1 of
   this work.
 - Switching WebGPU vendoring (stays on `wgpu-native` v24).
-- Replacing MSAA with a new AA scheme, or changing the 1-sample
-  alpha-coverage fallback path (#536).
+- Changing the anti-aliasing scheme. Geode renders analytic dual-ray
+  coverage at one sample per pixel on every adapter (0041); AA work is
+  out of scope here.
 - Expanding the resvg test-suite coverage. Phase 5b's widening of
   `kGeodeDefaultMaxMismatchedPixels = 2000` is orthogonal to perf.
 - Adding runtime backend switching or re-plumbing `RendererInterface`.
@@ -307,7 +309,7 @@ algorithm.
     in `GeodePerf_tests.cc`.
 - [x] Milestone 4: Transient render-target pool (Tier 2 findings).
   _Landed 2026-04-20 (M4.2)._
-  - [x] M4.1: Reuse `impl_->target` and `impl_->msaaTarget` across frames
+  - [x] M4.1: Reuse the render target (`impl_->target`) across frames
     when `pixelWidth`/`pixelHeight` are unchanged. _Landed 2026-04-19._
     Tracks `impl_->targetWidth`/`impl_->targetHeight` in Impl; beginFrame
     only recreates when the new viewport size differs. The
@@ -387,7 +389,7 @@ algorithm.
       observable even before the shader/driver pass ships.
     - [x] **M6-B step 2 — shader + bind-group plumbing.** Added
       binding 7 on the Slug-fill pipeline: a per-instance affine
-      transforms SSBO (`slug_fill.wgsl` + alpha-coverage variant).
+      transforms SSBO (`slug_fill.wgsl`).
       `vs_main` now takes `@builtin(instance_index)`, fetches the
       instance transform, and composes `effective_mvp = mvp *
       instance_mat`. For non-instanced draws `GeodeDevice` owns
@@ -722,3 +724,94 @@ required to hit the per-frame goals here.
 - [ ] Investigate whether `populateSharedGradientUniforms` can move
   gradient stops to a texture (freeing the >16-stop cap in
   `slug_gradient.wgsl:28` that's already flagged as Phase 5 work).
+
+## Appendix - measured steady-state cost profile
+
+Where the per-frame cost of the current Geode path actually is, with
+numbers from `GeodeCounters` on representative fixtures. Environment:
+macOS / Metal, Apple M4 Pro (integrated), headless `GeodeDevice`, via
+
+```
+bazel test //donner/svg/renderer/geode:geode_perf_tests \
+    --test_output=all --nocache_test_results
+```
+
+`bufferWrites` / `bufferWriteBytes` count every `wgpu::Queue::writeBuffer`
+call and its payload bytes; `textureWriteBytes` counts `writeTexture`
+payloads. "frame 2" rows are the steady state: a second render of an
+unchanged document by the same renderer (the `*_NoDirtyPath_*` tests),
+including one `takeSnapshot()` readback per frame.
+
+| Fixture (frame 2, unchanged) | draws | pathEncodes | bufferCreates | bindgroupCreates | bufferWrites | bufferWriteBytes | textureWriteBytes |
+|---|---|---|---|---|---|---|---|
+| SimpleShapes (3 fills)  | 3   | 0 | 1 | 3   | 24   | 4,128     | 0 |
+| Moderate (layer + grad) | 3   | 0 | 2 | 3   | 17   | 5,372     | 0 |
+| lion.svg (132 paths)    | 132 | 0 | 1 | 132 | 1,056 | 172,776   | 0 |
+| Ghostscript_Tiger (304 paths) | 304 | 0 | 4 | 304 | 2,432 | 1,473,888 | 0 |
+
+First-frame values differ only in `pathEncodes` (one per path: Lion 132,
+Tiger encodes during frame 1) and `textureCreates` (render target
+allocation); the upload traffic is identical on frame 1 and frame N.
+
+### What the numbers say
+
+1. **The CPU encode cache saves the encode, not the upload.** Milestone 2
+   memoizes `EncodedPath` per entity (`GeodePathCacheComponent`), and
+   frame-2 `pathEncodes` is 0 everywhere. But the cached bands / curves /
+   grids / quad vertices have no persistent GPU residence: every
+   `submitFillDraw` re-uploads all eight arena regions (vertex, bands,
+   curves, vBands, vCurves, hBandGrid, vBandGrid, uniforms) through
+   `GeoEncoder.cc` `allocInArena` -> `queue().writeBuffer`. That is 8
+   writeBuffer calls per draw (Lion: 1,056 = 132 x 8), re-transferring
+   ~1.44 MB per frame for a completely static Tiger (~88 MB/s at 60 fps)
+   plus per-call queue overhead on the CPU.
+2. **Bind groups are created per draw, every frame.** Frame-2
+   `bindgroupCreates == drawCalls` (Tiger: 304/frame). Each
+   `submitFillDraw` / `fillPathIntoMask` / gradient draw calls
+   `dev.createBindGroup` for bindings that are byte-identical to the
+   previous frame's. This is the M1.f.2 target
+   (`bindgroupCreates <= pipelines`), still open.
+3. **Arena buffers are pooled across frames (`GeodeBufferPool`).**
+   `RendererGeode::beginFrame` constructs a fresh `GeoEncoder` per frame
+   (and per layer / filter / mask push), but each encoder's bump-arena
+   buffers are recycled through a usage+label-keyed pool on
+   `RendererGeode::Impl` (companion to the M4.2 texture pool), so
+   steady-state `bufferCreates` is 1-4 per frame instead of one
+   `createBuffer` per arena per encoder. The residual creates are the
+   `takeSnapshot` readback buffer and the per-blit uniform buffers
+   below. Guarded by the `bufferCreates` ceilings in the
+   `*_NoDirtyPath_ZeroEncodes` tests.
+4. **Per-blit uniform buffers.** `GeodeTextureEncoder::drawTexturedQuad`
+   creates a fresh uniform buffer per blit (`createBuffer` +
+   `writeBuffer`), contributing to the per-frame `bufferCreates` floor
+   on any frame with layer composites or snapshots.
+5. **Texture uploads are already clean.** `textureWriteBytes == 0` on all
+   vector fixtures, and frame-2 `textureCreates == 0` (M4). Image decode
+   uploads happen once, off the steady-state path.
+6. **`submits == 2` steady-state** is frame + snapshot readback; the M3
+   target of 1 holds for the render itself.
+7. **Per-encode output is lean.** `GeodePathEncoder::encode` emits only
+   what the analytic dual-ray pipeline draws: band/curve/grid SSBO data
+   plus the single whole-path bounding quad (`quadVertices`). The
+   `GeodePathEncoder.EncodeTimingProbe` test prints the per-encode
+   median for a many-band serpentine fixture (~181 us) as a
+   non-asserting reference number.
+
+### Cost ranking of remaining work (highest first)
+
+1. Steady-state GPU re-upload of memoized path data (item 1):
+   O(paths) writeBuffer calls and O(scene bytes) transfer per static
+   frame. Fix direction: persistent GPU residence for cached
+   `EncodedPath` data (per-entity arena slots alongside
+   `GeodePathCacheComponent`), or at minimum skip-write when content
+   and arena placement are unchanged.
+2. Per-draw bind-group creation (item 2): O(paths) driver-object
+   creations per frame. Unlocked by 1 (stable buffer bindings make
+   bind groups reusable / cacheable).
+3. Per-blit uniform creation (item 4): small counts on typical scenes;
+   route through the arena + pool machinery.
+
+Counters `bufferWrites` / `bufferWriteBytes` / `textureWriteBytes` are
+the regression signal for items 1 and 5; `bufferCreates` for item 3
+(pooled, ceilings asserted); `bindgroupCreates` for item 2. Ceilings
+are asserted in `GeodePerf_tests.cc` and tighten as each fix lands.

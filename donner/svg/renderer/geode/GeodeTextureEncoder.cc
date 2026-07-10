@@ -94,6 +94,7 @@ wgpu::Texture GeodeTextureEncoder::uploadRgba8Texture(GeodeDevice& device,
     // Fast path - source rows already 256-aligned. Upload directly.
     const size_t byteCount = static_cast<size_t>(unpaddedBytesPerRow) * height;
     queue.writeTexture(dst, rgbaPixels, byteCount, layout, writeSize);
+    device.countTextureWrite(byteCount);
   } else {
     // Slow path - copy into a padded staging buffer. `std::vector` is the
     // allowed allocation path (stdlib, not raw malloc/free). We size-cap on
@@ -105,6 +106,7 @@ wgpu::Texture GeodeTextureEncoder::uploadRgba8Texture(GeodeDevice& device,
                   rgbaPixels + static_cast<size_t>(y) * unpaddedBytesPerRow, unpaddedBytesPerRow);
     }
     queue.writeTexture(dst, staging.data(), staging.size(), layout, writeSize);
+    device.countTextureWrite(staging.size());
   }
 
   return texture;
@@ -154,6 +156,7 @@ void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device, const GeodeImage
   wgpu::Buffer uniBuf = resourceArena.retain(dev.createBuffer(uniDesc));
   device.countBuffer();
   queue.writeBuffer(uniBuf, 0, &u, sizeof(Uniforms));
+  device.countBufferWrite(sizeof(Uniforms));
 
   // Pick sampler based on requested filter mode.
   const wgpu::Sampler& sampler =

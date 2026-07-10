@@ -51,6 +51,9 @@ void ApplyMenuBarCommand(bool activated, MenuBarCommand command, const MenuBarSt
     case MenuBarCommand::ToggleCompositorDebugPanel:
       actions->toggleCompositorDebugPanel = true;
       return;
+    case MenuBarCommand::ToggleGeometryDebugOverlay:
+      actions->toggleGeometryDebugOverlay = true;
+      return;
     case MenuBarCommand::SetPerfOverlayOff:
       actions->setPerfOverlayMode = true;
       actions->perfOverlayMode = PerfOverlayMode::Off;
@@ -69,12 +72,15 @@ void ApplyMenuBarCommand(bool activated, MenuBarCommand command, const MenuBarSt
 }
 
 void ApplyViewMenuToggleActions(const MenuBarActions& actions, bool* showCompositorDebugPanel,
-                                PerfOverlayMode* perfOverlayMode) {
+                                PerfOverlayMode* perfOverlayMode, bool* geometryDebugOverlay) {
   if (actions.toggleCompositorDebugPanel && showCompositorDebugPanel != nullptr) {
     *showCompositorDebugPanel = !*showCompositorDebugPanel;
   }
   if (actions.setPerfOverlayMode && perfOverlayMode != nullptr) {
     *perfOverlayMode = actions.perfOverlayMode;
+  }
+  if (actions.toggleGeometryDebugOverlay && geometryDebugOverlay != nullptr) {
+    *geometryDebugOverlay = !*geometryDebugOverlay;
   }
 }
 
@@ -173,6 +179,9 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
     ApplyMenuBarCommand(
         ImGui::MenuItem("Compositor Debug", nullptr, state.showCompositorDebugPanel),
         MenuBarCommand::ToggleCompositorDebugPanel, state, &actions);
+    ApplyMenuBarCommand(
+        ImGui::MenuItem("Geometry Debug Overlay", nullptr, state.geometryDebugOverlay),
+        MenuBarCommand::ToggleGeometryDebugOverlay, state, &actions);
     ImGui::Separator();
     ApplyMenuBarCommand(ImGui::MenuItem("Lock Panel Layout", nullptr, state.panelLayoutLocked),
                         MenuBarCommand::ToggleLayoutLock, state, &actions);

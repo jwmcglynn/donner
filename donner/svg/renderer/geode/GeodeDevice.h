@@ -187,11 +187,12 @@ public:
   bool useAlphaCoverageAA() const { return useAlphaCoverageAA_; }
 
   /**
-   * MSAA sample count for render pipelines and render-target textures.
+   * Sample count for render pipelines and render-target textures.
    *
-   * Returns 1 on the alpha-coverage path (Intel Arc + Vulkan or explicit
-   * embedded-host request), where MSAA resolve must be avoided. All other
-   * adapters get 4× MSAA with hardware sample-mask AA.
+   * Always 1: Geode renders analytic dual-ray coverage at one sample per
+   * pixel on every adapter (design doc 0041). The 4x MSAA sample-mask path
+   * and the alpha-coverage fallback are deleted; this accessor remains so
+   * pool keys and tests stay explicit about the sample dimension.
    */
   uint32_t sampleCount() const { return 1u; }
 
@@ -246,6 +247,17 @@ public:
   }
   void countPipelineSwitch() const {
     if (counters_) ++counters_->pipelineSwitches;
+  }
+  /// Record one `wgpu::Queue::writeBuffer` call of `bytes` payload bytes.
+  void countBufferWrite(uint64_t bytes) const {
+    if (counters_) {
+      ++counters_->bufferWrites;
+      counters_->bufferWriteBytes += bytes;
+    }
+  }
+  /// Record one `wgpu::Queue::writeTexture` call of `bytes` payload bytes.
+  void countTextureWrite(uint64_t bytes) const {
+    if (counters_) counters_->textureWriteBytes += bytes;
   }
 
   /**

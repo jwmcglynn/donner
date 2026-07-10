@@ -690,6 +690,7 @@ wgpu::Buffer createUniformBuffer(FilterResourceArena& arena, GeodeDevice& device
   bufDesc.mappedAtCreation = false;
   wgpu::Buffer buffer = arena.createBuffer(dev, bufDesc);
   device.queue().writeBuffer(buffer, 0, data, size);
+  device.countBufferWrite(size);
   return buffer;
 }
 
@@ -2413,6 +2414,7 @@ wgpu::Texture GeodeFilterEngine::applyComponentTransfer(
   bufDesc.mappedAtCreation = false;
   wgpu::Buffer lutBuffer = arena.createBuffer(dev, bufDesc);
   device_.queue().writeBuffer(lutBuffer, 0, lutData.data(), bufDesc.size);
+  device_.countBufferWrite(bufDesc.size);
 
   // Build bind group.
   ScopedWgpuHandle<wgpu::TextureView> inputView(input.createView());
@@ -2528,6 +2530,7 @@ wgpu::Texture GeodeFilterEngine::applyConvolveMatrix(
   bufDesc.mappedAtCreation = false;
   wgpu::Buffer paramsBuffer = arena.createBuffer(dev, bufDesc);
   device_.queue().writeBuffer(paramsBuffer, 0, &params, sizeof(params));
+  device_.countBufferWrite(sizeof(params));
 
   // Build bind group.
   ScopedWgpuHandle<wgpu::TextureView> inputView(input.createView());
@@ -2625,6 +2628,7 @@ wgpu::Texture GeodeFilterEngine::applyTurbulence(
   bufDesc.mappedAtCreation = false;
   wgpu::Buffer paramsBuffer = arena.createBuffer(dev, bufDesc);
   device_.queue().writeBuffer(paramsBuffer, 0, &params, sizeof(params));
+  device_.countBufferWrite(sizeof(params));
 
   // Upload tables as storage buffer.
   wgpu::BufferDescriptor tablesBufDesc{};
@@ -2634,6 +2638,7 @@ wgpu::Texture GeodeFilterEngine::applyTurbulence(
   tablesBufDesc.mappedAtCreation = false;
   wgpu::Buffer tablesBuffer = arena.createBuffer(dev, tablesBufDesc);
   device_.queue().writeBuffer(tablesBuffer, 0, &tables, sizeof(tables));
+  device_.countBufferWrite(sizeof(tables));
 
   ScopedWgpuHandle<wgpu::TextureView> outputView(output.createView());
 
@@ -2877,6 +2882,7 @@ wgpu::Texture GeodeFilterEngine::applyDiffuseLighting(
   bufDesc.mappedAtCreation = false;
   wgpu::Buffer paramsBuffer = arena.createBuffer(dev, bufDesc);
   device_.queue().writeBuffer(paramsBuffer, 0, &params, sizeof(params));
+  device_.countBufferWrite(sizeof(params));
 
   // Build bind group.
   ScopedWgpuHandle<wgpu::TextureView> inputView(input.createView());
@@ -2995,6 +3001,7 @@ wgpu::Texture GeodeFilterEngine::applySpecularLighting(
   bufDesc.mappedAtCreation = false;
   wgpu::Buffer paramsBuffer = arena.createBuffer(dev, bufDesc);
   device_.queue().writeBuffer(paramsBuffer, 0, &params, sizeof(params));
+  device_.countBufferWrite(sizeof(params));
 
   // Build bind group.
   ScopedWgpuHandle<wgpu::TextureView> inputView(input.createView());
@@ -3115,6 +3122,7 @@ wgpu::Texture GeodeFilterEngine::applyImage(
     layout.rowsPerImage = 1;
     wgpu::Extent3D extent = {1, 1, 1};
     device_.queue().writeTexture(dstInfo, zero, 4, layout, extent);
+    device_.countTextureWrite(4);
 
     ImageParams params{};
     params.m02 = -1000.0f;
@@ -3160,6 +3168,7 @@ wgpu::Texture GeodeFilterEngine::applyImage(
   layout.rowsPerImage = static_cast<uint32_t>(imgH);
   wgpu::Extent3D extent = {static_cast<uint32_t>(imgW), static_cast<uint32_t>(imgH), 1};
   device_.queue().writeTexture(dstInfo, premul.data(), premul.size(), layout, extent);
+  device_.countTextureWrite(premul.size());
 
   // Fragment references with a non-axis-aligned ancestor transform: project the fragment image
   // through the full CTM (rotation/skew) so placement matches the CPU path. The transform

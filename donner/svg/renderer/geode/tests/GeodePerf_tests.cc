@@ -96,9 +96,11 @@ void printCounters(const char* label, const geode::GeodeCounters& c) {
                "[GeodePerf] %-40s  pathEncodes=%4" PRIu64 "  bufferCreates=%5" PRIu64
                "  bindgroupCreates=%5" PRIu64 "  textureCreates=%3" PRIu64 "  submits=%3" PRIu64
                "  drawCalls=%4" PRIu64 "  pipelineSwitches=%3" PRIu64
-               "  sameSourceDrawPairs=%3" PRIu64 "\n",
+               "  sameSourceDrawPairs=%3" PRIu64 "  bufferWrites=%5" PRIu64
+               "  bufferWriteBytes=%9" PRIu64 "  textureWriteBytes=%9" PRIu64 "\n",
                label, c.pathEncodes, c.bufferCreates, c.bindgroupCreates, c.textureCreates,
-               c.submits, c.drawCalls, c.pipelineSwitches, c.sameSourceDrawPairs);
+               c.submits, c.drawCalls, c.pipelineSwitches, c.sameSourceDrawPairs, c.bufferWrites,
+               c.bufferWriteBytes, c.textureWriteBytes);
 }
 
 /// Read a file from disk. Returns the empty string on any I/O error -
@@ -173,6 +175,9 @@ TEST_F(GeodePerfTest, SimpleShapes_BaselineCeilings) {
   RecordProperty("pathEncodes", std::to_string(c.pathEncodes));
   RecordProperty("drawCalls", std::to_string(c.drawCalls));
   RecordProperty("pipelineSwitches", std::to_string(c.pipelineSwitches));
+  RecordProperty("bufferWrites", std::to_string(c.bufferWrites));
+  RecordProperty("bufferWriteBytes", std::to_string(c.bufferWriteBytes));
+  RecordProperty("textureWriteBytes", std::to_string(c.textureWriteBytes));
   printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), c);
 
   // Observed 2026-04-19 on macOS/Metal, M4 Pro:
@@ -215,6 +220,9 @@ TEST_F(GeodePerfTest, Moderate_BaselineCeilings) {
   RecordProperty("pathEncodes", std::to_string(c.pathEncodes));
   RecordProperty("drawCalls", std::to_string(c.drawCalls));
   RecordProperty("pipelineSwitches", std::to_string(c.pipelineSwitches));
+  RecordProperty("bufferWrites", std::to_string(c.bufferWrites));
+  RecordProperty("bufferWriteBytes", std::to_string(c.bufferWriteBytes));
+  RecordProperty("textureWriteBytes", std::to_string(c.textureWriteBytes));
   printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), c);
 
   // Observed 2026-04-19:
@@ -266,6 +274,9 @@ TEST_F(GeodePerfTest, Lion_BaselineCeilings) {
   RecordProperty("pathEncodes", std::to_string(c.pathEncodes));
   RecordProperty("drawCalls", std::to_string(c.drawCalls));
   RecordProperty("pipelineSwitches", std::to_string(c.pipelineSwitches));
+  RecordProperty("bufferWrites", std::to_string(c.bufferWrites));
+  RecordProperty("bufferWriteBytes", std::to_string(c.bufferWriteBytes));
+  RecordProperty("textureWriteBytes", std::to_string(c.textureWriteBytes));
   printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), c);
 
   // Observed 2026-04-19:
@@ -316,6 +327,9 @@ TEST_F(GeodePerfTest, UseHeavy_BaselineCeilings) {
   RecordProperty("pathEncodes", std::to_string(c.pathEncodes));
   RecordProperty("drawCalls", std::to_string(c.drawCalls));
   RecordProperty("pipelineSwitches", std::to_string(c.pipelineSwitches));
+  RecordProperty("bufferWrites", std::to_string(c.bufferWrites));
+  RecordProperty("bufferWriteBytes", std::to_string(c.bufferWriteBytes));
+  RecordProperty("textureWriteBytes", std::to_string(c.textureWriteBytes));
   RecordProperty("sameSourceDrawPairs", std::to_string(c.sameSourceDrawPairs));
   printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), c);
 
@@ -435,6 +449,10 @@ TEST_F(GeodePerfTest, SimpleShapes_NoDirtyPath_ZeroEncodes) {
   // cache. countPathEncode() is only called on cache miss.
   EXPECT_EQ(c.pathEncodes, 0u) << "Cache miss on an unchanged second render: one or more paths "
                                   "re-encoded despite zero geometry changes.";
+  // M1 (GeodeBufferPool): steady-state arena buffers are recycled across
+  // frames. The remaining create is the takeSnapshot readback buffer.
+  EXPECT_LE(c.bufferCreates, 2u) << "Arena buffer churn on an unchanged second render: the "
+                                    "cross-frame GeodeBufferPool should serve all arena growth.";
 }
 
 TEST_F(GeodePerfTest, Moderate_NoDirtyPath_ZeroEncodes) {
@@ -449,6 +467,9 @@ TEST_F(GeodePerfTest, Moderate_NoDirtyPath_ZeroEncodes) {
   // `fillPathLinearGradient` (rounded-rect path).
   EXPECT_EQ(c.pathEncodes, 0u) << "Cache miss on unchanged second render: fill or gradient path "
                                   "re-encoded despite zero geometry changes.";
+  // M1 (GeodeBufferPool): readback + one per-blit uniform buffer remain
+  // (layer composite blits create a fresh uniform buffer per call).
+  EXPECT_LE(c.bufferCreates, 4u) << "Arena buffer churn on an unchanged second render.";
 }
 
 TEST_F(GeodePerfTest, Lion_NoDirtyPath_ZeroEncodes) {
@@ -471,6 +492,11 @@ TEST_F(GeodePerfTest, Lion_NoDirtyPath_ZeroEncodes) {
   // is the whole point of the cache.
   EXPECT_EQ(c.pathEncodes, 0u) << "Cache miss on unchanged second render of lion.svg: "
                                   "re-encoded paths despite zero geometry changes.";
+  // M1 (GeodeBufferPool): pre-pool this was 12 creates/frame (arena
+  // re-growth in the per-frame encoder); pooled steady state is the
+  // readback buffer only.
+  EXPECT_LE(c.bufferCreates, 3u)
+      << "Arena buffer churn on an unchanged second render of lion.svg.";
 }
 
 TEST_F(GeodePerfTest, GhostscriptTiger_NoDirtyPath_ZeroEncodes) {
@@ -493,6 +519,11 @@ TEST_F(GeodePerfTest, GhostscriptTiger_NoDirtyPath_ZeroEncodes) {
   EXPECT_EQ(c.pathEncodes, 0u)
       << "Cache miss on unchanged second render of Ghostscript_Tiger.svg: "
          "fill- or stroke-slot cache missed despite zero geometry changes.";
+  // M1 (GeodeBufferPool): pre-pool this was 20 creates/frame. Observed
+  // pooled steady state is 4 (readback + residual arena churn); assert
+  // with a little margin.
+  EXPECT_LE(c.bufferCreates, 8u)
+      << "Arena buffer churn on an unchanged second render of Ghostscript_Tiger.svg.";
 }
 
 // ---------------------------------------------------------------------------

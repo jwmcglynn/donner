@@ -17,6 +17,8 @@ TEST(ViewMenuVisibility, MenuBarStateDefaultsMatchVisibilityContract) {
       << "Compositor Debug panel must default to hidden (developer diagnostics only)";
   EXPECT_EQ(state.perfOverlayMode, PerfOverlayMode::Off)
       << "Performance overlay must default to off";
+  EXPECT_FALSE(state.geometryDebugOverlay)
+      << "Geode geometry debug overlay must default to off (zero impact on normal rendering)";
 }
 
 // The toggle actions are edge-triggered requests, so they must default to false
@@ -25,6 +27,7 @@ TEST(ViewMenuVisibility, MenuBarActionsToggleRequestsDefaultFalse) {
   const MenuBarActions actions;
   EXPECT_FALSE(actions.toggleCompositorDebugPanel);
   EXPECT_FALSE(actions.setPerfOverlayMode);
+  EXPECT_FALSE(actions.toggleGeometryDebugOverlay);
 }
 
 TEST(ViewMenuVisibility, ToggleActionsFlipCompositorDebugPanel) {
@@ -88,6 +91,31 @@ TEST(ViewMenuVisibility, ToggleActionsIgnoreNullVisibilityPointers) {
   ApplyViewMenuToggleActions(actions, nullptr, nullptr);
   EXPECT_TRUE(showCompositorDebugPanel);
   EXPECT_EQ(perfOverlayMode, PerfOverlayMode::Off);
+}
+
+TEST(ViewMenuVisibility, ToggleActionsFlipGeometryDebugOverlay) {
+  bool showCompositorDebugPanel = false;
+  PerfOverlayMode perfOverlayMode = PerfOverlayMode::Off;
+  bool geometryDebugOverlay = false;
+  MenuBarActions actions;
+  actions.toggleGeometryDebugOverlay = true;
+
+  ApplyViewMenuToggleActions(actions, &showCompositorDebugPanel, &perfOverlayMode,
+                             &geometryDebugOverlay);
+
+  EXPECT_TRUE(geometryDebugOverlay);
+  EXPECT_FALSE(showCompositorDebugPanel);
+  EXPECT_EQ(perfOverlayMode, PerfOverlayMode::Off);
+
+  ApplyViewMenuToggleActions(actions, &showCompositorDebugPanel, &perfOverlayMode,
+                             &geometryDebugOverlay);
+
+  EXPECT_FALSE(geometryDebugOverlay);
+
+  // Callers without a document renderer omit the pointer; the toggle
+  // request must be ignored (default argument is null).
+  ApplyViewMenuToggleActions(actions, &showCompositorDebugPanel, &perfOverlayMode);
+  EXPECT_FALSE(geometryDebugOverlay);
 }
 
 }  // namespace donner::editor
