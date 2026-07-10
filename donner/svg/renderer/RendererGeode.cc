@@ -1402,6 +1402,91 @@ struct RendererGeode::Impl {
   /// registries are never considered "consecutive same-source").
   Entity lastDrawSourceEntity = entt::null;
 
+  /// Debug geometry overlay (see `RendererGeode::setDebugGeometryOverlay`).
+  /// When true, every `drawPath` additionally outlines the Slug band
+  /// decomposition Geode emits for the draw: horizontal band strips,
+  /// vertical band strips, and the single bounding quad (with its
+  /// triangle diagonal) that is the geometry actually rasterized.
+  /// Default off; every overlay code path is behind this flag so the
+  /// disabled state is byte-identical to a build without the feature.
+  bool debugGeometryOverlay = false;
+
+  /// Draw the debug overlay for one encoded path. Called from `drawPath`
+  /// after the normal fill/stroke draws so the overlay renders on top.
+  /// Uses `GeoEncoder::fillPath` directly (hairline rings built as
+  /// EvenOdd outer+inset rectangles), so no new pipelines or shaders are
+  /// involved; overlay draws cost normal draw-call counters, which is
+  /// acceptable for a debug mode.
+  void drawEncodedPathOverlay(const geode::EncodedPath& encoded) {
+    if (!encoder || encoded.empty()) {
+      return;
+    }
+    syncTransform();
+
+    // Hairline width: one device pixel expressed in path space. The
+    // linear part's determinant gives the area scale of the transform;
+    // its square root approximates the isotropic scale factor.
+    const double det = std::abs(deviceFromLocalTransform.determinant());
+    const double scale = det > 0.0 ? std::sqrt(det) : 1.0;
+    const double w = 1.0 / std::max(scale, 1e-6);
+
+    // A hairline rectangular ring: outer rect + inset rect, filled
+    // EvenOdd so only the border remains.
+    const auto addRing = [w](PathBuilder& builder, const Box2d& rect) {
+      builder.addRect(rect);
+      const Box2d inner(rect.topLeft + Vector2d(w, w), rect.bottomRight - Vector2d(w, w));
+      if (inner.bottomRight.x > inner.topLeft.x && inner.bottomRight.y > inner.topLeft.y) {
+        builder.addRect(inner);
+      }
+    };
+
+    // Horizontal (Y-strip) bands: cyan.
+    if (!encoded.bands.empty()) {
+      PathBuilder builder;
+      for (const geode::EncodedPath::Band& band : encoded.bands) {
+        addRing(builder, Box2d(Vector2d(band.xMin, band.yMin), Vector2d(band.xMax, band.yMax)));
+      }
+      encoder->fillPath(builder.build(), css::RGBA(0, 200, 255, 160), FillRule::EvenOdd);
+    }
+
+    // Vertical (X-strip) bands: yellow. Field semantics are transposed
+    // for vertical bands (`xMin`/`xMax` = strip bounds, `yMin`/`yMax` =
+    // curve extent), but both pairs still form the band's rectangle.
+    if (!encoded.vBands.empty()) {
+      PathBuilder builder;
+      for (const geode::EncodedPath::Band& band : encoded.vBands) {
+        addRing(builder, Box2d(Vector2d(band.xMin, band.yMin), Vector2d(band.xMax, band.yMax)));
+      }
+      encoder->fillPath(builder.build(), css::RGBA(255, 200, 0, 140), FillRule::EvenOdd);
+    }
+
+    // Bounding quad + triangle diagonal: magenta. This is the geometry
+    // Geode actually rasterizes - one quad (two triangles) per path
+    // (0041: one fragment per pixel, band lookup in the fragment
+    // shader). The diagonal runs between the shared vertices of the two
+    // triangles: (xMin, yMin) -> (xMax, yMax) per
+    // `GeodePathEncoder::encode`'s quadVertices emission order.
+    {
+      const Box2d& b = encoded.pathBounds;
+      PathBuilder builder;
+      addRing(builder, b);
+      const Vector2d d = (b.bottomRight - b.topLeft);
+      const double len = d.length();
+      if (len > w) {
+        // Thin quad along the diagonal, offset w/2 perpendicular.
+        const Vector2d unit = d / len;
+        const Vector2d perp(-unit.y * w * 0.5, unit.x * w * 0.5);
+        builder.moveTo(b.topLeft + perp)
+            .lineTo(b.bottomRight + perp)
+            .lineTo(b.bottomRight - perp)
+            .lineTo(b.topLeft - perp)
+            .closePath();
+      }
+      encoder->fillPath(builder.build(), css::RGBA(255, 0, 255, 200), FillRule::NonZero);
+    }
+  }
+
+
   /// M6-B step 3 (design doc 0030 §M6 Bullet 2): deferred batch for
   /// consecutive `drawPath` calls that share a source entity + resolved
   /// solid paint + no stroke + no subtree complication. Each matching
@@ -1467,6 +1552,18 @@ struct RendererGeode::Impl {
     /// subpath → NonZero; for closed-path strokes, two → EvenOdd.
     FillRule fillRule = FillRule::NonZero;
   };
+
+  /// Debug-overlay companion for a stroke draw: visualize the encode of
+  /// the stroked outline (the geometry Geode actually emits for the
+  /// stroke). Falls back to a local encode when the stroke came from the
+  /// no-entity path (no cache slot).
+  void drawStrokeOverlay(const Path& strokedOutline, const StrokeDerived& derived) {
+    if (derived.encoded != nullptr) {
+      drawEncodedPathOverlay(*derived.encoded);
+    } else {
+      drawEncodedPathOverlay(geode::GeodePathEncoder::encode(strokedOutline, derived.fillRule));
+    }
+  }
 
   /// Encode-side of the cache. If `source` holds a valid entity handle,
   /// installs / reuses a `GeodePathCacheComponent::fillEncode` on it and
@@ -1968,6 +2065,14 @@ RendererGeode::RendererGeode(std::shared_ptr<geode::GeodeDevice> device, bool ve
 void RendererGeode::enableTimestamps(bool /*enabled*/) {
   // Reserved for future work (design doc 0030, "Future Work"). Counters
   // are the durable regression signal and are always enabled.
+}
+
+void RendererGeode::setDebugGeometryOverlay(bool enabled) {
+  impl_->debugGeometryOverlay = enabled;
+}
+
+bool RendererGeode::debugGeometryOverlay() const {
+  return impl_->debugGeometryOverlay;
 }
 
 FrameTimings RendererGeode::lastFrameTimings() const {
@@ -3551,7 +3656,10 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // draw.
   const bool hasStroke = !(stroke.strokeWidth <= 0.0 ||
                            std::holds_alternative<PaintServer::None>(impl_->paint.stroke));
-  const bool batchable = !hasStroke && fillEncoded != nullptr &&
+  // The debug geometry overlay draws per-path, immediately after the
+  // path's own draws, so batching is disabled while it is on (debug
+  // mode trades the batching win for draw-order fidelity).
+  const bool batchable = !impl_->debugGeometryOverlay && !hasStroke && fillEncoded != nullptr &&
                          path.sourceEntity.entity() != entt::null &&
                          std::holds_alternative<PaintServer::Solid>(impl_->paint.fill) &&
                          !impl_->patternFillPaint.has_value() && impl_->encoder != nullptr &&
@@ -3573,6 +3681,15 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // Both default to true, so this is a no-op for ordinary fill-then-stroke draws.
   if (impl_->paint.drawFillComponent) {
     impl_->fillResolved(path.path, path.fillRule, fillEncoded);
+    if (impl_->debugGeometryOverlay &&
+        !std::holds_alternative<PaintServer::None>(impl_->paint.fill)) {
+      if (fillEncoded != nullptr) {
+        impl_->drawEncodedPathOverlay(*fillEncoded);
+      } else {
+        impl_->drawEncodedPathOverlay(
+            geode::GeodePathEncoder::encode(path.path, path.fillRule));
+      }
+    }
   }
 
   // Mirror fillResolved's no-op safety: if there's no encoder (headless
@@ -3633,6 +3750,9 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
       impl_->device->deferDestroy(impl_->patternStrokePaint->tile.take());
     }
     impl_->patternStrokePaint.reset();
+    if (impl_->debugGeometryOverlay) {
+      impl_->drawStrokeOverlay(strokedOutline, strokeDerived);
+    }
     return;
   }
 
@@ -3645,6 +3765,9 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   auto strokeServer = impl_->paint.stroke;
   impl_->drawPaintedPathAgainst(path.path, strokedOutline, strokeServer, effectiveOpacity,
                                 strokeDerived.fillRule, strokeDerived.encoded);
+  if (impl_->debugGeometryOverlay) {
+    impl_->drawStrokeOverlay(strokedOutline, strokeDerived);
+  }
 }
 
 void RendererGeode::drawRect(const Box2d& rect, const StrokeParams& stroke) {

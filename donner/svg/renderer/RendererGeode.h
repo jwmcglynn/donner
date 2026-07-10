@@ -267,6 +267,26 @@ public:
   void enableTimestamps(bool enabled);
 
   /**
+   * Enable or disable the Geode geometry debug overlay.
+   *
+   * When enabled, every path draw (fills, strokes, rects, ellipses)
+   * additionally outlines the Slug band decomposition Geode emits for
+   * that draw: horizontal band strips (cyan), vertical band strips
+   * (yellow), and the per-path bounding quad with its triangle diagonal
+   * (magenta) - the two triangles Geode actually rasterizes (0041).
+   * Overlay draws render through the normal fill pipeline, so they are
+   * included in `lastFrameTimings()` counters. `<use>` instancing is
+   * disabled while the overlay is on so overlays stay in draw order.
+   *
+   * Default off. When off, rendering behavior and performance are
+   * unchanged; the only cost is one boolean test per draw.
+   */
+  void setDebugGeometryOverlay(bool enabled);
+
+  /// Whether the geometry debug overlay is enabled.
+  [[nodiscard]] bool debugGeometryOverlay() const;
+
+  /**
    * Returns per-frame instrumentation for the most recently completed
    * `beginFrame`→`endFrame` window. Valid after the first `endFrame()`;
    * before then all fields are zero.
