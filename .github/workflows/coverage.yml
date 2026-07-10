@@ -20,7 +20,18 @@ name: Coverage
 # the 21-min re-run we are eliminating, so the PR coverage jobs SKIP instead --
 # the main-push baseline already covers those lines. Only the affected subset
 # (fallback_reason == bazel_diff), the cheap smoke subset (coverage_smoke), and
-# the explicit ci:full-test opt-in still produce PR coverage. Future readers:
+# the explicit ci:full-test opt-in still produce PR coverage.
+#
+# One more skip: a genuine incremental subset whose affected targets contain
+# NO instrumentable C/C++ (docs-only, shell/python tooling, filegroup/flag-only
+# changes) also SKIPs the coverage lane. Building coverage over such a subset
+# yields an empty LCOV report and trips check_lcov_report.py's "no executable
+# line data" guard -- a deterministic red no rerun can clear. That subset is
+# detected from target KINDS via a bazel query over the affected set
+# (fallback_reason == no_instrumentable_targets), never from file extensions,
+# and the detection fails closed: any query/classifier error or unrecognized
+# rule kind runs coverage with the guard intact. A subset that DOES touch
+# instrumentable code keeps the guard at full strength. Future readers:
 # do not silently re-add a full instrumented PR coverage run.
 on:
   push:
@@ -195,7 +206,7 @@ jobs:
             esac
 
             case "$path" in
-              .bazelrc|.github/workflows/*|.github/actions/*|docs/*|*.md|tools/binary_size.sh|tools/build_docs.sh|tools/coverage.sh|tools/filter_coverage.py|tools/filter_coverage_tests.py|tools/lcov_metrics.py|tools/lcov_metrics_tests.py|tools/generate_build_report.py|tools/generate_build_report_tests.py)
+              .bazelrc|.github/workflows/*|.github/actions/*|docs/*|*.md|tools/binary_size.sh|tools/build_docs.sh|tools/coverage.sh|tools/filter_coverage.py|tools/filter_coverage_tests.py|tools/lcov_metrics.py|tools/lcov_metrics_tests.py|tools/generate_build_report.py|tools/generate_build_report_tests.py|tools/coverage_instrumentable_targets.py|tools/coverage_instrumentable_targets_tests.py)
                 ;;
               *)
                 smoke_only=false
@@ -288,6 +299,38 @@ jobs:
             echo "bazel-diff produced no affected targets; using full coverage target set."
             emit_targets true no_affected_targets "$FULL_COVERAGE_TARGETS"
             exit 0
+          fi
+
+          # Instrumentability gate. A genuine incremental subset that contains
+          # zero instrumentable C/C++ targets (docs-only, shell/python tooling,
+          # filegroup/flag-only changes) would build an empty LCOV report and
+          # trip check_lcov_report.py's "no executable line data" guard -- a
+          # deterministic red no rerun can clear. Decide from target KINDS via a
+          # bazel query over the affected set (not file-extension heuristics) and
+          # skip only when nothing instrumentable is affected. Fail closed: any
+          # query/classifier error, or any unrecognized rule kind, keeps the
+          # guard by running the bazel_diff subset as before.
+          kind_query_file="$work_dir/affected-query.txt"
+          { printf 'set('; tr '\n' ' ' < "$work_dir/affected.txt"; printf ')\n'; } > "$kind_query_file"
+          label_kind_file="$work_dir/affected-label-kind.txt"
+          if ( cd "$head_dir" && bazelisk query --query_file="$kind_query_file" \
+              --output label_kind --keep_going ) > "$label_kind_file" 2> "$diagnostics_dir/kind-query.log"; then
+            cp "$label_kind_file" "$diagnostics_dir/affected-label-kind.txt"
+            if instrumentable_decision="$(python3 tools/coverage_instrumentable_targets.py \
+                --label-kind-file "$label_kind_file" 2> "$diagnostics_dir/instrumentability.log")"; then
+              cat "$diagnostics_dir/instrumentability.log" || true
+              if [[ "$instrumentable_decision" == "instrumentable_present=false" ]]; then
+                echo "Affected subset has no instrumentable C/C++ targets; skipping PR coverage."
+                emit_targets true no_instrumentable_targets ""
+                exit 0
+              fi
+              echo "Affected subset includes instrumentable C/C++ targets; running coverage."
+            else
+              echo "Instrumentability classifier errored; running coverage on affected subset (guard intact)."
+            fi
+          else
+            echo "Kind query failed; running coverage on affected subset (guard intact)."
+            cat "$diagnostics_dir/kind-query.log" || true
           fi
 
           emit_targets false bazel_diff "$affected"

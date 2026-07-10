@@ -74,6 +74,14 @@ py_test(
 )
 
 py_test(
+    name = "coverage_instrumentable_targets_tests",
+    srcs = [
+        "coverage_instrumentable_targets.py",
+        "coverage_instrumentable_targets_tests.py",
+    ],
+)
+
+py_test(
     name = "filter_coverage_tests",
     srcs = [
         "filter_coverage.py",
