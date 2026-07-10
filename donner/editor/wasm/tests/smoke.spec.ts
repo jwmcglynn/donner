@@ -39,6 +39,10 @@ interface PngImage {
   data: Uint8Array;
 }
 
+interface OpenEditorOptions {
+  wgpuReadbackStats?: boolean;
+}
+
 const kFatalRuntimePattern =
   /Aborted|Assertion failed|RuntimeError|Pthread .* sent an error|getJsObject/i;
 const kSourcePaneWidth = 560;
@@ -254,10 +258,12 @@ async function readLayerPreviewColorStats(page: Page): Promise<CanvasColorStats>
   return readCanvasColorStats(page, region);
 }
 
-async function openEditor(page: Page): Promise<string[]> {
+async function openEditor(page: Page, options: OpenEditorOptions = {}): Promise<string[]> {
   const baseUrl = process.env.DONNER_WASM_BASE_URL || "http://127.0.0.1:8000";
   const url = new URL(baseUrl);
-  url.searchParams.set("wgpuReadbackStats", "1");
+  if (options.wgpuReadbackStats !== false) {
+    url.searchParams.set("wgpuReadbackStats", "1");
+  }
   const fatalMessages: string[] = [];
 
   page.on("console", (message) => {
@@ -288,6 +294,32 @@ async function openEditor(page: Page): Promise<string[]> {
 test("wasm editor starts without runtime abort", async ({ page }) => {
   const fatalMessages = await openEditor(page);
 
+  expect(fatalMessages).toEqual([]);
+});
+
+test("production Geode wasm presents visible editor pixels", async ({ page }) => {
+  test.skip(kBackend !== "geode", "production WebGPU presentation is Geode-specific");
+  const fatalMessages = await openEditor(page, { wgpuReadbackStats: false });
+  const canvasBox = await page.locator("canvas#canvas").boundingBox();
+  expect(canvasBox).not.toBeNull();
+  if (canvasBox === null) {
+    return;
+  }
+
+  await expect
+    .poll(async () => {
+      const stats = await readCanvasColorStats(page, {
+        x: 0,
+        y: 0,
+        width: canvasBox.width,
+        height: canvasBox.height,
+      });
+      return stats.coloredPixels;
+    }, {
+      message: "expected the production WebGPU canvas to present colored document pixels",
+      timeout: 20000,
+    })
+    .toBeGreaterThan(1000);
   expect(fatalMessages).toEqual([]);
 });
 
