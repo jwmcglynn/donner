@@ -1,6 +1,7 @@
 # Historical design documents whose exact model provenance is not recoverable from the document or
 # repository history. New entries are prohibited. Remove an entry when supported metadata is added;
-# the provenance checker rejects stale entries.
+# the provenance checker rejects stale entries and entries outside its code-owned historical
+# baseline.
 docs/design_docs/0001-terminal_image_viewer.md
 docs/design_docs/0002-mcp_test_triage_server.md
 docs/design_docs/0004-external_svg_references.md

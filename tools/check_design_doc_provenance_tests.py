@@ -74,14 +74,25 @@ class DesignDocProvenanceTests(unittest.TestCase):
         )
 
     def test_allowlist_ratchets_historical_debt(self):
-        path = self.write_design("0001-test.md", "**Author:** Codex")
-        relative_path = path.relative_to(self.root).as_posix()
+        relative_path = next(iter(provenance.APPROVED_HISTORICAL_DEBT))
+        path = self.root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# Design: Test\n\n**Author:** Codex\n", encoding="utf-8")
         self.allowlist.write_text(f"{relative_path}\n", encoding="utf-8")
 
         self.assertEqual(provenance.check(self.root, self.allowlist), [])
 
         path.write_text("# Design: Test\n\n**Author:** GPT-5\n", encoding="utf-8")
         self.assertIn("stale provenance-debt entry", provenance.check(self.root, self.allowlist)[0])
+
+    def test_new_allowlist_entry_is_rejected(self):
+        path = self.write_design("0054-new-debt.md", "**Author:** Codex")
+        relative_path = path.relative_to(self.root).as_posix()
+        self.allowlist.write_text(f"{relative_path}\n", encoding="utf-8")
+
+        errors = provenance.check(self.root, self.allowlist)
+
+        self.assertTrue(any("unapproved provenance-debt entry" in error for error in errors))
 
     def test_non_design_markdown_is_ignored(self):
         self.write_design("README.md", "No author metadata")

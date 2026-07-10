@@ -24,6 +24,34 @@ IGNORED_FILENAMES = {
     "developer_template.md",
     "retrospective_template.md",
 }
+APPROVED_HISTORICAL_DEBT = frozenset(
+    {
+        "docs/design_docs/0001-terminal_image_viewer.md",
+        "docs/design_docs/0002-mcp_test_triage_server.md",
+        "docs/design_docs/0004-external_svg_references.md",
+        "docs/design_docs/0006-color_emoji.md",
+        "docs/design_docs/0007-coverage_improvement_plan.md",
+        "docs/design_docs/0008-css_fonts.md",
+        "docs/design_docs/0009-resvg_test_suite_bugs.md",
+        "docs/design_docs/0011-v0_5_release.md",
+        "docs/design_docs/0013-coverage_improvement.md",
+        "docs/design_docs/0014-filter_performance.md",
+        "docs/design_docs/0015-skia_filter_conformance.md",
+        "docs/design_docs/0017-geode_renderer.md",
+        "docs/design_docs/0018-bcr_release.md",
+        "docs/design_docs/0020-editor.md",
+        "docs/design_docs/0021-resvg_feature_gaps.md",
+        "docs/design_docs/0022-resvg_test_suite_upgrade.md",
+        "docs/design_docs/0038-geode_tinyskia_text_parity.md",
+        "docs/design_docs/0041-geode_analytical_aa.md",
+        "docs/design_docs/0042-geode_slug_conformance.md",
+        "docs/design_docs/0043-deterministic_replay_testing.md",
+        "docs/design_docs/0044-2-editor_fluid_canvas_rendering.md",
+        "docs/design_docs/0045-editor_geode_chrome_migration.md",
+        "docs/design_docs/0046-editor_group_layers.md",
+        "docs/design_docs/0047-v0_8_showcase.md",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -98,10 +126,14 @@ def check(root: Path, allowlist_path: Path) -> list[str]:
     violations = collect_violations(root)
     debt = load_debt_allowlist(allowlist_path)
     errors = [
+        f"{path}: unapproved provenance-debt entry; new debt is prohibited"
+        for path in sorted(debt - APPROVED_HISTORICAL_DEBT)
+    ]
+    errors.extend(
         f"{violation.path}: {violation.message}"
         for path, violation in sorted(violations.items())
         if path not in debt
-    ]
+    )
     errors.extend(
         f"{path}: stale provenance-debt entry; remove it from {allowlist_path.relative_to(root)}"
         for path in sorted(debt - violations.keys())
