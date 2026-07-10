@@ -412,16 +412,20 @@ jobs:
     # buffer: RE degradation fast-fails (no local fallback, below) instead of
     # the CPU-capped 2-3 h local re-run that produced the 3.3 h tail.
     timeout-minutes: 60
-    # Admission control on the shared bazel-re2 backend. TWO concurrent
-    # instrumented coverage builds were the measured failure that hit the 60 min
-    # timeout on #808/#809: both farm to one 14-core NativeLink backend on
-    # deep-thought and thrash it ~20x (uncontended median is 2.5 min; two
-    # concurrent = 60 min timeout). See docs/design_docs/0029-2-ci_runtime.md
-    # appendix (2026-07-10). This group serializes coverage-self-hosted across
-    # all of the operator's in-flight PRs so at most one instrumented coverage
-    # build runs at a time; the CI linux-self-hosted lane uses a separate group.
-    # cancel-in-progress: false never kills a running build (a superseded push
-    # to the SAME PR is already cancelled by the workflow-level group).
+    # Admission control on the shared RE path. TWO concurrent instrumented
+    # coverage builds were the measured failure that hit the 60 min timeout on
+    # #808/#809. The coverage lane merges lcov LOCALLY on gha-host1 (8 vcpu
+    # shared by four runners) and executes actions on bazel-re1 (96-vcpu VM on
+    # event-horizon, shared with the priority dev host dev1); N concurrent
+    # coverage jobs thrash both (uncontended median 2.5 min; two concurrent =
+    # 60 min timeout; live 2026-07-10 a smoke subset sat 45+ min under 3-way
+    # contention). See docs/design_docs/0029-2-ci_runtime.md appendix. This
+    # group serializes coverage-self-hosted across all of the operator's
+    # in-flight PRs so at most one instrumented coverage build runs at a time,
+    # which also protects dev1's bazel-re1 latency; the CI linux-self-hosted
+    # lane uses a separate group. cancel-in-progress: false never kills a
+    # running build (a superseded push to the SAME PR is already cancelled by
+    # the workflow-level group).
     concurrency:
       group: donner-selfhosted-coverage-re
       cancel-in-progress: false
