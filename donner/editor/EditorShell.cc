@@ -5543,9 +5543,9 @@ void EditorShell::runFrame() {
 #ifdef __EMSCRIPTEN__
   static const bool kPreferTouchInput =
       EM_ASM_INT({
-        const hasTouchPoints = typeof navigator != = 'undefined' && navigator.maxTouchPoints > 0;
-        const hasCoarsePointer = typeof window != = 'undefined' && typeof window.matchMedia ==
-            = 'function' && window.matchMedia('(pointer: coarse)').matches;
+        const hasTouchPoints = navigator.maxTouchPoints > 0;
+        const hasCoarsePointer =
+            window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
         return hasTouchPoints || hasCoarsePointer ? 1 : 0;
       }) != 0;
 #else
