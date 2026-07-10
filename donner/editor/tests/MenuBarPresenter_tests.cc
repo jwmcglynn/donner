@@ -143,12 +143,14 @@ TEST_F(MenuBarPresenterTest, RendersEachOpenMenuWithoutImplicitActions) {
     EXPECT_FALSE(actions.actualSize) << menuLabel;
     EXPECT_FALSE(actions.toggleSourceFocusMode) << menuLabel;
     EXPECT_FALSE(actions.toggleCompositorDebugPanel) << menuLabel;
+    EXPECT_FALSE(actions.toggleCompositorTileOverlay) << menuLabel;
     EXPECT_FALSE(actions.setPerfOverlayMode) << menuLabel;
   }
 }
 
 TEST(MenuBarPresenterActionsTest, ApplyViewMenuToggleActionsHandlesNullAndIndependentToggles) {
   bool showCompositorDebugPanel = false;
+  bool compositorTileOverlay = false;
   PerfOverlayMode perfOverlayMode = PerfOverlayMode::Off;
 
   ApplyViewMenuToggleActions(MenuBarActions{}, &showCompositorDebugPanel, &perfOverlayMode);
@@ -160,6 +162,11 @@ TEST(MenuBarPresenterActionsTest, ApplyViewMenuToggleActionsHandlesNullAndIndepe
   ApplyViewMenuToggleActions(actions, &showCompositorDebugPanel, nullptr);
   EXPECT_TRUE(showCompositorDebugPanel);
   EXPECT_EQ(perfOverlayMode, PerfOverlayMode::Off);
+
+  actions = MenuBarActions{};
+  actions.toggleCompositorTileOverlay = true;
+  ApplyViewMenuToggleActions(actions, nullptr, nullptr, nullptr, &compositorTileOverlay);
+  EXPECT_TRUE(compositorTileOverlay);
 
   actions = MenuBarActions{};
   actions.setPerfOverlayMode = true;
@@ -268,6 +275,10 @@ TEST(MenuBarPresenterActionsTest, ApplyMenuBarCommandMapsSimpleCommandsToActions
   actions = MenuBarActions{};
   ApplyMenuBarCommand(true, MenuBarCommand::ToggleCompositorDebugPanel, state, &actions);
   EXPECT_TRUE(actions.toggleCompositorDebugPanel);
+
+  actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::ToggleCompositorTileOverlay, state, &actions);
+  EXPECT_TRUE(actions.toggleCompositorTileOverlay);
 
   actions = MenuBarActions{};
   ApplyMenuBarCommand(true, MenuBarCommand::SetPerfOverlayOff, state, &actions);

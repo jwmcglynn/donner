@@ -1657,10 +1657,11 @@ void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
     toggleSourceFocusMode();
   }
   const bool showCompositorDebugPanelBeforeMenu = showCompositorDebugPanel_;
+  const bool compositorTileOverlayBeforeMenu = compositorTileOverlay_;
   const PerfOverlayMode perfOverlayModeBeforeMenu = perfOverlayMode_;
   const bool geometryDebugOverlayBeforeMenu = geometryDebugOverlay_;
   ApplyViewMenuToggleActions(menuActions, &showCompositorDebugPanel_, &perfOverlayMode_,
-                             &geometryDebugOverlay_);
+                             &geometryDebugOverlay_, &compositorTileOverlay_);
   if (geometryDebugOverlay_ != geometryDebugOverlayBeforeMenu) {
     // Push the new overlay state to the render worker and post a render:
     // the worker re-rasterizes every cached segment with the overlay
@@ -1679,6 +1680,7 @@ void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
     window_.wakeEventLoop();
   }
   if (showCompositorDebugPanel_ != showCompositorDebugPanelBeforeMenu ||
+      compositorTileOverlay_ != compositorTileOverlayBeforeMenu ||
       perfOverlayMode_ != perfOverlayModeBeforeMenu ||
       geometryDebugOverlay_ != geometryDebugOverlayBeforeMenu) {
     window_.wakeEventLoop();
@@ -3303,6 +3305,7 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
       .suppressedLayerEntity = presentSuppressedLayerEntity,
       .suppressDragTargetTiles = suppressDragTargetTiles,
       .documentPresentedDirectly = documentPresentedDirectly,
+      .compositorTileOverlay = !contentOnlyCaptureThisFrame_ && compositorTileOverlay_,
       .perfOverlayMode = contentOnlyCaptureThisFrame_ ? PerfOverlayMode::Off : perfOverlayMode_,
   };
   renderPanePresenter_.render(paneState);
@@ -5089,6 +5092,7 @@ void EditorShell::runFrame() {
       .hasTextSelection = selectionIsAllText(),
       .hasSelectableElements = canvasHasSelectableElements(),
       .showCompositorDebugPanel = showCompositorDebugPanel_,
+      .compositorTileOverlay = compositorTileOverlay_,
       .geometryDebugOverlay = geometryDebugOverlay_,
       .perfOverlayMode = perfOverlayMode_,
       .panelLayoutLocked = dockLayoutLocked_,

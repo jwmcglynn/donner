@@ -150,6 +150,25 @@ If a visual frame is wrong but diagnostics look correct, suspect a lower backend
 layer: stale texture handle, bind group cache, command buffer lifetime, or
 framebuffer readback.
 
+### Compositor Tile Overlay
+
+Enable **View > Compositor Tile Overlay** to inspect tile boundaries on the live canvas without
+opening a separate panel. The overlay uses the presenter's exact transformed tile quadrilaterals,
+so its borders remain aligned through pan, zoom, cached transforms, and active drags.
+
+Tile labels begin with `S`, `L`, or `I` for segment, promoted layer, or immediate content, followed
+by the stable tile ID and generation. Teal marks segments, amber marks promoted layers, pink marks
+immediate content, and white marks the active drag target. A muted `cached` suffix identifies a
+metadata-only update that reused an existing texture payload.
+
+Use the overlay to decide whether a defect originates before or after presentation:
+
+- Correct boundaries with wrong pixels suggest texture identity, lifetime, or backend binding.
+- Wrong boundaries suggest compositor metadata or presenter geometry.
+- A boundary that moves separately from selection chrome suggests differing drag baselines.
+
+The overlay is disabled by default and omitted from content-only captures.
+
 ### Unit Test Boundaries
 
 Use focused tests before reaching for full replay tests:

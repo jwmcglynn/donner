@@ -40,6 +40,8 @@ struct MenuBarState {
   /// Current visibility of the Compositor Debug panel (drives the View-menu
   /// checkmark). Off by default.
   bool showCompositorDebugPanel = false;
+  /// Whether compositor tile boundaries and identities are drawn directly over the canvas.
+  bool compositorTileOverlay = false;
   /// Whether the Geode geometry debug overlay (band strips + per-path
   /// bounding-quad triangles) is enabled on the document renderer
   /// (drives the View-menu checkmark). Off by default.
@@ -84,6 +86,8 @@ struct MenuBarActions {
   bool toggleSourceFocusMode = false;
   /// Set when the user toggles the Compositor Debug panel via the View menu.
   bool toggleCompositorDebugPanel = false;
+  /// Set when the user toggles compositor tile boundaries over the canvas.
+  bool toggleCompositorTileOverlay = false;
   /// Set when the user toggles the Geode geometry debug overlay via the
   /// View menu.
   bool toggleGeometryDebugOverlay = false;
@@ -122,6 +126,7 @@ enum class MenuBarCommand {
   ActualSize,
   ToggleSourceFocusMode,
   ToggleCompositorDebugPanel,
+  ToggleCompositorTileOverlay,
   ToggleGeometryDebugOverlay,
   SetPerfOverlayOff,
   SetPerfOverlayFpsPill,
@@ -148,7 +153,8 @@ void ApplyMenuBarCommand(bool activated, MenuBarCommand command, const MenuBarSt
 ///   Optional (may be null) so callers without a document renderer skip it.
 void ApplyViewMenuToggleActions(const MenuBarActions& actions, bool* showCompositorDebugPanel,
                                 PerfOverlayMode* perfOverlayMode,
-                                bool* geometryDebugOverlay = nullptr);
+                                bool* geometryDebugOverlay = nullptr,
+                                bool* compositorTileOverlay = nullptr);
 
 /// Renders the app's top menu bar and reports semantic actions back to the shell.
 class MenuBarPresenter {

@@ -130,6 +130,18 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "editor_sample_catalog_tests",
+    srcs = ["EditorSampleCatalog_tests.cc"],
+    deps = [
+        "//donner/base",
+        "//donner/editor:editor_sample_catalog",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "editor_window_tests",
     srcs = ["EditorWindow_tests.cc"],
     data = [

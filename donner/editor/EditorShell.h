@@ -606,6 +606,8 @@ private:
   /// developer-facing composite-tile diagnostics view, toggled on via the View
   /// menu. The user-facing Layers panel is unrelated and always visible.
   bool showCompositorDebugPanel_ = false;
+  /// Draw compositor tile geometry and identity directly over the canvas.
+  bool compositorTileOverlay_ = false;
   /// Render-pane frame-timing/perf overlay mode. Off by default; set via the
   /// View menu's Performance Overlay submenu.
   PerfOverlayMode perfOverlayMode_ = PerfOverlayMode::Off;

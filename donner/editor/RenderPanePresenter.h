@@ -33,6 +33,7 @@ struct RenderPanePresenterState {
   Entity suppressedLayerEntity = entt::null;
   bool suppressDragTargetTiles = false;
   bool documentPresentedDirectly = false;
+  bool compositorTileOverlay = false;
   PerfOverlayMode perfOverlayMode = PerfOverlayMode::Off;
 };
 

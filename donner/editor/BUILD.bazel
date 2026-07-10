@@ -1229,6 +1229,13 @@ embed_resources(
 )
 
 donner_cc_library(
+    name = "editor_sample_catalog",
+    srcs = ["EditorSampleCatalog.cc"],
+    hdrs = ["EditorSampleCatalog.h"],
+    deps = [":editor_splash"],
+)
+
+donner_cc_library(
     name = "editor_notice_inputs",
     target_compatible_with = select({
         "@platforms//os:macos": [],
