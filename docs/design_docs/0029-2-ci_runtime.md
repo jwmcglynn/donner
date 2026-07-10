@@ -281,9 +281,9 @@ this measurement repeatable. Optional but recommended before starting M1.
 that ran past 60 minutes under queue contention and were cancelled at the job
 timeout (PRs #808, #809). Timeouts were raised 60 -> 120 as a stopgap on
 affected branches by another agent; this appendix targets the root cause so the
-stopgap becomes unnecessary. Aligns with
-[0018: Donner Build, Test and CI Speed P0] (Verification section) and its
-Packet C (shared-backend capacity).
+stopgap becomes unnecessary. Aligns with the project's CI
+build/test speed and stability goals (the P95/P99 targets below) and the
+shared-backend capacity follow-ups.
 
 ### Stated goal (operator, 2026-07-10)
 
@@ -295,8 +295,8 @@ check finishing and INCLUDING queue wait:
 
 Primary metric is end-to-end run completion on that definition; a per-lane view
 is reported alongside it. Speed is the target, never coverage: no test removed,
-no lane skipped, no required check made optional. Governing infra principle
-(operator Packet C): all build/test executes on a shared remote-execution (RE)
+no lane skipped, no required check made optional. Governing infra principle:
+all build/test executes on a shared remote-execution (RE)
 backend; runner hosts stay thin dispatchers; solve tail latency by shifting
 cores to the RE backend, not by multiplying runner hosts. An interactive
 development host has PRIORITY on shared RE capacity: if CI and interactive
@@ -311,20 +311,21 @@ tail latency, stated here rather than eroding that priority.
   run. Execution = job started -> completed. Queue = run created -> job started.
   End-to-end per PR = latest run per workflow at a head SHA, max(job completed)
   - min(run created), non-skipped jobs only.
-- Split at Packet A (#799, "CI: PR lane under 15 minutes", merged 2026-07-06
-  ~19:00Z). Post-A is the state that matters; pre-A kept for contrast.
+- Split at the #799 PR-lane speedup ("CI: PR lane under 15 minutes", merged
+  2026-07-06 ~19:00Z). Post-#799 is the state that matters; pre-#799 kept for
+  contrast.
 
 ### End-to-end per PR (PR events, trigger -> last check, incl queue)
 
 | Window | n (head SHAs) | median | p90 | p95 | p99 | max | >15m | >30m |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| PRE Packet A (06-26..07-06) | 267 | 58.1 | 254 | 688 | 1028 | 1067 | 85% | 72% |
-| POST Packet A (07-06..07-10) | 43 | 15.3 | 71.0 | 270.6 | 304.0 | 306.6 | 51% | 33% |
+| PRE #799 (06-26..07-06) | 267 | 58.1 | 254 | 688 | 1028 | 1067 | 85% | 72% |
+| POST #799 (07-06..07-10) | 43 | 15.3 | 71.0 | 270.6 | 304.0 | 306.6 | 51% | 33% |
 
-All minutes. **Gap to goal (post-A): P95 270.6 vs 15; P99 304 vs 30.** Packet A
-fixed the median (58 -> 15.3); the entire remaining gap is tail.
+All minutes. **Gap to goal (post-#799): P95 270.6 vs 15; P99 304 vs 30.** The
+#799 speedup fixed the median (58 -> 15.3); the entire remaining gap is tail.
 
-### Per-lane wall-clock, POST Packet A (PR events, minutes)
+### Per-lane wall-clock, POST #799 (PR events, minutes)
 
 | Workflow:job | n | exec med | exec p90 | exec p95 | exec max | queue med | queue p90 | queue p95 | queue max |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -366,7 +367,7 @@ contention on the shared path, not a saturated host.
 
 ### Dominant cost: two contention points on the shared RE path (drives P95/P99)
 
-The three worst post-A PR SHAs decompose as queue 232-270 min + a 30-60 min
+The three worst post-#799 PR SHAs decompose as queue 232-270 min + a 30-60 min
 (timeout) exec on a self-hosted lane, e2e 292-307 min. Step-level on the two
 60-min cancellations (runs 29076327250, 29077015684, two different PRs started
 within one second at 11:24:44-45Z): checkout 11s, toolchain sync 10s, LLVM fetch
@@ -374,7 +375,7 @@ within one second at 11:24:44-45Z): checkout 11s, toolchain sync 10s, LLVM fetch
 timeout. Setup is ~1 minute; 100% of the wasted hour is one coverage step that
 never finished.
 
-Uncontended, an incremental `coverage-self-hosted` run is ~2.5 min (post-A
+Uncontended, an incremental `coverage-self-hosted` run is ~2.5 min (post-#799
 median). Under concurrency it blows up ~20x (superlinear) into the timeout. Two
 contention points compound, neither of them raw executor cores (the
 executor is not core-starved):
@@ -405,13 +406,13 @@ PRs (and interactive development) contending, not third-party load.
 
 ### Secondary cost: hosted full //... fallback on infra-file PRs (drives P90)
 
-A cluster of post-A PR SHAs sits at e2e 66-78 min with near-zero queue, exec in
+A cluster of post-#799 PR SHAs sits at e2e 66-78 min with near-zero queue, exec in
 the hosted `CI:linux` (66-77 min) or hosted `Co:build` (71 min). These are PRs
 touching build-graph infra (`MODULE.bazel`, `WORKSPACE*`, `.bazelrc`,
 `build_defs/*`, `.github/workflows/*`, `.github/actions/*`): `determine-targets`
 correctly forces a full `//...`, the self-hosted lanes skip by design (gate
 requires `fallback != 'true'`), and the hosted lane runs the whole graph on
-GitHub's disk cache. About 19% of post-A PR SHAs. Separate population from the
+GitHub's disk cache. About 19% of post-#799 PR SHAs. Separate population from the
 self-hosted tail; matters for P90, not the P95/P99 gap.
 
 ### Not significant (ruled out with numbers)
@@ -422,8 +423,8 @@ self-hosted tail; matters for P90, not the P95/P99 gap.
 - Raw executor cores: the shared RE backend is not core-starved; the crawl is
   contention (runner-local merge on limited cores + overcommit against
   interactive development), not an undersized executor.
-- Packet A incremental scoping works: coverage-self-hosted exec median fell
-  17 -> 2.5 min pre->post Packet A.
+- The #799 incremental scoping works: coverage-self-hosted exec median fell
+  17 -> 2.5 min pre->post #799.
 - macos-self-hosted: exec p95 4.1 min. Healthy; leave unchanged.
 
 ### Ranked levers toward the P95<=15 / P99<=30 goal
@@ -446,10 +447,10 @@ self-hosted tail; matters for P90, not the P95/P99 gap.
    coverage merge runs locally on the runner host's limited cores. Either move
    the profdata/lcov merge into a bazel-executed (RE) action, or scope
    `--remote_download_*` so only the merged report returns, keeping the runner
-   host thin per the Packet C principle. Needs care to preserve the exact
+   host thin per that principle. Needs care to preserve the exact
    Codecov output; not attempted here.
-3. **RE-vs-interactive capacity rebalance on the shared build host (operator,
-   Packet C; RECOMMEND, do not self-apply while CI is in flight).** The shared
+3. **RE-vs-interactive capacity rebalance on the shared build host (operator;
+   RECOMMEND, do not self-apply while CI is in flight).** The shared
    host runs at low average load, but the RE backend and the interactive host
    are provisioned to overcommit it. Options, each reversible via host config
    but each requiring an interactive-latency measurement under CI load
@@ -472,7 +473,7 @@ With lever 1 the lanes no longer oversubscribe the shared RE backend, so
 uncontended exec
 stays well under 60 min and the raise is unnecessary; the 60 min bound stays as
 a fast-fail on a genuinely wedged endpoint (paired with
-`remote_local_fallback=false`), matching the 0018 end-state.
+`remote_local_fallback=false`), matching the intended CI end-state.
 
 ### Projected P95/P99 after lever 1 (and required for the goal)
 
