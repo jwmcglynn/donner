@@ -569,6 +569,18 @@ void AsyncRenderer::workerLoop() {
     compositor_->setTightBoundedSegmentsEnabled(
         tightBoundedSegments_.load(std::memory_order_acquire));
 
+    // Push the Geode geometry debug overlay flag into the document
+    // renderer. Applied unconditionally (cheap bool store, and it must
+    // reach a renderer that changed under us); on a flip, every cached
+    // segment bitmap is stale (the overlay draws into rasterized
+    // tiles), so force a full re-raster.
+    const bool geometryDebugOverlay = geometryDebugOverlay_.load(std::memory_order_acquire);
+    requestRenderer.setDebugGeometryOverlay(geometryDebugOverlay);
+    if (geometryDebugOverlay != appliedGeometryDebugOverlay_) {
+      appliedGeometryDebugOverlay_ = geometryDebugOverlay;
+      compositor_->resetAllLayers();
+    }
+
     // Keep the compositor hint in ActiveDrag across mouse-up so the
     // layer/segment caches survive quick release->drag-again cycles, but
     // only skip the main-renderer compose while an actual drag request is

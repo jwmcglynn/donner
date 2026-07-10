@@ -586,6 +586,12 @@ private:
   /// Render-pane frame-timing/perf overlay mode. Off by default; set via the
   /// View menu's Performance Overlay submenu.
   PerfOverlayMode perfOverlayMode_ = PerfOverlayMode::Off;
+  /// Whether the Geode geometry debug overlay is enabled on the document
+  /// renderer (band strips + per-path bounding-quad triangles drawn into
+  /// rasterized tiles). Off by default; toggled via the View menu. Applied
+  /// to the render worker through
+  /// `AsyncRenderer::setGeometryDebugOverlayEnabled`.
+  bool geometryDebugOverlay_ = false;
 
   ImFont* uiFontBold_ = nullptr;
   ImFont* codeFont_ = nullptr;

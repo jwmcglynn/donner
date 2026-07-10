@@ -590,3 +590,27 @@ donner_multi_transitioned_test(
     dep = ":geode_embed_tests_impl",
     renderer_backend = "geode",
 )
+
+# Geode geometry debug overlay (RendererGeode::setDebugGeometryOverlay):
+# default-off contract, overlay-on rendering, and clean toggling.
+donner_cc_test(
+    name = "geode_debug_overlay_tests_impl",
+    srcs = ["tests/GeodeDebugOverlay_tests.cc"],
+    target_compatible_with = _GEODE_ONLY,
+    deps = [
+        ":geode_device",
+        "//donner/base",
+        "//donner/base:gtest_timeout_main",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer:renderer_geode",
+        "//donner/svg/renderer:renderer_interface",
+    ],
+)
+
+donner_multi_transitioned_test(
+    name = "geode_debug_overlay_tests",
+    testonly = 1,
+    dep = ":geode_debug_overlay_tests_impl",
+    renderer_backend = "geode",
+)

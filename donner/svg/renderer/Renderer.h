@@ -261,6 +261,13 @@ public:
   /// Creates an offscreen renderer of the active backend type.
   [[nodiscard]] std::unique_ptr<RendererInterface> createOffscreenInstance() const override;
 
+  /// Forwards \ref RendererInterface::setDebugGeometryOverlay to the
+  /// active backend (no-op for backends without a debug overlay).
+  void setDebugGeometryOverlay(bool enabled) override;
+
+  /// Whether the active backend's geometry debug overlay is enabled.
+  [[nodiscard]] bool debugGeometryOverlay() const override;
+
   /**
    * Saves the last rendered frame to a PNG file.
    *

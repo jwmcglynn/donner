@@ -40,6 +40,10 @@ struct MenuBarState {
   /// Current visibility of the Compositor Debug panel (drives the View-menu
   /// checkmark). Off by default.
   bool showCompositorDebugPanel = false;
+  /// Whether the Geode geometry debug overlay (band strips + per-path
+  /// bounding-quad triangles) is enabled on the document renderer
+  /// (drives the View-menu checkmark). Off by default.
+  bool geometryDebugOverlay = false;
   /// Current render-pane performance overlay mode (drives the View-menu
   /// checkmarks). Off by default.
   PerfOverlayMode perfOverlayMode = PerfOverlayMode::Off;
@@ -80,6 +84,9 @@ struct MenuBarActions {
   bool toggleSourceFocusMode = false;
   /// Set when the user toggles the Compositor Debug panel via the View menu.
   bool toggleCompositorDebugPanel = false;
+  /// Set when the user toggles the Geode geometry debug overlay via the
+  /// View menu.
+  bool toggleGeometryDebugOverlay = false;
   /// Set when the user picks a performance overlay mode via the View menu.
   bool setPerfOverlayMode = false;
   /// Requested performance overlay mode; meaningful only while
@@ -115,6 +122,7 @@ enum class MenuBarCommand {
   ActualSize,
   ToggleSourceFocusMode,
   ToggleCompositorDebugPanel,
+  ToggleGeometryDebugOverlay,
   SetPerfOverlayOff,
   SetPerfOverlayFpsPill,
   SetPerfOverlayFullGraph,
@@ -136,8 +144,11 @@ void ApplyMenuBarCommand(bool activated, MenuBarCommand command, const MenuBarSt
 /// @param actions Edge-triggered menu actions from \ref MenuBarPresenter::render.
 /// @param showCompositorDebugPanel Current Compositor Debug panel visibility.
 /// @param perfOverlayMode Current performance overlay mode.
+/// @param geometryDebugOverlay Current Geode geometry debug overlay state.
+///   Optional (may be null) so callers without a document renderer skip it.
 void ApplyViewMenuToggleActions(const MenuBarActions& actions, bool* showCompositorDebugPanel,
-                                PerfOverlayMode* perfOverlayMode);
+                                PerfOverlayMode* perfOverlayMode,
+                                bool* geometryDebugOverlay = nullptr);
 
 /// Renders the app's top menu bar and reports semantic actions back to the shell.
 class MenuBarPresenter {
