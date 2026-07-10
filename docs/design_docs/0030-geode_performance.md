@@ -744,10 +744,10 @@ including one `takeSnapshot()` readback per frame.
 
 | Fixture (frame 2, unchanged) | draws | pathEncodes | bufferCreates | bindgroupCreates | bufferWrites | bufferWriteBytes | textureWriteBytes |
 |---|---|---|---|---|---|---|---|
-| SimpleShapes (3 fills)  | 3   | 0 | 9  | 3   | 24   | 4,128     | 0 |
-| Moderate (layer + grad) | 3   | 0 | 18 | 3   | 17   | 5,372     | 0 |
-| lion.svg (132 paths)    | 132 | 0 | 12 | 132 | 1,056 | 172,776   | 0 |
-| Ghostscript_Tiger (304 paths) | 304 | 0 | 20 | 304 | 2,432 | 1,473,888 | 0 |
+| SimpleShapes (3 fills)  | 3   | 0 | 1 | 3   | 24   | 4,128     | 0 |
+| Moderate (layer + grad) | 3   | 0 | 2 | 3   | 17   | 5,372     | 0 |
+| lion.svg (132 paths)    | 132 | 0 | 1 | 132 | 1,056 | 172,776   | 0 |
+| Ghostscript_Tiger (304 paths) | 304 | 0 | 4 | 304 | 2,432 | 1,473,888 | 0 |
 
 First-frame values differ only in `pathEncodes` (one per path: Lion 132,
 Tiger encodes during frame 1) and `textureCreates` (render target
@@ -771,52 +771,47 @@ allocation); the upload traffic is identical on frame 1 and frame N.
    `dev.createBindGroup` for bindings that are byte-identical to the
    previous frame's. This is the M1.f.2 target
    (`bindgroupCreates <= pipelines`), still open.
-3. **The frame encoder and its arenas are recreated every frame.**
-   `RendererGeode::beginFrame` constructs a fresh `GeoEncoder`
-   (`RendererGeode.cc`, "Per-frame resources, recreated in beginFrame"),
-   so all bump arenas start at zero capacity and re-grow: steady-state
-   `bufferCreates` is 9-20 per frame (Lion 12, Tiger 20; Moderate 18
-   because layer push/pop spawns additional encoders) against the M1
-   target of 0. Every one of those is a `createBuffer` driver allocation
-   plus retirement of last frame's buffer - allocation churn that shows
-   up as frame-time jitter.
+3. **Arena buffers are pooled across frames (`GeodeBufferPool`).**
+   `RendererGeode::beginFrame` constructs a fresh `GeoEncoder` per frame
+   (and per layer / filter / mask push), but each encoder's bump-arena
+   buffers are recycled through a usage+label-keyed pool on
+   `RendererGeode::Impl` (companion to the M4.2 texture pool), so
+   steady-state `bufferCreates` is 1-4 per frame instead of one
+   `createBuffer` per arena per encoder. The residual creates are the
+   `takeSnapshot` readback buffer and the per-blit uniform buffers
+   below. Guarded by the `bufferCreates` ceilings in the
+   `*_NoDirtyPath_ZeroEncodes` tests.
 4. **Per-blit uniform buffers.** `GeodeTextureEncoder::drawTexturedQuad`
    creates a fresh uniform buffer per blit (`createBuffer` +
    `writeBuffer`), contributing to the per-frame `bufferCreates` floor
    on any frame with layer composites or snapshots.
-5. **Dead per-encode work.** `GeodePathEncoder::encode` still builds the
-   legacy per-band quad list `EncodedPath::vertices` (6 vertices per
-   band) for the deleted 4-sample alpha-coverage gradient/mask shaders
-   (0041). No draw path consumes it: the analytic fill, gradient, and
-   mask paths all draw `quadVertices` (one bounding quad per path). It
-   costs allocation + fill on every encode and idle bytes in every
-   cached `EncodedPath`.
-6. **Texture uploads are already clean.** `textureWriteBytes == 0` on all
+5. **Texture uploads are already clean.** `textureWriteBytes == 0` on all
    vector fixtures, and frame-2 `textureCreates == 0` (M4). Image decode
    uploads happen once, off the steady-state path.
-7. **`submits == 2` steady-state** is frame + snapshot readback; the M3
+6. **`submits == 2` steady-state** is frame + snapshot readback; the M3
    target of 1 holds for the render itself.
+7. **Per-encode output is lean.** `GeodePathEncoder::encode` emits only
+   what the analytic dual-ray pipeline draws: band/curve/grid SSBO data
+   plus the single whole-path bounding quad (`quadVertices`). The
+   `GeodePathEncoder.EncodeTimingProbe` test prints the per-encode
+   median for a many-band serpentine fixture (~181 us) as a
+   non-asserting reference number.
 
-### Cost ranking (highest first)
+### Cost ranking of remaining work (highest first)
 
 1. Steady-state GPU re-upload of memoized path data (item 1):
    O(paths) writeBuffer calls and O(scene bytes) transfer per static
    frame. Fix direction: persistent GPU residence for cached
    `EncodedPath` data (per-entity arena slots alongside
-   `GeodePathCacheComponent`), or at minimum persistent arenas plus
-   skip-write when content is unchanged.
+   `GeodePathCacheComponent`), or at minimum skip-write when content
+   and arena placement are unchanged.
 2. Per-draw bind-group creation (item 2): O(paths) driver-object
    creations per frame. Unlocked by 1 (stable buffer bindings make
-   bind groups reusable).
-3. Per-frame encoder/arena recreation (item 3): O(arenas) buffer
-   creates + retires per frame; the direct source of allocation
-   jitter. Fix direction: arenas owned by `RendererGeode::Impl` or
-   `GeodeDevice`, handed to each frame's encoders.
-4. Legacy `EncodedPath::vertices` build (item 5): O(bands) CPU fill +
-   allocation per encode, pure dead work.
-5. Per-blit uniform creation (item 4): small counts on typical scenes.
+   bind groups reusable / cacheable).
+3. Per-blit uniform creation (item 4): small counts on typical scenes;
+   route through the arena + pool machinery.
 
 Counters `bufferWrites` / `bufferWriteBytes` / `textureWriteBytes` are
-the regression signal for items 1 and 6; `bufferCreates` for item 3;
-`bindgroupCreates` for item 2. Ceilings are asserted in
-`GeodePerf_tests.cc` and tighten as each fix lands.
+the regression signal for items 1 and 5; `bufferCreates` for item 3
+(pooled, ceilings asserted); `bindgroupCreates` for item 2. Ceilings
+are asserted in `GeodePerf_tests.cc` and tighten as each fix lands.

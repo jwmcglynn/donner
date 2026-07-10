@@ -449,6 +449,10 @@ TEST_F(GeodePerfTest, SimpleShapes_NoDirtyPath_ZeroEncodes) {
   // cache. countPathEncode() is only called on cache miss.
   EXPECT_EQ(c.pathEncodes, 0u) << "Cache miss on an unchanged second render: one or more paths "
                                   "re-encoded despite zero geometry changes.";
+  // M1 (GeodeBufferPool): steady-state arena buffers are recycled across
+  // frames. The remaining create is the takeSnapshot readback buffer.
+  EXPECT_LE(c.bufferCreates, 2u) << "Arena buffer churn on an unchanged second render: the "
+                                    "cross-frame GeodeBufferPool should serve all arena growth.";
 }
 
 TEST_F(GeodePerfTest, Moderate_NoDirtyPath_ZeroEncodes) {
@@ -463,6 +467,9 @@ TEST_F(GeodePerfTest, Moderate_NoDirtyPath_ZeroEncodes) {
   // `fillPathLinearGradient` (rounded-rect path).
   EXPECT_EQ(c.pathEncodes, 0u) << "Cache miss on unchanged second render: fill or gradient path "
                                   "re-encoded despite zero geometry changes.";
+  // M1 (GeodeBufferPool): readback + one per-blit uniform buffer remain
+  // (layer composite blits create a fresh uniform buffer per call).
+  EXPECT_LE(c.bufferCreates, 4u) << "Arena buffer churn on an unchanged second render.";
 }
 
 TEST_F(GeodePerfTest, Lion_NoDirtyPath_ZeroEncodes) {
@@ -485,6 +492,11 @@ TEST_F(GeodePerfTest, Lion_NoDirtyPath_ZeroEncodes) {
   // is the whole point of the cache.
   EXPECT_EQ(c.pathEncodes, 0u) << "Cache miss on unchanged second render of lion.svg: "
                                   "re-encoded paths despite zero geometry changes.";
+  // M1 (GeodeBufferPool): pre-pool this was 12 creates/frame (arena
+  // re-growth in the per-frame encoder); pooled steady state is the
+  // readback buffer only.
+  EXPECT_LE(c.bufferCreates, 3u)
+      << "Arena buffer churn on an unchanged second render of lion.svg.";
 }
 
 TEST_F(GeodePerfTest, GhostscriptTiger_NoDirtyPath_ZeroEncodes) {
@@ -507,6 +519,11 @@ TEST_F(GeodePerfTest, GhostscriptTiger_NoDirtyPath_ZeroEncodes) {
   EXPECT_EQ(c.pathEncodes, 0u)
       << "Cache miss on unchanged second render of Ghostscript_Tiger.svg: "
          "fill- or stroke-slot cache missed despite zero geometry changes.";
+  // M1 (GeodeBufferPool): pre-pool this was 20 creates/frame. Observed
+  // pooled steady state is 4 (readback + residual arena churn); assert
+  // with a little margin.
+  EXPECT_LE(c.bufferCreates, 8u)
+      << "Arena buffer churn on an unchanged second render of Ghostscript_Tiger.svg.";
 }
 
 // ---------------------------------------------------------------------------

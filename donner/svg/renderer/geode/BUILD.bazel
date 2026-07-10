@@ -502,7 +502,10 @@ donner_cc_library(
 donner_cc_library(
     name = "geo_encoder",
     srcs = ["GeoEncoder.cc"],
-    hdrs = ["GeoEncoder.h"],
+    hdrs = [
+        "GeoEncoder.h",
+        "GeodeBufferPool.h",
+    ],
     target_compatible_with = _GEODE_ONLY,
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [

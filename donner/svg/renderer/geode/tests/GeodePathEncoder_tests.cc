@@ -2,10 +2,56 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <vector>
+
 #include "donner/base/FillRule.h"
 #include "donner/base/Path.h"
 
 namespace donner::geode {
+
+/// Non-asserting encode-cost probe: times `GeodePathEncoder::encode` on a
+/// synthetic many-curve, many-band path and prints the per-encode median
+/// to stderr. Wall-clock budgets are not CI-stable, so this only reports;
+/// the durable regression signal for encode work is `pathEncodes` in
+/// `GeodePerf_tests.cc`.
+TEST(GeodePathEncoder, EncodeTimingProbe) {
+  // Tall serpentine path: ~200 cubic segments over 2000px of height, so
+  // the encode runs the full pipeline (cubic lowering, dual monotonic
+  // splits, curve extraction, banding) across many bands (~63 at 32px).
+  PathBuilder builder;
+  builder.moveTo(Vector2d(0, 0));
+  for (int i = 0; i < 200; ++i) {
+    const double y = static_cast<double>(i) * 10.0;
+    const double x = (i % 2 == 0) ? 200.0 : 0.0;
+    builder.curveTo(Vector2d(x + 50.0, y), Vector2d(x - 50.0, y + 5.0), Vector2d(x, y + 10.0));
+  }
+  builder.closePath();
+  const Path path = builder.build();
+
+  constexpr int kIterations = 200;
+  std::vector<double> samplesUs;
+  samplesUs.reserve(kIterations);
+  size_t sink = 0;  // Defeat dead-code elimination.
+  for (int i = 0; i < kIterations; ++i) {
+    const auto start = std::chrono::steady_clock::now();
+    const EncodedPath iterEncoded = GeodePathEncoder::encode(path, FillRule::NonZero);
+    const auto end = std::chrono::steady_clock::now();
+    sink += iterEncoded.curves.size() + iterEncoded.quadVertices.size();
+    samplesUs.push_back(std::chrono::duration<double, std::micro>(end - start).count());
+  }
+  std::sort(samplesUs.begin(), samplesUs.end());
+  const EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
+  std::fprintf(stderr,
+               "[GeodePathEncoder] EncodeTimingProbe median=%.1fus p90=%.1fus (bands=%zu "
+               "vBands=%zu curves=%zu vCurves=%zu sink=%zu)\n",
+               samplesUs[samplesUs.size() / 2], samplesUs[(samplesUs.size() * 9) / 10],
+               encoded.bands.size(), encoded.vBands.size(), encoded.curves.size(),
+               encoded.vCurves.size(), sink);
+  EXPECT_FALSE(encoded.empty());
+}
 
 TEST(GeodePathEncoder, EmptyPath) {
   Path path;
@@ -13,7 +59,6 @@ TEST(GeodePathEncoder, EmptyPath) {
   EXPECT_TRUE(encoded.empty());
   EXPECT_TRUE(encoded.curves.empty());
   EXPECT_TRUE(encoded.bands.empty());
-  EXPECT_TRUE(encoded.vertices.empty());
 }
 
 TEST(GeodePathEncoder, SimpleTriangle) {
@@ -33,8 +78,8 @@ TEST(GeodePathEncoder, SimpleTriangle) {
   // Should have at least 1 band.
   EXPECT_GE(encoded.bands.size(), 1u);
 
-  // Each band produces 6 vertices (2 triangles).
-  EXPECT_EQ(encoded.vertices.size(), encoded.bands.size() * 6);
+  // The whole path draws one bounding quad (6 vertices = 2 triangles).
+  EXPECT_EQ(encoded.quadVertices.size(), 6u);
 
   // Bounds should encompass the triangle.
   EXPECT_LE(encoded.pathBounds.topLeft.x, 0.0f);
@@ -139,8 +184,10 @@ TEST(GeodePathEncoder, VertexNormalsPointOutward) {
   EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
   EXPECT_FALSE(encoded.empty());
 
-  // Each band has 6 vertices. Verify normals are non-zero and point in expected directions.
-  for (const auto& v : encoded.vertices) {
+  // The path bounding quad has 6 vertices. Verify normals are non-zero
+  // and point in expected directions.
+  EXPECT_EQ(encoded.quadVertices.size(), 6u);
+  for (const auto& v : encoded.quadVertices) {
     const float normalLen = std::sqrt(v.normalX * v.normalX + v.normalY * v.normalY);
     EXPECT_GT(normalLen, 0.0f) << "Vertex normals should be non-zero";
   }

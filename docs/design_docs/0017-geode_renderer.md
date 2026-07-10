@@ -792,6 +792,33 @@ struct GeodeLayerStack {
 - **Patterns:** Render the pattern tile into a texture, then use it as a repeating shader in
   subsequent draws.
 
+### Debug and Diagnostics
+
+Geode ships a geometry debug overlay for inspecting the banded geometry
+it emits per draw:
+
+- `RendererGeode::setDebugGeometryOverlay(bool)` (surfaced as a
+  default-no-op virtual on `RendererInterface` and forwarded by the
+  `svg::Renderer` facade) makes every path draw additionally outline its
+  Slug band decomposition: horizontal band strips (cyan), vertical band
+  strips (yellow), and the whole-path bounding quad with its triangle
+  diagonal (magenta) - the two triangles Geode actually rasterizes per
+  path. Overlay geometry renders as hairline EvenOdd rings through the
+  existing fill pipeline; no dedicated shaders or pipelines exist for it.
+- Default off. When off, rendering is byte-identical to a build without
+  the feature (asserted by `GeodeDebugOverlay_tests` and the geode
+  goldens); the only cost is one boolean test per draw. `<use>`
+  instancing is disabled while the overlay is on so overlay draws stay
+  in paint order.
+- The editor exposes it as View > Geometry Debug Overlay. The flag rides
+  `AsyncRenderer`'s atomic-push channel into the render worker's
+  document renderer, and a flip resets all compositor layers so cached
+  segment bitmaps re-rasterize with the new state.
+
+Per-frame instrumentation (`GeodeCounters`: resource creates, submits,
+draw calls, pipeline switches, writeBuffer/writeTexture call and byte
+volumes) is owned by design doc 0030 (geode_performance).
+
 ### ECS Integration for GPU Resource Caching
 
 Geode introduces ECS components for GPU resource lifetime management:
