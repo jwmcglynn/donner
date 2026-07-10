@@ -447,6 +447,22 @@ jobs:
     # it at 60 min for buffer while a wedged/degraded RE endpoint still
     # fast-fails instead of silently tailing for hours.
     timeout-minutes: 60
+    # Admission control on the shared bazel-re2 backend. The Linux self-hosted
+    # lanes are thin RE clients: their build/test actions all execute on ONE
+    # 14-core NativeLink backend on deep-thought. Two-plus concurrent operator
+    # PRs oversubscribe it ~20x and crawl into the 60 min timeout (measured
+    # 2026-07-10; see docs/design_docs/0029-2-ci_runtime.md appendix). This
+    # per-lane group serializes linux-self-hosted across all of the operator's
+    # in-flight PRs so at most one runs at a time; the sibling
+    # coverage-self-hosted lane has its own group, so a Linux build and a
+    # coverage build may overlap but two of the same heavy lane never do.
+    # cancel-in-progress: false never kills a running build (a superseded push
+    # to the SAME PR is already cancelled by the workflow-level concurrency
+    # group). Loosen to a single shared group only if 1 linux + 1 coverage is
+    # still shown to oversubscribe the backend.
+    concurrency:
+      group: donner-selfhosted-linux-re
+      cancel-in-progress: false
     env:
       # The runner host may add the LAN Bazel cache from its home rc. Use that
       # acceleration when healthy, but do NOT fall back to local execution when
