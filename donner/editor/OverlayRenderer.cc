@@ -722,7 +722,7 @@ SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
                       AppendChromeItemsOptions{.includePathPointChrome = false});
   }
 
-  if (selection.empty()) {
+  if (selection.empty() || selectionDetail == SelectionChromeDetail::EditingChromeOnly) {
     return snapshot;
   }
 
@@ -732,6 +732,31 @@ SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
   const bool combinedBoundsOnly = selectionDetail == SelectionChromeDetail::CombinedBoundsOnly;
   const bool pathOutlinesOnly = selectionDetail == SelectionChromeDetail::PathOutlinesOnly;
   const bool includePathPointChrome = pathOutlinesOnly;
+
+  // A live select gesture already carries immutable start bounds and the
+  // exact current document transform. Build its lightweight bounds chrome
+  // directly from that state instead of traversing selected geometry while
+  // the async renderer may hold the document. Besides avoiding contention,
+  // this keeps converted text (one path per glyph) at constant overlay cost.
+  if (combinedBoundsOnly && activeBoundsPreview.has_value()) {
+    const auto corners = TransformedBoxCorners(activeBoundsPreview->startBoundsDoc,
+                                               activeBoundsPreview->documentFromStartDocument);
+    std::array<Vector2d, 4> representedCorners;
+    for (std::size_t i = 0; i < corners.size(); ++i) {
+      representedCorners[i] = representedDocumentFromLiveDocument.transformPosition(corners[i]);
+    }
+    snapshot.orientedBoundsDoc = CullOrientedBox(
+        SelectionChromeSnapshot::OrientedBox{.cornersDoc = representedCorners}, cullRectDoc);
+    if (snapshot.orientedBoundsDoc.has_value()) {
+      snapshot.handleBoxesDoc.reserve(representedCorners.size());
+      for (const Vector2d& corner : representedCorners) {
+        snapshot.handleBoxesDoc.push_back(HandleBoxForCorner(corner, scale));
+      }
+      CullBoxesInPlace(&snapshot.handleBoxesDoc, cullRectDoc);
+    }
+    return snapshot;
+  }
+
   const std::optional<Box2d> combinedSelectionBounds = AppendChromeItems(
       selection, cullRectDoc, &snapshot.paths, &snapshot.aabbsDoc, &snapshot.pathAnchorBoxesDoc,
       &snapshot.pathControlLinesDoc, &snapshot.pathControlPointBoxesDoc, &snapshot.textBaselinesDoc,

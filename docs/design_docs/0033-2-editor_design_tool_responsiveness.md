@@ -3,7 +3,7 @@
 **Status:** Implementing (M1, M2, M4, M5, M7, M8, M9 landed; M3/M6/M10 open)
 **Author:** Claude Opus 4.7 (1M context)
 **Created:** 2026-05-12
-**Last updated:** 2026-05-13
+**Last updated:** 2026-07-10
 
 ## Summary
 
@@ -95,6 +95,32 @@ re-running the long-form instrumentation cycle that this round needed.
 | M8 — Click→drag handoff doesn't wait for raster | ✅ Cache-backed re-drag fast path bypasses `!isBusy()`; full hitTest path still gated                                                              | (M8 re-attempt)                                |
 | M9 — Layer-set hysteresis                       | ✅ `demoteEntity` queues for `kDemotionHysteresisFrames` (30, ~0.5s @ 60Hz); re-promote inside the window cancels the demote without segment churn | (this commit)                                  |
 | M10 — Operator perf validation                  | ⏳ Open                                                                                                                                            | —                                              |
+
+## Interaction-path audit (2026-07-10)
+
+A v0.8 follow-up profiled text entry, dragging converted text outlines, and source-pane reveal.
+These paths extended the original compositor-focused design with three UI-thread invariants:
+
+1. **Key input is frame-coalesced.** `EditorShell` filters and batches ImGui's queued codepoints,
+   and `TextTool` performs one DOM synchronization per frame. Point-text caret placement issues one
+   adjacent-character geometry query instead of querying every glyph after each key; exact character
+   widths remain for box-text wrapping.
+2. **Gesture chrome owns its bounds.** Active moves and transforms derive the displayed selection
+   bounds from the gesture start bounds plus the current transform. The shell does not walk outlined
+   glyph paths or refresh generic selection bounds on every move. A cached tile with a live entity
+   may match only that entity; legacy `isDragTarget` metadata is a fallback only for entity-less
+   tiles.
+3. **Source reveal cannot enlarge the raster workload.** Pane-bounded rasterization is selected only
+   when it reduces pixel area, unless a backend dimension limit forces it. Pane resizing preserves
+   the document point at pane center. CSS source analysis parses an immutable snapshot on an isolated
+   worker, validates generation and source version on return, and resolves deduplicated locators in a
+   single live-document traversal.
+
+The source-reveal replay improved from a 110.6 ms first visible source frame and a `1718x2234`
+bounded raster to 8.5 ms for reveal, 11.3 ms for annotation application, and about 4.0 ms steady
+state. The raster remains `1784x1024` across viewport, document, compositor, and presented tile, with
+no document-canvas commits. These measurements are diagnostics, not timing assertions in unit tests;
+structural invariants are pinned by focused tests and replay readback.
 
 ### Post-implementation stabilization (debugging arc, folded into `ab802105`)
 

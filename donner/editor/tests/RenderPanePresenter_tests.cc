@@ -155,6 +155,23 @@ TEST(RenderPanePresenterTest, ActiveDragPreviewMatchingHandlesPrimaryAndMissingP
   EXPECT_TRUE(TileMatchesActiveDragPreview(tile, activeDrag));
 }
 
+TEST(RenderPanePresenterTest, StaleDragTargetMetadataDoesNotMatchDifferentLiveEntity) {
+  GlTextureCache::TileView tile;
+  tile.texture = static_cast<ImTextureID>(static_cast<std::uintptr_t>(7));
+  tile.kind = RenderResult::CompositedTile::Kind::Layer;
+  tile.layerEntity = static_cast<Entity>(7);
+  tile.isDragTarget = true;
+
+  const SelectTool::ActiveDragPreview activeDrag{
+      .entity = static_cast<Entity>(42),
+      .translation = Vector2d(8.0, 0.0),
+      .documentFromCachedDocument = Transform2d::Translate(Vector2d(8.0, 0.0)),
+      .dragGeneration = 5,
+  };
+
+  EXPECT_FALSE(TileMatchesActiveDragPreview(tile, activeDrag));
+}
+
 TEST(RenderPanePresenterTest, OverviewTilesAreOnlyPresentedUnderViewportBoundedActiveTiles) {
   GlTextureCache::TileView overviewTile;
   overviewTile.texture = static_cast<ImTextureID>(static_cast<std::uintptr_t>(7));

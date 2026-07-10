@@ -395,7 +395,7 @@ void TextTool::beginEditingSessionForExisting(EditorApp& editor, const svg::SVGT
   pointFrameFadeStart_.reset();
   pointFramePointerAnchorDoc_ =
       boxText_.has_value() ? std::nullopt : std::make_optional(documentPoint);
-  cachedCharWidths_ = measureCharacterWidths(editor);
+  cachedCharWidths_ = boxText_.has_value() ? measureCharacterWidths(editor) : std::vector<double>{};
   caretIndex_ = caretIndexAtPoint(documentPoint).value_or(content_.size());
   resetCaretBlinkPhase();
 
@@ -577,11 +577,29 @@ void TextTool::commitFrameResize(EditorApp& editor) {
 }
 
 void TextTool::insertCodepoint(EditorApp& editor, char32_t codepoint) {
-  if (state_ != State::Editing || !IsInsertableCodepoint(codepoint)) {
+  const std::array<char32_t, 1> codepoints{codepoint};
+  insertCodepoints(editor, codepoints);
+}
+
+void TextTool::insertCodepoints(EditorApp& editor, std::span<const char32_t> codepoints) {
+  if (state_ != State::Editing || codepoints.empty()) {
     return;
   }
-  content_.insert(content_.begin() + static_cast<std::ptrdiff_t>(caretIndex_), codepoint);
-  ++caretIndex_;
+
+  std::u32string inserted;
+  inserted.reserve(codepoints.size());
+  for (const char32_t codepoint : codepoints) {
+    if (IsInsertableCodepoint(codepoint)) {
+      inserted.push_back(codepoint);
+    }
+  }
+  if (inserted.empty()) {
+    return;
+  }
+
+  content_.insert(content_.begin() + static_cast<std::ptrdiff_t>(caretIndex_), inserted.begin(),
+                  inserted.end());
+  caretIndex_ += inserted.size();
   resetCaretBlinkPhase();
   hidePointFrameAfterTyping();
   syncContentToDom(editor);
@@ -821,18 +839,22 @@ void TextTool::syncContentToDom(EditorApp& editor) {
     editor.flushFrame();
   };
 
-  // First pass with the current cached widths; then re-measure (used by both
-  // caret math and wrapping) and re-wrap once if the new content changed the
-  // break points (box text only).
+  // Point text does not wrap, and its caret can query the one adjacent glyph
+  // directly. Avoid the old O(n) full-run geometry scan on every keystroke.
   const std::vector<std::u32string> lines = displayLines(editor);
   rebuild(lines);
+  if (!boxText_.has_value()) {
+    cachedCharWidths_.clear();
+    return;
+  }
+
+  // Box text needs per-character widths for wrapping. Re-measure after the
+  // first pass and re-wrap once if the new content changed the break points.
   cachedCharWidths_ = measureCharacterWidths(editor);
-  if (boxText_.has_value()) {
-    const std::vector<std::u32string> rewrapped = displayLines(editor);
-    if (rewrapped != lines) {
-      rebuild(rewrapped);
-      cachedCharWidths_ = measureCharacterWidths(editor);
-    }
+  const std::vector<std::u32string> rewrapped = displayLines(editor);
+  if (rewrapped != lines) {
+    rebuild(rewrapped);
+    cachedCharWidths_ = measureCharacterWidths(editor);
   }
 }
 
@@ -1093,9 +1115,25 @@ std::optional<TextTool::EditingChrome> TextTool::editingChrome(EditorApp& editor
       }
     }
   }
-  for (std::size_t i = 0; i < column; ++i) {
-    caretX += widthIndex < cachedCharWidths_.size() ? cachedCharWidths_[widthIndex] : 0.0;
-    ++widthIndex;
+  if (!boxText_.has_value() && column > 0u) {
+    // Point text has no wrapping dependency on cached widths. Read just the
+    // glyph adjacent to the caret instead of scanning every glyph after each
+    // edit. DOM character indices exclude the logical hard-break markers.
+    std::size_t domCharsBeforeCaret = 0u;
+    for (std::size_t i = 0; i < caretIndex_ && i < content_.size(); ++i) {
+      domCharsBeforeCaret += content_[i] != U'\n' ? 1u : 0u;
+    }
+    if (domCharsBeforeCaret > 0u) {
+      caretX = sessionText_->withWriteAccess(
+          [this, domChar = domCharsBeforeCaret - 1u](svg::DocumentWriteAccess&, EntityHandle) {
+            return sessionText_->getEndPositionOfChar(domChar).x;
+          });
+    }
+  } else {
+    for (std::size_t i = 0; i < column; ++i) {
+      caretX += widthIndex < cachedCharWidths_.size() ? cachedCharWidths_[widthIndex] : 0.0;
+      ++widthIndex;
+    }
   }
 
   const double lineHeight = fontSize_ * kLineHeightFactor;
@@ -1108,9 +1146,10 @@ std::optional<TextTool::EditingChrome> TextTool::editingChrome(EditorApp& editor
       documentFromText_.transformPosition(Vector2d(caretX, baselineY - fontSize_ * 0.9));
   chrome.caretBottomDoc =
       documentFromText_.transformPosition(Vector2d(caretX, baselineY + fontSize_ * 0.25));
+  const float frameOpacity = pointFrameOpacity();
   if (const std::optional<Box2d> frameLocal = sessionFrameLocal(); frameLocal.has_value()) {
     chrome.frameCornersDoc = FrameCornersDoc(documentFromText_, *frameLocal);
-    chrome.frameOpacity = pointFrameOpacity();
+    chrome.frameOpacity = frameOpacity;
   }
   return chrome;
 }

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "donner/base/xml/XMLEscape.h"
@@ -424,42 +425,19 @@ std::optional<AttributeWritebackTarget> captureAttributeWritebackTarget(
   return target;
 }
 
-std::optional<svg::SVGElement> resolveAttributeWritebackTarget(
+namespace {
+
+std::optional<svg::SVGElement> ResolveAttributeWritebackTargetWithAccess(
     svg::SVGDocument& document, const AttributeWritebackTarget& target) {
-  return document.withReadAccess([&document, &target](
-                                     svg::DocumentReadAccess&) -> std::optional<svg::SVGElement> {
-    if (target.elementPath.empty()) {
-      return std::nullopt;
-    }
+  if (target.elementPath.empty()) {
+    return std::nullopt;
+  }
 
-    if (target.elementId.has_value()) {
-      const auto targetTagName = target.elementPath.back().qualifiedName;
-      std::vector<svg::SVGElement> stack;
-      stack.push_back(document.svgElement());
-      while (!stack.empty()) {
-        svg::SVGElement current = stack.back();
-        stack.pop_back();
-        if (current.tagName() == targetTagName && current.id() == *target.elementId) {
-          return current;
-        }
-
-        std::vector<svg::SVGElement> children;
-        for (auto child = current.firstChild(); child.has_value(); child = child->nextSibling()) {
-          children.push_back(*child);
-        }
-
-        for (auto it = children.rbegin(); it != children.rend(); ++it) {
-          stack.push_back(*it);
-        }
-      }
-    }
-
-    svg::SVGElement current = document.svgElement();
-    const AttributeWritebackPathSegment& rootSegment = target.elementPath.front();
-    if (rootSegment.elementChildIndex != 0 || current.tagName() != rootSegment.qualifiedName) {
-      return std::nullopt;
-    }
-
+  std::optional<svg::SVGElement> pathMatch;
+  svg::SVGElement current = document.svgElement();
+  const AttributeWritebackPathSegment& rootSegment = target.elementPath.front();
+  if (rootSegment.elementChildIndex == 0 && current.tagName() == rootSegment.qualifiedName) {
+    pathMatch = current;
     for (std::size_t i = 1; i < target.elementPath.size(); ++i) {
       const AttributeWritebackPathSegment& segment = target.elementPath[i];
       std::size_t childIndex = 0;
@@ -473,13 +451,133 @@ std::optional<svg::SVGElement> resolveAttributeWritebackTarget(
       }
 
       if (!matchedChild.has_value() || matchedChild->tagName() != segment.qualifiedName) {
-        return std::nullopt;
+        pathMatch.reset();
+        break;
       }
 
       current = *matchedChild;
+      pathMatch = current;
+    }
+  }
+
+  if (pathMatch.has_value() &&
+      (!target.elementId.has_value() || pathMatch->id() == *target.elementId)) {
+    return pathMatch;
+  }
+
+  if (target.elementId.has_value()) {
+    const auto targetTagName = target.elementPath.back().qualifiedName;
+    std::vector<svg::SVGElement> stack;
+    stack.push_back(document.svgElement());
+    while (!stack.empty()) {
+      svg::SVGElement current = stack.back();
+      stack.pop_back();
+      if (current.tagName() == targetTagName && current.id() == *target.elementId) {
+        return current;
+      }
+
+      std::vector<svg::SVGElement> children;
+      for (auto child = current.firstChild(); child.has_value(); child = child->nextSibling()) {
+        children.push_back(*child);
+      }
+
+      for (auto it = children.rbegin(); it != children.rend(); ++it) {
+        stack.push_back(*it);
+      }
+    }
+  }
+
+  return pathMatch;
+}
+
+}  // namespace
+
+std::optional<svg::SVGElement> resolveAttributeWritebackTarget(
+    svg::SVGDocument& document, const AttributeWritebackTarget& target) {
+  return document.withReadAccess([&document, &target](svg::DocumentReadAccess&) {
+    return ResolveAttributeWritebackTargetWithAccess(document, target);
+  });
+}
+
+std::vector<std::optional<svg::SVGElement>> resolveAttributeWritebackTargets(
+    svg::SVGDocument& document, std::span<const AttributeWritebackTarget> targets) {
+  return document.withReadAccess([&document, targets](svg::DocumentReadAccess&) {
+    struct PathHash {
+      std::size_t operator()(const std::vector<AttributeWritebackPathSegment>& path) const {
+        std::size_t hash = 0;
+        for (const AttributeWritebackPathSegment& segment : path) {
+          hash ^= std::hash<std::size_t>()(segment.elementChildIndex) + 0x9e3779b9u + (hash << 6u) +
+                  (hash >> 2u);
+          hash ^= std::hash<xml::XMLQualifiedName>()(segment.qualifiedName) + 0x9e3779b9u +
+                  (hash << 6u) + (hash >> 2u);
+        }
+        return hash;
+      }
+    };
+
+    std::unordered_map<std::vector<AttributeWritebackPathSegment>, std::vector<std::size_t>,
+                       PathHash>
+        indicesByPath;
+    for (std::size_t targetIndex = 0; targetIndex < targets.size(); ++targetIndex) {
+      if (!targets[targetIndex].elementPath.empty()) {
+        indicesByPath[targets[targetIndex].elementPath].push_back(targetIndex);
+      }
     }
 
-    return current;
+    std::vector<std::optional<svg::SVGElement>> resolved(targets.size());
+    struct PendingElement {
+      svg::SVGElement element;
+      std::vector<AttributeWritebackPathSegment> path;
+    };
+    std::vector<PendingElement> stack;
+    svg::SVGElement root = document.svgElement();
+    stack.push_back(PendingElement{
+        .element = root,
+        .path = {AttributeWritebackPathSegment{
+            0,
+            xml::XMLQualifiedName(root.tagName()),
+        }},
+    });
+
+    while (!stack.empty()) {
+      PendingElement pending = std::move(stack.back());
+      stack.pop_back();
+
+      if (auto pathIter = indicesByPath.find(pending.path); pathIter != indicesByPath.end()) {
+        for (const std::size_t targetIndex : pathIter->second) {
+          const std::optional<RcString>& targetId = targets[targetIndex].elementId;
+          if (!targetId.has_value() || pending.element.id() == *targetId) {
+            resolved[targetIndex] = pending.element;
+          }
+        }
+      }
+
+      std::vector<PendingElement> children;
+      std::size_t childIndex = 0;
+      for (auto child = pending.element.firstChild(); child.has_value();
+           child = child->nextSibling(), ++childIndex) {
+        std::vector<AttributeWritebackPathSegment> childPath = pending.path;
+        childPath.push_back(AttributeWritebackPathSegment{
+            childIndex,
+            xml::XMLQualifiedName(child->tagName()),
+        });
+        children.push_back(PendingElement{
+            .element = *child,
+            .path = std::move(childPath),
+        });
+      }
+      for (auto childIter = children.rbegin(); childIter != children.rend(); ++childIter) {
+        stack.push_back(std::move(*childIter));
+      }
+    }
+
+    for (std::size_t targetIndex = 0; targetIndex < targets.size(); ++targetIndex) {
+      if (!resolved[targetIndex].has_value()) {
+        resolved[targetIndex] =
+            ResolveAttributeWritebackTargetWithAccess(document, targets[targetIndex]);
+      }
+    }
+    return resolved;
   });
 }
 

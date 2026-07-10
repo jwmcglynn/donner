@@ -126,6 +126,26 @@ The Inspector presents XML attributes and computed CSS as compact property lists
 These lists are read-only in the visual MVP. Attribute editing must remain DOM-first and use the
 editor's structured source-writeback path when it is added.
 
+## Interaction Responsiveness
+
+Interactive chrome must stay on the UI thread while expensive document work is coalesced, deferred,
+or moved to an isolated worker:
+
+- Queued text input performs one DOM synchronization per UI frame. Point text advances its caret
+  with one adjacent-character geometry query and does not issue geometry queries for every glyph
+  after each key. Box text keeps exact per-character measurement because wrapping depends on it.
+- Active move and transform chrome comes from the gesture's start bounds plus its current transform.
+  It does not walk outlined glyph paths on every pointer event. Cached pixels and live chrome may be
+  paired only when their entity identities match.
+- Revealing the source pane preserves the document point at the render-pane center. A pane-bounded
+  raster is used only when it reduces pixel area, unless the full raster exceeds the backend limit.
+- CSS source annotations parse an immutable source snapshot on an isolated worker. The UI thread
+  accepts the result only after document-generation and source-version validation, then resolves
+  deduplicated element locators in one document traversal.
+
+Source reveal and annotation application should each remain within a 16.7 ms UI-frame budget on the
+checked-in showcase document. Steady source-pane rendering should remain below that budget as well.
+
 ## Source Palette
 
 `TextEditor::getDarkPalette()` follows the same Graphite base while using semantic hues for syntax:

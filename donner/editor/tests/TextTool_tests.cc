@@ -130,6 +130,22 @@ TEST_F(TextToolTest, NewTextKeepsCurrentForegroundFill) {
   EXPECT_THAT(attr(text(), "style"), Eq("fill: #31c6b3"));
 }
 
+TEST_F(TextToolTest, QueuedPointTextCharactersFlushAsOneBatch) {
+  doubleClickAt(Vector2d(20.0, 30.0));
+  const std::uint64_t versionBefore = app.document().currentFrameVersion();
+  constexpr std::array<char32_t, 4> kCharacters{U'D', U'o', U'n', U'n'};
+
+  tool.insertCodepoints(app, kCharacters);
+
+  EXPECT_EQ(app.document().currentFrameVersion(), versionBefore + 1u);
+  EXPECT_EQ(tool.sessionContent(), U"Donn");
+  EXPECT_EQ(tool.caretIndex(), 4u);
+  EXPECT_EQ(text().textContent(), "Donn");
+  const auto chrome = tool.editingChrome(app);
+  ASSERT_TRUE(chrome.has_value());
+  EXPECT_GT(chrome->caretTopDoc.x, 20.0);
+}
+
 TEST_F(TextToolTest, DragOpensBoxTextSessionWithBoxAttributes) {
   tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
   tool.onMouseMove(app, Vector2d(210.0, 120.0), /*buttonHeld=*/true);

@@ -17,7 +17,9 @@ Fill/Stroke chrome, canvas zoom control, and structured Inspector property lists
 computed CSS. The source pane starts collapsed behind a persistent reveal rail, and Transform uses
 aligned paired fields, direct click-to-type behavior, and a concurrent-DOM-safe edit lifecycle.
 Toolbar and cursor artwork use one two-tone contrast system. It does not include workspace modes or
-runtime SVG interaction.
+runtime SVG interaction. The implemented interaction contract also keeps text entry, outlined-shape
+dragging, and source reveal within the UI frame budget by coalescing document work and validating
+asynchronous source analysis by document revision.
 
 ## Goals
 
@@ -65,6 +67,16 @@ runtime SVG interaction.
   pointer movement, then fade away on typing; drag-created box frames remain visible.
 - Use the select tool's handle-box calculation for text frames. Resize pointer moves update local
   chrome only; commit attributes, rewrap, source writeback, and rendering once on release.
+- Coalesce queued text characters into one document synchronization per frame. Use one adjacent
+  glyph-geometry query for point-text caret advancement; retain exact glyph measurement for box
+  wrapping.
+- During active transforms, derive selection bounds and handles from gesture state and require exact
+  entity identity before pairing cached pixels with live selection chrome.
+- Preserve the document point at the render-pane center when source visibility changes. Reject a
+  pane-bounded raster when it has more pixel area than the full-document raster.
+- Compute CSS source annotations from an immutable snapshot on an isolated worker. Return stable
+  locators rather than registry handles, reject stale revisions, and resolve deduplicated locators in
+  one live-document traversal.
 - Coordinate `TextEditor::getDarkPalette()` with Graphite and the semantic hue set.
 - Keep Diagram and Play as the next product packet after operator review of this MVP.
 
@@ -89,6 +101,10 @@ runtime SVG interaction.
 - [x] Unify toolbar and cursor artwork around crisp black-core/white-halo SVGs.
 - [x] Preserve the pen tool's filled black nib and add raster contrast/clipping tests.
 - [x] Add deterministic Inspector UI fuzzing with sanitizer support and seed corpus.
+- [x] Batch queued text input and remove the full point-text glyph scan from the per-key path.
+- [x] Keep outlined-shape drag chrome and cached pixels on one gesture transform.
+- [x] Preserve canvas framing and raster dimensions when the source pane opens.
+- [x] Move source-style analysis off the UI thread with revision-safe result application.
 - [x] Add a canvas-local 100 percent zoom control.
 - [x] Add focused token, menu, and source-palette tests.
 - [x] Capture a worker-settled full-frame Geode replay.
@@ -96,9 +112,12 @@ runtime SVG interaction.
 
 ## Security And Privacy
 
-The visual MVP does not change SVG parsing, renderer trust boundaries, filesystem access, network
-access, clipboard access, or publication behavior. Visual verification uses a public sample SVG.
-Theme and icon assets remain compiled resources and do not load arbitrary runtime files.
+The visual MVP does not change renderer trust boundaries, filesystem access, network access,
+clipboard access, or publication behavior. Background source analysis parses the already-open
+document source in a separate registry. No `SVGElement` handle crosses threads; only stable locators
+return to the UI thread, where document generation and source version are revalidated before use.
+Visual verification uses a public sample SVG. Theme and icon assets remain compiled resources and do
+not load arbitrary runtime files.
 
 ## Testing And Validation
 
@@ -122,6 +141,12 @@ test instead of hanging the suite. The Inspector fuzzer combines arbitrary point
 direct edit-lifecycle transitions, then runs under `--config=asan-fuzzer` against deterministic
 seeds and a writable mutation corpus. Its action space includes text creation, typing, point-frame
 visibility, release-time resize commit, reload, and undo.
+
+The source-reveal replay on `donner_splash.svg` records 8.5 ms for pane reveal, 11.3 ms for
+annotation application, and about 4.0 ms for steady source frames. It also asserts that viewport,
+document, compositor, and tile canvases remain `1784x1024` with no document-canvas commit. The
+Inspector UI fuzzer's real writable-corpus invocation is documented in the editor README; the
+non-`_bin` target is seed replay only.
 
 ## Developer Documentation
 

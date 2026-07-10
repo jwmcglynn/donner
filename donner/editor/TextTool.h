@@ -19,6 +19,7 @@
 #include <chrono>
 #include <cstddef>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -151,6 +152,12 @@ public:
 
   /// Insert one code point at the caret.
   void insertCodepoint(EditorApp& editor, char32_t codepoint);
+  /// Insert a frame's queued code points with one DOM synchronization.
+  ///
+  /// ImGui may deliver multiple characters in one input frame (paste, key
+  /// repeat, or an input method). Batching them avoids rebuilding and flushing
+  /// the text subtree once per code point.
+  void insertCodepoints(EditorApp& editor, std::span<const char32_t> codepoints);
   /// Insert a hard line break at the caret.
   void insertNewline(EditorApp& editor);
   /// Delete the code point before the caret.

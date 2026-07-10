@@ -73,6 +73,9 @@ enum class SelectionChromeDetail {
   PathOutlinesOnly,
   /// Capture only the combined selection bounds, skipping path extraction.
   CombinedBoundsOnly,
+  /// Skip selection geometry entirely. Dedicated editing chrome (for example
+  /// a text caret and session frame) is attached to the snapshot separately.
+  EditingChromeOnly,
 };
 
 /// Frozen view of everything `OverlayRenderer::drawChromeWithTransform`

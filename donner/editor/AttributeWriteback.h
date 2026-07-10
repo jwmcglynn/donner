@@ -15,6 +15,7 @@
 /// See `docs/design_docs/0049-structured_text_editing.md` M3.
 
 #include <optional>
+#include <span>
 #include <string_view>
 #include <vector>
 
@@ -61,6 +62,19 @@ std::optional<AttributeWritebackTarget> captureAttributeWritebackTarget(
  */
 std::optional<svg::SVGElement> resolveAttributeWritebackTarget(
     svg::SVGDocument& document, const AttributeWritebackTarget& target);
+
+/**
+ * Resolve multiple writeback targets while holding one document read access.
+ *
+ * This is equivalent to calling \ref resolveAttributeWritebackTarget for each
+ * target, but avoids repeated registry lock transitions for bulk editor work.
+ *
+ * @param document The current document.
+ * @param targets Targets to resolve in input order.
+ * @return One optional element per input target.
+ */
+std::vector<std::optional<svg::SVGElement>> resolveAttributeWritebackTargets(
+    svg::SVGDocument& document, std::span<const AttributeWritebackTarget> targets);
 
 /**
  * Build a \ref donner::editor::TextPatch "TextPatch" that sets the given attribute to the new value

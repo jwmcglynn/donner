@@ -1646,6 +1646,17 @@ TEST_F(SelectToolTest, ActiveRotationBoundsPreviewClearsOnMouseUp) {
       << "rotation chrome must switch back to axis-aligned bounds immediately on release";
 }
 
+TEST_F(SelectToolTest, ActiveMoveExposesGestureOwnedBoundsPreview) {
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(35.0, 25.0), /*buttonHeld=*/true);
+
+  const auto boundsPreview = tool.activeTransformBoundsPreview();
+  ASSERT_TRUE(boundsPreview.has_value());
+  EXPECT_EQ(boundsPreview->startBoundsDoc, Box2d::FromXYWH(10.0, 10.0, 20.0, 20.0));
+  EXPECT_THAT(boundsPreview->documentFromStartDocument,
+              TransformIs(1.0, 0.0, 0.0, 1.0, 20.0, 10.0));
+}
+
 TEST_F(SelectToolTest, RotateUndoRedoRestoresTransform) {
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
   tool.onMouseUp(app, Vector2d(15.0, 15.0));

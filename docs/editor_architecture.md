@@ -52,7 +52,9 @@ Guarantees callers can rely on:
   `DocumentSyncController`; (4) compute pane layout, handle shortcuts, and render
   the menu bar; (5) render the panes; (6) if `!isBusy()`, request the next render
   via `RenderCoordinator::maybeRequestRender`; (7) collect a `FrameCostBreakdown`
-  and emit frame-miss/resource telemetry.
+  and emit frame-miss/resource telemetry. Queued canvas-text characters are
+  coalesced before the mutation flush, so one UI frame performs one text-content
+  synchronization rather than one synchronization per queued codepoint.
 
 ### The mutation seam
 
@@ -117,6 +119,12 @@ immediate ImGui overlay. `svg::Renderer` is backend-agnostic and resolves at bui
 time to tiny-skia (software) or Geode (GPU, `DONNER_EDITOR_WGPU`); the shipped
 `editor` target uses Geode.
 
+During an active transform, `SelectTool` exposes gesture-owned bounds and transform
+state. `OverlayRenderer` builds combined bounds and handles directly from that
+snapshot instead of traversing selected geometry every pointer frame. A presented
+tile carrying a live entity matches an active drag only when the entity identities
+are equal; the boolean drag-target marker is used only for entity-less legacy tiles.
+
 The composited-tile presentation is the subject of its own design work; this doc
 describes the editor's consumption of it.
 
@@ -140,6 +148,15 @@ describes the editor's consumption of it.
   through `ViewportInteractionController::screenToDocument` to the active tool.
 - **Source ↔ canvas sync** is handled by `DocumentSyncController` and documented in
   \ref StructuredSourceEditing.
+- **Source style annotations** are computed from an immutable source copy on a
+  separate worker. The worker owns an isolated parsed document and returns cascade
+  metadata plus deduplicated `AttributeWritebackTarget` locators, never live
+  `SVGElement` handles. `EditorShell` applies a result only when both document
+  generation and source version still match, then resolves all locators in one
+  read-guarded document traversal.
+- **Source reveal layout** preserves the document point under the render-pane center.
+  `ViewportState` selects a pane-bounded raster only when its pixel area is smaller
+  than the full-document raster, unless a backend dimension cap requires bounds.
 
 ## API Surface
 
@@ -167,6 +184,9 @@ entry points are:
 - **Concurrent DOM access** is guarded: the worker holds `DocumentWriteAccess` for
   the render; UI-thread reads take a read-access guard. Illegal cross-thread access
   is designed to fail deterministically in debug builds.
+- **Source annotation isolation** is revision-gated. Background parsing uses a
+  separate registry; registry-backed element handles are cleared before the result
+  crosses threads, and stale document/source revisions are discarded.
 - **Dynamic strings** are rendered with `ImGui::TextUnformatted(...)` rather than as
   format strings; this is an enforced-by-convention practice in the editor code, not
   a separate lint rule.

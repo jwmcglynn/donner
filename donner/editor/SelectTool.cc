@@ -787,8 +787,7 @@ std::optional<SelectTool::ActiveGesturePreview> SelectTool::activeGesturePreview
 
 std::optional<SelectTool::ActiveTransformBoundsPreview> SelectTool::activeTransformBoundsPreview()
     const {
-  if (!dragState_.has_value() || !dragState_->hasMoved ||
-      dragState_->gestureKind != DragState::GestureKind::Rotate) {
+  if (!dragState_.has_value() || !dragState_->hasMoved) {
     return std::nullopt;
   }
 

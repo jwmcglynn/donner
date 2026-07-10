@@ -191,12 +191,14 @@ donner_cc_library(
     srcs = ["StyleSourceAnnotations.cc"],
     hdrs = ["StyleSourceAnnotations.h"],
     deps = [
+        ":attribute_writeback",
         ":flash_decorations",
         ":reference_fanout",
         "//donner/base",
         "//donner/base/xml",
         "//donner/css",
         "//donner/svg",
+        "//donner/svg/parser",
     ],
 )
 
@@ -873,8 +875,8 @@ donner_cc_library(
         "//conditions:default": [],
     }),
     deps = [
-        ":canvas_scrollbars",
         ":attribute_writeback",
+        ":canvas_scrollbars",
         ":clipboard_interface",
         ":compositor_debug_panel",
         ":dialog_presenter",

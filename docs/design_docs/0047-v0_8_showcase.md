@@ -942,6 +942,36 @@ the `TextToolClickTypeEscapeCommitsTextElement` replay.
 - [x] Add a Text tool toolbar button so the tool is reachable. (No separate
       Insert Text menu item; toolbar + `T` shortcut only.)
 
+### Resolved: interaction latency and source-pane stability (2026-07-10)
+
+The v0.8 UX audit found three interaction paths doing document-sized work inside a pointer or key
+frame:
+
+- text input synchronized each queued character independently, rescanned all point-text glyph
+  geometry, mirrored source, and refreshed generic selection geometry after every key;
+- outlined-group drags could pair stale promoted pixels with a different live entity while
+  rebuilding selected path geometry on every pointer event;
+- source reveal could switch from a full `1784x1024` raster to a larger `1718x2234` pane-bounded
+  raster, then synchronously parse and resolve CSS source annotations.
+
+The implemented contract is now:
+
+- apply queued text with one DOM synchronization per UI frame; point text uses one
+  adjacent-character geometry query, while box text retains exact width measurement for wrapping;
+- derive active transform chrome from gesture-owned bounds, retain the selected tile through the
+  presentation handoff, and accept cached drag metadata only for the same live entity;
+- preserve the document point at pane center when source visibility changes, choose bounded raster
+  only when it reduces pixel area, and compute CSS annotations on an isolated source snapshot;
+- validate annotation results by document generation and source version, then resolve deduplicated
+  locators in one live-document traversal. Registry-backed element handles never cross threads.
+
+The deterministic source-reveal replay now measures 8.5 ms for reveal, 11.3 ms when annotations
+land, and about 4.0 ms steady-state. Viewport, document, compositor, and tile canvases remain
+`1784x1024`, with zero document-canvas commits during reveal. Focused tests cover text batching,
+gesture bounds, stale tile identity, replacement-document annotation rejection, locator batching,
+and pane-center preservation. The Inspector UI fuzzer completed a 31-second ASan mutation run with
+138 executions and no crash.
+
 ### Iconography + toolbar
 
 - [x] Icons for the new layer functionality (**lock** / **hide** layers): vendored

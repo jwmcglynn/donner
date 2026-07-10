@@ -225,6 +225,48 @@ TEST(OverlayRendererTest, PathOutlinesOnlyOmitsSelectionBoundsAndHandles) {
   EXPECT_TRUE(snapshot.handleBoxesDoc.empty());
 }
 
+TEST(OverlayRendererTest, EditingChromeOnlySkipsSelectionGeometry) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+  auto rect = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(rect.has_value());
+  app.setSelection(*rect);
+
+  const SelectionChromeSnapshot snapshot = OverlayRenderer::captureChromeSnapshot(
+      std::span<const svg::SVGElement>(app.selectedElements()), std::nullopt, Transform2d(),
+      std::nullopt, std::span<const svg::SVGElement>(), std::nullopt,
+      SelectionChromeDetail::EditingChromeOnly);
+
+  EXPECT_TRUE(snapshot.paths.empty());
+  EXPECT_TRUE(snapshot.aabbsDoc.empty());
+  EXPECT_TRUE(snapshot.textBaselinesDoc.empty());
+  EXPECT_TRUE(snapshot.handleBoxesDoc.empty());
+}
+
+TEST(OverlayRendererTest, ActiveCombinedBoundsPreviewAvoidsSelectionPathCapture) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+  auto rect = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(rect.has_value());
+  app.setSelection(*rect);
+
+  const SelectionChromeBoundsPreview boundsPreview{
+      .startBoundsDoc = Box2d::FromXYWH(20.0, 30.0, 40.0, 50.0),
+      .documentFromStartDocument = Transform2d::Translate(Vector2d(15.0, 5.0)),
+  };
+  const SelectionChromeSnapshot snapshot = OverlayRenderer::captureChromeSnapshot(
+      std::span<const svg::SVGElement>(app.selectedElements()), std::nullopt, Transform2d(),
+      boundsPreview, std::span<const svg::SVGElement>(), std::nullopt,
+      SelectionChromeDetail::CombinedBoundsOnly);
+
+  EXPECT_TRUE(snapshot.paths.empty());
+  EXPECT_TRUE(snapshot.aabbsDoc.empty());
+  ASSERT_TRUE(snapshot.orientedBoundsDoc.has_value());
+  EXPECT_EQ(snapshot.orientedBoundsDoc->cornersDoc[0], Vector2d(35.0, 35.0));
+  EXPECT_EQ(snapshot.orientedBoundsDoc->cornersDoc[2], Vector2d(75.0, 85.0));
+  EXPECT_EQ(snapshot.handleBoxesDoc.size(), 4u);
+}
+
 TEST(OverlayRendererTest, SelectedPathSnapshotIncludesAnchorsAndControlLines) {
   constexpr std::string_view kPathSvg =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">

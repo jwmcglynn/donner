@@ -975,6 +975,9 @@ public:
   static std::size_t StyleSourceContributionCount(const EditorShell& shell) {
     return shell.styleSourceContributions_.size();
   }
+  static std::uint64_t StyleSourceDecorationDocumentGeneration(const EditorShell& shell) {
+    return shell.styleSourceDecorationDocumentGeneration_;
+  }
   static std::optional<Vector2d> RenderContextMenuDocumentPoint(const EditorShell& shell) {
     return shell.renderContextMenuDocumentPoint_;
   }
@@ -1009,6 +1012,19 @@ void RunFramesUntilDisplayedSelectionBounds(gui::EditorWindow& window, EditorShe
 
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
+}
+
+bool WaitForStyleSourceDecorations(EditorShell& shell) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  do {
+    EditorShellTestAccess::UpdateSourceStyleDecorations(shell);
+    if (EditorShellTestAccess::StyleSourceDecorationsValid(shell)) {
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  } while (std::chrono::steady_clock::now() < deadline);
+
+  return false;
 }
 
 void DriveGlobalShortcut(EditorShell& shell, const std::vector<ImGuiKey>& keys, bool ctrl = false,
@@ -1876,8 +1892,7 @@ TEST(EditorShellTest, SourceFocusAndStyleDecorationsTrackSelectionAndDirtySource
   EXPECT_TRUE(EditorShellTestAccess::SourceFocusMode(shell));
   EXPECT_TRUE(EditorShellTestAccess::Source(shell).hasFocusPartition());
 
-  EditorShellTestAccess::UpdateSourceStyleDecorations(shell);
-  EXPECT_TRUE(EditorShellTestAccess::StyleSourceDecorationsValid(shell));
+  EXPECT_TRUE(WaitForStyleSourceDecorations(shell));
   EXPECT_GT(EditorShellTestAccess::StyleSourceContributionCount(shell), 0u);
   EXPECT_GT(EditorShellTestAccess::Source(shell).sourceStyleDecorations().size(), 0u);
 
@@ -1890,6 +1905,41 @@ TEST(EditorShellTest, SourceFocusAndStyleDecorationsTrackSelectionAndDirtySource
   source.insertText(" ");
   EditorShellTestAccess::UpdateSourceStyleDecorations(shell);
   EXPECT_FALSE(EditorShellTestAccess::StyleSourceDecorationsValid(shell));
+  EXPECT_TRUE(source.sourceStyleDecorations().empty());
+}
+
+TEST(EditorShellTest, SourceStyleDecorationsDiscardReplacedDocumentResult) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kStyledSvg, "styled.svg"));
+  ASSERT_TRUE(shell.valid());
+  ASSERT_TRUE(WaitForStyleSourceDecorations(shell));
+  ASSERT_GT(EditorShellTestAccess::StyleSourceContributionCount(shell), 0u);
+
+  ASSERT_TRUE(EditorShellTestAccess::App(shell).document().loadFromString(kStyledSvg));
+  TextEditor& source = EditorShellTestAccess::Source(shell);
+  source.setText(internal::CanonicalizeForTextEditor(kStyledSvg));
+  source.resetTextChanged();
+  EditorShellTestAccess::UpdateSourceStyleDecorations(shell);
+  EXPECT_FALSE(EditorShellTestAccess::StyleSourceDecorationsValid(shell));
+  EXPECT_TRUE(source.sourceStyleDecorations().empty());
+
+  constexpr std::string_view kReplacementSvg = R"svg(
+<svg xmlns="http://www.w3.org/2000/svg">
+  <g id="replacement"/>
+</svg>
+)svg";
+  ASSERT_TRUE(EditorShellTestAccess::App(shell).document().loadFromString(kReplacementSvg));
+  source.setText(internal::CanonicalizeForTextEditor(kReplacementSvg));
+  source.resetTextChanged();
+
+  ASSERT_TRUE(WaitForStyleSourceDecorations(shell));
+  EXPECT_EQ(EditorShellTestAccess::StyleSourceDecorationDocumentGeneration(shell),
+            EditorShellTestAccess::App(shell).document().documentGeneration());
+  EXPECT_EQ(EditorShellTestAccess::StyleSourceContributionCount(shell), 0u);
   EXPECT_TRUE(source.sourceStyleDecorations().empty());
 }
 

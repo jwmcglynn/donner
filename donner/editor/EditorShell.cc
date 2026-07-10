@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iostream>
 #include <optional>
 #include <span>
@@ -2102,7 +2103,6 @@ void EditorShell::renderSourcePane(float paneOriginY, float paneHeight, float pa
   updateSourceStyleDecorations();
   textEditor_.render("##source");
   applySourceStyleDecorationChipClick();
-  updateSourceHoverPreview();
   if (textEditor_.takeSourceFocusModeContextMenuToggleRequest()) {
     toggleSourceFocusMode();
   }
@@ -2455,7 +2455,8 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   interactionController_.updatePaneLayout(
       Vector2d(paneOriginImGui.x, paneOriginImGui.y), Vector2d(contentRegion.x, contentRegion.y),
       app_.hasDocument() ? std::make_optional(ResolveDocumentViewBox(app_.document().document()))
-                         : std::nullopt);
+                         : std::nullopt,
+      /*preservePaneCenterDocumentPoint=*/true);
   interactionController_.updateDevicePixelRatio(window_.contentScale().x);
 
   if (pendingViewportReplayOverride_.has_value()) {
@@ -2899,7 +2900,6 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
                                 modifiers);
         lastPostedScreenPoint_ = currentScreen;
         if (!renderCoordinator_.asyncRenderer().isBusy() && app_.flushFrame()) {
-          renderCoordinator_.refreshSelectionBoundsCache(app_);
           renderCoordinator_.rasterizeOverlayForCurrentSelection(
               app_, interactionController_.viewport(), selectTool_.marqueeRect(),
               selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview(),
@@ -4012,13 +4012,18 @@ SelectionChromeDetail EditorShell::selectionChromeDetailForActiveTool() const {
   if (activeTool_ == ActiveTool::Pen) {
     return SelectionChromeDetail::PathOutlinesOnly;
   }
+  if (activeTool_ == ActiveTool::Select && selectTool_.isDragging()) {
+    // Drag chrome is projected from the immutable gesture bounds. Avoid
+    // rebuilding every selected path (notably one path per outlined glyph)
+    // while the compositor and DOM are advancing asynchronously.
+    return SelectionChromeDetail::CombinedBoundsOnly;
+  }
   if (activeTool_ == ActiveTool::Text && textTool_.isEditing()) {
-    // The session frame (an oriented quad with its own corner handles,
-    // pushed via setTextEditingChrome) is the selection UI while a text
-    // session is open. Skip the generic axis-aligned bounds + handles: on a
-    // rotated frame they would draw the axis-aligned envelope on top of the
-    // oriented frame.
-    return SelectionChromeDetail::PathOutlinesOnly;
+    // The caret and oriented session frame are pushed explicitly through
+    // setTextEditingChrome. Skip generic text baselines/bounds/path traversal:
+    // they duplicate that UI and force synchronous text geometry work after
+    // every keystroke.
+    return SelectionChromeDetail::EditingChromeOnly;
   }
   return SelectionChromeDetail::Full;
 }
@@ -4107,16 +4112,37 @@ void EditorShell::handleTextEditingKeyboard() {
     textTool_.moveCaret(app_, TextTool::CaretMove::LineEnd);
   }
 
+  std::u32string queuedCharacters;
+  queuedCharacters.reserve(static_cast<std::size_t>(io.InputQueueCharacters.Size));
   for (int i = 0; i < io.InputQueueCharacters.Size; ++i) {
     const ImWchar character = io.InputQueueCharacters[i];
-    textTool_.insertCodepoint(app_, static_cast<char32_t>(character));
+    queuedCharacters.push_back(static_cast<char32_t>(character));
+  }
+  if (!queuedCharacters.empty()) {
+    textTool_.insertCodepoints(app_, queuedCharacters);
     edited = true;
   }
   io.InputQueueCharacters.resize(0);
 
   if (edited) {
-    refreshAfterToolDrivenFlush();
+    refreshAfterTextTypingFlush();
   }
+}
+
+void EditorShell::refreshAfterTextTypingFlush() {
+  // The text mutation is already flushed by TextTool. Keep this input frame
+  // focused on presentation: source deltas and selection bounds are consumed
+  // at the start of the next frame, while the caret/session frame comes from
+  // TextTool's local editing state immediately.
+  renderCoordinator_.invalidatePresentationAfterDocumentFlush(app_,
+                                                              app_.document().lastFlushResult());
+  updatePenLivePreviewTarget();
+  renderCoordinator_.rasterizeOverlayForCurrentSelection(
+      app_, interactionController_.viewport(), selectTool_.marqueeRect(),
+      selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview(),
+      selectionChromeDetailForActiveTool());
+  requestRenderAtEndOfFrame_ = true;
+  window_.wakeEventLoop();
 }
 
 void EditorShell::refreshAfterToolDrivenFlush() {
@@ -4428,13 +4454,21 @@ void EditorShell::updateSourceStyleDecorations() {
   const auto clearDecorations = [this]() {
     styleSourceContributions_.clear();
     styleSourceDecorationsValid_ = false;
+    styleSourceDecorationDocumentGeneration_ = 0;
     styleSourceDecorationSourceVersion_ = 0;
-    styleSourceDecorationText_.clear();
     std::ignore = textEditor_.clearSourceStyleDecorations();
   };
 
   if (!app_.hasDocument() || textEditor_.isTextChanged() || app_.document().hasPendingMutations()) {
     clearDecorations();
+    return;
+  }
+
+  const std::uint64_t documentGeneration = app_.document().documentGeneration();
+  const std::uint64_t sourceVersion = app_.document().document().sourceVersion();
+  if (styleSourceDecorationsValid_ &&
+      styleSourceDecorationDocumentGeneration_ == documentGeneration &&
+      styleSourceDecorationSourceVersion_ == sourceVersion) {
     return;
   }
 
@@ -4444,15 +4478,49 @@ void EditorShell::updateSourceStyleDecorations() {
     return;
   }
 
-  const std::uint64_t sourceVersion = app_.document().document().sourceVersion();
-  if (styleSourceDecorationsValid_ && styleSourceDecorationSourceVersion_ == sourceVersion &&
-      styleSourceDecorationText_ == documentSource) {
+  // Never leave ranges and clickable chips from an older source revision in
+  // the editor while its replacement annotations are being computed.
+  clearDecorations();
+
+  if (!styleSourceAnnotationsFuture_.valid()) {
+    styleSourceAnnotationPendingDocumentGeneration_ = documentGeneration;
+    styleSourceAnnotationPendingSourceVersion_ = sourceVersion;
+    styleSourceAnnotationsFuture_ =
+        std::async(std::launch::async, [source = documentSource]() mutable {
+          return ComputeDetachedStyleSourceAnnotations(std::move(source));
+        });
+    window_.wakeEventLoop();
     return;
   }
 
-  StyleSourceAnnotations annotations =
-      ComputeStyleSourceAnnotations(app_.document().document(), documentSource);
-  styleSourceContributions_ = std::move(annotations.contributions);
+  if (styleSourceAnnotationsFuture_.wait_for(std::chrono::seconds(0)) !=
+      std::future_status::ready) {
+    window_.wakeEventLoop();
+    return;
+  }
+
+  DetachedStyleSourceAnnotations detached = styleSourceAnnotationsFuture_.get();
+  if (styleSourceAnnotationPendingDocumentGeneration_ != documentGeneration ||
+      styleSourceAnnotationPendingSourceVersion_ != sourceVersion) {
+    window_.wakeEventLoop();
+    return;
+  }
+
+  const std::vector<std::optional<svg::SVGElement>> resolvedElements =
+      resolveAttributeWritebackTargets(app_.document().document(), detached.elementTargets);
+
+  styleSourceContributions_.clear();
+  styleSourceContributions_.reserve(detached.contributions.size());
+  for (DetachedStyleSourceContribution& detachedContribution : detached.contributions) {
+    StyleSourceContribution& contribution = detachedContribution.contribution;
+    contribution.matchedElements.reserve(detachedContribution.matchedElementTargetIndices.size());
+    for (const std::size_t targetIndex : detachedContribution.matchedElementTargetIndices) {
+      if (targetIndex < resolvedElements.size() && resolvedElements[targetIndex].has_value()) {
+        contribution.matchedElements.push_back(*resolvedElements[targetIndex]);
+      }
+    }
+    styleSourceContributions_.push_back(std::move(contribution));
+  }
 
   std::vector<TextEditor::SourceStyleDecoration> decorations;
   decorations.reserve(styleSourceContributions_.size());
@@ -4476,8 +4544,8 @@ void EditorShell::updateSourceStyleDecorations() {
 
   std::ignore = textEditor_.setSourceStyleDecorations(std::move(decorations));
   styleSourceDecorationsValid_ = true;
+  styleSourceDecorationDocumentGeneration_ = documentGeneration;
   styleSourceDecorationSourceVersion_ = sourceVersion;
-  styleSourceDecorationText_ = documentSource;
 }
 
 void EditorShell::applySourceStyleDecorationChipClick() {
@@ -4640,9 +4708,23 @@ void EditorShell::runFrame() {
 
   if (!renderCoordinator_.asyncRenderer().isBusy()) {
     if (app_.flushFrame()) {
-      renderCoordinator_.invalidatePresentationAfterDocumentFlush(
-          app_, app_.document().lastFlushResult());
-      renderCoordinator_.refreshSelectionBoundsCache(app_);
+      const bool preserveActiveDragCache =
+          selectTool_.isDragging() ||
+          renderCoordinator_.compositedPresentation().isWaitingForFullRender() ||
+          renderCoordinator_.compositedPresentation().isWaitingForChromeRefresh();
+      if (preserveActiveDragCache) {
+        // Transform-only drag flushes are intentionally represented by the
+        // promoted tile's compose transform. Discarding that cache here makes
+        // a queued group drag fall back to stale full-document pixels.
+        renderCoordinator_.invalidatePresentationAfterDocumentFlush(
+            app_.document().lastFlushResult());
+      } else {
+        renderCoordinator_.invalidatePresentationAfterDocumentFlush(
+            app_, app_.document().lastFlushResult());
+      }
+      if (!selectTool_.isDragging()) {
+        renderCoordinator_.refreshSelectionBoundsCache(app_);
+      }
       // UI mutations can be queued while the async renderer is busy. When they flush here, the
       // DOM/source panes already reflect the edit, so request a matching document render instead of
       // continuing to present stale composited textures.
@@ -4709,7 +4791,8 @@ void EditorShell::runFrame() {
   interactionController_.updatePaneLayout(
       renderPaneOrigin, renderPaneSize,
       app_.hasDocument() ? std::make_optional(ResolveDocumentViewBox(app_.document().document()))
-                         : std::nullopt);
+                         : std::nullopt,
+      /*preservePaneCenterDocumentPoint=*/true);
   markPhase(mainFrameCost.layoutMs);
 
   handleGlobalShortcuts();

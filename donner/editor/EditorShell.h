@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <future>
 #include <memory>
 #include <optional>
 #include <string>
@@ -399,6 +400,10 @@ private:
   /// Re-run the post-flush presentation refresh after a tool that flushes the
   /// document internally (the text tool's wrap measurement).
   void refreshAfterToolDrivenFlush();
+  /// Low-latency post-flush path for ordinary text entry. Source mirroring and
+  /// selection-bounds refresh are deferred to the next frame; caret/session
+  /// chrome is already driven directly by TextTool state.
+  void refreshAfterTextTypingFlush();
   /// Keyboard handling while the in-canvas text editing session is active:
   /// typing, caret movement, Cmd+B/I/U style toggles, Escape commit.
   void handleTextEditingKeyboard();
@@ -561,9 +566,12 @@ private:
   bool referenceHighlightActive_ = false;
   bool referenceHighlightChipHovered_ = false;
   std::vector<StyleSourceContribution> styleSourceContributions_;
+  std::future<DetachedStyleSourceAnnotations> styleSourceAnnotationsFuture_;
+  std::uint64_t styleSourceAnnotationPendingDocumentGeneration_ = 0;
+  std::uint64_t styleSourceAnnotationPendingSourceVersion_ = 0;
   bool styleSourceDecorationsValid_ = false;
+  std::uint64_t styleSourceDecorationDocumentGeneration_ = 0;
   std::uint64_t styleSourceDecorationSourceVersion_ = 0;
-  std::string styleSourceDecorationText_;
   std::optional<Vector2d> renderContextMenuDocumentPoint_;
   std::optional<svg::SVGElement> renderContextMenuHitElement_;
   bool renderContextMenuOpenRequested_ = false;
