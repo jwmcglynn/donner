@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v7
 
@@ -47,7 +47,7 @@ jobs:
         working-directory: donner/editor/wasm/tests
         run: |
           npm ci
-          npx playwright install --with-deps chromium
+          npx playwright install chromium
 
       - name: Serve Geode package and run headed Playwright suite
         env:
@@ -85,7 +85,7 @@ jobs:
           done
           curl -fsS -o /dev/null "${DONNER_WASM_BASE_URL}/index.html"
 
-          xvfb-run --auto-servernum bash donner/editor/wasm/tests/run_tests.sh --headed
+          bash donner/editor/wasm/tests/run_tests.sh --headed
           cleanup
           trap - EXIT
 
@@ -157,13 +157,15 @@ jobs:
             test -f "${site_dir}/${required_file}"
           done
 
-          lockfile_sha256=$(sha256sum donner/editor/wasm/tests/package-lock.json | awk '{print $1}')
+          lockfile_sha256=$(shasum -a 256 donner/editor/wasm/tests/package-lock.json | awk '{print $1}')
           printf '{"source_revision":"%s","lockfile_sha256":"%s","bazel_config":"editor-wasm","target":"//donner/editor/wasm:wasm_web_package"}\n' \
             "${GITHUB_SHA}" "${lockfile_sha256}" > "${candidate_dir}/provenance.json"
 
           (
             cd "${candidate_dir}"
-            find site -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS
+            find site -type f | LC_ALL=C sort | while IFS= read -r file; do
+              shasum -a 256 "${file}"
+            done > SHA256SUMS
           )
 
           echo "candidate_dir=${candidate_dir}" >> "${GITHUB_OUTPUT}"
