@@ -1,5 +1,8 @@
 #include "donner/css/parser/AnbMicrosyntaxParser.h"
 
+#include <cmath>
+#include <limits>
+
 #include "donner/base/StringUtils.h"
 
 namespace donner::css::parser {
@@ -329,6 +332,7 @@ private:
     }
 
     auto token = component.get<Token>();
+    const FileOffset tokenOffset = token.offset();
     if (token.is<Token::Delim>()) {
       const auto& delim = token.get<Token::Delim>();
 
@@ -345,7 +349,7 @@ private:
         // <n-dimension> is a <dimension-token> with its type flag set to
         // "integer", and a unit that is an ASCII case-insensitive match for "n"
         if (dimension.suffixString.equalsLowercase("n")) {
-          return AnbToken(AnbToken::Type::NDimension, dimension.value);
+          return makeIntegerToken(AnbToken::Type::NDimension, dimension.value, tokenOffset);
         }
         // <ndashdigit-dimension> is a <dimension-token> with its type flag set
         // to "integer", and a unit that is an ASCII case-insensitive match for
@@ -353,14 +357,19 @@ private:
         else if (StringUtils::StartsWith<StringComparison::IgnoreCase>(dimension.suffixString,
                                                                        std::string_view("n-")) &&
                  isAllDigits(dimension.suffixString.substr(2))) {
-          return AnbToken(AnbToken::Type::NDashDigitDimension, dimension.value,
-                          parseDigits(dimension.suffixString.substr(2)));
+          const auto digitValue = parseDigits(dimension.suffixString.substr(2));
+          if (!digitValue.has_value()) {
+            return integerOutOfRange(tokenOffset);
+          }
+
+          return makeIntegerToken(AnbToken::Type::NDashDigitDimension, dimension.value, tokenOffset,
+                                  digitValue);
         }
         // <ndash-dimension> is a <dimension-token> with its type flag set to
         // "integer", and a unit that is an ASCII case-insensitive match for
         // "n-"
         else if (StringUtils::EqualsLowercase(dimension.suffixString, std::string_view("n-"))) {
-          return AnbToken(AnbToken::Type::NDashDimension, dimension.value);
+          return makeIntegerToken(AnbToken::Type::NDashDimension, dimension.value, tokenOffset);
         }
       }
     } else if (token.is<Token::Ident>()) {
@@ -387,16 +396,22 @@ private:
       // digits
       else if (StringUtils::StartsWith(ident.value, std::string_view("n-")) &&
                isAllDigits(ident.value.substr(2))) {
-        return AnbToken(AnbToken::Type::NDashDigitIdent, std::nullopt,
-                        parseDigits(ident.value.substr(2)));
+        if (const auto digitValue = parseDigits(ident.value.substr(2)); digitValue.has_value()) {
+          return AnbToken(AnbToken::Type::NDashDigitIdent, std::nullopt, digitValue);
+        }
+
+        return integerOutOfRange(tokenOffset);
       }
       // <dashndashdigit-ident> is an <ident-token> whose value is an ASCII
       // case-insensitive match for "-n-*", where "*" is a series of one or more
       // digits
       else if (StringUtils::StartsWith(ident.value, std::string_view("-n-")) &&
                isAllDigits(ident.value.substr(3))) {
-        return AnbToken(AnbToken::Type::DashNDashDigitIdent, std::nullopt,
-                        parseDigits(ident.value.substr(3)));
+        if (const auto digitValue = parseDigits(ident.value.substr(3)); digitValue.has_value()) {
+          return AnbToken(AnbToken::Type::DashNDashDigitIdent, std::nullopt, digitValue);
+        }
+
+        return integerOutOfRange(tokenOffset);
       }
 
     } else if (token.is<Token::Number>()) {
@@ -410,18 +425,18 @@ private:
         // "integer", and whose representation starts with "+" or "-"
         if (number.type == NumberType::Integer &&
             (numberStr.starts_with('+') || numberStr.starts_with('-'))) {
-          return AnbToken(AnbToken::Type::SignedInteger, number.value);
+          return makeIntegerToken(AnbToken::Type::SignedInteger, number.value, tokenOffset);
         }
         // <signless-integer> is a <number-token> with its type flag set to
         // "integer", and whose representation starts with a digit
         else {
-          assert(std::isdigit(numberStr[0]));
-          return AnbToken(AnbToken::Type::SignlessInteger, number.value);
+          assert(isAsciiDigit(numberStr[0]));
+          return makeIntegerToken(AnbToken::Type::SignlessInteger, number.value, tokenOffset);
         }
       }
     }
 
-    return ParseDiagnostic::Error("Unexpected token when parsing An+B microsyntax", token.offset());
+    return ParseDiagnostic::Error("Unexpected token when parsing An+B microsyntax", tokenOffset);
   }
 
   int skipWhitespace(int nextToken) {
@@ -433,13 +448,15 @@ private:
   }
 
 private:
-  bool isAllDigits(std::string_view str) {
+  static bool isAsciiDigit(char value) { return value >= '0' && value <= '9'; }
+
+  static bool isAllDigits(std::string_view str) {
     if (str.empty()) {
       return false;
     }
 
-    for (int i = 0; i < str.size(); i++) {
-      if (!std::isdigit(str[i])) {
+    for (const char value : str) {
+      if (!isAsciiDigit(value)) {
         return false;
       }
     }
@@ -447,16 +464,44 @@ private:
     return true;
   }
 
-  int parseDigits(std::string_view str) {
-    assert(!str.empty() && std::isdigit(str[0]) && "First character must be a digit");
+  static std::optional<int> parseDigits(std::string_view str) {
+    assert(!str.empty() && isAsciiDigit(str[0]) && "First character must be a digit");
 
     int value = 0;
-    for (int i = 0; i < str.size(); i++) {
-      assert(std::isdigit(str[i]));
-      value = value * 10 + (str[i] - '0');
+    for (const char character : str) {
+      assert(isAsciiDigit(character));
+      const int digit = character - '0';
+      if (value > (std::numeric_limits<int>::max() - digit) / 10) {
+        return std::nullopt;
+      }
+
+      value = value * 10 + digit;
     }
 
     return value;
+  }
+
+  static std::optional<int> checkedInteger(double value) {
+    if (!std::isfinite(value) || value < std::numeric_limits<int>::min() ||
+        value > std::numeric_limits<int>::max()) {
+      return std::nullopt;
+    }
+
+    return static_cast<int>(value);
+  }
+
+  static ParseResult<AnbToken> integerOutOfRange(FileOffset offset) {
+    return ParseDiagnostic::Error("An+B microsyntax integer out of range", offset);
+  }
+
+  static ParseResult<AnbToken> makeIntegerToken(AnbToken::Type type, double value,
+                                                FileOffset offset,
+                                                std::optional<int> digitValue = std::nullopt) {
+    if (const auto integerValue = checkedInteger(value); integerValue.has_value()) {
+      return AnbToken(type, integerValue, digitValue);
+    }
+
+    return integerOutOfRange(offset);
   }
 
   std::span<const css::ComponentValue> components_;
