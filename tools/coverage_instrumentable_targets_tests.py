@@ -58,6 +58,7 @@ class ClassifyTest(unittest.TestCase):
         # empty-coverage guard (a deterministic false RUN).
         lines = [
             "_wasm_cc_binary rule //donner/svg/renderer/wasm:donner_wasm",
+            "web_package rule //donner/editor/wasm:wasm_web_package",
             "serve_http rule //donner/svg/renderer/wasm:serve_test",
             "filegroup rule //donner/svg/renderer/wasm:test_page",
         ]

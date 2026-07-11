@@ -2,7 +2,9 @@
   "name": "donner-editor-wasm-tests",
   "private": true,
   "scripts": {
-    "test": "playwright test"
+    "test": "playwright test",
+    "test:ios": "playwright test --config=playwright.ios.config.js",
+    "test:selector": "node --test backend-selector.spec.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1"
