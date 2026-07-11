@@ -286,6 +286,24 @@ TEST(PipelineBlitterTest, BlitAntiH2WritesPerPixelCoverage) {
   EXPECT_THAT(alpha, ElementsAre(64u, 200u));
 }
 
+TEST(PipelineBlitterTest, BlitAntiH2ClipsSlowPathAtRightEdge) {
+  auto pixmap = tiny_skia::Pixmap::fromSize(3, 1);
+  ASSERT_TRUE(pixmap.has_value());
+  const auto clip = tiny_skia::IntRect::fromXYWH(0, 0, 2, 1);
+  ASSERT_TRUE(clip.has_value());
+  auto sub = pixmap->mutableView().subpixmap(*clip);
+  ASSERT_TRUE(sub.has_value());
+
+  auto blitter = tiny_skia::pipeline::RasterPipelineBlitter::createMask(&*sub);
+  ASSERT_TRUE(blitter.has_value());
+
+  blitter->blitAntiH2(1, 0, 64u, 200u);
+
+  const auto alpha = std::vector<std::uint8_t>{alphaAt(*pixmap, 0, 0), alphaAt(*pixmap, 1, 0),
+                                               alphaAt(*pixmap, 2, 0)};
+  EXPECT_THAT(alpha, ElementsAre(0u, 64u, 0u));
+}
+
 TEST(PipelineBlitterTest, PartialCoverageComposesWithExistingDestinationAlpha) {
   auto pixmap = tiny_skia::Pixmap::fromSize(1, 1);
   ASSERT_TRUE(pixmap.has_value());
@@ -413,6 +431,24 @@ TEST(PipelineBlitterTest, BlitAntiV2WritesSeparatePixelCoverages) {
   const auto antiV2Alpha =
       std::vector<std::uint8_t>{alphaAt(*pixmap, 0, 0), alphaAt(*pixmap, 0, 1)};
   EXPECT_THAT(antiV2Alpha, ElementsAre(10u, 240u));
+}
+
+TEST(PipelineBlitterTest, BlitAntiV2ClipsSlowPathAtBottomEdge) {
+  auto pixmap = tiny_skia::Pixmap::fromSize(1, 3);
+  ASSERT_TRUE(pixmap.has_value());
+  const auto clip = tiny_skia::IntRect::fromXYWH(0, 0, 1, 2);
+  ASSERT_TRUE(clip.has_value());
+  auto sub = pixmap->mutableView().subpixmap(*clip);
+  ASSERT_TRUE(sub.has_value());
+
+  auto blitter = tiny_skia::pipeline::RasterPipelineBlitter::createMask(&*sub);
+  ASSERT_TRUE(blitter.has_value());
+
+  blitter->blitAntiV2(0, 1, 10u, 240u);
+
+  const auto alpha = std::vector<std::uint8_t>{alphaAt(*pixmap, 0, 0), alphaAt(*pixmap, 0, 1),
+                                               alphaAt(*pixmap, 0, 2)};
+  EXPECT_THAT(alpha, ElementsAre(0u, 10u, 0u));
 }
 
 }  // namespace
