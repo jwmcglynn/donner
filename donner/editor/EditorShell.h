@@ -298,6 +298,9 @@ public:
 private:
   bool tryOpenPath(std::string_view path, std::string* error);
   bool tryLoadSource(std::string_view source, std::optional<std::string> path, std::string* error);
+  void queuePendingSampleLoad(std::string sampleId);
+  void cancelPendingSampleLoad();
+  void confirmPendingSampleLoadDiscard();
   void processPendingSampleLoad();
   /// Apply Group or Ungroup only while the render worker releases DOM ownership.
   bool tryApplyGroupOperation(bool ungroup);
@@ -614,6 +617,8 @@ private:
   bool showSamplePicker_ = false;
   std::string activeSampleId_;
   std::string pendingSampleLoadId_;
+  bool pendingSampleLoadNeedsConfirmation_ = false;
+  bool pendingSampleLoadDiscardConfirmed_ = false;
   /// Whether the Compositor Debug panel window renders. Off by default: it is a
   /// developer-facing composite-tile diagnostics view, toggled on via the View
   /// menu. The user-facing Layers panel is unrelated and always visible.

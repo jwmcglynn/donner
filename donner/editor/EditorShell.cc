@@ -1314,7 +1314,7 @@ void EditorShell::maybeLogFrameMissTelemetry(const FrameCostBreakdown& frameCost
 }
 
 bool EditorShell::tryOpenPath(std::string_view path, std::string* error) {
-  pendingSampleLoadId_.clear();
+  cancelPendingSampleLoad();
   auto contents = LoadFile(std::string(path));
   if (!contents.has_value()) {
     *error = "Could not open file.";
@@ -1344,6 +1344,27 @@ bool EditorShell::tryLoadSource(std::string_view source, std::optional<std::stri
   return true;
 }
 
+void EditorShell::queuePendingSampleLoad(std::string sampleId) {
+  pendingSampleLoadId_ = std::move(sampleId);
+  pendingSampleLoadNeedsConfirmation_ = false;
+  pendingSampleLoadDiscardConfirmed_ = false;
+}
+
+void EditorShell::cancelPendingSampleLoad() {
+  pendingSampleLoadId_.clear();
+  pendingSampleLoadNeedsConfirmation_ = false;
+  pendingSampleLoadDiscardConfirmed_ = false;
+}
+
+void EditorShell::confirmPendingSampleLoadDiscard() {
+  if (pendingSampleLoadId_.empty()) {
+    return;
+  }
+  pendingSampleLoadNeedsConfirmation_ = false;
+  pendingSampleLoadDiscardConfirmed_ = true;
+  window_.wakeEventLoop();
+}
+
 void EditorShell::processPendingSampleLoad() {
   if (!internal::PendingDocumentReplacementCanProcess(!pendingSampleLoadId_.empty(),
                                                       renderCoordinator_.asyncRenderer().isBusy(),
@@ -1351,7 +1372,15 @@ void EditorShell::processPendingSampleLoad() {
     return;
   }
 
+  if (!pendingSampleLoadDiscardConfirmed_ && (app_.isDirty() || textEditor_.isTextChanged())) {
+    pendingSampleLoadNeedsConfirmation_ = true;
+    showSamplePicker_ = true;
+    return;
+  }
+
   const std::string sampleId = std::exchange(pendingSampleLoadId_, {});
+  pendingSampleLoadNeedsConfirmation_ = false;
+  pendingSampleLoadDiscardConfirmed_ = false;
   const EditorSample* sample = FindEditorSample(sampleId);
   if (sample == nullptr) {
     showSamplePicker_ = true;
@@ -1569,7 +1598,7 @@ void EditorShell::requestRevert() {
     return;
   }
 
-  pendingSampleLoadId_.clear();
+  cancelPendingSampleLoad();
 
   const std::string source(app_.cleanSourceText());
   if (!app_.revertToCleanSource()) {
@@ -1643,7 +1672,7 @@ void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
     dialogPresenter_.requestAbout();
   }
   if (menuActions.openFile) {
-    pendingSampleLoadId_.clear();
+    cancelPendingSampleLoad();
     dialogPresenter_.requestOpenFile(app_.currentFilePath());
   }
   if (menuActions.openSamples) {
@@ -3453,16 +3482,36 @@ void EditorShell::renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& con
   const SamplePickerActions actions = samplePickerPresenter_.render(
       SamplePickerState{.visible = true, .selectedSampleId = activeSampleId_});
   ImGui::EndChild();
+
+  if (pendingSampleLoadNeedsConfirmation_) {
+    if (!ImGui::IsPopupOpen("Discard changes?")) {
+      ImGui::OpenPopup("Discard changes?");
+    }
+    if (ImGui::BeginPopupModal("Discard changes?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+      ImGui::TextUnformatted("Loading a sample replaces the current document.");
+      ImGui::Spacing();
+      if (ImGui::Button("Cancel", ImVec2(112.0f, 40.0f))) {
+        cancelPendingSampleLoad();
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Discard & Load", ImVec2(148.0f, 40.0f))) {
+        confirmPendingSampleLoadDiscard();
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::EndPopup();
+    }
+  }
   ImGui::End();
   ImGui::PopStyleVar(2);
   ImGui::PopStyleColor();
 
   if (actions.dismiss) {
-    pendingSampleLoadId_.clear();
+    cancelPendingSampleLoad();
     showSamplePicker_ = false;
   }
   if (actions.openFile) {
-    pendingSampleLoadId_.clear();
+    cancelPendingSampleLoad();
     showSamplePicker_ = false;
     dialogPresenter_.requestOpenFile(app_.currentFilePath());
   }
@@ -3474,7 +3523,7 @@ void EditorShell::renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& con
 #endif
   }
   if (actions.loadSample) {
-    pendingSampleLoadId_ = actions.sampleId;
+    queuePendingSampleLoad(actions.sampleId);
     window_.wakeEventLoop();
   }
 }

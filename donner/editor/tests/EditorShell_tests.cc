@@ -630,7 +630,7 @@ public:
   }
 
   static void QueueSampleLoad(EditorShell& shell, std::string sampleId) {
-    shell.pendingSampleLoadId_ = std::move(sampleId);
+    shell.queuePendingSampleLoad(std::move(sampleId));
     shell.showSamplePicker_ = true;
   }
 
@@ -638,6 +638,14 @@ public:
 
   static std::string_view PendingSampleLoad(const EditorShell& shell) {
     return shell.pendingSampleLoadId_;
+  }
+
+  static bool PendingSampleLoadNeedsConfirmation(const EditorShell& shell) {
+    return shell.pendingSampleLoadNeedsConfirmation_;
+  }
+
+  static void ConfirmPendingSampleLoadDiscard(EditorShell& shell) {
+    shell.confirmPendingSampleLoadDiscard();
   }
 
   static void RequestSave(EditorShell& shell) { shell.requestSave(); }
@@ -1793,9 +1801,45 @@ TEST(EditorShellTest, GroupDispatchFlushesAtomicallyAndDeferredSampleWaitsForQue
 
   ASSERT_TRUE(app.flushFrame());
   EditorShellTestAccess::ProcessPendingSampleLoad(shell);
+  EXPECT_TRUE(EditorShellTestAccess::PendingSampleLoadNeedsConfirmation(shell));
+  EXPECT_EQ(EditorShellTestAccess::PendingSampleLoad(shell), "basic-shapes");
+  EditorShellTestAccess::ConfirmPendingSampleLoadDiscard(shell);
+  EditorShellTestAccess::ProcessPendingSampleLoad(shell);
   EXPECT_TRUE(EditorShellTestAccess::PendingSampleLoad(shell).empty());
   EXPECT_TRUE(app.document().document().querySelector("polygon").has_value());
   EXPECT_FALSE(app.currentFilePath().has_value());
+}
+
+TEST(EditorShellTest, SampleLoadRequiresConfirmationForPendingSourceEdits) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::Source(shell).setText("<svg>unsaved</svg>");
+  EditorShellTestAccess::QueueSampleLoad(shell, "basic-shapes");
+
+  EditorShellTestAccess::ProcessPendingSampleLoad(shell);
+
+  EXPECT_TRUE(EditorShellTestAccess::PendingSampleLoadNeedsConfirmation(shell));
+  EXPECT_EQ(EditorShellTestAccess::PendingSampleLoad(shell), "basic-shapes");
+  EXPECT_FALSE(EditorShellTestAccess::App(shell)
+                   .document()
+                   .document()
+                   .querySelector("polygon")
+                   .has_value());
+
+  EditorShellTestAccess::ConfirmPendingSampleLoadDiscard(shell);
+  EditorShellTestAccess::ProcessPendingSampleLoad(shell);
+
+  EXPECT_TRUE(EditorShellTestAccess::PendingSampleLoad(shell).empty());
+  EXPECT_TRUE(EditorShellTestAccess::App(shell)
+                  .document()
+                  .document()
+                  .querySelector("polygon")
+                  .has_value());
 }
 
 TEST(EditorShellTest, NewerFileAndRevertRequestsCancelDeferredSampleReplacement) {
