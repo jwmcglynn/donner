@@ -1163,6 +1163,10 @@ donner_cc_test(
 donner_cc_test(
     name = "layers_panel_tests",
     srcs = ["LayersPanel_tests.cc"],
+    # 71 independent panel/golden cases. The geode variant runs them through
+    # software Vulkan on GPU-less CI (~23 s single-shard); shard so the render
+    # work runs as parallel RE actions.
+    shard_count = 4,
     data = [
         "//:donner_splash.svg",
     ] + glob(["testdata/layer_thumbnails/*.png"]),
