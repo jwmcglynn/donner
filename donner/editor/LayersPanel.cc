@@ -110,8 +110,10 @@ std::uint64_t DisclosureChevronTextureKey(bool expanded) {
 /// click. The chevron points right when collapsed and down when expanded, drawn
 /// from the Donner-rendered chevron mask and tinted with the current text color.
 bool DrawDisclosureChevronButton(const char* id, bool expanded,
-                                 const LayersPanel::IconTextureProvider& iconTextureProvider) {
-  const ImVec2 cellSize(ImGui::GetFrameHeight(), ImGui::GetFrameHeight());
+                                 const LayersPanel::IconTextureProvider& iconTextureProvider,
+                                 float minimumInteractionHeight) {
+  const float targetSize = std::max(ImGui::GetFrameHeight(), minimumInteractionHeight);
+  const ImVec2 cellSize(targetSize, targetSize);
   const ImVec2 cellMin = ImGui::GetCursorScreenPos();
   const bool clicked = ImGui::InvisibleButton(id, cellSize);
   if (iconTextureProvider) {
@@ -129,11 +131,13 @@ bool DrawDisclosureChevronButton(const char* id, bool expanded,
 }
 
 bool DrawLayerIconButton(const char* id, LayerAffordanceIcon icon,
-                         const LayersPanel::IconTextureProvider& iconTextureProvider) {
+                         const LayersPanel::IconTextureProvider& iconTextureProvider,
+                         float minimumInteractionHeight) {
   const ImVec2 iconSize(kAffordanceIconSize, kAffordanceIconSize);
   const ImGuiStyle& style = ImGui::GetStyle();
-  const ImVec2 buttonSize(iconSize.x + style.FramePadding.x * 2.0f,
-                          iconSize.y + style.FramePadding.y * 2.0f);
+  const ImVec2 buttonSize(
+      std::max(iconSize.x + style.FramePadding.x * 2.0f, minimumInteractionHeight),
+      std::max(iconSize.y + style.FramePadding.y * 2.0f, minimumInteractionHeight));
   const ImVec2 buttonMin = ImGui::GetCursorScreenPos();
   const bool clicked = ImGui::InvisibleButton(id, buttonSize);
 
@@ -143,8 +147,8 @@ bool DrawLayerIconButton(const char* id, LayerAffordanceIcon icon,
       const LayersPanel::IconTexture iconTexture =
           iconTextureProvider(LayerAffordanceIconTextureKey(icon), *bitmap);
       if (iconTexture.texture != 0) {
-        const ImVec2 iconMin(buttonMin.x + style.FramePadding.x,
-                             buttonMin.y + style.FramePadding.y);
+        const ImVec2 iconMin(buttonMin.x + (buttonSize.x - iconSize.x) * 0.5f,
+                             buttonMin.y + (buttonSize.y - iconSize.y) * 0.5f);
         const ImVec2 iconMax(iconMin.x + iconSize.x, iconMin.y + iconSize.y);
         const ImVec2 uvTopLeft(0.0f, 0.0f);
         const ImVec2 uvBottomRight(static_cast<float>(iconTexture.uvBottomRight.x),
@@ -215,7 +219,8 @@ ImU32 ToImU32(const css::RGBA& rgba) {
 
 }  // namespace
 
-void LayersPanel::refreshSnapshot(const EditorApp& app, svg::Renderer* renderer) {
+void LayersPanel::refreshSnapshot(const EditorApp& app, svg::Renderer* renderer,
+                                  ThumbnailRefreshMode mode) {
   model_.refresh(app);
 
   const auto renderStart = std::chrono::steady_clock::now();
@@ -235,9 +240,10 @@ void LayersPanel::refreshSnapshot(const EditorApp& app, svg::Renderer* renderer)
 
   std::unordered_set<std::uint64_t> liveStableIds;
   liveStableIds.reserve(model_.rows().size());
-  const bool renderThumbnails = !app.document().document().hasPendingRenderInvalidation();
+  const bool renderThumbnails = mode == ThumbnailRefreshMode::Render &&
+                                !app.document().document().hasPendingRenderInvalidation();
   const Vector2i thumbnailMaxSizePx(kPreviewWidthPx, kPreviewHeightPx);
-  if (!renderThumbnails) {
+  if (mode == ThumbnailRefreshMode::Render && !renderThumbnails) {
     thumbnailRefreshStats_.skippedForCanvasInvalidationCount = model_.rows().size();
   }
   std::optional<svg::Renderer> fallbackRenderer;
@@ -482,7 +488,8 @@ void LayersPanel::beginRename(std::uint64_t stableId) {
 }
 
 void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& textureProvider,
-                         const IconTextureProvider& iconTextureProvider) {
+                         const IconTextureProvider& iconTextureProvider,
+                         float minimumInteractionHeight) {
   const std::vector<LayerTreeRow>& rows = model_.rows();
   if (rows.empty()) {
     ImGui::TextDisabled("(no document)");
@@ -492,6 +499,7 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
   constexpr float kPreviewWidth = static_cast<float>(kPreviewWidthPx);
   constexpr float kPreviewHeight = static_cast<float>(kPreviewHeightPx);
   constexpr float kIndentStep = 14.0f;
+  const float rowHeight = std::max(kPreviewHeight, minimumInteractionHeight);
   ImDrawList* drawList = ImGui::GetWindowDrawList();
 
   // The visible row (if any) whose element matches the active locked-rejection
@@ -525,11 +533,12 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
     // the owned model. A non-expandable row gets a same-width spacer so names
     // stay aligned.
     if (row.hasChildren) {
-      if (DrawDisclosureChevronButton("##layer_disclosure", row.isExpanded, iconTextureProvider)) {
+      if (DrawDisclosureChevronButton("##layer_disclosure", row.isExpanded, iconTextureProvider,
+                                      minimumInteractionHeight)) {
         model_.toggleExpanded(row.stableId);
       }
     } else {
-      ImGui::Dummy(ImVec2(ImGui::GetFrameHeight(), 0.0f));
+      ImGui::Dummy(ImVec2(std::max(ImGui::GetFrameHeight(), minimumInteractionHeight), 0.0f));
     }
     ImGui::SameLine();
 
@@ -541,7 +550,8 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
     // no rendered thumbnail (or no GL texture context) fall back to the
     // deterministic fill swatch. See CLAUDE.md "No Rendering Vector Graphics
     // With ImGui".
-    const ImVec2 slotMin = ImGui::GetCursorScreenPos();
+    const ImVec2 slotCellMin = ImGui::GetCursorScreenPos();
+    const ImVec2 slotMin(slotCellMin.x, slotCellMin.y + (rowHeight - kPreviewHeight) * 0.5f);
     const ImVec2 slotMax(slotMin.x + kPreviewWidth, slotMin.y + kPreviewHeight);
     const svg::RendererBitmap* thumbnailBitmap = nullptr;
     ThumbnailTexture thumbnailTexture;
@@ -587,7 +597,7 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
       drawList->AddRectFilled(swatchMin, swatchMax, ToImU32(swatch), 3.0f);
       drawList->AddRect(swatchMin, swatchMax, IM_COL32(255, 255, 255, 60), 3.0f);
     }
-    ImGui::Dummy(ImVec2(slotMax.x - slotMin.x, slotMax.y - slotMin.y));
+    ImGui::Dummy(ImVec2(slotMax.x - slotMin.x, rowHeight));
     ImGui::SameLine();
 
     // Selection highlight. Only a *truly* selected row gets the filled row
@@ -645,7 +655,7 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
       const ImVec2 labelMin = ImGui::GetCursorScreenPos();
       if (ImGui::Selectable("##layer_row_select", selected,
                             ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap,
-                            ImVec2(0.0f, kPreviewHeight))) {
+                            ImVec2(0.0f, rowHeight))) {
         if (liveApp != nullptr) {
           ClickModifiers mods{
               .shift = ImGui::GetIO().KeyShift,
@@ -655,7 +665,7 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
         }
       }
       const ImVec2 labelPos(labelMin.x,
-                            slotMin.y + (kPreviewHeight - ImGui::GetTextLineHeight()) * 0.5f);
+                            slotCellMin.y + (rowHeight - ImGui::GetTextLineHeight()) * 0.5f);
       drawList->AddText(labelPos, ImGui::GetColorU32(ImGuiCol_Text), row.displayName.c_str());
       // Track the hovered row so the canvas/source panes can highlight the
       // element under the cursor, mirroring source-pane hover. `IsItemHovered`
@@ -693,8 +703,9 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
     // (design doc 0054 selection token), not the neutral header surface.
     if (partialOnly) {
       const ImU32 accent = WithAlpha(EditorTheme::Active().accentDefault, 230);
-      const ImVec2 barMin(ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMin().x, slotMin.y);
-      const ImVec2 barMax(barMin.x + 2.0f, slotMin.y + kPreviewHeight);
+      const ImVec2 barMin(ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMin().x,
+                          slotCellMin.y);
+      const ImVec2 barMax(barMin.x + 2.0f, slotCellMin.y + rowHeight);
       drawList->AddRectFilled(barMin, barMax, accent, 1.0f);
     }
 
@@ -709,18 +720,23 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
     const LayerAffordanceIcon lockIcon =
         row.isLocked ? LayerAffordanceIcon::Locked : LayerAffordanceIcon::Unlocked;
     const ImGuiStyle& style = ImGui::GetStyle();
-    const float buttonWidth = kAffordanceIconSize + style.FramePadding.x * 2.0f;
+    const float buttonWidth =
+        std::max(kAffordanceIconSize + style.FramePadding.x * 2.0f, minimumInteractionHeight);
     const float affordancesWidth = buttonWidth * 2.0f + style.ItemSpacing.x;
     ImGui::SameLine();
     ImGui::SetCursorPosX(ImGui::GetWindowContentRegionMax().x - affordancesWidth);
-    if (DrawLayerIconButton("##layer_eye", eyeIcon, iconTextureProvider) && liveApp != nullptr) {
+    if (DrawLayerIconButton("##layer_eye", eyeIcon, iconTextureProvider,
+                            minimumInteractionHeight) &&
+        liveApp != nullptr) {
       handleEyeClick(*liveApp, i);
     }
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("%s", row.isVisible ? "Hide layer" : "Show layer");
     }
     ImGui::SameLine();
-    if (DrawLayerIconButton("##layer_lock", lockIcon, iconTextureProvider) && liveApp != nullptr) {
+    if (DrawLayerIconButton("##layer_lock", lockIcon, iconTextureProvider,
+                            minimumInteractionHeight) &&
+        liveApp != nullptr) {
       handleLockClick(*liveApp, i);
     }
     if (ImGui::IsItemHovered()) {

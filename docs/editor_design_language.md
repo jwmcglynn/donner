@@ -45,8 +45,9 @@ but product chrome should not choose a different accent per widget.
 ## Geometry And Type
 
 Spacing uses 4, 8, 12, 16, 24, and 32 px tokens. Controls use a 4 px radius; floating containers
-use a 6 px radius. Tool buttons are 32 px square. New fixed-format controls should use stable
-dimensions and reserve enough room for their longest label.
+use a 6 px radius. Tool buttons are 32 px square on desktop and 44 px square in the compact touch
+profile. New fixed-format controls should use stable dimensions and reserve enough room for their
+longest label.
 
 Roboto is the UI face and Fira Code is the source face. UI text uses regular weight for values and
 bold weight for identity or compact section emphasis. Large display type does not belong in panels,
@@ -69,6 +70,38 @@ leak through the white halo during downsampling.
 The Inspector contains document and selection controls only. Viewport implementation telemetry does
 not occupy the Inspector. Zoom state lives on the canvas in a compact control that resets to 100
 percent when clicked.
+
+### Adaptive Touch Profile
+
+`ComputeEditorAdaptiveUiLayout` selects a canvas-first compact profile for constrained windows and
+touch-preferred builds. Native windows enter it below 760 px wide or 520 px high. WebAssembly enters
+it at those constraints or when the browser reports touch points or a coarse pointer, so desktop
+browsers retain the full editor while iOS starts with stable touch geometry.
+
+The compact profile keeps the same Graphite language but changes the command hierarchy:
+
+- a fixed 52 px top bar presents `DONNER` plus icon-only Open/Samples, Undo, Redo, Layers, and
+  Inspector actions;
+- the canvas tool palette keeps Select, Pen, and Text with 44 px buttons, while the dense paint
+  widget, source pane, text format bar, canvas scrollbars, and compositor diagnostics are omitted;
+- Layers and Inspector open one at a time in an overlay sheet, on the right in landscape and at the
+  bottom in portrait, with a 44 px close target;
+- layer rows and their disclosure, visibility, and lock controls use at least 44 px interaction
+  targets; compact Inspector fields receive equivalent vertical padding;
+- selection, text-frame, and pen geometry stays visually unchanged while invisible pointer hit
+  tolerance doubles for touch.
+
+Opening a right-side sheet recenters the tool palette within the unobscured canvas region. Compact
+and desktop modes use separate DockSpace roots, so resizing into the touch profile cannot rewrite a
+custom desktop panel arrangement. Source visibility and desktop sidebar width remain preferences,
+not transient compact state.
+
+The UI profile consumes ordinary ImGui pointer and resize events. The WebAssembly bootstrap maps
+one primary touch pointer into the existing mouse-compatible ImGui stream, with pointer capture and
+cancel handling so taps and direct drags use the desktop mutation paths. Viewport sizing,
+multi-touch gestures, virtual-keyboard behavior, and Safari lifecycle integration remain platform
+responsibilities; they must continue to feed existing editor seams rather than add touch-specific
+document mutation paths.
 
 ### Text Authoring
 
@@ -177,16 +210,24 @@ Launching without a filename, including the WebAssembly build, opens a first-run
 real editor workspace. It keeps Donner as the first visual signal, offers Open SVG and a fixed
 GitHub destination, and lists a bounded offline catalog of reviewed SVG samples. Loading a sample
 creates an untitled document, so Save cannot overwrite a local file without an explicit path.
+Each sample card uses a small bitmap rendered by Donner from the exact bundled SVG source. ImGui
+only blits the cached texture; it does not approximate sample artwork with hand-drawn UI geometry.
+The catalog has a dedicated texture cache so Layers-panel retention cannot evict welcome previews.
+The shell renders at most one missing preview per UI frame and keeps a fixed placeholder slot while
+the bounded catalog fills in, avoiding a first-frame Wasm stall or card-layout shift.
 
 The welcome surface owns the workspace while visible rather than competing with docked Layers and
 Inspector panels. Its sample controls use at least 44 logical pixels of height, lay out in one
-column below the compact breakpoint, and use at most three columns on wider displays. The surface
+column below the compact breakpoint, and use at most three columns on wider displays. Cards reserve
+a fixed preview slot while keeping their complete surface clickable as a touch target. The surface
 can be reopened through File > Open Sample and dismissed to reveal the current document.
 
 Document replacement requested from the sample surface is deferred to the next orchestration frame.
 The shell waits for the renderer to become idle and detaches any prior direct-presentation callback
 before releasing old WebGPU resources. This ordering prevents the prior frame callback from
-retaining presentation handles across document replacement.
+retaining presentation handles across document replacement. If the document or source buffer has
+unsaved edits, replacement stops at an explicit Discard and Load confirmation; Cancel leaves both
+the current document and pending source text untouched.
 
 ## Verification
 
@@ -195,6 +236,9 @@ Theme, menu, and source-palette contracts run in:
 ```sh
 bazel test //donner/editor/tests:editor_theme_tests \
   //donner/editor/tests:editor_shell_tests \
+  //donner/editor/tests:editor_shell_layout_tests \
+  //donner/editor/tests:editor_dock_layout_tests \
+  //donner/editor/tests:layers_panel_tests \
   //donner/editor/tests:menu_bar_presenter_tests \
   //donner/editor/tests:sample_picker_presenter_tests \
   //donner/editor/tests:sidebar_presenter_tests \

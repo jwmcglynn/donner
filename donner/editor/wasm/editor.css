@@ -20,6 +20,10 @@ body {
   outline: none;
 }
 
+#canvas {
+  touch-action: none;
+}
+
 #status {
   position: fixed;
   left: 16px;

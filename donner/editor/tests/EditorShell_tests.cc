@@ -344,6 +344,31 @@ TEST(EditorShellInternalTest, StructuralDocumentActionsWaitForExclusiveDomOwners
       /*hasPendingRequest=*/true, /*rendererBusy=*/false, /*hasPendingMutations=*/false));
 }
 
+TEST(EditorShellInternalTest, CompactChromeCapturesSheetAndUsesTouchHint) {
+  const Box2d panelRect = Box2d::FromXYWH(480.0, 52.0, 360.0, 338.0);
+  EXPECT_TRUE(internal::CanvasChromeCapturesInput(
+      ImVec2(500.0f, 100.0f), std::nullopt, Box2d::FromXYWH(20.0, 70.0, 156.0, 60.0), std::nullopt,
+      std::nullopt, Box2d::FromXYWH(20.0, 320.0, 44.0, 44.0), panelRect));
+  EXPECT_NE(internal::TextToolHintLabel(/*isEditing=*/false, /*isDraggingBox=*/false,
+                                        /*touchPreferred=*/true)
+                .find("Double-tap"),
+            std::string_view::npos);
+}
+
+TEST(EditorShellInternalTest, HiddenCanvasScrollbarsDoNotCaptureCanvasInput) {
+  ViewportState viewport;
+  viewport.paneOrigin = Vector2d(0.0, 0.0);
+  viewport.paneSize = Vector2d(100.0, 100.0);
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 400.0, 400.0);
+  viewport.zoom = 1.0;
+  viewport.panDocPoint = Vector2d(50.0, 50.0);
+  viewport.panScreenPoint = Vector2d(50.0, 50.0);
+
+  const Vector2d bottomRailPoint(50.0, 95.0);
+  EXPECT_TRUE(internal::CanvasScrollbarsCaptureInput(true, viewport, bottomRailPoint));
+  EXPECT_FALSE(internal::CanvasScrollbarsCaptureInput(false, viewport, bottomRailPoint));
+}
+
 TEST(EditorShellInternalTest, PendingClickBusyActionPrefersFastRedragThenCancelsBusyRender) {
   EXPECT_EQ(internal::PendingClickBusyActionForState(/*tookFastRedrag=*/true,
                                                      /*rendererBusy=*/true),
@@ -1016,6 +1041,18 @@ public:
     return shell.dockLayoutResetRequested_;
   }
 
+  static const EditorAdaptiveUiLayout& AdaptiveUiLayout(const EditorShell& shell) {
+    return shell.adaptiveUiLayout_;
+  }
+
+  static void SetAdaptiveUiLayout(EditorShell& shell, const EditorAdaptiveUiLayout& layout) {
+    shell.adaptiveUiLayout_ = layout;
+  }
+
+  static void SetCompactPanelVisible(EditorShell& shell, bool visible) {
+    shell.compactPanelVisible_ = visible;
+  }
+
   static bool SourcePaneVisible(const EditorShell& shell) { return shell.sourcePaneVisible_; }
   static float SourcePaneWidth(const EditorShell& shell) { return shell.sourcePaneWidth_; }
   static void SetSourcePaneWidth(EditorShell& shell, float value) {
@@ -1326,6 +1363,14 @@ TEST(EditorShellTest, HiddenWindowShellConstructsAndRunsFrames) {
   window.beginFrame();
   shell.runFrame();
   window.endFrame();
+
+  const EditorAdaptiveUiLayout& adaptiveLayout = EditorShellTestAccess::AdaptiveUiLayout(shell);
+  EXPECT_TRUE(adaptiveLayout.compactTouch());
+  EXPECT_FLOAT_EQ(adaptiveLayout.topBarHeight, 52.0f);
+  EXPECT_FLOAT_EQ(adaptiveLayout.toolButtonSize, 44.0f);
+  EXPECT_FALSE(adaptiveLayout.showPaintControls);
+  EXPECT_FALSE(adaptiveLayout.showTextFormatBar);
+  EXPECT_FALSE(adaptiveLayout.showCanvasScrollbars);
 
   const LayerInspectorStatusReadback status = shell.layerInspectorStatusForReadback();
   EXPECT_GE(status.viewportDesiredCanvas.x, 0);
@@ -2574,6 +2619,19 @@ TEST(EditorShellTest, ShellGeometryHelpersClampToViewportAndSelectionCache) {
                                                                      ImVec2(500.0f, 300.0f));
   EXPECT_GT(palette.width(), 0.0);
   EXPECT_GT(palette.height(), 0.0);
+
+  const EditorAdaptiveUiLayout compactLandscape = ComputeEditorAdaptiveUiLayout({
+      .windowWidth = 844.0f,
+      .windowHeight = 390.0f,
+      .preferTouch = true,
+  });
+  EditorShellTestAccess::SetAdaptiveUiLayout(shell, compactLandscape);
+  EditorShellTestAccess::SetCompactPanelVisible(shell, true);
+  const Box2d compactPalette = EditorShellTestAccess::ToolPaletteScreenRect(
+      shell, ImVec2(0.0f, compactLandscape.topBarHeight),
+      ImVec2(844.0f, 390.0f - compactLandscape.topBarHeight));
+  EXPECT_LE(compactPalette.bottomRight.x, compactLandscape.panelX);
+  EXPECT_FLOAT_EQ(compactPalette.width(), 156.0f);
 }
 
 TEST(EditorShellTest, PrivateUiRenderHelpersCoverPaneToolbarAndPanelStates) {

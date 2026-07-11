@@ -51,6 +51,11 @@ struct LayersLockedRejectionFlash {
 /// ImGui Layers panel backed by a `LayerTreeModel` snapshot.
 class LayersPanel {
 public:
+  enum class ThumbnailRefreshMode {
+    Render,
+    SwatchesOnly,
+  };
+
   LayersPanel() = default;
 
   /// Maps a per-row rendered thumbnail bitmap to an ImGui texture handle for
@@ -119,7 +124,9 @@ public:
   ///
   /// @param app Live editor app to snapshot.
   /// @param renderer Optional renderer to use for thumbnail rasterization.
-  void refreshSnapshot(const EditorApp& app, svg::Renderer* renderer = nullptr);
+  /// @param mode Whether to render thumbnails or refresh only the row swatches.
+  void refreshSnapshot(const EditorApp& app, svg::Renderer* renderer = nullptr,
+                       ThumbnailRefreshMode mode = ThumbnailRefreshMode::Render);
 
   /// Render the panel into the current ImGui window. Must be called inside an
   /// `ImGui::Begin(...) / End()` pair. When @p liveApp is null (the worker owns
@@ -131,8 +138,12 @@ public:
   /// @param iconTextureProvider Uploads the static Donner-rendered layer icon
   ///   bitmaps to ImGui textures for display, or null to keep a blank hit area
   ///   in headless tests.
+  /// @param minimumInteractionHeight Minimum row and icon-button target height.
+  ///   Compact touch sheets pass 44 logical pixels; desktop keeps the dense
+  ///   default by passing zero.
   void render(EditorApp* liveApp, const ThumbnailTextureProvider& textureProvider = {},
-              const IconTextureProvider& iconTextureProvider = {});
+              const IconTextureProvider& iconTextureProvider = {},
+              float minimumInteractionHeight = 0.0f);
 
   /// Set the current locked-rejection flash (or clear it with `std::nullopt`).
   /// When set with a positive intensity and the flashed element matches a

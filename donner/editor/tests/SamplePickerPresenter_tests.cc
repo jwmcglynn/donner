@@ -16,6 +16,7 @@ TEST(SamplePickerPresenter, NarrowLayoutUsesOneTouchSizedColumn) {
   EXPECT_EQ(layout.rows, 4u);
   EXPECT_GE(layout.cardWidth, 0.0f);
   EXPECT_GE(layout.cardHeight, kSamplePickerMinTouchTarget);
+  EXPECT_FLOAT_EQ(layout.cardHeight, 96.0f);
 }
 
 TEST(SamplePickerPresenter, WideLayoutUsesCompactBoundedColumns) {
@@ -26,6 +27,7 @@ TEST(SamplePickerPresenter, WideLayoutUsesCompactBoundedColumns) {
   EXPECT_EQ(layout.rows, 2u);
   EXPECT_GT(layout.cardWidth, 0.0f);
   EXPECT_GE(layout.cardHeight, kSamplePickerMinTouchTarget);
+  EXPECT_FLOAT_EQ(layout.cardHeight, 96.0f);
   EXPECT_FLOAT_EQ(layout.cardWidth * 3.0f + 12.0f * 2.0f, 1024.0f);
 }
 

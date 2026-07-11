@@ -15,11 +15,16 @@ inline constexpr const char* kCompositorDebugWindowName = "Compositor Debug";
 
 /// Stable string hashed into the editor's root DockSpace id.
 inline constexpr const char* kEditorDockSpaceName = "EditorDockSpace";
+/// Stable string hashed into the compact editor's canvas-only DockSpace id.
+inline constexpr const char* kEditorCompactDockSpaceName = "EditorCompactDockSpace";
 
 /// The editor's root DockSpace id. Hashed directly from \ref
 /// kEditorDockSpaceName so it is stable and independent of the ImGui window
 /// stack (unlike `ImGui::GetID`, which dereferences the current window).
 [[nodiscard]] ImGuiID EditorDockSpaceId();
+/// The compact editor's root DockSpace id. Kept separate so entering compact
+/// mode cannot rewrite a customized desktop DockSpace tree.
+[[nodiscard]] ImGuiID EditorCompactDockSpaceId();
 
 /// Node ids produced by \ref BuildDefaultDockLayout. Ids of zero mean the node
 /// was not created (e.g. \ref EditorDockNodes::rightBottom when the compositor
@@ -50,6 +55,9 @@ struct EditorDockLayoutParams {
   float compositorRatio = 0.34f;
   /// Whether the Compositor Debug panel gets a reserved node in the layout.
   bool includeCompositorDebug = false;
+  /// Whether persistent Layers and Inspector nodes are included. Compact touch
+  /// mode omits them and presents one panel at a time as an overlay sheet.
+  bool includeSidebars = true;
 };
 
 /**

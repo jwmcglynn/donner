@@ -61,6 +61,61 @@ async function runBootstrapWithoutThreads() {
   return { elements, window };
 }
 
+async function loadTouchPointerBridge() {
+  const source = await readFile(new URL("../editor-bootstrap.js", import.meta.url), "utf8");
+  const handlers = new Map();
+  const dispatched = [];
+  const captured = [];
+  const released = [];
+  const canvas = {
+    addEventListener(type, handler) {
+      handlers.set(type, handler);
+    },
+    dispatchEvent(event) {
+      dispatched.push(event);
+    },
+    focus() {},
+    hidden: false,
+    releasePointerCapture(pointerId) {
+      released.push(pointerId);
+    },
+    setPointerCapture(pointerId) {
+      captured.push(pointerId);
+    },
+    style: {},
+  };
+  const elements = {
+    canvas,
+    status: { hidden: false, textContent: "" },
+    "capability-error": { hidden: true },
+    "capability-error-detail": { textContent: "" },
+  };
+  const window = {
+    __donnerBackendPromise: Promise.reject(new Error("WebGL2 is unavailable")),
+    isSecureContext: false,
+    PointerEvent: function PointerEvent() {},
+  };
+  class MouseEvent {
+    constructor(type, init) {
+      this.type = type;
+      Object.assign(this, init);
+    }
+  }
+  const context = vm.createContext({
+    console,
+    document: {
+      body: { appendChild() {} },
+      getElementById: (id) => elements[id],
+    },
+    MouseEvent,
+    SharedArrayBuffer: undefined,
+    window,
+  });
+  vm.runInContext(source, context, { filename: "editor-bootstrap.js" });
+  await new Promise((resolve) => setImmediate(resolve));
+  return { canvas, captured, dispatched, handlers, released };
+}
+
 test("auto mode prefers Geode when WebGPU has an adapter", async () => {
   const selectBackend = await loadSelector();
   const result = await selectBackend({
@@ -69,6 +124,36 @@ test("auto mode prefers Geode when WebGPU has an adapter", async () => {
     hasWebGl2: () => true,
   });
   assert.deepEqual({ ...result }, { name: "geode", base: "geode/" });
+});
+
+test("touch pointer bridge emits one captured mouse drag", async () => {
+  const { canvas, captured, dispatched, handlers, released } = await loadTouchPointerBridge();
+  const pointer = (type, overrides = {}) => ({
+    clientX: 12,
+    clientY: 34,
+    pointerId: 7,
+    pointerType: "touch",
+    preventDefault() {},
+    type,
+    ...overrides,
+  });
+
+  handlers.get("pointerdown")(pointer("pointerdown"));
+  handlers.get("pointermove")(pointer("pointermove", { clientX: 20 }));
+  handlers.get("pointerdown")(pointer("pointerdown", { pointerId: 8 }));
+  handlers.get("pointerup")(pointer("pointerup"));
+
+  assert.equal(canvas.style.touchAction, "none");
+  assert.deepEqual(captured, [7]);
+  assert.deepEqual(released, [7]);
+  assert.deepEqual(
+    dispatched.map((event) => [event.type, event.clientX, event.buttons]),
+    [
+      ["mousedown", 12, 1],
+      ["mousemove", 20, 1],
+      ["mouseup", 12, 0],
+    ],
+  );
 });
 
 test("auto mode falls back to TinySkia when WebGPU is absent", async () => {

@@ -4,13 +4,70 @@
 
 namespace donner::editor {
 
+namespace {
+
+constexpr float kCompactWidthThreshold = 760.0f;
+constexpr float kCompactHeightThreshold = 520.0f;
+constexpr float kCompactTopBarHeight = 52.0f;
+constexpr float kCompactToolButtonSize = 44.0f;
+constexpr float kCompactPanelFraction = 0.42f;
+constexpr float kCompactPanelMinWidth = 280.0f;
+constexpr float kCompactPanelMaxWidth = 380.0f;
+constexpr float kCompactPanelMinHeight = 220.0f;
+constexpr float kCompactPanelMaxHeight = 360.0f;
+
+}  // namespace
+
+EditorAdaptiveUiLayout ComputeEditorAdaptiveUiLayout(const EditorAdaptiveUiInput& input) {
+  const float windowWidth = std::max(0.0f, input.windowWidth);
+  const float windowHeight = std::max(0.0f, input.windowHeight);
+  const bool constrained =
+      windowWidth < kCompactWidthThreshold || windowHeight < kCompactHeightThreshold;
+
+  EditorAdaptiveUiLayout layout;
+  if (!input.preferTouch && !constrained) {
+    return layout;
+  }
+
+  layout.mode = EditorUiMode::CompactTouch;
+  layout.topBarHeight = std::min(kCompactTopBarHeight, windowHeight);
+  layout.toolButtonSize = kCompactToolButtonSize;
+  layout.showPaintControls = false;
+  layout.showTextFormatBar = false;
+  layout.showCanvasScrollbars = false;
+
+  if (windowWidth > windowHeight) {
+    layout.panelPlacement = CompactPanelPlacement::Right;
+    const float availableHeight = std::max(0.0f, windowHeight - layout.topBarHeight);
+    const float requestedWidth = windowWidth * kCompactPanelFraction;
+    layout.panelWidth = std::min(
+        windowWidth, std::clamp(requestedWidth, kCompactPanelMinWidth, kCompactPanelMaxWidth));
+    layout.panelHeight = availableHeight;
+    layout.panelX = windowWidth - layout.panelWidth;
+    layout.panelY = layout.topBarHeight;
+  } else {
+    layout.panelPlacement = CompactPanelPlacement::Bottom;
+    const float availableHeight = std::max(0.0f, windowHeight - layout.topBarHeight);
+    const float requestedHeight = windowHeight * kCompactPanelFraction;
+    layout.panelWidth = windowWidth;
+    layout.panelHeight =
+        std::min(availableHeight,
+                 std::clamp(requestedHeight, kCompactPanelMinHeight, kCompactPanelMaxHeight));
+    layout.panelX = 0.0f;
+    layout.panelY = windowHeight - layout.panelHeight;
+  }
+  return layout;
+}
+
 EditorMainPaneLayout ComputeEditorMainPaneLayout(const EditorMainPaneLayoutInput& input) {
   const float windowWidth = std::max(0.0f, input.windowWidth);
   const float minSourcePaneWidth = std::max(0.0f, input.minSourcePaneWidth);
   const float maxSourcePaneWidth = std::max(minSourcePaneWidth, input.maxSourcePaneWidth);
-  const float minRightPaneWidth = std::max(0.0f, input.minRightPaneWidth);
+  const float minRightPaneWidth =
+      input.rightPaneVisible ? std::max(0.0f, input.minRightPaneWidth) : 0.0f;
   const float minRenderPaneWidth = std::max(0.0f, input.minRenderPaneWidth);
-  const float maxRightPaneWidth = std::max(minRightPaneWidth, input.maxRightPaneWidth);
+  const float maxRightPaneWidth =
+      input.rightPaneVisible ? std::max(minRightPaneWidth, input.maxRightPaneWidth) : 0.0f;
   const float sourcePaneRailWidth =
       input.sourcePaneVisible ? 0.0f : std::clamp(input.sourcePaneRailWidth, 0.0f, windowWidth);
   const float sourcePaneUpperBound = std::max(
@@ -28,7 +85,10 @@ EditorMainPaneLayout ComputeEditorMainPaneLayout(const EditorMainPaneLayoutInput
   EditorMainPaneLayout layout;
   layout.sourcePaneWidth = sourcePaneWidth;
   layout.sourcePaneRailWidth = sourcePaneRailWidth;
-  layout.rightPaneWidth = std::clamp(input.rightPaneWidth, minRightPaneWidth, rightPaneUpperBound);
+  layout.rightPaneWidth =
+      input.rightPaneVisible
+          ? std::clamp(input.rightPaneWidth, minRightPaneWidth, rightPaneUpperBound)
+          : 0.0f;
   layout.renderPaneX = leftChromeWidth;
   layout.renderPaneWidth = std::max(0.0f, windowWidth - leftChromeWidth - layout.rightPaneWidth);
   layout.rightPaneX = windowWidth - layout.rightPaneWidth;

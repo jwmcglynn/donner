@@ -374,7 +374,9 @@ private:
   void renderEditingScopeBreadcrumb();
   void renderCanvasZoomControl();
   void renderFillStrokeToolbarWidget();
+  void renderCompactTopBar();
   void renderSidebars();
+  void ensureSampleThumbnails();
   void renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& contentRegion);
   void renderSourcePaneSplitter(float windowWidth, float paneOriginY, float paneHeight,
                                 float sourcePaneWidth);
@@ -382,6 +384,7 @@ private:
   /// the right-column dockable panels, (re)building the default locked layout on
   /// first frame, after a reset, or when the docked-panel set changes.
   void renderDockSpaceHost(float hostX, float hostY, float hostWidth, float hostHeight);
+  [[nodiscard]] std::optional<Box2d> compactPanelScreenRect() const;
   void renderLayerPanelContents();
   void maybeLogResourceDiagnostics(const FrameCostBreakdown& frameCost);
   void maybeLogFrameMissTelemetry(const FrameCostBreakdown& frameCost);
@@ -484,6 +487,9 @@ private:
   /// preview bitmap to a GL/WGPU texture (same path as the render pane) keyed by
   /// row stable id, so ImGui can blit the real thumbnail instead of a swatch.
   GlTextureCache thumbnailTextures_;
+  /// Dedicated cache for the bounded welcome catalog. It is intentionally
+  /// separate from row thumbnails, whose retention sweep follows live layers.
+  GlTextureCache sampleThumbnailTextures_;
   /// Toolbar tool-icon texture cache. Holds the Donner-rendered white-mask
   /// bitmaps for the palette icons, keyed by a stable per-icon id. Never
   /// retention-swept (unlike `thumbnailTextures_`), so the four icons upload
@@ -493,6 +499,10 @@ private:
   /// shares the editor's Geode device but is never bound to the live framebuffer,
   /// so row previews cannot inherit presentation state from the main renderer.
   svg::Renderer layerThumbnailRenderer_;
+  /// Offscreen renderer and owned bitmaps for the four built-in sample cards.
+  svg::Renderer sampleThumbnailRenderer_;
+  std::vector<std::optional<svg::RendererBitmap>> sampleThumbnailBitmaps_;
+  std::size_t sampleThumbnailGenerationCursor_ = 0;
   RenderCoordinator renderCoordinator_;
   RotateCursorSet rotateCursorSet_;
   DocumentSyncController documentSyncController_;
@@ -565,6 +575,11 @@ private:
   /// Whether the DockSpace layout has been built (or adopted from the persisted
   /// .ini) at least once this session.
   bool dockLayoutBuilt_ = false;
+  /// Whether the canvas-only compact DockSpace has been built this session.
+  bool compactDockLayoutBuilt_ = false;
+  /// Whether the active DockSpace includes persistent sidebars. Used to rebind
+  /// the canvas between separate desktop and compact roots on profile changes.
+  bool dockSidebarsIncludedInLayout_ = true;
   /// Whether the currently built layout reserves a node for the Compositor Debug
   /// panel. Tracks \ref showCompositorDebugPanel_ so toggling the panel rebuilds
   /// the layout to add or reclaim its slot.
@@ -619,6 +634,11 @@ private:
   std::string pendingSampleLoadId_;
   bool pendingSampleLoadNeedsConfirmation_ = false;
   bool pendingSampleLoadDiscardConfirmed_ = false;
+  /// Current compact sheet state. Desktop keeps the source/sidebar preferences
+  /// above intact so switching profiles does not rewrite user layout choices.
+  bool compactPanelVisible_ = false;
+  bool compactInspectorSheet_ = false;
+  EditorAdaptiveUiLayout adaptiveUiLayout_;
   /// Whether the Compositor Debug panel window renders. Off by default: it is a
   /// developer-facing composite-tile diagnostics view, toggled on via the View
   /// menu. The user-facing Layers panel is unrelated and always visible.
