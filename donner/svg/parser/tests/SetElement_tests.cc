@@ -197,4 +197,24 @@ TEST(SVGSetElement, DocumentSetTime) {
   EXPECT_DOUBLE_EQ(document.currentTime(), 1.5);
 }
 
+TEST(SVGSetElement, MissingAttributeNameProducesNoOverride) {
+  // <set> without attributeName cannot target an attribute, so no override is produced even
+  // while the animation is active.
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="r" fill="red" width="100" height="100">
+        <set to="blue" begin="0s" dur="2s" />
+      </rect>
+    </svg>
+  )");
+
+  auto& registry = document.registry();
+  components::AnimationSystem().advance(registry, 1.0, nullptr);
+
+  auto rect = document.querySelector("#r");
+  ASSERT_TRUE(rect.has_value());
+  EXPECT_EQ(registry.try_get<components::AnimatedValuesComponent>(rect->entityHandle().entity()),
+            nullptr);
+}
+
 }  // namespace donner::svg

@@ -285,4 +285,100 @@ TEST(SVGAnimateTransformElement, ValuesListInterpolation) {
   EXPECT_EQ(val3.value(), "rotate(45)");
 }
 
+TEST(SVGAnimateTransformElement, SkewYInterpolation) {
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="r" width="100" height="100">
+        <animateTransform attributeName="transform" type="skewY"
+                          from="0" to="40" begin="0s" dur="2s" />
+      </rect>
+    </svg>
+  )");
+
+  auto val = getAnimatedTransform(document, "#r", 1.0);
+  ASSERT_TRUE(val.has_value());
+  EXPECT_EQ(val.value(), "skewY(20)");
+}
+
+TEST(SVGAnimateTransformElement, SkewXByOnlyStartsFromIdentity) {
+  // A by-only skew animates from the neutral skewX(0) to skewX(by).
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="r" width="100" height="100">
+        <animateTransform attributeName="transform" type="skewX"
+                          by="30" begin="0s" dur="2s" />
+      </rect>
+    </svg>
+  )");
+
+  auto val = getAnimatedTransform(document, "#r", 1.0);
+  ASSERT_TRUE(val.has_value());
+  EXPECT_EQ(val.value(), "skewX(15)");
+}
+
+TEST(SVGAnimateTransformElement, ToOnlyTranslateAppliesConstant) {
+  // A to-only animateTransform has a single keyframe applied for the whole active interval.
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="r" width="100" height="100">
+        <animateTransform attributeName="transform" type="translate"
+                          to="100 50" begin="0s" dur="2s" />
+      </rect>
+    </svg>
+  )");
+
+  auto val05 = getAnimatedTransform(document, "#r", 0.5);
+  ASSERT_TRUE(val05.has_value());
+  EXPECT_EQ(val05.value(), "translate(100, 50)");
+
+  auto val15 = getAnimatedTransform(document, "#r", 1.5);
+  ASSERT_TRUE(val15.has_value());
+  EXPECT_EQ(val15.value(), "translate(100, 50)");
+}
+
+TEST(SVGAnimateTransformElement, MissingValueSpecProducesNoOverride) {
+  // <animateTransform> without values/from/to/by has nothing to apply.
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="r" width="100" height="100">
+        <animateTransform attributeName="transform" type="scale" begin="0s" dur="2s" />
+      </rect>
+    </svg>
+  )");
+
+  EXPECT_FALSE(getAnimatedTransform(document, "#r", 1.0).has_value());
+}
+
+TEST(SVGAnimateTransformElement, SingleNumberTranslatePadsTyToZero) {
+  // translate with one number pads ty to 0, which is omitted from the formatted result.
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="r" width="100" height="100">
+        <animateTransform attributeName="transform" type="translate"
+                          from="0" to="100" begin="0s" dur="2s" />
+      </rect>
+    </svg>
+  )");
+
+  auto val = getAnimatedTransform(document, "#r", 1.0);
+  ASSERT_TRUE(val.has_value());
+  EXPECT_EQ(val.value(), "translate(50)");
+}
+
+TEST(SVGAnimateTransformElement, TwoNumberRotatePadsCenterY) {
+  // rotate with two numbers pads cy to 0; a nonzero cx keeps the center in the output.
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="r" width="100" height="100">
+        <animateTransform attributeName="transform" type="rotate"
+                          from="0 25" to="90 25" begin="0s" dur="2s" />
+      </rect>
+    </svg>
+  )");
+
+  auto val = getAnimatedTransform(document, "#r", 1.0);
+  ASSERT_TRUE(val.has_value());
+  EXPECT_EQ(val.value(), "rotate(45, 25, 0)");
+}
+
 }  // namespace donner::svg

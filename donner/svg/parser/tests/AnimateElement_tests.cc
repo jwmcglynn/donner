@@ -833,6 +833,252 @@ TEST(SVGAnimateElement, NumberListInterpolation) {
   EXPECT_NEAR(c, 45.0, 1.0);
 }
 
+TEST(SVGAnimateElement, WhitespaceAroundNumbersIsTrimmed) {
+  // Numeric interpolation must tolerate surrounding whitespace in from/to values.
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="r" width="100" height="100">
+        <animate attributeName="width" from=" 100 " to=" 200 " begin="0s" dur="2s" />
+      </rect>
+    </svg>
+  )");
+
+  auto val = getAnimatedValue(document, "#r", "width", 1.0);
+  ASSERT_TRUE(val.has_value());
+  EXPECT_NEAR(std::stod(val.value()), 150.0, 0.01);
+}
+
+TEST(SVGAnimateElement, RestartAlwaysAllowsRerunWhenTimeMovesBackward) {
+  // Baseline for the restart="never" test below: with the default restart behavior, sampling an
+  // earlier time after the animation has completed reactivates it.
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="r" width="100" height="100">
+        <animate attributeName="width" from="0" to="100" begin="0s" dur="1s" />
+      </rect>
+    </svg>
+  )");
+
+  auto valActive = getAnimatedValue(document, "#r", "width", 0.5);
+  ASSERT_TRUE(valActive.has_value());
+  EXPECT_NEAR(std::stod(valActive.value()), 50.0, 0.01);
+
+  // Past the active duration with fill="remove": no override.
+  EXPECT_FALSE(getAnimatedValue(document, "#r", "width", 2.0).has_value());
+
+  // Sampling backwards restarts the animation.
+  auto valAgain = getAnimatedValue(document, "#r", "width", 0.5);
+  ASSERT_TRUE(valAgain.has_value());
+  EXPECT_NEAR(std::stod(valAgain.value()), 50.0, 0.01);
+}
+
+TEST(SVGAnimateElement, RestartNeverPreventsRerunWhenTimeMovesBackward) {
+  // restart="never": once the animation has completed, sampling an earlier time must not
+  // reactivate it.
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="r" width="100" height="100">
+        <animate attributeName="width" from="0" to="100" begin="0s" dur="1s" restart="never" />
+      </rect>
+    </svg>
+  )");
+
+  auto valActive = getAnimatedValue(document, "#r", "width", 0.5);
+  ASSERT_TRUE(valActive.has_value());
+  EXPECT_NEAR(std::stod(valActive.value()), 50.0, 0.01);
+
+  // Completes; fill="remove" clears the override.
+  EXPECT_FALSE(getAnimatedValue(document, "#r", "width", 2.0).has_value());
+
+  // Unlike the default restart behavior, sampling backwards stays inactive.
+  EXPECT_FALSE(getAnimatedValue(document, "#r", "width", 0.5).has_value());
+}
+
+TEST(SVGAnimateElement, PathQuadCurveCloseInterpolation) {
+  // Structurally compatible paths with Q, C, and Z verbs interpolate pointwise.
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <path id="p" d="M0,0 L10,0 Q20,0 30,0 C40,0 50,0 60,0 Z">
+        <animate attributeName="d"
+                 from="M0,0 L10,0 Q20,0 30,0 C40,0 50,0 60,0 Z"
+                 to="M10,10 L20,10 Q30,10 40,10 C50,10 60,10 70,10 Z"
+                 begin="0s" dur="2s" />
+      </path>
+    </svg>
+  )");
+
+  auto val = getAnimatedValue(document, "#p", "d", 1.0);
+  ASSERT_TRUE(val.has_value());
+  EXPECT_EQ(val.value(), "M5,5 L15,5 Q25,5 35,5 C45,5 55,5 65,5 Z");
+}
+
+TEST(SVGAnimateElement, PathVerbMismatchFallsBackToDiscrete) {
+  // Same command count but different verbs (L vs Q): not interpolable, so discrete fallback.
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <path id="p" d="M0,0 L10,10">
+        <animate attributeName="d" from="M0,0 L10,10" to="M0,0 Q5,5 10,10"
+                 begin="0s" dur="2s" />
+      </path>
+    </svg>
+  )");
+
+  auto val05 = getAnimatedValue(document, "#p", "d", 0.5);
+  ASSERT_TRUE(val05.has_value());
+  EXPECT_EQ(val05.value(), "M0,0 L10,10");
+
+  auto val15 = getAnimatedValue(document, "#p", "d", 1.5);
+  ASSERT_TRUE(val15.has_value());
+  EXPECT_EQ(val15.value(), "M0,0 Q5,5 10,10");
+}
+
+TEST(SVGAnimateElement, NonInterpolableValuesFallBackToDiscrete) {
+  // Values that parse as neither numbers, paths, nor number lists snap at the midpoint.
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="r" fill="red" width="100" height="100">
+        <animate attributeName="fill" from="red" to="blue" begin="0s" dur="2s" />
+      </rect>
+    </svg>
+  )");
+
+  auto val05 = getAnimatedValue(document, "#r", "fill", 0.5);
+  ASSERT_TRUE(val05.has_value());
+  EXPECT_EQ(val05.value(), "red");
+
+  auto val15 = getAnimatedValue(document, "#r", "fill", 1.5);
+  ASSERT_TRUE(val15.has_value());
+  EXPECT_EQ(val15.value(), "blue");
+}
+
+TEST(SVGAnimateElement, HexColorValuesFallBackToDiscrete) {
+  // Hex colors fail numeric, path, and number-list interpolation, so they snap at the midpoint.
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="r" fill="#000000" width="100" height="100">
+        <animate attributeName="fill" from="#ff0000" to="#0000ff" begin="0s" dur="2s" />
+      </rect>
+    </svg>
+  )");
+
+  auto val05 = getAnimatedValue(document, "#r", "fill", 0.5);
+  ASSERT_TRUE(val05.has_value());
+  EXPECT_EQ(val05.value(), "#ff0000");
+
+  auto val15 = getAnimatedValue(document, "#r", "fill", 1.5);
+  ASSERT_TRUE(val15.has_value());
+  EXPECT_EQ(val15.value(), "#0000ff");
+}
+
+TEST(SVGAnimateElement, ToOnlyAnimationAppliesToValue) {
+  // A to-only animation applies "to" as a discrete value while active.
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="r" width="100" height="100">
+        <animate attributeName="width" to="200" begin="0s" dur="2s" />
+      </rect>
+    </svg>
+  )");
+
+  auto val = getAnimatedValue(document, "#r", "width", 1.0);
+  ASSERT_TRUE(val.has_value());
+  EXPECT_EQ(val.value(), "200");
+
+  // After the active interval with fill="remove": no override.
+  EXPECT_FALSE(getAnimatedValue(document, "#r", "width", 3.0).has_value());
+}
+
+TEST(SVGAnimateElement, FromByNonNumericFallsBackToFromValue) {
+  // from/by requires numeric addition; non-numeric values fall back to the from value.
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="r" fill="green" width="100" height="100">
+        <animate attributeName="fill" from="red" by="blue" begin="0s" dur="2s" />
+      </rect>
+    </svg>
+  )");
+
+  auto val = getAnimatedValue(document, "#r", "fill", 1.0);
+  ASSERT_TRUE(val.has_value());
+  EXPECT_EQ(val.value(), "red");
+}
+
+TEST(SVGAnimateElement, SingleValuesEntryAppliesConstantValue) {
+  // A one-entry values list applies that value for the whole active interval.
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="r" width="100" height="100">
+        <animate attributeName="width" values="42" begin="0s" dur="2s" />
+      </rect>
+    </svg>
+  )");
+
+  auto val = getAnimatedValue(document, "#r", "width", 1.0);
+  ASSERT_TRUE(val.has_value());
+  EXPECT_EQ(val.value(), "42");
+}
+
+TEST(SVGAnimateElement, NoValueSpecificationProducesNoOverride) {
+  // <animate> without values/from/to/by has nothing to apply.
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="r" width="100" height="100">
+        <animate attributeName="width" begin="0s" dur="2s" />
+      </rect>
+    </svg>
+  )");
+
+  EXPECT_FALSE(getAnimatedValue(document, "#r", "width", 1.0).has_value());
+}
+
+TEST(SVGAnimateElement, DiscreteAtActiveEndClampsToLastValue) {
+  // Frozen at 100% progress, the discrete index (numValues) clamps to the last value.
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="r" width="100" height="100">
+        <animate attributeName="width" values="10;20" calcMode="discrete" begin="0s" dur="2s"
+                 fill="freeze" />
+      </rect>
+    </svg>
+  )");
+
+  auto val = getAnimatedValue(document, "#r", "width", 3.0);
+  ASSERT_TRUE(val.has_value());
+  EXPECT_EQ(val.value(), "20");
+}
+
+TEST(SVGAnimateElement, MissingAttributeNameProducesNoOverride) {
+  // <animate> without attributeName cannot target an attribute.
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="r" width="100" height="100">
+        <animate from="0" to="100" begin="0s" dur="2s" />
+      </rect>
+    </svg>
+  )");
+
+  auto& registry = document.registry();
+  components::AnimationSystem().advance(registry, 1.0, nullptr);
+
+  auto rect = document.querySelector("#r");
+  ASSERT_TRUE(rect.has_value());
+  EXPECT_EQ(registry.try_get<components::AnimatedValuesComponent>(rect->entityHandle().entity()),
+            nullptr);
+}
+
+TEST(SVGAnimateElement, HrefToMissingIdProducesNoOverride) {
+  // An href that resolves to no element leaves the sibling untouched and does not crash.
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+      <rect id="r" width="100" height="100" />
+      <animate xlink:href="#missing" attributeName="width" from="0" to="100"
+               begin="0s" dur="2s" />
+    </svg>
+  )");
+
+  EXPECT_FALSE(getAnimatedValue(document, "#r", "width", 1.0).has_value());
+}
+
 TEST(SVGAnimateElement, NumberListValuesInterpolation) {
   auto document = parseSVGWithExperimental(R"(
     <svg xmlns="http://www.w3.org/2000/svg">
