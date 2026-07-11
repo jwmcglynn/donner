@@ -1320,6 +1320,89 @@ TEST_F(EffectiveBaselineResolutionTest, UseScriptResolvesAsIs) {
               testing::Contains(SpanWithEffectiveBaseline("A", DominantBaseline::UseScript)));
 }
 
+// -- baseline-shift keywords, ancestor shifts, and per-span textLength --------
+
+namespace {
+
+/// Returns the resolved span whose text equals \p expectedText, or nullptr.
+const components::ComputedTextComponent::TextSpan* FindSpanWithText(
+    const SmallVector<components::ComputedTextComponent::TextSpan, 1>& spans,
+    std::string_view expectedText) {
+  for (const auto& span : spans) {
+    const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
+    if (spanText == expectedText) {
+      return &span;
+    }
+  }
+  return nullptr;
+}
+
+}  // namespace
+
+TEST_F(EffectiveBaselineResolutionTest, BaselineShiftKeywordsResolvePerSpan) {
+  using BSK = components::ComputedTextComponent::TextSpan::BaselineShiftKeyword;
+
+  const auto spans = resolveSpans(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <text id="t" x="10" y="20"><tspan baseline-shift="sub">A</tspan><tspan
+        baseline-shift="super">B</tspan><tspan baseline-shift="4">C</tspan></text>
+    </svg>
+  )");
+
+  const auto* subSpan = FindSpanWithText(spans, "A");
+  ASSERT_NE(subSpan, nullptr);
+  EXPECT_EQ(subSpan->baselineShiftKeyword, BSK::Sub);
+
+  const auto* superSpan = FindSpanWithText(spans, "B");
+  ASSERT_NE(superSpan, nullptr);
+  EXPECT_EQ(superSpan->baselineShiftKeyword, BSK::Super);
+
+  const auto* lengthSpan = FindSpanWithText(spans, "C");
+  ASSERT_NE(lengthSpan, nullptr);
+  EXPECT_EQ(lengthSpan->baselineShiftKeyword, BSK::Length);
+  EXPECT_DOUBLE_EQ(lengthSpan->baselineShift.value, 4.0);
+}
+
+TEST_F(EffectiveBaselineResolutionTest, AncestorBaselineShiftsAccumulateThroughNestedTspans) {
+  using BSK = components::ComputedTextComponent::TextSpan::BaselineShiftKeyword;
+
+  const auto spans = resolveSpans(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <text id="t" x="10" y="20"><tspan baseline-shift="super"><tspan
+        baseline-shift="sub"><tspan baseline-shift="2">A</tspan></tspan></tspan></text>
+    </svg>
+  )");
+
+  const auto* span = FindSpanWithText(spans, "A");
+  ASSERT_NE(span, nullptr);
+  EXPECT_EQ(span->baselineShiftKeyword, BSK::Length);
+  EXPECT_DOUBLE_EQ(span->baselineShift.value, 2.0);
+
+  // Ancestor shifts accumulate bottom-up: the sub tspan first, then the super tspan.
+  ASSERT_EQ(span->ancestorBaselineShifts.size(), 2u);
+  EXPECT_EQ(span->ancestorBaselineShifts[0].keyword, BSK::Sub);
+  EXPECT_EQ(span->ancestorBaselineShifts[1].keyword, BSK::Super);
+}
+
+TEST_F(EffectiveBaselineResolutionTest, TspanTextLengthResolvesPerSpan) {
+  const auto spans = resolveSpans(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <text id="t" x="10" y="20">A<tspan textLength="50"
+        lengthAdjust="spacingAndGlyphs">BC</tspan></text>
+    </svg>
+  )");
+
+  const auto* plainSpan = FindSpanWithText(spans, "A");
+  ASSERT_NE(plainSpan, nullptr);
+  EXPECT_FALSE(plainSpan->textLength.has_value());
+
+  const auto* sizedSpan = FindSpanWithText(spans, "BC");
+  ASSERT_NE(sizedSpan, nullptr);
+  ASSERT_TRUE(sizedSpan->textLength.has_value());
+  EXPECT_DOUBLE_EQ(sizedSpan->textLength->value, 50.0);
+  EXPECT_EQ(sizedSpan->lengthAdjust, LengthAdjust::SpacingAndGlyphs);
+}
+
 }  // namespace
 
 }  // namespace donner::svg

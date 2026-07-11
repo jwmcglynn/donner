@@ -113,6 +113,16 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "text_backend_simple_tests",
+    srcs = ["tests/TextBackendSimple_tests.cc"],
+    deps = [
+        ":text_backend",
+        ":text_backend_simple",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "inline_size_wrap_tests",
     srcs = ["tests/InlineSizeWrap_tests.cc"],
     deps = [

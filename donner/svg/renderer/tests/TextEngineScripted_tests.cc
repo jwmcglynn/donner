@@ -2,6 +2,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cmath>
 #include <iterator>
 #include <memory>
 #include <optional>
@@ -10,6 +11,7 @@
 #include "donner/base/Utf8.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/css/FontFace.h"
+#include "donner/css/Specificity.h"
 #include "donner/svg/components/layout/ViewBoxComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
@@ -673,6 +675,733 @@ TEST(TextEngineScriptedTest, TextPathEndAnchorAndExhaustedPathHideGlyphs) {
   EXPECT_THAT(runs, ElementsAre(AllOf(
                         RunOnPathIs(Eq(true)),
                         RunGlyphsAre(ElementsAre(GlyphIndexIs(Eq(0)), GlyphIndexIs(Eq(0)))))));
+}
+
+// -- Error paths and edge branches (coverage-focused, all default-config) -----
+
+namespace {
+
+/// Backend that shapes non-ASCII codepoints to .notdef unless shaped with `coveringFont`,
+/// for exercising the registered-face coverage-fallback search.
+class CoverageProbeBackend : public ScriptedTextBackend {
+public:
+  FontHandle coveringFont;
+
+  ShapedRun shapeRun(FontHandle font, float fontSizePx, std::string_view spanText,
+                     size_t byteOffset, size_t byteLength, bool isVertical,
+                     FontVariant fontVariant, bool forceLogicalOrder) const override {
+    ShapedRun run = ScriptedTextBackend::shapeRun(font, fontSizePx, spanText, byteOffset,
+                                                  byteLength, isVertical, fontVariant,
+                                                  forceLogicalOrder);
+    for (auto& glyph : run.glyphs) {
+      const auto [codepoint, codepointLength] =
+          Utf8::NextCodepointLenient(spanText.substr(glyph.cluster));
+      (void)codepointLength;
+      if (static_cast<uint32_t>(codepoint) > 0x7F && font != coveringFont) {
+        glyph.glyphIndex = 0;
+      }
+    }
+    return run;
+  }
+};
+
+/// Backend whose font reports no vertical metrics, forcing the inline-size wrap to fall
+/// back to the 1.2 * font-size line height.
+class ZeroVMetricsBackend : public ScriptedTextBackend {
+public:
+  FontVMetrics fontVMetrics(FontHandle /*font*/) const override { return {}; }
+};
+
+/// Backend with no vector outlines: 'A' resolves to a bitmap glyph, everything else to a
+/// zero-sized bitmap (empty extent).
+class BitmapOutlineBackend : public ScriptedTextBackend {
+public:
+  Path glyphOutline(FontHandle /*font*/, int /*glyphIndex*/, float /*scale*/) const override {
+    return Path();
+  }
+
+  std::optional<BitmapGlyph> bitmapGlyph(FontHandle /*font*/, int glyphIndex,
+                                         float /*scale*/) const override {
+    if (glyphIndex == 'A' % 997 + 1) {
+      return BitmapGlyph{.rgbaPixels = {},
+                         .width = 4,
+                         .height = 4,
+                         .bearingX = 1.0,
+                         .bearingY = 2.0,
+                         .scale = 0.5};
+    }
+    return BitmapGlyph{
+        .rgbaPixels = {}, .width = 0, .height = 0, .bearingX = 0.0, .bearingY = 0.0, .scale = 1.0};
+  }
+};
+
+/// Backend whose outlines contain quadratic and cubic curve segments.
+class CurveOutlineBackend : public ScriptedTextBackend {
+public:
+  Path glyphOutline(FontHandle /*font*/, int /*glyphIndex*/, float /*scale*/) const override {
+    return PathBuilder()
+        .moveTo(Vector2d(0.0, 0.0))
+        .quadTo(Vector2d(5.0, -10.0), Vector2d(10.0, 0.0))
+        .curveTo(Vector2d(12.0, 5.0), Vector2d(2.0, 5.0), Vector2d(0.0, 10.0))
+        .build();
+  }
+};
+
+/// Registers a @font-face named \p familyName backed by the embedded fallback font's bytes,
+/// returning its resolved handle.
+FontHandle RegisterFallbackBackedFace(FontManager& fontManager, const std::string& familyName) {
+  const FontHandle fallback = fontManager.fallbackFont();
+  const auto data = fontManager.fontData(fallback);
+  auto payload = std::make_shared<const std::vector<uint8_t>>(data.begin(), data.end());
+
+  css::FontFaceSource source;
+  source.kind = css::FontFaceSource::Kind::Data;
+  source.payload = payload;
+
+  css::FontFace face;
+  face.familyName = RcString(familyName);
+  face.sources.push_back(std::move(source));
+  fontManager.addFontFace(face);
+  return fontManager.findFont(RcString(familyName));
+}
+
+/// Minimal sfnt bytes that pass the outline-table check but fail stb_truetype parsing
+/// (no cmap table), so shaping produces no glyphs.
+std::shared_ptr<const std::vector<uint8_t>> MakeUnparseableOutlineFontData() {
+  std::vector<uint8_t> data = {0x00, 0x01, 0x00, 0x00,  // sfnt version 1.0
+                               0x00, 0x01,              // numTables = 1
+                               0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+  const char tag[4] = {'g', 'l', 'y', 'f'};
+  data.insert(data.end(), tag, tag + 4);
+  for (int i = 0; i < 4; ++i) data.push_back(0);         // Checksum.
+  data.insert(data.end(), {0x00, 0x00, 0x00, 0x1C});     // Offset = 28.
+  for (int i = 0; i < 4; ++i) data.push_back(0);         // Length = 0.
+  return std::make_shared<const std::vector<uint8_t>>(std::move(data));
+}
+
+components::ComputedStyleComponent MakeStyle() {
+  components::ComputedStyleComponent style;
+  style.properties.emplace();
+  return style;
+}
+
+/// Creates a text root entity with computed text/style/viewbox components and a single
+/// span sourced from the root, ready for the cached-geometry APIs.
+Entity MakeTextRootWithSpan(Registry& registry, const std::string& textValue,
+                            components::ComputedTextComponent::TextSpan span) {
+  const Entity root = registry.create();
+  registry.emplace<donner::components::TreeComponent>(root, xml::XMLQualifiedNameRef("text"));
+  registry.emplace<components::TextRootComponent>(root);
+  registry.emplace<components::ComputedViewBoxComponent>(root,
+                                                         Box2d::FromXYWH(0.0, 0.0, 200.0, 100.0));
+
+  components::TextComponent textComponent;
+  textComponent.text = RcString(textValue);
+  registry.emplace<components::TextComponent>(root, textComponent);
+
+  span.sourceEntity = root;
+  components::ComputedTextComponent computedText;
+  computedText.spans.push_back(std::move(span));
+  registry.emplace<components::ComputedTextComponent>(root, computedText);
+
+  registry.emplace<components::ComputedStyleComponent>(root, MakeStyle());
+  return root;
+}
+
+}  // namespace
+
+TEST(TextEngineScriptedTest, PrepareForElementIgnoresElementsWithoutTextRoot) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+  ParseWarningSink warnings;
+
+  // Entity with no TreeComponent: the text-root walk stops immediately.
+  const Entity detached = registry.create();
+  engine.prepareForElement(EntityHandle(registry, detached), warnings);
+
+  // Entity in a tree without any TextRootComponent ancestor.
+  const Entity group = registry.create();
+  registry.emplace<donner::components::TreeComponent>(group, xml::XMLQualifiedNameRef("g"));
+  engine.prepareForElement(EntityHandle(registry, group), warnings);
+
+  EXPECT_FALSE(registry.ctx().contains<FontManager>());
+  EXPECT_EQ(registry.try_get<components::ComputedTextComponent>(group), nullptr);
+}
+
+TEST(TextEngineScriptedTest, PrepareForElementRequiresResourceManagerContext) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+  ParseWarningSink warnings;
+
+  const Entity root = registry.create();
+  registry.emplace<donner::components::TreeComponent>(root, xml::XMLQualifiedNameRef("text"));
+  registry.emplace<components::TextRootComponent>(root);
+
+  engine.prepareForElement(EntityHandle(registry, root), warnings);
+
+  // Without a ResourceManagerContext the engine bails out before installing anything.
+  EXPECT_FALSE(registry.ctx().contains<FontManager>());
+  EXPECT_EQ(registry.try_get<components::ComputedTextComponent>(root), nullptr);
+}
+
+TEST(TextEngineScriptedTest, AddFontFaceRegistersSingleFaceAndBatchSkipsAlreadyRegistered) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+
+  css::FontFace face;
+  face.familyName = RcString("SoloFace");
+  engine.addFontFace(face);
+  EXPECT_EQ(fontManager.numFaces(), 1u);
+
+  // A batch no larger than the registered count is a no-op.
+  const std::vector<css::FontFace> faces = {face};
+  engine.addFontFaces(faces);
+  EXPECT_EQ(fontManager.numFaces(), 1u);
+}
+
+TEST(TextEngineScriptedTest, ResolvePerSpanLayoutStylesRequiresRootTextComponent) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+
+  const Entity root = registry.create();
+  registry.emplace<donner::components::TreeComponent>(root, xml::XMLQualifiedNameRef("text"));
+  registry.emplace<components::TextRootComponent>(root);
+  auto rootStyle = MakeStyle();
+  rootStyle.properties->textAnchor.set(TextAnchor::End, css::Specificity::Override());
+  registry.emplace<components::ComputedStyleComponent>(root, rootStyle);
+
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("A");
+  span.sourceEntity = root;
+  text.spans.push_back(std::move(span));
+
+  // No TextComponent on the root: resolution is skipped and spans stay untouched.
+  engine.resolvePerSpanLayoutStyles(EntityHandle(registry, root), text);
+  EXPECT_EQ(text.spans[0].textAnchor, TextAnchor::Start);
+}
+
+TEST(TextEngineScriptedTest, ResolvePerSpanLayoutStylesFallsBackToParentStyleAndSkipsUnstyled) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+
+  const Entity root = MakeTextRootWithSpan(registry, "ABCD", MakeSpan("A"));
+
+  // A styled tspan parent whose child has no computed style of its own.
+  const Entity styledParent = registry.create();
+  registry.emplace<donner::components::TreeComponent>(styledParent,
+                                                      xml::XMLQualifiedNameRef("tspan"));
+  registry.get<donner::components::TreeComponent>(root).appendChild(registry, styledParent);
+  auto parentStyle = MakeStyle();
+  parentStyle.properties->textAnchor.set(TextAnchor::End, css::Specificity::Override());
+  registry.emplace<components::ComputedStyleComponent>(styledParent, parentStyle);
+
+  const Entity unstyledChild = registry.create();
+  registry.emplace<donner::components::TreeComponent>(unstyledChild,
+                                                      xml::XMLQualifiedNameRef("tspan"));
+  registry.get<donner::components::TreeComponent>(styledParent)
+      .appendChild(registry, unstyledChild);
+
+  const Entity orphanNoTree = registry.create();
+  const Entity orphanWithTree = registry.create();
+  registry.emplace<donner::components::TreeComponent>(orphanWithTree,
+                                                      xml::XMLQualifiedNameRef("tspan"));
+
+  components::ComputedTextComponent text;
+  auto nullSourceSpan = MakeSpan("A");
+  nullSourceSpan.sourceEntity = entt::null;
+  auto orphanSpan = MakeSpan("B");
+  orphanSpan.sourceEntity = orphanNoTree;
+  auto orphanTreeSpan = MakeSpan("C");
+  orphanTreeSpan.sourceEntity = orphanWithTree;
+  auto childSpan = MakeSpan("D");
+  childSpan.sourceEntity = unstyledChild;
+  text.spans.push_back(std::move(nullSourceSpan));
+  text.spans.push_back(std::move(orphanSpan));
+  text.spans.push_back(std::move(orphanTreeSpan));
+  text.spans.push_back(std::move(childSpan));
+
+  engine.resolvePerSpanLayoutStyles(EntityHandle(registry, root), text);
+
+  // Spans without a resolvable style source stay at their defaults.
+  EXPECT_EQ(text.spans[0].textAnchor, TextAnchor::Start);
+  EXPECT_EQ(text.spans[1].textAnchor, TextAnchor::Start);
+  EXPECT_EQ(text.spans[2].textAnchor, TextAnchor::Start);
+  // A span without its own style resolves through its parent element's style.
+  EXPECT_EQ(text.spans[3].textAnchor, TextAnchor::End);
+}
+
+TEST(TextEngineScriptedTest, ResolvePerSpanLayoutStylesResolvesKeywordsAncestorsAndTextLength) {
+  using BSK = components::ComputedTextComponent::TextSpan::BaselineShiftKeyword;
+
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+
+  const Entity root = MakeTextRootWithSpan(registry, "ABX", MakeSpan("X"));
+  auto& rootStyle = registry.get<components::ComputedStyleComponent>(root);
+  rootStyle.properties->baselineShift.set(Lengthd(5.0, Lengthd::Unit::Px),
+                                          css::Specificity::Override());
+
+  auto makeChild = [&](Entity parent, std::optional<Lengthd> baselineShift) {
+    const Entity entity = registry.create();
+    registry.emplace<donner::components::TreeComponent>(entity,
+                                                        xml::XMLQualifiedNameRef("tspan"));
+    registry.get<donner::components::TreeComponent>(parent).appendChild(registry, entity);
+    if (baselineShift.has_value()) {
+      auto style = MakeStyle();
+      style.properties->baselineShift.set(*baselineShift, css::Specificity::Override());
+      registry.emplace<components::ComputedStyleComponent>(entity, style);
+    }
+    return entity;
+  };
+
+  // Chain: root -> super(0.4em) -> sub(-0.33em) -> unstyled -> length(3) -> leaf(-0.33em).
+  const Entity superAncestor = makeChild(root, Lengthd(0.4, Lengthd::Unit::Em));
+  const Entity subAncestor = makeChild(superAncestor, Lengthd(-0.33, Lengthd::Unit::Em));
+  const Entity unstyledAncestor = makeChild(subAncestor, std::nullopt);
+  const Entity lengthAncestor = makeChild(unstyledAncestor, Lengthd(3.0, Lengthd::Unit::None));
+  const Entity leaf = makeChild(lengthAncestor, Lengthd(-0.33, Lengthd::Unit::Em));
+
+  // dominant-baseline: no-change on the leaf resolves to the parent's value.
+  registry.get<components::ComputedStyleComponent>(leaf).properties->dominantBaseline.set(
+      DominantBaseline::NoChange, css::Specificity::Override());
+  registry.get<components::ComputedStyleComponent>(lengthAncestor)
+      .properties->dominantBaseline.set(DominantBaseline::Hanging, css::Specificity::Override());
+
+  // Per-span textLength comes from the source element's TextComponent.
+  components::TextComponent leafText;
+  leafText.text = RcString("A");
+  leafText.textLength = Lengthd(50.0, Lengthd::Unit::None);
+  leafText.lengthAdjust = LengthAdjust::SpacingAndGlyphs;
+  registry.emplace<components::TextComponent>(leaf, leafText);
+
+  const Entity superLeaf = makeChild(root, Lengthd(0.4, Lengthd::Unit::Em));
+
+  components::ComputedTextComponent text;
+  auto leafSpan = MakeSpan("A");
+  leafSpan.sourceEntity = leaf;
+  auto rootSpan = MakeSpan("B");
+  rootSpan.sourceEntity = root;
+  auto superSpan = MakeSpan("X");
+  superSpan.sourceEntity = superLeaf;
+  text.spans.push_back(std::move(leafSpan));
+  text.spans.push_back(std::move(rootSpan));
+  text.spans.push_back(std::move(superSpan));
+
+  engine.resolvePerSpanLayoutStyles(EntityHandle(registry, root), text);
+
+  const auto& resolvedLeaf = text.spans[0];
+  EXPECT_EQ(resolvedLeaf.baselineShiftKeyword, BSK::Sub);
+  EXPECT_EQ(resolvedLeaf.alignmentBaseline, DominantBaseline::Hanging);
+  ASSERT_TRUE(resolvedLeaf.textLength.has_value());
+  EXPECT_DOUBLE_EQ(resolvedLeaf.textLength->value, 50.0);
+  EXPECT_EQ(resolvedLeaf.lengthAdjust, LengthAdjust::SpacingAndGlyphs);
+
+  // Ancestors accumulate bottom-up, skipping the unstyled element.
+  ASSERT_EQ(resolvedLeaf.ancestorBaselineShifts.size(), 3u);
+  EXPECT_EQ(resolvedLeaf.ancestorBaselineShifts[0].keyword, BSK::Length);
+  EXPECT_DOUBLE_EQ(resolvedLeaf.ancestorBaselineShifts[0].shift.value, 3.0);
+  EXPECT_EQ(resolvedLeaf.ancestorBaselineShifts[1].keyword, BSK::Sub);
+  EXPECT_EQ(resolvedLeaf.ancestorBaselineShifts[2].keyword, BSK::Super);
+
+  // Spans sourced from the text root ignore baseline-shift entirely.
+  EXPECT_DOUBLE_EQ(text.spans[1].baselineShift.value, 0.0);
+  EXPECT_TRUE(text.spans[1].ancestorBaselineShifts.empty());
+
+  EXPECT_EQ(text.spans[2].baselineShiftKeyword, BSK::Super);
+}
+
+TEST(TextEngineScriptedTest, CoverageFallbackSwitchesToRegisteredFaceThatCoversCodepoint) {
+  Registry registry;
+  FontManager fontManager(registry);
+  const FontHandle altFace = RegisterFallbackBackedFace(fontManager, "AltFace");
+  ASSERT_TRUE(static_cast<bool>(altFace));
+
+  auto backend = std::make_unique<CoverageProbeBackend>();
+  backend->coveringFont = altFace;
+  TextEngine engine(fontManager, registry, std::move(backend));
+
+  components::ComputedTextComponent text;
+  text.spans.push_back(MakeSpan("\xC3\xA9"));  // e-acute: not covered by the base font.
+
+  const auto runs = engine.layout(text, MakeTextParams(20.0));
+
+  ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(SizeIs(1))));
+  EXPECT_EQ(runs[0].font, altFace);
+  EXPECT_THAT(runs[0].glyphs, ElementsAre(GlyphIndexIs(Gt(0))));
+}
+
+TEST(TextEngineScriptedTest, CoverageFallbackKeepsFontWhenNoRegisteredFaceCovers) {
+  Registry registry;
+  FontManager fontManager(registry);
+  const FontHandle altFace = RegisterFallbackBackedFace(fontManager, "AltFace");
+  ASSERT_TRUE(static_cast<bool>(altFace));
+
+  // No font covers non-ASCII: the search visits the registered face and keeps the original.
+  auto backend = std::make_unique<CoverageProbeBackend>();
+  TextEngine engine(fontManager, registry, std::move(backend));
+
+  components::ComputedTextComponent text;
+  text.spans.push_back(MakeSpan("\xC3\xA9"));
+
+  const auto runs = engine.layout(text, MakeTextParams(20.0));
+
+  ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(SizeIs(1))));
+  EXPECT_EQ(runs[0].font, fontManager.fallbackFont());
+  EXPECT_THAT(runs[0].glyphs, ElementsAre(GlyphIndexIs(Eq(0))));
+}
+
+TEST(TextEngineScriptedTest, BoldSpanResolvesFontThroughWeightAwareLookup) {
+  Registry registry;
+  FontManager fontManager(registry);
+  const FontHandle altFace = RegisterFallbackBackedFace(fontManager, "WeightProbe");
+  ASSERT_TRUE(static_cast<bool>(altFace));
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("A");
+  span.fontWeight = 700;
+  text.spans.push_back(std::move(span));
+
+  TextLayoutParams params = MakeTextParams(20.0);
+  params.fontFamilies = {RcString("WeightProbe")};
+  const auto runs = engine.layout(text, params);
+
+  ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(SizeIs(1))));
+  EXPECT_EQ(runs[0].font, altFace);
+}
+
+TEST(TextEngineScriptedTest, HorizontalCrossSpanKernShiftsContinuationSpan) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+
+  components::ComputedTextComponent text;
+  text.spans.push_back(MakeSpan("A"));
+  auto continuation = MakeSpan("B");
+  continuation.startsNewChunk = false;
+  text.spans.push_back(std::move(continuation));
+
+  const auto runs = engine.layout(text, MakeTextParams(20.0));
+
+  // The continuation span's first glyph picks up the scripted 3px cross-span kern.
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(0.0)))),
+                                RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(13.0))))));
+}
+
+TEST(TextEngineScriptedTest, VerticalCrossSpanKernShiftsContinuationSpan) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+
+  components::ComputedTextComponent text;
+  text.spans.push_back(MakeSpan("A"));
+  auto continuation = MakeSpan("B");
+  continuation.startsNewChunk = false;
+  text.spans.push_back(std::move(continuation));
+
+  TextLayoutParams params = MakeTextParams(20.0);
+  params.writingMode = WritingMode::VerticalRl;
+  const auto runs = engine.layout(text, params);
+
+  // 10px sideways advance for "A", then the scripted 4px vertical cross-span kern.
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(GlyphYPositionIs(DoubleEq(0.0)))),
+                                RunGlyphsAre(ElementsAre(GlyphYPositionIs(DoubleEq(14.0))))));
+}
+
+TEST(TextEngineScriptedTest, VerticalCjkRotateListRepeatsLastValue) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("\xE6\x97\xA5\xE6\x97\xA5");  // Two upright CJK glyphs.
+  span.rotateList = {7.0};
+  text.spans.push_back(std::move(span));
+
+  TextLayoutParams params = MakeTextParams(20.0);
+  params.writingMode = WritingMode::VerticalRl;
+  const auto runs = engine.layout(text, params);
+
+  // The single rotate value repeats for the second glyph per the SVG spec.
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(
+                        AllOf(GlyphRotateDegreesIs(DoubleEq(7.0)),
+                              GlyphYPositionIs(DoubleEq(3.0))),
+                        AllOf(GlyphRotateDegreesIs(DoubleEq(7.0)),
+                              GlyphYPositionIs(DoubleEq(17.0)))))));
+}
+
+TEST(TextEngineScriptedTest, PerSpanTextLengthSpacingAdjustsVerticalGaps) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("AB");
+  span.textLength = Lengthd(40.0, Lengthd::Unit::None);
+  span.lengthAdjust = LengthAdjust::Spacing;
+  text.spans.push_back(std::move(span));
+
+  // A sibling span without textLength is skipped by the per-span adjustment.
+  auto plainSpan = MakeSpan("C");
+  plainSpan.startsNewChunk = false;
+  text.spans.push_back(std::move(plainSpan));
+
+  TextLayoutParams params = MakeTextParams(20.0);
+  params.writingMode = WritingMode::VerticalRl;
+  const auto runs = engine.layout(text, params);
+
+  // Natural length 22px (10px advance, 2px kern, 10px advance) stretched to 40px moves
+  // the second glyph down by the 18px gap difference. The plain span keeps its natural
+  // position after the first span's unadjusted 22px extent plus the 4px cross-span kern.
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(GlyphYPositionIs(DoubleEq(0.0)),
+                                                         GlyphYPositionIs(DoubleEq(30.0)))),
+                                RunGlyphsAre(ElementsAre(GlyphYPositionIs(DoubleEq(26.0))))));
+}
+
+TEST(TextEngineScriptedTest, InlineSizeDoesNotWrapTextOnPath) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+  const entt::entity textPathEntity = registry.create();
+  const Path path = PathBuilder().moveTo(Vector2d(0.0, 0.0)).lineTo(Vector2d(400.0, 0.0)).build();
+
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("aa bb");
+  span.pathSpline = path;
+  span.textPathSourceEntity = textPathEntity;
+  text.spans.push_back(std::move(span));
+
+  TextLayoutParams params = MakeTextParams(20.0);
+  params.inlineSizePx = 25.0;  // Would wrap flat text; ignored for text-on-path.
+  const auto runs = engine.layout(text, params);
+
+  ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(SizeIs(5))));
+  EXPECT_TRUE(runs[0].onPath);
+  for (const auto& glyph : runs[0].glyphs) {
+    EXPECT_THAT(glyph.yPosition, DoubleNear(0.0, 1e-9));  // No stacked lines.
+  }
+}
+
+TEST(TextEngineScriptedTest, InlineSizeIgnoresSingleGlyphContent) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+
+  components::ComputedTextComponent text;
+  text.spans.push_back(MakeSpan("a"));
+
+  TextLayoutParams params = MakeTextParams(20.0);
+  params.inlineSizePx = 5.0;  // Smaller than the glyph; still nothing to wrap.
+  const auto runs = engine.layout(text, params);
+
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(AllOf(
+                        GlyphXPositionIs(DoubleEq(0.0)), GlyphYPositionIs(DoubleEq(0.0)))))));
+}
+
+TEST(TextEngineScriptedTest, InlineSizeLineHeightFallsBackWhenFontMetricsAreEmpty) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine(fontManager, registry, std::make_unique<ZeroVMetricsBackend>());
+
+  components::ComputedTextComponent text;
+  text.spans.push_back(MakeSpan("aa bb"));
+
+  TextLayoutParams params = MakeTextParams(20.0);
+  params.inlineSizePx = 25.0;  // Each two-glyph word (21px) fits alone; both do not.
+  const auto runs = engine.layout(text, params);
+
+  std::vector<long> baselines;
+  for (const auto& run : runs) {
+    for (const auto& glyph : run.glyphs) {
+      baselines.push_back(std::lround(glyph.yPosition));
+    }
+  }
+  std::sort(baselines.begin(), baselines.end());
+  baselines.erase(std::unique(baselines.begin(), baselines.end()), baselines.end());
+
+  // Zero font metrics force the 1.2 * font-size (24px) line-height fallback.
+  EXPECT_THAT(baselines, ElementsAre(0, 24));
+}
+
+TEST(TextEngineScriptedTest, TextAnchorSkipsOnPathRunsInsideChunks) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+  const entt::entity firstPathEntity = registry.create();
+  const entt::entity secondPathEntity = registry.create();
+  const Path path = PathBuilder().moveTo(Vector2d(0.0, 0.0)).lineTo(Vector2d(200.0, 0.0)).build();
+
+  components::ComputedTextComponent text;
+  auto flatSpan = MakeSpan("AB");
+  flatSpan.textAnchor = TextAnchor::End;
+
+  auto onPathSpan = MakeSpan("C");
+  onPathSpan.startsNewChunk = false;
+  onPathSpan.pathSpline = path;
+  onPathSpan.textPathSourceEntity = firstPathEntity;
+
+  // Second chunk: an empty span (anchor end) followed by on-path glyphs only, so the
+  // chunk has no flat glyphs to anchor.
+  auto emptySpan = MakeSpan("");
+  emptySpan.textAnchor = TextAnchor::End;
+
+  auto onPathTail = MakeSpan("D");
+  onPathTail.startsNewChunk = false;
+  onPathTail.textAnchor = TextAnchor::End;
+  onPathTail.pathSpline = path;
+  onPathTail.textPathSourceEntity = secondPathEntity;
+  onPathTail.pathStartOffset = 80.0;
+
+  text.spans.push_back(std::move(flatSpan));
+  text.spans.push_back(std::move(onPathSpan));
+  text.spans.push_back(std::move(emptySpan));
+  text.spans.push_back(std::move(onPathTail));
+
+  const auto runs = engine.layout(text, MakeTextParams(20.0));
+
+  // Flat glyphs shift by the chunk width (21px); on-path glyphs stay path-positioned.
+  EXPECT_THAT(runs,
+              ElementsAre(RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(-21.0)),
+                                                   GlyphXPositionIs(DoubleEq(-10.0)))),
+                          RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(0.0)))),
+                          RunGlyphsAre(IsEmpty()),
+                          RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(70.0))))));
+}
+
+TEST(TextEngineScriptedTest, GeometryCacheFallsBackToBitmapGlyphExtents) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine(fontManager, registry, std::make_unique<BitmapOutlineBackend>());
+
+  const Entity root = MakeTextRootWithSpan(registry, "AB", MakeSpan("AB"));
+  const EntityHandle rootHandle(registry, root);
+
+  // No vector outlines anywhere.
+  EXPECT_THAT(engine.computedGlyphPaths(rootHandle), IsEmpty());
+
+  // 'A' resolves to a 4x4 bitmap at scale 0.5 with bearing (1, 2).
+  EXPECT_EQ(engine.getExtentOfChar(rootHandle, 0), Box2d::FromXYWH(1.0, -2.0, 2.0, 2.0));
+  // 'B' resolves to a zero-sized bitmap: its extent stays empty.
+  EXPECT_EQ(engine.getExtentOfChar(rootHandle, 1), Box2d());
+
+  EXPECT_EQ(engine.getNumberOfChars(rootHandle), 2);
+  // End position advances by the scripted (10, 12) glyph advance.
+  EXPECT_EQ(engine.getEndPositionOfChar(rootHandle, 0), Vector2d(10.0, 12.0));
+
+  // Out-of-range character queries return empty values.
+  EXPECT_EQ(engine.getEndPositionOfChar(rootHandle, 9), Vector2d());
+  EXPECT_EQ(engine.getExtentOfChar(rootHandle, 9), Box2d());
+  EXPECT_DOUBLE_EQ(engine.getRotationOfChar(rootHandle, 9), 0.0);
+}
+
+TEST(TextEngineScriptedTest, GeometryCacheTransformsQuadraticAndCubicOutlineSegments) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine(fontManager, registry, std::make_unique<CurveOutlineBackend>());
+
+  auto span = MakeSpan("A");
+  span.xList = {Lengthd(7.0, Lengthd::Unit::None)};
+  span.yList = {Lengthd(9.0, Lengthd::Unit::None)};
+  const Entity root = MakeTextRootWithSpan(registry, "A", std::move(span));
+
+  const std::vector<Path> paths = engine.computedGlyphPaths(EntityHandle(registry, root));
+
+  // The outline's move/quad/cubic control points all translate by the glyph position.
+  ASSERT_THAT(paths, SizeIs(1));
+  EXPECT_THAT(paths[0].points(),
+              ElementsAre(Vector2d(7.0, 9.0), Vector2d(12.0, -1.0), Vector2d(17.0, 9.0),
+                          Vector2d(19.0, 14.0), Vector2d(9.0, 14.0), Vector2d(7.0, 19.0)));
+}
+
+TEST(TextEngineScriptedTest, GeometryCacheFilterExcludesEntitiesOutsideTree) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+
+  const Entity root = MakeTextRootWithSpan(registry, "A", MakeSpan("A"));
+  const EntityHandle rootHandle(registry, root);
+  ASSERT_EQ(engine.getNumberOfChars(rootHandle), 1);  // Builds the geometry cache.
+
+  // Inject a cached glyph whose source entity has no TreeComponent: the descendant
+  // filter cannot walk it and excludes it from subtree queries.
+  const Entity detached = registry.create();
+  auto& cache = registry.get<components::ComputedTextGeometryComponent>(root);
+  cache.glyphs.push_back(components::ComputedTextGeometryComponent::GlyphGeometry{
+      .sourceEntity = detached,
+      .path = PathBuilder().addRect(Box2d::FromXYWH(50.0, 0.0, 5.0, 5.0)).build(),
+      .extent = Box2d::FromXYWH(50.0, 0.0, 5.0, 5.0),
+  });
+
+  const auto paths = engine.computedGlyphPaths(rootHandle);
+  EXPECT_THAT(paths, SizeIs(1));  // Only the root-sourced glyph; the detached one is filtered.
+
+  // The outline+source variant applies the same subtree filter.
+  const auto outlines = engine.computedGlyphOutlines(rootHandle);
+  ASSERT_THAT(outlines, SizeIs(1));
+  EXPECT_EQ(outlines[0].sourceEntity, root);
+}
+
+TEST(TextEngineScriptedTest, MetricForwardersExposeBackendValues) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+  const FontHandle font;
+
+  EXPECT_EQ(engine.fontVMetrics(font).ascent, 1000);
+  EXPECT_FLOAT_EQ(engine.scaleForPixelHeight(font, 24.0f), 0.02f);
+  EXPECT_FLOAT_EQ(engine.scaleForEmToPixels(font, 24.0f), 0.024f);
+
+  const auto underline = engine.underlineMetrics(font);
+  ASSERT_TRUE(underline.has_value());
+  EXPECT_DOUBLE_EQ(underline->position, -100.0);
+  EXPECT_DOUBLE_EQ(underline->thickness, 50.0);
+
+  const auto strikeout = engine.strikeoutMetrics(font);
+  ASSERT_TRUE(strikeout.has_value());
+  EXPECT_DOUBLE_EQ(strikeout->position, 300.0);
+  EXPECT_DOUBLE_EQ(strikeout->thickness, 40.0);
+
+  EXPECT_FALSE(engine.subSuperMetrics(font).has_value());
+  EXPECT_FALSE(engine.isBitmapOnly(font));
+  EXPECT_FALSE(engine.bitmapGlyph(font, 3, 1.0f).has_value());
+  EXPECT_FALSE(engine.glyphOutline(font, 5, 1.0f).empty());
+  EXPECT_TRUE(engine.glyphOutline(font, 0, 1.0f).empty());
+}
+
+TEST(TextEngineScriptedTest, MeasureChUnitUsesFallbackFontWhenNoFamilyMatches) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+
+  const std::optional<double> chUnit = engine.measureChUnitInEm({});
+
+  // The embedded fallback font's '0' advance, in ems.
+  ASSERT_TRUE(chUnit.has_value());
+  EXPECT_THAT(*chUnit, AllOf(Gt(0.0), testing::Lt(2.0)));
+}
+
+TEST(TextEngineScriptedTest, MeasureChUnitFailsWhenFontCannotBeShaped) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+
+  // Register a face whose data passes the outline check but cannot be parsed for shaping.
+  css::FontFaceSource source;
+  source.kind = css::FontFaceSource::Kind::Data;
+  source.payload = MakeUnparseableOutlineFontData();
+  css::FontFace face;
+  face.familyName = RcString("BrokenFont");
+  face.sources.push_back(std::move(source));
+  fontManager.addFontFace(face);
+
+  const std::vector<RcString> families = {RcString("BrokenFont")};
+  EXPECT_FALSE(engine.measureChUnitInEm(families).has_value());
 }
 
 }  // namespace donner::svg
