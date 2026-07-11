@@ -9,8 +9,19 @@ permissions:
   contents: read
 
 jobs:
+  # The two wasm package builds are independent (separate Bazel configs) and
+  # historically ran back-to-back in one job, so the lane's wall time was the
+  # SUM of both compiles. Splitting them into a matrix runs them in parallel
+  # and hands the packages to the `test` job as artifacts, so wall time is the
+  # MAX of the two compiles plus the (short) browser-test phase. The combined
+  # "compatible" deployment candidate is still staged only in `test`, after
+  # all three browser lanes pass (see docs/design_docs/0056).
   build:
     runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [geode, tiny_skia]
     steps:
       - uses: actions/checkout@v7
 
@@ -18,21 +29,26 @@ jobs:
         uses: bazel-contrib/setup-bazel@0.19.0
         with:
           bazelisk-cache: true
-          disk-cache: editor-wasm-${{ runner.os }}
+          # Scoped per backend so the two matrix legs do not race a shared
+          # cache key on save, and each leg restores only the outputs it needs.
+          disk-cache: editor-wasm-${{ runner.os }}-${{ matrix.backend }}
           repository-cache: true
           external-cache: true
           cache-save: true
 
       - name: Build editor wasm package (Geode)
+        if: matrix.backend == 'geode'
         run: |
           bazelisk build --config=editor-wasm //donner/editor/wasm:wasm_web_package
 
       - name: Build editor wasm package (tiny_skia)
+        if: matrix.backend == 'tiny_skia'
         run: |
           bazelisk build --config=editor-wasm-tiny-skia \
             //donner/editor/wasm:wasm_tiny_skia_web_package
 
       - name: Setup Node
+        if: matrix.backend == 'tiny_skia'
         uses: actions/setup-node@v6
         with:
           node-version: 24
@@ -44,11 +60,64 @@ jobs:
       # closure/filesystem-trim glue regression would pass CI silently. The
       # render_test target keeps its `manual` tag (so plain wildcard builds under
       # the wrong config do not pull in the wasm outputs); it is invoked here
-      # explicitly under the wasm-size config, in the same lane that builds wasm.
+      # explicitly under the wasm-size config, in the matrix leg that builds the
+      # tiny_skia wasm outputs.
       - name: WASM JS-glue render gate (closure + FILESYSTEM=0)
+        if: matrix.backend == 'tiny_skia'
         run: |
           bazelisk test --config=wasm-size --test_output=errors \
             //donner/svg/renderer/wasm:render_test
+
+      # Materialize the package outside bazel-out (dereferencing symlinks) so
+      # the artifact contains plain files for the `test` job to download.
+      - name: Stage package for handoff
+        id: stage-package
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ matrix.backend }}" == "geode" ]]; then
+            pkg_rel=$(bazelisk cquery --config=editor-wasm --output=files \
+              //donner/editor/wasm:wasm_web_package | head -n1)
+          else
+            pkg_rel=$(bazelisk cquery --config=editor-wasm-tiny-skia --output=files \
+              //donner/editor/wasm:wasm_tiny_skia_web_package | head -n1)
+          fi
+          pkg_dir=$(cd "${pkg_rel}" && pwd -P)
+          handoff_dir="${RUNNER_TEMP}/editor-wasm-package-${{ matrix.backend }}"
+          mkdir -p "${handoff_dir}"
+          cp -RL "${pkg_dir}/." "${handoff_dir}/"
+          echo "handoff_dir=${handoff_dir}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: editor-wasm-package-${{ matrix.backend }}-${{ github.sha }}
+          path: ${{ steps.stage-package.outputs.handoff_dir }}
+          if-no-files-found: error
+          retention-days: 3
+
+  test:
+    runs-on: macos-26
+    needs: build
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download Geode package
+        uses: actions/download-artifact@v8
+        with:
+          name: editor-wasm-package-geode-${{ github.sha }}
+          path: ${{ runner.temp }}/editor-wasm-package-geode
+
+      - name: Download tiny_skia package
+        uses: actions/download-artifact@v8
+        with:
+          name: editor-wasm-package-tiny_skia-${{ github.sha }}
+          path: ${{ runner.temp }}/editor-wasm-package-tiny_skia
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
 
       - name: Install Playwright
         working-directory: donner/editor/wasm/tests
@@ -65,12 +134,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          geode_rel=$(bazelisk cquery --config=editor-wasm --output=files \
-            //donner/editor/wasm:wasm_web_package | head -n1)
-          geode_dir=$(cd "${geode_rel}" && pwd -P)
-          tiny_skia_rel=$(bazelisk cquery --config=editor-wasm-tiny-skia --output=files \
-            //donner/editor/wasm:wasm_tiny_skia_web_package | head -n1)
-          tiny_skia_dir=$(cd "${tiny_skia_rel}" && pwd -P)
+          geode_dir="${RUNNER_TEMP}/editor-wasm-package-geode"
+          tiny_skia_dir="${RUNNER_TEMP}/editor-wasm-package-tiny_skia"
           compatible_dir="${RUNNER_TEMP}/donner-editor-wasm-compatible-site-${GITHUB_SHA}"
           donner/editor/wasm/stage-compatible-package.sh \
             "${geode_dir}" "${tiny_skia_dir}" "${compatible_dir}"
@@ -119,8 +184,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          pkg_dir=$(bazelisk cquery --config=editor-wasm-tiny-skia --output=files \
-            //donner/editor/wasm:wasm_tiny_skia_web_package | head -n1)
+          pkg_dir="${RUNNER_TEMP}/editor-wasm-package-tiny_skia"
           server_log="${RUNNER_TEMP}/editor-wasm-tiny-skia-server.log"
           PYTHONUNBUFFERED=1 python3 tools/http/simple_webserver.py --no-https --host 127.0.0.1 \
             --dir "${pkg_dir}" >"${server_log}" 2>&1 &
