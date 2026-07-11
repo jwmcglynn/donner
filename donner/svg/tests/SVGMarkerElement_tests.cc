@@ -282,10 +282,6 @@ TEST(SVGMarkerElementTests, MarkerEndProperty) {
 /// 16 = 8, displacing the marker. Asserted differentially so the expected placement needs no
 /// hand-derived golden.
 TEST(SVGMarkerElementRenderingTests, RefKeywordResolvesAgainstMarkerViewBox) {
-  if (ActiveRendererBackend() == RendererBackend::Geode) {
-    GTEST_SKIP() << "Known broken on Geode backend (jwmcglynn/donner#566).";
-  }
-
   const AsciiImage keyword = RendererTestUtils::renderToAsciiImage(R"-(
     <svg viewBox="0 0 16 16">
       <defs>
