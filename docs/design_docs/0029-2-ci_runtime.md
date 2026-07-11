@@ -502,7 +502,7 @@ concurrency groups); the operator's new bar is per-job EXECUTION time. Target
 tightened 2026-07-11 to **per-job execution P99 <= 15 minutes** (supersedes the
 earlier p95<=30). A 15-minute P99 means even the worst-case coverage run must
 fit, so structural fixes beat shaving. Sibling agents own test-runtime trims,
-compile/RE throughput, and event-horizon infra; this appendix touches only the
+compile/RE throughput, and RE-host infra; this appendix touches only the
 coverage lane and does not propose infra or non-coverage test-content changes
 (those are flagged for the owning agents / the operator).
 
@@ -542,7 +542,7 @@ entire cost is the Bazel `coverage` command; the runner-side post-processing is
 2 seconds.
 
 **This corrects the prior appendix's hypothesis.** The 2026-07-10 note assumed
-the runner-side lcov merge on the 8-vcpu gha-host1 was a dominant coverage cost.
+the runner-side lcov merge on the the runner host was a dominant coverage cost.
 Measured: the Python merge is 2s and Bazel's own `Coverage report generation`
 action is 14.1s. Neither is a lever. The cost is the instrumented build+test
 executed on the RE backend inside `bazel coverage`.
@@ -624,14 +624,14 @@ warmed and the instrumented surface is both broad (all //donner) and multiplied
    `push:main` coverage build to the self-hosted RE lane (same executor and same
    coverage flags PR coverage uses) so its instrumented action results land in
    the shared CAS/AC. Effect: (a) the ~70-min hosted `Coverage:build` main job
-   runs on the 96-vcpu RE backend instead of a hosted runner; (b) PR coverage's
+   runs on the self-hosted RE backend instead of a hosted runner; (b) PR coverage's
    unchanged instrumented compiles become cache hits, collapsing a PR coverage
    run toward just the changed files' rdep-fanout recompiles. Projected: common
    PRs ~7 -> ~3 min; a header-fanout PR like #829 from 54 min toward the
    changed-fanout floor (est. 10-20 min, to be measured). **OPERATOR SIGN-OFF:**
-   this adds serialized main-coverage load to bazel-re1, which is shared with the
-   priority dev host dev1; it is reversible (revert the workflow) and off the PR
-   critical path (main pushes serialize), but the dev1-latency-under-main-coverage
+   this adds serialized main-coverage load to the self-hosted RE backend, which is shared with the
+   priority interactive dev host; it is reversible (revert the workflow) and off the PR
+   critical path (main pushes serialize), but the dev-host-latency-under-main-coverage
    cost must be measured before keeping it. Coverage SIGNAL is unchanged (same
    instrumentation, same targets). This is the primary structural fix; it borders
    the infra sibling's RE-throughput scope, so it is filed for operator routing.
@@ -670,7 +670,7 @@ safe partial that lands immediately.
 ### Cross-check with the infra audit (2026-07-11, generic attribution)
 
 A parallel read-only infra audit reports that the RE backend has ample slot
-headroom under organic CI (roughly 9-25 of 96 execution slots occupied), while
+headroom under organic CI (roughly well under a quarter of execution slots occupied), while
 the runner tier is CPU-overcommitted under concurrent runner-side phases (each
 runner microVM is oversubscribed on the shared runner-host cores). Two
 implications for this lane:
@@ -766,9 +766,9 @@ threshold routes broad PRs to the hosted lane and fired on editor-v08-ux-polish
 
 1. Warm the RE coverage cache from main-push coverage (run the main baseline on
    the RE lane, same executor + flags). Primary structural fix; the infra audit
-   confirms the RE backend has slot headroom (9-25/96), so the dev1-contention
+   confirms the RE backend has slot headroom (well under a quarter of slots busy), so the dev-host contention
    risk is low. Operator infra sign-off; reversible; measure the main-coverage
-   job time and dev1 latency.
+   job time and dev-host latency.
 2. Cut variant multiplication for PR patch coverage (single representative
    variant on PRs; full multi-variant on main). Operator coverage-scope sign-off.
 3. Align bazel-diff base to the merge-base (above): shrinks the affected set for
