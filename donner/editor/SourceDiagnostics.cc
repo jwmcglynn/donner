@@ -53,18 +53,20 @@ SourceByteRange NormalizeRange(const SourceRange& range, std::string_view source
   return SourceByteRange{start, end};
 }
 
-FileOffset::LineInfo RecoverLineInfo(std::string_view source, std::size_t offset) {
-  offset = std::min(offset, source.size());
-  FileOffset::LineInfo result{1, 0};
-  for (std::size_t i = 0; i < offset; ++i) {
+std::vector<std::size_t> BuildLineStarts(std::string_view source) {
+  std::vector<std::size_t> lineStarts{0};
+  for (std::size_t i = 0; i < source.size(); ++i) {
     if (source[i] == '\n') {
-      ++result.line;
-      result.offsetOnLine = 0;
-    } else {
-      ++result.offsetOnLine;
+      lineStarts.push_back(i + 1);
     }
   }
-  return result;
+  return lineStarts;
+}
+
+FileOffset::LineInfo RecoverLineInfo(std::span<const std::size_t> lineStarts, std::size_t offset) {
+  const auto nextLine = std::upper_bound(lineStarts.begin(), lineStarts.end(), offset);
+  const std::size_t lineIndex = static_cast<std::size_t>(nextLine - lineStarts.begin() - 1);
+  return FileOffset::LineInfo{lineIndex + 1, offset - lineStarts[lineIndex]};
 }
 
 }  // namespace
@@ -74,12 +76,15 @@ SourceDiagnosticSnapshot BuildSourceDiagnosticSnapshot(std::span<const ParseDiag
                                                        std::uint64_t revision) {
   SourceDiagnosticSnapshot snapshot{.revision = revision};
   snapshot.diagnostics.reserve(std::min(diagnostics.size(), kMaxPublishedDiagnostics));
+  const std::vector<std::size_t> lineStarts = BuildLineStarts(source);
 
   for (std::size_t i = 0; i < diagnostics.size() && i < kMaxPublishedDiagnostics; ++i) {
     const ParseDiagnostic& diagnostic = diagnostics[i];
     const SourceByteRange range = NormalizeRange(diagnostic.range, source);
+    const std::size_t sourceOffset = std::min(
+        diagnostic.range.start.resolveOffset(source).offset.value(), source.size());
     const FileOffset::LineInfo lineInfo = diagnostic.range.start.lineInfo.value_or(
-        RecoverLineInfo(source, diagnostic.range.start.resolveOffset(source).offset.value()));
+        RecoverLineInfo(lineStarts, sourceOffset));
     snapshot.diagnostics.push_back(SourceDiagnostic{
         .id = DiagnosticId(diagnostic, range, revision, i),
         .severity = diagnostic.severity,

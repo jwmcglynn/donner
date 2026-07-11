@@ -3,7 +3,9 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <string>
 #include <string_view>
+#include <vector>
 
 #include "donner/base/FileOffset.h"
 #include "donner/base/ParseDiagnostic.h"
@@ -58,6 +60,23 @@ TEST(SourceDiagnostics, PreservesSeverityAndMessage) {
   EXPECT_EQ(snapshot.diagnostics[0].message, "deprecated");
   EXPECT_EQ(snapshot.diagnostics[1].severity, DiagnosticSeverity::Error);
   EXPECT_EQ(snapshot.diagnostics[1].message, "invalid");
+}
+
+TEST(SourceDiagnostics, CapsPublishedDiagnosticsAndRecoversLocationsInLargeSource) {
+  std::string source;
+  std::vector<ParseDiagnostic> diagnostics;
+  for (std::size_t i = 0; i < 300; ++i) {
+    source += "line\n";
+    diagnostics.push_back(ParseDiagnostic::Warning("warning", FileOffset::Offset(i * 5)));
+  }
+
+  const SourceDiagnosticSnapshot snapshot = BuildSourceDiagnosticSnapshot(diagnostics, source, 1);
+
+  ASSERT_EQ(snapshot.diagnostics.size(), 256u);
+  EXPECT_EQ(snapshot.diagnostics.front().line, 1u);
+  EXPECT_EQ(snapshot.diagnostics.front().column, 0u);
+  EXPECT_EQ(snapshot.diagnostics.back().line, 256u);
+  EXPECT_EQ(snapshot.diagnostics.back().column, 0u);
 }
 
 }  // namespace

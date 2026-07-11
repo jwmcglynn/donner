@@ -1,5 +1,8 @@
 #include "donner/editor/AsyncSVGDocument.h"
 
+#include <algorithm>
+#include <cstddef>
+
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/editor/EditorParseOptions.h"
@@ -13,8 +16,12 @@ namespace donner::editor {
 
 namespace {
 
+constexpr std::size_t kMaxPublishedParseDiagnostics = 256;
+
 std::vector<ParseDiagnostic> CopyWarnings(const ParseWarningSink& sink) {
-  return std::vector<ParseDiagnostic>(sink.warnings().begin(), sink.warnings().end());
+  const auto& warnings = sink.warnings();
+  const std::size_t count = std::min(warnings.size(), kMaxPublishedParseDiagnostics);
+  return std::vector<ParseDiagnostic>(warnings.begin(), warnings.begin() + count);
 }
 
 bool InvalidatesExistingCompositedPixels(const EditorCommand& command) {
@@ -41,6 +48,12 @@ AsyncSVGDocument::AsyncSVGDocument() = default;
 void AsyncSVGDocument::publishParseDiagnostics(std::vector<ParseDiagnostic> warnings,
                                                std::optional<ParseDiagnostic> fatalError) {
   lastParseError_ = fatalError;
+  if (warnings.size() > kMaxPublishedParseDiagnostics) {
+    warnings.resize(kMaxPublishedParseDiagnostics);
+  }
+  if (fatalError.has_value() && warnings.size() == kMaxPublishedParseDiagnostics) {
+    warnings.pop_back();
+  }
   parseDiagnostics_ = std::move(warnings);
   if (fatalError.has_value()) {
     parseDiagnostics_.push_back(std::move(*fatalError));
