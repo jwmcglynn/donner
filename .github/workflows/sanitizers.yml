@@ -89,12 +89,31 @@ jobs:
         run: |
           # The blocking Fuzz workflow owns fuzz_target tests under ASan. Excluding them here keeps
           # this job focused on unit and integration coverage without running each timed fuzzer twice.
+          # The GL replay suite is a wall-clock race/performance harness whose far-zoom case exceeds
+          # its 180 s per-case watchdog under ASan; normal and UBSan lanes retain that coverage.
+          # Native Geode tests use raw non-owning webgpu.hpp handles in their harnesses, so run that
+          # package separately with leak detection disabled while retaining ASan memory-safety checks.
           bazelisk test \
             --config=asan \
             --test_output=errors \
             --test_tag_filters=-fuzz_target \
             --build_tag_filters=-fuzz_target \
-            //donner/...
+            -- \
+            //donner/... \
+            -//donner/editor/tests:gl_rnr_replay_tests \
+            -//donner/svg/renderer/geode/... \
+            -//donner/svg/renderer/tests:renderer_geode_golden_tests \
+            -//donner/svg/renderer/tests:renderer_geode_tests
+
+          bazelisk test \
+            --config=asan \
+            --test_output=errors \
+            --test_env=ASAN_OPTIONS=detect_leaks=0 \
+            --test_tag_filters=-fuzz_target \
+            --build_tag_filters=-fuzz_target \
+            //donner/svg/renderer/geode/... \
+            //donner/svg/renderer/tests:renderer_geode_golden_tests \
+            //donner/svg/renderer/tests:renderer_geode_tests
 
   ubsan:
     runs-on: ubuntu-24.04
