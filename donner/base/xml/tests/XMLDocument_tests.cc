@@ -3129,8 +3129,13 @@ TEST_F(XMLDocumentTests, InsertNodeReconcilesCommentChildDroppedByReparse) {
   EXPECT_THAT(std::string(doc.source()), testing::HasSubstr("<!--note-->"));
   ASSERT_TRUE(svg.firstChild().has_value());
   EXPECT_EQ(*svg.firstChild(), rect);
-  // The reparse of the serialized node drops the comment, so the reconciliation removes the
-  // DOM-only comment child.
+  // KNOWN DIVERGENCE (characterization, not endorsement): the serialized
+  // source keeps the comment child, but XMLIncrementalParser::ParseElement
+  // parses with default options that drop Comment nodes, so reconciliation
+  // removes the DOM-only comment child and the DOM disagrees with the source
+  // until the next full reparse. The product-side fix is for the subtree
+  // reparse to preserve comment nodes; when that lands, flip this assertion
+  // to expect the comment child to survive.
   EXPECT_FALSE(rect.firstChild().has_value());
 }
 
