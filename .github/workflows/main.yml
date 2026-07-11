@@ -650,7 +650,14 @@ jobs:
       # remote execution is down/degraded: a CPU-capped runner executing the
       # whole graph locally is the measured 2-3 h tail. Fast-fail on RE
       # degradation; the wedge-watch + rerun recover.
-      BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS: "--remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=5s"
+      # --remote_timeout is 60s (not 5s) for the same reason as the coverage
+      # lane: a healthy-but-BUSY endpoint legitimately takes >5s on bulk
+      # transfers under a multi-job burst (observed as spurious
+      # DEADLINE_EXCEEDED-after-4.999s failures on full-`//...` fallback runs,
+      # 2026-07-11, twice in a row on organic load; same signature as the
+      # 2026-07-02 coverage-lane incident that motivated coverage.yml's 60s).
+      # 60s still fast-fails a genuinely dead endpoint.
+      BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS: "--remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s"
       # Every self-hosted run uploads Bazel profiles + BEP + compact execution
       # logs so slow runs can be attributed to targets/actions without live
       # SSH. Keep artifacts small; retention is 3 days. DIAG_DIR is exported
