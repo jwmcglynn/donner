@@ -29,12 +29,22 @@
 ///                                    canvas sizes. Without the fix, the
 ///                                    high-zoom probe falls back to the
 ///                                    raw deep-blue background and the
-///                                    luma delta jumps from ≤25 to ~37+.
+///                                    luma delta jumps from ~9.1 to ~36.2 (measured at 4460x2560).
 ///
-/// All four tests dump PNGs to `$TEST_UNDECLARED_OUTPUTS_DIR` so a
-/// failing run gives the operator the actual pixels to look at.
+/// The splash tests dump PNGs to `$TEST_UNDECLARED_OUTPUTS_DIR` ONLY on
+/// failure, so a failing run gives the operator the actual pixels to look
+/// at. Encoding a 38.6-megapixel PNG costs ~6 s per image, which used to
+/// be ~60% of this suite's runtime on every green run.
+///
+/// The halo comparison runs the high-zoom render at 4460x2560 (5x splash,
+/// ~182 MB float SourceGraphic buffer): comfortably above the broken
+/// 64 MiB filter cap (2.8x), so it exercises the same blur-no-op-above-cap
+/// path as the editor's real 8192x4708 output at ~1/3.4 the pixel count.
+/// The real editor dimension is still pinned by
+/// SplashAtEditorClampBoundaryRenders above.
 
 #include <array>
+#include <span>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -47,6 +57,7 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/renderer/RendererImageIO.h"
 #include "gtest/gtest.h"
 
 namespace donner::svg {
@@ -67,9 +78,8 @@ constexpr std::string_view kTinySvg =
          <rect width="100" height="100" fill="red"/>
        </svg>)";
 
-// Helper: parse `source`, set canvas, render, optionally save PNG, return
-// the snapshot.
-RendererBitmap RenderAt(std::string_view source, int width, int height, const char* outName) {
+// Helper: parse `source`, set canvas, render, return the snapshot.
+RendererBitmap RenderAt(std::string_view source, int width, int height) {
   ParseWarningSink warningSink = ParseWarningSink::Disabled();
   auto result = parser::SVGParser::ParseSVG(source, warningSink);
   EXPECT_FALSE(result.hasError()) << "parse failed: " << result.error();
@@ -77,12 +87,23 @@ RendererBitmap RenderAt(std::string_view source, int width, int height, const ch
   document.setCanvasSize(width, height);
   Renderer renderer;
   renderer.draw(document);
-  if (outName != nullptr) {
-    if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
-      renderer.save((std::filesystem::path(dir) / outName).string().c_str());
-    }
-  }
   return renderer.takeSnapshot();
+}
+
+// Dump `bitmap` as a PNG into `$TEST_UNDECLARED_OUTPUTS_DIR`. Called only on
+// failure paths: encoding a 38.6-megapixel PNG costs ~6 s, so green runs
+// skip it entirely while failing runs still hand the operator the pixels.
+void SaveSnapshotForDiagnostics(const RendererBitmap& bitmap, const char* outName) {
+  if (bitmap.empty()) {
+    return;  // Nothing renderable to save.
+  }
+  if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
+    const size_t stridePixels = bitmap.rowBytes ? bitmap.rowBytes / 4 : 0;
+    RendererImageIO::writeRgbaPixelsToPngFile(
+        (std::filesystem::path(dir) / outName).string().c_str(),
+        std::span<const uint8_t>(bitmap.pixels), bitmap.dimensions.x, bitmap.dimensions.y,
+        stridePixels);
+  }
 }
 
 // Sample an RGBA pixel from `bitmap` at the given device coords, returning
@@ -130,7 +151,7 @@ double MeanLumaDelta(const RendererBitmap& lowZoom, const RendererBitmap& highZo
 TEST(ZoomFilterRepro, TinyCanvasRendersNonEmptySnapshot) {
   // Sanity: a 100×100 canvas must render. If this fails, something is
   // wrong with the test harness itself, not the cap.
-  const RendererBitmap snapshot = RenderAt(kTinySvg, 100, 100, /*outName=*/nullptr);
+  const RendererBitmap snapshot = RenderAt(kTinySvg, 100, 100);
   EXPECT_FALSE(snapshot.empty()) << "100×100 canvas produced an empty snapshot";
 }
 
@@ -138,7 +159,7 @@ TEST(ZoomFilterRepro, SquareCanvasAtPriorCapBoundaryRenders) {
   // 4096×4096 RGBA = exactly 64 MiB. The prior `Pixmap::fromSize` cap was
   // `len.value() > kMaxAllocationBytes` (strict greater-than), so this size
   // is on the boundary and was historically allowed.
-  const RendererBitmap snapshot = RenderAt(kTinySvg, 4096, 4096, /*outName=*/nullptr);
+  const RendererBitmap snapshot = RenderAt(kTinySvg, 4096, 4096);
   EXPECT_FALSE(snapshot.empty())
       << "4096×4096 canvas (64 MiB exactly) failed to render - the cap may have moved.";
 }
@@ -155,8 +176,12 @@ TEST(ZoomFilterRepro, SplashAtEditorClampBoundaryRenders) {
   if (source.empty()) {
     GTEST_SKIP() << "donner_splash.svg not in runfiles";
   }
-  const RendererBitmap snapshot =
-      RenderAt(std::string_view{source}, 8192, 4708, "splash_at_editor_clamp_8192x4708.png");
+  const RendererBitmap snapshot = RenderAt(std::string_view{source}, 8192, 4708);
+  const bool dimensionsOk = snapshot.dimensions.x == 8192 && snapshot.dimensions.y >= 4700 &&
+                            snapshot.dimensions.y <= 4708;
+  if (snapshot.empty() || !dimensionsOk) {
+    SaveSnapshotForDiagnostics(snapshot, "splash_at_editor_clamp_8192x4708.png");
+  }
   EXPECT_FALSE(snapshot.empty())
       << "Splash @ 8192×4708 produced an empty snapshot - main pixmap allocation failed. "
          "Check `Pixmap::fromSize` cap in third_party/tiny-skia-cpp.";
@@ -175,14 +200,18 @@ TEST(ZoomFilterRepro, SplashHaloSurvivesHighZoom) {
   // sized SourceGraphic float buffers above ~2048×2048 floats - the blur
   // disappears while every other element renders normally. This produces a
   // luma swing of ~37+ at the Lightning_glow_dark halo probe; with the
-  // blur intact, the delta is ≤25.
+  // blur intact, the delta is ~9.
   const std::string source = LoadSplash();
   if (source.empty()) {
     GTEST_SKIP() << "donner_splash.svg not in runfiles";
   }
-  const RendererBitmap lo = RenderAt(std::string_view{source}, 892, 512, "splash_halo_lo.png");
+  const RendererBitmap lo = RenderAt(std::string_view{source}, 892, 512);
   ASSERT_FALSE(lo.empty());
-  const RendererBitmap hi = RenderAt(std::string_view{source}, 8192, 4708, "splash_halo_hi.png");
+  // 5x splash: ~182 MB float SourceGraphic buffer, 2.8x above the broken
+  // 64 MiB filter cap - the same blur-no-op-above-cap path as the editor's
+  // real 8192x4708 output at ~1/3.4 the pixel count. The real dimension is
+  // pinned by SplashAtEditorClampBoundaryRenders.
+  const RendererBitmap hi = RenderAt(std::string_view{source}, 4460, 2560);
   ASSERT_FALSE(hi.empty());
 
   // Probe inside the Lightning_glow_dark halo on the small bottom bolt
@@ -190,7 +219,12 @@ TEST(ZoomFilterRepro, SplashHaloSurvivesHighZoom) {
   // visible in the low-zoom reference. When the gaussian blur no-ops at
   // high zoom this region falls back to the deep-blue background.
   const double delta = MeanLumaDelta(lo, hi, /*lowX=*/478, /*lowY=*/440, /*patchRadius=*/4);
-  EXPECT_LT(delta, 25.0) << "Halo luma at low vs high zoom differs by " << delta
+  RecordProperty("halo_luma_delta", std::to_string(delta));
+  if (delta >= 22.0) {
+    SaveSnapshotForDiagnostics(lo, "splash_halo_lo.png");
+    SaveSnapshotForDiagnostics(hi, "splash_halo_hi.png");
+  }
+  EXPECT_LT(delta, 22.0) << "Halo luma at low vs high zoom differs by " << delta
                          << " - a gaussian blur on the splash is no-op'ing at the high canvas. "
                             "The blur primitive's defensive size cap is the likely cause: check "
                             "third_party/tiny-skia-cpp/src/tiny_skia/filter/"
