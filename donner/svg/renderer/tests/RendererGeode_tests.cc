@@ -648,6 +648,39 @@ TEST_F(RendererGeodeTest, StrokeRectOutline) {
   EXPECT_THAT(corner, IsTransparent()) << "Corner should be transparent";
 }
 
+TEST_F(RendererGeodeTest, StrokeSharedVertexDoesNotExtendVertically) {
+  RendererGeode renderer = createRenderer();
+  RenderViewport viewport;
+  viewport.size = Vector2d(200, 200);
+  viewport.devicePixelRatio = 1.0;
+  renderer.beginFrame(viewport);
+
+  renderer.setPaint(solidStroke(css::RGBA(0, 0, 255, 255)));
+  StrokeParams stroke;
+  stroke.strokeWidth = 1.0;
+  stroke.lineJoin = StrokeLinejoin::Miter;
+
+  PathShape shape;
+  shape.path = PathBuilder()
+                   .moveTo({50, 85})
+                   .lineTo({65, 135})
+                   .lineTo({150, 135})
+                   .lineTo({150, 85})
+                   .quadTo({100, 45}, {50, 85})
+                   .closePath()
+                   .build();
+  shape.fillRule = FillRule::NonZero;
+  renderer.drawPath(shape, stroke);
+  renderer.endFrame();
+
+  const RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+  for (int y = 90; y <= 120; y += 10) {
+    EXPECT_THAT(pixelAt(snap, 65, y), IsTransparent())
+        << "Stroke must not extend vertically above the shared vertex at y=" << y;
+  }
+}
+
 /// Fill and stroke together: interior should be the fill color, the stroke
 /// ring around the edge should be the stroke color.
 TEST_F(RendererGeodeTest, FillAndStrokeRect) {
