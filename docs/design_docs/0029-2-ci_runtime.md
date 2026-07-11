@@ -817,3 +817,70 @@ consecutive spurious DEADLINE_EXCEEDED-after-4.999s failures on organic load
 (the serialized coverage job passed concurrently under its 60s timeout; the
 first tip-vs-merge run then passed full-`//...` in 17m28s on the same busy
 backend).
+
+### As-built: levers 1 and 2 (operator-approved, 2026-07-11)
+
+**Lever 1 (seed the RE coverage cache from main-push) is already live, and its
+verification CORRECTS this audit's cold-cache claim.** The main-push coverage
+baseline has been routing to the self-hosted RE lane (same job, executor, and
+flags as PR coverage) since the runner-routing change (#818) took effect; the
+hosted `build` job now runs only as the PR fallback path. Measured main-push
+lane duration: 5-11 min on the RE lane versus the ~70 min hosted median in the
+48h profile above (the profile window straddled the cutover; 69.7 median was
+the before-state). Codecov baseline semantics are intact: the artifact +
+hosted-upload path is unchanged, verified on live main-push runs.
+
+**Correction (integrity note):** this audit's "`cachedRemotely: true` = 4, the
+coverage cache is effectively cold" was WRONG. BEP `action` events are emitted
+only for failed actions, so grepping them undercounts cache hits by orders of
+magnitude. The authoritative `buildMetrics.actionSummary.runnerCount` shows:
+
+| run | remote cache hit | remote exec | internal | wall |
+|---|---:|---:|---:|---:|
+| PR #829 coverage (the 54-min exemplar) | 3107 | 1519 | 5854 | 54 min |
+| main-push 19:32Z | 5526 | 10 | 10610 | 7.5 min |
+| main-push 15:30Z | 3748 | 1 | 104 | 5.7 min |
+
+The seed works: main-to-main runs are ~97 percent cache-hit, and even the #829
+worst case got 3107 hits. The revised root cause of the 54-minute run: the
+1519 genuine cache-miss actions (the real reverse-dependency recompiles of the
+PR's changed headers - which can never be cache hits on first run) spent
+**4511 cpu-min in remote-execution QUEUE versus 158 cpu-min executing** (96
+percent queuing) at CI's floor scheduler priority during a contended window
+(the PR's own linux lane ran concurrently on the same backend, plus
+interactive dev priority). The lane's tail is therefore demand x contention on
+cache-miss actions, not cache coldness. Levers that cut miss-set size (the
+merge-ref hashing fix #836, and lever 2 below) attack it directly; scheduler
+priority is operator-reserved and untouched.
+
+**Lever 2 (representative-variant PR coverage) as-built.** PR PATCH coverage
+now trims `donner_variant_cc_test` wrapper targets (`_tiny`, `_text_full`,
+`_geode`; build_defs/rules.bzl `_VARIANT_SPECS`) from the bazel-diff affected
+set when their base sibling is present; the base/default target is the
+representative. The full multi-variant matrix stays on the main-push baseline.
+Coverage-semantics change, stated plainly: patch coverage on PRs reflects the
+default variant only; backend/feature-gated lines and cross-variant
+regressions surface on main-push (and in CI's own test lanes, which are
+untouched - this trims only the coverage lane's instrumented re-run).
+Fail-safe: variant-only targets (no base sibling) are never dropped; tool
+failure keeps the untrimmed set. Implemented in
+`tools/coverage_variant_trim.py` (unit-tested,
+`//tools:coverage_variant_trim_tests`), called from coverage.yml
+determine-targets after the instrumentability classifier (which therefore
+still sees the full set).
+
+Review hardening (PR #840 P2): trimming is kind-gated on the generated
+wrapper rule kind (`donner_multi_transitioned_test`, from the label_kind
+query the classifier already runs), so handwritten targets that merely share
+the suffix (e.g. the `cc_library` named `renderer_geode` beside
+`renderer`) are never dropped; unknown kinds fail safe to keep.
+
+Measured on the #829 exemplar's real affected list with its real label_kind
+data: 376 -> 281 targets (95 generated wrappers dropped; 4 name-coincident
+non-wrapper targets correctly kept by the kind gate; 7 wrapper targets kept
+for lacking a base sibling); on the run's execution profile those wrappers
+account for 90 of 296 test executions and the transitioned compile closures
+behind the ~7x per-element instrumented compile multiplier. Projected: the
+cache-miss compile set on a variant-heavy PR shrinks by roughly the wrapper
+share; measured before/after cache-hit and wall numbers ride the next organic
+C/C++ PR (post-merge measurement, pull_request runs the base workflow).
