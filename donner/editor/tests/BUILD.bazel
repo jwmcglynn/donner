@@ -22,17 +22,6 @@ donner_cc_library(
 )
 
 donner_cc_test(
-    name = "drag_coalesce_tests",
-    srcs = ["DragCoalesce_tests.cc"],
-    deps = [
-        "//donner/base",
-        "//donner/editor:drag_coalesce",
-        "//donner/editor:imgui_headers",
-        "@com_google_gtest//:gtest_main",
-    ],
-)
-
-donner_cc_test(
     name = "viewport_geometry_tests",
     srcs = ["ViewportGeometry_tests.cc"],
     deps = [
@@ -51,30 +40,10 @@ donner_cc_test(
 )
 
 donner_cc_test(
-    name = "native_window_chrome_tests",
-    srcs = ["NativeWindowChrome_tests.cc"],
-    deps = [
-        "//donner/editor:native_window_chrome",
-        "@com_google_gtest//:gtest_main",
-    ],
-)
-
-donner_cc_test(
     name = "editor_theme_tests",
     srcs = ["EditorTheme_tests.cc"],
     deps = [
         "//donner/editor:editor_theme",
-        "@com_google_gtest//:gtest_main",
-        "@imgui",
-    ],
-)
-
-donner_cc_test(
-    name = "editor_dock_layout_tests",
-    srcs = ["EditorDockLayout_tests.cc"],
-    deps = [
-        "//donner/editor:editor_dock_layout",
-        "//donner/editor:imgui_headers",
         "@com_google_gtest//:gtest_main",
         "@imgui",
     ],
@@ -91,16 +60,6 @@ donner_cc_test(
         "//donner/editor:editor_shell",
         "//donner/editor/gui:editor_window",
         "@com_google_gtest//:gtest_main",
-    ],
-)
-
-donner_cc_test(
-    name = "dialog_presenter_tests",
-    srcs = ["DialogPresenter_tests.cc"],
-    deps = [
-        "//donner/editor:dialog_presenter",
-        "@com_google_gtest//:gtest_main",
-        "@imgui",
     ],
 )
 
@@ -194,17 +153,6 @@ donner_cc_test(
 )
 
 donner_cc_test(
-    name = "transform_syntax_preserving_tests",
-    srcs = ["TransformSyntaxPreserving_tests.cc"],
-    deps = [
-        "//donner/base",
-        "//donner/editor:transform_syntax_preserving",
-        "//donner/svg/parser",
-        "@com_google_gtest//:gtest_main",
-    ],
-)
-
-donner_cc_test(
     name = "document_sync_controller_tests",
     srcs = ["DocumentSyncController_tests.cc"],
     deps = [
@@ -214,25 +162,6 @@ donner_cc_test(
         "//donner/editor:text_editor",
         "@com_google_gtest//:gtest_main",
         "@imgui",
-    ],
-)
-
-donner_cc_test(
-    name = "source_diagnostics_tests",
-    srcs = ["SourceDiagnostics_tests.cc"],
-    deps = [
-        "//donner/base",
-        "//donner/editor:source_diagnostics",
-        "@com_google_gtest//:gtest_main",
-    ],
-)
-
-donner_cc_test(
-    name = "source_diagnostics_panel_tests",
-    srcs = ["SourceDiagnosticsPanel_tests.cc"],
-    deps = [
-        "//donner/editor:source_diagnostics_panel",
-        "@com_google_gtest//:gtest_main",
     ],
 )
 
@@ -256,16 +185,6 @@ donner_cc_test(
         "//donner/editor:select_tool",
         "//donner/editor:selection_aabb",
         "//donner/svg",
-        "@com_google_gtest//:gtest_main",
-    ],
-)
-
-donner_cc_test(
-    name = "toolbar_icon_set_tests",
-    srcs = ["ToolbarIconSet_tests.cc"],
-    deps = [
-        "//donner/editor:toolbar_icon_set",
-        "//donner/svg/renderer:renderer_interface",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -295,25 +214,6 @@ donner_cc_test(
         "//donner/svg",
         "@com_google_gtest//:gtest_main",
         "@imgui",
-    ],
-)
-
-donner_cc_test(
-    name = "style_source_annotations_tests",
-    srcs = ["StyleSourceAnnotations_tests.cc"],
-    deps = [
-        "//donner/editor:style_source_annotations",
-        "//donner/svg/parser",
-        "@com_google_gtest//:gtest_main",
-    ],
-)
-
-donner_cc_test(
-    name = "soft_wrap_tests",
-    srcs = ["SoftWrap_tests.cc"],
-    deps = [
-        "//donner/editor:soft_wrap",
-        "@com_google_gtest//:gtest_main",
     ],
 )
 
@@ -816,15 +716,6 @@ donner_cc_test(
 )
 
 donner_cc_test(
-    name = "xml_autocomplete_tests",
-    srcs = ["XmlAutocomplete_tests.cc"],
-    deps = [
-        "//donner/editor:xml_autocomplete",
-        "@com_google_gtest//:gtest_main",
-    ],
-)
-
-donner_cc_test(
     name = "attribute_writeback_tests",
     srcs = ["AttributeWriteback_tests.cc"],
     deps = [
@@ -1245,38 +1136,67 @@ donner_cc_test(
 
 donner_cc_test(
     name = "editor_widget_unit_tests",
-    # Consolidated from 10 single-dep, pure-logic editor widget/policy unit
-    # tests (canvas_scrollbars, file_dialog_state, flash_decorations,
-    # frame_miss_telemetry, keyboard_shortcut_policy, rope_simulation,
-    # rotate_cursor_set, selection_transform_handles, view_menu_visibility,
-    # viewport_interaction_controller). Each was its own cc_test binary, so the
-    # suite cost 10 CppLink actions + 10 test actions on the CI critical path;
-    # merged into one binary it costs 1 link + 1 test action. No coverage
-    # change: every source file and its TEST cases still compile and run. None
-    # of these targets are referenced by name in design docs.
+    # Consolidated pure-logic editor unit tests (waves 1+2 of the CI
+    # test-binary consolidation). Each merged source was previously its own
+    # cc_test binary paying a full CppLink + test action per CI run; merged
+    # they cost 1 link + 1 test action total. Inclusion criteria: the test
+    # exercises exactly one small editor library (plus at most ubiquitous
+    # utility deps: base, imgui headers, svg/parser, renderer_interface), has
+    # no data/args/defines/size/timeout/env/target_compatible_with attributes,
+    # and is not referenced by name in any design doc, so doc-to-test
+    # traceability is preserved by leaving cited targets standalone. No
+    # coverage change: every source file and its TEST cases still compile and
+    # run.
     srcs = [
         "CanvasScrollbars_tests.cc",
+        "DialogPresenter_tests.cc",
+        "DragCoalesce_tests.cc",
+        "EditorDockLayout_tests.cc",
         "FileDialogState_tests.cc",
         "FlashDecorations_tests.cc",
         "FrameMissTelemetry_tests.cc",
         "KeyboardShortcutPolicy_tests.cc",
+        "NativeWindowChrome_tests.cc",
         "RopeSimulation_tests.cc",
         "RotateCursorSet_tests.cc",
         "SelectionTransformHandles_tests.cc",
+        "SoftWrap_tests.cc",
+        "SourceDiagnosticsPanel_tests.cc",
+        "SourceDiagnostics_tests.cc",
+        "StyleSourceAnnotations_tests.cc",
+        "ToolbarIconSet_tests.cc",
+        "TransformSyntaxPreserving_tests.cc",
         "ViewMenuVisibility_tests.cc",
         "ViewportInteractionController_tests.cc",
+        "XmlAutocomplete_tests.cc",
     ],
     deps = [
+        "//donner/base",
         "//donner/editor:canvas_scrollbars",
+        "//donner/editor:dialog_presenter",
+        "//donner/editor:drag_coalesce",
+        "//donner/editor:editor_dock_layout",
         "//donner/editor:file_dialog_state",
         "//donner/editor:flash_decorations",
         "//donner/editor:frame_miss_telemetry",
+        "//donner/editor:imgui_headers",
         "//donner/editor:keyboard_shortcut_policy",
         "//donner/editor:menu_bar_presenter",
+        "//donner/editor:native_window_chrome",
         "//donner/editor:rope_simulation",
         "//donner/editor:rotate_cursor_set",
         "//donner/editor:selection_transform_handles",
+        "//donner/editor:soft_wrap",
+        "//donner/editor:source_diagnostics",
+        "//donner/editor:source_diagnostics_panel",
+        "//donner/editor:style_source_annotations",
+        "//donner/editor:toolbar_icon_set",
+        "//donner/editor:transform_syntax_preserving",
         "//donner/editor:viewport_interaction_controller",
+        "//donner/editor:xml_autocomplete",
+        "//donner/svg/parser",
+        "//donner/svg/renderer:renderer_interface",
         "@com_google_gtest//:gtest_main",
+        "@imgui",
     ],
 )
