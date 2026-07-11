@@ -133,7 +133,7 @@ index 00000000..952ce1c3
 +        "src/cocoa_init.m",
 +        "src/cocoa_joystick.m",
 +        "src/cocoa_monitor.m",
-+        "src/cocoa_time.c",
++        "src/macos_time.c",
 +        "src/cocoa_window.m",
 +        "src/nsgl_context.m",
 +        "src/posix_thread.c",
