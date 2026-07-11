@@ -3604,7 +3604,13 @@ void EditorShell::renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& con
   }
   if (actions.openGitHub) {
 #ifdef __EMSCRIPTEN__
-    EM_ASM({ window.open('https://github.com/jwmcglynn/donner', '_blank', 'noopener'); });
+    EM_ASM({
+      const url = 'https://github.com/jwmcglynn/donner';
+      const opened = window.open(url, '_blank', 'noopener');
+      if (!opened) {
+        window.location.assign(url);
+      }
+    });
 #else
     ImGui::SetClipboardText(kSamplePickerGitHubUrl.data());
 #endif

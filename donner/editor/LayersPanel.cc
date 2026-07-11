@@ -147,8 +147,8 @@ bool DrawLayerIconButton(const char* id, LayerAffordanceIcon icon,
       const LayersPanel::IconTexture iconTexture =
           iconTextureProvider(LayerAffordanceIconTextureKey(icon), *bitmap);
       if (iconTexture.texture != 0) {
-        const ImVec2 iconMin(buttonMin.x + style.FramePadding.x,
-                             buttonMin.y + style.FramePadding.y);
+        const ImVec2 iconMin(buttonMin.x + (buttonSize.x - iconSize.x) * 0.5f,
+                             buttonMin.y + (buttonSize.y - iconSize.y) * 0.5f);
         const ImVec2 iconMax(iconMin.x + iconSize.x, iconMin.y + iconSize.y);
         const ImVec2 uvTopLeft(0.0f, 0.0f);
         const ImVec2 uvBottomRight(static_cast<float>(iconTexture.uvBottomRight.x),

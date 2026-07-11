@@ -989,9 +989,10 @@ The compact canvas uses a separate DockSpace root. Entering or leaving the profi
 not destroy the desktop dock tree or overwrite source/sidebar preferences. A right-side sheet also
 recenters the floating tool palette in the visible canvas region instead of covering it.
 
-This milestone owns UI policy and ImGui interaction geometry only. The WebAssembly platform layer
-owns Safari resize, touch-event, virtual-keyboard, and lifecycle translation into the existing
-editor input seam. The compact subset intentionally omits source editing, paint controls, the text
+The WebAssembly bootstrap now maps one primary touch pointer into the existing ImGui mouse stream,
+including pointer capture and cancel handling, so taps and direct drags reuse normal editor
+commands. Safari resize, virtual-keyboard, lifecycle, and multi-touch gesture translation remain
+platform work. The compact subset intentionally omits source editing, paint controls, the text
 format bar, canvas scrollbars, and compositor diagnostics for the first pass.
 
 ### Iconography + toolbar

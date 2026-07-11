@@ -11,6 +11,59 @@ function ShowCapabilityError(message) {
   console.error(message);
 }
 
+function InstallTouchPointerBridge(targetCanvas) {
+  if (!window.PointerEvent) {
+    return;
+  }
+
+  let activeTouchId = null;
+  const dispatchMouse = (type, event, buttons) => {
+    targetCanvas.dispatchEvent(
+      new MouseEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX: event.clientX,
+        clientY: event.clientY,
+        button: 0,
+        buttons,
+      }),
+    );
+  };
+
+  targetCanvas.style.touchAction = "none";
+  targetCanvas.addEventListener("pointerdown", (event) => {
+    if (event.pointerType !== "touch" || activeTouchId !== null) {
+      return;
+    }
+    activeTouchId = event.pointerId;
+    event.preventDefault();
+    targetCanvas.focus();
+    targetCanvas.setPointerCapture?.(event.pointerId);
+    dispatchMouse("mousedown", event, 1);
+  });
+  targetCanvas.addEventListener("pointermove", (event) => {
+    if (event.pointerType !== "touch" || event.pointerId !== activeTouchId) {
+      return;
+    }
+    event.preventDefault();
+    dispatchMouse("mousemove", event, 1);
+  });
+  const finishTouch = (event) => {
+    if (event.pointerType !== "touch" || event.pointerId !== activeTouchId) {
+      return;
+    }
+    event.preventDefault();
+    dispatchMouse("mouseup", event, 0);
+    targetCanvas.releasePointerCapture?.(event.pointerId);
+    activeTouchId = null;
+  };
+  targetCanvas.addEventListener("pointerup", finishTouch);
+  targetCanvas.addEventListener("pointercancel", finishTouch);
+}
+
+InstallTouchPointerBridge(canvas);
+
 window.__donnerCanStartWasm = typeof SharedArrayBuffer !== "undefined";
 if (!window.__donnerCanStartWasm) {
   const reason = window.isSecureContext

@@ -96,9 +96,12 @@ and desktop modes use separate DockSpace roots, so resizing into the touch profi
 custom desktop panel arrangement. Source visibility and desktop sidebar width remain preferences,
 not transient compact state.
 
-The UI profile consumes ordinary ImGui pointer and resize events. Browser touch translation,
-viewport sizing, and Safari lifecycle integration belong to the WebAssembly platform layer; they
-must feed that existing input seam rather than add touch-specific document mutation paths.
+The UI profile consumes ordinary ImGui pointer and resize events. The WebAssembly bootstrap maps
+one primary touch pointer into the existing mouse-compatible ImGui stream, with pointer capture and
+cancel handling so taps and direct drags use the desktop mutation paths. Viewport sizing,
+multi-touch gestures, virtual-keyboard behavior, and Safari lifecycle integration remain platform
+responsibilities; they must continue to feed existing editor seams rather than add touch-specific
+document mutation paths.
 
 ### Text Authoring
 
@@ -222,7 +225,9 @@ can be reopened through File > Open Sample and dismissed to reveal the current d
 Document replacement requested from the sample surface is deferred to the next orchestration frame.
 The shell waits for the renderer to become idle and detaches any prior direct-presentation callback
 before releasing old WebGPU resources. This ordering prevents the prior frame callback from
-retaining presentation handles across document replacement.
+retaining presentation handles across document replacement. If the document or source buffer has
+unsaved edits, replacement stops at an explicit Discard and Load confirmation; Cancel leaves both
+the current document and pending source text untouched.
 
 ## Verification
 

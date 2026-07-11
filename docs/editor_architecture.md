@@ -183,9 +183,10 @@ leaving the desktop dock tree, source visibility, and sidebar width intact.
 Touch adaptation is deliberately above the document and renderer layers. Compact
 commands call the same `EditorApp`, tool, and presenter seams as desktop commands.
 The shell increases hit tolerance without increasing selection-handle artwork and
-uses 44 logical pixel command, row, and field targets. Browser code remains
-responsible for mapping Safari touch, resize, and virtual-keyboard events into the
-ordinary ImGui input stream.
+uses 44 logical pixel command, row, and field targets. The Wasm bootstrap translates
+one captured touch pointer into the ordinary ImGui mouse stream for taps and direct
+drags. Browser code remains responsible for resize, virtual-keyboard, lifecycle, and
+future multi-touch gesture integration.
 
 ## API Surface
 
