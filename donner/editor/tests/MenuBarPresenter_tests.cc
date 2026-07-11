@@ -121,6 +121,7 @@ TEST_F(MenuBarPresenterTest, RendersEachOpenMenuWithoutImplicitActions) {
     const MenuBarActions actions = RenderFrame(state);
     EXPECT_FALSE(actions.openAbout) << menuLabel;
     EXPECT_FALSE(actions.openFile) << menuLabel;
+    EXPECT_FALSE(actions.openSamples) << menuLabel;
     EXPECT_FALSE(actions.saveFile) << menuLabel;
     EXPECT_FALSE(actions.saveFileAs) << menuLabel;
     EXPECT_FALSE(actions.exportViewportSvg) << menuLabel;
@@ -134,6 +135,8 @@ TEST_F(MenuBarPresenterTest, RendersEachOpenMenuWithoutImplicitActions) {
     EXPECT_FALSE(actions.paste) << menuLabel;
     EXPECT_FALSE(actions.pasteInFront) << menuLabel;
     EXPECT_FALSE(actions.convertTextToOutlines) << menuLabel;
+    EXPECT_FALSE(actions.group) << menuLabel;
+    EXPECT_FALSE(actions.ungroup) << menuLabel;
     EXPECT_FALSE(actions.selectAll) << menuLabel;
     EXPECT_FALSE(actions.selectAllCanvas) << menuLabel;
     EXPECT_FALSE(actions.deselectAll) << menuLabel;
@@ -143,12 +146,14 @@ TEST_F(MenuBarPresenterTest, RendersEachOpenMenuWithoutImplicitActions) {
     EXPECT_FALSE(actions.actualSize) << menuLabel;
     EXPECT_FALSE(actions.toggleSourceFocusMode) << menuLabel;
     EXPECT_FALSE(actions.toggleCompositorDebugPanel) << menuLabel;
+    EXPECT_FALSE(actions.toggleCompositorTileOverlay) << menuLabel;
     EXPECT_FALSE(actions.setPerfOverlayMode) << menuLabel;
   }
 }
 
 TEST(MenuBarPresenterActionsTest, ApplyViewMenuToggleActionsHandlesNullAndIndependentToggles) {
   bool showCompositorDebugPanel = false;
+  bool compositorTileOverlay = false;
   PerfOverlayMode perfOverlayMode = PerfOverlayMode::Off;
 
   ApplyViewMenuToggleActions(MenuBarActions{}, &showCompositorDebugPanel, &perfOverlayMode);
@@ -160,6 +165,11 @@ TEST(MenuBarPresenterActionsTest, ApplyViewMenuToggleActionsHandlesNullAndIndepe
   ApplyViewMenuToggleActions(actions, &showCompositorDebugPanel, nullptr);
   EXPECT_TRUE(showCompositorDebugPanel);
   EXPECT_EQ(perfOverlayMode, PerfOverlayMode::Off);
+
+  actions = MenuBarActions{};
+  actions.toggleCompositorTileOverlay = true;
+  ApplyViewMenuToggleActions(actions, nullptr, nullptr, nullptr, &compositorTileOverlay);
+  EXPECT_TRUE(compositorTileOverlay);
 
   actions = MenuBarActions{};
   actions.setPerfOverlayMode = true;
@@ -196,6 +206,10 @@ TEST(MenuBarPresenterActionsTest, ApplyMenuBarCommandMapsSimpleCommandsToActions
   actions = MenuBarActions{};
   ApplyMenuBarCommand(true, MenuBarCommand::OpenFile, state, &actions);
   EXPECT_TRUE(actions.openFile);
+
+  actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::OpenSamples, state, &actions);
+  EXPECT_TRUE(actions.openSamples);
 
   actions = MenuBarActions{};
   ApplyMenuBarCommand(true, MenuBarCommand::SaveFile, state, &actions);
@@ -250,6 +264,14 @@ TEST(MenuBarPresenterActionsTest, ApplyMenuBarCommandMapsSimpleCommandsToActions
   EXPECT_TRUE(actions.convertTextToOutlines);
 
   actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::Group, state, &actions);
+  EXPECT_TRUE(actions.group);
+
+  actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::Ungroup, state, &actions);
+  EXPECT_TRUE(actions.ungroup);
+
+  actions = MenuBarActions{};
   ApplyMenuBarCommand(true, MenuBarCommand::ZoomIn, state, &actions);
   EXPECT_TRUE(actions.zoomIn);
 
@@ -268,6 +290,10 @@ TEST(MenuBarPresenterActionsTest, ApplyMenuBarCommandMapsSimpleCommandsToActions
   actions = MenuBarActions{};
   ApplyMenuBarCommand(true, MenuBarCommand::ToggleCompositorDebugPanel, state, &actions);
   EXPECT_TRUE(actions.toggleCompositorDebugPanel);
+
+  actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::ToggleCompositorTileOverlay, state, &actions);
+  EXPECT_TRUE(actions.toggleCompositorTileOverlay);
 
   actions = MenuBarActions{};
   ApplyMenuBarCommand(true, MenuBarCommand::SetPerfOverlayOff, state, &actions);

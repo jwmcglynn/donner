@@ -20,24 +20,24 @@ and supplies tokens to custom `ImDrawList` chrome, the canvas overlay, and sourc
 
 ## Core Tokens
 
-| Role | Token | Value |
-| --- | --- | --- |
-| Canvas surround | `surfaceCanvas` | `#111215` |
-| Inset well | `surfaceSunken` | `#151619` |
-| Panel background | `surfaceBase` | `#1B1D20` |
-| Menu, tab, field | `surfaceRaised` | `#24272B` |
-| Floating chrome | `surfaceOverlay` | `#2B2F34` |
-| Hover | `surfaceHover` | `#343940` |
-| Active | `surfaceActive` | `#3C424A` |
-| Subtle rule | `borderSubtle` | `#30343A` |
-| Strong rule | `borderStrong` | `#464C55` |
-| Primary text | `textPrimary` | `#F1F2F4` |
-| Secondary text | `textMuted` | `#A8ADB5` |
-| Disabled text | `textDisabled` | `#656B74` |
-| Focus and selection | `accentDefault` | `#31C6B3` |
-| Warning | `warning` | `#E3B341` |
-| Error or destructive | `destructive` | `#F0616A` |
-| Success | `success` | `#3FB984` |
+| Role                 | Token            | Value     |
+| -------------------- | ---------------- | --------- |
+| Canvas surround      | `surfaceCanvas`  | `#111215` |
+| Inset well           | `surfaceSunken`  | `#151619` |
+| Panel background     | `surfaceBase`    | `#1B1D20` |
+| Menu, tab, field     | `surfaceRaised`  | `#24272B` |
+| Floating chrome      | `surfaceOverlay` | `#2B2F34` |
+| Hover                | `surfaceHover`   | `#343940` |
+| Active               | `surfaceActive`  | `#3C424A` |
+| Subtle rule          | `borderSubtle`   | `#30343A` |
+| Strong rule          | `borderStrong`   | `#464C55` |
+| Primary text         | `textPrimary`    | `#F1F2F4` |
+| Secondary text       | `textMuted`      | `#A8ADB5` |
+| Disabled text        | `textDisabled`   | `#656B74` |
+| Focus and selection  | `accentDefault`  | `#31C6B3` |
+| Warning              | `warning`        | `#E3B341` |
+| Error or destructive | `destructive`    | `#F0616A` |
+| Success              | `success`        | `#3FB984` |
 
 The shipped accent is `Accent::SignalTeal`. Other accent variants remain test-covered theme inputs,
 but product chrome should not choose a different accent per widget.
@@ -171,13 +171,32 @@ ranges remain legible.
 7. Add or update a focused test when a token, mapped ImGui slot, palette value, or control contract
    changes.
 
+## Welcome And Samples
+
+Launching without a filename, including the WebAssembly build, opens a first-run surface over the
+real editor workspace. It keeps Donner as the first visual signal, offers Open SVG and a fixed
+GitHub destination, and lists a bounded offline catalog of reviewed SVG samples. Loading a sample
+creates an untitled document, so Save cannot overwrite a local file without an explicit path.
+
+The welcome surface owns the workspace while visible rather than competing with docked Layers and
+Inspector panels. Its sample controls use at least 44 logical pixels of height, lay out in one
+column below the compact breakpoint, and use at most three columns on wider displays. The surface
+can be reopened through File > Open Sample and dismissed to reveal the current document.
+
+Document replacement requested from the sample surface is deferred to the next orchestration frame.
+The shell waits for the renderer to become idle and detaches any prior direct-presentation callback
+before releasing old WebGPU resources. This ordering prevents the prior frame callback from
+retaining presentation handles across document replacement.
+
 ## Verification
 
 Theme, menu, and source-palette contracts run in:
 
 ```sh
 bazel test //donner/editor/tests:editor_theme_tests \
+  //donner/editor/tests:editor_shell_tests \
   //donner/editor/tests:menu_bar_presenter_tests \
+  //donner/editor/tests:sample_picker_presenter_tests \
   //donner/editor/tests:sidebar_presenter_tests \
   //donner/editor/tests:text_editor_tests
 ```
@@ -212,6 +231,12 @@ includes text creation, active fill, typing, frame reveal, resize, release, relo
 
 ## Security And Privacy
 
-The design language does not add file, network, clipboard, or document mutation paths. SVG icon
-assets continue through Donner's renderer. Public captures and documentation must use public sample
-documents and must not include private paths, host data, credentials, or operator content.
+The sample catalog is compiled into the editor and never fetches document content. Sample loading
+uses the same parser and full document-replacement path as a local open, produces an untitled
+document, and waits for renderer ownership to return before releasing presentation resources. The
+only external destination is the fixed Donner repository URL: browser builds open it after an
+explicit click with `noopener`, while native builds copy the same fixed URL only after an explicit
+click. Neither path derives a destination from SVG content.
+
+SVG icon assets continue through Donner's renderer. Public captures and documentation use public
+sample documents and exclude private paths, host data, credentials, and operator content.

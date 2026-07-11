@@ -16,6 +16,7 @@
 #include "donner/editor/TextPatch.h"
 #include "donner/svg/ElementType.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/SVGGElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/SVGPathElement.h"
 #include "donner/svg/SVGStyleElement.h"
@@ -920,6 +921,7 @@ bool EditorApp::loadFromString(std::string_view svgBytes) {
   pendingTransformWritebacks_.clear();
   pendingElementRemoveWritebacks_.clear();
   pendingDocumentSourceUndo_.reset();
+  pendingSelectionAfterFlush_.reset();
   pendingSelectionRestoreTargets_.reset();
   const bool result = document_.loadFromString(svgBytes);
   // A successful load resets the dirty state - the in-memory document
@@ -1008,6 +1010,11 @@ bool EditorApp::flushFrame() {
     controller_.reset();
     controllerVersion_ = 0;
     pendingSelectionRestoreTargets_.reset();
+  }
+
+  if (pendingSelectionAfterFlush_.has_value()) {
+    setSelection(std::move(*pendingSelectionAfterFlush_));
+    pendingSelectionAfterFlush_.reset();
   }
 
   consumePendingDocumentSourceUndo();
@@ -1226,6 +1233,137 @@ bool EditorApp::moveElementBefore(svg::SVGElement element, svg::SVGElement paren
   }
 
   return applyElementMove(element, parent, referenceElement, undoLabel);
+}
+
+GroupOperationAvailability EditorApp::groupSelectionAvailability() const {
+  if (!document_.hasDocument()) {
+    return {.reason = "No SVG document is loaded"};
+  }
+  if (document_.hasPendingMutations()) {
+    return {.reason = "Document edits are still applying"};
+  }
+  if (!document_.document().hasSourceStore()) {
+    return {.reason = "Grouping requires source-backed elements"};
+  }
+  if (selection_.size() < 2u) {
+    return {.reason = "Select at least two adjacent elements"};
+  }
+
+  const std::optional<svg::SVGElement> parent = selection_.front().parentElement();
+  if (!parent.has_value() || !IsStructuralMoveContainer(*parent) || IsLocked(*parent)) {
+    return {.reason = "Selected elements need an editable container"};
+  }
+  for (const svg::SVGElement& element : selection_) {
+    if (element.parentElement() != parent || IsLocked(element)) {
+      return {.reason = "Select unlocked elements with the same parent"};
+    }
+  }
+
+  bool insideSelection = false;
+  bool passedSelection = false;
+  std::size_t selectedChildCount = 0;
+  for (std::optional<svg::SVGElement> child = parent->firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    const bool selected =
+        std::find(selection_.begin(), selection_.end(), *child) != selection_.end();
+    if (selected) {
+      if (passedSelection) {
+        return {.reason = "Selected elements must be adjacent"};
+      }
+      insideSelection = true;
+      ++selectedChildCount;
+    } else if (insideSelection) {
+      passedSelection = true;
+    }
+  }
+  if (selectedChildCount != selection_.size()) {
+    return {.reason = "Selection includes detached elements"};
+  }
+  return {.canApply = true};
+}
+
+bool EditorApp::groupSelection() {
+  if (!groupSelectionAvailability().canApply) {
+    return false;
+  }
+
+  svg::SVGDocument& document = document_.document();
+  const svg::SVGElement parent = *selection_.front().parentElement();
+  std::vector<svg::SVGElement> orderedSelection;
+  orderedSelection.reserve(selection_.size());
+  for (std::optional<svg::SVGElement> child = parent.firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    if (std::find(selection_.begin(), selection_.end(), *child) != selection_.end()) {
+      orderedSelection.push_back(*child);
+    }
+  }
+  if (orderedSelection.size() != selection_.size()) {
+    return false;
+  }
+
+  svg::SVGGElement group = svg::SVGGElement::Create(document);
+  recordDocumentSourceUndoOnNextFlush("Group", orderedSelection.front(),
+                                      std::string(document.source()));
+  applyMutation(EditorCommand::InsertElementCommand(parent, group, orderedSelection.front()));
+  for (const svg::SVGElement& element : orderedSelection) {
+    applyMutation(EditorCommand::InsertElementCommand(group, element));
+  }
+  pendingSelectionAfterFlush_ = std::vector<svg::SVGElement>{group};
+  return true;
+}
+
+GroupOperationAvailability EditorApp::ungroupSelectionAvailability() const {
+  if (!document_.hasDocument()) {
+    return {.reason = "No SVG document is loaded"};
+  }
+  if (document_.hasPendingMutations()) {
+    return {.reason = "Document edits are still applying"};
+  }
+  if (!document_.document().hasSourceStore()) {
+    return {.reason = "Ungrouping requires a source-backed group"};
+  }
+  if (selection_.size() != 1u || selection_.front().tryType() != svg::ElementType::G) {
+    return {.reason = "Select one group"};
+  }
+
+  const svg::SVGElement group = selection_.front();
+  const std::optional<svg::SVGElement> parent = group.parentElement();
+  if (!parent.has_value() || IsLocked(group) || IsLocked(*parent)) {
+    return {.reason = "Select an unlocked attached group"};
+  }
+  if (!group.attributes().empty()) {
+    return {.reason = "Remove group attributes before ungrouping"};
+  }
+  if (!group.firstChild().has_value()) {
+    return {.reason = "The selected group is empty"};
+  }
+  return {.canApply = true};
+}
+
+bool EditorApp::ungroupSelection() {
+  if (!ungroupSelectionAvailability().canApply) {
+    return false;
+  }
+
+  svg::SVGDocument& document = document_.document();
+  const svg::SVGElement group = selection_.front();
+  const svg::SVGElement parent = *group.parentElement();
+  std::vector<svg::SVGElement> children;
+  for (std::optional<svg::SVGElement> child = group.firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    children.push_back(*child);
+  }
+  if (children.empty()) {
+    return false;
+  }
+
+  recordDocumentSourceUndoOnNextFlush("Ungroup", group, std::string(document.source()));
+  for (const svg::SVGElement& child : children) {
+    applyMutation(EditorCommand::InsertElementCommand(parent, child, group));
+  }
+  applyMutation(EditorCommand::DeleteElementCommand(group));
+  pendingSelectionAfterFlush_ = children;
+  return true;
 }
 
 bool EditorApp::applyElementMove(svg::SVGElement element, svg::SVGElement parent,

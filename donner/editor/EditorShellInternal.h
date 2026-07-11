@@ -81,6 +81,10 @@ enum class PendingClickIdleAction {
                                              const std::optional<Box2d>& textFormatBarRect,
                                              const std::optional<Box2d>& editingScopeBreadcrumbRect,
                                              const Box2d& canvasZoomControlRect);
+[[nodiscard]] bool GroupOperationCanDispatch(
+    bool rendererBusy, const GroupOperationAvailability& availability) noexcept;
+[[nodiscard]] bool PendingDocumentReplacementCanProcess(bool hasPendingRequest, bool rendererBusy,
+                                                        bool hasPendingMutations) noexcept;
 [[nodiscard]] PendingClickBusyAction PendingClickBusyActionForState(bool tookFastRedrag,
                                                                     bool rendererBusy);
 [[nodiscard]] PendingClickIdleAction PendingClickIdleActionForState(

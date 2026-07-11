@@ -34,12 +34,16 @@ struct MenuBarState {
   /// True when the canvas selection is exactly one or more `<text>` elements,
   /// the precondition for "Convert Text to Outlines".
   bool hasTextSelection = false;
+  bool canGroup = false;
+  bool canUngroup = false;
   /// True when the document has at least one selectable element. Enables the canvas "Select All"
   /// when the source pane is not focused.
   bool hasSelectableElements = false;
   /// Current visibility of the Compositor Debug panel (drives the View-menu
   /// checkmark). Off by default.
   bool showCompositorDebugPanel = false;
+  /// Whether compositor tile boundaries and identities are drawn directly over the canvas.
+  bool compositorTileOverlay = false;
   /// Whether the Geode geometry debug overlay (band strips + per-path
   /// bounding-quad triangles) is enabled on the document renderer
   /// (drives the View-menu checkmark). Off by default.
@@ -55,6 +59,7 @@ struct MenuBarState {
 struct MenuBarActions {
   bool openAbout = false;
   bool openFile = false;
+  bool openSamples = false;
   bool saveFile = false;
   bool saveFileAs = false;
   bool exportViewportSvg = false;
@@ -68,6 +73,8 @@ struct MenuBarActions {
   bool paste = false;
   bool pasteInFront = false;
   bool convertTextToOutlines = false;
+  bool group = false;
+  bool ungroup = false;
   /// Text Select-All in the source/XML pane (fires when the source pane owns keyboard focus).
   bool selectAll = false;
   /// Canvas Select-All - selects every selectable element (fires when the source pane is not
@@ -84,6 +91,8 @@ struct MenuBarActions {
   bool toggleSourceFocusMode = false;
   /// Set when the user toggles the Compositor Debug panel via the View menu.
   bool toggleCompositorDebugPanel = false;
+  /// Set when the user toggles compositor tile boundaries over the canvas.
+  bool toggleCompositorTileOverlay = false;
   /// Set when the user toggles the Geode geometry debug overlay via the
   /// View menu.
   bool toggleGeometryDebugOverlay = false;
@@ -102,6 +111,7 @@ struct MenuBarActions {
 enum class MenuBarCommand {
   OpenAbout,
   OpenFile,
+  OpenSamples,
   SaveFile,
   SaveFileAs,
   ExportViewportSvg,
@@ -115,6 +125,8 @@ enum class MenuBarCommand {
   Paste,
   PasteInFront,
   ConvertTextToOutlines,
+  Group,
+  Ungroup,
   SelectAll,
   DeselectAll,
   ZoomIn,
@@ -122,6 +134,7 @@ enum class MenuBarCommand {
   ActualSize,
   ToggleSourceFocusMode,
   ToggleCompositorDebugPanel,
+  ToggleCompositorTileOverlay,
   ToggleGeometryDebugOverlay,
   SetPerfOverlayOff,
   SetPerfOverlayFpsPill,
@@ -148,7 +161,8 @@ void ApplyMenuBarCommand(bool activated, MenuBarCommand command, const MenuBarSt
 ///   Optional (may be null) so callers without a document renderer skip it.
 void ApplyViewMenuToggleActions(const MenuBarActions& actions, bool* showCompositorDebugPanel,
                                 PerfOverlayMode* perfOverlayMode,
-                                bool* geometryDebugOverlay = nullptr);
+                                bool* geometryDebugOverlay = nullptr,
+                                bool* compositorTileOverlay = nullptr);
 
 /// Renders the app's top menu bar and reports semantic actions back to the shell.
 class MenuBarPresenter {

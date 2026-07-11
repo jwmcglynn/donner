@@ -11,13 +11,12 @@
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
-
-#include "donner/editor/EditorSplash.h"
 #else
 #include "donner/base/FailureSignalHandler.h"
 #endif
 
 #include "donner/editor/EditorShell.h"
+#include "donner/editor/EditorSplash.h"
 #include "donner/editor/Notice.h"
 #include "donner/editor/TracyWrapper.h"
 #include "donner/editor/gui/EditorWindow.h"
@@ -122,12 +121,13 @@ int main(int argc, char** argv) {
   std::optional<std::string> initialSource;
   std::optional<std::string> initialPath;
   std::optional<std::string> reproOutputPath;
+  bool showWelcome = false;
 #ifdef __EMSCRIPTEN__
   initialSource = EmbeddedBytesToString(donner::embedded::kEditorSplashSvg);
-  initialPath = std::string("donner_splash.svg");
+  showWelcome = true;
 #else
   constexpr std::string_view kUsage =
-      "Usage: donner-editor [--experimental] [--save-repro <path>] <filename>\n";
+      "Usage: donner-editor [--experimental] [--save-repro <path>] [filename]\n";
   for (int i = 1; i < argc; ++i) {
     const std::string_view arg(argv[i]);
     if (arg == "--experimental") {
@@ -160,8 +160,8 @@ int main(int argc, char** argv) {
   }
 
   if (!svgPath.has_value()) {
-    std::cerr << kUsage;
-    return 1;
+    initialSource = EmbeddedBytesToString(donner::embedded::kEditorSplashSvg);
+    showWelcome = true;
   }
 #endif
 
@@ -184,6 +184,7 @@ int main(int argc, char** argv) {
                    .svgPath = svgPath.value_or(""),
                    .initialSource = initialSource,
                    .initialPath = initialPath,
+                   .showWelcome = showWelcome,
                    .editorNoticeText = EmbeddedBytesToString(donner::embedded::kEditorNoticeText),
                    .reproOutputPath = reproOutputPath});
   if (!shell->valid()) {

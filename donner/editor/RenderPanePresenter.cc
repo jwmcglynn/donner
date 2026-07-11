@@ -1,6 +1,8 @@
 #include "donner/editor/RenderPanePresenter.h"
 
 #include <algorithm>
+#include <array>
+#include <cinttypes>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -465,6 +467,57 @@ Box2d PresentedTileQuadBounds(const PresentedTileQuad& tileQuad) {
   return bounds;
 }
 
+ImU32 CompositorTileOverlayColor(const GlTextureCache::TileView& tile) {
+  if (tile.isDragTarget) {
+    return IM_COL32(255, 255, 255, tile.metadataOnly ? 150 : 245);
+  }
+
+  const int alpha = tile.metadataOnly ? 120 : 230;
+  switch (tile.kind) {
+    case RenderResult::CompositedTile::Kind::Segment: return IM_COL32(42, 214, 196, alpha);
+    case RenderResult::CompositedTile::Kind::Layer: return IM_COL32(255, 178, 66, alpha);
+    case RenderResult::CompositedTile::Kind::Immediate: return IM_COL32(255, 92, 138, alpha);
+  }
+  return IM_COL32(220, 220, 220, alpha);
+}
+
+char CompositorTileKindLabel(RenderResult::CompositedTile::Kind kind) {
+  switch (kind) {
+    case RenderResult::CompositedTile::Kind::Segment: return 'S';
+    case RenderResult::CompositedTile::Kind::Layer: return 'L';
+    case RenderResult::CompositedTile::Kind::Immediate: return 'I';
+  }
+  return '?';
+}
+
+void DrawCompositorTileOverlay(ImDrawList* drawList, const GlTextureCache::TileView& tile,
+                               const PresentedTileQuad& tileQuad) {
+  const ImU32 color = CompositorTileOverlayColor(tile);
+  const std::array<ImVec2, 4> points = {ToImVec2(tileQuad.topLeft), ToImVec2(tileQuad.topRight),
+                                        ToImVec2(tileQuad.bottomRight),
+                                        ToImVec2(tileQuad.bottomLeft)};
+  drawList->AddPolyline(points.data(), static_cast<int>(points.size()), color, ImDrawFlags_Closed,
+                        tile.isDragTarget ? 2.0f : 1.5f);
+
+  const Box2d bounds = PresentedTileQuadBounds(tileQuad);
+  if (bounds.width() < 44.0 || bounds.height() < ImGui::GetTextLineHeight() + 6.0) {
+    return;
+  }
+
+  char label[64];
+  std::snprintf(label, sizeof(label), "%c %.24s g%" PRIu64 "%s",
+                CompositorTileKindLabel(tile.kind), tile.id.c_str(), tile.generation,
+                tile.metadataOnly ? " cached" : "");
+  const ImVec2 labelOrigin(static_cast<float>(bounds.topLeft.x + 4.0),
+                           static_cast<float>(bounds.topLeft.y + 3.0));
+  const ImVec2 labelSize = ImGui::CalcTextSize(label);
+  drawList->AddRectFilled(
+      ImVec2(labelOrigin.x - 2.0f, labelOrigin.y - 1.0f),
+      ImVec2(labelOrigin.x + labelSize.x + 2.0f, labelOrigin.y + labelSize.y + 1.0f),
+      IM_COL32(20, 22, 26, 210), 2.0f);
+  drawList->AddText(labelOrigin, color, label);
+}
+
 }  // namespace
 
 bool ShouldPresentCompositedTile(const GlTextureCache::TileView& tile, Entity suppressedLayerEntity,
@@ -685,6 +738,17 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
     }
     for (const auto& tile : state.textures.tiles()) {
       drawTile(tile);
+    }
+    paneDrawList->PopClipRect();
+  }
+  if (state.compositorTileOverlay && imageClipRect.has_value()) {
+    paneDrawList->PushClipRect(ToImVec2(imageClipRect->topLeft),
+                               ToImVec2(imageClipRect->bottomRight),
+                               /*intersect_with_current_clip_rect=*/true);
+    for (const auto& tile : state.textures.tiles()) {
+      if (const std::optional<PresentedTileQuad> tileQuad = computeTileQuad(tile)) {
+        DrawCompositorTileOverlay(paneDrawList, tile, *tileQuad);
+      }
     }
     paneDrawList->PopClipRect();
   }

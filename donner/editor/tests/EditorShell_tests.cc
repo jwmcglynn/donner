@@ -306,20 +306,42 @@ TEST(EditorShellInternalTest, TextFormatBarCapturesCanvasInputWithinItsLayoutRec
   EXPECT_DOUBLE_EQ(formatBarRect->width(), TextFormatBarPresenter::PreferredWidth());
 
   const Box2d referenceChipRect = Box2d::FromXYWH(20.0, 300.0, 80.0, 24.0);
+  const Box2d editingScopeBreadcrumbRect = Box2d::FromXYWH(20.0, 40.0, 96.0, 32.0);
   const Box2d zoomControlRect = Box2d::FromXYWH(520.0, 320.0, 48.0, 28.0);
   const ImVec2 formatControlPoint(static_cast<float>(formatBarRect->topLeft.x + 20.0),
                                   static_cast<float>(formatBarRect->topLeft.y + 20.0));
   EXPECT_TRUE(internal::CanvasChromeCapturesInput(formatControlPoint, referenceChipRect,
-                                                  toolPaletteRect, formatBarRect, std::nullopt,
-                                                  zoomControlRect));
-  EXPECT_FALSE(internal::CanvasChromeCapturesInput(
-      ImVec2(150.0f, 220.0f), referenceChipRect, toolPaletteRect, formatBarRect, std::nullopt,
-      zoomControlRect));
+                                                  toolPaletteRect, formatBarRect,
+                                                  editingScopeBreadcrumbRect, zoomControlRect));
+  EXPECT_TRUE(internal::CanvasChromeCapturesInput(ImVec2(40.0f, 50.0f), referenceChipRect,
+                                                  toolPaletteRect, formatBarRect,
+                                                  editingScopeBreadcrumbRect, zoomControlRect));
+  EXPECT_FALSE(internal::CanvasChromeCapturesInput(ImVec2(150.0f, 220.0f), referenceChipRect,
+                                                   toolPaletteRect, formatBarRect,
+                                                   editingScopeBreadcrumbRect, zoomControlRect));
 
   EXPECT_FALSE(internal::TextFormatBarScreenRect(ImVec2(10.0f, 20.0f), ImVec2(580.0f, 360.0f),
                                                  toolPaletteRect,
                                                  /*visible=*/false, /*barHeight=*/48.0f)
                    .has_value());
+}
+
+TEST(EditorShellInternalTest, StructuralDocumentActionsWaitForExclusiveDomOwnership) {
+  EXPECT_FALSE(internal::GroupOperationCanDispatch(
+      /*rendererBusy=*/true, GroupOperationAvailability{.canApply = true}));
+  EXPECT_FALSE(internal::GroupOperationCanDispatch(
+      /*rendererBusy=*/false, GroupOperationAvailability{.reason = "Select more elements"}));
+  EXPECT_TRUE(internal::GroupOperationCanDispatch(
+      /*rendererBusy=*/false, GroupOperationAvailability{.canApply = true}));
+
+  EXPECT_FALSE(internal::PendingDocumentReplacementCanProcess(
+      /*hasPendingRequest=*/false, /*rendererBusy=*/false, /*hasPendingMutations=*/false));
+  EXPECT_FALSE(internal::PendingDocumentReplacementCanProcess(
+      /*hasPendingRequest=*/true, /*rendererBusy=*/true, /*hasPendingMutations=*/false));
+  EXPECT_FALSE(internal::PendingDocumentReplacementCanProcess(
+      /*hasPendingRequest=*/true, /*rendererBusy=*/false, /*hasPendingMutations=*/true));
+  EXPECT_TRUE(internal::PendingDocumentReplacementCanProcess(
+      /*hasPendingRequest=*/true, /*rendererBusy=*/false, /*hasPendingMutations=*/false));
 }
 
 TEST(EditorShellInternalTest, PendingClickBusyActionPrefersFastRedragThenCancelsBusyRender) {
@@ -597,11 +619,40 @@ public:
     return shell.tryOpenPath(path, error);
   }
 
+  static void SetShowSamplePicker(EditorShell& shell, bool visible) {
+    shell.showSamplePicker_ = visible;
+  }
+
+  static bool ShowSamplePicker(const EditorShell& shell) { return shell.showSamplePicker_; }
+
   static bool TrySavePath(EditorShell& shell, std::string_view path, std::string* error) {
     return shell.trySavePath(path, error);
   }
 
   static void RequestRevert(EditorShell& shell) { shell.requestRevert(); }
+
+  static bool TryApplyGroupOperation(EditorShell& shell, bool ungroup) {
+    return shell.tryApplyGroupOperation(ungroup);
+  }
+
+  static void QueueSampleLoad(EditorShell& shell, std::string sampleId) {
+    shell.queuePendingSampleLoad(std::move(sampleId));
+    shell.showSamplePicker_ = true;
+  }
+
+  static void ProcessPendingSampleLoad(EditorShell& shell) { shell.processPendingSampleLoad(); }
+
+  static std::string_view PendingSampleLoad(const EditorShell& shell) {
+    return shell.pendingSampleLoadId_;
+  }
+
+  static bool PendingSampleLoadNeedsConfirmation(const EditorShell& shell) {
+    return shell.pendingSampleLoadNeedsConfirmation_;
+  }
+
+  static void ConfirmPendingSampleLoadDiscard(EditorShell& shell) {
+    shell.confirmPendingSampleLoadDiscard();
+  }
 
   static void RequestSave(EditorShell& shell) { shell.requestSave(); }
 
@@ -1673,10 +1724,13 @@ TEST(EditorShellTest, OpenSaveAndRevertUpdateDocumentAndSourceState) {
   EditorShell shell(window, OptionsWithSource(kInitialSvg));
   ASSERT_TRUE(shell.valid());
 
+  EditorShellTestAccess::SetShowSamplePicker(shell, true);
+
   std::string error;
   EXPECT_FALSE(
       EditorShellTestAccess::TryOpenPath(shell, TempPathForTest("missing.svg").string(), &error));
   EXPECT_EQ(error, "Could not open file.");
+  EXPECT_TRUE(EditorShellTestAccess::ShowSamplePicker(shell));
 
   const std::filesystem::path invalidPath = TempPathForTest("invalid.svg");
   WriteTextFile(invalidPath, "<svg><rect></svg>");
@@ -1692,6 +1746,7 @@ TEST(EditorShellTest, OpenSaveAndRevertUpdateDocumentAndSourceState) {
   EXPECT_TRUE(EditorShellTestAccess::TryOpenPath(shell, openPath.string(), &error)) << error;
   EXPECT_TRUE(EditorShellTestAccess::App(shell).hasDocument());
   EXPECT_NE(EditorShellTestAccess::Source(shell).getText().find("opened"), std::string::npos);
+  EXPECT_FALSE(EditorShellTestAccess::ShowSamplePicker(shell));
 
   error.clear();
   EXPECT_FALSE(EditorShellTestAccess::TrySavePath(shell, "", &error));
@@ -1720,6 +1775,116 @@ TEST(EditorShellTest, OpenSaveAndRevertUpdateDocumentAndSourceState) {
 
   EXPECT_FALSE(EditorShellTestAccess::App(shell).isDirty());
   EXPECT_NE(EditorShellTestAccess::Source(shell).getText().find("opened"), std::string::npos);
+}
+
+TEST(EditorShellTest, GroupDispatchFlushesAtomicallyAndDeferredSampleWaitsForQueuedEdits) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  constexpr std::string_view kGroupableSvg = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+    <rect id="a"/><circle id="b"/>
+  </svg>)svg";
+  EditorShell shell(window, OptionsWithSource(kGroupableSvg, "groupable.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  const svg::SVGElement a = *app.document().document().querySelector("#a");
+  const svg::SVGElement b = *app.document().document().querySelector("#b");
+  app.setSelection(std::vector<svg::SVGElement>{a, b});
+
+  ASSERT_TRUE(EditorShellTestAccess::TryApplyGroupOperation(shell, /*ungroup=*/false));
+  EXPECT_FALSE(app.document().hasPendingMutations());
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+  EXPECT_EQ(app.selectedElements().front().tryType(), svg::ElementType::G);
+
+  ASSERT_TRUE(EditorShellTestAccess::TryApplyGroupOperation(shell, /*ungroup=*/true));
+  EXPECT_FALSE(app.document().hasPendingMutations());
+  ASSERT_EQ(app.selectedElements().size(), 2u);
+
+  ASSERT_TRUE(app.groupSelection());
+  ASSERT_TRUE(app.document().hasPendingMutations());
+  EditorShellTestAccess::QueueSampleLoad(shell, "basic-shapes");
+  EditorShellTestAccess::ProcessPendingSampleLoad(shell);
+  EXPECT_EQ(EditorShellTestAccess::PendingSampleLoad(shell), "basic-shapes");
+  EXPECT_FALSE(app.document().document().querySelector("polygon").has_value());
+
+  ASSERT_TRUE(app.flushFrame());
+  EditorShellTestAccess::ProcessPendingSampleLoad(shell);
+  EXPECT_TRUE(EditorShellTestAccess::PendingSampleLoadNeedsConfirmation(shell));
+  EXPECT_EQ(EditorShellTestAccess::PendingSampleLoad(shell), "basic-shapes");
+  EditorShellTestAccess::ConfirmPendingSampleLoadDiscard(shell);
+  EditorShellTestAccess::ProcessPendingSampleLoad(shell);
+  EXPECT_TRUE(EditorShellTestAccess::PendingSampleLoad(shell).empty());
+  EXPECT_TRUE(app.document().document().querySelector("polygon").has_value());
+  EXPECT_FALSE(app.currentFilePath().has_value());
+}
+
+TEST(EditorShellTest, SampleLoadRequiresConfirmationForPendingSourceEdits) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::Source(shell).setText("<svg>unsaved</svg>");
+  EditorShellTestAccess::QueueSampleLoad(shell, "basic-shapes");
+
+  EditorShellTestAccess::ProcessPendingSampleLoad(shell);
+
+  EXPECT_TRUE(EditorShellTestAccess::PendingSampleLoadNeedsConfirmation(shell));
+  EXPECT_EQ(EditorShellTestAccess::PendingSampleLoad(shell), "basic-shapes");
+  EXPECT_FALSE(EditorShellTestAccess::App(shell)
+                   .document()
+                   .document()
+                   .querySelector("polygon")
+                   .has_value());
+
+  EditorShellTestAccess::ConfirmPendingSampleLoadDiscard(shell);
+  EditorShellTestAccess::ProcessPendingSampleLoad(shell);
+
+  EXPECT_TRUE(EditorShellTestAccess::PendingSampleLoad(shell).empty());
+  EXPECT_TRUE(EditorShellTestAccess::App(shell)
+                  .document()
+                  .document()
+                  .querySelector("polygon")
+                  .has_value());
+}
+
+TEST(EditorShellTest, NewerFileAndRevertRequestsCancelDeferredSampleReplacement) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::QueueSampleLoad(shell, "basic-shapes");
+
+  const std::filesystem::path openPath = TempPathForTest("sample-cancel-open.svg");
+  constexpr std::string_view kOpenedSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg"><rect id="newer-file"/></svg>)svg";
+  WriteTextFile(openPath, kOpenedSvg);
+  std::string error;
+  ASSERT_TRUE(EditorShellTestAccess::TryOpenPath(shell, openPath.string(), &error)) << error;
+  EXPECT_TRUE(EditorShellTestAccess::PendingSampleLoad(shell).empty());
+  EXPECT_TRUE(EditorShellTestAccess::App(shell)
+                  .document()
+                  .document()
+                  .querySelector("#newer-file")
+                  .has_value());
+
+  EditorShellTestAccess::QueueSampleLoad(shell, "gradients-clip");
+  EditorShellTestAccess::Source(shell).setText("<svg>dirty</svg>");
+  EditorShellTestAccess::App(shell).markDirty();
+  EditorShellTestAccess::RequestRevert(shell);
+  EXPECT_TRUE(EditorShellTestAccess::PendingSampleLoad(shell).empty());
+  EXPECT_TRUE(EditorShellTestAccess::App(shell)
+                  .document()
+                  .document()
+                  .querySelector("#newer-file")
+                  .has_value());
 }
 
 TEST(EditorShellTest, RevertRequestIgnoresGuardStates) {

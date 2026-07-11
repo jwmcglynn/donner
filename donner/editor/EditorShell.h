@@ -29,6 +29,7 @@
 #include "donner/editor/RenderCoordinator.h"
 #include "donner/editor/RenderPanePresenter.h"
 #include "donner/editor/RotateCursorSet.h"
+#include "donner/editor/SamplePickerPresenter.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/SidebarPresenter.h"
 #include "donner/editor/SourceDiagnosticsPanel.h"
@@ -67,6 +68,8 @@ struct EditorShellOptions {
   std::string svgPath;
   std::optional<std::string> initialSource;
   std::optional<std::string> initialPath;
+  /// Show the in-workspace welcome and sample picker on the first frame.
+  bool showWelcome = false;
   std::string editorNoticeText;
   /// Optional destination path for a `.donner-repro` recording of the
   /// user's UI interactions. When set, the shell constructs a
@@ -294,6 +297,13 @@ public:
 
 private:
   bool tryOpenPath(std::string_view path, std::string* error);
+  bool tryLoadSource(std::string_view source, std::optional<std::string> path, std::string* error);
+  void queuePendingSampleLoad(std::string sampleId);
+  void cancelPendingSampleLoad();
+  void confirmPendingSampleLoadDiscard();
+  void processPendingSampleLoad();
+  /// Apply Group or Ungroup only while the render worker releases DOM ownership.
+  bool tryApplyGroupOperation(bool ungroup);
   bool trySavePath(std::string_view path, std::string* error);
   void applyPendingDocumentSpaceReplayInputForTesting();
 
@@ -365,6 +375,7 @@ private:
   void renderCanvasZoomControl();
   void renderFillStrokeToolbarWidget();
   void renderSidebars();
+  void renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& contentRegion);
   void renderSourcePaneSplitter(float windowWidth, float paneOriginY, float paneHeight,
                                 float sourcePaneWidth);
   /// Submit the host window and DockSpace that own the canvas (central node) and
@@ -511,6 +522,7 @@ private:
   bool penDragFlushedThisFrame_ = false;
   EditorInputBridge inputBridge_;
   MenuBarPresenter menuBarPresenter_;
+  SamplePickerPresenter samplePickerPresenter_;
   TextFormatBarPresenter textFormatBarPresenter_;
   SidebarPresenter sidebarPresenter_;
   TextInspectorPanel textInspectorPanel_;
@@ -602,10 +614,17 @@ private:
   /// Preferred width for the source pane when it is visible.
   float sourcePaneWidth_ = 560.0f;
   bool sourcePaneVisible_ = false;
+  bool showSamplePicker_ = false;
+  std::string activeSampleId_;
+  std::string pendingSampleLoadId_;
+  bool pendingSampleLoadNeedsConfirmation_ = false;
+  bool pendingSampleLoadDiscardConfirmed_ = false;
   /// Whether the Compositor Debug panel window renders. Off by default: it is a
   /// developer-facing composite-tile diagnostics view, toggled on via the View
   /// menu. The user-facing Layers panel is unrelated and always visible.
   bool showCompositorDebugPanel_ = false;
+  /// Draw compositor tile geometry and identity directly over the canvas.
+  bool compositorTileOverlay_ = false;
   /// Render-pane frame-timing/perf overlay mode. Off by default; set via the
   /// View menu's Performance Overlay submenu.
   PerfOverlayMode perfOverlayMode_ = PerfOverlayMode::Off;

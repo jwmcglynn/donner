@@ -22,6 +22,10 @@
 #include <variant>
 #include <vector>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+
 #include "GLFW/glfw3.h"
 #include "donner/base/RcString.h"
 #include "donner/base/StringUtils.h"
@@ -30,6 +34,7 @@
 #include "donner/editor/DocumentSave.h"
 #include "donner/editor/DragCoalesce.h"
 #include "donner/editor/EditorDockLayout.h"
+#include "donner/editor/EditorSampleCatalog.h"
 #include "donner/editor/EditorShellInternal.h"
 #include "donner/editor/EditorShellPresentation.h"
 #include "donner/editor/EditorTheme.h"
@@ -267,6 +272,16 @@ bool CanvasChromeCapturesInput(const ImVec2& point, const std::optional<Box2d>& 
          (editingScopeBreadcrumbRect.has_value() &&
           ContainsScreenPoint(*editingScopeBreadcrumbRect, point)) ||
          ContainsScreenPoint(canvasZoomControlRect, point);
+}
+
+bool GroupOperationCanDispatch(bool rendererBusy,
+                               const GroupOperationAvailability& availability) noexcept {
+  return !rendererBusy && availability.canApply;
+}
+
+bool PendingDocumentReplacementCanProcess(bool hasPendingRequest, bool rendererBusy,
+                                          bool hasPendingMutations) noexcept {
+  return hasPendingRequest && !rendererBusy && !hasPendingMutations;
 }
 
 // Build the "<label> (<key>)" tooltip string for a tool button from the shared
@@ -811,6 +826,7 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     std::fprintf(stderr, "[repro] recording UI inputs to %s\n", options_.reproOutputPath->c_str());
   }
 
+  showSamplePicker_ = options_.showWelcome;
   valid_ = true;
 }
 
@@ -1298,22 +1314,111 @@ void EditorShell::maybeLogFrameMissTelemetry(const FrameCostBreakdown& frameCost
 }
 
 bool EditorShell::tryOpenPath(std::string_view path, std::string* error) {
+  cancelPendingSampleLoad();
   auto contents = LoadFile(std::string(path));
   if (!contents.has_value()) {
     *error = "Could not open file.";
     return false;
   }
-  if (!app_.loadFromString(*contents)) {
+  return tryLoadSource(*contents, std::string(path), error);
+}
+
+bool EditorShell::tryLoadSource(std::string_view source, std::optional<std::string> path,
+                                std::string* error) {
+  if (!app_.loadFromString(source)) {
     *error = "Failed to parse SVG.";
     return false;
   }
 
-  textEditor_.setText(*contents);
+  showSamplePicker_ = false;
+  textEditor_.setText(std::string(source));
   textEditor_.resetTextChanged();
   const std::string canonicalSource = textEditor_.getText();
-  app_.setCurrentFilePath(std::string(path));
+  if (path.has_value()) {
+    app_.setCurrentFilePath(std::move(*path));
+  } else {
+    app_.clearCurrentFilePath();
+  }
   resetPresentationForLoadedDocument(canonicalSource);
+  viewportInitialized_ = false;
+  requestRenderAtEndOfFrame_ = true;
   return true;
+}
+
+void EditorShell::queuePendingSampleLoad(std::string sampleId) {
+  pendingSampleLoadId_ = std::move(sampleId);
+  pendingSampleLoadNeedsConfirmation_ = false;
+  pendingSampleLoadDiscardConfirmed_ = false;
+}
+
+void EditorShell::cancelPendingSampleLoad() {
+  pendingSampleLoadId_.clear();
+  pendingSampleLoadNeedsConfirmation_ = false;
+  pendingSampleLoadDiscardConfirmed_ = false;
+}
+
+void EditorShell::confirmPendingSampleLoadDiscard() {
+  if (pendingSampleLoadId_.empty()) {
+    return;
+  }
+  pendingSampleLoadNeedsConfirmation_ = false;
+  pendingSampleLoadDiscardConfirmed_ = true;
+  window_.wakeEventLoop();
+}
+
+void EditorShell::processPendingSampleLoad() {
+  if (!internal::PendingDocumentReplacementCanProcess(!pendingSampleLoadId_.empty(),
+                                                      renderCoordinator_.asyncRenderer().isBusy(),
+                                                      app_.document().hasPendingMutations())) {
+    return;
+  }
+
+  if (!pendingSampleLoadDiscardConfirmed_ && (app_.isDirty() || textEditor_.isTextChanged())) {
+    pendingSampleLoadNeedsConfirmation_ = true;
+    showSamplePicker_ = true;
+    return;
+  }
+
+  const std::string sampleId = std::exchange(pendingSampleLoadId_, {});
+  pendingSampleLoadNeedsConfirmation_ = false;
+  pendingSampleLoadDiscardConfirmed_ = false;
+  const EditorSample* sample = FindEditorSample(sampleId);
+  if (sample == nullptr) {
+    showSamplePicker_ = true;
+    return;
+  }
+
+#ifdef DONNER_EDITOR_WGPU
+  // The previous frame's direct callback has run, but remains installed until the next render-pane
+  // submission. Detach it before releasing presentation resources for the old document.
+  window_.setWgpuDirectRenderCallback({});
+#endif
+  std::string error;
+  if (tryLoadSource(sample->source, std::nullopt, &error)) {
+    activeSampleId_ = sampleId;
+    showSamplePicker_ = false;
+  } else {
+    showSamplePicker_ = true;
+    std::fprintf(stderr, "[editor] failed to load built-in sample %s: %s\n", sampleId.c_str(),
+                 error.c_str());
+  }
+}
+
+bool EditorShell::tryApplyGroupOperation(bool ungroup) {
+  const bool rendererBusy = renderCoordinator_.asyncRenderer().isBusy();
+  const GroupOperationAvailability availability =
+      rendererBusy
+          ? GroupOperationAvailability{.reason = "Renderer busy"}
+          : (ungroup ? app_.ungroupSelectionAvailability() : app_.groupSelectionAvailability());
+  if (!internal::GroupOperationCanDispatch(rendererBusy, availability)) {
+    return false;
+  }
+
+  const bool queued = ungroup ? app_.ungroupSelection() : app_.groupSelection();
+  if (queued) {
+    flushQueuedMutationAndRefreshOverlay();
+  }
+  return queued;
 }
 
 void EditorShell::resetPresentationForLoadedDocument(std::string_view canonicalSource) {
@@ -1494,6 +1599,8 @@ void EditorShell::requestRevert() {
     return;
   }
 
+  cancelPendingSampleLoad();
+
   const std::string source(app_.cleanSourceText());
   if (!app_.revertToCleanSource()) {
     return;
@@ -1566,7 +1673,12 @@ void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
     dialogPresenter_.requestAbout();
   }
   if (menuActions.openFile) {
+    cancelPendingSampleLoad();
     dialogPresenter_.requestOpenFile(app_.currentFilePath());
+  }
+  if (menuActions.openSamples) {
+    showSamplePicker_ = true;
+    window_.wakeEventLoop();
   }
   if (menuActions.saveFile) {
     requestSave();
@@ -1620,6 +1732,12 @@ void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
   if (menuActions.convertTextToOutlines) {
     convertSelectedTextToOutlines();
   }
+  if (menuActions.group) {
+    std::ignore = tryApplyGroupOperation(/*ungroup=*/false);
+  }
+  if (menuActions.ungroup) {
+    std::ignore = tryApplyGroupOperation(/*ungroup=*/true);
+  }
   if (menuActions.selectAll) {
     textEditor_.selectAll();
   }
@@ -1657,10 +1775,11 @@ void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
     toggleSourceFocusMode();
   }
   const bool showCompositorDebugPanelBeforeMenu = showCompositorDebugPanel_;
+  const bool compositorTileOverlayBeforeMenu = compositorTileOverlay_;
   const PerfOverlayMode perfOverlayModeBeforeMenu = perfOverlayMode_;
   const bool geometryDebugOverlayBeforeMenu = geometryDebugOverlay_;
   ApplyViewMenuToggleActions(menuActions, &showCompositorDebugPanel_, &perfOverlayMode_,
-                             &geometryDebugOverlay_);
+                             &geometryDebugOverlay_, &compositorTileOverlay_);
   if (geometryDebugOverlay_ != geometryDebugOverlayBeforeMenu) {
     // Push the new overlay state to the render worker and post a render:
     // the worker re-rasterizes every cached segment with the overlay
@@ -1679,6 +1798,7 @@ void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
     window_.wakeEventLoop();
   }
   if (showCompositorDebugPanel_ != showCompositorDebugPanelBeforeMenu ||
+      compositorTileOverlay_ != compositorTileOverlayBeforeMenu ||
       perfOverlayMode_ != perfOverlayModeBeforeMenu ||
       geometryDebugOverlay_ != geometryDebugOverlayBeforeMenu) {
     window_.wakeEventLoop();
@@ -1880,6 +2000,10 @@ void EditorShell::handleGlobalShortcuts() {
     } else if (ImGui::IsKeyPressed(ImGuiKey_F, /*repeat=*/false)) {
       pasteShapesFromClipboard(/*inFront=*/true);
     }
+  }
+  if (!sourcePaneFocused && !anyPopupOpen && cmd &&
+      ImGui::IsKeyPressed(ImGuiKey_G, /*repeat=*/false)) {
+    std::ignore = tryApplyGroupOperation(/*ungroup=*/shift);
   }
 
   const bool deleteKey = ImGui::IsKeyPressed(ImGuiKey_Delete, /*repeat=*/false) ||
@@ -2636,7 +2760,7 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   ImGui::InvisibleButton("##render_canvas", contentRegion,
                          ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonMiddle);
   const bool paneHovered = ImGui::IsItemHovered();
-  const bool canvasHovered = paneHovered && !canvasChromeHovered;
+  const bool canvasHovered = paneHovered && !canvasChromeHovered && !showSamplePicker_;
   const Box2d paneRect = Box2d::FromXYWH(interactionController_.viewport().paneOrigin.x,
                                          interactionController_.viewport().paneOrigin.y,
                                          interactionController_.viewport().paneSize.x,
@@ -2691,8 +2815,8 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
     }
   }
 
-  const bool modalCapturingInput =
-      canvasChromeHovered || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
+  const bool modalCapturingInput = showSamplePicker_ || canvasChromeHovered ||
+                                   ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
   // Publish the canvas scroll-capture rect for the raw GLFW scroll callback:
   // wheel events inside the render pane are consumed by the canvas (pan/zoom)
   // and must not also reach ImGui window scrolling, or scrolling the canvas
@@ -3172,7 +3296,7 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
       activeDragPreview, displayedDragPreview, hasPresentableActiveDragTarget);
   const auto representedGesturePreview = OverlayGesturePreviewForPresentation(
       activeGesturePreview, liveActiveDragPreview, representedDragPreview);
-  if (!contentOnlyCaptureThisFrame_) {
+  if (!contentOnlyCaptureThisFrame_ && !showSamplePicker_) {
     // While the Pen tool is active the selected path is itself the live
     // interaction surface, so chrome must track the live DOM even between
     // anchor drags (close-path clicks, deferred clicks processed after
@@ -3303,6 +3427,7 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
       .suppressedLayerEntity = presentSuppressedLayerEntity,
       .suppressDragTargetTiles = suppressDragTargetTiles,
       .documentPresentedDirectly = documentPresentedDirectly,
+      .compositorTileOverlay = !contentOnlyCaptureThisFrame_ && compositorTileOverlay_,
       .perfOverlayMode = contentOnlyCaptureThisFrame_ ? PerfOverlayMode::Off : perfOverlayMode_,
   };
   renderPanePresenter_.render(paneState);
@@ -3328,8 +3453,80 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
     renderCanvasScrollbars();
     renderRenderPaneContextMenu();
   }
-
   ImGui::End();
+}
+
+void EditorShell::renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& contentRegion) {
+  if (contentRegion.x <= 0.0f || contentRegion.y <= 0.0f) {
+    return;
+  }
+
+  const EditorTheme& theme = EditorTheme::Active();
+  ImGui::SetNextWindowPos(paneOrigin, ImGuiCond_Always);
+  ImGui::SetNextWindowSize(contentRegion, ImGuiCond_Always);
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, ImGui::ColorConvertU32ToFloat4(theme.surfaceCanvas));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.0f, 16.0f));
+  constexpr ImGuiWindowFlags kWelcomeFlags =
+      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking;
+  ImGui::Begin("##sample_picker_surface", nullptr, kWelcomeFlags);
+
+  const float horizontalInset = contentRegion.x < kSamplePickerNarrowBreakpoint ? 0.0f : 32.0f;
+  const float contentWidth = std::max(0.0f, std::min(920.0f, contentRegion.x - 32.0f));
+  if (horizontalInset > 0.0f && contentWidth < contentRegion.x) {
+    ImGui::SetCursorPosX(std::max(horizontalInset, (contentRegion.x - contentWidth) * 0.5f));
+  }
+  ImGui::SetCursorPosY(contentRegion.y < 560.0f ? 8.0f : 32.0f);
+  ImGui::BeginChild("##sample_picker_content", ImVec2(contentWidth, 0.0f), ImGuiChildFlags_None,
+                    ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoSavedSettings);
+  const SamplePickerActions actions = samplePickerPresenter_.render(
+      SamplePickerState{.visible = true, .selectedSampleId = activeSampleId_});
+  ImGui::EndChild();
+
+  if (pendingSampleLoadNeedsConfirmation_) {
+    if (!ImGui::IsPopupOpen("Discard changes?")) {
+      ImGui::OpenPopup("Discard changes?");
+    }
+    if (ImGui::BeginPopupModal("Discard changes?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+      ImGui::TextUnformatted("Loading a sample replaces the current document.");
+      ImGui::Spacing();
+      if (ImGui::Button("Cancel", ImVec2(112.0f, 40.0f))) {
+        cancelPendingSampleLoad();
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Discard & Load", ImVec2(148.0f, 40.0f))) {
+        confirmPendingSampleLoadDiscard();
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::EndPopup();
+    }
+  }
+  ImGui::End();
+  ImGui::PopStyleVar(2);
+  ImGui::PopStyleColor();
+
+  if (actions.dismiss) {
+    cancelPendingSampleLoad();
+    showSamplePicker_ = false;
+  }
+  if (actions.openFile) {
+    cancelPendingSampleLoad();
+    showSamplePicker_ = false;
+    dialogPresenter_.requestOpenFile(app_.currentFilePath());
+  }
+  if (actions.openGitHub) {
+#ifdef __EMSCRIPTEN__
+    EM_ASM({ window.open('https://github.com/jwmcglynn/donner', '_blank', 'noopener'); });
+#else
+    ImGui::SetClipboardText(kSamplePickerGitHubUrl.data());
+#endif
+  }
+  if (actions.loadSample) {
+    queuePendingSampleLoad(actions.sampleId);
+    window_.wakeEventLoop();
+  }
 }
 
 void EditorShell::renderEditingScopeBreadcrumb() {
@@ -4536,6 +4733,18 @@ void EditorShell::renderRenderPaneContextMenu() {
   if (ImGui::MenuItem("Delete Selection", nullptr, false, app_.hasSelection())) {
     selectionChanged = app_.deleteSelectionWithUndo(textEditor_.getText());
   }
+  const GroupOperationAvailability groupAvailability =
+      rendererBusy ? GroupOperationAvailability{.reason = "Renderer busy"}
+                   : app_.groupSelectionAvailability();
+  if (ImGui::MenuItem("Group", "Cmd+G", false, groupAvailability.canApply)) {
+    selectionChanged = tryApplyGroupOperation(/*ungroup=*/false);
+  }
+  const GroupOperationAvailability ungroupAvailability =
+      rendererBusy ? GroupOperationAvailability{.reason = "Renderer busy"}
+                   : app_.ungroupSelectionAvailability();
+  if (ImGui::MenuItem("Ungroup", "Cmd+Shift+G", false, ungroupAvailability.canApply)) {
+    selectionChanged = tryApplyGroupOperation(/*ungroup=*/true);
+  }
 
   // Arrange (paint/z-order). Acts on the right-clicked element, or on the single
   // selection when the menu was opened over empty canvas. Reuses the shared
@@ -5010,6 +5219,7 @@ void EditorShell::runFrame() {
       requestRenderAtEndOfFrame_ = true;
     }
   }
+  processPendingSampleLoad();
   markPhase(mainFrameCost.documentFlushMs);
 
   // Re-rasterize the overlay against the just-flushed DOM while a locked-rejection flash is (or was
@@ -5077,6 +5287,7 @@ void EditorShell::runFrame() {
   handleGlobalShortcuts();
   markPhase(mainFrameCost.shortcutsMs);
 
+  const bool rendererIdle = !renderCoordinator_.asyncRenderer().isBusy();
   MenuBarState menuState{
       .sourcePaneFocused = sourcePaneVisible_ && textEditor_.isFocused(),
       .canSave = app_.hasDocument(),
@@ -5087,8 +5298,11 @@ void EditorShell::runFrame() {
       .hasShapeSelection = app_.hasSelection(),
       .hasShapeClipboard = shapeClipboard_ != nullptr && shapeClipboard_->hasText(),
       .hasTextSelection = selectionIsAllText(),
+      .canGroup = rendererIdle && app_.groupSelectionAvailability().canApply,
+      .canUngroup = rendererIdle && app_.ungroupSelectionAvailability().canApply,
       .hasSelectableElements = canvasHasSelectableElements(),
       .showCompositorDebugPanel = showCompositorDebugPanel_,
+      .compositorTileOverlay = compositorTileOverlay_,
       .geometryDebugOverlay = geometryDebugOverlay_,
       .perfOverlayMode = perfOverlayMode_,
       .panelLayoutLocked = dockLayoutLocked_,
@@ -5130,6 +5344,10 @@ void EditorShell::runFrame() {
   // Debug float are now owned by the DockSpace submitted above.
   renderSourcePaneSplitter(static_cast<float>(windowSize.x), paneOriginY, paneHeight,
                            mainPaneLayout.sourcePaneWidth);
+  if (!contentOnlyCaptureThisFrame_ && showSamplePicker_) {
+    renderSamplePicker(ImVec2(0.0f, paneOriginY),
+                       ImVec2(static_cast<float>(windowSize.x), paneHeight));
+  }
   markPhase(mainFrameCost.splittersMs);
   if (requestRenderAtEndOfFrame_) {
     if (!app_.hasDocument()) {

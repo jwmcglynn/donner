@@ -16,6 +16,7 @@ void ApplyMenuBarCommand(bool activated, MenuBarCommand command, const MenuBarSt
   switch (command) {
     case MenuBarCommand::OpenAbout: actions->openAbout = true; return;
     case MenuBarCommand::OpenFile: actions->openFile = true; return;
+    case MenuBarCommand::OpenSamples: actions->openSamples = true; return;
     case MenuBarCommand::SaveFile: actions->saveFile = true; return;
     case MenuBarCommand::SaveFileAs: actions->saveFileAs = true; return;
     case MenuBarCommand::ExportViewportSvg: actions->exportViewportSvg = true; return;
@@ -31,6 +32,8 @@ void ApplyMenuBarCommand(bool activated, MenuBarCommand command, const MenuBarSt
     case MenuBarCommand::Paste: actions->paste = true; return;
     case MenuBarCommand::PasteInFront: actions->pasteInFront = true; return;
     case MenuBarCommand::ConvertTextToOutlines: actions->convertTextToOutlines = true; return;
+    case MenuBarCommand::Group: actions->group = true; return;
+    case MenuBarCommand::Ungroup: actions->ungroup = true; return;
     case MenuBarCommand::SelectAll:
       if (state.sourcePaneFocused) {
         actions->selectAll = true;
@@ -51,6 +54,9 @@ void ApplyMenuBarCommand(bool activated, MenuBarCommand command, const MenuBarSt
     case MenuBarCommand::ToggleSourceFocusMode: actions->toggleSourceFocusMode = true; return;
     case MenuBarCommand::ToggleCompositorDebugPanel:
       actions->toggleCompositorDebugPanel = true;
+      return;
+    case MenuBarCommand::ToggleCompositorTileOverlay:
+      actions->toggleCompositorTileOverlay = true;
       return;
     case MenuBarCommand::ToggleGeometryDebugOverlay:
       actions->toggleGeometryDebugOverlay = true;
@@ -73,7 +79,8 @@ void ApplyMenuBarCommand(bool activated, MenuBarCommand command, const MenuBarSt
 }
 
 void ApplyViewMenuToggleActions(const MenuBarActions& actions, bool* showCompositorDebugPanel,
-                                PerfOverlayMode* perfOverlayMode, bool* geometryDebugOverlay) {
+                                PerfOverlayMode* perfOverlayMode, bool* geometryDebugOverlay,
+                                bool* compositorTileOverlay) {
   if (actions.toggleCompositorDebugPanel && showCompositorDebugPanel != nullptr) {
     *showCompositorDebugPanel = !*showCompositorDebugPanel;
   }
@@ -82,6 +89,9 @@ void ApplyViewMenuToggleActions(const MenuBarActions& actions, bool* showComposi
   }
   if (actions.toggleGeometryDebugOverlay && geometryDebugOverlay != nullptr) {
     *geometryDebugOverlay = !*geometryDebugOverlay;
+  }
+  if (actions.toggleCompositorTileOverlay && compositorTileOverlay != nullptr) {
+    *compositorTileOverlay = !*compositorTileOverlay;
   }
 }
 
@@ -124,6 +134,8 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
   if (ImGui::BeginMenu("File")) {
     ApplyMenuBarCommand(ImGui::MenuItem("Open...", "Cmd+O"), MenuBarCommand::OpenFile, state,
                         &actions);
+    ApplyMenuBarCommand(ImGui::MenuItem("Open Sample..."), MenuBarCommand::OpenSamples, state,
+                        &actions);
     ApplyMenuBarCommand(ImGui::MenuItem("Save", "Cmd+S", false, state.canSave),
                         MenuBarCommand::SaveFile, state, &actions);
     ApplyMenuBarCommand(ImGui::MenuItem("Save As...", "Cmd+Shift+S", false, state.canSave),
@@ -164,6 +176,10 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
     ApplyMenuBarCommand(
         ImGui::MenuItem("Convert Text to Outlines", nullptr, false, state.hasTextSelection),
         MenuBarCommand::ConvertTextToOutlines, state, &actions);
+    ApplyMenuBarCommand(ImGui::MenuItem("Group", "Cmd+G", false, state.canGroup),
+                        MenuBarCommand::Group, state, &actions);
+    ApplyMenuBarCommand(ImGui::MenuItem("Ungroup", "Cmd+Shift+G", false, state.canUngroup),
+                        MenuBarCommand::Ungroup, state, &actions);
     // "Select All" routes to the source/XML pane's text Select-All while it owns keyboard focus,
     // and otherwise to the canvas Select-All (every selectable element). Enabled when either path
     // can act.
@@ -194,6 +210,9 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
     ApplyMenuBarCommand(
         ImGui::MenuItem("Compositor Debug", nullptr, state.showCompositorDebugPanel),
         MenuBarCommand::ToggleCompositorDebugPanel, state, &actions);
+    ApplyMenuBarCommand(
+        ImGui::MenuItem("Compositor Tile Overlay", nullptr, state.compositorTileOverlay),
+        MenuBarCommand::ToggleCompositorTileOverlay, state, &actions);
     ApplyMenuBarCommand(
         ImGui::MenuItem("Geometry Debug Overlay", nullptr, state.geometryDebugOverlay),
         MenuBarCommand::ToggleGeometryDebugOverlay, state, &actions);

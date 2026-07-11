@@ -1860,6 +1860,96 @@ TEST(EditorAppReorderTest, ReflectsTheMoveIntoTheSourceText) {
   EXPECT_LT(r3, r1) << source;
 }
 
+TEST(EditorAppGroupTest, GroupsAdjacentElementsAndUndoRestoresExactSource) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kThreeRects)));
+  const std::string sourceBefore(app.document().document().source());
+  const auto r1 = app.document().document().querySelector("#r1");
+  const auto r2 = app.document().document().querySelector("#r2");
+  ASSERT_TRUE(r1.has_value());
+  ASSERT_TRUE(r2.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*r2, *r1});
+
+  EXPECT_TRUE(app.groupSelectionAvailability().canApply);
+  ASSERT_TRUE(app.groupSelection());
+  ASSERT_TRUE(app.flushFrame());
+
+  const svg::SVGElement root = app.document().document().svgElement();
+  ASSERT_TRUE(root.firstChild().has_value());
+  const svg::SVGElement group = *root.firstChild();
+  EXPECT_EQ(group.tryType(), svg::ElementType::G);
+  ASSERT_TRUE(group.firstChild().has_value());
+  EXPECT_EQ(group.firstChild()->id(), "r1");
+  ASSERT_TRUE(group.firstChild()->nextSibling().has_value());
+  EXPECT_EQ(group.firstChild()->nextSibling()->id(), "r2");
+  ASSERT_TRUE(group.nextSibling().has_value());
+  EXPECT_EQ(group.nextSibling()->id(), "r3");
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+  EXPECT_EQ(app.selectedElements().front(), group);
+
+  ASSERT_TRUE(app.canUndo());
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(std::string(app.document().document().source()), sourceBefore);
+  EXPECT_FALSE(app.canUndo());
+}
+
+TEST(EditorAppGroupTest, UngroupsAttributeFreeGroupAndSelectsChildren) {
+  constexpr std::string_view kGrouped =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><g><rect id="a"/><circle id="b"/></g><path id="c"/></svg>)";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kGrouped)));
+  const svg::SVGElement group = *app.document().document().svgElement().firstChild();
+  app.setSelection(group);
+
+  EXPECT_TRUE(app.ungroupSelectionAvailability().canApply);
+  ASSERT_TRUE(app.ungroupSelection());
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_THAT(ChildIds(app), ::testing::ElementsAre("a", "b", "c"));
+  ASSERT_EQ(app.selectedElements().size(), 2u);
+  EXPECT_EQ(app.selectedElements()[0].id(), "a");
+  EXPECT_EQ(app.selectedElements()[1].id(), "b");
+  EXPECT_TRUE(app.canUndo());
+}
+
+TEST(EditorAppGroupTest, RefusesNonAdjacentSelectionAndAttributedUngroup) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kThreeRects)));
+  const auto r1 = app.document().document().querySelector("#r1");
+  const auto r3 = app.document().document().querySelector("#r3");
+  ASSERT_TRUE(r1.has_value());
+  ASSERT_TRUE(r3.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*r1, *r3});
+  EXPECT_FALSE(app.groupSelectionAvailability().canApply);
+  EXPECT_FALSE(app.groupSelection());
+
+  ASSERT_TRUE(app.loadFromString(R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+    <g transform="translate(2 3)"><rect/></g>
+  </svg>)svg"));
+  app.setSelection(*app.document().document().svgElement().firstChild());
+  EXPECT_FALSE(app.ungroupSelectionAvailability().canApply);
+  EXPECT_FALSE(app.ungroupSelection());
+}
+
+TEST(EditorAppGroupTest, GroupSelectionRemainsInsideIsolatedScope) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><g id="scope"><rect id="a"/><circle id="b"/></g></svg>)"));
+  const svg::SVGElement scope = *app.document().document().querySelector("#scope");
+  ASSERT_TRUE(app.enterGroupEdit(scope));
+  const svg::SVGElement a = *app.document().document().querySelector("#a");
+  const svg::SVGElement b = *app.document().document().querySelector("#b");
+  app.setSelection(std::vector<svg::SVGElement>{a, b});
+
+  ASSERT_TRUE(app.groupSelection());
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+  EXPECT_EQ(app.selectedElements().front().tryType(), svg::ElementType::G);
+  EXPECT_EQ(app.selectedElements().front().parentElement(), scope);
+  EXPECT_EQ(app.editingScope(), scope);
+}
+
 TEST(EditorAppReorderTest, NoOpWhenAlreadyAtExtreme) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(std::string(kThreeRects)));
