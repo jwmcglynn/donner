@@ -3943,7 +3943,10 @@ void EditorShell::renderSidebars() {
   const bool rendererBusy = renderCoordinator_.asyncRenderer().isBusy();
   if (!rendererBusy) {
     sidebarPresenter_.refreshSnapshot(app_);
-    layersPanel_.refreshSnapshot(app_, &layerThumbnailRenderer_);
+    // Compact sheets use deterministic fill swatches. Avoiding per-row raster
+    // rendering and texture uploads keeps the touch panel responsive and also
+    // avoids backend-specific thumbnail presentation differences in Wasm.
+    layersPanel_.refreshSnapshot(app_, compactSheet ? nullptr : &layerThumbnailRenderer_);
   }
   EditorApp* liveAppForClicks = rendererBusy ? nullptr : &app_;
 
@@ -4055,8 +4058,10 @@ void EditorShell::renderSidebars() {
     lastTreeSelection_ = app_.selectedElement();
     return;
   }
-  layersPanel_.render(liveAppForClicks, thumbnailTextureProvider, layerIconTextureProvider,
-                      compactSheet ? 44.0f : 0.0f);
+  layersPanel_.render(
+      liveAppForClicks,
+      compactSheet ? LayersPanel::ThumbnailTextureProvider{} : thumbnailTextureProvider,
+      layerIconTextureProvider, compactSheet ? 44.0f : 0.0f);
   // Feed the Layers-panel hover into the shared source-hover preview so the
   // canvas (and source pane) highlight the hovered element, the same way
   // hovering a source-pane token does.
