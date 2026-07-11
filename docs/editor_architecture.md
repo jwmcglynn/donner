@@ -43,7 +43,8 @@ Guarantees callers can rely on:
   `EditorShell::nextIdleWakeSeconds()` so throttled UI work still wakes the loop.
 - **`EditorShell`** (`donner/editor/EditorShell.h`) is the stateful frontend that
   owns essentially all long-lived orchestration state: `EditorApp`, the tools,
-  `TextEditor`, `GlTextureCache`, `RenderCoordinator`, `DocumentSyncController`,
+  `TextEditor`, its purpose-specific `GlTextureCache` instances, `RenderCoordinator`,
+  `DocumentSyncController`,
   the viewport/input controllers, and the presenters.
 - **`EditorShell::runFrame()`** each frame: (1) poll the latest async render into
   GL textures via `RenderCoordinator::pollRenderResult`; (2) if `!isBusy()`, flush
@@ -56,6 +57,13 @@ Guarantees callers can rely on:
   and emit frame-miss/resource telemetry. Queued canvas-text characters are
   coalesced before the mutation flush, so one UI frame performs one text-content
   synchronization rather than one synchronization per queued codepoint.
+
+The welcome catalog renders each bundled SVG once through a dedicated offscreen
+`svg::Renderer` at thumbnail resolution. A dedicated texture cache uploads those owned bitmaps for
+`SamplePickerPresenter`; ImGui only lays out cards and blits the resulting textures. Keeping this
+cache separate from Layers previews prevents the live-row retention sweep from evicting samples.
+Generation advances by at most one catalog entry per UI frame and explicitly wakes the event loop
+until the bounded cache is complete.
 
 ### The mutation seam
 

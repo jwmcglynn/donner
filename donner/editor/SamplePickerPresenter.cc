@@ -12,7 +12,9 @@ namespace {
 
 constexpr float kGridGap = 12.0f;
 constexpr float kMinimumCardWidth = 220.0f;
-constexpr float kCardHeight = 72.0f;
+constexpr float kCardHeight = 96.0f;
+constexpr float kThumbnailWidth = 104.0f;
+constexpr float kThumbnailHeight = 64.0f;
 constexpr float kHeadingSpacing = 8.0f;
 #ifdef __EMSCRIPTEN__
 constexpr std::string_view kGitHubActionLabel = "View on GitHub";
@@ -26,7 +28,8 @@ std::size_t BoundedSampleCount(std::size_t sampleCount) noexcept {
 
 void DrawSampleButton(const EditorSample& sample, std::string_view description,
                       const SamplePickerState& state, float width, float height,
-                      SamplePickerActions* actions, std::size_t index) {
+                      const SamplePickerThumbnail& thumbnail, SamplePickerActions* actions,
+                      std::size_t index) {
   const EditorTheme& theme = EditorTheme::Active();
   ImGui::PushID(static_cast<int>(index));
   const bool clicked = ImGui::InvisibleButton("##sample", ImVec2(width, height));
@@ -47,9 +50,27 @@ void DrawSampleButton(const EditorSample& sample, std::string_view description,
   drawList->AddRect(min, max, selected ? theme.accentDefault : theme.borderSubtle,
                     theme.radiusControl, 0, selected ? 2.0f : 1.0f);
 
-  const float textX = min.x + theme.space3;
-  const float titleY = min.y + theme.space2;
   drawList->PushClipRect(min, max, true);
+  const ImVec2 thumbnailSlotMin(min.x + theme.space2,
+                                min.y + std::max(0.0f, (height - kThumbnailHeight) * 0.5f));
+  const ImVec2 thumbnailSlotMax(thumbnailSlotMin.x + kThumbnailWidth,
+                                thumbnailSlotMin.y + kThumbnailHeight);
+  drawList->AddRectFilled(thumbnailSlotMin, thumbnailSlotMax, theme.surfaceCanvas,
+                          theme.radiusControl);
+  if (thumbnail.texture != 0) {
+    const float aspectRatio = std::max(0.01f, thumbnail.aspectRatio);
+    const float previewWidth = std::min(kThumbnailWidth, kThumbnailHeight * aspectRatio);
+    const float previewHeight = std::min(kThumbnailHeight, previewWidth / aspectRatio);
+    const ImVec2 thumbnailMin(thumbnailSlotMin.x + (kThumbnailWidth - previewWidth) * 0.5f,
+                              thumbnailSlotMin.y + (kThumbnailHeight - previewHeight) * 0.5f);
+    const ImVec2 thumbnailMax(thumbnailMin.x + previewWidth, thumbnailMin.y + previewHeight);
+    drawList->AddImage(thumbnail.texture, thumbnailMin, thumbnailMax, ImVec2(0.0f, 0.0f),
+                       ImVec2(static_cast<float>(thumbnail.uvBottomRight.x),
+                              static_cast<float>(thumbnail.uvBottomRight.y)));
+  }
+  drawList->AddRect(thumbnailSlotMin, thumbnailSlotMax, theme.borderSubtle, theme.radiusControl);
+  const float textX = thumbnailSlotMax.x + theme.space3;
+  const float titleY = min.y + (height - ImGui::GetTextLineHeight() * 2.0f - 2.0f) * 0.5f;
   drawList->AddText(ImVec2(textX, titleY), theme.textPrimary, sample.title.data(),
                     sample.title.data() + sample.title.size());
   drawList->AddText(ImVec2(textX, titleY + ImGui::GetTextLineHeight() + 2.0f), theme.textMuted,
@@ -128,7 +149,8 @@ void ApplySamplePickerCommand(bool activated, SamplePickerCommand command,
   }
 }
 
-SamplePickerActions SamplePickerPresenter::render(const SamplePickerState& state) const {
+SamplePickerActions SamplePickerPresenter::render(
+    const SamplePickerState& state, const SamplePickerThumbnailProvider& thumbnailProvider) const {
   SamplePickerActions actions;
   if (!state.visible) {
     return actions;
@@ -172,8 +194,10 @@ SamplePickerActions SamplePickerPresenter::render(const SamplePickerState& state
       ImGui::SameLine(0.0f, kGridGap);
     }
     const EditorSample& sample = samples[index];
+    const SamplePickerThumbnail thumbnail =
+        thumbnailProvider ? thumbnailProvider(sample, index) : SamplePickerThumbnail{};
     DrawSampleButton(sample, SamplePickerDescription(sample.id), state, layout.cardWidth,
-                     layout.cardHeight, &actions, index);
+                     layout.cardHeight, thumbnail, &actions, index);
   }
 
   return actions;

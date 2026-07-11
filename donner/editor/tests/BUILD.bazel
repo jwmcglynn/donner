@@ -119,6 +119,7 @@ donner_cc_test(
         "//donner/editor:editor_sample_catalog",
         "//donner/svg",
         "//donner/svg/parser",
+        "//donner/svg/renderer",
         "@com_google_gtest//:gtest_main",
     ],
 )

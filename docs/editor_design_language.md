@@ -207,10 +207,16 @@ Launching without a filename, including the WebAssembly build, opens a first-run
 real editor workspace. It keeps Donner as the first visual signal, offers Open SVG and a fixed
 GitHub destination, and lists a bounded offline catalog of reviewed SVG samples. Loading a sample
 creates an untitled document, so Save cannot overwrite a local file without an explicit path.
+Each sample card uses a small bitmap rendered by Donner from the exact bundled SVG source. ImGui
+only blits the cached texture; it does not approximate sample artwork with hand-drawn UI geometry.
+The catalog has a dedicated texture cache so Layers-panel retention cannot evict welcome previews.
+The shell renders at most one missing preview per UI frame and keeps a fixed placeholder slot while
+the bounded catalog fills in, avoiding a first-frame Wasm stall or card-layout shift.
 
 The welcome surface owns the workspace while visible rather than competing with docked Layers and
 Inspector panels. Its sample controls use at least 44 logical pixels of height, lay out in one
-column below the compact breakpoint, and use at most three columns on wider displays. The surface
+column below the compact breakpoint, and use at most three columns on wider displays. Cards reserve
+a fixed preview slot while keeping their complete surface clickable as a touch target. The surface
 can be reopened through File > Open Sample and dismissed to reveal the current document.
 
 Document replacement requested from the sample surface is deferred to the next orchestration frame.

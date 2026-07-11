@@ -2,12 +2,13 @@
 /// @file
 
 #include <cstddef>
+#include <functional>
 #include <string>
 #include <string_view>
 
+#include "donner/base/Vector2.h"
 #include "donner/editor/EditorSampleCatalog.h"
-
-struct ImVec2;
+#include "donner/editor/ImGuiIncludes.h"
 
 namespace donner::editor {
 
@@ -62,6 +63,17 @@ struct SamplePickerActions {
   bool openGitHub = false;
 };
 
+/// Donner-rendered sample artwork uploaded to a texture the picker can blit.
+struct SamplePickerThumbnail {
+  ImTextureID texture = 0;
+  Vector2d uvBottomRight = Vector2d(1.0, 1.0);
+  float aspectRatio = 1.0f;
+};
+
+/// Resolve one catalog entry to its already-rendered thumbnail texture.
+using SamplePickerThumbnailProvider =
+    std::function<SamplePickerThumbnail(const EditorSample& sample, std::size_t index)>;
+
 enum class SamplePickerCommand {
   Dismiss,
   OpenFile,
@@ -80,7 +92,9 @@ void ApplySamplePickerCommand(bool activated, SamplePickerCommand command,
 class SamplePickerPresenter {
 public:
   /// Render using the current pane's available width and return edge-triggered actions.
-  [[nodiscard]] SamplePickerActions render(const SamplePickerState& state) const;
+  [[nodiscard]] SamplePickerActions render(
+      const SamplePickerState& state,
+      const SamplePickerThumbnailProvider& thumbnailProvider = {}) const;
 };
 
 }  // namespace donner::editor

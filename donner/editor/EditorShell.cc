@@ -709,8 +709,10 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       textEditor_(),
       textures_(window.geodeDevice()),
       thumbnailTextures_(window.geodeDevice()),
+      sampleThumbnailTextures_(window.geodeDevice()),
       toolbarIconTextures_(window.geodeDevice()),
       layerThumbnailRenderer_(window.geodeDevice()),
+      sampleThumbnailRenderer_(window.geodeDevice()),
       renderCoordinator_(window.geodeDevice()),
       rotateCursorSet_(),
       documentSyncController_(InitialDocumentSyncSource(options_)),
@@ -3495,6 +3497,35 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   ImGui::End();
 }
 
+void EditorShell::ensureSampleThumbnails() {
+  constexpr int kThumbnailWidthPx = 192;
+  constexpr int kThumbnailHeightPx = 120;
+  const std::span<const EditorSample> samples = GetEditorSampleCatalog();
+  if (sampleThumbnailBitmaps_.empty()) {
+    sampleThumbnailBitmaps_.resize(samples.size());
+  }
+  if (sampleThumbnailGenerationCursor_ >= samples.size()) {
+    return;
+  }
+
+  const std::size_t index = sampleThumbnailGenerationCursor_++;
+  const EditorSample& sample = samples[index];
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = svg::parser::SVGParser::ParseSVG(sample.source, warnings);
+  if (!parsed.hasError()) {
+    svg::SVGDocument document = std::move(parsed.result());
+    document.setCanvasSize(kThumbnailWidthPx, kThumbnailHeightPx);
+    sampleThumbnailRenderer_.draw(document);
+    svg::RendererBitmap bitmap = sampleThumbnailRenderer_.takeSnapshot();
+    if (!bitmap.empty()) {
+      sampleThumbnailBitmaps_[index] = std::move(bitmap);
+    }
+  }
+  if (sampleThumbnailGenerationCursor_ < samples.size()) {
+    window_.wakeEventLoop();
+  }
+}
+
 void EditorShell::renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& contentRegion) {
   if (contentRegion.x <= 0.0f || contentRegion.y <= 0.0f) {
     return;
@@ -3519,8 +3550,24 @@ void EditorShell::renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& con
   ImGui::SetCursorPosY(contentRegion.y < 560.0f ? 8.0f : 32.0f);
   ImGui::BeginChild("##sample_picker_content", ImVec2(contentWidth, 0.0f), ImGuiChildFlags_None,
                     ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoSavedSettings);
+  ensureSampleThumbnails();
+  const SamplePickerThumbnailProvider thumbnailProvider =
+      [this](const EditorSample&, std::size_t index) -> SamplePickerThumbnail {
+    if (index >= sampleThumbnailBitmaps_.size() || !sampleThumbnailBitmaps_[index].has_value()) {
+      return {};
+    }
+    constexpr std::uint64_t kSampleThumbnailKeyBase = 0x53414d5000000000ULL;
+    const GlTextureCache::ThumbnailTextureView uploaded = sampleThumbnailTextures_.uploadThumbnail(
+        kSampleThumbnailKeyBase + index, *sampleThumbnailBitmaps_[index]);
+    return SamplePickerThumbnail{
+        .texture = uploaded.texture,
+        .uvBottomRight = uploaded.uvBottomRight,
+        .aspectRatio = static_cast<float>(sampleThumbnailBitmaps_[index]->dimensions.x) /
+                       static_cast<float>(sampleThumbnailBitmaps_[index]->dimensions.y),
+    };
+  };
   const SamplePickerActions actions = samplePickerPresenter_.render(
-      SamplePickerState{.visible = true, .selectedSampleId = activeSampleId_});
+      SamplePickerState{.visible = true, .selectedSampleId = activeSampleId_}, thumbnailProvider);
   ImGui::EndChild();
 
   if (pendingSampleLoadNeedsConfirmation_) {

@@ -376,6 +376,7 @@ private:
   void renderFillStrokeToolbarWidget();
   void renderCompactTopBar();
   void renderSidebars();
+  void ensureSampleThumbnails();
   void renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& contentRegion);
   void renderSourcePaneSplitter(float windowWidth, float paneOriginY, float paneHeight,
                                 float sourcePaneWidth);
@@ -486,6 +487,9 @@ private:
   /// preview bitmap to a GL/WGPU texture (same path as the render pane) keyed by
   /// row stable id, so ImGui can blit the real thumbnail instead of a swatch.
   GlTextureCache thumbnailTextures_;
+  /// Dedicated cache for the bounded welcome catalog. It is intentionally
+  /// separate from row thumbnails, whose retention sweep follows live layers.
+  GlTextureCache sampleThumbnailTextures_;
   /// Toolbar tool-icon texture cache. Holds the Donner-rendered white-mask
   /// bitmaps for the palette icons, keyed by a stable per-icon id. Never
   /// retention-swept (unlike `thumbnailTextures_`), so the four icons upload
@@ -495,6 +499,10 @@ private:
   /// shares the editor's Geode device but is never bound to the live framebuffer,
   /// so row previews cannot inherit presentation state from the main renderer.
   svg::Renderer layerThumbnailRenderer_;
+  /// Offscreen renderer and owned bitmaps for the four built-in sample cards.
+  svg::Renderer sampleThumbnailRenderer_;
+  std::vector<std::optional<svg::RendererBitmap>> sampleThumbnailBitmaps_;
+  std::size_t sampleThumbnailGenerationCursor_ = 0;
   RenderCoordinator renderCoordinator_;
   RotateCursorSet rotateCursorSet_;
   DocumentSyncController documentSyncController_;
