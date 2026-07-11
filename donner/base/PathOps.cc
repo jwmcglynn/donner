@@ -68,12 +68,6 @@ struct PointKey {
   std::int64_t y = 0;
 
   bool operator==(const PointKey& other) const = default;
-  bool operator<(const PointKey& other) const {
-    if (x != other.x) {
-      return x < other.x;
-    }
-    return y < other.y;
-  }
 };
 
 struct TraceEdge {
