@@ -687,3 +687,93 @@ implications for this lane:
   than run on the overcommitted runner tier. The coverage lane already keeps the
   runner thin (`--no-html`, RE execution), so no runner-side move is warranted
   today; this is recorded so the option is not re-litigated.
+
+### Incremental-coverage verification and target-determination quality (2026-07-11)
+
+Operator directives 2026-07-11: (1) MAKE PR coverage incremental (affected
+subset only, full run on main-push) and prove it; (2) audit how good
+determine-targets actually is.
+
+**(1) Incremental RUN is already wired and engaging.** PR coverage runs the
+bazel-diff affected subset, NOT a full `//...`: over 60 recent PR coverage runs,
+fallback_reason was `bazel_diff` 31x (52%), `coverage_smoke` 17x (28%),
+`no_instrumentable_targets` (skipped, correct) 11x (18%), and a full-`//...`
+fallback (`infra_change`) exactly ONCE (2%). Full-fallback is rare, so it is not
+a material P99 driver today, and the fallback triggers are earning their cost.
+The main-push baseline runs the full set. So the Packet A affected-targets intent
+is live; the coverage cost is the SIZE and COLD cost of the affected subset, not
+a failure to scope.
+
+**Instrumentation-scoping is NOT a compile-time lever in this setup (negative
+finding).** A natural next step was to also make INSTRUMENTATION incremental
+(scope `--instrumentation_filter` to the changed packages so unchanged deps
+compile without coverage). Investigated and rejected with evidence: `bazel
+aquery --config=coverage --collect_code_coverage` shows the `//donner/base:base`
+compile carrying `-fcoverage-mapping`/`-fprofile-instr-generate` even under a
+narrow `--instrumentation_filter=-test_utils$,//donner/svg:` that excludes base.
+`.bazelrc` does not globally force those copts, so the coverage feature is being
+applied to all `//donner` compiles regardless of the filter; the filter scopes
+which files' coverage is COLLECTED/reported, not which are compiled with
+instrumentation. Conclusion: narrowing `--instrumentation_filter` would change
+the report scope (and risk under-reporting) without cutting the instrumented
+compile cost. It is a dead end for speed here; the compile cost must be attacked
+via the RE cache seed (lever 1) or variant scope (lever 2). No code shipped for
+this idea.
+
+**(2) Determination quality.** Affected-set size vs branch-side change
+(over-inclusion), from the same 60-run sample (bazel_diff runs):
+
+| branch (sample) | changed files | affected targets | ratio |
+|---|---:|---:|---:|
+| codex/wasm-sanitizer-followup | 3 | 378 | 126x |
+| editor/group-editing (#829) | 17 | 376 | 22x |
+| wasm-ios-runtime | 21 | 381 | 18x |
+| geode/gpu-residence | 10 | 187 | 18.7x |
+| geode-perf-transfer-counters | 21 | 270 | 12.9x |
+| editor/structured-source-drag | 14 | 106 | 7.6x |
+| editor/sample-picker-debug-overlay | 25 | 117 | 4.7x |
+| editor-v08-ux-polish | 82 | 193 | 2.4x |
+
+The tail (300-460 targets) is what blows the coverage budget. Two contributors:
+- Genuine reverse-dependency fanout: a change to a widely-included core header
+  legitimately impacts a large subtree (the 3-file / 378-target and 17-file /
+  376-target cases are header-fanout, not a determination bug).
+- The known bazel-diff residual (flagged during the #825 fix): the git-diff that
+  gates infra/smoke detection now uses `git merge-base` (correct, branch-side
+  only), but the bazel-diff base worktree is still checked out at `BASE_SHA` (the
+  base-branch TIP), so post-fork drift on main is hashed into the base and
+  over-includes targets on stale branches. The 126x ratio (3 files -> 378
+  targets) is the signature of this: a small branch-side change against a drifted
+  base tip. Never unsound (only ever widens), but it inflates the coverage set
+  and the P99 tail for branches that have not rebased.
+
+**Ownable determination fix (ranked): align the bazel-diff base worktree to the
+merge-base.** Check out the base worktree at `git merge-base BASE_SHA HEAD_SHA`
+instead of `BASE_SHA`, so bazel-diff compares fork-point vs head (matching the
+git-diff basis already used for gating). This removes base-drift over-inclusion,
+shrinking the affected set (and thus coverage compile+test) for stale branches.
+Caching note: the base-hash cache is keyed by `BASE_SHA`; it must be re-keyed by
+the merge-base SHA (which is itself a main commit, so the main-push pre-warm can
+still hit it). This is a determine-targets change in this lane; it is
+post-merge-measurable only (pull_request runs the base workflow) and composes
+with, but does not by itself reach, P99<=15. Fallback-trigger review: the
+infra-file list and the `no_instrumentable_targets` skip are pulling their
+weight (18% correctly skipped, 2% infra-fallback); the `large_change`>75-files
+threshold routes broad PRs to the hosted lane and fired on editor-v08-ux-polish
+(82-85 files) as intended. No trigger is mis-tuned enough to change today.
+
+### Revised lever ranking (instrumentation-scoping removed)
+
+1. Warm the RE coverage cache from main-push coverage (run the main baseline on
+   the RE lane, same executor + flags). Primary structural fix; the infra audit
+   confirms the RE backend has slot headroom (9-25/96), so the dev1-contention
+   risk is low. Operator infra sign-off; reversible; measure the main-coverage
+   job time and dev1 latency.
+2. Cut variant multiplication for PR patch coverage (single representative
+   variant on PRs; full multi-variant on main). Operator coverage-scope sign-off.
+3. Align bazel-diff base to the merge-base (above): shrinks the affected set for
+   stale branches; ownable, post-merge-measurable.
+4. Timeout right-sizing after the lane is fast.
+
+Levers 1 and 2 remain the only ones that reach P99<=15 on worst-case
+header-fanout PRs, and both are operator-reserved (infra load / coverage scope).
