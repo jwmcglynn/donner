@@ -491,3 +491,289 @@ a fast-fail on a genuinely wedged endpoint (paired with
   alone (lever 1) is projected to clear P95 <= 15 for the common case and get
   P99 close to 30; the last margin and the interactive-priority guarantee are
   operator infra decisions, quantified above.
+
+
+## Appendix: 2026-07-11 coverage-lane execution-time audit (post-serialization)
+
+**Author:** Claude Opus 4.8 (coverage-lane CI-runtime agent)
+**Scope (narrowed by operator 2026-07-11):** the COVERAGE lane only. Queue
+contention was fixed by the 2026-07-10 serialization work (PR #817 per-lane
+concurrency groups); the operator's new bar is per-job EXECUTION time. Target
+tightened 2026-07-11 to **per-job execution P99 <= 15 minutes** (supersedes the
+earlier p95<=30). A 15-minute P99 means even the worst-case coverage run must
+fit, so structural fixes beat shaving. Sibling agents own test-runtime trims,
+compile/RE throughput, and RE-host infra; this appendix touches only the
+coverage lane and does not propose infra or non-coverage test-content changes
+(those are flagged for the owning agents / the operator).
+
+### Method
+
+GitHub Actions REST API (`gh api`), window 2026-07-09..07-11 (48h), job-level
+`started_at`/`completed_at` (execution) and run `created_at` (queue). Coverage
+step decomposition from the lane's own diagnostics artifact
+(`ci-diagnostics-coverage-self-hosted-*`): `tools/coverage.sh` writes a Bazel
+`--profile` gz, a `--build_event_json_file` BEP, and a `timing.txt` with phase
+marks (start / bazel_coverage_done / filter_done / end). The exemplar is PR
+#829 (`coverage-self-hosted` run 29158844327, the 54-minute run the operator
+flagged).
+
+### Coverage-lane execution profile (48h, minutes)
+
+| lane | n | exec med | exec p95 | exec max | note |
+|---|---:|---:|---:|---:|---|
+| Coverage:build (hosted; main + hosted PR fallback) | 12 | 69.7 | 74.7 | 75.2 | 9/12 over 30 min |
+| Coverage:coverage-self-hosted (PR incremental) | 66 | 6.9 | 60.3 | 60.4 | 12 over 30 min; the 60.3 p95 is the 60-min timeout firing, plus one real 54.0-min completion (#829) |
+| Coverage:determine-targets | 90 | 0.5 | 0.8 | 0.9 | healthy |
+| Coverage:upload-self-hosted-coverage | 49 | 0.1 | 0.2 | 0.3 | healthy (its queue wait just trails coverage-self-hosted) |
+
+Two jobs violate P99<=15: the hosted `build` (main baseline + hosted PR
+fallback), pinned at ~70 min, and `coverage-self-hosted` (PR incremental) whose
+real completions reach 54 min and whose timeouts cap at 60.
+
+### #829 exemplar: where the 54 minutes goes
+
+Job steps: setup 2s, checkout 8s, toolchain sync 9s, LLVM fetch 36s, **Generate
+coverage 3170s (52.8 min)**, uploads 5s. So ~55s of setup and 100% of the rest
+is one `tools/coverage.sh` invocation.
+
+Inside `coverage.sh` (timing.txt): `bazel coverage` = **3158s (52.6 min)**;
+Python LCOV filter + metrics = **2s**; `genhtml` skipped (`--no-html`). So the
+entire cost is the Bazel `coverage` command; the runner-side post-processing is
+2 seconds.
+
+**This corrects the prior appendix's hypothesis.** The 2026-07-10 note assumed
+the runner-side lcov merge on the the runner host was a dominant coverage cost.
+Measured: the Python merge is 2s and Bazel's own `Coverage report generation`
+action is 14.1s. Neither is a lever. The cost is the instrumented build+test
+executed on the RE backend inside `bazel coverage`.
+
+Decomposition of the 52.6-min `bazel coverage` (from BEP `buildMetrics` +
+profile), affected set = 376 targets from 17 changed files (fallback=false,
+reason=bazel_diff):
+
+| work | measured | notes |
+|---|---|---|
+| CppCompile actions EXECUTED | 3112 | instrumented; 898 CppLink; the compile phase dominates wall |
+| Compiling total CPU | 3321 cpu-min | summed across RE parallelism |
+| TestRunner actions | 296 | 1174 cpu-min; runs across variants (base 206, geode 50, text_full 40) |
+| `cachedRemotely: true` | **4** | across the ENTIRE build -> the coverage cache is effectively cold |
+| Coverage report merge (runner) | 14.1s | not a lever |
+| Python filter+metrics (runner) | 2s | not a lever |
+
+### Root cause: why 50 minutes, and why the set is "so big"
+
+Four compounding causes, all coverage-specific:
+
+1. **The RE-side coverage cache is never seeded, so every PR coverage run is a
+   cold instrumented build.** `cachedRemotely: true` = 4 across 3112 executed
+   compiles. The main-push coverage baseline runs ONLY on the hosted
+   `Coverage:build` job (`runs-on: ubuntu-24.04`), and on the hosted path
+   `tools/coverage.sh` uses its DEFAULT flags `--remote_executor=
+   --remote_cache=` -> it executes **fully locally** and populates only the
+   hosted runner's GHA disk cache. The self-hosted PR coverage lane executes on
+   the RE backend (`--config=ci` -> remote executor). The two share no cache, so
+   nothing ever warms the RE coverage cache with the base commit's instrumented
+   objects. Every PR coverage run recompiles the whole affected instrumented
+   surface from scratch. THIS is the single biggest driver.
+
+2. **Coverage instruments all of `//donner`, and the coverage config makes those
+   actions disjoint from the warm standard CI cache.** `.bazelrc` sets
+   `coverage --instrumentation_filter="-test_utils$,//donner[:/]"` (everything
+   under //donner) and `build:coverage` adds `-DNDEBUG`, `-ffile-compilation-dir=.`,
+   `--features=llvm_coverage_map_format`, coverage `--action_env`s. Those flags
+   change the compile command for EVERY TU in the coverage build (not just
+   instrumented ones), so even a coverage-build dependency that CI compiles
+   constantly on the same RE backend has a different action key and cannot reuse
+   CI's always-warm cache. The coverage build lives in its own cache namespace,
+   which (per cause 1) is never seeded.
+
+3. **Variant multiplication.** Each SVG element TU compiles ~7x (base +
+   `text_full` + `geode` + `tiny_skia` variants and their test transitions);
+   e.g. `SVGSymbolElement.cc` executed 7 instrumented compiles = 25.5 cpu-min.
+   Tests run across base/geode/text_full. For Codecov PATCH coverage (the only
+   unique output of PR coverage) the extra variants add coverage only for
+   backend-`#ifdef`'d lines; for a change that is not backend-specific they are
+   redundant instrumented work.
+
+4. **Header-fanout affected sets.** #829 changed widely-included editor/svg
+   headers (`DonnerController.h`, `EditorShell.h`, `EditorApp.h`), so bazel-diff
+   correctly expanded 17 files to 376 affected targets. Packet A's incremental
+   scoping IS engaging (fallback=false, reason=bazel_diff -- verified across
+   runs: 376/381/187/31 targets and a 1-target smoke case), but "incremental" on
+   a header change is still most of the editor+svg graph. Incremental scope is
+   working as designed; it is not over-including. The size is real rdep fanout,
+   which only a warm cache (cause 1) or a variant cut (cause 3) shrinks.
+
+Net: the coverage lane does the right SET of work (incremental scoping is live),
+but does it at full cold cost every time because the RE coverage cache is never
+warmed and the instrumented surface is both broad (all //donner) and multiplied
+(variants).
+
+### Not a lever (ruled out with numbers)
+
+- Runner-side lcov merge / Python post-processing: 2s (timing.txt).
+- Bazel `Coverage report generation` action: 14.1s (profile/BEP).
+- Checkout + toolchain sync + LLVM fetch: ~55s total.
+- determine-targets / upload jobs: sub-minute, healthy.
+- Incremental target selection: verified engaging; not over-including.
+
+### Ranked coverage-lane levers toward P99 <= 15 min
+
+1. **Seed the RE coverage cache from main-push coverage; run the main baseline
+   on the RE lane instead of hosted-local (fixes BOTH violators).** Route the
+   `push:main` coverage build to the self-hosted RE lane (same executor and same
+   coverage flags PR coverage uses) so its instrumented action results land in
+   the shared CAS/AC. Effect: (a) the ~70-min hosted `Coverage:build` main job
+   runs on the self-hosted RE backend instead of a hosted runner; (b) PR coverage's
+   unchanged instrumented compiles become cache hits, collapsing a PR coverage
+   run toward just the changed files' rdep-fanout recompiles. Projected: common
+   PRs ~7 -> ~3 min; a header-fanout PR like #829 from 54 min toward the
+   changed-fanout floor (est. 10-20 min, to be measured). **OPERATOR SIGN-OFF:**
+   this adds serialized main-coverage load to the self-hosted RE backend, which is shared with the
+   priority interactive dev host; it is reversible (revert the workflow) and off the PR
+   critical path (main pushes serialize), but the dev-host-latency-under-main-coverage
+   cost must be measured before keeping it. Coverage SIGNAL is unchanged (same
+   instrumentation, same targets). This is the primary structural fix; it borders
+   the infra sibling's RE-throughput scope, so it is filed for operator routing.
+
+2. **Cut variant multiplication for PR patch coverage.** For non-backend-specific
+   changes the base/geode/text_full re-runs are redundant parameterizations of
+   identical code paths (~7x compile, 3x test). Restrict PR coverage to a single
+   representative variant (or only the variant whose backend the change touches),
+   keeping the full multi-variant run on the main baseline. Projected ~2-4x
+   compile+test reduction on the PR lane. **OPERATOR SIGN-OFF:** narrows
+   backend-specific line coverage on PRs; sanctioned in principle by the
+   operator's redundant-parameterization trim allowance but needs either a
+   per-PR "change is not backend-specific" proof or an explicit policy call,
+   since a backend-specific PR would lose backend-branch patch coverage.
+
+3. **Narrow `--instrumentation_filter` to the changed packages (faithful Packet
+   A) -- SAFE, implemented.** Packet A's stated intent was an "instrumented run
+   over only the changed code." The implementation instruments all of //donner
+   in the affected closure. Scoping `--instrumentation_filter` to the changed
+   files' packages makes unchanged dependencies compile WITHOUT coverage
+   instrumentation (cheaper, and more stably cacheable), while the changed code
+   still yields Codecov patch coverage. Projected ~30-40% per-run compile-CPU
+   cut; largest for single-package PRs, smallest for editor+svg-wide PRs like
+   #829. Patch-coverage equivalence validated on a real PR before landing. This
+   is the safe, no-infra, no-signal-loss change and is the first PR from this
+   audit.
+
+4. **Timeout right-sizing, AFTER the lane is fast.** Once (1)-(3) land, lower the
+   60-min SLA bound so a genuinely wedged RE endpoint fast-fails per the 0018
+   end-state, paired with the existing `--remote_local_fallback=false`.
+
+Levers 1 and 2 are the ones that reach P99<=15 on worst-case (#829-class) PRs
+and both are operator-reserved (infra load / coverage scope); lever 3 is the
+safe partial that lands immediately.
+
+### Cross-check with the infra audit (2026-07-11, generic attribution)
+
+A parallel read-only infra audit reports that the RE backend has ample slot
+headroom under organic CI (roughly well under a quarter of execution slots occupied), while
+the runner tier is CPU-overcommitted under concurrent runner-side phases (each
+runner microVM is oversubscribed on the shared runner-host cores). Two
+implications for this lane:
+
+- The 52-minute cost is genuine cold instrumented-build volume, not RE backend
+  saturation: with the backend far from full, seeding the RE coverage cache
+  (lever 1) is the fix, and running the main-baseline coverage on the RE backend
+  has slot headroom to spare (the dev-host priority guarantee still governs, but
+  the backend is not the scarce resource here).
+- Any CPU-heavy runner-side coverage step is the structurally starved place. The
+  measured runner-side coverage post-processing here is only ~16s (2s Python +
+  14s Bazel merge) and is not the current bottleneck under serialization, but if
+  a future change adds runner-side CPU work, it should be pushed onto RE rather
+  than run on the overcommitted runner tier. The coverage lane already keeps the
+  runner thin (`--no-html`, RE execution), so no runner-side move is warranted
+  today; this is recorded so the option is not re-litigated.
+
+### Incremental-coverage verification and target-determination quality (2026-07-11)
+
+Operator directives 2026-07-11: (1) MAKE PR coverage incremental (affected
+subset only, full run on main-push) and prove it; (2) audit how good
+determine-targets actually is.
+
+**(1) Incremental RUN is already wired and engaging.** PR coverage runs the
+bazel-diff affected subset, NOT a full `//...`: over 60 recent PR coverage runs,
+fallback_reason was `bazel_diff` 31x (52%), `coverage_smoke` 17x (28%),
+`no_instrumentable_targets` (skipped, correct) 11x (18%), and a full-`//...`
+fallback (`infra_change`) exactly ONCE (2%). Full-fallback is rare, so it is not
+a material P99 driver today, and the fallback triggers are earning their cost.
+The main-push baseline runs the full set. So the Packet A affected-targets intent
+is live; the coverage cost is the SIZE and COLD cost of the affected subset, not
+a failure to scope.
+
+**Instrumentation-scoping is NOT a compile-time lever in this setup (negative
+finding).** A natural next step was to also make INSTRUMENTATION incremental
+(scope `--instrumentation_filter` to the changed packages so unchanged deps
+compile without coverage). Investigated and rejected with evidence: `bazel
+aquery --config=coverage --collect_code_coverage` shows the `//donner/base:base`
+compile carrying `-fcoverage-mapping`/`-fprofile-instr-generate` even under a
+narrow `--instrumentation_filter=-test_utils$,//donner/svg:` that excludes base.
+`.bazelrc` does not globally force those copts, so the coverage feature is being
+applied to all `//donner` compiles regardless of the filter; the filter scopes
+which files' coverage is COLLECTED/reported, not which are compiled with
+instrumentation. Conclusion: narrowing `--instrumentation_filter` would change
+the report scope (and risk under-reporting) without cutting the instrumented
+compile cost. It is a dead end for speed here; the compile cost must be attacked
+via the RE cache seed (lever 1) or variant scope (lever 2). No code shipped for
+this idea.
+
+**(2) Determination quality.** Affected-set size vs branch-side change
+(over-inclusion), from the same 60-run sample (bazel_diff runs):
+
+| branch (sample) | changed files | affected targets | ratio |
+|---|---:|---:|---:|
+| codex/wasm-sanitizer-followup | 3 | 378 | 126x |
+| editor/group-editing (#829) | 17 | 376 | 22x |
+| wasm-ios-runtime | 21 | 381 | 18x |
+| geode/gpu-residence | 10 | 187 | 18.7x |
+| geode-perf-transfer-counters | 21 | 270 | 12.9x |
+| editor/structured-source-drag | 14 | 106 | 7.6x |
+| editor/sample-picker-debug-overlay | 25 | 117 | 4.7x |
+| editor-v08-ux-polish | 82 | 193 | 2.4x |
+
+The tail (300-460 targets) is what blows the coverage budget. Two contributors:
+- Genuine reverse-dependency fanout: a change to a widely-included core header
+  legitimately impacts a large subtree (the 3-file / 378-target and 17-file /
+  376-target cases are header-fanout, not a determination bug).
+- The known bazel-diff residual (flagged during the #825 fix): the git-diff that
+  gates infra/smoke detection now uses `git merge-base` (correct, branch-side
+  only), but the bazel-diff base worktree is still checked out at `BASE_SHA` (the
+  base-branch TIP), so post-fork drift on main is hashed into the base and
+  over-includes targets on stale branches. The 126x ratio (3 files -> 378
+  targets) is the signature of this: a small branch-side change against a drifted
+  base tip. Never unsound (only ever widens), but it inflates the coverage set
+  and the P99 tail for branches that have not rebased.
+
+**Ownable determination fix (ranked): align the bazel-diff base worktree to the
+merge-base.** Check out the base worktree at `git merge-base BASE_SHA HEAD_SHA`
+instead of `BASE_SHA`, so bazel-diff compares fork-point vs head (matching the
+git-diff basis already used for gating). This removes base-drift over-inclusion,
+shrinking the affected set (and thus coverage compile+test) for stale branches.
+Caching note: the base-hash cache is keyed by `BASE_SHA`; it must be re-keyed by
+the merge-base SHA (which is itself a main commit, so the main-push pre-warm can
+still hit it). This is a determine-targets change in this lane; it is
+post-merge-measurable only (pull_request runs the base workflow) and composes
+with, but does not by itself reach, P99<=15. Fallback-trigger review: the
+infra-file list and the `no_instrumentable_targets` skip are pulling their
+weight (18% correctly skipped, 2% infra-fallback); the `large_change`>75-files
+threshold routes broad PRs to the hosted lane and fired on editor-v08-ux-polish
+(82-85 files) as intended. No trigger is mis-tuned enough to change today.
+
+### Revised lever ranking (instrumentation-scoping removed)
+
+1. Warm the RE coverage cache from main-push coverage (run the main baseline on
+   the RE lane, same executor + flags). Primary structural fix; the infra audit
+   confirms the RE backend has slot headroom (well under a quarter of slots busy), so the dev-host contention
+   risk is low. Operator infra sign-off; reversible; measure the main-coverage
+   job time and dev-host latency.
+2. Cut variant multiplication for PR patch coverage (single representative
+   variant on PRs; full multi-variant on main). Operator coverage-scope sign-off.
+3. Align bazel-diff base to the merge-base (above): shrinks the affected set for
+   stale branches; ownable, post-merge-measurable.
+4. Timeout right-sizing after the lane is fast.
+
+Levers 1 and 2 remain the only ones that reach P99<=15 on worst-case
+header-fanout PRs, and both are operator-reserved (infra load / coverage scope).
