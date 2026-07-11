@@ -14,6 +14,10 @@ edited in both directions:
   removal, attribute changes — mutate the XML document and emit byte-level source
   deltas, which are mirrored back into the source pane in place, preserving the
   surrounding text and formatting rather than regenerating the whole document.
+- **Structural source moves.** Dragging an element's source-gutter handle over
+  another element previews the insertion point on the source and canvas. A valid
+  drop queues one DOM reparent/reorder operation; source deltas then mirror the
+  committed order back into the editor without cut-and-paste string surgery.
 
 Structured editing is on by default (`EditorApp::structuredEditingEnabled()`
 returns `true`). Documents that were not loaded with a source store fall back to
@@ -33,6 +37,9 @@ Guarantees callers can rely on:
   canvas reparse.
 - **Monotonic versioning.** `XMLSourceStore::sourceVersion()` increases on every
   applied edit, and each delta records the version it produced.
+- **Revision-bound structural gestures.** A source move records document
+  generation, frame version, and source hash. Any intervening source or DOM edit
+  rejects the drop instead of applying it to stale elements or offsets.
 
 ## Architecture Snapshot
 
@@ -99,7 +106,15 @@ with the initial source; `resetForLoadedDocument`, `handleTextEdits`,
 `nextTextSyncWakeSeconds`.
 
 `EditorApp`: `structuredEditingEnabled()` / `setStructuredEditingEnabled(bool)`
-(default `true`).
+(default `true`); `moveElementBefore(...)` validates and queues cross-parent or
+same-parent DOM moves used by source dragging.
+
+`SourceStructuralMove` (`donner/editor/SourceStructuralMove.h`):
+`BuildSourceStructuralMovePlan(...)` validates a prospective move without
+mutation; `CommitSourceStructuralMove(...)` revalidates the captured revision and
+queues the DOM operation. The planner rejects the document root, locked
+subtrees, cycles, invalid containers/references, unavailable source ranges, and
+no-op positions.
 
 ## Testing and Observability
 
@@ -112,6 +127,11 @@ with the initial source; `resetForLoadedDocument`, `handleTextEdits`,
 - **`//donner/editor/tests:structured_editing_stress_tests`** — the editor sync
   path under the deterministic replay/stress harness (see
   [Deterministic Replay Testing](deterministic_replay_testing.md)).
+- **`//donner/editor/tests:source_structural_move_tests`** — DOM-first source
+  moves, cross-parent ordering, lock/cycle/root/no-op rejection, terminal-newline
+  canonicalization, and stale-plan rejection.
+- **`//donner/editor/tests:text_editor_tests`** — source-gutter drag event
+  routing, non-mutating preview decoration, and cancellation cleanup.
 
 ## Limitations and Future Extensions
 
@@ -120,3 +140,6 @@ with the initial source; `resetForLoadedDocument`, `handleTextEdits`,
 - When a source edit cannot be reparsed locally, the document falls back to a
   wider reparse scope; the source pane still stays consistent via full-source
   mirroring.
+- Structural source dragging currently moves one complete element before
+  another source-backed element. Arbitrary text drag/drop and cross-document
+  moves are not supported.

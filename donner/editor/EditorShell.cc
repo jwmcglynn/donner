@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cfloat>
 #include <chrono>
 #include <cmath>
@@ -586,6 +587,15 @@ std::string CanonicalizeForTextEditor(std::string_view source) {
     result.pop_back();
   }
   return result;
+}
+
+std::size_t FirstSourceContentOffset(std::string_view source, std::size_t lineStart) {
+  std::size_t offset = std::min(lineStart, source.size());
+  while (offset < source.size() && source[offset] != '\n' && source[offset] != '\r' &&
+         std::isspace(static_cast<unsigned char>(source[offset]))) {
+    ++offset;
+  }
+  return offset;
 }
 
 Box2d ResolveDocumentViewBox(svg::SVGDocument& document) {
@@ -2162,11 +2172,14 @@ void EditorShell::renderSourcePane(float paneOriginY, float paneHeight, float pa
   updateSourceStyleDecorations();
   textEditor_.render("##source",
                      ImVec2(0.0f, diagnosticsHeight > 0.0f ? -diagnosticsHeight : 0.0f));
+  updateSourceStructuralDrag();
   applySourceStyleDecorationChipClick();
   if (textEditor_.takeSourceFocusModeContextMenuToggleRequest()) {
     toggleSourceFocusMode();
   }
-  syncSelectionFromSourceCursorIfNeeded();
+  if (!sourceStructuralDragElement_.has_value()) {
+    syncSelectionFromSourceCursorIfNeeded();
+  }
   const std::optional<std::uint64_t> sourceHoveredDiagnostic =
       textEditor_.hoveredSourceDiagnosticId();
   ImGui::PopFont();
@@ -3725,6 +3738,11 @@ void EditorShell::renderDockSpaceHost(float hostX, float hostY, float hostWidth,
 }
 
 bool EditorShell::highlightSelectionSourceIfNeeded() {
+  if (sourceStructuralDragElement_.has_value()) {
+    textEditor_.clearFocusPartition();
+    return false;
+  }
+
   const auto& selectionNow = app_.selectedElements();
   const bool preserveSourceEditCursor =
       preserveSourceEditFocusCursor_ && sourceFocusMode_ && textEditor_.isCursorInsideFocusRange();
@@ -3837,11 +3855,131 @@ std::vector<svg::SVGElement> EditorShell::referenceHighlightElements() const {
 std::vector<svg::SVGElement> EditorShell::combinedSourcePreviewElements() const {
   std::vector<svg::SVGElement> elements = sourceHoverElements();
   AddUniqueElements(&elements, referenceHighlightElements());
+  if (sourceStructuralDragElement_.has_value()) {
+    const std::array<svg::SVGElement, 1> dragged{*sourceStructuralDragElement_};
+    AddUniqueElements(&elements, dragged);
+  }
+  if (sourceStructuralMoveTarget_.has_value()) {
+    const std::array<svg::SVGElement, 1> target{*sourceStructuralMoveTarget_};
+    AddUniqueElements(&elements, target);
+  }
   if (layersPanelHoverElement_.has_value()) {
     const std::array<svg::SVGElement, 1> hovered{*layersPanelHoverElement_};
     AddUniqueElements(&elements, hovered);
   }
   return elements;
+}
+
+void EditorShell::clearSourceStructuralDrag() {
+  sourceStructuralDragElement_.reset();
+  sourceStructuralMoveTarget_.reset();
+  sourceStructuralMovePlan_.reset();
+  textEditor_.setSourceStructuralMoveDecoration(std::nullopt);
+  if (sourceFocusModeBeforeStructuralDrag_.has_value()) {
+    sourceFocusMode_ = *sourceFocusModeBeforeStructuralDrag_;
+    sourceFocusModeBeforeStructuralDrag_.reset();
+    if (sourceFocusMode_ && app_.hasDocument() && !app_.document().hasPendingMutations()) {
+      updateSourceFocusView(/*scrollToSelection=*/false);
+    }
+  }
+}
+
+void EditorShell::updateSourceStructuralDrag() {
+  if (textEditor_.takeSourceGutterDragCancelled()) {
+    clearSourceStructuralDrag();
+  }
+
+  const std::string source = textEditor_.getText();
+  if (const std::optional<int> startedLine = textEditor_.takeSourceGutterDragStartedLine()) {
+    clearSourceStructuralDrag();
+    sourceFocusModeBeforeStructuralDrag_ = sourceFocusMode_;
+    sourceFocusMode_ = false;
+    textEditor_.clearFocusPartition();
+    if (!app_.hasDocument() || textEditor_.isTextChanged() ||
+        app_.document().hasPendingMutations()) {
+      clearSourceStructuralDrag();
+      textEditor_.cancelSourceGutterDrag();
+      return;
+    }
+    const std::string documentSource =
+        CanonicalizeForTextEditor(app_.document().document().source());
+    if (source != documentSource) {
+      clearSourceStructuralDrag();
+      textEditor_.cancelSourceGutterDrag();
+      return;
+    }
+    const std::size_t lineStart =
+        textEditor_.getByteOffsetAtCoordinates(Coordinates{*startedLine, 0});
+    sourceStructuralDragElement_ = FindElementNearSourceOffset(
+        app_.document().document(), source, FirstSourceContentOffset(source, lineStart));
+    if (!sourceStructuralDragElement_.has_value() ||
+        *sourceStructuralDragElement_ == app_.document().document().svgElement()) {
+      clearSourceStructuralDrag();
+      textEditor_.cancelSourceGutterDrag();
+      return;
+    }
+  }
+
+  const auto evaluateDragTarget = [&](const Coordinates& dragTarget) {
+    if (!sourceStructuralDragElement_.has_value()) {
+      return;
+    }
+    const std::size_t targetOffset =
+        textEditor_.getByteOffsetAtCoordinates(Coordinates{dragTarget.line, 0});
+    sourceStructuralMoveTarget_ = FindElementNearSourceOffset(
+        app_.document().document(), source, FirstSourceContentOffset(source, targetOffset));
+    sourceStructuralMovePlan_.reset();
+
+    SourceStructuralMoveEvaluation evaluation;
+    if (sourceStructuralMoveTarget_.has_value() &&
+        sourceStructuralMoveTarget_->parentElement().has_value()) {
+      evaluation = BuildSourceStructuralMovePlan(app_, source, *sourceStructuralDragElement_,
+                                                 *sourceStructuralMoveTarget_->parentElement(),
+                                                 sourceStructuralMoveTarget_);
+    } else {
+      evaluation.status = SourceStructuralMoveStatus::InvalidReference;
+    }
+    sourceStructuralMovePlan_ = std::move(evaluation.plan);
+
+    SourceByteRange draggedRange;
+    if (sourceStructuralMovePlan_.has_value()) {
+      draggedRange = sourceStructuralMovePlan_->elementRange;
+    } else if (const std::optional<SourceByteRange> range =
+                   ElementSourceByteRange(*sourceStructuralDragElement_, source)) {
+      draggedRange = *range;
+    }
+    std::size_t insertionOffset = targetOffset;
+    if (sourceStructuralMovePlan_.has_value()) {
+      insertionOffset = sourceStructuralMovePlan_->insertionOffset;
+    } else if (sourceStructuralMoveTarget_.has_value()) {
+      if (const std::optional<SourceByteRange> range =
+              ElementSourceByteRange(*sourceStructuralMoveTarget_, source)) {
+        insertionOffset = range->start;
+      }
+    }
+    textEditor_.setSourceStructuralMoveDecoration(TextEditor::SourceStructuralMoveDecoration{
+        .elementRange = draggedRange,
+        .insertionOffset = insertionOffset,
+        .valid = evaluation.status == SourceStructuralMoveStatus::Ready,
+        .message = std::string(SourceStructuralMoveStatusMessage(evaluation.status)),
+    });
+  };
+
+  if (const std::optional<Coordinates> dragTarget = textEditor_.sourceGutterDragTarget()) {
+    evaluateDragTarget(*dragTarget);
+  }
+
+  if (const std::optional<Coordinates> dropTarget = textEditor_.takeSourceGutterDropTarget()) {
+    // Re-evaluate from the release coordinate: the pointer can move and release between drag frames.
+    evaluateDragTarget(*dropTarget);
+    if (sourceStructuralMovePlan_.has_value() &&
+        CommitSourceStructuralMove(app_, *sourceStructuralMovePlan_, source) ==
+            SourceStructuralMoveStatus::Ready) {
+      app_.setSelection(sourceStructuralDragElement_);
+    }
+    clearSourceStructuralDrag();
+    window_.wakeEventLoop();
+  }
 }
 
 void EditorShell::updateSourceHoverPreview() {

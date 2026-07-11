@@ -138,6 +138,24 @@ bool FilledPathIntersectsRect(const Path& path, FillRule fillRule,
   return result.status == PathBooleanStatus::Ok;
 }
 
+bool IsElementOrDescendant(const svg::SVGElement& ancestor, const svg::SVGElement& element) {
+  for (std::optional<svg::SVGElement> current = element; current.has_value();
+       current = current->parentElement()) {
+    if (*current == ancestor) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool IsStructuralMoveContainer(const svg::SVGElement& element) {
+  const std::string tagName(element.tagName().name);
+  constexpr std::array<std::string_view, 10> kContainerTags = {
+      "svg", "g", "defs", "symbol", "a", "marker", "mask", "pattern", "clipPath", "switch",
+  };
+  return std::find(kContainerTags.begin(), kContainerTags.end(), tagName) != kContainerTags.end();
+}
+
 bool GeometryIntersectsRect(const svg::SVGGeometryElement& geometry, const Box2d& documentRect) {
   std::optional<Box2d> bounds = geometry.worldBounds();
   if (!bounds.has_value()) {
@@ -567,7 +585,7 @@ std::vector<AttributeWritebackTarget> CaptureSelectionTargets(
 //   computing a fresh writeback target - against it risks writing a
 //   correctly-shaped but wrongly-targeted patch into the live source text.
 std::optional<svg::SVGElement> ResolveSnapshotElement(AsyncSVGDocument& document,
-                                                       const UndoSnapshot& snapshot) {
+                                                      const UndoSnapshot& snapshot) {
   if (!snapshot.writebackTarget.has_value()) {
     return snapshot.element;
   }
@@ -1182,6 +1200,32 @@ bool EditorApp::reorderElementBeforeSibling(svg::SVGElement element,
   return applyElementMove(element, parent, referenceSibling, "Reorder element");
 }
 
+bool EditorApp::moveElementBefore(svg::SVGElement element, svg::SVGElement parent,
+                                  std::optional<svg::SVGElement> referenceElement,
+                                  std::string_view undoLabel) {
+  if (!document_.hasDocument()) {
+    return false;
+  }
+  const svg::SVGElement root = document_.document().svgElement();
+  if (element == root || !IsElementOrDescendant(root, element) ||
+      !IsElementOrDescendant(root, parent) || IsElementOrDescendant(element, parent) ||
+      !IsStructuralMoveContainer(parent) || IsLocked(element) || IsLocked(parent)) {
+    return false;
+  }
+
+  if (referenceElement.has_value()) {
+    if (*referenceElement == element || referenceElement->parentElement() != parent) {
+      return false;
+    }
+  }
+
+  if (element.parentElement() == parent && element.nextSibling() == referenceElement) {
+    return false;
+  }
+
+  return applyElementMove(element, parent, referenceElement, undoLabel);
+}
+
 bool EditorApp::applyElementMove(svg::SVGElement element, svg::SVGElement parent,
                                  std::optional<svg::SVGElement> referenceElement,
                                  std::string_view undoLabel) {
@@ -1343,7 +1387,7 @@ void EditorApp::setElementVisible(const svg::SVGElement& element, bool visible) 
     std::optional<RcString> authorDisplay = element.getAttribute("display");
     std::optional<std::string> capturedValue =
         authorDisplay.has_value() ? std::optional<std::string>(std::string(*authorDisplay))
-                                   : std::nullopt;
+                                  : std::nullopt;
     if (entryIt != hiddenElementAuthorDisplay_.end()) {
       entryIt->second = std::move(capturedValue);
     } else {
@@ -1364,8 +1408,8 @@ void EditorApp::setElementVisible(const svg::SVGElement& element, bool visible) 
     std::optional<std::string> authorDisplay = std::move(entryIt->second);
     hiddenElementAuthorDisplay_.erase(entryIt);
     if (authorDisplay.has_value() && *authorDisplay != "none") {
-      applyMutation(EditorCommand::SetAttributeCommand(element, "display",
-                                                        std::move(*authorDisplay)));
+      applyMutation(
+          EditorCommand::SetAttributeCommand(element, "display", std::move(*authorDisplay)));
       return;
     }
   }

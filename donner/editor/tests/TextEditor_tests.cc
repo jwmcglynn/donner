@@ -586,6 +586,14 @@ protected:
     };
   }
 
+  [[nodiscard]] ImVec2 SourceGutterHandlePoint(int visualIndex) const {
+    return ImVec2{
+        editor.uiCursorPos_.x + editor.textStart_ - 8.0f * editor.uiScale_,
+        editor.uiCursorPos_.y + static_cast<float>(visualIndex) * editor.charAdvance_.y +
+            editor.charAdvance_.y * 0.5f,
+    };
+  }
+
   [[nodiscard]] int LineMaxColumn(int line) const { return editor.text_.getLineMaxColumn(line); }
 
   [[nodiscard]] bool HasActiveSourceFlash() const {
@@ -5066,6 +5074,89 @@ TEST_F(TextEditorTests, ClickingLineNumberMarginDoesNotMoveCursorThroughRenderPa
   RenderEditorFrameWithMouse(marginPoint, true);
 
   EXPECT_EQ(editor.getCursorPosition(), Coordinates(0, 5));
+}
+
+TEST_F(TextEditorTests, GutterHandleDragPublishesSourceMoveGestureWithoutEditingText) {
+  editor.setText("one\ntwo\nthree");
+  editor.resetTextChanged();
+  RenderEditorFrame();
+
+  const ImVec2 handle = SourceGutterHandlePoint(/*visualIndex=*/0);
+  const ImVec2 target = ScreenPointAtVisualTextOffset(/*visualIndex=*/2,
+                                                      /*visualColumnOffset=*/1);
+  RenderEditorFrameWithMouse(handle, /*mouseDown=*/false);
+  RenderEditorFrameWithMouse(handle, /*mouseDown=*/true);
+
+  EXPECT_EQ(editor.takeSourceGutterDragStartedLine(), 0);
+  ASSERT_TRUE(editor.sourceGutterDragTarget().has_value());
+  EXPECT_EQ(editor.sourceGutterDragTarget()->line, 0);
+
+  RenderEditorFrameWithMouse(target, /*mouseDown=*/true);
+  ASSERT_TRUE(editor.sourceGutterDragTarget().has_value());
+  EXPECT_EQ(editor.sourceGutterDragTarget()->line, 2);
+
+  RenderEditorFrameWithMouse(target, /*mouseDown=*/false);
+  const std::optional<Coordinates> drop = editor.takeSourceGutterDropTarget();
+  ASSERT_TRUE(drop.has_value());
+  EXPECT_EQ(drop->line, 2);
+  EXPECT_EQ(editor.getText(), "one\ntwo\nthree");
+  EXPECT_FALSE(editor.isTextChanged());
+}
+
+TEST_F(TextEditorTests, GutterHandleDropUsesCurrentReleasePosition) {
+  editor.setText("one\ntwo\nthree");
+  RenderEditorFrame();
+
+  const ImVec2 handle = SourceGutterHandlePoint(/*visualIndex=*/0);
+  const ImVec2 release = ScreenPointAtVisualTextOffset(/*visualIndex=*/2,
+                                                       /*visualColumnOffset=*/1);
+  RenderEditorFrameWithMouse(handle, /*mouseDown=*/false);
+  RenderEditorFrameWithMouse(handle, /*mouseDown=*/true);
+  ASSERT_EQ(editor.takeSourceGutterDragStartedLine(), 0);
+
+  // Move and release without a preceding held frame at the destination.
+  RenderEditorFrameWithMouse(release, /*mouseDown=*/false);
+
+  const std::optional<Coordinates> drop = editor.takeSourceGutterDropTarget();
+  ASSERT_TRUE(drop.has_value());
+  EXPECT_EQ(drop->line, 2);
+}
+
+TEST_F(TextEditorTests, StructuralMoveDecorationClampsToSourceAndRenders) {
+  editor.setText("<svg><rect/></svg>");
+
+  EXPECT_TRUE(editor.setSourceStructuralMoveDecoration(TextEditor::SourceStructuralMoveDecoration{
+      .elementRange = SourceByteRange{.start = 5, .end = 999},
+      .insertionOffset = 999,
+      .valid = true,
+      .message = "Move before rect",
+  }));
+  ASSERT_TRUE(editor.sourceStructuralMoveDecoration().has_value());
+  EXPECT_EQ(editor.sourceStructuralMoveDecoration()->elementRange,
+            (SourceByteRange{.start = 5, .end = 18}));
+  EXPECT_EQ(editor.sourceStructuralMoveDecoration()->insertionOffset, 18u);
+
+  RenderEditorFrame();
+
+  EXPECT_TRUE(editor.setSourceStructuralMoveDecoration(std::nullopt));
+  EXPECT_FALSE(editor.sourceStructuralMoveDecoration().has_value());
+}
+
+TEST_F(TextEditorTests, CancellingGutterDragClearsPendingGestureState) {
+  editor.setText("one\ntwo");
+  RenderEditorFrame();
+
+  const ImVec2 handle = SourceGutterHandlePoint(/*visualIndex=*/0);
+  RenderEditorFrameWithMouse(handle, /*mouseDown=*/false);
+  RenderEditorFrameWithMouse(handle, /*mouseDown=*/true);
+  ASSERT_TRUE(editor.sourceGutterDragTarget().has_value());
+
+  editor.cancelSourceGutterDrag();
+
+  EXPECT_FALSE(editor.takeSourceGutterDragStartedLine().has_value());
+  EXPECT_FALSE(editor.sourceGutterDragTarget().has_value());
+  EXPECT_FALSE(editor.takeSourceGutterDropTarget().has_value());
+  EXPECT_TRUE(editor.takeSourceGutterDragCancelled());
 }
 
 TEST_F(TextEditorTests, AltAndShiftHoverDoNotMoveCursorThroughRenderPath) {

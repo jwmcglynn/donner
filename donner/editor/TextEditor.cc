@@ -681,6 +681,11 @@ void TextEditor::handleMouseInputs() {
     return;
   }
 
+  if (sourceGutterDragLine_.has_value()) {
+    io.WantCaptureMouse = true;
+    return;
+  }
+
   const bool click = ImGui::IsMouseClicked(0);
   if (alt || (shift && !click)) {
     return;
@@ -925,6 +930,62 @@ void TextEditor::updateHoveredTextPosition() {
   }
 
   hoveredTextPosition_ = screenPosToCoordinates(mousePos);
+}
+
+void TextEditor::updateSourceGutterDragInput() {
+  if (!showLineNumbers_) {
+    return;
+  }
+
+  ImGuiIO& io = ImGui::GetIO();
+  const ImVec2 mousePos = ImGui::GetMousePos();
+  const ImVec2 local{mousePos.x - uiCursorPos_.x, mousePos.y - uiCursorPos_.y};
+
+  if (sourceGutterDragLine_.has_value()) {
+    io.WantCaptureMouse = true;
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+      sourceGutterDragCancelled_ = true;
+      sourceGutterDragLine_.reset();
+      sourceGutterDragTarget_.reset();
+    } else if (!ImGui::IsWindowHovered()) {
+      if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        sourceGutterDragCancelled_ = true;
+        sourceGutterDragLine_.reset();
+        sourceGutterDragTarget_.reset();
+      }
+    } else if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+      // Resolve the release position from this frame instead of reusing the previous drag frame.
+      // A fast move-and-release can otherwise commit one row behind the pointer.
+      sourceGutterDropTarget_ = screenPosToCoordinates(mousePos);
+      sourceGutterDragLine_.reset();
+      sourceGutterDragTarget_.reset();
+    } else {
+      sourceGutterDragTarget_ = screenPosToCoordinates(mousePos);
+    }
+    return;
+  }
+
+  if (!ImGui::IsWindowHovered()) {
+    return;
+  }
+
+  const float handleWidth = 16.0f * uiScale_;
+  const bool inHandle = local.x >= std::max(0.0f, textStart_ - handleWidth) &&
+                        local.x < textStart_ && local.y >= 0.0f;
+  if (!inHandle || !ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    return;
+  }
+
+  const Coordinates position = screenPosToCoordinates(mousePos);
+  if (position.line < 0 || position.line >= text_.getTotalLines()) {
+    return;
+  }
+  sourceGutterDragLine_ = position.line;
+  sourceGutterDragStartedLine_ = position.line;
+  sourceGutterDragTarget_ = position;
+  sourceGutterDropTarget_.reset();
+  sourceGutterDragCancelled_ = false;
+  io.WantCaptureMouse = true;
 }
 
 void TextEditor::rebuildVisualLines(const ImVec2& contentSize) {
@@ -1508,6 +1569,24 @@ void TextEditor::renderLineBackground(const VisualLine& visualLine, const ImVec2
         ImGui::ColorConvertFloat4ToU32(color));
   }
 
+  if (sourceStructuralMoveDecoration_.has_value()) {
+    const SourceStructuralMoveDecoration& decoration = *sourceStructuralMoveDecoration_;
+    const ImVec4 previewColor =
+        decoration.valid ? ImVec4(0.20f, 0.78f, 0.70f, 0.14f) : ImVec4(0.95f, 0.30f, 0.28f, 0.14f);
+    drawSourceRange(decoration.elementRange, ImGui::ColorConvertFloat4ToU32(previewColor));
+
+    const Coordinates insertion = getCoordinatesAtByteOffset(decoration.insertionOffset);
+    if (insertion.line == visualLine.lineNo && insertion.column >= visualLine.startColumn &&
+        insertion.column <= visualLine.endColumn) {
+      const ImU32 lineColor =
+          ImGui::ColorConvertFloat4ToU32(decoration.valid ? ImVec4(0.20f, 0.78f, 0.70f, 0.95f)
+                                                          : ImVec4(0.95f, 0.30f, 0.28f, 0.95f));
+      drawList->AddLine(ImVec2(lineStart.x + textStart_, lineStart.y),
+                        ImVec2(lineStart.x + contentSize.x, lineStart.y), lineColor,
+                        2.0f * uiScale_);
+    }
+  }
+
   const std::vector<ActiveFlash> flashes =
       flashDecorations_.activeBackgrounds(FlashDecorations::Clock::now());
   for (const ActiveFlash& flash : flashes) {
@@ -1994,6 +2073,14 @@ void TextEditor::remapFocusMetadataForSourceEdit(const SourceEditIntent& intent)
                    })) {
     activeSourceDiagnosticId_.reset();
   }
+  if (sourceGutterDragLine_.has_value()) {
+    sourceGutterDragCancelled_ = true;
+  }
+  sourceGutterDragLine_.reset();
+  sourceGutterDragStartedLine_.reset();
+  sourceGutterDragTarget_.reset();
+  sourceGutterDropTarget_.reset();
+  sourceStructuralMoveDecoration_.reset();
 
   for (SourceStyleDecoration& decoration : sourceStyleDecorations_) {
     decoration.range = MapSourceByteRangeForEdit(decoration.range, intent, bufferSize);
@@ -2691,6 +2778,53 @@ bool TextEditor::setActiveSourceDiagnosticId(std::optional<std::uint64_t> id) {
   return changed || id.has_value();
 }
 
+std::optional<int> TextEditor::takeSourceGutterDragStartedLine() {
+  std::optional<int> line = sourceGutterDragStartedLine_;
+  sourceGutterDragStartedLine_.reset();
+  return line;
+}
+
+std::optional<Coordinates> TextEditor::takeSourceGutterDropTarget() {
+  std::optional<Coordinates> target = sourceGutterDropTarget_;
+  sourceGutterDropTarget_.reset();
+  return target;
+}
+
+bool TextEditor::takeSourceGutterDragCancelled() {
+  const bool cancelled = sourceGutterDragCancelled_;
+  sourceGutterDragCancelled_ = false;
+  return cancelled;
+}
+
+void TextEditor::cancelSourceGutterDrag() {
+  if (sourceGutterDragLine_.has_value()) {
+    sourceGutterDragCancelled_ = true;
+  }
+  sourceGutterDragLine_.reset();
+  sourceGutterDragStartedLine_.reset();
+  sourceGutterDragTarget_.reset();
+  sourceGutterDropTarget_.reset();
+  sourceStructuralMoveDecoration_.reset();
+}
+
+bool TextEditor::setSourceStructuralMoveDecoration(
+    std::optional<SourceStructuralMoveDecoration> decoration) {
+  if (decoration.has_value()) {
+    const std::size_t bufferSize = getText().size();
+    decoration->elementRange.start = std::min(decoration->elementRange.start, bufferSize);
+    decoration->elementRange.end = std::min(decoration->elementRange.end, bufferSize);
+    decoration->insertionOffset = std::min(decoration->insertionOffset, bufferSize);
+    if (decoration->elementRange.end <= decoration->elementRange.start) {
+      decoration.reset();
+    }
+  }
+  if (sourceStructuralMoveDecoration_ == decoration) {
+    return false;
+  }
+  sourceStructuralMoveDecoration_ = std::move(decoration);
+  return true;
+}
+
 void TextEditor::renderSourceDiagnosticTooltip() {
   const std::optional<std::uint64_t> hovered = hoveredSourceDiagnosticId();
   if (!hovered.has_value()) {
@@ -2715,6 +2849,17 @@ void TextEditor::renderSourceDiagnosticTooltip() {
   ImGui::PushTextWrapPos(420.0f * uiScale_);
   ImGui::TextUnformatted(it->message.c_str());
   ImGui::PopTextWrapPos();
+  ImGui::EndTooltip();
+}
+
+void TextEditor::renderSourceStructuralMoveTooltip() {
+  if (!sourceStructuralMoveDecoration_.has_value() ||
+      sourceStructuralMoveDecoration_->message.empty()) {
+    return;
+  }
+
+  ImGui::BeginTooltip();
+  ImGui::TextUnformatted(sourceStructuralMoveDecoration_->message.c_str());
   ImGui::EndTooltip();
 }
 
@@ -3022,6 +3167,23 @@ void TextEditor::renderLineNumbers(int lineNo, const ImVec2& pos, ImDrawList* dr
 
   drawList->AddText(ImVec2(pos.x + textStart_ - lineNoWidth, pos.y),
                     palette_[static_cast<int>(ColorIndex::LineNumber)], buf);
+
+  const float handleX = pos.x + textStart_ - 8.0f * uiScale_;
+  const bool handleHovered = ImGui::IsMouseHoveringRect(
+      ImVec2(handleX - 8.0f * uiScale_, pos.y), ImVec2(pos.x + textStart_, pos.y + charAdvance_.y));
+  if (handleHovered || sourceGutterDragLine_ == lineNo) {
+    const ImU32 color = sourceGutterDragLine_ == lineNo
+                            ? ImGui::ColorConvertFloat4ToU32(ImVec4(0.20f, 0.78f, 0.70f, 1.0f))
+                            : palette_[static_cast<int>(ColorIndex::LineNumber)];
+    const float centerY = pos.y + charAdvance_.y * 0.5f;
+    for (int row = -1; row <= 1; ++row) {
+      drawList->AddCircleFilled(ImVec2(handleX, centerY + row * 3.0f * uiScale_), 1.0f * uiScale_,
+                                color);
+    }
+    if (handleHovered) {
+      ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    }
+  }
 }
 
 namespace {
@@ -3867,6 +4029,7 @@ void TextEditor::render(std::string_view title, const ImVec2& size, bool showBor
   uiCursorPos_ = ImGui::GetCursorScreenPos();
   visualLayoutMaxColumns_ = 0;
   rebuildVisualLines(ImGui::GetWindowContentRegionMax());
+  updateSourceGutterDragInput();
   updateHoveredTextPosition();
 
   if (handleKeyboardInputs_) {
@@ -3882,6 +4045,7 @@ void TextEditor::render(std::string_view title, const ImVec2& size, bool showBor
   readyForAutocomplete_ = true;
   renderInternal(title);
   renderSourceDiagnosticTooltip();
+  renderSourceStructuralMoveTooltip();
 
   // Scrollbar markers
   if (scrollbarMarkers_) {

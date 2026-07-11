@@ -1,6 +1,6 @@
 # Design: Semantic Text Editing
 
-**Status:** Design
+**Status:** Implementing
 **Author:** GPT-5
 **Created:** 2026-05-25
 
@@ -79,13 +79,13 @@ anonymous text.
 - [ ] Milestone 3: CSS semantic completions.
   - [ ] Pair CSS strings, braces, parentheses, and comments in `<style>` and inline `style=""`.
   - [ ] Use CSS tokenizer state to avoid pairing delimiters inside existing CSS strings/comments.
-- [ ] Milestone 4: Source block movement.
-  - [ ] Render a move chip above the top-left of a selected element's source range when that range
-        maps cleanly to one XML node.
-  - [ ] Drag the chip over legal source drop targets and preview the insertion point without
-        changing text selection mid-drag.
-  - [ ] Apply the move as a DOM/source operation that preserves the moved element selection and
-        scrolls the new source range into view.
+- [x] Milestone 4: Source block movement.
+  - [x] Render a compact gutter handle beside source-backed element lines.
+  - [x] Drag the handle over legal source drop targets and preview the insertion point without
+        changing text selection mid-drag. Focus mode temporarily reveals the complete source while
+        the gesture is active.
+  - [x] Apply the move as a revision-bound DOM/source operation that preserves the moved element
+        selection and mirrors the new source order in place.
 - [ ] Milestone 5: Editor integration and verification.
   - [ ] Route completions through the same undo path as normal typing.
   - [ ] Add regression tests for focus-mode scrolling, selection preservation, and parseable
