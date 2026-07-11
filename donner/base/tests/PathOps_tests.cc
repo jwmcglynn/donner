@@ -1576,4 +1576,186 @@ TEST(PathOpsTest, DeterministicCurvedCommandOrder) {
   EXPECT_EQ(PathData(first), PathData(second));
 }
 
+TEST(PathOpsTest, DuplicateInputShortcutRespectsOutputCommandCap) {
+  // The duplicate-input shortcut returns the shared path directly, but must
+  // still honor the output command cap.
+  PathBooleanOptions options;
+  options.maxOutputCommands = 2;
+  const std::array<PathBooleanInput, 2> inputs = {
+      Input(RectPath(10, 10, 40, 40)),
+      Input(RectPath(10, 10, 40, 40)),
+  };
+
+  const PathBooleanResult result = ApplyPathBoolean(PathBooleanOp::Union, inputs, options);
+
+  EXPECT_EQ(result.status, PathBooleanStatus::TooComplex);
+  EXPECT_THAT(result.paths, IsEmpty());
+  EXPECT_THAT(Diagnostics(result), HasSubstr("maxOutputCommands"));
+}
+
+TEST(PathOpsTest, XorOfThreeDuplicateInputsKeepsRegion) {
+  // Xor over an odd number of identical regions covers each point an odd
+  // number of times, so the region itself survives.
+  const std::array<PathBooleanInput, 3> inputs = {
+      Input(RectPath(10, 10, 40, 40)),
+      Input(RectPath(10, 10, 40, 40)),
+      Input(RectPath(10, 10, 40, 40)),
+  };
+
+  const PathBooleanResult result = ApplyPathBoolean(PathBooleanOp::Xor, inputs);
+
+  ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
+  EXPECT_EQ(PathData(result), "M 10 10 L 50 10 L 50 50 L 10 50 Z");
+}
+
+TEST(PathOpsTest, UnionWithClosedLoopCubicCrossingRect) {
+  // A single cubic segment that starts and ends at the same point (a closed
+  // loop with a zero-length chord) participates in winding classification.
+  Path teardrop =
+      PathBuilder().moveTo({0, 0}).curveTo({-30, -60}, {30, -60}, {0, 0}).closePath().build();
+
+  const PathBooleanResult result =
+      Boolean(PathBooleanOp::Union, {Input(std::move(teardrop)), Input(RectPath(-50, -10, 100, 20))});
+
+  ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
+  const Path& path = result.paths.front();
+  EXPECT_THAT(path, IsInside(Vector2d(0, -30)));  // Loop interior above the rect.
+  EXPECT_THAT(path, IsInside(Vector2d(0, 0)));    // Rect interior.
+  EXPECT_THAT(path, IsOutside(Vector2d(20, -30)));
+  EXPECT_THAT(path, IsOutside(Vector2d(0, -50)));
+}
+
+TEST(PathOpsTest, UnionDropsDisjointSingleSegmentLoopContour) {
+  // Characterization: a contour made of exactly one closed segment (start and
+  // end quantize to the same point) is currently skipped by output tracing, so
+  // a disjoint union keeps only the other input.
+  Path teardrop =
+      PathBuilder().moveTo({0, 0}).curveTo({-30, -60}, {30, -60}, {0, 0}).closePath().build();
+
+  const PathBooleanResult result =
+      Boolean(PathBooleanOp::Union, {Input(std::move(teardrop)), Input(RectPath(100, 0, 50, 50))});
+
+  ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
+  const Path& path = result.paths.front();
+  EXPECT_THAT(path, CommandCountIs(Path::Verb::MoveTo, 1u));
+  EXPECT_THAT(path, IsInside(Vector2d(125, 25)));
+  EXPECT_THAT(path, IsOutside(Vector2d(0, -30)));
+}
+
+TEST(PathOpsTest, IntersectOfOppositeDirectionContainedBoundaryContainedInputFirstIsEmpty) {
+  // Same coincident-contained boundary as the container-first test, but with
+  // the short contained segment appearing first in segment order.
+  const PathBooleanResult result = Boolean(
+      PathBooleanOp::Intersect,
+      {Input(RegionAboveReversedLineContainedBoundary()), Input(RegionBelowLineBoundary())});
+
+  EXPECT_EQ(result.status, PathBooleanStatus::EmptyResult) << Diagnostics(result);
+  EXPECT_THAT(result.paths, IsEmpty());
+}
+
+TEST(PathOpsTest, UnionIgnoresZeroLengthSegmentFromDuplicateVertex) {
+  // A duplicated vertex produces a zero-length line segment. It cannot carry
+  // an intersection parameterization or a boundary orientation, so it must be
+  // ignored without corrupting the union of the two rects.
+  Path dupVertexRect = PathBuilder()
+                           .moveTo({0, 0})
+                           .lineTo({0, 0})
+                           .lineTo({100, 0})
+                           .lineTo({100, 100})
+                           .lineTo({0, 100})
+                           .closePath()
+                           .build();
+
+  const PathBooleanResult result =
+      Boolean(PathBooleanOp::Union, {Input(std::move(dupVertexRect)), Input(RectPath(0, -50, 50, 50))});
+
+  ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
+  const Path& path = result.paths.front();
+  EXPECT_THAT(path, IsInside(Vector2d(50, 50)));
+  EXPECT_THAT(path, IsInside(Vector2d(25, -25)));
+  EXPECT_THAT(path, IsOutside(Vector2d(75, -25)));
+  EXPECT_THAT(path, IsOutside(Vector2d(-10, 50)));
+}
+
+TEST(PathOpsTest, UnionIgnoresZeroLengthSegmentAgainstCurve) {
+  // The zero-length segment's bounding box also overlaps curve segments; the
+  // line-curve intersection must reject the degenerate line gracefully.
+  Path dupVertexRect = PathBuilder()
+                           .moveTo({0, 0})
+                           .lineTo({0, 0})
+                           .lineTo({100, 0})
+                           .lineTo({100, 100})
+                           .lineTo({0, 100})
+                           .closePath()
+                           .build();
+
+  const PathBooleanResult result = Boolean(
+      PathBooleanOp::Union, {Input(std::move(dupVertexRect)), Input(CirclePath({-20, -20}, 30))});
+
+  ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
+  ASSERT_THAT(result.paths, Not(IsEmpty()));
+  const Path& path = result.paths.front();
+  EXPECT_THAT(path, IsInside(Vector2d(50, 50)));
+  EXPECT_THAT(path, IsInside(Vector2d(-40, -20)));
+  EXPECT_THAT(path, IsOutside(Vector2d(-45, 20)));
+}
+
+TEST(PathOpsTest, IntersectEmptyWhenQuadraticNeverCrossesRectEdgeLine) {
+  // The rect's top edge sits 5e-7 below the arch apex: close enough that the
+  // segment bounding boxes overlap, but the edge's infinite line never crosses
+  // the quadratic (negative discriminant). No intersections, empty result.
+  const PathBooleanResult result =
+      Boolean(PathBooleanOp::Intersect,
+              {Input(RegionBelowQuadraticArch()), Input(RectPath(40, 10, 20, 14.9999995))});
+
+  EXPECT_EQ(result.status, PathBooleanStatus::EmptyResult) << Diagnostics(result);
+  EXPECT_THAT(result.paths, IsEmpty());
+  EXPECT_THAT(Diagnostics(result), HasSubstr("after classifying"));
+}
+
+TEST(PathOpsTest, HugeOutputCommandCapDoesNotOverflowTraceBudget) {
+  // A maximal output command cap must not overflow the contour search budget
+  // computation; the operation behaves exactly like the default.
+  PathBooleanOptions options;
+  options.maxOutputCommands = std::numeric_limits<std::size_t>::max();
+  const std::array<PathBooleanInput, 2> inputs = {
+      Input(RectPath(10, 10, 40, 40)),
+      Input(RectPath(30, 25, 40, 20)),
+  };
+
+  const PathBooleanResult result = ApplyPathBoolean(PathBooleanOp::Intersect, inputs, options);
+
+  ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
+  EXPECT_EQ(PathData(result), "M 30 25 L 50 25 L 50 45 L 30 45 Z");
+}
+
+TEST(PathOpsTest, IntersectOfCollinearBoundariesSeparatedBeyondToleranceIsEmpty) {
+  // Two slivers with collinear diagonal boundaries separated by ~1.27e-6 in
+  // parameter space: the boxes overlap within tolerance, but the collinear
+  // spans do not, so no intersections are recorded and the result is empty.
+  Path sliverA = PathBuilder()
+                     .moveTo({0, 0})
+                     .lineTo({0.7, 0.7})
+                     .lineTo({0.7, 1.5})
+                     .lineTo({0, 0.8})
+                     .closePath()
+                     .build();
+  Path sliverB = PathBuilder()
+                     .moveTo({0.7000009, 0.7000009})
+                     .lineTo({1.4, 1.4})
+                     .lineTo({1.4, 2.2})
+                     .lineTo({0.7000009, 1.5000009})
+                     .closePath()
+                     .build();
+
+  const PathBooleanResult result =
+      Boolean(PathBooleanOp::Intersect, {Input(std::move(sliverA)), Input(std::move(sliverB))});
+
+  EXPECT_EQ(result.status, PathBooleanStatus::EmptyResult) << Diagnostics(result);
+  EXPECT_THAT(result.paths, IsEmpty());
+}
+
 }  // namespace donner

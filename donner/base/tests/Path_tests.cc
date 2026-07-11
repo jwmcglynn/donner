@@ -3,6 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <sstream>
@@ -2677,6 +2678,240 @@ TEST(PathToSVGPathData, LargeNegativeIntegerValues) {
 TEST(PathToSVGPathData, ZeroCoordinates) {
   Path path = PathBuilder().moveTo({0, 0}).lineTo({0, 0}).build();
   EXPECT_EQ(path.toSVGPathData(), "M 0 0 L 0 0");
+}
+
+// =============================================================================
+// Edge-case and degenerate-input behavior
+// =============================================================================
+
+TEST(Path, PathLengthDeepSubdivisionTerminates) {
+  // A cubic with extreme control points never satisfies the flatness tolerance,
+  // so the recursive length measurement must terminate at its depth cap and
+  // still return a sane approximation.
+  Path path =
+      PathBuilder().moveTo({0, 0}).curveTo({1000000, 1000000}, {-1000000, 1000000}, {1, 0}).build();
+
+  const double length = path.pathLength();
+
+  EXPECT_TRUE(std::isfinite(length));
+  // The curve reaches y = 750000 at t=0.5 and returns, so the true arc length
+  // is at least 1.5e6. It can never exceed the control polygon length (~4.83e6).
+  EXPECT_GE(length, 1.5e6);
+  EXPECT_LE(length, 4.83e6);
+}
+
+TEST(Path, PointAtArcLengthContinuesPastClosePathIntoNextSubpath) {
+  // Subpath 1: 10 units out plus a 10-unit closing edge; subpath 2: 10 more.
+  Path path = PathBuilder()
+                  .moveTo({0, 0})
+                  .lineTo({10, 0})
+                  .closePath()
+                  .moveTo({20, 0})
+                  .lineTo({30, 0})
+                  .build();
+
+  // Distance 25 = 10 (line) + 10 (close) + 5 into the second subpath's line.
+  const Path::PointOnPath result = path.pointAtArcLength(25.0);
+
+  EXPECT_TRUE(result.valid);
+  ExpectNear(result.point, Vector2d(25, 0));
+  EXPECT_NEAR(result.angle, 0.0, 1e-9);
+}
+
+TEST(Path, VerticesMoveToThenClosePathFallsBackThroughMoveToTangent) {
+  // "M 5,5 Z": the zero-length ClosePath has no tangent of its own; the
+  // fallback consults the MoveTo's tangent, which forwards to the ClosePath
+  // and also resolves to zero. The single vertex keeps a zero orientation.
+  Path path = PathBuilder().moveTo({5, 5}).closePath().build();
+
+  std::vector<Path::Vertex> verts = path.vertices();
+
+  ASSERT_EQ(verts.size(), 1u);
+  ExpectNear(verts[0].point, Vector2d(5, 5));
+  ExpectNear(verts[0].orientation, Vector2d(0, 0));
+}
+
+TEST(Path, VerticesDegenerateCubicEndTangentFallsBackToEarlierControlPoints) {
+  // Cubic where c2 == end: the end tangent (P3 - P2) is zero, so it falls back
+  // to P3 - P1 = (5, 0). The interior vertex orientation bisects the incoming
+  // +x direction with the outgoing +y line.
+  Path partial = PathBuilder()
+                     .moveTo({0, 0})
+                     .curveTo({5, 0}, {10, 0}, {10, 0})
+                     .lineTo({10, 10})
+                     .build();
+  std::vector<Path::Vertex> partialVerts = partial.vertices();
+  ASSERT_EQ(partialVerts.size(), 3u);
+  ExpectNear(partialVerts[1].point, Vector2d(10, 0));
+  ExpectNear(partialVerts[1].orientation, Vector2d(std::sqrt(0.5), std::sqrt(0.5)));
+
+  // Cubic where c1 == c2 == end: both control-point differences are zero, so
+  // the tangent falls all the way back to the end - start chord (+x again).
+  Path chord = PathBuilder()
+                   .moveTo({0, 0})
+                   .curveTo({10, 0}, {10, 0}, {10, 0})
+                   .lineTo({10, 10})
+                   .build();
+  std::vector<Path::Vertex> chordVerts = chord.vertices();
+  ASSERT_EQ(chordVerts.size(), 3u);
+  ExpectNear(chordVerts[1].point, Vector2d(10, 0));
+  ExpectNear(chordVerts[1].orientation, Vector2d(std::sqrt(0.5), std::sqrt(0.5)));
+}
+
+TEST(Path, ToMonotonicPreservesClosePath) {
+  Path path = PathBuilder().moveTo({0, 0}).quadTo({5, 10}, {10, 0}).closePath().build();
+
+  Path monotonic = path.toMonotonic();
+
+  // The quadratic splits at its Y apex (5, 5); the ClosePath is preserved.
+  EXPECT_EQ(monotonic.toSVGPathData(), "M 0 0 Q 2.5 5 5 5 Q 7.5 5 10 0 Z");
+}
+
+TEST(Path, StrokeToFillRoundJoinArcCrossesAngleWrap) {
+  // Segments heading at 100 degrees then 80 degrees meet at the origin. The
+  // outside round join sweeps from normal angle -170 degrees to +170 degrees,
+  // whose atan2 difference (5.93 rad) must be normalized to the short -20
+  // degree arc that passes through 180 degrees.
+  const Vector2d kStart(1.7364817766693041, -9.84807753012208);
+  const Vector2d kEnd(1.7364817766693041, 9.84807753012208);
+  Path path = PathBuilder().moveTo(kStart).lineTo({0, 0}).lineTo(kEnd).build();
+
+  StrokeStyle style;
+  style.width = 2.0;
+  style.join = LineJoin::Round;
+  Path filled = path.strokeToFill(style);
+  ASSERT_FALSE(filled.empty());
+
+  // The arc midpoint lands at angle 180 degrees: vertex + halfWidth * (-1, 0).
+  double minDistanceToArcMid = std::numeric_limits<double>::infinity();
+  double minDistanceToWrongSide = std::numeric_limits<double>::infinity();
+  for (const Vector2d& point : filled.points()) {
+    minDistanceToArcMid = std::min(minDistanceToArcMid, point.distance(Vector2d(-1, 0)));
+    minDistanceToWrongSide = std::min(minDistanceToWrongSide, point.distance(Vector2d(1, 0)));
+  }
+  EXPECT_LT(minDistanceToArcMid, 1e-6);
+  // A non-normalized sweep would trace the long way around and place an arc
+  // point at exactly (1, 0); the nearest legitimate outline points are the
+  // inside-join connectors at distance ~0.175.
+  EXPECT_GT(minDistanceToWrongSide, 0.1);
+}
+
+TEST(Path, StrokeToFillNearExact180ReversalMiterDoesNotSpike) {
+  // The second segment folds back at an angle of (pi - 1.5e-10): far enough
+  // from parallel to pass the colinearity gate, but so close to a U-turn that
+  // the miter intersection is numerically unrepresentable. Both the outside
+  // miter and the inside miter must fall back to short connectors instead of
+  // emitting a ~1e10-unit spike.
+  StrokeStyle style;
+  style.width = 2.0;
+  style.join = LineJoin::Miter;
+
+  Path outsideTurn =
+      PathBuilder().moveTo({0, 0}).lineTo({1, 0}).lineTo({0, -1.5e-10}).build();
+  Path outsideFilled = outsideTurn.strokeToFill(style);
+  ASSERT_FALSE(outsideFilled.empty());
+  Box2d outsideBounds = outsideFilled.bounds();
+  EXPECT_LE(outsideBounds.width(), 1.5);
+  EXPECT_LE(outsideBounds.height(), 2.5);
+
+  Path insideTurn = PathBuilder().moveTo({0, 0}).lineTo({1, 0}).lineTo({0, 1.5e-10}).build();
+  Path insideFilled = insideTurn.strokeToFill(style);
+  ASSERT_FALSE(insideFilled.empty());
+  Box2d insideBounds = insideFilled.bounds();
+  EXPECT_LE(insideBounds.width(), 1.5);
+  EXPECT_LE(insideBounds.height(), 2.5);
+}
+
+TEST(Path, StrokeToFillMultipleOpenSubpaths) {
+  // Two disjoint open subpaths each produce their own stroke ribbon.
+  Path path = PathBuilder()
+                  .moveTo({0, 0})
+                  .lineTo({10, 0})
+                  .moveTo({0, 10})
+                  .lineTo({10, 10})
+                  .build();
+
+  StrokeStyle style;
+  style.width = 2.0;
+  Path filled = path.strokeToFill(style);
+
+  ASSERT_FALSE(filled.empty());
+  EXPECT_EQ(countSubpaths(filled), 2u);
+  EXPECT_TRUE(filled.isInside({5, 0}));
+  EXPECT_TRUE(filled.isInside({5, 10}));
+  EXPECT_FALSE(filled.isInside({5, 5}));
+}
+
+TEST(Path, StrokeToFillCurveBoundaryOverridesSkipSubpathsWithoutCurves) {
+  // The first subpath has no curve junctions; the exact-tangent override for
+  // the second subpath's line/quad junction must skip past it and attach to
+  // the correct vertex, keeping both ribbons well-formed.
+  Path path = PathBuilder()
+                  .moveTo({0, 0})
+                  .lineTo({10, 0})
+                  .moveTo({0, 20})
+                  .lineTo({10, 20})
+                  .quadTo({15, 20}, {20, 25})
+                  .build();
+
+  StrokeStyle style;
+  style.width = 2.0;
+  Path filled = path.strokeToFill(style);
+
+  ASSERT_FALSE(filled.empty());
+  EXPECT_EQ(countSubpaths(filled), 2u);
+  EXPECT_TRUE(filled.isInside({5, 0}));
+  EXPECT_TRUE(filled.isInside({5, 20}));
+  EXPECT_TRUE(filled.isInside({19, 24}));
+  EXPECT_FALSE(filled.isInside({5, 10}));
+}
+
+TEST(Path, StrokeToFillQuadWithControlAtEndUsesChordExitTangent) {
+  // Quadratic whose control point coincides with its endpoint: the exit
+  // tangent at the curve/line junction falls back to the end - start chord
+  // (+x), so the 90 degree miter corner is placed exactly as for a straight
+  // horizontal segment.
+  Path path = PathBuilder().moveTo({0, 0}).quadTo({10, 0}, {10, 0}).lineTo({10, 10}).build();
+
+  StrokeStyle style;
+  style.width = 2.0;
+  style.join = LineJoin::Miter;
+  Path filled = path.strokeToFill(style);
+
+  ASSERT_FALSE(filled.empty());
+  EXPECT_TRUE(filled.isInside({5, 0.5}));
+  EXPECT_TRUE(filled.isInside({10, 5}));
+  // Outer miter corner of the 90 degree turn reaches (11, -1).
+  EXPECT_TRUE(filled.isInside({10.9, -0.9}));
+  EXPECT_FALSE(filled.isInside({5, 5}));
+}
+
+TEST(Path, StrokeToFillDashCountIsCapped) {
+  // A pathological dash pattern (200000 dashes on a 200-unit line) truncates
+  // at the 65536-dash safety cap instead of hanging or exhausting memory.
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({200, 0}).build();
+
+  StrokeStyle style;
+  style.width = 1.0;
+  style.dashArray = {0.001, 0.001};
+  Path filled = path.strokeToFill(style);
+
+  ASSERT_FALSE(filled.empty());
+  EXPECT_EQ(countSubpaths(filled), 65536u);
+  // 65536 on/off pairs of 0.001 each cover exactly [0, 131.072].
+  EXPECT_NEAR(filled.bounds().bottomRight.x, 131.072, 0.01);
+}
+
+TEST(PathBuilder, ArcToDegenerateTinyGeometryFallsBackToLine) {
+  // Radii and endpoint distance are so small that the center equation
+  // degenerates; the arc must fall back to a straight line to the endpoint.
+  Path path =
+      PathBuilder().moveTo({0, 0}).arcTo({1e-8, 1e-8}, 0.0, false, false, {2e-7, 0}).build();
+
+  EXPECT_THAT(path.commands(), testing::ElementsAre(PathCommandVerbIs(Path::Verb::MoveTo),
+                                                    PathCommandVerbIs(Path::Verb::LineTo)));
+  ASSERT_EQ(path.points().size(), 2u);
+  ExpectNear(path.points()[1], Vector2d(2e-7, 0), 1e-20);
 }
 
 }  // namespace donner
