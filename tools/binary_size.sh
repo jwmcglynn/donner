@@ -109,11 +109,14 @@ echo '```'
 ## bridge). Skipped automatically when emcc is not on PATH.
 ##
 if [[ -z "$SKIP_WASM" ]] && command -v emcc >/dev/null 2>&1; then
+  # wasm-size is the size-optimized production config (see .bazelrc). Override
+  # with WASM_CONFIG=wasm to measure the unoptimized dev build instead.
+  WASM_CONFIG="${WASM_CONFIG:-wasm-size}"
   echo ""
-  echo "### WebAssembly build (\`//donner/svg/renderer/wasm:donner_wasm\`)"
+  echo "### WebAssembly build (\`//donner/svg/renderer/wasm:donner_wasm\`, --config=$WASM_CONFIG)"
   echo ""
 
-  bazel build "${BAZEL_QUIET_OPTIONS[@]}" "${BAZEL_LOCAL_OPTIONS[@]}" --config=wasm //donner/svg/renderer/wasm:donner_wasm
+  bazel build "${BAZEL_QUIET_OPTIONS[@]}" "${BAZEL_LOCAL_OPTIONS[@]}" --config="$WASM_CONFIG" //donner/svg/renderer/wasm:donner_wasm
 
   cp -f bazel-bin/donner/svg/renderer/wasm/donner_wasm_bin.wasm build-binary-size/donner_wasm.wasm
   cp -f bazel-bin/donner/svg/renderer/wasm/donner_wasm_bin.js build-binary-size/donner_wasm.js
