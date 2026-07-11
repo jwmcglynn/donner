@@ -327,8 +327,23 @@ jobs:
           }
           trap cleanup EXIT
 
-          if ! git worktree add --detach "$head_dir" "$HEAD_SHA"; then
-            echo "Failed to check out PR head; using full coverage target set."
+          # Hash the current base TIP against the PR's MERGE commit (the
+          # workspace checkout, refs/pull/N/merge), not against HEAD_SHA.
+          # Hashing base-tip vs HEAD_SHA attributes post-fork drift on main to
+          # the PR, inflating the affected set on any branch that has not
+          # rebased (measured up to 126x over-inclusion; see
+          # docs/design_docs/0029-2). In the tip-vs-merge comparison, drift is
+          # present on BOTH sides, so unchanged-by-the-PR targets hash
+          # identically and drop out; and because the merge graph is the one
+          # hashed, reverse dependencies that exist ONLY in the merge (a dep
+          # edge added on main after the fork onto code this PR touches) are
+          # still caught - the coverage job builds this same merge ref.
+          # Fail closed: if the workspace is not a merge commit (e.g. a
+          # checkout override), it IS the PR head and this degrades to exactly
+          # the old base-tip-vs-head comparison.
+          merge_sha="$(git rev-parse HEAD)"
+          if ! git worktree add --detach "$head_dir" "$merge_sha"; then
+            echo "Failed to check out PR merge commit; using full coverage target set."
             emit_targets true head_checkout_failed "$FULL_COVERAGE_TARGETS"
             exit 0
           fi

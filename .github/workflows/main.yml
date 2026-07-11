@@ -398,7 +398,22 @@ jobs:
           }
           trap cleanup EXIT
 
-          git worktree add --detach "$head_dir" "$HEAD_SHA"
+          # Hash the current base TIP against the PR's MERGE commit (the
+          # workspace checkout, refs/pull/N/merge), not against HEAD_SHA.
+          # Hashing base-tip vs HEAD_SHA attributes post-fork drift on main to
+          # the PR, inflating the affected set on any branch that has not
+          # rebased (measured up to 126x over-inclusion; see
+          # docs/design_docs/0029-2). In the tip-vs-merge comparison, drift is
+          # present on BOTH sides, so unchanged-by-the-PR targets hash
+          # identically and drop out; and because the merge graph is the one
+          # hashed, reverse dependencies that exist ONLY in the merge (a dep
+          # edge added on main after the fork onto code this PR touches) are
+          # still caught - the downstream jobs build this same merge ref.
+          # Fail closed: if the workspace is not a merge commit (e.g. a
+          # checkout override), it IS the PR head and this degrades to exactly
+          # the old base-tip-vs-head comparison.
+          merge_sha="$(git rev-parse HEAD)"
+          git worktree add --detach "$head_dir" "$merge_sha"
 
           cached_base="$HOME/.cache/bazel-diff-base-hashes/$BASE_SHA.json"
           if [[ -s "$cached_base" ]]; then
@@ -624,7 +639,14 @@ jobs:
       # remote execution is down/degraded: a CPU-capped runner executing the
       # whole graph locally is the measured 2-3 h tail. Fast-fail on RE
       # degradation; the wedge-watch + rerun recover.
-      BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS: "--remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=5s"
+      # --remote_timeout is 60s (not 5s) for the same reason as the coverage
+      # lane: a healthy-but-BUSY endpoint legitimately takes >5s on bulk
+      # transfers under a multi-job burst (observed as spurious
+      # DEADLINE_EXCEEDED-after-4.999s failures on full-`//...` fallback runs,
+      # 2026-07-11, twice in a row on organic load; same signature as the
+      # 2026-07-02 coverage-lane incident that motivated coverage.yml's 60s).
+      # 60s still fast-fails a genuinely dead endpoint.
+      BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS: "--remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s"
       # Every self-hosted run uploads Bazel profiles + BEP + compact execution
       # logs so slow runs can be attributed to targets/actions without live
       # SSH. Keep artifacts small; retention is 3 days. DIAG_DIR is exported
