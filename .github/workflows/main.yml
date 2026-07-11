@@ -264,18 +264,34 @@ jobs:
           set -euo pipefail
           base_sha=""
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            base_sha="$(python3 -c 'import json, os; print(json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8")).get("pull_request", {}).get("base", {}).get("sha", ""))')"
+            eval "$(
+              python3 -c 'import json, os, shlex; event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8")); pr = event.get("pull_request", {}); print("\n".join(f"{key}={shlex.quote(value)}" for key, value in {"EVENT_BASE_SHA": pr.get("base", {}).get("sha", ""), "EVENT_HEAD_SHA": pr.get("head", {}).get("sha", "")}.items()))'
+            )"
+            # Key the base-hash cache by the MERGE-BASE, not the base tip.
+            # bazel-diff's base worktree is checked out at this same SHA (see
+            # the determine step), so the cache key must match. The merge-base
+            # is itself a main commit, so the main-push pre-warm below still
+            # populates it. Fail closed: if merge-base cannot be computed, key
+            # by the base tip exactly as before.
+            base_sha="$EVENT_BASE_SHA"
+            if [[ -n "$EVENT_BASE_SHA" && -n "$EVENT_HEAD_SHA" ]] && \
+               merge_base="$(git merge-base "$EVENT_BASE_SHA" "$EVENT_HEAD_SHA")"; then
+              base_sha="$merge_base"
+            fi
           elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
-            # Pre-warm the cache for future PRs whose base is this main commit.
+            # Pre-warm the cache for future PRs whose merge-base is this main
+            # commit.
             base_sha="${{ github.sha }}"
           fi
           echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
 
       # Base hashes are a pure function of (bazel-diff version, base SHA), and
       # generating them is roughly half of this job's bazel-diff wall time.
-      # PRs restore them here; pushes to main generate and save them below so
-      # the first PR against any main commit already hits warm. Caches created
-      # on main are visible to all PR branches.
+      # PRs restore them here (keyed by the PR's merge-base); pushes to main
+      # generate and save them below so the first PR forking from any main
+      # commit already hits warm. Caches created on main are visible to all PR
+      # branches. Merge-base keying also makes the key stable across base-branch
+      # drift: pushes to main no longer invalidate a PR's cached base hashes.
       - name: Cache bazel-diff base hashes
         if: steps.pr-meta.outputs.base_sha != ''
         uses: actions/cache@v6
@@ -400,12 +416,22 @@ jobs:
 
           git worktree add --detach "$head_dir" "$HEAD_SHA"
 
-          cached_base="$HOME/.cache/bazel-diff-base-hashes/$BASE_SHA.json"
+          # Hash the base at the MERGE-BASE ($diff_base, computed above), not
+          # the base tip. Hashing the base tip attributes post-fork drift on
+          # main to the PR, inflating the affected set on any branch that has
+          # not rebased (measured up to 126x over-inclusion; see
+          # docs/design_docs/0029-2). Merge-base hashing sees only branch-side
+          # changes. This is sound because the PR merges INTO current main:
+          # target impact from base-side drift is validated by main's own CI on
+          # each main push, not by re-testing it on every stale PR. $diff_base
+          # fails closed to $BASE_SHA above, which preserves the old behavior.
+          # The pr-meta step keys the cache by the same merge-base.
+          cached_base="$HOME/.cache/bazel-diff-base-hashes/$diff_base.json"
           if [[ -s "$cached_base" ]]; then
-            echo "Using cached bazel-diff base hashes for $BASE_SHA."
+            echo "Using cached bazel-diff base hashes for $diff_base."
             cp "$cached_base" "$work_dir/base-hashes.json"
           else
-            git worktree add --detach "$base_dir" "$BASE_SHA"
+            git worktree add --detach "$base_dir" "$diff_base"
             java -jar "$RUNNER_TEMP/bazel-diff.jar" generate-hashes \
             --includeTargetType \
               -w "$base_dir" \

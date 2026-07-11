@@ -777,3 +777,37 @@ threshold routes broad PRs to the hosted lane and fired on editor-v08-ux-polish
 
 Levers 1 and 2 remain the only ones that reach P99<=15 on worst-case
 header-fanout PRs, and both are operator-reserved (infra load / coverage scope).
+
+### As-built: bazel-diff base aligned to the merge-base (lever 3, 2026-07-11)
+
+Implemented in both `main.yml` and `coverage.yml` determine-targets: the
+bazel-diff base worktree is checked out and hashed at `git merge-base
+BASE_SHA HEAD_SHA` (the same `diff_base` the #825 changed-files fix uses), and
+the base-hash cache is keyed by that merge-base (computed identically in the
+`pr-meta` step). Fail-closed: if merge-base cannot be computed, both sites fall
+back to the base tip, which is exactly the prior behavior.
+
+Soundness: the PR merges INTO current main, so target impact from base-side
+drift is validated by main's own CI on each main push. Interaction impact needs
+a target that depends on the PR's changed targets; every such target is in the
+merge-base affected set by construction (it is a reverse dependency of the
+branch-side change) and is built/tested on the PR's MERGE checkout, where the
+drift is present. Only redundant re-testing of pure-drift targets is dropped.
+Side benefit: merge-base cache keys are stable across base drift, so main
+pushes no longer invalidate a PR's cached base hashes, and the main-push
+pre-warm still hits (a merge-base is itself a main commit).
+
+Validation (controlled stale-branch reproduction, hub-local bazel-diff
+v18.1.0, same flags as CI): fork point 3 commits behind main tip (drift = the
+#828 + #829 editor/svg merges plus a docs commit), true change = one comment
+line in `donner/base/tests/Box_tests.cc`.
+
+| basis | affected targets |
+|---|---:|
+| base hashed at base TIP (old behavior) | 376 |
+| base hashed at MERGE-BASE (this change) | **2** (`//donner/base:base_tests`, `base_tests_lint`) |
+
+The 376 matches the #829-scale inflation measured in this audit; the 2 is
+exactly the true change. This closes the known bazel-diff over-inclusion
+residual flagged in the #825 fix and in the determination-quality audit above
+(126x tail).
