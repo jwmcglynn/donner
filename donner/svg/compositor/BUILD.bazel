@@ -212,6 +212,9 @@ donner_cc_test(
     data = [
         "//:donner_splash.svg",
     ],
+    # 80 independent golden cases (perf cases excluded via the filter above
+    # and split into compositor_golden_perf_tests); shard for parallelism.
+    shard_count = 4,
     deps = [
         ":compositor",
         ":dual_path_verifier",
