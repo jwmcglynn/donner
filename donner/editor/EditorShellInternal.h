@@ -79,6 +79,7 @@ enum class PendingClickIdleAction {
                                              const std::optional<Box2d>& referenceChipRect,
                                              const Box2d& toolPaletteRect,
                                              const std::optional<Box2d>& textFormatBarRect,
+                                             const std::optional<Box2d>& editingScopeBreadcrumbRect,
                                              const Box2d& canvasZoomControlRect);
 [[nodiscard]] PendingClickBusyAction PendingClickBusyActionForState(bool tookFastRedrag,
                                                                     bool rendererBusy);

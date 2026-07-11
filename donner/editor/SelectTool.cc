@@ -476,8 +476,10 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
   // filter-group - select the clicked path instead of the whole group.
   // Requires double-click detection in the pointer-event protocol.
   svg::SVGDocument& doc = editor.document().document();
+  const std::optional<svg::SVGElement> editingScope = editor.editingScope();
   const svg::SVGElement element = doc.withReadAccess([&](svg::DocumentReadAccess&) {
-    const svg::SVGElement container = DeepestWrappingContainer(doc.svgElement());
+    const svg::SVGElement container =
+        editingScope.has_value() ? *editingScope : DeepestWrappingContainer(doc.svgElement());
     const svg::SVGElement topLevel = TopLevelAncestor(*hit, container);
     return HasCompositingAttribute(topLevel) ? topLevel : *hit;
   });

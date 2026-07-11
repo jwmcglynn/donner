@@ -1352,6 +1352,25 @@ TEST_F(SelectToolTest, DoubleClickInsideCurrentScopeEntersNestedGroupOnly) {
   EXPECT_TRUE(selectionIs("#leaf"));
 }
 
+TEST_F(SelectToolTest, ClickInsideCompositeEditingScopeDoesNotSelectScope) {
+  constexpr std::string_view kCompositeScopeSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120">
+        <defs><filter id="blur"><feGaussianBlur stdDeviation="1"/></filter></defs>
+        <g id="scope" filter="url(#blur)">
+          <rect id="leaf" x="10" y="10" width="40" height="40"/>
+        </g>
+      </svg>)svg";
+  loadSvg(kCompositeScopeSvg);
+  ASSERT_TRUE(app.enterGroupEdit(elementById("#scope")));
+
+  tool.onMouseDown(app, Vector2d(20, 20), MouseModifiers{});
+  tool.onMouseUp(app, Vector2d(20, 20));
+
+  ASSERT_TRUE(app.editingScope().has_value());
+  EXPECT_EQ(app.editingScope()->id(), "scope");
+  EXPECT_TRUE(selectionIs("#leaf"));
+}
+
 TEST_F(SelectToolTest, CornerHandleResizesSelectionFromOppositeCorner) {
   loadSvg(kResizeRectSvg);
   app.setSelection(elementById("#target"));

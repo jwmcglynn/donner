@@ -1834,10 +1834,10 @@ void EditorShell::handleGlobalShortcuts() {
   }
 
   if (!anyPopupOpen && ImGui::IsKeyPressed(ImGuiKey_Escape, /*repeat=*/false)) {
-    if (app_.hasSelection()) {
-      app_.clearSelection();
-    } else if (app_.exitGroupEdit()) {
+    if (app_.editingScope().has_value() && app_.exitGroupEdit()) {
       window_.wakeEventLoop();
+    } else if (app_.hasSelection()) {
+      app_.clearSelection();
     }
   }
 
