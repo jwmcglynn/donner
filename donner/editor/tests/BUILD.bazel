@@ -22,15 +22,6 @@ donner_cc_library(
 )
 
 donner_cc_test(
-    name = "canvas_scrollbars_tests",
-    srcs = ["CanvasScrollbars_tests.cc"],
-    deps = [
-        "//donner/editor:canvas_scrollbars",
-        "@com_google_gtest//:gtest_main",
-    ],
-)
-
-donner_cc_test(
     name = "drag_coalesce_tests",
     srcs = ["DragCoalesce_tests.cc"],
     deps = [
@@ -86,15 +77,6 @@ donner_cc_test(
         "//donner/editor:imgui_headers",
         "@com_google_gtest//:gtest_main",
         "@imgui",
-    ],
-)
-
-donner_cc_test(
-    name = "file_dialog_state_tests",
-    srcs = ["FileDialogState_tests.cc"],
-    deps = [
-        "//donner/editor:file_dialog_state",
-        "@com_google_gtest//:gtest_main",
     ],
 )
 
@@ -166,24 +148,6 @@ donner_cc_test(
         ],
         "//conditions:default": [],
     }),
-)
-
-donner_cc_test(
-    name = "keyboard_shortcut_policy_tests",
-    srcs = ["KeyboardShortcutPolicy_tests.cc"],
-    deps = [
-        "//donner/editor:keyboard_shortcut_policy",
-        "@com_google_gtest//:gtest_main",
-    ],
-)
-
-donner_cc_test(
-    name = "view_menu_visibility_tests",
-    srcs = ["ViewMenuVisibility_tests.cc"],
-    deps = [
-        "//donner/editor:menu_bar_presenter",
-        "@com_google_gtest//:gtest_main",
-    ],
 )
 
 donner_cc_test(
@@ -259,15 +223,6 @@ donner_cc_test(
 )
 
 donner_cc_test(
-    name = "viewport_interaction_controller_tests",
-    srcs = ["ViewportInteractionController_tests.cc"],
-    deps = [
-        "//donner/editor:viewport_interaction_controller",
-        "@com_google_gtest//:gtest_main",
-    ],
-)
-
-donner_cc_test(
     name = "selection_aabb_tests",
     srcs = ["SelectionAabb_tests.cc"],
     deps = [
@@ -276,24 +231,6 @@ donner_cc_test(
         "//donner/editor:select_tool",
         "//donner/editor:selection_aabb",
         "//donner/svg",
-        "@com_google_gtest//:gtest_main",
-    ],
-)
-
-donner_cc_test(
-    name = "selection_transform_handles_tests",
-    srcs = ["SelectionTransformHandles_tests.cc"],
-    deps = [
-        "//donner/editor:selection_transform_handles",
-        "@com_google_gtest//:gtest_main",
-    ],
-)
-
-donner_cc_test(
-    name = "rotate_cursor_set_tests",
-    srcs = ["RotateCursorSet_tests.cc"],
-    deps = [
-        "//donner/editor:rotate_cursor_set",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -347,28 +284,10 @@ donner_cc_test(
 )
 
 donner_cc_test(
-    name = "flash_decorations_tests",
-    srcs = ["FlashDecorations_tests.cc"],
-    deps = [
-        "//donner/editor:flash_decorations",
-        "@com_google_gtest//:gtest_main",
-    ],
-)
-
-donner_cc_test(
     name = "soft_wrap_tests",
     srcs = ["SoftWrap_tests.cc"],
     deps = [
         "//donner/editor:soft_wrap",
-        "@com_google_gtest//:gtest_main",
-    ],
-)
-
-donner_cc_test(
-    name = "rope_simulation_tests",
-    srcs = ["RopeSimulation_tests.cc"],
-    deps = [
-        "//donner/editor:rope_simulation",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -452,15 +371,6 @@ donner_cc_test(
     srcs = ["LayerInspectorDiagnostics_tests.cc"],
     deps = [
         "//donner/editor:layer_inspector_diagnostics",
-        "@com_google_gtest//:gtest_main",
-    ],
-)
-
-donner_cc_test(
-    name = "frame_miss_telemetry_tests",
-    srcs = ["FrameMissTelemetry_tests.cc"],
-    deps = [
-        "//donner/editor:frame_miss_telemetry",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -1297,6 +1207,44 @@ donner_cc_test(
         "//donner/svg/parser",
         "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_interface",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "editor_widget_unit_tests",
+    # Consolidated from 10 single-dep, pure-logic editor widget/policy unit
+    # tests (canvas_scrollbars, file_dialog_state, flash_decorations,
+    # frame_miss_telemetry, keyboard_shortcut_policy, rope_simulation,
+    # rotate_cursor_set, selection_transform_handles, view_menu_visibility,
+    # viewport_interaction_controller). Each was its own cc_test binary, so the
+    # suite cost 10 CppLink actions + 10 test actions on the CI critical path;
+    # merged into one binary it costs 1 link + 1 test action. No coverage
+    # change: every source file and its TEST cases still compile and run. None
+    # of these targets are referenced by name in design docs.
+    srcs = [
+        "CanvasScrollbars_tests.cc",
+        "FileDialogState_tests.cc",
+        "FlashDecorations_tests.cc",
+        "FrameMissTelemetry_tests.cc",
+        "KeyboardShortcutPolicy_tests.cc",
+        "RopeSimulation_tests.cc",
+        "RotateCursorSet_tests.cc",
+        "SelectionTransformHandles_tests.cc",
+        "ViewMenuVisibility_tests.cc",
+        "ViewportInteractionController_tests.cc",
+    ],
+    deps = [
+        "//donner/editor:canvas_scrollbars",
+        "//donner/editor:file_dialog_state",
+        "//donner/editor:flash_decorations",
+        "//donner/editor:frame_miss_telemetry",
+        "//donner/editor:keyboard_shortcut_policy",
+        "//donner/editor:menu_bar_presenter",
+        "//donner/editor:rope_simulation",
+        "//donner/editor:rotate_cursor_set",
+        "//donner/editor:selection_transform_handles",
+        "//donner/editor:viewport_interaction_controller",
         "@com_google_gtest//:gtest_main",
     ],
 )
