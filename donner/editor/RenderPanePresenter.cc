@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cinttypes>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -504,8 +505,8 @@ void DrawCompositorTileOverlay(ImDrawList* drawList, const GlTextureCache::TileV
   }
 
   char label[64];
-  std::snprintf(label, sizeof(label), "%c %.24s g%llu%s", CompositorTileKindLabel(tile.kind),
-                tile.id.c_str(), static_cast<unsigned long long>(tile.generation),
+  std::snprintf(label, sizeof(label), "%c %.24s g%" PRIu64 "%s",
+                CompositorTileKindLabel(tile.kind), tile.id.c_str(), tile.generation,
                 tile.metadataOnly ? " cached" : "");
   const ImVec2 labelOrigin(static_cast<float>(bounds.topLeft.x + 4.0),
                            static_cast<float>(bounds.topLeft.y + 3.0));
@@ -738,11 +739,15 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
     for (const auto& tile : state.textures.tiles()) {
       drawTile(tile);
     }
-    if (state.compositorTileOverlay) {
-      for (const auto& tile : state.textures.tiles()) {
-        if (const std::optional<PresentedTileQuad> tileQuad = computeTileQuad(tile)) {
-          DrawCompositorTileOverlay(paneDrawList, tile, *tileQuad);
-        }
+    paneDrawList->PopClipRect();
+  }
+  if (state.compositorTileOverlay && imageClipRect.has_value()) {
+    paneDrawList->PushClipRect(ToImVec2(imageClipRect->topLeft),
+                               ToImVec2(imageClipRect->bottomRight),
+                               /*intersect_with_current_clip_rect=*/true);
+    for (const auto& tile : state.textures.tiles()) {
+      if (const std::optional<PresentedTileQuad> tileQuad = computeTileQuad(tile)) {
+        DrawCompositorTileOverlay(paneDrawList, tile, *tileQuad);
       }
     }
     paneDrawList->PopClipRect();

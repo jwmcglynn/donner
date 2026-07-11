@@ -619,6 +619,12 @@ public:
     return shell.tryOpenPath(path, error);
   }
 
+  static void SetShowSamplePicker(EditorShell& shell, bool visible) {
+    shell.showSamplePicker_ = visible;
+  }
+
+  static bool ShowSamplePicker(const EditorShell& shell) { return shell.showSamplePicker_; }
+
   static bool TrySavePath(EditorShell& shell, std::string_view path, std::string* error) {
     return shell.trySavePath(path, error);
   }
@@ -1718,10 +1724,13 @@ TEST(EditorShellTest, OpenSaveAndRevertUpdateDocumentAndSourceState) {
   EditorShell shell(window, OptionsWithSource(kInitialSvg));
   ASSERT_TRUE(shell.valid());
 
+  EditorShellTestAccess::SetShowSamplePicker(shell, true);
+
   std::string error;
   EXPECT_FALSE(
       EditorShellTestAccess::TryOpenPath(shell, TempPathForTest("missing.svg").string(), &error));
   EXPECT_EQ(error, "Could not open file.");
+  EXPECT_TRUE(EditorShellTestAccess::ShowSamplePicker(shell));
 
   const std::filesystem::path invalidPath = TempPathForTest("invalid.svg");
   WriteTextFile(invalidPath, "<svg><rect></svg>");
@@ -1737,6 +1746,7 @@ TEST(EditorShellTest, OpenSaveAndRevertUpdateDocumentAndSourceState) {
   EXPECT_TRUE(EditorShellTestAccess::TryOpenPath(shell, openPath.string(), &error)) << error;
   EXPECT_TRUE(EditorShellTestAccess::App(shell).hasDocument());
   EXPECT_NE(EditorShellTestAccess::Source(shell).getText().find("opened"), std::string::npos);
+  EXPECT_FALSE(EditorShellTestAccess::ShowSamplePicker(shell));
 
   error.clear();
   EXPECT_FALSE(EditorShellTestAccess::TrySavePath(shell, "", &error));

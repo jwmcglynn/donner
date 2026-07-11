@@ -138,7 +138,8 @@ void WriteDiagnosticBitmap(const svg::RendererBitmap& bitmap, std::string_view f
 svg::RendererBitmap CapturePresenterFrame(
     gui::EditorWindow* window, GlTextureCache* textures, Entity suppressedLayerEntity,
     std::optional<SelectTool::ActiveDragPreview> activePreview = std::nullopt,
-    std::optional<SelectTool::ActiveDragPreview> displayedPreview = std::nullopt) {
+    std::optional<SelectTool::ActiveDragPreview> displayedPreview = std::nullopt,
+    bool documentPresentedDirectly = false, bool compositorTileOverlay = false) {
   ViewportState viewport;
   viewport.paneOrigin = Vector2d(0.0, 0.0);
   viewport.paneSize = Vector2d(kLogicalWidth, kLogicalHeight);
@@ -176,6 +177,8 @@ svg::RendererBitmap CapturePresenterFrame(
       .displayedDragPreview = displayedPreview,
       .contentRegion = Vector2d(kLogicalWidth, kLogicalHeight),
       .suppressedLayerEntity = suppressedLayerEntity,
+      .documentPresentedDirectly = documentPresentedDirectly,
+      .compositorTileOverlay = compositorTileOverlay,
   });
   ImGui::End();
   ImGui::PopStyleVar();
@@ -266,6 +269,55 @@ TEST(RenderPanePresenterVisualReproTest, WritesDisplayNoneSuppressionScreenshots
   EXPECT_GT(expectedVisiblePixels, 2500)
       << "The expected screenshot should keep the selected drag target visible while the "
          "display:none layer is suppressed.";
+}
+
+TEST(RenderPanePresenterVisualReproTest, CompositorTileOverlayRendersDuringDirectPresentation) {
+  gui::EditorWindow window(gui::EditorWindowOptions{
+      .title = "Direct Presentation Compositor Tile Overlay Repro",
+      .initialWidth = kLogicalWidth,
+      .initialHeight = kLogicalHeight,
+      .visible = false,
+      .offscreen = true,
+      .offscreenContentScale = 1.0,
+      .clearColor = {0.08f, 0.09f, 0.10f, 1.0f},
+      .enableFramebufferReadback = true,
+  });
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+
+  RenderResult::CompositedPreview preview;
+  preview.tiles.push_back(MakeTile(
+      "layer:7", RenderResult::CompositedTile::Kind::Layer, kVisibleDragEntity,
+      Vector2d(54.0, 44.0), Vector2d(78.0, 78.0), kVisibleDragLayer, /*isDragTarget=*/false));
+
+  GlTextureCache textures(window.geodeDevice());
+  textures.initialize();
+  textures.uploadComposited(preview);
+
+  const svg::RendererBitmap withoutOverlay =
+      CapturePresenterFrame(&window, &textures, entt::null, std::nullopt, std::nullopt,
+                            /*documentPresentedDirectly=*/true,
+                            /*compositorTileOverlay=*/false);
+  const svg::RendererBitmap withOverlay =
+      CapturePresenterFrame(&window, &textures, entt::null, std::nullopt, std::nullopt,
+                            /*documentPresentedDirectly=*/true,
+                            /*compositorTileOverlay=*/true);
+
+  ASSERT_FALSE(withoutOverlay.empty());
+  ASSERT_FALSE(withOverlay.empty());
+  int changedPixels = 0;
+  for (std::size_t offset = 0; offset + 3u < withOverlay.pixels.size(); offset += 4u) {
+    if (withOverlay.pixels[offset + 0u] != withoutOverlay.pixels[offset + 0u] ||
+        withOverlay.pixels[offset + 1u] != withoutOverlay.pixels[offset + 1u] ||
+        withOverlay.pixels[offset + 2u] != withoutOverlay.pixels[offset + 2u] ||
+        withOverlay.pixels[offset + 3u] != withoutOverlay.pixels[offset + 3u]) {
+      ++changedPixels;
+    }
+  }
+  EXPECT_GT(changedPixels, 0)
+      << "The compositor tile overlay must remain visible when document pixels are presented "
+         "directly to the framebuffer.";
 }
 
 TEST(RenderPanePresenterVisualReproTest, OverviewInfillDoesNotBleedThroughTransparentActiveTile) {

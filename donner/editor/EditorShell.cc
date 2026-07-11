@@ -1330,6 +1330,7 @@ bool EditorShell::tryLoadSource(std::string_view source, std::optional<std::stri
     return false;
   }
 
+  showSamplePicker_ = false;
   textEditor_.setText(std::string(source));
   textEditor_.resetTextChanged();
   const std::string canonicalSource = textEditor_.getText();
