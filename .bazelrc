@@ -161,6 +161,13 @@ common:wasm-size --config=wasm
 build:wasm-size -c opt
 build:wasm-size --copt=-Oz
 build:wasm-size --linkopt=-Oz
+# JS-glue minification: closure shrinks the Emscripten glue ~10x, and
+# -sFILESYSTEM=0 drops the unused virtual filesystem runtime. Both are
+# JS-glue-only trims validated by the headless render gate
+# (//donner/svg/renderer/wasm:render_test). Gated to wasm-size so the plain
+# --config=wasm dev build stays fast and un-minified.
+build:wasm-size --linkopt=--closure=1
+build:wasm-size --linkopt=-sFILESYSTEM=0
 
 # Full editor WASM build. Uses Geode/WebGPU by default because the editor
 # presentation and performance work target Geode. Usage:
@@ -262,6 +269,21 @@ build:binary-size --copt=-ffunction-sections --copt=-fdata-sections
 
 build:linux-binary-size --config=binary-size
 build:linux-binary-size --linkopt=-Wl,--gc-sections
+
+# ThinLTO layer for the size-optimized native build. ThinLTO shrinks the
+# stripped binaries ~8% by folding and inlining across translation units, but
+# its debug info points at transient .thinlto.o object files that dsymutil and
+# bloaty cannot open, so it is kept OFF the attribution build:binary-size above
+# and offered as a separate shipped-size config. tools/binary_size.sh reports
+# both: the non-LTO build (with per-compile-unit attribution) and this LTO
+# build (headline shipped size, no attribution). Usage:
+#   bazel build --config=macos-binary-size-lto //donner/svg/tool:donner-svg.stripped
+build:binary-size-lto --config=binary-size
+build:binary-size-lto --copt=-flto=thin --linkopt=-flto=thin
+build:macos-binary-size-lto --config=macos-binary-size
+build:macos-binary-size-lto --copt=-flto=thin --linkopt=-flto=thin
+build:linux-binary-size-lto --config=linux-binary-size
+build:linux-binary-size-lto --copt=-flto=thin --linkopt=-flto=thin
 
 test --test_env=LLM
 test --test_env=DONNER_RENDERER_TEST_VERBOSE

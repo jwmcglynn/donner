@@ -1,6 +1,7 @@
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@emsdk//emscripten_toolchain:wasm_cc_binary.bzl", "wasm_cc_binary")
 load("@rules_cc//cc:defs.bzl", "cc_binary")
+load("@rules_python//python:defs.bzl", "py_test")
 load("//tools/http:serve_http.bzl", "serve_http")
 
 package(default_visibility = ["//visibility:public"])
@@ -51,7 +52,7 @@ cc_binary(
         "-sEXPORTED_FUNCTIONS=_donner_init,_donner_render_svg,_donner_free_pixels,_donner_get_last_error,_malloc,_free",
         # Smaller allocator than the default dlmalloc; safe with USE_PTHREADS=0.
         "-sMALLOC=emmalloc",
-        "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString",
+        "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,HEAPU8",
         "-sUSE_PTHREADS=0",
         "-sSTACK_SIZE=1048576",
         "--no-entry",
@@ -84,6 +85,31 @@ filegroup(
         ":donner_wasm",
     ],
     target_compatible_with = _WASM_TINY_SKIA_COMPATIBLE_WITH,
+)
+
+# Headless render gate for the tiny_skia wasm module. Loads the built module
+# under Node, renders a nontrivial SVG through the public C API, and asserts on
+# the pixels (see render_test.py). This is the safety gate for JS-glue size
+# work (closure minification, filesystem trims). Run against the shipped,
+# size-optimized artifact so assertions are compiled out and the module loads
+# outside a browser:
+#
+#   bazel test --config=wasm-size //donner/svg/renderer/wasm:render_test
+#
+# Requires Node on the host (found via $DONNER_NODE, PATH, or a common install
+# location). Marked manual and gated to the tiny_skia wasm config so a plain
+# host-config wildcard build does not try to pull in the wasm outputs.
+py_test(
+    name = "render_test",
+    srcs = ["render_test.py"],
+    size = "small",
+    data = [
+        "render_test_driver.mjs",
+        ":donner_wasm",
+    ],
+    tags = ["manual"],
+    target_compatible_with = _WASM_TINY_SKIA_COMPATIBLE_WITH,
+    deps = ["@rules_python//python/runfiles"],
 )
 
 # ─── Geode (WebGPU) WASM build ─────────────────────────────────────────
