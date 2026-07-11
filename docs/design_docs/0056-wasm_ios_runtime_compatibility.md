@@ -1,7 +1,7 @@
 # Design: WASM iOS Runtime Compatibility
 
 **Status:** In Progress
-**Author:** Codex GPT-5
+**Author:** GPT-5
 **Created:** 2026-07-10
 
 ## Summary
