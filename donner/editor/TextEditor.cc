@@ -1459,9 +1459,8 @@ void TextEditor::renderLineBackground(const VisualLine& visualLine, const ImVec2
   const float textStartX =
       lineStart.x + textStart_ + static_cast<float>(visualLine.indentColumns) * charAdvance_.x;
 
-  const auto drawSourceRange = [&](SourceByteRange byteRange, ImU32 color) {
-    const Coordinates rangeStart = getCoordinatesAtByteOffset(byteRange.start);
-    const Coordinates rangeEnd = getCoordinatesAtByteOffset(byteRange.end);
+  const auto drawSourceCoordinates = [&](const Coordinates& rangeStart,
+                                         const Coordinates& rangeEnd, ImU32 color) {
     if (rangeEnd.line < visualLine.lineNo || rangeStart.line > visualLine.lineNo) {
       return;
     }
@@ -1484,6 +1483,10 @@ void TextEditor::renderLineBackground(const VisualLine& visualLine, const ImVec2
                      lineStart.y + charAdvance_.y};
     drawList->AddRectFilled(start, end, color, 2.0f * uiScale_);
   };
+  const auto drawSourceRange = [&](SourceByteRange byteRange, ImU32 color) {
+    drawSourceCoordinates(getCoordinatesAtByteOffset(byteRange.start),
+                          getCoordinatesAtByteOffset(byteRange.end), color);
+  };
 
   const ImU32 hoverColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.22f, 0.62f, 1.0f, 0.13f));
   for (const SourceByteRange& range : hoverSourceRanges_) {
@@ -1498,7 +1501,11 @@ void TextEditor::renderLineBackground(const VisualLine& visualLine, const ImVec2
     const ImVec4 color = diagnostic.severity == DiagnosticSeverity::Error
                              ? ImVec4(0.95f, 0.24f, 0.22f, alpha)
                              : ImVec4(1.0f, 0.68f, 0.16f, alpha);
-    drawSourceRange(diagnostic.range, ImGui::ColorConvertFloat4ToU32(color));
+    drawSourceCoordinates(
+        Coordinates(static_cast<int>(diagnostic.line - 1), static_cast<int>(diagnostic.column)),
+        Coordinates(static_cast<int>(diagnostic.endLine - 1),
+                    static_cast<int>(diagnostic.endColumn)),
+        ImGui::ColorConvertFloat4ToU32(color));
   }
 
   const std::vector<ActiveFlash> flashes =
@@ -1971,8 +1978,11 @@ void TextEditor::remapFocusMetadataForSourceEdit(const SourceEditIntent& intent)
   for (SourceDiagnostic& diagnostic : sourceDiagnostics_) {
     diagnostic.range = MapSourceByteRangeForEdit(diagnostic.range, intent, bufferSize);
     const Coordinates start = getCoordinatesAtByteOffset(diagnostic.range.start);
+    const Coordinates end = getCoordinatesAtByteOffset(diagnostic.range.end);
     diagnostic.line = static_cast<std::size_t>(start.line + 1);
     diagnostic.column = static_cast<std::size_t>(start.column);
+    diagnostic.endLine = static_cast<std::size_t>(end.line + 1);
+    diagnostic.endColumn = static_cast<std::size_t>(end.column);
   }
   std::erase_if(sourceDiagnostics_, [](const SourceDiagnostic& diagnostic) {
     return diagnostic.range.end <= diagnostic.range.start;
@@ -2608,8 +2618,11 @@ bool TextEditor::setSourceDiagnostics(std::vector<SourceDiagnostic> diagnostics)
     diagnostic.range.start = std::min(diagnostic.range.start, bufferSize);
     diagnostic.range.end = std::min(diagnostic.range.end, bufferSize);
     const Coordinates start = getCoordinatesAtByteOffset(diagnostic.range.start);
+    const Coordinates end = getCoordinatesAtByteOffset(diagnostic.range.end);
     diagnostic.line = static_cast<std::size_t>(start.line + 1);
     diagnostic.column = static_cast<std::size_t>(start.column);
+    diagnostic.endLine = static_cast<std::size_t>(end.line + 1);
+    diagnostic.endColumn = static_cast<std::size_t>(end.column);
   }
   std::erase_if(diagnostics, [](const SourceDiagnostic& diagnostic) {
     return diagnostic.range.end <= diagnostic.range.start;

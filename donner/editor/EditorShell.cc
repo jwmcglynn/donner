@@ -2149,7 +2149,9 @@ void EditorShell::renderSourcePane(float paneOriginY, float paneHeight, float pa
   ImGui::SetNextWindowPos(ImVec2(0.0f, paneOriginY), ImGuiCond_Always);
   ImGui::SetNextWindowSize(ImVec2(paneWidth, paneHeight), ImGuiCond_Always);
   ImGui::Begin("Source", nullptr, kPaneFlags);
-  const auto& diagnostics = documentSyncController_.sourceDiagnostics().diagnostics;
+  // TextEditor owns the canonical, edit-remapped diagnostic ranges used for both inline
+  // highlighting and panel activation. The controller snapshot remains parse-revision evidence.
+  const auto& diagnostics = textEditor_.sourceDiagnostics();
   const float availableHeight = ImGui::GetContentRegionAvail().y;
   const float diagnosticsHeight = diagnostics.empty()
                                       ? 0.0f

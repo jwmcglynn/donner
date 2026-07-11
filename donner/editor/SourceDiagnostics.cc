@@ -83,14 +83,16 @@ SourceDiagnosticSnapshot BuildSourceDiagnosticSnapshot(std::span<const ParseDiag
     const SourceByteRange range = NormalizeRange(diagnostic.range, source);
     const std::size_t sourceOffset = std::min(
         diagnostic.range.start.resolveOffset(source).offset.value(), source.size());
-    const FileOffset::LineInfo lineInfo = diagnostic.range.start.lineInfo.value_or(
-        RecoverLineInfo(lineStarts, sourceOffset));
+    const FileOffset::LineInfo lineInfo = RecoverLineInfo(lineStarts, sourceOffset);
+    const FileOffset::LineInfo endLineInfo = RecoverLineInfo(lineStarts, range.end);
     snapshot.diagnostics.push_back(SourceDiagnostic{
         .id = DiagnosticId(diagnostic, range, revision, i),
         .severity = diagnostic.severity,
         .range = range,
         .line = lineInfo.line,
         .column = lineInfo.offsetOnLine,
+        .endLine = endLineInfo.line,
+        .endColumn = endLineInfo.offsetOnLine,
         .message = std::string(std::string_view(diagnostic.reason)),
     });
   }

@@ -74,8 +74,9 @@ SourceDiagnosticsPanelAction SourceDiagnosticsPanel::render(
                     ImGuiWindowFlags_AlwaysVerticalScrollbar | ImGuiWindowFlags_NoNav);
 
   const float rowHeight = 30.0f * scale;
-  for (const SourceDiagnostic& diagnostic : diagnostics) {
-    ImGui::PushID(static_cast<int>(diagnostic.id ^ (diagnostic.id >> 32u)));
+  for (std::size_t index = 0; index < diagnostics.size(); ++index) {
+    const SourceDiagnostic& diagnostic = diagnostics[index];
+    ImGui::PushID(static_cast<int>(index));
     const ImVec2 rowMin = ImGui::GetCursorScreenPos();
     const float rowWidth = ImGui::GetContentRegionAvail().x;
     ImGui::InvisibleButton("##diagnostic", ImVec2(rowWidth, rowHeight));

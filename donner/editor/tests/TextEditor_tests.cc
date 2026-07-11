@@ -4622,6 +4622,8 @@ TEST_F(TextEditorTests, SourceDiagnosticsTrackSourceEditsAndValidateActiveId) {
   ASSERT_EQ(editor.sourceDiagnostics().size(), 1u);
   EXPECT_EQ(editor.sourceDiagnostics().front().range, (SourceByteRange{4, 6}));
   EXPECT_EQ(editor.sourceDiagnostics().front().column, 4u);
+  EXPECT_EQ(editor.sourceDiagnostics().front().endLine, 1u);
+  EXPECT_EQ(editor.sourceDiagnostics().front().endColumn, 6u);
   EXPECT_FALSE(editor.setActiveSourceDiagnosticId(99));
   EXPECT_EQ(editor.activeSourceDiagnosticId(), std::nullopt);
 }

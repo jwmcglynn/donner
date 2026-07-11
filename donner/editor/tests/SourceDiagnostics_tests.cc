@@ -28,6 +28,8 @@ TEST(SourceDiagnostics, NormalizesRangesAndRecoversLineInformation) {
   EXPECT_EQ(snapshot.diagnostics[0].range, (SourceByteRange{8, 9}));
   EXPECT_EQ(snapshot.diagnostics[0].line, 2u);
   EXPECT_EQ(snapshot.diagnostics[0].column, 2u);
+  EXPECT_EQ(snapshot.diagnostics[0].endLine, 2u);
+  EXPECT_EQ(snapshot.diagnostics[0].endColumn, 3u);
   EXPECT_EQ(snapshot.diagnostics[1].range, (SourceByteRange{9, kSource.size()}));
 }
 
@@ -77,6 +79,8 @@ TEST(SourceDiagnostics, CapsPublishedDiagnosticsAndRecoversLocationsInLargeSourc
   EXPECT_EQ(snapshot.diagnostics.front().column, 0u);
   EXPECT_EQ(snapshot.diagnostics.back().line, 256u);
   EXPECT_EQ(snapshot.diagnostics.back().column, 0u);
+  EXPECT_EQ(snapshot.diagnostics.back().endLine, 256u);
+  EXPECT_EQ(snapshot.diagnostics.back().endColumn, 1u);
 }
 
 }  // namespace
