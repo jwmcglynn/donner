@@ -83,6 +83,9 @@ donner_cc_test(
 donner_cc_test(
     name = "editor_shell_tests",
     srcs = ["EditorShell_tests.cc"],
+    # 83 independent gtest cases; shard so the suite runs as parallel RE
+    # actions instead of one ~18 s serial critical-path action.
+    shard_count = 4,
     deps = [
         "//donner/editor:clipboard_interface",
         "//donner/editor:editor_shell",
@@ -472,6 +475,9 @@ donner_cc_test(
     data = [
         "//:donner_splash.svg",
     ],
+    # 75 independent gtest cases (wall-clock-sensitive cases live in the
+    # separate async_renderer_wallclock_tests target); shard for parallelism.
+    shard_count = 4,
     deps = [
         "//donner/editor:async_renderer",
         "//donner/editor:async_svg_document",
