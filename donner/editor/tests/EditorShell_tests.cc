@@ -355,6 +355,20 @@ TEST(EditorShellInternalTest, CompactChromeCapturesSheetAndUsesTouchHint) {
             std::string_view::npos);
 }
 
+TEST(EditorShellInternalTest, HiddenCanvasScrollbarsDoNotCaptureCanvasInput) {
+  ViewportState viewport;
+  viewport.paneOrigin = Vector2d(0.0, 0.0);
+  viewport.paneSize = Vector2d(100.0, 100.0);
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 400.0, 400.0);
+  viewport.zoom = 1.0;
+  viewport.panDocPoint = Vector2d(50.0, 50.0);
+  viewport.panScreenPoint = Vector2d(50.0, 50.0);
+
+  const Vector2d bottomRailPoint(50.0, 95.0);
+  EXPECT_TRUE(internal::CanvasScrollbarsCaptureInput(true, viewport, bottomRailPoint));
+  EXPECT_FALSE(internal::CanvasScrollbarsCaptureInput(false, viewport, bottomRailPoint));
+}
+
 TEST(EditorShellInternalTest, PendingClickBusyActionPrefersFastRedragThenCancelsBusyRender) {
   EXPECT_EQ(internal::PendingClickBusyActionForState(/*tookFastRedrag=*/true,
                                                      /*rendererBusy=*/true),

@@ -1,7 +1,8 @@
 # Design: Donner v0.8 Showcase and Rebrand
 
 **Status:** Implemented (v0.8 drive)
-**Author:** Codex
+**Author:** unknown (historical provenance debt)
+**Drafted by:** unknown (historical provenance debt)
 **Reviewed by:** GPT-5.6 Sol
 **Created:** 2026-05-30
 **Updated:** 2026-07-10

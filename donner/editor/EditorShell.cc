@@ -276,6 +276,11 @@ bool CanvasChromeCapturesInput(const ImVec2& point, const std::optional<Box2d>& 
          (compactPanelRect.has_value() && ContainsScreenPoint(*compactPanelRect, point));
 }
 
+bool CanvasScrollbarsCaptureInput(bool scrollbarsVisible, const ViewportState& viewport,
+                                  const Vector2d& screenPoint) noexcept {
+  return scrollbarsVisible && CanvasScrollbarsContain(viewport, screenPoint);
+}
+
 bool GroupOperationCanDispatch(bool rendererBusy,
                                const GroupOperationAvailability& availability) noexcept {
   return !rendererBusy && availability.canApply;
@@ -2880,8 +2885,9 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   }
 
   const ImVec2 hoverMousePos = ImGui::GetMousePos();
-  const bool overCanvasScrollbar = CanvasScrollbarsContain(
-      interactionController_.viewport(), Vector2d(hoverMousePos.x, hoverMousePos.y));
+  const bool overCanvasScrollbar = internal::CanvasScrollbarsCaptureInput(
+      adaptiveUiLayout_.showCanvasScrollbars, interactionController_.viewport(),
+      Vector2d(hoverMousePos.x, hoverMousePos.y));
   const bool toolEligible =
       canvasHovered && !interactionController_.panning() && !spaceHeld && !overCanvasScrollbar;
   const bool selectToolActive = activeTool_ == ActiveTool::Select;
@@ -3999,7 +4005,10 @@ void EditorShell::renderSidebars() {
     // Compact sheets use deterministic fill swatches. Avoiding per-row raster
     // rendering and texture uploads keeps the touch panel responsive and also
     // avoids backend-specific thumbnail presentation differences in Wasm.
-    layersPanel_.refreshSnapshot(app_, compactSheet ? nullptr : &layerThumbnailRenderer_);
+    layersPanel_.refreshSnapshot(
+        app_, compactSheet ? nullptr : &layerThumbnailRenderer_,
+        compactSheet ? LayersPanel::ThumbnailRefreshMode::SwatchesOnly
+                     : LayersPanel::ThumbnailRefreshMode::Render);
   }
   EditorApp* liveAppForClicks = rendererBusy ? nullptr : &app_;
 

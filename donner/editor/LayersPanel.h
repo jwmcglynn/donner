@@ -51,6 +51,11 @@ struct LayersLockedRejectionFlash {
 /// ImGui Layers panel backed by a `LayerTreeModel` snapshot.
 class LayersPanel {
 public:
+  enum class ThumbnailRefreshMode {
+    Render,
+    SwatchesOnly,
+  };
+
   LayersPanel() = default;
 
   /// Maps a per-row rendered thumbnail bitmap to an ImGui texture handle for
@@ -119,7 +124,9 @@ public:
   ///
   /// @param app Live editor app to snapshot.
   /// @param renderer Optional renderer to use for thumbnail rasterization.
-  void refreshSnapshot(const EditorApp& app, svg::Renderer* renderer = nullptr);
+  /// @param mode Whether to render thumbnails or refresh only the row swatches.
+  void refreshSnapshot(const EditorApp& app, svg::Renderer* renderer = nullptr,
+                       ThumbnailRefreshMode mode = ThumbnailRefreshMode::Render);
 
   /// Render the panel into the current ImGui window. Must be called inside an
   /// `ImGui::Begin(...) / End()` pair. When @p liveApp is null (the worker owns

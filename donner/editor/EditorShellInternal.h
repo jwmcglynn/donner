@@ -10,6 +10,7 @@
 #include "donner/base/Box.h"
 #include "donner/base/Transform.h"
 #include "donner/css/Color.h"
+#include "donner/editor/CanvasScrollbars.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/FocusView.h"
 #include "donner/editor/FrameMissTelemetry.h"
@@ -80,6 +81,9 @@ enum class PendingClickIdleAction {
     const Box2d& toolPaletteRect, const std::optional<Box2d>& textFormatBarRect,
     const std::optional<Box2d>& editingScopeBreadcrumbRect, const Box2d& canvasZoomControlRect,
     const std::optional<Box2d>& compactPanelRect = std::nullopt);
+[[nodiscard]] bool CanvasScrollbarsCaptureInput(bool scrollbarsVisible,
+                                                const ViewportState& viewport,
+                                                const Vector2d& screenPoint) noexcept;
 [[nodiscard]] bool GroupOperationCanDispatch(
     bool rendererBusy, const GroupOperationAvailability& availability) noexcept;
 [[nodiscard]] bool PendingDocumentReplacementCanProcess(bool hasPendingRequest, bool rendererBusy,

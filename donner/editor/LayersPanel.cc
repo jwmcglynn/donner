@@ -219,7 +219,8 @@ ImU32 ToImU32(const css::RGBA& rgba) {
 
 }  // namespace
 
-void LayersPanel::refreshSnapshot(const EditorApp& app, svg::Renderer* renderer) {
+void LayersPanel::refreshSnapshot(const EditorApp& app, svg::Renderer* renderer,
+                                  ThumbnailRefreshMode mode) {
   model_.refresh(app);
 
   const auto renderStart = std::chrono::steady_clock::now();
@@ -239,9 +240,10 @@ void LayersPanel::refreshSnapshot(const EditorApp& app, svg::Renderer* renderer)
 
   std::unordered_set<std::uint64_t> liveStableIds;
   liveStableIds.reserve(model_.rows().size());
-  const bool renderThumbnails = !app.document().document().hasPendingRenderInvalidation();
+  const bool renderThumbnails = mode == ThumbnailRefreshMode::Render &&
+                                !app.document().document().hasPendingRenderInvalidation();
   const Vector2i thumbnailMaxSizePx(kPreviewWidthPx, kPreviewHeightPx);
-  if (!renderThumbnails) {
+  if (mode == ThumbnailRefreshMode::Render && !renderThumbnails) {
     thumbnailRefreshStats_.skippedForCanvasInvalidationCount = model_.rows().size();
   }
   std::optional<svg::Renderer> fallbackRenderer;

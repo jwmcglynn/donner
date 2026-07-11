@@ -73,6 +73,20 @@ TEST(LayersPanelTest, PlainClickSelectsRowElement) {
   EXPECT_TRUE(panel.consumeSelectionChanged());
 }
 
+TEST(LayersPanelTest, SwatchesOnlyRefreshDoesNotRasterizeThumbnails) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app, nullptr, LayersPanel::ThumbnailRefreshMode::SwatchesOnly);
+
+  EXPECT_EQ(panel.thumbnailRefreshStats().renderedCount, 0u);
+  EXPECT_EQ(panel.thumbnailRefreshStats().reusedCount, 0u);
+  ASSERT_FALSE(panel.rows().empty());
+  EXPECT_EQ(panel.rowThumbnail(panel.rows().front().stableId), nullptr);
+  EXPECT_TRUE(panel.hasThumbnailOrSwatch(panel.rows().front().stableId));
+}
+
 TEST(LayersPanelTest, ShiftClickSelectsContiguousRange) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kSvg));
