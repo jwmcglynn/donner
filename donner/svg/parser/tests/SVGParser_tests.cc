@@ -5,9 +5,17 @@
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
+#include "donner/base/xml/XMLDocument.h"
+#include "donner/base/xml/XMLNode.h"
 #include "donner/base/xml/XMLParser.h"
 #include "donner/base/xml/XMLQualifiedName.h"
+#include "donner/svg/SVGAElement.h"
 #include "donner/svg/SVGElement.h"
+#include "donner/svg/SVGTSpanElement.h"
+#include "donner/svg/SVGTextElement.h"
+#include "donner/svg/SVGTextPathElement.h"
+#include "donner/svg/components/DescriptiveTextComponent.h"
+#include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/renderer/RendererUtils.h"
 
 using testing::AllOf;
@@ -347,6 +355,241 @@ TEST(SVGParser, MismatchedNamespace) {
                     ParseErrorPos(2, 23),
                     ParseErrorIs("Ignored attribute 'invalid:d' with an unsupported namespace"))));
   }
+}
+
+TEST(SVGParser, RootElementNotSvgFails) {
+  ParseWarningSink warnings;
+  EXPECT_THAT(SVGParser::ParseSVG(R"(<foo xmlns="http://www.w3.org/2000/svg"/>)", warnings),
+              ParseErrorIs("Unexpected element <foo> at root, first element must be <svg>"));
+}
+
+TEST(SVGParser, UnknownElementInSvgNamespace) {
+  ParseWarningSink warnings;
+  auto result = SVGParser::ParseSVG(
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><notAnElement id="u"/></svg>)", warnings);
+  ASSERT_THAT(result, NoParseError());
+
+  auto unknown = result.result().querySelector("#u");
+  ASSERT_TRUE(unknown.has_value());
+  EXPECT_EQ(unknown->type(), ElementType::Unknown);
+  EXPECT_THAT(unknown->tagName(), testing::Eq("notAnElement"));
+}
+
+TEST(SVGParser, ExperimentalElementsRequireOptIn) {
+  const std::string_view source(
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><animate id="a" attributeName="x"/></svg>)");
+
+  {
+    // Without the experimental option, <animate> parses as an unknown element.
+    ParseWarningSink warnings;
+    auto result = SVGParser::ParseSVG(source, warnings);
+    ASSERT_THAT(result, NoParseError());
+
+    auto element = result.result().querySelector("#a");
+    ASSERT_TRUE(element.has_value());
+    EXPECT_EQ(element->type(), ElementType::Unknown);
+  }
+
+  {
+    SVGParser::Options options;
+    options.enableExperimental = true;
+
+    ParseWarningSink warnings;
+    auto result = SVGParser::ParseSVG(source, warnings, options);
+    ASSERT_THAT(result, NoParseError());
+
+    auto element = result.result().querySelector("#a");
+    ASSERT_TRUE(element.has_value());
+    EXPECT_EQ(element->type(), ElementType::Animate);
+  }
+}
+
+TEST(SVGParser, NestedStyleElementContentsErrorPropagates) {
+  ParseWarningSink warnings;
+  EXPECT_THAT(SVGParser::ParseSVG(
+                  R"(<svg xmlns="http://www.w3.org/2000/svg"><g><style><rect/></style></g></svg>)",
+                  warnings),
+              ParseErrorIs(testing::HasSubstr("Unexpected <style> element contents")));
+}
+
+TEST(SVGParser, GzipErrors) {
+  {
+    // Gzip magic bytes with no payload.
+    const std::string_view truncated("\x1f\x8b", 2);
+    ParseWarningSink warnings;
+    EXPECT_THAT(SVGParser::ParseSVG(truncated, warnings),
+                ParseErrorIs(testing::HasSubstr("Failed to decompress gzip data")));
+  }
+
+  {
+    // Valid magic bytes followed by a corrupt stream.
+    std::string corrupt("\x1f\x8b", 2);
+    corrupt += std::string(32, 'x');
+
+    ParseWarningSink warnings;
+    EXPECT_THAT(SVGParser::ParseSVG(corrupt, warnings),
+                ParseErrorIs(testing::HasSubstr("gzip")));
+  }
+}
+
+TEST(SVGParser, InlineSvgWithExplicitInvalidNamespaceFails) {
+  SVGParser::Options options;
+  options.parseAsInlineSVG = true;
+
+  ParseWarningSink warnings;
+  EXPECT_THAT(SVGParser::ParseSVG(R"(<svg xmlns="invalid"></svg>)", warnings, options),
+              ParseErrorIs("<svg> has an unexpected namespace URI 'invalid'. "
+                           "Expected 'http://www.w3.org/2000/svg'"));
+}
+
+TEST(SVGParser, PrefixedXmlnsDeclaredBeforeDefault) {
+  const std::string_view source(
+      R"(<svg xmlns:s="http://www.w3.org/2000/svg" xmlns="http://www.w3.org/2000/svg">
+           <rect id="plain"/>
+           <s:rect s:id="prefixed"/>
+         </svg>)");
+
+  ParseWarningSink warnings;
+  auto result = SVGParser::ParseSVG(source, warnings);
+  ASSERT_THAT(result, NoParseError());
+  EXPECT_THAT(warnings.warnings(), ElementsAre());
+
+  SVGDocument document = result.result();
+  auto plain = document.querySelector("#plain");
+  ASSERT_TRUE(plain.has_value());
+  EXPECT_EQ(plain->type(), ElementType::Rect);
+
+  auto prefixed = document.svgElement().lastChild();
+  ASSERT_TRUE(prefixed.has_value());
+  EXPECT_EQ(prefixed->type(), ElementType::Rect);
+  EXPECT_THAT(prefixed->tagName(), testing::Eq(xml::XMLQualifiedNameRef("s", "rect")));
+}
+
+TEST(SVGParser, ParseXMLDocumentSuccessAndRootError) {
+  xml::XMLParser::Options xmlOptions = xml::XMLParser::Options::ParseAll();
+
+  {
+    auto xmlResult = xml::XMLParser::Parse(
+        R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r"/></svg>)", xmlOptions);
+    ASSERT_THAT(xmlResult, NoParseError());
+
+    ParseWarningSink warnings;
+    auto result = SVGParser::ParseXMLDocument(std::move(xmlResult.result()), warnings);
+    ASSERT_THAT(result, NoParseError());
+    EXPECT_TRUE(result.result().querySelector("#r").has_value());
+  }
+
+  {
+    auto xmlResult = xml::XMLParser::Parse("<foo/>", xmlOptions);
+    ASSERT_THAT(xmlResult, NoParseError());
+
+    ParseWarningSink warnings;
+    EXPECT_THAT(SVGParser::ParseXMLDocument(std::move(xmlResult.result()), warnings),
+                ParseErrorIs("Unexpected element <foo> at root, first element must be <svg>"));
+  }
+}
+
+TEST(SVGParser, ProgrammaticDocumentStyleWithoutSourceLocations) {
+  // Build an XML document via the DOM API. Its nodes have no source offsets, exercising the
+  // <style> source-map fallback paths.
+  xml::XMLDocument xmlDocument;
+
+  xml::XMLNode svg = xml::XMLNode::CreateElementNode(xmlDocument, "svg");
+  svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  xmlDocument.root().appendChild(svg);
+
+  xml::XMLNode style = xml::XMLNode::CreateElementNode(xmlDocument, "style");
+  svg.appendChild(style);
+  style.appendChild(xml::XMLNode::CreateDataNode(xmlDocument, "rect { fill: red; }"));
+
+  ParseWarningSink warnings;
+  auto result = SVGParser::ParseXMLDocument(std::move(xmlDocument), warnings);
+  ASSERT_THAT(result, NoParseError());
+
+  auto styleElement = result.result().querySelector("style");
+  ASSERT_TRUE(styleElement.has_value());
+  const auto& stylesheet =
+      styleElement->entityHandle().get<components::StylesheetComponent>();
+  EXPECT_EQ(stylesheet.text, "rect { fill: red; }");
+  EXPECT_FALSE(stylesheet.stylesheet.rules().empty());
+}
+
+TEST(SVGParser, DescriptiveElementsCaptureTextContent) {
+  const std::string_view source(
+      R"(<svg xmlns="http://www.w3.org/2000/svg">
+           <title id="t">Hello<!-- ignored --><![CDATA[ World]]></title>
+         </svg>)");
+
+  ParseWarningSink warnings;
+  auto result = SVGParser::ParseSVG(source, warnings);
+  ASSERT_THAT(result, NoParseError());
+
+  auto title = result.result().querySelector("#t");
+  ASSERT_TRUE(title.has_value());
+  const auto& descriptiveText =
+      title->entityHandle().get<components::DescriptiveTextComponent>();
+  EXPECT_EQ(descriptiveText.text, "Hello World");
+}
+
+TEST(SVGParser, TextContentSkipsCommentsAndCollectsCData) {
+  const std::string_view source(
+      R"(<svg xmlns="http://www.w3.org/2000/svg">
+           <text id="text">one<!-- c --><![CDATA[two]]><tspan id="span"><![CDATA[three]]><!-- c --></tspan><a id="link"><![CDATA[four]]><!-- c --></a><textPath id="tp"><![CDATA[five]]><!-- c --></textPath></text>
+         </svg>)");
+
+  ParseWarningSink warnings;
+  auto result = SVGParser::ParseSVG(source, warnings);
+  ASSERT_THAT(result, NoParseError());
+
+  SVGDocument document = result.result();
+  EXPECT_EQ(document.querySelector("#text")->cast<SVGTextElement>().textContent(), "onetwo");
+  EXPECT_EQ(document.querySelector("#span")->cast<SVGTSpanElement>().textContent(), "three");
+  EXPECT_EQ(document.querySelector("#link")->cast<SVGAElement>().textContent(), "four");
+  EXPECT_EQ(document.querySelector("#tp")->cast<SVGTextPathElement>().textContent(), "five");
+}
+
+TEST(SVGParser, SubDocumentParseErrorsReportedAsWarnings) {
+  // data URI decodes to "<notsvg/>", which fails SVG parsing inside the sub-document callback.
+  const std::string_view source(
+      R"(<svg xmlns="http://www.w3.org/2000/svg">
+           <image href="data:image/svg+xml;base64,PG5vdHN2Zy8+" width="10" height="10"/>
+         </svg>)");
+
+  ParseWarningSink parseWarnings;
+  auto result = SVGParser::ParseSVG(source, parseWarnings);
+  ASSERT_THAT(result, NoParseError());
+
+  ParseWarningSink renderWarnings;
+  SVGDocument document = result.result();
+  RendererUtils::prepareDocumentForRendering(document, /*verbose*/ false, renderWarnings);
+
+  EXPECT_THAT(renderWarnings.warnings(),
+              testing::Contains(
+                  testing::Field(&ParseDiagnostic::reason,
+                                 testing::HasSubstr("Unexpected element <notsvg> at root"))));
+}
+
+TEST(SVGParser, SecureStaticModeDisablesSubDocumentParsing) {
+  const std::string_view source(
+      R"(<svg xmlns="http://www.w3.org/2000/svg">
+           <image href="data:image/svg+xml;base64,PG5vdHN2Zy8+" width="10" height="10"/>
+         </svg>)");
+
+  SVGDocument::Settings settings;
+  settings.processingMode = ProcessingMode::SecureStatic;
+
+  ParseWarningSink parseWarnings;
+  auto result =
+      SVGParser::ParseSVG(source, parseWarnings, SVGParser::Options(), std::move(settings));
+  ASSERT_THAT(result, NoParseError());
+
+  ParseWarningSink renderWarnings;
+  SVGDocument document = result.result();
+  RendererUtils::prepareDocumentForRendering(document, /*verbose*/ false, renderWarnings);
+
+  // In SecureStatic mode resource loading is skipped entirely (SVG2 section 2.7.1): the
+  // sub-document is not parsed and no warnings are produced.
+  EXPECT_THAT(renderWarnings.warnings(), ElementsAre());
 }
 
 }  // namespace donner::svg::parser
