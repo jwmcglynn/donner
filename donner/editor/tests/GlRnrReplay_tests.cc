@@ -1500,7 +1500,11 @@ std::optional<std::filesystem::path> WritePenClosePathClickReplay(
                              .kind = repro::ReproAction::Kind::SetActiveTool,
                              .tool = "pen",
                          }});
-  for (std::uint64_t index = 1; index <= 20; ++index) {
+  // Leading settle: DrainEachFrame synchronously drains the async worker
+  // every frame, so first-content settle is deterministic within a frame or
+  // two; four idle frames keep margin. (This was frames 1..20 - 16 dead
+  // event-free leading frames at ~140 ms of software-GL present each.)
+  for (std::uint64_t index = 1; index <= 4; ++index) {
     PushDonnerDReplayFrame(file, index, viewport, kAnchor1Doc, 0);
   }
 
@@ -1515,15 +1519,19 @@ std::optional<std::filesystem::path> WritePenClosePathClickReplay(
     PushDonnerDReplayFrame(file, pressFrame + 1, viewport, mouseDoc, 0, {mouseUp});
   };
 
-  pushClick(21, kAnchor1Doc);
-  PushDonnerDReplayFrame(file, 23, viewport, kAnchor2Doc, 0);
-  pushClick(24, kAnchor2Doc);
-  PushDonnerDReplayFrame(file, 26, viewport, kAnchor3Doc, 0);
-  pushClick(27, kAnchor3Doc);
-  PushDonnerDReplayFrame(file, 29, viewport, kAnchor1Doc, 0);
+  pushClick(5, kAnchor1Doc);
+  PushDonnerDReplayFrame(file, 7, viewport, kAnchor2Doc, 0);
+  pushClick(8, kAnchor2Doc);
+  PushDonnerDReplayFrame(file, 10, viewport, kAnchor3Doc, 0);
+  pushClick(11, kAnchor3Doc);
+  PushDonnerDReplayFrame(file, 13, viewport, kAnchor1Doc, 0);
   // Close-path click back on the first anchor.
-  pushClick(30, kAnchor1Doc);
-  for (std::uint64_t index = 32; index <= 40; ++index) {
+  pushClick(14, kAnchor1Doc);
+  // Trailing flush margin: the close-commit flush lands on the click frame
+  // itself (the test scans diagnostics for the first " Z" commit and asserts
+  // on that frame); three post-click frames keep margin. (This was frames
+  // 32..40 - dead trailing frames whose output fed no assertion.)
+  for (std::uint64_t index = 16; index <= 18; ++index) {
     PushDonnerDReplayFrame(file, index, viewport, kAnchor1Doc, 0);
   }
 
@@ -2310,8 +2318,8 @@ TEST(GlRnrReplayTest, PenClosePathClickRefreshesOverlayOnFlushFrame) {
   options.rnrPath = *replayPath;
   options.svgPathOverride = RunfilePath("donner_splash.svg");
   options.outputDir = outputDir;
-  options.captureFrames.insert(40);
-  options.maxFrame = 40;
+  options.captureFrames.insert(18);
+  options.maxFrame = 18;
   options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
   options.pace = false;
   options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
