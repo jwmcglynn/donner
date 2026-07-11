@@ -64,6 +64,7 @@ NON_INSTRUMENTABLE_RULE_KINDS = frozenset(
         "genquery",
         "test_suite",
         "serve_http",
+        "web_package",
         # Configuration, flags, and platform/toolchain declarations.
         "config_setting",
         "bool_flag",
