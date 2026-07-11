@@ -94,6 +94,49 @@ TEST(SVGDocument, SetCanvasSizeNoOpDoesNotInvalidateBuiltRenderTree) {
   EXPECT_EQ(document.canvasSize(), Vector2i(100, 201));
 }
 
+TEST(SVGDocument, SetTimeNoOpDoesNotInvalidateBuiltRenderTree) {
+  SVGDocument document;
+  document.setTime(5.0);
+  EXPECT_EQ(document.currentTime(), 5.0);
+
+  auto& renderState = EnsureRenderTreeState(document.registry());
+  renderState.hasBeenBuilt = true;
+  renderState.needsFullRebuild = false;
+  renderState.needsFullStyleRecompute = false;
+  document.registry().clear<components::DirtyFlagsComponent>();
+
+  document.setTime(5.0);
+
+  EXPECT_FALSE(document.hasPendingRenderInvalidation());
+  EXPECT_EQ(document.currentTime(), 5.0);
+
+  document.setTime(6.0);
+
+  EXPECT_TRUE(document.hasPendingRenderInvalidation());
+  EXPECT_EQ(document.currentTime(), 6.0);
+}
+
+TEST(SVGDocument, UserLanguagesRoundTripAndNoOpSkipsInvalidation) {
+  SVGDocument document;
+  EXPECT_THAT(document.userLanguages(), testing::ElementsAre(RcString("en")));
+
+  auto& renderState = EnsureRenderTreeState(document.registry());
+  renderState.hasBeenBuilt = true;
+  renderState.needsFullRebuild = false;
+  renderState.needsFullStyleRecompute = false;
+  document.registry().clear<components::DirtyFlagsComponent>();
+
+  document.setUserLanguages({RcString("en")});
+
+  EXPECT_FALSE(document.hasPendingRenderInvalidation());
+  EXPECT_THAT(document.userLanguages(), testing::ElementsAre(RcString("en")));
+
+  document.setUserLanguages({RcString("de"), RcString("en")});
+
+  EXPECT_TRUE(document.hasPendingRenderInvalidation());
+  EXPECT_THAT(document.userLanguages(), testing::ElementsAre(RcString("de"), RcString("en")));
+}
+
 TEST(SVGDocument, CanvasSizeFromFile) {
   {
     auto document = ParseSVG(R"(
@@ -692,6 +735,239 @@ TEST(SVGDocument, SourceLessSetElementTextContentReturnsUnappliedResult) {
   EXPECT_FALSE(result.applied);
   EXPECT_EQ(result.scope, xml::ReparseScope::TextNode);
   EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+}
+
+TEST(SVGDocument, SetElementTextContentOnNonTextElementReportsDiagnostic) {
+  auto document =
+      ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><custom id="c">old</custom></svg>)");
+  SVGElement custom = document.querySelector("#c").value();
+
+  xml::ApplySourceEditResult result = document.setElementTextContent(custom, "new");
+
+  ASSERT_TRUE(result.diagnostic.has_value());
+  EXPECT_THAT(result.diagnostic->reason, testing::HasSubstr("not SVG text or style content"));
+  EXPECT_THAT(document.source(), testing::HasSubstr(">new</custom>"));
+}
+
+TEST(SVGDocument, MixedContentTextNodeEditReprojectsTextChunks) {
+  // Editing a text node inside an element with mixed content (text plus child elements) reprojects
+  // the parent element's text, preserving chunk boundaries around the child element.
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <text id="m">one<tspan id="s">two</tspan>three</text>
+    </svg>
+  )");
+  SVGElement text = document.querySelector("#m").value();
+  const std::size_t valueOffset = document.source().find("one");
+  ASSERT_NE(valueOffset, std::string_view::npos);
+
+  xml::ApplySourceEditResult result = document.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(valueOffset), FileOffset::Offset(valueOffset + 3)},
+      .replacement = "ONE",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+  EXPECT_THAT(document.source(), testing::HasSubstr(">ONE<tspan"));
+  const auto& textComponent = text.entityHandle().get<components::TextComponent>();
+  EXPECT_EQ(textComponent.text, "ONEthree");
+  EXPECT_THAT(textComponent.textChunks, testing::ElementsAre(RcString("ONE"), RcString("three")));
+}
+
+TEST(SVGDocument, TSpanTextEditInvalidatesAncestorTextRoot) {
+  // Editing text inside a <tspan> marks the ancestor <text> root's text geometry dirty, walking
+  // up the tree from the tspan (which is not itself a text root).
+  auto document = ParseSVG(
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><text id="m"><tspan id="s">two</tspan></text></svg>)");
+  SVGElement tspan = document.querySelector("#s").value();
+  SVGElement text = document.querySelector("#m").value();
+  text.entityHandle().remove<components::DirtyFlagsComponent>();
+  const std::size_t valueOffset = document.source().find("two");
+  ASSERT_NE(valueOffset, std::string_view::npos);
+
+  xml::ApplySourceEditResult result = document.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(valueOffset), FileOffset::Offset(valueOffset + 3)},
+      .replacement = "TWO",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+  EXPECT_EQ(tspan.entityHandle().get<components::TextComponent>().text, "TWO");
+
+  const auto* dirtyFlags = text.entityHandle().try_get<components::DirtyFlagsComponent>();
+  ASSERT_NE(dirtyFlags, nullptr);
+  EXPECT_TRUE(dirtyFlags->test(components::DirtyFlagsComponent::TextGeometry));
+}
+
+TEST(SVGDocument, StandaloneAnchorTextEditProjectsWithoutTextRoot) {
+  // An <a> outside of text content carries text components but has no <text> root ancestor; the
+  // invalidation walk terminates at the document root without finding one.
+  auto document = ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><a id="a1">hi</a></svg>)");
+  SVGElement anchor = document.querySelector("#a1").value();
+  const std::size_t valueOffset = document.source().find("hi");
+  ASSERT_NE(valueOffset, std::string_view::npos);
+
+  xml::ApplySourceEditResult result = document.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(valueOffset), FileOffset::Offset(valueOffset + 2)},
+      .replacement = "bye",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+  EXPECT_EQ(anchor.entityHandle().get<components::TextComponent>().text, "bye");
+}
+
+TEST(SVGDocument, CDataMixedContentEditReprojectsTextChunks) {
+  // Editing CDATA contents adjacent to a plain text sibling reprojects the parent text element,
+  // concatenating the data and CDATA chunks.
+  auto document = ParseSVG(
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><text id="m">one<![CDATA[two]]></text></svg>)");
+  SVGElement text = document.querySelector("#m").value();
+  const std::size_t valueOffset = document.source().find("two");
+  ASSERT_NE(valueOffset, std::string_view::npos);
+
+  xml::ApplySourceEditResult result = document.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(valueOffset), FileOffset::Offset(valueOffset + 3)},
+      .replacement = "TWO",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+  EXPECT_THAT(document.source(), testing::HasSubstr("<![CDATA[TWO]]>"));
+  const auto& textComponent = text.entityHandle().get<components::TextComponent>();
+  EXPECT_EQ(textComponent.text, "oneTWO");
+  EXPECT_THAT(textComponent.textChunks, testing::ElementsAre(RcString("one"), RcString("TWO")));
+}
+
+TEST(SVGDocument, ProcessingInstructionValueEditAppliesWithoutProjectionDiagnostic) {
+  // Editing processing instruction contents applies to the source without producing a projection
+  // diagnostic, and does not disturb sibling elements.
+  auto document =
+      ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><?foo bar?><rect id="r"/></svg>)");
+  const std::size_t valueOffset = document.source().find("bar");
+  ASSERT_NE(valueOffset, std::string_view::npos);
+
+  xml::ApplySourceEditResult result = document.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(valueOffset), FileOffset::Offset(valueOffset + 3)},
+      .replacement = "baz",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+  EXPECT_THAT(document.source(), testing::HasSubstr("<?foo baz?>"));
+  EXPECT_THAT(document.querySelector("#r"), Optional(ElementIdEq("r")));
+}
+
+TEST(SVGDocument, CommentValueEditAppliesWithoutProjectionDiagnostic) {
+  // Editing comment contents applies to the source without producing a projection diagnostic,
+  // and does not disturb sibling elements.
+  auto document =
+      ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><!-- note --><rect id="r"/></svg>)");
+  const std::size_t valueOffset = document.source().find("note");
+  ASSERT_NE(valueOffset, std::string_view::npos);
+
+  xml::ApplySourceEditResult result = document.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(valueOffset), FileOffset::Offset(valueOffset + 4)},
+      .replacement = "updated",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+  EXPECT_THAT(document.source(), testing::HasSubstr("<!-- updated -->"));
+  EXPECT_THAT(document.querySelector("#r"), Optional(ElementIdEq("r")));
+}
+
+TEST(SVGDocument, StyleTextEditWithElementChildReportsDiagnostic) {
+  // Insert an element child into a <style> element, then edit the style text: reprojecting the
+  // stylesheet encounters the unexpected element child.
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <style id="s">rect { fill: red; }</style>
+      <rect id="r"/>
+    </svg>
+  )");
+  SVGElement style = document.querySelector("#s").value();
+  SVGRectElement inserted = SVGRectElement::Create(document);
+  inserted.setId("inserted");
+  ASSERT_TRUE(document.insertElement(style, inserted).applied);
+
+  const std::size_t valueOffset = document.source().find("red");
+  ASSERT_NE(valueOffset, std::string_view::npos);
+
+  xml::ApplySourceEditResult result = document.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(valueOffset), FileOffset::Offset(valueOffset + 3)},
+      .replacement = "blue",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  ASSERT_TRUE(result.diagnostic.has_value());
+  EXPECT_THAT(result.diagnostic->reason, testing::HasSubstr("Unexpected <style> element contents"));
+}
+
+TEST(SVGDocument, SubtreeEditWithInvalidAttributeReportsProjectionDiagnostic) {
+  // An edit spanning multiple children reparses the parent subtree; projecting the replacement
+  // reports the invalid attribute on the new child.
+  auto document = ParseSVG(
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><g id="host"><rect id="a" width="5"/><rect id="b"/></g></svg>)");
+  const std::size_t editStart = document.source().find(R"(<rect id="a")");
+  const std::string_view lastChild = R"(<rect id="b"/>)";
+  const std::size_t lastChildOffset = document.source().find(lastChild);
+  ASSERT_NE(editStart, std::string_view::npos);
+  ASSERT_NE(lastChildOffset, std::string_view::npos);
+  const std::size_t editEnd = lastChildOffset + lastChild.size();
+
+  xml::ApplySourceEditResult result = document.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(editStart), FileOffset::Offset(editEnd)},
+      .replacement = R"(<rect id="c" width="not-a-length"/>)",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, xml::ReparseScope::ElementSubtree);
+  ASSERT_TRUE(result.diagnostic.has_value());
+  EXPECT_THAT(result.diagnostic->reason, testing::HasSubstr("Invalid length or percentage"));
+  ASSERT_THAT(document.querySelector("#c"), Optional(ElementIdEq("c")));
+  EXPECT_THAT(document.querySelector("#a"), Eq(std::nullopt));
+  EXPECT_THAT(document.querySelector("#b"), Eq(std::nullopt));
+}
+
+TEST(SVGDocument, SubtreeEditProjectsMixedTextChunks) {
+  // Text content inserted through a source edit is projected by SVGDocument's subtree projection,
+  // preserving chunk boundaries around child elements and concatenating adjacent text and CDATA.
+  auto document = ParseSVG(
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><g id="host"><rect id="old"/></g></svg>)");
+  const std::string_view oldChild = R"(<rect id="old"/>)";
+  const std::size_t editStart = document.source().find(oldChild);
+  ASSERT_NE(editStart, std::string_view::npos);
+
+  xml::ApplySourceEditResult result = document.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(editStart),
+                           FileOffset::Offset(editStart + oldChild.size())},
+      .replacement =
+          R"(<text id="t2"><tspan>lead</tspan>mid<tspan>x</tspan>tail<![CDATA[cd]]></text><text id="t3">solo</text>)",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+
+  SVGElement mixed = document.querySelector("#t2").value();
+  const auto& mixedText = mixed.entityHandle().get<components::TextComponent>();
+  EXPECT_EQ(mixedText.text, "midtailcd");
+  EXPECT_THAT(mixedText.textChunks, testing::ElementsAre(RcString(""), RcString("mid"),
+                                                         RcString("tail"), RcString("cd")));
+
+  SVGElement solo = document.querySelector("#t3").value();
+  const auto& soloText = solo.entityHandle().get<components::TextComponent>();
+  EXPECT_EQ(soloText.text, "solo");
+  EXPECT_THAT(soloText.textChunks, testing::ElementsAre(RcString("solo")));
 }
 
 TEST(SVGDocument, SourceBackedInsertAndRemoveElementUpdateSource) {
