@@ -582,11 +582,27 @@ donner_variant_cc_test(
         # Geode variant: runs the same resvg Params and thresholds as the CPU
         # variants. Per-test exceptions belong in the normal Params maps, not in
         # backend-specific gate tables.
+        #
+        # In geode builds every testcase generates a TinyGolden (CPU
+        # reference) and a GeodeGolden param, interleaved. The TinyGolden
+        # half is an exact duplicate of the default_text variant's param
+        # set (verified by enumerating both binaries: the geode variant's
+        # 1636 *_TinyGolden params strip-suffix-equal the default_text
+        # variant's 1636 params, zero missing / zero extra), so the geode
+        # lane filters them out and runs only the GeodeGolden half. The CPU
+        # comparisons still run on every `bazel test //...` via
+        # resvg_test_suite_default_text.
+        #
+        # With the CPU half gone the shard work is pure geode
+        # render+readback+golden-compare volume; 16 shards halves the
+        # per-shard critical path relative to the CPU variants' 8.
         {
             "name": "geode",
             "backend": "geode",
             "text": "true",
             "text_full": "false",
+            "args": ["--gtest_filter=-*_TinyGolden"],
+            "shard_count": 16,
         },
     ],
     # Hundreds of independent image comparisons per variant. Unsharded, the
