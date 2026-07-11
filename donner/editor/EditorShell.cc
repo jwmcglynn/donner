@@ -3920,10 +3920,12 @@ void EditorShell::updateSourceStructuralDrag() {
     }
   }
 
-  const std::optional<Coordinates> dragTarget = textEditor_.sourceGutterDragTarget();
-  if (sourceStructuralDragElement_.has_value() && dragTarget.has_value()) {
+  const auto evaluateDragTarget = [&](const Coordinates& dragTarget) {
+    if (!sourceStructuralDragElement_.has_value()) {
+      return;
+    }
     const std::size_t targetOffset =
-        textEditor_.getByteOffsetAtCoordinates(Coordinates{dragTarget->line, 0});
+        textEditor_.getByteOffsetAtCoordinates(Coordinates{dragTarget.line, 0});
     sourceStructuralMoveTarget_ = FindElementNearSourceOffset(
         app_.document().document(), source, FirstSourceContentOffset(source, targetOffset));
     sourceStructuralMovePlan_.reset();
@@ -3961,9 +3963,15 @@ void EditorShell::updateSourceStructuralDrag() {
         .valid = evaluation.status == SourceStructuralMoveStatus::Ready,
         .message = std::string(SourceStructuralMoveStatusMessage(evaluation.status)),
     });
+  };
+
+  if (const std::optional<Coordinates> dragTarget = textEditor_.sourceGutterDragTarget()) {
+    evaluateDragTarget(*dragTarget);
   }
 
-  if (textEditor_.takeSourceGutterDropTarget().has_value()) {
+  if (const std::optional<Coordinates> dropTarget = textEditor_.takeSourceGutterDropTarget()) {
+    // Re-evaluate from the release coordinate: the pointer can move and release between drag frames.
+    evaluateDragTarget(*dropTarget);
     if (sourceStructuralMovePlan_.has_value() &&
         CommitSourceStructuralMove(app_, *sourceStructuralMovePlan_, source) ==
             SourceStructuralMoveStatus::Ready) {

@@ -954,7 +954,9 @@ void TextEditor::updateSourceGutterDragInput() {
         sourceGutterDragTarget_.reset();
       }
     } else if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-      sourceGutterDropTarget_ = sourceGutterDragTarget_;
+      // Resolve the release position from this frame instead of reusing the previous drag frame.
+      // A fast move-and-release can otherwise commit one row behind the pointer.
+      sourceGutterDropTarget_ = screenPosToCoordinates(mousePos);
       sourceGutterDragLine_.reset();
       sourceGutterDragTarget_.reset();
     } else {

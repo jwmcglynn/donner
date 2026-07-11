@@ -5103,6 +5103,25 @@ TEST_F(TextEditorTests, GutterHandleDragPublishesSourceMoveGestureWithoutEditing
   EXPECT_FALSE(editor.isTextChanged());
 }
 
+TEST_F(TextEditorTests, GutterHandleDropUsesCurrentReleasePosition) {
+  editor.setText("one\ntwo\nthree");
+  RenderEditorFrame();
+
+  const ImVec2 handle = SourceGutterHandlePoint(/*visualIndex=*/0);
+  const ImVec2 release = ScreenPointAtVisualTextOffset(/*visualIndex=*/2,
+                                                       /*visualColumnOffset=*/1);
+  RenderEditorFrameWithMouse(handle, /*mouseDown=*/false);
+  RenderEditorFrameWithMouse(handle, /*mouseDown=*/true);
+  ASSERT_EQ(editor.takeSourceGutterDragStartedLine(), 0);
+
+  // Move and release without a preceding held frame at the destination.
+  RenderEditorFrameWithMouse(release, /*mouseDown=*/false);
+
+  const std::optional<Coordinates> drop = editor.takeSourceGutterDropTarget();
+  ASSERT_TRUE(drop.has_value());
+  EXPECT_EQ(drop->line, 2);
+}
+
 TEST_F(TextEditorTests, StructuralMoveDecorationClampsToSourceAndRenders) {
   editor.setText("<svg><rect/></svg>");
 
