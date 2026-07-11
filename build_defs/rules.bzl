@@ -344,6 +344,17 @@ def donner_variant_cc_test(name, dep, variants = None, named_variants = None, **
     if named_variants:
         for v in named_variants:
             target_name = "{}_{}".format(name, v["name"])
+
+            # Per-variant overrides: a variant dict may carry "args" and/or
+            # "shard_count" to override the shared kwargs for just that
+            # variant (e.g. the resvg geode variant filters out CPU-reference
+            # params and takes a higher shard count than the CPU variants).
+            variant_kwargs = dict(kwargs)
+            if "args" in v:
+                variant_kwargs["args"] = v["args"]
+            if "shard_count" in v:
+                variant_kwargs["shard_count"] = v["shard_count"]
+
             donner_multi_transitioned_test(
                 name = target_name,
                 dep = dep,
@@ -351,7 +362,7 @@ def donner_variant_cc_test(name, dep, variants = None, named_variants = None, **
                 text = v.get("text", "false"),
                 text_full = v.get("text_full", "false"),
                 testonly = 1,
-                **kwargs
+                **variant_kwargs
             )
     elif variants:
         backends = variants[0] if len(variants) > 0 else ["tiny_skia"]
