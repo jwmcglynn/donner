@@ -666,3 +666,24 @@ warmed and the instrumented surface is both broad (all //donner) and multiplied
 Levers 1 and 2 are the ones that reach P99<=15 on worst-case (#829-class) PRs
 and both are operator-reserved (infra load / coverage scope); lever 3 is the
 safe partial that lands immediately.
+
+### Cross-check with the infra audit (2026-07-11, generic attribution)
+
+A parallel read-only infra audit reports that the RE backend has ample slot
+headroom under organic CI (roughly 9-25 of 96 execution slots occupied), while
+the runner tier is CPU-overcommitted under concurrent runner-side phases (each
+runner microVM is oversubscribed on the shared runner-host cores). Two
+implications for this lane:
+
+- The 52-minute cost is genuine cold instrumented-build volume, not RE backend
+  saturation: with the backend far from full, seeding the RE coverage cache
+  (lever 1) is the fix, and running the main-baseline coverage on the RE backend
+  has slot headroom to spare (the dev-host priority guarantee still governs, but
+  the backend is not the scarce resource here).
+- Any CPU-heavy runner-side coverage step is the structurally starved place. The
+  measured runner-side coverage post-processing here is only ~16s (2s Python +
+  14s Bazel merge) and is not the current bottleneck under serialization, but if
+  a future change adds runner-side CPU work, it should be pushed onto RE rather
+  than run on the overcommitted runner tier. The coverage lane already keeps the
+  runner thin (`--no-html`, RE execution), so no runner-side move is warranted
+  today; this is recorded so the option is not re-litigated.
