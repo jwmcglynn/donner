@@ -31,6 +31,7 @@
 #include "donner/editor/RotateCursorSet.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/SidebarPresenter.h"
+#include "donner/editor/SourceDiagnosticsPanel.h"
 #include "donner/editor/StyleSourceAnnotations.h"
 #include "donner/editor/TextEditor.h"
 #include "donner/editor/TextFormatBarPresenter.h"
@@ -449,6 +450,7 @@ private:
   };
   ActiveTool activeTool_ = ActiveTool::Select;
   TextEditor textEditor_;
+  SourceDiagnosticsPanel sourceDiagnosticsPanel_;
   /// Backing store for shape Cut/Copy/Paste. Holds the headered
   /// `# donner-shape-clipboard v1` payload (see `ShapeClipboardPayload`).
   std::unique_ptr<ClipboardInterface> shapeClipboard_;

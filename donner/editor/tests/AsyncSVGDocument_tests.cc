@@ -59,6 +59,8 @@ TEST(AsyncSVGDocumentTest, EmptyByDefault) {
   EXPECT_FALSE(doc.flushFrame());
   EXPECT_EQ(doc.currentFrameVersion(), 0u);
   EXPECT_FALSE(doc.lastFlushResult().appliedCommands);
+  EXPECT_TRUE(doc.parseDiagnostics().empty());
+  EXPECT_EQ(doc.parseDiagnosticsRevision(), 0u);
 }
 
 TEST(AsyncSVGDocumentTest, LoadFromStringSucceedsAndBumpsVersion) {
@@ -69,6 +71,35 @@ TEST(AsyncSVGDocumentTest, LoadFromStringSucceedsAndBumpsVersion) {
 
   auto rect = doc.document().querySelector("#r1");
   ASSERT_TRUE(rect.has_value());
+}
+
+TEST(AsyncSVGDocumentTest, SuccessfulParsePublishesWarnings) {
+  constexpr std::string_view kSvgWithWarning = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" xmlns:unused="urn:unexpected">
+      <rect width="10" height="10"/>
+    </svg>)svg";
+  AsyncSVGDocument doc;
+
+  ASSERT_TRUE(doc.loadFromString(kSvgWithWarning));
+
+  ASSERT_FALSE(doc.parseDiagnostics().empty());
+  EXPECT_EQ(doc.parseDiagnostics().front().severity, DiagnosticSeverity::Warning);
+  EXPECT_FALSE(doc.lastParseError().has_value());
+  EXPECT_GT(doc.parseDiagnosticsRevision(), 0u);
+}
+
+TEST(AsyncSVGDocumentTest, ParseDiagnosticsAdvanceAndClearOnNextSuccessfulParse) {
+  AsyncSVGDocument doc;
+  ASSERT_FALSE(doc.loadFromString("<svg"));
+  const std::uint64_t failedRevision = doc.parseDiagnosticsRevision();
+  ASSERT_EQ(doc.parseDiagnostics().size(), 1u);
+  EXPECT_EQ(doc.parseDiagnostics().front().severity, DiagnosticSeverity::Error);
+
+  ASSERT_TRUE(doc.loadFromString(kTrivialSvg));
+
+  EXPECT_GT(doc.parseDiagnosticsRevision(), failedRevision);
+  EXPECT_TRUE(doc.parseDiagnostics().empty());
+  EXPECT_FALSE(doc.lastParseError().has_value());
 }
 
 TEST(AsyncSVGDocumentTest, FlushAppliesQueuedSetTransform) {

@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -8,6 +9,7 @@
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorApp.h"
+#include "donner/editor/SourceDiagnostics.h"
 #include "donner/editor/SourceEditIntent.h"
 #include "donner/editor/TextEditor.h"
 
@@ -23,6 +25,10 @@ public:
   void resetForLoadedDocument(const std::string& source);
 
   void syncParseErrorMarkers(EditorApp& app, TextEditor& textEditor);
+  /// Diagnostics normalized for the current source buffer and parse revision.
+  [[nodiscard]] const SourceDiagnosticSnapshot& sourceDiagnostics() const {
+    return sourceDiagnostics_;
+  }
   /**
    * Mirror XML-owned source deltas into the source pane.
    *
@@ -44,8 +50,6 @@ public:
   void applyPendingWritebacks(EditorApp& app, SelectTool& selectTool, TextEditor& textEditor);
 
 private:
-  static TextEditor::ErrorMarkers ParseErrorToMarkers(const ParseDiagnostic& diag);
-
   std::string previousSourceText_;
   std::optional<std::string> lastWritebackSourceText_;
   /// Pending transform writebacks that haven't been reflected in the source
@@ -55,8 +59,8 @@ private:
   std::vector<EditorApp::CompletedElementRemoveWriteback> pendingElementRemoveWritebacks_;
   std::vector<SourceEditIntent> pendingSourceEditIntents_;
 
-  int lastShownErrorLine_ = -1;
-  std::string lastShownErrorReason_;
+  SourceDiagnosticSnapshot sourceDiagnostics_;
+  std::uint64_t lastSyncedDiagnosticsRevision_ = std::numeric_limits<std::uint64_t>::max();
 
   bool textChangePending_ = false;
   bool textDispatchThrottled_ = false;

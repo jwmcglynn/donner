@@ -4597,6 +4597,37 @@ TEST_F(TextEditorTests, ErrorMarkersRenderLineBackground) {
   EXPECT_GT(VisualLineCount(), 0);
 }
 
+TEST_F(TextEditorTests, SourceDiagnosticsPreferNarrowestRangeAtByteOffset) {
+  editor.setText("abcdef");
+  ASSERT_TRUE(editor.setSourceDiagnostics({
+      SourceDiagnostic{.id = 1, .range = {1, 5}, .message = "wide"},
+      SourceDiagnostic{.id = 2, .range = {2, 4}, .message = "narrow"},
+  }));
+
+  EXPECT_EQ(editor.sourceDiagnosticAtByteOffset(3), 2u);
+  EXPECT_EQ(editor.sourceDiagnosticAtByteOffset(5), std::nullopt);
+}
+
+TEST_F(TextEditorTests, SourceDiagnosticsTrackSourceEditsAndValidateActiveId) {
+  editor.setText("abcdef");
+  ASSERT_TRUE(editor.setSourceDiagnostics({
+      SourceDiagnostic{.id = 7, .range = {2, 4}, .line = 1, .column = 2, .message = "issue"},
+  }));
+  EXPECT_TRUE(editor.setActiveSourceDiagnosticId(7));
+  EXPECT_EQ(editor.activeSourceDiagnosticId(), 7u);
+
+  editor.setCursorPosition(Coordinates(0, 0));
+  editor.insertText("XX");
+
+  ASSERT_EQ(editor.sourceDiagnostics().size(), 1u);
+  EXPECT_EQ(editor.sourceDiagnostics().front().range, (SourceByteRange{4, 6}));
+  EXPECT_EQ(editor.sourceDiagnostics().front().column, 4u);
+  EXPECT_EQ(editor.sourceDiagnostics().front().endLine, 1u);
+  EXPECT_EQ(editor.sourceDiagnostics().front().endColumn, 6u);
+  EXPECT_FALSE(editor.setActiveSourceDiagnosticId(99));
+  EXPECT_EQ(editor.activeSourceDiagnosticId(), std::nullopt);
+}
+
 TEST_F(TextEditorTests, HoveringErrorMarkerRendersTooltip) {
   editor.setText("first\nsecond\nthird");
   editor.setErrorMarkers(ErrorMarkers{{2, "syntax error"}});

@@ -2149,16 +2149,45 @@ void EditorShell::renderSourcePane(float paneOriginY, float paneHeight, float pa
   ImGui::SetNextWindowPos(ImVec2(0.0f, paneOriginY), ImGuiCond_Always);
   ImGui::SetNextWindowSize(ImVec2(paneWidth, paneHeight), ImGuiCond_Always);
   ImGui::Begin("Source", nullptr, kPaneFlags);
+  // TextEditor owns the canonical, edit-remapped diagnostic ranges used for both inline
+  // highlighting and panel activation. The controller snapshot remains parse-revision evidence.
+  const auto& diagnostics = textEditor_.sourceDiagnostics();
+  const float availableHeight = ImGui::GetContentRegionAvail().y;
+  const float diagnosticsHeight = diagnostics.empty()
+                                      ? 0.0f
+                                      : std::min(std::clamp(paneHeight * 0.30f, 118.0f, 220.0f),
+                                                 std::max(0.0f, availableHeight - 80.0f));
   ImGui::PushFont(codeFont);
   textEditor_.setSourceFocusModeContextMenu(sourceFocusMode_);
   updateSourceStyleDecorations();
-  textEditor_.render("##source");
+  textEditor_.render("##source",
+                     ImVec2(0.0f, diagnosticsHeight > 0.0f ? -diagnosticsHeight : 0.0f));
   applySourceStyleDecorationChipClick();
   if (textEditor_.takeSourceFocusModeContextMenuToggleRequest()) {
     toggleSourceFocusMode();
   }
   syncSelectionFromSourceCursorIfNeeded();
+  const std::optional<std::uint64_t> sourceHoveredDiagnostic =
+      textEditor_.hoveredSourceDiagnosticId();
   ImGui::PopFont();
+
+  if (diagnosticsHeight > 0.0f) {
+    const SourceDiagnosticsPanelAction diagnosticsAction =
+        sourceDiagnosticsPanel_.render(diagnostics, sourceHoveredDiagnostic, diagnosticsHeight);
+    textEditor_.setActiveSourceDiagnosticId(diagnosticsAction.hoveredId.has_value()
+                                                ? diagnosticsAction.hoveredId
+                                                : sourceHoveredDiagnostic);
+    if (diagnosticsAction.activatedId.has_value()) {
+      if (const SourceDiagnostic* diagnostic =
+              FindSourceDiagnostic(diagnostics, *diagnosticsAction.activatedId)) {
+        textEditor_.selectAndFocus(textEditor_.getCoordinatesAtByteOffset(diagnostic->range.start),
+                                   textEditor_.getCoordinatesAtByteOffset(diagnostic->range.end));
+        textEditor_.flashSourceRange(diagnostic->range);
+      }
+    }
+  } else {
+    textEditor_.setActiveSourceDiagnosticId(std::nullopt);
+  }
   const bool sourceEditShouldPreserveCursor =
       textEditor_.isTextChanged() && sourceFocusMode_ && textEditor_.isCursorInsideFocusRange();
   if (textEditor_.isTextChanged()) {

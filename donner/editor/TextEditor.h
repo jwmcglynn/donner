@@ -19,6 +19,7 @@
 #include "donner/editor/FrameCostBreakdown.h"
 #include "donner/editor/RopeSimulation.h"
 #include "donner/editor/SoftWrap.h"
+#include "donner/editor/SourceDiagnostics.h"
 #include "donner/editor/TextBuffer.h"
 #include "donner/editor/TextEditorCore.h"
 
@@ -606,6 +607,22 @@ public:
   [[nodiscard]] const std::vector<SourceByteRange>& hoverSourceRanges() const {
     return hoverSourceRanges_;
   }
+  /// Install exact source diagnostics for inline rendering and hit testing.
+  bool setSourceDiagnostics(std::vector<SourceDiagnostic> diagnostics);
+  /// Active source diagnostics.
+  [[nodiscard]] const std::vector<SourceDiagnostic>& sourceDiagnostics() const {
+    return sourceDiagnostics_;
+  }
+  /// Return the narrowest diagnostic containing \p byteOffset.
+  [[nodiscard]] std::optional<std::uint64_t> sourceDiagnosticAtByteOffset(
+      std::size_t byteOffset) const;
+  /// Diagnostic under the source pointer, if any.
+  [[nodiscard]] std::optional<std::uint64_t> hoveredSourceDiagnosticId() const;
+  /// Emphasize a diagnostic selected or hovered by an external presenter.
+  bool setActiveSourceDiagnosticId(std::optional<std::uint64_t> id);
+  [[nodiscard]] std::optional<std::uint64_t> activeSourceDiagnosticId() const {
+    return activeSourceDiagnosticId_;
+  }
   /// Set source style/cascade decorations.
   bool setSourceStyleDecorations(std::vector<SourceStyleDecoration> decorations);
   /// Clear source style/cascade decorations.
@@ -1089,8 +1106,10 @@ private:
   // place; the shell reads them via aliased references.
   bool& scrollbarMarkers_;
   std::vector<int>& changedLines_;
-  std::vector<int> highlightedLines_;               //!< Lines to highlight
-  std::vector<SourceByteRange> hoverSourceRanges_;  //!< Source ranges highlighted on hover
+  std::vector<int> highlightedLines_;                //!< Lines to highlight
+  std::vector<SourceByteRange> hoverSourceRanges_;   //!< Source ranges highlighted on hover
+  std::vector<SourceDiagnostic> sourceDiagnostics_;  //!< Exact parser diagnostic ranges.
+  std::optional<std::uint64_t> activeSourceDiagnosticId_;
   std::vector<SourceStyleDecoration> sourceStyleDecorations_;  //!< Style source decorations.
   FocusPartition focusPartition_;
   bool focusPartitionActive_ = false;
@@ -1425,6 +1444,7 @@ private:
                             ImDrawList* drawList);
   void renderLineBackground(const VisualLine& visualLine, const ImVec2& start,
                             const ImVec2& contentSize, ImDrawList* drawList);
+  void renderSourceDiagnosticTooltip();
   void renderFocusReferenceLinks(ImDrawList* drawList);
 
   /**

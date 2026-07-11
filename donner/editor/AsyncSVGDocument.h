@@ -165,6 +165,14 @@ public:
     return lastParseError_;
   }
 
+  /// All warnings and the fatal error, if any, published by the most recent parse operation.
+  [[nodiscard]] const std::vector<ParseDiagnostic>& parseDiagnostics() const {
+    return parseDiagnostics_;
+  }
+
+  /// Monotonic revision for \ref parseDiagnostics.
+  [[nodiscard]] std::uint64_t parseDiagnosticsRevision() const { return parseDiagnosticsRevision_; }
+
 private:
   // Apply a single (already-coalesced) command. SetTransform finds the
   // target element via the document's Registry and calls
@@ -174,6 +182,9 @@ private:
 
   /// Remap any element handles in `command` through a structural writeback replacement.
   void remapCommandTargets(EditorCommand* command, const std::unordered_map<Entity, Entity>& remap);
+
+  void publishParseDiagnostics(std::vector<ParseDiagnostic> warnings,
+                               std::optional<ParseDiagnostic> fatalError);
 
   std::optional<svg::SVGDocument> document_;
   CommandQueue queue_;
@@ -188,6 +199,8 @@ private:
   /// replacement since the last consumption.
   std::unordered_map<Entity, Entity> pendingStructuralRemap_;
   std::optional<ParseDiagnostic> lastParseError_;
+  std::vector<ParseDiagnostic> parseDiagnostics_;
+  std::uint64_t parseDiagnosticsRevision_ = 0;
   FlushResult lastFlushResult_;
 };
 

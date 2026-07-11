@@ -1088,6 +1088,12 @@ TEST_F(DocumentSyncControllerTest, SyncParseErrorMarkersHandlesErrorAppearAndCle
   ASSERT_TRUE(app_.document().lastParseError().has_value());
   // Error-present branch: sets markers from the diagnostic.
   controller_.syncParseErrorMarkers(app_, textEditor_);
+  ASSERT_EQ(controller_.sourceDiagnostics().diagnostics.size(), 1u);
+  EXPECT_EQ(controller_.sourceDiagnostics().revision, app_.document().parseDiagnosticsRevision());
+  EXPECT_EQ(controller_.sourceDiagnostics().diagnostics.front().severity,
+            DiagnosticSeverity::Error);
+  EXPECT_GT(controller_.sourceDiagnostics().diagnostics.front().range.end,
+            controller_.sourceDiagnostics().diagnostics.front().range.start);
   // Repeated calls with the same error hit the change-detection short-circuit.
   controller_.syncParseErrorMarkers(app_, textEditor_);
 
@@ -1098,6 +1104,7 @@ TEST_F(DocumentSyncControllerTest, SyncParseErrorMarkersHandlesErrorAppearAndCle
   (void)app_.flushFrame();
   ASSERT_FALSE(app_.document().lastParseError().has_value());
   controller_.syncParseErrorMarkers(app_, textEditor_);
+  EXPECT_TRUE(controller_.sourceDiagnostics().diagnostics.empty());
 }
 
 TEST(DocumentSyncControllerStructuredTest, MirrorSourceDeltasWithEmptyDeltasReturnsFalse) {

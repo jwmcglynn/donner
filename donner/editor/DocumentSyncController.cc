@@ -16,7 +16,6 @@ namespace donner::editor {
 namespace {
 
 constexpr float kTextChangeDebounceSeconds = 0.15f;
-constexpr int kNoErrorLine = -1;
 
 struct SourceMirrorEdit {
   std::size_t offset = 0;
@@ -300,30 +299,37 @@ void DocumentSyncController::resetForLoadedDocument(const std::string& source) {
   pendingTransformWritebacks_.clear();
   pendingElementRemoveWritebacks_.clear();
   pendingSourceEditIntents_.clear();
-  lastShownErrorLine_ = kNoErrorLine;
-  lastShownErrorReason_.clear();
+  sourceDiagnostics_ = {};
+  lastSyncedDiagnosticsRevision_ = std::numeric_limits<std::uint64_t>::max();
   textChangePending_ = false;
   textDispatchThrottled_ = false;
   textChangeIdleTimer_ = 0.0f;
 }
 
 void DocumentSyncController::syncParseErrorMarkers(EditorApp& app, TextEditor& textEditor) {
-  const auto& parseError = app.document().lastParseError();
-  if (parseError.has_value()) {
-    const int line = parseError->range.start.lineInfo.has_value()
-                         ? static_cast<int>(parseError->range.start.lineInfo->line)
-                         : 1;
-    const std::string_view reasonSv = parseError->reason;
-    if (line != lastShownErrorLine_ || reasonSv != lastShownErrorReason_) {
-      textEditor.setErrorMarkers(ParseErrorToMarkers(*parseError));
-      lastShownErrorLine_ = line;
-      lastShownErrorReason_.assign(reasonSv);
-    }
-  } else if (lastShownErrorLine_ != kNoErrorLine) {
-    textEditor.setErrorMarkers({});
-    lastShownErrorLine_ = kNoErrorLine;
-    lastShownErrorReason_.clear();
+  const std::uint64_t revision = app.document().parseDiagnosticsRevision();
+  if (revision == lastSyncedDiagnosticsRevision_) {
+    return;
   }
+
+  sourceDiagnostics_ = BuildSourceDiagnosticSnapshot(app.document().parseDiagnostics(),
+                                                     textEditor.getText(), revision);
+  lastSyncedDiagnosticsRevision_ = revision;
+  textEditor.setSourceDiagnostics(sourceDiagnostics_.diagnostics);
+
+  TextEditor::ErrorMarkers markers;
+  for (const SourceDiagnostic& diagnostic : sourceDiagnostics_.diagnostics) {
+    if (diagnostic.severity != DiagnosticSeverity::Error) {
+      continue;
+    }
+
+    std::string& message = markers[static_cast<int>(diagnostic.line)];
+    if (!message.empty()) {
+      message += '\n';
+    }
+    message += diagnostic.message;
+  }
+  textEditor.setErrorMarkers(markers);
 }
 
 bool DocumentSyncController::mirrorSourceDeltas(
@@ -531,14 +537,6 @@ void DocumentSyncController::applyPendingWritebacks(EditorApp& app, SelectTool& 
   applyPatches(source, patches);
   textEditor.setText(source, /*preserveScroll=*/true);
   QueueSourceWritebackReparse(app, source, &previousSourceText_, &lastWritebackSourceText_);
-}
-
-TextEditor::ErrorMarkers DocumentSyncController::ParseErrorToMarkers(const ParseDiagnostic& diag) {
-  TextEditor::ErrorMarkers markers;
-  const auto& start = diag.range.start;
-  const int line = start.lineInfo.has_value() ? static_cast<int>(start.lineInfo->line) : 1;
-  markers.emplace(line, std::string(std::string_view(diag.reason)));
-  return markers;
 }
 
 }  // namespace donner::editor
