@@ -778,36 +778,42 @@ threshold routes broad PRs to the hosted lane and fired on editor-v08-ux-polish
 Levers 1 and 2 remain the only ones that reach P99<=15 on worst-case
 header-fanout PRs, and both are operator-reserved (infra load / coverage scope).
 
-### As-built: bazel-diff base aligned to the merge-base (lever 3, 2026-07-11)
+### As-built: bazel-diff compares base TIP vs the PR MERGE commit (lever 3, 2026-07-11)
 
-Implemented in both `main.yml` and `coverage.yml` determine-targets: the
-bazel-diff base worktree is checked out and hashed at `git merge-base
-BASE_SHA HEAD_SHA` (the same `diff_base` the #825 changed-files fix uses), and
-the base-hash cache is keyed by that merge-base (computed identically in the
-`pr-meta` step). Fail-closed: if merge-base cannot be computed, both sites fall
-back to the base tip, which is exactly the prior behavior.
+Implemented in both `main.yml` and `coverage.yml` determine-targets: bazel-diff
+now hashes the CURRENT BASE TIP against the PR's MERGE commit (the workspace
+checkout, `refs/pull/N/merge`) instead of base tip vs `HEAD_SHA`. The base-hash
+cache keying (base tip, main-push pre-warmed) is unchanged. Fail-closed: if the
+workspace is not a merge commit, it is the PR head and the comparison degrades
+to exactly the old behavior.
 
-Soundness: the PR merges INTO current main, so target impact from base-side
-drift is validated by main's own CI on each main push. Interaction impact needs
-a target that depends on the PR's changed targets; every such target is in the
-merge-base affected set by construction (it is a reverse dependency of the
-branch-side change) and is built/tested on the PR's MERGE checkout, where the
-drift is present. Only redundant re-testing of pure-drift targets is dropped.
-Side benefit: merge-base cache keys are stable across base drift, so main
-pushes no longer invalidate a PR's cached base hashes, and the main-push
-pre-warm still hits (a merge-base is itself a main commit).
+Design history, recorded for provenance: the first draft hashed the base at the
+MERGE-BASE (fork point) vs `HEAD_SHA`. Review (PR #836, P1) correctly identified
+an escape hole in that scheme: a reverse dependency added on main AFTER the fork
+(a dep edge onto code the PR touches) exists in neither the fork-point graph nor
+the PR-head graph, so fork-vs-head hashing cannot see it, while the CI jobs
+build the merge ref where it is live. The tip-vs-merge comparison dominates both
+schemes: post-fork drift is present on BOTH sides (identical hashes, drops out,
+killing the inflation), and the merge graph is the one hashed (merge-only
+reverse dependencies hash differently vs the base tip, so they stay in the
+affected set).
 
-Validation (controlled stale-branch reproduction, hub-local bazel-diff
-v18.1.0, same flags as CI): fork point 3 commits behind main tip (drift = the
-#828 + #829 editor/svg merges plus a docs commit), true change = one comment
-line in `donner/base/tests/Box_tests.cc`.
+Validation (controlled reproductions, hub-local bazel-diff v18.1.0, same flags
+as CI; fork point 3 commits behind main tip):
 
-| basis | affected targets |
-|---|---:|
-| base hashed at base TIP (old behavior) | 376 |
-| base hashed at MERGE-BASE (this change) | **2** (`//donner/base:base_tests`, `base_tests_lint`) |
+| test | scheme | result |
+|---|---|---|
+| A: inflation (one-line change to `donner/base/tests/Box_tests.cc`) | old: tip vs HEAD_SHA | 130 affected targets |
+| A | new: tip vs MERGE | **2** (`//donner/base:base_tests`, `base_tests_lint`) |
+| B: merge-only rdep escape (drifted base adds `//probe_drift:probe_dep` depending on `//donner/css:css`; PR touches `donner/css/CSS.cc`) | rejected draft: fork vs HEAD_SHA | 422 targets, probe_dep **MISSED** |
+| B | new: tip vs MERGE | 425 targets, probe_dep **CAUGHT** |
 
-The 376 matches the #829-scale inflation measured in this audit; the 2 is
-exactly the true change. This closes the known bazel-diff over-inclusion
-residual flagged in the #825 fix and in the determination-quality audit above
-(126x tail).
+Test A shows the over-inclusion fix (matches the 126x-tail signature in the
+determination-quality audit above); Test B constructs the reviewer's escape
+scenario and shows the shipped scheme closes it while the rejected draft did
+not. Same PR also raises the CI Linux lane's `--remote_timeout` from 5s to 60s,
+mirroring the coverage lane's documented 2026-07-02 rationale, after two
+consecutive spurious DEADLINE_EXCEEDED-after-4.999s failures on organic load
+(the serialized coverage job passed concurrently under its 60s timeout; the
+first tip-vs-merge run then passed full-`//...` in 17m28s on the same busy
+backend).
