@@ -298,7 +298,7 @@ jobs:
             esac
 
             case "$path" in
-              .bazelrc|.github/workflows/*|.github/actions/*|docs/*|*.md|tools/binary_size.sh|tools/build_docs.sh|tools/coverage.sh|tools/filter_coverage.py|tools/filter_coverage_tests.py|tools/lcov_metrics.py|tools/lcov_metrics_tests.py|tools/generate_build_report.py|tools/generate_build_report_tests.py|tools/coverage_instrumentable_targets.py|tools/coverage_instrumentable_targets_tests.py)
+              .bazelrc|.github/workflows/*|.github/actions/*|docs/*|*.md|tools/binary_size.sh|tools/build_docs.sh|tools/coverage.sh|tools/filter_coverage.py|tools/filter_coverage_tests.py|tools/lcov_metrics.py|tools/lcov_metrics_tests.py|tools/generate_build_report.py|tools/generate_build_report_tests.py|tools/coverage_instrumentable_targets.py|tools/coverage_instrumentable_targets_tests.py|tools/coverage_variant_trim.py|tools/coverage_variant_trim_tests.py)
                 ;;
               *)
                 smoke_only=false
@@ -488,6 +488,32 @@ jobs:
           else
             echo "Kind query failed; running coverage on affected subset (guard intact)."
             cat "$diagnostics_dir/kind-query.log" || true
+          fi
+
+          # Representative-variant trim (operator-approved policy, 2026-07-11):
+          # PR PATCH coverage runs one representative variant per test - the
+          # base/default target - and drops `_tiny`/`_text_full`/`_geode`
+          # variant wrappers whose base sibling is in the set. The wrappers
+          # compile the SAME sources under different backend/feature flags, so
+          # for patch coverage they are redundant parameterizations whose
+          # unique signal (backend/feature-gated lines) stays covered by the
+          # main-push FULL multi-variant baseline. Fail closed: tool failure
+          # keeps the untrimmed set; variant-only targets (no base sibling)
+          # are never dropped. See tools/coverage_variant_trim.py and
+          # docs/design_docs/0029-2.
+          printf '%s\n' $affected > "$work_dir/affected-pretrim.txt"
+          if trimmed="$(python3 tools/coverage_variant_trim.py \
+              --affected-file "$work_dir/affected-pretrim.txt" \
+              --dropped-out "$diagnostics_dir/variant-trim-dropped.txt" 2> "$diagnostics_dir/variant-trim.log")"; then
+            cat "$diagnostics_dir/variant-trim.log" || true
+            if [[ -n "$trimmed" ]]; then
+              affected="$(tr '\n' ' ' <<< "$trimmed" | sed 's/ $//')"
+            else
+              echo "Variant trim produced an empty set; keeping untrimmed affected set (guard intact)."
+            fi
+          else
+            echo "Variant trim tool errored; keeping untrimmed affected set (guard intact)."
+            cat "$diagnostics_dir/variant-trim.log" || true
           fi
 
           emit_targets false bazel_diff "$affected"

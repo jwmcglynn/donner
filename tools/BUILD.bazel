@@ -82,6 +82,14 @@ py_test(
 )
 
 py_test(
+    name = "coverage_variant_trim_tests",
+    srcs = [
+        "coverage_variant_trim.py",
+        "coverage_variant_trim_tests.py",
+    ],
+)
+
+py_test(
     name = "filter_coverage_tests",
     srcs = [
         "filter_coverage.py",
