@@ -5,8 +5,7 @@
 
 namespace donner::geode {
 
-GeodeImagePipeline::GeodeImagePipeline(const wgpu::Device& device, wgpu::TextureFormat colorFormat,
-                                       uint32_t sampleCount)
+GeodeImagePipeline::GeodeImagePipeline(const wgpu::Device& device, wgpu::TextureFormat colorFormat)
     : colorFormat_(colorFormat) {
   // ----- Bind group layout -----
   // Seven bindings: uniform buffer, sampler, sampled content texture,
@@ -107,9 +106,7 @@ GeodeImagePipeline::GeodeImagePipeline(const wgpu::Device& device, wgpu::Texture
   rpDesc.primitive.cullMode = wgpu::CullMode::None;
 
   rpDesc.fragment = &fragmentState;
-  // Match the Slug fill + gradient pipelines' sample count. When the
-  // alpha-coverage path is active this is 1 (no MSAA).
-  rpDesc.multisample.count = sampleCount;
+  rpDesc.multisample.count = 1;
   rpDesc.multisample.mask = 0xFFFFFFFF;
 
   pipeline_.reset(device.createRenderPipeline(rpDesc));

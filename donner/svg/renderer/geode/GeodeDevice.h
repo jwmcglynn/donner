@@ -54,16 +54,9 @@ struct GeodeEmbedConfig {
   /// passed to `RendererGeode::setTargetTexture()`.
   wgpu::TextureFormat textureFormat = wgpu::TextureFormat::RGBA8Unorm;
 
-  /// Optional adapter handle. When provided, Geode uses it for hardware
-  /// workaround detection (e.g., Intel Arc + Vulkan alpha-coverage fallback).
-  /// When null, workaround detection is skipped - the host is assumed to
-  /// know its own hardware characteristics.
+  /// Optional adapter handle. Preserved for hosts that need to query the
+  /// adapter associated with the external device.
   wgpu::Adapter adapter;
-
-  /// Force the single-sample alpha-coverage path even when hardware 4× MSAA is available.
-  /// Intended for appending Geode draws directly to an already-rendered host framebuffer, where
-  /// a multisample resolve would overwrite framebuffer pixels outside the new draw coverage.
-  bool forceSingleSampleAlphaCoverage = false;
 };
 
 /**
@@ -173,29 +166,6 @@ public:
    * without an explicit `device.poll()`.
    */
   void drainDeferredDestroys();
-
-  /**
-   * Whether to use alpha-coverage AA instead of hardware 4× MSAA with
-   * `@builtin(sample_mask)`.
-   *
-   * Returns true on Intel + Vulkan, where writing `@builtin(sample_mask)`
-   * from overlapping band quads hangs Mesa ANV / Xe KMD (observed on
-   * Arc A380, Mesa 25.2.8), or when an embedded host explicitly requests
-   * single-sample alpha coverage. The alpha-coverage path folds coverage
-   * into the fragment color instead of relying on the hardware sample
-   * mask, and runs at `sampleCount() == 1` (no MSAA / no resolve).
-   */
-  bool useAlphaCoverageAA() const { return useAlphaCoverageAA_; }
-
-  /**
-   * Sample count for render pipelines and render-target textures.
-   *
-   * Always 1: Geode renders analytic dual-ray coverage at one sample per
-   * pixel on every adapter (design doc 0041). The 4x MSAA sample-mask path
-   * and the alpha-coverage fallback are deleted; this accessor remains so
-   * pool keys and tests stay explicit about the sample dimension.
-   */
-  uint32_t sampleCount() const { return 1u; }
 
   /**
    * Process-unique identity for this device instance, assigned at
@@ -408,7 +378,6 @@ private:
   wgpu::Queue queue_;
   wgpu::TextureFormat textureFormat_ = wgpu::TextureFormat::RGBA8Unorm;
 
-  bool useAlphaCoverageAA_ = false;
   bool supportsTimestamps_ = false;
 
   /// True when this device was created via CreateFromExternal(). The destructor

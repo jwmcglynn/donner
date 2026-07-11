@@ -323,20 +323,6 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
                    device.data(), static_cast<int>(arch.size()), arch.data(), backend, type,
                    info.vendorID, info.deviceID);
 
-      // Intel + Vulkan: writing @builtin(sample_mask) from overlapping band
-      // quads hangs Mesa ANV / Xe KMD when bandCount >= 2 (observed on Arc
-      // A380, Mesa 25.2.8). Fall back to alpha-coverage AA which folds
-      // coverage into the fragment color and runs at sampleCount = 1 (no
-      // MSAA texture, no hardware resolve) to avoid a second class of flaky
-      // MSAA-resolve hangs on the same driver.
-      if (info.vendorID == 0x8086 && info.backendType == WGPUBackendType_Vulkan) {
-        result->useAlphaCoverageAA_ = true;
-        std::fprintf(stderr,
-                     "[Geode] Intel Arc + Vulkan detected; using alpha-coverage AA "
-                     "(sample_mask output hangs on Mesa 25.2.8 Xe-KMD; "
-                     "upstream fix in Mesa 25.3)\n");
-      }
-
       wgpuAdapterInfoFreeMembers(info);
     }
   }
@@ -412,10 +398,7 @@ GeodeMaskPipeline& GeodeDevice::maskPipeline() const {
     // Lazy: most documents never hit the clip-path mask pass, and
     // production WASM callers that never need it should not pay the
     // pipeline-compile cost at startup.
-    // Mask runs the alpha-coverage 4-sample shader at sampleCount=1 for now
-    // (0041 increment (a)); migrated to analytic dual-ray in increment (b).
-    impl_->maskPipeline = std::make_unique<GeodeMaskPipeline>(
-        device_, /*useAlphaCoverageShader=*/true, sampleCount());
+    impl_->maskPipeline = std::make_unique<GeodeMaskPipeline>(device_);
   }
   return *impl_->maskPipeline;
 }
@@ -446,23 +429,9 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateFromExternal(const GeodeEmbedCon
   result->textureFormat_ = config.textureFormat;
   // impl_->instance stays null - host owns the instance.
 
-  // Use the host-provided adapter for hardware workaround detection. When no
-  // adapter is supplied, skip detection - the host controls its own device.
+  // Preserve the host-provided adapter for callers that need adapter metadata.
   if (config.adapter) {
     result->adapter_ = config.adapter;
-    WGPUAdapterInfo info = {};
-    if (wgpuAdapterGetInfo(result->adapter_, &info) == WGPUStatus_Success) {
-      if (info.vendorID == 0x8086 && info.backendType == WGPUBackendType_Vulkan) {
-        result->useAlphaCoverageAA_ = true;
-        std::fprintf(stderr,
-                     "[Geode] Intel Arc + Vulkan detected (embedded); "
-                     "using alpha-coverage AA\n");
-      }
-      wgpuAdapterInfoFreeMembers(info);
-    }
-  }
-  if (config.forceSingleSampleAlphaCoverage) {
-    result->useAlphaCoverageAA_ = true;
   }
 
   result->supportsTimestamps_ = config.device.hasFeature(wgpu::FeatureName::TimestampQuery);
@@ -554,21 +523,13 @@ void GeodeDevice::initSharedResources() {
 }
 
 void GeodeDevice::initSharedPipelines() {
-  // Requires device_ / queue_ / textureFormat_ / useAlphaCoverageAA_ to
-  // be fully populated - `CreateHeadless` and `CreateFromExternal` both
-  // call this as the final step.
+  // Requires device_ / queue_ / textureFormat_ to be fully populated.
+  // `CreateHeadless` and `CreateFromExternal` both call this as the final step.
   const wgpu::TextureFormat fmt = textureFormat_;
-  const uint32_t samples = sampleCount();  // Always 1 (0041 §8: analytic AA).
 
-  // The fill pipeline always uses the analytic dual-ray shader (its
-  // `useAlphaCoverageShader` flag is ignored). Gradient and mask still run
-  // their `_alpha_coverage` 4-sample shaders for now (0041 increment (a));
-  // both are sampleCount=1-compatible, so they are selected unconditionally
-  // until they are migrated to the analytic dual-ray path.
-  impl_->pipeline = std::make_unique<GeodePipeline>(device_, fmt, /*alphaCoverage=*/false, samples);
-  impl_->gradientPipeline =
-      std::make_unique<GeodeGradientPipeline>(device_, fmt, /*alphaCoverage=*/true, samples);
-  impl_->imagePipeline = std::make_unique<GeodeImagePipeline>(device_, fmt, samples);
+  impl_->pipeline = std::make_unique<GeodePipeline>(device_, fmt);
+  impl_->gradientPipeline = std::make_unique<GeodeGradientPipeline>(device_, fmt);
+  impl_->imagePipeline = std::make_unique<GeodeImagePipeline>(device_, fmt);
   // Mask pipeline is built on first `maskPipeline()` access - see header.
   impl_->filterEngine = std::make_unique<GeodeFilterEngine>(*this, /*verbose=*/false);
 }

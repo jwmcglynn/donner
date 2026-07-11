@@ -126,34 +126,19 @@ struct RadialGradientParams {
 class GeoEncoder {
 public:
   /**
-   * Create an encoder targeting the given texture pair.
-   *
-   * The encoder uses 4× MSAA internally: every render pass attaches
-   * `msaaTarget` as the color attachment and `resolveTarget` as the
-   * pass's resolve attachment. The MSAA attachment's store op is `Store`
-   * so multi-pass work (e.g., re-opening a pass via `setLoadPreserve()`
-   * after a nested layer composite) can pick up the previous MSAA state
-   * via `LoadOp::Load`.
-   *
-   * External code reads back / samples from the `resolveTarget` (always
-   * 1-sample), never from the MSAA texture, because sampling an MSAA
-   * texture requires `texture_multisampled_2d` bindings in WGSL which the
-   * image-blit shader doesn't use.
+   * Create an encoder targeting the given texture.
    *
    * @param device The Geode device (owns the wgpu::Device + queue).
-   * @param fillPipeline The Slug fill pipeline (4× multisample).
-   * @param gradientPipeline The Slug gradient-fill pipeline (4× multisample).
-   * @param imagePipeline The image-blit pipeline (4× multisample).
-   * @param msaaTarget 4× multisampled render target texture. Usage must
-   *   include `RenderAttachment`. Same width/height as `resolveTarget`.
-   * @param resolveTarget 1-sample resolve texture. Usage must include
-   *   `RenderAttachment` + `TextureBinding` + `CopySrc` (for readback).
-   *   The encoder retains references to both; both must outlive
-   *   `finish()`.
+   * @param fillPipeline The Slug fill pipeline.
+   * @param gradientPipeline The Slug gradient-fill pipeline.
+   * @param imagePipeline The image-blit pipeline.
+   * @param target Single-sample render target. Usage must include
+   *   `RenderAttachment`; add `TextureBinding` or `CopySrc` when callers
+   *   sample or read it after rendering. The texture must outlive `finish()`.
    */
   GeoEncoder(GeodeDevice& device, const GeodePipeline& fillPipeline,
              const GeodeGradientPipeline& gradientPipeline, const GeodeImagePipeline& imagePipeline,
-             const wgpu::Texture& msaaTarget, const wgpu::Texture& resolveTarget);
+             const wgpu::Texture& target);
 
   /**
    * Shared-CommandEncoder constructor (design doc 0030 Milestone 3).
@@ -171,8 +156,7 @@ public:
    */
   GeoEncoder(GeodeDevice& device, const GeodePipeline& fillPipeline,
              const GeodeGradientPipeline& gradientPipeline, const GeodeImagePipeline& imagePipeline,
-             const wgpu::Texture& msaaTarget, const wgpu::Texture& resolveTarget,
-             wgpu::CommandEncoder sharedCommandEncoder);
+             const wgpu::Texture& target, wgpu::CommandEncoder sharedCommandEncoder);
 
   ~GeoEncoder();
 
@@ -245,9 +229,8 @@ public:
    * `<use>` viewports that have a non-axis-aligned ancestor transform
    * where WebGPU's rectangular scissor can only express the AABB of
    * the transformed rect, not the true polygon. The fragment shader
-   * tests each of 4 edge half-planes against its sub-pixel sample
-   * positions and AND's the result into `@builtin(sample_mask)` so
-   * clipping integrates with the 4× MSAA coverage path.
+   * tests each of 4 edge half-planes at the fragment position and discards
+   * fragments outside the polygon.
    *
    * @param corners 4 polygon vertices in target-pixel space, given in
    *   consistent (clockwise OR counter-clockwise) winding order. The
@@ -262,7 +245,7 @@ public:
 
   /**
    * Phase 3b: open a new render pass that writes into the given mask
-   * texture pair. Used by `RendererGeode::pushClip` to materialise a
+   * texture. Used by `RendererGeode::pushClip` to materialise a
    * path-based clip into an RGBA8Unorm coverage texture that subsequent
    * fill/gradient draws can sample.
    *
@@ -271,14 +254,10 @@ public:
    * pipeline. `endMaskPass` closes the mask pass and re-opens the
    * main pass (with `LoadOp::Load`) when the next draw lands.
    *
-   * @param msaaMask 4× MSAA RGBA8Unorm render target. Must be the same
-   *   size as this encoder's target when `GeodeDevice::sampleCount() >
-   *   1`. On the alpha-coverage path (`sampleCount() == 1`) this may be
-   *   null and the pass draws directly into `resolveMask`.
-   * @param resolveMask 1-sample RGBA8Unorm resolve target. Sampled by
+   * @param mask Single-sample RGBA8Unorm target. Sampled by
    *   `setClipMask` after `endMaskPass`.
    */
-  void beginMaskPass(const wgpu::Texture& msaaMask, const wgpu::Texture& resolveMask);
+  void beginMaskPass(const wgpu::Texture& mask);
 
   /**
    * Fill `path` into the currently open mask pass using the Slug mask
@@ -597,8 +576,7 @@ private:
   /// to avoid duplicating ~20 lines of setup. See GeoEncoder.cc.
   static void initImpl(Impl& impl, GeodeDevice& device, const GeodePipeline& fillPipeline,
                        const GeodeGradientPipeline& gradientPipeline,
-                       const GeodeImagePipeline& imagePipeline, const wgpu::Texture& msaaTarget,
-                       const wgpu::Texture& resolveTarget);
+                       const GeodeImagePipeline& imagePipeline, const wgpu::Texture& target);
   static void finalizeImpl(Impl& impl);
 
   std::unique_ptr<Impl> impl_;

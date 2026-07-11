@@ -39,13 +39,8 @@ public:
    * @param device The WebGPU device.
    * @param colorFormat The pixel format of the render target this pipeline
    *   will draw into. Must match the target texture's format at draw time.
-   * @param useAlphaCoverageShader When true, selects the alpha-coverage
-   *   variant of the fill shader (no `@builtin(sample_mask)` output).
-   * @param sampleCount MSAA sample count for the pipeline's multisample
-   *   state. Pass 1 for the alpha-coverage path (no MSAA), 4 otherwise.
    */
-  GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat colorFormat,
-                bool useAlphaCoverageShader = false, uint32_t sampleCount = 4);
+  GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat colorFormat);
 
   ~GeodePipeline() = default;
   GeodePipeline(const GeodePipeline&) = delete;
@@ -87,10 +82,7 @@ private:
 class GeodeGradientPipeline {
 public:
   /// Construct a gradient pipeline for the given device and color target format.
-  /// @param useAlphaCoverageShader When true, selects the alpha-coverage shader variant.
-  /// @param sampleCount MSAA sample count (1 for alpha-coverage, 4 otherwise).
-  GeodeGradientPipeline(const wgpu::Device& device, wgpu::TextureFormat colorFormat,
-                        bool useAlphaCoverageShader = false, uint32_t sampleCount = 4);
+  GeodeGradientPipeline(const wgpu::Device& device, wgpu::TextureFormat colorFormat);
 
   ~GeodeGradientPipeline() = default;
   GeodeGradientPipeline(const GeodeGradientPipeline&) = delete;
@@ -118,12 +110,9 @@ private:
  * (`shaders/slug_mask.wgsl`) plus its bind-group layout.
  *
  * The mask pipeline is a stripped-down sibling of @ref GeodePipeline -
- * it reuses the same vertex shader, the same band/curve storage SSBOs,
- * and the same 4× MSAA coverage path, but the fragment stage writes clip
- * coverage into an `RGBA8Unorm` color attachment. The sample-mask path
- * replicates scalar coverage into all 4 channels; the alpha-coverage path
- * packs one subpixel sample per channel so Max blending unions them exactly.
- * resulting mask texture is then sampled by @ref GeodePipeline and
+ * it reuses the same vertex shader and band/curve storage SSBOs. The fragment
+ * stage replicates scalar analytic coverage into an `RGBA8Unorm` color
+ * attachment. The resulting mask texture is then sampled by @ref GeodePipeline and
  * @ref GeodeGradientPipeline as a clip coverage multiplier.
  *
  * The bind group layout is:
@@ -139,13 +128,9 @@ class GeodeMaskPipeline {
 public:
   /**
    * Create a Slug mask pipeline for the given device. Renders into an
-   * RGBA8Unorm texture with 4× MSAA.
-   *
-   * @param useAlphaCoverageShader When true, selects the alpha-coverage shader variant.
-   * @param sampleCount MSAA sample count (1 for alpha-coverage, 4 otherwise).
+   * single-sampled RGBA8Unorm texture.
    */
-  explicit GeodeMaskPipeline(const wgpu::Device& device, bool useAlphaCoverageShader = false,
-                             uint32_t sampleCount = 4);
+  explicit GeodeMaskPipeline(const wgpu::Device& device);
 
   ~GeodeMaskPipeline() = default;
   GeodeMaskPipeline(const GeodeMaskPipeline&) = delete;

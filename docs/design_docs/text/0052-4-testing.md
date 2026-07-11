@@ -42,8 +42,8 @@ CI runs all feature combinations to ensure both enabled and disabled paths work.
 ### Backend parity
 
 - `RendererTinySkia` and `RendererGeode` both consume the same `TextEngine`/`TextBackend*` layout
-  output, so glyph positions match between them at both the base and `text_full` tiers; residual
-  diffs are limited to rasterization (MSAA vs vector fill). See
+  output, so glyph positions should match between them at both the base and `text_full` tiers.
+  Residual pixel differences still require root-cause analysis. See
   [0038-geode_tinyskia_text_parity.md](../0038-geode_tinyskia_text_parity.md) for the parity gate.
 - The base tier (stb_truetype, `TextBackendSimple`) and `text_full` tier (HarfBuzz,
   `TextBackendFull`) can still diverge in glyph advances/kerning between each other, since only

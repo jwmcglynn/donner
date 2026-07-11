@@ -20,12 +20,11 @@
  *
  * **Most tests share the same goldens as tiny-skia / Skia**, living in
  * `testdata/golden/` (no `geode/` subdirectory). Geode's fragment
- * shaders now compute `@builtin(sample_mask)` from 4 sub-pixel winding
- * tests and resolve through a 4× MSAA render target, which is close
- * enough to tiny-skia's 16-sample (`SUPERSAMPLE_SHIFT=2`) scan-converter
- * that a per-pixel threshold around 10% absorbs all the remaining AA
- * drift. Sharing goldens means Geode and tiny-skia can never quietly
- * diverge on geometry, only on sub-pixel edge AA quality.
+ * shaders compute analytic dual-ray coverage at one sample per pixel. This
+ * is close enough to tiny-skia's 16-sample (`SUPERSAMPLE_SHIFT=2`)
+ * scan-converter for the covered fixtures. A per-pixel threshold around 10%
+ * captures the measured cross-driver numeric variation. Sharing goldens keeps
+ * backend geometry differences visible rather than accepting them implicitly.
  *
  * A handful of tests still carry **per-backend goldens** under
  * `testdata/golden/geode/`:

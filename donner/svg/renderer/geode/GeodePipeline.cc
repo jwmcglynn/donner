@@ -5,8 +5,7 @@
 
 namespace donner::geode {
 
-GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat colorFormat,
-                             bool useAlphaCoverageShader, uint32_t sampleCount)
+GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat colorFormat)
     : colorFormat_(colorFormat) {
   // ----- Bind group layout -----
   // Eight bindings: uniforms, bands SSBO, curves SSBO, pattern texture,
@@ -101,9 +100,6 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
   ScopedWgpuHandle<wgpu::PipelineLayout> pipelineLayout(device.createPipelineLayout(plDesc));
 
   // ----- Shader module -----
-  // The fill shader is always the analytic dual-ray variant (0041 §8); it runs
-  // at sampleCount=1 on every adapter, so there is no alpha-coverage variant.
-  (void)useAlphaCoverageShader;
   ScopedWgpuHandle<wgpu::ShaderModule> shader(createSlugFillShader(device));
 
   // ----- Vertex buffer layout -----
@@ -163,10 +159,7 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
   rpDesc.primitive.cullMode = wgpu::CullMode::None;
 
   rpDesc.fragment = &fragmentState;
-  // MSAA sample count. On the alpha-coverage path (Intel Arc + Vulkan) this
-  // is 1 - no MSAA rasterization, no hardware resolve. Other adapters get
-  // 4× with fragment-shader sample_mask AA.
-  rpDesc.multisample.count = sampleCount;
+  rpDesc.multisample.count = 1;
   rpDesc.multisample.mask = 0xFFFFFFFF;
 
   pipeline_.reset(device.createRenderPipeline(rpDesc));
@@ -177,8 +170,7 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
 // ============================================================================
 
 GeodeGradientPipeline::GeodeGradientPipeline(const wgpu::Device& device,
-                                             wgpu::TextureFormat colorFormat,
-                                             bool useAlphaCoverageShader, uint32_t sampleCount)
+                                             wgpu::TextureFormat colorFormat)
     : colorFormat_(colorFormat) {
   // Nine bindings - uniforms, H bands SSBO, H curves SSBO, clip-mask texture,
   // clip-mask sampler, and (analytic dual-ray, 0041 §8) V bands SSBO, V curves
@@ -234,8 +226,6 @@ GeodeGradientPipeline::GeodeGradientPipeline(const wgpu::Device& device,
   plDesc.bindGroupLayouts = layouts;
   ScopedWgpuHandle<wgpu::PipelineLayout> pipelineLayout(device.createPipelineLayout(plDesc));
 
-  // Always the analytic dual-ray gradient shader (0041 §8); sampleCount=1.
-  (void)useAlphaCoverageShader;
   ScopedWgpuHandle<wgpu::ShaderModule> shader(createSlugGradientShader(device));
 
   // Same vertex buffer layout as the solid-fill pipeline.
@@ -290,8 +280,7 @@ GeodeGradientPipeline::GeodeGradientPipeline(const wgpu::Device& device,
   rpDesc.primitive.cullMode = wgpu::CullMode::None;
 
   rpDesc.fragment = &fragmentState;
-  // Match the solid-fill pipeline's sample count.
-  rpDesc.multisample.count = sampleCount;
+  rpDesc.multisample.count = 1;
   rpDesc.multisample.mask = 0xFFFFFFFF;
 
   pipeline_.reset(device.createRenderPipeline(rpDesc));
@@ -301,8 +290,7 @@ GeodeGradientPipeline::GeodeGradientPipeline(const wgpu::Device& device,
 // GeodeMaskPipeline
 // ============================================================================
 
-GeodeMaskPipeline::GeodeMaskPipeline(const wgpu::Device& device, bool useAlphaCoverageShader,
-                                     uint32_t sampleCount) {
+GeodeMaskPipeline::GeodeMaskPipeline(const wgpu::Device& device) {
   // Nine bindings - uniforms, H bands SSBO, H curves SSBO, nested clip mask
   // texture, nested clip mask sampler, and (analytic dual-ray, 0041 §8) V bands
   // SSBO, V curves SSBO, H band grid, V band grid. The clip-mask slot is always
@@ -355,8 +343,6 @@ GeodeMaskPipeline::GeodeMaskPipeline(const wgpu::Device& device, bool useAlphaCo
   plDesc.bindGroupLayouts = layouts;
   ScopedWgpuHandle<wgpu::PipelineLayout> pipelineLayout(device.createPipelineLayout(plDesc));
 
-  // Always the analytic dual-ray mask shader (0041 §8); sampleCount=1.
-  (void)useAlphaCoverageShader;
   ScopedWgpuHandle<wgpu::ShaderModule> shader(createSlugMaskShader(device));
 
   // Same vertex buffer layout as the fill pipelines: pos (vec2f) +
@@ -380,10 +366,7 @@ GeodeMaskPipeline::GeodeMaskPipeline(const wgpu::Device& device, bool useAlphaCo
   vbLayout.attributeCount = 3;
   vbLayout.attributes = vertexAttribs;
 
-  // Max-blend so multiple clip paths rendered into the same mask layer
-  // UNION. On the sample-mask path every channel carries the same scalar
-  // coverage. On the alpha-coverage path each channel carries one of the
-  // four subpixel samples, and Max unions them independently per sample.
+  // Max-blend unions scalar analytic coverage from multiple clip paths.
   wgpu::BlendState blend = {};
   blend.color.srcFactor = wgpu::BlendFactor::One;
   blend.color.dstFactor = wgpu::BlendFactor::One;
@@ -416,8 +399,7 @@ GeodeMaskPipeline::GeodeMaskPipeline(const wgpu::Device& device, bool useAlphaCo
   rpDesc.primitive.cullMode = wgpu::CullMode::None;
 
   rpDesc.fragment = &fragmentState;
-  // MSAA sample count matching the colour pipelines.
-  rpDesc.multisample.count = sampleCount;
+  rpDesc.multisample.count = 1;
   rpDesc.multisample.mask = 0xFFFFFFFF;
 
   pipeline_.reset(device.createRenderPipeline(rpDesc));

@@ -664,7 +664,6 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     return;
   }
   geode::GeodeEmbedConfig framebufferEmbedConfig = embedConfig;
-  framebufferEmbedConfig.forceSingleSampleAlphaCoverage = true;
   wgpuState_->framebufferGeodeDevice =
       geode::GeodeDevice::CreateFromExternal(framebufferEmbedConfig);
   if (wgpuState_->framebufferGeodeDevice == nullptr) {

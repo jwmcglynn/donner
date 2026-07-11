@@ -56,14 +56,12 @@ bool GeodeSupportsFeature(RendererBackendFeature feature) {
     //
     // The `Text` / `TextFull` feature flags still return `false`
     // here so the resvg test suite skips the `text/*` category on
-    // Geode: the 4x MSAA pipeline introduces ~6% per-pixel alpha
-    // drift on every glyph edge vs tiny-skia's 16x supersampled
-    // reference, which produces a ~600-800 px diff on every
-    // realistic text test -- well past the default 100-px threshold
-    // and not closable by threshold widening (the edge pixels are
-    // frequently fully off, not partial). Revisit once Geode picks
-    // up a finer sample pattern (8x or 16x MSAA) or analytic glyph
-    // AA lands.
+    // Geode text currently differs from the tiny-skia reference by
+    // ~600-800 pixels on realistic text tests, well past the default
+    // 100-pixel threshold. The differing pixels are frequently fully
+    // off rather than partial, so threshold widening is not justified.
+    // Keep the feature gate until the positional/coverage root cause is
+    // identified and fixed.
     case RendererBackendFeature::FilterEffects: return true;
     case RendererBackendFeature::Text: return false;
     case RendererBackendFeature::TextFull: return false;

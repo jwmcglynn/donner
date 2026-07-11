@@ -22,6 +22,15 @@ TEST(GeodeShaders, SlugFillCompiles) {
   // uncaptured error callback before we get here.
 }
 
+/// Smoke test for the analytic gradient shader used on every adapter.
+TEST(GeodeShaders, SlugGradientCompiles) {
+  auto geodeDevice = GeodeDevice::CreateHeadless();
+  ASSERT_NE(geodeDevice, nullptr);
+
+  wgpu::ShaderModule module = createSlugGradientShader(geodeDevice->device());
+  ASSERT_TRUE(static_cast<bool>(module)) << "Slug gradient shader failed to compile";
+}
+
 /// Smoke test for the Phase 3b path-clip mask shader.
 TEST(GeodeShaders, SlugMaskCompiles) {
   auto geodeDevice = GeodeDevice::CreateHeadless();

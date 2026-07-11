@@ -64,17 +64,16 @@ const std::map<std::string_view, ImageComparisonParams>& geodeOverrides() {
   static const std::map<std::string_view, ImageComparisonParams> overrides = {
       // feImage pulls the external SVG through the Phase 7 filter engine,
       // which rasterizes the nested document into an intermediate texture
-      // before compositing. Sample-pattern differences between Slug's 4×
-      // MSAA and tiny-skia's 16× supersample accumulate along every edge
-      // of the embedded SVG, so the per-pixel threshold alone isn't
-      // enough - widen the mismatched-pixel cap to absorb the fringe.
+      // before compositing. The embedded SVG differs along its edges, so
+      // the per-pixel threshold alone isn't enough. Keep the measured
+      // mismatched-pixel cap while the rasterization cause is investigated.
       // Actual diff at 0.1 threshold: ~13.7k pixels.
       {"donner/svg/renderer/testdata/golden/feimage-external-svg.png",
        Params::WithThreshold(0.1f, 15000)},
 
-      // Ghostscript Tiger is stroke-dense; whiskers + outlines accumulate
-      // the 4× MSAA vs 16× supersample edge drift into several thousand
-      // sub-threshold pixels. Actual diff at 0.1 threshold: ~3.9k pixels.
+      // Ghostscript Tiger is stroke-dense; whiskers and outlines account for
+      // several thousand differing pixels. The rasterization cause remains
+      // under investigation. Actual diff at 0.1 threshold: ~3.9k pixels.
       {"donner/svg/renderer/testdata/golden/Ghostscript_Tiger.png",
        Params::WithThreshold(0.1f, 4500)},
 

@@ -789,16 +789,14 @@ struct RendererGeode::Impl {
   RenderViewport viewport;
   int pixelWidth = 0;
   int pixelHeight = 0;
-  // Dimensions of the `target` / `msaaTarget` textures as they were
-  // created. When the next `beginFrame` comes in at the same size,
+  // Dimensions of `target` as it was created. When the next `beginFrame`
+  // comes in at the same size,
   // the textures are reused (design doc 0030 Milestone 4.1); otherwise
   // they're reallocated.
   int targetWidth = 0;
   int targetHeight = 0;
-  wgpu::Texture target;      // Borrowed active 1-sample resolve target.
-  wgpu::Texture msaaTarget;  // Borrowed active 4× MSAA color attachment companion to `target`.
+  wgpu::Texture target;  // Borrowed active render target.
   geode::ScopedWgpuHandle<wgpu::Texture> ownedTarget;
-  geode::ScopedWgpuHandle<wgpu::Texture> ownedMsaaTarget;
 
   // Single CommandEncoder owned by RendererGeode for the whole frame
   // (design doc 0030 Milestone 3). All `GeoEncoder` instances created
@@ -894,7 +892,6 @@ struct RendererGeode::Impl {
   struct PatternStackFrame {
     std::unique_ptr<geode::GeoEncoder> savedEncoder;
     wgpu::Texture savedTarget;
-    wgpu::Texture savedMsaaTarget;
     Transform2d savedDeviceFromLocalTransform;
     std::vector<Transform2d> savedDeviceFromLocalTransformStack;
     int savedPixelWidth = 0;
@@ -910,10 +907,7 @@ struct RendererGeode::Impl {
     // The pattern tile being recorded.
     Box2d tileRect;                 // In pattern space (topLeft at origin).
     Transform2d targetFromPattern;  // Transform used when the tile is sampled.
-    geode::ScopedWgpuHandle<wgpu::Texture>
-        tileTexture;  // Offscreen tile (1-sample resolve) being sampled later.
-    geode::ScopedWgpuHandle<wgpu::Texture>
-        tileMsaaTexture;  // 4× MSAA companion used during tile recording.
+    geode::ScopedWgpuHandle<wgpu::Texture> tileTexture;  // Sampled after recording.
     int tilePixelWidth = 0;
     int tilePixelHeight = 0;
     // Scale factor applied to all `setTransform` calls while this frame is
@@ -934,11 +928,10 @@ struct RendererGeode::Impl {
   // M4.2 transient-texture pool (design doc 0030 §M4.2).
   //
   // Every push/pop of isolated-layer / filter-layer / mask / clip-mask
-  // scratch allocates a resolve + MSAA-companion pair - prior to this
-  // pool those allocations fired on every frame even when the same
+  // scratch allocates offscreen textures that fired on every frame even when the same
   // document was re-rendered at the same viewport. The pool holds
-  // released textures keyed by `(width, height, format, sampleCount,
-  // usage)`; same-dim / same-format acquisition on a later frame pops
+  // released textures keyed by `(width, height, format, usage)`;
+  // same-dim / same-format acquisition on a later frame pops
   // from the bucket instead of calling `createTexture`.
   //
   // Exact-size pooling (no power-of-two bucketing). Works for the
@@ -950,19 +943,17 @@ struct RendererGeode::Impl {
 
   /// Key used for texture-pool bucket lookup. Two textures are
   /// interchangeable iff every field matches - same size, same
-  /// format, same MSAA sample count, same usage flags.
+  /// format, same usage flags.
   struct TextureKey {
     uint32_t width = 0;
     uint32_t height = 0;
     wgpu::TextureFormat format = wgpu::TextureFormat::Undefined;
-    uint32_t sampleCount = 1;
     wgpu::TextureUsage usage = wgpu::TextureUsage::None;
 
     auto operator<=>(const TextureKey& other) const = default;
 
     static TextureKey From(const wgpu::TextureDescriptor& desc) {
-      return TextureKey{desc.size.width, desc.size.height, desc.format, desc.sampleCount,
-                        desc.usage};
+      return TextureKey{desc.size.width, desc.size.height, desc.format, desc.usage};
     }
   };
   struct TextureBucket {
@@ -1099,15 +1090,12 @@ struct RendererGeode::Impl {
   /// onto the saved target with the stored opacity.
   struct LayerStackFrame {
     std::unique_ptr<geode::GeoEncoder> savedEncoder;
-    wgpu::Texture savedTarget;       // Outer 1-sample resolve target.
-    wgpu::Texture savedMsaaTarget;   // Outer 4× MSAA color attachment.
-    wgpu::Texture layerTexture;      // Inner layer 1-sample resolve.
-    wgpu::Texture layerMsaaTexture;  // Inner layer 4× MSAA color attachment.
+    wgpu::Texture savedTarget;
+    wgpu::Texture layerTexture;
     /// Descriptors captured at push time so `popIsolatedLayer` can
     /// release the textures back to the correct pool bucket via
     /// `releaseTexture`.
     wgpu::TextureDescriptor layerDesc = {};
-    wgpu::TextureDescriptor layerMsaaDesc = {};
     double opacity = 1.0;
     /// Phase 3d: SVG `mix-blend-mode`. `Normal` (default) keeps the
     /// plain premultiplied source-over compositing path;
@@ -1122,30 +1110,25 @@ struct RendererGeode::Impl {
   geode::GeodeFilterEngine* filterEngine = nullptr;
 
   /// Phase 3c: state for an in-progress `<mask>` element. Two offscreen
-  /// texture pairs, one capturing the mask element's content and one
+  /// textures, one capturing the mask element's content and one
   /// capturing the masked subtree. `popMask` composites them via
   /// `GeoEncoder::blitFullTargetMasked` back onto the saved parent
   /// target.
   ///
   /// Phase sequencing matches `RendererTinySkia`:
-  ///   * `pushMask` → allocate mask capture pair, redirect encoder.
-  ///   * `transitionMaskToContent` → switch to content pair.
+  ///   * `pushMask` → allocate mask capture, redirect encoder.
+  ///   * `transitionMaskToContent` → switch to content texture.
   ///   * `popMask` → blit (content * luminance(mask)) onto parent.
   struct MaskStackFrame {
     enum class Phase { Capturing, Content };
     Phase phase = Phase::Capturing;
     std::unique_ptr<geode::GeoEncoder> savedEncoder;
     wgpu::Texture savedTarget;
-    wgpu::Texture savedMsaaTarget;
-    wgpu::Texture maskTexture;  // Mask element's content (RGBA).
-    wgpu::Texture maskMsaaTexture;
+    wgpu::Texture maskTexture;     // Mask element's content (RGBA).
     wgpu::Texture contentTexture;  // Masked element's content (RGBA).
-    wgpu::Texture contentMsaaTexture;
     /// Descriptors captured at push for M4.2 pool release.
     wgpu::TextureDescriptor maskDesc = {};
-    wgpu::TextureDescriptor maskMsaaDesc = {};
     wgpu::TextureDescriptor contentDesc = {};
-    wgpu::TextureDescriptor contentMsaaDesc = {};
     /// Raw mask-bounds rectangle from the driver, in the coordinate
     /// space of `maskBoundsTransform` (userSpaceOnUse or the
     /// objectBoundingBox-mapped user space - either way, NOT yet in
@@ -1215,13 +1198,10 @@ struct RendererGeode::Impl {
   /// composites the result back onto the outer target.
   struct FilterStackFrame {
     std::unique_ptr<geode::GeoEncoder> savedEncoder;
-    wgpu::Texture savedTarget;       // Outer 1-sample resolve target.
-    wgpu::Texture savedMsaaTarget;   // Outer 4× MSAA color attachment.
-    wgpu::Texture layerTexture;      // Inner layer 1-sample resolve.
-    wgpu::Texture layerMsaaTexture;  // Inner layer 4× MSAA color attachment.
+    wgpu::Texture savedTarget;
+    wgpu::Texture layerTexture;
     /// Descriptors captured at push for M4.2 pool release.
     wgpu::TextureDescriptor layerDesc = {};
-    wgpu::TextureDescriptor layerMsaaDesc = {};
     components::FilterGraph filterGraph;
     Box2d filterRegion;
     Transform2d deviceFromFilter;  // Full CTM at push time.
@@ -2015,29 +1995,24 @@ struct RendererGeode::Impl {
 
     for (LayerStackFrame& frame : layerStack) {
       destroyAndReleaseTexture(frame.layerTexture);
-      destroyAndReleaseTexture(frame.layerMsaaTexture);
     }
     layerStack.clear();
 
     for (MaskStackFrame& frame : maskStack) {
       destroyAndReleaseTexture(frame.maskTexture);
-      destroyAndReleaseTexture(frame.maskMsaaTexture);
       destroyAndReleaseTexture(frame.contentTexture);
-      destroyAndReleaseTexture(frame.contentMsaaTexture);
     }
     maskStack.clear();
 
     destroyClipStackTextures(clipStack);
     for (FilterStackFrame& frame : filterStack) {
       destroyAndReleaseTexture(frame.layerTexture);
-      destroyAndReleaseTexture(frame.layerMsaaTexture);
       destroyClipStackTextures(frame.savedClipStack);
     }
     filterStack.clear();
 
     for (PatternStackFrame& frame : patternStack) {
       destroyTextureBacking(frame.tileTexture);
-      destroyTextureBacking(frame.tileMsaaTexture);
     }
     patternStack.clear();
     if (patternFillPaint.has_value()) {
@@ -2051,8 +2026,6 @@ struct RendererGeode::Impl {
 
     destroyTextureBacking(ownedTarget);
     ownedTarget.reset();
-    destroyTextureBacking(ownedMsaaTarget);
-    ownedMsaaTarget.reset();
     destroyTexturePool();
 
     if (device) {
@@ -2241,9 +2214,7 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
   if (!impl_->device || !impl_->pipeline || !impl_->gradientPipeline || !impl_->imagePipeline ||
       impl_->pixelWidth <= 0 || impl_->pixelHeight <= 0) {
     impl_->ownedTarget.reset();
-    impl_->ownedMsaaTarget.reset();
     impl_->target = wgpu::Texture();
-    impl_->msaaTarget = wgpu::Texture();
     impl_->targetWidth = 0;
     impl_->targetHeight = 0;
     return;
@@ -2266,25 +2237,6 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
     impl_->targetWidth = 0;
     impl_->targetHeight = 0;
 
-    // 4× MSAA color attachment (when sampleCount > 1).
-    const uint32_t sc = impl_->device->sampleCount();
-    if (sc > 1) {
-      wgpu::TextureDescriptor msaaDesc = {};
-      msaaDesc.label = wgpuLabel("RendererGeodeTargetMSAA");
-      msaaDesc.size = {static_cast<uint32_t>(impl_->pixelWidth),
-                       static_cast<uint32_t>(impl_->pixelHeight), 1};
-      msaaDesc.format = impl_->textureFormat;
-      msaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
-      msaaDesc.mipLevelCount = 1;
-      msaaDesc.sampleCount = sc;
-      msaaDesc.dimension = wgpu::TextureDimension::_2D;
-      impl_->ownedMsaaTarget.reset(impl_->device->device().createTexture(msaaDesc));
-      impl_->msaaTarget = impl_->ownedMsaaTarget.get();
-      impl_->device->countTexture();
-    } else {
-      impl_->ownedMsaaTarget.reset();
-      impl_->msaaTarget = wgpu::Texture();
-    }
   } else {
     // Headless mode: reuse render targets across same-size frames (design doc
     // 0030 Milestone 4.1). Content is cleared by the encoder's first
@@ -2294,8 +2246,7 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
                                  impl_->targetHeight == impl_->pixelHeight;
 
     if (!canReuseTargets) {
-      // 1-sample resolve target: what `takeSnapshot()` copies back and what
-      // pattern / layer blits sample from.
+      // Direct render target. Snapshots copy it and layer/pattern blits sample it.
       wgpu::TextureDescriptor td = {};
       td.label = wgpuLabel("RendererGeodeTarget");
       td.size = {static_cast<uint32_t>(impl_->pixelWidth),
@@ -2310,32 +2261,10 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
       impl_->target = impl_->ownedTarget.get();
       impl_->device->countTexture();
 
-      // 4× MSAA color attachment (when sampleCount > 1): all draws land here,
-      // hardware resolves to `target` at pass end. Skipped on the
-      // alpha-coverage path (sampleCount == 1) where draws go directly
-      // into `target` with no intermediate MSAA texture.
-      const uint32_t sc = impl_->device->sampleCount();
-      if (sc > 1) {
-        wgpu::TextureDescriptor msaaDesc = {};
-        msaaDesc.label = wgpuLabel("RendererGeodeTargetMSAA");
-        msaaDesc.size = td.size;
-        msaaDesc.format = impl_->textureFormat;
-        msaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
-        msaaDesc.mipLevelCount = 1;
-        msaaDesc.sampleCount = sc;
-        msaaDesc.dimension = wgpu::TextureDimension::_2D;
-        impl_->ownedMsaaTarget.reset(impl_->device->device().createTexture(msaaDesc));
-        impl_->msaaTarget = impl_->ownedMsaaTarget.get();
-        impl_->device->countTexture();
-      } else {
-        impl_->ownedMsaaTarget.reset();
-        impl_->msaaTarget = wgpu::Texture();
-      }
       impl_->targetWidth = impl_->pixelWidth;
       impl_->targetHeight = impl_->pixelHeight;
     } else {
       impl_->target = impl_->ownedTarget.get();
-      impl_->msaaTarget = impl_->ownedMsaaTarget.get();
     }
   }
 
@@ -2348,7 +2277,7 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
 
   impl_->encoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      impl_->msaaTarget, impl_->target, impl_->frameCommandEncoder.get());
+      impl_->target, impl_->frameCommandEncoder.get());
   impl_->encoder->setBufferPool(&impl_->arenaBufferPool);
   if (impl_->preserveTargetOnBeginFrame) {
     impl_->encoder->setLoadPreserve();
@@ -2494,7 +2423,7 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
 
   // Phase 3b: path-clip mask. When the clip has any `clipPaths`,
   // render them into R8Unorm mask textures via the Slug mask
-  // pipeline and hand the resolved view of the outermost layer to
+  // pipeline and hand the view of the outermost layer to
   // the encoder so subsequent fill / gradient draws multiply clip
   // coverage into their output.
   //
@@ -2523,7 +2452,7 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
       impl_->pixelHeight > 0) {
     const wgpu::Device& dev = impl_->device->device();
 
-    const auto makeResolveTexture = [&](const char* label, wgpu::TextureDescriptor& outDesc) {
+    const auto makeMaskTexture = [&](const char* label, wgpu::TextureDescriptor& outDesc) {
       outDesc = wgpu::TextureDescriptor{};
       outDesc.label = wgpuLabel(label);
       outDesc.size = {static_cast<uint32_t>(impl_->pixelWidth),
@@ -2535,24 +2464,6 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
       outDesc.dimension = wgpu::TextureDimension::_2D;
       return impl_->acquireTexture(outDesc);
     };
-    const auto makeMsaaTexture = [&](const char* label,
-                                     wgpu::TextureDescriptor& outDesc) -> wgpu::Texture {
-      if (impl_->device->sampleCount() == 1) {
-        // Alpha-coverage path: no separate MSAA texture needed.
-        return {};
-      }
-      outDesc = wgpu::TextureDescriptor{};
-      outDesc.label = wgpuLabel(label);
-      outDesc.size = {static_cast<uint32_t>(impl_->pixelWidth),
-                      static_cast<uint32_t>(impl_->pixelHeight), 1u};
-      outDesc.format = wgpu::TextureFormat::RGBA8Unorm;
-      outDesc.usage = wgpu::TextureUsage::RenderAttachment;
-      outDesc.mipLevelCount = 1;
-      outDesc.sampleCount = 4;
-      outDesc.dimension = wgpu::TextureDimension::_2D;
-      return impl_->acquireTexture(outDesc);
-    };
-
     // Partition `clip.clipPaths` into contiguous [begin, end) ranges,
     // one per layer, in the order they appear. Layers appear in
     // traversal order - within a run the layer is constant, and
@@ -2603,15 +2514,9 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
     (void)dev;  // Kept for potential future use; texture allocation
                 // routes through `impl_->acquireTexture` now.
     for (auto it = runs.rbegin(); it != runs.rend(); ++it) {
-      wgpu::TextureDescriptor msaaDesc = {};
-      wgpu::TextureDescriptor resolveDesc = {};
-      wgpu::Texture msaaTexture = makeMsaaTexture("RendererGeodeClipMaskMsaa", msaaDesc);
-      wgpu::Texture resolveTexture =
-          makeResolveTexture("RendererGeodeClipMaskResolve", resolveDesc);
-      if (!resolveTexture || (impl_->device->sampleCount() > 1 && !msaaTexture)) {
-        // Release anything we managed to acquire before giving up.
-        if (msaaTexture) impl_->releaseTexture(std::move(msaaTexture), msaaDesc);
-        if (resolveTexture) impl_->releaseTexture(std::move(resolveTexture), resolveDesc);
+      wgpu::TextureDescriptor maskDesc = {};
+      wgpu::Texture maskTexture = makeMaskTexture("RendererGeodeClipMask", maskDesc);
+      if (!maskTexture) {
         continue;
       }
 
@@ -2623,7 +2528,7 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
         impl_->encoder->clearClipMask();
       }
 
-      impl_->encoder->beginMaskPass(msaaTexture, resolveTexture);
+      impl_->encoder->beginMaskPass(maskTexture);
       for (size_t s = it->begin; s < it->end; ++s) {
         const PathShape& shape = clip.clipPaths[s];
         const Transform2d composed =
@@ -2633,22 +2538,19 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
       }
       impl_->encoder->endMaskPass();
 
-      nestedMaskTexture = resolveTexture;
-      geode::ScopedWgpuHandle<wgpu::TextureView> resolveView(resolveTexture.createView());
-      nestedMaskView = resolveView.get();
-      if (resolveView) {
-        entry.maskLayerViews.push_back(std::move(resolveView));
+      nestedMaskTexture = maskTexture;
+      geode::ScopedWgpuHandle<wgpu::TextureView> maskView(maskTexture.createView());
+      nestedMaskView = maskView.get();
+      if (maskView) {
+        entry.maskLayerViews.push_back(std::move(maskView));
       }
 
       // Keep the intermediate textures alive until popClip, paired
       // with their descs for M4.2 pool release.
-      if (msaaTexture) {
-        entry.maskLayerTextures.push_back({std::move(msaaTexture), msaaDesc});
-      }
-      entry.maskLayerTextures.push_back({resolveTexture, resolveDesc});
+      entry.maskLayerTextures.push_back({maskTexture, maskDesc});
 
       // The outermost layer (the LAST one processed by this loop,
-      // i.e. the FIRST run in `runs`) provides the resolve view the
+      // i.e. the FIRST run in `runs`) provides the mask view the
       // main draws sample as their clip.
       entry.maskResolveTexture = nestedMaskTexture;
       entry.maskResolveView = nestedMaskView;
@@ -2703,10 +2605,8 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
     return;
   }
 
-  // Allocate offscreen 1-sample resolve + 4× MSAA companion for the
-  // layer. All draws issued between push/pop land here; pop composites
-  // the resolved 1-sample texture back onto the outer target with the
-  // stored opacity.
+  // Allocate an offscreen layer. All draws issued between push/pop land
+  // here; pop composites it back onto the outer target with the stored opacity.
   wgpu::TextureDescriptor td = {};
   td.label = wgpuLabel("RendererGeodeIsolatedLayer");
   td.size = {static_cast<uint32_t>(impl_->pixelWidth), static_cast<uint32_t>(impl_->pixelHeight),
@@ -2723,24 +2623,6 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
     return;
   }
 
-  wgpu::TextureDescriptor msaaDesc = {};
-  wgpu::Texture layerMsaaTexture;
-  if (impl_->device->sampleCount() > 1) {
-    msaaDesc.label = wgpuLabel("RendererGeodeIsolatedLayerMSAA");
-    msaaDesc.size = td.size;
-    msaaDesc.format = impl_->textureFormat;
-    msaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
-    msaaDesc.mipLevelCount = 1;
-    msaaDesc.sampleCount = 4;
-    msaaDesc.dimension = wgpu::TextureDimension::_2D;
-    layerMsaaTexture = impl_->acquireTexture(msaaDesc);
-    if (!layerMsaaTexture) {
-      impl_->releaseTexture(std::move(layerTexture), td);
-      impl_->layerStack.push_back({});
-      return;
-    }
-  }
-
   // Finish the outer encoder so its queued draws land on the saved target
   // before we redirect subsequent work into the offscreen layer. Same
   // shape as `beginPatternTile` - two render-pass submissions ordered
@@ -2750,19 +2632,15 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
   Impl::LayerStackFrame frame;
   frame.savedEncoder = std::move(impl_->encoder);
   frame.savedTarget = impl_->target;
-  frame.savedMsaaTarget = impl_->msaaTarget;
   frame.layerTexture = layerTexture;
-  frame.layerMsaaTexture = layerMsaaTexture;
   frame.layerDesc = td;
-  frame.layerMsaaDesc = msaaDesc;
   frame.opacity = opacity;
   frame.blendMode = blendMode;
 
   impl_->target = layerTexture;
-  impl_->msaaTarget = layerMsaaTexture;
   auto newEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      layerMsaaTexture, layerTexture, impl_->frameCommandEncoder.get());
+      layerTexture, impl_->frameCommandEncoder.get());
   newEncoder->setBufferPool(&impl_->arenaBufferPool);
   newEncoder->clear(css::RGBA(0, 0, 0, 0));
   impl_->encoder = std::move(newEncoder);
@@ -2792,7 +2670,6 @@ void RendererGeode::popIsolatedLayer() {
 
   // Restore outer target references.
   impl_->target = frame.savedTarget;
-  impl_->msaaTarget = frame.savedMsaaTarget;
 
   if (frame.blendMode != MixBlendMode::Normal) {
     // Phase 3d: SVG `mix-blend-mode`. The fragment shader needs the
@@ -2844,7 +2721,7 @@ void RendererGeode::popIsolatedLayer() {
       // safe.
       auto newEncoder = std::make_unique<geode::GeoEncoder>(
           *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-          frame.savedMsaaTarget, frame.savedTarget, impl_->frameCommandEncoder.get());
+          frame.savedTarget, impl_->frameCommandEncoder.get());
       newEncoder->setBufferPool(&impl_->arenaBufferPool);
       newEncoder->setLoadPreserve();
       impl_->encoder = std::move(newEncoder);
@@ -2856,7 +2733,6 @@ void RendererGeode::popIsolatedLayer() {
       // frameCommandEncoder; they must stay alive until that buffer
       // is submitted at `endFrame`.
       impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
-      impl_->releaseTextureAtFrameEnd(std::move(frame.layerMsaaTexture), frame.layerMsaaDesc);
       impl_->releaseTextureAtFrameEnd(std::move(snapshot), snapDesc);
       return;
     }
@@ -2865,14 +2741,11 @@ void RendererGeode::popIsolatedLayer() {
   }
 
   // Plain premultiplied source-over (the `Normal` case). Create a
-  // fresh encoder that preserves its existing contents (LoadOp::Load
-  // on the outer MSAA texture, whose state was retained via
-  // `StoreOp::Store`). Draw the layer's RESOLVED (1-sample) texture
-  // across the entire target with the stored opacity as the
-  // compositing alpha.
+  // fresh encoder that preserves its existing contents. Draw the layer
+  // texture across the target with the stored opacity as compositing alpha.
   auto newEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      frame.savedMsaaTarget, frame.savedTarget, impl_->frameCommandEncoder.get());
+      frame.savedTarget, impl_->frameCommandEncoder.get());
   newEncoder->setBufferPool(&impl_->arenaBufferPool);
   newEncoder->setLoadPreserve();
   impl_->encoder = std::move(newEncoder);
@@ -2880,7 +2753,6 @@ void RendererGeode::popIsolatedLayer() {
   impl_->encoder->blitFullTarget(frame.layerTexture, frame.opacity);
   // Same deferred-release rationale as the blend-mode branch above.
   impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
-  impl_->releaseTextureAtFrameEnd(std::move(frame.layerMsaaTexture), frame.layerMsaaDesc);
 }
 
 void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
@@ -2926,9 +2798,8 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
   const int bufferWidth = viewportWidth + filterBufferOffsetX;
   const int bufferHeight = viewportHeight + filterBufferOffsetY;
 
-  // Allocate offscreen 1-sample resolve + 4× MSAA companion for the
-  // filter layer capture. All draws between push/pop land here; pop runs
-  // the filter graph on the resolved texture and composites back.
+  // Allocate an offscreen filter layer capture. All draws between push/pop
+  // land here; pop runs the filter graph on it and composites back.
   wgpu::TextureDescriptor td{};
   td.label = wgpuLabel("RendererGeodeFilterLayer");
   td.size = {static_cast<uint32_t>(bufferWidth), static_cast<uint32_t>(bufferHeight), 1u};
@@ -2944,21 +2815,6 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
     return;
   }
 
-  wgpu::TextureDescriptor msaaDesc{};
-  msaaDesc.label = wgpuLabel("RendererGeodeFilterLayerMSAA");
-  msaaDesc.size = td.size;
-  msaaDesc.format = impl_->textureFormat;
-  msaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
-  msaaDesc.mipLevelCount = 1;
-  msaaDesc.sampleCount = 4;
-  msaaDesc.dimension = wgpu::TextureDimension::_2D;
-  wgpu::Texture layerMsaaTexture = impl_->acquireTexture(msaaDesc);
-  if (!layerMsaaTexture) {
-    impl_->releaseTexture(std::move(layerTexture), td);
-    impl_->filterStack.push_back({});
-    return;
-  }
-
   // Finish the outer encoder so its queued draws land on the saved
   // target before we redirect subsequent work into the filter layer.
   impl_->encoder->finish();
@@ -2966,11 +2822,8 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
   Impl::FilterStackFrame frame;
   frame.savedEncoder = std::move(impl_->encoder);
   frame.savedTarget = impl_->target;
-  frame.savedMsaaTarget = impl_->msaaTarget;
   frame.layerTexture = layerTexture;
-  frame.layerMsaaTexture = layerMsaaTexture;
   frame.layerDesc = td;
-  frame.layerMsaaDesc = msaaDesc;
   frame.filterGraph = filterGraph;
   frame.filterRegion = region;
   frame.deviceFromFilter = impl_->deviceFromLocalTransform;
@@ -2987,10 +2840,9 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
   impl_->clipStack.clear();
 
   impl_->target = layerTexture;
-  impl_->msaaTarget = layerMsaaTexture;
   auto newEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      layerMsaaTexture, layerTexture, impl_->frameCommandEncoder.get());
+      layerTexture, impl_->frameCommandEncoder.get());
   newEncoder->setBufferPool(&impl_->arenaBufferPool);
   newEncoder->clear(css::RGBA(0, 0, 0, 0));
   impl_->encoder = std::move(newEncoder);
@@ -3089,7 +2941,7 @@ void RendererGeode::popFilterLayer() {
     // Cap the local raster to avoid pathological allocations under extreme CTMs.
     constexpr uint32_t kMaxLocalDim = 8192u;
     if (localWidth <= kMaxLocalDim && localHeight <= kMaxLocalDim) {
-      // Allocate the local-raster offscreen pair (1-sample resolve + 4× MSAA).
+      // Allocate the local-raster offscreen texture.
       wgpu::TextureDescriptor localDesc{};
       localDesc.label = wgpuLabel("RendererGeodeBlurLocal");
       localDesc.size = {localWidth, localHeight, 1u};
@@ -3101,19 +2953,7 @@ void RendererGeode::popFilterLayer() {
       localDesc.dimension = wgpu::TextureDimension::_2D;
       wgpu::Texture localTexture = impl_->acquireTexture(localDesc);
 
-      wgpu::TextureDescriptor localMsaaDesc{};
-      localMsaaDesc.label = wgpuLabel("RendererGeodeBlurLocalMSAA");
-      localMsaaDesc.size = localDesc.size;
-      localMsaaDesc.format = impl_->textureFormat;
-      localMsaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
-      localMsaaDesc.mipLevelCount = 1;
-      localMsaaDesc.sampleCount = 4;
-      localMsaaDesc.dimension = wgpu::TextureDimension::_2D;
-      wgpu::Texture localMsaaTexture =
-          impl_->device->sampleCount() > 1 ? impl_->acquireTexture(localMsaaDesc) : wgpu::Texture();
-
-      const bool needMsaa = impl_->device->sampleCount() > 1;
-      if (localTexture && (!needMsaa || localMsaaTexture)) {
+      if (localTexture) {
         // Transform chains mirror tiny-skia (operator* applies the left factor
         // first): device pixel → filter user space → padded-raster origin → local
         // raster pixels.
@@ -3128,7 +2968,7 @@ void RendererGeode::popFilterLayer() {
         {
           geode::GeoEncoder resampleEncoder(*impl_->device, *impl_->pipeline,
                                             *impl_->gradientPipeline, *impl_->imagePipeline,
-                                            localMsaaTexture, localTexture);
+                                            localTexture);
           resampleEncoder.setBufferPool(&impl_->arenaBufferPool);
           resampleEncoder.setTransform(localFromDevice);
           resampleEncoder.drawTexture(
@@ -3157,10 +2997,9 @@ void RendererGeode::popFilterLayer() {
             deviceFromFilter;
 
         impl_->target = frame.savedTarget;
-        impl_->msaaTarget = frame.savedMsaaTarget;
         auto compositeEncoder = std::make_unique<geode::GeoEncoder>(
             *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-            frame.savedMsaaTarget, frame.savedTarget, impl_->frameCommandEncoder.get());
+            frame.savedTarget, impl_->frameCommandEncoder.get());
         compositeEncoder->setBufferPool(&impl_->arenaBufferPool);
         compositeEncoder->setLoadPreserve();
         impl_->encoder = std::move(compositeEncoder);
@@ -3176,24 +3015,15 @@ void RendererGeode::popFilterLayer() {
         impl_->encoder->setTransform(Transform2d());
 
         impl_->releaseTextureAtFrameEnd(std::move(localTexture), localDesc);
-        if (localMsaaTexture) {
-          impl_->releaseTextureAtFrameEnd(std::move(localMsaaTexture), localMsaaDesc);
-        }
         transformedBlurComposited = true;
       } else {
-        if (localTexture) {
-          impl_->releaseTexture(std::move(localTexture), localDesc);
-        }
-        if (localMsaaTexture) {
-          impl_->releaseTexture(std::move(localMsaaTexture), localMsaaDesc);
-        }
+        impl_->releaseTexture(std::move(localTexture), localDesc);
       }
     }
   }
 
   if (transformedBlurComposited) {
     impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
-    impl_->releaseTextureAtFrameEnd(std::move(frame.layerMsaaTexture), frame.layerMsaaDesc);
     return;
   }
 
@@ -3208,10 +3038,9 @@ void RendererGeode::popFilterLayer() {
   // existing contents. Composite the filtered texture back with full
   // opacity (filter results are already premultiplied).
   impl_->target = frame.savedTarget;
-  impl_->msaaTarget = frame.savedMsaaTarget;
   auto newEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      frame.savedMsaaTarget, frame.savedTarget, impl_->frameCommandEncoder.get());
+      frame.savedTarget, impl_->frameCommandEncoder.get());
   newEncoder->setBufferPool(&impl_->arenaBufferPool);
   newEncoder->setLoadPreserve();
   impl_->encoder = std::move(newEncoder);
@@ -3268,9 +3097,8 @@ void RendererGeode::popFilterLayer() {
   // `filteredTexture` (which is `frame.layerTexture` when the filter
   // graph is empty) into the frame encoder. Filter-engine-owned
   // intermediates are tracked separately by `GeodeFilterEngine` and
-  // covered by M5; we only recycle the layer capture pair here.
+  // covered by M5; we only recycle the layer capture here.
   impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
-  impl_->releaseTextureAtFrameEnd(std::move(frame.layerMsaaTexture), frame.layerMsaaDesc);
 }
 
 void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds) {
@@ -3282,9 +3110,8 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds) {
     return;
   }
 
-  const auto allocTexturePair = [&](const char* label, const char* msaaLabel,
-                                    wgpu::Texture& outResolve, wgpu::TextureDescriptor& outDesc,
-                                    wgpu::Texture& outMsaa, wgpu::TextureDescriptor& outMsaaDesc) {
+  const auto allocTexture = [&](const char* label, wgpu::Texture& outTexture,
+                                wgpu::TextureDescriptor& outDesc) {
     outDesc = wgpu::TextureDescriptor{};
     outDesc.label = wgpuLabel(label);
     outDesc.size = {static_cast<uint32_t>(impl_->pixelWidth),
@@ -3295,29 +3122,13 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds) {
     outDesc.mipLevelCount = 1;
     outDesc.sampleCount = 1;
     outDesc.dimension = wgpu::TextureDimension::_2D;
-    outResolve = impl_->acquireTexture(outDesc);
-
-    if (impl_->device->sampleCount() > 1) {
-      outMsaaDesc = wgpu::TextureDescriptor{};
-      outMsaaDesc.label = wgpuLabel(msaaLabel);
-      outMsaaDesc.size = outDesc.size;
-      outMsaaDesc.format = impl_->textureFormat;
-      outMsaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
-      outMsaaDesc.mipLevelCount = 1;
-      outMsaaDesc.sampleCount = 4;
-      outMsaaDesc.dimension = wgpu::TextureDimension::_2D;
-      outMsaa = impl_->acquireTexture(outMsaaDesc);
-    }
+    outTexture = impl_->acquireTexture(outDesc);
   };
 
   Impl::MaskStackFrame frame;
-  allocTexturePair("RendererGeodeMaskCapture", "RendererGeodeMaskCaptureMSAA", frame.maskTexture,
-                   frame.maskDesc, frame.maskMsaaTexture, frame.maskMsaaDesc);
-  allocTexturePair("RendererGeodeMaskContent", "RendererGeodeMaskContentMSAA", frame.contentTexture,
-                   frame.contentDesc, frame.contentMsaaTexture, frame.contentMsaaDesc);
-  const bool needsMsaa = impl_->device->sampleCount() > 1;
-  if (!frame.maskTexture || (needsMsaa && !frame.maskMsaaTexture) || !frame.contentTexture ||
-      (needsMsaa && !frame.contentMsaaTexture)) {
+  allocTexture("RendererGeodeMaskCapture", frame.maskTexture, frame.maskDesc);
+  allocTexture("RendererGeodeMaskContent", frame.contentTexture, frame.contentDesc);
+  if (!frame.maskTexture || !frame.contentTexture) {
     impl_->maskStack.push_back({});
     return;
   }
@@ -3330,14 +3141,12 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds) {
 
   frame.savedEncoder = std::move(impl_->encoder);
   frame.savedTarget = impl_->target;
-  frame.savedMsaaTarget = impl_->msaaTarget;
   frame.phase = Impl::MaskStackFrame::Phase::Capturing;
 
   impl_->target = frame.maskTexture;
-  impl_->msaaTarget = frame.maskMsaaTexture;
   auto captureEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      frame.maskMsaaTexture, frame.maskTexture, impl_->frameCommandEncoder.get());
+      frame.maskTexture, impl_->frameCommandEncoder.get());
   captureEncoder->setBufferPool(&impl_->arenaBufferPool);
   captureEncoder->clear(css::RGBA(0, 0, 0, 0));
   impl_->encoder = std::move(captureEncoder);
@@ -3354,8 +3163,7 @@ void RendererGeode::transitionMaskToContent() {
   if (frame.phase != Impl::MaskStackFrame::Phase::Capturing) {
     return;
   }
-  const bool needsMsaa = impl_->device->sampleCount() > 1;
-  if (!frame.contentTexture || (needsMsaa && !frame.contentMsaaTexture) || !impl_->encoder) {
+  if (!frame.contentTexture || !impl_->encoder) {
     frame.phase = Impl::MaskStackFrame::Phase::Content;
     return;
   }
@@ -3365,10 +3173,9 @@ void RendererGeode::transitionMaskToContent() {
   impl_->retireActiveEncoder();
 
   impl_->target = frame.contentTexture;
-  impl_->msaaTarget = frame.contentMsaaTexture;
   auto contentEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      frame.contentMsaaTexture, frame.contentTexture, impl_->frameCommandEncoder.get());
+      frame.contentTexture, impl_->frameCommandEncoder.get());
   contentEncoder->setBufferPool(&impl_->arenaBufferPool);
   contentEncoder->clear(css::RGBA(0, 0, 0, 0));
   impl_->encoder = std::move(contentEncoder);
@@ -3389,19 +3196,17 @@ void RendererGeode::popMask() {
     return;
   }
 
-  // Finish the content encoder so its resolve is ready to sample.
+  // Finish the content encoder so its target is ready to sample.
   if (impl_->encoder) {
     impl_->retireActiveEncoder();
   }
   impl_->retireFinishedEncoder(std::move(frame.savedEncoder));
 
-  // Restore the outer target and reopen a new encoder with load-
-  // preserve on the saved MSAA state.
+  // Restore the outer target and reopen a new encoder with load-preserve.
   impl_->target = frame.savedTarget;
-  impl_->msaaTarget = frame.savedMsaaTarget;
   auto newEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      frame.savedMsaaTarget, frame.savedTarget, impl_->frameCommandEncoder.get());
+      frame.savedTarget, impl_->frameCommandEncoder.get());
   newEncoder->setBufferPool(&impl_->arenaBufferPool);
   newEncoder->setLoadPreserve();
   impl_->encoder = std::move(newEncoder);
@@ -3423,12 +3228,9 @@ void RendererGeode::popMask() {
 
   // Defer release to endFrame - `blitFullTargetMasked` recorded
   // samples from both `contentTexture` and `maskTexture` into the
-  // frame encoder. MSAA companions had no post-render samples but
-  // are bucketed alongside their resolve for symmetry.
+  // frame encoder.
   impl_->releaseTextureAtFrameEnd(std::move(frame.maskTexture), frame.maskDesc);
-  impl_->releaseTextureAtFrameEnd(std::move(frame.maskMsaaTexture), frame.maskMsaaDesc);
   impl_->releaseTextureAtFrameEnd(std::move(frame.contentTexture), frame.contentDesc);
-  impl_->releaseTextureAtFrameEnd(std::move(frame.contentMsaaTexture), frame.contentMsaaDesc);
 }
 
 void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& targetFromPattern) {
@@ -3448,8 +3250,8 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   // kPatternSupersampleScale. Without it, small tiles (e.g. a 2×2 tile
   // scaled 10× → 20×20 device px) produce a 20×20-texel texture whose
   // bilinear-sampled circle edges visibly drift from the reference golden
-  // that was rendered at 40×40 texels. The extra resolution lets the
-  // MSAA-resolved tile capture finer edge transitions, closing the gap.
+  // that was rendered at 40×40 texels. The extra resolution preserves finer
+  // edge transitions.
   constexpr double kPatternSupersampleScale = 2.0;
   const Transform2d deviceFromPattern = impl_->deviceFromLocalTransform * targetFromPattern;
   const double scaleX = std::hypot(deviceFromPattern.data[0], deviceFromPattern.data[1]);
@@ -3466,8 +3268,7 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   const int tilePixelWidth = boundedPx(tileRect.width() * ssX);
   const int tilePixelHeight = boundedPx(tileRect.height() * ssY);
 
-  // 1-sample resolve target for the pattern tile (this is what the Slug
-  // fill shader samples when the tile is later used as paint).
+  // Pattern tile target sampled by the Slug fill shader when used as paint.
   wgpu::TextureDescriptor td = {};
   td.label = wgpuLabel("RendererGeodePatternTile");
   td.size = {static_cast<uint32_t>(tilePixelWidth), static_cast<uint32_t>(tilePixelHeight), 1u};
@@ -3483,27 +3284,7 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
     return;
   }
 
-  // 4× MSAA companion render target - shares the same encoder lifetime
-  // as the tile; resolved into `tileTexture` at pass end. Skipped on
-  // the alpha-coverage path (sampleCount == 1).
-  geode::ScopedWgpuHandle<wgpu::Texture> tileMsaaTexture;
-  if (impl_->device->sampleCount() > 1) {
-    wgpu::TextureDescriptor tileMsaaDesc = {};
-    tileMsaaDesc.label = wgpuLabel("RendererGeodePatternTileMSAA");
-    tileMsaaDesc.size = td.size;
-    tileMsaaDesc.format = impl_->textureFormat;
-    tileMsaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
-    tileMsaaDesc.mipLevelCount = 1;
-    tileMsaaDesc.sampleCount = 4;
-    tileMsaaDesc.dimension = wgpu::TextureDimension::_2D;
-    tileMsaaTexture.reset(impl_->device->device().createTexture(tileMsaaDesc));
-    impl_->device->countTexture();
-    if (!tileMsaaTexture) {
-      return;
-    }
-  }
   const wgpu::Texture tileTextureHandle = tileTexture.get();
-  const wgpu::Texture tileMsaaTextureHandle = tileMsaaTexture.get();
 
   // Stash the currently-active encoder/target/transform state. A nested
   // encoder can't share a render pass with the outer one, so we finish any
@@ -3523,7 +3304,6 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   }
   frame.savedEncoder = std::move(impl_->encoder);
   frame.savedTarget = impl_->target;
-  frame.savedMsaaTarget = impl_->msaaTarget;
   frame.savedDeviceFromLocalTransform = impl_->deviceFromLocalTransform;
   frame.savedDeviceFromLocalTransformStack = std::move(impl_->deviceFromLocalTransformStack);
   frame.savedPixelWidth = impl_->pixelWidth;
@@ -3543,7 +3323,6 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   frame.tileRect = tileRect;
   frame.targetFromPattern = targetFromPattern;
   frame.tileTexture = std::move(tileTexture);
-  frame.tileMsaaTexture = std::move(tileMsaaTexture);
   frame.tilePixelWidth = tilePixelWidth;
   frame.tilePixelHeight = tilePixelHeight;
   // Map pattern-tile units onto tile-texture pixels: this factor is applied
@@ -3569,7 +3348,6 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   impl_->pixelWidth = tilePixelWidth;
   impl_->pixelHeight = tilePixelHeight;
   impl_->target = tileTextureHandle;
-  impl_->msaaTarget = tileMsaaTextureHandle;
   impl_->deviceFromLocalTransformStack.clear();
   // Initialise the current transform to the raster scale so direct draws
   // issued before the driver's next `setTransform` still land in the
@@ -3579,7 +3357,7 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
 
   auto newEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      tileMsaaTextureHandle, tileTextureHandle, impl_->frameCommandEncoder.get());
+      tileTextureHandle, impl_->frameCommandEncoder.get());
   newEncoder->setBufferPool(&impl_->arenaBufferPool);
   // Transparent clear so unpainted tile pixels contribute nothing.
   newEncoder->clear(css::RGBA(0, 0, 0, 0));
@@ -3607,13 +3385,8 @@ void RendererGeode::endPatternTile(bool forStroke) {
     impl_->retireActiveEncoder();
   }
   impl_->retireFinishedEncoder(std::move(frame.savedEncoder));
-  if (frame.tileMsaaTexture) {
-    impl_->device->deferDestroy(frame.tileMsaaTexture.take());
-  }
-
   // Restore outer state.
   impl_->target = frame.savedTarget;
-  impl_->msaaTarget = frame.savedMsaaTarget;
   impl_->pixelWidth = frame.savedPixelWidth;
   impl_->pixelHeight = frame.savedPixelHeight;
   impl_->deviceFromLocalTransform = frame.savedDeviceFromLocalTransform;
@@ -3647,15 +3420,11 @@ void RendererGeode::endPatternTile(bool forStroke) {
   // Practical fix: change the render pass load op to Load instead of Clear
   // when there's been at least one prior submission. This requires
   // extending GeoEncoder; see the `reopen` helper added below.
-  // On the 1-sample alpha-coverage path (Intel Arc Vulkan) `frame.savedMsaaTarget`
-  // is intentionally null; `GeoEncoder` handles the no-MSAA case. Only require
-  // the MSAA attachment when the device actually uses multisampling.
-  const bool needsMsaa = impl_->device && impl_->device->sampleCount() > 1;
   if (impl_->device && impl_->pipeline && impl_->gradientPipeline && impl_->imagePipeline &&
-      frame.savedTarget && (!needsMsaa || frame.savedMsaaTarget)) {
+      frame.savedTarget) {
     auto newEncoder = std::make_unique<geode::GeoEncoder>(
         *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-        frame.savedMsaaTarget, frame.savedTarget, impl_->frameCommandEncoder.get());
+        frame.savedTarget, impl_->frameCommandEncoder.get());
     newEncoder->setBufferPool(&impl_->arenaBufferPool);
     // Preserve existing target contents: the pattern subtree may have
     // submitted work on the outer target *before* the pattern tile opened
@@ -4456,12 +4225,8 @@ std::shared_ptr<const RendererTextureSnapshot> RendererGeode::takeTextureSnapsho
   wgpu::Texture texture = impl_->ownedTarget.take();
   const Vector2i dimensions(impl_->pixelWidth, impl_->pixelHeight);
   impl_->target = wgpu::Texture();
-  impl_->msaaTarget = wgpu::Texture();
   impl_->targetWidth = 0;
   impl_->targetHeight = 0;
-  if (impl_->ownedMsaaTarget) {
-    impl_->device->deferDestroy(impl_->ownedMsaaTarget.take());
-  }
 
   return std::make_shared<RendererGeodeTextureSnapshot>(impl_->device, std::move(texture),
                                                         dimensions, impl_->textureFormat);
