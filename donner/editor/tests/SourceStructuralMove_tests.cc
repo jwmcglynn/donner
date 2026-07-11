@@ -111,5 +111,20 @@ TEST(SourceStructuralMove, AcceptsEditorSourceWithHiddenTerminalNewline) {
             SourceStructuralMoveStatus::Ready);
 }
 
+TEST(SourceStructuralMove, RejectsMovesThatEscapeActiveGroupEditScope) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  svg::SVGElement a = RequiredElement(app, "#a");
+  svg::SVGElement r1 = RequiredElement(app, "#r1");
+  svg::SVGElement b = RequiredElement(app, "#b");
+  svg::SVGElement c = RequiredElement(app, "#c");
+  ASSERT_TRUE(app.enterGroupEdit(a));
+
+  EXPECT_EQ(BuildSourceStructuralMovePlan(app, kSvg, r1, b, c).status,
+            SourceStructuralMoveStatus::InvalidParent);
+  EXPECT_EQ(BuildSourceStructuralMovePlan(app, kSvg, c, a, std::nullopt).status,
+            SourceStructuralMoveStatus::InvalidParent);
+}
+
 }  // namespace
 }  // namespace donner::editor

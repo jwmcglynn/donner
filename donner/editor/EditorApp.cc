@@ -913,6 +913,7 @@ EditorApp::EditorApp() = default;
 
 bool EditorApp::loadFromString(std::string_view svgBytes) {
   selection_.clear();
+  editingScope_.reset();
   refreshFirstSelectionCache();
   controller_.reset();
   undoTimeline_.clear();
@@ -973,6 +974,7 @@ bool EditorApp::flushFrame() {
   const auto& documentFlush = document_.lastFlushResult();
   if (documentBeforeFlush.has_value() && document_.hasDocument() &&
       !(*documentBeforeFlush == document_.document())) {
+    editingScope_.reset();
     std::vector<svg::SVGElement> remappedSelection;
     remappedSelection.reserve(selectionTargets.size());
     for (const auto& target : selectionTargets) {
@@ -1120,7 +1122,7 @@ bool EditorApp::reorderSelectedElement(ZOrder direction) {
   // the child inherits no transform, paint, clip, or opacity from it);
   // otherwise we fall through to the within-parent sibling reorder below, which
   // never changes how the element paints.
-  const svg::SVGElement root = document_.document().svgElement();
+  const svg::SVGElement root = editingScope_.value_or(document_.document().svgElement());
   if (parent != root && (direction == ZOrder::BringToFront || direction == ZOrder::SendToBack) &&
       CanLiftToRoot(element, root)) {
     if (direction == ZOrder::BringToFront) {
@@ -1349,13 +1351,16 @@ bool EditorApp::renameSelectedElement(std::string_view newId) {
 
 void EditorApp::setSelection(std::optional<svg::SVGElement> element) {
   selection_.clear();
-  if (element.has_value()) {
+  if (element.has_value() && isElementInEditingScope(*element)) {
     selection_.push_back(std::move(*element));
   }
   refreshFirstSelectionCache();
 }
 
 void EditorApp::setSelection(std::vector<svg::SVGElement> elements) {
+  std::erase_if(elements, [this](const svg::SVGElement& element) {
+    return !isElementInEditingScope(element);
+  });
   selection_ = std::move(elements);
   refreshFirstSelectionCache();
 }
@@ -1442,11 +1447,17 @@ void EditorApp::toggleInSelection(const svg::SVGElement& element) {
       return;
     }
   }
+  if (!isElementInEditingScope(element)) {
+    return;
+  }
   selection_.push_back(element);
   refreshFirstSelectionCache();
 }
 
 void EditorApp::addToSelection(const svg::SVGElement& element) {
+  if (!isElementInEditingScope(element)) {
+    return;
+  }
   for (const auto& existing : selection_) {
     if (existing == element) {
       return;
@@ -1454,6 +1465,44 @@ void EditorApp::addToSelection(const svg::SVGElement& element) {
   }
   selection_.push_back(element);
   refreshFirstSelectionCache();
+}
+
+bool EditorApp::enterGroupEdit(const svg::SVGElement& group) {
+  if (!document_.hasDocument() || group.tryType() != svg::ElementType::G || IsLocked(group)) {
+    return false;
+  }
+  const svg::SVGElement root = document_.document().svgElement();
+  if (!IsElementOrDescendant(root, group) ||
+      (editingScope_.has_value() && !IsElementOrDescendant(*editingScope_, group)) ||
+      editingScope_ == group) {
+    return false;
+  }
+
+  editingScope_ = group;
+  clearSelection();
+  return true;
+}
+
+bool EditorApp::exitGroupEdit() {
+  if (!editingScope_.has_value()) {
+    return false;
+  }
+  const svg::SVGElement exited = *editingScope_;
+  std::optional<svg::SVGElement> parent = exited.parentElement();
+  editingScope_.reset();
+  while (parent.has_value() && parent->tryType() != svg::ElementType::G) {
+    parent = parent->parentElement();
+  }
+  if (parent.has_value()) {
+    editingScope_ = parent;
+  }
+  setSelection(exited);
+  return true;
+}
+
+bool EditorApp::isElementInEditingScope(const svg::SVGElement& element) const {
+  return !editingScope_.has_value() ||
+         (*editingScope_ != element && IsElementOrDescendant(*editingScope_, element));
 }
 
 bool EditorApp::setAttributeOnSelection(std::string_view attrName, std::string_view attrValue) {
@@ -1746,7 +1795,15 @@ std::optional<svg::SVGGraphicsElement> EditorApp::hitTest(const Vector2d& docume
     controllerVersion_ = currentVersion;
   }
 
-  return controller_->findIntersecting(documentPoint);
+  if (!editingScope_.has_value()) {
+    return controller_->findIntersecting(documentPoint);
+  }
+  for (const svg::SVGGraphicsElement& hit : controller_->findAllIntersecting(documentPoint)) {
+    if (isElementInEditingScope(hit)) {
+      return hit;
+    }
+  }
+  return std::nullopt;
 }
 
 std::vector<svg::SVGGraphicsElement> EditorApp::hitTestRect(const Box2d& documentRect) {
@@ -1765,7 +1822,7 @@ std::vector<svg::SVGGraphicsElement> EditorApp::hitTestRect(const Box2d& documen
   // computes shape state under *write* access, so the whole traversal takes one coarse write guard.
   svg::SVGDocument doc = document_.document();
   doc.withWriteAccess([&](svg::DocumentWriteAccess&) {
-    const svg::SVGElement root = doc.svgElement();
+    const svg::SVGElement root = editingScope_.value_or(doc.svgElement());
     auto visit = [&](const svg::SVGGraphicsElement& element) {
       if (element.isa<svg::SVGGeometryElement>()) {
         if (GeometryIntersectsRect(element.cast<svg::SVGGeometryElement>(), documentRect)) {
@@ -1797,7 +1854,7 @@ std::vector<svg::SVGElement> EditorApp::selectableElements() {
   // scoped access guard against the live ConcurrentDom document.
   svg::SVGDocument doc = document_.document();
   doc.withWriteAccess([&](svg::DocumentWriteAccess&) {
-    const svg::SVGElement root = doc.svgElement();
+    const svg::SVGElement root = editingScope_.value_or(doc.svgElement());
     auto visit = [&](const svg::SVGGraphicsElement& element) { selectable.emplace_back(element); };
     ForEachSelectableElement(root, visit);
   });

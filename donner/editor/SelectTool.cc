@@ -186,6 +186,20 @@ svg::SVGElement TopLevelAncestor(svg::SVGElement hit, const svg::SVGElement& con
   return hit;
 }
 
+std::optional<svg::SVGElement> NearestEditableGroupAncestor(
+    const svg::SVGElement& hit, const std::optional<svg::SVGElement>& currentScope) {
+  for (std::optional<svg::SVGElement> current = hit.parentElement(); current.has_value();
+       current = current->parentElement()) {
+    if (currentScope.has_value() && *current == *currentScope) {
+      return std::nullopt;
+    }
+    if (current->tryType() == svg::ElementType::G) {
+      return current;
+    }
+  }
+  return std::nullopt;
+}
+
 }  // namespace
 
 bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& documentPoint,
@@ -409,6 +423,15 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
     return;
   }
 
+  if (modifiers.doubleClick && !IsLocked(*hit)) {
+    if (const std::optional<svg::SVGElement> group =
+            NearestEditableGroupAncestor(*hit, editor.editingScope());
+        group.has_value() && editor.enterGroupEdit(*group)) {
+      editor.setSelection(*hit);
+      return;
+    }
+  }
+
   // Shift+click on an element → toggle membership in the current
   // selection without starting a drag. The user is curating a
   // multi-element set, not moving anything. Leaf-accuracy matters here
@@ -453,8 +476,10 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
   // filter-group - select the clicked path instead of the whole group.
   // Requires double-click detection in the pointer-event protocol.
   svg::SVGDocument& doc = editor.document().document();
+  const std::optional<svg::SVGElement> editingScope = editor.editingScope();
   const svg::SVGElement element = doc.withReadAccess([&](svg::DocumentReadAccess&) {
-    const svg::SVGElement container = DeepestWrappingContainer(doc.svgElement());
+    const svg::SVGElement container =
+        editingScope.has_value() ? *editingScope : DeepestWrappingContainer(doc.svgElement());
     const svg::SVGElement topLevel = TopLevelAncestor(*hit, container);
     return HasCompositingAttribute(topLevel) ? topLevel : *hit;
   });

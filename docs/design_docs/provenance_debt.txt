@@ -24,5 +24,4 @@ docs/design_docs/0042-geode_slug_conformance.md
 docs/design_docs/0043-deterministic_replay_testing.md
 docs/design_docs/0044-2-editor_fluid_canvas_rendering.md
 docs/design_docs/0045-editor_geode_chrome_migration.md
-docs/design_docs/0046-editor_group_layers.md
 docs/design_docs/0047-v0_8_showcase.md

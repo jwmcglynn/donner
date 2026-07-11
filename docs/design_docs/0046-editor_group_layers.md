@@ -1,7 +1,7 @@
 # Design: Editor Group Layers
 
-**Status:** Design
-**Author:** Codex
+**Status:** Implementing
+**Author:** GPT-5.6 Sol
 **Created:** 2026-05-30
 **Related:** [0033-2-editor_design_tool_responsiveness](0033-2-editor_design_tool_responsiveness.md),
 [0044-2-editor_fluid_canvas_rendering](0044-2-editor_fluid_canvas_rendering.md),
@@ -71,32 +71,32 @@ model or compositor diagnostics split. For the release, "complete" means:
 - Compositor Debug remains separate and hidden by default so render-cache tiles are not confused
   with editable document layers.
 
-Structural group editing commands, such as Group, Ungroup, and drag-to-reorder, can remain a
-follow-up unless the showcase artwork workflow directly needs them. The panel itself is still
-showcase-gating.
+Structural group editing is now part of the v0.8 editor scope. Group/Ungroup remain DOM-first and
+lossless-by-default; isolated group editing constrains selection, hit testing, Layers rows, source
+structural moves, and arrange commands to the active group.
 
 ## Implementation Plan
 
-- [ ] **Milestone 1: Layer tree model**
-  - [ ] Add `LayerTreeModel` / `LayerTreeSnapshot` types under `donner/editor/`.
-  - [ ] Build rows from the SVG light tree, classifying document root, groups, and renderable
+- [x] **Milestone 1: Layer tree model**
+  - [x] Add `LayerTreeModel` / `LayerTreeSnapshot` types under `donner/editor/`.
+  - [x] Build rows from the SVG light tree, classifying document root, groups, and renderable
         leaves.
-  - [ ] Generate display names from `id`, `<title>`, semantic label attributes, then tag fallback.
-  - [ ] Preserve stable expansion and scroll-target keys across idle snapshot refreshes.
-  - [ ] Add model tests for nested groups, unnamed groups, hidden/non-renderable resource subtrees,
+  - [x] Generate display names from `id`, `<title>`, semantic label attributes, then tag fallback.
+  - [x] Preserve stable expansion and scroll-target keys across idle snapshot refreshes.
+  - [x] Add model tests for nested groups, unnamed groups, hidden/non-renderable resource subtrees,
         compound paths, and multi-selection.
-- [ ] **Milestone 2: Layers panel UI**
-  - [ ] Replace `SidebarPresenter::renderTreeView` with a Layers panel presenter backed by
+- [x] **Milestone 2: Layers panel UI**
+  - [x] Replace `SidebarPresenter::renderTreeView` with a Layers panel presenter backed by
         `LayerTreeSnapshot`.
-  - [ ] Render rows with disclosure arrow, thumbnail slot, layer name, element kind, and selection
+  - [x] Render rows with disclosure arrow, thumbnail slot, layer name, element kind, and selection
         state.
-  - [ ] Sync row clicks with `EditorApp::setSelection` / `toggleInSelection`.
-  - [ ] Auto-expand and scroll to the selected row when selection changes from the canvas or source
+  - [x] Sync row clicks with `EditorApp::setSelection` / `toggleInSelection`.
+  - [x] Auto-expand and scroll to the selected row when selection changes from the canvas or source
         pane.
-  - [ ] Rename the current compositor `LayerInspectorPanel` surface to Render Diagnostics in the UI
+  - [x] Rename the current compositor `LayerInspectorPanel` surface to Render Diagnostics in the UI
         so users do not confuse render cache tiles with editable layers.
 - [ ] **Milestone 3: Per-tier previews**
-  - [ ] Add `LayerPreviewRenderer` that renders a single row's entity range into a fixed-size
+  - [x] Add `LayerPreviewRenderer` that renders a single row's entity range into a fixed-size
         thumbnail.
   - [ ] Use lazy preview requests only for visible rows and rows entering the overscan band.
   - [ ] Cache previews by row key, document version, style/layout generation, preview size, DPR, and
@@ -106,11 +106,11 @@ showcase-gating.
   - [ ] Add preview tests for root, nested group, transformed group, filtered group, compound path
         with a hole, transparent content, and clipping.
 - [ ] **Milestone 4: Interaction polish**
-  - [ ] Add keyboard navigation for expand/collapse and selection.
+  - [x] Add keyboard navigation for expand/collapse and selection.
   - [ ] Add context-menu entries for Select, Add to Selection, Expand All, Collapse All, and Reveal
         in Source.
-  - [ ] Add a compact multi-selection state that shows partially selected groups.
-  - [ ] Keep row hover/selection highlights in lockstep with canvas overlay selection.
+  - [x] Add a compact multi-selection state that shows partially selected groups.
+  - [x] Keep row hover/selection highlights in lockstep with canvas overlay selection.
 - [ ] **Milestone 5: Structural group editing**
   - [ ] Add Group Selection: wrap compatible selected siblings in a `<g>` while preserving paint
         order and visual output.
@@ -118,6 +118,9 @@ showcase-gating.
         styles.
   - [ ] Add drag-to-reorder after group/ungroup source writeback is covered by undo, source sync,
         and preview invalidation tests.
+  - [x] Add isolated group editing with double-click entry, one-level Escape/breadcrumb exit,
+        scope-aware exact hit testing, marquee/Select All filtering, scoped Layers rows, and
+        scope-relative arrange/source-drag behavior.
 
 ## User Stories
 

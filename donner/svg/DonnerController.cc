@@ -20,4 +20,19 @@ std::optional<SVGGraphicsElement> DonnerController::findIntersecting(const Vecto
   return std::nullopt;
 }
 
+std::vector<SVGGraphicsElement> DonnerController::findAllIntersecting(const Vector2d& point) {
+  DocumentWriteAccess access = document_.writeAccess();
+  Registry& registry = access.registry();
+  const std::vector<Entity> entities =
+      components::RenderingContext(registry).findAllIntersecting(point);
+  std::vector<SVGGraphicsElement> results;
+  results.reserve(entities.size());
+  for (const Entity entity : entities) {
+    SVGElement element(EntityHandle(registry, entity));
+    UTILS_RELEASE_ASSERT(element.isa<SVGGraphicsElement>());
+    results.push_back(element.cast<SVGGraphicsElement>());
+  }
+  return results;
+}
+
 }  // namespace donner::svg

@@ -1319,6 +1319,58 @@ TEST_F(SelectToolTest, RedragFastPathDoesNotStealClickFromFrontOverlappingObject
   EXPECT_TRUE(selectionIs("#front"));
 }
 
+TEST_F(SelectToolTest, DoubleClickEntersNearestGroupAndSelectsHitLeaf) {
+  constexpr std::string_view kNestedGroupsSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120">
+        <g id="outer"><g id="inner"><rect id="leaf" x="10" y="10" width="40" height="40"/></g></g>
+        <rect id="outside" x="70" y="10" width="40" height="40"/>
+      </svg>)svg";
+  loadSvg(kNestedGroupsSvg);
+
+  tool.onMouseDown(app, Vector2d(20, 20), MouseModifiers{.doubleClick = true});
+  tool.onMouseUp(app, Vector2d(20, 20));
+
+  ASSERT_TRUE(app.editingScope().has_value());
+  EXPECT_EQ(app.editingScope()->id(), "inner");
+  EXPECT_TRUE(selectionIs("#leaf"));
+  EXPECT_FALSE(app.hitTest(Vector2d(80, 20)).has_value());
+}
+
+TEST_F(SelectToolTest, DoubleClickInsideCurrentScopeEntersNestedGroupOnly) {
+  constexpr std::string_view kNestedGroupsSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120">
+        <g id="outer"><g id="inner"><rect id="leaf" x="10" y="10" width="40" height="40"/></g></g>
+      </svg>)svg";
+  loadSvg(kNestedGroupsSvg);
+  ASSERT_TRUE(app.enterGroupEdit(elementById("#outer")));
+
+  tool.onMouseDown(app, Vector2d(20, 20), MouseModifiers{.doubleClick = true});
+  tool.onMouseUp(app, Vector2d(20, 20));
+
+  ASSERT_TRUE(app.editingScope().has_value());
+  EXPECT_EQ(app.editingScope()->id(), "inner");
+  EXPECT_TRUE(selectionIs("#leaf"));
+}
+
+TEST_F(SelectToolTest, ClickInsideCompositeEditingScopeDoesNotSelectScope) {
+  constexpr std::string_view kCompositeScopeSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120">
+        <defs><filter id="blur"><feGaussianBlur stdDeviation="1"/></filter></defs>
+        <g id="scope" filter="url(#blur)">
+          <rect id="leaf" x="10" y="10" width="40" height="40"/>
+        </g>
+      </svg>)svg";
+  loadSvg(kCompositeScopeSvg);
+  ASSERT_TRUE(app.enterGroupEdit(elementById("#scope")));
+
+  tool.onMouseDown(app, Vector2d(20, 20), MouseModifiers{});
+  tool.onMouseUp(app, Vector2d(20, 20));
+
+  ASSERT_TRUE(app.editingScope().has_value());
+  EXPECT_EQ(app.editingScope()->id(), "scope");
+  EXPECT_TRUE(selectionIs("#leaf"));
+}
+
 TEST_F(SelectToolTest, CornerHandleResizesSelectionFromOppositeCorner) {
   loadSvg(kResizeRectSvg);
   app.setSelection(elementById("#target"));

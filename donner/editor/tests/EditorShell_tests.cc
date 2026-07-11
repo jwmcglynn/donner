@@ -310,9 +310,11 @@ TEST(EditorShellInternalTest, TextFormatBarCapturesCanvasInputWithinItsLayoutRec
   const ImVec2 formatControlPoint(static_cast<float>(formatBarRect->topLeft.x + 20.0),
                                   static_cast<float>(formatBarRect->topLeft.y + 20.0));
   EXPECT_TRUE(internal::CanvasChromeCapturesInput(formatControlPoint, referenceChipRect,
-                                                  toolPaletteRect, formatBarRect, zoomControlRect));
+                                                  toolPaletteRect, formatBarRect, std::nullopt,
+                                                  zoomControlRect));
   EXPECT_FALSE(internal::CanvasChromeCapturesInput(
-      ImVec2(150.0f, 220.0f), referenceChipRect, toolPaletteRect, formatBarRect, zoomControlRect));
+      ImVec2(150.0f, 220.0f), referenceChipRect, toolPaletteRect, formatBarRect, std::nullopt,
+      zoomControlRect));
 
   EXPECT_FALSE(internal::TextFormatBarScreenRect(ImVec2(10.0f, 20.0f), ImVec2(580.0f, 360.0f),
                                                  toolPaletteRect,
@@ -3160,6 +3162,31 @@ TEST(EditorShellTest, GlobalShortcutsSwitchToolsZoomAndSourceFocus) {
   const bool sourceFocusBeforeKeypadEnter = EditorShellTestAccess::SourceFocusMode(shell);
   DriveGlobalShortcut(shell, {ImGuiKey_KeypadEnter}, /*ctrl=*/true);
   EXPECT_NE(EditorShellTestAccess::SourceFocusMode(shell), sourceFocusBeforeKeypadEnter);
+}
+
+TEST(EditorShellTest, EscapeExitsGroupEditEvenWhenSelectionIsActive) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  constexpr std::string_view kGroupSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120">
+        <g id="scope"><rect id="leaf" x="10" y="10" width="40" height="40"/></g>
+      </svg>)svg";
+  EditorShell shell(window, OptionsWithSource(kGroupSvg, "group.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  const svg::SVGElement scope = *app.document().document().querySelector("#scope");
+  const svg::SVGElement leaf = *app.document().document().querySelector("#leaf");
+  ASSERT_TRUE(app.enterGroupEdit(scope));
+  app.setSelection(leaf);
+  ASSERT_TRUE(app.hasSelection());
+
+  DriveGlobalShortcut(shell, {ImGuiKey_Escape});
+
+  EXPECT_FALSE(app.editingScope().has_value());
+  EXPECT_EQ(app.selectedElement(), std::optional<svg::SVGElement>(scope));
 }
 
 TEST(EditorShellTest, GlobalShortcutsRouteFileDialogsSaveAndQuit) {

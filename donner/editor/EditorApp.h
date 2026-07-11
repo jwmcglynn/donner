@@ -332,6 +332,23 @@ public:
   void addToSelection(const svg::SVGElement& element);
 
   /**
+   * Enter isolated editing for a group in the current document.
+   *
+   * Selection and hit testing are constrained to strict descendants until
+   * ef exitGroupEdit is called. Nested groups may become the new scope.
+   */
+  bool enterGroupEdit(const svg::SVGElement& group);
+
+  /// Exit one isolated editing level and select the group that was being edited.
+  bool exitGroupEdit();
+
+  /// Current isolated group, or null when editing the full document.
+  [[nodiscard]] const std::optional<svg::SVGElement>& editingScope() const { return editingScope_; }
+
+  /// Whether p element is selectable within the current isolated group.
+  [[nodiscard]] bool isElementInEditingScope(const svg::SVGElement& element) const;
+
+  /**
    * Queue an attribute write for every selected element.
    *
    * @param attrName Attribute name to set, e.g. `"fill"`.
@@ -609,6 +626,7 @@ private:
   /// Mirrors `selection_.front()` (or `std::nullopt`) so the
   /// single-element compatibility accessor can hand out a reference.
   std::optional<svg::SVGElement> cachedFirstSelection_;
+  std::optional<svg::SVGElement> editingScope_;
   UndoTimeline undoTimeline_;
 
   // Lazily-rebuilt hit-test controller. Recreated whenever the document's

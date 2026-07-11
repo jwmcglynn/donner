@@ -491,5 +491,22 @@ TEST(LayerTreeModelTest, CollapsedGroupHidesDescendantsButKeepsChevron) {
   EXPECT_EQ(FindRow(model, "rectTop"), nullptr);
 }
 
+TEST(LayerTreeModelTest, GroupEditScopeShowsOnlyChildrenOfIsolatedGroup) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  const std::optional<svg::SVGElement> groupA = FindElement(app, "groupA");
+  ASSERT_TRUE(groupA.has_value());
+  ASSERT_TRUE(app.enterGroupEdit(*groupA));
+
+  LayerTreeModel model;
+  model.refresh(app);
+
+  EXPECT_EQ(FindRow(model, "groupA"), nullptr);
+  EXPECT_EQ(FindRow(model, "comp"), nullptr);
+  EXPECT_EQ(FindRow(model, "leaf"), nullptr);
+  EXPECT_NE(FindRow(model, "rectTop"), nullptr);
+  EXPECT_NE(FindRow(model, "rectBottom"), nullptr);
+}
+
 }  // namespace
 }  // namespace donner::editor
