@@ -497,13 +497,19 @@ jobs:
           # compile the SAME sources under different backend/feature flags, so
           # for patch coverage they are redundant parameterizations whose
           # unique signal (backend/feature-gated lines) stays covered by the
-          # main-push FULL multi-variant baseline. Fail closed: tool failure
-          # keeps the untrimmed set; variant-only targets (no base sibling)
+          # main-push FULL multi-variant baseline. Only targets whose rule
+          # kind (from the label_kind query above) is the generated
+          # donner_multi_transitioned_test wrapper are ever dropped, so
+          # handwritten targets that merely share the suffix (e.g. a
+          # cc_library named renderer_geode) are untouched. Fail closed: tool
+          # failure, a failed kind query, or an unknown kind keeps the
+          # untrimmed set / target; variant-only targets (no base sibling)
           # are never dropped. See tools/coverage_variant_trim.py and
           # docs/design_docs/0029-2.
           printf '%s\n' $affected > "$work_dir/affected-pretrim.txt"
           if trimmed="$(python3 tools/coverage_variant_trim.py \
               --affected-file "$work_dir/affected-pretrim.txt" \
+              --label-kind-file "$label_kind_file" \
               --dropped-out "$diagnostics_dir/variant-trim-dropped.txt" 2> "$diagnostics_dir/variant-trim.log")"; then
             cat "$diagnostics_dir/variant-trim.log" || true
             if [[ -n "$trimmed" ]]; then

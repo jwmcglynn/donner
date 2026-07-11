@@ -869,9 +869,16 @@ failure keeps the untrimmed set. Implemented in
 determine-targets after the instrumentability classifier (which therefore
 still sees the full set).
 
-Measured on the #829 exemplar's real affected list: 376 -> 277 targets (99
-variant wrappers dropped, all with base siblings present: 38 `_geode`, 31
-`_text_full`, 30 `_tiny`); on the run's execution profile those wrappers
+Review hardening (PR #840 P2): trimming is kind-gated on the generated
+wrapper rule kind (`donner_multi_transitioned_test`, from the label_kind
+query the classifier already runs), so handwritten targets that merely share
+the suffix (e.g. the `cc_library` named `renderer_geode` beside
+`renderer`) are never dropped; unknown kinds fail safe to keep.
+
+Measured on the #829 exemplar's real affected list with its real label_kind
+data: 376 -> 281 targets (95 generated wrappers dropped; 4 name-coincident
+non-wrapper targets correctly kept by the kind gate; 7 wrapper targets kept
+for lacking a base sibling); on the run's execution profile those wrappers
 account for 90 of 296 test executions and the transitioned compile closures
 behind the ~7x per-element instrumented compile multiplier. Projected: the
 cache-miss compile set on a variant-heavy PR shrinks by roughly the wrapper
