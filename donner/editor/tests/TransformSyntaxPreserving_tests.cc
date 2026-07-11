@@ -202,5 +202,120 @@ TEST(TransformSyntaxPreserving, WrapperClearsAttributeOnIdentity) {
       std::string_view(serializeTransformForWriteback(RcString("rotate(45)"), identity)).empty());
 }
 
+// --- error-path and edge-branch coverage ----------------------------------
+
+TEST(TransformSyntaxPreserving, PreservesVerbatimExponentToken) {
+  // The author wrote x in exponent form and only y changes; the untouched x
+  // token must round-trip byte-for-byte, exercising the number scanner's
+  // exponent branch.
+  const Transform2d target = Transform2d::Translate(Vector2d(10.0, 27.0));
+  EXPECT_EQ(Reserialize("translate(1e1, 20)", target), "translate(1e1, 27)");
+}
+
+TEST(TransformSyntaxPreserving, PreservesVerbatimSignedToken) {
+  // Explicit-sign token on the unchanged x component is re-emitted as authored.
+  const Transform2d target = Transform2d::Translate(Vector2d(-10.0, 25.0));
+  EXPECT_EQ(Reserialize("translate(-10, 20)", target), "translate(-10, 25)");
+}
+
+TEST(TransformSyntaxPreserving, DoubleCommaAuthorFallsBack) {
+  const Transform2d target = Transform2d::Translate(Vector2d(5.0, 6.0));
+  EXPECT_FALSE(reserializeTransformPreservingSyntax("translate(10,,20)", target).has_value());
+}
+
+TEST(TransformSyntaxPreserving, NonAlphaLeadingAuthorFallsBack) {
+  const Transform2d target = Transform2d::Translate(Vector2d(5.0, 6.0));
+  EXPECT_FALSE(reserializeTransformPreservingSyntax("9translate(10)", target).has_value());
+}
+
+TEST(TransformSyntaxPreserving, NonNumericArgumentFallsBack) {
+  const Transform2d target = Transform2d::Translate(Vector2d(5.0, 0.0));
+  EXPECT_FALSE(reserializeTransformPreservingSyntax("translate(x)", target).has_value());
+}
+
+TEST(TransformSyntaxPreserving, BareDotArgumentFallsBack) {
+  const Transform2d target = Transform2d::Translate(Vector2d(5.0, 0.0));
+  EXPECT_FALSE(reserializeTransformPreservingSyntax("translate(.)", target).has_value());
+}
+
+TEST(TransformSyntaxPreserving, WhitespaceOnlyAuthorFallsBack) {
+  const Transform2d target = Transform2d::Translate(Vector2d(5.0, 0.0));
+  EXPECT_FALSE(reserializeTransformPreservingSyntax("   ", target).has_value());
+}
+
+TEST(TransformSyntaxPreserving, SingularTargetFallsBack) {
+  // A degenerate (zero-scale) target cannot be decomposed, so the structured
+  // update bails and the caller must fall back to canonical serialization.
+  const Transform2d singular = ParseMatrix("matrix(0, 0, 0, 0, 5, 5)");
+  EXPECT_FALSE(reserializeTransformPreservingSyntax("translate(10, 20)", singular).has_value());
+}
+
+TEST(TransformSyntaxPreserving, DuplicateFunctionOfSameKindFallsBack) {
+  // Two translate() functions in one list are not a shape the structured path
+  // solves, so it declines rather than guessing.
+  const Transform2d target = ParseMatrix("translate(1, 2) translate(3, 4)");
+  EXPECT_FALSE(
+      reserializeTransformPreservingSyntax("translate(1, 2) translate(3, 4)", target).has_value());
+}
+
+TEST(TransformSyntaxPreserving, ScaleChangeOnRotateOnlyFallsBack) {
+  // rotate() has no scale parameter to absorb the target's scale, and the
+  // rotate-only fallback also rejects the non-unit scale.
+  const Transform2d target = Transform2d::Scale(Vector2d(2.0, 2.0));
+  EXPECT_FALSE(reserializeTransformPreservingSyntax("rotate(45)", target).has_value());
+}
+
+TEST(TransformSyntaxPreserving, PureTranslationOnRotateOnlyFallsBack) {
+  // A pure translation has zero rotation, so no rotation-about-a-center can
+  // reproduce it; the rotate-only fallback declines.
+  const Transform2d target = Transform2d::Translate(Vector2d(5.0, 5.0));
+  EXPECT_FALSE(reserializeTransformPreservingSyntax("rotate(45)", target).has_value());
+}
+
+TEST(TransformSyntaxPreserving, RotateOnlyAboutCenterKeepsAuthoredAngle) {
+  // Same angle, but the element is now rotated about a non-origin center: the
+  // angle token stays verbatim and explicit center arguments are added.
+  const Transform2d target = ParseMatrix("rotate(45, 10, 10)");
+  const std::string out = Reserialize("rotate(45)", target);
+  EXPECT_THAT(out, ::testing::StartsWith("rotate(45"));
+  EXPECT_THAT(out, ::testing::Not(::testing::HasSubstr("matrix")));
+  ExpectRoundTrips(out, target);
+}
+
+TEST(TransformSyntaxPreserving, RotationDeltaWrapsThroughShortestArc) {
+  // A rotation edit whose raw delta exceeds half a turn must normalize to the
+  // shortest signed arc before it is applied to the author's angle.
+  const Transform2d target = ParseMatrix("rotate(170)");
+  const std::string out = Reserialize("rotate(-80)", target);
+  EXPECT_THAT(out, ::testing::StartsWith("rotate("));
+  EXPECT_THAT(out, ::testing::Not(::testing::HasSubstr("matrix")));
+  ExpectRoundTrips(out, target);
+}
+
+
+TEST(TransformSyntaxPreserving, PreservesVerbatimSignedExponentToken) {
+  // Exponent with an explicit sign (1e+1) on the unchanged component is
+  // re-emitted byte-for-byte, exercising the scanner branch that consumes the
+  // exponent sign.
+  const Transform2d target = Transform2d::Translate(Vector2d(10.0, 27.0));
+  EXPECT_EQ(Reserialize("translate(1e+1, 20)", target), "translate(1e+1, 27)");
+}
+
+TEST(TransformSyntaxPreserving, RotationDeltaWrapsThroughNegativeArc) {
+  // A raw delta at or below -180 degrees normalizes upward: editing
+  // rotate(170) to a -170 degree pose applies +20, emitting rotate(190),
+  // which is the same rotation.
+  const Transform2d target = ParseMatrix("rotate(-170)");
+  EXPECT_EQ(Reserialize("rotate(170)", target), "rotate(190)");
+  ExpectRoundTrips("rotate(190)", target);
+}
+
+TEST(TransformSyntaxPreserving, UnknownFunctionNameFallsBack) {
+  // foo(1) survives the lexical function-list scan but is not a valid SVG
+  // transform, so the author-source parse fails and the caller falls back.
+  const Transform2d target = Transform2d::Translate(Vector2d(5.0, 0.0));
+  EXPECT_FALSE(reserializeTransformPreservingSyntax("foo(1)", target).has_value());
+}
+
 }  // namespace
 }  // namespace donner::editor
