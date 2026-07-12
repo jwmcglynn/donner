@@ -275,6 +275,13 @@ public:
    */
   bool supportsTimestamps() const { return false; }
 
+  /// True when the active wgpu backend is Vulkan (Intel Arc hardware or Mesa
+  /// lavapipe software). GeodeFilterEngine uses this to force inter-pass
+  /// serialization that eliminates a nondeterministic cross-submit
+  /// storage-write -> sampled-read visibility race observed on Arc Vulkan.
+  /// Metal returns false and keeps the fast multi-submit path.
+  bool isVulkan() const { return isVulkan_; }
+
   /// @name Shared dummy resources (design doc 0030 Milestone 4.2)
   /// @{
   ///
@@ -379,6 +386,10 @@ private:
   wgpu::TextureFormat textureFormat_ = wgpu::TextureFormat::RGBA8Unorm;
 
   bool supportsTimestamps_ = false;
+
+  /// True when the active wgpu backend is Vulkan. Set during adapter
+  /// selection in CreateHeadless(); see isVulkan().
+  bool isVulkan_ = false;
 
   /// True when this device was created via CreateFromExternal(). The destructor
   /// skips releasing the instance/adapter since the host owns them.

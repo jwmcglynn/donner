@@ -323,6 +323,12 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
                    device.data(), static_cast<int>(arch.size()), arch.data(), backend, type,
                    info.vendorID, info.deviceID);
 
+      // Record whether we landed on a Vulkan backend (Intel Arc hardware or
+      // Mesa lavapipe software). GeodeFilterEngine uses this to serialize its
+      // per-pass compute submits, working around a nondeterministic
+      // cross-submit texture-visibility race that only Vulkan exposes.
+      result->isVulkan_ = (info.backendType == WGPUBackendType_Vulkan);
+
       wgpuAdapterInfoFreeMembers(info);
     }
   }
