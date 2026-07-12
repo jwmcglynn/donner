@@ -59,6 +59,7 @@ cc_library(
         "//donner/base/xml/components",
         "//donner/svg/components:components_core",
         "//donner/svg/components:svg_document_context",
+        "//donner/svg/components/layout:layout_system",
         "//donner/svg/components/shape:components",
         "//donner/svg/components/style:components",
         "//donner/svg/graph",
@@ -68,15 +69,15 @@ cc_library(
 
 donner_cc_test(
     name = "text_system_tests",
+    srcs = [
+        "tests/TextSystem_tests.cc",
+    ],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
         "tiny",
         "text_full",
         "geode",
-    ],
-    srcs = [
-        "tests/TextSystem_tests.cc",
     ],
     deps = [
         ":text_system",

@@ -10,7 +10,7 @@
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/ConditionalProcessingComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
-#include "donner/svg/components/layout/TransformComponent.h"
+#include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/PathComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
@@ -101,7 +101,7 @@ void removeTrailingSpace(RcString& text) {
 }
 
 void resolveTextPath(Registry& registry, const TextPathComponent& textPath,
-                     ComputedTextComponent::TextSpan& span, ParseWarningSink& warningSink) {
+                     ComputedTextComponent::TextSpan& span) {
   if (textPath.href.empty()) {
     return;
   }
@@ -136,44 +136,30 @@ void resolveTextPath(Registry& registry, const TextPathComponent& textPath,
     return;
   }
 
-  // Apply the referenced path element's local transform to the path geometry.
-  // Per SVG §10.12.2, textPath uses the path in the referenced element's user coordinate space.
-  //
-  // The transform must include the `transform-origin` pivot so the path the text follows lands
-  // in the same place as the path element renders.
-  // `ComputedLocalTransformComponent::parentFromEntity` is the *raw* transform (pivot not applied);
-  // compose the pivot here exactly as LayoutSystem::getEntityFromParentTransform does - `T(-origin)
-  // * M * T(origin)` in Donner's left-first multiplication order. Without this,
-  // `transform="rotate(90)" transform-origin="center"` rotated the baseline path about the origin
-  // instead of its center, sampling glyphs off-screen (issue #624:
-  // structure/transform-origin/on-text-path).
-  const auto* localTransform =
-      registry.try_get<ComputedLocalTransformComponent>(resolved->handle.entity());
-  const Transform2d parentFromEntity =
-      localTransform ? Transform2d::Translate(-localTransform->transformOrigin) *
-                           localTransform->parentFromEntity *
-                           Transform2d::Translate(localTransform->transformOrigin)
-                     : Transform2d();
-  if (localTransform && !parentFromEntity.isIdentity()) {
+  // The referenced path is treated as if it were defined in the textPath user space. Its own
+  // pivoted transform applies there, while transforms on its original ancestors do not.
+  const Transform2d textRootFromPath =
+      LayoutSystem().getEntityFromParentTransform(resolved->handle);
+  if (!textRootFromPath.isIdentity()) {
     const auto& srcPoints = computedPath->spline.points();
     const auto& srcCommands = computedPath->spline.commands();
     PathBuilder builder;
     for (const auto& cmd : srcCommands) {
       switch (cmd.verb) {
         case Path::Verb::MoveTo:
-          builder.moveTo(parentFromEntity.transformPosition(srcPoints[cmd.pointIndex]));
+          builder.moveTo(textRootFromPath.transformPosition(srcPoints[cmd.pointIndex]));
           break;
         case Path::Verb::LineTo:
-          builder.lineTo(parentFromEntity.transformPosition(srcPoints[cmd.pointIndex]));
+          builder.lineTo(textRootFromPath.transformPosition(srcPoints[cmd.pointIndex]));
           break;
         case Path::Verb::QuadTo:
-          builder.quadTo(parentFromEntity.transformPosition(srcPoints[cmd.pointIndex]),
-                         parentFromEntity.transformPosition(srcPoints[cmd.pointIndex + 1]));
+          builder.quadTo(textRootFromPath.transformPosition(srcPoints[cmd.pointIndex]),
+                         textRootFromPath.transformPosition(srcPoints[cmd.pointIndex + 1]));
           break;
         case Path::Verb::CurveTo:
-          builder.curveTo(parentFromEntity.transformPosition(srcPoints[cmd.pointIndex]),
-                          parentFromEntity.transformPosition(srcPoints[cmd.pointIndex + 1]),
-                          parentFromEntity.transformPosition(srcPoints[cmd.pointIndex + 2]));
+          builder.curveTo(textRootFromPath.transformPosition(srcPoints[cmd.pointIndex]),
+                          textRootFromPath.transformPosition(srcPoints[cmd.pointIndex + 1]),
+                          textRootFromPath.transformPosition(srcPoints[cmd.pointIndex + 2]));
           break;
         case Path::Verb::ClosePath: builder.closePath(); break;
       }
@@ -340,7 +326,7 @@ void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
         findApplicableTextPathEntity(registry, handle.entity(), invalidTextPathNesting);
     if (textPathEntity != entt::null) {
       const auto& textPath = registry.get<TextPathComponent>(textPathEntity);
-      resolveTextPath(registry, textPath, span, warningSink);
+      resolveTextPath(registry, textPath, span);
       if (!span.pathSpline) {
         // textPath href could not be resolved - mark as failed so glyphs are hidden.
         span.textPathFailed = true;

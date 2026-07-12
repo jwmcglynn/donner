@@ -506,10 +506,12 @@ donner_cc_test(
     deps = [
         ":mock_renderer_interface",
         "//donner/base:base_test_utils",
+        "//donner/svg/components/layout:layout_system",
         "//donner/svg/renderer:renderer_driver",
         "//donner/svg/renderer:renderer_utils",
         "//donner/svg/renderer:rendering_context",
         "//donner/svg/tests:parser_test_utils",
+        "//donner/svg/text:text_engine",
         "@com_google_gtest//:gtest_main",
     ],
 )
