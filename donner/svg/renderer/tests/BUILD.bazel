@@ -381,6 +381,19 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "text_span_positioning_tests",
+    srcs = ["TextSpanPositioning_tests.cc"],
+    data = ["//third_party/resvg-test-suite:fonts"],
+    deps = [
+        "//donner/base:base_test_utils",
+        "//donner/svg/text:text_backend_simple",
+        "//donner/svg/text:text_engine",
+        "//donner/svg/text:text_layout_params",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "text_engine_helpers_tests",
     srcs = [
         "MockTextBackend.h",

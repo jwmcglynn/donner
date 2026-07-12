@@ -109,6 +109,22 @@ TEST_F(TextSystemTest, TextWithTspan) {
                                                     TextSpanTextIs("Second")));
 }
 
+TEST_F(TextSystemTest, TspanWithoutExplicitPositionContinuesParentTextChunk) {
+  auto document = ParseAndCompute(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <text id="t" x="32" y="100">Te<tspan paint-order="stroke fill">xt</tspan></text>
+    </svg>
+  )");
+
+  auto& registry = document.registry();
+  const auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
+  const auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
+  ASSERT_NE(computed, nullptr);
+  ASSERT_THAT(computed->spans, SizeIs(2));
+  EXPECT_TRUE(computed->spans[0].startsNewChunk);
+  EXPECT_FALSE(computed->spans[1].startsNewChunk);
+}
+
 // --- Text positioning: x, y inherited from root ---
 
 TEST_F(TextSystemTest, PositioningInheritedFromRoot) {

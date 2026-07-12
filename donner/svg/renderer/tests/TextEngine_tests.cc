@@ -15,6 +15,7 @@
 
 #include "donner/base/MathUtils.h"
 #include "donner/base/Utf8.h"
+#include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/Runfiles.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/css/FontFace.h"
@@ -1000,6 +1001,73 @@ TEST(TextEngineTest, TextPathTspanCoordinatesAffectPathLocalPlacement) {
   const double secondSpanFirstGlyphX = runs[1].glyphs.front().xPosition;
   EXPECT_THAT(runs[2].glyphs, FirstGlyphMatches(AllOf(GlyphXPositionIs(Gt(secondSpanFirstGlyphX)),
                                                       GlyphYPositionIs(DoubleNear(0.0, 1.0)))));
+}
+
+// This exact Latin case preserves the e-x kerning result across a paint-only tspan boundary.
+TEST(TextEngineTest, FullBackendPaintOnlySplitMatchesUnsplitGlyphPositions) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine(fontManager, registry);
+
+  ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans")));
+
+  components::ComputedTextComponent unsplitText;
+  unsplitText.spans.push_back(MakeSpan("Text"));
+
+  components::ComputedTextComponent splitText;
+  splitText.spans.push_back(MakeSpan("Te"));
+  auto trailingSpan = MakeSpan("xt");
+  trailingSpan.startsNewChunk = false;
+  trailingSpan.paintOrder.order = {PaintComponent::Stroke, PaintComponent::Fill,
+                                   PaintComponent::Markers};
+  splitText.spans.push_back(std::move(trailingSpan));
+
+  TextLayoutParams params = MakeTextParams(64.0);
+  params.fontFamilies = {RcString("Noto Sans")};
+  const auto unsplitRuns = engine.layout(unsplitText, params);
+  const auto splitRuns = engine.layout(splitText, params);
+
+  ASSERT_THAT(unsplitRuns, ElementsAre(RunGlyphsAre(SizeIs(4))));
+  ASSERT_THAT(splitRuns, ElementsAre(RunGlyphsAre(SizeIs(2)), RunGlyphsAre(SizeIs(2))));
+  const auto splitGlyphAt = [&splitRuns](size_t index) -> const TextGlyph& {
+    return index < 2 ? splitRuns[0].glyphs[index] : splitRuns[1].glyphs[index - 2];
+  };
+  for (size_t glyphIndex = 0; glyphIndex < 4; ++glyphIndex) {
+    const TextGlyph& unsplitGlyph = unsplitRuns[0].glyphs[glyphIndex];
+    const TextGlyph& splitGlyph = splitGlyphAt(glyphIndex);
+    const Path unsplitOutline =
+        engine.glyphOutline(unsplitRuns[0].font, unsplitGlyph.glyphIndex,
+                            engine.scaleForEmToPixels(unsplitRuns[0].font, 64.0f));
+    const Path splitOutline = engine.glyphOutline(
+        splitRuns[glyphIndex < 2 ? 0 : 1].font, splitGlyph.glyphIndex,
+        engine.scaleForEmToPixels(splitRuns[glyphIndex < 2 ? 0 : 1].font, 64.0f));
+    ASSERT_THAT(unsplitOutline.commands(), Not(IsEmpty()));
+    ASSERT_THAT(splitOutline.commands(), Not(IsEmpty()));
+    const Box2d unsplitBounds = unsplitOutline.transformedBounds(
+        Transform2d::Translate(Vector2d(unsplitGlyph.xPosition, unsplitGlyph.yPosition)));
+    const Box2d splitBounds = splitOutline.transformedBounds(
+        Transform2d::Translate(Vector2d(splitGlyph.xPosition, splitGlyph.yPosition)));
+
+    EXPECT_EQ(splitGlyph.glyphIndex, unsplitGlyph.glyphIndex) << glyphIndex;
+    EXPECT_DOUBLE_EQ(splitGlyph.xPosition, unsplitGlyph.xPosition) << glyphIndex;
+    EXPECT_DOUBLE_EQ(splitGlyph.yPosition, unsplitGlyph.yPosition) << glyphIndex;
+    EXPECT_DOUBLE_EQ(splitGlyph.yAdvance, unsplitGlyph.yAdvance) << glyphIndex;
+    // Compare the placed advance so cross-span kerning has the same meaning regardless of
+    // whether the backend folds it into xAdvance or applies it at the next glyph position.
+    const double unsplitAdvance =
+        glyphIndex + 1 < 4
+            ? unsplitRuns[0].glyphs[glyphIndex + 1].xPosition - unsplitGlyph.xPosition
+            : unsplitGlyph.xAdvance;
+    const double splitAdvance = glyphIndex + 1 < 4
+                                    ? splitGlyphAt(glyphIndex + 1).xPosition - splitGlyph.xPosition
+                                    : splitGlyph.xAdvance;
+    EXPECT_DOUBLE_EQ(splitAdvance, unsplitAdvance) << glyphIndex;
+    EXPECT_THAT(splitBounds, BoxEq(Vector2Eq(DoubleNear(unsplitBounds.topLeft.x, 1e-9),
+                                             DoubleNear(unsplitBounds.topLeft.y, 1e-9)),
+                                   Vector2Eq(DoubleNear(unsplitBounds.bottomRight.x, 1e-9),
+                                             DoubleNear(unsplitBounds.bottomRight.y, 1e-9))))
+        << glyphIndex;
+  }
 }
 
 TEST(TextEngineTest, TextAfterTextPathStartsAfterLastVisiblePathGlyph) {
