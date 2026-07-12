@@ -743,8 +743,9 @@ INSTANTIATE_TEST_SUITE_P(
                 // Issue #623: the rounded-rect start corner now stacks marker-start +
                 // arrival marker-mid + marker-end (3 markers), matching resvg, after
                 // Path::vertices() emits the arrival mid for zero-length-close corner
-                // contours. Residual is sub-marker edge coverage.
-                {"marker-on-rounded-rect.svg", WithMaxPixels(60, "Marker stack edge coverage")},
+                // contours. Residual sub-marker edge coverage is a measured ~24px, under
+                // the default comparison budget, so no per-test override is needed.
+                {"marker-on-rounded-rect.svg", Params{}},
                 {"recursive-5.svg", Params{}},
             })),
         ValuesIn(ActiveComparisonModes())),
