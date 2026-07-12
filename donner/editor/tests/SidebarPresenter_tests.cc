@@ -947,5 +947,208 @@ TEST_F(SidebarPresenterImGuiTest, InspectorRendersTransformFieldsWithoutLiveApp)
   EXPECT_GT(drawData->TotalVtxCount, 0);
 }
 
+/// Render one inspector frame with the raw-matrix disclosure forced open by
+/// pre-seeding the tree node's persistent open state in the window storage.
+bool RenderInspectorFrameWithMatrixOpen(SidebarPresenter& presenter, EditorApp* app,
+                                        const char* windowName) {
+  ImGuiIO& io = ImGui::GetIO();
+  io.DisplaySize = ImVec2(400, 300);
+  io.AddMousePosEvent(-1.0f, -1.0f);
+  io.AddMouseButtonEvent(0, false);
+  ImGui::NewFrame();
+  ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(360, 280), ImGuiCond_Always);
+  ImGui::Begin(windowName, nullptr,
+               ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                   ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar);
+  ImGui::GetStateStorage()->SetInt(ImGui::GetID("Matrix##transform_matrix"), 1);
+  const bool queuedMutation = presenter.renderInspector(app, ViewportState{});
+  ImGui::End();
+  ImGui::Render();
+  return queuedMutation;
+}
+
+TEST_F(SidebarPresenterImGuiTest, MatrixDisclosureRendersRawComponentCells) {
+  constexpr std::string_view kRotatedSvg =
+      R"SVG(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">
+           <rect id="target" x="10" y="20" width="40" height="30" transform="rotate(30)"/>
+         </svg>)SVG";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kRotatedSvg));
+  app.setCleanSourceText(kRotatedSvg);
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  ASSERT_TRUE(presenter.inspectorHasSelectionForTesting());
+  constexpr char kWindowName[] = "##sidebar_matrix_disclosure_test";
+
+  // Baseline frame with the disclosure collapsed.
+  EXPECT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName));
+  const ImDrawData* collapsedDrawData = ImGui::GetDrawData();
+  ASSERT_NE(collapsedDrawData, nullptr);
+  const int collapsedVertices = collapsedDrawData->TotalVtxCount;
+
+  // Opening the disclosure renders the six raw matrix drag cells: strictly
+  // more geometry, still no queued mutation and no undo entry.
+  EXPECT_FALSE(RenderInspectorFrameWithMatrixOpen(presenter, &app, kWindowName));
+  const ImDrawData* openDrawData = ImGui::GetDrawData();
+  ASSERT_NE(openDrawData, nullptr);
+  EXPECT_GT(openDrawData->TotalVtxCount, collapsedVertices)
+      << "The open matrix disclosure must draw the a-f component cells.";
+  EXPECT_FALSE(app.canUndo()) << "Rendering the matrix cells must not record undo entries.";
+
+  // An in-progress matrix edit displays the edit-buffer value for its cell.
+  presenter.beginTransformEditForTesting(app, SidebarPresenter::TransformField::Matrix,
+                                         /*matrixIndex=*/2);
+  EXPECT_FALSE(RenderInspectorFrameWithMatrixOpen(presenter, &app, kWindowName));
+  presenter.commitTransformEditForTesting(app);
+  EXPECT_FALSE(presenter.hasTransformEditForTesting());
+
+  // Busy frame (no live app): the cells render disabled and stay inert.
+  EXPECT_FALSE(RenderInspectorFrameWithMatrixOpen(presenter, nullptr, kWindowName));
+  const ImDrawData* busyDrawData = ImGui::GetDrawData();
+  ASSERT_NE(busyDrawData, nullptr);
+  EXPECT_GT(busyDrawData->TotalVtxCount, collapsedVertices);
+}
+
+TEST_F(SidebarPresenterImGuiTest, PathOperationButtonsRenderDisabledWithoutLiveApp) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kInspectorSvg));
+  app.setCleanSourceText(kInspectorSvg);
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+
+  constexpr ImTextureID kIconTexture = static_cast<ImTextureID>(0x5432);
+  int providerCalls = 0;
+  const SidebarPresenter::IconTextureProvider iconTextureProvider =
+      [&](std::uint64_t, const svg::RendererBitmap&) {
+        ++providerCalls;
+        return SidebarPresenter::IconTexture{
+            .texture = kIconTexture,
+            .uvBottomRight = Vector2d(1.0, 1.0),
+        };
+      };
+
+  // A busy frame (null live app) reports every operation unavailable, but the
+  // buttons must still render (disabled) so the panel layout stays stable.
+  ImGuiIO& io = ImGui::GetIO();
+  io.DisplaySize = ImVec2(400, 300);
+  io.AddMousePosEvent(-1.0f, -1.0f);
+  io.AddMouseButtonEvent(0, false);
+  ImGui::NewFrame();
+  ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(360, 280), ImGuiCond_Always);
+  ImGui::Begin("##sidebar_path_ops_disabled_test", nullptr,
+               ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                   ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar);
+  const bool queuedMutation =
+      presenter.renderInspector(nullptr, ViewportState{}, iconTextureProvider);
+  ImGui::End();
+  ImGui::Render();
+
+  EXPECT_FALSE(queuedMutation);
+  EXPECT_EQ(providerCalls, 4)
+      << "Disabled path-operation buttons must still request all four icon textures.";
+  EXPECT_FALSE(app.canUndo());
+}
+
+TEST_F(SidebarPresenterImGuiTest, TransformEditCommitsWhenSelectionChanges) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kInspectorSvg));
+  app.setCleanSourceText(kInspectorSvg);
+  const auto target = app.document().document().querySelector("#target");
+  const auto peer = app.document().document().querySelector("#peer");
+  ASSERT_TRUE(target.has_value());
+  ASSERT_TRUE(peer.has_value());
+  app.setSelection(*target);
+
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  presenter.beginTransformEditForTesting(app, SidebarPresenter::TransformField::PositionX);
+  ASSERT_TRUE(presenter.applyTransformEditForTesting(app, 25.0));
+  ASSERT_TRUE(presenter.hasTransformEditForTesting());
+
+  // The live selection moved to a different element while the edit was still
+  // composing: the next inspector frame must land the edit as an undo entry
+  // instead of composing against a stale baseline.
+  app.setSelection(*peer);
+  EXPECT_FALSE(RenderInspectorFrame(presenter, &app, "##sidebar_commit_on_selection_change"));
+  EXPECT_FALSE(presenter.hasTransformEditForTesting())
+      << "A selection change must commit the in-progress transform edit.";
+  EXPECT_TRUE(app.canUndo()) << "The committed edit must be undoable.";
+}
+
+TEST_F(SidebarPresenterImGuiTest, TransformEditPendingCommitFinalizesOnNextLiveFrame) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kInspectorSvg));
+  app.setCleanSourceText(kInspectorSvg);
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  presenter.beginTransformEditForTesting(app, SidebarPresenter::TransformField::PositionX);
+  ASSERT_TRUE(presenter.applyTransformEditForTesting(app, 30.0));
+
+  // A busy frame (no live app) cannot commit; the edit is parked for commit.
+  EXPECT_FALSE(RenderInspectorFrame(presenter, nullptr, "##sidebar_pending_commit_test"));
+  EXPECT_TRUE(presenter.hasTransformEditForTesting())
+      << "A busy frame must park the edit instead of dropping it.";
+
+  // The next live frame lands the parked commit.
+  EXPECT_FALSE(RenderInspectorFrame(presenter, &app, "##sidebar_pending_commit_test"));
+  EXPECT_FALSE(presenter.hasTransformEditForTesting())
+      << "The parked edit must commit on the next frame with live app access.";
+  EXPECT_TRUE(app.canUndo()) << "The committed edit must be undoable.";
+}
+
+TEST_F(SidebarPresenterImGuiTest, TransformFieldDragAppliesAndCommitsEdit) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kInspectorSvg));
+  app.setCleanSourceText(kInspectorSvg);
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  constexpr char kWindowName[] = "##sidebar_transform_drag_commit_test";
+  ASSERT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName));
+  const auto x =
+      presenter.transformFieldRectForTesting(SidebarPresenter::TransformField::PositionX);
+  ASSERT_TRUE(x.has_value());
+  const ImVec2 center(static_cast<float>((x->topLeft.x + x->bottomRight.x) * 0.5),
+                      static_cast<float>((x->topLeft.y + x->bottomRight.y) * 0.5));
+
+  // Hover first so window-focus nav bookkeeping settles, then press: a click
+  // delivered on the same frame as the nav-init result would be recorded as a
+  // keyboard-sourced activation and ignore mouse drag deltas.
+  EXPECT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName, center, /*mouseDown=*/false));
+  EXPECT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName, center, /*mouseDown=*/true));
+  EXPECT_TRUE(presenter.hasTransformEditForTesting());
+
+  bool applied = false;
+  ImVec2 dragged = center;
+  for (int step = 1; step <= 4; ++step) {
+    dragged.x = center.x + 10.0f * static_cast<float>(step);
+    applied = RenderInspectorFrame(presenter, &app, kWindowName, dragged, /*mouseDown=*/true) ||
+              applied;
+  }
+  EXPECT_TRUE(applied) << "Dragging the X field must queue a live transform mutation.";
+
+  EXPECT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName, dragged, /*mouseDown=*/false));
+  EXPECT_FALSE(presenter.hasTransformEditForTesting())
+      << "Releasing the drag must commit the transform edit.";
+  EXPECT_TRUE(app.canUndo()) << "The committed drag edit must be undoable.";
+}
+
 }  // namespace
 }  // namespace donner::editor
