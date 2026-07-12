@@ -832,21 +832,7 @@ INSTANTIATE_TEST_SUITE_P(
                     {"negative-sum.svg", Params::RenderOnly("UB (negative sum)")},
                     {"negative-values.svg", Params::RenderOnly("UB (negative values)")},
 
-                    // `0 N` dash patterns (zero-length dashes -> caps/dots) now render. `40 0`
-                    // (zero gap) differs by ~625px at exactly the closed-rect dash-START corner
-                    // (doc (40,40), the outer top-left stroke quadrant). Root-caused (#623): the
-                    // `<rect>` is a *closed* contour, so tiny-skia (faithful Rust port) seam-joins
-                    // the first and last `40`-unit dash across the start vertex into one continuous
-                    // dash - making that corner an interior MITER (filled quadrant). resvg's golden
-                    // butt-caps it (notched) because usvg flattens the rect to a *non-closed* path
-                    // before dashing. Donner's mitered closed-contour seam is the spec-conformant
-                    // behavior (matches Skia/Chrome/Firefox); the residual is a resvg-pipeline
-                    // (usvg path-normalization) difference, not a Donner/tiny-skia bug. Pinned by
-                    // RendererTests.DashSeamClosedContourMitersStartCorner in Renderer_tests.cc.
-                    {"n-0.svg",
-                     Params::Skip("resvg golden butt-caps the closed-rect dash-start corner; "
-                                  "Donner spec-correctly seam-joins it (usvg flattens rect to an "
-                                  "open path). See DashSeamClosedContourMitersStartCorner.")},
+                    {"n-0.svg", Params::WithThreshold(0.0f, 0, "Closed-path dash seam identity")},
                     // `0 N` round/square caps render as dots on the CPU backend; Geode's dot
                     // rendering for zero-length dashes differs. Compare CPU, disable Geode.
                     {"0-n-with-round-caps.svg", GeodeDisabled("Geode 0-N dash cap rendering gap")},

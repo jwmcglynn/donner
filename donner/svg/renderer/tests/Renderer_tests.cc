@@ -587,22 +587,10 @@ TEST_F(RendererTests, ChainedFeImageDeepRecursionIsBoundedAndStable) {
          "bounded by the depth cap (issue #552)";
 }
 
-// Root-cause documentation for issue #623's stroke-dasharray/n-0 residual.
-//
-// The resvg golden draws a *butt-capped* (notched) top-left corner on a `40 0`-dashed closed
-// rect. Donner renders an SVG `<rect>` as a genuinely closed path (`M L L L Z`), and tiny-skia
-// (a line-faithful port of Rust tiny-skia) seam-joins the first and last dash across the start
-// vertex into one continuous dash - so the start corner becomes an interior miter join that
-// fills the outer corner quadrant. This is the spec-conformant closed-dashed-path behavior
-// (Skia / Chrome / Firefox seam-join closed dashed contours); resvg's golden differs because
-// usvg flattens the rect to a non-closed path before dashing.
-//
-// This test pins the difference to closed-vs-open dash seam handling - NOT a rasterizer,
-// coverage, or transform bug - by rendering the same `40 0`-dashed square three ways and
-// measuring green coverage in the outer start-corner quadrant. A `<rect>` and an equivalent
-// closed `<path ... Z>` both miter (fill); only an explicitly open `<path>` butt-caps (empty),
-// reproducing the resvg golden. If a future change makes Donner stop seam-joining closed dashed
-// paths, the rect/closed expectations here trip loudly.
+// A zero-length gap does not split adjacent painted ranges. Closed contours therefore retain
+// their joins, including the join at the start/end seam, while an explicitly open contour keeps
+// its endpoint caps. Pin the native TinySkia behavior as the renderer-level baseline for the
+// shared path stroker used by Geode.
 TEST_F(RendererTests, DashSeamClosedContourMitersStartCorner) {
   auto renderInner = [&](const std::string& inner) {
     const std::string svg =
