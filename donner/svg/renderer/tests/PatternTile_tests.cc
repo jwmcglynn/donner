@@ -71,23 +71,37 @@ TEST(PatternTile, TargetFromRasterDividesCoordinatesBeforeAnisotropicTransform) 
 TEST(PatternTile, RasterMetricsRejectUnsafeDimensionsAndTransforms) {
   constexpr double kInfinity = std::numeric_limits<double>::infinity();
   constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+  constexpr double kMax = std::numeric_limits<double>::max();
   const Transform2d identity;
 
   EXPECT_FALSE(ComputePatternTileRasterMetrics(Box2d::FromXYWH(0.0, 0.0, 0.0, 1.0), identity));
   EXPECT_FALSE(ComputePatternTileRasterMetrics(Box2d::FromXYWH(0.0, 0.0, -1.0, 1.0), identity));
+  EXPECT_FALSE(ComputePatternTileRasterMetrics(Box2d::FromXYWH(0.0, 0.0, 1.0, 0.0), identity));
+  EXPECT_FALSE(ComputePatternTileRasterMetrics(Box2d::FromXYWH(0.0, 0.0, 1.0, -1.0), identity));
   EXPECT_FALSE(
       ComputePatternTileRasterMetrics(Box2d::FromXYWH(0.0, 0.0, kInfinity, 1.0), identity));
   EXPECT_FALSE(ComputePatternTileRasterMetrics(Box2d::FromXYWH(0.0, 0.0, kNaN, 1.0), identity));
+  EXPECT_FALSE(
+      ComputePatternTileRasterMetrics(Box2d::FromXYWH(0.0, 0.0, 1.0, kInfinity), identity));
+  EXPECT_FALSE(ComputePatternTileRasterMetrics(Box2d::FromXYWH(0.0, 0.0, 1.0, kNaN), identity));
   EXPECT_FALSE(ComputePatternTileRasterMetrics(
       Box2d::FromXYWH(0.0, 0.0, kMaxPatternTileRasterDimension / 2.0 + 1.0, 1.0), identity));
+  EXPECT_FALSE(ComputePatternTileRasterMetrics(
+      Box2d::FromXYWH(0.0, 0.0, 1.0, kMaxPatternTileRasterDimension / 2.0 + 1.0), identity));
   EXPECT_FALSE(ComputePatternTileRasterMetrics(Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0),
                                                Transform2d::Scale(0.0, 1.0)));
   EXPECT_FALSE(ComputePatternTileRasterMetrics(
       Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0),
       Transform2d::Scale(std::numeric_limits<double>::denorm_min(), 1.0)));
+  EXPECT_FALSE(ComputePatternTileRasterMetrics(Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0),
+                                               Transform2d::Scale(kMax, kMax)));
+  EXPECT_FALSE(ComputePatternTileRasterMetrics(
+      Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0), Transform2d::Scale(kMax, 1.0 / kMax)));
+  EXPECT_FALSE(ComputePatternTileRasterMetrics(
+      Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0), Transform2d::Scale(1.0 / kMax, kMax)));
 
   Transform2d nonFiniteTransform;
-  nonFiniteTransform.data[0] = kInfinity;
+  nonFiniteTransform.data[5] = kInfinity;
   EXPECT_FALSE(
       ComputePatternTileRasterMetrics(Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0), nonFiniteTransform));
 }
