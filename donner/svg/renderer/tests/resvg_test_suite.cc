@@ -775,11 +775,10 @@ INSTANTIATE_TEST_SUITE_P(
                 // `Te<tspan paint-order="stroke fill">xt</tspan>` is the exact Latin kerning
                 // case covered by the layout tests. The vendored PNG is not a strict geometry
                 // oracle: it loses e-x kerning at the paint-only tspan boundary that Donner
-                // preserves. The remaining raster mismatch is paint-order layering across runs,
-                // so this reference stays skipped until a compatible oracle or renderer
-                // contract exists. See #624.
+                // preserves, so it cannot isolate the fixture's paint-order behavior. Keep the
+                // reference skipped until a compatible oracle exists. See #624.
                 {"on-tspan.svg",
-                 Params::Skip("vendored PNG loses e-x kerning; remaining diff is paint-order layering")},
+                 Params::Skip("vendored PNG loses e-x kerning across paint-only tspan boundary")},
                 // paint-order rendering is implemented on the CPU backend only; Geode does not
                 // honor the fill/stroke/marker reordering yet. Compare CPU, disable Geode.
                 {"fill-markers-stroke.svg", GeodeDisabled("Geode paint-order rendering gap")},
