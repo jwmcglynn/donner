@@ -252,12 +252,18 @@ struct RayCoverage {
   wgt: f32,
 };
 
-// A shared vertex belongs to the curve that starts there, not the curve that ends there.
-// Testing the monotonic axis directly avoids backend-dependent root rounding near t=1.
+// Ownership of a shared vertex on the monotone axis, as a direction-independent
+// half-open interval [min, max): min-inclusive, max-exclusive. This is the standard
+// scanline winding convention. A start-inclusive/end-exclusive test (which flips to
+// max-inclusive for a decreasing curve) miscounts a Y-extremum shared vertex as a
+// single crossing when the sample lands exactly on the extremum value, breaking fill
+// parity for that scanline. Metal never samples exactly on the integer extremum;
+// llvmpipe does, so [min, max) is required for cross-backend agreement. Testing the
+// monotone axis directly also avoids backend-dependent root rounding near t=1.
 fn owns_axis_sample(start: f32, end: f32, sample: f32) -> bool {
-  return select(sample <= start && sample > end,
-                sample >= start && sample < end,
-                end > start);
+  let lo = min(start, end);
+  let hi = max(start, end);
+  return sample >= lo && sample < hi;
 }
 
 fn accumulateHoriz(slot: u32, sample: vec2f, ppemX: f32) -> RayCoverage {
