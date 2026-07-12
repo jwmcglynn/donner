@@ -1002,6 +1002,42 @@ TEST(TextEngineTest, TextPathTspanCoordinatesAffectPathLocalPlacement) {
                                                       GlyphYPositionIs(DoubleNear(0.0, 1.0)))));
 }
 
+// CSS Text 3 section 7.3 requires shaping to continue across an inline boundary when the only
+// formatting change does not affect glyphs. SVG paint-order changes painting, not shaping.
+TEST(TextEngineTest, FullBackendPaintOnlySplitMatchesUnsplitGlyphPositions) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine(fontManager, registry);
+
+  ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans")));
+
+  components::ComputedTextComponent unsplitText;
+  unsplitText.spans.push_back(MakeSpan("Text"));
+
+  components::ComputedTextComponent splitText;
+  splitText.spans.push_back(MakeSpan("Te"));
+  auto trailingSpan = MakeSpan("xt");
+  trailingSpan.startsNewChunk = false;
+  trailingSpan.paintOrder.order = {PaintComponent::Stroke, PaintComponent::Fill,
+                                   PaintComponent::Markers};
+  splitText.spans.push_back(std::move(trailingSpan));
+
+  TextLayoutParams params = MakeTextParams(64.0);
+  params.fontFamilies = {RcString("Noto Sans")};
+  const auto unsplitRuns = engine.layout(unsplitText, params);
+  const auto splitRuns = engine.layout(splitText, params);
+
+  ASSERT_THAT(unsplitRuns, ElementsAre(RunGlyphsAre(SizeIs(4))));
+  ASSERT_THAT(splitRuns, ElementsAre(RunGlyphsAre(SizeIs(2)), RunGlyphsAre(SizeIs(2))));
+  for (size_t glyphIndex = 0; glyphIndex < 4; ++glyphIndex) {
+    const TextGlyph& unsplitGlyph = unsplitRuns[0].glyphs[glyphIndex];
+    const TextGlyph& splitGlyph =
+        glyphIndex < 2 ? splitRuns[0].glyphs[glyphIndex] : splitRuns[1].glyphs[glyphIndex - 2];
+    EXPECT_DOUBLE_EQ(splitGlyph.xPosition, unsplitGlyph.xPosition) << glyphIndex;
+    EXPECT_DOUBLE_EQ(splitGlyph.yPosition, unsplitGlyph.yPosition) << glyphIndex;
+  }
+}
+
 TEST(TextEngineTest, TextAfterTextPathStartsAfterLastVisiblePathGlyph) {
   Registry registry;
   FontManager fontManager(registry);
