@@ -2410,5 +2410,166 @@ TEST(EditorAppGroupEditTest, AbsoluteArrangeStopsAtActiveScope) {
   EXPECT_EQ(app.editingScope(), std::optional<svg::SVGElement>(scope));
 }
 
+TEST(EditorAppGroupTest, GroupAvailabilityReportsEachRejectionReason) {
+  EditorApp app;
+
+  // No document loaded.
+  EXPECT_EQ(app.groupSelectionAvailability().reason, "No SVG document is loaded");
+
+  ASSERT_TRUE(app.loadFromString(std::string(kThreeRects)));
+
+  // Fewer than two elements selected.
+  SelectById(app, "r1");
+  EXPECT_EQ(app.groupSelectionAvailability().reason, "Select at least two adjacent elements");
+
+  // Two selected but not adjacent siblings (r1 and r3 straddle r2).
+  const auto r1 = app.document().document().querySelector("#r1");
+  const auto r3 = app.document().document().querySelector("#r3");
+  ASSERT_TRUE(r1.has_value());
+  ASSERT_TRUE(r3.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*r1, *r3});
+  EXPECT_EQ(app.groupSelectionAvailability().reason, "Selected elements must be adjacent");
+
+  // Two selected under different parents (detached from a common container).
+  ASSERT_TRUE(app.loadFromString(R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+    <g id="g1"><rect id="a" width="10" height="10"/></g>
+    <g id="g2"><rect id="b" width="10" height="10"/></g>
+  </svg>)svg"));
+  const auto a = app.document().document().querySelector("#a");
+  const auto b = app.document().document().querySelector("#b");
+  ASSERT_TRUE(a.has_value());
+  ASSERT_TRUE(b.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*a, *b});
+  EXPECT_EQ(app.groupSelectionAvailability().reason,
+            "Select unlocked elements with the same parent");
+}
+
+TEST(EditorAppGroupTest, GroupAvailabilityRejectsLockedCommonParent) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+    <g id="box"><rect id="a" width="10" height="10"/><rect id="b" x="20" width="10" height="10"/></g>
+  </svg>)svg"));
+  const auto box = app.document().document().querySelector("#box");
+  ASSERT_TRUE(box.has_value());
+  app.setElementLocked(*box, true);
+  ASSERT_TRUE(app.flushFrame());
+
+  const auto a = app.document().document().querySelector("#a");
+  const auto b = app.document().document().querySelector("#b");
+  ASSERT_TRUE(a.has_value());
+  ASSERT_TRUE(b.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*a, *b});
+  EXPECT_EQ(app.groupSelectionAvailability().reason,
+            "Selected elements need an editable container");
+  EXPECT_FALSE(app.groupSelection());
+}
+
+TEST(EditorAppGroupTest, UngroupAvailabilityReportsEachRejectionReason) {
+  EditorApp app;
+
+  EXPECT_EQ(app.ungroupSelectionAvailability().reason, "No SVG document is loaded");
+
+  // A non-group single selection.
+  ASSERT_TRUE(app.loadFromString(std::string(kThreeRects)));
+  SelectById(app, "r1");
+  EXPECT_EQ(app.ungroupSelectionAvailability().reason, "Select one group");
+
+  // A group carrying attributes cannot be ungrouped without losing them.
+  ASSERT_TRUE(app.loadFromString(R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+    <g id="attrs" transform="translate(2 3)"><rect id="a" width="10" height="10"/></g>
+  </svg>)svg"));
+  auto attrs = app.document().document().querySelector("#attrs");
+  ASSERT_TRUE(attrs.has_value());
+  app.setSelection(*attrs);
+  EXPECT_EQ(app.ungroupSelectionAvailability().reason,
+            "Remove group attributes before ungrouping");
+
+  // An empty attribute-free group has nothing to ungroup. It carries no id, so
+  // it is selected via the document tree rather than a query.
+  ASSERT_TRUE(app.loadFromString(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg"><g></g></svg>)svg"));
+  const auto emptyGroup = app.document().document().svgElement().firstChild();
+  ASSERT_TRUE(emptyGroup.has_value());
+  ASSERT_EQ(emptyGroup->tryType(), svg::ElementType::G);
+  app.setSelection(*emptyGroup);
+  EXPECT_EQ(app.ungroupSelectionAvailability().reason, "The selected group is empty");
+}
+
+TEST(EditorAppGroupTest, UngroupAvailabilityRejectsLockedGroup) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg"><g id="g"><rect id="a" width="10" height="10"/></g></svg>)svg"));
+  const auto group = app.document().document().querySelector("#g");
+  ASSERT_TRUE(group.has_value());
+  app.setElementLocked(*group, true);
+  ASSERT_TRUE(app.flushFrame());
+  app.setSelection(*group);
+  EXPECT_EQ(app.ungroupSelectionAvailability().reason, "Select an unlocked attached group");
+  EXPECT_FALSE(app.ungroupSelection());
+}
+
+TEST(EditorAppTest, RevertToCleanSourceFailsWithoutCleanSource) {
+  EditorApp app;
+  // A fresh app has never captured a clean source snapshot.
+  EXPECT_FALSE(app.revertToCleanSource());
+
+  ASSERT_TRUE(app.loadFromString(std::string(kThreeRects)));
+  // loadFromString does not set the clean-source snapshot, so revert is still a
+  // no-op until setCleanSourceText records one.
+  EXPECT_FALSE(app.revertToCleanSource());
+}
+
+TEST(EditorAppTest, MoveElementBeforeRejectsInvalidTargets) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+    <g id="group"><rect id="child" width="10" height="10"/></g>
+    <rect id="sibling" x="20" width="10" height="10"/>
+  </svg>)svg"));
+  const svg::SVGElement root = app.document().document().svgElement();
+  const auto group = app.document().document().querySelector("#group");
+  const auto child = app.document().document().querySelector("#child");
+  const auto sibling = app.document().document().querySelector("#sibling");
+  ASSERT_TRUE(group.has_value());
+  ASSERT_TRUE(child.has_value());
+  ASSERT_TRUE(sibling.has_value());
+
+  // The document root cannot be moved.
+  EXPECT_FALSE(app.moveElementBefore(root, root, std::nullopt, "Move"));
+  // A container cannot be moved into its own descendant.
+  EXPECT_FALSE(app.moveElementBefore(*group, *child, std::nullopt, "Move"));
+  // The reference sibling must be a child of the destination parent.
+  EXPECT_FALSE(app.moveElementBefore(*child, root, *child, "Move"));
+  EXPECT_FALSE(app.moveElementBefore(*sibling, root, *child, "Move"));
+  // Moving an element to the position it already occupies is a no-op rejection.
+  EXPECT_FALSE(app.moveElementBefore(*child, *group, std::nullopt, "Move"));
+  EXPECT_FALSE(app.flushFrame()) << "no rejected move should queue a mutation";
+}
+
+TEST(EditorAppTest, MoveElementBeforeRejectsLockedElementOrParent) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+    <rect id="a" width="10" height="10"/>
+    <g id="dest"><rect id="anchor" width="10" height="10"/></g>
+  </svg>)svg"));
+  const auto a = app.document().document().querySelector("#a");
+  const auto dest = app.document().document().querySelector("#dest");
+  const auto anchor = app.document().document().querySelector("#anchor");
+  ASSERT_TRUE(a.has_value());
+  ASSERT_TRUE(dest.has_value());
+  ASSERT_TRUE(anchor.has_value());
+
+  app.setElementLocked(*a, true);
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_FALSE(app.moveElementBefore(*a, *dest, *anchor, "Move"))
+      << "a locked element must not move";
+
+  app.setElementLocked(*a, false);
+  app.setElementLocked(*dest, true);
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_FALSE(app.moveElementBefore(*a, *dest, *anchor, "Move"))
+      << "moving into a locked parent must be rejected";
+  EXPECT_FALSE(app.flushFrame());
+}
+
 }  // namespace
 }  // namespace donner::editor
