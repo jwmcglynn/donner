@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "donner/css/Color.h"
+#include "donner/editor/EditorSampleCatalog.h"
 #include "donner/editor/EditorShellInternal.h"
 #include "donner/editor/FillStrokeWidget.h"
 #include "donner/editor/InMemoryClipboard.h"
@@ -649,6 +650,24 @@ public:
   }
 
   static bool ShowSamplePicker(const EditorShell& shell) { return shell.showSamplePicker_; }
+
+  static std::size_t SampleThumbnailCursor(const EditorShell& shell) {
+    return shell.sampleThumbnailGenerationCursor_;
+  }
+
+  static std::size_t SampleThumbnailSlotCount(const EditorShell& shell) {
+    return shell.sampleThumbnailBitmaps_.size();
+  }
+
+  static std::size_t SampleThumbnailGeneratedCount(const EditorShell& shell) {
+    std::size_t count = 0;
+    for (const auto& bitmap : shell.sampleThumbnailBitmaps_) {
+      if (bitmap.has_value()) {
+        ++count;
+      }
+    }
+    return count;
+  }
 
   static bool TrySavePath(EditorShell& shell, std::string_view path, std::string* error) {
     return shell.trySavePath(path, error);
@@ -3771,6 +3790,78 @@ TEST(EditorShellTest, ShapeClipboardRejectsMalformedAndPastesIntoSelectedGroup) 
   ASSERT_NE(groupCloseOffset, std::string_view::npos);
   EXPECT_GT(pastedOffset, groupOffset);
   EXPECT_LT(pastedOffset, groupCloseOffset);
+}
+
+TEST(EditorShellTest, SamplePickerRenderGeneratesThumbnailsAcrossFrames) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+
+  const std::size_t sampleCount = GetEditorSampleCatalog().size();
+  ASSERT_GT(sampleCount, 0u);
+
+  // Showing the picker routes runFrame through renderSamplePicker(), which lazily
+  // rasterizes one thumbnail per frame via ensureSampleThumbnails().
+  EditorShellTestAccess::SetShowSamplePicker(shell, true);
+  EXPECT_EQ(EditorShellTestAccess::SampleThumbnailCursor(shell), 0u);
+
+  // Generation advances at most one sample per frame, so drive enough frames to
+  // let the cursor walk the whole catalog and leave headroom for the final pass.
+  for (std::size_t frame = 0; frame < sampleCount + 3u; ++frame) {
+    window.beginFrame();
+    shell.runFrame();
+    window.endFrame();
+    if (EditorShellTestAccess::SampleThumbnailCursor(shell) >= sampleCount) {
+      break;
+    }
+  }
+
+  EXPECT_TRUE(EditorShellTestAccess::ShowSamplePicker(shell));
+  EXPECT_EQ(EditorShellTestAccess::SampleThumbnailSlotCount(shell), sampleCount);
+  EXPECT_EQ(EditorShellTestAccess::SampleThumbnailCursor(shell), sampleCount);
+  // The built-in catalog is valid SVG, so every slot should rasterize to a bitmap
+  // that the picker can upload as a texture.
+  EXPECT_EQ(EditorShellTestAccess::SampleThumbnailGeneratedCount(shell), sampleCount);
+
+  // Re-running frames past the end of the catalog is idempotent: the cursor stays
+  // clamped and no additional thumbnails are produced.
+  window.beginFrame();
+  shell.runFrame();
+  window.endFrame();
+  EXPECT_EQ(EditorShellTestAccess::SampleThumbnailCursor(shell), sampleCount);
+  EXPECT_EQ(EditorShellTestAccess::SampleThumbnailGeneratedCount(shell), sampleCount);
+}
+
+TEST(EditorShellTest, SamplePickerRendersDiscardConfirmationForDirtyDocument) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+
+  // Dirty the document so a queued sample load must ask before discarding edits.
+  EditorShellTestAccess::Source(shell).setText("<svg>unsaved edits</svg>");
+  EditorShellTestAccess::QueueSampleLoad(shell, "basic-shapes");
+  EXPECT_TRUE(EditorShellTestAccess::ShowSamplePicker(shell));
+
+  // Driving frames runs processPendingSampleLoad(), which flags the load as
+  // needing confirmation, and renderSamplePicker() then draws the modal. The
+  // pending load and picker both survive because nothing has confirmed yet.
+  for (int frame = 0; frame < 3; ++frame) {
+    window.beginFrame();
+    shell.runFrame();
+    window.endFrame();
+  }
+
+  EXPECT_TRUE(EditorShellTestAccess::PendingSampleLoadNeedsConfirmation(shell));
+  EXPECT_EQ(EditorShellTestAccess::PendingSampleLoad(shell), "basic-shapes");
+  EXPECT_TRUE(EditorShellTestAccess::ShowSamplePicker(shell));
 }
 
 }  // namespace donner::editor
