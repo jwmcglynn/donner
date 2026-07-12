@@ -65,7 +65,7 @@ TextLayoutParams MakeParams() {
   return params;
 }
 
-// This exact Latin kerning case keeps shaping continuous across a paint-only tspan boundary.
+// This exact Latin case preserves the e-x kerning result across a paint-only tspan boundary.
 TEST(TextSpanPositioningTest, SimpleBackendPaintOnlySplitMatchesUnsplitGlyphPositions) {
   Registry registry;
   FontManager fontManager(registry);

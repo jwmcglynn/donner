@@ -1003,7 +1003,7 @@ TEST(TextEngineTest, TextPathTspanCoordinatesAffectPathLocalPlacement) {
                                                       GlyphYPositionIs(DoubleNear(0.0, 1.0)))));
 }
 
-// This exact Latin kerning case keeps shaping continuous across a paint-only tspan boundary.
+// This exact Latin case preserves the e-x kerning result across a paint-only tspan boundary.
 TEST(TextEngineTest, FullBackendPaintOnlySplitMatchesUnsplitGlyphPositions) {
   Registry registry;
   FontManager fontManager(registry);
