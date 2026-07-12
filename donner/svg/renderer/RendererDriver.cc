@@ -2487,26 +2487,23 @@ void RendererDriver::drawMarkers(RenderingInstanceView& view, Registry& registry
   considerMarkerSubtree(instance.markerEnd);
 
   // Marker render ranges intentionally exclude nested marker definitions because nested paths
-  // render those definitions through drawMarker(). Walk later instances in draw order and extend
-  // the cleanup frontier whenever an in-range instance owns another inline marker subtree.
-  std::vector<const components::RenderingInstanceComponent*> laterInstances;
-  for (const Entity entity : registry.view<components::RenderingInstanceComponent>()) {
-    const auto& candidate = registry.get<components::RenderingInstanceComponent>(entity);
-    if (candidate.drawOrder > instance.drawOrder) {
-      laterInstances.push_back(&candidate);
-    }
-  }
-  std::ranges::sort(laterInstances, {},
-                    &components::RenderingInstanceComponent::drawOrder);
-
-  for (const auto* nestedInstance : laterInstances) {
-    if (nestedInstance->drawOrder > skipToDrawOrder) {
+  // render those definitions through drawMarker(). Walk the active traversal snapshot in draw
+  // order and extend the cleanup frontier whenever an in-range instance owns another inline
+  // marker subtree. Do not scan the registry: it can contain offscreen filter instances that are
+  // deliberately absent from this view.
+  RenderingInstanceView nestedView = view;
+  while (!nestedView.done()) {
+    const auto& nestedInstance = nestedView.get();
+    if (nestedInstance.drawOrder > skipToDrawOrder) {
       break;
     }
 
-    considerMarkerSubtree(nestedInstance->markerStart);
-    considerMarkerSubtree(nestedInstance->markerMid);
-    considerMarkerSubtree(nestedInstance->markerEnd);
+    if (nestedInstance.drawOrder > instance.drawOrder) {
+      considerMarkerSubtree(nestedInstance.markerStart);
+      considerMarkerSubtree(nestedInstance.markerMid);
+      considerMarkerSubtree(nestedInstance.markerEnd);
+    }
+    nestedView.advance();
   }
 
   if (skipToEntity != entt::null) {
