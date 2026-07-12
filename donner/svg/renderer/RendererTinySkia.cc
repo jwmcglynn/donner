@@ -120,7 +120,14 @@ tiny_skia::SpreadMode toTinySpreadMode(GradientSpreadMethod spreadMethod) {
   UTILS_UNREACHABLE();
 }
 
-tiny_skia::Path toTinyPath(const Path& spline) {
+enum class TinyPathCloseBehavior : uint8_t {
+  Preserve,
+  EndWithLine,
+};
+
+tiny_skia::Path toTinyPath(
+    const Path& spline,
+    TinyPathCloseBehavior closeBehavior = TinyPathCloseBehavior::Preserve) {
   tiny_skia::PathBuilder builder(spline.commands().size(), spline.points().size());
   const auto points = spline.points();
 
@@ -153,7 +160,12 @@ tiny_skia::Path toTinyPath(const Path& spline) {
         break;
       }
       case Path::Verb::ClosePath: {
-        builder.close();
+        if (closeBehavior == TinyPathCloseBehavior::Preserve) {
+          builder.close();
+        } else {
+          const Vector2d& subpathStart = points[command.pointIndex];
+          builder.lineTo(NarrowToFloat(subpathStart.x), NarrowToFloat(subpathStart.y));
+        }
         break;
       }
     }
@@ -1169,6 +1181,7 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
     tinyStroke.lineCap = toTinyLineCap(adjustedStroke.lineCap);
     tinyStroke.lineJoin = toTinyLineJoin(adjustedStroke.lineJoin);
 
+    bool dashHasOnlyZeroLengthGaps = false;
     if (!adjustedStroke.dashArray.empty()) {
       const int repeats = (adjustedStroke.dashArray.size() & 1u) != 0u ? 2 : 1;
       std::vector<float> dashArray;
@@ -1179,16 +1192,35 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
         }
       }
 
+      dashHasOnlyZeroLengthGaps = true;
+      for (std::size_t i = 1; i < dashArray.size(); i += 2) {
+        if (dashArray[i] != 0.0f) {
+          dashHasOnlyZeroLengthGaps = false;
+          break;
+        }
+      }
+
       tinyStroke.dash = tiny_skia::StrokeDash::create(std::move(dashArray),
                                                       NarrowToFloat(adjustedStroke.dashOffset));
     }
 
+    // A zero-length gap still terminates one dash and starts the next. TinySkia otherwise joins
+    // those ranges across ClosePath, filling the seam as if the stroke were solid. Replace only
+    // the stroke's ClosePath commands with explicit closing lines so the dash stroker emits caps
+    // at that boundary; fills and ordinary dashed/solid strokes keep their closed contours.
+    std::optional<tiny_skia::Path> openDashSeamPath;
+    const tiny_skia::Path* strokePath = &tinyPath;
+    if (tinyStroke.dash.has_value() && dashHasOnlyZeroLengthGaps) {
+      openDashSeamPath = toTinyPath(path.path, TinyPathCloseBehavior::EndWithLine);
+      strokePath = &*openDashSeamPath;
+    }
+
     auto pixmapView = currentPixmapView();
-    tiny_skia::Painter::strokePath(pixmapView, tinyPath, *strokePaint, tinyStroke,
+    tiny_skia::Painter::strokePath(pixmapView, *strokePath, *strokePaint, tinyStroke,
                                    toTinyTransform(deviceFromLocalTransform_), mask);
     if (strokePaintPixmap != nullptr) {
       auto strokePaintView = strokePaintPixmap->mutableView();
-      tiny_skia::Painter::strokePath(strokePaintView, tinyPath, *strokePaint, tinyStroke,
+      tiny_skia::Painter::strokePath(strokePaintView, *strokePath, *strokePaint, tinyStroke,
                                      toTinyTransform(deviceFromLocalTransform_), mask);
     }
     if (usedPatternStroke) {

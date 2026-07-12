@@ -587,11 +587,10 @@ TEST_F(RendererTests, ChainedFeImageDeepRecursionIsBoundedAndStable) {
          "bounded by the depth cap (issue #552)";
 }
 
-// A zero-length gap does not split adjacent painted ranges. Closed contours therefore retain
-// their joins, including the join at the start/end seam, while an explicitly open contour keeps
-// its endpoint caps. Pin the native TinySkia behavior as the renderer-level baseline for the
-// shared path stroker used by Geode.
-TEST_F(RendererTests, DashSeamClosedContourMitersStartCorner) {
+// A zero-length gap still separates adjacent painted ranges. At a closed contour's start/end
+// seam those ranges have caps rather than a join. A dash that remains painted across the seam,
+// and an ordinary solid stroke, retain the closed-contour join.
+TEST_F(RendererTests, DashSeamDistinguishesZeroGapBoundaryFromContinuousStroke) {
   auto renderInner = [&](const std::string& inner) {
     const std::string svg =
         "<svg viewBox=\"0 0 200 200\" xmlns=\"http://www.w3.org/2000/svg\">" + inner + "</svg>";
@@ -631,18 +630,28 @@ TEST_F(RendererTests, DashSeamClosedContourMitersStartCorner) {
       renderInner("<path d=\"M40,40 L160,40 L160,160 L40,160 Z\" " + attrs + "/>");
   const RendererBitmap openPath =
       renderInner("<path d=\"M40,40 L160,40 L160,160 L40,160 L40,40\" " + attrs + "/>");
+  const RendererBitmap continuousDash = renderInner(
+      "<path d=\"M40,40 L160,40 L160,160 L40,160 Z\" fill=\"none\" stroke=\"green\" "
+      "stroke-width=\"20\" stroke-dasharray=\"50 10\" stroke-dashoffset=\"10\"/>");
+  const RendererBitmap solidPath = renderInner(
+      "<path d=\"M40,40 L160,40 L160,160 L40,160 Z\" fill=\"none\" stroke=\"green\" "
+      "stroke-width=\"20\"/>");
 
   ASSERT_FALSE(rectEl.empty());
   ASSERT_FALSE(closedPath.empty());
   ASSERT_FALSE(openPath.empty());
+  ASSERT_FALSE(continuousDash.empty());
+  ASSERT_FALSE(solidPath.empty());
 
-  // <rect> is a closed contour -> the dash seam-joins -> mitered start corner (quadrant filled).
-  EXPECT_EQ(greenInOuterCorner(rectEl), 64) << "dashed <rect> should miter its start corner";
-  // An explicit closed <path ... Z> behaves identically.
-  EXPECT_EQ(greenInOuterCorner(closedPath), 64)
-      << "closed <path ... Z> should miter its start corner";
-  // An explicitly open path (no Z) butt-caps the start vertex, like the resvg golden.
+  EXPECT_EQ(greenInOuterCorner(rectEl), 0)
+      << "a zero-gap dash boundary should cap the <rect> seam";
+  EXPECT_EQ(greenInOuterCorner(closedPath), 0)
+      << "a zero-gap dash boundary should cap the closed-path seam";
   EXPECT_EQ(greenInOuterCorner(openPath), 0) << "open dashed path should butt-cap its start corner";
+  EXPECT_EQ(greenInOuterCorner(continuousDash), 64)
+      << "a dash painted across the seam should retain the closed-path join";
+  EXPECT_EQ(greenInOuterCorner(solidPath), 64)
+      << "a solid closed path should retain its start-corner join";
 }
 
 }  // namespace
