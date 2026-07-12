@@ -2486,6 +2486,29 @@ void RendererDriver::drawMarkers(RenderingInstanceView& view, Registry& registry
   considerMarkerSubtree(instance.markerMid);
   considerMarkerSubtree(instance.markerEnd);
 
+  // Marker render ranges intentionally exclude nested marker definitions because nested paths
+  // render those definitions through drawMarker(). Walk later instances in draw order and extend
+  // the cleanup frontier whenever an in-range instance owns another inline marker subtree.
+  std::vector<const components::RenderingInstanceComponent*> laterInstances;
+  for (const Entity entity : registry.view<components::RenderingInstanceComponent>()) {
+    const auto& candidate = registry.get<components::RenderingInstanceComponent>(entity);
+    if (candidate.drawOrder > instance.drawOrder) {
+      laterInstances.push_back(&candidate);
+    }
+  }
+  std::ranges::sort(laterInstances, {},
+                    &components::RenderingInstanceComponent::drawOrder);
+
+  for (const auto* nestedInstance : laterInstances) {
+    if (nestedInstance->drawOrder > skipToDrawOrder) {
+      break;
+    }
+
+    considerMarkerSubtree(nestedInstance->markerStart);
+    considerMarkerSubtree(nestedInstance->markerMid);
+    considerMarkerSubtree(nestedInstance->markerEnd);
+  }
+
   if (skipToEntity != entt::null) {
     skipUntil(view, skipToEntity);
   }

@@ -626,10 +626,10 @@ TEST_F(RenderingContextTest, RecursiveMarkerKeepsNestedSubtreeOutsideParentRende
   Registry& registry = document.registry();
   const Entity hostEntity = document.querySelector("#host")->unsafeEntityHandle().entity();
   const auto& hostInstance = registry.get<RenderingInstanceComponent>(hostEntity);
-  ASSERT_TRUE(hostInstance.markerEnd.has_value());
-  ASSERT_TRUE(hostInstance.markerEnd->subtreeInfo.has_value());
+  ASSERT_TRUE(hostInstance.markerStart.has_value());
+  ASSERT_TRUE(hostInstance.markerStart->subtreeInfo.has_value());
 
-  const SubtreeInfo& rootInfo = *hostInstance.markerEnd->subtreeInfo;
+  const SubtreeInfo& rootInfo = *hostInstance.markerStart->subtreeInfo;
   const int rootFirstOrder =
       registry.get<RenderingInstanceComponent>(rootInfo.firstRenderedEntity).drawOrder;
   const int rootLastOrder =
@@ -640,17 +640,17 @@ TEST_F(RenderingContextTest, RecursiveMarkerKeepsNestedSubtreeOutsideParentRende
     const auto& candidate = registry.get<RenderingInstanceComponent>(entity);
     const auto* id = registry.try_get<IdComponent>(candidate.dataEntity);
     if (id && id->id() == "recursive-path" && candidate.drawOrder >= rootFirstOrder &&
-        candidate.drawOrder <= rootLastOrder && candidate.markerStart.has_value()) {
+        candidate.drawOrder <= rootLastOrder && candidate.markerEnd.has_value()) {
       nestedPath = &candidate;
       break;
     }
   }
 
   ASSERT_THAT(nestedPath, NotNull());
-  ASSERT_TRUE(nestedPath->markerStart->subtreeInfo.has_value());
+  ASSERT_TRUE(nestedPath->markerEnd->subtreeInfo.has_value());
   const int nestedLastOrder =
       registry
-          .get<RenderingInstanceComponent>(nestedPath->markerStart->subtreeInfo->lastRenderedEntity)
+          .get<RenderingInstanceComponent>(nestedPath->markerEnd->subtreeInfo->lastRenderedEntity)
           .drawOrder;
   // Nested markers are rendered through their referencing path, not as part of the parent's direct
   // range. Renderer cleanup must still skip their separate inline ranges after drawing the parent.

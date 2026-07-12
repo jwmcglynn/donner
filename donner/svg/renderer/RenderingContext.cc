@@ -4,7 +4,7 @@
 #include <map>
 #include <optional>
 #include <set>
-#include <tuple>
+#include <utility>
 #include <vector>
 
 #include "donner/base/parser/LengthParser.h"
@@ -1118,16 +1118,14 @@ public:
         resolvedRef && IsValidMarker(resolvedRef->handle)) {
       const Entity markerElement = resolvedRef->handle.entity();
       if (!activeMarkerStack_.empty() &&
-          cyclicMarkerReferences_.count(
-              {activeMarkerStack_.front(), activeMarkerStack_.back(), markerElement})) {
+          cyclicMarkerReferences_.count({activeMarkerStack_.back(), markerElement})) {
         return ResolvedMarker{ResolvedReference{EntityHandle()}, std::nullopt,
                               MarkerUnits::Default};
       }
 
       if (activeMarkerElements_.count(markerElement)) {
         assert(!activeMarkerStack_.empty());
-        cyclicMarkerReferences_.insert(
-            {activeMarkerStack_.front(), activeMarkerStack_.back(), markerElement});
+        cyclicMarkerReferences_.insert({activeMarkerStack_.back(), markerElement});
         return ResolvedMarker{ResolvedReference{EntityHandle()}, std::nullopt,
                               MarkerUnits::Default};
       }
@@ -1207,10 +1205,10 @@ private:
   /// Marker expansion order, used to identify the exact reference edge that closes a cycle.
   std::vector<Entity> activeMarkerStack_;
 
-  /// Cycle-closing marker reference edges, keyed by top-level marker root, source, and target.
-  /// Reusing decisions within a root keeps repeated definitions structurally consistent without
-  /// suppressing the reverse orientation when another marker becomes the root.
-  std::set<std::tuple<Entity, Entity, Entity>> cyclicMarkerReferences_;
+  /// Cycle-closing marker reference edges, keyed by source and target marker. Decisions remain
+  /// active while all markers on one host shape are resolved, so a reciprocal marker does not
+  /// expand the same cycle again from the opposite endpoint.
+  std::set<std::pair<Entity, Entity>> cyclicMarkerReferences_;
 
   /// The last rendered entity of each offscreen subtree instantiated by \ref
   /// instantiateOffscreenSubtree, keyed by the subtree's root entity. Used to rebuild a correct

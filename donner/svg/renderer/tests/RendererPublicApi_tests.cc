@@ -853,7 +853,7 @@ TEST(RendererPublicApiTest, RecursiveMarkerStopsAtOneLevel) {
   EXPECT_THAT(PixelAt(snapshot, 34, 18), IsTransparent());
 }
 
-TEST(RendererPublicApiTest, RecursiveMarkersRetainFirstNestedLevelForEachRoot) {
+TEST(RendererPublicApiTest, RecursiveMarkerCycleEdgesRemainStableAcrossHostMarkers) {
   SVGDocument document = ParseDocument(R"svg(
       <svg xmlns="http://www.w3.org/2000/svg" width="80" height="32" viewBox="0 0 80 32">
         <defs>
@@ -883,7 +883,7 @@ TEST(RendererPublicApiTest, RecursiveMarkersRetainFirstNestedLevelForEachRoot) {
   EXPECT_THAT(PixelAt(snapshot, 10, 18), IsRedish());
   EXPECT_THAT(PixelAt(snapshot, 26, 18), IsBlueish());
   EXPECT_THAT(PixelAt(snapshot, 50, 18), IsBlueish());
-  EXPECT_THAT(PixelAt(snapshot, 58, 18), IsRedish());
+  EXPECT_THAT(PixelAt(snapshot, 58, 18), IsTransparent());
   EXPECT_THAT(PixelAt(snapshot, 74, 18), IsTransparent());
   EXPECT_THAT(PixelAt(snapshot, 2, 2), IsTransparent());
 }
