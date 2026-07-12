@@ -32,13 +32,16 @@ struct AsciiImage {
    * EXPECT_TRUE(image.matchBackend()
    *     .tinySkia(R"(...)"));
    * ```
-   * Each backend's golden is only checked when that backend is active. If no
-   * backend-specific golden is set, falls back to a default if provided.
+   * Each backend's golden is only checked when that backend is active. A
+   * backend-specific golden is strict: if it mismatches, the matcher does not
+   * fall back to the default. The default is used only when no golden was set
+   * for the active backend.
    */
   struct BackendMatcher {
     const AsciiImage& image;
     std::string_view defaultGolden;
     std::string_view tinySkiaGolden;
+    std::string_view geodeGolden;
 
     BackendMatcher& defaultPattern(std::string_view g) {
       defaultGolden = g;
@@ -48,27 +51,20 @@ struct AsciiImage {
       tinySkiaGolden = g;
       return *this;
     }
+    BackendMatcher& geode(std::string_view g) {
+      geodeGolden = g;
+      return *this;
+    }
 
     /// Implicit conversion to bool for use in EXPECT_TRUE.
-    /// Tries backend-specific golden first; if it doesn't match (or isn't set),
-    /// falls back to defaultPattern. Emits diagnostics for the last pattern tried.
+    /// Uses the active backend's golden when set, otherwise defaultPattern.
     operator bool() const {  // NOLINT(google-explicit-constructor)
       std::string_view backendGolden;
-      if (ActiveRendererBackend() == RendererBackend::TinySkia) {
-        backendGolden = tinySkiaGolden;
+      switch (ActiveRendererBackend()) {
+        case RendererBackend::TinySkia: backendGolden = tinySkiaGolden; break;
+        case RendererBackend::Geode: backendGolden = geodeGolden; break;
       }
 
-      // Try backend-specific pattern first (silently).
-      if (!backendGolden.empty() && image.matchesImpl(backendGolden, false)) {
-        return true;
-      }
-
-      // Try default pattern (silently if backend was also tried).
-      if (!defaultGolden.empty() && image.matchesImpl(defaultGolden, false)) {
-        return true;
-      }
-
-      // All failed - emit diagnostics for the most specific pattern.
       if (!backendGolden.empty()) {
         return image.matchesImpl(backendGolden, true);
       }
@@ -82,7 +78,7 @@ struct AsciiImage {
     }
   };
 
-  BackendMatcher matchBackend() const { return BackendMatcher{*this, {}, {}}; }
+  BackendMatcher matchBackend() const { return BackendMatcher{*this, {}, {}, {}}; }
 
 private:
   bool matchesImpl(std::string_view golden, bool emitDiagnostics) const {

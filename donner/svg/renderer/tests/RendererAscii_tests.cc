@@ -30,5 +30,14 @@ TEST(RendererAsciiTests, RectAscii) {
         )"));
 }
 
+TEST(RendererAsciiTests, TinySkiaMismatchDoesNotFallBackToDefault) {
+  if (ActiveRendererBackend() != RendererBackend::TinySkia) {
+    GTEST_SKIP() << "TinySkia-specific matcher regression";
+  }
+
+  const AsciiImage geodeImage{"geode\n"};
+  EXPECT_FALSE(geodeImage.matchBackend().defaultPattern("geode\n").tinySkia("tiny-skia\n"));
+}
+
 }  // namespace
 }  // namespace donner::svg
