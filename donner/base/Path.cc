@@ -2228,8 +2228,7 @@ std::optional<ResolvedDashPattern> resolveDashPattern(const std::vector<double>&
   // reasonable size. Matches spec behavior (odd -> double) but bails out if
   // the result would be unreasonably large. Real SVG dasharrays are rarely
   // longer than ~16 entries.
-  constexpr size_t kMaxDashEntries = 256;
-  if (rawDashes.size() > kMaxDashEntries) {
+  if (rawDashes.size() > StrokeStyle::kMaxDashEntries) {
     return std::nullopt;
   }
 

@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstddef>
 #include <cstdint>
 #include <ostream>
 #include <span>
@@ -51,6 +52,9 @@ inline std::ostream& operator<<(std::ostream& os, LineJoin join) {
 
 /// Parameters for converting a stroked path to a filled outline.
 struct StrokeStyle {
+  /// Maximum dash entries accepted by \ref Path::strokeToFill before falling back to solid.
+  static constexpr std::size_t kMaxDashEntries = 256;
+
   double width = 1.0;               ///< Stroke width.
   LineCap cap = LineCap::Butt;      ///< Line cap style for open subpath endpoints.
   LineJoin join = LineJoin::Miter;  ///< Line join style for corners between segments.

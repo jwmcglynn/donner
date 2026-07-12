@@ -1686,11 +1686,12 @@ struct RendererGeode::Impl {
   /// Determine the fill rule for a stroked outline. Each painted interval of
   /// a valid dash pattern becomes a separate closed ribbon. Those ribbons use
   /// NonZero so adjacent or wrapped dashes union instead of canceling their
-  /// overlaps. Invalid and all-zero patterns fall back to solid stroking, where
+  /// overlaps. Invalid, oversized, and all-zero patterns fall back to solid stroking, where
   /// open paths produce one subpath (NonZero) and closed paths produce two
   /// same-winding subpaths (EvenOdd hollow-ring semantics).
   static FillRule strokeFillRuleFor(const Path& strokedOutline, const StrokeStyle& strokeStyle) {
-    if (!strokeStyle.dashArray.empty()) {
+    if (!strokeStyle.dashArray.empty() &&
+        strokeStyle.dashArray.size() <= StrokeStyle::kMaxDashEntries) {
       double dashSum = 0.0;
       for (double dash : strokeStyle.dashArray) {
         if (!std::isfinite(dash) || dash < 0.0) {
