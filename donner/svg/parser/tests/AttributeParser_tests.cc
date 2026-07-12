@@ -6,10 +6,12 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <limits>
 #include <optional>
 #include <string>
 
 #include "donner/base/Length.h"
+#include "donner/base/MathUtils.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
@@ -33,6 +35,10 @@
 #include "donner/svg/SVGTextElement.h"
 #include "donner/svg/SVGTextPathElement.h"
 #include "donner/svg/SVGUseElement.h"
+#include "donner/svg/components/animation/AnimateTransformComponent.h"
+#include "donner/svg/components/animation/AnimateValueComponent.h"
+#include "donner/svg/components/animation/AnimationTimingComponent.h"
+#include "donner/svg/components/animation/SetAnimationComponent.h"
 #include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
@@ -1900,6 +1906,302 @@ TEST(AttributeParserTest, TextAnchorAndPathAttributes) {
   EXPECT_THAT(warningSink.warnings(),
               testing::Contains(
                   testing::Field(&ParseDiagnostic::reason, testing::HasSubstr("Invalid angle"))));
+}
+
+// --- Length parsing edge cases ---
+
+TEST(AttributeParserTest, LengthTrailingDataWarnsAndKeepsDefault) {
+  ParseWarningSink warningSink;
+  auto maybeDocument = SVGParser::ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <line id="line" x1="1 2"/>
+      <mask id="mask" x="bad" y="bad" width="bad" height="bad"/>
+    </svg>
+  )",
+                                           warningSink);
+  ASSERT_TRUE(maybeDocument.hasResult());
+  auto document = std::move(maybeDocument).result();
+
+  // Trailing data invalidates the whole attribute, keeping the default value.
+  auto line = QueryElement<SVGLineElement>(document, "#line");
+  EXPECT_EQ(line.x1(), Lengthd());
+
+  // Invalid mask geometry values keep the auto (nullopt) defaults.
+  auto mask = QueryElement<SVGMaskElement>(document, "#mask");
+  EXPECT_EQ(mask.x(), std::nullopt);
+  EXPECT_EQ(mask.y(), std::nullopt);
+  EXPECT_EQ(mask.width(), std::nullopt);
+  EXPECT_EQ(mask.height(), std::nullopt);
+
+  EXPECT_THAT(warningSink.warnings(),
+              testing::Contains(
+                  testing::Field(&ParseDiagnostic::reason,
+                                 testing::HasSubstr("Unexpected data at end of attribute"))));
+}
+
+TEST(AttributeParserTest, MarkerOrientTrailingDataAndInvalidLengths) {
+  ParseWarningSink warningSink;
+  auto maybeDocument = SVGParser::ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="m" orient="45 extra" markerHeight="bad" refX="bad" refY="bad"/>
+      </defs>
+    </svg>
+  )",
+                                           warningSink);
+  ASSERT_TRUE(maybeDocument.hasResult());
+  auto document = std::move(maybeDocument).result();
+
+  auto marker = QueryElement<SVGMarkerElement>(document, "#m");
+
+  // The angle before the extra data is still applied, with a warning.
+  EXPECT_EQ(marker.orient().type(), MarkerOrient::Type::Angle);
+  EXPECT_NEAR(marker.orient().computeAngleRadians(Vector2d(1.0, 0.0)),
+              45.0 * MathConstants<double>::kDegToRad, 1e-9);
+
+  // Invalid lengths keep the SVG defaults: markerHeight=3, refX=0, refY=0.
+  EXPECT_THAT(marker.markerHeight(), LengthIs(DoubleNear(3.0, 0.001), Lengthd::Unit::None));
+  EXPECT_THAT(marker.refX(), LengthIs(DoubleNear(0.0, 0.001), Lengthd::Unit::None));
+  EXPECT_THAT(marker.refY(), LengthIs(DoubleNear(0.0, 0.001), Lengthd::Unit::None));
+
+  EXPECT_THAT(warningSink.warnings(),
+              testing::Contains(
+                  testing::Field(&ParseDiagnostic::reason,
+                                 testing::HasSubstr("Unexpected data after angle value"))));
+}
+
+TEST(AttributeParserTest, ImageInvalidPreserveAspectRatioKeepsDefault) {
+  ParseWarningSink warningSink;
+  auto maybeDocument = SVGParser::ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <image id="img" width="10" height="10" href="test.png" preserveAspectRatio="bad"/>
+    </svg>
+  )",
+                                           warningSink);
+  ASSERT_TRUE(maybeDocument.hasResult());
+  auto document = std::move(maybeDocument).result();
+
+  auto image = QueryElement<SVGImageElement>(document, "#img");
+  EXPECT_EQ(image.preserveAspectRatio(), PreserveAspectRatio());
+
+  EXPECT_THAT(warningSink.warnings(),
+              testing::Contains(testing::Field(&ParseDiagnostic::reason,
+                                               testing::HasSubstr("align"))));
+}
+
+// --- Filter enum and separator edge cases ---
+
+TEST(AttributeParserTest, FilterEnumInvalidValuesKeepDefaults) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <filter id="f" color-interpolation-filters="bad">
+        <feGaussianBlur id="blur" stdDeviation="1" edgeMode="bad"/>
+        <feBlend id="blend" mode="bad"/>
+        <feMorphology id="morph" operator="bad"/>
+      </filter>
+    </svg>
+  )");
+
+  // The invalid value is ignored, leaving color-interpolation-filters unset.
+  EXPECT_EQ(QueryComponent<components::FilterComponent>(document, "#f").colorInterpolationFilters,
+            std::nullopt);
+  EXPECT_EQ(QueryComponent<components::FEGaussianBlurComponent>(document, "#blur").edgeMode,
+            components::FEGaussianBlurComponent::EdgeMode::None);
+  EXPECT_EQ(QueryComponent<components::FEBlendComponent>(document, "#blend").mode,
+            components::FEBlendComponent::Mode::Normal);
+  EXPECT_EQ(QueryComponent<components::FEMorphologyComponent>(document, "#morph").op,
+            components::FEMorphologyComponent::Operator::Erode);
+}
+
+TEST(AttributeParserTest, FilterSeparatorAndInvalidFirstNumberBranches) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <filter id="f">
+        <feMorphology id="morph" radius="1 , 2 , "/>
+        <feConvolveMatrix id="conv" order="4,2" kernelMatrix="1 0 0 1 0 0 1 0"/>
+        <feTurbulence id="turb-bad" baseFrequency="bad"/>
+        <feTurbulence id="turb-comma" baseFrequency="0.25,0.75"/>
+      </filter>
+    </svg>
+  )");
+
+  // Comma-and-space separators between the two radius values, plus trailing separators.
+  const auto& morph = QueryComponent<components::FEMorphologyComponent>(document, "#morph");
+  EXPECT_DOUBLE_EQ(morph.radiusX, 1.0);
+  EXPECT_DOUBLE_EQ(morph.radiusY, 2.0);
+
+  const auto& conv = QueryComponent<components::FEConvolveMatrixComponent>(document, "#conv");
+  EXPECT_EQ(conv.orderX, 4);
+  EXPECT_EQ(conv.orderY, 2);
+
+  // An invalid first number leaves the defaults untouched.
+  const auto& turbBad = QueryComponent<components::FETurbulenceComponent>(document, "#turb-bad");
+  EXPECT_DOUBLE_EQ(turbBad.baseFrequencyX, 0.0);
+  EXPECT_DOUBLE_EQ(turbBad.baseFrequencyY, 0.0);
+
+  const auto& turbComma =
+      QueryComponent<components::FETurbulenceComponent>(document, "#turb-comma");
+  EXPECT_DOUBLE_EQ(turbComma.baseFrequencyX, 0.25);
+  EXPECT_DOUBLE_EQ(turbComma.baseFrequencyY, 0.75);
+}
+
+// --- Animation attribute edge cases ---
+
+TEST(AttributeParserTest, AnimateValueListEdgeCases) {
+  auto document = ParseSVGExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect width="10" height="10">
+        <animate id="a1" attributeName="fill" values="red ;; blue " calcMode="linear"/>
+        <animate id="a2" attributeName="width" keyTimes="0;0.25 0.5;1"/>
+        <animate id="a3" attributeName="width" keyTimes="0;bad;1"/>
+      </rect>
+    </svg>
+  )");
+
+  // Empty items are dropped and surrounding whitespace is trimmed.
+  const auto& a1 = QueryComponent<components::AnimateValueComponent>(document, "#a1");
+  EXPECT_THAT(a1.values, testing::ElementsAre("red", "blue"));
+  EXPECT_EQ(a1.calcMode, components::CalcMode::Linear);
+
+  // A semicolon group may contain multiple whitespace-separated numbers.
+  const auto& a2 = QueryComponent<components::AnimateValueComponent>(document, "#a2");
+  EXPECT_THAT(a2.keyTimes, testing::ElementsAre(0.0, 0.25, 0.5, 1.0));
+
+  // Non-numeric groups contribute no values.
+  const auto& a3 = QueryComponent<components::AnimateValueComponent>(document, "#a3");
+  EXPECT_THAT(a3.keyTimes, testing::ElementsAre(0.0, 1.0));
+}
+
+TEST(AttributeParserTest, AnimationTimingAttributeEdgeCases) {
+  SVGParser::Options options;
+  options.enableExperimental = true;
+  options.disableUserAttributes = false;
+
+  ParseWarningSink warningSink;
+  auto maybeDocument = SVGParser::ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect width="10" height="10">
+        <animate id="a1" attributeName="width" begin="5s; 2s; 10s" end="indefinite"
+                 fill="remove" repeatCount="indefinite" restart="always" min="1s" max="4s"
+                 data-user="kept"/>
+        <animate id="a2" attributeName="width" dur="bad" repeatCount="bad" repeatDur="bad"
+                 min="bad" max="bad"/>
+      </rect>
+    </svg>
+  )",
+                                           warningSink, options);
+  ASSERT_TRUE(maybeDocument.hasResult());
+  auto document = std::move(maybeDocument).result();
+
+  const auto& t1 = QueryComponent<components::AnimationTimingComponent>(document, "#a1");
+  // The earliest offset in the begin list wins.
+  ASSERT_TRUE(t1.beginOffset.has_value());
+  EXPECT_DOUBLE_EQ(t1.beginOffset->seconds(), 2.0);
+  // "indefinite" is recorded but produces no end offset.
+  EXPECT_EQ(t1.endValue, "indefinite");
+  EXPECT_EQ(t1.endOffset, std::nullopt);
+  EXPECT_EQ(t1.fill, components::AnimationFill::Remove);
+  ASSERT_TRUE(t1.repeatCount.has_value());
+  EXPECT_EQ(*t1.repeatCount, std::numeric_limits<double>::infinity());
+  EXPECT_EQ(t1.restart, components::AnimationRestart::Always);
+  ASSERT_TRUE(t1.min.has_value());
+  EXPECT_DOUBLE_EQ(t1.min->seconds(), 1.0);
+  ASSERT_TRUE(t1.max.has_value());
+  EXPECT_DOUBLE_EQ(t1.max->seconds(), 4.0);
+
+  // Attributes not handled by the animation specialization fall through to the common path.
+  auto animate1 = document.querySelector("#a1");
+  ASSERT_TRUE(animate1.has_value());
+  EXPECT_THAT(animate1->getAttribute("data-user"), testing::Optional(RcString("kept")));
+
+  // Invalid clock and number values leave the timing defaults untouched.
+  const auto& t2 = QueryComponent<components::AnimationTimingComponent>(document, "#a2");
+  EXPECT_EQ(t2.dur, std::nullopt);
+  EXPECT_EQ(t2.repeatCount, std::nullopt);
+  EXPECT_EQ(t2.repeatDur, std::nullopt);
+  EXPECT_EQ(t2.min, std::nullopt);
+  EXPECT_EQ(t2.max, std::nullopt);
+}
+
+TEST(AttributeParserTest, AnimateTransformSkewYHrefAndSetAttributes) {
+  SVGParser::Options options;
+  options.enableExperimental = true;
+  options.disableUserAttributes = false;
+
+  ParseWarningSink warningSink;
+  auto maybeDocument = SVGParser::ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="r" width="10" height="10"/>
+      <animateTransform id="at" attributeName="transform" type="skewY" href="#r"
+                        from="0" to="45"/>
+      <set id="st" attributeName="width" to="20" href="#r" data-user="kept"/>
+    </svg>
+  )",
+                                           warningSink, options);
+  ASSERT_TRUE(maybeDocument.hasResult());
+  auto document = std::move(maybeDocument).result();
+
+  const auto& transformComp =
+      QueryComponent<components::AnimateTransformComponent>(document, "#at");
+  EXPECT_EQ(transformComp.type, components::TransformAnimationType::SkewY);
+  EXPECT_EQ(transformComp.href, "#r");
+
+  const auto& setComp = QueryComponent<components::SetAnimationComponent>(document, "#st");
+  EXPECT_EQ(setComp.href, "#r");
+
+  // Attributes not handled by the set specialization fall through to the common path.
+  auto set = document.querySelector("#st");
+  ASSERT_TRUE(set.has_value());
+  EXPECT_THAT(set->getAttribute("data-user"), testing::Optional(RcString("kept")));
+}
+
+// --- Text positioning list errors ---
+
+TEST(AttributeParserTest, RotateListTrailingCommaWarnsAndKeepsParsedValues) {
+  ParseWarningSink warningSink;
+  auto maybeDocument = SVGParser::ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <text id="text" rotate="45,">one</text>
+      <text>
+        <a id="link" rotate="45," lengthAdjust="bad" x="1 bad" y="2 bad" dx="3 bad"
+           dy="4 bad">two</a>
+      </text>
+      <text>
+        <tspan id="span" rotate="45," lengthAdjust="bad">three</tspan>
+      </text>
+      <text>
+        <textPath id="path-text" rotate="45,">four</textPath>
+      </text>
+    </svg>
+  )",
+                                           warningSink);
+  ASSERT_TRUE(maybeDocument.hasResult());
+  auto document = std::move(maybeDocument).result();
+
+  // Values before the trailing comma are kept; the list error is reported as a warning.
+  EXPECT_THAT(QueryElement<SVGTextElement>(document, "#text").rotateList(),
+              testing::ElementsAre(DoubleNear(45.0, 1e-12)));
+
+  auto link = QueryElement<SVGAElement>(document, "#link");
+  EXPECT_THAT(link.rotateList(), testing::ElementsAre(DoubleNear(45.0, 1e-12)));
+  // Invalid lengthAdjust on <a> keeps the default; invalid list tokens are skipped.
+  EXPECT_EQ(link.lengthAdjust(), LengthAdjust::Spacing);
+  EXPECT_THAT(link.xList(), testing::ElementsAre(Lengthd(1)));
+  EXPECT_THAT(link.yList(), testing::ElementsAre(Lengthd(2)));
+  EXPECT_THAT(link.dxList(), testing::ElementsAre(Lengthd(3)));
+  EXPECT_THAT(link.dyList(), testing::ElementsAre(Lengthd(4)));
+
+  auto span = QueryElement<SVGTSpanElement>(document, "#span");
+  EXPECT_THAT(span.rotateList(), testing::ElementsAre(DoubleNear(45.0, 1e-12)));
+  EXPECT_EQ(span.lengthAdjust(), LengthAdjust::Spacing);
+
+  EXPECT_THAT(QueryElement<SVGTextPathElement>(document, "#path-text").rotateList(),
+              testing::ElementsAre(DoubleNear(45.0, 1e-12)));
+
+  EXPECT_THAT(warningSink.warnings(),
+              testing::Contains(testing::Field(&ParseDiagnostic::reason,
+                                               testing::HasSubstr("Unexpected trailing comma")))
+                  .Times(4));
 }
 
 }  // namespace donner::svg::parser
