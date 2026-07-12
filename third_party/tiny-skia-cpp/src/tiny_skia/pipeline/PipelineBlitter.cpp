@@ -730,28 +730,31 @@ void RasterPipelineBlitter::blitAntiH2(std::uint32_t x, std::uint32_t y, AlphaU8
     return;
   }
 
-  const auto bounds = ScreenIntRect::fromXYWH(x, y, 2, 1);
-  if (!bounds.has_value()) {
+  if (pixmap_ == nullptr || x >= pixmap_->width() || y >= pixmap_->height()) {
     return;
   }
+  const auto boundsWidth = static_cast<LengthU32>(std::min<std::size_t>(2u, pixmap_->width() - x));
+  const auto bounds = ScreenIntRect::fromXYWHSafe(x, y, boundsWidth, 1u);
   const AAMaskCtx aaMaskCtx{
-      {alpha0, alpha1}, 2u, static_cast<std::size_t>(bounds->x() + bounds->y() * 2)};
+      {alpha0, alpha1}, 2u, static_cast<std::size_t>(bounds.x() + bounds.y() * 2)};
   const auto maskCtx = makeMaskCtx(mask_);
   const auto pixmapSrcRef = pixmapSrcStorage_.view();
-  blitMaskRp_.run(*bounds, aaMaskCtx, maskCtx, pixmapSrcRef, pixmap_);
+  blitMaskRp_.run(bounds, aaMaskCtx, maskCtx, pixmapSrcRef, pixmap_);
 }
 
 void RasterPipelineBlitter::blitAntiV2(std::uint32_t x, std::uint32_t y, AlphaU8 alpha0,
                                        AlphaU8 alpha1) {
-  const auto bounds = ScreenIntRect::fromXYWH(x, y, 1, 2);
-  if (!bounds.has_value()) {
+  if (pixmap_ == nullptr || x >= pixmap_->width() || y >= pixmap_->height()) {
     return;
   }
+  const auto boundsHeight =
+      static_cast<LengthU32>(std::min<std::size_t>(2u, pixmap_->height() - y));
+  const auto bounds = ScreenIntRect::fromXYWHSafe(x, y, 1u, boundsHeight);
   const AAMaskCtx aaMaskCtx{
-      {alpha0, alpha1}, 1u, static_cast<std::size_t>(bounds->x() + bounds->y() * 1)};
+      {alpha0, alpha1}, 1u, static_cast<std::size_t>(bounds.x() + bounds.y() * 1)};
   const auto maskCtx = makeMaskCtx(mask_);
   const auto pixmapSrcRef = pixmapSrcStorage_.view();
-  blitMaskRp_.run(*bounds, aaMaskCtx, maskCtx, pixmapSrcRef, pixmap_);
+  blitMaskRp_.run(bounds, aaMaskCtx, maskCtx, pixmapSrcRef, pixmap_);
 }
 
 void RasterPipelineBlitter::blitAntiRect(std::int32_t x, std::int32_t y, std::int32_t width,
