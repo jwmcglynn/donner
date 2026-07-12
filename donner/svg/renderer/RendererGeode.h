@@ -236,7 +236,8 @@ public:
   void transitionMaskToContent() override;
   void popMask() override;
 
-  void beginPatternTile(const Box2d& tileRect, const Transform2d& targetFromPattern) override;
+  [[nodiscard]] bool beginPatternTile(const Box2d& tileRect,
+                                      const Transform2d& targetFromPattern) override;
   void endPatternTile(bool forStroke) override;
 
   void setPaint(const PaintParams& paint) override;

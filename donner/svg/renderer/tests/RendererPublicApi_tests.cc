@@ -3,6 +3,7 @@
 
 #include <array>
 #include <filesystem>
+#include <limits>
 #include <vector>
 
 #include "donner/base/ParseWarningSink.h"
@@ -115,7 +116,7 @@ public:
   void pushMask(const std::optional<Box2d>&) override {}
   void transitionMaskToContent() override {}
   void popMask() override {}
-  void beginPatternTile(const Box2d&, const Transform2d&) override {}
+  bool beginPatternTile(const Box2d&, const Transform2d&) override { return true; }
   void endPatternTile(bool) override {}
   void setPaint(const PaintParams&) override {}
   void drawPath(const PathShape&, const StrokeParams&) override {}
@@ -335,7 +336,7 @@ TEST(RendererPublicApiTest, FacadeForwardsFrameStateAndPrimitiveCalls) {
   renderer.transitionMaskToContent();
   renderer.popMask();
 
-  renderer.beginPatternTile(Box2d::FromXYWH(0.0, 0.0, 4.0, 4.0), Transform2d());
+  EXPECT_TRUE(renderer.beginPatternTile(Box2d::FromXYWH(0.0, 0.0, 4.0, 4.0), Transform2d()));
   renderer.endPatternTile(/*forStroke=*/false);
 
   PaintParams paint;
@@ -371,6 +372,34 @@ TEST(RendererPublicApiTest, FacadeForwardsFrameStateAndPrimitiveCalls) {
 
   EXPECT_GE(renderer.width(), 0);
   EXPECT_GE(renderer.height(), 0);
+}
+
+TEST(RendererPublicApiTest, PatternTileRejectsUnsafeDimensionsWithoutChangingFrameState) {
+  Renderer renderer;
+  renderer.beginFrame(RenderViewport{
+      .size = Vector2d(16.0, 16.0),
+      .devicePixelRatio = 1.0,
+  });
+  renderer.setTransform(Transform2d());
+
+  constexpr double kInfinity = std::numeric_limits<double>::infinity();
+  constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_FALSE(renderer.beginPatternTile(Box2d::FromXYWH(0.0, 0.0, 0.0, 4.0), Transform2d()));
+  EXPECT_FALSE(renderer.beginPatternTile(Box2d::FromXYWH(0.0, 0.0, -1.0, 4.0), Transform2d()));
+  EXPECT_FALSE(renderer.beginPatternTile(Box2d::FromXYWH(0.0, 0.0, kInfinity, 4.0), Transform2d()));
+  EXPECT_FALSE(renderer.beginPatternTile(Box2d::FromXYWH(0.0, 0.0, kNaN, 4.0), Transform2d()));
+  EXPECT_FALSE(renderer.beginPatternTile(Box2d::FromXYWH(0.0, 0.0, 3000.0, 4.0), Transform2d()));
+  EXPECT_FALSE(
+      renderer.beginPatternTile(Box2d::FromXYWH(0.0, 0.0, 4.0, 4.0), Transform2d::Scale(0.0, 1.0)));
+  Transform2d nonFiniteTransform;
+  nonFiniteTransform.data[0] = kInfinity;
+  EXPECT_FALSE(renderer.beginPatternTile(Box2d::FromXYWH(0.0, 0.0, 4.0, 4.0), nonFiniteTransform));
+
+  renderer.setPaint(PaintParams{});
+  renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, 2.0, 2.0), StrokeParams{});
+  renderer.endFrame();
+  EXPECT_EQ(renderer.width(), 16);
+  EXPECT_EQ(renderer.height(), 16);
 }
 
 TEST(RendererPublicApiTest, DrawBitmapDefaultSkipsEmptyAndInvalidRowData) {

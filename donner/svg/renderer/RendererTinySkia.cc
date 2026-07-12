@@ -20,6 +20,7 @@
 #ifdef DONNER_FILTERS_ENABLED
 #include "donner/svg/renderer/FilterGraphExecutor.h"
 #endif
+#include "donner/svg/renderer/PatternTile.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #ifdef DONNER_TEXT_ENABLED
@@ -356,26 +357,6 @@ void unionMaskInPlace(tiny_skia::Mask& dst, const tiny_skia::Mask& src) {
   for (std::size_t i = 0; i < dstData.size(); ++i) {
     dstData[i] = std::max(dstData[i], srcData[i]);
   }
-}
-
-Vector2d patternRasterScaleForTransform(const Transform2d& deviceFromPattern) {
-  const double scaleX =
-      std::max(1.0, deviceFromPattern.transformVector(Vector2d(1.0, 0.0)).length());
-  const double scaleY =
-      std::max(1.0, deviceFromPattern.transformVector(Vector2d(0.0, 1.0)).length());
-  constexpr double kPatternSupersampleScale = 2.0;
-  return Vector2d(scaleX * kPatternSupersampleScale, scaleY * kPatternSupersampleScale);
-}
-
-Vector2d effectivePatternRasterScale(const Box2d& tileRect, int pixelWidth, int pixelHeight,
-                                     const Vector2d& fallbackScale) {
-  const double scaleX = NearZero(tileRect.width())
-                            ? fallbackScale.x
-                            : static_cast<double>(pixelWidth) / tileRect.width();
-  const double scaleY = NearZero(tileRect.height())
-                            ? fallbackScale.y
-                            : static_cast<double>(pixelHeight) / tileRect.height();
-  return Vector2d(scaleX, scaleY);
 }
 
 Transform2d scaleTransformOutput(const Transform2d& transform, const Vector2d& scale) {
@@ -1066,7 +1047,7 @@ void RendererTinySkia::popMask() {
   }
 }
 
-void RendererTinySkia::beginPatternTile(const Box2d& tileRect,
+bool RendererTinySkia::beginPatternTile(const Box2d& tileRect,
                                         const Transform2d& targetFromPattern) {
   SurfaceFrame frame;
   frame.kind = SurfaceKind::PatternTile;
@@ -1074,21 +1055,20 @@ void RendererTinySkia::beginPatternTile(const Box2d& tileRect,
   frame.savedTransformStack = deviceFromLocalTransformStack_;
   frame.savedClipMask = currentClipMask_;
   frame.savedClipStack = clipStack_;
-  const Transform2d deviceFromPattern = frame.savedTransform * targetFromPattern;
-  const Vector2d requestedRasterScale = patternRasterScaleForTransform(deviceFromPattern);
-  const int pixelWidth =
-      std::max(1, static_cast<int>(std::ceil(tileRect.width() * requestedRasterScale.x)));
-  const int pixelHeight =
-      std::max(1, static_cast<int>(std::ceil(tileRect.height() * requestedRasterScale.y)));
-  const Vector2d rasterScale =
-      effectivePatternRasterScale(tileRect, pixelWidth, pixelHeight, requestedRasterScale);
-  frame.patternRasterFromTile = Transform2d::Scale(rasterScale);
-  frame.targetFromPattern = targetFromPattern;
-  frame.targetFromPattern.data[4] *= rasterScale.x;
-  frame.targetFromPattern.data[5] *= rasterScale.y;
+  const Transform2d deviceFromPattern = targetFromPattern * frame.savedTransform;
+  const std::optional<PatternTileRasterMetrics> rasterMetrics =
+      ComputePatternTileRasterMetrics(tileRect, deviceFromPattern);
+  if (!rasterMetrics.has_value()) {
+    return false;
+  }
+
+  frame.patternRasterFromTile = Transform2d::Scale(rasterMetrics->rasterFromPatternScale);
   frame.targetFromPattern =
-      frame.targetFromPattern * Transform2d::Scale(1.0 / rasterScale.x, 1.0 / rasterScale.y);
-  frame.pixmap = createTransparentPixmap(pixelWidth, pixelHeight);
+      TargetFromPatternRaster(targetFromPattern, rasterMetrics->rasterFromPatternScale);
+  frame.pixmap = createTransparentPixmap(rasterMetrics->pixelWidth, rasterMetrics->pixelHeight);
+  if (frame.pixmap.width() == 0 || frame.pixmap.height() == 0) {
+    return false;
+  }
 
   // Tile-content draws must not consume the outer element's pending pattern shaders (a shape
   // inside the tile would otherwise pick them up as its own fill/stroke and reset them).
@@ -1103,6 +1083,7 @@ void RendererTinySkia::beginPatternTile(const Box2d& tileRect,
   deviceFromLocalTransformStack_.clear();
   currentClipMask_.reset();
   clipStack_.clear();
+  return true;
 }
 
 void RendererTinySkia::endPatternTile(bool forStroke) {

@@ -293,11 +293,6 @@ TEST(SVGPatternElementTests, PatternTransform) {
 }
 
 TEST(SVGPatternElementTests, PatternTransformRendering) {
-  // Variant lane (doc 0031 M2.3): re-enable on Geode once the backend
-  // bug is fixed (tracked in jwmcglynn/donner#566).
-  if (ActiveRendererBackend() == RendererBackend::Geode) {
-    GTEST_SKIP() << "Known broken on Geode backend (jwmcglynn/donner#566).";
-  }
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
         <pattern id="a" width="0.5" height="0.5" patternTransform="skewX(45) scale(2)">
           <rect x="0" y="0" width="4" height="4" fill="lime" />
@@ -307,31 +302,26 @@ TEST(SVGPatternElementTests, PatternTransformRendering) {
         )-");
 
   EXPECT_TRUE(generatedAscii.matches(R"(
-        .********.......
-        ..********......
-        ...,*******=....
-        .....********...
-        ......:*******-.
-        ........********
-        *,.......+******
-        ***........*****
-        ....========....
-        ......=======:..
-        .......========.
-        -.......-=======
-        ==........======
-        ===,.......:====
-        =====........===
-        ======........==
+        :*******:.......
+        .:*******:......
+        ..:*******:.....
+        ...:*******:....
+        ....:*******:...
+        .....:*******:..
+        ......:*******:.
+        .......:*******:
+        -=======-.......
+        .-=======-......
+        ..-=======-.....
+        ...-=======-....
+        ....-=======-...
+        .....-=======-..
+        ......-=======-.
+        .......-=======-
         )"));
 }
 
 TEST(SVGPatternElementTests, PatternTransformWithXYRendering) {
-  // Variant lane (doc 0031 M2.3): re-enable on Geode once the backend
-  // bug is fixed (tracked in jwmcglynn/donner#566).
-  if (ActiveRendererBackend() == RendererBackend::Geode) {
-    GTEST_SKIP() << "Known broken on Geode backend (jwmcglynn/donner#566).";
-  }
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
         <pattern id="a" x="0.125" y="0.25" width="0.5" height="0.5" patternTransform="rotate(45) scale(2 1)">
           <rect x="0" y="0" width="4" height="4" fill="lime" />
@@ -341,30 +331,25 @@ TEST(SVGPatternElementTests, PatternTransformWithXYRendering) {
         )-");
 
   EXPECT_TRUE(generatedAscii.matches(R"(
-        ..-...***..,**:=
-        =.*=..=**...*-.=
-        =-**...***..,..:
-        =.**=..=**..:...
-        -.***...***.=:..
-        ...**=..=**:==..
-        ,..***...**.==:.
-        *...**=..=-.===.
-        *,..***......==:
-        **...**=.:...===
-        **,..***.==...==
-        ***...**-==...==
-        ,**,..**.===...=
-        .***...-.,==...=
-        .,**,.....===...
-        ..***.:=..,==...
+        -....*......****
+        =-..***......**-
+        ==-*****......-.
+        ==.:*****....-=.
+        =...:*****..-===
+        .....:*****-====
+        *.....:***-.====
+        **.....:*-...===
+        ***.....-.....==
+        ****...-=-.....=
+        *****.-===-.....
+        *****-=====-....
+        .***-..=====-...
+        ..*-....=====-.*
+        ..-......=====:*
+        .-==......===..:
         )"));
 }
 TEST(SVGPatternElementTests, PatternTransformWithPatternUnitsRendering) {
-  // Variant lane (doc 0031 M2.3): re-enable on Geode once the backend
-  // bug is fixed (tracked in jwmcglynn/donner#566).
-  if (ActiveRendererBackend() == RendererBackend::Geode) {
-    GTEST_SKIP() << "Known broken on Geode backend (jwmcglynn/donner#566).";
-  }
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
         <pattern id="a" patternUnits="userSpaceOnUse" width="8" height="8" patternTransform="skewX(45) scale(2)">
           <rect x="0" y="0" width="4" height="4" fill="lime" />
@@ -374,31 +359,26 @@ TEST(SVGPatternElementTests, PatternTransformWithPatternUnitsRendering) {
         )-");
 
   EXPECT_TRUE(generatedAscii.matches(R"(
-        .********.......
-        ..********......
-        ...,*******=....
-        .....********...
-        ......:*******-.
-        ........********
-        *,.......+******
-        ***........*****
-        ....========....
-        ......=======:..
-        .......========.
-        -.......-=======
-        ==........======
-        ===,.......:====
-        =====........===
-        ======........==
+        :*******:.......
+        .:*******:......
+        ..:*******:.....
+        ...:*******:....
+        ....:*******:...
+        .....:*******:..
+        ......:*******:.
+        .......:*******:
+        -=======-.......
+        .-=======-......
+        ..-=======-.....
+        ...-=======-....
+        ....-=======-...
+        .....-=======-..
+        ......-=======-.
+        .......-=======-
         )"));
 }
 
 TEST(SVGPatternElementTests, PatternTransformWithPatternUnitsAndXYRendering) {
-  // Variant lane (doc 0031 M2.3): re-enable on Geode once the backend
-  // bug is fixed (tracked in jwmcglynn/donner#566).
-  if (ActiveRendererBackend() == RendererBackend::Geode) {
-    GTEST_SKIP() << "Known broken on Geode backend (jwmcglynn/donner#566).";
-  }
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
         <pattern id="a" patternUnits="userSpaceOnUse" x="2" y="2" width="8" height="8" patternTransform="skewX(45) scale(2)">
           <rect x="0" y="0" width="4" height="4" fill="lime" />
@@ -408,22 +388,22 @@ TEST(SVGPatternElementTests, PatternTransformWithPatternUnitsAndXYRendering) {
         )-");
 
   EXPECT_TRUE(generatedAscii.matches(R"(
-        ===........=====
-        ====,.......:===
-        ======........==
-        =======........=
-        *........*******
-        **........******
-        ***=.......,****
-        *****........***
-        ******-.......:*
-        ********........
-        .+*******,......
-        ...********.....
-        ====........====
-        =====:........==
-        =======........=
-        -=======-.......
+        ====-.......-===
+        =====-.......-==
+        ======-.......-=
+        =======-.......-
+        :.......:*******
+        *:.......:******
+        **:.......:*****
+        ***:.......:****
+        ****:.......:***
+        *****:.......:**
+        ******:.......:*
+        *******:.......:
+        -.......-=======
+        =-.......-======
+        ==-.......-=====
+        ===-.......-====
         )"));
 }
 
