@@ -516,6 +516,42 @@ RendererBitmap RenderSvgString(const std::string& svg) {
   return RenderDocumentWithBackend(document, ActiveRendererBackend(), /*verbose=*/false);
 }
 
+TEST_F(RendererTests, TextPathTransformChainMatchesFlattenedTextCoordinates) {
+  const std::string transformed = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <defs>
+        <g transform="translate(50 40)">
+          <g transform="scale(2)">
+            <path id="p" d="M 0 0 L 20 0" transform="matrix(0 2 -3 0 0 0)"
+                  transform-origin="10px 0"/>
+          </g>
+        </g>
+      </defs>
+      <g transform="translate(10 5)">
+        <text transform="translate(5 15)" rotate="15" font-family="Noto Sans" font-size="12">
+          <textPath href="#p" startOffset="25%">AB</textPath>
+        </text>
+      </g>
+    </svg>
+  )svg";
+  const std::string flattened = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <defs><path id="p" d="M 10 -20 L 10 20"/></defs>
+      <g transform="translate(10 5)">
+        <text transform="translate(5 15)" rotate="15" font-family="Noto Sans" font-size="12">
+          <textPath href="#p" startOffset="25%">AB</textPath>
+        </text>
+      </g>
+    </svg>
+  )svg";
+
+  const RendererBitmap actual = RenderSvgString(transformed);
+  const RendererBitmap expected = RenderSvgString(flattened);
+  ASSERT_FALSE(actual.empty());
+  ASSERT_FALSE(expected.empty());
+  ExpectBitmapsIdentical(actual, expected, "text_path_transform_chain");
+}
+
 // Regression for issue #552: a long *acyclic* chain of `<feImage>` fragment
 // references recursed once per link in `RendererDriver::preRenderFeImageFragments`
 // - each level standing up a GPU offscreen instance - with no depth bound. The

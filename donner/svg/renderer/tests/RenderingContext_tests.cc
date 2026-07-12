@@ -14,11 +14,15 @@
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/IdComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
+#include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/parser/SVGParser.h"
+#include "donner/svg/text/TextEngine.h"
 
 using testing::ElementsAre;
+using testing::Eq;
 using testing::Gt;
+using testing::Lt;
 using testing::NotNull;
 using testing::Optional;
 
@@ -148,6 +152,46 @@ TEST_F(RenderingContextTest, FindAllIntersecting) {
 
   std::vector<Entity> hits = ctx.findAllIntersecting(Vector2d(50, 50));
   EXPECT_THAT(hits.size(), Gt(0u));
+}
+
+TEST_F(RenderingContextTest, TextPathHitTestUsesTransformedGlyphBounds) {
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <g transform="translate(50 40)">
+        <g transform="scale(2)">
+          <path id="p" d="M 0 0 L 20 0" transform="matrix(0 2 -3 0 0 0)"
+                transform-origin="10px 0" fill="none" stroke="gray"/>
+        </g>
+      </g>
+      <g transform="translate(10 5)">
+        <text id="t" transform="translate(5 15)" font-family="Noto Sans" font-size="12">
+          <textPath href="#p" startOffset="25%">AB</textPath>
+        </text>
+      </g>
+    </svg>
+  )svg");
+
+  RenderingContext ctx(document.registry());
+  ctx.instantiateRenderTree(false, warningSink_);
+
+  Registry& registry = document.registry();
+  if (!registry.ctx().contains<TextEngine>()) {
+    GTEST_SKIP() << "Text is disabled in this renderer variant";
+  }
+
+  const EntityHandle textHandle = document.querySelector("#t")->unsafeEntityHandle();
+  const EntityHandle pathHandle = document.querySelector("#p")->unsafeEntityHandle();
+  const Box2d localInkBounds = registry.ctx().get<TextEngine>().computedInkBounds(textHandle);
+  ASSERT_FALSE(localInkBounds.isEmpty());
+
+  EXPECT_THAT(ctx.getWorldBounds(pathHandle.entity()),
+              Optional(BoxEq(Vector2Near(70.0, 0.0), Vector2Near(70.0, 80.0))));
+
+  const Vector2d localCenter = (localInkBounds.topLeft + localInkBounds.bottomRight) * 0.5;
+  const Vector2d worldCenter =
+      LayoutSystem().getEntityFromWorldTransform(textHandle).transformPosition(localCenter);
+  EXPECT_THAT(worldCenter.x, testing::AllOf(Gt(20.0), Lt(40.0)));
+  EXPECT_THAT(ctx.findIntersecting(worldCenter), Eq(textHandle.entity()));
 }
 
 // --- World bounds ---
