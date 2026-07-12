@@ -1683,11 +1683,28 @@ struct RendererGeode::Impl {
     return true;
   }
 
-  /// Determine the fill rule for a stroked outline per the subpath-count
-  /// rule documented in `RendererGeode::drawPath`. Open-path strokes
-  /// produce one subpath (NonZero); closed-path strokes produce two
+  /// Determine the fill rule for a stroked outline. Each painted interval of
+  /// a valid dash pattern becomes a separate closed ribbon. Those ribbons use
+  /// NonZero so adjacent or wrapped dashes union instead of canceling their
+  /// overlaps. Invalid, oversized, and all-zero patterns fall back to solid stroking, where
+  /// open paths produce one subpath (NonZero) and closed paths produce two
   /// same-winding subpaths (EvenOdd hollow-ring semantics).
-  static FillRule strokeFillRuleFor(const Path& strokedOutline) {
+  static FillRule strokeFillRuleFor(const Path& strokedOutline, const StrokeStyle& strokeStyle) {
+    if (!strokeStyle.dashArray.empty() &&
+        strokeStyle.dashArray.size() <= StrokeStyle::kMaxDashEntries) {
+      double dashSum = 0.0;
+      for (double dash : strokeStyle.dashArray) {
+        if (!std::isfinite(dash) || dash < 0.0) {
+          dashSum = 0.0;
+          break;
+        }
+        dashSum += dash;
+      }
+      if (std::isfinite(dashSum) && dashSum > 0.0) {
+        return FillRule::NonZero;
+      }
+    }
+
     size_t subpathCount = 0;
     for (const auto& cmd : strokedOutline.commands()) {
       if (cmd.verb == Path::Verb::MoveTo) {
@@ -1718,7 +1735,7 @@ struct RendererGeode::Impl {
           cache.strokeSlot.reset();
           return result;  // strokedPath stays null.
         }
-        const FillRule fillRule = strokeFillRuleFor(stroked);
+        const FillRule fillRule = strokeFillRuleFor(stroked, strokeStyle);
         device->countPathEncode();
         geode::EncodedPath encoded = geode::GeodePathEncoder::encode(stroked, fillRule);
         // GCC 14 libstdc++ rejects `.emplace()` here with "is_constructible_v<StrokeSlot> was not
@@ -1752,7 +1769,7 @@ struct RendererGeode::Impl {
       return result;
     }
     result.strokedPath = &strokeScratchPath;
-    result.fillRule = strokeFillRuleFor(strokeScratchPath);
+    result.fillRule = strokeFillRuleFor(strokeScratchPath, strokeStyle);
     return result;
   }
 
@@ -3885,7 +3902,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
         // not a hardcoded NonZero -- see RendererGeode::drawPath's stroke notes.
         const Path stroked = placed.strokeToFill(*strokeStyle);
         if (!stroked.empty()) {
-          const FillRule strokeRule = Impl::strokeFillRuleFor(stroked);
+          const FillRule strokeRule = Impl::strokeFillRuleFor(stroked, *strokeStyle);
           if (strokeIsGradient) {
             // Gradient stroke: resolve against the text bbox (the *original*
             // geometry, per SVG), fill the stroked outline.
@@ -3981,7 +3998,8 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
         if (decoStrokeColor.has_value()) {
           const Path stroked = path.strokeToFill(*decoStrokeStyle);
           if (!stroked.empty()) {
-            impl_->encoder->fillPath(stroked, *decoStrokeColor, Impl::strokeFillRuleFor(stroked));
+            impl_->encoder->fillPath(stroked, *decoStrokeColor,
+                                     Impl::strokeFillRuleFor(stroked, *decoStrokeStyle));
           }
         }
       };
