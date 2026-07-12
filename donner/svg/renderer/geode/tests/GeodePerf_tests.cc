@@ -187,8 +187,7 @@ TEST_F(GeodePerfTest, SimpleShapes_BaselineCeilings) {
   //   M1.f.1 (uniforms):  bufferCreates=5 (4 arenas + 1 readback,
   //                       arenas lazily grown - some frames only
   //                       touch 3 arenas)
-  //   M4.2 (device dummies + pool): textureCreates=2 (target + MSAA
-  //                       pair, fresh on first frame; repeat-render
+  //   M4.2 (device dummies + pool): target fresh on first frame; repeat-render
   //                       is 0, see `*_ZeroTextures` tests below).
   //   M6 instrumentation: drawCalls=3 (one per solid fill),
   //                       pipelineSwitches=1 (solid pipeline only).
@@ -198,7 +197,7 @@ TEST_F(GeodePerfTest, SimpleShapes_BaselineCeilings) {
   // uniform, so first-frame arena growth costs a few more buffer creates.
   EXPECT_LE(c.bufferCreates, 12u);
   EXPECT_LE(c.bindgroupCreates, 6u);  // M1.f.2: target <= #pipelines (3 today).
-  EXPECT_LE(c.textureCreates, 3u);    // Target on frame 1; 0 on repeat (sampleCount=1).
+  EXPECT_LE(c.textureCreates, 3u);    // Target on frame 1; 0 on repeat.
   EXPECT_LE(c.submits, 3u);           // M3: target = 1.
   EXPECT_LE(c.drawCalls, 4u);         // 3 shapes, one draw each.
   EXPECT_LE(c.pipelineSwitches, 2u);  // Solid pipeline bound once.
@@ -233,8 +232,7 @@ TEST_F(GeodePerfTest, Moderate_BaselineCeilings) {
   //                   their own arenas - 3×3 + 1 readback.)
   //   M3 (shared CE): bufferCreates=10 submits=2 textureCreates=10
   //                   (push/pop no longer forces a queue submit)
-  //   M4.2 (device dummies + pool): textureCreates=4 on frame 1
-  //                   (target+MSAA + layer+MSAA), 0 on repeat.
+  //   M4.2 (device dummies + pool): target + layer on frame 1, 0 on repeat.
   //   M6 instrumentation: drawCalls=2 (solid fill + gradient fill),
   //                   pipelineSwitches=~3 (solid for layer, image
   //                   blit on layer composite, gradient for rect).
@@ -287,8 +285,7 @@ TEST_F(GeodePerfTest, Lion_BaselineCeilings) {
   //   M1.f.1 (uniforms):  bufferCreates=6 (4 arenas + 2 dummies +
   //                       readback; 98.9% total drop from M0)
   //   bindgroupCreates=132 (one per draw; M1.f.2 collapses to ~1).
-  //   M4.2 (device dummies + pool): textureCreates=2 on frame 1
-  //                       (target + MSAA); 0 on repeat.
+  //   M4.2 (device dummies + pool): target on frame 1; 0 on repeat.
   //   M6 instrumentation: drawCalls=132 (one per path),
   //                       pipelineSwitches=1 (solid pipeline only -
   //                       all of Lion is solid-fill). M6 Bullet 2
@@ -578,8 +575,8 @@ TEST_F(GeodePerfTest, GhostscriptTiger_NoDirtyPath_ZeroEncodes) {
 // Milestone 4.2: Transient render-target pool - zero-alloc repeat render.
 //
 // Per design doc 0030 §M4.2: a size-keyed free list for layer / filter /
-// mask / clip-mask scratch textures. Combined with M4.1 (target + MSAA
-// reuse) and the per-encoder persistent dummy texture (M1), a repeat
+// mask / clip-mask scratch textures. Combined with M4.1 target reuse and
+// the per-encoder persistent dummy texture (M1), a repeat
 // render of the same document at the same size should allocate zero
 // textures on frame 2.
 // ---------------------------------------------------------------------------
@@ -591,7 +588,7 @@ TEST_F(GeodePerfTest, SimpleShapes_NoDirtyPath_ZeroTextures) {
   const geode::GeodeCounters c = countersForSecondRender(kSimpleShapesSvg, device);
   printCounters("SimpleShapes_NoDirtyPath_ZeroTextures (frame2)", c);
 
-  // Exercises only the main target / MSAA pair; no isolated layers.
+  // Exercises only the main target; no isolated layers.
   // Any texture allocation here means M4.1 regressed or a dummy is
   // leaking per-frame.
   EXPECT_EQ(c.textureCreates, 0u)
@@ -608,8 +605,7 @@ TEST_F(GeodePerfTest, Moderate_NoDirtyPath_ZeroTextures) {
 
   // Moderate fixture has `<path opacity="0.8">` which triggers a
   // `pushIsolatedLayer` / `popIsolatedLayer` round-trip per frame. The
-  // layer allocates an RGBA8 resolve + 4× MSAA companion - M4.2 must
-  // pool and reuse both.
+  // layer allocates an RGBA8 target that M4.2 must pool and reuse.
   EXPECT_EQ(c.textureCreates, 0u) << "Isolated-layer texture leak on unchanged second render. "
                                      "Layer push/pop should draw from the M4.2 texture pool.";
 }
@@ -654,7 +650,7 @@ TEST_F(GeodePerfTest, GhostscriptTiger_NoDirtyPath_ZeroTextures) {
 // The original fix (moving pipeline ownership onto `GeodeDevice`) was
 // worth ~1.6 MB per renderer across the resvg test suite. This test
 // pins the contract: a fresh renderer may allocate a handful of bucket-
-// sized resources (target + MSAA pair go into the per-instance pool,
+// sized resources (the target goes into the per-instance pool,
 // plus a readback buffer for `takeSnapshot`), but every *pipeline*
 // lives on the device. Doubling the renderer count therefore roughly
 // doubles textures/buffers, not pipelines - and the per-renderer
@@ -685,17 +681,16 @@ TEST_F(GeodePerfTest, SharedDevice_RendererConstructionDoesNotLeakPipelines) {
 
   // `renderAndGetCounters` constructs one renderer, renders one frame,
   // and takes a snapshot. Per iteration that legitimately creates:
-  //   - target + MSAA pair (2 textures on the MSAA path; 1 on the
-  //     alpha-coverage fallback for Intel + Vulkan)
+  //   - one render target
   //   - a readback buffer inside `takeSnapshot`
   //   - ~4 arena buffers for the vertex/band/curve/uniform data of
   //     the three solid fills in `kSimpleShapesSvg`
   // Budget liberally: 4 textures and 8 buffers per iteration absorbs
-  // both paths plus a little slack. Anything larger than that means
+  // a little slack. Anything larger than that means
   // something new is being allocated per-renderer - most likely a
   // pipeline, which is exactly what this test guards against.
   EXPECT_LE(deltaTex, 4u * kRendererCount) << "Per-renderer texture growth exceeds expected "
-                                              "(target + MSAA + slack). Did pipeline construction "
+                                              "(target + slack). Did pipeline construction "
                                               "move back onto `RendererGeode::Impl`?";
   // 0041 analytic dual-ray fill adds 4 read-only SSBO arenas per encoder
   // (vBands/vCurves/hBandGrid/vBandGrid), so per-renderer first-frame arena
@@ -704,12 +699,9 @@ TEST_F(GeodePerfTest, SharedDevice_RendererConstructionDoesNotLeakPipelines) {
                                                "(arenas + readback + slack). See issue #575.";
 }
 
-TEST_F(GeodePerfTest, TextureSnapshotStressReleasesMsaaTargets) {
+TEST_F(GeodePerfTest, TextureSnapshotStressReleasesTargets) {
   auto device = sharedDevice();
   ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
-  if (device->sampleCount() <= 1u) {
-    GTEST_SKIP() << "MSAA target leak regression only applies when Geode allocates MSAA targets.";
-  }
 
   ParseWarningSink sink = ParseWarningSink::Disabled();
   auto parsed = parser::SVGParser::ParseSVG(kSimpleShapesSvg, sink);
@@ -727,18 +719,13 @@ TEST_F(GeodePerfTest, TextureSnapshotStressReleasesMsaaTargets) {
     ASSERT_NE(snapshot, nullptr);
     snapshot.reset();
     device->drainDeferredDestroys();
+
+    const uint64_t textureReleaseDelta =
+        geode::ScopedWgpuHandle<wgpu::Texture>::releaseCountForTesting() - textureReleasesBefore;
+    EXPECT_GE(textureReleaseDelta, static_cast<uint64_t>(frame + 1))
+        << "Texture snapshot frame " << frame
+        << " did not release its transferred single-sample target.";
   }
-
-  const uint64_t textureReleaseDelta =
-      geode::ScopedWgpuHandle<wgpu::Texture>::releaseCountForTesting() - textureReleasesBefore;
-
-  // Each texture-snapshot frame creates two owned render targets on the MSAA path:
-  // the resolved target transferred to the snapshot and the MSAA attachment used
-  // only while rendering. The pre-fix code released only the snapshot target;
-  // the raw `msaaTarget` handle was overwritten on the next frame.
-  EXPECT_GE(textureReleaseDelta, static_cast<uint64_t>(kFrameCount * 2))
-      << "Repeated texture snapshots should release both resolved and MSAA targets. "
-         "A lower count means the MSAA target is still being overwritten as a raw handle.";
 }
 
 // ---------------------------------------------------------------------------

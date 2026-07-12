@@ -121,8 +121,8 @@ This design proposes a second responsiveness pass:
   - [ ] Add memory caps, LRU eviction, and stale-but-coherent fallback rules.
 - [ ] **M7: Geode-rendered source-pane flair and UI chrome.**
   - [x] Render selection/path chrome through `OverlayRenderer` + `RendererGeode` directly into the
-        editor framebuffer after ImGui submits the editor draw data. This path uses a single-sample
-        alpha-coverage Geode device and `LoadOp::Load`, so it appends to the swapchain instead of
+        editor framebuffer after ImGui submits the editor draw data. This path uses Geode's direct
+        single-sample target and `LoadOp::Load`, so it appends to the swapchain instead of
         allocating an overlay texture or re-tessellating curves through ImGui.
   - [ ] Move source-reference ropes from ImGui path commands to a clipped Geode screen-space chrome
         layer. Keep the existing ImGui hit testing and tooltips as invisible interaction owners.

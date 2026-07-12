@@ -40,12 +40,11 @@ donner::geode::GeodeEmbedConfig config;
 config.device = hostDevice;        // wgpu::Device, must not be null.
 config.queue = hostQueue;          // wgpu::Queue, must not be null.
 config.textureFormat = wgpu::TextureFormat::BGRA8Unorm;  // match your target.
-config.adapter = hostAdapter;      // optional; enables hardware workarounds.
+config.adapter = hostAdapter;      // optional; retained for adapter metadata queries.
 ```
 
-The `adapter` field is optional. When supplied it lets Geode probe for the
-Intel Arc + Vulkan MSAA bug and fall back to alpha-coverage AA; when left
-null, Geode assumes the host has already chosen a safe configuration.
+The `adapter` field is optional. When supplied, Geode preserves it for callers
+that need metadata about the adapter associated with the external device.
 
 ### 2. Construct a non-owning `GeodeDevice`
 
@@ -110,7 +109,7 @@ path.
 | `usage` includes `wgpu::TextureUsage::RenderAttachment` | Geode draws into the texture via a render pass. |
 | `format` matches `GeodeEmbedConfig::textureFormat` | The internal pipelines are built against a single color format. |
 | `usage` includes `wgpu::TextureUsage::CopySrc` | Only needed for `RendererGeode::takeSnapshot()`; omit otherwise. |
-| `sampleCount` is 1 | Geode resolves MSAA internally before writing to the host target. |
+| `sampleCount` is 1 | Geode renders directly into a single-sample target. |
 
 If the format doesn't match, Geode will reject the texture at `beginFrame`
 time and fall back to its internal offscreen target for that frame.

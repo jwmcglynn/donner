@@ -95,9 +95,8 @@ struct alignas(16) Uniforms {
   // as 4 edge half-planes, one per side, in VIEWPORT-PIXEL space. Each
   // edge is `(a, b, c)` such that `a*x + b*y + c >= 0` marks the inside
   // half-plane (the normal `(a, b)` points into the clipped region).
-  // The fragment shader AND's these half-plane tests into its
-  // `sample_mask` output so the clip integrates with the per-sample
-  // MSAA coverage path. Used by `RendererGeode::pushClip` for
+  // The fragment shader discards fragments outside these half-planes.
+  // Used by `RendererGeode::pushClip` for
   // transformed rectangular viewports (`<symbol>` / `<use>` /
   // `<svg>` viewports with a non-axis-aligned transform) where the
   // true clip shape is a parallelogram that WebGPU's rectangular
@@ -491,22 +490,13 @@ struct GeoEncoder::Impl {
     pass.get().draw(static_cast<uint32_t>(encoded.quadVertices.size()), 1, 0, 0);
     device->countDraw();
   }
-  // When sampleCount == 4: multisampled color attachment. All draws land
-  // here and the hardware resolves into `target` at the end of each pass.
-  // When sampleCount == 1: unused (null) - draws go directly to `target`.
-  wgpu::Texture msaaTarget;
-  ScopedWgpuHandle<wgpu::TextureView> msaaTargetView;
-  // 1-sample resolve / direct-render texture. External code (image blit,
-  // readback) samples / copies from this texture, never the MSAA color.
+  // Direct-render texture. External code may sample or copy from it.
   wgpu::Texture target;
   ScopedWgpuHandle<wgpu::TextureView> targetView;
   ScopedWgpuHandle<wgpu::CommandEncoder> ownedCommandEncoder;
   wgpu::CommandEncoder commandEncoder;
   uint32_t targetWidth;
   uint32_t targetHeight;
-  // MSAA sample count from GeodeDevice. 1 = no MSAA (alpha-coverage path).
-  uint32_t sampleCount = 4;
-
   // Dummy texture / sampler resources are now owned by `GeodeDevice`
   // and shared across every GeoEncoder - see `GeodeDevice::dummyPatternTexture()`
   // and the M4.2 notes in design doc 0030. Access them via
@@ -595,8 +585,7 @@ struct GeoEncoder::Impl {
   /// of each edge of a convex 4-vertex clip polygon in VIEWPORT-PIXEL
   /// space. Each plane is `(a, b, c)` such that a fragment at
   /// `@builtin(position).xy` is inside when `a*x + b*y + c >= 0`. The
-  /// fragment shader AND's these tests into its sample_mask so the
-  /// clip integrates with per-sample MSAA coverage.
+  /// fragment shader discards fragments outside these half-planes.
   ///
   /// Set via `setClipPolygon` from `RendererGeode::pushClip` when the
   /// current clip is a rectangular viewport with a non-axis-aligned
@@ -659,20 +648,7 @@ struct GeoEncoder::Impl {
     }
     wgpu::RenderPassColorAttachment color = {};
 
-    if (sampleCount > 1) {
-      // 4× MSAA color attachment with per-pass resolve. The MSAA view is
-      // the draw target; WebGPU implicitly resolves into `targetView` at
-      // pass end. `storeOp = Store` on the MSAA attachment preserves its
-      // state for a subsequent pass (see `setLoadPreserve()` - we may
-      // reopen a pass to continue drawing on top of the previous MSAA
-      // contents, e.g., after a nested-layer composite).
-      color.view = msaaTargetView.get();
-      color.resolveTarget = targetView.get();
-    } else {
-      // 1-sample (alpha-coverage path): draw directly into the target
-      // texture - no MSAA intermediate, no hardware resolve.
-      color.view = targetView.get();
-    }
+    color.view = targetView.get();
     color.loadOp = loadPreserve ? wgpu::LoadOp::Load : wgpu::LoadOp::Clear;
     color.storeOp = wgpu::StoreOp::Store;
     color.clearValue = clearColor;
@@ -791,24 +767,15 @@ struct GeoEncoder::Impl {
 void GeoEncoder::initImpl(GeoEncoder::Impl& impl, GeodeDevice& device,
                           const GeodePipeline& fillPipeline,
                           const GeodeGradientPipeline& gradientPipeline,
-                          const GeodeImagePipeline& imagePipeline, const wgpu::Texture& msaaTarget,
-                          const wgpu::Texture& resolveTarget) {
+                          const GeodeImagePipeline& imagePipeline, const wgpu::Texture& target) {
   impl.device = &device;
   impl.pipeline = &fillPipeline;
   impl.gradientPipeline = &gradientPipeline;
   impl.imagePipeline = &imagePipeline;
-  impl.sampleCount = device.sampleCount();
-  impl.target = resolveTarget;
-  impl.targetView.reset(resolveTarget.createView());
-  impl.targetWidth = resolveTarget.getWidth();
-  impl.targetHeight = resolveTarget.getHeight();
-
-  if (impl.sampleCount > 1) {
-    impl.msaaTarget = msaaTarget;
-    impl.msaaTargetView.reset(msaaTarget.createView());
-  }
-  // When sampleCount == 1 the msaaTarget / msaaTargetView stay null -
-  // ensurePassOpen renders directly into targetView with no resolve.
+  impl.target = target;
+  impl.targetView.reset(target.createView());
+  impl.targetWidth = target.getWidth();
+  impl.targetHeight = target.getHeight();
 }
 
 // Post-init: configure per-draw arenas. Runs once `commandEncoder`
@@ -843,11 +810,9 @@ void GeoEncoder::finalizeImpl(GeoEncoder::Impl& impl) {
 
 GeoEncoder::GeoEncoder(GeodeDevice& device, const GeodePipeline& fillPipeline,
                        const GeodeGradientPipeline& gradientPipeline,
-                       const GeodeImagePipeline& imagePipeline, const wgpu::Texture& msaaTarget,
-                       const wgpu::Texture& resolveTarget)
+                       const GeodeImagePipeline& imagePipeline, const wgpu::Texture& target)
     : impl_(std::make_unique<Impl>()) {
-  initImpl(*impl_, device, fillPipeline, gradientPipeline, imagePipeline, msaaTarget,
-           resolveTarget);
+  initImpl(*impl_, device, fillPipeline, gradientPipeline, imagePipeline, target);
 
   wgpu::CommandEncoderDescriptor desc = {};
   desc.label = wgpuLabel("GeoEncoder");
@@ -860,12 +825,10 @@ GeoEncoder::GeoEncoder(GeodeDevice& device, const GeodePipeline& fillPipeline,
 
 GeoEncoder::GeoEncoder(GeodeDevice& device, const GeodePipeline& fillPipeline,
                        const GeodeGradientPipeline& gradientPipeline,
-                       const GeodeImagePipeline& imagePipeline, const wgpu::Texture& msaaTarget,
-                       const wgpu::Texture& resolveTarget,
+                       const GeodeImagePipeline& imagePipeline, const wgpu::Texture& target,
                        wgpu::CommandEncoder sharedCommandEncoder)
     : impl_(std::make_unique<Impl>()) {
-  initImpl(*impl_, device, fillPipeline, gradientPipeline, imagePipeline, msaaTarget,
-           resolveTarget);
+  initImpl(*impl_, device, fillPipeline, gradientPipeline, imagePipeline, target);
   impl_->commandEncoder = std::move(sharedCommandEncoder);
   impl_->ownsCommandEncoder = false;
   finalizeImpl(*impl_);
@@ -985,8 +948,8 @@ void GeoEncoder::clearClipPolygon() {
 // Phase 3b: clip mask pass
 // ============================================================================
 
-void GeoEncoder::beginMaskPass(const wgpu::Texture& msaaMask, const wgpu::Texture& resolveMask) {
-  if (!resolveMask || (impl_->sampleCount > 1 && !msaaMask)) {
+void GeoEncoder::beginMaskPass(const wgpu::Texture& mask) {
+  if (!mask) {
     return;
   }
 
@@ -1012,17 +975,10 @@ void GeoEncoder::beginMaskPass(const wgpu::Texture& msaaMask, const wgpu::Textur
 
   impl_->maskPassSavedTransform = impl_->transform;
 
-  wgpu::TextureView resolveView = impl_->transientResources.retain(resolveMask.createView());
+  wgpu::TextureView maskView = impl_->transientResources.retain(mask.createView());
 
   wgpu::RenderPassColorAttachment color = {};
-  if (impl_->sampleCount > 1) {
-    wgpu::TextureView msaaView = impl_->transientResources.retain(msaaMask.createView());
-    color.view = msaaView;
-    color.resolveTarget = resolveView;
-  } else {
-    // 1-sample path: draw directly into the resolve texture.
-    color.view = resolveView;
-  }
+  color.view = maskView;
   color.loadOp = wgpu::LoadOp::Clear;
   color.storeOp = wgpu::StoreOp::Store;
   color.clearValue = {0.0, 0.0, 0.0, 0.0};

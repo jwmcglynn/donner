@@ -105,37 +105,12 @@ directly (`GeodeGolden`/`TinyGolden`); geode-vs-tiny parity comparison was retir
   sample pattern or analytic glyph AA" follow-up. Text parity with
   tiny-skia is tracked in [0038](0038-geode_tinyskia_text_parity.md)
   (0 structural divergences remaining).
-- **Real-GPU verification (2026-04-17)**: 🚧 first run on real hardware,
-  plus a targeted fallback shader path for Intel+Vulkan. Added
-  adapter-info logging to `GeodeDevice::CreateHeadless` (commit
-  `5f6ac7d4`). On Intel Arc A380 (DG2) with Mesa 25.2.8 Xe-KMD Vulkan
-  the smoke test (`GeodeDevice.CanExecuteClearAndReadback`) and
-  `DrawPathWithSolidFill` pass, but any path with `bandCount >= 2`
-  hung indefinitely due to a Mesa ANV driver bug in
-  `@builtin(sample_mask)` output when two fragment invocations at the
-  same pixel both write it (exactly the Slug half-pixel band overlap).
-  Experimentally confirmed: the same tests pass under Mesa llvmpipe,
-  proving Geode's pipeline is correct. #536 ships three alpha-coverage
-  WGSL shader variants (`slug_fill_alpha_coverage.wgsl`,
-  `slug_gradient_alpha_coverage.wgsl`, `slug_mask_alpha_coverage.wgsl`)
-  vendor-gated on `vendorID == 0x8086 && backendType == Vulkan`. Mesa
-  25.3 upstream fix exists; once CI Mesa crosses that version, the
-  fallback can be deleted. Known follow-up (issue #537): band-boundary
-  pixels in the alpha-coverage fallback lose coverage — cosmetic AA
-  artifact on the Intel-Vulkan path only, does not affect default
-  MSAA + sample_mask rendering.
-  **1-sample alpha-coverage variant**: When `useAlphaCoverageAA` is
-  active, all pipelines run at `sampleCount = 1` (no MSAA texture, no
-  hardware resolve). The alpha-coverage shaders compute 4-sample
-  supersampling in the fragment shader and fold coverage into alpha, so
-  hardware MSAA is unnecessary overhead. `GeodeDevice::sampleCount()`
-  returns 1 on the alpha-coverage path, 4 otherwise; all pipeline
-  constructors, `GeoEncoder`, and `RendererGeode` MSAA-texture
-  allocations gate on this value. Note: a separate class of
-  non-deterministic GPU hangs (~20% per-submission) remains on
-  Arc A380 + Mesa ANV 25.2.8 — these affect even empty render passes
-  (clear + readback, no shader execution) and are a driver/hardware
-  bug independent of MSAA or shader variant.
+- **Real-GPU verification**: Geode logs adapter information and uses the
+  same single-sample analytic dual-ray shaders on every backend. The Intel
+  Vulkan fallback shaders and all hardware-MSAA target/resolve plumbing are
+  deleted. Intel Arc validation still needs to cover the driver independently:
+  Mesa ANV 25.2.8 exhibited non-deterministic hangs even for empty render
+  passes, outside shader execution.
 
 
 ## Summary
@@ -673,44 +648,20 @@ dilation, handling non-uniform scaling and skew correctly.
 
 #### Fragment Shader: Winding Number Evaluation
 
-The fragment shader is intentionally simple — Slug's decade of production use showed that
-shader simplicity (fewer branches, bounded loops, no bidirectional rays) consistently
-outperforms more complex variants due to reduced divergence:
+The fragment shader evaluates Slug analytic dual-ray coverage:
 
 ```
-For each of 4 sub-pixel sample offsets (D3D-style rotated grid):
-  If the sample's y is outside this band's [yMin, yMax) → skip.
-  For each curve in this band's curve list:
-      1. Compute ray-curve intersection roots
-      2. Apply root eligibility test (filters out tangent touches,
-         endpoints already counted by adjacent curves, and numerical noise)
-      3. Accumulate winding number contribution (+1 or -1 per valid crossing)
-  Apply fill rule to winding number → binary inside/outside.
-  Set bit N of `@builtin(sample_mask)` if this sample is inside.
-
-If the sample_mask is zero (no sample inside) → discard.
-Write the full paint color (solid, gradient sample, or pattern sample) to
-the color attachment; the hardware gates per-sample writes by sample_mask,
-and the 4× MSAA resolve at pass end averages the surviving samples into
-the 1-sample resolve target.
+Look up the horizontal and vertical bands from the fragment position.
+Accumulate signed analytic coverage along both rays.
+Combine the two rays using Slug's weighted coverage equation.
+Multiply premultiplied paint by that scalar coverage.
+Write directly to the single-sample target.
 ```
 
-**4× MSAA with fragment-shader sample_mask.** Geode's render targets are a
-(4× multisample color attachment, 1-sample resolve target) pair. The Slug
-fragment shader runs once per pixel but evaluates the winding test at four
-sub-pixel offsets, packing the results into `@builtin(sample_mask)` so the
-hardware selects which samples receive the write. This gives fractional
-edge coverage that closely matches tiny-skia's 16× supersampled
-scan-converter while keeping the per-pixel winding loop count the same
-order as naive single-sample shading.
-
-The pixel-center band-Y discard is deliberately dropped in favor of a
-per-sample band-Y check inside the sample_mask loop: adjacent band
-fragment invocations own disjoint sample sets at band overlap boundaries,
-so there is neither double coverage (from the dilated band quads
-overlapping) nor a missing-coverage gap (from the earlier pixel-center
-discard throwing away a fragment whose sub-pixel samples still belonged
-to that band).
+One whole-path bounding quad produces at most one fragment per pixel. Dense
+horizontal and vertical band grids provide the curves needed by that fragment,
+so band-boundary overlap cannot create non-additive coverage writes. See
+[0041](0041-geode_analytical_aa.md) for the coverage equation and deletion gates.
 
 **Robustness guarantee:** The root eligibility method ensures deterministic winding numbers
 regardless of floating-point precision. This is the one algorithm component that has remained
@@ -1407,9 +1358,8 @@ cleanup.
   transformed viewport, not the true parallelogram. `GeoEncoder` now
   accepts `setClipPolygon(corners[4])` / `clearClipPolygon()`, uploads
   4 inward half-planes through the `Uniforms` / `GradientUniforms`
-  blocks, and the fragment shader ANDs a per-sample half-plane test
-  into its `@builtin(sample_mask)` so the clip integrates with the 4×
-  MSAA coverage path. `RendererGeode::pushClip` detects non-axis-
+  blocks, and the fragment shader rejects positions outside any
+  half-plane. `RendererGeode::pushClip` detects non-axis-
   aligned transforms via the 2×2 linear part and pushes the 4
   transformed corners alongside the existing scissor AABB. Re-enables
   `structure/symbol/with-transform-on-use{,-no-size}` on the Geode
@@ -1419,8 +1369,8 @@ cleanup.
   `clip-path` references are now honoured. `GeoEncoder` gains a
   `beginMaskPass` / `fillPathIntoMask` / `endMaskPass` /
   `setClipMask` / `clearClipMask` API. A new `GeodeMaskPipeline`
-  + `shaders/slug_mask.wgsl` renders clip paths into a 4× MSAA
-  R8Unorm target that resolves to a 1-sample R8Unorm texture; the
+  + `shaders/slug_mask.wgsl` renders clip paths directly into a
+  single-sample RGBA8Unorm texture; the
   main fill + gradient pipelines gain an extra texture+sampler
   binding and their fragment shaders sample `mask.r` at each pixel
   center and multiply it into the output colour. A 1x1 dummy R8

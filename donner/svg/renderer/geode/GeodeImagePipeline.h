@@ -38,10 +38,8 @@ public:
    * @param device The WebGPU device.
    * @param colorFormat The pixel format of the render target this pipeline
    *   will draw into. Must match the target texture's format at draw time.
-   * @param sampleCount MSAA sample count (1 for alpha-coverage, 4 otherwise).
    */
-  GeodeImagePipeline(const wgpu::Device& device, wgpu::TextureFormat colorFormat,
-                     uint32_t sampleCount = 4);
+  GeodeImagePipeline(const wgpu::Device& device, wgpu::TextureFormat colorFormat);
 
   ~GeodeImagePipeline() = default;
   GeodeImagePipeline(const GeodeImagePipeline&) = delete;

@@ -18,8 +18,8 @@ consistent with Donner's composited-editor targets (`DragFrameOverhead` budgets
 in 0025) and unblock Phase 5 of 0017.
 
 Scope: Geode only (`donner/svg/renderer/geode/**`, `RendererGeode.{cc,h}`).
-Boundary: no pipeline algorithm changes (Slug stays Slug; the analytic
-dual-ray coverage fill at `sampleCount == 1` from 0041 stays as-is; WGSL
+Boundary: no pipeline algorithm changes (Slug stays Slug; the single-sample
+analytic dual-ray coverage fill from 0041 stays as-is; WGSL
 stays stable). This is a wiring/caching/batching design, not a new rendering
 algorithm.
 
@@ -315,7 +315,7 @@ algorithm.
     only recreates when the new viewport size differs. The
     `CountersResetBetweenFrames` test gates this with
     `EXPECT_LT(secondCounters.textureCreates, firstCounters.textureCreates)`.
-  - [x] M4.2: exact-size `(width, height, format, sampleCount, usage)`
+  - [x] M4.2: exact-size `(width, height, format, usage)`
     pool on `RendererGeode::Impl` covering `pushIsolatedLayer` /
     `popIsolatedLayer` (including the mix-blend-mode `dstSnapshot`),
     `pushFilterLayer` / `popFilterLayer`, `pushMask` / `popMask`, and
@@ -579,9 +579,9 @@ entities`) and bullet 2 (`Implement cache invalidation via dirty flags`).
 ### Single-encoder frames + render-target pool
 
 `RendererGeode::beginFrame` creates one `CommandEncoder`; all draws,
-layer blits, filter passes, mask passes, and the final resolve go into
+layer blits, filter passes, mask passes, and the final target writes go into
 that encoder, submitted once at `endFrame`. Layer textures come from
-a `GeodeTexturePool` keyed on `(bucket_w, bucket_h, format, sampleCount)`.
+a `GeodeTexturePool` keyed on `(bucket_w, bucket_h, format, usage)`.
 Pool size capped in `GeodeConfig`; overflow falls back to per-use
 createTexture.
 
@@ -891,6 +891,5 @@ and pattern residence (Moderate's residual, and any gradient-heavy scene);
 (2) route the per-blit composite uniform through resident/pooled storage;
 (3) suballocate resident slots from a shared arena to cut frame-1
 `bufferCreates`; (4) wave-1 carryovers still open - snapshot readback
-`submits` 2 -> 1, band-curve duplication in the vertical SSBO,
-`<use>`-instancing widening, and removing the vestigial
-`useAlphaCoverageAA_` flag (sample count is always 1).
+`submits` 2 -> 1, band-curve duplication in the vertical SSBO, and
+`<use>`-instancing widening.

@@ -109,6 +109,10 @@ TEST(GeodePathEncoder, LargePathMultipleBands) {
   // 500px / 32px per band ≈ 16 bands.
   EXPECT_GT(encoded.bands.size(), 1u);
   EXPECT_LE(encoded.bands.size(), 256u);  // Within max band limit.
+
+  // Multi-band paths still draw one whole-path quad. Multiple quads would
+  // reintroduce non-additive source-over coverage at band boundaries.
+  EXPECT_EQ(encoded.quadVertices.size(), 6u);
 }
 
 TEST(GeodePathEncoder, BandsCoverFullHeight) {

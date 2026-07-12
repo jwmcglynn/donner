@@ -202,9 +202,7 @@ public:
    *
    * This is for embedded append passes: the host has already rendered into the
    * target texture, and Geode should draw additional renderer primitives on top
-   * instead of clearing the texture. Use this only with a single-sample
-   * alpha-coverage Geode device; preserving an existing single-sample
-   * swapchain image is incompatible with Geode's normal MSAA resolve target.
+   * instead of clearing the texture.
    *
    * @param preserve True to use `LoadOp::Load` for the first render pass.
    */
