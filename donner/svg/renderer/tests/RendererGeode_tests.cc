@@ -680,6 +680,31 @@ TEST_F(RendererGeodeTest, StrokeSharedVertexDoesNotExtendVertically) {
         << "Stroke must not extend vertically above the shared vertex at y=" << y;
   }
 }
+/// Dash patterns beyond `Path::strokeToFill`'s allocation guardrail fall back to a solid stroke.
+/// The closed-path outline must retain EvenOdd semantics so its interior remains hollow.
+TEST_F(RendererGeodeTest, OversizedDashArrayPreservesSolidStrokeFallback) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  renderer.setPaint(solidStroke(css::RGBA(255, 0, 0, 255)));
+  StrokeParams stroke;
+  stroke.strokeWidth = 4.0;
+  stroke.dashArray.assign(257, 1.0);
+
+  PathShape shape;
+  shape.path = PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build();
+  shape.fillRule = FillRule::NonZero;
+  renderer.drawPath(shape, stroke);
+
+  renderer.endFrame();
+
+  const RendererBitmap snapshot = renderer.takeSnapshot();
+  ASSERT_FALSE(snapshot.empty());
+  EXPECT_THAT(pixelAt(snapshot, 32, 16), RgbaEq(255, 0, 0, 255))
+      << "oversized dash fallback should retain the solid stroke band";
+  EXPECT_THAT(pixelAt(snapshot, 32, 32), IsTransparent())
+      << "oversized dash fallback must not fill the closed stroke interior";
+}
 
 /// Fill and stroke together: interior should be the fill color, the stroke
 /// ring around the edge should be the stroke color.

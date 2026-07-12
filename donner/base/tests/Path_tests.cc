@@ -2077,15 +2077,18 @@ TEST(Path, StrokeToFillZeroLengthSubpathCaps) {
 }
 
 TEST(Path, StrokeToFillDashOversizedPatternFallsBackToSolid) {
-  Path path = PathBuilder().moveTo({0, 0}).lineTo({100, 0}).build();
+  Path path = PathBuilder().addRect(Box2d({0, 0}, {100, 100})).build();
   StrokeStyle style;
-  style.width = 1.0;
+  style.width = 10.0;
   style.dashArray.assign(257, 1.0);
 
-  Path filled = path.strokeToFill(style);
+  const Path filled = path.strokeToFill(style);
+  style.dashArray.clear();
+  const Path solid = path.strokeToFill(style);
 
-  EXPECT_FALSE(filled.empty());
-  EXPECT_EQ(countSubpaths(filled), 1u);
+  ASSERT_FALSE(filled.empty());
+  EXPECT_EQ(filled, solid) << "an oversized dash pattern must retain the exact solid outline";
+  EXPECT_EQ(countSubpaths(filled), 2u);
 }
 
 TEST(Path, StrokeToFillDashSkipsZeroLengthSegments) {
