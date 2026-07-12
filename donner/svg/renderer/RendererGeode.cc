@@ -3862,6 +3862,8 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
       continue;  // Nothing to fill, stroke, or decorate.
     }
 
+    std::vector<Path> runGlyphPaths;
+    runGlyphPaths.reserve(run.glyphs.size());
     for (const auto& glyph : run.glyphs) {
       if (glyph.glyphIndex == 0) {
         continue;  // `.notdef` -- skip to match tiny-skia.
@@ -3879,44 +3881,70 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
         continue;
       }
 
-      if (fillIsGradient) {
-        // Gradient fill on text: resolve the gradient against the text bbox
-        // (the gradient *geometry*), fill the glyph outline (the *draw* path).
-        impl_->drawPaintedPathAgainst(textBoundsPath, placed, fillServer, fillOpacity,
-                                      FillRule::NonZero);
-      } else if (usePatternFill) {
-        // Fill the glyph outline with the staged pattern tile, same as a
-        // pattern-filled `<path>` (see Impl::fillResolved). The glyph path is
-        // already in the element's local space and `deviceFromLocalTransform`
-        // is set above, so `buildPatternPaint` composes the right sample space.
-        impl_->syncTransform();
-        impl_->encoder->fillPathPattern(
-            placed, FillRule::NonZero,
-            impl_->buildPatternPaint(*impl_->patternFillPaint, impl_->paint.fillOpacity));
-      } else if (hasFill) {
-        impl_->encoder->fillPath(placed, spanFill, FillRule::NonZero);
+      runGlyphPaths.push_back(placed);
+    }
+
+    const auto drawRunFill = [&]() {
+      for (const Path& placed : runGlyphPaths) {
+        if (fillIsGradient) {
+          // Gradient fill on text: resolve the gradient against the text bbox
+          // (the gradient *geometry*), fill the glyph outline (the *draw* path).
+          impl_->drawPaintedPathAgainst(textBoundsPath, placed, fillServer, fillOpacity,
+                                        FillRule::NonZero);
+        } else if (usePatternFill) {
+          // Fill the glyph outline with the staged pattern tile, same as a
+          // pattern-filled `<path>` (see Impl::fillResolved). The glyph path is
+          // already in the element's local space and `deviceFromLocalTransform`
+          // is set above, so `buildPatternPaint` composes the right sample space.
+          impl_->syncTransform();
+          impl_->encoder->fillPathPattern(
+              placed, FillRule::NonZero,
+              impl_->buildPatternPaint(*impl_->patternFillPaint, impl_->paint.fillOpacity));
+        } else if (hasFill) {
+          impl_->encoder->fillPath(placed, spanFill, FillRule::NonZero);
+        }
       }
-      if (hasStrokePaint) {
-        // Closed glyph contours expand to same-winding outer+inner subpaths, so
-        // the stroked outline needs `strokeFillRuleFor` (EvenOdd for the ring),
-        // not a hardcoded NonZero -- see RendererGeode::drawPath's stroke notes.
-        const Path stroked = placed.strokeToFill(*strokeStyle);
-        if (!stroked.empty()) {
-          const FillRule strokeRule = Impl::strokeFillRuleFor(stroked, *strokeStyle);
-          if (strokeIsGradient) {
-            // Gradient stroke: resolve against the text bbox (the *original*
-            // geometry, per SVG), fill the stroked outline.
-            impl_->drawPaintedPathAgainst(textBoundsPath, stroked, *strokeServer, strokeOpacity,
-                                          strokeRule);
-          } else if (usePatternStroke) {
-            impl_->syncTransform();
-            impl_->encoder->fillPathPattern(
-                stroked, strokeRule,
-                impl_->buildPatternPaint(*impl_->patternStrokePaint, strokeOpacity));
-          } else {
-            impl_->encoder->fillPath(stroked, *strokeColor, strokeRule);
+    };
+    const auto drawRunStroke = [&]() {
+      for (const Path& placed : runGlyphPaths) {
+        if (hasStrokePaint) {
+          // Closed glyph contours expand to same-winding outer+inner subpaths, so
+          // the stroked outline needs `strokeFillRuleFor` (EvenOdd for the ring),
+          // not a hardcoded NonZero -- see RendererGeode::drawPath's stroke notes.
+          const Path stroked = placed.strokeToFill(*strokeStyle);
+          if (!stroked.empty()) {
+            const FillRule strokeRule = Impl::strokeFillRuleFor(stroked, *strokeStyle);
+            if (strokeIsGradient) {
+              // Gradient stroke: resolve against the text bbox (the *original*
+              // geometry, per SVG), fill the stroked outline.
+              impl_->drawPaintedPathAgainst(textBoundsPath, stroked, *strokeServer, strokeOpacity,
+                                            strokeRule);
+            } else if (usePatternStroke) {
+              impl_->syncTransform();
+              impl_->encoder->fillPathPattern(
+                  stroked, strokeRule,
+                  impl_->buildPatternPaint(*impl_->patternStrokePaint, strokeOpacity));
+            } else {
+              impl_->encoder->fillPath(stroked, *strokeColor, strokeRule);
+            }
           }
         }
+      }
+    };
+
+    PaintOrder spanPaintOrder;
+    if (runIndex < text.spans.size()) {
+      spanPaintOrder = text.spans[runIndex].paintOrder;
+    }
+    bool fillDrawn = false;
+    bool strokeDrawn = false;
+    for (const PaintComponent component : spanPaintOrder.order) {
+      if (component == PaintComponent::Fill && !fillDrawn) {
+        drawRunFill();
+        fillDrawn = true;
+      } else if (component == PaintComponent::Stroke && !strokeDrawn) {
+        drawRunStroke();
+        strokeDrawn = true;
       }
     }
 
