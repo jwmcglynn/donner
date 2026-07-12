@@ -599,6 +599,12 @@ jobs:
             libgl1-mesa-dev libosmesa6-dev
           sudo apt-get clean
 
+      - name: Configure BuildBuddy remote cache
+        uses: ./.github/actions/buildbuddy-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          download-outputs-minimal: "false"
+
       - name: Generate coverage
         shell: bash
         run: |

@@ -430,3 +430,10 @@ test:ci --test_tag_filters=-perf
 
 # Allow `bazel run` on sharded test targets (sharding only applies to `bazel test`).
 run --test_sharding_strategy=disabled
+
+# GitHub-hosted CI lanes may write a BuildBuddy remote-cache fragment here via
+# the .github/actions/buildbuddy-cache composite action when the
+# BUILDBUDDY_API_KEY repo secret is set. try-import is a silent no-op when the
+# file is absent (the default, and on every self-hosted lane, which never runs
+# that action), so builds are byte-for-byte unchanged unless the secret exists.
+try-import %workspace%/.buildbuddy.bazelrc

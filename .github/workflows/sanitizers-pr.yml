@@ -57,6 +57,11 @@ jobs:
           external-cache: true
           cache-save: ${{ github.ref == 'refs/heads/main' }}
 
+      - name: Configure BuildBuddy remote cache
+        uses: ./.github/actions/buildbuddy-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+
       - name: Test (Geode ASan) — informational, non-blocking
         shell: bash
         run: |
