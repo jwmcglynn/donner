@@ -421,5 +421,254 @@ TEST(RenderPanePresenterVisualReproTest, OverviewInfillDoesNotBleedThroughOldDra
          "position while the active tile is presented at the live drag position.";
 }
 
+// --- Performance overlay (FPS pill and full frame/memory graph) ---
+
+gui::EditorWindowOptions PerfOverlayWindowOptions(const char* title) {
+  return gui::EditorWindowOptions{
+      .title = title,
+      .initialWidth = kLogicalWidth,
+      .initialHeight = kLogicalHeight,
+      .visible = false,
+      .offscreen = true,
+      .offscreenContentScale = 1.0,
+      .clearColor = {0.08f, 0.09f, 0.10f, 1.0f},
+      .enableFramebufferReadback = true,
+  };
+}
+
+/// Render one presenter frame with an explicit frame history and perf overlay
+/// mode, returning the readback pixels.
+svg::RendererBitmap CapturePerfOverlayFrame(gui::EditorWindow* window, GlTextureCache* textures,
+                                            const FrameHistory& frameHistory,
+                                            PerfOverlayMode perfOverlayMode) {
+  ViewportState viewport;
+  viewport.paneOrigin = Vector2d(0.0, 0.0);
+  viewport.paneSize = Vector2d(kLogicalWidth, kLogicalHeight);
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, static_cast<double>(kLogicalWidth),
+                                             static_cast<double>(kLogicalHeight));
+  viewport.devicePixelRatio = 1.0;
+  viewport.zoom = 1.0;
+  viewport.panDocPoint = Vector2d(0.0, 0.0);
+  viewport.panScreenPoint = Vector2d(0.0, 0.0);
+
+  const std::optional<SelectionChromeSnapshot> noOverlaySnapshot;
+  const std::optional<SelectTool::ActiveDragPreview> noPreview;
+  RenderPanePresenter presenter;
+
+  window->beginFrame();
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+  ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(
+      ImVec2(static_cast<float>(kLogicalWidth), static_cast<float>(kLogicalHeight)),
+      ImGuiCond_Always);
+  constexpr ImGuiWindowFlags kWindowFlags =
+      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
+      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus;
+  ImGui::Begin("perf-overlay-repro", nullptr, kWindowFlags);
+  presenter.render(RenderPanePresenterState{
+      .viewport = viewport,
+      .frameHistory = frameHistory,
+      .textures = *textures,
+      .immediateOverlaySnapshot = noOverlaySnapshot,
+      .activeDragPreview = noPreview,
+      .displayedDragPreview = noPreview,
+      .contentRegion = Vector2d(kLogicalWidth, kLogicalHeight),
+      // Match the editor's direct-presentation path: without it, an empty tile
+      // set early-returns from render() before the perf overlay is drawn.
+      .documentPresentedDirectly = true,
+      .perfOverlayMode = perfOverlayMode,
+  });
+  ImGui::End();
+  ImGui::PopStyleVar();
+  return window->endFrameAndReadPixels();
+}
+
+/// Count pixels in a logical-coordinate rect for which @p predicate holds.
+template <typename Predicate>
+int CountPixelsWhere(const svg::RendererBitmap& bitmap, int left, int top, int right, int bottom,
+                     Predicate predicate) {
+  if (bitmap.empty()) {
+    return 0;
+  }
+  int count = 0;
+  for (int logicalY = top; logicalY < bottom; ++logicalY) {
+    for (int logicalX = left; logicalX < right; ++logicalX) {
+      const std::array<std::uint8_t, 4> px = PixelAtLogical(bitmap, logicalX, logicalY);
+      if (predicate(px[0], px[1], px[2])) {
+        ++count;
+      }
+    }
+  }
+  return count;
+}
+
+bool IsBudgetMissRed(int r, int g, int b) {
+  return r > 180 && g < 90 && b < 90;
+}
+
+bool IsBackendCyan(int r, int g, int b) {
+  return r < 80 && g > 150 && b > 170;
+}
+
+bool IsRenderBucketBlue(int r, int g, int b) {
+  return r < 90 && g > 110 && g < 160 && b > 200;
+}
+
+bool IsUiBucketGreen(int r, int g, int b) {
+  return r < 60 && g > 130 && b > 90 && b < 140;
+}
+
+bool IsHostOrRetiredOrange(int r, int g, int b) {
+  return r > 170 && g > 110 && g < 160 && b < 40;
+}
+
+bool IsTilesBucketPurple(int r, int g, int b) {
+  return r > 120 && r < 170 && g > 110 && g < 160 && b > 200;
+}
+
+bool IsBrightReadoutText(int r, int g, int b) {
+  (void)g;
+  (void)b;
+  // Every FrameReadoutColor variant (white, red, orange) has a bright red channel.
+  return r > 180;
+}
+
+TEST(RenderPanePresenterVisualReproTest, FpsPillDrawsReadoutInBottomRightCorner) {
+  gui::EditorWindow window(PerfOverlayWindowOptions("Perf Overlay FPS Pill Repro"));
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+
+  GlTextureCache textures(window.geodeDevice());
+  textures.initialize();
+
+  FrameHistory history;
+  for (int i = 0; i < 30; ++i) {
+    history.push(4.0f);
+  }
+
+  const svg::RendererBitmap off =
+      CapturePerfOverlayFrame(&window, &textures, history, PerfOverlayMode::Off);
+  const svg::RendererBitmap pill =
+      CapturePerfOverlayFrame(&window, &textures, history, PerfOverlayMode::FpsPill);
+  WriteDiagnosticBitmap(pill, "perf_overlay_fps_pill.png");
+  ASSERT_FALSE(off.empty());
+  ASSERT_FALSE(pill.empty());
+
+  // The pill anchors to the bottom-right corner and draws a bright FPS/ms
+  // readout; with the overlay off the same corner stays dark.
+  const int pillText = CountPixelsWhere(pill, kLogicalWidth - 120, kLogicalHeight - 35,
+                                        kLogicalWidth, kLogicalHeight, IsBrightReadoutText);
+  const int offText = CountPixelsWhere(off, kLogicalWidth - 120, kLogicalHeight - 35, kLogicalWidth,
+                                       kLogicalHeight, IsBrightReadoutText);
+  EXPECT_GT(pillText, 20) << "FPS pill mode should draw a bright readout in the corner.";
+  EXPECT_EQ(offText, 0) << "Off mode must not draw any perf overlay.";
+}
+
+TEST(RenderPanePresenterVisualReproTest, FullGraphMarksBudgetMissesAndWorkerSamples) {
+  gui::EditorWindow window(PerfOverlayWindowOptions("Perf Overlay Frame Graph Repro"));
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+
+  GlTextureCache textures(window.geodeDevice());
+  textures.initialize();
+
+  // Fast frames: all under the 120 Hz budget, no worker samples.
+  FrameHistory fastHistory;
+  for (int i = 0; i < 60; ++i) {
+    fastHistory.push(4.0f);
+  }
+
+  // Slow frames: over the 60 Hz budget with profiled buckets, and worker
+  // samples both in a consecutive run (line segments) and isolated (dot).
+  FrameHistory slowHistory;
+  for (int i = 0; i < 60; ++i) {
+    slowHistory.push(20.0f);
+    FrameCostBreakdown cost;
+    cost.mainFrame.renderPaneMs = 5.0;
+    cost.mainFrame.layoutMs = 4.0;
+    cost.hostFrame.beginFrameMs = 3.0;
+    slowHistory.setLatestFrameCost(cost);
+    if (i >= 20 && i < 40) {
+      // Consecutive run: connected line. 25 ms places the line in the clear
+      // region above the stacked bars so it is not diluted by them.
+      slowHistory.setLatestBackendMs(25.0f);
+    } else if (i == 50) {
+      slowHistory.setLatestBackendMs(25.0f);  // Isolated sample: single dot.
+    }
+  }
+
+  const svg::RendererBitmap fast =
+      CapturePerfOverlayFrame(&window, &textures, fastHistory, PerfOverlayMode::FullGraph);
+  const svg::RendererBitmap slow =
+      CapturePerfOverlayFrame(&window, &textures, slowHistory, PerfOverlayMode::FullGraph);
+  WriteDiagnosticBitmap(slow, "perf_overlay_full_graph_budget_miss.png");
+  ASSERT_FALSE(fast.empty());
+  ASSERT_FALSE(slow.empty());
+
+  // Budget-miss markers are drawn only above bars that exceed the 60 Hz budget.
+  const int slowMissPixels =
+      CountPixelsWhere(slow, 0, 0, kLogicalWidth, kLogicalHeight, IsBudgetMissRed);
+  const int fastMissPixels =
+      CountPixelsWhere(fast, 0, 0, kLogicalWidth, kLogicalHeight, IsBudgetMissRed);
+  EXPECT_GT(slowMissPixels, 40) << "Over-budget frames must draw red budget-miss markers.";
+  EXPECT_LT(fastMissPixels, slowMissPixels / 4)
+      << "Under-budget frames must not draw budget-miss markers.";
+
+  // The worker overlay draws cyan only where backend samples landed.
+  const int slowBackendPixels =
+      CountPixelsWhere(slow, 0, 0, kLogicalWidth, kLogicalHeight, IsBackendCyan);
+  const int fastBackendPixels =
+      CountPixelsWhere(fast, 0, 0, kLogicalWidth, kLogicalHeight, IsBackendCyan);
+  EXPECT_GT(slowBackendPixels, 10) << "Non-zero worker samples must draw the cyan overlay.";
+  EXPECT_EQ(fastBackendPixels, 0) << "Frames without worker samples must not draw the overlay.";
+
+  // Profiled frame-cost buckets stack as distinct colors inside the graph.
+  EXPECT_GT(CountPixelsWhere(slow, 0, 0, kLogicalWidth, kLogicalHeight, IsRenderBucketBlue), 20)
+      << "The main-render bucket should be visible in the stacked graph.";
+  EXPECT_GT(CountPixelsWhere(slow, 0, 0, kLogicalWidth, kLogicalHeight, IsUiBucketGreen), 20)
+      << "The UI bucket should be visible in the stacked graph.";
+  EXPECT_GT(CountPixelsWhere(slow, 0, 0, kLogicalWidth, kLogicalHeight, IsHostOrRetiredOrange), 20)
+      << "The host bucket should be visible in the stacked graph.";
+}
+
+TEST(RenderPanePresenterVisualReproTest, FullGraphStacksMemoryBucketsWithPeakLine) {
+  gui::EditorWindow window(PerfOverlayWindowOptions("Perf Overlay Memory Graph Repro"));
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+
+  GlTextureCache textures(window.geodeDevice());
+  textures.initialize();
+
+  constexpr std::uint64_t kMiB = 1024u * 1024u;
+  FrameHistory history;
+  for (int i = 0; i < 60; ++i) {
+    history.push(4.0f);
+    FrameMemorySample memory;
+    memory.activeTileBytes = 100u * kMiB;
+    memory.overviewTileBytes = 20u * kMiB;
+    memory.retiredBytes = 50u * kMiB;
+    memory.totalTrackedBytes = 220u * kMiB;  // 50 MiB of untracked-bucket overhead.
+    memory.peakTrackedBytes = 240u * kMiB;
+    history.setLatestMemorySample(memory);
+  }
+
+  const svg::RendererBitmap graph =
+      CapturePerfOverlayFrame(&window, &textures, history, PerfOverlayMode::FullGraph);
+  WriteDiagnosticBitmap(graph, "perf_overlay_memory_graph.png");
+  ASSERT_FALSE(graph.empty());
+
+  // Tile bytes stack in purple; retired bytes in orange. The frame graph above
+  // has no profiled buckets here (frames carry no cost breakdown), so any
+  // orange comes from the memory graph's retired segment.
+  EXPECT_GT(CountPixelsWhere(graph, 0, 0, kLogicalWidth, kLogicalHeight, IsTilesBucketPurple), 40)
+      << "Active plus overview tile bytes should render as the purple memory bucket.";
+  EXPECT_GT(CountPixelsWhere(graph, 0, 0, kLogicalWidth, kLogicalHeight, IsHostOrRetiredOrange), 20)
+      << "Retired texture bytes should render as the orange memory bucket.";
+}
+
 }  // namespace
 }  // namespace donner::editor
