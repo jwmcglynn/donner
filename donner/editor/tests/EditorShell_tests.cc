@@ -1072,6 +1072,12 @@ public:
     shell.compactPanelVisible_ = visible;
   }
 
+  static bool CompactPanelVisible(const EditorShell& shell) { return shell.compactPanelVisible_; }
+
+  static bool CompactInspectorSheet(const EditorShell& shell) {
+    return shell.compactInspectorSheet_;
+  }
+
   static bool SourcePaneVisible(const EditorShell& shell) { return shell.sourcePaneVisible_; }
   static float SourcePaneWidth(const EditorShell& shell) { return shell.sourcePaneWidth_; }
   static void SetSourcePaneWidth(EditorShell& shell, float value) {
@@ -3862,6 +3868,140 @@ TEST(EditorShellTest, SamplePickerRendersDiscardConfirmationForDirtyDocument) {
   EXPECT_TRUE(EditorShellTestAccess::PendingSampleLoadNeedsConfirmation(shell));
   EXPECT_EQ(EditorShellTestAccess::PendingSampleLoad(shell), "basic-shapes");
   EXPECT_TRUE(EditorShellTestAccess::ShowSamplePicker(shell));
+}
+
+namespace {
+
+/// Run one editor frame with an injected mouse state (compact-UI click driver).
+void RunFrameWithMouse(gui::EditorWindow& window, EditorShell& shell, const ImVec2& mouse,
+                       bool mouseDown) {
+  ImGuiIO& io = ImGui::GetIO();
+  io.AddMousePosEvent(mouse.x, mouse.y);
+  io.AddMouseButtonEvent(0, mouseDown);
+  window.beginFrame();
+  shell.runFrame();
+  window.endFrame();
+}
+
+/// Hover, press, and release at @p pos; ImGui buttons fire on release.
+void ClickAt(gui::EditorWindow& window, EditorShell& shell, const ImVec2& pos) {
+  RunFrameWithMouse(window, shell, pos, /*mouseDown=*/false);
+  RunFrameWithMouse(window, shell, pos, /*mouseDown=*/true);
+  RunFrameWithMouse(window, shell, pos, /*mouseDown=*/false);
+}
+
+/// Center of the Nth compact top-bar button (Open, Undo, Redo, Layers,
+/// Inspector), derived from the same layout math as renderCompactTopBar.
+ImVec2 CompactTopBarButtonCenter(const gui::EditorWindow& window, const EditorShell& shell,
+                                 int buttonIndex) {
+  const EditorAdaptiveUiLayout& layout = EditorShellTestAccess::AdaptiveUiLayout(shell);
+  const float targetSize = std::max(44.0f, layout.toolButtonSize);
+  constexpr float kButtonGap = 4.0f;
+  constexpr int kButtonCount = 5;
+  const float controlsWidth = targetSize * kButtonCount + kButtonGap * (kButtonCount - 1);
+  const float controlsX =
+      std::max(8.0f, static_cast<float>(window.windowSize().x) - controlsWidth - 8.0f);
+  const float x = controlsX + static_cast<float>(buttonIndex) * (targetSize + kButtonGap);
+  return ImVec2(x + targetSize * 0.5f, 4.0f + targetSize * 0.5f);
+}
+
+}  // namespace
+
+TEST(EditorShellTest, CompactTopBarButtonsToggleSheetsAndSamplePicker) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+
+  // 640x480 is under the compact height threshold, so the shell selects the
+  // compact-touch chrome with the five-button top bar.
+  RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), /*mouseDown=*/false);
+  ASSERT_TRUE(EditorShellTestAccess::AdaptiveUiLayout(shell).compactTouch());
+  EXPECT_FALSE(EditorShellTestAccess::CompactPanelVisible(shell));
+
+  // Layers button opens the layers sheet.
+  ClickAt(window, shell, CompactTopBarButtonCenter(window, shell, 3));
+  EXPECT_TRUE(EditorShellTestAccess::CompactPanelVisible(shell));
+  EXPECT_FALSE(EditorShellTestAccess::CompactInspectorSheet(shell));
+
+  // Inspector button switches the sheet to the inspector. (That the sheet
+  // itself renders is proven by CompactSheetHeaderCloseButtonHidesPanel, which
+  // clicks a button that only exists inside the rendered sheet.)
+  ClickAt(window, shell, CompactTopBarButtonCenter(window, shell, 4));
+  EXPECT_TRUE(EditorShellTestAccess::CompactPanelVisible(shell));
+  EXPECT_TRUE(EditorShellTestAccess::CompactInspectorSheet(shell));
+
+  // Clicking Inspector again dismisses the sheet.
+  ClickAt(window, shell, CompactTopBarButtonCenter(window, shell, 4));
+  EXPECT_FALSE(EditorShellTestAccess::CompactPanelVisible(shell));
+
+  // The Open button clears any pending sample load and shows the picker.
+  EXPECT_FALSE(EditorShellTestAccess::ShowSamplePicker(shell));
+  ClickAt(window, shell, CompactTopBarButtonCenter(window, shell, 0));
+  EXPECT_TRUE(EditorShellTestAccess::ShowSamplePicker(shell));
+  EXPECT_TRUE(EditorShellTestAccess::PendingSampleLoad(shell).empty());
+}
+
+TEST(EditorShellTest, CompactUndoRedoButtonsDriveDocumentHistory) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::UseInMemoryShapeClipboard(shell);
+
+  // Record an undoable mutation: paste a copy of the selected shape.
+  auto target = EditorShellTestAccess::App(shell).document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  EditorShellTestAccess::App(shell).setSelection(*target);
+  EditorShellTestAccess::CopySelectedShapesToClipboard(shell);
+  EditorShellTestAccess::PasteShapesFromClipboard(shell, /*inFront=*/false);
+  ASSERT_TRUE(EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell));
+  ASSERT_TRUE(EditorShellTestAccess::App(shell).canUndo());
+
+  RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), /*mouseDown=*/false);
+  ASSERT_TRUE(EditorShellTestAccess::AdaptiveUiLayout(shell).compactTouch());
+
+  // Undo removes the pasted shape from the document history.
+  ClickAt(window, shell, CompactTopBarButtonCenter(window, shell, 1));
+  EXPECT_FALSE(EditorShellTestAccess::App(shell).canUndo());
+  EXPECT_TRUE(EditorShellTestAccess::App(shell).canRedo());
+
+  // Redo restores it.
+  ClickAt(window, shell, CompactTopBarButtonCenter(window, shell, 2));
+  EXPECT_TRUE(EditorShellTestAccess::App(shell).canUndo());
+  EXPECT_FALSE(EditorShellTestAccess::App(shell).canRedo());
+}
+
+TEST(EditorShellTest, CompactSheetHeaderCloseButtonHidesPanel) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+
+  RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), /*mouseDown=*/false);
+  ASSERT_TRUE(EditorShellTestAccess::AdaptiveUiLayout(shell).compactTouch());
+  EditorShellTestAccess::SetCompactPanelVisible(shell, true);
+  RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), /*mouseDown=*/false);
+  EXPECT_TRUE(EditorShellTestAccess::CompactPanelVisible(shell));
+
+  // The close button is a headerHeight-square invisible button flush to the
+  // sheet's top-right content corner (default window padding is 8 px).
+  const EditorAdaptiveUiLayout& layout = EditorShellTestAccess::AdaptiveUiLayout(shell);
+  const float headerHeight = std::max(44.0f, layout.toolButtonSize);
+  const ImVec2 closeCenter(layout.panelX + layout.panelWidth - 8.0f - headerHeight * 0.5f,
+                           layout.panelY + 8.0f + headerHeight * 0.5f);
+  ClickAt(window, shell, closeCenter);
+  EXPECT_FALSE(EditorShellTestAccess::CompactPanelVisible(shell))
+      << "Clicking the sheet header's close button must hide the compact panel.";
 }
 
 }  // namespace donner::editor
