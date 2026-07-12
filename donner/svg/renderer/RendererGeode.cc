@@ -26,6 +26,7 @@
 #include "donner/svg/core/Gradient.h"
 #include "donner/svg/core/Stroke.h"
 #include "donner/svg/properties/PaintServer.h"
+#include "donner/svg/renderer/PatternTile.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/geode/GeoEncoder.h"
 #include "donner/svg/renderer/geode/GeodeBufferPool.h"
@@ -33,9 +34,9 @@
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePathCacheComponent.h"
-#include "donner/svg/renderer/geode/GeodeResidentPathComponent.h"
 #include "donner/svg/renderer/geode/GeodePathEncoder.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
+#include "donner/svg/renderer/geode/GeodeResidentPathComponent.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "donner/svg/resources/ImageResource.h"
 #ifdef DONNER_TEXT_ENABLED
@@ -876,17 +877,8 @@ struct RendererGeode::Impl {
   /// A completed pattern tile ready to be sampled as fill or stroke paint.
   struct PatternPaintSlot {
     geode::ScopedWgpuHandle<wgpu::Texture> tile;
-    Vector2d tileSize;              // In pattern space.
-    Transform2d targetFromPattern;  // destFromSource naming.
-    // `deviceFromLocalTransform` snapshotted at the time the outer element kicked
-    // off `beginPatternTile`. This is the path→device transform that the
-    // SAME outer element will use when its fill draw happens. Used at
-    // pattern-paint build time to strip the canvas-scale / parent-transform
-    // chain back out of the live `deviceFromLocalTransform`, so the resulting
-    // `patternFromPath` matrix compares path-space positions against the
-    // pattern tile's user-space coordinate system instead of accidentally
-    // multiplying them by the viewBox→canvas scale.
-    Transform2d deviceFromPathAtCapture;
+    Vector2d rasterTileSize;
+    Transform2d targetFromRaster;
   };
 
   struct PatternStackFrame {
@@ -905,8 +897,8 @@ struct RendererGeode::Impl {
     std::vector<ClipStackEntry> savedClipStack;
 
     // The pattern tile being recorded.
-    Box2d tileRect;                 // In pattern space (topLeft at origin).
-    Transform2d targetFromPattern;  // Transform used when the tile is sampled.
+    Box2d tileRect;                                      // In pattern space (topLeft at origin).
+    Transform2d targetFromPattern;                       // Transform used when the tile is sampled.
     geode::ScopedWgpuHandle<wgpu::Texture> tileTexture;  // Sampled after recording.
     int tilePixelWidth = 0;
     int tilePixelHeight = 0;
@@ -1316,43 +1308,15 @@ struct RendererGeode::Impl {
     return std::nullopt;
   }
 
-  /// Build a `GeoEncoder::PatternPaint` from a stashed slot, composing the
-  /// current transform so the shader samples in the correct space.
-  ///
-  /// Math: during the fill draw, the Geode vertex shader emits `sample_pos`
-  /// in PATH space (pre-MVP, pre-`deviceFromLocalTransform`). The pattern fragment
-  /// shader needs pattern-tile-space coordinates. The driver gave us
-  /// `targetFromPattern` in USER space (i.e., the viewBox frame the outer
-  /// element was drawn in) - *not* device space - which is a semantic
-  /// mismatch with the renderer, where `deviceFromLocalTransform` goes all the way
-  /// from path space to device pixels (i.e., it bakes in the
-  /// viewBox→canvas scale on top of the entity's own transform).
-  ///
-  /// To bridge the mismatch we capture `deviceFromPathAtCapture = deviceFromLocalTransform`
-  /// at `beginPatternTile` time. Both the pattern's content subtree and the
-  /// eventual fill draw use the same referencing element, so that transform
-  /// is the path→device mapping we'd want for BOTH the tile raster and
-  /// the final sample. The chain is:
-  ///
-  ///   pattern_pos  =  inverse(deviceFromPath_at_capture * targetFromPattern)
-  ///                 · deviceFromLocalTransform · path_pos
-  ///
-  /// Expanding: the two `deviceFromLocalTransform`/`deviceFromPath_at_capture` matrices
-  /// cancel (they're the same transform when the outer element is drawing
-  /// its own fill immediately after the pattern subtree returns), leaving
-  /// `inverse(targetFromPattern) · path_pos` - which sits in the user-space
-  /// frame that `tileSize` is expressed in. That keeps the shader's
-  /// `fract(patternPos / tileSize)` well-defined regardless of the
-  /// viewBox→canvas scale.
+  /// Build a pattern paint whose shader coordinates and repeat period are both in raster-tile
+  /// pixels. The fill shader's sample position is path-local, which is also the pattern target
+  /// space supplied by the driver, so no device-space reconstruction is needed.
   geode::GeoEncoder::PatternPaint buildPatternPaint(const PatternPaintSlot& slot,
                                                     double opacity) const {
-    const Transform2d deviceFromPattern = slot.deviceFromPathAtCapture * slot.targetFromPattern;
-    const Transform2d patternFromDevice = deviceFromPattern.inverse();
-    const Transform2d patternFromPath = patternFromDevice * deviceFromLocalTransform;
     geode::GeoEncoder::PatternPaint p;
     p.tile = slot.tile.get();
-    p.tileSize = slot.tileSize;
-    p.patternFromPath = patternFromPath;
+    p.tileSize = slot.rasterTileSize;
+    p.patternFromPath = slot.targetFromRaster.inverse();
     p.opacity = opacity;
     return p;
   }
@@ -3233,40 +3197,21 @@ void RendererGeode::popMask() {
   impl_->releaseTextureAtFrameEnd(std::move(frame.contentTexture), frame.contentDesc);
 }
 
-void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& targetFromPattern) {
-  impl_->flushPendingBatch();  // M6-B step 3
+bool RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& targetFromPattern) {
   if (!impl_->device || !impl_->pipeline) {
-    return;
+    return false;
   }
 
-  // Raster resolution: use the composition of the current transform and the
-  // tile transform to estimate how many device pixels one tile unit maps to,
-  // then scale the tile texture accordingly. Using device pixels directly as
-  // a 1:1 fallback would under-sample patterns that are scaled up before
-  // tiling. We clamp to a minimum of 1 pixel per axis so zero-size tiles
-  // never allocate a zero-extent texture.
-  //
-  // A 2× supersample factor matches RendererTinySkia's
-  // kPatternSupersampleScale. Without it, small tiles (e.g. a 2×2 tile
-  // scaled 10× → 20×20 device px) produce a 20×20-texel texture whose
-  // bilinear-sampled circle edges visibly drift from the reference golden
-  // that was rendered at 40×40 texels. The extra resolution preserves finer
-  // edge transitions.
-  constexpr double kPatternSupersampleScale = 2.0;
-  const Transform2d deviceFromPattern = impl_->deviceFromLocalTransform * targetFromPattern;
-  const double scaleX = std::hypot(deviceFromPattern.data[0], deviceFromPattern.data[1]);
-  const double scaleY = std::hypot(deviceFromPattern.data[2], deviceFromPattern.data[3]);
-  auto boundedPx = [](double v) {
-    if (!(v > 0.0) || !std::isfinite(v)) {
-      return 1;
-    }
-    constexpr double kMaxTileDim = 4096.0;
-    return std::max(1, static_cast<int>(std::ceil(std::min(v, kMaxTileDim))));
-  };
-  const double ssX = (scaleX > 0.0 ? scaleX : 1.0) * kPatternSupersampleScale;
-  const double ssY = (scaleY > 0.0 ? scaleY : 1.0) * kPatternSupersampleScale;
-  const int tilePixelWidth = boundedPx(tileRect.width() * ssX);
-  const int tilePixelHeight = boundedPx(tileRect.height() * ssY);
+  const Transform2d deviceFromPattern = targetFromPattern * impl_->deviceFromLocalTransform;
+  const std::optional<PatternTileRasterMetrics> rasterMetrics =
+      ComputePatternTileRasterMetrics(tileRect, deviceFromPattern);
+  if (!rasterMetrics.has_value()) {
+    return false;
+  }
+
+  impl_->flushPendingBatch();  // M6-B step 3
+  const int tilePixelWidth = rasterMetrics->pixelWidth;
+  const int tilePixelHeight = rasterMetrics->pixelHeight;
 
   // Pattern tile target sampled by the Slug fill shader when used as paint.
   wgpu::TextureDescriptor td = {};
@@ -3281,7 +3226,7 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   geode::ScopedWgpuHandle<wgpu::Texture> tileTexture(impl_->device->device().createTexture(td));
   impl_->device->countTexture();
   if (!tileTexture) {
-    return;
+    return false;
   }
 
   const wgpu::Texture tileTextureHandle = tileTexture.get();
@@ -3329,11 +3274,7 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   // to every `setTransform` call while this frame is on the stack so the
   // encoder's pixelWidth/pixelHeight-based MVP renders the tile at its
   // native resolution.
-  const double tileWidthUnits = tileRect.width();
-  const double tileHeightUnits = tileRect.height();
-  frame.rasterScale = Vector2d(
-      tileWidthUnits > 0.0 ? static_cast<double>(tilePixelWidth) / tileWidthUnits : 1.0,
-      tileHeightUnits > 0.0 ? static_cast<double>(tilePixelHeight) / tileHeightUnits : 1.0);
+  frame.rasterScale = rasterMetrics->rasterFromPatternScale;
   impl_->patternStack.push_back(std::move(frame));
 
   // Redirect all subsequent draw calls into the new tile texture. The new
@@ -3365,9 +3306,8 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   // Apply the (now-empty) clip stack so the fresh tile encoder has no scissor.
   impl_->updateEncoderScissor();
 
-  // Compose the pattern raster scale into targetFromPattern so it takes
-  // pattern-pixel coordinates to target units. We record the raster scale
-  // in the frame itself and apply it in endPatternTile.
+  // endPatternTile composes the logical pattern transform with this raster scale.
+  return true;
 }
 
 void RendererGeode::endPatternTile(bool forStroke) {
@@ -3446,22 +3386,11 @@ void RendererGeode::endPatternTile(bool forStroke) {
     impl_->encoder.reset();
   }
 
-  // Stash the completed tile as the current pattern paint slot. The tile
-  // size is in *pattern-space* units (matching the vertex shader's
-  // input), not pixels - the shader scales `patternFromPath` positions
-  // through the existing 4x4 matrix multiply and compares against the
-  // tile's native dimensions.
+  // Stash the completed tile in raster-pixel space, matching the texture sampled by the shader.
   Impl::PatternPaintSlot slot;
   slot.tile = std::move(frame.tileTexture);
-  slot.tileSize = frame.tileRect.size();
-  slot.targetFromPattern = frame.targetFromPattern;
-  // `frame.savedDeviceFromLocalTransform` is the path→device transform that was live at
-  // `beginPatternTile` time - i.e., the outer element's deviceFromLocalTransform
-  // including the viewBox→canvas scale. We stash it on the slot so
-  // `buildPatternPaint` can cancel it out of the live `deviceFromLocalTransform`
-  // at the upcoming fill draw, leaving the pattern sample in the pattern's
-  // user-space frame (where `tileSize` is expressed).
-  slot.deviceFromPathAtCapture = frame.savedDeviceFromLocalTransform;
+  slot.rasterTileSize = Vector2d(frame.tilePixelWidth, frame.tilePixelHeight);
+  slot.targetFromRaster = TargetFromPatternRaster(frame.targetFromPattern, frame.rasterScale);
 
   // Restore the pattern slots pending at `beginPatternTile`, then overwrite the slot this tile
   // was recorded for (releasing any stale tile texture it held).

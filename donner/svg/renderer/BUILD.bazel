@@ -270,6 +270,14 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "pattern_tile",
+    srcs = ["PatternTile.cc"],
+    hdrs = ["PatternTile.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = ["//donner/base"],
+)
+
+donner_cc_library(
     name = "terminal_image_viewer",
     srcs = ["TerminalImageViewer.cc"],
     hdrs = ["TerminalImageViewer.h"],
@@ -355,6 +363,7 @@ donner_cc_library(
     }),
     visibility = ["//visibility:public"],
     deps = [
+        ":pattern_tile",
         ":renderer_driver",
         ":renderer_interface",
         "//donner/base",
@@ -406,6 +415,7 @@ donner_perf_sensitive_cc_library(
     # //donner/svg/renderer:geode_excludes_tiny_skia_audit.
     visibility = ["//visibility:public"],
     deps = [
+        ":pattern_tile",
         ":pixel_format_utils",
         ":renderer_driver",
         ":renderer_image_io",

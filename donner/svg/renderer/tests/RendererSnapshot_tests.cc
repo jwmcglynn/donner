@@ -245,6 +245,29 @@ TEST(RendererSnapshotTests, PatternPaintReferencesAreSnapshotOwned) {
   EXPECT_NE(ref.reference.handle.try_get<components::ComputedPatternComponent>(), nullptr);
 }
 
+TEST(RendererSnapshotTests, RejectedPatternTileSkipsRecordedContentAndEndCommand) {
+  SVGDocument document = MakeDocument(R"svg(
+    <defs>
+      <pattern id="p" patternUnits="userSpaceOnUse" width="4" height="4">
+        <rect width="4" height="4" fill="red" />
+      </pattern>
+    </defs>
+    <rect width="8" height="8" fill="url(#p)" />
+  )svg");
+
+  ::testing::NiceMock<MockRendererInterface> renderer;
+  RendererDriver driver(renderer);
+  RenderSnapshot snapshot = driver.captureRenderSnapshot(document);
+
+  EXPECT_CALL(renderer, beginFrame(_)).Times(1);
+  EXPECT_CALL(renderer, endFrame()).Times(1);
+  EXPECT_CALL(renderer, beginPatternTile(_, _)).WillOnce(::testing::Return(false));
+  EXPECT_CALL(renderer, endPatternTile(_)).Times(0);
+  EXPECT_CALL(renderer, drawPath(_, _)).Times(1);
+
+  driver.draw(snapshot);
+}
+
 TEST(RendererSnapshotTests, FeImageFragmentReferencesAreClearedBeforeReplay) {
   SVGDocument document = MakeDocument(R"svg(
     <defs>

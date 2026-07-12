@@ -510,6 +510,7 @@ TEST_F(RendererDriverTest, EmitsPatternTileForPatternFill) {
         // Pattern tile should have the specified 4x4 size.
         EXPECT_NEAR(tileRect.width(), 4.0, 1e-6);
         EXPECT_NEAR(tileRect.height(), 4.0, 1e-6);
+        return true;
       });
   EXPECT_CALL(renderer, endPatternTile(_)).WillRepeatedly([&](bool) { ++endPatternCount; });
 
@@ -526,6 +527,28 @@ TEST_F(RendererDriverTest, EmitsPatternTileForPatternFill) {
   EXPECT_GE(beginPatternCount, 1) << "beginPatternTile should be called for pattern fill";
   EXPECT_EQ(beginPatternCount, endPatternCount) << "begin/end pattern tile should be paired";
   EXPECT_GE(drawPathInPattern, 1) << "Pattern content should be drawn between begin and end";
+}
+
+TEST_F(RendererDriverTest, RejectedPatternTileSkipsContentAndEndCommand) {
+  SVGDocument document = makeDocument(R"svg(
+    <defs>
+      <pattern id="pat" width="4" height="4" patternUnits="userSpaceOnUse">
+        <rect width="2" height="2" fill="red" />
+      </pattern>
+    </defs>
+    <rect width="8" height="8" fill="url(#pat)" />
+  )svg",
+                                      Vector2i(8, 8));
+
+  EXPECT_CALL(renderer, beginFrame(_)).Times(1);
+  EXPECT_CALL(renderer, endFrame()).Times(1);
+  EXPECT_CALL(renderer, setTransform(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, setPaint(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, beginPatternTile(_, _)).WillOnce(::testing::Return(false));
+  EXPECT_CALL(renderer, endPatternTile(_)).Times(0);
+  EXPECT_CALL(renderer, drawPath(_, _)).Times(1);
+
+  driver.draw(document);
 }
 
 TEST_F(RendererDriverTest, DrawsEllipseAndRectAsPath) {

@@ -2312,10 +2312,13 @@ void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& regist
   // consuming entity's local space.
   const Transform2d entityFromContextTransform =
       ref.contextRemap ? ref.contextRemap->entityFromContextTransform : Transform2d();
-  const Transform2d patternTileFromTarget =
+  const Transform2d targetFromPattern =
       Transform2d::Translate(rect.topLeft) * patternTransform * entityFromContextTransform;
 
-  renderer_.beginPatternTile(rect.toOrigin(), patternTileFromTarget);
+  if (!renderer_.beginPatternTile(rect.toOrigin(), targetFromPattern)) {
+    skipSubtree();
+    return;
+  }
 
   // Save and override surfaceFromCanvasTransform for pattern content rendering.
   const Transform2d savedSurfaceFromCanvas = surfaceFromCanvasTransform_;

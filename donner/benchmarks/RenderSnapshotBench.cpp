@@ -63,7 +63,7 @@ public:
   void pushMask(const std::optional<Box2d>&) override {}
   void transitionMaskToContent() override {}
   void popMask() override {}
-  void beginPatternTile(const Box2d&, const Transform2d&) override {}
+  bool beginPatternTile(const Box2d&, const Transform2d&) override { return true; }
   void endPatternTile(bool) override {}
   void setPaint(const PaintParams&) override {}
   void drawPath(const PathShape&, const StrokeParams&) override {}

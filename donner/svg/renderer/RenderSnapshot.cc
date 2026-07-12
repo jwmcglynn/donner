@@ -335,7 +335,7 @@ void ReplayCommand(const RenderCommand& command, RendererInterface& renderer,
           [&](const TransitionMaskToContentCommand&) { renderer.transitionMaskToContent(); },
           [&](const PopMaskCommand&) { renderer.popMask(); },
           [&](const BeginPatternTileCommand& value) {
-            renderer.beginPatternTile(value.tileRect, value.targetFromPattern);
+            (void)renderer.beginPatternTile(value.tileRect, value.targetFromPattern);
           },
           [&](const EndPatternTileCommand& value) { renderer.endPatternTile(value.forStroke); },
           [&](const SetPaintCommand& value) { renderer.setPaint(value.paint); },
@@ -406,7 +406,28 @@ std::size_t RenderSnapshot::liveRegistryReferenceCountForTesting(const Registry&
 
 void RenderSnapshot::replay(RendererInterface& renderer) const {
   Registry textRegistry;
+  std::size_t rejectedPatternDepth = 0;
   for (const RenderCommand& command : impl_->commands) {
+    if (const auto* beginPattern = std::get_if<BeginPatternTileCommand>(&command)) {
+      if (rejectedPatternDepth > 0 ||
+          !renderer.beginPatternTile(beginPattern->tileRect, beginPattern->targetFromPattern)) {
+        ++rejectedPatternDepth;
+      }
+      continue;
+    }
+
+    if (const auto* endPattern = std::get_if<EndPatternTileCommand>(&command)) {
+      if (rejectedPatternDepth > 0) {
+        --rejectedPatternDepth;
+      } else {
+        renderer.endPatternTile(endPattern->forStroke);
+      }
+      continue;
+    }
+
+    if (rejectedPatternDepth > 0) {
+      continue;
+    }
     ReplayCommand(command, renderer, textRegistry);
   }
 }
@@ -488,9 +509,10 @@ void RenderSnapshotRecorder::popMask() {
   snapshot_.impl_->commands.push_back(PopMaskCommand{});
 }
 
-void RenderSnapshotRecorder::beginPatternTile(const Box2d& tileRect,
+bool RenderSnapshotRecorder::beginPatternTile(const Box2d& tileRect,
                                               const Transform2d& targetFromPattern) {
   snapshot_.impl_->commands.push_back(BeginPatternTileCommand{tileRect, targetFromPattern});
+  return true;
 }
 
 void RenderSnapshotRecorder::endPatternTile(bool forStroke) {

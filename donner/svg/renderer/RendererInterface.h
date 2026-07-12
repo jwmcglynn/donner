@@ -351,8 +351,10 @@ public:
    *
    * @param tileRect The tile rectangle in pattern coordinate space.
    * @param targetFromPattern Transform from pattern tile space to target element space.
+   * @return True when recording started. False rejects the tile without allocating resources.
    */
-  virtual void beginPatternTile(const Box2d& tileRect, const Transform2d& targetFromPattern) = 0;
+  [[nodiscard]] virtual bool beginPatternTile(const Box2d& tileRect,
+                                              const Transform2d& targetFromPattern) = 0;
 
   /**
    * Ends pattern tile recording and sets the resulting tiled shader as the current fill or stroke

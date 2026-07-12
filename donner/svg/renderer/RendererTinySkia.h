@@ -127,8 +127,10 @@ public:
    *
    * @param tileRect Tile bounds in pattern space.
    * @param targetFromPattern Transform from pattern tile space to target space.
+   * @return True when recording started. False rejects an unsafe tile before allocation.
    */
-  void beginPatternTile(const Box2d& tileRect, const Transform2d& targetFromPattern) override;
+  [[nodiscard]] bool beginPatternTile(const Box2d& tileRect,
+                                      const Transform2d& targetFromPattern) override;
 
   /**
    * Ends pattern recording and stores the resulting pattern paint.

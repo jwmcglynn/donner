@@ -499,8 +499,8 @@ void Renderer::popMask() {
   impl_->popMask();
 }
 
-void Renderer::beginPatternTile(const Box2d& tileRect, const Transform2d& targetFromPattern) {
-  impl_->beginPatternTile(tileRect, targetFromPattern);
+bool Renderer::beginPatternTile(const Box2d& tileRect, const Transform2d& targetFromPattern) {
+  return impl_->beginPatternTile(tileRect, targetFromPattern);
 }
 
 void Renderer::endPatternTile(bool forStroke) {

@@ -168,6 +168,16 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "pattern_tile_tests",
+    srcs = ["PatternTile_tests.cc"],
+    deps = [
+        "//donner/base:base_test_utils",
+        "//donner/svg/renderer:pattern_tile",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "renderer_regression_tests",
     srcs = ["RendererRegression_tests.cc"],
     data = [
