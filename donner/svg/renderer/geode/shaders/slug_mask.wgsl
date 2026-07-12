@@ -152,6 +152,20 @@ struct RayCoverage {
   wgt: f32,
 };
 
+// Ownership of a shared vertex on the monotone axis, as a direction-independent
+// half-open interval [min, max): min-inclusive, max-exclusive. This is the standard
+// scanline winding convention. A start-inclusive/end-exclusive test (which flips to
+// max-inclusive for a decreasing curve) miscounts a Y-extremum shared vertex as a
+// single crossing when the sample lands exactly on the extremum value, breaking fill
+// parity for that scanline. Metal never samples exactly on the integer extremum;
+// llvmpipe does, so [min, max) is required for cross-backend agreement. Testing the
+// monotone axis directly also avoids backend-dependent root rounding near t=1.
+fn owns_axis_sample(start: f32, end: f32, sample: f32) -> bool {
+  let lo = min(start, end);
+  let hi = max(start, end);
+  return sample >= lo && sample < hi;
+}
+
 fn accumulateHoriz(slot: u32, sample: vec2f, ppemX: f32) -> RayCoverage {
   var result: RayCoverage;
   result.cov = 0.0;
@@ -162,6 +176,9 @@ fn accumulateHoriz(slot: u32, sample: vec2f, ppemX: f32) -> RayCoverage {
   let band = bands[slot];
   for (var i = 0u; i < band.curveCount; i = i + 1u) {
     let curve = load_h_curve(band.curveStart + i);
+    if (!owns_axis_sample(curve.p0.y, curve.p2.y, sample.y)) {
+      continue;
+    }
     let a = curve.p0.y - 2.0 * curve.p1.y + curve.p2.y;
     let b = 2.0 * (curve.p1.y - curve.p0.y);
     let c = curve.p0.y - sample.y;
@@ -193,6 +210,9 @@ fn accumulateVert(slot: u32, sample: vec2f, ppemY: f32) -> RayCoverage {
   let band = vBands[slot];
   for (var i = 0u; i < band.curveCount; i = i + 1u) {
     let curve = load_v_curve(band.curveStart + i);
+    if (!owns_axis_sample(curve.p0.x, curve.p2.x, sample.x)) {
+      continue;
+    }
     let a = curve.p0.x - 2.0 * curve.p1.x + curve.p2.x;
     let b = 2.0 * (curve.p1.x - curve.p0.x);
     let c = curve.p0.x - sample.x;

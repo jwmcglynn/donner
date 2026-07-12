@@ -302,6 +302,28 @@ TEST(GeodePathEncoder, VerticalBandsConsistentWinding) {
   }
 }
 
+TEST(GeodePathEncoder, ClosedStrokeRightContourUsesInsideJoins) {
+  // Exact path from filters/filter/path-bbox.svg. The closed stroke's right contour must
+  // truncate inside joins at their miter intersections instead of retaining both offset
+  // endpoints. The latter produces a self-intersecting wedge at (65, 135).
+  const Path path = PathBuilder()
+                        .moveTo({50, 85})
+                        .lineTo({65, 135})
+                        .lineTo({150, 135})
+                        .lineTo({150, 85})
+                        .quadTo({100, 45}, {50, 85})
+                        .closePath()
+                        .build();
+  const Path stroke = path.strokeToFill({.width = 1.0});
+  ASSERT_FALSE(stroke.empty());
+  EXPECT_EQ(stroke.points().size(), 95u)
+      << "Pre-fix right-contour misclassification emitted 117 outline points";
+  EXPECT_EQ(stroke.commands().size(), 97u);
+
+  const EncodedPath encoded = GeodePathEncoder::encode(stroke, FillRule::EvenOdd);
+  ASSERT_FALSE(encoded.empty());
+}
+
 // M3c: the dense band-grid maps cells onto the packed band arrays so the analytic
 // shader can look up its band in O(1) from a sample position. Verify the grid is the
 // right size and each non-empty cell points at a band whose strip matches the cell.

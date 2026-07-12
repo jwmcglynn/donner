@@ -2104,12 +2104,10 @@ void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBui
       const Vector2d prevEnd = pts[i] - normals[i - 1] * halfWidth;
       const Vector2d curStart = pts[i] - normals[i] * halfWidth;
 
-      // On the right side, the "outside" sense is flipped - feed emitJoin
-      // the flipped normals so its cross-product sign classification
-      // points at the right-contour outside.
+      // Use right-facing normals for miter geometry and right-side turn classification.
       emitJoin(prevEnd, curStart, pts[i], Vector2d(-normals[i - 1].x, -normals[i - 1].y),
                Vector2d(-normals[i].x, -normals[i].y), halfWidth, style.join, style.miterLimit,
-               segmentLengths[i - 1], segmentLengths[i], builder, /*isLeftSide=*/true);
+               segmentLengths[i - 1], segmentLengths[i], builder, /*isLeftSide=*/false);
     }
 
     // NOTE: unlike the OPEN case, closed paths do NOT need a post-loop
@@ -2125,7 +2123,8 @@ void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBui
       emitJoin(prevEnd, curStart, pts[n - 1],
                Vector2d(-normals[numSegments - 1].x, -normals[numSegments - 1].y),
                Vector2d(-normals[0].x, -normals[0].y), halfWidth, style.join, style.miterLimit,
-               segmentLengths[numSegments - 1], segmentLengths[0], builder, /*isLeftSide=*/true);
+               segmentLengths[numSegments - 1], segmentLengths[0], builder,
+               /*isLeftSide=*/false);
     }
 
     builder.closePath();
