@@ -209,6 +209,33 @@ protected:
     ImGui::Render();
   }
 
+  /// Full-control input frame: mouse position, left/right button state, and an
+  /// optional Escape press. Used by gutter-drag cancellation and context-menu
+  /// tests that need inputs the simpler helpers cannot express.
+  void RenderEditorFrameWithInputs(const ImVec2& mousePos, bool leftDown, bool rightDown,
+                                   bool escapePressed = false,
+                                   const ImVec2& editorSize = ImVec2(240.0f, 180.0f)) {
+    editor.setHandleKeyboardInputs(false);
+    editor.setHandleMouseInputs(true);
+
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(800.0f, 600.0f);
+    io.AddMousePosEvent(mousePos.x, mousePos.y);
+    io.AddMouseButtonEvent(0, leftDown);
+    io.AddMouseButtonEvent(1, rightDown);
+    io.AddKeyEvent(ImGuiKey_Escape, escapePressed);
+
+    ImGui::NewFrame();
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(editorSize.x + 40.0f, editorSize.y + 40.0f), ImGuiCond_Always);
+    ImGui::Begin(
+        "TextEditorTestWindow", nullptr,
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
+    editor.render("##editor", editorSize);
+    ImGui::End();
+    ImGui::Render();
+  }
+
   // Drives one render frame with keyboard input handling enabled, injecting
   // the supplied modifier state, key presses, and typed characters. ImGui
   // reports `IsKeyPressed` on the frame a key transitions from up→down, so
@@ -5222,6 +5249,115 @@ TEST_F(TextEditorTests, MouseDragNearBottomAutoscrollsThroughRenderPath) {
   RenderEditorFrameWithMouse(bottomEdge, /*mouseDown=*/true, editorSize);
 
   EXPECT_TRUE(editor.hasSelection());
+}
+
+TEST_F(TextEditorTests, GutterDragCancelsOnEscapeKey) {
+  editor.setText("one\ntwo\nthree");
+  RenderEditorFrame();
+
+  const ImVec2 handle = SourceGutterHandlePoint(/*visualIndex=*/0);
+  RenderEditorFrameWithMouse(handle, /*mouseDown=*/false);
+  RenderEditorFrameWithMouse(handle, /*mouseDown=*/true);
+  ASSERT_EQ(editor.takeSourceGutterDragStartedLine(), 0);
+  ASSERT_TRUE(editor.sourceGutterDragTarget().has_value());
+
+  // Escape while the drag button is still held abandons the gesture.
+  RenderEditorFrameWithInputs(handle, /*leftDown=*/true, /*rightDown=*/false,
+                              /*escapePressed=*/true);
+
+  EXPECT_TRUE(editor.takeSourceGutterDragCancelled());
+  EXPECT_FALSE(editor.sourceGutterDragTarget().has_value());
+  EXPECT_FALSE(editor.takeSourceGutterDropTarget().has_value());
+  EXPECT_EQ(editor.getText(), "one\ntwo\nthree");
+}
+
+TEST_F(TextEditorTests, GutterDragCancelsOnRightClick) {
+  editor.setText("one\ntwo\nthree");
+  RenderEditorFrame();
+
+  const ImVec2 handle = SourceGutterHandlePoint(/*visualIndex=*/0);
+  RenderEditorFrameWithMouse(handle, /*mouseDown=*/false);
+  RenderEditorFrameWithMouse(handle, /*mouseDown=*/true);
+  ASSERT_EQ(editor.takeSourceGutterDragStartedLine(), 0);
+
+  // A right-click mid-drag abandons the gesture without dropping.
+  RenderEditorFrameWithInputs(handle, /*leftDown=*/true, /*rightDown=*/true);
+
+  EXPECT_TRUE(editor.takeSourceGutterDragCancelled());
+  EXPECT_FALSE(editor.sourceGutterDragTarget().has_value());
+  EXPECT_FALSE(editor.takeSourceGutterDropTarget().has_value());
+}
+
+TEST_F(TextEditorTests, GutterDragCancelsWhenReleasedOutsideWindow) {
+  editor.setText("one\ntwo\nthree");
+  RenderEditorFrame();
+
+  const ImVec2 handle = SourceGutterHandlePoint(/*visualIndex=*/0);
+  RenderEditorFrameWithMouse(handle, /*mouseDown=*/false);
+  RenderEditorFrameWithMouse(handle, /*mouseDown=*/true);
+  ASSERT_EQ(editor.takeSourceGutterDragStartedLine(), 0);
+
+  // Drag far outside the editor window, then release there: the gesture
+  // cancels instead of dropping at a bogus position.
+  const ImVec2 outside(780.0f, 580.0f);
+  RenderEditorFrameWithInputs(outside, /*leftDown=*/true, /*rightDown=*/false);
+  RenderEditorFrameWithInputs(outside, /*leftDown=*/false, /*rightDown=*/false);
+
+  EXPECT_TRUE(editor.takeSourceGutterDragCancelled());
+  EXPECT_FALSE(editor.sourceGutterDragTarget().has_value());
+  EXPECT_FALSE(editor.takeSourceGutterDropTarget().has_value());
+  EXPECT_EQ(editor.getText(), "one\ntwo\nthree");
+}
+
+TEST_F(TextEditorTests, SourceDiagnosticTooltipRendersOnHover) {
+  editor.setText("<svg><rect/></svg>");
+  ASSERT_TRUE(editor.setSourceDiagnostics({
+      SourceDiagnostic{.id = 11,
+                       .range = {5, 12},
+                       .line = 1,
+                       .column = 5,
+                       .endLine = 1,
+                       .endColumn = 12,
+                       .severity = DiagnosticSeverity::Error,
+                       .message = "rect is unclosed"},
+  }));
+  RenderEditorFrame();
+
+  // Baseline frame: mouse away from the diagnostic, no tooltip.
+  const ImVec2 away = ScreenPointAtVisualTextOffset(/*visualIndex=*/0, /*visualColumnOffset=*/1);
+  RenderEditorFrameWithMouse(away, /*mouseDown=*/false);
+  EXPECT_FALSE(editor.hoveredSourceDiagnosticId().has_value());
+  const ImDrawData* baseline = ImGui::GetDrawData();
+  ASSERT_NE(baseline, nullptr);
+  const int baselineWindows = baseline->CmdListsCount;
+
+  // Hovering inside the diagnostic range shows the severity tooltip.
+  const ImVec2 hover = ScreenPointAtVisualTextOffset(/*visualIndex=*/0, /*visualColumnOffset=*/7);
+  RenderEditorFrameWithMouse(hover, /*mouseDown=*/false);
+  EXPECT_EQ(editor.hoveredSourceDiagnosticId(), 11u);
+  RenderEditorFrameWithMouse(hover, /*mouseDown=*/false);
+  const ImDrawData* hovered = ImGui::GetDrawData();
+  ASSERT_NE(hovered, nullptr);
+  EXPECT_GT(hovered->CmdListsCount, baselineWindows)
+      << "Hovering a diagnostic must open its tooltip window.";
+}
+
+TEST_F(TextEditorTests, RightClickInTextMovesCursorToClickPosition) {
+  editor.setText("hello world");
+  editor.setCursorPosition(Coordinates(0, 0));
+  RenderEditorFrame();
+
+  // Right-clicking inside the text area (the context-menu gesture) moves the
+  // caret to the clicked position before the popup opens, so a subsequent
+  // Cut/Copy/Paste acts on the intended spot.
+  const ImVec2 textPoint =
+      ScreenPointAtVisualTextOffset(/*visualIndex=*/0, /*visualColumnOffset=*/6);
+  RenderEditorFrameWithInputs(textPoint, /*leftDown=*/false, /*rightDown=*/false);
+  RenderEditorFrameWithInputs(textPoint, /*leftDown=*/false, /*rightDown=*/true);
+
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(0, 6))
+      << "A right-click over text must reposition the caret to the click point.";
+  EXPECT_EQ(editor.getText(), "hello world") << "A right-click must not modify the text.";
 }
 
 }  // namespace donner::editor
