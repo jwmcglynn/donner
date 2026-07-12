@@ -853,6 +853,40 @@ TEST(RendererPublicApiTest, RecursiveMarkerStopsAtOneLevel) {
   EXPECT_THAT(PixelAt(snapshot, 34, 18), IsTransparent());
 }
 
+TEST(RendererPublicApiTest, RecursiveMarkersRetainFirstNestedLevelForEachRoot) {
+  SVGDocument document = ParseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="80" height="32" viewBox="0 0 80 32">
+        <defs>
+          <marker id="a" refX="0" refY="0" markerWidth="32" markerHeight="10"
+                  markerUnits="userSpaceOnUse" orient="0" style="overflow:visible">
+            <rect x="0" y="0" width="4" height="4" fill="red" />
+            <use href="#recursive-path" />
+          </marker>
+          <marker id="b" refX="0" refY="0" markerWidth="32" markerHeight="10"
+                  markerUnits="userSpaceOnUse" orient="0" style="overflow:visible">
+            <rect x="0" y="0" width="4" height="4" fill="blue" />
+            <use href="#recursive-path" />
+          </marker>
+          <path id="recursive-path" d="M 8 0 H 16" fill="none" stroke="black"
+                stroke-opacity="0" marker-start="url(#a)" marker-end="url(#b)" />
+        </defs>
+        <polyline points="8,16 48,16" fill="none" stroke="black" stroke-opacity="0"
+                  marker-start="url(#a)" marker-end="url(#b)" />
+      </svg>
+    )svg");
+
+  Renderer renderer;
+  renderer.draw(document);
+  const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
+  ASSERT_FALSE(snapshot.empty());
+
+  EXPECT_THAT(PixelAt(snapshot, 10, 18), IsRedish());
+  EXPECT_THAT(PixelAt(snapshot, 26, 18), IsBlueish());
+  EXPECT_THAT(PixelAt(snapshot, 50, 18), IsBlueish());
+  EXPECT_THAT(PixelAt(snapshot, 58, 18), IsRedish());
+  EXPECT_THAT(PixelAt(snapshot, 74, 18), IsTransparent());
+}
+
 // 6. Use element rendering
 TEST(RendererPublicApiTest, UseElementRendering) {
   SVGDocument document = ParseDocument(R"svg(
