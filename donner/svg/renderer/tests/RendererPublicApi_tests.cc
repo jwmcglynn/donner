@@ -885,6 +885,7 @@ TEST(RendererPublicApiTest, RecursiveMarkersRetainFirstNestedLevelForEachRoot) {
   EXPECT_THAT(PixelAt(snapshot, 50, 18), IsBlueish());
   EXPECT_THAT(PixelAt(snapshot, 58, 18), IsRedish());
   EXPECT_THAT(PixelAt(snapshot, 74, 18), IsTransparent());
+  EXPECT_THAT(PixelAt(snapshot, 2, 2), IsTransparent());
 }
 
 // 6. Use element rendering

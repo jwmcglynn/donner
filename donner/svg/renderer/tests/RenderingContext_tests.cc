@@ -602,7 +602,7 @@ TEST_F(RenderingContextTest, FindIntersectingRectReturnsFrontToBackOrder) {
   EXPECT_THAT(hits, testing::Contains(backEntity));
 }
 
-TEST_F(RenderingContextTest, RecursiveMarkerRangeContainsNestedMarkerSubtree) {
+TEST_F(RenderingContextTest, RecursiveMarkerKeepsNestedSubtreeOutsideParentRenderRange) {
   auto document = ParseSVG(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
       <defs>
@@ -652,7 +652,9 @@ TEST_F(RenderingContextTest, RecursiveMarkerRangeContainsNestedMarkerSubtree) {
       registry
           .get<RenderingInstanceComponent>(nestedPath->markerStart->subtreeInfo->lastRenderedEntity)
           .drawOrder;
-  EXPECT_LE(nestedLastOrder, rootLastOrder);
+  // Nested markers are rendered through their referencing path, not as part of the parent's direct
+  // range. Renderer cleanup must still skip their separate inline ranges after drawing the parent.
+  EXPECT_GT(nestedLastOrder, rootLastOrder);
 }
 
 // --- context-fill / context-stroke resolution ---
