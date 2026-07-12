@@ -3708,23 +3708,14 @@ std::string toLowercase(std::string_view str) {
 
 }  // namespace
 
-void TextEditor::buildMemberSuggestions(bool* keepAutocompleteOpen) {
+void TextEditor::buildMemberSuggestions(bool*) {
+  // Member-completion after a '.' was never implemented: no code path ever
+  // populates autocompleteSuggestions_ here, so the guarded block below was
+  // unreachable (the vector is always empty immediately after the clear), and
+  // its `object`/`curPos` inputs were computed and discarded. Only the clear
+  // is observable; the real suggestion list is (re)built by buildSuggestions on
+  // the following frame. Reduced to the one behavior that is actually reached.
   autocompleteSuggestions_.clear();
-
-  auto curPos = getCorrectCursorPosition();
-  RcString object = getWordAt(curPos);
-
-  if (!autocompleteSuggestions_.empty()) {
-    autocompleteOpened_ = true;
-    autocompleteWord_.clear();
-
-    if (keepAutocompleteOpen != nullptr) {
-      *keepAutocompleteOpen = true;
-    }
-
-    Coordinates curCursor = getCursorPosition();
-    autocompletePosition_ = findWordStart(curCursor);
-  }
 }
 
 void TextEditor::buildSuggestions(bool* keepAutocompleteOpen) {
