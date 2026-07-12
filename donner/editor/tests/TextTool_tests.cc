@@ -996,5 +996,79 @@ TEST_F(TextToolTest, CaretBlinkVisibleImmediatelyAfterTypingAndSchedulesWake) {
   EXPECT_FALSE(tool.nextCaretBlinkWakeSeconds().has_value());
 }
 
+TEST_F(TextToolTest, MultiByteCodepointsEncodeToUtf8) {
+  doubleClickAt(Vector2d(20.0, 30.0));
+
+  // One code point in each UTF-8 length class: ASCII (1 byte), Latin-1
+  // supplement (2 bytes), a BMP symbol (3 bytes), and an astral emoji
+  // (4 bytes, surrogate-free char32_t).
+  constexpr std::array<char32_t, 4> kCodepoints{U'A', U'\u00E9', U'\u2713', U'\U0001F600'};
+  tool.insertCodepoints(app, kCodepoints);
+
+  EXPECT_EQ(tool.sessionContent(), U"A\u00E9\u2713\U0001F600");
+  EXPECT_EQ(tool.caretIndex(), 4u);
+
+  // The DOM text content is the UTF-8 encoding of those code points: the
+  // encoder must emit the 2-, 3-, and 4-byte sequences.
+  const std::string kExpectedUtf8 =
+      std::string("A") + "\xC3\xA9" + "\xE2\x9C\x93" + "\xF0\x9F\x98\x80";
+  EXPECT_EQ(text().textContent(), kExpectedUtf8);
+}
+
+// Existing document whose <text> content spans 1-, 2-, and 3-byte UTF-8
+// sequences, so opening an edit session must decode each length class.
+class TextToolMultiByteTextTest : public TextToolTest {
+protected:
+  void SetUp() override {
+    const std::string svg =
+        std::string(R"(<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400">)"
+                    R"(<text id="t" x="50" y="80" font-size="20" font-family="sans-serif">)") +
+        "A" + "\xC3\xA9" + "\xE2\x9C\x93" + "B" + "</text></svg>";
+    ASSERT_TRUE(app.loadFromString(svg));
+  }
+
+  /// A document point inside the glyph cell of character @p charIndex.
+  Vector2d pointInChar(std::size_t charIndex) {
+    svg::SVGTextElement element = text();
+    const Box2d extent =
+        element.withWriteAccess([&element, charIndex](svg::DocumentWriteAccess&, EntityHandle) {
+          return element.getExtentOfChar(charIndex);
+        });
+    EXPECT_FALSE(extent.isEmpty());
+    return Vector2d(extent.topLeft.x + extent.size().x * 0.25,
+                    extent.topLeft.y + extent.size().y * 0.5);
+  }
+};
+
+TEST_F(TextToolMultiByteTextTest, EditingExistingMultiByteTextDecodesUtf8) {
+  clickAt(pointInChar(1));
+
+  ASSERT_TRUE(tool.isEditing());
+  // The UTF-8 DOM content decoded back into four logical code points.
+  EXPECT_EQ(tool.sessionContent(), U"A\u00E9\u2713B");
+  // The caret landed on the clicked (second) character.
+  EXPECT_EQ(tool.caretIndex(), 1u);
+
+  // Editing preserves the surrounding multi-byte glyphs.
+  type("Z");
+  EXPECT_EQ(tool.sessionContent(), U"AZ\u00E9\u2713B");
+}
+
+TEST_F(TextToolTest, VerticalCaretMovesClampAtFirstAndLastLine) {
+  doubleClickAt(Vector2d(20.0, 30.0));
+  type("Hello");
+
+  // Single line: moving up from the first line and down from the last line are
+  // no-ops (targetLine == line), leaving the caret column unchanged.
+  tool.moveCaret(app, TextTool::CaretMove::LineStart);
+  ASSERT_EQ(tool.caretIndex(), 0u);
+  tool.moveCaret(app, TextTool::CaretMove::Right);
+  ASSERT_EQ(tool.caretIndex(), 1u);
+  tool.moveCaret(app, TextTool::CaretMove::Up);
+  EXPECT_EQ(tool.caretIndex(), 1u) << "Up on the first line must not move the caret.";
+  tool.moveCaret(app, TextTool::CaretMove::Down);
+  EXPECT_EQ(tool.caretIndex(), 1u) << "Down on the last line must not move the caret.";
+}
+
 }  // namespace
 }  // namespace donner::editor
