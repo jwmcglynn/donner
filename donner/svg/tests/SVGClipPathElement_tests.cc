@@ -45,7 +45,7 @@ TEST(SVGClipPathElementTests, RenderingDefaults) {
         )-");
 
   EXPECT_TRUE(generatedAscii.matchBackend()
-                  .defaultPattern(R"(
+                  .geode(R"(
         ....,*%@@%*,....
         ...*@@@@@@@@*...
         ..%@@@@@@@@@@%..
@@ -93,7 +93,7 @@ TEST(SVGClipPathElementTests, RenderingObjectBoundingBox) {
         )-");
 
   EXPECT_TRUE(generatedAscii.matchBackend()
-                  .defaultPattern(R"(
+                  .geode(R"(
         ..#@@#..........
         .@@@@@@.........
         #@@@@@@#........
@@ -278,7 +278,7 @@ TEST(SVGClipPathElementTests, RenderingTransform) {
 
   // Expected output assumes that the translated circle defines a shifted clipping region.
   EXPECT_TRUE(generatedAscii.matchBackend()
-                  .defaultPattern(R"(
+                  .geode(R"(
         ................
         ................
         ......,*%@@%*,..
@@ -330,7 +330,7 @@ TEST(SVGClipPathElementTests, RenderingMultipleChildrenWithTransforms) {
         )-");
 
   EXPECT_TRUE(generatedAscii.matchBackend()
-                  .defaultPattern(R"(
+                  .geode(R"(
         .....,#@@#,.....
         ....,@@@@@@,....
         ....#@@@@@@#....
