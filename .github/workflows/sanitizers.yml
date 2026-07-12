@@ -85,6 +85,11 @@ jobs:
           external-cache: true
           cache-save: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
 
+      - name: Configure BuildBuddy remote cache
+        uses: ./.github/actions/buildbuddy-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+
       - name: Test //donner/... with ASan
         run: |
           # The blocking Fuzz workflow owns fuzz_target tests under ASan. Excluding them here keeps
@@ -147,6 +152,11 @@ jobs:
           repository-cache: true
           external-cache: true
           cache-save: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+
+      - name: Configure BuildBuddy remote cache
+        uses: ./.github/actions/buildbuddy-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
 
       - name: Test //donner/... with UBSan
         run: |

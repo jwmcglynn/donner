@@ -59,3 +59,6 @@ examples/svg_viewer_screenshot.png
 
 # Local git worktrees used for parallel agent work (never tracked)
 .worktrees/
+
+# BuildBuddy remote-cache fragment, written by CI only; never committed.
+.buildbuddy.bazelrc

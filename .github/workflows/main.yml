@@ -514,6 +514,11 @@ jobs:
           external-cache: true
           cache-save: ${{ github.ref == 'refs/heads/main' }}
 
+      - name: Configure BuildBuddy remote cache
+        uses: ./.github/actions/buildbuddy-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+
       - name: Build
         shell: bash
         run: |
@@ -591,6 +596,11 @@ jobs:
       # instead of only surfacing on a dev box whose default linker isn't lld.
       # See #665. Targets are the minimal set proven to reach every
       # link-order-sensitive library in that fix.
+      - name: Configure BuildBuddy remote cache
+        uses: ./.github/actions/buildbuddy-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+
       - name: Linker canary (non-lld linker support)
         shell: bash
         run: |
@@ -877,6 +887,11 @@ jobs:
           repository-cache: true
           external-cache: true
           cache-save: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Configure BuildBuddy remote cache
+        uses: ./.github/actions/buildbuddy-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
 
       - name: Build
         shell: bash

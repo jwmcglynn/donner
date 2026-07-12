@@ -98,6 +98,11 @@ jobs:
           external-cache: true
           cache-save: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
 
+      - name: Configure BuildBuddy remote cache
+        uses: ./.github/actions/buildbuddy-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+
       - name: Build //...
         shell: bash
         run: |

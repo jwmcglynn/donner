@@ -192,6 +192,32 @@ for the external-consumer setup.
 | `--config=latest_llvm` | Use the latest LLVM toolchain (required for coverage)                                                                                         |
 | `--config=lld`         | Force the `lld` linker; workaround for dev boxes whose default linker can't link the suite (see FAQ below)                                    |
 
+## Continuous integration remote cache
+
+The GitHub-hosted CI lanes (the hosted Linux/macOS fallback builds, the
+`linker-canary`, the hosted Coverage build, the nightly full-tree build, and
+the sanitizer lanes) can share a [BuildBuddy](https://www.buildbuddy.io/)
+remote cache. It is off by default and never affects local builds or the
+self-hosted runners.
+
+**How it works.** The `.github/actions/buildbuddy-cache` composite action runs
+early in each hosted lane. When the `BUILDBUDDY_API_KEY` repository secret is
+present it writes a `.buildbuddy.bazelrc` fragment (loaded by a `try-import` in
+`.bazelrc`) that points Bazel at `grpcs://remote.buildbuddy.io`. When the secret
+is absent the action writes nothing and the `try-import` is a silent no-op, so
+every lane builds exactly as it would without the cache.
+
+Pull-request runs are read-only: they may read cache hits but never upload
+(`--remote_upload_local_results=false`), so a PR can never poison the cache.
+Only trusted `main` pushes and scheduled runs upload results.
+
+**Activation.** Add a repository secret named `BUILDBUDDY_API_KEY` (Settings ->
+Secrets and variables -> Actions) holding a BuildBuddy API key. No code change
+or redeploy is needed; the next hosted run picks it up automatically.
+
+**Deactivation.** Delete the `BUILDBUDDY_API_KEY` secret. On their next run the
+lanes revert to cache-less builds with no other change.
+
 ## Frequently Asked Questions (FAQ)
 
 ### On macOS: bazel crashed due to an internal error
