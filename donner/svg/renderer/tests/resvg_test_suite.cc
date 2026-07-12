@@ -772,18 +772,14 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "painting/paint-order",
             {
-                // `Te<tspan paint-order="stroke fill">xt</tspan>`. NOT a positioning bug:
-                // the glyph positions are correct (identical to the unsplit on-text.svg, which
-                // passes - cross-tspan kerning keeps "xt" at the same x as "Text"). The ~1968px
-                // residual is a paint-order *layering* difference across the two runs with
-                // different paint-orders: Donner draws run "Te" (default order: fill then
-                // stroke-on-top) fully, then run "xt" (stroke then fill) fully on top, so at the
-                // e/x overlap "x"'s green fill covers "e"'s on-top blue stroke where resvg keeps
-                // the blue (≈1.6k green↔blue edge swaps). resvg layers paint-order across the
-                // whole <text> rather than per-run. Fixing this needs the renderer's text
-                // paint-order passes to span runs, not the text layout. See #624.
+                // `Te<tspan paint-order="stroke fill">xt</tspan>` is the exact Latin kerning
+                // case covered by the layout tests. The vendored PNG is not a strict geometry
+                // oracle: it loses e-x kerning at the paint-only tspan boundary that Donner
+                // preserves. The remaining raster mismatch is paint-order layering across runs,
+                // so this reference stays skipped until a compatible oracle or renderer
+                // contract exists. See #624.
                 {"on-tspan.svg",
-                 Params::Skip("paint-order layering across tspan runs (not positioning) - #624")},
+                 Params::Skip("vendored PNG loses e-x kerning; remaining diff is paint-order layering")},
                 // paint-order rendering is implemented on the CPU backend only; Geode does not
                 // honor the fill/stroke/marker reordering yet. Compare CPU, disable Geode.
                 {"fill-markers-stroke.svg", GeodeDisabled("Geode paint-order rendering gap")},
