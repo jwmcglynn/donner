@@ -90,8 +90,11 @@ donner_cc_test(
     name = "sample_picker_presenter_tests",
     srcs = ["SamplePickerPresenter_tests.cc"],
     deps = [
+        "//donner/editor:editor_sample_catalog",
+        "//donner/editor:imgui_headers",
         "//donner/editor:sample_picker_presenter",
         "@com_google_gtest//:gtest_main",
+        "@imgui",
     ],
 )
 
