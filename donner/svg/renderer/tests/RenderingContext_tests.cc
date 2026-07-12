@@ -602,6 +602,59 @@ TEST_F(RenderingContextTest, FindIntersectingRectReturnsFrontToBackOrder) {
   EXPECT_THAT(hits, testing::Contains(backEntity));
 }
 
+TEST_F(RenderingContextTest, RecursiveMarkerRangeContainsNestedMarkerSubtree) {
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <defs>
+        <marker id="a" markerWidth="6" markerHeight="6" refX="1" refY="3" orient="auto">
+          <use href="#recursive-path" transform="matrix(-1 0 0 1 6 0)"/>
+        </marker>
+        <marker id="b" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+          <use href="#recursive-path"/>
+        </marker>
+        <path id="recursive-path" d="M 1 1 5 3 1 5" fill="none" stroke="blue"
+              marker-start="url(#a)" marker-end="url(#b)"/>
+      </defs>
+      <path id="host" d="M 10 10 L 190 190" fill="none" stroke="green" stroke-width="5"
+            marker-start="url(#a)" marker-end="url(#b)"/>
+    </svg>
+  )svg");
+
+  RenderingContext ctx(document.registry());
+  ctx.instantiateRenderTree(false, warningSink_);
+
+  Registry& registry = document.registry();
+  const Entity hostEntity = document.querySelector("#host")->unsafeEntityHandle().entity();
+  const auto& hostInstance = registry.get<RenderingInstanceComponent>(hostEntity);
+  ASSERT_TRUE(hostInstance.markerEnd.has_value());
+  ASSERT_TRUE(hostInstance.markerEnd->subtreeInfo.has_value());
+
+  const SubtreeInfo& rootInfo = *hostInstance.markerEnd->subtreeInfo;
+  const int rootFirstOrder =
+      registry.get<RenderingInstanceComponent>(rootInfo.firstRenderedEntity).drawOrder;
+  const int rootLastOrder =
+      registry.get<RenderingInstanceComponent>(rootInfo.lastRenderedEntity).drawOrder;
+
+  const RenderingInstanceComponent* nestedPath = nullptr;
+  for (const Entity entity : registry.view<RenderingInstanceComponent>()) {
+    const auto& candidate = registry.get<RenderingInstanceComponent>(entity);
+    const auto* id = registry.try_get<IdComponent>(candidate.dataEntity);
+    if (id && id->id() == "recursive-path" && candidate.drawOrder >= rootFirstOrder &&
+        candidate.drawOrder <= rootLastOrder && candidate.markerStart.has_value()) {
+      nestedPath = &candidate;
+      break;
+    }
+  }
+
+  ASSERT_THAT(nestedPath, NotNull());
+  ASSERT_TRUE(nestedPath->markerStart->subtreeInfo.has_value());
+  const int nestedLastOrder =
+      registry
+          .get<RenderingInstanceComponent>(nestedPath->markerStart->subtreeInfo->lastRenderedEntity)
+          .drawOrder;
+  EXPECT_LE(nestedLastOrder, rootLastOrder);
+}
+
 // --- context-fill / context-stroke resolution ---
 
 /// Matches a ResolvedPaintServer holding a solid color equal to @p expectedColor.
