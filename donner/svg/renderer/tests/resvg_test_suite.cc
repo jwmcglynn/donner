@@ -754,7 +754,7 @@ INSTANTIATE_TEST_SUITE_P(
                 // Path::vertices() emits the arrival mid for zero-length-close corner
                 // contours. Residual is sub-marker edge coverage.
                 {"marker-on-rounded-rect.svg", WithMaxPixels(60, "Marker stack edge coverage")},
-                {"recursive-5.svg", Params::Skip("Recursive marker rendering edge case (~787px)")},
+                {"recursive-5.svg", Params{}},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);

@@ -1,8 +1,10 @@
 #include "donner/svg/renderer/RenderingContext.h"
 
+#include <cassert>
 #include <map>
 #include <optional>
 #include <set>
+#include <utility>
 #include <vector>
 
 #include "donner/base/parser/LengthParser.h"
@@ -623,6 +625,11 @@ public:
       contextPaintServers_.contextBounds = dataHandle.get<ComputedPathComponent>().localBounds();
       contextPaintServers_.resolveAtDrawTime = true;
 
+      const bool ownsMarkerResolutionSession = activeMarkerStack_.empty();
+      if (ownsMarkerResolutionSession) {
+        cyclicMarkerReferences_.clear();
+      }
+
       if (properties.markerStart.get()) {
         if (auto resolved = resolveMarker(EntityHandle(registry_, styleEntity),
                                           properties.markerStart.get().value(),
@@ -648,6 +655,10 @@ public:
             resolved.valid()) {
           instance.markerEnd = resolved;
         }
+      }
+
+      if (ownsMarkerResolutionSession) {
+        cyclicMarkerReferences_.clear();
       }
 
       contextPaintServers_ = savedForMarkers;
@@ -1106,7 +1117,15 @@ public:
     if (auto resolvedRef = reference.resolve(*styleHandle.registry());
         resolvedRef && IsValidMarker(resolvedRef->handle)) {
       const Entity markerElement = resolvedRef->handle.entity();
+      if (!activeMarkerStack_.empty() &&
+          cyclicMarkerReferences_.count({activeMarkerStack_.back(), markerElement})) {
+        return ResolvedMarker{ResolvedReference{EntityHandle()}, std::nullopt,
+                              MarkerUnits::Default};
+      }
+
       if (activeMarkerElements_.count(markerElement)) {
+        assert(!activeMarkerStack_.empty());
+        cyclicMarkerReferences_.insert({activeMarkerStack_.back(), markerElement});
         return ResolvedMarker{ResolvedReference{EntityHandle()}, std::nullopt,
                               MarkerUnits::Default};
       }
@@ -1122,7 +1141,9 @@ public:
       if (const auto* computedShadow = shadowTreeHost.try_get<ComputedShadowTreeComponent>();
           computedShadow && computedShadow->findOffscreenShadow(branchType).has_value()) {
         activeMarkerElements_.insert(markerElement);
+        activeMarkerStack_.push_back(markerElement);
         auto subtree = instantiateOffscreenSubtree(shadowTreeHost, branchType);
+        activeMarkerStack_.pop_back();
         activeMarkerElements_.erase(markerElement);
 
         return ResolvedMarker{resolvedRef.value(), std::move(subtree),
@@ -1180,6 +1201,14 @@ private:
   /// Tracks marker elements currently being instantiated so recursive marker references stop
   /// after the first level instead of repeatedly expanding the same cycle.
   std::set<Entity> activeMarkerElements_;
+
+  /// Marker expansion order, used to identify the exact reference edge that closes a cycle.
+  std::vector<Entity> activeMarkerStack_;
+
+  /// Cycle-closing marker reference edges, keyed by source and target marker. Decisions remain
+  /// active while all markers on one host shape are resolved, so a reciprocal marker does not
+  /// expand the same cycle again from the opposite endpoint.
+  std::set<std::pair<Entity, Entity>> cyclicMarkerReferences_;
 
   /// The last rendered entity of each offscreen subtree instantiated by \ref
   /// instantiateOffscreenSubtree, keyed by the subtree's root entity. Used to rebuild a correct

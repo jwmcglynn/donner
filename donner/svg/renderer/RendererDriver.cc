@@ -2489,6 +2489,26 @@ void RendererDriver::drawMarkers(RenderingInstanceView& view, Registry& registry
   considerMarkerSubtree(instance.markerMid);
   considerMarkerSubtree(instance.markerEnd);
 
+  // Marker render ranges intentionally exclude nested marker definitions because nested paths
+  // render those definitions through drawMarker(). Walk the active traversal snapshot in draw
+  // order and extend the cleanup frontier whenever an in-range instance owns another inline
+  // marker subtree. Do not scan the registry: it can contain offscreen filter instances that are
+  // deliberately absent from this view.
+  RenderingInstanceView nestedView = view;
+  while (!nestedView.done()) {
+    const auto& nestedInstance = nestedView.get();
+    if (nestedInstance.drawOrder > skipToDrawOrder) {
+      break;
+    }
+
+    if (nestedInstance.drawOrder > instance.drawOrder) {
+      considerMarkerSubtree(nestedInstance.markerStart);
+      considerMarkerSubtree(nestedInstance.markerMid);
+      considerMarkerSubtree(nestedInstance.markerEnd);
+    }
+    nestedView.advance();
+  }
+
   if (skipToEntity != entt::null) {
     skipUntil(view, skipToEntity);
   }
