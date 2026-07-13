@@ -1,0 +1,184 @@
+{
+  "schema": "https://donner.graphics/svg2-suite/requirement-v1.schema.json",
+  "baseline": "svg2-cr-20181004",
+  "requirements": [
+    {
+      "id": "svg2-cr-20181004/painting/SpecifyingFillPaint/req-01",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "13.4.1 Specifying fill paint: the 'fill' property",
+      "anchor": "SpecifyingFillPaint",
+      "assertion": "The fill property paints the interior of a shape with the given paint value, such as a solid color.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [
+        "resvg/painting/fill/named-color"
+      ],
+      "review_state": "reviewed",
+      "evidence_state": "covered-pass",
+      "rationale": "Reviewed mapping: the resvg pilot case painting/fill/named-color isolates this requirement, its upstream golden is a conforming oracle for this simple assertion by specification inspection, and the Donner adapter renders it to an exact match (proven by the donner_svg2_pilot parity test). A named color fills the shape interior.",
+      "artifacts": [],
+      "source_text_hash": "sha256:a0d021e956fc7d7fe737639d9c21897e773e59f1734b03bb1e3911b868cb404d",
+      "dependencies": [
+        "css-color-4"
+      ]
+    },
+    {
+      "id": "svg2-cr-20181004/painting/SpecifyingFillPaint/req-02",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "13.4.1 Specifying fill paint: the 'fill' property",
+      "anchor": "SpecifyingFillPaint",
+      "assertion": "The initial value of the fill property is the color black.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [
+        "donner-svg2/painting/fill/default-black"
+      ],
+      "review_state": "reviewed",
+      "evidence_state": "covered-pass",
+      "rationale": "Covered by the Donner-authored SVG2 extension case donner-svg2/painting/fill/default-black, which isolates this requirement (initial fill is black) against a manually-constructed exact geometric reference; the Donner adapter renders it to a byte-exact match (donner_svg2_suite). Reference provenance and an independent oracle review are recorded with the extension corpus.",
+      "artifacts": [],
+      "source_text_hash": "sha256:5cea2fc72fae8826b4828efe594b01812526553acc76c3303b2ce81eb4d93aac",
+      "dependencies": [
+        "css-color-4"
+      ]
+    },
+    {
+      "id": "svg2-cr-20181004/painting/WindingRule/req-01",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "13.4.2 Winding rule: the 'fill-rule' property",
+      "anchor": "WindingRule",
+      "assertion": "The initial fill-rule is nonzero, which includes a point when the signed count of path-segment crossings of a ray from the point is non-zero.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [],
+      "review_state": "reviewed",
+      "evidence_state": "missing-test",
+      "rationale": "",
+      "artifacts": [],
+      "source_text_hash": "sha256:390dacfff2bdb918d9b1bf0f72a89d734f28ff7a0ec9b41044869bd17aefb1d7"
+    },
+    {
+      "id": "svg2-cr-20181004/painting/WindingRule/req-02",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "13.4.2 Winding rule: the 'fill-rule' property",
+      "anchor": "WindingRule",
+      "assertion": "With fill-rule evenodd, a point is inside the shape when the number of path-segment crossings of a ray from the point is odd.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [
+        "resvg/painting/fill-rule/evenodd"
+      ],
+      "review_state": "reviewed",
+      "evidence_state": "covered-pass",
+      "rationale": "Reviewed mapping: the resvg pilot case painting/fill-rule/evenodd isolates this requirement, its upstream golden is a conforming oracle for this simple assertion by specification inspection, and the Donner adapter renders it to an exact match (proven by the donner_svg2_pilot parity test). The evenodd interior is filled.",
+      "artifacts": [],
+      "source_text_hash": "sha256:e2ce4722b7e844849a1bea020e794f11c0a53cfaa306ee0bf01e1f11b74250a1"
+    },
+    {
+      "id": "svg2-cr-20181004/painting/FillOpacity/req-01",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "13.4.3 Fill paint opacity: the 'fill-opacity' property",
+      "anchor": "FillOpacity",
+      "assertion": "fill-opacity specifies the opacity of the fill painting operation, with 1 fully opaque.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [
+        "resvg/painting/fill-opacity/50percent"
+      ],
+      "review_state": "reviewed",
+      "evidence_state": "covered-pass",
+      "rationale": "Reviewed mapping: the resvg pilot case painting/fill-opacity/50percent isolates this requirement, its upstream golden is a conforming oracle for this simple assertion by specification inspection, and the Donner adapter renders it to an exact match (proven by the donner_svg2_pilot parity test). A half-opacity fill is composited.",
+      "artifacts": [],
+      "source_text_hash": "sha256:b51ada003615ea7ef74d8292254aab4c5ebf5b1efd3f6f1e67bfac6762d4c6f4"
+    },
+    {
+      "id": "svg2-cr-20181004/painting/FillOpacity/req-02",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "13.4.3 Fill paint opacity: the 'fill-opacity' property",
+      "anchor": "FillOpacity",
+      "assertion": "A fill-opacity value outside the range 0 to 1 must be clamped to that range.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [
+        "donner-svg2/painting/fill-opacity/clamp-above-one"
+      ],
+      "review_state": "reviewed",
+      "evidence_state": "covered-pass",
+      "rationale": "Covered by the Donner-authored SVG2 extension case donner-svg2/painting/fill-opacity/clamp-above-one, which isolates this requirement (fill-opacity above 1 clamps to opaque) against a manually-constructed exact geometric reference; the Donner adapter renders it to a byte-exact match (donner_svg2_suite). Reference provenance and an independent oracle review are recorded with the extension corpus.",
+      "artifacts": [],
+      "source_text_hash": "sha256:5f880c6e034b7ee42e54ec75972738e80d0f58a2df392eb6fabccad714115689"
+    }
+  ]
+}

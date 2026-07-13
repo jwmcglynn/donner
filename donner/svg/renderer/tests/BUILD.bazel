@@ -697,6 +697,24 @@ donner_cc_binary(
     ],
 )
 
+# The pilot corpus manifest carries the reviewed resvg->SVG2-requirement
+# mapping. Exposed so the portable suite's spec_coverage_lint can cross-check
+# that mapping against the requirement inventory.
+filegroup(
+    name = "pilot_corpus_manifest",
+    srcs = ["pilot_corpus/manifest.json"],
+    visibility = ["//visibility:public"],
+)
+
+# The Donner-authored SVG2 extension corpus manifest carries its cases' reviewed
+# requirement mapping. Exposed so spec_coverage_lint can cross-check it against
+# the requirement inventory.
+filegroup(
+    name = "donner_svg2_corpus_manifest",
+    srcs = ["donner_svg2_corpus/manifest.json"],
+    visibility = ["//visibility:public"],
+)
+
 py_test(
     name = "donner_svg2_pilot",
     size = "medium",
@@ -710,6 +728,26 @@ py_test(
         "//third_party/resvg-test-suite:tests",
     ] + glob(["pilot_corpus/*.json"]),
     main = "donner_svg2_pilot_test.py",
+    deps = [
+        "//tools/donner_svg2_suite:runner_lib",
+        "@rules_python//python/runfiles",
+    ],
+)
+
+# Donner adapter against the Donner-authored SVG2 extension seed corpus (design
+# 0057, Milestone 4): cases for SVG 2 behavior the resvg base suite does not
+# isolate, each with a manually-constructed exact PNG reference.
+py_test(
+    name = "donner_svg2_suite",
+    size = "medium",
+    srcs = ["donner_svg2_suite_test.py"],
+    data = [
+        ":donner_svg2_render_adapter",
+    ] + glob([
+        "donner_svg2_corpus/manifest.json",
+        "donner_svg2_corpus/tests/**",
+    ]),
+    main = "donner_svg2_suite_test.py",
     deps = [
         "//tools/donner_svg2_suite:runner_lib",
         "@rules_python//python/runfiles",

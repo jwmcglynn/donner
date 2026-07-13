@@ -14,7 +14,9 @@
         "provenance": "upstream-resvg-golden"
       },
       "assertion": "Imported resvg base case shapes/rect/simple-case; upstream reference rendering (unreviewed for SVG 2 requirement mapping).",
-      "spec_requirements": [],
+      "spec_requirements": [
+        "svg2-cr-20181004/shapes/RectElement/req-01"
+      ],
       "capabilities": []
     },
     {
@@ -28,7 +30,9 @@
         "provenance": "upstream-resvg-golden"
       },
       "assertion": "Imported resvg base case shapes/circle/simple-case; upstream reference rendering (unreviewed for SVG 2 requirement mapping).",
-      "spec_requirements": [],
+      "spec_requirements": [
+        "svg2-cr-20181004/shapes/CircleElement/req-01"
+      ],
       "capabilities": []
     },
     {
@@ -42,7 +46,9 @@
         "provenance": "upstream-resvg-golden"
       },
       "assertion": "Imported resvg base case shapes/ellipse/simple-case; upstream reference rendering (unreviewed for SVG 2 requirement mapping).",
-      "spec_requirements": [],
+      "spec_requirements": [
+        "svg2-cr-20181004/shapes/EllipseElement/req-01"
+      ],
       "capabilities": []
     },
     {
@@ -56,7 +62,9 @@
         "provenance": "upstream-resvg-golden"
       },
       "assertion": "Imported resvg base case shapes/polygon/simple-case; upstream reference rendering (unreviewed for SVG 2 requirement mapping).",
-      "spec_requirements": [],
+      "spec_requirements": [
+        "svg2-cr-20181004/shapes/PolygonElement/req-01"
+      ],
       "capabilities": []
     },
     {
@@ -70,7 +78,9 @@
         "provenance": "upstream-resvg-golden"
       },
       "assertion": "Imported resvg base case shapes/polyline/simple-case; upstream reference rendering (unreviewed for SVG 2 requirement mapping).",
-      "spec_requirements": [],
+      "spec_requirements": [
+        "svg2-cr-20181004/shapes/PolylineElement/req-01"
+      ],
       "capabilities": []
     },
     {
@@ -84,7 +94,9 @@
         "provenance": "upstream-resvg-golden"
       },
       "assertion": "Imported resvg base case painting/fill/named-color; upstream reference rendering (unreviewed for SVG 2 requirement mapping).",
-      "spec_requirements": [],
+      "spec_requirements": [
+        "svg2-cr-20181004/painting/SpecifyingFillPaint/req-01"
+      ],
       "capabilities": []
     },
     {
@@ -98,7 +110,9 @@
         "provenance": "upstream-resvg-golden"
       },
       "assertion": "Imported resvg base case painting/fill-opacity/50percent; upstream reference rendering (unreviewed for SVG 2 requirement mapping).",
-      "spec_requirements": [],
+      "spec_requirements": [
+        "svg2-cr-20181004/painting/FillOpacity/req-01"
+      ],
       "capabilities": []
     },
     {
@@ -126,7 +140,9 @@
         "provenance": "upstream-resvg-golden"
       },
       "assertion": "Imported resvg base case painting/fill-rule/evenodd; upstream reference rendering (unreviewed for SVG 2 requirement mapping).",
-      "spec_requirements": [],
+      "spec_requirements": [
+        "svg2-cr-20181004/painting/WindingRule/req-02"
+      ],
       "capabilities": []
     },
     {
@@ -141,8 +157,12 @@
       },
       "assertion": "Imported resvg base case text/text/simple-case; upstream reference rendering (unreviewed for SVG 2 requirement mapping).",
       "spec_requirements": [],
-      "capabilities": ["text"],
-      "resources": ["fonts/NotoSans-Regular.ttf"]
+      "capabilities": [
+        "text"
+      ],
+      "resources": [
+        "fonts/NotoSans-Regular.ttf"
+      ]
     }
   ]
 }

@@ -48,12 +48,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from manifest_validation import validate_manifest
 from path_safety import read_text_capped
 import jsonschema_lite
 
 
 REQUIREMENT_SCHEMA_NAME = "requirement-v1.schema.json"
+CORPUS_SCHEMA_NAME = "corpus-v1.schema.json"
 
 # Evidence-state partitions. Only ``covered-pass`` is passing evidence; every
 # other testable state is a visible gap. ``not-applicable`` leaves the
@@ -170,6 +170,11 @@ def lint(
     """
 
     corpora = corpora or []
+    # When at least one corpus is supplied it is the authoritative test universe,
+    # so a coverage-claiming requirement's linked test must exist in it. With no
+    # corpus supplied the universe is unknown, so existence is deferred (but a
+    # covered-pass must still carry a test id, checked below).
+    has_corpus_universe = bool(corpora)
     requirements_by_id, errors = collect_requirements(inventories)
     tests_by_id, test_errors = collect_tests(corpora, base_corpora)
     errors.extend(test_errors)
@@ -189,13 +194,14 @@ def lint(
         for test_id in test_ids:
             record = tests_by_id.get(test_id)
             if record is None:
-                if evidence in COVERAGE_CLAIMING_STATES:
+                if evidence in COVERAGE_CLAIMING_STATES and has_corpus_universe:
                     errors.append(
                         f"{req_id!r} claims {evidence!r} but its linked test "
                         f"{test_id!r} exists in no corpus"
                     )
                 # Otherwise the id is a recorded candidate for a not-yet-authored
-                # test, which the design permits for a gap requirement.
+                # test (permitted for a gap requirement), or the corpus universe
+                # was not supplied so existence cannot be judged here.
                 continue
             if req_id not in record["requirements"]:
                 errors.append(
@@ -352,17 +358,26 @@ def _load_inventories(spec_dir: Path, schema_dir: Path) -> tuple[list[dict], lis
     return inventories, errors
 
 
-def _load_corpora(
-    corpus_paths: list[Path], schema_dir: Path, known_requirements: set[str]
-) -> tuple[list[dict], list[str]]:
+def _load_corpora(corpus_paths: list[Path], schema_dir: Path) -> tuple[list[dict], list[str]]:
+    """Load corpus manifests for graph checking only.
+
+    This validates a manifest's *structure* (via the corpus schema) but not its
+    filesystem facts: path safety, file existence, and content hashes are owned
+    by ``manifest_validation``/``manifest_validation_tests``. Keeping the coverage
+    lint off the filesystem lets it reason about the requirement/test graph from
+    committed JSON alone, without staging a corpus's inputs and oracles.
+    """
+
+    schema = json.loads((schema_dir / CORPUS_SCHEMA_NAME).read_text(encoding="utf-8"))
     corpora: list[dict] = []
     errors: list[str] = []
     for path in corpus_paths:
-        structural = validate_manifest(path, schema_dir, known_requirements=known_requirements)
+        manifest = json.loads(read_text_capped(path))
+        structural = jsonschema_lite.validate(manifest, schema)
         if structural:
             errors.extend(f"{path.name}: {message}" for message in structural)
             continue
-        corpora.append(json.loads(read_text_capped(path)))
+        corpora.append(manifest)
     return corpora, errors
 
 
@@ -380,12 +395,7 @@ def check(
     if errors:
         return errors
 
-    known_requirements = {
-        requirement["id"]
-        for inventory in inventories
-        for requirement in inventory["requirements"]
-    }
-    corpora, corpus_errors = _load_corpora(corpus_paths or [], schema_dir, known_requirements)
+    corpora, corpus_errors = _load_corpora(corpus_paths or [], schema_dir)
     errors.extend(corpus_errors)
     if errors:
         return errors

@@ -1,0 +1,485 @@
+{
+  "schema": "https://donner.graphics/svg2-suite/requirement-v1.schema.json",
+  "baseline": "svg2-cr-20181004",
+  "requirements": [
+    {
+      "id": "svg2-cr-20181004/shapes/RectElement/req-01",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "10.2 The 'rect' element",
+      "anchor": "RectElement",
+      "assertion": "A rect element renders an axis-aligned rectangle at (x, y) with the given width and height.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [
+        "resvg/shapes/rect/simple-case"
+      ],
+      "review_state": "reviewed",
+      "evidence_state": "covered-pass",
+      "rationale": "Reviewed mapping: the resvg pilot case shapes/rect/simple-case isolates this requirement, its upstream golden is a conforming oracle for this simple assertion by specification inspection, and the Donner adapter renders it to an exact match (proven by the donner_svg2_pilot parity test). A plain filled rect is drawn as its rectangle.",
+      "artifacts": [],
+      "source_text_hash": "sha256:2395842b6deab8edf07e7cbf85b5541667914af972cf4ecd9e7fbd7c395d0a76"
+    },
+    {
+      "id": "svg2-cr-20181004/shapes/RectElement/req-02",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "10.2 The 'rect' element",
+      "anchor": "RectElement",
+      "assertion": "A negative value for width, height, rx, or ry is illegal and must be ignored as a parsing error.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [
+        "donner-svg2/shapes/rect/negative-width-ignored"
+      ],
+      "review_state": "reviewed",
+      "evidence_state": "covered-pass",
+      "rationale": "Covered by the Donner-authored SVG2 extension case donner-svg2/shapes/rect/negative-width-ignored, which isolates this requirement (negative rect width ignored) against a manually-constructed exact geometric reference; the Donner adapter renders it to a byte-exact match (donner_svg2_suite). Reference provenance and an independent oracle review are recorded with the extension corpus.",
+      "artifacts": [],
+      "source_text_hash": "sha256:0d87e09a508c0e9c4574a9fb84a7e87966c319d43216d62262a0298ba8652c8d"
+    },
+    {
+      "id": "svg2-cr-20181004/shapes/RectElement/req-03",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "10.2 The 'rect' element",
+      "anchor": "RectElement",
+      "assertion": "A computed value of zero for either the width or the height disables rendering of the rect.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [],
+      "review_state": "reviewed",
+      "evidence_state": "missing-test",
+      "rationale": "",
+      "artifacts": [],
+      "source_text_hash": "sha256:cf6a3d3d4bdcf4285453bb40339e46cbe3a2e6f18a81ecbf3891b5f77c17909c"
+    },
+    {
+      "id": "svg2-cr-20181004/shapes/RectElement/req-04",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "10.2 The 'rect' element",
+      "anchor": "RectElement",
+      "assertion": "When both rx and ry are auto, the used value of both is 0, so the rect has square corners.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [],
+      "review_state": "reviewed",
+      "evidence_state": "missing-test",
+      "rationale": "",
+      "artifacts": [],
+      "source_text_hash": "sha256:32dc85079fb184efa18556063c52d16be55fdd688223a3eec30c4759f65ae9f6",
+      "feature_flags": [
+        "rounded-rect"
+      ]
+    },
+    {
+      "id": "svg2-cr-20181004/shapes/RectElement/req-05",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "10.2 The 'rect' element",
+      "anchor": "RectElement",
+      "assertion": "A used rx greater than half the used width is clamped to half the width, and likewise ry to half the height.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [],
+      "review_state": "reviewed",
+      "evidence_state": "missing-test",
+      "rationale": "",
+      "artifacts": [],
+      "source_text_hash": "sha256:ff98553bd00bf04e464c92b2536fc3a0984ecccebb47e0e37a14b4ddee74faf0",
+      "feature_flags": [
+        "rounded-rect"
+      ]
+    },
+    {
+      "id": "svg2-cr-20181004/shapes/CircleElement/req-01",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "10.3 The 'circle' element",
+      "anchor": "CircleElement",
+      "assertion": "A circle element renders a circle centered at (cx, cy) with radius r.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [
+        "resvg/shapes/circle/simple-case"
+      ],
+      "review_state": "reviewed",
+      "evidence_state": "covered-pass",
+      "rationale": "Reviewed mapping: the resvg pilot case shapes/circle/simple-case isolates this requirement, its upstream golden is a conforming oracle for this simple assertion by specification inspection, and the Donner adapter renders it to an exact match (proven by the donner_svg2_pilot parity test). A plain filled circle is drawn as its disc.",
+      "artifacts": [],
+      "source_text_hash": "sha256:f003746ebceac4efef6b7472bca3faa268a49aa235358b47afc814b82149b4fe"
+    },
+    {
+      "id": "svg2-cr-20181004/shapes/CircleElement/req-02",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "10.3 The 'circle' element",
+      "anchor": "CircleElement",
+      "assertion": "A negative value for the r property is illegal and must be ignored as a parsing error.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [],
+      "review_state": "reviewed",
+      "evidence_state": "missing-test",
+      "rationale": "",
+      "artifacts": [],
+      "source_text_hash": "sha256:14e6c5f3589c27058bc414b995b744c9ffb82ca0f744b3b7f45f5c8e402d89b4"
+    },
+    {
+      "id": "svg2-cr-20181004/shapes/EllipseElement/req-01",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "10.4 The 'ellipse' element",
+      "anchor": "EllipseElement",
+      "assertion": "An ellipse element renders an axis-aligned ellipse centered at (cx, cy) with radii rx and ry.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [
+        "resvg/shapes/ellipse/simple-case"
+      ],
+      "review_state": "reviewed",
+      "evidence_state": "covered-pass",
+      "rationale": "Reviewed mapping: the resvg pilot case shapes/ellipse/simple-case isolates this requirement, its upstream golden is a conforming oracle for this simple assertion by specification inspection, and the Donner adapter renders it to an exact match (proven by the donner_svg2_pilot parity test). A plain filled ellipse is drawn as its shape.",
+      "artifacts": [],
+      "source_text_hash": "sha256:ccba4f31960fd76e7813c26d99532e6d93419311648f63783841e2a271fe74a9"
+    },
+    {
+      "id": "svg2-cr-20181004/shapes/EllipseElement/req-02",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "10.4 The 'ellipse' element",
+      "anchor": "EllipseElement",
+      "assertion": "A negative value for the rx or ry property is illegal and must be ignored as a parsing error.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [],
+      "review_state": "reviewed",
+      "evidence_state": "missing-test",
+      "rationale": "",
+      "artifacts": [],
+      "source_text_hash": "sha256:c46658b00a6b7558e3f0769dfa7ed55afdd2263e5c243671733893cda9030a91"
+    },
+    {
+      "id": "svg2-cr-20181004/shapes/EllipseElement/req-03",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "10.4 The 'ellipse' element",
+      "anchor": "EllipseElement",
+      "assertion": "An auto value for rx or ry is resolved using the same rules as for rect radii.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [],
+      "review_state": "reviewed",
+      "evidence_state": "missing-test",
+      "rationale": "",
+      "artifacts": [],
+      "source_text_hash": "sha256:b64a6e9f470897464ca4efedb8380c0e513cdaef6b32dacdb3d166d7d94196db"
+    },
+    {
+      "id": "svg2-cr-20181004/shapes/EllipseElement/req-04",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "10.4 The 'ellipse' element",
+      "anchor": "EllipseElement",
+      "assertion": "A computed value of zero for either radius, or auto for both radii, disables rendering of the ellipse.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [],
+      "review_state": "reviewed",
+      "evidence_state": "missing-test",
+      "rationale": "",
+      "artifacts": [],
+      "source_text_hash": "sha256:9a4adf6065f007f9174a596e405a80597f47295e45caa846f31a7b81a9a1f343"
+    },
+    {
+      "id": "svg2-cr-20181004/shapes/LineElement/req-01",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "10.5 The 'line' element",
+      "anchor": "LineElement",
+      "assertion": "A line element is geometrically one-dimensional and is never filled.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [
+        "donner-svg2/shapes/line/never-filled"
+      ],
+      "review_state": "reviewed",
+      "evidence_state": "covered-pass",
+      "rationale": "Covered by the Donner-authored SVG2 extension case donner-svg2/shapes/line/never-filled, which isolates this requirement (a line is never filled) against a manually-constructed exact geometric reference; the Donner adapter renders it to a byte-exact match (donner_svg2_suite). Reference provenance and an independent oracle review are recorded with the extension corpus.",
+      "artifacts": [],
+      "source_text_hash": "sha256:0ceb2a1e175d2f99bb57bf7c437eb5ae68a551fe9dbb63c3ab3b2fd4f61ffc81"
+    },
+    {
+      "id": "svg2-cr-20181004/shapes/LineElement/req-02",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "10.5 The 'line' element",
+      "anchor": "LineElement",
+      "assertion": "A line element renders a straight segment from (x1, y1) to (x2, y2).",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [],
+      "review_state": "reviewed",
+      "evidence_state": "missing-test",
+      "rationale": "",
+      "artifacts": [],
+      "source_text_hash": "sha256:d1073ebab99ee372d74bf7dba51016c5d4e31f3dda07d53e40b93ad629edc5c7"
+    },
+    {
+      "id": "svg2-cr-20181004/shapes/PolylineElement/req-01",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "10.6 The 'polyline' element",
+      "anchor": "PolylineElement",
+      "assertion": "A polyline element renders connected straight segments through its points and is left open (not auto-closed).",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [
+        "resvg/shapes/polyline/simple-case"
+      ],
+      "review_state": "reviewed",
+      "evidence_state": "covered-pass",
+      "rationale": "Reviewed mapping: the resvg pilot case shapes/polyline/simple-case isolates this requirement, its upstream golden is a conforming oracle for this simple assertion by specification inspection, and the Donner adapter renders it to an exact match (proven by the donner_svg2_pilot parity test). The open polyline path is drawn through its points.",
+      "artifacts": [],
+      "source_text_hash": "sha256:5358c0de2553e16c1be872024693ae65bd7c7af1448720466b910fc9d03d8c19"
+    },
+    {
+      "id": "svg2-cr-20181004/shapes/PolylineElement/req-02",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "10.6 The 'polyline' element",
+      "anchor": "PolylineElement",
+      "assertion": "If an odd number of coordinates is provided in points, the element is in error and the last odd coordinate is dropped.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [],
+      "review_state": "reviewed",
+      "evidence_state": "missing-test",
+      "rationale": "",
+      "artifacts": [],
+      "source_text_hash": "sha256:6344268a323d64b977c47306df1be37e77d464c1b45c2a4e0982edaf0eadee15"
+    },
+    {
+      "id": "svg2-cr-20181004/shapes/PolygonElement/req-01",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "10.7 The 'polygon' element",
+      "anchor": "PolygonElement",
+      "assertion": "A polygon element renders a closed shape of connected straight segments through its points, automatically closing the final segment.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [
+        "resvg/shapes/polygon/simple-case"
+      ],
+      "review_state": "reviewed",
+      "evidence_state": "covered-pass",
+      "rationale": "Reviewed mapping: the resvg pilot case shapes/polygon/simple-case isolates this requirement, its upstream golden is a conforming oracle for this simple assertion by specification inspection, and the Donner adapter renders it to an exact match (proven by the donner_svg2_pilot parity test). The closed polygon path is drawn and auto-closed.",
+      "artifacts": [],
+      "source_text_hash": "sha256:bd08fa49bf9f2a36f0cb54cafcf92f96e2150c46cfd6083e3e17edf4dbad2af6"
+    },
+    {
+      "id": "svg2-cr-20181004/shapes/PolygonElement/req-02",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "10.7 The 'polygon' element",
+      "anchor": "PolygonElement",
+      "assertion": "If an odd number of coordinates is provided in points, the element is in error and the last odd coordinate is dropped.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [],
+      "review_state": "reviewed",
+      "evidence_state": "missing-test",
+      "rationale": "",
+      "artifacts": [],
+      "source_text_hash": "sha256:9feb19497157c608e82ef7a8935b8f9eb40759b315634556db6339f6edf1b86c"
+    }
+  ]
+}
