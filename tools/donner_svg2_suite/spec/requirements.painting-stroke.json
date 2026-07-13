@@ -1,0 +1,309 @@
+{
+  "schema": "https://donner.graphics/svg2-suite/requirement-v1.schema.json",
+  "baseline": "svg2-cr-20181004",
+  "requirements": [
+    {
+      "id": "svg2-cr-20181004/painting/StrokeWidth/req-01",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "13.5.3 Stroke width: the 'stroke-width' property",
+      "anchor": "StrokeWidth",
+      "assertion": "A negative value for the stroke-width property is invalid.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [],
+      "review_state": "reviewed",
+      "evidence_state": "missing-test",
+      "rationale": "",
+      "artifacts": [],
+      "source_text_hash": "sha256:fbee20af34349732c63a950454e6985f3a831e2bbfaa73ae923f9214167fd764",
+      "feature_flags": [
+        "stroke"
+      ]
+    },
+    {
+      "id": "svg2-cr-20181004/painting/StrokeWidth/req-02",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "13.5.3 Stroke width: the 'stroke-width' property",
+      "anchor": "StrokeWidth",
+      "assertion": "A stroke-width value of zero causes no stroke to be painted.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [],
+      "review_state": "reviewed",
+      "evidence_state": "missing-test",
+      "rationale": "",
+      "artifacts": [],
+      "source_text_hash": "sha256:5773dedc8cf54987bcfcd8593541a453bf8cb3a716be1ac1b837fb1528057fdb",
+      "feature_flags": [
+        "stroke"
+      ]
+    },
+    {
+      "id": "svg2-cr-20181004/painting/LineCaps/req-01",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "13.5.4 Drawing caps at the ends of strokes: the 'stroke-linecap' property",
+      "anchor": "LineCaps",
+      "assertion": "stroke-linecap butt does not extend the stroke beyond the subpath endpoints.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [],
+      "review_state": "reviewed",
+      "evidence_state": "missing-test",
+      "rationale": "",
+      "artifacts": [],
+      "source_text_hash": "sha256:7b003b596e907f0243ccd82041392d2c674273556c171bb3078fab70d139a0dd",
+      "feature_flags": [
+        "stroke"
+      ]
+    },
+    {
+      "id": "svg2-cr-20181004/painting/LineCaps/req-02",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "13.5.4 Drawing caps at the ends of strokes: the 'stroke-linecap' property",
+      "anchor": "LineCaps",
+      "assertion": "stroke-linecap round extends each subpath end by a half-circle with diameter equal to the stroke width.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [],
+      "review_state": "reviewed",
+      "evidence_state": "missing-test",
+      "rationale": "",
+      "artifacts": [],
+      "source_text_hash": "sha256:63bb3f27d67768c21ba13bfe77e1e2310a2bb3a058a7e311cc1b3a8e07be4ef0",
+      "feature_flags": [
+        "stroke"
+      ]
+    },
+    {
+      "id": "svg2-cr-20181004/painting/LineCaps/req-03",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "13.5.4 Drawing caps at the ends of strokes: the 'stroke-linecap' property",
+      "anchor": "LineCaps",
+      "assertion": "stroke-linecap square extends each subpath end by a half-square with side equal to the stroke width.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [],
+      "review_state": "reviewed",
+      "evidence_state": "missing-test",
+      "rationale": "",
+      "artifacts": [],
+      "source_text_hash": "sha256:bcb57f490b30db552fb9d18189f721cc3b148c6cf5c4b40983251324e413c52b",
+      "feature_flags": [
+        "stroke"
+      ]
+    },
+    {
+      "id": "svg2-cr-20181004/painting/LineJoin/req-01",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "13.5.5 Controlling line joins: the 'stroke-linejoin' and 'stroke-miterlimit' properties",
+      "anchor": "LineJoin",
+      "assertion": "stroke-linejoin selects how path segments are joined: miter (sharp), round, or bevel (bevelled) corners.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [],
+      "review_state": "reviewed",
+      "evidence_state": "missing-test",
+      "rationale": "",
+      "artifacts": [],
+      "source_text_hash": "sha256:987a43c9b8eda06aacb7b8cb7f1d86ea05887a10564e7f5da7fda5f25f80d690",
+      "feature_flags": [
+        "stroke"
+      ]
+    },
+    {
+      "id": "svg2-cr-20181004/painting/LineJoin/req-02",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "13.5.5 Controlling line joins: the 'stroke-linejoin' and 'stroke-miterlimit' properties",
+      "anchor": "LineJoin",
+      "assertion": "A negative value for stroke-miterlimit is an error.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [],
+      "review_state": "reviewed",
+      "evidence_state": "missing-test",
+      "rationale": "",
+      "artifacts": [],
+      "source_text_hash": "sha256:028047101492b0a2b8b7a33680255e8da32a6f28de4f428ad829e1bcfed9d0c1",
+      "feature_flags": [
+        "stroke"
+      ]
+    },
+    {
+      "id": "svg2-cr-20181004/painting/StrokeDashing/req-01",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "13.5.6 Dashing strokes: the 'stroke-dasharray' and 'stroke-dashoffset' properties",
+      "anchor": "StrokeDashing",
+      "assertion": "If any value in stroke-dasharray is negative, the value is invalid.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [],
+      "review_state": "reviewed",
+      "evidence_state": "missing-test",
+      "rationale": "",
+      "artifacts": [],
+      "source_text_hash": "sha256:659ee231202fcad544bd6245cc3bb5a4a72e624ad04d8cfc632ab7921b017152",
+      "feature_flags": [
+        "stroke",
+        "dashing"
+      ]
+    },
+    {
+      "id": "svg2-cr-20181004/painting/StrokeDashing/req-02",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "13.5.6 Dashing strokes: the 'stroke-dasharray' and 'stroke-dashoffset' properties",
+      "anchor": "StrokeDashing",
+      "assertion": "If stroke-dasharray has an odd number of values, the list is repeated once to yield an even number of values.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [],
+      "review_state": "reviewed",
+      "evidence_state": "missing-test",
+      "rationale": "",
+      "artifacts": [],
+      "source_text_hash": "sha256:59f0e599916bd57574fc43ecb1c9fb8e0f41e92e5768645bf56285c0b5558a19",
+      "feature_flags": [
+        "stroke",
+        "dashing"
+      ]
+    },
+    {
+      "id": "svg2-cr-20181004/painting/StrokeDashing/req-03",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "13.5.6 Dashing strokes: the 'stroke-dasharray' and 'stroke-dashoffset' properties",
+      "anchor": "StrokeDashing",
+      "assertion": "A stroke-dasharray value of none indicates that no dashing is applied to the stroke.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [],
+      "review_state": "reviewed",
+      "evidence_state": "missing-test",
+      "rationale": "",
+      "artifacts": [],
+      "source_text_hash": "sha256:15b622438fc930736e763650f4c84f9596f41261a1b649cffcfe62ca01cdc510",
+      "feature_flags": [
+        "stroke",
+        "dashing"
+      ]
+    }
+  ]
+}

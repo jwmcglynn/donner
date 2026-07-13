@@ -16,6 +16,11 @@ import spec_coverage_lint
 
 
 SPEC_DIR = Path(spec_coverage_lint.__file__).resolve().parent / "spec"
+# The reviewed resvg->requirement mapping lives in the Donner pilot corpus. Both
+# the bazel runfiles tree and a plain source checkout place it two levels above
+# the tools/donner_svg2_suite package.
+WORKSPACE_ROOT = Path(spec_coverage_lint.__file__).resolve().parents[2]
+PILOT_MANIFEST = WORKSPACE_ROOT / "donner/svg/renderer/tests/pilot_corpus/manifest.json"
 
 
 def requirement(
@@ -72,8 +77,17 @@ def test_case(test_id: str, requirements: list[str]) -> dict:
 
 
 class ShippedGraphTest(unittest.TestCase):
-    def test_committed_inventory_lints_clean(self):
-        # The paint-order seed on its own (no extension corpus yet) is consistent.
+    def test_committed_graph_lints_clean(self):
+        # The committed inventories, cross-checked against the reviewed resvg
+        # pilot corpus, form a consistent bidirectional graph: every covered-pass
+        # mapping is mutual and its test exists.
+        self.assertTrue(PILOT_MANIFEST.is_file(), f"pilot manifest not staged at {PILOT_MANIFEST}")
+        errors = spec_coverage_lint.check(SPEC_DIR, [PILOT_MANIFEST])
+        self.assertEqual(errors, [], errors)
+
+    def test_inventory_only_check_is_clean(self):
+        # Inventory-only checking (no corpus universe) still passes: it validates
+        # states, anchors, and covered-pass integrity from the inventories alone.
         errors = spec_coverage_lint.check(SPEC_DIR)
         self.assertEqual(errors, [], errors)
 
@@ -83,11 +97,11 @@ class ShippedGraphTest(unittest.TestCase):
             self.assertEqual(spec_coverage_lint.emit_artifacts(SPEC_DIR, out), [])
             gaps = json.loads((out / "gaps.json").read_text())
             summary = gaps["summary"]
-            # Every shipped paint-order requirement is a gap (missing-test), so
-            # nothing is counted as passing.
-            self.assertEqual(summary["covered_pass"], 0)
-            self.assertEqual(summary["gaps"], summary["total"])
-            self.assertGreaterEqual(summary["total"], 3)
+            # Passing evidence is exactly the covered-pass mappings; every other
+            # testable state remains a visible gap.
+            self.assertEqual(summary["covered_pass"] + summary["gaps"] + summary["not_applicable"], summary["total"])
+            self.assertEqual(summary["covered_pass"], 8)
+            self.assertGreaterEqual(summary["total"], 35)
             self.assertTrue((out / "requirements.json").is_file())
             self.assertTrue((out / "coverage.json").is_file())
 
@@ -152,8 +166,11 @@ class NegativeGraphTest(unittest.TestCase):
         self._assert_flags(errors, "not reviewed")
 
     def test_covered_pass_dangling_test_rejected(self):
+        # With a corpus universe present, a covered-pass whose linked test is
+        # absent from it is a dangling claim.
         req = requirement(evidence_state="covered-pass", test_ids=["donner-svg2/painting/paint-order/ghost"])
-        errors = spec_coverage_lint.lint([inventory([req])], [])
+        other = test_case("resvg/shapes/rect/simple-case", [])
+        errors = spec_coverage_lint.lint([inventory([req])], [corpus("resvg", [other])])
         self._assert_flags(errors, "exists in no corpus")
 
     def test_non_mutual_edge_from_test_rejected(self):
