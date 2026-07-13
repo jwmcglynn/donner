@@ -27,14 +27,6 @@ ImageComparisonParams WithMaxPixels(int maxMismatchedPixels, std::string_view re
   return params;
 }
 
-// Disable only the Geode backend for a test the CPU backends still compare. Used for
-// CPU-only features Geode does not implement yet (e.g. paint-order, 0-N dash caps).
-ImageComparisonParams GeodeDisabled(std::string_view reason) {
-  ImageComparisonParams params;
-  params.disableBackend(RendererBackend::Geode, reason);
-  return params;
-}
-
 ImageComparisonParams categoryFeatureRequirements(std::string_view category) {
   ImageComparisonParams params;
   if (category.rfind("filters/", 0) == 0) {
@@ -320,10 +312,7 @@ INSTANTIATE_TEST_SUITE_P(FiltersFeMerge, ImageComparisonTestFixture,
 
 INSTANTIATE_TEST_SUITE_P(
     FiltersFeMorphology, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory("filters/feMorphology",
-                                        {
-                                            {"source-with-opacity.svg", Params{}},
-                                        })),
+    Combine(ValuesIn(getTestsInCategory("filters/feMorphology")),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
@@ -499,7 +488,6 @@ INSTANTIATE_TEST_SUITE_P(
                 {"clipping-with-text.svg", Params::Skip("Not impl: clipPath with <text> children")},
                 {"on-the-root-svg-without-size.svg",
                  Params::RenderOnly("UB: on root `<svg>` without size")},
-                {"with-use-child.svg", Params::Skip("Not impl: <use> child")},
 
                 {"circle-shorthand-with-stroke-box.svg",
                  Params::Skip("Bug: clipPath edge cases beyond core support")},
@@ -590,11 +578,13 @@ INSTANTIATE_TEST_SUITE_P(
                     {"tiny-pattern-upscaled.svg",
                      Params::WithThreshold(0.02f, 500, "Upscaled pattern edge AA")},
                     {"transform-and-patternTransform.svg",
-                     ImageComparisonParams().disableBackend(
-                         RendererBackend::Geode,
+                     Params{}.withGeodeGoldenOverride(
+                         "donner/svg/renderer/testdata/golden/geode/"
+                         "paint-servers_pattern_transform-and-patternTransform.png",
                          "Geode analytic dual-ray Slug coverage (0041 §6) on the rotated rounded "
                          "rect edge diverges from the resvg finite-sample reference by a ~1px edge "
-                         "band (115px), interacting with the pattern tile seams")},
+                         "band, interacting with the pattern tile seams; the exact backend golden "
+                         "keeps the case gated without a threshold exception")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -725,7 +715,6 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-orient=auto-on-M-C-C-4.png")
                      .withReason("Pre-existing rendering diff (stroke/AA), not cusp-related")},
-                {"orient=auto-on-M-L-Z.svg", Params{}},
                 {"target-with-subpaths-2.svg", Params::RenderOnly("UB: Target with subpaths")},
                 {"with-a-large-stroke.svg", WithMaxPixels(300, "Marker clip edge AA")},
                 {"with-a-text-child.svg",
@@ -739,14 +728,6 @@ INSTANTIATE_TEST_SUITE_P(
                 {"with-invalid-markerUnits.svg", WithMaxPixels(300, "Marker clip edge AA")},
                 {"with-markerUnits=userSpaceOnUse.svg", WithMaxPixels(300, "Marker clip edge AA")},
                 {"with-viewBox-1.svg", Params::RenderOnly("UB: with `viewBox`")},
-
-                // Issue #623: the rounded-rect start corner now stacks marker-start +
-                // arrival marker-mid + marker-end (3 markers), matching resvg, after
-                // Path::vertices() emits the arrival mid for zero-length-close corner
-                // contours. Residual sub-marker edge coverage is a measured ~24px, under
-                // the default comparison budget, so no per-test override is needed.
-                {"marker-on-rounded-rect.svg", Params{}},
-                {"recursive-5.svg", Params{}},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -772,22 +753,24 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "painting/paint-order",
             {
-                // `Te<tspan paint-order="stroke fill">xt</tspan>` is the exact Latin kerning
-                // case covered by the layout tests. The vendored PNG is not a strict geometry
-                // oracle: it loses e-x kerning at the paint-only tspan boundary that Donner
-                // preserves, so it cannot isolate the fixture's paint-order behavior. Keep the
-                // reference skipped until a compatible oracle exists. See #624.
+                // The vendored PNG loses e-x kerning at the paint-only tspan boundary. Donner's
+                // custom goldens preserve continuous shaping while still gating paint order.
                 {"on-tspan.svg",
-                 Params::Skip("vendored PNG loses e-x kerning across paint-only tspan boundary")},
-                // paint-order rendering is implemented on the CPU backend only; Geode does not
-                // honor the fill/stroke/marker reordering yet. Compare CPU, disable Geode.
-                {"fill-markers-stroke.svg", GeodeDisabled("Geode paint-order rendering gap")},
-                {"markers-stroke.svg", GeodeDisabled("Geode paint-order rendering gap")},
-                {"markers.svg", GeodeDisabled("Geode paint-order rendering gap")},
-                {"stroke-markers-fill.svg", GeodeDisabled("Geode paint-order rendering gap")},
-                {"stroke-markers.svg", GeodeDisabled("Geode paint-order rendering gap")},
-                {"stroke.svg", GeodeDisabled("Geode paint-order rendering gap")},
-                {"on-text.svg", GeodeDisabled("Geode paint-order rendering gap")},
+                 Params::WithGoldenOverride(
+                     "donner/svg/renderer/testdata/golden/resvg-paint-order-on-tspan.png")
+                     .withReason("Preserve cross-span kerning across a paint-only tspan boundary")
+                     .withGeodeGoldenOverride(
+                         "donner/svg/renderer/testdata/golden/geode/"
+                         "painting_paint-order_on-tspan.png",
+                         "Exact Geode analytic text-edge oracle for the same shaped glyph run")},
+                {"on-text.svg",
+                 Params{}.withGeodeGoldenOverride(
+                     "donner/svg/renderer/testdata/golden/geode/"
+                     "painting_paint-order_on-text.png",
+                     "Geode's whole-run stroke-then-fill order is covered independently; its "
+                     "analytic glyph edge coverage differs from resvg's finite-sample text "
+                     "rasterization, so this exact backend golden preserves a zero-tolerance "
+                     "oracle without masking paint-order behavior.")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -829,10 +812,6 @@ INSTANTIATE_TEST_SUITE_P(
                     {"negative-values.svg", Params::RenderOnly("UB (negative values)")},
 
                     {"n-0.svg", Params::WithThreshold(0.0f, 0, "Closed-path dash seam identity")},
-                    // `0 N` round/square caps render as dots on the CPU backend; Geode's dot
-                    // rendering for zero-length dashes differs. Compare CPU, disable Geode.
-                    {"0-n-with-round-caps.svg", GeodeDisabled("Geode 0-N dash cap rendering gap")},
-                    {"0-n-with-square-caps.svg", GeodeDisabled("Geode 0-N dash cap rendering gap")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1386,8 +1365,6 @@ INSTANTIATE_TEST_SUITE_P(
                     {"on-Arabic.svg", Params()
                                           .requireFeature(RendererBackendFeature::TextFull)
                                           .withReason("Arabic text")},
-
-                    {"filter-bbox.svg", Params::Skip("Bug: letter-spacing edge cases")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1443,10 +1420,6 @@ INSTANTIATE_TEST_SUITE_P(
                     {"zalgo.svg", Params().withMaxPixelsDifferent(300).onlyTextFull().withReason(
                                       "Complex diacritics; vertical-axis AA diff "
                                       "not the focus of the test")},
-
-                    {"filter-bbox.svg",
-                     Params::Skip(
-                         "Bug: text rendering edge cases (mixed inline content, BiDi-adjacent)")},
                     {"ligatures-handling-in-mixed-fonts-1.svg",
                      Params::Skip(
                          "Bug: text rendering edge cases (mixed inline content, BiDi-adjacent)")},
