@@ -126,3 +126,30 @@ py_test(
     ],
     data = ["reference_adapter.py"],
 )
+
+# Milestone 3: package the resvg base layer. Generates a corpus-v1 manifest
+# from the pinned, unmodified upstream tree at //third_party/resvg-test-suite.
+
+py_binary(
+    name = "resvg_base_manifest",
+    srcs = ["resvg_base_manifest.py"],
+    main = "resvg_base_manifest.py",
+    visibility = ["//visibility:public"],
+)
+
+py_test(
+    name = "resvg_base_manifest_tests",
+    srcs = [
+        "jsonschema_lite.py",
+        "manifest_validation.py",
+        "path_safety.py",
+        "resvg_base_manifest.py",
+        "resvg_base_manifest_tests.py",
+    ],
+    data = [
+        ":schemas",
+        "//third_party/resvg-test-suite:LICENSE",
+        "//third_party/resvg-test-suite:tests",
+    ],
+    deps = ["@rules_python//python/runfiles"],
+)

@@ -42,8 +42,8 @@
       "properties": {
         "id": {
           "type": "string",
-          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$",
-          "description": "Globally namespaced stable id, for example 'donner-svg2/painting/paint-order/tspan-boundary'."
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*/[A-Za-z0-9._=#-]+(?:/[A-Za-z0-9._=#-]+)*$",
+          "description": "Globally namespaced stable id, for example 'donner-svg2/painting/paint-order/tspan-boundary'. '=' and '#' are allowed in path segments because imported resvg base cases carry those characters in upstream filenames (for example 'filters/feColorMatrix/type=matrix')."
         },
         "input": {
           "$ref": "#/$defs/relpath"
@@ -57,7 +57,8 @@
         },
         "spec_requirements": {
           "type": "array",
-          "minItems": 1,
+          "minItems": 0,
+          "description": "Requirement links, when reviewed. Base-imported corpus cases (design 0057, 'Oracle governance': imported corpus membership is not sufficient provenance) carry an empty array until their assertion, applicability, and oracle are reviewed and mapped; the future spec_coverage_lint enforces mapping completeness, not this schema.",
           "items": {
             "$ref": "#/$defs/requirementId"
           }
