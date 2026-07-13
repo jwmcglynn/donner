@@ -8,9 +8,11 @@
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <string_view>
+#include <thread>
 
 #include "donner/base/StringUtils.h"
 #include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
@@ -351,10 +353,43 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
   deviceDesc.uncapturedErrorCallbackInfo.userdata1 = nullptr;
   deviceDesc.uncapturedErrorCallbackInfo.userdata2 = nullptr;
 
-  result->device_ = result->adapter_.requestDevice(deviceDesc);
-  if (!result->device_) {
+  // Bounded retry around device creation only.
+  //
+  // Under heavy parallel load the Intel Arc (ANV) Vulkan driver
+  // intermittently fails device initialization with a transient
+  // "Validation Error" (empirically around 1 in 80 device creations). This
+  // is a driver-side device-init race under contention, not a
+  // deterministic capability problem: the adapter was acquired
+  // successfully just above, and re-requesting the device after a short
+  // backoff succeeds. Retry a bounded number of times with exponential
+  // backoff, logging every retry so the flake stays observable in test
+  // logs rather than being silently absorbed.
+  //
+  // Only a null device return from requestDevice is retried. The
+  // deterministic failures (null instance, no adapter for the requested
+  // backend) already returned above and are never retried; a device lost
+  // after successful creation is out of scope here.
+  constexpr int kMaxDeviceInitRetries = 3;
+  constexpr int kDeviceInitBackoffMs[kMaxDeviceInitRetries] = {50, 200, 800};
+  for (int attempt = 0;; ++attempt) {
+    result->device_ = result->adapter_.requestDevice(deviceDesc);
+    if (result->device_) {
+      break;  // Device created successfully.
+    }
+
     std::fprintf(stderr, "[Geode/wgpu-native] Failed to create device.\n");
-    return nullptr;
+    if (attempt >= kMaxDeviceInitRetries) {
+      std::fprintf(stderr,
+                   "[Geode/wgpu-native] Giving up after %d device-creation retries.\n",
+                   kMaxDeviceInitRetries);
+      return nullptr;
+    }
+    const int backoffMs = kDeviceInitBackoffMs[attempt];
+    std::fprintf(stderr,
+                 "[Geode/wgpu-native] Transient device-init failure under parallel "
+                 "load; retrying (attempt %d of %d) after %d ms.\n",
+                 attempt + 1, kMaxDeviceInitRetries, backoffMs);
+    std::this_thread::sleep_for(std::chrono::milliseconds(backoffMs));
   }
 
   // 4. Grab the default queue.
