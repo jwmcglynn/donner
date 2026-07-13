@@ -323,6 +323,14 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
                    device.data(), static_cast<int>(arch.size()), arch.data(), backend, type,
                    info.vendorID, info.deviceID);
 
+      // Record whether we landed on a Vulkan backend (Intel Arc hardware or
+      // Mesa lavapipe software). GeodeFilterEngine uses this to serialize its
+      // per-pass compute submits, working around a nondeterministic
+      // cross-submit texture-visibility race that only Vulkan exposes.
+      // If wgpuAdapterGetInfo fails on a real Vulkan device the fix silently
+      // disables (accepted residual risk).
+      result->isVulkan_ = (info.backendType == WGPUBackendType_Vulkan);
+
       wgpuAdapterInfoFreeMembers(info);
     }
   }
@@ -432,6 +440,21 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateFromExternal(const GeodeEmbedCon
   // Preserve the host-provided adapter for callers that need adapter metadata.
   if (config.adapter) {
     result->adapter_ = config.adapter;
+
+    // Detect a Vulkan backend on the embedder-supplied adapter the same way
+    // CreateHeadless() does, so the filter-engine inter-pass serialization
+    // (see isVulkan()) also protects external Vulkan devices.
+#ifndef __EMSCRIPTEN__
+    {
+      WGPUAdapterInfo info = {};
+      if (wgpuAdapterGetInfo(result->adapter_, &info) == WGPUStatus_Success) {
+        // If wgpuAdapterGetInfo fails on a real Vulkan device the fix
+        // silently disables (accepted residual risk).
+        result->isVulkan_ = (info.backendType == WGPUBackendType_Vulkan);
+        wgpuAdapterInfoFreeMembers(info);
+      }
+    }
+#endif
   }
 
   result->supportsTimestamps_ = config.device.hasFeature(wgpu::FeatureName::TimestampQuery);

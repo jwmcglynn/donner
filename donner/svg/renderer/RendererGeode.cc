@@ -3060,6 +3060,16 @@ void RendererGeode::popFilterLayer() {
       geode::ScopedWgpuHandle<wgpu::CommandBuffer> copyCmd(copyEncoder.get().finish());
       impl_->device->queue().submit(1, &copyCmd.get());
 
+      // [Vulkan filter-sync] This copy is its own submit, but the blit below
+      // records a sample of `viewportTexture` into the frame encoder, which
+      // submits later - the same cross-submit copy-write -> sampled-read race
+      // class as the filter engine's per-pass submits. Serialize on Vulkan.
+      // Interim workaround; superseded by the single-encoder filter refactor
+      // (design 0030 M3).
+      if (impl_->device->isVulkan()) {
+        impl_->device->device().poll(true, nullptr);
+      }
+
       impl_->encoder->blitFullTarget(viewportTexture.get(), 1.0);
       impl_->device->deferDestroy(viewportTexture.take());
     }
