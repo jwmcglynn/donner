@@ -312,10 +312,7 @@ INSTANTIATE_TEST_SUITE_P(FiltersFeMerge, ImageComparisonTestFixture,
 
 INSTANTIATE_TEST_SUITE_P(
     FiltersFeMorphology, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory("filters/feMorphology",
-                                        {
-                                            {"source-with-opacity.svg", Params{}},
-                                        })),
+    Combine(ValuesIn(getTestsInCategory("filters/feMorphology")),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
@@ -491,7 +488,6 @@ INSTANTIATE_TEST_SUITE_P(
                 {"clipping-with-text.svg", Params::Skip("Not impl: clipPath with <text> children")},
                 {"on-the-root-svg-without-size.svg",
                  Params::RenderOnly("UB: on root `<svg>` without size")},
-                {"with-use-child.svg", Params{}},
 
                 {"circle-shorthand-with-stroke-box.svg",
                  Params::Skip("Bug: clipPath edge cases beyond core support")},
@@ -719,7 +715,6 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-orient=auto-on-M-C-C-4.png")
                      .withReason("Pre-existing rendering diff (stroke/AA), not cusp-related")},
-                {"orient=auto-on-M-L-Z.svg", Params{}},
                 {"target-with-subpaths-2.svg", Params::RenderOnly("UB: Target with subpaths")},
                 {"with-a-large-stroke.svg", WithMaxPixels(300, "Marker clip edge AA")},
                 {"with-a-text-child.svg",
@@ -733,14 +728,6 @@ INSTANTIATE_TEST_SUITE_P(
                 {"with-invalid-markerUnits.svg", WithMaxPixels(300, "Marker clip edge AA")},
                 {"with-markerUnits=userSpaceOnUse.svg", WithMaxPixels(300, "Marker clip edge AA")},
                 {"with-viewBox-1.svg", Params::RenderOnly("UB: with `viewBox`")},
-
-                // Issue #623: the rounded-rect start corner now stacks marker-start +
-                // arrival marker-mid + marker-end (3 markers), matching resvg, after
-                // Path::vertices() emits the arrival mid for zero-length-close corner
-                // contours. Residual sub-marker edge coverage is a measured ~24px, under
-                // the default comparison budget, so no per-test override is needed.
-                {"marker-on-rounded-rect.svg", Params{}},
-                {"recursive-5.svg", Params{}},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -776,12 +763,6 @@ INSTANTIATE_TEST_SUITE_P(
                          "donner/svg/renderer/testdata/golden/geode/"
                          "painting_paint-order_on-tspan.png",
                          "Exact Geode analytic text-edge oracle for the same shaped glyph run")},
-                {"fill-markers-stroke.svg", Params{}},
-                {"markers-stroke.svg", Params{}},
-                {"markers.svg", Params{}},
-                {"stroke-markers-fill.svg", Params{}},
-                {"stroke-markers.svg", Params{}},
-                {"stroke.svg", Params{}},
                 {"on-text.svg",
                  Params{}.withGeodeGoldenOverride(
                      "donner/svg/renderer/testdata/golden/geode/"
@@ -831,9 +812,6 @@ INSTANTIATE_TEST_SUITE_P(
                     {"negative-values.svg", Params::RenderOnly("UB (negative values)")},
 
                     {"n-0.svg", Params::WithThreshold(0.0f, 0, "Closed-path dash seam identity")},
-                    // `0 N` round/square caps render as dots at each zero-length on interval.
-                    {"0-n-with-round-caps.svg", Params{}},
-                    {"0-n-with-square-caps.svg", Params{}},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
