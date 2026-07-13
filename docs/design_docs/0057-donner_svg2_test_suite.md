@@ -1,7 +1,8 @@
 # Design: Donner SVG2 Test Suite
 
 **Status:** Draft
-**Author:** Claude Fable 5 (reviewed; drafted by GPT-5.6 Sol)
+**Author:** Claude Fable 5
+**Drafted by:** GPT-5.6 Sol
 **Created:** 2026-07-12
 
 ## Summary
