@@ -1387,8 +1387,6 @@ INSTANTIATE_TEST_SUITE_P(
                     {"on-Arabic.svg", Params()
                                           .requireFeature(RendererBackendFeature::TextFull)
                                           .withReason("Arabic text")},
-
-                    {"filter-bbox.svg", Params{}},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1444,8 +1442,6 @@ INSTANTIATE_TEST_SUITE_P(
                     {"zalgo.svg", Params().withMaxPixelsDifferent(300).onlyTextFull().withReason(
                                       "Complex diacritics; vertical-axis AA diff "
                                       "not the focus of the test")},
-
-                    {"filter-bbox.svg", Params{}},
                     {"ligatures-handling-in-mixed-fonts-1.svg",
                      Params::Skip(
                          "Bug: text rendering edge cases (mixed inline content, BiDi-adjacent)")},

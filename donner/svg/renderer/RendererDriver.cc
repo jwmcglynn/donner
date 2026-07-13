@@ -152,25 +152,17 @@ std::optional<Box2d> LocalDrawableBoundsWithStroke(
 /// is produced by TextEngine instead of ComputedPathComponent. Falling back to an empty shape box
 /// for text collapses objectBoundingBox filter regions to zero and clips the entire filter output.
 std::optional<Box2d> RenderingObjectBoundingBox(Registry& registry, EntityHandle handle) {
-  if (const auto shapeBounds = components::ShapeSystem().getShapeBounds(handle);
-      shapeBounds.has_value() && !shapeBounds->isEmpty()) {
-    return shapeBounds;
-  }
-
 #ifdef DONNER_TEXT_ENABLED
   if (handle.all_of<components::TextComponent>()) {
     if (auto* textEngine = registry.ctx().find<TextEngine>()) {
-      const Box2d textBounds = textEngine->computedObjectBoundingBox(handle);
-      if (!textBounds.isEmpty()) {
-        return textBounds;
-      }
+      return textEngine->computedObjectBoundingBox(handle);
     }
   }
 #else
   (void)registry;
 #endif
 
-  return std::nullopt;
+  return components::ShapeSystem().getShapeBounds(handle);
 }
 
 bool IsNonDrawingContainer(const EntityHandle& dataHandle) {
