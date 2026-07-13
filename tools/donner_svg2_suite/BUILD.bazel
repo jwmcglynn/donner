@@ -74,6 +74,40 @@ py_test(
     ],
 )
 
+# Coverage lint: the bidirectional requirement<->test graph and the
+# no-skip-as-pass accounting, plus the requirements/coverage/gaps artifacts.
+
+py_binary(
+    name = "spec_coverage_lint",
+    srcs = [
+        "jsonschema_lite.py",
+        "manifest_validation.py",
+        "path_safety.py",
+        "spec_coverage_lint.py",
+    ],
+    data = [
+        ":schemas",
+        ":spec_seed_data",
+    ],
+    main = "spec_coverage_lint.py",
+    visibility = ["//visibility:public"],
+)
+
+py_test(
+    name = "spec_coverage_lint_tests",
+    srcs = [
+        "jsonschema_lite.py",
+        "manifest_validation.py",
+        "path_safety.py",
+        "spec_coverage_lint.py",
+        "spec_coverage_lint_tests.py",
+    ],
+    data = [
+        ":schemas",
+        ":spec_seed_data",
+    ],
+)
+
 # Milestone 2: reference runner and adapter protocol.
 
 py_binary(
