@@ -141,15 +141,24 @@ def validate_manifest(
     manifest_path: Path,
     schema_dir: Path | None = None,
     known_requirements: set[str] | None = None,
+    corpus_root: Path | None = None,
 ) -> list[str]:
     """Validate the manifest at ``manifest_path`` and return error strings.
 
     An empty list means the manifest is valid. Structural errors are reported on
     their own; when the shape is broken, the deeper filesystem checks are
     skipped because they assume a well-formed manifest.
+
+    By default, referenced paths (``tests/...``, ``resources/...``, ...) are
+    resolved relative to the manifest file's own parent directory. Passing an
+    explicit ``corpus_root`` overrides that and resolves referenced paths
+    against a different directory instead. This lets a manifest that was
+    generated into its own location (for example a temporary file produced by
+    a generator tool) be validated against the actual corpus tree it
+    describes, without copying or symlinking that tree next to the manifest.
     """
 
-    corpus_root = manifest_path.resolve().parent
+    resolved_root = Path(corpus_root) if corpus_root is not None else manifest_path.resolve().parent
     try:
         raw = read_text_capped(manifest_path)
     except (OSError, UnsafePathError) as error:
@@ -174,14 +183,14 @@ def validate_manifest(
             errors.append(f"duplicate test id: {test_id!r}")
         seen_ids.add(test_id)
 
-        _check_referenced_path(corpus_root, test["input"], INPUT_ROOTS, "input", errors)
+        _check_referenced_path(resolved_root, test["input"], INPUT_ROOTS, "input", errors)
 
         oracle = test["oracle"]
         if oracle.get("kind") == "png":
-            _check_referenced_path(corpus_root, oracle["path"], INPUT_ROOTS, "oracle", errors)
+            _check_referenced_path(resolved_root, oracle["path"], INPUT_ROOTS, "oracle", errors)
 
         for resource in test.get("resources", []):
-            _check_referenced_path(corpus_root, resource, RESOURCE_ROOTS, "resource", errors)
+            _check_referenced_path(resolved_root, resource, RESOURCE_ROOTS, "resource", errors)
 
         if known_requirements is not None:
             for requirement in test["spec_requirements"]:
@@ -192,7 +201,7 @@ def validate_manifest(
 
     integrity = manifest.get("integrity")
     if isinstance(integrity, dict):
-        _check_integrity(corpus_root, integrity, errors)
+        _check_integrity(resolved_root, integrity, errors)
 
     return errors
 
