@@ -25,25 +25,25 @@ PR**. Golden overrides (where Donner is right and resvg's golden is wrong) live 
 
 ## How a test can be "not passing"
 
-There are **four** supported ways the suite records a known gap. All of them must
+There are **five** supported ways the suite records a known gap. All of them must
 be expressed through the normal `Params` path close to the affected tests:
 
 | State | Count | Meaning |
 |---|---:|---|
-| `Params::Skip("reason")` | 188 | Not run. Feature gap or known bug. The bulk of this doc. |
-| `Params::RenderOnly("reason")` | 52 | Rendered, **not** compared. Used for UB/deprecated cases where no-crash coverage is still useful. |
+| `Params::Skip("reason")` | 126 | Not run. Feature gap or known bug. The bulk of this doc. |
+| `Params::RenderOnly("reason")` | 58 | Rendered, **not** compared. Used for UB/deprecated cases where no-crash coverage is still useful. |
 | Commented-out `INSTANTIATE_TEST_SUITE_P` | 1 block | `filters/filter-functions` — whole category dark on CI. See [B2](#b2-filtersfilter-functions-category-disabled-on-ci). |
-| `Params::WithThreshold(…, maxPx)` / local max-pixel budget | 96 | Passes with an explicit threshold or pixel budget. Large non-text budgets remain suspect; see [Masked bugs behind inflated CPU thresholds](#masked-bugs-behind-inflated-cpu-thresholds). |
-| Geode-disabled local `Params` entries | 1 analytic-residual + ~9 CPU-only-feature | The analytic-coverage work closed the former ~16-gate cluster; remaining = 1 `feGaussianBlur/complex-transform` ([#625](https://github.com/jwmcglynn/donner/issues/625)) + paint-order/0-N-dash tests Geode doesn't implement yet. See [Geode coverage (resolved)](#geode-coverage-analytic-slug-dual-ray-resolved--the-misdiagnosis-correction). |
+| `Params::WithThreshold(…, maxPx)` / local max-pixel budget | 90 | Passes with an explicit threshold or pixel budget. Large non-text budgets remain suspect; see [Masked bugs behind inflated CPU thresholds](#masked-bugs-behind-inflated-cpu-thresholds). |
+| Geode-disabled local `Params` entries | 0 | Geode now runs every active resvg case. Verified analytic edge residuals use exact per-backend goldens instead of disabling the backend or inflating thresholds. |
 
 ## Current totals
 
 | | Count |
 |---|---:|
-| `Params::Skip(...)` | 181 (`grep -c 'Params::Skip'`, 2026-07-03) |
-| `Params::RenderOnly(...)` | 52 (render-must-not-crash, no pixel compare) |
-| `WithThreshold` / max-pixel overrides | 89 (`grep -cE 'WithThreshold\|WithMaxPixels'`, 2026-07-03; ~15 still over 1000 px -> masked-bug candidates) |
-| Geode-disabled local `Params` entries | 1 analytic-residual + ~9 CPU-only-feature (down from 22; analytic dual-ray landed, see 0041) |
+| `Params::Skip(...)` | 126 (`grep -o 'Params::Skip('`, 2026-07-12) |
+| `Params::RenderOnly(...)` | 58 (render-must-not-crash, no pixel compare) |
+| `WithThreshold` / max-pixel overrides | 90 (`grep -oE 'WithThreshold\(|WithMaxPixels\('`, 2026-07-12; large non-text budgets remain masked-bug candidates) |
+| Geode-disabled local `Params` entries | 0 (all active cases now run on Geode) |
 | Commented-out category blocks | 1 (`filters/filter-functions`) |
 
 ---
@@ -75,9 +75,8 @@ Landed 2026-05-25 from a parallel CPU-backend debugging sweep. IDs are burned (n
   sampler** (`filter_image.wgsl`, edge-clamped, RGB≤A) plus a per-attribute
   placement-rect fix in `GeodeFilterEngine::applyImage` (each of x/y/width/height
   resolved independently, percent/OBB-aware, defaulting to the filter region):
-  6 of 7 Geode feImage gaps closed (embedded-png, preserveAspectRatio=none,
-  with-subregion-1..4). Only `svg.svg` remains Geode-gated — its residual is the
-  shared slug_fill coverage gap below, not a feImage issue.
+  All 7 Geode feImage cases are active. `svg.svg` uses an exact Geode golden for
+  its verified analytic edge-coverage residual, rather than disabling the backend.
 
 ## Priority 0: CPU-backend backlog (the active front)
 
@@ -93,13 +92,13 @@ bottom for completeness.
 |---|---|---:|---|
 | B2 | `filters/filter-functions` disabled (CI "Data corrupted") | ~30 | CI gap — whole category dark |
 | B3 | `structure/image` golden kernel-era mismatch | 13 | Golden refresh + `<image>` upscale-kernel decision (see [B3](#b3-structureimage-golden-kernel-era-mismatch)) |
-| F12 | `transform-origin` on `<textPath>` baseline | 1 | gradient/pattern/`<image>`/text resolve the pivot; `on-text-path` baseline still drops it → [#624](https://github.com/jwmcglynn/donner/issues/624) |
-| F7 | `paint-order` rendering | **DONE** (7/8) | Rendered on shapes + text; `on-tspan` residual → [#624](https://github.com/jwmcglynn/donner/issues/624) |
+| F12 | `transform-origin` on `<textPath>` baseline | **DONE** | Resolved by #868; all category cases are active. |
+| F7 | `paint-order` rendering | **DONE** (8/8) | Shapes and text run on both backends; `on-tspan` uses a project-owned oracle because the vendored PNG breaks cross-span kerning. |
 | F9 | `textLength` + `lengthAdjust` stretch/compress | 8 | Feature |
 | F10 | `textPath` SVG2 attributes (`path`/`side`/`method`/`spacing`) | 8 | Feature |
 | F11 | BiDi / RTL text shaping | ~8 | Feature (needs `text-full`) |
 | B7 | font substitution — missing bundled families (masked by fat thresholds) | ~9 | Triage: bundle fonts vs. document as known gap |
-| — | masking edge cases (mask 8, clipPath 6) | ~14 | Mixed |
+| — | masking edge cases (mask 8, clipPath 5) | ~13 | Mixed; `clipPath/with-use-child` is now active on both backends. |
 | — | uncertain `Bug?` entries (need triage) | ~12 | Needs investigation |
 | F1 | `enable-background` + `in=Background*` | 23 | **Out of scope** (deprecated) |
 | — | other deprecated/UB skips | ~30 | **Out of scope** |
@@ -237,8 +236,10 @@ Per-test threshold inflation is not an option.
 
 ### F7: `paint-order` rendering
 
-**Impact:** 8 tests in `painting/paint-order/`. The property name parses but
-render order (fill/stroke/markers) is not reordered. On shapes, text, and tspan.
+**Resolved.** All 8 tests in `painting/paint-order/` are active. Shape marker/fill/stroke
+ordering and text whole-run fill/stroke ordering run on both backends. The vendored
+`on-tspan` PNG loses kerning across a paint-only span boundary, so Donner uses explicit
+CPU and Geode goldens that preserve continuous shaping while still gating paint order.
 
 ### F9: `textLength` + `lengthAdjust`
 
@@ -262,8 +263,8 @@ algorithm + RTL shaping (`text-full`). Group as one workstream.
 
 ### F12: `transform-origin` on paint-servers / `<image>` / text
 
-**Impact:** 1 remaining test in `structure/transform-origin/` (`on-text-path`); the
-`on-gradient` ×2, `on-pattern` ×2, `on-image`, and `on-text` cases pass.
+**Resolved by #868.** All `structure/transform-origin/` cases, including
+`on-text-path`, are active.
 
 Gradient/pattern paint-servers and `<image>`/text apply the `transform-origin` pivot
 as `Translate(-origin)·M·Translate(origin)` (matching the shape path; Donner's
@@ -405,8 +406,9 @@ goldens, all now fixed/closed:
 
 **Lesson:** a large diff amplified by a filter/matrix is not evidence of a coverage
 problem — inspect whether a coverage change actually moves it before attributing it.
-The only remaining Geode resvg gate is `feGaussianBlur/complex-transform` (genuine
-analytic-vs-finite-sample 1px blur edge) — [#625](https://github.com/jwmcglynn/donner/issues/625).
+No active resvg case is backend-disabled. Verified analytic-vs-finite-sample edge
+residuals, including `feGaussianBlur/complex-transform`, paint-order text, and the
+rotated pattern case, use exact Geode goldens so the backend remains fully gated.
 
 ---
 
