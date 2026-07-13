@@ -274,10 +274,38 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
   //    `emscripten_sleep` instead).
   wgpu::RequestAdapterOptions adapterOptions = {};
   adapterOptions.backendType = headlessBackend;
-  result->adapter_ = result->impl_->instance.requestAdapter(adapterOptions);
-  if (!result->adapter_) {
+
+  // Bounded retry around adapter acquisition, mirroring the device-init
+  // retry below (#880). Under heavy parallel load the adapter request can
+  // transiently fail at the adapter level - wgpu-native logs
+  // \"Could not get WebGPU adapter: Validation Error / No suitable adapter
+  // found\" and requestAdapter returns null - before requestDevice is even
+  // reached. This is the same driver-side race under contention; the
+  // adapter re-request after a short backoff succeeds. A permanently
+  // missing adapter (no GPU, wrong backend) simply exhausts the retries and
+  // returns nullptr, which RendererGeode handles as no-op mode. Every retry
+  // is logged so the flake stays observable in test logs.
+  constexpr int kMaxAdapterRetries = 3;
+  constexpr int kAdapterBackoffMs[kMaxAdapterRetries] = {50, 200, 800};
+  for (int attempt = 0;; ++attempt) {
+    result->adapter_ = result->impl_->instance.requestAdapter(adapterOptions);
+    if (result->adapter_) {
+      break;  // Adapter acquired.
+    }
+
     std::fprintf(stderr, "[Geode/wgpu-native] No WebGPU adapter available.\n");
-    return nullptr;
+    if (attempt >= kMaxAdapterRetries) {
+      std::fprintf(stderr,
+                   "[Geode/wgpu-native] Giving up after %d adapter-acquisition retries.\n",
+                   kMaxAdapterRetries);
+      return nullptr;
+    }
+    const int backoffMs = kAdapterBackoffMs[attempt];
+    std::fprintf(stderr,
+                 "[Geode/wgpu-native] Transient adapter-acquisition failure under parallel "
+                 "load; retrying (attempt %d of %d) after %d ms.\n",
+                 attempt + 1, kMaxAdapterRetries, backoffMs);
+    std::this_thread::sleep_for(std::chrono::milliseconds(backoffMs));
   }
 
   // Log adapter selection so it is obvious at a glance whether we landed

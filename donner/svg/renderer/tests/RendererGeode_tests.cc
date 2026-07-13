@@ -85,6 +85,14 @@ PaintParams solidFillAndStroke(const css::RGBA& fill, const css::RGBA& stroke) {
 /// RGBA pixel at (x, y) in a tightly packed snapshot bitmap.
 std::array<uint8_t, 4> pixelAt(const RendererBitmap& bitmap, int x, int y) {
   const size_t off = static_cast<size_t>(y) * bitmap.rowBytes + static_cast<size_t>(x) * 4u;
+  // Guard against an empty or undersized bitmap - e.g. a no-op-mode snapshot
+  // produced when no GPU adapter was available. Returning transparent lets the
+  // caller's pixel assertion fail cleanly instead of indexing out of bounds
+  // and crashing the whole test binary with SIGSEGV (a missing adapter must
+  // yield a clean test FAILURE, never a crash and never a silent skip).
+  if (off + 4 > bitmap.pixels.size()) {
+    return {0, 0, 0, 0};
+  }
   return {bitmap.pixels[off], bitmap.pixels[off + 1], bitmap.pixels[off + 2],
           bitmap.pixels[off + 3]};
 }
@@ -2168,6 +2176,46 @@ TEST_F(RendererGeodeTest, FilterAppliedBeforeClipPathSvgRenderingOrder) {
   auto outside = pixelAt(snap, 48, 32);
   EXPECT_THAT(outside, IsTransparent()) << "Outside the clip must be transparent - the "
                                            "filter result is clipped on composite";
+}
+
+
+// A GeodeDevice that fails to initialize (e.g. no Vulkan adapter on a GPU-less
+// worker) leaves RendererGeode in \"no-op mode\". Every rendering entry point
+// must be a clean no-op rather than dereferencing the null device. The
+// historical failure was a SIGSEGV in
+// drawPath -> Impl::getFillEncode -> GeodeDevice::countPathEncode() when the
+// resvg suite ran on a worker whose adapter acquisition failed.
+TEST_F(RendererGeodeTest, NullDeviceEntersNoOpModeWithoutCrashing) {
+  // Deterministically simulate CreateHeadless() having returned nullptr by
+  // handing the renderer a null device. Does not depend on the host GPU.
+  RendererGeode renderer(std::shared_ptr<geode::GeodeDevice>(nullptr), /*verbose=*/false);
+
+  // Low-level ops (direct callers such as the editor overlay) must no-op.
+  RenderViewport viewport;
+  viewport.size = Vector2d(kViewportSize, kViewportSize);
+  viewport.devicePixelRatio = 1.0;
+  renderer.beginFrame(viewport);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.endFrame();
+  EXPECT_TRUE(renderer.takeSnapshot().empty())
+      << "No-op mode has no rendered target, so the snapshot is empty.";
+
+  // Full document render path via draw(). The draw() guard makes this a
+  // clean no-op before the driver runs; the drawPath guard (the historical
+  // crash site drawPath -> getFillEncode -> countPathEncode) is exercised
+  // directly by the drawRect() call above, which routes through drawPath.
+  ParseWarningSink warningSink;
+  auto maybeDocument = parser::SVGParser::ParseSVG(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+             <rect x="1" y="1" width="14" height="14" fill="red"/>
+           </svg>)svg",
+      warningSink);
+  ASSERT_FALSE(maybeDocument.hasError()) << maybeDocument.error();
+  SVGDocument document = std::move(maybeDocument).result();
+  RendererUtils::prepareDocumentForRendering(document, /*verbose=*/false, warningSink);
+  renderer.draw(document);  // Must not crash.
+  EXPECT_TRUE(renderer.takeSnapshot().empty());
 }
 
 }  // namespace

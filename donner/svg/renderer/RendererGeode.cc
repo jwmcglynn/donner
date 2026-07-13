@@ -2141,6 +2141,14 @@ RendererGeode::RendererGeode(RendererGeode&&) noexcept = default;
 RendererGeode& RendererGeode::operator=(RendererGeode&&) noexcept = default;
 
 void RendererGeode::draw(SVGDocument& document) {
+  // No-op mode: if adapter/device acquisition failed there is no GPU to
+  // render with. Return before running the driver so none of the
+  // per-element callbacks (drawPath, pushClip, pushFilterLayer, ...)
+  // dereference a null device. Matches beginFrame's existing no-op guard.
+  if (!impl_->device) {
+    return;
+  }
+
   // Wire the M2 cache-invalidation listener onto this document's
   // registry BEFORE the driver runs `RenderingContext::instantiateRenderTree`.
   // The listener must be connected when `ShapeSystem` fires its
@@ -3436,6 +3444,13 @@ void RendererGeode::setPaint(const PaintParams& paint) {
 }
 
 void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) {
+  // No-op mode guard (matches drawImage / drawText): with no device or no
+  // active frame encoder, skip cleanly instead of dereferencing a null
+  // device via getFillEncode() -> GeodeDevice::countPathEncode().
+  if (!impl_->device || !impl_->encoder) {
+    return;
+  }
+
   // M6-B detection (design doc 0030 §M6 Bullet 2): when a `<use>`
   // draws a path that was also just drawn by the previous call -
   // same source entity, same paint - this is exactly the case an
