@@ -1724,6 +1724,7 @@ void emitCap(const Vector2d& point, const Vector2d& direction, double halfWidth,
 struct FlatSubpath {
   std::vector<Vector2d> points;
   bool closed = false;
+  Vector2d zeroLengthTangent;  ///< Orientation for a synthetic zero-length dash.
 
   /// Exact tangent normal override at a curve-command boundary vertex.
   ///
@@ -1996,11 +1997,15 @@ void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBui
     }
     const Vector2d p = pts[0];
     if (style.cap == LineCap::Square) {
-      // Axis-aligned square centered at p with side = stroke-width.
-      builder.moveTo(Vector2d(p.x - halfWidth, p.y - halfWidth));
-      builder.lineTo(Vector2d(p.x + halfWidth, p.y - halfWidth));
-      builder.lineTo(Vector2d(p.x + halfWidth, p.y + halfWidth));
-      builder.lineTo(Vector2d(p.x - halfWidth, p.y + halfWidth));
+      Vector2d tangent = subpath.zeroLengthTangent.normalize();
+      if (tangent.lengthSquared() <= 1e-20) {
+        tangent = Vector2d(1.0, 0.0);
+      }
+      const Vector2d normal(-tangent.y, tangent.x);
+      builder.moveTo(p - tangent * halfWidth - normal * halfWidth);
+      builder.lineTo(p + tangent * halfWidth - normal * halfWidth);
+      builder.lineTo(p + tangent * halfWidth + normal * halfWidth);
+      builder.lineTo(p - tangent * halfWidth + normal * halfWidth);
       builder.closePath();
       return;
     }
@@ -2372,6 +2377,28 @@ Vector2d pointAtPolylineDistance(const FlatSubpath& subpath, double distance) {
   return pts.back();
 }
 
+/// Return the path tangent at an arc-length distance along a flattened subpath.
+Vector2d tangentAtPolylineDistance(const FlatSubpath& subpath, double distance) {
+  const auto& pts = subpath.points;
+  Vector2d lastTangent;
+  double cursor = 0.0;
+  for (size_t i = 0; i + 1 < pts.size(); ++i) {
+    const Vector2d tangent = pts[i + 1] - pts[i];
+    const double segmentLength = tangent.length();
+    if (segmentLength <= 0.0) {
+      continue;
+    }
+
+    lastTangent = tangent;
+    if (distance <= cursor + segmentLength) {
+      return tangent;
+    }
+    cursor += segmentLength;
+  }
+
+  return lastTangent;
+}
+
 /// Dash a single subpath and emit its stroked dashes to the builder. Returns
 /// true if any dashes were emitted, false if the pattern was invalid or the
 /// subpath was too degenerate to dash.
@@ -2457,6 +2484,7 @@ bool strokeDashedSubpath(const FlatSubpath& subpath, const StrokeStyle& style, d
           const Vector2d point = pointAtPolylineDistance(subpath, cursor);
           FlatSubpath dash;
           dash.points = {point, point};
+          dash.zeroLengthTangent = tangentAtPolylineDistance(subpath, cursor);
           strokeSubpath(dash, style, builder);
         }
         if (++iterationsWithoutProgress >= kMaxStalledIters) {
