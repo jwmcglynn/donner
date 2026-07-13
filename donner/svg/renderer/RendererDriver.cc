@@ -146,6 +146,25 @@ std::optional<Box2d> LocalDrawableBoundsWithStroke(
                box.bottomRight + Vector2d(halfStroke, halfStroke));
 }
 
+/// Return the SVG object bounding box used by objectBoundingBox effects.
+///
+/// ShapeSystem covers path-backed elements and their path-backed descendants, but text geometry
+/// is produced by TextEngine instead of ComputedPathComponent. Falling back to an empty shape box
+/// for text collapses objectBoundingBox filter regions to zero and clips the entire filter output.
+std::optional<Box2d> RenderingObjectBoundingBox(Registry& registry, EntityHandle handle) {
+#ifdef DONNER_TEXT_ENABLED
+  if (handle.all_of<components::TextComponent>()) {
+    if (auto* textEngine = registry.ctx().find<TextEngine>()) {
+      return textEngine->computedObjectBoundingBox(handle);
+    }
+  }
+#else
+  (void)registry;
+#endif
+
+  return components::ShapeSystem().getShapeBounds(handle);
+}
+
 bool IsNonDrawingContainer(const EntityHandle& dataHandle) {
   const auto* type = dataHandle.try_get<components::ElementTypeComponent>();
   if (type == nullptr) {
@@ -740,7 +759,7 @@ std::optional<Box2d> computeFilterRegion(Registry& registry,
 
     // Mixed list with url() references: use the default filter region.
     const std::optional<Box2d> shapeBounds =
-        components::ShapeSystem().getShapeBounds(instance.dataHandle(registry));
+        RenderingObjectBoundingBox(registry, instance.dataHandle(registry));
     if (!shapeBounds) {
       return std::nullopt;
     }
@@ -758,7 +777,7 @@ std::optional<Box2d> computeFilterRegion(Registry& registry,
 
   // Determine the bounds reference for resolving percentages.
   const Box2d shapeBounds =
-      components::ShapeSystem().getShapeBounds(instance.dataHandle(registry)).value_or(Box2d());
+      RenderingObjectBoundingBox(registry, instance.dataHandle(registry)).value_or(Box2d());
 
   if (computed->filterUnits == FilterUnits::ObjectBoundingBox) {
     // In objectBoundingBox mode, x/y/width/height are fractions/percentages of the bbox.
@@ -1544,7 +1563,7 @@ void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Ent
       filterGraph->filterRegion = filterRegion;
       if (filterGraph->primitiveUnits == PrimitiveUnits::ObjectBoundingBox) {
         filterGraph->elementBoundingBox =
-            components::ShapeSystem().getShapeBounds(instance->dataHandle(registry));
+            RenderingObjectBoundingBox(registry, instance->dataHandle(registry));
       }
       if (filterViewBox.width() > 0 && filterViewBox.height() > 0) {
         filterGraph->userToPixelScale = Vector2d(renderingSize_.x / filterViewBox.width(),
