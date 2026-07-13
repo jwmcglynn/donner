@@ -1984,6 +1984,36 @@ TEST(Path, StrokeToFillDashLeadingZeroEntryDoesNotHang) {
   EXPECT_TRUE(filled.empty());
 }
 
+TEST(Path, StrokeToFillDashLeadingZeroRoundCaps) {
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({90, 0}).build();
+  StrokeStyle style;
+  style.width = 4.0;
+  style.cap = LineCap::Round;
+  style.dashArray = {0.0, 20.0};
+
+  Path filled = path.strokeToFill(style);
+
+  ASSERT_FALSE(filled.empty());
+  EXPECT_EQ(countSubpaths(filled), 5u);
+  ExpectNear(filled.bounds().topLeft, Vector2d(-2, -2));
+  ExpectNear(filled.bounds().bottomRight, Vector2d(82, 2));
+}
+
+TEST(Path, StrokeToFillDashLeadingZeroSquareCaps) {
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({90, 0}).build();
+  StrokeStyle style;
+  style.width = 4.0;
+  style.cap = LineCap::Square;
+  style.dashArray = {0.0, 20.0};
+
+  Path filled = path.strokeToFill(style);
+
+  ASSERT_FALSE(filled.empty());
+  EXPECT_EQ(countSubpaths(filled), 5u);
+  ExpectNear(filled.bounds().topLeft, Vector2d(-2, -2));
+  ExpectNear(filled.bounds().bottomRight, Vector2d(82, 2));
+}
+
 TEST(Path, StrokeToFillDashNegativeIsSolid) {
   // Negative values in the dasharray disable dashing.
   Path path = PathBuilder().moveTo({0, 0}).lineTo({100, 0}).build();

@@ -2343,6 +2343,35 @@ FlatSubpath extractPolylineRange(const FlatSubpath& subpath, double startDist, d
   return result;
 }
 
+/// Return the point at an arc-length distance along a flattened subpath.
+Vector2d pointAtPolylineDistance(const FlatSubpath& subpath, double distance) {
+  const auto& pts = subpath.points;
+  if (pts.empty()) {
+    return Vector2d();
+  }
+  if (distance <= 0.0) {
+    return pts.front();
+  }
+
+  double cursor = 0.0;
+  for (size_t i = 0; i + 1 < pts.size(); ++i) {
+    const Vector2d& a = pts[i];
+    const Vector2d& b = pts[i + 1];
+    const double segLen = (b - a).length();
+    if (segLen <= 0.0) {
+      continue;
+    }
+
+    const double segEnd = cursor + segLen;
+    if (distance <= segEnd) {
+      return a + (b - a) * ((distance - cursor) / segLen);
+    }
+    cursor = segEnd;
+  }
+
+  return pts.back();
+}
+
 /// Dash a single subpath and emit its stroked dashes to the builder. Returns
 /// true if any dashes were emitted, false if the pattern was invalid or the
 /// subpath was too degenerate to dash.
@@ -2376,12 +2405,15 @@ bool strokeDashedSubpath(const FlatSubpath& subpath, const StrokeStyle& style, d
   size_t idx = 0;
   {
     double acc = 0.0;
+    const double boundaryEpsilon = std::max(1.0, pattern.totalLength) * 1e-12;
     for (size_t i = 0; i < numEntries; ++i) {
-      if (patternPos < acc + pattern.lengths[i]) {
+      const double entryLength = pattern.lengths[i];
+      if ((entryLength == 0.0 && std::abs(patternPos - acc) <= boundaryEpsilon) ||
+          patternPos < acc + entryLength) {
         idx = i;
         break;
       }
-      acc += pattern.lengths[i];
+      acc += entryLength;
     }
     // Fractional offset within the current entry:
     double consumed = 0.0;
@@ -2412,7 +2444,21 @@ bool strokeDashedSubpath(const FlatSubpath& subpath, const StrokeStyle& style, d
     double cursor = 0.0;
     while (cursor < totalArc) {
       const double entryLen = (remainingInEntry > 0.0) ? remainingInEntry : pattern.lengths[idx];
+      const bool isOn = (idx % 2u == 0u);
       if (entryLen <= 0.0) {
+        // A zero-length ON dash is invisible with butt caps, but round and square
+        // caps produce a circle or square centered at the current path position.
+        // Emit a degenerate two-point subpath so strokeSubpath applies its SVG 2
+        // zero-length-subpath cap handling without advancing the dash cursor.
+        if (isOn && style.cap != LineCap::Butt) {
+          if (++dashesEmitted > kMaxDashes) {
+            return true;
+          }
+          const Vector2d point = pointAtPolylineDistance(subpath, cursor);
+          FlatSubpath dash;
+          dash.points = {point, point};
+          strokeSubpath(dash, style, builder);
+        }
         if (++iterationsWithoutProgress >= kMaxStalledIters) {
           break;
         }
@@ -2422,7 +2468,6 @@ bool strokeDashedSubpath(const FlatSubpath& subpath, const StrokeStyle& style, d
       }
       iterationsWithoutProgress = 0;
       const double next = cursor + entryLen;
-      const bool isOn = (idx % 2u == 0u);
 
       if (isOn && entryLen > 0.0) {
         if (++dashesEmitted > kMaxDashes) {
