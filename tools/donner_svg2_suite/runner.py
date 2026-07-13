@@ -78,6 +78,10 @@ class AdapterFailure(Exception):
     pass
 
 
+class ComparatorFailure(Exception):
+    """Raised when an external comparator cannot produce a verdict."""
+
+
 @dataclass
 class RunResult:
     results: list[dict] = field(default_factory=list)
@@ -128,6 +132,53 @@ def compare_png(actual_bytes: bytes, expected_bytes: bytes, budget: dict) -> tup
         "max_mismatched_pixels": budget["max_mismatched_pixels"],
         "threshold": threshold,
     }
+
+
+def invoke_comparator(
+    comparator_argv: list[str],
+    expected_path: Path,
+    actual_path: Path,
+    budget: dict,
+    timeout: float,
+) -> tuple[bool, dict]:
+    """Delegate PNG comparison to an external comparator (executable + args).
+
+    The comparator is invoked as an argument array (never a shell string),
+    mirroring the adapter contract, and must print a one-line JSON verdict with
+    at least ``status`` and ``passed``. This lets the Donner lane reuse Donner's
+    own pixelmatch implementation instead of the built-in comparator, so its
+    verdicts match the resvg C++ fixture. Raises :class:`ComparatorFailure` when
+    the comparator cannot produce a verdict.
+    """
+
+    argv = list(comparator_argv) + [
+        "--expected",
+        str(expected_path),
+        "--actual",
+        str(actual_path),
+        "--threshold",
+        repr(budget["threshold"]),
+        "--max-mismatched-pixels",
+        str(budget["max_mismatched_pixels"]),
+    ]
+    try:
+        completed = subprocess.run(argv, timeout=timeout, capture_output=True, text=True)
+    except subprocess.TimeoutExpired as error:
+        raise ComparatorFailure(f"comparator timed out after {timeout}s") from error
+
+    try:
+        verdict = json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise ComparatorFailure(
+            f"comparator did not emit JSON (exit {completed.returncode}): "
+            f"{completed.stderr.strip()[:200]}"
+        ) from error
+
+    if verdict.get("status") != "ok":
+        raise ComparatorFailure(
+            f"comparator reported {verdict.get('status')!r}: {verdict.get('diagnostics', '')}"
+        )
+    return bool(verdict.get("passed")), verdict
 
 
 def _stage_file(sandbox: Path, relative: str, source: str) -> Path:
@@ -210,6 +261,7 @@ def run_case(
     work_dir: Path,
     cli_override: dict | None,
     timeout: float,
+    comparator_argv: list[str] | None = None,
 ) -> tuple[dict, bool]:
     """Run one case and return (result_record, acceptable)."""
 
@@ -276,7 +328,17 @@ def run_case(
         result["status"] = "render-only"
         return result, True
 
-    passed, metrics = compare_png(actual_bytes, oracle_source.read_bytes(), budget)
+    if comparator_argv is not None:
+        try:
+            passed, metrics = invoke_comparator(
+                comparator_argv, oracle_source, output_path, budget, timeout
+            )
+        except ComparatorFailure as error:
+            result["status"] = "infrastructure-error"
+            result["diagnostics"] = str(error)
+            return result, False
+    else:
+        passed, metrics = compare_png(actual_bytes, oracle_source.read_bytes(), budget)
     result["comparison"] = metrics
 
     if expectation == "expected-fail":
@@ -305,8 +367,13 @@ def run_manifest(
     work_dir: Path | None = None,
     cli_override: dict | None = None,
     timeout: float = 30.0,
+    corpus_root: Path | None = None,
+    comparator_argv: list[str] | None = None,
 ) -> RunResult:
-    corpus_root = manifest_path.resolve().parent
+    # The manifest normally sits at its corpus root, but an explicit corpus_root
+    # lets a generated or committed manifest reference a corpus tree stored
+    # elsewhere (for example the vendored resvg tree) without copying its files.
+    resolved_root = Path(corpus_root).resolve() if corpus_root is not None else manifest_path.resolve().parent
     manifest = json.loads(read_text_capped(manifest_path))
 
     cases: dict = {}
@@ -317,7 +384,14 @@ def run_manifest(
     run = RunResult()
     for test in manifest["tests"]:
         result, acceptable = run_case(
-            corpus_root, test, cases.get(test["id"]), adapter_argv, work_dir, cli_override, timeout
+            resolved_root,
+            test,
+            cases.get(test["id"]),
+            adapter_argv,
+            work_dir,
+            cli_override,
+            timeout,
+            comparator_argv,
         )
         run.results.append(result)
         run.ok = run.ok and acceptable
@@ -409,6 +483,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Adapter executable and its fixed leading arguments (argument array, never a shell string).",
     )
     parser.add_argument("--adapter-id", default=None)
+    parser.add_argument(
+        "--comparator",
+        nargs="+",
+        default=None,
+        help="External comparator executable and its fixed leading arguments (argument array, "
+        "never a shell string). When set, the runner delegates PNG comparison to it instead of "
+        "the built-in comparator, so a renderer can reuse its own pixel comparison.",
+    )
+    parser.add_argument(
+        "--corpus-root",
+        type=Path,
+        default=None,
+        help="Corpus root for resolving test inputs and oracles, when the manifest is stored "
+        "apart from its corpus tree. Defaults to the manifest's directory.",
+    )
     parser.add_argument("--profile", type=Path, default=None)
     parser.add_argument("--baseline-lock", type=Path, default=None)
     parser.add_argument("--out-json", type=Path, default=None)
@@ -429,6 +518,8 @@ def main(argv: list[str] | None = None) -> int:
             profile_path=args.profile,
             cli_override=_parse_cli_override(args),
             timeout=args.timeout,
+            corpus_root=args.corpus_root,
+            comparator_argv=args.comparator,
         )
     except ComparisonRelaxationError as error:
         print(f"runner refused to relax a comparison budget: {error}", file=sys.stderr)
