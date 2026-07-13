@@ -73,3 +73,56 @@ py_test(
         ":spec_seed_data",
     ],
 )
+
+# Milestone 2: reference runner and adapter protocol.
+
+py_binary(
+    name = "runner",
+    srcs = [
+        "adapter_protocol.py",
+        "path_safety.py",
+        "png_image.py",
+        "runner.py",
+    ],
+    main = "runner.py",
+    visibility = ["//visibility:public"],
+)
+
+# Standalone stdlib-only executable adapter used as a test fixture. It depends
+# on nothing else in the suite, mirroring a real external adapter.
+py_binary(
+    name = "reference_adapter",
+    srcs = ["reference_adapter.py"],
+    visibility = ["//visibility:public"],
+)
+
+py_test(
+    name = "runner_tests",
+    srcs = [
+        "adapter_protocol.py",
+        "jsonschema_lite.py",
+        "manifest_validation.py",
+        "path_safety.py",
+        "png_image.py",
+        "runner.py",
+        "runner_tests.py",
+        "suite_test_support.py",
+    ],
+    data = [
+        "reference_adapter.py",
+        ":schemas",
+    ],
+)
+
+py_test(
+    name = "adapter_contract_tests",
+    srcs = [
+        "adapter_contract_tests.py",
+        "adapter_protocol.py",
+        "path_safety.py",
+        "png_image.py",
+        "runner.py",
+        "suite_test_support.py",
+    ],
+    data = ["reference_adapter.py"],
+)
