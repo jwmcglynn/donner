@@ -1,0 +1,52 @@
+{
+  "schema": "https://donner.graphics/svg2-suite/baseline-lock-v1.schema.json",
+  "formal_baseline": {
+    "specification": "SVG 2",
+    "url": "https://www.w3.org/TR/2018/CR-SVG2-20181004/",
+    "publication_date": "2018-10-04",
+    "status": "Candidate Recommendation",
+    "stable": false,
+    "content_digest": "sha256:462109d31d230c4345071b99a70ac06253453551f92409f2eddc64d49f00bca9"
+  },
+  "editorial_delta_baseline": {
+    "source": "https://github.com/w3c/svgwg",
+    "revision": "8b521081b0c65490c9b80633be68871f7bf441fa",
+    "retrieved": "2026-07-12",
+    "advisory": true
+  },
+  "dependency_lock": {
+    "entries": [
+      {
+        "key": "css-color-4",
+        "title": "CSS Color Module Level 4",
+        "organization": "w3c",
+        "url": "https://www.w3.org/TR/css-color-4/",
+        "status": "Candidate Recommendation",
+        "edition": "2022-11-01",
+        "successor": "css-color-3",
+        "stable": false,
+        "used_by": ["svg2-cr-20181004/painting/paint-order/req-01"]
+      },
+      {
+        "key": "css-writing-modes-4",
+        "title": "CSS Writing Modes Level 4",
+        "organization": "w3c",
+        "url": "https://www.w3.org/TR/css-writing-modes-4/",
+        "status": "Candidate Recommendation",
+        "edition": "2019-07-30",
+        "stable": false,
+        "used_by": ["svg2-cr-20181004/painting/paint-order/req-03"]
+      },
+      {
+        "key": "unicode",
+        "title": "The Unicode Standard",
+        "organization": "unicode",
+        "url": "https://www.unicode.org/versions/latest/",
+        "status": "Published",
+        "edition": "15.1.0",
+        "stable": true,
+        "used_by": ["svg2-cr-20181004/painting/paint-order/req-03"]
+      }
+    ]
+  }
+}

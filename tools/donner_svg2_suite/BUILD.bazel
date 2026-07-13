@@ -1,0 +1,75 @@
+# Portable Donner SVG2 test suite: schemas, manifest validation, and the
+# compliance-baseline seed. See docs/design_docs/0057-donner_svg2_test_suite.md.
+
+filegroup(
+    name = "schemas",
+    srcs = glob(["schemas/*.json"]),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "spec_seed_data",
+    srcs = glob(["spec/*.json"]),
+    visibility = ["//visibility:public"],
+)
+
+py_binary(
+    name = "manifest_validation",
+    srcs = [
+        "jsonschema_lite.py",
+        "manifest_validation.py",
+        "path_safety.py",
+    ],
+    data = [":schemas"],
+    main = "manifest_validation.py",
+    visibility = ["//visibility:public"],
+)
+
+py_test(
+    name = "manifest_validation_tests",
+    srcs = [
+        "jsonschema_lite.py",
+        "manifest_validation.py",
+        "manifest_validation_tests.py",
+        "path_safety.py",
+    ],
+    data = [":schemas"],
+)
+
+py_test(
+    name = "security_tests",
+    srcs = [
+        "jsonschema_lite.py",
+        "manifest_validation.py",
+        "path_safety.py",
+        "security_tests.py",
+    ],
+    data = [":schemas"],
+)
+
+py_binary(
+    name = "spec_seed",
+    srcs = [
+        "jsonschema_lite.py",
+        "spec_seed.py",
+    ],
+    data = [
+        ":schemas",
+        ":spec_seed_data",
+    ],
+    main = "spec_seed.py",
+    visibility = ["//visibility:public"],
+)
+
+py_test(
+    name = "spec_seed_tests",
+    srcs = [
+        "jsonschema_lite.py",
+        "spec_seed.py",
+        "spec_seed_tests.py",
+    ],
+    data = [
+        ":schemas",
+        ":spec_seed_data",
+    ],
+)

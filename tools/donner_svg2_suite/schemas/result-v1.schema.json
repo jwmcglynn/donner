@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://donner.graphics/svg2-suite/result-v1.schema.json",
+  "title": "Donner SVG2 Suite result record, version 1",
+  "description": "Machine-readable compliance evidence emitted by the reference runner. Records exactly one status per test and backend, plus the bundle, adapter, profile, and SVG 2 baseline identity needed to scope the result.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "bundle", "adapter", "profile", "baseline", "results"],
+  "properties": {
+    "schema": {
+      "const": "https://donner.graphics/svg2-suite/result-v1.schema.json"
+    },
+    "bundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["digest"],
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "adapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "profile": {
+      "type": "string",
+      "minLength": 1
+    },
+    "baseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["formal", "dependency_lock"],
+      "properties": {
+        "formal": {
+          "type": "string",
+          "minLength": 1
+        },
+        "editorial_delta": {
+          "type": "string"
+        },
+        "dependency_lock": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "conformance_classes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "processing_modes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "results": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/result"
+      }
+    }
+  },
+  "$defs": {
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["test", "status"],
+      "properties": {
+        "test": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "pass",
+            "comparison-fail",
+            "unsupported",
+            "expected-fail",
+            "render-only",
+            "adapter-error",
+            "timeout",
+            "infrastructure-error"
+          ]
+        },
+        "spec_requirements": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "comparison": {
+          "type": "object"
+        },
+        "diagnostics": {
+          "type": "string"
+        },
+        "artifacts": {
+          "type": "object"
+        },
+        "duration_ms": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}
