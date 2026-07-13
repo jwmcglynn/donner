@@ -627,11 +627,13 @@ void dispatchTwoInputUniform(GeodeDevice& device, const wgpu::BindGroupLayout& b
 
   ScopedWgpuHandle<wgpu::CommandBuffer> cmdBuf(encoder.get().finish());
   device.queue().submit(1, &cmdBuf.get());
-  // [lavapipe/Arc filter-sync probe] Force each filter compute pass to fully
-  // complete before the next pass samples its storage-texture output. On
-  // hardware Vulkan (Intel Arc) the automatic cross-submit storage-write ->
+  // [Vulkan filter-sync] Force each filter compute pass to fully complete
+  // before the next pass samples its storage-texture output. On hardware
+  // Vulkan (Intel Arc) the automatic cross-submit storage-write ->
   // sampled-read barrier races the async queue, producing nondeterministic
   // large-area filter corruption. Serialize on Vulkan; Metal is unaffected.
+  // Interim workaround; superseded by the single-encoder filter refactor
+  // (design 0030 M3).
   if (device.isVulkan()) {
     device.device().poll(true, nullptr);
   }
@@ -685,11 +687,13 @@ void dispatchInputOutputUniform(GeodeDevice& device, const wgpu::BindGroupLayout
 
   ScopedWgpuHandle<wgpu::CommandBuffer> cmdBuf(encoder.get().finish());
   device.queue().submit(1, &cmdBuf.get());
-  // [lavapipe/Arc filter-sync probe] Force each filter compute pass to fully
-  // complete before the next pass samples its storage-texture output. On
-  // hardware Vulkan (Intel Arc) the automatic cross-submit storage-write ->
+  // [Vulkan filter-sync] Force each filter compute pass to fully complete
+  // before the next pass samples its storage-texture output. On hardware
+  // Vulkan (Intel Arc) the automatic cross-submit storage-write ->
   // sampled-read barrier races the async queue, producing nondeterministic
   // large-area filter corruption. Serialize on Vulkan; Metal is unaffected.
+  // Interim workaround; superseded by the single-encoder filter refactor
+  // (design 0030 M3).
   if (device.isVulkan()) {
     device.device().poll(true, nullptr);
   }
@@ -2172,11 +2176,13 @@ wgpu::Texture GeodeFilterEngine::applyFlood(
 
   ScopedWgpuHandle<wgpu::CommandBuffer> cmdBuf(encoder.get().finish());
   device_.queue().submit(1, &cmdBuf.get());
-  // [lavapipe/Arc filter-sync probe] Force each filter compute pass to fully
-  // complete before the next pass samples its storage-texture output. On
-  // hardware Vulkan (Intel Arc) the automatic cross-submit storage-write ->
+  // [Vulkan filter-sync] Force each filter compute pass to fully complete
+  // before the next pass samples its storage-texture output. On hardware
+  // Vulkan (Intel Arc) the automatic cross-submit storage-write ->
   // sampled-read barrier races the async queue, producing nondeterministic
   // large-area filter corruption. Serialize on Vulkan; Metal is unaffected.
+  // Interim workaround; superseded by the single-encoder filter refactor
+  // (design 0030 M3).
   if (device_.isVulkan()) {
     device_.device().poll(true, nullptr);
   }
@@ -2271,11 +2277,13 @@ wgpu::Texture GeodeFilterEngine::runMergePass(FilterResourceArena& arena, const 
 
   ScopedWgpuHandle<wgpu::CommandBuffer> cmdBuf(encoder.get().finish());
   device_.queue().submit(1, &cmdBuf.get());
-  // [lavapipe/Arc filter-sync probe] Force each filter compute pass to fully
-  // complete before the next pass samples its storage-texture output. On
-  // hardware Vulkan (Intel Arc) the automatic cross-submit storage-write ->
+  // [Vulkan filter-sync] Force each filter compute pass to fully complete
+  // before the next pass samples its storage-texture output. On hardware
+  // Vulkan (Intel Arc) the automatic cross-submit storage-write ->
   // sampled-read barrier races the async queue, producing nondeterministic
   // large-area filter corruption. Serialize on Vulkan; Metal is unaffected.
+  // Interim workaround; superseded by the single-encoder filter refactor
+  // (design 0030 M3).
   if (device_.isVulkan()) {
     device_.device().poll(true, nullptr);
   }
@@ -2488,11 +2496,13 @@ wgpu::Texture GeodeFilterEngine::applyComponentTransfer(
 
   ScopedWgpuHandle<wgpu::CommandBuffer> cmdBuf(encoder.get().finish());
   device_.queue().submit(1, &cmdBuf.get());
-  // [lavapipe/Arc filter-sync probe] Force each filter compute pass to fully
-  // complete before the next pass samples its storage-texture output. On
-  // hardware Vulkan (Intel Arc) the automatic cross-submit storage-write ->
+  // [Vulkan filter-sync] Force each filter compute pass to fully complete
+  // before the next pass samples its storage-texture output. On hardware
+  // Vulkan (Intel Arc) the automatic cross-submit storage-write ->
   // sampled-read barrier races the async queue, producing nondeterministic
   // large-area filter corruption. Serialize on Vulkan; Metal is unaffected.
+  // Interim workaround; superseded by the single-encoder filter refactor
+  // (design 0030 M3).
   if (device_.isVulkan()) {
     device_.device().poll(true, nullptr);
   }
@@ -2612,11 +2622,13 @@ wgpu::Texture GeodeFilterEngine::applyConvolveMatrix(
 
   ScopedWgpuHandle<wgpu::CommandBuffer> cmdBuf(encoder.get().finish());
   device_.queue().submit(1, &cmdBuf.get());
-  // [lavapipe/Arc filter-sync probe] Force each filter compute pass to fully
-  // complete before the next pass samples its storage-texture output. On
-  // hardware Vulkan (Intel Arc) the automatic cross-submit storage-write ->
+  // [Vulkan filter-sync] Force each filter compute pass to fully complete
+  // before the next pass samples its storage-texture output. On hardware
+  // Vulkan (Intel Arc) the automatic cross-submit storage-write ->
   // sampled-read barrier races the async queue, producing nondeterministic
   // large-area filter corruption. Serialize on Vulkan; Metal is unaffected.
+  // Interim workaround; superseded by the single-encoder filter refactor
+  // (design 0030 M3).
   if (device_.isVulkan()) {
     device_.device().poll(true, nullptr);
   }
@@ -2728,11 +2740,13 @@ wgpu::Texture GeodeFilterEngine::applyTurbulence(
 
   ScopedWgpuHandle<wgpu::CommandBuffer> cmdBuf(encoder.get().finish());
   device_.queue().submit(1, &cmdBuf.get());
-  // [lavapipe/Arc filter-sync probe] Force each filter compute pass to fully
-  // complete before the next pass samples its storage-texture output. On
-  // hardware Vulkan (Intel Arc) the automatic cross-submit storage-write ->
+  // [Vulkan filter-sync] Force each filter compute pass to fully complete
+  // before the next pass samples its storage-texture output. On hardware
+  // Vulkan (Intel Arc) the automatic cross-submit storage-write ->
   // sampled-read barrier races the async queue, producing nondeterministic
   // large-area filter corruption. Serialize on Vulkan; Metal is unaffected.
+  // Interim workaround; superseded by the single-encoder filter refactor
+  // (design 0030 M3).
   if (device_.isVulkan()) {
     device_.device().poll(true, nullptr);
   }
@@ -2980,11 +2994,13 @@ wgpu::Texture GeodeFilterEngine::applyDiffuseLighting(
 
   ScopedWgpuHandle<wgpu::CommandBuffer> cmdBuf(encoder.get().finish());
   device_.queue().submit(1, &cmdBuf.get());
-  // [lavapipe/Arc filter-sync probe] Force each filter compute pass to fully
-  // complete before the next pass samples its storage-texture output. On
-  // hardware Vulkan (Intel Arc) the automatic cross-submit storage-write ->
+  // [Vulkan filter-sync] Force each filter compute pass to fully complete
+  // before the next pass samples its storage-texture output. On hardware
+  // Vulkan (Intel Arc) the automatic cross-submit storage-write ->
   // sampled-read barrier races the async queue, producing nondeterministic
   // large-area filter corruption. Serialize on Vulkan; Metal is unaffected.
+  // Interim workaround; superseded by the single-encoder filter refactor
+  // (design 0030 M3).
   if (device_.isVulkan()) {
     device_.device().poll(true, nullptr);
   }
@@ -3107,11 +3123,13 @@ wgpu::Texture GeodeFilterEngine::applySpecularLighting(
 
   ScopedWgpuHandle<wgpu::CommandBuffer> cmdBuf(encoder.get().finish());
   device_.queue().submit(1, &cmdBuf.get());
-  // [lavapipe/Arc filter-sync probe] Force each filter compute pass to fully
-  // complete before the next pass samples its storage-texture output. On
-  // hardware Vulkan (Intel Arc) the automatic cross-submit storage-write ->
+  // [Vulkan filter-sync] Force each filter compute pass to fully complete
+  // before the next pass samples its storage-texture output. On hardware
+  // Vulkan (Intel Arc) the automatic cross-submit storage-write ->
   // sampled-read barrier races the async queue, producing nondeterministic
   // large-area filter corruption. Serialize on Vulkan; Metal is unaffected.
+  // Interim workaround; superseded by the single-encoder filter refactor
+  // (design 0030 M3).
   if (device_.isVulkan()) {
     device_.device().poll(true, nullptr);
   }
