@@ -1,7 +1,7 @@
 # Design: Donner SVG2 Test Suite
 
 **Status:** Draft
-**Author:** GPT-5
+**Author:** GPT-5.6 Sol
 **Created:** 2026-07-12
 
 ## Summary
