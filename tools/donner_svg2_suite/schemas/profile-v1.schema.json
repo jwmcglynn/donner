@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://donner.graphics/svg2-suite/profile-v1.schema.json",
+  "title": "Donner SVG2 Suite renderer profile overlay, version 1",
+  "description": "Renderer-specific execution policy keyed by stable test id. Expresses what one engine configuration currently expects. Profile states are execution policy only and never replace requirement evidence states.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "profile", "cases"],
+  "properties": {
+    "schema": {
+      "const": "https://donner.graphics/svg2-suite/profile-v1.schema.json"
+    },
+    "profile": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "cases": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/case"
+      }
+    }
+  },
+  "$defs": {
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expectation"],
+      "properties": {
+        "expectation": {
+          "enum": ["pass", "unsupported", "expected-fail", "render-only"]
+        },
+        "comparison": {
+          "$ref": "#/$defs/comparison"
+        },
+        "oracle": {
+          "$ref": "#/$defs/relpath"
+        },
+        "reason_category": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["expectation"],
+            "properties": {
+              "expectation": {
+                "enum": ["unsupported", "expected-fail"]
+              }
+            }
+          },
+          "then": {
+            "required": ["expectation", "reason_category", "reason"]
+          }
+        },
+        {
+          "if": {
+            "required": ["oracle"]
+          },
+          "then": {
+            "required": ["reason_category", "reason"]
+          }
+        }
+      ]
+    },
+    "comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "threshold": {
+          "type": "number",
+          "minimum": 0
+        },
+        "max_mismatched_pixels": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "relpath": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://donner.graphics/svg2-suite/corpus-v1.schema.json",
+  "title": "Donner SVG2 Suite corpus manifest, version 1",
+  "description": "Facts about a corpus of SVG 2 conformance tests. Records inputs, typed oracles, spec-requirement links, capabilities, and resources. Contains no renderer-specific expectations; those live in a profile overlay.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "corpus", "revision", "tests"],
+  "properties": {
+    "schema": {
+      "const": "https://donner.graphics/svg2-suite/corpus-v1.schema.json"
+    },
+    "corpus": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "description": "Corpus namespace, for example 'resvg' or 'donner-svg2'."
+    },
+    "revision": {
+      "type": "string",
+      "minLength": 1
+    },
+    "integrity": {
+      "type": "object",
+      "description": "Optional map from corpus-relative path to expected sha256 digest.",
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^sha256:[0-9a-f]{64}$"
+      }
+    },
+    "tests": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/test"
+      }
+    }
+  },
+  "$defs": {
+    "test": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "input", "oracle", "assertion", "spec_requirements", "capabilities"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$",
+          "description": "Globally namespaced stable id, for example 'donner-svg2/painting/paint-order/tspan-boundary'."
+        },
+        "input": {
+          "$ref": "#/$defs/relpath"
+        },
+        "oracle": {
+          "$ref": "#/$defs/oracle"
+        },
+        "assertion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "spec_requirements": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/requirementId"
+          }
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+          }
+        },
+        "resources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/relpath"
+          }
+        }
+      }
+    },
+    "oracle": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "png",
+            "parse",
+            "dom",
+            "computed-style",
+            "accessibility",
+            "resource-trace",
+            "event-trace",
+            "animation-sample"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["kind"],
+            "properties": {
+              "kind": {
+                "const": "png"
+              }
+            }
+          },
+          "then": {
+            "required": ["kind", "path", "width", "height", "provenance"],
+            "properties": {
+              "path": {
+                "$ref": "#/$defs/relpath"
+              },
+              "width": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "height": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "provenance": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "relpath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "requirementId": {
+      "type": "string",
+      "pattern": "^svg2-cr-20181004/[a-z0-9-]+/[A-Za-z0-9._-]+/req-[0-9]{2,}$"
+    }
+  }
+}
