@@ -228,6 +228,47 @@ The output size is determined by \ref donner::svg::SVGDocument, which can either
 - \ref donner::svg::SVGDocument::setCanvasSize()
 - \ref donner::svg::SVGDocument::useAutomaticCanvasSize()
 
+### Hit testing and link interaction
+
+The \ref donner::svg::DonnerController class provides geometry-aware spatial queries on top of the
+DOM, for pointer interaction in a viewer or editor. All queries take a point in SVG canvas
+coordinates (the same space as the root `<svg>` element's viewBox) and honor `pointer-events`,
+`visibility`, `display`, paint-order, transforms, and per-shape fill/stroke geometry. They are
+independent of the active renderer.
+
+- \ref donner::svg::DonnerController::findIntersecting returns the topmost painted element at a
+  point.
+- \ref donner::svg::DonnerController::findAllIntersecting returns every painted element at a point,
+  front to back.
+- \ref donner::svg::DonnerController::hitTestLink returns the hyperlink (\ref donner::svg::SVGAElement
+  "&lt;a&gt;") at a point, if any.
+
+`hitTestLink` implements the SVG enclosing-`<a>` semantics: a point over any descendant of an `<a>`
+resolves to that link, so the whole subtree of a link is clickable. Donner never navigates; it
+returns the link target verbatim (a raw `href` such as `"#section"`, `"../other.svg"`, or an
+absolute URL) and the embedding application resolves and follows it. Because it is a stateless
+query rather than a navigation callback, the application drives it from its own pointer events and
+uses the same call for both a click (activate the link) and hover (show a pointer cursor, a hover
+highlight, or a tooltip), deciding for itself what each gesture does.
+
+```cpp
+donner::svg::DonnerController controller(document);
+
+// On a pointer move, for a hover affordance:
+if (auto link = controller.hitTestLink(cursorPosition)) {
+  setCursor(Cursor::Pointer);
+  showTooltip(link->href);  // link->linkElement is the enclosing <a>
+} else {
+  setCursor(Cursor::Default);
+  hideTooltip();
+}
+
+// On a click, to activate:
+if (auto link = controller.hitTestLink(clickPosition)) {
+  app.openUrl(link->href);  // the application resolves and navigates
+}
+```
+
 ### Using the CSS API {#UsingTheCssApi}
 
 The CSS API is used internally within the SVG library, but can be used standalone.

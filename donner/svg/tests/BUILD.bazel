@@ -43,6 +43,7 @@ donner_cc_test(
 donner_cc_test(
     name = "svg_tests",
     srcs = [
+        "DonnerController_tests.cc",
         "ElementStyle_tests.cc",
         "ElementType_tests.cc",
         "SVGAElement_tests.cc",

@@ -35,4 +35,28 @@ std::vector<SVGGraphicsElement> DonnerController::findAllIntersecting(const Vect
   return results;
 }
 
+std::optional<DonnerController::LinkHit> DonnerController::hitTestLink(const Vector2d& point) {
+  std::optional<SVGGraphicsElement> hit = findIntersecting(point);
+  if (!hit) {
+    return std::nullopt;
+  }
+
+  // Enclosing-<a> semantics: a hit on any descendant of an `<a>` resolves to that `<a>`'s target.
+  // Walk the ancestor chain, starting at the hit element itself, to the nearest `<a>` that carries
+  // a link target. An `<a>` without an href is not a link and is skipped so an outer linked `<a>`
+  // can still match.
+  std::optional<SVGElement> current = *hit;
+  while (current) {
+    if (std::optional<SVGAElement> anchor = current->tryCast<SVGAElement>()) {
+      if (std::optional<RcString> href = anchor->href()) {
+        return LinkHit{*anchor, std::move(*href), *hit};
+      }
+    }
+
+    current = current->parentElement();
+  }
+
+  return std::nullopt;
+}
+
 }  // namespace donner::svg
