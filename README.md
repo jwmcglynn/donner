@@ -35,45 +35,65 @@ size-optimized software renderer.
 
 The editor ships with the engine and is under active development. Open a file, edit visually or in the built-in XML view with two-way sync, and export clean SVG.
 
-## Supported Elements
+## Supported SVG elements and features
 
-**Structural:**
-[`<svg>`](https://jwmcglynn.github.io/donner/xml_svg.html)
-[`<g>`](https://jwmcglynn.github.io/donner/xml_g.html)
-[`<defs>`](https://jwmcglynn.github.io/donner/xml_defs.html)
-[`<symbol>`](https://jwmcglynn.github.io/donner/xml_symbol.html)
-[`<use>`](https://jwmcglynn.github.io/donner/xml_use.html)
-[`<style>`](https://jwmcglynn.github.io/donner/xml_style.html)
-[`<image>`](https://jwmcglynn.github.io/donner/xml_image.html)
+Donner targets the SVG 2 static rendering subset. The tables below are an honest snapshot of what
+the engine actually parses and renders today, derived from the code and from the conformance run in
+`donner/svg/renderer/tests/resvg_test_suite.cc`, which pixel-compares Donner against the upstream
+[resvg test suite](https://github.com/RazrFalcon/resvg-test-suite) goldens on every push. That test
+and the SVG 2 conformance program in [design 0057](docs/design_docs/0057-donner_svg2_test_suite.md)
+are the measurement backbone; this section is the interim human-readable summary until the
+conformance suite publishes a generated gap report.
 
-**Shapes:**
-[`<circle>`](https://jwmcglynn.github.io/donner/xml_circle.html)
-[`<ellipse>`](https://jwmcglynn.github.io/donner/xml_ellipse.html)
-[`<line>`](https://jwmcglynn.github.io/donner/xml_line.html)
-[`<path>`](https://jwmcglynn.github.io/donner/xml_path.html)
-[`<polygon>`](https://jwmcglynn.github.io/donner/xml_polygon.html)
-[`<polyline>`](https://jwmcglynn.github.io/donner/xml_polyline.html)
-[`<rect>`](https://jwmcglynn.github.io/donner/xml_rect.html)
+Legend: **Yes** = parsed and rendered; **Partial** = supported with the noted gaps;
+**Parsed only** = retained on the DOM but not drawn (by design); **Experimental** = implemented but
+off by default; **No** = not recognized (parses to an unknown element).
 
-**Text:**
-[`<text>`](https://jwmcglynn.github.io/donner/xml_text.html)
-[`<tspan>`](https://jwmcglynn.github.io/donner/xml_tspan.html)
-[`<textPath>`](https://jwmcglynn.github.io/donner/xml_textPath.html)
+### Elements
 
-**Paint servers and markers:**
-[`<linearGradient>`](https://jwmcglynn.github.io/donner/xml_linearGradient.html)
-[`<radialGradient>`](https://jwmcglynn.github.io/donner/xml_radialGradient.html)
-[`<stop>`](https://jwmcglynn.github.io/donner/xml_stop.html)
-[`<pattern>`](https://jwmcglynn.github.io/donner/xml_pattern.html)
-[`<marker>`](https://jwmcglynn.github.io/donner/xml_marker.html)
+| Category | Elements | Support |
+| :------- | :------- | :------ |
+| Structural | [`<svg>`](https://jwmcglynn.github.io/donner/xml_svg.html) [`<g>`](https://jwmcglynn.github.io/donner/xml_g.html) [`<defs>`](https://jwmcglynn.github.io/donner/xml_defs.html) [`<symbol>`](https://jwmcglynn.github.io/donner/xml_symbol.html) [`<use>`](https://jwmcglynn.github.io/donner/xml_use.html) [`<style>`](https://jwmcglynn.github.io/donner/xml_style.html) [`<switch>`](https://jwmcglynn.github.io/donner/xml_switch.html) | Yes |
+| Hyperlink | [`<a>`](https://jwmcglynn.github.io/donner/xml_a.html) | Yes. Renders as a transparent group (its children draw in place); the link target (`href` / `xlink:href`) is retained on the DOM. |
+| Shapes | [`<circle>`](https://jwmcglynn.github.io/donner/xml_circle.html) [`<ellipse>`](https://jwmcglynn.github.io/donner/xml_ellipse.html) [`<line>`](https://jwmcglynn.github.io/donner/xml_line.html) [`<path>`](https://jwmcglynn.github.io/donner/xml_path.html) [`<polygon>`](https://jwmcglynn.github.io/donner/xml_polygon.html) [`<polyline>`](https://jwmcglynn.github.io/donner/xml_polyline.html) [`<rect>`](https://jwmcglynn.github.io/donner/xml_rect.html) | Yes |
+| Raster image | [`<image>`](https://jwmcglynn.github.io/donner/xml_image.html) | Partial. Embedded (data URI) images render; external-URL and cross-file references are not loaded. |
+| Text | [`<text>`](https://jwmcglynn.github.io/donner/xml_text.html) [`<tspan>`](https://jwmcglynn.github.io/donner/xml_tspan.html) [`<textPath>`](https://jwmcglynn.github.io/donner/xml_textPath.html) | Partial. See Text features below. Text requires a text-enabled build; the size-optimized build can omit it. |
+| Paint servers and markers | [`<linearGradient>`](https://jwmcglynn.github.io/donner/xml_linearGradient.html) [`<radialGradient>`](https://jwmcglynn.github.io/donner/xml_radialGradient.html) [`<stop>`](https://jwmcglynn.github.io/donner/xml_stop.html) [`<pattern>`](https://jwmcglynn.github.io/donner/xml_pattern.html) [`<marker>`](https://jwmcglynn.github.io/donner/xml_marker.html) | Yes. Linear and radial gradients (all spread methods, radial focal point) and patterns are supported; conic/sweep gradients are not. |
+| Masking and clipping | [`<mask>`](https://jwmcglynn.github.io/donner/xml_mask.html) [`<clipPath>`](https://jwmcglynn.github.io/donner/xml_clipPath.html) | Partial. Core masking and clipping work; clip on/with `<text>`, some nested clip-path intersections, and a few mask-unit edge cases are not yet handled. |
+| Filters | [`<filter>`](https://jwmcglynn.github.io/donner/xml_filter.html) and the full `<fe*>` primitive suite | Partial. All 17 filter primitives have DOM wrappers and renderer support; the CSS `filter:` function-list category, `enable-background` / `BackgroundImage` inputs, and some feImage subregion cases are not covered. See the [filter element reference](https://jwmcglynn.github.io/donner/elements_filters.html). |
+| Descriptive | [`<title>`](https://jwmcglynn.github.io/donner/xml_title.html) [`<desc>`](https://jwmcglynn.github.io/donner/xml_desc.html) [`<metadata>`](https://jwmcglynn.github.io/donner/xml_metadata.html) | Parsed only (retained, never drawn, per spec). |
+| Animation (SMIL) | `<animate>` `<animateTransform>` `<set>` | Experimental, off by default. An animation system exists and renders time-sampled frames, but these elements parse to their animation types only when experimental parsing is enabled; otherwise they are treated as unknown. |
 
-**Masking and clipping:**
-[`<mask>`](https://jwmcglynn.github.io/donner/xml_mask.html)
-[`<clipPath>`](https://jwmcglynn.github.io/donner/xml_clipPath.html)
+Elements outside this list (for example `<foreignObject>`, `<tref>`, SVG 1.1 `<font>` / `<glyph>`,
+`<cursor>`, `<view>`, `<script>`) are not recognized and parse to an unknown element. See
+[unsupported SVG 1.x features](docs/unsupported_svg1_features.md) for the SVG 1.1 details.
 
-**Filters:** [`<filter>`](https://jwmcglynn.github.io/donner/xml_filter.html) and the full `<fe*>` primitive suite (`<feGaussianBlur>`, `<feColorMatrix>`, `<feDiffuseLighting>`, `<feTurbulence>`, …). See the [filter element reference](https://jwmcglynn.github.io/donner/elements_filters.html) for the complete list.
+### Presentation attributes and CSS properties
 
-**Not yet supported:** `<a>` `<switch>`
+| Support | Properties |
+| :------ | :--------- |
+| Honored | `fill` / `fill-rule` / `fill-opacity`, `stroke` and all `stroke-*`, `opacity`, `color`, `display`, `visibility`, `overflow`, `transform` / `transform-origin`, `clip-path` / `clip-rule`, `mask`, `filter`, `color-interpolation-filters`, `marker-start` / `-mid` / `-end`, `mix-blend-mode` (all 16 modes), `isolation`, `image-rendering` (sampling), `vector-effect` (only `non-scaling-stroke`), and the text properties (`font-*`, `text-anchor`, `text-decoration`, baseline family, `letter-spacing`, `word-spacing`, `writing-mode`). |
+| Partial | `paint-order` (honored by the CPU backend; not yet by the GPU backend). |
+| Parsed but not painted | `pointer-events` and `cursor` (used for hit-testing / interaction, not drawing); the rendering hints `color-rendering`, `shape-rendering`, `text-rendering`, `color-interpolation`. |
+| Not implemented | `direction` / `unicode-bidi` (bidirectional text), `image-rendering: pixelated` / `crisp-edges`, `glyph-orientation-*`, `font-size-adjust`, CSS2 `clip: rect(...)`. |
+
+### Text features
+
+Text layout supports fills and strokes (including gradient and pattern paints), per-glyph
+positioning, `text-anchor`, `textPath` along a path, and a full font stack (FreeType, HarfBuzz,
+WOFF2) or a compact built-in stack. Known gaps, tracked against the resvg suite: bidirectional
+text and `direction` / `unicode-bidi`, `textLength` / `lengthAdjust`, several SVG 2 `<textPath>`
+features (`side`, `method=stretch`, `spacing=auto`, the `path` attribute), full SVG 2
+`text-decoration` (independent line, style, and color), `<tref>`, and some vertical
+`writing-mode: tb` cases.
+
+### Renderers
+
+Donner ships two backends behind one renderer interface. The tiny_skia CPU backend is the default
+and the most complete; the Geode WebGPU backend drives the editor canvas and is at broad parity,
+with a few narrower gaps (`paint-order`, some `0 N` dash caps, nested path-clip intersection) where
+the CPU backend currently passes conformance cases the GPU backend does not. Both share the same
+DOM, layout, paint resolution, markers, and filter graph.
 
 ## CLI Tool: donner-svg
 
