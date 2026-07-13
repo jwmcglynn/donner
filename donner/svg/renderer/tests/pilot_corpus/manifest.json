@@ -1,0 +1,148 @@
+{
+  "schema": "https://donner.graphics/svg2-suite/corpus-v1.schema.json",
+  "corpus": "resvg",
+  "revision": "d8e064337faf01bc5a9579187a56dbdbe3eacc72",
+  "tests": [
+    {
+      "id": "resvg/shapes/rect/simple-case",
+      "input": "tests/shapes/rect/simple-case.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/shapes/rect/simple-case.png",
+        "width": 500,
+        "height": 500,
+        "provenance": "upstream-resvg-golden"
+      },
+      "assertion": "Imported resvg base case shapes/rect/simple-case; upstream reference rendering (unreviewed for SVG 2 requirement mapping).",
+      "spec_requirements": [],
+      "capabilities": []
+    },
+    {
+      "id": "resvg/shapes/circle/simple-case",
+      "input": "tests/shapes/circle/simple-case.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/shapes/circle/simple-case.png",
+        "width": 500,
+        "height": 500,
+        "provenance": "upstream-resvg-golden"
+      },
+      "assertion": "Imported resvg base case shapes/circle/simple-case; upstream reference rendering (unreviewed for SVG 2 requirement mapping).",
+      "spec_requirements": [],
+      "capabilities": []
+    },
+    {
+      "id": "resvg/shapes/ellipse/simple-case",
+      "input": "tests/shapes/ellipse/simple-case.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/shapes/ellipse/simple-case.png",
+        "width": 500,
+        "height": 500,
+        "provenance": "upstream-resvg-golden"
+      },
+      "assertion": "Imported resvg base case shapes/ellipse/simple-case; upstream reference rendering (unreviewed for SVG 2 requirement mapping).",
+      "spec_requirements": [],
+      "capabilities": []
+    },
+    {
+      "id": "resvg/shapes/polygon/simple-case",
+      "input": "tests/shapes/polygon/simple-case.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/shapes/polygon/simple-case.png",
+        "width": 500,
+        "height": 500,
+        "provenance": "upstream-resvg-golden"
+      },
+      "assertion": "Imported resvg base case shapes/polygon/simple-case; upstream reference rendering (unreviewed for SVG 2 requirement mapping).",
+      "spec_requirements": [],
+      "capabilities": []
+    },
+    {
+      "id": "resvg/shapes/polyline/simple-case",
+      "input": "tests/shapes/polyline/simple-case.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/shapes/polyline/simple-case.png",
+        "width": 500,
+        "height": 500,
+        "provenance": "upstream-resvg-golden"
+      },
+      "assertion": "Imported resvg base case shapes/polyline/simple-case; upstream reference rendering (unreviewed for SVG 2 requirement mapping).",
+      "spec_requirements": [],
+      "capabilities": []
+    },
+    {
+      "id": "resvg/painting/fill/named-color",
+      "input": "tests/painting/fill/named-color.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/painting/fill/named-color.png",
+        "width": 500,
+        "height": 500,
+        "provenance": "upstream-resvg-golden"
+      },
+      "assertion": "Imported resvg base case painting/fill/named-color; upstream reference rendering (unreviewed for SVG 2 requirement mapping).",
+      "spec_requirements": [],
+      "capabilities": []
+    },
+    {
+      "id": "resvg/painting/fill-opacity/50percent",
+      "input": "tests/painting/fill-opacity/50percent.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/painting/fill-opacity/50percent.png",
+        "width": 500,
+        "height": 500,
+        "provenance": "upstream-resvg-golden"
+      },
+      "assertion": "Imported resvg base case painting/fill-opacity/50percent; upstream reference rendering (unreviewed for SVG 2 requirement mapping).",
+      "spec_requirements": [],
+      "capabilities": []
+    },
+    {
+      "id": "resvg/painting/color/simple-case",
+      "input": "tests/painting/color/simple-case.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/painting/color/simple-case.png",
+        "width": 500,
+        "height": 500,
+        "provenance": "upstream-resvg-golden"
+      },
+      "assertion": "Imported resvg base case painting/color/simple-case; upstream reference rendering (unreviewed for SVG 2 requirement mapping).",
+      "spec_requirements": [],
+      "capabilities": []
+    },
+    {
+      "id": "resvg/painting/fill-rule/evenodd",
+      "input": "tests/painting/fill-rule/evenodd.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/painting/fill-rule/evenodd.png",
+        "width": 500,
+        "height": 500,
+        "provenance": "upstream-resvg-golden"
+      },
+      "assertion": "Imported resvg base case painting/fill-rule/evenodd; upstream reference rendering (unreviewed for SVG 2 requirement mapping).",
+      "spec_requirements": [],
+      "capabilities": []
+    },
+    {
+      "id": "resvg/text/text/simple-case",
+      "input": "tests/text/text/simple-case.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/text/text/simple-case.png",
+        "width": 500,
+        "height": 500,
+        "provenance": "upstream-resvg-golden"
+      },
+      "assertion": "Imported resvg base case text/text/simple-case; upstream reference rendering (unreviewed for SVG 2 requirement mapping).",
+      "spec_requirements": [],
+      "capabilities": ["text"],
+      "resources": ["fonts/NotoSans-Regular.ttf"]
+    }
+  ]
+}

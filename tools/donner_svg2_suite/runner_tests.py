@@ -183,3 +183,88 @@ class RunnerScenarioTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RunnerComparatorAndCorpusRootTest(unittest.TestCase):
+    """Covers the external-comparator delegation and corpus-root override."""
+
+    def setUp(self):
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary_directory.name)
+        self.work = self.root / "work"
+
+    def tearDown(self):
+        self.temporary_directory.cleanup()
+
+    def _fake_comparator(self, passed: bool) -> list[str]:
+        # A standalone comparator that reports a fixed verdict, proving the
+        # runner delegates comparison (executable + argument array) and honors
+        # the returned verdict rather than its built-in comparator.
+        script = self.root / "fake_comparator.py"
+        script.write_text(
+            "import argparse, json\n"
+            "p = argparse.ArgumentParser()\n"
+            "p.add_argument('--expected')\n"
+            "p.add_argument('--actual')\n"
+            "p.add_argument('--threshold')\n"
+            "p.add_argument('--max-mismatched-pixels')\n"
+            "p.parse_args()\n"
+            f"print(json.dumps({{'status': 'ok', 'passed': {passed}, 'mismatched_pixels': 0}}))\n",
+            encoding="utf-8",
+        )
+        return [sys.executable, str(script)]
+
+    def test_external_comparator_verdict_overrides_builtin(self):
+        # Actual and oracle differ, so the built-in comparator would fail; the
+        # external comparator forces a pass, proving delegation.
+        support.make_png(self.root / "tests/c.png")
+        support.make_png(self.root / "tests/c.oracle.png", pixel=support.OTHER_PIXEL)
+        entry = support.test_entry(
+            test_id="donner-svg2/c", input_rel="tests/c.png", oracle_rel="tests/c.oracle.png"
+        )
+        manifest_path = support.write_manifest(self.root, [entry])
+        run = runner.run_manifest(
+            manifest_path,
+            support.adapter_argv(),
+            work_dir=self.work,
+            comparator_argv=self._fake_comparator(passed=True),
+        )
+        self.assertEqual({r["test"]: r["status"] for r in run.results}, {"donner-svg2/c": "pass"})
+        self.assertTrue(run.ok)
+
+    def test_unparseable_comparator_is_infrastructure_error(self):
+        support.make_png(self.root / "tests/e.png")
+        support.make_png(self.root / "tests/e.oracle.png")
+        entry = support.test_entry(
+            test_id="donner-svg2/e", input_rel="tests/e.png", oracle_rel="tests/e.oracle.png"
+        )
+        manifest_path = support.write_manifest(self.root, [entry])
+        broken = self.root / "broken_comparator.py"
+        broken.write_text("import sys\nsys.exit(0)\n", encoding="utf-8")
+        run = runner.run_manifest(
+            manifest_path,
+            support.adapter_argv(),
+            work_dir=self.work,
+            comparator_argv=[sys.executable, str(broken)],
+        )
+        self.assertEqual(
+            {r["test"]: r["status"] for r in run.results},
+            {"donner-svg2/e": "infrastructure-error"},
+        )
+        self.assertFalse(run.ok)
+
+    def test_corpus_root_resolves_inputs_from_separate_tree(self):
+        corpus = self.root / "corpus"
+        support.make_png(corpus / "tests/r.png")
+        support.make_png(corpus / "tests/r.oracle.png")
+        entry = support.test_entry(
+            test_id="donner-svg2/r", input_rel="tests/r.png", oracle_rel="tests/r.oracle.png"
+        )
+        manifest_dir = self.root / "elsewhere"
+        manifest_dir.mkdir()
+        manifest_path = support.write_manifest(manifest_dir, [entry])
+        run = runner.run_manifest(
+            manifest_path, support.adapter_argv(), work_dir=self.work, corpus_root=corpus
+        )
+        self.assertEqual({r["test"]: r["status"] for r in run.results}, {"donner-svg2/r": "pass"})
+        self.assertTrue(run.ok)

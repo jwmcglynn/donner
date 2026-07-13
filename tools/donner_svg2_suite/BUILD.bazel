@@ -153,3 +153,17 @@ py_test(
     ],
     deps = ["@rules_python//python/runfiles"],
 )
+
+# Importable form of the reference runner, so other packages (for example the
+# Donner adapter pilot parity test) can drive it in-process.
+py_library(
+    name = "runner_lib",
+    srcs = [
+        "adapter_protocol.py",
+        "path_safety.py",
+        "png_image.py",
+        "runner.py",
+    ],
+    imports = ["."],
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,46 @@
+{
+  "schema": "https://donner.graphics/svg2-suite/profile-v1.schema.json",
+  "profile": "donner-tinyskia",
+  "cases": {
+    "resvg/shapes/rect/simple-case": {
+      "expectation": "pass",
+      "comparison": {"threshold": 0.02, "max_mismatched_pixels": 100}
+    },
+    "resvg/shapes/circle/simple-case": {
+      "expectation": "pass",
+      "comparison": {"threshold": 0.02, "max_mismatched_pixels": 100}
+    },
+    "resvg/shapes/ellipse/simple-case": {
+      "expectation": "pass",
+      "comparison": {"threshold": 0.02, "max_mismatched_pixels": 100}
+    },
+    "resvg/shapes/polygon/simple-case": {
+      "expectation": "pass",
+      "comparison": {"threshold": 0.02, "max_mismatched_pixels": 100}
+    },
+    "resvg/shapes/polyline/simple-case": {
+      "expectation": "pass",
+      "comparison": {"threshold": 0.02, "max_mismatched_pixels": 100}
+    },
+    "resvg/painting/fill/named-color": {
+      "expectation": "pass",
+      "comparison": {"threshold": 0.02, "max_mismatched_pixels": 100}
+    },
+    "resvg/painting/fill-opacity/50percent": {
+      "expectation": "pass",
+      "comparison": {"threshold": 0.02, "max_mismatched_pixels": 100}
+    },
+    "resvg/painting/color/simple-case": {
+      "expectation": "pass",
+      "comparison": {"threshold": 0.02, "max_mismatched_pixels": 100}
+    },
+    "resvg/painting/fill-rule/evenodd": {
+      "expectation": "pass",
+      "comparison": {"threshold": 0.02, "max_mismatched_pixels": 100}
+    },
+    "resvg/text/text/simple-case": {
+      "expectation": "pass",
+      "comparison": {"threshold": 0.02, "max_mismatched_pixels": 100}
+    }
+  }
+}

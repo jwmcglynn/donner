@@ -1,5 +1,6 @@
 load(
     "//build_defs:rules.bzl",
+    "donner_cc_binary",
     "donner_cc_fuzzer",
     "donner_cc_library",
     "donner_cc_test",
@@ -658,5 +659,59 @@ donner_cc_test(
         ":image_comparison_test_fixture",
         "//donner/svg/renderer:terminal_image_viewer",
         "@com_google_gtest//:gtest_main",
+    ],
+)
+
+# Portable SVG2 test suite (design 0057): the Donner render adapter and a thin
+# reuse of Donner's image comparison, plus the pilot parity test that drives the
+# portable reference runner against a small resvg subset. See
+# docs/design_docs/0057-donner_svg2_test_suite.md (Rollout step 4).
+
+donner_cc_binary(
+    name = "donner_svg2_render_adapter",
+    testonly = 1,
+    srcs = ["DonnerSvg2RenderAdapter.cc"],
+    deps = [
+        ":renderer_test_backend",
+        "//donner/base",
+        "//donner/css:core",
+        "//donner/svg",
+        "//donner/svg/components/resources:resource_manager_context",
+        "//donner/svg/parser",
+        "//donner/svg/renderer:renderer_image_io",
+        "//donner/svg/resources:font_manager",
+        "//donner/svg/resources:font_metadata",
+        "//donner/svg/resources:sandboxed_file_resource_loader",
+        "@nlohmann_json//:json",
+    ],
+)
+
+donner_cc_binary(
+    name = "svg2_image_compare",
+    testonly = 1,
+    srcs = ["Svg2ImageCompare.cc"],
+    deps = [
+        ":renderer_image_test_utils",
+        "@nlohmann_json//:json",
+        "@pixelmatch-cpp17",
+    ],
+)
+
+py_test(
+    name = "donner_svg2_pilot",
+    size = "medium",
+    srcs = ["donner_svg2_pilot_test.py"],
+    data = [
+        ":donner_svg2_render_adapter",
+        ":svg2_image_compare",
+        "//third_party/resvg-test-suite:LICENSE",
+        "//third_party/resvg-test-suite:fonts",
+        "//third_party/resvg-test-suite:resources",
+        "//third_party/resvg-test-suite:tests",
+    ] + glob(["pilot_corpus/*.json"]),
+    main = "donner_svg2_pilot_test.py",
+    deps = [
+        "//tools/donner_svg2_suite:runner_lib",
+        "@rules_python//python/runfiles",
     ],
 )
