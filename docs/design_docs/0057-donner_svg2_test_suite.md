@@ -1,7 +1,7 @@
 # Design: Donner SVG2 Test Suite
 
 **Status:** Draft
-**Author:** GPT-5.6 Sol
+**Author:** Claude Fable 5 (reviewed; drafted by GPT-5.6 Sol)
 **Created:** 2026-07-12
 
 ## Summary
@@ -530,9 +530,9 @@ strict pass and never evidence that an override is stale.
 The suite has five independently visible versions:
 
 - bundle version;
-- manifest schema major/minor version; and
+- manifest schema major/minor version;
 - exact SVG 2 formal and editorial-delta revisions;
-- specification dependency-lock digest;
+- specification dependency-lock digest; and
 - exact resvg and Donner-extension source revisions.
 
 A release artifact is content-addressed and includes manifests, files, licenses, source revisions,
