@@ -52,10 +52,12 @@
       "oracle_kinds": [
         "png"
       ],
-      "test_ids": [],
+      "test_ids": [
+        "donner-svg2/painting/stroke-width/zero-no-stroke"
+      ],
       "review_state": "reviewed",
-      "evidence_state": "missing-test",
-      "rationale": "",
+      "evidence_state": "covered-pass",
+      "rationale": "Covered by the Donner-authored SVG2 extension case donner-svg2/painting/stroke-width/zero-no-stroke, which isolates this requirement (zero stroke-width paints no stroke) against a manually-constructed exact geometric reference; the Donner adapter renders it to a byte-exact match (donner_svg2_suite). Reference provenance and an independent oracle review are recorded with the extension corpus.",
       "artifacts": [],
       "source_text_hash": "sha256:5773dedc8cf54987bcfcd8593541a453bf8cb3a716be1ac1b837fb1528057fdb",
       "feature_flags": [

@@ -10,15 +10,28 @@
       "assertion": "The initial value of the paint-order property paints fill first, then stroke, then markers.",
       "strength": "must",
       "subject": "user-agent",
-      "software_classes": ["interpreter", "viewer", "high-quality-viewer"],
-      "processing_modes": ["static", "secure-static"],
-      "feature_flags": ["paint-order"],
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "feature_flags": [
+        "paint-order"
+      ],
       "dependencies": [],
-      "oracle_kinds": ["png"],
-      "test_ids": [],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [
+        "donner-svg2/painting/paint-order/default-fill-then-stroke"
+      ],
       "review_state": "reviewed",
-      "evidence_state": "missing-test",
-      "rationale": "Worked-example seed record. Applicable to the static render adapter but no committed test yet, so it stays a visible gap rather than a claimed pass.",
+      "evidence_state": "covered-pass",
+      "rationale": "Covered by the Donner-authored SVG2 extension case donner-svg2/painting/paint-order/default-fill-then-stroke, which isolates this requirement (default paint order (fill then stroke)) against a manually-constructed exact geometric reference; the Donner adapter renders it to a byte-exact match (donner_svg2_suite). Reference provenance and an independent oracle review are recorded with the extension corpus.",
       "artifacts": [],
       "source_text_hash": "sha256:240453d374a916ab505ed43af407da9cc63966c3e9162cffb617b8921d92a1d6"
     },
@@ -30,11 +43,22 @@
       "assertion": "paint-order accepts fill, stroke, and markers in any order; keywords omitted from the list are painted in their default order after the listed keywords.",
       "strength": "must",
       "subject": "user-agent",
-      "software_classes": ["interpreter", "viewer", "high-quality-viewer"],
-      "processing_modes": ["static", "secure-static"],
-      "feature_flags": ["paint-order"],
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "feature_flags": [
+        "paint-order"
+      ],
       "dependencies": [],
-      "oracle_kinds": ["png"],
+      "oracle_kinds": [
+        "png"
+      ],
       "test_ids": [],
       "review_state": "reviewed",
       "evidence_state": "missing-test",
@@ -50,12 +74,29 @@
       "assertion": "Applying paint-order to text does not change glyph shaping, so a paint-only tspan must not split shaping across its boundary.",
       "strength": "must",
       "subject": "user-agent",
-      "software_classes": ["interpreter", "viewer", "high-quality-viewer"],
-      "processing_modes": ["static", "secure-static"],
-      "feature_flags": ["paint-order", "text"],
-      "dependencies": ["css-writing-modes-4", "unicode"],
-      "oracle_kinds": ["png"],
-      "test_ids": ["donner-svg2/painting/paint-order/tspan-boundary"],
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "feature_flags": [
+        "paint-order",
+        "text"
+      ],
+      "dependencies": [
+        "css-writing-modes-4",
+        "unicode"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [
+        "donner-svg2/painting/paint-order/tspan-boundary"
+      ],
       "review_state": "reviewed",
       "evidence_state": "missing-test",
       "rationale": "Worked-example seed record matching the manifest sample in design 0057. A candidate test id is recorded but the reference image and coverage edge land with the extension corpus in a later milestone, so this stays a gap.",
