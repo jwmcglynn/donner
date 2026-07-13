@@ -140,6 +140,7 @@ conventions automated agents should follow when editing design docs.
 | 0054   | [editor_design_language](0054-editor_design_language.md)                                   | In Progress                                                       | Graphite editor chrome, Signal Teal interaction states, source palette, fixed control geometry, and deterministic visual verification.       |
 | 0055   | [binary_size](0055-binary_size.md)                                                         | Draft                                                             | Binary size reduction: reproducible native + wasm size report tooling, measured baseline, and ranked reduction plan.                        |
 | 0056   | [wasm_ios_runtime_compatibility](0056-wasm_ios_runtime_compatibility.md)                   | In Progress                                                       | Feature-detected Geode WebGPU plus TinySkia WebGL2 packaging and iPhone-profile runtime verification.                                        |
+| 0057   | [donner_svg2_test_suite](0057-donner_svg2_test_suite.md)                                 | Draft                                                             | Reusable adapter and distribution layer combining the upstream resvg corpus with focused Donner SVG 2 extension tests.                      |
 
 ## Cross-reference: developer docs
 
