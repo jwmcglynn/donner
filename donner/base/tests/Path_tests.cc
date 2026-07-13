@@ -2014,6 +2014,21 @@ TEST(Path, StrokeToFillDashLeadingZeroSquareCaps) {
   ExpectNear(filled.bounds().bottomRight, Vector2d(82, 2));
 }
 
+TEST(Path, StrokeToFillDashLeadingZeroSquareCapsPreserveTangent) {
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({10, 10}).build();
+  StrokeStyle style;
+  style.width = 2.0 * std::sqrt(2.0);
+  style.cap = LineCap::Square;
+  style.dashArray = {0.0, 20.0};
+
+  Path filled = path.strokeToFill(style);
+
+  ASSERT_FALSE(filled.empty());
+  EXPECT_EQ(countSubpaths(filled), 1u);
+  ExpectNear(filled.bounds().topLeft, Vector2d(-2, -2));
+  ExpectNear(filled.bounds().bottomRight, Vector2d(2, 2));
+}
+
 TEST(Path, StrokeToFillDashNegativeIsSolid) {
   // Negative values in the dasharray disable dashing.
   Path path = PathBuilder().moveTo({0, 0}).lineTo({100, 0}).build();
