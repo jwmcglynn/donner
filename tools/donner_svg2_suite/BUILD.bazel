@@ -103,6 +103,7 @@ py_test(
     data = [
         ":schemas",
         ":spec_seed_data",
+        "//donner/svg/renderer/tests:donner_svg2_corpus_manifest",
         "//donner/svg/renderer/tests:pilot_corpus_manifest",
     ],
 )

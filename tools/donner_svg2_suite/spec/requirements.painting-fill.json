@@ -54,10 +54,12 @@
       "oracle_kinds": [
         "png"
       ],
-      "test_ids": [],
+      "test_ids": [
+        "donner-svg2/painting/fill/default-black"
+      ],
       "review_state": "reviewed",
-      "evidence_state": "missing-test",
-      "rationale": "",
+      "evidence_state": "covered-pass",
+      "rationale": "Covered by the Donner-authored SVG2 extension case donner-svg2/painting/fill/default-black, which isolates this requirement (initial fill is black) against a manually-constructed exact geometric reference; the Donner adapter renders it to a byte-exact match (donner_svg2_suite). Reference provenance and an independent oracle review are recorded with the extension corpus.",
       "artifacts": [],
       "source_text_hash": "sha256:5cea2fc72fae8826b4828efe594b01812526553acc76c3303b2ce81eb4d93aac",
       "dependencies": [
@@ -169,10 +171,12 @@
       "oracle_kinds": [
         "png"
       ],
-      "test_ids": [],
+      "test_ids": [
+        "donner-svg2/painting/fill-opacity/clamp-above-one"
+      ],
       "review_state": "reviewed",
-      "evidence_state": "missing-test",
-      "rationale": "",
+      "evidence_state": "covered-pass",
+      "rationale": "Covered by the Donner-authored SVG2 extension case donner-svg2/painting/fill-opacity/clamp-above-one, which isolates this requirement (fill-opacity above 1 clamps to opaque) against a manually-constructed exact geometric reference; the Donner adapter renders it to a byte-exact match (donner_svg2_suite). Reference provenance and an independent oracle review are recorded with the extension corpus.",
       "artifacts": [],
       "source_text_hash": "sha256:5f880c6e034b7ee42e54ec75972738e80d0f58a2df392eb6fabccad714115689"
     }

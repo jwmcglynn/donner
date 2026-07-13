@@ -21,6 +21,7 @@ SPEC_DIR = Path(spec_coverage_lint.__file__).resolve().parent / "spec"
 # the tools/donner_svg2_suite package.
 WORKSPACE_ROOT = Path(spec_coverage_lint.__file__).resolve().parents[2]
 PILOT_MANIFEST = WORKSPACE_ROOT / "donner/svg/renderer/tests/pilot_corpus/manifest.json"
+EXTENSION_MANIFEST = WORKSPACE_ROOT / "donner/svg/renderer/tests/donner_svg2_corpus/manifest.json"
 
 
 def requirement(
@@ -79,10 +80,12 @@ def test_case(test_id: str, requirements: list[str]) -> dict:
 class ShippedGraphTest(unittest.TestCase):
     def test_committed_graph_lints_clean(self):
         # The committed inventories, cross-checked against the reviewed resvg
-        # pilot corpus, form a consistent bidirectional graph: every covered-pass
-        # mapping is mutual and its test exists.
+        # pilot corpus and the Donner-authored extension corpus, form a consistent
+        # bidirectional graph: every covered-state mapping is mutual and its test
+        # exists.
         self.assertTrue(PILOT_MANIFEST.is_file(), f"pilot manifest not staged at {PILOT_MANIFEST}")
-        errors = spec_coverage_lint.check(SPEC_DIR, [PILOT_MANIFEST])
+        self.assertTrue(EXTENSION_MANIFEST.is_file(), f"extension manifest not staged at {EXTENSION_MANIFEST}")
+        errors = spec_coverage_lint.check(SPEC_DIR, [PILOT_MANIFEST, EXTENSION_MANIFEST])
         self.assertEqual(errors, [], errors)
 
     def test_inventory_only_check_is_clean(self):
@@ -100,7 +103,7 @@ class ShippedGraphTest(unittest.TestCase):
             # Passing evidence is exactly the covered-pass mappings; every other
             # testable state remains a visible gap.
             self.assertEqual(summary["covered_pass"] + summary["gaps"] + summary["not_applicable"], summary["total"])
-            self.assertEqual(summary["covered_pass"], 8)
+            self.assertEqual(summary["covered_pass"], 14)
             self.assertGreaterEqual(summary["total"], 35)
             self.assertTrue((out / "requirements.json").is_file())
             self.assertTrue((out / "coverage.json").is_file())

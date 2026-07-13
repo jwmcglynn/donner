@@ -51,10 +51,12 @@
       "oracle_kinds": [
         "png"
       ],
-      "test_ids": [],
+      "test_ids": [
+        "donner-svg2/shapes/rect/negative-width-ignored"
+      ],
       "review_state": "reviewed",
-      "evidence_state": "missing-test",
-      "rationale": "",
+      "evidence_state": "covered-pass",
+      "rationale": "Covered by the Donner-authored SVG2 extension case donner-svg2/shapes/rect/negative-width-ignored, which isolates this requirement (negative rect width ignored) against a manually-constructed exact geometric reference; the Donner adapter renders it to a byte-exact match (donner_svg2_suite). Reference provenance and an independent oracle review are recorded with the extension corpus.",
       "artifacts": [],
       "source_text_hash": "sha256:0d87e09a508c0e9c4574a9fb84a7e87966c319d43216d62262a0298ba8652c8d"
     },
@@ -331,10 +333,12 @@
       "oracle_kinds": [
         "png"
       ],
-      "test_ids": [],
+      "test_ids": [
+        "donner-svg2/shapes/line/never-filled"
+      ],
       "review_state": "reviewed",
-      "evidence_state": "missing-test",
-      "rationale": "",
+      "evidence_state": "covered-pass",
+      "rationale": "Covered by the Donner-authored SVG2 extension case donner-svg2/shapes/line/never-filled, which isolates this requirement (a line is never filled) against a manually-constructed exact geometric reference; the Donner adapter renders it to a byte-exact match (donner_svg2_suite). Reference provenance and an independent oracle review are recorded with the extension corpus.",
       "artifacts": [],
       "source_text_hash": "sha256:0ceb2a1e175d2f99bb57bf7c437eb5ae68a551fe9dbb63c3ab3b2fd4f61ffc81"
     },

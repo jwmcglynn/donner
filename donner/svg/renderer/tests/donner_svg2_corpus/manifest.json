@@ -1,0 +1,122 @@
+{
+  "schema": "https://donner.graphics/svg2-suite/corpus-v1.schema.json",
+  "corpus": "donner-svg2",
+  "revision": "donner-svg2-m4-seed-v1",
+  "integrity": {
+    "tests/painting/fill/default-black.svg": "sha256:c4ac6cd200f3bc0187a73144cdf1d79372231e747a3ef5277f5bd63aa8045550",
+    "tests/painting/fill/default-black.png": "sha256:52b6c0aeba2019069988d0bd0710bd5c94ff80e7252104677832eb66e7f7cb93",
+    "tests/painting/fill-opacity/clamp-above-one.svg": "sha256:132a3db08eb49c05b55ae7fd7d6654f4a989dcda96fade49e5b66f3e9c941b45",
+    "tests/painting/fill-opacity/clamp-above-one.png": "sha256:2adc7391683d01ceefbb9422ba2ebc51e2f744f20b95966a789920d42b03fb95",
+    "tests/painting/stroke-width/zero-no-stroke.svg": "sha256:8a8d10df191ea4974bee54c38d61ef82e9158e75601c5da97f11fe9c0766fca4",
+    "tests/painting/stroke-width/zero-no-stroke.png": "sha256:2adc7391683d01ceefbb9422ba2ebc51e2f744f20b95966a789920d42b03fb95",
+    "tests/shapes/rect/negative-width-ignored.svg": "sha256:868d396552d6d9356b6af99dfbb0b37d21ffa1d0800caf56a09fd16207bfe6d8",
+    "tests/shapes/rect/negative-width-ignored.png": "sha256:52b6c0aeba2019069988d0bd0710bd5c94ff80e7252104677832eb66e7f7cb93",
+    "tests/painting/paint-order/default-fill-then-stroke.svg": "sha256:66aa1ea7c1d1cede92e56ffda815e2dfd43fd1bd852ce23fa8ce890e03ffba8b",
+    "tests/painting/paint-order/default-fill-then-stroke.png": "sha256:face95c520ce78bca2325b1eeac0a9637cc242a88c4c5f0a418ca17d2aafe3db",
+    "tests/shapes/line/never-filled.svg": "sha256:5073e55e738129c6aed322e469e2fc7a490c3912478c0b5dafa14f777cc2fe2d",
+    "tests/shapes/line/never-filled.png": "sha256:52b6c0aeba2019069988d0bd0710bd5c94ff80e7252104677832eb66e7f7cb93"
+  },
+  "tests": [
+    {
+      "id": "donner-svg2/painting/fill/default-black",
+      "input": "tests/painting/fill/default-black.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/painting/fill/default-black.png",
+        "width": 100,
+        "height": 100,
+        "provenance": "manually-constructed-geometric-reference: SVG 2 CR 2018-10-04 13.4.1 (fill), initial value black."
+      },
+      "assertion": "A shape with no fill property specified is painted with the initial fill value, black.",
+      "spec_requirements": [
+        "svg2-cr-20181004/painting/SpecifyingFillPaint/req-02"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "donner-svg2/painting/fill-opacity/clamp-above-one",
+      "input": "tests/painting/fill-opacity/clamp-above-one.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/painting/fill-opacity/clamp-above-one.png",
+        "width": 100,
+        "height": 100,
+        "provenance": "manually-constructed-geometric-reference: SVG 2 CR 2018-10-04 13.4.3 (fill-opacity), out-of-range values clamped to [0,1]."
+      },
+      "assertion": "A fill-opacity greater than 1 is clamped to 1, so the fill is fully opaque.",
+      "spec_requirements": [
+        "svg2-cr-20181004/painting/FillOpacity/req-02"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "donner-svg2/painting/stroke-width/zero-no-stroke",
+      "input": "tests/painting/stroke-width/zero-no-stroke.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/painting/stroke-width/zero-no-stroke.png",
+        "width": 100,
+        "height": 100,
+        "provenance": "manually-constructed-geometric-reference: SVG 2 CR 2018-10-04 13.5.3 (stroke-width), a zero value causes no stroke to be painted."
+      },
+      "assertion": "A stroke-width of zero paints no stroke, so only the red fill is visible with no blue outline.",
+      "spec_requirements": [
+        "svg2-cr-20181004/painting/StrokeWidth/req-02"
+      ],
+      "capabilities": [
+        "stroke"
+      ]
+    },
+    {
+      "id": "donner-svg2/shapes/rect/negative-width-ignored",
+      "input": "tests/shapes/rect/negative-width-ignored.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/shapes/rect/negative-width-ignored.png",
+        "width": 100,
+        "height": 100,
+        "provenance": "manually-constructed-geometric-reference: SVG 2 CR 2018-10-04 10.2 (rect), a negative dimension is illegal and must be ignored as a parsing error."
+      },
+      "assertion": "A rect with a negative width is illegal and ignored, so only the black control rect renders and no red pixels appear.",
+      "spec_requirements": [
+        "svg2-cr-20181004/shapes/RectElement/req-02"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "donner-svg2/painting/paint-order/default-fill-then-stroke",
+      "input": "tests/painting/paint-order/default-fill-then-stroke.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/painting/paint-order/default-fill-then-stroke.png",
+        "width": 100,
+        "height": 100,
+        "provenance": "manually-constructed-geometric-reference: SVG 2 CR 2018-10-04 13.7 (paint-order), the initial value paints fill first, then stroke, then markers."
+      },
+      "assertion": "With the initial paint-order, fill is painted before stroke, so the wide blue stroke covers the outer band of the red fill.",
+      "spec_requirements": [
+        "svg2-cr-20181004/painting/paint-order/req-01"
+      ],
+      "capabilities": [
+        "stroke",
+        "paint-order"
+      ]
+    },
+    {
+      "id": "donner-svg2/shapes/line/never-filled",
+      "input": "tests/shapes/line/never-filled.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/shapes/line/never-filled.png",
+        "width": 100,
+        "height": 100,
+        "provenance": "manually-constructed-geometric-reference: SVG 2 CR 2018-10-04 10.5 (line), line elements are geometrically one-dimensional and are never filled."
+      },
+      "assertion": "A line element has no interior and is never filled, so a fill on a stroke-less line paints nothing and only the black control rect renders.",
+      "spec_requirements": [
+        "svg2-cr-20181004/shapes/LineElement/req-01"
+      ],
+      "capabilities": []
+    }
+  ]
+}
