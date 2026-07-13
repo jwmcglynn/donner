@@ -128,6 +128,29 @@ TEST(FilterGraphExecutorTest, ClipsFilterOutputUsingCapturedFilterTransform) {
   EXPECT_THAT(GetPixel(pixmap, 6, 6), Rgba(0, 0, 0, 0));
 }
 
+TEST(FilterGraphExecutorTest, ClipsFractionalAxisAlignedRegionByPixelCenter) {
+  auto maybePixmap = tiny_skia::Pixmap::fromSize(4, 4);
+  ASSERT_TRUE(maybePixmap.has_value());
+  tiny_skia::Pixmap pixmap = std::move(*maybePixmap);
+
+  for (int y = 0; y < 4; ++y) {
+    for (int x = 0; x < 4; ++x) {
+      SetPixel(pixmap, x, y, Pixel{255, 255, 255, 255});
+    }
+  }
+
+  ClipFilterOutputToRegion(pixmap, Box2d::FromXYWH(0.6, 1.4, 2.0, 2.0), Transform2d());
+
+  for (int y = 0; y < 4; ++y) {
+    for (int x = 0; x < 4; ++x) {
+      const bool pixelCenterInside = x >= 1 && x <= 2 && y >= 1 && y <= 2;
+      EXPECT_THAT(GetPixel(pixmap, x, y),
+                  pixelCenterInside ? Rgba(255, 255, 255, 255) : Rgba(0, 0, 0, 0))
+          << "at " << x << "," << y;
+    }
+  }
+}
+
 TEST(FilterGraphExecutorTest, ClipsCompletelyOffscreenFilterRegion) {
   auto maybePixmap = tiny_skia::Pixmap::fromSize(8, 8);
   ASSERT_TRUE(maybePixmap.has_value());

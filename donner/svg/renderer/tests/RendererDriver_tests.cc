@@ -1014,6 +1014,41 @@ TEST_F(RendererDriverTest, DrawEntityRangeUsesResolvedFilterReferenceObjectBound
   EXPECT_THAT(transforms, testing::Contains(TransformNear(baseTransform, 1e-6)));
 }
 
+#ifdef DONNER_TEXT_ENABLED
+TEST_F(RendererDriverTest, DrawUsesTextObjectBoundingBoxForFilterRegion) {
+  SVGDocument document = makeDocument(R"svg(
+    <defs>
+      <filter id="flood" x="0" y="0" width="1" height="1"
+              primitiveUnits="objectBoundingBox">
+        <feFlood flood-color="green" />
+      </filter>
+    </defs>
+    <text x="100" y="100" text-anchor="middle" font-family="Noto Sans" font-size="64"
+          filter="url(#flood)">Text</text>
+  )svg",
+                                      Vector2i(200, 200));
+
+  EXPECT_CALL(renderer, beginFrame(_)).Times(1);
+  EXPECT_CALL(renderer, endFrame()).Times(1);
+  EXPECT_CALL(renderer, setTransform(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, setPaint(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, drawText(_, _, _)).Times(1);
+  EXPECT_CALL(renderer, pushFilterLayer(_, _))
+      .WillOnce(
+          [](const components::FilterGraph& filterGraph, const std::optional<Box2d>& filterRegion) {
+            ASSERT_TRUE(filterRegion.has_value());
+            EXPECT_FALSE(filterRegion->isEmpty());
+            ASSERT_TRUE(filterGraph.elementBoundingBox.has_value());
+            EXPECT_EQ(*filterRegion, *filterGraph.elementBoundingBox);
+            EXPECT_GT(filterRegion->width(), 100.0);
+            EXPECT_GT(filterRegion->height(), 50.0);
+          });
+  EXPECT_CALL(renderer, popFilterLayer()).Times(1);
+
+  driver.draw(document);
+}
+#endif  // DONNER_TEXT_ENABLED
+
 TEST_F(RendererDriverTest, DrawEntityRangeCopiesUrlFilterNodesIntoCssFilterGraph) {
   SVGDocument document = makeDocument(R"svg(
     <rect x="10" y="20" width="40" height="10" fill="red" />
