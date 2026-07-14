@@ -25,7 +25,9 @@
         "edition": "2022-11-01",
         "successor": "css-color-3",
         "stable": false,
-        "used_by": ["svg2-cr-20181004/painting/paint-order/req-01"]
+        "used_by": [
+          "svg2-cr-20181004/painting/paint-order/req-01"
+        ]
       },
       {
         "key": "css-writing-modes-4",
@@ -35,7 +37,9 @@
         "status": "Candidate Recommendation",
         "edition": "2019-07-30",
         "stable": false,
-        "used_by": ["svg2-cr-20181004/painting/paint-order/req-03"]
+        "used_by": [
+          "svg2-cr-20181004/painting/paint-order/req-03"
+        ]
       },
       {
         "key": "unicode",
@@ -45,7 +49,21 @@
         "status": "Published",
         "edition": "15.1.0",
         "stable": true,
-        "used_by": ["svg2-cr-20181004/painting/paint-order/req-03"]
+        "used_by": [
+          "svg2-cr-20181004/painting/paint-order/req-03"
+        ]
+      },
+      {
+        "key": "css-transforms-1",
+        "title": "CSS Transforms Module Level 1",
+        "organization": "w3c",
+        "url": "https://www.w3.org/TR/css-transforms-1/",
+        "status": "Candidate Recommendation",
+        "edition": "2019-02-14",
+        "stable": false,
+        "used_by": [
+          "svg2-cr-20181004/coordinates/TransformProperty/req-01"
+        ]
       }
     ]
   }

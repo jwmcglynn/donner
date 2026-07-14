@@ -292,6 +292,118 @@
         "svg2-cr-20181004/linking/AElement/req-01"
       ],
       "capabilities": []
+    },
+    {
+      "id": "resvg/structure/transform/matrix",
+      "input": "tests/structure/transform/matrix.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/structure/transform/matrix.png",
+        "width": 500,
+        "height": 500,
+        "provenance": "upstream-resvg-golden"
+      },
+      "assertion": "Imported resvg base case structure/transform/matrix; upstream reference rendering reviewed for SVG 2 requirement mapping in the requirement inventory rationale.",
+      "spec_requirements": [
+        "svg2-cr-20181004/coordinates/TransformProperty/req-01"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "resvg/structure/transform/nested-transforms-1",
+      "input": "tests/structure/transform/nested-transforms-1.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/structure/transform/nested-transforms-1.png",
+        "width": 500,
+        "height": 500,
+        "provenance": "upstream-resvg-golden"
+      },
+      "assertion": "Imported resvg base case structure/transform/nested-transforms-1; upstream reference rendering reviewed for SVG 2 requirement mapping in the requirement inventory rationale.",
+      "spec_requirements": [
+        "svg2-cr-20181004/coordinates/TransformProperty/req-01"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "resvg/structure/svg/viewBox-not-at-zero-pos",
+      "input": "tests/structure/svg/viewBox-not-at-zero-pos.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/structure/svg/viewBox-not-at-zero-pos.png",
+        "width": 500,
+        "height": 250,
+        "provenance": "upstream-resvg-golden"
+      },
+      "assertion": "Imported resvg base case structure/svg/viewBox-not-at-zero-pos; upstream reference rendering reviewed for SVG 2 requirement mapping in the requirement inventory rationale.",
+      "spec_requirements": [
+        "svg2-cr-20181004/coordinates/ViewBoxAttribute/req-01"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "resvg/structure/svg/preserveAspectRatio=xMidYMid",
+      "input": "tests/structure/svg/preserveAspectRatio=xMidYMid.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/structure/svg/preserveAspectRatio=xMidYMid.png",
+        "width": 500,
+        "height": 250,
+        "provenance": "upstream-resvg-golden"
+      },
+      "assertion": "Imported resvg base case structure/svg/preserveAspectRatio=xMidYMid; upstream reference rendering reviewed for SVG 2 requirement mapping in the requirement inventory rationale.",
+      "spec_requirements": [
+        "svg2-cr-20181004/coordinates/PreserveAspectRatioAttribute/req-01"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "resvg/structure/svg/preserveAspectRatio=xMidYMid-slice",
+      "input": "tests/structure/svg/preserveAspectRatio=xMidYMid-slice.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/structure/svg/preserveAspectRatio=xMidYMid-slice.png",
+        "width": 500,
+        "height": 250,
+        "provenance": "upstream-resvg-golden"
+      },
+      "assertion": "Imported resvg base case structure/svg/preserveAspectRatio=xMidYMid-slice; upstream reference rendering reviewed for SVG 2 requirement mapping in the requirement inventory rationale.",
+      "spec_requirements": [
+        "svg2-cr-20181004/coordinates/PreserveAspectRatioAttribute/req-02"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "resvg/structure/svg/preserveAspectRatio=none",
+      "input": "tests/structure/svg/preserveAspectRatio=none.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/structure/svg/preserveAspectRatio=none.png",
+        "width": 500,
+        "height": 250,
+        "provenance": "upstream-resvg-golden"
+      },
+      "assertion": "Imported resvg base case structure/svg/preserveAspectRatio=none; upstream reference rendering reviewed for SVG 2 requirement mapping in the requirement inventory rationale.",
+      "spec_requirements": [
+        "svg2-cr-20181004/coordinates/PreserveAspectRatioAttribute/req-03"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "resvg/structure/svg/nested-svg-with-viewBox",
+      "input": "tests/structure/svg/nested-svg-with-viewBox.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/structure/svg/nested-svg-with-viewBox.png",
+        "width": 500,
+        "height": 500,
+        "provenance": "upstream-resvg-golden"
+      },
+      "assertion": "Imported resvg base case structure/svg/nested-svg-with-viewBox; upstream reference rendering reviewed for SVG 2 requirement mapping in the requirement inventory rationale.",
+      "spec_requirements": [
+        "svg2-cr-20181004/coordinates/EstablishingANewSVGViewport/req-01"
+      ],
+      "capabilities": []
     }
   ]
 }
