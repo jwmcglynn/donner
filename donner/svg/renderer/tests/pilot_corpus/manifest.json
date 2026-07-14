@@ -163,6 +163,135 @@
       "resources": [
         "fonts/NotoSans-Regular.ttf"
       ]
+    },
+    {
+      "id": "resvg/structure/g/deeply-nested-groups",
+      "input": "tests/structure/g/deeply-nested-groups.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/structure/g/deeply-nested-groups.png",
+        "width": 500,
+        "height": 500,
+        "provenance": "upstream-resvg-golden"
+      },
+      "assertion": "Imported resvg base case structure/g/deeply-nested-groups; upstream reference rendering reviewed for SVG 2 requirement mapping in the requirement inventory rationale.",
+      "spec_requirements": [
+        "svg2-cr-20181004/structure/GElement/req-01"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "resvg/structure/defs/ignore-shapes-inside-defs",
+      "input": "tests/structure/defs/ignore-shapes-inside-defs.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/structure/defs/ignore-shapes-inside-defs.png",
+        "width": 500,
+        "height": 500,
+        "provenance": "upstream-resvg-golden"
+      },
+      "assertion": "Imported resvg base case structure/defs/ignore-shapes-inside-defs; upstream reference rendering reviewed for SVG 2 requirement mapping in the requirement inventory rationale.",
+      "spec_requirements": [
+        "svg2-cr-20181004/structure/DefsElement/req-01"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "resvg/structure/use/from-defs",
+      "input": "tests/structure/use/from-defs.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/structure/use/from-defs.png",
+        "width": 500,
+        "height": 500,
+        "provenance": "upstream-resvg-golden"
+      },
+      "assertion": "Imported resvg base case structure/use/from-defs; upstream reference rendering reviewed for SVG 2 requirement mapping in the requirement inventory rationale.",
+      "spec_requirements": [
+        "svg2-cr-20181004/structure/UseElement/req-01"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "resvg/structure/symbol/with-viewBox-and-custom-use-size",
+      "input": "tests/structure/symbol/with-viewBox-and-custom-use-size.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/structure/symbol/with-viewBox-and-custom-use-size.png",
+        "width": 500,
+        "height": 500,
+        "provenance": "upstream-resvg-golden"
+      },
+      "assertion": "Imported resvg base case structure/symbol/with-viewBox-and-custom-use-size; upstream reference rendering reviewed for SVG 2 requirement mapping in the requirement inventory rationale.",
+      "spec_requirements": [
+        "svg2-cr-20181004/structure/UseLayout/req-02"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "resvg/structure/symbol/unused-symbol",
+      "input": "tests/structure/symbol/unused-symbol.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/structure/symbol/unused-symbol.png",
+        "width": 500,
+        "height": 500,
+        "provenance": "upstream-resvg-golden"
+      },
+      "assertion": "Imported resvg base case structure/symbol/unused-symbol; upstream reference rendering reviewed for SVG 2 requirement mapping in the requirement inventory rationale.",
+      "spec_requirements": [
+        "svg2-cr-20181004/structure/SymbolElement/req-01",
+        "svg2-cr-20181004/structure/SymbolElement/req-02"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "resvg/structure/symbol/simple-case",
+      "input": "tests/structure/symbol/simple-case.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/structure/symbol/simple-case.png",
+        "width": 500,
+        "height": 500,
+        "provenance": "upstream-resvg-golden"
+      },
+      "assertion": "Imported resvg base case structure/symbol/simple-case; upstream reference rendering reviewed for SVG 2 requirement mapping in the requirement inventory rationale.",
+      "spec_requirements": [
+        "svg2-cr-20181004/structure/SymbolElement/req-03"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "resvg/structure/switch/simple-case",
+      "input": "tests/structure/switch/simple-case.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/structure/switch/simple-case.png",
+        "width": 500,
+        "height": 500,
+        "provenance": "upstream-resvg-golden"
+      },
+      "assertion": "Imported resvg base case structure/switch/simple-case; upstream reference rendering reviewed for SVG 2 requirement mapping in the requirement inventory rationale.",
+      "spec_requirements": [
+        "svg2-cr-20181004/structure/SwitchElement/req-01"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "resvg/structure/a/on-shape",
+      "input": "tests/structure/a/on-shape.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/structure/a/on-shape.png",
+        "width": 500,
+        "height": 500,
+        "provenance": "upstream-resvg-golden"
+      },
+      "assertion": "Imported resvg base case structure/a/on-shape; upstream reference rendering reviewed for SVG 2 requirement mapping in the requirement inventory rationale.",
+      "spec_requirements": [
+        "svg2-cr-20181004/linking/AElement/req-01"
+      ],
+      "capabilities": []
     }
   ]
 }
