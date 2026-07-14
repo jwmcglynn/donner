@@ -321,7 +321,7 @@
       },
       "assertion": "Imported resvg base case structure/transform/nested-transforms-1; upstream reference rendering reviewed for SVG 2 requirement mapping in the requirement inventory rationale.",
       "spec_requirements": [
-        "svg2-cr-20181004/coordinates/TransformProperty/req-02"
+        "svg2-cr-20181004/coordinates/TransformProperty/req-01"
       ],
       "capabilities": []
     },
