@@ -153,3 +153,5 @@ runs:
           echo "turnstile: waiting behind run ${ahead_desc}; re-checking in $(( poll + jitter ))s"
           sleep $(( poll + jitter ))
         done
+
+# turnstile concurrency demo B
