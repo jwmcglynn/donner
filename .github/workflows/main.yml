@@ -15,6 +15,7 @@ concurrency:
 permissions:
   contents: read
   pull-requests: read
+  actions: read
 
 # Retry policy: network-sensitive steps (checkout, apt install, bazel fetch)
 # are retried to survive transient GitHub/registry outages. Build/test steps
@@ -623,26 +624,30 @@ jobs:
     runs-on: [self-hosted, linux, arm64]
     needs: [gatekeeper, determine-targets]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' && needs.determine-targets.outputs.large_change != 'true' }}
-    # RE-availability SLA lane. A healthy affected-target run is ~21 min; bound
-    # it at 60 min for buffer while a wedged/degraded RE endpoint still
-    # fast-fails instead of silently tailing for hours.
-    timeout-minutes: 60
+    # RE-availability SLA lane. A healthy affected-target run is ~21 min. This
+    # budget now also covers the re-turnstile queue wait (the job clock runs
+    # while the turnstile step waits its FIFO turn), so it is sized to hold a
+    # realistic multi-PR burst (turnstile cap 150 min below, plus a full build)
+    # rather than fail open. RE-degradation fast-fail is unchanged and lives at
+    # the Bazel layer (no local fallback + --remote_timeout=60s below), so a
+    # wedged/degraded backend still fails in about a minute regardless of this
+    # backstop.
+    timeout-minutes: 210
     # Admission control on the shared remote-execution backend. Both self-hosted
     # lanes execute on a shared remote-execution backend that an interactive
     # development host also uses with priority; two-plus concurrent operator PRs
-    # oversubscribe it and crawl into the 60 min timeout (measured). This
-    # per-lane group serializes linux-self-hosted across all of the operator's
-    # in-flight PRs so at most one runs at a time; the sibling
-    # coverage-self-hosted lane has its own group, so a Linux build and a
-    # coverage build may overlap but two of the same heavy lane never do.
-    # Bounding CI's demand on the backend also protects the interactive host's
-    # latency. cancel-in-progress: false never kills a running build (a
-    # superseded push to the SAME PR is already cancelled by the workflow-level
-    # concurrency group). This job-level group composes with the workflow-level
-    # group and with the centralized routing (it is gate-agnostic).
-    concurrency:
-      group: donner-selfhosted-linux-re
-      cancel-in-progress: false
+    # oversubscribe it and crawl into the 60 min timeout (measured).
+    # Serialization is enforced by the re-turnstile step below (after checkout),
+    # NOT by a GitHub concurrency group. A concurrency group caps the queue at
+    # one pending run and cancels any older pending run when a third concurrent
+    # run arrives, so a parallel-PR burst (and every post-merge main run
+    # competing for the same group) drops pending runs. The turnstile instead
+    # holds each run until its turn, FIFO, so N concurrent runs all execute in
+    # submission order and none are cancelled, while keeping at most one Linux
+    # build on the backend at a time. Bounding CI's demand on the backend also
+    # protects the interactive host's latency. The sibling coverage-self-hosted
+    # lane serializes on its own turnstile lane, so a Linux build and a coverage
+    # build may overlap but two of the same heavy lane never do.
     env:
       # The runner host may add the LAN Bazel cache from its home rc. Use that
       # acceleration when healthy, but do NOT fall back to local execution when
@@ -669,10 +674,26 @@ jobs:
       DIAG_BUILD_FLAGS: "--remote_download_outputs=minimal"
       DIAG_TEST_FLAGS: "--remote_download_outputs=minimal --remote_download_regex=.*(test\\.log|test\\.xml|outputs\\.zip)$"
     steps:
+      # Checkout first so the local ./.github/actions/re-turnstile action is
+      # present. Checkout does no remote-execution work, so gating the
+      # RE-heavy Bazel steps (below) on the turnstile is what matters.
       - name: Checkout
         uses: actions/checkout@v7
         with:
           persist-credentials: false
+
+      # Serialize this Linux self-hosted build on the shared remote-execution
+      # backend without dropping runs. Holds this run (FIFO) until its lane is
+      # free, replacing the old evicting concurrency group. Read-only.
+      - name: Remote-execution turnstile
+        uses: ./.github/actions/re-turnstile
+        with:
+          lane: linux-self-hosted
+          token: ${{ github.token }}
+          # Below the job's 210 min timeout with room for a full build after
+          # the wait. Beyond this depth the turnstile fails open (bounded
+          # oversubscription, never an evicted/lost run).
+          timeout-minutes: "150"
 
       - name: Record target selection
         shell: bash
