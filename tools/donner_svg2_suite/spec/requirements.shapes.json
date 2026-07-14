@@ -80,10 +80,12 @@
       "oracle_kinds": [
         "png"
       ],
-      "test_ids": [],
+      "test_ids": [
+        "donner-svg2/shapes/rect/zero-width-no-render"
+      ],
       "review_state": "reviewed",
-      "evidence_state": "missing-test",
-      "rationale": "",
+      "evidence_state": "covered-pass",
+      "rationale": "Covered by the Donner-authored extension case donner-svg2/shapes/rect/zero-width-no-render, which isolates this requirement against the independently-reviewed control-rect oracle; the Donner adapter renders it to a match (donner_svg2_suite).",
       "artifacts": [],
       "source_text_hash": "sha256:cf6a3d3d4bdcf4285453bb40339e46cbe3a2e6f18a81ecbf3891b5f77c17909c"
     },
@@ -196,10 +198,12 @@
       "oracle_kinds": [
         "png"
       ],
-      "test_ids": [],
+      "test_ids": [
+        "donner-svg2/shapes/circle/negative-r-ignored"
+      ],
       "review_state": "reviewed",
-      "evidence_state": "missing-test",
-      "rationale": "",
+      "evidence_state": "covered-pass",
+      "rationale": "Covered by the Donner-authored extension case donner-svg2/shapes/circle/negative-r-ignored, which isolates this requirement against the independently-reviewed control-rect oracle; the Donner adapter renders it to a match (donner_svg2_suite).",
       "artifacts": [],
       "source_text_hash": "sha256:14e6c5f3589c27058bc414b995b744c9ffb82ca0f744b3b7f45f5c8e402d89b4"
     },
@@ -306,10 +310,12 @@
       "oracle_kinds": [
         "png"
       ],
-      "test_ids": [],
+      "test_ids": [
+        "donner-svg2/shapes/ellipse/zero-radius-no-render"
+      ],
       "review_state": "reviewed",
-      "evidence_state": "missing-test",
-      "rationale": "",
+      "evidence_state": "covered-pass",
+      "rationale": "Covered by the Donner-authored extension case donner-svg2/shapes/ellipse/zero-radius-no-render, which isolates this requirement against the independently-reviewed control-rect oracle; the Donner adapter renders it to a match (donner_svg2_suite).",
       "artifacts": [],
       "source_text_hash": "sha256:9a4adf6065f007f9174a596e405a80597f47295e45caa846f31a7b81a9a1f343"
     },

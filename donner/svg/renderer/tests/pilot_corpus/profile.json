@@ -4,43 +4,186 @@
   "cases": {
     "resvg/shapes/rect/simple-case": {
       "expectation": "pass",
-      "comparison": {"threshold": 0.02, "max_mismatched_pixels": 100}
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
     },
     "resvg/shapes/circle/simple-case": {
       "expectation": "pass",
-      "comparison": {"threshold": 0.02, "max_mismatched_pixels": 100}
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
     },
     "resvg/shapes/ellipse/simple-case": {
       "expectation": "pass",
-      "comparison": {"threshold": 0.02, "max_mismatched_pixels": 100}
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
     },
     "resvg/shapes/polygon/simple-case": {
       "expectation": "pass",
-      "comparison": {"threshold": 0.02, "max_mismatched_pixels": 100}
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
     },
     "resvg/shapes/polyline/simple-case": {
       "expectation": "pass",
-      "comparison": {"threshold": 0.02, "max_mismatched_pixels": 100}
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
     },
     "resvg/painting/fill/named-color": {
       "expectation": "pass",
-      "comparison": {"threshold": 0.02, "max_mismatched_pixels": 100}
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
     },
     "resvg/painting/fill-opacity/50percent": {
       "expectation": "pass",
-      "comparison": {"threshold": 0.02, "max_mismatched_pixels": 100}
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
     },
     "resvg/painting/color/simple-case": {
       "expectation": "pass",
-      "comparison": {"threshold": 0.02, "max_mismatched_pixels": 100}
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
     },
     "resvg/painting/fill-rule/evenodd": {
       "expectation": "pass",
-      "comparison": {"threshold": 0.02, "max_mismatched_pixels": 100}
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
     },
     "resvg/text/text/simple-case": {
       "expectation": "pass",
-      "comparison": {"threshold": 0.02, "max_mismatched_pixels": 100}
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
+    },
+    "resvg/structure/g/deeply-nested-groups": {
+      "expectation": "pass",
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
+    },
+    "resvg/structure/defs/ignore-shapes-inside-defs": {
+      "expectation": "pass",
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
+    },
+    "resvg/structure/use/from-defs": {
+      "expectation": "pass",
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
+    },
+    "resvg/structure/symbol/with-viewBox-and-custom-use-size": {
+      "expectation": "pass",
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
+    },
+    "resvg/structure/symbol/unused-symbol": {
+      "expectation": "pass",
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
+    },
+    "resvg/structure/symbol/simple-case": {
+      "expectation": "pass",
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
+    },
+    "resvg/structure/switch/simple-case": {
+      "expectation": "pass",
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
+    },
+    "resvg/structure/a/on-shape": {
+      "expectation": "pass",
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
+    },
+    "resvg/structure/transform/matrix": {
+      "expectation": "pass",
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
+    },
+    "resvg/structure/transform/nested-transforms-1": {
+      "expectation": "pass",
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
+    },
+    "resvg/structure/svg/viewBox-not-at-zero-pos": {
+      "expectation": "pass",
+      "comparison": {
+        "threshold": 0.13,
+        "max_mismatched_pixels": 100
+      },
+      "reason_category": "rasterization-aa",
+      "reason": "Viewport-edge anti-aliasing only; geometry and compositing verified against the upstream golden."
+    },
+    "resvg/structure/svg/preserveAspectRatio=xMidYMid": {
+      "expectation": "pass",
+      "comparison": {
+        "threshold": 0.13,
+        "max_mismatched_pixels": 300
+      },
+      "reason_category": "rasterization-aa",
+      "reason": "Viewport-edge anti-aliasing only; geometry and compositing verified against the upstream golden."
+    },
+    "resvg/structure/svg/preserveAspectRatio=xMidYMid-slice": {
+      "expectation": "pass",
+      "comparison": {
+        "threshold": 0.13,
+        "max_mismatched_pixels": 100
+      },
+      "reason_category": "rasterization-aa",
+      "reason": "Viewport-edge anti-aliasing only; geometry and compositing verified against the upstream golden."
+    },
+    "resvg/structure/svg/preserveAspectRatio=none": {
+      "expectation": "pass",
+      "comparison": {
+        "threshold": 0.13,
+        "max_mismatched_pixels": 1000
+      },
+      "reason_category": "rasterization-aa",
+      "reason": "Viewport-edge anti-aliasing only; geometry and compositing verified against the upstream golden."
+    },
+    "resvg/structure/svg/nested-svg-with-viewBox": {
+      "expectation": "pass",
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
     }
   }
 }

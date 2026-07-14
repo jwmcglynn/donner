@@ -457,6 +457,9 @@ donner_multi_transitioned_test(
     testonly = 1,
     dep = ":renderer_geode_golden_tests_impl",
     renderer_backend = "geode",
+    # Route the GPU test action to a remote-execution worker advertising a
+    # hardware GPU. Ignored for local / non-remote execution.
+    exec_properties = {"gpu": "arc"},
 )
 
 donner_cc_test(
@@ -502,6 +505,7 @@ donner_multi_transitioned_test(
     testonly = 1,
     dep = ":renderer_geode_tests_impl",
     renderer_backend = "geode",
+    exec_properties = {"gpu": "arc"},
 )
 
 donner_cc_test(
@@ -629,6 +633,9 @@ donner_variant_cc_test(
             "text_full": "false",
             "args": ["--gtest_filter=-*_TinyGolden"],
             "shard_count": 16,
+            # Route only this GPU variant to a remote-execution worker that
+            # advertises a hardware GPU. Ignored for local / non-remote runs.
+            "exec_properties": {"gpu": "arc"},
         },
     ],
     # Hundreds of independent image comparisons per variant. Unsharded, the

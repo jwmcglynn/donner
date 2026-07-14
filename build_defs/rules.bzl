@@ -354,6 +354,8 @@ def donner_variant_cc_test(name, dep, variants = None, named_variants = None, **
                 variant_kwargs["args"] = v["args"]
             if "shard_count" in v:
                 variant_kwargs["shard_count"] = v["shard_count"]
+            if "exec_properties" in v:
+                variant_kwargs["exec_properties"] = v["exec_properties"]
 
             donner_multi_transitioned_test(
                 name = target_name,

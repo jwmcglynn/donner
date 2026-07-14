@@ -3323,8 +3323,14 @@ TEST(GlRnrReplayTest, GeodeDragZoomRebuildsDonnerDGestureBoundsEveryPresentedFra
   options.maxFrame = kLastZoomFrame;
   options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
   options.pace = false;
-  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::Realtime;
-  options.workerRenderDelayMsForTesting = 2;
+  // Deterministic worker scheduling instead of a wall-clock render delay: hold
+  // each completed worker result a fixed number of frame polls behind the live
+  // gesture so the presented content stays stale during the drag (the overlay
+  // must rebuild its gesture-owned bounds every presented frame). Frame-count
+  // lag does not race host-load-dependent frame pacing the way the old Realtime
+  // + workerRenderDelayMsForTesting form did.
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::HoldFramesBehind;
+  options.holdFramesBehind = 2;
   options.driveDocumentSpaceInput = true;
   options.visible = false;
 
@@ -3371,8 +3377,13 @@ TEST(GlRnrReplayTest, GeodeZoomThenDragKeepsDonnerDOverlayLockedToPresentedConte
   options.maxFrame = 43;
   options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
   options.pace = false;
-  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::Realtime;
-  options.workerRenderDelayMsForTesting = 40;
+  // Deterministic worker scheduling instead of a wall-clock render delay: hold
+  // completed results a fixed number of frame polls behind so the worker stays
+  // behind the live drag and the overlay presentation tracks the presented
+  // (lagging) content tile. The drag window is entered on a fixed frame
+  // regardless of host load.
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::HoldFramesBehind;
+  options.holdFramesBehind = 2;
   options.driveDocumentSpaceInput = true;
   options.visible = false;
 
@@ -3421,8 +3432,12 @@ TEST(GlRnrReplayTest, GeodeZoomThenDragDoesNotFreezeLiveDragPreviewWhileWorkerBu
   options.maxFrame = 42;
   options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
   options.pace = false;
-  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::Realtime;
-  options.workerRenderDelayMsForTesting = 500;
+  // Keep the worker deterministically behind so the live preview must keep
+  // moving while the presented content is stale. A fixed frame-poll hold on
+  // completed results reproduces a lagging worker without a wall-clock sleep
+  // that races the (host-load-dependent) replay frame loop.
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::HoldFramesBehind;
+  options.holdFramesBehind = 8;
   options.driveDocumentSpaceInput = true;
   options.visible = false;
 
@@ -3472,8 +3487,19 @@ TEST(GlRnrReplayTest, GeodeFarZoomThenDragKeepsDonnerNOverlayLockedToPresentedCo
   options.maxFrame = 61;
   options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
   options.pace = false;
-  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::Realtime;
-  options.workerRenderDelayMsForTesting = 500;
+  // Deterministic worker draining instead of a wall-clock render delay: each
+  // frame's drag render completes before the frame is captured, so the
+  // presented content and the overlay both reflect the current live drag and
+  // must stay lockstep. This removes the host-load race in the old Realtime +
+  // workerRenderDelayMsForTesting form. Note this test asserts
+  // presented == live, which a lagging worker cannot satisfy under the
+  // deterministic HoldFramesBehind mode (a stale delivered drag tile reports an
+  // older translation), so DrainEachFrame is used here: it verifies the
+  // overlay/content/live lockstep on always-fresh renders. The lagging-worker
+  // (worker-behind) form of the lockstep contract stays covered by the sibling
+  // GeodeZoomThenDragKeepsDonnerDOverlayLockedToPresentedContent test, which
+  // uses HoldFramesBehind.
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
   options.driveDocumentSpaceInput = true;
   options.visible = false;
 

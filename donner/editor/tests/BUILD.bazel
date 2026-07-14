@@ -826,14 +826,11 @@ donner_cc_test(
     # with the offending test-case name instead of a silent target timeout.
     timeout = "long",
     srcs = ["GlRnrReplay_tests.cc"],
-    # The Realtime-scheduling zoom/drag replays measure worker/presentation
-    # races against wall-clock frame pacing and need a real, unloaded GL host:
-    # on shared remote executors they fail spuriously (clicks deferred past
-    # the replay window, budget overruns). Under --config=geode on a
-    # remote-exec-by-default setup, run with --strategy=TestRunner=local.
-    # (A no-remote-exec tag would express this in the target, but tag-forced
-    # local execution currently trips a duplicate-SDKROOT action-env crash
-    # when remote execution is the default.)
+    # The zoom/drag replays drive worker/presentation races with deterministic
+    # worker scheduling (HoldFramesBehind / DrainEachFrame) instead of a
+    # wall-clock render delay. A fixed frame-count lag (or per-frame drain)
+    # decouples them from real frame pacing and host load, so they run reliably
+    # on shared/loaded executors without a forced-local execution strategy.
     data = [
         "drag_start_hang_repro.rnr",
         "filter_post_drag_jump.rnr",
