@@ -14,7 +14,13 @@
     "tests/painting/paint-order/default-fill-then-stroke.svg": "sha256:66aa1ea7c1d1cede92e56ffda815e2dfd43fd1bd852ce23fa8ce890e03ffba8b",
     "tests/painting/paint-order/default-fill-then-stroke.png": "sha256:face95c520ce78bca2325b1eeac0a9637cc242a88c4c5f0a418ca17d2aafe3db",
     "tests/shapes/line/never-filled.svg": "sha256:5073e55e738129c6aed322e469e2fc7a490c3912478c0b5dafa14f777cc2fe2d",
-    "tests/shapes/line/never-filled.png": "sha256:52b6c0aeba2019069988d0bd0710bd5c94ff80e7252104677832eb66e7f7cb93"
+    "tests/shapes/line/never-filled.png": "sha256:52b6c0aeba2019069988d0bd0710bd5c94ff80e7252104677832eb66e7f7cb93",
+    "tests/shapes/rect/zero-width-no-render.svg": "sha256:50bcf4a6c1999676a7bc379b364f5045f0151a0642d15425bf5d9f45ef41af24",
+    "tests/shapes/rect/zero-width-no-render.png": "sha256:52b6c0aeba2019069988d0bd0710bd5c94ff80e7252104677832eb66e7f7cb93",
+    "tests/shapes/circle/negative-r-ignored.svg": "sha256:ed60814ae40540f8cf089721f9f42f2ffce721f22d8f1991b811c804de633e9a",
+    "tests/shapes/circle/negative-r-ignored.png": "sha256:52b6c0aeba2019069988d0bd0710bd5c94ff80e7252104677832eb66e7f7cb93",
+    "tests/shapes/ellipse/zero-radius-no-render.svg": "sha256:46b7fceb1a2dbd6dce2a76d64bde6ff180b3c206f8dc3930bd0dd755c1471d04",
+    "tests/shapes/ellipse/zero-radius-no-render.png": "sha256:52b6c0aeba2019069988d0bd0710bd5c94ff80e7252104677832eb66e7f7cb93"
   },
   "tests": [
     {
@@ -115,6 +121,54 @@
       "assertion": "A line element has no interior and is never filled, so a fill on a stroke-less line paints nothing and only the black control rect renders.",
       "spec_requirements": [
         "svg2-cr-20181004/shapes/LineElement/req-01"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "donner-svg2/shapes/rect/zero-width-no-render",
+      "input": "tests/shapes/rect/zero-width-no-render.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/shapes/rect/zero-width-no-render.png",
+        "width": 100,
+        "height": 100,
+        "provenance": "manually-constructed-geometric-reference: SVG 2 CR 2018-10-04 10.2 (rect), a computed value of zero for width or height disables rendering of the rect. Reference shares the independently-reviewed control-rect oracle used by donner-svg2/painting/fill/default-black (a black 30x30 control rect at (10,10) on a 100x100 canvas)."
+      },
+      "assertion": "A rect with a computed width of zero disables rendering of the rect, so only the black control rect renders and no red pixels appear.",
+      "spec_requirements": [
+        "svg2-cr-20181004/shapes/RectElement/req-03"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "donner-svg2/shapes/circle/negative-r-ignored",
+      "input": "tests/shapes/circle/negative-r-ignored.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/shapes/circle/negative-r-ignored.png",
+        "width": 100,
+        "height": 100,
+        "provenance": "manually-constructed-geometric-reference: SVG 2 CR 2018-10-04 10.3 (circle), a negative value for r is illegal and must be ignored as a parsing error. Reference shares the independently-reviewed control-rect oracle used by donner-svg2/painting/fill/default-black (a black 30x30 control rect at (10,10) on a 100x100 canvas)."
+      },
+      "assertion": "A circle with a negative r is illegal and ignored as a parsing error, so only the black control rect renders and no red pixels appear.",
+      "spec_requirements": [
+        "svg2-cr-20181004/shapes/CircleElement/req-02"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "donner-svg2/shapes/ellipse/zero-radius-no-render",
+      "input": "tests/shapes/ellipse/zero-radius-no-render.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/shapes/ellipse/zero-radius-no-render.png",
+        "width": 100,
+        "height": 100,
+        "provenance": "manually-constructed-geometric-reference: SVG 2 CR 2018-10-04 10.4 (ellipse), a computed value of zero for either radius disables rendering of the ellipse. Reference shares the independently-reviewed control-rect oracle used by donner-svg2/painting/fill/default-black (a black 30x30 control rect at (10,10) on a 100x100 canvas)."
+      },
+      "assertion": "An ellipse with a computed radius of zero disables rendering of the ellipse, so only the black control rect renders and no red pixels appear.",
+      "spec_requirements": [
+        "svg2-cr-20181004/shapes/EllipseElement/req-04"
       ],
       "capabilities": []
     }
