@@ -1,0 +1,269 @@
+{
+  "schema": "https://donner.graphics/svg2-suite/requirement-v1.schema.json",
+  "baseline": "svg2-cr-20181004",
+  "requirements": [
+    {
+      "id": "svg2-cr-20181004/coordinates/TransformProperty/req-01",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "8.5 The 'transform' property",
+      "anchor": "TransformProperty",
+      "assertion": "A user agent must support the transform property and presentation attribute (as defined by CSS Transforms), applying the transform to the element and establishing a new user space for it and its descendants.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [
+        "resvg/structure/transform/matrix"
+      ],
+      "review_state": "reviewed",
+      "evidence_state": "covered-pass",
+      "rationale": "Reviewed mapping: the resvg pilot case structure/transform/matrix isolates this requirement, its upstream golden is a conforming oracle for this assertion by specification inspection, and the Donner tiny-skia adapter renders it to a match (proven by the donner_svg2_pilot parity test).",
+      "artifacts": [],
+      "source_text_hash": "sha256:4fed4e7dc87db9f9fd6201f2c18ac4775a581161a54cb0191efaf450f7c185a9",
+      "dependencies": [
+        "css-transforms-1"
+      ]
+    },
+    {
+      "id": "svg2-cr-20181004/coordinates/TransformProperty/req-02",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "8.5 The 'transform' property",
+      "anchor": "TransformProperty",
+      "assertion": "Nested transforms compose: a transform on a descendant is applied relative to the user space established by its ancestors' transforms.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [
+        "resvg/structure/transform/nested-transforms-1"
+      ],
+      "review_state": "reviewed",
+      "evidence_state": "covered-pass",
+      "rationale": "Reviewed mapping: the resvg pilot case structure/transform/nested-transforms-1 isolates this requirement, its upstream golden is a conforming oracle for this assertion by specification inspection, and the Donner tiny-skia adapter renders it to a match (proven by the donner_svg2_pilot parity test).",
+      "artifacts": [],
+      "source_text_hash": "sha256:4fed4e7dc87db9f9fd6201f2c18ac4775a581161a54cb0191efaf450f7c185a9",
+      "dependencies": [
+        "css-transforms-1"
+      ]
+    },
+    {
+      "id": "svg2-cr-20181004/coordinates/ViewBoxAttribute/req-01",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "8.6 The 'viewBox' attribute",
+      "anchor": "ViewBoxAttribute",
+      "assertion": "The 'viewBox' attribute specifies a rectangle in user space that is mapped to the bounds of the SVG viewport.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [
+        "resvg/structure/svg/viewBox-not-at-zero-pos"
+      ],
+      "review_state": "reviewed",
+      "evidence_state": "covered-pass",
+      "rationale": "Reviewed mapping: the resvg pilot case structure/svg/viewBox-not-at-zero-pos isolates this requirement, its upstream golden is a conforming oracle for this assertion by specification inspection, and the Donner tiny-skia adapter renders it to a match (proven by the donner_svg2_pilot parity test). The donner-tinyskia profile compares this case at the same viewport-edge anti-aliasing tolerance the resvg fixture records: Donner's geometry and compositing are correct and only sub-pixel edge anti-aliasing differs from the upstream rasterizer.",
+      "artifacts": [],
+      "source_text_hash": "sha256:1dd40367041b818aff51bc6f092b9f126786bf1bd73e32da89fefde1b5ba2504"
+    },
+    {
+      "id": "svg2-cr-20181004/coordinates/ViewBoxAttribute/req-02",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "8.6 The 'viewBox' attribute",
+      "anchor": "ViewBoxAttribute",
+      "assertion": "A negative value for the 'viewBox' width or height is an error and invalidates the 'viewBox' attribute.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [],
+      "review_state": "reviewed",
+      "evidence_state": "missing-test",
+      "rationale": "No portable suite case yet isolates the invalid negative-viewBox path; candidate for a Donner extension case.",
+      "artifacts": [],
+      "source_text_hash": "sha256:4f49448ed3021caec5fe3eb4d2f32ce14068db49fde28a088b4cf91b609ecf2c"
+    },
+    {
+      "id": "svg2-cr-20181004/coordinates/ViewBoxAttribute/req-03",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "8.6 The 'viewBox' attribute",
+      "anchor": "ViewBoxAttribute",
+      "assertion": "A 'viewBox' width or height value of zero disables rendering of the element.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [],
+      "review_state": "reviewed",
+      "evidence_state": "missing-test",
+      "rationale": "No portable suite case yet isolates the zero-viewBox disable-render path; candidate for a Donner extension case.",
+      "artifacts": [],
+      "source_text_hash": "sha256:150fa67bdd152627e7ff4a927913ac375ab83c19c09a6481076c989fc518f1a5"
+    },
+    {
+      "id": "svg2-cr-20181004/coordinates/PreserveAspectRatioAttribute/req-01",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "8.7 The 'preserveAspectRatio' attribute",
+      "anchor": "PreserveAspectRatioAttribute",
+      "assertion": "The initial 'preserveAspectRatio' value xMidYMid meet forces uniform scaling so the entire 'viewBox' is visible and centered within the viewport.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [
+        "resvg/structure/svg/preserveAspectRatio=xMidYMid"
+      ],
+      "review_state": "reviewed",
+      "evidence_state": "covered-pass",
+      "rationale": "Reviewed mapping: the resvg pilot case structure/svg/preserveAspectRatio=xMidYMid isolates this requirement, its upstream golden is a conforming oracle for this assertion by specification inspection, and the Donner tiny-skia adapter renders it to a match (proven by the donner_svg2_pilot parity test). The donner-tinyskia profile compares this case at the same viewport-edge anti-aliasing tolerance the resvg fixture records: Donner's geometry and compositing are correct and only sub-pixel edge anti-aliasing differs from the upstream rasterizer.",
+      "artifacts": [],
+      "source_text_hash": "sha256:9c96a774c2a0c61f882ca1f1b83da56005c33399e22563923759b024ab4b124f"
+    },
+    {
+      "id": "svg2-cr-20181004/coordinates/PreserveAspectRatioAttribute/req-02",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "8.7 The 'preserveAspectRatio' attribute",
+      "anchor": "PreserveAspectRatioAttribute",
+      "assertion": "With meetOrSlice 'slice', the graphic is scaled uniformly so the entire viewport is covered by the 'viewBox'.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [
+        "resvg/structure/svg/preserveAspectRatio=xMidYMid-slice"
+      ],
+      "review_state": "reviewed",
+      "evidence_state": "covered-pass",
+      "rationale": "Reviewed mapping: the resvg pilot case structure/svg/preserveAspectRatio=xMidYMid-slice isolates this requirement, its upstream golden is a conforming oracle for this assertion by specification inspection, and the Donner tiny-skia adapter renders it to a match (proven by the donner_svg2_pilot parity test). The donner-tinyskia profile compares this case at the same viewport-edge anti-aliasing tolerance the resvg fixture records: Donner's geometry and compositing are correct and only sub-pixel edge anti-aliasing differs from the upstream rasterizer.",
+      "artifacts": [],
+      "source_text_hash": "sha256:03ed77c0485893222df485490e9c3e0db453445ca1befdcbf80174fc30dd5605"
+    },
+    {
+      "id": "svg2-cr-20181004/coordinates/PreserveAspectRatioAttribute/req-03",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "8.7 The 'preserveAspectRatio' attribute",
+      "anchor": "PreserveAspectRatioAttribute",
+      "assertion": "A 'preserveAspectRatio' value of none applies non-uniform scaling so the graphic fills the entire viewport.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [
+        "resvg/structure/svg/preserveAspectRatio=none"
+      ],
+      "review_state": "reviewed",
+      "evidence_state": "covered-pass",
+      "rationale": "Reviewed mapping: the resvg pilot case structure/svg/preserveAspectRatio=none isolates this requirement, its upstream golden is a conforming oracle for this assertion by specification inspection, and the Donner tiny-skia adapter renders it to a match (proven by the donner_svg2_pilot parity test). The donner-tinyskia profile compares this case at the same viewport-edge anti-aliasing tolerance the resvg fixture records: Donner's geometry and compositing are correct and only sub-pixel edge anti-aliasing differs from the upstream rasterizer.",
+      "artifacts": [],
+      "source_text_hash": "sha256:0754edb478073cf6673ae0f6095f50e123790cb28c28323b5ebbe91499c4b71f"
+    },
+    {
+      "id": "svg2-cr-20181004/coordinates/EstablishingANewSVGViewport/req-01",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "8.8 Establishing a new SVG viewport",
+      "anchor": "EstablishingANewSVGViewport",
+      "assertion": "Including an 'svg' element inside SVG content creates a new SVG viewport into which the contained graphics are drawn.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [
+        "resvg/structure/svg/nested-svg-with-viewBox"
+      ],
+      "review_state": "reviewed",
+      "evidence_state": "covered-pass",
+      "rationale": "Reviewed mapping: the resvg pilot case structure/svg/nested-svg-with-viewBox isolates this requirement, its upstream golden is a conforming oracle for this assertion by specification inspection, and the Donner tiny-skia adapter renders it to a match (proven by the donner_svg2_pilot parity test).",
+      "artifacts": [],
+      "source_text_hash": "sha256:6b88ecff7ac23bb374ad03e6a91059dda866a385cbcd4e175f1273231ec02d9c"
+    }
+  ]
+}

@@ -127,6 +127,63 @@
         "threshold": 0.02,
         "max_mismatched_pixels": 100
       }
+    },
+    "resvg/structure/transform/matrix": {
+      "expectation": "pass",
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
+    },
+    "resvg/structure/transform/nested-transforms-1": {
+      "expectation": "pass",
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
+    },
+    "resvg/structure/svg/viewBox-not-at-zero-pos": {
+      "expectation": "pass",
+      "comparison": {
+        "threshold": 0.13,
+        "max_mismatched_pixels": 100
+      },
+      "reason_category": "rasterization-aa",
+      "reason": "Viewport-edge anti-aliasing only; geometry and compositing verified against the upstream golden."
+    },
+    "resvg/structure/svg/preserveAspectRatio=xMidYMid": {
+      "expectation": "pass",
+      "comparison": {
+        "threshold": 0.13,
+        "max_mismatched_pixels": 300
+      },
+      "reason_category": "rasterization-aa",
+      "reason": "Viewport-edge anti-aliasing only; geometry and compositing verified against the upstream golden."
+    },
+    "resvg/structure/svg/preserveAspectRatio=xMidYMid-slice": {
+      "expectation": "pass",
+      "comparison": {
+        "threshold": 0.13,
+        "max_mismatched_pixels": 100
+      },
+      "reason_category": "rasterization-aa",
+      "reason": "Viewport-edge anti-aliasing only; geometry and compositing verified against the upstream golden."
+    },
+    "resvg/structure/svg/preserveAspectRatio=none": {
+      "expectation": "pass",
+      "comparison": {
+        "threshold": 0.13,
+        "max_mismatched_pixels": 1000
+      },
+      "reason_category": "rasterization-aa",
+      "reason": "Viewport-edge anti-aliasing only; geometry and compositing verified against the upstream golden."
+    },
+    "resvg/structure/svg/nested-svg-with-viewBox": {
+      "expectation": "pass",
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
     }
   }
 }
