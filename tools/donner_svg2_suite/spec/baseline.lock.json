@@ -62,8 +62,7 @@
         "edition": "2019-02-14",
         "stable": false,
         "used_by": [
-          "svg2-cr-20181004/coordinates/TransformProperty/req-01",
-          "svg2-cr-20181004/coordinates/TransformProperty/req-02"
+          "svg2-cr-20181004/coordinates/TransformProperty/req-01"
         ]
       }
     ]

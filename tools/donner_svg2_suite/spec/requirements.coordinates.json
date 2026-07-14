@@ -7,7 +7,7 @@
       "spec_revision": "CR-SVG2-20181004",
       "section": "8.5 The 'transform' property",
       "anchor": "TransformProperty",
-      "assertion": "A user agent must support the transform property and presentation attribute (as defined by CSS Transforms), applying the transform to the element and establishing a new user space for it and its descendants.",
+      "assertion": "A user agent must support the transform property and presentation attribute as defined by CSS Transforms.",
       "strength": "must",
       "subject": "user-agent",
       "software_classes": [
@@ -23,43 +23,12 @@
         "png"
       ],
       "test_ids": [
-        "resvg/structure/transform/matrix"
-      ],
-      "review_state": "reviewed",
-      "evidence_state": "covered-pass",
-      "rationale": "Reviewed mapping: the resvg pilot case structure/transform/matrix isolates this requirement, its upstream golden is a conforming oracle for this assertion by specification inspection, and the Donner tiny-skia adapter renders it to a match (proven by the donner_svg2_pilot parity test).",
-      "artifacts": [],
-      "source_text_hash": "sha256:4fed4e7dc87db9f9fd6201f2c18ac4775a581161a54cb0191efaf450f7c185a9",
-      "dependencies": [
-        "css-transforms-1"
-      ]
-    },
-    {
-      "id": "svg2-cr-20181004/coordinates/TransformProperty/req-02",
-      "spec_revision": "CR-SVG2-20181004",
-      "section": "8.5 The 'transform' property",
-      "anchor": "TransformProperty",
-      "assertion": "Nested transforms compose: a transform on a descendant is applied relative to the user space established by its ancestors' transforms.",
-      "strength": "must",
-      "subject": "user-agent",
-      "software_classes": [
-        "interpreter",
-        "viewer",
-        "high-quality-viewer"
-      ],
-      "processing_modes": [
-        "static",
-        "secure-static"
-      ],
-      "oracle_kinds": [
-        "png"
-      ],
-      "test_ids": [
+        "resvg/structure/transform/matrix",
         "resvg/structure/transform/nested-transforms-1"
       ],
       "review_state": "reviewed",
       "evidence_state": "covered-pass",
-      "rationale": "Reviewed mapping: the resvg pilot case structure/transform/nested-transforms-1 isolates this requirement, its upstream golden is a conforming oracle for this assertion by specification inspection, and the Donner tiny-skia adapter renders it to a match (proven by the donner_svg2_pilot parity test).",
+      "rationale": "Reviewed mapping: the resvg pilot cases structure/transform/matrix and structure/transform/nested-transforms-1 exercise the transform property and presentation attribute; their upstream goldens are conforming oracles by specification inspection, and the Donner tiny-skia adapter renders both to a match (proven by the donner_svg2_pilot parity test). Transform semantics are defined normatively by the css-transforms-1 dependency.",
       "artifacts": [],
       "source_text_hash": "sha256:4fed4e7dc87db9f9fd6201f2c18ac4775a581161a54cb0191efaf450f7c185a9",
       "dependencies": [
@@ -91,7 +60,7 @@
       ],
       "review_state": "reviewed",
       "evidence_state": "covered-pass",
-      "rationale": "Reviewed mapping: the resvg pilot case structure/svg/viewBox-not-at-zero-pos isolates this requirement, its upstream golden is a conforming oracle for this assertion by specification inspection, and the Donner tiny-skia adapter renders it to a match (proven by the donner_svg2_pilot parity test). The donner-tinyskia profile compares this case at the same viewport-edge anti-aliasing tolerance the resvg fixture records: Donner's geometry and compositing are correct and only sub-pixel edge anti-aliasing differs from the upstream rasterizer.",
+      "rationale": "Reviewed mapping: the resvg pilot case structure/svg/viewBox-not-at-zero-pos isolates this requirement, its upstream golden is a conforming oracle for this assertion by specification inspection, and the Donner tiny-skia adapter renders it to a match (proven by the donner_svg2_pilot parity test). The donner-tinyskia profile compares this case at a viewport-edge anti-aliasing tolerance: Donner's geometry and compositing are correct and only sub-pixel edge anti-aliasing differs from the upstream rasterizer.",
       "artifacts": [],
       "source_text_hash": "sha256:1dd40367041b818aff51bc6f092b9f126786bf1bd73e32da89fefde1b5ba2504"
     },
@@ -174,7 +143,7 @@
       ],
       "review_state": "reviewed",
       "evidence_state": "covered-pass",
-      "rationale": "Reviewed mapping: the resvg pilot case structure/svg/preserveAspectRatio=xMidYMid isolates this requirement, its upstream golden is a conforming oracle for this assertion by specification inspection, and the Donner tiny-skia adapter renders it to a match (proven by the donner_svg2_pilot parity test). The donner-tinyskia profile compares this case at the same viewport-edge anti-aliasing tolerance the resvg fixture records: Donner's geometry and compositing are correct and only sub-pixel edge anti-aliasing differs from the upstream rasterizer.",
+      "rationale": "Reviewed mapping: the resvg pilot case structure/svg/preserveAspectRatio=xMidYMid isolates this requirement, its upstream golden is a conforming oracle for this assertion by specification inspection, and the Donner tiny-skia adapter renders it to a match (proven by the donner_svg2_pilot parity test). The donner-tinyskia profile compares this case at a viewport-edge anti-aliasing tolerance: Donner's geometry and compositing are correct and only sub-pixel edge anti-aliasing differs from the upstream rasterizer.",
       "artifacts": [],
       "source_text_hash": "sha256:9c96a774c2a0c61f882ca1f1b83da56005c33399e22563923759b024ab4b124f"
     },
@@ -203,7 +172,7 @@
       ],
       "review_state": "reviewed",
       "evidence_state": "covered-pass",
-      "rationale": "Reviewed mapping: the resvg pilot case structure/svg/preserveAspectRatio=xMidYMid-slice isolates this requirement, its upstream golden is a conforming oracle for this assertion by specification inspection, and the Donner tiny-skia adapter renders it to a match (proven by the donner_svg2_pilot parity test). The donner-tinyskia profile compares this case at the same viewport-edge anti-aliasing tolerance the resvg fixture records: Donner's geometry and compositing are correct and only sub-pixel edge anti-aliasing differs from the upstream rasterizer.",
+      "rationale": "Reviewed mapping: the resvg pilot case structure/svg/preserveAspectRatio=xMidYMid-slice isolates this requirement, its upstream golden is a conforming oracle for this assertion by specification inspection, and the Donner tiny-skia adapter renders it to a match (proven by the donner_svg2_pilot parity test). The donner-tinyskia profile compares this case at a viewport-edge anti-aliasing tolerance: Donner's geometry and compositing are correct and only sub-pixel edge anti-aliasing differs from the upstream rasterizer.",
       "artifacts": [],
       "source_text_hash": "sha256:03ed77c0485893222df485490e9c3e0db453445ca1befdcbf80174fc30dd5605"
     },
@@ -232,7 +201,7 @@
       ],
       "review_state": "reviewed",
       "evidence_state": "covered-pass",
-      "rationale": "Reviewed mapping: the resvg pilot case structure/svg/preserveAspectRatio=none isolates this requirement, its upstream golden is a conforming oracle for this assertion by specification inspection, and the Donner tiny-skia adapter renders it to a match (proven by the donner_svg2_pilot parity test). The donner-tinyskia profile compares this case at the same viewport-edge anti-aliasing tolerance the resvg fixture records: Donner's geometry and compositing are correct and only sub-pixel edge anti-aliasing differs from the upstream rasterizer.",
+      "rationale": "Reviewed mapping: the resvg pilot case structure/svg/preserveAspectRatio=none isolates this requirement, its upstream golden is a conforming oracle for this assertion by specification inspection, and the Donner tiny-skia adapter renders it to a match (proven by the donner_svg2_pilot parity test). The donner-tinyskia profile compares this case at a viewport-edge anti-aliasing tolerance: Donner's geometry and compositing are correct and only sub-pixel edge anti-aliasing differs from the upstream rasterizer.",
       "artifacts": [],
       "source_text_hash": "sha256:0754edb478073cf6673ae0f6095f50e123790cb28c28323b5ebbe91499c4b71f"
     },
