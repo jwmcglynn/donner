@@ -4,43 +4,129 @@
   "cases": {
     "resvg/shapes/rect/simple-case": {
       "expectation": "pass",
-      "comparison": {"threshold": 0.02, "max_mismatched_pixels": 100}
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
     },
     "resvg/shapes/circle/simple-case": {
       "expectation": "pass",
-      "comparison": {"threshold": 0.02, "max_mismatched_pixels": 100}
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
     },
     "resvg/shapes/ellipse/simple-case": {
       "expectation": "pass",
-      "comparison": {"threshold": 0.02, "max_mismatched_pixels": 100}
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
     },
     "resvg/shapes/polygon/simple-case": {
       "expectation": "pass",
-      "comparison": {"threshold": 0.02, "max_mismatched_pixels": 100}
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
     },
     "resvg/shapes/polyline/simple-case": {
       "expectation": "pass",
-      "comparison": {"threshold": 0.02, "max_mismatched_pixels": 100}
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
     },
     "resvg/painting/fill/named-color": {
       "expectation": "pass",
-      "comparison": {"threshold": 0.02, "max_mismatched_pixels": 100}
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
     },
     "resvg/painting/fill-opacity/50percent": {
       "expectation": "pass",
-      "comparison": {"threshold": 0.02, "max_mismatched_pixels": 100}
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
     },
     "resvg/painting/color/simple-case": {
       "expectation": "pass",
-      "comparison": {"threshold": 0.02, "max_mismatched_pixels": 100}
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
     },
     "resvg/painting/fill-rule/evenodd": {
       "expectation": "pass",
-      "comparison": {"threshold": 0.02, "max_mismatched_pixels": 100}
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
     },
     "resvg/text/text/simple-case": {
       "expectation": "pass",
-      "comparison": {"threshold": 0.02, "max_mismatched_pixels": 100}
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
+    },
+    "resvg/structure/g/deeply-nested-groups": {
+      "expectation": "pass",
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
+    },
+    "resvg/structure/defs/ignore-shapes-inside-defs": {
+      "expectation": "pass",
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
+    },
+    "resvg/structure/use/from-defs": {
+      "expectation": "pass",
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
+    },
+    "resvg/structure/symbol/with-viewBox-and-custom-use-size": {
+      "expectation": "pass",
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
+    },
+    "resvg/structure/symbol/unused-symbol": {
+      "expectation": "pass",
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
+    },
+    "resvg/structure/symbol/simple-case": {
+      "expectation": "pass",
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
+    },
+    "resvg/structure/switch/simple-case": {
+      "expectation": "pass",
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
+    },
+    "resvg/structure/a/on-shape": {
+      "expectation": "pass",
+      "comparison": {
+        "threshold": 0.02,
+        "max_mismatched_pixels": 100
+      }
     }
   }
 }

@@ -101,9 +101,20 @@ class ShippedGraphTest(unittest.TestCase):
             gaps = json.loads((out / "gaps.json").read_text())
             summary = gaps["summary"]
             # Passing evidence is exactly the covered-pass mappings; every other
-            # testable state remains a visible gap.
+            # testable state remains a visible gap. Assert the partition invariant
+            # and that the passing tally counts only covered-pass requirements
+            # (derived from the committed inventories, so adding chapters does not
+            # churn a hardcoded snapshot).
             self.assertEqual(summary["covered_pass"] + summary["gaps"] + summary["not_applicable"], summary["total"])
-            self.assertEqual(summary["covered_pass"], 14)
+            expected_pass = 0
+            expected_total = 0
+            for path in sorted(SPEC_DIR.glob("requirements.*.json")):
+                for req in json.loads(path.read_text())["requirements"]:
+                    expected_total += 1
+                    if req["evidence_state"] == "covered-pass":
+                        expected_pass += 1
+            self.assertEqual(summary["covered_pass"], expected_pass)
+            self.assertEqual(summary["total"], expected_total)
             self.assertGreaterEqual(summary["total"], 35)
             self.assertTrue((out / "requirements.json").is_file())
             self.assertTrue((out / "coverage.json").is_file())

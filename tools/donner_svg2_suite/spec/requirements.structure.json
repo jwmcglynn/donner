@@ -1,0 +1,375 @@
+{
+  "schema": "https://donner.graphics/svg2-suite/requirement-v1.schema.json",
+  "baseline": "svg2-cr-20181004",
+  "requirements": [
+    {
+      "id": "svg2-cr-20181004/structure/GElement/req-01",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "5.2 Grouping: the 'g' element",
+      "anchor": "GElement",
+      "assertion": "A 'g' element is a container element that groups related graphics elements and renders them together.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [
+        "resvg/structure/g/deeply-nested-groups"
+      ],
+      "review_state": "reviewed",
+      "evidence_state": "covered-pass",
+      "rationale": "Reviewed mapping: the resvg pilot case structure/g/deeply-nested-groups isolates this requirement, its upstream golden is a conforming oracle for this assertion by specification inspection, and the Donner tiny-skia adapter renders it to a match (proven by the donner_svg2_pilot parity test).",
+      "artifacts": [],
+      "source_text_hash": "sha256:3227627c6befada4949ddc6f4ecc517ca9ac3fa1f838b0ac3a711f49119b335c"
+    },
+    {
+      "id": "svg2-cr-20181004/structure/DefsElement/req-01",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "5.4 Defining content for reuse, and the 'defs' element",
+      "anchor": "DefsElement",
+      "assertion": "Descendants of a 'defs' element are not rendered directly; the user agent style sheet forces display:none on 'defs' with importance over any other rule.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [
+        "resvg/structure/defs/ignore-shapes-inside-defs"
+      ],
+      "review_state": "reviewed",
+      "evidence_state": "covered-pass",
+      "rationale": "Reviewed mapping: the resvg pilot case structure/defs/ignore-shapes-inside-defs isolates this requirement, its upstream golden is a conforming oracle for this assertion by specification inspection, and the Donner tiny-skia adapter renders it to a match (proven by the donner_svg2_pilot parity test).",
+      "artifacts": [],
+      "source_text_hash": "sha256:9c7f14af666d534b85e5eb28c86c6f5732c3bb1cb24268643812686e0cc08469"
+    },
+    {
+      "id": "svg2-cr-20181004/structure/UseElement/req-01",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "5.6 The 'use' element",
+      "anchor": "UseElement",
+      "assertion": "A 'use' element references another element and renders a copy of it in place of the 'use' element in the document.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [
+        "resvg/structure/use/from-defs"
+      ],
+      "review_state": "reviewed",
+      "evidence_state": "covered-pass",
+      "rationale": "Reviewed mapping: the resvg pilot case structure/use/from-defs isolates this requirement, its upstream golden is a conforming oracle for this assertion by specification inspection, and the Donner tiny-skia adapter renders it to a match (proven by the donner_svg2_pilot parity test).",
+      "artifacts": [],
+      "source_text_hash": "sha256:2977ef24efb216c629ee055ea8dbe61e6ccebfe78d6be94cb7bf7434b9962e0f"
+    },
+    {
+      "id": "svg2-cr-20181004/structure/UseShadowTree/req-01",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "5.6 The 'use' element",
+      "anchor": "UseShadowTree",
+      "assertion": "If a 'use' element's referenced element is neither an SVG element nor an HTML element that may be included in an SVG container, the reference is invalid and the 'use' element is in error.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [],
+      "review_state": "reviewed",
+      "evidence_state": "missing-test",
+      "rationale": "No portable suite case yet isolates the invalid-target error path; candidate for a Donner extension case.",
+      "artifacts": [],
+      "source_text_hash": "sha256:4bf4ef60c62e81fe014e450978f38b8e490e03f46db51ed37ad914c28ed19270"
+    },
+    {
+      "id": "svg2-cr-20181004/structure/UseShadowTree/req-02",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "5.6 The 'use' element",
+      "anchor": "UseShadowTree",
+      "assertion": "A 'use' element that references a (shadow-including) ancestor of itself is an invalid circular reference and the 'use' element is in error.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [],
+      "review_state": "reviewed",
+      "evidence_state": "missing-test",
+      "rationale": "Donner exercises circular-use error handling in unit fixtures (testdata/svg2-e-use-*.svg) but no portable suite case is mapped yet; candidate for a Donner extension case.",
+      "artifacts": [],
+      "source_text_hash": "sha256:3c8608b92552216eff6d58a69b50848b4acc27ead501408ca431062e1804b7b6"
+    },
+    {
+      "id": "svg2-cr-20181004/structure/UseLayout/req-01",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "5.6 The 'use' element",
+      "anchor": "UseLayout",
+      "assertion": "A negative value for the width or height of a 'use' element is an illegal value.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [],
+      "review_state": "reviewed",
+      "evidence_state": "missing-test",
+      "rationale": "No portable suite case yet isolates negative use width/height; candidate for a Donner extension case.",
+      "artifacts": [],
+      "source_text_hash": "sha256:0b5dbf8a12d4a3cc8fcdd3a4e4a4b98b68373e20a66290a36f8b73ed627b988c"
+    },
+    {
+      "id": "svg2-cr-20181004/structure/UseLayout/req-02",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "5.6 The 'use' element",
+      "anchor": "UseLayout",
+      "assertion": "The width and height properties on a 'use' element override the corresponding properties of a referenced 'svg' or 'symbol' element.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [
+        "resvg/structure/symbol/with-viewBox-and-custom-use-size"
+      ],
+      "review_state": "reviewed",
+      "evidence_state": "covered-pass",
+      "rationale": "Reviewed mapping: the resvg pilot case structure/symbol/with-viewBox-and-custom-use-size isolates this requirement, its upstream golden is a conforming oracle for this assertion by specification inspection, and the Donner tiny-skia adapter renders it to a match (proven by the donner_svg2_pilot parity test).",
+      "artifacts": [],
+      "source_text_hash": "sha256:87ce91aebd50918ab9794685fba499c517775eded8cc67136e2f58233f257234"
+    },
+    {
+      "id": "svg2-cr-20181004/structure/SymbolElement/req-01",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "5.5 The 'symbol' element",
+      "anchor": "SymbolElement",
+      "assertion": "A 'symbol' element must never be rendered directly; it is rendered only when referenced by a 'use' element.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [
+        "resvg/structure/symbol/unused-symbol"
+      ],
+      "review_state": "reviewed",
+      "evidence_state": "covered-pass",
+      "rationale": "Reviewed mapping: the resvg pilot case structure/symbol/unused-symbol isolates this requirement, its upstream golden is a conforming oracle for this assertion by specification inspection, and the Donner tiny-skia adapter renders it to a match (proven by the donner_svg2_pilot parity test).",
+      "artifacts": [],
+      "source_text_hash": "sha256:c09d5dc814c43c91abbe2ba96f45b187518a53b50d0aa70abe1b5483f2765b9c"
+    },
+    {
+      "id": "svg2-cr-20181004/structure/SymbolElement/req-02",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "5.5 The 'symbol' element",
+      "anchor": "SymbolElement",
+      "assertion": "The user agent must set display:none on the 'symbol' element via the user agent style sheet, with importance over any other rule.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [
+        "resvg/structure/symbol/unused-symbol"
+      ],
+      "review_state": "reviewed",
+      "evidence_state": "covered-pass",
+      "rationale": "Reviewed mapping: the resvg pilot case structure/symbol/unused-symbol isolates this requirement, its upstream golden is a conforming oracle for this assertion by specification inspection, and the Donner tiny-skia adapter renders it to a match (proven by the donner_svg2_pilot parity test).",
+      "artifacts": [],
+      "source_text_hash": "sha256:084a3f2df6bfc2f4de298f6be72d7da520e02611ea20e235c25d81e31c7e1b09"
+    },
+    {
+      "id": "svg2-cr-20181004/structure/SymbolElement/req-03",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "5.5 The 'symbol' element",
+      "anchor": "SymbolElement",
+      "assertion": "When referenced by a 'use' element, a 'symbol' element's content is instantiated and rendered.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [
+        "resvg/structure/symbol/simple-case"
+      ],
+      "review_state": "reviewed",
+      "evidence_state": "covered-pass",
+      "rationale": "Reviewed mapping: the resvg pilot case structure/symbol/simple-case isolates this requirement, its upstream golden is a conforming oracle for this assertion by specification inspection, and the Donner tiny-skia adapter renders it to a match (proven by the donner_svg2_pilot parity test).",
+      "artifacts": [],
+      "source_text_hash": "sha256:c09d5dc814c43c91abbe2ba96f45b187518a53b50d0aa70abe1b5483f2765b9c"
+    },
+    {
+      "id": "svg2-cr-20181004/structure/SwitchElement/req-01",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "5.7.3 The 'switch' element",
+      "anchor": "SwitchElement",
+      "assertion": "A 'switch' element processes and renders the first direct child for which its conditional processing attributes (requiredExtensions and systemLanguage) all evaluate to true.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [
+        "resvg/structure/switch/simple-case"
+      ],
+      "review_state": "reviewed",
+      "evidence_state": "covered-pass",
+      "rationale": "Reviewed mapping: the resvg pilot case structure/switch/simple-case isolates this requirement, its upstream golden is a conforming oracle for this assertion by specification inspection, and the Donner tiny-skia adapter renders it to a match (proven by the donner_svg2_pilot parity test).",
+      "artifacts": [],
+      "source_text_hash": "sha256:bac83ab16ad99a6461f86f5d2d182c3437366520da95125896205d93e0acd82f"
+    },
+    {
+      "id": "svg2-cr-20181004/linking/AElement/req-01",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "16.2 Links out of SVG content: the 'a' element",
+      "anchor": "AElement",
+      "assertion": "An 'a' element is a container that renders its child content and may contain any element its parent may contain, except another 'a' element.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [
+        "resvg/structure/a/on-shape"
+      ],
+      "review_state": "reviewed",
+      "evidence_state": "covered-pass",
+      "rationale": "Reviewed mapping: the resvg pilot case structure/a/on-shape isolates this requirement, its upstream golden is a conforming oracle for this assertion by specification inspection, and the Donner tiny-skia adapter renders it to a match (proven by the donner_svg2_pilot parity test).",
+      "artifacts": [],
+      "source_text_hash": "sha256:49e43e08d744780450546494131213081b3dc1c9997112c7d39215036b4cf7be"
+    },
+    {
+      "id": "svg2-cr-20181004/linking/AElement/req-02",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "16.2 Links out of SVG content: the 'a' element",
+      "anchor": "AElement",
+      "assertion": "A nested 'a' element (a link within a link) has its href ignored and is treated as inactive, but is still rendered as a generic container element.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [],
+      "review_state": "reviewed",
+      "evidence_state": "missing-test",
+      "rationale": "No portable suite case yet isolates nested-link container rendering; candidate for a Donner extension case.",
+      "artifacts": [],
+      "source_text_hash": "sha256:97d2b9b83dc9f50c4f3be001c2611eaba9ec0ab75c9885951bcca71987d1d968"
+    }
+  ]
+}
