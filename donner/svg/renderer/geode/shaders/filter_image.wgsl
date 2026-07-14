@@ -30,7 +30,9 @@ struct ImageParams {
   m10: f32,
   m11: f32,
   m12: f32,
-  _pad0: u32,
+  // 1 = nearest-neighbor sampling (`image-rendering: pixelated`/`crisp-edges` on the source
+  // feImage); 0 = Mitchell-Netravali bicubic (the default high-quality kernel).
+  pixelated: u32,
   _pad1: u32,
 }
 
@@ -92,6 +94,17 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   if (sx < -0.5 || sy < -0.5 ||
       sx >= f32(img_size.x) - 0.5 || sy >= f32(img_size.y) - 0.5) {
     textureStore(output_tex, coord, vec4f(0.0));
+    return;
+  }
+
+  // `image-rendering: pixelated`/`crisp-edges`: sample the single nearest texel (the one whose
+  // [i, i+1) span contains the source position `sx + 0.5`) instead of the bicubic footprint.
+  if (params.pixelated != 0u) {
+    let nsx = clamp(i32(floor(sx + 0.5)), 0, img_size.x - 1);
+    let nsy = clamp(i32(floor(sy + 0.5)), 0, img_size.y - 1);
+    let texel = textureLoad(image_tex, vec2i(nsx, nsy), 0);
+    let an = texel.a;
+    textureStore(output_tex, coord, vec4f(min(texel.rgb, vec3f(an)), an));
     return;
   }
 

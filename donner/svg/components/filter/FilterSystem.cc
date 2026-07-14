@@ -5,6 +5,7 @@
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/core/ImageRendering.h"
 #include "donner/svg/graph/RecursionGuard.h"
 #include "donner/svg/properties/PropertyParsing.h"
 
@@ -568,6 +569,17 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
       filter_primitive::Image prim;
       prim.href = feImage->href;
       prim.preserveAspectRatio = feImage->preserveAspectRatio;
+
+      // `image-rendering: pixelated` / `crisp-edges` (plus the legacy SVG 1.1 `optimizeSpeed`
+      // alias) on the feImage requests nearest-neighbor resampling. `auto`, `smooth`, and
+      // `optimizeQuality` keep the default high-quality (Mitchell-bicubic) kernel.
+      if (const auto* feStyle = registry.try_get<ComputedStyleComponent>(cur);
+          feStyle && feStyle->properties.has_value()) {
+        const ImageRendering imageRendering = feStyle->properties->imageRendering.get().value();
+        prim.imageRenderingPixelated = imageRendering == ImageRendering::Pixelated ||
+                                       imageRendering == ImageRendering::CrispEdges ||
+                                       imageRendering == ImageRendering::OptimizeSpeed;
+      }
 
       // Load the referenced image if available.
       if (const auto* loaded = registry.try_get<LoadedImageComponent>(cur);

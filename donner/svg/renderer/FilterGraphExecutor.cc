@@ -15,7 +15,8 @@ namespace donner::svg {
 std::vector<std::uint8_t> RasterizeTransformedImagePremultiplied(
     std::span<const std::uint8_t> premultipliedPixels, int sourceWidth, int sourceHeight,
     const Transform2d& deviceFromImage, std::optional<Box2d> userSubregion,
-    std::optional<Transform2d> filterFromDevice, int outputWidth, int outputHeight) {
+    std::optional<Transform2d> filterFromDevice, int outputWidth, int outputHeight,
+    bool pixelated) {
   std::vector<std::uint8_t> output(static_cast<std::size_t>(outputWidth * outputHeight * 4), 0);
   if (sourceWidth <= 0 || sourceHeight <= 0 || outputWidth <= 0 || outputHeight <= 0) {
     return output;
@@ -51,12 +52,25 @@ std::vector<std::uint8_t> RasterizeTransformedImagePremultiplied(
           sourceY >= sourceHeight - 0.5) {
         continue;
       }
+      const std::size_t outIndex = static_cast<std::size_t>((y * outputWidth + x) * 4);
+
+      // `image-rendering: pixelated`/`crisp-edges`: sample the single nearest texel (the one whose
+      // [i, i+1) span contains the source position `sourceX + 0.5`) rather than the bilinear 2x2.
+      if (pixelated) {
+        const int nx = std::clamp(static_cast<int>(std::floor(sourceX + 0.5)), 0, sourceWidth - 1);
+        const int ny = std::clamp(static_cast<int>(std::floor(sourceY + 0.5)), 0, sourceHeight - 1);
+        for (int channel = 0; channel < 4; ++channel) {
+          output[outIndex + channel] =
+              premultipliedPixels[static_cast<std::size_t>((ny * sourceWidth + nx) * 4 + channel)];
+        }
+        continue;
+      }
+
       const int x0 = static_cast<int>(std::floor(sourceX));
       const int y0 = static_cast<int>(std::floor(sourceY));
 
       const float fx = static_cast<float>(sourceX - x0);
       const float fy = static_cast<float>(sourceY - y0);
-      const std::size_t outIndex = static_cast<std::size_t>((y * outputWidth + x) * 4);
       for (int channel = 0; channel < 4; ++channel) {
         const float s00 = sampleSource(x0, y0, channel);
         const float s10 = sampleSource(x0 + 1, y0, channel);
@@ -557,6 +571,7 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
 
           } else if constexpr (std::is_same_v<T, Image>) {
             gp::Image image;
+            image.pixelated = primitive.imageRenderingPixelated;
             if (!primitive.imageData.empty() && primitive.imageWidth > 0 &&
                 primitive.imageHeight > 0) {
               const std::vector<std::uint8_t> premultiplied = PremultiplyRgba(primitive.imageData);
@@ -585,7 +600,7 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
 
                 image.pixels = RasterizeTransformedImagePremultiplied(
                     premultiplied, primitive.imageWidth, primitive.imageHeight, deviceFromFragment,
-                    std::nullopt, std::nullopt, w, h);
+                    std::nullopt, std::nullopt, w, h, primitive.imageRenderingPixelated);
                 image.width = w;
                 image.height = h;
                 image.targetRect = tiny_skia::filter::PixelRect{0.0, 0.0, static_cast<double>(w),
@@ -619,7 +634,8 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
 
                 image.pixels = RasterizeTransformedImagePremultiplied(
                     premultiplied, primitive.imageWidth, primitive.imageHeight, deviceFromImage,
-                    userSubregion, deviceFromFilter.inverse(), w, h);
+                    userSubregion, deviceFromFilter.inverse(), w, h,
+                    primitive.imageRenderingPixelated);
                 image.width = w;
                 image.height = h;
                 image.targetRect = tiny_skia::filter::PixelRect{0.0, 0.0, static_cast<double>(w),

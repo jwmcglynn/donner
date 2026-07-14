@@ -343,7 +343,7 @@ struct ImageParams {
   float m10;
   float m11;
   float m12;
-  uint32_t pad0;
+  uint32_t pixelated;  ///< 1 = nearest-neighbor (`image-rendering: pixelated`), 0 = bicubic.
   uint32_t pad1;
 };
 
@@ -3288,7 +3288,7 @@ wgpu::Texture GeodeFilterEngine::applyImage(
     params.m10 = static_cast<float>(fragmentFromDevice.data[1]);
     params.m11 = static_cast<float>(fragmentFromDevice.data[3]);
     params.m12 = static_cast<float>(fragmentFromDevice.data[5]);
-    params.pad0 = 0;
+    params.pixelated = primitive.imageRenderingPixelated ? 1u : 0u;
     params.pad1 = 0;
 
     wgpu::Buffer uniformBuffer =
@@ -3314,7 +3314,7 @@ wgpu::Texture GeodeFilterEngine::applyImage(
     params.m10 = 0.0f;
     params.m11 = 1.0f;
     params.m12 = static_cast<float>(-deviceOffsetY);
-    params.pad0 = 0;
+    params.pixelated = primitive.imageRenderingPixelated ? 1u : 0u;
     params.pad1 = 0;
 
     wgpu::Buffer uniformBuffer =
@@ -3437,7 +3437,7 @@ wgpu::Texture GeodeFilterEngine::applyImage(
   params.m10 = 0.0f;
   params.m11 = static_cast<float>(scaleImgY);
   params.m12 = static_cast<float>(offsetY);
-  params.pad0 = 0;
+  params.pixelated = primitive.imageRenderingPixelated ? 1u : 0u;
   params.pad1 = 0;
 
   wgpu::Buffer uniformBuffer =

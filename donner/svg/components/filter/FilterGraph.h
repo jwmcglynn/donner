@@ -276,6 +276,11 @@ struct Image {
   /// a device-space post-translation that positions the fragment content at the filter primitive
   /// subregion origin. Set by the renderer driver during pre-rendering.
   Vector2d fragmentRegionTopLeft;
+
+  /// True when the source `<feImage>` requests nearest-neighbor sampling via
+  /// `image-rendering: pixelated` / `crisp-edges` (or the legacy `optimizeSpeed` alias). When set,
+  /// both backends resample this image with nearest-neighbor instead of the default kernel.
+  bool imageRenderingPixelated = false;
 };
 
 /// Parameters for \c feDisplacementMap.
