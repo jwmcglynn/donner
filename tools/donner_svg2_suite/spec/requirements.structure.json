@@ -7,7 +7,7 @@
       "spec_revision": "CR-SVG2-20181004",
       "section": "5.2 Grouping: the 'g' element",
       "anchor": "GElement",
-      "assertion": "A 'g' element is a container that groups related graphics elements so that group-level properties and transforms apply to its descendants as a unit.",
+      "assertion": "A 'g' element is a container element that groups related graphics elements and renders them together.",
       "strength": "must",
       "subject": "user-agent",
       "software_classes": [
@@ -291,7 +291,7 @@
       "spec_revision": "CR-SVG2-20181004",
       "section": "5.7.3 The 'switch' element",
       "anchor": "SwitchElement",
-      "assertion": "A 'switch' element processes and renders the first direct child for which the requiredFeatures, requiredExtensions, and systemLanguage attributes all evaluate to true.",
+      "assertion": "A 'switch' element processes and renders the first direct child for which its conditional processing attributes (requiredExtensions and systemLanguage) all evaluate to true.",
       "strength": "must",
       "subject": "user-agent",
       "software_classes": [
