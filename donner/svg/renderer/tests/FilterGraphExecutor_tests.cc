@@ -913,5 +913,52 @@ TEST(FilterGraphExecutorTest, BlendMultiplyDarkensColors) {
   EXPECT_THAT(result, Rgba(ChannelNear(128, 2), ChannelNear(128, 2), ChannelNear(128, 2), 255));
 }
 
+// Render a 2x2 feImage (left column red, right column blue) into an 8x4 pixmap. With no host
+// transform the executor fits the 2x2 source into the pixmap with `preserveAspectRatio=xMidYMid
+// meet` (scale 2, centered), placing it at device x in [2, 6), so device columns 2-3 map to the
+// red source column and columns 4-5 map to the blue source column. `pixelated` selects the
+// `image-rendering` sampling kernel.
+tiny_skia::Pixmap RenderTwoColumnFeImage(bool pixelated) {
+  auto maybePixmap = tiny_skia::Pixmap::fromSize(8, 4);
+  EXPECT_TRUE(maybePixmap.has_value());
+  tiny_skia::Pixmap pixmap = std::move(*maybePixmap);
+
+  components::filter_primitive::Image image;
+  // Straight-alpha RGBA, two columns: red then blue, duplicated across both rows.
+  image.imageData = {255, 0, 0, 255, 0, 0, 255, 255, 255, 0, 0, 255, 0, 0, 255, 255};
+  image.imageWidth = 2;
+  image.imageHeight = 2;
+  image.imageRenderingPixelated = pixelated;
+
+  components::FilterGraph graph;
+  components::FilterNode node;
+  node.primitive = std::move(image);
+  graph.nodes.push_back(std::move(node));
+
+  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
+  return pixmap;
+}
+
+TEST(FilterGraphExecutorTest, FeImagePixelatedUsesNearestNeighborSharpEdge) {
+  const tiny_skia::Pixmap pixmap = RenderTwoColumnFeImage(/*pixelated=*/true);
+
+  // Nearest-neighbor: each device column resolves to exactly one source column, so the red/blue
+  // boundary is sharp with no cross-color bleed.
+  EXPECT_THAT(GetPixel(pixmap, 2, 1), Rgba(255, 0, 0, 255));
+  EXPECT_THAT(GetPixel(pixmap, 3, 1), Rgba(255, 0, 0, 255));
+  EXPECT_THAT(GetPixel(pixmap, 4, 1), Rgba(0, 0, 255, 255));
+  EXPECT_THAT(GetPixel(pixmap, 5, 1), Rgba(0, 0, 255, 255));
+}
+
+TEST(FilterGraphExecutorTest, FeImageDefaultKernelBlendsAcrossEdge) {
+  const tiny_skia::Pixmap pixmap = RenderTwoColumnFeImage(/*pixelated=*/false);
+
+  // Default (Mitchell-bicubic) kernel: the columns straddling the red/blue boundary blend the two
+  // source colors, so blue bleeds onto the red side and red onto the blue side. This is the
+  // behavior nearest-neighbor replaces, proving the `image-rendering` flag selects the kernel.
+  EXPECT_THAT(GetPixel(pixmap, 3, 1), Rgba(Gt(0), _, Gt(0), _));
+  EXPECT_THAT(GetPixel(pixmap, 4, 1), Rgba(Gt(0), _, Gt(0), _));
+}
+
 }  // namespace
 }  // namespace donner::svg

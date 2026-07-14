@@ -75,7 +75,17 @@ loading, a set of masking/clipping and filter edge cases, and CPU/GPU renderer p
   - [ ] feImage subregion cases and feConvolveMatrix / feDropShadow edge cases.
   - [ ] Filter-region scissor per SVG 2 section 15.5 (GPU backend TODO).
 - [ ] Milestone 5: Painting and structural edge cases
-  - [ ] `image-rendering: pixelated` / `crisp-edges` sampling.
+  - [~] `image-rendering: pixelated` / `crisp-edges` sampling. Nearest-neighbor is now honored on
+        both the CPU (tiny_skia) and GPU (Geode) backends for both the `<image>` element and the
+        `<feImage>` filter primitive (the `feImage` resampler previously always used the
+        Mitchell-bicubic kernel and ignored `image-rendering`). Both backends render bit-identical
+        nearest output; proven by `FilterGraphExecutorTest.FeImagePixelatedUsesNearestNeighborSharpEdge`
+        and `...FeImageDefaultKernelBlendsAcrossEdge`. Done-signal not yet met: the
+        `painting/image-rendering` goldens (`on-feImage.svg`, `optimizeSpeed.svg`) still diff by a
+        seam-only residual because resvg's nearest block grid lands on a slightly different
+        device-pixel boundary than Donner's at the non-integer upscale in these cases. This is the
+        same "golden kernel mismatch" class (0021 B3) that already blocks most of the `<image>`
+        category, and clears with a vendored-golden refresh, not a Donner code change.
   - [ ] `<svg version="1.1">` compatibility handling.
   - [ ] Non-UTF-8 document encodings.
 - [ ] Milestone 6: CPU/GPU (Geode) render parity

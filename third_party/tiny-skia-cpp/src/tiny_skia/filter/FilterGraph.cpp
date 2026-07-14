@@ -757,6 +757,22 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
                   const double srcXf = (static_cast<double>(dx) + 0.5 - tx) * invScaleX - 0.5;
                   const double srcYf = (static_cast<double>(dy) + 0.5 - ty) * invScaleY - 0.5;
 
+                  // `image-rendering: pixelated`/`crisp-edges` on the source feImage: sample the
+                  // single nearest texel (the texel whose [i, i+1) span contains the source
+                  // position `srcXf + 0.5`) instead of the bicubic footprint. Exact per-texel, so
+                  // there is no interpolation ramp; block edges stay hard.
+                  if (primitive.pixelated) {
+                    const int nsx = std::clamp(static_cast<int>(std::floor(srcXf + 0.5)), 0, srcW - 1);
+                    const int nsy = std::clamp(static_cast<int>(std::floor(srcYf + 0.5)), 0, srcH - 1);
+                    const std::size_t dstIdxN = static_cast<std::size_t>((dy * w + dx) * 4);
+                    const float aN = static_cast<float>(sampleSrc(nsx, nsy, 3));
+                    dstData[dstIdxN + 0] = std::min(static_cast<float>(sampleSrc(nsx, nsy, 0)), aN);
+                    dstData[dstIdxN + 1] = std::min(static_cast<float>(sampleSrc(nsx, nsy, 1)), aN);
+                    dstData[dstIdxN + 2] = std::min(static_cast<float>(sampleSrc(nsx, nsy, 2)), aN);
+                    dstData[dstIdxN + 3] = aN;
+                    continue;
+                  }
+
                   const int sx0 = static_cast<int>(std::floor(srcXf));
                   const int sy0 = static_cast<int>(std::floor(srcYf));
 

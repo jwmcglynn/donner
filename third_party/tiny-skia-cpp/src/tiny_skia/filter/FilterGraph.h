@@ -204,6 +204,10 @@ struct Image {
   int height = 0;                    ///< Image height in pixels.
   /// Target rectangle within the filter output (pixel space). If empty, uses the full output.
   std::optional<PixelRect> targetRect;
+  /// When true, resample with nearest-neighbor instead of the Mitchell-Netravali bicubic kernel.
+  /// Set by `image-rendering: pixelated` / `crisp-edges` (and the legacy `optimizeSpeed` alias)
+  /// on the source `<feImage>`.
+  bool pixelated = false;
 };
 
 }  // namespace graph_primitive
