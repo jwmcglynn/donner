@@ -6,11 +6,13 @@ corpus with the Donner render adapter, and asserts every case renders to an exac
 match against its manually-constructed geometric reference (the canonical oracle,
 compared at the corpus exact budget). These cases isolate SVG 2 behavior the
 resvg base suite does not: the initial fill color, fill-opacity clamping, a
-zero-width stroke, a negative-dimension parse error, a never-filled line, and the
-default paint-order. The upstream resvg gate and the pilot parity test are
+zero-width stroke, a negative-dimension parse error, a never-filled line, the
+default paint-order, and the zero/negative shape-dimension rules for rect,
+circle, and ellipse. The upstream resvg gate and the pilot parity test are
 unaffected.
 """
 
+import json
 import os
 import unittest
 from pathlib import Path
@@ -51,7 +53,10 @@ class DonnerSvg2SuiteTest(unittest.TestCase):
         )
         statuses = {r["test"]: r["status"] for r in result.results}
         self.assertTrue(statuses, "runner produced no results")
-        self.assertEqual(len(statuses), 6, statuses)
+        # Every committed extension case must be exercised (derived from the
+        # manifest so adding a case does not churn a hardcoded count).
+        expected = len(json.loads(self.manifest.read_text())["tests"])
+        self.assertEqual(len(statuses), expected, statuses)
         for test_id, status in statuses.items():
             self.assertEqual(
                 status,
