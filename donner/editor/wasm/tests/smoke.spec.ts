@@ -27,6 +27,7 @@ const kFatalRuntimePattern =
   /Aborted|Assertion failed|RuntimeError|Pthread .* sent an error|getJsObject|No available adapters|WebGPU on Linux requires|WebGPU adapter (?:request )?(?:failed|unavailable)/i;
 const kSourcePaneWidth = 560;
 const kRightPaneWidth = 420;
+const kWelcomeContentMaxWidth = 920;
 
 // Which renderer backend the served package was built with. The Geode/WebGPU
 // lane publishes window.__donnerWgpuReadbackStats (its swapchain pixels never
@@ -206,6 +207,32 @@ async function openEditor(page: Page, options: OpenEditorOptions = {}): Promise<
   return fatalMessages;
 }
 
+async function dismissWelcomePicker(page: Page) {
+  const canvas = page.locator("canvas#canvas");
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  if (bounds === null) {
+    return;
+  }
+
+  const contentWidth = Math.min(kWelcomeContentMaxWidth, bounds.width - 32);
+  const contentLeft = (bounds.width - contentWidth) * 0.5;
+  const inputPrimePosition = {
+    x: contentLeft + contentWidth - 100,
+    y: 75,
+  };
+  const dismissPosition = {
+    x: contentLeft + contentWidth - 30,
+    y: 75,
+  };
+  // emscripten-glfw consumes mouse transitions on rendered frames. Prime the
+  // canvas in inert header space before activating the dismiss button.
+  await canvas.click({ position: inputPrimePosition });
+  await page.waitForTimeout(100);
+  await canvas.click({ position: dismissPosition });
+  await page.waitForTimeout(100);
+}
+
 test("wasm editor starts without runtime abort", async ({ page }) => {
   const fatalMessages = await openEditor(page);
 
@@ -266,15 +293,26 @@ test("wasm editor renders colored document pixels", async ({ page }) => {
 
 test("wasm editor renders layer panel thumbnails", async ({ page }) => {
   const fatalMessages = await openEditor(page);
-  await expect
-    .poll(async () => {
-      const stats = await readLayerPreviewColorStats(page);
-      return stats.coloredPixels > 100 && stats.maxChannel > 80;
-    }, {
-      message: "expected colored thumbnail pixels in the Layers panel preview column",
-      timeout: 20000,
-    })
-    .toBe(true);
+  await dismissWelcomePicker(page);
+  try {
+    await expect
+      .poll(async () => {
+        const stats = await readLayerPreviewColorStats(page);
+        return stats.coloredPixels > 100 && stats.maxChannel > 80;
+      }, {
+        message: "expected colored thumbnail pixels in the Layers panel preview column",
+        timeout: 20000,
+      })
+      .toBe(true);
+  } catch (error) {
+    const stats = await readLayerPreviewColorStats(page);
+    console.log(`layer-preview-stats=${JSON.stringify(stats)}`);
+    await test.info().attach("layer-preview-stats", {
+      body: JSON.stringify(stats, null, 2),
+      contentType: "application/json",
+    });
+    throw error;
+  }
 
   expect(fatalMessages).toEqual([]);
 });
