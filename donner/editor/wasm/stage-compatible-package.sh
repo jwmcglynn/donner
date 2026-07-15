@@ -16,7 +16,7 @@ if [[ -e "$output_dir" ]]; then
   exit 1
 fi
 
-shared_files=(index.html editor-bootstrap.js editor.css donner_icon.svg)
+shared_files=(index.html editor-bootstrap.js editor.css enable-threads.js donner_icon.svg)
 backend_files=(editor.js editor.wasm)
 for file in "${shared_files[@]}"; do
   [[ -f "${geode_dir}/${file}" ]] || { echo "error: missing Geode ${file}" >&2; exit 1; }
@@ -50,6 +50,7 @@ expected_files="$(printf '%s\n' \
   ./donner_icon.svg \
   ./editor-bootstrap.js \
   ./editor.css \
+  ./enable-threads.js \
   ./geode/editor.js \
   ./geode/editor.wasm \
   ./index.html \

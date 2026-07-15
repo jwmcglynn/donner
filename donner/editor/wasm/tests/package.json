@@ -3,6 +3,7 @@
   "private": true,
   "scripts": {
     "test": "playwright test",
+    "test:isolation-fallback": "playwright test static-host-isolation.spec.ts",
     "test:ios": "playwright test --config=playwright.ios.config.js",
     "test:selector": "node --test backend-selector.spec.mjs isolation-fallback.spec.mjs"
   },

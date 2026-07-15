@@ -123,7 +123,7 @@ jobs:
         working-directory: donner/editor/wasm/tests
         run: |
           npm ci
-          npx playwright install chromium webkit
+          npx playwright install chromium firefox webkit
 
       - name: Verify renderer selector
         working-directory: donner/editor/wasm/tests
@@ -140,6 +140,47 @@ jobs:
           donner/editor/wasm/stage-compatible-package.sh \
             "${geode_dir}" "${tiny_skia_dir}" "${compatible_dir}"
           echo "compatible_dir=${compatible_dir}" >> "${GITHUB_OUTPUT}"
+
+      - name: Verify static-host isolation fallback
+        env:
+          DONNER_WASM_TEST_ISOLATION_FALLBACK: "1"
+        run: |
+          set -euo pipefail
+
+          pkg_dir="${{ steps.stage-compatible-package.outputs.compatible_dir }}"
+          server_log="${RUNNER_TEMP}/editor-wasm-isolation-fallback-server.log"
+          PYTHONUNBUFFERED=1 python3 tools/http/simple_webserver.py \
+            --no-https --no-cross-origin-isolation --host 127.0.0.1 \
+            --dir "${pkg_dir}" >"${server_log}" 2>&1 &
+          server_pid=$!
+          cleanup() {
+            kill "${server_pid}" 2>/dev/null || true
+            wait "${server_pid}" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          server_url=""
+          for _ in $(seq 1 60); do
+            server_url=$(sed -n 's/^Serving at //p' "${server_log}" | head -n1)
+            if [[ -n "${server_url}" ]]; then break; fi
+            if ! kill -0 "${server_pid}" 2>/dev/null; then
+              cat "${server_log}"
+              wait "${server_pid}" 2>/dev/null || true
+              exit 1
+            fi
+            sleep 1
+          done
+          test -n "${server_url}"
+          export DONNER_WASM_BASE_URL="${server_url}"
+
+          (
+            cd donner/editor/wasm/tests
+            npm run test:isolation-fallback
+            npx playwright test static-host-isolation.spec.ts --browser=firefox
+            npx playwright test static-host-isolation.spec.ts --browser=webkit
+          )
+          cleanup
+          trap - EXIT
 
       - name: Serve compatible package and run headed Geode suite
         env:
@@ -274,6 +315,7 @@ jobs:
             donner_icon.svg \
             editor-bootstrap.js \
             editor.css \
+            enable-threads.js \
             geode/editor.js \
             geode/editor.wasm \
             index.html \
@@ -283,7 +325,8 @@ jobs:
           test "${actual_site_files}" = "${expected_site_files}"
 
           for shared_file in \
-            backend-selector.js donner_icon.svg editor-bootstrap.js editor.css index.html; do
+            backend-selector.js donner_icon.svg editor-bootstrap.js editor.css enable-threads.js \
+            index.html; do
             cp "${site_dir}/${shared_file}" "${deploy_dir}/${shared_file}"
           done
           for backend in geode tiny_skia; do
