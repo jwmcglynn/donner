@@ -610,6 +610,7 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
 
     const std::uint64_t holdPollCountBefore = replayRenderer.replayResultHoldPollCountForTesting();
     window.pollEvents();
+    shell.prepareFrame();
     window.beginFrameWithInput(options.driveDocumentSpaceInput ? NonCanvasInputFromFrame(frame)
                                                                : InputFromFrame(frame));
     if (frame.viewport.has_value()) {

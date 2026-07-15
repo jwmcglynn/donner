@@ -74,6 +74,10 @@ void RunEditorFrame(donner::editor::gui::EditorWindow& window, donner::editor::E
     }
   }
   {
+    ZoneScopedN("shell.prepareFrame");
+    shell.prepareFrame();
+  }
+  {
     ZoneScopedN("beginFrame");
     window.beginFrame();
   }
