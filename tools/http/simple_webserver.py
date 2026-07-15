@@ -29,6 +29,12 @@ parser.add_argument(
 parser.add_argument("--certfile", help="path to TLS certificate PEM file")
 parser.add_argument("--keyfile", help="path to TLS private key PEM file")
 parser.add_argument(
+    "--cross-origin-isolation",
+    action=argparse.BooleanOptionalAction,
+    default=True,
+    help="send COOP/COEP response headers (default: on)",
+)
+parser.add_argument(
     "--cert-dir",
     default=os.path.join(os.path.expanduser("~"), ".cache", "donner", "dev-certs"),
     help="directory for auto-generated local certificates",
@@ -47,8 +53,9 @@ if os.path.isfile(serve_dir):
 
 class CrossOriginHandler(http.server.SimpleHTTPRequestHandler):
     def end_headers(self):
-        self.send_header("Cross-Origin-Opener-Policy", "same-origin")
-        self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
+        if args.cross_origin_isolation:
+            self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+            self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
         return super().end_headers()
 
     def do_GET(self) -> None:  # noqa: N802 — overriding stdlib method name

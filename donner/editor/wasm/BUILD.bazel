@@ -122,8 +122,9 @@ wasm_cc_binary(
 web_package(
     name = "wasm_web_package",
     srcs = [
-        "editor-bootstrap.js",
         "editor.css",
+        "editor-bootstrap.js",
+        "enable-threads.js",
         "index.html",
         "single/backend-selector.js",
         "//:donner_icon.svg",
@@ -182,8 +183,9 @@ wasm_cc_binary(
 web_package(
     name = "wasm_tiny_skia_web_package",
     srcs = [
-        "editor-bootstrap.js",
         "editor.css",
+        "editor-bootstrap.js",
+        "enable-threads.js",
         "index.html",
         "single/backend-selector.js",
         "//:donner_icon.svg",

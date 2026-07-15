@@ -4,6 +4,7 @@ import { type CanvasColorStats, type CssRegion, readCanvasColorStats } from "./c
 declare global {
   interface Window {
     __donnerBackend?: string;
+    __donnerCanStartWasm?: boolean;
     __donnerLastScrollEvent?: {
       zoomModifierHeld?: boolean;
       yoffset?: number;
@@ -172,6 +173,18 @@ async function openEditor(page: Page, options: OpenEditorOptions = {}): Promise<
   });
 
   await page.goto(url.toString(), { waitUntil: "domcontentloaded" });
+  await expect
+    .poll(async () => {
+      try {
+        return await page.evaluate(() => window.__donnerCanStartWasm === true);
+      } catch {
+        return false;
+      }
+    }, {
+      message: "expected browser capabilities to permit Wasm startup",
+      timeout: 20000,
+    })
+    .toBe(true);
   // The tiny_skia software lane renders through WebGL and does not require
   // WebGPU, so only gate the Geode lane on navigator.gpu.
   if (kBackend !== "tiny_skia") {
