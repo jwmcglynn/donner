@@ -9,7 +9,7 @@ async function loadFallbackSource() {
   return readFile(new URL("../enable-threads.js", import.meta.url), "utf8");
 }
 
-async function runPageFallback({ crossOriginIsolated = false } = {}) {
+async function runPageFallback({ controller = null, crossOriginIsolated = false } = {}) {
   const source = await loadFallbackSource();
   let registeredUrl = null;
   let reloads = 0;
@@ -29,7 +29,7 @@ async function runPageFallback({ crossOriginIsolated = false } = {}) {
     },
   };
   const serviceWorker = {
-    controller: null,
+    controller,
     async register(url) {
       registeredUrl = url;
       return registration;
@@ -95,6 +95,15 @@ test("isolated pages do not register the fallback", async () => {
   assert.deepEqual(result, {
     registeredUrl: null,
     reloads: 0,
+  });
+});
+
+test("newly controlled unisolated pages reload through the fallback", async () => {
+  const result = await runPageFallback({ controller: {} });
+
+  assert.deepEqual(result, {
+    registeredUrl: kFallbackScriptUrl,
+    reloads: 1,
   });
 });
 

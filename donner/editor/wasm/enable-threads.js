@@ -40,7 +40,7 @@ if (typeof window === "undefined") {
     const registration = await navigator.serviceWorker
       .register(fallbackScriptUrl)
       .catch((error) => console.error("COOP/COEP service worker registration failed:", error));
-    if (!registration || navigator.serviceWorker.controller) {
+    if (!registration) {
       return;
     }
 
@@ -51,6 +51,11 @@ if (typeof window === "undefined") {
         window.location.reload();
       }
     };
+    if (navigator.serviceWorker.controller) {
+      reload();
+      return;
+    }
+
     const watchWorker = (worker) => {
       if (!worker) {
         return;
