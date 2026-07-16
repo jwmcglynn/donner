@@ -532,6 +532,20 @@ TEST_F(TextToolExistingTextTest, ClickInTrailingHalfPlacesCaretAfterCharacter) {
   EXPECT_EQ(tool.caretIndex(), 2u);
 }
 
+TEST_F(TextToolExistingTextTest, DragSelectionIsReplacedByTyping) {
+  clickAt(pointInChar(0, /*rightHalf=*/false));
+
+  const Vector2d selectionStart = pointInChar(1, /*rightHalf=*/false);
+  const Vector2d selectionEnd = pointInChar(3, /*rightHalf=*/true);
+  tool.onMouseDown(app, selectionStart, MouseModifiers{});
+  tool.onMouseMove(app, selectionEnd, /*buttonHeld=*/true);
+  tool.onMouseUp(app, selectionEnd);
+  tool.insertCodepoint(app, U'X');
+
+  EXPECT_EQ(tool.sessionContent(), U"HXo");
+  EXPECT_EQ(text().textContent(), "HXo");
+}
+
 TEST_F(TextToolExistingTextTest, EditingExistingTextCommitRecordsEditUndo) {
   clickAt(pointInChar(4, /*rightHalf=*/true));
   ASSERT_EQ(tool.caretIndex(), 5u);
