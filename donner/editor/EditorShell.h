@@ -238,6 +238,8 @@ public:
   ~EditorShell();
 
   [[nodiscard]] bool valid() const { return valid_; }
+  /// Perform bounded work that may yield and must run before ImGui::NewFrame().
+  void prepareFrame();
   void runFrame();
 
   /// Font catalog (embedded Google Fonts + macOS system fonts) backing document font resolution

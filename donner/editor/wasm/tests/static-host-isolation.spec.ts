@@ -12,6 +12,10 @@ const kFatalRuntimePattern =
 
 test("secure static host isolation fallback enables Wasm threads", async ({ page }) => {
   test.skip(!kRunFallbackTest, "requires a server without COOP/COEP response headers");
+  // A cold browser may need both a service-worker activation reload and a
+  // separate pthread Wasm startup, whose existing phase deadlines exceed the
+  // suite's 30-second default when combined.
+  test.setTimeout(60_000);
 
   const baseUrl = process.env.DONNER_WASM_BASE_URL || "http://127.0.0.1:8000";
   const fatalMessages: string[] = [];

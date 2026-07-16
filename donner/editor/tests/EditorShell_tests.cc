@@ -3798,7 +3798,7 @@ TEST(EditorShellTest, ShapeClipboardRejectsMalformedAndPastesIntoSelectedGroup) 
   EXPECT_LT(pastedOffset, groupCloseOffset);
 }
 
-TEST(EditorShellTest, SamplePickerRenderGeneratesThumbnailsAcrossFrames) {
+TEST(EditorShellTest, SamplePickerPreparationGeneratesThumbnailsOutsideImGuiFrame) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
     GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
@@ -3810,14 +3810,22 @@ TEST(EditorShellTest, SamplePickerRenderGeneratesThumbnailsAcrossFrames) {
   const std::size_t sampleCount = GetEditorSampleCatalog().size();
   ASSERT_GT(sampleCount, 0u);
 
-  // Showing the picker routes runFrame through renderSamplePicker(), which lazily
-  // rasterizes one thumbnail per frame via ensureSampleThumbnails().
+  // Thumbnail rasterization is bounded to one sample per pre-frame preparation.
+  // The ImGui frame only uploads and presents completed bitmaps.
   EditorShellTestAccess::SetShowSamplePicker(shell, true);
   EXPECT_EQ(EditorShellTestAccess::SampleThumbnailCursor(shell), 0u);
 
-  // Generation advances at most one sample per frame, so drive enough frames to
-  // let the cursor walk the whole catalog and leave headroom for the final pass.
+  // Rendering the picker without preparation must not rasterize inside the active
+  // ImGui frame.
+  window.beginFrame();
+  shell.runFrame();
+  window.endFrame();
+  EXPECT_EQ(EditorShellTestAccess::SampleThumbnailCursor(shell), 0u);
+
+  // Generation advances at most one sample per preparation, so drive enough
+  // frames to let the cursor walk the whole catalog.
   for (std::size_t frame = 0; frame < sampleCount + 3u; ++frame) {
+    shell.prepareFrame();
     window.beginFrame();
     shell.runFrame();
     window.endFrame();
@@ -3835,6 +3843,7 @@ TEST(EditorShellTest, SamplePickerRenderGeneratesThumbnailsAcrossFrames) {
 
   // Re-running frames past the end of the catalog is idempotent: the cursor stays
   // clamped and no additional thumbnails are produced.
+  shell.prepareFrame();
   window.beginFrame();
   shell.runFrame();
   window.endFrame();

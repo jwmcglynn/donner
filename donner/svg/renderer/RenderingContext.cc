@@ -428,17 +428,20 @@ public:
     }
   }
 
-  /**
-   * Traverse a tree, instantiating each entity in the tree.
-   *
-   * @param treeEntity Current entity in the tree or shadow tree.
-   * @param lastRenderedEntityIfSubtree Optional, entity of the last rendered element if this is a
-   *   subtree.
-   * @return The last rendered entity.
-   */
+  struct PreparedTraversalNode {
+    Entity styleEntity = entt::null;
+    bool traverseChildren = false;
+    bool selectSwitchChild = false;
+    int layerDepth = 0;
+    std::optional<ContextPaintServers> savedContextPaintServers;
+  };
+
+  /// Instantiate one tree entity and retain only the state needed while its
+  /// children are traversed. Keeping this large operation out of the recursive
+  /// DFS bounds native/WASM call-frame usage on browsers with small stacks.
   // TODO(jwmcglynn): Since 'stroke' and 'fill' may reference the same tree, we need to create two
   // instances of it in the render tree.
-  void traverseTree(Entity treeEntity, Entity* lastRenderedEntityIfSubtree = nullptr) {
+  std::optional<PreparedTraversalNode> prepareTraversalNode(Entity treeEntity) {
     const auto* shadowEntityComponent = registry_.try_get<ShadowEntityComponent>(treeEntity);
     const Entity styleEntity = treeEntity;
     const EntityHandle dataHandle(
@@ -450,7 +453,7 @@ public:
     const bool isShape = dataHandle.all_of<ComputedPathComponent>();
 
     if (!dataHandle.all_of<ElementTypeComponent>()) {
-      return;
+      return std::nullopt;
     }
 
     // Conditional-processing attributes (requiredExtensions, systemLanguage) disable rendering of
@@ -459,7 +462,7 @@ public:
     // intentionally not affected, matching resvg.
     if (const auto* conditional = dataHandle.try_get<ConditionalProcessingComponent>();
         conditional && !EvaluateConditionalProcessing(*conditional, userLanguages_)) {
-      return;
+      return std::nullopt;
     }
 
     // ShadowOnlyChildren elements (e.g., <mask>, <pattern>) don't render content in the light
@@ -470,7 +473,7 @@ public:
 
     if (const auto* behavior = dataHandle.try_get<RenderingBehaviorComponent>()) {
       if (behavior->behavior == RenderingBehavior::Nonrenderable && !ignoreNonrenderable_) {
-        return;
+        return std::nullopt;
       } else if (behavior->behavior == RenderingBehavior::NoTraverseChildren) {
         traverseChildren = false;
       } else if (behavior->behavior == RenderingBehavior::ShadowOnlyChildren) {
@@ -485,7 +488,7 @@ public:
     const auto& properties = styleComponent.properties.value();
 
     if (properties.display.get().value() == Display::None) {
-      return;
+      return std::nullopt;
     }
 
     bool isEmpty = false;
@@ -501,7 +504,7 @@ public:
     }
 
     if (isEmpty) {
-      return;
+      return std::nullopt;
     }
 
     if (auto maybeClipRect = LayoutSystem().clipRect(EntityHandle(registry_, treeEntity))) {
@@ -694,9 +697,31 @@ public:
 
     lastRenderedEntity_ = styleEntity;
 
-    if (traverseChildren) {
+    return PreparedTraversalNode{
+        .styleEntity = styleEntity,
+        .traverseChildren = traverseChildren,
+        .selectSwitchChild = dataHandle.get<ElementTypeComponent>().type() == ElementType::Switch,
+        .layerDepth = layerDepth,
+        .savedContextPaintServers = std::move(savedContextPaintServers),
+    };
+  }
+
+  /**
+   * Traverse a tree, instantiating each entity in the tree.
+   *
+   * @param treeEntity Current entity in the tree or shadow tree.
+   * @param lastRenderedEntityIfSubtree Optional, entity of the last rendered element if this is a
+   *   subtree.
+   */
+  void traverseTree(Entity treeEntity, Entity* lastRenderedEntityIfSubtree = nullptr) {
+    std::optional<PreparedTraversalNode> prepared = prepareTraversalNode(treeEntity);
+    if (!prepared.has_value()) {
+      return;
+    }
+
+    if (prepared->traverseChildren) {
       const auto& tree = registry_.get<donner::components::TreeComponent>(treeEntity);
-      if (dataHandle.get<ElementTypeComponent>().type() == ElementType::Switch) {
+      if (prepared->selectSwitchChild) {
         // <switch> renders only the first direct child whose conditional-processing attributes
         // all evaluate to true.
         if (const Entity selectedChild = selectSwitchChild(tree); selectedChild != entt::null) {
@@ -710,12 +735,13 @@ public:
       }
     }
 
-    if (layerDepth > 0) {
-      instance.subtreeInfo = SubtreeInfo{styleEntity, lastRenderedEntity_, layerDepth};
+    if (prepared->layerDepth > 0) {
+      registry_.get<RenderingInstanceComponent>(prepared->styleEntity).subtreeInfo =
+          SubtreeInfo{prepared->styleEntity, lastRenderedEntity_, prepared->layerDepth};
     }
 
-    if (savedContextPaintServers) {
-      contextPaintServers_ = savedContextPaintServers.value();
+    if (prepared->savedContextPaintServers) {
+      contextPaintServers_ = std::move(prepared->savedContextPaintServers).value();
     }
 
     if (lastRenderedEntityIfSubtree) {

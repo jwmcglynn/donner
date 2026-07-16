@@ -3556,7 +3556,6 @@ void EditorShell::renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& con
   ImGui::SetCursorPosY(contentRegion.y < 560.0f ? 8.0f : 32.0f);
   ImGui::BeginChild("##sample_picker_content", ImVec2(contentWidth, 0.0f), ImGuiChildFlags_None,
                     ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoSavedSettings);
-  ensureSampleThumbnails();
   const SamplePickerThumbnailProvider thumbnailProvider =
       [this](const EditorSample&, std::size_t index) -> SamplePickerThumbnail {
     if (index >= sampleThumbnailBitmaps_.size() || !sampleThumbnailBitmaps_[index].has_value()) {
@@ -5483,6 +5482,12 @@ void EditorShell::revealSourceRange(SourceByteRange byteRange) {
     textEditor_.flashSourceRange(byteRange);
   }
   window_.wakeEventLoop();
+}
+
+void EditorShell::prepareFrame() {
+  if (showSamplePicker_) {
+    ensureSampleThumbnails();
+  }
 }
 
 void EditorShell::runFrame() {

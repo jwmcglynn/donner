@@ -74,6 +74,10 @@ void RunEditorFrame(donner::editor::gui::EditorWindow& window, donner::editor::E
     }
   }
   {
+    ZoneScopedN("shell.prepareFrame");
+    shell.prepareFrame();
+  }
+  {
     ZoneScopedN("beginFrame");
     window.beginFrame();
   }
@@ -92,17 +96,28 @@ void RunEditorFrame(donner::editor::gui::EditorWindow& window, donner::editor::E
 struct WasmEditorLoopState {
   std::unique_ptr<donner::editor::gui::EditorWindow> window;
   std::unique_ptr<donner::editor::EditorShell> shell;
+  bool frameActive = false;
 };
 
 void RunWasmEditorFrame(void* userdata) {
   auto* state = static_cast<WasmEditorLoopState*>(userdata);
+  // Synchronous browser calls proxied from the pthread can let WebKit service
+  // another requestAnimationFrame callback before the suspended frame resumes.
+  // A nested frame would call ImGui::NewFrame() twice without an intervening
+  // Render() and recurse until the JS stack overflows. Drop that callback; the
+  // active frame will finish and the browser will schedule the next one.
+  if (state->frameActive) {
+    return;
+  }
   if (state->window->shouldClose()) {
     emscripten_cancel_main_loop();
     delete state;
     return;
   }
 
+  state->frameActive = true;
   RunEditorFrame(*state->window, *state->shell);
+  state->frameActive = false;
 }
 #endif
 
