@@ -273,6 +273,31 @@ TEST(SVGDocumentConcurrencyTests, ConcurrentDomPublicReadAccessorsAcquireAccessI
   EXPECT_EQ(child->attributes().size(), 2u);
 }
 
+TEST(SVGDocumentConcurrencyTests, LazyComputedQueryUpgradesAndRestoresOuterReadAccess) {
+  SVGDocument document;
+  SVGRectElement rect = SVGRectElement::Create(document);
+  const Transform2d parentFromRect = Transform2d::Translate(Vector2d(12.0, 34.0));
+  rect.setTransform(parentFromRect);
+  document.setThreadingMode(ThreadingMode::ConcurrentDom);
+
+  document.withReadAccess([&](DocumentReadAccess&) {
+    EXPECT_TRUE(document.handle()->currentThreadHasAccess());
+    EXPECT_FALSE(document.handle()->currentThreadHasWriteAccess());
+
+    EXPECT_EQ(rect.transform().translation(), parentFromRect.translation());
+
+    EXPECT_TRUE(document.handle()->currentThreadHasAccess());
+    EXPECT_FALSE(document.handle()->currentThreadHasWriteAccess());
+    const DocumentAccessDiagnostics diagnostics = document.handle()->accessDiagnostics();
+    EXPECT_EQ(diagnostics.activeReadLocks, 1u);
+    EXPECT_FALSE(diagnostics.writeLockHeld);
+  });
+
+  const DocumentAccessDiagnostics diagnostics = document.handle()->accessDiagnostics();
+  EXPECT_EQ(diagnostics.activeReadLocks, 0u);
+  EXPECT_FALSE(diagnostics.writeLockHeld);
+}
+
 TEST(SVGDocumentConcurrencyTests, ConcurrentDomSerializesElementHandleCopies) {
   SVGDocument document;
   SVGRectElement rect = SVGRectElement::Create(document);
