@@ -1297,13 +1297,13 @@ void TextEditor::calculateFolds(int currentLine, int totalLines) {
 
     if (fold_.size() != foldBegin_.size()) {
       fold_.resize(foldBegin_.size(), false);
-      foldConnection_.resize(foldBegin_.size(), -1);
     }
+    foldConnection_.assign(foldBegin_.size(), -1);
 
     std::vector<bool> foldUsed(foldEnd_.size(), false);
     for (int i = static_cast<int>(foldBegin_.size()) - 1; i >= 0; i--) {
       int j = static_cast<int>(foldEnd_.size()) - 1;
-      int lastUnused = j;
+      int lastUnused = static_cast<int>(foldEnd_.size());
 
       for (; j >= 0; j--) {
         if (foldEnd_[j] < foldBegin_[i]) {
