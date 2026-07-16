@@ -790,6 +790,14 @@ public:
     (void)shell.interactionController_.resetToActualSize();
   }
 
+  static AsyncRenderer& BeginDelayedRender(EditorShell& shell, std::chrono::milliseconds delay) {
+    AsyncRenderer& renderer = shell.renderCoordinator_.asyncRenderer();
+    renderer.setReplayRenderDelayForTesting(delay);
+    shell.renderCoordinator_.maybeRequestRender(
+        shell.app_, shell.selectTool_, shell.interactionController_.viewport(), &shell.textures_);
+    return renderer;
+  }
+
   static void RefreshSelectionBoundsCache(EditorShell& shell) {
     shell.renderCoordinator_.refreshSelectionBoundsCache(shell.app_);
   }
@@ -1238,6 +1246,22 @@ void RenderToolbarFrame(gui::EditorWindow& window, EditorShell& shell, const ImV
   EditorShellTestAccess::RenderFillStrokeToolbarWidget(shell);
   ImGui::End();
   ImGui::Render();
+}
+
+bool DrawDataContainsColor(ImU32 color) {
+  const ImDrawData* drawData = ImGui::GetDrawData();
+  if (drawData == nullptr) {
+    return false;
+  }
+  for (int listIndex = 0; listIndex < drawData->CmdListsCount; ++listIndex) {
+    const ImDrawList* drawList = drawData->CmdLists[listIndex];
+    for (const ImDrawVert& vertex : drawList->VtxBuffer) {
+      if (vertex.col == color) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 void ClickToolbar(gui::EditorWindow& window, EditorShell& shell, const ImVec2& cursor,
@@ -2900,6 +2924,38 @@ TEST(EditorShellTest, FillStrokeToolbarMouseHitTestingCoversChipsSwatchesAndTool
   }
 
   EXPECT_TRUE(shell.valid());
+}
+
+TEST(EditorShellTest, FillStrokeToolbarKeepsChosenPaintVisibleWhileRendererIsBusy) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0.0, 0.0, 120.0, 80.0));
+  std::optional<svg::SVGElement> target =
+      EditorShellTestAccess::App(shell).document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  EditorShellTestAccess::App(shell).setSelection(*target);
+
+  constexpr std::string_view kChosenFill = "#3366cc";
+  EditorShellTestAccess::App(shell).setActiveFill(kChosenFill);
+  AsyncRenderer& renderer =
+      EditorShellTestAccess::BeginDelayedRender(shell, std::chrono::milliseconds(500));
+  ASSERT_TRUE(renderer.isBusy());
+
+  constexpr ImVec2 kCursor(20.0f, 40.0f);
+  RenderToolbarFrame(window, shell, kCursor, ImVec2(-100.0f, -100.0f), /*mouseDown=*/false);
+  EXPECT_TRUE(DrawDataContainsColor(IM_COL32(0x33, 0x66, 0xcc, 0xff)))
+      << "The chosen fill swatch must not reset while its render is in flight";
+
+  renderer.cancelInFlight();
+  EXPECT_TRUE(renderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
+                                                           std::chrono::seconds(2)));
+  std::ignore = renderer.pollResult();
+  renderer.setReplayRenderDelayForTesting(std::chrono::milliseconds(0));
 }
 
 TEST(EditorShellTest, ToolPaletteSelectCommitsOpenPenPath) {
