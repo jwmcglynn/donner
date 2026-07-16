@@ -11,17 +11,23 @@ load("//build_defs:visibility.bzl", "donner_internal_visibility")
 donner_cc_library(
     name = "gpu",
     srcs = [
+        "CommandEncoder.cc",
         "Descriptors.cc",
+        "Device.cc",
         "GpuError.cc",
+        "RecordingDevice.cc",
     ],
     hdrs = [
         "CheckedArithmetic.h",
+        "CommandEncoder.h",
         "Commands.h",
         "Descriptors.h",
+        "Device.h",
         "GpuError.h",
         "GpuLimits.h",
         "GpuResult.h",
         "Handles.h",
+        "RecordingDevice.h",
     ],
     visibility = donner_internal_visibility(),
     deps = [
