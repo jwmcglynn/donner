@@ -169,26 +169,30 @@ FormatBarActions TextFormatBarPresenter::render(const FormatBarState& state, con
   const EditorTheme& theme = EditorTheme::Active();
   const ImVec2 size(width, BarHeight());
   const ImVec2 shadowOffset(0.0f, 3.0f);
-  ImGui::GetBackgroundDrawList()->AddRectFilled(
+  ImDrawList* drawList = ImGui::GetWindowDrawList();
+  drawList->AddRectFilled(
       ImVec2(topLeft.x + shadowOffset.x, topLeft.y + shadowOffset.y),
       ImVec2(topLeft.x + size.x + shadowOffset.x, topLeft.y + size.y + shadowOffset.y),
       WithAlpha(theme.surfaceCanvas, 150), theme.radiusContainer);
-  ImGui::SetNextWindowPos(topLeft);
-  ImGui::SetNextWindowSize(ImVec2(width, BarHeight()));
-  constexpr ImGuiWindowFlags kBarFlags =
-      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
-      ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoSavedSettings |
-      ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoBringToFrontOnFocus |
-      ImGuiWindowFlags_NoDocking;
 
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, theme.radiusContainer);
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+  // Keep the controls in a child of the render pane. The old independent
+  // NoBringToFrontOnFocus window could remain behind its parent after the user
+  // selected text, leaving a visible bar whose controls could not receive
+  // clicks. A child owns its screen rect above the pane's overlapping canvas
+  // item without taking keyboard focus merely by appearing.
+  const ImVec2 savedCursorPos = ImGui::GetCursorPos();
+  ImGui::SetCursorScreenPos(topLeft);
+  ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, theme.radiusContainer);
+  ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.0f);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 8.0f));
-  ImGui::PushStyleColor(ImGuiCol_WindowBg, ImGui::ColorConvertU32ToFloat4(theme.surfaceOverlay));
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::ColorConvertU32ToFloat4(theme.surfaceOverlay));
   ImGui::PushStyleColor(ImGuiCol_Border, ImGui::ColorConvertU32ToFloat4(theme.borderStrong));
-
-  if (ImGui::Begin("##text_format_bar", nullptr, kBarFlags)) {
+  constexpr ImGuiChildFlags kChildFlags =
+      ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding;
+  constexpr ImGuiWindowFlags kWindowFlags =
+      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
+      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNavFocus;
+  if (ImGui::BeginChild("##text_format_bar", size, kChildFlags, kWindowFlags)) {
     // --- Font family: free-text input plus a searchable preview dropdown. ---
     ImGui::SetNextItemWidth(180.0f);
     ImGui::InputTextWithHint("##format_bar_font_family", "Font family", fontFamilyBuffer_.data(),
@@ -297,9 +301,10 @@ FormatBarActions TextFormatBarPresenter::render(const FormatBarState& state, con
       actions.toggleUnderline = true;
     }
   }
-  ImGui::End();
+  ImGui::EndChild();
   ImGui::PopStyleColor(2);
   ImGui::PopStyleVar(3);
+  ImGui::SetCursorPos(savedCursorPos);
 
   return actions;
 }

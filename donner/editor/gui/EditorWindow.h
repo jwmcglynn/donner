@@ -297,7 +297,8 @@ public:
   /// Set the direct framebuffer underlay callback for the next and subsequent frames.
   void setWgpuUnderlayRenderCallback(WgpuUnderlayRenderCallback callback);
 
-  /// Set the direct framebuffer render callback for the next and subsequent frames.
+  /// Set the direct framebuffer overlay callback for the next and subsequent frames.
+  /// The callback renders above the document underlay and below ImGui UI.
   void setWgpuDirectRenderCallback(WgpuDirectRenderCallback callback);
 #endif
 
