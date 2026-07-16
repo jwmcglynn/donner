@@ -1170,6 +1170,17 @@ TEST(EditorControlSessionTest, RecordsTextToolPointerGestureWithIdleTail) {
               testing::ElementsAre(
                   testing::Field(&repro::ReproEvent::kind, repro::ReproEvent::Kind::MouseUp)));
   EXPECT_TRUE(recorded->frames[3].events.empty());
+
+  const ToolCallResult reload = session.handleToolCall(
+      "load_svg", json{{"svg_source", R"(<svg xmlns="http://www.w3.org/2000/svg"/>)"},
+                       {"render_after_load", false}});
+  ASSERT_TRUE(reload.body.value("ok", false)) << reload.body.dump(2);
+  ASSERT_TRUE(
+      session.handleToolCall("set_active_tool", json{{"tool", "text"}}).body.value("ok", false));
+  const ToolCallResult emptyClick =
+      session.handleToolCall("pointer_gesture", json{{"start_x", 100.0}, {"start_y", 70.0}});
+  ASSERT_TRUE(emptyClick.body.value("ok", false)) << emptyClick.body.dump(2);
+  EXPECT_FALSE(emptyClick.body.value("text_editing", true));
 }
 
 TEST(EditorControlSessionTest, RecordsAndReplaysPenPathPaintActions) {
