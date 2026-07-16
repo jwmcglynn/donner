@@ -359,8 +359,14 @@ protected:
 
   static FormatBarActions RenderFrame(TextFormatBarPresenter& bar, const FormatBarState& state) {
     ImGui::NewFrame();
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize, ImGuiCond_Always);
+    ImGui::Begin("TextFormatBarHost", nullptr,
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+                     ImGuiWindowFlags_NoSavedSettings);
     const FormatBarActions actions =
         bar.render(state, ImVec2(320.0f, 80.0f), TextFormatBarPresenter::PreferredWidth());
+    ImGui::End();
     ImGui::Render();
     return actions;
   }
@@ -478,8 +484,14 @@ protected:
     ImGui::NewFrame();
     frameHeight_ = ImGui::GetFrameHeight();
     itemSpacingX_ = ImGui::GetStyle().ItemSpacing.x;
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(io.DisplaySize, ImGuiCond_Always);
+    ImGui::Begin("TextFormatBarInputHost", nullptr,
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+                     ImGuiWindowFlags_NoSavedSettings);
     const FormatBarActions actions =
         bar_.render(state, ImVec2(kBarX, kBarY), TextFormatBarPresenter::PreferredWidth());
+    ImGui::End();
     ImGui::Render();
     return actions;
   }

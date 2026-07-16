@@ -1089,7 +1089,9 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   }
 
   const bool hasUnderlayRenderCallback = static_cast<bool>(wgpuUnderlayRenderCallback_);
-  if (hasUnderlayRenderCallback) {
+  const bool hasDirectRenderCallback = static_cast<bool>(wgpuDirectRenderCallback_);
+  const bool hasPreImGuiFramebufferContent = hasUnderlayRenderCallback || hasDirectRenderCallback;
+  if (hasPreImGuiFramebufferContent) {
     const auto underlayStart = std::chrono::steady_clock::now();
     donner::geode::ScopedWgpuHandle<wgpu::TextureView> clearView(target.get().createView());
     if (!clearView) {
@@ -1124,12 +1126,27 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     }
     wgpuState_->queue.submit(1, &clearCommands.get());
 
-    EditorWindowWgpuRenderTarget underlayTarget{
+    if (hasUnderlayRenderCallback) {
+      EditorWindowWgpuRenderTarget underlayTarget{
+          .texture = target.get(),
+          .framebufferSizePx = Vector2i(displayW, displayH),
+      };
+      wgpuUnderlayRenderCallback_(underlayTarget);
+      timing.underlayMs = ElapsedMs(underlayStart);
+    }
+  }
+
+  // The direct pass carries selection/path chrome. It belongs above the
+  // document underlay, but below every ImGui surface so menus, popups, and
+  // contextual controls remain usable and visually unobstructed.
+  if (hasDirectRenderCallback) {
+    const auto directStart = std::chrono::steady_clock::now();
+    EditorWindowWgpuRenderTarget directTarget{
         .texture = target.get(),
         .framebufferSizePx = Vector2i(displayW, displayH),
     };
-    wgpuUnderlayRenderCallback_(underlayTarget);
-    timing.underlayMs = ElapsedMs(underlayStart);
+    wgpuDirectRenderCallback_(directTarget);
+    timing.directMs = ElapsedMs(directStart);
   }
 
   {
@@ -1145,7 +1162,7 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     }
     wgpu::RenderPassColorAttachment color = {};
     color.view = view.get();
-    color.loadOp = hasUnderlayRenderCallback ? wgpu::LoadOp::Load : wgpu::LoadOp::Clear;
+    color.loadOp = hasPreImGuiFramebufferContent ? wgpu::LoadOp::Load : wgpu::LoadOp::Clear;
     color.storeOp = wgpu::StoreOp::Store;
     color.clearValue = {options_.clearColor[0], options_.clearColor[1], options_.clearColor[2],
                         options_.clearColor[3]};
@@ -1171,15 +1188,6 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     }
     wgpuState_->queue.submit(1, &commands.get());
     timing.imguiDrawMs = ElapsedMs(imguiDrawStart);
-  }
-  if (wgpuDirectRenderCallback_) {
-    const auto directStart = std::chrono::steady_clock::now();
-    EditorWindowWgpuRenderTarget directTarget{
-        .texture = target.get(),
-        .framebufferSizePx = Vector2i(displayW, displayH),
-    };
-    wgpuDirectRenderCallback_(directTarget);
-    timing.directMs = ElapsedMs(directStart);
   }
   if (readbackBuffer) {
     const auto readbackStart = std::chrono::steady_clock::now();

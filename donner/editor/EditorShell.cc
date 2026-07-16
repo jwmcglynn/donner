@@ -2441,8 +2441,13 @@ void EditorShell::renderFillStrokeToolbarWidget() {
       sourceForRanges = std::string_view(editorSource);
     }
   }
+  // The worker owns the selected element while busy, so fall back to the
+  // authoring paint that the picker updates synchronously. Replacing the
+  // state with an empty/default swatch here made both the toolbar and the
+  // inspector alternate through black/none during every color render.
   const ToolbarPaintState paintState =
-      rendererBusy ? ToolbarPaintState{} : ToolbarPaintStateForApp(app_, sourceForRanges);
+      rendererBusy ? ToolbarPaintStateForActivePaint(app_.activePaintStyle())
+                   : ToolbarPaintStateForApp(app_, sourceForRanges);
   ImGui::BeginDisabled(!canEditPaint);
   ImGui::InvisibleButton("##fill_stroke_widget",
                          ImVec2(kToolPalettePaintWidgetWidth, kToolPaletteButtonSize));
