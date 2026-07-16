@@ -5142,8 +5142,8 @@ TEST(RenderCoordinatorTest, QueuedFirstDragMoveKeepsOverlayAlignedWithPresentedS
 
   GlTextureCache textures;
   RenderCoordinator coordinator;
-  ASSERT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(
-      app, viewport, std::nullopt, selectTool.activeDragPreview()));
+  ASSERT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport, std::nullopt,
+                                                              selectTool.activeDragPreview()));
 
   selectTool.onMouseMove(app, Vector2d(20.0, 12.0), /*buttonHeld=*/true);
   ASSERT_TRUE(app.document().hasPendingMutations());
@@ -5161,6 +5161,24 @@ TEST(RenderCoordinatorTest, QueuedFirstDragMoveKeepsOverlayAlignedWithPresentedS
       << "A queued first drag transform has not reached the DOM yet, but the cached shape tile "
          "already presents that delta. The overlay must project its pre-flush geometry into the "
          "same presented document frame.";
+
+  ASSERT_TRUE(app.flushFrame());
+  app.applyMutation(EditorCommand::SetAttributeCommand(*target, "fill", "#ff0000"));
+  ASSERT_TRUE(app.document().hasPendingMutations());
+  selectTool.onMouseMove(app, Vector2d(24.0, 12.0), /*buttonHeld=*/true);
+  ASSERT_TRUE(app.document().hasPendingMutations());
+  const std::optional<SelectTool::ActiveDragPreview> secondPresentationDragPreview =
+      selectTool.activeDragPreview();
+  ASSERT_TRUE(secondPresentationDragPreview.has_value());
+  ASSERT_TRUE(coordinator.rasterizeOverlayForPresentation(app, selectTool, viewport, textures,
+                                                          secondPresentationDragPreview,
+                                                          secondPresentationDragPreview));
+  ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
+  ASSERT_EQ(coordinator.immediateOverlaySnapshot()->paths.size(), 1u);
+  EXPECT_EQ(coordinator.immediateOverlaySnapshot()->paths.front().pathDoc.bounds(),
+            Box2d::FromXYWH(20.0, 8.0, 16.0, 16.0))
+      << "After an intermediate drag transform reaches the DOM, the next queued move must project "
+         "from that committed baseline rather than reapplying the whole gesture delta.";
 }
 
 TEST(RenderCoordinatorTest, AffineActiveDragRerasterizesOverlayInsteadOfReusingTextureTransform) {
@@ -5205,6 +5223,56 @@ TEST(RenderCoordinatorTest, AffineActiveDragRerasterizesOverlayInsteadOfReusingT
       << "Affine resize/rotate drags should rerasterize chrome instead of stretching the previous "
          "immediate overlay snapshot at presentation time.";
   ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
+}
+
+TEST(RenderCoordinatorTest, QueuedFirstResizeKeepsPathAndBoundsAlignedWithPresentedShape) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <rect id="target" x="8" y="8" width="16" height="16" fill="red"/>
+    </svg>
+  )svg"));
+  app.document().document().setCanvasSize(64, 64);
+  auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(64.0, 64.0);
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 64.0, 64.0);
+  viewport.devicePixelRatio = 1.0;
+
+  SelectTool selectTool;
+  selectTool.onMouseDown(app, Vector2d(24.0, 24.0), MouseModifiers{});
+  ASSERT_TRUE(selectTool.activeDragPreview().has_value());
+
+  GlTextureCache textures;
+  RenderCoordinator coordinator;
+  ASSERT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport, std::nullopt,
+                                                              selectTool.activeDragPreview()));
+
+  selectTool.onMouseMove(app, Vector2d(32.0, 32.0), /*buttonHeld=*/true);
+  ASSERT_TRUE(app.document().hasPendingMutations());
+  const std::optional<SelectTool::ActiveDragPreview> presentationDragPreview =
+      selectTool.activeDragPreview();
+  ASSERT_TRUE(presentationDragPreview.has_value());
+  ASSERT_FALSE(presentationDragPreview->documentFromCachedDocument.isTranslation());
+
+  ASSERT_TRUE(coordinator.rasterizeOverlayForPresentation(
+      app, selectTool, viewport, textures, presentationDragPreview, presentationDragPreview));
+  ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
+  ASSERT_EQ(coordinator.immediateOverlaySnapshot()->paths.size(), 1u);
+  const Box2d expectedBounds = presentationDragPreview->documentFromCachedDocument.transformBox(
+      Box2d::FromXYWH(8.0, 8.0, 16.0, 16.0));
+  EXPECT_EQ(coordinator.immediateOverlaySnapshot()->paths.front().pathDoc.bounds(), expectedBounds);
+  ASSERT_TRUE(coordinator.immediateOverlaySnapshot()->orientedBoundsDoc.has_value());
+  Box2d presentedChromeBounds = Box2d::CreateEmpty(
+      coordinator.immediateOverlaySnapshot()->orientedBoundsDoc->cornersDoc.front());
+  for (const Vector2d& corner :
+       coordinator.immediateOverlaySnapshot()->orientedBoundsDoc->cornersDoc) {
+    presentedChromeBounds.addPoint(corner);
+  }
+  EXPECT_EQ(presentedChromeBounds, expectedBounds);
 }
 
 TEST(RenderCoordinatorTest, OverlayGesturePreviewUsesRepresentedDragTransformForChip) {
@@ -5260,7 +5328,7 @@ TEST(RenderCoordinatorTest, OverlayRepresentedTransformMapsLiveAffinePointsToRep
   };
 
   const Transform2d representedDocumentFromLiveDocument =
-      OverlayRepresentedDocumentFromLiveDocument(liveDragPreview, representedDragPreview);
+      OverlayDocumentFromSourceDragPreview(liveDragPreview, representedDragPreview);
   for (const Vector2d point : {Vector2d(0.0, 0.0), Vector2d(10.0, 4.0), Vector2d(6.0, 12.0)}) {
     const Vector2d representedFromLive = representedDocumentFromLiveDocument.transformPosition(
         liveDocumentFromStartDocument.transformPosition(point));

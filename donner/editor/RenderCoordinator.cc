@@ -322,18 +322,18 @@ std::optional<SelectTool::ActiveDragPreview> OverlayRepresentedDragPreviewForPre
   };
 }
 
-Transform2d OverlayRepresentedDocumentFromLiveDocument(
-    const std::optional<SelectTool::ActiveDragPreview>& liveDragPreview,
-    const std::optional<SelectTool::ActiveDragPreview>& representedDragPreview) {
-  if (!liveDragPreview.has_value() || !representedDragPreview.has_value() ||
-      liveDragPreview->entity != representedDragPreview->entity ||
-      liveDragPreview->dragGeneration != representedDragPreview->dragGeneration ||
-      std::abs(liveDragPreview->documentFromCachedDocument.determinant()) < 1e-12) {
+Transform2d OverlayDocumentFromSourceDragPreview(
+    const std::optional<SelectTool::ActiveDragPreview>& sourceDragPreview,
+    const std::optional<SelectTool::ActiveDragPreview>& targetDragPreview) {
+  if (!sourceDragPreview.has_value() || !targetDragPreview.has_value() ||
+      sourceDragPreview->entity != targetDragPreview->entity ||
+      sourceDragPreview->dragGeneration != targetDragPreview->dragGeneration ||
+      std::abs(sourceDragPreview->documentFromCachedDocument.determinant()) < 1e-12) {
     return Transform2d();
   }
 
-  return liveDragPreview->documentFromCachedDocument.inverse() *
-         representedDragPreview->documentFromCachedDocument;
+  return sourceDragPreview->documentFromCachedDocument.inverse() *
+         targetDragPreview->documentFromCachedDocument;
 }
 
 std::optional<SelectTool::ActiveGesturePreview> OverlayGesturePreviewForPresentation(
@@ -346,7 +346,7 @@ std::optional<SelectTool::ActiveGesturePreview> OverlayGesturePreviewForPresenta
 
   SelectTool::ActiveGesturePreview representedGesturePreview = *activeGesturePreview;
   const Transform2d representedDocumentFromLiveDocument =
-      OverlayRepresentedDocumentFromLiveDocument(liveDragPreview, representedDragPreview);
+      OverlayDocumentFromSourceDragPreview(liveDragPreview, representedDragPreview);
   representedGesturePreview.documentFromStartDocument =
       representedDocumentFromLiveDocument * activeGesturePreview->documentFromStartDocument;
   if (liveDragPreview.has_value() && representedDragPreview.has_value() &&
@@ -445,7 +445,7 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
     std::optional<SelectTool::ActiveDragPreview> representedDragPreview,
     std::optional<SelectTool::ActiveTransformBoundsPreview> activeBoundsPreview,
     std::optional<SelectionChromeDetail> selectionDetail,
-    std::optional<SelectTool::ActiveDragPreview> liveDragPreview) {
+    std::optional<SelectTool::ActiveDragPreview> documentDragPreview) {
   ZoneScopedN("RenderCoordinator::rasterizeOverlay");
   if (!app.hasDocument()) {
     immediateOverlaySnapshot_.reset();
@@ -459,14 +459,14 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   const auto currentVersion = app.document().currentFrameVersion();
   const auto now = std::chrono::steady_clock::now();
   const auto& overlaySelection = app.selectedElements();
-  const std::optional<SelectTool::ActiveDragPreview> effectiveLiveDragPreview =
-      liveDragPreview.has_value() ? liveDragPreview : representedDragPreview;
+  const std::optional<SelectTool::ActiveDragPreview> effectiveDocumentDragPreview =
+      documentDragPreview.has_value() ? documentDragPreview : representedDragPreview;
   // An active locked-rejection flash fades every frame, so it must force a fresh overlay capture
   // (defeating the "geometry unchanged → reuse cached overlay" fast path below) until it expires.
   const bool lockedFlashActive =
       lockedRejectionFlash_.has_value() && lockedRejectionFlash_->intensity > 0.0f;
   const bool overlayInteractionActive =
-      effectiveLiveDragPreview.has_value() || representedDragPreview.has_value() ||
+      effectiveDocumentDragPreview.has_value() || representedDragPreview.has_value() ||
       marqueeRectDoc.has_value() || activeBoundsPreview.has_value() || lockedFlashActive;
   const bool overlayGeometryDiffers =
       overlaySelection != lastOverlaySelectionVec_ ||
@@ -516,22 +516,24 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   overlayCost.sourceHoverElementCount = static_cast<int>(sourceHoverElements_.size());
   overlayCost.selectionBoundsOnly =
       resolvedSelectionDetail == SelectionChromeDetail::CombinedBoundsOnly;
-  overlayCost.hasLiveDragPreview = effectiveLiveDragPreview.has_value();
+  overlayCost.hasLiveDragPreview = effectiveDocumentDragPreview.has_value();
   overlayCost.hasRepresentedDragPreview = representedDragPreview.has_value();
-  if (effectiveLiveDragPreview.has_value()) {
-    overlayCost.liveDragTranslationDoc = effectiveLiveDragPreview->translation;
+  if (effectiveDocumentDragPreview.has_value()) {
+    overlayCost.liveDragTranslationDoc = effectiveDocumentDragPreview->translation;
   }
   if (representedDragPreview.has_value()) {
     overlayCost.representedDragTranslationDoc = representedDragPreview->translation;
   }
   const Transform2d representedDocumentFromLiveDocument =
-      OverlayRepresentedDocumentFromLiveDocument(effectiveLiveDragPreview, representedDragPreview);
+      OverlayDocumentFromSourceDragPreview(effectiveDocumentDragPreview, representedDragPreview);
 
   std::optional<SelectionChromeBoundsPreview> chromeBoundsPreview;
   if (activeBoundsPreview.has_value()) {
     chromeBoundsPreview = SelectionChromeBoundsPreview{
         .startBoundsDoc = activeBoundsPreview->startBoundsDoc,
-        .documentFromStartDocument = activeBoundsPreview->documentFromStartDocument,
+        .documentFromStartDocument = effectiveDocumentDragPreview.has_value()
+                                         ? effectiveDocumentDragPreview->documentFromCachedDocument
+                                         : activeBoundsPreview->documentFromStartDocument,
     };
   }
   // Overlay AABBs are computed from the same live DOM snapshot as the path
@@ -627,11 +629,13 @@ bool RenderCoordinator::rasterizeOverlayForPresentation(
 
   const std::optional<SelectTool::ActiveDragPreview> liveActiveDragPreview =
       selectTool.activeDragPreview();
-  const std::optional<SelectTool::ActiveDragPreview> liveDragPreview =
-      liveActiveDragPreview.has_value() ? liveActiveDragPreview : activeDragPreview;
+  const std::optional<SelectTool::ActiveDragPreview> documentDragPreview =
+      selectTool.documentDragPreview(app);
+  const std::optional<SelectTool::ActiveDragPreview> capturedDocumentDragPreview =
+      documentDragPreview.has_value() ? documentDragPreview : activeDragPreview;
   const std::optional<SelectTool::ActiveTransformBoundsPreview> activeBoundsPreview =
       selectTool.activeTransformBoundsPreview();
-  const bool hasPresentationProjection = liveDragPreview.has_value() ||
+  const bool hasPresentationProjection = liveActiveDragPreview.has_value() ||
                                          representedDragPreview.has_value() ||
                                          activeBoundsPreview.has_value();
   const std::uint64_t currentVersion = app.document().currentFrameVersion();
@@ -660,7 +664,7 @@ bool RenderCoordinator::rasterizeOverlayForPresentation(
 
   return rasterizeOverlayForCurrentSelection(app, viewport, selectTool.marqueeRect(),
                                              representedDragPreview, activeBoundsPreview,
-                                             selectionDetail, liveDragPreview);
+                                             selectionDetail, capturedDocumentDragPreview);
 }
 
 void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& viewport,

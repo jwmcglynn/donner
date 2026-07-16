@@ -324,17 +324,17 @@ TEST(RenderCoordinatorPolicyTest, RepresentedDocumentTransformRequiresMatchingIn
   const SelectTool::ActiveDragPreview represented = DragPreview(
       static_cast<Entity>(42), 7, Vector2d(3.0, 0.0), Transform2d::Translate(Vector2d(3.0, 0.0)));
 
-  EXPECT_TRUE(OverlayRepresentedDocumentFromLiveDocument(std::nullopt, represented).isIdentity());
-  EXPECT_TRUE(OverlayRepresentedDocumentFromLiveDocument(
+  EXPECT_TRUE(OverlayDocumentFromSourceDragPreview(std::nullopt, represented).isIdentity());
+  EXPECT_TRUE(OverlayDocumentFromSourceDragPreview(
                   live, DragPreview(static_cast<Entity>(42), 8, Vector2d(3.0, 0.0)))
                   .isIdentity());
   EXPECT_TRUE(
-      OverlayRepresentedDocumentFromLiveDocument(
+      OverlayDocumentFromSourceDragPreview(
           DragPreview(static_cast<Entity>(42), 7, Vector2d::Zero(), Transform2d::Scale(0.0)),
           represented)
           .isIdentity());
 
-  const Transform2d projected = OverlayRepresentedDocumentFromLiveDocument(live, represented);
+  const Transform2d projected = OverlayDocumentFromSourceDragPreview(live, represented);
   EXPECT_FALSE(projected.isIdentity());
   EXPECT_NE(projected.data[4], 0.0);
 }

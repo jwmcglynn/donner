@@ -96,14 +96,14 @@ OverlayRepresentedDragPreviewForPresentation(
     bool hasPresentableActiveDragTarget);
 
 /**
- * Return the document transform that projects live drag chrome onto the represented presentation.
+ * Return the document transform that projects geometry from one drag frame onto another.
  *
- * @param liveDragPreview Live drag transform currently applied to the DOM.
- * @param representedDragPreview Drag transform the presented content represents.
+ * @param sourceDragPreview Drag transform represented by the source geometry.
+ * @param targetDragPreview Drag transform the presented content represents.
  */
-[[nodiscard]] Transform2d OverlayRepresentedDocumentFromLiveDocument(
-    const std::optional<SelectTool::ActiveDragPreview>& liveDragPreview,
-    const std::optional<SelectTool::ActiveDragPreview>& representedDragPreview);
+[[nodiscard]] Transform2d OverlayDocumentFromSourceDragPreview(
+    const std::optional<SelectTool::ActiveDragPreview>& sourceDragPreview,
+    const std::optional<SelectTool::ActiveDragPreview>& targetDragPreview);
 
 /**
  * Project live gesture chrome, including the selection size/angle chip, to the overlay state.
@@ -215,7 +215,7 @@ public:
       std::optional<SelectTool::ActiveDragPreview> representedDragPreview = std::nullopt,
       std::optional<SelectTool::ActiveTransformBoundsPreview> activeBoundsPreview = std::nullopt,
       std::optional<SelectionChromeDetail> selectionDetail = std::nullopt,
-      std::optional<SelectTool::ActiveDragPreview> liveDragPreview = std::nullopt);
+      std::optional<SelectTool::ActiveDragPreview> documentDragPreview = std::nullopt);
   /// Rasterize the current UI-frame overlay immediately before presentation.
   ///
   /// Unlike content render scheduling, overlay chrome is intentionally not gated on worker
