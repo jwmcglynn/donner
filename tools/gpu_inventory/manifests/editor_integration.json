@@ -41,7 +41,7 @@
       "operations": [
         "draw"
       ],
-      "sha256": "84a3fd6c3fa741d4f25dd6266212097134f6ec1066dddf8398d43a2e9e806679",
+      "sha256": "c733ce3c9218339ae4a71a067e41a93cffdecba1f82943ff71cff7db0f58d8cd",
       "usesEditorWgpuDefine": true,
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
@@ -49,7 +49,7 @@
       ]
     },
     "donner/editor/EditorShell.h": {
-      "sha256": "37f4fcfa88adad0e771c657c2673b853fd0b525d2885ebe2e690127f6d039414",
+      "sha256": "9921109bee80d87593bc7847bad55da1ce9abb8127e21bf329bdb50e1695d48f",
       "usesEditorWgpuDefine": true
     },
     "donner/editor/EditorShellPresentation.cc": {
@@ -299,7 +299,7 @@
       ]
     },
     "donner/editor/repro/GlRnrReplay.cc": {
-      "sha256": "64bbf1b03ffc6903587e3a4c0ff94a8d7c6ed3a38fd6179c4089933320cd0691",
+      "sha256": "e315f732bf6b5a6a1bc592cb26c56770f51ab83bb204ff6c31c81e0131a9e2a1",
       "usesEditorWgpuDefine": true
     },
     "donner/editor/tests/EditorRnrGlReplay.cc": {
@@ -310,7 +310,7 @@
       ]
     },
     "donner/editor/tests/EditorShell_tests.cc": {
-      "sha256": "603f0b8e8e60e749a89ba00d2380b73b2045d020c5c6c608904bb4bc950650d1",
+      "sha256": "be93cf6d1d89c97e3dde48c6692f8cfe96d9f212630d17babe26ea382ffb58c9",
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
         "wgpuLifetimeTextureCreates"

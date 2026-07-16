@@ -31,7 +31,7 @@
       "operations": [
         "draw"
       ],
-      "sha256": "84a3fd6c3fa741d4f25dd6266212097134f6ec1066dddf8398d43a2e9e806679",
+      "sha256": "c733ce3c9218339ae4a71a067e41a93cffdecba1f82943ff71cff7db0f58d8cd",
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
         "wgpuLifetimeTextureCreates"
@@ -269,7 +269,7 @@
       ]
     },
     "donner/editor/tests/EditorShell_tests.cc": {
-      "sha256": "603f0b8e8e60e749a89ba00d2380b73b2045d020c5c6c608904bb4bc950650d1",
+      "sha256": "be93cf6d1d89c97e3dde48c6692f8cfe96d9f212630d17babe26ea382ffb58c9",
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
         "wgpuLifetimeTextureCreates"
