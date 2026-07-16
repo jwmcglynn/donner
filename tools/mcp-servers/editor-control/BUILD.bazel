@@ -45,6 +45,7 @@ cc_library(
         "//donner/editor:presentation_render_scheduler",
         "//donner/editor:presented_frame_composer",
         "//donner/editor:select_tool",
+        "//donner/editor:selection_aabb",
         "//donner/editor:selection_transform_handles",
         "//donner/editor:viewport_state",
         "//donner/editor/repro:gl_rnr_replay",

@@ -71,7 +71,8 @@ enum class SelectionChromeDetail {
   Full,
   /// Capture visible path outlines only, skipping selection bounds and transform handles.
   PathOutlinesOnly,
-  /// Capture only the combined selection bounds, skipping path extraction.
+  /// Capture only the combined selection bounds. An active scale/rotate
+  /// preview also keeps the selection path outline aligned with the gesture.
   CombinedBoundsOnly,
   /// Skip selection geometry entirely. Dedicated editing chrome (for example
   /// a text caret and session frame) is attached to the snapshot separately.
@@ -343,8 +344,10 @@ public:
   /// otherwise not mutating these components on the same registry.
   /// When `cullRectDoc` is present, path outlines, AABBs, and handles
   /// fully outside that document-space rect are skipped before draw.
-  /// `CombinedBoundsOnly` skips selected path extraction and stores one
-  /// combined bounds box for low-latency large-selection feedback.
+  /// `CombinedBoundsOnly` normally skips selected path extraction and stores
+  /// one combined bounds box for low-latency large-selection feedback. During
+  /// an active scale/rotate preview it also captures path outlines so they
+  /// remain visible and aligned with the gesture.
   /// @param devicePixelRatio Viewport framebuffer scale used to convert
   ///   logical UI stroke widths into device pixels.
   ///

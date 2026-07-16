@@ -418,7 +418,12 @@ void LayersPanel::handleLockClick(EditorApp& app, std::size_t rowIndex) {
   if (rowIndex >= rows.size()) {
     return;
   }
-  app.setElementLocked(rows[rowIndex].element, !rows[rowIndex].isLocked);
+  const bool locking = !rows[rowIndex].isLocked;
+  const std::size_t selectionSizeBefore = app.selectedElements().size();
+  app.setElementLocked(rows[rowIndex].element, locking);
+  if (locking && app.selectedElements().size() != selectionSizeBefore) {
+    selectionChanged_ = true;
+  }
   mutationQueued_ = true;
 }
 
