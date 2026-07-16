@@ -436,6 +436,28 @@ TEST(SelectionAabbTest, SnapshotSelectionWorldBoundsUsesAuthoredBoxForBoxText) {
   EXPECT_NEAR(bounds[0].size().y, 120.0, 1e-6);
 }
 
+TEST(SelectionAabbTest, AuthoredBoxOriginIsIndependentFromTextBaseline) {
+  constexpr std::string_view kSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">
+              <text id="t" x="50" y="80" font-size="20" font-family="sans-serif"
+                    data-donner-text-box-x="40" data-donner-text-box-y="45"
+                    data-donner-text-box-width="200" data-donner-text-box-height="120">Hi</text>
+            </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  auto text = app.document().document().querySelector("#t");
+  ASSERT_TRUE(text.has_value());
+
+  const std::optional<Box2d> frame = text->cast<svg::SVGTextElement>().withWriteAccess(
+      [&text](svg::DocumentWriteAccess&, EntityHandle) {
+        return TextWorldFrameBounds(text->cast<svg::SVGTextElement>());
+      });
+
+  ASSERT_TRUE(frame.has_value());
+  EXPECT_EQ(*frame, Box2d::FromXYWH(40.0, 45.0, 200.0, 120.0));
+}
+
 TEST(SelectionAabbTest, TextWorldFrameBoundsMapsAuthoredBoxThroughTransform) {
   constexpr std::string_view kSvg =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">

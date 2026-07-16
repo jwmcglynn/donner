@@ -47,9 +47,9 @@ namespace donner::editor {
 [[nodiscard]] std::optional<Box2d> TextWorldInkBounds(const svg::SVGTextElement& text);
 
 /// Text-local frame rect authored by the text tool: the
-/// `data-donner-text-box-width`/`-height` region anchored one font-size
-/// above the `x`/`y` origin (inverting the tool's "first baseline sits one
-/// font-size below the box top" rule). Nullopt for point text.
+/// `data-donner-text-box-x`/`-y`/`-width`/`-height` region. Legacy boxes
+/// without an explicit frame origin are anchored one font-size above the
+/// text's `x`/`y` origin. Nullopt for point text.
 [[nodiscard]] std::optional<Box2d> AuthoredTextBoxLocal(const svg::SVGTextElement& text);
 
 /// Document-space frame of @p text: the authored text box when present (the

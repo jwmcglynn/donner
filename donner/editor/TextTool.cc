@@ -372,6 +372,10 @@ void TextTool::beginEditingSession(EditorApp& editor, const Vector2d& originDoc,
   text.setAttribute("style",
                     "fill: " + (activeFill.empty() ? std::string(kDefaultFill) : activeFill));
   if (boxDoc.has_value()) {
+    text.setAttribute("data-donner-text-box-x",
+                      donner::detail::FormatNumberForSVG(boxDoc->topLeft.x));
+    text.setAttribute("data-donner-text-box-y",
+                      donner::detail::FormatNumberForSVG(boxDoc->topLeft.y));
     text.setAttribute("data-donner-text-box-width",
                       donner::detail::FormatNumberForSVG(boxDoc->size().x));
     text.setAttribute("data-donner-text-box-height",
@@ -456,9 +460,10 @@ void TextTool::beginEditingSessionForExisting(EditorApp& editor, const svg::SVGT
     const std::optional<double> boxHeight =
         ParseNumericAttribute(text, "data-donner-text-box-height");
     if (boxWidth.has_value() && boxHeight.has_value()) {
-      // Invert the creation rule: the origin sits one font-size below the
-      // box's top-left corner.
-      const Vector2d topLeft(originText_.x, originText_.y - fontSize_);
+      const Vector2d legacyTopLeft(originText_.x, originText_.y - fontSize_);
+      const Vector2d topLeft(
+          ParseNumericAttribute(text, "data-donner-text-box-x").value_or(legacyTopLeft.x),
+          ParseNumericAttribute(text, "data-donner-text-box-y").value_or(legacyTopLeft.y));
       boxText_ = Box2d(topLeft, topLeft + Vector2d(*boxWidth, *boxHeight));
     }
   });
@@ -690,7 +695,6 @@ void TextTool::updateFrameGesture(EditorApp& editor, const Vector2d& documentPoi
       Vector2d(std::max(anchor.x, movingCorner.x), std::max(anchor.y, movingCorner.y)));
 
   boxText_ = newFrame;
-  originText_ = Vector2d(newFrame.topLeft.x, newFrame.topLeft.y + fontSize_);
 }
 
 void TextTool::commitFrameResize(EditorApp& editor) {
@@ -703,6 +707,12 @@ void TextTool::commitFrameResize(EditorApp& editor) {
       *sessionText_, "x", donner::detail::FormatNumberForSVG(originText_.x)));
   editor.applyMutation(EditorCommand::SetAttributeCommand(
       *sessionText_, "y", donner::detail::FormatNumberForSVG(originText_.y)));
+  editor.applyMutation(
+      EditorCommand::SetAttributeCommand(*sessionText_, "data-donner-text-box-x",
+                                         donner::detail::FormatNumberForSVG(newFrame.topLeft.x)));
+  editor.applyMutation(
+      EditorCommand::SetAttributeCommand(*sessionText_, "data-donner-text-box-y",
+                                         donner::detail::FormatNumberForSVG(newFrame.topLeft.y)));
   editor.applyMutation(
       EditorCommand::SetAttributeCommand(*sessionText_, "data-donner-text-box-width",
                                          donner::detail::FormatNumberForSVG(newFrame.size().x)));

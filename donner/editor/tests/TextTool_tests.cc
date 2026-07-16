@@ -158,6 +158,8 @@ TEST_F(TextToolTest, DragOpensBoxTextSessionWithBoxAttributes) {
   // below the top.
   EXPECT_THAT(attr(inserted, "x"), Eq("10"));
   EXPECT_THAT(attr(inserted, "y"), Eq("52"));
+  EXPECT_THAT(attr(inserted, "data-donner-text-box-x"), Eq("10"));
+  EXPECT_THAT(attr(inserted, "data-donner-text-box-y"), Eq("20"));
   EXPECT_THAT(attr(inserted, "data-donner-text-box-width"), Eq("200"));
   EXPECT_THAT(attr(inserted, "data-donner-text-box-height"), Eq("100"));
 }
@@ -822,6 +824,8 @@ TEST_F(TextToolTest, TopEdgeFrameResizeKeepsTextBaselineFixed) {
   tool.onMouseUp(app, Vector2d(90.0, 10.0));
   EXPECT_THAT(attr(text(), "x"), Eq("10"));
   EXPECT_THAT(attr(text(), "y"), Eq("52"));
+  EXPECT_THAT(attr(text(), "data-donner-text-box-x"), Eq("10"));
+  EXPECT_THAT(attr(text(), "data-donner-text-box-y"), Eq("10"));
   EXPECT_THAT(attr(text(), "data-donner-text-box-width"), Eq("80"));
   EXPECT_THAT(attr(text(), "data-donner-text-box-height"), Eq("110"));
 
