@@ -17,6 +17,9 @@ concurrency:
 # - check_design_doc_provenance.py (ratchets exact model metadata on design docs)
 # - gen_cmakelists.py unit tests + full --check validator (reentrant bazel
 #   prevents running --check from inside bazel test; see design doc 0016)
+# - tools/gpu_inventory checks (design doc 0053): manifest freshness and the
+#   report-only no-Rust-dependency verifier; whole-tree scans that a sandboxed
+#   bazel test cannot perform
 jobs:
   gatekeeper:
     runs-on: ubuntu-24.04
@@ -83,6 +86,12 @@ jobs:
 
       - name: Check design document provenance
         run: python3 tools/check_design_doc_provenance.py
+
+      - name: Check GPU inventory manifests are up to date
+        run: python3 tools/gpu_inventory/generate_gpu_manifests.py --check
+
+      - name: No-Rust-dependency verifier (report-only)
+        run: python3 tools/gpu_inventory/check_no_rust_dependencies.py
 
   cmake-validate:
     runs-on: ubuntu-24.04

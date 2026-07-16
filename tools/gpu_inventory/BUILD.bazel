@@ -1,0 +1,52 @@
+load("@rules_python//python:defs.bzl", "py_binary", "py_test")
+
+# GPU runtime inventory manifests and no-Rust-dependency verifier (design 0053).
+#
+# Whole-tree scans (`generate_gpu_manifests.py --check` and
+# `check_no_rust_dependencies.py`) run as standalone steps in the Lint workflow
+# because sandboxed bazel tests cannot see the full source tree. The py_tests
+# here cover the pure scanning/verification logic and the structural integrity
+# of the checked-in manifests.
+
+filegroup(
+    name = "manifests",
+    srcs = glob(["manifests/*.json"]),
+)
+
+py_binary(
+    name = "generate_gpu_manifests",
+    srcs = ["generate_gpu_manifests.py"],
+    visibility = ["//visibility:public"],
+)
+
+py_binary(
+    name = "check_no_rust_dependencies",
+    srcs = ["check_no_rust_dependencies.py"],
+    visibility = ["//visibility:public"],
+)
+
+py_test(
+    name = "generate_gpu_manifests_tests",
+    srcs = [
+        "generate_gpu_manifests.py",
+        "generate_gpu_manifests_tests.py",
+    ],
+)
+
+py_test(
+    name = "check_no_rust_dependencies_tests",
+    srcs = [
+        "check_no_rust_dependencies.py",
+        "check_no_rust_dependencies_tests.py",
+    ],
+)
+
+py_test(
+    name = "manifests_integrity_tests",
+    srcs = ["manifests_integrity_tests.py"],
+    data = [
+        "rust_allowlist.json",
+        ":manifests",
+    ],
+    deps = ["@rules_python//python/runfiles"],
+)

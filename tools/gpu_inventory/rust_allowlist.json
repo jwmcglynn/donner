@@ -1,0 +1,7 @@
+{
+  "_comment": "Inert third-party reference allowlist for the no-Rust-dependency verifier (design doc 0053). Rust source and Cargo metadata under these prefixes is reviewed upstream reference material that must never be compiled, linked, executed, or referenced by any build rule.",
+  "inertReferencePrefixes": [
+    "third_party/resvg-test-suite/",
+    "third_party/tiny-skia-cpp/third_party/tiny-skia/"
+  ]
+}

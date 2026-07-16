@@ -355,11 +355,15 @@ directory drops.
 
 ### Phase 0: Freeze requirements and provenance
 
-- [ ] Generate the GPU-operation, shader-feature, editor-integration, and Rust-dependency manifests.
+- [x] Generate the GPU-operation, shader-feature, editor-integration, and Rust-dependency manifests
+      (`tools/gpu_inventory/`, freshness-gated by the Lint workflow's
+      `generate_gpu_manifests.py --check` step).
 - [ ] Freeze representative pixels, counters, captures, error outcomes, and performance baselines
       from the current implementation using Donner-owned inputs.
 - [ ] Approve the clean-room input rules and provenance template.
-- [ ] Add the no-Rust-dependency verifier and inert-reference allowlist in report-only mode.
+- [x] Add the no-Rust-dependency verifier and inert-reference allowlist in report-only mode
+      (`tools/gpu_inventory/check_no_rust_dependencies.py`, run by the Lint workflow; phase 6
+      switches it to `--blocking`).
 - [ ] Define platform and driver release matrices plus binary-size budgets.
 
 ### Phase 1: Live RHI extraction
