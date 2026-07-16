@@ -35,10 +35,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ALLOWLIST_PATH = REPO_ROOT / "tools/gpu_inventory/rust_allowlist.json"
 
-# Files that participate in the build graph. Kept in sync with
-# generate_gpu_manifests.py (same definition, same rationale).
+# Files that participate in the build graph. `BUILD.<name>` covers overlay
+# build files applied to external archives (e.g.
+# third_party/BUILD.wgpu_native_platform) and `WORKSPACE.<name>` covers
+# WORKSPACE.bazel/WORKSPACE.bzlmod. Kept in sync with generate_gpu_manifests.py.
 BUILD_GRAPH_FILE_RE = re.compile(
-    r"(^|/)(MODULE\.bazel|MODULE\.bazel\.lock|BUILD\.bazel|BUILD|WORKSPACE(\.bazel)?|[^/]+\.bzl|\.bazelrc)$"
+    r"(^|/)(MODULE\.bazel(\.lock)?|BUILD(\.[^/]+)?|WORKSPACE(\.[^/]+)?|[^/]+\.bzl|\.bazelrc)$"
 )
 
 RUST_BUILD_TOKENS = (
@@ -58,12 +60,20 @@ RUST_BUILT_ARCHIVE_TOKENS = ("gfx-rs/wgpu-native", "wgpu_native_")
 # The active Rust FFI cross-validation fixture (design 0053 phase 6 removes it).
 RUST_FFI_PREFIX = "third_party/tiny-skia-cpp/tests/rust_ffi/"
 
-# Path fragments that indicate a build-graph reference into the inert snapshot.
-ALLOWLIST_REFERENCE_TOKENS = ("third_party/tiny-skia/",)
+# Path fragments that indicate a build-graph reference into the inert Rust code
+# snapshot. Both the directory form and the bazel package-label form
+# (`//...:target`) are matched; the trailing `/` and `:` keep
+# `third_party/tiny-skia-cpp` itself from matching. The resvg-test-suite
+# allowlist entry is deliberately absent: it contains no Rust code, and its
+# SVG/PNG corpus is legitimately referenced as test data.
+ALLOWLIST_REFERENCE_TOKENS = ("third_party/tiny-skia/", "third_party/tiny-skia:")
 
 # Generated build state that is not git-tracked but must still be free of Rust
 # edges (design 0053: the verifier scans "generated build state" too). Scanned
-# from the working tree when present.
+# from the working tree when present. On a fresh checkout (e.g. the Lint
+# workflow) these do not exist yet, so this only fires locally today; the
+# phase 6 --blocking CI step must generate the lockfile (any bazel invocation)
+# before running the verifier for this check to be effective there.
 GENERATED_BUILD_STATE_PATHS = (
     "MODULE.bazel.lock",
     "third_party/tiny-skia-cpp/MODULE.bazel.lock",
@@ -154,7 +164,9 @@ def check(files: dict[str, str], allowlist_prefixes: list[str]) -> list[Finding]
 
 def git_tracked_files(repo_root: Path) -> list[str]:
     """Returns all git-tracked paths (repo-relative, sorted)."""
-    output = subprocess.check_output(["git", "ls-files", "-z"], cwd=repo_root, text=True)
+    output = subprocess.check_output(
+        ["git", "ls-files", "-z"], cwd=repo_root, text=True, encoding="utf-8"
+    )
     return sorted(p for p in output.split("\0") if p)
 
 
@@ -191,7 +203,7 @@ def load_allowlist_prefixes(allowlist_path: Path) -> list[str]:
 def format_report(findings: list[Finding]) -> str:
     """Renders findings grouped by category with counts."""
     if not findings:
-        return "No Rust dependency edges found."
+        return "No Rust dependency edges found.\n"
     lines = [f"{len(findings)} Rust dependency finding(s):", ""]
     by_category: dict[str, list[Finding]] = {}
     for finding in findings:

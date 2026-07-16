@@ -27,6 +27,7 @@ py_binary(
 
 py_test(
     name = "generate_gpu_manifests_tests",
+    size = "small",
     srcs = [
         "generate_gpu_manifests.py",
         "generate_gpu_manifests_tests.py",
@@ -35,6 +36,7 @@ py_test(
 
 py_test(
     name = "check_no_rust_dependencies_tests",
+    size = "small",
     srcs = [
         "check_no_rust_dependencies.py",
         "check_no_rust_dependencies_tests.py",
@@ -43,6 +45,7 @@ py_test(
 
 py_test(
     name = "manifests_integrity_tests",
+    size = "small",
     srcs = ["manifests_integrity_tests.py"],
     data = [
         "rust_allowlist.json",

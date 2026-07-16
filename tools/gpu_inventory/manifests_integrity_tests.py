@@ -31,7 +31,7 @@ class GpuOperationsManifestTest(unittest.TestCase):
         files = self.manifest["files"]
         self.assertGreater(len(files), 0)
         for path, entry in files.items():
-            self.assertTrue(path.startswith("donner/"), path)
+            self.assertFalse(path.startswith("third_party/"), path)
             self.assertTrue(
                 any(k in entry for k in ("wgpuCppTokens", "wgpuCFunctions", "wgpuCTypes")),
                 f"{path} has no wgpu tokens",
@@ -41,6 +41,13 @@ class GpuOperationsManifestTest(unittest.TestCase):
         files = self.manifest["files"]
         self.assertIn("donner/svg/renderer/geode/GeodeDevice.cc", files)
         self.assertIn("donner/svg/renderer/RendererGeode.cc", files)
+
+    def test_imgui_wgpu_patches_inventoried(self):
+        patches = self.manifest["wgpuPatchFiles"]
+        self.assertTrue(
+            any("imgui_wgpu" in p for p in patches),
+            f"expected an imgui_wgpu patch in {patches}",
+        )
 
 
 class ShaderFeaturesManifestTest(unittest.TestCase):

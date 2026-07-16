@@ -26,6 +26,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import subprocess
@@ -51,12 +52,18 @@ EDITOR_WGPU_DEFINE_RE = re.compile(r"\bDONNER_EDITOR_WGPU\b")
 
 # GPU operation methods, per the design 0053 current-state inventory. Matched as
 # `.method(` inside files that already reference the WebGPU wrapper, so generic
-# names like `draw` do not pick up unrelated call sites.
+# names like `draw` do not pick up unrelated call sites. This is a curated,
+# labeled view; completeness of the ratchet does not depend on it because every
+# scanned file also records a content hash, so any edit to a wgpu-using file
+# forces a manifest regeneration. `RenderPassEncoder::end` is intentionally not
+# tracked lexically (`.end(` is ambiguous with container `end()`); pass lifetime
+# coverage comes from beginRenderPass/beginComputePass plus the content hash.
 OPERATION_METHODS = (
     "beginComputePass",
     "beginRenderPass",
     "configure",
     "copyBufferToBuffer",
+    "copyBufferToTexture",
     "copyTextureToBuffer",
     "copyTextureToTexture",
     "createBindGroup",
@@ -73,6 +80,7 @@ OPERATION_METHODS = (
     "destroy",
     "dispatchWorkgroups",
     "draw",
+    "drawIndexed",
     "finish",
     "getCapabilities",
     "getConstMappedRange",
@@ -87,8 +95,11 @@ OPERATION_METHODS = (
     "requestAdapter",
     "requestDevice",
     "setBindGroup",
+    "setIndexBuffer",
     "setPipeline",
+    "setScissorRect",
     "setVertexBuffer",
+    "setViewport",
     "submit",
     "unmap",
     "writeBuffer",
@@ -96,21 +107,30 @@ OPERATION_METHODS = (
 )
 OPERATION_RE = re.compile(r"\.\s*(" + "|".join(OPERATION_METHODS) + r")\s*\(")
 
-# WGSL parsing patterns.
+# WGSL parsing patterns. Entry-point and binding attributes may appear in any
+# order, so both patterns match an attribute blob and the fields are extracted
+# from it afterwards.
 WGSL_ENTRY_RE = re.compile(
-    r"@(vertex|fragment|compute)"
-    r"(?:\s*@workgroup_size\(([^)]*)\))?"
+    r"((?:@(?:vertex|fragment|compute)|@workgroup_size\([^)]*\))"
+    r"(?:\s*(?:@(?:vertex|fragment|compute)|@workgroup_size\([^)]*\)))*)"
     r"\s*fn\s+([A-Za-z_][A-Za-z0-9_]*)",
     re.DOTALL,
 )
+WGSL_ENTRY_STAGE_RE = re.compile(r"@(vertex|fragment|compute)\b")
+WGSL_WORKGROUP_SIZE_RE = re.compile(r"@workgroup_size\(([^)]*)\)")
 WGSL_BINDING_RE = re.compile(
-    r"@group\((\d+)\)\s*@binding\((\d+)\)\s*"
+    r"((?:@group\(\d+\)|@binding\(\d+\))\s*(?:@group\(\d+\)|@binding\(\d+\))\s*)"
     r"var\s*(<[^>]*>)?\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([^;]+);"
 )
+WGSL_GROUP_RE = re.compile(r"@group\((\d+)\)")
+WGSL_BINDING_INDEX_RE = re.compile(r"@binding\((\d+)\)")
 WGSL_BUILTIN_RE = re.compile(r"@builtin\(([A-Za-z_][A-Za-z0-9_]*)\)")
 WGSL_STRUCT_RE = re.compile(r"\bstruct\s+([A-Za-z_][A-Za-z0-9_]*)")
+# Inline WGSL raw strings, with or without an `identifier =` assignment prefix;
+# unassigned literals (e.g. passed directly as an argument) get an index-based
+# manifest key.
 INLINE_WGSL_RE = re.compile(
-    r"([A-Za-z_][A-Za-z0-9_]*)\s*=\s*R\"wgsl\((.*?)\)wgsl\"", re.DOTALL
+    r"(?:([A-Za-z_][A-Za-z0-9_]*)\s*=\s*)?R\"wgsl\((.*?)\)wgsl\"", re.DOTALL
 )
 
 # WGSL language features tracked as simple word-boundary tokens. The shader IR
@@ -172,8 +192,12 @@ WGSL_FEATURE_TOKENS = (
 )
 
 # Files that participate in the build graph, for Rust build-edge scanning.
+# `BUILD.<name>` covers overlay build files applied to external archives (e.g.
+# third_party/BUILD.wgpu_native_platform) and `WORKSPACE.<name>` covers
+# WORKSPACE.bazel/WORKSPACE.bzlmod. Kept in sync with
+# check_no_rust_dependencies.py.
 BUILD_GRAPH_FILE_RE = re.compile(
-    r"(^|/)(MODULE\.bazel|MODULE\.bazel\.lock|BUILD\.bazel|BUILD|WORKSPACE(\.bazel)?|[^/]+\.bzl|\.bazelrc)$"
+    r"(^|/)(MODULE\.bazel(\.lock)?|BUILD(\.[^/]+)?|WORKSPACE(\.[^/]+)?|[^/]+\.bzl|\.bazelrc)$"
 )
 RUST_BUILD_TOKENS = (
     "cargo_bazel",
@@ -190,7 +214,9 @@ WGPU_NATIVE_VERSION_RE = re.compile(r"_WGPU_NATIVE_VERSION\s*=\s*\"([^\"]+)\"")
 
 def git_tracked_files(repo_root: Path) -> list[str]:
     """Returns all git-tracked paths (repo-relative, sorted)."""
-    output = subprocess.check_output(["git", "ls-files", "-z"], cwd=repo_root, text=True)
+    output = subprocess.check_output(
+        ["git", "ls-files", "-z"], cwd=repo_root, text=True, encoding="utf-8"
+    )
     return sorted(p for p in output.split("\0") if p)
 
 
@@ -224,18 +250,26 @@ def scan_wgpu_tokens(text: str) -> dict[str, object]:
 def scan_wgsl(text: str) -> dict[str, object]:
     """Extracts entry points, bindings, and language features from WGSL source."""
     entry_points = []
-    for stage, workgroup_size, name in WGSL_ENTRY_RE.findall(text):
-        entry: dict[str, object] = {"name": name, "stage": stage}
-        if workgroup_size:
-            entry["workgroupSize"] = [s.strip() for s in workgroup_size.split(",")]
+    for attributes, name in WGSL_ENTRY_RE.findall(text):
+        stage_match = WGSL_ENTRY_STAGE_RE.search(attributes)
+        if not stage_match:
+            continue
+        entry: dict[str, object] = {"name": name, "stage": stage_match.group(1)}
+        workgroup_match = WGSL_WORKGROUP_SIZE_RE.search(attributes)
+        if workgroup_match:
+            entry["workgroupSize"] = [s.strip() for s in workgroup_match.group(1).split(",")]
         entry_points.append(entry)
     entry_points.sort(key=lambda e: (e["stage"], e["name"]))
 
     bindings = []
-    for group, binding, address_space, name, binding_type in WGSL_BINDING_RE.findall(text):
+    for attributes, address_space, name, binding_type in WGSL_BINDING_RE.findall(text):
+        group_match = WGSL_GROUP_RE.search(attributes)
+        binding_match = WGSL_BINDING_INDEX_RE.search(attributes)
+        if not group_match or not binding_match:
+            continue
         binding_entry = {
-            "group": int(group),
-            "binding": int(binding),
+            "group": int(group_match.group(1)),
+            "binding": int(binding_match.group(1)),
             "name": name,
             "type": re.sub(r"\s+", " ", binding_type.strip()),
         }
@@ -262,31 +296,53 @@ def scan_wgsl(text: str) -> dict[str, object]:
     }
 
 
+def is_first_party_source(path: str) -> bool:
+    """True for first-party C++/ObjC++ sources (everything outside vendored code)."""
+    if path.startswith(("third_party/", "external/", "bazel-")):
+        return False
+    if "/third_party/" in path:
+        return False
+    return path.endswith((".h", ".cc", ".mm"))
+
+
+def content_sha256(text: str) -> str:
+    """Content hash recorded per manifest entry so any edit to a GPU-using file
+    forces a manifest regeneration, independent of the curated token lists."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def build_gpu_operations_manifest(files: dict[str, str]) -> dict[str, object]:
-    """Builds the per-file WebGPU token/operation manifest for donner/ sources."""
+    """Builds the per-file WebGPU token/operation manifest for first-party sources."""
     per_file: dict[str, object] = {}
     for path in sorted(files):
-        if not path.startswith("donner/"):
-            continue
-        if not path.endswith((".h", ".cc", ".mm")):
+        if not is_first_party_source(path):
             continue
         tokens = scan_wgpu_tokens(files[path])
         if tokens:
+            tokens["sha256"] = content_sha256(files[path])
             per_file[path] = tokens
-    return {"_comment": GENERATOR_NOTE, "files": per_file}
+
+    # Patched third-party WebGPU integration code (e.g. the ImGui WebGPU backend
+    # patches) is part of the design 0053 inventory even though it lives outside
+    # first-party sources.
+    patches = sorted(
+        path
+        for path in files
+        if path.endswith(".patch") and ("wgpu" in files[path] or "WGPU" in files[path])
+    )
+    return {"_comment": GENERATOR_NOTE, "files": per_file, "wgpuPatchFiles": patches}
 
 
 def build_shader_features_manifest(files: dict[str, str]) -> dict[str, object]:
     """Builds the WGSL shader manifest, including inline R"wgsl(...)" literals."""
     shaders: dict[str, object] = {}
     for path in sorted(files):
-        if not path.startswith("donner/"):
-            continue
-        if path.endswith(".wgsl"):
+        if path.endswith(".wgsl") and not path.startswith("third_party/"):
             shaders[path] = scan_wgsl(files[path])
-        elif path.endswith((".cc", ".h", ".mm")):
-            for name, body in INLINE_WGSL_RE.findall(files[path]):
-                shaders[f"{path}#{name}"] = scan_wgsl(body)
+        elif is_first_party_source(path):
+            for index, match in enumerate(INLINE_WGSL_RE.finditer(files[path])):
+                name = match.group(1) or f"inline{index}"
+                shaders[f"{path}#{name}"] = scan_wgsl(match.group(2))
     return {"_comment": GENERATOR_NOTE, "shaders": shaders}
 
 
@@ -306,6 +362,7 @@ def build_editor_integration_manifest(files: dict[str, str]) -> dict[str, object
         if EDITOR_WGPU_DEFINE_RE.search(text):
             entry["usesEditorWgpuDefine"] = True
         if entry:
+            entry["sha256"] = content_sha256(text)
             per_file[path] = entry
     return {"_comment": GENERATOR_NOTE, "files": per_file}
 
@@ -384,7 +441,9 @@ def collect_repo_files(repo_root: Path) -> dict[str, str]:
     files: dict[str, str] = {}
     for path in git_tracked_files(repo_root):
         interesting = (
-            path.startswith("donner/")
+            is_first_party_source(path)
+            or path.startswith("donner/")
+            or path.endswith((".wgsl", ".patch"))
             or is_rust_source_path(path)
             or BUILD_GRAPH_FILE_RE.search(path) is not None
         )

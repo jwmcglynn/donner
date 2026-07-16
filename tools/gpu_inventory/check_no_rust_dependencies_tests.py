@@ -91,6 +91,24 @@ class CheckTest(unittest.TestCase):
         }
         self.assertEqual(categories(verifier.check(files, ALLOWLIST)), [])
 
+    def test_overlay_build_file_is_scanned(self):
+        files = {
+            "third_party/BUILD.wgpu_native_platform": (
+                '# overlay for the wgpu_native_macos_aarch64 archive\n'
+            )
+        }
+        findings = verifier.check(files, ALLOWLIST)
+        self.assertEqual(categories(findings), ["rust-built-archive"])
+
+    def test_label_form_reference_into_snapshot_is_flagged(self):
+        files = {
+            "third_party/tiny-skia-cpp/BUILD.bazel": (
+                'deps = ["//third_party/tiny-skia-cpp/third_party/tiny-skia:src"]\n'
+            )
+        }
+        findings = verifier.check(files, ALLOWLIST)
+        self.assertEqual(categories(findings), ["reference-into-allowlist"])
+
     def test_non_build_files_are_not_scanned_for_edges(self):
         files = {"docs/history.md": "The old backend used rules_rust and wgpu_native_ archives."}
         self.assertEqual(verifier.check(files, ALLOWLIST), [])
@@ -98,7 +116,7 @@ class CheckTest(unittest.TestCase):
 
 class FormatReportTest(unittest.TestCase):
     def test_empty_report(self):
-        self.assertEqual(verifier.format_report([]), "No Rust dependency edges found.")
+        self.assertEqual(verifier.format_report([]), "No Rust dependency edges found.\n")
 
     def test_report_groups_by_category_with_counts(self):
         findings = [

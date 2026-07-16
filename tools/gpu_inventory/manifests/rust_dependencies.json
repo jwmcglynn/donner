@@ -124,6 +124,11 @@
         "wgpu_native_"
       ]
     },
+    "third_party/BUILD.wgpu_native_platform": {
+      "tokens": [
+        "wgpu_native_"
+      ]
+    },
     "third_party/bazel/non_bcr_deps.bzl": {
       "tokens": [
         "gfx-rs/wgpu-native",

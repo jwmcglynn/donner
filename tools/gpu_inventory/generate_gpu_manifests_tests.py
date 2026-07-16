@@ -98,6 +98,22 @@ fn main() { }
             ],
         )
 
+    def test_reversed_attribute_orders_are_parsed(self):
+        wgsl = (
+            "@binding(3) @group(1) var<uniform> u: U;\n"
+            "@workgroup_size(4) @compute\n"
+            "fn main() { }\n"
+        )
+        result = gen.scan_wgsl(wgsl)
+        self.assertEqual(
+            result["bindings"],
+            [{"group": 1, "binding": 3, "name": "u", "type": "U", "addressSpace": "uniform"}],
+        )
+        self.assertEqual(
+            result["entryPoints"],
+            [{"name": "main", "stage": "compute", "workgroupSize": ["4"]}],
+        )
+
     def test_features_builtins_and_structs(self):
         result = gen.scan_wgsl(self.WGSL)
         self.assertIn("discard", result["features"])
@@ -116,6 +132,8 @@ class BuildManifestsTest(unittest.TestCase):
         "donner/inline_shader.cc": 'constexpr std::string_view kWgsl = R"wgsl(@vertex\nfn vs() {})wgsl";\n',
         "donner/plain.cc": "int main() { return 0; }\n",
         "examples/outside.cc": "wgpu::Device d;\n",
+        "third_party/patches/imgui_wgpu_texture_cache.patch": "+WGPUTextureView view;\n",
+        "third_party/patches/glfw_bazel_build_files.patch": "+cc_library(\n",
         "third_party/vendored/lib.rs": "fn main() {}\n",
         "third_party/active/Cargo.toml": "[package]\n",
         "MODULE.bazel": 'bazel_dep(name = "rules_rust", version = "0.1")\n',
@@ -123,10 +141,26 @@ class BuildManifestsTest(unittest.TestCase):
     }
     ALLOWLIST = ["third_party/vendored/"]
 
-    def test_gpu_operations_scoped_to_donner_sources(self):
+    def test_gpu_operations_cover_first_party_sources(self):
         manifest = gen.build_gpu_operations_manifest(self.FILES)
-        self.assertEqual(list(manifest["files"]), ["donner/gpu_user.cc"])
+        self.assertEqual(list(manifest["files"]), ["donner/gpu_user.cc", "examples/outside.cc"])
         self.assertEqual(manifest["files"]["donner/gpu_user.cc"]["operations"], ["createBuffer"])
+
+    def test_gpu_operations_entries_carry_content_hash(self):
+        manifest = gen.build_gpu_operations_manifest(self.FILES)
+        entry = manifest["files"]["donner/gpu_user.cc"]
+        self.assertEqual(entry["sha256"], gen.content_sha256(self.FILES["donner/gpu_user.cc"]))
+
+    def test_vendored_sources_are_excluded(self):
+        files = {"third_party/webgpu-cpp/webgpu.hpp.cc": "wgpu::Device d;"}
+        manifest = gen.build_gpu_operations_manifest(files)
+        self.assertEqual(manifest["files"], {})
+
+    def test_wgpu_patch_files_are_inventoried(self):
+        manifest = gen.build_gpu_operations_manifest(self.FILES)
+        self.assertEqual(
+            manifest["wgpuPatchFiles"], ["third_party/patches/imgui_wgpu_texture_cache.patch"]
+        )
 
     def test_shader_manifest_includes_inline_wgsl(self):
         manifest = gen.build_shader_features_manifest(self.FILES)
@@ -134,6 +168,11 @@ class BuildManifestsTest(unittest.TestCase):
             sorted(manifest["shaders"]),
             ["donner/inline_shader.cc#kWgsl", "donner/shaders/fill.wgsl"],
         )
+
+    def test_unassigned_inline_wgsl_gets_index_key(self):
+        files = {"donner/arg.cc": 'createShader(device, R"wgsl(@vertex\nfn vs() {})wgsl");\n'}
+        manifest = gen.build_shader_features_manifest(files)
+        self.assertEqual(sorted(manifest["shaders"]), ["donner/arg.cc#inline0"])
 
     def test_editor_manifest_captures_imgui_and_define(self):
         manifest = gen.build_editor_integration_manifest(self.FILES)
