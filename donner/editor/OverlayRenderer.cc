@@ -63,6 +63,14 @@ svg::PaintParams MakeSelectionStrokePaint(double worldStrokeWidth, double opacit
   return paint;
 }
 
+svg::PaintParams MakeTextSelectionFillPaint() {
+  svg::PaintParams paint;
+  paint.fill = svg::PaintServer::Solid(css::Color(EditorTheme::Active().selectionRgba(0x55)));
+  paint.stroke = svg::PaintServer::None{};
+  paint.fillOpacity = 1.0;
+  return paint;
+}
+
 svg::PaintParams MakePathControlLinePaint(double worldStrokeWidth) {
   svg::PaintParams paint;
   paint.fill = svg::PaintServer::None{};
@@ -722,7 +730,23 @@ SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
                       AppendChromeItemsOptions{.includePathPointChrome = false});
   }
 
-  if (selection.empty() || selectionDetail == SelectionChromeDetail::EditingChromeOnly) {
+  if (selection.empty()) {
+    return snapshot;
+  }
+
+  if (selectionDetail == SelectionChromeDetail::EditingChromeOnly) {
+    AppendChromeItems(
+        selection, cullRectDoc, /*outPaths=*/nullptr, /*outAabbs=*/nullptr,
+        /*outPathAnchorBoxes=*/nullptr, /*outPathControlLines=*/nullptr,
+        /*outPathControlPointBoxes=*/nullptr, &snapshot.textBaselinesDoc,
+        AppendChromeItemsOptions{
+            .includePaths = false,
+            .includePerElementAabbs = false,
+            .includePathPointChrome = false,
+            .canvasScale = scale,
+            .devicePixelRatio = devicePixelRatio,
+            .representedDocumentFromLiveDocument = representedDocumentFromLiveDocument,
+        });
     return snapshot;
   }
 
@@ -742,7 +766,7 @@ SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
     AppendChromeItems(
         selection, cullRectDoc, &snapshot.paths, &snapshot.aabbsDoc,
         /*outPathAnchorBoxes=*/nullptr, /*outPathControlLines=*/nullptr,
-        /*outPathControlPointBoxes=*/nullptr, /*outTextBaselines=*/nullptr,
+        /*outPathControlPointBoxes=*/nullptr, &snapshot.textBaselinesDoc,
         AppendChromeItemsOptions{
             .includePaths = true,
             .includePerElementAabbs = false,
@@ -832,8 +856,8 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
       !snapshot.marqueeDoc.has_value() && !snapshot.lockedFlash.has_value() &&
       !snapshot.livePathPreview.has_value() && !snapshot.penPreviewSegmentDoc.has_value() &&
       !snapshot.penCloseAffordanceDoc.has_value() && !snapshot.textCaretDoc.has_value() &&
-      !snapshot.textFrameCornersDoc.has_value() && !snapshot.textBoxDragPreviewDoc.has_value() &&
-      snapshot.textBaselinesDoc.empty()) {
+      snapshot.textSelectionQuadsDoc.empty() && !snapshot.textFrameCornersDoc.has_value() &&
+      !snapshot.textBoxDragPreviewDoc.has_value() && snapshot.textBaselinesDoc.empty()) {
     return;
   }
 
@@ -863,6 +887,18 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
     shape.fillRule = preview.fillRule;
     shape.parentFromEntity = Transform2d();
     renderer.drawPath(shape, paint.strokeParams);
+  }
+
+  if (!snapshot.textSelectionQuadsDoc.empty()) {
+    const svg::PaintParams selectionFill = MakeTextSelectionFillPaint();
+    renderer.setPaint(selectionFill);
+    renderer.setTransform(snapshot.canvasFromDoc);
+    for (const std::array<Vector2d, 4>& corners : snapshot.textSelectionQuadsDoc) {
+      svg::PathShape shape;
+      shape.path = PathForCorners(corners);
+      shape.parentFromEntity = Transform2d();
+      renderer.drawPath(shape, selectionFill.strokeParams);
+    }
   }
 
   // Baseline underlay for selected text: drawn before every other chrome

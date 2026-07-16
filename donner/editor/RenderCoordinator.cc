@@ -391,10 +391,12 @@ void RenderCoordinator::resetForLoadedDocument() {
   textEditingCaretDoc_.reset();
   textEditingFrameCornersDoc_.reset();
   textEditingFrameOpacity_ = 1.0f;
+  textEditingSelectionQuadsDoc_.clear();
   textBoxDragPreviewDoc_.reset();
   lastOverlayTextEditingCaretDoc_.reset();
   lastOverlayTextEditingFrameCornersDoc_.reset();
   lastOverlayTextEditingFrameOpacity_ = 1.0f;
+  lastOverlayTextEditingSelectionQuadsDoc_.clear();
   lastOverlayTextBoxDragPreviewDoc_.reset();
   renderScheduler_.reset();
   displayNoneSuppressedSelectionEntity_ = entt::null;
@@ -483,6 +485,7 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
       textEditingCaretDoc_ != lastOverlayTextEditingCaretDoc_ ||
       textEditingFrameCornersDoc_ != lastOverlayTextEditingFrameCornersDoc_ ||
       textEditingFrameOpacity_ != lastOverlayTextEditingFrameOpacity_ ||
+      textEditingSelectionQuadsDoc_ != lastOverlayTextEditingSelectionQuadsDoc_ ||
       textBoxDragPreviewDoc_ != lastOverlayTextBoxDragPreviewDoc_;
   if (!selectionDetail.has_value()) {
     if (overlayGeometryDiffers || IsUnsetTimePoint(overlayStableSince_)) {
@@ -553,6 +556,7 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   chromeSnapshot.penPreviewSegmentDoc = penHoverPreviewSegmentDoc_;
   chromeSnapshot.penCloseAffordanceDoc = penHoverCloseAffordanceDoc_;
   chromeSnapshot.textCaretDoc = textEditingCaretDoc_;
+  chromeSnapshot.textSelectionQuadsDoc = textEditingSelectionQuadsDoc_;
   chromeSnapshot.textFrameCornersDoc = textEditingFrameCornersDoc_;
   chromeSnapshot.textFrameOpacity = textEditingFrameOpacity_;
   chromeSnapshot.textBoxDragPreviewDoc = textBoxDragPreviewDoc_;
@@ -579,6 +583,7 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
       chromeSnapshot.orientedBoundsDoc.has_value() || chromeSnapshot.livePathPreview.has_value() ||
       chromeSnapshot.penPreviewSegmentDoc.has_value() ||
       chromeSnapshot.penCloseAffordanceDoc.has_value() || chromeSnapshot.textCaretDoc.has_value() ||
+      !chromeSnapshot.textSelectionQuadsDoc.empty() ||
       chromeSnapshot.textFrameCornersDoc.has_value() ||
       chromeSnapshot.textBoxDragPreviewDoc.has_value();
   overlayCost.payloadBytes =
@@ -604,6 +609,7 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   lastOverlayTextEditingCaretDoc_ = textEditingCaretDoc_;
   lastOverlayTextEditingFrameCornersDoc_ = textEditingFrameCornersDoc_;
   lastOverlayTextEditingFrameOpacity_ = textEditingFrameOpacity_;
+  lastOverlayTextEditingSelectionQuadsDoc_ = textEditingSelectionQuadsDoc_;
   lastOverlayTextBoxDragPreviewDoc_ = textBoxDragPreviewDoc_;
   lastFrameCostBreakdown_.overlay = overlayCost;
   return true;

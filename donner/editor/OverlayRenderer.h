@@ -200,6 +200,9 @@ struct SelectionChromeSnapshot {
   };
   /// The active text-editing caret, or nullopt when no text session is open.
   std::optional<TextCaret> textCaretDoc;
+  /// Highlight quads for the active text range, in document space. Each quad
+  /// follows its character cell through the text element's transform.
+  std::vector<std::array<Vector2d, 4>> textSelectionQuadsDoc;
   /// Session frame for the active text-editing session: local TL, TR, BR, BL
   /// corners mapped through the text's transform. An ORIENTED quad - after a
   /// rotate it stays aligned to the text's rotation, never the axis-aligned

@@ -936,6 +936,7 @@ donner_cc_library(
         ":layer_inspector_diagnostics",
         ":layer_tree_model",
         ":layers_panel",
+        ":lock_state",
         ":menu_bar_presenter",
         ":native_dialog_coordinator",
         ":native_window_chrome",

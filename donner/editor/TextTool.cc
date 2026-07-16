@@ -183,14 +183,30 @@ void TextTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
       }
       if (const std::optional<std::size_t> caret = caretIndexAtPoint(documentPoint);
           caret.has_value()) {
+        if (modifiers.shift) {
+          if (!selectionAnchorIndex_.has_value()) {
+            selectionAnchorIndex_ = caretIndex_;
+          }
+        } else {
+          selectionAnchorIndex_ = *caret;
+        }
         caretIndex_ = *caret;
+        selectingText_ = true;
         resetCaretBlinkPhase();
         return;
       }
       if (const std::optional<Box2d> frameLocal = sessionFrameLocal(); frameLocal.has_value()) {
         const Vector2d localPoint = documentFromText_.inverse().transformPosition(documentPoint);
         if (frameLocal->contains(localPoint)) {
+          if (modifiers.shift) {
+            if (!selectionAnchorIndex_.has_value()) {
+              selectionAnchorIndex_ = caretIndex_;
+            }
+          } else {
+            selectionAnchorIndex_ = content_.size();
+          }
           caretIndex_ = content_.size();
+          selectingText_ = true;
           resetCaretBlinkPhase();
           return;
         }
@@ -211,6 +227,8 @@ void TextTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
         });
     if (hitText.has_value()) {
       beginEditingSessionForExisting(editor, *hitText, documentPoint);
+      selectionAnchorIndex_ = caretIndex_;
+      selectingText_ = true;
       return;
     }
   }
@@ -227,6 +245,23 @@ void TextTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, boo
   if (frameGesture_ != FrameGesture::None) {
     if (buttonHeld) {
       updateFrameGesture(editor, documentPoint);
+    }
+    return;
+  }
+
+  if (state_ == State::Editing && selectingText_) {
+    if (buttonHeld) {
+      if (const std::optional<std::size_t> caret = caretIndexAtPoint(documentPoint);
+          caret.has_value()) {
+        caretIndex_ = *caret;
+        resetCaretBlinkPhase();
+      } else if (const std::optional<Box2d> frameLocal = sessionFrameLocal();
+                 frameLocal.has_value() &&
+                 frameLocal->contains(
+                     documentFromText_.inverse().transformPosition(documentPoint))) {
+        caretIndex_ = content_.size();
+        resetCaretBlinkPhase();
+      }
     }
     return;
   }
@@ -252,6 +287,15 @@ void TextTool::onMouseUp(EditorApp& editor, const Vector2d& documentPoint) {
     }
     // Frame gestures end on release; the editing session stays open.
     frameGesture_ = FrameGesture::None;
+    return;
+  }
+
+  if (state_ == State::Editing && selectingText_) {
+    onMouseMove(editor, documentPoint, /*buttonHeld=*/true);
+    selectingText_ = false;
+    if (selectionAnchorIndex_ == caretIndex_) {
+      selectionAnchorIndex_.reset();
+    }
     return;
   }
 
@@ -316,6 +360,8 @@ void TextTool::beginEditingSession(EditorApp& editor, const Vector2d& originDoc,
   content_.clear();
   cachedCharWidths_.clear();
   caretIndex_ = 0;
+  selectionAnchorIndex_.reset();
+  selectingText_ = false;
   state_ = State::Editing;
   pointFrameVisible_ = boxDoc.has_value();
   pointFrameFadeStart_.reset();
@@ -397,6 +443,8 @@ void TextTool::beginEditingSessionForExisting(EditorApp& editor, const svg::SVGT
       boxText_.has_value() ? std::nullopt : std::make_optional(documentPoint);
   cachedCharWidths_ = boxText_.has_value() ? measureCharacterWidths(editor) : std::vector<double>{};
   caretIndex_ = caretIndexAtPoint(documentPoint).value_or(content_.size());
+  selectionAnchorIndex_.reset();
+  selectingText_ = false;
   resetCaretBlinkPhase();
 
   editor.setSelection(text);
@@ -598,6 +646,7 @@ void TextTool::insertCodepoints(EditorApp& editor, std::span<const char32_t> cod
     return;
   }
 
+  deleteSelection();
   content_.insert(content_.begin() + static_cast<std::ptrdiff_t>(caretIndex_), inserted.begin(),
                   inserted.end());
   caretIndex_ += inserted.size();
@@ -610,6 +659,7 @@ void TextTool::insertNewline(EditorApp& editor) {
   if (state_ != State::Editing) {
     return;
   }
+  deleteSelection();
   content_.insert(content_.begin() + static_cast<std::ptrdiff_t>(caretIndex_), U'\n');
   ++caretIndex_;
   resetCaretBlinkPhase();
@@ -618,7 +668,16 @@ void TextTool::insertNewline(EditorApp& editor) {
 }
 
 void TextTool::backspace(EditorApp& editor) {
-  if (state_ != State::Editing || caretIndex_ == 0) {
+  if (state_ != State::Editing) {
+    return;
+  }
+  if (deleteSelection()) {
+    resetCaretBlinkPhase();
+    hidePointFrameAfterTyping();
+    syncContentToDom(editor);
+    return;
+  }
+  if (caretIndex_ == 0) {
     return;
   }
   content_.erase(content_.begin() + static_cast<std::ptrdiff_t>(caretIndex_) - 1);
@@ -629,7 +688,16 @@ void TextTool::backspace(EditorApp& editor) {
 }
 
 void TextTool::deleteForward(EditorApp& editor) {
-  if (state_ != State::Editing || caretIndex_ >= content_.size()) {
+  if (state_ != State::Editing) {
+    return;
+  }
+  if (deleteSelection()) {
+    resetCaretBlinkPhase();
+    hidePointFrameAfterTyping();
+    syncContentToDom(editor);
+    return;
+  }
+  if (caretIndex_ >= content_.size()) {
     return;
   }
   content_.erase(content_.begin() + static_cast<std::ptrdiff_t>(caretIndex_));
@@ -638,9 +706,25 @@ void TextTool::deleteForward(EditorApp& editor) {
   syncContentToDom(editor);
 }
 
-void TextTool::moveCaret(EditorApp& editor, CaretMove move) {
+void TextTool::moveCaret(EditorApp& editor, CaretMove move, bool extendSelection) {
   if (state_ != State::Editing) {
     return;
+  }
+
+  if (extendSelection) {
+    if (!selectionAnchorIndex_.has_value()) {
+      selectionAnchorIndex_ = caretIndex_;
+    }
+  } else if (const std::optional<SelectionRange> selection = selectionRange();
+             selection.has_value() && (move == CaretMove::Left || move == CaretMove::Right ||
+                                       move == CaretMove::Up || move == CaretMove::Down)) {
+    caretIndex_ =
+        (move == CaretMove::Left || move == CaretMove::Up) ? selection->start : selection->end;
+    selectionAnchorIndex_.reset();
+    resetCaretBlinkPhase();
+    return;
+  } else {
+    selectionAnchorIndex_.reset();
   }
 
   const std::vector<std::u32string> lines = displayLines(editor);
@@ -683,6 +767,46 @@ void TextTool::moveCaret(EditorApp& editor, CaretMove move) {
       break;
     }
   }
+  if (selectionAnchorIndex_ == caretIndex_) {
+    selectionAnchorIndex_.reset();
+  }
+  resetCaretBlinkPhase();
+}
+
+void TextTool::selectAll() {
+  if (state_ != State::Editing) {
+    return;
+  }
+  selectionAnchorIndex_ = 0u;
+  caretIndex_ = content_.size();
+  selectingText_ = false;
+  if (content_.empty()) {
+    selectionAnchorIndex_.reset();
+  }
+  resetCaretBlinkPhase();
+}
+
+std::optional<TextTool::SelectionRange> TextTool::selectionRange() const {
+  if (!selectionAnchorIndex_.has_value() || *selectionAnchorIndex_ == caretIndex_) {
+    return std::nullopt;
+  }
+  return SelectionRange{
+      .start = std::min(*selectionAnchorIndex_, caretIndex_),
+      .end = std::max(*selectionAnchorIndex_, caretIndex_),
+  };
+}
+
+bool TextTool::deleteSelection() {
+  const std::optional<SelectionRange> selection = selectionRange();
+  if (!selection.has_value()) {
+    return false;
+  }
+  content_.erase(content_.begin() + static_cast<std::ptrdiff_t>(selection->start),
+                 content_.begin() + static_cast<std::ptrdiff_t>(selection->end));
+  caretIndex_ = selection->start;
+  selectionAnchorIndex_.reset();
+  selectingText_ = false;
+  return true;
 }
 
 void TextTool::toggleBold(EditorApp& editor) {
@@ -783,6 +907,8 @@ void TextTool::cancel() {
   content_.clear();
   cachedCharWidths_.clear();
   caretIndex_ = 0;
+  selectionAnchorIndex_.reset();
+  selectingText_ = false;
   sessionBeforeSource_.reset();
   previousSelection_.clear();
   pointFrameVisible_ = false;
@@ -1151,6 +1277,33 @@ std::optional<TextTool::EditingChrome> TextTool::editingChrome(EditorApp& editor
   if (const std::optional<Box2d> frameLocal = sessionFrameLocal(); frameLocal.has_value()) {
     chrome.frameCornersDoc = FrameCornersDoc(documentFromText_, *frameLocal);
     chrome.frameOpacity = frameOpacity;
+  }
+  if (const std::optional<SelectionRange> selection = selectionRange(); selection.has_value()) {
+    const std::vector<Box2d> selectedExtents =
+        sessionText_->withWriteAccess([this, &selection](svg::DocumentWriteAccess&, EntityHandle) {
+          std::vector<Box2d> extents;
+          extents.reserve(selection->end - selection->start);
+          std::size_t domIndex = 0u;
+          const std::size_t domCharCount =
+              static_cast<std::size_t>(std::max(0L, sessionText_->getNumberOfChars()));
+          for (std::size_t logicalIndex = 0; logicalIndex < content_.size(); ++logicalIndex) {
+            if (content_[logicalIndex] == U'\n') {
+              continue;
+            }
+            if (logicalIndex >= selection->start && logicalIndex < selection->end &&
+                domIndex < domCharCount) {
+              extents.push_back(sessionText_->getExtentOfChar(domIndex));
+            }
+            ++domIndex;
+          }
+          return extents;
+        });
+    chrome.selectionQuadsDoc.reserve(selectedExtents.size());
+    for (const Box2d& extent : selectedExtents) {
+      if (!extent.isEmpty()) {
+        chrome.selectionQuadsDoc.push_back(FrameCornersDoc(documentFromText_, extent));
+      }
+    }
   }
   return chrome;
 }
