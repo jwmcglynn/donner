@@ -383,14 +383,20 @@ private:
   struct TextureRecord {
     TextureDescriptor descriptor;  //!< Creation descriptor.
   };
-  /// Validated per-view state, including a snapshot of the viewed texture's properties used by
-  /// render pass and bind group validation.
+  /// Identity of a resource at a point in time: slot plus generation, so slot reuse cannot alias
+  /// two different resources.
+  struct ResourceIdentity {
+    uint32_t slotIndex = 0;   //!< Resource slot index.
+    uint32_t generation = 0;  //!< Slot generation at capture time.
+
+    /// Equality operator. @param other Identity to compare against.
+    bool operator==(const ResourceIdentity& other) const = default;
+  };
+  /// Validated per-view state. Consumers re-resolve the viewed texture through
+  /// \ref resolveViewedTexture on every use, so a view cannot outlive its texture unnoticed.
   struct TextureViewRecord {
-    TextureViewDescriptor descriptor;                         //!< Creation descriptor.
-    uint32_t textureSlot = 0;                                 //!< Slot of the viewed texture.
-    TextureFormat textureFormat = TextureFormat::RGBA8Unorm;  //!< Viewed texture format.
-    Extent2d textureSize;                                     //!< Viewed texture extent.
-    TextureUsage textureUsage = TextureUsage::None;           //!< Viewed texture usage.
+    TextureViewDescriptor descriptor;  //!< Creation descriptor.
+    ResourceIdentity textureIdentity;  //!< Identity of the viewed texture.
   };
   /// Validated per-sampler state.
   struct SamplerRecord {
@@ -400,24 +406,15 @@ private:
   struct BindGroupLayoutRecord {
     BindGroupLayoutDescriptor descriptor;  //!< Creation descriptor.
   };
-  /// Identity of a bind group layout at a point in time: slot plus generation, so slot reuse
-  /// cannot alias two different layouts.
-  struct LayoutIdentity {
-    uint32_t slotIndex = 0;   //!< Layout slot index.
-    uint32_t generation = 0;  //!< Layout generation at capture time.
-
-    /// Equality operator. @param other Identity to compare against.
-    bool operator==(const LayoutIdentity& other) const = default;
-  };
   /// Validated per-bind-group state.
   struct BindGroupRecord {
-    BindGroupDescriptor descriptor;  //!< Creation descriptor.
-    LayoutIdentity layoutIdentity;   //!< Identity of the layout this group was created against.
+    BindGroupDescriptor descriptor;   //!< Creation descriptor.
+    ResourceIdentity layoutIdentity;  //!< Identity of the layout this group was created against.
   };
   /// Validated per-pipeline-layout state.
   struct PipelineLayoutRecord {
-    PipelineLayoutDescriptor descriptor;             //!< Creation descriptor.
-    std::vector<LayoutIdentity> bindGroupLayoutIds;  //!< Layout identities, by group index.
+    PipelineLayoutDescriptor descriptor;               //!< Creation descriptor.
+    std::vector<ResourceIdentity> bindGroupLayoutIds;  //!< Layout identities, by group index.
   };
   /// Validated per-shader-module state.
   struct ShaderModuleRecord {
@@ -425,8 +422,8 @@ private:
   };
   /// Validated per-pipeline state used for draw-time compatibility checks.
   struct RenderPipelineRecord {
-    RenderPipelineDescriptor descriptor;             //!< Creation descriptor.
-    std::vector<LayoutIdentity> bindGroupLayoutIds;  //!< Pipeline layout's group identities.
+    RenderPipelineDescriptor descriptor;               //!< Creation descriptor.
+    std::vector<ResourceIdentity> bindGroupLayoutIds;  //!< Pipeline layout's group identities.
   };
   /// A finished, not-yet-submitted command buffer.
   struct CommandBufferRecord {
@@ -445,6 +442,15 @@ private:
   template <typename Record, typename HandleLike>
   Result<const Record*> resolve(const details::SlotTable<Record>& table,
                                 const HandleLike& handleLike, std::string_view resourceName) const;
+
+  /**
+   * Re-resolves the texture a view was created against. Returns
+   * \ref GpuErrorType::InvalidHandle if the texture was destroyed, including when its slot was
+   * reused by a newer texture, so stale views can never alias another texture.
+   *
+   * @param viewRecord Resolved record of the view being consumed.
+   */
+  Result<const TextureRecord*> resolveViewedTexture(const TextureViewRecord& viewRecord) const;
 
   /// Allocates a slot in \p table and mints a handle carrying this device's identity.
   /// @param table Destination table. @param record Validated record to store.

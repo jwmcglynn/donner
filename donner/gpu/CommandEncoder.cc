@@ -3,6 +3,7 @@
 #include <cmath>
 #include <format>
 #include <utility>
+#include <vector>
 
 #include "donner/gpu/CheckedArithmetic.h"
 
@@ -90,6 +91,8 @@ Result<RenderPassEncoder*> CommandEncoder::beginRenderPass(const RenderPassDescr
   }
 
   Extent2d passExtent;
+  std::vector<Device::ResourceIdentity> seenViews;
+  seenViews.reserve(descriptor.colorAttachments.size());
   for (size_t i = 0; i < descriptor.colorAttachments.size(); ++i) {
     const RenderPassColorAttachment& attachment = descriptor.colorAttachments[i];
     auto viewRecord =
@@ -97,7 +100,29 @@ Result<RenderPassEncoder*> CommandEncoder::beginRenderPass(const RenderPassDescr
     if (viewRecord.hasError()) {
       return fail(std::move(viewRecord).error()).error();
     }
-    if (!HasAllFlags(viewRecord.result()->textureUsage, TextureUsage::RenderAttachment)) {
+
+    const Device::ResourceIdentity viewIdentity{attachment.view.slotIndex(),
+                                                attachment.view.generation()};
+    for (const Device::ResourceIdentity& seenView : seenViews) {
+      if (seenView == viewIdentity) {
+        return fail(Err(GpuErrorType::InvalidDescriptor,
+                        std::format("beginRenderPass: attachment {} view \"{}\" appears in "
+                                    "multiple color attachments of the same pass",
+                                    i, viewRecord.result()->descriptor.label.str())))
+            .error();
+      }
+    }
+    seenViews.push_back(viewIdentity);
+
+    // Re-resolve the viewed texture so a view of a destroyed (or slot-reused) texture fails
+    // closed here instead of aliasing another texture.
+    auto viewedTexture = device_->resolveViewedTexture(*viewRecord.result());
+    if (viewedTexture.hasError()) {
+      return fail(std::move(viewedTexture).error()).error();
+    }
+    const TextureDescriptor& textureDescriptor = viewedTexture.result()->descriptor;
+
+    if (!HasAllFlags(textureDescriptor.usage, TextureUsage::RenderAttachment)) {
       return fail(Err(GpuErrorType::UsageMismatch,
                       std::format("beginRenderPass: attachment {} view \"{}\" lacks the "
                                   "RenderAttachment usage",
@@ -112,14 +137,13 @@ Result<RenderPassEncoder*> CommandEncoder::beginRenderPass(const RenderPassDescr
       }
     }
     if (i == 0) {
-      passExtent = viewRecord.result()->textureSize;
-    } else if (!(viewRecord.result()->textureSize == passExtent)) {
+      passExtent = textureDescriptor.size;
+    } else if (!(textureDescriptor.size == passExtent)) {
       return fail(Err(GpuErrorType::InvalidDescriptor,
                       std::format("beginRenderPass: attachment {} extent {}x{} differs from "
                                   "attachment 0 extent {}x{}",
-                                  i, viewRecord.result()->textureSize.width,
-                                  viewRecord.result()->textureSize.height, passExtent.width,
-                                  passExtent.height)))
+                                  i, textureDescriptor.size.width, textureDescriptor.size.height,
+                                  passExtent.width, passExtent.height)))
           .error();
     }
   }

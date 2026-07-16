@@ -239,6 +239,20 @@ Result<Texture> Device::createTexture(const TextureDescriptor& descriptor) {
   return handle;
 }
 
+Result<const Device::TextureRecord*> Device::resolveViewedTexture(
+    const TextureViewRecord& viewRecord) const {
+  const TextureRecord* record =
+      textures_.find(viewRecord.textureIdentity.slotIndex, viewRecord.textureIdentity.generation);
+  if (record == nullptr) {
+    return Err(
+        GpuErrorType::InvalidHandle,
+        std::format("textureView \"{}\" is stale; the view's texture was destroyed "
+                    "(texture slot {})",
+                    viewRecord.descriptor.label.str(), viewRecord.textureIdentity.slotIndex));
+  }
+  return record;
+}
+
 Result<TextureView> Device::createTextureView(const Texture& texture,
                                               const TextureViewDescriptor& descriptor) {
   auto textureRecord = resolve(textures_, texture, TextureTag::kName);
@@ -246,9 +260,7 @@ Result<TextureView> Device::createTextureView(const Texture& texture,
     return std::move(textureRecord).error();
   }
 
-  TextureViewRecord record{
-      descriptor, texture.slotIndex(), textureRecord.result()->descriptor.format,
-      textureRecord.result()->descriptor.size, textureRecord.result()->descriptor.usage};
+  TextureViewRecord record{descriptor, ResourceIdentity{texture.slotIndex(), texture.generation()}};
   TextureView handle = allocateHandle<TextureViewTag>(textureViews_, std::move(record));
   if (Status status = onCreateTextureView(handle.slotIndex(), texture.slotIndex(), descriptor);
       status.hasError()) {
@@ -367,7 +379,11 @@ Result<BindGroup> Device::createBindGroup(const BindGroupDescriptor& descriptor)
         if (viewRecord.hasError()) {
           return std::move(viewRecord).error();
         }
-        if (!HasAllFlags(viewRecord.result()->textureUsage, TextureUsage::Sampled)) {
+        auto viewedTexture = resolveViewedTexture(*viewRecord.result());
+        if (viewedTexture.hasError()) {
+          return std::move(viewedTexture).error();
+        }
+        if (!HasAllFlags(viewedTexture.result()->descriptor.usage, TextureUsage::Sampled)) {
           return Err(GpuErrorType::UsageMismatch,
                      std::format("BindGroupEntry binding {}: texture view \"{}\" lacks the "
                                  "Sampled usage",
@@ -393,7 +409,7 @@ Result<BindGroup> Device::createBindGroup(const BindGroupDescriptor& descriptor)
   }
 
   BindGroupRecord record{
-      descriptor, LayoutIdentity{descriptor.layout.slotIndex(), descriptor.layout.generation()}};
+      descriptor, ResourceIdentity{descriptor.layout.slotIndex(), descriptor.layout.generation()}};
   BindGroup handle = allocateHandle<BindGroupTag>(bindGroups_, std::move(record));
   if (Status status = onCreateBindGroup(handle.slotIndex(), descriptor); status.hasError()) {
     bindGroups_.release(handle.slotIndex());
@@ -410,14 +426,14 @@ Result<PipelineLayout> Device::createPipelineLayout(const PipelineLayoutDescript
                            descriptor.bindGroupLayouts.size(), kMaxBindGroups));
   }
 
-  std::vector<LayoutIdentity> layoutIds;
+  std::vector<ResourceIdentity> layoutIds;
   layoutIds.reserve(descriptor.bindGroupLayouts.size());
   for (const BindGroupLayoutRef& layoutRef : descriptor.bindGroupLayouts) {
     auto layoutRecord = resolve(bindGroupLayouts_, layoutRef, BindGroupLayoutTag::kName);
     if (layoutRecord.hasError()) {
       return std::move(layoutRecord).error();
     }
-    layoutIds.push_back(LayoutIdentity{layoutRef.slotIndex(), layoutRef.generation()});
+    layoutIds.push_back(ResourceIdentity{layoutRef.slotIndex(), layoutRef.generation()});
   }
 
   PipelineLayout handle = allocateHandle<PipelineLayoutTag>(
@@ -601,10 +617,13 @@ Result<uint64_t> Device::submit(CommandBuffer commandBuffer) {
       std::move(commandBuffers_.findMutable(slotIndex, commandBuffer.generation())->commands);
   commandBuffers_.release(slotIndex);
 
-  const uint64_t serial = ++lastSubmittedSerial_;
+  // Advance the serial only after the backend accepts the submission: a failed submit must not
+  // burn a serial, or completion waiters would treat the failed work as finished.
+  const uint64_t serial = lastSubmittedSerial_ + 1;
   if (Status status = onSubmit(serial, slotIndex, commands); status.hasError()) {
     return std::move(status).error();
   }
+  lastSubmittedSerial_ = serial;
   return serial;
 }
 
