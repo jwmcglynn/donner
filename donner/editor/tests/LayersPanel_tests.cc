@@ -817,6 +817,29 @@ TEST(LayersPanelTest, LockClickSetsLockedAttribute) {
       << "unlock should remove data-donner-locked, not set it to \"false\"";
 }
 
+TEST(LayersPanelTest, LockClickDeselectsLockedSubtreeAndPreservesOtherSelection) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <g id="group1">
+      <rect id="child" x="0" y="0" width="10" height="10"/>
+    </g>
+    <rect id="outside" x="20" y="0" width="10" height="10"/>
+  </svg>)");
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const std::optional<LayerTreeRow> child = FindRow(panel, "child");
+  const std::optional<LayerTreeRow> outside = FindRow(panel, "outside");
+  ASSERT_TRUE(child.has_value());
+  ASSERT_TRUE(outside.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{child->element, outside->element});
+
+  panel.handleLockClick(app, static_cast<std::size_t>(RowIndex(panel, "group1")));
+
+  EXPECT_THAT(app.selectedElements(), testing::ElementsAre(outside->element));
+  EXPECT_TRUE(panel.consumeSelectionChanged());
+}
+
 TEST(LayersPanelTest, LockSurvivesLoadFromSource) {
   EditorApp app;
   LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">

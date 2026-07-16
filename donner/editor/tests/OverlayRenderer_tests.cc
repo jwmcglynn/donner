@@ -243,27 +243,32 @@ TEST(OverlayRendererTest, EditingChromeOnlySkipsSelectionGeometry) {
   EXPECT_TRUE(snapshot.handleBoxesDoc.empty());
 }
 
-TEST(OverlayRendererTest, ActiveCombinedBoundsPreviewAvoidsSelectionPathCapture) {
+TEST(OverlayRendererTest, ActiveCombinedBoundsPreviewKeepsScaledSelectionPath) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTrivialSvg));
   auto rect = app.document().document().querySelector("#r1");
   ASSERT_TRUE(rect.has_value());
   app.setSelection(*rect);
 
+  const Transform2d scale = Transform2d::Scale(Vector2d(1.5, 1.2));
+  rect->cast<svg::SVGGraphicsElement>().setTransform(scale);
+
   const SelectionChromeBoundsPreview boundsPreview{
       .startBoundsDoc = Box2d::FromXYWH(20.0, 30.0, 40.0, 50.0),
-      .documentFromStartDocument = Transform2d::Translate(Vector2d(15.0, 5.0)),
+      .documentFromStartDocument = scale,
   };
   const SelectionChromeSnapshot snapshot = OverlayRenderer::captureChromeSnapshot(
       std::span<const svg::SVGElement>(app.selectedElements()), std::nullopt, Transform2d(),
       boundsPreview, std::span<const svg::SVGElement>(), std::nullopt,
       SelectionChromeDetail::CombinedBoundsOnly);
 
-  EXPECT_TRUE(snapshot.paths.empty());
+  ASSERT_EQ(snapshot.paths.size(), 1u);
+  EXPECT_EQ(snapshot.paths.front().pathDoc.bounds(),
+            scale.transformBox(boundsPreview.startBoundsDoc));
   EXPECT_TRUE(snapshot.aabbsDoc.empty());
   ASSERT_TRUE(snapshot.orientedBoundsDoc.has_value());
-  EXPECT_EQ(snapshot.orientedBoundsDoc->cornersDoc[0], Vector2d(35.0, 35.0));
-  EXPECT_EQ(snapshot.orientedBoundsDoc->cornersDoc[2], Vector2d(75.0, 85.0));
+  EXPECT_EQ(snapshot.orientedBoundsDoc->cornersDoc[0], Vector2d(30.0, 36.0));
+  EXPECT_EQ(snapshot.orientedBoundsDoc->cornersDoc[2], Vector2d(90.0, 96.0));
   EXPECT_EQ(snapshot.handleBoxesDoc.size(), 4u);
 }
 

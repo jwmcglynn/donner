@@ -239,6 +239,25 @@ TEST(SelectionAabbTest, SnapshotUsesTightTransformedPathBounds) {
          "path's transformed local AABB";
 }
 
+TEST(SelectionAabbTest, SnapshotIncludesGeometryStrokeExtents) {
+  constexpr std::string_view kSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 120">
+              <rect id="stroked" x="20" y="30" width="40" height="50"
+                    fill="red" stroke="black" stroke-width="10" stroke-linejoin="round"/>
+            </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  auto stroked = app.document().document().querySelector("#stroked");
+  ASSERT_TRUE(stroked.has_value());
+
+  const std::vector<svg::SVGElement> selection = {*stroked};
+  const std::vector<Box2d> bounds =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(selection));
+
+  EXPECT_THAT(bounds, testing::ElementsAre(BoxFromXYWHIs(15.0, 25.0, 50.0, 60.0)));
+}
+
 TEST(SelectionAabbTest, SnapshotOccludingWorldBoundsIncludesOnlyLaterPaintedGeometry) {
   constexpr std::string_view kSvg =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
@@ -442,7 +461,7 @@ TEST(SelectionAabbTest, TextWorldFrameBoundsMapsAuthoredBoxThroughTransform) {
   EXPECT_NEAR(frame->size().y, 120.0, 1e-6);
 }
 
-TEST(SelectionAabbTest, TextWorldFrameBoundsFallsBackToInkForPointText) {
+TEST(SelectionAabbTest, TextWorldFrameBoundsUsesFullObjectExtentForPointText) {
   constexpr std::string_view kSvg =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
               <text id="t" x="50" y="80" font-size="20" font-family="sans-serif">Hello</text>
@@ -463,10 +482,16 @@ TEST(SelectionAabbTest, TextWorldFrameBoundsFallsBackToInkForPointText) {
       boundsOf([](const svg::SVGTextElement& element) { return TextWorldFrameBounds(element); });
   const std::optional<Box2d> ink =
       boundsOf([](const svg::SVGTextElement& element) { return TextWorldInkBounds(element); });
+  const std::optional<Box2d> object = boundsOf([](const svg::SVGTextElement& element) {
+    return std::optional<Box2d>(
+        element.elementFromWorld().transformBox(element.objectBoundingBox()));
+  });
 
   ASSERT_TRUE(frame.has_value());
   ASSERT_TRUE(ink.has_value());
-  EXPECT_EQ(*frame, *ink);
+  ASSERT_TRUE(object.has_value());
+  EXPECT_EQ(*frame, *object);
+  EXPECT_NE(*frame, *ink);
 }
 
 TEST(SelectionAabbTest, SnapshotOccludingBoundsAllowConcurrentDom) {

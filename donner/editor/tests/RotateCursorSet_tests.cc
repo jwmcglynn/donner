@@ -1,5 +1,6 @@
 #include "donner/editor/RotateCursorSet.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <optional>
 
@@ -9,6 +10,34 @@ namespace donner::editor {
 namespace {
 
 constexpr int kCursorSizePx = 32;
+
+struct PixelBounds {
+  int minX = kCursorSizePx;
+  int minY = kCursorSizePx;
+  int maxX = -1;
+  int maxY = -1;
+
+  [[nodiscard]] int width() const { return maxX >= minX ? maxX - minX + 1 : 0; }
+  [[nodiscard]] int height() const { return maxY >= minY ? maxY - minY + 1 : 0; }
+};
+
+PixelBounds NonTransparentPixelBounds(const RotateCursorImage& image) {
+  PixelBounds bounds;
+  for (int y = 0; y < image.height; ++y) {
+    for (int x = 0; x < image.width; ++x) {
+      const std::size_t index =
+          (static_cast<std::size_t>(y) * image.width + static_cast<std::size_t>(x)) * 4u;
+      if (image.rgba[index + 3] == 0) {
+        continue;
+      }
+      bounds.minX = std::min(bounds.minX, x);
+      bounds.minY = std::min(bounds.minY, y);
+      bounds.maxX = std::max(bounds.maxX, x);
+      bounds.maxY = std::max(bounds.maxY, y);
+    }
+  }
+  return bounds;
+}
 
 std::size_t CountNonTransparentPixels(const RotateCursorImage& image) {
   std::size_t count = 0;
@@ -74,6 +103,14 @@ TEST(RotateCursorSetTest, RendersPanCursorImage) {
     EXPECT_EQ(image->rgba.size(), 32u * 32u * 4u);
     EXPECT_GT(CountNonTransparentPixels(*image), 100u);
     EXPECT_LT(CountNonTransparentPixels(*image), 32u * 32u);
+  }
+}
+
+TEST(RotateCursorSetTest, PanCursorsUseWhiteFillWithBlackOutline) {
+  for (PanCursorKind kind : {PanCursorKind::OpenHand, PanCursorKind::ClosedHand}) {
+    const std::optional<RotateCursorImage> image = RenderPanCursorImage(kind, nullptr);
+    ASSERT_TRUE(image.has_value());
+    EXPECT_GT(CountOpaqueBlackPixels(*image), CountOpaqueWhitePixels(*image));
   }
 }
 
@@ -165,6 +202,9 @@ TEST(RotateCursorSetTest, ScaleCursorIsBlackGlyphWithWhiteOutlineAndRotatesPerCo
   ASSERT_TRUE(topRight.has_value());
   EXPECT_GT(CountOpaqueBlackPixels(*topLeft), 20u);
   EXPECT_GT(CountOpaqueWhitePixels(*topLeft), 8u);
+  const PixelBounds glyphBounds = NonTransparentPixelBounds(*topLeft);
+  EXPECT_LE(glyphBounds.width(), 19);
+  EXPECT_LE(glyphBounds.height(), 19);
   EXPECT_NE(topLeft->rgba, topRight->rgba);
 }
 
