@@ -34,3 +34,20 @@ donner_cc_library(
         "//donner/base",
     ],
 )
+
+donner_cc_test(
+    name = "gpu_tests",
+    srcs = [
+        "tests/CommandEncoder_tests.cc",
+        "tests/DeviceValidation_tests.cc",
+        "tests/GpuResult_tests.cc",
+        "tests/GpuTestUtils.h",
+        "tests/HandleLifetime_tests.cc",
+        "tests/Handles_tests.cc",
+        "tests/RecordingDevice_tests.cc",
+    ],
+    deps = [
+        ":gpu",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
