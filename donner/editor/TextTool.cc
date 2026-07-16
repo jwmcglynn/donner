@@ -1267,22 +1267,27 @@ std::optional<TextTool::EditingChrome> TextTool::editingChrome(EditorApp& editor
   const double baselineY = originText_.y + static_cast<double>(line) * lineHeight;
 
   EditingChrome chrome;
-  // Approximate ascent/descent from the font size; exact metrics are not
-  // needed for a caret.
+  // Approximate the ascent from the font size and end the caret on the baseline.
   chrome.caretTopDoc =
       documentFromText_.transformPosition(Vector2d(caretX, baselineY - fontSize_ * 0.9));
-  chrome.caretBottomDoc =
-      documentFromText_.transformPosition(Vector2d(caretX, baselineY + fontSize_ * 0.25));
+  chrome.caretBottomDoc = documentFromText_.transformPosition(Vector2d(caretX, baselineY));
   const float frameOpacity = pointFrameOpacity();
   if (const std::optional<Box2d> frameLocal = sessionFrameLocal(); frameLocal.has_value()) {
     chrome.frameCornersDoc = FrameCornersDoc(documentFromText_, *frameLocal);
     chrome.frameOpacity = frameOpacity;
   }
   if (const std::optional<SelectionRange> selection = selectionRange(); selection.has_value()) {
-    const std::vector<Box2d> selectedExtents =
-        sessionText_->withWriteAccess([this, &selection](svg::DocumentWriteAccess&, EntityHandle) {
-          std::vector<Box2d> extents;
-          extents.reserve(selection->end - selection->start);
+    std::vector<std::size_t> displayLineByLogicalIndex;
+    displayLineByLogicalIndex.reserve(content_.size());
+    for (std::size_t displayLine = 0u; displayLine < lines.size(); ++displayLine) {
+      for (std::size_t column = 0u; column < lines[displayLine].size(); ++column) {
+        displayLineByLogicalIndex.push_back(displayLine);
+      }
+    }
+    const std::vector<Box2d> selectedLineExtents =
+        sessionText_->withWriteAccess([this, &displayLineByLogicalIndex, &lines, &selection](
+                                          svg::DocumentWriteAccess&, EntityHandle) {
+          std::vector<std::optional<Box2d>> extentsByLine(lines.size());
           std::size_t domIndex = 0u;
           const std::size_t domCharCount =
               static_cast<std::size_t>(std::max(0L, sessionText_->getNumberOfChars()));
@@ -1292,17 +1297,30 @@ std::optional<TextTool::EditingChrome> TextTool::editingChrome(EditorApp& editor
             }
             if (logicalIndex >= selection->start && logicalIndex < selection->end &&
                 domIndex < domCharCount) {
-              extents.push_back(sessionText_->getExtentOfChar(domIndex));
+              const Box2d extent = sessionText_->getExtentOfChar(domIndex);
+              const std::size_t displayLine = displayLineByLogicalIndex[logicalIndex];
+              if (!extent.isEmpty()) {
+                if (extentsByLine[displayLine].has_value()) {
+                  extentsByLine[displayLine]->addBox(extent);
+                } else {
+                  extentsByLine[displayLine] = extent;
+                }
+              }
             }
             ++domIndex;
           }
+          std::vector<Box2d> extents;
+          extents.reserve(extentsByLine.size());
+          for (const std::optional<Box2d>& extent : extentsByLine) {
+            if (extent.has_value()) {
+              extents.push_back(*extent);
+            }
+          }
           return extents;
         });
-    chrome.selectionQuadsDoc.reserve(selectedExtents.size());
-    for (const Box2d& extent : selectedExtents) {
-      if (!extent.isEmpty()) {
-        chrome.selectionQuadsDoc.push_back(FrameCornersDoc(documentFromText_, extent));
-      }
+    chrome.selectionQuadsDoc.reserve(selectedLineExtents.size());
+    for (const Box2d& extent : selectedLineExtents) {
+      chrome.selectionQuadsDoc.push_back(FrameCornersDoc(documentFromText_, extent));
     }
   }
   return chrome;
