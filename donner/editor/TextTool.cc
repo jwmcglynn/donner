@@ -161,6 +161,39 @@ std::size_t LogicalIndexForDomChar(const std::u32string& content, std::size_t do
   return logical;
 }
 
+struct TextVerticalMetrics {
+  double ascent = 0.0;
+  double descent = 0.0;
+};
+
+/// Resolve a stable ascender-to-descender cell from the text's em-box.
+TextVerticalMetrics ResolveTextVerticalMetrics(const svg::SVGTextElement& text,
+                                               double fallbackFontSize) {
+  return text.withWriteAccess([&text, fallbackFontSize](svg::DocumentWriteAccess&, EntityHandle) {
+    TextVerticalMetrics result{fallbackFontSize * 0.9, fallbackFontSize * 0.25};
+    const long charCount = text.getNumberOfChars();
+    if (charCount <= 0) {
+      return result;
+    }
+
+    double minBaselineY = text.getStartPositionOfChar(0u).y;
+    double maxBaselineY = minBaselineY;
+    for (long i = 1; i < charCount; ++i) {
+      const double baselineY = text.getStartPositionOfChar(static_cast<std::size_t>(i)).y;
+      minBaselineY = std::min(minBaselineY, baselineY);
+      maxBaselineY = std::max(maxBaselineY, baselineY);
+    }
+
+    const Box2d emBox = text.objectBoundingBox();
+    const double ascent = minBaselineY - emBox.topLeft.y;
+    const double descent = emBox.bottomRight.y - maxBaselineY;
+    if (ascent > 0.0 && descent >= 0.0) {
+      result = TextVerticalMetrics{ascent, descent};
+    }
+    return result;
+  });
+}
+
 }  // namespace
 
 void TextTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
@@ -175,7 +208,7 @@ void TextTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
   if (state_ == State::Editing) {
     // A press on the frame's transform handles starts a frame gesture; a
     // click inside the session's text moves the caret (inside the frame but
-    // off every glyph parks it at the end); a click anywhere else commits
+    // off its line cells parks it at the end); a click anywhere else commits
     // the session before the idle click rules run below.
     if (sessionText_.has_value()) {
       if (beginFrameGestureAtPoint(documentPoint, modifiers)) {
@@ -251,15 +284,10 @@ void TextTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, boo
 
   if (state_ == State::Editing && selectingText_) {
     if (buttonHeld) {
-      if (const std::optional<std::size_t> caret = caretIndexAtPoint(documentPoint);
+      if (const std::optional<std::size_t> caret =
+              caretIndexAtPoint(documentPoint, /*clampToNearestLine=*/true);
           caret.has_value()) {
         caretIndex_ = *caret;
-        resetCaretBlinkPhase();
-      } else if (const std::optional<Box2d> frameLocal = sessionFrameLocal();
-                 frameLocal.has_value() &&
-                 frameLocal->contains(
-                     documentFromText_.inverse().transformPosition(documentPoint))) {
-        caretIndex_ = content_.size();
         resetCaretBlinkPhase();
       }
     }
@@ -451,33 +479,92 @@ void TextTool::beginEditingSessionForExisting(EditorApp& editor, const svg::SVGT
   editor.flushFrame();
 }
 
-std::optional<std::size_t> TextTool::caretIndexAtPoint(const Vector2d& documentPoint) const {
+std::optional<std::size_t> TextTool::caretIndexAtPoint(const Vector2d& documentPoint,
+                                                       bool clampToNearestLine) const {
   if (!sessionText_.has_value()) {
     return std::nullopt;
   }
 
   const Vector2d textPoint = documentFromText_.inverse().transformPosition(documentPoint);
-  struct CharHit {
-    long index = -1;
-    bool afterCenter = false;
+  struct CaretCell {
+    std::size_t before = 0u;
+    std::size_t after = 0u;
+    double startX = 0.0;
+    double endX = 0.0;
   };
-  const CharHit hit = sessionText_->withWriteAccess([this, &textPoint](svg::DocumentWriteAccess&,
-                                                                       EntityHandle) -> CharHit {
-    CharHit result;
-    result.index = sessionText_->getCharNumAtPosition(textPoint);
-    if (result.index >= 0) {
-      const Box2d extent = sessionText_->getExtentOfChar(static_cast<std::size_t>(result.index));
-      result.afterCenter = textPoint.x > (extent.topLeft.x + extent.bottomRight.x) * 0.5;
-    }
-    return result;
-  });
-  if (hit.index < 0) {
+  struct CaretLine {
+    double baselineY = 0.0;
+    double minX = 0.0;
+    double maxX = 0.0;
+    std::vector<CaretCell> cells;
+  };
+  const std::vector<CaretLine> caretLines =
+      sessionText_->withWriteAccess([this](svg::DocumentWriteAccess&, EntityHandle) {
+        std::vector<CaretLine> lines;
+        const long charCount = sessionText_->getNumberOfChars();
+        constexpr double kBaselineYToleranceLocal = 0.25;
+        for (long i = 0; i < charCount; ++i) {
+          const std::size_t domIndex = static_cast<std::size_t>(i);
+          const Vector2d start = sessionText_->getStartPositionOfChar(domIndex);
+          const Vector2d end = sessionText_->getEndPositionOfChar(domIndex);
+          if (lines.empty() ||
+              std::abs(start.y - lines.back().baselineY) > kBaselineYToleranceLocal) {
+            lines.push_back(CaretLine{.baselineY = start.y,
+                                      .minX = std::min(start.x, end.x),
+                                      .maxX = std::max(start.x, end.x)});
+          }
+          CaretLine& line = lines.back();
+          line.minX = std::min(line.minX, std::min(start.x, end.x));
+          line.maxX = std::max(line.maxX, std::max(start.x, end.x));
+          const std::size_t logical = LogicalIndexForDomChar(content_, domIndex);
+          line.cells.push_back(CaretCell{.before = logical,
+                                         .after = std::min(logical + 1u, content_.size()),
+                                         .startX = start.x,
+                                         .endX = end.x});
+        }
+        return lines;
+      });
+  if (caretLines.empty()) {
     return std::nullopt;
   }
 
-  const std::size_t logical = LogicalIndexForDomChar(content_, static_cast<std::size_t>(hit.index));
-  // A click in the trailing half of a glyph places the caret after it.
-  return hit.afterCenter ? std::min(logical + 1u, content_.size()) : logical;
+  const TextVerticalMetrics verticalMetrics = ResolveTextVerticalMetrics(*sessionText_, fontSize_);
+  const CaretLine* nearestLine = nullptr;
+  double nearestLineDistance = 0.0;
+  for (const CaretLine& line : caretLines) {
+    const double top = line.baselineY - verticalMetrics.ascent;
+    const double bottom = line.baselineY + verticalMetrics.descent;
+    const bool insideY = textPoint.y >= top && textPoint.y <= bottom;
+    const bool insideX = textPoint.x >= line.minX && textPoint.x <= line.maxX;
+    if (!clampToNearestLine && (!insideX || !insideY)) {
+      continue;
+    }
+    const double distance =
+        textPoint.y < top ? top - textPoint.y : (textPoint.y > bottom ? textPoint.y - bottom : 0.0);
+    if (!nearestLine || distance < nearestLineDistance) {
+      nearestLine = &line;
+      nearestLineDistance = distance;
+    }
+  }
+  if (!nearestLine) {
+    return std::nullopt;
+  }
+
+  std::size_t nearestCaret = nearestLine->cells.front().before;
+  double nearestCaretDistance = std::abs(textPoint.x - nearestLine->cells.front().startX);
+  for (const CaretCell& cell : nearestLine->cells) {
+    const double beforeDistance = std::abs(textPoint.x - cell.startX);
+    if (beforeDistance < nearestCaretDistance) {
+      nearestCaret = cell.before;
+      nearestCaretDistance = beforeDistance;
+    }
+    const double afterDistance = std::abs(textPoint.x - cell.endX);
+    if (afterDistance < nearestCaretDistance) {
+      nearestCaret = cell.after;
+      nearestCaretDistance = afterDistance;
+    }
+  }
+  return nearestCaret;
 }
 
 std::optional<Box2d> TextTool::sessionFrameLocal() const {
@@ -1265,12 +1352,13 @@ std::optional<TextTool::EditingChrome> TextTool::editingChrome(EditorApp& editor
 
   const double lineHeight = fontSize_ * kLineHeightFactor;
   const double baselineY = originText_.y + static_cast<double>(line) * lineHeight;
+  const TextVerticalMetrics verticalMetrics = ResolveTextVerticalMetrics(*sessionText_, fontSize_);
 
   EditingChrome chrome;
-  // Approximate the ascent from the font size and end the caret on the baseline.
   chrome.caretTopDoc =
-      documentFromText_.transformPosition(Vector2d(caretX, baselineY - fontSize_ * 0.9));
-  chrome.caretBottomDoc = documentFromText_.transformPosition(Vector2d(caretX, baselineY));
+      documentFromText_.transformPosition(Vector2d(caretX, baselineY - verticalMetrics.ascent));
+  chrome.caretBottomDoc =
+      documentFromText_.transformPosition(Vector2d(caretX, baselineY + verticalMetrics.descent));
   const float frameOpacity = pointFrameOpacity();
   if (const std::optional<Box2d> frameLocal = sessionFrameLocal(); frameLocal.has_value()) {
     chrome.frameCornersDoc = FrameCornersDoc(documentFromText_, *frameLocal);
@@ -1284,10 +1372,16 @@ std::optional<TextTool::EditingChrome> TextTool::editingChrome(EditorApp& editor
         displayLineByLogicalIndex.push_back(displayLine);
       }
     }
+    struct SelectedLineRange {
+      double minX = 0.0;
+      double maxX = 0.0;
+      double baselineY = 0.0;
+      bool initialized = false;
+    };
     const std::vector<Box2d> selectedLineExtents =
-        sessionText_->withWriteAccess([this, &displayLineByLogicalIndex, &lines, &selection](
-                                          svg::DocumentWriteAccess&, EntityHandle) {
-          std::vector<std::optional<Box2d>> extentsByLine(lines.size());
+        sessionText_->withWriteAccess([this, &displayLineByLogicalIndex, &lines, &selection,
+                                       &verticalMetrics](svg::DocumentWriteAccess&, EntityHandle) {
+          std::vector<SelectedLineRange> rangesByLine(lines.size());
           std::size_t domIndex = 0u;
           const std::size_t domCharCount =
               static_cast<std::size_t>(std::max(0L, sessionText_->getNumberOfChars()));
@@ -1296,24 +1390,31 @@ std::optional<TextTool::EditingChrome> TextTool::editingChrome(EditorApp& editor
               continue;
             }
             if (logicalIndex >= selection->start && logicalIndex < selection->end &&
-                domIndex < domCharCount) {
-              const Box2d extent = sessionText_->getExtentOfChar(domIndex);
+                domIndex < domCharCount && logicalIndex < displayLineByLogicalIndex.size()) {
+              const Vector2d start = sessionText_->getStartPositionOfChar(domIndex);
+              const Vector2d end = sessionText_->getEndPositionOfChar(domIndex);
               const std::size_t displayLine = displayLineByLogicalIndex[logicalIndex];
-              if (!extent.isEmpty()) {
-                if (extentsByLine[displayLine].has_value()) {
-                  extentsByLine[displayLine]->addBox(extent);
-                } else {
-                  extentsByLine[displayLine] = extent;
-                }
+              SelectedLineRange& range = rangesByLine[displayLine];
+              const double minX = std::min(start.x, end.x);
+              const double maxX = std::max(start.x, end.x);
+              if (range.initialized) {
+                range.minX = std::min(range.minX, minX);
+                range.maxX = std::max(range.maxX, maxX);
+              } else {
+                range.minX = minX;
+                range.maxX = maxX;
+                range.baselineY = start.y;
+                range.initialized = true;
               }
             }
             ++domIndex;
           }
           std::vector<Box2d> extents;
-          extents.reserve(extentsByLine.size());
-          for (const std::optional<Box2d>& extent : extentsByLine) {
-            if (extent.has_value()) {
-              extents.push_back(*extent);
+          extents.reserve(rangesByLine.size());
+          for (const SelectedLineRange& range : rangesByLine) {
+            if (range.initialized) {
+              extents.emplace_back(Vector2d(range.minX, range.baselineY - verticalMetrics.ascent),
+                                   Vector2d(range.maxX, range.baselineY + verticalMetrics.descent));
             }
           }
           return extents;

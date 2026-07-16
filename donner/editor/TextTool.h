@@ -244,14 +244,16 @@ private:
                            const std::optional<Box2d>& boxDoc);
   /// Open an editing session on an existing `<text>` element: reconstruct the
   /// logical content from its DOM children and place the caret at the clicked
-  /// character (@p documentPoint), or at the end when the click misses every
-  /// glyph.
+  /// line position (@p documentPoint), or at the end when the click misses the
+  /// text's line cells.
   void beginEditingSessionForExisting(EditorApp& editor, const svg::SVGTextElement& text,
                                       const Vector2d& documentPoint);
-  /// Caret index for a click at @p documentPoint inside the session's text,
-  /// or nullopt when the click misses every glyph. Clicks in the trailing
-  /// half of a glyph place the caret after it.
-  [[nodiscard]] std::optional<std::size_t> caretIndexAtPoint(const Vector2d& documentPoint) const;
+  /// Caret index nearest @p documentPoint inside the session's text line
+  /// cells, or nullopt when a click misses every line cell. When
+  /// @p clampToNearestLine is true, points outside the line bounds clamp to
+  /// the nearest caret position for continuous pointer selection.
+  [[nodiscard]] std::optional<std::size_t> caretIndexAtPoint(const Vector2d& documentPoint,
+                                                             bool clampToNearestLine = false) const;
   /// Delete the active text range and collapse the caret to its start.
   /// Returns true when content was removed.
   bool deleteSelection();
