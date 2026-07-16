@@ -548,19 +548,19 @@ TEST_F(TextToolExistingTextTest, DragSelectionIsReplacedByTyping) {
   const std::optional<TextTool::EditingChrome> chrome = tool.editingChrome(app);
   ASSERT_TRUE(chrome.has_value());
   svg::SVGTextElement element = text();
-  Box2d selectedExtent = element.withWriteAccess(
-      [&element](svg::DocumentWriteAccess&, EntityHandle) { return element.getExtentOfChar(1u); });
-  element.withWriteAccess([&element, &selectedExtent](svg::DocumentWriteAccess&, EntityHandle) {
-    selectedExtent.addBox(element.getExtentOfChar(2u));
-    selectedExtent.addBox(element.getExtentOfChar(3u));
-  });
+  const Box2d expectedSelection =
+      element.withWriteAccess([&element](svg::DocumentWriteAccess&, EntityHandle) {
+        const Box2d emBox = element.objectBoundingBox();
+        return Box2d(Vector2d(element.getStartPositionOfChar(1u).x, emBox.topLeft.y),
+                     Vector2d(element.getEndPositionOfChar(3u).x, emBox.bottomRight.y));
+      });
   ASSERT_EQ(chrome->selectionQuadsDoc.size(), 1u);
   EXPECT_EQ(chrome->selectionQuadsDoc[0],
             (std::array<Vector2d, 4>{
-                selectedExtent.topLeft,
-                Vector2d(selectedExtent.bottomRight.x, selectedExtent.topLeft.y),
-                selectedExtent.bottomRight,
-                Vector2d(selectedExtent.topLeft.x, selectedExtent.bottomRight.y),
+                expectedSelection.topLeft,
+                Vector2d(expectedSelection.bottomRight.x, expectedSelection.topLeft.y),
+                expectedSelection.bottomRight,
+                Vector2d(expectedSelection.topLeft.x, expectedSelection.bottomRight.y),
             }));
 
   tool.insertCodepoint(app, U'X');
@@ -568,6 +568,61 @@ TEST_F(TextToolExistingTextTest, DragSelectionIsReplacedByTyping) {
   EXPECT_EQ(tool.sessionContent(), U"HXo");
   EXPECT_EQ(text().textContent(), "HXo");
   EXPECT_FALSE(tool.selectionRange().has_value());
+}
+
+TEST_F(TextToolExistingTextTest, SelectionHeightIsStableAcrossGlyphShapes) {
+  clickAt(pointInChar(0, /*rightHalf=*/false));
+
+  const auto selectCharacter = [this](std::size_t charIndex) {
+    const Vector2d start = pointInChar(charIndex, /*rightHalf=*/false);
+    const Vector2d end = pointInChar(charIndex, /*rightHalf=*/true);
+    tool.onMouseDown(app, start, MouseModifiers{});
+    tool.onMouseMove(app, end, /*buttonHeld=*/true);
+    tool.onMouseUp(app, end);
+    const std::optional<TextTool::EditingChrome> chrome = tool.editingChrome(app);
+    EXPECT_TRUE(chrome.has_value());
+    EXPECT_EQ(chrome->selectionQuadsDoc.size(), 1u);
+    return chrome->selectionQuadsDoc.front();
+  };
+
+  const std::array<Vector2d, 4> uppercaseSelection = selectCharacter(0u);
+  const std::array<Vector2d, 4> lowercaseSelection = selectCharacter(1u);
+  svg::SVGTextElement element = text();
+  const Box2d emBox = element.withWriteAccess(
+      [&element](svg::DocumentWriteAccess&, EntityHandle) { return element.objectBoundingBox(); });
+
+  EXPECT_NEAR(uppercaseSelection[0].y, emBox.topLeft.y, 1e-6);
+  EXPECT_NEAR(uppercaseSelection[3].y, emBox.bottomRight.y, 1e-6);
+  EXPECT_NEAR(lowercaseSelection[0].y, emBox.topLeft.y, 1e-6);
+  EXPECT_NEAR(lowercaseSelection[3].y, emBox.bottomRight.y, 1e-6);
+}
+
+TEST_F(TextToolTest, DragSelectionAcrossWhitespaceKeepsNearestCaret) {
+  constexpr std::string_view kTextSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="240" height="140">
+           <text id="label" x="30" y="75" font-family="sans-serif" font-size="32"
+             >Hello text</text>
+         </svg>)";
+  ASSERT_TRUE(app.loadFromString(kTextSvg));
+
+  clickAt(Vector2d(55.0, 67.0));
+  ASSERT_TRUE(tool.isEditing());
+  svg::SVGTextElement element = text();
+  const Vector2d spacePoint =
+      element.withWriteAccess([&element](svg::DocumentWriteAccess&, EntityHandle) {
+        const Vector2d start = element.getStartPositionOfChar(5u);
+        const Vector2d end = element.getEndPositionOfChar(5u);
+        return Vector2d(start.x + (end.x - start.x) * 0.25, start.y - 8.0);
+      });
+  tool.onMouseDown(app, Vector2d(43.0, 67.0), MouseModifiers{});
+  tool.onMouseMove(app, spacePoint, /*buttonHeld=*/true);
+
+  EXPECT_EQ(tool.caretIndex(), 5u);
+  EXPECT_THAT(tool.selectionRange(), Optional(TextTool::SelectionRange{1u, 5u}));
+
+  tool.onMouseUp(app, spacePoint);
+  EXPECT_EQ(tool.caretIndex(), 5u);
+  EXPECT_THAT(tool.selectionRange(), Optional(TextTool::SelectionRange{1u, 5u}));
 }
 
 TEST_F(TextToolExistingTextTest, ShiftNavigationAndSelectAllMaintainLogicalRanges) {
@@ -671,7 +726,11 @@ TEST_F(TextToolExistingTextTest, TransformedTextClickMapsThroughElementTransform
   // The caret chrome maps back into document space through the transform.
   const auto chrome = tool.editingChrome(app);
   ASSERT_TRUE(chrome.has_value());
-  EXPECT_NEAR(chrome->caretBottomDoc.y, 80.0 + 40.0, 1.0);
+  svg::SVGTextElement element = text();
+  const Box2d emBox = element.withWriteAccess(
+      [&element](svg::DocumentWriteAccess&, EntityHandle) { return element.objectBoundingBox(); });
+  EXPECT_NEAR(chrome->caretTopDoc.y, emBox.topLeft.y + 40.0, 1.0);
+  EXPECT_NEAR(chrome->caretBottomDoc.y, emBox.bottomRight.y + 40.0, 1.0);
   EXPECT_GT(chrome->caretTopDoc.x, 150.0);
 }
 
