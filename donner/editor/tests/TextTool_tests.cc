@@ -547,7 +547,21 @@ TEST_F(TextToolExistingTextTest, DragSelectionIsReplacedByTyping) {
   EXPECT_EQ(selection->end, 4u);
   const std::optional<TextTool::EditingChrome> chrome = tool.editingChrome(app);
   ASSERT_TRUE(chrome.has_value());
-  EXPECT_EQ(chrome->selectionQuadsDoc.size(), 3u);
+  svg::SVGTextElement element = text();
+  Box2d selectedExtent = element.withWriteAccess(
+      [&element](svg::DocumentWriteAccess&, EntityHandle) { return element.getExtentOfChar(1u); });
+  element.withWriteAccess([&element, &selectedExtent](svg::DocumentWriteAccess&, EntityHandle) {
+    selectedExtent.addBox(element.getExtentOfChar(2u));
+    selectedExtent.addBox(element.getExtentOfChar(3u));
+  });
+  ASSERT_EQ(chrome->selectionQuadsDoc.size(), 1u);
+  EXPECT_EQ(chrome->selectionQuadsDoc[0],
+            (std::array<Vector2d, 4>{
+                selectedExtent.topLeft,
+                Vector2d(selectedExtent.bottomRight.x, selectedExtent.topLeft.y),
+                selectedExtent.bottomRight,
+                Vector2d(selectedExtent.topLeft.x, selectedExtent.bottomRight.y),
+            }));
 
   tool.insertCodepoint(app, U'X');
 
@@ -657,7 +671,7 @@ TEST_F(TextToolExistingTextTest, TransformedTextClickMapsThroughElementTransform
   // The caret chrome maps back into document space through the transform.
   const auto chrome = tool.editingChrome(app);
   ASSERT_TRUE(chrome.has_value());
-  EXPECT_NEAR(chrome->caretBottomDoc.y, 80.0 + 40.0 + 20.0 * 0.25, 1.0);
+  EXPECT_NEAR(chrome->caretBottomDoc.y, 80.0 + 40.0, 1.0);
   EXPECT_GT(chrome->caretTopDoc.x, 150.0);
 }
 
