@@ -429,6 +429,10 @@ private:
   /// Keyboard handling while the in-canvas text editing session is active:
   /// typing, caret movement, Cmd+B/I/U style toggles, Escape commit.
   void handleTextEditingKeyboard();
+  /// On a Select-tool double-click, hand an unlocked text hit directly to
+  /// TextTool so the same press opens editing and places the caret.
+  bool tryBeginTextEditingFromSelectDoubleClick(const Vector2d& documentPoint,
+                                                MouseModifiers modifiers);
   /// Emulated canvas scrollbars along the pane edges: they represent the
   /// document extent relative to the viewport and pan the canvas when
   /// dragged. The pane window itself never scrolls.

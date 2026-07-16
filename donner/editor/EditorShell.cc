@@ -44,6 +44,7 @@
 #include "donner/editor/ImGuiClipboard.h"
 #include "donner/editor/ImGuiInternalIncludes.h"
 #include "donner/editor/KeyboardShortcutPolicy.h"
+#include "donner/editor/LockState.h"
 #include "donner/editor/NativeWindowChrome.h"
 #include "donner/editor/SelectionTransformHandles.h"
 #include "donner/editor/ShapeClipboardCommands.h"
@@ -1146,7 +1147,7 @@ void EditorShell::applyPendingDocumentSpaceReplayInputForTesting() {
     } else if (activeTool_ == ActiveTool::Text) {
       textTool_.onMouseDown(app_, input.documentPoint, input.modifiers);
       flushQueuedMutationAndRefreshOverlay();
-    } else {
+    } else if (!tryBeginTextEditingFromSelectDoubleClick(input.documentPoint, input.modifiers)) {
       selectTool_.onMouseDown(app_, input.documentPoint, input.modifiers);
       rasterizeCurrentSelection();
     }
@@ -1156,12 +1157,14 @@ void EditorShell::applyPendingDocumentSpaceReplayInputForTesting() {
       penDragFlushedThisFrame_ = true;
     }
   } else if (input.leftMouseDown && activeTool_ == ActiveTool::Text &&
-             (textTool_.isDraggingBox() || textTool_.isAdjustingFrame())) {
+             (textTool_.isDraggingBox() || textTool_.isAdjustingFrame() ||
+              textTool_.isSelectingText())) {
     const bool rotatingFrame = textTool_.isRotatingFrame();
+    const bool selectingText = textTool_.isSelectingText();
     textTool_.onMouseMove(app_, input.documentPoint, /*buttonHeld=*/true);
     if (rotatingFrame) {
       refreshAfterToolDrivenFlush();
-    } else {
+    } else if (!selectingText) {
       // Box creation and frame resize are local previews. The frame is pushed
       // into overlay chrome later this frame; no DOM flush or rewrap is needed.
       window_.wakeEventLoop();
@@ -1176,9 +1179,13 @@ void EditorShell::applyPendingDocumentSpaceReplayInputForTesting() {
 
   if (input.leftMouseReleased) {
     if (activeTool_ == ActiveTool::Text &&
-        (textTool_.isDraggingBox() || textTool_.isAdjustingFrame())) {
+        (textTool_.isDraggingBox() || textTool_.isAdjustingFrame() ||
+         textTool_.isSelectingText())) {
+      const bool selectingText = textTool_.isSelectingText();
       textTool_.onMouseUp(app_, input.documentPoint);
-      refreshAfterToolDrivenFlush();
+      if (!selectingText) {
+        refreshAfterToolDrivenFlush();
+      }
       return;
     }
     if (activeTool_ == ActiveTool::Pen) {
@@ -1231,7 +1238,7 @@ void EditorShell::applyPendingDocumentSpaceReplayInputForTesting() {
           textTool_.caretBlinkVisible() ? std::make_optional(SelectionChromeSnapshot::TextCaret{
                                               textChrome->caretTopDoc, textChrome->caretBottomDoc})
                                         : std::nullopt,
-          textChrome->frameCornersDoc, textChrome->frameOpacity);
+          textChrome->frameCornersDoc, textChrome->frameOpacity, textChrome->selectionQuadsDoc);
     }
     renderCoordinator_.setTextBoxDragPreview(std::nullopt);
   } else if (activeTool_ == ActiveTool::Text) {
@@ -3036,13 +3043,15 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
             ? cachedHandleIntentAt(pendingClick.documentPoint,
                                    /*includeRotate=*/!pendingClick.modifiers.shift)
             : SelectionTransformHandleIntent{};
-    bool tookFastRedrag = selectToolActive && cacheMatchesSelection &&
-                          pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
-                          selectTool_.tryStartRedragOnSelected(
-                              app_, pendingClick.documentPoint, pendingClick.modifiers,
-                              redragBoundsDoc, redragOccludingBoundsDoc);
-    if (!tookFastRedrag && renderCoordinator_.asyncRenderer().isBusy() && selectToolActive &&
-        cacheMatchesSelection && pendingHandleIntent.kind == SelectionTransformHandleKind::None) {
+    bool tookFastRedrag =
+        selectToolActive && !pendingClick.modifiers.doubleClick && cacheMatchesSelection &&
+        pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
+        selectTool_.tryStartRedragOnSelected(app_, pendingClick.documentPoint,
+                                             pendingClick.modifiers, redragBoundsDoc,
+                                             redragOccludingBoundsDoc);
+    if (!tookFastRedrag && !pendingClick.modifiers.doubleClick &&
+        renderCoordinator_.asyncRenderer().isBusy() && selectToolActive && cacheMatchesSelection &&
+        pendingHandleIntent.kind == SelectionTransformHandleKind::None) {
       // The occlusion cache uses broad AABBs for later-painted elements. When the worker is busy,
       // prefer an optimistic re-drag of the current selection over freezing behind a conservative
       // false-positive overlap; the idle path above still uses full hit-testing for retargets.
@@ -3109,9 +3118,16 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
             lastPostedScreenPoint_.reset();
             bool queuedMutationForNextFrame = false;
             if (selectToolActive) {
-              selectTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
-              if (!leftMouseDown) {
-                selectTool_.onMouseUp(app_, pendingClick.documentPoint);
+              if (tryBeginTextEditingFromSelectDoubleClick(pendingClick.documentPoint,
+                                                           pendingClick.modifiers)) {
+                if (!leftMouseDown) {
+                  textTool_.onMouseUp(app_, pendingClick.documentPoint);
+                }
+              } else {
+                selectTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
+                if (!leftMouseDown) {
+                  selectTool_.onMouseUp(app_, pendingClick.documentPoint);
+                }
               }
             } else if (penToolActive) {
               penTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
@@ -3234,19 +3250,24 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   // mousedown (starting the box drag or a frame handle gesture), but the
   // drag extension and the release come from the live ImGui pointer, exactly
   // like the pen tool's anchor drag below.
-  if (textToolActive && (textTool_.isDraggingBox() || textTool_.isAdjustingFrame())) {
+  if (activeTool_ == ActiveTool::Text &&
+      (textTool_.isDraggingBox() || textTool_.isAdjustingFrame() || textTool_.isSelectingText())) {
     if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && !spaceHeld) {
       const bool rotatingFrame = textTool_.isRotatingFrame();
+      const bool selectingText = textTool_.isSelectingText();
       textTool_.onMouseMove(app_, screenToDocument(ImGui::GetMousePos()), /*buttonHeld=*/true);
       if (rotatingFrame) {
         refreshAfterToolDrivenFlush();
-      } else {
+      } else if (!selectingText) {
         window_.wakeEventLoop();
       }
     }
     if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+      const bool selectingText = textTool_.isSelectingText();
       textTool_.onMouseUp(app_, screenToDocument(ImGui::GetMousePos()));
-      refreshAfterToolDrivenFlush();
+      if (!selectingText) {
+        refreshAfterToolDrivenFlush();
+      }
     }
   }
 
@@ -3307,7 +3328,7 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
           textTool_.caretBlinkVisible() ? std::make_optional(SelectionChromeSnapshot::TextCaret{
                                               textChrome->caretTopDoc, textChrome->caretBottomDoc})
                                         : std::nullopt,
-          textChrome->frameCornersDoc, textChrome->frameOpacity);
+          textChrome->frameCornersDoc, textChrome->frameOpacity, textChrome->selectionQuadsDoc);
     }
     renderCoordinator_.setTextBoxDragPreview(std::nullopt);
   } else {
@@ -4005,10 +4026,9 @@ void EditorShell::renderSidebars() {
     // Compact sheets use deterministic fill swatches. Avoiding per-row raster
     // rendering and texture uploads keeps the touch panel responsive and also
     // avoids backend-specific thumbnail presentation differences in Wasm.
-    layersPanel_.refreshSnapshot(
-        app_, compactSheet ? nullptr : &layerThumbnailRenderer_,
-        compactSheet ? LayersPanel::ThumbnailRefreshMode::SwatchesOnly
-                     : LayersPanel::ThumbnailRefreshMode::Render);
+    layersPanel_.refreshSnapshot(app_, compactSheet ? nullptr : &layerThumbnailRenderer_,
+                                 compactSheet ? LayersPanel::ThumbnailRefreshMode::SwatchesOnly
+                                              : LayersPanel::ThumbnailRefreshMode::Render);
   }
   EditorApp* liveAppForClicks = rendererBusy ? nullptr : &app_;
 
@@ -4601,7 +4621,8 @@ void EditorShell::updateSourceStructuralDrag() {
   }
 
   if (const std::optional<Coordinates> dropTarget = textEditor_.takeSourceGutterDropTarget()) {
-    // Re-evaluate from the release coordinate: the pointer can move and release between drag frames.
+    // Re-evaluate from the release coordinate: the pointer can move and release between drag
+    // frames.
     evaluateDragTarget(*dropTarget);
     if (sourceStructuralMovePlan_.has_value() &&
         CommitSourceStructuralMove(app_, *sourceStructuralMovePlan_, source) ==
@@ -4859,16 +4880,39 @@ SelectionChromeDetail EditorShell::selectionChromeDetailForActiveTool() const {
     // Drag chrome is projected from the immutable gesture bounds. Avoid
     // rebuilding every selected path (notably one path per outlined glyph)
     // while the compositor and DOM are advancing asynchronously.
-    return SelectionChromeDetail::CombinedBoundsOnly;
+    const std::optional<SelectTool::ActiveGesturePreview> preview =
+        selectTool_.activeGesturePreview();
+    return preview.has_value() && preview->hasMoved ? SelectionChromeDetail::CombinedBoundsOnly
+                                                    : SelectionChromeDetail::Full;
   }
   if (activeTool_ == ActiveTool::Text && textTool_.isEditing()) {
-    // The caret and oriented session frame are pushed explicitly through
-    // setTextEditingChrome. Skip generic text baselines/bounds/path traversal:
-    // they duplicate that UI and force synchronous text geometry work after
-    // every keystroke.
+    // The caret, range highlights, and oriented session frame are pushed
+    // explicitly through setTextEditingChrome. Retain only the generic text
+    // baseline from the selected element; EditingChromeOnly skips its bounds
+    // and path traversal while preserving that guidance line.
     return SelectionChromeDetail::EditingChromeOnly;
   }
   return SelectionChromeDetail::Full;
+}
+
+bool EditorShell::tryBeginTextEditingFromSelectDoubleClick(const Vector2d& documentPoint,
+                                                           MouseModifiers modifiers) {
+  if (activeTool_ != ActiveTool::Select || !modifiers.doubleClick || !app_.hasDocument()) {
+    return false;
+  }
+  const std::optional<svg::SVGGraphicsElement> hit = app_.hitTest(documentPoint);
+  if (!hit.has_value() || IsLocked(*hit)) {
+    return false;
+  }
+  const bool hitText = hit->withReadAccess(
+      [&hit](svg::DocumentReadAccess&, EntityHandle) { return hit->isa<svg::SVGTextElement>(); });
+  if (!hitText) {
+    return false;
+  }
+
+  activeTool_ = ActiveTool::Text;
+  textTool_.onMouseDown(app_, documentPoint, modifiers);
+  return textTool_.isEditing();
 }
 
 void EditorShell::updatePenLivePreviewTarget() {
@@ -4906,7 +4950,9 @@ void EditorShell::handleTextEditingKeyboard() {
   }
 
   if (cmd) {
-    if (ImGui::IsKeyPressed(ImGuiKey_B, /*repeat=*/false)) {
+    if (ImGui::IsKeyPressed(ImGuiKey_A, /*repeat=*/false)) {
+      textTool_.selectAll();
+    } else if (ImGui::IsKeyPressed(ImGuiKey_B, /*repeat=*/false)) {
       textTool_.toggleBold(app_);
       edited = true;
     } else if (ImGui::IsKeyPressed(ImGuiKey_I, /*repeat=*/false)) {
@@ -4937,22 +4983,22 @@ void EditorShell::handleTextEditingKeyboard() {
     edited = true;
   }
   if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, /*repeat=*/true)) {
-    textTool_.moveCaret(app_, TextTool::CaretMove::Left);
+    textTool_.moveCaret(app_, TextTool::CaretMove::Left, io.KeyShift);
   }
   if (ImGui::IsKeyPressed(ImGuiKey_RightArrow, /*repeat=*/true)) {
-    textTool_.moveCaret(app_, TextTool::CaretMove::Right);
+    textTool_.moveCaret(app_, TextTool::CaretMove::Right, io.KeyShift);
   }
   if (ImGui::IsKeyPressed(ImGuiKey_UpArrow, /*repeat=*/true)) {
-    textTool_.moveCaret(app_, TextTool::CaretMove::Up);
+    textTool_.moveCaret(app_, TextTool::CaretMove::Up, io.KeyShift);
   }
   if (ImGui::IsKeyPressed(ImGuiKey_DownArrow, /*repeat=*/true)) {
-    textTool_.moveCaret(app_, TextTool::CaretMove::Down);
+    textTool_.moveCaret(app_, TextTool::CaretMove::Down, io.KeyShift);
   }
   if (ImGui::IsKeyPressed(ImGuiKey_Home, /*repeat=*/false)) {
-    textTool_.moveCaret(app_, TextTool::CaretMove::LineStart);
+    textTool_.moveCaret(app_, TextTool::CaretMove::LineStart, io.KeyShift);
   }
   if (ImGui::IsKeyPressed(ImGuiKey_End, /*repeat=*/false)) {
-    textTool_.moveCaret(app_, TextTool::CaretMove::LineEnd);
+    textTool_.moveCaret(app_, TextTool::CaretMove::LineEnd, io.KeyShift);
   }
 
   std::u32string queuedCharacters;

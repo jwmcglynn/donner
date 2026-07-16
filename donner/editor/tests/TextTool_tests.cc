@@ -540,10 +540,41 @@ TEST_F(TextToolExistingTextTest, DragSelectionIsReplacedByTyping) {
   tool.onMouseDown(app, selectionStart, MouseModifiers{});
   tool.onMouseMove(app, selectionEnd, /*buttonHeld=*/true);
   tool.onMouseUp(app, selectionEnd);
+
+  const std::optional<TextTool::SelectionRange> selection = tool.selectionRange();
+  ASSERT_TRUE(selection.has_value());
+  EXPECT_EQ(selection->start, 1u);
+  EXPECT_EQ(selection->end, 4u);
+  const std::optional<TextTool::EditingChrome> chrome = tool.editingChrome(app);
+  ASSERT_TRUE(chrome.has_value());
+  EXPECT_EQ(chrome->selectionQuadsDoc.size(), 3u);
+
   tool.insertCodepoint(app, U'X');
 
   EXPECT_EQ(tool.sessionContent(), U"HXo");
   EXPECT_EQ(text().textContent(), "HXo");
+  EXPECT_FALSE(tool.selectionRange().has_value());
+}
+
+TEST_F(TextToolExistingTextTest, ShiftNavigationAndSelectAllMaintainLogicalRanges) {
+  clickAt(pointInChar(1, /*rightHalf=*/false));
+
+  tool.moveCaret(app, TextTool::CaretMove::Right, /*extendSelection=*/true);
+  tool.moveCaret(app, TextTool::CaretMove::Right, /*extendSelection=*/true);
+  ASSERT_TRUE(tool.selectionRange().has_value());
+  EXPECT_EQ(tool.selectionRange()->start, 1u);
+  EXPECT_EQ(tool.selectionRange()->end, 3u);
+
+  tool.backspace(app);
+  EXPECT_EQ(tool.sessionContent(), U"Hlo");
+  EXPECT_FALSE(tool.selectionRange().has_value());
+
+  tool.selectAll();
+  ASSERT_TRUE(tool.selectionRange().has_value());
+  EXPECT_EQ(tool.selectionRange()->start, 0u);
+  EXPECT_EQ(tool.selectionRange()->end, 3u);
+  tool.insertCodepoint(app, U'X');
+  EXPECT_EQ(tool.sessionContent(), U"X");
 }
 
 TEST_F(TextToolExistingTextTest, EditingExistingTextCommitRecordsEditUndo) {

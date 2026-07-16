@@ -1736,6 +1736,15 @@ TEST(OverlayRendererTest, ZeroOpacityPointFrameDrawsNoFrameOrHandles) {
   EXPECT_FALSE(HasAnyNonTransparentPixel(DrawSnapshot(snapshot)));
 }
 
+TEST(OverlayRendererTest, TextRangeHighlightDrawsOrientedQuad) {
+  SelectionChromeSnapshot snapshot;
+  snapshot.canvasFromDoc = Transform2d();
+  snapshot.textSelectionQuadsDoc.push_back(std::array<Vector2d, 4>{
+      Vector2d(20.0, 20.0), Vector2d(50.0, 20.0), Vector2d(50.0, 45.0), Vector2d(20.0, 45.0)});
+
+  EXPECT_TRUE(HasAnyNonTransparentPixel(DrawSnapshot(snapshot)));
+}
+
 TEST(OverlayRendererTest, TextSelectionCapturesBaselineUnderlay) {
   constexpr std::string_view kTextSvg =
       R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">

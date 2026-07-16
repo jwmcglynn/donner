@@ -186,10 +186,12 @@ public:
   /// TL, TR, BR, BL mapped through the text's transform), in document space.
   void setTextEditingChrome(std::optional<SelectionChromeSnapshot::TextCaret> caretDoc,
                             std::optional<std::array<Vector2d, 4>> frameCornersDoc,
-                            float frameOpacity = 1.0f) {
+                            float frameOpacity = 1.0f,
+                            std::vector<std::array<Vector2d, 4>> selectionQuadsDoc = {}) {
     textEditingCaretDoc_ = caretDoc;
     textEditingFrameCornersDoc_ = frameCornersDoc;
     textEditingFrameOpacity_ = frameOpacity;
+    textEditingSelectionQuadsDoc_ = std::move(selectionQuadsDoc);
   }
 
   /// Set (or clear) the text tool's drag-to-create preview chrome for the
@@ -342,6 +344,7 @@ private:
   std::optional<SelectionChromeSnapshot::TextCaret> textEditingCaretDoc_;
   std::optional<std::array<Vector2d, 4>> textEditingFrameCornersDoc_;
   float textEditingFrameOpacity_ = 1.0f;
+  std::vector<std::array<Vector2d, 4>> textEditingSelectionQuadsDoc_;
   /// Text-box drag-to-create preview pushed by the shell each frame.
   std::optional<SelectionChromeSnapshot::TextBoxDragPreview> textBoxDragPreviewDoc_;
   /// Pen hover chrome baked into the current immediate overlay snapshot;
@@ -352,6 +355,7 @@ private:
   std::optional<SelectionChromeSnapshot::TextCaret> lastOverlayTextEditingCaretDoc_;
   std::optional<std::array<Vector2d, 4>> lastOverlayTextEditingFrameCornersDoc_;
   float lastOverlayTextEditingFrameOpacity_ = 1.0f;
+  std::vector<std::array<Vector2d, 4>> lastOverlayTextEditingSelectionQuadsDoc_;
   std::optional<SelectionChromeSnapshot::TextBoxDragPreview> lastOverlayTextBoxDragPreviewDoc_;
 
   PresentationRenderScheduler renderScheduler_;
