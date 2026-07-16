@@ -15,6 +15,7 @@
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/PenTool.h"
 #include "donner/editor/SelectTool.h"
+#include "donner/editor/TextTool.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/editor/repro/ReproFile.h"
 #include "donner/svg/renderer/Renderer.h"
@@ -127,6 +128,7 @@ private:
   ToolCallResult penPath(const nlohmann::json& arguments);
   ToolCallResult dragSelector(const nlohmann::json& arguments);
   ToolCallResult transformSelector(const nlohmann::json& arguments);
+  ToolCallResult pointerGesture(const nlohmann::json& arguments);
   ToolCallResult renderFrameTool(const nlohmann::json& arguments);
   ToolCallResult sessionState(const nlohmann::json& arguments) const;
   ToolCallResult startRnrRecording(const nlohmann::json& arguments);
@@ -197,9 +199,11 @@ private:
   EditorApp app_;
   std::unique_ptr<SelectTool> selectTool_;
   PenTool penTool_;
+  TextTool textTool_;
   enum class ActiveReplayTool : std::uint8_t {
     Select,
     Pen,
+    Text,
   };
   ActiveReplayTool activeReplayTool_ = ActiveReplayTool::Select;
   svg::Renderer renderer_;

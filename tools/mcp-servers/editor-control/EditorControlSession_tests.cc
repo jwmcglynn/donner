@@ -337,6 +337,7 @@ TEST(EditorControlSessionTest, ToolListExposesSelectorDragAndRenderTools) {
   EXPECT_TRUE(hasTool("click_layer_button"));
   EXPECT_TRUE(hasTool("drag_selector"));
   EXPECT_TRUE(hasTool("transform_selector"));
+  EXPECT_TRUE(hasTool("pointer_gesture"));
   EXPECT_TRUE(hasTool("render_frame"));
   EXPECT_TRUE(hasTool("get_svg_source"));
   EXPECT_TRUE(hasTool("edit_svg_source"));
@@ -1123,6 +1124,52 @@ TEST(EditorControlSessionTest, RecordsInMemoryRnrWithEmbeddedSource) {
 
   std::error_code removeError;
   std::filesystem::remove(rnrPath, removeError);
+}
+
+TEST(EditorControlSessionTest, RecordsTextToolPointerGestureWithIdleTail) {
+  constexpr std::string_view kScene =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80">
+  <text id="label" x="10" y="40" font-family="sans-serif" font-size="24">Hello</text>
+</svg>)svg";
+  const std::filesystem::path rnrPath = TestScratchDir() / "text_pointer_gesture.rnr";
+
+  EditorControlSession session;
+  const ToolCallResult load =
+      session.handleToolCall("load_svg", json{{"svg_source", std::string(kScene)},
+                                              {"canvas_width", 120},
+                                              {"canvas_height", 80},
+                                              {"render_after_load", false}});
+  ASSERT_TRUE(load.body.value("ok", false)) << load.body.dump(2);
+
+  const ToolCallResult start = session.handleToolCall(
+      "start_rnr_recording", json{{"output_path", rnrPath.string()}, {"frame_delta_ms", 600.0}});
+  ASSERT_TRUE(start.body.value("ok", false)) << start.body.dump(2);
+
+  const ToolCallResult setTool = session.handleToolCall("set_active_tool", json{{"tool", "text"}});
+  ASSERT_TRUE(setTool.body.value("ok", false)) << setTool.body.dump(2);
+
+  const ToolCallResult gesture = session.handleToolCall(
+      "pointer_gesture", json{{"start_x", 18.0}, {"start_y", 34.0}, {"idle_frames", 1}});
+  ASSERT_TRUE(gesture.body.value("ok", false)) << gesture.body.dump(2);
+  EXPECT_EQ(gesture.body.value("active_tool", ""), "text");
+  EXPECT_TRUE(gesture.body.value("text_editing", false));
+  EXPECT_EQ(gesture.body.value("idle_frames", 0), 1);
+
+  const ToolCallResult stop = session.handleToolCall("stop_rnr_recording", json::object());
+  ASSERT_TRUE(stop.body.value("ok", false)) << stop.body.dump(2);
+
+  const std::optional<repro::ReproFile> recorded = repro::ReadReproFile(rnrPath);
+  ASSERT_TRUE(recorded.has_value());
+  ASSERT_EQ(recorded->frames.size(), 4u);
+  ASSERT_THAT(recorded->frames.front().actions, testing::SizeIs(1u));
+  EXPECT_EQ(recorded->frames.front().actions.front().tool, "text");
+  EXPECT_THAT(recorded->frames[1].events,
+              testing::ElementsAre(
+                  testing::Field(&repro::ReproEvent::kind, repro::ReproEvent::Kind::MouseDown)));
+  EXPECT_THAT(recorded->frames[2].events,
+              testing::ElementsAre(
+                  testing::Field(&repro::ReproEvent::kind, repro::ReproEvent::Kind::MouseUp)));
+  EXPECT_TRUE(recorded->frames[3].events.empty());
 }
 
 TEST(EditorControlSessionTest, RecordsAndReplaysPenPathPaintActions) {
