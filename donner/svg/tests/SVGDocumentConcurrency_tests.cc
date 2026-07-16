@@ -327,6 +327,122 @@ TEST(SVGDocumentConcurrencyTests, LazyComputedQueryUpgradesAndRestoresOuterReadA
   EXPECT_FALSE(diagnostics.writeLockHeld);
 }
 
+TEST(SVGDocumentConcurrencyTests, TryUpgradeConvertsSoleReaderAndRestoresReadAccess) {
+  SVGDocument document;
+  document.setThreadingMode(ThreadingMode::ConcurrentDom);
+
+  DocumentReadAccess readAccess = document.readAccess();
+  std::optional<DocumentWriteAccess> writeAccess = readAccess.tryUpgrade();
+
+  ASSERT_TRUE(writeAccess.has_value());
+  EXPECT_TRUE(document.handle()->currentThreadHasWriteAccess());
+  DocumentAccessDiagnostics diagnostics = document.handle()->accessDiagnostics();
+  EXPECT_EQ(diagnostics.activeReadLocks, 0u);
+  EXPECT_TRUE(diagnostics.writeLockHeld);
+
+  writeAccess.reset();
+
+  EXPECT_TRUE(document.handle()->currentThreadHasAccess());
+  EXPECT_FALSE(document.handle()->currentThreadHasWriteAccess());
+  diagnostics = document.handle()->accessDiagnostics();
+  EXPECT_EQ(diagnostics.activeReadLocks, 1u);
+  EXPECT_FALSE(diagnostics.writeLockHeld);
+}
+
+TEST(SVGDocumentConcurrencyTests, TryUpgradeFailsImmediatelyAndRetainsReadUnderContention) {
+  SVGDocument document;
+  document.setThreadingMode(ThreadingMode::ConcurrentDom);
+
+  DocumentReadAccess readAccess = document.readAccess();
+  std::atomic<bool> competingReaderReady = false;
+  std::atomic<bool> releaseCompetingReader = false;
+  std::thread competingReader([document, &competingReaderReady, &releaseCompetingReader]() mutable {
+    DocumentReadAccess access = document.readAccess();
+    competingReaderReady.store(true, std::memory_order_release);
+    while (!releaseCompetingReader.load(std::memory_order_acquire)) {
+      std::this_thread::yield();
+    }
+  });
+
+  while (!competingReaderReady.load(std::memory_order_acquire)) {
+    std::this_thread::yield();
+  }
+
+  std::optional<DocumentWriteAccess> writeAccess = readAccess.tryUpgrade();
+  EXPECT_FALSE(writeAccess.has_value());
+  EXPECT_TRUE(document.handle()->currentThreadHasAccess());
+  EXPECT_FALSE(document.handle()->currentThreadHasWriteAccess());
+  DocumentAccessDiagnostics diagnostics = document.handle()->accessDiagnostics();
+  EXPECT_EQ(diagnostics.activeReadLocks, 2u);
+  EXPECT_FALSE(diagnostics.writeLockHeld);
+
+  releaseCompetingReader.store(true, std::memory_order_release);
+  competingReader.join();
+
+  diagnostics = document.handle()->accessDiagnostics();
+  EXPECT_EQ(diagnostics.activeReadLocks, 1u);
+  EXPECT_FALSE(diagnostics.writeLockHeld);
+}
+
+TEST(SVGDocumentConcurrencyTests, TryDowngradeAtomicallyConvertsWriteToReadAccess) {
+  SVGDocument document;
+  document.setThreadingMode(ThreadingMode::ConcurrentDom);
+
+  DocumentWriteAccess writeAccess = document.writeAccess();
+  std::optional<DocumentReadAccess> readAccess = std::move(writeAccess).tryDowngrade();
+
+  ASSERT_TRUE(readAccess.has_value());
+  EXPECT_TRUE(document.handle()->currentThreadHasAccess());
+  EXPECT_FALSE(document.handle()->currentThreadHasWriteAccess());
+  DocumentAccessDiagnostics diagnostics = document.handle()->accessDiagnostics();
+  EXPECT_EQ(diagnostics.activeReadLocks, 1u);
+  EXPECT_FALSE(diagnostics.writeLockHeld);
+
+  readAccess.reset();
+
+  diagnostics = document.handle()->accessDiagnostics();
+  EXPECT_EQ(diagnostics.activeReadLocks, 0u);
+  EXPECT_FALSE(diagnostics.writeLockHeld);
+}
+
+TEST(SVGDocumentConcurrencyTests, TryDowngradeRetainsWriterWhenReentrantWriteIsActive) {
+  SVGDocument document;
+  document.setThreadingMode(ThreadingMode::ConcurrentDom);
+
+  DocumentWriteAccess outerWrite = document.writeAccess();
+  {
+    DocumentWriteAccess innerWrite = document.writeAccess();
+    std::optional<DocumentReadAccess> readAccess = std::move(innerWrite).tryDowngrade();
+    EXPECT_FALSE(readAccess.has_value());
+    EXPECT_TRUE(document.handle()->currentThreadHasWriteAccess());
+    EXPECT_TRUE(document.handle()->accessDiagnostics().writeLockHeld);
+  }
+
+  std::optional<DocumentReadAccess> readAccess = std::move(outerWrite).tryDowngrade();
+  ASSERT_TRUE(readAccess.has_value());
+  EXPECT_FALSE(document.handle()->currentThreadHasWriteAccess());
+  EXPECT_EQ(document.handle()->accessDiagnostics().activeReadLocks, 1u);
+}
+
+TEST(SVGDocumentConcurrencyTests, TryDowngradeRetainsWriterWhenNestedReadIsActive) {
+  SVGDocument document;
+  document.setThreadingMode(ThreadingMode::ConcurrentDom);
+
+  DocumentWriteAccess writeAccess = document.writeAccess();
+  {
+    DocumentReadAccess nestedRead = document.readAccess();
+    std::optional<DocumentReadAccess> downgradedRead = std::move(writeAccess).tryDowngrade();
+    EXPECT_FALSE(downgradedRead.has_value());
+    EXPECT_TRUE(document.handle()->currentThreadHasWriteAccess());
+    EXPECT_TRUE(document.handle()->accessDiagnostics().writeLockHeld);
+  }
+
+  std::optional<DocumentReadAccess> readAccess = std::move(writeAccess).tryDowngrade();
+  ASSERT_TRUE(readAccess.has_value());
+  EXPECT_FALSE(document.handle()->currentThreadHasWriteAccess());
+  EXPECT_EQ(document.handle()->accessDiagnostics().activeReadLocks, 1u);
+}
+
 TEST(SVGDocumentConcurrencyTests, ConcurrentDomSerializesElementHandleCopies) {
   SVGDocument document;
   SVGRectElement rect = SVGRectElement::Create(document);

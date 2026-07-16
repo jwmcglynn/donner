@@ -1,7 +1,9 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <atomic>
 #include <optional>
+#include <thread>
 #include <utility>
 
 #include "donner/base/ParseWarningSink.h"
@@ -224,6 +226,65 @@ TEST(SVGElementLifetimeTests, DetachedElementCollectedAfterLastHandleIsReleased)
   rect.reset();
 
   EXPECT_FALSE(document.registry().valid(rectEntity));
+}
+
+TEST(SVGElementLifetimeTests, DetachedElementReleasedInsideConcurrentReadUsesUpgrade) {
+  SVGDocument document;
+  SVGSVGElement root = document.svgElement();
+  std::optional<SVGRectElement> rect;
+  rect.emplace(SVGRectElement::Create(document));
+  const Entity rectEntity = rect->unsafeEntityHandle().entity();
+  root.appendChild(*rect);
+  root.removeChild(*rect);
+  document.setThreadingMode(ThreadingMode::ConcurrentDom);
+
+  document.withReadAccess([&](DocumentReadAccess& access) {
+    rect.reset();
+    EXPECT_FALSE(access.registry().valid(rectEntity));
+    EXPECT_TRUE(document.handle()->currentThreadHasAccess());
+    EXPECT_FALSE(document.handle()->currentThreadHasWriteAccess());
+  });
+}
+
+TEST(SVGElementLifetimeTests, DetachedElementReleaseDefersWhenReadUpgradeIsContended) {
+  SVGDocument document;
+  SVGSVGElement root = document.svgElement();
+  std::optional<SVGRectElement> rect;
+  rect.emplace(SVGRectElement::Create(document));
+  const Entity rectEntity = rect->unsafeEntityHandle().entity();
+  root.appendChild(*rect);
+  root.removeChild(*rect);
+  document.setThreadingMode(ThreadingMode::ConcurrentDom);
+
+  std::atomic<bool> competingReaderReady = false;
+  std::atomic<bool> releaseCompetingReader = false;
+  document.withReadAccess([&](DocumentReadAccess& access) {
+    std::thread competingReader(
+        [document, &competingReaderReady, &releaseCompetingReader]() mutable {
+          DocumentReadAccess competingAccess = document.readAccess();
+          competingReaderReady.store(true, std::memory_order_release);
+          while (!releaseCompetingReader.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+          }
+        });
+
+    while (!competingReaderReady.load(std::memory_order_acquire)) {
+      std::this_thread::yield();
+    }
+
+    rect.reset();
+    EXPECT_TRUE(access.registry().valid(rectEntity));
+    EXPECT_TRUE(DetachedQueueContains(document, rectEntity));
+
+    releaseCompetingReader.store(true, std::memory_order_release);
+    competingReader.join();
+  });
+
+  document.withWriteAccess([&](DocumentWriteAccess& access) {
+    components::NodeLifetimeCollector::Collect(access.registry());
+  });
+  document.withReadAccess(
+      [&](DocumentReadAccess& access) { EXPECT_FALSE(access.registry().valid(rectEntity)); });
 }
 
 TEST(SVGElementLifetimeTests, DetachedRootsAreQueuedInDocumentState) {
