@@ -47,6 +47,7 @@ cc_library(
         "//donner/editor:select_tool",
         "//donner/editor:selection_aabb",
         "//donner/editor:selection_transform_handles",
+        "//donner/editor:text_tool",
         "//donner/editor:viewport_state",
         "//donner/editor/repro:gl_rnr_replay",
         "//donner/editor/repro:repro_file",

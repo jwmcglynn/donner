@@ -232,10 +232,42 @@ json EditorControlSession::toolList() {
                 {
                     {"tool",
                      {{"type", "string"},
-                      {"enum", json::array({"select", "pen"})},
+                      {"enum", json::array({"select", "pen", "text"})},
                       {"description", "Canvas tool to activate."}}},
                 }},
                {"required", json::array({"tool"})},
+           }},
+      },
+      {
+          {"name", "pointer_gesture"},
+          {"description",
+           "Dispatch a recorded click, double-click, or drag through the active canvas tool. "
+           "Idle tail frames make timed chrome such as caret blink replayable."},
+          {"inputSchema",
+           {
+               {"type", "object"},
+               {"properties",
+                {
+                    {"start_x", {{"type", "number"}}},
+                    {"start_y", {{"type", "number"}}},
+                    {"end_x", {{"type", "number"}}},
+                    {"end_y", {{"type", "number"}}},
+                    {"frames", {{"type", "integer"}, {"minimum", 1}, {"maximum", kMaxDragFrames}}},
+                    {"click_count",
+                     {{"type", "integer"}, {"minimum", 1}, {"maximum", 2}, {"default", 1}}},
+                    {"shift", {{"type", "boolean"}, {"default", false}}},
+                    {"option", {{"type", "boolean"}, {"default", false}}},
+                    {"idle_frames",
+                     {{"type", "integer"},
+                      {"minimum", 0},
+                      {"maximum", kMaxDragFrames},
+                      {"default", 0}}},
+                    {"render_after_gesture", {{"type", "boolean"}, {"default", false}}},
+                    {"include_final_frame", {{"type", "boolean"}, {"default", false}}},
+                    {"include_tile_images", {{"type", "boolean"}, {"default", false}}},
+                    {"embed_png_base64", {{"type", "boolean"}, {"default", false}}},
+                }},
+               {"required", json::array({"start_x", "start_y"})},
            }},
       },
       {
@@ -473,6 +505,7 @@ ToolCallResult EditorControlSession::handleToolCall(std::string_view name, const
   if (name == "pen_path") return penPath(arguments);
   if (name == "drag_selector") return dragSelector(arguments);
   if (name == "transform_selector") return transformSelector(arguments);
+  if (name == "pointer_gesture") return pointerGesture(arguments);
   if (name == "render_frame") return renderFrameTool(arguments);
   if (name == "session_state") return sessionState(arguments);
   if (name == "start_rnr_recording") return startRnrRecording(arguments);
