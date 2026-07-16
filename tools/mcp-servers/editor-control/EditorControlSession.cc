@@ -40,6 +40,7 @@
 #include "donner/editor/LayersPanel.h"
 #include "donner/editor/PresentationRenderScheduler.h"
 #include "donner/editor/PresentedFrameComposer.h"
+#include "donner/editor/SelectionAabb.h"
 #include "donner/editor/SelectionTransformHandles.h"
 #include "donner/editor/TextPatch.h"
 #include "donner/editor/repro/GlRnrReplay.h"
@@ -522,37 +523,10 @@ std::optional<svg::SVGElement> EditorControlSession::querySelector(std::string_v
 
 std::optional<Box2d> EditorControlSession::elementWorldBounds(
     const svg::SVGElement& element) const {
-  std::optional<Box2d> result;
-  const std::optional<svg::SVGGeometryElement> geometry =
-      element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
-        if (!element.isa<svg::SVGGeometryElement>()) {
-          return std::optional<svg::SVGGeometryElement>();
-        }
-
-        return std::optional(element.cast<svg::SVGGeometryElement>());
-      });
-  if (geometry.has_value()) {
-    result = geometry->worldBounds();
-  }
-
-  std::optional<svg::SVGElement> child = element.withReadAccess(
-      [&element](svg::DocumentReadAccess&, EntityHandle) { return element.firstChild(); });
-  while (child.has_value()) {
-    const svg::SVGElement currentChild = *child;
-    if (auto childBounds = elementWorldBounds(*child); childBounds.has_value()) {
-      if (result.has_value()) {
-        result->addBox(*childBounds);
-      } else {
-        result = *childBounds;
-      }
-    }
-
-    child = currentChild.withReadAccess([&currentChild](svg::DocumentReadAccess&, EntityHandle) {
-      return currentChild.nextSibling();
-    });
-  }
-
-  return result;
+  const std::array<svg::SVGElement, 1> selection{element};
+  const std::vector<Box2d> bounds =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(selection));
+  return bounds.empty() ? std::nullopt : std::optional<Box2d>(bounds.front());
 }
 
 json EditorControlSession::selectedElementJson() const {

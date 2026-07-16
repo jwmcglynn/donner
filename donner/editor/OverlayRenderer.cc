@@ -459,7 +459,7 @@ std::optional<Box2d> AppendChromeItems(
                              options, &combinedBounds](svg::DocumentWriteAccess&, EntityHandle) {
       std::optional<Box2d> mergedBounds;
       for (const auto& geometry : CollectRenderableGeometry(element)) {
-        const std::optional<Box2d> worldBoundsDoc = geometry.worldBounds();
+        const std::optional<Box2d> worldBoundsDoc = GeometryWorldFrameBounds(geometry);
         const std::optional<Box2d> representedBoundsDoc =
             worldBoundsDoc.has_value()
                 ? std::make_optional(
@@ -495,7 +495,7 @@ std::optional<Box2d> AppendChromeItems(
       }
 
       // Text roots have no spline outline; they contribute their frame - the
-      // authored text box for box text, or the laid-out ink bounds for point
+      // authored text box for box text, or the full laid-out bounds for point
       // text - so text gets the same selection rectangle + transform handles
       // as shapes, plus a baseline underlay segment per line.
       for (const auto& text : CollectRenderableTextRoots(element)) {
@@ -733,12 +733,24 @@ SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
   const bool pathOutlinesOnly = selectionDetail == SelectionChromeDetail::PathOutlinesOnly;
   const bool includePathPointChrome = pathOutlinesOnly;
 
-  // A live select gesture already carries immutable start bounds and the
-  // exact current document transform. Build its lightweight bounds chrome
-  // directly from that state instead of traversing selected geometry while
-  // the async renderer may hold the document. Besides avoiding contention,
-  // this keeps converted text (one path per glyph) at constant overlay cost.
+  // A live select gesture carries immutable start bounds and the exact current
+  // document transform. Keep its path outline sampled from the live DOM so it
+  // scales and rotates with the presented object, while retaining the
+  // lightweight oriented-bounds path for handles and omitting per-element
+  // AABBs and path-point chrome.
   if (combinedBoundsOnly && activeBoundsPreview.has_value()) {
+    AppendChromeItems(
+        selection, cullRectDoc, &snapshot.paths, &snapshot.aabbsDoc,
+        /*outPathAnchorBoxes=*/nullptr, /*outPathControlLines=*/nullptr,
+        /*outPathControlPointBoxes=*/nullptr, /*outTextBaselines=*/nullptr,
+        AppendChromeItemsOptions{
+            .includePaths = true,
+            .includePerElementAabbs = false,
+            .includePathPointChrome = false,
+            .canvasScale = scale,
+            .devicePixelRatio = devicePixelRatio,
+            .representedDocumentFromLiveDocument = representedDocumentFromLiveDocument,
+        });
     const auto corners = TransformedBoxCorners(activeBoundsPreview->startBoundsDoc,
                                                activeBoundsPreview->documentFromStartDocument);
     std::array<Vector2d, 4> representedCorners;

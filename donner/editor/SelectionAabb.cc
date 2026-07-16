@@ -1,8 +1,10 @@
 #include "donner/editor/SelectionAabb.h"
 
 #include <array>
+#include <cmath>
 #include <optional>
 
+#include "donner/base/Path.h"
 #include "donner/base/Transform.h"
 #include "donner/base/parser/NumberParser.h"
 #include "donner/base/xml/XMLNode.h"
@@ -10,6 +12,8 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGTextElement.h"
+#include "donner/svg/core/Stroke.h"
+#include "donner/svg/core/VectorEffect.h"
 
 namespace donner::editor {
 
@@ -37,6 +41,38 @@ bool IsNonRenderedContainer(svg::ElementType type) {
 
 bool HasLiveSvgTreeComponents(const svg::SVGElement& element) {
   return xml::XMLNode::TryCast(element.entityHandle()).has_value() && element.tryType().has_value();
+}
+
+LineCap ToLineCap(svg::StrokeLinecap cap) {
+  switch (cap) {
+    case svg::StrokeLinecap::Butt: return LineCap::Butt;
+    case svg::StrokeLinecap::Round: return LineCap::Round;
+    case svg::StrokeLinecap::Square: return LineCap::Square;
+  }
+  return LineCap::Butt;
+}
+
+LineJoin ToLineJoin(svg::StrokeLinejoin join) {
+  switch (join) {
+    case svg::StrokeLinejoin::Miter:
+    case svg::StrokeLinejoin::MiterClip:
+    case svg::StrokeLinejoin::Arcs: return LineJoin::Miter;
+    case svg::StrokeLinejoin::Round: return LineJoin::Round;
+    case svg::StrokeLinejoin::Bevel: return LineJoin::Bevel;
+  }
+  return LineJoin::Miter;
+}
+
+double EffectiveLocalStrokeWidth(const svg::PropertyRegistry& style,
+                                 const Transform2d& documentFromElement) {
+  double strokeWidth = style.strokeWidth.get().value().value;
+  if (style.vectorEffect.getOr(svg::VectorEffect::None) == svg::VectorEffect::NonScalingStroke) {
+    const double scale = std::sqrt(std::abs(documentFromElement.determinant()));
+    if (std::isfinite(scale) && scale > 0.0) {
+      strokeWidth /= scale;
+    }
+  }
+  return strokeWidth;
 }
 
 std::optional<svg::SVGElement> SafeFirstChild(const svg::SVGElement& element) {
@@ -134,7 +170,7 @@ void MergeRenderableWorldBounds(const svg::SVGElement& root, std::optional<Box2d
   std::vector<svg::SVGGeometryElement> geometryElements;
   CollectRenderableGeometryImpl(root, geometryElements);
   for (const auto& geometry : geometryElements) {
-    const auto wb = geometry.worldBounds();
+    const auto wb = GeometryWorldFrameBounds(geometry);
     if (!wb.has_value()) {
       continue;
     }
@@ -177,7 +213,7 @@ void CollectLaterRenderableBoundsImpl(const svg::SVGElement& root, const svg::SV
 
   if (root.isa<svg::SVGGeometryElement>()) {
     if (afterSelected) {
-      const auto wb = root.cast<svg::SVGGeometryElement>().worldBounds();
+      const auto wb = GeometryWorldFrameBounds(root.cast<svg::SVGGeometryElement>());
       if (wb.has_value()) {
         out.push_back(*wb);
       }
@@ -220,6 +256,43 @@ std::vector<svg::SVGTextElement> CollectRenderableTextRoots(const svg::SVGElemen
   return out;
 }
 
+std::optional<Box2d> GeometryWorldFrameBounds(const svg::SVGGeometryElement& geometry) {
+  std::optional<Box2d> result = geometry.worldBounds();
+  const svg::PropertyRegistry style = geometry.getComputedStyle();
+  if (style.stroke.get().value().is<svg::PaintServer::None>()) {
+    return result;
+  }
+
+  const Transform2d documentFromGeometry = geometry.elementFromWorld();
+  const double strokeWidth = EffectiveLocalStrokeWidth(style, documentFromGeometry);
+  if (strokeWidth <= 0.0) {
+    return result;
+  }
+
+  const std::optional<Path> spline = geometry.computedSpline();
+  if (!spline.has_value() || spline->empty()) {
+    return result;
+  }
+
+  StrokeStyle strokeStyle;
+  strokeStyle.width = strokeWidth;
+  strokeStyle.cap = ToLineCap(style.strokeLinecap.get().value());
+  strokeStyle.join = ToLineJoin(style.strokeLinejoin.get().value());
+  strokeStyle.miterLimit = style.strokeMiterlimit.get().value();
+  const Path strokeOutline = spline->strokeToFill(strokeStyle);
+  if (strokeOutline.empty()) {
+    return result;
+  }
+
+  const Box2d strokeBounds = strokeOutline.transformedBounds(documentFromGeometry);
+  if (result.has_value()) {
+    result->addBox(strokeBounds);
+  } else {
+    result = strokeBounds;
+  }
+  return result;
+}
+
 std::optional<Box2d> TextWorldInkBounds(const svg::SVGTextElement& text) {
   const Box2d inkLocal = text.inkBoundingBox();
   if (inkLocal.isEmpty()) {
@@ -248,10 +321,31 @@ std::optional<Box2d> AuthoredTextBoxLocal(const svg::SVGTextElement& text) {
 }
 
 std::optional<Box2d> TextWorldFrameBounds(const svg::SVGTextElement& text) {
-  if (const std::optional<Box2d> boxLocal = AuthoredTextBoxLocal(text); boxLocal.has_value()) {
-    return TextWorldAabbOfLocalRect(text, *boxLocal);
+  std::optional<Box2d> frameLocal = AuthoredTextBoxLocal(text);
+  if (!frameLocal.has_value()) {
+    const Box2d objectLocal = text.objectBoundingBox();
+    if (objectLocal.isEmpty()) {
+      return std::nullopt;
+    }
+    frameLocal = objectLocal;
   }
-  return TextWorldInkBounds(text);
+
+  const svg::PropertyRegistry style = text.getComputedStyle();
+  if (!style.stroke.get().value().is<svg::PaintServer::None>()) {
+    const double strokeWidth = EffectiveLocalStrokeWidth(style, text.elementFromWorld());
+    if (strokeWidth > 0.0) {
+      const Box2d inkLocal = text.inkBoundingBox();
+      if (!inkLocal.isEmpty()) {
+        double padding = strokeWidth * 0.5;
+        if (ToLineJoin(style.strokeLinejoin.get().value()) == LineJoin::Miter) {
+          padding *= style.strokeMiterlimit.get().value();
+        }
+        frameLocal->addBox(inkLocal.inflatedBy(padding));
+      }
+    }
+  }
+
+  return TextWorldAabbOfLocalRect(text, *frameLocal);
 }
 
 std::vector<Box2d> SnapshotSelectionWorldBounds(std::span<const svg::SVGElement> selection) {
@@ -260,8 +354,8 @@ std::vector<Box2d> SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>
   for (const auto& element : selection) {
     // Expand each selection entry to its renderable leaves and union their
     // world bounds. For a plain geometry selection this is a single-element
-    // collection that reduces to `worldBounds()`; a `<text>` root reduces to
-    // its ink bounds; for a `<g filter>` it unions every descendant shape and
+    // collection that reduces to stroke-aware geometry bounds; a `<text>` root
+    // reduces to its full frame; for a `<g filter>` it unions every descendant shape and
     // text run so the AABB envelopes the visible group.
     std::optional<Box2d> merged;
     element.withWriteAccess([&element, &merged](svg::DocumentWriteAccess&, EntityHandle) {

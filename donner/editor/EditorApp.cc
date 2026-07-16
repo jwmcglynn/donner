@@ -1567,6 +1567,14 @@ void EditorApp::setElementLocked(const svg::SVGElement& element, bool locked) {
   // never locked. This mutation is never lock-gated (see `IsLockGatedCommand`)
   // so a locked layer can always be unlocked.
   if (locked) {
+    const std::size_t previousSelectionSize = selection_.size();
+    std::erase_if(selection_, [&element](const svg::SVGElement& selected) {
+      return IsElementOrDescendant(element, selected);
+    });
+    if (selection_.size() != previousSelectionSize) {
+      refreshFirstSelectionCache();
+    }
+
     applyMutation(EditorCommand::SetAttributeCommand(element, std::string(kLockedAttributeName),
                                                      std::string(kLockedAttributeValue)));
   } else {
