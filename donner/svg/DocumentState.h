@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "donner/base/EcsRegistry.h"
+#include "donner/base/Utils.h"
 
 #if defined(__clang__)
 #define DONNER_NO_THREAD_SAFETY_ANALYSIS __attribute__((no_thread_safety_analysis))
@@ -76,17 +77,52 @@ public:
     }
   }
 
+  /**
+   * Try to atomically convert the calling thread's sole read lock to a write lock.
+   *
+   * This operation never waits. On failure, the caller retains its read lock unchanged.
+   */
+  [[nodiscard]] bool tryUpgradeReadToWrite() DONNER_NO_THREAD_SAFETY_ANALYSIS {
+    if (!writerMutex_.try_lock()) {
+      return false;
+    }
+
+    writerPendingOrActive_.store(true, std::memory_order_release);
+    std::uint32_t expectedReaders = 1;
+    if (!activeReaders_.compare_exchange_strong(expectedReaders, 0, std::memory_order_acq_rel,
+                                                std::memory_order_acquire)) {
+      writerPendingOrActive_.store(false, std::memory_order_release);
+      notifyWaiters();
+      writerMutex_.unlock();
+      return false;
+    }
+
+    return true;
+  }
+
+  /// Atomically convert the calling thread's write lock to a read lock.
+  void downgradeWriteToRead() DONNER_NO_THREAD_SAFETY_ANALYSIS {
+    [[maybe_unused]] const std::uint32_t previous =
+        activeReaders_.fetch_add(1, std::memory_order_acq_rel);
+    assert(previous == 0 && "DocumentAccessLock write downgrade with active readers");
+    writerPendingOrActive_.store(false, std::memory_order_release);
+    notifyWaiters();
+    writerMutex_.unlock();
+  }
+
   /// Release exclusive write access.
   void unlockWrite() DONNER_NO_THREAD_SAFETY_ANALYSIS {
     writerPendingOrActive_.store(false, std::memory_order_release);
-    {
-      std::lock_guard<std::mutex> lock(waitMutex_);
-      waitCondition_.notify_all();
-    }
+    notifyWaiters();
     writerMutex_.unlock();
   }
 
 private:
+  void notifyWaiters() {
+    std::lock_guard<std::mutex> lock(waitMutex_);
+    waitCondition_.notify_all();
+  }
+
   void waitForWriterToLeave() {
     if (!writerPendingOrActive_.load(std::memory_order_acquire)) {
       return;
@@ -317,8 +353,11 @@ public:
     maxWriteLockHeldNs_.store(0, std::memory_order_relaxed);
   }
 
-  /// Returns true if this thread currently holds reentrant write access to this document.
-  bool currentThreadHasWriteAccess() const { return activeWriteDocument_ == this; }
+  /// Returns true if this thread currently holds write access to this document.
+  bool currentThreadHasWriteAccess() const {
+    return std::find(activeWriteDocuments_.begin(), activeWriteDocuments_.end(), this) !=
+           activeWriteDocuments_.end();
+  }
 
   /// Returns true if this thread currently holds read or write access to this document.
   bool currentThreadHasAccess() const {
@@ -426,6 +465,10 @@ private:
 
   void releaseReadLock() { activeReadLocks_.fetch_sub(1, std::memory_order_relaxed); }
 
+  void restoreReadLockAfterWriteDowngrade() {
+    activeReadLocks_.fetch_add(1, std::memory_order_relaxed);
+  }
+
   void recordReadLockHeld(std::uint64_t heldNs) {
     totalReadLockHeldNs_.fetch_add(heldNs, std::memory_order_relaxed);
     updateMax(maxReadLockHeldNs_, heldNs);
@@ -485,6 +528,29 @@ private:
     assert(false && "DocumentReadAccess marker missing");
   }
 
+  void pushWriteAccessMarker() { activeWriteDocuments_.push_back(this); }
+
+  void popWriteAccessMarker() {
+    for (std::size_t index = activeWriteDocuments_.size(); index > 0; --index) {
+      if (activeWriteDocuments_[index - 1] == this) {
+        activeWriteDocuments_.erase(activeWriteDocuments_.begin() +
+                                    static_cast<std::ptrdiff_t>(index - 1));
+        return;
+      }
+    }
+
+    assert(false && "DocumentWriteAccess marker missing");
+  }
+
+  std::size_t currentThreadWriteAccessCount() const {
+    return static_cast<std::size_t>(
+        std::count(activeWriteDocuments_.begin(), activeWriteDocuments_.end(), this));
+  }
+
+  bool currentThreadWriteAccessIsInnermost() const {
+    return !activeWriteDocuments_.empty() && activeWriteDocuments_.back() == this;
+  }
+
   static void updateMax(std::atomic<std::uint64_t>& target, std::uint64_t value) {
     std::uint64_t current = target.load(std::memory_order_relaxed);
     while (value > current &&
@@ -501,7 +567,7 @@ private:
   }
 
   inline static thread_local std::vector<DocumentState*> activeReadDocuments_;
-  inline static thread_local DocumentState* activeWriteDocument_ = nullptr;
+  inline static thread_local std::vector<DocumentState*> activeWriteDocuments_;
   inline static thread_local DocumentState* activeMutationBatchDocument_ = nullptr;
   inline static thread_local int activeMutationBatchDepth_ = 0;
   inline static thread_local bool activeMutationBatchMutated_ = false;
@@ -564,7 +630,22 @@ public:
   /// Get the guarded registry.
   Registry& registry() const { return documentState_->registry(); }
 
+  /**
+   * Try to temporarily upgrade this read scope to write access.
+   *
+   * The returned write guard restores this read access when it is destroyed. In ConcurrentDom
+   * mode the conversion succeeds only when this thread owns the document's sole read lock and the
+   * writer gate is immediately available. Failure leaves this guard unchanged.
+   */
+  [[nodiscard]] std::optional<DocumentWriteAccess> tryUpgrade();
+
 private:
+  friend class DocumentWriteAccess;
+
+  struct AdoptDowngradedLockTag {};
+
+  DocumentReadAccess(DocumentState& documentState, AdoptDowngradedLockTag);
+
   DocumentState* documentState_;
   std::chrono::steady_clock::time_point lockAcquiredAt_;
   bool ownsReadMarker_ = false;
@@ -605,11 +686,26 @@ public:
   /// Mark the guarded document as mutated.
   void bumpMutationRevision() const { documentState_->bumpMutationRevision(); }
 
+  /**
+   * Try to consume this write guard and atomically downgrade it to read access.
+   *
+   * Only an outer guard that directly owns the document's write lock can be downgraded. Failure
+   * leaves this guard unchanged, including while a nested read or reentrant write guard is active.
+   */
+  [[nodiscard]] std::optional<DocumentReadAccess> tryDowngrade() &&;
+
 private:
+  friend class DocumentReadAccess;
+
+  struct AdoptUpgradedLockTag {};
+
+  DocumentWriteAccess(DocumentState& documentState, AdoptUpgradedLockTag);
+
   DocumentState* documentState_;
   std::chrono::steady_clock::time_point lockAcquiredAt_;
-  DocumentState* previousWriteDocument_ = nullptr;
   bool ownsWriteMarker_ = false;
+  bool ownsWriteLock_ = false;
+  bool upgradedFromRead_ = false;
 };
 
 /// Scoped deferral for detached-node collection during snapshot or observer epochs.
@@ -721,7 +817,7 @@ private:
 inline DocumentReadAccess::DocumentReadAccess(DocumentState& documentState)
     : documentState_(&documentState) {
   if (documentState.threadingMode_ == ThreadingMode::ConcurrentDom) {
-    if (DocumentState::activeWriteDocument_ != &documentState &&
+    if (!documentState.currentThreadHasWriteAccess() &&
         !documentState.currentThreadHasReadAccess()) {
       documentState.accessMutex_.lockRead();
       lockAcquiredAt_ = std::chrono::steady_clock::now();
@@ -733,6 +829,15 @@ inline DocumentReadAccess::DocumentReadAccess(DocumentState& documentState)
   } else {
     documentState.assertSingleThreadedAccess();
   }
+}
+
+inline DocumentReadAccess::DocumentReadAccess(DocumentState& documentState, AdoptDowngradedLockTag)
+    : documentState_(&documentState),
+      lockAcquiredAt_(std::chrono::steady_clock::now()),
+      ownsReadMarker_(true),
+      ownsReadLockDiagnostics_(true) {
+  documentState.pushReadAccessMarker();
+  documentState.recordReadAccess(true);
 }
 
 inline DocumentReadAccess::DocumentReadAccess(DocumentReadAccess&& other) noexcept
@@ -747,6 +852,9 @@ inline DocumentReadAccess::DocumentReadAccess(DocumentReadAccess&& other) noexce
 
 inline DocumentReadAccess::~DocumentReadAccess() {
   if (ownsReadLockDiagnostics_) {
+    UTILS_RELEASE_ASSERT_MSG(
+        !documentState_->currentThreadHasWriteAccess(),
+        "A document read lock owner must outlive write guards upgraded from that read scope");
     documentState_->recordReadLockHeld(DocumentState::elapsedNs(lockAcquiredAt_));
     documentState_->accessMutex_.unlockRead();
     documentState_->releaseReadLock();
@@ -760,38 +868,137 @@ inline DocumentReadAccess::~DocumentReadAccess() {
 inline DocumentWriteAccess::DocumentWriteAccess(DocumentState& documentState)
     : documentState_(&documentState) {
   if (documentState.threadingMode_ == ThreadingMode::ConcurrentDom) {
-    bool acquiredLock = false;
-    if (DocumentState::activeWriteDocument_ != &documentState) {
+    if (documentState.currentThreadHasWriteAccess()) {
+      documentState.pushWriteAccessMarker();
+      ownsWriteMarker_ = true;
+      documentState.recordWriteAccess(false);
+    } else if (documentState.currentThreadHasReadAccess()) {
+      const bool upgraded = documentState.accessMutex_.tryUpgradeReadToWrite();
+      UTILS_RELEASE_ASSERT_MSG(
+          upgraded,
+          "Cannot implicitly upgrade document read access while another reader or writer is "
+          "active; use DocumentReadAccess::tryUpgrade() when contention is expected");
+      lockAcquiredAt_ = std::chrono::steady_clock::now();
+      documentState.pushWriteAccessMarker();
+      ownsWriteMarker_ = true;
+      ownsWriteLock_ = true;
+      upgradedFromRead_ = true;
+      documentState.releaseReadLock();
+      documentState.recordWriteAccess(true);
+    } else {
       documentState.accessMutex_.lockWrite();
       lockAcquiredAt_ = std::chrono::steady_clock::now();
-      previousWriteDocument_ = DocumentState::activeWriteDocument_;
-      DocumentState::activeWriteDocument_ = &documentState;
+      documentState.pushWriteAccessMarker();
       ownsWriteMarker_ = true;
-      acquiredLock = true;
+      ownsWriteLock_ = true;
+      documentState.recordWriteAccess(true);
     }
-    documentState.recordWriteAccess(acquiredLock);
   } else {
     documentState.assertSingleThreadedAccess();
   }
 }
 
+inline DocumentWriteAccess::DocumentWriteAccess(DocumentState& documentState, AdoptUpgradedLockTag)
+    : documentState_(&documentState),
+      lockAcquiredAt_(std::chrono::steady_clock::now()),
+      ownsWriteMarker_(true),
+      ownsWriteLock_(true),
+      upgradedFromRead_(true) {
+  documentState.pushWriteAccessMarker();
+  documentState.releaseReadLock();
+  documentState.recordWriteAccess(true);
+}
+
 inline DocumentWriteAccess::DocumentWriteAccess(DocumentWriteAccess&& other) noexcept
     : documentState_(other.documentState_),
       lockAcquiredAt_(other.lockAcquiredAt_),
-      previousWriteDocument_(other.previousWriteDocument_),
-      ownsWriteMarker_(other.ownsWriteMarker_) {
+      ownsWriteMarker_(other.ownsWriteMarker_),
+      ownsWriteLock_(other.ownsWriteLock_),
+      upgradedFromRead_(other.upgradedFromRead_) {
   other.documentState_ = nullptr;
-  other.previousWriteDocument_ = nullptr;
   other.ownsWriteMarker_ = false;
+  other.ownsWriteLock_ = false;
+  other.upgradedFromRead_ = false;
 }
 
 inline DocumentWriteAccess::~DocumentWriteAccess() {
-  if (ownsWriteMarker_) {
-    DocumentState::activeWriteDocument_ = previousWriteDocument_;
-    documentState_->recordWriteLockHeld(DocumentState::elapsedNs(lockAcquiredAt_));
+  if (!ownsWriteMarker_) {
+    return;
+  }
+
+  if (!ownsWriteLock_) {
+    documentState_->popWriteAccessMarker();
+    return;
+  }
+
+  UTILS_RELEASE_ASSERT_MSG(documentState_->currentThreadWriteAccessCount() == 1 &&
+                               documentState_->currentThreadWriteAccessIsInnermost(),
+                           "A document write lock owner must outlive all nested write guards");
+  UTILS_RELEASE_ASSERT_MSG(
+      upgradedFromRead_ || !documentState_->currentThreadHasReadAccess(),
+      "A document write lock owner must outlive all reads nested in its write scope");
+  documentState_->popWriteAccessMarker();
+  documentState_->recordWriteLockHeld(DocumentState::elapsedNs(lockAcquiredAt_));
+  if (upgradedFromRead_) {
+    documentState_->accessMutex_.downgradeWriteToRead();
+    documentState_->releaseWriteLock();
+    documentState_->restoreReadLockAfterWriteDowngrade();
+  } else {
     documentState_->accessMutex_.unlockWrite();
     documentState_->releaseWriteLock();
   }
+}
+
+inline auto DocumentReadAccess::tryUpgrade() -> std::optional<DocumentWriteAccess> {
+  if (documentState_ == nullptr) {
+    return std::nullopt;
+  }
+
+  if (documentState_->threadingMode_ != ThreadingMode::ConcurrentDom ||
+      documentState_->currentThreadHasWriteAccess()) {
+    DocumentWriteAccess writeAccess(*documentState_);
+    return std::optional<DocumentWriteAccess>(std::move(writeAccess));
+  }
+
+  UTILS_RELEASE_ASSERT_MSG(ownsReadMarker_ && documentState_->currentThreadHasReadAccess(),
+                           "DocumentReadAccess::tryUpgrade() requires an active read guard");
+  if (!documentState_->accessMutex_.tryUpgradeReadToWrite()) {
+    return std::nullopt;
+  }
+
+  DocumentWriteAccess writeAccess(*documentState_, DocumentWriteAccess::AdoptUpgradedLockTag{});
+  return std::optional<DocumentWriteAccess>(std::move(writeAccess));
+}
+
+inline auto DocumentWriteAccess::tryDowngrade() && -> std::optional<DocumentReadAccess> {
+  if (documentState_ == nullptr) {
+    return std::nullopt;
+  }
+
+  if (documentState_->threadingMode_ != ThreadingMode::ConcurrentDom) {
+    DocumentState* documentState = documentState_;
+    documentState_ = nullptr;
+    DocumentReadAccess readAccess(*documentState);
+    return std::optional<DocumentReadAccess>(std::move(readAccess));
+  }
+
+  if (!ownsWriteLock_ || upgradedFromRead_ || documentState_->currentThreadHasReadAccess() ||
+      documentState_->currentThreadWriteAccessCount() != 1 ||
+      !documentState_->currentThreadWriteAccessIsInnermost()) {
+    return std::nullopt;
+  }
+
+  DocumentState* documentState = documentState_;
+  documentState->popWriteAccessMarker();
+  documentState->recordWriteLockHeld(DocumentState::elapsedNs(lockAcquiredAt_));
+  documentState->accessMutex_.downgradeWriteToRead();
+  documentState->releaseWriteLock();
+
+  documentState_ = nullptr;
+  ownsWriteMarker_ = false;
+  ownsWriteLock_ = false;
+  DocumentReadAccess readAccess(*documentState, DocumentReadAccess::AdoptDowngradedLockTag{});
+  return std::optional<DocumentReadAccess>(std::move(readAccess));
 }
 
 inline DetachedNodeCollectionDeferral DocumentState::deferDetachedNodeCollection() {
