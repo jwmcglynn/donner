@@ -907,6 +907,24 @@ TEST_F(TextToolTest, RotateRingRotatesElementKeepingFrameAttributes) {
   EXPECT_THAT(attr(element, "font-size"), Eq("32"));
 }
 
+// Regression coverage for a main-thread self-deadlock observed in the live editor. The rotate
+// gesture used to hold a ConcurrentDom read guard while calling the lazy transform() accessor,
+// which attempts to acquire the same document's write lock. Starting the gesture would then wait
+// forever for its own read guard to drain.
+TEST_F(TextToolTest, RotateRingStartsUnderConcurrentDomWithoutSelfDeadlock) {
+  tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(70.0, 120.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(70.0, 120.0));
+  ASSERT_TRUE(tool.isEditing());
+  type("Hi");
+
+  app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+
+  tool.onMouseDown(app, Vector2d(84.0, 134.0), MouseModifiers{});
+
+  EXPECT_TRUE(tool.isRotatingFrame());
+}
+
 TEST_F(TextToolTest, RotatedFrameStaysOrientedAndResizesInLocalSpace) {
   // Box (10,20)-(70,120), center (40,70). Rotate ~45 degrees via the rotate
   // ring, then verify the hard invariant: the frame chrome and its handles
