@@ -78,8 +78,8 @@ public:
     /// fully opaque. New point text starts at zero, pointer movement reveals
     /// it, and text input fades it back to zero.
     float frameOpacity = 1.0f;
-    /// Highlight quads for the active text range, one oriented character
-    /// cell at a time in document space. Empty for a collapsed caret.
+    /// Highlight quads for the active text range, one continuous oriented
+    /// fragment per display line in document space. Empty for a collapsed caret.
     std::vector<std::array<Vector2d, 4>> selectionQuadsDoc;
   };
 
