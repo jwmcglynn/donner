@@ -310,13 +310,15 @@ std::optional<Box2d> AuthoredTextBoxLocal(const svg::SVGTextElement& text) {
     return std::nullopt;
   }
 
-  // Invert the text tool's creation rule: the `x`/`y` origin is the box's
-  // top-left with the first baseline one font-size below the top. 16 is the
-  // CSS `font-size` initial value, matching what an attribute-less text
-  // renders at.
+  // Legacy box text derives the frame origin from the first baseline. Newer
+  // text stores its frame origin independently so a top-edge resize does not
+  // move the text baseline. 16 is the CSS `font-size` initial value.
   const double fontSize = ParseNumericAttribute(text, "font-size").value_or(16.0);
-  const Vector2d topLeft(ParseNumericAttribute(text, "x").value_or(0.0),
-                         ParseNumericAttribute(text, "y").value_or(0.0) - fontSize);
+  const Vector2d legacyTopLeft(ParseNumericAttribute(text, "x").value_or(0.0),
+                               ParseNumericAttribute(text, "y").value_or(0.0) - fontSize);
+  const Vector2d topLeft(
+      ParseNumericAttribute(text, "data-donner-text-box-x").value_or(legacyTopLeft.x),
+      ParseNumericAttribute(text, "data-donner-text-box-y").value_or(legacyTopLeft.y));
   return Box2d(topLeft, topLeft + Vector2d(*boxWidth, *boxHeight));
 }
 

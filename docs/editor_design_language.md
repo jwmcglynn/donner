@@ -117,7 +117,8 @@ visible. Drag-created box text keeps its authored frame visible.
 
 Text frame handles use the same handle-box calculation as select-tool handles at every display
 scale. During frame resize, pointer moves update only local frame chrome. DOM attributes, text
-rewrap, source writeback, and document rendering occur once on release.
+rewrap, source writeback, and document rendering occur once on release. The authored frame stores
+its own origin, so resizing its top or left edge does not move the glyph origin or first baseline.
 
 ### Canvas-First Source Access
 
