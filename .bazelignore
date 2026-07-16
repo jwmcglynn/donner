@@ -13,3 +13,6 @@ CMakeFiles
 # Ignore Claude Code harness worktrees — their BUILD files are stale copies
 # and break wildcard bazel queries like //...
 .claude
+
+# Ignore project-local git worktrees for the same reason
+.worktrees
