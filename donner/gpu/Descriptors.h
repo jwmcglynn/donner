@@ -292,7 +292,9 @@ struct TextureDescriptor {
   Extent2d size;                                     //!< Extent in texels. Must be nonzero.
   TextureFormat format = TextureFormat::RGBA8Unorm;  //!< Texel format.
   TextureUsage usage = TextureUsage::None;           //!< Usage flags. Must not be empty.
-  uint32_t sampleCount = 1;  //!< Samples per texel. Only 1 is supported; coverage is analytic.
+  uint32_t sampleCount = 1;  //!< Samples per texel. Only 1 is accepted today; multisampled
+                             //!< attachments plus a resolve-target story arrive with the Geode
+                             //!< pipeline migration packets.
 };
 
 /// Descriptor for `Device::createTextureView`. Views cover the whole texture.
@@ -392,7 +394,8 @@ struct RenderPipelineDescriptor {
   FragmentState fragment;                                        //!< Fragment stage.
   PrimitiveTopology topology = PrimitiveTopology::TriangleList;  //!< Primitive topology.
   CullMode cullMode = CullMode::None;                            //!< Face culling mode.
-  uint32_t multisampleCount = 1;  //!< Samples per pixel. Only 1 is supported.
+  uint32_t multisampleCount = 1;  //!< Samples per pixel. Only 1 is accepted today; multisample
+                                  //!< support arrives with the Geode pipeline migration packets.
 };
 
 /// One color attachment of a \ref RenderPassDescriptor.
@@ -421,10 +424,11 @@ struct TexelCopyTextureInfo {
  *
  * \ref bytesPerRow must be a multiple of \ref donner::gpu::kTexelRowPitchAlignment (256): that is
  * the strictest row-pitch alignment across the native APIs this runtime targets, so enforcing it
- * uniformly keeps recorded copies portable to every backend without repacking.
+ * uniformly keeps recorded copies portable to every backend without repacking. For the same
+ * portability reason, \ref offsetBytes must be aligned to the copied format's texel size.
  */
 struct TexelCopyBufferLayout {
-  uint64_t offsetBytes = 0;   //!< Byte offset of the first texel row.
+  uint64_t offsetBytes = 0;   //!< Byte offset of the first texel row. Must be texel-size aligned.
   uint32_t bytesPerRow = 0;   //!< Bytes between row starts. Must be 256-aligned and cover a row.
   uint32_t rowsPerImage = 0;  //!< Rows allotted to the image. Must cover the copy height.
 };

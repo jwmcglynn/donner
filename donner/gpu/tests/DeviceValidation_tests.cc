@@ -346,6 +346,26 @@ TEST_F(RenderPipelineValidationTests, RejectsEmptyTargets) {
       IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor, HasSubstr("targets is empty")));
 }
 
+TEST_F(RenderPipelineValidationTests, RejectsTooManyVertexAttributes) {
+  RenderPipelineDescriptor descriptor = validDescriptor();
+  VertexBufferLayout& layout = descriptor.vertex.buffers[0];
+  layout.strideBytes = (kMaxVertexAttributes + 1) * 8;
+  layout.attributes.clear();
+  for (uint32_t i = 0; i < kMaxVertexAttributes + 1; ++i) {
+    layout.attributes.push_back(VertexAttribute{VertexFormat::Float32x2, i * 8, i});
+  }
+  EXPECT_THAT(
+      device_.createRenderPipeline(descriptor),
+      IsGpuErrorWithMessage(GpuErrorType::LimitExceeded, HasSubstr("kMaxVertexAttributes")));
+}
+
+TEST_F(RenderPipelineValidationTests, RejectsOutOfRangeShaderLocation) {
+  RenderPipelineDescriptor descriptor = validDescriptor();
+  descriptor.vertex.buffers[0].attributes[0].shaderLocation = kMaxVertexAttributes;
+  EXPECT_THAT(device_.createRenderPipeline(descriptor),
+              IsGpuErrorWithMessage(GpuErrorType::LimitExceeded, HasSubstr("shaderLocation 16")));
+}
+
 TEST_F(RenderPipelineValidationTests, RejectsMultisample) {
   RenderPipelineDescriptor descriptor = validDescriptor();
   descriptor.multisampleCount = 4;
@@ -420,6 +440,14 @@ TEST_F(WriteTextureTests, RejectsBytesPerRowSmallerThanRow) {
       device_.writeTexture(wide, MakeBytes(1024), TexelCopyBufferLayout{0, 256, 2},
                            Extent2d{128, 2}),
       IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor, HasSubstr("does not cover one row")));
+}
+
+TEST_F(WriteTextureTests, RejectsOffsetNotAlignedToTexelSize) {
+  // RGBA8 texels are 4 bytes; an offset of 2 is not texel-aligned.
+  EXPECT_THAT(device_.writeTexture(texture_, MakeBytes(kPaddedByteCount + 2),
+                                   TexelCopyBufferLayout{2, 256, 4}, Extent2d{4, 4}),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor,
+                                    HasSubstr("not aligned to the 4-byte texel size")));
 }
 
 TEST_F(WriteTextureTests, RejectsDataTooSmall) {

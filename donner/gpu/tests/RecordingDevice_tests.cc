@@ -29,6 +29,43 @@ std::vector<uint8_t> MakeBytes(size_t count) {
   return bytes;
 }
 
+/// Backend fake whose submissions always fail, proving that a rejected submission does not
+/// consume a serial.
+class FailingSubmitDevice : public Device {
+public:
+  uint64_t completedSerial() const override { return lastSubmittedSerial(); }
+
+protected:
+  Status onCreateBuffer(uint32_t, const BufferDescriptor&) override { return OkStatus(); }
+  Status onCreateTexture(uint32_t, const TextureDescriptor&) override { return OkStatus(); }
+  Status onCreateTextureView(uint32_t, uint32_t, const TextureViewDescriptor&) override {
+    return OkStatus();
+  }
+  Status onCreateSampler(uint32_t, const SamplerDescriptor&) override { return OkStatus(); }
+  Status onCreateBindGroupLayout(uint32_t, const BindGroupLayoutDescriptor&) override {
+    return OkStatus();
+  }
+  Status onCreateBindGroup(uint32_t, const BindGroupDescriptor&) override { return OkStatus(); }
+  Status onCreatePipelineLayout(uint32_t, const PipelineLayoutDescriptor&) override {
+    return OkStatus();
+  }
+  Status onCreateShaderModule(uint32_t, const ShaderModuleDescriptor&) override {
+    return OkStatus();
+  }
+  Status onCreateRenderPipeline(uint32_t, const RenderPipelineDescriptor&) override {
+    return OkStatus();
+  }
+  void onDestroyResource(std::string_view, uint32_t) override {}
+  Status onWriteBuffer(uint32_t, uint64_t, std::span<const uint8_t>) override { return OkStatus(); }
+  Status onWriteTexture(uint32_t, std::span<const uint8_t>, const TexelCopyBufferLayout&,
+                        const Extent2d&) override {
+    return OkStatus();
+  }
+  Status onSubmit(uint64_t, uint32_t, std::span<const Command>) override {
+    return GpuError{GpuErrorType::InvalidState, "backend rejected the submission"};
+  }
+};
+
 /// Records the representative solid-fill stream: every resource creation, queue write, a full
 /// render pass, a readback copy, a destroy, and a submission.
 void RecordRepresentativeStream(RecordingDevice& device) {
@@ -131,6 +168,22 @@ TEST(RecordingDeviceTests, SubmissionSerialsStrictlyIncreaseAndComplete) {
     EXPECT_THAT(device.lastSubmittedSerial(), Eq(previousSerial));
     EXPECT_THAT(device.completedSerial(), Eq(previousSerial));
   }
+}
+
+TEST(RecordingDeviceTests, FailedBackendSubmitDoesNotBurnSerial) {
+  FailingSubmitDevice device;
+  std::unique_ptr<CommandEncoder> encoder = GetResultOrFail(device.createCommandEncoder());
+  auto commandBuffer = encoder->finish();
+  ASSERT_THAT(commandBuffer, HasResult());
+
+  EXPECT_THAT(device.submit(std::move(commandBuffer).result()),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState,
+                                    HasSubstr("backend rejected the submission")));
+
+  // The rejected submission must not consume a serial: completion waiters would otherwise treat
+  // the failed work as finished.
+  EXPECT_THAT(device.lastSubmittedSerial(), Eq(0u));
+  EXPECT_THAT(device.completedSerial(), Eq(0u));
 }
 
 TEST(RecordingDeviceTests, IdenticalStreamsSerializeByteIdentically) {

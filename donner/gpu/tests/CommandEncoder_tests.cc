@@ -298,6 +298,22 @@ TEST_F(CommandEncoderTests, BeginRenderPassRejectsNonRenderableView) {
       IsGpuErrorWithMessage(GpuErrorType::UsageMismatch, HasSubstr("RenderAttachment")));
 }
 
+TEST_F(CommandEncoderTests, DuplicateAttachmentViewFails) {
+  EXPECT_THAT(encoder_->beginRenderPass(RenderPassDescriptor{
+                  "duplicatePass",
+                  {RenderPassColorAttachment{targetView_, LoadOp::Clear, StoreOp::Store},
+                   RenderPassColorAttachment{targetView_, LoadOp::Load, StoreOp::Store}}}),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor,
+                                    HasSubstr("multiple color attachments")));
+}
+
+TEST_F(CommandEncoderTests, CopyTextureToBufferRejectsMisalignedOffset) {
+  EXPECT_THAT(encoder_->copyTextureToBuffer(TexelCopyTextureInfo{target_}, readbackBuffer_,
+                                            TexelCopyBufferLayout{2, 256, 4}, Extent2d{4, 4}),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor,
+                                    HasSubstr("not aligned to the 4-byte texel size")));
+}
+
 TEST_F(CommandEncoderTests, SubmitNullCommandBufferFails) {
   EXPECT_THAT(device_.submit(CommandBuffer()), IsGpuError(GpuErrorType::InvalidHandle));
 }

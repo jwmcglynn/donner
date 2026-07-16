@@ -113,6 +113,11 @@ private:
  * error - so a failure cannot be silently skipped and the root cause is always the reported
  * error. Obtain encoders via `Device::createCommandEncoder`; the encoder must not outlive its
  * device.
+ *
+ * Known gap: destroying a resource that a recorded-but-unsubmitted command buffer references is
+ * not yet validated; commands are checked at recording time only. Deferred-destruction
+ * validation arrives with the resource-lifetime and submission packet (design 0053 change
+ * sequence step 3).
  */
 class CommandEncoder {
 public:

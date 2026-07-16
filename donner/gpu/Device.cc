@@ -102,6 +102,17 @@ Status ValidateVertexBufferLayouts(const std::vector<VertexBufferLayout>& buffer
                            buffers.size(), kMaxVertexBuffers));
   }
 
+  size_t totalAttributes = 0;
+  for (const VertexBufferLayout& layout : buffers) {
+    totalAttributes += layout.attributes.size();
+  }
+  if (totalAttributes > kMaxVertexAttributes) {
+    return Err(GpuErrorType::LimitExceeded,
+               std::format("RenderPipelineDescriptor has {} vertex attributes, exceeding "
+                           "kMaxVertexAttributes {}",
+                           totalAttributes, kMaxVertexAttributes));
+  }
+
   for (size_t bufferIndex = 0; bufferIndex < buffers.size(); ++bufferIndex) {
     const VertexBufferLayout& layout = buffers[bufferIndex];
     if (layout.strideBytes == 0) {
@@ -113,6 +124,11 @@ Status ValidateVertexBufferLayouts(const std::vector<VertexBufferLayout>& buffer
                  std::format("VertexBufferLayout {} has no attributes", bufferIndex));
     }
     for (const VertexAttribute& attribute : layout.attributes) {
+      if (attribute.shaderLocation >= kMaxVertexAttributes) {
+        return Err(GpuErrorType::LimitExceeded,
+                   std::format("VertexAttribute shaderLocation {} exceeds kMaxVertexAttributes {}",
+                               attribute.shaderLocation, kMaxVertexAttributes));
+      }
       const std::optional<uint64_t> attributeEnd =
           CheckedAdd(attribute.offsetBytes, VertexFormatByteSize(attribute.format));
       if (!attributeEnd || *attributeEnd > layout.strideBytes) {
@@ -161,6 +177,13 @@ Result<uint64_t> ValidateTexelCopyInternal(const TexelCopyBufferLayout& layout,
     return Err(GpuErrorType::InvalidDescriptor,
                std::format("{}: bytesPerRow {} is not a multiple of {}", context,
                            layout.bytesPerRow, kTexelRowPitchAlignment));
+  }
+  // Texel-size offset alignment is a portability rule like the 256-byte row pitch: every native
+  // API this runtime targets requires copy offsets aligned to the texel block size.
+  if (layout.offsetBytes % TextureFormatBytesPerTexel(format) != 0) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               std::format("{}: offsetBytes {} is not aligned to the {}-byte texel size", context,
+                           layout.offsetBytes, TextureFormatBytesPerTexel(format)));
   }
   if (layout.bytesPerRow < *rowBytes) {
     return Err(GpuErrorType::InvalidDescriptor,

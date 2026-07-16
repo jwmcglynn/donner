@@ -1,8 +1,7 @@
 #include "donner/gpu/RecordingDevice.h"
 
-#include <cctype>
-#include <cstdio>
 #include <format>
+#include <locale>
 #include <sstream>
 #include <string_view>
 
@@ -10,28 +9,34 @@ namespace donner::gpu {
 
 namespace {
 
-/// Formats a double deterministically (no locale dependence beyond the C locale, fixed
-/// precision).
-std::string FormatDouble(double value) {
-  char buffer[32];
-  std::snprintf(buffer, sizeof(buffer), "%.9g", value);
-  return buffer;
+/// Creates a serialization stream imbued with the classic "C" locale, so captured numbers are
+/// byte-identical regardless of the process's global locale (no digit grouping).
+std::ostringstream MakeLineStream() {
+  std::ostringstream os;
+  os.imbue(std::locale::classic());
+  return os;
 }
 
-/// Quotes and escapes a label: `"`, `\`, and non-printable bytes are escaped so labels cannot
-/// break the line-based format.
+/// Formats a double deterministically: std::format's shortest round-trip representation is
+/// locale-independent, unlike printf-family formatting which follows LC_NUMERIC.
+std::string FormatDouble(double value) {
+  return std::format("{}", value);
+}
+
+/// Quotes and escapes a label: `"`, `\`, and bytes outside the printable ASCII range are escaped
+/// so labels cannot break the line-based format. The explicit range test avoids the
+/// locale-dependent std::isprint.
 std::string QuoteLabel(std::string_view label) {
   std::string result = "\"";
   for (const char ch : label) {
+    const unsigned char byte = static_cast<unsigned char>(ch);
     if (ch == '"' || ch == '\\') {
       result += '\\';
       result += ch;
-    } else if (std::isprint(static_cast<unsigned char>(ch)) != 0) {
+    } else if (byte >= 0x20 && byte < 0x7F) {
       result += ch;
     } else {
-      char buffer[8];
-      std::snprintf(buffer, sizeof(buffer), "\\x%02x", static_cast<unsigned char>(ch));
-      result += buffer;
+      result += std::format("\\x{:02x}", byte);
     }
   }
   result += '"';
@@ -51,17 +56,7 @@ std::string HashBytes(std::span<const uint8_t> data) {
 
 /// Formats a slot-based resource identifier, e.g. `buffer#0`.
 std::string RefId(std::string_view resourceName, uint32_t slotIndex) {
-  std::ostringstream os;
-  os << resourceName << "#" << slotIndex;
-  return os.str();
-}
-
-/// Streams an enum or other `operator<<`-printable value to a string.
-template <typename T>
-std::string ToString(const T& value) {
-  std::ostringstream os;
-  os << value;
-  return os.str();
+  return std::format("{}#{}", resourceName, slotIndex);
 }
 
 /// Serializes the vertex buffer layout list of a pipeline descriptor.
@@ -162,7 +157,7 @@ std::string RecordingDevice::serialize() const {
 }
 
 Status RecordingDevice::onCreateBuffer(uint32_t slotIndex, const BufferDescriptor& descriptor) {
-  std::ostringstream os;
+  std::ostringstream os = MakeLineStream();
   os << "createBuffer " << RefId(BufferTag::kName, slotIndex)
      << " label=" << QuoteLabel(descriptor.label) << " byteSize=" << descriptor.byteSize
      << " usage=" << descriptor.usage;
@@ -171,7 +166,7 @@ Status RecordingDevice::onCreateBuffer(uint32_t slotIndex, const BufferDescripto
 }
 
 Status RecordingDevice::onCreateTexture(uint32_t slotIndex, const TextureDescriptor& descriptor) {
-  std::ostringstream os;
+  std::ostringstream os = MakeLineStream();
   os << "createTexture " << RefId(TextureTag::kName, slotIndex)
      << " label=" << QuoteLabel(descriptor.label) << " size=" << descriptor.size
      << " format=" << descriptor.format << " usage=" << descriptor.usage
@@ -182,7 +177,7 @@ Status RecordingDevice::onCreateTexture(uint32_t slotIndex, const TextureDescrip
 
 Status RecordingDevice::onCreateTextureView(uint32_t slotIndex, uint32_t textureSlotIndex,
                                             const TextureViewDescriptor& descriptor) {
-  std::ostringstream os;
+  std::ostringstream os = MakeLineStream();
   os << "createTextureView " << RefId(TextureViewTag::kName, slotIndex)
      << " label=" << QuoteLabel(descriptor.label)
      << " texture=" << RefId(TextureTag::kName, textureSlotIndex);
@@ -191,7 +186,7 @@ Status RecordingDevice::onCreateTextureView(uint32_t slotIndex, uint32_t texture
 }
 
 Status RecordingDevice::onCreateSampler(uint32_t slotIndex, const SamplerDescriptor& descriptor) {
-  std::ostringstream os;
+  std::ostringstream os = MakeLineStream();
   os << "createSampler " << RefId(SamplerTag::kName, slotIndex)
      << " label=" << QuoteLabel(descriptor.label) << " magFilter=" << descriptor.magFilter
      << " minFilter=" << descriptor.minFilter << " addressModeU=" << descriptor.addressModeU
@@ -202,7 +197,7 @@ Status RecordingDevice::onCreateSampler(uint32_t slotIndex, const SamplerDescrip
 
 Status RecordingDevice::onCreateBindGroupLayout(uint32_t slotIndex,
                                                 const BindGroupLayoutDescriptor& descriptor) {
-  std::ostringstream os;
+  std::ostringstream os = MakeLineStream();
   os << "createBindGroupLayout " << RefId(BindGroupLayoutTag::kName, slotIndex)
      << " label=" << QuoteLabel(descriptor.label) << " entries=[";
   for (size_t i = 0; i < descriptor.entries.size(); ++i) {
@@ -220,7 +215,7 @@ Status RecordingDevice::onCreateBindGroupLayout(uint32_t slotIndex,
 
 Status RecordingDevice::onCreateBindGroup(uint32_t slotIndex,
                                           const BindGroupDescriptor& descriptor) {
-  std::ostringstream os;
+  std::ostringstream os = MakeLineStream();
   os << "createBindGroup " << RefId(BindGroupTag::kName, slotIndex)
      << " label=" << QuoteLabel(descriptor.label)
      << " layout=" << RefId(BindGroupLayoutTag::kName, descriptor.layout.slotIndex())
@@ -251,7 +246,7 @@ Status RecordingDevice::onCreateBindGroup(uint32_t slotIndex,
 
 Status RecordingDevice::onCreatePipelineLayout(uint32_t slotIndex,
                                                const PipelineLayoutDescriptor& descriptor) {
-  std::ostringstream os;
+  std::ostringstream os = MakeLineStream();
   os << "createPipelineLayout " << RefId(PipelineLayoutTag::kName, slotIndex)
      << " label=" << QuoteLabel(descriptor.label) << " bindGroupLayouts=[";
   for (size_t i = 0; i < descriptor.bindGroupLayouts.size(); ++i) {
@@ -268,7 +263,7 @@ Status RecordingDevice::onCreatePipelineLayout(uint32_t slotIndex,
 Status RecordingDevice::onCreateShaderModule(uint32_t slotIndex,
                                              const ShaderModuleDescriptor& descriptor) {
   const std::string_view source(descriptor.sourceText);
-  std::ostringstream os;
+  std::ostringstream os = MakeLineStream();
   os << "createShaderModule " << RefId(ShaderModuleTag::kName, slotIndex)
      << " label=" << QuoteLabel(descriptor.label) << " sourceKind=" << descriptor.sourceKind
      << " sourceBytes=" << source.size() << " sourceHash="
@@ -280,7 +275,7 @@ Status RecordingDevice::onCreateShaderModule(uint32_t slotIndex,
 
 Status RecordingDevice::onCreateRenderPipeline(uint32_t slotIndex,
                                                const RenderPipelineDescriptor& descriptor) {
-  std::ostringstream os;
+  std::ostringstream os = MakeLineStream();
   os << "createRenderPipeline " << RefId(RenderPipelineTag::kName, slotIndex)
      << " label=" << QuoteLabel(descriptor.label)
      << " layout=" << RefId(PipelineLayoutTag::kName, descriptor.layout.slotIndex());
@@ -324,7 +319,7 @@ void RecordingDevice::onDestroyResource(std::string_view resourceName, uint32_t 
 
 Status RecordingDevice::onWriteBuffer(uint32_t slotIndex, uint64_t offsetBytes,
                                       std::span<const uint8_t> data) {
-  std::ostringstream os;
+  std::ostringstream os = MakeLineStream();
   os << "writeBuffer " << RefId(BufferTag::kName, slotIndex) << " offsetBytes=" << offsetBytes
      << " byteCount=" << data.size() << " dataHash=" << HashBytes(data);
   lines_.push_back(os.str());
@@ -334,7 +329,7 @@ Status RecordingDevice::onWriteBuffer(uint32_t slotIndex, uint64_t offsetBytes,
 Status RecordingDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t> data,
                                        const TexelCopyBufferLayout& dataLayout,
                                        const Extent2d& writeSize) {
-  std::ostringstream os;
+  std::ostringstream os = MakeLineStream();
   os << "writeTexture " << RefId(TextureTag::kName, slotIndex)
      << " offsetBytes=" << dataLayout.offsetBytes << " bytesPerRow=" << dataLayout.bytesPerRow
      << " rowsPerImage=" << dataLayout.rowsPerImage << " writeSize=" << writeSize
@@ -345,14 +340,14 @@ Status RecordingDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8
 
 Status RecordingDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferSlotIndex,
                                  std::span<const Command> commands) {
-  std::ostringstream os;
+  std::ostringstream os = MakeLineStream();
   os << "submit serial=" << submissionSerial << " "
      << RefId(CommandBufferTag::kName, commandBufferSlotIndex)
      << " commandCount=" << commands.size();
   lines_.push_back(os.str());
 
   for (const Command& command : commands) {
-    std::ostringstream commandStream;
+    std::ostringstream commandStream = MakeLineStream();
     commandStream << "  ";
     std::visit(CommandSerializer{commandStream}, command);
     lines_.push_back(commandStream.str());

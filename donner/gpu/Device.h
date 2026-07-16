@@ -296,7 +296,12 @@ public:
 
   /**
    * Submits a finished command buffer, consuming it, and returns the assigned submission serial.
-   * Serials start at 1 and increase by 1 per submission.
+   * Serials start at 1 and increase by 1 per submission; a submission rejected by the backend
+   * does not consume a serial.
+   *
+   * Known gap: commands are validated at recording time, so destroying a resource between
+   * recording and submit is not yet detected here. Deferred-destruction validation arrives with
+   * the resource-lifetime and submission packet (design 0053 change sequence step 3).
    *
    * @param commandBuffer Command buffer to submit; consumed even on failure.
    */

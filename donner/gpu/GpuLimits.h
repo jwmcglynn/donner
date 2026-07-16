@@ -28,12 +28,18 @@ inline constexpr uint32_t kMaxBindGroups = 4;
 /// for `setVertexBuffer` slots.
 inline constexpr uint32_t kMaxVertexBuffers = 8;
 
+/// Maximum total vertex attributes in a render pipeline, and the exclusive upper bound for
+/// attribute shader locations. 16 is the strictest common cap across the native APIs this
+/// runtime targets (well below Metal's 31 per-stage limit).
+inline constexpr uint32_t kMaxVertexAttributes = 16;
+
 /// Maximum number of color attachments in a render pass or render pipeline.
 inline constexpr uint32_t kMaxColorAttachments = 4;
 
 /// Required alignment of \ref TexelCopyBufferLayout::bytesPerRow. 256 is the strictest row-pitch
 /// alignment across the native APIs this runtime targets, so enforcing it uniformly keeps copies
-/// portable without per-backend repacking.
+/// portable without per-backend repacking. The same portability reasoning requires
+/// `TexelCopyBufferLayout::offsetBytes` to be aligned to the copied format's texel size.
 inline constexpr uint32_t kTexelRowPitchAlignment = 256;
 
 }  // namespace donner::gpu
