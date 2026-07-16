@@ -226,11 +226,16 @@ TEST(OverlayRendererTest, PathOutlinesOnlyOmitsSelectionBoundsAndHandles) {
 }
 
 TEST(OverlayRendererTest, EditingChromeOnlySkipsSelectionGeometry) {
+  constexpr std::string_view kTextSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+           <text id="t" x="50" y="80" font-size="20" font-family="sans-serif">Hello</text>
+         </svg>)";
+
   EditorApp app;
-  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
-  auto rect = app.document().document().querySelector("#r1");
-  ASSERT_TRUE(rect.has_value());
-  app.setSelection(*rect);
+  ASSERT_TRUE(app.loadFromString(kTextSvg));
+  auto text = app.document().document().querySelector("#t");
+  ASSERT_TRUE(text.has_value());
+  app.setSelection(*text);
 
   const SelectionChromeSnapshot snapshot = OverlayRenderer::captureChromeSnapshot(
       std::span<const svg::SVGElement>(app.selectedElements()), std::nullopt, Transform2d(),
@@ -239,8 +244,36 @@ TEST(OverlayRendererTest, EditingChromeOnlySkipsSelectionGeometry) {
 
   EXPECT_TRUE(snapshot.paths.empty());
   EXPECT_TRUE(snapshot.aabbsDoc.empty());
-  EXPECT_TRUE(snapshot.textBaselinesDoc.empty());
+  ASSERT_EQ(snapshot.textBaselinesDoc.size(), 1u);
+  EXPECT_NEAR(snapshot.textBaselinesDoc.front().startDoc.y, 80.0, 1.0);
   EXPECT_TRUE(snapshot.handleBoxesDoc.empty());
+}
+
+TEST(OverlayRendererTest, ActiveCombinedBoundsPreviewKeepsTextBaseline) {
+  constexpr std::string_view kTextSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+           <text id="t" x="50" y="80" font-size="20" font-family="sans-serif">Hello</text>
+         </svg>)";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTextSvg));
+  auto text = app.document().document().querySelector("#t");
+  ASSERT_TRUE(text.has_value());
+  app.setSelection(*text);
+
+  const Transform2d scale = Transform2d::Scale(Vector2d(1.5, 1.2));
+  text->cast<svg::SVGGraphicsElement>().setTransform(scale);
+  const SelectionChromeBoundsPreview boundsPreview{
+      .startBoundsDoc = Box2d::FromXYWH(50.0, 60.0, 50.0, 20.0),
+      .documentFromStartDocument = scale,
+  };
+  const SelectionChromeSnapshot snapshot = OverlayRenderer::captureChromeSnapshot(
+      std::span<const svg::SVGElement>(app.selectedElements()), std::nullopt, Transform2d(),
+      boundsPreview, std::span<const svg::SVGElement>(), std::nullopt,
+      SelectionChromeDetail::CombinedBoundsOnly);
+
+  ASSERT_EQ(snapshot.textBaselinesDoc.size(), 1u);
+  EXPECT_NEAR(snapshot.textBaselinesDoc.front().startDoc.y, 96.0, 1.0);
 }
 
 TEST(OverlayRendererTest, ActiveCombinedBoundsPreviewKeepsScaledSelectionPath) {

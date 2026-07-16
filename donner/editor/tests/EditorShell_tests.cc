@@ -997,6 +997,16 @@ public:
     return shell.activeTool_ == EditorShell::ActiveTool::Text;
   }
 
+  static bool TextToolIsEditing(const EditorShell& shell) { return shell.textTool_.isEditing(); }
+
+  static std::size_t TextToolCaretIndex(const EditorShell& shell) {
+    return shell.textTool_.caretIndex();
+  }
+
+  static SelectionChromeDetail SelectionChromeDetailForActiveTool(const EditorShell& shell) {
+    return shell.selectionChromeDetailForActiveTool();
+  }
+
   static bool PenToolIsDrafting(const EditorShell& shell) { return shell.penTool_.isDrafting(); }
 
   static bool PenToolIsDraggingAnchor(const EditorShell& shell) {
@@ -1905,21 +1915,15 @@ TEST(EditorShellTest, SampleLoadRequiresConfirmationForPendingSourceEdits) {
 
   EXPECT_TRUE(EditorShellTestAccess::PendingSampleLoadNeedsConfirmation(shell));
   EXPECT_EQ(EditorShellTestAccess::PendingSampleLoad(shell), "basic-shapes");
-  EXPECT_FALSE(EditorShellTestAccess::App(shell)
-                   .document()
-                   .document()
-                   .querySelector("polygon")
-                   .has_value());
+  EXPECT_FALSE(
+      EditorShellTestAccess::App(shell).document().document().querySelector("polygon").has_value());
 
   EditorShellTestAccess::ConfirmPendingSampleLoadDiscard(shell);
   EditorShellTestAccess::ProcessPendingSampleLoad(shell);
 
   EXPECT_TRUE(EditorShellTestAccess::PendingSampleLoad(shell).empty());
-  EXPECT_TRUE(EditorShellTestAccess::App(shell)
-                  .document()
-                  .document()
-                  .querySelector("polygon")
-                  .has_value());
+  EXPECT_TRUE(
+      EditorShellTestAccess::App(shell).document().document().querySelector("polygon").has_value());
 }
 
 TEST(EditorShellTest, NewerFileAndRevertRequestsCancelDeferredSampleReplacement) {
@@ -2380,6 +2384,69 @@ TEST(EditorShellTest, DocumentSpaceReplayInputRoutesSelectPressAndRelease) {
   ASSERT_TRUE(EditorShellTestAccess::App(shell).selectedElement().has_value());
   EXPECT_EQ(EditorShellTestAccess::App(shell).selectedElement()->id(), "target");
   EXPECT_TRUE(EditorShellTestAccess::RequestRenderAtEndOfFrame(shell));
+}
+
+TEST(EditorShellTest, SelectPressKeepsFullChromeUntilDragMoves) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0.0, 0.0, 120.0, 80.0));
+
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(20.0, 20.0),
+      .leftMouseDown = true,
+      .leftMousePressed = true,
+      .hitElementId = std::string("target"),
+  });
+  EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
+  EXPECT_EQ(EditorShellTestAccess::SelectionChromeDetailForActiveTool(shell),
+            SelectionChromeDetail::Full);
+
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(30.0, 30.0),
+      .leftMouseDown = true,
+      .hitElementId = std::string("target"),
+  });
+  EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
+  EXPECT_EQ(EditorShellTestAccess::SelectionChromeDetailForActiveTool(shell),
+            SelectionChromeDetail::CombinedBoundsOnly);
+}
+
+TEST(EditorShellTest, SelectDoubleClickOnTextSwitchesToTextEditingAtClick) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  auto label = EditorShellTestAccess::App(shell).document().document().querySelector("#label");
+  ASSERT_TRUE(label.has_value());
+  svg::SVGTextElement labelText = label->cast<svg::SVGTextElement>();
+  const Box2d extent =
+      labelText.withWriteAccess([&labelText](svg::DocumentWriteAccess&, EntityHandle) {
+        return labelText.getExtentOfChar(2u);
+      });
+  const Vector2d clickPoint(extent.topLeft.x + extent.size().x * 0.25,
+                            extent.topLeft.y + extent.size().y * 0.5);
+  MouseModifiers modifiers;
+  modifiers.doubleClick = true;
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = clickPoint,
+      .leftMouseDown = true,
+      .leftMousePressed = true,
+      .modifiers = modifiers,
+      .hitElementId = std::string("label"),
+  });
+  EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
+
+  EXPECT_TRUE(EditorShellTestAccess::ActiveToolIsText(shell));
+  EXPECT_TRUE(EditorShellTestAccess::TextToolIsEditing(shell));
+  EXPECT_EQ(EditorShellTestAccess::TextToolCaretIndex(shell), 2u);
 }
 
 TEST(EditorShellTest, DocumentSpaceReplayInputRoutesTextToolPlainClickCreatesNothing) {
