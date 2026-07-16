@@ -562,7 +562,7 @@ TEST(EditorWindowTest, NumericDragFieldsSupportSimpleClickToEdit) {
   EXPECT_TRUE(ImGui::GetIO().ConfigDragClickToInputText);
 }
 
-TEST(EditorWindowTest, WgpuDirectRenderCallbackAppendsToFramebuffer) {
+TEST(EditorWindowTest, WgpuDirectRenderCallbackDrawsBelowImGuiChrome) {
   EditorWindow window(EditorWindowOptions{
       .title = "Direct WGPU Framebuffer Append Test",
       .initialWidth = 96,
@@ -598,26 +598,27 @@ TEST(EditorWindowTest, WgpuDirectRenderCallbackAppendsToFramebuffer) {
     paint.opacity = 1.0;
     paint.fillOpacity = 1.0;
     directRenderer.setPaint(paint);
-    directRenderer.drawRect(Box2d(Vector2d(32.0, 32.0) * framebufferFromLogical,
-                                  Vector2d(64.0, 64.0) * framebufferFromLogical),
+    directRenderer.drawRect(Box2d(Vector2d(0.0, 0.0) * framebufferFromLogical,
+                                  Vector2d(96.0, 96.0) * framebufferFromLogical),
                             svg::StrokeParams{});
     directRenderer.endFrame();
     directRenderer.clearTargetTexture();
   });
 
   window.beginFrame();
-  ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(96.0f, 96.0f),
+  ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(32.0f, 32.0f), ImVec2(64.0f, 64.0f),
                                                 IM_COL32(0, 0, 255, 255));
   const svg::RendererBitmap actual = window.endFrameAndReadPixels();
   ASSERT_FALSE(actual.empty());
   const Vector2d readbackFromLogical = ReadbackScale(actual, 96, 96);
 
   const std::array<std::uint8_t, 4> outside = PixelAtLogical(actual, readbackFromLogical, 16, 16);
-  EXPECT_THAT(outside, Rgba(testing::Le(3), testing::Le(3), Near(255, 3), testing::Eq(255)))
-      << "The direct Geode pass must preserve earlier ImGui framebuffer pixels.";
+  EXPECT_THAT(outside, Rgba(Near(255, 3), testing::Le(3), testing::Le(3), testing::Eq(255)))
+      << "The direct Geode pass must remain visible outside ImGui chrome.";
 
   const std::array<std::uint8_t, 4> inside = PixelAtLogical(actual, readbackFromLogical, 48, 48);
-  EXPECT_THAT(inside, Rgba(Near(255, 3), testing::Le(3), testing::Le(3), testing::Eq(255)));
+  EXPECT_THAT(inside, Rgba(testing::Le(3), testing::Le(3), Near(255, 3), testing::Eq(255)))
+      << "ImGui popups and controls must paint above the direct selection overlay.";
 }
 
 TEST(EditorWindowTest, WgpuUnderlayDirectRenderCallbackDrawsBelowImGui) {
