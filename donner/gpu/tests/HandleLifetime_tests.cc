@@ -5,9 +5,11 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <memory>
 #include <utility>
 #include <vector>
 
+#include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/RecordingDevice.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
 
@@ -69,6 +71,57 @@ TEST_F(HandleLifetimeTests, MovedFromHandleIsNullAndFailsClosed) {
   EXPECT_EQ(original, nullptr);  // NOLINT(bugprone-use-after-move): moved-from state is the API.
   EXPECT_THAT(writeTo(original), IsGpuError(GpuErrorType::InvalidHandle));
   EXPECT_THAT(writeTo(moved), IsOk());
+}
+
+TEST_F(HandleLifetimeTests, PassAttachmentOfDestroyedTextureRejects) {
+  const Texture texture = GetResultOrFail(device_.createTexture(TextureDescriptor{
+      "target", Extent2d{4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::RenderAttachment}));
+  const TextureView view =
+      GetResultOrFail(device_.createTextureView(texture, TextureViewDescriptor{"targetView"}));
+  ASSERT_THAT(device_.destroyTexture(texture), IsOk());
+
+  std::unique_ptr<CommandEncoder> encoder = GetResultOrFail(device_.createCommandEncoder());
+  EXPECT_THAT(encoder->beginRenderPass(RenderPassDescriptor{
+                  "pass", {RenderPassColorAttachment{view, LoadOp::Clear, StoreOp::Store}}}),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidHandle,
+                                    testing::HasSubstr("texture was destroyed")));
+}
+
+TEST_F(HandleLifetimeTests, SampledBindingOfDestroyedTextureRejects) {
+  const Texture texture = GetResultOrFail(device_.createTexture(TextureDescriptor{
+      "image", Extent2d{4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::Sampled}));
+  const TextureView view =
+      GetResultOrFail(device_.createTextureView(texture, TextureViewDescriptor{"imageView"}));
+  const BindGroupLayout layout =
+      GetResultOrFail(device_.createBindGroupLayout(BindGroupLayoutDescriptor{
+          "texture",
+          {BindGroupLayoutEntry{0, ShaderStage::Fragment, BindingType::SampledTexture2dFloat}}}));
+  ASSERT_THAT(device_.destroyTexture(texture), IsOk());
+
+  EXPECT_THAT(device_.createBindGroup(BindGroupDescriptor{
+                  "group", layout, {BindGroupEntry{0, TextureViewBinding{view}}}}),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidHandle,
+                                    testing::HasSubstr("texture was destroyed")));
+}
+
+TEST_F(HandleLifetimeTests, StaleViewAfterTextureSlotReuseRejects) {
+  const Texture original = GetResultOrFail(device_.createTexture(TextureDescriptor{
+      "original", Extent2d{4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::RenderAttachment}));
+  const TextureView staleView =
+      GetResultOrFail(device_.createTextureView(original, TextureViewDescriptor{"staleView"}));
+  ASSERT_THAT(device_.destroyTexture(original), IsOk());
+
+  // The replacement reuses the freed texture slot; the stale view must not alias it.
+  const Texture replacement = GetResultOrFail(device_.createTexture(TextureDescriptor{
+      "replacement", Extent2d{8, 8}, TextureFormat::RGBA8Unorm, TextureUsage::RenderAttachment}));
+  ASSERT_THAT(replacement.slotIndex(), Eq(original.slotIndex()));
+  ASSERT_THAT(replacement.generation(), Ne(original.generation()));
+
+  std::unique_ptr<CommandEncoder> encoder = GetResultOrFail(device_.createCommandEncoder());
+  EXPECT_THAT(encoder->beginRenderPass(RenderPassDescriptor{
+                  "pass", {RenderPassColorAttachment{staleView, LoadOp::Clear, StoreOp::Store}}}),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidHandle,
+                                    testing::HasSubstr("texture was destroyed")));
 }
 
 TEST_F(HandleLifetimeTests, DestroyIsSharedAcrossResourceTypes) {
