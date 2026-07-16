@@ -793,6 +793,53 @@ TEST_F(TextToolTest, FrameHandleResizeReflowsBoxWithoutScalingGlyphs) {
   EXPECT_EQ(element.textContent(), "MMMM MMMM");
 }
 
+TEST_F(TextToolTest, TopEdgeFrameResizeKeepsTextBaselineFixed) {
+  tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(70.0, 120.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(70.0, 120.0));
+  ASSERT_TRUE(tool.isEditing());
+  type("Hi");
+
+  const std::optional<TextTool::EditingChrome> beforeResize = tool.editingChrome(app);
+  ASSERT_TRUE(beforeResize.has_value());
+  ASSERT_TRUE(beforeResize->frameCornersDoc.has_value());
+  const Vector2d caretTopBefore = beforeResize->caretTopDoc;
+  const Vector2d caretBottomBefore = beforeResize->caretBottomDoc;
+
+  tool.onMouseDown(app, Vector2d(70.0, 20.0), MouseModifiers{});
+  ASSERT_TRUE(tool.isResizingFrame());
+  tool.onMouseMove(app, Vector2d(90.0, 10.0), /*buttonHeld=*/true);
+
+  const std::optional<TextTool::EditingChrome> resizePreview = tool.editingChrome(app);
+  ASSERT_TRUE(resizePreview.has_value());
+  ASSERT_TRUE(resizePreview->frameCornersDoc.has_value());
+  EXPECT_EQ(*resizePreview->frameCornersDoc,
+            (std::array<Vector2d, 4>{Vector2d(10.0, 10.0), Vector2d(90.0, 10.0),
+                                     Vector2d(90.0, 120.0), Vector2d(10.0, 120.0)}));
+  EXPECT_EQ(resizePreview->caretTopDoc, caretTopBefore);
+  EXPECT_EQ(resizePreview->caretBottomDoc, caretBottomBefore);
+
+  tool.onMouseUp(app, Vector2d(90.0, 10.0));
+  EXPECT_THAT(attr(text(), "x"), Eq("10"));
+  EXPECT_THAT(attr(text(), "y"), Eq("52"));
+  EXPECT_THAT(attr(text(), "data-donner-text-box-width"), Eq("80"));
+  EXPECT_THAT(attr(text(), "data-donner-text-box-height"), Eq("110"));
+
+  ASSERT_TRUE(tool.commit(app));
+  app.flushFrame();
+  svg::SVGTextElement resizedText = text();
+  const Box2d firstGlyphExtent =
+      resizedText.withWriteAccess([&resizedText](svg::DocumentWriteAccess&, EntityHandle) {
+        return resizedText.getExtentOfChar(0);
+      });
+  clickAt((firstGlyphExtent.topLeft + firstGlyphExtent.bottomRight) * 0.5);
+  ASSERT_TRUE(tool.isEditing());
+  const std::optional<TextTool::EditingChrome> reopened = tool.editingChrome(app);
+  ASSERT_TRUE(reopened.has_value());
+  ASSERT_TRUE(reopened->frameCornersDoc.has_value());
+  EXPECT_EQ(*reopened->frameCornersDoc, *resizePreview->frameCornersDoc);
+}
+
 TEST_F(TextToolTest, FrameResizeConvertsPointTextToUserSizedBox) {
   doubleClickAt(Vector2d(50.0, 80.0));
   type("Hello");
