@@ -642,10 +642,7 @@ bool TextTool::beginFrameGestureAtPoint(const Vector2d& documentPoint, MouseModi
     rotateCenterDoc_ =
         documentFromText_.transformPosition((frameLocal->topLeft + frameLocal->bottomRight) * 0.5);
     rotateStartAngleRadians_ = AngleFromCenter(rotateCenterDoc_, documentPoint);
-    rotateStartTransform_ =
-        sessionText_->withReadAccess([this](svg::DocumentReadAccess&, EntityHandle) {
-          return sessionText_->cast<svg::SVGGraphicsElement>().transform();
-        });
+    rotateStartTransform_ = sessionText_->cast<svg::SVGGraphicsElement>().transform();
   }
   return true;
 }
