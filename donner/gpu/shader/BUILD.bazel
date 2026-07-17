@@ -17,6 +17,7 @@ donner_cc_library(
         "IrModule.cc",
         "IrSerialization.cc",
         "IrType.cc",
+        "MslEmitter.cc",
         "WgslEmitter.cc",
     ],
     hdrs = [
@@ -25,6 +26,8 @@ donner_cc_library(
         "IrModule.h",
         "IrStatement.h",
         "IrType.h",
+        "MslBindingMap.h",
+        "MslEmitter.h",
         "ShaderError.h",
         "ShaderResult.h",
         "WgslEmitter.h",
@@ -55,17 +58,39 @@ donner_cc_test(
         "tests/IrBuilder_tests.cc",
         "tests/IrLayout_tests.cc",
         "tests/IrSerialization_tests.cc",
+        "tests/MslEmitter_tests.cc",
         "tests/ShaderTestUtils.h",
         "tests/SolidFillProgram_tests.cc",
         "tests/WgslEmitter_tests.cc",
     ],
-    data = ["tests/testdata/solid_fill.wgsl"],
+    data = [
+        "tests/testdata/solid_fill.msl",
+        "tests/testdata/solid_fill.wgsl",
+    ],
     deps = [
         ":programs",
         ":shader",
         "//donner/base:base_test_utils",
         "@com_google_gtest//:gtest_main",
         "@rules_cc//cc/runfiles",
+    ],
+)
+
+# Out-of-process MSL validation: compiles the emitted solid-fill MSL with the
+# platform Metal compiler (an out-of-process verification tool per design
+# 0053, not a build dependency). macOS-only; skips cleanly when xcrun or the
+# Metal toolchain is unavailable.
+donner_cc_test(
+    name = "msl_xcrun_validation_tests",
+    srcs = [
+        "tests/MslXcrunValidation_tests.cc",
+        "tests/ShaderTestUtils.h",
+    ],
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = [
+        ":programs",
+        ":shader",
+        "@com_google_gtest//:gtest_main",
     ],
 )
 
