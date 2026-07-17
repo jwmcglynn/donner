@@ -310,6 +310,47 @@
         "wgpuLifetimeTextureCreates"
       ]
     },
+    "donner/gpu/metal/tests/BaselineCaptureTool.cc": {
+      "operations": [
+        "copyTextureToBuffer",
+        "createBuffer",
+        "createCommandEncoder",
+        "createTexture",
+        "finish",
+        "getConstMappedRange",
+        "mapAsync",
+        "poll",
+        "submit",
+        "unmap"
+      ],
+      "sha256": "177b603fa6d19acd29ef35baf8f6da2658430a80f8fbb1ec4a86acb793da803f",
+      "wgpuCFunctions": [
+        "wgpuLabel"
+      ],
+      "wgpuCTypes": [
+        "WGPUMapAsyncStatus",
+        "WGPUMapAsyncStatus_Success",
+        "WGPUStringView"
+      ],
+      "wgpuCppTokens": [
+        "Buffer",
+        "BufferDescriptor",
+        "BufferMapCallbackInfo",
+        "BufferUsage",
+        "CommandBuffer",
+        "CommandEncoder",
+        "Default",
+        "Extent3D",
+        "MapMode",
+        "TexelCopyBufferInfo",
+        "TexelCopyTextureInfo",
+        "Texture",
+        "TextureDescriptor",
+        "TextureDimension",
+        "TextureFormat",
+        "TextureUsage"
+      ]
+    },
     "donner/gpu/shader/tests/WgslEmitterGeodeValidation_tests.cc": {
       "operations": [
         "createBindGroupLayout",
