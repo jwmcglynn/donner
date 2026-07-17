@@ -298,6 +298,110 @@ TEST_F(CommandEncoderTests, BeginRenderPassRejectsNonRenderableView) {
       IsGpuErrorWithMessage(GpuErrorType::UsageMismatch, HasSubstr("RenderAttachment")));
 }
 
+TEST_F(CommandEncoderTests, SetBindGroupRejectsDestroyedBuffer) {
+  ASSERT_THAT(device_.destroyBuffer(uniformBuffer_), IsOk());
+
+  RenderPassEncoder* pass = beginPass();
+  EXPECT_THAT(pass->setBindGroup(0, bindGroup_),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidHandle, HasSubstr("stale")));
+}
+
+TEST_F(CommandEncoderTests, SetBindGroupRejectsBufferSlotReuse) {
+  ASSERT_THAT(device_.destroyBuffer(uniformBuffer_), IsOk());
+
+  // The replacement reuses the freed buffer slot; the group's stale reference must not alias it.
+  const Buffer replacement = GetResultOrFail(device_.createBuffer(
+      BufferDescriptor{"replacement", 16, BufferUsage::Uniform | BufferUsage::CopyDst}));
+  ASSERT_THAT(replacement.slotIndex(), Eq(uniformBuffer_.slotIndex()));
+
+  RenderPassEncoder* pass = beginPass();
+  EXPECT_THAT(pass->setBindGroup(0, bindGroup_),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidHandle, HasSubstr("stale")));
+}
+
+class SetBindGroupTextureTests : public CommandEncoderTests {
+protected:
+  void SetUp() override {
+    CommandEncoderTests::SetUp();
+
+    sampledTexture_ = GetResultOrFail(device_.createTexture(TextureDescriptor{
+        "sampled", Extent2d{4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::Sampled}));
+    sampledView_ = GetResultOrFail(
+        device_.createTextureView(sampledTexture_, TextureViewDescriptor{"sampledView"}));
+    sampler_ = GetResultOrFail(device_.createSampler(SamplerDescriptor{"linear"}));
+    textureLayout_ = GetResultOrFail(device_.createBindGroupLayout(BindGroupLayoutDescriptor{
+        "textureBindings",
+        {BindGroupLayoutEntry{0, ShaderStage::Fragment, BindingType::SampledTexture2dFloat},
+         BindGroupLayoutEntry{1, ShaderStage::Fragment, BindingType::FilteringSampler}}}));
+    textureGroup_ = GetResultOrFail(device_.createBindGroup(
+        BindGroupDescriptor{"textureGroup",
+                            textureLayout_,
+                            {BindGroupEntry{0, TextureViewBinding{sampledView_}},
+                             BindGroupEntry{1, SamplerBinding{sampler_}}}}));
+  }
+
+  Texture sampledTexture_;
+  TextureView sampledView_;
+  Sampler sampler_;
+  BindGroupLayout textureLayout_;
+  BindGroup textureGroup_;
+};
+
+TEST_F(SetBindGroupTextureTests, RejectsDestroyedTextureView) {
+  ASSERT_THAT(device_.destroyTextureView(sampledView_), IsOk());
+
+  RenderPassEncoder* pass = beginPass();
+  EXPECT_THAT(pass->setBindGroup(1, textureGroup_),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidHandle, HasSubstr("stale")));
+}
+
+TEST_F(SetBindGroupTextureTests, RejectsDestroyedUnderlyingTexture) {
+  ASSERT_THAT(device_.destroyTexture(sampledTexture_), IsOk());
+
+  RenderPassEncoder* pass = beginPass();
+  EXPECT_THAT(
+      pass->setBindGroup(1, textureGroup_),
+      IsGpuErrorWithMessage(GpuErrorType::InvalidHandle, HasSubstr("texture was destroyed")));
+}
+
+TEST_F(SetBindGroupTextureTests, RejectsDestroyedSampler) {
+  ASSERT_THAT(device_.destroySampler(sampler_), IsOk());
+
+  RenderPassEncoder* pass = beginPass();
+  EXPECT_THAT(pass->setBindGroup(1, textureGroup_),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidHandle, HasSubstr("stale")));
+}
+
+TEST_F(CommandEncoderTests, SetPipelineRejectsMismatchedTargetFormat) {
+  // A pipeline whose color target is RGBA8 cannot be used in a BGRA8 pass.
+  const Texture bgraTarget = GetResultOrFail(device_.createTexture(TextureDescriptor{
+      "bgraTarget", Extent2d{4, 4}, TextureFormat::BGRA8Unorm, TextureUsage::RenderAttachment}));
+  const TextureView bgraView =
+      GetResultOrFail(device_.createTextureView(bgraTarget, TextureViewDescriptor{"bgraView"}));
+
+  RenderPassEncoder* pass = GetResultOrFail(encoder_->beginRenderPass(RenderPassDescriptor{
+      "bgraPass", {RenderPassColorAttachment{bgraView, LoadOp::Clear, StoreOp::Store}}}));
+  ASSERT_NE(pass, nullptr);
+  EXPECT_THAT(pass->setPipeline(pipeline_),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("format")));
+}
+
+TEST_F(CommandEncoderTests, SetPipelineRejectsAttachmentCountMismatch) {
+  // The pass has two attachments but the pipeline declares one color target.
+  const Texture second = GetResultOrFail(device_.createTexture(TextureDescriptor{
+      "second", Extent2d{4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::RenderAttachment}));
+  const TextureView secondView =
+      GetResultOrFail(device_.createTextureView(second, TextureViewDescriptor{"secondView"}));
+
+  RenderPassEncoder* pass = GetResultOrFail(encoder_->beginRenderPass(RenderPassDescriptor{
+      "twoAttachmentPass",
+      {RenderPassColorAttachment{targetView_, LoadOp::Clear, StoreOp::Store},
+       RenderPassColorAttachment{secondView, LoadOp::Clear, StoreOp::Store}}}));
+  ASSERT_NE(pass, nullptr);
+  EXPECT_THAT(pass->setPipeline(pipeline_),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("color target")));
+}
+
 TEST_F(CommandEncoderTests, DuplicateAttachmentViewFails) {
   EXPECT_THAT(encoder_->beginRenderPass(RenderPassDescriptor{
                   "duplicatePass",

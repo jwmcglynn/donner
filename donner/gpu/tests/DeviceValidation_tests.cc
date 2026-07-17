@@ -92,6 +92,53 @@ TEST_F(DeviceValidationTests, CreateTextureRejectsMultisample) {
               IsGpuErrorWithMessage(GpuErrorType::Unsupported, HasSubstr("sampleCount 4")));
 }
 
+TEST_F(DeviceValidationTests, CreateTextureRejectsUnknownFormat) {
+  // An out-of-range format enum must fail closed instead of flowing into copy-size math
+  // (TextureFormatBytesPerTexel returns 0 for unknown formats).
+  EXPECT_THAT(device_.createTexture(TextureDescriptor{
+                  "bogus", Extent2d{4, 4}, static_cast<TextureFormat>(255), TextureUsage::Sampled}),
+              IsGpuError(GpuErrorType::InvalidDescriptor));
+}
+
+TEST_F(DeviceValidationTests, RejectsUnknownUsageBits) {
+  EXPECT_THAT(device_.createBuffer(
+                  BufferDescriptor{"bogus", 16, static_cast<BufferUsage>((1u << 30) | 1u)}),
+              IsGpuError(GpuErrorType::InvalidDescriptor));
+  EXPECT_THAT(
+      device_.createTexture(TextureDescriptor{"bogus", Extent2d{4, 4}, TextureFormat::RGBA8Unorm,
+                                              static_cast<TextureUsage>(1u << 29)}),
+      IsGpuError(GpuErrorType::InvalidDescriptor));
+}
+
+TEST_F(DeviceValidationTests, CreateSamplerRejectsUnknownEnums) {
+  EXPECT_THAT(device_.createSampler(SamplerDescriptor{"bogus", static_cast<FilterMode>(7),
+                                                      FilterMode::Nearest, AddressMode::ClampToEdge,
+                                                      AddressMode::ClampToEdge}),
+              IsGpuError(GpuErrorType::InvalidDescriptor));
+  EXPECT_THAT(device_.createSampler(
+                  SamplerDescriptor{"bogus", FilterMode::Nearest, FilterMode::Nearest,
+                                    static_cast<AddressMode>(9), AddressMode::ClampToEdge}),
+              IsGpuError(GpuErrorType::InvalidDescriptor));
+}
+
+TEST_F(DeviceValidationTests, CreateBindGroupLayoutRejectsUnknownEnums) {
+  EXPECT_THAT(
+      device_.createBindGroupLayout(BindGroupLayoutDescriptor{
+          "bogus", {BindGroupLayoutEntry{0, ShaderStage::Vertex, static_cast<BindingType>(200)}}}),
+      IsGpuError(GpuErrorType::InvalidDescriptor));
+  EXPECT_THAT(device_.createBindGroupLayout(BindGroupLayoutDescriptor{
+                  "bogus",
+                  {BindGroupLayoutEntry{0, static_cast<ShaderStage>(1u << 20),
+                                        BindingType::UniformBuffer}}}),
+              IsGpuError(GpuErrorType::InvalidDescriptor));
+}
+
+TEST_F(DeviceValidationTests, CreateShaderModuleRejectsUnknownSourceKind) {
+  EXPECT_THAT(device_.createShaderModule(ShaderModuleDescriptor{"bogus", "@vertex fn vsMain() {}",
+                                                                static_cast<ShaderSourceKind>(9)}),
+              IsGpuError(GpuErrorType::InvalidDescriptor));
+}
+
 // == createTextureView ========================================================================
 
 TEST_F(DeviceValidationTests, CreateTextureViewAcceptsLiveTexture) {
@@ -364,6 +411,53 @@ TEST_F(RenderPipelineValidationTests, RejectsOutOfRangeShaderLocation) {
   descriptor.vertex.buffers[0].attributes[0].shaderLocation = kMaxVertexAttributes;
   EXPECT_THAT(device_.createRenderPipeline(descriptor),
               IsGpuErrorWithMessage(GpuErrorType::LimitExceeded, HasSubstr("shaderLocation 16")));
+}
+
+TEST_F(RenderPipelineValidationTests, RejectsUnknownEnums) {
+  {
+    RenderPipelineDescriptor descriptor = validDescriptor();
+    descriptor.vertex.buffers[0].attributes[0].format = static_cast<VertexFormat>(77);
+    EXPECT_THAT(device_.createRenderPipeline(descriptor),
+                IsGpuError(GpuErrorType::InvalidDescriptor));
+  }
+  {
+    RenderPipelineDescriptor descriptor = validDescriptor();
+    descriptor.fragment.targets[0].format = static_cast<TextureFormat>(255);
+    EXPECT_THAT(device_.createRenderPipeline(descriptor),
+                IsGpuError(GpuErrorType::InvalidDescriptor));
+  }
+  {
+    RenderPipelineDescriptor descriptor = validDescriptor();
+    descriptor.fragment.targets[0].blend = BlendState{
+        BlendComponent{static_cast<BlendFactor>(99), BlendFactor::One, BlendOperation::Add},
+        BlendComponent{}};
+    EXPECT_THAT(device_.createRenderPipeline(descriptor),
+                IsGpuError(GpuErrorType::InvalidDescriptor));
+  }
+  {
+    RenderPipelineDescriptor descriptor = validDescriptor();
+    descriptor.fragment.targets[0].writeMask = static_cast<ColorWriteMask>(1u << 8);
+    EXPECT_THAT(device_.createRenderPipeline(descriptor),
+                IsGpuError(GpuErrorType::InvalidDescriptor));
+  }
+  {
+    RenderPipelineDescriptor descriptor = validDescriptor();
+    descriptor.topology = static_cast<PrimitiveTopology>(9);
+    EXPECT_THAT(device_.createRenderPipeline(descriptor),
+                IsGpuError(GpuErrorType::InvalidDescriptor));
+  }
+  {
+    RenderPipelineDescriptor descriptor = validDescriptor();
+    descriptor.cullMode = static_cast<CullMode>(9);
+    EXPECT_THAT(device_.createRenderPipeline(descriptor),
+                IsGpuError(GpuErrorType::InvalidDescriptor));
+  }
+  {
+    RenderPipelineDescriptor descriptor = validDescriptor();
+    descriptor.vertex.buffers[0].stepMode = static_cast<VertexStepMode>(9);
+    EXPECT_THAT(device_.createRenderPipeline(descriptor),
+                IsGpuError(GpuErrorType::InvalidDescriptor));
+  }
 }
 
 TEST_F(RenderPipelineValidationTests, RejectsMultisample) {
