@@ -258,12 +258,12 @@ private:
   struct BlockFrame {
     enum class Kind : uint8_t { IfThen, IfElse, ForBody } kind = Kind::IfThen;  //!< Frame kind.
     std::optional<IrExpr> condition;                                            //!< If condition.
-    IrBlock statements;                  //!< Statements recorded into this frame.
-    IrBlock thenStatements;              //!< Completed then-branch (IfElse frames).
-    std::optional<IrStmt> init;          //!< For-loop init.
-    std::optional<IrExpr> forCondition;  //!< For-loop condition (set via forCondition()).
-    std::optional<IrStmt> continuing;    //!< For-loop continuing.
-    bool forHeaderComplete = false;      //!< True once forContinuing() was called.
+    IrBlock statements;                   //!< Statements recorded into this frame.
+    IrBlock thenStatements;               //!< Completed then-branch (IfElse frames).
+    std::optional<IrStmt> init;           //!< For-loop init.
+    std::optional<IrExpr> forCondition;   //!< For-loop condition (set via forCondition()).
+    std::optional<IrStmt> continuing;     //!< For-loop continuing.
+    std::vector<RcString> declaredNames;  //!< Names declared in this block; dropped on close.
   };
 
   FunctionBuilder(ModuleBuilder& moduleBuilder, IrFunction&& function);
@@ -274,8 +274,13 @@ private:
   std::optional<ShaderError> checkUsable() const;
   /// Appends to the innermost open block (or the function body).
   void append(IrStmt&& statement);
-  /// Declares a local name, rejecting duplicates.
+  /// Declares a local name (scoped to the innermost open block), rejecting duplicates.
   ShaderStatus declareName(const RcString& name, const IrType& type, RefKind kind);
+  /// Drops \p names from the local scope (block exit).
+  void removeScopedNames(std::vector<RcString>& names);
+  /// Re-verifies that every name referenced by \p expr is still declared with the same type and
+  /// kind, so expressions captured inside a closed block fail closed when reused outside it.
+  ShaderStatus verifyExprInScope(const IrExpr& expr);
   /// True if any enclosing open block is a loop body.
   bool insideLoop() const;
 

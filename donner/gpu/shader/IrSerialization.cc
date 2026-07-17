@@ -36,14 +36,30 @@ void AppendStructDefinition(std::string& out, const IrType& type, int indent) {
   out += " }\n";
 }
 
-/// Appends struct definitions reachable from a binding type (the root struct or a runtime
-/// array's struct element).
-void AppendReachableStructs(std::string& out, const IrType& type, int indent) {
-  if (type.kind() == IrType::Kind::Struct) {
-    AppendStructDefinition(out, type, indent);
-  } else if (type.kind() == IrType::Kind::RuntimeArray &&
-             type.elementType().kind() == IrType::Kind::Struct) {
-    AppendStructDefinition(out, type.elementType(), indent);
+/// Appends every struct definition reachable from a binding type, depth-first in declaration
+/// order (outer struct before its nested member structs), deduplicated by struct name so shared
+/// nested types print once.
+void AppendReachableStructs(std::string& out, const IrType& type, int indent,
+                            std::vector<RcString>& emittedNames) {
+  switch (type.kind()) {
+    case IrType::Kind::Struct: {
+      for (const RcString& emitted : emittedNames) {
+        if (emitted == type.structName()) {
+          return;
+        }
+      }
+      emittedNames.push_back(type.structName());
+      AppendStructDefinition(out, type, indent);
+      for (const IrType::Member& member : type.structMembers()) {
+        AppendReachableStructs(out, member.type, indent, emittedNames);
+      }
+      return;
+    }
+    case IrType::Kind::SizedArray:
+    case IrType::Kind::RuntimeArray:
+      AppendReachableStructs(out, type.elementType(), indent, emittedNames);
+      return;
+    default: return;
   }
 }
 
@@ -149,7 +165,8 @@ std::string IrModule::serialize() const {
       case BindingKind::FilteringSampler: out += "sampler"; break;
     }
     out += std::format(" {}: {}\n", binding.name.str(), binding.type.toString());
-    AppendReachableStructs(out, binding.type, 1);
+    std::vector<RcString> emittedStructNames;
+    AppendReachableStructs(out, binding.type, 1, emittedStructNames);
   }
 
   for (const IrFunction& function : functions_) {

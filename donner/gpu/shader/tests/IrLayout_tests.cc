@@ -82,10 +82,30 @@ TEST(IrLayoutTests, ArrayStrideStorageVsUniform) {
   EXPECT_THAT(GetShaderResultOrFail(ComputeArrayStride(arrayVec2, AddressSpace::Storage)), Eq(8u));
   EXPECT_THAT(LayoutOrFail(arrayF32, AddressSpace::Storage), Eq(TypeLayout{4, 16}));
 
-  // Uniform: element stride rounds up to a multiple of 16.
+  // Uniform: element stride rounds up to a multiple of 16. This is a deliberate policy: WGSL
+  // validation would reject the natural stride (there is no stride attribute), so the layout
+  // engine defines the rounded stride and emitters must materialize padded element wrappers
+  // when ArrayStrideInfo::paddedFromNatural is set.
   EXPECT_THAT(GetShaderResultOrFail(ComputeArrayStride(arrayF32, AddressSpace::Uniform)), Eq(16u));
   EXPECT_THAT(GetShaderResultOrFail(ComputeArrayStride(arrayVec2, AddressSpace::Uniform)), Eq(16u));
   EXPECT_THAT(LayoutOrFail(arrayF32, AddressSpace::Uniform), Eq(TypeLayout{16, 64}));
+}
+
+TEST(IrLayoutTests, ArrayStrideInfoReportsUniformPadding) {
+  const IrType arrayF32 =
+      GetShaderResultOrFail(IrType::SizedArray(IrType::F32(), 4), IrType::F32());
+  const IrType arrayVec4 =
+      GetShaderResultOrFail(IrType::SizedArray(IrType::Vec4f(), 4), IrType::F32());
+
+  // array<f32, 4> in uniform is padded (natural stride 4 -> 16); the emitter obligation flag is
+  // set so packet 5 wraps the element type.
+  EXPECT_THAT(GetShaderResultOrFail(ComputeArrayStrideInfo(arrayF32, AddressSpace::Uniform)),
+              Eq(ArrayStrideInfo{16, true}));
+  EXPECT_THAT(GetShaderResultOrFail(ComputeArrayStrideInfo(arrayF32, AddressSpace::Storage)),
+              Eq(ArrayStrideInfo{4, false}));
+  // slug_fill's clipPolygonPlanes array<vec4f, 4> has a natural stride of 16: no padding needed.
+  EXPECT_THAT(GetShaderResultOrFail(ComputeArrayStrideInfo(arrayVec4, AddressSpace::Uniform)),
+              Eq(ArrayStrideInfo{16, false}));
 }
 
 TEST(IrLayoutTests, RuntimeArrayHasStrideButNoSize) {

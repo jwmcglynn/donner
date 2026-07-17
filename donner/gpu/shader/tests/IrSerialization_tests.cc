@@ -227,8 +227,27 @@ TEST(IrSerializationTests, TypesConstructedInDifferentOrderCompareEqual) {
   const IrType arrayA = GetShaderResultOrFail(IrType::SizedArray(vecFirst, 4), IrType::F32());
   const IrType arrayB =
       GetShaderResultOrFail(IrType::SizedArray(IrType::Vec4(ScalarKind::F32), 4), IrType::F32());
-  EXPECT_TRUE(arrayA == arrayB);
+  EXPECT_EQ(arrayA, arrayB);
   EXPECT_THAT(arrayA.toString(), testing::Eq(arrayB.toString()));
+}
+
+TEST(IrSerializationTests, NestedStructDefinitionsAreSerializedRecursively) {
+  ModuleBuilder builder;
+  const IrType inner = GetShaderResultOrFail(
+      IrType::Struct("GridParams", {{"base", IrType::F32()}, {"count", IrType::U32()}}),
+      IrType::F32());
+  const IrType outer = GetShaderResultOrFail(
+      IrType::Struct("NestedUniforms", {{"mvp", IrType::Mat4x4f()}, {"grid", inner}}),
+      IrType::F32());
+  EXPECT_THAT(builder.addUniformBuffer(0, 0, "params", outer), IsShaderOk());
+
+  ShaderResult<IrModule> module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+
+  const std::string serialized = module.result().serialize();
+  EXPECT_THAT(serialized,
+              HasSubstr("struct NestedUniforms { mvp: mat4x4<f32>, grid: GridParams }"));
+  EXPECT_THAT(serialized, HasSubstr("struct GridParams { base: f32, count: u32 }"));
 }
 
 TEST(IrSerializationTests, SerializationContainsNoPointers) {

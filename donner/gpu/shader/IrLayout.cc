@@ -95,6 +95,15 @@ ShaderResult<TypeLayout> ComputeTypeLayout(const IrType& type, AddressSpace addr
 }
 
 ShaderResult<uint32_t> ComputeArrayStride(const IrType& arrayType, AddressSpace addressSpace) {
+  ShaderResult<ArrayStrideInfo> info = ComputeArrayStrideInfo(arrayType, addressSpace);
+  if (info.hasError()) {
+    return std::move(info).error();
+  }
+  return info.result().strideBytes;
+}
+
+ShaderResult<ArrayStrideInfo> ComputeArrayStrideInfo(const IrType& arrayType,
+                                                     AddressSpace addressSpace) {
   if (arrayType.kind() != IrType::Kind::SizedArray &&
       arrayType.kind() != IrType::Kind::RuntimeArray) {
     return ShaderError{std::format("{} is not an array type", arrayType.toString()), "arrayStride"};
@@ -105,12 +114,16 @@ ShaderResult<uint32_t> ComputeArrayStride(const IrType& arrayType, AddressSpace 
     return std::move(elementLayout).error();
   }
 
-  uint32_t stride = RoundUp(elementLayout.result().alignBytes, elementLayout.result().sizeBytes);
+  const uint32_t naturalStride =
+      RoundUp(elementLayout.result().alignBytes, elementLayout.result().sizeBytes);
+  uint32_t stride = naturalStride;
   if (addressSpace == AddressSpace::Uniform) {
-    // WGSL uniform address space requires array element strides to be multiples of 16.
+    // WGSL uniform address space requires array element strides to be multiples of 16. Rounding
+    // (instead of rejecting) keeps natural-stride-16 arrays like slug_fill's clipPolygonPlanes
+    // array<vec4f, 4> simple; emitters must wrap padded elements when paddedFromNatural is set.
     stride = RoundUp(16, stride);
   }
-  return stride;
+  return ArrayStrideInfo{stride, stride != naturalStride};
 }
 
 ShaderResult<StructLayout> ComputeStructLayout(const IrType& structType,

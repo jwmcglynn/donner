@@ -37,15 +37,15 @@ IrExpr Mat4Val() {
 // == Types ====================================================================================
 
 TEST(IrTypeTests, IdenticalTypesCompareEqual) {
-  EXPECT_TRUE(IrType::Vec2f() == IrType::Vec2(ScalarKind::F32));
-  EXPECT_FALSE(IrType::Vec2f() == IrType::Vec2i());
-  EXPECT_FALSE(IrType::Vec2f() == IrType::Vec3f());
+  EXPECT_EQ(IrType::Vec2f(), IrType::Vec2(ScalarKind::F32));
+  EXPECT_NE(IrType::Vec2f(), IrType::Vec2i());
+  EXPECT_NE(IrType::Vec2f(), IrType::Vec3f());
 
   const IrType arrayA =
       GetShaderResultOrFail(IrType::SizedArray(IrType::Vec4f(), 4), IrType::F32());
   const IrType arrayB =
       GetShaderResultOrFail(IrType::SizedArray(IrType::Vec4f(), 4), IrType::F32());
-  EXPECT_TRUE(arrayA == arrayB);
+  EXPECT_EQ(arrayA, arrayB);
 
   const IrType structA =
       GetShaderResultOrFail(IrType::Struct("S", {{"a", IrType::F32()}}), IrType::F32());
@@ -53,8 +53,8 @@ TEST(IrTypeTests, IdenticalTypesCompareEqual) {
       GetShaderResultOrFail(IrType::Struct("S", {{"a", IrType::F32()}}), IrType::F32());
   const IrType structC =
       GetShaderResultOrFail(IrType::Struct("S", {{"a", IrType::U32()}}), IrType::F32());
-  EXPECT_TRUE(structA == structB);
-  EXPECT_FALSE(structA == structC);
+  EXPECT_EQ(structA, structB);
+  EXPECT_NE(structA, structC);
 }
 
 TEST(IrTypeTests, RejectsInvalidArraysAndStructs) {
@@ -87,21 +87,33 @@ TEST(IrExprTests, ArithmeticRequiresMatchingNumericTypes) {
 TEST(IrExprTests, MulSupportsMatrixAndScalarVectorForms) {
   // mat4x4f * vec4f and mat4x4f * mat4x4f (slug_fill composes the MVP with the instance matrix).
   const IrExpr matVec = GetShaderResultOrFail(Mul(Mat4Val(), Vec4fVal()), LiteralF32(0));
-  EXPECT_TRUE(matVec.type() == IrType::Vec4f());
+  EXPECT_EQ(matVec.type(), IrType::Vec4f());
   const IrExpr matMat = GetShaderResultOrFail(Mul(Mat4Val(), Mat4Val()), LiteralF32(0));
-  EXPECT_TRUE(matMat.type() == IrType::Mat4x4f());
+  EXPECT_EQ(matMat.type(), IrType::Mat4x4f());
   EXPECT_THAT(Mul(Mat4Val(), Vec2fVal()), IsShaderError(HasSubstr("mat4x4<f32> can multiply")));
 
   // vector * scalar and scalar * vector.
   const IrExpr vecScalar = GetShaderResultOrFail(Mul(Vec2fVal(), F32Val()), LiteralF32(0));
-  EXPECT_TRUE(vecScalar.type() == IrType::Vec2f());
+  EXPECT_EQ(vecScalar.type(), IrType::Vec2f());
   const IrExpr scalarVec = GetShaderResultOrFail(Mul(F32Val(), Vec2fVal()), LiteralF32(0));
-  EXPECT_TRUE(scalarVec.type() == IrType::Vec2f());
+  EXPECT_EQ(scalarVec.type(), IrType::Vec2f());
+}
+
+TEST(IrExprTests, DivSupportsVectorScalarForms) {
+  // scalar / vector broadcast: slug_fill computes 1.0 / fwidth(sample_pos) (f32 / vec2f).
+  const IrExpr scalarVec = GetShaderResultOrFail(Div(F32Val(), Vec2fVal()), LiteralF32(0));
+  EXPECT_EQ(scalarVec.type(), IrType::Vec2f());
+
+  const IrExpr vecScalar = GetShaderResultOrFail(Div(Vec2fVal(), F32Val()), LiteralF32(0));
+  EXPECT_EQ(vecScalar.type(), IrType::Vec2f());
+
+  // Element types must still match.
+  EXPECT_THAT(Div(LiteralI32(1), Vec2fVal()), IsShaderError(HasSubstr("matching numeric")));
 }
 
 TEST(IrExprTests, ComparisonsAreScalarOnlyAndYieldBool) {
   const IrExpr cmp = GetShaderResultOrFail(Lt(F32Val(), F32Val()), LiteralF32(0));
-  EXPECT_TRUE(cmp.type() == IrType::Bool());
+  EXPECT_EQ(cmp.type(), IrType::Bool());
   EXPECT_THAT(Ge(Vec2fVal(), Vec2fVal()), IsShaderError(HasSubstr("scalar")));
   EXPECT_THAT(Eq(LiteralBool(true), LiteralBool(false)), HasShaderResult());
   EXPECT_THAT(Lt(LiteralBool(true), LiteralBool(false)), IsShaderError(HasSubstr("numeric")));
@@ -122,9 +134,9 @@ TEST(IrExprTests, NegRejectsU32AndBool) {
 
 TEST(IrExprTests, SwizzleValidatesComponents) {
   const IrExpr xy = GetShaderResultOrFail(Swizzle(Vec4fVal(), "xy"), LiteralF32(0));
-  EXPECT_TRUE(xy.type() == IrType::Vec2f());
+  EXPECT_EQ(xy.type(), IrType::Vec2f());
   const IrExpr x = GetShaderResultOrFail(Swizzle(Vec2fVal(), "x"), LiteralF32(0));
-  EXPECT_TRUE(x.type() == IrType::F32());
+  EXPECT_EQ(x.type(), IrType::F32());
 
   EXPECT_THAT(Swizzle(Vec2fVal(), "q"), IsShaderError(HasSubstr("out of range")));
   EXPECT_THAT(Swizzle(Vec2fVal(), "xyz"), IsShaderError(HasSubstr("out of range")));
@@ -138,7 +150,7 @@ TEST(IrExprTests, MemberAccessValidatesStructMembers) {
   const IrExpr structRef = MakeRef(RefKind::Let, "q", structType);
 
   const IrExpr member = GetShaderResultOrFail(Member(structRef, "p0"), LiteralF32(0));
-  EXPECT_TRUE(member.type() == IrType::Vec2f());
+  EXPECT_EQ(member.type(), IrType::Vec2f());
   EXPECT_THAT(Member(structRef, "missing"), IsShaderError(HasSubstr("no member named")));
   EXPECT_THAT(Member(F32Val(), "x"), IsShaderError(HasSubstr("requires a struct")));
 }
@@ -149,11 +161,11 @@ TEST(IrExprTests, IndexValidatesBaseAndIndexTypes) {
   const IrExpr arrayRef = MakeRef(RefKind::Resource, "curveData", runtimeArray);
 
   const IrExpr element = GetShaderResultOrFail(Index(arrayRef, LiteralU32(3)), LiteralF32(0));
-  EXPECT_TRUE(element.type() == IrType::F32());
+  EXPECT_EQ(element.type(), IrType::F32());
 
   const IrExpr vectorElement =
       GetShaderResultOrFail(Index(Vec4fVal(), LiteralI32(1)), LiteralF32(0));
-  EXPECT_TRUE(vectorElement.type() == IrType::F32());
+  EXPECT_EQ(vectorElement.type(), IrType::F32());
 
   EXPECT_THAT(Index(arrayRef, F32Val()), IsShaderError(HasSubstr("index must be i32 or u32")));
   EXPECT_THAT(Index(F32Val(), LiteralU32(0)), IsShaderError(HasSubstr("not indexable")));
@@ -170,7 +182,7 @@ TEST(IrExprTests, ConstructorsValidateArityAndTypes) {
   // Single-scalar splat, e.g. vec2i(0).
   const IrExpr splat =
       GetShaderResultOrFail(ConstructVector(IrType::Vec2i(), {LiteralI32(0)}), LiteralF32(0));
-  EXPECT_TRUE(splat.type() == IrType::Vec2i());
+  EXPECT_EQ(splat.type(), IrType::Vec2i());
 
   EXPECT_THAT(ConstructMat4x4f({Vec4fVal(), Vec4fVal()}),
               IsShaderError(HasSubstr("needs 4 columns")));
@@ -213,7 +225,7 @@ TEST(IrExprTests, BuiltinCallsTypeCheck) {
 
   const IrExpr dims =
       GetShaderResultOrFail(CallBuiltin(BuiltinFn::TextureDimensions, {texture}), LiteralF32(0));
-  EXPECT_TRUE(dims.type() == IrType::Vec2u());
+  EXPECT_EQ(dims.type(), IrType::Vec2u());
 }
 
 TEST(IrExprTests, UnknownBuiltinNameIsRejected) {
@@ -350,6 +362,73 @@ TEST_F(FunctionBuilderTests, ReturnTypeIsChecked) {
 TEST_F(FunctionBuilderTests, DiscardIsFragmentOnly) {
   FunctionBuilder function = startFunction();
   EXPECT_THAT(function.discard(), IsShaderError(HasSubstr("only valid in fragment entry points")));
+}
+
+TEST_F(FunctionBuilderTests, NonVoidFunctionMustEndWithReturn) {
+  FunctionBuilder function = startFunction(IrType::F32());
+  EXPECT_THAT(function.addLet("x", LiteralF32(1)), HasShaderResult());
+
+  // The body ends with a let, not a return; if/for-nested returns would not count either.
+  EXPECT_THAT(function.finish(), IsShaderError(HasSubstr("must end with a return")));
+}
+
+TEST_F(FunctionBuilderTests, VoidFunctionNeedsNoReturn) {
+  FunctionBuilder function = startFunction();
+  EXPECT_THAT(function.addLet("x", LiteralF32(1)), HasShaderResult());
+  EXPECT_THAT(function.finish(), IsShaderOk());
+}
+
+TEST_F(FunctionBuilderTests, LoopVariableGoesOutOfScopeAtEndFor) {
+  FunctionBuilder function = startFunction();
+  const IrExpr i = GetShaderResultOrFail(function.beginFor("i", LiteralU32(0)), LiteralF32(0));
+  EXPECT_THAT(function.forCondition(GetShaderResultOrFail(Lt(i, LiteralU32(4)), LiteralF32(0))),
+              IsShaderOk());
+  EXPECT_THAT(
+      function.forContinuing(i, GetShaderResultOrFail(Add(i, LiteralU32(1)), LiteralF32(0))),
+      IsShaderOk());
+  EXPECT_THAT(function.endFor(), IsShaderOk());
+
+  // The loop variable is block-scoped: name lookup fails closed after endFor.
+  EXPECT_THAT(function.ref("i"), IsShaderError(HasSubstr("unknown name i")));
+}
+
+TEST_F(FunctionBuilderTests, StaleExprFromClosedBlockFailsClosed) {
+  FunctionBuilder function = startFunction();
+
+  EXPECT_THAT(function.beginIf(LiteralBool(true)), IsShaderOk());
+  const IrExpr scoped = GetShaderResultOrFail(function.addLet("x", LiteralF32(1)), LiteralF32(0));
+  EXPECT_THAT(function.endIf(), IsShaderOk());
+
+  // The expression handle survives the block, but recording it after endIf must fail closed.
+  EXPECT_THAT(function.addLet("y", scoped), IsShaderError(HasSubstr("x which is out of scope")));
+}
+
+TEST_F(FunctionBuilderTests, AssignToVarFromClosedBlockFailsClosed) {
+  FunctionBuilder function = startFunction();
+
+  const IrExpr i = GetShaderResultOrFail(function.beginFor("i", LiteralU32(0)), LiteralF32(0));
+  EXPECT_THAT(function.forCondition(GetShaderResultOrFail(Lt(i, LiteralU32(4)), LiteralF32(0))),
+              IsShaderOk());
+  EXPECT_THAT(
+      function.forContinuing(i, GetShaderResultOrFail(Add(i, LiteralU32(1)), LiteralF32(0))),
+      IsShaderOk());
+  const IrExpr scopedVar =
+      GetShaderResultOrFail(function.addVar("scoped", IrType::U32(), LiteralU32(0)), LiteralF32(0));
+  EXPECT_THAT(function.endFor(), IsShaderOk());
+
+  EXPECT_THAT(function.assign(scopedVar, LiteralU32(1)),
+              IsShaderError(HasSubstr("scoped which is out of scope")));
+}
+
+TEST(EntryPointTests, DuplicateBuiltinParamsAreRejected) {
+  ModuleBuilder builder;
+  EXPECT_THAT(
+      builder.createVertexEntryPoint(
+          "vsMain",
+          {IrParam{"a", IrType::U32(), std::nullopt, BuiltinInput::InstanceIndex},
+           IrParam{"b", IrType::U32(), std::nullopt, BuiltinInput::InstanceIndex}},
+          {IrOutputMember{"clip_pos", IrType::Vec4f(), std::nullopt, BuiltinOutput::Position}}),
+      IsShaderError(HasSubstr("duplicate stage IO builtin")));
 }
 
 TEST(EntryPointTests, VertexValidatesBuiltinsAndPosition) {

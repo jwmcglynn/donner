@@ -164,6 +164,15 @@ bool IrExpr::isMutableLvalue() const {
   return node_->mutableLvalue;
 }
 
+void IrExpr::collectRefs(std::vector<RefInfo>& out) const {
+  if (node_->kind == Kind::Ref) {
+    out.push_back(RefInfo{node_->refKind, node_->name, node_->type});
+  }
+  for (const IrExpr& child : node_->children) {
+    child.collectRefs(out);
+  }
+}
+
 std::string IrExpr::toString() const {
   const Node& node = *node_;
   switch (node.kind) {
@@ -328,6 +337,23 @@ ShaderResult<IrExpr> Mul(const IrExpr& lhs, const IrExpr& rhs, const RcString& l
 }
 
 ShaderResult<IrExpr> Div(const IrExpr& lhs, const IrExpr& rhs, const RcString& label) {
+  // vector / broadcast-scalar and broadcast-scalar / vector with matching element type; the
+  // solid-fill fragment stage needs the latter for `1.0 / fwidth(sample_pos)`.
+  const IrType& lt = lhs.type();
+  const IrType& rt = rhs.type();
+  const bool vectorScalar =
+      lt.isNumericVector() && rt.isNumericScalar() && lt.scalarKind() == rt.scalarKind();
+  const bool scalarVector =
+      lt.isNumericScalar() && rt.isNumericVector() && lt.scalarKind() == rt.scalarKind();
+  if (vectorScalar || scalarVector) {
+    IrExpr::Node node;
+    node.kind = IrExpr::Kind::Binary;
+    node.type = vectorScalar ? lt : rt;
+    node.binaryOp = BinaryOp::Div;
+    node.children = {lhs, rhs};
+    return MakeNode(std::move(node));
+  }
+
   return MakeArithmetic(BinaryOp::Div, lhs, rhs, label);
 }
 

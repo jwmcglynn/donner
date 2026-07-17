@@ -114,6 +114,22 @@ public:
   /// member/index/single-component-swizzle chain rooted at one.
   bool isMutableLvalue() const;
 
+  /// One name reference found inside an expression tree (see \ref collectRefs).
+  struct RefInfo {
+    RefKind kind;   //!< What the name refers to.
+    RcString name;  //!< Referenced name.
+    IrType type;    //!< Type the reference was created with.
+  };
+
+  /**
+   * Appends every name reference in this expression tree (depth-first, in operand order) to
+   * \p out. Used by the function builder to re-verify that referenced names are still in scope
+   * when an expression is recorded into a statement.
+   *
+   * @param out Destination list.
+   */
+  void collectRefs(std::vector<RefInfo>& out) const;
+
   /// Formats this expression as a deterministic prefix string, e.g. `add(ref(a), lit_f32(1))`.
   std::string toString() const;
 

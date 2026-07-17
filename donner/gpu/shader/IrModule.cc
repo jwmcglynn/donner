@@ -16,6 +16,15 @@ ShaderError Err(std::string message, const RcString& label) {
 template <typename IoList>
 ShaderStatus ValidateStageIo(const IoList& io, const RcString& label) {
   for (size_t i = 0; i < io.size(); ++i) {
+    if (io[i].builtin) {
+      for (size_t j = i + 1; j < io.size(); ++j) {
+        if (io[j].builtin && *io[j].builtin == *io[i].builtin) {
+          return Err(std::format("duplicate stage IO builtin on {} and {}", io[i].name.str(),
+                                 io[j].name.str()),
+                     label);
+        }
+      }
+    }
     if (io[i].location) {
       if (!io[i].type.isNumeric()) {
         return Err(std::format("stage IO {} must be a numeric scalar or vector, got {}",
@@ -100,6 +109,38 @@ ShaderStatus FunctionBuilder::declareName(const RcString& name, const IrType& ty
                     function_.name));
   }
   locals_.emplace(name, std::make_pair(type, kind));
+  if (!blockStack_.empty()) {
+    blockStack_.back().declaredNames.push_back(name);
+  }
+  return OkShaderStatus();
+}
+
+void FunctionBuilder::removeScopedNames(std::vector<RcString>& names) {
+  for (const RcString& name : names) {
+    locals_.erase(name);
+  }
+  names.clear();
+}
+
+ShaderStatus FunctionBuilder::verifyExprInScope(const IrExpr& expr) {
+  std::vector<IrExpr::RefInfo> refs;
+  expr.collectRefs(refs);
+  for (const IrExpr::RefInfo& ref : refs) {
+    if (ref.kind == RefKind::Constant || ref.kind == RefKind::Resource) {
+      if (!moduleBuilder_->resolveModuleName(ref.name)) {
+        return fail(
+            Err(std::format("expression references unknown module-scope name {}", ref.name.str()),
+                function_.name));
+      }
+      continue;
+    }
+    const auto it = locals_.find(ref.name);
+    if (it == locals_.end() || it->second.second != ref.kind || !(it->second.first == ref.type)) {
+      return fail(
+          Err(std::format("expression references {} which is out of scope here", ref.name.str()),
+              function_.name));
+    }
+  }
   return OkShaderStatus();
 }
 
@@ -126,6 +167,9 @@ ShaderResult<IrExpr> FunctionBuilder::ref(const RcString& name) const {
 ShaderResult<IrExpr> FunctionBuilder::addLet(const RcString& name, const IrExpr& value) {
   if (std::optional<ShaderError> error = checkUsable()) {
     return *error;
+  }
+  if (ShaderStatus status = verifyExprInScope(value); status.hasError()) {
+    return std::move(status).error();
   }
   if (ShaderStatus status = declareName(name, value.type(), RefKind::Let); status.hasError()) {
     return std::move(status).error();
@@ -157,6 +201,11 @@ ShaderResult<IrExpr> FunctionBuilder::addVar(const RcString& name, const IrType&
                  function_.name));
     return std::move(status).error();
   }
+  if (init) {
+    if (ShaderStatus status = verifyExprInScope(*init); status.hasError()) {
+      return std::move(status).error();
+    }
+  }
   if (ShaderStatus status = declareName(name, type, RefKind::Var); status.hasError()) {
     return std::move(status).error();
   }
@@ -175,6 +224,12 @@ ShaderResult<IrExpr> FunctionBuilder::addVar(const RcString& name, const IrType&
 ShaderStatus FunctionBuilder::assign(const IrExpr& lhs, const IrExpr& rhs) {
   if (std::optional<ShaderError> error = checkUsable()) {
     return *error;
+  }
+  if (ShaderStatus status = verifyExprInScope(lhs); status.hasError()) {
+    return status;
+  }
+  if (ShaderStatus status = verifyExprInScope(rhs); status.hasError()) {
+    return status;
   }
   if (!lhs.isMutableLvalue()) {
     return fail(
@@ -223,6 +278,7 @@ ShaderStatus FunctionBuilder::elseBranch() {
   frame.kind = BlockFrame::Kind::IfElse;
   frame.thenStatements = std::move(frame.statements);
   frame.statements.clear();
+  removeScopedNames(frame.declaredNames);
   return OkShaderStatus();
 }
 
@@ -237,6 +293,7 @@ ShaderStatus FunctionBuilder::endIf() {
 
   BlockFrame frame = std::move(blockStack_.back());
   blockStack_.pop_back();
+  removeScopedNames(frame.declaredNames);
 
   IrStmt::Data data;
   data.kind = IrStmt::Kind::If;
@@ -255,7 +312,7 @@ ShaderResult<IrExpr> FunctionBuilder::beginFor(const RcString& name, const IrExp
   if (std::optional<ShaderError> error = checkUsable()) {
     return *error;
   }
-  if (ShaderStatus status = declareName(name, init.type(), RefKind::Var); status.hasError()) {
+  if (ShaderStatus status = verifyExprInScope(init); status.hasError()) {
     return std::move(status).error();
   }
 
@@ -269,6 +326,13 @@ ShaderResult<IrExpr> FunctionBuilder::beginFor(const RcString& name, const IrExp
   frame.kind = BlockFrame::Kind::ForBody;
   frame.init = IrStmt(std::move(initData));
   blockStack_.push_back(std::move(frame));
+
+  // Declared after the frame is pushed so the loop variable is scoped to it and dropped at
+  // endFor.
+  if (ShaderStatus status = declareName(name, init.type(), RefKind::Var); status.hasError()) {
+    blockStack_.pop_back();
+    return std::move(status).error();
+  }
   return MakeRef(RefKind::Var, name, init.type());
 }
 
@@ -309,7 +373,6 @@ ShaderStatus FunctionBuilder::forContinuing(const IrExpr& lhs, const IrExpr& rhs
   data.kind = IrStmt::Kind::Assign;
   data.exprs = {lhs, rhs};
   blockStack_.back().continuing = IrStmt(std::move(data));
-  blockStack_.back().forHeaderComplete = true;
   return OkShaderStatus();
 }
 
@@ -323,6 +386,7 @@ ShaderStatus FunctionBuilder::endFor() {
 
   BlockFrame frame = std::move(blockStack_.back());
   blockStack_.pop_back();
+  removeScopedNames(frame.declaredNames);
 
   IrStmt::Data data;
   data.kind = IrStmt::Kind::For;
@@ -485,6 +549,15 @@ ShaderStatus FunctionBuilder::finish() {
   }
   if (!blockStack_.empty()) {
     return fail(Err("finish with an open if/for block", function_.name));
+  }
+
+  // Conservative structural check: a non-void function or entry point must end with a
+  // top-level return statement (returns inside if/for bodies do not count).
+  const bool needsReturn = function_.stage != StageKind::None || function_.returnType.has_value();
+  if (needsReturn &&
+      (function_.body.empty() || function_.body.back().kind() != IrStmt::Kind::Return)) {
+    return fail(Err("non-void functions and entry points must end with a return statement",
+                    function_.name));
   }
 
   finished_ = true;

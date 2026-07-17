@@ -82,10 +82,47 @@ ShaderResult<TypeLayout> ComputeTypeLayout(const IrType& type, AddressSpace addr
  * roundUp(AlignOf(element), SizeOf(element)), rounded up to a multiple of 16 in the uniform
  * address space.
  *
+ * The uniform rounding is a deliberate policy choice: WGSL validation would reject a uniform
+ * array whose natural stride is not a multiple of 16 (there is no stride attribute), so this
+ * engine defines the layout as the rounded stride and \ref ComputeArrayStrideInfo reports when
+ * rounding occurred. Emitters must materialize padded element wrappers in that case (see
+ * \ref ArrayStrideInfo).
+ *
  * @param arrayType Sized or runtime array type.
  * @param addressSpace Address space the stride is computed for.
  */
 ShaderResult<uint32_t> ComputeArrayStride(const IrType& arrayType, AddressSpace addressSpace);
+
+/// Element stride of an array in an address space, plus whether uniform rules padded it.
+struct ArrayStrideInfo {
+  uint32_t strideBytes = 0;        //!< Effective element stride.
+  bool paddedFromNatural = false;  //!< True when the uniform 16-byte rule raised the natural
+                                   //!< stride. EMITTER OBLIGATION: WGSL has no stride attribute,
+                                   //!< so emitters must materialize a padded element wrapper
+                                   //!< (e.g. a struct with explicit tail padding) whenever this
+                                   //!< is set.
+
+  /// Equality operator. @param other Info to compare against.
+  bool operator==(const ArrayStrideInfo& other) const = default;
+
+  /// Ostream output operator, e.g. `stride=16 padded=true`.
+  /// @param os Output stream. @param value Info to output.
+  friend std::ostream& operator<<(std::ostream& os, const ArrayStrideInfo& value) {
+    return os << "stride=" << value.strideBytes
+              << " padded=" << (value.paddedFromNatural ? "true" : "false");
+  }
+};
+
+/**
+ * Like \ref ComputeArrayStride, additionally reporting whether the uniform 16-byte rule raised
+ * the natural stride - the flag packet 5's emitters consult to decide whether a padded element
+ * wrapper is required.
+ *
+ * @param arrayType Sized or runtime array type.
+ * @param addressSpace Address space the stride is computed for.
+ */
+ShaderResult<ArrayStrideInfo> ComputeArrayStrideInfo(const IrType& arrayType,
+                                                     AddressSpace addressSpace);
 
 /**
  * Computes the full member layout of a struct type in \p addressSpace: member offsets rounded to
