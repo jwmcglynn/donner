@@ -39,6 +39,7 @@ async function runBootstrapWithoutThreads() {
       focus() {},
       hidden: false,
     },
+    "loading-screen": { hidden: false },
     status: { hidden: false, textContent: "" },
     "capability-error": { hidden: true },
     "capability-error-detail": { textContent: "" },
@@ -86,6 +87,7 @@ async function loadTouchPointerBridge() {
   };
   const elements = {
     canvas,
+    "loading-screen": { hidden: false },
     status: { hidden: false, textContent: "" },
     "capability-error": { hidden: true },
     "capability-error-detail": { textContent: "" },
@@ -116,6 +118,67 @@ async function loadTouchPointerBridge() {
   vm.runInContext(source, context, { filename: "editor-bootstrap.js" });
   await new Promise((resolve) => setImmediate(resolve));
   return { canvas, captured, dispatched, handlers, released };
+}
+
+async function loadReadyHandoff() {
+  const source = await readFile(new URL("../editor-bootstrap.js", import.meta.url), "utf8");
+  const windowHandlers = new Map();
+  const timers = [];
+  const loadingClasses = new Set();
+  let focusCount = 0;
+  const canvas = {
+    addEventListener() {},
+    focus() {
+      focusCount += 1;
+    },
+    hidden: false,
+  };
+  const loadingProgress = {
+    classList: { add() {}, remove() {} },
+    removeAttribute() {},
+    setAttribute() {},
+  };
+  const elements = {
+    canvas,
+    "loading-screen": {
+      classList: { add: (name) => loadingClasses.add(name) },
+      hidden: false,
+    },
+    status: { textContent: "" },
+    "loading-progress": loadingProgress,
+    "loading-progress-fill": { style: {} },
+    "loading-detail": { textContent: "" },
+    "capability-error": { hidden: true },
+    "capability-error-detail": { textContent: "" },
+  };
+  const window = {
+    __donnerBackendPromise: new Promise(() => {}),
+    addEventListener(type, handler) {
+      windowHandlers.set(type, handler);
+    },
+    isSecureContext: true,
+  };
+  const context = vm.createContext({
+    console,
+    document: {
+      body: { appendChild() {} },
+      getElementById: (id) => elements[id],
+    },
+    SharedArrayBuffer: function SharedArrayBuffer() {},
+    setTimeout(callback) {
+      timers.push(callback);
+    },
+    window,
+  });
+  vm.runInContext(source, context, { filename: "editor-bootstrap.js" });
+  return {
+    context,
+    elements,
+    focusCount: () => focusCount,
+    loadingClasses,
+    timers,
+    windowHandlers,
+  };
 }
 
 test("auto mode prefers Geode when WebGPU has an adapter", async () => {
@@ -181,6 +244,23 @@ test("trackpad gesture bridge prevents page zoom and emits editor wheel zoom", a
     dispatched.map((event) => [event.type, event.ctrlKey, Math.sign(event.deltaY)]),
     [["wheel", true, -1]],
   );
+});
+
+test("loading screen remains until the editor presents its first frame", async () => {
+  const { context, elements, focusCount, loadingClasses, timers, windowHandlers } =
+    await loadReadyHandoff();
+
+  context.Module.onRuntimeInitialized();
+  assert.equal(elements["loading-screen"].hidden, false);
+  assert.equal(focusCount(), 0);
+
+  windowHandlers.get("donner:first-frame-presented")();
+  assert.equal(loadingClasses.has("is-complete"), true);
+  assert.equal(elements["loading-screen"].hidden, false);
+  assert.equal(focusCount(), 1);
+
+  timers.shift()();
+  assert.equal(elements["loading-screen"].hidden, true);
 });
 
 test("auto mode falls back to TinySkia when WebGPU is absent", async () => {
