@@ -251,9 +251,9 @@ donner_cc_library(
     hdrs = ["RendererImageIO.h"],
     visibility = [
         "//donner/editor:__subpackages__",
-        # //donner/gpu: the design 0053 frozen-baseline capture tool writes
-        # its PNG through the shared image IO helper.
-        "//donner/gpu:__subpackages__",
+        # //donner/gpu/metal/tests: the design 0053 frozen-baseline capture
+        # tool writes its PNG through the shared image IO helper.
+        "//donner/gpu/metal/tests:__pkg__",
         "//donner/svg/renderer:__subpackages__",
         "//tools/mcp-servers/editor-control:__pkg__",
     ],

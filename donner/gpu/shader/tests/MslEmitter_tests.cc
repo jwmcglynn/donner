@@ -162,6 +162,21 @@ TEST(MslEmitterTests, RejectsUserStructCollidingWithGeneratedIoStructs) {
               IsShaderError(HasSubstr("collides with a generated stage IO struct")));
 }
 
+TEST(MslEmitterTests, RejectsBufferBindingsCollidingWithVertexBufferIndex) {
+  // Buffer binding 29 maps to Metal buffer index 30, the reserved stage-in vertex buffer slot;
+  // bindings 30 and 31 would exceed Metal's 0..30 argument table.
+  ModuleBuilder builder;
+  const IrType structType =
+      GetShaderResultOrFail(IrType::Struct("Params", {{"x", IrType::F32()}}), IrType::F32());
+  EXPECT_THAT(builder.addUniformBuffer(0, 29, "params", structType), IsShaderOk());
+
+  ShaderResult<IrModule> module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  EXPECT_THAT(EmitMsl(module.result()),
+              IsShaderError(HasSubstr("collides with or exceeds the reserved stage-in vertex "
+                                      "buffer index")));
+}
+
 TEST(MslEmitterTests, RejectsMslReservedWords) {
   ModuleBuilder builder;
   EXPECT_THAT(builder.addConstant("device", LiteralU32(1)), IsShaderOk());

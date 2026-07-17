@@ -746,6 +746,9 @@ void Emitter::emitFunction(const IrFunction& function) {
         addParam(std::format("uint {} [[instance_id]]", param.name.str()));
       }
     }
+    // Every module binding is declared on every entry point; a declared-but-unbound argument
+    // slot is legal only while the stage genuinely never references it, which holds because
+    // the Metal backend binds every group entry for each stage its layout declares.
     for (const IrBinding& binding : module_.bindings()) {
       addParam(bindingEntryParam(binding));
     }
@@ -793,6 +796,15 @@ ShaderResult<std::string> Emitter::emit() {
         verifyBufferStructLayouts(binding.type, AddressSpace::Storage);
         break;
       default: break;
+    }
+    if ((binding.kind == BindingKind::UniformBuffer ||
+         binding.kind == BindingKind::ReadOnlyStorageBuffer) &&
+        MslBufferIndex(binding.binding) >= kMslVertexBufferIndex) {
+      latch(ShaderError{
+          std::format("buffer binding {} maps to Metal buffer index {}, which collides with or "
+                      "exceeds the reserved stage-in vertex buffer index {}",
+                      binding.binding, MslBufferIndex(binding.binding), kMslVertexBufferIndex),
+          "msl"});
     }
     check(CheckMslIdentifier(binding.name, "binding"));
   }

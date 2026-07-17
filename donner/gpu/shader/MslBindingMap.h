@@ -11,9 +11,10 @@
 /// - Texture binding `b` -> `[[texture(b)]]`.
 /// - Sampler binding `b` -> `[[sampler(b)]]`.
 /// - Stage-in vertex data occupies the dedicated vertex buffer index 30 (the last slot of
-///   Metal's 0..30 vertex buffer argument table), keeping the `1 + b` buffer mapping
-///   collision-free for every RHI binding index this runtime allows (b in 0..31 would collide
-///   at 31; the solid-fill family uses b in 0..11).
+///   Metal's 0..30 vertex buffer argument table). The `1 + b` mapping therefore supports RHI
+///   buffer bindings b in 0..28 only: b = 29 would land on the reserved index 30, and b >= 30
+///   would exceed Metal's table. The MSL emitter and the Metal backend both fail closed for
+///   b >= 29; the solid-fill family uses b in 0..11.
 ///
 /// Only bind group 0 exists in the solid-fill pipeline family; multi-group support would extend
 /// this map with a per-group base offset when a pipeline family needs it.

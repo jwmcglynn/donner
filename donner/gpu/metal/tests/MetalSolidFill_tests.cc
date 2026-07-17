@@ -139,11 +139,9 @@ protected:
     Buffer buffer = unwrap(device_->createBuffer(BufferDescriptor{
                                label, byteCount, BufferUsage::Storage | BufferUsage::CopyDst}),
                            label);
-    EXPECT_FALSE(
-        device_
-            ->writeBuffer(buffer, 0,
-                          std::span<const uint8_t>(static_cast<const uint8_t*>(data), byteCount))
-            .hasError());
+    const Status writeStatus = device_->writeBuffer(
+        buffer, 0, std::span<const uint8_t>(static_cast<const uint8_t*>(data), byteCount));
+    EXPECT_FALSE(writeStatus.hasError()) << writeStatus.error();
     return buffer;
   }
 
@@ -227,10 +225,9 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
                                                TextureUsage::Sampled | TextureUsage::CopyDst}),
       "createTexture dummy");
   const std::array<uint8_t, 4> dummyTexel = {0, 0, 0, 0};
-  ASSERT_FALSE(
-      device_
-          ->writeTexture(dummyTexture, dummyTexel, TexelCopyBufferLayout{0, 256, 1}, Extent2d{1, 1})
-          .hasError());
+  const Status dummyWrite = device_->writeTexture(dummyTexture, dummyTexel,
+                                                  TexelCopyBufferLayout{0, 256, 1}, Extent2d{1, 1});
+  ASSERT_FALSE(dummyWrite.hasError()) << dummyWrite.error();
   TextureView dummyView =
       unwrap(device_->createTextureView(dummyTexture, TextureViewDescriptor{"dummyView"}),
              "createTextureView dummy");
@@ -259,13 +256,11 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
                    "vertices", encoded.quadVertices.size() * sizeof(EncodedPath::Vertex),
                    BufferUsage::Vertex | BufferUsage::CopyDst}),
                "createBuffer vertices");
-    ASSERT_FALSE(
-        device_
-            ->writeBuffer(draw.vertexBuffer, 0,
-                          std::span<const uint8_t>(
-                              reinterpret_cast<const uint8_t*>(encoded.quadVertices.data()),
-                              encoded.quadVertices.size() * sizeof(EncodedPath::Vertex)))
-            .hasError());
+    const Status vertexWrite = device_->writeBuffer(
+        draw.vertexBuffer, 0,
+        std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(encoded.quadVertices.data()),
+                                 encoded.quadVertices.size() * sizeof(EncodedPath::Vertex)));
+    ASSERT_FALSE(vertexWrite.hasError()) << vertexWrite.error();
 
     draw.bands = storageBuffer("bands", encoded.bands.data(),
                                encoded.bands.size() * sizeof(EncodedPath::Band));
@@ -307,12 +302,10 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
         unwrap(device_->createBuffer(BufferDescriptor{"uniforms", sizeof(Uniforms),
                                                       BufferUsage::Uniform | BufferUsage::CopyDst}),
                "createBuffer uniforms");
-    ASSERT_FALSE(
-        device_
-            ->writeBuffer(draw.uniformBuffer, 0,
-                          std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&uniforms),
-                                                   sizeof(uniforms)))
-            .hasError());
+    const Status uniformWrite = device_->writeBuffer(
+        draw.uniformBuffer, 0,
+        std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&uniforms), sizeof(uniforms)));
+    ASSERT_FALSE(uniformWrite.hasError()) << uniformWrite.error();
 
     std::vector<BindGroupEntry> entries;
     entries.push_back({0, BufferBinding{draw.uniformBuffer, 0, sizeof(Uniforms)}});
@@ -343,17 +336,21 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
   RenderPassEncoder* pass = passResult.result();
 
   for (const PathDraw& draw : draws) {
-    ASSERT_FALSE(pass->setPipeline(pipeline).hasError());
-    ASSERT_FALSE(pass->setBindGroup(0, draw.bindGroup).hasError());
-    ASSERT_FALSE(pass->setVertexBuffer(0, draw.vertexBuffer).hasError());
-    ASSERT_FALSE(pass->draw(draw.vertexCount).hasError());
+    const Status pipelineStatus = pass->setPipeline(pipeline);
+    ASSERT_FALSE(pipelineStatus.hasError()) << pipelineStatus.error();
+    const Status bindGroupStatus = pass->setBindGroup(0, draw.bindGroup);
+    ASSERT_FALSE(bindGroupStatus.hasError()) << bindGroupStatus.error();
+    const Status vertexBufferStatus = pass->setVertexBuffer(0, draw.vertexBuffer);
+    ASSERT_FALSE(vertexBufferStatus.hasError()) << vertexBufferStatus.error();
+    const Status drawStatus = pass->draw(draw.vertexCount);
+    ASSERT_FALSE(drawStatus.hasError()) << drawStatus.error();
   }
-  ASSERT_FALSE(pass->end().hasError());
-  ASSERT_FALSE(encoder
-                   ->copyTextureToBuffer(TexelCopyTextureInfo{target}, readback,
-                                         TexelCopyBufferLayout{0, kBytesPerRow, kBaselineSize},
-                                         Extent2d{kBaselineSize, kBaselineSize})
-                   .hasError());
+  const Status endStatus = pass->end();
+  ASSERT_FALSE(endStatus.hasError()) << endStatus.error();
+  const Status copyStatus = encoder->copyTextureToBuffer(
+      TexelCopyTextureInfo{target}, readback, TexelCopyBufferLayout{0, kBytesPerRow, kBaselineSize},
+      Extent2d{kBaselineSize, kBaselineSize});
+  ASSERT_FALSE(copyStatus.hasError()) << copyStatus.error();
 
   Result<CommandBuffer> commands = encoder->finish();
   ASSERT_FALSE(commands.hasError()) << commands.error();
@@ -375,8 +372,11 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
   bitmap.rowBytes = kBytesPerRow;
   bitmap.alphaType = svg::AlphaType::Premultiplied;
 
+  // Strict identity: the Metal slice must reproduce the frozen baseline byte-for-byte (zero
+  // mismatched pixels, anti-aliased pixels included).
   editor::tests::CompareBitmapToGolden(
-      bitmap, "donner/gpu/metal/tests/testdata/solid_fill_baseline.png", "metal_solid_fill");
+      bitmap, "donner/gpu/metal/tests/testdata/solid_fill_baseline.png", "metal_solid_fill",
+      editor::tests::PixelmatchIdentityParams());
 }
 
 }  // namespace

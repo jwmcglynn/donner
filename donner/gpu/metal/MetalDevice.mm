@@ -643,6 +643,17 @@ Status MetalDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferSl
         }
 
         if (const auto* bufferBinding = std::get_if<BufferBinding>(&entry.resource)) {
+          // Mirror of the MSL emitter's guard: buffer bindings must not reach the reserved
+          // stage-in vertex buffer index (or exceed Metal's argument table).
+          if (shader::MslBufferIndex(entry.binding) >= shader::kMslVertexBufferIndex) {
+            bindStatus = GpuError{
+                GpuErrorType::Unsupported,
+                std::format("setBindGroup: binding {} maps to Metal buffer index {}, which "
+                            "collides with or exceeds the reserved vertex buffer index {}",
+                            entry.binding, shader::MslBufferIndex(entry.binding),
+                            shader::kMslVertexBufferIndex)};
+            break;
+          }
           id<MTLBuffer> buffer = GetSlot(impl_->buffers, bufferBinding->buffer.slotIndex());
           if (buffer == nil) {
             bindStatus =

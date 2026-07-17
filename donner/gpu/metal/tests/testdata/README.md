@@ -6,7 +6,7 @@
 both) rendered at 256x256 RGBA8 over a transparent background.
 
 It was captured from the **current production renderer as a black box** - the wgpu-based Geode
-path running on the Metal backend of this machine (Apple Silicon) - using:
+path running on the Metal backend of an Apple Silicon Mac - using:
 
 ```sh
 bazel run --config=geode //donner/gpu/metal/tests:baseline_capture_tool -- \
