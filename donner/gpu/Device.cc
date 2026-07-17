@@ -760,6 +760,14 @@ Result<uint64_t> Device::submit(CommandBuffer commandBuffer) {
   return serial;
 }
 
+Status Device::validateBufferHandleForBackend(const Buffer& buffer) const {
+  auto record = resolve(buffers_, buffer, BufferTag::kName);
+  if (record.hasError()) {
+    return std::move(record).error();
+  }
+  return OkStatus();
+}
+
 CommandBuffer Device::registerCommandBuffer(std::vector<Command>&& commands) {
   return allocateHandle<CommandBufferTag>(commandBuffers_,
                                           CommandBufferRecord{std::move(commands)});

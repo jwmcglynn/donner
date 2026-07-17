@@ -370,6 +370,15 @@ protected:
                                 const TexelCopyBufferLayout& dataLayout,
                                 const Extent2d& writeSize) = 0;
 
+  /**
+   * Validates a buffer handle for backend-provided auxiliary entry points (test readback
+   * helpers and similar), running the same null/device-identity/generation checks the
+   * template-method public API performs before its hooks.
+   *
+   * @param buffer Handle to validate.
+   */
+  Status validateBufferHandleForBackend(const Buffer& buffer) const;
+
   /// Backend hook: a validated command buffer was submitted.
   /// @param submissionSerial Serial assigned to this submission.
   /// @param commandBufferSlotIndex Slot the command buffer occupied before being consumed.

@@ -200,10 +200,12 @@ struct MetalDevice::Impl {
     uint32_t layoutSlot = 0;         //!< Slot of the bind group layout.
   };
 
-  /// A compiled render pipeline plus the topology every draw through it uses.
+  /// A compiled render pipeline plus the encoder state every draw through it uses (cull mode
+  /// is encoder state in Metal, so it is applied when the pipeline binds).
   struct RenderPipelineRecord {
     id<MTLRenderPipelineState> state = nil;                        //!< Compiled pipeline state.
     PrimitiveTopology topology = PrimitiveTopology::TriangleList;  //!< Pipeline topology.
+    CullMode cullMode = CullMode::None;                            //!< Pipeline cull mode.
   };
 
   std::vector<id<MTLBuffer>> buffers;                         //!< Buffer slots.
@@ -259,13 +261,10 @@ bool MetalDevice::waitForSerial(uint64_t serial, double timeoutSeconds) {
 }
 
 Result<std::vector<uint8_t>> MetalDevice::readBackBuffer(const Buffer& buffer) {
-  if (!buffer.isValid()) {
-    return GpuError{GpuErrorType::InvalidHandle, "buffer handle is null"};
-  }
-  if (buffer.deviceId() != deviceId()) {
-    return GpuError{GpuErrorType::DeviceMismatch,
-                    std::format("buffer handle belongs to device {} but was used with device {}",
-                                buffer.deviceId(), deviceId())};
+  // Full handle validation (null, device identity, AND generation) through the base class, so a
+  // stale handle whose slot was reused cannot read the replacement buffer.
+  if (Status status = validateBufferHandleForBackend(buffer); status.hasError()) {
+    return std::move(status).error();
   }
   id<MTLBuffer> metalBuffer = GetSlot(impl_->buffers, buffer.slotIndex());
   if (metalBuffer == nil) {
@@ -486,8 +485,8 @@ Status MetalDevice::onCreateRenderPipeline(uint32_t slotIndex,
   }
 
   SetSlot(impl_->renderPipelines, slotIndex,
-          std::optional<Impl::RenderPipelineRecord>(
-              Impl::RenderPipelineRecord{pipelineState, descriptor.topology}));
+          std::optional<Impl::RenderPipelineRecord>(Impl::RenderPipelineRecord{
+              pipelineState, descriptor.topology, descriptor.cullMode}));
   return OkStatus();
 }
 
@@ -613,6 +612,11 @@ Status MetalDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferSl
                                                  setPipeline->pipelineSlot)});
       }
       [renderEncoder setRenderPipelineState:pipeline->state];
+      // Cull mode is encoder state in Metal; apply the pipeline's recorded mode at bind time.
+      // Behavioral coverage requires winding-controlled geometry, which arrives with the Geode
+      // pipeline migration packets; the solid-fill slice always uses CullMode::None.
+      [renderEncoder setCullMode:(pipeline->cullMode == CullMode::Back ? MTLCullModeBack
+                                                                       : MTLCullModeNone)];
       currentTopology = pipeline->topology;
     } else if (const auto* setBindGroup = std::get_if<SetBindGroupCommand>(&command)) {
       if (setBindGroup->index != 0) {

@@ -236,6 +236,27 @@ private:
     return std::format("{}_Output", std::string_view(function.name));
   }
 
+  /// Rejects user names that would shadow an implicit MSL identifier: binding parameter names
+  /// (present on every function) or, inside entry points, the generated stage-in parameter
+  /// `in`. Shadowing would be legal C++ but wrong-meaning MSL - user-call forwarding passes
+  /// binding names, which would resolve to the shadowing local.
+  ShaderStatus checkNoImplicitShadow(const RcString& name, std::string_view context,
+                                     bool insideEntryPoint) const {
+    for (const IrBinding& binding : module_.bindings()) {
+      if (name == binding.name) {
+        return ShaderError{std::format("{}: \"{}\" shadows an implicit MSL binding parameter",
+                                       context, name.str()),
+                           "msl"};
+      }
+    }
+    if (insideEntryPoint && std::string_view(name) == "in") {
+      return ShaderError{
+          std::format("{}: \"{}\" shadows an implicit MSL stage-in parameter", context, name.str()),
+          "msl"};
+    }
+    return OkShaderStatus();
+  }
+
   const IrModule& module_;
   std::string out_;
   int indent_ = 0;
@@ -379,11 +400,13 @@ void Emitter::emitStatement(const IrStmt& statement, const IrFunction& function)
   switch (statement.kind()) {
     case IrStmt::Kind::Let:
       check(CheckMslIdentifier(data.name, "let"));
+      check(checkNoImplicitShadow(data.name, "let", function.stage != StageKind::None));
       line(std::format("const {} {} = {};", TypeToMsl(data.exprs[0].type()), data.name.str(),
                        exprToMsl(data.exprs[0])));
       return;
     case IrStmt::Kind::Var:
       check(CheckMslIdentifier(data.name, "var"));
+      check(checkNoImplicitShadow(data.name, "var", function.stage != StageKind::None));
       if (!data.exprs.empty()) {
         line(std::format("{} {} = {};", TypeToMsl(*data.declaredType), data.name.str(),
                          exprToMsl(data.exprs[0])));
@@ -412,6 +435,7 @@ void Emitter::emitStatement(const IrStmt& statement, const IrFunction& function)
       if (data.init) {
         const IrStmt::Data& init = data.init->data();
         check(CheckMslIdentifier(init.name, "for init"));
+        check(checkNoImplicitShadow(init.name, "for init", function.stage != StageKind::None));
         header += std::format("{} {} = {}", TypeToMsl(*init.declaredType), init.name.str(),
                               exprToMsl(init.exprs[0]));
       }
@@ -758,6 +782,7 @@ void Emitter::emitFunction(const IrFunction& function) {
     }
     for (const IrParam& param : function.params) {
       check(CheckMslIdentifier(param.name, "parameter"));
+      check(checkNoImplicitShadow(param.name, "parameter", /*insideEntryPoint=*/false));
       addParam(std::format("{} {}", TypeToMsl(param.type), param.name.str()));
     }
   }
@@ -768,6 +793,8 @@ void Emitter::emitFunction(const IrFunction& function) {
   if (function.stage != StageKind::None) {
     // Alias stage-in fields to their IR names so references emit unchanged.
     for (const IrParam& param : function.params) {
+      check(checkNoImplicitShadow(param.name, "entry point input",
+                                  /*insideEntryPoint=*/true));
       if (param.builtin && *param.builtin == BuiltinInput::InstanceIndex) {
         continue;  // Already a direct parameter.
       }
@@ -796,6 +823,15 @@ ShaderResult<std::string> Emitter::emit() {
         verifyBufferStructLayouts(binding.type, AddressSpace::Storage);
         break;
       default: break;
+    }
+    // The flat Metal argument-table map models only bind group 0 today (the solid-fill family
+    // is single-group); multi-group support arrives with later pipeline families.
+    if (binding.group != 0) {
+      latch(ShaderError{
+          std::format("binding {} is in group {}; the Metal binding map models only bind group "
+                      "0 today",
+                      binding.binding, binding.group),
+          "msl"});
     }
     if ((binding.kind == BindingKind::UniformBuffer ||
          binding.kind == BindingKind::ReadOnlyStorageBuffer) &&
