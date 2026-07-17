@@ -796,6 +796,49 @@ TEST_F(RendererDriverTest, DrawEntityRangeDefersSubtreeCleanupAndAppliesBaseTran
   EXPECT_THAT(transforms, testing::Contains(TransformNear(baseTransform, 1e-6)));
 }
 
+TEST_F(RendererDriverTest, InterruptibleEntityRangeStopsBeforeSecondShape) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect x="1" y="1" width="4" height="4" fill="red" />
+    <rect x="7" y="1" width="4" height="4" fill="green" />
+    <rect x="13" y="1" width="4" height="4" fill="blue" />
+  )svg",
+                                      Vector2i(20, 8));
+
+  ParseWarningSink warnings;
+  RendererUtils::prepareDocumentForRendering(document, false, warnings);
+  ASSERT_FALSE(warnings.hasWarnings());
+
+  std::vector<Entity> pathEntities;
+  RenderingInstanceView view(document.registry());
+  while (!view.done()) {
+    const auto& instance = view.get();
+    if (instance.dataHandle(document.registry()).all_of<components::ComputedPathComponent>()) {
+      pathEntities.push_back(view.currentEntity());
+    }
+    view.advance();
+  }
+  ASSERT_EQ(pathEntities.size(), 3u);
+
+  int drawPathCount = 0;
+  EXPECT_CALL(renderer, beginFrame(_)).Times(1);
+  EXPECT_CALL(renderer, endFrame()).Times(1);
+  EXPECT_CALL(renderer, drawPath(_, _)).WillRepeatedly([&](const PathShape&, const StrokeParams&) {
+    ++drawPathCount;
+  });
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(20, 8);
+  viewport.devicePixelRatio = 1.0;
+
+  const bool completed = driver.drawEntityRangeInterruptibly(
+      document.registry(), pathEntities.front(), pathEntities.back(), viewport, Transform2d(),
+      [&]() { return drawPathCount >= 1; });
+
+  EXPECT_FALSE(completed);
+  EXPECT_EQ(drawPathCount, 1)
+      << "cancellation must release the document between shapes instead of after the full range";
+}
+
 TEST_F(RendererDriverTest, DrawEntityRangeConvertsCssFilterFunctionsToFilterGraph) {
   SVGDocument document = makeDocument(R"svg(
     <rect x="10" y="20" width="40" height="10" fill="red" />
