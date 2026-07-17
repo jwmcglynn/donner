@@ -141,6 +141,11 @@ _RULES: List[_Rule] = [
         # construct test fixtures that compile pipelines for shader-only
         # validation; they're exempt because the test binary's wgpu::Device
         # goes away at process exit, not during the test run.
+        # donner/gpu/** is the Donner-owned GPU runtime (design 0053):
+        # `donner::gpu::Device::createRenderPipeline` is that runtime's own validated API, not a
+        # wgpu-native pipeline constructor, and its recording backend never touches a driver.
+        # Pipeline ownership rules for the new runtime are enforced by its Device API and model
+        # tests.
         exempt_path_prefixes=(
             "donner/svg/renderer/geode/GeodePipeline.cc",
             "donner/svg/renderer/geode/GeodeImagePipeline.cc",
@@ -148,6 +153,7 @@ _RULES: List[_Rule] = [
             "donner/svg/renderer/geode/GeodeCheckerboardPipeline.cc",
             "donner/svg/renderer/geode/tests/GeoEncoder_tests.cc",
             "donner/svg/renderer/geode/tests/GeodeShaders_tests.cc",
+            "donner/gpu/",
         ),
     ),
     _Rule(
