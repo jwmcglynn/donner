@@ -111,6 +111,30 @@ TEST(CompositedPresentationTest, PureTranslationActiveDragWithMatchingCacheSuppr
          "canvas refresh happens after drag settles.";
 }
 
+TEST(CompositedPresentationTest, PureTranslationRecapturesBeforeOverdrawIsExhausted) {
+  CompositedPresentation state;
+  const SelectTool::ActiveDragPreview represented{
+      .entity = Entity(7),
+      .translation = Vector2d(40.0, 0.0),
+      .documentFromCachedDocument = Transform2d::Translate(Vector2d(40.0, 0.0)),
+      .dragGeneration = 8,
+  };
+  state.noteCachedTextures(Entity(7), /*version=*/3, Vector2i(100, 100), represented);
+
+  SelectTool::ActiveDragPreview active = represented;
+  active.translation = Vector2d(150.0, 0.0);
+  active.documentFromCachedDocument = Transform2d::Translate(active.translation);
+  EXPECT_FALSE(state.needsCompositedLayerCapture(active, /*currentVersion=*/4,
+                                                 Vector2i(100, 100),
+                                                 /*translationRecaptureDistanceDoc=*/128.0));
+
+  active.translation = Vector2d(169.0, 0.0);
+  active.documentFromCachedDocument = Transform2d::Translate(active.translation);
+  EXPECT_TRUE(state.needsCompositedLayerCapture(active, /*currentVersion=*/5,
+                                                Vector2i(100, 100),
+                                                /*translationRecaptureDistanceDoc=*/128.0));
+}
+
 // A large affine scale drift past the threshold re-captures a crisp bitmap - the
 // intentional anti-blur re-capture. The worker bakes the live transform into the
 // fresh bitmap and `represented` is updated to that baked transform, so the
