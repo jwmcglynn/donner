@@ -109,6 +109,59 @@ TEST(MslEmitterTests, RejectsVec3OffsetDivergence) {
               IsShaderError(HasSubstr("diverges from the WGSL layout offset")));
 }
 
+TEST(MslEmitterTests, RejectsSyntacticallyInvalidIdentifiers) {
+  ModuleBuilder builder;
+  EXPECT_THAT(builder.addConstant("bad name", LiteralU32(1)), IsShaderOk());
+
+  ShaderResult<IrModule> module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  EXPECT_THAT(EmitMsl(module.result()), IsShaderError(HasSubstr("not a valid identifier")));
+}
+
+TEST(MslEmitterTests, RejectsLeadingDoubleUnderscoreIdentifiers) {
+  ModuleBuilder builder;
+  EXPECT_THAT(builder.addConstant("__reserved", LiteralU32(1)), IsShaderOk());
+
+  ShaderResult<IrModule> module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  EXPECT_THAT(EmitMsl(module.result()), IsShaderError(HasSubstr("not a valid identifier")));
+}
+
+TEST(MslEmitterTests, RejectsNonHostShareableUniformStructs) {
+  // Covered by the shared WGSL layout verification the MSL emitter already runs on binding
+  // roots; pinned here so the coverage cannot regress.
+  ModuleBuilder builder;
+  const IrType structType =
+      GetShaderResultOrFail(IrType::Struct("Flags", {{"flag", IrType::Bool()}}), IrType::F32());
+  EXPECT_THAT(builder.addUniformBuffer(0, 0, "flags", structType), IsShaderOk());
+
+  ShaderResult<IrModule> module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  EXPECT_THAT(EmitMsl(module.result()), IsShaderError(HasSubstr("not host-shareable")));
+}
+
+TEST(MslEmitterTests, RejectsUserStructCollidingWithGeneratedIoStructs) {
+  ModuleBuilder builder;
+  const IrType collidingType =
+      GetShaderResultOrFail(IrType::Struct("vs_main_Input", {{"x", IrType::F32()}}), IrType::F32());
+  EXPECT_THAT(builder.addReadOnlyStorageBuffer(0, 0, "colliding", collidingType), IsShaderOk());
+
+  auto vertex = builder.createVertexEntryPoint(
+      "vs_main", {IrParam{"pos", IrType::Vec2f(), 0}},
+      {IrOutputMember{"clip_pos", IrType::Vec4f(), std::nullopt, BuiltinOutput::Position}});
+  ASSERT_THAT(vertex, HasShaderResult());
+  FunctionBuilder function = std::move(vertex).result();
+  EXPECT_THAT(function.returnOutputs({GetShaderResultOrFail(
+                  ConstructVector(IrType::Vec4f(), {LiteralF32(0.0f)}), LiteralF32(0))}),
+              IsShaderOk());
+  EXPECT_THAT(function.finish(), IsShaderOk());
+
+  ShaderResult<IrModule> module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  EXPECT_THAT(EmitMsl(module.result()),
+              IsShaderError(HasSubstr("collides with a generated stage IO struct")));
+}
+
 TEST(MslEmitterTests, RejectsMslReservedWords) {
   ModuleBuilder builder;
   EXPECT_THAT(builder.addConstant("device", LiteralU32(1)), IsShaderOk());

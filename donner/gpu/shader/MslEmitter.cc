@@ -35,11 +35,35 @@ constexpr std::string_view kMslReservedWords[] = {
     "min",     "max",      "sqrt",        "length",    "round",
 };
 
-/// Checks an identifier against the MSL reserved-word list; fails closed on collision.
+/// Checks an identifier for C++/MSL lexical validity and reserved-word collisions; fails
+/// closed. As with the WGSL emitter, lexical enforcement lives here rather than in the
+/// target-neutral module builder.
 ShaderStatus CheckMslIdentifier(const RcString& name, std::string_view context) {
   if (name.empty()) {
     return ShaderError{std::format("{}: identifier is empty", context), "msl"};
   }
+
+  const std::string_view text(name);
+  const auto isIdentifierStart = [](char ch) {
+    return (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || ch == '_';
+  };
+  const auto isIdentifierChar = [&](char ch) {
+    return isIdentifierStart(ch) || (ch >= '0' && ch <= '9');
+  };
+  bool lexicallyValid = isIdentifierStart(text[0]);
+  for (size_t i = 1; lexicallyValid && i < text.size(); ++i) {
+    lexicallyValid = isIdentifierChar(text[i]);
+  }
+  // C++ reserves identifiers containing a double underscore; reject the leading form the same
+  // way the WGSL emitter does.
+  if (!lexicallyValid || text.starts_with("__")) {
+    return ShaderError{
+        std::format("{}: \"{}\" is not a valid identifier (MSL identifiers match "
+                    "[A-Za-z_][A-Za-z0-9_]* and may not start with a double underscore)",
+                    context, name.str()),
+        "msl"};
+  }
+
   for (const std::string_view reserved : kMslReservedWords) {
     if (std::string_view(name) == reserved) {
       return ShaderError{std::format("{}: identifier \"{}\" collides with an MSL reserved word",
@@ -215,6 +239,7 @@ private:
   const IrModule& module_;
   std::string out_;
   int indent_ = 0;
+  std::vector<RcString> userStructNames_;
   std::optional<ShaderError> error_;
 };
 
@@ -561,6 +586,7 @@ void Emitter::emitStructDeclarations() {
   }
 
   for (const IrType& structType : structs) {
+    userStructNames_.push_back(structType.structName());
     check(CheckMslIdentifier(structType.structName(), "struct"));
     line(std::format("struct {} {{", structType.structName().str()));
     ++indent_;
@@ -638,6 +664,19 @@ void Emitter::emitFunction(const IrFunction& function) {
   check(CheckMslIdentifier(function.name, "function"));
 
   if (function.stage != StageKind::None) {
+    // The generated stage IO struct names must not collide with user structs; fail closed
+    // rather than declaring conflicting types (mirrors the WGSL emitter's check).
+    for (const RcString& userStruct : userStructNames_) {
+      if (std::string_view(userStruct) == InputStructName(function) ||
+          std::string_view(userStruct) == OutputStructName(function)) {
+        latch(ShaderError{
+            std::format("struct \"{}\" collides with a generated stage IO struct name for "
+                        "entry point {}",
+                        userStruct.str(), std::string_view(function.name)),
+            "msl"});
+      }
+    }
+
     // Generated stage-in struct: location params become [[attribute(N)]] (vertex) or
     // [[user(locnN)]] (fragment); the fragment position builtin is a [[position]] member.
     line(std::format("struct {} {{", InputStructName(function)));
