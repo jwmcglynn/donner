@@ -310,6 +310,53 @@
         "wgpuLifetimeTextureCreates"
       ]
     },
+    "donner/gpu/shader/tests/WgslEmitterGeodeValidation_tests.cc": {
+      "operations": [
+        "createBindGroupLayout",
+        "createPipelineLayout",
+        "createRenderPipeline",
+        "createShaderModule"
+      ],
+      "sha256": "a1b4cf055fae654cddf4c7a462d3b8b3eca0dce55577cbffb15b18f4f1779e83",
+      "wgpuCFunctions": [
+        "wgpuLabel"
+      ],
+      "wgpuCTypes": [
+        "WGPUBindGroupLayout"
+      ],
+      "wgpuCppTokens": [
+        "BindGroupLayout",
+        "BindGroupLayoutDescriptor",
+        "BindGroupLayoutEntry",
+        "BlendFactor",
+        "BlendOperation",
+        "BlendState",
+        "BufferBindingType",
+        "ColorTargetState",
+        "ColorWriteMask",
+        "CullMode",
+        "Default",
+        "Device",
+        "FragmentState",
+        "PipelineLayout",
+        "PipelineLayoutDescriptor",
+        "PrimitiveTopology",
+        "RenderPipeline",
+        "RenderPipelineDescriptor",
+        "SamplerBindingType",
+        "ShaderModule",
+        "ShaderModuleDescriptor",
+        "ShaderSourceWGSL",
+        "ShaderStage",
+        "TextureFormat",
+        "TextureSampleType",
+        "TextureViewDimension",
+        "VertexAttribute",
+        "VertexBufferLayout",
+        "VertexFormat",
+        "VertexStepMode"
+      ]
+    },
     "donner/svg/renderer/RendererGeode.cc": {
       "operations": [
         "copyTextureToBuffer",
