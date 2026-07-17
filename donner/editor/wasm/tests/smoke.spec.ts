@@ -1,5 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
-import { type CanvasColorStats, type CssRegion, readCanvasColorStats } from "./canvas-color-stats";
+import { type CanvasColorStats, readCanvasColorStats } from "./canvas-color-stats";
 
 declare global {
   interface Window {
@@ -13,6 +13,7 @@ declare global {
       frame: number;
       renderPane: WgpuReadbackColorStats;
       layerPreview: WgpuReadbackColorStats;
+      selectionChromePixels: number;
     };
   }
 }
@@ -214,7 +215,7 @@ test("wasm editor starts without runtime abort", async ({ page }) => {
 
 test("production Geode wasm presents visible editor pixels", async ({ page }) => {
   test.skip(kBackend !== "geode", "production WebGPU presentation is Geode-specific");
-  const fatalMessages = await openEditor(page, { wgpuReadbackStats: false });
+  const fatalMessages = await openEditor(page);
   const gpuDiagnostics = await readWebGpuDiagnostics(page);
   console.log(`browser-gpu-diagnostics=${JSON.stringify(gpuDiagnostics)}`);
   await test.info().attach("browser-gpu-diagnostics", {
@@ -297,13 +298,13 @@ test("WASM trackpad pinch wheel reaches editor as zoom gesture", async ({ page }
     window.__donnerLastScrollEvent = undefined;
   });
 
-  await page.evaluate(({ x, y }) => {
+  const browserDefaultAllowed = await page.evaluate(({ x, y }) => {
     const target = document.getElementById("canvas");
     if (!target) {
       throw new Error("canvas not found");
     }
 
-    target.dispatchEvent(
+    return target.dispatchEvent(
       new WheelEvent("wheel", {
         bubbles: true,
         cancelable: true,
@@ -316,11 +317,54 @@ test("WASM trackpad pinch wheel reaches editor as zoom gesture", async ({ page }
     );
   }, center);
 
+  expect(browserDefaultAllowed).toBe(false);
+
   await expect
     .poll(async () => page.evaluate(() => window.__donnerLastScrollEvent?.zoomModifierHeld))
     .toBe(true);
   await expect
     .poll(async () => page.evaluate(() => window.__donnerLastScrollEvent?.yoffset))
     .toBeGreaterThan(0);
+  expect(fatalMessages).toEqual([]);
+});
+
+test("Geode WASM presents selection path overlay pixels", async ({ page }) => {
+  test.skip(kBackend !== "geode", "direct selection overlay is Geode-specific");
+  const fatalMessages = await openEditor(page, { wgpuReadbackStats: true });
+  const canvas = page.locator("canvas#canvas");
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  if (bounds === null) {
+    return;
+  }
+
+  await page.mouse.click(bounds.x + bounds.width * 0.5, bounds.y + 282);
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => window.__donnerWgpuReadbackStats?.renderPane.coloredPixels || 0),
+      {
+        message: "expected the Basic Shapes sample to finish loading",
+        timeout: 10000,
+      },
+    )
+    .toBeGreaterThan(1000);
+
+  const beforeSelection = await page.evaluate(
+    () => window.__donnerWgpuReadbackStats?.selectionChromePixels || 0,
+  );
+  await page.mouse.click(bounds.x + 510, bounds.y + 440);
+  await expect
+    .poll(
+      async () =>
+        (await page.evaluate(() => window.__donnerWgpuReadbackStats?.selectionChromePixels || 0))
+        - beforeSelection,
+      {
+        message: "expected selection outline, bounds, and handle pixels in the document pane",
+        timeout: 10000,
+      },
+    )
+    .toBeGreaterThan(100);
+
   expect(fatalMessages).toEqual([]);
 });

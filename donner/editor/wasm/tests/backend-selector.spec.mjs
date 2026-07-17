@@ -101,6 +101,7 @@ async function loadTouchPointerBridge() {
       Object.assign(this, init);
     }
   }
+  class WheelEvent extends MouseEvent {}
   const context = vm.createContext({
     console,
     document: {
@@ -108,6 +109,7 @@ async function loadTouchPointerBridge() {
       getElementById: (id) => elements[id],
     },
     MouseEvent,
+    WheelEvent,
     SharedArrayBuffer: undefined,
     window,
   });
@@ -153,6 +155,31 @@ test("touch pointer bridge emits one captured mouse drag", async () => {
       ["mousemove", 20, 1],
       ["mouseup", 12, 0],
     ],
+  );
+});
+
+test("trackpad gesture bridge prevents page zoom and emits editor wheel zoom", async () => {
+  const { dispatched, handlers } = await loadTouchPointerBridge();
+  let prevented = 0;
+  const gesture = (type, scale) => ({
+    clientX: 320,
+    clientY: 240,
+    preventDefault() {
+      prevented += 1;
+    },
+    scale,
+    type,
+  });
+
+  assert.equal(typeof handlers.get("gesturestart"), "function");
+  assert.equal(typeof handlers.get("gesturechange"), "function");
+  handlers.get("gesturestart")(gesture("gesturestart", 1));
+  handlers.get("gesturechange")(gesture("gesturechange", 1.25));
+
+  assert.equal(prevented, 2);
+  assert.deepEqual(
+    dispatched.map((event) => [event.type, event.ctrlKey, Math.sign(event.deltaY)]),
+    [["wheel", true, -1]],
   );
 });
 

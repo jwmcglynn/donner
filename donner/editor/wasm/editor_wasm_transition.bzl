@@ -77,7 +77,9 @@ editor_wasm_geode_transitioned_target = rule(
 def _editor_wasm_config_probe_impl(ctx):
     output = ctx.actions.declare_file(ctx.label.name + ".txt")
     values = [
+        "compilation_mode={}".format(ctx.var["COMPILATION_MODE"]),
         "copt_pthread={}".format("-pthread" in ctx.fragments.cpp.copts),
+        "copt_oz={}".format("-Oz" in ctx.fragments.cpp.copts),
         "cxxopt_constexpr={}".format("-fconstexpr-steps=10000000" in ctx.fragments.cpp.cxxopts),
         "disable_perf_opt_transition={}".format(
             ctx.attr._disable_perf_opt_transition[BuildSettingInfo].value,
@@ -85,6 +87,7 @@ def _editor_wasm_config_probe_impl(ctx):
         "editor_wasm_enabled={}".format(ctx.attr._editor_wasm_enabled[BuildSettingInfo].value),
         "geode_enabled={}".format(ctx.attr._geode_enabled[BuildSettingInfo].value),
         "linkopt_pthread={}".format("-pthread" in ctx.fragments.cpp.linkopts),
+        "linkopt_oz={}".format("-Oz" in ctx.fragments.cpp.linkopts),
         "renderer_backend={}".format(ctx.attr._renderer_backend[BuildSettingInfo].value),
         "renderer_wasm_enabled={}".format(
             ctx.attr._renderer_wasm_enabled[BuildSettingInfo].value,

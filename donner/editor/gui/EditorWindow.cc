@@ -309,7 +309,8 @@ EM_JS(bool, WgpuReadbackStatsEnabled, (),
       { return new URLSearchParams(window.location.search).has("wgpuReadbackStats"); });
 EM_JS(void, PublishWgpuReadbackStats,
       (int renderSamples, int renderColored, int renderNonBlack, int renderMaxChannel,
-       int layerSamples, int layerColored, int layerNonBlack, int layerMaxChannel),
+       int layerSamples, int layerColored, int layerNonBlack, int layerMaxChannel,
+       int selectionChromePixels),
       {
         const previous = window.__donnerWgpuReadbackStats;
         window.__donnerWgpuReadbackStats = {
@@ -326,6 +327,7 @@ EM_JS(void, PublishWgpuReadbackStats,
             nonBlackPixels : layerNonBlack,
             maxChannel : layerMaxChannel,
           },
+          selectionChromePixels : selectionChromePixels,
         };
       });
 
@@ -388,6 +390,33 @@ WgpuReadbackStats ComputeWgpuReadbackStatsForCssRegion(const svg::RendererBitmap
   return stats;
 }
 
+int CountWgpuSelectionChromePixelsForCssRegion(const svg::RendererBitmap& bitmap, double cssX,
+                                               double cssY, double cssWidth, double cssHeight) {
+  if (bitmap.empty() || bitmap.rowBytes == 0u) {
+    return 0;
+  }
+
+  const double displayScale = CurrentDisplayScale();
+  const int x0 = std::max(0, static_cast<int>(std::floor(cssX * displayScale)));
+  const int y0 = std::max(0, static_cast<int>(std::floor(cssY * displayScale)));
+  const int x1 =
+      std::min(bitmap.dimensions.x, static_cast<int>(std::ceil((cssX + cssWidth) * displayScale)));
+  const int y1 =
+      std::min(bitmap.dimensions.y, static_cast<int>(std::ceil((cssY + cssHeight) * displayScale)));
+  int count = 0;
+  for (int y = y0; y < y1; ++y) {
+    const uint8_t* row = bitmap.pixels.data() + static_cast<std::size_t>(y) * bitmap.rowBytes;
+    for (int x = x0; x < x1; ++x) {
+      const uint8_t* pixel = row + static_cast<std::size_t>(x) * 4u;
+      if (pixel[0] >= 20 && pixel[0] <= 100 && pixel[1] >= 150 && pixel[1] <= 235 &&
+          pixel[2] >= 130 && pixel[2] <= 220) {
+        ++count;
+      }
+    }
+  }
+  return count;
+}
+
 void PublishWgpuReadbackStatsForSmokeTests(const svg::RendererBitmap& bitmap) {
   const double cssWidth = static_cast<double>(CanvasCssWidth());
   const double cssHeight = static_cast<double>(CanvasCssHeight());
@@ -404,10 +433,12 @@ void PublishWgpuReadbackStatsForSmokeTests(const svg::RendererBitmap& bitmap) {
   const WgpuReadbackStats layerStats = ComputeWgpuReadbackStatsForCssRegion(
       bitmap, cssWidth - 420.0 + 8.0, std::max(1.0, cssHeight * 0.05), 90.0,
       std::max(1.0, cssHeight * 0.42));
+  const int selectionChromePixels = CountWgpuSelectionChromePixelsForCssRegion(
+      bitmap, 0.0, 100.0, std::max(1.0, cssWidth - 420.0), std::max(1.0, cssHeight - 100.0));
   PublishWgpuReadbackStats(renderStats.samples, renderStats.coloredPixels,
                            renderStats.nonBlackPixels, renderStats.maxChannel, layerStats.samples,
                            layerStats.coloredPixels, layerStats.nonBlackPixels,
-                           layerStats.maxChannel);
+                           layerStats.maxChannel, selectionChromePixels);
 }
 #endif
 #endif
