@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <functional>
 #include <optional>
 #include <span>
 #include <unordered_map>
@@ -89,6 +90,20 @@ public:
                        const RenderViewport& viewport, const Transform2d& surfaceFromCanvas);
 
   /**
+   * Render a prepared entity range while polling @p shouldCancel between shapes.
+   *
+   * The renderer frame is always balanced and ended before this method returns. A cancelled
+   * partial frame is safe to discard, which lets editor workers release their document guard
+   * without waiting for an entire complex compositor segment to finish.
+   *
+   * @return True when the complete range was rendered, false when cancellation stopped traversal.
+   */
+  [[nodiscard]] bool drawEntityRangeInterruptibly(Registry& registry, Entity firstEntity,
+                                                  Entity lastEntity, const RenderViewport& viewport,
+                                                  const Transform2d& surfaceFromCanvas,
+                                                  const std::function<bool()>& shouldCancel);
+
+  /**
    * Render a range of entities into the renderer's already-active frame.
    *
    * This is the current-frame form of \ref drawEntityRange: the caller owns
@@ -169,7 +184,9 @@ private:
   void drawPreparedDocument(SVGDocument& document);
   void drawPreparedDocument(SVGDocument& document, const RenderViewport& viewport,
                             const Transform2d& surfaceFromCanvas);
-  void drawPreparedEntityRange(Registry& registry, Entity firstEntity, Entity lastEntity);
+  [[nodiscard]] bool drawPreparedEntityRange(Registry& registry, Entity firstEntity,
+                                             Entity lastEntity,
+                                             const std::function<bool()>& shouldCancel);
   void traverse(RenderingInstanceView& view, Registry& registry);
   void traverseRange(RenderingInstanceView& view, Registry& registry, Entity startEntity,
                      Entity endEntity);

@@ -91,9 +91,9 @@ inline constexpr double kViewportCullSlackDevicePx = 1.0;
 /// pre-divided by the CTM's scale factor (see `toStrokeParams`), so the cull
 /// inflate must use that same adjusted width or a downscaling CTM would make
 /// the bounds under-count and wrongly cull a visible stroke.
-std::optional<Box2d> LocalDrawableBoundsWithStroke(
-    const EntityHandle& dataHandle, const components::ComputedStyleComponent& style,
-    const Transform2d& worldFromEntity) {
+std::optional<Box2d> LocalDrawableBoundsWithStroke(const EntityHandle& dataHandle,
+                                                   const components::ComputedStyleComponent& style,
+                                                   const Transform2d& worldFromEntity) {
   const auto* path = dataHandle.try_get<components::ComputedPathComponent>();
   if (!path) {
     // Text and <image> draws are not culled by this path for now: text
@@ -1072,11 +1072,27 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
 
   renderer_.beginFrame(viewport);
-  drawPreparedEntityRange(registry, firstEntity, lastEntity);
+  (void)drawPreparedEntityRange(registry, firstEntity, lastEntity, {});
   renderer_.endFrame();
   surfaceFromCanvasTransform_ = Transform2d();
   preparedFilterGraphs_.clear();
   preparedFilterRegions_.clear();
+}
+
+bool RendererDriver::drawEntityRangeInterruptibly(Registry& registry, Entity firstEntity,
+                                                  Entity lastEntity, const RenderViewport& viewport,
+                                                  const Transform2d& surfaceFromCanvas,
+                                                  const std::function<bool()>& shouldCancel) {
+  renderingSize_ = Vector2i(static_cast<int>(viewport.size.x), static_cast<int>(viewport.size.y));
+  surfaceFromCanvasTransform_ = surfaceFromCanvas;
+
+  renderer_.beginFrame(viewport);
+  const bool completed = drawPreparedEntityRange(registry, firstEntity, lastEntity, shouldCancel);
+  renderer_.endFrame();
+  surfaceFromCanvasTransform_ = Transform2d();
+  preparedFilterGraphs_.clear();
+  preparedFilterRegions_.clear();
+  return completed;
 }
 
 void RendererDriver::drawEntityRangeIntoCurrentFrame(Registry& registry, Entity firstEntity,
@@ -1086,14 +1102,19 @@ void RendererDriver::drawEntityRangeIntoCurrentFrame(Registry& registry, Entity 
   renderingSize_ = Vector2i(static_cast<int>(viewport.size.x), static_cast<int>(viewport.size.y));
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
 
-  drawPreparedEntityRange(registry, firstEntity, lastEntity);
+  (void)drawPreparedEntityRange(registry, firstEntity, lastEntity, {});
   surfaceFromCanvasTransform_ = Transform2d();
   preparedFilterGraphs_.clear();
   preparedFilterRegions_.clear();
 }
 
-void RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEntity,
-                                             Entity lastEntity) {
+bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEntity,
+                                             Entity lastEntity,
+                                             const std::function<bool()>& shouldCancel) {
+  const auto cancelled = [&]() { return shouldCancel && shouldCancel(); };
+  if (cancelled()) {
+    return false;
+  }
   // Snapshot the entity slice [firstEntity, lastEntity] and pre-resolve filter graphs before the
   // main traversal, for the same reason as `draw()`: `preRenderFeImageFragments` mutates
   // `RenderingInstanceComponent` storage (emplace + sort inside `createFeImageShadowTree`), which
@@ -1121,6 +1142,10 @@ void RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
 
   prepareFilterGraphs(registry, rangeEntities);
 
+  if (cancelled()) {
+    return false;
+  }
+
   RenderingInstanceView view(registry, rangeEntities);
 
   // Advance to the first entity.
@@ -1130,7 +1155,12 @@ void RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
 
   // Traverse from first to last (inclusive).
   bool reachedLast = false;
+  bool completed = true;
   while (!view.done() && !reachedLast) {
+    if (cancelled()) {
+      completed = false;
+      break;
+    }
     reachedLast = (view.currentEntity() == lastEntity);
 
     const components::RenderingInstanceComponent& instance = view.get();
@@ -1309,6 +1339,7 @@ void RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
     }
     subtreeMarkers_.pop_back();
   }
+  return completed;
 }
 
 std::optional<Box2d> RendererDriver::computeEntityRangeBounds(
@@ -1697,9 +1728,8 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
           std::any_of(subtreeMarkers_.begin(), subtreeMarkers_.end(),
                       [](const DeferredPop& m) { return m.hasFilterLayer; });
       if (!insideFilterLayer) {
-        if (const auto localBounds =
-                LocalDrawableBoundsWithStroke(instance.dataHandle(registry), style,
-                                              instance.worldFromEntityTransform);
+        if (const auto localBounds = LocalDrawableBoundsWithStroke(
+                instance.dataHandle(registry), style, instance.worldFromEntityTransform);
             localBounds.has_value()) {
           const Transform2d deviceFromLocal =
               instance.worldFromEntityTransform * surfaceFromCanvasTransform_;
@@ -1970,9 +2000,8 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
           std::any_of(localDeferred.begin(), localDeferred.end(),
                       [](const DeferredPop& m) { return m.hasFilterLayer; });
       if (!insideFilterLayer) {
-        if (const auto localBounds =
-                LocalDrawableBoundsWithStroke(instance.dataHandle(registry), style,
-                                              instance.worldFromEntityTransform);
+        if (const auto localBounds = LocalDrawableBoundsWithStroke(
+                instance.dataHandle(registry), style, instance.worldFromEntityTransform);
             localBounds.has_value()) {
           const Transform2d deviceFromLocal =
               instance.worldFromEntityTransform * surfaceFromCanvasTransform_;
