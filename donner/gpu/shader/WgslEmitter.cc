@@ -95,11 +95,35 @@ constexpr std::string_view kReservedWords[] = {
     "workgroup",
 };
 
-/// Checks an identifier against the reserved-word list; fails closed on collision.
+/// Checks an identifier for WGSL lexical validity and reserved-word collisions; fails closed.
+/// Lexical enforcement lives in the emitters (not the target-neutral module builder): each
+/// target language owns its own identifier rules, and the emitter is the last point where
+/// invalid source could otherwise escape.
 ShaderStatus CheckIdentifier(const RcString& name, std::string_view context) {
   if (name.empty()) {
     return ShaderError{std::format("{}: identifier is empty", context), "wgsl"};
   }
+
+  const std::string_view text(name);
+  const auto isIdentifierStart = [](char ch) {
+    return (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || ch == '_';
+  };
+  const auto isIdentifierChar = [&](char ch) {
+    return isIdentifierStart(ch) || (ch >= '0' && ch <= '9');
+  };
+  bool lexicallyValid = isIdentifierStart(text[0]);
+  for (size_t i = 1; lexicallyValid && i < text.size(); ++i) {
+    lexicallyValid = isIdentifierChar(text[i]);
+  }
+  // WGSL reserves identifiers beginning with a double underscore.
+  if (!lexicallyValid || text.starts_with("__")) {
+    return ShaderError{
+        std::format("{}: \"{}\" is not a valid identifier (WGSL identifiers match "
+                    "[A-Za-z_][A-Za-z0-9_]* and may not start with a double underscore)",
+                    context, name.str()),
+        "wgsl"};
+  }
+
   for (const std::string_view reserved : kReservedWords) {
     if (std::string_view(name) == reserved) {
       return ShaderError{std::format("{}: identifier \"{}\" collides with a WGSL reserved word",
@@ -178,6 +202,7 @@ private:
   void emitBlock(const IrBlock& block, const IrFunction& function);
 
   void collectStructs(const IrType& type, std::vector<IrType>& out);
+  void validateBindingLayout(const IrType& type, AddressSpace addressSpace);
   void emitStructDeclarations();
   void checkUniformArrays(const IrType& type);
   void emitConstants();
@@ -192,6 +217,7 @@ private:
   const IrModule& module_;
   std::string out_;
   int indent_ = 0;
+  std::vector<RcString> userStructNames_;
   std::optional<ShaderError> error_;
 };
 
@@ -448,6 +474,38 @@ void Emitter::checkUniformArrays(const IrType& type) {
   }
 }
 
+void Emitter::validateBindingLayout(const IrType& type, AddressSpace addressSpace) {
+  // Route the full binding root type through the layout engine so non-host-shareable contents
+  // (bool members, resource types) fail closed instead of emitting silently.
+  switch (type.kind()) {
+    case IrType::Kind::Struct: {
+      if (ShaderResult<StructLayout> layout = ComputeStructLayout(type, addressSpace);
+          layout.hasError()) {
+        latch(std::move(layout).error());
+      }
+      return;
+    }
+    case IrType::Kind::RuntimeArray: {
+      if (ShaderResult<uint32_t> stride = ComputeArrayStride(type, addressSpace);
+          stride.hasError()) {
+        latch(std::move(stride).error());
+        return;
+      }
+      if (type.elementType().kind() == IrType::Kind::Struct) {
+        validateBindingLayout(type.elementType(), addressSpace);
+      }
+      return;
+    }
+    default: {
+      if (ShaderResult<TypeLayout> layout = ComputeTypeLayout(type, addressSpace);
+          layout.hasError()) {
+        latch(std::move(layout).error());
+      }
+      return;
+    }
+  }
+}
+
 void Emitter::emitStructDeclarations() {
   std::vector<IrType> structs;
   for (const IrBinding& binding : module_.bindings()) {
@@ -483,6 +541,7 @@ void Emitter::emitStructDeclarations() {
   }
 
   for (const IrType& structType : structs) {
+    userStructNames_.push_back(structType.structName());
     check(CheckIdentifier(structType.structName(), "struct"));
     line(std::format("struct {} {{", structType.structName().str()));
     ++indent_;
@@ -513,11 +572,13 @@ void Emitter::emitBindings() {
     std::string declaration;
     switch (binding.kind) {
       case BindingKind::UniformBuffer:
+        validateBindingLayout(binding.type, AddressSpace::Uniform);
         checkUniformArrays(binding.type);
         declaration =
             std::format("var<uniform> {}: {};", binding.name.str(), TypeToWgsl(binding.type));
         break;
       case BindingKind::ReadOnlyStorageBuffer:
+        validateBindingLayout(binding.type, AddressSpace::Storage);
         declaration =
             std::format("var<storage, read> {}: {};", binding.name.str(), TypeToWgsl(binding.type));
         break;
@@ -539,6 +600,19 @@ void Emitter::emitFunction(const IrFunction& function) {
   check(CheckIdentifier(function.name, "function"));
 
   if (function.stage != StageKind::None) {
+    // The generated output struct name must not collide with a user struct. Detected here (not
+    // reserved at builder registration) so the target-neutral IR carries no emitter naming
+    // rules; the emitter fails closed instead of declaring two conflicting structs.
+    for (const RcString& userStruct : userStructNames_) {
+      if (std::string_view(userStruct) == OutputStructName(function)) {
+        latch(ShaderError{
+            std::format("struct \"{}\" collides with the generated output struct name for "
+                        "entry point {}",
+                        userStruct.str(), std::string_view(function.name)),
+            "wgsl"});
+      }
+    }
+
     // Generated output struct with annotated members.
     line(std::format("struct {} {{", OutputStructName(function)));
     ++indent_;
