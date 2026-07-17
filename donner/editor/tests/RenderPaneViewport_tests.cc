@@ -408,7 +408,7 @@ TEST(ViewportStateTest, SelectedPrewarmRasterViewportAddsBoundedOverdraw) {
   EXPECT_NEAR_VEC(outputBottomRight, Vector2d(2624.0, 2224.0), 1e-9);
 }
 
-TEST(ViewportStateTest, SelectedPrewarmRasterViewportDoesNotPadUnboundedOutput) {
+TEST(ViewportStateTest, SelectedPrewarmRasterViewportPadsUnboundedOutputForOffCanvasDrag) {
   ViewportState v = MakeFreshState(Vector2d::Zero(), Vector2d(800.0, 600.0),
                                    Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0),
                                    /*dpr=*/2.0);
@@ -417,8 +417,13 @@ TEST(ViewportStateTest, SelectedPrewarmRasterViewportDoesNotPadUnboundedOutput) 
   const EditorRasterViewport padded = v.selectedPrewarmRasterViewport();
 
   EXPECT_FALSE(base.viewportBounded);
-  EXPECT_EQ(padded.documentRect, base.documentRect);
-  EXPECT_EQ(padded.outputSizePx, base.outputSizePx);
+  EXPECT_TRUE(padded.viewportBounded);
+  EXPECT_LT(padded.documentRect.topLeft.x, base.documentRect.topLeft.x);
+  EXPECT_LT(padded.documentRect.topLeft.y, base.documentRect.topLeft.y);
+  EXPECT_GT(padded.documentRect.bottomRight.x, base.documentRect.bottomRight.x);
+  EXPECT_GT(padded.documentRect.bottomRight.y, base.documentRect.bottomRight.y);
+  EXPECT_GT(padded.outputSizePx.x, base.outputSizePx.x);
+  EXPECT_GT(padded.outputSizePx.y, base.outputSizePx.y);
   EXPECT_EQ(padded.semanticCanvasSizePx, base.semanticCanvasSizePx);
 }
 
