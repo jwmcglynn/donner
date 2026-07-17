@@ -310,6 +310,94 @@
         "wgpuLifetimeTextureCreates"
       ]
     },
+    "donner/gpu/metal/tests/BaselineCaptureTool.cc": {
+      "operations": [
+        "copyTextureToBuffer",
+        "createBuffer",
+        "createCommandEncoder",
+        "createTexture",
+        "finish",
+        "getConstMappedRange",
+        "mapAsync",
+        "poll",
+        "submit",
+        "unmap"
+      ],
+      "sha256": "177b603fa6d19acd29ef35baf8f6da2658430a80f8fbb1ec4a86acb793da803f",
+      "wgpuCFunctions": [
+        "wgpuLabel"
+      ],
+      "wgpuCTypes": [
+        "WGPUMapAsyncStatus",
+        "WGPUMapAsyncStatus_Success",
+        "WGPUStringView"
+      ],
+      "wgpuCppTokens": [
+        "Buffer",
+        "BufferDescriptor",
+        "BufferMapCallbackInfo",
+        "BufferUsage",
+        "CommandBuffer",
+        "CommandEncoder",
+        "Default",
+        "Extent3D",
+        "MapMode",
+        "TexelCopyBufferInfo",
+        "TexelCopyTextureInfo",
+        "Texture",
+        "TextureDescriptor",
+        "TextureDimension",
+        "TextureFormat",
+        "TextureUsage"
+      ]
+    },
+    "donner/gpu/shader/tests/WgslEmitterGeodeValidation_tests.cc": {
+      "operations": [
+        "createBindGroupLayout",
+        "createPipelineLayout",
+        "createRenderPipeline",
+        "createShaderModule"
+      ],
+      "sha256": "9ecff1bfb87e22304c62c0bea9b1dd5a6b09ff36d3677c02e6c3f8100bd98131",
+      "wgpuCFunctions": [
+        "wgpuLabel"
+      ],
+      "wgpuCTypes": [
+        "WGPUBindGroupLayout"
+      ],
+      "wgpuCppTokens": [
+        "BindGroupLayout",
+        "BindGroupLayoutDescriptor",
+        "BindGroupLayoutEntry",
+        "BlendFactor",
+        "BlendOperation",
+        "BlendState",
+        "BufferBindingType",
+        "ColorTargetState",
+        "ColorWriteMask",
+        "CullMode",
+        "Default",
+        "Device",
+        "FragmentState",
+        "PipelineLayout",
+        "PipelineLayoutDescriptor",
+        "PrimitiveTopology",
+        "RenderPipeline",
+        "RenderPipelineDescriptor",
+        "SamplerBindingType",
+        "ShaderModule",
+        "ShaderModuleDescriptor",
+        "ShaderSourceWGSL",
+        "ShaderStage",
+        "TextureFormat",
+        "TextureSampleType",
+        "TextureViewDimension",
+        "VertexAttribute",
+        "VertexBufferLayout",
+        "VertexFormat",
+        "VertexStepMode"
+      ]
+    },
     "donner/svg/renderer/RendererGeode.cc": {
       "operations": [
         "copyTextureToBuffer",

@@ -12,6 +12,9 @@ donner_cc_library(
     testonly = 1,
     srcs = ["BitmapGoldenCompare.cc"],
     hdrs = ["BitmapGoldenCompare.h"],
+    # //donner/gpu: the Metal vertical slice test (design 0053) uses the one
+    # blessed pixelmatch comparator for its frozen-baseline comparison.
+    visibility = ["//donner/gpu/metal/tests:__pkg__"],
     deps = [
         "//donner/svg/renderer:renderer_image_io",
         "//donner/svg/renderer:renderer_interface",
@@ -1061,10 +1064,6 @@ donner_cc_test(
 donner_cc_test(
     name = "layers_panel_tests",
     srcs = ["LayersPanel_tests.cc"],
-    # 71 independent panel/golden cases. The geode variant runs them through
-    # software Vulkan on GPU-less CI (~23 s single-shard); shard so the render
-    # work runs as parallel RE actions.
-    shard_count = 4,
     data = [
         "//:donner_splash.svg",
     ] + glob(["testdata/layer_thumbnails/*.png"]),
@@ -1072,6 +1071,10 @@ donner_cc_test(
         "//donner/svg/renderer:renderer_backend_geode": ["DONNER_EDITOR_WGPU"],
         "//conditions:default": [],
     }),
+    # 71 independent panel/golden cases. The geode variant runs them through
+    # software Vulkan on GPU-less CI (~23 s single-shard); shard so the render
+    # work runs as parallel RE actions.
+    shard_count = 4,
     variants = ["geode"],
     deps = [
         ":bitmap_golden_compare",
