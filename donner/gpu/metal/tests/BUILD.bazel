@@ -1,0 +1,36 @@
+load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library")
+
+# Tests and tooling for the design 0053 Metal vertical slice: the shared
+# frozen-baseline scene, the geode-gated black-box capture tool that produced
+# the committed baseline PNG, and the Metal solid-fill pixel-comparison test.
+
+donner_cc_library(
+    name = "baseline_scene",
+    testonly = 1,
+    hdrs = ["BaselineScene.h"],
+    deps = [
+        "//donner/base",
+        "//donner/css",
+    ],
+)
+
+# Black-box baseline capture (design 0053 phase 3): renders the shared scene
+# through the current production renderer and writes the PNG committed under
+# testdata/. Geode-gated; see testdata/README.md for the capture command.
+donner_cc_binary(
+    name = "baseline_capture_tool",
+    testonly = 1,
+    srcs = ["BaselineCaptureTool.cc"],
+    target_compatible_with = select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":baseline_scene",
+        "//donner/svg/renderer:renderer_image_io",
+        "//donner/svg/renderer/geode:geo_encoder",
+        "//donner/svg/renderer/geode:geode_device",
+        "//donner/svg/renderer/geode:geode_wgpu_util",
+        "//third_party/webgpu-cpp:webgpu_cpp",
+    ],
+)

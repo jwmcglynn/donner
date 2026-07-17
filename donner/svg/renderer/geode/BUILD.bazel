@@ -44,7 +44,13 @@ donner_cc_library(
     name = "geode_path_encoder",
     srcs = ["GeodePathEncoder.cc"],
     hdrs = ["GeodePathEncoder.h"],
-    visibility = ["//donner/svg/renderer:__subpackages__"],
+    # //donner/gpu: the Metal vertical slice test (design 0053) encodes the
+    # frozen-baseline paths with the same banding the production path uses.
+    # GeodePathEncoder is pure CPU path math with no GPU dependency.
+    visibility = [
+        "//donner/gpu:__subpackages__",
+        "//donner/svg/renderer:__subpackages__",
+    ],
     deps = [
         "//donner/base",
     ],
@@ -524,7 +530,12 @@ donner_cc_library(
         "GeodeBufferPool.h",
     ],
     target_compatible_with = _GEODE_ONLY,
-    visibility = ["//donner/svg/renderer:__subpackages__"],
+    # //donner/gpu: the design 0053 frozen-baseline capture tool renders
+    # through GeoEncoder as a black box.
+    visibility = [
+        "//donner/gpu:__subpackages__",
+        "//donner/svg/renderer:__subpackages__",
+    ],
     deps = [
         ":geode_device",
         ":geode_path_encoder",
