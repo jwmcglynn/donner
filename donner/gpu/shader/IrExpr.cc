@@ -173,6 +173,24 @@ void IrExpr::collectRefs(std::vector<RefInfo>& out) const {
   }
 }
 
+void IrExpr::collectBuiltinCalls(std::vector<BuiltinFn>& out) const {
+  if (node_->kind == Kind::CallBuiltin) {
+    out.push_back(node_->builtin);
+  }
+  for (const IrExpr& child : node_->children) {
+    child.collectBuiltinCalls(out);
+  }
+}
+
+void IrExpr::collectUserCalls(std::vector<RcString>& out) const {
+  if (node_->kind == Kind::CallUser) {
+    out.push_back(node_->name);
+  }
+  for (const IrExpr& child : node_->children) {
+    child.collectUserCalls(out);
+  }
+}
+
 std::string IrExpr::toString() const {
   const Node& node = *node_;
   switch (node.kind) {

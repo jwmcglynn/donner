@@ -92,12 +92,16 @@ struct IrOutputMember {
 
 /// One function: a plain function or an entry point.
 struct IrFunction {
-  RcString name;                        //!< Function name.
-  StageKind stage = StageKind::None;    //!< Stage kind.
-  std::vector<IrParam> params;          //!< Parameters, in order.
-  std::optional<IrType> returnType;     //!< Plain function return type (empty = void).
-  std::vector<IrOutputMember> outputs;  //!< Entry point outputs (empty for plain functions).
-  IrBlock body;                         //!< Function body.
+  RcString name;                          //!< Function name.
+  StageKind stage = StageKind::None;      //!< Stage kind.
+  std::vector<IrParam> params;            //!< Parameters, in order.
+  std::optional<IrType> returnType;       //!< Plain function return type (empty = void).
+  std::vector<IrOutputMember> outputs;    //!< Entry point outputs (empty for plain functions).
+  IrBlock body;                           //!< Function body.
+  bool usesFragmentOnlyBuiltins = false;  //!< True if the body (or any user function it calls)
+                                          //!< calls an implicit-derivative builtin (fwidth,
+                                          //!< textureSample). Computed at finish(); vertex entry
+                                          //!< points with this flag are rejected.
 };
 
 /**
@@ -209,6 +213,11 @@ public:
   ShaderStatus forCondition(const IrExpr& condition);
   /**
    * Sets the continuing assignment of the innermost open `for`.
+   *
+   * The update expression may reference the loop variable and enclosing scope only, never
+   * body-block locals: this builder models `for (init; cond; update)` where the body block
+   * closes before the update runs, unlike a raw WGSL `loop`/`continuing` where the continuing
+   * block is nested inside the body scope.
    *
    * @param lhs Continuing assignment target (normally the loop variable).
    * @param rhs Continuing assignment value.

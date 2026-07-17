@@ -16,6 +16,11 @@ ShaderError Err(std::string message, const RcString& label) {
 template <typename IoList>
 ShaderStatus ValidateStageIo(const IoList& io, const RcString& label) {
   for (size_t i = 0; i < io.size(); ++i) {
+    if (io[i].builtin && io[i].location) {
+      return Err(
+          std::format("stage IO {} must not carry both a location and a builtin", io[i].name.str()),
+          label);
+    }
     if (io[i].builtin) {
       for (size_t j = i + 1; j < io.size(); ++j) {
         if (io[j].builtin && *io[j].builtin == *io[i].builtin) {
@@ -52,6 +57,60 @@ std::ostream& operator<<(std::ostream& os, BindingKind value) {
   }
   return os << "unknown";
 }
+
+namespace {
+
+/// True if \p fn takes implicit derivatives and is therefore fragment-only in WGSL.
+bool IsFragmentOnlyBuiltin(BuiltinFn fn) {
+  return fn == BuiltinFn::Fwidth || fn == BuiltinFn::TextureSample;
+}
+
+/// Recursively determines whether \p block calls a fragment-only builtin, following user calls
+/// through \p lookupFunction (callees are always finished, and therefore flagged, before their
+/// callers can reference them).
+template <typename LookupFn>
+bool BlockUsesFragmentOnlyBuiltins(const IrBlock& block, const LookupFn& lookupFunction) {
+  const auto exprUses = [&](const IrExpr& expr) {
+    std::vector<BuiltinFn> builtins;
+    expr.collectBuiltinCalls(builtins);
+    for (const BuiltinFn fn : builtins) {
+      if (IsFragmentOnlyBuiltin(fn)) {
+        return true;
+      }
+    }
+    std::vector<RcString> callees;
+    expr.collectUserCalls(callees);
+    for (const RcString& callee : callees) {
+      const IrFunction* function = lookupFunction(callee);
+      if (function != nullptr && function->usesFragmentOnlyBuiltins) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  for (const IrStmt& statement : block) {
+    const IrStmt::Data& data = statement.data();
+    for (const IrExpr& expr : data.exprs) {
+      if (exprUses(expr)) {
+        return true;
+      }
+    }
+    if (data.init && BlockUsesFragmentOnlyBuiltins({*data.init}, lookupFunction)) {
+      return true;
+    }
+    if (data.continuing && BlockUsesFragmentOnlyBuiltins({*data.continuing}, lookupFunction)) {
+      return true;
+    }
+    if (BlockUsesFragmentOnlyBuiltins(data.body, lookupFunction) ||
+        BlockUsesFragmentOnlyBuiltins(data.elseBody, lookupFunction)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+}  // namespace
 
 // ============================================================================
 // FunctionBuilder
@@ -368,6 +427,33 @@ ShaderStatus FunctionBuilder::forContinuing(const IrExpr& lhs, const IrExpr& rhs
   if (blockStack_.back().continuing) {
     return fail(Err("for continuing already set", function_.name));
   }
+  if (ShaderStatus status = verifyExprInScope(lhs); status.hasError()) {
+    return status;
+  }
+  if (ShaderStatus status = verifyExprInScope(rhs); status.hasError()) {
+    return status;
+  }
+  // Our for-loop model closes the body block before the update expression runs, so the update
+  // may reference the loop variable and enclosing scope only, never body-block locals (unlike a
+  // raw WGSL loop/continuing, where the continuing block nests inside the body scope).
+  {
+    const BlockFrame& frame = blockStack_.back();
+    const RcString loopVarName = frame.init ? frame.init->data().name : RcString();
+    std::vector<IrExpr::RefInfo> refs;
+    lhs.collectRefs(refs);
+    rhs.collectRefs(refs);
+    for (const IrExpr::RefInfo& ref : refs) {
+      for (const RcString& bodyName : frame.declaredNames) {
+        if (ref.name == bodyName && ref.name != loopVarName) {
+          return fail(Err(
+              std::format("for continuing references body-block local {}; the update expression "
+                          "may reference the loop variable and enclosing scope only",
+                          ref.name.str()),
+              function_.name));
+        }
+      }
+    }
+  }
 
   IrStmt::Data data;
   data.kind = IrStmt::Kind::Assign;
@@ -444,6 +530,10 @@ ShaderStatus FunctionBuilder::returnValue(const IrExpr& value) {
                     function_.name));
   }
 
+  if (ShaderStatus status = verifyExprInScope(value); status.hasError()) {
+    return status;
+  }
+
   IrStmt::Data data;
   data.kind = IrStmt::Kind::Return;
   data.exprs = {value};
@@ -483,6 +573,9 @@ ShaderStatus FunctionBuilder::returnOutputs(std::vector<IrExpr> outputs) {
                           function_.outputs[i].name.str(), function_.outputs[i].type.toString(),
                           outputs[i].type().toString()),
               function_.name));
+    }
+    if (ShaderStatus status = verifyExprInScope(outputs[i]); status.hasError()) {
+      return status;
     }
   }
 
@@ -558,6 +651,20 @@ ShaderStatus FunctionBuilder::finish() {
       (function_.body.empty() || function_.body.back().kind() != IrStmt::Kind::Return)) {
     return fail(Err("non-void functions and entry points must end with a return statement",
                     function_.name));
+  }
+
+  // Stage restriction for implicit-derivative builtins: fwidth and textureSample are
+  // fragment-only in WGSL. Each function records whether its body (or any user function it
+  // calls, transitively - callees are always finished before their callers) uses one; vertex
+  // entry points with the flag fail closed. Fragment entry points and plain functions may carry
+  // the flag freely.
+  function_.usesFragmentOnlyBuiltins = BlockUsesFragmentOnlyBuiltins(
+      function_.body, [this](const RcString& name) { return moduleBuilder_->findFunction(name); });
+  if (function_.stage == StageKind::Vertex && function_.usesFragmentOnlyBuiltins) {
+    return fail(
+        Err("vertex entry points cannot use fragment-only builtins (fwidth and "
+            "textureSample take implicit derivatives)",
+            function_.name));
   }
 
   finished_ = true;

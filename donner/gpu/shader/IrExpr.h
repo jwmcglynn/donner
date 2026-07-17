@@ -130,6 +130,22 @@ public:
    */
   void collectRefs(std::vector<RefInfo>& out) const;
 
+  /**
+   * Appends every builtin function called anywhere in this expression tree to \p out. Used by
+   * the function builder to enforce stage restrictions (fragment-only builtins).
+   *
+   * @param out Destination list.
+   */
+  void collectBuiltinCalls(std::vector<BuiltinFn>& out) const;
+
+  /**
+   * Appends the name of every user function called anywhere in this expression tree to \p out.
+   * Used to propagate stage restrictions through user calls.
+   *
+   * @param out Destination list.
+   */
+  void collectUserCalls(std::vector<RcString>& out) const;
+
   /// Formats this expression as a deterministic prefix string, e.g. `add(ref(a), lit_f32(1))`.
   std::string toString() const;
 
