@@ -269,6 +269,78 @@ fn fs_test(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
   EXPECT_THAT(wgsl, testing::Eq(kExpected));
 }
 
+TEST(WgslEmitterTests, CollectsStructTypedForInitVariables) {
+  // For-loop init variables live in IrStmt::Data::init rather than the body block; a
+  // struct-typed loop variable must still produce a struct declaration (exactly once, before
+  // its first use).
+  ModuleBuilder builder;
+  const IrType cursorType =
+      GetShaderResultOrFail(IrType::Struct("Cursor", {{"position", IrType::U32()}}), IrType::F32());
+
+  {
+    auto helper = builder.createFunction("makeCursor", {}, cursorType);
+    ASSERT_THAT(helper, HasShaderResult());
+    FunctionBuilder fn = std::move(helper).result();
+    const IrExpr cursor = GetShaderResultOrFail(fn.addVar("cursor", cursorType), LiteralF32(0));
+    EXPECT_THAT(
+        fn.assign(GetShaderResultOrFail(Member(cursor, "position"), LiteralF32(0)), LiteralU32(0)),
+        IsShaderOk());
+    EXPECT_THAT(fn.returnValue(cursor), IsShaderOk());
+    EXPECT_THAT(fn.finish(), IsShaderOk());
+  }
+  {
+    auto walker = builder.createFunction("walk", {}, std::nullopt);
+    ASSERT_THAT(walker, HasShaderResult());
+    FunctionBuilder fn = std::move(walker).result();
+    const IrExpr c = GetShaderResultOrFail(
+        fn.beginFor("c", GetShaderResultOrFail(fn.callFunction("makeCursor", {}), LiteralF32(0))),
+        LiteralF32(0));
+    EXPECT_THAT(fn.forCondition(GetShaderResultOrFail(
+                    Lt(GetShaderResultOrFail(Member(c, "position"), LiteralF32(0)), LiteralU32(4)),
+                    LiteralF32(0))),
+                IsShaderOk());
+    EXPECT_THAT(fn.endFor(), IsShaderOk());
+    EXPECT_THAT(fn.finish(), IsShaderOk());
+  }
+
+  ShaderResult<IrModule> module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  const std::string wgsl = GetShaderResultOrFail(EmitWgsl(module.result()), std::string());
+
+  EXPECT_THAT(wgsl, HasSubstr("struct Cursor {"));
+  EXPECT_THAT(wgsl, HasSubstr("for (var c: Cursor = makeCursor();"));
+  // Declared exactly once, before its first use.
+  EXPECT_THAT(wgsl.find("struct Cursor {"), testing::Lt(wgsl.find("fn makeCursor")));
+  EXPECT_THAT(wgsl.find("struct Cursor {"), testing::Eq(wgsl.rfind("struct Cursor {")));
+}
+
+TEST(WgslEmitterTests, RejectsDistinctStructsSharingAName) {
+  // Two structurally different types named "S" cannot both be emitted; the emitter fails
+  // closed instead of declaring one and silently mistyping the other.
+  ModuleBuilder builder;
+  const IrType first =
+      GetShaderResultOrFail(IrType::Struct("S", {{"a", IrType::F32()}}), IrType::F32());
+  const IrType second = GetShaderResultOrFail(
+      IrType::Struct("S", {{"a", IrType::U32()}, {"b", IrType::U32()}}), IrType::F32());
+  EXPECT_THAT(builder.addUniformBuffer(0, 0, "firstBinding", first), IsShaderOk());
+  EXPECT_THAT(builder.addUniformBuffer(0, 1, "secondBinding", second), IsShaderOk());
+
+  ShaderResult<IrModule> module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  EXPECT_THAT(EmitWgsl(module.result()),
+              IsShaderError(HasSubstr("two distinct struct types share the name S")));
+}
+
+TEST(WgslEmitterTests, RejectsExtendedReservedWords) {
+  ModuleBuilder builder;
+  EXPECT_THAT(builder.addConstant("private", LiteralU32(1)), IsShaderOk());
+
+  ShaderResult<IrModule> module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  EXPECT_THAT(EmitWgsl(module.result()),
+              IsShaderError(HasSubstr("collides with a WGSL reserved word")));
+}
+
 TEST(WgslEmitterTests, RejectsReservedWordIdentifiers) {
   ModuleBuilder builder;
   EXPECT_THAT(builder.addConstant("loop", LiteralU32(1)), IsShaderOk());

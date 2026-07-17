@@ -42,8 +42,11 @@ wgpu::ShaderModule CreateModuleFromWgsl(const wgpu::Device& device, const std::s
 
 /// Builds the solid-fill render pipeline from \p module, mirroring GeodePipeline.cc's
 /// descriptor: the 12-entry bind group layout, the 20-byte vertex layout, premultiplied
-/// source-over blending, and both entry points.
-void CreateSolidFillPipeline(const wgpu::Device& device, const wgpu::ShaderModule& module) {
+/// source-over blending, and both entry points. \p binding7Visibility is Vertex for the correct
+/// layout; the pipeline-time negative control passes Fragment to provoke a stage-visibility
+/// mismatch with the shader's vertex-stage use of instanceTransforms.
+void CreateSolidFillPipeline(const wgpu::Device& device, const wgpu::ShaderModule& module,
+                             wgpu::ShaderStage binding7Visibility = wgpu::ShaderStage::Vertex) {
   wgpu::BindGroupLayoutEntry entries[12] = {};
 
   entries[0].binding = 0;
@@ -77,7 +80,7 @@ void CreateSolidFillPipeline(const wgpu::Device& device, const wgpu::ShaderModul
   entries[6].sampler.type = wgpu::SamplerBindingType::Filtering;
 
   entries[7].binding = 7;
-  entries[7].visibility = wgpu::ShaderStage::Vertex;
+  entries[7].visibility = binding7Visibility;
   entries[7].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
 
   fragmentStorage(8);
@@ -145,7 +148,11 @@ void CreateSolidFillPipeline(const wgpu::Device& device, const wgpu::ShaderModul
   rpDesc.multisample.mask = 0xFFFFFFFF;
 
   wgpu::RenderPipeline pipeline = device.createRenderPipeline(rpDesc);
-  EXPECT_TRUE(static_cast<bool>(pipeline)) << "Render pipeline creation returned null";
+  if (binding7Visibility == wgpu::ShaderStage::Vertex) {
+    // Only the correct layout asserts on the handle; the sabotaged negative-control layout
+    // observes failure through the uncaptured-error marker instead.
+    EXPECT_TRUE(static_cast<bool>(pipeline)) << "Render pipeline creation returned null";
+  }
 }
 
 TEST(WgslEmitterGeodeValidation, EmittedSolidFillPassesRendererValidation) {
@@ -167,6 +174,32 @@ TEST(WgslEmitterGeodeValidation, EmittedSolidFillPassesRendererValidation) {
 
   EXPECT_THAT(errors, Not(HasSubstr(kErrorMarker)))
       << "Renderer validation reported errors for the emitted WGSL";
+}
+
+TEST(WgslEmitterGeodeValidation, NegativeControlDetectsPipelineMismatch) {
+  // Second negative control: pipeline-time errors must also be observable. A valid module with
+  // a deliberately mismatched bind group layout (binding 7 declared fragment-only while the
+  // shader reads instanceTransforms in the vertex stage) must trip the error marker at
+  // createRenderPipeline.
+  auto geodeDevice = donner::geode::GeodeDevice::CreateHeadless();
+  if (!geodeDevice) {
+    GTEST_SKIP() << "No WebGPU-capable device available";
+  }
+
+  ShaderResult<IrModule> module = programs::BuildSolidFillModule();
+  ASSERT_THAT(module, HasShaderResult());
+  ShaderResult<std::string> wgsl = EmitWgsl(module.result());
+  ASSERT_FALSE(wgsl.hasError()) << "EmitWgsl failed: " << wgsl.error();
+
+  testing::internal::CaptureStderr();
+  wgpu::ShaderModule shaderModule = CreateModuleFromWgsl(geodeDevice->device(), wgsl.result());
+  CreateSolidFillPipeline(geodeDevice->device(), shaderModule,
+                          /*binding7Visibility=*/wgpu::ShaderStage::Fragment);
+  const std::string errors = testing::internal::GetCapturedStderr();
+
+  EXPECT_THAT(errors, HasSubstr(kErrorMarker))
+      << "A stage-visibility mismatch did not surface at pipeline creation; pipeline-time "
+         "acceptance evidence would be meaningless";
 }
 
 TEST(WgslEmitterGeodeValidation, NegativeControlDetectsInvalidWgsl) {
