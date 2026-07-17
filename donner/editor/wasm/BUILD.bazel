@@ -1,7 +1,13 @@
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@emsdk//emscripten_toolchain:wasm_rules.bzl", "wasm_cc_binary")
 load("@rules_cc//cc:defs.bzl", "cc_binary")
+load("@rules_python//python:defs.bzl", "py_test")
 load("//tools/http:serve_http.bzl", "serve_http")
+load(
+    ":editor_wasm_transition.bzl",
+    "editor_wasm_config_probe",
+    "editor_wasm_geode_transitioned_target",
+)
 load(":web_package.bzl", "web_package")
 
 package(default_visibility = ["//visibility:public"])
@@ -133,17 +139,44 @@ web_package(
     wasm_deps = [":wasm"],
 )
 
-serve_http(
-    name = "serve_http",
-    dir = ":wasm_web_package",
+editor_wasm_geode_transitioned_target(
+    name = "_wasm_web_package_for_serve",
+    dep = ":wasm_web_package",
     tags = [
         "manual",
         "wasm",
     ],
-    target_compatible_with = select({
-        ":wasm_enabled": [],
-        "//conditions:default": ["@platforms//:incompatible"],
-    }),
+    visibility = ["//visibility:private"],
+)
+
+serve_http(
+    name = "serve_http",
+    dir = ":_wasm_web_package_for_serve",
+    tags = [
+        "manual",
+        "wasm",
+    ],
+)
+
+editor_wasm_config_probe(
+    name = "_editor_wasm_geode_transition_probe",
+    testonly = True,
+    visibility = ["//visibility:private"],
+)
+
+editor_wasm_geode_transitioned_target(
+    name = "_editor_wasm_geode_transition_test_data",
+    testonly = True,
+    dep = ":_editor_wasm_geode_transition_probe",
+    visibility = ["//visibility:private"],
+)
+
+py_test(
+    name = "editor_wasm_transition_tests",
+    size = "small",
+    srcs = ["editor_wasm_transition_tests.py"],
+    args = ["$(rootpath :_editor_wasm_geode_transition_test_data)"],
+    data = [":_editor_wasm_geode_transition_test_data"],
 )
 
 # tiny_skia (software-fallback) editor WASM variant. Build with
