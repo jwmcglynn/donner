@@ -98,7 +98,7 @@ TEST(IrLayoutTests, RuntimeArrayHasStrideButNoSize) {
               IsShaderError(HasSubstr("no fixed size")));
 }
 
-TEST(IrLayoutTests, NestedStructUniformGets16ByteAlignment) {
+TEST(IrLayoutTests, NestedStructUniformGets16ByteAlignmentAndFollowerRounding) {
   const IrType inner =
       GetShaderResultOrFail(IrType::Struct("Inner", {{"x", IrType::F32()}}), IrType::F32());
   const IrType outer = GetShaderResultOrFail(
@@ -110,9 +110,31 @@ TEST(IrLayoutTests, NestedStructUniformGets16ByteAlignment) {
   EXPECT_THAT(storageLayout.members, ElementsAre(OffsetIs(0), OffsetIs(4), OffsetIs(8)));
   EXPECT_THAT(storageLayout.sizeBytes, Eq(12u));
 
-  // Uniform: the nested struct member's alignment rounds up to 16.
+  // Uniform: the nested struct member aligns to 16 AND the member following a struct-typed
+  // member must start at least roundUp(16, SizeOf(Inner)) bytes after its start (WGSL uniform
+  // layout constraint), so c lands at 32, not 20.
   const StructLayout uniformLayout = StructLayoutOrFail(outer, AddressSpace::Uniform);
-  EXPECT_THAT(uniformLayout.members, ElementsAre(OffsetIs(0), OffsetIs(16), OffsetIs(20)));
+  EXPECT_THAT(uniformLayout.members, ElementsAre(OffsetIs(0), OffsetIs(16), OffsetIs(32)));
+  EXPECT_THAT(uniformLayout.alignBytes, Eq(16u));
+  EXPECT_THAT(uniformLayout.sizeBytes, Eq(48u));
+}
+
+TEST(IrLayoutTests, UniformFollowerOfLargerNestedStructRoundsToNext16) {
+  // Inner3 is 12 bytes (three f32, align 4): its size is not a multiple of 16, so in uniform
+  // space the follower advances by roundUp(16, 12) = 16 even though the follower itself only
+  // needs 4-byte alignment.
+  const IrType inner = GetShaderResultOrFail(
+      IrType::Struct("Inner3", {{"x", IrType::F32()}, {"y", IrType::F32()}, {"z", IrType::F32()}}),
+      IrType::F32());
+  const IrType outer = GetShaderResultOrFail(
+      IrType::Struct("Outer3", {{"a", inner}, {"b", IrType::F32()}}), IrType::F32());
+
+  const StructLayout storageLayout = StructLayoutOrFail(outer, AddressSpace::Storage);
+  EXPECT_THAT(storageLayout.members, ElementsAre(OffsetIs(0), OffsetIs(12)));
+  EXPECT_THAT(storageLayout.sizeBytes, Eq(16u));
+
+  const StructLayout uniformLayout = StructLayoutOrFail(outer, AddressSpace::Uniform);
+  EXPECT_THAT(uniformLayout.members, ElementsAre(OffsetIs(0), OffsetIs(16)));
   EXPECT_THAT(uniformLayout.alignBytes, Eq(16u));
   EXPECT_THAT(uniformLayout.sizeBytes, Eq(32u));
 }

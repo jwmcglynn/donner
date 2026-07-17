@@ -392,6 +392,54 @@ TEST(EntryPointTests, FragmentValidatesColorOutputAndDiscard) {
   EXPECT_THAT(function.finish(), IsShaderOk());
 }
 
+TEST(EntryPointTests, FragmentAcceptsPositionBuiltinInput) {
+  // slug_fill's fs_main consumes @builtin(position) as pixel_center; the IR must express it.
+  ModuleBuilder builder;
+  auto fragment = builder.createFragmentEntryPoint(
+      "fsMain",
+      {IrParam{"clip_pos", IrType::Vec4f(), std::nullopt, BuiltinInput::Position},
+       IrParam{"sample_pos", IrType::Vec2f(), 0}},
+      {IrOutputMember{"color", IrType::Vec4f(), 0}});
+  ASSERT_THAT(fragment, HasShaderResult());
+  FunctionBuilder function = std::move(fragment).result();
+
+  // The builtin param resolves like any other input.
+  const IrExpr clipPos = GetShaderResultOrFail(function.ref("clip_pos"), LiteralF32(0));
+  EXPECT_EQ(clipPos.type(), IrType::Vec4f());
+  const IrExpr pixelCenter = GetShaderResultOrFail(Swizzle(clipPos, "xy"), LiteralF32(0));
+  EXPECT_EQ(pixelCenter.type(), IrType::Vec2f());
+
+  EXPECT_THAT(function.returnOutputs({Vec4fVal()}), IsShaderOk());
+  EXPECT_THAT(function.finish(), IsShaderOk());
+}
+
+TEST(EntryPointTests, FragmentPositionBuiltinMustBeVec4f) {
+  ModuleBuilder builder;
+  EXPECT_THAT(
+      builder.createFragmentEntryPoint(
+          "fsMain", {IrParam{"clip_pos", IrType::Vec2f(), std::nullopt, BuiltinInput::Position}},
+          {IrOutputMember{"color", IrType::Vec4f(), 0}}),
+      IsShaderError(HasSubstr("position: vec4<f32>")));
+}
+
+TEST(EntryPointTests, FragmentRejectsInstanceIndexBuiltin) {
+  ModuleBuilder builder;
+  EXPECT_THAT(builder.createFragmentEntryPoint("fsMain",
+                                               {IrParam{"instance_index", IrType::U32(),
+                                                        std::nullopt, BuiltinInput::InstanceIndex}},
+                                               {IrOutputMember{"color", IrType::Vec4f(), 0}}),
+              IsShaderError(HasSubstr("position")));
+}
+
+TEST(EntryPointTests, VertexRejectsPositionBuiltinInput) {
+  ModuleBuilder builder;
+  EXPECT_THAT(
+      builder.createVertexEntryPoint(
+          "vsMain", {IrParam{"clip_pos", IrType::Vec4f(), std::nullopt, BuiltinInput::Position}},
+          {IrOutputMember{"out_pos", IrType::Vec4f(), std::nullopt, BuiltinOutput::Position}}),
+      IsShaderError(HasSubstr("instance_index")));
+}
+
 TEST(EntryPointTests, ReturnOutputsTypeChecked) {
   ModuleBuilder builder;
   auto vertex = builder.createVertexEntryPoint(

@@ -51,6 +51,7 @@ enum class StageKind : uint8_t {
 /// Builtin input values available to entry point parameters.
 enum class BuiltinInput : uint8_t {
   InstanceIndex,  //!< `instance_index` (vertex stage, u32).
+  Position,       //!< Framebuffer position (fragment stage, vec4<f32>).
 };
 
 /// Builtin output values available to entry point outputs.
