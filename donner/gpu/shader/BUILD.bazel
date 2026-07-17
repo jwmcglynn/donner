@@ -32,3 +32,17 @@ donner_cc_library(
         "//donner/base",
     ],
 )
+
+donner_cc_test(
+    name = "shader_tests",
+    srcs = [
+        "tests/IrBuilder_tests.cc",
+        "tests/IrLayout_tests.cc",
+        "tests/IrSerialization_tests.cc",
+        "tests/ShaderTestUtils.h",
+    ],
+    deps = [
+        ":shader",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
