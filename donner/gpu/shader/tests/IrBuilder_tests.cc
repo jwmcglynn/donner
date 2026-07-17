@@ -347,6 +347,126 @@ TEST_F(FunctionBuilderTests, ForLoopWithBreakAndContinue) {
   EXPECT_THAT(function.finish(), IsShaderOk());
 }
 
+TEST_F(FunctionBuilderTests, ReturnValueRejectsOutOfScopeRefs) {
+  FunctionBuilder function = startFunction(IrType::F32());
+
+  EXPECT_THAT(function.beginIf(LiteralBool(true)), IsShaderOk());
+  const IrExpr scoped = GetShaderResultOrFail(function.addLet("x", LiteralF32(1)), LiteralF32(0));
+  EXPECT_THAT(function.endIf(), IsShaderOk());
+
+  // The handle survives its block; returning it after endIf must fail closed like addLet/assign.
+  EXPECT_THAT(function.returnValue(scoped), IsShaderError(HasSubstr("x which is out of scope")));
+}
+
+TEST(EntryPointTests, ReturnOutputsRejectsOutOfScopeRefs) {
+  ModuleBuilder builder;
+  auto fragment = builder.createFragmentEntryPoint("fsMain", {IrParam{"uv", IrType::Vec2f(), 0}},
+                                                   {IrOutputMember{"color", IrType::Vec4f(), 0}});
+  ASSERT_THAT(fragment, HasShaderResult());
+  FunctionBuilder function = std::move(fragment).result();
+
+  EXPECT_THAT(function.beginIf(LiteralBool(true)), IsShaderOk());
+  const IrExpr scoped = GetShaderResultOrFail(
+      function.addLet("tmp",
+                      GetShaderResultOrFail(ConstructVector(IrType::Vec4f(), {LiteralF32(1.0f)}),
+                                            LiteralF32(0))),
+      LiteralF32(0));
+  EXPECT_THAT(function.endIf(), IsShaderOk());
+
+  EXPECT_THAT(function.returnOutputs({scoped}),
+              IsShaderError(HasSubstr("tmp which is out of scope")));
+}
+
+TEST_F(FunctionBuilderTests, ForContinuingRejectsBodyBlockLocals) {
+  // Our for-loop model closes the body block before the update expression runs, so the
+  // continuing expression may reference the loop variable and enclosing scope only.
+  FunctionBuilder function = startFunction();
+  const IrExpr i = GetShaderResultOrFail(function.beginFor("i", LiteralU32(0)), LiteralF32(0));
+  EXPECT_THAT(function.forCondition(GetShaderResultOrFail(Lt(i, LiteralU32(4)), LiteralF32(0))),
+              IsShaderOk());
+  const IrExpr bodyLocal = GetShaderResultOrFail(
+      function.addVar("bodyLocal", IrType::U32(), LiteralU32(2)), LiteralF32(0));
+
+  EXPECT_THAT(function.forContinuing(i, GetShaderResultOrFail(Add(i, bodyLocal), LiteralF32(0))),
+              IsShaderError(HasSubstr("loop variable and enclosing scope")));
+}
+
+TEST(EntryPointTests, VertexEntryPointRejectsFwidth) {
+  // fwidth takes implicit derivatives: WGSL restricts it to the fragment stage.
+  ModuleBuilder builder;
+  auto vertex = builder.createVertexEntryPoint(
+      "vsMain", {IrParam{"pos", IrType::Vec2f(), 0}},
+      {IrOutputMember{"clip_pos", IrType::Vec4f(), std::nullopt, BuiltinOutput::Position}});
+  ASSERT_THAT(vertex, HasShaderResult());
+  FunctionBuilder function = std::move(vertex).result();
+
+  const IrExpr pos = GetShaderResultOrFail(function.ref("pos"), LiteralF32(0));
+  const IrExpr width = GetShaderResultOrFail(
+      function.addLet("width",
+                      GetShaderResultOrFail(CallBuiltin(BuiltinFn::Fwidth, {pos}), LiteralF32(0))),
+      LiteralF32(0));
+  EXPECT_THAT(
+      function.returnOutputs({GetShaderResultOrFail(
+          ConstructVector(IrType::Vec4f(), {width, LiteralF32(0), LiteralF32(1)}), LiteralF32(0))}),
+      IsShaderOk());
+
+  EXPECT_THAT(function.finish(), IsShaderError(HasSubstr("fragment-only builtin")));
+}
+
+TEST(EntryPointTests, VertexEntryPointRejectsTextureSampleTransitively) {
+  // textureSample also takes implicit derivatives, and the restriction must follow user calls:
+  // a helper that samples is rejected when reached from a vertex entry point.
+  ModuleBuilder builder;
+  EXPECT_THAT(builder.addTexture2d(0, 0, "tex"), IsShaderOk());
+  EXPECT_THAT(builder.addSampler(0, 1, "smp"), IsShaderOk());
+
+  {
+    auto helper =
+        builder.createFunction("sampleHelper", {IrParam{"uv", IrType::Vec2f()}}, IrType::Vec4f());
+    ASSERT_THAT(helper, HasShaderResult());
+    FunctionBuilder function = std::move(helper).result();
+    const IrExpr sampled = GetShaderResultOrFail(
+        CallBuiltin(BuiltinFn::TextureSample,
+                    {GetShaderResultOrFail(function.ref("tex"), LiteralF32(0)),
+                     GetShaderResultOrFail(function.ref("smp"), LiteralF32(0)),
+                     GetShaderResultOrFail(function.ref("uv"), LiteralF32(0))}),
+        LiteralF32(0));
+    EXPECT_THAT(function.returnValue(sampled), IsShaderOk());
+    EXPECT_THAT(function.finish(), IsShaderOk());
+  }
+
+  auto vertex = builder.createVertexEntryPoint(
+      "vsMain", {IrParam{"pos", IrType::Vec2f(), 0}},
+      {IrOutputMember{"clip_pos", IrType::Vec4f(), std::nullopt, BuiltinOutput::Position}});
+  ASSERT_THAT(vertex, HasShaderResult());
+  FunctionBuilder function = std::move(vertex).result();
+
+  const IrExpr sampled = GetShaderResultOrFail(
+      function.addLet(
+          "sampled",
+          GetShaderResultOrFail(
+              function.callFunction("sampleHelper",
+                                    {GetShaderResultOrFail(function.ref("pos"), LiteralF32(0))}),
+              LiteralF32(0))),
+      LiteralF32(0));
+  EXPECT_THAT(function.returnOutputs({sampled}), IsShaderOk());
+
+  EXPECT_THAT(function.finish(), IsShaderError(HasSubstr("fragment-only builtin")));
+}
+
+TEST(EntryPointTests, RejectsLocationAndBuiltinOnSameIo) {
+  ModuleBuilder builder;
+  EXPECT_THAT(builder.createVertexEntryPoint(
+                  "vsMain", {IrParam{"pos", IrType::Vec2f(), 0}},
+                  {IrOutputMember{"clip_pos", IrType::Vec4f(), 0, BuiltinOutput::Position}}),
+              IsShaderError(HasSubstr("both a location and a builtin")));
+
+  EXPECT_THAT(builder.createFragmentEntryPoint(
+                  "fsMain", {IrParam{"clip_pos", IrType::Vec4f(), 3, BuiltinInput::Position}},
+                  {IrOutputMember{"color", IrType::Vec4f(), 0}}),
+              IsShaderError(HasSubstr("both a location and a builtin")));
+}
+
 TEST_F(FunctionBuilderTests, FinishWithOpenBlockFails) {
   FunctionBuilder function = startFunction();
   EXPECT_THAT(function.beginIf(LiteralBool(true)), IsShaderOk());
