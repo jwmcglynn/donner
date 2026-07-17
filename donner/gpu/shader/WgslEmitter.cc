@@ -16,17 +16,83 @@ namespace {
 /// deliberately conservative subset covering keywords, types, address spaces, and the builtin
 /// functions this IR can call.
 constexpr std::string_view kReservedWords[] = {
-    "alias",       "array",         "bitcast",    "bool",    "break",   "case",
-    "const",       "continue",      "continuing", "default", "discard", "else",
-    "enable",      "f16",           "f32",        "false",   "fn",      "for",
-    "fragment",    "i32",           "if",         "let",     "loop",    "mat2x2",
-    "mat3x3",      "mat4x4",        "override",   "ptr",     "read",    "read_write",
-    "ref",         "requires",      "return",     "sampler", "storage", "struct",
-    "switch",      "texture_2d",    "true",       "u32",     "uniform", "var",
-    "vec2",        "vec3",          "vec4",       "vertex",  "while",   "write",
-    "abs",         "clamp",         "fract",      "fwidth",  "length",  "max",
-    "min",         "round",         "saturate",   "select",  "sqrt",    "textureDimensions",
-    "textureLoad", "textureSample",
+    "alias",
+    "array",
+    "bitcast",
+    "bool",
+    "break",
+    "case",
+    "const",
+    "continue",
+    "continuing",
+    "default",
+    "discard",
+    "else",
+    "enable",
+    "f16",
+    "f32",
+    "false",
+    "fn",
+    "for",
+    "fragment",
+    "i32",
+    "if",
+    "let",
+    "loop",
+    "mat2x2",
+    "mat3x3",
+    "mat4x4",
+    "override",
+    "ptr",
+    "read",
+    "read_write",
+    "ref",
+    "requires",
+    "return",
+    "sampler",
+    "storage",
+    "struct",
+    "switch",
+    "texture_2d",
+    "true",
+    "u32",
+    "uniform",
+    "var",
+    "vec2",
+    "vec3",
+    "vec4",
+    "vertex",
+    "while",
+    "write",
+    "abs",
+    "clamp",
+    "fract",
+    "fwidth",
+    "length",
+    "max",
+    "min",
+    "round",
+    "saturate",
+    "select",
+    "sqrt",
+    "textureDimensions",
+    "textureLoad",
+    "textureSample",
+    // WGSL keyword / reserved-word table entries beyond the subset above.
+    "atomic",
+    "attribute",
+    "binding_array",
+    "compute",
+    "const_assert",
+    "diagnostic",
+    "do",
+    "enum",
+    "function",
+    "handle",
+    "private",
+    "typedef",
+    "using",
+    "workgroup",
 };
 
 /// Checks an identifier against the reserved-word list; fails closed on collision.
@@ -397,12 +463,17 @@ void Emitter::emitStructDeclarations() {
     for (const IrOutputMember& output : function.outputs) {
       collectStructs(output.type, structs);
     }
-    // Function-scope var declarations may introduce struct types not visible in any signature.
+    // Function-scope var declarations may introduce struct types not visible in any signature;
+    // for-loop init variables live in IrStmt::Data::init rather than the body block, so they
+    // are collected explicitly.
     const std::function<void(const IrBlock&)> walkBlock = [&](const IrBlock& block) {
       for (const IrStmt& statement : block) {
         const IrStmt::Data& data = statement.data();
         if (statement.kind() == IrStmt::Kind::Var && data.declaredType) {
           collectStructs(*data.declaredType, structs);
+        }
+        if (data.init && data.init->data().declaredType) {
+          collectStructs(*data.init->data().declaredType, structs);
         }
         walkBlock(data.body);
         walkBlock(data.elseBody);
