@@ -148,6 +148,27 @@ protected:
   std::unique_ptr<MetalDevice> device_;
 };
 
+TEST_F(MetalSolidFillTest, ReadBackBufferRejectsStaleHandleAfterSlotReuse) {
+  // The readback helper must validate the handle's generation: after destroy + recreate the
+  // freed slot is reused, and a stale handle must fail closed instead of reading the wrong
+  // buffer.
+  Buffer original = unwrap(device_->createBuffer(BufferDescriptor{
+                               "original", 16, BufferUsage::CopyDst | BufferUsage::MapRead}),
+                           "createBuffer original");
+  const Status destroyStatus = device_->destroyBuffer(original);
+  ASSERT_FALSE(destroyStatus.hasError()) << destroyStatus.error();
+
+  Buffer replacement = unwrap(device_->createBuffer(BufferDescriptor{
+                                  "replacement", 16, BufferUsage::CopyDst | BufferUsage::MapRead}),
+                              "createBuffer replacement");
+  ASSERT_EQ(replacement.slotIndex(), original.slotIndex());
+  ASSERT_NE(replacement.generation(), original.generation());
+
+  Result<std::vector<uint8_t>> stale = device_->readBackBuffer(original);
+  ASSERT_TRUE(stale.hasError()) << "stale readback unexpectedly succeeded";
+  EXPECT_EQ(stale.error().type, GpuErrorType::InvalidHandle) << stale.error();
+}
+
 TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
   // ----- Shader module and pipeline from the emitted MSL -----
   shader::ShaderResult<shader::IrModule> irModule = shader::programs::BuildSolidFillModule();

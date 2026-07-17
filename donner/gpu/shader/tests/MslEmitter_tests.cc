@@ -177,6 +177,59 @@ TEST(MslEmitterTests, RejectsBufferBindingsCollidingWithVertexBufferIndex) {
                                       "buffer index")));
 }
 
+TEST(MslEmitterTests, RejectsBindingsOutsideGroupZero) {
+  // The flat Metal argument-table map models bind group 0 only; a binding in another group
+  // would silently collide with group 0's indices.
+  ModuleBuilder builder;
+  const IrType structType =
+      GetShaderResultOrFail(IrType::Struct("Params", {{"x", IrType::F32()}}), IrType::F32());
+  EXPECT_THAT(builder.addUniformBuffer(1, 0, "params", structType), IsShaderOk());
+
+  ShaderResult<IrModule> module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  EXPECT_THAT(EmitMsl(module.result()), IsShaderError(HasSubstr("only bind group 0")));
+}
+
+TEST(MslEmitterTests, RejectsLocalsShadowingBindingNames) {
+  // Bindings become implicit MSL parameters on every function; a local with the same name
+  // would shadow the parameter, and user-call forwarding would then pass the local.
+  ModuleBuilder builder;
+  const IrType structType =
+      GetShaderResultOrFail(IrType::Struct("Params", {{"x", IrType::F32()}}), IrType::F32());
+  EXPECT_THAT(builder.addUniformBuffer(0, 0, "params", structType), IsShaderOk());
+
+  auto fn = builder.createFunction("helper", {}, IrType::F32());
+  ASSERT_THAT(fn, HasShaderResult());
+  FunctionBuilder function = std::move(fn).result();
+  EXPECT_THAT(function.addVar("params", IrType::F32(), LiteralF32(0.0f)), HasShaderResult());
+  EXPECT_THAT(function.returnValue(LiteralF32(1.0f)), IsShaderOk());
+  EXPECT_THAT(function.finish(), IsShaderOk());
+
+  ShaderResult<IrModule> module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  EXPECT_THAT(EmitMsl(module.result()), IsShaderError(HasSubstr("shadows an implicit MSL")));
+}
+
+TEST(MslEmitterTests, RejectsEntryLocalsShadowingStageInName) {
+  // Entry points receive the generated stage-in struct as a parameter named `in`; a user local
+  // with that name would shadow it.
+  ModuleBuilder builder;
+  auto vertex = builder.createVertexEntryPoint(
+      "vs_main", {IrParam{"pos", IrType::Vec2f(), 0}},
+      {IrOutputMember{"clip_pos", IrType::Vec4f(), std::nullopt, BuiltinOutput::Position}});
+  ASSERT_THAT(vertex, HasShaderResult());
+  FunctionBuilder function = std::move(vertex).result();
+  EXPECT_THAT(function.addLet("in", LiteralF32(1.0f)), HasShaderResult());
+  EXPECT_THAT(function.returnOutputs({GetShaderResultOrFail(
+                  ConstructVector(IrType::Vec4f(), {LiteralF32(0.0f)}), LiteralF32(0))}),
+              IsShaderOk());
+  EXPECT_THAT(function.finish(), IsShaderOk());
+
+  ShaderResult<IrModule> module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  EXPECT_THAT(EmitMsl(module.result()), IsShaderError(HasSubstr("shadows an implicit MSL")));
+}
+
 TEST(MslEmitterTests, RejectsMslReservedWords) {
   ModuleBuilder builder;
   EXPECT_THAT(builder.addConstant("device", LiteralU32(1)), IsShaderOk());
