@@ -351,6 +351,80 @@ TEST(WgslEmitterTests, RejectsReservedWordIdentifiers) {
               IsShaderError(HasSubstr("collides with a WGSL reserved word")));
 }
 
+TEST(WgslEmitterTests, RejectsSyntacticallyInvalidIdentifiers) {
+  // The module builder accepts arbitrary strings as names; the emitter must reject anything
+  // that is not a WGSL identifier instead of emitting invalid source.
+  {
+    ModuleBuilder builder;
+    EXPECT_THAT(builder.addConstant("bad name", LiteralU32(1)), IsShaderOk());
+    ShaderResult<IrModule> module = builder.build();
+    ASSERT_THAT(module, HasShaderResult());
+    EXPECT_THAT(EmitWgsl(module.result()), IsShaderError(HasSubstr("not a valid identifier")));
+  }
+  {
+    ModuleBuilder builder;
+    EXPECT_THAT(builder.addConstant("0leading", LiteralU32(1)), IsShaderOk());
+    ShaderResult<IrModule> module = builder.build();
+    ASSERT_THAT(module, HasShaderResult());
+    EXPECT_THAT(EmitWgsl(module.result()), IsShaderError(HasSubstr("not a valid identifier")));
+  }
+  {
+    // WGSL reserves identifiers starting with a double underscore.
+    ModuleBuilder builder;
+    EXPECT_THAT(builder.addConstant("__reserved", LiteralU32(1)), IsShaderOk());
+    ShaderResult<IrModule> module = builder.build();
+    ASSERT_THAT(module, HasShaderResult());
+    EXPECT_THAT(EmitWgsl(module.result()), IsShaderError(HasSubstr("not a valid identifier")));
+  }
+}
+
+TEST(WgslEmitterTests, RejectsNonHostShareableUniformStructs) {
+  // A uniform struct with a bool member has no host-shareable layout; the layout engine already
+  // fails closed, and the emitter must surface that instead of emitting silently.
+  ModuleBuilder builder;
+  const IrType structType =
+      GetShaderResultOrFail(IrType::Struct("Flags", {{"flag", IrType::Bool()}}), IrType::F32());
+  EXPECT_THAT(builder.addUniformBuffer(0, 0, "flags", structType), IsShaderOk());
+
+  ShaderResult<IrModule> module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  EXPECT_THAT(EmitWgsl(module.result()), IsShaderError(HasSubstr("not host-shareable")));
+}
+
+TEST(WgslEmitterTests, RejectsNonHostShareableStorageStructs) {
+  ModuleBuilder builder;
+  const IrType structType = GetShaderResultOrFail(
+      IrType::Struct("StorageFlags", {{"flag", IrType::Bool()}}), IrType::F32());
+  EXPECT_THAT(builder.addReadOnlyStorageBuffer(0, 0, "storageFlags", structType), IsShaderOk());
+
+  ShaderResult<IrModule> module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  EXPECT_THAT(EmitWgsl(module.result()), IsShaderError(HasSubstr("not host-shareable")));
+}
+
+TEST(WgslEmitterTests, RejectsUserStructCollidingWithGeneratedOutputStruct) {
+  // Entry points generate a <name>_Output struct; a user struct with that exact name would
+  // produce two conflicting declarations.
+  ModuleBuilder builder;
+  const IrType collidingType = GetShaderResultOrFail(
+      IrType::Struct("vs_main_Output", {{"x", IrType::F32()}}), IrType::F32());
+  EXPECT_THAT(builder.addReadOnlyStorageBuffer(0, 0, "colliding", collidingType), IsShaderOk());
+
+  auto vertex = builder.createVertexEntryPoint(
+      "vs_main", {IrParam{"pos", IrType::Vec2f(), 0}},
+      {IrOutputMember{"clip_pos", IrType::Vec4f(), std::nullopt, BuiltinOutput::Position}});
+  ASSERT_THAT(vertex, HasShaderResult());
+  FunctionBuilder function = std::move(vertex).result();
+  EXPECT_THAT(function.returnOutputs({GetShaderResultOrFail(
+                  ConstructVector(IrType::Vec4f(), {LiteralF32(0.0f)}), LiteralF32(0))}),
+              IsShaderOk());
+  EXPECT_THAT(function.finish(), IsShaderOk());
+
+  ShaderResult<IrModule> module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  EXPECT_THAT(EmitWgsl(module.result()), IsShaderError(HasSubstr("collides with the generated")));
+}
+
 TEST(WgslEmitterTests, RejectsPaddedUniformArrays) {
   // array<f32, 4> in uniform needs a padded element wrapper (natural stride 4); the emitter
   // fails closed instead of silently emitting a layout mismatch.
