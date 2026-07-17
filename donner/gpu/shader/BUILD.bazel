@@ -17,6 +17,7 @@ donner_cc_library(
         "IrModule.cc",
         "IrSerialization.cc",
         "IrType.cc",
+        "WgslEmitter.cc",
     ],
     hdrs = [
         "IrExpr.h",
@@ -26,6 +27,7 @@ donner_cc_library(
         "IrType.h",
         "ShaderError.h",
         "ShaderResult.h",
+        "WgslEmitter.h",
     ],
     visibility = donner_internal_visibility(),
     deps = [
@@ -40,6 +42,7 @@ donner_cc_test(
         "tests/IrLayout_tests.cc",
         "tests/IrSerialization_tests.cc",
         "tests/ShaderTestUtils.h",
+        "tests/WgslEmitter_tests.cc",
     ],
     deps = [
         ":shader",

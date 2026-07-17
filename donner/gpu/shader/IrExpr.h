@@ -13,6 +13,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 #include "donner/base/RcString.h"
@@ -168,6 +169,22 @@ public:
 
 private:
   std::shared_ptr<const Node> node_;
+};
+
+/// Internal storage for \ref IrExpr nodes; public for the factory, serialization, and emitter
+/// implementations only.
+struct IrExpr::Node {
+  Kind kind = Kind::Literal;                                    //!< Node kind.
+  IrType type = IrType::F32();                                  //!< Result type.
+  bool mutableLvalue = false;                                   //!< Assignable access chain.
+  std::variant<bool, int32_t, uint32_t, float> literal = 0.0f;  //!< Literal payload.
+  RefKind refKind = RefKind::Let;                               //!< Ref payload.
+  RcString name;                                                //!< Ref/member/callee name.
+  UnaryOp unaryOp = UnaryOp::Neg;                               //!< Unary payload.
+  BinaryOp binaryOp = BinaryOp::Add;                            //!< Binary payload.
+  BuiltinFn builtin = BuiltinFn::Abs;                           //!< Builtin payload.
+  std::string swizzle;                                          //!< Swizzle components.
+  std::vector<IrExpr> children;                                 //!< Operands, in order.
 };
 
 /// `f32` literal. @param value Literal value.
