@@ -167,7 +167,10 @@ std::string IrModule::serialize() const {
       out += std::format("param {}: {}{}", param.name.str(), param.type.toString(),
                          IoAnnotation(param));
       if (param.builtin) {
-        out += " @builtin(instance_index)";
+        switch (*param.builtin) {
+          case BuiltinInput::InstanceIndex: out += " @builtin(instance_index)"; break;
+          case BuiltinInput::Position: out += " @builtin(position)"; break;
+        }
       }
       out += "\n";
     }

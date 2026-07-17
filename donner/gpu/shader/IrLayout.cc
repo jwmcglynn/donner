@@ -137,7 +137,15 @@ ShaderResult<StructLayout> ComputeStructLayout(const IrType& structType,
     layout.members.push_back(
         StructMemberLayout{offset, TypeLayout{memberAlign, memberLayout.result().sizeBytes}});
     layout.alignBytes = std::max(layout.alignBytes, memberAlign);
-    offset += memberLayout.result().sizeBytes;
+
+    // WGSL uniform constraint: the member following a struct-typed member S must start at least
+    // roundUp(16, SizeOf(S)) bytes after S's start, even when the follower's own alignment would
+    // let it pack into S's tail padding.
+    if (addressSpace == AddressSpace::Uniform && member.type.kind() == IrType::Kind::Struct) {
+      offset += RoundUp(16, memberLayout.result().sizeBytes);
+    } else {
+      offset += memberLayout.result().sizeBytes;
+    }
   }
 
   layout.sizeBytes = RoundUp(layout.alignBytes, offset);

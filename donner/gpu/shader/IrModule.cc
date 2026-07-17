@@ -691,9 +691,15 @@ ShaderResult<FunctionBuilder> ModuleBuilder::createFragmentEntryPoint(
     return std::move(status).error();
   }
   for (const IrParam& param : params) {
-    if (param.builtin || !param.location) {
-      return ShaderError{std::format("fragment input {} must have a location", param.name.str()),
-                         name};
+    if (param.builtin) {
+      if (*param.builtin != BuiltinInput::Position || !(param.type == IrType::Vec4f())) {
+        return ShaderError{
+            std::format("fragment builtin input {} must be position: vec4<f32>", param.name.str()),
+            name};
+      }
+    } else if (!param.location) {
+      return ShaderError{
+          std::format("fragment input {} must have a location or builtin", param.name.str()), name};
     }
   }
   bool hasColorOutput = false;
