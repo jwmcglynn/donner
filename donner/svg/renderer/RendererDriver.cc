@@ -1072,11 +1072,27 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
 
   renderer_.beginFrame(viewport);
-  drawPreparedEntityRange(registry, firstEntity, lastEntity);
+  (void)drawPreparedEntityRange(registry, firstEntity, lastEntity, {});
   renderer_.endFrame();
   surfaceFromCanvasTransform_ = Transform2d();
   preparedFilterGraphs_.clear();
   preparedFilterRegions_.clear();
+}
+
+bool RendererDriver::drawEntityRangeInterruptibly(Registry& registry, Entity firstEntity,
+                                                  Entity lastEntity, const RenderViewport& viewport,
+                                                  const Transform2d& surfaceFromCanvas,
+                                                  const std::function<bool()>& shouldCancel) {
+  renderingSize_ = Vector2i(static_cast<int>(viewport.size.x), static_cast<int>(viewport.size.y));
+  surfaceFromCanvasTransform_ = surfaceFromCanvas;
+
+  renderer_.beginFrame(viewport);
+  const bool completed = drawPreparedEntityRange(registry, firstEntity, lastEntity, shouldCancel);
+  renderer_.endFrame();
+  surfaceFromCanvasTransform_ = Transform2d();
+  preparedFilterGraphs_.clear();
+  preparedFilterRegions_.clear();
+  return completed;
 }
 
 void RendererDriver::drawEntityRangeIntoCurrentFrame(Registry& registry, Entity firstEntity,
@@ -1086,14 +1102,19 @@ void RendererDriver::drawEntityRangeIntoCurrentFrame(Registry& registry, Entity 
   renderingSize_ = Vector2i(static_cast<int>(viewport.size.x), static_cast<int>(viewport.size.y));
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
 
-  drawPreparedEntityRange(registry, firstEntity, lastEntity);
+  (void)drawPreparedEntityRange(registry, firstEntity, lastEntity, {});
   surfaceFromCanvasTransform_ = Transform2d();
   preparedFilterGraphs_.clear();
   preparedFilterRegions_.clear();
 }
 
-void RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEntity,
-                                             Entity lastEntity) {
+bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEntity,
+                                             Entity lastEntity,
+                                             const std::function<bool()>& shouldCancel) {
+  const auto cancelled = [&]() { return shouldCancel && shouldCancel(); };
+  if (cancelled()) {
+    return false;
+  }
   // Snapshot the entity slice [firstEntity, lastEntity] and pre-resolve filter graphs before the
   // main traversal, for the same reason as `draw()`: `preRenderFeImageFragments` mutates
   // `RenderingInstanceComponent` storage (emplace + sort inside `createFeImageShadowTree`), which
@@ -1121,6 +1142,10 @@ void RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
 
   prepareFilterGraphs(registry, rangeEntities);
 
+  if (cancelled()) {
+    return false;
+  }
+
   RenderingInstanceView view(registry, rangeEntities);
 
   // Advance to the first entity.
@@ -1130,7 +1155,12 @@ void RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
 
   // Traverse from first to last (inclusive).
   bool reachedLast = false;
+  bool completed = true;
   while (!view.done() && !reachedLast) {
+    if (cancelled()) {
+      completed = false;
+      break;
+    }
     reachedLast = (view.currentEntity() == lastEntity);
 
     const components::RenderingInstanceComponent& instance = view.get();
@@ -1309,6 +1339,7 @@ void RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
     }
     subtreeMarkers_.pop_back();
   }
+  return completed;
 }
 
 std::optional<Box2d> RendererDriver::computeEntityRangeBounds(

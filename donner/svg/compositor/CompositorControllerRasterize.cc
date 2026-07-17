@@ -90,11 +90,17 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
 
   if (geometry.tight) {
     ZoneScopedN("Compositor::rasterizeLayer::drawEntityRangeTight");
-    driver.drawEntityRange(registry, layer.firstEntity(), layer.lastEntity(), geometry.viewport,
-                           geometry.surfaceFromCanvas);
+    if (!driver.drawEntityRangeInterruptibly(registry, layer.firstEntity(), layer.lastEntity(),
+                                             geometry.viewport, geometry.surfaceFromCanvas,
+                                             [this]() { return isCancelled(); })) {
+      return;
+    }
   } else {
-    driver.drawEntityRange(registry, layer.firstEntity(), layer.lastEntity(), geometry.viewport,
-                           geometry.surfaceFromCanvas);
+    if (!driver.drawEntityRangeInterruptibly(registry, layer.firstEntity(), layer.lastEntity(),
+                                             geometry.viewport, geometry.surfaceFromCanvas,
+                                             [this]() { return isCancelled(); })) {
+      return;
+    }
   }
 
   // Stamp the bitmap with the entity's current absolute transform so the
@@ -389,9 +395,12 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
         tightViewport.size = tightBoundsSnapped.size();
         tightViewport.devicePixelRatio = viewport.devicePixelRatio;
         RendererDriver driver(*offscreen);
-        driver.drawEntityRange(
-            registry, paintOrder[startIdx], paintOrder[endIdx], tightViewport,
-            surfaceFromCanvas * Transform2d::Translate(-tightBoundsSnapped.topLeft));
+        if (!driver.drawEntityRangeInterruptibly(
+                registry, paintOrder[startIdx], paintOrder[endIdx], tightViewport,
+                surfaceFromCanvas * Transform2d::Translate(-tightBoundsSnapped.topLeft),
+                [this]() { return isCancelled(); })) {
+          return;
+        }
         if (offscreen->requiresTextureSnapshotPresentation()) {
           std::shared_ptr<const RendererTextureSnapshot> texture = offscreen->takeTextureSnapshot();
           UTILS_RELEASE_ASSERT_MSG(
@@ -408,8 +417,11 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
       } else {
         ZoneScopedN("Compositor::segment::drawEntityRange");
         RendererDriver driver(*offscreen);
-        driver.drawEntityRange(registry, paintOrder[startIdx], paintOrder[endIdx], viewport,
-                               surfaceFromCanvas);
+        if (!driver.drawEntityRangeInterruptibly(registry, paintOrder[startIdx], paintOrder[endIdx],
+                                                 viewport, surfaceFromCanvas,
+                                                 [this]() { return isCancelled(); })) {
+          return;
+        }
         if (offscreen->requiresTextureSnapshotPresentation()) {
           std::shared_ptr<const RendererTextureSnapshot> texture = offscreen->takeTextureSnapshot();
           UTILS_RELEASE_ASSERT_MSG(
