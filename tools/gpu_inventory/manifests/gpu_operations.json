@@ -317,7 +317,7 @@
         "createRenderPipeline",
         "createShaderModule"
       ],
-      "sha256": "a1b4cf055fae654cddf4c7a462d3b8b3eca0dce55577cbffb15b18f4f1779e83",
+      "sha256": "9ecff1bfb87e22304c62c0bea9b1dd5a6b09ff36d3677c02e6c3f8100bd98131",
       "wgpuCFunctions": [
         "wgpuLabel"
       ],
