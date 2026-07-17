@@ -98,6 +98,7 @@ donner_cc_library(
     target_compatible_with = _GEODE_ONLY,
     visibility = [
         "//donner/editor/gui:__pkg__",
+        "//donner/gpu:__subpackages__",
         "//donner/svg/renderer:__subpackages__",
         "//examples:__pkg__",
     ],
@@ -165,6 +166,9 @@ donner_cc_library(
     visibility = [
         "//donner/editor/gui:__pkg__",
         "//donner/editor/tests:__pkg__",
+        # The donner::gpu shader IR validation fixture compiles emitted WGSL
+        # through GeodeDevice as a black box (design 0053 transition baseline).
+        "//donner/gpu:__subpackages__",
         "//donner/svg/renderer:__subpackages__",
         "//examples:__pkg__",
     ],
