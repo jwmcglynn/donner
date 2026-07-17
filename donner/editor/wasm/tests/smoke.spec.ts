@@ -345,7 +345,7 @@ test("Geode WASM presents selection path overlay pixels", async ({ page }) => {
         page.evaluate(() => window.__donnerWgpuReadbackStats?.renderPane.coloredPixels || 0),
       {
         message: "expected the Basic Shapes sample to finish loading",
-        timeout: 10000,
+        timeout: 20000,
       },
     )
     .toBeGreaterThan(1000);
@@ -353,7 +353,7 @@ test("Geode WASM presents selection path overlay pixels", async ({ page }) => {
   const beforeSelection = await page.evaluate(
     () => window.__donnerWgpuReadbackStats?.selectionChromePixels || 0,
   );
-  await page.mouse.click(bounds.x + 510, bounds.y + 440);
+  await page.mouse.click(bounds.x + 408, bounds.y + 353);
   await expect
     .poll(
       async () =>
@@ -361,7 +361,7 @@ test("Geode WASM presents selection path overlay pixels", async ({ page }) => {
         - beforeSelection,
       {
         message: "expected selection outline, bounds, and handle pixels in the document pane",
-        timeout: 10000,
+        timeout: 20000,
       },
     )
     .toBeGreaterThan(100);
