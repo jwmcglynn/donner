@@ -12,11 +12,17 @@ load("//build_defs:visibility.bzl", "donner_internal_visibility")
 donner_cc_library(
     name = "shader",
     srcs = [
+        "IrExpr.cc",
         "IrLayout.cc",
+        "IrModule.cc",
+        "IrSerialization.cc",
         "IrType.cc",
     ],
     hdrs = [
+        "IrExpr.h",
         "IrLayout.h",
+        "IrModule.h",
+        "IrStatement.h",
         "IrType.h",
         "ShaderError.h",
         "ShaderResult.h",
