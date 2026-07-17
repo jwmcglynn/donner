@@ -35,6 +35,20 @@ donner_cc_library(
     ],
 )
 
+# The complete solid-fill pipeline program (the packet 6 Metal vertical
+# slice consumes this module; the frozen baseline is rendered by the
+# Donner-owned slug_fill.wgsl this program re-expresses).
+donner_cc_library(
+    name = "programs",
+    srcs = ["programs/SolidFill.cc"],
+    hdrs = ["programs/SolidFill.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":shader",
+        "//donner/base",
+    ],
+)
+
 donner_cc_test(
     name = "shader_tests",
     srcs = [
@@ -42,10 +56,15 @@ donner_cc_test(
         "tests/IrLayout_tests.cc",
         "tests/IrSerialization_tests.cc",
         "tests/ShaderTestUtils.h",
+        "tests/SolidFillProgram_tests.cc",
         "tests/WgslEmitter_tests.cc",
     ],
+    data = ["tests/testdata/solid_fill.wgsl"],
     deps = [
+        ":programs",
         ":shader",
+        "//donner/base:base_test_utils",
         "@com_google_gtest//:gtest_main",
+        "@rules_cc//cc/runfiles",
     ],
 )
