@@ -1,4 +1,4 @@
-load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
+load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 
 # donner::gpu::shader - the typed shader IR core and WGSL-rule layout engine
@@ -67,4 +67,35 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
         "@rules_cc//cc/runfiles",
     ],
+)
+
+# Black-box validation fixture: compiles the emitted solid-fill WGSL through
+# the current wgpu-based renderer (design 0053 transition baseline). Runs in
+# the geode variant lane; incompatible otherwise.
+donner_cc_test(
+    name = "wgsl_emitter_geode_validation_tests_impl",
+    srcs = [
+        "tests/ShaderTestUtils.h",
+        "tests/WgslEmitterGeodeValidation_tests.cc",
+    ],
+    target_compatible_with = select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":programs",
+        ":shader",
+        "//donner/base:gtest_timeout_main",
+        "//donner/svg/renderer/geode:geode_device",
+        "//donner/svg/renderer/geode:geode_wgpu_util",
+        "//third_party/webgpu-cpp:webgpu_cpp",
+    ],
+)
+
+donner_multi_transitioned_test(
+    name = "wgsl_emitter_geode_validation_tests",
+    timeout = "short",
+    testonly = 1,
+    dep = ":wgsl_emitter_geode_validation_tests_impl",
+    renderer_backend = "geode",
 )
