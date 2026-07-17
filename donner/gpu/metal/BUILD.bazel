@@ -1,0 +1,29 @@
+load("//build_defs:visibility.bzl", "donner_internal_visibility")
+
+# donner::gpu::metal - the Metal backend of the Donner GPU runtime (design doc
+# 0053, change sequence packet 6).
+#
+# Minimal vertical slice: shared-storage resources, MSL shader modules, the
+# solid-fill render pipeline family, render pass replay, and texture-to-buffer
+# readback. macOS-only; Objective-C++ compiled with ARC (objc_library `srcs`
+# default). The header is pure C++ behind a pimpl so C++ tests can include it.
+
+objc_library(
+    name = "metal_device",
+    srcs = ["MetalDevice.mm"],
+    hdrs = ["MetalDevice.h"],
+    sdk_frameworks = [
+        "Foundation",
+        "Metal",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = donner_internal_visibility(),
+    deps = [
+        "//donner/base",
+        "//donner/gpu",
+        "//donner/gpu/shader",
+    ],
+)
