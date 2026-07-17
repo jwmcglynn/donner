@@ -251,6 +251,46 @@ std::ostream& operator<<(std::ostream& os, StoreOp value);
 /// Ostream output operator. @param os Output stream. @param value Value to output.
 std::ostream& operator<<(std::ostream& os, ShaderSourceKind value);
 
+/// Returns true if \p value is a known enumerator. Every enum arriving through a descriptor is
+/// checked with these overloads so out-of-range casts fail closed with
+/// \ref GpuErrorType::InvalidDescriptor instead of flowing into layout or copy math.
+/// @param value Value to check.
+bool IsKnownEnumValue(TextureFormat value);
+/// Returns true if \p value is a known enumerator. @param value Value to check.
+bool IsKnownEnumValue(FilterMode value);
+/// Returns true if \p value is a known enumerator. @param value Value to check.
+bool IsKnownEnumValue(AddressMode value);
+/// Returns true if \p value is a known enumerator. @param value Value to check.
+bool IsKnownEnumValue(VertexFormat value);
+/// Returns true if \p value is a known enumerator. @param value Value to check.
+bool IsKnownEnumValue(VertexStepMode value);
+/// Returns true if \p value is a known enumerator. @param value Value to check.
+bool IsKnownEnumValue(PrimitiveTopology value);
+/// Returns true if \p value is a known enumerator. @param value Value to check.
+bool IsKnownEnumValue(CullMode value);
+/// Returns true if \p value is a known enumerator. @param value Value to check.
+bool IsKnownEnumValue(BlendFactor value);
+/// Returns true if \p value is a known enumerator. @param value Value to check.
+bool IsKnownEnumValue(BlendOperation value);
+/// Returns true if \p value is a known enumerator. @param value Value to check.
+bool IsKnownEnumValue(BindingType value);
+/// Returns true if \p value is a known enumerator. @param value Value to check.
+bool IsKnownEnumValue(LoadOp value);
+/// Returns true if \p value is a known enumerator. @param value Value to check.
+bool IsKnownEnumValue(StoreOp value);
+/// Returns true if \p value is a known enumerator. @param value Value to check.
+bool IsKnownEnumValue(ShaderSourceKind value);
+
+/// Returns true if \p value contains only known flag bits (an empty mask is bit-valid; emptiness
+/// is validated separately where required). @param value Bitmask to check.
+bool IsValidBitmask(TextureUsage value);
+/// Returns true if \p value contains only known flag bits. @param value Bitmask to check.
+bool IsValidBitmask(BufferUsage value);
+/// Returns true if \p value contains only known flag bits. @param value Bitmask to check.
+bool IsValidBitmask(ShaderStage value);
+/// Returns true if \p value contains only known flag bits. @param value Bitmask to check.
+bool IsValidBitmask(ColorWriteMask value);
+
 /**
  * Bytes per texel for a \ref TextureFormat.
  *

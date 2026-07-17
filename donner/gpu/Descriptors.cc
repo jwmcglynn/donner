@@ -180,6 +180,141 @@ std::ostream& operator<<(std::ostream& os, ShaderSourceKind value) {
   return os << "Unknown";
 }
 
+bool IsKnownEnumValue(TextureFormat value) {
+  switch (value) {
+    case TextureFormat::RGBA8Unorm:
+    case TextureFormat::BGRA8Unorm:
+    case TextureFormat::R8Unorm: return true;
+  }
+  return false;
+}
+
+bool IsKnownEnumValue(FilterMode value) {
+  switch (value) {
+    case FilterMode::Nearest:
+    case FilterMode::Linear: return true;
+  }
+  return false;
+}
+
+bool IsKnownEnumValue(AddressMode value) {
+  switch (value) {
+    case AddressMode::ClampToEdge:
+    case AddressMode::Repeat: return true;
+  }
+  return false;
+}
+
+bool IsKnownEnumValue(VertexFormat value) {
+  switch (value) {
+    case VertexFormat::Float32x2:
+    case VertexFormat::Float32x4:
+    case VertexFormat::Uint32: return true;
+  }
+  return false;
+}
+
+bool IsKnownEnumValue(VertexStepMode value) {
+  switch (value) {
+    case VertexStepMode::Vertex:
+    case VertexStepMode::Instance: return true;
+  }
+  return false;
+}
+
+bool IsKnownEnumValue(PrimitiveTopology value) {
+  switch (value) {
+    case PrimitiveTopology::TriangleList:
+    case PrimitiveTopology::TriangleStrip: return true;
+  }
+  return false;
+}
+
+bool IsKnownEnumValue(CullMode value) {
+  switch (value) {
+    case CullMode::None:
+    case CullMode::Back: return true;
+  }
+  return false;
+}
+
+bool IsKnownEnumValue(BlendFactor value) {
+  switch (value) {
+    case BlendFactor::Zero:
+    case BlendFactor::One:
+    case BlendFactor::SrcAlpha:
+    case BlendFactor::OneMinusSrcAlpha: return true;
+  }
+  return false;
+}
+
+bool IsKnownEnumValue(BlendOperation value) {
+  switch (value) {
+    case BlendOperation::Add:
+    case BlendOperation::Max: return true;
+  }
+  return false;
+}
+
+bool IsKnownEnumValue(BindingType value) {
+  switch (value) {
+    case BindingType::UniformBuffer:
+    case BindingType::ReadOnlyStorageBuffer:
+    case BindingType::SampledTexture2dFloat:
+    case BindingType::FilteringSampler: return true;
+  }
+  return false;
+}
+
+bool IsKnownEnumValue(LoadOp value) {
+  switch (value) {
+    case LoadOp::Clear:
+    case LoadOp::Load: return true;
+  }
+  return false;
+}
+
+bool IsKnownEnumValue(StoreOp value) {
+  switch (value) {
+    case StoreOp::Store:
+    case StoreOp::Discard: return true;
+  }
+  return false;
+}
+
+bool IsKnownEnumValue(ShaderSourceKind value) {
+  switch (value) {
+    case ShaderSourceKind::Wgsl:
+    case ShaderSourceKind::Msl: return true;
+  }
+  return false;
+}
+
+bool IsValidBitmask(TextureUsage value) {
+  constexpr uint32_t kAllBits =
+      static_cast<uint32_t>(TextureUsage::RenderAttachment | TextureUsage::Sampled |
+                            TextureUsage::CopySrc | TextureUsage::CopyDst);
+  return (static_cast<uint32_t>(value) & ~kAllBits) == 0;
+}
+
+bool IsValidBitmask(BufferUsage value) {
+  constexpr uint32_t kAllBits = static_cast<uint32_t>(
+      BufferUsage::Vertex | BufferUsage::Index | BufferUsage::Uniform | BufferUsage::Storage |
+      BufferUsage::CopySrc | BufferUsage::CopyDst | BufferUsage::MapRead);
+  return (static_cast<uint32_t>(value) & ~kAllBits) == 0;
+}
+
+bool IsValidBitmask(ShaderStage value) {
+  constexpr uint32_t kAllBits =
+      static_cast<uint32_t>(ShaderStage::Vertex | ShaderStage::Fragment | ShaderStage::Compute);
+  return (static_cast<uint32_t>(value) & ~kAllBits) == 0;
+}
+
+bool IsValidBitmask(ColorWriteMask value) {
+  constexpr uint32_t kAllBits = static_cast<uint32_t>(ColorWriteMask::All);
+  return (static_cast<uint32_t>(value) & ~kAllBits) == 0;
+}
+
 uint32_t TextureFormatBytesPerTexel(TextureFormat format) {
   switch (format) {
     case TextureFormat::RGBA8Unorm:

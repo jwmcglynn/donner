@@ -19,6 +19,29 @@ GpuError Err(GpuErrorType type, std::string message) {
   return GpuError{type, std::move(message)};
 }
 
+/// Rejects out-of-range enum values arriving through descriptors (central check so unknown
+/// values cannot flow into layout or copy math).
+template <typename EnumT>
+Status CheckEnum(EnumT value, std::string_view fieldName) {
+  if (!IsKnownEnumValue(value)) {
+    return Err(
+        GpuErrorType::InvalidDescriptor,
+        std::format("{} has unknown enum value {}", fieldName, static_cast<uint32_t>(value)));
+  }
+  return OkStatus();
+}
+
+/// Rejects bitmasks containing unknown flag bits.
+template <typename MaskT>
+Status CheckBitmask(MaskT value, std::string_view fieldName) {
+  if (!IsValidBitmask(value)) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               std::format("{} has unknown flag bits (value {})", fieldName,
+                           static_cast<uint32_t>(value)));
+  }
+  return OkStatus();
+}
+
 /// Validates a \ref BufferDescriptor.
 Status ValidateBufferDescriptor(const BufferDescriptor& descriptor) {
   if (descriptor.byteSize == 0) {
@@ -29,14 +52,45 @@ Status ValidateBufferDescriptor(const BufferDescriptor& descriptor) {
                std::format("BufferDescriptor.byteSize {} exceeds kMaxBufferByteSize {}",
                            descriptor.byteSize, kMaxBufferByteSize));
   }
+  if (Status status = CheckBitmask(descriptor.usage, "BufferDescriptor.usage"); status.hasError()) {
+    return status;
+  }
   if (descriptor.usage == BufferUsage::None) {
     return Err(GpuErrorType::InvalidDescriptor, "BufferDescriptor.usage is empty");
   }
   return OkStatus();
 }
 
+/// Validates a \ref SamplerDescriptor.
+Status ValidateSamplerDescriptor(const SamplerDescriptor& descriptor) {
+  if (Status status = CheckEnum(descriptor.magFilter, "SamplerDescriptor.magFilter");
+      status.hasError()) {
+    return status;
+  }
+  if (Status status = CheckEnum(descriptor.minFilter, "SamplerDescriptor.minFilter");
+      status.hasError()) {
+    return status;
+  }
+  if (Status status = CheckEnum(descriptor.addressModeU, "SamplerDescriptor.addressModeU");
+      status.hasError()) {
+    return status;
+  }
+  if (Status status = CheckEnum(descriptor.addressModeV, "SamplerDescriptor.addressModeV");
+      status.hasError()) {
+    return status;
+  }
+  return OkStatus();
+}
+
 /// Validates a \ref TextureDescriptor.
 Status ValidateTextureDescriptor(const TextureDescriptor& descriptor) {
+  if (Status status = CheckEnum(descriptor.format, "TextureDescriptor.format"); status.hasError()) {
+    return status;
+  }
+  if (Status status = CheckBitmask(descriptor.usage, "TextureDescriptor.usage");
+      status.hasError()) {
+    return status;
+  }
   if (descriptor.size.width == 0 || descriptor.size.height == 0) {
     return Err(GpuErrorType::InvalidDescriptor,
                std::format("TextureDescriptor.size {}x{} has a zero dimension",
@@ -77,6 +131,13 @@ Status ValidateBindGroupLayoutDescriptor(const BindGroupLayoutDescriptor& descri
                  std::format("BindGroupLayoutEntry.binding {} exceeds kMaxBindings {}",
                              entry.binding, kMaxBindings));
     }
+    if (Status status = CheckBitmask(entry.visibility, "BindGroupLayoutEntry.visibility");
+        status.hasError()) {
+      return status;
+    }
+    if (Status status = CheckEnum(entry.type, "BindGroupLayoutEntry.type"); status.hasError()) {
+      return status;
+    }
     if (entry.visibility == ShaderStage::None) {
       return Err(
           GpuErrorType::InvalidDescriptor,
@@ -115,6 +176,10 @@ Status ValidateVertexBufferLayouts(const std::vector<VertexBufferLayout>& buffer
 
   for (size_t bufferIndex = 0; bufferIndex < buffers.size(); ++bufferIndex) {
     const VertexBufferLayout& layout = buffers[bufferIndex];
+    if (Status status = CheckEnum(layout.stepMode, "VertexBufferLayout.stepMode");
+        status.hasError()) {
+      return status;
+    }
     if (layout.strideBytes == 0) {
       return Err(GpuErrorType::InvalidDescriptor,
                  std::format("VertexBufferLayout {} has strideBytes 0", bufferIndex));
@@ -124,6 +189,10 @@ Status ValidateVertexBufferLayouts(const std::vector<VertexBufferLayout>& buffer
                  std::format("VertexBufferLayout {} has no attributes", bufferIndex));
     }
     for (const VertexAttribute& attribute : layout.attributes) {
+      if (Status status = CheckEnum(attribute.format, "VertexAttribute.format");
+          status.hasError()) {
+        return status;
+      }
       if (attribute.shaderLocation >= kMaxVertexAttributes) {
         return Err(GpuErrorType::LimitExceeded,
                    std::format("VertexAttribute shaderLocation {} exceeds kMaxVertexAttributes {}",
@@ -294,6 +363,10 @@ Result<TextureView> Device::createTextureView(const Texture& texture,
 }
 
 Result<Sampler> Device::createSampler(const SamplerDescriptor& descriptor) {
+  if (Status status = ValidateSamplerDescriptor(descriptor); status.hasError()) {
+    return std::move(status).error();
+  }
+
   Sampler handle = allocateHandle<SamplerTag>(samplers_, SamplerRecord{descriptor});
   if (Status status = onCreateSampler(handle.slotIndex(), descriptor); status.hasError()) {
     samplers_.release(handle.slotIndex());
@@ -469,6 +542,10 @@ Result<PipelineLayout> Device::createPipelineLayout(const PipelineLayoutDescript
 }
 
 Result<ShaderModule> Device::createShaderModule(const ShaderModuleDescriptor& descriptor) {
+  if (Status status = CheckEnum(descriptor.sourceKind, "ShaderModuleDescriptor.sourceKind");
+      status.hasError()) {
+    return std::move(status).error();
+  }
   if (descriptor.sourceText.empty()) {
     return Err(GpuErrorType::InvalidDescriptor, "ShaderModuleDescriptor.sourceText is empty");
   }
@@ -515,6 +592,39 @@ Result<RenderPipeline> Device::createRenderPipeline(const RenderPipelineDescript
                std::format("RenderPipelineDescriptor has {} color targets, exceeding "
                            "kMaxColorAttachments {}",
                            descriptor.fragment.targets.size(), kMaxColorAttachments));
+  }
+  for (const ColorTargetState& target : descriptor.fragment.targets) {
+    if (Status status = CheckEnum(target.format, "ColorTargetState.format"); status.hasError()) {
+      return std::move(status).error();
+    }
+    if (Status status = CheckBitmask(target.writeMask, "ColorTargetState.writeMask");
+        status.hasError()) {
+      return std::move(status).error();
+    }
+    if (target.blend) {
+      for (const BlendComponent& component : {target.blend->color, target.blend->alpha}) {
+        if (Status status = CheckEnum(component.srcFactor, "BlendComponent.srcFactor");
+            status.hasError()) {
+          return std::move(status).error();
+        }
+        if (Status status = CheckEnum(component.dstFactor, "BlendComponent.dstFactor");
+            status.hasError()) {
+          return std::move(status).error();
+        }
+        if (Status status = CheckEnum(component.operation, "BlendComponent.operation");
+            status.hasError()) {
+          return std::move(status).error();
+        }
+      }
+    }
+  }
+  if (Status status = CheckEnum(descriptor.topology, "RenderPipelineDescriptor.topology");
+      status.hasError()) {
+    return std::move(status).error();
+  }
+  if (Status status = CheckEnum(descriptor.cullMode, "RenderPipelineDescriptor.cullMode");
+      status.hasError()) {
+    return std::move(status).error();
   }
   if (descriptor.multisampleCount != 1) {
     return Err(GpuErrorType::Unsupported,

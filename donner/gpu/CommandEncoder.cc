@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <format>
+#include <sstream>
 #include <utility>
 #include <vector>
 
@@ -91,6 +92,8 @@ Result<RenderPassEncoder*> CommandEncoder::beginRenderPass(const RenderPassDescr
   }
 
   Extent2d passExtent;
+  std::vector<TextureFormat> attachmentFormats;
+  attachmentFormats.reserve(descriptor.colorAttachments.size());
   std::vector<Device::ResourceIdentity> seenViews;
   seenViews.reserve(descriptor.colorAttachments.size());
   for (size_t i = 0; i < descriptor.colorAttachments.size(); ++i) {
@@ -114,6 +117,19 @@ Result<RenderPassEncoder*> CommandEncoder::beginRenderPass(const RenderPassDescr
     }
     seenViews.push_back(viewIdentity);
 
+    if (!IsKnownEnumValue(attachment.loadOp)) {
+      return fail(Err(GpuErrorType::InvalidDescriptor,
+                      std::format("beginRenderPass: attachment {} has an unknown loadOp value {}",
+                                  i, static_cast<uint32_t>(attachment.loadOp))))
+          .error();
+    }
+    if (!IsKnownEnumValue(attachment.storeOp)) {
+      return fail(Err(GpuErrorType::InvalidDescriptor,
+                      std::format("beginRenderPass: attachment {} has an unknown storeOp value {}",
+                                  i, static_cast<uint32_t>(attachment.storeOp))))
+          .error();
+    }
+
     // Re-resolve the viewed texture so a view of a destroyed (or slot-reused) texture fails
     // closed here instead of aliasing another texture.
     auto viewedTexture = device_->resolveViewedTexture(*viewRecord.result());
@@ -121,6 +137,7 @@ Result<RenderPassEncoder*> CommandEncoder::beginRenderPass(const RenderPassDescr
       return fail(std::move(viewedTexture).error()).error();
     }
     const TextureDescriptor& textureDescriptor = viewedTexture.result()->descriptor;
+    attachmentFormats.push_back(textureDescriptor.format);
 
     if (!HasAllFlags(textureDescriptor.usage, TextureUsage::RenderAttachment)) {
       return fail(Err(GpuErrorType::UsageMismatch,
@@ -150,6 +167,7 @@ Result<RenderPassEncoder*> CommandEncoder::beginRenderPass(const RenderPassDescr
 
   inRenderPass_ = true;
   passExtent_ = passExtent;
+  passAttachmentFormats_ = std::move(attachmentFormats);
   currentPipeline_.reset();
   boundVertexBuffers_.fill(std::nullopt);
   boundBindGroups_.fill(std::nullopt);
@@ -164,6 +182,30 @@ Status CommandEncoder::passSetPipeline(const RenderPipeline& pipeline) {
   auto record = device_->resolve(device_->renderPipelines_, pipeline, RenderPipelineTag::kName);
   if (record.hasError()) {
     return fail(std::move(record).error());
+  }
+
+  // The pipeline's color targets must match the active pass's attachments in count and
+  // per-index format. InvalidState (not UsageMismatch) by convention: like the draw-time bind
+  // group / pipeline layout check, this is an incompatibility between a valid object and the
+  // encoder's current state, whereas UsageMismatch is reserved for resources missing a usage
+  // flag.
+  const std::vector<ColorTargetState>& targets = record.result()->descriptor.fragment.targets;
+  if (targets.size() != passAttachmentFormats_.size()) {
+    return fail(
+        Err(GpuErrorType::InvalidState,
+            std::format("setPipeline: pipeline declares {} color targets but the pass has {} "
+                        "attachments",
+                        targets.size(), passAttachmentFormats_.size())));
+  }
+  for (size_t i = 0; i < targets.size(); ++i) {
+    if (targets[i].format != passAttachmentFormats_[i]) {
+      std::ostringstream formats;
+      formats << targets[i].format << " vs " << passAttachmentFormats_[i];
+      return fail(Err(GpuErrorType::InvalidState,
+                      std::format("setPipeline: color target {} format does not match the pass "
+                                  "attachment format ({})",
+                                  i, formats.str())));
+    }
   }
 
   currentPipeline_ = BoundPipeline{record.result()->descriptor.vertex.buffers,
@@ -184,6 +226,37 @@ Status CommandEncoder::passSetBindGroup(uint32_t index, const BindGroup& bindGro
   auto record = device_->resolve(device_->bindGroups_, bindGroup, BindGroupTag::kName);
   if (record.hasError()) {
     return fail(std::move(record).error());
+  }
+
+  // Re-resolve every resource the group references: a buffer, texture view (and its texture),
+  // or sampler destroyed after createBindGroup - including slot reuse - must fail closed here
+  // instead of reaching a backend.
+  for (const BindGroupEntry& entry : record.result()->descriptor.entries) {
+    if (const BufferBinding* bufferBinding = std::get_if<BufferBinding>(&entry.resource)) {
+      auto bufferRecord =
+          device_->resolve(device_->buffers_, bufferBinding->buffer, BufferTag::kName);
+      if (bufferRecord.hasError()) {
+        return fail(std::move(bufferRecord).error());
+      }
+    } else if (const TextureViewBinding* viewBinding =
+                   std::get_if<TextureViewBinding>(&entry.resource)) {
+      auto viewRecord =
+          device_->resolve(device_->textureViews_, viewBinding->view, TextureViewTag::kName);
+      if (viewRecord.hasError()) {
+        return fail(std::move(viewRecord).error());
+      }
+      auto viewedTexture = device_->resolveViewedTexture(*viewRecord.result());
+      if (viewedTexture.hasError()) {
+        return fail(std::move(viewedTexture).error());
+      }
+    } else if (const SamplerBinding* samplerBinding =
+                   std::get_if<SamplerBinding>(&entry.resource)) {
+      auto samplerRecord =
+          device_->resolve(device_->samplers_, samplerBinding->sampler, SamplerTag::kName);
+      if (samplerRecord.hasError()) {
+        return fail(std::move(samplerRecord).error());
+      }
+    }
   }
 
   boundBindGroups_[index] = BoundBindGroup{bindGroup.slotIndex(), record.result()->layoutIdentity};

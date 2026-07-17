@@ -212,6 +212,7 @@ private:
   bool finished_ = false;
 
   Extent2d passExtent_;
+  std::vector<TextureFormat> passAttachmentFormats_;
   std::optional<BoundPipeline> currentPipeline_;
   std::array<std::optional<BoundVertexBuffer>, kMaxVertexBuffers> boundVertexBuffers_;
   std::array<std::optional<BoundBindGroup>, kMaxBindGroups> boundBindGroups_;
