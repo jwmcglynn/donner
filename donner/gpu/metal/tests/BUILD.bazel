@@ -1,4 +1,4 @@
-load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library")
+load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_cc_test")
 
 # Tests and tooling for the design 0053 Metal vertical slice: the shared
 # frozen-baseline scene, the geode-gated black-box capture tool that produced
@@ -32,5 +32,29 @@ donner_cc_binary(
         "//donner/svg/renderer/geode:geode_device",
         "//donner/svg/renderer/geode:geode_wgpu_util",
         "//third_party/webgpu-cpp:webgpu_cpp",
+    ],
+)
+
+# The Metal solid-fill vertical slice: donner::gpu + emitted MSL only (no
+# wgpu-based dependencies, not geode-gated). Metal API validation is enabled
+# so validation issues abort loudly.
+donner_cc_test(
+    name = "metal_solid_fill_tests",
+    srcs = ["MetalSolidFill_tests.cc"],
+    data = ["testdata/solid_fill_baseline.png"],
+    env = {
+        "MTL_DEBUG_LAYER": "1",
+        "MTL_SHADER_VALIDATION": "1",
+    },
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = [
+        ":baseline_scene",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/gpu",
+        "//donner/gpu/metal:metal_device",
+        "//donner/gpu/shader",
+        "//donner/gpu/shader:programs",
+        "//donner/svg/renderer/geode:geode_path_encoder",
+        "@com_google_gtest//:gtest_main",
     ],
 )
