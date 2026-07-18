@@ -138,6 +138,24 @@ std::vector<CurveWithRange> extractCurves(const Path& monoPath) {
 /// Which axis a band set partitions along.
 enum class BandAxis { Y, X };
 
+/// Return true when a curve is provably parallel to the ray represented by `axis`.
+/// Horizontal-ray data is split along Y and cannot receive a winding contribution
+/// from a curve whose three Y coordinates are identical. The vertical case is the
+/// exact transpose. Exact equality is intentional: nearly parallel curves still
+/// carry geometry and must not be discarded.
+bool isRayParallel(const CurveWithRange& curve, BandAxis axis) {
+  if (axis == BandAxis::Y) {
+    return curve.curve.p0y == curve.curve.p1y && curve.curve.p1y == curve.curve.p2y;
+  }
+  return curve.curve.p0x == curve.curve.p1x && curve.curve.p1x == curve.curve.p2x;
+}
+
+std::vector<CurveWithRange> omitRayParallelCurves(std::vector<CurveWithRange> curves,
+                                                  BandAxis axis) {
+  std::erase_if(curves, [axis](const CurveWithRange& curve) { return isRayParallel(curve, axis); });
+  return curves;
+}
+
 /// Bin curves into bands along `axis` and flatten into the band/curve output vectors.
 /// For `BandAxis::Y` (horizontal bands, horizontal ray) the band's `yMin`/`yMax` are
 /// its strip boundaries and `xMin`/`xMax` are the curves' X-extent. For `BandAxis::X`
@@ -260,7 +278,8 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
   }
 
   // Horizontal bands (Y-monotonic curves) for the horizontal ray.
-  const std::vector<CurveWithRange> hCurves = extractCurves(monoPathY);
+  const std::vector<CurveWithRange> hCurves =
+      omitRayParallelCurves(extractCurves(monoPathY), BandAxis::Y);
   if (hCurves.empty()) {
     return result;
   }
@@ -279,7 +298,8 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
   // horizontal ray alone covers them.
   if (!NearZero(pathWidth)) {
     const Path monoPathX = quadPath.toMonotonic(Path::MonotonicAxis::X);
-    const std::vector<CurveWithRange> vAll = extractCurves(monoPathX);
+    const std::vector<CurveWithRange> vAll =
+        omitRayParallelCurves(extractCurves(monoPathX), BandAxis::X);
     const uint16_t vBandCount = computeBandCount(pathWidth);
     bandCurves(vAll, bounds, BandAxis::X, result.vBands, result.vCurves, vBandCount,
                result.vBandGrid);
