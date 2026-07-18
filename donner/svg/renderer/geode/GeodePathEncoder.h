@@ -23,9 +23,9 @@ namespace donner::geode {
  * filled path. It is produced by GeodePathEncoder::encode() and consumed by the GPU pipeline.
  *
  * The data is organized as:
- * - **Curves**: Quadratic Bézier control points (3 × Vector2f per curve), packed contiguously.
- * - **Bands**: Horizontal slices through the path. Each band references a contiguous range of
- *   curves and has a bounding quad for rasterization.
+ * - **Curves**: Canonical quadratic Bézier control points (3 × Vector2f per curve).
+ * - **Curve references**: Compact per-band indexes into the canonical curve arrays.
+ * - **Bands**: Compact offset/count pairs into the curve-reference arrays.
  * - **quadVertices**: A single bounding quad over the whole path (6 vertices = 2 triangles),
  *   with position, outward normal, and band index attributes for the vertex shader.
  */
@@ -37,23 +37,33 @@ struct EncodedPath {
     float p2x, p2y;  ///< End point.
   };
 
-  /// Metadata for one horizontal band.
-  ///
-  /// Layout matches the WGSL `Band` struct in shaders/slug_fill.wgsl exactly
-  /// (8 × 4 bytes = 32 bytes per band). Two trailing pad fields are required
-  /// because storage buffer struct stride must be 16-byte aligned, and
-  /// without them WGSL would round the struct to 32 bytes anyway.
+  /// Compact metadata for one band. Layout matches the WGSL `Band` struct exactly.
   struct Band {
-    uint32_t curveStart;  ///< Index of the first curve in this band's curve range.
-    uint32_t curveCount;  ///< Number of curves intersecting this band.
-    float yMin;           ///< Bottom edge of the band (in path space).
-    float yMax;           ///< Top edge of the band (in path space).
-    float xMin;           ///< Left extent of curves in this band.
-    float xMax;           ///< Right extent of curves in this band.
-    float _pad0;          ///< Padding to match WGSL stride.
-    float _pad1;          ///< Padding to match WGSL stride.
+    uint32_t curveStart;  ///< First entry in the axis's curve-reference array.
+    uint32_t curveCount;  ///< Number of curve references in the band.
   };
-  static_assert(sizeof(Band) == 32, "Band struct must match WGSL layout");
+  static_assert(sizeof(Band) == 8, "Band struct must match WGSL layout");
+
+  /// Per-axis encode statistics retained with the path for diagnostics and perf tests.
+  struct AxisStats {
+    uint32_t canonicalCurveCount = 0;    ///< Curves stored exactly once for this ray.
+    uint32_t curveReferenceCount = 0;    ///< Total indexes across all bands.
+    uint32_t omittedParallelCurves = 0;  ///< Curves proven parallel to this ray.
+    uint32_t gridBandCount = 0;          ///< Dense band-grid cells.
+    uint32_t nonemptyBandCount = 0;      ///< Packed nonempty band records.
+    uint32_t maxCurvesPerBand = 0;       ///< Worst packed-band reference count.
+    uint32_t p95CurvesPerBand = 0;       ///< 95th percentile nonempty-band count.
+    double meanCurvesPerBand = 0.0;      ///< Mean references per nonempty band.
+  };
+
+  /// Output-neutral instrumentation for the CPU encoding result.
+  struct EncodingStats {
+    AxisStats horizontal;
+    AxisStats vertical;
+    double aabbArea = 0.0;
+    double boundingGeometryArea = 0.0;
+    uint32_t boundingGeometryVertexCount = 0;
+  };
 
   /// Vertex for the path bounding quad (input to the Slug vertex shader).
   struct Vertex {
@@ -62,9 +72,10 @@ struct EncodedPath {
     uint32_t bandIndex;      ///< Which band this vertex belongs to (unused by the dual-ray fill).
   };
 
-  std::vector<Curve> curves;  ///< Horizontal (Y-monotonic) curves, sorted by band.
-  std::vector<Band> bands;    ///< Horizontal band metadata (Y-strips), for the horizontal ray.
-  Box2d pathBounds;           ///< Axis-aligned bounding box of the path.
+  std::vector<Curve> curves;           ///< Canonical horizontal (Y-monotonic) curves.
+  std::vector<uint32_t> curveIndices;  ///< Per-band references into `curves`.
+  std::vector<Band> bands;  ///< Horizontal band metadata (Y-strips), for the horizontal ray.
+  Box2d pathBounds;         ///< Axis-aligned bounding box of the path.
 
   /// Single bounding quad (6 verts) over the whole path, for the analytic dual-ray fill
   /// shader (0041 §8.1). One quad per path means each pixel is rasterized by exactly one
@@ -74,12 +85,11 @@ struct EncodedPath {
   std::vector<Vertex> quadVertices;
 
   /// Vertical (X-monotonic) curve + band data, for the Slug **vertical ray** used by the
-  /// dual-ray analytic coverage. These mirror `curves`/`bands`
-  /// but are split at X-extrema and binned into vertical (X-strip) bands. For a vertical
-  /// `Band` the field semantics are transposed: `xMin`/`xMax` are the band's X-strip
-  /// boundaries and `yMin`/`yMax` are the Y-extent of the curves in the band.
-  std::vector<Curve> vCurves;  ///< X-monotonic curves, sorted by vertical band.
-  std::vector<Band> vBands;    ///< Vertical band metadata (X-strips), for the vertical ray.
+  /// dual-ray analytic coverage. These mirror `curves`/`bands`, but are split at X-extrema and
+  /// binned into vertical (X-strip) bands.
+  std::vector<Curve> vCurves;           ///< Canonical X-monotonic curves.
+  std::vector<uint32_t> vCurveIndices;  ///< Per-band references into `vCurves`.
+  std::vector<Band> vBands;  ///< Vertical band metadata (X-strips), for the vertical ray.
 
   /// Sentinel for a grid cell with no band (no curves overlap that strip).
   static constexpr uint32_t kNoBand = 0xFFFFFFFFu;
@@ -99,6 +109,8 @@ struct EncodedPath {
   float xBase = 0.0f;               ///< Left edge of the vertical band grid (path space).
   float vStride = 0.0f;             ///< Width of each vertical band cell (path space).
   uint32_t vBandCount = 0;          ///< Number of vertical band cells.
+
+  EncodingStats stats;  ///< Encode diagnostics; does not affect rendering.
 
   /// Returns true if the encoded path has no bands (empty or degenerate path).
   bool empty() const { return bands.empty(); }

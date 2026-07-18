@@ -24,6 +24,12 @@ namespace donner::geode {
  * - binding 3: pattern tile texture (2D, Float sampleType) - sampled only
  *   when paintMode == 1. A 1x1 dummy texture is bound in solid-fill draws.
  * - binding 4: pattern sampler (Filtering) - paired with binding 3.
+ * - binding 5: nested clip-mask texture.
+ * - binding 6: nested clip-mask sampler.
+ * - binding 7: per-instance transforms.
+ * - bindings 8 and 9: vertical Band[] and canonical curve data.
+ * - bindings 10 and 11: horizontal and vertical dense band grids.
+ * - bindings 12 and 13: horizontal and vertical curve-reference indexes.
  *
  * The vertex buffer layout is:
  * - location 0: vec2f position (offset 0)
@@ -119,6 +125,9 @@ private:
  * - binding 0: uniform buffer (mvp, viewport, fillRule).
  * - binding 1: storage buffer (read-only) - Band[].
  * - binding 2: storage buffer (read-only) - curve data (flat f32[]).
+ * - bindings 5 and 6: vertical Band[] and canonical curve data.
+ * - bindings 7 and 8: horizontal and vertical dense band grids.
+ * - bindings 9 and 10: horizontal and vertical curve-reference indexes.
  *
  * No texture / sampler bindings - the mask pipeline doesn't read from
  * any texture input. Multiple paths belonging to a single clip layer

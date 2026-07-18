@@ -54,12 +54,6 @@ struct GradientUniforms {
 struct Band {
   curveStart: u32,
   curveCount: u32,
-  yMin: f32,
-  yMax: f32,
-  xMin: f32,
-  xMax: f32,
-  _pad0: f32,
-  _pad1: f32,
 };
 
 @group(0) @binding(1) var<storage, read> bands: array<Band>;
@@ -71,6 +65,8 @@ struct Band {
 @group(0) @binding(6) var<storage, read> vCurveData: array<f32>;
 @group(0) @binding(7) var<storage, read> hBandGrid: array<u32>;
 @group(0) @binding(8) var<storage, read> vBandGrid: array<u32>;
+@group(0) @binding(9) var<storage, read> hCurveIndices: array<u32>;
+@group(0) @binding(10) var<storage, read> vCurveIndices: array<u32>;
 
 const kNoBand: u32 = 0xFFFFFFFFu;
 
@@ -197,7 +193,7 @@ fn accumulateHoriz(slot: u32, sample: vec2f, ppemX: f32) -> RayCoverage {
   }
   let band = bands[slot];
   for (var i = 0u; i < band.curveCount; i = i + 1u) {
-    let curve = load_h_curve(band.curveStart + i);
+    let curve = load_h_curve(hCurveIndices[band.curveStart + i]);
     let curve_max_x = max(curve.p0.x, max(curve.p1.x, curve.p2.x));
     if ((curve_max_x - sample.x) * ppemX <= -0.5) {
       break;
@@ -237,7 +233,7 @@ fn accumulateVert(slot: u32, sample: vec2f, ppemY: f32) -> RayCoverage {
   }
   let band = vBands[slot];
   for (var i = 0u; i < band.curveCount; i = i + 1u) {
-    let curve = load_v_curve(band.curveStart + i);
+    let curve = load_v_curve(vCurveIndices[band.curveStart + i]);
     let curve_max_y = max(curve.p0.y, max(curve.p1.y, curve.p2.y));
     if ((curve_max_y - sample.y) * ppemY <= -0.5) {
       break;
