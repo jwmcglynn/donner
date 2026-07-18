@@ -1270,13 +1270,12 @@ void GeoEncoder::Impl::populateFillUniform(Uniforms& u, const EncodedPath& encod
 void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const EncodedPath& encoded) {
   // Drop any previous residence (first upload, a re-upload after the stroke
   // slot rebuilt in place, or a re-upload because a DIFFERENT device now
-  // renders this document). Frees the old buffer and settles the live-bytes
-  // gauge before we account the new allocation. When the existing buffer
-  // belongs to a different device we release our ref WITHOUT calling
-  // `destroy()`: that device may already be gone, and destroy() would route
-  // into it (see `GeodeResidentSlot::owningDeviceId`).
-  const bool ownedByCurrentDevice = slot.owningDeviceId == device->deviceId();
-  slot.reset(/*destroyBuffer=*/ownedByCurrentDevice);
+  // renders this document). Releases the old handles and settles the
+  // live-bytes gauge before we account the new allocation. `reset()` never
+  // calls `Buffer::destroy()`: an earlier draw in the open command encoder
+  // may still reference the old buffer, and releasing our handle lets WebGPU
+  // retain that resource for exactly as long as the recorded work needs it.
+  slot.reset();
 
   const uint64_t vBytes = encoded.quadVertices.size() * sizeof(EncodedPath::Vertex);
   const uint64_t bandsBytes = encoded.bands.size() * sizeof(EncodedPath::Band);
