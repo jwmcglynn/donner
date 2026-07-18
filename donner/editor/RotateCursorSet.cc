@@ -200,7 +200,8 @@ std::optional<RotateCursorImage> RenderImageFromSvg(
   }
 
   svg::SVGDocument document = std::move(parseResult.result());
-  svg::Renderer renderer(std::move(geodeDevice));
+  svg::Renderer renderer =
+      geodeDevice != nullptr ? svg::Renderer(std::move(geodeDevice)) : svg::Renderer();
   renderer.draw(document);
   svg::RendererBitmap bitmap = renderer.takeSnapshot();
   std::optional<std::vector<unsigned char>> rgba =
@@ -280,7 +281,8 @@ std::optional<RotateCursorImage> RenderEditorCursorImage(
     std::shared_ptr<geode::GeodeDevice> geodeDevice) {
   switch (cursor) {
     case EditorCursor::Select: return RenderSelectCursorImage(std::move(geodeDevice));
-    case EditorCursor::Pen: return RenderPenCursorImage(PenCursorHint::Base, std::move(geodeDevice));
+    case EditorCursor::Pen:
+      return RenderPenCursorImage(PenCursorHint::Base, std::move(geodeDevice));
     case EditorCursor::PenAdd:
       return RenderPenCursorImage(PenCursorHint::Add, std::move(geodeDevice));
     case EditorCursor::PenRemove:
