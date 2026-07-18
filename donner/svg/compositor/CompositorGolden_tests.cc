@@ -90,6 +90,10 @@ SVGDocument parseDocument(std::string_view svgSource) {
   return std::move(result).result();
 }
 
+bool HasTilePayload(const CompositorTile& tile) {
+  return !tile.bitmap.empty() || tile.textureSnapshot != nullptr;
+}
+
 class CompositorGoldenTest : public ::testing::Test {
 protected:
   svg::Renderer renderer_;
@@ -551,7 +555,7 @@ TEST_F(CompositorGoldenTest, DraggingFilterGroupSubtreeEngagesFastPath) {
 
   const CompositorLayer* layer = compositor.findLayerForTest(entity);
   ASSERT_NE(layer, nullptr) << "filter group must be a layer root";
-  ASSERT_TRUE(layer->hasValidBitmap());
+  ASSERT_TRUE(layer->hasRenderablePayload());
   const std::optional<Transform2d> stampAfterWarm = layer->bitmapEntityFromWorldTransform();
   ASSERT_TRUE(stampAfterWarm.has_value());
 
@@ -564,7 +568,7 @@ TEST_F(CompositorGoldenTest, DraggingFilterGroupSubtreeEngagesFastPath) {
 
   const CompositorLayer* layerAfterDrag = compositor.findLayerForTest(entity);
   ASSERT_NE(layerAfterDrag, nullptr);
-  ASSERT_TRUE(layerAfterDrag->hasValidBitmap());
+  ASSERT_TRUE(layerAfterDrag->hasRenderablePayload());
 
   // Fast-path signal #1: the layer's rasterize-time stamp hasn't
   // moved. If it changed, `setBitmap` ran - slow path.
@@ -620,7 +624,7 @@ TEST_F(CompositorGoldenTest, FilterGroupRotationDragReusesCachedBitmapForLockste
 
   const CompositorLayer* warm = compositor.findLayerForTest(entity);
   ASSERT_NE(warm, nullptr);
-  ASSERT_TRUE(warm->hasValidBitmap());
+  ASSERT_TRUE(warm->hasRenderablePayload());
   const std::optional<Transform2d> stampAfterWarm = warm->bitmapEntityFromWorldTransform();
   ASSERT_TRUE(stampAfterWarm.has_value());
 
@@ -633,7 +637,7 @@ TEST_F(CompositorGoldenTest, FilterGroupRotationDragReusesCachedBitmapForLockste
 
   const CompositorLayer* afterDrag = compositor.findLayerForTest(entity);
   ASSERT_NE(afterDrag, nullptr);
-  ASSERT_TRUE(afterDrag->hasValidBitmap());
+  ASSERT_TRUE(afterDrag->hasRenderablePayload());
 
   // The cached filtered bitmap must be reused (stamp unchanged) - not re-filtered.
   const std::optional<Transform2d> stampAfterDrag = afterDrag->bitmapEntityFromWorldTransform();
@@ -677,7 +681,7 @@ TEST_F(CompositorGoldenTest, TranslationDragEngagesFastPathAtMultipleCanvasScale
 
     const CompositorLayer* layer = compositor.findLayerForTest(entity);
     ASSERT_NE(layer, nullptr);
-    ASSERT_TRUE(layer->hasValidBitmap()) << "post-warm layer bitmap should be valid";
+    ASSERT_TRUE(layer->hasRenderablePayload()) << "post-warm layer payload should be valid";
     const std::optional<Transform2d> stampAfterWarm = layer->bitmapEntityFromWorldTransform();
     ASSERT_TRUE(stampAfterWarm.has_value());
 
@@ -687,7 +691,7 @@ TEST_F(CompositorGoldenTest, TranslationDragEngagesFastPathAtMultipleCanvasScale
 
     const CompositorLayer* layerAfterDrag = compositor.findLayerForTest(entity);
     ASSERT_NE(layerAfterDrag, nullptr);
-    ASSERT_TRUE(layerAfterDrag->hasValidBitmap());
+    ASSERT_TRUE(layerAfterDrag->hasRenderablePayload());
 
     // The fast-path signal: the layer's `bitmapEntityFromWorldTransform`
     // MUST be identical to the warmed stamp (no re-rasterize). If it
@@ -1578,12 +1582,15 @@ TEST_F(CompositorGoldenTest, DragTargetOnlySnapshotKeepsNonDragTileMetadata) {
     EXPECT_EQ(partial.isDragTarget, full.isDragTarget);
     if (partial.isDragTarget) {
       sawDragTargetBitmap = true;
-      EXPECT_FALSE(partial.bitmap.empty());
+      EXPECT_TRUE(HasTilePayload(partial));
     } else {
       sawNonDragMetadataOnlyTile = true;
       EXPECT_TRUE(partial.bitmap.empty())
           << "non-drag tile " << partial.tileId
           << " should keep metadata without forcing a pixel payload";
+      EXPECT_EQ(partial.textureSnapshot, nullptr)
+          << "non-drag tile " << partial.tileId
+          << " should keep metadata without forcing a texture payload";
       EXPECT_GT(partial.bitmapDims.x, 0);
       EXPECT_GT(partial.bitmapDims.y, 0);
     }
@@ -1621,7 +1628,7 @@ TEST_F(CompositorGoldenTest, SelectionToActiveDragDoesNotAdvanceUnchangedTileGen
   std::unordered_map<uint64_t, uint64_t> preDragRetainedGenerations;
   std::unordered_set<uint64_t> preDragImmediateTileIds;
   for (const CompositorTile& tile : preDragTiles) {
-    ASSERT_FALSE(tile.bitmap.empty()) << "prewarmed tile " << tile.tileId << " has no pixels";
+    ASSERT_TRUE(HasTilePayload(tile)) << "prewarmed tile " << tile.tileId << " has no payload";
     if (tile.immediate) {
       preDragImmediateTileIds.insert(tile.tileId);
       continue;
@@ -2091,7 +2098,7 @@ TEST_F(CompositorGoldenTest, SplitBitmapsInvalidateOnViewportResize) {
   auto smallTiles = compositor.snapshotTilesForUpload();
   std::unordered_map<uint64_t, uint64_t> generationsAtSmall;
   for (const auto& tile : smallTiles) {
-    if (!tile.isDragTarget && !tile.bitmap.empty()) {
+    if (!tile.isDragTarget && HasTilePayload(tile)) {
       generationsAtSmall[tile.tileId] = tile.generation;
     }
   }
@@ -2113,7 +2120,7 @@ TEST_F(CompositorGoldenTest, SplitBitmapsInvalidateOnViewportResize) {
   auto largeTiles = compositor.snapshotTilesForUpload();
   for (const auto& tile : largeTiles) {
     auto it = generationsAtSmall.find(tile.tileId);
-    if (it == generationsAtSmall.end() || tile.isDragTarget || tile.bitmap.empty()) {
+    if (it == generationsAtSmall.end() || tile.isDragTarget || !HasTilePayload(tile)) {
       continue;
     }
     EXPECT_NE(it->second, tile.generation)

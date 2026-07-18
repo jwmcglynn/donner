@@ -143,8 +143,20 @@ public:
   /// Returns the last entity in the layer's render range.
   [[nodiscard]] Entity lastEntity() const { return lastEntity_; }
 
-  /// Returns the cached bitmap for this layer. Empty if not yet rasterized.
-  [[nodiscard]] const RendererBitmap& bitmap() const { return bitmap_; }
+  /**
+   * Returns a CPU-readable bitmap for this layer.
+   *
+   * GPU-backed layers perform and cache an explicit texture readback on first access. Presentation
+   * code should use \ref textureSnapshot instead so normal frames remain readback-free.
+   *
+   * @return Cached or read-back bitmap, or an empty bitmap if the layer has no payload.
+   */
+  [[nodiscard]] const RendererBitmap& bitmap() const {
+    if (bitmap_.empty() && textureSnapshot_ != nullptr) {
+      bitmap_ = textureSnapshot_->takeSnapshot();
+    }
+    return bitmap_;
+  }
 
   /// Returns the cached GPU texture for this layer, if the renderer produced one.
   [[nodiscard]] const std::shared_ptr<const RendererTextureSnapshot>& textureSnapshot() const {
@@ -347,7 +359,7 @@ private:
   Entity entity_;
   Entity firstEntity_;
   Entity lastEntity_;
-  RendererBitmap bitmap_;
+  mutable RendererBitmap bitmap_;
   std::shared_ptr<const RendererTextureSnapshot> textureSnapshot_;
   std::optional<Transform2d> bitmapEntityFromWorldTransform_;
   /// `canvasFromBitmap` transform applied during blitting - see the

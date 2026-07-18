@@ -339,6 +339,9 @@ TEST_F(RendererGeodeTest, TakeTextureSnapshotReturnsTextureAndDetachesTarget) {
   const auto* geodeTexture = static_cast<const RendererGeodeTextureSnapshot*>(texture.get());
   EXPECT_TRUE(static_cast<bool>(geodeTexture->texture()));
   EXPECT_TRUE(static_cast<bool>(geodeTexture->textureView()));
+  const RendererBitmap textureBitmap = texture->takeSnapshot();
+  ASSERT_FALSE(textureBitmap.empty());
+  EXPECT_THAT(pixelAt(textureBitmap, 8, 8), RgbaEq(255, 0, 0, 255));
 
   EXPECT_TRUE(renderer.takeSnapshot().empty()) << "Texture export detaches the internal target so "
                                                   "presentation cannot be overwritten by readback";
@@ -2177,7 +2180,6 @@ TEST_F(RendererGeodeTest, FilterAppliedBeforeClipPathSvgRenderingOrder) {
   EXPECT_THAT(outside, IsTransparent()) << "Outside the clip must be transparent - the "
                                            "filter result is clipped on composite";
 }
-
 
 // A GeodeDevice that fails to initialize (e.g. no Vulkan adapter on a GPU-less
 // worker) leaves RendererGeode in \"no-op mode\". Every rendering entry point

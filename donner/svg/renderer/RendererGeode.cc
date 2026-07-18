@@ -4232,14 +4232,16 @@ std::shared_ptr<const RendererTextureSnapshot> RendererGeode::takeTextureSnapsho
                                                         dimensions, impl_->textureFormat);
 }
 
-RendererBitmap RendererGeode::takeSnapshot() const {
+static RendererBitmap ReadGeodeTextureSnapshot(const std::shared_ptr<geode::GeodeDevice>& device,
+                                               const wgpu::Texture& texture, Vector2i dimensions,
+                                               wgpu::TextureFormat format) {
   RendererBitmap bitmap;
-  if (!impl_->device || !impl_->target || impl_->pixelWidth <= 0 || impl_->pixelHeight <= 0) {
+  if (!device || !texture || dimensions.x <= 0 || dimensions.y <= 0) {
     return bitmap;
   }
 
-  const uint32_t width = static_cast<uint32_t>(impl_->pixelWidth);
-  const uint32_t height = static_cast<uint32_t>(impl_->pixelHeight);
+  const uint32_t width = static_cast<uint32_t>(dimensions.x);
+  const uint32_t height = static_cast<uint32_t>(dimensions.y);
   const uint32_t bytesPerRow = alignBytesPerRow(width * 4u);
 
   // Allocate readback buffer.
@@ -4247,13 +4249,13 @@ RendererBitmap RendererGeode::takeSnapshot() const {
   bd.label = wgpuLabel("RendererGeodeReadback");
   bd.size = static_cast<uint64_t>(bytesPerRow) * static_cast<uint64_t>(height);
   bd.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
-  geode::ScopedWgpuHandle<wgpu::Buffer> readback(impl_->device->device().createBuffer(bd));
-  impl_->device->countBuffer();
+  geode::ScopedWgpuHandle<wgpu::Buffer> readback(device->device().createBuffer(bd));
+  device->countBuffer();
 
   // Copy texture → readback buffer.
-  geode::ScopedWgpuHandle<wgpu::CommandEncoder> enc(impl_->device->device().createCommandEncoder());
+  geode::ScopedWgpuHandle<wgpu::CommandEncoder> enc(device->device().createCommandEncoder());
   wgpu::TexelCopyTextureInfo src = {};
-  src.texture = impl_->target;
+  src.texture = texture;
   src.mipLevel = 0;
   src.origin = {0, 0, 0};
   wgpu::TexelCopyBufferInfo dst = {};
@@ -4264,8 +4266,8 @@ RendererBitmap RendererGeode::takeSnapshot() const {
   enc.get().copyTextureToBuffer(src, dst, copySize);
 
   geode::ScopedWgpuHandle<wgpu::CommandBuffer> cmd(enc.get().finish());
-  impl_->device->queue().submit(1, &cmd.get());
-  impl_->device->countSubmit();
+  device->queue().submit(1, &cmd.get());
+  device->countSubmit();
 
   // Map for read. wgpu-native's C++ wrapper (`webgpu.hpp`) only exposes the
   // `BufferMapCallbackInfo` form of `mapAsync`, which takes a raw C function
@@ -4299,7 +4301,7 @@ RendererBitmap RendererGeode::takeSnapshot() const {
   readback.get().mapAsync(wgpu::MapMode::Read, 0, bd.size, mapCb);
   int pollIter = 0;
   while (!mapState.done) {
-    impl_->device->device().poll(true, nullptr);
+    device->device().poll(true, nullptr);
     ++pollIter;
     if (pollIter > 2000) {  // 2000 * 5ms = 10s bail-out.
       break;
@@ -4323,7 +4325,7 @@ RendererBitmap RendererGeode::takeSnapshot() const {
   bitmap.rowBytes = static_cast<size_t>(width) * 4u;
   bitmap.alphaType = AlphaType::Unpremultiplied;
   bitmap.pixels.resize(bitmap.rowBytes * height);
-  const bool sourceIsBgra = IsBgraTextureFormat(impl_->textureFormat);
+  const bool sourceIsBgra = IsBgraTextureFormat(format);
   for (uint32_t y = 0; y < height; ++y) {
     const uint8_t* srcRow = mapped + static_cast<size_t>(y) * bytesPerRow;
     uint8_t* dstRow = bitmap.pixels.data() + static_cast<size_t>(y) * bitmap.rowBytes;
@@ -4357,6 +4359,19 @@ RendererBitmap RendererGeode::takeSnapshot() const {
   }
   readback.get().unmap();
   return bitmap;
+}
+
+RendererBitmap RendererGeodeTextureSnapshot::takeSnapshot() const {
+  return ReadGeodeTextureSnapshot(device_, texture_.get(), dimensions_, format_);
+}
+
+RendererBitmap RendererGeode::takeSnapshot() const {
+  if (!impl_->device || !impl_->target) {
+    return RendererBitmap{};
+  }
+  return ReadGeodeTextureSnapshot(impl_->device, impl_->target,
+                                  Vector2i(impl_->pixelWidth, impl_->pixelHeight),
+                                  impl_->textureFormat);
 }
 
 }  // namespace donner::svg

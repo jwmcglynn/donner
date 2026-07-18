@@ -1853,7 +1853,11 @@ size_t CompositorController::totalBitmapMemory() const {
     total += static_cast<size_t>(dims.x) * static_cast<size_t>(dims.y) * 4u;
   }
   for (const auto& layer : layers_) {
-    total += layer.bitmap().pixels.size();
+    // `bitmap()` may explicitly read a texture snapshot back to the CPU for diagnostics. Memory
+    // accounting must remain observational and must not create a second copy of every GPU layer.
+    if (layer.hasValidBitmap()) {
+      total += layer.bitmap().pixels.size();
+    }
     if (layer.textureSnapshot() != nullptr) {
       const Vector2i dims = layer.textureSnapshot()->dimensions();
       total += static_cast<size_t>(dims.x) * static_cast<size_t>(dims.y) * 4u;

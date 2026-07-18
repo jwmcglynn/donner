@@ -60,6 +60,7 @@ public:
   }
   [[nodiscard]] Vector2i dimensions() const override { return dimensions_; }
   [[nodiscard]] AlphaType alphaType() const override { return AlphaType::Premultiplied; }
+  [[nodiscard]] RendererBitmap takeSnapshot() const override;
 
   /// Resolved single-sample WebGPU texture.
   [[nodiscard]] const wgpu::Texture& texture() const { return texture_.get(); }

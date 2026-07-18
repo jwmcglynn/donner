@@ -477,7 +477,14 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
       }
     }
     staticSpanPlans_[i] = spanPlan;
-    staticSegmentDirty_[i] = spanPlan.mode == StaticSpanMode::Immediate;
+    // Immediate spans were introduced to avoid retaining and re-uploading cheap CPU bitmaps.
+    // A texture snapshot has neither cost: it is already resident on the presentation device and
+    // remains valid until content is explicitly invalidated. Re-rendering it every frame would
+    // create a different snapshot identity even when the pixels are unchanged, forcing a needless
+    // generation bump and GPU cache replacement. Keep texture-backed spans until a document,
+    // transform, viewport, or topology change marks the slot dirty again.
+    staticSegmentDirty_[i] = spanPlan.mode == StaticSpanMode::Immediate &&
+                             !renderer().requiresTextureSnapshotPresentation();
     // Bump the generation only when this re-rasterize actually produced
     // different content (or moved the segment on the canvas). An
     // `Immediate` segment redraws every frame; if its entities and the
@@ -817,12 +824,12 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
     return true;
   };
 
-  const auto drawPayload = [this](const RendererBitmap& bitmap,
+  const auto drawPayload = [this](const RendererBitmap* bitmap,
                                   const std::shared_ptr<const RendererTextureSnapshot>& texture,
                                   const Transform2d& canvasFromPayload) {
     const Vector2i payloadDims =
-        HasPublicTileBitmap(bitmap)
-            ? bitmap.dimensions
+        bitmap != nullptr && HasPublicTileBitmap(*bitmap)
+            ? bitmap->dimensions
             : (texture != nullptr ? texture->dimensions() : Vector2i::Zero());
     if (payloadDims.x <= 0 || payloadDims.y <= 0) {
       return;
@@ -858,12 +865,12 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
     if (renderer().requiresTextureSnapshotPresentation()) {
       return;
     }
-    if (HasPublicTileBitmap(bitmap)) {
+    if (bitmap != nullptr && HasPublicTileBitmap(*bitmap)) {
       // drawBitmap consumes the premultiplied raster directly. Routing this
       // through the unpremultiplied ImageResource contract cost two full
       // pixel-buffer conversions plus three allocations per layer/segment per
       // composed frame - the dominant compose cost on drag-heavy replays.
-      renderer().drawBitmap(bitmap, params);
+      renderer().drawBitmap(*bitmap, params);
     }
   };
 
@@ -894,7 +901,8 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
     } else {
       canvasFromBitmap = Transform2d::Translate(offset) * canvasFromBitmap;
     }
-    drawPayload(layer.bitmap(), layer.textureSnapshot(), canvasFromBitmap);
+    const RendererBitmap* bitmap = layer.hasValidBitmap() ? &layer.bitmap() : nullptr;
+    drawPayload(bitmap, layer.textureSnapshot(), canvasFromBitmap);
   };
 
   const auto drawSegment = [&](size_t segmentIndex) {
@@ -908,7 +916,7 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
     const std::shared_ptr<const RendererTextureSnapshot> segmentTexture =
         segmentIndex < staticSegmentTextures_.size() ? staticSegmentTextures_[segmentIndex]
                                                      : nullptr;
-    drawPayload(staticSegments_[segmentIndex], segmentTexture,
+    drawPayload(&staticSegments_[segmentIndex], segmentTexture,
                 Transform2d::Translate(segmentOffset));
   };
 

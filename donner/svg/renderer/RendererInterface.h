@@ -100,6 +100,17 @@ public:
 
   /// Alpha interpretation of the texture contents.
   [[nodiscard]] virtual AlphaType alphaType() const = 0;
+
+  /**
+   * Capture a CPU-readable copy of this texture.
+   *
+   * Backends that cannot read texture snapshots return an empty bitmap. The operation may submit
+   * GPU work and block for completion, so presentation code should keep using the texture directly
+   * and reserve readback for explicit capture, diagnostics, and tests.
+   *
+   * @return CPU-readable bitmap, or an empty bitmap when readback is unsupported.
+   */
+  [[nodiscard]] virtual RendererBitmap takeSnapshot() const { return RendererBitmap{}; }
 };
 
 /**
