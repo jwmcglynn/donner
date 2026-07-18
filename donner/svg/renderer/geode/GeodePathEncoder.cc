@@ -196,10 +196,21 @@ void bandCurves(const std::vector<CurveWithRange>& allCurves, const Box2d& bound
   outCurves.reserve(outCurves.size() + allCurves.size() * 2);
 
   for (uint16_t b = 0; b < bandCount; ++b) {
-    const auto& indices = bandCurveIndices[b];
+    auto& indices = bandCurveIndices[b];
     if (indices.empty()) {
       continue;  // Skip empty bands entirely.
     }
+
+    // The fragment shader scans a positive ray. Descending cross-axis maxima let it
+    // stop as soon as a curve's conservative control-hull maximum lies more than
+    // half a pixel behind the sample, because every remaining curve is no larger.
+    std::stable_sort(indices.begin(), indices.end(), [&](size_t lhs, size_t rhs) {
+      const CurveRange& lhsRange = allCurves[lhs].range;
+      const CurveRange& rhsRange = allCurves[rhs].range;
+      const float lhsMax = byY ? lhsRange.xMax : lhsRange.yMax;
+      const float rhsMax = byY ? rhsRange.xMax : rhsRange.yMax;
+      return lhsMax > rhsMax;
+    });
 
     // Record the dense-grid cell → packed-band-slot mapping for O(1) shader lookup.
     outGrid[b] = static_cast<uint32_t>(outBands.size());
