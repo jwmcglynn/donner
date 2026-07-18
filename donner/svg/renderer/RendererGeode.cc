@@ -1647,12 +1647,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink {
   }
 
   /// Capture the exact post-vertex Slug triangles at the GPU submission
-  /// boundary. This reproduces `slug_fill.wgsl`'s normal-based dynamic
-  /// dilation before mapping the vertices into root-target device pixels.
+  /// boundary. This reproduces `slug_fill.wgsl`'s half-pixel miter dilation
+  /// before mapping the vertices into root-target device pixels.
   void recordSlugDraw(const geode::EncodedPath& encoded, const Transform2d& targetFromPath,
                       const Transform2d& rootFromTarget,
                       std::span<const float> instanceTransforms) override {
-    if (!debugGeometryOverlay || !patternStack.empty() || encoded.quadVertices.size() < 3) {
+    if (!debugGeometryOverlay || !patternStack.empty() || encoded.boundingVertexCount < 3u) {
       return;
     }
 
@@ -1675,21 +1675,48 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink {
       instance.data[5] = packed[6];
       return instance;
     };
-
     for (size_t instanceIndex = 0; instanceIndex < instanceCount; ++instanceIndex) {
       const Transform2d instance = instanceAt(instanceIndex);
-      std::vector<GeometryDebugEdge> submissionEdges;
-      submissionEdges.reserve(encoded.quadVertices.size());
-      const auto postVertexPosition = [&](const geode::EncodedPath::Vertex& vertex) {
-        const Vector2d normal(vertex.normalX, vertex.normalY);
-        const Vector2d targetNormal =
-            targetFromPath.transformVector(instance.transformVector(normal));
-        const double dilation = 1.0 / std::max(targetNormal.length(), 0.001);
-        const Vector2d dilatedPathPosition = Vector2d(vertex.posX, vertex.posY) + normal * dilation;
-        const Vector2d targetPosition =
-            targetFromPath.transformPosition(instance.transformPosition(dilatedPathPosition));
-        return rootFromTarget.transformPosition(targetPosition);
+      const double determinant = targetFromPath.determinant() * instance.determinant();
+      if (std::abs(determinant) < 1e-8) {
+        continue;
+      }
+
+      std::vector<Vector2d> dilatedVertices;
+      dilatedVertices.reserve(encoded.boundingVertexCount);
+      const auto targetPosition = [&](uint32_t index) {
+        const auto& vertex = encoded.boundingVertices[index];
+        return targetFromPath.transformPosition(
+            instance.transformPosition(Vector2d(vertex.x, vertex.y)));
       };
+      const double orientation = determinant > 0.0 ? 1.0 : -1.0;
+      for (uint32_t index = 0; index < encoded.boundingVertexCount; ++index) {
+        const uint32_t previousIndex =
+            (index + encoded.boundingVertexCount - 1u) % encoded.boundingVertexCount;
+        const uint32_t nextIndex = (index + 1u) % encoded.boundingVertexCount;
+        const Vector2d previous = targetPosition(previousIndex);
+        const Vector2d position = targetPosition(index);
+        const Vector2d next = targetPosition(nextIndex);
+        const Vector2d previousDelta = position - previous;
+        const Vector2d nextDelta = next - position;
+        const double previousLength = previousDelta.length();
+        const double nextLength = nextDelta.length();
+        if (previousLength <= 1e-8 || nextLength <= 1e-8) {
+          dilatedVertices.push_back(rootFromTarget.transformPosition(position));
+          continue;
+        }
+
+        const Vector2d previousEdge = previousDelta / previousLength;
+        const Vector2d nextEdge = nextDelta / nextLength;
+        const Vector2d previousNormal(orientation * previousEdge.y, -orientation * previousEdge.x);
+        const Vector2d nextNormal(orientation * nextEdge.y, -orientation * nextEdge.x);
+        const double miterDenominator = std::max(1.0 + previousNormal.dot(nextNormal), 1e-6);
+        const Vector2d pixelDelta = (previousNormal + nextNormal) * (0.5 / miterDenominator);
+        dilatedVertices.push_back(rootFromTarget.transformPosition(position + pixelDelta));
+      }
+
+      std::vector<GeometryDebugEdge> submissionEdges;
+      submissionEdges.reserve(encoded.boundingDrawVertexCount());
       const auto addUniqueEdge = [&](const Vector2d& a, const Vector2d& b) {
         const bool duplicate = std::ranges::any_of(submissionEdges, [&](const auto& edge) {
           return (edge.a == a && edge.b == b) || (edge.a == b && edge.b == a);
@@ -1699,14 +1726,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink {
         }
       };
 
-      for (size_t triangleStart = 0; triangleStart + 2 < encoded.quadVertices.size();
-           triangleStart += 3) {
-        const Vector2d p0 = postVertexPosition(encoded.quadVertices[triangleStart]);
-        const Vector2d p1 = postVertexPosition(encoded.quadVertices[triangleStart + 1]);
-        const Vector2d p2 = postVertexPosition(encoded.quadVertices[triangleStart + 2]);
-        addUniqueEdge(p0, p1);
-        addUniqueEdge(p1, p2);
-        addUniqueEdge(p2, p0);
+      for (uint32_t triangle = 0; triangle + 2u < encoded.boundingVertexCount; ++triangle) {
+        addUniqueEdge(dilatedVertices[0], dilatedVertices[triangle + 1u]);
+        addUniqueEdge(dilatedVertices[triangle + 1u], dilatedVertices[triangle + 2u]);
+        addUniqueEdge(dilatedVertices[triangle + 2u], dilatedVertices[0]);
       }
       geometryDebugEdges.insert(geometryDebugEdges.end(), submissionEdges.begin(),
                                 submissionEdges.end());

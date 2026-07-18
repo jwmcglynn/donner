@@ -110,28 +110,6 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
   // ----- Shader module -----
   ScopedWgpuHandle<wgpu::ShaderModule> shader(createSlugFillShader(device));
 
-  // ----- Vertex buffer layout -----
-  // Matches EncodedPath::Vertex: pos (vec2f) + normal (vec2f) + bandIndex (u32)
-  // = 5 × 4 bytes = 20 bytes per vertex.
-  wgpu::VertexAttribute vertexAttribs[3] = {};
-  vertexAttribs[0].format = wgpu::VertexFormat::Float32x2;
-  vertexAttribs[0].offset = 0;
-  vertexAttribs[0].shaderLocation = 0;
-
-  vertexAttribs[1].format = wgpu::VertexFormat::Float32x2;
-  vertexAttribs[1].offset = 8;
-  vertexAttribs[1].shaderLocation = 1;
-
-  vertexAttribs[2].format = wgpu::VertexFormat::Uint32;
-  vertexAttribs[2].offset = 16;
-  vertexAttribs[2].shaderLocation = 2;
-
-  wgpu::VertexBufferLayout vbLayout = {};
-  vbLayout.arrayStride = 20;
-  vbLayout.stepMode = wgpu::VertexStepMode::Vertex;
-  vbLayout.attributeCount = 3;
-  vbLayout.attributes = vertexAttribs;
-
   // ----- Fragment / blending -----
   wgpu::BlendState blend = {};
   // Standard premultiplied-alpha source-over blending.
@@ -160,8 +138,8 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
 
   rpDesc.vertex.module = shader.get();
   rpDesc.vertex.entryPoint = wgpuLabel("vs_main");
-  rpDesc.vertex.bufferCount = 1;
-  rpDesc.vertex.buffers = &vbLayout;
+  rpDesc.vertex.bufferCount = 0;
+  rpDesc.vertex.buffers = nullptr;
 
   rpDesc.primitive.topology = wgpu::PrimitiveTopology::TriangleList;
   rpDesc.primitive.cullMode = wgpu::CullMode::None;
@@ -236,26 +214,6 @@ GeodeGradientPipeline::GeodeGradientPipeline(const wgpu::Device& device,
 
   ScopedWgpuHandle<wgpu::ShaderModule> shader(createSlugGradientShader(device));
 
-  // Same vertex buffer layout as the solid-fill pipeline.
-  wgpu::VertexAttribute vertexAttribs[3] = {};
-  vertexAttribs[0].format = wgpu::VertexFormat::Float32x2;
-  vertexAttribs[0].offset = 0;
-  vertexAttribs[0].shaderLocation = 0;
-
-  vertexAttribs[1].format = wgpu::VertexFormat::Float32x2;
-  vertexAttribs[1].offset = 8;
-  vertexAttribs[1].shaderLocation = 1;
-
-  vertexAttribs[2].format = wgpu::VertexFormat::Uint32;
-  vertexAttribs[2].offset = 16;
-  vertexAttribs[2].shaderLocation = 2;
-
-  wgpu::VertexBufferLayout vbLayout = {};
-  vbLayout.arrayStride = 20;
-  vbLayout.stepMode = wgpu::VertexStepMode::Vertex;
-  vbLayout.attributeCount = 3;
-  vbLayout.attributes = vertexAttribs;
-
   wgpu::BlendState blend = {};
   blend.color.srcFactor = wgpu::BlendFactor::One;
   blend.color.dstFactor = wgpu::BlendFactor::OneMinusSrcAlpha;
@@ -281,8 +239,8 @@ GeodeGradientPipeline::GeodeGradientPipeline(const wgpu::Device& device,
 
   rpDesc.vertex.module = shader.get();
   rpDesc.vertex.entryPoint = wgpuLabel("vs_main");
-  rpDesc.vertex.bufferCount = 1;
-  rpDesc.vertex.buffers = &vbLayout;
+  rpDesc.vertex.bufferCount = 0;
+  rpDesc.vertex.buffers = nullptr;
 
   rpDesc.primitive.topology = wgpu::PrimitiveTopology::TriangleList;
   rpDesc.primitive.cullMode = wgpu::CullMode::None;
@@ -353,27 +311,6 @@ GeodeMaskPipeline::GeodeMaskPipeline(const wgpu::Device& device) {
 
   ScopedWgpuHandle<wgpu::ShaderModule> shader(createSlugMaskShader(device));
 
-  // Same vertex buffer layout as the fill pipelines: pos (vec2f) +
-  // normal (vec2f) + bandIndex (u32) = 20 bytes per vertex.
-  wgpu::VertexAttribute vertexAttribs[3] = {};
-  vertexAttribs[0].format = wgpu::VertexFormat::Float32x2;
-  vertexAttribs[0].offset = 0;
-  vertexAttribs[0].shaderLocation = 0;
-
-  vertexAttribs[1].format = wgpu::VertexFormat::Float32x2;
-  vertexAttribs[1].offset = 8;
-  vertexAttribs[1].shaderLocation = 1;
-
-  vertexAttribs[2].format = wgpu::VertexFormat::Uint32;
-  vertexAttribs[2].offset = 16;
-  vertexAttribs[2].shaderLocation = 2;
-
-  wgpu::VertexBufferLayout vbLayout = {};
-  vbLayout.arrayStride = 20;
-  vbLayout.stepMode = wgpu::VertexStepMode::Vertex;
-  vbLayout.attributeCount = 3;
-  vbLayout.attributes = vertexAttribs;
-
   // Max-blend unions scalar analytic coverage from multiple clip paths.
   wgpu::BlendState blend = {};
   blend.color.srcFactor = wgpu::BlendFactor::One;
@@ -400,8 +337,8 @@ GeodeMaskPipeline::GeodeMaskPipeline(const wgpu::Device& device) {
 
   rpDesc.vertex.module = shader.get();
   rpDesc.vertex.entryPoint = wgpuLabel("vs_main");
-  rpDesc.vertex.bufferCount = 1;
-  rpDesc.vertex.buffers = &vbLayout;
+  rpDesc.vertex.bufferCount = 0;
+  rpDesc.vertex.buffers = nullptr;
 
   rpDesc.primitive.topology = wgpu::PrimitiveTopology::TriangleList;
   rpDesc.primitive.cullMode = wgpu::CullMode::None;

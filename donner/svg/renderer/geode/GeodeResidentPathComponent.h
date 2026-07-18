@@ -34,18 +34,18 @@ namespace donner::geode {
 
 /// GPU-resident geometry for one cached `EncodedPath` (a fill slot or a
 /// stroke slot). Owns a single combined-usage GPU buffer that holds the
-/// path's vertex quad, the eight analytic dual-ray SSBO regions, and the
-/// per-draw uniform block, plus the cached fill bind group. The buffer
+/// path's eight analytic dual-ray SSBO regions and per-draw uniform block, plus the cached fill
+/// bind group. Bounding vertices live in that uniform and are expanded from vertex_index, so the
+/// resident geometry needs no vertex buffer. The buffer
 /// and bind group are built once by `GeoEncoder` on first residence and
 /// reused every subsequent unchanged frame.
 ///
 /// Move-only (owns wgpu handles). Default-constructed slots are empty;
 /// `GeoEncoder::fillPathResident` populates them lazily.
 struct GeodeResidentSlot {
-  /// Combined Vertex|Storage|Uniform|CopyDst buffer. Layout (each region
+  /// Combined Storage|Uniform|CopyDst buffer. Layout (each region
   /// offset satisfies the binding's alignment requirement):
-  ///   [ vertex quad | bands | curves | hRefs | vBands | vCurves | vRefs |
-  ///     hGrid | vGrid | uniform ]
+  ///   [ bands | curves | hRefs | vBands | vCurves | vRefs | hGrid | vGrid | uniform ]
   ScopedWgpuHandle<wgpu::Buffer> buffer;
 
   /// Cached fill bind group. All fourteen bindings reference stable
@@ -64,7 +64,6 @@ struct GeodeResidentSlot {
     uint64_t size = 0;
   };
 
-  Region vertex;   ///< Vertex quad range (4-byte aligned offset).
   Region bands;    ///< Horizontal band SSBO (binding 1).
   Region curves;   ///< Horizontal curve SSBO (binding 2).
   Region hRefs;    ///< Horizontal curve-reference SSBO (binding 12).
@@ -75,7 +74,7 @@ struct GeodeResidentSlot {
   Region vGrid;    ///< Vertical band grid (binding 11).
   Region uniform;  ///< Per-draw uniform block (binding 0, 256-aligned).
 
-  uint32_t vertexCount = 0;  ///< Number of quad vertices (draw count).
+  uint32_t vertexCount = 0;  ///< Triangle-fan draw count generated from vertex_index.
 
   /// Frame index in which this slot was last drawn via the resident path.
   /// A slot's single uniform buffer + cached bind group can only serve ONE
@@ -114,7 +113,7 @@ struct GeodeResidentSlot {
   /// Bytes last written to the uniform region. A draw whose recomputed
   /// uniform matches this skips the `writeBuffer` entirely (steady-state
   /// static frame => zero buffer writes); a camera/color change rewrites
-  /// only this 288-byte region and keeps the cached bind group.
+  /// only this 368-byte region and keeps the cached bind group.
   std::vector<uint8_t> lastUniform;
 
   /// Live-resident-bytes gauge, co-owned with `GeodeDevice` so the
@@ -134,7 +133,6 @@ struct GeodeResidentSlot {
       reset();
       buffer = std::move(other.buffer);
       bindGroup = std::move(other.bindGroup);
-      vertex = other.vertex;
       bands = other.bands;
       curves = other.curves;
       hRefs = other.hRefs;

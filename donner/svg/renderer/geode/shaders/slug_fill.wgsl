@@ -5,10 +5,10 @@
 //      curves, for the horizontal ray) AND vertical bands (X-monotonic curves,
 //      for the vertical ray). Dense band grids map a sample position to its
 //      band in O(1).
-//   2. A SINGLE bounding quad (2 triangles) is drawn per path. The vertex
-//      shader performs dynamic half-pixel dilation (the key Slug innovation)
-//      so the quad expands by exactly half a pixel in viewport space.
-//   3. Because each pixel is rasterized by exactly one fragment (one quad),
+//   2. One small convex bounding fan is drawn per path. The vertex shader performs
+//      dynamic half-pixel dilation so the enclosure expands by exactly half a pixel
+//      across each edge in viewport space.
+//   3. Because each pixel is rasterized by exactly one fragment (one convex fan),
 //      folded sampleCount=1 coverage composes correctly with no band-seam
 //      double-count (Blocker B is structurally impossible).
 //   4. The fragment shader casts a HORIZONTAL ray through the pixel's
@@ -66,6 +66,12 @@ struct Uniforms {
   // Four inward-facing half-planes in viewport-pixel space, one per polygon
   // edge. `plane.xyz = (nx, ny, c)` with `nx*x + ny*y + c >= 0` inside.
   clipPolygonPlanes: array<vec4f, 4>,
+  boundingVertexCount: u32,
+  _boundingPad0: u32,
+  _boundingPad1: u32,
+  _boundingPad2: u32,
+  // Two path-space vec2 vertices per vec4, up to eight vertices.
+  boundingVertices: array<vec4f, 4>,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -123,20 +129,62 @@ fn clip_mask_coverage(pixel_center: vec2f) -> f32 {
 // Vertex stage
 // ============================================================================
 
-struct VertexInput {
-  @location(0) pos: vec2f,
-  @location(1) normal: vec2f,
-  @location(2) bandIndex: u32,  // Unused for the analytic path (single quad).
-};
-
 struct VertexOutput {
   @builtin(position) clip_pos: vec4f,
   // Path-space sample position. Fragment shader casts both rays from here.
   @location(0) sample_pos: vec2f,
 };
 
+fn load_bounding_vertex(index: u32) -> vec2f {
+  let pair = uniforms.boundingVertices[index / 2u];
+  return select(pair.xy, pair.zw, (index & 1u) != 0u);
+}
+
+fn fan_polygon_index(vertex_index: u32) -> u32 {
+  let triangle = vertex_index / 3u;
+  let corner = vertex_index % 3u;
+  return select(triangle + corner, 0u, corner == 0u);
+}
+
+fn dilated_bounding_vertex(effective_mvp: mat4x4f, polygon_index: u32) -> vec2f {
+  let count = uniforms.boundingVertexCount;
+  let previous_index = (polygon_index + count - 1u) % count;
+  let next_index = (polygon_index + 1u) % count;
+  let previous = load_bounding_vertex(previous_index);
+  let position = load_bounding_vertex(polygon_index);
+  let next = load_bounding_vertex(next_index);
+
+  // Work in viewport pixels, including WebGPU's Y flip. Intersect the two adjacent edge
+  // half-planes after moving each outward by half a pixel, then map that miter back to path
+  // space so the fragment shader's analytic sample coordinates remain exact.
+  let pixel_scale = vec2f(uniforms.viewport.x * 0.5, -uniforms.viewport.y * 0.5);
+  let origin_pixel = (effective_mvp * vec4f(0.0, 0.0, 0.0, 1.0)).xy * pixel_scale;
+  let x_axis_pixel =
+    (effective_mvp * vec4f(1.0, 0.0, 0.0, 1.0)).xy * pixel_scale - origin_pixel;
+  let y_axis_pixel =
+    (effective_mvp * vec4f(0.0, 1.0, 0.0, 1.0)).xy * pixel_scale - origin_pixel;
+  let to_pixel = mat2x2f(x_axis_pixel, y_axis_pixel);
+  let determinant = x_axis_pixel.x * y_axis_pixel.y - x_axis_pixel.y * y_axis_pixel.x;
+  if (abs(determinant) < 1e-8) {
+    return position;
+  }
+  let previous_edge = normalize(to_pixel * (position - previous));
+  let next_edge = normalize(to_pixel * (next - position));
+
+  let orientation = select(-1.0, 1.0, determinant > 0.0);
+  let previous_normal = orientation * vec2f(previous_edge.y, -previous_edge.x);
+  let next_normal = orientation * vec2f(next_edge.y, -next_edge.x);
+  let miter_denominator = max(1.0 + dot(previous_normal, next_normal), 1e-6);
+  let pixel_delta = 0.5 * (previous_normal + next_normal) / miter_denominator;
+  let path_delta = vec2f(y_axis_pixel.y * pixel_delta.x - y_axis_pixel.x * pixel_delta.y,
+                         -x_axis_pixel.y * pixel_delta.x + x_axis_pixel.x * pixel_delta.y) /
+                   determinant;
+  return position + path_delta;
+}
+
 @vertex
-fn vs_main(@builtin(instance_index) instance_index: u32, in: VertexInput) -> VertexOutput {
+fn vs_main(@builtin(vertex_index) vertex_index: u32,
+           @builtin(instance_index) instance_index: u32) -> VertexOutput {
   let xf = instanceTransforms[instance_index];
   let instance_mat = mat4x4f(
     vec4f(xf.row0.x, xf.row1.x, 0.0, 0.0),
@@ -146,14 +194,8 @@ fn vs_main(@builtin(instance_index) instance_index: u32, in: VertexInput) -> Ver
   );
   let effective_mvp = uniforms.mvp * instance_mat;
 
-  // Dynamic half-pixel dilation: expand the quad by exactly half a pixel in
-  // viewport space along the outward normal.
-  let world_normal = (effective_mvp * vec4f(in.normal, 0.0, 0.0)).xy;
-  let viewport_normal = world_normal * uniforms.viewport * 0.5;
-  let viewport_len = length(viewport_normal);
-  let d = 1.0 / max(viewport_len, 0.001);
-
-  let dilated = in.pos + in.normal * d;
+  let polygon_index = fan_polygon_index(vertex_index);
+  let dilated = dilated_bounding_vertex(effective_mvp, polygon_index);
 
   var out: VertexOutput;
   out.clip_pos = effective_mvp * vec4f(dilated, 0.0, 1.0);

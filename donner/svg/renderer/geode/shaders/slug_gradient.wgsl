@@ -3,7 +3,7 @@
 // Parallel to slug_fill.wgsl (see that file for the full analytic-AA
 // commentary, 0041 §1/§8) but the fragment evaluates a linear/radial gradient
 // at the pixel center instead of a solid color, then folds the analytic
-// coverage into the premultiplied output. Single bounding quad + dense H/V
+// coverage into the premultiplied output. Single convex bounding fan + dense H/V
 // band grids → no band-seam double-count.
 
 // ============================================================================
@@ -47,6 +47,11 @@ struct GradientUniforms {
   _gridPad0: u32,
   _gridPad1: u32,
   clipPolygonPlanes: array<vec4f, 4>,
+  boundingVertexCount: u32,
+  _boundingPad0: u32,
+  _boundingPad1: u32,
+  _boundingPad2: u32,
+  boundingVertices: array<vec4f, 4>,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: GradientUniforms;
@@ -81,25 +86,55 @@ fn clip_mask_coverage(pixel_center: vec2f) -> f32 {
 // Vertex stage
 // ============================================================================
 
-struct VertexInput {
-  @location(0) pos: vec2f,
-  @location(1) normal: vec2f,
-  @location(2) bandIndex: u32,
-};
-
 struct VertexOutput {
   @builtin(position) clip_pos: vec4f,
   @location(0) sample_pos: vec2f,
 };
 
-@vertex
-fn vs_main(in: VertexInput) -> VertexOutput {
-  let world_normal = (uniforms.mvp * vec4f(in.normal, 0.0, 0.0)).xy;
-  let viewport_normal = world_normal * uniforms.viewport * 0.5;
-  let viewport_len = length(viewport_normal);
-  let d = 1.0 / max(viewport_len, 0.001);
+fn load_bounding_vertex(index: u32) -> vec2f {
+  let pair = uniforms.boundingVertices[index / 2u];
+  return select(pair.xy, pair.zw, (index & 1u) != 0u);
+}
 
-  let dilated = in.pos + in.normal * d;
+fn fan_polygon_index(vertex_index: u32) -> u32 {
+  let triangle = vertex_index / 3u;
+  let corner = vertex_index % 3u;
+  return select(triangle + corner, 0u, corner == 0u);
+}
+
+fn dilated_bounding_vertex(polygon_index: u32) -> vec2f {
+  let count = uniforms.boundingVertexCount;
+  let previous = load_bounding_vertex((polygon_index + count - 1u) % count);
+  let position = load_bounding_vertex(polygon_index);
+  let next = load_bounding_vertex((polygon_index + 1u) % count);
+  let pixel_scale = vec2f(uniforms.viewport.x * 0.5, -uniforms.viewport.y * 0.5);
+  let origin_pixel = (uniforms.mvp * vec4f(0.0, 0.0, 0.0, 1.0)).xy * pixel_scale;
+  let x_axis_pixel =
+    (uniforms.mvp * vec4f(1.0, 0.0, 0.0, 1.0)).xy * pixel_scale - origin_pixel;
+  let y_axis_pixel =
+    (uniforms.mvp * vec4f(0.0, 1.0, 0.0, 1.0)).xy * pixel_scale - origin_pixel;
+  let determinant = x_axis_pixel.x * y_axis_pixel.y - x_axis_pixel.y * y_axis_pixel.x;
+  if (abs(determinant) < 1e-8) {
+    return position;
+  }
+  let to_pixel = mat2x2f(x_axis_pixel, y_axis_pixel);
+  let previous_edge = normalize(to_pixel * (position - previous));
+  let next_edge = normalize(to_pixel * (next - position));
+  let orientation = select(-1.0, 1.0, determinant > 0.0);
+  let previous_normal = orientation * vec2f(previous_edge.y, -previous_edge.x);
+  let next_normal = orientation * vec2f(next_edge.y, -next_edge.x);
+  let miter_denominator = max(1.0 + dot(previous_normal, next_normal), 1e-6);
+  let pixel_delta = 0.5 * (previous_normal + next_normal) / miter_denominator;
+  let path_delta = vec2f(y_axis_pixel.y * pixel_delta.x - y_axis_pixel.x * pixel_delta.y,
+                         -x_axis_pixel.y * pixel_delta.x + x_axis_pixel.x * pixel_delta.y) /
+                   determinant;
+  return position + path_delta;
+}
+
+@vertex
+fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
+  let polygon_index = fan_polygon_index(vertex_index);
+  let dilated = dilated_bounding_vertex(polygon_index);
 
   var out: VertexOutput;
   out.clip_pos = uniforms.mvp * vec4f(dilated, 0.0, 1.0);

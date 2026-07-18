@@ -2,6 +2,7 @@
 /// @file
 /// CPU-side Slug band decomposition: converts a Path into GPU-ready band data.
 
+#include <array>
 #include <cstdint>
 #include <span>
 #include <vector>
@@ -26,8 +27,8 @@ namespace donner::geode {
  * - **Curves**: Canonical quadratic Bézier control points (3 × Vector2f per curve).
  * - **Curve references**: Compact per-band indexes into the canonical curve arrays.
  * - **Bands**: Compact offset/count pairs into the curve-reference arrays.
- * - **quadVertices**: A single bounding quad over the whole path (6 vertices = 2 triangles),
- *   with position, outward normal, and band index attributes for the vertex shader.
+ * - **Bounding polygon**: Up to eight convex vertices enclosing the path. The vertex shader
+ *   triangulates and dilates it from `vertex_index`, so no resident vertex buffer is required.
  */
 struct EncodedPath {
   /// A quadratic Bézier curve segment (3 control points) stored as floats for GPU consumption.
@@ -65,24 +66,25 @@ struct EncodedPath {
     uint32_t boundingGeometryVertexCount = 0;
   };
 
-  /// Vertex for the path bounding quad (input to the Slug vertex shader).
-  struct Vertex {
-    float posX, posY;        ///< Position in path space.
-    float normalX, normalY;  ///< Outward normal (for dynamic half-pixel dilation).
-    uint32_t bandIndex;      ///< Which band this vertex belongs to (unused by the dual-ray fill).
+  /// One path-space vertex in the convex bounding polygon.
+  struct BoundingPoint {
+    float x;
+    float y;
   };
+
+  static constexpr uint32_t kMaxBoundingVertices = 8u;
 
   std::vector<Curve> curves;           ///< Canonical horizontal (Y-monotonic) curves.
   std::vector<uint32_t> curveIndices;  ///< Per-band references into `curves`.
   std::vector<Band> bands;  ///< Horizontal band metadata (Y-strips), for the horizontal ray.
   Box2d pathBounds;         ///< Axis-aligned bounding box of the path.
 
-  /// Single bounding quad (6 verts) over the whole path, for the analytic dual-ray fill
-  /// shader (0041 §8.1). One quad per path means each pixel is rasterized by exactly one
-  /// fragment, so folded sampleCount=1 coverage composes correctly (no band-seam
-  /// double-count - Blocker B). `bandIndex` is unused (the fragment looks up both its
-  /// H- and V-band from `sample_pos` via the band grids).
-  std::vector<Vertex> quadVertices;
+  /// Small convex path enclosure, counter-clockwise in path space. The first vertex is the fan
+  /// origin; the vertex shader expands `(vertexCount - 2) * 3` triangle-list vertices from
+  /// `vertex_index`. The selected enclosure is either a support-bounds polygon or its AABB
+  /// fallback, so it always has 3 to `kMaxBoundingVertices` vertices for a nonempty path.
+  std::array<BoundingPoint, kMaxBoundingVertices> boundingVertices{};
+  uint32_t boundingVertexCount = 0;
 
   /// Vertical (X-monotonic) curve + band data, for the Slug **vertical ray** used by the
   /// dual-ray analytic coverage. These mirror `curves`/`bands`, but are split at X-extrema and
@@ -112,6 +114,11 @@ struct EncodedPath {
 
   EncodingStats stats;  ///< Encode diagnostics; does not affect rendering.
 
+  /// Triangle-list vertex count emitted by the vertex shader for the bounding fan.
+  uint32_t boundingDrawVertexCount() const {
+    return boundingVertexCount >= 3u ? (boundingVertexCount - 2u) * 3u : 0u;
+  }
+
   /// Returns true if the encoded path has no bands (empty or degenerate path).
   bool empty() const { return bands.empty(); }
 };
@@ -124,7 +131,7 @@ struct EncodedPath {
  * 2. Split curves at Y-monotone points (Path::toMonotonic)
  * 3. Compute path bounds and determine band count
  * 4. Assign curves to bands and sort
- * 5. Generate the whole-path bounding quad (6 vertices = 2 triangles)
+ * 5. Generate a small conservative whole-path bounding polygon
  *
  * The output EncodedPath contains all data needed to fill the path on the GPU.
  */
