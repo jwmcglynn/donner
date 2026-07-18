@@ -32,9 +32,6 @@ constexpr uint64_t alignUp(uint64_t value, uint64_t alignment) {
 // WebGPU binding offset alignment requirements for the per-draw arenas
 // (design doc 0030 Milestone 1).
 //
-// Vertex buffer: `setVertexBuffer(slot, buffer, offset, size)` requires
-// `offset` be a multiple of 4 (WebGPU spec §23.8).
-constexpr uint64_t kVertexOffsetAlignment = 4u;
 // Storage buffer bind-group offset: defaults to 256 across wgpu-native
 // backends (the spec-mandated floor for portability). Querying the
 // device's `minStorageBufferOffsetAlignment` would let us tighten this
@@ -97,8 +94,15 @@ struct alignas(16) Uniforms {
   // so the struct stays mat4x4-aligned and the WGSL side reads
   // `array<vec4f, 4>` directly.
   float clipPolygonPlanes[16];  // 224 .. 288 (4 edges × vec4)
+  // Up to eight path-space vertices, packed two vec2 values per vec4. The vertex shader
+  // triangulates this convex fan from vertex_index and applies its device-space AA halo.
+  uint32_t boundingVertexCount;   // 288 .. 292
+  uint32_t _boundingPad0;         // 292 .. 296
+  uint32_t _boundingPad1;         // 296 .. 300
+  uint32_t _boundingPad2;         // 300 .. 304
+  float boundingVertices[4 * 4];  // 304 .. 368
 };
-static_assert(sizeof(Uniforms) == 288, "Uniforms struct layout mismatch");
+static_assert(sizeof(Uniforms) == 368, "Uniforms struct layout mismatch");
 
 /// Build a column-major 4x4 matrix from an affine `Transform2d` and write it
 /// into the first 16 floats of the output array. Used for the `mvp` and
@@ -184,17 +188,31 @@ struct alignas(16) GradientUniforms {
   uint32_t antialias;       // 488 .. 492 - 0 = binary coverage, 1 = analytic AA
   uint32_t _clipPad2;       // 492 .. 496
   // Band-grid parameters (0041 §8.1), matching the WGSL `GradientUniforms`.
-  float gridYBase;              // 496 .. 500
-  float gridHStride;            // 500 .. 504
-  uint32_t gridHBandCount;      // 504 .. 508
-  float gridXBase;              // 508 .. 512
-  float gridVStride;            // 512 .. 516
-  uint32_t gridVBandCount;      // 516 .. 520
-  uint32_t _gridPad0;           // 520 .. 524
-  uint32_t _gridPad1;           // 524 .. 528
-  float clipPolygonPlanes[16];  // 528 .. 592
+  float gridYBase;                // 496 .. 500
+  float gridHStride;              // 500 .. 504
+  uint32_t gridHBandCount;        // 504 .. 508
+  float gridXBase;                // 508 .. 512
+  float gridVStride;              // 512 .. 516
+  uint32_t gridVBandCount;        // 516 .. 520
+  uint32_t _gridPad0;             // 520 .. 524
+  uint32_t _gridPad1;             // 524 .. 528
+  float clipPolygonPlanes[16];    // 528 .. 592
+  uint32_t boundingVertexCount;   // 592 .. 596
+  uint32_t _boundingPad0;         // 596 .. 600
+  uint32_t _boundingPad1;         // 600 .. 604
+  uint32_t _boundingPad2;         // 604 .. 608
+  float boundingVertices[4 * 4];  // 608 .. 672
 };
-static_assert(sizeof(GradientUniforms) == 592, "GradientUniforms struct layout mismatch");
+static_assert(sizeof(GradientUniforms) == 672, "GradientUniforms struct layout mismatch");
+
+template <typename UniformT>
+void writeBoundingPolygonUniforms(UniformT& uniforms, const EncodedPath& encoded) {
+  uniforms.boundingVertexCount = encoded.boundingVertexCount;
+  for (uint32_t i = 0; i < encoded.boundingVertexCount; ++i) {
+    uniforms.boundingVertices[i * 2u] = encoded.boundingVertices[i].x;
+    uniforms.boundingVertices[i * 2u + 1u] = encoded.boundingVertices[i].y;
+  }
+}
 
 /// Gradient kind values shared with `shaders/slug_gradient.wgsl`.
 constexpr uint32_t kGradientKindLinear = 0u;
@@ -233,7 +251,6 @@ struct GeoEncoder::Impl {
     wgpu::BufferUsage usage = wgpu::BufferUsage::CopyDst;
     const char* label = "GeodeArena";
   };
-  Arena vertexArena;
   Arena bandArena;
   Arena curveArena;
   Arena uniformArena;
@@ -273,7 +290,6 @@ struct GeoEncoder::Impl {
     pass.reset();
     maskPass.reset();
 
-    releaseArenaResources(vertexArena);
     releaseArenaResources(bandArena);
     releaseArenaResources(curveArena);
     releaseArenaResources(uniformArena);
@@ -388,7 +404,7 @@ struct GeoEncoder::Impl {
   /// `EncodedPath*` address to defend a resident slot against a missed
   /// invalidation (e.g. the in-place stroke-slot rebuild).
   static uint64_t residentFingerprint(const EncodedPath& e) {
-    uint64_t h = e.quadVertices.size();
+    uint64_t h = e.boundingVertexCount;
     h = h * 1000003u + e.bands.size();
     h = h * 1000003u + e.curves.size();
     h = h * 1000003u + e.curveIndices.size();
@@ -411,12 +427,9 @@ struct GeoEncoder::Impl {
     u.gridXBase = encoded.xBase;
     u.gridVStride = encoded.vStride;
     u.gridVBandCount = encoded.vBandCount;
+    writeBoundingPolygonUniforms(u, encoded);
 
     const wgpu::Device& dev = device->device();
-
-    const uint64_t vbSize = roundUp4(encoded.quadVertices.size() * sizeof(EncodedPath::Vertex));
-    const auto vbAlloc =
-        allocInArena(vertexArena, encoded.quadVertices.data(), vbSize, kVertexOffsetAlignment);
 
     const auto bandsAlloc = allocStorageOrDummy(bandArena, encoded.bands.data(),
                                                 encoded.bands.size() * sizeof(EncodedPath::Band));
@@ -488,9 +501,8 @@ struct GeoEncoder::Impl {
     wgpu::BindGroup bindGroup = transientResources.retain(dev.createBindGroup(bgDesc));
     device->countBindGroup();
 
-    pass.get().setVertexBuffer(0, vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
     pass.get().setBindGroup(0, bindGroup, 0, nullptr);
-    pass.get().draw(static_cast<uint32_t>(encoded.quadVertices.size()), 1, 0, 0);
+    pass.get().draw(encoded.boundingDrawVertexCount(), 1, 0, 0);
     device->countDraw();
   }
   // Direct-render texture. External code may sample or copy from it.
@@ -791,8 +803,6 @@ void GeoEncoder::finalizeImpl(GeoEncoder::Impl& impl) {
   // Configure per-draw arenas (bump-allocated GPU buffers, design
   // doc 0030 Milestone 1). They stay empty here; the first draw
   // triggers lazy growth to 64 KiB and doubles from there.
-  impl.vertexArena.usage = wgpu::BufferUsage::Vertex | wgpu::BufferUsage::CopyDst;
-  impl.vertexArena.label = "GeodeVertexArena";
   impl.bandArena.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
   impl.bandArena.label = "GeodeBandArena";
   impl.curveArena.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
@@ -1024,11 +1034,8 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
 
   const wgpu::Device& dev = impl_->device->device();
 
-  // Analytic dual-ray buffers (0041 §8): single quad + H/V bands/curves/grids.
-  const uint64_t vbSize = roundUp4(encoded.quadVertices.size() * sizeof(EncodedPath::Vertex));
-  const auto vbAlloc = impl_->allocInArena(impl_->vertexArena, encoded.quadVertices.data(), vbSize,
-                                           kVertexOffsetAlignment);
-
+  // Analytic dual-ray buffers (0041 §8): H/V bands, curves, references, and grids. The
+  // bounding fan is generated from vertex_index and uniform data.
   const auto bandsAlloc = impl_->allocStorageOrDummy(
       impl_->bandArena, encoded.bands.data(), encoded.bands.size() * sizeof(EncodedPath::Band));
   const auto curvesAlloc = impl_->allocStorageOrDummy(impl_->curveArena, encoded.curves.data(),
@@ -1052,20 +1059,25 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
   // `hasClipMask` field gates whether the fragment shader intersects with the
   // nested clip mask at binding 3 (nested `<clipPath>` references).
   struct alignas(16) MaskUniforms {
-    float mvp[16];            //  0 ..  64
-    float viewport[2];        // 64 ..  72
-    uint32_t fillRule;        // 72 ..  76
-    uint32_t hasClipMask;     // 76 ..  80
-    float gridYBase;          // 80 ..  84
-    float gridHStride;        // 84 ..  88
-    uint32_t gridHBandCount;  // 88 ..  92
-    float gridXBase;          // 92 ..  96
-    float gridVStride;        // 96 .. 100
-    uint32_t gridVBandCount;  // 100 .. 104
-    uint32_t antialias;       // 104 .. 108 - 0 = binary coverage, 1 = analytic AA
-    uint32_t _gridPad1;       // 108 .. 112
+    float mvp[16];                  //  0 ..  64
+    float viewport[2];              // 64 ..  72
+    uint32_t fillRule;              // 72 ..  76
+    uint32_t hasClipMask;           // 76 ..  80
+    float gridYBase;                // 80 ..  84
+    float gridHStride;              // 84 ..  88
+    uint32_t gridHBandCount;        // 88 ..  92
+    float gridXBase;                // 92 ..  96
+    float gridVStride;              // 96 .. 100
+    uint32_t gridVBandCount;        // 100 .. 104
+    uint32_t antialias;             // 104 .. 108 - 0 = binary coverage, 1 = analytic AA
+    uint32_t _gridPad1;             // 108 .. 112
+    uint32_t boundingVertexCount;   // 112 .. 116
+    uint32_t _boundingPad0;         // 116 .. 120
+    uint32_t _boundingPad1;         // 120 .. 124
+    uint32_t _boundingPad2;         // 124 .. 128
+    float boundingVertices[4 * 4];  // 128 .. 192
   };
-  static_assert(sizeof(MaskUniforms) == 112, "MaskUniforms layout mismatch");
+  static_assert(sizeof(MaskUniforms) == 192, "MaskUniforms layout mismatch");
 
   MaskUniforms u = {};
   impl_->buildMvp(u.mvp);
@@ -1080,6 +1092,7 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
   u.gridXBase = encoded.xBase;
   u.gridVStride = encoded.vStride;
   u.gridVBandCount = encoded.vBandCount;
+  writeBoundingPolygonUniforms(u, encoded);
 
   const auto uniAlloc =
       impl_->allocInArena(impl_->uniformArena, &u, sizeof(MaskUniforms), kUniformOffsetAlignment);
@@ -1134,9 +1147,8 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
   wgpu::BindGroup bindGroup = impl_->transientResources.retain(dev.createBindGroup(bgDesc));
   impl_->device->countBindGroup();
 
-  impl_->maskPass.get().setVertexBuffer(0, vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
   impl_->maskPass.get().setBindGroup(0, bindGroup, 0, nullptr);
-  impl_->maskPass.get().draw(static_cast<uint32_t>(encoded.quadVertices.size()), 1, 0, 0);
+  impl_->maskPass.get().draw(encoded.boundingDrawVertexCount(), 1, 0, 0);
   impl_->device->countDraw();
 }
 
@@ -1288,6 +1300,7 @@ void GeoEncoder::Impl::populateFillUniform(Uniforms& u, const EncodedPath& encod
   u.gridXBase = encoded.xBase;
   u.gridVStride = encoded.vStride;
   u.gridVBandCount = encoded.vBandCount;
+  writeBoundingPolygonUniforms(u, encoded);
 }
 
 void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const EncodedPath& encoded) {
@@ -1300,7 +1313,6 @@ void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const Enc
   // retain that resource for exactly as long as the recorded work needs it.
   slot.reset();
 
-  const uint64_t vBytes = encoded.quadVertices.size() * sizeof(EncodedPath::Vertex);
   const uint64_t bandsBytes = encoded.bands.size() * sizeof(EncodedPath::Band);
   const uint64_t curvesBytes = encoded.curves.size() * 6u * sizeof(float);
   const uint64_t hRefsBytes = encoded.curveIndices.size() * sizeof(uint32_t);
@@ -1311,8 +1323,7 @@ void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const Enc
   const uint64_t vGridBytes = encoded.vBandGrid.size() * sizeof(uint32_t);
 
   // Lay out the combined buffer. Each storage region's offset satisfies
-  // `kStorageOffsetAlignment`; the vertex region needs 4-byte alignment;
-  // the uniform region needs `kUniformOffsetAlignment`. Empty storage
+  // `kStorageOffsetAlignment`; the uniform region needs `kUniformOffsetAlignment`. Empty storage
   // regions reserve a 4-byte zero-filled dummy slot (the shader's
   // band-count gate never dereferences them), mirroring the arena
   // `allocStorageOrDummy` dummy.
@@ -1324,7 +1335,6 @@ void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const Enc
     r.size = (storageDummy && bytes == 0) ? uint64_t{4} : roundUp4(bytes);
     cursor += r.size;
   };
-  place(slot.vertex, vBytes, kVertexOffsetAlignment, /*storageDummy=*/false);
   place(slot.bands, bandsBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
   place(slot.curves, curvesBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
   place(slot.hRefs, hRefsBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
@@ -1341,22 +1351,20 @@ void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const Enc
   wgpu::BufferDescriptor desc = {};
   desc.label = wgpuLabel("GeodeResidentPath");
   desc.size = totalSize;
-  desc.usage = wgpu::BufferUsage::Vertex | wgpu::BufferUsage::Storage | wgpu::BufferUsage::Uniform |
-               wgpu::BufferUsage::CopyDst;
+  desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
   slot.buffer.reset(device->device().createBuffer(desc));
   device->countBuffer();
 
   // Assemble the geometry portion in one zero-filled staging blob so
   // padding + dummy regions read as zero, then upload it in a single
   // `writeBuffer`. The uniform region is written separately by the draw
-  // path (so a camera/color-only change rewrites just 288 bytes).
+  // path (so a camera/color-only change rewrites just the uniform region).
   std::vector<uint8_t> staging(geometrySize, 0u);
   auto blit = [&](const GeodeResidentSlot::Region& r, const void* data, uint64_t bytes) {
     if (bytes > 0) {
       std::memcpy(staging.data() + r.offset, data, bytes);
     }
   };
-  blit(slot.vertex, encoded.quadVertices.data(), vBytes);
   blit(slot.bands, encoded.bands.data(), bandsBytes);
   blit(slot.curves, encoded.curves.data(), curvesBytes);
   blit(slot.hRefs, encoded.curveIndices.data(), hRefsBytes);
@@ -1369,7 +1377,7 @@ void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const Enc
   device->queue().writeBuffer(slot.buffer.get(), 0, staging.data(), geometrySize);
   device->countBufferWrite(geometrySize);
 
-  slot.vertexCount = static_cast<uint32_t>(encoded.quadVertices.size());
+  slot.vertexCount = encoded.boundingDrawVertexCount();
   slot.resident = true;
   slot.lastUniform.clear();  // Force the first uniform write below.
 
@@ -1467,7 +1475,6 @@ void GeoEncoder::Impl::submitResidentFillDraw(GeodeResidentSlot& slot, const Enc
     buildResidentBindGroup(slot);
   }
 
-  pass.get().setVertexBuffer(0, slot.buffer.get(), slot.vertex.offset, slot.vertex.size);
   pass.get().setBindGroup(0, slot.bindGroup.get(), 0, nullptr);
   pass.get().draw(slot.vertexCount, 1, 0, 0);
   device->countDraw();
@@ -1632,14 +1639,9 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
 
   const wgpu::Device& dev = impl_->device->device();
 
-  // 2. Allocate and upload GPU buffers via the per-encoder arenas. The
-  // analytic dual-ray fill (0041 §8) draws the SINGLE bounding quad
-  // (`quadVertices`) and binds two band/curve SSBO sets (horizontal +
-  // vertical) plus the dense H/V band grids.
-  const uint64_t vbSize = roundUp4(encoded.quadVertices.size() * sizeof(EncodedPath::Vertex));
-  const auto vbAlloc = impl_->allocInArena(impl_->vertexArena, encoded.quadVertices.data(), vbSize,
-                                           /*alignment=*/kVertexOffsetAlignment);
-
+  // 2. Allocate and upload GPU buffers via the per-encoder arenas. The analytic dual-ray fill
+  // (0041 §8) generates one convex bounding fan from vertex_index and binds two band/curve
+  // SSBO sets (horizontal + vertical) plus the dense H/V band grids.
   const auto bandsAlloc = impl_->allocStorageOrDummy(
       impl_->bandArena, encoded.bands.data(), encoded.bands.size() * sizeof(EncodedPath::Band));
   const auto curvesAlloc = impl_->allocStorageOrDummy(impl_->curveArena, encoded.curves.data(),
@@ -1739,11 +1741,9 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
   wgpu::BindGroup bindGroup = impl_->transientResources.retain(dev.createBindGroup(bgDesc));
   impl_->device->countBindGroup();
 
-  // 4. Record the draw call - one quad (6 vertices) per path.
-  impl_->pass.get().setVertexBuffer(0, vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
+  // 4. Record the draw call - one convex fan per path.
   impl_->pass.get().setBindGroup(0, bindGroup, 0, nullptr);
-  impl_->pass.get().draw(static_cast<uint32_t>(encoded.quadVertices.size()), args.instanceCount, 0,
-                         0);
+  impl_->pass.get().draw(encoded.boundingDrawVertexCount(), args.instanceCount, 0, 0);
   impl_->device->countDraw();
 }
 

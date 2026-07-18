@@ -13,7 +13,7 @@ namespace donner::geode {
  * bind group layout.
  *
  * One `GeodePipeline` instance is sufficient per `(device, render-target-format)`
- * pair - the actual data (uniforms, vertex buffers, bands, curves) varies per
+ * pair - the actual data (uniforms, bands, curves) varies per
  * draw call but the pipeline state object can be reused.
  *
  * The bind group layout matches the shader in `shaders/slug_fill.wgsl`:
@@ -31,11 +31,8 @@ namespace donner::geode {
  * - bindings 10 and 11: horizontal and vertical dense band grids.
  * - bindings 12 and 13: horizontal and vertical curve-reference indexes.
  *
- * The vertex buffer layout is:
- * - location 0: vec2f position (offset 0)
- * - location 1: vec2f normal   (offset 8)
- * - location 2: u32 bandIndex  (offset 16)
- * Stride: 20 bytes per vertex.
+ * The pipeline has no vertex buffer. Its shader expands the uniform bounding polygon into a
+ * triangle fan from `vertex_index` and applies the half-pixel AA halo in device space.
  */
 class GeodePipeline {
 public:
