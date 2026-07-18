@@ -237,8 +237,8 @@ struct GeoEncoder::Impl {
   Arena bandArena;
   Arena curveArena;
   Arena uniformArena;
-  /// Analytic dual-ray fill (0041 §8): vertical band/curve SSBOs and the dense
-  /// H/V band-grid lookup tables. Bound at bindings 8-11 of the fill pipeline.
+  /// Analytic dual-ray fill (0041 §8): vertical band/curve SSBOs, dense H/V band-grid lookup
+  /// tables, and compact curve references. Bound at bindings 8-13 of the fill pipeline.
   Arena vBandArena;
   Arena vCurveArena;
   Arena hGridArena;
@@ -389,15 +389,17 @@ struct GeoEncoder::Impl {
     uint64_t h = e.quadVertices.size();
     h = h * 1000003u + e.bands.size();
     h = h * 1000003u + e.curves.size();
+    h = h * 1000003u + e.curveIndices.size();
     h = h * 1000003u + e.vBands.size();
     h = h * 1000003u + e.vCurves.size();
+    h = h * 1000003u + e.vCurveIndices.size();
     h = h * 1000003u + e.hBandGrid.size();
     h = h * 1000003u + e.vBandGrid.size();
     return h;
   }
 
   /// Upload the analytic dual-ray buffers + grid params for a gradient draw,
-  /// build the 9-binding bind group, and record the single-quad draw. Shared
+  /// build the 11-binding bind group, and record the single-quad draw. Shared
   /// by the linear and radial gradient paths (0041 §8). `u` is filled in by the
   /// caller except for the grid params, which this writes from `encoded`.
   void submitGradientDraw(GradientUniforms& u, const EncodedPath& encoded) {
@@ -426,11 +428,15 @@ struct GeoEncoder::Impl {
                                                 encoded.hBandGrid.size() * sizeof(uint32_t));
     const auto vGridAlloc = allocStorageOrDummy(vGridArena, encoded.vBandGrid.data(),
                                                 encoded.vBandGrid.size() * sizeof(uint32_t));
+    const auto hRefsAlloc = allocStorageOrDummy(hGridArena, encoded.curveIndices.data(),
+                                                encoded.curveIndices.size() * sizeof(uint32_t));
+    const auto vRefsAlloc = allocStorageOrDummy(vGridArena, encoded.vCurveIndices.data(),
+                                                encoded.vCurveIndices.size() * sizeof(uint32_t));
 
     const auto uniAlloc =
         allocInArena(uniformArena, &u, sizeof(GradientUniforms), kUniformOffsetAlignment);
 
-    wgpu::BindGroupEntry entries[9] = {};
+    wgpu::BindGroupEntry entries[11] = {};
     entries[0].binding = 0;
     entries[0].buffer = *uniAlloc.buffer;
     entries[0].offset = uniAlloc.offset;
@@ -463,11 +469,19 @@ struct GeoEncoder::Impl {
     entries[8].buffer = *vGridAlloc.buffer;
     entries[8].offset = vGridAlloc.offset;
     entries[8].size = vGridAlloc.size;
+    entries[9].binding = 9;
+    entries[9].buffer = *hRefsAlloc.buffer;
+    entries[9].offset = hRefsAlloc.offset;
+    entries[9].size = hRefsAlloc.size;
+    entries[10].binding = 10;
+    entries[10].buffer = *vRefsAlloc.buffer;
+    entries[10].offset = vRefsAlloc.offset;
+    entries[10].size = vRefsAlloc.size;
 
     wgpu::BindGroupDescriptor bgDesc = {};
     bgDesc.label = wgpuLabel("GeodeGradientBindGroup");
     bgDesc.layout = gradientPipeline->bindGroupLayout();
-    bgDesc.entryCount = 9;
+    bgDesc.entryCount = 11;
     bgDesc.entries = entries;
     wgpu::BindGroup bindGroup = transientResources.retain(dev.createBindGroup(bgDesc));
     device->countBindGroup();
@@ -1025,6 +1039,12 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
                                                      encoded.hBandGrid.size() * sizeof(uint32_t));
   const auto vGridAlloc = impl_->allocStorageOrDummy(impl_->vGridArena, encoded.vBandGrid.data(),
                                                      encoded.vBandGrid.size() * sizeof(uint32_t));
+  const auto hRefsAlloc =
+      impl_->allocStorageOrDummy(impl_->hGridArena, encoded.curveIndices.data(),
+                                 encoded.curveIndices.size() * sizeof(uint32_t));
+  const auto vRefsAlloc =
+      impl_->allocStorageOrDummy(impl_->vGridArena, encoded.vCurveIndices.data(),
+                                 encoded.vCurveIndices.size() * sizeof(uint32_t));
 
   // Mask uniforms - mvp, viewport, fillRule, hasClipMask, grid params. The
   // `hasClipMask` field gates whether the fragment shader intersects with the
@@ -1062,7 +1082,7 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
   const auto uniAlloc =
       impl_->allocInArena(impl_->uniformArena, &u, sizeof(MaskUniforms), kUniformOffsetAlignment);
 
-  wgpu::BindGroupEntry entries[9] = {};
+  wgpu::BindGroupEntry entries[11] = {};
   entries[0].binding = 0;
   entries[0].buffer = *uniAlloc.buffer;
   entries[0].offset = uniAlloc.offset;
@@ -1095,11 +1115,19 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
   entries[8].buffer = *vGridAlloc.buffer;
   entries[8].offset = vGridAlloc.offset;
   entries[8].size = vGridAlloc.size;
+  entries[9].binding = 9;
+  entries[9].buffer = *hRefsAlloc.buffer;
+  entries[9].offset = hRefsAlloc.offset;
+  entries[9].size = hRefsAlloc.size;
+  entries[10].binding = 10;
+  entries[10].buffer = *vRefsAlloc.buffer;
+  entries[10].offset = vRefsAlloc.offset;
+  entries[10].size = vRefsAlloc.size;
 
   wgpu::BindGroupDescriptor bgDesc = {};
   bgDesc.label = wgpuLabel("GeodeMaskBindGroup");
   bgDesc.layout = impl_->maskPipelineOwned->bindGroupLayout();
-  bgDesc.entryCount = 9;
+  bgDesc.entryCount = 11;
   bgDesc.entries = entries;
   wgpu::BindGroup bindGroup = impl_->transientResources.retain(dev.createBindGroup(bgDesc));
   impl_->device->countBindGroup();
@@ -1273,8 +1301,10 @@ void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const Enc
   const uint64_t vBytes = encoded.quadVertices.size() * sizeof(EncodedPath::Vertex);
   const uint64_t bandsBytes = encoded.bands.size() * sizeof(EncodedPath::Band);
   const uint64_t curvesBytes = encoded.curves.size() * 6u * sizeof(float);
+  const uint64_t hRefsBytes = encoded.curveIndices.size() * sizeof(uint32_t);
   const uint64_t vBandsBytes = encoded.vBands.size() * sizeof(EncodedPath::Band);
   const uint64_t vCurvesBytes = encoded.vCurves.size() * 6u * sizeof(float);
+  const uint64_t vRefsBytes = encoded.vCurveIndices.size() * sizeof(uint32_t);
   const uint64_t hGridBytes = encoded.hBandGrid.size() * sizeof(uint32_t);
   const uint64_t vGridBytes = encoded.vBandGrid.size() * sizeof(uint32_t);
 
@@ -1295,8 +1325,10 @@ void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const Enc
   place(slot.vertex, vBytes, kVertexOffsetAlignment, /*storageDummy=*/false);
   place(slot.bands, bandsBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
   place(slot.curves, curvesBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
+  place(slot.hRefs, hRefsBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
   place(slot.vBands, vBandsBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
   place(slot.vCurves, vCurvesBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
+  place(slot.vRefs, vRefsBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
   place(slot.hGrid, hGridBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
   place(slot.vGrid, vGridBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
   place(slot.uniform, sizeof(Uniforms), kUniformOffsetAlignment, /*storageDummy=*/false);
@@ -1325,8 +1357,10 @@ void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const Enc
   blit(slot.vertex, encoded.quadVertices.data(), vBytes);
   blit(slot.bands, encoded.bands.data(), bandsBytes);
   blit(slot.curves, encoded.curves.data(), curvesBytes);
+  blit(slot.hRefs, encoded.curveIndices.data(), hRefsBytes);
   blit(slot.vBands, encoded.vBands.data(), vBandsBytes);
   blit(slot.vCurves, encoded.vCurves.data(), vCurvesBytes);
+  blit(slot.vRefs, encoded.vCurveIndices.data(), vRefsBytes);
   blit(slot.hGrid, encoded.hBandGrid.data(), hGridBytes);
   blit(slot.vGrid, encoded.vBandGrid.data(), vGridBytes);
 
@@ -1351,7 +1385,7 @@ void GeoEncoder::Impl::buildResidentBindGroup(GeodeResidentSlot& slot) {
   const wgpu::Device& dev = device->device();
   const wgpu::Buffer& buf = slot.buffer.get();
 
-  wgpu::BindGroupEntry entries[12] = {};
+  wgpu::BindGroupEntry entries[14] = {};
   auto bufEntry = [&](int i, uint32_t binding, const GeodeResidentSlot::Region& r) {
     entries[i].binding = binding;
     entries[i].buffer = buf;
@@ -1380,11 +1414,13 @@ void GeoEncoder::Impl::buildResidentBindGroup(GeodeResidentSlot& slot) {
   bufEntry(9, 9, slot.vCurves);
   bufEntry(10, 10, slot.hGrid);
   bufEntry(11, 11, slot.vGrid);
+  bufEntry(12, 12, slot.hRefs);
+  bufEntry(13, 13, slot.vRefs);
 
   wgpu::BindGroupDescriptor bgDesc = {};
   bgDesc.label = wgpuLabel("GeodeResidentBindGroup");
   bgDesc.layout = pipeline->bindGroupLayout();
-  bgDesc.entryCount = 12;
+  bgDesc.entryCount = 14;
   bgDesc.entries = entries;
   slot.bindGroup.reset(dev.createBindGroup(bgDesc));
   device->countBindGroup();
@@ -1614,6 +1650,12 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
                                                      encoded.hBandGrid.size() * sizeof(uint32_t));
   const auto vGridAlloc = impl_->allocStorageOrDummy(impl_->vGridArena, encoded.vBandGrid.data(),
                                                      encoded.vBandGrid.size() * sizeof(uint32_t));
+  const auto hRefsAlloc =
+      impl_->allocStorageOrDummy(impl_->hGridArena, encoded.curveIndices.data(),
+                                 encoded.curveIndices.size() * sizeof(uint32_t));
+  const auto vRefsAlloc =
+      impl_->allocStorageOrDummy(impl_->vGridArena, encoded.vCurveIndices.data(),
+                                 encoded.vCurveIndices.size() * sizeof(uint32_t));
 
   // Uniform buffer - still per-draw today; Milestone 1.f lifts it into
   // a ring buffer with dynamic offsets. `populateFillUniform` is shared
@@ -1624,11 +1666,11 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
   const auto uniAlloc =
       impl_->allocInArena(impl_->uniformArena, &u, sizeof(Uniforms), kUniformOffsetAlignment);
 
-  // 3. Bind group - twelve entries: uniforms, H bands SSBO, H curves SSBO,
+  // 3. Bind group - fourteen entries: uniforms, H bands SSBO, H curves SSBO,
   // pattern texture, pattern sampler, clip-mask texture, clip-mask sampler,
   // per-instance transforms SSBO, V bands SSBO, V curves SSBO, H band grid,
-  // V band grid.
-  wgpu::BindGroupEntry entries[12] = {};
+  // V band grid, H curve references, V curve references.
+  wgpu::BindGroupEntry entries[14] = {};
   entries[0].binding = 0;
   entries[0].buffer = *uniAlloc.buffer;
   entries[0].offset = uniAlloc.offset;
@@ -1678,11 +1720,19 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
   entries[11].buffer = *vGridAlloc.buffer;
   entries[11].offset = vGridAlloc.offset;
   entries[11].size = vGridAlloc.size;
+  entries[12].binding = 12;
+  entries[12].buffer = *hRefsAlloc.buffer;
+  entries[12].offset = hRefsAlloc.offset;
+  entries[12].size = hRefsAlloc.size;
+  entries[13].binding = 13;
+  entries[13].buffer = *vRefsAlloc.buffer;
+  entries[13].offset = vRefsAlloc.offset;
+  entries[13].size = vRefsAlloc.size;
 
   wgpu::BindGroupDescriptor bgDesc = {};
   bgDesc.label = wgpuLabel("GeodeBindGroup");
   bgDesc.layout = impl_->pipeline->bindGroupLayout();
-  bgDesc.entryCount = 12;
+  bgDesc.entryCount = 14;
   bgDesc.entries = entries;
   wgpu::BindGroup bindGroup = impl_->transientResources.retain(dev.createBindGroup(bgDesc));
   impl_->device->countBindGroup();

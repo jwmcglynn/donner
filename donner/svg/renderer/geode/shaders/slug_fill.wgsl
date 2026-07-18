@@ -74,19 +74,10 @@ struct Uniforms {
 // Storage buffers
 // ============================================================================
 
-// Per-band metadata. With the dense-grid lookup the band's strip extents come
-// from the grid params, so only (curveStart, curveCount) are meaningful; the
-// remaining fields are retained for layout compatibility with the encoder's
-// `EncodedPath::Band` (32 bytes).
+// Compact per-band offset/count into the axis's curve-reference array.
 struct Band {
   curveStart: u32,
   curveCount: u32,
-  yMin: f32,
-  yMax: f32,
-  xMin: f32,
-  xMax: f32,
-  _pad0: f32,
-  _pad1: f32,
 };
 
 // Horizontal bands + curves (for the horizontal ray).
@@ -115,6 +106,8 @@ struct InstanceTransform {
 @group(0) @binding(9) var<storage, read> vCurveData: array<f32>;
 @group(0) @binding(10) var<storage, read> hBandGrid: array<u32>;
 @group(0) @binding(11) var<storage, read> vBandGrid: array<u32>;
+@group(0) @binding(12) var<storage, read> hCurveIndices: array<u32>;
+@group(0) @binding(13) var<storage, read> vCurveIndices: array<u32>;
 
 // Sentinel for an empty grid cell (must match EncodedPath::kNoBand).
 const kNoBand: u32 = 0xFFFFFFFFu;
@@ -278,7 +271,7 @@ fn accumulateHoriz(slot: u32, sample: vec2f, ppemX: f32) -> RayCoverage {
   }
   let band = bands[slot];
   for (var i = 0u; i < band.curveCount; i = i + 1u) {
-    let curve = load_h_curve(band.curveStart + i);
+    let curve = load_h_curve(hCurveIndices[band.curveStart + i]);
     let curve_max_x = max(curve.p0.x, max(curve.p1.x, curve.p2.x));
     if ((curve_max_x - sample.x) * ppemX <= -0.5) {
       break;
@@ -320,7 +313,7 @@ fn accumulateVert(slot: u32, sample: vec2f, ppemY: f32) -> RayCoverage {
   }
   let band = vBands[slot];
   for (var i = 0u; i < band.curveCount; i = i + 1u) {
-    let curve = load_v_curve(band.curveStart + i);
+    let curve = load_v_curve(vCurveIndices[band.curveStart + i]);
     let curve_max_y = max(curve.p0.y, max(curve.p1.y, curve.p2.y));
     if ((curve_max_y - sample.y) * ppemY <= -0.5) {
       break;

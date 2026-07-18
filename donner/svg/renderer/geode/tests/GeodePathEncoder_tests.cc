@@ -41,17 +41,20 @@ TEST(GeodePathEncoder, EncodeTimingProbe) {
     const auto start = std::chrono::steady_clock::now();
     const EncodedPath iterEncoded = GeodePathEncoder::encode(path, FillRule::NonZero);
     const auto end = std::chrono::steady_clock::now();
-    sink += iterEncoded.curves.size() + iterEncoded.quadVertices.size();
+    sink += iterEncoded.curves.size() + iterEncoded.curveIndices.size() +
+            iterEncoded.vCurves.size() + iterEncoded.vCurveIndices.size() +
+            iterEncoded.quadVertices.size();
     samplesUs.push_back(std::chrono::duration<double, std::micro>(end - start).count());
   }
   std::sort(samplesUs.begin(), samplesUs.end());
   const EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
   std::fprintf(stderr,
                "[GeodePathEncoder] EncodeTimingProbe median=%.1fus p90=%.1fus (bands=%zu "
-               "vBands=%zu curves=%zu vCurves=%zu sink=%zu)\n",
+               "vBands=%zu curves=%zu refs=%zu vCurves=%zu vRefs=%zu sink=%zu)\n",
                samplesUs[samplesUs.size() / 2], samplesUs[(samplesUs.size() * 9) / 10],
                encoded.bands.size(), encoded.vBands.size(), encoded.curves.size(),
-               encoded.vCurves.size(), sink);
+               encoded.curveIndices.size(), encoded.vCurves.size(), encoded.vCurveIndices.size(),
+               sink);
   EXPECT_FALSE(encoded.empty());
 }
 
@@ -143,7 +146,9 @@ TEST(GeodePathEncoder, SortsBandCurvesByDescendingCrossAxisMaximum) {
   for (const EncodedPath::Band& band : encoded.bands) {
     float previousMax = std::numeric_limits<float>::infinity();
     for (uint32_t i = 0; i < band.curveCount; ++i) {
-      const EncodedPath::Curve& curve = encoded.curves[band.curveStart + i];
+      const uint32_t curveIndex = encoded.curveIndices[band.curveStart + i];
+      ASSERT_LT(curveIndex, encoded.curves.size());
+      const EncodedPath::Curve& curve = encoded.curves[curveIndex];
       const float curveMax = std::max({curve.p0x, curve.p1x, curve.p2x});
       EXPECT_LE(curveMax, previousMax) << "Horizontal band references must be descending";
       previousMax = curveMax;
@@ -152,7 +157,9 @@ TEST(GeodePathEncoder, SortsBandCurvesByDescendingCrossAxisMaximum) {
   for (const EncodedPath::Band& band : encoded.vBands) {
     float previousMax = std::numeric_limits<float>::infinity();
     for (uint32_t i = 0; i < band.curveCount; ++i) {
-      const EncodedPath::Curve& curve = encoded.vCurves[band.curveStart + i];
+      const uint32_t curveIndex = encoded.vCurveIndices[band.curveStart + i];
+      ASSERT_LT(curveIndex, encoded.vCurves.size());
+      const EncodedPath::Curve& curve = encoded.vCurves[curveIndex];
       const float curveMax = std::max({curve.p0y, curve.p1y, curve.p2y});
       EXPECT_LE(curveMax, previousMax) << "Vertical band references must be descending";
       previousMax = curveMax;
@@ -179,11 +186,9 @@ TEST(GeodePathEncoder, BandsCoverFullHeight) {
   EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
   EXPECT_FALSE(encoded.empty());
 
-  // First band should start at or before the path's top.
-  EXPECT_LE(encoded.bands.front().yMin, encoded.pathBounds.topLeft.y + 0.01f);
-
-  // Last band should end at or after the path's bottom.
-  EXPECT_GE(encoded.bands.back().yMax, encoded.pathBounds.bottomRight.y - 0.01f);
+  EXPECT_NEAR(encoded.yBase, encoded.pathBounds.topLeft.y, 0.01f);
+  EXPECT_NEAR(encoded.yBase + encoded.hStride * static_cast<float>(encoded.hBandCount),
+              encoded.pathBounds.bottomRight.y, 0.01f);
 }
 
 TEST(GeodePathEncoder, CurvesPerBandNonEmpty) {
@@ -198,8 +203,8 @@ TEST(GeodePathEncoder, CurvesPerBandNonEmpty) {
 
   for (const auto& band : encoded.bands) {
     EXPECT_GT(band.curveCount, 0u) << "Non-empty band should have curves";
-    EXPECT_LE(band.curveStart + band.curveCount, encoded.curves.size())
-        << "Curve range should be within bounds";
+    EXPECT_LE(band.curveStart + band.curveCount, encoded.curveIndices.size())
+        << "Curve-reference range should be within bounds";
   }
 }
 
@@ -340,9 +345,10 @@ TEST(GeodePathEncoder, VerticalBandsConsistentWinding) {
   EXPECT_FALSE(encoded.vBands.empty()) << "Vertical bands must be populated for the vertical ray";
   EXPECT_FALSE(encoded.vCurves.empty());
 
-  // Vertical bands partition the bounds width.
-  EXPECT_LE(encoded.vBands.front().xMin, encoded.pathBounds.topLeft.x + 0.01);
-  EXPECT_GE(encoded.vBands.back().xMax, encoded.pathBounds.bottomRight.x - 0.01);
+  // The vertical grid partitions the bounds width.
+  EXPECT_NEAR(encoded.xBase, encoded.pathBounds.topLeft.x, 0.01);
+  EXPECT_NEAR(encoded.xBase + encoded.vStride * static_cast<float>(encoded.vBandCount),
+              encoded.pathBounds.bottomRight.x, 0.01);
 
   // Sample a grid over the bounding box; the two rays must agree on inside/outside.
   const auto& b = encoded.pathBounds;
@@ -407,9 +413,8 @@ TEST(GeodePathEncoder, BandGridResolvesToCoveringBand) {
       continue;
     }
     ASSERT_LT(slot, encoded.bands.size());
-    const float expectedYMin = encoded.yBase + static_cast<float>(cell) * encoded.hStride;
-    EXPECT_NEAR(encoded.bands[slot].yMin, expectedYMin, 0.01f)
-        << "Grid cell " << cell << " should map to the band covering its Y-strip";
+    EXPECT_LE(encoded.bands[slot].curveStart + encoded.bands[slot].curveCount,
+              encoded.curveIndices.size());
   }
   for (uint32_t cell = 0; cell < encoded.vBandCount; ++cell) {
     const uint32_t slot = encoded.vBandGrid[cell];
@@ -417,8 +422,8 @@ TEST(GeodePathEncoder, BandGridResolvesToCoveringBand) {
       continue;
     }
     ASSERT_LT(slot, encoded.vBands.size());
-    const float expectedXMin = encoded.xBase + static_cast<float>(cell) * encoded.vStride;
-    EXPECT_NEAR(encoded.vBands[slot].xMin, expectedXMin, 0.01f);
+    EXPECT_LE(encoded.vBands[slot].curveStart + encoded.vBands[slot].curveCount,
+              encoded.vCurveIndices.size());
   }
 }
 
@@ -435,10 +440,7 @@ TEST(GeodePathEncoder, BandGridResolvesToCoveringBand) {
 //
 // Strategy: compare the encoded output of an open path against the same
 // path with an explicit closePath(). They should produce identical band
-// curve counts and identical bounds. `encoded.curves` is band-flattened
-// (each curve is duplicated per band it spans), so an equality assertion
-// on the size implicitly verifies the total number of source segments
-// and their band coverage matches.
+// curve counts, reference counts, and identical bounds.
 TEST(GeodePathEncoder, OpenSubpathGetsImplicitClose) {
   // Triangle as three LineTos with no closePath() vs. the same with
   // closePath(). The implicit-close logic in the encoder should make
@@ -459,6 +461,7 @@ TEST(GeodePathEncoder, OpenSubpathGetsImplicitClose) {
   EXPECT_FALSE(openEncoded.empty());
   EXPECT_FALSE(closedEncoded.empty());
   EXPECT_EQ(openEncoded.curves.size(), closedEncoded.curves.size());
+  EXPECT_EQ(openEncoded.curveIndices.size(), closedEncoded.curveIndices.size());
   EXPECT_EQ(openEncoded.bands.size(), closedEncoded.bands.size());
 
   // A straight line (the geometry resvg's `a-stroke-linecap-001` feeds to
@@ -470,7 +473,7 @@ TEST(GeodePathEncoder, OpenSubpathGetsImplicitClose) {
   EXPECT_FALSE(encoded.empty());
   // There must be an even number of forward+return segments per band
   // (one LineTo forward, one implicit close back). `curves.size()` is
-  // band-flattened, so for an N-band span we expect 2*N band curves.
+  // stored canonically, so the forward and return segments form a pair.
   EXPECT_EQ(encoded.curves.size() % 2u, 0u);
 }
 
@@ -504,6 +507,26 @@ TEST(GeodePathEncoder, MultipleOpenSubpathsEachGetClosed) {
   EncodedPath openEncoded = GeodePathEncoder::encode(twoLinesOpen, FillRule::NonZero);
   EncodedPath closedEncoded = GeodePathEncoder::encode(twoLinesClosed, FillRule::NonZero);
   EXPECT_EQ(openEncoded.curves.size(), closedEncoded.curves.size());
+  EXPECT_EQ(openEncoded.curveIndices.size(), closedEncoded.curveIndices.size());
+}
+
+TEST(GeodePathEncoder, RecordsOutputNeutralEncodingStatistics) {
+  PathBuilder builder;
+  builder.addRect(Box2d({0, 0}, {100, 10}));
+  builder.addRect(Box2d({0, 20}, {100, 30}));
+  const EncodedPath encoded = GeodePathEncoder::encode(builder.build(), FillRule::NonZero);
+  ASSERT_FALSE(encoded.empty());
+
+  EXPECT_EQ(encoded.stats.horizontal.canonicalCurveCount, encoded.curves.size());
+  EXPECT_EQ(encoded.stats.horizontal.curveReferenceCount, encoded.curveIndices.size());
+  EXPECT_EQ(encoded.stats.horizontal.gridBandCount, encoded.hBandCount);
+  EXPECT_EQ(encoded.stats.horizontal.nonemptyBandCount, encoded.bands.size());
+  EXPECT_GT(encoded.stats.horizontal.omittedParallelCurves, 0u);
+  EXPECT_GT(encoded.stats.horizontal.maxCurvesPerBand, 0u);
+  EXPECT_GT(encoded.stats.horizontal.p95CurvesPerBand, 0u);
+  EXPECT_GT(encoded.stats.horizontal.meanCurvesPerBand, 0.0);
+  EXPECT_DOUBLE_EQ(encoded.stats.aabbArea,
+                   encoded.pathBounds.width() * encoded.pathBounds.height());
 }
 
 TEST(GeodePathEncoder, RayParallelAxisLeavesFiniteEmptyBandMetadata) {
