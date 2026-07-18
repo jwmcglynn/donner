@@ -127,11 +127,6 @@ public:
    * @return Encoded path data ready for GPU upload, or empty if the path is degenerate.
    */
   static EncodedPath encode(const Path& path, FillRule fillRule, double tolerance = 0.1);
-
-private:
-  /// Determine the number of bands for a path of the given height.
-  /// Small paths (< 64px) use 1 band; larger paths scale up.
-  static uint16_t computeBandCount(float pathHeight);
 };
 
 }  // namespace donner::geode

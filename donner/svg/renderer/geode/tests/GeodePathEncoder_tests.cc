@@ -102,16 +102,15 @@ TEST(GeodePathEncoder, SmallPathSingleBand) {
   EXPECT_EQ(encoded.bands.size(), 1u);
 }
 
-TEST(GeodePathEncoder, LargePathMultipleBands) {
-  // A tall rect (500px) should produce multiple bands.
+TEST(GeodePathEncoder, LongSpanningCurvesStayInOneBand) {
+  // More bands cannot reduce the candidate count when every contributing curve spans the
+  // complete path, so the distribution-driven selector should retain one band.
   Path path = PathBuilder().addRect(Box2d({0, 0}, {100, 500})).build();
 
   EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
   EXPECT_FALSE(encoded.empty());
 
-  // 500px / 32px per band ≈ 16 bands.
-  EXPECT_GT(encoded.bands.size(), 1u);
-  EXPECT_LE(encoded.bands.size(), 256u);  // Within max band limit.
+  EXPECT_EQ(encoded.hBandCount, 1u);
 
   // Multi-band paths still draw one whole-path quad. Multiple quads would
   // reintroduce non-additive source-over coverage at band boundaries.

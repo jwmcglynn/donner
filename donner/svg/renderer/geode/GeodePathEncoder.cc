@@ -2,6 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <numeric>
+#include <optional>
+#include <tuple>
 
 #include "donner/base/FillRule.h"
 #include "donner/base/MathUtils.h"
@@ -138,6 +142,124 @@ std::vector<CurveWithRange> extractCurves(const Path& monoPath) {
 /// Which axis a band set partitions along.
 enum class BandAxis { Y, X };
 
+struct BandSpan {
+  uint16_t first;
+  uint16_t last;
+};
+
+struct BandMetrics {
+  uint32_t maxCurves = 0;
+  uint32_t p95Curves = 0;
+  uint64_t totalReferences = 0;
+};
+
+std::optional<BandSpan> curveBandSpan(const CurveRange& range, const Box2d& bounds, BandAxis axis,
+                                      uint16_t bandCount) {
+  if (bandCount == 0) {
+    return std::nullopt;
+  }
+
+  const bool byY = axis == BandAxis::Y;
+  const float spanBase =
+      byY ? static_cast<float>(bounds.topLeft.y) : static_cast<float>(bounds.topLeft.x);
+  const float span = byY ? static_cast<float>(bounds.height()) : static_cast<float>(bounds.width());
+  if (!(span > 0.0f) || !std::isfinite(span)) {
+    return std::nullopt;
+  }
+
+  const float bandStride = span / static_cast<float>(bandCount);
+  const float lo = byY ? range.yMin : range.xMin;
+  const float hi = byY ? range.yMax : range.xMax;
+  const float hiExclusive = std::nextafter(hi, -std::numeric_limits<float>::infinity());
+
+  const int first = std::clamp(static_cast<int>(std::floor((lo - spanBase) / bandStride)), 0,
+                               static_cast<int>(bandCount) - 1);
+  const int last = std::clamp(static_cast<int>(std::floor((hiExclusive - spanBase) / bandStride)),
+                              first, static_cast<int>(bandCount) - 1);
+  return BandSpan{static_cast<uint16_t>(first), static_cast<uint16_t>(last)};
+}
+
+BandMetrics evaluateBandCount(const std::vector<CurveWithRange>& curves, const Box2d& bounds,
+                              BandAxis axis, uint16_t bandCount) {
+  std::vector<int32_t> countDeltas(static_cast<size_t>(bandCount) + 1u, 0);
+  for (const CurveWithRange& curve : curves) {
+    const std::optional<BandSpan> span = curveBandSpan(curve.range, bounds, axis, bandCount);
+    if (!span) {
+      continue;
+    }
+    ++countDeltas[span->first];
+    if (span->last + 1u < countDeltas.size()) {
+      --countDeltas[span->last + 1u];
+    }
+  }
+
+  BandMetrics metrics;
+  std::vector<uint32_t> nonemptyCounts;
+  nonemptyCounts.reserve(bandCount);
+  int32_t runningCount = 0;
+  for (uint16_t band = 0; band < bandCount; ++band) {
+    runningCount += countDeltas[band];
+    const uint32_t count = static_cast<uint32_t>(runningCount);
+    metrics.totalReferences += count;
+    metrics.maxCurves = std::max(metrics.maxCurves, count);
+    if (count != 0u) {
+      nonemptyCounts.push_back(count);
+    }
+  }
+  if (!nonemptyCounts.empty()) {
+    std::sort(nonemptyCounts.begin(), nonemptyCounts.end());
+    const size_t p95Index = (nonemptyCounts.size() * 95u + 99u) / 100u - 1u;
+    metrics.p95Curves = nonemptyCounts[p95Index];
+  }
+  return metrics;
+}
+
+uint16_t chooseBandCount(const std::vector<CurveWithRange>& curves, const Box2d& bounds,
+                         BandAxis axis) {
+  if (curves.empty()) {
+    return 0;
+  }
+
+  const uint16_t maxCandidate =
+      static_cast<uint16_t>(std::min<size_t>(kMaxBands, std::max<size_t>(1u, curves.size())));
+  uint16_t targetCount = 1;
+  const size_t desiredCount = (curves.size() + 7u) / 8u;
+  while (targetCount < desiredCount && targetCount < maxCandidate) {
+    targetCount = std::min<uint16_t>(static_cast<uint16_t>(targetCount * 2u), maxCandidate);
+  }
+  const uint16_t startCount =
+      std::min<uint16_t>(static_cast<uint16_t>(targetCount * 2u), maxCandidate);
+
+  uint16_t bestCount = 1;
+  BandMetrics bestMetrics = evaluateBandCount(curves, bounds, axis, bestCount);
+  // A shorter worst-case band is not useful if it multiplies encode work and
+  // resident reference bytes without bound. Two references per canonical curve
+  // keeps the indirection table compact while still allowing strongly clustered
+  // geometry to split into many cells.
+  constexpr uint64_t kMaxReferenceExpansion = 2u;
+  const uint64_t maxReferences = static_cast<uint64_t>(curves.size()) * kMaxReferenceExpansion;
+  bool foundAllowedSplit = false;
+  for (uint16_t candidate = startCount; candidate > 1u; candidate /= 2u) {
+    const BandMetrics metrics = evaluateBandCount(curves, bounds, axis, candidate);
+    if (metrics.totalReferences > maxReferences) {
+      continue;
+    }
+    if (foundAllowedSplit && metrics.maxCurves > bestMetrics.maxCurves) {
+      break;
+    }
+    const auto score =
+        std::tuple(metrics.maxCurves, metrics.p95Curves, metrics.totalReferences, candidate);
+    const auto bestScore = std::tuple(bestMetrics.maxCurves, bestMetrics.p95Curves,
+                                      bestMetrics.totalReferences, bestCount);
+    if (score < bestScore) {
+      bestCount = candidate;
+      bestMetrics = metrics;
+    }
+    foundAllowedSplit = true;
+  }
+  return bestCount;
+}
+
 /// Return true when a curve is provably parallel to the ray represented by `axis`.
 /// Horizontal-ray data is split along Y and cannot receive a winding contribution
 /// from a curve whose three Y coordinates are identical. The vertical case is the
@@ -178,17 +300,30 @@ void bandCurves(const std::vector<CurveWithRange>& allCurves, const Box2d& bound
   const float span = byY ? static_cast<float>(bounds.height()) : static_cast<float>(bounds.width());
   const float bandStride = span / static_cast<float>(bandCount);
 
+  // Sort the canonical curve indexes once. Appending them to every overlapping
+  // band in this order preserves descending cross-axis maxima without an O(B)
+  // family of per-band sorts.
+  std::vector<size_t> sortedCurveIndices(allCurves.size());
+  std::iota(sortedCurveIndices.begin(), sortedCurveIndices.end(), 0u);
+  std::stable_sort(sortedCurveIndices.begin(), sortedCurveIndices.end(),
+                   [&](size_t lhs, size_t rhs) {
+                     const CurveRange& lhsRange = allCurves[lhs].range;
+                     const CurveRange& rhsRange = allCurves[rhs].range;
+                     const float lhsMax = byY ? lhsRange.xMax : lhsRange.yMax;
+                     const float rhsMax = byY ? rhsRange.xMax : rhsRange.yMax;
+                     return lhsMax > rhsMax;
+                   });
+
   // Per-band curve index lists.
   std::vector<std::vector<size_t>> bandCurveIndices(bandCount);
-  for (size_t ci = 0; ci < allCurves.size(); ++ci) {
-    const auto& range = allCurves[ci].range;
-    const float lo = byY ? range.yMin : range.xMin;
-    const float hi = byY ? range.yMax : range.xMax;
-    const int firstBand = std::max(0, static_cast<int>(std::floor((lo - spanBase) / bandStride)));
-    const int lastBand = std::min(static_cast<int>(bandCount) - 1,
-                                  static_cast<int>(std::floor((hi - spanBase) / bandStride)));
-    for (int b = firstBand; b <= lastBand; ++b) {
-      bandCurveIndices[static_cast<size_t>(b)].push_back(ci);
+  for (size_t ci : sortedCurveIndices) {
+    const std::optional<BandSpan> curveSpan =
+        curveBandSpan(allCurves[ci].range, bounds, axis, bandCount);
+    if (!curveSpan) {
+      continue;
+    }
+    for (uint16_t band = curveSpan->first; band <= curveSpan->last; ++band) {
+      bandCurveIndices[band].push_back(ci);
     }
   }
 
@@ -196,21 +331,10 @@ void bandCurves(const std::vector<CurveWithRange>& allCurves, const Box2d& bound
   outCurves.reserve(outCurves.size() + allCurves.size() * 2);
 
   for (uint16_t b = 0; b < bandCount; ++b) {
-    auto& indices = bandCurveIndices[b];
+    const auto& indices = bandCurveIndices[b];
     if (indices.empty()) {
       continue;  // Skip empty bands entirely.
     }
-
-    // The fragment shader scans a positive ray. Descending cross-axis maxima let it
-    // stop as soon as a curve's conservative control-hull maximum lies more than
-    // half a pixel behind the sample, because every remaining curve is no larger.
-    std::stable_sort(indices.begin(), indices.end(), [&](size_t lhs, size_t rhs) {
-      const CurveRange& lhsRange = allCurves[lhs].range;
-      const CurveRange& rhsRange = allCurves[rhs].range;
-      const float lhsMax = byY ? lhsRange.xMax : lhsRange.yMax;
-      const float rhsMax = byY ? rhsRange.xMax : rhsRange.yMax;
-      return lhsMax > rhsMax;
-    });
 
     // Record the dense-grid cell → packed-band-slot mapping for O(1) shader lookup.
     outGrid[b] = static_cast<uint32_t>(outBands.size());
@@ -249,15 +373,6 @@ void bandCurves(const std::vector<CurveWithRange>& allCurves, const Box2d& bound
 
 }  // namespace
 
-uint16_t GeodePathEncoder::computeBandCount(float pathExtent) {
-  if (pathExtent <= 0.0f) {
-    return 0;
-  }
-  // Target: ~32 pixels per band, minimum 1 band, maximum kMaxBands.
-  const auto count = static_cast<uint16_t>(std::ceil(pathExtent / 32.0f));
-  return std::clamp(count, static_cast<uint16_t>(1), kMaxBands);
-}
-
 EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, double tolerance) {
   EncodedPath result;
 
@@ -294,7 +409,7 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
   if (hCurves.empty()) {
     return result;
   }
-  const uint16_t hBandCount = computeBandCount(pathHeight);
+  const uint16_t hBandCount = chooseBandCount(hCurves, bounds, BandAxis::Y);
   bandCurves(hCurves, bounds, BandAxis::Y, result.bands, result.curves, hBandCount,
              result.hBandGrid);
   if (result.bands.empty()) {
@@ -311,7 +426,7 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
     const Path monoPathX = quadPath.toMonotonic(Path::MonotonicAxis::X);
     const std::vector<CurveWithRange> vAll =
         omitRayParallelCurves(extractCurves(monoPathX), BandAxis::X);
-    const uint16_t vBandCount = computeBandCount(pathWidth);
+    const uint16_t vBandCount = chooseBandCount(vAll, bounds, BandAxis::X);
     bandCurves(vAll, bounds, BandAxis::X, result.vBands, result.vCurves, vBandCount,
                result.vBandGrid);
     result.xBase = static_cast<float>(bounds.topLeft.x);
