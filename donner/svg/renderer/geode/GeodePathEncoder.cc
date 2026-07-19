@@ -426,12 +426,14 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
     const Path monoPathX = quadPath.toMonotonic(Path::MonotonicAxis::X);
     const std::vector<CurveWithRange> vAll =
         omitRayParallelCurves(extractCurves(monoPathX), BandAxis::X);
-    const uint16_t vBandCount = chooseBandCount(vAll, bounds, BandAxis::X);
-    bandCurves(vAll, bounds, BandAxis::X, result.vBands, result.vCurves, vBandCount,
-               result.vBandGrid);
-    result.xBase = static_cast<float>(bounds.topLeft.x);
-    result.vStride = pathWidth / static_cast<float>(vBandCount);
-    result.vBandCount = vBandCount;
+    if (!vAll.empty()) {
+      const uint16_t vBandCount = chooseBandCount(vAll, bounds, BandAxis::X);
+      bandCurves(vAll, bounds, BandAxis::X, result.vBands, result.vCurves, vBandCount,
+                 result.vBandGrid);
+      result.xBase = static_cast<float>(bounds.topLeft.x);
+      result.vStride = pathWidth / static_cast<float>(vBandCount);
+      result.vBandCount = vBandCount;
+    }
   }
 
   // Single bounding quad over the whole path for the analytic dual-ray fill shader.
