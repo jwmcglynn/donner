@@ -420,6 +420,65 @@ std::vector<Vector2d> buildSupportPolygon(const std::vector<CurveWithRange>& cur
   return polygon;
 }
 
+bool hasBoundedIdentityMiters(const std::vector<Vector2d>& polygon) {
+  constexpr double kMaxMiterPixels = 2.0;
+  for (size_t i = 0; i < polygon.size(); ++i) {
+    const Vector2d previous = polygon[(i + polygon.size() - 1u) % polygon.size()];
+    const Vector2d position = polygon[i];
+    const Vector2d next = polygon[(i + 1u) % polygon.size()];
+    const Vector2d incoming = position - previous;
+    const Vector2d outgoing = next - position;
+    const double incomingLength = incoming.length();
+    const double outgoingLength = outgoing.length();
+    if (!(incomingLength > 0.0) || !(outgoingLength > 0.0) || !std::isfinite(incomingLength) ||
+        !std::isfinite(outgoingLength)) {
+      return false;
+    }
+
+    const Vector2d incomingNormal(incoming.y / incomingLength, -incoming.x / incomingLength);
+    const Vector2d outgoingNormal(outgoing.y / outgoingLength, -outgoing.x / outgoingLength);
+    const double denominator = 1.0 + incomingNormal.dot(outgoingNormal);
+    if (!(denominator > 0.0) || !std::isfinite(denominator)) {
+      return false;
+    }
+    const Vector2d pixelDelta = 0.5 * (incomingNormal + outgoingNormal) / denominator;
+    if (!std::isfinite(pixelDelta.x) || !std::isfinite(pixelDelta.y) ||
+        pixelDelta.length() > kMaxMiterPixels) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool isValidFloatBoundingPolygon(
+    const std::array<Vector2f, EncodedPath::kMaxBoundingVertices>& vertices, size_t count) {
+  if (count < 3u || count > vertices.size()) {
+    return false;
+  }
+  const Vector2f origin = vertices[0];
+  double twiceArea = 0.0;
+  for (size_t i = 0; i < count; ++i) {
+    const Vector2f& previous = vertices[(i + count - 1u) % count];
+    const Vector2f& position = vertices[i];
+    const Vector2f& next = vertices[(i + 1u) % count];
+    if (!std::isfinite(position.x) || !std::isfinite(position.y) ||
+        (position.x == next.x && position.y == next.y)) {
+      return false;
+    }
+    const double incomingX = static_cast<double>(position.x) - previous.x;
+    const double incomingY = static_cast<double>(position.y) - previous.y;
+    const double outgoingX = static_cast<double>(next.x) - position.x;
+    const double outgoingY = static_cast<double>(next.y) - position.y;
+    if (!(incomingX * outgoingY - incomingY * outgoingX > 0.0)) {
+      return false;
+    }
+    twiceArea +=
+        (static_cast<double>(position.x) - origin.x) * (static_cast<double>(next.y) - origin.y) -
+        (static_cast<double>(position.y) - origin.y) * (static_cast<double>(next.x) - origin.x);
+  }
+  return twiceArea > 0.0 && std::isfinite(twiceArea);
+}
+
 void storeBoundingPolygon(EncodedPath& result, const std::vector<CurveWithRange>& curves,
                           const Box2d& bounds) {
   const double aabbArea = bounds.width() * bounds.height();
@@ -434,40 +493,61 @@ void storeBoundingPolygon(EncodedPath& result, const std::vector<CurveWithRange>
   const double requiredSavingFraction = 0.20 + 0.05 * static_cast<double>(extraTriangles);
   const bool validPolygon = polygon.size() >= 3u &&
                             polygon.size() <= EncodedPath::kMaxBoundingVertices &&
-                            std::isfinite(area) && area > 0.0;
-  const bool useSupportPolygon =
-      validPolygon && (aabbArea - area) >= aabbArea * requiredSavingFraction;
+                            std::isfinite(area) && area > 0.0 && hasBoundedIdentityMiters(polygon);
+  bool useSupportPolygon = validPolygon && (aabbArea - area) >= aabbArea * requiredSavingFraction;
   if (!useSupportPolygon) {
     polygon = aabbPolygon(bounds);
     area = aabbArea;
   }
 
-  result.boundingVertexCount = static_cast<uint32_t>(polygon.size());
-  Vector2d center(0.0, 0.0);
-  for (const Vector2d& point : polygon) {
-    center += point;
-  }
-  center /= static_cast<double>(polygon.size());
-  const double conservativeScale =
-      useSupportPolygon ? 1.0 + 16.0 * std::numeric_limits<float>::epsilon() : 1.0;
-  for (size_t i = 0; i < polygon.size(); ++i) {
-    const Vector2d expanded = center + (polygon[i] - center) * conservativeScale;
-    float x = static_cast<float>(expanded.x);
-    float y = static_cast<float>(expanded.y);
-    if (useSupportPolygon) {
-      x = std::nextafter(x, x >= center.x ? std::numeric_limits<float>::infinity()
-                                          : -std::numeric_limits<float>::infinity());
-      y = std::nextafter(y, y >= center.y ? std::numeric_limits<float>::infinity()
-                                          : -std::numeric_limits<float>::infinity());
-    } else {
-      const bool left = i == 0u || i == 3u;
-      const bool top = i < 2u;
-      x = std::nextafter(x, left ? -std::numeric_limits<float>::infinity()
-                                 : std::numeric_limits<float>::infinity());
-      y = std::nextafter(y, top ? -std::numeric_limits<float>::infinity()
-                                : std::numeric_limits<float>::infinity());
+  auto convertPolygon = [&](bool supportPolygon) {
+    std::array<Vector2f, EncodedPath::kMaxBoundingVertices> converted = {};
+    Vector2d center(0.0, 0.0);
+    for (const Vector2d& point : polygon) {
+      center += point;
     }
-    result.boundingVertices[i] = {x, y};
+    center /= static_cast<double>(polygon.size());
+    const double conservativeScale =
+        supportPolygon ? 1.0 + 16.0 * std::numeric_limits<float>::epsilon() : 1.0;
+    for (size_t i = 0; i < polygon.size(); ++i) {
+      const Vector2d expanded = center + (polygon[i] - center) * conservativeScale;
+      float x = static_cast<float>(expanded.x);
+      float y = static_cast<float>(expanded.y);
+      if (supportPolygon) {
+        x = std::nextafter(x, x >= center.x ? std::numeric_limits<float>::infinity()
+                                            : -std::numeric_limits<float>::infinity());
+        y = std::nextafter(y, y >= center.y ? std::numeric_limits<float>::infinity()
+                                            : -std::numeric_limits<float>::infinity());
+      } else {
+        const bool left = i == 0u || i == 3u;
+        const bool top = i < 2u;
+        x = std::nextafter(x, left ? -std::numeric_limits<float>::infinity()
+                                   : std::numeric_limits<float>::infinity());
+        y = std::nextafter(y, top ? -std::numeric_limits<float>::infinity()
+                                  : std::numeric_limits<float>::infinity());
+      }
+      converted[i] = {x, y};
+    }
+    return converted;
+  };
+
+  auto converted = convertPolygon(useSupportPolygon);
+  if (useSupportPolygon && !isValidFloatBoundingPolygon(converted, polygon.size())) {
+    polygon = aabbPolygon(bounds);
+    area = aabbArea;
+    useSupportPolygon = false;
+    converted = convertPolygon(false);
+  }
+  if (!isValidFloatBoundingPolygon(converted, polygon.size())) {
+    result.boundingVertexCount = 0u;
+    result.stats.boundingGeometryArea = 0.0;
+    result.stats.boundingGeometryVertexCount = 0u;
+    return;
+  }
+
+  result.boundingVertexCount = static_cast<uint32_t>(polygon.size());
+  for (size_t i = 0; i < polygon.size(); ++i) {
+    result.boundingVertices[i] = {converted[i].x, converted[i].y};
   }
   result.stats.boundingGeometryArea = area;
   result.stats.boundingGeometryVertexCount = result.boundingVertexCount;
@@ -623,6 +703,9 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
   // Horizontal bands (Y-monotonic curves) for the horizontal ray.
   const std::vector<CurveWithRange> hAll = extractCurves(monoPathY);
   storeBoundingPolygon(result, hAll, bounds);
+  if (result.boundingVertexCount < 3u) {
+    return result;
+  }
   const std::vector<CurveWithRange> hCurves = omitRayParallelCurves(hAll, BandAxis::Y);
   result.stats.horizontal.omittedParallelCurves =
       static_cast<uint32_t>(hAll.size() - hCurves.size());

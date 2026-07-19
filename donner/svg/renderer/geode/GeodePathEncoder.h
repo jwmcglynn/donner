@@ -116,7 +116,11 @@ struct EncodedPath {
 
   /// Triangle-list vertex count emitted by the vertex shader for the bounding fan.
   uint32_t boundingDrawVertexCount() const {
-    return boundingVertexCount >= 3u ? (boundingVertexCount - 2u) * 3u : 0u;
+    if (boundingVertexCount < 3u) {
+      return 0u;
+    }
+    const uint32_t fanVertexCount = (boundingVertexCount - 2u) * 3u;
+    return fanVertexCount < 6u ? 6u : fanVertexCount;
   }
 
   /// Returns true if the encoded path has no bands (empty or degenerate path).
