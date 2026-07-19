@@ -302,6 +302,13 @@ donner_cc_test(
     ],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
+    # ASCII goldens are a deterministic conformance lane. Use llvmpipe for Geode on Linux;
+    # dedicated Geode suites retain hardware coverage, and Metal has no guaranteed fallback
+    # adapter.
+    env = select({
+        "@platforms//os:linux": {"DONNER_GEODE_FORCE_FALLBACK_ADAPTER": "1"},
+        "//conditions:default": {},
+    }),
     variants = [
         "tiny",
         "text_full",

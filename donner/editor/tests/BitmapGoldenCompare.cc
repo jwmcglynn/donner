@@ -58,6 +58,54 @@ std::vector<uint8_t> BuildSideBySide(const std::vector<uint8_t>& expected, int e
   return combined;
 }
 
+int ComparePixels(const std::vector<uint8_t>& expected, const std::vector<uint8_t>& actual,
+                  int width, int height, std::size_t strideInPixels,
+                  const BitmapGoldenCompareParams& params, std::vector<uint8_t>& diffImage,
+                  int& pixelsExceedingChannelDelta) {
+  pixelsExceedingChannelDelta = 0;
+  if (params.maxChannelDelta < 0) {
+    pixelmatch::Options options;
+    options.threshold = params.threshold;
+    options.includeAA = params.includeAntiAliasing;
+    return pixelmatch::pixelmatch(expected, actual, diffImage, width, height, strideInPixels,
+                                  options);
+  }
+
+  int mismatched = 0;
+  for (int y = 0; y < height; ++y) {
+    for (int x = 0; x < width; ++x) {
+      const std::size_t pos =
+          (static_cast<std::size_t>(y) * strideInPixels + static_cast<std::size_t>(x)) * 4u;
+      bool differs = false;
+      bool exceedsLimit = false;
+      for (std::size_t channel = 0; channel < 4u; ++channel) {
+        const int delta = std::abs(static_cast<int>(expected[pos + channel]) -
+                                   static_cast<int>(actual[pos + channel]));
+        differs = differs || delta != 0;
+        exceedsLimit = exceedsLimit || delta > params.maxChannelDelta;
+      }
+      if (differs) {
+        diffImage[pos] = 255u;
+        diffImage[pos + 3u] = 255u;
+        ++mismatched;
+      }
+      if (exceedsLimit) {
+        ++pixelsExceedingChannelDelta;
+      }
+    }
+  }
+  return mismatched;
+}
+
+std::string ChannelLimitDetails(const BitmapGoldenCompareParams& params,
+                                int pixelsExceedingChannelDelta) {
+  if (params.maxChannelDelta < 0) {
+    return {};
+  }
+  return "; " + std::to_string(pixelsExceedingChannelDelta) +
+         " pixels exceed RGBA channel delta " + std::to_string(params.maxChannelDelta);
+}
+
 }  // namespace
 
 void CompareBitmapToGolden(const svg::RendererBitmap& bitmap, std::string_view goldenPath,
@@ -116,13 +164,11 @@ void CompareBitmapToGolden(const svg::RendererBitmap& bitmap, std::string_view g
   }
 
   std::vector<uint8_t> diffImage(bitmap.pixels.size(), 0u);
-  pixelmatch::Options options;
-  options.threshold = params.threshold;
-  options.includeAA = params.includeAntiAliasing;
-  const int mismatched = pixelmatch::pixelmatch(golden.data, bitmap.pixels, diffImage, width,
-                                                height, strideInPixels, options);
+  int pixelsExceedingChannelDelta = 0;
+  const int mismatched = ComparePixels(golden.data, bitmap.pixels, width, height, strideInPixels,
+                                       params, diffImage, pixelsExceedingChannelDelta);
 
-  if (mismatched > params.maxMismatchedPixels) {
+  if (mismatched > params.maxMismatchedPixels || pixelsExceedingChannelDelta > 0) {
     const std::filesystem::path outDir = DiffOutputDir();
     const std::string flat = Flatten(goldenPath);
     const auto actualPath = outDir / ("actual_" + flat);
@@ -141,6 +187,7 @@ void CompareBitmapToGolden(const svg::RendererBitmap& bitmap, std::string_view g
                                                    width * 2, height, strideInPixels * 2u);
     ADD_FAILURE() << "[" << testLabel << "] " << mismatched
                   << " pixels differ (max allowed: " << params.maxMismatchedPixels
+                  << ChannelLimitDetails(params, pixelsExceedingChannelDelta)
                   << "). Golden: " << goldenPath << ". Actual: " << actualPath.string()
                   << ". Expected: " << expectedPath.string() << ". Diff: " << diffPath.string()
                   << ". Side-by-side: " << sideBySidePath.string()
@@ -191,13 +238,11 @@ void CompareBitmapToBitmap(const svg::RendererBitmap& actual, const svg::Rendere
   ASSERT_EQ(expected.rowBytes, actual.rowBytes) << "[" << testLabel << "] rowBytes mismatch";
 
   std::vector<uint8_t> diffImage(actual.pixels.size(), 0u);
-  pixelmatch::Options options;
-  options.threshold = params.threshold;
-  options.includeAA = params.includeAntiAliasing;
-  const int mismatched = pixelmatch::pixelmatch(expected.pixels, actual.pixels, diffImage, width,
-                                                height, strideInPixels, options);
+  int pixelsExceedingChannelDelta = 0;
+  const int mismatched = ComparePixels(expected.pixels, actual.pixels, width, height, strideInPixels,
+                                       params, diffImage, pixelsExceedingChannelDelta);
 
-  if (mismatched > params.maxMismatchedPixels) {
+  if (mismatched > params.maxMismatchedPixels || pixelsExceedingChannelDelta > 0) {
     const std::filesystem::path outDir = DiffOutputDir();
     const std::string flat = Flatten(testLabel);
     const auto actualPath = outDir / ("actual_" + flat + ".png");
@@ -217,6 +262,7 @@ void CompareBitmapToBitmap(const svg::RendererBitmap& actual, const svg::Rendere
                                                    width * 2, height, strideInPixels * 2u);
     ADD_FAILURE() << "[" << testLabel << "] " << mismatched
                   << " pixels differ (max allowed: " << params.maxMismatchedPixels
+                  << ChannelLimitDetails(params, pixelsExceedingChannelDelta)
                   << "). Actual: " << actualPath.string() << ". Expected: " << expectedPath.string()
                   << ". Diff: " << diffPath.string()
                   << ". Side-by-side: " << sideBySidePath.string();
