@@ -2188,7 +2188,23 @@ RendererGeode::~RendererGeode() {
   }
 }
 RendererGeode::RendererGeode(RendererGeode&&) noexcept = default;
-RendererGeode& RendererGeode::operator=(RendererGeode&&) noexcept = default;
+RendererGeode& RendererGeode::operator=(RendererGeode&& other) noexcept {
+  if (this == &other) {
+    return *this;
+  }
+
+  // `unique_ptr` move-assignment destroys our current Impl without invoking
+  // `RendererGeode::~RendererGeode()`. Detach its counter sink first so a
+  // shared device cannot retain a pointer into the displaced Impl. The moved
+  // Impl itself stays at the same address, so a binding to `other` remains
+  // valid after ownership transfers to `this`.
+  if (impl_ && impl_->device && impl_->device->counters() == &impl_->counters) {
+    impl_->device->setCounters(nullptr);
+  }
+
+  impl_ = std::move(other.impl_);
+  return *this;
+}
 
 void RendererGeode::draw(SVGDocument& document) {
   // No-op mode: if adapter/device acquisition failed there is no GPU to

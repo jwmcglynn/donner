@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <utility>
 
 #include "donner/base/Box.h"
 #include "donner/base/FillRule.h"
@@ -315,6 +316,31 @@ TEST_F(RendererGeodeTest, SharedDeviceSurvivesRendererTeardown) {
     ASSERT_FALSE(snapshot.empty()) << "iteration " << iteration;
     EXPECT_THAT(pixelAt(snapshot, 32, 32), RgbaEq(0, 255, 0, 255)) << "iteration " << iteration;
   }
+}
+
+TEST_F(RendererGeodeTest, MoveAssignmentDetachesDisplacedCounters) {
+  const std::shared_ptr<geode::GeodeDevice> device = sharedDevice();
+  RendererGeode source(device);
+  RendererGeode destination(device);
+
+  ASSERT_NE(device->counters(), nullptr);
+  destination = std::move(source);
+
+  // Move-assignment destroys the destination's old Impl. The device must not
+  // retain that Impl's counter address while the moved-in renderer is idle.
+  EXPECT_EQ(device->counters(), nullptr);
+
+  // The moved-in renderer must rebind its counters at the next frame and
+  // remain fully usable.
+  beginFrame(destination);
+  EXPECT_NE(device->counters(), nullptr);
+  destination.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
+  destination.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  destination.endFrame();
+
+  const RendererBitmap snapshot = destination.takeSnapshot();
+  ASSERT_FALSE(snapshot.empty());
+  EXPECT_THAT(pixelAt(snapshot, 32, 32), RgbaEq(0, 255, 0, 255));
 }
 
 TEST_F(RendererGeodeTest, EmptyFrameAfterOpaqueFrameClearsReusedTarget) {
