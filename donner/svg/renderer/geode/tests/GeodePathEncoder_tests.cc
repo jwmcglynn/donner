@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <limits>
 #include <vector>
@@ -503,6 +504,23 @@ TEST(GeodePathEncoder, MultipleOpenSubpathsEachGetClosed) {
   EncodedPath openEncoded = GeodePathEncoder::encode(twoLinesOpen, FillRule::NonZero);
   EncodedPath closedEncoded = GeodePathEncoder::encode(twoLinesClosed, FillRule::NonZero);
   EXPECT_EQ(openEncoded.curves.size(), closedEncoded.curves.size());
+}
+
+TEST(GeodePathEncoder, RayParallelAxisLeavesFiniteEmptyBandMetadata) {
+  const Path path = PathBuilder()
+                        .moveTo(Vector2d(0, 0))
+                        .lineTo(Vector2d(0, 10))
+                        .moveTo(Vector2d(10, 0))
+                        .lineTo(Vector2d(10, 10))
+                        .build();
+
+  const EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
+  ASSERT_FALSE(encoded.empty());
+  EXPECT_TRUE(encoded.vBands.empty());
+  EXPECT_TRUE(encoded.vCurves.empty());
+  EXPECT_EQ(encoded.vBandCount, 0u);
+  EXPECT_EQ(encoded.vStride, 0.0f);
+  EXPECT_TRUE(std::isfinite(encoded.vStride));
 }
 
 }  // namespace donner::geode
