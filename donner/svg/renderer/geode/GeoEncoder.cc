@@ -294,9 +294,11 @@ struct GeoEncoder::Impl {
   /// Allocate `size` bytes in `arena` at an offset aligned to
   /// `alignment`, growing if necessary. Writes `size` bytes of `data`
   /// into the buffer via `queue.writeBuffer`. Returns the
-  /// (buffer, offset) pair the draw should bind.
+  /// (buffer, offset) pair the draw should bind. The returned handle is a
+  /// value snapshot so a later growth of the same arena cannot retarget an
+  /// earlier allocation to the replacement buffer.
   struct Allocation {
-    const wgpu::Buffer* buffer;
+    wgpu::Buffer buffer;
     uint64_t offset;
     uint64_t size;
   };
@@ -339,7 +341,7 @@ struct GeoEncoder::Impl {
     device->queue().writeBuffer(arena.buffer.get(), alignedOffset, data, size);
     device->countBufferWrite(size);
     arena.offset = alignedOffset + size;
-    return {&arena.buffer.get(), alignedOffset, size};
+    return {arena.buffer.get(), alignedOffset, size};
   }
 
   /// Allocate a read-only storage binding for `byteCount` bytes of `data`,
@@ -438,15 +440,15 @@ struct GeoEncoder::Impl {
 
     wgpu::BindGroupEntry entries[11] = {};
     entries[0].binding = 0;
-    entries[0].buffer = *uniAlloc.buffer;
+    entries[0].buffer = uniAlloc.buffer;
     entries[0].offset = uniAlloc.offset;
     entries[0].size = uniAlloc.size;
     entries[1].binding = 1;
-    entries[1].buffer = *bandsAlloc.buffer;
+    entries[1].buffer = bandsAlloc.buffer;
     entries[1].offset = bandsAlloc.offset;
     entries[1].size = bandsAlloc.size;
     entries[2].binding = 2;
-    entries[2].buffer = *curvesAlloc.buffer;
+    entries[2].buffer = curvesAlloc.buffer;
     entries[2].offset = curvesAlloc.offset;
     entries[2].size = curvesAlloc.size;
     entries[3].binding = 3;
@@ -454,27 +456,27 @@ struct GeoEncoder::Impl {
     entries[4].binding = 4;
     entries[4].sampler = device->dummyClipMaskSampler();
     entries[5].binding = 5;
-    entries[5].buffer = *vBandsAlloc.buffer;
+    entries[5].buffer = vBandsAlloc.buffer;
     entries[5].offset = vBandsAlloc.offset;
     entries[5].size = vBandsAlloc.size;
     entries[6].binding = 6;
-    entries[6].buffer = *vCurvesAlloc.buffer;
+    entries[6].buffer = vCurvesAlloc.buffer;
     entries[6].offset = vCurvesAlloc.offset;
     entries[6].size = vCurvesAlloc.size;
     entries[7].binding = 7;
-    entries[7].buffer = *hGridAlloc.buffer;
+    entries[7].buffer = hGridAlloc.buffer;
     entries[7].offset = hGridAlloc.offset;
     entries[7].size = hGridAlloc.size;
     entries[8].binding = 8;
-    entries[8].buffer = *vGridAlloc.buffer;
+    entries[8].buffer = vGridAlloc.buffer;
     entries[8].offset = vGridAlloc.offset;
     entries[8].size = vGridAlloc.size;
     entries[9].binding = 9;
-    entries[9].buffer = *hRefsAlloc.buffer;
+    entries[9].buffer = hRefsAlloc.buffer;
     entries[9].offset = hRefsAlloc.offset;
     entries[9].size = hRefsAlloc.size;
     entries[10].binding = 10;
-    entries[10].buffer = *vRefsAlloc.buffer;
+    entries[10].buffer = vRefsAlloc.buffer;
     entries[10].offset = vRefsAlloc.offset;
     entries[10].size = vRefsAlloc.size;
 
@@ -486,7 +488,7 @@ struct GeoEncoder::Impl {
     wgpu::BindGroup bindGroup = transientResources.retain(dev.createBindGroup(bgDesc));
     device->countBindGroup();
 
-    pass.get().setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
+    pass.get().setVertexBuffer(0, vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
     pass.get().setBindGroup(0, bindGroup, 0, nullptr);
     pass.get().draw(static_cast<uint32_t>(encoded.quadVertices.size()), 1, 0, 0);
     device->countDraw();
@@ -1084,15 +1086,15 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
 
   wgpu::BindGroupEntry entries[11] = {};
   entries[0].binding = 0;
-  entries[0].buffer = *uniAlloc.buffer;
+  entries[0].buffer = uniAlloc.buffer;
   entries[0].offset = uniAlloc.offset;
   entries[0].size = uniAlloc.size;
   entries[1].binding = 1;
-  entries[1].buffer = *bandsAlloc.buffer;
+  entries[1].buffer = bandsAlloc.buffer;
   entries[1].offset = bandsAlloc.offset;
   entries[1].size = bandsAlloc.size;
   entries[2].binding = 2;
-  entries[2].buffer = *curvesAlloc.buffer;
+  entries[2].buffer = curvesAlloc.buffer;
   entries[2].offset = curvesAlloc.offset;
   entries[2].size = curvesAlloc.size;
   entries[3].binding = 3;
@@ -1100,27 +1102,27 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
   entries[4].binding = 4;
   entries[4].sampler = impl_->device->dummyClipMaskSampler();
   entries[5].binding = 5;
-  entries[5].buffer = *vBandsAlloc.buffer;
+  entries[5].buffer = vBandsAlloc.buffer;
   entries[5].offset = vBandsAlloc.offset;
   entries[5].size = vBandsAlloc.size;
   entries[6].binding = 6;
-  entries[6].buffer = *vCurvesAlloc.buffer;
+  entries[6].buffer = vCurvesAlloc.buffer;
   entries[6].offset = vCurvesAlloc.offset;
   entries[6].size = vCurvesAlloc.size;
   entries[7].binding = 7;
-  entries[7].buffer = *hGridAlloc.buffer;
+  entries[7].buffer = hGridAlloc.buffer;
   entries[7].offset = hGridAlloc.offset;
   entries[7].size = hGridAlloc.size;
   entries[8].binding = 8;
-  entries[8].buffer = *vGridAlloc.buffer;
+  entries[8].buffer = vGridAlloc.buffer;
   entries[8].offset = vGridAlloc.offset;
   entries[8].size = vGridAlloc.size;
   entries[9].binding = 9;
-  entries[9].buffer = *hRefsAlloc.buffer;
+  entries[9].buffer = hRefsAlloc.buffer;
   entries[9].offset = hRefsAlloc.offset;
   entries[9].size = hRefsAlloc.size;
   entries[10].binding = 10;
-  entries[10].buffer = *vRefsAlloc.buffer;
+  entries[10].buffer = vRefsAlloc.buffer;
   entries[10].offset = vRefsAlloc.offset;
   entries[10].size = vRefsAlloc.size;
 
@@ -1132,7 +1134,7 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
   wgpu::BindGroup bindGroup = impl_->transientResources.retain(dev.createBindGroup(bgDesc));
   impl_->device->countBindGroup();
 
-  impl_->maskPass.get().setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
+  impl_->maskPass.get().setVertexBuffer(0, vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
   impl_->maskPass.get().setBindGroup(0, bindGroup, 0, nullptr);
   impl_->maskPass.get().draw(static_cast<uint32_t>(encoded.quadVertices.size()), 1, 0, 0);
   impl_->device->countDraw();
@@ -1558,7 +1560,7 @@ void GeoEncoder::fillPathInstanced(const EncodedPath& encoded, const css::RGBA& 
   args.tileSize = Vector2d(1.0, 1.0);
   args.patternFromPath = Transform2d();
 
-  args.instanceTransformsBuffer = itAlloc.buffer;
+  args.instanceTransformsBuffer = &itAlloc.buffer;
   args.instanceTransformsOffset = itAlloc.offset;
   args.instanceTransformsSize = itAlloc.size;
   args.instanceCount = instanceCount;
@@ -1672,15 +1674,15 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
   // V band grid, H curve references, V curve references.
   wgpu::BindGroupEntry entries[14] = {};
   entries[0].binding = 0;
-  entries[0].buffer = *uniAlloc.buffer;
+  entries[0].buffer = uniAlloc.buffer;
   entries[0].offset = uniAlloc.offset;
   entries[0].size = uniAlloc.size;
   entries[1].binding = 1;
-  entries[1].buffer = *bandsAlloc.buffer;
+  entries[1].buffer = bandsAlloc.buffer;
   entries[1].offset = bandsAlloc.offset;
   entries[1].size = bandsAlloc.size;
   entries[2].binding = 2;
-  entries[2].buffer = *curvesAlloc.buffer;
+  entries[2].buffer = curvesAlloc.buffer;
   entries[2].offset = curvesAlloc.offset;
   entries[2].size = curvesAlloc.size;
   entries[3].binding = 3;
@@ -1705,27 +1707,27 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
     entries[7].size = 32u;
   }
   entries[8].binding = 8;
-  entries[8].buffer = *vBandsAlloc.buffer;
+  entries[8].buffer = vBandsAlloc.buffer;
   entries[8].offset = vBandsAlloc.offset;
   entries[8].size = vBandsAlloc.size;
   entries[9].binding = 9;
-  entries[9].buffer = *vCurvesAlloc.buffer;
+  entries[9].buffer = vCurvesAlloc.buffer;
   entries[9].offset = vCurvesAlloc.offset;
   entries[9].size = vCurvesAlloc.size;
   entries[10].binding = 10;
-  entries[10].buffer = *hGridAlloc.buffer;
+  entries[10].buffer = hGridAlloc.buffer;
   entries[10].offset = hGridAlloc.offset;
   entries[10].size = hGridAlloc.size;
   entries[11].binding = 11;
-  entries[11].buffer = *vGridAlloc.buffer;
+  entries[11].buffer = vGridAlloc.buffer;
   entries[11].offset = vGridAlloc.offset;
   entries[11].size = vGridAlloc.size;
   entries[12].binding = 12;
-  entries[12].buffer = *hRefsAlloc.buffer;
+  entries[12].buffer = hRefsAlloc.buffer;
   entries[12].offset = hRefsAlloc.offset;
   entries[12].size = hRefsAlloc.size;
   entries[13].binding = 13;
-  entries[13].buffer = *vRefsAlloc.buffer;
+  entries[13].buffer = vRefsAlloc.buffer;
   entries[13].offset = vRefsAlloc.offset;
   entries[13].size = vRefsAlloc.size;
 
@@ -1738,7 +1740,7 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
   impl_->device->countBindGroup();
 
   // 4. Record the draw call - one quad (6 vertices) per path.
-  impl_->pass.get().setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
+  impl_->pass.get().setVertexBuffer(0, vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
   impl_->pass.get().setBindGroup(0, bindGroup, 0, nullptr);
   impl_->pass.get().draw(static_cast<uint32_t>(encoded.quadVertices.size()), args.instanceCount, 0,
                          0);
