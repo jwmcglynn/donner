@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <future>
 #include <memory>
 #include <optional>
@@ -354,7 +355,7 @@ private:
   bool synchronizeSourceBeforeSave(std::string* error);
   void updateWindowTitle();
   void requestHistoryAction(HistoryAction action);
-  void applyPendingHistoryAction();
+  void applyPendingHistoryActions();
   void applyMenuActions(const MenuBarActions& menuActions);
   /// Build the contextual text-formatting bar's state for this frame: whether
   /// it is visible (single `<text>` selected or an active editing session), the
@@ -532,7 +533,8 @@ private:
   bool pendingViewportExportOverlay_ = false;
   bool contentOnlyCaptureForNextFrame_ = false;
   bool contentOnlyCaptureThisFrame_ = false;
-  std::optional<HistoryAction> pendingHistoryAction_;
+  /// History commands waiting for the async renderer to release document read access.
+  std::deque<HistoryAction> pendingHistoryActions_;
   bool requestRenderAtEndOfFrame_ = false;
   /// Render-pane ImGui scroll state sampled each frame for diagnostics.
   float renderPaneScrollYForDiagnostics_ = 0.0f;

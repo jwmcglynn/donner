@@ -14,7 +14,6 @@
 ///   UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) \
 ///     bazel run //donner/editor/tests:rnr_replay_tests
 
-#include <cstdint>
 #include <string_view>
 
 #include "donner/svg/renderer/RendererInterface.h"
@@ -22,16 +21,13 @@
 namespace donner::editor::tests {
 
 struct BitmapGoldenCompareParams {
-  /// Perceptual YIQ threshold (0.0 - 1.0). 0.02 matches the renderer suite's default.
+  /// Per-pixel pixelmatch threshold (0.0 - 1.0). 0.02 matches the renderer suite's default.
   float threshold = 0.02f;
-  /// Max number of pixels allowed to differ under the active comparison mode.
+  /// Max number of pixels allowed to exceed `threshold` before the comparison fails.
   int maxMismatchedPixels = 100;
   /// When true, count AA pixels as mismatches (off by default, same
   /// as `ImageComparisonTestFixture`).
   bool includeAntiAliasing = false;
-  /// When non-negative, replace perceptual comparison with an exact per-channel RGBA L-infinity
-  /// limit in 8-bit channel steps.
-  int maxChannelDelta = -1;
 };
 
 /// Strict identity pixelmatch parameters for new replay regressions.
@@ -49,7 +45,7 @@ struct BitmapGoldenCompareParams {
  * Use only for documented exceptions where identity comparison has
  * been reviewed and rejected.
  *
- * @param threshold Perceptual YIQ pixelmatch threshold.
+ * @param threshold Pixelmatch threshold.
  * @param maxMismatchedPixels Maximum number of mismatched pixels before failure.
  * @param includeAntiAliasing Whether anti-aliased pixels count as mismatches.
  */
@@ -59,23 +55,6 @@ struct BitmapGoldenCompareParams {
       .threshold = threshold,
       .maxMismatchedPixels = maxMismatchedPixels,
       .includeAntiAliasing = includeAntiAliasing,
-  };
-}
-
-/**
- * Explicitly-approved exact per-channel RGBA tolerance.
- *
- * Unlike pixelmatch's perceptual threshold, this rejects every pixel with any channel farther
- * than `maxChannelDelta` 8-bit steps from the expected pixel. It also rejects images with more
- * than `maxMismatchedPixels` non-identical pixels, including pixels within the channel limit.
- */
-[[nodiscard]] constexpr BitmapGoldenCompareParams RgbaLInfToleranceParams(
-    uint8_t maxChannelDelta, int maxMismatchedPixels = 0) {
-  return BitmapGoldenCompareParams{
-      .threshold = 0.0f,
-      .maxMismatchedPixels = maxMismatchedPixels,
-      .includeAntiAliasing = true,
-      .maxChannelDelta = static_cast<int>(maxChannelDelta),
   };
 }
 

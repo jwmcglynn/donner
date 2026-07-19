@@ -1739,37 +1739,35 @@ void EditorShell::updateWindowTitle() {
 }
 
 void EditorShell::requestHistoryAction(HistoryAction action) {
-  const bool available = action == HistoryAction::Undo ? app_.canUndo() : app_.canRedo();
-  if (!available) {
-    return;
-  }
-
-  pendingHistoryAction_ = action;
-  applyPendingHistoryAction();
-  if (pendingHistoryAction_.has_value()) {
+  pendingHistoryActions_.push_back(action);
+  applyPendingHistoryActions();
+  if (!pendingHistoryActions_.empty()) {
     window_.wakeEventLoop();
   }
 }
 
-void EditorShell::applyPendingHistoryAction() {
-  if (!pendingHistoryAction_.has_value() || renderCoordinator_.asyncRenderer().isBusy()) {
+void EditorShell::applyPendingHistoryActions() {
+  if (pendingHistoryActions_.empty() || renderCoordinator_.asyncRenderer().isBusy()) {
     return;
   }
 
-  const HistoryAction action = *pendingHistoryAction_;
-  pendingHistoryAction_.reset();
-  if (action == HistoryAction::Undo) {
-    if (!app_.canUndo()) {
-      return;
+  bool applied = false;
+  while (!pendingHistoryActions_.empty()) {
+    const HistoryAction action = pendingHistoryActions_.front();
+    pendingHistoryActions_.pop_front();
+    if (action == HistoryAction::Undo) {
+      if (app_.canUndo()) {
+        app_.undo();
+        applied = true;
+      }
+    } else if (app_.canRedo()) {
+      app_.redo();
+      applied = true;
     }
-    app_.undo();
-  } else {
-    if (!app_.canRedo()) {
-      return;
-    }
-    app_.redo();
   }
-  requestRenderAtEndOfFrame_ = true;
+  if (applied) {
+    requestRenderAtEndOfFrame_ = true;
+  }
 }
 
 void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
@@ -5654,7 +5652,7 @@ void EditorShell::runFrame() {
 
   renderCoordinator_.pollRenderResult(app_, interactionController_.viewport(), textures_,
                                       &interactionController_.frameHistory());
-  applyPendingHistoryAction();
+  applyPendingHistoryActions();
   markPhase(mainFrameCost.renderPollMs);
 
   if (!renderCoordinator_.asyncRenderer().isBusy()) {

@@ -123,6 +123,10 @@ See `docs/design_docs/0016-ci_escape_prevention.md` for the full rationale behin
 - **No dead code, refactor in-place.** Modify existing types/functions/modules step by step — do NOT build a parallel new implementation alongside the old one with the intent to "switch over later." Orphaned `.cc`/`.h` whose only consumers are their own tests are dead code and must be deleted in the same commit that severs their last live caller. See `CLAUDE.md` §"No Dead Code, Refactor In-Place" for the policy that drives this.
 - **Prefer replacement over parallel paths.** When adding or switching behavior, such as moving a comparison path to pixelmatch, aggressively remove the old implementation, output fields, docs, and tests instead of keeping multiple code paths unless compatibility or rollback is explicitly required.
 - **Pixel-diff tests use `donner/editor/tests:bitmap_golden_compare` (`CompareBitmapToBitmap` / `CompareBitmapToGolden`) + pixelmatch.** No private `composeOver` helpers; no percentage-divergence thresholds — either identity or inspectable `actual_*`/`expected_*`/`diff_*.png` under `$TEST_UNDECLARED_OUTPUTS_DIR`. See `CLAUDE.md` §"Pixel-Diff Tests".
+- **Never implement, duplicate, or emulate pixel-comparison logic.** Pixel acceptance decisions must
+  go through the project's pixelmatch helper. If pixelmatch cannot express a required comparison,
+  stop and obtain operator approval instead of adding channel loops, private comparators, or a
+  parallel tolerance API.
 - **Render SVGs with Donner, even from the terminal.** For local SVG previews or PNG
   generation, use `bazel run //donner/svg/tool:donner-svg -- <input.svg> --output <out.png>` or
   Donner renderer test utilities. Do not use external SVG renderers such as `rsvg-convert`,

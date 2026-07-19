@@ -25,15 +25,6 @@ donner_cc_library(
 )
 
 donner_cc_test(
-    name = "bitmap_golden_compare_tests",
-    srcs = ["BitmapGoldenCompare_tests.cc"],
-    deps = [
-        ":bitmap_golden_compare",
-        "@com_google_gtest//:gtest_main",
-    ],
-)
-
-donner_cc_test(
     name = "viewport_geometry_tests",
     srcs = ["ViewportGeometry_tests.cc"],
     deps = [

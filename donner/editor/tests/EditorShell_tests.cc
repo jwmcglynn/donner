@@ -638,6 +638,18 @@ class EditorShellTestAccess {
 public:
   static EditorApp& App(EditorShell& shell) { return shell.app_; }
   static const EditorApp& App(const EditorShell& shell) { return shell.app_; }
+  static std::size_t PendingHistoryActionCount(const EditorShell& shell) {
+    return shell.pendingHistoryActions_.size();
+  }
+
+  static void RequestUndo(EditorShell& shell) {
+    shell.requestHistoryAction(EditorShell::HistoryAction::Undo);
+  }
+
+  static void RequestRedo(EditorShell& shell) {
+    shell.requestHistoryAction(EditorShell::HistoryAction::Redo);
+  }
+
   static TextEditor& Source(EditorShell& shell) { return shell.textEditor_; }
   static const TextEditor& Source(const EditorShell& shell) { return shell.textEditor_; }
 
@@ -4002,6 +4014,43 @@ TEST(EditorShellTest, CompactUndoRedoButtonsDriveDocumentHistory) {
   ASSERT_TRUE(RunFramesUntilHistoryState(window, shell, /*canUndo=*/true, /*canRedo=*/false));
   EXPECT_TRUE(EditorShellTestAccess::App(shell).canUndo());
   EXPECT_FALSE(EditorShellTestAccess::App(shell).canRedo());
+}
+
+TEST(EditorShellTest, DeferredHistoryPreservesRepeatedCommands) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::UseInMemoryShapeClipboard(shell);
+
+  auto target = EditorShellTestAccess::App(shell).document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  EditorShellTestAccess::App(shell).setSelection(*target);
+  EditorShellTestAccess::CopySelectedShapesToClipboard(shell);
+  for (int i = 0; i < 2; ++i) {
+    EditorShellTestAccess::PasteShapesFromClipboard(shell, /*inFront=*/false);
+    ASSERT_TRUE(EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell));
+  }
+
+  shell.asyncRendererForReplay().setReplayRenderDelayForTesting(std::chrono::milliseconds(200));
+  RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), /*mouseDown=*/false);
+  ASSERT_TRUE(shell.asyncRendererForReplay().isBusy());
+
+  EditorShellTestAccess::RequestUndo(shell);
+  EditorShellTestAccess::RequestUndo(shell);
+  EXPECT_EQ(EditorShellTestAccess::PendingHistoryActionCount(shell), 2u);
+  ASSERT_TRUE(RunFramesUntilHistoryState(window, shell, /*canUndo=*/false, /*canRedo=*/true));
+  EXPECT_EQ(EditorShellTestAccess::PendingHistoryActionCount(shell), 0u);
+
+  ASSERT_TRUE(shell.asyncRendererForReplay().isBusy());
+  EditorShellTestAccess::RequestRedo(shell);
+  EditorShellTestAccess::RequestRedo(shell);
+  EXPECT_EQ(EditorShellTestAccess::PendingHistoryActionCount(shell), 2u);
+  ASSERT_TRUE(RunFramesUntilHistoryState(window, shell, /*canUndo=*/true, /*canRedo=*/false));
+  EXPECT_EQ(EditorShellTestAccess::PendingHistoryActionCount(shell), 0u);
 }
 
 TEST(EditorShellTest, CompactSheetHeaderCloseButtonHidesPanel) {
