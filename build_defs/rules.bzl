@@ -299,6 +299,10 @@ def donner_multi_transitioned_test(name, dep, renderer_backend, **kwargs):
     """Create a transitioned test with an honest short-runtime default."""
     if "size" not in kwargs and "timeout" not in kwargs:
         kwargs["size"] = "small"
+    if renderer_backend == "geode":
+        tags = kwargs.get("tags", [])
+        if "exclusive-if-local" not in tags:
+            kwargs["tags"] = tags + ["exclusive-if-local"]
 
     _donner_multi_transitioned_test(
         name = name,
