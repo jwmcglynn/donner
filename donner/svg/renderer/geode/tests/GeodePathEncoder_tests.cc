@@ -1,5 +1,6 @@
 #include "donner/svg/renderer/geode/GeodePathEncoder.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -9,12 +10,21 @@
 #include <limits>
 #include <set>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include "donner/base/FillRule.h"
 #include "donner/base/Path.h"
 
 namespace donner::geode {
+
+namespace {
+
+MATCHER(IsFiniteFloat, "is finite") {
+  return std::isfinite(arg);
+}
+
+}  // namespace
 
 /// Non-asserting encode-cost probe: times `GeodePathEncoder::encode` on a
 /// synthetic many-curve, many-band path and prints the per-encode median
@@ -274,9 +284,10 @@ TEST(GeodePathEncoder, FloatBoundingPolygonRemainsFiniteAndStrict) {
   for (uint32_t i = 0; i < encoded.boundingVertexCount; ++i) {
     const auto& a = encoded.boundingVertices[i];
     const auto& b = encoded.boundingVertices[(i + 1u) % encoded.boundingVertexCount];
-    EXPECT_TRUE(std::isfinite(a.x));
-    EXPECT_TRUE(std::isfinite(a.y));
-    EXPECT_TRUE(a.x != b.x || a.y != b.y) << "Consecutive float vertices must be distinct";
+    SCOPED_TRACE(::testing::Message() << "bounding vertex " << i);
+    EXPECT_THAT(a.x, IsFiniteFloat());
+    EXPECT_THAT(a.y, IsFiniteFloat());
+    EXPECT_THAT(std::pair(a.x, a.y), ::testing::Ne(std::pair(b.x, b.y)));
     twiceArea += static_cast<double>(a.x - origin.x) * static_cast<double>(b.y - origin.y) -
                  static_cast<double>(a.y - origin.y) * static_cast<double>(b.x - origin.x);
   }
