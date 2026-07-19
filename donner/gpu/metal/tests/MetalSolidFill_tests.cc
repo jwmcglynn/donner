@@ -192,7 +192,7 @@ protected:
     const Status writeStatus = device_->writeBuffer(
         buffer, 0, std::span<const uint8_t>(static_cast<const uint8_t*>(data), byteCount));
     EXPECT_FALSE(writeStatus.hasError()) << writeStatus.error();
-    return SizedBuffer{buffer, byteCount};
+    return SizedBuffer{std::move(buffer), byteCount};
   }
 
   std::unique_ptr<MetalDevice> device_;
