@@ -1413,6 +1413,20 @@
           "group": 0,
           "name": "vBandGrid",
           "type": "array<u32>"
+        },
+        {
+          "addressSpace": "storage, read",
+          "binding": 12,
+          "group": 0,
+          "name": "hCurveIndices",
+          "type": "array<u32>"
+        },
+        {
+          "addressSpace": "storage, read",
+          "binding": 13,
+          "group": 0,
+          "name": "vCurveIndices",
+          "type": "array<u32>"
         }
       ],
       "builtins": [
@@ -1533,6 +1547,20 @@
           "group": 0,
           "name": "vBandGrid",
           "type": "array<u32>"
+        },
+        {
+          "addressSpace": "storage, read",
+          "binding": 9,
+          "group": 0,
+          "name": "hCurveIndices",
+          "type": "array<u32>"
+        },
+        {
+          "addressSpace": "storage, read",
+          "binding": 10,
+          "group": 0,
+          "name": "vCurveIndices",
+          "type": "array<u32>"
         }
       ],
       "builtins": [
@@ -1649,6 +1677,20 @@
           "binding": 8,
           "group": 0,
           "name": "vBandGrid",
+          "type": "array<u32>"
+        },
+        {
+          "addressSpace": "storage, read",
+          "binding": 9,
+          "group": 0,
+          "name": "hCurveIndices",
+          "type": "array<u32>"
+        },
+        {
+          "addressSpace": "storage, read",
+          "binding": 10,
+          "group": 0,
+          "name": "vCurveIndices",
           "type": "array<u32>"
         }
       ],
