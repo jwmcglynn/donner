@@ -703,29 +703,6 @@ std::optional<Box2d> TryResolveDocumentViewBox(svg::SVGDocument& document) {
 
 using namespace internal;
 
-namespace {
-
-constexpr std::string_view kUiRegularFontName = "Donner UI Regular";
-constexpr std::string_view kUiBoldFontName = "Donner UI Bold";
-constexpr std::string_view kCodeFontName = "Donner Code";
-
-ImFont* FindFontByDebugName(const ImFontAtlas& atlas, std::string_view name) {
-  for (int index = 0; index < atlas.Fonts.Size; ++index) {
-    ImFont* font = atlas.Fonts[index];
-    if (font != nullptr && name == font->GetDebugName()) {
-      return font;
-    }
-  }
-  return nullptr;
-}
-
-void SetFontConfigName(ImFontConfig& config, std::string_view name) {
-  std::snprintf(config.Name, sizeof(config.Name), "%.*s", static_cast<int>(name.size()),
-                name.data());
-}
-
-}  // namespace
-
 /// Convert the text tool's drag-to-create preview into the overlay
 /// snapshot's pushed-state form.
 std::optional<SelectionChromeSnapshot::TextBoxDragPreview> TextBoxDragPreviewFromTool(
@@ -801,31 +778,27 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
   });
 
   ImGuiIO& io = ImGui::GetIO();
-  ImFont* existingRegular = FindFontByDebugName(*io.Fonts, kUiRegularFontName);
-  ImFont* existingBold = FindFontByDebugName(*io.Fonts, kUiBoldFontName);
-  ImFont* existingCode = FindFontByDebugName(*io.Fonts, kCodeFontName);
-  if (existingRegular != nullptr && existingBold != nullptr && existingCode != nullptr) {
+  const gui::EditorWindowFonts& existingFonts = window_.editorFonts();
+  if (existingFonts.complete()) {
     // Multiple EditorShell instances can share one EditorWindow in tests and
     // document-replacement workflows. Re-adding fonts after the WGPU backend
     // has uploaded the atlas clears its texture id, leaving the next draw with
-    // a null texture view. Reuse the context-local fonts instead.
-    uiFontBold_ = existingBold;
-    codeFont_ = existingCode;
+    // a null texture view. Reuse the window-owned context-local pointers
+    // without changing the fonts' ImGui debug names.
+    uiFontBold_ = existingFonts.uiBold;
+    codeFont_ = existingFonts.code;
   } else {
     ImFontConfig fontCfg;
     fontCfg.FontDataOwnedByAtlas = false;
     const double displayScale = window_.displayScale();
-    SetFontConfigName(fontCfg, kUiRegularFontName);
-    std::ignore = io.Fonts->AddFontFromMemoryTTF(
+    ImFont* uiFontRegular = io.Fonts->AddFontFromMemoryTTF(
         const_cast<unsigned char*>(embedded::kRobotoRegularTtf.data()),
         static_cast<int>(embedded::kRobotoRegularTtf.size()),
         static_cast<float>(15.0 * displayScale), &fontCfg, kEditorGlyphRanges);
-    SetFontConfigName(fontCfg, kUiBoldFontName);
     uiFontBold_ = io.Fonts->AddFontFromMemoryTTF(
         const_cast<unsigned char*>(embedded::kRobotoBoldTtf.data()),
         static_cast<int>(embedded::kRobotoBoldTtf.size()), static_cast<float>(15.0 * displayScale),
         &fontCfg, kEditorGlyphRanges);
-    SetFontConfigName(fontCfg, kCodeFontName);
     codeFont_ = io.Fonts->AddFontFromMemoryTTF(
         const_cast<unsigned char*>(embedded::kFiraCodeRegularTtf.data()),
         static_cast<int>(embedded::kFiraCodeRegularTtf.size()),
@@ -836,6 +809,11 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
         const_cast<unsigned char*>(embedded::kRobotoRegularTtf.data()),
         static_cast<int>(embedded::kRobotoRegularTtf.size()),
         static_cast<float>(14.0 * displayScale), &codeSymbolFontCfg, kEditorSymbolGlyphRanges);
+    window_.setEditorFonts({
+        .uiRegular = uiFontRegular,
+        .uiBold = uiFontBold_,
+        .code = codeFont_,
+    });
   }
 
   if (!app_.loadFromString(*initialSource)) {

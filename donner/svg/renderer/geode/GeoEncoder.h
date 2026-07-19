@@ -200,6 +200,11 @@ public:
    */
   void setLoadPreserve();
 
+  /// Enable analytic edge anti-aliasing for subsequent path and mask draws.
+  /// Disabled mode emits binary coverage at the pixel center.
+  /// @param antialias True to retain analytic edge coverage.
+  void setAntialias(bool antialias);
+
   /// Set the model-view transform for subsequent draw calls.
   void setTransform(const Transform2d& transform);
 
@@ -442,8 +447,8 @@ public:
    *   distinct per-instance uniforms); repeat draws in the same frame fall
    *   back to the arena path.
    */
-  void fillPathResident(GeodeResidentSlot& slot, const EncodedPath& encoded,
-                        const css::RGBA& color, FillRule rule, uint64_t frameId);
+  void fillPathResident(GeodeResidentSlot& slot, const EncodedPath& encoded, const css::RGBA& color,
+                        FillRule rule, uint64_t frameId);
 
   /**
    * Fill N copies of the same encoded path at N different affine

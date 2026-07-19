@@ -3909,12 +3909,25 @@ void ClickAt(gui::EditorWindow& window, EditorShell& shell, const ImVec2& pos) {
   RunFrameWithMouse(window, shell, pos, /*mouseDown=*/false);
 }
 
-bool RunFramesUntilHistoryState(gui::EditorWindow& window, EditorShell& shell, bool canUndo,
-                                bool canRedo) {
+enum class HistoryAvailability {
+  None,
+  UndoOnly,
+  RedoOnly,
+  UndoAndRedo,
+};
+
+HistoryAvailability CurrentHistoryAvailability(const EditorApp& app) {
+  if (app.canUndo()) {
+    return app.canRedo() ? HistoryAvailability::UndoAndRedo : HistoryAvailability::UndoOnly;
+  }
+  return app.canRedo() ? HistoryAvailability::RedoOnly : HistoryAvailability::None;
+}
+
+bool RunFramesUntilHistoryState(gui::EditorWindow& window, EditorShell& shell,
+                                HistoryAvailability expectedAvailability) {
   constexpr int kMaxFrames = 200;
   for (int frame = 0; frame < kMaxFrames; ++frame) {
-    if (EditorShellTestAccess::App(shell).canUndo() == canUndo &&
-        EditorShellTestAccess::App(shell).canRedo() == canRedo) {
+    if (CurrentHistoryAvailability(EditorShellTestAccess::App(shell)) == expectedAvailability) {
       return true;
     }
     RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), /*mouseDown=*/false);
@@ -4005,13 +4018,13 @@ TEST(EditorShellTest, CompactUndoRedoButtonsDriveDocumentHistory) {
   // Undo requested while the renderer owns the document is deferred until the worker releases
   // its read access, then removes the pasted shape from the document history.
   ClickAt(window, shell, CompactTopBarButtonCenter(window, shell, 1));
-  ASSERT_TRUE(RunFramesUntilHistoryState(window, shell, /*canUndo=*/false, /*canRedo=*/true));
+  ASSERT_TRUE(RunFramesUntilHistoryState(window, shell, HistoryAvailability::RedoOnly));
   EXPECT_FALSE(EditorShellTestAccess::App(shell).canUndo());
   EXPECT_TRUE(EditorShellTestAccess::App(shell).canRedo());
 
   // Redo restores it.
   ClickAt(window, shell, CompactTopBarButtonCenter(window, shell, 2));
-  ASSERT_TRUE(RunFramesUntilHistoryState(window, shell, /*canUndo=*/true, /*canRedo=*/false));
+  ASSERT_TRUE(RunFramesUntilHistoryState(window, shell, HistoryAvailability::UndoOnly));
   EXPECT_TRUE(EditorShellTestAccess::App(shell).canUndo());
   EXPECT_FALSE(EditorShellTestAccess::App(shell).canRedo());
 }
@@ -4042,14 +4055,14 @@ TEST(EditorShellTest, DeferredHistoryPreservesRepeatedCommands) {
   EditorShellTestAccess::RequestUndo(shell);
   EditorShellTestAccess::RequestUndo(shell);
   EXPECT_EQ(EditorShellTestAccess::PendingHistoryActionCount(shell), 2u);
-  ASSERT_TRUE(RunFramesUntilHistoryState(window, shell, /*canUndo=*/false, /*canRedo=*/true));
+  ASSERT_TRUE(RunFramesUntilHistoryState(window, shell, HistoryAvailability::RedoOnly));
   EXPECT_EQ(EditorShellTestAccess::PendingHistoryActionCount(shell), 0u);
 
   ASSERT_TRUE(shell.asyncRendererForReplay().isBusy());
   EditorShellTestAccess::RequestRedo(shell);
   EditorShellTestAccess::RequestRedo(shell);
   EXPECT_EQ(EditorShellTestAccess::PendingHistoryActionCount(shell), 2u);
-  ASSERT_TRUE(RunFramesUntilHistoryState(window, shell, /*canUndo=*/true, /*canRedo=*/false));
+  ASSERT_TRUE(RunFramesUntilHistoryState(window, shell, HistoryAvailability::UndoOnly));
   EXPECT_EQ(EditorShellTestAccess::PendingHistoryActionCount(shell), 0u);
 }
 

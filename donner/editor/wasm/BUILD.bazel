@@ -41,8 +41,9 @@ _EMDAWNWEBGPU_LINKOPTS = [
     "--js-library=$(execpath //third_party/emdawnwebgpu:webgpu/src/library_webgpu.js)",
     "-sASYNCIFY",
     # WebGPU readback can suspend from the full EditorShell frame stack. The
-    # Emscripten default (4 KiB) overflows before waitAny rewinds.
-    "-sASYNCIFY_STACK_SIZE=1048576",
+    # Emscripten's 4 KiB default overflows before waitAny rewinds. The
+    # readback smoke test passes at 8 KiB; use 16 KiB for 2x headroom.
+    "-sASYNCIFY_STACK_SIZE=16384",
 ]
 
 # Linker flags shared by both renderer backends.

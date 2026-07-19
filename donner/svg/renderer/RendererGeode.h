@@ -211,6 +211,11 @@ public:
    */
   void setPreserveTargetOnBeginFrame(bool preserve);
 
+  /// Enable analytic edge anti-aliasing. Disabled mode emits binary
+  /// pixel-center coverage for deterministic ASCII snapshot tests.
+  /// @param antialias True to retain analytic edge coverage.
+  void setAntialias(bool antialias);
+
   // --- RendererInterface ---
 
   void draw(SVGDocument& document) override;

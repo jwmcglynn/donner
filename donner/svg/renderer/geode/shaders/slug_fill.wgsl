@@ -47,7 +47,8 @@ struct Uniforms {
   hasClipPolygon: u32,
   // Nonzero when a path-clip mask texture is bound at binding 5.
   hasClipMask: u32,
-  _pad0: u32,
+  // Nonzero to preserve analytic edge coverage; zero emits binary coverage.
+  antialias: u32,
   _pad1: u32,
   _pad2: u32,
   // Band-grid parameters (0041 §8.1). The horizontal grid bins the path's
@@ -250,6 +251,7 @@ fn solve_quadratic(a: f32, b: f32, c: f32) -> vec2f {
 struct RayCoverage {
   cov: f32,
   wgt: f32,
+  winding: f32,
 };
 
 // Ownership of a shared vertex on the monotone axis, as a direction-independent
@@ -270,6 +272,7 @@ fn accumulateHoriz(slot: u32, sample: vec2f, ppemX: f32) -> RayCoverage {
   var result: RayCoverage;
   result.cov = 0.0;
   result.wgt = 0.0;
+  result.winding = 0.0;
   if (slot == kNoBand) {
     return result;
   }
@@ -297,6 +300,7 @@ fn accumulateHoriz(slot: u32, sample: vec2f, ppemX: f32) -> RayCoverage {
       let s = select(-1.0, 1.0, dy_dt >= 0.0);
       result.cov = result.cov + s * saturate(r + 0.5);
       result.wgt = max(result.wgt, saturate(1.0 - abs(r) * 2.0));
+      result.winding = result.winding + s * select(0.0, 1.0, r >= 0.0);
     }
   }
   return result;
@@ -306,6 +310,7 @@ fn accumulateVert(slot: u32, sample: vec2f, ppemY: f32) -> RayCoverage {
   var result: RayCoverage;
   result.cov = 0.0;
   result.wgt = 0.0;
+  result.winding = 0.0;
   if (slot == kNoBand) {
     return result;
   }
@@ -338,6 +343,7 @@ fn accumulateVert(slot: u32, sample: vec2f, ppemY: f32) -> RayCoverage {
       let s = select(1.0, -1.0, dx_dt >= 0.0);
       result.cov = result.cov + s * saturate(r + 0.5);
       result.wgt = max(result.wgt, saturate(1.0 - abs(r) * 2.0));
+      result.winding = result.winding + s * select(0.0, 1.0, r >= 0.0);
     }
   }
   return result;
@@ -386,6 +392,7 @@ fn fs_main(in: VertexOutput) -> FragOutput {
   var hCov: RayCoverage;
   hCov.cov = 0.0;
   hCov.wgt = 0.0;
+  hCov.winding = 0.0;
   if (uniforms.hBandCount > 0u) {
     let hi = clamp(i32((in.sample_pos.y - uniforms.yBase) / uniforms.hStride),
                    0, i32(uniforms.hBandCount) - 1);
@@ -396,6 +403,7 @@ fn fs_main(in: VertexOutput) -> FragOutput {
   var vCov: RayCoverage;
   vCov.cov = 0.0;
   vCov.wgt = 0.0;
+  vCov.winding = 0.0;
   if (uniforms.vBandCount > 0u) {
     let vj = clamp(i32((in.sample_pos.x - uniforms.xBase) / uniforms.vStride),
                    0, i32(uniforms.vBandCount) - 1);
@@ -408,7 +416,14 @@ fn fs_main(in: VertexOutput) -> FragOutput {
   // Fill rule. Non-zero clamps the (signed) winding coverage; even-odd folds
   // the RAW coverage via a triangle wave (the fold must see the unsaturated
   // value - a hole has combined coverage ≈ 2, which the wave maps to 0).
-  if (uniforms.fillRule == 0u) {
+  if (uniforms.antialias == 0u) {
+    let winding = u32(abs(hCov.winding));
+    if (uniforms.fillRule == 0u) {
+      coverage = select(0.0, 1.0, winding != 0u);
+    } else {
+      coverage = f32(winding & 1u);
+    }
+  } else if (uniforms.fillRule == 0u) {
     coverage = saturate(coverage);
   } else {
     coverage = 1.0 - abs(1.0 - fract(coverage * 0.5) * 2.0);

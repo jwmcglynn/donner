@@ -1480,7 +1480,7 @@
         "textureSample",
         "var"
       ],
-      "lineCount": 452,
+      "lineCount": 467,
       "structs": [
         "Band",
         "FragOutput",
@@ -1598,7 +1598,7 @@
         "textureLoad",
         "var"
       ],
-      "lineCount": 457,
+      "lineCount": 471,
       "structs": [
         "Band",
         "FragOutput",
@@ -1712,7 +1712,7 @@
         "textureLoad",
         "var"
       ],
-      "lineCount": 295,
+      "lineCount": 309,
       "structs": [
         "Band",
         "FragOutput",

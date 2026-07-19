@@ -758,6 +758,7 @@ std::optional<ResolvedRadialGradient> resolveRadialGradientParams(
 
 struct RendererGeode::Impl {
   bool verbose = false;
+  bool antialias = true;
 
   // Per-frame perf counters. See design doc 0030 (geode_performance) for
   // the tracked sites and the optimization milestones these drive.
@@ -973,6 +974,19 @@ struct RendererGeode::Impl {
   /// through it instead of re-creating them each frame. Companion to
   /// `texturePool` (M4.2) on the buffer side.
   geode::GeodeBufferPool arenaBufferPool;
+
+  void configureEncoder(geode::GeoEncoder& encoderToConfigure) {
+    encoderToConfigure.setBufferPool(&arenaBufferPool);
+    encoderToConfigure.setAntialias(antialias);
+  }
+
+  std::unique_ptr<geode::GeoEncoder> makeEncoder(const wgpu::Texture& renderTarget) {
+    auto result =
+        std::make_unique<geode::GeoEncoder>(*device, *pipeline, *gradientPipeline, *imagePipeline,
+                                            renderTarget, frameCommandEncoder.get());
+    configureEncoder(*result);
+    return result;
+  }
 
   /// Drop a bucket entirely if it hasn't been touched in this many
   /// consecutive frames. At 60 fps this is ~2 seconds of idleness;
@@ -1442,7 +1456,6 @@ struct RendererGeode::Impl {
       encoder->fillPath(builder.build(), css::RGBA(255, 0, 255, 200), FillRule::NonZero);
     }
   }
-
 
   /// M6-B step 3 (design doc 0030 §M6 Bullet 2): deferred batch for
   /// consecutive `drawPath` calls that share a source entity + resolved
@@ -2175,6 +2188,10 @@ void RendererGeode::setPreserveTargetOnBeginFrame(bool preserve) {
   impl_->preserveTargetOnBeginFrame = preserve;
 }
 
+void RendererGeode::setAntialias(bool antialias) {
+  impl_->antialias = antialias;
+}
+
 RendererGeode::~RendererGeode() {
   // GeodeDevice holds a raw `counters_` pointer into our Impl (see `Impl::initPipelines` →
   // `device->setCounters(&counters)`). If this renderer's counters are still the ones the
@@ -2330,10 +2347,7 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
   cedesc.label = wgpuLabel("RendererGeodeFrameCE");
   impl_->frameCommandEncoder.reset(impl_->device->device().createCommandEncoder(cedesc));
 
-  impl_->encoder = std::make_unique<geode::GeoEncoder>(
-      *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      impl_->target, impl_->frameCommandEncoder.get());
-  impl_->encoder->setBufferPool(&impl_->arenaBufferPool);
+  impl_->encoder = impl_->makeEncoder(impl_->target);
   if (impl_->preserveTargetOnBeginFrame) {
     impl_->encoder->setLoadPreserve();
   } else {
@@ -2693,10 +2707,7 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
   frame.blendMode = blendMode;
 
   impl_->target = layerTexture;
-  auto newEncoder = std::make_unique<geode::GeoEncoder>(
-      *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      layerTexture, impl_->frameCommandEncoder.get());
-  newEncoder->setBufferPool(&impl_->arenaBufferPool);
+  auto newEncoder = impl_->makeEncoder(layerTexture);
   newEncoder->clear(css::RGBA(0, 0, 0, 0));
   impl_->encoder = std::move(newEncoder);
   impl_->layerStack.push_back(std::move(frame));
@@ -2774,10 +2785,7 @@ void RendererGeode::popIsolatedLayer() {
       // No feedback loop: `snapshot` is a copy of `savedTarget`, not an
       // alias, so sampling `snapshot` while writing `savedTarget` is
       // safe.
-      auto newEncoder = std::make_unique<geode::GeoEncoder>(
-          *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-          frame.savedTarget, impl_->frameCommandEncoder.get());
-      newEncoder->setBufferPool(&impl_->arenaBufferPool);
+      auto newEncoder = impl_->makeEncoder(frame.savedTarget);
       newEncoder->setLoadPreserve();
       impl_->encoder = std::move(newEncoder);
       impl_->updateEncoderScissor();
@@ -2798,10 +2806,7 @@ void RendererGeode::popIsolatedLayer() {
   // Plain premultiplied source-over (the `Normal` case). Create a
   // fresh encoder that preserves its existing contents. Draw the layer
   // texture across the target with the stored opacity as compositing alpha.
-  auto newEncoder = std::make_unique<geode::GeoEncoder>(
-      *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      frame.savedTarget, impl_->frameCommandEncoder.get());
-  newEncoder->setBufferPool(&impl_->arenaBufferPool);
+  auto newEncoder = impl_->makeEncoder(frame.savedTarget);
   newEncoder->setLoadPreserve();
   impl_->encoder = std::move(newEncoder);
   impl_->updateEncoderScissor();
@@ -2895,10 +2900,7 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
   impl_->clipStack.clear();
 
   impl_->target = layerTexture;
-  auto newEncoder = std::make_unique<geode::GeoEncoder>(
-      *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      layerTexture, impl_->frameCommandEncoder.get());
-  newEncoder->setBufferPool(&impl_->arenaBufferPool);
+  auto newEncoder = impl_->makeEncoder(layerTexture);
   newEncoder->clear(css::RGBA(0, 0, 0, 0));
   impl_->encoder = std::move(newEncoder);
 
@@ -3024,7 +3026,7 @@ void RendererGeode::popFilterLayer() {
           geode::GeoEncoder resampleEncoder(*impl_->device, *impl_->pipeline,
                                             *impl_->gradientPipeline, *impl_->imagePipeline,
                                             localTexture);
-          resampleEncoder.setBufferPool(&impl_->arenaBufferPool);
+          impl_->configureEncoder(resampleEncoder);
           resampleEncoder.setTransform(localFromDevice);
           resampleEncoder.drawTexture(
               frame.layerTexture,
@@ -3052,10 +3054,7 @@ void RendererGeode::popFilterLayer() {
             deviceFromFilter;
 
         impl_->target = frame.savedTarget;
-        auto compositeEncoder = std::make_unique<geode::GeoEncoder>(
-            *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-            frame.savedTarget, impl_->frameCommandEncoder.get());
-        compositeEncoder->setBufferPool(&impl_->arenaBufferPool);
+        auto compositeEncoder = impl_->makeEncoder(frame.savedTarget);
         compositeEncoder->setLoadPreserve();
         impl_->encoder = std::move(compositeEncoder);
         impl_->updateEncoderScissor();
@@ -3093,10 +3092,7 @@ void RendererGeode::popFilterLayer() {
   // existing contents. Composite the filtered texture back with full
   // opacity (filter results are already premultiplied).
   impl_->target = frame.savedTarget;
-  auto newEncoder = std::make_unique<geode::GeoEncoder>(
-      *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      frame.savedTarget, impl_->frameCommandEncoder.get());
-  newEncoder->setBufferPool(&impl_->arenaBufferPool);
+  auto newEncoder = impl_->makeEncoder(frame.savedTarget);
   newEncoder->setLoadPreserve();
   impl_->encoder = std::move(newEncoder);
   impl_->updateEncoderScissor();
@@ -3209,10 +3205,7 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds) {
   frame.phase = Impl::MaskStackFrame::Phase::Capturing;
 
   impl_->target = frame.maskTexture;
-  auto captureEncoder = std::make_unique<geode::GeoEncoder>(
-      *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      frame.maskTexture, impl_->frameCommandEncoder.get());
-  captureEncoder->setBufferPool(&impl_->arenaBufferPool);
+  auto captureEncoder = impl_->makeEncoder(frame.maskTexture);
   captureEncoder->clear(css::RGBA(0, 0, 0, 0));
   impl_->encoder = std::move(captureEncoder);
   impl_->maskStack.push_back(std::move(frame));
@@ -3238,10 +3231,7 @@ void RendererGeode::transitionMaskToContent() {
   impl_->retireActiveEncoder();
 
   impl_->target = frame.contentTexture;
-  auto contentEncoder = std::make_unique<geode::GeoEncoder>(
-      *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      frame.contentTexture, impl_->frameCommandEncoder.get());
-  contentEncoder->setBufferPool(&impl_->arenaBufferPool);
+  auto contentEncoder = impl_->makeEncoder(frame.contentTexture);
   contentEncoder->clear(css::RGBA(0, 0, 0, 0));
   impl_->encoder = std::move(contentEncoder);
   frame.phase = Impl::MaskStackFrame::Phase::Content;
@@ -3269,10 +3259,7 @@ void RendererGeode::popMask() {
 
   // Restore the outer target and reopen a new encoder with load-preserve.
   impl_->target = frame.savedTarget;
-  auto newEncoder = std::make_unique<geode::GeoEncoder>(
-      *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      frame.savedTarget, impl_->frameCommandEncoder.get());
-  newEncoder->setBufferPool(&impl_->arenaBufferPool);
+  auto newEncoder = impl_->makeEncoder(frame.savedTarget);
   newEncoder->setLoadPreserve();
   impl_->encoder = std::move(newEncoder);
   impl_->updateEncoderScissor();
@@ -3397,10 +3384,7 @@ bool RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   const Vector2d& rasterScale = impl_->patternStack.back().rasterScale;
   impl_->deviceFromLocalTransform = Transform2d::Scale(rasterScale.x, rasterScale.y);
 
-  auto newEncoder = std::make_unique<geode::GeoEncoder>(
-      *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      tileTextureHandle, impl_->frameCommandEncoder.get());
-  newEncoder->setBufferPool(&impl_->arenaBufferPool);
+  auto newEncoder = impl_->makeEncoder(tileTextureHandle);
   // Transparent clear so unpainted tile pixels contribute nothing.
   newEncoder->clear(css::RGBA(0, 0, 0, 0));
   impl_->encoder = std::move(newEncoder);
@@ -3463,10 +3447,7 @@ void RendererGeode::endPatternTile(bool forStroke) {
   // extending GeoEncoder; see the `reopen` helper added below.
   if (impl_->device && impl_->pipeline && impl_->gradientPipeline && impl_->imagePipeline &&
       frame.savedTarget) {
-    auto newEncoder = std::make_unique<geode::GeoEncoder>(
-        *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-        frame.savedTarget, impl_->frameCommandEncoder.get());
-    newEncoder->setBufferPool(&impl_->arenaBufferPool);
+    auto newEncoder = impl_->makeEncoder(frame.savedTarget);
     // Preserve existing target contents: the pattern subtree may have
     // submitted work on the outer target *before* the pattern tile opened
     // (via the finish() in beginPatternTile), so we must not clear it
@@ -3592,8 +3573,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
       if (fillEncoded != nullptr) {
         impl_->drawEncodedPathOverlay(*fillEncoded);
       } else {
-        impl_->drawEncodedPathOverlay(
-            geode::GeodePathEncoder::encode(path.path, path.fillRule));
+        impl_->drawEncodedPathOverlay(geode::GeodePathEncoder::encode(path.path, path.fillRule));
       }
     }
   }
@@ -4279,7 +4259,9 @@ std::unique_ptr<RendererInterface> RendererGeode::createOffscreenInstance() cons
   if (!impl_->device) {
     return nullptr;
   }
-  return std::make_unique<RendererGeode>(impl_->device, impl_->verbose);
+  auto renderer = std::make_unique<RendererGeode>(impl_->device, impl_->verbose);
+  renderer->setAntialias(impl_->antialias);
+  return renderer;
 }
 
 std::shared_ptr<const RendererTextureSnapshot> RendererGeode::takeTextureSnapshot() {
