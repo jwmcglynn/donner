@@ -300,6 +300,27 @@ TEST_F(RendererGeodeTest, EmptyFrameIsTransparent) {
   EXPECT_THAT(pixel, IsTransparent()) << "Empty frame should be transparent";
 }
 
+TEST_F(RendererGeodeTest, SharedDeviceSurvivesRendererTeardown) {
+  {
+    RendererGeode first = createRenderer();
+    beginFrame(first);
+    first.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+    first.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+    first.endFrame();
+    ASSERT_FALSE(first.takeSnapshot().empty());
+  }
+
+  RendererGeode second = createRenderer();
+  beginFrame(second);
+  second.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
+  second.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  second.endFrame();
+
+  const RendererBitmap snapshot = second.takeSnapshot();
+  ASSERT_FALSE(snapshot.empty());
+  EXPECT_THAT(pixelAt(snapshot, 32, 32), RgbaEq(0, 255, 0, 255));
+}
+
 TEST_F(RendererGeodeTest, EmptyFrameAfterOpaqueFrameClearsReusedTarget) {
   RendererGeode renderer = createRenderer();
   beginFrame(renderer);
