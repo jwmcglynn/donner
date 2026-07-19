@@ -7,6 +7,8 @@
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <set>
+#include <tuple>
 #include <vector>
 
 #include "donner/base/FillRule.h"
@@ -178,6 +180,32 @@ TEST(GeodePathEncoder, ChoosesBandCountFromCurveDistribution) {
   ASSERT_FALSE(encoded.empty());
   EXPECT_GT(encoded.hBandCount, 1u)
       << "A compact path with many separated curve clusters needs more than one band";
+}
+
+TEST(GeodePathEncoder, StoresEachCurveOnceInsteadOfDuplicatingItAcrossBands) {
+  const Path path = PathBuilder()
+                        .moveTo(Vector2d(0, 0))
+                        .lineTo(Vector2d(100, 500))
+                        .lineTo(Vector2d(200, 0))
+                        .closePath()
+                        .build();
+
+  const EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
+  ASSERT_FALSE(encoded.empty());
+
+  std::set<std::tuple<float, float, float, float, float, float>> uniqueHorizontal;
+  for (const EncodedPath::Curve& curve : encoded.curves) {
+    uniqueHorizontal.emplace(curve.p0x, curve.p0y, curve.p1x, curve.p1y, curve.p2x, curve.p2y);
+  }
+  EXPECT_EQ(encoded.curves.size(), uniqueHorizontal.size())
+      << "Horizontal bands must reference one canonical copy of each curve";
+
+  std::set<std::tuple<float, float, float, float, float, float>> uniqueVertical;
+  for (const EncodedPath::Curve& curve : encoded.vCurves) {
+    uniqueVertical.emplace(curve.p0x, curve.p0y, curve.p1x, curve.p1y, curve.p2x, curve.p2y);
+  }
+  EXPECT_EQ(encoded.vCurves.size(), uniqueVertical.size())
+      << "Vertical bands must reference one canonical copy of each curve";
 }
 
 TEST(GeodePathEncoder, BandsCoverFullHeight) {
