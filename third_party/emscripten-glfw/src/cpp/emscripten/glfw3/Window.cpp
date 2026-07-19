@@ -219,7 +219,7 @@ void Window::setSizeLimits(int iMinWidth, int iMinHeight, int iMaxWidth, int iMa
   if((iMinWidth == GLFW_DONT_CARE || iMinWidth >= 0) &&
      (iMinHeight == GLFW_DONT_CARE || iMinHeight >= 0) &&
      (iMaxWidth == GLFW_DONT_CARE || (iMaxWidth >= 0 && iMaxWidth > iMinWidth)) &&
-     iMaxHeight == GLFW_DONT_CARE || (iMaxHeight >= 0 && iMaxHeight > iMinHeight))
+     (iMaxHeight == GLFW_DONT_CARE || (iMaxHeight >= 0 && iMaxHeight > iMinHeight)))
   {
     fMinSize = {iMinWidth, iMinHeight};
     fMaxSize = {iMaxWidth, iMaxHeight};

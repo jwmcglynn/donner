@@ -5313,12 +5313,12 @@ TEST_F(TextEditorTests, SourceDiagnosticTooltipRendersOnHover) {
   editor.setText("<svg><rect/></svg>");
   ASSERT_TRUE(editor.setSourceDiagnostics({
       SourceDiagnostic{.id = 11,
+                       .severity = DiagnosticSeverity::Error,
                        .range = {5, 12},
                        .line = 1,
                        .column = 5,
                        .endLine = 1,
                        .endColumn = 12,
-                       .severity = DiagnosticSeverity::Error,
                        .message = "rect is unclosed"},
   }));
   RenderEditorFrame();

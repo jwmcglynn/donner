@@ -14,6 +14,15 @@ class GeodeDevice;
 namespace donner::svg {
 
 /**
+ * Rasterize an element subtree through an isolated instance of a specific
+ * renderer implementation. This is the backend-explicit counterpart to
+ * `Renderer::renderElementToBitmap` for callers that intentionally choose a
+ * CPU or GPU renderer.
+ */
+[[nodiscard]] RendererBitmap RenderElementToBitmap(RendererInterface& renderer, SVGElement element,
+                                                   Vector2i sizePx);
+
+/**
  * Backend-agnostic renderer that resolves to the active build backend (Skia or tiny-skia).
  *
  * Typical usage:

@@ -1,0 +1,443 @@
+diff --git a/backends/imgui_impl_glfw.cpp b/backends/imgui_impl_glfw.cpp
+index 5ea6d36..4db7a52 100644
+--- a/backends/imgui_impl_glfw.cpp
++++ b/backends/imgui_impl_glfw.cpp
+@@ -1055 +1055 @@ struct ImGui_ImplGlfw_ViewportData
+-    ImGui_ImplGlfw_ViewportData()  { memset(this, 0, sizeof(*this)); IgnoreWindowSizeEventFrame = IgnoreWindowPosEventFrame = -1; }
++    ImGui_ImplGlfw_ViewportData()  { memset((void*)this, 0, sizeof(*this)); IgnoreWindowSizeEventFrame = IgnoreWindowPosEventFrame = -1; }
+diff --git a/backends/imgui_impl_wgpu.cpp b/backends/imgui_impl_wgpu.cpp
+index 6264f18..455257d 100644
+--- a/backends/imgui_impl_wgpu.cpp
++++ b/backends/imgui_impl_wgpu.cpp
+@@ -586,2 +586,2 @@ void ImGui_ImplWGPU_RenderDrawData(ImDrawData* draw_data, WGPURenderPassEncoder
+-        memcpy(vtx_dst, draw_list->VtxBuffer.Data, draw_list->VtxBuffer.Size * sizeof(ImDrawVert));
+-        memcpy(idx_dst, draw_list->IdxBuffer.Data, draw_list->IdxBuffer.Size * sizeof(ImDrawIdx));
++        memcpy((void*)vtx_dst, draw_list->VtxBuffer.Data, draw_list->VtxBuffer.Size * sizeof(ImDrawVert));
++        memcpy((void*)idx_dst, draw_list->IdxBuffer.Data, draw_list->IdxBuffer.Size * sizeof(ImDrawIdx));
+diff --git a/imgui.cpp b/imgui.cpp
+index 34611e2..0616c90 100644
+--- a/imgui.cpp
++++ b/imgui.cpp
+@@ -1407 +1407 @@ ImGuiIO::ImGuiIO()
+-    memset(this, 0, sizeof(*this));
++    memset((void*)this, 0, sizeof(*this));
+@@ -1578 +1578 @@ void ImGuiIO::ClearInputKeys()
+-    memset(KeysDown, 0, sizeof(KeysDown));
++    memset((void*)KeysDown, 0, sizeof(KeysDown));
+@@ -1878 +1878 @@ ImGuiPlatformIO::ImGuiPlatformIO()
+-    memset(this, 0, sizeof(*this));
++    memset((void*)this, 0, sizeof(*this));
+@@ -2034 +2034 @@ char* ImStrdup(const char* str)
+-    return (char*)memcpy(buf, (const void*)str, len + 1);
++    return (char*)memcpy((void*)buf, (const void*)str, len + 1);
+@@ -2048 +2048 @@ char* ImStrdupcpy(char* dst, size_t* p_dst_size, const char* src)
+-    return (char*)memcpy(dst, (const void*)src, src_size);
++    return (char*)memcpy((void*)dst, (const void*)src, src_size);
+@@ -2932 +2932 @@ void ImGuiTextBuffer::append(const char* str, const char* str_end)
+-    memcpy(&Buf[write_off - 1], str, (size_t)len);
++    memcpy((void*)&Buf[write_off - 1], str, (size_t)len);
+@@ -3048 +3048 @@ ImGuiListClipper::ImGuiListClipper()
+-    memset(this, 0, sizeof(*this));
++    memset((void*)this, 0, sizeof(*this));
+@@ -3497 +3497 @@ void ImGui::PopStyleVar(int count)
+-        // We avoid a generic memcpy(data, &backup.Backup.., GDataTypeSize[info->Type] * info->Count), the overhead in Debug is not worth it.
++        // We avoid a generic memcpy((void*)data, &backup.Backup.., GDataTypeSize[info->Type] * info->Count), the overhead in Debug is not worth it.
+@@ -3926 +3926 @@ ImGuiContext::ImGuiContext(ImFontAtlas* shared_font_atlas)
+-    memset(ContextName, 0, sizeof(ContextName));
++    memset((void*)ContextName, 0, sizeof(ContextName));
+@@ -4041 +4041 @@ ImGuiContext::ImGuiContext(ImFontAtlas* shared_font_atlas)
+-    memset(DragDropPayloadBufLocal, 0, sizeof(DragDropPayloadBufLocal));
++    memset((void*)DragDropPayloadBufLocal, 0, sizeof(DragDropPayloadBufLocal));
+@@ -4058 +4058 @@ ImGuiContext::ImGuiContext(ImFontAtlas* shared_font_atlas)
+-    memset(&DataTypeZeroValue, 0, sizeof(DataTypeZeroValue));
++    memset((void*)&DataTypeZeroValue, 0, sizeof(DataTypeZeroValue));
+@@ -4088 +4088 @@ ImGuiContext::ImGuiContext(ImFontAtlas* shared_font_atlas)
+-    memset(LocalizationTable, 0, sizeof(LocalizationTable));
++    memset((void*)LocalizationTable, 0, sizeof(LocalizationTable));
+@@ -4127 +4127 @@ ImGuiContext::ImGuiContext(ImFontAtlas* shared_font_atlas)
+-    memset(FramerateSecPerFrame, 0, sizeof(FramerateSecPerFrame));
++    memset((void*)FramerateSecPerFrame, 0, sizeof(FramerateSecPerFrame));
+@@ -4131 +4131 @@ ImGuiContext::ImGuiContext(ImFontAtlas* shared_font_atlas)
+-    memset(TempKeychordName, 0, sizeof(TempKeychordName));
++    memset((void*)TempKeychordName, 0, sizeof(TempKeychordName));
+@@ -4319 +4319 @@ ImGuiWindow::ImGuiWindow(ImGuiContext* ctx, const char* name) : DrawListInst(NUL
+-    memset(this, 0, sizeof(*this));
++    memset((void*)this, 0, sizeof(*this));
+@@ -5580 +5580 @@ static void FlattenDrawDataIntoSingleLayer(ImDrawDataBuilder* builder)
+-        memcpy(builder->Layers[0]->Data + n, layer->Data, layer->Size * sizeof(ImDrawList*));
++        memcpy((void*)(builder->Layers[0]->Data + n), layer->Data, layer->Size * sizeof(ImDrawList*));
+@@ -14590 +14590 @@ void ImGui::ClearDragDrop()
+-    memset(&g.DragDropPayloadBufLocal, 0, sizeof(g.DragDropPayloadBufLocal));
++    memset((void*)&g.DragDropPayloadBufLocal, 0, sizeof(g.DragDropPayloadBufLocal));
+@@ -14766 +14766 @@ bool ImGui::SetDragDropPayload(const char* type, const void* data, size_t data_s
+-            memcpy(payload.Data, data, data_size);
++            memcpy((void*)payload.Data, data, data_size);
+@@ -14771 +14771 @@ bool ImGui::SetDragDropPayload(const char* type, const void* data, size_t data_s
+-            memset(&g.DragDropPayloadBufLocal, 0, sizeof(g.DragDropPayloadBufLocal));
++            memset((void*)&g.DragDropPayloadBufLocal, 0, sizeof(g.DragDropPayloadBufLocal));
+@@ -14773 +14773 @@ bool ImGui::SetDragDropPayload(const char* type, const void* data, size_t data_s
+-            memcpy(payload.Data, data, data_size);
++            memcpy((void*)payload.Data, data, data_size);
+@@ -15297 +15297 @@ void ImGui::LoadIniSettingsFromMemory(const char* ini_data, size_t ini_size)
+-    memcpy(buf, ini_data, ini_size);
++    memcpy((void*)buf, ini_data, ini_size);
+@@ -15345 +15345 @@ void ImGui::LoadIniSettingsFromMemory(const char* ini_data, size_t ini_size)
+-    memcpy(buf, ini_data, ini_size);
++    memcpy((void*)buf, ini_data, ini_size);
+@@ -15401 +15401 @@ ImGuiWindowSettings* ImGui::CreateNewWindowSettings(const char* name)
+-    memcpy(settings->GetName(), name, name_len + 1);   // Store with zero terminator
++    memcpy((void*)settings->GetName(), name, name_len + 1);   // Store with zero terminator
+@@ -16716 +16716 @@ struct ImGuiDockNodeSettings
+-    ImGuiDockNodeSettings() { memset(this, 0, sizeof(*this)); SplitAxis = ImGuiAxis_None; }
++    ImGuiDockNodeSettings() { memset((void*)this, 0, sizeof(*this)); SplitAxis = ImGuiAxis_None; }
+@@ -17721 +17721 @@ struct ImGuiDockNodeTreeInfo
+-    ImGuiDockNodeTreeInfo() { memset(this, 0, sizeof(*this)); }
++    ImGuiDockNodeTreeInfo() { memset((void*)this, 0, sizeof(*this)); }
+@@ -20660 +20660 @@ static void Platform_SetClipboardTextFn_DefaultImpl(ImGuiContext* ctx, const cha
+-    memcpy(&g.ClipboardHandlerData[0], text, (size_t)(text_end - text));
++    memcpy((void*)&g.ClipboardHandlerData[0], text, (size_t)(text_end - text));
+@@ -21264 +21264 @@ void ImGui::ShowMetricsWindow(bool* p_open)
+-            memcpy(viewports.Data, g.Viewports.Data, g.Viewports.size_in_bytes());
++            memcpy((void*)viewports.Data, g.Viewports.Data, g.Viewports.size_in_bytes());
+@@ -21845 +21845 @@ static void FormatTextureIDForDebugDisplay(char* buf, int buf_size, ImTextureID
+-    memcpy(&tex_id_opaque, &tex_id, ImMin(sizeof(void*), sizeof(tex_id)));
++    memcpy((void*)&tex_id_opaque, &tex_id, ImMin(sizeof(void*), sizeof(tex_id)));
+diff --git a/imgui.h b/imgui.h
+index 7eb4d57..851863c 100644
+--- a/imgui.h
++++ b/imgui.h
+@@ -2091 +2091 @@ struct ImGuiTableSortSpecs
+-    ImGuiTableSortSpecs()       { memset(this, 0, sizeof(*this)); }
++    ImGuiTableSortSpecs()       { memset((void*)this, 0, sizeof(*this)); }
+@@ -2102 +2102 @@ struct ImGuiTableColumnSortSpecs
+-    ImGuiTableColumnSortSpecs() { memset(this, 0, sizeof(*this)); }
++    ImGuiTableColumnSortSpecs() { memset((void*)this, 0, sizeof(*this)); }
+@@ -2161 +2161 @@ struct ImVector
+-    inline ImVector<T>& operator=(const ImVector<T>& src)   { clear(); resize(src.Size); if (src.Data) memcpy(Data, src.Data, (size_t)Size * sizeof(T)); return *this; }
++    inline ImVector<T>& operator=(const ImVector<T>& src)   { clear(); resize(src.Size); if (src.Data) memcpy((void*)Data, src.Data, (size_t)Size * sizeof(T)); return *this; }
+@@ -2188 +2188 @@ struct ImVector
+-    inline void         resize(int new_size, const T& v)    { if (new_size > Capacity) reserve(_grow_capacity(new_size)); if (new_size > Size) for (int n = Size; n < new_size; n++) memcpy(&Data[n], &v, sizeof(v)); Size = new_size; }
++    inline void         resize(int new_size, const T& v)    { if (new_size > Capacity) reserve(_grow_capacity(new_size)); if (new_size > Size) for (int n = Size; n < new_size; n++) memcpy((void*)&Data[n], &v, sizeof(v)); Size = new_size; }
+@@ -2190 +2190 @@ struct ImVector
+-    inline void         reserve(int new_capacity)           { if (new_capacity <= Capacity) return; T* new_data = (T*)IM_ALLOC((size_t)new_capacity * sizeof(T)); if (Data) { memcpy(new_data, Data, (size_t)Size * sizeof(T)); IM_FREE(Data); } Data = new_data; Capacity = new_capacity; }
++    inline void         reserve(int new_capacity)           { if (new_capacity <= Capacity) return; T* new_data = (T*)IM_ALLOC((size_t)new_capacity * sizeof(T)); if (Data) { memcpy((void*)new_data, Data, (size_t)Size * sizeof(T)); IM_FREE(Data); } Data = new_data; Capacity = new_capacity; }
+@@ -2194 +2194 @@ struct ImVector
+-    inline void         push_back(const T& v)               { if (Size == Capacity) reserve(_grow_capacity(Size + 1)); memcpy(&Data[Size], &v, sizeof(v)); Size++; }
++    inline void         push_back(const T& v)               { if (Size == Capacity) reserve(_grow_capacity(Size + 1)); memcpy((void*)&Data[Size], &v, sizeof(v)); Size++; }
+@@ -2199,2 +2199,2 @@ struct ImVector
+-    inline T*           erase_unsorted(const T* it)         { IM_ASSERT(it >= Data && it < Data + Size);  const ptrdiff_t off = it - Data; if (it < Data + Size - 1) memcpy(Data + off, Data + Size - 1, sizeof(T)); Size--; return Data + off; }
+-    inline T*           insert(const T* it, const T& v)     { IM_ASSERT(it >= Data && it <= Data + Size); const ptrdiff_t off = it - Data; if (Size == Capacity) reserve(_grow_capacity(Size + 1)); if (off < (int)Size) memmove(Data + off + 1, Data + off, ((size_t)Size - (size_t)off) * sizeof(T)); memcpy(&Data[off], &v, sizeof(v)); Size++; return Data + off; }
++    inline T*           erase_unsorted(const T* it)         { IM_ASSERT(it >= Data && it < Data + Size);  const ptrdiff_t off = it - Data; if (it < Data + Size - 1) memcpy((void*)(Data + off), Data + Size - 1, sizeof(T)); Size--; return Data + off; }
++    inline T*           insert(const T* it, const T& v)     { IM_ASSERT(it >= Data && it <= Data + Size); const ptrdiff_t off = it - Data; if (Size == Capacity) reserve(_grow_capacity(Size + 1)); if (off < (int)Size) memmove(Data + off + 1, Data + off, ((size_t)Size - (size_t)off) * sizeof(T)); memcpy((void*)&Data[off], &v, sizeof(v)); Size++; return Data + off; }
+@@ -2620 +2620 @@ struct ImGuiWindowClass
+-    ImGuiWindowClass() { memset(this, 0, sizeof(*this)); ParentViewportId = (ImGuiID)-1; DockingAllowUnclassed = true; }
++    ImGuiWindowClass() { memset((void*)this, 0, sizeof(*this)); ParentViewportId = (ImGuiID)-1; DockingAllowUnclassed = true; }
+@@ -2639 +2639 @@ struct ImGuiPayload
+-    void Clear()    { SourceId = SourceParentId = 0; Data = NULL; DataSize = 0; memset(DataType, 0, sizeof(DataType)); DataFrameCount = -1; Preview = Delivery = false; }
++    void Clear()    { SourceId = SourceParentId = 0; Data = NULL; DataSize = 0; memset((void*)DataType, 0, sizeof(DataType)); DataFrameCount = -1; Preview = Delivery = false; }
+@@ -2820 +2820 @@ struct ImGuiListClipper
+-    //inline ImGuiListClipper(int items_count, float items_height = -1.0f) { memset(this, 0, sizeof(*this)); ItemsCount = -1; Begin(items_count, items_height); } // [removed in 1.79]
++    //inline ImGuiListClipper(int items_count, float items_height = -1.0f) { memset((void*)this, 0, sizeof(*this)); ItemsCount = -1; Begin(items_count, items_height); } // [removed in 1.79]
+@@ -3089 +3089 @@ struct ImDrawCmd
+-    ImDrawCmd()     { memset(this, 0, sizeof(*this)); } // Also ensure our padding fields are zeroed
++    ImDrawCmd()     { memset((void*)this, 0, sizeof(*this)); } // Also ensure our padding fields are zeroed
+@@ -3135 +3135 @@ struct ImDrawListSplitter
+-    inline ImDrawListSplitter()  { memset(this, 0, sizeof(*this)); }
++    inline ImDrawListSplitter()  { memset((void*)this, 0, sizeof(*this)); }
+@@ -3207 +3207 @@ struct ImDrawList
+-    ImDrawList(ImDrawListSharedData* shared_data) { memset(this, 0, sizeof(*this)); _Data = shared_data; }
++    ImDrawList(ImDrawListSharedData* shared_data) { memset((void*)this, 0, sizeof(*this)); _Data = shared_data; }
+@@ -3407 +3407 @@ struct ImFontGlyphRangesBuilder
+-    inline void     Clear()                 { int size_in_bytes = (IM_UNICODE_CODEPOINT_MAX + 1) / 8; UsedChars.resize(size_in_bytes / (int)sizeof(ImU32)); memset(UsedChars.Data, 0, (size_t)size_in_bytes); }
++    inline void     Clear()                 { int size_in_bytes = (IM_UNICODE_CODEPOINT_MAX + 1) / 8; UsedChars.resize(size_in_bytes / (int)sizeof(ImU32)); memset((void*)UsedChars.Data, 0, (size_t)size_in_bytes); }
+@@ -3671 +3671 @@ struct ImGuiViewport
+-    ImGuiViewport()     { memset(this, 0, sizeof(*this)); }
++    ImGuiViewport()     { memset((void*)this, 0, sizeof(*this)); }
+@@ -3842 +3842 @@ struct ImGuiPlatformImeData
+-    ImGuiPlatformImeData() { memset(this, 0, sizeof(*this)); }
++    ImGuiPlatformImeData() { memset((void*)this, 0, sizeof(*this)); }
+diff --git a/imgui_draw.cpp b/imgui_draw.cpp
+index 90431fa..e17dfa1 100644
+--- a/imgui_draw.cpp
++++ b/imgui_draw.cpp
+@@ -378 +378 @@ ImDrawListSharedData::ImDrawListSharedData()
+-    memset(this, 0, sizeof(*this));
++    memset((void*)this, 0, sizeof(*this));
+@@ -417 +417 @@ void ImDrawList::_ResetForNewFrame()
+-    memset(&_CmdHeader, 0, sizeof(_CmdHeader));
++    memset((void*)&_CmdHeader, 0, sizeof(_CmdHeader));
+@@ -509 +509 @@ void ImDrawList::AddCallback(ImDrawCallback callback, void* userdata, size_t use
+-        memcpy(_CallbacksDataBuf.Data + (size_t)curr_cmd->UserCallbackDataOffset, userdata, userdata_size);
++        memcpy((void*)(_CallbacksDataBuf.Data + (size_t)curr_cmd->UserCallbackDataOffset), userdata, userdata_size);
+@@ -518 +518 @@ void ImDrawList::AddCallback(ImDrawCallback callback, void* userdata, size_t use
+-#define ImDrawCmd_HeaderCopy(CMD_DST, CMD_SRC)          (memcpy(CMD_DST, CMD_SRC, ImDrawCmd_HeaderSize))    // Copy ClipRect, TextureId, VtxOffset
++#define ImDrawCmd_HeaderCopy(CMD_DST, CMD_SRC)          (memcpy((void*)CMD_DST, CMD_SRC, ImDrawCmd_HeaderSize))    // Copy ClipRect, TextureId, VtxOffset
+@@ -2070 +2070 @@ void ImDrawListSplitter::ClearFreeMemory()
+-            memset(&_Channels[i], 0, sizeof(_Channels[i]));  // Current channel is a copy of CmdBuffer/IdxBuffer, don't destruct again
++            memset((void*)&_Channels[i], 0, sizeof(_Channels[i]));  // Current channel is a copy of CmdBuffer/IdxBuffer, don't destruct again
+@@ -2094 +2094 @@ void ImDrawListSplitter::Split(ImDrawList* draw_list, int channels_count)
+-    memset(&_Channels[0], 0, sizeof(ImDrawChannel));
++    memset((void*)&_Channels[0], 0, sizeof(ImDrawChannel));
+@@ -2161,2 +2161,2 @@ void ImDrawListSplitter::Merge(ImDrawList* draw_list)
+-        if (int sz = ch._CmdBuffer.Size) { memcpy(cmd_write, ch._CmdBuffer.Data, sz * sizeof(ImDrawCmd)); cmd_write += sz; }
+-        if (int sz = ch._IdxBuffer.Size) { memcpy(idx_write, ch._IdxBuffer.Data, sz * sizeof(ImDrawIdx)); idx_write += sz; }
++        if (int sz = ch._CmdBuffer.Size) { memcpy((void*)cmd_write, ch._CmdBuffer.Data, sz * sizeof(ImDrawCmd)); cmd_write += sz; }
++        if (int sz = ch._IdxBuffer.Size) { memcpy((void*)idx_write, ch._IdxBuffer.Data, sz * sizeof(ImDrawIdx)); idx_write += sz; }
+@@ -2187,2 +2187,2 @@ void ImDrawListSplitter::SetCurrentChannel(ImDrawList* draw_list, int idx)
+-    memcpy(&_Channels.Data[_Current]._CmdBuffer, &draw_list->CmdBuffer, sizeof(draw_list->CmdBuffer));
+-    memcpy(&_Channels.Data[_Current]._IdxBuffer, &draw_list->IdxBuffer, sizeof(draw_list->IdxBuffer));
++    memcpy((void*)&_Channels.Data[_Current]._CmdBuffer, &draw_list->CmdBuffer, sizeof(draw_list->CmdBuffer));
++    memcpy((void*)&_Channels.Data[_Current]._IdxBuffer, &draw_list->IdxBuffer, sizeof(draw_list->IdxBuffer));
+@@ -2190,2 +2190,2 @@ void ImDrawListSplitter::SetCurrentChannel(ImDrawList* draw_list, int idx)
+-    memcpy(&draw_list->CmdBuffer, &_Channels.Data[idx]._CmdBuffer, sizeof(draw_list->CmdBuffer));
+-    memcpy(&draw_list->IdxBuffer, &_Channels.Data[idx]._IdxBuffer, sizeof(draw_list->IdxBuffer));
++    memcpy((void*)&draw_list->CmdBuffer, &_Channels.Data[idx]._CmdBuffer, sizeof(draw_list->CmdBuffer));
++    memcpy((void*)&draw_list->IdxBuffer, &_Channels.Data[idx]._IdxBuffer, sizeof(draw_list->IdxBuffer));
+@@ -2367 +2367 @@ ImFontConfig::ImFontConfig()
+-    memset(this, 0, sizeof(*this));
++    memset((void*)this, 0, sizeof(*this));
+@@ -2433 +2433 @@ ImFontAtlas::ImFontAtlas()
+-    memset(this, 0, sizeof(*this));
++    memset((void*)this, 0, sizeof(*this));
+@@ -2551 +2551 @@ ImFont* ImFontAtlas::AddFont(const ImFontConfig* font_cfg)
+-        memcpy(new_font_cfg.FontData, font_cfg->FontData, (size_t)new_font_cfg.FontDataSize);
++        memcpy((void*)new_font_cfg.FontData, font_cfg->FontData, (size_t)new_font_cfg.FontDataSize);
+@@ -2823,2 +2823,2 @@ static bool ImFontAtlasBuildWithStbTruetype(ImFontAtlas* atlas)
+-    memset(src_tmp_array.Data, 0, (size_t)src_tmp_array.size_in_bytes());
+-    memset(dst_tmp_array.Data, 0, (size_t)dst_tmp_array.size_in_bytes());
++    memset((void*)src_tmp_array.Data, 0, (size_t)src_tmp_array.size_in_bytes());
++    memset((void*)dst_tmp_array.Data, 0, (size_t)dst_tmp_array.size_in_bytes());
+@@ -2913,2 +2913,2 @@ static bool ImFontAtlasBuildWithStbTruetype(ImFontAtlas* atlas)
+-    memset(buf_rects.Data, 0, (size_t)buf_rects.size_in_bytes());
+-    memset(buf_packedchars.Data, 0, (size_t)buf_packedchars.size_in_bytes());
++    memset((void*)buf_rects.Data, 0, (size_t)buf_rects.size_in_bytes());
++    memset((void*)buf_packedchars.Data, 0, (size_t)buf_packedchars.size_in_bytes());
+@@ -2993 +2993 @@ static bool ImFontAtlasBuildWithStbTruetype(ImFontAtlas* atlas)
+-    memset(atlas->TexPixelsAlpha8, 0, atlas->TexWidth * atlas->TexHeight);
++    memset((void*)atlas->TexPixelsAlpha8, 0, atlas->TexWidth * atlas->TexHeight);
+@@ -3118 +3118 @@ void ImFontAtlasBuildPackCustomRects(ImFontAtlas* atlas, void* stbrp_context_opa
+-    memset(pack_rects.Data, 0, (size_t)pack_rects.size_in_bytes());
++    memset((void*)pack_rects.Data, 0, (size_t)pack_rects.size_in_bytes());
+@@ -3431 +3431 @@ const ImWchar*  ImFontAtlas::GetGlyphRangesChineseSimplifiedCommon()
+-        memcpy(full_ranges, base_ranges, sizeof(base_ranges));
++        memcpy((void*)full_ranges, base_ranges, sizeof(base_ranges));
+@@ -3521 +3521 @@ const ImWchar*  ImFontAtlas::GetGlyphRangesJapanese()
+-        memcpy(full_ranges, base_ranges, sizeof(base_ranges));
++        memcpy((void*)full_ranges, base_ranges, sizeof(base_ranges));
+@@ -3627 +3627 @@ ImFont::ImFont()
+-    memset(Used4kPagesMap, 0, sizeof(Used4kPagesMap));
++    memset((void*)Used4kPagesMap, 0, sizeof(Used4kPagesMap));
+@@ -3669 +3669 @@ void ImFont::BuildLookupTable()
+-    memset(Used4kPagesMap, 0, sizeof(Used4kPagesMap));
++    memset((void*)Used4kPagesMap, 0, sizeof(Used4kPagesMap));
+@@ -4500 +4500 @@ static void stb__lit(const unsigned char *data, unsigned int length)
+-    memcpy(stb__dout, data, length);
++    memcpy((void*)stb__dout, data, length);
+diff --git a/imgui_internal.h b/imgui_internal.h
+index eb0dd80..e66bab8 100644
+--- a/imgui_internal.h
++++ b/imgui_internal.h
+@@ -564 +564 @@ inline size_t   ImBitArrayGetStorageSizeInBytes(int bitcount)   { return (size_t
+-inline void     ImBitArrayClearAllBits(ImU32* arr, int bitcount){ memset(arr, 0, ImBitArrayGetStorageSizeInBytes(bitcount)); }
++inline void     ImBitArrayClearAllBits(ImU32* arr, int bitcount){ memset((void*)arr, 0, ImBitArrayGetStorageSizeInBytes(bitcount)); }
+@@ -590,2 +590,2 @@ struct ImBitArray
+-    void            ClearAllBits()              { memset(Storage, 0, sizeof(Storage)); }
+-    void            SetAllBits()                { memset(Storage, 255, sizeof(Storage)); }
++    void            ClearAllBits()              { memset((void*)Storage, 0, sizeof(Storage)); }
++    void            SetAllBits()                { memset((void*)Storage, 255, sizeof(Storage)); }
+@@ -604 +604 @@ struct IMGUI_API ImBitVector
+-    void            Create(int sz)              { Storage.resize((sz + 31) >> 5); memset(Storage.Data, 0, (size_t)Storage.Size * sizeof(Storage.Data[0])); }
++    void            Create(int sz)              { Storage.resize((sz + 31) >> 5); memset((void*)Storage.Data, 0, (size_t)Storage.Size * sizeof(Storage.Data[0])); }
+@@ -653 +653 @@ struct ImSpanAllocator
+-    ImSpanAllocator()                               { memset(this, 0, sizeof(*this)); }
++    ImSpanAllocator()                               { memset((void*)this, 0, sizeof(*this)); }
+@@ -795 +795 @@ struct ImDrawDataBuilder
+-    ImDrawDataBuilder()                     { memset(this, 0, sizeof(*this)); }
++    ImDrawDataBuilder()                     { memset((void*)this, 0, sizeof(*this)); }
+@@ -1053 +1053 @@ struct IMGUI_API ImGuiComboPreviewData
+-    ImGuiComboPreviewData() { memset(this, 0, sizeof(*this)); }
++    ImGuiComboPreviewData() { memset((void*)this, 0, sizeof(*this)); }
+@@ -1086 +1086 @@ struct IMGUI_API ImGuiMenuColumns
+-    ImGuiMenuColumns() { memset(this, 0, sizeof(*this)); }
++    ImGuiMenuColumns() { memset((void*)this, 0, sizeof(*this)); }
+@@ -1098 +1098 @@ struct IMGUI_API ImGuiInputTextDeactivatedState
+-    ImGuiInputTextDeactivatedState()    { memset(this, 0, sizeof(*this)); }
++    ImGuiInputTextDeactivatedState()    { memset((void*)this, 0, sizeof(*this)); }
+@@ -1215 +1215 @@ struct ImGuiNextWindowData
+-    ImGuiNextWindowData()       { memset(this, 0, sizeof(*this)); }
++    ImGuiNextWindowData()       { memset((void*)this, 0, sizeof(*this)); }
+@@ -1244 +1244 @@ struct ImGuiNextItemData
+-    ImGuiNextItemData()         { memset(this, 0, sizeof(*this)); SelectionUserData = -1; }
++    ImGuiNextItemData()         { memset((void*)this, 0, sizeof(*this)); SelectionUserData = -1; }
+@@ -1261 +1261 @@ struct ImGuiLastItemData
+-    ImGuiLastItemData()     { memset(this, 0, sizeof(*this)); }
++    ImGuiLastItemData()     { memset((void*)this, 0, sizeof(*this)); }
+@@ -1291 +1291 @@ struct IMGUI_API ImGuiErrorRecoveryState
+-    ImGuiErrorRecoveryState() { memset(this, 0, sizeof(*this)); }
++    ImGuiErrorRecoveryState() { memset((void*)this, 0, sizeof(*this)); }
+@@ -1342 +1342 @@ struct ImGuiPopupData
+-    ImGuiPopupData()    { memset(this, 0, sizeof(*this)); ParentNavLayer = OpenFrameCount = -1; }
++    ImGuiPopupData()    { memset((void*)this, 0, sizeof(*this)); ParentNavLayer = OpenFrameCount = -1; }
+@@ -1423 +1423 @@ struct ImGuiInputEvent
+-    ImGuiInputEvent() { memset(this, 0, sizeof(*this)); }
++    ImGuiInputEvent() { memset((void*)this, 0, sizeof(*this)); }
+@@ -1538 +1538 @@ struct ImGuiListClipperData
+-    ImGuiListClipperData()          { memset(this, 0, sizeof(*this)); }
++    ImGuiListClipperData()          { memset((void*)this, 0, sizeof(*this)); }
+@@ -1671 +1671 @@ struct IMGUI_API ImGuiTypingSelectState
+-    ImGuiTypingSelectState() { memset(this, 0, sizeof(*this)); }
++    ImGuiTypingSelectState() { memset((void*)this, 0, sizeof(*this)); }
+@@ -1707 +1707 @@ struct ImGuiOldColumnData
+-    ImGuiOldColumnData() { memset(this, 0, sizeof(*this)); }
++    ImGuiOldColumnData() { memset((void*)this, 0, sizeof(*this)); }
+@@ -1728 +1728 @@ struct ImGuiOldColumns
+-    ImGuiOldColumns()   { memset(this, 0, sizeof(*this)); }
++    ImGuiOldColumns()   { memset((void*)this, 0, sizeof(*this)); }
+@@ -1756 +1756 @@ struct ImGuiBoxSelectState
+-    ImGuiBoxSelectState()   { memset(this, 0, sizeof(*this)); }
++    ImGuiBoxSelectState()   { memset((void*)this, 0, sizeof(*this)); }
+@@ -1954 +1954 @@ struct ImGuiDockContext
+-    ImGuiDockContext()              { memset(this, 0, sizeof(*this)); }
++    ImGuiDockContext()              { memset((void*)this, 0, sizeof(*this)); }
+@@ -2032 +2032 @@ struct ImGuiWindowSettings
+-    ImGuiWindowSettings()       { memset(this, 0, sizeof(*this)); DockOrder = -1; }
++    ImGuiWindowSettings()       { memset((void*)this, 0, sizeof(*this)); DockOrder = -1; }
+@@ -2048 +2048 @@ struct ImGuiSettingsHandler
+-    ImGuiSettingsHandler() { memset(this, 0, sizeof(*this)); }
++    ImGuiSettingsHandler() { memset((void*)this, 0, sizeof(*this)); }
+@@ -2135 +2135 @@ struct ImGuiDebugAllocInfo
+-    ImGuiDebugAllocInfo() { memset(this, 0, sizeof(*this)); }
++    ImGuiDebugAllocInfo() { memset((void*)this, 0, sizeof(*this)); }
+@@ -2164 +2164 @@ struct ImGuiStackLevelInfo
+-    ImGuiStackLevelInfo()   { memset(this, 0, sizeof(*this)); }
++    ImGuiStackLevelInfo()   { memset((void*)this, 0, sizeof(*this)); }
+@@ -2177 +2177 @@ struct ImGuiIDStackTool
+-    ImGuiIDStackTool()      { memset(this, 0, sizeof(*this)); CopyToClipboardLastTime = -FLT_MAX; }
++    ImGuiIDStackTool()      { memset((void*)this, 0, sizeof(*this)); CopyToClipboardLastTime = -FLT_MAX; }
+@@ -2195 +2195 @@ struct ImGuiContextHook
+-    ImGuiContextHook()          { memset(this, 0, sizeof(*this)); }
++    ImGuiContextHook()          { memset((void*)this, 0, sizeof(*this)); }
+@@ -2827 +2827 @@ struct ImGuiTabItem
+-    ImGuiTabItem()      { memset(this, 0, sizeof(*this)); LastFrameVisible = LastFrameSelected = -1; RequestedWidth = -1.0f; NameOffset = -1; BeginOrder = IndexDuringLayout = -1; }
++    ImGuiTabItem()      { memset((void*)this, 0, sizeof(*this)); LastFrameVisible = LastFrameSelected = -1; RequestedWidth = -1.0f; NameOffset = -1; BeginOrder = IndexDuringLayout = -1; }
+@@ -2933 +2933 @@ struct ImGuiTableColumn
+-        memset(this, 0, sizeof(*this));
++        memset((void*)this, 0, sizeof(*this));
+@@ -3093 +3093 @@ struct IMGUI_API ImGuiTable
+-    ImGuiTable()                { memset(this, 0, sizeof(*this)); LastFrameActive = -1; }
++    ImGuiTable()                { memset((void*)this, 0, sizeof(*this)); LastFrameActive = -1; }
+@@ -3121 +3121 @@ struct IMGUI_API ImGuiTableTempData
+-    ImGuiTableTempData()        { memset(this, 0, sizeof(*this)); LastTimeActive = -1.0f; }
++    ImGuiTableTempData()        { memset((void*)this, 0, sizeof(*this)); LastTimeActive = -1.0f; }
+@@ -3158 +3158 @@ struct ImGuiTableSettings
+-    ImGuiTableSettings()        { memset(this, 0, sizeof(*this)); }
++    ImGuiTableSettings()        { memset((void*)this, 0, sizeof(*this)); }
+diff --git a/imgui_tables.cpp b/imgui_tables.cpp
+index 03007bb..f7e9b6e 100644
+--- a/imgui_tables.cpp
++++ b/imgui_tables.cpp
+@@ -651 +651 @@ void ImGui::TableBeginInitMemory(ImGuiTable* table, int columns_count)
+-    memset(table->RawData, 0, span_allocator.GetArenaSizeInBytes());
++    memset((void*)table->RawData, 0, span_allocator.GetArenaSizeInBytes());
+@@ -2539 +2539 @@ void ImGui::TableMergeDrawChannels(ImGuiTable* table)
+-    memset(g.TempBuffer.Data, 0, size_for_masks_bitarrays_one * 5);
++    memset((void*)g.TempBuffer.Data, 0, size_for_masks_bitarrays_one * 5);
+@@ -2664 +2664 @@ void ImGui::TableMergeDrawChannels(ImGuiTable* table)
+-                    memcpy(dst_tmp++, channel, sizeof(ImDrawChannel));
++                    memcpy((void*)dst_tmp++, channel, sizeof(ImDrawChannel));
+@@ -2670 +2670 @@ void ImGui::TableMergeDrawChannels(ImGuiTable* table)
+-                memcpy(dst_tmp++, &splitter->_Channels[table->Bg2DrawChannelUnfrozen], sizeof(ImDrawChannel));
++                memcpy((void*)dst_tmp++, &splitter->_Channels[table->Bg2DrawChannelUnfrozen], sizeof(ImDrawChannel));
+@@ -2679 +2679 @@ void ImGui::TableMergeDrawChannels(ImGuiTable* table)
+-            memcpy(dst_tmp++, channel, sizeof(ImDrawChannel));
++            memcpy((void*)dst_tmp++, channel, sizeof(ImDrawChannel));
+@@ -2683 +2683 @@ void ImGui::TableMergeDrawChannels(ImGuiTable* table)
+-        memcpy(splitter->_Channels.Data + LEADING_DRAW_CHANNELS, g.DrawChannelsTempMergeBuffer.Data, (splitter->_Count - LEADING_DRAW_CHANNELS) * sizeof(ImDrawChannel));
++        memcpy((void*)(splitter->_Channels.Data + LEADING_DRAW_CHANNELS), g.DrawChannelsTempMergeBuffer.Data, (splitter->_Count - LEADING_DRAW_CHANNELS) * sizeof(ImDrawChannel));
+@@ -3855,2 +3855,2 @@ void ImGui::TableRemove(ImGuiTable* table)
+-    //memset(table->RawData.Data, 0, table->RawData.size_in_bytes());
+-    //memset(table, 0, sizeof(ImGuiTable));
++    //memset((void*)table->RawData.Data, 0, table->RawData.size_in_bytes());
++    //memset((void*)table, 0, sizeof(ImGuiTable));
+@@ -3897 +3897 @@ void ImGui::TableGcCompactSettings()
+-            memcpy(new_chunk_stream.alloc_chunk(TableSettingsCalcChunkSize(settings->ColumnsCount)), settings, TableSettingsCalcChunkSize(settings->ColumnsCount));
++            memcpy((void*)new_chunk_stream.alloc_chunk(TableSettingsCalcChunkSize(settings->ColumnsCount)), settings, TableSettingsCalcChunkSize(settings->ColumnsCount));
+diff --git a/imgui_widgets.cpp b/imgui_widgets.cpp
+index 4725d1e..25c03b2 100644
+--- a/imgui_widgets.cpp
++++ b/imgui_widgets.cpp
+@@ -2264 +2264 @@ bool ImGui::DataTypeApplyFromText(const char* buf, ImGuiDataType data_type, void
+-    memcpy(&data_backup, p_data, type_info->Size);
++    memcpy((void*)&data_backup, p_data, type_info->Size);
+@@ -2272 +2272 @@ bool ImGui::DataTypeApplyFromText(const char* buf, ImGuiDataType data_type, void
+-            memcpy(p_data, p_data_when_empty, type_info->Size);
++            memcpy((void*)p_data, p_data_when_empty, type_info->Size);
+@@ -3628 +3628 @@ bool ImGui::TempInputScalar(const ImRect& bb, ImGuiID id, const char* label, ImG
+-        memcpy(&data_backup, p_data, data_type_size);
++        memcpy((void*)&data_backup, p_data, data_type_size);
+@@ -3652 +3652 @@ void ImGui::SetNextItemRefVal(ImGuiDataType data_type, void* p_data)
+-    memcpy(&g.NextItemData.RefVal, p_data, DataTypeGetInfo(data_type)->Size);
++    memcpy((void*)&g.NextItemData.RefVal, p_data, DataTypeGetInfo(data_type)->Size);
+@@ -4081 +4081 @@ static bool STB_TEXTEDIT_INSERTCHARS(ImGuiInputTextState* obj, int pos, const ch
+-    memcpy(text + pos, new_text, (size_t)new_text_len);
++    memcpy((void*)(text + pos), new_text, (size_t)new_text_len);
+@@ -4136 +4136 @@ ImGuiInputTextState::ImGuiInputTextState()
+-    memset(this, 0, sizeof(*this));
++    memset((void*)this, 0, sizeof(*this));
+@@ -4138 +4138 @@ ImGuiInputTextState::ImGuiInputTextState()
+-    memset(Stb, 0, sizeof(*Stb));
++    memset((void*)Stb, 0, sizeof(*Stb));
+@@ -4179 +4179 @@ ImGuiInputTextCallbackData::ImGuiInputTextCallbackData()
+-    memset(this, 0, sizeof(*this));
++    memset((void*)this, 0, sizeof(*this));
+@@ -4229 +4229 @@ void ImGuiInputTextCallbackData::InsertChars(int pos, const char* new_text, cons
+-    memcpy(Buf + pos, new_text, (size_t)new_text_len * sizeof(char));
++    memcpy((void*)(Buf + pos), new_text, (size_t)new_text_len * sizeof(char));
+@@ -4389 +4389 @@ void ImGui::InputTextDeactivateHook(ImGuiID id)
+-        memcpy(g.InputTextDeactivatedState.TextA.Data, state->TextA.Data, state->CurLenA + 1);
++        memcpy((void*)g.InputTextDeactivatedState.TextA.Data, state->TextA.Data, state->CurLenA + 1);
+@@ -4530 +4530 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
+-            memcpy(state->InitialTextA.Data, buf, buf_len + 1);
++            memcpy((void*)state->InitialTextA.Data, buf, buf_len + 1);
+@@ -4543 +4543 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
+-        memcpy(state->TextA.Data, buf, state->CurLenA + 1);
++        memcpy((void*)state->TextA.Data, buf, state->CurLenA + 1);
+@@ -4909 +4909 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
+-                    memcpy(clipboard_filtered + clipboard_filtered_len, s - len, len);
++                    memcpy((void*)(clipboard_filtered + clipboard_filtered_len), s - len, len);
+@@ -4941 +4941 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
+-                IMSTB_TEXTEDIT_CHARTYPE empty_string;
++                IMSTB_TEXTEDIT_CHARTYPE empty_string = 0;
+@@ -5012 +5012 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
+-                    memcpy(state->CallbackTextBackup.Data, state->TextA.Data, state->CurLenA + 1);
++                    memcpy((void*)state->CallbackTextBackup.Data, state->TextA.Data, state->CurLenA + 1);
+@@ -5652 +5652 @@ bool ImGui::ColorEdit4(const char* label, float col[4], ImGuiColorEditFlags flag
+-            memcpy((float*)col, payload->Data, sizeof(float) * 3); // Preserve alpha if any //-V512 //-V1086
++            memcpy((void*)(float*)col, payload->Data, sizeof(float) * 3); // Preserve alpha if any //-V512 //-V1086
+@@ -5657 +5657 @@ bool ImGui::ColorEdit4(const char* label, float col[4], ImGuiColorEditFlags flag
+-            memcpy((float*)col, payload->Data, sizeof(float) * components);
++            memcpy((void*)(float*)col, payload->Data, sizeof(float) * components);
+@@ -5750 +5750 @@ bool ImGui::ColorPicker4(const char* label, float col[4], ImGuiColorEditFlags fl
+-    memcpy(backup_initial_col, col, components * sizeof(float));
++    memcpy((void*)backup_initial_col, col, components * sizeof(float));
+@@ -5883 +5883 @@ bool ImGui::ColorPicker4(const char* label, float col[4], ImGuiColorEditFlags fl
+-                memcpy(col, ref_col, components * sizeof(float));
++                memcpy((void*)col, ref_col, components * sizeof(float));
+@@ -6288 +6288 @@ void ImGui::ColorPickerOptionsPopup(const float* ref_col, ImGuiColorEditFlags fl
+-            memcpy(&previewing_ref_col, ref_col, sizeof(float) * ((picker_flags & ImGuiColorEditFlags_NoAlpha) ? 3 : 4));
++            memcpy((void*)&previewing_ref_col, ref_col, sizeof(float) * ((picker_flags & ImGuiColorEditFlags_NoAlpha) ? 3 : 4));
+@@ -7131 +7131 @@ ImGuiTypingSelectRequest* ImGui::GetTypingSelectRequest(ImGuiTypingSelectFlags f
+-        memcpy(data->SearchBuffer + buffer_len, w_buf, w_len + 1); // Append
++        memcpy((void*)(data->SearchBuffer + buffer_len), w_buf, w_len + 1); // Append
+@@ -8537 +8537 @@ void ImGuiMenuColumns::Update(float spacing, bool window_reappearing)
+-        memset(Widths, 0, sizeof(Widths));
++        memset((void*)Widths, 0, sizeof(Widths));
+@@ -8540 +8540 @@ void ImGuiMenuColumns::Update(float spacing, bool window_reappearing)
+-    memset(Widths, 0, sizeof(Widths));
++    memset((void*)Widths, 0, sizeof(Widths));
+@@ -9120 +9120 @@ struct ImGuiTabBarSection
+-    ImGuiTabBarSection() { memset(this, 0, sizeof(*this)); }
++    ImGuiTabBarSection() { memset((void*)this, 0, sizeof(*this)); }
+@@ -9136 +9136 @@ ImGuiTabBar::ImGuiTabBar()
+-    memset(this, 0, sizeof(*this));
++    memset((void*)this, 0, sizeof(*this));

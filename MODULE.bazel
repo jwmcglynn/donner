@@ -6,7 +6,10 @@ access with complete rendering support including text, filters, and animation.""
 # ReleaseBot: bump `version` to the published v0.8 version string when stamping the
 # "Donner SVG Editor & Engine" release. Currently the v0.8 pre-release line; bump to the
 # final "0.8.0" at stamp time.
-module(name = "donner", version = "0.8.0-pre")
+module(
+    name = "donner",
+    version = "0.8.0-pre",
+)
 
 # Donner build-time feature configuration.
 # Downstream consumers can override these defaults via donner.configure() in their MODULE.bazel.
@@ -15,12 +18,13 @@ donner.configure()
 use_repo(donner, "donner_config")
 
 local_repository = use_repo_rule("//third_party:bazel/local.bzl", "local_repository")
+
 new_local_repository = use_repo_rule("//third_party:bazel/local.bzl", "new_local_repository")
+
 git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
 
 # Build dependencies
 bazel_dep(name = "apple_support", version = "2.7.0", repo_name = "build_bazel_apple_support")  # Must be before rules_cc
-
 bazel_dep(name = "rules_cc", version = "0.2.22")
 bazel_dep(name = "bazel_skylib", version = "1.9.0")
 bazel_dep(name = "platforms", version = "1.1.0")
@@ -91,19 +95,18 @@ local_repository(
 )
 
 bazel_dep(name = "rules_license", version = "1.0.0")
-
 bazel_dep(name = "freetype", version = "2.13.3.bcr.1")
 bazel_dep(name = "libpng", version = "1.6.54")
 
 # Enable FreeType's PNG support for CBDT color emoji bitmaps.
 single_version_override(
     module_name = "freetype",
-    version = "2.13.3.bcr.1",
+    patch_strip = 1,
     patches = [
         "//third_party/patches:freetype-enable-png-module.patch",
         "//third_party/patches:freetype-enable-png-build.patch",
     ],
-    patch_strip = 1,
+    version = "2.13.3.bcr.1",
 )
 
 # entt is vendored as a git subtree under third_party/entt (pinned at upstream
@@ -127,6 +130,12 @@ new_local_repository(
 )
 
 bazel_dep(name = "zlib", version = "1.3.2")
+single_version_override(
+    module_name = "zlib",
+    patch_strip = 1,
+    patches = ["//third_party/patches:zlib-detect-unistd.patch"],
+    version = "1.3.2",
+)
 
 # brotli is required by @woff2 (see non_bcr_deps.bzl); text-full only.
 bazel_dep(name = "brotli", version = "1.2.0.bcr.1")
@@ -136,13 +145,10 @@ bazel_dep(name = "brotli", version = "1.2.0.bcr.1")
 ##
 # re2 is not used directly, but is selected by googletest and transitive test dependencies.
 bazel_dep(name = "re2", version = "2025-11-05.bcr.1", dev_dependency = True)
-bazel_dep(name = "googletest", repo_name = "com_google_gtest", version = "1.17.0.bcr.2", dev_dependency = True)
-
+bazel_dep(name = "googletest", version = "1.17.0.bcr.2", dev_dependency = True, repo_name = "com_google_gtest")
 bazel_dep(name = "nlohmann_json", version = "3.12.0.bcr.1", dev_dependency = True)
-
 bazel_dep(name = "google_benchmark", version = "1.9.5", dev_dependency = True)
 bazel_dep(name = "rules_shell", version = "0.8.0", dev_dependency = True)
-
 bazel_dep(name = "pixelmatch-cpp17", version = "1.0.3", dev_dependency = True)
 
 new_local_repository(
@@ -199,50 +205,50 @@ llvm.toolchain(
 # headers. See third_party/bazel/non_bcr_deps.bzl for the tarballs.
 llvm.sysroot(
     name = "llvm_toolchain",
-    targets = ["linux-aarch64"],
     label = "@sysroot_linux_aarch64//:sysroot",
+    targets = ["linux-aarch64"],
 )
 llvm.sysroot(
     name = "llvm_toolchain",
-    targets = ["linux-x86_64"],
     label = "@sysroot_linux_x86_64//:sysroot",
+    targets = ["linux-x86_64"],
 )
 
 # Remote execution needs exec-platform-specific LLVM downloads. Otherwise a
 # macOS client can upload a Mach-O clang to a Linux worker.
 llvm.toolchain(
     name = "llvm_toolchain_linux_aarch64",
-    llvm_version = "21.1.6",
-    exec_os = "linux",
     exec_arch = "aarch64",
+    exec_os = "linux",
+    llvm_version = "21.1.6",
 )
 llvm.sysroot(
     name = "llvm_toolchain_linux_aarch64",
-    targets = ["linux-aarch64"],
     label = "@sysroot_linux_aarch64//:sysroot",
+    targets = ["linux-aarch64"],
 )
 llvm.sysroot(
     name = "llvm_toolchain_linux_aarch64",
-    targets = ["linux-x86_64"],
     label = "@sysroot_linux_x86_64//:sysroot",
+    targets = ["linux-x86_64"],
 )
 
 # Keep the Linux x86_64 variant ready for future workers and local parity.
 llvm.toolchain(
     name = "llvm_toolchain_linux_x86_64",
-    llvm_version = "21.1.6",
-    exec_os = "linux",
     exec_arch = "x86_64",
+    exec_os = "linux",
+    llvm_version = "21.1.6",
 )
 llvm.sysroot(
     name = "llvm_toolchain_linux_x86_64",
-    targets = ["linux-aarch64"],
     label = "@sysroot_linux_aarch64//:sysroot",
+    targets = ["linux-aarch64"],
 )
 llvm.sysroot(
     name = "llvm_toolchain_linux_x86_64",
-    targets = ["linux-x86_64"],
     label = "@sysroot_linux_x86_64//:sysroot",
+    targets = ["linux-x86_64"],
 )
 
 # Do not register a macOS LLVM exec variant. //donner/editor needs ObjC for
@@ -251,9 +257,9 @@ llvm.sysroot(
 use_repo(
     llvm,
     "llvm_toolchain",
-    "llvm_toolchain_llvm",
     "llvm_toolchain_linux_aarch64",
     "llvm_toolchain_linux_x86_64",
+    "llvm_toolchain_llvm",
 )
 
 # NOTE: To use any of these toolchains specify --config=latest_llvm (which
@@ -272,24 +278,22 @@ bazel_dep(name = "zstd", version = "1.5.7.bcr.1", dev_dependency = True)
 bazel_dep(name = "hedron_compile_commands", dev_dependency = True)
 git_override(
     module_name = "hedron_compile_commands",
-    remote = "https://github.com/hedronvision/bazel-compile-commands-extractor",
     commit = "abb61a688167623088f8768cc9264798df6a9d10",
+    remote = "https://github.com/hedronvision/bazel-compile-commands-extractor",
 )
 
 bazel_dep(name = "rules_proto", version = "7.1.0", dev_dependency = True)
 bazel_dep(name = "protobuf", version = "30.2", dev_dependency = True)
-
 single_version_override(
     module_name = "protobuf",
     version = "30.2",
 )
 
 bazel_dep(name = "bloaty", version = "0.0.0", dev_dependency = True)
-
 git_override(
     module_name = "bloaty",
-    remote = "https://github.com/jwmcglynn/bloaty",
     commit = "a655c418811ef5097e37a562ce62f925bda72d88",
+    remote = "https://github.com/jwmcglynn/bloaty",
 )
 
 #
@@ -301,9 +305,9 @@ bazel_dep(name = "emsdk", version = "5.0.5", dev_dependency = True)
 # Keep emsdk's hermetic Python runnable under macOS remote execution.
 single_version_override(
     module_name = "emsdk",
-    version = "5.0.5",
-    patches = ["//third_party/patches:emsdk_env_sh_dyld_library_path.patch"],
     patch_strip = 1,
+    patches = ["//third_party/patches:emsdk_env_sh_dyld_library_path.patch"],
+    version = "5.0.5",
 )
 
 #
@@ -313,24 +317,25 @@ single_version_override(
 bazel_dep(name = "imgui", version = "0.0.0", dev_dependency = True)
 git_override(
     module_name = "imgui",
-    remote = "https://github.com/ocornut/imgui",
     commit = "ee1deccc08c14ab1e6abcfa6aae11d915763cdb7",
+    patch_strip = 1,
     patches = [
         "//third_party/patches:imgui_bazel_build_files.patch",
         "//third_party/patches:imgui_wgpu_texture_cache.patch",
         "//third_party/patches:imgui_wgpu_premultiplied_textures.patch",
         "//third_party/patches:imgui_wgpu_emscripten_dawn.patch",
+        "//third_party/patches:imgui-explicit-raw-memory.patch",
     ],
-    patch_strip = 1,
+    remote = "https://github.com/ocornut/imgui",
 )
 
 bazel_dep(name = "glfw", version = "0.0.0", dev_dependency = True)
 git_override(
     module_name = "glfw",
-    remote = "https://github.com/glfw/glfw",
     commit = "ed6452b13c76f7b4da216a9952bc7837aeb0f031",
+    patch_strip = 1,
     patches = [
         "//third_party/patches:glfw_bazel_build_files.patch",
     ],
-    patch_strip = 1,
+    remote = "https://github.com/glfw/glfw",
 )

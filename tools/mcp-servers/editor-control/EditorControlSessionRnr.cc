@@ -798,6 +798,7 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
       }
 
       RenderRequest request(renderer_, app_.document().document());
+      request.captureCpuSnapshot = true;
       request.version = currentVersion;
       request.documentGeneration = app_.document().documentGeneration();
       request.structuralRemap = app_.document().consumePendingStructuralRemap();

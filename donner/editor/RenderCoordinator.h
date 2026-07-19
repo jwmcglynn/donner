@@ -58,14 +58,14 @@ class SelectTool;
  * @param hasActiveDrag True while a drag preview is active.
  * @param currentVersion Current document frame version.
  * @param displayedDocVersion Document frame version currently presented.
- * @param hasCachedSelectedTexture True when a selected-layer texture is already cached.
+ * @param hasCachedPresentation True when any current-version presentation texture is cached.
  * @param rasterViewportSettled True when the viewport has passed the commit delay.
  * @param needsOverviewInfill True when a bounded viewport still needs overview coverage.
  * @param pendingSelectedLayerRasterization True when selected-layer pixels are known stale.
  */
 [[nodiscard]] bool ShouldDeferSelectedViewportRefresh(
     Entity selectedEntity, bool hasActiveDrag, std::uint64_t currentVersion,
-    std::uint64_t displayedDocVersion, bool hasCachedSelectedTexture, bool rasterViewportSettled,
+    std::uint64_t displayedDocVersion, bool hasCachedPresentation, bool rasterViewportSettled,
     bool needsOverviewInfill, bool pendingSelectedLayerRasterization);
 
 /**

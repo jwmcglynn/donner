@@ -125,5 +125,6 @@ void AddUniqueElements(std::vector<svg::SVGElement>* target,
     const ::donner::editor::EditorShellOptions& options);
 [[nodiscard]] std::string CanonicalizeForTextEditor(std::string_view source);
 [[nodiscard]] Box2d ResolveDocumentViewBox(svg::SVGDocument& document);
+[[nodiscard]] std::optional<Box2d> TryResolveDocumentViewBox(svg::SVGDocument& document);
 
 }  // namespace donner::editor::internal

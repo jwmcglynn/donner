@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <iostream>
 #include <map>
 #include <optional>
@@ -4271,15 +4272,14 @@ static RendererBitmap ReadGeodeTextureSnapshot(const std::shared_ptr<geode::Geod
 
   // Map for read. wgpu-native's C++ wrapper (`webgpu.hpp`) only exposes the
   // `BufferMapCallbackInfo` form of `mapAsync`, which takes a raw C function
-  // pointer + two void*'s rather than a std::function. We stash the "done"
-  // flag in `userdata1` so the callback can flip it and we can spin until it
-  // flips. wgpu-native guarantees `wgpuDevicePoll(wait=true)` drains pending
-  // callbacks before returning - a single `poll(true, nullptr)` is enough to
-  // wait for the map to complete.
+  // pointer + two void*'s rather than a std::function. Keep the callback state
+  // on the heap across Emscripten's Asyncify wait. Native wgpu drains the same
+  // callback through `wgpuDevicePoll(wait=true)`.
   struct MapState {
     bool done = false;
     bool ok = false;
-  } mapState;
+  };
+  auto mapState = std::make_unique<MapState>();
   wgpu::BufferMapCallbackInfo mapCb{wgpu::Default};
   mapCb.callback = [](WGPUMapAsyncStatus status, WGPUStringView /*message*/, void* userdata1,
                       void* /*userdata2*/) {
@@ -4287,27 +4287,34 @@ static RendererBitmap ReadGeodeTextureSnapshot(const std::shared_ptr<geode::Geod
     s->ok = (status == WGPUMapAsyncStatus_Success);
     s->done = true;
   };
-  mapCb.userdata1 = &mapState;
+  mapCb.userdata1 = mapState.get();
   mapCb.userdata2 = nullptr;
-  // Browser WebGPU fires `mapAsync` completion via the JS Promise
-  // microtask - there is no wgpu-native-style "poll" on the instance.
-  // `AllowProcessEvents` would require an explicit `wgpuInstanceProcessEvents`
-  // call, which we never make (our Emscripten `wgpuDevicePoll` stub only
-  // yields via `emscripten_sleep`). Use `AllowSpontaneous` so the browser
-  // can fire the callback as soon as the Promise resolves, during the
-  // microtask tick that runs while we're sleeping. wgpu-native also
-  // accepts spontaneous mode and fires callbacks during `wgpuDevicePoll`.
-  mapCb.mode = wgpu::CallbackMode::AllowSpontaneous;
-  readback.get().mapAsync(wgpu::MapMode::Read, 0, bd.size, mapCb);
-  int pollIter = 0;
-  while (!mapState.done) {
-    device->device().poll(true, nullptr);
-    ++pollIter;
-    if (pollIter > 2000) {  // 2000 * 5ms = 10s bail-out.
-      break;
-    }
+#ifdef __EMSCRIPTEN__
+  if (!device->instance()) {
+    std::fprintf(stderr,
+                 "[Geode/emscripten] Snapshot readback requires the host WebGPU instance.\n");
+    return bitmap;
   }
-  if (!mapState.ok) {
+  mapCb.mode = wgpu::CallbackMode::WaitAnyOnly;
+#else
+  mapCb.mode = wgpu::CallbackMode::AllowSpontaneous;
+#endif
+  [[maybe_unused]] const wgpu::Future mapFuture =
+      readback.get().mapAsync(wgpu::MapMode::Read, 0, bd.size, mapCb);
+#ifdef __EMSCRIPTEN__
+  wgpu::FutureWaitInfo waitInfo{wgpu::Default};
+  waitInfo.future = mapFuture;
+  constexpr uint64_t kMapTimeoutNs = 30'000'000'000ull;
+  if (device->instance().waitAny(1, &waitInfo, kMapTimeoutNs) != wgpu::WaitStatus::Success ||
+      !waitInfo.completed) {
+    return bitmap;
+  }
+#else
+  while (!mapState->done) {
+    device->device().poll(true, nullptr);
+  }
+#endif
+  if (!mapState->ok) {
     return bitmap;
   }
 

@@ -136,6 +136,11 @@ public:
   /// Acquire scoped read access to the underlying document state.
   DocumentReadAccess readAccess() const { return documentState_->read(); }
 
+  /// Attempt to acquire scoped read access without waiting for a concurrent writer.
+  std::optional<DocumentReadAccess> tryReadAccess() const {
+    return DocumentReadAccess::tryAcquire(*documentState_);
+  }
+
   /// Acquire scoped write access to the underlying document state.
   DocumentWriteAccess writeAccess() const { return documentState_->write(); }
 

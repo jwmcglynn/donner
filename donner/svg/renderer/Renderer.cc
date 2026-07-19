@@ -404,7 +404,8 @@ void Renderer::draw(SVGDocument& document) {
   impl_->draw(document);
 }
 
-RendererBitmap Renderer::renderElementToBitmap(SVGElement element, Vector2i sizePx) {
+RendererBitmap RenderElementToBitmap(RendererInterface& renderer, SVGElement element,
+                                     Vector2i sizePx) {
   if (sizePx.x <= 0 || sizePx.y <= 0) {
     return RendererBitmap{};
   }
@@ -434,12 +435,16 @@ RendererBitmap Renderer::renderElementToBitmap(SVGElement element, Vector2i size
     cropBounds = *visibleBounds;
   }
 
-  std::unique_ptr<RendererInterface> offscreenRenderer = impl_->createOffscreenInstance();
+  std::unique_ptr<RendererInterface> offscreenRenderer = renderer.createOffscreenInstance();
   RendererInterface& thumbnailRenderer =
-      offscreenRenderer != nullptr ? *offscreenRenderer : static_cast<RendererInterface&>(*impl_);
+      offscreenRenderer != nullptr ? *offscreenRenderer : renderer;
 
   const Vector2i bitmapSizePx = ComputeThumbnailBitmapSize(cropBounds, sizePx);
   return RenderThumbnailRange(thumbnailRenderer, registry, span, cropBounds, bitmapSizePx);
+}
+
+RendererBitmap Renderer::renderElementToBitmap(SVGElement element, Vector2i sizePx) {
+  return RenderElementToBitmap(*impl_, element, sizePx);
 }
 
 void Renderer::beginFrame(const RenderViewport& viewport) {

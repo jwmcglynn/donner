@@ -117,9 +117,11 @@ bool ContainsAllEntities(const std::vector<Entity>& haystack, const std::vector<
 }  // namespace
 
 PresentationSnapshotPlan ChoosePresentationSnapshotPlan(bool hasCompositedPreview,
-                                                        bool requiresTextureSnapshotPresentation) {
+                                                        bool requiresTextureSnapshotPresentation,
+                                                        bool captureCpuSnapshot) {
   if (requiresTextureSnapshotPresentation) {
     return PresentationSnapshotPlan{
+        .captureCpuSnapshot = captureCpuSnapshot,
         .captureTextureSnapshot = !hasCompositedPreview,
     };
   }
@@ -591,7 +593,8 @@ void AsyncRenderer::workerLoop() {
         request.dragPreview.has_value() &&
         request.dragPreview->interactionKind == svg::compositor::InteractionHint::ActiveDrag;
     const bool splitPreviewSafe = !desiredPromotionIncomplete;
-    compositor_->setSkipMainComposeDuringSplit(activeDragRequest && splitPreviewSafe);
+    compositor_->setSkipMainComposeDuringSplit(activeDragRequest && splitPreviewSafe &&
+                                               !request.captureCpuSnapshot);
     workerTiming.setupMs = elapsedSince(workerStart);
 
     // Build a CompositedPreview from the compositor's current tile state.
@@ -829,9 +832,15 @@ void AsyncRenderer::workerLoop() {
     svg::RendererBitmap bitmap;
     std::shared_ptr<const svg::RendererTextureSnapshot> fullCanvasTexture;
     const PresentationSnapshotPlan snapshotPlan = ChoosePresentationSnapshotPlan(
-        compositedPreview.has_value(), requestRenderer.requiresTextureSnapshotPresentation());
+        compositedPreview.has_value(), requestRenderer.requiresTextureSnapshotPresentation(),
+        request.captureCpuSnapshot);
     {
       const auto finalSnapshotStart = std::chrono::steady_clock::now();
+      // Read before exporting the texture because texture export detaches the renderer target.
+      if (snapshotPlan.captureCpuSnapshot) {
+        ZoneScopedN("Renderer::takeSnapshot");
+        bitmap = requestRenderer.takeSnapshot();
+      }
       if (snapshotPlan.captureTextureSnapshot) {
         ZoneScopedN("Renderer::takeTextureSnapshot");
         fullCanvasTexture = requestRenderer.takeTextureSnapshot();
@@ -839,10 +848,6 @@ void AsyncRenderer::workerLoop() {
             fullCanvasTexture != nullptr,
             "Geode full-canvas presentation did not produce a GPU texture. Refusing CPU "
             "readback/upload fallback in Geode presentation mode.");
-      }
-      if (snapshotPlan.captureCpuSnapshot) {
-        ZoneScopedN("Renderer::takeSnapshot");
-        bitmap = requestRenderer.takeSnapshot();
       }
       workerTiming.finalSnapshotMs = elapsedSince(finalSnapshotStart);
     }

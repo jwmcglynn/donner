@@ -73,6 +73,7 @@ wgpu::BackendType RequestedHeadlessBackend() {
 #endif
 }
 
+#ifndef __EMSCRIPTEN__
 WGPUInstanceBackend InstanceBackendsFor(wgpu::BackendType backendType) {
   switch (static_cast<WGPUBackendType>(backendType)) {
     case WGPUBackendType_Vulkan: return WGPUInstanceBackend_Vulkan;
@@ -85,6 +86,7 @@ WGPUInstanceBackend InstanceBackendsFor(wgpu::BackendType backendType) {
     default: return WGPUInstanceBackend_All;
   }
 }
+#endif
 
 wgpu::Instance CreateHeadlessInstance(wgpu::BackendType backendType) {
 #ifndef __EMSCRIPTEN__
@@ -97,9 +99,15 @@ wgpu::Instance CreateHeadlessInstance(wgpu::BackendType backendType) {
     instanceDesc.nextInChain = &instanceExtras.chain;
     return wgpu::createInstance(instanceDesc);
   }
-#endif
-
   return wgpu::createInstance();
+#else
+  (void)backendType;
+  const WGPUInstanceFeatureName timedWaitFeature = WGPUInstanceFeatureName_TimedWaitAny;
+  wgpu::InstanceDescriptor descriptor{wgpu::Default};
+  descriptor.requiredFeatureCount = 1;
+  descriptor.requiredFeatures = &timedWaitFeature;
+  return wgpu::createInstance(descriptor);
+#endif
 }
 
 void WaitForSubmittedWork(const wgpu::Device& device, const wgpu::Queue& queue) {
@@ -274,6 +282,7 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
   //    `emscripten_sleep` instead).
   wgpu::RequestAdapterOptions adapterOptions = {};
   adapterOptions.backendType = headlessBackend;
+  adapterOptions.forceFallbackAdapter = wgpuForceFallbackAdapterRequested();
 
   // Bounded retry around adapter acquisition, mirroring the device-init
   // retry below (#880). Under heavy parallel load the adapter request can
@@ -295,8 +304,7 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
 
     std::fprintf(stderr, "[Geode/wgpu-native] No WebGPU adapter available.\n");
     if (attempt >= kMaxAdapterRetries) {
-      std::fprintf(stderr,
-                   "[Geode/wgpu-native] Giving up after %d adapter-acquisition retries.\n",
+      std::fprintf(stderr, "[Geode/wgpu-native] Giving up after %d adapter-acquisition retries.\n",
                    kMaxAdapterRetries);
       return nullptr;
     }
@@ -407,8 +415,7 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
 
     std::fprintf(stderr, "[Geode/wgpu-native] Failed to create device.\n");
     if (attempt >= kMaxDeviceInitRetries) {
-      std::fprintf(stderr,
-                   "[Geode/wgpu-native] Giving up after %d device-creation retries.\n",
+      std::fprintf(stderr, "[Geode/wgpu-native] Giving up after %d device-creation retries.\n",
                    kMaxDeviceInitRetries);
       return nullptr;
     }
@@ -476,6 +483,9 @@ GeodeMaskPipeline& GeodeDevice::maskPipeline() const {
 GeodeFilterEngine& GeodeDevice::filterEngine() const {
   return *impl_->filterEngine;
 }
+const wgpu::Instance& GeodeDevice::instance() const {
+  return impl_->instance;
+}
 GeodeCheckerboardPipeline& GeodeDevice::checkerboardPipeline() const {
   if (!impl_->checkerboardPipeline) {
     // Lazy: only the editor's direct framebuffer presentation draws the
@@ -498,7 +508,9 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateFromExternal(const GeodeEmbedCon
   result->device_ = config.device;
   result->queue_ = config.queue;
   result->textureFormat_ = config.textureFormat;
-  // impl_->instance stays null - host owns the instance.
+  // The raw wrapper does not release on destruction. Keep the host instance
+  // available for event dispatch without taking ownership of it.
+  result->impl_->instance = config.instance;
 
   // Preserve the host-provided adapter for callers that need adapter metadata.
   if (config.adapter) {

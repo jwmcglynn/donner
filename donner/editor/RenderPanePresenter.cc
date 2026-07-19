@@ -13,12 +13,16 @@
 
 #include "donner/editor/ImGuiIncludes.h"
 #if defined(__clang__)
+#if __has_warning("-Wnontrivial-memcall")
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wnontrivial-memcall"
 #endif
+#endif
 #include "imgui_internal.h"
 #if defined(__clang__)
+#if __has_warning("-Wnontrivial-memcall")
 #pragma clang diagnostic pop
+#endif
 #endif
 
 #include "donner/editor/PresentedFrameComposer.h"
@@ -505,9 +509,8 @@ void DrawCompositorTileOverlay(ImDrawList* drawList, const GlTextureCache::TileV
   }
 
   char label[64];
-  std::snprintf(label, sizeof(label), "%c %.24s g%" PRIu64 "%s",
-                CompositorTileKindLabel(tile.kind), tile.id.c_str(), tile.generation,
-                tile.metadataOnly ? " cached" : "");
+  std::snprintf(label, sizeof(label), "%c %.24s g%" PRIu64 "%s", CompositorTileKindLabel(tile.kind),
+                tile.id.c_str(), tile.generation, tile.metadataOnly ? " cached" : "");
   const ImVec2 labelOrigin(static_cast<float>(bounds.topLeft.x + 4.0),
                            static_cast<float>(bounds.topLeft.y + 3.0));
   const ImVec2 labelSize = ImGui::CalcTextSize(label);

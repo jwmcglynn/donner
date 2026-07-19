@@ -21,7 +21,7 @@
 #include "donner/editor/ScaleCursorSvg.h"
 #include "donner/editor/SelectCursorSvg.h"
 #include "donner/svg/parser/SVGParser.h"
-#include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/renderer/RendererTinySkia.h"
 
 namespace donner::editor {
 
@@ -192,7 +192,7 @@ std::optional<std::vector<unsigned char>> DownsampleToStraightAlphaTightRgba(
 }
 
 std::optional<RotateCursorImage> RenderImageFromSvg(
-    std::string_view svgSource, std::shared_ptr<geode::GeodeDevice> geodeDevice) {
+    std::string_view svgSource, std::shared_ptr<geode::GeodeDevice> /*geodeDevice*/) {
   ParseWarningSink warnings = ParseWarningSink::Disabled();
   auto parseResult = svg::parser::SVGParser::ParseSVG(svgSource, warnings);
   if (parseResult.hasError()) {
@@ -200,8 +200,11 @@ std::optional<RotateCursorImage> RenderImageFromSvg(
   }
 
   svg::SVGDocument document = std::move(parseResult.result());
-  svg::Renderer renderer =
-      geodeDevice != nullptr ? svg::Renderer(std::move(geodeDevice)) : svg::Renderer();
+  // Cursor SVGs always need a CPU bitmap for GLFW. Rendering them through the
+  // selected Geode backend would submit GPU work and synchronously read it back
+  // during editor startup, before the first document frame. Keep this small,
+  // fixed-size rasterization on TinySkia even when document rendering uses Geode.
+  svg::RendererTinySkia renderer;
   renderer.draw(document);
   svg::RendererBitmap bitmap = renderer.takeSnapshot();
   std::optional<std::vector<unsigned char>> rgba =

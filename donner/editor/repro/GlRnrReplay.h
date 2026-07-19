@@ -60,6 +60,9 @@ struct GlRnrReplayOptions {
   bool driveDocumentSpaceInput = false;
   /// Suppress non-document render-pane chrome when writing captures.
   bool contentOnlyCapture = false;
+  /// Read retained GPU textures back to count diagnostic pixels. Expensive and disabled unless a
+  /// diagnostics consumer explicitly requests it.
+  bool collectTexturePixelStats = false;
   /// Show the native editor window while replaying.
   bool visible = false;
 };
@@ -100,9 +103,9 @@ struct GlRnrReplayTileDiagnostics {
   Transform2d presentedDocumentFromCachedDocument = Transform2d();
   /// Backend texture/view handle, represented as an integer for diagnostics.
   std::uint64_t textureHandle = 0;
-  /// Number of green pixels found when the retained texture snapshot is rendered for diagnostics.
+  /// Number of green pixels found in an explicitly collected retained-texture readback.
   int textureGreenPixels = 0;
-  /// Number of nontransparent pixels found in the retained texture snapshot.
+  /// Number of nontransparent pixels found in an explicitly collected retained-texture readback.
   int textureNonTransparentPixels = 0;
   /// True when a renderer texture snapshot was available for pixel diagnostics.
   bool hasTextureSnapshot = false;

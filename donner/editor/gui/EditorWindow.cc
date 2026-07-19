@@ -34,6 +34,7 @@ extern "C" {
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -85,6 +86,18 @@ void OnEditorWgpuUncapturedError(WGPUDevice const* /*device*/, WGPUErrorType typ
                                  WGPUStringView message, void* /*userdata1*/, void* /*userdata2*/) {
   std::fprintf(stderr, "[Editor/WGPU] Uncaptured error (type=%d): %.*s\n", static_cast<int>(type),
                static_cast<int>(message.length), message.data ? message.data : "");
+}
+
+wgpu::Instance CreateEditorWgpuInstance() {
+#ifdef __EMSCRIPTEN__
+  const WGPUInstanceFeatureName timedWaitFeature = WGPUInstanceFeatureName_TimedWaitAny;
+  wgpu::InstanceDescriptor descriptor{wgpu::Default};
+  descriptor.requiredFeatureCount = 1;
+  descriptor.requiredFeatures = &timedWaitFeature;
+  return wgpu::createInstance(descriptor);
+#else
+  return wgpu::createInstance();
+#endif
 }
 
 class SurfacePresentGuard {
@@ -161,6 +174,27 @@ wgpu::TextureUsage SurfaceUsageForCapabilities(const wgpu::SurfaceCapabilities& 
   return wgpu::TextureUsage{usage};
 }
 
+wgpu::TextureUsage OffscreenTextureUsage(bool enableReadback) {
+  WGPUTextureUsage usage = WGPUTextureUsage_RenderAttachment;
+  if (enableReadback) {
+    usage |= WGPUTextureUsage_CopySrc;
+  }
+  return wgpu::TextureUsage{usage};
+}
+
+wgpu::Texture CreateOffscreenTargetTexture(const wgpu::Device& device, int width, int height,
+                                           wgpu::TextureFormat format, wgpu::TextureUsage usage) {
+  wgpu::TextureDescriptor textureDesc = {};
+  textureDesc.label = donner::geode::wgpuLabel("EditorWindowOffscreenTarget");
+  textureDesc.size = {static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1u};
+  textureDesc.mipLevelCount = 1;
+  textureDesc.sampleCount = 1;
+  textureDesc.dimension = wgpu::TextureDimension::_2D;
+  textureDesc.format = format;
+  textureDesc.usage = usage;
+  return device.createTexture(textureDesc);
+}
+
 bool SurfaceUsageSupportsReadback(wgpu::TextureUsage usage) {
   return (static_cast<WGPUTextureUsage>(usage) & WGPUTextureUsage_CopySrc) != 0;
 }
@@ -211,11 +245,18 @@ void CopySurfaceTextureToReadbackBuffer(const wgpu::Texture& texture, const wgpu
   encoder.copyTextureToBuffer(src, dst, copySize);
 }
 
-bool MapReadbackBuffer(const wgpu::Device& device, const wgpu::Buffer& buffer, uint64_t size) {
+bool MapReadbackBuffer(const wgpu::Instance& instance, const wgpu::Device& device,
+                       const wgpu::Buffer& buffer, uint64_t size) {
+#ifdef __EMSCRIPTEN__
+  (void)device;
+#else
+  (void)instance;
+#endif
   struct MapState {
     bool done = false;
     bool ok = false;
-  } mapState;
+  };
+  auto mapState = std::make_unique<MapState>();
 
   wgpu::BufferMapCallbackInfo mapCb{wgpu::Default};
   mapCb.callback = [](WGPUMapAsyncStatus status, WGPUStringView /*message*/, void* userdata1,
@@ -224,20 +265,30 @@ bool MapReadbackBuffer(const wgpu::Device& device, const wgpu::Buffer& buffer, u
     state->ok = (status == WGPUMapAsyncStatus_Success);
     state->done = true;
   };
-  mapCb.userdata1 = &mapState;
+  mapCb.userdata1 = mapState.get();
   mapCb.userdata2 = nullptr;
+#ifdef __EMSCRIPTEN__
+  mapCb.mode = wgpu::CallbackMode::WaitAnyOnly;
+#else
   mapCb.mode = wgpu::CallbackMode::AllowSpontaneous;
-  buffer.mapAsync(wgpu::MapMode::Read, 0, size, mapCb);
+#endif
+  [[maybe_unused]] const wgpu::Future mapFuture =
+      buffer.mapAsync(wgpu::MapMode::Read, 0, size, mapCb);
 
-  int pollCount = 0;
-  while (!mapState.done) {
-    device.poll(true, nullptr);
-    ++pollCount;
-    if (pollCount > 2000) {
-      break;
-    }
+#ifdef __EMSCRIPTEN__
+  wgpu::FutureWaitInfo waitInfo{wgpu::Default};
+  waitInfo.future = mapFuture;
+  constexpr uint64_t kMapTimeoutNs = 30'000'000'000ull;
+  if (instance.waitAny(1, &waitInfo, kMapTimeoutNs) != wgpu::WaitStatus::Success ||
+      !waitInfo.completed) {
+    return false;
   }
-  return mapState.ok;
+#else
+  while (!mapState->done) {
+    device.poll(true, nullptr);
+  }
+#endif
+  return mapState->ok;
 }
 #endif
 
@@ -307,6 +358,20 @@ EM_JS(int, CanvasCssHeight, (), { return Math.max(1, Math.floor(window.innerHeig
 EM_JS(double, BrowserDevicePixelRatio, (), { return window.devicePixelRatio || 1.0; });
 EM_JS(bool, WgpuReadbackStatsEnabled, (),
       { return new URLSearchParams(window.location.search).has("wgpuReadbackStats"); });
+EM_JS(void, PresentWgpuReadbackBitmap, (const uint8_t* pixels, int width, int height, int rowBytes),
+      {
+        const canvas = Module.canvas;
+        const context = canvas ? canvas.getContext("2d") : null;
+        if (!context || width <= 0 || height <= 0 || rowBytes != width * 4) {
+          return;
+        }
+        const byteLength = rowBytes * height;
+        // Threaded Wasm stores HEAPU8 in a SharedArrayBuffer, which ImageData
+        // intentionally rejects. Copy into a normal JS-owned buffer first.
+        const rgba = new Uint8ClampedArray(byteLength);
+        rgba.set(HEAPU8.subarray(pixels, pixels + byteLength));
+        context.putImageData(new ImageData(rgba, width, height), 0, 0);
+      });
 EM_JS(void, PublishWgpuReadbackStats,
       (int renderSamples, int renderColored, int renderNonBlack, int renderMaxChannel,
        int layerSamples, int layerColored, int layerNonBlack, int layerMaxChannel),
@@ -438,6 +503,7 @@ struct EditorWindow::WgpuState {
   wgpu::Device device;
   wgpu::Queue queue;
   wgpu::Surface surface;
+  donner::geode::ScopedWgpuHandle<wgpu::Texture> offscreenTexture;
   wgpu::TextureFormat surfaceFormat = wgpu::TextureFormat::Undefined;
   wgpu::TextureUsage surfaceUsage = wgpu::TextureUsage::RenderAttachment;
   wgpu::CompositeAlphaMode alphaMode = wgpu::CompositeAlphaMode::Auto;
@@ -569,7 +635,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
 
 #ifdef DONNER_EDITOR_WGPU
   wgpuState_ = std::make_unique<WgpuState>();
-  wgpuState_->instance = wgpu::createInstance();
+  wgpuState_->instance = CreateEditorWgpuInstance();
   if (!wgpuState_->instance) {
     std::fprintf(stderr, "EditorWindow: wgpuCreateInstance failed\n");
     glfwDestroyWindow(window_);
@@ -577,16 +643,29 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     glfwTerminate();
     return;
   }
-  wgpuState_->surface = CreateEditorWgpuSurface(wgpuState_->instance, window_);
-  if (!wgpuState_->surface) {
-    std::fprintf(stderr, "EditorWindow: failed to create WebGPU surface\n");
-    glfwDestroyWindow(window_);
-    window_ = nullptr;
-    glfwTerminate();
-    return;
+  bool useOffscreenWgpuTarget = useNullPlatform;
+#ifdef __EMSCRIPTEN__
+  // The smoke-test readback lane renders into a regular WebGPU texture and
+  // presents the mapped pixels through Canvas2D. This keeps pixel validation
+  // independent of headless browsers whose WebGPU swapchain cannot allocate a
+  // compositor-compatible shared-image backing.
+  useOffscreenWgpuTarget = useOffscreenWgpuTarget || WgpuReadbackStatsEnabled();
+#endif
+  if (!useOffscreenWgpuTarget) {
+    wgpuState_->surface = CreateEditorWgpuSurface(wgpuState_->instance, window_);
+    if (!wgpuState_->surface) {
+      std::fprintf(stderr, "EditorWindow: failed to create WebGPU surface\n");
+      glfwDestroyWindow(window_);
+      window_ = nullptr;
+      glfwTerminate();
+      return;
+    }
   }
   wgpu::RequestAdapterOptions adapterOptions = {};
-  adapterOptions.compatibleSurface = wgpuState_->surface;
+  adapterOptions.forceFallbackAdapter = geode::wgpuForceFallbackAdapterRequested();
+  if (wgpuState_->surface) {
+    adapterOptions.compatibleSurface = wgpuState_->surface;
+  }
   wgpuState_->adapter = wgpuState_->instance.requestAdapter(adapterOptions);
   if (!wgpuState_->adapter) {
     std::fprintf(stderr, "EditorWindow: no WebGPU adapter available\n");
@@ -610,20 +689,25 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   }
   wgpuState_->queue = wgpuState_->device.getQueue();
 
-  wgpu::SurfaceCapabilities caps;
-  wgpuState_->surface.getCapabilities(wgpuState_->adapter, &caps);
-  wgpuState_->surfaceFormat = ChooseSurfaceFormat(caps);
   bool enableSurfaceReadback = options_.enableFramebufferReadback;
 #if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
   enableSurfaceReadback = enableSurfaceReadback || WgpuReadbackStatsEnabled();
 #endif
-  wgpuState_->surfaceUsage = SurfaceUsageForCapabilities(caps, enableSurfaceReadback);
-  if (caps.alphaModeCount > 0) {
-    wgpuState_->alphaMode = wgpu::CompositeAlphaMode{caps.alphaModes[0]};
+  if (wgpuState_->surface) {
+    wgpu::SurfaceCapabilities caps;
+    wgpuState_->surface.getCapabilities(wgpuState_->adapter, &caps);
+    wgpuState_->surfaceFormat = ChooseSurfaceFormat(caps);
+    wgpuState_->surfaceUsage = SurfaceUsageForCapabilities(caps, enableSurfaceReadback);
+    if (caps.alphaModeCount > 0) {
+      wgpuState_->alphaMode = wgpu::CompositeAlphaMode{caps.alphaModes[0]};
+    } else {
+      wgpuState_->alphaMode = wgpu::CompositeAlphaMode::Auto;
+    }
+    caps.freeMembers();
   } else {
-    wgpuState_->alphaMode = wgpu::CompositeAlphaMode::Auto;
+    wgpuState_->surfaceFormat = wgpu::TextureFormat::BGRA8Unorm;
+    wgpuState_->surfaceUsage = OffscreenTextureUsage(enableSurfaceReadback);
   }
-  caps.freeMembers();
 
   int surfaceWidth = 0;
   int surfaceHeight = 0;
@@ -635,19 +719,33 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
 #endif
   surfaceWidth = std::max(1, surfaceWidth);
   surfaceHeight = std::max(1, surfaceHeight);
-  wgpu::SurfaceConfiguration surfaceConfig(wgpu::Default);
-  surfaceConfig.device = wgpuState_->device;
-  surfaceConfig.format = wgpuState_->surfaceFormat;
-  surfaceConfig.usage = wgpuState_->surfaceUsage;
-  surfaceConfig.width = surfaceWidth;
-  surfaceConfig.height = surfaceHeight;
-  surfaceConfig.presentMode = wgpu::PresentMode::Fifo;
-  surfaceConfig.alphaMode = wgpuState_->alphaMode;
-  wgpuState_->surface.configure(surfaceConfig);
+  if (wgpuState_->surface) {
+    wgpu::SurfaceConfiguration surfaceConfig(wgpu::Default);
+    surfaceConfig.device = wgpuState_->device;
+    surfaceConfig.format = wgpuState_->surfaceFormat;
+    surfaceConfig.usage = wgpuState_->surfaceUsage;
+    surfaceConfig.width = surfaceWidth;
+    surfaceConfig.height = surfaceHeight;
+    surfaceConfig.presentMode = wgpu::PresentMode::Fifo;
+    surfaceConfig.alphaMode = wgpuState_->alphaMode;
+    wgpuState_->surface.configure(surfaceConfig);
+  } else {
+    wgpuState_->offscreenTexture.reset(
+        CreateOffscreenTargetTexture(wgpuState_->device, surfaceWidth, surfaceHeight,
+                                     wgpuState_->surfaceFormat, wgpuState_->surfaceUsage));
+    if (!wgpuState_->offscreenTexture) {
+      std::fprintf(stderr, "EditorWindow: failed to create offscreen WebGPU target\n");
+      glfwDestroyWindow(window_);
+      window_ = nullptr;
+      glfwTerminate();
+      return;
+    }
+  }
   wgpuState_->configuredWidth = surfaceWidth;
   wgpuState_->configuredHeight = surfaceHeight;
 
   geode::GeodeEmbedConfig embedConfig;
+  embedConfig.instance = wgpuState_->instance;
   embedConfig.device = wgpuState_->device;
   embedConfig.queue = wgpuState_->queue;
 #ifndef __EMSCRIPTEN__
@@ -657,7 +755,9 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   wgpuState_->geodeDevice = geode::GeodeDevice::CreateFromExternal(embedConfig);
   if (wgpuState_->geodeDevice == nullptr) {
     std::fprintf(stderr, "EditorWindow: GeodeDevice::CreateFromExternal failed\n");
-    wgpuState_->surface.unconfigure();
+    if (wgpuState_->surface) {
+      wgpuState_->surface.unconfigure();
+    }
     glfwDestroyWindow(window_);
     window_ = nullptr;
     glfwTerminate();
@@ -668,7 +768,9 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
       geode::GeodeDevice::CreateFromExternal(framebufferEmbedConfig);
   if (wgpuState_->framebufferGeodeDevice == nullptr) {
     std::fprintf(stderr, "EditorWindow: framebuffer GeodeDevice::CreateFromExternal failed\n");
-    wgpuState_->surface.unconfigure();
+    if (wgpuState_->surface) {
+      wgpuState_->surface.unconfigure();
+    }
     glfwDestroyWindow(window_);
     window_ = nullptr;
     glfwTerminate();
@@ -1035,42 +1137,60 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   if (targetReadback != nullptr) {
     *targetReadback = svg::RendererBitmap{};
   }
-  if (wgpuState_ == nullptr || !wgpuState_->surface || !wgpuState_->device || displayW <= 0 ||
-      displayH <= 0) {
+  if (wgpuState_ == nullptr || !wgpuState_->device || displayW <= 0 || displayH <= 0 ||
+      (!wgpuState_->surface && !wgpuState_->offscreenTexture)) {
     return;
   }
   if (displayW != wgpuState_->configuredWidth || displayH != wgpuState_->configuredHeight) {
-    wgpu::SurfaceConfiguration surfaceConfig(wgpu::Default);
-    surfaceConfig.device = wgpuState_->device;
-    surfaceConfig.format = wgpuState_->surfaceFormat;
-    surfaceConfig.usage = wgpuState_->surfaceUsage;
-    surfaceConfig.width = displayW;
-    surfaceConfig.height = displayH;
-    surfaceConfig.presentMode = wgpu::PresentMode::Fifo;
-    surfaceConfig.alphaMode = wgpuState_->alphaMode;
-    wgpuState_->surface.configure(surfaceConfig);
+    if (wgpuState_->surface) {
+      wgpu::SurfaceConfiguration surfaceConfig(wgpu::Default);
+      surfaceConfig.device = wgpuState_->device;
+      surfaceConfig.format = wgpuState_->surfaceFormat;
+      surfaceConfig.usage = wgpuState_->surfaceUsage;
+      surfaceConfig.width = displayW;
+      surfaceConfig.height = displayH;
+      surfaceConfig.presentMode = wgpu::PresentMode::Fifo;
+      surfaceConfig.alphaMode = wgpuState_->alphaMode;
+      wgpuState_->surface.configure(surfaceConfig);
+    } else {
+      wgpuState_->offscreenTexture.reset(
+          CreateOffscreenTargetTexture(wgpuState_->device, displayW, displayH,
+                                       wgpuState_->surfaceFormat, wgpuState_->surfaceUsage));
+      if (!wgpuState_->offscreenTexture) {
+        return;
+      }
+    }
     wgpuState_->configuredWidth = displayW;
     wgpuState_->configuredHeight = displayH;
   }
 
-  wgpu::SurfaceTexture surfaceTexture;
-  const auto acquireStart = std::chrono::steady_clock::now();
-  wgpuState_->surface.getCurrentTexture(&surfaceTexture);
-  const auto acquireMs = ElapsedMs(acquireStart);
-  timing.surfaceAcquireMs = acquireMs;
-  if (acquireMs > 250.0) {
-    std::fprintf(stderr,
-                 "[Editor/WGPU] surface.getCurrentTexture took %.1fms (status=%d, size=%dx%d)\n",
-                 acquireMs, static_cast<int>(surfaceTexture.status), displayW, displayH);
+  donner::geode::ScopedWgpuHandle<wgpu::Texture> acquiredSurfaceTexture;
+  wgpu::Texture target;
+  if (wgpuState_->surface) {
+    wgpu::SurfaceTexture surfaceTexture;
+    const auto acquireStart = std::chrono::steady_clock::now();
+    wgpuState_->surface.getCurrentTexture(&surfaceTexture);
+    const auto acquireMs = ElapsedMs(acquireStart);
+    timing.surfaceAcquireMs = acquireMs;
+    if (acquireMs > 250.0) {
+      std::fprintf(stderr,
+                   "[Editor/WGPU] surface.getCurrentTexture took %.1fms (status=%d, size=%dx%d)\n",
+                   acquireMs, static_cast<int>(surfaceTexture.status), displayW, displayH);
+    }
+    if (surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal &&
+        surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal) {
+      donner::geode::ScopedWgpuHandle<wgpu::Texture> failedTexture(
+          wgpu::Texture(surfaceTexture.texture));
+      return;
+    }
+    acquiredSurfaceTexture.reset(wgpu::Texture(surfaceTexture.texture));
+    target = acquiredSurfaceTexture.get();
+  } else {
+    target = wgpuState_->offscreenTexture.get();
   }
-  if (surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal &&
-      surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal) {
-    donner::geode::ScopedWgpuHandle<wgpu::Texture> failedTexture(
-        wgpu::Texture(surfaceTexture.texture));
+  if (!target) {
     return;
   }
-
-  donner::geode::ScopedWgpuHandle<wgpu::Texture> target(wgpu::Texture(surfaceTexture.texture));
   SurfacePresentGuard presentGuard(wgpuState_->surface);
   const bool shouldReadback =
       targetReadback != nullptr && SurfaceUsageSupportsReadback(wgpuState_->surfaceUsage);
@@ -1091,7 +1211,7 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   const bool hasUnderlayRenderCallback = static_cast<bool>(wgpuUnderlayRenderCallback_);
   if (hasUnderlayRenderCallback) {
     const auto underlayStart = std::chrono::steady_clock::now();
-    donner::geode::ScopedWgpuHandle<wgpu::TextureView> clearView(target.get().createView());
+    donner::geode::ScopedWgpuHandle<wgpu::TextureView> clearView(target.createView());
     if (!clearView) {
       return;
     }
@@ -1125,7 +1245,7 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     wgpuState_->queue.submit(1, &clearCommands.get());
 
     EditorWindowWgpuRenderTarget underlayTarget{
-        .texture = target.get(),
+        .texture = target,
         .framebufferSizePx = Vector2i(displayW, displayH),
     };
     wgpuUnderlayRenderCallback_(underlayTarget);
@@ -1134,7 +1254,7 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
 
   {
     const auto imguiDrawStart = std::chrono::steady_clock::now();
-    donner::geode::ScopedWgpuHandle<wgpu::TextureView> view(target.get().createView());
+    donner::geode::ScopedWgpuHandle<wgpu::TextureView> view(target.createView());
     if (!view) {
       return;
     }
@@ -1175,7 +1295,7 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   if (wgpuDirectRenderCallback_) {
     const auto directStart = std::chrono::steady_clock::now();
     EditorWindowWgpuRenderTarget directTarget{
-        .texture = target.get(),
+        .texture = target,
         .framebufferSizePx = Vector2i(displayW, displayH),
     };
     wgpuDirectRenderCallback_(directTarget);
@@ -1188,8 +1308,8 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     if (!encoder) {
       return;
     }
-    CopySurfaceTextureToReadbackBuffer(target.get(), readbackBuffer.get(), readbackWidth,
-                                       readbackHeight, readbackBytesPerRow, encoder.get());
+    CopySurfaceTextureToReadbackBuffer(target, readbackBuffer.get(), readbackWidth, readbackHeight,
+                                       readbackBytesPerRow, encoder.get());
     donner::geode::ScopedWgpuHandle<wgpu::CommandBuffer> commands(encoder.get().finish());
     if (!commands) {
       return;
@@ -1197,8 +1317,8 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     wgpuState_->queue.submit(1, &commands.get());
     timing.readbackMs += ElapsedMs(readbackStart);
   }
-  if (readbackBuffer &&
-      MapReadbackBuffer(wgpuState_->device, readbackBuffer.get(), readbackBufferSize)) {
+  if (readbackBuffer && MapReadbackBuffer(wgpuState_->instance, wgpuState_->device,
+                                          readbackBuffer.get(), readbackBufferSize)) {
     const auto readbackStart = std::chrono::steady_clock::now();
     const uint8_t* mapped = static_cast<const uint8_t*>(
         readbackBuffer.get().getConstMappedRange(0, readbackBufferSize));
@@ -1212,6 +1332,9 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
 #if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
   if (publishSmokeReadbackStats && targetReadback != nullptr && !targetReadback->empty()) {
     PublishWgpuReadbackStatsForSmokeTests(*targetReadback);
+    PresentWgpuReadbackBitmap(targetReadback->pixels.data(), targetReadback->dimensions.x,
+                              targetReadback->dimensions.y,
+                              static_cast<int>(targetReadback->rowBytes));
   }
 #endif
   {

@@ -56,7 +56,10 @@ Entity SelectedGraphicsEntity(EditorApp& app) {
 
 constexpr std::size_t kTargetMouseUpCount = 2;
 constexpr char kReplayPath[] = "donner/editor/tests/filter_elm_disappear-3.rnr";
-constexpr char kGoldenPath[] = "donner/editor/tests/testdata/filter_disappear_rnr3_after_mup2.png";
+constexpr char kTinySkiaGoldenPath[] =
+    "donner/editor/tests/testdata/filter_disappear_rnr3_after_mup2.png";
+constexpr char kGeodeGoldenPath[] =
+    "donner/editor/tests/testdata/filter_disappear_rnr3_after_mup2_geode.png";
 
 std::optional<std::uint64_t> ParseBisectFrame() {
   const char* value = std::getenv("BISECTION_FRAME");
@@ -222,6 +225,7 @@ std::optional<RenderResult> RequestRenderAndWait(AsyncRenderer& asyncRenderer,
                                                  svg::Renderer& renderer, EditorApp& app,
                                                  SelectTool& selectTool) {
   RenderRequest request(renderer, app.document().document());
+  request.captureCpuSnapshot = true;
   request.version = app.document().currentFrameVersion();
   request.documentGeneration = app.document().documentGeneration();
   request.structuralRemap = app.document().consumePendingStructuralRemap();
@@ -316,6 +320,7 @@ protected:
     bool stoppedForBisection = false;
     std::filesystem::path diagnosticPath;
     std::uint64_t compositorReconstructCount = 0;
+    bool usesTexturePresentation = false;
   };
 
   void ReplayRecording(const std::filesystem::path& reproPath, ReplaySnapshot* out) {
@@ -354,6 +359,7 @@ protected:
 
     AsyncRenderer asyncRenderer;
     svg::Renderer renderer;
+    out->usesTexturePresentation = renderer.requiresTextureSnapshotPresentation();
 
     SyncCanvasSize(app, viewport);
     auto initialResult = RequestRenderAndWait(asyncRenderer, renderer, app, selectTool);
@@ -366,6 +372,8 @@ protected:
 
     const std::optional<std::uint64_t> bisectFrame = ParseBisectFrame();
     bool leftButtonHeld = false;
+    bool renderedActiveDragFrame = false;
+    std::optional<Vector2d> lastDragMouseDoc;
 
     for (const auto& frame : replay->frames) {
       bool frameNeedsRender = false;
@@ -380,6 +388,7 @@ protected:
                                     ? Vector2d(*frame.mouseDocX, *frame.mouseDocY)
                                     : viewport.screenToDocument(mouseScreen);
       const bool nowHeld = (frame.mouseButtonMask & 1) != 0;
+      bool suppressUnsampledDragRender = false;
 
       for (const auto& event : frame.events) {
         switch (event.kind) {
@@ -388,6 +397,8 @@ protected:
               selectTool.onMouseDown(
                   app, mouseDoc,
                   DecodeMouseModifiers(frame.modifiers, viewport.pixelsPerDocUnit()));
+              renderedActiveDragFrame = false;
+              lastDragMouseDoc = mouseDoc;
               frameNeedsRender = true;
             }
             break;
@@ -395,6 +406,7 @@ protected:
           case repro::ReproEvent::Kind::MouseUp:
             if (event.mouseButton == 0) {
               selectTool.onMouseUp(app, mouseDoc);
+              lastDragMouseDoc.reset();
               ++out->mouseUpCount;
               frameNeedsRender = true;
             }
@@ -412,10 +424,18 @@ protected:
         }
       }
 
-      if (nowHeld && leftButtonHeld) {
+      if (nowHeld && leftButtonHeld &&
+          (!lastDragMouseDoc.has_value() || mouseDoc != *lastDragMouseDoc)) {
         selectTool.onMouseMove(app, mouseDoc, /*buttonHeld=*/true,
                                DecodeMouseModifiers(frame.modifiers, viewport.pixelsPerDocUnit()));
-        frameNeedsRender = true;
+        lastDragMouseDoc = mouseDoc;
+        // One active frame preserves the promotion transition; later moves coalesce before release.
+        if (renderedActiveDragFrame) {
+          suppressUnsampledDragRender = true;
+        } else {
+          renderedActiveDragFrame = true;
+          frameNeedsRender = true;
+        }
       }
       leftButtonHeld = nowHeld;
 
@@ -423,7 +443,8 @@ protected:
         frameNeedsRender |= DrainWritebackAndReparse(app, selectTool, &liveSource_);
       }
 
-      frameNeedsRender |= app.flushFrame();
+      const bool flushedFrame = app.flushFrame();
+      frameNeedsRender |= flushedFrame && !suppressUnsampledDragRender;
 
       if (frameNeedsRender) {
         auto result = RequestRenderAndWait(asyncRenderer, renderer, app, selectTool);
@@ -471,11 +492,10 @@ TEST_F(RnrReplayTest, FilterDisappearRepro3MatchesGoldenAfterSecondMouseUp) {
       << "Replay ended before the second mouse-up checkpoint";
   ASSERT_FALSE(snapshot.bitmap.empty()) << "Replay produced an empty final bitmap";
 
-  // Approved exception: this committed golden still has small AA/raster drift across replay runs.
-  // The test remains useful for the presented-frame regression while the fixture is not yet
-  // identity-stable.
-  tests::CompareBitmapToGolden(snapshot.bitmap, kGoldenPath, "rnr_replay_repro3_after_mup2",
-                               tests::ApprovedPixelToleranceParams(0.03f, 500));
+  const std::string_view goldenPath =
+      snapshot.usesTexturePresentation ? kGeodeGoldenPath : kTinySkiaGoldenPath;
+  tests::CompareBitmapToGolden(snapshot.bitmap, goldenPath, "rnr_replay_repro3_after_mup2",
+                               tests::PixelmatchIdentityParams());
 }
 
 // Structural remaps must preserve the compositor across drag-release source

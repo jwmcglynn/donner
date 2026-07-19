@@ -41,6 +41,7 @@ TEST(GeodeEmbed, CreateFromExternalSucceeds) {
   ASSERT_NE(headless, nullptr);
 
   geode::GeodeEmbedConfig config;
+  config.instance = headless->instance();
   config.device = headless->device();
   config.queue = headless->queue();
   config.adapter = headless->adapter();
@@ -50,6 +51,7 @@ TEST(GeodeEmbed, CreateFromExternalSucceeds) {
   ASSERT_NE(embedded, nullptr);
   EXPECT_TRUE(static_cast<bool>(embedded->device()));
   EXPECT_TRUE(static_cast<bool>(embedded->queue()));
+  EXPECT_TRUE(static_cast<bool>(embedded->instance()));
   EXPECT_EQ(embedded->textureFormat(), wgpu::TextureFormat::RGBA8Unorm);
 }
 
@@ -77,6 +79,7 @@ protected:
         return std::shared_ptr<geode::GeodeDevice>();
       }
       geode::GeodeEmbedConfig config;
+      config.instance = headless->instance();
       config.device = headless->device();
       config.queue = headless->queue();
       config.adapter = headless->adapter();

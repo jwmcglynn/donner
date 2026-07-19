@@ -271,7 +271,7 @@ _multi_transition = transition(
     ],
 )
 
-donner_multi_transitioned_test = rule(
+_donner_multi_transitioned_test = rule(
     implementation = _donner_transitioned_executable_impl,
     test = True,
     attrs = {
@@ -294,6 +294,18 @@ donner_multi_transitioned_test = rule(
         ),
     },
 )
+
+def donner_multi_transitioned_test(name, dep, renderer_backend, **kwargs):
+    """Create a transitioned test with an honest short-runtime default."""
+    if "size" not in kwargs and "timeout" not in kwargs:
+        kwargs["size"] = "small"
+
+    _donner_multi_transitioned_test(
+        name = name,
+        dep = dep,
+        renderer_backend = renderer_backend,
+        **kwargs
+    )
 
 donner_multi_transitioned_binary = rule(
     implementation = _donner_transitioned_executable_impl,
@@ -497,6 +509,9 @@ def donner_cc_test(
     if add_llvm_macos_runtime_rpaths:
         donner_linkopts = donner_linkopts + llvm21_macos_runtime_rpath_linkopts()
 
+    if "size" not in kwargs and "timeout" not in kwargs:
+        kwargs["size"] = "small"
+
     cc_test(
         name = name,
         srcs = srcs,
@@ -682,7 +697,7 @@ def donner_cc_fuzzer(name, corpus, deps = [], per_input_timeout_seconds = 2, **k
         linkstatic = 1,
         deps = deps,
         target_compatible_with = fuzzer_compatible_with(),
-        size = "large",
+        size = "small",
         data = select({
             "@platforms//os:macos": ["@llvm_toolchain//:linker-components-aarch64-darwin"],
             "//conditions:default": [],

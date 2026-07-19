@@ -219,7 +219,7 @@ ImU32 ToImU32(const css::RGBA& rgba) {
 
 }  // namespace
 
-void LayersPanel::refreshSnapshot(const EditorApp& app, svg::Renderer* renderer,
+void LayersPanel::refreshSnapshot(const EditorApp& app, svg::RendererInterface* renderer,
                                   ThumbnailRefreshMode mode) {
   model_.refresh(app);
 
@@ -272,7 +272,7 @@ void LayersPanel::refreshSnapshot(const EditorApp& app, svg::Renderer* renderer,
     // empty and fall back to the swatch. The per-frame cache above avoids
     // rerasterizing thumbnails during idle sidebar refreshes.
     svg::RendererBitmap thumbnail =
-        renderer->renderElementToBitmap(row.element, thumbnailMaxSizePx);
+        svg::RenderElementToBitmap(*renderer, row.element, thumbnailMaxSizePx);
     ++thumbnailRefreshStats_.renderedCount;
     CachedThumbnail& cacheEntry = thumbnailBitmapByStableId_[row.stableId];
     cacheEntry.documentFrameVersion = thumbnailRefreshStats_.documentFrameVersion;

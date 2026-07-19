@@ -17,6 +17,7 @@
 ##   --config=tsan              - Build with thread sanitizer.
 ##   --config=clang-tidy        - Build with clang-tidy checks.
 ##   --config=dev               - Disable renderer backend test transitions.
+##   --config=hardware-adapter  - Run Geode tests on the default hardware adapter.
 ##   --config=wasm              - Build for WebAssembly via Emscripten.
 ##
 
@@ -287,6 +288,14 @@ build:linux-binary-size-lto --copt=-flto=thin --linkopt=-flto=thin
 
 test --test_env=LLM
 test --test_env=DONNER_RENDERER_TEST_VERBOSE
+
+# Tests favor a deterministic software WebGPU adapter on Linux. Running many
+# independent Geode test processes against one physical Vulkan device can turn
+# one driver device-loss into a suite-wide cascade. Product binaries and
+# `bazel run` keep the platform-default hardware adapter. Use
+# `--config=hardware-adapter` for an explicit hardware test lane.
+test:linux --test_env=DONNER_GEODE_FORCE_FALLBACK_ADAPTER=1
+test:hardware-adapter --test_env=DONNER_GEODE_FORCE_FALLBACK_ADAPTER=0
 
 # Coverage builds
 coverage --config=coverage

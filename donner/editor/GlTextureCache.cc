@@ -1103,40 +1103,64 @@ void GlTextureCache::UploadBitmap(GLuint texture, const svg::RendererBitmap& bit
 
   const Vector2i allocationDimensions = PowerOfTwoTextureDimensionsForPayload(bitmap.dimensions);
   glBindTexture(GL_TEXTURE_2D, texture);
+  bool initializedAllocation = false;
   if (*outAllocatedWidth != allocationDimensions.x ||
       *outAllocatedHeight != allocationDimensions.y) {
+    const std::size_t allocationRowBytes = static_cast<std::size_t>(allocationDimensions.x) * 4u;
+    std::vector<uint8_t> initializedPixels(allocationRowBytes *
+                                           static_cast<std::size_t>(allocationDimensions.y));
+    for (int y = 0; y < allocationDimensions.y; ++y) {
+      const int sourceY = std::min(y, bitmap.dimensions.y - 1);
+      const uint8_t* sourceRow =
+          bitmap.pixels.data() + static_cast<std::size_t>(sourceY) * bitmap.rowBytes;
+      uint8_t* destinationRow =
+          initializedPixels.data() + static_cast<std::size_t>(y) * allocationRowBytes;
+      std::memcpy(destinationRow, sourceRow, static_cast<std::size_t>(bitmap.dimensions.x) * 4u);
+
+      const uint8_t* edgePixel = sourceRow + static_cast<std::size_t>(bitmap.dimensions.x - 1) * 4u;
+      for (int x = bitmap.dimensions.x; x < allocationDimensions.x; ++x) {
+        std::memcpy(destinationRow + static_cast<std::size_t>(x) * 4u, edgePixel, 4u);
+      }
+    }
+
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, allocationDimensions.x, allocationDimensions.y, 0,
-                 GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+                 GL_RGBA, GL_UNSIGNED_BYTE, initializedPixels.data());
     *outAllocatedWidth = allocationDimensions.x;
     *outAllocatedHeight = allocationDimensions.y;
+    initializedAllocation = true;
   }
-  glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(bitmap.rowBytes / 4u));
-  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, bitmap.dimensions.x, bitmap.dimensions.y, GL_RGBA,
-                  GL_UNSIGNED_BYTE, bitmap.pixels.data());
-  if (allocationDimensions.y > bitmap.dimensions.y) {
-    const uint8_t* bottomRow =
-        bitmap.pixels.data() + static_cast<std::size_t>(bitmap.dimensions.y - 1) * bitmap.rowBytes;
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, bitmap.dimensions.y, bitmap.dimensions.x, 1, GL_RGBA,
-                    GL_UNSIGNED_BYTE, bottomRow);
-  }
-  if (allocationDimensions.x > bitmap.dimensions.x) {
-    std::vector<uint8_t> edgeColumn(static_cast<std::size_t>(bitmap.dimensions.y) * 4u, 0u);
-    for (int y = 0; y < bitmap.dimensions.y; ++y) {
-      const uint8_t* src = bitmap.pixels.data() + static_cast<std::size_t>(y) * bitmap.rowBytes +
-                           static_cast<std::size_t>(bitmap.dimensions.x - 1) * 4u;
-      std::memcpy(edgeColumn.data() + static_cast<std::size_t>(y) * 4u, src, 4u);
-    }
-    glPixelStorei(GL_UNPACK_ROW_LENGTH, 1);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, bitmap.dimensions.x, 0, 1, bitmap.dimensions.y, GL_RGBA,
-                    GL_UNSIGNED_BYTE, edgeColumn.data());
 
+  if (!initializedAllocation) {
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(bitmap.rowBytes / 4u));
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, bitmap.dimensions.x, bitmap.dimensions.y, GL_RGBA,
+                    GL_UNSIGNED_BYTE, bitmap.pixels.data());
     if (allocationDimensions.y > bitmap.dimensions.y) {
-      const uint8_t* bottomRight =
+      const uint8_t* bottomRow =
           bitmap.pixels.data() +
-          static_cast<std::size_t>(bitmap.dimensions.y - 1) * bitmap.rowBytes +
-          static_cast<std::size_t>(bitmap.dimensions.x - 1) * 4u;
-      glTexSubImage2D(GL_TEXTURE_2D, 0, bitmap.dimensions.x, bitmap.dimensions.y, 1, 1, GL_RGBA,
-                      GL_UNSIGNED_BYTE, bottomRight);
+          static_cast<std::size_t>(bitmap.dimensions.y - 1) * bitmap.rowBytes;
+      glTexSubImage2D(GL_TEXTURE_2D, 0, 0, bitmap.dimensions.y, bitmap.dimensions.x, 1, GL_RGBA,
+                      GL_UNSIGNED_BYTE, bottomRow);
+    }
+    if (allocationDimensions.x > bitmap.dimensions.x) {
+      std::vector<uint8_t> edgeColumn(static_cast<std::size_t>(bitmap.dimensions.y) * 4u, 0u);
+      for (int y = 0; y < bitmap.dimensions.y; ++y) {
+        const uint8_t* src = bitmap.pixels.data() + static_cast<std::size_t>(y) * bitmap.rowBytes +
+                             static_cast<std::size_t>(bitmap.dimensions.x - 1) * 4u;
+        std::memcpy(edgeColumn.data() + static_cast<std::size_t>(y) * 4u, src, 4u);
+      }
+      glPixelStorei(GL_UNPACK_ROW_LENGTH, 1);
+      glTexSubImage2D(GL_TEXTURE_2D, 0, bitmap.dimensions.x, 0, 1, bitmap.dimensions.y, GL_RGBA,
+                      GL_UNSIGNED_BYTE, edgeColumn.data());
+
+      if (allocationDimensions.y > bitmap.dimensions.y) {
+        const uint8_t* bottomRight =
+            bitmap.pixels.data() +
+            static_cast<std::size_t>(bitmap.dimensions.y - 1) * bitmap.rowBytes +
+            static_cast<std::size_t>(bitmap.dimensions.x - 1) * 4u;
+        glTexSubImage2D(GL_TEXTURE_2D, 0, bitmap.dimensions.x, bitmap.dimensions.y, 1, 1, GL_RGBA,
+                        GL_UNSIGNED_BYTE, bottomRight);
+      }
     }
   }
   glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);

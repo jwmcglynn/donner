@@ -617,7 +617,7 @@ donner_cc_test(
 
 donner_multi_transitioned_test(
     name = "geode_embed_tests",
-    timeout = "moderate",
+    size = "small",
     testonly = 1,
     dep = ":geode_embed_tests_impl",
     renderer_backend = "geode",

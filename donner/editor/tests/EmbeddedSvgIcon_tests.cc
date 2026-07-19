@@ -1,8 +1,7 @@
 /// @file
 /// Tests for the embedded-SVG icon rasterizer. Beyond mask correctness, pins
-/// that repeated icon renders share one renderer: on GPU backends every
-/// renderer construction stands up a full WebGPU instance/adapter/device, so
-/// a per-icon renderer floods startup with duplicate adapter/device creation.
+/// that CPU-bound icon generation never creates a Geode device or pays a GPU
+/// readback during editor startup.
 
 #include "donner/editor/EmbeddedSvgIcon.h"
 
@@ -12,8 +11,6 @@
 #include <array>
 #include <span>
 #include <string_view>
-
-#include "donner/svg/renderer/Renderer.h"
 
 #ifdef DONNER_GEODE_BACKEND_AVAILABLE
 #include "donner/svg/renderer/geode/GeodeDevice.h"
@@ -86,19 +83,16 @@ TEST(EmbeddedSvgIcon, RejectsMalformedSvg) {
 }
 
 #ifdef DONNER_GEODE_BACKEND_AVAILABLE
-TEST(EmbeddedSvgIcon, RepeatedRendersShareOneHeadlessDevice) {
-  // Prime the shared renderer (first call may create the one shared device).
+TEST(EmbeddedSvgIcon, RepeatedRendersDoNotCreateGeodeDevices) {
+  const int creationsBeforeRendering = geode::GeodeDevice::headlessCreationCountForTesting();
   ASSERT_TRUE(RenderEmbeddedSvgIcon(BytesOf(kSquareIconSvg), 16).has_value());
-
-  const int creationsAfterFirstRender = geode::GeodeDevice::headlessCreationCountForTesting();
   ASSERT_TRUE(RenderEmbeddedSvgIcon(BytesOf(kCircleIconSvg), 16).has_value());
   ASSERT_TRUE(RenderEmbeddedSvgIcon(BytesOf(kSquareIconSvg), 24).has_value());
   ASSERT_TRUE(RenderEmbeddedSvgIcon(BytesOf(kCircleIconSvg), 24).has_value());
 
-  EXPECT_EQ(geode::GeodeDevice::headlessCreationCountForTesting(), creationsAfterFirstRender)
-      << "Each embedded-icon render must reuse the shared renderer; a fresh renderer per icon "
-         "creates a full WebGPU instance/adapter/device per icon (the duplicate "
-         "'[Geode/wgpu-native] Adapter:' log spam at editor startup).";
+  EXPECT_EQ(geode::GeodeDevice::headlessCreationCountForTesting(), creationsBeforeRendering)
+      << "Embedded icons are CPU bitmaps and must stay on TinySkia instead of creating or "
+         "synchronously reading back a Geode device.";
 }
 #endif
 

@@ -1,0 +1,21 @@
+Subject: [PATCH] Detect unistd on non-Windows Bazel builds
+
+The registry overlay does not run zlib's configure step and leaves
+HAVE_UNISTD_H unset. That makes zlib call lseek without its prototype and use
+long long instead of off_t, which produces conflicting Wasm signatures at
+link time. Non-Windows Bazel toolchains provide unistd.h, so declare it just as
+the configure build would.
+
+diff --git a/BUILD.bazel b/BUILD.bazel
+--- a/BUILD.bazel
++++ b/BUILD.bazel
+@@ -111,7 +111,7 @@ cc_library(
+     }),
+     includes = ["zlib/include/"],
+     local_defines = select({
+         "@platforms//os:windows": ["_CRT_NONSTDC_NO_WARNINGS"],
+-        "//conditions:default": [],
++        "//conditions:default": ["HAVE_UNISTD_H=1"],
+     }),
+     visibility = ["//visibility:public"],
+ )

@@ -164,6 +164,11 @@ struct RenderRequest {
   /// and publishes a full-canvas tile. The UI uploads it into the retained overview cache without
   /// replacing active viewport-bounded tiles.
   bool overviewInfillOnly = false;
+  /// Capture a CPU-readable copy of the fully composed frame.
+  ///
+  /// Geode normally publishes GPU texture tiles without readback. Diagnostics, replay tools, and
+  /// pixel-asserting tests set this flag when they explicitly need a bitmap.
+  bool captureCpuSnapshot = false;
 };
 
 /// Final full-canvas snapshot work needed after compositor rendering.
@@ -179,10 +184,11 @@ struct PresentationSnapshotPlan {
  *
  * @param hasCompositedPreview True when compositor tiles already provide the presented pixels.
  * @param requiresTextureSnapshotPresentation True when presentation must remain on GPU textures.
+ * @param captureCpuSnapshot True when the caller explicitly requested a CPU-readable frame.
  * @return The final snapshot plan for this worker iteration.
  */
 [[nodiscard]] PresentationSnapshotPlan ChoosePresentationSnapshotPlan(
-    bool hasCompositedPreview, bool requiresTextureSnapshotPresentation);
+    bool hasCompositedPreview, bool requiresTextureSnapshotPresentation, bool captureCpuSnapshot);
 
 /// Presentation payload plus the document version it was rendered from.
 struct RenderResult {

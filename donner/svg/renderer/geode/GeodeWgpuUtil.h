@@ -18,6 +18,8 @@
 /// owning smart handles.
 
 #include <atomic>
+#include <cstdio>
+#include <cstdlib>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -39,6 +41,31 @@ namespace donner::geode {
 /// into callers that don't already need it.
 [[nodiscard]] inline wgpu::StringView wgpuLabel(std::string_view text) noexcept {
   return wgpu::StringView{text};
+}
+
+/// Whether headless/test WebGPU creation should request a software fallback
+/// adapter. Bazel's Linux test configuration sets this to keep independent
+/// test processes from contending for one physical Vulkan device. Product
+/// processes leave it unset and retain the platform-default adapter policy.
+[[nodiscard]] inline bool wgpuForceFallbackAdapterRequested() noexcept {
+  const char* fallbackEnv = std::getenv("DONNER_GEODE_FORCE_FALLBACK_ADAPTER");
+  if (fallbackEnv == nullptr || fallbackEnv[0] == '\0') {
+    return false;
+  }
+
+  const std::string_view value(fallbackEnv);
+  if (value == "1") {
+    return true;
+  }
+  if (value == "0") {
+    return false;
+  }
+
+  std::fprintf(stderr,
+               "[Geode/wgpu-native] Ignoring unsupported "
+               "DONNER_GEODE_FORCE_FALLBACK_ADAPTER=%.*s; expected 0 or 1.\n",
+               static_cast<int>(value.size()), value.data());
+  return false;
 }
 
 /**

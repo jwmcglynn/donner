@@ -24,10 +24,6 @@
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/RendererInterface.h"
 
-#ifdef DONNER_EDITOR_WGPU
-#include "donner/svg/renderer/RendererGeode.h"
-#endif
-
 namespace donner::editor::repro {
 namespace {
 
@@ -369,34 +365,13 @@ void QueueRecordedScrollEvents(EditorShell& shell, const ReproFrame& frame) {
   return cropRect.has_value() ? CropBitmap(bitmap, *cropRect) : bitmap;
 }
 
-#ifdef DONNER_EDITOR_WGPU
 std::optional<TexturePixelStats> TexturePixelStatsForSnapshot(
-    const std::shared_ptr<const svg::RendererTextureSnapshot>& textureSnapshot,
-    const std::shared_ptr<geode::GeodeDevice>& device) {
-  if (textureSnapshot == nullptr || device == nullptr ||
-      textureSnapshot->backend() != svg::RendererTextureSnapshotBackend::Geode) {
+    const std::shared_ptr<const svg::RendererTextureSnapshot>& textureSnapshot) {
+  if (textureSnapshot == nullptr) {
     return std::nullopt;
   }
 
-  const Vector2i dims = textureSnapshot->dimensions();
-  if (dims.x <= 0 || dims.y <= 0) {
-    return std::nullopt;
-  }
-
-  svg::RendererGeode renderer(device);
-  svg::RenderViewport viewport;
-  viewport.size = Vector2d(static_cast<double>(dims.x), static_cast<double>(dims.y));
-  viewport.devicePixelRatio = 1.0;
-  renderer.beginFrame(viewport);
-  if (!renderer.drawTextureSnapshot(
-          *textureSnapshot, Box2d(Vector2d::Zero(), Vector2d(static_cast<double>(dims.x),
-                                                             static_cast<double>(dims.y))))) {
-    renderer.endFrame();
-    return std::nullopt;
-  }
-  renderer.endFrame();
-
-  const svg::RendererBitmap bitmap = renderer.takeSnapshot();
+  const svg::RendererBitmap bitmap = textureSnapshot->takeSnapshot();
   if (bitmap.empty()) {
     return std::nullopt;
   }
@@ -420,7 +395,6 @@ std::optional<TexturePixelStats> TexturePixelStatsForSnapshot(
   }
   return stats;
 }
-#endif
 
 [[nodiscard]] bool WriteCapture(const svg::RendererBitmap& bitmap,
                                 const std::filesystem::path& path, std::string* error) {
@@ -695,15 +669,15 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
       int textureGreenPixels = 0;
       int textureNonTransparentPixels = 0;
       bool hasTextureSnapshot = tile.textureSnapshot != nullptr;
-#ifdef DONNER_EDITOR_WGPU
-      if (const std::optional<TexturePixelStats> stats =
-              TexturePixelStatsForSnapshot(tile.textureSnapshot, window.geodeFramebufferDevice());
-          stats.has_value()) {
-        textureGreenPixels = stats->greenPixels;
-        textureNonTransparentPixels = stats->nonTransparentPixels;
-        hasTextureSnapshot = true;
+      if (options.collectTexturePixelStats) {
+        if (const std::optional<TexturePixelStats> stats =
+                TexturePixelStatsForSnapshot(tile.textureSnapshot);
+            stats.has_value()) {
+          textureGreenPixels = stats->greenPixels;
+          textureNonTransparentPixels = stats->nonTransparentPixels;
+          hasTextureSnapshot = true;
+        }
       }
-#endif
       frameDiagnostics.tiles.push_back(GlRnrReplayTileDiagnostics{
           .id = tile.id,
           .kind = tile.kind,

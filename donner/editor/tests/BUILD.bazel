@@ -843,10 +843,14 @@ donner_cc_test(
         "//:donner_splash.svg",
         "//:zoom-out-drag-jump.rnr",
     ],
+    defines = select({
+        "//donner/svg/renderer:renderer_backend_geode": ["DONNER_GL_RNR_GEODE_BACKEND"],
+        "//conditions:default": [],
+    }),
     env = {"DONNER_TEST_TIMEOUT_SECONDS": "180"},
-    # 12 independent replay scenarios ran serially at ~307 s total on the
-    # self-hosted RE lane (CI baseline, 2026-07-01). Sharding runs
-    # them as parallel RE actions, cutting the test-step critical path.
+    # Six shards produced the shortest measured target critical path on the
+    # software-Vulkan CI lane. Reducing this to two doubled target wall time;
+    # per-case latency is controlled by compact deterministic fixtures.
     shard_count = 6,
     target_compatible_with = select({
         "@platforms//os:macos": [],
@@ -879,13 +883,14 @@ filegroup(
         "filter_snapback_repro.rnr",
         "filtered-element-flash-after-drags-2.rnr",
         "testdata/filter_disappear_rnr3_after_mup2.png",
+        "testdata/filter_disappear_rnr3_after_mup2_geode.png",
         "testdata/filter_disappear_single_drag_lgd_post.png",
     ],
 )
 
 donner_cc_test(
     name = "rnr_replay_tests",
-    size = "large",
+    size = "small",
     srcs = ["RnrReplay_tests.cc"],
     data = [
         ":rnr_replay_testdata",

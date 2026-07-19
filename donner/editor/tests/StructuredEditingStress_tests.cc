@@ -329,7 +329,9 @@ protected:
 
     if (app_.hasDocument()) {
       svg::Renderer liveRenderer;
-      liveRenderer.draw(app_.document().document());
+      svg::SVGDocument& liveDocument = app_.document().document();
+      [[maybe_unused]] svg::DocumentWriteAccess access = liveDocument.writeAccess();
+      liveRenderer.draw(liveDocument);
       svg::RendererBitmap liveBitmap = liveRenderer.takeSnapshot();
       WriteBitmapArtifact(outputDir / ("structured_editing_" + label + "_live.png"), liveBitmap);
 
@@ -441,7 +443,9 @@ protected:
     tests::CompareBitmapToBitmap(asyncResult.bitmap, referenceBitmap, phase);
 
     svg::Renderer liveRenderer;
-    liveRenderer.draw(app_.document().document());
+    svg::SVGDocument& liveDocument = app_.document().document();
+    [[maybe_unused]] svg::DocumentWriteAccess access = liveDocument.writeAccess();
+    liveRenderer.draw(liveDocument);
     svg::RendererBitmap liveBitmap = liveRenderer.takeSnapshot();
     tests::CompareBitmapToBitmap(liveBitmap, referenceBitmap, phase);
     if (::testing::Test::HasFailure() == hadFailureAtStart) {
@@ -451,7 +455,9 @@ protected:
 
   svg::RendererBitmap RenderLiveBitmap() {
     svg::Renderer liveRenderer;
-    liveRenderer.draw(app_.document().document());
+    svg::SVGDocument& liveDocument = app_.document().document();
+    [[maybe_unused]] svg::DocumentWriteAccess access = liveDocument.writeAccess();
+    liveRenderer.draw(liveDocument);
     return liveRenderer.takeSnapshot();
   }
 
@@ -699,6 +705,7 @@ protected:
 
   RenderRequest BuildRenderRequest(std::uint64_t version, bool includeInteractionState = true) {
     RenderRequest request(asyncRendererBackend_, app_.document().document());
+    request.captureCpuSnapshot = true;
     request.version = version;
     request.documentGeneration = app_.document().documentGeneration();
     request.structuralRemap = app_.document().consumePendingStructuralRemap();

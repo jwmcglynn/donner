@@ -492,6 +492,7 @@ donner_cc_library(
 # graph always includes).
 forbidden_transitive_dep_test(
     name = "geode_excludes_tiny_skia_audit",
+    size = "small",
     forbidden = "//donner/svg/renderer:renderer_tiny_skia",
     tags = [
         "audit",

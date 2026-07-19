@@ -272,11 +272,11 @@ std::uint64_t PostReleaseSettleTargetVersion(std::uint64_t currentFrameVersion,
 bool ShouldDeferSelectedViewportRefresh(Entity selectedEntity, bool hasActiveDrag,
                                         std::uint64_t currentVersion,
                                         std::uint64_t displayedDocVersion,
-                                        bool hasCachedSelectedTexture, bool rasterViewportSettled,
+                                        bool hasCachedPresentation, bool rasterViewportSettled,
                                         bool needsOverviewInfill,
                                         bool pendingSelectedLayerRasterization) {
   return selectedEntity != entt::null && !hasActiveDrag && currentVersion == displayedDocVersion &&
-         hasCachedSelectedTexture && !rasterViewportSettled && !needsOverviewInfill &&
+         hasCachedPresentation && !rasterViewportSettled && !needsOverviewInfill &&
          !pendingSelectedLayerRasterization;
 }
 
@@ -797,8 +797,8 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
       prewarmEntity != entt::null && prewarmEntity == pendingSelectedLayerRasterizationEntity_;
   const bool deferSelectedViewportRefresh = ShouldDeferSelectedViewportRefresh(
       prewarmEntity, dragPreview.has_value(), currentVersion, displayedDocVersion_,
-      compositedPresentation_.hasCachedTexturesForEntity(prewarmEntity), rasterViewportSettled,
-      needsOverviewInfill, pendingSelectedLayerRasterization);
+      compositedPresentation_.hasCachedTextures(), rasterViewportSettled, needsOverviewInfill,
+      pendingSelectedLayerRasterization);
   if (deferSelectedViewportRefresh && !needsOverviewInfill) {
     if (renderWorker_.asyncRenderer.isBusy()) {
       renderWorker_.asyncRenderer.cancelInFlight();

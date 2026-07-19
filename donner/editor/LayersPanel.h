@@ -30,10 +30,6 @@
 #include "donner/editor/LayerTreeModel.h"
 #include "donner/svg/renderer/RendererInterface.h"
 
-namespace donner::svg {
-class Renderer;
-}
-
 namespace donner::editor {
 
 /// Current "this element is locked, you can't select it" flash fed into the
@@ -125,7 +121,7 @@ public:
   /// @param app Live editor app to snapshot.
   /// @param renderer Optional renderer to use for thumbnail rasterization.
   /// @param mode Whether to render thumbnails or refresh only the row swatches.
-  void refreshSnapshot(const EditorApp& app, svg::Renderer* renderer = nullptr,
+  void refreshSnapshot(const EditorApp& app, svg::RendererInterface* renderer = nullptr,
                        ThumbnailRefreshMode mode = ThumbnailRefreshMode::Render);
 
   /// Render the panel into the current ImGui window. Must be called inside an

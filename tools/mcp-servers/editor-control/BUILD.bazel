@@ -73,6 +73,7 @@ cc_binary(
 
 cc_test(
     name = "editor_control_session_tests",
+    size = "small",
     srcs = ["EditorControlSession_tests.cc"],
     data = [
         "//:donner_splash.svg",
@@ -110,6 +111,7 @@ py_test(
 
 py_test(
     name = "editor_control_wrapper_tests",
+    size = "small",
     srcs = [
         "editor_control_wrapper.py",
         "editor_control_wrapper_tests.py",

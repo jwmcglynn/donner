@@ -88,13 +88,15 @@ Entity SelectedGraphicsEntity(EditorApp& app) {
   return app.selectedElement()->unsafeEntityHandle().entity();
 }
 
-std::string ElementId(const svg::SVGElement& element) {
-  return element.withReadAccess(
-      [&element](svg::DocumentReadAccess&, EntityHandle) { return std::string(element.id()); });
-}
-
 bool HasPresentationPayload(const RenderResult::CompositedTile& tile) {
   return !tile.bitmap.empty() || tile.textureSnapshot != nullptr;
+}
+
+svg::RendererBitmap MaterializeTileBitmap(const RenderResult::CompositedTile& tile) {
+  if (!tile.bitmap.empty()) {
+    return tile.bitmap;
+  }
+  return tile.textureSnapshot ? tile.textureSnapshot->takeSnapshot() : svg::RendererBitmap{};
 }
 
 bool TileCoversDocPoint(const RenderResult::CompositedTile& tile, const Vector2d& point) {
@@ -180,7 +182,8 @@ EditorRasterViewport SplashDonnerHighZoomRasterViewport(Vector2d panDocPoint = V
 
 TEST(AsyncRendererPresentationPolicyTest, TexturePresentationSkipsFinalSnapshotWhenTilesExist) {
   const PresentationSnapshotPlan plan = ChoosePresentationSnapshotPlan(
-      /*hasCompositedPreview=*/true, /*requiresTextureSnapshotPresentation=*/true);
+      /*hasCompositedPreview=*/true, /*requiresTextureSnapshotPresentation=*/true,
+      /*captureCpuSnapshot=*/false);
 
   EXPECT_FALSE(plan.captureCpuSnapshot);
   EXPECT_FALSE(plan.captureTextureSnapshot);
@@ -188,7 +191,8 @@ TEST(AsyncRendererPresentationPolicyTest, TexturePresentationSkipsFinalSnapshotW
 
 TEST(AsyncRendererPresentationPolicyTest, TexturePresentationCapturesFallbackWhenTilesAreMissing) {
   const PresentationSnapshotPlan plan = ChoosePresentationSnapshotPlan(
-      /*hasCompositedPreview=*/false, /*requiresTextureSnapshotPresentation=*/true);
+      /*hasCompositedPreview=*/false, /*requiresTextureSnapshotPresentation=*/true,
+      /*captureCpuSnapshot=*/false);
 
   EXPECT_FALSE(plan.captureCpuSnapshot);
   EXPECT_TRUE(plan.captureTextureSnapshot);
@@ -196,7 +200,8 @@ TEST(AsyncRendererPresentationPolicyTest, TexturePresentationCapturesFallbackWhe
 
 TEST(AsyncRendererPresentationPolicyTest, CpuPresentationCanKeepDiagnosticSnapshotWithTiles) {
   const PresentationSnapshotPlan plan = ChoosePresentationSnapshotPlan(
-      /*hasCompositedPreview=*/true, /*requiresTextureSnapshotPresentation=*/false);
+      /*hasCompositedPreview=*/true, /*requiresTextureSnapshotPresentation=*/false,
+      /*captureCpuSnapshot=*/false);
 
   EXPECT_TRUE(plan.captureCpuSnapshot);
   EXPECT_FALSE(plan.captureTextureSnapshot);
@@ -204,10 +209,25 @@ TEST(AsyncRendererPresentationPolicyTest, CpuPresentationCanKeepDiagnosticSnapsh
 
 TEST(AsyncRendererPresentationPolicyTest, CpuPresentationCapturesFallbackWhenTilesAreMissing) {
   const PresentationSnapshotPlan plan = ChoosePresentationSnapshotPlan(
-      /*hasCompositedPreview=*/false, /*requiresTextureSnapshotPresentation=*/false);
+      /*hasCompositedPreview=*/false, /*requiresTextureSnapshotPresentation=*/false,
+      /*captureCpuSnapshot=*/false);
 
   EXPECT_TRUE(plan.captureCpuSnapshot);
   EXPECT_FALSE(plan.captureTextureSnapshot);
+}
+
+TEST(AsyncRendererPresentationPolicyTest, TexturePresentationHonorsExplicitCpuCapture) {
+  const PresentationSnapshotPlan withTiles = ChoosePresentationSnapshotPlan(
+      /*hasCompositedPreview=*/true, /*requiresTextureSnapshotPresentation=*/true,
+      /*captureCpuSnapshot=*/true);
+  EXPECT_TRUE(withTiles.captureCpuSnapshot);
+  EXPECT_FALSE(withTiles.captureTextureSnapshot);
+
+  const PresentationSnapshotPlan fallback = ChoosePresentationSnapshotPlan(
+      /*hasCompositedPreview=*/false, /*requiresTextureSnapshotPresentation=*/true,
+      /*captureCpuSnapshot=*/true);
+  EXPECT_TRUE(fallback.captureCpuSnapshot);
+  EXPECT_TRUE(fallback.captureTextureSnapshot);
 }
 
 TEST(AsyncRendererTest, MultiSelectActiveDragMarksEverySelectedLayerAsDragTarget) {
@@ -971,10 +991,6 @@ TEST(AsyncRendererTest, DisplayNoneSelectionDoesNotLeaveStaleBackgroundPixelsWhe
   const Entity nextEntity = next->unsafeEntityHandle().entity();
 
   svg::Renderer renderer;
-  if (renderer.requiresTextureSnapshotPresentation()) {
-    GTEST_SKIP() << "This regression asserts CPU bitmap pixels; Geode editor presentation uses "
-                    "direct texture snapshots.";
-  }
   AsyncRenderer asyncRenderer;
 
   const auto waitForResult = [&]() -> std::optional<RenderResult> {
@@ -998,7 +1014,8 @@ TEST(AsyncRendererTest, DisplayNoneSelectionDoesNotLeaveStaleBackgroundPixelsWhe
   const auto tilePixelAtDoc =
       [&](const RenderResult::CompositedTile& tile,
           const Vector2d& docPoint) -> std::optional<std::array<uint8_t, 4>> {
-    if (tile.bitmap.empty() || tile.bitmapDimsDoc.x <= 0.0 || tile.bitmapDimsDoc.y <= 0.0) {
+    const svg::RendererBitmap bitmap = MaterializeTileBitmap(tile);
+    if (bitmap.empty() || tile.bitmapDimsDoc.x <= 0.0 || tile.bitmapDimsDoc.y <= 0.0) {
       return std::nullopt;
     }
     const Vector2d local = docPoint - tile.canvasOffsetDoc;
@@ -1006,15 +1023,15 @@ TEST(AsyncRendererTest, DisplayNoneSelectionDoesNotLeaveStaleBackgroundPixelsWhe
         local.y >= tile.bitmapDimsDoc.y) {
       return std::nullopt;
     }
-    const int x = std::clamp(
-        static_cast<int>(std::floor(local.x * static_cast<double>(tile.bitmap.dimensions.x) /
-                                    tile.bitmapDimsDoc.x)),
-        0, tile.bitmap.dimensions.x - 1);
-    const int y = std::clamp(
-        static_cast<int>(std::floor(local.y * static_cast<double>(tile.bitmap.dimensions.y) /
-                                    tile.bitmapDimsDoc.y)),
-        0, tile.bitmap.dimensions.y - 1);
-    return pixelAt(tile.bitmap, x, y);
+    const int x =
+        std::clamp(static_cast<int>(std::floor(local.x * static_cast<double>(bitmap.dimensions.x) /
+                                               tile.bitmapDimsDoc.x)),
+                   0, bitmap.dimensions.x - 1);
+    const int y =
+        std::clamp(static_cast<int>(std::floor(local.y * static_cast<double>(bitmap.dimensions.y) /
+                                               tile.bitmapDimsDoc.y)),
+                   0, bitmap.dimensions.y - 1);
+    return pixelAt(bitmap, x, y);
   };
   const auto isRed = [](const std::array<uint8_t, 4>& pixel) {
     return pixel[0] > 180 && pixel[1] < 80 && pixel[2] < 80;
@@ -1028,6 +1045,7 @@ TEST(AsyncRendererTest, DisplayNoneSelectionDoesNotLeaveStaleBackgroundPixelsWhe
 
   {
     RenderRequest request(renderer, document);
+    request.captureCpuSnapshot = true;
     request.version = 1;
     request.selectedEntity = hiddenSoonEntity;
     request.dragPreview = RenderRequest::DragPreview{
@@ -1043,6 +1061,7 @@ TEST(AsyncRendererTest, DisplayNoneSelectionDoesNotLeaveStaleBackgroundPixelsWhe
   AsGraphicsElement(*hiddenSoon).setStyle("display:none");
   {
     RenderRequest request(renderer, document);
+    request.captureCpuSnapshot = true;
     request.version = 2;
     request.selectedEntity = entt::null;
     asyncRenderer.requestRender(request);
@@ -1061,6 +1080,7 @@ TEST(AsyncRendererTest, DisplayNoneSelectionDoesNotLeaveStaleBackgroundPixelsWhe
 
   {
     RenderRequest request(renderer, document);
+    request.captureCpuSnapshot = true;
     request.version = 3;
     request.selectedEntity = nextEntity;
     request.dragPreview = RenderRequest::DragPreview{
@@ -2137,10 +2157,6 @@ TEST(AsyncRendererTest, SelectedPathStyleChangePublishesFreshPromotedLayerPixels
   const Entity entity = target->unsafeEntityHandle().entity();
 
   svg::Renderer renderer;
-  if (renderer.requiresTextureSnapshotPresentation()) {
-    GTEST_SKIP() << "This regression asserts CPU bitmap pixels; Geode editor presentation uses "
-                    "direct texture snapshots.";
-  }
   AsyncRenderer asyncRenderer;
 
   const auto postSelectedPrewarm = [&](std::uint64_t version) {
@@ -2172,7 +2188,8 @@ TEST(AsyncRendererTest, SelectedPathStyleChangePublishesFreshPromotedLayerPixels
   const auto tilePixelAtDoc =
       [&](const RenderResult::CompositedTile& tile,
           const Vector2d& docPoint) -> std::optional<std::array<uint8_t, 4>> {
-    if (tile.bitmap.empty() || tile.bitmapDimsDoc.x <= 0.0 || tile.bitmapDimsDoc.y <= 0.0) {
+    const svg::RendererBitmap bitmap = MaterializeTileBitmap(tile);
+    if (bitmap.empty() || tile.bitmapDimsDoc.x <= 0.0 || tile.bitmapDimsDoc.y <= 0.0) {
       return std::nullopt;
     }
     const Vector2d local = docPoint - tile.canvasOffsetDoc;
@@ -2180,15 +2197,15 @@ TEST(AsyncRendererTest, SelectedPathStyleChangePublishesFreshPromotedLayerPixels
         local.y >= tile.bitmapDimsDoc.y) {
       return std::nullopt;
     }
-    const int x = std::clamp(
-        static_cast<int>(std::floor(local.x * static_cast<double>(tile.bitmap.dimensions.x) /
-                                    tile.bitmapDimsDoc.x)),
-        0, tile.bitmap.dimensions.x - 1);
-    const int y = std::clamp(
-        static_cast<int>(std::floor(local.y * static_cast<double>(tile.bitmap.dimensions.y) /
-                                    tile.bitmapDimsDoc.y)),
-        0, tile.bitmap.dimensions.y - 1);
-    return pixelAt(tile.bitmap, x, y);
+    const int x =
+        std::clamp(static_cast<int>(std::floor(local.x * static_cast<double>(bitmap.dimensions.x) /
+                                               tile.bitmapDimsDoc.x)),
+                   0, bitmap.dimensions.x - 1);
+    const int y =
+        std::clamp(static_cast<int>(std::floor(local.y * static_cast<double>(bitmap.dimensions.y) /
+                                               tile.bitmapDimsDoc.y)),
+                   0, bitmap.dimensions.y - 1);
+    return pixelAt(bitmap, x, y);
   };
   const auto isTransparent = [](const std::array<uint8_t, 4>& pixel) { return pixel[3] < 16u; };
   const auto isRed = [](const std::array<uint8_t, 4>& pixel) {
@@ -3879,10 +3896,6 @@ TEST(AsyncRendererE2ETest, CpuSnapshotStaysNonTransparentAcrossDragTargetSwap) {
   const Entity donnerEntity = donnerPath->unsafeEntityHandle().entity();
 
   svg::Renderer renderer;
-  if (renderer.requiresTextureSnapshotPresentation()) {
-    GTEST_SKIP() << "Geode editor presentation is direct-texture only; this regression is "
-                    "specific to tiny-skia CPU snapshots.";
-  }
   AsyncRenderer asyncRenderer;
 
   using Clock = std::chrono::steady_clock;
@@ -3897,6 +3910,7 @@ TEST(AsyncRendererE2ETest, CpuSnapshotStaysNonTransparentAcrossDragTargetSwap) {
   };
   const auto post = [&](uint64_t version, Entity selectedEntity, Entity dragEntity) {
     RenderRequest request(renderer, asyncDoc.document());
+    request.captureCpuSnapshot = true;
     request.version = version;
     request.documentGeneration = asyncDoc.documentGeneration();
     request.structuralRemap = asyncDoc.consumePendingStructuralRemap();
@@ -3999,10 +4013,6 @@ TEST(AsyncRendererE2ETest, DragEndWritebackTakesStructuralRemapPath) {
   const Entity targetEntity = target->unsafeEntityHandle().entity();
 
   svg::Renderer renderer;
-  if (renderer.requiresTextureSnapshotPresentation()) {
-    GTEST_SKIP() << "This pixel assertion requires tiny-skia CPU snapshots; Geode keeps "
-                    "presentation on GPU texture snapshots.";
-  }
   AsyncRenderer asyncRenderer;
 
   using Clock = std::chrono::steady_clock;
@@ -4018,6 +4028,7 @@ TEST(AsyncRendererE2ETest, DragEndWritebackTakesStructuralRemapPath) {
 
   const auto postRequest = [&](uint64_t version, bool drag) {
     RenderRequest request(renderer, asyncDoc.document());
+    request.captureCpuSnapshot = true;
     request.version = version;
     request.documentGeneration = asyncDoc.documentGeneration();
     request.structuralRemap = asyncDoc.consumePendingStructuralRemap();
@@ -4072,6 +4083,7 @@ TEST(AsyncRendererE2ETest, DragEndWritebackTakesStructuralRemapPath) {
   // Post the next render request. The worker consumes the remap and
   // takes the structural-remap path instead of resetAllLayers.
   RenderRequest postReplaceRequest(renderer, asyncDoc.document());
+  postReplaceRequest.captureCpuSnapshot = true;
   postReplaceRequest.version = 100;
   postReplaceRequest.documentGeneration = asyncDoc.documentGeneration();
   postReplaceRequest.structuralRemap = asyncDoc.consumePendingStructuralRemap();
@@ -4301,12 +4313,9 @@ TEST(AsyncRendererE2ETest, StructuralWritebackDoesNotResizeCanvasAndRerasterFilt
 // it, a user tweaking a transform value by typing would pay the same
 // multi-second reset cost the drag-end path used to pay.
 //
-// The distinction from `DragEndWritebackTakesStructuralRemapPath` is
-// the command's origin: that test emits `preserveUndoOnReparse=true`
-// (the self-writeback flag); this one emits `preserveUndoOnReparse=
-// false`, matching what the source-pane fallback path (`SourceSync.cc`
-// classifier-returned-empty, falls through to full `Replace
-// DocumentCommand`) produces.
+// The distinction from `DragEndWritebackTakesStructuralRemapPath` is the command's origin: source
+// pane fallback emits `preserveUndoOnReparse=false`, while self-writeback emits true. Undo metadata
+// must not determine whether an equivalent tree preserves the compositor entity space.
 TEST(AsyncRendererE2ETest, SourcePaneStructurallyEquivalentReparseAvoidsReset) {
   const char* kSvgOriginal = R"svg(
 <svg xmlns="http://www.w3.org/2000/svg" width="400" height="200">
@@ -4369,27 +4378,8 @@ TEST(AsyncRendererE2ETest, SourcePaneStructurallyEquivalentReparseAvoidsReset) {
   ASSERT_TRUE(waitForResult().has_value());
   EXPECT_EQ(asyncRenderer.compositorResetCountForTesting(), 0u);
 
-  // User-typed source-pane edit: the classifier's fast path doesn't
-  // apply here (the change is an attribute on an existing element, so
-  // it actually WOULD classify as `SetAttributeCommand` in real use -
-  // but this test asserts the *fallback* structural-remap path works
-  // just as well when the classifier can't handle the change, so emit
-  // `preserveUndoOnReparse=false` and force `applyOne` through
-  // `setDocumentMaybeStructural` via the non-preserve path).
-  //
-  // The non-preserve-undo ReplaceDocument still reaches setDocument,
-  // which today unconditionally clears `pendingStructuralRemap_` - so
-  // a NON-structural edit should end up with `FullReplace` semantics
-  // too. The TEST is that the *structurally-equivalent* bytes below
-  // (only a fill color changed) produce a remap-preserving path.
-  //
-  // Current `applyOne` routes only `preserveUndoOnReparse=true`
-  // commands through `setDocumentMaybeStructural`; source-pane edits
-  // use `preserveUndoOnReparse=false` and take the plain `loadFromString`
-  // path. This test documents that gap: we expect (future work) that
-  // all `ReplaceDocumentCommand`s with structurally-equivalent bytes
-  // skip the reset. Today the assertion fails loudly at the reset
-  // counter check - that's the regression surface we want gated.
+  // Force the source-pane fallback command rather than the targeted attribute classifier. The
+  // parsed tree is equivalent, so it must still take the structural-remap path.
   asyncDoc.applyMutation(EditorCommand::ReplaceDocumentCommand(kSvgStructurallyEquivalentEdit,
                                                                /*preserveUndoOnReparse=*/false));
   asyncDoc.flushFrame();
@@ -4405,20 +4395,7 @@ TEST(AsyncRendererE2ETest, SourcePaneStructurallyEquivalentReparseAvoidsReset) {
   asyncRenderer.requestRender(postEditRequest);
   ASSERT_TRUE(waitForResult().has_value());
 
-  // With the gap fixed, this would be 0 - the editor observed that
-  // the new tree is structurally equivalent to the old and dispatched
-  // a `Structural` replace. Until then, the test documents the gap.
-  //
-  // Expected to FAIL today: source-pane edits bypass the structural
-  // classifier in `applyOne` because `preserveUndoOnReparse=false`
-  // goes through `loadFromString`, not `setDocumentMaybeStructural`.
-  // Track via design 0026 Milestone B3.
   const uint64_t resetCount = asyncRenderer.compositorResetCountForTesting();
-  if (resetCount != 0u) {
-    GTEST_SKIP() << "Known gap: source-pane edits don't yet route through setDocument"
-                    "MaybeStructural (preserveUndoOnReparse=false path). Reset count: "
-                 << resetCount << ". Tracked in 0026 Milestone B3 Step 3.";
-  }
   EXPECT_EQ(resetCount, 0u) << "source-pane structurally-equivalent edit took the reset path";
 }
 

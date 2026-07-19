@@ -245,32 +245,16 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
       // setDocument path which clears the queue (already drained) and bumps
       // the version (which `flushFrame` will bump again, harmlessly).
       //
-      // `preserveUndoOnReparse` commands are self-generated writebacks -
-      // drag-end transforms, delete-element text patches - that mutate
-      // only attribute values or delete whole subtrees. In the common
-      // drag-end case the tree shape is identical, so try the structural
-      // remap path: on success the worker's next tick will preserve the
-      // compositor's cached layer bitmaps + segments instead of paying
-      // the full-reset cost. On failure (tree shape changed, e.g. delete-
-      // element), the structural check returns an empty remap and the
-      // replacement falls back to the standard `FullReplace` semantics.
-      //
-      // Non-writeback `ReplaceDocument`s (file open, user text edit that
-      // made the whole thing unparseable until now) aren't tagged
-      // `preserveUndoOnReparse`, and go through the straight
-      // `loadFromString` path - they genuinely replace the entity space.
-      if (command.preserveUndoOnReparse) {
-        ParseWarningSink sink;
-        auto result = svg::parser::SVGParser::ParseSVG(command.bytes, sink, EditorParseOptions());
-        if (result.hasError()) {
-          publishParseDiagnostics(CopyWarnings(sink), std::move(result.error()));
-          return;
-        }
-        (void)setDocumentMaybeStructural(std::move(result).result());
-        publishParseDiagnostics(CopyWarnings(sink), std::nullopt);
-      } else {
-        (void)loadFromString(command.bytes);
+      // Every replacement may preserve entity identity when its parsed tree is structurally
+      // equivalent. `preserveUndoOnReparse` controls undo metadata, not compositor invalidation.
+      ParseWarningSink sink;
+      auto result = svg::parser::SVGParser::ParseSVG(command.bytes, sink, EditorParseOptions());
+      if (result.hasError()) {
+        publishParseDiagnostics(CopyWarnings(sink), std::move(result.error()));
+        return;
       }
+      (void)setDocumentMaybeStructural(std::move(result).result());
+      publishParseDiagnostics(CopyWarnings(sink), std::nullopt);
       break;
     }
 

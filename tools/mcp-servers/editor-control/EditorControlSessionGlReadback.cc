@@ -74,6 +74,19 @@ void ClosePipe(int pipeFds[2]) {
   CloseFd(&pipeFds[1]);
 }
 
+void WriteChildError(std::string_view message) {
+  while (!message.empty()) {
+    const ssize_t bytesWritten = ::write(STDERR_FILENO, message.data(), message.size());
+    if (bytesWritten > 0) {
+      message.remove_prefix(static_cast<std::size_t>(bytesWritten));
+    } else if (bytesWritten < 0 && errno == EINTR) {
+      continue;
+    } else {
+      return;
+    }
+  }
+}
+
 bool SetFdFlag(int fd, int command, int flag, std::string* error) {
   const int existing = ::fcntl(fd, command, 0);
   if (existing < 0) {
@@ -200,12 +213,12 @@ ProcessRunResult RunProcess(std::span<const std::string> args, std::chrono::mill
     ClosePipe(stderrPipe);
     if (!workingDirectoryPath.empty() && ::chdir(workingDirectoryPath.c_str()) < 0) {
       constexpr std::string_view kChdirFailure = "chdir failed\n";
-      ::write(STDERR_FILENO, kChdirFailure.data(), kChdirFailure.size());
+      WriteChildError(kChdirFailure);
       ::_exit(126);
     }
     ::execvp(argv[0], argv.data());
     constexpr std::string_view kExecFailure = "execvp failed\n";
-    ::write(STDERR_FILENO, kExecFailure.data(), kExecFailure.size());
+    WriteChildError(kExecFailure);
     ::_exit(127);
   }
 

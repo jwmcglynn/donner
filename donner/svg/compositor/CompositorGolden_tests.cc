@@ -2698,7 +2698,7 @@ TEST_F(CompositorGoldenTest, TightBoundsWithRotatingGradientNoDrift) {
 // Rotations don't commute, so the final CTM pushed rotated paths off
 // the tight bitmap entirely, leaving only the surrounding background.
 TEST_F(CompositorGoldenTest, TightBoundsRotatedEllipseWithRotatingGradient) {
-  auto makeDoc = [this]() {
+  auto makeDoc = []() {
     return parseDocument(R"svg(
       <svg xmlns="http://www.w3.org/2000/svg" width="900" height="400">
         <defs>

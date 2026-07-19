@@ -76,6 +76,10 @@ public:
     context_ = ImGui::CreateContext();
     ImGui::SetCurrentContext(context_);
     ImGuiIO& io = ImGui::GetIO();
+    // A fuzz iteration must be hermetic. ImGui otherwise loads `imgui.ini`
+    // during the first NewFrame(), which introduces filesystem I/O into the
+    // per-input timeout and can block under a highly parallel fuzz test run.
+    io.IniFilename = nullptr;
     io.DisplaySize = ImVec2(420.0f, 720.0f);
     io.DeltaTime = 1.0f / 60.0f;
     io.ConfigMacOSXBehaviors = false;

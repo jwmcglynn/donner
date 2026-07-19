@@ -7,7 +7,7 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/svg/SVGSVGElement.h"
 #include "donner/svg/parser/SVGParser.h"
-#include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/renderer/RendererTinySkia.h"
 
 namespace donner::editor {
 namespace {
@@ -34,14 +34,11 @@ void NormalizeIconBitmapToTintableAlphaMask(svg::RendererBitmap* bitmap) {
   bitmap->alphaType = svg::AlphaType::Premultiplied;
 }
 
-/// One shared renderer for all embedded-icon rasterization, created on first
-/// use. Icons render lazily from UI-thread panel code only. Constructing a
-/// fresh renderer per icon is disproportionately expensive on GPU backends -
-/// each construction stands up a full WebGPU instance/adapter/device - and
-/// showed up as a stream of duplicate "[Geode/wgpu-native] Adapter:" logs at
-/// editor startup.
-svg::Renderer& SharedIconRenderer() {
-  static svg::Renderer renderer;
+/// Embedded icons always end as CPU bitmaps for ImGui upload. Keep this small,
+/// fixed-size rasterization on TinySkia so a Geode editor does not serialize a
+/// GPU texture readback for every toolbar icon before its first frame.
+svg::RendererTinySkia& SharedIconRenderer() {
+  static svg::RendererTinySkia renderer;
   return renderer;
 }
 
@@ -63,7 +60,7 @@ std::optional<svg::RendererBitmap> RenderEmbeddedSvgBitmap(std::span<const unsig
   root.setWidth(Lengthd(outputSizePx, Lengthd::Unit::Px));
   root.setHeight(Lengthd(outputSizePx, Lengthd::Unit::Px));
 
-  svg::Renderer& renderer = SharedIconRenderer();
+  svg::RendererTinySkia& renderer = SharedIconRenderer();
   renderer.draw(document);
   svg::RendererBitmap bitmap = renderer.takeSnapshot();
   if (bitmap.empty()) {

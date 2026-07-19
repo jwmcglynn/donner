@@ -24,6 +24,12 @@ namespace emscripten::glfw3 {
 template<typename T>
 struct Vec2
 {
+  constexpr Vec2() : x{}, y{} {}
+  constexpr Vec2(T iX, T iY) : x{iX}, y{iY} {}
+
+  template<typename U>
+  constexpr Vec2(Vec2<U> const &iOther) : x{static_cast<T>(iOther.x)}, y{static_cast<T>(iOther.y)} {}
+
   union
   {
     T x;
@@ -39,8 +45,8 @@ struct Vec2
   template<typename U>
   constexpr Vec2<T> &operator=(Vec2<U> const &iOther)
   {
-    x = static_cast<T>(iOther);
-    y = static_cast<T>(iOther);
+    x = static_cast<T>(iOther.x);
+    y = static_cast<T>(iOther.y);
     return *this;
   }
 
