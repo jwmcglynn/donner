@@ -77,6 +77,23 @@ class CheckBannedPatternsTests(unittest.TestCase):
 
         self.assertEqual([], descriptions)
 
+    def test_directory_scan_excludes_dependencies_and_generated_trees(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_root = Path(temp_dir) / "donner"
+            source_root.mkdir()
+            checked_source = source_root / "Example.cc"
+            checked_source.write_text("int example;\n", encoding="utf-8")
+
+            for excluded_directory in ("node_modules", "third_party", "bazel-generated", ".git"):
+                dependency_source = source_root / excluded_directory / "dependency.js"
+                dependency_source.parent.mkdir()
+                dependency_source.write_text("// dependency\n", encoding="utf-8")
+
+            self.assertEqual(
+                [checked_source],
+                check_banned_patterns._iter_source_files([source_root]),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

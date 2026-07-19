@@ -1,4 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Keep intermediate links in defs so only the deepest 200-level chain is rendered. -->
+  <defs>
   <rect id="u0" x="0" y="0" width="1" height="1"/>
   <use id="u1" href="#u0"/>
   <use id="u2" href="#u1"/>
@@ -199,5 +201,6 @@
   <use id="u197" href="#u196"/>
   <use id="u198" href="#u197"/>
   <use id="u199" href="#u198"/>
+  </defs>
   <use href="#u199"/>
 </svg>
