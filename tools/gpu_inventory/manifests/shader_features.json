@@ -1431,7 +1431,8 @@
       ],
       "builtins": [
         "instance_index",
-        "position"
+        "position",
+        "vertex_index"
       ],
       "entryPoints": [
         {
@@ -1453,6 +1454,7 @@
         "cross",
         "discard",
         "distance",
+        "dot",
         "floor",
         "for",
         "fract",
@@ -1460,9 +1462,11 @@
         "if",
         "length",
         "let",
+        "mat2x2f",
         "mat4x4f",
         "max",
         "min",
+        "normalize",
         "return",
         "round",
         "saturate",
@@ -1481,7 +1485,6 @@
         "Quadratic",
         "RayCoverage",
         "Uniforms",
-        "VertexInput",
         "VertexOutput"
       ]
     },
@@ -1564,7 +1567,8 @@
         }
       ],
       "builtins": [
-        "position"
+        "position",
+        "vertex_index"
       ],
       "entryPoints": [
         {
@@ -1593,10 +1597,12 @@
         "if",
         "length",
         "let",
+        "mat2x2f",
         "mat4x4f",
         "max",
         "min",
         "mix",
+        "normalize",
         "return",
         "round",
         "saturate",
@@ -1612,7 +1618,6 @@
         "GradientUniforms",
         "Quadratic",
         "RayCoverage",
-        "VertexInput",
         "VertexOutput"
       ]
     },
@@ -1695,7 +1700,8 @@
         }
       ],
       "builtins": [
-        "position"
+        "position",
+        "vertex_index"
       ],
       "entryPoints": [
         {
@@ -1716,15 +1722,18 @@
         "continue",
         "cross",
         "discard",
+        "dot",
         "for",
         "fract",
         "fwidth",
         "if",
         "length",
         "let",
+        "mat2x2f",
         "mat4x4f",
         "max",
         "min",
+        "normalize",
         "return",
         "round",
         "saturate",
@@ -1740,7 +1749,6 @@
         "Quadratic",
         "RayCoverage",
         "Uniforms",
-        "VertexInput",
         "VertexOutput"
       ]
     }
