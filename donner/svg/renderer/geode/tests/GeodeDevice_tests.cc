@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string_view>
@@ -24,12 +25,12 @@ TEST(GeodeCallbackState, CallbackOwnsStateAfterCallerReturns) {
 
   auto state = std::make_shared<State>();
   const std::weak_ptr<State> weakState = state;
-  void* userdata = RetainWgpuCallbackState(state);
+  void* userdata = retainWgpuCallbackState(state);
 
   state.reset();
   EXPECT_FALSE(weakState.expired());
 
-  std::shared_ptr<State> callbackState = TakeWgpuCallbackState<State>(userdata);
+  std::shared_ptr<State> callbackState = takeWgpuCallbackState<State>(userdata);
   EXPECT_EQ(callbackState.get(), weakState.lock().get());
   callbackState.reset();
   EXPECT_TRUE(weakState.expired());
@@ -150,27 +151,28 @@ TEST(GeodeDevice, CanExecuteClearAndReadback) {
   // hand the done flag through userdata1 and spin on `device.poll(true)`
   // until wgpu-native drains the pending callback.
   struct MapState {
-    bool done = false;
-    bool ok = false;
-  } mapState;
+    std::atomic<bool> done = false;
+    std::atomic<bool> ok = false;
+  };
+  auto mapState = std::make_shared<MapState>();
   wgpu::BufferMapCallbackInfo mapCb{wgpu::Default};
   mapCb.callback = [](WGPUMapAsyncStatus status, WGPUStringView message, void* userdata1,
                       void* /*userdata2*/) {
-    auto* s = static_cast<MapState*>(userdata1);
-    s->ok = (status == WGPUMapAsyncStatus_Success);
-    s->done = true;
-    if (!s->ok) {
+    const std::shared_ptr<MapState> state = takeWgpuCallbackState<MapState>(userdata1);
+    state->ok.store(status == WGPUMapAsyncStatus_Success, std::memory_order_relaxed);
+    state->done.store(true, std::memory_order_release);
+    if (!state->ok.load(std::memory_order_relaxed)) {
       (void)message;  // Keep the message parameter named for future logging.
     }
   };
-  mapCb.userdata1 = &mapState;
+  mapCb.userdata1 = retainWgpuCallbackState(mapState);
   mapCb.userdata2 = nullptr;
   readback.mapAsync(wgpu::MapMode::Read, 0, kBufferSize, mapCb);
 
-  while (!mapState.done) {
+  while (!mapState->done.load(std::memory_order_acquire)) {
     device.poll(true, nullptr);
   }
-  EXPECT_TRUE(mapState.ok) << "buffer map failed";
+  EXPECT_TRUE(mapState->ok.load(std::memory_order_relaxed)) << "buffer map failed";
 
   const uint8_t* pixels = static_cast<const uint8_t*>(readback.getConstMappedRange(0, kBufferSize));
   ASSERT_NE(pixels, nullptr);

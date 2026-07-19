@@ -15,6 +15,7 @@
 #include <thread>
 
 #include "donner/base/StringUtils.h"
+#include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
@@ -116,8 +117,9 @@ void WaitForSubmittedWork(const wgpu::Device& device, const wgpu::Queue& queue) 
   }
 
   struct WorkDoneState {
-    bool done = false;
-  } state;
+    std::atomic<bool> done = false;
+  };
+  auto state = std::make_shared<WorkDoneState>();
 
   wgpu::QueueWorkDoneCallbackInfo callbackInfo{wgpu::Default};
   callbackInfo.mode = wgpu::CallbackMode::AllowSpontaneous;
@@ -127,21 +129,22 @@ void WaitForSubmittedWork(const wgpu::Device& device, const wgpu::Queue& queue) 
 #if defined(__EMSCRIPTEN__)
   callbackInfo.callback = [](WGPUQueueWorkDoneStatus /*status*/, WGPUStringView /*message*/,
                              void* userdata1, void* /*userdata2*/) {
-    WorkDoneState* state = static_cast<WorkDoneState*>(userdata1);
-    state->done = true;
+    const std::shared_ptr<WorkDoneState> state = takeWgpuCallbackState<WorkDoneState>(userdata1);
+    state->done.store(true, std::memory_order_release);
   };
 #else
   callbackInfo.callback = [](WGPUQueueWorkDoneStatus /*status*/, void* userdata1,
                              void* /*userdata2*/) {
-    WorkDoneState* state = static_cast<WorkDoneState*>(userdata1);
-    state->done = true;
+    const std::shared_ptr<WorkDoneState> state = takeWgpuCallbackState<WorkDoneState>(userdata1);
+    state->done.store(true, std::memory_order_release);
   };
 #endif
-  callbackInfo.userdata1 = &state;
+  callbackInfo.userdata1 = retainWgpuCallbackState(state);
   callbackInfo.userdata2 = nullptr;
 
   queue.onSubmittedWorkDone(callbackInfo);
-  for (int pollIter = 0; !state.done && pollIter < 2000; ++pollIter) {
+  for (int pollIter = 0; !state->done.load(std::memory_order_acquire) && pollIter < 2000;
+       ++pollIter) {
     device.poll(true, nullptr);
   }
 }

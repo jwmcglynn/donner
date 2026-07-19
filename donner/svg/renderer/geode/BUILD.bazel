@@ -148,6 +148,7 @@ donner_cc_library(
         "GeodePipeline.cc",
     ],
     hdrs = [
+        "GeodeCallbackState.h",
         "GeodeCheckerboardPipeline.h",
         "GeodeDevice.h",
         "GeodeFilterEngine.h",

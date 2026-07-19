@@ -1,6 +1,7 @@
 #include "donner/editor/gui/EditorWindow.h"
 
 #include <algorithm>
+#include <atomic>
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 
@@ -46,6 +47,7 @@ extern "C" {
 #ifndef __EMSCRIPTEN__
 #include "donner/editor/gui/EditorWgpuSurface.h"
 #endif
+#include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #endif
@@ -249,29 +251,32 @@ bool MapReadbackBuffer(const wgpu::Instance& instance, const wgpu::Device& devic
                        const wgpu::Buffer& buffer, uint64_t size) {
 #ifdef __EMSCRIPTEN__
   (void)device;
+  if (!instance) {
+    return false;
+  }
 #else
   (void)instance;
 #endif
   struct MapState {
-    bool done = false;
-    bool ok = false;
+    std::atomic<bool> done = false;
+    std::atomic<bool> ok = false;
   };
-  auto mapState = std::make_unique<MapState>();
+  auto mapState = std::make_shared<MapState>();
 
   wgpu::BufferMapCallbackInfo mapCb{wgpu::Default};
   mapCb.callback = [](WGPUMapAsyncStatus status, WGPUStringView /*message*/, void* userdata1,
                       void* /*userdata2*/) {
-    auto* state = static_cast<MapState*>(userdata1);
-    state->ok = (status == WGPUMapAsyncStatus_Success);
-    state->done = true;
+    const std::shared_ptr<MapState> state = geode::takeWgpuCallbackState<MapState>(userdata1);
+    state->ok.store(status == WGPUMapAsyncStatus_Success, std::memory_order_relaxed);
+    state->done.store(true, std::memory_order_release);
   };
-  mapCb.userdata1 = mapState.get();
-  mapCb.userdata2 = nullptr;
 #ifdef __EMSCRIPTEN__
   mapCb.mode = wgpu::CallbackMode::WaitAnyOnly;
 #else
   mapCb.mode = wgpu::CallbackMode::AllowSpontaneous;
 #endif
+  mapCb.userdata1 = geode::retainWgpuCallbackState(mapState);
+  mapCb.userdata2 = nullptr;
   [[maybe_unused]] const wgpu::Future mapFuture =
       buffer.mapAsync(wgpu::MapMode::Read, 0, size, mapCb);
 
@@ -284,11 +289,11 @@ bool MapReadbackBuffer(const wgpu::Instance& instance, const wgpu::Device& devic
     return false;
   }
 #else
-  while (!mapState->done) {
+  while (!mapState->done.load(std::memory_order_acquire)) {
     device.poll(true, nullptr);
   }
 #endif
-  return mapState->ok;
+  return mapState->ok.load(std::memory_order_relaxed);
 }
 #endif
 

@@ -18,6 +18,11 @@ namespace donner::svg {
  * renderer implementation. This is the backend-explicit counterpart to
  * `Renderer::renderElementToBitmap` for callers that intentionally choose a
  * CPU or GPU renderer.
+ *
+ * @param renderer Backend instance used to rasterize the subtree.
+ * @param element Root element of the subtree to rasterize.
+ * @param sizePx Output bitmap dimensions in pixels.
+ * @return The rasterized subtree bitmap.
  */
 [[nodiscard]] RendererBitmap RenderElementToBitmap(RendererInterface& renderer, SVGElement element,
                                                    Vector2i sizePx);
