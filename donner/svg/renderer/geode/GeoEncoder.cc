@@ -45,13 +45,6 @@ constexpr uint64_t kStorageOffsetAlignment = 256u;
 // wgpu-native backends (`minUniformBufferOffsetAlignment`).
 constexpr uint64_t kUniformOffsetAlignment = 256u;
 
-template <typename Handle>
-void DestroyResourceBacking(ScopedWgpuHandle<Handle>& handle) {
-  if (handle) {
-    handle.get().destroy();
-  }
-}
-
 /// Layout of the per-draw uniform buffer (must match shaders/slug_fill.wgsl).
 ///
 /// WGSL struct layout requires the total size to be a multiple of the largest
@@ -262,40 +255,33 @@ struct GeoEncoder::Impl {
   /// `GeodeBufferPool` and design doc 0030 M1.
   GeodeBufferPool* bufferPool = nullptr;
 
-  void destroyArenaBackings(Arena& arena) {
+  void releaseArenaResources(Arena& arena) {
     // With a pool installed, the current (largest, fully-grown) buffer
-    // is recycled for the next frame's encoders instead of destroyed.
-    // Retired buffers are the outgrown smaller generations - steady
-    // state has none - so they are destroyed as before. Safe because
-    // encoder destruction only happens after the commands referencing
-    // these buffers were submitted (same invariant the eager destroy
-    // below already relies on).
+    // is recycled for the next frame's encoders. Otherwise release the
+    // handle without explicitly destroying its backing. Submitted WebGPU
+    // commands retain their resources until completion; calling destroy()
+    // here can invalidate those in-flight commands on some Vulkan drivers.
     if (bufferPool != nullptr && arena.buffer) {
       bufferPool->release(std::move(arena.buffer), arena.usage, arena.label, arena.capacity);
     }
-    DestroyResourceBacking(arena.buffer);
     arena.buffer.reset();
-    for (ScopedWgpuHandle<wgpu::Buffer>& buffer : arena.retired) {
-      DestroyResourceBacking(buffer);
-      buffer.reset();
-    }
     arena.retired.clear();
   }
 
-  void destroyOwnedResourceBackings() {
+  void releaseOwnedResources() {
     pass.reset();
     maskPass.reset();
 
-    destroyArenaBackings(vertexArena);
-    destroyArenaBackings(bandArena);
-    destroyArenaBackings(curveArena);
-    destroyArenaBackings(uniformArena);
-    destroyArenaBackings(vBandArena);
-    destroyArenaBackings(vCurveArena);
-    destroyArenaBackings(hGridArena);
-    destroyArenaBackings(vGridArena);
-    destroyArenaBackings(instanceTransformArena);
-    transientResources.destroyBackings();
+    releaseArenaResources(vertexArena);
+    releaseArenaResources(bandArena);
+    releaseArenaResources(curveArena);
+    releaseArenaResources(uniformArena);
+    releaseArenaResources(vBandArena);
+    releaseArenaResources(vCurveArena);
+    releaseArenaResources(hGridArena);
+    releaseArenaResources(vGridArena);
+    releaseArenaResources(instanceTransformArena);
+    transientResources.releaseAll();
   }
 
   // When true, this encoder owns its `commandEncoder` and `finish()`
@@ -836,7 +822,7 @@ GeoEncoder::GeoEncoder(GeodeDevice& device, const GeodePipeline& fillPipeline,
 
 GeoEncoder::~GeoEncoder() {
   if (impl_) {
-    impl_->destroyOwnedResourceBackings();
+    impl_->releaseOwnedResources();
   }
 }
 GeoEncoder::GeoEncoder(GeoEncoder&&) noexcept = default;

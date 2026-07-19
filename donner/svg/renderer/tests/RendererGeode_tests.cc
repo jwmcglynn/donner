@@ -225,8 +225,11 @@ std::vector<uint8_t> CpuDiffuseLightingReferenceForFlatSource(
 
 TEST(RendererGeodeDeviceSharing, DefaultRenderersReuseHeadlessDevice) {
   const int before = geode::GeodeDevice::headlessCreationCountForTesting();
-  RendererGeode first;
-  const int afterFirst = geode::GeodeDevice::headlessCreationCountForTesting();
+  int afterFirst = 0;
+  {
+    RendererGeode first;
+    afterFirst = geode::GeodeDevice::headlessCreationCountForTesting();
+  }
   RendererGeode second;
 
   EXPECT_LE(afterFirst, before + 1);

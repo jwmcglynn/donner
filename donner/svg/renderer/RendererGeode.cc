@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <iostream>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -1922,28 +1923,19 @@ struct RendererGeode::Impl {
   // die with the `Registry` they live on, and calling `.disconnect<&fn>()` from
   // a renderer dtor would UB when the registry was destroyed first.
 
-  static void destroyTextureBacking(geode::ScopedWgpuHandle<wgpu::Texture>& texture) {
-    if (texture) {
-      texture.get().destroy();
-    }
+  static void releaseTextureBacking(geode::ScopedWgpuHandle<wgpu::Texture>& texture) {
+    texture.reset();
   }
 
-  static void destroyAndReleaseTexture(wgpu::Texture& texture) {
-    if (texture) {
-      texture.destroy();
-      geode::ReleaseWgpuHandle(texture);
-    }
-  }
+  static void releaseTexture(wgpu::Texture& texture) { geode::ReleaseWgpuHandle(texture); }
 
-  static void destroyPendingTexture(PendingRelease& release) {
-    destroyAndReleaseTexture(release.texture);
-  }
+  static void releasePendingTexture(PendingRelease& release) { releaseTexture(release.texture); }
 
-  static void destroyClipStackTextures(std::vector<ClipStackEntry>& entries) {
+  static void releaseClipStackTextures(std::vector<ClipStackEntry>& entries) {
     for (ClipStackEntry& entry : entries) {
       entry.maskLayerViews.clear();
       for (PendingRelease& release : entry.maskLayerTextures) {
-        destroyPendingTexture(release);
+        releasePendingTexture(release);
       }
       entry.maskLayerTextures.clear();
       entry.maskResolveTexture = wgpu::Texture();
@@ -1952,11 +1944,11 @@ struct RendererGeode::Impl {
     entries.clear();
   }
 
-  void destroyTexturePool() {
+  void releaseTexturePool() {
     for (auto& [unusedKey, bucket] : texturePool) {
       (void)unusedKey;
       for (geode::ScopedWgpuHandle<wgpu::Texture>& texture : bucket.free) {
-        destroyTextureBacking(texture);
+        releaseTextureBacking(texture);
       }
     }
     texturePool.clear();
@@ -1973,44 +1965,44 @@ struct RendererGeode::Impl {
 
     framePendingTextureViewReleases.clear();
     for (PendingRelease& release : framePendingReleases) {
-      destroyPendingTexture(release);
+      releasePendingTexture(release);
     }
     framePendingReleases.clear();
 
     for (LayerStackFrame& frame : layerStack) {
-      destroyAndReleaseTexture(frame.layerTexture);
+      releaseTexture(frame.layerTexture);
     }
     layerStack.clear();
 
     for (MaskStackFrame& frame : maskStack) {
-      destroyAndReleaseTexture(frame.maskTexture);
-      destroyAndReleaseTexture(frame.contentTexture);
+      releaseTexture(frame.maskTexture);
+      releaseTexture(frame.contentTexture);
     }
     maskStack.clear();
 
-    destroyClipStackTextures(clipStack);
+    releaseClipStackTextures(clipStack);
     for (FilterStackFrame& frame : filterStack) {
-      destroyAndReleaseTexture(frame.layerTexture);
-      destroyClipStackTextures(frame.savedClipStack);
+      releaseTexture(frame.layerTexture);
+      releaseClipStackTextures(frame.savedClipStack);
     }
     filterStack.clear();
 
     for (PatternStackFrame& frame : patternStack) {
-      destroyTextureBacking(frame.tileTexture);
+      releaseTextureBacking(frame.tileTexture);
     }
     patternStack.clear();
     if (patternFillPaint.has_value()) {
-      destroyTextureBacking(patternFillPaint->tile);
+      releaseTextureBacking(patternFillPaint->tile);
     }
     if (patternStrokePaint.has_value()) {
-      destroyTextureBacking(patternStrokePaint->tile);
+      releaseTextureBacking(patternStrokePaint->tile);
     }
     patternFillPaint.reset();
     patternStrokePaint.reset();
 
-    destroyTextureBacking(ownedTarget);
+    releaseTextureBacking(ownedTarget);
     ownedTarget.reset();
-    destroyTexturePool();
+    releaseTexturePool();
 
     if (device) {
       device->drainDeferredDestroys();
@@ -2070,9 +2062,64 @@ void RendererGeode::Impl::onComputedPathChanged(Registry& registry, Entity entit
   registry.remove<geode::GeodeResidentPathComponent>(entity);
 }
 
+namespace {
+
+class HeadlessGeodeDevicePool {
+public:
+  std::shared_ptr<geode::GeodeDevice> acquire() {
+    std::shared_ptr<geode::GeodeDevice> device;
+    {
+      const std::lock_guard lock(mutex_);
+      if (!idle_.empty()) {
+        device = std::move(idle_.back());
+        idle_.pop_back();
+      }
+    }
+    if (!device) {
+      device = std::shared_ptr<geode::GeodeDevice>(geode::GeodeDevice::CreateHeadless());
+    }
+    if (!device) {
+      return nullptr;
+    }
+
+    auto lease = std::make_shared<Lease>(this, std::move(device));
+    return std::shared_ptr<geode::GeodeDevice>(lease, lease->device.get());
+  }
+
+private:
+  struct Lease {
+    Lease(HeadlessGeodeDevicePool* pool, std::shared_ptr<geode::GeodeDevice> device)
+        : pool(pool), device(std::move(device)) {}
+    ~Lease() { pool->release(std::move(device)); }
+
+    HeadlessGeodeDevicePool* pool;
+    std::shared_ptr<geode::GeodeDevice> device;
+  };
+
+  void release(std::shared_ptr<geode::GeodeDevice> device) {
+    const std::lock_guard lock(mutex_);
+    if (idle_.size() < kMaxIdleDevices) {
+      idle_.push_back(std::move(device));
+    }
+  }
+
+  static constexpr std::size_t kMaxIdleDevices = 4;
+  std::mutex mutex_;
+  std::vector<std::shared_ptr<geode::GeodeDevice>> idle_;
+};
+
+HeadlessGeodeDevicePool& SharedHeadlessGeodeDevicePool() {
+  // Active leases retain a raw pointer to the pool. Keep the small bounded
+  // cache alive through process teardown so global renderers cannot outlive it.
+  static auto* pool = new HeadlessGeodeDevicePool();
+  return *pool;
+}
+
+}  // namespace
+
 RendererGeode::RendererGeode(bool verbose) : impl_(std::make_unique<Impl>()) {
   impl_->verbose = verbose;
-  impl_->device = geode::GeodeDevice::CreateHeadless();
+  impl_->device = SharedHeadlessGeodeDevicePool().acquire();
   if (!impl_->device) {
     if (verbose) {
       std::cerr << "RendererGeode: GeodeDevice::CreateHeadless() failed - entering no-op mode\n";

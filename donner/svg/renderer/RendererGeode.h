@@ -117,7 +117,7 @@ struct FrameTimings {
  *
  * | Mode | Constructor | Device ownership |
  * |------|-------------|-----------------|
- * | Headless | `RendererGeode(verbose)` | Geode creates + owns device |
+ * | Headless | `RendererGeode(verbose)` | Geode leases an exclusive pooled device |
  * | Shared | `RendererGeode(shared_ptr<GeodeDevice>)` | Caller shares ownership |
  *
  * In all modes, Geode creates its own offscreen render target each frame
@@ -138,9 +138,11 @@ struct FrameTimings {
 class RendererGeode : public RendererInterface {
 public:
   /**
-   * Construct the renderer. Creates a headless `GeodeDevice` immediately;
-   * if device creation fails, the renderer enters a "no-op" state and all
-   * subsequent draw calls do nothing.
+   * Construct the renderer. Acquires an exclusive lease on a pooled headless `GeodeDevice`; if
+   * device creation fails, the renderer enters a "no-op" state and all subsequent draw calls do
+   * nothing. Pooling avoids repeated physical-device creation and keeps WebGPU pipeline caches warm
+   * for sequential renderer instances, while concurrently live renderers receive independent
+   * devices. Callers that intentionally share a device should use the explicit-device constructor.
    *
    * @param verbose If true, emit warnings to stderr for unsupported features
    *   the first time they are encountered.

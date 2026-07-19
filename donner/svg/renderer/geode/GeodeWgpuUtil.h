@@ -43,10 +43,10 @@ namespace donner::geode {
   return wgpu::StringView{text};
 }
 
-/// Whether headless/test WebGPU creation should request a software fallback
-/// adapter. Bazel's Linux test configuration sets this to keep independent
-/// test processes from contending for one physical Vulkan device. Product
-/// processes leave it unset and retain the platform-default adapter policy.
+/// Whether headless WebGPU creation should request a software fallback adapter.
+/// Tests exercise the platform-default hardware adapter unless the environment
+/// variable is set explicitly, for example while regenerating deterministic
+/// software-rendered goldens.
 [[nodiscard]] inline bool wgpuForceFallbackAdapterRequested() noexcept {
   const char* fallbackEnv = std::getenv("DONNER_GEODE_FORCE_FALLBACK_ADAPTER");
   if (fallbackEnv == nullptr || fallbackEnv[0] == '\0') {
@@ -193,10 +193,16 @@ public:
     return retainImpl(bindGroups_, std::move(handle));
   }
 
-  /// Destroy backing storage for retained buffers/textures before release.
-  void destroyBackings() {
-    destroyBackingsImpl(buffers_);
-    destroyBackingsImpl(textures_);
+  /// Release all retained handles without explicitly destroying resource backings.
+  ///
+  /// Use this after submitting commands. The queue retains resources required by
+  /// in-flight work, while an explicit `destroy()` can invalidate that work.
+  void releaseAll() {
+    bindGroups_.clear();
+    samplers_.clear();
+    textureViews_.clear();
+    textures_.clear();
+    buffers_.clear();
   }
 
 private:
@@ -208,17 +214,6 @@ private:
     Handle borrowed = handle;
     storage.push_back(ScopedWgpuHandle<Handle>(std::move(handle)));
     return borrowed;
-  }
-
-  template <typename Handle>
-  static void destroyBackingsImpl(std::vector<ScopedWgpuHandle<Handle>>& storage) {
-    for (ScopedWgpuHandle<Handle>& handle : storage) {
-      if (handle) {
-        handle.get().destroy();
-        handle.reset();
-      }
-    }
-    storage.clear();
   }
 
   std::vector<ScopedWgpuHandle<wgpu::Buffer>> buffers_;

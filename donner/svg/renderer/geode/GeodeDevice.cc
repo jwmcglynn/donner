@@ -40,6 +40,16 @@ void OnUncapturedError(WGPUDevice const* /*device*/, WGPUErrorType type, WGPUStr
                message.data ? message.data : "");
 }
 
+void OnDeviceLost(WGPUDevice const* /*device*/, WGPUDeviceLostReason reason, WGPUStringView message,
+                  void* /*userdata1*/, void* /*userdata2*/) {
+  if (reason == WGPUDeviceLostReason_Destroyed || reason == WGPUDeviceLostReason_InstanceDropped) {
+    return;
+  }
+  std::fprintf(stderr, "[Geode/wgpu-native] Device lost (reason=%d): %.*s\n",
+               static_cast<int>(reason), static_cast<int>(message.length),
+               message.data ? message.data : "");
+}
+
 wgpu::BackendType RequestedHeadlessBackend() {
   const char* backendEnv = std::getenv("WGPU_BACKEND");
   if (backendEnv != nullptr && backendEnv[0] != '\0') {
@@ -153,13 +163,6 @@ template <typename Handle>
 void DestroyResourceBacking(ScopedWgpuHandle<Handle>& handle) {
   if (handle) {
     handle.get().destroy();
-  }
-}
-
-template <typename Handle>
-void DestroyResourceBackings(std::vector<ScopedWgpuHandle<Handle>>& handles) {
-  for (ScopedWgpuHandle<Handle>& handle : handles) {
-    DestroyResourceBacking(handle);
   }
 }
 
@@ -383,11 +386,12 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
   //    `uncapturedErrorCallbackInfo` on the descriptor - the callback
   //    stays valid for the device's lifetime.
   //
-  // DeviceLostCallback is intentionally NOT set. wgpu-native fires it
-  // during normal device destruction and the callback path interacts
-  // badly with static destruction order for globals.
   wgpu::DeviceDescriptor deviceDesc = {};
   deviceDesc.label = wgpu::StringView{std::string_view{"GeodeDevice"}};
+  deviceDesc.deviceLostCallbackInfo.mode = wgpu::CallbackMode::AllowSpontaneous;
+  deviceDesc.deviceLostCallbackInfo.callback = OnDeviceLost;
+  deviceDesc.deviceLostCallbackInfo.userdata1 = nullptr;
+  deviceDesc.deviceLostCallbackInfo.userdata2 = nullptr;
   deviceDesc.uncapturedErrorCallbackInfo.callback = OnUncapturedError;
   deviceDesc.uncapturedErrorCallbackInfo.userdata1 = nullptr;
   deviceDesc.uncapturedErrorCallbackInfo.userdata2 = nullptr;
@@ -648,8 +652,6 @@ void GeodeDevice::deferDestroy(wgpu::Texture texture) {
 }
 
 void GeodeDevice::drainDeferredDestroys() {
-  DestroyResourceBackings(pendingBuffers_);
-  DestroyResourceBackings(pendingTextures_);
   pendingBuffers_.clear();
   pendingTextures_.clear();
 }
