@@ -424,7 +424,7 @@
         "submit",
         "unmap"
       ],
-      "sha256": "d4980c0b648a1b5341fdf62593c187a5ca73df3ba82557c9cdfdf25c6d0de297",
+      "sha256": "43785a3dc4127a0713b8c529642c926152de8715640f07e5652d04a952efdabf",
       "wgpuCFunctions": [
         "wgpuDevicePoll",
         "wgpuLabel"
@@ -488,7 +488,7 @@
         "submit",
         "writeBuffer"
       ],
-      "sha256": "07a47714c2ba361d457dfd2cfc1811d3611cfd994b83a273c613cc47e0969e34",
+      "sha256": "69dbd4f4c47eb398794b15b5b39e7a7b824db9e640a8058e2eca8a2f55b09b5b",
       "wgpuCFunctions": [
         "wgpuLabel"
       ],
@@ -838,7 +838,7 @@
         "createPipelineLayout",
         "createRenderPipeline"
       ],
-      "sha256": "95b41ffaed25ce8cf92a6cf96b817b6b8f93c78c4e9a0d60efbf6463cd9363f8",
+      "sha256": "b58a2b1471403062caa600b3dc07f71adedf969d4a42fff2f4ed999a8e79075e",
       "wgpuCFunctions": [
         "wgpuLabel"
       ],
@@ -874,7 +874,7 @@
       ]
     },
     "donner/svg/renderer/geode/GeodePipeline.h": {
-      "sha256": "2b798ed6e6262abe7a41f6c2d64866c93f7b7c6cabd3d97670c476abe98696ff",
+      "sha256": "04a99d5246fd63a47af52a6d0de6725424dae6606eb65ea42f685b56136d0369",
       "wgpuCppTokens": [
         "BindGroupLayout",
         "Device",
@@ -883,7 +883,7 @@
       ]
     },
     "donner/svg/renderer/geode/GeodeResidentPathComponent.h": {
-      "sha256": "87b81c2130b47dad4e6593ec03b71000ec44ba38101c8541960e2c124df871bb",
+      "sha256": "8a3cf286289a9e869740d23f1514d77e26503df32d94fc101aeb5dbaa858877c",
       "wgpuCppTokens": [
         "BindGroup",
         "Buffer"
@@ -996,7 +996,7 @@
         "unmap",
         "writeTexture"
       ],
-      "sha256": "b46780013c07d5db243a358395aacb18aa08f32d0e6c752675ecea1cc9ef07c1",
+      "sha256": "e4735e8b9125208ddf2c17c937c2e7ca7681d21ecfac8ce0ec7ca0dada28ea21",
       "wgpuCFunctions": [
         "wgpuLabel"
       ],

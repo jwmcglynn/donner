@@ -4,10 +4,11 @@
 /// and compares pixels against the frozen baseline captured from the current production
 /// renderer.
 ///
-/// The geometry, uniforms, and draw sequence mirror the production encoder's fillPath data flow
-/// exactly: GeodePathEncoder banding, the same clip-space MVP construction (pixel -> clip with
-/// the Y flip for a top-left origin), premultiplied colors, an identity per-instance transform
-/// at binding 7, and 1x1 dummy pattern/clip textures at bindings 3..6.
+/// The geometry, uniforms, and draw sequence follow the production encoder's fillPath data flow:
+/// GeodePathEncoder banding, the same clip-space MVP construction (pixel -> clip with the Y flip
+/// for a top-left origin), premultiplied colors, an identity per-instance transform at binding 7,
+/// and 1x1 dummy pattern/clip textures at bindings 3..6. The compact canonical curve references
+/// are expanded for the shader IR's current contiguous-curve input layout.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -16,6 +17,7 @@
 #include <cstring>
 #include <memory>
 #include <optional>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -95,16 +97,64 @@ void BuildIdentity(float* out16) {
   out16[0] = out16[5] = out16[10] = out16[15] = 1.0f;
 }
 
+/// Legacy band layout consumed by BuildSolidFillModule. The generic shader IR intentionally
+/// remains on contiguous per-band curves while Geode's production shaders use compact references.
+struct LegacyBand {
+  uint32_t curveStart;
+  uint32_t curveCount;
+  float yMin = 0.0f;
+  float yMax = 0.0f;
+  float xMin = 0.0f;
+  float xMax = 0.0f;
+  float pad0 = 0.0f;
+  float pad1 = 0.0f;
+};
+static_assert(sizeof(LegacyBand) == 32, "LegacyBand must match the shader IR layout");
+
+struct LegacyAxis {
+  std::vector<LegacyBand> bands;
+  std::vector<EncodedPath::Curve> curves;
+};
+
+/// Expands compact per-band curve references into the contiguous layout consumed by the current
+/// generic solid-fill shader IR. Returns false for a malformed reference range or index.
+bool ExpandLegacyAxis(std::span<const EncodedPath::Band> bands,
+                      std::span<const uint32_t> curveIndices,
+                      std::span<const EncodedPath::Curve> canonicalCurves, LegacyAxis& result) {
+  for (const EncodedPath::Band& band : bands) {
+    if (band.curveStart > curveIndices.size() ||
+        band.curveCount > curveIndices.size() - band.curveStart) {
+      return false;
+    }
+
+    LegacyBand legacyBand{static_cast<uint32_t>(result.curves.size()), band.curveCount};
+    for (uint32_t i = 0; i < band.curveCount; ++i) {
+      const uint32_t curveIndex = curveIndices[band.curveStart + i];
+      if (curveIndex >= canonicalCurves.size()) {
+        return false;
+      }
+      result.curves.push_back(canonicalCurves[curveIndex]);
+    }
+    result.bands.push_back(legacyBand);
+  }
+  return true;
+}
+
+struct SizedBuffer {
+  Buffer buffer;
+  uint64_t sizeBytes = 0;
+};
+
 /// One path's GPU resources.
 struct PathDraw {
   Buffer vertexBuffer;       //!< Quad vertices (6 x 20 bytes).
   Buffer uniformBuffer;      //!< 288-byte Uniforms.
-  Buffer bands;              //!< Horizontal bands (or 4-byte dummy).
-  Buffer curves;             //!< Horizontal curves (or dummy).
-  Buffer vBands;             //!< Vertical bands (or dummy).
-  Buffer vCurves;            //!< Vertical curves (or dummy).
-  Buffer hGrid;              //!< Horizontal band grid (or dummy).
-  Buffer vGrid;              //!< Vertical band grid (or dummy).
+  SizedBuffer bands;         //!< Horizontal bands (or one zero band).
+  SizedBuffer curves;        //!< Horizontal curves (or 4-byte dummy).
+  SizedBuffer vBands;        //!< Vertical bands (or one zero band).
+  SizedBuffer vCurves;       //!< Vertical curves (or 4-byte dummy).
+  SizedBuffer hGrid;         //!< Horizontal band grid (or 4-byte dummy).
+  SizedBuffer vGrid;         //!< Vertical band grid (or 4-byte dummy).
   BindGroup bindGroup;       //!< The 12-entry solid-fill bind group.
   uint32_t vertexCount = 0;  //!< Draw vertex count.
 };
@@ -127,14 +177,14 @@ protected:
     return std::move(result).result();
   }
 
-  /// Creates a storage buffer holding \p bytes (or a 4-byte zero dummy when empty), mirroring
-  /// the production encoder's empty-region dummies (the shader's band-count gates never
-  /// dereference them).
-  Buffer storageBuffer(const char* label, const void* data, size_t byteCount) {
-    const uint32_t dummy = 0;
+  /// Creates a storage buffer holding \p bytes. Empty buffers receive a zero-filled dummy large
+  /// enough for one shader element so Metal validation can prove every runtime-array binding.
+  SizedBuffer storageBuffer(const char* label, const void* data, size_t byteCount,
+                            size_t emptyByteCount = sizeof(uint32_t)) {
+    const std::array<uint8_t, sizeof(LegacyBand)> dummy = {};
     if (byteCount == 0) {
-      data = &dummy;
-      byteCount = sizeof(dummy);
+      data = dummy.data();
+      byteCount = emptyByteCount;
     }
     Buffer buffer = unwrap(device_->createBuffer(BufferDescriptor{
                                label, byteCount, BufferUsage::Storage | BufferUsage::CopyDst}),
@@ -142,7 +192,7 @@ protected:
     const Status writeStatus = device_->writeBuffer(
         buffer, 0, std::span<const uint8_t>(static_cast<const uint8_t*>(data), byteCount));
     EXPECT_FALSE(writeStatus.hasError()) << writeStatus.error();
-    return buffer;
+    return SizedBuffer{buffer, byteCount};
   }
 
   std::unique_ptr<MetalDevice> device_;
@@ -260,7 +310,7 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
     float row0[4] = {1.0f, 0.0f, 0.0f, 0.0f};
     float row1[4] = {0.0f, 1.0f, 0.0f, 0.0f};
   } identityTransform;
-  Buffer instanceTransforms =
+  SizedBuffer instanceTransforms =
       storageBuffer("instanceTransforms", &identityTransform, sizeof(identityTransform));
 
   // ----- Per-path geometry, uniforms, and bind groups (the production fillPath data flow) ----
@@ -269,6 +319,11 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
   for (const BaselinePathSpec& spec : BaselineScenePaths()) {
     const EncodedPath encoded = geode::GeodePathEncoder::encode(spec.path, spec.rule);
     ASSERT_FALSE(encoded.quadVertices.empty());
+
+    LegacyAxis horizontal;
+    LegacyAxis vertical;
+    ASSERT_TRUE(ExpandLegacyAxis(encoded.bands, encoded.curveIndices, encoded.curves, horizontal));
+    ASSERT_TRUE(ExpandLegacyAxis(encoded.vBands, encoded.vCurveIndices, encoded.vCurves, vertical));
 
     PathDraw draw;
     draw.vertexCount = static_cast<uint32_t>(encoded.quadVertices.size());
@@ -283,14 +338,14 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
                                  encoded.quadVertices.size() * sizeof(EncodedPath::Vertex)));
     ASSERT_FALSE(vertexWrite.hasError()) << vertexWrite.error();
 
-    draw.bands = storageBuffer("bands", encoded.bands.data(),
-                               encoded.bands.size() * sizeof(EncodedPath::Band));
-    draw.curves = storageBuffer("curves", encoded.curves.data(),
-                                encoded.curves.size() * sizeof(EncodedPath::Curve));
-    draw.vBands = storageBuffer("vBands", encoded.vBands.data(),
-                                encoded.vBands.size() * sizeof(EncodedPath::Band));
-    draw.vCurves = storageBuffer("vCurves", encoded.vCurves.data(),
-                                 encoded.vCurves.size() * sizeof(EncodedPath::Curve));
+    draw.bands = storageBuffer("bands", horizontal.bands.data(),
+                               horizontal.bands.size() * sizeof(LegacyBand), sizeof(LegacyBand));
+    draw.curves = storageBuffer("curves", horizontal.curves.data(),
+                                horizontal.curves.size() * sizeof(EncodedPath::Curve));
+    draw.vBands = storageBuffer("vBands", vertical.bands.data(),
+                                vertical.bands.size() * sizeof(LegacyBand), sizeof(LegacyBand));
+    draw.vCurves = storageBuffer("vCurves", vertical.curves.data(),
+                                 vertical.curves.size() * sizeof(EncodedPath::Curve));
     draw.hGrid = storageBuffer("hBandGrid", encoded.hBandGrid.data(),
                                encoded.hBandGrid.size() * sizeof(uint32_t));
     draw.vGrid = storageBuffer("vBandGrid", encoded.vBandGrid.data(),
@@ -330,17 +385,18 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
 
     std::vector<BindGroupEntry> entries;
     entries.push_back({0, BufferBinding{draw.uniformBuffer, 0, sizeof(Uniforms)}});
-    entries.push_back({1, BufferBinding{draw.bands, 0, 4}});
-    entries.push_back({2, BufferBinding{draw.curves, 0, 4}});
+    entries.push_back({1, BufferBinding{draw.bands.buffer, 0, draw.bands.sizeBytes}});
+    entries.push_back({2, BufferBinding{draw.curves.buffer, 0, draw.curves.sizeBytes}});
     entries.push_back({3, TextureViewBinding{dummyView}});
     entries.push_back({4, SamplerBinding{dummySampler}});
     entries.push_back({5, TextureViewBinding{dummyView}});
     entries.push_back({6, SamplerBinding{dummySampler}});
-    entries.push_back({7, BufferBinding{instanceTransforms, 0, sizeof(identityTransform)}});
-    entries.push_back({8, BufferBinding{draw.vBands, 0, 4}});
-    entries.push_back({9, BufferBinding{draw.vCurves, 0, 4}});
-    entries.push_back({10, BufferBinding{draw.hGrid, 0, 4}});
-    entries.push_back({11, BufferBinding{draw.vGrid, 0, 4}});
+    entries.push_back(
+        {7, BufferBinding{instanceTransforms.buffer, 0, instanceTransforms.sizeBytes}});
+    entries.push_back({8, BufferBinding{draw.vBands.buffer, 0, draw.vBands.sizeBytes}});
+    entries.push_back({9, BufferBinding{draw.vCurves.buffer, 0, draw.vCurves.sizeBytes}});
+    entries.push_back({10, BufferBinding{draw.hGrid.buffer, 0, draw.hGrid.sizeBytes}});
+    entries.push_back({11, BufferBinding{draw.vGrid.buffer, 0, draw.vGrid.sizeBytes}});
     draw.bindGroup = unwrap(device_->createBindGroup(BindGroupDescriptor{
                                 "solidFillGroup", bindGroupLayout, std::move(entries)}),
                             "createBindGroup");
