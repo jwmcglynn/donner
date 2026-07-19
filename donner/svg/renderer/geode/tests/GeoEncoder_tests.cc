@@ -184,6 +184,22 @@ TEST_F(GeoEncoderTest, FillRect) {
   EXPECT_THAT(corner, RgbaEq(0, 0, 0, 255)) << "Corner should be clear black";
 }
 
+TEST_F(GeoEncoderTest, ArenaGrowthKeepsEarlierGridBinding) {
+  PathBuilder builder;
+  for (int i = 0; i < 8500; ++i) {
+    builder.addRect(Box2d({31, 31}, {33, 33}));
+  }
+  const Path path = builder.build();
+
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  encoder.clear(css::RGBA(0, 0, 0, 255));
+  encoder.fillPath(path, css::RGBA(255, 0, 0, 255), FillRule::NonZero);
+  encoder.finish();
+
+  const auto pixels = readback();
+  EXPECT_THAT(pixelAt(pixels, 32, 32), RgbaEq(255, 0, 0, 255));
+}
+
 /// Fill a triangle. Verify center inside, far corners outside.
 TEST_F(GeoEncoderTest, FillTriangle) {
   Path path = PathBuilder()
