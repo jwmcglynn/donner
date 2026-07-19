@@ -174,7 +174,7 @@ EditorRasterViewport SplashDonnerHighZoomRasterViewport(Vector2d panDocPoint = V
   viewport.paneSize = Vector2d(892.0, 512.0);
   viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 892.0, 512.0);
   viewport.devicePixelRatio = 2.0;
-  viewport.zoom = 16.0;
+  viewport.zoom = 8.0;
   viewport.panDocPoint = panDocPoint;
   viewport.panScreenPoint = Vector2d(446.0, 256.0);
   return viewport.rasterViewport();
