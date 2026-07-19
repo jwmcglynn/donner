@@ -184,6 +184,23 @@ TEST_F(GeoEncoderTest, FillRect) {
   EXPECT_THAT(corner, RgbaEq(0, 0, 0, 255)) << "Corner should be clear black";
 }
 
+TEST_F(GeoEncoderTest, TinyUniformScaleStillRasterizesHalfPixelHalo) {
+  const Path path =
+      PathBuilder().addRect(Box2d({264062.5, 264062.5}, {735937.5, 735937.5})).build();
+
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  encoder.clear(css::RGBA(0, 0, 0, 0));
+  encoder.setTransform(Transform2d::Scale(0.000064));
+  encoder.fillPath(path, css::RGBA(255, 0, 0, 255), FillRule::NonZero);
+  encoder.finish();
+
+  const auto pixels = readback();
+  const auto halo = pixelAt(pixels, 16, 32);
+  EXPECT_GT(halo[0], 0u);
+  EXPECT_GT(halo[3], 0u);
+  EXPECT_THAT(pixelAt(pixels, 15, 32), RgbaEq(0, 0, 0, 0));
+}
+
 TEST_F(GeoEncoderTest, ArenaGrowthKeepsEarlierGridBinding) {
   PathBuilder builder;
   for (int i = 0; i < 8500; ++i) {
