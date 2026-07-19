@@ -201,6 +201,37 @@ TEST_F(GeoEncoderTest, TinyUniformScaleStillRasterizesHalfPixelHalo) {
   EXPECT_THAT(pixelAt(pixels, 15, 32), RgbaEq(0, 0, 0, 0));
 }
 
+TEST_F(GeoEncoderTest, IllConditionedAffineStillRasterizesHalfPixelHalo) {
+  constexpr double kLongEdge = 8388608.0;
+  const Path path = PathBuilder()
+                        .moveTo({0, 0})
+                        .lineTo({32, 0})
+                        .lineTo({32 - kLongEdge, kLongEdge})
+                        .lineTo({-kLongEdge, kLongEdge})
+                        .closePath()
+                        .build();
+
+  Transform2d transform(Transform2d::uninitialized);
+  transform.data[0] = 1.0;
+  transform.data[1] = 0.0;
+  transform.data[2] = 1.0;
+  transform.data[3] = 1.0 / kLongEdge;
+  transform.data[4] = 16.75;
+  transform.data[5] = 20.75;
+
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  encoder.clear(css::RGBA(0, 0, 0, 0));
+  encoder.setTransform(transform);
+  encoder.fillPath(path, css::RGBA(255, 0, 0, 255), FillRule::NonZero);
+  encoder.finish();
+
+  const auto pixels = readback();
+  const auto halo = pixelAt(pixels, 32, 20);
+  EXPECT_GT(halo[0], 0u);
+  EXPECT_GT(halo[3], 0u);
+  EXPECT_THAT(pixelAt(pixels, 32, 19), RgbaEq(0, 0, 0, 0));
+}
+
 TEST_F(GeoEncoderTest, ArenaGrowthKeepsEarlierGridBinding) {
   PathBuilder builder;
   for (int i = 0; i < 8500; ++i) {
