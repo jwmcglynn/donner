@@ -201,6 +201,44 @@ TEST_F(GeoEncoderTest, TinyUniformScaleStillRasterizesHalfPixelHalo) {
   EXPECT_THAT(pixelAt(pixels, 15, 32), RgbaEq(0, 0, 0, 0));
 }
 
+TEST_F(GeoEncoderTest, IllConditionedShearStillRasterizesHalfPixelHalo) {
+  constexpr double kPathYMin = 65500.0;
+  constexpr double kPathYMax = 68500.0;
+  constexpr double kDeviceXMinOverScale = -2000.0;
+  constexpr double kDeviceXMaxOverScale = 2000.0;
+  const Path path = PathBuilder()
+                        .moveTo(Vector2d(-kPathYMin + kDeviceXMinOverScale, kPathYMin))
+                        .lineTo(Vector2d(-kPathYMin + kDeviceXMaxOverScale, kPathYMin))
+                        .lineTo(Vector2d(-kPathYMax + kDeviceXMaxOverScale, kPathYMax))
+                        .lineTo(Vector2d(-kPathYMax + kDeviceXMinOverScale, kPathYMax))
+                        .closePath()
+                        .build();
+
+  // The two device-space axes are nearly collinear: their determinant ratio
+  // is below the miter path's conditioning threshold. The large path maps to
+  // a visible strip from y=32.75 to y=34.25 that crosses the full viewport.
+  Transform2d transform(Transform2d::uninitialized);
+  transform.data[0] = 1024.0;
+  transform.data[1] = 0.0;
+  transform.data[2] = 1024.0;
+  transform.data[3] = 0.0005;
+  transform.data[4] = 0.0;
+  transform.data[5] = 0.0;
+
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  encoder.clear(css::RGBA(0, 0, 0, 0));
+  encoder.setTransform(transform);
+  encoder.fillPath(path, css::RGBA(255, 0, 0, 255), FillRule::NonZero);
+  encoder.finish();
+
+  const auto pixels = readback();
+  EXPECT_GT(pixelAt(pixels, 32, 32)[3], 0u);
+  EXPECT_GT(pixelAt(pixels, 32, 33)[3], 0u);
+  EXPECT_GT(pixelAt(pixels, 32, 34)[3], 0u);
+  EXPECT_THAT(pixelAt(pixels, 32, 31), RgbaEq(0, 0, 0, 0));
+  EXPECT_THAT(pixelAt(pixels, 32, 35), RgbaEq(0, 0, 0, 0));
+}
+
 TEST_F(GeoEncoderTest, ArenaGrowthKeepsEarlierGridBinding) {
   PathBuilder builder;
   for (int i = 0; i < 8500; ++i) {
