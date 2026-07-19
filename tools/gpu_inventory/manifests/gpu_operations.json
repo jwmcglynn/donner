@@ -424,7 +424,7 @@
         "submit",
         "unmap"
       ],
-      "sha256": "43785a3dc4127a0713b8c529642c926152de8715640f07e5652d04a952efdabf",
+      "sha256": "1e669f8019ad84506657a823ddbd627fe645982998604934709f67e8dc8d99af",
       "wgpuCFunctions": [
         "wgpuDevicePoll",
         "wgpuLabel"
@@ -484,11 +484,10 @@
         "setBindGroup",
         "setPipeline",
         "setScissorRect",
-        "setVertexBuffer",
         "submit",
         "writeBuffer"
       ],
-      "sha256": "69dbd4f4c47eb398794b15b5b39e7a7b824db9e640a8058e2eca8a2f55b09b5b",
+      "sha256": "ec1e50c43ef9c62e7893b82658d807c043ff308d2edd1c1ef8a3706bcc280bca",
       "wgpuCFunctions": [
         "wgpuLabel"
       ],
@@ -838,7 +837,7 @@
         "createPipelineLayout",
         "createRenderPipeline"
       ],
-      "sha256": "b58a2b1471403062caa600b3dc07f71adedf969d4a42fff2f4ed999a8e79075e",
+      "sha256": "25fa4b3cd7d226536387713f5fe36e7ef9782f56bf6a3a2a86cbce6b6ce0f065",
       "wgpuCFunctions": [
         "wgpuLabel"
       ],
@@ -866,15 +865,11 @@
         "ShaderStage",
         "TextureFormat",
         "TextureSampleType",
-        "TextureViewDimension",
-        "VertexAttribute",
-        "VertexBufferLayout",
-        "VertexFormat",
-        "VertexStepMode"
+        "TextureViewDimension"
       ]
     },
     "donner/svg/renderer/geode/GeodePipeline.h": {
-      "sha256": "04a99d5246fd63a47af52a6d0de6725424dae6606eb65ea42f685b56136d0369",
+      "sha256": "a39e8c5092a72f14f73ff38e5c690c919819f8c92525035eacc6fbe573dc5eb2",
       "wgpuCppTokens": [
         "BindGroupLayout",
         "Device",
@@ -883,7 +878,7 @@
       ]
     },
     "donner/svg/renderer/geode/GeodeResidentPathComponent.h": {
-      "sha256": "8a3cf286289a9e869740d23f1514d77e26503df32d94fc101aeb5dbaa858877c",
+      "sha256": "843201f090fdad0b3ae43b4922a0cb093a742d30af91d3871169f46516d7b675",
       "wgpuCppTokens": [
         "BindGroup",
         "Buffer"
@@ -996,7 +991,7 @@
         "unmap",
         "writeTexture"
       ],
-      "sha256": "e4735e8b9125208ddf2c17c937c2e7ca7681d21ecfac8ce0ec7ca0dada28ea21",
+      "sha256": "dc63693f3d5071c82c548985aa0d26e37478cfcfc78a2ef9d155acd2c9da7661",
       "wgpuCFunctions": [
         "wgpuLabel"
       ],
