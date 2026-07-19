@@ -14,13 +14,14 @@ window, a composited WebGPU canvas — without paying for a second device.
 
 - A valid `wgpu::Device` and its default `wgpu::Queue`, both created by the
   host.
+- The host's `wgpu::Instance` when synchronous snapshots must dispatch WebGPU
+  map callbacks, as required by browser embedders.
 - A target `wgpu::Texture` with `TextureUsage::RenderAttachment` in its usage
   flags. `CopySrc` is required in addition if you plan to call
   `RendererGeode::takeSnapshot()`.
 - A build with Geode enabled:
   `bazel build --config=geode //your:target` (the config sets
-  `--//donner/svg/renderer/geode:enable_dawn=true`, whose historical name
-  predates the switch to wgpu-native).
+  `--//donner/svg/renderer/geode:enable_geode=true`).
 
 Geode is confirmed against the wgpu-native backend that ships in
 `third_party/webgpu-cpp`. The Dawn C++ wrapper exposes the same C++ API
@@ -31,20 +32,24 @@ surface but a few status enumerants differ (see Troubleshooting below).
 ### 1. Describe the embedding
 
 `GeodeEmbedConfig` (declared in `donner/svg/renderer/geode/GeodeDevice.h`)
-bundles the four pieces of host state Geode needs:
+bundles the host state Geode needs:
 
 ```cpp
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 
 donner::geode::GeodeEmbedConfig config;
+config.instance = hostInstance;    // optional; enables browser snapshot callbacks.
 config.device = hostDevice;        // wgpu::Device, must not be null.
 config.queue = hostQueue;          // wgpu::Queue, must not be null.
 config.textureFormat = wgpu::TextureFormat::BGRA8Unorm;  // match your target.
 config.adapter = hostAdapter;      // optional; retained for adapter metadata queries.
 ```
 
-The `adapter` field is optional. When supplied, Geode preserves it for callers
-that need metadata about the adapter associated with the external device.
+The `instance` and `adapter` fields are optional. Browser embedders should
+supply `instance` when calling `RendererGeode::takeSnapshot()` so synchronous
+readback can wait for map callback completion through `Instance::waitAny()`. When
+supplied, Geode preserves `adapter` for callers that need metadata about the
+adapter associated with the external device.
 
 ### 2. Construct a non-owning `GeodeDevice`
 

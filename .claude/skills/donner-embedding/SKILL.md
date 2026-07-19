@@ -229,7 +229,8 @@ device/queue/target texture and Geode draws into the host's texture.
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/RendererGeode.h"
 
-donner::geode::GeodeEmbedConfig config;           // device, queue, textureFormat, adapter(optional)
+donner::geode::GeodeEmbedConfig config;           // instance(optional), device, queue,
+                                                   // textureFormat, adapter(optional)
 // CreateFromExternal returns std::unique_ptr<GeodeDevice> (non-owning of the wgpu objects);
 // nullptr if config.device or config.queue was null. The RendererGeode ctor takes a shared_ptr,
 // which a moved unique_ptr converts to.
@@ -244,8 +245,10 @@ renderer.clearTargetTexture();   // reverts to internal offscreen target
 
 - Build with `--config=geode` (in `.bazelrc` this sets
   `--//donner/svg/renderer:renderer_backend=geode` and
-  `--//donner/svg/renderer/geode:enable_geode=true`). The guide's mention of an `enable_dawn`
-  flag is stale — the live flag is `enable_geode`.
+  `--//donner/svg/renderer/geode:enable_geode=true`).
+- Browser embedders that use synchronous snapshots should supply the host
+  `wgpu::Instance` so Geode can wait for map callback completion through
+  `Instance::waitAny()`.
 - Lifetime: host objects must outlive every `GeodeDevice`/`RendererGeode`; destroy renderers
   before the host `wgpu::Device`; target texture must stay alive through the frame's draw.
 - Target texture must have `RenderAttachment` usage, `sampleCount == 1`, and a format matching
