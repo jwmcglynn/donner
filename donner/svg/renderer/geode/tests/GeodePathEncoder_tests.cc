@@ -222,7 +222,64 @@ TEST(GeodePathEncoder, UsesTighterGeometryForTriangularPath) {
 
   EXPECT_LE(encoded.boundingVertexCount, 3u)
       << "A triangle should not shade all four corners of its axis-aligned bounds";
+  EXPECT_GE(encoded.boundingDrawVertexCount(), 6u)
+      << "Triangle draws must leave room for a device-space AABB fallback";
   EXPECT_LT(encoded.stats.boundingGeometryArea, encoded.stats.aabbArea);
+}
+
+TEST(GeodePathEncoder, AcuteSupportPolygonFallsBackToAabb) {
+  const Path path = PathBuilder()
+                        .moveTo(Vector2d(32, 1))
+                        .lineTo(Vector2d(32.01, 63))
+                        .lineTo(Vector2d(31.99, 63))
+                        .closePath()
+                        .build();
+
+  const EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
+  ASSERT_FALSE(encoded.empty());
+  EXPECT_EQ(encoded.boundingVertexCount, 4u);
+  EXPECT_DOUBLE_EQ(encoded.stats.boundingGeometryArea, encoded.stats.aabbArea);
+}
+
+TEST(GeodePathEncoder, FloatBoundingPolygonRemainsFiniteAndStrict) {
+  PathBuilder builder;
+  builder.moveTo({-87869956096.0, -492549144576.0})
+      .lineTo({-88004124672.0, -492709281792.0})
+      .lineTo({-87869399040.0, -492575457280.0})
+      .lineTo({-88002412544.0, -492716359680.0})
+      .lineTo({-87930290176.0, -492577914880.0})
+      .lineTo({-87925121024.0, -492680085504.0})
+      .lineTo({-87896064000.0, -492593807360.0})
+      .lineTo({-87972298752.0, -492648366080.0})
+      .lineTo({-87897595904.0, -492609503232.0})
+      .lineTo({-87956447232.0, -492684378112.0})
+      .lineTo({-87916617728.0, -492639944704.0})
+      .lineTo({-87945699328.0, -492628934656.0})
+      .lineTo({-87930953728.0, -492660097024.0})
+      .lineTo({-87961272320.0, -492682575872.0})
+      .lineTo({-87971225600.0, -492670124032.0})
+      .lineTo({-87961837568.0, -492637126656.0})
+      .lineTo({-87960141824.0, -492664619008.0})
+      .lineTo({-87930593280.0, -492648431616.0})
+      .closePath();
+
+  const EncodedPath encoded = GeodePathEncoder::encode(builder.build(), FillRule::NonZero);
+  ASSERT_FALSE(encoded.empty());
+  ASSERT_GE(encoded.boundingVertexCount, 3u);
+  ASSERT_LE(encoded.boundingVertexCount, EncodedPath::kMaxBoundingVertices);
+
+  const auto origin = encoded.boundingVertices[0];
+  double twiceArea = 0.0;
+  for (uint32_t i = 0; i < encoded.boundingVertexCount; ++i) {
+    const auto& a = encoded.boundingVertices[i];
+    const auto& b = encoded.boundingVertices[(i + 1u) % encoded.boundingVertexCount];
+    EXPECT_TRUE(std::isfinite(a.x));
+    EXPECT_TRUE(std::isfinite(a.y));
+    EXPECT_TRUE(a.x != b.x || a.y != b.y) << "Consecutive float vertices must be distinct";
+    twiceArea += static_cast<double>(a.x - origin.x) * static_cast<double>(b.y - origin.y) -
+                 static_cast<double>(a.y - origin.y) * static_cast<double>(b.x - origin.x);
+  }
+  EXPECT_GT(twiceArea, 0.0);
 }
 
 TEST(GeodePathEncoder, BandsCoverFullHeight) {
