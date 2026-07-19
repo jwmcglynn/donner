@@ -146,7 +146,87 @@ fn fan_polygon_index(vertex_index: u32) -> u32 {
   return select(triangle + corner, 0u, corner == 0u);
 }
 
-fn dilated_bounding_vertex(effective_mvp: mat4x4f, polygon_index: u32) -> vec2f {
+fn pixel_axes(effective_mvp: mat4x4f) -> mat2x2f {
+  let pixel_scale = vec2f(uniforms.viewport.x * 0.5, -uniforms.viewport.y * 0.5);
+  let origin_pixel = (effective_mvp * vec4f(0.0, 0.0, 0.0, 1.0)).xy * pixel_scale;
+  let x_axis_pixel =
+    (effective_mvp * vec4f(1.0, 0.0, 0.0, 1.0)).xy * pixel_scale - origin_pixel;
+  let y_axis_pixel =
+    (effective_mvp * vec4f(0.0, 1.0, 0.0, 1.0)).xy * pixel_scale - origin_pixel;
+  return mat2x2f(x_axis_pixel, y_axis_pixel);
+}
+
+fn axes_determinant(axes: mat2x2f) -> f32 {
+  return axes[0].x * axes[1].y - axes[0].y * axes[1].x;
+}
+
+fn axes_are_well_conditioned(axes: mat2x2f) -> bool {
+  let axis_scale = length(axes[0]) * length(axes[1]);
+  let determinant = axes_determinant(axes);
+  return axis_scale > 0.0 && axis_scale < 1e30 &&
+         abs(determinant) > axis_scale * 1e-6;
+}
+
+fn path_from_pixel_delta(axes: mat2x2f, pixel_delta: vec2f) -> vec2f {
+  let determinant = axes_determinant(axes);
+  return vec2f(axes[1].y * pixel_delta.x - axes[1].x * pixel_delta.y,
+               -axes[0].y * pixel_delta.x + axes[0].x * pixel_delta.y) /
+         determinant;
+}
+
+fn needs_device_aabb_fallback(axes: mat2x2f) -> bool {
+  if (!axes_are_well_conditioned(axes)) {
+    return false;
+  }
+  let orientation = select(-1.0, 1.0, axes_determinant(axes) > 0.0);
+  for (var i = 0u; i < uniforms.boundingVertexCount; i = i + 1u) {
+    let previous = load_bounding_vertex(
+      (i + uniforms.boundingVertexCount - 1u) % uniforms.boundingVertexCount);
+    let position = load_bounding_vertex(i);
+    let next = load_bounding_vertex((i + 1u) % uniforms.boundingVertexCount);
+    let incoming = axes * (position - previous);
+    let outgoing = axes * (next - position);
+    let incoming_length = length(incoming);
+    let outgoing_length = length(outgoing);
+    if (!(incoming_length > 1e-6 && incoming_length < 1e30 &&
+          outgoing_length > 1e-6 && outgoing_length < 1e30)) {
+      return true;
+    }
+    let incoming_edge = incoming / incoming_length;
+    let outgoing_edge = outgoing / outgoing_length;
+    let incoming_normal = orientation * vec2f(incoming_edge.y, -incoming_edge.x);
+    let outgoing_normal = orientation * vec2f(outgoing_edge.y, -outgoing_edge.x);
+    let denominator = 1.0 + dot(incoming_normal, outgoing_normal);
+    if (!(denominator > 1e-6)) {
+      return true;
+    }
+    let miter = 0.5 * (incoming_normal + outgoing_normal) / denominator;
+    if (!(length(miter) <= 2.0)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+fn load_device_aabb_vertex(effective_mvp: mat4x4f, axes: mat2x2f,
+                           polygon_index: u32) -> vec2f {
+  let pixel_scale = vec2f(uniforms.viewport.x * 0.5, -uniforms.viewport.y * 0.5);
+  let origin_pixel = (effective_mvp * vec4f(0.0, 0.0, 0.0, 1.0)).xy * pixel_scale;
+  var pixel_min = vec2f(1e30, 1e30);
+  var pixel_max = vec2f(-1e30, -1e30);
+  for (var i = 0u; i < uniforms.boundingVertexCount; i = i + 1u) {
+    let pixel = origin_pixel + axes * load_bounding_vertex(i);
+    pixel_min = min(pixel_min, pixel);
+    pixel_max = max(pixel_max, pixel);
+  }
+  let left = polygon_index == 0u || polygon_index == 3u;
+  let top = polygon_index < 2u;
+  let pixel_corner = vec2f(select(pixel_max.x + 0.5, pixel_min.x - 0.5, left),
+                           select(pixel_max.y + 0.5, pixel_min.y - 0.5, top));
+  return path_from_pixel_delta(axes, pixel_corner - origin_pixel);
+}
+
+fn dilated_bounding_vertex(axes: mat2x2f, polygon_index: u32) -> vec2f {
   let count = uniforms.boundingVertexCount;
   let previous_index = (polygon_index + count - 1u) % count;
   let next_index = (polygon_index + 1u) % count;
@@ -157,29 +237,33 @@ fn dilated_bounding_vertex(effective_mvp: mat4x4f, polygon_index: u32) -> vec2f 
   // Work in viewport pixels, including WebGPU's Y flip. Intersect the two adjacent edge
   // half-planes after moving each outward by half a pixel, then map that miter back to path
   // space so the fragment shader's analytic sample coordinates remain exact.
-  let pixel_scale = vec2f(uniforms.viewport.x * 0.5, -uniforms.viewport.y * 0.5);
-  let origin_pixel = (effective_mvp * vec4f(0.0, 0.0, 0.0, 1.0)).xy * pixel_scale;
-  let x_axis_pixel =
-    (effective_mvp * vec4f(1.0, 0.0, 0.0, 1.0)).xy * pixel_scale - origin_pixel;
-  let y_axis_pixel =
-    (effective_mvp * vec4f(0.0, 1.0, 0.0, 1.0)).xy * pixel_scale - origin_pixel;
-  let to_pixel = mat2x2f(x_axis_pixel, y_axis_pixel);
-  let determinant = x_axis_pixel.x * y_axis_pixel.y - x_axis_pixel.y * y_axis_pixel.x;
-  if (abs(determinant) < 1e-8) {
+  if (!axes_are_well_conditioned(axes)) {
     return position;
   }
-  let previous_edge = normalize(to_pixel * (position - previous));
-  let next_edge = normalize(to_pixel * (next - position));
+  let previous_edge = normalize(axes * (position - previous));
+  let next_edge = normalize(axes * (next - position));
 
-  let orientation = select(-1.0, 1.0, determinant > 0.0);
+  let orientation = select(-1.0, 1.0, axes_determinant(axes) > 0.0);
   let previous_normal = orientation * vec2f(previous_edge.y, -previous_edge.x);
   let next_normal = orientation * vec2f(next_edge.y, -next_edge.x);
-  let miter_denominator = max(1.0 + dot(previous_normal, next_normal), 1e-6);
+  let miter_denominator = 1.0 + dot(previous_normal, next_normal);
   let pixel_delta = 0.5 * (previous_normal + next_normal) / miter_denominator;
-  let path_delta = vec2f(y_axis_pixel.y * pixel_delta.x - y_axis_pixel.x * pixel_delta.y,
-                         -x_axis_pixel.y * pixel_delta.x + x_axis_pixel.x * pixel_delta.y) /
-                   determinant;
-  return position + path_delta;
+  return position + path_from_pixel_delta(axes, pixel_delta);
+}
+
+fn effective_bounding_vertex(effective_mvp: mat4x4f, vertex_index: u32) -> vec2f {
+  let axes = pixel_axes(effective_mvp);
+  let use_aabb = needs_device_aabb_fallback(axes);
+  let effective_count = select(uniforms.boundingVertexCount, 4u, use_aabb);
+  let triangle = vertex_index / 3u;
+  var polygon_index = 0u;
+  if (triangle < effective_count - 2u) {
+    polygon_index = fan_polygon_index(vertex_index);
+  }
+  if (use_aabb) {
+    return load_device_aabb_vertex(effective_mvp, axes, polygon_index);
+  }
+  return dilated_bounding_vertex(axes, polygon_index);
 }
 
 @vertex
@@ -194,8 +278,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32,
   );
   let effective_mvp = uniforms.mvp * instance_mat;
 
-  let polygon_index = fan_polygon_index(vertex_index);
-  let dilated = dilated_bounding_vertex(effective_mvp, polygon_index);
+  let dilated = effective_bounding_vertex(effective_mvp, vertex_index);
 
   var out: VertexOutput;
   out.clip_pos = effective_mvp * vec4f(dilated, 0.0, 1.0);

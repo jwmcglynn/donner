@@ -85,9 +85,10 @@ TEST(GeodePathEncoder, SimpleTriangle) {
   // Should have at least 1 band.
   EXPECT_GE(encoded.bands.size(), 1u);
 
-  // The triangle is its own conservative support polygon (one raster triangle).
+  // The triangle is its own conservative support polygon. The draw reserves a
+  // second, normally degenerate triangle for a device-space AABB fallback.
   EXPECT_EQ(encoded.boundingVertexCount, 3u);
-  EXPECT_EQ(encoded.boundingDrawVertexCount(), 3u);
+  EXPECT_EQ(encoded.boundingDrawVertexCount(), 6u);
 
   // Bounds should encompass the triangle.
   EXPECT_LE(encoded.pathBounds.topLeft.x, 0.0f);
