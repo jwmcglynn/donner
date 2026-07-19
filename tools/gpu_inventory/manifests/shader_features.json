@@ -1432,6 +1432,7 @@
       "features": [
         "abs",
         "array",
+        "break",
         "clamp",
         "const",
         "continue",
@@ -1550,6 +1551,7 @@
       "features": [
         "abs",
         "array",
+        "break",
         "clamp",
         "const",
         "continue",
@@ -1666,6 +1668,7 @@
       "features": [
         "abs",
         "array",
+        "break",
         "clamp",
         "const",
         "continue",
