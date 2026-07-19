@@ -18,6 +18,18 @@ py_test(
     ],
 )
 
+py_test(
+    name = "geode_test_scheduling_tests",
+    size = "small",
+    srcs = [
+        "geode_test_scheduling_tests.py",
+    ],
+    data = [
+        ":rules.bzl",
+        "//:.bazelrc",
+    ],
+)
+
 string_flag(
     name = "llvm_latest",
     build_setting_default = "0",
