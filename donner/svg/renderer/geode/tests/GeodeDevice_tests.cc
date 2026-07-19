@@ -5,8 +5,10 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <string_view>
 
+#include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
@@ -16,6 +18,22 @@
 namespace donner::geode {
 
 using svg::test::RgbaEq;
+
+TEST(GeodeCallbackState, CallbackOwnsStateAfterCallerReturns) {
+  struct State {};
+
+  auto state = std::make_shared<State>();
+  const std::weak_ptr<State> weakState = state;
+  void* userdata = RetainWgpuCallbackState(state);
+
+  state.reset();
+  EXPECT_FALSE(weakState.expired());
+
+  std::shared_ptr<State> callbackState = TakeWgpuCallbackState<State>(userdata);
+  EXPECT_EQ(callbackState.get(), weakState.lock().get());
+  callbackState.reset();
+  EXPECT_TRUE(weakState.expired());
+}
 
 /// Smoke test: can we instantiate a headless Dawn device at all?
 /// If this fails, the entire Geode backend is non-functional.
