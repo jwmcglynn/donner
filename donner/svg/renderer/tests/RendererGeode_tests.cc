@@ -301,24 +301,17 @@ TEST_F(RendererGeodeTest, EmptyFrameIsTransparent) {
 }
 
 TEST_F(RendererGeodeTest, SharedDeviceSurvivesRendererTeardown) {
-  {
-    RendererGeode first = createRenderer();
-    beginFrame(first);
-    first.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
-    first.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
-    first.endFrame();
-    ASSERT_FALSE(first.takeSnapshot().empty());
+  for (int iteration = 0; iteration < 3; ++iteration) {
+    RendererGeode renderer = createRenderer();
+    beginFrame(renderer);
+    renderer.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
+    renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+    renderer.endFrame();
+
+    const RendererBitmap snapshot = renderer.takeSnapshot();
+    ASSERT_FALSE(snapshot.empty()) << "iteration " << iteration;
+    EXPECT_THAT(pixelAt(snapshot, 32, 32), RgbaEq(0, 255, 0, 255)) << "iteration " << iteration;
   }
-
-  RendererGeode second = createRenderer();
-  beginFrame(second);
-  second.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
-  second.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
-  second.endFrame();
-
-  const RendererBitmap snapshot = second.takeSnapshot();
-  ASSERT_FALSE(snapshot.empty());
-  EXPECT_THAT(pixelAt(snapshot, 32, 32), RgbaEq(0, 255, 0, 255));
 }
 
 TEST_F(RendererGeodeTest, EmptyFrameAfterOpaqueFrameClearsReusedTarget) {
