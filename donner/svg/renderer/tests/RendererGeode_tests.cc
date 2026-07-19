@@ -223,6 +223,16 @@ std::vector<uint8_t> CpuDiffuseLightingReferenceForFlatSource(
   return UnpremultiplyRgba(dst->data());
 }
 
+TEST(RendererGeodeDeviceSharing, DefaultRenderersReuseHeadlessDevice) {
+  const int before = geode::GeodeDevice::headlessCreationCountForTesting();
+  RendererGeode first;
+  const int afterFirst = geode::GeodeDevice::headlessCreationCountForTesting();
+  RendererGeode second;
+
+  EXPECT_LE(afterFirst, before + 1);
+  EXPECT_EQ(geode::GeodeDevice::headlessCreationCountForTesting(), afterFirst);
+}
+
 class RendererGeodeTest : public ::testing::Test {
 protected:
   /// Returns a process-wide shared GeodeDevice (created once, destroyed at exit).
