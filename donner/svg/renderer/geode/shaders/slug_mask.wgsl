@@ -110,6 +110,24 @@ fn path_from_pixel_delta(axes: mat2x2f, pixel_delta: vec2f) -> vec2f {
          determinant;
 }
 
+fn conservative_path_aabb_expansion(axes: mat2x2f) -> f32 {
+  let max_component = max(max(abs(axes[0].x), abs(axes[0].y)),
+                          max(abs(axes[1].x), abs(axes[1].y)));
+  if (!(max_component > 0.0 && max_component < 1e30)) {
+    return 0.0;
+  }
+  let scaled_axes = mat2x2f(axes[0] / max_component, axes[1] / max_component);
+  let scaled_determinant = abs(axes_determinant(scaled_axes));
+  if (!(scaled_determinant > 0.0)) {
+    return 0.0;
+  }
+  let scaled_frobenius =
+    sqrt(dot(scaled_axes[0], scaled_axes[0]) + dot(scaled_axes[1], scaled_axes[1]));
+  let expansion = 0.7071068 * scaled_frobenius /
+                  (max_component * scaled_determinant);
+  return select(0.0, expansion, expansion > 0.0 && expansion < 1e30);
+}
+
 fn needs_device_aabb_fallback(axes: mat2x2f) -> bool {
   if (!axes_are_well_conditioned(axes)) {
     return false;
@@ -162,6 +180,20 @@ fn load_device_aabb_vertex(effective_mvp: mat4x4f, axes: mat2x2f,
   return path_from_pixel_delta(axes, pixel_corner - origin_pixel);
 }
 
+fn load_path_aabb_vertex(expansion: f32, polygon_index: u32) -> vec2f {
+  var path_min = vec2f(1e30, 1e30);
+  var path_max = vec2f(-1e30, -1e30);
+  for (var i = 0u; i < uniforms.boundingVertexCount; i = i + 1u) {
+    let position = load_bounding_vertex(i);
+    path_min = min(path_min, position);
+    path_max = max(path_max, position);
+  }
+  let left = polygon_index == 0u || polygon_index == 3u;
+  let lower = polygon_index < 2u;
+  return vec2f(select(path_max.x + expansion, path_min.x - expansion, left),
+               select(path_max.y + expansion, path_min.y - expansion, lower));
+}
+
 fn dilated_bounding_vertex(axes: mat2x2f, polygon_index: u32) -> vec2f {
   let count = uniforms.boundingVertexCount;
   let previous = load_bounding_vertex((polygon_index + count - 1u) % count);
@@ -182,14 +214,20 @@ fn dilated_bounding_vertex(axes: mat2x2f, polygon_index: u32) -> vec2f {
 
 fn effective_bounding_vertex(effective_mvp: mat4x4f, vertex_index: u32) -> vec2f {
   let axes = pixel_axes(effective_mvp);
-  let use_aabb = needs_device_aabb_fallback(axes);
+  let path_aabb_expansion = conservative_path_aabb_expansion(axes);
+  let use_path_aabb = !axes_are_well_conditioned(axes) && path_aabb_expansion > 0.0;
+  let use_device_aabb = needs_device_aabb_fallback(axes);
+  let use_aabb = use_path_aabb || use_device_aabb;
   let effective_count = select(uniforms.boundingVertexCount, 4u, use_aabb);
   let triangle = vertex_index / 3u;
   var polygon_index = 0u;
   if (triangle < effective_count - 2u) {
     polygon_index = fan_polygon_index(vertex_index);
   }
-  if (use_aabb) {
+  if (use_path_aabb) {
+    return load_path_aabb_vertex(path_aabb_expansion, polygon_index);
+  }
+  if (use_device_aabb) {
     return load_device_aabb_vertex(effective_mvp, axes, polygon_index);
   }
   return dilated_bounding_vertex(axes, polygon_index);
