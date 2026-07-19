@@ -133,6 +133,7 @@ struct VertexOutput {
   @builtin(position) clip_pos: vec4f,
   // Path-space sample position. Fragment shader casts both rays from here.
   @location(0) sample_pos: vec2f,
+  @location(1) @interpolate(flat) ppem: vec2f,
 };
 
 fn load_bounding_vertex(index: u32) -> vec2f {
@@ -148,12 +149,8 @@ fn fan_polygon_index(vertex_index: u32) -> u32 {
 
 fn pixel_axes(effective_mvp: mat4x4f) -> mat2x2f {
   let pixel_scale = vec2f(uniforms.viewport.x * 0.5, -uniforms.viewport.y * 0.5);
-  let origin_pixel = (effective_mvp * vec4f(0.0, 0.0, 0.0, 1.0)).xy * pixel_scale;
-  let x_axis_pixel =
-    (effective_mvp * vec4f(1.0, 0.0, 0.0, 1.0)).xy * pixel_scale - origin_pixel;
-  let y_axis_pixel =
-    (effective_mvp * vec4f(0.0, 1.0, 0.0, 1.0)).xy * pixel_scale - origin_pixel;
-  return mat2x2f(x_axis_pixel, y_axis_pixel);
+  return mat2x2f(effective_mvp[0].xy * pixel_scale,
+                  effective_mvp[1].xy * pixel_scale);
 }
 
 fn axes_determinant(axes: mat2x2f) -> f32 {
@@ -167,6 +164,15 @@ fn axes_are_well_conditioned(axes: mat2x2f) -> bool {
          abs(determinant) > axis_scale * 1e-6;
 }
 
+fn axes_are_finitely_invertible(axes: mat2x2f) -> bool {
+  let determinant = abs(axes_determinant(axes));
+  let max_component = max(max(abs(axes[0].x), abs(axes[0].y)),
+                          max(abs(axes[1].x), abs(axes[1].y)));
+  let inverse_scale = max_component / determinant;
+  return max_component > 0.0 && max_component < 1e30 &&
+         determinant > 0.0 && determinant < 1e30 && inverse_scale < 1e30;
+}
+
 fn path_from_pixel_delta(axes: mat2x2f, pixel_delta: vec2f) -> vec2f {
   let determinant = axes_determinant(axes);
   return vec2f(axes[1].y * pixel_delta.x - axes[1].x * pixel_delta.y,
@@ -175,8 +181,11 @@ fn path_from_pixel_delta(axes: mat2x2f, pixel_delta: vec2f) -> vec2f {
 }
 
 fn needs_device_aabb_fallback(axes: mat2x2f) -> bool {
-  if (!axes_are_well_conditioned(axes)) {
+  if (!axes_are_finitely_invertible(axes)) {
     return false;
+  }
+  if (!axes_are_well_conditioned(axes)) {
+    return true;
   }
   let orientation = select(-1.0, 1.0, axes_determinant(axes) > 0.0);
   for (var i = 0u; i < uniforms.boundingVertexCount; i = i + 1u) {
@@ -283,6 +292,8 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32,
   var out: VertexOutput;
   out.clip_pos = effective_mvp * vec4f(dilated, 0.0, 1.0);
   out.sample_pos = dilated;
+  let axes = pixel_axes(effective_mvp);
+  out.ppem = vec2f(length(axes[0]), length(axes[1]));
   return out;
 }
 
@@ -510,9 +521,9 @@ struct FragOutput {
 fn fs_main(in: VertexOutput) -> FragOutput {
   let pixel_center = in.clip_pos.xy;
 
-  // Path-units per pixel, per axis. `sample_pos` is a linear function of the
-  // viewport position, so fwidth gives the constant per-pixel path delta.
-  let ppem = 1.0 / fwidth(in.sample_pos);
+  // Pixels per path unit along each path-space axis. Matrix-column lengths preserve
+  // the independent ray scales under shear instead of mixing both derivatives.
+  let ppem = in.ppem;
 
   // Look up this pixel's horizontal and vertical bands in O(1).
   var hCov: RayCoverage;

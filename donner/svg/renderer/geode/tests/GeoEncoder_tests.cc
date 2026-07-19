@@ -202,20 +202,22 @@ TEST_F(GeoEncoderTest, TinyUniformScaleStillRasterizesHalfPixelHalo) {
 }
 
 TEST_F(GeoEncoderTest, IllConditionedAffineStillRasterizesHalfPixelHalo) {
-  constexpr double kLongEdge = 8388608.0;
+  constexpr double kLargeAxis = 1048576.0;
+  constexpr double kPathWidth = 32.0 / kLargeAxis;
+  constexpr double kPathHeight = 32.0;
   const Path path = PathBuilder()
                         .moveTo({0, 0})
-                        .lineTo({32, 0})
-                        .lineTo({32 - kLongEdge, kLongEdge})
-                        .lineTo({-kLongEdge, kLongEdge})
+                        .lineTo({kPathWidth, 0})
+                        .lineTo({kPathWidth - kPathHeight, kPathHeight})
+                        .lineTo({-kPathHeight, kPathHeight})
                         .closePath()
                         .build();
 
   Transform2d transform(Transform2d::uninitialized);
-  transform.data[0] = 1.0;
+  transform.data[0] = kLargeAxis;
   transform.data[1] = 0.0;
-  transform.data[2] = 1.0;
-  transform.data[3] = 1.0 / kLongEdge;
+  transform.data[2] = kLargeAxis;
+  transform.data[3] = 1.0;
   transform.data[4] = 16.75;
   transform.data[5] = 20.75;
 
@@ -226,10 +228,11 @@ TEST_F(GeoEncoderTest, IllConditionedAffineStillRasterizesHalfPixelHalo) {
   encoder.finish();
 
   const auto pixels = readback();
-  const auto halo = pixelAt(pixels, 32, 20);
+  EXPECT_GT(pixelAt(pixels, 32, 21)[3], 0u) << "Interior pixel should remain covered";
+  const auto halo = pixelAt(pixels, 16, 32);
   EXPECT_GT(halo[0], 0u);
   EXPECT_GT(halo[3], 0u);
-  EXPECT_THAT(pixelAt(pixels, 32, 19), RgbaEq(0, 0, 0, 0));
+  EXPECT_THAT(pixelAt(pixels, 15, 32), RgbaEq(0, 0, 0, 0));
 }
 
 TEST_F(GeoEncoderTest, ArenaGrowthKeepsEarlierGridBinding) {
