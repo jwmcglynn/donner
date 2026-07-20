@@ -50,8 +50,8 @@ runs:
         poll="${TURNSTILE_POLL_SECONDS}"
         deadline=$(( $(date +%s) + TURNSTILE_TIMEOUT_MINUTES * 60 ))
 
-        # GET a paginated-safe single page (100 is plenty; the runner pool
-        # bounds how many self-hosted runs can be concurrently active).
+        # GET one Actions API page. Callers that enumerate collections own the
+        # pagination so admission does not depend on a burst fitting one page.
         gh_get() {
           curl --silent --show-error --fail-with-body \
             --max-time 30 \
@@ -94,26 +94,33 @@ runs:
         # order is a strict total order on run_number, the oldest run is never
         # ahead of anyone: no cycles, no deadlock, no starvation.
         last_ahead_desc=""
+        clear_observations=0
         while true; do
           ahead_desc=""
           list_failed=0
           # Enumerate older, still-active runs of this workflow, oldest first,
           # and break on the first one still holding the lane (that alone is
-          # enough to keep waiting). Filter status server-side (queued +
-          # in_progress) so an old active run is never missed behind >100 newer
-          # runs; active runs of one workflow never exceed a page in practice.
+          # enough to keep waiting). Filter every nonterminal status server-side
+          # so an old active run is never missed behind >100 newer runs; active
+          # runs are not hidden behind a page of newer runs.
           older_active=$(
-            for status in in_progress queued; do
-              if ! p=$(gh_get "${api}/repos/${repo}/actions/workflows/${workflow_id}/runs?status=${status}&per_page=100"); then
-                echo "LIST_FAILED"
-                continue
-              fi
-              if ! printf '%s' "${p}" | jq -e '.workflow_runs | arrays' >/dev/null 2>&1; then
-                echo "LIST_FAILED"
-                continue
-              fi
-              printf '%s' "${p}" | jq -r --argjson mine "${my_number}" \
-                '.workflow_runs[] | select(.run_number < $mine) | "\(.id)\t\(.run_number)"'
+            for status in queued in_progress requested waiting pending; do
+              page=1
+              while true; do
+                if ! p=$(gh_get "${api}/repos/${repo}/actions/workflows/${workflow_id}/runs?status=${status}&per_page=100&page=${page}"); then
+                  echo "LIST_FAILED"
+                  break
+                fi
+                if ! printf '%s' "${p}" | jq -e '.workflow_runs | arrays' >/dev/null 2>&1; then
+                  echo "LIST_FAILED"
+                  break
+                fi
+                printf '%s' "${p}" | jq -r --argjson mine "${my_number}" \
+                  '.workflow_runs[] | select(.run_number < $mine) | "\(.id)\t\(.run_number)"'
+                page_size=$(printf '%s' "${p}" | jq -r '.workflow_runs | length')
+                (( page_size < 100 )) && break
+                page=$(( page + 1 ))
+              done
             done
           )
           if printf '%s\n' "${older_active}" | grep -q '^LIST_FAILED$'; then
@@ -133,9 +140,10 @@ runs:
                   'first(.jobs[]? | select(.name == $lane) | .status) // "absent"' \
                   2>/dev/null) || lane_state="unavailable"
             case "${lane_state}" in
-              queued|in_progress|absent)
-                # queued/in_progress: lane job active. absent: older run still
-                # initializing and has not yet created (or skipped) its lane job.
+              queued|in_progress|requested|waiting|pending|absent)
+                # Any nonterminal state holds the lane. Absent means the older
+                # run is still initializing and has not yet created (or skipped)
+                # its lane job.
                 ahead_desc="#${other_number} (lane ${lane_state})"
                 break
                 ;;
@@ -150,12 +158,23 @@ runs:
           done < <(printf '%s\n' "${older_active}" | grep -v '^LIST_FAILED$' | sort -t$'\t' -k2 -n)
 
           if [[ -n "${ahead_desc}" ]]; then
+            clear_observations=0
             last_ahead_desc="${ahead_desc}"
           elif [[ "${list_failed}" -eq 1 ]]; then
+            clear_observations=0
             ahead_desc="${last_ahead_desc:-Actions API unavailable}"
           else
-            echo "turnstile: clear, proceeding"
-            exit 0
+            # Status-filtered run lists converge asynchronously after dispatch.
+            # Confirm a clear lane across a poll interval before releasing it.
+            clear_observations=$(( clear_observations + 1 ))
+            if (( clear_observations >= 2 )); then
+              echo "turnstile: clear, proceeding"
+              exit 0
+            fi
+            jitter=$(( RANDOM % 5 ))
+            echo "turnstile: candidate clear; confirming in $(( poll + jitter ))s"
+            sleep $(( poll + jitter ))
+            continue
           fi
 
           now=$(date +%s)
