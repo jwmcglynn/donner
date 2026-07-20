@@ -21,7 +21,8 @@ inputs:
     description: >-
       Safety cap. If the wait exceeds this, the turnstile proceeds anyway
       (fail-open) rather than blocking. Keep below the hosted prerequisite
-      job's timeout.
+      job's timeout. Transient Actions API failures keep waiting within this
+      same cap rather than releasing every gated job at once.
     required: false
     default: "150"
   poll-seconds:
@@ -61,25 +62,29 @@ runs:
         }
 
         # Identify this run: its ordering key (run_number) and workflow id.
+        # API availability is part of admission correctness. Retry off-pool
+        # until the common safety deadline instead of releasing all waiters on
+        # one transient 5xx response.
         me_json=""
-        for attempt in 1 2 3; do
+        my_number=""
+        workflow_id=""
+        while true; do
           if me_json=$(gh_get "${api}/repos/${repo}/actions/runs/${run_id}"); then
-            break
+            my_number=$(printf '%s' "${me_json}" | jq -er '.run_number | numbers' 2>/dev/null) || my_number=""
+            workflow_id=$(printf '%s' "${me_json}" | jq -er '.workflow_id | numbers' 2>/dev/null) || workflow_id=""
+            if [[ "${my_number}" =~ ^[0-9]+$ && "${workflow_id}" =~ ^[0-9]+$ ]]; then
+              break
+            fi
           fi
-          me_json=""
-          echo "turnstile: could not read own run (attempt ${attempt}); retrying"
-          sleep 5
+          now=$(date +%s)
+          if (( now >= deadline )); then
+            echo "turnstile: safety timeout reached while Actions API metadata is unavailable; proceeding (fail-open)"
+            exit 0
+          fi
+          jitter=$(( RANDOM % 5 ))
+          echo "turnstile: Actions API metadata unavailable; re-checking in $(( poll + jitter ))s"
+          sleep $(( poll + jitter ))
         done
-        if [[ -z "${me_json}" ]]; then
-          echo "turnstile: Actions API unavailable; proceeding without serialization (fail-open)"
-          exit 0
-        fi
-        my_number=$(printf '%s' "${me_json}" | jq -er '.run_number | numbers' 2>/dev/null) || my_number=""
-        workflow_id=$(printf '%s' "${me_json}" | jq -er '.workflow_id | numbers' 2>/dev/null) || workflow_id=""
-        if [[ ! "${my_number}" =~ ^[0-9]+$ || ! "${workflow_id}" =~ ^[0-9]+$ ]]; then
-          echo "turnstile: could not determine run ordering; proceeding (fail-open)"
-          exit 0
-        fi
         echo "turnstile: lane='${lane}' this run #${my_number} (workflow ${workflow_id})"
 
         # A run is "ahead" of us if it is older (smaller run_number) and its
@@ -88,6 +93,7 @@ runs:
         # never jump its place (strict FIFO, no two-at-once race). Because the
         # order is a strict total order on run_number, the oldest run is never
         # ahead of anyone: no cycles, no deadlock, no starvation.
+        last_ahead_desc=""
         while true; do
           ahead_desc=""
           list_failed=0
@@ -144,10 +150,9 @@ runs:
           done < <(printf '%s\n' "${older_active}" | grep -v '^LIST_FAILED$' | sort -t$'\t' -k2 -n)
 
           if [[ -n "${ahead_desc}" ]]; then
-            :
+            last_ahead_desc="${ahead_desc}"
           elif [[ "${list_failed}" -eq 1 ]]; then
-            echo "turnstile: Actions API list failed; proceeding (fail-open)"
-            exit 0
+            ahead_desc="${last_ahead_desc:-Actions API unavailable}"
           else
             echo "turnstile: clear, proceeding"
             exit 0
@@ -159,6 +164,10 @@ runs:
             exit 0
           fi
           jitter=$(( RANDOM % 5 ))
-          echo "turnstile: waiting behind run ${ahead_desc}; re-checking in $(( poll + jitter ))s"
+          if [[ "${list_failed}" -eq 1 ]]; then
+            echo "turnstile: Actions API list unavailable; retaining gate behind ${ahead_desc}; re-checking in $(( poll + jitter ))s"
+          else
+            echo "turnstile: waiting behind run ${ahead_desc}; re-checking in $(( poll + jitter ))s"
+          fi
           sleep $(( poll + jitter ))
         done
