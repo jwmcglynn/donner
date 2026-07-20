@@ -1,13 +1,12 @@
 name: Remote-execution turnstile
 description: >-
-  Serialize a self-hosted job on the shared remote-execution backend without
-  losing runs. Waits (FIFO, oldest run first) until this job's lane is free,
-  then returns so the build can proceed. Replaces a GitHub concurrency group,
-  which caps the queue at one pending run and cancels any older pending run
-  when a third concurrent run arrives. This turnstile instead holds each run
-  until its turn, so N concurrent runs all execute in submission order and
-  none are cancelled. Read-only: it lists this repository's own workflow runs
-  via the Actions API and mutates nothing.
+  Admit a self-hosted job to the shared remote-execution backend without losing
+  runs. This action must run in a separate hosted prerequisite job: running the
+  wait on the constrained self-hosted pool can let newer runs occupy every
+  runner while the oldest lane job remains queued, deadlocking the FIFO. Waits
+  (oldest run first) until the requested lane is free, then returns so the
+  dependent self-hosted job can be scheduled. Read-only: it lists this
+  repository's own workflow runs via the Actions API and mutates nothing.
 
 inputs:
   lane:
@@ -21,8 +20,8 @@ inputs:
   timeout-minutes:
     description: >-
       Safety cap. If the wait exceeds this, the turnstile proceeds anyway
-      (fail-open) rather than blocking. Keep below the job timeout, with room
-      left for a full build after the wait.
+      (fail-open) rather than blocking. Keep below the hosted prerequisite
+      job's timeout.
     required: false
     default: "150"
   poll-seconds:
@@ -64,7 +63,10 @@ runs:
         # Identify this run: its ordering key (run_number) and workflow id.
         me_json=""
         for attempt in 1 2 3; do
-          me_json=$(gh_get "${api}/repos/${repo}/actions/runs/${run_id}") && break
+          if me_json=$(gh_get "${api}/repos/${repo}/actions/runs/${run_id}"); then
+            break
+          fi
+          me_json=""
           echo "turnstile: could not read own run (attempt ${attempt}); retrying"
           sleep 5
         done
@@ -72,9 +74,9 @@ runs:
           echo "turnstile: Actions API unavailable; proceeding without serialization (fail-open)"
           exit 0
         fi
-        my_number=$(printf '%s' "${me_json}" | jq -r '.run_number')
-        workflow_id=$(printf '%s' "${me_json}" | jq -r '.workflow_id')
-        if [[ -z "${my_number}" || "${my_number}" == "null" || -z "${workflow_id}" || "${workflow_id}" == "null" ]]; then
+        my_number=$(printf '%s' "${me_json}" | jq -er '.run_number | numbers' 2>/dev/null) || my_number=""
+        workflow_id=$(printf '%s' "${me_json}" | jq -er '.workflow_id | numbers' 2>/dev/null) || workflow_id=""
+        if [[ ! "${my_number}" =~ ^[0-9]+$ || ! "${workflow_id}" =~ ^[0-9]+$ ]]; then
           echo "turnstile: could not determine run ordering; proceeding (fail-open)"
           exit 0
         fi
@@ -96,8 +98,11 @@ runs:
           # runs; active runs of one workflow never exceed a page in practice.
           older_active=$(
             for status in in_progress queued; do
-              p=$(gh_get "${api}/repos/${repo}/actions/workflows/${workflow_id}/runs?status=${status}&per_page=100") || true
-              if [[ -z "${p}" ]]; then
+              if ! p=$(gh_get "${api}/repos/${repo}/actions/workflows/${workflow_id}/runs?status=${status}&per_page=100"); then
+                echo "LIST_FAILED"
+                continue
+              fi
+              if ! printf '%s' "${p}" | jq -e '.workflow_runs | arrays' >/dev/null 2>&1; then
                 echo "LIST_FAILED"
                 continue
               fi
@@ -111,8 +116,7 @@ runs:
           while IFS=$'\t' read -r other_id other_number; do
             [[ -z "${other_id}" || "${other_id}" == "LIST_FAILED" ]] && continue
             [[ "${other_id}" == "${run_id}" ]] && continue
-            jobs=$(gh_get "${api}/repos/${repo}/actions/runs/${other_id}/jobs?per_page=100") || true
-            if [[ -z "${jobs}" ]]; then
+            if ! jobs=$(gh_get "${api}/repos/${repo}/actions/runs/${other_id}/jobs?per_page=100"); then
               # Cannot inspect this older active run; be conservative and treat
               # it as ahead so we do not race past it.
               ahead_desc="#${other_number} (jobs unavailable)"
@@ -120,12 +124,17 @@ runs:
             fi
             lane_state=$(printf '%s' "${jobs}" \
               | jq -r --arg lane "${lane}" \
-                  'first(.jobs[] | select(.name == $lane) | .status) // "absent"')
+                  'first(.jobs[]? | select(.name == $lane) | .status) // "absent"' \
+                  2>/dev/null) || lane_state="unavailable"
             case "${lane_state}" in
               queued|in_progress|absent)
                 # queued/in_progress: lane job active. absent: older run still
                 # initializing and has not yet created (or skipped) its lane job.
                 ahead_desc="#${other_number} (lane ${lane_state})"
+                break
+                ;;
+              unavailable)
+                ahead_desc="#${other_number} (jobs unavailable)"
                 break
                 ;;
               *)

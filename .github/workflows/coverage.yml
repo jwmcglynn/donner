@@ -641,18 +641,39 @@ jobs:
           fail_ci_if_error: true
           verbose: false
 
+  # Wait for the coverage lane on a hosted runner so queued older work can
+  # still acquire the constrained self-hosted runner pool. Waiting inside the
+  # heavy job can deadlock when newer runs occupy every runner while the oldest
+  # lane remains queued.
+  coverage-self-hosted-turnstile:
+    runs-on: ubuntu-24.04
+    needs: determine-targets
+    if: ${{ needs.determine-targets.outputs.use_self_hosted_linux == 'true' && needs.determine-targets.outputs.large_change != 'true' && (github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && (needs.determine-targets.outputs.fallback == 'false' || needs.determine-targets.outputs.fallback_reason == 'coverage_smoke' || needs.determine-targets.outputs.fallback_reason == 'full_test_label'))) }}
+    timeout-minutes: 165
+    steps:
+      - name: Checkout turnstile action
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Wait for coverage self-hosted lane
+        uses: ./.github/actions/re-turnstile
+        with:
+          lane: coverage-self-hosted
+          token: ${{ github.token }}
+          timeout-minutes: "150"
+
   coverage-self-hosted:
     runs-on: [self-hosted, linux, arm64]
-    needs: determine-targets
+    needs: [determine-targets, coverage-self-hosted-turnstile]
     # here on PRs, plus explicit ci:full-test opt-ins. A full //... fallback is
     # skipped on PRs (main-push baseline covers it). Trusted main pushes run
     # here instead of hosted Ubuntu. Large-change PRs (over the changed-file
     # cap) stay on the hosted coverage lane.
     if: ${{ needs.determine-targets.outputs.use_self_hosted_linux == 'true' && needs.determine-targets.outputs.large_change != 'true' && (github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && (needs.determine-targets.outputs.fallback == 'false' || needs.determine-targets.outputs.fallback_reason == 'coverage_smoke' || needs.determine-targets.outputs.fallback_reason == 'full_test_label'))) }}
-    # Coverage healthy median is ~21 min. This budget now also covers the
-    # re-turnstile queue wait (the job clock runs while the turnstile step
-    # waits its FIFO turn), so it is sized to hold a realistic multi-PR burst
-    # (turnstile cap 150 min below, plus a full build) rather than fail open.
+    # Coverage healthy median is ~21 min. This budget starts only after the
+    # hosted turnstile admits this job, so queued work does not consume it or
+    # occupy the constrained self-hosted runner pool.
     # RE-degradation fast-fail is unchanged and lives at the Bazel layer (no
     # local fallback + --remote_timeout=60s below), so a dead/degraded backend
     # still fails in about a minute regardless of this backstop; the CPU-capped
@@ -663,8 +684,8 @@ jobs:
     # timeout: both self-hosted lanes execute on a shared remote-execution
     # backend that an interactive development host also uses with priority, so
     # two-plus concurrent instrumented builds oversubscribe it and crawl into
-    # the timeout (measured). Serialization is enforced by the re-turnstile
-    # step below (first step of this job), NOT by a GitHub concurrency group.
+    # the timeout (measured). Serialization is enforced by the hosted
+    # re-turnstile prerequisite above, NOT by a GitHub concurrency group.
     # A concurrency group caps the queue at one pending run and cancels any
     # older pending run when a third concurrent run arrives, so a parallel-PR
     # burst (and every post-merge main coverage run competing for the same
@@ -688,25 +709,9 @@ jobs:
       DONNER_COVERAGE_BAZEL_FLAGS: "--remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s"
 
     steps:
-      # Checkout first so the local ./.github/actions/re-turnstile action is
-      # present. Checkout does no remote-execution work, so gating the
-      # RE-heavy Bazel steps (below) on the turnstile is what matters.
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-
-      # Serialize instrumented coverage builds on the shared remote-execution
-      # backend without dropping runs. Holds this run (FIFO) until its lane is
-      # free, replacing the old evicting concurrency group. Read-only.
-      - name: Remote-execution turnstile
-        uses: ./.github/actions/re-turnstile
-        with:
-          lane: coverage-self-hosted
-          token: ${{ github.token }}
-          # Below the job's 210 min timeout with room for a full build after
-          # the wait. Beyond this depth the turnstile fails open (bounded
-          # oversubscription, never an evicted/lost run).
-          timeout-minutes: "150"
 
       - name: Sync Bazel toolchain
         # Keep this in sync with CI's self-hosted Linux cleanup (main.yml).
