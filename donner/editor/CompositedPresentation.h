@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <limits>
 #include <optional>
 #include <ostream>
 #include <variant>
@@ -145,7 +146,8 @@ public:
   /// Returns true when an active drag needs a fresh composited capture.
   [[nodiscard]] bool needsCompositedLayerCapture(
       const std::optional<SelectTool::ActiveDragPreview>& activePreview,
-      std::uint64_t /*currentVersion*/, const Vector2i& /*currentCanvasSize*/) const {
+      std::uint64_t /*currentVersion*/, const Vector2i& /*currentCanvasSize*/,
+      double translationRecaptureDistanceDoc = std::numeric_limits<double>::infinity()) const {
     if (!activePreview.has_value()) {
       return false;
     }
@@ -164,11 +166,20 @@ public:
     const SelectTool::ActiveDragPreview representedPreview =
         representedPreviewForActiveCache(*cache, *activePreview);
     if (activePreview->documentFromCachedDocument.isTranslation()) {
-      // A pure translation tracks via the cached bitmap's translation offset with
-      // no re-capture - UNLESS the cached bitmap is still an affine (we just
-      // returned from a resize/rotate to a translation), in which case re-capture
-      // a clean, crisply-translated layer instead of carrying the stale affine.
-      return !representedPreview.documentFromCachedDocument.isTranslation();
+      // A pure translation tracks via the cached bitmap's translation offset.
+      // Re-capture when the cached bitmap is still affine (we just returned
+      // from resize/rotate to translation), or after a bounded translation
+      // distance so the tile's offscreen overdraw is replenished.
+      if (!representedPreview.documentFromCachedDocument.isTranslation()) {
+        return true;
+      }
+      if (std::isfinite(translationRecaptureDistanceDoc) && translationRecaptureDistanceDoc > 0.0) {
+        const Vector2d drift = activePreview->translation - representedPreview.translation;
+        if (std::max(std::abs(drift.x), std::abs(drift.y)) > translationRecaptureDistanceDoc) {
+          return true;
+        }
+      }
+      return false;
     }
 
     // Affine (rotate/scale) drag: re-capture a crisp bitmap when the cached

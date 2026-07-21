@@ -51,9 +51,13 @@ public:
                const TextParams& params),
               (override));
   MOCK_METHOD(RendererBitmap, takeSnapshot, (), (const, override));
+  MOCK_METHOD(RendererBitmap, takeSnapshotInterruptibly,
+              (const std::function<bool()>& shouldCancel), (const, override));
   MOCK_METHOD(std::shared_ptr<const RendererTextureSnapshot>, takeTextureSnapshot, (), (override));
   MOCK_METHOD(bool, requiresTextureSnapshotPresentation, (), (const, override));
   MOCK_METHOD(std::unique_ptr<RendererInterface>, createOffscreenInstance, (), (const, override));
+  MOCK_METHOD(void, setDebugGeometryOverlay, (bool enabled), (override));
+  MOCK_METHOD(bool, debugGeometryOverlay, (), (const, override));
 
   /// 1×1 opaque-black RGBA bitmap. Cheap way to satisfy cache-warming code
   /// paths that read `takeSnapshot()` and expect a non-empty bitmap.

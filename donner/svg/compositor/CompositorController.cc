@@ -542,6 +542,7 @@ CompositorController::StateSnapshot CompositorController::snapshotState() const 
   out.activeHintsCount = static_cast<uint32_t>(activeHints_.size());
   out.layerCount = static_cast<uint32_t>(layers_.size());
   out.splitPathActive = hasSplitStaticLayers();
+  out.firstFrameWarmupPending = firstFrameWarmupPending_;
   out.splitStaticLayersEntity = splitStaticLayersEntity_;
   out.canvasSize = staticSegmentsCanvas_;
   out.lastPromoteRefusalReason = lastPromoteRefusalReason_;
@@ -930,6 +931,7 @@ void CompositorController::resetAllLayers(bool documentReplaced) {
   rootDirty_ = true;
   documentPrepared_ = false;
   hintsScanned_ = false;
+  firstFrameWarmupPending_ = false;
   // Main renderer's cached frame is for the old document - invalidate
   // so the next `composeLayers` does a full first-frame compose.
   mainRendererHasCachedFrame_ = false;
@@ -946,6 +948,96 @@ void CompositorController::setTightBoundedSegmentsEnabled(bool enabled) {
   // full-canvas path would mis-apply on compose, and vice versa. Mark
   // every slot dirty so the next frame rebuilds under the new policy.
   markAllSegmentsDirty();
+}
+
+void CompositorController::warmFirstFrameCaches(const RenderViewport& viewport,
+                                                const Transform2d& surfaceFromCanvas) {
+  if (offscreenSupported_ ||
+      (!offscreenSupportKnown_ && renderer().createOffscreenInstance() != nullptr)) {
+    offscreenSupported_ = true;
+    offscreenSupportKnown_ = true;
+    const Vector2i currentCanvasSize = BitmapDimensionsForViewport(viewport);
+    {
+      uint32_t liveHints = 0;
+      Entity liveDragCandidate = entt::null;
+      for (const auto& [hintEntity, hint] : activeHints_) {
+        if (pendingDemotions_.contains(hintEntity)) {
+          continue;
+        }
+        ++liveHints;
+        liveDragCandidate = hintEntity;
+      }
+      if (liveHints == 1 && findLayer(liveDragCandidate) != nullptr) {
+        splitStaticLayersEntity_ = liveDragCandidate;
+        splitStaticLayersViewport_ = currentCanvasSize;
+      }
+    }
+    {
+      ZoneScopedN("Compositor::eagerWarmupRasterizeLayers");
+      for (auto& layer : layers_) {
+        if (isCancelled()) {
+          return;
+        }
+        if (!layer.hasRenderablePayload()) {
+          rasterizeLayer(layer, viewport, surfaceFromCanvas);
+          if (layer.isImmediate()) {
+            lastRenderFrameStats_.immediateRasterizeMs += layer.lastRasterizeMs();
+            ++lastRenderFrameStats_.immediateTileCount;
+          } else {
+            lastRenderFrameStats_.cachedRasterizeMs += layer.lastRasterizeMs();
+            ++lastRenderFrameStats_.cachedTileCount;
+          }
+        }
+      }
+    }
+    if (isCancelled()) {
+      return;
+    }
+    // Seed segment state via the preserving resync path so
+    // `staticSegmentBoundaries_` is consistent with the new layer
+    // set. Nothing to preserve yet (segments are empty), so every
+    // slot is marked dirty and rasterized.
+    {
+      ZoneScopedN("Compositor::resyncSegmentsToLayerSet (first)");
+      resyncSegmentsToLayerSet(currentCanvasSize, surfaceFromCanvas);
+    }
+    if (isCancelled()) {
+      return;
+    }
+    {
+      ZoneScopedN("Compositor::rasterizeDirtyStaticSegments (first)");
+      rasterizeDirtyStaticSegments(viewport, surfaceFromCanvas);
+    }
+  } else {
+    offscreenSupportKnown_ = true;
+  }
+}
+
+bool CompositorController::warmPendingFirstFrameCaches(CancellationToken& token) {
+  if (!firstFrameWarmupPending_) {
+    return true;
+  }
+  if (!hasLastViewport_ || !hasLastSurfaceFromCanvas_) {
+    return false;
+  }
+
+  lastRenderFrameStats_.firstFrameWarmupMs = 0.0;
+  lastRenderFrameStats_.immediateRasterizeMs = 0.0;
+  lastRenderFrameStats_.cachedRasterizeMs = 0.0;
+  lastRenderFrameStats_.immediateTileCount = 0;
+  lastRenderFrameStats_.cachedTileCount = 0;
+  const auto warmupStart = std::chrono::steady_clock::now();
+  cancelToken_.emplace(token);
+  warmFirstFrameCaches(lastViewport_, lastSurfaceFromCanvas_);
+  const bool completed = !token.isCancelled();
+  cancelToken_.reset();
+  lastRenderFrameStats_.firstFrameWarmupMs =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - warmupStart)
+          .count();
+  if (completed) {
+    firstFrameWarmupPending_ = false;
+  }
+  return completed;
 }
 
 bool CompositorController::renderFrame(const RenderViewport& viewport, CancellationToken& token) {
@@ -975,7 +1067,44 @@ void CompositorController::renderFrame(const RenderViewport& viewport,
 void CompositorController::renderFrameImpl(const RenderViewport& viewport,
                                            const Transform2d& surfaceFromCanvas) {
   ZoneScopedN("Compositor::renderFrame");
+  // Any foreground render supersedes the deferred cold-frame warmup. The normal frame path below
+  // will populate whatever retained payloads are still missing, with the current viewport and DOM.
+  firstFrameWarmupPending_ = false;
   lastRenderFrameStats_ = RenderFrameStats{};
+  const auto elapsedMsSince = [](std::chrono::steady_clock::time_point start) {
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+        .count();
+  };
+
+  // Geometry debug output is a frame-global visualization of the actual
+  // post-vertex Slug triangles. Retained/tight-bounded tiles cannot preserve
+  // that contract: tile edges can crop the dilation and later tile composition
+  // can cover an earlier tile's wireframe. While the mode is active, discard
+  // retained state and render one flat full-document frame into the root
+  // target. No warmup or promotion is allowed to repopulate segmented output.
+  if (renderer().debugGeometryOverlay()) {
+    if (!activeHints_.empty() || !layers_.empty() || !staticSegments_.empty() ||
+        firstFrameWarmupPending_) {
+      resetAllLayers();
+    }
+    firstFrameWarmupPending_ = false;
+    lastViewport_ = viewport;
+    hasLastViewport_ = true;
+    lastSurfaceFromCanvas_ = surfaceFromCanvas;
+    hasLastSurfaceFromCanvas_ = true;
+
+    RendererDriver driver(renderer());
+    const auto drawStart = std::chrono::steady_clock::now();
+    const bool drawCompleted = driver.drawInterruptibly(document(), viewport, surfaceFromCanvas,
+                                                        [this]() { return isCancelled(); });
+    lastRenderFrameStats_.firstFrameDrawMs = elapsedMsSince(drawStart);
+    if (!drawCompleted) {
+      mainRendererHasCachedFrame_ = false;
+      return;
+    }
+    mainRendererHasCachedFrame_ = true;
+    return;
+  }
 
   const bool surfaceChanged =
       hasLastSurfaceFromCanvas_ && !SameTransformNear(lastSurfaceFromCanvas_, surfaceFromCanvas);
@@ -1354,21 +1483,18 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   // runs `prepareDocumentForRendering` implicitly via `driver.draw()`,
   // so by the time the detectors run afterwards they can observe RICs.
   //
-  // Eager-warmup optimization: after the detectors pick up mandatory /
-  // bucket layers, we rasterize them into their bitmap caches IN THE
-  // SAME FRAME - so the user's first click-and-drag after load lands
-  // on a warm compositor and doesn't freeze for several seconds while
-  // every filter-group bitmap, every segment, and every bg/fg composite
-  // rasterizes for the first time. The flat output the main renderer
-  // just produced is the correct frame to show the user; the layer /
-  // segment rasterization happens to offscreen targets and doesn't
-  // affect this frame's pixels.
+  // Retained-cache warmup: after the detectors pick up mandatory / bucket layers, rasterize them
+  // before the first interaction has to. Standalone callers keep the original same-call behavior;
+  // interactive owners may publish the already-correct flat draw and run the offscreen-only work
+  // from a later cancellable worker turn.
   if (layers_.empty()) {
     ZoneScopedN("Compositor::firstFrameEmptyLayersPath");
     RendererDriver driver(renderer());
     {
       ZoneScopedN("Compositor::driver.draw (first-frame)");
+      const auto firstFrameDrawStart = std::chrono::steady_clock::now();
       driver.draw(document(), viewport, surfaceFromCanvas);
+      lastRenderFrameStats_.firstFrameDrawMs = elapsedMsSince(firstFrameDrawStart);
     }
     mainRendererHasCachedFrame_ = true;
     // `driver.draw` runs preparation for the first frame. Defensively clear
@@ -1394,6 +1520,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
     // them once against the populated view and rebuild `layers_`. A newly
     // discovered mandatory filter/mask/isolated-layer promotes the affected
     // subtree immediately.
+    const auto firstFramePlanningStart = std::chrono::steady_clock::now();
     if (!hintsScanned_) {
       ZoneScopedN("Compositor::firstFrameDetectorsAndWarmup");
       {
@@ -1414,62 +1541,16 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
         reconcileLayers(registry);
       }
       refreshLayerMetadata();
+      lastRenderFrameStats_.firstFramePlanningMs = elapsedMsSince(firstFramePlanningStart);
 
-      // Eager-warmup: for every layer the detectors just produced,
-      // rasterize its bitmap immediately so the next render (likely the
-      // user's first drag frame) doesn't have to pay the first-time
-      // rasterize cost on the critical path. Also pre-rasterize static
-      // segments against the new layer set. None of this writes to the
-      // main renderer - all offscreen work.
-      if (offscreenSupported_ ||
-          (!offscreenSupportKnown_ && renderer().createOffscreenInstance() != nullptr)) {
-        offscreenSupported_ = true;
-        offscreenSupportKnown_ = true;
-        const Vector2i currentCanvasSize = BitmapDimensionsForViewport(viewport);
-        {
-          uint32_t liveHints = 0;
-          Entity liveDragCandidate = entt::null;
-          for (const auto& [hintEntity, hint] : activeHints_) {
-            if (pendingDemotions_.contains(hintEntity)) {
-              continue;
-            }
-            ++liveHints;
-            liveDragCandidate = hintEntity;
-          }
-          if (liveHints == 1 && findLayer(liveDragCandidate) != nullptr) {
-            splitStaticLayersEntity_ = liveDragCandidate;
-            splitStaticLayersViewport_ = currentCanvasSize;
-          }
-        }
-        {
-          ZoneScopedN("Compositor::eagerWarmupRasterizeLayers");
-          for (auto& layer : layers_) {
-            if (!layer.hasRenderablePayload()) {
-              rasterizeLayer(layer, viewport, surfaceFromCanvas);
-              if (layer.isImmediate()) {
-                lastRenderFrameStats_.immediateRasterizeMs += layer.lastRasterizeMs();
-                ++lastRenderFrameStats_.immediateTileCount;
-              } else {
-                lastRenderFrameStats_.cachedRasterizeMs += layer.lastRasterizeMs();
-                ++lastRenderFrameStats_.cachedTileCount;
-              }
-            }
-          }
-        }
-        // Seed segment state via the preserving resync path so
-        // `staticSegmentBoundaries_` is consistent with the new layer
-        // set. Nothing to preserve yet (segments are empty), so every
-        // slot is marked dirty and rasterized.
-        {
-          ZoneScopedN("Compositor::resyncSegmentsToLayerSet (first)");
-          resyncSegmentsToLayerSet(currentCanvasSize, surfaceFromCanvas);
-        }
-        {
-          ZoneScopedN("Compositor::rasterizeDirtyStaticSegments (first)");
-          rasterizeDirtyStaticSegments(viewport, surfaceFromCanvas);
-        }
+      // The flat output above is already the correct frame. Interactive owners may publish it now
+      // and perform this offscreen-only cache preparation in a later cancellable worker turn.
+      if (config_.deferFirstFrameWarmup) {
+        firstFrameWarmupPending_ = true;
       } else {
-        offscreenSupportKnown_ = true;
+        const auto firstFrameWarmupStart = std::chrono::steady_clock::now();
+        warmFirstFrameCaches(viewport, surfaceFromCanvas);
+        lastRenderFrameStats_.firstFrameWarmupMs = elapsedMsSince(firstFrameWarmupStart);
       }
     }
     return;

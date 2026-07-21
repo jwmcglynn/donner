@@ -14,9 +14,10 @@ def _editor_wasm_geode_transition_impl(settings, _attr):
         "//donner/editor/wasm:enable_wasm": True,
         "//donner/svg/renderer/wasm:enable_wasm": True,
         "//donner/svg/renderer:renderer_backend": "geode",
-        "//donner/svg/renderer:text": False,
+        "//donner/svg/renderer:text": True,
         "//donner/svg/renderer:text_full": False,
         "//donner/svg/renderer/geode:enable_geode": True,
+        "//command_line_option:compilation_mode": "opt",
         "//command_line_option:copt": _append_once(
             settings["//command_line_option:copt"],
             "-pthread",
@@ -46,6 +47,7 @@ _editor_wasm_geode_transition = transition(
         "//donner/svg/renderer:text",
         "//donner/svg/renderer:text_full",
         "//donner/svg/renderer/geode:enable_geode",
+        "//command_line_option:compilation_mode",
         "//command_line_option:copt",
         "//command_line_option:cxxopt",
         "//command_line_option:linkopt",
@@ -114,4 +116,31 @@ editor_wasm_config_probe = rule(
         "_text_full": attr.label(default = "//donner/svg/renderer:text_full"),
     },
     fragments = ["cpp"],
+)
+
+def _editor_wasm_runtime_options_probe_impl(ctx):
+    output = ctx.actions.declare_file(ctx.label.name + ".txt")
+    values = ctx.attr.linkopts
+    lines = [
+        "asyncify_common={}".format("-sASYNCIFY" in values),
+        "asyncify_geode={}".format("-sASYNCIFY" in ctx.attr.geode_linkopts),
+        "closure={}".format("--closure=1" in values),
+        "closure_simple={}".format(
+            "--closure-args=--compilation_level=SIMPLE_OPTIMIZATIONS" in values,
+        ),
+        "exports_ccall={}".format("-sEXPORTED_RUNTIME_METHODS=ccall" in values),
+        "initial_memory_64_common={}".format("-sINITIAL_MEMORY=64MB" in values),
+        "initial_memory_64_geode={}".format("-sINITIAL_MEMORY=64MB" in ctx.attr.geode_linkopts),
+        "pthread_pool_size_one={}".format("-sPTHREAD_POOL_SIZE=1" in values),
+        "pthread_pool_size_two={}".format("-sPTHREAD_POOL_SIZE=2" in values),
+    ]
+    ctx.actions.write(output, "\n".join(lines) + "\n")
+    return [DefaultInfo(files = depset([output]))]
+
+editor_wasm_runtime_options_probe = rule(
+    implementation = _editor_wasm_runtime_options_probe_impl,
+    attrs = {
+        "geode_linkopts": attr.string_list(mandatory = True),
+        "linkopts": attr.string_list(mandatory = True),
+    },
 )

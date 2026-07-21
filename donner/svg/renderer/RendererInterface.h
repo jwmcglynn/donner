@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -16,6 +17,7 @@
 #include "donner/base/RelativeLengthMetrics.h"
 #include "donner/base/SmallVector.h"
 #include "donner/base/Transform.h"
+#include "donner/base/Utils.h"
 #include "donner/css/Color.h"
 #include "donner/css/FontFace.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
@@ -70,6 +72,16 @@ struct RendererBitmap {
   [[nodiscard]] bool empty() const {
     return dimensions.x <= 0 || dimensions.y <= 0 || pixels.empty();
   }
+};
+
+/**
+ * Aggregate diagnostics for CPU readbacks completed by a renderer and any
+ * offscreen instances that share its backend device.
+ */
+struct RendererReadbackStats {
+  int count = 0;
+  int pollIterations = 0;
+  bool usedTimedWaitAny = false;
 };
 
 /// Backend type for \ref RendererTextureSnapshot payloads.
@@ -273,6 +285,14 @@ public:
   virtual void endFrame() = 0;
 
   /**
+   * Preserve the current render target when the next frame begins.
+   *
+   * Backends that support append passes override this to use a load operation
+   * instead of clearing. Other backends may ignore the request.
+   */
+  virtual void setPreserveTargetOnBeginFrame(bool preserve) { (void)preserve; }
+
+  /**
    * Sets the absolute transform on the renderer, replacing the current matrix.
    * Unlike pushTransform, this does not interact with the save/restore stack.
    */
@@ -451,6 +471,27 @@ public:
   [[nodiscard]] virtual RendererBitmap takeSnapshot() const = 0;
 
   /**
+   * Captures a CPU-readable snapshot while allowing a low-priority caller to abort the readback.
+   *
+   * Backends whose snapshots are already bounded may inherit this default. GPU backends should
+   * override it and poll \p shouldCancel while waiting for mapped readback data.
+   */
+  [[nodiscard]] virtual RendererBitmap takeSnapshotInterruptibly(
+      const std::function<bool()>& shouldCancel) const {
+    if (shouldCancel && shouldCancel()) {
+      return {};
+    }
+    RendererBitmap result = takeSnapshot();
+    return shouldCancel && shouldCancel() ? RendererBitmap{} : std::move(result);
+  }
+
+  /**
+   * Consume readback diagnostics accumulated by this renderer backend.
+   * Backends without asynchronous GPU readback return zeroed stats.
+   */
+  [[nodiscard]] virtual RendererReadbackStats consumeReadbackStats() { return {}; }
+
+  /**
    * Captures the current frame buffer as a backend-owned GPU texture.
    *
    * Returns nullptr for backends that cannot expose a directly-sampleable
@@ -458,6 +499,18 @@ public:
    * needed by downstream presentation code.
    */
   [[nodiscard]] virtual std::shared_ptr<const RendererTextureSnapshot> takeTextureSnapshot() {
+    return nullptr;
+  }
+
+  /**
+   * Borrows the current backend-owned GPU texture for a synchronous presentation operation.
+   *
+   * The returned view is invalidated by the next frame, by \ref takeTextureSnapshot, or by
+   * renderer destruction. Callers that retain the texture after returning must use
+   * \ref takeTextureSnapshot instead.
+   */
+  [[nodiscard]] virtual const RendererTextureSnapshot* borrowTextureSnapshot()
+      UTILS_LIFETIME_BOUND {
     return nullptr;
   }
 
@@ -476,10 +529,13 @@ public:
   }
 
   /**
-   * Enable or disable the backend's geometry debug overlay, which
-   * visualizes the internal geometry the backend emits per draw (for
-   * Geode: Slug band strips and the per-path bounding-quad triangles).
-   * Default off. Backends without a debug overlay ignore the call.
+   * Enable or disable the backend's geometry debug overlay.
+   *
+   * Geode observes geometry at the actual Slug GPU submission boundary and
+   * renders the two dynamically-dilated post-vertex triangles represented by
+   * each six-entry `EncodedPath::quadVertices` as one frame-final root-target
+   * wireframe pass. Default off. Backends without a debug overlay ignore the
+   * call.
    */
   virtual void setDebugGeometryOverlay(bool /*enabled*/) {}
 

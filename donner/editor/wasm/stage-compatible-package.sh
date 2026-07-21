@@ -16,7 +16,14 @@ if [[ -e "$output_dir" ]]; then
   exit 1
 fi
 
-shared_files=(index.html editor-bootstrap.js editor.css enable-threads.js donner_icon.svg)
+shared_files=(
+  index.html
+  editor-bootstrap.js
+  editor.css
+  enable-threads.js
+  donner_icon.svg
+  worker-surface-selector.js
+)
 backend_files=(editor.js editor.wasm)
 for file in "${shared_files[@]}"; do
   [[ -f "${geode_dir}/${file}" ]] || { echo "error: missing Geode ${file}" >&2; exit 1; }
@@ -45,17 +52,22 @@ for file in "${backend_files[@]}"; do
 done
 
 actual_files="$(cd "$output_dir" && find . -type f | LC_ALL=C sort)"
-expected_files="$(printf '%s\n' \
-  ./backend-selector.js \
-  ./donner_icon.svg \
-  ./editor-bootstrap.js \
-  ./editor.css \
-  ./enable-threads.js \
-  ./geode/editor.js \
-  ./geode/editor.wasm \
-  ./index.html \
-  ./tiny_skia/editor.js \
-  ./tiny_skia/editor.wasm)"
+expected_files="$(
+  {
+    printf '%s\n' \
+      ./backend-selector.js \
+      ./donner_icon.svg \
+      ./editor-bootstrap.js \
+      ./editor.css \
+      ./enable-threads.js \
+      ./geode/editor.js \
+      ./geode/editor.wasm \
+      ./index.html \
+      ./tiny_skia/editor.js \
+      ./tiny_skia/editor.wasm \
+      ./worker-surface-selector.js
+  } | LC_ALL=C sort
+)"
 if [[ "$actual_files" != "$expected_files" ]]; then
   echo "error: staged package inventory mismatch" >&2
   diff <(printf '%s\n' "$expected_files") <(printf '%s\n' "$actual_files") >&2 || true

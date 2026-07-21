@@ -178,7 +178,11 @@ TEST(GlTextureCacheTest, MetadataOnlyCompositedUploadTracksMissesAndViewportDiag
   GlTextureCache cache;
   cache.uploadComposited(preview, RasterViewportForTest(/*viewportBounded=*/true));
 
-  EXPECT_TRUE(cache.tiles().empty());
+  ASSERT_EQ(cache.tiles().size(), 1u);
+  EXPECT_EQ(cache.tiles().front().id, "seg:0");
+  EXPECT_EQ(cache.tiles().front().texture, 0u);
+  EXPECT_TRUE(cache.tiles().front().metadataOnly);
+  EXPECT_EQ(cache.tiles().front().bitmapDimsPx, Vector2i(8, 9));
   EXPECT_TRUE(cache.overviewTiles().empty());
   EXPECT_TRUE(cache.activeTilesViewportBounded());
   EXPECT_EQ(cache.metadataOnlyMissCount(), 1);
@@ -326,6 +330,8 @@ RenderResult::CompositedPreview SingleSnapshotTilePreview(
 TEST(GlTextureCacheTest, RetiredSnapshotsAgeByPresentationFrame) {
   int firstDestructionCount = 0;
   int secondDestructionCount = 0;
+  const std::uint64_t backingDestroysBefore =
+      geode::ScopedWgpuHandle<wgpu::Texture>::backingDestroyCountForTesting();
 
   {
     std::shared_ptr<geode::GeodeDevice> device = SharedGeodeDevice();
@@ -348,20 +354,31 @@ TEST(GlTextureCacheTest, RetiredSnapshotsAgeByPresentationFrame) {
 
     EXPECT_EQ(firstDestructionCount, 0);
     EXPECT_EQ(secondDestructionCount, 0);
+    EXPECT_EQ(geode::ScopedWgpuHandle<wgpu::Texture>::backingDestroyCountForTesting(),
+              backingDestroysBefore)
+        << "Retirement must keep the replaced texture backing alive through its safety window";
 
     cache.advancePresentationFrame();
     cache.advancePresentationFrame();
     cache.advancePresentationFrame();
     EXPECT_EQ(firstDestructionCount, 0);
     EXPECT_EQ(secondDestructionCount, 0);
+    EXPECT_EQ(geode::ScopedWgpuHandle<wgpu::Texture>::backingDestroyCountForTesting(),
+              backingDestroysBefore);
 
     cache.advancePresentationFrame();
     EXPECT_EQ(firstDestructionCount, 1);
     EXPECT_EQ(secondDestructionCount, 0);
+    EXPECT_EQ(geode::ScopedWgpuHandle<wgpu::Texture>::backingDestroyCountForTesting(),
+              backingDestroysBefore + 1u)
+        << "The aged-out owned snapshot must explicitly destroy its GPU backing";
   }
 
   EXPECT_EQ(firstDestructionCount, 1);
   EXPECT_EQ(secondDestructionCount, 1);
+  EXPECT_EQ(geode::ScopedWgpuHandle<wgpu::Texture>::backingDestroyCountForTesting(),
+            backingDestroysBefore + 2u)
+      << "Cache teardown must explicitly destroy the remaining active snapshot backing";
 }
 
 TEST(GlTextureCacheTest, PresentationResourceStatsTrackActiveAndRetiredTextures) {

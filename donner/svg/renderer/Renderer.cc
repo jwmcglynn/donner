@@ -450,6 +450,10 @@ void Renderer::endFrame() {
   impl_->endFrame();
 }
 
+void Renderer::setPreserveTargetOnBeginFrame(bool preserve) {
+  impl_->setPreserveTargetOnBeginFrame(preserve);
+}
+
 void Renderer::setTransform(const Transform2d& transform) {
   impl_->setTransform(transform);
 }
@@ -548,8 +552,21 @@ RendererBitmap Renderer::takeSnapshot() const {
   return impl_->takeSnapshot();
 }
 
+RendererBitmap Renderer::takeSnapshotInterruptibly(
+    const std::function<bool()>& shouldCancel) const {
+  return impl_->takeSnapshotInterruptibly(shouldCancel);
+}
+
+RendererReadbackStats Renderer::consumeReadbackStats() {
+  return impl_->consumeReadbackStats();
+}
+
 std::shared_ptr<const RendererTextureSnapshot> Renderer::takeTextureSnapshot() {
   return impl_->takeTextureSnapshot();
+}
+
+const RendererTextureSnapshot* Renderer::borrowTextureSnapshot() {
+  return impl_->borrowTextureSnapshot();
 }
 
 bool Renderer::requiresTextureSnapshotPresentation() const {

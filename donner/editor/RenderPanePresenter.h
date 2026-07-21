@@ -30,6 +30,7 @@ struct RenderPanePresenterState {
   const std::optional<SelectTool::ActiveDragPreview>& activeDragPreview;
   const std::optional<SelectTool::ActiveDragPreview>& displayedDragPreview;
   Vector2d contentRegion = Vector2d::Zero();
+  std::uint64_t presentationVersion = 0;
   Entity suppressedLayerEntity = entt::null;
   bool suppressDragTargetTiles = false;
   bool documentPresentedDirectly = false;
@@ -114,9 +115,8 @@ public:
    * Draw the advanced editor render pane's composited document tiles and, when
    * enabled, the performance overlay (compact FPS pill or full frame graph).
    *
-   * Selection chrome is not drawn here: it is rendered by Donner's OverlayRenderer
-   * straight onto the Geode framebuffer (see
-   * EditorShell::DrawImmediateOverlaySnapshotToFramebuffer).
+   * Selection chrome is rasterized by Donner's OverlayRenderer and composited here as a
+   * transparent texture, preserving ImGui ordering below menus and popups.
    *
    * @param state Presentation inputs for the current UI frame.
    */

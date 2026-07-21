@@ -60,6 +60,10 @@ struct ReproAction;
 
 namespace donner::editor {
 
+namespace internal {
+struct ToolbarPaintState;
+}
+
 #ifdef DONNER_EDITOR_WGPU
 class FramebufferCheckerboardRenderer;
 #endif
@@ -377,6 +381,7 @@ private:
   void renderCompactTopBar();
   void renderSidebars();
   void ensureSampleThumbnails();
+  void cancelSampleThumbnailGeneration();
   void renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& contentRegion);
   void renderSourcePaneSplitter(float windowWidth, float paneOriginY, float paneHeight,
                                 float sourcePaneWidth);
@@ -419,6 +424,7 @@ private:
   void renderTextToolHint();
   [[nodiscard]] SelectionChromeDetail selectionChromeDetailForActiveTool() const;
   bool flushQueuedMutationAndRefreshOverlay();
+  bool flushInteractiveDragMutationAndRequestRender();
   /// Re-run the post-flush presentation refresh after a tool that flushes the
   /// document internally (the text tool's wrap measurement).
   void refreshAfterToolDrivenFlush();
@@ -503,10 +509,15 @@ private:
   /// shares the editor's Geode device but is never bound to the live framebuffer,
   /// so row previews cannot inherit presentation state from the main renderer.
   svg::Renderer layerThumbnailRenderer_;
-  /// Offscreen renderer and owned bitmaps for the four built-in sample cards.
-  svg::Renderer sampleThumbnailRenderer_;
+  /// Owned bitmaps for the four built-in sample cards. Their offscreen renderer lives on the
+  /// existing asynchronous render worker and shares its production renderer/device.
   std::vector<std::optional<svg::RendererBitmap>> sampleThumbnailBitmaps_;
   std::size_t sampleThumbnailGenerationCursor_ = 0;
+  std::optional<std::size_t> sampleThumbnailInFlightIndex_;
+  bool samplePickerHasPresentedFrame_ = false;
+  /// Embedded + system font catalog. It is declared before the render coordinator so it outlives
+  /// every worker-side FontManager and offscreen renderer during reverse-order destruction.
+  svg::FontCatalog fontCatalog_;
   RenderCoordinator renderCoordinator_;
   RotateCursorSet rotateCursorSet_;
   DocumentSyncController documentSyncController_;
@@ -539,10 +550,15 @@ private:
   SamplePickerPresenter samplePickerPresenter_;
   TextFormatBarPresenter textFormatBarPresenter_;
   SidebarPresenter sidebarPresenter_;
+  /// Last paint presentation read while the document was idle. The renderer
+  /// owns the document registry while busy, so worker frames replay this
+  /// value instead of substituting the unrelated authoring paint.
+  std::unique_ptr<internal::ToolbarPaintState> toolbarPaintSnapshot_;
+  /// Document-derived menu/shortcut state from the last idle UI epoch. Busy frames must replay
+  /// these values instead of traversing the live registry behind the worker's write guard.
+  bool cachedCanvasHasSelectableElements_ = false;
+  bool cachedSelectionIsAllText_ = false;
   TextInspectorPanel textInspectorPanel_;
-  /// Embedded + system font catalog, installed as the FontManager default provider so document
-  /// text resolves font-family names against embedded and system fonts.
-  svg::FontCatalog fontCatalog_;
   LayersPanel layersPanel_;
   /// Element hovered in the Layers panel as of the last frame, fed into the
   /// source-hover preview so the canvas and source pane highlight the element
@@ -634,6 +650,7 @@ private:
   float sourcePaneWidth_ = 560.0f;
   bool sourcePaneVisible_ = false;
   bool showSamplePicker_ = false;
+  bool welcomePlaceholderActive_ = false;
   std::string activeSampleId_;
   std::string pendingSampleLoadId_;
   bool pendingSampleLoadNeedsConfirmation_ = false;
@@ -653,10 +670,12 @@ private:
   /// View menu's Performance Overlay submenu.
   PerfOverlayMode perfOverlayMode_ = PerfOverlayMode::Off;
   /// Whether the Geode geometry debug overlay is enabled on the document
-  /// renderer (band strips + per-path bounding-quad triangles drawn into
-  /// rasterized tiles). Off by default; toggled via the View menu. Applied
-  /// to the render worker through
-  /// `AsyncRenderer::setGeometryDebugOverlayEnabled`.
+  /// renderer. It shows the dynamically-dilated post-vertex Slug quad
+  /// triangles in one frame-final root-target pass. While enabled, the editor
+  /// forces flat full-document compositor presentation so retained tiles
+  /// cannot crop or cover the wireframe.
+  /// Off by default; toggled via the View menu and applied to the render worker
+  /// through `AsyncRenderer::setGeometryDebugOverlayEnabled`.
   bool geometryDebugOverlay_ = false;
 
   ImFont* uiFontBold_ = nullptr;

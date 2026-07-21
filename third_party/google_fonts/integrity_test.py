@@ -35,9 +35,7 @@ class GoogleFontsIntegrityTest(unittest.TestCase):
         self.assertRegex(self.commit, _HEX40)
 
     def test_curated_set_size(self):
-        # Design 0013 W3 curates 8-12 families.
-        self.assertGreaterEqual(len(self.fonts), 8)
-        self.assertLessEqual(len(self.fonts), 12)
+        self.assertEqual(len(self.fonts), 12)
 
     def test_entries_are_wellformed(self):
         for font in self.fonts:
@@ -49,6 +47,7 @@ class GoogleFontsIntegrityTest(unittest.TestCase):
                 self.assertRegex(font["sha256"], _HEX64)
                 self.assertGreater(font["bytes"], 0)
                 self.assertTrue(font["file"])
+                self.assertEqual(font["file"], font["file"].split("/")[-1])
 
     def test_urls_are_commit_pinned_and_https(self):
         prefix = "https://raw.githubusercontent.com/google/fonts/" + self.commit + "/"
@@ -60,7 +59,7 @@ class GoogleFontsIntegrityTest(unittest.TestCase):
                 )
 
     def test_identifiers_are_unique(self):
-        for key in ("family", "var", "repo", "sha256"):
+        for key in ("family", "var", "repo", "sha256", "file"):
             values = [font[key] for font in self.fonts]
             self.assertEqual(len(values), len(set(values)), msg="duplicate " + key)
 

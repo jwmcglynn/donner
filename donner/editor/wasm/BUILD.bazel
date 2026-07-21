@@ -7,6 +7,7 @@ load(
     ":editor_wasm_transition.bzl",
     "editor_wasm_config_probe",
     "editor_wasm_geode_transitioned_target",
+    "editor_wasm_runtime_options_probe",
 )
 load(":web_package.bzl", "web_package")
 
@@ -34,6 +35,7 @@ _EDITOR_WASM_BINARY_DEPS = [
 # emdawnwebgpu JS library files required by the Geode (WebGPU) backend.
 # These implement the wgpu* C API via the browser's native WebGPU bindings.
 _EMDAWNWEBGPU_JS_LIBS = [
+    "//third_party/emdawnwebgpu:webgpu/src/webgpu-externs.js",
     "//third_party/emdawnwebgpu:webgpu/src/library_webgpu_enum_tables.js",
     "//third_party/emdawnwebgpu:webgpu/src/library_webgpu_generated_struct_info.js",
     "//third_party/emdawnwebgpu:webgpu/src/library_webgpu_generated_sig_info.js",
@@ -41,6 +43,7 @@ _EMDAWNWEBGPU_JS_LIBS = [
 ]
 
 _EMDAWNWEBGPU_LINKOPTS = [
+    "--closure-args=--externs=$(execpath //third_party/emdawnwebgpu:webgpu/src/webgpu-externs.js)",
     "--js-library=$(execpath //third_party/emdawnwebgpu:webgpu/src/library_webgpu_enum_tables.js)",
     "--js-library=$(execpath //third_party/emdawnwebgpu:webgpu/src/library_webgpu_generated_struct_info.js)",
     "--js-library=$(execpath //third_party/emdawnwebgpu:webgpu/src/library_webgpu_generated_sig_info.js)",
@@ -49,16 +52,37 @@ _EMDAWNWEBGPU_LINKOPTS = [
 
 # Linker flags shared by both renderer backends.
 _COMMON_LINKOPTS = [
+    "--closure=1",
+    # SIMPLE keeps DOM, Emscripten, and WebGPU property names intact while
+    # still compressing local glue. ADVANCED rewrites cross-language contracts
+    # such as the input bridge and can leave the editor unresponsive.
+    "--closure-args=--compilation_level=SIMPLE_OPTIMIZATIONS",
     "-pthread",
-    "-sASYNCIFY",
     "-sALLOW_MEMORY_GROWTH=1",
     "-sMAXIMUM_MEMORY=512MB",
     "-sEXIT_RUNTIME=0",
+    # AsyncRenderer owns one persistent worker. Keep another worker available
+    # for Emscripten's proxied browser work; consuming the whole pool with the
+    # renderer can stall presentation and input after the first frame.
     "-sPTHREAD_POOL_SIZE=2",
     "-sSTACK_SIZE=1048576",
     "-sUSE_PTHREADS=1",
     "-sENVIRONMENT=web,worker",
 ]
+
+_EDITOR_LINKOPTS = _COMMON_LINKOPTS
+
+_GEODE_LINKOPTS = [
+    # Geode's synchronous WebGPU bridge yields while creating devices and
+    # waiting for mapped buffers. TinySkia has no asynchronous C++ call path.
+    "-sASYNCIFY",
+    # Safari can leave a pooled pthread with stale Wasm heap views when shared memory grows after
+    # the pool starts. Geode's UI device, renderer device, fonts, and asynchronous SVG thumbnails
+    # peak near 58 MiB during the browser regression, so start above that boundary. Keep this out
+    # of the common options so TinySkia does not pay the additional initial-memory commitment.
+    "-sINITIAL_MEMORY=64MB",
+    "-sOFFSCREENCANVAS_SUPPORT=1",
+] + _EMDAWNWEBGPU_LINKOPTS
 
 cc_library(
     name = "notice_inputs",
@@ -82,19 +106,8 @@ cc_binary(
     copts = [
         "-pthread",
     ],
-    linkopts = [
-        "-pthread",
-        "-sASYNCIFY",
-        "-sALLOW_MEMORY_GROWTH=1",
-        "-sMAXIMUM_MEMORY=512MB",
-        "-sEXIT_RUNTIME=0",
-        "-sEXPORTED_RUNTIME_METHODS=ccall",
-        "-sPTHREAD_POOL_SIZE=2",
-        "-sSTACK_SIZE=1048576",
-        "-sUSE_PTHREADS=1",
-        "-sENVIRONMENT=web,worker",
-    ] + select({
-        "//donner/svg/renderer:renderer_backend_geode": _EMDAWNWEBGPU_LINKOPTS,
+    linkopts = _EDITOR_LINKOPTS + select({
+        "//donner/svg/renderer:renderer_backend_geode": _GEODE_LINKOPTS,
         "//conditions:default": [],
     }),
     tags = [
@@ -133,6 +146,7 @@ web_package(
         "enable-threads.js",
         "index.html",
         "single/backend-selector.js",
+        "worker-surface-selector.js",
         "//:donner_icon.svg",
     ],
     tags = [
@@ -178,12 +192,91 @@ editor_wasm_geode_transitioned_target(
     visibility = ["//visibility:private"],
 )
 
+editor_wasm_runtime_options_probe(
+    name = "_editor_wasm_runtime_options_probe",
+    testonly = True,
+    geode_linkopts = _GEODE_LINKOPTS,
+    linkopts = _EDITOR_LINKOPTS,
+    visibility = ["//visibility:private"],
+)
+
 py_test(
     name = "editor_wasm_transition_tests",
     size = "small",
     srcs = ["editor_wasm_transition_tests.py"],
-    args = ["$(rootpath :_editor_wasm_geode_transition_test_data)"],
-    data = [":_editor_wasm_geode_transition_test_data"],
+    args = [
+        "$(rootpath :_editor_wasm_geode_transition_test_data)",
+        "$(rootpath :_editor_wasm_runtime_options_probe)",
+    ],
+    data = [
+        ":_editor_wasm_geode_transition_test_data",
+        ":_editor_wasm_runtime_options_probe",
+    ],
+)
+
+sh_test(
+    name = "stage_compatible_package_tests",
+    size = "small",
+    srcs = ["stage-compatible-package_test.sh"],
+    args = ["$(rootpath :stage-compatible-package.sh)"],
+    data = [
+        "backend-selector.js",
+        "stage-compatible-package.sh",
+    ],
+)
+
+py_test(
+    name = "wasm_geode_package_size_tests",
+    size = "small",
+    srcs = ["wasm_package_size_tests.py"],
+    args = [
+        "--package-dir",
+        "$(rootpath :wasm_web_package)",
+        "--max-wasm-raw-bytes",
+        "13800000",
+        "--max-wasm-gzip-bytes",
+        "5350000",
+        "--max-js-raw-bytes",
+        "185000",
+        "--max-js-gzip-bytes",
+        "49000",
+        "--max-total-raw-bytes",
+        "14050000",
+        "--expected-js-property",
+        "__donnerLastScrollEvent",
+        "--expected-js-property",
+        "__donnerWgpuReadbackStats",
+        "--expected-js-property",
+        "__donnerRequestWgpuReadback",
+        "--expected-js-property",
+        "__donnerWgpuReadbackCaptureStarts",
+        "--expected-js-property",
+        "__donnerWgpuReadbackCaptureCompletions",
+        "--expected-js-property",
+        "__donnerWgpuReadbackCaptureFailures",
+        "--expected-js-property",
+        "__donnerMainLoopRenderedFrames",
+        "--expected-js-property",
+        "__donnerEditorFrameRequested",
+        "--expected-js-property",
+        "__donnerWorkerRuntimeStats",
+        "--expected-js-property",
+        "__donnerActiveSampleStats",
+        "--expected-js-property",
+        "data-active-sample-id",
+        "--expected-js-property",
+        "zoomModifierHeld",
+    ],
+    data = [":wasm_web_package"],
+    main = "wasm_package_size_tests.py",
+    tags = [
+        "manual",
+        "wasm",
+    ],
+    target_compatible_with = select({
+        ":wasm_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
 )
 
 # tiny_skia (software-fallback) editor WASM variant. Build with
@@ -221,6 +314,7 @@ web_package(
         "enable-threads.js",
         "index.html",
         "single/backend-selector.js",
+        "worker-surface-selector.js",
         "//:donner_icon.svg",
     ],
     tags = [
@@ -232,6 +326,52 @@ web_package(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     wasm_deps = [":wasm_tiny_skia"],
+)
+
+py_test(
+    name = "wasm_tiny_skia_package_size_tests",
+    size = "small",
+    srcs = ["wasm_package_size_tests.py"],
+    args = [
+        "--package-dir",
+        "$(rootpath :wasm_tiny_skia_web_package)",
+        "--max-wasm-raw-bytes",
+        "10500000",
+        "--max-wasm-gzip-bytes",
+        "4600000",
+        "--max-js-raw-bytes",
+        "148000",
+        "--max-js-gzip-bytes",
+        "42000",
+        "--max-total-raw-bytes",
+        "10700000",
+        "--expected-js-property",
+        "__donnerLastScrollEvent",
+        "--expected-js-property",
+        "__donnerActiveSampleStats",
+        "--expected-js-property",
+        "__donnerAcceptedPresentation",
+        "--expected-js-property",
+        "data-active-sample-id",
+        "--expected-js-property",
+        "data-tiny-presentation-version",
+        "--expected-js-property",
+        "zoomModifierHeld",
+        "--forbidden-js-token",
+        "transferControlToOffscreen",
+        "--forbidden-js-token",
+        "Asyncify",
+    ],
+    data = [":wasm_tiny_skia_web_package"],
+    main = "wasm_package_size_tests.py",
+    tags = [
+        "manual",
+        "wasm",
+    ],
+    target_compatible_with = select({
+        ":wasm_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
 )
 
 serve_http(

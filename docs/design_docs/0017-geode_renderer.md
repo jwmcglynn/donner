@@ -745,26 +745,41 @@ struct GeodeLayerStack {
 
 ### Debug and Diagnostics
 
-Geode ships a geometry debug overlay for inspecting the banded geometry
-it emits per draw:
+Geode ships a geometry debug overlay for inspecting the raster geometry
+that actually reaches Slug GPU submissions:
 
 - `RendererGeode::setDebugGeometryOverlay(bool)` (surfaced as a
   default-no-op virtual on `RendererInterface` and forwarded by the
-  `svg::Renderer` facade) makes every path draw additionally outline its
-  Slug band decomposition: horizontal band strips (cyan), vertical band
-  strips (yellow), and the whole-path bounding quad with its triangle
-  diagonal (magenta) - the two triangles Geode actually rasterizes per
-  path. Overlay geometry renders as hairline EvenOdd rings through the
-  existing fill pipeline; no dedicated shaders or pipelines exist for it.
-- Default off. When off, rendering is byte-identical to a build without
-  the feature (asserted by `GeodeDebugOverlay_tests` and the geode
-  goldens); the only cost is one boolean test per draw. `<use>`
-  instancing is disabled while the overlay is on so overlay draws stay
-  in paint order.
+  `svg::Renderer` facade) installs a null-by-default submission observer on
+  every path-capable `GeoEncoder`. The observer runs at the four actual Slug
+  GPU submission paths: gradient, mask, resident fill, and transient or
+  instanced fill. For each submitted instance it reconstructs the exact two
+  triangles from the six `EncodedPath::quadVertices` after the same
+  normal-based dynamic pixel dilation as `slug_fill.wgsl` and all submitted
+  transforms. This includes text, strokes, clips, masks, and instanced draws.
+  Pattern-resource internals are excluded; the consuming pattern fill's path
+  submission is captured instead.
+- `RendererGeode::endFrame()` emits the unique triangle edges as
+  one-device-pixel opaque-magenta geometry in one final root-target pass.
+  Normal pixels between edges remain unchanged, and later document paint,
+  strokes, filters, masks, and group opacity cannot cover, blur, or fade the
+  wireframe. The replay uses the existing fill pipeline with its observer
+  disabled, so there is no dedicated shader, pipeline, or recursive capture.
+- Default off. `GeodeDebugOverlay_tests` asserts that an explicitly-off
+  renderer is byte-identical to the default-off renderer for its focused
+  fixture. GeoEncoder retains only a null observer check at actual Slug
+  submissions, with no sink or capture storage installed. Normal batching
+  and `<use>` instancing stay enabled; the observer expands submitted
+  instances into wireframe edges, and debug mode adds one frame-final draw
+  rather than one draw per path.
 - The editor exposes it as View > Geometry Debug Overlay. The flag rides
   `AsyncRenderer`'s atomic-push channel into the render worker's
-  document renderer, and a flip resets all compositor layers so cached
-  segment bitmaps re-rasterize with the new state.
+  document renderer. While enabled, retained promotion and warmup are
+  suppressed and the editor forces one flat full-document root frame.
+  This prevents tight tile bounds from cropping dilation or later tile
+  composition from covering earlier wireframes. Disabling the mode resets
+  the flat debug state and re-promotes the current selection on the next
+  normal frame.
 
 Per-frame instrumentation (`GeodeCounters`: resource creates, submits,
 draw calls, pipeline switches, writeBuffer/writeTexture call and byte

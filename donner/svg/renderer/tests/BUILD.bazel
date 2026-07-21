@@ -50,7 +50,10 @@ donner_cc_library(
     hdrs = [
         "MockRendererInterface.h",
     ],
-    visibility = ["//donner/svg:__subpackages__"],
+    visibility = [
+        "//donner/editor/tests:__pkg__",
+        "//donner/svg:__subpackages__",
+    ],
     deps = [
         "//donner/svg/renderer:renderer_interface",
         "@com_google_gtest//:gtest",
@@ -456,10 +459,10 @@ donner_multi_transitioned_test(
     timeout = "long",
     testonly = 1,
     dep = ":renderer_geode_golden_tests_impl",
-    renderer_backend = "geode",
     # Route the GPU test action to a remote-execution worker advertising a
     # hardware GPU. Ignored for local / non-remote execution.
     exec_properties = {"gpu": "arc"},
+    renderer_backend = "geode",
 )
 
 donner_cc_test(
@@ -504,8 +507,8 @@ donner_multi_transitioned_test(
     timeout = "long",
     testonly = 1,
     dep = ":renderer_geode_tests_impl",
-    renderer_backend = "geode",
     exec_properties = {"gpu": "arc"},
+    renderer_backend = "geode",
 )
 
 donner_cc_test(

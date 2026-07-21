@@ -10,6 +10,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <memory>
 #include <span>
 #include <string_view>
 
@@ -49,6 +50,67 @@ std::array<int, 4> PixelAt(const svg::RendererBitmap& bitmap, int x, int y) {
                                static_cast<std::size_t>(x) * 4u;
   return {pixel[0], pixel[1], pixel[2], pixel[3]};
 }
+
+#ifdef DONNER_GEODE_BACKEND_AVAILABLE
+struct ScopedEmbeddedIconRendererDeviceReset {
+  svg::RendererInterface* renderer = nullptr;
+
+  ~ScopedEmbeddedIconRendererDeviceReset() {
+    if (renderer != nullptr) {
+      ResetEmbeddedSvgIconRenderer(*renderer);
+    }
+  }
+};
+
+TEST(EmbeddedSvgIcon, ConfiguredDeviceAvoidsASecondHeadlessDeviceAndPreservesPixels) {
+  std::shared_ptr<geode::GeodeDevice> device(geode::GeodeDevice::CreateHeadless());
+  if (device == nullptr) {
+    GTEST_SKIP() << "A Geode device is unavailable on this host";
+  }
+
+  svg::Renderer renderer(device);
+  ConfigureEmbeddedSvgIconRenderer(renderer);
+  const ScopedEmbeddedIconRendererDeviceReset reset{&renderer};
+  const int creationsBeforeIcons = geode::GeodeDevice::headlessCreationCountForTesting();
+
+  const std::optional<svg::RendererBitmap> mask =
+      RenderEmbeddedSvgIcon(BytesOf(kSquareIconSvg), 16);
+  const std::optional<svg::RendererBitmap> artwork =
+      RenderEmbeddedSvgArtwork(BytesOf(kTwoToneIconSvg), 16);
+
+  ASSERT_TRUE(mask.has_value());
+  ASSERT_TRUE(artwork.has_value());
+  EXPECT_THAT(PixelAt(*mask, 8, 8), ElementsAre(255, 255, 255, 255));
+  EXPECT_THAT(PixelAt(*mask, 0, 0), ElementsAre(0, 0, 0, 0));
+  EXPECT_THAT(PixelAt(*artwork, 4, 8), ElementsAre(0, 0, 0, 255));
+  EXPECT_THAT(PixelAt(*artwork, 11, 8), ElementsAre(255, 255, 255, 255));
+  EXPECT_EQ(geode::GeodeDevice::headlessCreationCountForTesting(), creationsBeforeIcons)
+      << "Embedded editor icons must reuse the configured editor device instead of standing up "
+         "another WebGPU instance/adapter/device.";
+}
+
+TEST(EmbeddedSvgIcon, ResetFromOlderOwnerDoesNotClearNewerRenderer) {
+  std::shared_ptr<geode::GeodeDevice> device(geode::GeodeDevice::CreateHeadless());
+  if (device == nullptr) {
+    GTEST_SKIP() << "A Geode device is unavailable on this host";
+  }
+
+  svg::Renderer olderRenderer(device);
+  svg::Renderer newerRenderer(device);
+  ConfigureEmbeddedSvgIconRenderer(olderRenderer);
+  ConfigureEmbeddedSvgIconRenderer(newerRenderer);
+  const ScopedEmbeddedIconRendererDeviceReset reset{&newerRenderer};
+
+  ResetEmbeddedSvgIconRenderer(olderRenderer);
+  const int creationsBeforeIcon = geode::GeodeDevice::headlessCreationCountForTesting();
+  const std::optional<svg::RendererBitmap> bitmap =
+      RenderEmbeddedSvgIcon(BytesOf(kCircleIconSvg), 16);
+
+  ASSERT_TRUE(bitmap.has_value());
+  EXPECT_EQ(geode::GeodeDevice::headlessCreationCountForTesting(), creationsBeforeIcon)
+      << "An older EditorShell destructor must not clear a renderer installed by a newer shell.";
+}
+#endif
 
 TEST(EmbeddedSvgIcon, RendersTintableAlphaMask) {
   const std::optional<svg::RendererBitmap> bitmap = RenderEmbeddedSvgIcon(BytesOf(kSquareIconSvg),

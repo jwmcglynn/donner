@@ -3,10 +3,16 @@
 #include <GLFW/glfw3.h>
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <future>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -15,10 +21,13 @@
 #include "donner/css/Color.h"
 #include "donner/editor/EditorSampleCatalog.h"
 #include "donner/editor/EditorShellInternal.h"
+#include "donner/editor/EditorShellPresentation.h"
 #include "donner/editor/FillStrokeWidget.h"
 #include "donner/editor/InMemoryClipboard.h"
 #include "donner/editor/gui/EditorWindow.h"
 #include "donner/editor/repro/ReproFile.h"
+#include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/resources/FontManager.h"
 
 namespace donner::editor {
 namespace {
@@ -156,6 +165,85 @@ TEST(EditorShellInternalTest, MapsPresentationResourcesToTelemetrySamples) {
   EXPECT_EQ(telemetry.peakTrackedBytes, memory.peakTrackedBytes);
   EXPECT_EQ(telemetry.wgpuLifetimeTextureCreates, memory.wgpuLifetimeTextureCreates);
   EXPECT_EQ(telemetry.wgpuLifetimeBufferCreates, memory.wgpuLifetimeBufferCreates);
+}
+
+TEST(EditorShellPresentationTest, SparseSelectionChromeUsesTightOverlayTextureFootprint) {
+  ViewportState viewport;
+  viewport.paneOrigin = Vector2d(40.0, 24.0);
+  viewport.paneSize = Vector2d(1200.0, 800.0);
+  viewport.devicePixelRatio = 2.0;
+
+  SelectionChromeSnapshot snapshot;
+  snapshot.canvasFromDoc = Transform2d::Scale(2.0);
+  snapshot.aabbsDoc.push_back(Box2d::FromXYWH(100.0, 80.0, 160.0, 120.0));
+  snapshot.selectionStrokeWidthWorld = 1.0;
+
+  const OverlayTexturePlacement placement = ComputeOverlayTexturePlacement(viewport, snapshot);
+
+  EXPECT_LT(placement.textureSizePx.x, 400);
+  EXPECT_LT(placement.textureSizePx.y, 320);
+  EXPECT_LT(placement.textureSizePx.x * placement.textureSizePx.y,
+            viewport.paneSize.x * viewport.devicePixelRatio * viewport.paneSize.y *
+                viewport.devicePixelRatio / 16.0)
+      << "Sparse selection chrome must not allocate and blend a pane-sized transparent texture ";
+  EXPECT_TRUE(placement.screenRect.contains(Vector2d(140.0, 104.0)));
+  EXPECT_TRUE(placement.screenRect.contains(Vector2d(300.0, 224.0)));
+}
+
+TEST(EditorShellPresentationTest, LivePathPreviewIncludesWideMiterStrokeExtent) {
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(600.0, 500.0);
+  viewport.devicePixelRatio = 1.0;
+
+  PathBuilder builder;
+  builder.moveTo(Vector2d(200.0, 200.0));
+  builder.lineTo(Vector2d(250.0, 100.0));
+  builder.lineTo(Vector2d(300.0, 200.0));
+
+  SelectionChromeSnapshot snapshot;
+  snapshot.livePathPreview = SelectionChromeSnapshot::LivePathPreview{
+      .pathDoc = builder.build(),
+      .strokeColor = css::RGBA(0xff, 0xff, 0xff, 0xff),
+      .strokeWidthDoc = 80.0,
+  };
+
+  const OverlayTexturePlacement placement = ComputeOverlayTexturePlacement(viewport, snapshot);
+
+  // OverlayRenderer uses the default SVG miter limit of four. The tight overlay must retain the
+  // worst-case stroke spike instead of clipping it to the fixed screen-space chrome padding.
+  EXPECT_TRUE(placement.screenRect.contains(Vector2d(90.0, 100.0)));
+  EXPECT_TRUE(placement.screenRect.contains(Vector2d(410.0, 200.0)));
+}
+
+TEST(EditorShellPresentationTest, BakedSelectionChromeLeavesDynamicMainThreadChrome) {
+  PathBuilder pathBuilder;
+  pathBuilder.moveTo(Vector2d(10.0, 10.0));
+  pathBuilder.lineTo(Vector2d(20.0, 20.0));
+
+  SelectionChromeSnapshot snapshot;
+  snapshot.paths.push_back(
+      SelectionChromeSnapshot::PathItem{.pathDoc = pathBuilder.build()});
+  snapshot.aabbsDoc.push_back(Box2d::FromXYWH(10.0, 10.0, 10.0, 10.0));
+  snapshot.handleBoxesDoc.push_back(Box2d::FromXYWH(8.0, 8.0, 4.0, 4.0));
+  snapshot.textBaselinesDoc.push_back(SelectionChromeSnapshot::TextBaseline{
+      .startDoc = Vector2d(10.0, 20.0),
+      .endDoc = Vector2d(20.0, 20.0),
+  });
+  snapshot.marqueeDoc = Box2d::FromXYWH(30.0, 30.0, 20.0, 20.0);
+  snapshot.textCaretDoc = SelectionChromeSnapshot::TextCaret{
+      .topDoc = Vector2d(15.0, 10.0),
+      .bottomDoc = Vector2d(15.0, 20.0),
+  };
+
+  const SelectionChromeSnapshot mainOverlay =
+      OverlayWithoutBakedSelectionChrome(std::move(snapshot));
+
+  EXPECT_TRUE(mainOverlay.paths.empty());
+  EXPECT_TRUE(mainOverlay.aabbsDoc.empty());
+  EXPECT_TRUE(mainOverlay.handleBoxesDoc.empty());
+  EXPECT_TRUE(mainOverlay.textBaselinesDoc.empty());
+  EXPECT_TRUE(mainOverlay.marqueeDoc.has_value());
+  EXPECT_TRUE(mainOverlay.textCaretDoc.has_value());
 }
 
 TEST(EditorShellInternalTest, CursorForTransformHandleIntentMapsResizeAndRotateHandles) {
@@ -336,13 +424,64 @@ TEST(EditorShellInternalTest, StructuralDocumentActionsWaitForExclusiveDomOwners
       /*rendererBusy=*/false, GroupOperationAvailability{.canApply = true}));
 
   EXPECT_FALSE(internal::PendingDocumentReplacementCanProcess(
-      /*hasPendingRequest=*/false, /*rendererBusy=*/false, /*hasPendingMutations=*/false));
+      /*hasPendingRequest=*/false, /*documentWriteAvailable=*/true,
+      /*hasPendingMutations=*/false));
   EXPECT_FALSE(internal::PendingDocumentReplacementCanProcess(
-      /*hasPendingRequest=*/true, /*rendererBusy=*/true, /*hasPendingMutations=*/false));
+      /*hasPendingRequest=*/true, /*documentWriteAvailable=*/false,
+      /*hasPendingMutations=*/false));
   EXPECT_FALSE(internal::PendingDocumentReplacementCanProcess(
-      /*hasPendingRequest=*/true, /*rendererBusy=*/false, /*hasPendingMutations=*/true));
+      /*hasPendingRequest=*/true, /*documentWriteAvailable=*/true,
+      /*hasPendingMutations=*/true));
   EXPECT_TRUE(internal::PendingDocumentReplacementCanProcess(
-      /*hasPendingRequest=*/true, /*rendererBusy=*/false, /*hasPendingMutations=*/false));
+      /*hasPendingRequest=*/true, /*documentWriteAvailable=*/true,
+      /*hasPendingMutations=*/false));
+}
+
+TEST(EditorShellInternalTest, SidebarSnapshotRefreshYieldsToInteractionAndRenderRequests) {
+  EXPECT_TRUE(internal::ShouldRefreshSidebarSnapshots(
+      /*rendererBusy=*/false, /*interactionActive=*/false));
+  EXPECT_FALSE(internal::ShouldRefreshSidebarSnapshots(
+      /*rendererBusy=*/true, /*interactionActive=*/false));
+  EXPECT_FALSE(internal::ShouldRefreshSidebarSnapshots(
+      /*rendererBusy=*/false, /*interactionActive=*/true));
+  EXPECT_FALSE(internal::ShouldRefreshSidebarSnapshots(
+      /*rendererBusy=*/true, /*interactionActive=*/true));
+}
+
+TEST(EditorShellInternalTest, BusyFrameReplaysDocumentUiBooleansWithoutEvaluatingLiveResolver) {
+  bool resolverCalled = false;
+  EXPECT_TRUE(internal::ResolveCachedDocumentBoolForFrame(
+      /*rendererBusy=*/true, /*cachedValue=*/true, [&] {
+        resolverCalled = true;
+        return false;
+      }));
+  EXPECT_FALSE(resolverCalled)
+      << "A busy UI frame must not enter document traversal just to refresh menu state.";
+
+  EXPECT_FALSE(internal::ResolveCachedDocumentBoolForFrame(
+      /*rendererBusy=*/false, /*cachedValue=*/true, [&] {
+        resolverCalled = true;
+        return false;
+      }));
+  EXPECT_TRUE(resolverCalled);
+}
+
+TEST(EditorShellInternalTest, LateSamplePickerActionsRequestAHostFollowupFrame) {
+  EXPECT_FALSE(internal::SamplePickerActionsNeedFollowupFrame(/*dismiss=*/false,
+                                                              /*openFile=*/false));
+  EXPECT_TRUE(internal::SamplePickerActionsNeedFollowupFrame(/*dismiss=*/true,
+                                                             /*openFile=*/false));
+  EXPECT_TRUE(internal::SamplePickerActionsNeedFollowupFrame(/*dismiss=*/false,
+                                                             /*openFile=*/true));
+}
+
+TEST(EditorShellInternalTest, BusyDeferredRenderWaitsForWorkerCompletionInsteadOfSpinning) {
+  EXPECT_EQ(internal::DeferredRenderActionForState(
+                /*hasDocument=*/true, /*penDragFlushed=*/false, /*rendererBusy=*/true),
+            internal::DeferredRenderAction::WaitForRendererCompletion);
+  EXPECT_EQ(internal::DeferredRenderActionForState(
+                /*hasDocument=*/true, /*penDragFlushed=*/true, /*rendererBusy=*/true),
+            internal::DeferredRenderAction::WakeForPenDrag);
 }
 
 TEST(EditorShellInternalTest, CompactChromeCapturesSheetAndUsesTouchHint) {
@@ -372,17 +511,17 @@ TEST(EditorShellInternalTest, HiddenCanvasScrollbarsDoNotCaptureCanvasInput) {
 
 TEST(EditorShellInternalTest, PendingClickBusyActionPrefersFastRedragThenCancelsBusyRender) {
   EXPECT_EQ(internal::PendingClickBusyActionForState(/*tookFastRedrag=*/true,
-                                                     /*rendererBusy=*/true),
+                                                     /*documentWriteUnavailable=*/true),
             internal::PendingClickBusyAction::CompleteFastRedrag);
   EXPECT_EQ(internal::PendingClickBusyActionForState(/*tookFastRedrag=*/true,
-                                                     /*rendererBusy=*/false),
+                                                     /*documentWriteUnavailable=*/false),
             internal::PendingClickBusyAction::CompleteFastRedrag);
 
   EXPECT_EQ(internal::PendingClickBusyActionForState(/*tookFastRedrag=*/false,
-                                                     /*rendererBusy=*/true),
+                                                     /*documentWriteUnavailable=*/true),
             internal::PendingClickBusyAction::CancelBusyRender);
   EXPECT_EQ(internal::PendingClickBusyActionForState(/*tookFastRedrag=*/false,
-                                                     /*rendererBusy=*/false),
+                                                     /*documentWriteUnavailable=*/false),
             internal::PendingClickBusyAction::RunIdleClickPath);
 }
 
@@ -609,6 +748,36 @@ TEST(EditorShellInternalTest, ResolveDocumentViewBoxIgnoresCommittedRasterCanvas
             Box2d::FromXYWH(0.0, 0.0, 160.0, 90.0));
 }
 
+TEST(EditorShellInternalTest, BusyFrameReusesCachedViewBoxWithoutWaitingForDocumentAccess) {
+  svg::SVGDocument document;
+  document.setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+
+  std::atomic<bool> writerReady = false;
+  std::atomic<bool> releaseWriter = false;
+  std::thread writer([document, &writerReady, &releaseWriter]() mutable {
+    svg::DocumentWriteAccess access = document.writeAccess();
+    writerReady.store(true, std::memory_order_release);
+    while (!releaseWriter.load(std::memory_order_acquire)) {
+      std::this_thread::yield();
+    }
+  });
+  while (!writerReady.load(std::memory_order_acquire)) {
+    std::this_thread::yield();
+  }
+
+  std::future<std::optional<Box2d>> frameViewBox = std::async(std::launch::async, [&] {
+    return internal::ResolveDocumentViewBoxForFrame(document, /*rendererBusy=*/true);
+  });
+  const std::future_status status = frameViewBox.wait_for(std::chrono::milliseconds(100));
+  releaseWriter.store(true, std::memory_order_release);
+  writer.join();
+
+  ASSERT_EQ(status, std::future_status::ready)
+      << "A UI frame must never block on the worker's document write guard.";
+  EXPECT_FALSE(frameViewBox.get().has_value())
+      << "nullopt tells updatePaneLayout to retain its immutable cached viewBox epoch.";
+}
+
 TEST(EditorShellInternalTest, PaintReferenceStateIncludesSameDocumentSourceRange) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kPaintToolbarSvg));
@@ -667,6 +836,11 @@ public:
       }
     }
     return count;
+  }
+
+  static const std::optional<svg::RendererBitmap>& SampleThumbnailBitmap(const EditorShell& shell,
+                                                                         std::size_t index) {
+    return shell.sampleThumbnailBitmaps_.at(index);
   }
 
   static bool TrySavePath(EditorShell& shell, std::string_view path, std::string* error) {
@@ -991,7 +1165,14 @@ public:
     shell.pasteShapesFromClipboard(inFront);
   }
 
-  static void HandleGlobalShortcuts(EditorShell& shell) { shell.handleGlobalShortcuts(); }
+  static void HandleGlobalShortcuts(EditorShell& shell) {
+    // runFrame refreshes these immutable UI snapshots immediately before shortcut dispatch. Tests
+    // that exercise the private dispatcher directly must establish the same idle-frame precondition
+    // instead of observing the constructor defaults.
+    shell.cachedCanvasHasSelectableElements_ = shell.canvasHasSelectableElements();
+    shell.cachedSelectionIsAllText_ = shell.selectionIsAllText();
+    shell.handleGlobalShortcuts();
+  }
 
   static bool ActiveToolIsSelect(const EditorShell& shell) {
     return shell.activeTool_ == EditorShell::ActiveTool::Select;
@@ -1042,6 +1223,10 @@ public:
     return shell.interactionController_.pendingClick().has_value();
   }
 
+  static bool RendererBusy(const EditorShell& shell) {
+    return shell.renderCoordinator_.asyncRenderer().isBusy();
+  }
+
   static void SetPendingSelectClickStartSeconds(EditorShell& shell, double seconds) {
     shell.pendingSelectClickStartSeconds_ = seconds;
   }
@@ -1052,6 +1237,16 @@ public:
 
   static void ClearRequestRenderAtEndOfFrame(EditorShell& shell) {
     shell.requestRenderAtEndOfFrame_ = false;
+  }
+
+  static void SetRequestRenderAtEndOfFrame(EditorShell& shell) {
+    shell.requestRenderAtEndOfFrame_ = true;
+  }
+
+  static void RenderSidebars(EditorShell& shell) { shell.renderSidebars(); }
+
+  static std::size_t VisibleLayerRowCount(const EditorShell& shell) {
+    return shell.layersPanel_.visibleRowCount();
   }
 
   static void SetShowCompositorDebugPanel(EditorShell& shell, bool value) {
@@ -2410,6 +2605,85 @@ TEST(EditorShellTest, DocumentSpaceReplayInputRoutesSelectPressAndRelease) {
   EXPECT_TRUE(EditorShellTestAccess::RequestRenderAtEndOfFrame(shell));
 }
 
+TEST(EditorShellTest, FullDesktopFrameLoopPresentsShapeDragBeforeMouseUp) {
+  gui::EditorWindow window(gui::EditorWindowOptions{
+      .title = "Donner full desktop drag regression",
+      .initialWidth = 1200,
+      .initialHeight = 800,
+      .visible = false,
+  });
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  const auto runFrameWithMouse = [&](const ImVec2& mouse, bool mouseDown) {
+    ImGuiIO& io = ImGui::GetIO();
+    io.AddMousePosEvent(mouse.x, mouse.y);
+    io.AddMouseButtonEvent(0, mouseDown);
+    window.beginFrame();
+    shell.runFrame();
+    window.endFrame();
+  };
+  for (int frame = 0; frame < 20; ++frame) {
+    runFrameWithMouse(ImVec2(-20.0f, -20.0f), /*mouseDown=*/false);
+    if (!EditorShellTestAccess::RendererBusy(shell) && frame >= 2) {
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+
+  const auto screenPoint = [&](const Vector2d& documentPoint) {
+    const Vector2d screen = shell.viewportForReadback().documentToScreen(documentPoint);
+    return ImVec2(static_cast<float>(screen.x), static_cast<float>(screen.y));
+  };
+  runFrameWithMouse(screenPoint(Vector2d(20.0, 20.0)), /*mouseDown=*/false);
+  runFrameWithMouse(screenPoint(Vector2d(20.0, 20.0)), /*mouseDown=*/true);
+  runFrameWithMouse(screenPoint(Vector2d(25.0, 23.0)), /*mouseDown=*/true);
+  runFrameWithMouse(screenPoint(Vector2d(35.0, 28.0)), /*mouseDown=*/true);
+
+  ASSERT_TRUE(EditorShellTestAccess::App(shell).selectedElement().has_value())
+      << "pendingClick=" << EditorShellTestAccess::HasPendingClick(shell)
+      << " rendererBusy=" << EditorShellTestAccess::RendererBusy(shell);
+  ASSERT_EQ(EditorShellTestAccess::App(shell).selectedElement()->id(), "target");
+  const LayerInspectorStatusReadback status = shell.layerInspectorStatusForReadback();
+  ASSERT_TRUE(status.activeDragPreview.has_value())
+      << "The full desktop frame loop must retain a live drag preview";
+  EXPECT_EQ(status.activeDragPreview->translation, Vector2d(15.0, 8.0));
+  ASSERT_TRUE(status.displayedDragPreview.has_value())
+      << "A promoted drag tile must retain the worker epoch its pixels represent";
+  constexpr Vector2d kTargetProbePoint(10.0, 12.0);
+  const Vector2d expectedLiveProbe =
+      status.activeDragPreview->documentFromCachedDocument.transformPosition(kTargetProbePoint);
+  const Vector2d representedProbe =
+      status.displayedDragPreview->documentFromCachedDocument.transformPosition(kTargetProbePoint);
+  const bool hasLiveDragTile = std::ranges::any_of(
+      status.tiles, [&](const LayerInspectorStatusReadback::Tile& tile) {
+        if (!tile.isDragTarget) {
+          return false;
+        }
+        const Vector2d presentedProbe =
+            tile.presentedDocumentFromCachedDocument.transformPosition(representedProbe);
+        return std::abs(presentedProbe.x - expectedLiveProbe.x) < 1e-6 &&
+               std::abs(presentedProbe.y - expectedLiveProbe.y) < 1e-6;
+      });
+  std::ostringstream tileDiagnostics;
+  for (const LayerInspectorStatusReadback::Tile& tile : status.tiles) {
+    tileDiagnostics << "\n  id=" << tile.id << " dragTarget=" << tile.isDragTarget
+                    << " cachedTranslation=(" << tile.documentFromCachedDocument.data[4] << ", "
+                    << tile.documentFromCachedDocument.data[5] << ") presentedTranslation=("
+                    << tile.presentedDocumentFromCachedDocument.data[4] << ", "
+                    << tile.presentedDocumentFromCachedDocument.data[5] << ")";
+  }
+  EXPECT_TRUE(hasLiveDragTile)
+      << "At least one cached shape tile must rebase its represented worker epoch onto the live "
+         "drag transform before mouse-up; tiles:"
+      << tileDiagnostics.str();
+
+  runFrameWithMouse(screenPoint(Vector2d(35.0, 28.0)), /*mouseDown=*/false);
+}
+
 TEST(EditorShellTest, SelectPressKeepsFullChromeUntilDragMoves) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
@@ -2940,16 +3214,19 @@ TEST(EditorShellTest, FillStrokeToolbarKeepsChosenPaintVisibleWhileRendererIsBus
   ASSERT_TRUE(target.has_value());
   EditorShellTestAccess::App(shell).setSelection(*target);
 
-  constexpr std::string_view kChosenFill = "#3366cc";
-  EditorShellTestAccess::App(shell).setActiveFill(kChosenFill);
+  constexpr std::string_view kDifferentAuthoringFill = "#ff00aa";
+  EditorShellTestAccess::App(shell).setActiveFill(kDifferentAuthoringFill);
+  constexpr ImVec2 kCursor(20.0f, 40.0f);
+  RenderToolbarFrame(window, shell, kCursor, ImVec2(-100.0f, -100.0f), /*mouseDown=*/false);
   AsyncRenderer& renderer =
       EditorShellTestAccess::BeginDelayedRender(shell, std::chrono::milliseconds(500));
   ASSERT_TRUE(renderer.isBusy());
 
-  constexpr ImVec2 kCursor(20.0f, 40.0f);
   RenderToolbarFrame(window, shell, kCursor, ImVec2(-100.0f, -100.0f), /*mouseDown=*/false);
   EXPECT_TRUE(DrawDataContainsColor(IM_COL32(0x33, 0x66, 0xcc, 0xff)))
-      << "The chosen fill swatch must not reset while its render is in flight";
+      << "The selected element's fill swatch must not change while its render is in flight";
+  EXPECT_FALSE(DrawDataContainsColor(IM_COL32(0xff, 0x00, 0xaa, 0xff)))
+      << "A busy frame must not replace the selected fill with the authoring fill";
 
   renderer.cancelInFlight();
   EXPECT_TRUE(renderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
@@ -3921,7 +4198,7 @@ TEST(EditorShellTest, ShapeClipboardRejectsMalformedAndPastesIntoSelectedGroup) 
   EXPECT_LT(pastedOffset, groupCloseOffset);
 }
 
-TEST(EditorShellTest, SamplePickerRenderGeneratesThumbnailsAcrossFrames) {
+TEST(EditorShellTest, SamplePickerAppearsBeforeGeneratingThumbnailsAcrossFrames) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
     GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
@@ -3933,20 +4210,33 @@ TEST(EditorShellTest, SamplePickerRenderGeneratesThumbnailsAcrossFrames) {
   const std::size_t sampleCount = GetEditorSampleCatalog().size();
   ASSERT_GT(sampleCount, 0u);
 
-  // Showing the picker routes runFrame through renderSamplePicker(), which lazily
-  // rasterizes one thumbnail per frame via ensureSampleThumbnails().
+  // The first frame must paint the complete picker before any sample SVG parsing or raster work
+  // starts. This keeps thumbnail generation off the startup-to-carousel critical path.
   EditorShellTestAccess::SetShowSamplePicker(shell, true);
   EXPECT_EQ(EditorShellTestAccess::SampleThumbnailCursor(shell), 0u);
 
-  // Generation advances at most one sample per frame, so drive enough frames to
-  // let the cursor walk the whole catalog and leave headroom for the final pass.
-  for (std::size_t frame = 0; frame < sampleCount + 3u; ++frame) {
+  window.beginFrame();
+  shell.runFrame();
+  window.endFrame();
+
+  EXPECT_TRUE(EditorShellTestAccess::ShowSamplePicker(shell));
+  EXPECT_EQ(EditorShellTestAccess::SampleThumbnailCursor(shell), 0u);
+  EXPECT_EQ(EditorShellTestAccess::SampleThumbnailGeneratedCount(shell), 0u);
+
+  // Later frames may start bounded background work and publish one result at a time.
+  std::size_t previousGeneratedCount = 0u;
+  for (std::size_t frame = 0; frame < 500u; ++frame) {
     window.beginFrame();
     shell.runFrame();
     window.endFrame();
-    if (EditorShellTestAccess::SampleThumbnailCursor(shell) >= sampleCount) {
+    const std::size_t generatedCount = EditorShellTestAccess::SampleThumbnailGeneratedCount(shell);
+    EXPECT_LE(generatedCount, previousGeneratedCount + 1u)
+        << "Thumbnail results must be published incrementally from one bounded worker slot";
+    previousGeneratedCount = generatedCount;
+    if (generatedCount >= sampleCount) {
       break;
     }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
 
   EXPECT_TRUE(EditorShellTestAccess::ShowSamplePicker(shell));
@@ -3956,6 +4246,40 @@ TEST(EditorShellTest, SamplePickerRenderGeneratesThumbnailsAcrossFrames) {
   // that the picker can upload as a texture.
   EXPECT_EQ(EditorShellTestAccess::SampleThumbnailGeneratedCount(shell), sampleCount);
 
+  // Every card must contain a real, source-dependent Donner render. The hash includes dimensions,
+  // row stride, and pixel bytes, so a shared placeholder bitmap cannot satisfy this assertion.
+  const auto fingerprint = [](const svg::RendererBitmap& bitmap) {
+    constexpr std::uint64_t kFnvOffset = 1469598103934665603ULL;
+    constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
+    std::uint64_t hash = kFnvOffset;
+    const auto mix = [&](std::uint64_t value) {
+      hash ^= value;
+      hash *= kFnvPrime;
+    };
+    mix(static_cast<std::uint64_t>(bitmap.dimensions.x));
+    mix(static_cast<std::uint64_t>(bitmap.dimensions.y));
+    mix(bitmap.rowBytes);
+    for (const std::uint8_t byte : bitmap.pixels) {
+      mix(byte);
+    }
+    return hash;
+  };
+  std::vector<std::uint64_t> fingerprints;
+  fingerprints.reserve(sampleCount);
+  for (std::size_t index = 0; index < sampleCount; ++index) {
+    const std::optional<svg::RendererBitmap>& bitmap =
+        EditorShellTestAccess::SampleThumbnailBitmap(shell, index);
+    ASSERT_TRUE(bitmap.has_value()) << "Missing catalog thumbnail at index " << index;
+    ASSERT_FALSE(bitmap->empty()) << "Empty catalog thumbnail at index " << index;
+    fingerprints.push_back(fingerprint(*bitmap));
+  }
+  for (std::size_t lhs = 0; lhs < fingerprints.size(); ++lhs) {
+    for (std::size_t rhs = lhs + 1u; rhs < fingerprints.size(); ++rhs) {
+      EXPECT_NE(fingerprints[lhs], fingerprints[rhs])
+          << "Samples " << lhs << " and " << rhs << " reused the same preview pixels";
+    }
+  }
+
   // Re-running frames past the end of the catalog is idempotent: the cursor stays
   // clamped and no additional thumbnails are produced.
   window.beginFrame();
@@ -3963,6 +4287,144 @@ TEST(EditorShellTest, SamplePickerRenderGeneratesThumbnailsAcrossFrames) {
   window.endFrame();
   EXPECT_EQ(EditorShellTestAccess::SampleThumbnailCursor(shell), sampleCount);
   EXPECT_EQ(EditorShellTestAccess::SampleThumbnailGeneratedCount(shell), sampleCount);
+}
+
+TEST(EditorShellTest, MainDocumentRenderTakesPriorityOverNewCarouselThumbnailWork) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+
+  // Drain the editor's initial document render before opening the picker so this test controls the
+  // priority transition precisely.
+  for (int frame = 0; frame < 200 && (EditorShellTestAccess::RendererBusy(shell) ||
+                                      EditorShellTestAccess::RequestRenderAtEndOfFrame(shell));
+       ++frame) {
+    window.beginFrame();
+    shell.runFrame();
+    window.endFrame();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  ASSERT_FALSE(EditorShellTestAccess::RendererBusy(shell));
+
+  EditorShellTestAccess::SetShowSamplePicker(shell, true);
+  window.beginFrame();
+  shell.runFrame();
+  window.endFrame();
+  ASSERT_EQ(EditorShellTestAccess::SampleThumbnailGeneratedCount(shell), 0u);
+
+  // On the next picker frame a low-priority thumbnail may be submitted. A simultaneous main
+  // document request must still enter the normal busy state immediately and no thumbnail result
+  // may have been synchronously generated on the UI thread.
+  shell.asyncRendererForReplay().setReplayRenderDelayForTesting(std::chrono::milliseconds(75));
+  EditorShellTestAccess::SetRequestRenderAtEndOfFrame(shell);
+  window.beginFrame();
+  shell.runFrame();
+  window.endFrame();
+
+  EXPECT_TRUE(EditorShellTestAccess::RendererBusy(shell));
+  EXPECT_EQ(EditorShellTestAccess::SampleThumbnailGeneratedCount(shell), 0u);
+  shell.asyncRendererForReplay().setReplayRenderDelayForTesting(std::chrono::milliseconds(0));
+}
+
+TEST(EditorShellTest, TeardownKeepsFontProviderUntilTextThumbnailWorkerStopsAndDetachesWake) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  const svg::FontFamilyProvider* previousProvider = svg::FontManager::DefaultFontProvider();
+  auto shell = std::make_unique<EditorShell>(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell->valid());
+  const svg::FontFamilyProvider* shellProvider = &shell->fontCatalog();
+  ASSERT_EQ(svg::FontManager::DefaultFontProvider(), shellProvider);
+
+  const EditorSample* textSample = FindEditorSample("text-style");
+  ASSERT_NE(textSample, nullptr);
+  svg::Renderer thumbnailRoot;
+
+  std::mutex wakeMutex;
+  std::condition_variable wakeCv;
+  bool wakeEntered = false;
+  bool releaseWake = false;
+  std::atomic<int> wakeCount{0};
+  shell->asyncRendererForReplay().setWakeCallback([&] {
+    wakeCount.fetch_add(1, std::memory_order_relaxed);
+    std::unique_lock<std::mutex> lock(wakeMutex);
+    wakeEntered = true;
+    wakeCv.notify_all();
+    wakeCv.wait(lock, [&] { return releaseWake; });
+  });
+  ASSERT_TRUE(shell->asyncRendererForReplay().requestSampleThumbnail(SampleThumbnailRenderRequest{
+      .key = 91u,
+      .source = std::string(textSample->source),
+      .dimensions = Vector2i(192, 120),
+      .nativeRenderer = &thumbnailRoot,
+  }));
+
+  {
+    std::unique_lock<std::mutex> lock(wakeMutex);
+    ASSERT_TRUE(wakeCv.wait_for(lock, std::chrono::seconds(5), [&] { return wakeEntered; }))
+        << "Expected the text thumbnail worker to reach its completion wake";
+  }
+
+  std::atomic<bool> destroyStarted{false};
+  std::atomic<bool> destroyFinished{false};
+  std::thread destroyer([&] {
+    destroyStarted.store(true, std::memory_order_release);
+    shell.reset();
+    destroyFinished.store(true, std::memory_order_release);
+  });
+  while (!destroyStarted.load(std::memory_order_acquire)) {
+    std::this_thread::yield();
+  }
+
+  // The worker is deliberately latched in its copied wake callback. Destruction therefore cannot
+  // finish, and the FontCatalog must remain installed until the renderer has joined that worker.
+  const auto providerDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
+  while (svg::FontManager::DefaultFontProvider() == shellProvider &&
+         std::chrono::steady_clock::now() < providerDeadline) {
+    std::this_thread::yield();
+  }
+  EXPECT_EQ(svg::FontManager::DefaultFontProvider(), shellProvider)
+      << "EditorShell detached/destroyed its font provider before AsyncRenderer joined";
+  EXPECT_FALSE(destroyFinished.load(std::memory_order_acquire));
+
+  {
+    std::lock_guard<std::mutex> lock(wakeMutex);
+    releaseWake = true;
+  }
+  wakeCv.notify_all();
+  destroyer.join();
+
+  EXPECT_TRUE(destroyFinished.load(std::memory_order_acquire));
+  EXPECT_EQ(svg::FontManager::DefaultFontProvider(), previousProvider);
+  const int wakesAfterTeardown = wakeCount.load(std::memory_order_relaxed);
+  std::this_thread::sleep_for(std::chrono::milliseconds(25));
+  EXPECT_EQ(wakeCount.load(std::memory_order_relaxed), wakesAfterTeardown)
+      << "A copied renderer wake callback ran after EditorShell teardown completed";
+}
+
+TEST(EditorShellTest, PendingEndOfFrameRenderDoesNotStarveSidebarSnapshotRefresh) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+  ASSERT_FALSE(EditorShellTestAccess::RendererBusy(shell));
+  ASSERT_EQ(EditorShellTestAccess::VisibleLayerRowCount(shell), 0u);
+
+  EditorShellTestAccess::SetRequestRenderAtEndOfFrame(shell);
+  window.beginFrame();
+  EditorShellTestAccess::RenderSidebars(shell);
+  window.endFrame();
+
+  EXPECT_GT(EditorShellTestAccess::VisibleLayerRowCount(shell), 0u);
 }
 
 TEST(EditorShellTest, SamplePickerRendersDiscardConfirmationForDirtyDocument) {

@@ -5,6 +5,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "donner/base/Box.h"
@@ -65,6 +66,14 @@ enum class PendingClickIdleAction {
   WaitForMarqueeIntent,
 };
 
+/// End-of-frame action for a deferred document render.
+enum class DeferredRenderAction {
+  ClearRequest,
+  WakeForPenDrag,
+  SubmitRender,
+  WaitForRendererCompletion,
+};
+
 [[nodiscard]] FrameMemorySample MemorySampleFromPresentationResources(
     const PresentationResourceStats& resources);
 [[nodiscard]] FrameMissResourceTelemetry FrameMissTelemetryFromPresentationResources(
@@ -86,10 +95,29 @@ enum class PendingClickIdleAction {
                                                 const Vector2d& screenPoint) noexcept;
 [[nodiscard]] bool GroupOperationCanDispatch(
     bool rendererBusy, const GroupOperationAvailability& availability) noexcept;
-[[nodiscard]] bool PendingDocumentReplacementCanProcess(bool hasPendingRequest, bool rendererBusy,
+[[nodiscard]] bool PendingDocumentReplacementCanProcess(bool hasPendingRequest,
+                                                        bool documentWriteAvailable,
                                                         bool hasPendingMutations) noexcept;
+[[nodiscard]] bool ShouldRefreshSidebarSnapshots(bool rendererBusy,
+                                                 bool interactionActive) noexcept;
+
+/// Resolve a document-derived UI boolean without ever entering the live document while the
+/// renderer owns it. Busy frames replay the value from the last complete UI epoch.
+template <typename Resolver>
+[[nodiscard]] bool ResolveCachedDocumentBoolForFrame(bool rendererBusy, bool cachedValue,
+                                                     Resolver&& resolveWhenIdle) {
+  if (rendererBusy) {
+    return cachedValue;
+  }
+  return static_cast<bool>(std::forward<Resolver>(resolveWhenIdle)());
+}
+
+[[nodiscard]] bool SamplePickerActionsNeedFollowupFrame(bool dismiss, bool openFile) noexcept;
+[[nodiscard]] DeferredRenderAction DeferredRenderActionForState(bool hasDocument,
+                                                                bool penDragFlushed,
+                                                                bool rendererBusy) noexcept;
 [[nodiscard]] PendingClickBusyAction PendingClickBusyActionForState(bool tookFastRedrag,
-                                                                    bool rendererBusy);
+                                                                    bool documentWriteUnavailable);
 [[nodiscard]] PendingClickIdleAction PendingClickIdleActionForState(
     bool leftMouseDown, bool pendingClickCanStartMarquee, bool selectHoldElapsed,
     bool selectDragIntent);
@@ -125,5 +153,7 @@ void AddUniqueElements(std::vector<svg::SVGElement>* target,
     const ::donner::editor::EditorShellOptions& options);
 [[nodiscard]] std::string CanonicalizeForTextEditor(std::string_view source);
 [[nodiscard]] Box2d ResolveDocumentViewBox(svg::SVGDocument& document);
+[[nodiscard]] std::optional<Box2d> ResolveDocumentViewBoxForFrame(svg::SVGDocument& document,
+                                                                  bool rendererBusy);
 
 }  // namespace donner::editor::internal

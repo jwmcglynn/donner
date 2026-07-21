@@ -21,48 +21,49 @@ EM_JS(void, InstallWasmWheelModifierCapture, (), {
     return;
   }
 
-  if (canvas.__donnerWheelModifierCapture) {
-    canvas.__donnerWheelModifierCapture.state.zoomModifierHeld = false;
+  if (canvas['__donnerWheelModifierCapture']) {
+    canvas['__donnerWheelModifierCapture']['state']['zoomModifierHeld'] = false;
     return;
   }
 
   const state = {
-    zoomModifierHeld: false,
+    'zoomModifierHeld': false,
   };
   const handler = function(event) {
     state.zoomModifierHeld = !!(event.ctrlKey || event.metaKey);
   };
 
-  canvas.__donnerWheelModifierCapture = {
-    state: state,
-    handler: handler,
+  canvas['__donnerWheelModifierCapture'] = {
+    'state': state,
+    'handler': handler,
   };
   canvas.addEventListener("wheel", handler, {capture: true, passive: false});
 });
 
 EM_JS(void, RemoveWasmWheelModifierCapture, (), {
   const canvas = document.getElementById("canvas");
-  const capture = canvas && canvas.__donnerWheelModifierCapture;
+  const capture = canvas && canvas['__donnerWheelModifierCapture'];
   if (!capture) {
     return;
   }
 
-  canvas.removeEventListener("wheel", capture.handler, true);
-  delete canvas.__donnerWheelModifierCapture;
+  canvas.removeEventListener("wheel", capture['handler'], true);
+  delete canvas['__donnerWheelModifierCapture'];
 });
 
 EM_JS(int, WasmWheelZoomModifierHeld, (), {
   const canvas = document.getElementById("canvas");
-  const capture = canvas && canvas.__donnerWheelModifierCapture;
-  return capture && capture.state && capture.state.zoomModifierHeld ? 1 : 0;
+  const capture = canvas && canvas['__donnerWheelModifierCapture'];
+  return capture && capture['state'] && capture['state']['zoomModifierHeld'] ? 1 : 0;
 });
 
 EM_JS(void, RecordWasmScrollDebug, (int zoomModifierHeld, double xoffset, double yoffset), {
-  window.__donnerLastScrollEvent = {
-    zoomModifierHeld: !!zoomModifierHeld,
-    xoffset: xoffset,
-    yoffset: yoffset,
-    count: ((window.__donnerLastScrollEvent && window.__donnerLastScrollEvent.count) || 0) + 1,
+  const previous = window['__donnerLastScrollEvent'];
+  window['__donnerLastScrollEvent'] = {
+    'zoomModifierHeld': !!zoomModifierHeld,
+    'xoffset': xoffset,
+    'yoffset': yoffset,
+    'count': ((previous && previous['count']) || 0) + 1,
   };
 });
 // clang-format on

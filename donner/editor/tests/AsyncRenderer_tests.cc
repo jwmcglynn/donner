@@ -194,11 +194,11 @@ TEST(AsyncRendererPresentationPolicyTest, TexturePresentationCapturesFallbackWhe
   EXPECT_TRUE(plan.captureTextureSnapshot);
 }
 
-TEST(AsyncRendererPresentationPolicyTest, CpuPresentationCanKeepDiagnosticSnapshotWithTiles) {
+TEST(AsyncRendererPresentationPolicyTest, CpuPresentationSkipsRedundantSnapshotWhenTilesExist) {
   const PresentationSnapshotPlan plan = ChoosePresentationSnapshotPlan(
       /*hasCompositedPreview=*/true, /*requiresTextureSnapshotPresentation=*/false);
 
-  EXPECT_TRUE(plan.captureCpuSnapshot);
+  EXPECT_FALSE(plan.captureCpuSnapshot);
   EXPECT_FALSE(plan.captureTextureSnapshot);
 }
 
@@ -208,6 +208,426 @@ TEST(AsyncRendererPresentationPolicyTest, CpuPresentationCapturesFallbackWhenTil
 
   EXPECT_TRUE(plan.captureCpuSnapshot);
   EXPECT_FALSE(plan.captureTextureSnapshot);
+}
+
+TEST(AsyncRendererPresentationPolicyTest,
+     DirectSurfaceOverviewInfillPublishesMetadataForCompositorTileOverlay) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <rect id="target" x="8" y="8" width="24" height="20" fill="red"/>
+      <rect x="40" y="40" width="12" height="12" fill="blue"/>
+    </svg>
+  )svg");
+  document.setCanvasSize(64, 64);
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  svg::Renderer renderer;
+  svg::compositor::CompositorController compositor(document, renderer);
+  ASSERT_TRUE(compositor.promoteEntity(entity, svg::compositor::InteractionHint::Selection));
+  svg::RenderViewport viewport;
+  viewport.size = Vector2d(64.0, 64.0);
+  viewport.devicePixelRatio = 1.0;
+  compositor.renderFrame(viewport);
+
+  EditorRasterViewport rasterViewport;
+  rasterViewport.outputSizePx = Vector2i(64, 64);
+  rasterViewport.semanticCanvasSizePx = Vector2i(64, 64);
+  rasterViewport.documentRect = Box2d::FromXYWH(0.0, 0.0, 64.0, 64.0);
+  rasterViewport.outputFromDocument = Transform2d();
+  rasterViewport.viewportBounded = false;
+
+  const auto preview = BuildDirectSurfaceCompositorTileMetadata(
+      compositor, rasterViewport, rasterViewport.documentRect, entity, std::nullopt,
+      /*overviewInfillOnly=*/true);
+
+  ASSERT_TRUE(preview.has_value())
+      << "Overview pixels live on the browser surface, but the ImGui compositor-tile overlay "
+         "still needs the matching metadata.";
+  ASSERT_FALSE(preview->tiles.empty());
+  for (const RenderResult::CompositedTile& tile : preview->tiles) {
+    EXPECT_TRUE(tile.bitmap.empty());
+    EXPECT_EQ(tile.textureSnapshot, nullptr);
+    EXPECT_GT(tile.bitmapDimsPx.x, 0);
+    EXPECT_GT(tile.bitmapDimsPx.y, 0);
+    EXPECT_EQ(tile.rasterCanvasSize, rasterViewport.outputSizePx);
+  }
+}
+
+TEST(AsyncRendererPresentationPolicyTest,
+     UnsplitDirectSurfacePublishesFullCanvasMetadataForCompositorTileOverlay) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <rect x="8" y="8" width="24" height="20" fill="red"/>
+    </svg>
+  )svg");
+  document.setCanvasSize(64, 64);
+
+  svg::Renderer renderer;
+  svg::compositor::CompositorConfig compositorConfig;
+  compositorConfig.deferFirstFrameWarmup = true;
+  svg::compositor::CompositorController compositor(document, renderer, compositorConfig);
+  svg::RenderViewport viewport;
+  viewport.size = Vector2d(64.0, 64.0);
+  viewport.devicePixelRatio = 1.0;
+  compositor.renderFrame(viewport);
+
+  EditorRasterViewport rasterViewport;
+  rasterViewport.outputSizePx = Vector2i(64, 64);
+  rasterViewport.semanticCanvasSizePx = Vector2i(64, 64);
+  rasterViewport.documentRect = Box2d::FromXYWH(0.0, 0.0, 64.0, 64.0);
+  rasterViewport.outputFromDocument = Transform2d();
+
+  const auto preview = BuildDirectSurfaceCompositorTileMetadata(
+      compositor, rasterViewport, rasterViewport.documentRect, entt::null, std::nullopt,
+      /*overviewInfillOnly=*/false);
+
+  ASSERT_TRUE(preview.has_value());
+  ASSERT_EQ(preview->tiles.size(), 1u);
+  EXPECT_EQ(preview->tiles.front().id, "full-canvas");
+  EXPECT_TRUE(preview->tiles.front().bitmap.empty());
+  EXPECT_EQ(preview->tiles.front().textureSnapshot, nullptr);
+  EXPECT_EQ(preview->tiles.front().bitmapDimsPx, rasterViewport.outputSizePx);
+  EXPECT_EQ(preview->tiles.front().bitmapDimsDoc, rasterViewport.documentRect.size());
+}
+
+TEST(AsyncRendererTest, GeometryOverlayForcesFlatFrameThenRepromotesSelectionWhenDisabled) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <rect id="target" x="8" y="8" width="24" height="20" fill="red"/>
+      <rect x="40" y="40" width="12" height="12" fill="blue"/>
+    </svg>
+  )svg");
+  document.setCanvasSize(64, 64);
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  svg::Renderer renderer;
+  renderer.setDebugGeometryOverlay(true);
+  const bool geometryOverlaySupported = renderer.debugGeometryOverlay();
+  renderer.setDebugGeometryOverlay(false);
+  AsyncRenderer asyncRenderer;
+  const auto renderSelected = [&](std::uint64_t version) {
+    RenderRequest request(renderer, document);
+    request.version = version;
+    request.documentGeneration = 1;
+    request.selectedEntity = entity;
+    asyncRenderer.requestRender(request);
+    return WaitForRenderResult(asyncRenderer);
+  };
+
+  ASSERT_TRUE(renderSelected(1).has_value());
+  ASSERT_EQ(asyncRenderer.workerCompositorEntity(), entity);
+  ASSERT_GT(asyncRenderer.compositorState().activeHintsCount, 0u);
+
+  asyncRenderer.setGeometryDebugOverlayEnabled(true);
+  ASSERT_TRUE(renderSelected(2).has_value());
+
+  if (!geometryOverlaySupported) {
+    EXPECT_EQ(asyncRenderer.workerCompositorEntity(), entity);
+    EXPECT_GT(asyncRenderer.compositorState().activeHintsCount, 0u)
+        << "An unsupported geometry-overlay request must not disable normal selection prewarm";
+    EXPECT_EQ(asyncRenderer.compositorResetCountForTesting(), 0u);
+    return;
+  }
+
+  const auto state = asyncRenderer.compositorState();
+  EXPECT_TRUE(asyncRenderer.workerCompositorEntity() == entt::null);
+  EXPECT_EQ(state.activeHintsCount, 0u);
+  EXPECT_EQ(state.layerCount, 0u);
+  EXPECT_FALSE(state.splitPathActive);
+  EXPECT_FALSE(state.firstFrameWarmupPending);
+  const std::uint64_t resetCountAfterEnable = asyncRenderer.compositorResetCountForTesting();
+  EXPECT_EQ(resetCountAfterEnable, 1u);
+
+  ASSERT_TRUE(renderSelected(3).has_value());
+  const auto consecutiveDebugState = asyncRenderer.compositorState();
+  EXPECT_TRUE(asyncRenderer.workerCompositorEntity() == entt::null);
+  EXPECT_EQ(consecutiveDebugState.activeHintsCount, 0u);
+  EXPECT_EQ(consecutiveDebugState.layerCount, 0u);
+  EXPECT_FALSE(consecutiveDebugState.firstFrameWarmupPending);
+  EXPECT_EQ(asyncRenderer.compositorResetCountForTesting(), resetCountAfterEnable)
+      << "A steady geometry-debug frame must not reset empty compositor state again";
+
+  asyncRenderer.setGeometryDebugOverlayEnabled(false);
+  ASSERT_TRUE(renderSelected(4).has_value());
+  const auto restoredState = asyncRenderer.compositorState();
+  EXPECT_EQ(asyncRenderer.workerCompositorEntity(), entity);
+  EXPECT_GT(restoredState.activeHintsCount, 0u)
+      << "Disabling geometry debug must restore selection prewarm on the next frame";
+  EXPECT_GT(restoredState.layerCount, 0u);
+  EXPECT_EQ(asyncRenderer.compositorResetCountForTesting(), resetCountAfterEnable + 1u);
+}
+
+TEST(AsyncRendererPresentationPolicyTest, TextureHandoffBorrowsOnlyForSynchronousCopy) {
+  EXPECT_EQ(ChooseTextureSnapshotHandoff(/*consumerOutlivesCurrentFrame=*/false),
+            TextureSnapshotHandoff::BorrowCurrentFrame);
+  EXPECT_EQ(ChooseTextureSnapshotHandoff(/*consumerOutlivesCurrentFrame=*/true),
+            TextureSnapshotHandoff::TakeOwnership);
+}
+
+TEST(AsyncRendererPresentationPolicyTest, WorkerSurfaceFailuresUseTypedBoundedRecovery) {
+  using Action = WorkerSurfaceRecoveryAction;
+  using Failure = WorkerSurfaceFailureKind;
+
+  EXPECT_EQ(WorkerSurfaceRecoveryDecisionFor(Failure::Timeout, 0u), Action::Retry);
+  EXPECT_EQ(WorkerSurfaceRecoveryDecisionFor(Failure::OutdatedOrLost, 0u),
+            Action::ReconfigureAndRetry);
+  EXPECT_EQ(WorkerSurfaceRecoveryDecisionFor(Failure::Setup, 1u), Action::RecreateAndRetry);
+  EXPECT_EQ(WorkerSurfaceRecoveryDecisionFor(Failure::Timeout, 2u), Action::TerminalFailure);
+  EXPECT_EQ(WorkerSurfaceRecoveryDecisionFor(Failure::Incompatible, 0u), Action::TerminalFailure);
+  EXPECT_EQ(WorkerSurfaceRecoveryDecisionFor(Failure::Fatal, 0u), Action::TerminalFailure);
+}
+
+TEST(AsyncRendererPresentationPolicyTest, TerminalSurfaceFailureSeparatesTransientAndPermanent) {
+  using Outcome = DirectSurfacePresentationOutcome;
+  using Failure = WorkerSurfaceFailureKind;
+
+  EXPECT_EQ(DirectSurfaceTerminalOutcomeFor(Failure::Timeout), Outcome::RetryAfterBackoff)
+      << "Exhausted transient recovery must not mark a newer document version complete against "
+         "stale retained pixels.";
+  EXPECT_EQ(DirectSurfaceTerminalOutcomeFor(Failure::OutdatedOrLost), Outcome::RetryAfterBackoff);
+  EXPECT_EQ(DirectSurfaceTerminalOutcomeFor(Failure::Setup), Outcome::RetryAfterBackoff);
+  EXPECT_EQ(DirectSurfaceTerminalOutcomeFor(Failure::Incompatible), Outcome::Unavailable)
+      << "Permanent incompatibility must be reported once instead of silently retaining stale "
+         "pixels or retrying forever.";
+  EXPECT_EQ(DirectSurfaceTerminalOutcomeFor(Failure::Fatal), Outcome::Unavailable);
+}
+
+TEST(AsyncRendererPresentationPolicyTest, DocumentReplacementRejectsOlderSurfaceHandoff) {
+  EXPECT_FALSE(DirectSurfacePresentationGenerationIsCurrent(
+      /*requestDocumentGeneration=*/4, /*minimumDocumentGeneration=*/5));
+  EXPECT_TRUE(DirectSurfacePresentationGenerationIsCurrent(
+      /*requestDocumentGeneration=*/5, /*minimumDocumentGeneration=*/5));
+  EXPECT_TRUE(DirectSurfacePresentationGenerationIsCurrent(
+      /*requestDocumentGeneration=*/6, /*minimumDocumentGeneration=*/5));
+}
+
+TEST(AsyncRendererTest, DeferredStartQueuesWorkAndStartsExactlyOnce) {
+  svg::SVGDocument document = svg::instantiateSubtree(
+      R"svg(<rect id="rect" x="1" y="1" width="8" height="8" fill="blue" />)svg");
+  document.setCanvasSize(16, 16);
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer(AsyncRendererStartMode::Deferred);
+
+  EXPECT_FALSE(asyncRenderer.workerStartedForTesting());
+  RenderRequest request(renderer, document);
+  request.version = 41;
+  request.documentGeneration = 1;
+  asyncRenderer.requestRender(request);
+  EXPECT_TRUE(asyncRenderer.isBusy());
+  EXPECT_EQ(asyncRenderer.compositorReconstructCountForTesting(), 0u);
+  EXPECT_FALSE(asyncRenderer.pollResult().has_value());
+
+  asyncRenderer.start();
+  EXPECT_TRUE(asyncRenderer.workerStartedForTesting());
+  asyncRenderer.start();
+  EXPECT_TRUE(asyncRenderer.workerStartedForTesting());
+
+  const std::optional<RenderResult> result = WaitForRenderResult(asyncRenderer);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->version, 41u);
+  EXPECT_EQ(asyncRenderer.compositorReconstructCountForTesting(), 1u);
+}
+
+TEST(AsyncRendererTest, ShutdownBeforeDeferredStartCannotRestartWorker) {
+  AsyncRenderer asyncRenderer(AsyncRendererStartMode::Deferred);
+  EXPECT_FALSE(asyncRenderer.workerStartedForTesting());
+
+  asyncRenderer.shutdown();
+  asyncRenderer.start();
+
+  EXPECT_FALSE(asyncRenderer.workerStartedForTesting());
+  EXPECT_FALSE(asyncRenderer.isBusy());
+}
+
+TEST(AsyncRendererTest, DeferredCompositorWarmupParticipatesInDocumentAccessGate) {
+  AsyncRenderer asyncRenderer(AsyncRendererStartMode::Deferred);
+
+  asyncRenderer.stageCompositorWarmupForTesting(/*pending=*/true, /*active=*/false);
+  EXPECT_TRUE(asyncRenderer.isBusy())
+      << "A queued warmup is about to take DocumentWriteAccess, so input must cancel it before "
+         "touching the live DOM.";
+  asyncRenderer.cancelInFlight();
+  EXPECT_FALSE(asyncRenderer.isBusy()) << "Cancelling an unclaimed warmup releases the gate now.";
+
+  asyncRenderer.stageCompositorWarmupForTesting(/*pending=*/false, /*active=*/true);
+  EXPECT_TRUE(asyncRenderer.isBusy());
+  asyncRenderer.cancelInFlight();
+  EXPECT_TRUE(asyncRenderer.isBusy())
+      << "An active warmup keeps the gate closed until the worker observes cancellation and "
+         "releases DocumentWriteAccess.";
+  asyncRenderer.completeCompositorWarmupForTesting();
+  EXPECT_FALSE(asyncRenderer.isBusy());
+}
+
+TEST(AsyncRendererTest, CancellingDeferredCompositorWarmupCannotLoseDocumentWaiterWake) {
+  AsyncRenderer asyncRenderer(AsyncRendererStartMode::Deferred);
+  int wakeCount = 0;
+  asyncRenderer.setWakeCallback([&] { ++wakeCount; });
+
+  asyncRenderer.stageCompositorWarmupForTesting(/*pending=*/true, /*active=*/false);
+  asyncRenderer.cancelInFlight();
+  EXPECT_EQ(wakeCount, 1)
+      << "Cancelling an unclaimed warmup releases the document gate immediately, so deferred "
+         "input needs an immediate retry frame.";
+
+  asyncRenderer.stageCompositorWarmupForTesting(/*pending=*/false, /*active=*/true);
+  asyncRenderer.cancelInFlight();
+  EXPECT_EQ(wakeCount, 1)
+      << "An active warmup must keep the document gate closed until its write access is released.";
+
+  // Model cancellation arriving after warmup code's final token check but before its document
+  // guard and active-state flag are released. The durable waiter, rather than the sampled token,
+  // must cause the retry wake at the actual release edge.
+  asyncRenderer.completeCompositorWarmupForTesting();
+  EXPECT_EQ(wakeCount, 2);
+
+  asyncRenderer.stageCompositorWarmupForTesting(/*pending=*/false, /*active=*/true);
+  asyncRenderer.completeCompositorWarmupForTesting();
+  EXPECT_EQ(wakeCount, 2) << "Successful speculative work has no visible state to publish.";
+  asyncRenderer.cancelInFlight();
+  EXPECT_EQ(wakeCount, 3)
+      << "The cancellation API must also close the check-then-act race where the caller observed "
+         "busy immediately before the worker released the gate.";
+}
+
+TEST(AsyncRendererTest, FirstDocumentResultPublishesBeforeRetainedCacheWarmup) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <defs>
+      <filter id="f"><feGaussianBlur stdDeviation="2"/></filter>
+    </defs>
+    <g filter="url(#f)">
+      <rect x="1" y="1" width="12" height="12" fill="blue" />
+    </g>
+  )svg");
+  document.setCanvasSize(16, 16);
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  RenderRequest request(renderer, document);
+  request.version = 1;
+  request.documentGeneration = 1;
+  asyncRenderer.requestRender(request);
+  ASSERT_TRUE(WaitForRenderResult(asyncRenderer).has_value());
+
+  const auto stats = asyncRenderer.compositorRenderFrameStats();
+  EXPECT_GT(stats.firstFrameDrawMs, 0.0);
+  EXPECT_EQ(stats.firstFrameWarmupMs, 0.0)
+      << "The accepted result must describe the already-correct main draw, not later speculative "
+         "cache preparation.";
+}
+
+TEST(AsyncRendererTest, CancellingStagedDirectSurfaceKeepsLastAcceptedPresentation) {
+  AsyncRenderer asyncRenderer;
+  asyncRenderer.setDirectSurfacePresentationForTesting(DirectSurfacePresentationState{
+      .active = true,
+      .frameCount = 10,
+      .surfaceSlot = 0,
+  });
+
+  RenderResult cancelled;
+  cancelled.documentGeneration = 1;
+  cancelled.directSurfaceOutcome = DirectSurfacePresentationOutcome::Presented;
+  cancelled.directSurfaceFrames = 11;
+  cancelled.directSurfaceSlot = 1;
+  asyncRenderer.stageDirectSurfaceResultForTesting(std::move(cancelled));
+  asyncRenderer.cancelInFlight();
+
+  DirectSurfacePresentationState presentation = asyncRenderer.directSurfacePresentation();
+  EXPECT_TRUE(presentation.active);
+  EXPECT_EQ(presentation.frameCount, 10u)
+      << "A result canceled from DoneState never became visible and cannot advance surface state.";
+  EXPECT_EQ(presentation.surfaceSlot, 0)
+      << "A canceled back-buffer result cannot become the slot selected for the next UI frame.";
+
+  RenderResult accepted;
+  accepted.documentGeneration = 1;
+  accepted.directSurfaceOutcome = DirectSurfacePresentationOutcome::Presented;
+  accepted.directSurfaceFrames = 12;
+  accepted.directSurfaceSlot = 1;
+  asyncRenderer.stageDirectSurfaceResultForTesting(std::move(accepted));
+  ASSERT_TRUE(asyncRenderer.pollResult().has_value());
+
+  presentation = asyncRenderer.directSurfacePresentation();
+  EXPECT_TRUE(presentation.active);
+  EXPECT_EQ(presentation.frameCount, 12u);
+  EXPECT_EQ(presentation.surfaceSlot, 1);
+}
+
+TEST(AsyncRendererTest, AcceptedDirectSurfaceRechecksDocumentGenerationAtPoll) {
+  AsyncRenderer asyncRenderer;
+  asyncRenderer.setDirectSurfacePresentationForTesting(DirectSurfacePresentationState{
+      .active = true,
+      .frameCount = 20,
+      .surfaceSlot = 0,
+  });
+  asyncRenderer.invalidateDirectSurfacePresentation(/*documentGeneration=*/3);
+
+  RenderResult stale;
+  stale.documentGeneration = 2;
+  stale.directSurfaceOutcome = DirectSurfacePresentationOutcome::Presented;
+  stale.directSurfaceFrames = 21;
+  stale.directSurfaceSlot = 1;
+  asyncRenderer.stageDirectSurfaceResultForTesting(std::move(stale));
+  std::optional<RenderResult> result = asyncRenderer.pollResult();
+
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->directSurfaceOutcome, DirectSurfacePresentationOutcome::None);
+  const DirectSurfacePresentationState presentation = asyncRenderer.directSurfacePresentation();
+  EXPECT_FALSE(presentation.active);
+  EXPECT_EQ(presentation.frameCount, 20u);
+  EXPECT_EQ(presentation.surfaceSlot, 0);
+}
+
+TEST(RenderCoordinatorTest, AcceptedDirectSurfaceRetainsMetadataOnlyTilesForDebugOverlay) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <rect id="target" x="10" y="20" width="30" height="40" fill="blue"/>
+    </svg>
+  )svg"));
+
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(100.0, 100.0);
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0);
+  viewport.devicePixelRatio = 1.0;
+  viewport.resetTo100Percent();
+
+  RenderResult::CompositedTile tile;
+  tile.id = "layer:target";
+  tile.kind = RenderResult::CompositedTile::Kind::Layer;
+  tile.generation = 4;
+  tile.bitmapDimsPx = Vector2i(30, 40);
+  tile.rasterCanvasSize = Vector2i(100, 100);
+  tile.canvasOffsetDoc = Vector2d(10.0, 20.0);
+  tile.bitmapDimsDoc = Vector2d(30.0, 40.0);
+
+  RenderResult::CompositedPreview preview;
+  preview.tiles.push_back(std::move(tile));
+
+  RenderResult result;
+  result.compositedPreview = std::move(preview);
+  result.rasterViewport = viewport.rasterViewport();
+  result.version = app.document().currentFrameVersion();
+  result.documentGeneration = app.document().documentGeneration();
+  result.directSurfaceOutcome = DirectSurfacePresentationOutcome::Presented;
+  result.directSurfaceFrames = 1;
+
+  GlTextureCache textures;
+  RenderCoordinator coordinator;
+  coordinator.asyncRenderer().stageDirectSurfaceResultForTesting(std::move(result));
+  coordinator.pollRenderResult(app, viewport, textures);
+
+  ASSERT_EQ(textures.tiles().size(), 1u)
+      << "The direct surface owns document pixels, but the compositor tile overlay still needs "
+         "the accepted frame's geometry metadata.";
+  EXPECT_EQ(textures.tiles().front().id, "layer:target");
+  EXPECT_EQ(textures.tiles().front().texture, 0u)
+      << "Debug-overlay metadata must not allocate or copy a presentation texture.";
+  EXPECT_TRUE(textures.tiles().front().metadataOnly);
 }
 
 TEST(AsyncRendererTest, MultiSelectActiveDragMarksEverySelectedLayerAsDragTarget) {
@@ -354,7 +774,7 @@ TEST(AsyncRendererTest, FullCanvasFallbackCarriesBoundedRasterViewportGeometry) 
   EXPECT_EQ(tile.bitmapDimsDoc, Vector2d(100.0, 80.0));
 }
 
-TEST(AsyncRendererTest, ImmediateStaticSpansCarryPayloadAcrossPublishedFrames) {
+TEST(AsyncRendererTest, ProductionRendererCachesStaticSpansAcrossPublishedFrames) {
   svg::SVGDocument document = svg::instantiateSubtree(R"svg(
     <rect id="target" x="40" y="0" width="10" height="10" fill="red" />
     <rect id="cheap" x="2" y="2" width="8" height="8" fill="blue" />
@@ -392,27 +812,27 @@ TEST(AsyncRendererTest, ImmediateStaticSpansCarryPayloadAcrossPublishedFrames) {
     asyncRenderer.requestRender(request);
     return waitForResult();
   };
-  const auto expectImmediatePayload = [](const RenderResult& result) {
+  const auto expectNoImmediateTiles = [](const RenderResult& result) {
     ASSERT_TRUE(result.compositedPreview.has_value());
-    int immediateTileCount = 0;
     for (const RenderResult::CompositedTile& tile : result.compositedPreview->tiles) {
-      if (tile.kind != RenderResult::CompositedTile::Kind::Immediate) {
-        continue;
-      }
-      ++immediateTileCount;
-      EXPECT_TRUE(HasPresentationPayload(tile))
-          << "Immediate spans must not be published as metadata-only texture reuse.";
+      EXPECT_NE(tile.kind, RenderResult::CompositedTile::Kind::Immediate)
+          << "Production editor frames must cache static spans instead of rerasterizing them";
     }
-    EXPECT_GT(immediateTileCount, 0);
   };
 
   const std::optional<RenderResult> first = postSelection(1);
   ASSERT_TRUE(first.has_value());
-  expectImmediatePayload(*first);
+  expectNoImmediateTiles(*first);
+  const auto firstStats = asyncRenderer.compositorRenderFrameStats();
+  EXPECT_GT(firstStats.cachedTileCount, 0);
 
   const std::optional<RenderResult> second = postSelection(2);
   ASSERT_TRUE(second.has_value());
-  expectImmediatePayload(*second);
+  expectNoImmediateTiles(*second);
+  const auto secondStats = asyncRenderer.compositorRenderFrameStats();
+  EXPECT_EQ(secondStats.immediateTileCount, 0);
+  EXPECT_EQ(secondStats.cachedTileCount, 0)
+      << "An unchanged follow-up frame must reuse the cached segment payloads";
 }
 
 TEST(AsyncRendererE2ETest, SplashDonnerSelectionExposesEligibleStaticSpansForLayerPanel) {
@@ -592,6 +1012,33 @@ TEST(AsyncRendererTest, WakeCallbackFiresOnDoneTransitionBeforePollResult) {
   EXPECT_EQ(wakeCount.load(std::memory_order_acquire), 1);
 }
 
+TEST(AsyncRendererTest, HiddenCompositorDiagnosticsSkipInspectorSnapshots) {
+  svg::SVGDocument document =
+      svg::instantiateSubtree(R"svg(<rect x="8" y="8" width="24" height="24" fill="blue"/>)svg");
+  document.setCanvasSize(64, 64);
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  asyncRenderer.setCompositorDiagnosticsEnabled(false);
+
+  RenderRequest request(renderer, document);
+  request.version = 1;
+  request.documentGeneration = 1;
+  request.rasterViewport = EditorRasterViewport{
+      .documentRect = Box2d::FromXYWH(0.0, 0.0, 64.0, 64.0),
+      .outputSizePx = Vector2i(64, 64),
+      .semanticCanvasSizePx = Vector2i(64, 64),
+      .outputFromDocument = Transform2d(),
+  };
+  asyncRenderer.requestRender(request);
+
+  const std::optional<RenderResult> result = WaitForRenderResult(asyncRenderer);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_DOUBLE_EQ(result->workerTiming.diagnosticsMs, 0.0);
+  EXPECT_THAT(asyncRenderer.compositorLayerInspectorRows(), testing::IsEmpty());
+  EXPECT_THAT(asyncRenderer.compositorSegmentInspectorRows(), testing::IsEmpty());
+  EXPECT_THAT(asyncRenderer.compositorCompositeTiles(), testing::IsEmpty());
+}
+
 TEST(AsyncRendererTest, RenderInFlightForTestingExcludesStagedDoneResult) {
   svg::SVGDocument document = svg::instantiateSubtree(R"svg(
     <rect x="0" y="0" width="16" height="16" fill="red" />
@@ -617,6 +1064,8 @@ TEST(AsyncRendererTest, RenderInFlightForTestingExcludesStagedDoneResult) {
 
   std::optional<RenderResult> result = asyncRenderer.pollResult();
   ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(asyncRenderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
+                                                                std::chrono::seconds(5)));
   EXPECT_FALSE(asyncRenderer.isBusy());
 }
 
@@ -644,6 +1093,8 @@ TEST(AsyncRendererTest, ReplayResultHoldWithholdsStagedDoneResultForPollAttempts
 
   std::optional<RenderResult> result = asyncRenderer.pollResult();
   ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(asyncRenderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
+                                                                std::chrono::seconds(5)));
   EXPECT_FALSE(asyncRenderer.isBusy());
 }
 
@@ -1109,6 +1560,297 @@ TEST(AsyncRendererTest, DisplayNoneSelectionDoesNotLeaveStaleBackgroundPixelsWhe
 //   * discard the partial in-flight result instead of committing it;
 //   * bump `cancelledRenderCount()` so the test (and the editor) can
 //     observe preemption happening.
+TEST(AsyncRendererTest, WasmWorkerTaskSchedulesFollowUpForPendingRequest) {
+  EXPECT_EQ(ChooseWorkerTaskFollowUp(/*hasPendingRequest=*/false), WorkerTaskFollowUp::Park);
+  EXPECT_EQ(ChooseWorkerTaskFollowUp(/*hasPendingRequest=*/true),
+            WorkerTaskFollowUp::SchedulePendingRequest);
+}
+
+TEST(AsyncRendererTest, WasmWorkerTaskSchedulesFollowUpForConcurrentCancellation) {
+  EXPECT_EQ(ChooseWorkerTaskFollowUp(/*hasPendingRequest=*/false,
+                                     /*cancellationPending=*/true),
+            WorkerTaskFollowUp::SchedulePendingRequest)
+      << "A transient worker-surface retry can return after cancelInFlight changes RenderingState "
+         "to CancellingState; another worker task must consume that cancellation and reach idle";
+}
+
+TEST(AsyncRendererTest, WasmWorkerCallbackExitsDirectlyWhenShutdownWinsFollowUpRace) {
+  EXPECT_EQ(ChooseWorkerTaskCompletionDisposition(
+                /*shuttingDown=*/true, /*hasPendingRequest=*/true,
+                /*cancellationPending=*/true, /*thumbnailPending=*/true,
+                /*presentationBoundaryPending=*/true),
+            WorkerTaskCompletionDisposition::ExitWorker)
+      << "The callback already running on the worker must clean up and exit instead of relying on "
+         "a follow-up enqueue that shutdown can reject";
+  EXPECT_EQ(ChooseWorkerTaskCompletionDisposition(
+                /*shuttingDown=*/false, /*hasPendingRequest=*/false,
+                /*cancellationPending=*/false, /*thumbnailPending=*/false,
+                /*presentationBoundaryPending=*/true),
+            WorkerTaskCompletionDisposition::ScheduleFollowUp)
+      << "A direct surface cannot be accepted until a later browser event task observes the "
+         "implicit presentation boundary";
+}
+
+TEST(AsyncRendererTest, WasmShutdownKeepsPendingBoundaryCallbackAttachedUntilWorkerJoin) {
+  EXPECT_EQ(ChooseWasmWorkerOwnerDetachTiming(WasmWorkerRuntimeInitializationStatus::Ready),
+            WasmWorkerOwnerDetachTiming::AfterWorkerJoin)
+      << "A pending surface-boundary callback owns the single-flight wake gate. It must observe "
+         "Shutdown and exit the ready worker before the owner gate is detached";
+  EXPECT_EQ(ChooseWasmWorkerOwnerDetachTiming(WasmWorkerRuntimeInitializationStatus::Initializing),
+            WasmWorkerOwnerDetachTiming::BeforeWorkerJoin);
+  EXPECT_EQ(ChooseWasmWorkerOwnerDetachTiming(WasmWorkerRuntimeInitializationStatus::Failed),
+            WasmWorkerOwnerDetachTiming::BeforeWorkerJoin)
+      << "A spontaneous initialization Promise may outlive cancellation, so non-ready runtimes "
+         "must retain the early-detach UAF guard";
+}
+
+TEST(AsyncRendererTest, WasmWorkerRuntimeWakeDefersWithoutClaimingQueueUntilAsyncInitCompletes) {
+  EXPECT_FALSE(
+      CanAcceptWasmSampleThumbnailRequest(WasmWorkerRuntimeInitializationStatus::Initializing));
+  EXPECT_TRUE(CanAcceptWasmSampleThumbnailRequest(WasmWorkerRuntimeInitializationStatus::Ready));
+  EXPECT_FALSE(CanAcceptWasmSampleThumbnailRequest(WasmWorkerRuntimeInitializationStatus::Failed))
+      << "The caller must observe rejection instead of marking a thumbnail in flight after "
+         "runtime initialization has already failed";
+  EXPECT_TRUE(
+      DidAcceptWasmSampleThumbnailScheduleResult(WorkerTaskScheduleResult::ScheduledOrCoalesced));
+  EXPECT_TRUE(DidAcceptWasmSampleThumbnailScheduleResult(
+      WorkerTaskScheduleResult::DeferredUntilRuntimeReady));
+  EXPECT_FALSE(
+      DidAcceptWasmSampleThumbnailScheduleResult(WorkerTaskScheduleResult::EnqueueRejected));
+  EXPECT_FALSE(
+      DidAcceptWasmSampleThumbnailScheduleResult(WorkerTaskScheduleResult::RuntimeUnavailable))
+      << "A rejected wake must not leave EditorShell believing the dropped thumbnail is in flight";
+
+  EXPECT_EQ(ChooseWasmWorkerRuntimeWakeAction(WasmWorkerRuntimeInitializationStatus::Initializing,
+                                              /*shuttingDown=*/false),
+            WasmWorkerRuntimeWakeAction::DeferUntilRuntimeReady);
+  EXPECT_EQ(ChooseWasmWorkerRuntimeWakeAction(WasmWorkerRuntimeInitializationStatus::Ready,
+                                              /*shuttingDown=*/false),
+            WasmWorkerRuntimeWakeAction::ScheduleWorkerTask);
+  EXPECT_EQ(ChooseWasmWorkerRuntimeWakeAction(WasmWorkerRuntimeInitializationStatus::Initializing,
+                                              /*shuttingDown=*/true),
+            WasmWorkerRuntimeWakeAction::DetachAndCancelWorker);
+  EXPECT_EQ(ChooseWasmWorkerRuntimeWakeAction(WasmWorkerRuntimeInitializationStatus::Failed,
+                                              /*shuttingDown=*/false),
+            WasmWorkerRuntimeWakeAction::ReportRuntimeUnavailable);
+  EXPECT_EQ(ChooseWasmWorkerRuntimeCallbackDisposition(/*ownerAttached=*/false),
+            WasmWorkerRuntimeCallbackDisposition::DisposeDetachedResult)
+      << "A spontaneous Promise completion after join must dispose its own result without "
+         "dereferencing the former renderer owner";
+  EXPECT_EQ(ChooseWasmWorkerRuntimeCallbackDisposition(/*ownerAttached=*/true),
+            WasmWorkerRuntimeCallbackDisposition::DeliverToOwner);
+
+  const WasmWorkerRuntimeUnavailablePlan postFailureWork =
+      ChooseWasmWorkerRuntimeUnavailablePlan(/*renderStatePending=*/true,
+                                             /*thumbnailPending=*/true);
+  EXPECT_THAT(postFailureWork,
+              AllOf(Field("resolveRenderState",
+                          &WasmWorkerRuntimeUnavailablePlan::resolveRenderState, true),
+                    Field("dropPendingThumbnail",
+                          &WasmWorkerRuntimeUnavailablePlan::dropPendingThumbnail, true),
+                    Field("wakeOwner", &WasmWorkerRuntimeUnavailablePlan::wakeOwner, true)))
+      << "Work racing after initialization failure must not strand busy or thumbnail state";
+}
+
+TEST(AsyncRendererTest, WasmWorkerWakeGateCoalescesBurstAndRearms) {
+  WorkerTaskWakeGate gate;
+
+  EXPECT_TRUE(gate.trySchedule());
+  for (int request = 0; request < 1000; ++request) {
+    EXPECT_FALSE(gate.trySchedule()) << "request " << request;
+  }
+
+  gate.completeTask();
+  EXPECT_TRUE(gate.trySchedule());
+}
+
+TEST(AsyncRendererTest, WasmWorkerWakeGateRollsBackRejectedEnqueue) {
+  WorkerTaskWakeGate gate;
+
+  ASSERT_TRUE(gate.trySchedule());
+  gate.completeEnqueue(/*queued=*/false);
+
+  EXPECT_TRUE(gate.trySchedule())
+      << "emscripten_proxy_async rejection must not permanently consume the single-flight slot";
+}
+
+TEST(AsyncRendererTest, WasmWorkerRejectedEnqueueResolvesBusyStateAndWakesOnce) {
+  const WorkerTaskEnqueueFailurePlan firstFailure = ChooseWorkerTaskEnqueueFailurePlan(
+      /*shuttingDown=*/false, /*renderStatePending=*/true, /*thumbnailPending=*/true,
+      /*consecutiveFailureCount=*/1);
+  EXPECT_THAT(
+      firstFailure,
+      AllOf(
+          Field("resolveRenderState", &WorkerTaskEnqueueFailurePlan::resolveRenderState, true),
+          Field("dropPendingThumbnail", &WorkerTaskEnqueueFailurePlan::dropPendingThumbnail, true),
+          Field("wakeOwnerForRetry", &WorkerTaskEnqueueFailurePlan::wakeOwnerForRetry, true),
+          Field("reportSurfaceUnavailable", &WorkerTaskEnqueueFailurePlan::reportSurfaceUnavailable,
+                false),
+          Field("shutdownDisposition", &WorkerTaskEnqueueFailurePlan::shutdownDisposition,
+                WorkerTaskShutdownDisposition::None)));
+
+  const WorkerTaskEnqueueFailurePlan repeatedFailure = ChooseWorkerTaskEnqueueFailurePlan(
+      /*shuttingDown=*/false, /*renderStatePending=*/true, /*thumbnailPending=*/false,
+      /*consecutiveFailureCount=*/2);
+  EXPECT_THAT(
+      repeatedFailure,
+      AllOf(
+          Field("resolveRenderState", &WorkerTaskEnqueueFailurePlan::resolveRenderState, true),
+          Field("dropPendingThumbnail", &WorkerTaskEnqueueFailurePlan::dropPendingThumbnail, false),
+          Field("wakeOwnerForRetry", &WorkerTaskEnqueueFailurePlan::wakeOwnerForRetry, false),
+          Field("reportSurfaceUnavailable", &WorkerTaskEnqueueFailurePlan::reportSurfaceUnavailable,
+                true),
+          Field("shutdownDisposition", &WorkerTaskEnqueueFailurePlan::shutdownDisposition,
+                WorkerTaskShutdownDisposition::None)))
+      << "A closed mailbox must not create an unbounded event-driven retry loop";
+}
+
+TEST(AsyncRendererTest, WasmWorkerRejectedShutdownWakeHasBoundedExitDisposition) {
+  const WorkerTaskEnqueueFailurePlan ownerPlan = ChooseWorkerTaskEnqueueFailurePlan(
+      /*shuttingDown=*/true, /*renderStatePending=*/true, /*thumbnailPending=*/true,
+      /*consecutiveFailureCount=*/1, /*enqueueAttemptFromWorker=*/false);
+  EXPECT_THAT(
+      ownerPlan,
+      AllOf(
+          Field("resolveRenderState", &WorkerTaskEnqueueFailurePlan::resolveRenderState, false),
+          Field("dropPendingThumbnail", &WorkerTaskEnqueueFailurePlan::dropPendingThumbnail, false),
+          Field("wakeOwnerForRetry", &WorkerTaskEnqueueFailurePlan::wakeOwnerForRetry, false),
+          Field("reportSurfaceUnavailable", &WorkerTaskEnqueueFailurePlan::reportSurfaceUnavailable,
+                false),
+          Field("shutdownDisposition", &WorkerTaskEnqueueFailurePlan::shutdownDisposition,
+                WorkerTaskShutdownDisposition::CancelWorkerBeforeJoin)));
+
+  const WorkerTaskEnqueueFailurePlan workerPlan = ChooseWorkerTaskEnqueueFailurePlan(
+      /*shuttingDown=*/true, /*renderStatePending=*/true, /*thumbnailPending=*/true,
+      /*consecutiveFailureCount=*/1, /*enqueueAttemptFromWorker=*/true);
+  EXPECT_EQ(workerPlan.shutdownDisposition, WorkerTaskShutdownDisposition::ExitCurrentWorker)
+      << "A running worker callback can release its thread-affined runtime and exit without a "
+         "second mailbox wake";
+}
+
+TEST(AsyncRendererTest, ForcedWasmWorkerCancellationAbandonsThreadAffinedRuntime) {
+  EXPECT_EQ(ChooseWasmWorkerRuntimeOwnerCleanupDisposition(
+                /*workerCancellationRequested=*/false, /*runtimeStillOwnedAfterJoin=*/false),
+            WasmWorkerRuntimeOwnerCleanupDisposition::ExpectWorkerCleanup);
+  EXPECT_EQ(ChooseWasmWorkerRuntimeOwnerCleanupDisposition(
+                /*workerCancellationRequested=*/true, /*runtimeStillOwnedAfterJoin=*/false),
+            WasmWorkerRuntimeOwnerCleanupDisposition::AbandonThreadAffinedRuntime)
+      << "After forced cancellation, destroying worker-created WebGPU handles on the joining main "
+         "thread is invalid; the bounded page-lifetime fallback must abandon them";
+  EXPECT_EQ(ChooseWasmWorkerRuntimeOwnerCleanupDisposition(
+                /*workerCancellationRequested=*/false, /*runtimeStillOwnedAfterJoin=*/true),
+            WasmWorkerRuntimeOwnerCleanupDisposition::AbandonThreadAffinedRuntime)
+      << "An unexpected live worker runtime after join must never fall through to main-thread "
+         "member destruction";
+}
+
+TEST(AsyncRendererTest, DirectSurfaceResultWaitsForNextWorkerTaskBoundary) {
+  AsyncRenderer asyncRenderer;
+  RenderResult pending;
+  pending.version = 7;
+  pending.directSurfaceOutcome = DirectSurfacePresentationOutcome::Presented;
+  pending.directSurfaceFrames = 23;
+  pending.directSurfaceSlot = 1;
+  asyncRenderer.stageDirectSurfaceResultPendingTaskBoundaryForTesting(std::move(pending));
+
+  EXPECT_TRUE(asyncRenderer.isBusy());
+  EXPECT_FALSE(asyncRenderer.pollResult().has_value())
+      << "The main thread must not swap z-order before the worker callback that submitted the "
+         "WebGPU surface has returned to the browser event loop";
+
+  ASSERT_TRUE(asyncRenderer.acknowledgeDirectSurfaceTaskBoundaryForTesting());
+  const std::optional<RenderResult> accepted = asyncRenderer.pollResult();
+  ASSERT_TRUE(accepted.has_value());
+  EXPECT_EQ(accepted->version, 7u);
+  EXPECT_EQ(accepted->directSurfaceFrames, 23u);
+  EXPECT_EQ(asyncRenderer.directSurfacePresentation().frameCount, 23u);
+}
+
+TEST(AsyncRendererTest, StaleDirectSurfaceBoundaryCannotAcknowledgeReplacementPendingFrame) {
+  AsyncRenderer asyncRenderer;
+
+  RenderResult superseded;
+  superseded.version = 20;
+  superseded.directSurfaceOutcome = DirectSurfacePresentationOutcome::Presented;
+  superseded.directSurfaceFrames = 20;
+  superseded.directSurfaceSlot = 0;
+  asyncRenderer.stageDirectSurfaceResultPendingTaskBoundaryForTesting(std::move(superseded));
+
+  RenderResult replacement;
+  replacement.version = 21;
+  replacement.directSurfaceOutcome = DirectSurfacePresentationOutcome::Presented;
+  replacement.directSurfaceFrames = 21;
+  replacement.directSurfaceSlot = 1;
+  asyncRenderer.stageDirectSurfaceResultPendingTaskBoundaryForTesting(std::move(replacement));
+
+  EXPECT_FALSE(asyncRenderer.acknowledgeDirectSurfaceTaskBoundaryForTesting(20))
+      << "The callback for a superseded frame must not acknowledge a newer pending surface";
+  EXPECT_FALSE(asyncRenderer.pollResult().has_value());
+
+  ASSERT_TRUE(asyncRenderer.acknowledgeDirectSurfaceTaskBoundaryForTesting(21));
+  const std::optional<RenderResult> accepted = asyncRenderer.pollResult();
+  ASSERT_TRUE(accepted.has_value());
+  EXPECT_EQ(accepted->version, 21u);
+  EXPECT_EQ(accepted->directSurfaceFrames, 21u);
+}
+
+TEST(AsyncRendererTest, CancellingDirectSurfaceBoundaryDropsUnpresentedResult) {
+  AsyncRenderer asyncRenderer;
+  asyncRenderer.setDirectSurfacePresentationForTesting(DirectSurfacePresentationState{
+      .active = true,
+      .frameCount = 19,
+      .surfaceSlot = 0,
+  });
+  RenderResult pending;
+  pending.directSurfaceOutcome = DirectSurfacePresentationOutcome::Presented;
+  pending.directSurfaceFrames = 20;
+  pending.directSurfaceSlot = 1;
+  asyncRenderer.stageDirectSurfaceResultPendingTaskBoundaryForTesting(std::move(pending));
+
+  asyncRenderer.cancelInFlight();
+
+  EXPECT_FALSE(asyncRenderer.acknowledgeDirectSurfaceTaskBoundaryForTesting());
+  EXPECT_FALSE(asyncRenderer.pollResult().has_value());
+  const DirectSurfacePresentationState presentation = asyncRenderer.directSurfacePresentation();
+  EXPECT_EQ(presentation.frameCount, 19u);
+  EXPECT_EQ(presentation.surfaceSlot, 0);
+}
+
+TEST(AsyncRendererTest, SupersedingDirectSurfaceBoundaryNeverAcceptsSupersededFrame) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <rect x="0" y="0" width="16" height="16" fill="red" />
+  )svg");
+  document.setCanvasSize(16, 16);
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  asyncRenderer.setDirectSurfacePresentationForTesting(DirectSurfacePresentationState{
+      .active = true,
+      .frameCount = 19,
+      .surfaceSlot = 0,
+  });
+
+  RenderResult pending;
+  pending.version = 20;
+  pending.directSurfaceOutcome = DirectSurfacePresentationOutcome::Presented;
+  pending.directSurfaceFrames = 20;
+  pending.directSurfaceSlot = 1;
+  asyncRenderer.stageDirectSurfaceResultPendingTaskBoundaryForTesting(std::move(pending));
+
+  RenderRequest replacement(renderer, document);
+  replacement.version = 21;
+  asyncRenderer.requestRender(replacement);
+
+  EXPECT_FALSE(asyncRenderer.acknowledgeDirectSurfaceTaskBoundaryForTesting())
+      << "A replacement request must retire the pending presentation-boundary state";
+  const std::optional<RenderResult> replacementResult = WaitForRenderResult(asyncRenderer);
+  ASSERT_TRUE(replacementResult.has_value());
+  EXPECT_EQ(replacementResult->version, 21u);
+  const DirectSurfacePresentationState presentation = asyncRenderer.directSurfacePresentation();
+  EXPECT_EQ(presentation.frameCount, 19u)
+      << "The superseded back-buffer frame never crossed its task boundary and cannot be visible";
+  EXPECT_EQ(presentation.surfaceSlot, 0);
+}
+
 TEST(AsyncRendererTest, RequestRenderDuringBusySignalsCancellationAndPicksUpNewRequest) {
   svg::SVGDocument document = svg::instantiateSubtree(R"svg(
     <rect id="a" x="0" y="0" width="16" height="16" fill="red" />
@@ -1220,6 +1962,30 @@ TEST(AsyncRendererTest, CancelInFlightDropsResultAndReturnsWorkerToIdle) {
          "`pollResult` - otherwise the caller picks up stale pre-cancel state";
 }
 
+TEST(AsyncRendererTest, CompositorBindsToRetainedDocumentBeforeDeferredWarmup) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <rect id="target" x="0" y="0" width="64" height="64" fill="red"/>
+  )svg");
+  document.setCanvasSize(64, 64);
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  {
+    RenderRequest request(renderer, document);
+    request.version = 1;
+    request.documentGeneration = 1;
+    asyncRenderer.requestRender(request);
+  }
+
+  ASSERT_TRUE(asyncRenderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
+                                                                std::chrono::seconds(5)));
+  EXPECT_TRUE(asyncRenderer.compositorUsesRetainedDocumentForTesting())
+      << "Deferred warmup outlives the request, so the compositor must reference the "
+         "renderer-owned SVGDocument value rather than RenderLease::document().";
+
+  ASSERT_TRUE(asyncRenderer.pollResult().has_value());
+}
+
 // Same contract, but assert that a follow-up `requestRender` after the
 // cancel runs through cleanly. The cancel must not leave the
 // AsyncRenderer in a state where the next request stalls or is treated
@@ -1301,9 +2067,9 @@ TEST(AsyncRendererTest, DragPreviewRequestReturnsCompositedPreviewLayers) {
   ASSERT_TRUE(result.has_value());
   ASSERT_TRUE(result->compositedPreview.has_value());
   EXPECT_TRUE(result->compositedPreview->valid());
-  // Tiny-skia keeps a CPU snapshot for diagnostics; Geode direct presentation
-  // must not fall back to CPU readback.
-  EXPECT_EQ(result->bitmap.empty(), renderer.requiresTextureSnapshotPresentation());
+  EXPECT_TRUE(result->bitmap.empty())
+      << "Compositor tiles already carry the presented pixels; a redundant full-canvas CPU "
+         "snapshot would copy the entire TinySkia framebuffer on every drag frame";
   EXPECT_EQ(result->compositedPreview->entity, target->unsafeEntityHandle().entity());
   // M2C: promoted presentation payload now lives inside the `tiles` paint-order
   // list. Assert at least one Layer-kind tile carries non-empty
@@ -1409,7 +2175,8 @@ TEST(AsyncRendererTest, CompositorResetOnDocumentVersionChange) {
     // After a version change, the compositor should still produce valid composited output.
     ASSERT_TRUE(result->compositedPreview.has_value());
     EXPECT_TRUE(result->compositedPreview->valid());
-    EXPECT_EQ(result->bitmap.empty(), renderer.requiresTextureSnapshotPresentation());
+    EXPECT_TRUE(result->bitmap.empty())
+        << "A valid composited preview must not also copy the full TinySkia framebuffer";
   }
 }
 
@@ -2121,6 +2888,72 @@ TEST(AsyncRendererTest, SteadyActiveDragTargetReusesPublishedTextureMetadataOnly
   }
 }
 
+TEST(AsyncRendererTest, CancelledDoneResultDoesNotAuthorizeMetadataOnlyFollowUp) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <rect id="before" x="0" y="0" width="12" height="12" fill="blue"/>
+    <rect id="target" x="20" y="0" width="20" height="20" fill="red"/>
+    <rect id="after" x="50" y="0" width="12" height="12" fill="green"/>
+  )svg");
+  document.setCanvasSize(80, 40);
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  asyncRenderer.setReplayResultHoldFramesForTesting(1);
+
+  const auto postActiveDrag = [&](std::uint64_t version, double x) {
+    target->cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(x, 0.0)));
+    RenderRequest request(renderer, document);
+    request.version = version;
+    request.documentGeneration = 1;
+    request.selectedEntity = entity;
+    request.dragPreview = RenderRequest::DragPreview{
+        .entity = entity,
+        .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
+    };
+    asyncRenderer.requestRender(request);
+  };
+
+  postActiveDrag(/*version=*/1, /*x=*/4.0);
+  ASSERT_TRUE(asyncRenderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
+                                                                std::chrono::seconds(5)));
+  EXPECT_FALSE(asyncRenderer.pollResult().has_value())
+      << "The replay hold must leave the completed result staged in DoneState.";
+  asyncRenderer.cancelInFlight();
+  EXPECT_FALSE(asyncRenderer.pollResult().has_value())
+      << "Cancelling a staged DoneState must prevent its tile payloads from reaching the UI.";
+
+  asyncRenderer.setReplayResultHoldFramesForTesting(0);
+  postActiveDrag(/*version=*/2, /*x=*/8.0);
+  std::optional<RenderResult> followUp = WaitForRenderResult(asyncRenderer);
+  ASSERT_TRUE(followUp.has_value());
+  ASSERT_TRUE(followUp->compositedPreview.has_value());
+
+  using PublishedTile =
+      std::tuple<RenderResult::CompositedTile::Kind, std::uint64_t, Vector2i, Vector2i>;
+  std::unordered_map<std::string, PublishedTile> polledPayloads;
+  for (const RenderResult::CompositedTile& tile : followUp->compositedPreview->tiles) {
+    if (HasPresentationPayload(tile)) {
+      polledPayloads.insert_or_assign(
+          tile.id,
+          PublishedTile{tile.kind, tile.generation, tile.bitmapDimsPx, tile.rasterCanvasSize});
+      continue;
+    }
+
+    const auto published = polledPayloads.find(tile.id);
+    ASSERT_NE(published, polledPayloads.end())
+        << "Metadata-only tile " << tile.id
+        << " reused pixels from a cancelled DoneState that pollResult never handed to the UI.";
+    EXPECT_EQ(std::get<0>(published->second), tile.kind);
+    EXPECT_EQ(std::get<1>(published->second), tile.generation);
+    EXPECT_EQ(std::get<2>(published->second), tile.bitmapDimsPx);
+    EXPECT_EQ(std::get<3>(published->second), tile.rasterCanvasSize);
+  }
+}
+
 TEST(AsyncRendererTest, SelectedPathStyleChangePublishesFreshPromotedLayerPixels) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(R"svg(
@@ -2806,10 +3639,12 @@ TEST(AsyncRendererTest, DragFrameVersionBumpDoesNotResetCompositor) {
 // editor's flow on mouse-down → drag is:
 //
 //   Frame 0 (page load): RenderRequest with no selectedEntity and no
-//     dragPreview. Compositor takes the cold-render path, detectors
-//     find mandatory filter layers, eager-warmup rasterizes their
-//     bitmaps + the segments between them. `layers_` contains filter
-//     groups only (drag target not yet known).
+//     dragPreview. Compositor takes the cold-render path, draws the
+//     correct full document, and publishes it before retained-cache
+//     warmup. After acceptance the worker warms mandatory filter layers
+//     and static segments on its cancellable low-priority lane. If the
+//     next gesture arrives first, it cancels that lane and the foreground
+//     render completes only the payloads still missing.
 //
 //   Frame 1 (click-then-drag, one UI frame): user clicks a letter →
 //     SelectTool sets selection + dragState in the same event. By the
@@ -3852,15 +4687,15 @@ TEST(AsyncRendererE2ETest, MultiShapeClickDragHiDpiRepro) {
 // `CompositorController::composeLayers` calling `renderer_->beginFrame()` (which
 // recreates the main renderer's pixmap as fully transparent) and then skipping
 // the actual compose because `skipMainComposeDuringSplit_` was on. The main
-// renderer's `takeSnapshot` then returned a transparent bitmap, which is now
-// used to seed the full-canvas composited tile whenever split tiles are not
-// available.
+// renderer's `takeSnapshot` then returned a transparent bitmap, which could
+// seed a full-canvas composited tile whenever split tiles were not available.
 //
 // The fix preserves the main renderer's framebuffer across skip-compose frames.
-// This test locks that in by polling the render result after each phase of the
-// click-D → drag-D → release-D → click-O sequence and asserting the CPU snapshot
-// is non-empty and contains at least some non-fully-transparent pixels.
-TEST(AsyncRendererE2ETest, CpuSnapshotStaysNonTransparentAcrossDragTargetSwap) {
+// This test models the retained tile cache while polling each phase of the
+// click-D → drag-D → release-D → click-O sequence. A fallback CPU snapshot must
+// contain real pixels, while a split preview may omit that redundant full-frame
+// copy only when its current tiles resolve to retained non-transparent pixels.
+TEST(AsyncRendererE2ETest, PresentationStaysNonTransparentAcrossDragTargetSwap) {
   std::ifstream splashStream("donner_splash.svg");
   if (!splashStream.is_open()) {
     GTEST_SKIP() << "donner_splash.svg not found in runfiles";
@@ -3925,28 +4760,40 @@ TEST(AsyncRendererE2ETest, CpuSnapshotStaysNonTransparentAcrossDragTargetSwap) {
     return nonTransparent * 100u < pixelCount;
   };
 
+  std::unordered_map<std::string, svg::RendererBitmap> retainedTileBitmaps;
   auto checkResult = [&](std::string_view phase) {
     auto result = waitForResult();
     ASSERT_TRUE(result.has_value()) << "no result for " << phase;
-    EXPECT_FALSE(result->bitmap.empty()) << phase << ": CPU snapshot empty";
-    EXPECT_FALSE(isBitmapMostlyTransparent(result->bitmap))
-        << phase
-        << ": CPU snapshot is ≥99% transparent - a full-canvas composited tile seeded from it "
-           "would show as a transparent flash to the user.";
+    if (!result->bitmap.empty()) {
+      EXPECT_FALSE(isBitmapMostlyTransparent(result->bitmap))
+          << phase << ": fallback CPU snapshot is at least 99% transparent and would flash blank";
+    }
+
+    ASSERT_TRUE(result->compositedPreview.has_value()) << phase << ": no presentation payload";
+    bool currentPresentationHasContent = false;
+    for (const RenderResult::CompositedTile& tile : result->compositedPreview->tiles) {
+      if (!tile.bitmap.empty()) {
+        retainedTileBitmaps[tile.id] = tile.bitmap;
+      }
+      const auto retained = retainedTileBitmaps.find(tile.id);
+      ASSERT_NE(retained, retainedTileBitmaps.end())
+          << phase << ": metadata-only tile " << tile.id << " was never published with pixels";
+      currentPresentationHasContent |= !isBitmapMostlyTransparent(retained->second);
+    }
+    EXPECT_TRUE(currentPresentationHasContent)
+        << phase << ": current retained tile set is at least 99% transparent";
   };
 
   // Phase 0 - cold render. Flat must contain real document content.
   post(1, entt::null, entt::null);
   checkResult("cold");
 
-  // Phase 1 - click-drag on D. Even though the editor displays composited
-  // tiles for this frame, the CPU snapshot must retain the cold render's pixels.
+  // Phase 1 - click-drag on D. Composited tiles replace the redundant full-frame copy.
   AsGraphicsElement(*donnerPath).setTransform(Transform2d::Translate(Vector2d(4.0, 0.0)));
   post(2, donnerEntity, donnerEntity);
   checkResult("click-D");
 
-  // Phase 2 - drag frames. The CPU snapshot must still hold cold pixels
-  // (skip-main-compose is active, main renderer's pixmap preserved).
+  // Phase 2 - drag frames. Metadata-only tiles must resolve to retained pixels.
   for (int i = 0; i < 3; ++i) {
     AsGraphicsElement(*donnerPath)
         .setTransform(Transform2d::Translate(Vector2d(static_cast<double>(i + 2) * 4.0, 0.0)));
@@ -3954,8 +4801,7 @@ TEST(AsyncRendererE2ETest, CpuSnapshotStaysNonTransparentAcrossDragTargetSwap) {
     checkResult("drag-D");
   }
 
-  // Phase 3 - release D (selection kept). Still split-path, still
-  // skip-main-compose, flat still preserved.
+  // Phase 3 - release D (selection kept).
   post(6, donnerEntity, entt::null);
   checkResult("release-D");
 
@@ -4473,6 +5319,61 @@ TEST(RenderCoordinatorTest, DisplayNoneSelectionSuppressesPromotedTilePresentati
   EXPECT_EQ(coordinator.suppressedCompositedLayerEntity(app), target->unsafeEntityHandle().entity())
       << "The live DOM has hidden the selected element, so stale promoted-layer pixels should not "
          "be drawn even while selection chrome remains visible.";
+}
+
+TEST(RenderCoordinatorTest, StableSelectedFullDocumentPrewarmStaysIdle) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 892 512">
+      <rect id="background" width="892" height="512" fill="#10131b"/>
+      <path id="target" d="M 120 80 C 780 20 60 490 760 430 Z" fill="#4fd1c5"/>
+    </svg>
+  )svg"));
+  auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(1148.0, 876.0);
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 892.0, 512.0);
+  viewport.devicePixelRatio = 2.0;
+  viewport.resetTo100Percent();
+  ASSERT_FALSE(viewport.rasterViewport().viewportBounded);
+  ASSERT_FALSE(viewport.selectedPrewarmRasterViewport().viewportBounded)
+      << "Selected-layer overdraw must not turn a full-document presentation into a bounded "
+         "result that pollRenderResult will reject";
+
+  SelectTool selectTool;
+  GlTextureCache textures;
+  RenderCoordinator coordinator;
+  if (!coordinator.renderer().requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "Geode-only presentation regression: TinySkia test path lacks a GL context "
+                    "for composited texture upload.";
+  }
+
+  const auto waitForCoordinator = [&]() {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (std::chrono::steady_clock::now() < deadline) {
+      coordinator.pollRenderResult(app, viewport, textures);
+      if (!coordinator.asyncRenderer().isBusy()) {
+        return true;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return false;
+  };
+
+  coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
+  ASSERT_TRUE(waitForCoordinator());
+  ASSERT_TRUE(coordinator.compositedPresentation().hasCachedTexturesForEntity(
+      target->unsafeEntityHandle().entity()));
+
+  for (int idleFrame = 0; idleFrame < 3; ++idleFrame) {
+    coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
+    EXPECT_FALSE(coordinator.asyncRenderer().isBusy())
+        << "A stable selected viewport must not post another worker update on idle frame "
+        << idleFrame;
+  }
 }
 
 TEST(RenderCoordinatorTest, ContinuousSelectedZoomDefersViewportPrewarmUntilStable) {

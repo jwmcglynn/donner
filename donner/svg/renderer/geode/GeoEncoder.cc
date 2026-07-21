@@ -485,6 +485,7 @@ struct GeoEncoder::Impl {
     wgpu::BindGroup bindGroup = transientResources.retain(dev.createBindGroup(bgDesc));
     device->countBindGroup();
 
+    recordGeometryDebugDraw(encoded);
     pass.get().setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
     pass.get().setBindGroup(0, bindGroup, 0, nullptr);
     pass.get().draw(static_cast<uint32_t>(encoded.quadVertices.size()), 1, 0, 0);
@@ -564,6 +565,19 @@ struct GeoEncoder::Impl {
 
   // Current transform - applied to MVP for the next draw.
   Transform2d transform = Transform2d();  // Identity.
+
+  // Optional renderer-owned debug observer. Null in normal rendering;
+  // `rootFromTarget` canonicalizes offscreen target pixels for that observer.
+  GeometryDebugSink* geometryDebugSink = nullptr;
+  Transform2d geometryDebugRootFromTarget;
+
+  void recordGeometryDebugDraw(const EncodedPath& encoded,
+                               std::span<const float> instanceTransforms = {}) const {
+    if (geometryDebugSink != nullptr) {
+      geometryDebugSink->recordSlugDraw(encoded, transform, geometryDebugRootFromTarget,
+                                        instanceTransforms);
+    }
+  }
 
   // Current scissor rectangle in target-pixel coords. An empty/unset
   // scissor means "no clipping" (full target extent). Applied to each
@@ -1116,6 +1130,7 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
   wgpu::BindGroup bindGroup = impl_->transientResources.retain(dev.createBindGroup(bgDesc));
   impl_->device->countBindGroup();
 
+  impl_->recordGeometryDebugDraw(encoded);
   impl_->maskPass.get().setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
   impl_->maskPass.get().setBindGroup(0, bindGroup, 0, nullptr);
   impl_->maskPass.get().draw(static_cast<uint32_t>(encoded.quadVertices.size()), 1, 0, 0);
@@ -1161,6 +1176,11 @@ void GeoEncoder::clearClipMask() {
 
 void GeoEncoder::setBufferPool(GeodeBufferPool* pool) {
   impl_->bufferPool = pool;
+}
+
+void GeoEncoder::setGeometryDebugSink(GeometryDebugSink* sink, const Transform2d& rootFromTarget) {
+  impl_->geometryDebugSink = sink;
+  impl_->geometryDebugRootFromTarget = rootFromTarget;
 }
 
 void GeoEncoder::setLoadPreserve() {
@@ -1315,8 +1335,8 @@ void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const Enc
   wgpu::BufferDescriptor desc = {};
   desc.label = wgpuLabel("GeodeResidentPath");
   desc.size = totalSize;
-  desc.usage = wgpu::BufferUsage::Vertex | wgpu::BufferUsage::Storage |
-               wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
+  desc.usage = wgpu::BufferUsage::Vertex | wgpu::BufferUsage::Storage | wgpu::BufferUsage::Uniform |
+               wgpu::BufferUsage::CopyDst;
   slot.buffer.reset(device->device().createBuffer(desc));
   device->countBuffer();
 
@@ -1437,6 +1457,7 @@ void GeoEncoder::Impl::submitResidentFillDraw(GeodeResidentSlot& slot, const Enc
     buildResidentBindGroup(slot);
   }
 
+  recordGeometryDebugDraw(encoded);
   pass.get().setVertexBuffer(0, slot.buffer.get(), slot.vertex.offset, slot.vertex.size);
   pass.get().setBindGroup(0, slot.bindGroup.get(), 0, nullptr);
   pass.get().draw(slot.vertexCount, 1, 0, 0);
@@ -1535,7 +1556,7 @@ void GeoEncoder::fillPathInstanced(const EncodedPath& encoded, const css::RGBA& 
   args.instanceTransformsSize = itAlloc.size;
   args.instanceCount = instanceCount;
 
-  submitFillDraw(args);
+  submitFillDraw(args, instanceTransforms);
 }
 
 void GeoEncoder::fillPathPattern(const Path& path, FillRule rule, const PatternPaint& paint,
@@ -1573,7 +1594,8 @@ void GeoEncoder::fillPathPattern(const Path& path, FillRule rule, const PatternP
   submitFillDraw(args);
 }
 
-void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
+void GeoEncoder::submitFillDraw(const FillDrawArgs& args,
+                                std::span<const float> instanceTransforms) {
   // Dummy resources are pre-created in the encoder constructor; no
   // per-draw ensure call is needed.
   impl_->ensurePassOpen();
@@ -1696,6 +1718,7 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
   impl_->device->countBindGroup();
 
   // 4. Record the draw call - one quad (6 vertices) per path.
+  impl_->recordGeometryDebugDraw(encoded, instanceTransforms);
   impl_->pass.get().setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
   impl_->pass.get().setBindGroup(0, bindGroup, 0, nullptr);
   impl_->pass.get().draw(static_cast<uint32_t>(encoded.quadVertices.size()), args.instanceCount, 0,

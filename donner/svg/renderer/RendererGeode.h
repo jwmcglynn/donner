@@ -9,6 +9,7 @@
 ///
 /// See `docs/design_docs/0017-geode_renderer.md` for the full design.
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -53,7 +54,12 @@ public:
    */
   RendererGeodeTextureSnapshot(std::shared_ptr<geode::GeodeDevice> device, wgpu::Texture texture,
                                Vector2i dimensions, wgpu::TextureFormat format);
-  ~RendererGeodeTextureSnapshot() override = default;
+  ~RendererGeodeTextureSnapshot() override;
+
+  RendererGeodeTextureSnapshot(const RendererGeodeTextureSnapshot&) = delete;
+  RendererGeodeTextureSnapshot& operator=(const RendererGeodeTextureSnapshot&) = delete;
+  RendererGeodeTextureSnapshot(RendererGeodeTextureSnapshot&&) noexcept = default;
+  RendererGeodeTextureSnapshot& operator=(RendererGeodeTextureSnapshot&& other) noexcept;
 
   [[nodiscard]] RendererTextureSnapshotBackend backend() const override {
     return RendererTextureSnapshotBackend::Geode;
@@ -62,7 +68,7 @@ public:
   [[nodiscard]] AlphaType alphaType() const override { return AlphaType::Premultiplied; }
 
   /// Resolved single-sample WebGPU texture.
-  [[nodiscard]] const wgpu::Texture& texture() const { return texture_.get(); }
+  [[nodiscard]] const wgpu::Texture& texture() const { return texture_; }
 
   /// Lazily-created texture view suitable for ImGui_ImplWGPU's ImTextureID.
   [[nodiscard]] const wgpu::TextureView& textureView() const;
@@ -71,8 +77,17 @@ public:
   [[nodiscard]] wgpu::TextureFormat format() const { return format_; }
 
 private:
+  friend class RendererGeode;
+
+  /// Construct a frame-local view that does not retain or release the texture.
+  static RendererGeodeTextureSnapshot BorrowCurrentFrame(wgpu::Texture texture, Vector2i dimensions,
+                                                         wgpu::TextureFormat format);
+
+  void destroyOwnedBacking() noexcept;
+
   std::shared_ptr<geode::GeodeDevice> device_;
-  geode::ScopedWgpuHandle<wgpu::Texture> texture_;
+  geode::ScopedWgpuHandle<wgpu::Texture> ownedTexture_;
+  wgpu::Texture texture_;
   mutable geode::ScopedWgpuHandle<wgpu::TextureView> textureView_;
   Vector2i dimensions_ = Vector2i::Zero();
   wgpu::TextureFormat format_ = wgpu::TextureFormat::Undefined;
@@ -104,6 +119,26 @@ struct FrameTimings {
   /// are disabled or unsupported. Reserved for future work - currently
   /// always zero.
   uint64_t totalGpuNs = 0;
+};
+
+/**
+ * Retained-memory instrumentation for RendererGeode's transient texture pool.
+ *
+ * Counts include only free textures available for cross-frame reuse, not textures currently in
+ * use by an active frame or the renderer's primary target.
+ */
+struct RendererGeodeTexturePoolStats {
+  /// Number of reusable textures currently retained by the pool.
+  std::size_t textureCount = 0;
+
+  /// Number of non-empty exact-size texture buckets.
+  std::size_t bucketCount = 0;
+
+  /// Estimated GPU bytes retained by reusable textures.
+  uint64_t bytes = 0;
+
+  /// Hard upper bound for retained bytes.
+  uint64_t budgetBytes = 0;
 };
 
 /**
@@ -206,7 +241,7 @@ public:
    *
    * @param preserve True to use `LoadOp::Load` for the first render pass.
    */
-  void setPreserveTargetOnBeginFrame(bool preserve);
+  void setPreserveTargetOnBeginFrame(bool preserve) override;
 
   // --- RendererInterface ---
 
@@ -255,6 +290,10 @@ public:
   [[nodiscard]] std::unique_ptr<RendererInterface> createOffscreenInstance() const override;
 
   [[nodiscard]] RendererBitmap takeSnapshot() const override;
+  [[nodiscard]] RendererBitmap takeSnapshotInterruptibly(
+      const std::function<bool()>& shouldCancel) const override;
+
+  [[nodiscard]] RendererReadbackStats consumeReadbackStats() override;
 
   /**
    * Enable or disable GPU timestamp capture. No-op today; reserved for
@@ -268,17 +307,27 @@ public:
   /**
    * Enable or disable the Geode geometry debug overlay.
    *
-   * When enabled, every path draw (fills, strokes, rects, ellipses)
-   * additionally outlines the Slug band decomposition Geode emits for
-   * that draw: horizontal band strips (cyan), vertical band strips
-   * (yellow), and the per-path bounding quad with its triangle diagonal
-   * (magenta) - the two triangles Geode actually rasterizes (0041).
-   * Overlay draws render through the normal fill pipeline, so they are
-   * included in `lastFrameTimings()` counters. `<use>` instancing is
-   * disabled while the overlay is on so overlays stay in draw order.
+   * When enabled, an observer on every path-capable `GeoEncoder` records at
+   * the four actual Slug GPU submission paths (gradient, mask, resident fill,
+   * and transient/instanced fill). For each instance it reconstructs the two
+   * submitted triangles from the six `EncodedPath::quadVertices`, including
+   * the shader's dynamic pixel dilation and all submitted transforms. Text,
+   * strokes, clips, masks, and instanced paths are therefore included.
+   * Pattern-tile resource internals are deliberately excluded; the consuming
+   * pattern fill's path submission is captured instead.
    *
-   * Default off. When off, rendering behavior and performance are
-   * unchanged; the only cost is one boolean test per draw.
+   * `endFrame()` draws the collected one-device-pixel opaque-magenta edges in
+   * one final root-target pass. Normal document pixels between edges remain
+   * unchanged, and later SVG paint, filters, masks, or opacity cannot cover or
+   * distort the wireframe. Resource and compositor offscreen instances do not
+   * inherit the flag.
+   *
+   * Default off. The focused regression verifies that explicitly-off output
+   * is byte-identical to the default-off renderer. No sink or capture storage
+   * is installed; the only hot-path cost is one null-sink branch at each
+   * actual Slug submission. Normal batching and `<use>` instancing remain
+   * enabled in debug mode; the observer expands submitted instances for the
+   * wireframe and the final overlay contributes one additional draw call.
    */
   void setDebugGeometryOverlay(bool enabled) override;
 
@@ -292,6 +341,9 @@ public:
    */
   [[nodiscard]] FrameTimings lastFrameTimings() const;
 
+  /// Returns retained-memory instrumentation for the transient texture pool.
+  [[nodiscard]] RendererGeodeTexturePoolStats texturePoolStats() const;
+
   /**
    * Captures the current resolved render target as a directly sampleable
    * WebGPU texture.
@@ -302,13 +354,18 @@ public:
    */
   [[nodiscard]] std::shared_ptr<const RendererTextureSnapshot> takeTextureSnapshot() override;
 
+  /// Borrows the current render target until the next frame mutation.
+  [[nodiscard]] const RendererTextureSnapshot* borrowTextureSnapshot()
+      UTILS_LIFETIME_BOUND override;
+
   /// Geode presentation is GPU-native when callers can sample WebGPU textures directly.
   [[nodiscard]] bool requiresTextureSnapshotPresentation() const override {
-#ifdef __EMSCRIPTEN__
-    // Emscripten's WebGPU object table is per-worker. The editor's async
-    // renderer runs on a pthread, while ImGui presents on the main browser
-    // thread, so worker-created texture handles cannot be handed directly to
-    // ImGui. Use CPU snapshots for the worker handoff in wasm builds.
+#if defined(__EMSCRIPTEN__) && defined(DONNER_WASM_WORKER_SURFACE)
+    // The Wasm compositor and document surface now live on the same pthread
+    // and WebGPU device, so textures stay in the worker's JS object table and
+    // are presented without CPU readback.
+    return true;
+#elif defined(__EMSCRIPTEN__)
     return false;
 #else
     return true;

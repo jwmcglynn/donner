@@ -1,5 +1,6 @@
 /// @file
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -11,12 +12,40 @@
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
+
+EM_JS(void, InitializeWasmEditorFrameScheduling, (), {
+  window['__donnerEditorFrameRequested'] = true;
+  window['__donnerMainLoopRenderedFrames'] = 0;
+  const requestFrame = function() {
+    window['__donnerEditorFrameRequested'] = true;
+  };
+  // Capture at window scope: direct worker canvases and transient DOM overlays can be the event
+  // target even though GLFW ultimately routes the interaction to the editor canvas.
+  for (const eventName of['mousedown', 'mouseup', 'mousemove', 'pointerdown', 'pointerup',
+                          'pointermove', 'pointercancel', 'pointerenter', 'pointerleave', 'wheel',
+                          'contextmenu', 'keydown', 'keyup', 'compositionstart',
+                          'compositionupdate', 'compositionend', 'beforeinput', 'input', 'paste',
+                          'resize', 'focus', 'blur']) {
+    window.addEventListener(eventName, requestFrame, {capture : true, passive : true});
+  }
+  document.addEventListener('visibilitychange', requestFrame, {capture : true, passive : true});
+});
+
+EM_JS(bool, ConsumeBrowserEditorFrameRequest, (), {
+  const requested = Boolean(window['__donnerEditorFrameRequested']);
+  window['__donnerEditorFrameRequested'] = false;
+  return requested;
+});
+
+EM_JS(void, MarkWasmEditorFrameRendered, (), {
+  window['__donnerMainLoopRenderedFrames'] =
+      Number(window['__donnerMainLoopRenderedFrames'] || 0) + 1;
+});
 #else
 #include "donner/base/FailureSignalHandler.h"
 #endif
 
 #include "donner/editor/EditorShell.h"
-#include "donner/editor/EditorSplash.h"
 #include "donner/editor/Notice.h"
 #include "donner/editor/TracyWrapper.h"
 #include "donner/editor/gui/EditorWindow.h"
@@ -25,6 +54,8 @@ namespace {
 
 constexpr int kInitialWindowWidth = 1600;
 constexpr int kInitialWindowHeight = 900;
+constexpr std::string_view kWelcomePlaceholderSvg =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400"/>)";
 
 std::string EmbeddedBytesToString(std::span<const unsigned char> bytes) {
   std::string text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
@@ -92,6 +123,7 @@ void RunEditorFrame(donner::editor::gui::EditorWindow& window, donner::editor::E
 struct WasmEditorLoopState {
   std::unique_ptr<donner::editor::gui::EditorWindow> window;
   std::unique_ptr<donner::editor::EditorShell> shell;
+  std::optional<double> nextIdleWakeAtMs;
 };
 
 void RunWasmEditorFrame(void* userdata) {
@@ -102,7 +134,21 @@ void RunWasmEditorFrame(void* userdata) {
     return;
   }
 
+  const double nowMs = emscripten_get_now();
+  const bool editorRequested = state->window->consumeWasmFrameRequest();
+  const bool browserRequested = ConsumeBrowserEditorFrameRequest();
+  const bool timerDue = state->nextIdleWakeAtMs.has_value() && nowMs >= *state->nextIdleWakeAtMs;
+  if (!editorRequested && !browserRequested && !timerDue) {
+    return;
+  }
+
   RunEditorFrame(*state->window, *state->shell);
+  MarkWasmEditorFrameRendered();
+  if (const std::optional<float> wakeSeconds = state->shell->nextIdleWakeSeconds()) {
+    state->nextIdleWakeAtMs = emscripten_get_now() + std::max(0.0f, *wakeSeconds) * 1000.0;
+  } else {
+    state->nextIdleWakeAtMs.reset();
+  }
 }
 #endif
 
@@ -123,7 +169,7 @@ int main(int argc, char** argv) {
   std::optional<std::string> reproOutputPath;
   bool showWelcome = false;
 #ifdef __EMSCRIPTEN__
-  initialSource = EmbeddedBytesToString(donner::embedded::kEditorSplashSvg);
+  initialSource = kWelcomePlaceholderSvg;
   showWelcome = true;
 #else
   constexpr std::string_view kUsage =
@@ -160,7 +206,7 @@ int main(int argc, char** argv) {
   }
 
   if (!svgPath.has_value()) {
-    initialSource = EmbeddedBytesToString(donner::embedded::kEditorSplashSvg);
+    initialSource = kWelcomePlaceholderSvg;
     showWelcome = true;
   }
 #endif
@@ -197,7 +243,8 @@ int main(int argc, char** argv) {
   }
 
 #ifdef __EMSCRIPTEN__
-  auto* loopState = new WasmEditorLoopState{std::move(window), std::move(shell)};
+  auto* loopState = new WasmEditorLoopState{std::move(window), std::move(shell), std::nullopt};
+  InitializeWasmEditorFrameScheduling();
   // The browser presents the WebGPU canvas when the requestAnimationFrame callback returns.
   emscripten_set_main_loop_arg(&RunWasmEditorFrame, loopState, /*fps=*/0,
                                /*simulateInfiniteLoop=*/true);

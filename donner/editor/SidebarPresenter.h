@@ -239,12 +239,16 @@ private:
 
   struct InspectorSnapshot {
     bool hasSelection = false;
+    bool transformEditable = false;
+    bool strokeEditable = false;
+    float strokeWidth = 1.0f;
     std::string titleText;
     std::optional<Box2d> bounds;
     std::optional<Transform2d> transform;
     std::vector<std::pair<std::string, std::string>> xmlAttributes;
     std::vector<std::pair<std::string, std::string>> computedStyle;
     std::vector<std::optional<ImU32>> computedStyleSwatches;
+    std::vector<PathOperationAvailability> pathOperationAvailability;
   };
 
   /// State for the transform edit currently in progress (one ImGui item can

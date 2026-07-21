@@ -53,6 +53,7 @@ class LayersPanel {
 public:
   enum class ThumbnailRefreshMode {
     Render,
+    RenderIncremental,
     SwatchesOnly,
   };
 
@@ -103,8 +104,13 @@ public:
     std::size_t renderedCount = 0;
     /// Number of cached row thumbnails reused during this refresh.
     std::size_t reusedCount = 0;
+    /// Number of stale row thumbnails deferred to a later refresh.
+    std::size_t deferredCount = 0;
     /// Number of rows skipped because the canvas render tree had pending invalidation.
     std::size_t skippedForCanvasInvalidationCount = 0;
+    /// Number of full model/swatch snapshots rebuilt during this refresh.
+    /// Incremental thumbnail follow-up frames keep this at zero.
+    std::size_t snapshotRebuildCount = 0;
     /// Wall time spent in thumbnail rasterization work.
     double renderMs = 0.0;
   };
@@ -293,6 +299,11 @@ public:
   [[nodiscard]] const LayerTreeModel& model() const { return model_; }
 
 private:
+  struct PendingThumbnail {
+    std::uint64_t stableId = 0;
+    svg::SVGElement element;
+  };
+
   struct CachedThumbnail {
     svg::RendererBitmap bitmap;
     std::uint64_t documentFrameVersion = 0;
@@ -315,6 +326,19 @@ private:
   std::unordered_map<std::uint64_t, CachedThumbnail> thumbnailBitmapByStableId_;
   /// Diagnostics for the most recent thumbnail refresh.
   ThumbnailRefreshStats thumbnailRefreshStats_;
+  /// Snapshot identity used to avoid repeating the O(N) model/style walk while
+  /// an incremental thumbnail batch drains one row per host frame.
+  bool snapshotPrepared_ = false;
+  bool modelRefreshRequested_ = true;
+  std::uint64_t snapshotDocumentGeneration_ = 0;
+  std::uint64_t snapshotDocumentFrameVersion_ = 0;
+  std::vector<std::uint64_t> snapshotSelectionStableIds_;
+  /// Stable, per-snapshot thumbnail work queue. Building it once turns an N-row
+  /// incremental refresh from N full scans into one scan plus N O(1) tasks.
+  bool thumbnailQueuePrepared_ = false;
+  std::vector<PendingThumbnail> pendingThumbnails_;
+  std::size_t pendingThumbnailCursor_ = 0;
+  std::size_t thumbnailQueueBaseReusedCount_ = 0;
   /// Visible-row index of the most recent plain/ctrl click; the anchor for
   /// shift-range selection.
   std::optional<std::size_t> anchorRowIndex_;

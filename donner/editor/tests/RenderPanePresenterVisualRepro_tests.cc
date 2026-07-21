@@ -11,8 +11,10 @@
 #include <string_view>
 #include <utility>
 
+#include "donner/base/MathUtils.h"
 #include "donner/base/tests/TestTempDir.h"
 #include "donner/editor/ImGuiIncludes.h"
+#include "donner/editor/MenuBarPresenter.h"
 #include "donner/editor/RenderPanePresenter.h"
 #include "donner/editor/gui/EditorWindow.h"
 #include "donner/svg/renderer/RendererImageIO.h"
@@ -271,7 +273,8 @@ TEST(RenderPanePresenterVisualReproTest, WritesDisplayNoneSuppressionScreenshots
          "display:none layer is suppressed.";
 }
 
-TEST(RenderPanePresenterVisualReproTest, CompositorTileOverlayRendersDuringDirectPresentation) {
+TEST(RenderPanePresenterVisualReproTest,
+     ViewMenuCompositorTileOverlayRendersMetadataOverDirectPresentation) {
   gui::EditorWindow window(gui::EditorWindowOptions{
       .title = "Direct Presentation Compositor Tile Overlay Repro",
       .initialWidth = kLogicalWidth,
@@ -287,9 +290,12 @@ TEST(RenderPanePresenterVisualReproTest, CompositorTileOverlayRendersDuringDirec
   }
 
   RenderResult::CompositedPreview preview;
-  preview.tiles.push_back(MakeTile(
-      "layer:7", RenderResult::CompositedTile::Kind::Layer, kVisibleDragEntity,
-      Vector2d(54.0, 44.0), Vector2d(78.0, 78.0), kVisibleDragLayer, /*isDragTarget=*/false));
+  RenderResult::CompositedTile tile =
+      MakeTile("layer:7", RenderResult::CompositedTile::Kind::Layer, kVisibleDragEntity,
+               Vector2d(54.0, 44.0), Vector2d(78.0, 78.0), kVisibleDragLayer,
+               /*isDragTarget=*/false);
+  tile.bitmap = svg::RendererBitmap{};
+  preview.tiles.push_back(std::move(tile));
 
   GlTextureCache textures(window.geodeDevice());
   textures.initialize();
@@ -299,10 +305,15 @@ TEST(RenderPanePresenterVisualReproTest, CompositorTileOverlayRendersDuringDirec
       CapturePresenterFrame(&window, &textures, entt::null, std::nullopt, std::nullopt,
                             /*documentPresentedDirectly=*/true,
                             /*compositorTileOverlay=*/false);
+
+  MenuBarActions menuActions;
+  menuActions.toggleCompositorTileOverlay = true;
+  bool compositorTileOverlay = false;
+  ApplyViewMenuToggleActions(menuActions, nullptr, nullptr, nullptr, &compositorTileOverlay);
+  ASSERT_TRUE(compositorTileOverlay);
   const svg::RendererBitmap withOverlay =
       CapturePresenterFrame(&window, &textures, entt::null, std::nullopt, std::nullopt,
-                            /*documentPresentedDirectly=*/true,
-                            /*compositorTileOverlay=*/true);
+                            /*documentPresentedDirectly=*/true, compositorTileOverlay);
 
   ASSERT_FALSE(withoutOverlay.empty());
   ASSERT_FALSE(withOverlay.empty());
@@ -316,8 +327,8 @@ TEST(RenderPanePresenterVisualReproTest, CompositorTileOverlayRendersDuringDirec
     }
   }
   EXPECT_GT(changedPixels, 0)
-      << "The compositor tile overlay must remain visible when document pixels are presented "
-         "directly to the framebuffer.";
+      << "The View-menu compositor tile overlay must draw metadata-only worker tile bounds over "
+         "the directly presented document surface.";
 }
 
 TEST(RenderPanePresenterVisualReproTest, OverviewInfillDoesNotBleedThroughTransparentActiveTile) {
@@ -419,6 +430,59 @@ TEST(RenderPanePresenterVisualReproTest, OverviewInfillDoesNotBleedThroughOldDra
   EXPECT_THAT(oldLeftEdge, Rgba(Lt(100), Lt(100), Lt(100), Eq(255)))
       << "Overview infill must not redraw stale drag-target pixels at the old background "
          "position while the active tile is presented at the live drag position.";
+}
+
+TEST(RenderPanePresenterVisualReproTest, RotatedDragTileUsesItsQuadInsteadOfAxisAlignedBounds) {
+  gui::EditorWindow window(gui::EditorWindowOptions{
+      .title = "Rotated Drag Tile Repro",
+      .initialWidth = kLogicalWidth,
+      .initialHeight = kLogicalHeight,
+      .visible = false,
+      .offscreen = true,
+      .offscreenContentScale = 1.0,
+      .clearColor = {0.08f, 0.09f, 0.10f, 1.0f},
+      .enableFramebufferReadback = true,
+  });
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+
+  RenderResult::CompositedPreview preview;
+  preview.tiles.push_back(MakeTile("layer:7", RenderResult::CompositedTile::Kind::Layer,
+                                   kVisibleDragEntity, Vector2d(100.0, 90.0), Vector2d(80.0, 40.0),
+                                   kVisibleDragLayer,
+                                   /*isDragTarget=*/true));
+
+  GlTextureCache textures(window.geodeDevice());
+  textures.initialize();
+  textures.uploadComposited(preview, RasterViewportForTest(/*viewportBounded=*/false));
+
+  const Vector2d center(140.0, 110.0);
+  const Transform2d rotation = Transform2d::Translate(-center) *
+                               Transform2d::Rotate(MathConstants<double>::kHalfPi * 0.5) *
+                               Transform2d::Translate(center);
+  const SelectTool::ActiveDragPreview activePreview{
+      .entity = kVisibleDragEntity,
+      .documentFromCachedDocument = rotation,
+      .dragGeneration = 1,
+  };
+  const SelectTool::ActiveDragPreview displayedPreview{
+      .entity = kVisibleDragEntity,
+      .documentFromCachedDocument = Transform2d(),
+      .dragGeneration = 1,
+  };
+
+  const svg::RendererBitmap actual =
+      CapturePresenterFrame(&window, &textures, entt::null, activePreview, displayedPreview);
+  WriteDiagnosticBitmap(actual, "actual_rotated_drag_tile.png");
+
+  ASSERT_FALSE(actual.empty());
+  EXPECT_THAT(PixelAtLogical(actual, 140, 110),
+              Rgba(Lt(80), testing::Gt(100), testing::Gt(180), Eq(255)))
+      << "The center of the rotated tile remains visible";
+  EXPECT_THAT(PixelAtLogical(actual, 100, 70),
+              testing::Not(Rgba(Lt(80), testing::Gt(100), testing::Gt(180), Eq(255))))
+      << "A rotated tile must not stretch its pixels across the empty corner of its AABB";
 }
 
 // --- Performance overlay (FPS pill and full frame/memory graph) ---

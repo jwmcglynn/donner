@@ -53,6 +53,18 @@ public:
             const Transform2d& surfaceFromCanvas);
 
   /**
+   * Prepare and render a document while polling @p shouldCancel between rendered entities.
+   *
+   * The document write guard and renderer frame are always balanced before this method returns.
+   * A cancelled partial frame is safe for a background worker to discard.
+   *
+   * @return True when the complete document rendered, false when cancellation stopped work.
+   */
+  [[nodiscard]] bool drawInterruptibly(SVGDocument& document, const RenderViewport& viewport,
+                                       const Transform2d& surfaceFromCanvas,
+                                       const std::function<bool()>& shouldCancel);
+
+  /**
    * Capture an immutable render snapshot from the given \ref SVGDocument.
    *
    * Snapshot capture prepares the live render tree under document access, then

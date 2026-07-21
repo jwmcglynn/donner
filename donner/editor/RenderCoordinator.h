@@ -58,15 +58,37 @@ class SelectTool;
  * @param hasActiveDrag True while a drag preview is active.
  * @param currentVersion Current document frame version.
  * @param displayedDocVersion Document frame version currently presented.
- * @param hasCachedSelectedTexture True when a selected-layer texture is already cached.
+ * @param hasCachedPresentation True when any current presentation texture is already cached.
+ *   The selected layer may still be warming; the existing full presentation is sufficient to
+ *   keep zoom responsive while that stale prewarm is cancelled.
  * @param rasterViewportSettled True when the viewport has passed the commit delay.
  * @param needsOverviewInfill True when a bounded viewport still needs overview coverage.
  * @param pendingSelectedLayerRasterization True when selected-layer pixels are known stale.
  */
 [[nodiscard]] bool ShouldDeferSelectedViewportRefresh(
     Entity selectedEntity, bool hasActiveDrag, std::uint64_t currentVersion,
-    std::uint64_t displayedDocVersion, bool hasCachedSelectedTexture, bool rasterViewportSettled,
+    std::uint64_t displayedDocVersion, bool hasCachedPresentation, bool rasterViewportSettled,
     bool needsOverviewInfill, bool pendingSelectedLayerRasterization);
+
+/**
+ * Return true when selected-layer overdraw should replace the base raster viewport.
+ *
+ * Direct worker surfaces disable selection-only prewarming because the UI thread cannot consume a
+ * promoted texture. They still use overdraw when a drag or another real invalidation needs a
+ * worker render.
+ *
+ * @param selectedEntity Selected compositable entity, or entt::null.
+ * @param requestOverviewInfill True when the request is reserved for full-document overview fill.
+ * @param rasterViewportBounded True when the base raster only covers the visible viewport.
+ * @param selectionOnlyPrewarmMayTriggerRender Backend policy for idle selection cache misses.
+ * @param hasIndependentRenderReason True when drag, document invalidation, forced rasterization, or
+ *   retry already requires a worker request.
+ */
+[[nodiscard]] bool ShouldUseSelectedPrewarmRasterViewport(Entity selectedEntity,
+                                                          bool requestOverviewInfill,
+                                                          bool rasterViewportBounded,
+                                                          bool selectionOnlyPrewarmMayTriggerRender,
+                                                          bool hasIndependentRenderReason);
 
 /**
  * Return true when a render result satisfies a pending selected-layer rasterization.
@@ -79,6 +101,13 @@ class SelectTool;
 [[nodiscard]] bool ShouldClearPendingSelectedLayerRasterization(
     const std::optional<RenderRequest::DragPreview>& representedDragPreview, Entity pendingEntity,
     std::uint64_t resultVersion, std::uint64_t pendingVersion);
+
+/**
+ * Return the bounded delay before retrying an exhausted transient worker-surface failure.
+ *
+ * @param attempt Consecutive coordinator-level delayed retry count.
+ */
+[[nodiscard]] std::chrono::milliseconds DirectSurfaceRetryBackoffForAttempt(unsigned attempt);
 
 /**
  * Return the drag transform that overlay chrome should represent in the current presentation frame.
@@ -138,6 +167,12 @@ public:
   [[nodiscard]] const FrameCostBreakdown& lastFrameCostBreakdown() const {
     return lastFrameCostBreakdown_;
   }
+  /// Request one worker render even when document and viewport epochs are already current.
+  void requestPresentationRefresh() { pendingPresentationRefresh_ = true; }
+  /// Whether a renderer-presentation setting still needs a worker frame.
+  [[nodiscard]] bool presentationRefreshPending() const { return pendingPresentationRefresh_; }
+  /// Seconds until an exhausted transient direct-surface failure should be retried.
+  [[nodiscard]] std::optional<float> nextDirectSurfaceRetryWakeSeconds() const;
   /// Clear the per-frame cost accumulator before a new UI frame starts.
   void beginFrameCostTracking() { lastFrameCostBreakdown_ = FrameCostBreakdown{}; }
   /// Replace transient source-hover chrome elements.
@@ -202,14 +237,18 @@ public:
     textBoxDragPreviewDoc_ = previewDoc;
   }
 
-  void resetForLoadedDocument();
+  /**
+   * Reset presentation state after loading a different document.
+   *
+   * @param documentGeneration Generation of the newly loaded document.
+   */
+  void resetForLoadedDocument(std::uint64_t documentGeneration);
   void refreshSelectionBoundsCache(EditorApp& app);
   void promoteSelectionBoundsIfReady();
   /// Capture the editor chrome (path outlines, selection AABBs, marquee) for immediate
   /// presentation. `marqueeRectDoc` is the active marquee rectangle in document space (nullopt when
-  /// the user isn't marquee-dragging). The snapshot is drawn directly by Donner's OverlayRenderer
-  /// straight onto the Geode framebuffer, so selected chrome does not allocate, rasterize,
-  /// snapshot, or upload an overlay texture.
+  /// the user isn't marquee-dragging). The snapshot remains vector geometry until the presentation
+  /// layer rasterizes it into the ordered Geode overlay texture.
   bool rasterizeOverlayForCurrentSelection(
       EditorApp& app, const ViewportState& viewport, const std::optional<Box2d>& marqueeRectDoc,
       std::optional<SelectTool::ActiveDragPreview> representedDragPreview = std::nullopt,
@@ -234,8 +273,10 @@ public:
   /// is allowed for callers that don't care about backend timing.
   void pollRenderResult(EditorApp& app, const ViewportState& viewport, GlTextureCache& textures,
                         FrameHistory* frameHistory = nullptr);
-  void maybeRequestRender(EditorApp& app, SelectTool& selectTool, const ViewportState& viewport,
-                          GlTextureCache* textures = nullptr);
+  bool maybeRequestRender(EditorApp& app, SelectTool& selectTool, const ViewportState& viewport,
+                          GlTextureCache* textures = nullptr, bool supersedeInFlight = false,
+                          SelectionChromeDetail directSurfaceSelectionDetail =
+                              SelectionChromeDetail::Full);
   /// Record that a document mutation requires a current-version presentation handoff.
   ///
   /// @param flushResult Metadata from the just-flushed editor command batch.
@@ -380,6 +421,10 @@ private:
   /// True after a structural mutation whose existing overview/full-document cache may contain
   /// deleted pixels. The old presentation remains visible until the replacement render lands.
   bool pendingDocumentMutationOverviewRefresh_ = false;
+  /// Renderer-only state changed and must be represented by the next accepted worker frame.
+  bool pendingPresentationRefresh_ = false;
+  std::optional<std::chrono::steady_clock::time_point> directSurfaceRetryNotBefore_;
+  unsigned directSurfaceRetryAttempt_ = 0;
   FrameCostBreakdown lastFrameCostBreakdown_;
 };
 

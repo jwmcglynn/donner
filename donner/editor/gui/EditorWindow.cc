@@ -28,12 +28,15 @@ extern "C" {
 #include <GLFW/glfw3.h>
 #endif
 
+#include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -41,6 +44,9 @@ extern "C" {
 #include "donner/editor/EditorTheme.h"
 #include "donner/editor/ImGuiBackendIncludes.h"
 #include "donner/editor/TracyWrapper.h"
+#ifdef __EMSCRIPTEN__
+#include "donner/editor/ImGuiInternalIncludes.h"
+#endif
 #ifdef DONNER_EDITOR_WGPU
 #ifndef __EMSCRIPTEN__
 #include "donner/editor/gui/EditorWgpuSurface.h"
@@ -289,15 +295,15 @@ void ApplyInputOverride(const EditorWindowInputOverride& inputOverride) {
 
 #ifdef __EMSCRIPTEN__
 EM_JS(int, CanvasPixelWidth, (), {
-  if (Module.canvas) {
-    return Module.canvas.width;
+  if (Module['canvas']) {
+    return Module['canvas'].width;
   }
   return Math.max(1, Math.floor(window.innerWidth * (window.devicePixelRatio || 1)));
 });
 
 EM_JS(int, CanvasPixelHeight, (), {
-  if (Module.canvas) {
-    return Module.canvas.height;
+  if (Module['canvas']) {
+    return Module['canvas'].height;
   }
   return Math.max(1, Math.floor(window.innerHeight * (window.devicePixelRatio || 1)));
 });
@@ -305,31 +311,114 @@ EM_JS(int, CanvasPixelHeight, (), {
 EM_JS(int, CanvasCssWidth, (), { return Math.max(1, Math.floor(window.innerWidth)); });
 EM_JS(int, CanvasCssHeight, (), { return Math.max(1, Math.floor(window.innerHeight)); });
 EM_JS(double, BrowserDevicePixelRatio, (), { return window.devicePixelRatio || 1.0; });
-EM_JS(bool, WgpuReadbackStatsEnabled, (),
-      { return new URLSearchParams(window.location.search).has("wgpuReadbackStats"); });
+EM_JS(void, PublishFirstPresentedFrame, (int headlessDeviceCreations), {
+  window['__donnerHeadlessDeviceCreations'] = headlessDeviceCreations;
+  if (window['__donnerFirstFramePresented']) {
+    return;
+  }
+  window['__donnerFirstFramePresented'] = true;
+  window.dispatchEvent(new Event("donner:first-frame-presented"));
+});
+EM_JS(bool, WgpuReadbackStatsEnabled, (), {
+  const enabled = new URLSearchParams(window.location.search).has('wgpuReadbackStats');
+  if (enabled && typeof window['__donnerRequestWgpuReadback'] != 'function') {
+    // One initial capture proves the diagnostic path is alive. Further captures are explicit so
+    // the probe never turns an otherwise idle editor into a continuous copy/map/pixel-scan loop.
+    window['__donnerWgpuReadbackRequested'] = 1;
+    window['__donnerWgpuReadbackCompleted'] = 0;
+    window['__donnerWgpuReadbackCaptureStarts'] = 0;
+    window['__donnerWgpuReadbackCaptureCompletions'] = 0;
+    window['__donnerWgpuReadbackCaptureFailures'] = 0;
+    window['__donnerRequestWgpuReadback'] = function() {
+      const request = Number(window['__donnerWgpuReadbackRequested'] || 0) + 1;
+      window['__donnerWgpuReadbackRequested'] = request;
+      window['__donnerEditorFrameRequested'] = true;
+      return request;
+    };
+  }
+  return enabled;
+});
+EM_JS(int, PeekWgpuReadbackRequest, (), {
+  const request = Number(window['__donnerWgpuReadbackRequested'] || 0);
+  const completed = Number(window['__donnerWgpuReadbackCompleted'] || 0);
+  if (request <= completed) {
+    return 0;
+  }
+  return request;
+});
+EM_JS(void, WakeWasmEditorForPendingWgpuReadback, (), {
+  const request = Number(window['__donnerWgpuReadbackRequested'] || 0);
+  const completed = Number(window['__donnerWgpuReadbackCompleted'] || 0);
+  if (request > completed) {
+    window['__donnerEditorFrameRequested'] = true;
+  }
+});
+EM_JS(void, MarkWgpuReadbackCaptureStarted, (int requestId), {
+  window['__donnerWgpuReadbackCaptureStarts'] =
+      Number(window['__donnerWgpuReadbackCaptureStarts'] || 0) + 1;
+  window['__donnerWgpuReadbackLastStartedRequest'] = requestId;
+});
+EM_JS(void, PublishWgpuReadbackFailure, (int requestId), {
+  if (requestId <= 0) {
+    return;
+  }
+  window['__donnerWgpuReadbackCompleted'] =
+      Math.max(Number(window['__donnerWgpuReadbackCompleted'] || 0), requestId);
+  window['__donnerWgpuReadbackCaptureFailures'] =
+      Number(window['__donnerWgpuReadbackCaptureFailures'] || 0) + 1;
+  window['__donnerWgpuReadbackLastFailedRequest'] = requestId;
+});
 EM_JS(void, PublishWgpuReadbackStats,
       (int renderSamples, int renderColored, int renderNonBlack, int renderMaxChannel,
        int layerSamples, int layerColored, int layerNonBlack, int layerMaxChannel,
-       int selectionChromePixels),
+       int selectionChromePixels, int requestId),
       {
-        const previous = window.__donnerWgpuReadbackStats;
-        window.__donnerWgpuReadbackStats = {
-          frame : previous ? previous.frame + 1 : 1,
-          renderPane : {
-            samples : renderSamples,
-            coloredPixels : renderColored,
-            nonBlackPixels : renderNonBlack,
-            maxChannel : renderMaxChannel,
+        if (requestId > 0) {
+          window['__donnerWgpuReadbackCompleted'] =
+              Math.max(Number(window['__donnerWgpuReadbackCompleted'] || 0), requestId);
+          window['__donnerWgpuReadbackCaptureCompletions'] =
+              Number(window['__donnerWgpuReadbackCaptureCompletions'] || 0) + 1;
+        }
+        const previous = window['__donnerWgpuReadbackStats'];
+        window['__donnerWgpuReadbackStats'] = {
+          'frame' : previous ? previous['frame'] + 1 : 1,
+          'request' : requestId > 0 ? requestId : (previous ? previous['request'] || 0 : 0),
+          'renderPane' : {
+            'samples' : renderSamples,
+            'coloredPixels' : renderColored,
+            'nonBlackPixels' : renderNonBlack,
+            'maxChannel' : renderMaxChannel,
           },
-          layerPreview : {
-            samples : layerSamples,
-            coloredPixels : layerColored,
-            nonBlackPixels : layerNonBlack,
-            maxChannel : layerMaxChannel,
+          'layerPreview' : {
+            'samples' : layerSamples,
+            'coloredPixels' : layerColored,
+            'nonBlackPixels' : layerNonBlack,
+            'maxChannel' : layerMaxChannel,
           },
-          selectionChromePixels : selectionChromePixels,
+          'selectionChromePixels' : selectionChromePixels,
         };
       });
+EM_JS(void, PublishWgpuCarouselThumbnailStats, (const int* values, int count), {
+  const stride = 7;
+  const base = values >> 2;
+  const thumbnails = [];
+  for (let index = 0; index < count; ++index) {
+    const offset = base + index * stride;
+    thumbnails.push({
+      'samples' : HEAP32[offset + 0],
+      'coloredPixels' : HEAP32[offset + 1],
+      'nonBlackPixels' : HEAP32[offset + 2],
+      'maxChannel' : HEAP32[offset + 3],
+      'fingerprint' : HEAP32[offset + 4] >>> 0,
+      'backgroundPixels' : HEAP32[offset + 5],
+      'glyphPixels' : HEAP32[offset + 6],
+    });
+  }
+  const stats = window['__donnerWgpuReadbackStats'];
+  if (stats) {
+    stats['carouselThumbnails'] = thumbnails;
+  }
+});
 
 double CurrentDisplayScale() {
   const int logicalWidth = CanvasCssWidth();
@@ -346,12 +435,33 @@ struct WgpuReadbackStats {
   int coloredPixels = 0;
   int nonBlackPixels = 0;
   int maxChannel = 0;
+  std::uint32_t fingerprint = 0;
+  int backgroundPixels = 0;
+  int glyphPixels = 0;
 };
 
-WgpuReadbackStats ComputeWgpuReadbackStatsForCssRegion(const svg::RendererBitmap& bitmap,
-                                                       double cssX, double cssY, double cssWidth,
+// Smoke diagnostics only need representative color/chrome coverage, not an exact image
+// histogram. Sampling one pixel from each 2x2 block keeps the main thread responsive while the
+// reported counts remain on the original full-resolution scale.
+constexpr int kWgpuReadbackSampleStride = 2;
+constexpr int kWgpuReadbackSampleWeight = kWgpuReadbackSampleStride * kWgpuReadbackSampleStride;
+
+struct WgpuReadbackView {
+  const uint8_t* pixels = nullptr;
+  int width = 0;
+  int height = 0;
+  std::size_t rowBytes = 0;
+  bool bgra = false;
+
+  [[nodiscard]] bool empty() const {
+    return pixels == nullptr || width <= 0 || height <= 0 || rowBytes == 0u;
+  }
+};
+
+WgpuReadbackStats ComputeWgpuReadbackStatsForCssRegion(const WgpuReadbackView& view, double cssX,
+                                                       double cssY, double cssWidth,
                                                        double cssHeight) {
-  if (bitmap.empty() || bitmap.rowBytes == 0u) {
+  if (view.empty()) {
     return WgpuReadbackStats{};
   }
 
@@ -359,40 +469,60 @@ WgpuReadbackStats ComputeWgpuReadbackStatsForCssRegion(const svg::RendererBitmap
   const int x0 = std::max(0, static_cast<int>(std::floor(cssX * displayScale)));
   const int y0 = std::max(0, static_cast<int>(std::floor(cssY * displayScale)));
   const int x1 =
-      std::min(bitmap.dimensions.x, static_cast<int>(std::ceil((cssX + cssWidth) * displayScale)));
+      std::min(view.width, static_cast<int>(std::ceil((cssX + cssWidth) * displayScale)));
   const int y1 =
-      std::min(bitmap.dimensions.y, static_cast<int>(std::ceil((cssY + cssHeight) * displayScale)));
+      std::min(view.height, static_cast<int>(std::ceil((cssY + cssHeight) * displayScale)));
   if (x1 <= x0 || y1 <= y0) {
     return WgpuReadbackStats{};
   }
 
   WgpuReadbackStats stats;
-  for (int y = y0; y < y1; ++y) {
-    const uint8_t* row = bitmap.pixels.data() + static_cast<std::size_t>(y) * bitmap.rowBytes;
-    for (int x = x0; x < x1; ++x) {
+  stats.fingerprint = 2166136261u;
+  for (int y = y0; y < y1; y += kWgpuReadbackSampleStride) {
+    const uint8_t* row = view.pixels + static_cast<std::size_t>(y) * view.rowBytes;
+    for (int x = x0; x < x1; x += kWgpuReadbackSampleStride) {
       const uint8_t* pixel = row + static_cast<std::size_t>(x) * 4u;
-      const int red = pixel[0];
+      const int red = view.bgra ? pixel[2] : pixel[0];
       const int green = pixel[1];
-      const int blue = pixel[2];
+      const int blue = view.bgra ? pixel[0] : pixel[2];
       const int alpha = pixel[3];
       const int maxRgb = std::max({red, green, blue});
       const int minRgb = std::min({red, green, blue});
-      ++stats.samples;
+      const auto mixFingerprint = [&stats](int value) {
+        stats.fingerprint ^= static_cast<std::uint8_t>(value);
+        stats.fingerprint *= 16777619u;
+      };
+      mixFingerprint(red);
+      mixFingerprint(green);
+      mixFingerprint(blue);
+      mixFingerprint(alpha);
+      stats.samples += kWgpuReadbackSampleWeight;
       stats.maxChannel = std::max(stats.maxChannel, maxRgb);
       if (alpha > 0 && maxRgb > 12) {
-        ++stats.nonBlackPixels;
+        stats.nonBlackPixels += kWgpuReadbackSampleWeight;
       }
       if (alpha > 0 && maxRgb > 50 && maxRgb - minRgb > 20) {
-        ++stats.coloredPixels;
+        stats.coloredPixels += kWgpuReadbackSampleWeight;
+      }
+      const bool textStyleBackground = alpha > 200 && red >= 15 && red <= 32 && green >= 24 &&
+                                       green <= 45 && blue >= 34 && blue <= 55;
+      if (textStyleBackground) {
+        stats.backgroundPixels += kWgpuReadbackSampleWeight;
+      }
+      const bool neutralLight = alpha > 200 && minRgb > 130 && maxRgb - minRgb < 35;
+      const bool mintText = alpha > 200 && red > 100 && green > 170 && blue > 140 &&
+                            green - red > 30 && green - blue > 10;
+      if (neutralLight || mintText) {
+        stats.glyphPixels += kWgpuReadbackSampleWeight;
       }
     }
   }
   return stats;
 }
 
-int CountWgpuSelectionChromePixelsForCssRegion(const svg::RendererBitmap& bitmap, double cssX,
+int CountWgpuSelectionChromePixelsForCssRegion(const WgpuReadbackView& view, double cssX,
                                                double cssY, double cssWidth, double cssHeight) {
-  if (bitmap.empty() || bitmap.rowBytes == 0u) {
+  if (view.empty()) {
     return 0;
   }
 
@@ -400,24 +530,31 @@ int CountWgpuSelectionChromePixelsForCssRegion(const svg::RendererBitmap& bitmap
   const int x0 = std::max(0, static_cast<int>(std::floor(cssX * displayScale)));
   const int y0 = std::max(0, static_cast<int>(std::floor(cssY * displayScale)));
   const int x1 =
-      std::min(bitmap.dimensions.x, static_cast<int>(std::ceil((cssX + cssWidth) * displayScale)));
+      std::min(view.width, static_cast<int>(std::ceil((cssX + cssWidth) * displayScale)));
   const int y1 =
-      std::min(bitmap.dimensions.y, static_cast<int>(std::ceil((cssY + cssHeight) * displayScale)));
+      std::min(view.height, static_cast<int>(std::ceil((cssY + cssHeight) * displayScale)));
   int count = 0;
-  for (int y = y0; y < y1; ++y) {
-    const uint8_t* row = bitmap.pixels.data() + static_cast<std::size_t>(y) * bitmap.rowBytes;
-    for (int x = x0; x < x1; ++x) {
+  for (int y = y0; y < y1; y += kWgpuReadbackSampleStride) {
+    const uint8_t* row = view.pixels + static_cast<std::size_t>(y) * view.rowBytes;
+    for (int x = x0; x < x1; x += kWgpuReadbackSampleStride) {
       const uint8_t* pixel = row + static_cast<std::size_t>(x) * 4u;
-      if (pixel[0] >= 20 && pixel[0] <= 100 && pixel[1] >= 150 && pixel[1] <= 235 &&
-          pixel[2] >= 130 && pixel[2] <= 220) {
-        ++count;
+      const int red = view.bgra ? pixel[2] : pixel[0];
+      const int green = pixel[1];
+      const int blue = view.bgra ? pixel[0] : pixel[2];
+      // Selection chrome is rendered into a transparent texture. Its Signal Teal pixels blend
+      // toward the document color during ImGui composition, so accept both the opaque accent and
+      // its lighter antialiased edge pixels. Keep the blue floor high enough to reject the green
+      // sample shape used by the smoke test.
+      if (red >= 10 && red <= 180 && green >= 145 && green <= 245 && blue >= 140 && blue <= 245 &&
+          green >= red + 20) {
+        count += kWgpuReadbackSampleWeight;
       }
     }
   }
   return count;
 }
 
-void PublishWgpuReadbackStatsForSmokeTests(const svg::RendererBitmap& bitmap) {
+void PublishWgpuReadbackStatsForSmokeTests(const WgpuReadbackView& view, int requestId) {
   const double cssWidth = static_cast<double>(CanvasCssWidth());
   const double cssHeight = static_cast<double>(CanvasCssHeight());
 
@@ -429,16 +566,179 @@ void PublishWgpuReadbackStatsForSmokeTests(const svg::RendererBitmap& bitmap) {
   }
 
   const WgpuReadbackStats renderStats = ComputeWgpuReadbackStatsForCssRegion(
-      bitmap, renderPaneX, 80.0, renderPaneWidth, std::max(1.0, cssHeight - 220.0));
+      view, renderPaneX, 80.0, renderPaneWidth, std::max(1.0, cssHeight - 220.0));
   const WgpuReadbackStats layerStats = ComputeWgpuReadbackStatsForCssRegion(
-      bitmap, cssWidth - 420.0 + 8.0, std::max(1.0, cssHeight * 0.05), 90.0,
+      view, cssWidth - 420.0 + 8.0, std::max(1.0, cssHeight * 0.05), 90.0,
       std::max(1.0, cssHeight * 0.42));
   const int selectionChromePixels = CountWgpuSelectionChromePixelsForCssRegion(
-      bitmap, 0.0, 100.0, std::max(1.0, cssWidth - 420.0), std::max(1.0, cssHeight - 100.0));
+      view, 0.0, 100.0, std::max(1.0, cssWidth - 420.0), std::max(1.0, cssHeight - 100.0));
   PublishWgpuReadbackStats(renderStats.samples, renderStats.coloredPixels,
                            renderStats.nonBlackPixels, renderStats.maxChannel, layerStats.samples,
                            layerStats.coloredPixels, layerStats.nonBlackPixels,
-                           layerStats.maxChannel, selectionChromePixels);
+                           layerStats.maxChannel, selectionChromePixels, requestId);
+
+  constexpr double kPickerMaxContentWidth = 920.0;
+  constexpr double kPickerHorizontalPadding = 32.0;
+  constexpr double kGridGap = 12.0;
+  constexpr double kThumbnailSlotInset = 8.0;
+  constexpr double kThumbnailWidth = 104.0;
+  constexpr double kThumbnailHeight = 64.0;
+  constexpr double kProbeInset = 6.0;
+  const double pickerContentWidth =
+      std::min(kPickerMaxContentWidth, cssWidth - kPickerHorizontalPadding);
+  const double pickerContentLeft = std::max(32.0, (cssWidth - pickerContentWidth) * 0.5);
+  const double cardWidth = (pickerContentWidth - kGridGap * 2.0) / 3.0;
+  const auto thumbnailStats = [&](int column, double rowCenter) {
+    return ComputeWgpuReadbackStatsForCssRegion(
+        view,
+        pickerContentLeft + static_cast<double>(column) * (cardWidth + kGridGap) +
+            kThumbnailSlotInset + kProbeInset,
+        rowCenter - kThumbnailHeight * 0.5 + kProbeInset, kThumbnailWidth - kProbeInset * 2.0,
+        kThumbnailHeight - kProbeInset * 2.0);
+  };
+  const std::array<WgpuReadbackStats, 4> carouselStats = {
+      thumbnailStats(0, 282.0),
+      thumbnailStats(1, 282.0),
+      thumbnailStats(2, 282.0),
+      thumbnailStats(0, 390.0),
+  };
+  constexpr int kPublishedStatStride = 7;
+  std::array<int, carouselStats.size() * kPublishedStatStride> packedCarouselStats{};
+  for (std::size_t index = 0; index < carouselStats.size(); ++index) {
+    const WgpuReadbackStats& stats = carouselStats[index];
+    const std::size_t offset = index * kPublishedStatStride;
+    packedCarouselStats[offset + 0] = stats.samples;
+    packedCarouselStats[offset + 1] = stats.coloredPixels;
+    packedCarouselStats[offset + 2] = stats.nonBlackPixels;
+    packedCarouselStats[offset + 3] = stats.maxChannel;
+    packedCarouselStats[offset + 4] = static_cast<std::int32_t>(stats.fingerprint);
+    packedCarouselStats[offset + 5] = stats.backgroundPixels;
+    packedCarouselStats[offset + 6] = stats.glyphPixels;
+  }
+  PublishWgpuCarouselThumbnailStats(packedCarouselStats.data(),
+                                    static_cast<int>(carouselStats.size()));
+}
+
+void PublishWgpuReadbackStatsForSmokeTests(const svg::RendererBitmap& bitmap, int requestId = 0) {
+  PublishWgpuReadbackStatsForSmokeTests(
+      WgpuReadbackView{
+          .pixels = bitmap.pixels.data(),
+          .width = bitmap.dimensions.x,
+          .height = bitmap.dimensions.y,
+          .rowBytes = bitmap.rowBytes,
+      },
+      requestId);
+}
+
+internal::WgpuDiagnosticReadbackDecision CompleteWgpuDiagnosticReadbackAttempt(
+    bool captureSucceeded, int requestId,
+    const std::shared_ptr<std::atomic_uint>& consecutiveFailures) {
+  const unsigned failuresBeforeAttempt =
+      captureSucceeded ? consecutiveFailures->load(std::memory_order_relaxed)
+                       : consecutiveFailures->fetch_add(1u, std::memory_order_relaxed);
+  const internal::WgpuDiagnosticReadbackDecision decision =
+      internal::WgpuDiagnosticReadbackDecisionFor(captureSucceeded, failuresBeforeAttempt);
+  if (captureSucceeded || decision.completeRequest) {
+    consecutiveFailures->store(0u, std::memory_order_relaxed);
+  }
+  if (!captureSucceeded && decision.completeRequest) {
+    PublishWgpuReadbackFailure(requestId);
+  }
+  return decision;
+}
+
+struct AsyncSmokeReadbackSetupAttempt {
+  int requestId = 0;
+  bool* handedOffToMapCallback = nullptr;
+  std::shared_ptr<std::atomic_bool> alive;
+  std::shared_ptr<std::atomic_uint> consecutiveFailures;
+
+  ~AsyncSmokeReadbackSetupAttempt() {
+    if (requestId <= 0 || handedOffToMapCallback == nullptr || *handedOffToMapCallback ||
+        !alive->load(std::memory_order_acquire)) {
+      return;
+    }
+
+    const internal::WgpuDiagnosticReadbackDecision decision =
+        CompleteWgpuDiagnosticReadbackAttempt(false, requestId, consecutiveFailures);
+    if (internal::ShouldRecheckPendingWgpuReadbackRequestsAfterCompletion(
+            alive->load(std::memory_order_acquire), decision)) {
+      WakeWasmEditorForPendingWgpuReadback();
+    }
+  }
+};
+
+struct AsyncSmokeReadback {
+  geode::ScopedWgpuHandle<wgpu::Buffer> buffer;
+  uint64_t size = 0;
+  uint32_t width = 0;
+  uint32_t height = 0;
+  uint32_t bytesPerRow = 0;
+  wgpu::TextureFormat surfaceFormat = wgpu::TextureFormat::Undefined;
+  int requestId = 0;
+  std::shared_ptr<std::atomic_bool> inFlight;
+  std::shared_ptr<std::atomic_bool> alive;
+  std::shared_ptr<std::atomic_uint> consecutiveFailures;
+};
+
+void BeginAsyncSmokeReadback(geode::ScopedWgpuHandle<wgpu::Buffer> buffer, uint64_t size,
+                             uint32_t width, uint32_t height, uint32_t bytesPerRow,
+                             wgpu::TextureFormat surfaceFormat, int requestId,
+                             std::shared_ptr<std::atomic_bool> inFlight,
+                             std::shared_ptr<std::atomic_bool> alive,
+                             std::shared_ptr<std::atomic_uint> consecutiveFailures) {
+  auto state = std::make_unique<AsyncSmokeReadback>(AsyncSmokeReadback{
+      .buffer = std::move(buffer),
+      .size = size,
+      .width = width,
+      .height = height,
+      .bytesPerRow = bytesPerRow,
+      .surfaceFormat = surfaceFormat,
+      .requestId = requestId,
+      .inFlight = std::move(inFlight),
+      .alive = std::move(alive),
+      .consecutiveFailures = std::move(consecutiveFailures),
+  });
+  AsyncSmokeReadback* callbackState = state.release();
+  wgpu::BufferMapCallbackInfo mapCb{wgpu::Default};
+  mapCb.callback = [](WGPUMapAsyncStatus status, WGPUStringView /*message*/, void* userdata1,
+                      void* /*userdata2*/) {
+    std::unique_ptr<AsyncSmokeReadback> state(static_cast<AsyncSmokeReadback*>(userdata1));
+    bool captureSucceeded = false;
+    if (status == WGPUMapAsyncStatus_Success) {
+      const uint8_t* mapped =
+          static_cast<const uint8_t*>(state->buffer.get().getConstMappedRange(0, state->size));
+      if (mapped != nullptr && state->alive->load(std::memory_order_acquire)) {
+        PublishWgpuReadbackStatsForSmokeTests(
+            WgpuReadbackView{
+                .pixels = mapped,
+                .width = static_cast<int>(state->width),
+                .height = static_cast<int>(state->height),
+                .rowBytes = state->bytesPerRow,
+                .bgra = IsBgraSurfaceFormat(state->surfaceFormat),
+            },
+            state->requestId);
+        captureSucceeded = true;
+      }
+      state->buffer.get().unmap();
+    }
+
+    internal::WgpuDiagnosticReadbackDecision decision;
+    if (state->alive->load(std::memory_order_acquire)) {
+      decision = CompleteWgpuDiagnosticReadbackAttempt(captureSucceeded, state->requestId,
+                                                       state->consecutiveFailures);
+    }
+    state->inFlight->store(false, std::memory_order_release);
+    if (internal::ShouldRecheckPendingWgpuReadbackRequestsAfterCompletion(
+            state->alive->load(std::memory_order_acquire), decision)) {
+      WakeWasmEditorForPendingWgpuReadback();
+    }
+  };
+  mapCb.userdata1 = callbackState;
+  mapCb.userdata2 = nullptr;
+  mapCb.mode = wgpu::CallbackMode::AllowSpontaneous;
+  MarkWgpuReadbackCaptureStarted(requestId);
+  callbackState->buffer.get().mapAsync(wgpu::MapMode::Read, 0, size, mapCb);
 }
 #endif
 #endif
@@ -474,6 +774,14 @@ struct EditorWindow::WgpuState {
   wgpu::CompositeAlphaMode alphaMode = wgpu::CompositeAlphaMode::Auto;
   std::shared_ptr<geode::GeodeDevice> geodeDevice;
   std::shared_ptr<geode::GeodeDevice> framebufferGeodeDevice;
+#ifdef __EMSCRIPTEN__
+  std::shared_ptr<std::atomic_bool> smokeReadbackInFlight =
+      std::make_shared<std::atomic_bool>(false);
+  std::shared_ptr<std::atomic_bool> smokeReadbackAlive = std::make_shared<std::atomic_bool>(true);
+  std::shared_ptr<std::atomic_uint> smokeReadbackConsecutiveFailures =
+      std::make_shared<std::atomic_uint>(0u);
+  unsigned consecutiveSurfaceFrameFailures = 0;
+#endif
   int configuredWidth = 0;
   int configuredHeight = 0;
 };
@@ -482,6 +790,12 @@ struct EditorWindow::WgpuState {};
 #endif
 
 EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(options)) {
+#if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
+  // The worker-owned document canvas sits behind this ImGui surface. Keep
+  // uncovered render-pane pixels transparent so the browser can composite the
+  // worker's WebGPU surface underneath the UI chrome.
+  options_.clearColor[3] = 0.0f;
+#endif
   glfwSetErrorCallback(&GlfwErrorCallback);
 
   bool useNullPlatform = false;
@@ -649,11 +963,21 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   enableSurfaceReadback = enableSurfaceReadback || WgpuReadbackStatsEnabled();
 #endif
   wgpuState_->surfaceUsage = SurfaceUsageForCapabilities(caps, enableSurfaceReadback);
+#ifdef __EMSCRIPTEN__
+  wgpuState_->alphaMode = wgpu::CompositeAlphaMode::Auto;
+  for (size_t i = 0; i < caps.alphaModeCount; ++i) {
+    if (caps.alphaModes[i] == wgpu::CompositeAlphaMode::Premultiplied) {
+      wgpuState_->alphaMode = caps.alphaModes[i];
+      break;
+    }
+  }
+#else
   if (caps.alphaModeCount > 0) {
     wgpuState_->alphaMode = wgpu::CompositeAlphaMode{caps.alphaModes[0]};
   } else {
     wgpuState_->alphaMode = wgpu::CompositeAlphaMode::Auto;
   }
+#endif
   caps.freeMembers();
 
   int surfaceWidth = 0;
@@ -694,6 +1018,18 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     glfwTerminate();
     return;
   }
+#ifdef __EMSCRIPTEN__
+  static_assert(internal::ShouldShareWgpuFramebufferGeodeDevice(/*emscriptenBuild=*/true));
+  // The Wasm render worker owns a separate device, leaving both users of this
+  // wrapper on the UI thread. Reuse it so startup does not compile an identical
+  // second suite of Geode render/filter pipelines.
+  wgpuState_->framebufferGeodeDevice = wgpuState_->geodeDevice;
+#else
+  static_assert(!internal::ShouldShareWgpuFramebufferGeodeDevice(/*emscriptenBuild=*/false));
+  // Native AsyncRenderer shares the primary wrapper with its background
+  // thread. Keep the UI framebuffer's mutable counters and deferred-destroy
+  // queues isolated in a second wrapper even though both wrap the same raw
+  // WebGPU device and queue.
   geode::GeodeEmbedConfig framebufferEmbedConfig = embedConfig;
   wgpuState_->framebufferGeodeDevice =
       geode::GeodeDevice::CreateFromExternal(framebufferEmbedConfig);
@@ -705,6 +1041,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     glfwTerminate();
     return;
   }
+#endif
 #else
 #ifndef __EMSCRIPTEN__
   glfwMakeContextCurrent(window_);
@@ -824,6 +1161,11 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
 }
 
 EditorWindow::~EditorWindow() {
+#if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
+  if (wgpuState_ != nullptr) {
+    wgpuState_->smokeReadbackAlive->store(false, std::memory_order_release);
+  }
+#endif
   if (imguiInitialized_) {
 #ifdef DONNER_EDITOR_WGPU
     ImGui_ImplWGPU_Shutdown();
@@ -958,7 +1300,9 @@ void EditorWindow::waitEventsTimeout(double timeoutSeconds) {
 
 void EditorWindow::wakeEventLoop() {
 #ifdef __EMSCRIPTEN__
-  // No-op - the browser's rAF cadence handles wake-ups implicitly.
+  // The browser still invokes the lightweight rAF scheduler continuously, but expensive ImGui and
+  // swapchain work is event-driven. Worker completion and editor animation paths land here.
+  wasmFrameRequested_.store(true, std::memory_order_release);
 #else
   glfwPostEmptyEvent();
 #endif
@@ -1008,6 +1352,13 @@ void EditorWindow::beginFrameImpl(const EditorWindowInputOverride* inputOverride
     ApplyInputOverride(*inputOverride);
   }
   ImGui::NewFrame();
+#ifdef __EMSCRIPTEN__
+  // ImGui trickles conflicting transitions such as mouse-down and mouse-up across frames. Preserve
+  // that ordering after the browser coalesces both DOM events into one animation-frame wake.
+  if (ImGui::GetCurrentContext()->InputEventsQueue.Size > 0) {
+    wakeEventLoop();
+  }
+#endif
   lastBeginFrameMs_ = ElapsedMs(beginFrameStart);
 }
 
@@ -1055,21 +1406,75 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   glfwGetFramebufferSize(window_, &displayW, &displayH);
 #endif
 #ifdef DONNER_EDITOR_WGPU
-  svg::RendererBitmap smokeTestReadback;
   svg::RendererBitmap* targetReadback = readback;
 #if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
   const bool publishSmokeReadbackStats = WgpuReadbackStatsEnabled();
-  if (targetReadback == nullptr && publishSmokeReadbackStats) {
-    targetReadback = &smokeTestReadback;
-  }
+  bool requestAsyncSmokeReadback = false;
+  const int smokeReadbackRequestId =
+      targetReadback == nullptr && publishSmokeReadbackStats ? PeekWgpuReadbackRequest() : 0;
 #endif
   if (targetReadback != nullptr) {
     *targetReadback = svg::RendererBitmap{};
   }
   if (wgpuState_ == nullptr || !wgpuState_->surface || !wgpuState_->device || displayW <= 0 ||
       displayH <= 0) {
+#if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
+    // There is no persistent WGPU state in which to count retries. Complete this diagnostic
+    // request as a terminal setup failure rather than rearming an impossible capture forever.
+    if (smokeReadbackRequestId > 0) {
+      PublishWgpuReadbackFailure(smokeReadbackRequestId);
+      WakeWasmEditorForPendingWgpuReadback();
+    }
+#endif
     return;
   }
+#if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
+  bool surfaceFrameCompleted = false;
+  internal::WgpuSurfaceFailureKind surfaceFailureKind = internal::WgpuSurfaceFailureKind::Setup;
+  struct WasmSurfaceFrameRetryGuard {
+    EditorWindow* window = nullptr;
+    WgpuState* state = nullptr;
+    bool* completed = nullptr;
+    internal::WgpuSurfaceFailureKind* failure = nullptr;
+
+    ~WasmSurfaceFrameRetryGuard() {
+      if (*completed) {
+        state->consecutiveSurfaceFrameFailures = 0;
+        return;
+      }
+      const internal::WgpuSurfaceRetryDecision decision =
+          internal::WgpuSurfaceRetryDecisionFor(*failure, state->consecutiveSurfaceFrameFailures);
+      if (decision.reconfigure) {
+        state->configuredWidth = 0;
+        state->configuredHeight = 0;
+      }
+      if (decision.requestFrame) {
+        ++state->consecutiveSurfaceFrameFailures;
+        window->wakeEventLoop();
+      }
+    }
+  } wasmSurfaceFrameRetryGuard{
+      .window = this,
+      .state = wgpuState_.get(),
+      .completed = &surfaceFrameCompleted,
+      .failure = &surfaceFailureKind,
+  };
+
+  if (smokeReadbackRequestId > 0) {
+    if (wgpuState_->smokeReadbackInFlight->load(std::memory_order_acquire)) {
+      // The in-flight callback owns the pending-request wake at this point.
+    } else {
+      requestAsyncSmokeReadback = true;
+    }
+  }
+  bool smokeReadbackHandedOffToMapCallback = !requestAsyncSmokeReadback;
+  AsyncSmokeReadbackSetupAttempt asyncSmokeReadbackSetupAttempt{
+      .requestId = smokeReadbackRequestId,
+      .handedOffToMapCallback = &smokeReadbackHandedOffToMapCallback,
+      .alive = wgpuState_->smokeReadbackAlive,
+      .consecutiveFailures = wgpuState_->smokeReadbackConsecutiveFailures,
+  };
+#endif
   if (displayW != wgpuState_->configuredWidth || displayH != wgpuState_->configuredHeight) {
     wgpu::SurfaceConfiguration surfaceConfig(wgpu::Default);
     surfaceConfig.device = wgpuState_->device;
@@ -1098,13 +1503,27 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
       surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal) {
     donner::geode::ScopedWgpuHandle<wgpu::Texture> failedTexture(
         wgpu::Texture(surfaceTexture.texture));
+#if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
+    if (surfaceTexture.status == WGPUSurfaceGetCurrentTextureStatus_Timeout) {
+      surfaceFailureKind = internal::WgpuSurfaceFailureKind::Timeout;
+    } else if (surfaceTexture.status == WGPUSurfaceGetCurrentTextureStatus_Outdated ||
+               surfaceTexture.status == WGPUSurfaceGetCurrentTextureStatus_Lost) {
+      surfaceFailureKind = internal::WgpuSurfaceFailureKind::OutdatedOrLost;
+    } else {
+      surfaceFailureKind = internal::WgpuSurfaceFailureKind::Fatal;
+    }
+#endif
     return;
   }
 
   donner::geode::ScopedWgpuHandle<wgpu::Texture> target(wgpu::Texture(surfaceTexture.texture));
   SurfacePresentGuard presentGuard(wgpuState_->surface);
   const bool shouldReadback =
-      targetReadback != nullptr && SurfaceUsageSupportsReadback(wgpuState_->surfaceUsage);
+      SurfaceUsageSupportsReadback(wgpuState_->surfaceUsage) && (targetReadback != nullptr
+#if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
+                                                                 || requestAsyncSmokeReadback
+#endif
+                                                                );
   const uint32_t readbackWidth = static_cast<uint32_t>(displayW);
   const uint32_t readbackHeight = static_cast<uint32_t>(displayH);
   const uint32_t readbackBytesPerRow = AlignTextureCopyBytesPerRow(readbackWidth * 4u);
@@ -1236,7 +1655,7 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     wgpuState_->queue.submit(1, &commands.get());
     timing.readbackMs += ElapsedMs(readbackStart);
   }
-  if (readbackBuffer &&
+  if (targetReadback != nullptr && readbackBuffer &&
       MapReadbackBuffer(wgpuState_->device, readbackBuffer.get(), readbackBufferSize)) {
     const auto readbackStart = std::chrono::steady_clock::now();
     const uint8_t* mapped = static_cast<const uint8_t*>(
@@ -1249,6 +1668,15 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     timing.readbackMs += ElapsedMs(readbackStart);
   }
 #if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
+  if (requestAsyncSmokeReadback && readbackBuffer) {
+    wgpuState_->smokeReadbackInFlight->store(true, std::memory_order_release);
+    smokeReadbackHandedOffToMapCallback = true;
+    BeginAsyncSmokeReadback(std::move(readbackBuffer), readbackBufferSize, readbackWidth,
+                            readbackHeight, readbackBytesPerRow, wgpuState_->surfaceFormat,
+                            smokeReadbackRequestId, wgpuState_->smokeReadbackInFlight,
+                            wgpuState_->smokeReadbackAlive,
+                            wgpuState_->smokeReadbackConsecutiveFailures);
+  }
   if (publishSmokeReadbackStats && targetReadback != nullptr && !targetReadback->empty()) {
     PublishWgpuReadbackStatsForSmokeTests(*targetReadback);
   }
@@ -1300,6 +1728,17 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     glfwSwapBuffers(window_);
     timing.presentMs = ElapsedMs(presentStart);
   }
+#endif
+#endif
+#ifdef __EMSCRIPTEN__
+  // Keep the HTML loading surface visible until a real editor frame has reached the browser
+  // presentation path. Runtime initialization alone precedes this point by several seconds on a
+  // cold load.
+#if defined(DONNER_EDITOR_WGPU)
+  PublishFirstPresentedFrame(geode::GeodeDevice::headlessCreationCountForTesting());
+  surfaceFrameCompleted = true;
+#else
+  PublishFirstPresentedFrame(/*headlessDeviceCreations=*/0);
 #endif
 #endif
 }

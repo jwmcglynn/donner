@@ -1,10 +1,14 @@
 #include "donner/svg/renderer/RendererGeode.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <iostream>
 #include <map>
+#include <mutex>
 #include <optional>
+#include <thread>
 #include <utility>
 #include <vector>
 #include <webgpu/webgpu.hpp>
@@ -58,13 +62,50 @@ RendererGeodeTextureSnapshot::RendererGeodeTextureSnapshot(
     std::shared_ptr<geode::GeodeDevice> device, wgpu::Texture texture, Vector2i dimensions,
     wgpu::TextureFormat format)
     : device_(std::move(device)),
-      texture_(std::move(texture)),
+      ownedTexture_(std::move(texture)),
       dimensions_(dimensions),
-      format_(format) {}
+      format_(format) {
+  texture_ = ownedTexture_.get();
+}
+
+RendererGeodeTextureSnapshot::~RendererGeodeTextureSnapshot() {
+  destroyOwnedBacking();
+}
+
+RendererGeodeTextureSnapshot& RendererGeodeTextureSnapshot::operator=(
+    RendererGeodeTextureSnapshot&& other) noexcept {
+  if (this == &other) {
+    return *this;
+  }
+
+  destroyOwnedBacking();
+  device_ = std::move(other.device_);
+  ownedTexture_ = std::move(other.ownedTexture_);
+  texture_ = std::exchange(other.texture_, wgpu::Texture());
+  textureView_ = std::move(other.textureView_);
+  dimensions_ = std::exchange(other.dimensions_, Vector2i::Zero());
+  format_ = std::exchange(other.format_, wgpu::TextureFormat::Undefined);
+  return *this;
+}
+
+void RendererGeodeTextureSnapshot::destroyOwnedBacking() noexcept {
+  textureView_.reset();
+  if (ownedTexture_) {
+    ownedTexture_.destroyBackingAndReset();
+  }
+  texture_ = wgpu::Texture();
+}
+
+RendererGeodeTextureSnapshot RendererGeodeTextureSnapshot::BorrowCurrentFrame(
+    wgpu::Texture texture, Vector2i dimensions, wgpu::TextureFormat format) {
+  RendererGeodeTextureSnapshot result(nullptr, wgpu::Texture(), dimensions, format);
+  result.texture_ = texture;
+  return result;
+}
 
 const wgpu::TextureView& RendererGeodeTextureSnapshot::textureView() const {
   if (!textureView_ && texture_) {
-    textureView_.reset(texture_.get().createView());
+    textureView_.reset(texture_.createView());
   }
   return textureView_.get();
 }
@@ -750,9 +791,219 @@ std::optional<ResolvedRadialGradient> resolveRadialGradientParams(
   return out;
 }
 
+struct RendererGeodeTextureKey {
+  uint32_t width = 0;
+  uint32_t height = 0;
+  wgpu::TextureFormat format = wgpu::TextureFormat::Undefined;
+  wgpu::TextureUsage usage = wgpu::TextureUsage::None;
+
+  auto operator<=>(const RendererGeodeTextureKey& other) const = default;
+
+  static RendererGeodeTextureKey From(const wgpu::TextureDescriptor& desc) {
+    return RendererGeodeTextureKey{desc.size.width, desc.size.height, desc.format, desc.usage};
+  }
+};
+
+struct RendererGeodeTextureBucket {
+  std::vector<geode::ScopedWgpuHandle<wgpu::Texture>> free;
+  uint64_t lastUsedFrame = 0;
+};
+
+/**
+ * Device-shared pool for transient Geode render textures.
+ *
+ * Exact-size reuse remains available across RendererGeode instances sharing one GeodeDevice, while
+ * one retained-memory budget covers the editor's main, compositor, and thumbnail renderers.
+ */
+class RendererGeodeTexturePool {
+public:
+  ~RendererGeodeTexturePool() {
+    for (auto& [unusedKey, bucket] : buckets_) {
+      (void)unusedKey;
+      for (geode::ScopedWgpuHandle<wgpu::Texture>& texture : bucket.free) {
+        if (texture) {
+          texture.get().destroy();
+        }
+      }
+    }
+  }
+
+  void beginFrame() {
+    std::lock_guard lock(mutex_);
+    ++currentFrameIndex_;
+    evictStalePoolBuckets();
+  }
+
+  [[nodiscard]] RendererGeodeTexturePoolStats stats() const {
+    std::lock_guard lock(mutex_);
+    RendererGeodeTexturePoolStats result;
+    result.textureCount = pooledTextureCount_;
+    result.bytes = pooledTextureBytes_;
+    result.budgetBytes = kTexturePoolBudgetBytes;
+    for (const auto& [unusedKey, bucket] : buckets_) {
+      (void)unusedKey;
+      if (!bucket.free.empty()) {
+        ++result.bucketCount;
+      }
+    }
+    return result;
+  }
+
+  wgpu::Texture acquire(geode::GeodeDevice& device, const wgpu::TextureDescriptor& desc) {
+    const RendererGeodeTextureKey key = RendererGeodeTextureKey::From(desc);
+    {
+      std::lock_guard lock(mutex_);
+      RendererGeodeTextureBucket& bucket = buckets_[key];
+      bucket.lastUsedFrame = currentFrameIndex_;
+      if (!bucket.free.empty()) {
+        wgpu::Texture texture = bucket.free.back().take();
+        bucket.free.pop_back();
+        pooledTextureBytes_ -= textureByteSize(key);
+        --pooledTextureCount_;
+        return texture;
+      }
+    }
+
+    wgpu::Texture texture = device.device().createTexture(desc);
+    if (texture) {
+      device.countTexture();
+    }
+    return texture;
+  }
+
+  void release(wgpu::Texture texture, const wgpu::TextureDescriptor& desc) {
+    if (!texture) {
+      return;
+    }
+
+    std::lock_guard lock(mutex_);
+    const RendererGeodeTextureKey key = RendererGeodeTextureKey::From(desc);
+    const auto existingBucket = buckets_.find(key);
+    if (existingBucket != buckets_.end() &&
+        existingBucket->second.free.size() >= kMaxPoolEntriesPerKey) {
+      destroyReleasedTexture(std::move(texture));
+      return;
+    }
+
+    const uint64_t textureBytes = textureByteSize(key);
+    if (!evictPoolEntriesToFit(textureBytes)) {
+      destroyReleasedTexture(std::move(texture));
+      return;
+    }
+
+    RendererGeodeTextureBucket& bucket = buckets_[key];
+    bucket.lastUsedFrame = currentFrameIndex_;
+    bucket.free.push_back(geode::ScopedWgpuHandle<wgpu::Texture>(std::move(texture)));
+    pooledTextureBytes_ += textureBytes;
+    ++pooledTextureCount_;
+  }
+
+private:
+  static constexpr std::size_t kMaxPoolEntriesPerKey = 8;
+  static constexpr uint64_t kTexturePoolBudgetBytes = 64u * 1024u * 1024u;
+  static constexpr uint64_t kBucketEvictAfterFrames = 120;
+
+  static uint64_t textureByteSize(const RendererGeodeTextureKey& key) {
+    // Every current pool caller uses a single-sampled, one-mip 32-bit RGBA or BGRA texture.
+    return static_cast<uint64_t>(key.width) * static_cast<uint64_t>(key.height) * 4u;
+  }
+
+  static void destroyReleasedTexture(wgpu::Texture texture) {
+    geode::ScopedWgpuHandle<wgpu::Texture> owned(std::move(texture));
+    if (owned) {
+      owned.get().destroy();
+    }
+  }
+
+  void destroyPoolBucket(const RendererGeodeTextureKey& key, RendererGeodeTextureBucket& bucket) {
+    const uint64_t bucketBytes = textureByteSize(key) * static_cast<uint64_t>(bucket.free.size());
+    for (geode::ScopedWgpuHandle<wgpu::Texture>& texture : bucket.free) {
+      if (texture) {
+        texture.get().destroy();
+      }
+    }
+    pooledTextureBytes_ -= bucketBytes;
+    pooledTextureCount_ -= bucket.free.size();
+  }
+
+  bool evictPoolEntriesToFit(uint64_t incomingBytes) {
+    if (incomingBytes > kTexturePoolBudgetBytes) {
+      return false;
+    }
+
+    while (pooledTextureBytes_ > kTexturePoolBudgetBytes - incomingBytes) {
+      auto victim = buckets_.end();
+      for (auto it = buckets_.begin(); it != buckets_.end(); ++it) {
+        if (it->second.free.empty()) {
+          continue;
+        }
+        if (victim == buckets_.end() || it->second.lastUsedFrame < victim->second.lastUsedFrame) {
+          victim = it;
+        }
+      }
+      if (victim == buckets_.end()) {
+        return false;
+      }
+
+      geode::ScopedWgpuHandle<wgpu::Texture>& texture = victim->second.free.back();
+      if (texture) {
+        texture.get().destroy();
+      }
+      victim->second.free.pop_back();
+      pooledTextureBytes_ -= textureByteSize(victim->first);
+      --pooledTextureCount_;
+      if (victim->second.free.empty()) {
+        buckets_.erase(victim);
+      }
+    }
+    return true;
+  }
+
+  void evictStalePoolBuckets() {
+    for (auto it = buckets_.begin(); it != buckets_.end();) {
+      if (currentFrameIndex_ - it->second.lastUsedFrame > kBucketEvictAfterFrames) {
+        destroyPoolBucket(it->first, it->second);
+        it = buckets_.erase(it);
+      } else {
+        ++it;
+      }
+    }
+  }
+
+  mutable std::mutex mutex_;
+  std::map<RendererGeodeTextureKey, RendererGeodeTextureBucket> buckets_;
+  uint64_t pooledTextureBytes_ = 0;
+  std::size_t pooledTextureCount_ = 0;
+  uint64_t currentFrameIndex_ = 0;
+};
+
+std::shared_ptr<RendererGeodeTexturePool> TexturePoolForDevice(geode::GeodeDevice* device) {
+  static std::mutex registryMutex;
+  static std::map<geode::GeodeDevice*, std::weak_ptr<RendererGeodeTexturePool>> pools;
+
+  std::lock_guard lock(registryMutex);
+  for (auto it = pools.begin(); it != pools.end();) {
+    if (it->second.expired()) {
+      it = pools.erase(it);
+    } else {
+      ++it;
+    }
+  }
+
+  if (const auto existing = pools.find(device); existing != pools.end()) {
+    if (std::shared_ptr<RendererGeodeTexturePool> pool = existing->second.lock()) {
+      return pool;
+    }
+  }
+
+  auto pool = std::make_shared<RendererGeodeTexturePool>();
+  pools[device] = pool;
+  return pool;
+}
+
 }  // namespace
 
-struct RendererGeode::Impl {
+struct RendererGeode::Impl : public geode::GeometryDebugSink {
   bool verbose = false;
 
   // Per-frame perf counters. See design doc 0030 (geode_performance) for
@@ -798,6 +1049,7 @@ struct RendererGeode::Impl {
   int targetHeight = 0;
   wgpu::Texture target;  // Borrowed active render target.
   geode::ScopedWgpuHandle<wgpu::Texture> ownedTarget;
+  std::optional<RendererGeodeTextureSnapshot> borrowedTargetSnapshot;
 
   // Single CommandEncoder owned by RendererGeode for the whole frame
   // (design doc 0030 Milestone 3). All `GeoEncoder` instances created
@@ -933,35 +1185,33 @@ struct RendererGeode::Impl {
   // follow-up for viewport-resize scenarios.
   // --------------------------------------------------------------------
 
-  /// Key used for texture-pool bucket lookup. Two textures are
-  /// interchangeable iff every field matches - same size, same
-  /// format, same usage flags.
-  struct TextureKey {
-    uint32_t width = 0;
-    uint32_t height = 0;
-    wgpu::TextureFormat format = wgpu::TextureFormat::Undefined;
-    wgpu::TextureUsage usage = wgpu::TextureUsage::None;
+  std::shared_ptr<RendererGeodeTexturePool> texturePool;
 
-    auto operator<=>(const TextureKey& other) const = default;
+  [[nodiscard]] RendererGeodeTexturePoolStats texturePoolStats() const {
+    return texturePool ? texturePool->stats() : RendererGeodeTexturePoolStats{};
+  }
 
-    static TextureKey From(const wgpu::TextureDescriptor& desc) {
-      return TextureKey{desc.size.width, desc.size.height, desc.format, desc.usage};
+  /// Detach a superseded primary target and destroy its GPU backing at the next frame boundary.
+  ///
+  /// `ScopedWgpuHandle::reset()` releases only the WebGPU handle. In browsers, notably Safari,
+  /// that can leave a succession of resized primary-target backings resident until JavaScript GC.
+  /// Keep the old handle through the current frame boundary so already-submitted work remains
+  /// valid, then let GeodeDevice's deferred-destroy pass explicitly reclaim the backing.
+  void retireOwnedTargetAtFrameBoundary() {
+    target = wgpu::Texture();
+    targetWidth = 0;
+    targetHeight = 0;
+    if (!ownedTarget) {
+      return;
     }
-  };
-  struct TextureBucket {
-    std::vector<geode::ScopedWgpuHandle<wgpu::Texture>> free;
-    /// Monotonic frame index when this bucket was last touched by
-    /// either `acquireTexture` or `releaseTexture`. Used by
-    /// `evictStalePoolBuckets` to age out buckets whose size hasn't
-    /// been seen in a while (viewport-resize scenarios).
-    uint64_t lastUsedFrame = 0;
-  };
-  std::map<TextureKey, TextureBucket> texturePool;
 
-  /// Per-bucket hard cap. Prevents a single size from accumulating
-  /// unbounded textures even if a pathological frame pushes and pops
-  /// dozens of layers at that size without ever reacquiring.
-  static constexpr std::size_t kMaxPoolEntriesPerKey = 8;
+    if (device) {
+      device->deferDestroy(ownedTarget.take());
+    } else {
+      ownedTarget.get().destroy();
+      ownedTarget.reset();
+    }
+  }
 
   /// Cross-frame arena buffer pool (design doc 0030 M1). Every
   /// `GeoEncoder` this renderer constructs gets a pointer via
@@ -970,33 +1220,14 @@ struct RendererGeode::Impl {
   /// `texturePool` (M4.2) on the buffer side.
   geode::GeodeBufferPool arenaBufferPool;
 
-  /// Drop a bucket entirely if it hasn't been touched in this many
-  /// consecutive frames. At 60 fps this is ~2 seconds of idleness;
-  /// long enough to survive transient dips (e.g. an editor dragging
-  /// slightly then stopping) while still releasing memory on real
-  /// viewport-size changes.
-  static constexpr uint64_t kBucketEvictAfterFrames = 120;
-
-  /// Monotonic frame counter. Incremented in `beginFrame`; used to
-  /// stamp `TextureBucket::lastUsedFrame`.
+  /// Per-renderer frame index used to age resident path-cache entries.
   uint64_t currentFrameIndex = 0;
 
   /// Acquire a pooled texture matching `desc`, or create a fresh one
   /// on miss. Always increments the `textureCreates` counter on miss;
   /// never on hit. Returns a null texture on device failure.
   wgpu::Texture acquireTexture(const wgpu::TextureDescriptor& desc) {
-    TextureBucket& bucket = texturePool[TextureKey::From(desc)];
-    bucket.lastUsedFrame = currentFrameIndex;
-    if (!bucket.free.empty()) {
-      wgpu::Texture texture = bucket.free.back().take();
-      bucket.free.pop_back();
-      return texture;
-    }
-    wgpu::Texture texture = device->device().createTexture(desc);
-    if (texture) {
-      device->countTexture();
-    }
-    return texture;
+    return texturePool && device ? texturePool->acquire(*device, desc) : wgpu::Texture{};
   }
 
   /// Return a texture to its pool bucket IMMEDIATELY. Caller must
@@ -1012,29 +1243,11 @@ struct RendererGeode::Impl {
     if (!texture) {
       return;
     }
-    TextureBucket& bucket = texturePool[TextureKey::From(desc)];
-    bucket.lastUsedFrame = currentFrameIndex;
-    if (bucket.free.size() >= kMaxPoolEntriesPerKey) {
-      // Bucket full - let the released texture go out of scope instead
-      // of unbounded growth.
-      geode::ScopedWgpuHandle<wgpu::Texture> dropped(std::move(texture));
-      return;
-    }
-    bucket.free.push_back(geode::ScopedWgpuHandle<wgpu::Texture>(std::move(texture)));
-  }
-
-  /// Drop every bucket whose `lastUsedFrame` is older than
-  /// `kBucketEvictAfterFrames` frames. Called at `beginFrame`. On
-  /// steady-state workloads this is a no-op (all buckets refresh
-  /// their stamps each frame); under viewport-resize churn it caps
-  /// pool memory at whatever sizes have been seen recently.
-  void evictStalePoolBuckets() {
-    for (auto it = texturePool.begin(); it != texturePool.end();) {
-      if (currentFrameIndex - it->second.lastUsedFrame > kBucketEvictAfterFrames) {
-        it = texturePool.erase(it);
-      } else {
-        ++it;
-      }
+    if (texturePool) {
+      texturePool->release(std::move(texture), desc);
+    } else {
+      geode::ScopedWgpuHandle<wgpu::Texture> owned(std::move(texture));
+      owned.get().destroy();
     }
   }
 
@@ -1356,89 +1569,139 @@ struct RendererGeode::Impl {
   Entity lastDrawSourceEntity = entt::null;
 
   /// Debug geometry overlay (see `RendererGeode::setDebugGeometryOverlay`).
-  /// When true, every `drawPath` additionally outlines the Slug band
-  /// decomposition Geode emits for the draw: horizontal band strips,
-  /// vertical band strips, and the single bounding quad (with its
-  /// triangle diagonal) that is the geometry actually rasterized.
-  /// Default off; every overlay code path is behind this flag so the
-  /// disabled state is byte-identical to a build without the feature.
+  /// Default off; the normal path pays only the null-sink check at an
+  /// actual Slug submission and allocates no capture storage.
   bool debugGeometryOverlay = false;
 
-  /// Draw the debug overlay for one encoded path. Called from `drawPath`
-  /// after the normal fill/stroke draws so the overlay renders on top.
-  /// Uses `GeoEncoder::fillPath` directly (hairline rings built as
-  /// EvenOdd outer+inset rectangles), so no new pipelines or shaders are
-  /// involved; overlay draws cost normal draw-call counters, which is
-  /// acceptable for a debug mode.
-  void drawEncodedPathOverlay(const geode::EncodedPath& encoded) {
-    if (!encoder || encoded.empty()) {
-      return;
+  struct GeometryDebugEdge {
+    Vector2d a;
+    Vector2d b;
+  };
+  std::vector<GeometryDebugEdge> geometryDebugEdges;
+
+  /// Map pixels in the current encoder target back into final root-target
+  /// pixels. Filter captures may be expanded at their top/left; all other
+  /// layer, mask, and clip targets share the root pixel coordinate system.
+  [[nodiscard]] Transform2d geometryDebugRootFromCurrentTarget(
+      int additionalFilterOffsetX = 0, int additionalFilterOffsetY = 0) const {
+    int offsetX = additionalFilterOffsetX;
+    int offsetY = additionalFilterOffsetY;
+    for (const FilterStackFrame& frame : filterStack) {
+      offsetX += frame.filterBufferOffsetX;
+      offsetY += frame.filterBufferOffsetY;
     }
-    syncTransform();
+    return Transform2d::Translate(-offsetX, -offsetY);
+  }
 
-    // Hairline width: one device pixel expressed in path space. The
-    // linear part's determinant gives the area scale of the transform;
-    // its square root approximates the isotropic scale factor.
-    const double det = std::abs(deviceFromLocalTransform.determinant());
-    const double scale = det > 0.0 ? std::sqrt(det) : 1.0;
-    const double w = 1.0 / std::max(scale, 1e-6);
-
-    // A hairline rectangular ring: outer rect + inset rect, filled
-    // EvenOdd so only the border remains.
-    const auto addRing = [w](PathBuilder& builder, const Box2d& rect) {
-      builder.addRect(rect);
-      const Box2d inner(rect.topLeft + Vector2d(w, w), rect.bottomRight - Vector2d(w, w));
-      if (inner.bottomRight.x > inner.topLeft.x && inner.bottomRight.y > inner.topLeft.y) {
-        builder.addRect(inner);
-      }
-    };
-
-    // Horizontal (Y-strip) bands: cyan.
-    if (!encoded.bands.empty()) {
-      PathBuilder builder;
-      for (const geode::EncodedPath::Band& band : encoded.bands) {
-        addRing(builder, Box2d(Vector2d(band.xMin, band.yMin), Vector2d(band.xMax, band.yMax)));
-      }
-      encoder->fillPath(builder.build(), css::RGBA(0, 200, 255, 160), FillRule::EvenOdd);
-    }
-
-    // Vertical (X-strip) bands: yellow. Field semantics are transposed
-    // for vertical bands (`xMin`/`xMax` = strip bounds, `yMin`/`yMax` =
-    // curve extent), but both pairs still form the band's rectangle.
-    if (!encoded.vBands.empty()) {
-      PathBuilder builder;
-      for (const geode::EncodedPath::Band& band : encoded.vBands) {
-        addRing(builder, Box2d(Vector2d(band.xMin, band.yMin), Vector2d(band.xMax, band.yMax)));
-      }
-      encoder->fillPath(builder.build(), css::RGBA(255, 200, 0, 140), FillRule::EvenOdd);
-    }
-
-    // Bounding quad + triangle diagonal: magenta. This is the geometry
-    // Geode actually rasterizes - one quad (two triangles) per path
-    // (0041: one fragment per pixel, band lookup in the fragment
-    // shader). The diagonal runs between the shared vertices of the two
-    // triangles: (xMin, yMin) -> (xMax, yMax) per
-    // `GeodePathEncoder::encode`'s quadVertices emission order.
-    {
-      const Box2d& b = encoded.pathBounds;
-      PathBuilder builder;
-      addRing(builder, b);
-      const Vector2d d = (b.bottomRight - b.topLeft);
-      const double len = d.length();
-      if (len > w) {
-        // Thin quad along the diagonal, offset w/2 perpendicular.
-        const Vector2d unit = d / len;
-        const Vector2d perp(-unit.y * w * 0.5, unit.x * w * 0.5);
-        builder.moveTo(b.topLeft + perp)
-            .lineTo(b.bottomRight + perp)
-            .lineTo(b.bottomRight - perp)
-            .lineTo(b.topLeft - perp)
-            .closePath();
-      }
-      encoder->fillPath(builder.build(), css::RGBA(255, 0, 255, 200), FillRule::NonZero);
+  /// Configure a path-capable encoder. Pattern-tile content deliberately
+  /// opts out: the consuming path is the root-visible Slug submission, while
+  /// resource-internal geometry must not leak into the document overlay.
+  void configurePathEncoder(geode::GeoEncoder& pathEncoder, bool collectGeometry = true,
+                            int additionalFilterOffsetX = 0, int additionalFilterOffsetY = 0) {
+    pathEncoder.setBufferPool(&arenaBufferPool);
+    if (debugGeometryOverlay && collectGeometry) {
+      pathEncoder.setGeometryDebugSink(this, geometryDebugRootFromCurrentTarget(
+                                                 additionalFilterOffsetX, additionalFilterOffsetY));
     }
   }
 
+  /// Capture the exact post-vertex Slug triangles at the GPU submission
+  /// boundary. This reproduces `slug_fill.wgsl`'s normal-based dynamic
+  /// dilation before mapping the vertices into root-target device pixels.
+  void recordSlugDraw(const geode::EncodedPath& encoded, const Transform2d& targetFromPath,
+                      const Transform2d& rootFromTarget,
+                      std::span<const float> instanceTransforms) override {
+    if (!debugGeometryOverlay || !patternStack.empty() || encoded.quadVertices.size() < 3) {
+      return;
+    }
+
+    const size_t instanceCount = instanceTransforms.empty() ? 1u : instanceTransforms.size() / 8u;
+    if (!instanceTransforms.empty() && instanceTransforms.size() != instanceCount * 8u) {
+      return;
+    }
+
+    const auto instanceAt = [&](size_t index) {
+      Transform2d instance;
+      if (instanceTransforms.empty()) {
+        return instance;
+      }
+      const float* packed = instanceTransforms.data() + index * 8u;
+      instance.data[0] = packed[0];
+      instance.data[2] = packed[1];
+      instance.data[4] = packed[2];
+      instance.data[1] = packed[4];
+      instance.data[3] = packed[5];
+      instance.data[5] = packed[6];
+      return instance;
+    };
+
+    for (size_t instanceIndex = 0; instanceIndex < instanceCount; ++instanceIndex) {
+      const Transform2d instance = instanceAt(instanceIndex);
+      std::vector<GeometryDebugEdge> submissionEdges;
+      submissionEdges.reserve(encoded.quadVertices.size());
+      const auto postVertexPosition = [&](const geode::EncodedPath::Vertex& vertex) {
+        const Vector2d normal(vertex.normalX, vertex.normalY);
+        const Vector2d targetNormal =
+            targetFromPath.transformVector(instance.transformVector(normal));
+        const double dilation = 1.0 / std::max(targetNormal.length(), 0.001);
+        const Vector2d dilatedPathPosition = Vector2d(vertex.posX, vertex.posY) + normal * dilation;
+        const Vector2d targetPosition =
+            targetFromPath.transformPosition(instance.transformPosition(dilatedPathPosition));
+        return rootFromTarget.transformPosition(targetPosition);
+      };
+      const auto addUniqueEdge = [&](const Vector2d& a, const Vector2d& b) {
+        const bool duplicate = std::ranges::any_of(submissionEdges, [&](const auto& edge) {
+          return (edge.a == a && edge.b == b) || (edge.a == b && edge.b == a);
+        });
+        if (!duplicate) {
+          submissionEdges.push_back({a, b});
+        }
+      };
+
+      for (size_t triangleStart = 0; triangleStart + 2 < encoded.quadVertices.size();
+           triangleStart += 3) {
+        const Vector2d p0 = postVertexPosition(encoded.quadVertices[triangleStart]);
+        const Vector2d p1 = postVertexPosition(encoded.quadVertices[triangleStart + 1]);
+        const Vector2d p2 = postVertexPosition(encoded.quadVertices[triangleStart + 2]);
+        addUniqueEdge(p0, p1);
+        addUniqueEdge(p1, p2);
+        addUniqueEdge(p2, p0);
+      }
+      geometryDebugEdges.insert(geometryDebugEdges.end(), submissionEdges.begin(),
+                                submissionEdges.end());
+    }
+  }
+
+  /// Draw every captured edge once, after normal SVG painting and compositing.
+  /// The replay encoder intentionally has no geometry sink, preventing the
+  /// overlay path from recursively observing itself.
+  void emitGeometryDebugOverlay() {
+    if (!debugGeometryOverlay || geometryDebugEdges.empty() || !target || !frameCommandEncoder) {
+      return;
+    }
+
+    PathBuilder builder;
+    for (const GeometryDebugEdge& edge : geometryDebugEdges) {
+      const Vector2d direction = edge.b - edge.a;
+      const double length = direction.length();
+      if (length <= 1e-6) {
+        continue;
+      }
+      const Vector2d halfPixelNormal(-direction.y / length * 0.5, direction.x / length * 0.5);
+      builder.moveTo(edge.a + halfPixelNormal)
+          .lineTo(edge.b + halfPixelNormal)
+          .lineTo(edge.b - halfPixelNormal)
+          .lineTo(edge.a - halfPixelNormal)
+          .closePath();
+    }
+
+    encoder = std::make_unique<geode::GeoEncoder>(
+        *device, *pipeline, *gradientPipeline, *imagePipeline, target, frameCommandEncoder.get());
+    encoder->setBufferPool(&arenaBufferPool);
+    encoder->setLoadPreserve();
+    encoder->setTransform(Transform2d());
+    encoder->fillPath(builder.build(), css::RGBA(255, 0, 255, 255), FillRule::NonZero);
+  }
 
   /// M6-B step 3 (design doc 0030 §M6 Bullet 2): deferred batch for
   /// consecutive `drawPath` calls that share a source entity + resolved
@@ -1510,18 +1773,6 @@ struct RendererGeode::Impl {
     /// subpath → NonZero; for closed-path strokes, two → EvenOdd.
     FillRule fillRule = FillRule::NonZero;
   };
-
-  /// Debug-overlay companion for a stroke draw: visualize the encode of
-  /// the stroked outline (the geometry Geode actually emits for the
-  /// stroke). Falls back to a local encode when the stroke came from the
-  /// no-entity path (no cache slot).
-  void drawStrokeOverlay(const Path& strokedOutline, const StrokeDerived& derived) {
-    if (derived.encoded != nullptr) {
-      drawEncodedPathOverlay(*derived.encoded);
-    } else {
-      drawEncodedPathOverlay(geode::GeodePathEncoder::encode(strokedOutline, derived.fillRule));
-    }
-  }
 
   /// Encode-side of the cache. If `source` holds a valid entity handle,
   /// installs / reuses a `GeodePathCacheComponent::fillEncode` on it and
@@ -1949,16 +2200,6 @@ struct RendererGeode::Impl {
     entries.clear();
   }
 
-  void destroyTexturePool() {
-    for (auto& [unusedKey, bucket] : texturePool) {
-      (void)unusedKey;
-      for (geode::ScopedWgpuHandle<wgpu::Texture>& texture : bucket.free) {
-        destroyTextureBacking(texture);
-      }
-    }
-    texturePool.clear();
-  }
-
   ~Impl() {
     encoder.reset();
     frameCommandEncoder.reset();
@@ -2007,7 +2248,7 @@ struct RendererGeode::Impl {
 
     destroyTextureBacking(ownedTarget);
     ownedTarget.reset();
-    destroyTexturePool();
+    texturePool.reset();
 
     if (device) {
       device->drainDeferredDestroys();
@@ -2026,6 +2267,7 @@ struct RendererGeode::Impl {
   /// no longer toggles filter-engine logging - the shared filter engine
   /// is always constructed with `verbose=false`.
   void initPipelines(bool /*verboseFlag*/) {
+    texturePool = TexturePoolForDevice(device.get());
     textureFormat = device->textureFormat();
     device->setCounters(&counters);
     pipeline = &device->pipeline();
@@ -2098,6 +2340,16 @@ void RendererGeode::enableTimestamps(bool /*enabled*/) {
 }
 
 void RendererGeode::setDebugGeometryOverlay(bool enabled) {
+  if (impl_->debugGeometryOverlay != enabled) {
+    if (enabled) {
+      impl_->geometryDebugEdges.clear();
+    } else {
+      // Debug captures can be large for glyph-heavy documents. Return their
+      // heap when the mode is disabled so the normal renderer retains no
+      // debug-frame allocation high-water mark.
+      std::vector<Impl::GeometryDebugEdge>().swap(impl_->geometryDebugEdges);
+    }
+  }
   impl_->debugGeometryOverlay = enabled;
 }
 
@@ -2112,11 +2364,17 @@ FrameTimings RendererGeode::lastFrameTimings() const {
   return timings;
 }
 
+RendererGeodeTexturePoolStats RendererGeode::texturePoolStats() const {
+  return impl_->texturePoolStats();
+}
+
 void RendererGeode::setTargetTexture(wgpu::Texture texture) {
+  impl_->borrowedTargetSnapshot.reset();
   impl_->hostTarget = std::move(texture);
 }
 
 void RendererGeode::clearTargetTexture() {
+  impl_->borrowedTargetSnapshot.reset();
   impl_->hostTarget = wgpu::Texture();
   impl_->preserveTargetOnBeginFrame = false;
 }
@@ -2169,6 +2427,8 @@ int RendererGeode::height() const {
 }
 
 void RendererGeode::beginFrame(const RenderViewport& viewport) {
+  impl_->borrowedTargetSnapshot.reset();
+
   // Drain deferred-destroy resources from the previous frame before allocating
   // new ones. By this point any GPU submission from the prior frame has had a
   // chance to finish, and WebGPU's internal ref-counting keeps resources alive
@@ -2185,13 +2445,12 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
   impl_->paint = PaintParams();
   impl_->encoder.reset();
   impl_->frameFinishedEncoders.clear();
+  impl_->geometryDebugEdges.clear();
 
-  // M4.2: stamp each frame with a monotonic index and age out pool
-  // buckets that haven't been touched in the last
-  // `kBucketEvictAfterFrames` frames. Caps memory under viewport
-  // resize.
+  if (impl_->texturePool) {
+    impl_->texturePool->beginFrame();
+  }
   ++impl_->currentFrameIndex;
-  impl_->evictStalePoolBuckets();
 
   // M6-B detection: drop the previous-draw source-entity memo so
   // cross-frame draws don't show up as "same-source runs".
@@ -2202,10 +2461,7 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
 
   if (!impl_->device || !impl_->pipeline || !impl_->gradientPipeline || !impl_->imagePipeline ||
       impl_->pixelWidth <= 0 || impl_->pixelHeight <= 0) {
-    impl_->ownedTarget.reset();
-    impl_->target = wgpu::Texture();
-    impl_->targetWidth = 0;
-    impl_->targetHeight = 0;
+    impl_->retireOwnedTargetAtFrameBoundary();
     return;
   }
 
@@ -2219,12 +2475,10 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
   if (impl_->hostTarget) {
     // Embedded mode: render into the host-provided target texture.
     // Override pixel dimensions from the texture itself.
-    impl_->ownedTarget.reset();
+    impl_->retireOwnedTargetAtFrameBoundary();
     impl_->pixelWidth = static_cast<int>(impl_->hostTarget.getWidth());
     impl_->pixelHeight = static_cast<int>(impl_->hostTarget.getHeight());
     impl_->target = impl_->hostTarget;
-    impl_->targetWidth = 0;
-    impl_->targetHeight = 0;
 
   } else {
     // Headless mode: reuse render targets across same-size frames (design doc
@@ -2235,6 +2489,8 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
                                  impl_->targetHeight == impl_->pixelHeight;
 
     if (!canReuseTargets) {
+      impl_->retireOwnedTargetAtFrameBoundary();
+
       // Direct render target. Snapshots copy it and layer/pattern blits sample it.
       wgpu::TextureDescriptor td = {};
       td.label = wgpuLabel("RendererGeodeTarget");
@@ -2267,7 +2523,7 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
   impl_->encoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
       impl_->target, impl_->frameCommandEncoder.get());
-  impl_->encoder->setBufferPool(&impl_->arenaBufferPool);
+  impl_->configurePathEncoder(*impl_->encoder);
   if (impl_->preserveTargetOnBeginFrame) {
     impl_->encoder->setLoadPreserve();
   } else {
@@ -2285,6 +2541,14 @@ void RendererGeode::endFrame() {
 
   if (impl_->encoder) {
     // Ends the open render pass without submitting - shared-mode.
+    impl_->retireActiveEncoder();
+  }
+
+  // Replay the captured post-vertex Slug triangle edges only after every
+  // normal paint, layer, filter, and mask composite. This makes the debug
+  // wireframe globally topmost within the renderer's final target.
+  impl_->emitGeometryDebugOverlay();
+  if (impl_->encoder) {
     impl_->retireActiveEncoder();
   }
 
@@ -2630,7 +2894,7 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
   auto newEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
       layerTexture, impl_->frameCommandEncoder.get());
-  newEncoder->setBufferPool(&impl_->arenaBufferPool);
+  impl_->configurePathEncoder(*newEncoder);
   newEncoder->clear(css::RGBA(0, 0, 0, 0));
   impl_->encoder = std::move(newEncoder);
   impl_->layerStack.push_back(std::move(frame));
@@ -2711,7 +2975,7 @@ void RendererGeode::popIsolatedLayer() {
       auto newEncoder = std::make_unique<geode::GeoEncoder>(
           *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
           frame.savedTarget, impl_->frameCommandEncoder.get());
-      newEncoder->setBufferPool(&impl_->arenaBufferPool);
+      impl_->configurePathEncoder(*newEncoder);
       newEncoder->setLoadPreserve();
       impl_->encoder = std::move(newEncoder);
       impl_->updateEncoderScissor();
@@ -2735,7 +2999,7 @@ void RendererGeode::popIsolatedLayer() {
   auto newEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
       frame.savedTarget, impl_->frameCommandEncoder.get());
-  newEncoder->setBufferPool(&impl_->arenaBufferPool);
+  impl_->configurePathEncoder(*newEncoder);
   newEncoder->setLoadPreserve();
   impl_->encoder = std::move(newEncoder);
   impl_->updateEncoderScissor();
@@ -2832,7 +3096,8 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
   auto newEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
       layerTexture, impl_->frameCommandEncoder.get());
-  newEncoder->setBufferPool(&impl_->arenaBufferPool);
+  impl_->configurePathEncoder(*newEncoder, /*collectGeometry=*/true, filterBufferOffsetX,
+                              filterBufferOffsetY);
   newEncoder->clear(css::RGBA(0, 0, 0, 0));
   impl_->encoder = std::move(newEncoder);
 
@@ -2989,7 +3254,7 @@ void RendererGeode::popFilterLayer() {
         auto compositeEncoder = std::make_unique<geode::GeoEncoder>(
             *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
             frame.savedTarget, impl_->frameCommandEncoder.get());
-        compositeEncoder->setBufferPool(&impl_->arenaBufferPool);
+        impl_->configurePathEncoder(*compositeEncoder);
         compositeEncoder->setLoadPreserve();
         impl_->encoder = std::move(compositeEncoder);
         impl_->updateEncoderScissor();
@@ -3030,7 +3295,7 @@ void RendererGeode::popFilterLayer() {
   auto newEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
       frame.savedTarget, impl_->frameCommandEncoder.get());
-  newEncoder->setBufferPool(&impl_->arenaBufferPool);
+  impl_->configurePathEncoder(*newEncoder);
   newEncoder->setLoadPreserve();
   impl_->encoder = std::move(newEncoder);
   impl_->updateEncoderScissor();
@@ -3146,7 +3411,7 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds) {
   auto captureEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
       frame.maskTexture, impl_->frameCommandEncoder.get());
-  captureEncoder->setBufferPool(&impl_->arenaBufferPool);
+  impl_->configurePathEncoder(*captureEncoder);
   captureEncoder->clear(css::RGBA(0, 0, 0, 0));
   impl_->encoder = std::move(captureEncoder);
   impl_->maskStack.push_back(std::move(frame));
@@ -3175,7 +3440,7 @@ void RendererGeode::transitionMaskToContent() {
   auto contentEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
       frame.contentTexture, impl_->frameCommandEncoder.get());
-  contentEncoder->setBufferPool(&impl_->arenaBufferPool);
+  impl_->configurePathEncoder(*contentEncoder);
   contentEncoder->clear(css::RGBA(0, 0, 0, 0));
   impl_->encoder = std::move(contentEncoder);
   frame.phase = Impl::MaskStackFrame::Phase::Content;
@@ -3206,7 +3471,7 @@ void RendererGeode::popMask() {
   auto newEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
       frame.savedTarget, impl_->frameCommandEncoder.get());
-  newEncoder->setBufferPool(&impl_->arenaBufferPool);
+  impl_->configurePathEncoder(*newEncoder);
   newEncoder->setLoadPreserve();
   impl_->encoder = std::move(newEncoder);
   impl_->updateEncoderScissor();
@@ -3334,7 +3599,7 @@ bool RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   auto newEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
       tileTextureHandle, impl_->frameCommandEncoder.get());
-  newEncoder->setBufferPool(&impl_->arenaBufferPool);
+  impl_->configurePathEncoder(*newEncoder, /*collectGeometry=*/false);
   // Transparent clear so unpainted tile pixels contribute nothing.
   newEncoder->clear(css::RGBA(0, 0, 0, 0));
   impl_->encoder = std::move(newEncoder);
@@ -3400,7 +3665,7 @@ void RendererGeode::endPatternTile(bool forStroke) {
     auto newEncoder = std::make_unique<geode::GeoEncoder>(
         *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
         frame.savedTarget, impl_->frameCommandEncoder.get());
-    newEncoder->setBufferPool(&impl_->arenaBufferPool);
+    impl_->configurePathEncoder(*newEncoder);
     // Preserve existing target contents: the pattern subtree may have
     // submitted work on the outer target *before* the pattern tile opened
     // (via the finish() in beginPatternTile), so we must not clear it
@@ -3485,10 +3750,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // draw.
   const bool hasStroke = !(stroke.strokeWidth <= 0.0 ||
                            std::holds_alternative<PaintServer::None>(impl_->paint.stroke));
-  // The debug geometry overlay draws per-path, immediately after the
-  // path's own draws, so batching is disabled while it is on (debug
-  // mode trades the batching win for draw-order fidelity).
-  const bool batchable = !impl_->debugGeometryOverlay && !hasStroke && fillEncoded != nullptr &&
+  const bool batchable = !hasStroke && fillEncoded != nullptr &&
                          path.sourceEntity.entity() != entt::null &&
                          std::holds_alternative<PaintServer::Solid>(impl_->paint.fill) &&
                          !impl_->patternFillPaint.has_value() && impl_->encoder != nullptr &&
@@ -3521,15 +3783,6 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // Both default to true, so this is a no-op for ordinary fill-then-stroke draws.
   if (impl_->paint.drawFillComponent) {
     impl_->fillResolved(path.path, path.fillRule, fillEncoded, residentFill);
-    if (impl_->debugGeometryOverlay &&
-        !std::holds_alternative<PaintServer::None>(impl_->paint.fill)) {
-      if (fillEncoded != nullptr) {
-        impl_->drawEncodedPathOverlay(*fillEncoded);
-      } else {
-        impl_->drawEncodedPathOverlay(
-            geode::GeodePathEncoder::encode(path.path, path.fillRule));
-      }
-    }
   }
 
   // Mirror fillResolved's no-op safety: if there's no encoder (headless
@@ -3590,9 +3843,6 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
       impl_->device->deferDestroy(impl_->patternStrokePaint->tile.take());
     }
     impl_->patternStrokePaint.reset();
-    if (impl_->debugGeometryOverlay) {
-      impl_->drawStrokeOverlay(strokedOutline, strokeDerived);
-    }
     return;
   }
 
@@ -3611,9 +3861,6 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
           : nullptr;
   impl_->drawPaintedPathAgainst(path.path, strokedOutline, strokeServer, effectiveOpacity,
                                 strokeDerived.fillRule, strokeDerived.encoded, residentStroke);
-  if (impl_->debugGeometryOverlay) {
-    impl_->drawStrokeOverlay(strokedOutline, strokeDerived);
-  }
 }
 
 void RendererGeode::drawRect(const Box2d& rect, const StrokeParams& stroke) {
@@ -4213,10 +4460,12 @@ std::unique_ptr<RendererInterface> RendererGeode::createOffscreenInstance() cons
   if (!impl_->device) {
     return nullptr;
   }
-  return std::make_unique<RendererGeode>(impl_->device, impl_->verbose);
+  auto renderer = std::make_unique<RendererGeode>(impl_->device, impl_->verbose);
+  return renderer;
 }
 
 std::shared_ptr<const RendererTextureSnapshot> RendererGeode::takeTextureSnapshot() {
+  impl_->borrowedTargetSnapshot.reset();
   if (!impl_->device || !impl_->ownedTarget || impl_->hostTarget || impl_->pixelWidth <= 0 ||
       impl_->pixelHeight <= 0) {
     return nullptr;
@@ -4232,8 +4481,31 @@ std::shared_ptr<const RendererTextureSnapshot> RendererGeode::takeTextureSnapsho
                                                         dimensions, impl_->textureFormat);
 }
 
+const RendererTextureSnapshot* RendererGeode::borrowTextureSnapshot() {
+  if (!impl_->device || !impl_->ownedTarget || impl_->hostTarget || impl_->pixelWidth <= 0 ||
+      impl_->pixelHeight <= 0) {
+    impl_->borrowedTargetSnapshot.reset();
+    return nullptr;
+  }
+
+  impl_->borrowedTargetSnapshot.emplace(RendererGeodeTextureSnapshot::BorrowCurrentFrame(
+      impl_->ownedTarget.get(), Vector2i(impl_->pixelWidth, impl_->pixelHeight),
+      impl_->textureFormat));
+  return &*impl_->borrowedTargetSnapshot;
+}
+
 RendererBitmap RendererGeode::takeSnapshot() const {
+  return takeSnapshotInterruptibly({});
+}
+
+RendererBitmap RendererGeode::takeSnapshotInterruptibly(
+    const std::function<bool()>& shouldCancel) const {
   RendererBitmap bitmap;
+  // Close the traversal-to-snapshot race before allocating a readback buffer or submitting any GPU
+  // work. A main-document request may arrive immediately after the thumbnail finishes drawing.
+  if (shouldCancel && shouldCancel()) {
+    return bitmap;
+  }
   if (!impl_->device || !impl_->target || impl_->pixelWidth <= 0 || impl_->pixelHeight <= 0) {
     return bitmap;
   }
@@ -4267,45 +4539,69 @@ RendererBitmap RendererGeode::takeSnapshot() const {
   impl_->device->queue().submit(1, &cmd.get());
   impl_->device->countSubmit();
 
-  // Map for read. wgpu-native's C++ wrapper (`webgpu.hpp`) only exposes the
-  // `BufferMapCallbackInfo` form of `mapAsync`, which takes a raw C function
-  // pointer + two void*'s rather than a std::function. We stash the "done"
-  // flag in `userdata1` so the callback can flip it and we can spin until it
-  // flips. wgpu-native guarantees `wgpuDevicePoll(wait=true)` drains pending
-  // callbacks before returning - a single `poll(true, nullptr)` is enough to
-  // wait for the map to complete.
+  // Map for read. `BufferMapCallbackInfo` takes raw userdata rather than a std::function, and a
+  // cancellation may return before WebGPU delivers that callback. Keep its payload alive
+  // independently of this stack frame: one reference belongs to this caller, the other to the
+  // callback. The state intentionally owns no WebGPU handles, so its final release is safe even
+  // when AllowSpontaneous invokes it from inside a WebGPU call.
   struct MapState {
-    bool done = false;
-    bool ok = false;
-  } mapState;
+    std::atomic<int> references{2};
+    std::atomic<bool> done{false};
+    std::atomic<bool> ok{false};
+
+    void release() {
+      if (references.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+        delete this;
+      }
+    }
+  };
+  MapState* mapState = new MapState();
   wgpu::BufferMapCallbackInfo mapCb{wgpu::Default};
   mapCb.callback = [](WGPUMapAsyncStatus status, WGPUStringView /*message*/, void* userdata1,
                       void* /*userdata2*/) {
     auto* s = static_cast<MapState*>(userdata1);
-    s->ok = (status == WGPUMapAsyncStatus_Success);
-    s->done = true;
+    s->ok.store(status == WGPUMapAsyncStatus_Success, std::memory_order_relaxed);
+    s->done.store(true, std::memory_order_release);
+    s->release();
   };
-  mapCb.userdata1 = &mapState;
+  mapCb.userdata1 = mapState;
   mapCb.userdata2 = nullptr;
-  // Browser WebGPU fires `mapAsync` completion via the JS Promise
-  // microtask - there is no wgpu-native-style "poll" on the instance.
-  // `AllowProcessEvents` would require an explicit `wgpuInstanceProcessEvents`
-  // call, which we never make (our Emscripten `wgpuDevicePoll` stub only
-  // yields via `emscripten_sleep`). Use `AllowSpontaneous` so the browser
-  // can fire the callback as soon as the Promise resolves, during the
-  // microtask tick that runs while we're sleeping. wgpu-native also
-  // accepts spontaneous mode and fires callbacks during `wgpuDevicePoll`.
+  // Browser WebGPU fires map completion from a Promise microtask while
+  // device.poll yields the Asyncify-enabled pthread. Keep this fallback for
+  // explicit diagnostics; normal worker-surface presentation never enters it.
   mapCb.mode = wgpu::CallbackMode::AllowSpontaneous;
   readback.get().mapAsync(wgpu::MapMode::Read, 0, bd.size, mapCb);
   int pollIter = 0;
-  while (!mapState.done) {
-    impl_->device->device().poll(true, nullptr);
-    ++pollIter;
-    if (pollIter > 2000) {  // 2000 * 5ms = 10s bail-out.
+  bool cancelled = false;
+  const auto readbackDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  while (!mapState->done.load(std::memory_order_acquire)) {
+    if ((shouldCancel && shouldCancel()) || std::chrono::steady_clock::now() >= readbackDeadline) {
+      cancelled = true;
       break;
     }
+    // Never ask wgpu-native to block until the GPU map completes: a low-priority thumbnail must
+    // observe a superseding main-document request promptly. emdawnwebgpu's poll implementation
+    // yields its Asyncify-enabled worker for roughly 5 ms regardless of `wait`; native polling is
+    // non-blocking and gets a short sleep to avoid spinning.
+    impl_->device->device().poll(false, nullptr);
+    ++pollIter;
+#ifndef __EMSCRIPTEN__
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+#endif
   }
-  if (!mapState.ok) {
+  impl_->device->recordReadback(/*usedTimedWaitAny=*/false, pollIter);
+  if (cancelled) {
+    // Cancelling a pending map schedules its callback with an aborted status. The callback's
+    // reference keeps `mapState` valid even when delivery happens after this method returns.
+    readback.get().unmap();
+    readback.get().destroy();
+    mapState->release();
+    return bitmap;
+  }
+
+  const bool mapOk = mapState->ok.load(std::memory_order_acquire);
+  mapState->release();
+  if (!mapOk) {
     return bitmap;
   }
 
@@ -4325,6 +4621,10 @@ RendererBitmap RendererGeode::takeSnapshot() const {
   bitmap.pixels.resize(bitmap.rowBytes * height);
   const bool sourceIsBgra = IsBgraTextureFormat(impl_->textureFormat);
   for (uint32_t y = 0; y < height; ++y) {
+    if (shouldCancel && shouldCancel()) {
+      readback.get().unmap();
+      return {};
+    }
     const uint8_t* srcRow = mapped + static_cast<size_t>(y) * bytesPerRow;
     uint8_t* dstRow = bitmap.pixels.data() + static_cast<size_t>(y) * bitmap.rowBytes;
     for (uint32_t x = 0; x < width; ++x) {
@@ -4357,6 +4657,18 @@ RendererBitmap RendererGeode::takeSnapshot() const {
   }
   readback.get().unmap();
   return bitmap;
+}
+
+RendererReadbackStats RendererGeode::consumeReadbackStats() {
+  if (!impl_->device) {
+    return {};
+  }
+  const geode::GeodeDevice::ReadbackStats stats = impl_->device->consumeReadbackStats();
+  return RendererReadbackStats{
+      .count = stats.count,
+      .pollIterations = stats.pollIterations,
+      .usedTimedWaitAny = stats.usedTimedWaitAny,
+  };
 }
 
 }  // namespace donner::svg

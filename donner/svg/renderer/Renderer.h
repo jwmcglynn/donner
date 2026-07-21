@@ -106,6 +106,9 @@ public:
   /// Completes the current render pass.
   void endFrame() override;
 
+  /// Preserve the current backend target for an append pass when supported.
+  void setPreserveTargetOnBeginFrame(bool preserve) override;
+
   /**
    * Sets the absolute transform, replacing the current matrix.
    *
@@ -253,8 +256,19 @@ public:
    */
   [[nodiscard]] RendererBitmap takeSnapshot() const override;
 
+  /// Forwards cancellation-aware CPU snapshot capture to the active backend.
+  [[nodiscard]] RendererBitmap takeSnapshotInterruptibly(
+      const std::function<bool()>& shouldCancel) const override;
+
+  /// Consume readback diagnostics from the active backend.
+  [[nodiscard]] RendererReadbackStats consumeReadbackStats() override;
+
   /// Captures a backend-owned GPU texture snapshot when the active backend supports it.
   [[nodiscard]] std::shared_ptr<const RendererTextureSnapshot> takeTextureSnapshot() override;
+
+  /// Borrows the current backend-owned GPU texture for a synchronous presentation operation.
+  [[nodiscard]] const RendererTextureSnapshot* borrowTextureSnapshot()
+      UTILS_LIFETIME_BOUND override;
 
   /// Returns true when this backend requires direct texture presentation.
   [[nodiscard]] bool requiresTextureSnapshotPresentation() const override;

@@ -9,6 +9,23 @@
 namespace donner::editor {
 
 /**
+ * Use an editor-owned renderer for subsequent embedded-SVG rasterization.
+ *
+ * The editor calls this before its first UI frame so icon rendering reuses the
+ * already-created backend/device instead of creating a second headless device.
+ * The renderer must outlive the matching reset call.
+ */
+void ConfigureEmbeddedSvgIconRenderer(svg::RendererInterface& renderer);
+
+/**
+ * Stop using the configured renderer before its owner is destroyed.
+ *
+ * The reset is ignored when another editor has since installed a different
+ * renderer, which keeps overlapping editor lifetimes safe.
+ */
+void ResetEmbeddedSvgIconRenderer(const svg::RendererInterface& expectedRenderer);
+
+/**
  * Render an embedded SVG icon resource into a tintable RGBA bitmap.
  *
  * The source SVG is parsed and rasterized through Donner. The returned bitmap

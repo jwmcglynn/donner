@@ -1,5 +1,6 @@
 #include "donner/editor/EmbeddedSvgIcon.h"
 
+#include <memory>
 #include <string_view>
 #include <utility>
 
@@ -40,9 +41,25 @@ void NormalizeIconBitmapToTintableAlphaMask(svg::RendererBitmap* bitmap) {
 /// each construction stands up a full WebGPU instance/adapter/device - and
 /// showed up as a stream of duplicate "[Geode/wgpu-native] Adapter:" logs at
 /// editor startup.
-svg::Renderer& SharedIconRenderer() {
-  static svg::Renderer renderer;
-  return renderer;
+struct SharedIconRendererState {
+  svg::RendererInterface* configuredRenderer = nullptr;
+  std::unique_ptr<svg::Renderer> fallbackRenderer;
+};
+
+SharedIconRendererState& SharedIconRendererStateInstance() {
+  static SharedIconRendererState state;
+  return state;
+}
+
+svg::RendererInterface& SharedIconRenderer() {
+  SharedIconRendererState& state = SharedIconRendererStateInstance();
+  if (state.configuredRenderer != nullptr) {
+    return *state.configuredRenderer;
+  }
+  if (state.fallbackRenderer == nullptr) {
+    state.fallbackRenderer = std::make_unique<svg::Renderer>();
+  }
+  return *state.fallbackRenderer;
 }
 
 std::optional<svg::RendererBitmap> RenderEmbeddedSvgBitmap(std::span<const unsigned char> svgBytes,
@@ -63,7 +80,7 @@ std::optional<svg::RendererBitmap> RenderEmbeddedSvgBitmap(std::span<const unsig
   root.setWidth(Lengthd(outputSizePx, Lengthd::Unit::Px));
   root.setHeight(Lengthd(outputSizePx, Lengthd::Unit::Px));
 
-  svg::Renderer& renderer = SharedIconRenderer();
+  svg::RendererInterface& renderer = SharedIconRenderer();
   renderer.draw(document);
   svg::RendererBitmap bitmap = renderer.takeSnapshot();
   if (bitmap.empty()) {
@@ -77,6 +94,22 @@ std::optional<svg::RendererBitmap> RenderEmbeddedSvgBitmap(std::span<const unsig
 }
 
 }  // namespace
+
+void ConfigureEmbeddedSvgIconRenderer(svg::RendererInterface& renderer) {
+  SharedIconRendererState& state = SharedIconRendererStateInstance();
+  if (state.configuredRenderer == &renderer) {
+    return;
+  }
+  state.fallbackRenderer.reset();
+  state.configuredRenderer = &renderer;
+}
+
+void ResetEmbeddedSvgIconRenderer(const svg::RendererInterface& expectedRenderer) {
+  SharedIconRendererState& state = SharedIconRendererStateInstance();
+  if (state.configuredRenderer == &expectedRenderer) {
+    state.configuredRenderer = nullptr;
+  }
+}
 
 std::optional<svg::RendererBitmap> RenderEmbeddedSvgIcon(std::span<const unsigned char> svgBytes,
                                                          int outputSizePx) {

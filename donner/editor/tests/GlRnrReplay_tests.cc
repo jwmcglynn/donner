@@ -2137,11 +2137,13 @@ TEST(GlRnrReplayTest, DirectFramebufferCheckerboardUsesSingleDrawDuringDrag) {
   repro::GlRnrReplayOptions options;
   options.rnrPath = *replayPath;
   options.outputDir = outputDir;
+  options.captureFrames.insert(8);
   options.captureFrames.insert(20);
   options.maxFrame = 20;
   options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
   options.pace = false;
-  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::HoldFramesBehind;
+  options.holdFramesBehind = 6;
   options.driveDocumentSpaceInput = true;
 
   repro::GlRnrReplayResult result;
@@ -2161,6 +2163,51 @@ TEST(GlRnrReplayTest, DirectFramebufferCheckerboardUsesSingleDrawDuringDrag) {
         << " should render the direct framebuffer checkerboard with one GPU draw";
   }
   EXPECT_GT(directDragFrames, 0) << "test setup must exercise direct drag presentation";
+
+  struct PixelBounds {
+    int minX = 0;
+    int minY = 0;
+    int maxX = 0;
+    int maxY = 0;
+  };
+  const auto greenBounds = [](const svg::RendererBitmap& source) -> std::optional<PixelBounds> {
+    const svg::RendererBitmap bitmap = NormalizeBitmap(source);
+    std::optional<PixelBounds> bounds;
+    for (int y = 0; y < bitmap.dimensions.y; ++y) {
+      for (int x = 0; x < bitmap.dimensions.x; ++x) {
+        const std::size_t offset =
+            (static_cast<std::size_t>(y) * static_cast<std::size_t>(bitmap.dimensions.x) +
+             static_cast<std::size_t>(x)) *
+            4u;
+        if (bitmap.pixels[offset] > 80 || bitmap.pixels[offset + 1] < 150 ||
+            bitmap.pixels[offset + 2] > 80) {
+          continue;
+        }
+        if (!bounds.has_value()) {
+          bounds = PixelBounds{x, y, x, y};
+        } else {
+          bounds->minX = std::min(bounds->minX, x);
+          bounds->minY = std::min(bounds->minY, y);
+          bounds->maxX = std::max(bounds->maxX, x);
+          bounds->maxY = std::max(bounds->maxY, y);
+        }
+      }
+    }
+    return bounds;
+  };
+
+  const std::optional<svg::RendererBitmap> baseline = LoadCaptureBitmap(result, 8);
+  const std::optional<svg::RendererBitmap> dragged = LoadCaptureBitmap(result, 20);
+  ASSERT_TRUE(baseline.has_value());
+  ASSERT_TRUE(dragged.has_value());
+  const std::optional<PixelBounds> baselineGreen = greenBounds(*baseline);
+  const std::optional<PixelBounds> draggedGreen = greenBounds(*dragged);
+  ASSERT_TRUE(baselineGreen.has_value()) << "pre-drag target pixels must be visible";
+  ASSERT_TRUE(draggedGreen.has_value()) << "mid-drag target pixels must remain visible";
+  EXPECT_GT(draggedGreen->minX, baselineGreen->minX + 20)
+      << "The direct presenter must move shape pixels during the held worker update";
+  EXPECT_GT(draggedGreen->minY, baselineGreen->minY + 10)
+      << "The direct presenter must track the live vertical drag before mouse-up";
 
   std::error_code ec;
   std::filesystem::remove_all(outputDir, ec);
@@ -2666,7 +2713,8 @@ TEST(GlRnrReplayTest, TypingIntoTextKeepsTextPixelsPresentEveryFrame) {
     int count = 0;
     const int chromeRows = bitmap.dimensions.y / 2;
     for (int y = 0; y < chromeRows; ++y) {
-      const std::uint8_t* row = bitmap.pixels.data() + static_cast<std::size_t>(y) * bitmap.rowBytes;
+      const std::uint8_t* row =
+          bitmap.pixels.data() + static_cast<std::size_t>(y) * bitmap.rowBytes;
       for (int x = 0; x < bitmap.dimensions.x; ++x) {
         const std::uint8_t r = row[x * 4];
         const std::uint8_t g = row[x * 4 + 1];
@@ -2685,13 +2733,12 @@ TEST(GlRnrReplayTest, TypingIntoTextKeepsTextPixelsPresentEveryFrame) {
     std::optional<svg::RendererBitmap> bmp = LoadCaptureBitmap(result, frame);
     std::cerr << "[diag] f=" << frame << " docV=" << diag->documentFrameVersion
               << " dispV=" << diag->displayedDocVersion
-              << " fresh=" << static_cast<int>(diag->canvasFreshness)
-              << " pendRasterE=" << static_cast<std::uint64_t>(diag->pendingSelectedLayerRasterizationEntity)
+              << " fresh=" << static_cast<int>(diag->canvasFreshness) << " pendRasterE="
+              << static_cast<std::uint64_t>(diag->pendingSelectedLayerRasterizationEntity)
               << " removed=" << diag->lastFlushRemovedElements
               << " invalidated=" << diag->lastFlushCacheInvalidatedElements.size()
               << " green=" << (bmp.has_value() ? greenPixels(*bmp) : -1)
-              << " cyanChrome=" << (bmp.has_value() ? cyanChromePixels(*bmp) : -1)
-              << " tiles=";
+              << " cyanChrome=" << (bmp.has_value() ? cyanChromePixels(*bmp) : -1) << " tiles=";
     for (const auto& tile : diag->tiles) {
       std::cerr << tile.id << "(g" << tile.generation << ",grn" << tile.textureGreenPixels << ") ";
     }

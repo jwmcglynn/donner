@@ -3,9 +3,11 @@
   "private": true,
   "scripts": {
     "test": "playwright test",
+    "test:compatibility": "playwright test --config=playwright.compatibility.config.js",
     "test:isolation-fallback": "playwright test static-host-isolation.spec.ts",
     "test:ios": "playwright test --config=playwright.ios.config.js",
-    "test:selector": "node --test backend-selector.spec.mjs isolation-fallback.spec.mjs loading-page.spec.mjs"
+    "test:safari-geode": "node safari-geode-regression.mjs",
+    "test:selector": "node --test backend-selector.spec.mjs browser-matrix.spec.mjs isolation-fallback.spec.mjs loading-page.spec.mjs wgpu-readback-contract.spec.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1"

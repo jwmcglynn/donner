@@ -174,8 +174,11 @@ build:wasm-size --linkopt=-sFILESYSTEM=0
 #   bazel build --config=editor-wasm //donner/editor/wasm:wasm
 common:editor-wasm --config=wasm-geode
 common:editor-wasm --//donner/editor/wasm:enable_wasm=true
+common:editor-wasm --//donner/svg/renderer:text=true
+common:editor-wasm --//donner/svg/renderer:text_full=false
 build:editor-wasm --copt=-pthread
 build:editor-wasm --linkopt=-pthread
+build:editor-wasm -c opt
 
 # Software-fallback editor WASM build. Uses the tiny_skia CPU backend (via
 # --config=wasm) so the rendered document is drawn into the WebGL canvas and is
@@ -186,8 +189,11 @@ build:editor-wasm --linkopt=-pthread
 #   bazel build --config=editor-wasm-tiny-skia //donner/editor/wasm:wasm_tiny_skia_web_package
 common:editor-wasm-tiny-skia --config=wasm
 common:editor-wasm-tiny-skia --//donner/editor/wasm:enable_wasm=true
+common:editor-wasm-tiny-skia --//donner/svg/renderer:text=true
+common:editor-wasm-tiny-skia --//donner/svg/renderer:text_full=false
 build:editor-wasm-tiny-skia --copt=-pthread
 build:editor-wasm-tiny-skia --linkopt=-pthread
+build:editor-wasm-tiny-skia -c opt
 
 # Geode (WebGPU) WASM build. Usage:
 #   bazel build --config=wasm-geode //donner/svg/renderer/wasm:donner_wasm_geode

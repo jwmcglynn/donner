@@ -221,87 +221,144 @@ ImU32 ToImU32(const css::RGBA& rgba) {
 
 void LayersPanel::refreshSnapshot(const EditorApp& app, svg::Renderer* renderer,
                                   ThumbnailRefreshMode mode) {
-  model_.refresh(app);
-
   const auto renderStart = std::chrono::steady_clock::now();
-  thumbnailRefreshStats_ = ThumbnailRefreshStats{
-      .documentFrameVersion = app.document().currentFrameVersion(),
-      .rowCount = model_.rows().size(),
+  const auto finishTiming = [this, renderStart]() {
+    thumbnailRefreshStats_.renderMs =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - renderStart)
+            .count();
   };
 
-  swatchByStableId_.clear();
-  if (!app.hasDocument()) {
-    // No document loaded (e.g. the editor fell back to an error/empty state):
-    // there are no rows to thumbnail, and `app.document().document()` below
-    // would dereference an empty optional.
+  const bool hasDocument = app.hasDocument();
+  const std::uint64_t documentGeneration = app.document().documentGeneration();
+  const std::uint64_t documentFrameVersion = app.document().currentFrameVersion();
+  std::vector<std::uint64_t> selectionStableIds;
+  selectionStableIds.reserve(app.selectedElements().size());
+  for (const svg::SVGElement& element : app.selectedElements()) {
+    selectionStableIds.push_back(LayerTreeModel::StableIdFor(element));
+  }
+  std::sort(selectionStableIds.begin(), selectionStableIds.end());
+
+  thumbnailRefreshStats_ = ThumbnailRefreshStats{
+      .documentFrameVersion = documentFrameVersion,
+  };
+
+  const bool rebuildSnapshot = modelRefreshRequested_ || !snapshotPrepared_ ||
+                               snapshotDocumentGeneration_ != documentGeneration ||
+                               snapshotDocumentFrameVersion_ != documentFrameVersion ||
+                               snapshotSelectionStableIds_ != selectionStableIds;
+  if (rebuildSnapshot) {
+    model_.refresh(app);
+    thumbnailRefreshStats_.snapshotRebuildCount = 1u;
+    swatchByStableId_.clear();
+
+    std::unordered_set<std::uint64_t> liveStableIds;
+    liveStableIds.reserve(model_.rows().size());
+    for (const LayerTreeRow& row : model_.rows()) {
+      liveStableIds.insert(row.stableId);
+      swatchByStableId_.emplace(row.stableId, SwatchColorForElement(row.element));
+    }
+    // Keep the previous non-empty thumbnail for a live row when an idle refresh
+    // transiently misses renderable geometry; otherwise rows can flash back to
+    // the fallback swatch until the next successful refresh.
+    for (auto it = thumbnailBitmapByStableId_.begin(); it != thumbnailBitmapByStableId_.end();) {
+      if (liveStableIds.count(it->first) == 0) {
+        it = thumbnailBitmapByStableId_.erase(it);
+      } else {
+        ++it;
+      }
+    }
+
+    snapshotPrepared_ = true;
+    modelRefreshRequested_ = false;
+    snapshotDocumentGeneration_ = documentGeneration;
+    snapshotDocumentFrameVersion_ = documentFrameVersion;
+    snapshotSelectionStableIds_ = std::move(selectionStableIds);
+    thumbnailQueuePrepared_ = false;
+
+    // Drop stale keyboard/range anchors if the rebuilt model is shorter.
+    if (activeRowIndex_.has_value() && *activeRowIndex_ >= model_.rows().size()) {
+      activeRowIndex_.reset();
+    }
+    if (anchorRowIndex_.has_value() && *anchorRowIndex_ >= model_.rows().size()) {
+      anchorRowIndex_.reset();
+    }
+  }
+
+  thumbnailRefreshStats_.rowCount = model_.rows().size();
+  if (!hasDocument) {
     thumbnailBitmapByStableId_.clear();
+    pendingThumbnails_.clear();
+    pendingThumbnailCursor_ = 0;
+    thumbnailQueuePrepared_ = false;
+    finishTiming();
     return;
   }
 
-  std::unordered_set<std::uint64_t> liveStableIds;
-  liveStableIds.reserve(model_.rows().size());
-  const bool renderThumbnails = mode == ThumbnailRefreshMode::Render &&
-                                !app.document().document().hasPendingRenderInvalidation();
+  const bool thumbnailRenderingRequested = mode != ThumbnailRefreshMode::SwatchesOnly;
+  const bool renderThumbnails =
+      thumbnailRenderingRequested && !app.document().document().hasPendingRenderInvalidation();
   const Vector2i thumbnailMaxSizePx(kPreviewWidthPx, kPreviewHeightPx);
-  if (mode == ThumbnailRefreshMode::Render && !renderThumbnails) {
+  if (thumbnailRenderingRequested && !renderThumbnails) {
     thumbnailRefreshStats_.skippedForCanvasInvalidationCount = model_.rows().size();
+    thumbnailQueuePrepared_ = false;
+    finishTiming();
+    return;
   }
+  if (!thumbnailRenderingRequested) {
+    // Re-evaluate cache freshness when the canvas presentation catches up and
+    // the caller switches back from swatches to rendered thumbnails.
+    thumbnailQueuePrepared_ = false;
+    finishTiming();
+    return;
+  }
+
   std::optional<svg::Renderer> fallbackRenderer;
-  if (renderThumbnails && renderer == nullptr) {
+  if (renderer == nullptr) {
     fallbackRenderer.emplace();
     renderer = &*fallbackRenderer;
   }
-  for (const LayerTreeRow& row : model_.rows()) {
-    liveStableIds.insert(row.stableId);
-    swatchByStableId_.emplace(row.stableId, SwatchColorForElement(row.element));
 
-    if (!renderThumbnails) {
-      continue;
+  if (!thumbnailQueuePrepared_) {
+    pendingThumbnails_.clear();
+    pendingThumbnailCursor_ = 0;
+    thumbnailQueueBaseReusedCount_ = 0;
+    pendingThumbnails_.reserve(model_.rows().size());
+    for (const LayerTreeRow& row : model_.rows()) {
+      const auto thumbnailIt = thumbnailBitmapByStableId_.find(row.stableId);
+      if (thumbnailIt != thumbnailBitmapByStableId_.end() &&
+          thumbnailIt->second.documentFrameVersion == documentFrameVersion &&
+          thumbnailIt->second.maxSizePx == thumbnailMaxSizePx) {
+        ++thumbnailQueueBaseReusedCount_;
+      } else {
+        pendingThumbnails_.push_back(
+            PendingThumbnail{.stableId = row.stableId, .element = row.element});
+      }
     }
+    thumbnailQueuePrepared_ = true;
+  }
 
-    if (const auto thumbnailIt = thumbnailBitmapByStableId_.find(row.stableId);
-        thumbnailIt != thumbnailBitmapByStableId_.end() &&
-        thumbnailIt->second.documentFrameVersion == thumbnailRefreshStats_.documentFrameVersion &&
-        thumbnailIt->second.maxSizePx == thumbnailMaxSizePx) {
-      ++thumbnailRefreshStats_.reusedCount;
-      continue;
-    }
-
+  thumbnailRefreshStats_.reusedCount = thumbnailQueueBaseReusedCount_ + pendingThumbnailCursor_;
+  const std::size_t remaining = pendingThumbnails_.size() - pendingThumbnailCursor_;
+  const std::size_t renderCount = mode == ThumbnailRefreshMode::RenderIncremental
+                                      ? std::min<std::size_t>(1u, remaining)
+                                      : remaining;
+  for (std::size_t i = 0; i < renderCount; ++i) {
+    const PendingThumbnail& pending = pendingThumbnails_[pendingThumbnailCursor_++];
     // Render the row's element subtree to a real RGBA thumbnail through the
     // Donner renderer. Rows whose subtree has no boundable geometry come back
-    // empty and fall back to the swatch. The per-frame cache above avoids
-    // rerasterizing thumbnails during idle sidebar refreshes.
+    // empty and fall back to the swatch.
     svg::RendererBitmap thumbnail =
-        renderer->renderElementToBitmap(row.element, thumbnailMaxSizePx);
+        renderer->renderElementToBitmap(pending.element, thumbnailMaxSizePx);
     ++thumbnailRefreshStats_.renderedCount;
-    CachedThumbnail& cacheEntry = thumbnailBitmapByStableId_[row.stableId];
+    CachedThumbnail& cacheEntry = thumbnailBitmapByStableId_[pending.stableId];
     cacheEntry.documentFrameVersion = thumbnailRefreshStats_.documentFrameVersion;
     cacheEntry.maxSizePx = thumbnailMaxSizePx;
     if (!thumbnail.empty()) {
       cacheEntry.bitmap = std::move(thumbnail);
     }
   }
-  // Keep the previous non-empty thumbnail for a live row when an idle refresh
-  // transiently misses renderable geometry; otherwise rows can flash back to
-  // the fallback swatch until the next successful refresh.
-  for (auto it = thumbnailBitmapByStableId_.begin(); it != thumbnailBitmapByStableId_.end();) {
-    if (liveStableIds.count(it->first) == 0) {
-      it = thumbnailBitmapByStableId_.erase(it);
-    } else {
-      ++it;
-    }
-  }
-
-  // Drop a stale active row if it no longer maps to a visible row.
-  if (activeRowIndex_.has_value() && *activeRowIndex_ >= model_.rows().size()) {
-    activeRowIndex_.reset();
-  }
-  if (anchorRowIndex_.has_value() && *anchorRowIndex_ >= model_.rows().size()) {
-    anchorRowIndex_.reset();
-  }
-  const auto renderEnd = std::chrono::steady_clock::now();
-  thumbnailRefreshStats_.renderMs =
-      std::chrono::duration<double, std::milli>(renderEnd - renderStart).count();
+  thumbnailRefreshStats_.deferredCount = pendingThumbnails_.size() - pendingThumbnailCursor_;
+  finishTiming();
 }
 
 std::optional<std::size_t> LayersPanel::rowIndexForStableId(std::uint64_t stableId) const {
@@ -541,6 +598,7 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
       if (DrawDisclosureChevronButton("##layer_disclosure", row.isExpanded, iconTextureProvider,
                                       minimumInteractionHeight)) {
         model_.toggleExpanded(row.stableId);
+        modelRefreshRequested_ = true;
       }
     } else {
       ImGui::Dummy(ImVec2(std::max(ImGui::GetFrameHeight(), minimumInteractionHeight), 0.0f));
@@ -860,11 +918,13 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
       const LayerTreeRow& row = rows[active];
       if (row.hasChildren && !row.isExpanded) {
         model_.setExpanded(row.stableId, true);
+        modelRefreshRequested_ = true;
       }
     } else if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, /*repeat=*/false)) {
       const LayerTreeRow& row = rows[active];
       if (row.hasChildren && row.isExpanded) {
         model_.setExpanded(row.stableId, false);
+        modelRefreshRequested_ = true;
       } else if (const std::optional<svg::SVGElement> parent = row.element.parentElement();
                  parent.has_value()) {
         if (const auto parentIdx = rowIndexForStableId(LayerTreeModel::StableIdFor(*parent));

@@ -50,8 +50,8 @@ google_fonts_catalog_inc(
 
 cc_library(
     name = "google_fonts_catalog_inc",
-    textual_hdrs = ["embed_resources/GoogleFontsCatalog.inc"],
     includes = ["."],
+    textual_hdrs = ["embed_resources/GoogleFontsCatalog.inc"],
     visibility = ["//donner:__subpackages__"],
 )
 

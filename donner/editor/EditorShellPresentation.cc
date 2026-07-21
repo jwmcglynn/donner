@@ -19,6 +19,159 @@
 
 namespace donner::editor {
 
+namespace {
+
+void AddOverlayPoint(std::optional<Box2d>* bounds, const Vector2d& point) {
+  if (!bounds->has_value()) {
+    *bounds = Box2d::CreateEmpty(point);
+  }
+  (*bounds)->addPoint(point);
+}
+
+void AddOverlayBox(std::optional<Box2d>* bounds, const Box2d& box) {
+  AddOverlayPoint(bounds, box.topLeft);
+  AddOverlayPoint(bounds, box.bottomRight);
+}
+
+void AddOverlayPath(std::optional<Box2d>* bounds, const Path& path) {
+  if (!path.empty()) {
+    AddOverlayBox(bounds, path.bounds());
+  }
+}
+
+template <std::size_t N>
+void AddOverlayPoints(std::optional<Box2d>* bounds, const std::array<Vector2d, N>& points) {
+  for (const Vector2d& point : points) {
+    AddOverlayPoint(bounds, point);
+  }
+}
+
+}  // namespace
+
+OverlayTexturePlacement ComputeOverlayTexturePlacement(const ViewportState& viewport,
+                                                       const SelectionChromeSnapshot& snapshot) {
+  std::optional<Box2d> documentBounds;
+  for (const SelectionChromeSnapshot::PathItem& item : snapshot.paths) {
+    AddOverlayPath(&documentBounds, item.pathDoc);
+  }
+  for (const SelectionChromeSnapshot::PathItem& item : snapshot.hoverPaths) {
+    AddOverlayPath(&documentBounds, item.pathDoc);
+  }
+  for (const Box2d& box : snapshot.pathAnchorBoxesDoc) {
+    AddOverlayBox(&documentBounds, box);
+  }
+  for (const SelectionChromeSnapshot::PathControlLine& line : snapshot.pathControlLinesDoc) {
+    AddOverlayPoint(&documentBounds, line.anchorDoc);
+    AddOverlayPoint(&documentBounds, line.controlDoc);
+  }
+  for (const Box2d& box : snapshot.pathControlPointBoxesDoc) {
+    AddOverlayBox(&documentBounds, box);
+  }
+  if (snapshot.lockedFlash.has_value()) {
+    AddOverlayPath(&documentBounds, snapshot.lockedFlash->pathDoc);
+  }
+  if (snapshot.livePathPreview.has_value()) {
+    const SelectionChromeSnapshot::LivePathPreview& preview = *snapshot.livePathPreview;
+    if (!preview.pathDoc.empty()) {
+      Box2d previewBounds = preview.pathDoc.bounds();
+      if (preview.strokeColor.has_value() && preview.strokeWidthDoc > 0.0 &&
+          std::isfinite(preview.strokeWidthDoc)) {
+        // drawChromeFromSnapshot uses StrokeParams' default miter join and limit of four. The
+        // geometric stroke reaches width / 2 from the path, while an acute miter can extend that
+        // radius by the miter limit. Include that worst-case document-space extent before the
+        // transformed screen-space chrome padding is applied below.
+        constexpr double kLivePathPreviewMiterLimit = 4.0;
+        previewBounds =
+            previewBounds.inflatedBy(preview.strokeWidthDoc * 0.5 * kLivePathPreviewMiterLimit);
+      }
+      AddOverlayBox(&documentBounds, previewBounds);
+    }
+  }
+  if (snapshot.penPreviewSegmentDoc.has_value()) {
+    AddOverlayPath(&documentBounds, *snapshot.penPreviewSegmentDoc);
+  }
+  if (snapshot.penCloseAffordanceDoc.has_value()) {
+    AddOverlayPoint(&documentBounds, *snapshot.penCloseAffordanceDoc);
+  }
+  if (snapshot.textCaretDoc.has_value()) {
+    AddOverlayPoint(&documentBounds, snapshot.textCaretDoc->topDoc);
+    AddOverlayPoint(&documentBounds, snapshot.textCaretDoc->bottomDoc);
+  }
+  for (const std::array<Vector2d, 4>& quad : snapshot.textSelectionQuadsDoc) {
+    AddOverlayPoints(&documentBounds, quad);
+  }
+  if (snapshot.textFrameCornersDoc.has_value()) {
+    AddOverlayPoints(&documentBounds, *snapshot.textFrameCornersDoc);
+  }
+  if (snapshot.textBoxDragPreviewDoc.has_value()) {
+    const SelectionChromeSnapshot::TextBoxDragPreview& preview = *snapshot.textBoxDragPreviewDoc;
+    AddOverlayBox(&documentBounds, preview.boxDoc);
+    AddOverlayPoint(&documentBounds, preview.baselineStartDoc);
+    AddOverlayPoint(&documentBounds, preview.baselineEndDoc);
+    AddOverlayPoint(&documentBounds, preview.ibeamTopDoc);
+    AddOverlayPoint(&documentBounds, preview.ibeamBottomDoc);
+  }
+  for (const SelectionChromeSnapshot::TextBaseline& baseline : snapshot.textBaselinesDoc) {
+    AddOverlayPoint(&documentBounds, baseline.startDoc);
+    AddOverlayPoint(&documentBounds, baseline.endDoc);
+  }
+  for (const Box2d& box : snapshot.aabbsDoc) {
+    AddOverlayBox(&documentBounds, box);
+  }
+  for (const Box2d& box : snapshot.hoverAabbsDoc) {
+    AddOverlayBox(&documentBounds, box);
+  }
+  if (snapshot.marqueeDoc.has_value()) {
+    AddOverlayBox(&documentBounds, *snapshot.marqueeDoc);
+  }
+  if (snapshot.orientedBoundsDoc.has_value()) {
+    AddOverlayPoints(&documentBounds, snapshot.orientedBoundsDoc->cornersDoc);
+  }
+  for (const Box2d& box : snapshot.handleBoxesDoc) {
+    AddOverlayBox(&documentBounds, box);
+  }
+
+  const double dpr = std::max(viewport.devicePixelRatio, 1e-9);
+  const Vector2d paneDeviceSize = viewport.paneSize * dpr;
+  Box2d canvasBounds = documentBounds.has_value()
+                           ? snapshot.canvasFromDoc.transformBox(*documentBounds)
+                           : Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0);
+  constexpr double kOverlayPaddingScreenPx = 8.0;
+  canvasBounds = canvasBounds.inflatedBy(kOverlayPaddingScreenPx * dpr);
+  canvasBounds.topLeft.x = std::clamp(std::floor(canvasBounds.topLeft.x), 0.0, paneDeviceSize.x);
+  canvasBounds.topLeft.y = std::clamp(std::floor(canvasBounds.topLeft.y), 0.0, paneDeviceSize.y);
+  canvasBounds.bottomRight.x =
+      std::clamp(std::ceil(canvasBounds.bottomRight.x), 0.0, paneDeviceSize.x);
+  canvasBounds.bottomRight.y =
+      std::clamp(std::ceil(canvasBounds.bottomRight.y), 0.0, paneDeviceSize.y);
+  if (canvasBounds.bottomRight.x <= canvasBounds.topLeft.x ||
+      canvasBounds.bottomRight.y <= canvasBounds.topLeft.y) {
+    canvasBounds = Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0);
+  }
+
+  const Vector2i textureSizePx(
+      std::max(1, static_cast<int>(canvasBounds.bottomRight.x - canvasBounds.topLeft.x)),
+      std::max(1, static_cast<int>(canvasBounds.bottomRight.y - canvasBounds.topLeft.y)));
+  return OverlayTexturePlacement{
+      .textureSizePx = textureSizePx,
+      .textureOriginPx = canvasBounds.topLeft,
+      .screenRect = Box2d(viewport.paneOrigin + canvasBounds.topLeft / dpr,
+                          viewport.paneOrigin + canvasBounds.bottomRight / dpr),
+  };
+}
+
+SelectionChromeSnapshot OverlayWithoutBakedSelectionChrome(SelectionChromeSnapshot snapshot) {
+  snapshot.paths.clear();
+  snapshot.aabbsDoc.clear();
+  snapshot.orientedBoundsDoc.reset();
+  snapshot.handleBoxesDoc.clear();
+  snapshot.pathAnchorBoxesDoc.clear();
+  snapshot.pathControlLinesDoc.clear();
+  snapshot.pathControlPointBoxesDoc.clear();
+  snapshot.textBaselinesDoc.clear();
+  return snapshot;
+}
+
 #ifdef DONNER_EDITOR_WGPU
 namespace {
 
@@ -253,33 +406,33 @@ FrameCostBreakdown::DirectPresentation DrawDocumentPresentationToFramebuffer(
   return cost;
 }
 
-void DrawImmediateOverlaySnapshotToFramebuffer(svg::RendererGeode& renderer,
-                                               const gui::EditorWindowWgpuRenderTarget& target,
-                                               const ViewportState& viewport,
-                                               const Box2d& imageClipRect,
-                                               const SelectionChromeSnapshot& snapshot) {
-  if (!target.texture || target.framebufferSizePx.x <= 0 || target.framebufferSizePx.y <= 0) {
-    return;
-  }
-
-  SelectionChromeSnapshot framebufferSnapshot = snapshot;
-  framebufferSnapshot.canvasFromDoc = FramebufferFromDocumentTransform(viewport);
-
+RenderedOverlayTexture RenderImmediateOverlaySnapshotToTexture(
+    svg::RendererGeode& renderer, const ViewportState& viewport,
+    const SelectionChromeSnapshot& snapshot) {
+  const OverlayTexturePlacement placement = ComputeOverlayTexturePlacement(viewport, snapshot);
+  const int width = placement.textureSizePx.x;
+  const int height = placement.textureSizePx.y;
   svg::RenderViewport renderViewport;
-  renderViewport.size = Vector2d(static_cast<double>(target.framebufferSizePx.x),
-                                 static_cast<double>(target.framebufferSizePx.y));
+  renderViewport.size = Vector2d(static_cast<double>(width), static_cast<double>(height));
   renderViewport.devicePixelRatio = 1.0;
 
-  renderer.setTargetTexture(target.texture);
-  renderer.setPreserveTargetOnBeginFrame(true);
+  renderer.clearTargetTexture();
+  renderer.setPreserveTargetOnBeginFrame(false);
   renderer.beginFrame(renderViewport);
   svg::ResolvedClip clip;
-  clip.clipRect = FramebufferBoxFromScreenBox(imageClipRect, viewport.devicePixelRatio);
+  clip.clipRect =
+      Box2d::FromXYWH(0.0, 0.0, static_cast<double>(width), static_cast<double>(height));
   renderer.pushClip(clip);
-  OverlayRenderer::drawChromeFromSnapshot(renderer, framebufferSnapshot);
+  SelectionChromeSnapshot placedSnapshot = snapshot;
+  placedSnapshot.canvasFromDoc =
+      snapshot.canvasFromDoc * Transform2d::Translate(-placement.textureOriginPx);
+  OverlayRenderer::drawChromeFromSnapshot(renderer, placedSnapshot);
   renderer.popClip();
   renderer.endFrame();
-  renderer.clearTargetTexture();
+  return RenderedOverlayTexture{
+      .textureSnapshot = renderer.takeTextureSnapshot(),
+      .screenRect = placement.screenRect,
+  };
 }
 
 FramebufferCheckerboardRenderer::FramebufferCheckerboardRenderer(

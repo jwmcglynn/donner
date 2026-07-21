@@ -8,17 +8,77 @@
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <string_view>
 #include <thread>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#endif
+
 #include "donner/base/StringUtils.h"
 #include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
+
+#ifdef __EMSCRIPTEN__
+// clang-format off: EM_JS contains JavaScript, whose arrow syntax clang-format corrupts.
+EM_JS(void, BeginGeodeHeadlessDeviceImport, (void* userdata, WGPUInstance instance), {
+  (async () => {
+    let adapterPtr = 0;
+    let devicePtr = 0;
+    try {
+      const adapter = await navigator.gpu.requestAdapter();
+      if (!adapter) {
+        throw new Error("navigator.gpu.requestAdapter returned null");
+      }
+
+      const device = await adapter.requestDevice({ label: "GeodeDevice" });
+      device.addEventListener("uncapturederror", (event) => {
+        const error = event && event.error;
+        const message = error && error.message ? error.message : String(error || "unknown error");
+        console.error("[Geode/emscripten] Uncaptured WebGPU error: " + message);
+      });
+      device.lost.then((info) => {
+        const reason = info && info.reason ? info.reason : "unknown";
+        const message = info && info.message ? info.message : "";
+        console.error("[Geode/emscripten] WebGPU device lost (" + reason + "): " + message);
+      }).catch((error) => {
+        console.error(
+          "[Geode/emscripten] WebGPU device-lost handler failed: " +
+            (error && error.stack ? error.stack : String(error)),
+        );
+      });
+
+      adapterPtr = WebGPU.importJsAdapter(adapter, instance);
+      devicePtr = WebGPU.importJsDevice(device, adapterPtr);
+    } catch (error) {
+      console.error(
+        "[Geode/emscripten] Direct WebGPU import failed: " +
+          (error && error.stack ? error.stack : String(error)),
+      );
+    }
+    // Do not include the C continuation in the acquisition catch. A C++ throw or Wasm trap must
+    // never re-enter this callback with an already-consumed heap context. Cross one worker event
+    // task before creating pipelines so Safari fully settles requestDevice and the imported roots.
+    setTimeout(() => {
+      callUserCallback(() => {
+        Module["_donnerGeodeCompleteHeadlessImport"](
+          userdata,
+          instance,
+          adapterPtr,
+          devicePtr,
+        );
+      });
+    }, 0);
+  })();
+});
+// clang-format on
+#endif
 
 namespace donner::geode {
 
@@ -73,6 +133,7 @@ wgpu::BackendType RequestedHeadlessBackend() {
 #endif
 }
 
+#ifndef __EMSCRIPTEN__
 WGPUInstanceBackend InstanceBackendsFor(wgpu::BackendType backendType) {
   switch (static_cast<WGPUBackendType>(backendType)) {
     case WGPUBackendType_Vulkan: return WGPUInstanceBackend_Vulkan;
@@ -85,9 +146,17 @@ WGPUInstanceBackend InstanceBackendsFor(wgpu::BackendType backendType) {
     default: return WGPUInstanceBackend_All;
   }
 }
+#endif
 
 wgpu::Instance CreateHeadlessInstance(wgpu::BackendType backendType) {
-#ifndef __EMSCRIPTEN__
+#ifdef __EMSCRIPTEN__
+  // Browser adapter/device acquisition uses spontaneous Promise callbacks.
+  // Requiring TimedWaitAny here prevents requestDevice from completing in a
+  // transferred-canvas pthread on Chromium. Direct surface presentation does
+  // not need CPU readback, so keep the instance on the browser's default
+  // callback contract.
+  return wgpu::createInstance();
+#else
   const WGPUInstanceBackend instanceBackends = InstanceBackendsFor(backendType);
   if (instanceBackends != WGPUInstanceBackend_All) {
     wgpu::InstanceExtras instanceExtras = wgpu::Default;
@@ -97,11 +166,11 @@ wgpu::Instance CreateHeadlessInstance(wgpu::BackendType backendType) {
     instanceDesc.nextInChain = &instanceExtras.chain;
     return wgpu::createInstance(instanceDesc);
   }
-#endif
-
   return wgpu::createInstance();
+#endif
 }
 
+#ifndef __EMSCRIPTEN__
 void WaitForSubmittedWork(const wgpu::Device& device, const wgpu::Queue& queue) {
   if (!device || !queue) {
     return;
@@ -113,22 +182,11 @@ void WaitForSubmittedWork(const wgpu::Device& device, const wgpu::Queue& queue) 
 
   wgpu::QueueWorkDoneCallbackInfo callbackInfo{wgpu::Default};
   callbackInfo.mode = wgpu::CallbackMode::AllowSpontaneous;
-  // emdawnwebgpu's WGPUQueueWorkDoneCallback carries an extra WGPUStringView
-  // message parameter that wgpu-native's doesn't; match whichever the active
-  // header declares.
-#if defined(__EMSCRIPTEN__)
-  callbackInfo.callback = [](WGPUQueueWorkDoneStatus /*status*/, WGPUStringView /*message*/,
-                             void* userdata1, void* /*userdata2*/) {
-    WorkDoneState* state = static_cast<WorkDoneState*>(userdata1);
-    state->done = true;
-  };
-#else
   callbackInfo.callback = [](WGPUQueueWorkDoneStatus /*status*/, void* userdata1,
                              void* /*userdata2*/) {
     WorkDoneState* state = static_cast<WorkDoneState*>(userdata1);
     state->done = true;
   };
-#endif
   callbackInfo.userdata1 = &state;
   callbackInfo.userdata2 = nullptr;
 
@@ -137,6 +195,7 @@ void WaitForSubmittedWork(const wgpu::Device& device, const wgpu::Queue& queue) 
     device.poll(true, nullptr);
   }
 }
+#endif
 
 template <typename Handle>
 void DestroyResourceBacking(ScopedWgpuHandle<Handle>& handle) {
@@ -209,11 +268,14 @@ std::atomic<uint64_t> g_nextDeviceId{0};
 GeodeDevice::GeodeDevice()
     : impl_(std::make_unique<Impl>()),
       deviceId_(g_nextDeviceId.fetch_add(1, std::memory_order_relaxed) + 1) {}
+
 GeodeDevice::~GeodeDevice() {
   // Release all resources that were created from the device before releasing the
   // root queue/device/adapter/instance handles. `webgpu.hpp` handles are raw
   // wrappers: their destructors do not release native references.
+#ifndef __EMSCRIPTEN__
   WaitForSubmittedWork(device_, queue_);
+#endif
   wgpu::Instance instance;
   if (!external_ && impl_) {
     instance = impl_->instance;
@@ -222,8 +284,10 @@ GeodeDevice::~GeodeDevice() {
   drainDeferredDestroys();
   impl_.reset();
   if (device_) {
+#ifndef __EMSCRIPTEN__
     device_.poll(true, nullptr);
     WaitForSubmittedWork(device_, queue_);
+#endif
   }
 
   if (external_) {
@@ -242,6 +306,26 @@ GeodeDevice::~GeodeDevice() {
   ReleaseWgpuHandle(instance);
 }
 
+const wgpu::Instance& GeodeDevice::instance() const {
+  return impl_->instance;
+}
+
+void GeodeDevice::recordReadback(bool usedTimedWaitAny, int pollIterations) {
+  readbackCount_.fetch_add(1, std::memory_order_relaxed);
+  readbackPollIterations_.fetch_add(pollIterations, std::memory_order_relaxed);
+  if (usedTimedWaitAny) {
+    readbackUsedTimedWaitAny_.store(true, std::memory_order_relaxed);
+  }
+}
+
+GeodeDevice::ReadbackStats GeodeDevice::consumeReadbackStats() {
+  return ReadbackStats{
+      .count = readbackCount_.exchange(0, std::memory_order_relaxed),
+      .pollIterations = readbackPollIterations_.exchange(0, std::memory_order_relaxed),
+      .usedTimedWaitAny = readbackUsedTimedWaitAny_.exchange(false, std::memory_order_relaxed),
+  };
+}
+
 namespace {
 /// Process-wide count of CreateHeadless calls, for tests that pin device
 /// sharing. Monotonic; never reset.
@@ -252,9 +336,78 @@ int GeodeDevice::headlessCreationCountForTesting() {
   return gHeadlessCreationCount.load(std::memory_order_relaxed);
 }
 
-std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
+#ifdef __EMSCRIPTEN__
+struct GeodeDevice::AsyncCreateContext {
+  std::unique_ptr<GeodeDevice> result;
+  CreateHeadlessAsyncCallback callback = nullptr;
+  void* userdata = nullptr;
+};
+
+void GeodeDevice::completeAsyncCreate(AsyncCreateContext* context,
+                                      std::unique_ptr<GeodeDevice> device) {
+  const CreateHeadlessAsyncCallback callback = context->callback;
+  void* userdata = context->userdata;
+  delete context;
+  callback(std::move(device), userdata);
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE void donnerGeodeCompleteHeadlessImport(void* userdata,
+                                                                       WGPUInstance instance,
+                                                                       WGPUAdapter adapter,
+                                                                       WGPUDevice device) {
+  auto* context = static_cast<GeodeDevice::AsyncCreateContext*>(userdata);
+
+  if (adapter != nullptr) {
+    context->result->adapter_ = wgpu::Adapter(adapter);
+  }
+  if (device != nullptr) {
+    context->result->device_ = wgpu::Device(device);
+  }
+  if (instance == nullptr || adapter == nullptr || device == nullptr) {
+    std::fprintf(stderr, "[Geode/emscripten] Browser WebGPU import returned incomplete handles.\n");
+    GeodeDevice::completeAsyncCreate(context, nullptr);
+    return;
+  }
+
+  context->result->queue_ = context->result->device_.getQueue();
+  if (!context->result->queue_) {
+    std::fprintf(stderr, "[Geode/emscripten] Imported WebGPU device returned no queue.\n");
+    GeodeDevice::completeAsyncCreate(context, nullptr);
+    return;
+  }
+
+  context->result->initSharedResources();
+  context->result->initSharedPipelines();
+  GeodeDevice::completeAsyncCreate(context, std::move(context->result));
+}
+
+void GeodeDevice::CreateHeadlessAsync(wgpu::TextureFormat textureFormat,
+                                      CreateHeadlessAsyncCallback callback, void* userdata) {
+  assert(callback != nullptr);
+  gHeadlessCreationCount.fetch_add(1, std::memory_order_relaxed);
+
+  auto* context = new AsyncCreateContext{
+      .result = std::unique_ptr<GeodeDevice>(new GeodeDevice()),
+      .callback = callback,
+      .userdata = userdata,
+  };
+  context->result->textureFormat_ = textureFormat;
+  const WGPUInstanceDescriptor instanceDescriptor = WGPU_INSTANCE_DESCRIPTOR_INIT;
+  WGPUInstance instance = wgpuCreateInstance(&instanceDescriptor);
+  context->result->impl_->instance = wgpu::Instance(instance);
+  if (instance == nullptr) {
+    std::fprintf(stderr, "[Geode/emscripten] wgpuCreateInstance returned null.\n");
+    completeAsyncCreate(context, nullptr);
+    return;
+  }
+  BeginGeodeHeadlessDeviceImport(context, instance);
+}
+#endif
+
+std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless(wgpu::TextureFormat textureFormat) {
   gHeadlessCreationCount.fetch_add(1, std::memory_order_relaxed);
   auto result = std::unique_ptr<GeodeDevice>(new GeodeDevice());
+  result->textureFormat_ = textureFormat;
 
   // 1. Create the WebGPU instance. wgpu-native's `wgpuCreateInstance`
   //    is synchronous and never blocks on I/O; the returned handle is
@@ -295,8 +448,7 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
 
     std::fprintf(stderr, "[Geode/wgpu-native] No WebGPU adapter available.\n");
     if (attempt >= kMaxAdapterRetries) {
-      std::fprintf(stderr,
-                   "[Geode/wgpu-native] Giving up after %d adapter-acquisition retries.\n",
+      std::fprintf(stderr, "[Geode/wgpu-native] Giving up after %d adapter-acquisition retries.\n",
                    kMaxAdapterRetries);
       return nullptr;
     }
@@ -364,8 +516,6 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
       wgpuAdapterInfoFreeMembers(info);
     }
   }
-#else
-  std::fprintf(stderr, "[Geode/emscripten] WebGPU adapter acquired (browser-managed).\n");
 #endif
 
   // 3. Create the device. Error diagnostics are wired via
@@ -407,8 +557,7 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
 
     std::fprintf(stderr, "[Geode/wgpu-native] Failed to create device.\n");
     if (attempt >= kMaxDeviceInitRetries) {
-      std::fprintf(stderr,
-                   "[Geode/wgpu-native] Giving up after %d device-creation retries.\n",
+      std::fprintf(stderr, "[Geode/wgpu-native] Giving up after %d device-creation retries.\n",
                    kMaxDeviceInitRetries);
       return nullptr;
     }
