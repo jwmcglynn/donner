@@ -31,6 +31,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import zlib from "node:zlib";
 
 const kDriverUrl = process.env.DONNER_SAFARI_DRIVER_URL || "http://127.0.0.1:4445";
 const kBaseUrl = process.env.DONNER_WASM_BASE_URL || "http://127.0.0.1:8000";
@@ -283,6 +284,163 @@ function assertAcceptedEpoch(label, state, minimumToken = 0) {
     assert.ok(
       Math.abs(edge - Math.round(edge)) <= 1e-6,
       `${label}: worker clip edge ${edge} did not land on the shared device-pixel grid`,
+    );
+  }
+}
+
+function decodeScreenshotPng(filePath) {
+  const bytes = fs.readFileSync(filePath);
+  assert.deepEqual(
+    [...bytes.subarray(0, 8)],
+    [137, 80, 78, 71, 13, 10, 26, 10],
+    `${filePath}: SafariDriver screenshot was not a PNG`,
+  );
+
+  let width = 0;
+  let height = 0;
+  let bitDepth = 0;
+  let colorType = 0;
+  let interlace = 0;
+  const compressed = [];
+  for (let offset = 8; offset < bytes.length;) {
+    const length = bytes.readUInt32BE(offset);
+    const type = bytes.toString("ascii", offset + 4, offset + 8);
+    const data = bytes.subarray(offset + 8, offset + 8 + length);
+    if (type === "IHDR") {
+      width = data.readUInt32BE(0);
+      height = data.readUInt32BE(4);
+      bitDepth = data[8];
+      colorType = data[9];
+      interlace = data[12];
+    } else if (type === "IDAT") {
+      compressed.push(data);
+    } else if (type === "IEND") {
+      break;
+    }
+    offset += length + 12;
+  }
+
+  assert.ok(width > 0 && height > 0, `${filePath}: PNG omitted its dimensions`);
+  assert.equal(bitDepth, 8, `${filePath}: expected an 8-bit Safari screenshot`);
+  assert.ok([2, 6].includes(colorType), `${filePath}: unsupported PNG color type ${colorType}`);
+  assert.equal(interlace, 0, `${filePath}: interlaced Safari screenshots are unsupported`);
+  const channels = colorType === 6 ? 4 : 3;
+  const rowBytes = width * channels;
+  const filtered = zlib.inflateSync(Buffer.concat(compressed));
+  assert.equal(
+    filtered.length,
+    height * (rowBytes + 1),
+    `${filePath}: unexpected decoded PNG byte count`,
+  );
+  const pixels = Buffer.alloc(height * rowBytes);
+  const paeth = (left, above, upperLeft) => {
+    const prediction = left + above - upperLeft;
+    const leftDistance = Math.abs(prediction - left);
+    const aboveDistance = Math.abs(prediction - above);
+    const upperLeftDistance = Math.abs(prediction - upperLeft);
+    if (leftDistance <= aboveDistance && leftDistance <= upperLeftDistance) return left;
+    return aboveDistance <= upperLeftDistance ? above : upperLeft;
+  };
+  for (let y = 0; y < height; ++y) {
+    const filter = filtered[y * (rowBytes + 1)];
+    const sourceOffset = y * (rowBytes + 1) + 1;
+    const destOffset = y * rowBytes;
+    for (let byte = 0; byte < rowBytes; ++byte) {
+      const encoded = filtered[sourceOffset + byte];
+      const left = byte >= channels ? pixels[destOffset + byte - channels] : 0;
+      const above = y > 0 ? pixels[destOffset + byte - rowBytes] : 0;
+      const upperLeft = y > 0 && byte >= channels
+        ? pixels[destOffset + byte - rowBytes - channels]
+        : 0;
+      let predictor = 0;
+      if (filter === 1) predictor = left;
+      else if (filter === 2) predictor = above;
+      else if (filter === 3) predictor = Math.floor((left + above) / 2);
+      else if (filter === 4) predictor = paeth(left, above, upperLeft);
+      else assert.equal(filter, 0, `${filePath}: unsupported PNG filter ${filter}`);
+      pixels[destOffset + byte] = (encoded + predictor) & 0xff;
+    }
+  }
+
+  return {
+    height,
+    pixel(x, y) {
+      assert.ok(x >= 0 && x < width && y >= 0 && y < height, `pixel outside screenshot: ${x},${y}`);
+      const offset = (y * width + x) * channels;
+      return [...pixels.subarray(offset, offset + 3)];
+    },
+    width,
+  };
+}
+
+function analyzeSolidDocumentEdges(filePath, state) {
+  const screenshot = decodeScreenshotPng(filePath);
+  const canvas = state.canvasRect;
+  const surface = state.surface;
+  assert.ok(
+    canvas && surface?.rect && surface?.clipInsets,
+    "missing surface geometry for seam probe",
+  );
+  const scaleX = screenshot.width / canvas.width;
+  const scaleY = screenshot.height / canvas.height;
+  assert.ok(Math.abs(scaleX - scaleY) <= 1e-6, "Safari screenshot used nonuniform scaling");
+  assert.ok(
+    Math.abs(scaleX - state.devicePixelRatio) <= 1e-6,
+    `Safari screenshot scale ${scaleX} did not match DPR ${state.devicePixelRatio}`,
+  );
+
+  const rect = surface.rect;
+  const clip = surface.clipInsets;
+  const edges = {
+    bottom: (rect.y + rect.height - clip.bottom - canvas.y) * scaleY,
+    left: (rect.x + clip.left - canvas.x) * scaleX,
+    right: (rect.x + rect.width - clip.right - canvas.x) * scaleX,
+    top: (rect.y + clip.top - canvas.y) * scaleY,
+  };
+  const samples = [
+    { axis: "x", edge: "left", fixed: edges.top + (edges.bottom - edges.top) * 0.45, sign: 1 },
+    { axis: "x", edge: "right", fixed: edges.top + (edges.bottom - edges.top) * 0.45, sign: -1 },
+    { axis: "y", edge: "top", fixed: edges.left + (edges.right - edges.left) * 0.9, sign: 1 },
+    { axis: "y", edge: "bottom", fixed: edges.left + (edges.right - edges.left) * 0.9, sign: -1 },
+  ];
+  const maxChannelDelta = (left, right) =>
+    Math.max(...left.map((value, i) => Math.abs(value - right[i])));
+  const diagnostics = [];
+  for (const sample of samples) {
+    const edgeCoordinate = edges[sample.edge];
+    const insideCoordinate = sample.sign > 0
+      ? Math.ceil(edgeCoordinate - 0.5)
+      : Math.floor(edgeCoordinate - 0.5);
+    const referenceCoordinate = insideCoordinate + sample.sign * 4;
+    const fixedCoordinate = Math.round(sample.fixed - 0.5);
+    const insidePixel = sample.axis === "x"
+      ? screenshot.pixel(insideCoordinate, fixedCoordinate)
+      : screenshot.pixel(fixedCoordinate, insideCoordinate);
+    const referencePixel = sample.axis === "x"
+      ? screenshot.pixel(referenceCoordinate, fixedCoordinate)
+      : screenshot.pixel(fixedCoordinate, referenceCoordinate);
+    diagnostics.push({
+      deviceCoordinate: edgeCoordinate,
+      edge: sample.edge,
+      insidePixel,
+      maxChannelDelta: maxChannelDelta(insidePixel, referencePixel),
+      referencePixel,
+    });
+  }
+  return diagnostics;
+}
+
+function assertNoSolidDocumentEdgeSeam(label, diagnostics) {
+  for (const diagnostic of diagnostics) {
+    assert.ok(
+      diagnostic.maxChannelDelta <= 2,
+      `${label}: ${diagnostic.edge} edge leaked compositor background: ${
+        JSON.stringify(diagnostic)
+      }`,
+    );
+    assert.ok(
+      Math.abs(diagnostic.deviceCoordinate - Math.round(diagnostic.deviceCoordinate)) <= 1e-6,
+      `${label}: ${diagnostic.edge} edge ${diagnostic.deviceCoordinate} split a device pixel`,
     );
   }
 }
@@ -688,6 +846,54 @@ async function runRegression(driver, editorUrl, result) {
   assertAcceptedEpoch("Basic Shapes", result.basicShapes, beforeSampleToken);
   assertFlatHeap("Basic Shapes", result.basicShapes, initialHeapBytes);
   result.basicShapesScreenshot = await capture(driver, "03-basic-shapes");
+
+  const seamPanPoint = {
+    x: result.basicShapes.surface.rect.x + result.basicShapes.surface.rect.width * 0.5,
+    y: result.basicShapes.surface.rect.y + result.basicShapes.surface.rect.height * 0.5,
+  };
+  await driver.actions([pointerMove(seamPanPoint.x, seamPanPoint.y, 80)]);
+  await driver.releaseActions();
+  const beforeSeamPan = await readState(driver);
+  await driver.execute(
+    `
+    const [x, y] = arguments;
+    const canvas = document.getElementById('canvas');
+    return canvas.dispatchEvent(new WheelEvent('wheel', {
+      bubbles: true,
+      cancelable: true,
+      clientX: x,
+      clientY: y,
+      deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+      deltaX: -2.5,
+      deltaY: -1.25,
+    }));
+  `,
+    [seamPanPoint.x, seamPanPoint.y],
+  );
+  const fractionalPan = await poll("fractional Safari pan layout", async () => {
+    const state = await readState(driver);
+    assertNoFatal("fractional Safari pan layout", [state]);
+    const beforeRect = beforeSeamPan.surface?.rect;
+    const rect = state.surface?.rect;
+    if (
+      rect && beforeRect
+      && (Math.abs(rect.x - beforeRect.x) > 1e-6 || Math.abs(rect.y - beforeRect.y) > 1e-6)
+    ) {
+      return state;
+    }
+    return null;
+  });
+  const fractionalPanScreenshot = await capture(driver, "04-fractional-pan-seam");
+  result.fractionalPanSeamProbe = {
+    afterRect: fractionalPan.surface.rect,
+    beforeRect: beforeSeamPan.surface.rect,
+    diagnostics: analyzeSolidDocumentEdges(fractionalPanScreenshot, fractionalPan),
+    screenshot: fractionalPanScreenshot,
+  };
+  assertNoSolidDocumentEdgeSeam(
+    "fractional Safari pan",
+    result.fractionalPanSeamProbe.diagnostics,
+  );
 
   const cursorProbePoint = {
     x: canvas.x + canvas.width * 0.55,
