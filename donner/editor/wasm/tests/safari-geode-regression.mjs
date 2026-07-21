@@ -484,6 +484,13 @@ function scanSolidDocumentEdges(filePath, state) {
     const referenceCoordinate = insideCoordinate + (leading ? 4 : -4);
     const variableStart = Math.ceil((vertical ? edges.top : edges.left) + 8);
     const variableEnd = Math.floor((vertical ? edges.bottom : edges.right) - 8);
+    const midpoint = Math.floor((variableStart + variableEnd) * 0.5);
+    const midpointPixel = vertical
+      ? screenshot.pixel(insideCoordinate, midpoint)
+      : screenshot.pixel(midpoint, insideCoordinate);
+    const midpointReferencePixel = vertical
+      ? screenshot.pixel(referenceCoordinate, midpoint)
+      : screenshot.pixel(midpoint, referenceCoordinate);
     let firstMismatch = null;
     let maxDelta = 0;
     let mismatchedSamples = 0;
@@ -508,11 +515,20 @@ function scanSolidDocumentEdges(filePath, state) {
       edge,
       firstMismatch,
       maxChannelDelta: maxDelta,
+      midpointPixel,
+      midpointReferencePixel,
       mismatchedSamples,
       samples,
     });
   }
   return diagnostics;
+}
+
+function samePresentedGeometry(before, after) {
+  return Number(before.accepted?.token || 0) === Number(after.accepted?.token || 0)
+    && JSON.stringify(before.surface?.rect || null) === JSON.stringify(after.surface?.rect || null)
+    && JSON.stringify(before.surface?.clipInsets || null)
+      === JSON.stringify(after.surface?.clipInsets || null);
 }
 
 function assertNoSolidDocumentEdgeSeam(label, diagnostics) {
@@ -855,8 +871,14 @@ async function runRegression(driver, editorUrl, result) {
   const canvas = result.thumbnailDiagnostic.canvasRect;
   const beforeSampleToken = Number(result.thumbnailDiagnostic.accepted?.token || 0);
   const beforeSampleResults = Number(result.thumbnailDiagnostic.worker?.completedResults || 0);
-  const sampleClickPoint = { x: canvas.x + canvas.width * 0.5, y: canvas.y + 282 };
-  result.basicShapesClickProbe = await driver.execute(
+  const sample = kLivePanOnly
+    ? { id: "text-style", label: "Text and Style", xFraction: 0.6875 }
+    : { id: "basic-shapes", label: "Basic Shapes", xFraction: 0.5 };
+  const sampleClickPoint = {
+    x: canvas.x + canvas.width * sample.xFraction,
+    y: canvas.y + 282,
+  };
+  result.sampleClickProbe = await driver.execute(
     `
     const [x, y] = arguments;
     const describe = (element) => element ? {
@@ -899,7 +921,7 @@ async function runRegression(driver, editorUrl, result) {
   );
   await click(driver, sampleClickPoint.x, sampleClickPoint.y);
   await new Promise((resolve) => setTimeout(resolve, 250));
-  result.basicShapesClickProbe.after = await driver.execute(`
+  result.sampleClickProbe.after = await driver.execute(`
     return {
       events: window.__donnerSafariClickProbeEvents || [],
       activeSample: window.__donnerActiveSampleStats || null,
@@ -910,16 +932,16 @@ async function runRegression(driver, editorUrl, result) {
     };
   `);
   assertTrustedClickAtPoint(
-    "Basic Shapes click",
-    result.basicShapesClickProbe.after.events,
+    `${sample.label} click`,
+    result.sampleClickProbe.after.events,
     sampleClickPoint,
   );
-  result.basicShapes = await poll("Basic Shapes sample presentation", async () => {
+  result.selectedSample = await poll(`${sample.label} sample presentation`, async () => {
     const state = await readState(driver);
-    assertNoFatal("Basic Shapes sample presentation", [state]);
+    assertNoFatal(`${sample.label} sample presentation`, [state]);
     const token = Number(state.accepted?.token || 0);
     if (
-      state.activeSample?.sampleId === "basic-shapes"
+      state.activeSample?.sampleId === sample.id
       && token > beforeSampleToken
       && displayedFrame(state) === token
       && Number(state.worker?.completedResults || 0) > beforeSampleResults
@@ -928,24 +950,47 @@ async function runRegression(driver, editorUrl, result) {
     }
     return null;
   });
-  assertAcceptedEpoch("Basic Shapes", result.basicShapes, beforeSampleToken);
-  assertFlatHeap("Basic Shapes", result.basicShapes, initialHeapBytes);
-  result.basicShapesScreenshot = await capture(driver, "03-basic-shapes");
+  assertAcceptedEpoch(sample.label, result.selectedSample, beforeSampleToken);
+  assertFlatHeap(sample.label, result.selectedSample, initialHeapBytes);
+  result.selectedSampleScreenshot = await capture(driver, `03-${sample.id}`);
 
   if (kLivePanOnly) {
     const panPoint = {
-      x: result.basicShapes.surface.rect.x + result.basicShapes.surface.rect.width * 0.5,
-      y: result.basicShapes.surface.rect.y + result.basicShapes.surface.rect.height * 0.5,
+      x: result.selectedSample.surface.rect.x + result.selectedSample.surface.rect.width * 0.5,
+      y: result.selectedSample.surface.rect.y + result.selectedSample.surface.rect.height * 0.5,
     };
     await driver.actions([pointerMove(panPoint.x, panPoint.y, 80)]);
     await driver.releaseActions();
     result.livePanFrames = [];
     const badFrames = [];
+    const goodFrames = [];
+    const edgePixels = new Set();
     for (let step = 1; step <= 48; ++step) {
-      await driver.scroll(panPoint.x, panPoint.y, 1, step % 3 === 0 ? 1 : 0);
-      const state = await readState(driver);
+      const magnitude = 9 + (step % 4) * 4;
+      const direction = step % 2 === 0 ? -1 : 1;
+      await driver.scroll(
+        panPoint.x,
+        panPoint.y,
+        direction * magnitude,
+        step % 3 === 0 ? direction * 5 : 0,
+      );
+      const beforeCapture = await readState(driver);
       const screenshot = await capture(driver, `04-live-pan-${String(step).padStart(2, "0")}`);
+      const state = await readState(driver);
+      if (!samePresentedGeometry(beforeCapture, state)) {
+        result.livePanFrames.push({
+          beforeAcceptedToken: Number(beforeCapture.accepted?.token || 0),
+          beforeSurfaceRect: beforeCapture.surface?.rect || null,
+          screenshot,
+          skippedGeometryRace: true,
+          afterAcceptedToken: Number(state.accepted?.token || 0),
+          afterSurfaceRect: state.surface?.rect || null,
+        });
+        continue;
+      }
       const diagnostics = scanSolidDocumentEdges(screenshot, state);
+      const leftEdge = diagnostics.find((edge) => edge.edge === "left");
+      edgePixels.add(JSON.stringify(leftEdge?.midpointPixel || []));
       const bad = diagnostics.some((edge) => edge.maxChannelDelta > 2);
       const frame = {
         acceptedToken: Number(state.accepted?.token || 0),
@@ -957,11 +1002,18 @@ async function runRegression(driver, editorUrl, result) {
       result.livePanFrames.push(frame);
       if (bad) {
         badFrames.push(frame);
+      } else {
+        goodFrames.push(frame);
       }
-      if (badFrames.length >= 2) {
+      if (badFrames.length >= 2 && goodFrames.length >= 1 && edgePixels.size >= 2) {
         break;
       }
     }
+    assert.ok(goodFrames.length >= 1, "Safari live pan captured no clean edge frame");
+    assert.ok(
+      edgePixels.size >= 2,
+      `Safari live pan did not expose changing edge pixels: ${[...edgePixels].join(", ")}`,
+    );
     assert.deepEqual(
       badFrames,
       [],
@@ -969,6 +1021,9 @@ async function runRegression(driver, editorUrl, result) {
     );
     return;
   }
+
+  result.basicShapes = result.selectedSample;
+  result.basicShapesScreenshot = result.selectedSampleScreenshot;
 
   const seamPanPoint = {
     x: result.basicShapes.surface.rect.x + result.basicShapes.surface.rect.width * 0.5,
