@@ -25,6 +25,7 @@
  *                                  Explicit exploratory-only bypass for the required digest.
  *   DONNER_SAFARI_REQUIRED=1      Treat unavailable Safari automation as failure, not a skip.
  *   DONNER_SAFARI_SEAM_ONLY=1     Stop after the fractional-pan compositor pixel probe.
+ *   DONNER_SAFARI_LIVE_PAN_ONLY=1 Capture trusted wheel-pan frames and fail on any edge leak.
  */
 
 import assert from "node:assert/strict";
@@ -40,6 +41,7 @@ const kRequired = process.env.DONNER_SAFARI_REQUIRED === "1";
 const kExpectedWasmSha256 = process.env.DONNER_SAFARI_EXPECTED_WASM_SHA256 || "";
 const kAllowUnpinnedPackage = process.env.DONNER_SAFARI_ALLOW_UNPINNED_PACKAGE === "1";
 const kSeamOnly = process.env.DONNER_SAFARI_SEAM_ONLY === "1";
+const kLivePanOnly = process.env.DONNER_SAFARI_LIVE_PAN_ONLY === "1";
 const kTimeoutMs = Number(process.env.DONNER_SAFARI_TIMEOUT_MS || 30_000);
 const kRunId = new Date().toISOString().replaceAll(/[^0-9A-Za-z]/g, "");
 const kArtifactDir = process.env.DONNER_SAFARI_ARTIFACT_DIR
@@ -145,6 +147,24 @@ class SafariDriverClient {
         id: "donner-safari-regression-mouse",
         parameters: { pointerType: "mouse" },
         actions: sequence,
+      }],
+    });
+  }
+
+  async scroll(x, y, deltaX, deltaY) {
+    await this.request("POST", `/session/${this.sessionId}/actions`, {
+      actions: [{
+        type: "wheel",
+        id: "donner-safari-regression-wheel",
+        actions: [{
+          type: "scroll",
+          duration: 0,
+          x: Math.round(x),
+          y: Math.round(y),
+          deltaX,
+          deltaY,
+          origin: "viewport",
+        }],
       }],
     });
   }
@@ -427,6 +447,69 @@ function analyzeSolidDocumentEdges(filePath, state) {
       insidePixel,
       maxChannelDelta: maxChannelDelta(insidePixel, referencePixel),
       referencePixel,
+    });
+  }
+  return diagnostics;
+}
+
+function scanSolidDocumentEdges(filePath, state) {
+  const screenshot = decodeScreenshotPng(filePath);
+  const canvas = state.canvasRect;
+  const surface = state.surface;
+  assert.ok(
+    canvas && surface?.rect && surface?.clipInsets,
+    "missing surface geometry for live seam scan",
+  );
+  const scaleX = screenshot.width / canvas.width;
+  const scaleY = screenshot.height / canvas.height;
+  assert.ok(Math.abs(scaleX - scaleY) <= 1e-6, "Safari screenshot used nonuniform scaling");
+  const rect = surface.rect;
+  const clip = surface.clipInsets;
+  const edges = {
+    bottom: (rect.y + rect.height - clip.bottom - canvas.y) * scaleY,
+    left: (rect.x + clip.left - canvas.x) * scaleX,
+    right: (rect.x + rect.width - clip.right - canvas.x) * scaleX,
+    top: (rect.y + clip.top - canvas.y) * scaleY,
+  };
+  const maxChannelDelta = (left, right) =>
+    Math.max(...left.map((value, i) => Math.abs(value - right[i])));
+  const diagnostics = [];
+  for (const edge of ["left", "right", "top", "bottom"]) {
+    const vertical = edge === "left" || edge === "right";
+    const leading = edge === "left" || edge === "top";
+    const deviceCoordinate = edges[edge];
+    const insideCoordinate = leading
+      ? Math.ceil(deviceCoordinate - 0.5)
+      : Math.floor(deviceCoordinate - 0.5);
+    const referenceCoordinate = insideCoordinate + (leading ? 4 : -4);
+    const variableStart = Math.ceil((vertical ? edges.top : edges.left) + 8);
+    const variableEnd = Math.floor((vertical ? edges.bottom : edges.right) - 8);
+    let firstMismatch = null;
+    let maxDelta = 0;
+    let mismatchedSamples = 0;
+    let samples = 0;
+    for (let variable = variableStart; variable <= variableEnd; variable += 2) {
+      const insidePixel = vertical
+        ? screenshot.pixel(insideCoordinate, variable)
+        : screenshot.pixel(variable, insideCoordinate);
+      const referencePixel = vertical
+        ? screenshot.pixel(referenceCoordinate, variable)
+        : screenshot.pixel(variable, referenceCoordinate);
+      const delta = maxChannelDelta(insidePixel, referencePixel);
+      maxDelta = Math.max(maxDelta, delta);
+      samples += 1;
+      if (delta > 2) {
+        mismatchedSamples += 1;
+        firstMismatch ??= { insidePixel, referencePixel, variable };
+      }
+    }
+    diagnostics.push({
+      deviceCoordinate,
+      edge,
+      firstMismatch,
+      maxChannelDelta: maxDelta,
+      mismatchedSamples,
+      samples,
     });
   }
   return diagnostics;
@@ -849,6 +932,44 @@ async function runRegression(driver, editorUrl, result) {
   assertFlatHeap("Basic Shapes", result.basicShapes, initialHeapBytes);
   result.basicShapesScreenshot = await capture(driver, "03-basic-shapes");
 
+  if (kLivePanOnly) {
+    const panPoint = {
+      x: result.basicShapes.surface.rect.x + result.basicShapes.surface.rect.width * 0.5,
+      y: result.basicShapes.surface.rect.y + result.basicShapes.surface.rect.height * 0.5,
+    };
+    await driver.actions([pointerMove(panPoint.x, panPoint.y, 80)]);
+    await driver.releaseActions();
+    result.livePanFrames = [];
+    const badFrames = [];
+    for (let step = 1; step <= 48; ++step) {
+      await driver.scroll(panPoint.x, panPoint.y, 1, step % 3 === 0 ? 1 : 0);
+      const state = await readState(driver);
+      const screenshot = await capture(driver, `04-live-pan-${String(step).padStart(2, "0")}`);
+      const diagnostics = scanSolidDocumentEdges(screenshot, state);
+      const bad = diagnostics.some((edge) => edge.maxChannelDelta > 2);
+      const frame = {
+        acceptedToken: Number(state.accepted?.token || 0),
+        bad,
+        diagnostics,
+        screenshot,
+        surfaceRect: state.surface?.rect || null,
+      };
+      result.livePanFrames.push(frame);
+      if (bad) {
+        badFrames.push(frame);
+      }
+      if (badFrames.length >= 2) {
+        break;
+      }
+    }
+    assert.deepEqual(
+      badFrames,
+      [],
+      `Safari exposed ${badFrames.length} wheel-pan frames with document-edge background leaks`,
+    );
+    return;
+  }
+
   const seamPanPoint = {
     x: result.basicShapes.surface.rect.x + result.basicShapes.surface.rect.width * 0.5,
     y: result.basicShapes.surface.rect.y + result.basicShapes.surface.rect.height * 0.5,
@@ -1224,7 +1345,7 @@ async function main() {
     artifactDir: kArtifactDir,
     driverUrl: kDriverUrl,
     editorUrl: editorUrl.href,
-    scope: kSeamOnly ? "fractional-pan-seam" : "full",
+    scope: kLivePanOnly ? "live-pan-seam" : kSeamOnly ? "fractional-pan-seam" : "full",
     startedAt: new Date().toISOString(),
   };
   const driver = new SafariDriverClient(kDriverUrl);
@@ -1271,7 +1392,9 @@ async function main() {
     result.completedAt = new Date().toISOString();
     result.passed = true;
     fs.writeFileSync(path.join(kArtifactDir, "result.json"), JSON.stringify(result, null, 2));
-    const passLabel = kSeamOnly
+    const passLabel = kLivePanOnly
+      ? "real Apple Safari live-pan edge pixels"
+      : kSeamOnly
       ? "real Apple Safari fractional-pan edge pixels"
       : "real Apple Safari Geode startup, thumbnails, drag, wake burst, and teardown";
     console.log(`PASS: ${passLabel}; artifacts=${kArtifactDir}`);
