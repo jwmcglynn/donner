@@ -44,8 +44,8 @@ struct MenuBarState {
   bool showCompositorDebugPanel = false;
   /// Whether compositor tile boundaries and identities are drawn directly over the canvas.
   bool compositorTileOverlay = false;
-  /// Whether the Geode geometry debug overlay (band strips + per-path
-  /// bounding-quad triangles) is enabled on the document renderer
+  /// Whether the Geode geometry debug overlay (dynamically-dilated
+  /// post-vertex Slug quad-triangle edges) is enabled on the document renderer
   /// (drives the View-menu checkmark). Off by default.
   bool geometryDebugOverlay = false;
   /// Current render-pane performance overlay mode (drives the View-menu

@@ -69,6 +69,14 @@ config_setting(
 )
 
 config_setting(
+    name = "wasm_geode_enabled",
+    flag_values = {
+        ":renderer_backend": "geode",
+        "//donner/svg/renderer/wasm:enable_wasm": "true",
+    },
+)
+
+config_setting(
     name = "filters_enabled",
     flag_values = {":filters": "true"},
     visibility = ["//visibility:public"],
@@ -153,6 +161,9 @@ donner_perf_sensitive_cc_library(
     hdrs = ["RenderSnapshot.h"],
     defines = select({
         ":text_enabled": ["DONNER_TEXT_ENABLED"],
+        "//conditions:default": [],
+    }) + select({
+        ":wasm_geode_enabled": ["DONNER_WASM_WORKER_SURFACE"],
         "//conditions:default": [],
     }),
     visibility = ["//visibility:public"],

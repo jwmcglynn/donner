@@ -524,6 +524,87 @@ TEST(EditorWindowTest, ComputeUiScaleConfigClampsToOne) {
   EXPECT_FLOAT_EQ(config.fontGlobalScale(), 1.0f);
 }
 
+TEST(EditorWindowTest, WasmSurfaceFailuresUseStatusAwareBoundedRetries) {
+  using Failure = internal::WgpuSurfaceFailureKind;
+
+  EXPECT_EQ(internal::WgpuSurfaceRetryDecisionFor(Failure::Timeout, 0u),
+            (internal::WgpuSurfaceRetryDecision{.requestFrame = true, .reconfigure = false}));
+  EXPECT_EQ(internal::WgpuSurfaceRetryDecisionFor(Failure::OutdatedOrLost, 1u),
+            (internal::WgpuSurfaceRetryDecision{.requestFrame = true, .reconfigure = true}));
+  EXPECT_EQ(internal::WgpuSurfaceRetryDecisionFor(Failure::Setup, 2u),
+            (internal::WgpuSurfaceRetryDecision{.requestFrame = true, .reconfigure = false}));
+  EXPECT_EQ(internal::WgpuSurfaceRetryDecisionFor(Failure::Timeout, 3u),
+            (internal::WgpuSurfaceRetryDecision{}));
+  EXPECT_EQ(internal::WgpuSurfaceRetryDecisionFor(Failure::Fatal, 0u),
+            (internal::WgpuSurfaceRetryDecision{}));
+}
+
+TEST(EditorWindowTest, WasmDiagnosticReadbackFailuresUseBoundedRetries) {
+  EXPECT_EQ(internal::WgpuDiagnosticReadbackDecisionFor(true, 2u),
+            (internal::WgpuDiagnosticReadbackDecision{
+                .retry = false,
+                .completeRequest = true,
+            }));
+  EXPECT_EQ(internal::WgpuDiagnosticReadbackDecisionFor(false, 0u),
+            (internal::WgpuDiagnosticReadbackDecision{
+                .retry = true,
+                .completeRequest = false,
+            }));
+  EXPECT_EQ(internal::WgpuDiagnosticReadbackDecisionFor(false, 1u),
+            (internal::WgpuDiagnosticReadbackDecision{
+                .retry = true,
+                .completeRequest = false,
+            }));
+  EXPECT_EQ(internal::WgpuDiagnosticReadbackDecisionFor(false, 2u),
+            (internal::WgpuDiagnosticReadbackDecision{
+                .retry = false,
+                .completeRequest = true,
+            }));
+}
+
+TEST(EditorWindowTest, WasmDiagnosticReadbackSetupFailuresCompleteOnThirdAttempt) {
+  unsigned consecutiveFailures = 0u;
+  unsigned attempts = 0u;
+  bool requestCompleted = false;
+
+  while (!requestCompleted && attempts < 10u) {
+    const internal::WgpuDiagnosticReadbackDecision decision =
+        internal::WgpuDiagnosticReadbackDecisionFor(/*captureSucceeded=*/false,
+                                                    consecutiveFailures);
+    ++attempts;
+    EXPECT_TRUE(internal::ShouldRecheckPendingWgpuReadbackRequestsAfterCompletion(
+        /*callbackAlive=*/true, decision));
+    if (decision.completeRequest) {
+      consecutiveFailures = 0u;
+      requestCompleted = true;
+    } else {
+      ++consecutiveFailures;
+    }
+  }
+
+  EXPECT_TRUE(requestCompleted);
+  EXPECT_EQ(attempts, 3u);
+  EXPECT_EQ(consecutiveFailures, 0u);
+}
+
+TEST(EditorWindowTest, WasmDiagnosticReadbackCompletionAlwaysRechecksPendingRequests) {
+  const internal::WgpuDiagnosticReadbackDecision successfulCapture =
+      internal::WgpuDiagnosticReadbackDecisionFor(true, 0u);
+  const internal::WgpuDiagnosticReadbackDecision transientFailure =
+      internal::WgpuDiagnosticReadbackDecisionFor(false, 0u);
+  const internal::WgpuDiagnosticReadbackDecision terminalFailure =
+      internal::WgpuDiagnosticReadbackDecisionFor(false, 2u);
+
+  EXPECT_TRUE(internal::ShouldRecheckPendingWgpuReadbackRequestsAfterCompletion(
+      /*callbackAlive=*/true, successfulCapture));
+  EXPECT_TRUE(internal::ShouldRecheckPendingWgpuReadbackRequestsAfterCompletion(
+      /*callbackAlive=*/true, transientFailure));
+  EXPECT_TRUE(internal::ShouldRecheckPendingWgpuReadbackRequestsAfterCompletion(
+      /*callbackAlive=*/true, terminalFailure));
+  EXPECT_FALSE(internal::ShouldRecheckPendingWgpuReadbackRequestsAfterCompletion(
+      /*callbackAlive=*/false, transientFailure));
+}
+
 #if defined(DONNER_EDITOR_WGPU)
 #if defined(__linux__)
 TEST(EditorWindowTest, WgpuOffscreenTargetSupportsHeadlessReadback) {
@@ -560,6 +641,33 @@ TEST(EditorWindowTest, NumericDragFieldsSupportSimpleClickToEdit) {
   }
 
   EXPECT_TRUE(ImGui::GetIO().ConfigDragClickToInputText);
+}
+
+TEST(EditorWindowTest, WgpuFramebufferGeodeDeviceSharingMatchesThreadingModel) {
+  EXPECT_TRUE(internal::ShouldShareWgpuFramebufferGeodeDevice(/*emscriptenBuild=*/true));
+  EXPECT_FALSE(internal::ShouldShareWgpuFramebufferGeodeDevice(/*emscriptenBuild=*/false));
+
+  EditorWindow window(EditorWindowOptions{
+      .title = "Shared WGPU Geode Device Test",
+      .initialWidth = 64,
+      .initialHeight = 64,
+      .visible = false,
+  });
+  if (!window.valid() || window.geodeDevice() == nullptr ||
+      window.geodeFramebufferDevice() == nullptr) {
+    GTEST_SKIP() << "WebGPU editor window is unavailable on this host";
+  }
+
+#ifdef __EMSCRIPTEN__
+  EXPECT_EQ(window.geodeFramebufferDevice().get(), window.geodeDevice().get())
+      << "The Wasm worker owns its own device, so the main-thread framebuffer path can share the "
+         "primary wrapper and avoid recompiling every shared pipeline at startup.";
+#else
+  EXPECT_NE(window.geodeFramebufferDevice().get(), window.geodeDevice().get())
+      << "Desktop background rendering shares the primary wrapper across threads. The UI-only "
+         "framebuffer path needs a separate wrapper to isolate mutable counters and deferred "
+         "destroy queues.";
+#endif
 }
 
 TEST(EditorWindowTest, WgpuDirectRenderCallbackDrawsBelowImGuiChrome) {

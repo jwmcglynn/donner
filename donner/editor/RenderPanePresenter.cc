@@ -11,6 +11,10 @@
 #include <span>
 #include <vector>
 
+#if defined(__EMSCRIPTEN__) && !defined(DONNER_EDITOR_WGPU)
+#include <emscripten/emscripten.h>
+#endif
+
 #include "donner/editor/ImGuiIncludes.h"
 #if defined(__clang__)
 #if __has_warning("-Wnontrivial-memcall")
@@ -28,6 +32,23 @@
 #include "donner/editor/PresentedFrameComposer.h"
 
 namespace donner::editor {
+
+#if defined(__EMSCRIPTEN__) && !defined(DONNER_EDITOR_WGPU)
+EM_JS(void, PublishTinyPresentationVersion, (double version), {
+  const canvas = document.getElementById('canvas');
+  if (canvas) {
+    canvas.setAttribute('data-tiny-presentation-version', String(version));
+  }
+  const accepted = window['__donnerAcceptedPresentation'];
+  if (!accepted || accepted['kind'] != 'tiny_skia' || accepted['token'] != version) {
+    window['__donnerAcceptedPresentation'] = {
+      'kind' : 'tiny_skia',
+      'token' : version,
+      'presentedAtMs' : performance.now(),
+    };
+  }
+});
+#endif
 
 namespace {
 
@@ -636,11 +657,8 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
                             return ShouldPresentCompositedTile(tile, state.suppressedLayerEntity,
                                                                state.suppressDragTargetTiles);
                           });
-  // Selection chrome (path outlines, hover, AABBs, oriented bounds, handles,
-  // marquee) is rendered exclusively by Donner's OverlayRenderer straight onto
-  // the Geode framebuffer (see EditorShell::DrawImmediateOverlaySnapshotToFramebuffer).
-  // The presenter only blits composited document tiles plus UI furniture, so
-  // presentable content here is purely tile-driven.
+  // Document content remains tile-driven. Selection chrome is a transparent Donner-rendered
+  // texture composed later in this same draw list so menus and popups retain topmost ordering.
   const bool hasPresentedContent = hasVisibleTiles || hasVisibleOverviewTiles;
 
   const Box2d paneRect = Box2d::FromXYWH(state.viewport.paneOrigin.x, state.viewport.paneOrigin.y,
@@ -672,13 +690,15 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
       Transform2d::Scale(pxPerDoc) * Transform2d::Translate(imageOriginScreen);
   const std::optional<PresentedDragBaseline> dragBaseline =
       PresentedBaselineFromSelectPreviews(state.activeDragPreview, state.displayedDragPreview);
-  const auto computeTileQuad = [&](const GlTextureCache::TileView& tile) {
-    if (!ShouldPresentCompositedTile(tile, state.suppressedLayerEntity,
-                                     state.suppressDragTargetTiles)) {
-      return std::optional<PresentedTileQuad>();
-    }
-    if (state.suppressDragTargetTiles &&
-        TileMatchesActiveDragPreview(tile, state.activeDragPreview)) {
+  const auto tileMetadataIsSuppressed = [&](const GlTextureCache::TileView& tile) {
+    return (state.suppressDragTargetTiles && tile.isDragTarget) ||
+           (state.suppressedLayerEntity != entt::null &&
+            tile.layerEntity == state.suppressedLayerEntity) ||
+           (state.suppressDragTargetTiles &&
+            TileMatchesActiveDragPreview(tile, state.activeDragPreview));
+  };
+  const auto computeTileQuadFromMetadata = [&](const GlTextureCache::TileView& tile) {
+    if (tileMetadataIsSuppressed(tile)) {
       return std::optional<PresentedTileQuad>();
     }
     const std::optional<PresentedTileQuad> tileQuad = ComputePresentedTileQuad(
@@ -693,17 +713,24 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
     }
     return tileQuad;
   };
+  const auto computeTileQuad = [&](const GlTextureCache::TileView& tile) {
+    if (!ShouldPresentCompositedTile(tile, state.suppressedLayerEntity,
+                                     state.suppressDragTargetTiles)) {
+      return std::optional<PresentedTileQuad>();
+    }
+    return computeTileQuadFromMetadata(tile);
+  };
   const auto drawTile = [&](const GlTextureCache::TileView& tile) {
     const std::optional<PresentedTileQuad> tileQuad = computeTileQuad(tile);
     if (!tileQuad.has_value()) {
       return;
     }
-    const ImVec2 uvTopLeft(0.0f, 0.0f);
-    const ImVec2 uvBottomRight(static_cast<float>(tile.uvBottomRight.x),
-                               static_cast<float>(tile.uvBottomRight.y));
-    const Box2d tileBounds = PresentedTileQuadBounds(*tileQuad);
-    paneDrawList->AddImage(tile.texture, ToImVec2(tileBounds.topLeft),
-                           ToImVec2(tileBounds.bottomRight), uvTopLeft, uvBottomRight);
+    const float uvRight = static_cast<float>(tile.uvBottomRight.x);
+    const float uvBottom = static_cast<float>(tile.uvBottomRight.y);
+    paneDrawList->AddImageQuad(
+        tile.texture, ToImVec2(tileQuad->topLeft), ToImVec2(tileQuad->topRight),
+        ToImVec2(tileQuad->bottomRight), ToImVec2(tileQuad->bottomLeft), ImVec2(0.0f, 0.0f),
+        ImVec2(uvRight, 0.0f), ImVec2(uvRight, uvBottom), ImVec2(0.0f, uvBottom));
   };
   if (imageClipRect.has_value() && !state.documentPresentedDirectly) {
     paneDrawList->PushClipRect(ToImVec2(imageClipRect->topLeft),
@@ -744,18 +771,32 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
     }
     paneDrawList->PopClipRect();
   }
+  const GlTextureCache::OverlayTextureView overlayTexture = state.textures.overlayTexture();
+  if (overlayTexture.texture != 0) {
+    paneDrawList->AddImage(overlayTexture.texture, ToImVec2(overlayTexture.screenRect.topLeft),
+                           ToImVec2(overlayTexture.screenRect.bottomRight));
+  }
   if (state.compositorTileOverlay && imageClipRect.has_value()) {
     paneDrawList->PushClipRect(ToImVec2(imageClipRect->topLeft),
                                ToImVec2(imageClipRect->bottomRight),
                                /*intersect_with_current_clip_rect=*/true);
     for (const auto& tile : state.textures.tiles()) {
-      if (const std::optional<PresentedTileQuad> tileQuad = computeTileQuad(tile)) {
+      if (const std::optional<PresentedTileQuad> tileQuad = computeTileQuadFromMetadata(tile)) {
         DrawCompositorTileOverlay(paneDrawList, tile, *tileQuad);
       }
     }
     paneDrawList->PopClipRect();
   }
   paneDrawList->PopClipRect();
+
+#if defined(__EMSCRIPTEN__) && !defined(DONNER_EDITOR_WGPU)
+  // Publish only after this accepted document version has contributed image commands to the frame.
+  // JavaScript cannot observe the value until the synchronous Wasm frame returns, after ImGui's GL
+  // submission, so browser tests cannot mistake a prior colored canvas for the new sample.
+  if (state.presentationVersion != 0u) {
+    PublishTinyPresentationVersion(static_cast<double>(state.presentationVersion));
+  }
+#endif
 
   if (state.perfOverlayMode == PerfOverlayMode::FpsPill) {
     RenderFpsPill(state.frameHistory, state.contentRegion);

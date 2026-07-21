@@ -14,7 +14,7 @@ namespace donner::svg {
 namespace {
 
 using ::testing::Contains;
-using ::testing::IsSupersetOf;
+using ::testing::ElementsAre;
 
 /// A provider that reports a fixed family list and returns a single sentinel byte per family so
 /// tests can tell which provider served a given family.
@@ -66,10 +66,9 @@ TEST(EmbeddedFontProviderTest, EnumeratesCuratedSet) {
   EmbeddedFontProvider provider;
   const std::vector<std::string> names = familyNames(provider.families());
 
-  // A representative sample from each style bucket must be present.
-  EXPECT_THAT(names, IsSupersetOf({"Inter", "Bitter", "JetBrains Mono", "Oswald", "Pacifico"}));
-  EXPECT_GE(names.size(), 8u);
-  EXPECT_LE(names.size(), 12u);
+  EXPECT_THAT(names, ElementsAre("Bebas Neue", "Bitter", "Inter", "JetBrains Mono", "Lato", "Lora",
+                                 "Montserrat", "Open Sans", "Oswald", "Pacifico",
+                                 "Playfair Display", "Roboto Mono"));
 }
 
 TEST(EmbeddedFontProviderTest, AllFamiliesReportEmbeddedSource) {
@@ -91,15 +90,17 @@ TEST(EmbeddedFontProviderTest, SetSpansMultipleCategories) {
   EXPECT_THAT(categories, Contains(FontCategory::Display));
 }
 
-TEST(EmbeddedFontProviderTest, LoadsValidSfntBytes) {
+TEST(EmbeddedFontProviderTest, EveryAdvertisedFamilyLoadsValidSfntBytes) {
   EmbeddedFontProvider provider;
-  const std::vector<uint8_t> data = provider.loadFamilyData("Inter");
-  ASSERT_GE(data.size(), 4u);
-  // TrueType sfnt magic 0x00010000.
-  EXPECT_EQ(data[0], 0x00);
-  EXPECT_EQ(data[1], 0x01);
-  EXPECT_EQ(data[2], 0x00);
-  EXPECT_EQ(data[3], 0x00);
+  for (const FontFamilyInfo& info : provider.families()) {
+    const std::vector<uint8_t> data = provider.loadFamilyData(info.family);
+    ASSERT_GE(data.size(), 4u) << info.family;
+    // Every curated source is a TrueType sfnt with magic 0x00010000.
+    EXPECT_EQ(data[0], 0x00) << info.family;
+    EXPECT_EQ(data[1], 0x01) << info.family;
+    EXPECT_EQ(data[2], 0x00) << info.family;
+    EXPECT_EQ(data[3], 0x00) << info.family;
+  }
 }
 
 TEST(EmbeddedFontProviderTest, LookupIsCaseInsensitive) {

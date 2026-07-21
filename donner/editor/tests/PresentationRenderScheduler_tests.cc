@@ -108,6 +108,88 @@ TEST(PresentationRenderSchedulerTest, RepeatedUpToDateSelectionDoesNotRequestRen
   EXPECT_FALSE(second.dragPreview.has_value());
 }
 
+TEST(PresentationRenderSchedulerTest, PresentationSettingChangeForcesCurrentDocumentRender) {
+  PresentationRenderScheduler scheduler;
+  CompositedPresentation presentation;
+
+  const PresentationRenderScheduleDecision first =
+      scheduler.evaluate(presentation, Input(entt::null, /*version=*/1));
+  scheduler.noteRenderCompleted(first.currentVersion, first.currentCanvasSize,
+                                first.currentRasterViewport);
+
+  PresentationRenderScheduleInput changedPresentation = Input(entt::null, /*version=*/1);
+  changedPresentation.forcePresentationRefresh = true;
+  const PresentationRenderScheduleDecision refresh =
+      scheduler.evaluate(presentation, changedPresentation);
+
+  EXPECT_TRUE(refresh.shouldRequestRender());
+  EXPECT_TRUE(refresh.needsRegularRender);
+}
+
+TEST(PresentationRenderSchedulerTest, DirectSurfaceSelectionOnlyCacheMissDoesNotRequestRender) {
+  PresentationRenderScheduler scheduler;
+  CompositedPresentation presentation;
+
+  const PresentationRenderScheduleDecision documentRender =
+      scheduler.evaluate(presentation, Input(entt::null, /*version=*/1));
+  ASSERT_TRUE(documentRender.needsRegularRender);
+  scheduler.noteRenderCompleted(documentRender.currentVersion, documentRender.currentCanvasSize,
+                                documentRender.currentRasterViewport);
+
+  PresentationRenderScheduleInput selection = Input(Entity(7), /*version=*/1);
+  selection.requiresRenderedActiveDragPresentation = true;
+  selection.deferIdentityActiveDragCapture = true;
+  selection.selectionOnlyPrewarmMayTriggerRender = false;
+  const PresentationRenderScheduleDecision decision = scheduler.evaluate(presentation, selection);
+
+  EXPECT_FALSE(decision.shouldRequestRender())
+      << "A direct worker surface cannot consume a selected-layer prewarm on the UI thread. "
+         "Selection chrome should update without posting an identical document frame.";
+  EXPECT_FALSE(decision.needsCompositedPrewarm);
+  EXPECT_FALSE(decision.dragPreview.has_value());
+}
+
+TEST(PresentationRenderSchedulerTest, CachedTexturePresenterStillPrewarmsSelectionOnlyCacheMiss) {
+  PresentationRenderScheduler scheduler;
+  CompositedPresentation presentation;
+
+  const PresentationRenderScheduleDecision documentRender =
+      scheduler.evaluate(presentation, Input(entt::null, /*version=*/1));
+  scheduler.noteRenderCompleted(documentRender.currentVersion, documentRender.currentCanvasSize,
+                                documentRender.currentRasterViewport);
+
+  const PresentationRenderScheduleDecision decision =
+      scheduler.evaluate(presentation, Input(Entity(7), /*version=*/1));
+
+  EXPECT_TRUE(decision.shouldRequestRender());
+  EXPECT_TRUE(decision.needsCompositedPrewarm);
+  EXPECT_FALSE(decision.needsRegularRender);
+  ASSERT_TRUE(decision.dragPreview.has_value());
+  EXPECT_EQ(decision.dragPreview->interactionKind, svg::compositor::InteractionHint::Selection);
+}
+
+TEST(PresentationRenderSchedulerTest, DirectSurfaceSelectionPiggybacksOnDocumentInvalidation) {
+  PresentationRenderScheduler scheduler;
+  CompositedPresentation presentation;
+
+  const PresentationRenderScheduleDecision documentRender =
+      scheduler.evaluate(presentation, Input(entt::null, /*version=*/1));
+  scheduler.noteRenderCompleted(documentRender.currentVersion, documentRender.currentCanvasSize,
+                                documentRender.currentRasterViewport);
+
+  PresentationRenderScheduleInput changedDocument = Input(Entity(7), /*version=*/2);
+  changedDocument.selectionOnlyPrewarmMayTriggerRender = false;
+  const PresentationRenderScheduleDecision decision =
+      scheduler.evaluate(presentation, changedDocument);
+
+  EXPECT_TRUE(decision.shouldRequestRender());
+  EXPECT_TRUE(decision.needsRegularRender);
+  EXPECT_TRUE(decision.needsCompositedPrewarm);
+  ASSERT_TRUE(decision.dragPreview.has_value());
+  EXPECT_EQ(decision.dragPreview->entity, Entity(7));
+  EXPECT_EQ(decision.dragPreview->interactionKind, svg::compositor::InteractionHint::Selection);
+}
+
 TEST(PresentationRenderSchedulerTest, ActiveDragWithStaleCacheRequestsDragCapture) {
   PresentationRenderScheduler scheduler;
   CompositedPresentation presentation;
@@ -160,6 +242,148 @@ TEST(PresentationRenderSchedulerTest, ActiveDragWithMatchingCacheDoesNotUploadAg
          "version changes every mouse move and must not trigger a new bitmap upload.";
   EXPECT_FALSE(decision.needsCompositedLayerCapture);
   EXPECT_FALSE(decision.needsRegularRender);
+}
+
+TEST(PresentationRenderSchedulerTest, DirectSurfaceRequestsChangedCachedDragTransform) {
+  PresentationRenderScheduler scheduler;
+  CompositedPresentation presentation;
+
+  const PresentationRenderScheduleDecision warm =
+      scheduler.evaluate(presentation, Input(Entity(7), /*version=*/1));
+  scheduler.noteRenderCompleted(warm.currentVersion, warm.currentCanvasSize,
+                                warm.currentRasterViewport);
+  presentation.noteCachedTextures(Entity(7), /*version=*/1, kCanvasSize);
+
+  const SelectTool::ActiveDragPreview activeDrag{
+      .entity = Entity(7),
+      .translation = Vector2d(9.0, 0.0),
+      .dragGeneration = 14,
+  };
+  PresentationRenderScheduleInput input = Input(Entity(7), /*version=*/8, activeDrag);
+  input.requiresRenderedActiveDragPresentation = true;
+  input.selectionOnlyPrewarmMayTriggerRender = false;
+  const PresentationRenderScheduleDecision changed = scheduler.evaluate(presentation, input);
+
+  EXPECT_TRUE(changed.shouldRequestRender());
+  EXPECT_FALSE(changed.needsCompositedLayerCapture)
+      << "The cached layer remains valid; only its direct-surface composition changed.";
+  EXPECT_TRUE(changed.needsRenderedActiveDragPresentation);
+  ASSERT_TRUE(changed.dragPreview.has_value());
+  EXPECT_FALSE(changed.dragPreview->forceLayerRasterization);
+
+  scheduler.noteRenderCompleted(changed.currentVersion, changed.currentCanvasSize,
+                                changed.currentRasterViewport);
+  presentation.noteCachedTextures(Entity(7), /*version=*/8, kCanvasSize, activeDrag);
+  const PresentationRenderScheduleDecision represented = scheduler.evaluate(presentation, input);
+  EXPECT_FALSE(represented.shouldRequestRender())
+      << "A direct surface must not redraw continuously after it represents the live transform.";
+  EXPECT_FALSE(represented.needsRenderedActiveDragPresentation);
+}
+
+TEST(PresentationRenderSchedulerTest, DirectSurfaceMatchingDragStillRendersChangedVersion) {
+  PresentationRenderScheduler scheduler;
+  CompositedPresentation presentation;
+  const SelectTool::ActiveDragPreview representedDrag{
+      .entity = Entity(7),
+      .translation = Vector2d(9.0, 0.0),
+      .documentFromCachedDocument = Transform2d::Translate(Vector2d(9.0, 0.0)),
+      .dragGeneration = 14,
+  };
+  scheduler.noteRenderCompleted(/*completedVersion=*/1, kCanvasSize, RasterViewport());
+  presentation.noteCachedTextures(Entity(7), /*version=*/1, kCanvasSize, representedDrag);
+
+  PresentationRenderScheduleInput input = Input(Entity(7), /*version=*/2, representedDrag);
+  input.requiresRenderedActiveDragPresentation = true;
+  input.selectionOnlyPrewarmMayTriggerRender = false;
+  const PresentationRenderScheduleDecision decision = scheduler.evaluate(presentation, input);
+
+  EXPECT_TRUE(decision.shouldRequestRender());
+  EXPECT_TRUE(decision.needsRegularRender);
+  EXPECT_FALSE(decision.needsCompositedLayerCapture);
+  EXPECT_FALSE(decision.needsRenderedActiveDragPresentation)
+      << "The direct surface already represents this drag transform; the document version is the "
+         "only render trigger.";
+}
+
+TEST(PresentationRenderSchedulerTest, DirectSurfaceMatchingDragStillRendersChangedCanvasSize) {
+  PresentationRenderScheduler scheduler;
+  CompositedPresentation presentation;
+  const SelectTool::ActiveDragPreview representedDrag{
+      .entity = Entity(7),
+      .translation = Vector2d(9.0, 0.0),
+      .documentFromCachedDocument = Transform2d::Translate(Vector2d(9.0, 0.0)),
+      .dragGeneration = 14,
+  };
+  scheduler.noteRenderCompleted(/*completedVersion=*/1, kCanvasSize, RasterViewport());
+  presentation.noteCachedTextures(Entity(7), /*version=*/1, kCanvasSize, representedDrag);
+
+  PresentationRenderScheduleInput input =
+      Input(Entity(7), /*version=*/1, representedDrag, RasterViewport(),
+            Vector2i(kCanvasSize.x + 20, kCanvasSize.y + 20));
+  input.requiresRenderedActiveDragPresentation = true;
+  input.selectionOnlyPrewarmMayTriggerRender = false;
+  const PresentationRenderScheduleDecision decision = scheduler.evaluate(presentation, input);
+
+  EXPECT_TRUE(decision.shouldRequestRender());
+  EXPECT_TRUE(decision.needsRegularRender);
+  EXPECT_FALSE(decision.needsCompositedLayerCapture);
+  EXPECT_FALSE(decision.needsRenderedActiveDragPresentation)
+      << "The direct surface already represents this drag transform; canvas size is the only "
+         "render trigger.";
+}
+
+TEST(PresentationRenderSchedulerTest, DirectSurfaceMatchingDragStillRendersChangedRasterViewport) {
+  PresentationRenderScheduler scheduler;
+  CompositedPresentation presentation;
+  const SelectTool::ActiveDragPreview representedDrag{
+      .entity = Entity(7),
+      .translation = Vector2d(9.0, 0.0),
+      .documentFromCachedDocument = Transform2d::Translate(Vector2d(9.0, 0.0)),
+      .dragGeneration = 14,
+  };
+  scheduler.noteRenderCompleted(/*completedVersion=*/1, kCanvasSize, RasterViewport());
+  presentation.noteCachedTextures(Entity(7), /*version=*/1, kCanvasSize, representedDrag);
+
+  PresentationRenderScheduleInput input =
+      Input(Entity(7), /*version=*/1, representedDrag, RasterViewport(Vector2d(10.0, 0.0)));
+  input.requiresRenderedActiveDragPresentation = true;
+  input.selectionOnlyPrewarmMayTriggerRender = false;
+  const PresentationRenderScheduleDecision decision = scheduler.evaluate(presentation, input);
+
+  EXPECT_TRUE(decision.shouldRequestRender());
+  EXPECT_TRUE(decision.needsRegularRender);
+  EXPECT_FALSE(decision.needsCompositedLayerCapture);
+  EXPECT_FALSE(decision.needsRenderedActiveDragPresentation)
+      << "The direct surface already represents this drag transform; raster viewport is the only "
+         "render trigger.";
+}
+
+TEST(PresentationRenderSchedulerTest, DirectSurfaceDefersIdentityCaptureUntilPointerMoves) {
+  PresentationRenderScheduler scheduler;
+  CompositedPresentation presentation;
+
+  const SelectTool::ActiveDragPreview identityDrag{
+      .entity = Entity(7),
+      .dragGeneration = 14,
+  };
+  PresentationRenderScheduleInput input = Input(Entity(7), /*version=*/1, identityDrag);
+  input.requiresRenderedActiveDragPresentation = true;
+  input.deferIdentityActiveDragCapture = true;
+  input.selectionOnlyPrewarmMayTriggerRender = false;
+  scheduler.noteRenderCompleted(/*completedVersion=*/1, kCanvasSize, RasterViewport());
+
+  const PresentationRenderScheduleDecision identity = scheduler.evaluate(presentation, input);
+  EXPECT_FALSE(identity.shouldRequestRender())
+      << "Mouse-down does not change document pixels and must not race the first move with a stale "
+         "surface handoff.";
+  EXPECT_FALSE(identity.needsCompositedLayerCapture);
+  EXPECT_FALSE(identity.needsRenderedActiveDragPresentation);
+
+  input.activeDragPreview->translation = Vector2d(9.0, 0.0);
+  input.activeDragPreview->documentFromCachedDocument = Transform2d::Translate(Vector2d(9.0, 0.0));
+  const PresentationRenderScheduleDecision moved = scheduler.evaluate(presentation, input);
+  EXPECT_TRUE(moved.shouldRequestRender());
+  EXPECT_TRUE(moved.needsCompositedLayerCapture);
 }
 
 TEST(PresentationRenderSchedulerTest, AffineActiveDragWithMatchingCacheRequestsLayerCapture) {

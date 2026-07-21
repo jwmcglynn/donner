@@ -199,6 +199,7 @@ FrameCostBreakdown::CompositedUpload CostForCompositedPreviewUpload(
 
 GlTextureCache::~GlTextureCache() {
 #ifdef DONNER_EDITOR_WGPU
+  releaseImGuiTexture(overlayTexture_.texture);
   for (const auto& [_, entry] : tileTextures_) {
     releaseImGuiTexture(entry.texture);
   }
@@ -236,6 +237,70 @@ GlTextureCache::~GlTextureCache() {
 }
 
 void GlTextureCache::initialize() {}
+
+GlTextureCache::OverlayTextureView GlTextureCache::updateOverlayTexture(
+    std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot, const Box2d& screenRect) {
+#ifdef DONNER_EDITOR_WGPU
+  if (textureSnapshot == overlayTexture_.textureSnapshot && screenRect == overlayScreenRect_) {
+    return overlayTexture();
+  }
+
+  const NativeTextureHandle textureId = ToImTextureId(textureSnapshot.get());
+  if (textureId == 0) {
+    resetOverlay();
+    return {};
+  }
+
+  if (overlayTexture_.texture != 0) {
+    RetiredSnapshotBatch retiredSnapshots;
+    retiredSnapshots.push_back(RetiredSnapshot{
+        .texture = overlayTexture_.texture,
+        .snapshot = std::move(overlayTexture_.textureSnapshot),
+        .uploadedTexture = std::move(overlayTexture_.uploadedTexture),
+    });
+    retireSnapshots(std::move(retiredSnapshots));
+  }
+
+  ImGui_ImplWGPU_AddTexturePremultipliedAlphaRef(textureId);
+  overlayTexture_.texture = textureId;
+  overlayTexture_.textureSnapshot = std::move(textureSnapshot);
+  overlayTexture_.width = overlayTexture_.textureSnapshot->dimensions().x;
+  overlayTexture_.height = overlayTexture_.textureSnapshot->dimensions().y;
+  overlayTexture_.allocatedWidth = overlayTexture_.width;
+  overlayTexture_.allocatedHeight = overlayTexture_.height;
+  overlayTexture_.uvBottomRight = Vector2d(1.0, 1.0);
+  overlayScreenRect_ = screenRect;
+  return overlayTexture();
+#else
+  (void)textureSnapshot;
+  (void)screenRect;
+  return {};
+#endif
+}
+
+GlTextureCache::OverlayTextureView GlTextureCache::overlayTexture() const {
+  return OverlayTextureView{
+      .texture = ToImTextureId(overlayTexture_.texture),
+      .dimensions = Vector2i(overlayTexture_.width, overlayTexture_.height),
+      .screenRect = overlayScreenRect_,
+  };
+}
+
+void GlTextureCache::resetOverlay() {
+#ifdef DONNER_EDITOR_WGPU
+  if (overlayTexture_.texture != 0) {
+    RetiredSnapshotBatch retiredSnapshots;
+    retiredSnapshots.push_back(RetiredSnapshot{
+        .texture = overlayTexture_.texture,
+        .snapshot = std::move(overlayTexture_.textureSnapshot),
+        .uploadedTexture = std::move(overlayTexture_.uploadedTexture),
+    });
+    retireSnapshots(std::move(retiredSnapshots));
+  }
+#endif
+  overlayTexture_ = CachedTextureEntry{};
+  overlayScreenRect_ = Box2d();
+}
 
 void GlTextureCache::uploadComposited(const RenderResult::CompositedPreview& preview,
                                       std::optional<EditorRasterViewport> rasterViewport) {
@@ -380,6 +445,11 @@ void GlTextureCache::uploadComposited(const RenderResult::CompositedPreview& pre
       if (it == tileTextures_.end() ||
           !TextureIdentityMatchesCompositedTile(it->second.identity, tile)) {
         ++metadataOnlyMissCount_;
+        CachedTextureEntry metadataOnlyEntry;
+        metadataOnlyEntry.width = tile.bitmapDimsPx.x;
+        metadataOnlyEntry.height = tile.bitmapDimsPx.y;
+        tiles_.push_back(makeTileView(tile, metadataOnlyEntry, 0,
+                                      /*metadataOnly=*/true));
         continue;
       }
       liveIds.insert(tile.id);
@@ -842,6 +912,8 @@ PresentationResourceStats GlTextureCache::presentationResourceStats() const {
     }
     return allocationBytes(Vector2i(entry.width, entry.height));
   };
+
+  stats.overlayBytes = cachedEntryBytes(overlayTexture_);
 
   stats.activeTileTextures = static_cast<int>(tileTextures_.size());
   for (const auto& [_, entry] : tileTextures_) {

@@ -228,6 +228,11 @@ struct CompositorConfig {
   /// new policy. See 0027-tight_bounded_segments.md § Reversibility.
   bool tightBoundedSegments = true;
 
+  /// Allow cheap static spans to be presented as immediate geometry and re-rasterized on every
+  /// compositor update. Backends with high per-draw submission overhead, notably browser WebGPU,
+  /// disable this so a span is rasterized once and then reused as a cached tile.
+  bool immediateStaticSpans = true;
+
   /// When true, a static segment that the deterministic cost heuristic would
   /// cache may additionally be promoted to an immediate (re-rasterized every
   /// frame) span when its *measured* rasterize time fits the per-frame
@@ -239,6 +244,12 @@ struct CompositorConfig {
   /// Deterministic tests that assert on that partition set this false so only
   /// the (host-independent) cost heuristic classifies spans. Default on.
   bool dynamicImmediateStaticSpans = true;
+
+  /// Return the first correct full-document draw before rasterizing retained layer and segment
+  /// caches. The owner must call `warmPendingFirstFrameCaches` from a later, cancellable idle task.
+  /// This keeps cache preparation off the click-to-present critical path without abandoning the
+  /// prewarm that makes the first drag responsive.
+  bool deferFirstFrameWarmup = false;
 };
 
 /**
@@ -430,6 +441,15 @@ public:
   bool renderFrame(const RenderViewport& viewport, CancellationToken& token,
                    const Transform2d& surfaceFromCanvas);
 
+  /// True when the first correct frame has been drawn but its retained caches still need warming.
+  [[nodiscard]] bool hasPendingFirstFrameWarmup() const { return firstFrameWarmupPending_; }
+
+  /// Warm retained layer and segment caches for the already-presented first frame.
+  ///
+  /// This never writes the main render target. It is intended for a later low-priority worker turn
+  /// and leaves unfinished cache work pending when cancelled by interactive rendering.
+  [[nodiscard]] bool warmPendingFirstFrameCaches(CancellationToken& token);
+
   /**
    * Returns the number of currently active layers (excluding the root layer).
    */
@@ -481,6 +501,12 @@ public:
     /// wasn't reached because no entities were dirty (e.g. page-load,
     /// selection-change-only frames).
     uint64_t noDirtyFrames = 0;
+    /// Number of times segment topology/state vectors were rebuilt. Stable
+    /// frames must preserve these vectors in place instead of reallocating them.
+    uint64_t segmentResyncRebuilds = 0;
+    /// Number of full document paint-order snapshots taken while planning dirty
+    /// static segments. Clean frames should not walk paint order at all.
+    uint64_t paintOrderSnapshots = 0;
   };
   [[nodiscard]] const FastPathCounters& fastPathCountersForTesting() const {
     return fastPathCounters_;
@@ -742,6 +768,12 @@ public:
   /// Worker render costs from the most recent `renderFrame` call, split by whether the work was
   /// caused by immediate-mode transient spans or retained cached tiles.
   struct RenderFrameStats {
+    /// First-frame full-document draw that produces the immediately presentable surface.
+    double firstFrameDrawMs = 0.0;
+    /// First-frame detector, resolver, and layer-plan construction after the initial draw.
+    double firstFramePlanningMs = 0.0;
+    /// First-frame retained layer/segment cache warmup performed after planning.
+    double firstFrameWarmupMs = 0.0;
     /// Segment raster time caused by immediate-mode static spans.
     double immediateRasterizeMs = 0.0;
     /// Segment/layer raster time that produces retained cached bitmap/texture tiles.
@@ -800,6 +832,9 @@ public:
     /// `hasSplitStaticLayers()` - the editor's drag-overlay fast
     /// path is active when this is true.
     bool splitPathActive = false;
+    /// A correct flat frame was published while retained caches still
+    /// await low-priority warmup.
+    bool firstFrameWarmupPending = false;
     /// Entity the compositor cached the bg/fg split for. `entt::null`
     /// when split-path is inactive.
     Entity splitStaticLayersEntity = entt::null;
@@ -930,6 +965,9 @@ private:
   /// Rasterize a single promoted layer into its bitmap cache.
   void rasterizeLayer(CompositorLayer& layer, const RenderViewport& viewport,
                       const Transform2d& surfaceFromCanvas);
+
+  /// Populate the retained caches discovered after the first full-document draw.
+  void warmFirstFrameCaches(const RenderViewport& viewport, const Transform2d& surfaceFromCanvas);
 
   /// Rasterize any static segments whose `staticSegmentDirty_` flag is
   /// set. Each segment lives between two consecutive promoted layers in
@@ -1210,6 +1248,9 @@ private:
   /// `renderFrame` call can't scan (RICs don't exist yet), so we defer the
   /// first scan until just after the initial `prepareDocumentForRendering`.
   bool hintsScanned_ = false;
+  /// The first correct main-renderer frame has already been produced, while its offscreen retained
+  /// caches are intentionally waiting for a lower-priority worker turn.
+  bool firstFrameWarmupPending_ = false;
   bool offscreenSupportKnown_ = false;
   bool offscreenSupported_ = false;
   /// When true, `composeLayers` skips the main-renderer draw calls while

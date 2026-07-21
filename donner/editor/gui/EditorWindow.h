@@ -21,6 +21,7 @@
 /// doesn't own the widget tree, just the hosting surface.
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -44,6 +45,81 @@ class GeodeDevice;
 }
 
 namespace donner::editor::gui {
+
+namespace internal {
+
+/// The Wasm render worker owns a separate WebGPU device, so the UI's primary
+/// and direct-framebuffer renderers remain single-threaded and may share one
+/// GeodeDevice wrapper. Desktop's AsyncRenderer shares the primary wrapper
+/// across threads; its UI-only framebuffer renderers need a separate wrapper
+/// to isolate mutable counters and deferred-destroy queues.
+[[nodiscard]] constexpr bool ShouldShareWgpuFramebufferGeodeDevice(bool emscriptenBuild) noexcept {
+  return emscriptenBuild;
+}
+
+enum class WgpuSurfaceFailureKind {
+  Timeout,
+  OutdatedOrLost,
+  Setup,
+  Fatal,
+};
+
+struct WgpuSurfaceRetryDecision {
+  bool requestFrame = false;
+  bool reconfigure = false;
+
+  bool operator==(const WgpuSurfaceRetryDecision&) const = default;
+};
+
+/// Bound retries so a permanently lost/device-fatal surface cannot turn the
+/// event-driven Wasm loop back into a hot spin.
+[[nodiscard]] constexpr WgpuSurfaceRetryDecision WgpuSurfaceRetryDecisionFor(
+    WgpuSurfaceFailureKind failure, unsigned consecutiveFailures) noexcept {
+  constexpr unsigned kMaxConsecutiveRetries = 3u;
+  if (failure == WgpuSurfaceFailureKind::Fatal || consecutiveFailures >= kMaxConsecutiveRetries) {
+    return {};
+  }
+  return WgpuSurfaceRetryDecision{
+      .requestFrame = true,
+      .reconfigure = failure == WgpuSurfaceFailureKind::OutdatedOrLost,
+  };
+}
+
+struct WgpuDiagnosticReadbackDecision {
+  bool retry = false;
+  bool completeRequest = false;
+
+  bool operator==(const WgpuDiagnosticReadbackDecision&) const = default;
+};
+
+/// Diagnostic readback is deliberately best-effort. A transient capture failure, including setup
+/// before mapAsync, gets two retries, while a successful capture or third consecutive failure
+/// completes the request so the event-driven browser loop cannot become a permanent readback spin.
+[[nodiscard]] constexpr WgpuDiagnosticReadbackDecision WgpuDiagnosticReadbackDecisionFor(
+    bool captureSucceeded, unsigned consecutiveFailuresBeforeAttempt) noexcept {
+  constexpr unsigned kMaxFailedAttempts = 3u;
+  if (captureSucceeded || consecutiveFailuresBeforeAttempt >= kMaxFailedAttempts - 1u) {
+    return WgpuDiagnosticReadbackDecision{
+        .retry = false,
+        .completeRequest = true,
+    };
+  }
+  return WgpuDiagnosticReadbackDecision{
+      .retry = true,
+      .completeRequest = false,
+  };
+}
+
+/// Once the map callback releases the in-flight gate, every live completion must recheck the
+/// JavaScript request counters. A transient failure needs another attempt, while a successful or
+/// terminal attempt may have a newer request waiting behind it. The JavaScript wake helper filters
+/// completed requests, so this recheck does not create idle frames.
+[[nodiscard]] constexpr bool ShouldRecheckPendingWgpuReadbackRequestsAfterCompletion(
+    bool callbackAlive, WgpuDiagnosticReadbackDecision decision) noexcept {
+  return callbackAlive && (decision.retry || decision.completeRequest);
+}
+
+}  // namespace internal
 
 /// HiDPI settings derived from the native window/display scale.
 struct UiScaleConfig {
@@ -217,8 +293,16 @@ public:
   /// async renderer worker to wake the UI thread when a render result
   /// becomes available.
   ///
-  /// No-op on Emscripten.
+  /// On Emscripten, sets the atomic gate consumed by the next browser animation frame.
   void wakeEventLoop();
+
+#ifdef __EMSCRIPTEN__
+  /// Consume one Wasm main-frame request posted by editor or worker code.
+  /// Browser input requests are tracked separately by the JavaScript bridge in `main.cc`.
+  [[nodiscard]] bool consumeWasmFrameRequest() {
+    return wasmFrameRequested_.exchange(false, std::memory_order_acq_rel);
+  }
+#endif
 
   /// Starts a new ImGui frame. Caller issues `ImGui::*` widget calls
   /// after this returns.
@@ -291,7 +375,7 @@ public:
   [[nodiscard]] std::shared_ptr<geode::GeodeDevice> geodeDevice() const;
 
 #ifdef DONNER_EDITOR_WGPU
-  /// Single-sample Geode device for direct append passes into the editor framebuffer.
+  /// Shared Geode device for direct append passes into the editor framebuffer.
   [[nodiscard]] std::shared_ptr<geode::GeodeDevice> geodeFramebufferDevice() const;
 
   /// Set the direct framebuffer underlay callback for the next and subsequent frames.
@@ -329,6 +413,10 @@ private:
   bool valid_ = false;
   bool glUnavailable_ = false;
   bool imguiInitialized_ = false;
+#ifdef __EMSCRIPTEN__
+  /// Cross-thread wake gate for the event-driven Wasm main loop.
+  std::atomic_bool wasmFrameRequested_{true};
+#endif
 };
 
 }  // namespace donner::editor::gui

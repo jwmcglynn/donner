@@ -26,6 +26,22 @@ namespace donner::geode {
 struct EncodedPath;
 struct GeodeResidentSlot;
 
+/**
+ * Optional debug observer for Slug draws that actually reach a GPU draw call.
+ *
+ * The observer is null in normal rendering. Implementations must copy any
+ * needed `EncodedPath` data before returning because an inline encode may be
+ * destroyed immediately after the submission call.
+ */
+class GeometryDebugSink {
+public:
+  virtual ~GeometryDebugSink() = default;
+
+  virtual void recordSlugDraw(const EncodedPath& encoded, const Transform2d& targetFromPath,
+                              const Transform2d& rootFromTarget,
+                              std::span<const float> instanceTransforms) = 0;
+};
+
 class GeodeBufferPool;
 class GeodeDevice;
 class GeodeImagePipeline;
@@ -172,6 +188,16 @@ public:
    * to disable (default).
    */
   void setBufferPool(GeodeBufferPool* pool);
+
+  /**
+   * Observe Slug draws recorded by this encoder.
+   *
+   * `rootFromTarget` maps this encoder's target pixels to the owning
+   * renderer's final target. Pass null to disable observation. The default
+   * path stores one pointer and one branch per actual Slug submission.
+   */
+  void setGeometryDebugSink(GeometryDebugSink* sink,
+                            const Transform2d& rootFromTarget = Transform2d());
 
   GeoEncoder(const GeoEncoder&) = delete;
   GeoEncoder& operator=(const GeoEncoder&) = delete;
@@ -575,7 +601,7 @@ private:
 
   /// Shared path for solid and pattern fills: encode path, upload buffers,
   /// build bind group, record draw call.
-  void submitFillDraw(const FillDrawArgs& args);
+  void submitFillDraw(const FillDrawArgs& args, std::span<const float> instanceTransforms = {});
 
   /// Shared construction helpers used by both constructors. Factored out
   /// to avoid duplicating ~20 lines of setup. See GeoEncoder.cc.

@@ -625,7 +625,9 @@ donner_multi_transitioned_test(
 )
 
 # Geode geometry debug overlay (RendererGeode::setDebugGeometryOverlay):
-# default-off contract, overlay-on rendering, and clean toggling.
+# byte-identical default-off/null-sink behavior, exact dynamically-dilated
+# post-vertex quad triangles (including text and instances), one frame-final
+# root wireframe pass, preserved batching, and clean toggling.
 donner_cc_test(
     name = "geode_debug_overlay_tests_impl",
     srcs = ["tests/GeodeDebugOverlay_tests.cc"],
@@ -646,4 +648,5 @@ donner_multi_transitioned_test(
     testonly = 1,
     dep = ":geode_debug_overlay_tests_impl",
     renderer_backend = "geode",
+    text = "true",
 )

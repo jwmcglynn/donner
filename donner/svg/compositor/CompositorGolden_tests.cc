@@ -167,6 +167,10 @@ TEST_F(CompositorGoldenTest, TranslationOnlyDragProducesCorrectPixels) {
 
   CompositorController compositor(document, renderer_);
   ASSERT_TRUE(compositor.promoteEntity(entity));
+  // Warm the promoted layer at its original position first. The browser direct-surface path
+  // reuses this cached texture during an active drag; transforming before the first render would
+  // only prove that a freshly rasterized layer lands in the right place.
+  compositor.renderFrame(viewport_);
   target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(100.0, 0.0)));
   compositor.renderFrame(viewport_);
 
@@ -2322,6 +2326,62 @@ TEST_F(CompositorGoldenTest, TightBoundedSegmentsPixelIdentityOnRealSplashWithDr
          "(b) bounds applied in canvas space but offset preserved in doc units, "
          "(c) filter-group bounds not expanded by filter region (blur spills "
          "beyond the source geometry extent).";
+}
+
+// Browser direct-surface regression: the accepted surface kept the selected Donner letter at its
+// pre-drag position while selection chrome advanced with every worker epoch. Exercise the exact
+// retained-texture sequence: render the real Splash, prewarm one letter as an ActiveDrag layer at
+// identity, then move it and compare the flattened compositor target with a full DOM render.
+TEST_F(CompositorGoldenTest, RealSplashRetainedLetterMovesInFlattenedDragFrame) {
+  std::ifstream splashStream("donner_splash.svg");
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  SVGDocument document = parseDocument(splashBuf.str());
+
+  auto letter = document.querySelector("#Donner path");
+  ASSERT_TRUE(letter.has_value());
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(892, 512);
+  viewport.devicePixelRatio = 1.0;
+  document.setCanvasSize(892, 512);
+
+  CompositorConfig config;
+  config.immediateStaticSpans = false;
+  config.dynamicImmediateStaticSpans = false;
+  config.deferFirstFrameWarmup = true;
+  CompositorController compositor(document, renderer_, config);
+  // Match the editor lifecycle: the document surface is published before anything is selected.
+  compositor.renderFrame(viewport);
+  ASSERT_TRUE(compositor.promoteEntity(letter->unsafeEntityHandle().entity(),
+                                       InteractionHint::ActiveDrag));
+  compositor.renderFrame(viewport);
+
+  const auto yellowMinX = [](const RendererBitmap& bitmap) {
+    int minX = bitmap.dimensions.x;
+    for (int y = 300; y < std::min(460, bitmap.dimensions.y); ++y) {
+      for (int x = 180; x < std::min(360, bitmap.dimensions.x); ++x) {
+        const Pixel pixel = getPixel(bitmap, x, y);
+        if (pixel.a >= 180 && pixel.r > 180 && pixel.g > 135 && pixel.b < 150 &&
+            pixel.r > pixel.b + 70 && pixel.g > pixel.b + 45) {
+          minX = std::min(minX, x);
+        }
+      }
+    }
+    return minX;
+  };
+  const int warmYellowMinX = yellowMinX(renderer_.takeSnapshot());
+  ASSERT_LT(warmYellowMinX, viewport.size.x);
+
+  letter->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(-40.0, -20.0)));
+  compositor.renderFrame(viewport);
+  const int draggedYellowMinX = yellowMinX(renderer_.takeSnapshot());
+
+  EXPECT_NEAR(draggedYellowMinX, warmYellowMinX - 40, 1)
+      << "retained Splash letter was not flattened at its current drag transform";
 }
 
 // Drives the ACTUAL `donner_splash.svg` through the tight-bound

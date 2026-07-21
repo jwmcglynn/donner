@@ -92,6 +92,23 @@ public:
     }
   }
 
+  /// Try to acquire exclusive write access without waiting.
+  [[nodiscard]] bool tryLockWrite() DONNER_NO_THREAD_SAFETY_ANALYSIS {
+    if (!writerMutex_.try_lock()) {
+      return false;
+    }
+
+    writerPendingOrActive_.store(true, std::memory_order_release);
+    if (activeReaders_.load(std::memory_order_acquire) != 0) {
+      writerPendingOrActive_.store(false, std::memory_order_release);
+      notifyWaiters();
+      writerMutex_.unlock();
+      return false;
+    }
+
+    return true;
+  }
+
   /**
    * Try to atomically convert the calling thread's sole read lock to a write lock.
    *
@@ -294,6 +311,9 @@ public:
 
   /// Acquire write access to the document.
   DocumentWriteAccess write();
+
+  /// Try to acquire write access without waiting.
+  std::optional<DocumentWriteAccess> tryWrite();
 
   /// Current document mutation revision.
   std::uint64_t revision() const { return revision_.load(std::memory_order_relaxed); }
@@ -726,10 +746,13 @@ public:
 
 private:
   friend class DocumentReadAccess;
+  friend class DocumentState;
 
   struct AdoptUpgradedLockTag {};
+  struct AdoptWriteLockTag {};
 
   DocumentWriteAccess(DocumentState& documentState, AdoptUpgradedLockTag);
+  DocumentWriteAccess(DocumentState& documentState, AdoptWriteLockTag);
 
   DocumentState* documentState_;
   std::chrono::steady_clock::time_point lockAcquiredAt_;
@@ -969,6 +992,15 @@ inline DocumentWriteAccess::DocumentWriteAccess(DocumentState& documentState, Ad
   documentState.recordWriteAccess(true);
 }
 
+inline DocumentWriteAccess::DocumentWriteAccess(DocumentState& documentState, AdoptWriteLockTag)
+    : documentState_(&documentState),
+      lockAcquiredAt_(std::chrono::steady_clock::now()),
+      ownsWriteMarker_(true),
+      ownsWriteLock_(true) {
+  documentState.pushWriteAccessMarker();
+  documentState.recordWriteAccess(true);
+}
+
 inline DocumentWriteAccess::DocumentWriteAccess(DocumentWriteAccess&& other) noexcept
     : documentState_(other.documentState_),
       lockAcquiredAt_(other.lockAcquiredAt_),
@@ -1071,6 +1103,27 @@ inline DocumentReadAccess DocumentState::read() {
 
 inline DocumentWriteAccess DocumentState::write() {
   return DocumentWriteAccess(*this);
+}
+
+inline std::optional<DocumentWriteAccess> DocumentState::tryWrite() {
+  if (threadingMode_ != ThreadingMode::ConcurrentDom || currentThreadHasWriteAccess()) {
+    DocumentWriteAccess access(*this);
+    return std::optional<DocumentWriteAccess>(std::move(access));
+  }
+
+  if (currentThreadHasReadAccess()) {
+    if (!accessMutex_.tryUpgradeReadToWrite()) {
+      return std::nullopt;
+    }
+    DocumentWriteAccess access(*this, DocumentWriteAccess::AdoptUpgradedLockTag{});
+    return std::optional<DocumentWriteAccess>(std::move(access));
+  }
+
+  if (!accessMutex_.tryLockWrite()) {
+    return std::nullopt;
+  }
+  DocumentWriteAccess access(*this, DocumentWriteAccess::AdoptWriteLockTag{});
+  return std::optional<DocumentWriteAccess>(std::move(access));
 }
 
 }  // namespace donner::svg

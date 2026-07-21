@@ -50,7 +50,10 @@ donner_cc_library(
     hdrs = [
         "MockRendererInterface.h",
     ],
-    visibility = ["//donner/svg:__subpackages__"],
+    visibility = [
+        "//donner/editor/tests:__pkg__",
+        "//donner/svg:__subpackages__",
+    ],
     deps = [
         "//donner/svg/renderer:renderer_interface",
         "@com_google_gtest//:gtest",

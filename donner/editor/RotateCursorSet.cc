@@ -11,6 +11,10 @@
 #include <string_view>
 #include <utility>
 
+#if defined(__EMSCRIPTEN__)
+#include <emscripten.h>
+#endif
+
 #include "GLFW/glfw3.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/editor/PanClosedCursorSvg.h"
@@ -35,6 +39,145 @@ constexpr int kPanCursorHotspotPx = 15;
 constexpr int kPenCursorHotspotXPx = 4;
 constexpr int kPenCursorHotspotYPx = 4;
 constexpr std::string_view kRotationPlaceholder = "rotate(0,16,16)";
+
+#if defined(__EMSCRIPTEN__)
+// clang-format off: C++ formatting corrupts JavaScript operators and object literals.
+EM_JS(bool, RegisterBrowserCursor,
+      (int cursorId, int cornerIndex, const char* svgSource, int svgLength, int hotspotX,
+       int hotspotY, const char* fallbackSource, int fallbackLength), {
+  const bytes = HEAPU8.subarray(svgSource, svgSource + svgLength);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode.apply(
+        null, bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length)));
+  }
+
+  const fallback = UTF8ToString(fallbackSource, fallbackLength);
+  const dataUrl = "data:image/svg+xml;base64," + btoa(binary);
+  const svgCssValue = "url(\"" + dataUrl + "\") " + hotspotX + " " + hotspotY + ", " + fallback;
+  const svgSupported = !globalThis.CSS || globalThis.CSS.supports("cursor", svgCssValue);
+  const cssValue = svgSupported ? svgCssValue : fallback;
+
+  let registry = Module["__donnerBrowserCursorRegistry"];
+  if (!registry) {
+    registry = {
+      entries: new Map(),
+      active: false,
+      activeKey: null,
+      previousInlineCursor: "",
+      previousInlineCursorPriority: "",
+    };
+    Module["__donnerBrowserCursorRegistry"] = registry;
+  }
+  const key = cursorId + ":" + cornerIndex;
+  registry.entries.set(key, {
+    cssValue: cssValue,
+    svgSupported: svgSupported,
+    hotspotX: hotspotX,
+    hotspotY: hotspotY,
+    fallback: fallback,
+  });
+
+  let svgSupportedCount = 0;
+  registry.entries.forEach(function(entry) {
+    if (entry.svgSupported) {
+      svgSupportedCount += 1;
+    }
+  });
+  const diagnostics = globalThis["__donnerBrowserCursorStats"] || {
+    applied: 0,
+    applyRequests: 0,
+    domMutations: 0,
+    registered: 0,
+    redundantApplySkips: 0,
+    svgSupported: 0,
+  };
+  diagnostics.registered = registry.entries.size;
+  diagnostics.svgSupported = svgSupportedCount;
+  globalThis["__donnerBrowserCursorStats"] = diagnostics;
+  return true;
+});
+
+EM_JS(bool, ApplyBrowserCursor, (int cursorId, int cornerIndex), {
+  const registry = Module["__donnerBrowserCursorRegistry"];
+  const canvas = Module["canvas"];
+  if (!registry || !canvas) {
+    return false;
+  }
+
+  const key = cursorId + ":" + cornerIndex;
+  const entry = registry.entries.get(key);
+  if (!entry) {
+    return false;
+  }
+  const diagnostics = globalThis["__donnerBrowserCursorStats"];
+  if (diagnostics) {
+    diagnostics.applyRequests += 1;
+  }
+  if (registry.active && registry.activeKey === key) {
+    if (diagnostics) {
+      diagnostics.redundantApplySkips += 1;
+    }
+    return true;
+  }
+  if (!registry.active) {
+    registry.previousInlineCursor = canvas.style.getPropertyValue("cursor");
+    registry.previousInlineCursorPriority = canvas.style.getPropertyPriority("cursor");
+  }
+  canvas.style.setProperty("cursor", entry.cssValue);
+  registry.active = true;
+  registry.activeKey = key;
+  if (diagnostics) {
+    diagnostics.applied += 1;
+    diagnostics.domMutations += 1;
+    diagnostics.lastKey = key;
+    diagnostics.lastHotspot = [entry.hotspotX, entry.hotspotY];
+    diagnostics.lastFallback = entry.fallback;
+    diagnostics.lastSvgSupported = entry.svgSupported;
+  }
+  return canvas.style.getPropertyValue("cursor") !== "";
+});
+
+EM_JS(void, ClearBrowserCursor, (), {
+  const registry = Module["__donnerBrowserCursorRegistry"];
+  const canvas = Module["canvas"];
+  if (!registry || !registry.active || !canvas) {
+    return;
+  }
+
+  if (registry.previousInlineCursor) {
+    canvas.style.setProperty(
+        "cursor", registry.previousInlineCursor, registry.previousInlineCursorPriority);
+  } else {
+    canvas.style.removeProperty("cursor");
+  }
+  registry.active = false;
+  registry.activeKey = null;
+  registry.previousInlineCursor = "";
+  registry.previousInlineCursorPriority = "";
+});
+
+EM_JS(void, DestroyBrowserCursorRegistry, (), {
+  const registry = Module["__donnerBrowserCursorRegistry"];
+  if (!registry) {
+    return;
+  }
+
+  const canvas = Module["canvas"];
+  if (registry.active && canvas) {
+    if (registry.previousInlineCursor) {
+      canvas.style.setProperty(
+          "cursor", registry.previousInlineCursor, registry.previousInlineCursorPriority);
+    } else {
+      canvas.style.removeProperty("cursor");
+    }
+  }
+  delete Module["__donnerBrowserCursorRegistry"];
+  delete globalThis["__donnerBrowserCursorStats"];
+});
+// clang-format on
+#endif
 
 bool ReplaceFirst(std::string* text, std::string_view needle, std::string_view replacement) {
   const std::size_t offset = text->find(needle);
@@ -94,6 +237,15 @@ double RotationDegreesForCorner(SelectionTransformCorner corner) {
   return 0.0;
 }
 
+std::string RotatedCursorSvg(std::span<const unsigned char> bytes,
+                             SelectionTransformCorner corner) {
+  std::string svg(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+  std::ostringstream replacement;
+  replacement << "rotate(" << RotationDegreesForCorner(corner) << ",16,16)";
+  ReplaceFirst(&svg, kRotationPlaceholder, replacement.str());
+  return svg;
+}
+
 // Substitute the source SVG's declared 32px width/height for the 4x raster
 // size, so Donner rasterizes the art at kCursorRasterSizePx before downsample.
 void ApplyRasterSize(std::string* svg) {
@@ -115,10 +267,7 @@ std::string SizedCursorSvg(std::span<const unsigned char> bytes) {
 // `rotate(0,16,16)` placeholder on the glyph group to the corner's angle.
 std::string SizedRotatedCursorSvg(std::span<const unsigned char> bytes,
                                   SelectionTransformCorner corner) {
-  std::string svg(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-  std::ostringstream replacement;
-  replacement << "rotate(" << RotationDegreesForCorner(corner) << ",16,16)";
-  ReplaceFirst(&svg, kRotationPlaceholder, replacement.str());
+  std::string svg = RotatedCursorSvg(bytes, corner);
   ApplyRasterSize(&svg);
   return svg;
 }
@@ -130,6 +279,72 @@ std::span<const unsigned char> PanCursorSvgBytes(PanCursorKind kind) {
   }
   return embedded::kPanCursorSvg;
 }
+
+#if defined(__EMSCRIPTEN__)
+std::string BrowserCursorSvg(EditorCursor cursor, SelectionTransformCorner corner) {
+  switch (cursor) {
+    case EditorCursor::Select:
+      return std::string(reinterpret_cast<const char*>(embedded::kSelectCursorSvg.data()),
+                         embedded::kSelectCursorSvg.size());
+    case EditorCursor::Pen:
+    case EditorCursor::PenAdd:
+    case EditorCursor::PenRemove:
+    case EditorCursor::PenClose: {
+      const std::span<const unsigned char> bytes =
+          PenCursorSvgBytes(cursor == EditorCursor::Pen         ? PenCursorHint::Base
+                            : cursor == EditorCursor::PenAdd    ? PenCursorHint::Add
+                            : cursor == EditorCursor::PenRemove ? PenCursorHint::Remove
+                                                                : PenCursorHint::Close);
+      return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    }
+    case EditorCursor::Rotate: return RotatedCursorSvg(embedded::kRotateCursorSvg, corner);
+    case EditorCursor::Scale: return RotatedCursorSvg(embedded::kScaleCursorSvg, corner);
+    case EditorCursor::PathModify:
+      return std::string(reinterpret_cast<const char*>(embedded::kPathModifyCursorSvg.data()),
+                         embedded::kPathModifyCursorSvg.size());
+    case EditorCursor::PanOpen:
+    case EditorCursor::PanClosed: {
+      const std::span<const unsigned char> bytes = PanCursorSvgBytes(
+          cursor == EditorCursor::PanOpen ? PanCursorKind::OpenHand : PanCursorKind::ClosedHand);
+      return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    }
+  }
+  return {};
+}
+
+std::string_view BrowserCursorFallback(EditorCursor cursor, SelectionTransformCorner corner) {
+  switch (cursor) {
+    case EditorCursor::Select: return "default";
+    case EditorCursor::Pen:
+    case EditorCursor::PenAdd:
+    case EditorCursor::PenRemove:
+    case EditorCursor::PenClose:
+    case EditorCursor::PathModify: return "crosshair";
+    case EditorCursor::Rotate: return "all-scroll";
+    case EditorCursor::Scale:
+      return corner == SelectionTransformCorner::TopLeft ||
+                     corner == SelectionTransformCorner::BottomRight
+                 ? "nwse-resize"
+                 : "nesw-resize";
+    case EditorCursor::PanOpen: return "grab";
+    case EditorCursor::PanClosed: return "grabbing";
+  }
+  return "default";
+}
+
+bool RegisterBrowserCursorVariant(EditorCursor cursor, SelectionTransformCorner corner) {
+  const std::string svg = BrowserCursorSvg(cursor, corner);
+  const CursorHotspot hotspot = HotspotForCursor(cursor);
+  const std::string_view fallback = BrowserCursorFallback(cursor, corner);
+  return RegisterBrowserCursor(static_cast<int>(cursor), static_cast<int>(CornerIndex(corner)),
+                               svg.data(), static_cast<int>(svg.size()), hotspot.x, hotspot.y,
+                               fallback.data(), static_cast<int>(fallback.size()));
+}
+
+bool ApplyBrowserCursorVariant(EditorCursor cursor, SelectionTransformCorner corner) {
+  return ApplyBrowserCursor(static_cast<int>(cursor), static_cast<int>(CornerIndex(corner)));
+}
+#endif
 
 std::optional<std::vector<unsigned char>> DownsampleToStraightAlphaTightRgba(
     const svg::RendererBitmap& bitmap, int rasterScale) {
@@ -315,6 +530,27 @@ bool RotateCursorSet::initialize(GLFWwindow* window,
     return false;
   }
 
+#ifdef __EMSCRIPTEN__
+  (void)geodeDevice;
+  for (EditorCursor cursor : kEditorCursors) {
+    if (CursorUsesCorner(cursor)) {
+      for (SelectionTransformCorner corner :
+           {SelectionTransformCorner::TopLeft, SelectionTransformCorner::TopRight,
+            SelectionTransformCorner::BottomRight, SelectionTransformCorner::BottomLeft}) {
+        if (!RegisterBrowserCursorVariant(cursor, corner)) {
+          destroy();
+          return false;
+        }
+      }
+    } else if (!RegisterBrowserCursorVariant(cursor, SelectionTransformCorner::TopLeft)) {
+      destroy();
+      return false;
+    }
+  }
+
+  valid_ = true;
+  return true;
+#else
   // Render an image and create a GLFW cursor with the given hotspot, storing it
   // in @p slot. Returns false (and leaves the caller to `destroy()`) on any
   // failure, so a partial cursor set never goes live.
@@ -382,6 +618,7 @@ bool RotateCursorSet::initialize(GLFWwindow* window,
 
   valid_ = true;
   return true;
+#endif
 }
 
 bool RotateCursorSet::setRotateCursor(SelectionTransformCorner corner) {
@@ -389,12 +626,18 @@ bool RotateCursorSet::setRotateCursor(SelectionTransformCorner corner) {
     return false;
   }
 
+#if defined(__EMSCRIPTEN__)
+  if (!ApplyBrowserCursorVariant(EditorCursor::Rotate, corner)) {
+    return false;
+  }
+#else
   GLFWcursor* cursor = rotateCursors_[CornerIndex(corner)];
   if (cursor == nullptr) {
     return false;
   }
 
   glfwSetCursor(window_, cursor);
+#endif
   customCursorActive_ = true;
   return true;
 }
@@ -404,32 +647,56 @@ bool RotateCursorSet::setScaleCursor(SelectionTransformCorner corner) {
     return false;
   }
 
+#if defined(__EMSCRIPTEN__)
+  if (!ApplyBrowserCursorVariant(EditorCursor::Scale, corner)) {
+    return false;
+  }
+#else
   GLFWcursor* cursor = scaleCursors_[CornerIndex(corner)];
   if (cursor == nullptr) {
     return false;
   }
 
   glfwSetCursor(window_, cursor);
+#endif
   customCursorActive_ = true;
   return true;
 }
 
 bool RotateCursorSet::setSelectCursor() {
-  if (!valid_ || window_ == nullptr || selectCursor_ == nullptr) {
+  if (!valid_ || window_ == nullptr) {
     return false;
   }
 
+#if defined(__EMSCRIPTEN__)
+  if (!ApplyBrowserCursorVariant(EditorCursor::Select, SelectionTransformCorner::TopLeft)) {
+    return false;
+  }
+#else
+  if (selectCursor_ == nullptr) {
+    return false;
+  }
   glfwSetCursor(window_, selectCursor_);
+#endif
   customCursorActive_ = true;
   return true;
 }
 
 bool RotateCursorSet::setPathModifyCursor() {
-  if (!valid_ || window_ == nullptr || pathModifyCursor_ == nullptr) {
+  if (!valid_ || window_ == nullptr) {
     return false;
   }
 
+#if defined(__EMSCRIPTEN__)
+  if (!ApplyBrowserCursorVariant(EditorCursor::PathModify, SelectionTransformCorner::TopLeft)) {
+    return false;
+  }
+#else
+  if (pathModifyCursor_ == nullptr) {
+    return false;
+  }
   glfwSetCursor(window_, pathModifyCursor_);
+#endif
   customCursorActive_ = true;
   return true;
 }
@@ -439,12 +706,20 @@ bool RotateCursorSet::setPanCursor(PanCursorKind kind) {
     return false;
   }
 
+#if defined(__EMSCRIPTEN__)
+  const EditorCursor cursorId =
+      kind == PanCursorKind::OpenHand ? EditorCursor::PanOpen : EditorCursor::PanClosed;
+  if (!ApplyBrowserCursorVariant(cursorId, SelectionTransformCorner::TopLeft)) {
+    return false;
+  }
+#else
   GLFWcursor* cursor = panCursors_[PanCursorIndex(kind)];
   if (cursor == nullptr) {
     return false;
   }
 
   glfwSetCursor(window_, cursor);
+#endif
   customCursorActive_ = true;
   return true;
 }
@@ -458,12 +733,22 @@ bool RotateCursorSet::setPenCursor(PenCursorHint hint) {
     return false;
   }
 
+#if defined(__EMSCRIPTEN__)
+  const EditorCursor cursorId = hint == PenCursorHint::Base     ? EditorCursor::Pen
+                                : hint == PenCursorHint::Add    ? EditorCursor::PenAdd
+                                : hint == PenCursorHint::Remove ? EditorCursor::PenRemove
+                                                                : EditorCursor::PenClose;
+  if (!ApplyBrowserCursorVariant(cursorId, SelectionTransformCorner::TopLeft)) {
+    return false;
+  }
+#else
   GLFWcursor* cursor = penCursors_[PenCursorIndex(hint)];
   if (cursor == nullptr) {
     return false;
   }
 
   glfwSetCursor(window_, cursor);
+#endif
   customCursorActive_ = true;
   return true;
 }
@@ -473,12 +758,19 @@ void RotateCursorSet::clearIfActive() {
     return;
   }
 
+#if defined(__EMSCRIPTEN__)
+  ClearBrowserCursor();
+#else
   glfwSetCursor(window_, nullptr);
+#endif
   customCursorActive_ = false;
 }
 
 void RotateCursorSet::destroy() {
   clearIfActive();
+#if defined(__EMSCRIPTEN__)
+  DestroyBrowserCursorRegistry();
+#else
   const auto destroyOne = [](GLFWcursor*& cursor) {
     if (cursor != nullptr) {
       glfwDestroyCursor(cursor);
@@ -499,6 +791,7 @@ void RotateCursorSet::destroy() {
   }
   destroyOne(selectCursor_);
   destroyOne(pathModifyCursor_);
+#endif
   window_ = nullptr;
   valid_ = false;
 }

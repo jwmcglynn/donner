@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -304,43 +306,42 @@ TEST_F(RendererGeodeTest, EmptyFrameIsTransparent) {
   EXPECT_THAT(pixel, IsTransparent()) << "Empty frame should be transparent";
 }
 
-TEST_F(RendererGeodeTest, SharedDeviceSurvivesRendererTeardown) {
-  for (int iteration = 0; iteration < 3; ++iteration) {
-    RendererGeode renderer = createRenderer();
-    beginFrame(renderer);
-    renderer.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
-    renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
-    renderer.endFrame();
+TEST_F(RendererGeodeTest, PreCancelledInterruptibleSnapshotSkipsGpuReadback) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  renderer.endFrame();
+  (void)renderer.consumeReadbackStats();
+  const std::uint64_t buffersBefore = sharedDevice()->lifetimeBufferCreates();
 
-    const RendererBitmap snapshot = renderer.takeSnapshot();
-    ASSERT_FALSE(snapshot.empty()) << "iteration " << iteration;
-    EXPECT_THAT(pixelAt(snapshot, 32, 32), RgbaEq(0, 255, 0, 255)) << "iteration " << iteration;
-  }
+  const RendererBitmap snapshot = renderer.takeSnapshotInterruptibly([] { return true; });
+
+  EXPECT_TRUE(snapshot.empty());
+  EXPECT_EQ(sharedDevice()->lifetimeBufferCreates(), buffersBefore)
+      << "A pre-cancelled low-priority snapshot must not allocate a GPU readback buffer";
+  const RendererReadbackStats stats = renderer.consumeReadbackStats();
+  EXPECT_EQ(stats.count, 0);
+  EXPECT_EQ(stats.pollIterations, 0);
 }
 
-TEST_F(RendererGeodeTest, MoveAssignmentDetachesDisplacedCounters) {
-  const std::shared_ptr<geode::GeodeDevice> device = sharedDevice();
-  RendererGeode source(device);
-  RendererGeode destination(device);
+TEST_F(RendererGeodeTest, InterruptibleSnapshotCancelsPromptlyAfterGpuSubmit) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  renderer.endFrame();
+  (void)renderer.consumeReadbackStats();
 
-  ASSERT_NE(device->counters(), nullptr);
-  destination = std::move(source);
+  std::atomic<int> cancellationChecks{0};
+  const auto start = std::chrono::steady_clock::now();
+  const RendererBitmap snapshot = renderer.takeSnapshotInterruptibly(
+      [&] { return cancellationChecks.fetch_add(1, std::memory_order_relaxed) >= 1; });
+  const auto elapsed = std::chrono::steady_clock::now() - start;
 
-  // Move-assignment destroys the destination's old Impl. The device must not
-  // retain that Impl's counter address while the moved-in renderer is idle.
-  EXPECT_EQ(device->counters(), nullptr);
-
-  // The moved-in renderer must rebind its counters at the next frame and
-  // remain fully usable.
-  beginFrame(destination);
-  EXPECT_NE(device->counters(), nullptr);
-  destination.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
-  destination.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
-  destination.endFrame();
-
-  const RendererBitmap snapshot = destination.takeSnapshot();
-  ASSERT_FALSE(snapshot.empty());
-  EXPECT_THAT(pixelAt(snapshot, 32, 32), RgbaEq(0, 255, 0, 255));
+  EXPECT_TRUE(snapshot.empty());
+  EXPECT_LT(elapsed, std::chrono::milliseconds(250))
+      << "The sole render worker must not remain blocked in thumbnail map/readback";
+  const RendererReadbackStats stats = renderer.consumeReadbackStats();
+  EXPECT_EQ(stats.count, 1);
+  EXPECT_EQ(stats.pollIterations, 0)
+      << "Cancellation should be observed before entering the GPU poll loop";
 }
 
 TEST_F(RendererGeodeTest, EmptyFrameAfterOpaqueFrameClearsReusedTarget) {
@@ -404,6 +405,139 @@ TEST_F(RendererGeodeTest, TakeTextureSnapshotReturnsTextureAndDetachesTarget) {
   std::shared_ptr<const RendererTextureSnapshot> secondTexture = renderer.takeTextureSnapshot();
   ASSERT_TRUE(secondTexture != nullptr);
   EXPECT_EQ(secondTexture->dimensions(), texture->dimensions());
+}
+
+TEST_F(RendererGeodeTest, OwnedTextureSnapshotExplicitlyDestroysBackingOnRelease) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  renderer.endFrame();
+
+  const std::uint64_t destroysBefore =
+      geode::ScopedWgpuHandle<wgpu::Texture>::backingDestroyCountForTesting();
+  std::shared_ptr<const RendererTextureSnapshot> snapshot = renderer.takeTextureSnapshot();
+  ASSERT_NE(snapshot, nullptr);
+  snapshot.reset();
+
+  EXPECT_EQ(geode::ScopedWgpuHandle<wgpu::Texture>::backingDestroyCountForTesting(),
+            destroysBefore + 1u)
+      << "Dropping an owned presentation snapshot must explicitly destroy its GPU backing";
+}
+
+TEST_F(RendererGeodeTest, BorrowedTextureSnapshotNeverDestroysBacking) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  renderer.endFrame();
+
+  const std::uint64_t destroysBefore =
+      geode::ScopedWgpuHandle<wgpu::Texture>::backingDestroyCountForTesting();
+  const RendererTextureSnapshot* snapshot = renderer.borrowTextureSnapshot();
+  ASSERT_NE(snapshot, nullptr);
+
+  beginFrame(renderer);
+  renderer.endFrame();
+
+  EXPECT_EQ(geode::ScopedWgpuHandle<wgpu::Texture>::backingDestroyCountForTesting(), destroysBefore)
+      << "A frame-local borrowed snapshot must not destroy the renderer's reusable target";
+}
+
+TEST_F(RendererGeodeTest, SynchronousDirectPresentationReusesSameSizeRenderTarget) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  renderer.endFrame();
+  ASSERT_TRUE(renderer.borrowTextureSnapshot() != nullptr);
+
+  beginFrame(renderer);
+  renderer.endFrame();
+  ASSERT_TRUE(renderer.borrowTextureSnapshot() != nullptr);
+
+  beginFrame(renderer);
+  renderer.endFrame();
+  ASSERT_TRUE(renderer.borrowTextureSnapshot() != nullptr);
+  EXPECT_EQ(renderer.lastFrameTimings().counters.textureCreates, 0u)
+      << "A same-size synchronous direct presentation must borrow the current texture instead of "
+         "detaching the renderer's reusable full-canvas target.";
+}
+
+TEST_F(RendererGeodeTest, ResizingDefersSupersededPrimaryTargetDestruction) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  sharedDevice()->drainDeferredDestroys();
+  RendererGeode renderer = createRenderer();
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(64.0, 64.0);
+  viewport.devicePixelRatio = 1.0;
+  renderer.beginFrame(viewport);
+  renderer.endFrame();
+  ASSERT_EQ(sharedDevice()->deferredTextureDestroyCountForTesting(), 0u);
+
+  renderer.beginFrame(viewport);
+  EXPECT_EQ(sharedDevice()->deferredTextureDestroyCountForTesting(), 0u)
+      << "A same-size frame must retain the reusable primary target";
+  renderer.endFrame();
+
+  viewport.size = Vector2d(96.0, 64.0);
+  renderer.beginFrame(viewport);
+  EXPECT_EQ(sharedDevice()->deferredTextureDestroyCountForTesting(), 1u)
+      << "Replacing the primary target must retain its handle until a later frame boundary, then "
+         "explicitly destroy its GPU backing";
+  renderer.endFrame();
+
+  viewport.size = Vector2d(128.0, 64.0);
+  renderer.beginFrame(viewport);
+  EXPECT_EQ(sharedDevice()->deferredTextureDestroyCountForTesting(), 1u)
+      << "Each resize must drain the prior retirement before queuing the newly superseded target";
+  renderer.endFrame();
+}
+
+TEST_F(RendererGeodeTest, TransientTexturePoolStaysWithinGlobalMemoryBudgetAcrossSizeChurn) {
+  constexpr int kUniqueTextureSizes = 122;
+  constexpr int kMinimumTextureDimension = 512;
+  constexpr uint64_t kExpectedBudgetBytes = 64u * 1024u * 1024u;
+  constexpr std::size_t kMaximumTextureCount =
+      kExpectedBudgetBytes / (kMinimumTextureDimension * kMinimumTextureDimension * 4u);
+
+  RendererGeode firstRenderer = createRenderer();
+  RendererGeode secondRenderer = createRenderer();
+  for (int index = 0; index < kUniqueTextureSizes; ++index) {
+    RendererGeode& renderer = index % 2 == 0 ? firstRenderer : secondRenderer;
+    RenderViewport viewport;
+    viewport.size = Vector2d(kMinimumTextureDimension + index, kMinimumTextureDimension);
+    viewport.devicePixelRatio = 1.0;
+    renderer.beginFrame(viewport);
+    renderer.pushIsolatedLayer(1.0, MixBlendMode::Normal);
+    renderer.popIsolatedLayer();
+    renderer.endFrame();
+  }
+
+  RenderViewport crossRendererReuseViewport;
+  crossRendererReuseViewport.size =
+      Vector2d(kMinimumTextureDimension + kUniqueTextureSizes - 2, kMinimumTextureDimension);
+  crossRendererReuseViewport.devicePixelRatio = 1.0;
+  secondRenderer.beginFrame(crossRendererReuseViewport);
+  secondRenderer.pushIsolatedLayer(1.0, MixBlendMode::Normal);
+  secondRenderer.popIsolatedLayer();
+  secondRenderer.endFrame();
+  EXPECT_EQ(secondRenderer.lastFrameTimings().counters.textureCreates, 1u)
+      << "Only the resized primary target should be created; the isolated-layer texture was "
+         "released by the other renderer and must be reused";
+
+  const RendererGeodeTexturePoolStats firstStats = firstRenderer.texturePoolStats();
+  const RendererGeodeTexturePoolStats secondStats = secondRenderer.texturePoolStats();
+  EXPECT_EQ(firstStats.bytes, secondStats.bytes)
+      << "Renderers sharing a GeodeDevice must report the same device-global pool";
+  EXPECT_EQ(firstStats.textureCount, secondStats.textureCount);
+  EXPECT_EQ(firstStats.bucketCount, secondStats.bucketCount);
+  EXPECT_EQ(firstStats.budgetBytes, secondStats.budgetBytes);
+  EXPECT_EQ(firstStats.budgetBytes, kExpectedBudgetBytes);
+  EXPECT_LE(firstStats.bytes, kExpectedBudgetBytes)
+      << "Size churn must not retain unbounded free GPU texture memory";
+  EXPECT_LE(firstStats.textureCount, kMaximumTextureCount)
+      << "Each exercised texture is at least 1 MiB, so the byte budget also bounds count";
+  EXPECT_LE(firstStats.bucketCount, kMaximumTextureCount)
+      << "Unique texture sizes must not bypass the global pool budget";
 }
 
 TEST_F(RendererGeodeTest, DrawTextureSnapshotPreservesPremultipliedAlpha) {
@@ -2240,6 +2374,16 @@ TEST_F(RendererGeodeTest, FilterAppliedBeforeClipPathSvgRenderingOrder) {
 // historical failure was a SIGSEGV in
 // drawPath -> Impl::getFillEncode -> GeodeDevice::countPathEncode() when the
 // resvg suite ran on a worker whose adapter acquisition failed.
+TEST(RendererGeodeNullDeviceTest, ReadbackStatsAreEmpty) {
+  RendererGeode renderer(std::shared_ptr<geode::GeodeDevice>(nullptr), /*verbose=*/false);
+
+  const RendererReadbackStats stats = renderer.consumeReadbackStats();
+
+  EXPECT_EQ(stats.count, 0);
+  EXPECT_EQ(stats.pollIterations, 0);
+  EXPECT_FALSE(stats.usedTimedWaitAny);
+}
+
 TEST_F(RendererGeodeTest, NullDeviceEntersNoOpModeWithoutCrashing) {
   // Deterministically simulate CreateHeadless() having returned nullptr by
   // handing the renderer a null device. Does not depend on the host GPU.

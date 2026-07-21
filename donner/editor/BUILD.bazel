@@ -475,6 +475,10 @@ donner_cc_library(
     name = "async_renderer",
     srcs = ["AsyncRenderer.cc"],
     hdrs = ["AsyncRenderer.h"],
+    defines = select({
+        ":wasm_geode_enabled": ["DONNER_WASM_WORKER_SURFACE"],
+        "//conditions:default": [],
+    }),
     deps = [
         ":overlay_renderer",
         ":tracy_wrapper",
@@ -482,7 +486,9 @@ donner_cc_library(
         "//donner/base",
         "//donner/svg",
         "//donner/svg/compositor",
+        "//donner/svg/parser",
         "//donner/svg/renderer",
+        "//donner/svg/renderer:renderer_driver",
     ],
 )
 

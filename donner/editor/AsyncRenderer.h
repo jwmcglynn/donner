@@ -46,9 +46,15 @@
 #include <variant>
 #include <vector>
 
+#ifdef DONNER_WASM_WORKER_SURFACE
+#include <emscripten/proxying.h>
+#include <pthread.h>
+#endif
+
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
+#include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
@@ -64,7 +70,16 @@ class CompositorController;
 }
 }  // namespace donner::svg
 
+namespace donner::geode {
+class GeodeDevice;
+}
+
 namespace donner::editor {
+
+#ifdef DONNER_WASM_WORKER_SURFACE
+struct WasmWorkerRuntime;
+struct WasmWorkerRuntimeInitControl;
+#endif
 
 /// Non-null renderer/document handoff for a render request.
 struct RenderLease {
@@ -106,8 +121,8 @@ struct RenderRequest {
     svg::compositor::InteractionHint interactionKind = svg::compositor::InteractionHint::ActiveDrag;
     /// Active drag translation represented by this request. Selection prewarms use zero.
     Vector2d translation = Vector2d::Zero();
-    /// Active affine transform represented by this request. Selection
-    /// prewarms use identity.
+    /// Active affine transform represented by this request, relative to the
+    /// drag-start cached document. Selection prewarms use identity.
     Transform2d documentFromCachedDocument = Transform2d();
     /// Monotonic id for the active drag gesture. Selection prewarms use zero.
     std::uint64_t dragGeneration = 0;
@@ -129,6 +144,8 @@ struct RenderRequest {
 
   /// Non-null renderer/document lease for the worker handoff.
   RenderLease lease;
+  /// Internal timestamp captured by `requestRender()` for queue-latency diagnostics.
+  std::chrono::steady_clock::time_point queuedAt;
   /// Document frame version snapshotted at request time so the UI can
   /// match the landed bitmap with other same-version assets.
   std::uint64_t version = 0;
@@ -145,6 +162,10 @@ struct RenderRequest {
   /// The worker holds this optional by value, so if the UI thread clears
   /// the selection mid-render the worker still draws the pre-render chrome.
   std::optional<svg::SVGElement> selection;
+  /// Frozen Select-mode chrome appended to the same worker texture as the document.
+  /// Keeping these pixels in one WebGPU surface epoch prevents browser compositor
+  /// timing from separating a dragged shape from its outline.
+  std::optional<SelectionChromeSnapshot> directSurfaceSelectionChrome;
   /// Currently-selected entity (if any) that the compositor should keep
   /// promoted across renders. The compositor demotes the previous entity and
   /// promotes this one when it changes. Allows pre-warming on selection so
@@ -179,6 +200,22 @@ struct PresentationSnapshotPlan {
   bool captureTextureSnapshot = false;
 };
 
+/// GPU-texture lifetime required by one presentation handoff.
+enum class TextureSnapshotHandoff : std::uint8_t {
+  BorrowCurrentFrame,
+  TakeOwnership,
+};
+
+/**
+ * Choose whether a texture handoff borrows the current frame or takes ownership.
+ *
+ * @param consumerOutlivesCurrentFrame True when presentation retains the texture after the
+ *   synchronous handoff returns.
+ * @return BorrowCurrentFrame for synchronous copies, otherwise TakeOwnership.
+ */
+[[nodiscard]] TextureSnapshotHandoff ChooseTextureSnapshotHandoff(
+    bool consumerOutlivesCurrentFrame) noexcept;
+
 /**
  * Choose final full-canvas snapshot work for a render result.
  *
@@ -190,10 +227,301 @@ struct PresentationSnapshotPlan {
 [[nodiscard]] PresentationSnapshotPlan ChoosePresentationSnapshotPlan(
     bool hasCompositedPreview, bool requiresTextureSnapshotPresentation, bool captureCpuSnapshot);
 
+/// Typed failure observed while presenting a worker-owned WebGPU surface.
+enum class WorkerSurfaceFailureKind : std::uint8_t {
+  Timeout,
+  OutdatedOrLost,
+  Setup,
+  Incompatible,
+  Fatal,
+};
+
+/// Recovery action for one failed worker-surface presentation attempt.
+enum class WorkerSurfaceRecoveryAction : std::uint8_t {
+  Retry,
+  ReconfigureAndRetry,
+  RecreateAndRetry,
+  TerminalFailure,
+};
+
+/// Final presentation outcome published with one worker render result.
+enum class DirectSurfacePresentationOutcome : std::uint8_t {
+  None,
+  Presented,
+  RetryAfterBackoff,
+  Unavailable,
+};
+
+/**
+ * Resolve a bounded terminal worker-surface failure.
+ *
+ * @param failure Failure whose immediate/bounded retry policy was exhausted.
+ * @return RetryAfterBackoff for transient exhaustion, otherwise Unavailable for permanent failure.
+ */
+[[nodiscard]] constexpr DirectSurfacePresentationOutcome DirectSurfaceTerminalOutcomeFor(
+    WorkerSurfaceFailureKind failure) noexcept {
+  if (failure != WorkerSurfaceFailureKind::Incompatible &&
+      failure != WorkerSurfaceFailureKind::Fatal) {
+    return DirectSurfacePresentationOutcome::RetryAfterBackoff;
+  }
+  return DirectSurfacePresentationOutcome::Unavailable;
+}
+
+/**
+ * Choose bounded recovery for a worker-owned WebGPU surface failure.
+ *
+ * Recoverable failures get at most two follow-up worker tasks. Permanent compatibility and device
+ * failures stop retrying instead of aborting or spinning the Wasm runtime.
+ *
+ * @param failure Typed failure from surface setup or `getCurrentTexture`.
+ * @param consecutiveFailuresBeforeAttempt Failures already observed for this surface slot.
+ * @return The recovery action for the failed attempt.
+ */
+[[nodiscard]] constexpr WorkerSurfaceRecoveryAction WorkerSurfaceRecoveryDecisionFor(
+    WorkerSurfaceFailureKind failure, unsigned consecutiveFailuresBeforeAttempt) noexcept {
+  constexpr unsigned kMaxFailedAttempts = 3u;
+  if (failure == WorkerSurfaceFailureKind::Incompatible ||
+      failure == WorkerSurfaceFailureKind::Fatal ||
+      consecutiveFailuresBeforeAttempt >= kMaxFailedAttempts - 1u) {
+    return WorkerSurfaceRecoveryAction::TerminalFailure;
+  }
+
+  if (failure == WorkerSurfaceFailureKind::OutdatedOrLost) {
+    return WorkerSurfaceRecoveryAction::ReconfigureAndRetry;
+  }
+  if (failure == WorkerSurfaceFailureKind::Setup) {
+    return WorkerSurfaceRecoveryAction::RecreateAndRetry;
+  }
+  return WorkerSurfaceRecoveryAction::Retry;
+}
+
+/// Follow-up scheduling decision after one event-loop-bounded worker task returns.
+enum class WorkerTaskFollowUp : std::uint8_t {
+  Park,
+  SchedulePendingRequest,
+};
+
+/**
+ * Choose whether a worker callback must schedule another event-loop task.
+ *
+ * @param hasPendingRequest True when the completed callback left a newer render request queued.
+ * @param cancellationPending True when a concurrent cancellation still needs a worker callback to
+ * transition the renderer to idle.
+ * @return `SchedulePendingRequest` when queued worker state still needs a guaranteed callback.
+ */
+[[nodiscard]] WorkerTaskFollowUp ChooseWorkerTaskFollowUp(
+    bool hasPendingRequest, bool cancellationPending = false) noexcept;
+
+/// Action taken after one Wasm renderer callback finishes its bounded worker iteration.
+enum class WorkerTaskCompletionDisposition : std::uint8_t {
+  Park,
+  ScheduleFollowUp,
+  ExitWorker,
+};
+
+/**
+ * Choose how a completed Wasm renderer callback returns control to the worker event loop.
+ *
+ * @param shuttingDown True when the owner is joining the worker.
+ * @param hasPendingRequest True when a newer render request is queued.
+ * @param cancellationPending True when cancellation still needs a worker callback.
+ * @param lowPriorityWorkPending True when thumbnail or deferred-cache work is ready.
+ * @param presentationBoundaryPending True when a direct-surface result needs a later task-boundary
+ * acknowledgment before publication.
+ */
+[[nodiscard]] WorkerTaskCompletionDisposition ChooseWorkerTaskCompletionDisposition(
+    bool shuttingDown, bool hasPendingRequest, bool cancellationPending,
+    bool lowPriorityWorkPending, bool presentationBoundaryPending) noexcept;
+
+/// Lifecycle of the callback-driven Wasm worker WebGPU runtime.
+enum class WasmWorkerRuntimeInitializationStatus : std::uint8_t {
+  Initializing,
+  Ready,
+  Failed,
+};
+
+/// Point at which shutdown detaches browser callbacks from their renderer owner.
+enum class WasmWorkerOwnerDetachTiming : std::uint8_t {
+  BeforeWorkerJoin,
+  AfterWorkerJoin,
+};
+
+/**
+ * Choose when shutdown may detach callback access to the renderer owner.
+ *
+ * A ready worker can have a task-boundary callback holding the single-flight wake gate. That
+ * callback must remain attached through join so it can observe `Shutdown`, release the gate, and
+ * exit its pthread. During initialization or after initialization failure, a browser Promise can
+ * outlive pthread cancellation, so those callbacks must be detached before join.
+ */
+[[nodiscard]] constexpr WasmWorkerOwnerDetachTiming ChooseWasmWorkerOwnerDetachTiming(
+    WasmWorkerRuntimeInitializationStatus status) noexcept {
+  return status == WasmWorkerRuntimeInitializationStatus::Ready
+             ? WasmWorkerOwnerDetachTiming::AfterWorkerJoin
+             : WasmWorkerOwnerDetachTiming::BeforeWorkerJoin;
+}
+
+/// Whether a thumbnail request can still be completed by the Wasm worker runtime.
+[[nodiscard]] constexpr bool CanAcceptWasmSampleThumbnailRequest(
+    WasmWorkerRuntimeInitializationStatus status) noexcept {
+  return status == WasmWorkerRuntimeInitializationStatus::Ready;
+}
+
+/// Queue/lifecycle action for a render or thumbnail wake.
+enum class WasmWorkerRuntimeWakeAction : std::uint8_t {
+  DeferUntilRuntimeReady,
+  ScheduleWorkerTask,
+  DetachAndCancelWorker,
+  ReportRuntimeUnavailable,
+};
+
+/**
+ * Choose how work interacts with callback-driven worker initialization.
+ *
+ * Initializing work remains represented in worker state without consuming the proxy wake gate.
+ * Shutdown detaches the callback owner before cancelling the pthread, so a late browser Promise
+ * cannot dereference the renderer.
+ */
+[[nodiscard]] WasmWorkerRuntimeWakeAction ChooseWasmWorkerRuntimeWakeAction(
+    WasmWorkerRuntimeInitializationStatus status, bool shuttingDown) noexcept;
+
+/// Safe destination for a spontaneous browser completion after owner detachment.
+enum class WasmWorkerRuntimeCallbackDisposition : std::uint8_t {
+  DeliverToOwner,
+  DisposeDetachedResult,
+};
+
+[[nodiscard]] constexpr WasmWorkerRuntimeCallbackDisposition
+ChooseWasmWorkerRuntimeCallbackDisposition(bool ownerAttached) noexcept {
+  return ownerAttached ? WasmWorkerRuntimeCallbackDisposition::DeliverToOwner
+                       : WasmWorkerRuntimeCallbackDisposition::DisposeDetachedResult;
+}
+
+/// Result of attempting to schedule one Wasm worker event-loop task.
+enum class WorkerTaskScheduleResult : std::uint8_t {
+  ScheduledOrCoalesced,
+  DeferredUntilRuntimeReady,
+  EnqueueRejected,
+  RuntimeUnavailable,
+};
+
+/// Whether the thumbnail caller should treat a worker wake as accepted.
+[[nodiscard]] constexpr bool DidAcceptWasmSampleThumbnailScheduleResult(
+    WorkerTaskScheduleResult result) noexcept {
+  return result == WorkerTaskScheduleResult::ScheduledOrCoalesced ||
+         result == WorkerTaskScheduleResult::DeferredUntilRuntimeReady;
+}
+
+/// State resolution when work arrives after callback-driven runtime creation failed.
+struct WasmWorkerRuntimeUnavailablePlan {
+  bool resolveRenderState = false;
+  bool dropPendingThumbnail = false;
+  bool wakeOwner = false;
+};
+
+[[nodiscard]] constexpr WasmWorkerRuntimeUnavailablePlan ChooseWasmWorkerRuntimeUnavailablePlan(
+    bool renderStatePending, bool thumbnailPending) noexcept {
+  return WasmWorkerRuntimeUnavailablePlan{
+      .resolveRenderState = renderStatePending,
+      .dropPendingThumbnail = thumbnailPending,
+      .wakeOwner = renderStatePending || thumbnailPending,
+  };
+}
+
+/// Result of one callback-driven browser device creation attempt.
+enum class WasmWorkerRuntimeFinishAction : std::uint8_t {
+  Ready,
+  RetryWithRgba8,
+  ExitWorker,
+};
+
+/// Shutdown action after a Wasm renderer proxy enqueue is rejected.
+enum class WorkerTaskShutdownDisposition : std::uint8_t {
+  None,
+  CancelWorkerBeforeJoin,
+  ExitCurrentWorker,
+};
+
+/// Owner-side cleanup after the Wasm renderer pthread has joined.
+enum class WasmWorkerRuntimeOwnerCleanupDisposition : std::uint8_t {
+  ExpectWorkerCleanup,
+  AbandonThreadAffinedRuntime,
+};
+
+/**
+ * Choose whether the owner may destroy the worker-affined Wasm renderer runtime after join.
+ *
+ * @param workerCancellationRequested True when normal worker-thread cleanup could not run.
+ * @param runtimeStillOwnedAfterJoin True when the worker did not release its runtime before exit.
+ */
+[[nodiscard]] WasmWorkerRuntimeOwnerCleanupDisposition
+ChooseWasmWorkerRuntimeOwnerCleanupDisposition(bool workerCancellationRequested,
+                                               bool runtimeStillOwnedAfterJoin) noexcept;
+
+/// Recovery actions after Emscripten rejects a renderer-worker proxy enqueue.
+struct WorkerTaskEnqueueFailurePlan {
+  bool resolveRenderState = false;
+  bool dropPendingThumbnail = false;
+  bool wakeOwnerForRetry = false;
+  bool reportSurfaceUnavailable = false;
+  WorkerTaskShutdownDisposition shutdownDisposition = WorkerTaskShutdownDisposition::None;
+};
+
+/**
+ * Choose bounded recovery for a rejected renderer-worker proxy enqueue.
+ *
+ * @param shuttingDown True when the owner is already joining the worker.
+ * @param renderStatePending True for `RenderingState` or `CancellingState`.
+ * @param thumbnailPending True when low-priority work has not reached the worker.
+ * @param consecutiveFailureCount Number of consecutive rejected enqueue attempts, including this
+ * one.
+ * @param enqueueAttemptFromWorker True when the rejected follow-up was queued by the worker
+ * callback that can exit directly.
+ */
+[[nodiscard]] WorkerTaskEnqueueFailurePlan ChooseWorkerTaskEnqueueFailurePlan(
+    bool shuttingDown, bool renderStatePending, bool thumbnailPending,
+    std::uint64_t consecutiveFailureCount, bool enqueueAttemptFromWorker = false) noexcept;
+
+/// Single-flight gate for event-loop worker wakeups. Pointer input may replace the pending render
+/// request many times while one callback is queued or running; only the newest request needs a
+/// follow-up callback.
+class WorkerTaskWakeGate {
+public:
+  /// Mark a callback queued/running. Returns false when one already owns the wakeup slot.
+  [[nodiscard]] bool trySchedule() noexcept {
+    bool expected = false;
+    return scheduled_.compare_exchange_strong(expected, true, std::memory_order_acq_rel);
+  }
+
+  /**
+   * Finish the enqueue attempt that followed a successful \ref trySchedule call.
+   *
+   * A rejected enqueue never created a callback that could release the slot. Roll it back here so
+   * shutdown and a later request cannot remain coalesced behind nonexistent work.
+   *
+   * @param queued True when the platform accepted the callback.
+   */
+  void completeEnqueue(bool queued) noexcept {
+    if (!queued) {
+      completeTask();
+    }
+  }
+
+  /// Release the slot before checking worker state for follow-up work.
+  void completeTask() noexcept { scheduled_.store(false, std::memory_order_release); }
+
+private:
+  std::atomic_bool scheduled_{false};
+};
+
 /// Presentation payload plus the document version it was rendered from.
 struct RenderResult {
   /// Internal timing split for one async worker iteration.
   struct WorkerTimingBreakdown {
+    /// Time from UI-thread request submission until the worker dequeues the request.
+    double queueWaitMs = 0.0;
+    /// Worker-thread preflight between dequeue and the measured render iteration.
+    double dequeueToStartMs = 0.0;
     /// Time before `CompositorController::renderFrame`, including compositor selection setup.
     double setupMs = 0.0;
     /// Time spent in `CompositorController::renderFrame`.
@@ -202,8 +530,18 @@ struct RenderResult {
     double buildPreviewMs = 0.0;
     /// Time spent taking the final fallback canvas snapshot, when needed.
     double finalSnapshotMs = 0.0;
+    /// Time spent borrowing/copying the worker texture into the browser presentation surface.
+    double presentMs = 0.0;
     /// Time spent copying compositor diagnostics for editor panels.
     double diagnosticsMs = 0.0;
+    /// Time from worker result completion until the UI thread polls it.
+    double pollDelayMs = 0.0;
+    /// GPU-to-CPU readbacks performed by the worker renderer and its offscreen instances.
+    int readbackCount = 0;
+    /// Legacy device-poll iterations used while waiting for those readbacks.
+    int readbackPollIterations = 0;
+    /// True when browser readbacks used the event-driven timed WaitAny path.
+    bool usedTimedWaitAny = false;
   };
 
   /// One composite tile from the worker's `CompositorController::
@@ -287,6 +625,8 @@ struct RenderResult {
   /// True when this result should update only retained overview infill.
   bool overviewInfillOnly = false;
   std::uint64_t version = 0;
+  /// Document generation captured by the render request.
+  std::uint64_t documentGeneration = 0;
   /// Wall-clock milliseconds spent in the worker iteration after a request is
   /// dequeued, including `CompositorController::renderFrame`, final
   /// snapshot/readback work, and diagnostic snapshots that gate presentation.
@@ -294,11 +634,115 @@ struct RenderResult {
   /// on the frame graph. Zero means no worker timing was recorded.
   double workerMs = 0.0;
   WorkerTimingBreakdown workerTiming;
+  /// Internal completion timestamp used to populate `workerTiming.pollDelayMs` on acceptance.
+  std::chrono::steady_clock::time_point workerCompletedAt;
+  /// Worker-owned browser-surface outcome for this result.
+  DirectSurfacePresentationOutcome directSurfaceOutcome = DirectSurfacePresentationOutcome::None;
+  /// Monotonic count of direct worker-surface frames presented this session.
+  std::uint64_t directSurfaceFrames = 0;
+  /// Entity whose worker-side compositor cache backs the direct surface.
+  Entity directSurfaceEntity = entt::null;
+  /// Drag preview represented by the pixels currently on the direct surface.
+  std::optional<RenderRequest::DragPreview> directSurfaceDragPreview;
+  /// Worker surface slot containing this frame. Direct WebGPU uses slot 0; the bitmap bridge
+  /// retains slots 0 and 1 on the main thread.
+  int directSurfaceSlot = 0;
+  /// True when a bitmap-bridge back-buffer frame is staged for this result's surface token.
+  bool bitmapBridgeFrameStaged = false;
+  /// True when Select-mode path/bounds chrome is already part of the direct-surface pixels.
+  bool directSurfaceSelectionChromeBaked = false;
+};
+
+/**
+ * Build the compositor-tile metadata that accompanies a worker-owned browser surface.
+ *
+ * The surface itself owns the pixels, so every returned tile is metadata-only. This metadata is
+ * still required for developer overlays, including low-resolution overview-infill frames.
+ *
+ * @param compositor Compositor that produced the presented browser surface.
+ * @param rasterViewport Raster viewport used for the surface frame.
+ * @param documentViewBox Document-space view box used to normalize tile offsets.
+ * @param compositorEntity Explicitly promoted entity for this presentation.
+ * @param dragPreview Drag state represented by the presented pixels, if any.
+ * @param overviewInfillOnly True when the surface frame is low-resolution overview infill.
+ * @return Paint-ordered metadata-only tiles, or `std::nullopt` when no valid tile exists.
+ */
+[[nodiscard]] std::optional<RenderResult::CompositedPreview>
+BuildDirectSurfaceCompositorTileMetadata(
+    svg::compositor::CompositorController& compositor, const EditorRasterViewport& rasterViewport,
+    const Box2d& documentViewBox, Entity compositorEntity,
+    const std::optional<RenderRequest::DragPreview>& dragPreview, bool overviewInfillOnly);
+
+/// Terminal outcome for one low-priority sample-thumbnail render attempt.
+enum class SampleThumbnailRenderOutcome : std::uint8_t {
+  Rendered,
+  Cancelled,
+  ParseError,
+  RenderError,
+  RendererUnavailable,
+};
+
+/// One SVG source queued for bounded, low-priority rendering on the existing render worker.
+struct SampleThumbnailRenderRequest {
+  /// Caller-defined key copied into the result (the sample-catalog index in `EditorShell`).
+  std::uint64_t key = 0;
+  /// Complete SVG source. The request owns its copy until the worker finishes parsing it.
+  std::string source;
+  /// Output bitmap dimensions in device pixels.
+  Vector2i dimensions = Vector2i::Zero();
+  /// Root renderer used to create the worker-local offscreen on native builds.
+  ///
+  /// Browser builds ignore this pointer and reuse the renderer already owned by their worker.
+  /// The native caller must keep it alive until the result is polled or the renderer is destroyed.
+  svg::RendererInterface* nativeRenderer = nullptr;
+};
+
+/// CPU bitmap returned by one asynchronous sample-thumbnail attempt.
+struct SampleThumbnailRenderResult {
+  std::uint64_t key = 0;
+  SampleThumbnailRenderOutcome outcome = SampleThumbnailRenderOutcome::RenderError;
+  svg::RendererBitmap bitmap;
+};
+
+/// Observable state and monotonic counters for the bounded sample-thumbnail lane.
+struct SampleThumbnailRenderStats {
+  std::uint64_t requested = 0;
+  std::uint64_t started = 0;
+  std::uint64_t completed = 0;
+  std::uint64_t rendered = 0;
+  std::uint64_t cancelled = 0;
+  std::uint64_t offscreenRendererCreations = 0;
+  bool pending = false;
+  bool active = false;
+  bool resultReady = false;
+};
+
+struct DirectSurfacePresentationState {
+  bool active = false;
+  EditorRasterViewport rasterViewport;
+  std::uint64_t frameCount = 0;
+  int surfaceSlot = 0;
+  bool selectionChromeBaked = false;
+};
+
+/**
+ * Return whether a worker-surface result may replace the currently loaded document surface.
+ *
+ * @param requestDocumentGeneration Generation captured by the completed render request.
+ * @param minimumDocumentGeneration Oldest generation still eligible for presentation.
+ */
+[[nodiscard]] bool DirectSurfacePresentationGenerationIsCurrent(
+    std::uint64_t requestDocumentGeneration, std::uint64_t minimumDocumentGeneration);
+
+/// Whether construction starts the render worker or leaves it inert until an explicit start call.
+enum class AsyncRendererStartMode : std::uint8_t {
+  Immediate,
+  Deferred,
 };
 
 class AsyncRenderer {
 public:
-  AsyncRenderer();
+  explicit AsyncRenderer(AsyncRendererStartMode startMode = AsyncRendererStartMode::Immediate);
   ~AsyncRenderer();
 
   AsyncRenderer(const AsyncRenderer&) = delete;
@@ -306,7 +750,35 @@ public:
   AsyncRenderer(AsyncRenderer&&) = delete;
   AsyncRenderer& operator=(AsyncRenderer&&) = delete;
 
-  /// Returns true while a render is in flight or a finished result is waiting to be polled.
+  /**
+   * Start the render worker after its borrowed main-thread dependencies are ready.
+   *
+   * Native construction starts immediately for existing standalone users. Browser editor startup
+   * calls this explicitly after synchronous main-thread WebGPU initialization, because Safari
+   * cannot safely interleave another device's Promise completion with an Asyncify readback.
+   * Repeated calls and calls after shutdown are no-ops.
+   */
+  void start();
+
+  /// True when this instance currently owns a joinable/running render worker.
+  [[nodiscard]] bool workerStartedForTesting() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+#ifdef DONNER_WASM_WORKER_SURFACE
+    return threadStarted_;
+#else
+    return thread_.joinable();
+#endif
+  }
+
+  /**
+   * Stop accepting work, cancel both priority lanes, detach the wake callback, and join the worker.
+   *
+   * Safe to call more than once from the owning thread. The destructor calls this automatically;
+   * owners with borrowed worker dependencies may call it earlier to control teardown order.
+   */
+  void shutdown();
+
+  /// Returns true while a render/result or document-reading cache warmup owns the input gate.
   /// The UI thread must not touch the `Renderer` or mutate the `SVGDocument` while this returns
   /// true.
   [[nodiscard]] bool isBusy() const;
@@ -323,6 +795,14 @@ public:
   [[nodiscard]] bool waitUntilNoRenderInFlightForTesting(
       std::chrono::steady_clock::time_point deadline);
 
+  /// Whether the compositor's document reference is bound to the renderer-owned retained value.
+  /// A compositor bound to a request-local RenderLease becomes dangling before deferred warmup.
+  [[nodiscard]] bool compositorUsesRetainedDocumentForTesting() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return compositor_ != nullptr && compositorDocument_.has_value() &&
+           &compositor_->document() == &*compositorDocument_;
+  }
+
   /**
    * Inject a fixed delay into each worker render attempt for replay tests.
    *
@@ -336,6 +816,54 @@ public:
    * @param frameCount Number of poll attempts to withhold a newly staged result.
    */
   void setReplayResultHoldFramesForTesting(int frameCount);
+
+  /**
+   * Stage a synthetic direct-surface result for state-machine tests.
+   *
+   * @param result Result to install in `DoneState` until it is polled or cancelled.
+   */
+  void stageDirectSurfaceResultForTesting(RenderResult result);
+
+  /** Stage a synthetic direct-surface result before its worker task-boundary acknowledgment. */
+  void stageDirectSurfaceResultPendingTaskBoundaryForTesting(RenderResult result);
+
+  /// Install a synthetic low-priority warmup state for document-access gate tests.
+  void stageCompositorWarmupForTesting(bool pending, bool active) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (std::holds_alternative<ShutdownState>(workerState_)) {
+      return;
+    }
+    pendingCompositorWarmup_ = pending;
+    compositorWarmupActive_ = active;
+  }
+
+  /// Simulate the active warmup releasing its document guard.
+  void completeCompositorWarmupForTesting() {
+    std::function<void()> wake;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      pendingCompositorWarmup_ = false;
+      compositorWarmupActive_ = false;
+      if (std::exchange(compositorWarmupReleaseWakePending_, false)) {
+        wake = wakeCallback_;
+      }
+    }
+    cv_.notify_all();
+    if (wake) {
+      wake();
+    }
+  }
+
+  /** Acknowledge a synthetic direct-surface task boundary and make its result pollable. */
+  [[nodiscard]] bool acknowledgeDirectSurfaceTaskBoundaryForTesting();
+
+  /**
+   * Acknowledge a synthetic boundary only when it still belongs to @p frameToken.
+   *
+   * Models a delayed browser callback after a newer direct-surface frame has replaced the
+   * pending state.
+   */
+  [[nodiscard]] bool acknowledgeDirectSurfaceTaskBoundaryForTesting(std::uint64_t frameToken);
 
   /// Number of poll attempts that intentionally withheld a staged result for replay tests.
   [[nodiscard]] std::uint64_t replayResultHoldPollCountForTesting() const {
@@ -367,6 +895,29 @@ public:
   /// `std::nullopt` if no render is pending-ready (either still busy
   /// or idle with nothing to hand off).
   std::optional<RenderResult> pollResult();
+
+  /**
+   * Queue one low-priority SVG thumbnail on this renderer's existing worker.
+   *
+   * The lane has exactly one slot spanning pending, active, and completed-but-unpolled work. Main
+   * document renders always take priority and cancel an active thumbnail at the next safe point.
+   *
+   * @return True when the request was accepted, false when the bounded slot is occupied or the
+   * renderer is shutting down.
+   */
+  [[nodiscard]] bool requestSampleThumbnail(SampleThumbnailRenderRequest request);
+
+  /// Poll one completed sample-thumbnail result without changing main-document busy state.
+  [[nodiscard]] std::optional<SampleThumbnailRenderResult> pollSampleThumbnailResult();
+
+  /// Drop queued/unpolled sample-thumbnail work and cancel an active attempt.
+  void cancelSampleThumbnailWork();
+
+  /// Snapshot low-priority worker counters and slot state.
+  [[nodiscard]] SampleThumbnailRenderStats sampleThumbnailRenderStats() const;
+
+  /// Inject a cancellation-aware delay before thumbnail parsing for deterministic priority tests.
+  void setSampleThumbnailRenderDelayForTesting(std::chrono::milliseconds delay);
 
   /// Install a callback that the worker thread invokes when a render
   /// result or cancellation completes. Used by the editor's on-demand
@@ -400,11 +951,13 @@ public:
   }
 
   /// Toggle the Geode geometry debug overlay
-  /// (`RendererInterface::setDebugGeometryOverlay`) on the document
-  /// renderer. The change applies at the start of the next worker
-  /// iteration; on a flip the worker also calls
-  /// `CompositorController::resetAllLayers()` so every cached segment
-  /// re-rasterizes with the new overlay state.
+  /// (`RendererInterface::setDebugGeometryOverlay`) on the root document
+  /// renderer. The change applies at the start of the next worker iteration.
+  /// Each state transition clears retained compositor state once. While
+  /// enabled, selection promotion/prewarm remains suppressed and every render
+  /// presents one flat full-document root frame so retained tiles cannot crop
+  /// or cover the frame-final wireframe. Disabling performs one transition
+  /// reset, then normal retained promotion resumes.
   ///
   /// Same threading contract as \ref setTightBoundedSegmentsEnabled:
   /// safe to call from the UI thread while a render is in flight.
@@ -422,8 +975,9 @@ public:
   /// since construction. Tests use this to assert that frame-version mutations
   /// do not masquerade as document replacements.
   ///
-  /// Counts only resets driven by a `request.documentGeneration` mismatch; not
-  /// the implicit reset performed on first compositor construction.
+  /// Counts resets driven by a `request.documentGeneration` mismatch and
+  /// geometry-debug state transitions; not the implicit reset performed on
+  /// first compositor construction.
   ///
   /// Safe to read from the UI thread; incremented under the internal mutex on
   /// the worker.
@@ -520,10 +1074,70 @@ public:
     return lastDocumentCanvasSize_;
   }
 
+  /// Latest worker-owned browser-surface presentation geometry.
+  [[nodiscard]] DirectSurfacePresentationState directSurfacePresentation() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return lastDirectSurfacePresentation_;
+  }
+
+  /**
+   * Invalidate the browser surface during a full document replacement.
+   *
+   * Results from older document generations remain ineligible even when their surface handoff
+   * finishes after this call.
+   *
+   * @param documentGeneration Generation of the newly loaded document.
+   */
+  void invalidateDirectSurfacePresentation(std::uint64_t documentGeneration);
+
+  /// Replace the cached direct-surface state for coordinator reset tests.
+  void setDirectSurfacePresentationForTesting(DirectSurfacePresentationState presentation) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    lastDirectSurfacePresentation_ = std::move(presentation);
+  }
+
+  /// Enable expensive compositor inspector snapshots for the developer panel.
+  /// Scalar render timing and fast-path counters remain available when disabled.
+  void setCompositorDiagnosticsEnabled(bool enabled) {
+    compositorDiagnosticsEnabled_.store(enabled, std::memory_order_release);
+  }
+
 private:
   void workerLoop();
 
+#ifdef DONNER_WASM_WORKER_SURFACE
+  static void* workerThreadEntry(void* self);
+  static void completeWasmWorkerDeviceInitialization(std::unique_ptr<geode::GeodeDevice> device,
+                                                     void* userdata);
+  static void runWorkerTask(void* self);
+  static void acknowledgeDirectSurfaceTaskBoundary(void* self);
+  [[noreturn]] void exitWasmWorker();
+  void beginWasmWorkerRuntimeInitialization();
+  WasmWorkerRuntimeFinishAction finishWasmWorkerRuntimeInitialization(
+      std::unique_ptr<geode::GeodeDevice> device, bool usingBgra8PrimaryFormat,
+      std::chrono::steady_clock::time_point initializationStart, int workerDeviceCreations);
+  WorkerTaskScheduleResult scheduleWorkerTask();
+  void handleWasmWorkerRuntimeUnavailable();
+  void handleWorkerTaskEnqueueFailure();
+  pthread_t thread_{};
+  bool threadStarted_ = false;
+  em_proxying_queue* proxyQueue_ = nullptr;
+  bool useBitmapWorkerSurfaceBridge_ = false;
+  bool publishWorkerSurfaceDiagnostic_ = false;
+  bool workerSurfaceDiagnosticAttempted_ = false;
+  bool workerSurfaceDiagnosticPublished_ = false;
+  int lastPublishedDirectSurfaceSlot_ = 1;
+  std::unique_ptr<WasmWorkerRuntime> wasmWorkerRuntime_;
+  std::shared_ptr<WasmWorkerRuntimeInitControl> wasmWorkerRuntimeInitControl_;
+  WasmWorkerRuntimeInitializationStatus wasmWorkerRuntimeInitializationStatus_ =
+      WasmWorkerRuntimeInitializationStatus::Initializing;
+  bool wasmWorkerRuntimeFailureReported_ = false;
+  int wasmWorkerRuntimeInitializationCount_ = 0;
+  std::atomic_uint64_t workerTaskWakeFailureCount_{0};
+  WorkerTaskWakeGate workerTaskWakeGate_;
+#else
   std::thread thread_;
+#endif
   mutable std::mutex mutex_;
   std::condition_variable cv_;
 
@@ -537,17 +1151,49 @@ private:
   struct DoneState {
     /// Render result. Draining this transitions the worker state to idle.
     RenderResult result;
-    /// Replay-only poll attempts remaining before this staged result becomes visible.
-    int replayHoldPollsRemaining = 0;
+    /// UI poll attempts remaining before this staged result becomes visible.
+    ///
+    /// Replay tests use this to model delayed delivery. Direct Wasm surfaces also use the same
+    /// existing storage for one browser-compositor warmup frame, so accepting a result cannot
+    /// expose a surface whose WebGPU presentation has not reached the screen yet.
+    int presentationHoldPollsRemaining = 0;
+    /// True only after a later worker event turn acknowledges direct-surface presentation.
+    bool directSurfaceTaskBoundaryAcknowledged = false;
   };
+  struct PendingDirectSurfaceTaskBoundaryState {
+    // Move the existing DoneState behind the fence; never allocate a second RenderResult buffer.
+    DoneState done;
+  };
+  static_assert(sizeof(PendingDirectSurfaceTaskBoundaryState) == sizeof(DoneState));
   struct ShutdownState {};
-  using WorkerState =
-      std::variant<IdleState, RenderingState, CancellingState, DoneState, ShutdownState>;
+  using WorkerState = std::variant<IdleState, RenderingState, CancellingState, DoneState,
+                                   PendingDirectSurfaceTaskBoundaryState, ShutdownState>;
 
   [[nodiscard]] static bool workerStateBusy(const WorkerState& state);
   [[nodiscard]] static bool workerStateRenderInFlight(const WorkerState& state);
+  bool acknowledgeDirectSurfaceTaskBoundaryLocked(std::uint64_t frameToken,
+                                                  std::function<void()>& wake);
 
   WorkerState workerState_;
+  /// Single low-priority slot. It remains independent from `WorkerState` so thumbnail work never
+  /// makes `isBusy()` gate editor input or document mutation.
+  std::optional<SampleThumbnailRenderRequest> pendingSampleThumbnail_;
+  std::optional<SampleThumbnailRenderResult> sampleThumbnailResult_;
+  bool sampleThumbnailActive_ = false;
+  bool discardActiveSampleThumbnailResult_ = false;
+  SampleThumbnailRenderStats sampleThumbnailCounters_;
+  svg::compositor::CancellationToken cancelSampleThumbnail_;
+  std::atomic<std::chrono::milliseconds::rep> sampleThumbnailRenderDelayMsForTesting_{0};
+  /// Offscreen-only cache preparation left over after publishing a correct first document frame.
+  /// It shares the worker but not `WorkerState`, so input can post a foreground render immediately;
+  /// that request cancels this work at the compositor's existing safe points.
+  bool pendingCompositorWarmup_ = false;
+  bool compositorWarmupActive_ = false;
+  /// A caller deferred document access while warmup owned the write guard. Keep this independent
+  /// from the cancellation token so a cancel arriving after warmup's final token poll still wakes
+  /// the caller at the actual guard-release edge.
+  bool compositorWarmupReleaseWakePending_ = false;
+  svg::compositor::CancellationToken cancelCompositorWarmup_;
   /// Structural remaps retained by document generation until the worker has
   /// actually advanced the compositor to that generation. A request can be
   /// canceled before the worker consumes its remap; without this cache, the
@@ -559,7 +1205,6 @@ private:
   /// installer. Held under `mutex_` so mutation vs. invocation races
   /// are impossible.
   std::function<void()> wakeCallback_;
-  std::unique_ptr<svg::compositor::CompositorController> compositor_;
   /// The `SVGDocument` this compositor is currently configured for. Stored by
   /// value - `SVGDocument` is a thin value-facade over a `std::shared_ptr<Registry>`
   /// (see `SVGDocumentHandle`), so copying is a refcount bump, not a deep copy
@@ -571,6 +1216,9 @@ private:
   /// document - two `SVGDocument` values wrapping the same `std::shared_ptr<
   /// Registry>` compare equal, which is the right "same document" semantic.
   std::optional<svg::SVGDocument> compositorDocument_;
+  /// Declared after the retained document so reverse member destruction tears the controller down
+  /// first while its referenced SVGDocument value is still alive.
+  std::unique_ptr<svg::compositor::CompositorController> compositor_;
   svg::Renderer* compositorRenderer_ = nullptr;
   Entity compositorEntity_ = entt::null;
   /// Full set of explicit editor-promoted entities currently tracked by the worker compositor.
@@ -605,8 +1253,12 @@ private:
   void notePublishedCompositedPreview(
       const std::optional<RenderResult::CompositedPreview>& compositedPreview);
 
-  /// Counter of worker-side `resetAllLayers()` invocations. Tests verify that
-  /// only document-generation changes fire resets.
+  /// Commit an accepted direct-surface result while holding `mutex_`.
+  void commitDirectSurfacePresentation(RenderResult& result);
+
+  /// Counter of worker-side `resetAllLayers()` invocations. Document-generation
+  /// changes and supported geometry-overlay state transitions increment it;
+  /// ordinary frame-version changes do not.
   std::atomic<std::uint64_t> compositorResetCount_{0};
 
   /// Counter of worker-side `compositor_ = make_unique<...>(...)` reconstructs.
@@ -665,6 +1317,11 @@ private:
   /// re-sized but compositor hasn't caught up yet".
   Vector2i lastDocumentCanvasSize_ = Vector2i::Zero();
 
+  DirectSurfacePresentationState lastDirectSurfacePresentation_;
+  /// Oldest document generation whose worker-surface handoff may become visible.
+  std::uint64_t minimumDirectSurfaceDocumentGeneration_ = 0;
+  std::uint64_t directSurfaceFrameCount_ = 0;
+
   /// Runtime kill-switch for tight-bounded segment rasterization. Pushed
   /// into `CompositorController` at the start of each worker iteration.
   /// Default-true matches `CompositorConfig::tightBoundedSegments`. See
@@ -676,9 +1333,12 @@ private:
   /// renderer's default.
   std::atomic<bool> geometryDebugOverlay_{false};
 
-  /// Worker-thread-only: the overlay state last applied to the request
-  /// renderer, so the worker can detect flips and invalidate cached
-  /// segments exactly once per change.
+  /// Whether completed renders should materialize developer inspector snapshots.
+  std::atomic<bool> compositorDiagnosticsEnabled_{true};
+
+  /// Worker-thread-only: the overlay state last applied to the root request
+  /// renderer. Transitions trigger one retained-state reset; the enabled state
+  /// additionally keeps every debug frame in flat full-document mode.
   bool appliedGeometryDebugOverlay_ = false;
 
   /// Replay/test-only fixed delay injected into each worker render attempt.

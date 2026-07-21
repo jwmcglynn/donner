@@ -376,6 +376,7 @@ bool RenderPathOperationIconButton(const PathOperationButton& button, bool canAp
 }
 
 bool RenderPathOperationsPanel(EditorApp* liveApp,
+                               std::span<const PathOperationAvailability> snapshotAvailability,
                                const SidebarPresenter::IconTextureProvider& iconTextureProvider) {
   ImGui::Separator();
   ImGui::TextUnformatted("Path Operations");
@@ -384,9 +385,10 @@ bool RenderPathOperationsPanel(EditorApp* liveApp,
   for (std::size_t i = 0; i < kPathOperationButtons.size(); ++i) {
     const PathOperationButton& button = kPathOperationButtons[i];
     const PathOperationAvailability availability =
-        liveApp != nullptr
-            ? liveApp->pathOperationAvailability(button.operation)
-            : PathOperationAvailability{.canApply = false, .reason = "Rendering in progress"};
+        liveApp != nullptr ? liveApp->pathOperationAvailability(button.operation)
+        : i < snapshotAvailability.size()
+            ? snapshotAvailability[i]
+            : PathOperationAvailability{.canApply = false, .reason = "Unavailable"};
 
     if (i > 0) {
       ImGui::SameLine();
@@ -428,19 +430,22 @@ double FirstSelectedStrokeWidth(const EditorApp& app) {
   return selection.front().getComputedStyle().strokeWidth.get().value().value;
 }
 
-bool RenderStrokeControlsPanel(EditorApp* liveApp) {
+bool RenderStrokeControlsPanel(EditorApp* liveApp, bool snapshotEditable,
+                               float snapshotStrokeWidth) {
   ImGui::Separator();
   ImGui::TextUnformatted("Stroke");
 
-  const bool canEdit = liveApp != nullptr && liveApp->hasSelection();
-  float strokeWidth = canEdit ? static_cast<float>(FirstSelectedStrokeWidth(*liveApp)) : 1.0f;
+  const bool canMutate = liveApp != nullptr && liveApp->hasSelection();
+  const bool visuallyEditable = liveApp != nullptr ? canMutate : snapshotEditable;
+  float strokeWidth =
+      canMutate ? static_cast<float>(FirstSelectedStrokeWidth(*liveApp)) : snapshotStrokeWidth;
 
-  if (!canEdit) {
+  if (!visuallyEditable) {
     ImGui::BeginDisabled();
   }
   ImGui::SetNextItemWidth(kInspectorFieldWidth);
   const bool changed = ImGui::DragFloat("Width", &strokeWidth, 0.1f, 0.0f, 200.0f, "%.2f");
-  if (!canEdit) {
+  if (!visuallyEditable) {
     ImGui::EndDisabled();
   }
 
@@ -527,9 +532,18 @@ void SidebarPresenter::refreshSnapshot(const EditorApp& app) {
 
   // Inspector snapshot.
   InspectorSnapshot inspector;
+  inspector.strokeEditable = !selectionList.empty();
+  if (inspector.strokeEditable) {
+    inspector.strokeWidth = static_cast<float>(FirstSelectedStrokeWidth(app));
+  }
+  inspector.pathOperationAvailability.reserve(kPathOperationButtons.size());
+  for (const PathOperationButton& button : kPathOperationButtons) {
+    inspector.pathOperationAvailability.push_back(app.pathOperationAvailability(button.operation));
+  }
   if (selectionList.size() == 1) {
     inspector.hasSelection = true;
     const donner::svg::SVGElement& selected = selectionList.front();
+    inspector.transformEditable = !IsLocked(selected);
     const donner::RcString selectedTagName = selected.tagName().name;
     const std::string_view tagSv = selectedTagName;
     const donner::RcString idStr = selected.id();
@@ -708,12 +722,20 @@ bool SidebarPresenter::renderInspector(EditorApp* liveApp, const ViewportState&,
   if (!inspectorSnapshot_.hasSelection) {
     if (liveApp != nullptr && liveApp->selectedElements().size() > 1u) {
       ImGui::Text("%zu elements selected", liveApp->selectedElements().size());
-      queuedMutation = RenderStrokeControlsPanel(liveApp);
-      queuedMutation = RenderPathOperationsPanel(liveApp, iconTextureProvider) || queuedMutation;
+      queuedMutation = RenderStrokeControlsPanel(liveApp, inspectorSnapshot_.strokeEditable,
+                                                 inspectorSnapshot_.strokeWidth);
+      queuedMutation =
+          RenderPathOperationsPanel(liveApp, inspectorSnapshot_.pathOperationAvailability,
+                                    iconTextureProvider) ||
+          queuedMutation;
     } else {
       ImGui::TextDisabled("Select a single element to inspect attributes.");
-      queuedMutation = RenderStrokeControlsPanel(liveApp);
-      queuedMutation = RenderPathOperationsPanel(liveApp, iconTextureProvider) || queuedMutation;
+      queuedMutation = RenderStrokeControlsPanel(liveApp, inspectorSnapshot_.strokeEditable,
+                                                 inspectorSnapshot_.strokeWidth);
+      queuedMutation =
+          RenderPathOperationsPanel(liveApp, inspectorSnapshot_.pathOperationAvailability,
+                                    iconTextureProvider) ||
+          queuedMutation;
     }
   } else {
     const EditorTheme& theme = EditorTheme::Active();
@@ -733,13 +755,18 @@ bool SidebarPresenter::renderInspector(EditorApp* liveApp, const ViewportState&,
                          b.topLeft.y);
     }
     queuedMutation = renderTransformPanel(liveApp);
-    queuedMutation = RenderStrokeControlsPanel(liveApp) || queuedMutation;
+    queuedMutation = RenderStrokeControlsPanel(liveApp, inspectorSnapshot_.strokeEditable,
+                                               inspectorSnapshot_.strokeWidth) ||
+                     queuedMutation;
     RenderInspectorSection("XML attributes", "##inspector_xml_attributes",
                            inspectorSnapshot_.xmlAttributes, InspectorSectionKind::XmlAttributes);
     RenderInspectorSection("Computed CSS", "##inspector_computed_style",
                            inspectorSnapshot_.computedStyle, InspectorSectionKind::ComputedCss,
                            inspectorSnapshot_.computedStyleSwatches);
-    queuedMutation = RenderPathOperationsPanel(liveApp, iconTextureProvider) || queuedMutation;
+    queuedMutation =
+        RenderPathOperationsPanel(liveApp, inspectorSnapshot_.pathOperationAvailability,
+                                  iconTextureProvider) ||
+        queuedMutation;
   }
   return queuedMutation;
 }
@@ -785,17 +812,19 @@ bool SidebarPresenter::renderTransformPanel(EditorApp* liveApp) {
   const std::optional<Box2d>& bounds = inspectorSnapshot_.bounds;
 
   const bool liveEditable = liveElement.has_value() && !IsLocked(*liveElement);
+  const bool visuallyEditable =
+      liveApp != nullptr ? liveEditable : inspectorSnapshot_.transformEditable;
   const bool decomposable = snapshotDecomposed.has_value();
 
   ImGui::Separator();
   ImGui::TextUnformatted("Transform");
 
-  const bool canEditPosition = liveEditable && decomposable && bounds.has_value();
+  const bool canEditPosition = visuallyEditable && decomposable && bounds.has_value();
   const bool canEditWidth =
       canEditPosition && static_cast<double>(bounds->width()) > kMinimumSpanForScale;
   const bool canEditHeight =
       canEditPosition && static_cast<double>(bounds->height()) > kMinimumSpanForScale;
-  const bool canEditRotation = liveEditable && decomposable;
+  const bool canEditRotation = visuallyEditable && decomposable;
 
   const float xValue = bounds.has_value() ? static_cast<float>(bounds->topLeft.x) : 0.0f;
   const float yValue = bounds.has_value() ? static_cast<float>(bounds->topLeft.y) : 0.0f;
@@ -897,12 +926,12 @@ bool SidebarPresenter::renderTransformPanel(EditorApp* liveApp) {
         ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(theme.textMuted), "%c", 'a' + i);
         ImGui::TableSetColumnIndex(axisColumn + 1);
         ImGui::SetNextItemWidth(-FLT_MIN);
-        if (!liveEditable) {
+        if (!visuallyEditable) {
           ImGui::BeginDisabled();
         }
         const bool changed = ImGui::DragScalar(kMatrixLabels[i], ImGuiDataType_Double, &value,
                                                0.01f, nullptr, nullptr, "%.6g");
-        if (!liveEditable) {
+        if (!visuallyEditable) {
           ImGui::EndDisabled();
         }
 

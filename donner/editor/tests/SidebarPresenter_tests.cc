@@ -547,6 +547,22 @@ protected:
     ImGui::Render();
     return queuedMutation;
   }
+
+  static std::vector<ImU32> DrawVertexColors() {
+    std::vector<ImU32> colors;
+    const ImDrawData* drawData = ImGui::GetDrawData();
+    if (drawData == nullptr) {
+      return colors;
+    }
+    colors.reserve(static_cast<std::size_t>(drawData->TotalVtxCount));
+    for (int listIndex = 0; listIndex < drawData->CmdListsCount; ++listIndex) {
+      const ImDrawList* drawList = drawData->CmdLists[listIndex];
+      for (const ImDrawVert& vertex : drawList->VtxBuffer) {
+        colors.push_back(vertex.col);
+      }
+    }
+    return colors;
+  }
 };
 
 TEST_F(SidebarPresenterImGuiTest, TreeViewAndInspectorRenderEmptySnapshotReadOnly) {
@@ -624,6 +640,29 @@ TEST_F(SidebarPresenterImGuiTest, InspectorRendersMultiSelectionAndSingleSelecti
   const ImDrawData* singleDrawData = ImGui::GetDrawData();
   ASSERT_NE(singleDrawData, nullptr);
   EXPECT_GT(singleDrawData->TotalVtxCount, 0);
+}
+
+TEST_F(SidebarPresenterImGuiTest, BusyFramePreservesInspectorSnapshotAppearance) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kInspectorSvg));
+  app.setCleanSourceText(kInspectorSvg);
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  constexpr char kWindowName[] = "##sidebar_busy_snapshot_appearance_test";
+
+  ASSERT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName));
+  const std::vector<ImU32> idleColors = DrawVertexColors();
+  ASSERT_FALSE(idleColors.empty());
+
+  ASSERT_FALSE(RenderInspectorFrame(presenter, nullptr, kWindowName));
+  const std::vector<ImU32> busyColors = DrawVertexColors();
+  EXPECT_EQ(busyColors, idleColors)
+      << "Worker ownership must gate mutations without dimming or resetting inspector controls";
+  EXPECT_FALSE(app.canUndo());
 }
 
 TEST_F(SidebarPresenterImGuiTest, TreeViewOpensAncestorsForPendingScrollTarget) {
@@ -1139,8 +1178,8 @@ TEST_F(SidebarPresenterImGuiTest, TransformFieldDragAppliesAndCommitsEdit) {
   ImVec2 dragged = center;
   for (int step = 1; step <= 4; ++step) {
     dragged.x = center.x + 10.0f * static_cast<float>(step);
-    applied = RenderInspectorFrame(presenter, &app, kWindowName, dragged, /*mouseDown=*/true) ||
-              applied;
+    applied =
+        RenderInspectorFrame(presenter, &app, kWindowName, dragged, /*mouseDown=*/true) || applied;
   }
   EXPECT_TRUE(applied) << "Dragging the X field must queue a live transform mutation.";
 

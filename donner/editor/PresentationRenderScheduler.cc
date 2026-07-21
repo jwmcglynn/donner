@@ -25,6 +25,16 @@ bool SameRasterViewport(const EditorRasterViewport& lhs, const EditorRasterViewp
          SameTransform(lhs.outputFromDocument, rhs.outputFromDocument);
 }
 
+bool SameDragPreviewTransform(const SelectTool::ActiveDragPreview& lhs,
+                              const SelectTool::ActiveDragPreview& rhs) {
+  constexpr double kTolerance = 1e-6;
+  return lhs.entity == rhs.entity && lhs.extraEntities == rhs.extraEntities &&
+         lhs.dragGeneration == rhs.dragGeneration &&
+         NearEquals(lhs.translation.x, rhs.translation.x, kTolerance) &&
+         NearEquals(lhs.translation.y, rhs.translation.y, kTolerance) &&
+         SameTransform(lhs.documentFromCachedDocument, rhs.documentFromCachedDocument);
+}
+
 }  // namespace
 
 void PresentationRenderScheduler::reset() {
@@ -42,8 +52,24 @@ PresentationRenderScheduleDecision PresentationRenderScheduler::evaluate(
   decision.currentVersion = input.currentVersion;
   decision.currentCanvasSize = input.currentCanvasSize;
   decision.currentRasterViewport = input.currentRasterViewport;
-  decision.needsCompositedLayerCapture = presentation.needsCompositedLayerCapture(
-      input.activeDragPreview, input.currentVersion, input.currentCanvasSize);
+  const bool deferIdentityActiveDragCapture =
+      input.deferIdentityActiveDragCapture && input.activeDragPreview.has_value() &&
+      input.activeDragPreview->documentFromCachedDocument.isIdentity() &&
+      NearEquals(input.activeDragPreview->translation.x, 0.0) &&
+      NearEquals(input.activeDragPreview->translation.y, 0.0);
+  if (!deferIdentityActiveDragCapture) {
+    decision.needsCompositedLayerCapture = presentation.needsCompositedLayerCapture(
+        input.activeDragPreview, input.currentVersion, input.currentCanvasSize,
+        input.dragTranslationRecaptureDistanceDoc);
+  }
+  if (!deferIdentityActiveDragCapture && input.requiresRenderedActiveDragPresentation &&
+      input.activeDragPreview.has_value()) {
+    const std::optional<SelectTool::ActiveDragPreview> representedPreview =
+        presentation.presentationPreview(input.activeDragPreview);
+    decision.needsRenderedActiveDragPresentation =
+        !representedPreview.has_value() ||
+        !SameDragPreviewTransform(*input.activeDragPreview, *representedPreview);
+  }
   const bool versionChanged = input.currentVersion != lastRenderedVersion_;
   const bool canvasSizeChanged = input.currentCanvasSize != lastRenderedCanvasSize_;
   const bool rasterViewportChanged =
@@ -67,13 +93,17 @@ PresentationRenderScheduleDecision PresentationRenderScheduler::evaluate(
   const bool selectedViewportRenderNeedsPrewarm = input.selectedEntity != entt::null &&
                                                   !input.activeDragPreview.has_value() &&
                                                   (canvasSizeChanged || rasterViewportChanged);
-  decision.needsCompositedPrewarm =
-      needsSettledSelectionRefresh || selectedLayerNeedsForcedRasterization ||
+  decision.needsRegularRender = input.forcePresentationRefresh || versionChanged ||
+                                canvasSizeChanged || rasterViewportChanged;
+  const bool selectionCacheNeedsPrewarm =
       presentation.shouldPrewarm(input.selectedEntity, input.selectedExtraEntities,
                                  input.currentVersion, input.currentCanvasSize,
                                  /*dragActive=*/input.activeDragPreview.has_value()) ||
       selectedViewportRenderNeedsPrewarm;
-  decision.needsRegularRender = versionChanged || canvasSizeChanged || rasterViewportChanged;
+  decision.needsCompositedPrewarm =
+      needsSettledSelectionRefresh || selectedLayerNeedsForcedRasterization ||
+      (selectionCacheNeedsPrewarm &&
+       (input.selectionOnlyPrewarmMayTriggerRender || decision.needsRegularRender));
 
   if (input.activeDragPreview.has_value()) {
     decision.dragPreview = RenderRequest::DragPreview{
@@ -94,7 +124,7 @@ PresentationRenderScheduleDecision PresentationRenderScheduler::evaluate(
                                    selectedLayerNeedsForcedRasterization,
     };
   }
-  if (input.activeDragPreview.has_value()) {
+  if (input.activeDragPreview.has_value() && !input.requiresRenderedActiveDragPresentation) {
     decision.needsRegularRender = false;
   }
 

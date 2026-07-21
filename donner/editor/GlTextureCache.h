@@ -208,6 +208,22 @@ public:
   };
   ThumbnailTextureView uploadThumbnail(std::uint64_t key, const svg::RendererBitmap& bitmap);
 
+  /// Current transparent selection-chrome texture, composited by the render-pane ImGui draw list
+  /// so editor popups and menus remain above it.
+  struct OverlayTextureView {
+    ImTextureID texture = 0;
+    Vector2i dimensions = Vector2i::Zero();
+    Box2d screenRect;
+  };
+
+  /// Replace the current Geode overlay snapshot and retire the previous snapshot safely.
+  OverlayTextureView updateOverlayTexture(
+      std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot, const Box2d& screenRect);
+  /// Return the currently presented overlay texture, if any.
+  [[nodiscard]] OverlayTextureView overlayTexture() const;
+  /// Remove the current overlay texture.
+  void resetOverlay();
+
   /// Evict every cached thumbnail texture whose key is not in @p liveKeys,
   /// freeing the backing GL/WGPU texture. Called after each Layers-panel render
   /// so thumbnails for removed rows do not leak across refreshes.
@@ -239,8 +255,9 @@ public:
     bool isDragTarget = false;
   };
 
-  /// Paint-order tile view; empty when no composited preview has been
-  /// uploaded yet (or the preview was cleared via `resetComposited`).
+  /// Paint-order tile view; metadata-only direct-surface entries have a zero texture handle.
+  /// Empty when no composited preview has been uploaded yet (or the preview was cleared via
+  /// `resetComposited`).
   [[nodiscard]] const std::vector<TileView>& tiles() const { return tiles_; }
   /// Last retained unbounded full-document tile set, drawn underneath
   /// viewport-bounded tiles as a coherent zoom-out fallback.
@@ -332,6 +349,8 @@ private:
   /// holding a content fingerprint plus the cached width/height). Evicted by
   /// `retainThumbnailsOnly` when a row leaves the panel.
   std::unordered_map<std::uint64_t, CachedTextureEntry> thumbnailTextures_;
+  CachedTextureEntry overlayTexture_;
+  Box2d overlayScreenRect_;
 
   /// Paint-order view of the most recent `uploadComposited` call.
   /// Rebuilt every upload (cheap - N tiles, plain values).

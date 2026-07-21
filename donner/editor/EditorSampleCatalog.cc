@@ -23,15 +23,15 @@ constexpr std::string_view kTextStyleSvg =
     R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
   <rect width="640" height="360" fill="#17202a"/>
   <style>
-    .heading { fill: #f8f9fa; font-family: sans-serif; font-size: 42px; font-weight: bold; }
-    .body { fill: #9fe3c0; font-family: sans-serif; font-size: 22px; }
+    .heading { fill: #f8f9fa; font-family: Inter, sans-serif; font-size: 42px; font-weight: bold; }
+    .body { fill: #9fe3c0; font-family: Inter, sans-serif; font-size: 22px; }
     .rule { stroke: #f0b429; stroke-width: 5; }
   </style>
   <text class="heading" x="48" y="110">Donner editor</text>
   <text class="body" x="48" y="158">Text and style inspection</text>
   <line class="rule" x1="48" y1="202" x2="592" y2="202"/>
-  <text x="48" y="270" fill="#f8f9fa" font-family="sans-serif" font-size="24px">Editable SVG source</text>
-  <text x="48" y="310" fill="#aeb6bf" font-family="sans-serif" font-size="18px" font-style="italic">Selectors, inheritance, and typography</text>
+  <text x="48" y="270" fill="#f8f9fa" font-family="Inter, sans-serif" font-size="24px">Editable SVG source</text>
+  <text x="48" y="310" fill="#aeb6bf" font-family="Inter, sans-serif" font-size="18px" font-style="italic">Selectors, inheritance, and typography</text>
 </svg>)svg";
 
 constexpr std::string_view kGradientsClipSvg =

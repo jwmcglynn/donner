@@ -142,8 +142,8 @@ struct ViewportState {
   /// Raster viewport for idle selected-layer prewarms.
   ///
   /// This matches \ref rasterViewport at normal zooms. When the base raster is viewport-bounded,
-  /// the prewarm viewport adds conservative screen-space overdraw so short zoom-outs do not expose
-  /// unrendered edges before the settled crisp render lands.
+  /// the prewarm viewport adds conservative screen-space overdraw so short transforms do not
+  /// expose unrendered edges before a refreshed selected-layer tile lands.
   [[nodiscard]] EditorRasterViewport selectedPrewarmRasterViewport() const;
 
   /// Low-resolution full-document raster used underneath viewport-bounded tiles.

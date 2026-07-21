@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <optional>
 #include <thread>
@@ -382,6 +383,37 @@ TEST(SVGDocumentConcurrencyTests, TryUpgradeFailsImmediatelyAndRetainsReadUnderC
   diagnostics = document.handle()->accessDiagnostics();
   EXPECT_EQ(diagnostics.activeReadLocks, 1u);
   EXPECT_FALSE(diagnostics.writeLockHeld);
+}
+
+TEST(SVGDocumentConcurrencyTests, TryWriteAccessFailsImmediatelyWhileWorkerOwnsDocument) {
+  SVGDocument document;
+  document.setThreadingMode(ThreadingMode::ConcurrentDom);
+
+  std::atomic<bool> competingWriterReady = false;
+  std::atomic<bool> releaseCompetingWriter = false;
+  std::thread competingWriter([document, &competingWriterReady, &releaseCompetingWriter]() mutable {
+    DocumentWriteAccess access = document.writeAccess();
+    competingWriterReady.store(true, std::memory_order_release);
+    while (!releaseCompetingWriter.load(std::memory_order_acquire)) {
+      std::this_thread::yield();
+    }
+  });
+
+  while (!competingWriterReady.load(std::memory_order_acquire)) {
+    std::this_thread::yield();
+  }
+
+  const auto start = std::chrono::steady_clock::now();
+  std::optional<DocumentWriteAccess> writeAccess = document.tryWriteAccess();
+  const auto elapsed = std::chrono::steady_clock::now() - start;
+  EXPECT_FALSE(writeAccess.has_value());
+  EXPECT_LT(elapsed, std::chrono::milliseconds(100));
+
+  releaseCompetingWriter.store(true, std::memory_order_release);
+  competingWriter.join();
+
+  std::optional<DocumentWriteAccess> writeAccessAfterRelease = document.tryWriteAccess();
+  EXPECT_TRUE(writeAccessAfterRelease.has_value());
 }
 
 TEST(SVGDocumentConcurrencyTests, TryDowngradeAtomicallyConvertsWriteToReadAccess) {

@@ -1279,6 +1279,42 @@ TEST(LayersPanelTest, RefreshSnapshotReusesThumbnailsWhenDocumentFrameIsUnchange
       << "a real document-frame change must invalidate cached layer thumbnails";
 }
 
+TEST(LayersPanelTest, IncrementalRefreshRendersAtMostOneStaleThumbnailPerPass) {
+  EditorApp app;
+  ASSERT_TRUE(
+      app.loadFromString(R"SVG(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="40">
+    <rect id="left" x="0" y="0" width="40" height="40" fill="red"/>
+    <rect id="middle" x="40" y="0" width="40" height="40" fill="green"/>
+    <rect id="right" x="80" y="0" width="40" height="40" fill="blue"/>
+  </svg>)SVG"));
+
+  svg::Renderer renderer;
+  LayersPanel panel;
+  panel.refreshSnapshot(app, &renderer, LayersPanel::ThumbnailRefreshMode::RenderIncremental);
+  const std::size_t rowCount = panel.thumbnailRefreshStats().rowCount;
+  ASSERT_GT(rowCount, 1u);
+  EXPECT_EQ(panel.thumbnailRefreshStats().renderedCount, 1u);
+  EXPECT_EQ(panel.thumbnailRefreshStats().reusedCount, 0u);
+  EXPECT_EQ(panel.thumbnailRefreshStats().deferredCount, rowCount - 1u);
+  EXPECT_EQ(panel.thumbnailRefreshStats().snapshotRebuildCount, 1u);
+
+  for (std::size_t pass = 1; pass < rowCount; ++pass) {
+    panel.refreshSnapshot(app, &renderer, LayersPanel::ThumbnailRefreshMode::RenderIncremental);
+    EXPECT_EQ(panel.thumbnailRefreshStats().renderedCount, 1u) << "pass=" << pass;
+    EXPECT_EQ(panel.thumbnailRefreshStats().reusedCount, pass) << "pass=" << pass;
+    EXPECT_EQ(panel.thumbnailRefreshStats().deferredCount, rowCount - pass - 1u) << "pass=" << pass;
+    EXPECT_EQ(panel.thumbnailRefreshStats().snapshotRebuildCount, 0u)
+        << "incremental thumbnail frames must not rebuild the full row/style snapshot; pass="
+        << pass;
+  }
+
+  panel.refreshSnapshot(app, &renderer, LayersPanel::ThumbnailRefreshMode::RenderIncremental);
+  EXPECT_EQ(panel.thumbnailRefreshStats().renderedCount, 0u);
+  EXPECT_EQ(panel.thumbnailRefreshStats().reusedCount, rowCount);
+  EXPECT_EQ(panel.thumbnailRefreshStats().deferredCount, 0u);
+  EXPECT_EQ(panel.thumbnailRefreshStats().snapshotRebuildCount, 0u);
+}
+
 // The approved thumbnail PNGs are default-renderer goldens. The Geode wrapper
 // keeps backend-independent layer panel behavior covered by the semantic tests
 // below.

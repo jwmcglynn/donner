@@ -1,5 +1,6 @@
 #include "donner/editor/EmbeddedSvgIcon.h"
 
+#include <memory>
 #include <string_view>
 #include <utility>
 
@@ -34,12 +35,31 @@ void NormalizeIconBitmapToTintableAlphaMask(svg::RendererBitmap* bitmap) {
   bitmap->alphaType = svg::AlphaType::Premultiplied;
 }
 
-/// Embedded icons always end as CPU bitmaps for ImGui upload. Keep this small,
-/// fixed-size rasterization on TinySkia so a Geode editor does not serialize a
-/// GPU texture readback for every toolbar icon before its first frame.
-svg::RendererTinySkia& SharedIconRenderer() {
-  static svg::RendererTinySkia renderer;
-  return renderer;
+/// One shared renderer for all embedded-icon rasterization, created on first
+/// use. Icons render lazily from UI-thread panel code only. Constructing a
+/// fresh renderer per icon is disproportionately expensive on GPU backends -
+/// each construction stands up a full WebGPU instance/adapter/device - and
+/// showed up as a stream of duplicate "[Geode/wgpu-native] Adapter:" logs at
+/// editor startup.
+struct SharedIconRendererState {
+  svg::RendererInterface* configuredRenderer = nullptr;
+  std::unique_ptr<svg::Renderer> fallbackRenderer;
+};
+
+SharedIconRendererState& SharedIconRendererStateInstance() {
+  static SharedIconRendererState state;
+  return state;
+}
+
+svg::RendererInterface& SharedIconRenderer() {
+  SharedIconRendererState& state = SharedIconRendererStateInstance();
+  if (state.configuredRenderer != nullptr) {
+    return *state.configuredRenderer;
+  }
+  if (state.fallbackRenderer == nullptr) {
+    state.fallbackRenderer = std::make_unique<svg::Renderer>();
+  }
+  return *state.fallbackRenderer;
 }
 
 std::optional<svg::RendererBitmap> RenderEmbeddedSvgBitmap(std::span<const unsigned char> svgBytes,
@@ -60,7 +80,7 @@ std::optional<svg::RendererBitmap> RenderEmbeddedSvgBitmap(std::span<const unsig
   root.setWidth(Lengthd(outputSizePx, Lengthd::Unit::Px));
   root.setHeight(Lengthd(outputSizePx, Lengthd::Unit::Px));
 
-  svg::RendererTinySkia& renderer = SharedIconRenderer();
+  svg::RendererInterface& renderer = SharedIconRenderer();
   renderer.draw(document);
   svg::RendererBitmap bitmap = renderer.takeSnapshot();
   if (bitmap.empty()) {
@@ -74,6 +94,22 @@ std::optional<svg::RendererBitmap> RenderEmbeddedSvgBitmap(std::span<const unsig
 }
 
 }  // namespace
+
+void ConfigureEmbeddedSvgIconRenderer(svg::RendererInterface& renderer) {
+  SharedIconRendererState& state = SharedIconRendererStateInstance();
+  if (state.configuredRenderer == &renderer) {
+    return;
+  }
+  state.fallbackRenderer.reset();
+  state.configuredRenderer = &renderer;
+}
+
+void ResetEmbeddedSvgIconRenderer(const svg::RendererInterface& expectedRenderer) {
+  SharedIconRendererState& state = SharedIconRendererStateInstance();
+  if (state.configuredRenderer == &expectedRenderer) {
+    state.configuredRenderer = nullptr;
+  }
+}
 
 std::optional<svg::RendererBitmap> RenderEmbeddedSvgIcon(std::span<const unsigned char> svgBytes,
                                                          int outputSizePx) {

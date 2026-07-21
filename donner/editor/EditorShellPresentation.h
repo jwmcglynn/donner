@@ -40,6 +40,23 @@ std::optional<PresentedDragBaseline> PresentedBaselineFromDragPreviews(
     const std::optional<SelectTool::ActiveDragPreview>& activePreview,
     const std::optional<SelectTool::ActiveDragPreview>& displayedPreview);
 
+/// Tight texture footprint and screen placement for one frozen selection-chrome snapshot.
+struct OverlayTexturePlacement {
+  Vector2i textureSizePx = Vector2i(1, 1);
+  Vector2d textureOriginPx = Vector2d::Zero();
+  Box2d screenRect;
+};
+
+/// Compute a clipped, padded overlay texture footprint around the snapshot's visible chrome.
+[[nodiscard]] OverlayTexturePlacement ComputeOverlayTexturePlacement(
+    const ViewportState& viewport, const SelectionChromeSnapshot& snapshot);
+
+/// Remove selection primitives already baked into a worker document surface,
+/// retaining independently animated UI chrome such as hover, marquee, pen,
+/// text caret, and text selection feedback.
+[[nodiscard]] SelectionChromeSnapshot OverlayWithoutBakedSelectionChrome(
+    SelectionChromeSnapshot snapshot);
+
 #ifdef DONNER_EDITOR_WGPU
 class FramebufferCheckerboardRenderer {
 public:
@@ -80,13 +97,17 @@ FrameCostBreakdown::DirectPresentation DrawDocumentPresentationToFramebuffer(
     const std::optional<SelectTool::ActiveDragPreview>& displayedDragPreview,
     Entity suppressedLayerEntity, bool suppressDragTargetTiles);
 
-/// Draw the immediate overlay snapshot (selection chrome, pen previews)
-/// directly onto the window framebuffer.
-void DrawImmediateOverlaySnapshotToFramebuffer(svg::RendererGeode& renderer,
-                                               const gui::EditorWindowWgpuRenderTarget& target,
-                                               const ViewportState& viewport,
-                                               const Box2d& imageClipRect,
-                                               const SelectionChromeSnapshot& snapshot);
+/// Transparent Geode texture plus its tight screen placement.
+struct RenderedOverlayTexture {
+  std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot;
+  Box2d screenRect;
+};
+
+/// Rasterize selection chrome into a tightly-bounded transparent Geode texture for ordered ImGui
+/// composition. This keeps the chrome above document pixels and below menus/popups in browsers.
+[[nodiscard]] RenderedOverlayTexture RenderImmediateOverlaySnapshotToTexture(
+    svg::RendererGeode& renderer, const ViewportState& viewport,
+    const SelectionChromeSnapshot& snapshot);
 #endif
 
 }  // namespace donner::editor

@@ -82,6 +82,122 @@
 
 namespace donner::editor {
 
+#ifdef __EMSCRIPTEN__
+EM_JS(void, PublishActiveSampleId, (const char* sampleId), {
+  const id = UTF8ToString(sampleId);
+  const canvas = document.getElementById('canvas');
+  if (canvas) {
+    canvas.setAttribute('data-active-sample-id', id);
+  }
+  window['__donnerActiveSampleStats'] = {
+    'sampleId' : id,
+    'activatedAtMs' : performance.now(),
+  };
+});
+
+EM_JS(void, PublishSampleThumbnailStats,
+      (int requested, int started, int completed, int rendered, int ready, int pending, int active,
+       int resultReady),
+      {
+        const frame = Number(window['__donnerMainLoopRenderedFrames'] || 0) + 1;
+        const previous = window['__donnerSampleThumbnailStats'] || {
+          'carouselFrame' : frame,
+          'firstRequestFrame' : 0,
+          'ready' : 0,
+          'publicationFrames' : [],
+        };
+        const publicationFrames = Array.isArray(previous['publicationFrames'])
+                                      ? previous['publicationFrames'].slice()
+                                      : [];
+        for (let published = Number(previous['ready'] || 0); published < ready; ++published) {
+          publicationFrames.push(frame);
+        }
+        window['__donnerSampleThumbnailStats'] = {
+          'carouselFrame' : Number(previous['carouselFrame'] || frame),
+          'firstRequestFrame' :
+              Number(previous['firstRequestFrame'] || (requested > 0 ? frame : 0)),
+          requested,
+          started,
+          completed,
+          rendered,
+          ready,
+          publicationFrames,
+          'pending' : Boolean(pending),
+          'active' : Boolean(active),
+          'resultReady' : Boolean(resultReady),
+        };
+      });
+
+EM_JS(void, PublishInteractionStats,
+      (int selectedCount, int pendingClick, int workerBusy, int dragging, double frame), {
+        window['__donnerInteractionStats'] = {
+          selectedCount,
+          'pendingClick' : Boolean(pendingClick),
+          'workerBusy' : Boolean(workerBusy),
+          'dragging' : Boolean(dragging),
+          'publishedAtFrame' : Number(frame),
+        };
+      });
+
+#endif
+
+#if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
+EM_JS(void, UpdateWorkerDocumentSurfaceLayout,
+      (int visible, int surfaceSlot, double left, double top, double width, double height,
+       double clipLeft, double clipTop, double clipRight, double clipBottom, double frameCount,
+       int selectionChromeBaked),
+      {
+        const layout = {
+          visible : Boolean(visible),
+          surfaceSlot,
+          left,
+          top,
+          width,
+          height,
+          clipLeft,
+          clipTop,
+          clipRight,
+          clipBottom,
+          frameToken : Number(frameCount),
+          selectionChromeBaked : Boolean(selectionChromeBaked),
+        };
+        if (window['__donnerWorkerSurfaceMode'] == 'bitmap-bridge' &&
+            typeof Module['updateDonnerBitmapSurfaceLayout'] == 'function') {
+          Module['updateDonnerBitmapSurfaceLayout'](layout);
+          return;
+        }
+        if (typeof window['__donnerApplyWorkerDocumentSurfaceLayout'] == 'function') {
+          window['__donnerApplyWorkerDocumentSurfaceLayout'](layout);
+          return;
+        }
+        const canvases = [
+          document.getElementById('donner-document-canvas'),
+          document.getElementById('donner-document-canvas-back'),
+        ];
+        const visibleSlot = Math.max(0, Math.min(canvases.length - 1, surfaceSlot));
+        for (let slot = 0; slot < canvases.length; ++slot) {
+          const canvas = canvases[slot];
+          if (!canvas) continue;
+          const show = Boolean(visible) && width > 0 && height > 0 && slot == visibleSlot;
+          canvas.setAttribute('data-direct-surface-visible', show ? 'true' : 'false');
+          canvas.setAttribute('data-direct-surface-selection-chrome-baked',
+                              show && selectionChromeBaked ? 'true' : 'false');
+          if (!show) {
+            canvas.style.visibility = 'hidden';
+            continue;
+          }
+          canvas.style.left = String(left) + 'px';
+          canvas.style.top = String(top) + 'px';
+          canvas.style.width = String(width) + 'px';
+          canvas.style.height = String(height) + 'px';
+          canvas.style.clipPath = 'inset(' + clipTop + 'px ' + clipRight + 'px ' + clipBottom +
+                                  'px ' + clipLeft + 'px)';
+          canvas.style.visibility = 'visible';
+          canvas.setAttribute('data-direct-surface-frame', String(frameCount));
+        }
+      });
+#endif
+
 namespace internal {
 
 constexpr float kMinSourcePaneWidth = 240.0f;
@@ -138,6 +254,32 @@ constexpr ImWchar kEditorSymbolGlyphRanges[] = {
     0x2731, 0x2731,  // Heavy asterisk.
     0,
 };
+
+constexpr std::string_view kEditorUiRegularFontName = "Donner UI Regular";
+constexpr std::string_view kEditorUiBoldFontName = "Donner UI Bold";
+constexpr std::string_view kEditorCodeFontName = "Donner Code";
+constexpr std::string_view kEditorCodeSymbolFontName = "Donner Code Symbols";
+
+void SetImGuiFontConfigName(ImFontConfig& config, std::string_view name) {
+  const std::size_t size = std::min(name.size(), sizeof(config.Name) - 1u);
+  std::copy_n(name.data(), size, config.Name);
+  config.Name[size] = '\0';
+}
+
+ImFont* FindImGuiFontByConfigName(const ImFontAtlas& atlas, std::string_view name) {
+  for (ImFont* font : atlas.Fonts) {
+    if (font == nullptr || font->ConfigData == nullptr) {
+      continue;
+    }
+
+    for (int configIndex = 0; configIndex < font->ConfigDataCount; ++configIndex) {
+      if (name == font->ConfigData[configIndex].Name) {
+        return font;
+      }
+    }
+  }
+  return nullptr;
+}
 
 bool ResourceDiagnosticsEnabled() {
   return std::getenv("DONNER_EDITOR_RESOURCE_LOG") != nullptr;
@@ -289,9 +431,31 @@ bool GroupOperationCanDispatch(bool rendererBusy,
   return !rendererBusy && availability.canApply;
 }
 
-bool PendingDocumentReplacementCanProcess(bool hasPendingRequest, bool rendererBusy,
+bool PendingDocumentReplacementCanProcess(bool hasPendingRequest, bool documentWriteAvailable,
                                           bool hasPendingMutations) noexcept {
-  return hasPendingRequest && !rendererBusy && !hasPendingMutations;
+  return hasPendingRequest && documentWriteAvailable && !hasPendingMutations;
+}
+
+bool ShouldRefreshSidebarSnapshots(bool rendererBusy, bool interactionActive) noexcept {
+  return !rendererBusy && !interactionActive;
+}
+
+bool SamplePickerActionsNeedFollowupFrame(bool dismiss, bool openFile) noexcept {
+  return dismiss || openFile;
+}
+
+DeferredRenderAction DeferredRenderActionForState(bool hasDocument, bool penDragFlushed,
+                                                  bool rendererBusy) noexcept {
+  if (!hasDocument) {
+    return DeferredRenderAction::ClearRequest;
+  }
+  if (penDragFlushed) {
+    return DeferredRenderAction::WakeForPenDrag;
+  }
+  if (!rendererBusy) {
+    return DeferredRenderAction::SubmitRender;
+  }
+  return DeferredRenderAction::WaitForRendererCompletion;
 }
 
 // Build the "<label> (<key>)" tooltip string for a tool button from the shared
@@ -686,18 +850,14 @@ Box2d ResolveDocumentViewBoxWithAccess(svg::SVGDocument& document) {
   return Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0);
 }
 
-Box2d ResolveDocumentViewBox(svg::SVGDocument& document) {
-  svg::DocumentReadAccess access = document.readAccess();
-  return ResolveDocumentViewBoxWithAccess(document);
-}
-
-std::optional<Box2d> TryResolveDocumentViewBox(svg::SVGDocument& document) {
-  std::optional<svg::DocumentReadAccess> access = document.tryReadAccess();
-  if (!access.has_value()) {
+std::optional<Box2d> ResolveDocumentViewBoxForFrame(svg::SVGDocument& document, bool rendererBusy) {
+  if (rendererBusy) {
+    // The viewport already owns the last complete document epoch. Returning nullopt tells
+    // updatePaneLayout to preserve it instead of blocking the UI thread on the worker's write
+    // guard. The next idle frame refreshes it from the live document.
     return std::nullopt;
   }
-
-  return ResolveDocumentViewBoxWithAccess(document);
+  return ResolveDocumentViewBox(document);
 }
 
 }  // namespace internal
@@ -731,8 +891,8 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       thumbnailTextures_(window.geodeDevice()),
       sampleThumbnailTextures_(window.geodeDevice()),
       toolbarIconTextures_(window.geodeDevice()),
-      layerThumbnailRenderer_(),
-      sampleThumbnailRenderer_(),
+      layerThumbnailRenderer_(window.geodeDevice()),
+      fontCatalog_(),
       renderCoordinator_(window.geodeDevice()),
       rotateCursorSet_(),
       documentSyncController_(InitialDocumentSyncSource(options_)),
@@ -740,11 +900,11 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       inputBridge_(window_, kWheelZoomStep),
       compositorDebugPanel_(window.geodeDevice()),
       dialogPresenter_(options_.editorNoticeText) {
+  renderCoordinator_.asyncRenderer().setCompositorDiagnosticsEnabled(false);
   // Install the embedded + system font catalog as the process-wide default provider, so every
   // document FontManager created by the render paths resolves font-family names against embedded
   // Google Fonts and macOS system fonts before falling back to Public Sans (Design 0013 W3).
   svg::FontManager::SetDefaultFontProvider(&fontCatalog_);
-
   std::optional<std::string> initialSource = options_.initialSource;
   if (!initialSource.has_value() && !options_.svgPath.empty()) {
     initialSource = LoadFile(options_.svgPath);
@@ -777,46 +937,48 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     }
     return response;
   });
-
   ImGuiIO& io = ImGui::GetIO();
-  const gui::EditorWindowFonts& existingFonts = window_.editorFonts();
-  if (existingFonts.complete()) {
-    // Multiple EditorShell instances can share one EditorWindow in tests and
-    // document-replacement workflows. Re-adding fonts after the WGPU backend
-    // has uploaded the atlas clears its texture id, leaving the next draw with
-    // a null texture view. Reuse the window-owned context-local pointers
-    // without changing the fonts' ImGui debug names.
-    uiFontBold_ = existingFonts.uiBold;
-    codeFont_ = existingFonts.code;
-  } else {
-    ImFontConfig fontCfg;
-    fontCfg.FontDataOwnedByAtlas = false;
-    const double displayScale = window_.displayScale();
-    ImFont* uiFontRegular = io.Fonts->AddFontFromMemoryTTF(
-        const_cast<unsigned char*>(embedded::kRobotoRegularTtf.data()),
-        static_cast<int>(embedded::kRobotoRegularTtf.size()),
-        static_cast<float>(15.0 * displayScale), &fontCfg, kEditorGlyphRanges);
-    uiFontBold_ = io.Fonts->AddFontFromMemoryTTF(
-        const_cast<unsigned char*>(embedded::kRobotoBoldTtf.data()),
-        static_cast<int>(embedded::kRobotoBoldTtf.size()), static_cast<float>(15.0 * displayScale),
-        &fontCfg, kEditorGlyphRanges);
-    codeFont_ = io.Fonts->AddFontFromMemoryTTF(
-        const_cast<unsigned char*>(embedded::kFiraCodeRegularTtf.data()),
-        static_cast<int>(embedded::kFiraCodeRegularTtf.size()),
-        static_cast<float>(14.0 * displayScale), &fontCfg, kEditorGlyphRanges);
-    ImFontConfig codeSymbolFontCfg = fontCfg;
-    codeSymbolFontCfg.MergeMode = true;
+  const double displayScale = window_.displayScale();
+  if (FindImGuiFontByConfigName(*io.Fonts, kEditorUiRegularFontName) == nullptr) {
+    ImFontConfig regularFontConfig;
+    regularFontConfig.FontDataOwnedByAtlas = false;
+    SetImGuiFontConfigName(regularFontConfig, kEditorUiRegularFontName);
     std::ignore = io.Fonts->AddFontFromMemoryTTF(
         const_cast<unsigned char*>(embedded::kRobotoRegularTtf.data()),
         static_cast<int>(embedded::kRobotoRegularTtf.size()),
-        static_cast<float>(14.0 * displayScale), &codeSymbolFontCfg, kEditorSymbolGlyphRanges);
-    window_.setEditorFonts({
-        .uiRegular = uiFontRegular,
-        .uiBold = uiFontBold_,
-        .code = codeFont_,
-    });
+        static_cast<float>(15.0 * displayScale), &regularFontConfig, kEditorGlyphRanges);
   }
 
+  uiFontBold_ = FindImGuiFontByConfigName(*io.Fonts, kEditorUiBoldFontName);
+  if (uiFontBold_ == nullptr) {
+    ImFontConfig boldFontConfig;
+    boldFontConfig.FontDataOwnedByAtlas = false;
+    SetImGuiFontConfigName(boldFontConfig, kEditorUiBoldFontName);
+    uiFontBold_ = io.Fonts->AddFontFromMemoryTTF(
+        const_cast<unsigned char*>(embedded::kRobotoBoldTtf.data()),
+        static_cast<int>(embedded::kRobotoBoldTtf.size()),
+        static_cast<float>(15.0 * displayScale), &boldFontConfig, kEditorGlyphRanges);
+  }
+
+  codeFont_ = FindImGuiFontByConfigName(*io.Fonts, kEditorCodeFontName);
+  if (codeFont_ == nullptr) {
+    ImFontConfig codeFontConfig;
+    codeFontConfig.FontDataOwnedByAtlas = false;
+    SetImGuiFontConfigName(codeFontConfig, kEditorCodeFontName);
+    codeFont_ = io.Fonts->AddFontFromMemoryTTF(
+        const_cast<unsigned char*>(embedded::kFiraCodeRegularTtf.data()),
+        static_cast<int>(embedded::kFiraCodeRegularTtf.size()),
+        static_cast<float>(14.0 * displayScale), &codeFontConfig, kEditorGlyphRanges);
+
+    ImFontConfig codeSymbolFontConfig = codeFontConfig;
+    codeSymbolFontConfig.MergeMode = true;
+    SetImGuiFontConfigName(codeSymbolFontConfig, kEditorCodeSymbolFontName);
+    std::ignore = io.Fonts->AddFontFromMemoryTTF(
+        const_cast<unsigned char*>(embedded::kRobotoRegularTtf.data()),
+        static_cast<int>(embedded::kRobotoRegularTtf.size()),
+        static_cast<float>(14.0 * displayScale), &codeSymbolFontConfig,
+        kEditorSymbolGlyphRanges);
+  }
   if (!app_.loadFromString(*initialSource)) {
     // Keep the shell alive so the user can still edit/fix the file from the source pane.
   }
@@ -844,20 +1006,24 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     directDocumentRenderer_ =
         std::make_unique<svg::RendererGeode>(window_.geodeFramebufferDevice());
     directOverlayRenderer_ = std::make_unique<svg::RendererGeode>(window_.geodeFramebufferDevice());
+    // Embedded UI icons are rasterized on the UI thread. Borrow this existing
+    // UI-only renderer so icon startup creates neither another renderer nor a
+    // headless WebGPU device. The matching destructor reset runs before the
+    // unique_ptr is released.
+    ConfigureEmbeddedSvgIconRenderer(*directOverlayRenderer_);
   }
 #endif
   if (!rotateCursorSet_.initialize(window_.rawHandle(), window_.geodeDevice())) {
     std::fprintf(stderr, "[editor] custom rotate cursor unavailable; using fallback cursor\n");
   }
 
-  // On-demand render loop: the main thread sleeps in `window.waitEvents()`
-  // between user inputs, so the worker thread has to nudge it when a
-  // render finishes - otherwise the fresh bitmap sits in `result_`
-  // forever. Safe to capture `this` because `AsyncRenderer`'s lifetime
-  // is strictly nested inside `RenderCoordinator`'s, which is a member
-  // of `*this`.
-  renderCoordinator_.asyncRenderer().setWakeCallback([this]() { window_.wakeEventLoop(); });
-
+  // On-demand render loop: the main thread sleeps in `window.waitEvents()` between user inputs, so
+  // the worker nudges it when a result finishes. Capture the constructor's externally-owned window
+  // directly, not `this`: EditorWindow is required to outlive EditorShell, and shutdown detaches
+  // then joins this callback before shell member teardown begins.
+  gui::EditorWindow* const wakeWindow = &window_;
+  renderCoordinator_.asyncRenderer().setWakeCallback(
+      [wakeWindow]() { wakeWindow->wakeEventLoop(); });
   if (options_.reproOutputPath.has_value()) {
     repro::ReproRecorderOptions recorderOptions;
     recorderOptions.outputPath = *options_.reproOutputPath;
@@ -872,7 +1038,12 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
   }
 
   showSamplePicker_ = options_.showWelcome;
+  welcomePlaceholderActive_ = options_.showWelcome;
   valid_ = true;
+  // Safari cannot safely resume a second WebGPU device's Promise completion while the main
+  // pthread is suspended in the Asyncify readbacks used to rasterize custom cursors. Start the
+  // renderer pthread only after all synchronous UI GPU setup and its wake callback are complete.
+  renderCoordinator_.asyncRenderer().start();
 }
 
 std::optional<float> EditorShell::nextIdleWakeSeconds() const {
@@ -887,6 +1058,7 @@ std::optional<float> EditorShell::nextIdleWakeSeconds() const {
   };
 
   includeWake(documentSyncController_.nextTextSyncWakeSeconds());
+  includeWake(renderCoordinator_.nextDirectSurfaceRetryWakeSeconds());
   includeWake(textEditor_.nextFlashWakeSeconds());
   includeWake(textEditor_.nextRopeAnimationWakeSeconds());
   // Caret blink: wake at the next visibility flip while a text session is
@@ -900,6 +1072,15 @@ std::optional<float> EditorShell::nextIdleWakeSeconds() const {
 }
 
 EditorShell::~EditorShell() {
+#ifdef DONNER_EDITOR_WGPU
+  if (directOverlayRenderer_ != nullptr) {
+    ResetEmbeddedSvgIconRenderer(*directOverlayRenderer_);
+  }
+#endif
+  // The worker borrows both the window wake target and FontCatalog. Detach/cancel/join it while
+  // those dependencies are still alive, before clearing the process-wide provider or allowing
+  // reverse-order member destruction to begin.
+  renderCoordinator_.asyncRenderer().shutdown();
   // Detach our font catalog from the global default before it is destroyed.
   if (svg::FontManager::DefaultFontProvider() == &fontCatalog_) {
     svg::FontManager::SetDefaultFontProvider(nullptr);
@@ -1381,10 +1562,8 @@ bool EditorShell::tryLoadSource(std::string_view source, std::optional<std::stri
     return false;
   }
 
-  svg::SVGDocument& document = app_.document().document();
-  documentViewBoxCacheDocument_ = document.handle();
-  documentViewBoxCache_ = ResolveDocumentViewBox(document);
-
+  cancelSampleThumbnailGeneration();
+  welcomePlaceholderActive_ = false;
   showSamplePicker_ = false;
   textEditor_.setText(std::string(source));
   textEditor_.resetTextChanged();
@@ -1404,6 +1583,10 @@ void EditorShell::queuePendingSampleLoad(std::string sampleId) {
   pendingSampleLoadId_ = std::move(sampleId);
   pendingSampleLoadNeedsConfirmation_ = false;
   pendingSampleLoadDiscardConfirmed_ = false;
+  // The selected sample supersedes the current document frame. Start cancellation in the click
+  // frame so the next UI frame can claim the DOM as soon as SVG traversal reaches a safe point.
+  cancelSampleThumbnailGeneration();
+  renderCoordinator_.asyncRenderer().cancelInFlight();
 }
 
 void EditorShell::cancelPendingSampleLoad() {
@@ -1422,8 +1605,15 @@ void EditorShell::confirmPendingSampleLoadDiscard() {
 }
 
 void EditorShell::processPendingSampleLoad() {
+  if (pendingSampleLoadId_.empty()) {
+    return;
+  }
+  const bool hasDocument = app_.hasDocument();
+  std::optional<svg::DocumentWriteAccess> documentAccess =
+      hasDocument ? app_.document().document().tryWriteAccess() : std::nullopt;
+  const bool documentWriteAvailable = !hasDocument || documentAccess.has_value();
   if (!internal::PendingDocumentReplacementCanProcess(!pendingSampleLoadId_.empty(),
-                                                      renderCoordinator_.asyncRenderer().isBusy(),
+                                                      documentWriteAvailable,
                                                       app_.document().hasPendingMutations())) {
     return;
   }
@@ -1448,9 +1638,15 @@ void EditorShell::processPendingSampleLoad() {
   // submission. Detach it before releasing presentation resources for the old document.
   window_.setWgpuDirectRenderCallback({});
 #endif
+  // If the previous render is packaging a result after releasing the DOM, ensure that result is
+  // dropped instead of landing over the replacement document.
+  renderCoordinator_.asyncRenderer().cancelInFlight();
   std::string error;
   if (tryLoadSource(sample->source, std::nullopt, &error)) {
     activeSampleId_ = sampleId;
+#ifdef __EMSCRIPTEN__
+    PublishActiveSampleId(activeSampleId_.c_str());
+#endif
     showSamplePicker_ = false;
   } else {
     showSamplePicker_ = true;
@@ -1495,9 +1691,12 @@ void EditorShell::resetPresentationForLoadedDocument(std::string_view canonicalS
   renderContextMenuOpenRequested_ = false;
   treeSelectionOriginatedInTree_ = false;
   treeviewPendingScroll_ = false;
-  renderCoordinator_.resetForLoadedDocument();
+  renderCoordinator_.resetForLoadedDocument(app_.document().documentGeneration());
   textures_.resetComposited();
+  textures_.resetOverlay();
   renderCoordinator_.refreshSelectionBoundsCache(app_);
+  cachedCanvasHasSelectableElements_ = false;
+  cachedSelectionIsAllText_ = false;
   dialogPresenter_.clearOpenFileError();
   dialogPresenter_.clearSaveFileError();
 }
@@ -1760,6 +1959,7 @@ void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
     dialogPresenter_.requestAbout();
   }
   if (menuActions.openFile) {
+    cancelSampleThumbnailGeneration();
     cancelPendingSampleLoad();
     dialogPresenter_.requestOpenFile(app_.currentFilePath());
   }
@@ -1869,10 +2069,17 @@ void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
   ApplyViewMenuToggleActions(menuActions, &showCompositorDebugPanel_, &perfOverlayMode_,
                              &geometryDebugOverlay_, &compositorTileOverlay_);
   if (geometryDebugOverlay_ != geometryDebugOverlayBeforeMenu) {
-    // Push the new overlay state to the render worker and post a render:
-    // the worker re-rasterizes every cached segment with the overlay
-    // state on its next iteration (see AsyncRenderer::workerLoop).
+    // Push the new overlay state to the worker and post a render. Geometry
+    // debug uses a flat full-document pass while enabled; disabling it resets
+    // that state and restores normal retained selection promotion.
     renderCoordinator_.asyncRenderer().setGeometryDebugOverlayEnabled(geometryDebugOverlay_);
+    renderCoordinator_.requestPresentationRefresh();
+    requestRenderAtEndOfFrame_ = true;
+  }
+  if (compositorTileOverlay_ && compositorTileOverlay_ != compositorTileOverlayBeforeMenu) {
+    // The first direct-surface frame can land before deferred compositor cache warmup. Request one
+    // metadata-publishing frame so the UI-side overlay has tile geometry to draw.
+    renderCoordinator_.requestPresentationRefresh();
     requestRenderAtEndOfFrame_ = true;
   }
   // DockSpace layout controls: toggle the lock or request a rebuild of the
@@ -1889,6 +2096,12 @@ void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
       compositorTileOverlay_ != compositorTileOverlayBeforeMenu ||
       perfOverlayMode_ != perfOverlayModeBeforeMenu ||
       geometryDebugOverlay_ != geometryDebugOverlayBeforeMenu) {
+    if (showCompositorDebugPanel_ != showCompositorDebugPanelBeforeMenu) {
+      renderCoordinator_.asyncRenderer().setCompositorDiagnosticsEnabled(showCompositorDebugPanel_);
+      if (showCompositorDebugPanel_) {
+        requestRenderAtEndOfFrame_ = true;
+      }
+    }
     window_.wakeEventLoop();
   }
 }
@@ -2058,7 +2271,7 @@ void EditorShell::handleGlobalShortcuts() {
     textEditor_.selectAll();
   } else if (CanSelectAllFromCanvasShortcut(
                  pressedA, cmd, shift, anyPopupOpen, sourcePaneFocused,
-                 /*canvasHasSelectableElements=*/canvasHasSelectableElements())) {
+                 /*canvasHasSelectableElements=*/cachedCanvasHasSelectableElements_)) {
     selectAllCanvasElements();
   }
 
@@ -2510,13 +2723,18 @@ void EditorShell::renderFillStrokeToolbarWidget() {
       sourceForRanges = std::string_view(editorSource);
     }
   }
-  // The worker owns the selected element while busy, so fall back to the
-  // authoring paint that the picker updates synchronously. Replacing the
-  // state with an empty/default swatch here made both the toolbar and the
-  // inspector alternate through black/none during every color render.
-  const ToolbarPaintState paintState =
-      rendererBusy ? ToolbarPaintStateForActivePaint(app_.activePaintStyle())
-                   : ToolbarPaintStateForApp(app_, sourceForRanges);
+  // The worker owns the selected element while busy. Preserve the last idle
+  // presentation instead of replacing the selected paint with the unrelated
+  // authoring default for every render update.
+  ToolbarPaintState paintState;
+  if (!rendererBusy) {
+    paintState = ToolbarPaintStateForApp(app_, sourceForRanges);
+    toolbarPaintSnapshot_ = std::make_unique<ToolbarPaintState>(paintState);
+  } else if (toolbarPaintSnapshot_ != nullptr) {
+    paintState = *toolbarPaintSnapshot_;
+  } else {
+    paintState = ToolbarPaintStateForActivePaint(app_.activePaintStyle());
+  }
   ImGui::BeginDisabled(!canEditPaint);
   ImGui::InvisibleButton("##fill_stroke_widget",
                          ImVec2(kToolPalettePaintWidgetWidth, kToolPaletteButtonSize));
@@ -2587,6 +2805,9 @@ void EditorShell::renderFillStrokeToolbarWidget() {
       const std::string strokeStr = SvgPaintStringForSlot(paintState.stroke);
       app_.setActiveFill(strokeStr);
       app_.setActiveStroke(fillStr);
+      if (toolbarPaintSnapshot_ != nullptr) {
+        std::swap(toolbarPaintSnapshot_->fill, toolbarPaintSnapshot_->stroke);
+      }
       bool changed = app_.setStylePropertyOnSelection("fill", strokeStr);
       changed = app_.setStylePropertyOnSelection("stroke", fillStr) || changed;
       if (changed) {
@@ -2606,6 +2827,11 @@ void EditorShell::renderFillStrokeToolbarWidget() {
       app_.setActiveFill("none");
     } else {
       app_.setActiveStroke("none");
+    }
+    if (toolbarPaintSnapshot_ != nullptr) {
+      ToolbarPaintSlotState& slot =
+          attrName == "fill" ? toolbarPaintSnapshot_->fill : toolbarPaintSnapshot_->stroke;
+      slot = ToolbarPaintSlotStateForActiveAttribute("none");
     }
     const bool changed = app_.hasSelection() && app_.setStylePropertyOnSelection(attrName, "none");
     if (changed) {
@@ -2691,6 +2917,11 @@ void EditorShell::renderFillStrokeToolbarWidget() {
         app_.setActiveFill(svgColor);
       } else {
         app_.setActiveStroke(svgColor);
+      }
+      if (toolbarPaintSnapshot_ != nullptr) {
+        ToolbarPaintSlotState& snapshotSlot =
+            attrName == "fill" ? toolbarPaintSnapshot_->fill : toolbarPaintSnapshot_->stroke;
+        snapshotSlot = ToolbarPaintSlotStateForActiveAttribute(svgColor);
       }
       if (app_.setStylePropertyOnSelection(attrName, svgColor)) {
         flushQueuedMutationAndRefreshOverlay();
@@ -2811,9 +3042,14 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   renderPaneScrollMaxYForDiagnostics_ = ImGui::GetScrollMaxY();
   const ImVec2 contentRegion = ImGui::GetContentRegionAvail();
   const ImVec2 paneOriginImGui = ImGui::GetCursorScreenPos();
+  const std::optional<Box2d> documentViewBox =
+      app_.hasDocument()
+          ? ResolveDocumentViewBoxForFrame(app_.document().document(),
+                                           renderCoordinator_.asyncRenderer().isBusy())
+          : std::nullopt;
   interactionController_.updatePaneLayout(Vector2d(paneOriginImGui.x, paneOriginImGui.y),
                                           Vector2d(contentRegion.x, contentRegion.y),
-                                          documentViewBoxCache_,
+                                          documentViewBox,
                                           /*preservePaneCenterDocumentPoint=*/true);
   interactionController_.updateDevicePixelRatio(window_.contentScale().x);
 
@@ -3103,6 +3339,9 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   // when the chrome catches up a frame later.
   if (interactionController_.pendingClick().has_value()) {
     const auto& pendingClick = *interactionController_.pendingClick();
+    std::optional<svg::DocumentWriteAccess> pendingClickDocumentAccess =
+        app_.hasDocument() ? app_.document().document().tryWriteAccess() : std::nullopt;
+    const bool documentWriteAvailable = pendingClickDocumentAccess.has_value();
     const auto& boundsCache = renderCoordinator_.selectionBoundsCache();
     const bool cacheMatchesSelection = boundsCache.lastSelection == app_.selectedElements();
     const std::vector<Box2d>& redragBoundsDoc = !boundsCache.displayedBoundsDoc.empty()
@@ -3117,12 +3356,12 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
                                    /*includeRotate=*/!pendingClick.modifiers.shift)
             : SelectionTransformHandleIntent{};
     bool tookFastRedrag =
-        selectToolActive && !pendingClick.modifiers.doubleClick && cacheMatchesSelection &&
-        pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
+        documentWriteAvailable && selectToolActive && !pendingClick.modifiers.doubleClick &&
+        cacheMatchesSelection && pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
         selectTool_.tryStartRedragOnSelected(app_, pendingClick.documentPoint,
                                              pendingClick.modifiers, redragBoundsDoc,
                                              redragOccludingBoundsDoc);
-    if (!tookFastRedrag && !pendingClick.modifiers.doubleClick &&
+    if (!tookFastRedrag && !pendingClick.modifiers.doubleClick && documentWriteAvailable &&
         renderCoordinator_.asyncRenderer().isBusy() && selectToolActive && cacheMatchesSelection &&
         pendingHandleIntent.kind == SelectionTransformHandleKind::None) {
       // The occlusion cache uses broad AABBs for later-painted elements. When the worker is busy,
@@ -3132,8 +3371,7 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
                                                             pendingClick.modifiers, redragBoundsDoc,
                                                             std::span<const Box2d>());
     }
-    switch (PendingClickBusyActionForState(tookFastRedrag,
-                                           renderCoordinator_.asyncRenderer().isBusy())) {
+    switch (PendingClickBusyActionForState(tookFastRedrag, !documentWriteAvailable)) {
       case PendingClickBusyAction::CompleteFastRedrag:
         lastPostedScreenPoint_.reset();
         interactionController_.clearPendingClick();
@@ -3274,12 +3512,7 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
         selectTool_.onMouseMove(app_, screenToDocument(currentScreen), /*buttonHeld=*/true,
                                 modifiers);
         lastPostedScreenPoint_ = currentScreen;
-        if (!renderCoordinator_.asyncRenderer().isBusy() && app_.flushFrame()) {
-          renderCoordinator_.rasterizeOverlayForCurrentSelection(
-              app_, interactionController_.viewport(), selectTool_.marqueeRect(),
-              selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview(),
-              selectionChromeDetailForActiveTool());
-        }
+        flushInteractiveDragMutationAndRequestRender();
       }
     }
     if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
@@ -3411,9 +3644,44 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
 
   applyPendingDocumentSpaceReplayInputForTesting();
 
-  if (!renderCoordinator_.asyncRenderer().isBusy() && app_.hasDocument()) {
+  if (!showSamplePicker_ && !renderCoordinator_.asyncRenderer().isBusy() && app_.hasDocument()) {
     requestRenderAtEndOfFrame_ = true;
   }
+
+  // Resolve browser direct-surface ownership before choosing the overlay epoch. A worker surface
+  // already contains its drag transform in the accepted pixels; unlike an in-process composited
+  // tile, the UI thread cannot advance those pixels with the live pointer transform. Selection
+  // chrome must therefore reuse the transform represented by that accepted surface.
+  bool documentPresentedDirectly = false;
+  bool workerDocumentSurfacePresented = false;
+  [[maybe_unused]] bool workerSurfaceSelectionChromeBaked = false;
+#if defined(DONNER_EDITOR_WGPU) && defined(__EMSCRIPTEN__)
+  const DirectSurfacePresentationState directSurface =
+      renderCoordinator_.asyncRenderer().directSurfacePresentation();
+  if (!contentOnlyCaptureThisFrame_ && !showSamplePicker_ && directSurface.active) {
+    const Box2d surfaceRect = interactionController_.viewport().documentToScreen(
+        directSurface.rasterViewport.documentRect);
+    const std::optional<Box2d> clippedSurfaceRect = PresentedImageClipRect(paneRect, surfaceRect);
+    if (clippedSurfaceRect.has_value() && surfaceRect.width() > 0.0 && surfaceRect.height() > 0.0) {
+      workerDocumentSurfacePresented = true;
+      documentPresentedDirectly = true;
+      workerSurfaceSelectionChromeBaked = directSurface.selectionChromeBaked;
+      UpdateWorkerDocumentSurfaceLayout(
+          1, directSurface.surfaceSlot, surfaceRect.topLeft.x, surfaceRect.topLeft.y,
+          surfaceRect.width(), surfaceRect.height(),
+          clippedSurfaceRect->topLeft.x - surfaceRect.topLeft.x,
+          clippedSurfaceRect->topLeft.y - surfaceRect.topLeft.y,
+          surfaceRect.bottomRight.x - clippedSurfaceRect->bottomRight.x,
+          surfaceRect.bottomRight.y - clippedSurfaceRect->bottomRight.y,
+          static_cast<double>(directSurface.frameCount),
+          directSurface.selectionChromeBaked ? 1 : 0);
+    }
+  }
+  if (!workerDocumentSurfacePresented) {
+    UpdateWorkerDocumentSurfaceLayout(0, directSurface.surfaceSlot, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                                      0.0, 0.0, static_cast<double>(directSurface.frameCount), 0);
+  }
+#endif
 
   const auto liveActiveDragPreview = selectTool_.activeDragPreview();
   const auto activeGesturePreview = selectTool_.activeGesturePreview();
@@ -3428,12 +3696,15 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
       renderCoordinator_.compositedPresentation().presentationPreview(activeDragPreview);
   const Entity suppressedLayerEntity = renderCoordinator_.suppressedCompositedLayerEntity(app_);
   const bool suppressDragTargetTiles = renderCoordinator_.selectedElementIsDisplayNone(app_);
-  const bool hasPresentableActiveDragTarget = HasPresentableDragTargetTile(
-      textures_, activeDragPreview, suppressedLayerEntity, suppressDragTargetTiles);
+  const bool hasPresentableActiveDragTarget =
+      !workerDocumentSurfacePresented && HasPresentableDragTargetTile(
+                                              textures_, activeDragPreview, suppressedLayerEntity,
+                                              suppressDragTargetTiles);
   const auto representedDragPreview = OverlayRepresentedDragPreviewForPresentation(
       activeDragPreview, displayedDragPreview, hasPresentableActiveDragTarget);
   const auto representedGesturePreview = OverlayGesturePreviewForPresentation(
       activeGesturePreview, liveActiveDragPreview, representedDragPreview);
+  [[maybe_unused]] bool overlaySnapshotChanged = false;
   if (!contentOnlyCaptureThisFrame_ && !showSamplePicker_) {
     // While the Pen tool is active the selected path is itself the live
     // interaction surface, so chrome must track the live DOM even between
@@ -3447,7 +3718,7 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
     const bool allowLiveGeometryOverlay =
         penToolActive || (textToolActive && (textTool_.isEditing() || textTool_.isDraggingBox()));
     updatePenLivePreviewTarget();
-    renderCoordinator_.rasterizeOverlayForPresentation(
+    overlaySnapshotChanged = renderCoordinator_.rasterizeOverlayForPresentation(
         app_, selectTool_, interactionController_.viewport(), textures_, activeDragPreview,
         representedDragPreview, selectionChromeDetailForActiveTool(), allowLiveGeometryOverlay);
   }
@@ -3467,14 +3738,8 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
       penPreviewSuppressedEntity != entt::null ? penPreviewSuppressedEntity : suppressedLayerEntity;
   interactionController_.frameHistory().setLatestMemorySample(
       MemorySampleFromPresentationResources(textures_.presentationResourceStats()));
-  // Selection chrome is rendered exclusively by Donner's OverlayRenderer drawn
-  // straight onto the Geode framebuffer via this direct-render callback. There
-  // is no ImGui-vector or texture-blit fallback: edge frames that can't take
-  // this path (a content-only capture, which intentionally carries no chrome,
-  // or a viewport with no presentable clip rect, which has nowhere to draw)
-  // simply skip the overlay - clearing the callback leaves the framebuffer
-  // chrome-free for that frame.
-  bool documentPresentedDirectly = false;
+  // Document tiles use the direct framebuffer path where possible. Selection chrome is prepared
+  // separately below as a transparent Donner-rendered texture in the render-pane draw order.
 #ifdef DONNER_EDITOR_WGPU
   window_.setWgpuUnderlayRenderCallback({});
   const std::optional<Box2d> directDocumentClipRect =
@@ -3503,8 +3768,8 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   };
   const bool drawOverviewTiles =
       ShouldPresentOverviewTiles(textures_.activeTilesViewportBounded(), textures_.overviewTiles());
-  if (!contentOnlyCaptureThisFrame_ && directDocumentRenderer_ != nullptr &&
-      directDocumentClipRect.has_value() &&
+  if (!workerDocumentSurfacePresented && !contentOnlyCaptureThisFrame_ &&
+      directDocumentRenderer_ != nullptr && directDocumentClipRect.has_value() &&
       ((drawOverviewTiles && hasDirectlyPresentableTile(textures_.overviewTiles())) ||
        hasDirectlyPresentableTile(textures_.tiles())) &&
       (!drawOverviewTiles || canPresentTileSetDirectly(textures_.overviewTiles())) &&
@@ -3534,24 +3799,24 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
         });
   }
 
+  // Browser WebGPU surface textures are a poor cross-backend seam for a second vector append pass.
+  // Rasterize chrome into a transparent Geode texture, then let RenderPanePresenter place it in
+  // ImGui's normal ordering: above document pixels, below menus and popups.
   window_.setWgpuDirectRenderCallback({});
-  const std::optional<Box2d> directOverlayClipRect =
-      PresentedImageClipRect(paneRect, interactionController_.viewport().imageScreenRect());
-  if (!contentOnlyCaptureThisFrame_ && directOverlayRenderer_ != nullptr &&
-      renderCoordinator_.immediateOverlaySnapshot().has_value() &&
-      directOverlayClipRect.has_value()) {
+  if (!contentOnlyCaptureThisFrame_ && !showSamplePicker_ && directOverlayRenderer_ != nullptr &&
+      renderCoordinator_.immediateOverlaySnapshot().has_value()) {
     SelectionChromeSnapshot overlaySnapshot = *renderCoordinator_.immediateOverlaySnapshot();
-    ViewportState overlayViewport = interactionController_.viewport();
-    const Box2d overlayClipRect = *directOverlayClipRect;
-    window_.setWgpuDirectRenderCallback(
-        [this, overlaySnapshot = std::move(overlaySnapshot), overlayViewport,
-         overlayClipRect](const gui::EditorWindowWgpuRenderTarget& target) {
-          if (directOverlayRenderer_ == nullptr) {
-            return;
-          }
-          DrawImmediateOverlaySnapshotToFramebuffer(
-              *directOverlayRenderer_, target, overlayViewport, overlayClipRect, overlaySnapshot);
-        });
+    if (workerSurfaceSelectionChromeBaked) {
+      overlaySnapshot = OverlayWithoutBakedSelectionChrome(std::move(overlaySnapshot));
+    }
+    if (overlaySnapshotChanged || textures_.overlayTexture().texture == 0) {
+      RenderedOverlayTexture renderedOverlay = RenderImmediateOverlaySnapshotToTexture(
+          *directOverlayRenderer_, interactionController_.viewport(), overlaySnapshot);
+      textures_.updateOverlayTexture(std::move(renderedOverlay.textureSnapshot),
+                                     renderedOverlay.screenRect);
+    }
+  } else {
+    textures_.resetOverlay();
   }
 #endif
   RenderPanePresenterState paneState{
@@ -3562,6 +3827,7 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
       .activeDragPreview = activeDragPreview,
       .displayedDragPreview = displayedDragPreview,
       .contentRegion = Vector2d(contentRegion.x, contentRegion.y),
+      .presentationVersion = renderCoordinator_.displayedDocVersion(),
       .suppressedLayerEntity = presentSuppressedLayerEntity,
       .suppressDragTargetTiles = suppressDragTargetTiles,
       .documentPresentedDirectly = documentPresentedDirectly,
@@ -3598,32 +3864,81 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
 }
 
 void EditorShell::ensureSampleThumbnails() {
+  const std::span<const EditorSample> samples = GetEditorSampleCatalog();
   constexpr int kThumbnailWidthPx = 192;
   constexpr int kThumbnailHeightPx = 120;
-  const std::span<const EditorSample> samples = GetEditorSampleCatalog();
   if (sampleThumbnailBitmaps_.empty()) {
     sampleThumbnailBitmaps_.resize(samples.size());
   }
-  if (sampleThumbnailGenerationCursor_ >= samples.size()) {
+
+  AsyncRenderer& asyncRenderer = renderCoordinator_.asyncRenderer();
+  const auto publishStats = [&] {
+#ifdef __EMSCRIPTEN__
+    std::size_t ready = 0u;
+    for (const std::optional<svg::RendererBitmap>& bitmap : sampleThumbnailBitmaps_) {
+      ready += bitmap.has_value() ? 1u : 0u;
+    }
+    const SampleThumbnailRenderStats stats = asyncRenderer.sampleThumbnailRenderStats();
+    PublishSampleThumbnailStats(static_cast<int>(stats.requested), static_cast<int>(stats.started),
+                                static_cast<int>(stats.completed), static_cast<int>(stats.rendered),
+                                static_cast<int>(ready), stats.pending ? 1 : 0,
+                                stats.active ? 1 : 0, stats.resultReady ? 1 : 0);
+#endif
+  };
+
+  // The first picker frame is presentation-only. Posting even a worker task here can contend with
+  // Wasm startup and delay the carousel itself, so arm one explicit follow-up frame and return.
+  if (!samplePickerHasPresentedFrame_) {
+    samplePickerHasPresentedFrame_ = true;
+    publishStats();
+    window_.wakeEventLoop();
     return;
   }
 
-  const std::size_t index = sampleThumbnailGenerationCursor_++;
-  const EditorSample& sample = samples[index];
-  ParseWarningSink warnings = ParseWarningSink::Disabled();
-  auto parsed = svg::parser::SVGParser::ParseSVG(sample.source, warnings);
-  if (!parsed.hasError()) {
-    svg::SVGDocument document = std::move(parsed.result());
-    document.setCanvasSize(kThumbnailWidthPx, kThumbnailHeightPx);
-    sampleThumbnailRenderer_.draw(document);
-    svg::RendererBitmap bitmap = sampleThumbnailRenderer_.takeSnapshot();
-    if (!bitmap.empty()) {
-      sampleThumbnailBitmaps_[index] = std::move(bitmap);
+  if (std::optional<SampleThumbnailRenderResult> result =
+          asyncRenderer.pollSampleThumbnailResult()) {
+    const std::size_t index = static_cast<std::size_t>(result->key);
+    if (index < samples.size()) {
+      if (result->outcome == SampleThumbnailRenderOutcome::Rendered && !result->bitmap.empty()) {
+        sampleThumbnailBitmaps_[index] = std::move(result->bitmap);
+      }
+      if (result->outcome != SampleThumbnailRenderOutcome::Cancelled &&
+          index == sampleThumbnailGenerationCursor_) {
+        ++sampleThumbnailGenerationCursor_;
+      }
+    }
+    if (sampleThumbnailInFlightIndex_ == index) {
+      sampleThumbnailInFlightIndex_.reset();
     }
   }
-  if (sampleThumbnailGenerationCursor_ < samples.size()) {
-    window_.wakeEventLoop();
+
+  if (sampleThumbnailGenerationCursor_ >= samples.size()) {
+    publishStats();
+    return;
   }
+  if (sampleThumbnailInFlightIndex_.has_value() || asyncRenderer.isBusy()) {
+    publishStats();
+    return;
+  }
+
+  const std::size_t index = sampleThumbnailGenerationCursor_;
+  SampleThumbnailRenderRequest request{
+      .key = index,
+      .source = std::string(samples[index].source),
+      .dimensions = Vector2i(kThumbnailWidthPx, kThumbnailHeightPx),
+  };
+#ifndef __EMSCRIPTEN__
+  request.nativeRenderer = &renderCoordinator_.renderer();
+#endif
+  if (asyncRenderer.requestSampleThumbnail(std::move(request))) {
+    sampleThumbnailInFlightIndex_ = index;
+  }
+  publishStats();
+}
+
+void EditorShell::cancelSampleThumbnailGeneration() {
+  renderCoordinator_.asyncRenderer().cancelSampleThumbnailWork();
+  sampleThumbnailInFlightIndex_.reset();
 }
 
 void EditorShell::renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& contentRegion) {
@@ -3693,13 +4008,27 @@ void EditorShell::renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& con
   ImGui::PopStyleColor();
 
   if (actions.dismiss) {
+    cancelSampleThumbnailGeneration();
     cancelPendingSampleLoad();
-    showSamplePicker_ = false;
+    if (welcomePlaceholderActive_) {
+      queuePendingSampleLoad("donner-splash");
+    } else {
+      showSamplePicker_ = false;
+    }
   }
   if (actions.openFile) {
+    cancelSampleThumbnailGeneration();
     cancelPendingSampleLoad();
-    showSamplePicker_ = false;
+    if (!welcomePlaceholderActive_) {
+      showSamplePicker_ = false;
+    }
     dialogPresenter_.requestOpenFile(app_.currentFilePath());
+  }
+  if (internal::SamplePickerActionsNeedFollowupFrame(actions.dismiss, actions.openFile)) {
+    // These actions mutate state after the picker has already drawn this frame.
+    // Explicitly present the replacement document/modal even if no further DOM
+    // input arrives to wake the event-driven browser loop.
+    window_.wakeEventLoop();
   }
   if (actions.openGitHub) {
 #ifdef __EMSCRIPTEN__
@@ -3716,6 +4045,8 @@ void EditorShell::renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& con
   }
   if (actions.loadSample) {
     queuePendingSampleLoad(actions.sampleId);
+    // Start a clean, idle replacement after this frame's document UI work has already finished.
+    processPendingSampleLoad();
     window_.wakeEventLoop();
   }
 }
@@ -4091,14 +4422,31 @@ void EditorShell::renderSidebars() {
   // so the panes keep showing their last-known content instead of flashing
   // to "(rendering...)" placeholders.
   const bool rendererBusy = renderCoordinator_.asyncRenderer().isBusy();
-  if (!rendererBusy) {
+  const bool interactionActive = selectTool_.isDragging() || penTool_.isDraggingAnchor() ||
+                                 textTool_.isDraggingBox() || textTool_.isAdjustingFrame() ||
+                                 textTool_.isSelectingText();
+  if (!showSamplePicker_ && ShouldRefreshSidebarSnapshots(rendererBusy, interactionActive)) {
     sidebarPresenter_.refreshSnapshot(app_);
     // Compact sheets use deterministic fill swatches. Avoiding per-row raster
     // rendering and texture uploads keeps the touch panel responsive and also
     // avoids backend-specific thumbnail presentation differences in Wasm.
-    layersPanel_.refreshSnapshot(app_, compactSheet ? nullptr : &layerThumbnailRenderer_,
-                                 compactSheet ? LayersPanel::ThumbnailRefreshMode::SwatchesOnly
-                                              : LayersPanel::ThumbnailRefreshMode::Render);
+    const bool presentationCurrent =
+        !app_.hasDocument() || renderCoordinator_.displayedDocVersionForDiagnostics() ==
+                                   app_.document().currentFrameVersion();
+    LayersPanel::ThumbnailRefreshMode thumbnailMode =
+        compactSheet || !presentationCurrent ? LayersPanel::ThumbnailRefreshMode::SwatchesOnly
+                                             : LayersPanel::ThumbnailRefreshMode::RenderIncremental;
+#if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
+    thumbnailMode = LayersPanel::ThumbnailRefreshMode::SwatchesOnly;
+#endif
+    layersPanel_.refreshSnapshot(app_,
+                                 thumbnailMode == LayersPanel::ThumbnailRefreshMode::SwatchesOnly
+                                     ? nullptr
+                                     : &layerThumbnailRenderer_,
+                                 thumbnailMode);
+    if (layersPanel_.thumbnailRefreshStats().deferredCount > 0u) {
+      window_.wakeEventLoop();
+    }
   }
   EditorApp* liveAppForClicks = rendererBusy ? nullptr : &app_;
 
@@ -5156,6 +5504,53 @@ bool EditorShell::flushQueuedMutationAndRefreshOverlay() {
   return true;
 }
 
+bool EditorShell::flushInteractiveDragMutationAndRequestRender() {
+  const bool hasPendingMutation = app_.hasDocument() && app_.document().hasPendingMutations();
+  if (!hasPendingMutation) {
+    return false;
+  }
+
+  // A worker can remain busy after SVG traversal while it packages or presents the completed
+  // frame. Never block the browser UI thread on that phase: claim the DOM only when the write
+  // guard is immediately available, then supersede the stale worker request with the moved state.
+  std::optional<svg::DocumentWriteAccess> documentAccess =
+      app_.document().document().tryWriteAccess();
+  if (!documentAccess.has_value()) {
+    renderCoordinator_.asyncRenderer().cancelInFlight();
+    window_.wakeEventLoop();
+    return false;
+  }
+
+  if (!app_.flushFrame()) {
+    return false;
+  }
+
+  // Transform-only drag flushes remain represented by the promoted tile/direct-surface request.
+  // Preserve the cached presentation just as the start-of-frame drag flush path does.
+  renderCoordinator_.invalidatePresentationAfterDocumentFlush(app_.document().lastFlushResult());
+  // A direct worker surface and the ImGui chrome are separate browser layers.
+  // Let the normal presentation pass bind chrome to the last completed worker
+  // epoch instead of capturing live resize geometry ahead of its pixels here.
+#ifndef DONNER_WASM_WORKER_SURFACE
+  renderCoordinator_.rasterizeOverlayForCurrentSelection(
+      app_, interactionController_.viewport(), selectTool_.marqueeRect(),
+      selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview(),
+      selectionChromeDetailForActiveTool());
+#endif
+  const bool posted = renderCoordinator_.maybeRequestRender(
+      app_, selectTool_, interactionController_.viewport(), &textures_,
+#ifdef DONNER_WASM_WORKER_SURFACE
+      // Continuous resize must not cancel every in-flight frame before it can
+      // reach the surface. Land one frame, then render the latest queued DOM.
+      /*supersedeInFlight=*/false, selectionChromeDetailForActiveTool());
+#else
+      /*supersedeInFlight=*/true);
+#endif
+  requestRenderAtEndOfFrame_ = !posted;
+  window_.wakeEventLoop();
+  return true;
+}
+
 void EditorShell::openRenderPaneContextMenu(const Vector2d& documentPoint) {
   renderContextMenuDocumentPoint_ = documentPoint;
   renderContextMenuHitElement_.reset();
@@ -5710,6 +6105,13 @@ void EditorShell::runFrame() {
     }
   }
   processPendingSampleLoad();
+  const bool documentUiSnapshotRendererBusy = renderCoordinator_.asyncRenderer().isBusy();
+  cachedCanvasHasSelectableElements_ = internal::ResolveCachedDocumentBoolForFrame(
+      documentUiSnapshotRendererBusy, cachedCanvasHasSelectableElements_,
+      [this] { return canvasHasSelectableElements(); });
+  cachedSelectionIsAllText_ = internal::ResolveCachedDocumentBoolForFrame(
+      documentUiSnapshotRendererBusy, cachedSelectionIsAllText_,
+      [this] { return selectionIsAllText(); });
   markPhase(mainFrameCost.documentFlushMs);
 
   // Re-rasterize the overlay against the just-flushed DOM while a locked-rejection flash is (or was
@@ -5803,7 +6205,12 @@ void EditorShell::runFrame() {
       renderPaneSize = Vector2d(centralNode->Size.x, centralNode->Size.y);
     }
   }
-  interactionController_.updatePaneLayout(renderPaneOrigin, renderPaneSize, documentViewBoxCache_,
+  const std::optional<Box2d> documentViewBox =
+      app_.hasDocument()
+          ? ResolveDocumentViewBoxForFrame(app_.document().document(),
+                                           renderCoordinator_.asyncRenderer().isBusy())
+          : std::nullopt;
+  interactionController_.updatePaneLayout(renderPaneOrigin, renderPaneSize, documentViewBox,
                                           /*preservePaneCenterDocumentPoint=*/true);
   markPhase(mainFrameCost.layoutMs);
 
@@ -5820,10 +6227,10 @@ void EditorShell::runFrame() {
       .sourceFocusMode = sourceFocusMode_,
       .hasShapeSelection = app_.hasSelection(),
       .hasShapeClipboard = shapeClipboard_ != nullptr && shapeClipboard_->hasText(),
-      .hasTextSelection = selectionIsAllText(),
+      .hasTextSelection = cachedSelectionIsAllText_,
       .canGroup = rendererIdle && app_.groupSelectionAvailability().canApply,
       .canUngroup = rendererIdle && app_.ungroupSelectionAvailability().canApply,
-      .hasSelectableElements = canvasHasSelectableElements(),
+      .hasSelectableElements = cachedCanvasHasSelectableElements_,
       .showCompositorDebugPanel = showCompositorDebugPanel_,
       .compositorTileOverlay = compositorTileOverlay_,
       .geometryDebugOverlay = geometryDebugOverlay_,
@@ -5880,23 +6287,37 @@ void EditorShell::runFrame() {
   }
   markPhase(mainFrameCost.splittersMs);
   if (requestRenderAtEndOfFrame_) {
-    if (!app_.hasDocument()) {
-      requestRenderAtEndOfFrame_ = false;
-    } else if (penDragFlushedThisFrame_) {
-      // An actively-moving pen drag flushed new path geometry this frame. The
-      // live preview already presents that geometry, so skip the async render
-      // request: keeping the worker idle guarantees the next drag frame's
-      // flush is never blocked behind a busy render (the source of pen-drag
-      // frame stutter). The request flag stays set and fires on the first
-      // frame the pointer pauses; wake the loop so that frame happens even
-      // without further input.
-      window_.wakeEventLoop();
-    } else if (!renderCoordinator_.asyncRenderer().isBusy()) {
-      renderCoordinator_.maybeRequestRender(app_, selectTool_, interactionController_.viewport(),
-                                            &textures_);
-      requestRenderAtEndOfFrame_ = false;
-    } else {
-      window_.wakeEventLoop();
+    if (renderCoordinator_.presentationRefreshPending() &&
+        renderCoordinator_.asyncRenderer().isBusy()) {
+      // A renderer-setting flip makes speculative warmup and any in-flight frame stale. Cancel it
+      // so its completion wake can submit the forced refresh without blocking the UI on the live
+      // document guard.
+      renderCoordinator_.asyncRenderer().cancelInFlight();
+    }
+    switch (internal::DeferredRenderActionForState(app_.hasDocument(), penDragFlushedThisFrame_,
+                                                   renderCoordinator_.asyncRenderer().isBusy())) {
+      case internal::DeferredRenderAction::ClearRequest: requestRenderAtEndOfFrame_ = false; break;
+      case internal::DeferredRenderAction::WakeForPenDrag:
+        // An actively-moving pen drag flushed new path geometry this frame. The
+        // live preview already presents that geometry, so skip the async render
+        // request: keeping the worker idle guarantees the next drag frame's
+        // flush is never blocked behind a busy render (the source of pen-drag
+        // frame stutter). The request flag stays set and fires on the first
+        // frame the pointer pauses; wake the loop so that frame happens even
+        // without further input.
+        window_.wakeEventLoop();
+        break;
+      case internal::DeferredRenderAction::SubmitRender:
+        renderCoordinator_.maybeRequestRender(app_, selectTool_, interactionController_.viewport(),
+                                              &textures_, /*supersedeInFlight=*/false,
+                                              selectionChromeDetailForActiveTool());
+        requestRenderAtEndOfFrame_ = false;
+        break;
+      case internal::DeferredRenderAction::WaitForRendererCompletion:
+        // AsyncRenderer's completion callback wakes the host. Posting another
+        // wake here would spin the Wasm main thread at requestAnimationFrame
+        // cadence for the entire worker render.
+        break;
     }
   }
   penDragFlushedThisFrame_ = false;
@@ -5926,6 +6347,13 @@ void EditorShell::runFrame() {
       MemorySampleFromPresentationResources(presentationResources));
   maybeLogFrameMissTelemetry(frameCost);
   maybeLogResourceDiagnostics(frameCost);
+#ifdef __EMSCRIPTEN__
+  PublishInteractionStats(static_cast<int>(app_.selectedElements().size()),
+                          interactionController_.pendingClick().has_value() ? 1 : 0,
+                          renderCoordinator_.asyncRenderer().isBusy() ? 1 : 0,
+                          selectTool_.isDragging() ? 1 : 0,
+                          static_cast<double>(frameTelemetryFrame_));
+#endif
   contentOnlyCaptureThisFrame_ = false;
 }
 
@@ -5939,12 +6367,13 @@ std::string_view TextToolHintLabel(bool isEditing, bool isDraggingBox, bool touc
                         : "Double-click to place text. Drag to draw a text box.";
 }
 
-PendingClickBusyAction PendingClickBusyActionForState(bool tookFastRedrag, bool rendererBusy) {
+PendingClickBusyAction PendingClickBusyActionForState(bool tookFastRedrag,
+                                                      bool documentWriteUnavailable) {
   if (tookFastRedrag) {
     return PendingClickBusyAction::CompleteFastRedrag;
   }
 
-  if (rendererBusy) {
+  if (documentWriteUnavailable) {
     return PendingClickBusyAction::CancelBusyRender;
   }
 

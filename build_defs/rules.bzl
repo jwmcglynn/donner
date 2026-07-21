@@ -188,17 +188,82 @@ def _donner_transitioned_executable_impl(ctx):
         fail("dep must be an executable target: {}".format(dep_target.label))
 
     executable = ctx.actions.declare_file(ctx.label.name)
-    ctx.actions.symlink(
-        output = executable,
-        target_file = files_to_run.executable,
-        is_executable = True,
-    )
+    launcher_target = "_donner_transitioned/{}/{}".format(ctx.label.package, ctx.label.name)
+    forwarded_runfiles = ctx.runfiles(
+        root_symlinks = {launcher_target: files_to_run.executable},
+    ).merge(dep_default_info.default_runfiles).merge(dep_default_info.data_runfiles)
+
+    # Do not forward the transitioned executable as a plain symlink. Native
+    # binaries encode their own target basename in a runfiles-relative rpath
+    # (for example, `foo_impl.runfiles/...`). A wrapper named `foo` gets a
+    # `foo.runfiles` tree instead, so a clean remote worker cannot find shared
+    # libraries even though they are declared runfiles. Local output-tree
+    # `_solib` residue can accidentally mask that mismatch.
+    #
+    # Execute the implementation through a stable root runfiles alias and add
+    # every declared `_solib_*` leaf to the platform loader path. This keeps
+    # transitioned tests hermetic on clean remote workers and also works for
+    # `bazel run` wrappers. Manifest-only runfiles are supported as a fallback.
+    launcher = """#!/usr/bin/env bash
+set -euo pipefail
+
+logical_impl={logical_impl}
+runfiles_dir="${{RUNFILES_DIR:-${{TEST_SRCDIR:-}}}}"
+manifest="${{RUNFILES_MANIFEST_FILE:-}}"
+if [[ -z "$runfiles_dir" && -d "$0.runfiles" ]]; then
+  runfiles_dir="$0.runfiles"
+fi
+if [[ -z "$manifest" && -f "$0.runfiles_manifest" ]]; then
+  manifest="$0.runfiles_manifest"
+fi
+
+impl=""
+library_path=""
+append_library_dir() {{
+  local candidate="$1"
+  case ":$library_path:" in
+    *":$candidate:"*) ;;
+    *) library_path="${{library_path:+$library_path:}}$candidate" ;;
+  esac
+}}
+
+if [[ -n "$runfiles_dir" && -e "$runfiles_dir/$logical_impl" ]]; then
+  impl="$runfiles_dir/$logical_impl"
+  for candidate in "$runfiles_dir"/*/_solib_*/*; do
+    if [[ -d "$candidate" ]]; then
+      append_library_dir "$candidate"
+    fi
+  done
+elif [[ -n "$manifest" && -f "$manifest" ]]; then
+  while IFS=' ' read -r logical physical; do
+    if [[ "$logical" == "$logical_impl" ]]; then
+      impl="$physical"
+    fi
+    case "$logical" in
+      */_solib_*/*.dylib|*/_solib_*/*.so)
+        append_library_dir "${{physical%/*}}"
+        ;;
+    esac
+  done < "$manifest"
+fi
+
+if [[ -z "$impl" ]]; then
+  echo "Unable to locate transitioned executable runfile: $logical_impl" >&2
+  exit 127
+fi
+if [[ -n "$library_path" ]]; then
+  export DYLD_LIBRARY_PATH="$library_path${{DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}}"
+  export LD_LIBRARY_PATH="$library_path${{LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}}"
+fi
+exec "$impl" "$@"
+""".format(logical_impl = launcher_target)
+    ctx.actions.write(executable, launcher, is_executable = True)
 
     providers = [
         DefaultInfo(
             executable = executable,
             files = depset([executable], transitive = [dep_default_info.files]),
-            runfiles = dep_default_info.default_runfiles,
+            runfiles = forwarded_runfiles,
         ),
     ]
 

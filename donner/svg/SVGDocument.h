@@ -144,6 +144,9 @@ public:
   /// Acquire scoped write access to the underlying document state.
   DocumentWriteAccess writeAccess() const { return documentState_->write(); }
 
+  /// Try to acquire scoped write access without waiting.
+  std::optional<DocumentWriteAccess> tryWriteAccess() const { return documentState_->tryWrite(); }
+
   /**
    * Run a callback with scoped read access to this document.
    *

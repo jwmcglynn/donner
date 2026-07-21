@@ -985,6 +985,40 @@ void RendererDriver::draw(SVGDocument& document, const RenderViewport& viewport,
   drawPreparedDocument(document, viewport, surfaceFromCanvas);
 }
 
+bool RendererDriver::drawInterruptibly(SVGDocument& document, const RenderViewport& viewport,
+                                       const Transform2d& surfaceFromCanvas,
+                                       const std::function<bool()>& shouldCancel) {
+  DocumentWriteAccess access = document.writeAccess();
+
+  ParseWarningSink warnings;
+  RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
+  if (shouldCancel && shouldCancel()) {
+    return false;
+  }
+
+  const std::unordered_set<Entity> feImageShadowEntities =
+      collectOffscreenFeImageShadowEntities(document.registry());
+  std::vector<Entity> mainEntities;
+  RenderingInstanceView instances(document.registry());
+  while (!instances.done()) {
+    const Entity entity = instances.currentEntity();
+    if (feImageShadowEntities.count(entity) == 0) {
+      mainEntities.push_back(entity);
+    }
+    instances.advance();
+  }
+
+  if (mainEntities.empty()) {
+    renderer_.beginFrame(viewport);
+    renderer_.endFrame();
+    return true;
+  }
+
+  return drawEntityRangeInterruptibly(document.registry(), mainEntities.front(),
+                                      mainEntities.back(), viewport, surfaceFromCanvas,
+                                      shouldCancel);
+}
+
 RenderSnapshot RendererDriver::captureRenderSnapshot(SVGDocument& document) {
   RenderSnapshot snapshot;
   DocumentWriteAccess access = document.writeAccess();

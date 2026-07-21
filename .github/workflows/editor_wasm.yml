@@ -1,9 +1,28 @@
 name: Editor WASM
 
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".bazelignore"
+      - ".bazelrc"
+      - ".bazelversion"
+      - ".github/workflows/editor_wasm.yml"
+      - "BUILD.bazel"
+      - "MODULE.bazel"
+      - "MODULE.bazel.lock"
+      - "build_defs/**"
+      - "donner/**"
+      - "donner_icon.svg"
+      - "third_party/**"
+      - "tools/http/**"
   schedule:
     - cron: "18 7 * * *"
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.workflow, github.event.pull_request.number) || format('run-{0}-{1}', github.workflow, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -34,18 +53,27 @@ jobs:
           disk-cache: editor-wasm-${{ runner.os }}-${{ matrix.backend }}
           repository-cache: true
           external-cache: true
-          cache-save: true
+          # PR code may restore trusted cache entries, but must not publish
+          # entries into caches consumed by scheduled release-candidate runs.
+          cache-save: ${{ github.event_name != 'pull_request' }}
 
-      - name: Build editor wasm package (Geode)
+      # The size test owns the exact shipped package as test data, so one
+      # command both builds the handoff artifact and enforces its transfer
+      # budget. Keep the targets explicit because their manual tag prevents a
+      # wildcard test under a native config from pulling in Emscripten.
+      - name: Build and size-check editor wasm package (Geode)
         if: matrix.backend == 'geode'
         run: |
-          bazelisk build --config=editor-wasm //donner/editor/wasm:wasm_web_package
+          bazelisk test --config=editor-wasm --test_output=errors \
+            --remote_download_outputs=all \
+            //donner/editor/wasm:wasm_geode_package_size_tests
 
-      - name: Build editor wasm package (tiny_skia)
+      - name: Build and size-check editor wasm package (tiny_skia)
         if: matrix.backend == 'tiny_skia'
         run: |
-          bazelisk build --config=editor-wasm-tiny-skia \
-            //donner/editor/wasm:wasm_tiny_skia_web_package
+          bazelisk test --config=editor-wasm-tiny-skia --test_output=errors \
+            --remote_download_outputs=all \
+            //donner/editor/wasm:wasm_tiny_skia_package_size_tests
 
       - name: Setup Node
         if: matrix.backend == 'tiny_skia'
@@ -184,7 +212,7 @@ jobs:
           cleanup
           trap - EXIT
 
-      - name: Serve compatible package and run headed Geode suite
+      - name: Serve compatible package and run headed Geode browser suites
         env:
           DONNER_WASM_BACKEND: geode
           DONNER_WASM_REQUIRE_WEBGPU: "1"
@@ -218,10 +246,12 @@ jobs:
           curl -fsS -o /dev/null "${DONNER_WASM_BASE_URL}/index.html"
 
           bash donner/editor/wasm/tests/run_tests.sh --headed
+          npm --prefix donner/editor/wasm/tests run test:compatibility -- \
+            --project=firefox-geode-resize --headed
           cleanup
           trap - EXIT
 
-      - name: Serve tiny_skia package and run Chromium suite
+      - name: Serve tiny_skia package and run browser suites
         env:
           DONNER_WASM_BACKEND: tiny_skia
         run: |
@@ -254,6 +284,8 @@ jobs:
           curl -fsS -o /dev/null "${DONNER_WASM_BASE_URL}/index.html"
 
           bash donner/editor/wasm/tests/run_tests.sh
+          npm --prefix donner/editor/wasm/tests run test:compatibility -- \
+            --project=webkit-tiny-skia-carousel --headed
           cleanup
           trap - EXIT
 
@@ -312,23 +344,27 @@ jobs:
           mkdir -p "${site_dir}" "${deploy_dir}/geode" "${deploy_dir}/tiny_skia"
           cp -R "${pkg_dir}/." "${site_dir}/"
 
-          expected_site_files=$(printf '%s\n' \
-            backend-selector.js \
-            donner_icon.svg \
-            editor-bootstrap.js \
-            editor.css \
-            enable-threads.js \
-            geode/editor.js \
-            geode/editor.wasm \
-            index.html \
-            tiny_skia/editor.js \
-            tiny_skia/editor.wasm)
+          expected_site_files=$(
+            printf '%s\n' \
+              backend-selector.js \
+              donner_icon.svg \
+              editor-bootstrap.js \
+              editor.css \
+              enable-threads.js \
+              geode/editor.js \
+              geode/editor.wasm \
+              index.html \
+              tiny_skia/editor.js \
+              tiny_skia/editor.wasm \
+              worker-surface-selector.js \
+              | LC_ALL=C sort
+          )
           actual_site_files=$(cd "${site_dir}" && find . -type f | sed 's|^./||' | LC_ALL=C sort)
           test "${actual_site_files}" = "${expected_site_files}"
 
           for shared_file in \
             backend-selector.js donner_icon.svg editor-bootstrap.js editor.css enable-threads.js \
-            index.html; do
+            index.html worker-surface-selector.js; do
             cp "${site_dir}/${shared_file}" "${deploy_dir}/${shared_file}"
           done
           for backend in geode tiny_skia; do

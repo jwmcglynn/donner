@@ -7,6 +7,10 @@
 #include <span>
 #include <utility>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/TracyWrapper.h"
@@ -16,6 +20,56 @@
 namespace donner::editor {
 
 namespace {
+
+#ifdef __EMSCRIPTEN__
+EM_JS(void, PublishWorkerTimingStats,
+      (double workerMs, double queueWaitMs, double dequeueToStartMs, double setupMs,
+       double renderFrameMs, double buildPreviewMs, double finalSnapshotMs, double presentMs,
+       double diagnosticsMs, double pollDelayMs, double firstFrameDrawMs,
+       double firstFramePlanningMs, double firstFrameWarmupMs, double immediateRasterizeMs,
+       double cachedRasterizeMs, int immediateTileCount, int cachedTileCount, int readbackCount,
+       int readbackPollIterations, int usedTimedWaitAny, double directSurfaceFrames,
+       int directSurfacePresented),
+      {
+        const previous = window['__donnerWorkerStats'];
+        window['__donnerWorkerStats'] = {
+          'completedResults' : previous ? previous['completedResults'] + 1 : 1,
+          'publishedAtMs' : performance.now(),
+          'workerMs' : workerMs,
+          'queueWaitMs' : queueWaitMs,
+          'dequeueToStartMs' : dequeueToStartMs,
+          'setupMs' : setupMs,
+          'renderFrameMs' : renderFrameMs,
+          'buildPreviewMs' : buildPreviewMs,
+          'finalSnapshotMs' : finalSnapshotMs,
+          'presentMs' : presentMs,
+          'diagnosticsMs' : diagnosticsMs,
+          'pollDelayMs' : pollDelayMs,
+          'firstFrameDrawMs' : firstFrameDrawMs,
+          'firstFramePlanningMs' : firstFramePlanningMs,
+          'firstFrameWarmupMs' : firstFrameWarmupMs,
+          'immediateRasterizeMs' : immediateRasterizeMs,
+          'cachedRasterizeMs' : cachedRasterizeMs,
+          'immediateTileCount' : immediateTileCount,
+          'cachedTileCount' : cachedTileCount,
+          'readbackCount' : readbackCount,
+          'readbackPollIterations' : readbackPollIterations,
+          'readbackWaitStrategy' : directSurfacePresented
+              ? (window['__donnerWorkerSurfaceMode'] || 'direct-surface')
+              : (usedTimedWaitAny ? 'timed-wait-any' : 'device-poll'),
+          'directSurfaceFrames' : directSurfaceFrames,
+        };
+      });
+
+EM_JS(void, ReportDirectSurfaceUnavailable, (), {
+  const report = window['__donnerReportWorkerSurfaceUnavailable'];
+  if (typeof report == 'function') {
+    report();
+  }
+});
+#else
+void ReportDirectSurfaceUnavailable() {}
+#endif
 
 bool IsGraphicsElement(const svg::SVGElement& element) {
   return element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
@@ -33,15 +87,29 @@ bool IsGraphicsElement(const svg::SVGElement& element) {
 /// stretched until the user stops zooming; the high-quality re-rasterize
 /// then happens once.
 constexpr std::chrono::milliseconds kCanvasSizeCommitDelay{120};
+constexpr double kDragTranslationRecaptureScreenPx = 128.0;
 constexpr double kOverlayCullMarginScreenPx = 64.0;
 constexpr std::size_t kLargeSelectionOverlayLodThreshold = 128;
 constexpr std::chrono::milliseconds kLargeSelectionFullDetailDelay{120};
+#ifdef DONNER_WASM_WORKER_SURFACE
+constexpr bool kSelectionOnlyPrewarmMayTriggerRender = false;
+#else
+constexpr bool kSelectionOnlyPrewarmMayTriggerRender = true;
+#endif
 
 svg::Renderer CreateRenderer(std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice) {
   if (geodeDevice != nullptr) {
     return svg::Renderer(std::move(geodeDevice));
   }
   return svg::Renderer();
+}
+
+constexpr AsyncRendererStartMode EditorRenderWorkerStartMode() {
+#ifdef DONNER_WASM_WORKER_SURFACE
+  return AsyncRendererStartMode::Deferred;
+#else
+  return AsyncRendererStartMode::Immediate;
+#endif
 }
 
 bool CanvasSizeCloseEnough(const Vector2i& lhs, const Vector2i& rhs) {
@@ -280,12 +348,27 @@ bool ShouldDeferSelectedViewportRefresh(Entity selectedEntity, bool hasActiveDra
          !pendingSelectedLayerRasterization;
 }
 
+bool ShouldUseSelectedPrewarmRasterViewport(Entity selectedEntity, bool requestOverviewInfill,
+                                            bool rasterViewportBounded,
+                                            bool selectionOnlyPrewarmMayTriggerRender,
+                                            bool hasIndependentRenderReason) {
+  return selectedEntity != entt::null && !requestOverviewInfill && rasterViewportBounded &&
+         (selectionOnlyPrewarmMayTriggerRender || hasIndependentRenderReason);
+}
+
 bool ShouldClearPendingSelectedLayerRasterization(
     const std::optional<RenderRequest::DragPreview>& representedDragPreview, Entity pendingEntity,
     std::uint64_t resultVersion, std::uint64_t pendingVersion) {
   return pendingEntity != entt::null && resultVersion >= pendingVersion &&
          representedDragPreview.has_value() && representedDragPreview->entity == pendingEntity &&
          representedDragPreview->forceLayerRasterization;
+}
+
+std::chrono::milliseconds DirectSurfaceRetryBackoffForAttempt(unsigned attempt) {
+  constexpr std::chrono::milliseconds kInitialDelay{100};
+  constexpr std::chrono::milliseconds kMaximumDelay{1000};
+  const unsigned multiplier = 1u << std::min(attempt, 4u);
+  return std::min(kInitialDelay * multiplier, kMaximumDelay);
 }
 
 bool CompositedPreviewClearsPendingSelectedLayerRasterization(
@@ -359,12 +442,23 @@ std::optional<SelectTool::ActiveGesturePreview> OverlayGesturePreviewForPresenta
 
 RenderCoordinator::RenderWorkerBundle::RenderWorkerBundle(
     std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice)
-    : renderer(CreateRenderer(std::move(geodeDevice))) {}
+    : renderer(CreateRenderer(std::move(geodeDevice))),
+      asyncRenderer(EditorRenderWorkerStartMode()) {}
 
 RenderCoordinator::RenderCoordinator(std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice)
     : renderWorker_(std::move(geodeDevice)) {}
 
-void RenderCoordinator::resetForLoadedDocument() {
+std::optional<float> RenderCoordinator::nextDirectSurfaceRetryWakeSeconds() const {
+  if (!directSurfaceRetryNotBefore_.has_value()) {
+    return std::nullopt;
+  }
+
+  const auto remaining = *directSurfaceRetryNotBefore_ - std::chrono::steady_clock::now();
+  return std::max(0.0f, std::chrono::duration<float>(remaining).count());
+}
+
+void RenderCoordinator::resetForLoadedDocument(std::uint64_t documentGeneration) {
+  renderWorker_.asyncRenderer.invalidateDirectSurfacePresentation(documentGeneration);
   compositedPresentation_ = CompositedPresentation{};
   selectionBoundsCache_ = SelectionBoundsCache{};
   displayedDocVersion_ = 0;
@@ -408,6 +502,9 @@ void RenderCoordinator::resetForLoadedDocument() {
   pendingRasterViewport_.reset();
   pendingRasterViewportSince_ = std::chrono::steady_clock::time_point{};
   pendingDocumentMutationOverviewRefresh_ = false;
+  pendingPresentationRefresh_ = false;
+  directSurfaceRetryNotBefore_.reset();
+  directSurfaceRetryAttempt_ = 0;
   lastFrameCostBreakdown_ = FrameCostBreakdown{};
 }
 
@@ -676,6 +773,21 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
   }
 
   const auto& result = *resultOpt;
+#ifdef __EMSCRIPTEN__
+  const auto compositorStats = renderWorker_.asyncRenderer.compositorRenderFrameStats();
+  PublishWorkerTimingStats(
+      result.workerMs, result.workerTiming.queueWaitMs, result.workerTiming.dequeueToStartMs,
+      result.workerTiming.setupMs, result.workerTiming.renderFrameMs,
+      result.workerTiming.buildPreviewMs, result.workerTiming.finalSnapshotMs,
+      result.workerTiming.presentMs, result.workerTiming.diagnosticsMs,
+      result.workerTiming.pollDelayMs, compositorStats.firstFrameDrawMs,
+      compositorStats.firstFramePlanningMs, compositorStats.firstFrameWarmupMs,
+      compositorStats.immediateRasterizeMs, compositorStats.cachedRasterizeMs,
+      compositorStats.immediateTileCount, compositorStats.cachedTileCount,
+      result.workerTiming.readbackCount, result.workerTiming.readbackPollIterations,
+      result.workerTiming.usedTimedWaitAny ? 1 : 0, static_cast<double>(result.directSurfaceFrames),
+      result.directSurfaceOutcome == DirectSurfacePresentationOutcome::Presented ? 1 : 0);
+#endif
   lastFrameCostBreakdown_.compositedRender =
       CompositedRenderCostFromStats(renderWorker_.asyncRenderer.compositorRenderFrameStats());
   // Forward the worker-measured presentation latency to the frame history so
@@ -685,6 +797,47 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
   // result belongs to that frame.
   if (frameHistory != nullptr) {
     frameHistory->setLatestBackendMs(static_cast<float>(result.workerMs));
+  }
+  if (result.directSurfaceOutcome == DirectSurfacePresentationOutcome::RetryAfterBackoff) {
+    // Park this result in the scheduler so the current event cannot immediately repost it. The
+    // idle-wake deadline makes the same desired version eligible again after bounded backoff.
+    renderScheduler_.noteRenderCompleted(result.version, result.rasterViewport.outputSizePx,
+                                         result.rasterViewport);
+    directSurfaceRetryNotBefore_ = std::chrono::steady_clock::now() +
+                                   DirectSurfaceRetryBackoffForAttempt(directSurfaceRetryAttempt_);
+    directSurfaceRetryAttempt_ = std::min(directSurfaceRetryAttempt_ + 1u, 4u);
+    return;
+  }
+  if (result.directSurfaceOutcome == DirectSurfacePresentationOutcome::Unavailable) {
+    // No prior frame exists to retain. Park this exact request and expose the browser's existing
+    // capability error instead of accepting a blank canvas or retrying the unavailable surface.
+    renderScheduler_.noteRenderCompleted(result.version, result.rasterViewport.outputSizePx,
+                                         result.rasterViewport);
+    directSurfaceRetryNotBefore_.reset();
+    directSurfaceRetryAttempt_ = 0;
+    ReportDirectSurfaceUnavailable();
+    return;
+  }
+  if (result.directSurfaceOutcome == DirectSurfacePresentationOutcome::Presented) {
+    const Vector2i resultCanvasSize = result.rasterViewport.outputSizePx;
+    if (result.compositedPreview.has_value() && result.compositedPreview->valid()) {
+      textures.uploadComposited(*result.compositedPreview, result.rasterViewport);
+      lastFrameCostBreakdown_.compositedUpload = textures.lastCompositedUploadCost();
+    }
+    displayedDocVersion_ = result.version;
+    renderScheduler_.noteRenderCompleted(result.version, resultCanvasSize, result.rasterViewport);
+    directSurfaceRetryNotBefore_.reset();
+    directSurfaceRetryAttempt_ = 0;
+    compositedPresentation_.noteCachedTextures(
+        result.directSurfaceEntity, result.version, resultCanvasSize,
+        DragPreviewFromRenderRequest(result.directSurfaceDragPreview));
+    pendingDocumentMutationOverviewRefresh_ = false;
+    if (result.directSurfaceEntity == entt::null) {
+      displayNoneSuppressedSelectionEntity_ = entt::null;
+      displayNoneSuppressedLayerEntity_ = entt::null;
+    }
+    promoteSelectionBoundsIfReady();
+    return;
   }
   const EditorRasterViewport rasterViewport = viewport.rasterViewport();
   const bool overviewInfillResult =
@@ -757,12 +910,13 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
   promoteSelectionBoundsIfReady();
 }
 
-void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectTool,
-                                           const ViewportState& viewport,
-                                           GlTextureCache* textures) {
+bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectTool,
+                                           const ViewportState& viewport, GlTextureCache* textures,
+                                           bool supersedeInFlight,
+                                           SelectionChromeDetail directSurfaceSelectionDetail) {
   ZoneScopedN("RenderCoordinator::maybeRequestRender");
   if (!app.hasDocument() || viewport.paneSize.x <= 0.0 || viewport.paneSize.y <= 0.0) {
-    return;
+    return false;
   }
 
   invalidatePresentationAfterDocumentFlush(app.document().lastFlushResult());
@@ -783,6 +937,12 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
       !SameRasterViewport(*pendingRasterViewport_, rasterViewport)) {
     pendingRasterViewport_ = rasterViewport;
     pendingRasterViewportSince_ = now;
+  }
+  const bool directSurfaceRetryPending = directSurfaceRetryNotBefore_.has_value();
+  const bool directSurfaceRetryDue =
+      directSurfaceRetryPending && now >= *directSurfaceRetryNotBefore_;
+  if (directSurfaceRetryPending && !directSurfaceRetryDue && !pendingPresentationRefresh_) {
+    return false;
   }
   const bool throttleElapsed = (now - pendingCanvasSizeSince_) >= kCanvasSizeCommitDelay;
   const bool rasterViewportSettled = !IsUnsetTimePoint(pendingRasterViewportSince_) &&
@@ -809,14 +969,15 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
       prewarmEntity, dragPreview.has_value(), currentVersion, displayedDocVersion_,
       compositedPresentation_.hasCachedTextures(), rasterViewportSettled, needsOverviewInfill,
       pendingSelectedLayerRasterization);
-  if (deferSelectedViewportRefresh && !needsOverviewInfill) {
+  if (deferSelectedViewportRefresh && !needsOverviewInfill && !directSurfaceRetryDue &&
+      !pendingPresentationRefresh_) {
     if (renderWorker_.asyncRenderer.isBusy()) {
       renderWorker_.asyncRenderer.cancelInFlight();
     }
-    return;
+    return false;
   }
-  if (renderWorker_.asyncRenderer.isBusy()) {
-    return;
+  if (renderWorker_.asyncRenderer.isBusy() && !supersedeInFlight) {
+    return false;
   }
 
   const bool requestOverviewInfill = needsOverviewInfill;
@@ -824,9 +985,12 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
       requestOverviewInfill ? std::vector<Entity>{}
                             : selectedCompositedExtraEntities(app, prewarmEntity);
   const bool forceSelectedLayerRasterization = pendingSelectedLayerRasterization;
-  const bool useSelectedPrewarmRasterViewport =
-      !requestOverviewInfill && prewarmEntity != entt::null && !dragPreview.has_value() &&
-      rasterViewport.viewportBounded;
+  const bool hasIndependentSelectedPrewarmRenderReason =
+      dragPreview.has_value() || currentVersion != displayedDocVersion_ ||
+      forceSelectedLayerRasterization || directSurfaceRetryDue || pendingPresentationRefresh_;
+  const bool useSelectedPrewarmRasterViewport = ShouldUseSelectedPrewarmRasterViewport(
+      prewarmEntity, requestOverviewInfill, rasterViewport.viewportBounded,
+      kSelectionOnlyPrewarmMayTriggerRender, hasIndependentSelectedPrewarmRenderReason);
   const EditorRasterViewport requestRasterViewport =
       requestOverviewInfill
           ? viewport.overviewInfillRasterViewport()
@@ -860,13 +1024,22 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
           .selectedEntity = requestOverviewInfill ? entt::null : prewarmEntity,
           .selectedExtraEntities = prewarmExtraEntities,
           .activeDragPreview = dragPreview,
+          .forcePresentationRefresh = pendingPresentationRefresh_,
           .forceSelectedLayerRasterization = forceSelectedLayerRasterization,
           .currentVersion = currentVersion,
           .currentCanvasSize = currentCanvasSize,
           .currentRasterViewport = requestRasterViewport,
+          .dragTranslationRecaptureDistanceDoc =
+              kDragTranslationRecaptureScreenPx /
+              std::max(std::abs(viewport.pixelsPerDocUnit()), 1e-9),
+#ifdef DONNER_WASM_WORKER_SURFACE
+          .requiresRenderedActiveDragPresentation = true,
+          .deferIdentityActiveDragCapture = true,
+#endif
+          .selectionOnlyPrewarmMayTriggerRender = kSelectionOnlyPrewarmMayTriggerRender,
       });
-  if (!schedule.shouldRequestRender()) {
-    return;
+  if (!schedule.shouldRequestRender() && !directSurfaceRetryDue) {
+    return false;
   }
 
   RenderRequest req(renderWorker_.renderer, app.document().document());
@@ -891,8 +1064,36 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   if (!requestOverviewInfill && schedule.dragPreview.has_value()) {
     req.dragPreview = *schedule.dragPreview;
   }
+#ifdef DONNER_WASM_WORKER_SURFACE
+  if (!requestOverviewInfill && !app.selectedElements().empty() &&
+      directSurfaceSelectionDetail != SelectionChromeDetail::PathOutlinesOnly &&
+      directSurfaceSelectionDetail != SelectionChromeDetail::EditingChromeOnly) {
+    std::optional<SelectionChromeBoundsPreview> chromeBoundsPreview;
+    if (const auto activeBoundsPreview = selectTool.activeTransformBoundsPreview();
+        activeBoundsPreview.has_value()) {
+      const std::optional<SelectTool::ActiveDragPreview> documentDragPreview =
+          selectTool.documentDragPreview(app);
+      chromeBoundsPreview = SelectionChromeBoundsPreview{
+          .startBoundsDoc = activeBoundsPreview->startBoundsDoc,
+          .documentFromStartDocument =
+              documentDragPreview.has_value()
+                  ? documentDragPreview->documentFromCachedDocument
+                  : activeBoundsPreview->documentFromStartDocument,
+      };
+    }
+    req.directSurfaceSelectionChrome = OverlayRenderer::captureChromeSnapshot(
+        std::span<const svg::SVGElement>(app.selectedElements()), /*marqueeRectDoc=*/std::nullopt,
+        requestRasterViewport.outputFromDocument, chromeBoundsPreview,
+        /*sourceHover=*/{}, requestRasterViewport.documentRect, directSurfaceSelectionDetail,
+        /*representedDocumentFromLiveDocument=*/Transform2d(), /*lockedFlash=*/std::nullopt,
+        viewport.devicePixelRatio);
+  }
+#endif
   ++lastFrameCostBreakdown_.renderRequestsPosted;
   renderWorker_.asyncRenderer.requestRender(req);
+  pendingPresentationRefresh_ = false;
+  directSurfaceRetryNotBefore_.reset();
+  return true;
 }
 
 void RenderCoordinator::invalidatePresentationAfterDocumentFlush(
