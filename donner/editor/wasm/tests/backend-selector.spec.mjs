@@ -548,6 +548,7 @@ test("bitmap bridge retains zero-copy handoff and presents backing texels withou
     devicePixelRatio: 2,
     workerSurfaceUtilities: true,
   });
+  context.window.__donnerWorkerSurfaceMode = "bitmap-bridge";
   const accepted = elements["donner-document-canvas-back"];
   let bitmapClosed = false;
   const bitmap = {
@@ -556,10 +557,10 @@ test("bitmap bridge retains zero-copy handoff and presents backing texels withou
     },
   };
   const layout = {
-    clipBottom: 0.375,
-    clipLeft: 0.375,
-    clipRight: 0.25,
-    clipTop: 0.125,
+    clipBottom: 0,
+    clipLeft: 0,
+    clipRight: 0,
+    clipTop: 0,
     frameToken: 9,
     height: 399.5,
     left: 100.25,
@@ -577,15 +578,14 @@ test("bitmap bridge retains zero-copy handoff and presents backing texels withou
   assert.equal(drawImageCalls.length, 0);
   assert.equal(accepted.width, 1279);
   assert.equal(accepted.height, 799);
-  assert.equal(accepted.style.left, "100.25px");
-  assert.equal(accepted.style.top, "50.75px");
+  assert.equal(accepted.style.left, "0px");
+  assert.equal(accepted.style.top, "0px");
+  assert.equal(accepted.style.transform, "translate3d(100.5px, 51px, 0)");
   assert.equal(accepted.style.width, "639.5px");
   assert.equal(accepted.style.height, "399.5px");
-  assert.equal(accepted.style.clipPath, "inset(-0.25px 0.25px 0.25px 0.25px)");
+  assert.equal(accepted.style.clipPath, "inset(0px 0px 0px 0px)");
   assert.equal(Number.parseFloat(accepted.style.width) * 2, accepted.width);
   assert.equal(Number.parseFloat(accepted.style.height) * 2, accepted.height);
-  assert.equal(Number.parseFloat(accepted.style.left), layout.left);
-  assert.equal(Number.parseFloat(accepted.style.top), layout.top);
   assert.equal(accepted.style.visibility, "visible");
   assert.equal(accepted.attributes.get("data-direct-surface-frame"), "9");
   assert.equal(

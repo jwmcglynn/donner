@@ -66,8 +66,19 @@ function ApplyWorkerDocumentSurfaceLayout(layout) {
         width: surfaceCanvas.width,
       })
       : layout;
-    surfaceCanvas.style.left = `${pixelLayout.left}px`;
-    surfaceCanvas.style.top = `${pixelLayout.top}px`;
+    if (window.__donnerWorkerSurfaceMode === "bitmap-bridge") {
+      // WebKit promotes the canvas bitmap into a compositor layer independently from the
+      // element's CSS background. Repositioning the layout box can expose that background for
+      // one frame at a device-pixel-aligned edge. Keep the box stationary and translate the
+      // composited element instead, so the bitmap and checkerboard move in one atomic property.
+      surfaceCanvas.style.left = "0px";
+      surfaceCanvas.style.top = "0px";
+      surfaceCanvas.style.transform = `translate3d(${pixelLayout.left}px, ${pixelLayout.top}px, 0)`;
+    } else {
+      surfaceCanvas.style.left = `${pixelLayout.left}px`;
+      surfaceCanvas.style.top = `${pixelLayout.top}px`;
+      surfaceCanvas.style.transform = "";
+    }
     surfaceCanvas.style.width = `${pixelLayout.width}px`;
     surfaceCanvas.style.height = `${pixelLayout.height}px`;
     surfaceCanvas.style.clipPath =
