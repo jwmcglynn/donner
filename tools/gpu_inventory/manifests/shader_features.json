@@ -1453,6 +1453,7 @@
       "features": [
         "abs",
         "array",
+        "break",
         "clamp",
         "const",
         "continue",
@@ -1480,7 +1481,7 @@
         "textureSample",
         "var"
       ],
-      "lineCount": 467,
+      "lineCount": 475,
       "structs": [
         "Band",
         "FragOutput",
@@ -1572,6 +1573,7 @@
       "features": [
         "abs",
         "array",
+        "break",
         "clamp",
         "const",
         "continue",
@@ -1598,7 +1600,7 @@
         "textureLoad",
         "var"
       ],
-      "lineCount": 471,
+      "lineCount": 479,
       "structs": [
         "Band",
         "FragOutput",
@@ -1689,6 +1691,7 @@
       "features": [
         "abs",
         "array",
+        "break",
         "clamp",
         "const",
         "continue",
@@ -1712,7 +1715,7 @@
         "textureLoad",
         "var"
       ],
-      "lineCount": 309,
+      "lineCount": 317,
       "structs": [
         "Band",
         "FragOutput",

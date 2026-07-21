@@ -4,7 +4,9 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
+#include <limits>
 #include <vector>
 
 #include "donner/base/FillRule.h"
@@ -99,20 +101,76 @@ TEST(GeodePathEncoder, SmallPathSingleBand) {
   EXPECT_EQ(encoded.bands.size(), 1u);
 }
 
-TEST(GeodePathEncoder, LargePathMultipleBands) {
-  // A tall rect (500px) should produce multiple bands.
+TEST(GeodePathEncoder, LongSpanningCurvesStayInOneBand) {
+  // More bands cannot reduce the candidate count when every contributing curve spans the
+  // complete path, so the distribution-driven selector should retain one band.
   Path path = PathBuilder().addRect(Box2d({0, 0}, {100, 500})).build();
 
   EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
   EXPECT_FALSE(encoded.empty());
 
-  // 500px / 32px per band ≈ 16 bands.
-  EXPECT_GT(encoded.bands.size(), 1u);
-  EXPECT_LE(encoded.bands.size(), 256u);  // Within max band limit.
+  EXPECT_EQ(encoded.hBandCount, 1u);
 
   // Multi-band paths still draw one whole-path quad. Multiple quads would
   // reintroduce non-additive source-over coverage at band boundaries.
   EXPECT_EQ(encoded.quadVertices.size(), 6u);
+}
+
+TEST(GeodePathEncoder, OmitsCurvesParallelToEachRay) {
+  const Path path = PathBuilder().addRect(Box2d({0, 0}, {100, 100})).build();
+
+  const EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
+  ASSERT_FALSE(encoded.empty());
+
+  for (const EncodedPath::Curve& curve : encoded.curves) {
+    EXPECT_FALSE(curve.p0y == curve.p1y && curve.p1y == curve.p2y)
+        << "Horizontal-ray data must omit horizontal curves";
+  }
+  for (const EncodedPath::Curve& curve : encoded.vCurves) {
+    EXPECT_FALSE(curve.p0x == curve.p1x && curve.p1x == curve.p2x)
+        << "Vertical-ray data must omit vertical curves";
+  }
+}
+
+TEST(GeodePathEncoder, SortsBandCurvesByDescendingCrossAxisMaximum) {
+  PathBuilder builder;
+  builder.addRect(Box2d({0, 0}, {10, 10}));
+  builder.addRect(Box2d({30, 0}, {40, 10}));
+  builder.addRect(Box2d({70, 0}, {80, 10}));
+  const EncodedPath encoded = GeodePathEncoder::encode(builder.build(), FillRule::NonZero);
+  ASSERT_FALSE(encoded.empty());
+
+  for (const EncodedPath::Band& band : encoded.bands) {
+    float previousMax = std::numeric_limits<float>::infinity();
+    for (uint32_t i = 0; i < band.curveCount; ++i) {
+      const EncodedPath::Curve& curve = encoded.curves[band.curveStart + i];
+      const float curveMax = std::max({curve.p0x, curve.p1x, curve.p2x});
+      EXPECT_LE(curveMax, previousMax) << "Horizontal band references must be descending";
+      previousMax = curveMax;
+    }
+  }
+  for (const EncodedPath::Band& band : encoded.vBands) {
+    float previousMax = std::numeric_limits<float>::infinity();
+    for (uint32_t i = 0; i < band.curveCount; ++i) {
+      const EncodedPath::Curve& curve = encoded.vCurves[band.curveStart + i];
+      const float curveMax = std::max({curve.p0y, curve.p1y, curve.p2y});
+      EXPECT_LE(curveMax, previousMax) << "Vertical band references must be descending";
+      previousMax = curveMax;
+    }
+  }
+}
+
+TEST(GeodePathEncoder, ChoosesBandCountFromCurveDistribution) {
+  PathBuilder builder;
+  for (int i = 0; i < 16; ++i) {
+    const double y = static_cast<double>(i) * 0.625;
+    builder.addRect(Box2d({0, y}, {10, y + 0.25}));
+  }
+
+  const EncodedPath encoded = GeodePathEncoder::encode(builder.build(), FillRule::NonZero);
+  ASSERT_FALSE(encoded.empty());
+  EXPECT_GT(encoded.hBandCount, 1u)
+      << "A compact path with many separated curve clusters needs more than one band";
 }
 
 TEST(GeodePathEncoder, BandsCoverFullHeight) {
@@ -446,6 +504,23 @@ TEST(GeodePathEncoder, MultipleOpenSubpathsEachGetClosed) {
   EncodedPath openEncoded = GeodePathEncoder::encode(twoLinesOpen, FillRule::NonZero);
   EncodedPath closedEncoded = GeodePathEncoder::encode(twoLinesClosed, FillRule::NonZero);
   EXPECT_EQ(openEncoded.curves.size(), closedEncoded.curves.size());
+}
+
+TEST(GeodePathEncoder, RayParallelAxisLeavesFiniteEmptyBandMetadata) {
+  const Path path = PathBuilder()
+                        .moveTo(Vector2d(0, 0))
+                        .lineTo(Vector2d(0, 10))
+                        .moveTo(Vector2d(10, 0))
+                        .lineTo(Vector2d(10, 10))
+                        .build();
+
+  const EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
+  ASSERT_FALSE(encoded.empty());
+  EXPECT_TRUE(encoded.vBands.empty());
+  EXPECT_TRUE(encoded.vCurves.empty());
+  EXPECT_EQ(encoded.vBandCount, 0u);
+  EXPECT_EQ(encoded.vStride, 0.0f);
+  EXPECT_TRUE(std::isfinite(encoded.vStride));
 }
 
 }  // namespace donner::geode
