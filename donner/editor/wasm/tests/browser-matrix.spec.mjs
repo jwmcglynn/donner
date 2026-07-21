@@ -26,11 +26,15 @@ test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", 
   );
   assert.match(
     String(firefox.grep),
-    /Firefox retains every accepted document epoch during a drag/,
+    /Firefox presents every accepted drag epoch on one stable surface/,
   );
   assert.match(
     String(firefox.grep),
-    /Firefox keeps every browser-composited Splash drag frame coherent/,
+    /Firefox never exposes the checkerboard while dragging a Splash letter/,
+  );
+  assert.match(
+    String(firefox.grep),
+    /Firefox bakes the Splash letter and overlay into one accepted surface epoch/,
   );
 
   const webkit = projects.get("webkit-tiny-skia-carousel");

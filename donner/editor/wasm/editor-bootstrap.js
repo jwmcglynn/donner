@@ -62,6 +62,7 @@ function ApplyWorkerDocumentSurfaceLayout(layout) {
     const pixelLayout = typeof globalThis.CreateDonnerWorkerSurfacePixelLayout === "function"
       ? globalThis.CreateDonnerWorkerSurfacePixelLayout(layout, window.devicePixelRatio, {
         height: surfaceCanvas.height,
+        snapToDevicePixels: window.__donnerWorkerSurfaceMode === "bitmap-bridge",
         width: surfaceCanvas.width,
       })
       : layout;

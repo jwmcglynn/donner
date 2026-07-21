@@ -24,6 +24,7 @@
  *   DONNER_SAFARI_ALLOW_UNPINNED_PACKAGE=1
  *                                  Explicit exploratory-only bypass for the required digest.
  *   DONNER_SAFARI_REQUIRED=1      Treat unavailable Safari automation as failure, not a skip.
+ *   DONNER_SAFARI_SEAM_ONLY=1     Stop after the fractional-pan compositor pixel probe.
  */
 
 import assert from "node:assert/strict";
@@ -38,6 +39,7 @@ const kBaseUrl = process.env.DONNER_WASM_BASE_URL || "http://127.0.0.1:8000";
 const kRequired = process.env.DONNER_SAFARI_REQUIRED === "1";
 const kExpectedWasmSha256 = process.env.DONNER_SAFARI_EXPECTED_WASM_SHA256 || "";
 const kAllowUnpinnedPackage = process.env.DONNER_SAFARI_ALLOW_UNPINNED_PACKAGE === "1";
+const kSeamOnly = process.env.DONNER_SAFARI_SEAM_ONLY === "1";
 const kTimeoutMs = Number(process.env.DONNER_SAFARI_TIMEOUT_MS || 30_000);
 const kRunId = new Date().toISOString().replaceAll(/[^0-9A-Za-z]/g, "");
 const kArtifactDir = process.env.DONNER_SAFARI_ARTIFACT_DIR
@@ -894,6 +896,9 @@ async function runRegression(driver, editorUrl, result) {
     "fractional Safari pan",
     result.fractionalPanSeamProbe.diagnostics,
   );
+  if (kSeamOnly) {
+    return;
+  }
 
   const cursorProbePoint = {
     x: canvas.x + canvas.width * 0.55,
@@ -1219,6 +1224,7 @@ async function main() {
     artifactDir: kArtifactDir,
     driverUrl: kDriverUrl,
     editorUrl: editorUrl.href,
+    scope: kSeamOnly ? "fractional-pan-seam" : "full",
     startedAt: new Date().toISOString(),
   };
   const driver = new SafariDriverClient(kDriverUrl);
@@ -1265,10 +1271,10 @@ async function main() {
     result.completedAt = new Date().toISOString();
     result.passed = true;
     fs.writeFileSync(path.join(kArtifactDir, "result.json"), JSON.stringify(result, null, 2));
-    console.log(
-      `PASS: real Apple Safari Geode startup, thumbnails, drag, wake burst, and teardown; `
-        + `artifacts=${kArtifactDir}`,
-    );
+    const passLabel = kSeamOnly
+      ? "real Apple Safari fractional-pan edge pixels"
+      : "real Apple Safari Geode startup, thumbnails, drag, wake burst, and teardown";
+    console.log(`PASS: ${passLabel}; artifacts=${kArtifactDir}`);
   } catch (error) {
     if (error instanceof SafariAutomationUnavailable && !kRequired) {
       result.completedAt = new Date().toISOString();
