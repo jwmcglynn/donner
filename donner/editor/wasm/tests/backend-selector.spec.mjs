@@ -504,6 +504,44 @@ test("worker surface never overdraws beyond an unclipped document edge", async (
   assert.equal(plan.clipBottom, 0);
 });
 
+test("Safari bitmap surface quantizes a fractional pan without resampling its backing", async () => {
+  const context = await loadWorkerSurfaceUtilities();
+  const createPixelLayout = context.CreateDonnerWorkerSurfacePixelLayout;
+  const plan = createPixelLayout(
+    {
+      clipBottom: 0,
+      clipLeft: 0,
+      clipRight: 0,
+      clipTop: 0,
+      height: 400,
+      left: 285.75,
+      top: 274.125,
+      width: 640,
+    },
+    2,
+    { height: 800, snapToDevicePixels: true, width: 1280 },
+  );
+
+  assert.deepEqual(
+    {
+      bottom: (plan.top + plan.height - plan.clipBottom) * 2,
+      height: plan.height,
+      left: (plan.left + plan.clipLeft) * 2,
+      right: (plan.left + plan.width - plan.clipRight) * 2,
+      top: (plan.top + plan.clipTop) * 2,
+      width: plan.width,
+    },
+    {
+      bottom: 1348,
+      height: 400,
+      left: 572,
+      right: 1852,
+      top: 548,
+      width: 640,
+    },
+  );
+});
+
 test("bitmap bridge retains zero-copy handoff and presents backing texels without stretching", async () => {
   const { bitmapTransfers, context, drawImageCalls, elements } = await loadReadyHandoff({
     backend: "packaged",

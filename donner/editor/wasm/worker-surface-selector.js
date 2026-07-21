@@ -43,50 +43,81 @@ function CreateDonnerWorkerSurfacePixelLayout(layout, devicePixelRatio, backingS
   const scale = Number.isFinite(Number(devicePixelRatio)) && Number(devicePixelRatio) > 0
     ? Number(devicePixelRatio)
     : 1;
-  const left = Number(layout.left);
-  const top = Number(layout.top);
-  const width = Number(layout.width);
-  const height = Number(layout.height);
+  const rawLeft = Number(layout.left);
+  const rawTop = Number(layout.top);
+  const rawWidth = Number(layout.width);
+  const rawHeight = Number(layout.height);
   if (
-    !Number.isFinite(left) || !Number.isFinite(top) || !Number.isFinite(width)
-    || !Number.isFinite(height) || width <= 0 || height <= 0
+    !Number.isFinite(rawLeft) || !Number.isFinite(rawTop) || !Number.isFinite(rawWidth)
+    || !Number.isFinite(rawHeight) || rawWidth <= 0 || rawHeight <= 0
   ) {
     return { ...layout };
   }
 
   // The document bitmap and the ImGui overlay are separate compositor layers. The renderer's
-  // layout is the live viewport projection and therefore owns CSS geometry; backing dimensions
-  // describe only the resolution of the accepted epoch. Reusing an older backing store during an
-  // immediate pan or zoom intentionally lets the browser resample that complete epoch until the
-  // worker replaces it, keeping document pixels and overlay chrome in one coordinate system.
-  void backingSize;
+  // layout is the live viewport projection and therefore owns CSS geometry. Safari's bitmap
+  // bridge additionally quantizes its CSS box because WebKit can otherwise leave a device pixel
+  // uncovered when a fractional pan moves a solid document edge between device pixels.
   const normalizeDeviceCoordinate = (value) => {
     const nearest = Math.round(value);
     return Math.abs(value - nearest) <= 1e-7 ? nearest : value;
   };
   const floorDevice = (value) => Math.floor(normalizeDeviceCoordinate(value * scale));
   const ceilDevice = (value) => Math.ceil(normalizeDeviceCoordinate(value * scale));
+  const roundDevice = (value) => Math.round(normalizeDeviceCoordinate(value * scale));
   const inset = (name) => {
     const value = Number(layout[name]);
     return Number.isFinite(value) ? Math.max(0, value) : 0;
   };
-  const rawRight = left + width;
-  const rawBottom = top + height;
+  const rawRight = rawLeft + rawWidth;
+  const rawBottom = rawTop + rawHeight;
   const clipLeftInset = inset("clipLeft");
   const clipTopInset = inset("clipTop");
   const clipRightInset = inset("clipRight");
   const clipBottomInset = inset("clipBottom");
+  let left = rawLeft;
+  let top = rawTop;
+  let width = rawWidth;
+  let height = rawHeight;
+  if (backingSize.snapToDevicePixels) {
+    const backingWidth = Number(backingSize.width);
+    const backingHeight = Number(backingSize.height);
+    const preserveBackingWidth = Number.isFinite(backingWidth)
+      && backingWidth > 0
+      && Math.abs(rawWidth * scale - backingWidth) <= 1e-6;
+    const preserveBackingHeight = Number.isFinite(backingHeight)
+      && backingHeight > 0
+      && Math.abs(rawHeight * scale - backingHeight) <= 1e-6;
+    const leftDevice = clipLeftInset > 0 ? floorDevice(rawLeft) : roundDevice(rawLeft);
+    const topDevice = clipTopInset > 0 ? floorDevice(rawTop) : roundDevice(rawTop);
+    const rightDevice = clipRightInset > 0
+      ? ceilDevice(rawRight)
+      : preserveBackingWidth
+      ? leftDevice + backingWidth
+      : roundDevice(rawRight);
+    const bottomDevice = clipBottomInset > 0
+      ? ceilDevice(rawBottom)
+      : preserveBackingHeight
+      ? topDevice + backingHeight
+      : roundDevice(rawBottom);
+    left = leftDevice / scale;
+    top = topDevice / scale;
+    width = (rightDevice - leftDevice) / scale;
+    height = (bottomDevice - topDevice) / scale;
+  }
+  const snappedRight = left + width;
+  const snappedBottom = top + height;
   const clipLeft = clipLeftInset > 0
-    ? floorDevice(Math.min(rawRight, left + clipLeftInset)) / scale - left
+    ? floorDevice(Math.min(rawRight, rawLeft + clipLeftInset)) / scale - left
     : 0;
   const clipTop = clipTopInset > 0
-    ? floorDevice(Math.min(rawBottom, top + clipTopInset)) / scale - top
+    ? floorDevice(Math.min(rawBottom, rawTop + clipTopInset)) / scale - top
     : 0;
   const clipRight = clipRightInset > 0
-    ? rawRight - ceilDevice(Math.max(left, rawRight - clipRightInset)) / scale
+    ? snappedRight - ceilDevice(Math.max(rawLeft, rawRight - clipRightInset)) / scale
     : 0;
   const clipBottom = clipBottomInset > 0
-    ? rawBottom - ceilDevice(Math.max(top, rawBottom - clipBottomInset)) / scale
+    ? snappedBottom - ceilDevice(Math.max(rawTop, rawBottom - clipBottomInset)) / scale
     : 0;
 
   return {
