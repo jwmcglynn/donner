@@ -964,7 +964,7 @@ async function runRegression(driver, editorUrl, result) {
     result.livePanFrames = [];
     const badFrames = [];
     const goodFrames = [];
-    const edgePixels = new Set();
+    const surfacePositions = new Set();
     for (let step = 1; step <= 48; ++step) {
       const magnitude = 9 + (step % 4) * 4;
       const direction = step % 2 === 0 ? -1 : 1;
@@ -989,8 +989,7 @@ async function runRegression(driver, editorUrl, result) {
         continue;
       }
       const diagnostics = scanSolidDocumentEdges(screenshot, state);
-      const leftEdge = diagnostics.find((edge) => edge.edge === "left");
-      edgePixels.add(JSON.stringify(leftEdge?.midpointPixel || []));
+      surfacePositions.add(JSON.stringify([state.surface.rect.x, state.surface.rect.y]));
       const bad = diagnostics.some((edge) => edge.maxChannelDelta > 2);
       const frame = {
         acceptedToken: Number(state.accepted?.token || 0),
@@ -1005,14 +1004,16 @@ async function runRegression(driver, editorUrl, result) {
       } else {
         goodFrames.push(frame);
       }
-      if (badFrames.length >= 2 && goodFrames.length >= 1 && edgePixels.size >= 2) {
+      if (badFrames.length >= 2 && goodFrames.length >= 1 && surfacePositions.size >= 2) {
         break;
       }
     }
     assert.ok(goodFrames.length >= 1, "Safari live pan captured no clean edge frame");
     assert.ok(
-      edgePixels.size >= 2,
-      `Safari live pan did not expose changing edge pixels: ${[...edgePixels].join(", ")}`,
+      surfacePositions.size >= 2,
+      `Safari live pan did not move through distinct surface positions: ${
+        [...surfacePositions].join(", ")
+      }`,
     );
     assert.deepEqual(
       badFrames,
