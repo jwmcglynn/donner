@@ -58,7 +58,12 @@ class ShaderFeaturesManifestTest(unittest.TestCase):
         shader = self.manifest["shaders"]["donner/svg/renderer/geode/shaders/slug_fill.wgsl"]
         stages = sorted(e["stage"] for e in shader["entryPoints"])
         self.assertEqual(stages, ["fragment", "vertex"])
-        self.assertEqual(len(shader["bindings"]), 12)
+        self.assertEqual(len(shader["bindings"]), 14)
+        bindings = {entry["binding"]: entry["name"] for entry in shader["bindings"]}
+        self.assertEqual(
+            {binding: bindings[binding] for binding in (12, 13)},
+            {12: "hCurveIndices", 13: "vCurveIndices"},
+        )
 
     def test_every_shader_has_an_entry_point(self):
         for name, shader in self.manifest["shaders"].items():

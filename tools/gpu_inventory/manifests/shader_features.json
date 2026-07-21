@@ -1434,6 +1434,20 @@
           "group": 0,
           "name": "vBandGrid",
           "type": "array<u32>"
+        },
+        {
+          "addressSpace": "storage, read",
+          "binding": 12,
+          "group": 0,
+          "name": "hCurveIndices",
+          "type": "array<u32>"
+        },
+        {
+          "addressSpace": "storage, read",
+          "binding": 13,
+          "group": 0,
+          "name": "vCurveIndices",
+          "type": "array<u32>"
         }
       ],
       "builtins": [
@@ -1481,7 +1495,7 @@
         "textureSample",
         "var"
       ],
-      "lineCount": 475,
+      "lineCount": 468,
       "structs": [
         "Band",
         "FragOutput",
@@ -1555,6 +1569,20 @@
           "group": 0,
           "name": "vBandGrid",
           "type": "array<u32>"
+        },
+        {
+          "addressSpace": "storage, read",
+          "binding": 9,
+          "group": 0,
+          "name": "hCurveIndices",
+          "type": "array<u32>"
+        },
+        {
+          "addressSpace": "storage, read",
+          "binding": 10,
+          "group": 0,
+          "name": "vCurveIndices",
+          "type": "array<u32>"
         }
       ],
       "builtins": [
@@ -1600,7 +1628,7 @@
         "textureLoad",
         "var"
       ],
-      "lineCount": 479,
+      "lineCount": 475,
       "structs": [
         "Band",
         "FragOutput",
@@ -1673,6 +1701,20 @@
           "group": 0,
           "name": "vBandGrid",
           "type": "array<u32>"
+        },
+        {
+          "addressSpace": "storage, read",
+          "binding": 9,
+          "group": 0,
+          "name": "hCurveIndices",
+          "type": "array<u32>"
+        },
+        {
+          "addressSpace": "storage, read",
+          "binding": 10,
+          "group": 0,
+          "name": "vCurveIndices",
+          "type": "array<u32>"
         }
       ],
       "builtins": [
@@ -1715,7 +1757,7 @@
         "textureLoad",
         "var"
       ],
-      "lineCount": 317,
+      "lineCount": 313,
       "structs": [
         "Band",
         "FragOutput",

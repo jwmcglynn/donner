@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -1411,22 +1412,69 @@ struct RendererGeode::Impl {
       }
     };
 
-    // Horizontal (Y-strip) bands: cyan.
+    const auto bandCrossExtent = [](const geode::EncodedPath::Band& band,
+                                    const std::vector<uint32_t>& curveIndices,
+                                    const std::vector<geode::EncodedPath::Curve>& curves,
+                                    bool vertical) -> std::optional<std::pair<double, double>> {
+      double lo = std::numeric_limits<double>::infinity();
+      double hi = -std::numeric_limits<double>::infinity();
+      const uint64_t end = static_cast<uint64_t>(band.curveStart) + band.curveCount;
+      if (end > curveIndices.size()) {
+        return std::nullopt;
+      }
+      for (uint64_t i = band.curveStart; i < end; ++i) {
+        const uint32_t curveIndex = curveIndices[i];
+        if (curveIndex >= curves.size()) {
+          return std::nullopt;
+        }
+        const auto& curve = curves[curveIndex];
+        const double p0 = vertical ? curve.p0y : curve.p0x;
+        const double p1 = vertical ? curve.p1y : curve.p1x;
+        const double p2 = vertical ? curve.p2y : curve.p2x;
+        lo = std::min({lo, p0, p1, p2});
+        hi = std::max({hi, p0, p1, p2});
+      }
+      if (!(lo <= hi)) {
+        return std::nullopt;
+      }
+      return std::pair(lo, hi);
+    };
+
+    // Horizontal (Y-strip) bands: cyan. Compact band records no longer carry redundant
+    // geometry, so the debug view derives their cross-axis extent from canonical curves.
     if (!encoded.bands.empty()) {
       PathBuilder builder;
-      for (const geode::EncodedPath::Band& band : encoded.bands) {
-        addRing(builder, Box2d(Vector2d(band.xMin, band.yMin), Vector2d(band.xMax, band.yMax)));
+      for (uint32_t cell = 0; cell < encoded.hBandGrid.size(); ++cell) {
+        const uint32_t slot = encoded.hBandGrid[cell];
+        if (slot == geode::EncodedPath::kNoBand || slot >= encoded.bands.size()) {
+          continue;
+        }
+        const auto extent =
+            bandCrossExtent(encoded.bands[slot], encoded.curveIndices, encoded.curves, false);
+        if (extent) {
+          const double yMin = encoded.yBase + static_cast<double>(cell) * encoded.hStride;
+          addRing(builder, Box2d(Vector2d(extent->first, yMin),
+                                 Vector2d(extent->second, yMin + encoded.hStride)));
+        }
       }
       encoder->fillPath(builder.build(), css::RGBA(0, 200, 255, 160), FillRule::EvenOdd);
     }
 
-    // Vertical (X-strip) bands: yellow. Field semantics are transposed
-    // for vertical bands (`xMin`/`xMax` = strip bounds, `yMin`/`yMax` =
-    // curve extent), but both pairs still form the band's rectangle.
+    // Vertical (X-strip) bands: yellow.
     if (!encoded.vBands.empty()) {
       PathBuilder builder;
-      for (const geode::EncodedPath::Band& band : encoded.vBands) {
-        addRing(builder, Box2d(Vector2d(band.xMin, band.yMin), Vector2d(band.xMax, band.yMax)));
+      for (uint32_t cell = 0; cell < encoded.vBandGrid.size(); ++cell) {
+        const uint32_t slot = encoded.vBandGrid[cell];
+        if (slot == geode::EncodedPath::kNoBand || slot >= encoded.vBands.size()) {
+          continue;
+        }
+        const auto extent =
+            bandCrossExtent(encoded.vBands[slot], encoded.vCurveIndices, encoded.vCurves, true);
+        if (extent) {
+          const double xMin = encoded.xBase + static_cast<double>(cell) * encoded.vStride;
+          addRing(builder, Box2d(Vector2d(xMin, extent->first),
+                                 Vector2d(xMin + encoded.vStride, extent->second)));
+        }
       }
       encoder->fillPath(builder.build(), css::RGBA(255, 200, 0, 140), FillRule::EvenOdd);
     }
