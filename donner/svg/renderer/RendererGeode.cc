@@ -1377,8 +1377,7 @@ struct RendererGeode::Impl {
   /// Debug geometry overlay (see `RendererGeode::setDebugGeometryOverlay`).
   /// When true, every `drawPath` additionally outlines the Slug band
   /// decomposition Geode emits for the draw: horizontal band strips,
-  /// vertical band strips, and the single bounding quad (with its
-  /// triangle diagonal) that is the geometry actually rasterized.
+  /// vertical band strips, and the convex bounding fan that is actually rasterized.
   /// Default off; every overlay code path is behind this flag so the
   /// disabled state is byte-identical to a build without the feature.
   bool debugGeometryOverlay = false;
@@ -1410,6 +1409,20 @@ struct RendererGeode::Impl {
       if (inner.bottomRight.x > inner.topLeft.x && inner.bottomRight.y > inner.topLeft.y) {
         builder.addRect(inner);
       }
+    };
+    const auto addHairline = [w](PathBuilder& builder, const Vector2d& from, const Vector2d& to) {
+      const Vector2d delta = to - from;
+      const double length = delta.length();
+      if (length <= w) {
+        return;
+      }
+      const Vector2d unit = delta / length;
+      const Vector2d perpendicular(-unit.y * w * 0.5, unit.x * w * 0.5);
+      builder.moveTo(from + perpendicular)
+          .lineTo(to + perpendicular)
+          .lineTo(to - perpendicular)
+          .lineTo(from - perpendicular)
+          .closePath();
     };
 
     const auto bandCrossExtent = [](const geode::EncodedPath::Band& band,
@@ -1479,27 +1492,18 @@ struct RendererGeode::Impl {
       encoder->fillPath(builder.build(), css::RGBA(255, 200, 0, 140), FillRule::EvenOdd);
     }
 
-    // Bounding quad + triangle diagonal: magenta. This is the geometry
-    // Geode actually rasterizes - one quad (two triangles) per path
-    // (0041: one fragment per pixel, band lookup in the fragment
-    // shader). The diagonal runs between the shared vertices of the two
-    // triangles: (xMin, yMin) -> (xMax, yMax) per
-    // `GeodePathEncoder::encode`'s quadVertices emission order.
-    {
-      const Box2d& b = encoded.pathBounds;
+    // Bounding polygon plus fan diagonals: magenta.
+    if (encoded.boundingVertexCount >= 3u) {
       PathBuilder builder;
-      addRing(builder, b);
-      const Vector2d d = (b.bottomRight - b.topLeft);
-      const double len = d.length();
-      if (len > w) {
-        // Thin quad along the diagonal, offset w/2 perpendicular.
-        const Vector2d unit = d / len;
-        const Vector2d perp(-unit.y * w * 0.5, unit.x * w * 0.5);
-        builder.moveTo(b.topLeft + perp)
-            .lineTo(b.bottomRight + perp)
-            .lineTo(b.bottomRight - perp)
-            .lineTo(b.topLeft - perp)
-            .closePath();
+      const auto point = [&](uint32_t index) {
+        const auto& vertex = encoded.boundingVertices[index];
+        return Vector2d(vertex.x, vertex.y);
+      };
+      for (uint32_t i = 0; i < encoded.boundingVertexCount; ++i) {
+        addHairline(builder, point(i), point((i + 1u) % encoded.boundingVertexCount));
+      }
+      for (uint32_t i = 2u; i + 1u < encoded.boundingVertexCount; ++i) {
+        addHairline(builder, point(0u), point(i));
       }
       encoder->fillPath(builder.build(), css::RGBA(255, 0, 255, 200), FillRule::NonZero);
     }

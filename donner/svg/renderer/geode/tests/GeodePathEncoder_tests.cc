@@ -1,5 +1,6 @@
 #include "donner/svg/renderer/geode/GeodePathEncoder.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -9,12 +10,21 @@
 #include <limits>
 #include <set>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include "donner/base/FillRule.h"
 #include "donner/base/Path.h"
 
 namespace donner::geode {
+
+namespace {
+
+MATCHER(IsFiniteFloat, "is finite") {
+  return std::isfinite(arg);
+}
+
+}  // namespace
 
 /// Non-asserting encode-cost probe: times `GeodePathEncoder::encode` on a
 /// synthetic many-curve, many-band path and prints the per-encode median
@@ -45,7 +55,7 @@ TEST(GeodePathEncoder, EncodeTimingProbe) {
     const auto end = std::chrono::steady_clock::now();
     sink += iterEncoded.curves.size() + iterEncoded.curveIndices.size() +
             iterEncoded.vCurves.size() + iterEncoded.vCurveIndices.size() +
-            iterEncoded.quadVertices.size();
+            iterEncoded.boundingVertexCount;
     samplesUs.push_back(std::chrono::duration<double, std::micro>(end - start).count());
   }
   std::sort(samplesUs.begin(), samplesUs.end());
@@ -85,8 +95,10 @@ TEST(GeodePathEncoder, SimpleTriangle) {
   // Should have at least 1 band.
   EXPECT_GE(encoded.bands.size(), 1u);
 
-  // The whole path draws one bounding quad (6 vertices = 2 triangles).
-  EXPECT_EQ(encoded.quadVertices.size(), 6u);
+  // The triangle is its own conservative support polygon. The draw reserves a
+  // second, normally degenerate triangle for a device-space AABB fallback.
+  EXPECT_EQ(encoded.boundingVertexCount, 3u);
+  EXPECT_EQ(encoded.boundingDrawVertexCount(), 6u);
 
   // Bounds should encompass the triangle.
   EXPECT_LE(encoded.pathBounds.topLeft.x, 0.0f);
@@ -116,9 +128,9 @@ TEST(GeodePathEncoder, LongSpanningCurvesStayInOneBand) {
 
   EXPECT_EQ(encoded.hBandCount, 1u);
 
-  // Multi-band paths still draw one whole-path quad. Multiple quads would
-  // reintroduce non-additive source-over coverage at band boundaries.
-  EXPECT_EQ(encoded.quadVertices.size(), 6u);
+  // A rectangle keeps the low-overhead AABB fallback (two raster triangles).
+  EXPECT_EQ(encoded.boundingVertexCount, 4u);
+  EXPECT_EQ(encoded.boundingDrawVertexCount(), 6u);
 }
 
 TEST(GeodePathEncoder, OmitsCurvesParallelToEachRay) {
@@ -208,6 +220,80 @@ TEST(GeodePathEncoder, StoresEachCurveOnceInsteadOfDuplicatingItAcrossBands) {
       << "Vertical bands must reference one canonical copy of each curve";
 }
 
+TEST(GeodePathEncoder, UsesTighterGeometryForTriangularPath) {
+  const Path path = PathBuilder()
+                        .moveTo(Vector2d(0, 0))
+                        .lineTo(Vector2d(100, 0))
+                        .lineTo(Vector2d(50, 100))
+                        .closePath()
+                        .build();
+
+  const EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
+  ASSERT_FALSE(encoded.empty());
+
+  EXPECT_LE(encoded.boundingVertexCount, 3u)
+      << "A triangle should not shade all four corners of its axis-aligned bounds";
+  EXPECT_GE(encoded.boundingDrawVertexCount(), 6u)
+      << "Triangle draws must leave room for a device-space AABB fallback";
+  EXPECT_LT(encoded.stats.boundingGeometryArea, encoded.stats.aabbArea);
+}
+
+TEST(GeodePathEncoder, AcuteSupportPolygonFallsBackToAabb) {
+  const Path path = PathBuilder()
+                        .moveTo(Vector2d(32, 1))
+                        .lineTo(Vector2d(32.01, 63))
+                        .lineTo(Vector2d(31.99, 63))
+                        .closePath()
+                        .build();
+
+  const EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
+  ASSERT_FALSE(encoded.empty());
+  EXPECT_EQ(encoded.boundingVertexCount, 4u);
+  EXPECT_DOUBLE_EQ(encoded.stats.boundingGeometryArea, encoded.stats.aabbArea);
+}
+
+TEST(GeodePathEncoder, FloatBoundingPolygonRemainsFiniteAndStrict) {
+  PathBuilder builder;
+  builder.moveTo({-87869956096.0, -492549144576.0})
+      .lineTo({-88004124672.0, -492709281792.0})
+      .lineTo({-87869399040.0, -492575457280.0})
+      .lineTo({-88002412544.0, -492716359680.0})
+      .lineTo({-87930290176.0, -492577914880.0})
+      .lineTo({-87925121024.0, -492680085504.0})
+      .lineTo({-87896064000.0, -492593807360.0})
+      .lineTo({-87972298752.0, -492648366080.0})
+      .lineTo({-87897595904.0, -492609503232.0})
+      .lineTo({-87956447232.0, -492684378112.0})
+      .lineTo({-87916617728.0, -492639944704.0})
+      .lineTo({-87945699328.0, -492628934656.0})
+      .lineTo({-87930953728.0, -492660097024.0})
+      .lineTo({-87961272320.0, -492682575872.0})
+      .lineTo({-87971225600.0, -492670124032.0})
+      .lineTo({-87961837568.0, -492637126656.0})
+      .lineTo({-87960141824.0, -492664619008.0})
+      .lineTo({-87930593280.0, -492648431616.0})
+      .closePath();
+
+  const EncodedPath encoded = GeodePathEncoder::encode(builder.build(), FillRule::NonZero);
+  ASSERT_FALSE(encoded.empty());
+  ASSERT_GE(encoded.boundingVertexCount, 3u);
+  ASSERT_LE(encoded.boundingVertexCount, EncodedPath::kMaxBoundingVertices);
+
+  const auto origin = encoded.boundingVertices[0];
+  double twiceArea = 0.0;
+  for (uint32_t i = 0; i < encoded.boundingVertexCount; ++i) {
+    const auto& a = encoded.boundingVertices[i];
+    const auto& b = encoded.boundingVertices[(i + 1u) % encoded.boundingVertexCount];
+    SCOPED_TRACE(::testing::Message() << "bounding vertex " << i);
+    EXPECT_THAT(a.x, IsFiniteFloat());
+    EXPECT_THAT(a.y, IsFiniteFloat());
+    EXPECT_THAT(std::pair(a.x, a.y), ::testing::Ne(std::pair(b.x, b.y)));
+    twiceArea += static_cast<double>(a.x - origin.x) * static_cast<double>(b.y - origin.y) -
+                 static_cast<double>(a.y - origin.y) * static_cast<double>(b.x - origin.x);
+  }
+  EXPECT_GT(twiceArea, 0.0);
+}
+
 TEST(GeodePathEncoder, BandsCoverFullHeight) {
   Path path = PathBuilder().addRect(Box2d({10, 20}, {90, 120})).build();
 
@@ -273,19 +359,21 @@ TEST(GeodePathEncoder, DegeneratePath) {
   EXPECT_TRUE(encoded.empty());
 }
 
-TEST(GeodePathEncoder, VertexNormalsPointOutward) {
+TEST(GeodePathEncoder, BoundingPolygonIsSmallAndCounterClockwise) {
   Path path = PathBuilder().addRect(Box2d({0, 0}, {100, 100})).build();
 
   EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
   EXPECT_FALSE(encoded.empty());
 
-  // The path bounding quad has 6 vertices. Verify normals are non-zero
-  // and point in expected directions.
-  EXPECT_EQ(encoded.quadVertices.size(), 6u);
-  for (const auto& v : encoded.quadVertices) {
-    const float normalLen = std::sqrt(v.normalX * v.normalX + v.normalY * v.normalY);
-    EXPECT_GT(normalLen, 0.0f) << "Vertex normals should be non-zero";
+  ASSERT_GE(encoded.boundingVertexCount, 3u);
+  ASSERT_LE(encoded.boundingVertexCount, EncodedPath::kMaxBoundingVertices);
+  double twiceArea = 0.0;
+  for (uint32_t i = 0; i < encoded.boundingVertexCount; ++i) {
+    const auto& a = encoded.boundingVertices[i];
+    const auto& b = encoded.boundingVertices[(i + 1u) % encoded.boundingVertexCount];
+    twiceArea += static_cast<double>(a.x) * b.y - static_cast<double>(a.y) * b.x;
   }
+  EXPECT_GT(twiceArea, 0.0) << "The vertex-index fan requires counter-clockwise input";
 }
 
 namespace {
@@ -555,6 +643,9 @@ TEST(GeodePathEncoder, RecordsOutputNeutralEncodingStatistics) {
   EXPECT_GT(encoded.stats.horizontal.meanCurvesPerBand, 0.0);
   EXPECT_DOUBLE_EQ(encoded.stats.aabbArea,
                    encoded.pathBounds.width() * encoded.pathBounds.height());
+  EXPECT_EQ(encoded.stats.boundingGeometryVertexCount, encoded.boundingVertexCount);
+  EXPECT_GT(encoded.stats.boundingGeometryArea, 0.0);
+  EXPECT_LE(encoded.stats.boundingGeometryArea, encoded.stats.aabbArea);
 }
 
 TEST(GeodePathEncoder, RayParallelAxisLeavesFiniteEmptyBandMetadata) {
