@@ -24,21 +24,22 @@ interface OpenEditorOptions {
 }
 
 const kFatalRuntimePattern =
-  /Aborted|Assertion failed|RuntimeError|Pthread .* sent an error|getJsObject|No available adapters|WebGPU on Linux requires|WebGPU adapter (?:request )?(?:failed|unavailable)/i;
+  /Aborted|Assertion failed|RuntimeError|Pthread .* sent an error|Blocking on the main thread is very dangerous|getJsObject|No available adapters|WebGPU on Linux requires|WebGPU adapter (?:request )?(?:failed|unavailable)/i;
 const kSourcePaneWidth = 560;
 const kRightPaneWidth = 420;
 const kWelcomeContentMaxWidth = 920;
 
 // Which renderer backend the served package was built with. The Geode/WebGPU
-// lane publishes window.__donnerWgpuReadbackStats (its swapchain pixels never
-// reach a headless screenshot); the tiny_skia software lane draws into the
-// WebGL canvas, so the screenshot fallback carries real pixels. Default to
-// "geode" so existing invocations keep their behavior.
+// lane publishes window.__donnerWgpuReadbackStats and mirrors those mapped
+// pixels into Canvas2D so headless screenshots exercise real Geode output
+// without relying on platform-specific WebGPU swapchain interop. The tiny_skia
+// software lane draws into the WebGL canvas. Default to "geode" so existing
+// invocations keep their behavior.
 const kBackend = (process.env.DONNER_WASM_BACKEND || "geode").toLowerCase();
 const kRequireWebGpu = process.env.DONNER_WASM_REQUIRE_WEBGPU === "1";
-// Match Chromium's webgpu-swiftshader test configuration. In particular, do
-// not force the browser compositor onto Vulkan: Dawn selects SwiftShader for
-// WebGPU independently, while Chromium keeps a display path Xvfb can present.
+// Match Chromium's webgpu-swiftshader test configuration. Dawn selects
+// SwiftShader for WebGPU while the pixel-validation lane uses explicit texture
+// readback, so the test does not depend on the browser compositor backend.
 const kLinuxGeodeLaunchArgs = [
   "--enable-unsafe-webgpu",
   "--use-webgpu-adapter=swiftshader",
@@ -97,11 +98,6 @@ async function readWebGpuDiagnostics(page: Page) {
 }
 
 async function readRenderPaneColorStats(page: Page): Promise<CanvasColorStats> {
-  const wgpuStats = await page.evaluate(() => window.__donnerWgpuReadbackStats?.renderPane);
-  if (wgpuStats) {
-    return { ...wgpuStats, region: { x: 0, y: 0, width: 0, height: 0 } };
-  }
-
   const region = await page.evaluate(({ sourcePaneWidth, rightPaneWidth }) => {
     const canvas = document.getElementById("canvas") as HTMLCanvasElement | null;
     if (!canvas) {
@@ -127,11 +123,6 @@ async function readRenderPaneColorStats(page: Page): Promise<CanvasColorStats> {
 }
 
 async function readLayerPreviewColorStats(page: Page): Promise<CanvasColorStats> {
-  const wgpuStats = await page.evaluate(() => window.__donnerWgpuReadbackStats?.layerPreview);
-  if (wgpuStats) {
-    return { ...wgpuStats, region: { x: 0, y: 0, width: 0, height: 0 } };
-  }
-
   const region = await page.evaluate(({ rightPaneWidth }) => {
     const canvas = document.getElementById("canvas") as HTMLCanvasElement | null;
     if (!canvas) {
@@ -142,8 +133,8 @@ async function readLayerPreviewColorStats(page: Page): Promise<CanvasColorStats>
     // edge of the right sidebar, just inside its border. In the software
     // (tiny_skia) screenshot lane the layers list renders at the TOP of the
     // sidebar (below the menu bar), so scan the upper portion of that column.
-    // The Geode lane never reaches this branch: it returns the natively
-    // published __donnerWgpuReadbackStats above.
+    // Geode mirrors its explicit texture readback into this Canvas2D surface,
+    // so both backends validate the pixels users actually see.
     return {
       x: canvas.clientWidth - rightPaneWidth + 8,
       y: Math.max(1, canvas.clientHeight * 0.05),
@@ -239,9 +230,9 @@ test("wasm editor starts without runtime abort", async ({ page }) => {
   expect(fatalMessages).toEqual([]);
 });
 
-test("production Geode wasm presents visible editor pixels", async ({ page }) => {
-  test.skip(kBackend !== "geode", "production WebGPU presentation is Geode-specific");
-  const fatalMessages = await openEditor(page, { wgpuReadbackStats: false });
+test("Geode wasm presents visible editor pixels in headless mode", async ({ page }) => {
+  test.skip(kBackend !== "geode", "WebGPU readback presentation is Geode-specific");
+  const fatalMessages = await openEditor(page);
   const gpuDiagnostics = await readWebGpuDiagnostics(page);
   console.log(`browser-gpu-diagnostics=${JSON.stringify(gpuDiagnostics)}`);
   await test.info().attach("browser-gpu-diagnostics", {
@@ -258,7 +249,7 @@ test("production Geode wasm presents visible editor pixels", async ({ page }) =>
   try {
     await expect
       .poll(async () => (await readCanvasColorStats(page, fullCanvasRegion)).coloredPixels, {
-        message: "expected the production WebGPU canvas to present colored document pixels",
+        message: "expected the Geode readback canvas to present colored document pixels",
         timeout: 20000,
       })
       .toBeGreaterThan(1000);

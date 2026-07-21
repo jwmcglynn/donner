@@ -35,6 +35,7 @@ class GeodeFilterEngine;
  * Example:
  * @code
  *   GeodeEmbedConfig config;
+ *   config.instance = myInstance;  // Optional; enables browser snapshot callbacks.
  *   config.device = myDevice;
  *   config.queue = myQueue;
  *   config.textureFormat = wgpu::TextureFormat::BGRA8Unorm;
@@ -44,6 +45,11 @@ class GeodeFilterEngine;
  * @endcode
  */
 struct GeodeEmbedConfig {
+  /// Optional host-provided WebGPU instance. Browser embedders should provide
+  /// it so synchronous snapshot readback can wait for map callback completion
+  /// through `Instance::waitAny()`.
+  wgpu::Instance instance;
+
   /// Host-provided WebGPU device. Must not be null.
   wgpu::Device device;
 
@@ -133,6 +139,10 @@ public:
 
   /// Returns the default queue.
   const wgpu::Queue& queue() const { return queue_; }
+
+  /// Returns the instance that created this device. In embedded mode this is
+  /// null unless the host supplied `GeodeEmbedConfig::instance`.
+  const wgpu::Instance& instance() const;
 
   /// Returns the adapter backing this device. May be null in embedded mode if
   /// the host did not provide an adapter.

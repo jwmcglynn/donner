@@ -31,6 +31,14 @@
 namespace donner::editor {
 namespace {
 
+constexpr bool UsesGeodePresentation() {
+#if defined(DONNER_GL_RNR_GEODE_BACKEND)
+  return true;
+#else
+  return false;
+#endif
+}
+
 // Runs a GL replay and, on failure, either GTEST_SKIP()s or FAIL()s. The skip
 // path fires only when the host genuinely cannot provide a GL context (a
 // headless / GPU-less environment with no software-GL fallback, e.g.
@@ -97,6 +105,15 @@ const repro::GlRnrReplayCapture* FindCapture(const repro::GlRnrReplayResult& res
     }
   }
   return nullptr;
+}
+
+void RemoveDiagnosticOutputOnSuccess(const std::filesystem::path& outputDir) {
+  if (::testing::Test::HasFailure()) {
+    return;
+  }
+
+  std::error_code ec;
+  std::filesystem::remove_all(outputDir, ec);
 }
 
 const repro::GlRnrReplayFrameDiagnostics* FindFrameDiagnostics(
@@ -262,6 +279,56 @@ std::optional<std::filesystem::path> WriteStaticContentReplay(
 
   const std::filesystem::path replayPath = outputDir / std::string(name);
   if (!repro::WriteReproFile(replayPath, file)) {
+    ADD_FAILURE() << "failed to write " << replayPath;
+    return std::nullopt;
+  }
+  return replayPath;
+}
+
+std::optional<std::filesystem::path> WriteCompactedArchivedReplay(
+    const std::filesystem::path& outputDir, std::string_view name,
+    const std::filesystem::path& archivedReplayPath,
+    const std::vector<std::uint64_t>& retainedFrameIndices) {
+  std::error_code createDirError;
+  std::filesystem::create_directories(outputDir, createDirError);
+  if (createDirError) {
+    ADD_FAILURE() << "failed to create " << outputDir << ": " << createDirError.message();
+    return std::nullopt;
+  }
+
+  std::optional<repro::ReproFile> archived = repro::ReadReproFile(archivedReplayPath);
+  if (!archived.has_value()) {
+    ADD_FAILURE() << "failed to read archived replay " << archivedReplayPath;
+    return std::nullopt;
+  }
+
+  repro::ReproFile compacted = *archived;
+  compacted.frames.clear();
+  compacted.frames.reserve(retainedFrameIndices.size());
+  for (const std::uint64_t retainedFrameIndex : retainedFrameIndices) {
+    const auto archivedFrame = std::find_if(archived->frames.begin(), archived->frames.end(),
+                                            [retainedFrameIndex](const repro::ReproFrame& frame) {
+                                              return frame.index == retainedFrameIndex;
+                                            });
+    if (archivedFrame == archived->frames.end()) {
+      ADD_FAILURE() << "archived replay " << archivedReplayPath << " is missing frame "
+                    << retainedFrameIndex;
+      return std::nullopt;
+    }
+
+    repro::ReproFrame frame = *archivedFrame;
+    frame.index = compacted.frames.size();
+    frame.timestampSeconds = static_cast<double>(frame.index) / 60.0;
+    frame.deltaMs = 1000.0 / 60.0;
+    compacted.frames.push_back(std::move(frame));
+  }
+  // The caller asserts the archived expectation before choosing the retained
+  // transition frames. Its original frame numbers do not describe this
+  // compact replay and must not leak into diagnostics.
+  compacted.metadata.expect.reset();
+
+  const std::filesystem::path replayPath = outputDir / std::string(name);
+  if (!repro::WriteReproFile(replayPath, compacted)) {
     ADD_FAILURE() << "failed to write " << replayPath;
     return std::nullopt;
   }
@@ -730,7 +797,8 @@ std::optional<std::filesystem::path> WriteTextTypingIntoExistingTextReplay(
   file.metadata.svgSource =
       R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">)"
       R"(<text id="msg" x="20" y="60" font-family="sans-serif" font-size="32" )"
-      R"(fill="#00cc00">Hello</text></svg>)";
+      R"(fill="#00cc00" data-donner-text-box-width="170" )"
+      R"(data-donner-text-box-height="70">Hello</text></svg>)";
   file.metadata.windowWidth = 640;
   file.metadata.windowHeight = 480;
   file.metadata.displayScale = 1.0;
@@ -1392,10 +1460,11 @@ std::optional<std::filesystem::path> WriteHighZoomPanReplay(const std::filesyste
   }
   file.metadata.windowWidth = 1600;
   file.metadata.windowHeight = 900;
-  file.metadata.displayScale = 2.0;
+  file.metadata.displayScale = 1.0;
 
   const auto viewportAt = [&](double zoom, double panScreenX) {
     repro::ReproViewport viewport = DonnerDViewport(zoom);
+    viewport.devicePixelRatio = 1.0;
     viewport.panDocX = 446.0;
     viewport.panDocY = 256.0;
     viewport.panScreenX = panScreenX;
@@ -1483,9 +1552,11 @@ std::optional<std::filesystem::path> WritePenClosePathClickReplay(
   }
 
   repro::ReproFile file;
-  file.metadata.svgPath = "donner_splash.svg";
-  file.metadata.svgBasename = "donner_splash.svg";
-  file.metadata.svgContentHash = "fnv1a64:donner-splash-runfile";
+  file.metadata.svgPath = "missing_pen_close_path.svg";
+  file.metadata.svgBasename = "pen_close_path.svg";
+  file.metadata.svgContentHash = "fnv1a64:pen-close-path";
+  file.metadata.svgSource =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="892" height="512" viewBox="0 0 892 512"/>)";
   file.metadata.windowWidth = 1600;
   file.metadata.windowHeight = 900;
   file.metadata.displayScale = 2.0;
@@ -1553,9 +1624,12 @@ std::optional<std::filesystem::path> WriteDonnerDDragZoomReplay(
   }
 
   repro::ReproFile file;
-  file.metadata.svgPath = "donner_splash.svg";
-  file.metadata.svgBasename = "donner_splash.svg";
-  file.metadata.svgContentHash = "fnv1a64:donner-splash-runfile";
+  file.metadata.svgPath = "missing_donner_d_drag_zoom.svg";
+  file.metadata.svgBasename = "donner_d_drag_zoom.svg";
+  file.metadata.svgContentHash = "fnv1a64:donner-d-drag-zoom";
+  file.metadata.svgSource =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="892" height="512" viewBox="0 0 892 512">)"
+      R"(<path id="Donner_D" d="M270 365 H315 V420 H270 Z" fill="#31c6b3"/></svg>)";
   file.metadata.windowWidth = 1600;
   file.metadata.windowHeight = 900;
   file.metadata.displayScale = 2.0;
@@ -1615,9 +1689,12 @@ std::optional<std::filesystem::path> WriteDonnerDZoomThenDragReplay(
   }
 
   repro::ReproFile file;
-  file.metadata.svgPath = "donner_splash.svg";
-  file.metadata.svgBasename = "donner_splash.svg";
-  file.metadata.svgContentHash = "fnv1a64:donner-splash-runfile";
+  file.metadata.svgPath = "missing_donner_d_zoom_then_drag.svg";
+  file.metadata.svgBasename = "donner_d_zoom_then_drag.svg";
+  file.metadata.svgContentHash = "fnv1a64:donner-d-zoom-then-drag";
+  file.metadata.svgSource =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="892" height="512" viewBox="0 0 892 512">)"
+      R"(<path id="Donner_D" d="M270 365 H315 V420 H270 Z" fill="#31c6b3"/></svg>)";
   file.metadata.windowWidth = 1600;
   file.metadata.windowHeight = 900;
   file.metadata.displayScale = 2.0;
@@ -1700,9 +1777,13 @@ std::optional<std::filesystem::path> WriteDonnerNFarZoomThenDragReplay(
   }
 
   repro::ReproFile file;
-  file.metadata.svgPath = "donner_splash.svg";
-  file.metadata.svgBasename = "donner_splash.svg";
-  file.metadata.svgContentHash = "fnv1a64:donner-splash-runfile";
+  file.metadata.svgPath = "missing_donner_n_far_zoom_then_drag.svg";
+  file.metadata.svgBasename = "donner_n_far_zoom_then_drag.svg";
+  file.metadata.svgContentHash = "fnv1a64:donner-n-far-zoom-then-drag";
+  file.metadata.svgSource =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="892" height="512" viewBox="0 0 892 512">)"
+      R"(<polygon id="Donner_N_2" points="490,310 520,310 520,360 490,360" )"
+      R"(fill="#31c6b3"/></svg>)";
   file.metadata.windowWidth = 1600;
   file.metadata.windowHeight = 900;
   file.metadata.displayScale = 2.0;
@@ -1710,15 +1791,15 @@ std::optional<std::filesystem::path> WriteDonnerNFarZoomThenDragReplay(
       .proofKind = repro::ReproExpectationProofKind::Selection,
       .leftMouseDownOrdinal = 2,
       .frameOffsetAfterLeftMouseDown = 2,
-      .minFrameIndex = 55,
-      .maxFrameIndex = 56,
+      .minFrameIndex = 11,
+      .maxFrameIndex = 12,
       .targetSelector = "#Donner_N_2",
       .cropMode = "document-canvas",
       .expectedSelectionLabel = std::string("<polygon> #Donner_N_2"),
   };
 
   const Vector2d kDonnerNDoc(505.0, 335.0);
-  for (std::uint64_t frame = 0; frame <= 4; ++frame) {
+  for (std::uint64_t frame = 0; frame <= 2; ++frame) {
     PushDonnerDReplayFrame(file, frame, DonnerNViewport(2.0), kDonnerNDoc, 0);
   }
 
@@ -1729,29 +1810,20 @@ std::optional<std::filesystem::path> WriteDonnerNFarZoomThenDragReplay(
       .id = "Donner_N_2",
       .tag = "polygon",
   };
-  PushDonnerDReplayFrame(file, 5, DonnerNViewport(2.0), kDonnerNDoc, 1, {selectMouseDown});
+  PushDonnerDReplayFrame(file, 3, DonnerNViewport(2.0), kDonnerNDoc, 1, {selectMouseDown});
 
   repro::ReproEvent selectMouseUp;
   selectMouseUp.kind = repro::ReproEvent::Kind::MouseUp;
   selectMouseUp.mouseButton = 0;
-  PushDonnerDReplayFrame(file, 6, DonnerNViewport(2.0), kDonnerNDoc, 0, {selectMouseUp});
+  PushDonnerDReplayFrame(file, 4, DonnerNViewport(2.0), kDonnerNDoc, 0, {selectMouseUp});
+  PushDonnerDReplayFrame(file, 5, DonnerNViewport(2.0), kDonnerNDoc, 0);
 
-  for (std::uint64_t frame = 7; frame <= 12; ++frame) {
-    PushDonnerDReplayFrame(file, frame, DonnerNViewport(2.0), kDonnerNDoc, 0);
-  }
-
-  for (std::uint64_t frame = 13; frame <= 26; ++frame) {
-    const double t = static_cast<double>(frame - 13) / 13.0;
-    PushDonnerDReplayFrame(file, frame, DonnerNViewport(2.0 + t * 6.0), kDonnerNDoc, 0);
-  }
-  for (std::uint64_t frame = 27; frame <= 38; ++frame) {
-    const double t = static_cast<double>(frame - 27) / 11.0;
-    PushDonnerDReplayFrame(file, frame, DonnerNViewport(8.0 - t * 4.5), kDonnerNDoc, 0);
-  }
-  for (std::uint64_t frame = 39; frame <= 52; ++frame) {
-    const double t = static_cast<double>(frame - 39) / 13.0;
-    PushDonnerDReplayFrame(file, frame, DonnerNViewport(3.5 + t * 8.5), kDonnerNDoc, 0);
-  }
+  // Preserve the original far-zoom oscillation while coalescing its redundant
+  // intermediate wheel frames. Each endpoint forces the same cache/viewport
+  // transitions that matter to the following drag.
+  PushDonnerDReplayFrame(file, 6, DonnerNViewport(8.0), kDonnerNDoc, 0);
+  PushDonnerDReplayFrame(file, 7, DonnerNViewport(3.5), kDonnerNDoc, 0);
+  PushDonnerDReplayFrame(file, 8, DonnerNViewport(12.0), kDonnerNDoc, 0);
 
   repro::ReproEvent dragMouseDown;
   dragMouseDown.kind = repro::ReproEvent::Kind::MouseDown;
@@ -1760,10 +1832,10 @@ std::optional<std::filesystem::path> WriteDonnerNFarZoomThenDragReplay(
       .id = "Donner_N_2",
       .tag = "polygon",
   };
-  PushDonnerDReplayFrame(file, 53, DonnerNViewport(12.0), kDonnerNDoc, 1, {dragMouseDown});
+  PushDonnerDReplayFrame(file, 9, DonnerNViewport(12.0), kDonnerNDoc, 1, {dragMouseDown});
 
-  for (std::uint64_t frame = 54; frame <= 60; ++frame) {
-    const double t = static_cast<double>(frame - 53);
+  for (std::uint64_t frame = 10; frame <= 13; ++frame) {
+    const double t = static_cast<double>(frame - 9);
     PushDonnerDReplayFrame(file, frame, DonnerNViewport(12.0),
                            kDonnerNDoc + Vector2d(t * 1.4, t * -0.45), 1);
   }
@@ -1771,8 +1843,8 @@ std::optional<std::filesystem::path> WriteDonnerNFarZoomThenDragReplay(
   repro::ReproEvent dragMouseUp;
   dragMouseUp.kind = repro::ReproEvent::Kind::MouseUp;
   dragMouseUp.mouseButton = 0;
-  PushDonnerDReplayFrame(file, 61, DonnerNViewport(12.0),
-                         kDonnerNDoc + Vector2d(8.0 * 1.4, 8.0 * -0.45), 0, {dragMouseUp});
+  PushDonnerDReplayFrame(file, 14, DonnerNViewport(12.0),
+                         kDonnerNDoc + Vector2d(5.0 * 1.4, 5.0 * -0.45), 0, {dragMouseUp});
 
   const std::filesystem::path replayPath = outputDir / std::string(name);
   if (!repro::WriteReproFile(replayPath, file)) {
@@ -1995,12 +2067,12 @@ int CountBrightRedPixelsBelowDocY(const svg::RendererBitmap& bitmap, double docY
   return count;
 }
 
-// Counts cyan-tinted chrome pixels in the horizontal corridor doc-x in
+// Counts signal-teal chrome pixels in the horizontal corridor doc-x in
 // [xMinDoc, xMaxDoc], doc-y within ±2 of yDoc, on the 80x80 pen canvas
-// mapped over the full capture. Matches the semi-transparent cyan the pen
+// mapped over the full capture. Matches the semi-transparent selection tint the pen
 // rubber-band preview strokes with, over any checkerboard shade.
-int CountPenPreviewCyanPixelsInCorridor(const svg::RendererBitmap& bitmap, double xMinDoc,
-                                        double xMaxDoc, double yDoc) {
+int CountPenPreviewPixelsInCorridor(const svg::RendererBitmap& bitmap, double xMinDoc,
+                                    double xMaxDoc, double yDoc) {
   const auto docToPxX = [&](double x) {
     return static_cast<int>(std::lround(static_cast<double>(bitmap.dimensions.x) * (x / 80.0)));
   };
@@ -2019,9 +2091,10 @@ int CountPenPreviewCyanPixelsInCorridor(const svg::RendererBitmap& bitmap, doubl
       const std::uint8_t red = bitmap.pixels[offset];
       const std::uint8_t green = bitmap.pixels[offset + 1];
       const std::uint8_t blue = bitmap.pixels[offset + 2];
-      // The 0xa0-alpha cyan stroke blends over the dark canvas checkerboard
-      // to roughly (15-25, 140-150, 175-185).
-      if (blue > 120 && green > 100 && red < 100 && blue > red + 80 && green > red + 60) {
+      // The antialiased 0xa0-alpha #31c6b3 stroke blends over the dark
+      // checkerboard to approximately (43-55, 102-114, 94-106).
+      if (green > 90 && blue > 80 && red < 80 && green > red + 50 && blue > red + 40 &&
+          green > blue) {
         ++count;
       }
     }
@@ -2079,8 +2152,7 @@ TEST(GlRnrReplayTest, ContentOnlyDocumentCanvasCaptureMatchesRendererGroundTruth
                                "gl_content_only_capture_vs_renderer",
                                tests::PixelmatchIdentityParams());
 
-  std::error_code ec;
-  std::filesystem::remove_all(outputDir, ec);
+  RemoveDiagnosticOutputOnSuccess(outputDir);
 }
 
 TEST(GlRnrReplayTest, DirectDocumentCanvasCaptureIsNotDimmedByRenderPaneBackground) {
@@ -2119,13 +2191,11 @@ TEST(GlRnrReplayTest, DirectDocumentCanvasCaptureIsNotDimmedByRenderPaneBackgrou
          "background.";
   EXPECT_EQ(actual->pixels[centerOffset + 3], 255);
 
-  std::error_code ec;
-  std::filesystem::remove_all(outputDir, ec);
+  RemoveDiagnosticOutputOnSuccess(outputDir);
 }
 
 TEST(GlRnrReplayTest, DirectFramebufferCheckerboardUsesSingleDrawDuringDrag) {
-  svg::Renderer renderer;
-  if (!renderer.requiresTextureSnapshotPresentation()) {
+  if (!UsesGeodePresentation()) {
     GTEST_SKIP() << "Direct framebuffer presentation requires the Geode renderer backend.";
   }
 
@@ -2162,8 +2232,7 @@ TEST(GlRnrReplayTest, DirectFramebufferCheckerboardUsesSingleDrawDuringDrag) {
   }
   EXPECT_GT(directDragFrames, 0) << "test setup must exercise direct drag presentation";
 
-  std::error_code ec;
-  std::filesystem::remove_all(outputDir, ec);
+  RemoveDiagnosticOutputOnSuccess(outputDir);
 }
 
 TEST(GlRnrReplayTest, DocumentSpaceInputDrivesCanvasSelectionThroughEditorShell) {
@@ -2191,8 +2260,7 @@ TEST(GlRnrReplayTest, DocumentSpaceInputDrivesCanvasSelectionThroughEditorShell)
   ASSERT_EQ(result.captures.size(), 1u);
   EXPECT_EQ(result.captures.front().frameIndex, 2u);
 
-  std::error_code ec;
-  std::filesystem::remove_all(outputDir, ec);
+  RemoveDiagnosticOutputOnSuccess(outputDir);
 }
 
 TEST(GlRnrReplayTest, SemanticPenPaintActionsRenderThroughEditorShell) {
@@ -2221,8 +2289,7 @@ TEST(GlRnrReplayTest, SemanticPenPaintActionsRenderThroughEditorShell) {
       << "Semantic .rnr PenTool and paint actions must create a visible filled path through the "
          "real EditorShell replay path.";
 
-  std::error_code ec;
-  std::filesystem::remove_all(outputDir, ec);
+  RemoveDiagnosticOutputOnSuccess(outputDir);
 }
 
 TEST(GlRnrReplayTest, PenDragUpdatesSelectedPathDataBeforeMouseUp) {
@@ -2253,8 +2320,7 @@ TEST(GlRnrReplayTest, PenDragUpdatesSelectedPathDataBeforeMouseUp) {
   EXPECT_TRUE(diagnostics->lastFlushAppliedCommands);
   EXPECT_FALSE(diagnostics->lastFlushCacheInvalidatedElements.empty());
 
-  std::error_code ec;
-  std::filesystem::remove_all(outputDir, ec);
+  RemoveDiagnosticOutputOnSuccess(outputDir);
 }
 
 TEST(GlRnrReplayTest, PenDragUsesCyanOverlayWithoutLegacyBluePath) {
@@ -2304,8 +2370,7 @@ TEST(GlRnrReplayTest, PenDragUsesCyanOverlayWithoutLegacyBluePath) {
          "mutation after the previous drag render lands; otherwise the overlay gate never catches "
          "up to the presented shape.";
 
-  std::error_code ec;
-  std::filesystem::remove_all(outputDir, ec);
+  RemoveDiagnosticOutputOnSuccess(outputDir);
 }
 
 TEST(GlRnrReplayTest, PenClosePathClickRefreshesOverlayOnFlushFrame) {
@@ -2316,7 +2381,6 @@ TEST(GlRnrReplayTest, PenClosePathClickRefreshesOverlayOnFlushFrame) {
 
   repro::GlRnrReplayOptions options;
   options.rnrPath = *replayPath;
-  options.svgPathOverride = RunfilePath("donner_splash.svg");
   options.outputDir = outputDir;
   options.captureFrames.insert(18);
   options.maxFrame = 18;
@@ -2359,8 +2423,7 @@ TEST(GlRnrReplayTest, PenClosePathClickRefreshesOverlayOnFlushFrame) {
       << "Overlay chrome must be re-captured on the same frame the close-path click flushed, "
          "even though the pen is no longer shaping an anchor after closePath().";
 
-  std::error_code ec;
-  std::filesystem::remove_all(outputDir, ec);
+  RemoveDiagnosticOutputOnSuccess(outputDir);
 }
 
 TEST(GlRnrReplayTest, PenEscapeCommitsOpenPathInsteadOfDiscarding) {
@@ -2392,13 +2455,11 @@ TEST(GlRnrReplayTest, PenEscapeCommitsOpenPathInsteadOfDiscarding) {
       << "Escape must keep (and leave selected) the committed open path; the draft was discarded.";
   EXPECT_EQ(*finalFrame->selectedPathDataAttribute, "M 10 10 L 40 10");
 
-  std::error_code ec;
-  std::filesystem::remove_all(outputDir, ec);
+  RemoveDiagnosticOutputOnSuccess(outputDir);
 }
 
 TEST(GlRnrReplayTest, PenHoverShowsRubberBandSegmentPreview) {
-  svg::Renderer renderer;
-  if (!renderer.requiresTextureSnapshotPresentation()) {
+  if (!UsesGeodePresentation()) {
     GTEST_SKIP() << "Chrome pixels require the Geode direct presentation path.";
   }
 
@@ -2427,12 +2488,11 @@ TEST(GlRnrReplayTest, PenHoverShowsRubberBandSegmentPreview) {
   // window starts past the anchor chrome so anchor boxes cannot satisfy it.
   std::optional<svg::RendererBitmap> capture = LoadCaptureBitmap(result, 10);
   ASSERT_TRUE(capture.has_value());
-  EXPECT_GT(CountPenPreviewCyanPixelsInCorridor(*capture, 25.0, 55.0, 40.0), 20)
+  EXPECT_GT(CountPenPreviewPixelsInCorridor(*capture, 25.0, 55.0, 40.0), 20)
       << "hovering after placing an anchor must rubber-band the pending segment. Capture: "
       << FindCapture(result, 10)->path;
 
-  std::error_code ec;
-  std::filesystem::remove_all(outputDir, ec);
+  RemoveDiagnosticOutputOnSuccess(outputDir);
 }
 
 TEST(GlRnrReplayTest, PenBackspaceRemovesLastAnchorNotWholeDraft) {
@@ -2476,8 +2536,7 @@ TEST(GlRnrReplayTest, PenBackspaceRemovesLastAnchorNotWholeDraft) {
 // until the crisp render catches up. Blank (checkerboard) pane regions are
 // the clipping bug this reproduces.
 TEST(GlRnrReplayTest, HighZoomRapidPanKeepsPaneCoveredByContent) {
-  svg::Renderer probeRenderer;
-  if (!probeRenderer.requiresTextureSnapshotPresentation()) {
+  if (!UsesGeodePresentation()) {
     GTEST_SKIP() << "Presented-tile coverage requires the Geode direct presentation path.";
   }
 
@@ -2504,13 +2563,11 @@ TEST(GlRnrReplayTest, HighZoomRapidPanKeepsPaneCoveredByContent) {
   std::string error;
   ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
-  // Pane rect in device pixels (logical origin 568,29 size 604x863 at DPR 2).
+  // Pane rect in device pixels (logical origin 568,29 size 604x863 at DPR 1).
   // Inset by 8 logical px so pane-border chrome never counts.
   const auto paneCrop = [&](const svg::RendererBitmap& bitmap) {
-    return CropBitmap(*&bitmap, PixelCrop{.x = (568 + 8) * 2,
-                                          .y = (29 + 8) * 2,
-                                          .width = (604 - 16) * 2,
-                                          .height = (863 - 16) * 2});
+    return CropBitmap(*&bitmap,
+                      PixelCrop{.x = 568 + 8, .y = 29 + 8, .width = 604 - 16, .height = 863 - 16});
   };
   // Ratio of pane pixels showing document content (either stripe color).
   // Non-content pixels are the checkerboard/background plus the in-pane
@@ -2594,15 +2651,16 @@ TEST(GlRnrReplayTest, TextToolLivePointerClickOpensSessionAndTypes) {
          "the committed text element must remain selected after Escape";
   EXPECT_EQ(*finalFrame->selectedTextContent, "Hi");
 
-  std::error_code ec;
-  std::filesystem::remove_all(outputDir, ec);
+  RemoveDiagnosticOutputOnSuccess(outputDir);
 }
 
-// Typing must never blank the text being edited NOR its editing chrome (the
-// caret bar and the session's selection outline). Each keystroke rewrites the
+// Typing must never blank the text being edited NOR its persistent box-text
+// frame. Each keystroke rewrites the
 // session <text> element's DOM content; until the async render of the new
 // content lands, the presenter must keep showing the previous text pixels AND
-// keep drawing the caret/selection chrome from the live post-flush DOM. Runs
+// keep drawing the frame from the live post-flush DOM. Box text is deliberate:
+// unlike its frame, a point-text frame fades and its caret blinks according to
+// wall time, which would make per-frame capture timing part of this contract. Runs
 // with the worker lagging a couple of frames behind (like a real machine
 // under fast typing) and counts green text pixels plus cyan chrome pixels in
 // the document region on every frame: a frame where either population
@@ -2615,8 +2673,7 @@ TEST(GlRnrReplayTest, TextToolLivePointerClickOpensSessionAndTypes) {
 // ahead of the displayed version with no drag projection - and fast typing
 // keeps the document perpetually ahead of the async renderer.
 TEST(GlRnrReplayTest, TypingIntoTextKeepsTextPixelsPresentEveryFrame) {
-  svg::Renderer probeRenderer;
-  if (!probeRenderer.requiresTextureSnapshotPresentation()) {
+  if (!UsesGeodePresentation()) {
     GTEST_SKIP() << "Chrome pixels require the Geode direct presentation path.";
   }
 
@@ -2658,20 +2715,21 @@ TEST(GlRnrReplayTest, TypingIntoTextKeepsTextPixelsPresentEveryFrame) {
     }
     return count;
   };
-  // Bright-cyan selection/caret chrome (MakeSelectionStrokePaint 0,200,255).
+  // Signal-teal editing frame chrome (the shipped EditorTheme selection token).
   // Counted only in the top half of the document-canvas crop: the text (and
   // its chrome) sits at the top of the 200x200 document while the perf HUD's
-  // frame graph - which also renders cyan-ish pixels - overlays the bottom.
-  const auto cyanChromePixels = [](const svg::RendererBitmap& bitmap) {
+  // frame graph - which also renders accent-colored pixels - overlays the bottom.
+  const auto selectionChromePixels = [](const svg::RendererBitmap& bitmap) {
     int count = 0;
     const int chromeRows = bitmap.dimensions.y / 2;
     for (int y = 0; y < chromeRows; ++y) {
-      const std::uint8_t* row = bitmap.pixels.data() + static_cast<std::size_t>(y) * bitmap.rowBytes;
+      const std::uint8_t* row =
+          bitmap.pixels.data() + static_cast<std::size_t>(y) * bitmap.rowBytes;
       for (int x = 0; x < bitmap.dimensions.x; ++x) {
         const std::uint8_t r = row[x * 4];
         const std::uint8_t g = row[x * 4 + 1];
         const std::uint8_t b = row[x * 4 + 2];
-        if (b > 180 && g > 140 && r < 110) {
+        if (g > 120 && b > 100 && r < 110 && g > b) {
           ++count;
         }
       }
@@ -2685,12 +2743,12 @@ TEST(GlRnrReplayTest, TypingIntoTextKeepsTextPixelsPresentEveryFrame) {
     std::optional<svg::RendererBitmap> bmp = LoadCaptureBitmap(result, frame);
     std::cerr << "[diag] f=" << frame << " docV=" << diag->documentFrameVersion
               << " dispV=" << diag->displayedDocVersion
-              << " fresh=" << static_cast<int>(diag->canvasFreshness)
-              << " pendRasterE=" << static_cast<std::uint64_t>(diag->pendingSelectedLayerRasterizationEntity)
+              << " fresh=" << static_cast<int>(diag->canvasFreshness) << " pendRasterE="
+              << static_cast<std::uint64_t>(diag->pendingSelectedLayerRasterizationEntity)
               << " removed=" << diag->lastFlushRemovedElements
               << " invalidated=" << diag->lastFlushCacheInvalidatedElements.size()
               << " green=" << (bmp.has_value() ? greenPixels(*bmp) : -1)
-              << " cyanChrome=" << (bmp.has_value() ? cyanChromePixels(*bmp) : -1)
+              << " selectionChrome=" << (bmp.has_value() ? selectionChromePixels(*bmp) : -1)
               << " tiles=";
     for (const auto& tile : diag->tiles) {
       std::cerr << tile.id << "(g" << tile.generation << ",grn" << tile.textureGreenPixels << ") ";
@@ -2702,9 +2760,9 @@ TEST(GlRnrReplayTest, TypingIntoTextKeepsTextPixelsPresentEveryFrame) {
   ASSERT_TRUE(baseline.has_value());
   const int baselineGreen = greenPixels(*baseline);
   ASSERT_GT(baselineGreen, 200) << "settled session frame must show the green text";
-  const int baselineChrome = cyanChromePixels(*baseline);
+  const int baselineChrome = selectionChromePixels(*baseline);
   ASSERT_GT(baselineChrome, 100)
-      << "settled session frame must show the caret + selection chrome around the text";
+      << "settled box-text session must show its persistent editing frame";
 
   // Typing only appends glyphs, so the settled baseline is a floor for every
   // subsequent frame (with headroom for antialiasing differences). The chrome
@@ -2721,7 +2779,7 @@ TEST(GlRnrReplayTest, TypingIntoTextKeepsTextPixelsPresentEveryFrame) {
                     << " green pixels (settled baseline " << baselineGreen
                     << "): " << FindCapture(result, frame)->path;
     }
-    const int chrome = cyanChromePixels(*bitmap);
+    const int chrome = selectionChromePixels(*bitmap);
     if (chrome < floorChrome) {
       ADD_FAILURE() << "frame " << frame << " dropped the caret/selection chrome: " << chrome
                     << " cyan chrome pixels (settled baseline " << baselineChrome
@@ -2832,8 +2890,7 @@ TEST(GlRnrReplayTest, FirstResizeOfFreshlySelectedGroupKeepsContentLockstepWithO
   expectRedBoundsNear(23, "settled post-release frame");
   expectRedBoundsNear(40, "long-settled frame");
 
-  std::error_code ec;
-  std::filesystem::remove_all(outputDir, ec);
+  RemoveDiagnosticOutputOnSuccess(outputDir);
 }
 
 TEST(GlRnrReplayTest, TextToolClickTypeEscapeCommitsTextElement) {
@@ -2864,13 +2921,11 @@ TEST(GlRnrReplayTest, TextToolClickTypeEscapeCommitsTextElement) {
       << "the committed text element must remain selected after Escape";
   EXPECT_EQ(*finalFrame->selectedTextContent, "Hi");
 
-  std::error_code ec;
-  std::filesystem::remove_all(outputDir, ec);
+  RemoveDiagnosticOutputOnSuccess(outputDir);
 }
 
 TEST(GlRnrReplayTest, PenAnchorHandleDragPresentsLiveGeometryInLockstep) {
-  svg::Renderer renderer;
-  if (!renderer.requiresTextureSnapshotPresentation()) {
+  if (!UsesGeodePresentation()) {
     GTEST_SKIP() << "Presented-pixels lockstep requires the Geode direct presentation path.";
   }
 
@@ -2927,8 +2982,7 @@ TEST(GlRnrReplayTest, PenAnchorHandleDragPresentsLiveGeometryInLockstep) {
 }
 
 TEST(GlRnrReplayTest, ColorPickerFillOnPenPathRerendersGeodePromotedLayer) {
-  svg::Renderer renderer;
-  if (!renderer.requiresTextureSnapshotPresentation()) {
+  if (!UsesGeodePresentation()) {
     GTEST_SKIP() << "This regression exercises Geode texture-snapshot presentation.";
   }
 
@@ -3008,8 +3062,7 @@ TEST(GlRnrReplayTest, DrainEachFrameContentCaptureIsDeterministicAcrossPaceAndDe
     }
   }
 
-  std::error_code ec;
-  std::filesystem::remove_all(outputDir, ec);
+  RemoveDiagnosticOutputOnSuccess(outputDir);
 }
 
 TEST(GlRnrReplayTest, HoldFramesBehindRecordsWithheldReplayDiagnostics) {
@@ -3048,8 +3101,7 @@ TEST(GlRnrReplayTest, HoldFramesBehindRecordsWithheldReplayDiagnostics) {
   EXPECT_FALSE(released->replayResultWithheld);
   EXPECT_NE(FindCapture(result, 2), nullptr);
 
-  std::error_code ec;
-  std::filesystem::remove_all(outputDir, ec);
+  RemoveDiagnosticOutputOnSuccess(outputDir);
 }
 
 TEST(GlRnrReplayTest, UsesEmbeddedSvgSourceWhenOriginalPathIsMissing) {
@@ -3195,8 +3247,8 @@ TEST(GlRnrReplayTest, ReplaysSourcePaneCharacterInput) {
 // content-only capture removes intentional selection-chrome settle from the pixel assertion.
 TEST(GlRnrReplayTest, SecondDragActiveFrameMatchesMouseUpFrame) {
   constexpr std::string_view kRnrPath = "donner/editor/tests/filter_post_drag_jump.rnr";
-  const std::filesystem::path rnrPath = RunfilePath(kRnrPath);
-  std::optional<repro::ReproFile> reproFile = repro::ReadReproFile(rnrPath);
+  const std::filesystem::path archivedRnrPath = RunfilePath(kRnrPath);
+  std::optional<repro::ReproFile> reproFile = repro::ReadReproFile(archivedRnrPath);
   ASSERT_TRUE(reproFile.has_value());
   ASSERT_TRUE(reproFile->metadata.expect.has_value());
   const repro::ReproExpectation& expect = *reproFile->metadata.expect;
@@ -3205,13 +3257,22 @@ TEST(GlRnrReplayTest, SecondDragActiveFrameMatchesMouseUpFrame) {
   ASSERT_TRUE(expect.comparisonFrameIndex.has_value());
   ASSERT_EQ(expect.cropMode, "document-canvas");
 
-  const std::uint64_t activeFrame = static_cast<std::uint64_t>(*expect.activeFrameIndex);
-  const std::uint64_t comparisonFrame = static_cast<std::uint64_t>(*expect.comparisonFrameIndex);
+  const std::filesystem::path outputDir = DiagnosticOutputDir() / "gl_second_drag_alignment_repro";
+  // Preserve both press/drag/release transitions and their final positions,
+  // but remove 233 redundant pointer interpolation and idle frames from the
+  // archived recording. DrainEachFrame makes the worker transition at every
+  // retained endpoint deterministic.
+  const std::optional<std::filesystem::path> rnrPath = WriteCompactedArchivedReplay(
+      outputDir, "filter_post_drag_jump_compact.rnr", archivedRnrPath,
+      {0, 1, 2, 3, 4, 86, 87, 91, 110, 130, 131, 132, 202, 203, 207, 230, 249, 250});
+  ASSERT_TRUE(rnrPath.has_value());
+  constexpr std::uint64_t activeFrame = 16;
+  constexpr std::uint64_t comparisonFrame = 17;
 
   repro::GlRnrReplayOptions options;
-  options.rnrPath = rnrPath;
+  options.rnrPath = *rnrPath;
   options.svgPathOverride = RunfilePath("donner_splash.svg");
-  options.outputDir = DiagnosticOutputDir() / "gl_second_drag_alignment_repro";
+  options.outputDir = outputDir;
   options.captureFrames = {activeFrame, comparisonFrame};
   options.maxFrame = comparisonFrame;
   options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
@@ -3230,20 +3291,18 @@ TEST(GlRnrReplayTest, SecondDragActiveFrameMatchesMouseUpFrame) {
   ASSERT_TRUE(active.has_value());
   ASSERT_TRUE(comparison.has_value());
 
-  tests::CompareBitmapToBitmap(*active, *comparison,
-                               "gl_second_drag_frame_249_active_vs_250_mouseup",
+  tests::CompareBitmapToBitmap(*active, *comparison, "gl_second_drag_active_vs_mouseup",
                                tests::PixelmatchIdentityParams());
+
+  RemoveDiagnosticOutputOnSuccess(outputDir);
 }
 
 // Regression coverage for #601: deterministic worker draining prevents ConcurrentDom
 // UI-thread reads while this replay covers the texture-reuse diagnostic window.
 TEST(GlRnrReplayTest, GeodeDragZoomOReplayCoversTextureReuseWindow) {
   constexpr std::string_view kRnrPath = "donner/editor/tests/geode_drag_zoom_o_pop.rnr";
-  constexpr std::uint64_t kFirstCaptureFrame = 78;
-  constexpr std::uint64_t kLastCaptureFrame = 81;
-
-  const std::filesystem::path rnrPath = RunfilePath(kRnrPath);
-  std::optional<repro::ReproFile> reproFile = repro::ReadReproFile(rnrPath);
+  const std::filesystem::path archivedRnrPath = RunfilePath(kRnrPath);
+  std::optional<repro::ReproFile> reproFile = repro::ReadReproFile(archivedRnrPath);
   ASSERT_TRUE(reproFile.has_value());
   ASSERT_TRUE(reproFile->metadata.expect.has_value());
   const repro::ReproExpectation& expect = *reproFile->metadata.expect;
@@ -3251,11 +3310,22 @@ TEST(GlRnrReplayTest, GeodeDragZoomOReplayCoversTextureReuseWindow) {
   ASSERT_EQ(expect.cropMode, "document-canvas");
   ASSERT_EQ(expect.targetSelector, "#Donner path:nth-of-type(2)");
 
+  const std::filesystem::path outputDir = DiagnosticOutputDir() / "gl_geode_drag_zoom_o_pop";
+  // Retain the drag start, representative zoom extrema, and every frame in
+  // the original 77..81 texture-reuse window. Intermediate linear pointer
+  // and zoom steps do not create distinct cache states needed by this proof.
+  const std::optional<std::filesystem::path> rnrPath = WriteCompactedArchivedReplay(
+      outputDir, "geode_drag_zoom_o_pop_compact.rnr", archivedRnrPath,
+      {0, 1, 2, 3, 4, 21, 22, 30, 38, 48, 58, 68, 76, 77, 78, 79, 80, 81});
+  ASSERT_TRUE(rnrPath.has_value());
+  constexpr std::uint64_t kFirstCaptureFrame = 14;
+  constexpr std::uint64_t kLastCaptureFrame = 17;
+
   repro::GlRnrReplayOptions options;
-  options.rnrPath = rnrPath;
+  options.rnrPath = *rnrPath;
   options.svgPathOverride = RunfilePath("donner_splash.svg");
-  options.outputDir = DiagnosticOutputDir() / "gl_geode_drag_zoom_o_pop";
-  options.captureFrames = {kFirstCaptureFrame, 79, 80, kLastCaptureFrame};
+  options.outputDir = outputDir;
+  options.captureFrames = {kFirstCaptureFrame, 15, 16, kLastCaptureFrame};
   options.maxFrame = kLastCaptureFrame;
   options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
   options.pace = false;
@@ -3280,7 +3350,7 @@ TEST(GlRnrReplayTest, GeodeDragZoomOReplayCoversTextureReuseWindow) {
     EXPECT_GT(capture->dimensions.y, 0);
   }
 
-  for (std::uint64_t frame = 39; frame <= kLastCaptureFrame; ++frame) {
+  for (std::uint64_t frame = 8; frame <= kLastCaptureFrame; ++frame) {
     const repro::GlRnrReplayFrameDiagnostics* diagnostics = FindFrameDiagnostics(result, frame);
     ASSERT_NE(diagnostics, nullptr) << "missing diagnostics for replay frame " << frame;
     if (!diagnostics->frameCost.overlay.hasLiveDragPreview) {
@@ -3297,6 +3367,8 @@ TEST(GlRnrReplayTest, GeodeDragZoomOReplayCoversTextureReuseWindow) {
     EXPECT_DOUBLE_EQ(diagnostics->frameCost.compositedRender.cachedMs, 0.0)
         << "Unexpected cached compositor raster cost on active zoom+drag replay frame " << frame;
   }
+
+  RemoveDiagnosticOutputOnSuccess(outputDir);
 }
 
 TEST(GlRnrReplayTest, GeodeDragZoomRebuildsDonnerDGestureBoundsEveryPresentedFrame) {
@@ -3317,7 +3389,6 @@ TEST(GlRnrReplayTest, GeodeDragZoomRebuildsDonnerDGestureBoundsEveryPresentedFra
 
   repro::GlRnrReplayOptions options;
   options.rnrPath = *rnrPath;
-  options.svgPathOverride = RunfilePath("donner_splash.svg");
   options.outputDir = outputDir;
   options.captureFrames = {kLastZoomFrame};
   options.maxFrame = kLastZoomFrame;
@@ -3371,7 +3442,6 @@ TEST(GlRnrReplayTest, GeodeZoomThenDragKeepsDonnerDOverlayLockedToPresentedConte
 
   repro::GlRnrReplayOptions options;
   options.rnrPath = *rnrPath;
-  options.svgPathOverride = RunfilePath("donner_splash.svg");
   options.outputDir = outputDir;
   options.captureFrames = {37, 38, 39, 40};
   options.maxFrame = 43;
@@ -3426,7 +3496,6 @@ TEST(GlRnrReplayTest, GeodeZoomThenDragDoesNotFreezeLiveDragPreviewWhileWorkerBu
 
   repro::GlRnrReplayOptions options;
   options.rnrPath = *rnrPath;
-  options.svgPathOverride = RunfilePath("donner_splash.svg");
   options.outputDir = outputDir;
   options.captureFrames = {42};
   options.maxFrame = 42;
@@ -3481,10 +3550,9 @@ TEST(GlRnrReplayTest, GeodeFarZoomThenDragKeepsDonnerNOverlayLockedToPresentedCo
 
   repro::GlRnrReplayOptions options;
   options.rnrPath = *rnrPath;
-  options.svgPathOverride = RunfilePath("donner_splash.svg");
   options.outputDir = outputDir;
-  options.captureFrames = {54, 55, 56, 57, 58, 59, 60};
-  options.maxFrame = 61;
+  options.captureFrames = {10, 11, 12, 13};
+  options.maxFrame = 14;
   options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
   options.pace = false;
   // Deterministic worker draining instead of a wall-clock render delay: each
@@ -3508,9 +3576,9 @@ TEST(GlRnrReplayTest, GeodeFarZoomThenDragKeepsDonnerNOverlayLockedToPresentedCo
   ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
   ASSERT_EQ(result.finalSelectedElementLabel, expect.expectedSelectionLabel);
 
-  const std::string dragDiagnostics = CanonicalReplayDiagnostics(result, 50u, 61u);
+  const std::string dragDiagnostics = CanonicalReplayDiagnostics(result, 8u, 14u);
   int checkedDragFrames = 0;
-  for (std::uint64_t frame = 54; frame <= 60; ++frame) {
+  for (std::uint64_t frame = 10; frame <= 13; ++frame) {
     const repro::GlRnrReplayFrameDiagnostics* diagnostics = FindFrameDiagnostics(result, frame);
     ASSERT_NE(diagnostics, nullptr) << "missing diagnostics for replay frame " << frame;
     ASSERT_TRUE(diagnostics->frameCost.overlay.hasLiveDragPreview)
@@ -3562,23 +3630,32 @@ TEST(GlRnrReplayTest, GeodeFarZoomThenDragKeepsDonnerNOverlayLockedToPresentedCo
 TEST(GlRnrReplayTest, FilteredElementOThenRDragDoesNotPopOBackOnRClick) {
   constexpr std::string_view kRnrPath =
       "donner/editor/tests/filtered-element-flash-after-drags-2.rnr";
-  const std::filesystem::path rnrPath = RunfilePath(kRnrPath);
-  std::optional<repro::ReproFile> reproFile = repro::ReadReproFile(rnrPath);
+  const std::filesystem::path archivedRnrPath = RunfilePath(kRnrPath);
+  std::optional<repro::ReproFile> reproFile = repro::ReadReproFile(archivedRnrPath);
   ASSERT_TRUE(reproFile.has_value());
   ASSERT_TRUE(reproFile->metadata.expect.has_value());
   ASSERT_TRUE(reproFile->metadata.expect->cropRect.has_value());
   const repro::ReproExpectation& expect = *reproFile->metadata.expect;
   ASSERT_EQ(expect.cropMode, "document-canvas");
-  const std::uint64_t beforeClickFrame = static_cast<std::uint64_t>(expect.minFrameIndex - 1);
-  const std::uint64_t firstClickFrame = static_cast<std::uint64_t>(expect.minFrameIndex);
-  const std::uint64_t settledClickFrame = static_cast<std::uint64_t>(expect.minFrameIndex + 2);
+  const std::filesystem::path outputDir = DiagnosticOutputDir() / "gl_o_then_r_popback_repro";
+  // Keep the O drag, its post-release settle, the pointer transition to R,
+  // and the first three held R-click frames. The removed frames only repeat
+  // intermediate cursor coordinates or idle state and do not add a renderer
+  // state transition under deterministic worker draining.
+  const std::optional<std::filesystem::path> rnrPath = WriteCompactedArchivedReplay(
+      outputDir, "filtered_element_o_then_r_compact.rnr", archivedRnrPath,
+      {0, 1, 2, 3, 4, 85, 86, 90, 94, 97, 98, 99, 110, 152, 153, 154, 155, 156});
+  ASSERT_TRUE(rnrPath.has_value());
+  constexpr std::uint64_t beforeClickFrame = 13;
+  constexpr std::uint64_t firstClickFrame = 14;
+  constexpr std::uint64_t settledClickFrame = 16;
 
   repro::GlRnrReplayOptions options;
-  options.rnrPath = rnrPath;
+  options.rnrPath = *rnrPath;
   options.svgPathOverride = RunfilePath("donner_splash.svg");
-  options.outputDir = DiagnosticOutputDir() / "gl_o_then_r_popback_repro";
+  options.outputDir = outputDir;
   options.captureFrames = {beforeClickFrame, firstClickFrame, settledClickFrame};
-  options.maxFrame = static_cast<std::uint64_t>(expect.maxFrameIndex);
+  options.maxFrame = 17;
   options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
   options.pace = false;
   options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
@@ -3643,6 +3720,8 @@ TEST(GlRnrReplayTest, FilteredElementOThenRDragDoesNotPopOBackOnRClick) {
   EXPECT_NEAR(*firstCentroidY, *settledCentroidY, 1.0)
       << "The first R-click frame should keep O at its post-drag position instead of popping "
          "back for one presented frame.";
+
+  RemoveDiagnosticOutputOnSuccess(outputDir);
 }
 
 }  // namespace

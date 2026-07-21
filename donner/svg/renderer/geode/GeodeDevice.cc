@@ -15,6 +15,7 @@
 #include <thread>
 
 #include "donner/base/StringUtils.h"
+#include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
@@ -36,6 +37,16 @@ void OnUncapturedError(WGPUDevice const* /*device*/, WGPUErrorType type, WGPUStr
                        void* /*userdata1*/, void* /*userdata2*/) {
   std::fprintf(stderr, "[Geode/wgpu-native] Uncaptured error (type=%d): %.*s\n",
                static_cast<int>(type), static_cast<int>(message.length),
+               message.data ? message.data : "");
+}
+
+void OnDeviceLost(WGPUDevice const* /*device*/, WGPUDeviceLostReason reason, WGPUStringView message,
+                  void* /*userdata1*/, void* /*userdata2*/) {
+  if (reason == WGPUDeviceLostReason_Destroyed || reason == WGPUDeviceLostReason_InstanceDropped) {
+    return;
+  }
+  std::fprintf(stderr, "[Geode/wgpu-native] Device lost (reason=%d): %.*s\n",
+               static_cast<int>(reason), static_cast<int>(message.length),
                message.data ? message.data : "");
 }
 
@@ -73,6 +84,7 @@ wgpu::BackendType RequestedHeadlessBackend() {
 #endif
 }
 
+#ifndef __EMSCRIPTEN__
 WGPUInstanceBackend InstanceBackendsFor(wgpu::BackendType backendType) {
   switch (static_cast<WGPUBackendType>(backendType)) {
     case WGPUBackendType_Vulkan: return WGPUInstanceBackend_Vulkan;
@@ -85,6 +97,7 @@ WGPUInstanceBackend InstanceBackendsFor(wgpu::BackendType backendType) {
     default: return WGPUInstanceBackend_All;
   }
 }
+#endif
 
 wgpu::Instance CreateHeadlessInstance(wgpu::BackendType backendType) {
 #ifndef __EMSCRIPTEN__
@@ -97,9 +110,15 @@ wgpu::Instance CreateHeadlessInstance(wgpu::BackendType backendType) {
     instanceDesc.nextInChain = &instanceExtras.chain;
     return wgpu::createInstance(instanceDesc);
   }
-#endif
-
   return wgpu::createInstance();
+#else
+  (void)backendType;
+  const WGPUInstanceFeatureName timedWaitFeature = WGPUInstanceFeatureName_TimedWaitAny;
+  wgpu::InstanceDescriptor descriptor{wgpu::Default};
+  descriptor.requiredFeatureCount = 1;
+  descriptor.requiredFeatures = &timedWaitFeature;
+  return wgpu::createInstance(descriptor);
+#endif
 }
 
 void WaitForSubmittedWork(const wgpu::Device& device, const wgpu::Queue& queue) {
@@ -108,8 +127,9 @@ void WaitForSubmittedWork(const wgpu::Device& device, const wgpu::Queue& queue) 
   }
 
   struct WorkDoneState {
-    bool done = false;
-  } state;
+    std::atomic<bool> done = false;
+  };
+  auto state = std::make_shared<WorkDoneState>();
 
   wgpu::QueueWorkDoneCallbackInfo callbackInfo{wgpu::Default};
   callbackInfo.mode = wgpu::CallbackMode::AllowSpontaneous;
@@ -119,21 +139,22 @@ void WaitForSubmittedWork(const wgpu::Device& device, const wgpu::Queue& queue) 
 #if defined(__EMSCRIPTEN__)
   callbackInfo.callback = [](WGPUQueueWorkDoneStatus /*status*/, WGPUStringView /*message*/,
                              void* userdata1, void* /*userdata2*/) {
-    WorkDoneState* state = static_cast<WorkDoneState*>(userdata1);
-    state->done = true;
+    const std::shared_ptr<WorkDoneState> state = takeWgpuCallbackState<WorkDoneState>(userdata1);
+    state->done.store(true, std::memory_order_release);
   };
 #else
   callbackInfo.callback = [](WGPUQueueWorkDoneStatus /*status*/, void* userdata1,
                              void* /*userdata2*/) {
-    WorkDoneState* state = static_cast<WorkDoneState*>(userdata1);
-    state->done = true;
+    const std::shared_ptr<WorkDoneState> state = takeWgpuCallbackState<WorkDoneState>(userdata1);
+    state->done.store(true, std::memory_order_release);
   };
 #endif
-  callbackInfo.userdata1 = &state;
+  callbackInfo.userdata1 = retainWgpuCallbackState(state);
   callbackInfo.userdata2 = nullptr;
 
   queue.onSubmittedWorkDone(callbackInfo);
-  for (int pollIter = 0; !state.done && pollIter < 2000; ++pollIter) {
+  for (int pollIter = 0; !state->done.load(std::memory_order_acquire) && pollIter < 2000;
+       ++pollIter) {
     device.poll(true, nullptr);
   }
 }
@@ -142,13 +163,6 @@ template <typename Handle>
 void DestroyResourceBacking(ScopedWgpuHandle<Handle>& handle) {
   if (handle) {
     handle.get().destroy();
-  }
-}
-
-template <typename Handle>
-void DestroyResourceBackings(std::vector<ScopedWgpuHandle<Handle>>& handles) {
-  for (ScopedWgpuHandle<Handle>& handle : handles) {
-    DestroyResourceBacking(handle);
   }
 }
 
@@ -274,6 +288,7 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
   //    `emscripten_sleep` instead).
   wgpu::RequestAdapterOptions adapterOptions = {};
   adapterOptions.backendType = headlessBackend;
+  adapterOptions.forceFallbackAdapter = wgpuForceFallbackAdapterRequested();
 
   // Bounded retry around adapter acquisition, mirroring the device-init
   // retry below (#880). Under heavy parallel load the adapter request can
@@ -295,8 +310,7 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
 
     std::fprintf(stderr, "[Geode/wgpu-native] No WebGPU adapter available.\n");
     if (attempt >= kMaxAdapterRetries) {
-      std::fprintf(stderr,
-                   "[Geode/wgpu-native] Giving up after %d adapter-acquisition retries.\n",
+      std::fprintf(stderr, "[Geode/wgpu-native] Giving up after %d adapter-acquisition retries.\n",
                    kMaxAdapterRetries);
       return nullptr;
     }
@@ -372,11 +386,12 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
   //    `uncapturedErrorCallbackInfo` on the descriptor - the callback
   //    stays valid for the device's lifetime.
   //
-  // DeviceLostCallback is intentionally NOT set. wgpu-native fires it
-  // during normal device destruction and the callback path interacts
-  // badly with static destruction order for globals.
   wgpu::DeviceDescriptor deviceDesc = {};
   deviceDesc.label = wgpu::StringView{std::string_view{"GeodeDevice"}};
+  deviceDesc.deviceLostCallbackInfo.mode = wgpu::CallbackMode::AllowSpontaneous;
+  deviceDesc.deviceLostCallbackInfo.callback = OnDeviceLost;
+  deviceDesc.deviceLostCallbackInfo.userdata1 = nullptr;
+  deviceDesc.deviceLostCallbackInfo.userdata2 = nullptr;
   deviceDesc.uncapturedErrorCallbackInfo.callback = OnUncapturedError;
   deviceDesc.uncapturedErrorCallbackInfo.userdata1 = nullptr;
   deviceDesc.uncapturedErrorCallbackInfo.userdata2 = nullptr;
@@ -407,8 +422,7 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
 
     std::fprintf(stderr, "[Geode/wgpu-native] Failed to create device.\n");
     if (attempt >= kMaxDeviceInitRetries) {
-      std::fprintf(stderr,
-                   "[Geode/wgpu-native] Giving up after %d device-creation retries.\n",
+      std::fprintf(stderr, "[Geode/wgpu-native] Giving up after %d device-creation retries.\n",
                    kMaxDeviceInitRetries);
       return nullptr;
     }
@@ -476,6 +490,9 @@ GeodeMaskPipeline& GeodeDevice::maskPipeline() const {
 GeodeFilterEngine& GeodeDevice::filterEngine() const {
   return *impl_->filterEngine;
 }
+const wgpu::Instance& GeodeDevice::instance() const {
+  return impl_->instance;
+}
 GeodeCheckerboardPipeline& GeodeDevice::checkerboardPipeline() const {
   if (!impl_->checkerboardPipeline) {
     // Lazy: only the editor's direct framebuffer presentation draws the
@@ -498,7 +515,9 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateFromExternal(const GeodeEmbedCon
   result->device_ = config.device;
   result->queue_ = config.queue;
   result->textureFormat_ = config.textureFormat;
-  // impl_->instance stays null - host owns the instance.
+  // The raw wrapper does not release on destruction. Keep the host instance
+  // available for event dispatch without taking ownership of it.
+  result->impl_->instance = config.instance;
 
   // Preserve the host-provided adapter for callers that need adapter metadata.
   if (config.adapter) {
@@ -633,8 +652,6 @@ void GeodeDevice::deferDestroy(wgpu::Texture texture) {
 }
 
 void GeodeDevice::drainDeferredDestroys() {
-  DestroyResourceBackings(pendingBuffers_);
-  DestroyResourceBackings(pendingTextures_);
   pendingBuffers_.clear();
   pendingTextures_.clear();
 }

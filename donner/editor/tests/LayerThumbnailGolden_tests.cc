@@ -67,6 +67,14 @@ svg::SVGDocument ParseDonnerSplash() {
   return std::move(parsed.result());
 }
 
+std::string GoldenPathForBackend(std::string_view path, bool usesTexturePresentation) {
+  std::string result(path);
+  if (usesTexturePresentation) {
+    result.insert(result.rfind('.'), "_geode");
+  }
+  return result;
+}
+
 }  // namespace
 
 TEST(LayerThumbnailGoldenTest, DonnerSplashLayerThumbnailsMatchGoldens) {
@@ -81,7 +89,9 @@ TEST(LayerThumbnailGoldenTest, DonnerSplashLayerThumbnailsMatchGoldens) {
         renderer.renderElementToBitmap(*element, kLayerThumbnailMaxSize);
     ASSERT_FALSE(bitmap.empty()) << "Layer " << testCase.label << " produced an empty thumbnail";
 
-    CompareBitmapToGolden(bitmap, testCase.goldenPath, testCase.label, PixelmatchIdentityParams());
+    const std::string goldenPath =
+        GoldenPathForBackend(testCase.goldenPath, renderer.requiresTextureSnapshotPresentation());
+    CompareBitmapToGolden(bitmap, goldenPath, testCase.label, PixelmatchIdentityParams());
   }
 }
 

@@ -42,6 +42,7 @@ struct AsciiImage {
     std::string_view defaultGolden;
     std::string_view tinySkiaGolden;
     std::string_view geodeGolden;
+    std::string_view geodeAlternativeGolden;
 
     BackendMatcher& defaultPattern(std::string_view g) {
       defaultGolden = g;
@@ -55,6 +56,10 @@ struct AsciiImage {
       geodeGolden = g;
       return *this;
     }
+    BackendMatcher& geodeAlternative(std::string_view g) {
+      geodeAlternativeGolden = g;
+      return *this;
+    }
 
     /// Implicit conversion to bool for use in EXPECT_TRUE.
     /// Uses the active backend's golden when set, otherwise defaultPattern.
@@ -62,7 +67,20 @@ struct AsciiImage {
       std::string_view backendGolden;
       switch (ActiveRendererBackend()) {
         case RendererBackend::TinySkia: backendGolden = tinySkiaGolden; break;
-        case RendererBackend::Geode: backendGolden = geodeGolden; break;
+        case RendererBackend::Geode:
+          backendGolden = geodeGolden;
+          if (!geodeAlternativeGolden.empty()) {
+            if (image.matchesImpl(backendGolden, false) ||
+                image.matchesImpl(geodeAlternativeGolden, false)) {
+              return true;
+            }
+
+            std::cerr << "Primary Geode golden mismatch:\n";
+            image.matchesImpl(backendGolden, true);
+            std::cerr << "Alternative Geode golden mismatch:\n";
+            return image.matchesImpl(geodeAlternativeGolden, true);
+          }
+          break;
       }
 
       if (!backendGolden.empty()) {
@@ -78,7 +96,7 @@ struct AsciiImage {
     }
   };
 
-  BackendMatcher matchBackend() const { return BackendMatcher{*this, {}, {}, {}}; }
+  BackendMatcher matchBackend() const { return BackendMatcher{*this, {}, {}, {}, {}}; }
 
 private:
   bool matchesImpl(std::string_view golden, bool emitDiagnostics) const {

@@ -55,6 +55,21 @@ public:
     }
   }
 
+  /// Attempt to acquire shared read access without waiting for a writer.
+  bool tryLockRead() {
+    if (writerPendingOrActive_.load(std::memory_order_acquire)) {
+      return false;
+    }
+
+    activeReaders_.fetch_add(1, std::memory_order_acquire);
+    if (!writerPendingOrActive_.load(std::memory_order_acquire)) {
+      return true;
+    }
+
+    unlockRead();
+    return false;
+  }
+
   /// Release shared read access.
   void unlockRead() {
     const std::uint32_t previous = activeReaders_.fetch_sub(1, std::memory_order_release);
@@ -543,6 +558,17 @@ public:
    */
   explicit DocumentReadAccess(DocumentState& documentState);
 
+  /**
+   * Attempt to create a read access guard without waiting for a writer.
+   *
+   * Reentrant access from a thread that already holds read or write access succeeds immediately.
+   *
+   * @param documentState Document state being accessed.
+   * @return A read guard, or `std::nullopt` while another thread owns or is waiting for write
+   * access.
+   */
+  static std::optional<DocumentReadAccess> tryAcquire(DocumentState& documentState);
+
   /// Copying access guards is not allowed.
   DocumentReadAccess(const DocumentReadAccess& other) = delete;
 
@@ -565,7 +591,11 @@ public:
   Registry& registry() const { return documentState_->registry(); }
 
 private:
-  DocumentState* documentState_;
+  struct TryLockTag {};
+
+  DocumentReadAccess(DocumentState& documentState, TryLockTag);
+
+  DocumentState* documentState_ = nullptr;
   std::chrono::steady_clock::time_point lockAcquiredAt_;
   bool ownsReadMarker_ = false;
   bool ownsReadLockDiagnostics_ = false;
@@ -733,6 +763,36 @@ inline DocumentReadAccess::DocumentReadAccess(DocumentState& documentState)
   } else {
     documentState.assertSingleThreadedAccess();
   }
+}
+
+inline DocumentReadAccess::DocumentReadAccess(DocumentState& documentState, TryLockTag)
+    : documentState_(&documentState) {
+  if (documentState.threadingMode_ == ThreadingMode::ConcurrentDom) {
+    if (DocumentState::activeWriteDocument_ != &documentState &&
+        !documentState.currentThreadHasReadAccess()) {
+      if (!documentState.accessMutex_.tryLockRead()) {
+        documentState_ = nullptr;
+        return;
+      }
+      lockAcquiredAt_ = std::chrono::steady_clock::now();
+      ownsReadLockDiagnostics_ = true;
+    }
+    documentState.pushReadAccessMarker();
+    ownsReadMarker_ = true;
+    documentState.recordReadAccess(ownsReadLockDiagnostics_);
+  } else {
+    documentState.assertSingleThreadedAccess();
+  }
+}
+
+inline std::optional<DocumentReadAccess> DocumentReadAccess::tryAcquire(
+    DocumentState& documentState) {
+  DocumentReadAccess access(documentState, TryLockTag{});
+  if (access.documentState_ == nullptr) {
+    return std::nullopt;
+  }
+
+  return std::move(access);
 }
 
 inline DocumentReadAccess::DocumentReadAccess(DocumentReadAccess&& other) noexcept

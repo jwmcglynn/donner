@@ -2,10 +2,10 @@ Subject: [PATCH] Add bazel build files
 Base-commit: 126569ad5b3a2c5329cc8ee914dd5b2075f4dd50
 
 ---
- BUILD.bazel                  | 90 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ BUILD.bazel                  | 83 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++
  backends/imgui_impl_wgpu.cpp |  4 +-
  MODULE.bazel                 | 15 +++++++++++
- 3 files changed, 107 insertions(+), 2 deletions(-)
+ 3 files changed, 100 insertions(+), 2 deletions(-)
  create mode 100644 BUILD.bazel
  create mode 100644 MODULE.bazel
 
@@ -14,7 +14,7 @@ new file mode 100644
 index 00000000..12345678
 --- /dev/null
 +++ b/BUILD.bazel
-@@ -0,0 +1,90 @@
+@@ -0,0 +1,83 @@
 +""" Builds imgui.
 +"""
 +
@@ -46,10 +46,7 @@ index 00000000..12345678
 +        "imgui_internal.h",
 +        "misc/cpp/imgui_stdlib.h",
 +    ],
-+    copts = [
-+        "-Wno-nontrivial-memcall",
-+        "-Wno-uninitialized-const-pointer",
-+    ] + selects.with_or({
++    copts = selects.with_or({
 +        ("@platforms//cpu:wasm32", "@platforms//cpu:wasm64"): [],
 +        "//conditions:default": [
 +            "-DIMGUI_IMPL_OPENGL_LOADER_CUSTOM",
@@ -77,10 +74,6 @@ index 00000000..12345678
 +    ],
 +    hdrs = [
 +        "backends/imgui_impl_wgpu.h",
-+    ],
-+    copts = [
-+        "-Wno-nontrivial-memcall",
-+        "-Wno-uninitialized-const-pointer",
 +    ],
 +    defines = ["IMGUI_IMPL_WEBGPU_BACKEND_DAWN"],
 +    includes = ["backends"],

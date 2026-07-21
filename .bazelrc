@@ -111,6 +111,9 @@ common:tiny-skia --//donner/svg/renderer:renderer_backend=tiny_skia
 # touch the WebGPU runtime.
 common:geode --//donner/svg/renderer:renderer_backend=geode
 common:geode --//donner/svg/renderer/geode:enable_geode=true
+# A local hardware adapter is process-global. Keep explicit Geode suites
+# serial so independent test processes cannot cascade one device loss.
+test:geode --local_test_jobs=1
 common:dev --//build_defs:disable_backend_test_transition=true
 # Disable forced opt compilation of perf-sensitive deps to avoid
 # cross-configuration link conflicts.  Use: --config=no-perf-opt

@@ -127,12 +127,9 @@ jobs:
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 750M
-    strategy:
-      fail-fast: false
-      matrix:
-        # Skia CMake temporarily disabled: chromium.googlesource.com rate limits
-        # git-sync-deps fetches (HTTP 403/429). Re-enable once stabilized.
-        backend: [tiny_skia]
+    # Keep the only active backend as a non-matrix job so a superseded run and
+    # its replacement use the same stable check name. Reintroduce distinct jobs
+    # when the Skia CMake lane is restored.
     steps:
       - uses: actions/checkout@v7
 
@@ -140,10 +137,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ccache ninja-build
-          if [[ "${{ matrix.backend }}" == "skia" ]]; then
-            sudo apt-get install -y --no-install-recommends \
-              pkg-config libfontconfig1-dev libfreetype6-dev
-          fi
           sudo apt-get clean
 
       # Cache key includes both gen_cmakelists.py AND MODULE.bazel because the
@@ -159,24 +152,24 @@ jobs:
         uses: actions/cache@v6
         with:
           path: build/_deps
-          key: cmake-deps-linux-${{ matrix.backend }}-${{ hashFiles('tools/cmake/gen_cmakelists.py', 'tools/cmake/external_deps.json', 'MODULE.bazel', 'MODULE.bazel.lock', 'third_party/bazel/non_bcr_deps.bzl') }}
+          key: cmake-deps-linux-tiny_skia-${{ hashFiles('tools/cmake/gen_cmakelists.py', 'tools/cmake/external_deps.json', 'MODULE.bazel', 'MODULE.bazel.lock', 'third_party/bazel/non_bcr_deps.bzl') }}
 
       - name: Cache compiler outputs
         uses: actions/cache@v6
         with:
           path: .ccache
-          key: ccache-linux-${{ matrix.backend }}-${{ github.sha }}
+          key: ccache-linux-tiny_skia-${{ github.sha }}
           restore-keys: |
-            ccache-linux-${{ matrix.backend }}-
+            ccache-linux-tiny_skia-
 
-      - name: Build with CMake (${{ matrix.backend }})
+      - name: Build with CMake (tiny_skia)
         run: |
           ccache --zero-stats
           ccache --max-size="$CCACHE_MAXSIZE"
           python3 tools/cmake/gen_cmakelists.py
           cmake -S examples/cmake_consumer -B build -G Ninja \
             -DDONNER_SOURCE_DIR="${PWD}" \
-            -DDONNER_RENDERER_BACKEND=${{ matrix.backend }} \
+            -DDONNER_RENDERER_BACKEND=tiny_skia \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           cmake --build build --target donner_cmake_consumer --parallel
@@ -190,12 +183,7 @@ jobs:
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 750M
-    strategy:
-      fail-fast: false
-      matrix:
-        # Skia CMake temporarily disabled: chromium.googlesource.com rate limits
-        # git-sync-deps fetches (HTTP 403/429). Re-enable once stabilized.
-        backend: [tiny_skia]
+    # Keep this paired with the stable Linux job name above.
     steps:
       - uses: actions/checkout@v7
 
@@ -213,24 +201,24 @@ jobs:
         uses: actions/cache@v6
         with:
           path: build/_deps
-          key: cmake-deps-macos-${{ matrix.backend }}-${{ hashFiles('tools/cmake/gen_cmakelists.py', 'tools/cmake/external_deps.json', 'MODULE.bazel', 'MODULE.bazel.lock', 'third_party/bazel/non_bcr_deps.bzl') }}
+          key: cmake-deps-macos-tiny_skia-${{ hashFiles('tools/cmake/gen_cmakelists.py', 'tools/cmake/external_deps.json', 'MODULE.bazel', 'MODULE.bazel.lock', 'third_party/bazel/non_bcr_deps.bzl') }}
 
       - name: Cache compiler outputs
         uses: actions/cache@v6
         with:
           path: .ccache
-          key: ccache-macos-${{ matrix.backend }}-${{ github.sha }}
+          key: ccache-macos-tiny_skia-${{ github.sha }}
           restore-keys: |
-            ccache-macos-${{ matrix.backend }}-
+            ccache-macos-tiny_skia-
 
-      - name: Build with CMake (${{ matrix.backend }})
+      - name: Build with CMake (tiny_skia)
         run: |
           ccache --zero-stats
           ccache --max-size="$CCACHE_MAXSIZE"
           python3 tools/cmake/gen_cmakelists.py
           cmake -S examples/cmake_consumer -B build -G Ninja \
             -DDONNER_SOURCE_DIR="${PWD}" \
-            -DDONNER_RENDERER_BACKEND=${{ matrix.backend }} \
+            -DDONNER_RENDERER_BACKEND=tiny_skia \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           cmake --build build --target donner_cmake_consumer --parallel

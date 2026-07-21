@@ -148,6 +148,7 @@ donner_cc_library(
         "GeodePipeline.cc",
     ],
     hdrs = [
+        "GeodeCallbackState.h",
         "GeodeCheckerboardPipeline.h",
         "GeodeDevice.h",
         "GeodeFilterEngine.h",
@@ -617,7 +618,7 @@ donner_cc_test(
 
 donner_multi_transitioned_test(
     name = "geode_embed_tests",
-    timeout = "moderate",
+    size = "small",
     testonly = 1,
     dep = ":geode_embed_tests_impl",
     renderer_backend = "geode",

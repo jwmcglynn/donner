@@ -610,6 +610,29 @@ jobs:
             //donner/svg/renderer/tests:filter_graph_executor_tests
 
 
+  # Admit the operator's ARM64 Linux job from a hosted runner. The FIFO wait
+  # cannot run on the constrained self-hosted pool itself: newer runs could
+  # occupy every runner while the oldest lane job remains queued, creating a
+  # head-of-line deadlock. This lightweight prerequisite waits off-pool and
+  # releases exactly one dependent self-hosted job at a time.
+  linux-self-hosted-turnstile:
+    runs-on: ubuntu-24.04
+    needs: [gatekeeper, determine-targets]
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' && needs.determine-targets.outputs.large_change != 'true' }}
+    timeout-minutes: 165
+    steps:
+      - name: Checkout turnstile action
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Wait for Linux self-hosted lane
+        uses: ./.github/actions/re-turnstile
+        with:
+          lane: linux-self-hosted
+          token: ${{ github.token }}
+          timeout-minutes: "150"
+
   # Operator's ARM64 Linux runs on the operator's self-hosted runner.
   # Replaces `linux` for trusted operator PRs and main pushes (extra arch
   # coverage + homelab cache). Renovate and non-operator runs stay hosted.
@@ -622,14 +645,14 @@ jobs:
   # surface instead of excluding graphics targets.
   linux-self-hosted:
     runs-on: [self-hosted, linux, arm64]
-    needs: [gatekeeper, determine-targets]
+    needs: [gatekeeper, determine-targets, linux-self-hosted-turnstile]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' && needs.determine-targets.outputs.large_change != 'true' }}
     # RE-availability SLA lane. A healthy affected-target run is ~21 min. This
-    # budget now also covers the re-turnstile queue wait (the job clock runs
-    # while the turnstile step waits its FIFO turn), so it is sized to hold a
-    # realistic multi-PR burst (turnstile cap 150 min below, plus a full build)
-    # rather than fail open. RE-degradation fast-fail is unchanged and lives at
-    # the Bazel layer (no local fallback + --remote_timeout=60s below), so a
+    # budget applies only after the hosted turnstile admits this job. It retains
+    # ample room for an unusually slow build without making the admission wait
+    # consume a constrained runner. RE-degradation fast-fail is unchanged and
+    # lives at the Bazel layer (no local fallback + --remote_timeout=60s
+    # below), so a
     # wedged/degraded backend still fails in about a minute regardless of this
     # backstop.
     timeout-minutes: 210
@@ -637,7 +660,7 @@ jobs:
     # lanes execute on a shared remote-execution backend that an interactive
     # development host also uses with priority; two-plus concurrent operator PRs
     # oversubscribe it and crawl into the 60 min timeout (measured).
-    # Serialization is enforced by the re-turnstile step below (after checkout),
+    # Serialization is enforced by the hosted re-turnstile prerequisite above,
     # NOT by a GitHub concurrency group. A concurrency group caps the queue at
     # one pending run and cancels any older pending run when a third concurrent
     # run arrives, so a parallel-PR burst (and every post-merge main run
@@ -674,26 +697,10 @@ jobs:
       DIAG_BUILD_FLAGS: "--remote_download_outputs=minimal"
       DIAG_TEST_FLAGS: "--remote_download_outputs=minimal --remote_download_regex=.*(test\\.log|test\\.xml|outputs\\.zip)$"
     steps:
-      # Checkout first so the local ./.github/actions/re-turnstile action is
-      # present. Checkout does no remote-execution work, so gating the
-      # RE-heavy Bazel steps (below) on the turnstile is what matters.
       - name: Checkout
         uses: actions/checkout@v7
         with:
           persist-credentials: false
-
-      # Serialize this Linux self-hosted build on the shared remote-execution
-      # backend without dropping runs. Holds this run (FIFO) until its lane is
-      # free, replacing the old evicting concurrency group. Read-only.
-      - name: Remote-execution turnstile
-        uses: ./.github/actions/re-turnstile
-        with:
-          lane: linux-self-hosted
-          token: ${{ github.token }}
-          # Below the job's 210 min timeout with room for a full build after
-          # the wait. Beyond this depth the turnstile fails open (bounded
-          # oversubscription, never an evicted/lost run).
-          timeout-minutes: "150"
 
       - name: Record target selection
         shell: bash
@@ -851,10 +858,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -f tools/ci_diagnostics_report.py && -f "$DIAG_DIR/build/profile.gz" ]]; then
-            python3 tools/ci_diagnostics_report.py "$DIAG_DIR" | tee "$DIAG_DIR/report.md" || true
-            if [[ -s "$DIAG_DIR/report.md" ]]; then
-              cat "$DIAG_DIR/report.md" >> "$GITHUB_STEP_SUMMARY"
+          diag_dir="${DIAG_DIR:-$RUNNER_TEMP/donner-ci-diagnostics}"
+          if [[ -f tools/ci_diagnostics_report.py && -f "$diag_dir/build/profile.gz" ]]; then
+            python3 tools/ci_diagnostics_report.py "$diag_dir" | tee "$diag_dir/report.md" || true
+            if [[ -s "$diag_dir/report.md" ]]; then
+              cat "$diag_dir/report.md" >> "$GITHUB_STEP_SUMMARY"
             fi
           fi
 

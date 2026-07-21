@@ -21,12 +21,9 @@
 namespace donner::editor::tests {
 
 struct BitmapGoldenCompareParams {
-  /// Per-pixel L∞ threshold (0.0 - 1.0). 0.02 matches the renderer
-  /// suite's default; replay drift vs. a golden captured on the same
-  /// machine is typically well below this on AA edges.
+  /// Per-pixel pixelmatch threshold (0.0 - 1.0). 0.02 matches the renderer suite's default.
   float threshold = 0.02f;
-  /// Max number of pixels allowed to exceed `threshold` before the
-  /// comparison fails.
+  /// Max number of pixels allowed to exceed `threshold` before the comparison fails.
   int maxMismatchedPixels = 100;
   /// When true, count AA pixels as mismatches (off by default, same
   /// as `ImageComparisonTestFixture`).
@@ -48,7 +45,7 @@ struct BitmapGoldenCompareParams {
  * Use only for documented exceptions where identity comparison has
  * been reviewed and rejected.
  *
- * @param threshold Per-channel pixelmatch threshold.
+ * @param threshold Pixelmatch threshold.
  * @param maxMismatchedPixels Maximum number of mismatched pixels before failure.
  * @param includeAntiAliasing Whether anti-aliased pixels count as mismatches.
  */

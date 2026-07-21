@@ -3,6 +3,11 @@
 ##
 ## Named target platforms for local and remote Bazel builds.
 
+##
+## Main library
+##
+load("//build_defs:rules.bzl", "donner_cc_library")
+
 platform(
     name = "linux_aarch64",
     constraint_values = [
@@ -26,11 +31,6 @@ platform(
         "@platforms//cpu:aarch64",
     ],
 )
-
-##
-## Main library
-##
-load("//build_defs:rules.bzl", "donner_cc_library")
 
 #
 # Donner main library, packages together the SVG library and associated renderer.
@@ -60,6 +60,7 @@ exports_files(
         "donner_splash_v0_8.svg",
         "donner_splash_v0_8_editable.svg",
         "MODULE.bazel",
+        ".bazelrc",
         "zoom-out-drag-jump.rnr",
     ],
     visibility = ["//visibility:public"],

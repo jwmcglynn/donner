@@ -27,6 +27,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 import unicodedata
@@ -288,6 +289,8 @@ def _strip_comments_and_strings(text: str) -> str:
 _NOLINT_RE = re.compile(r"//\s*NOLINT\(banned_patterns(?::[^)]*)?\)")
 _CPP_EXTS = {".cc", ".cpp", ".h", ".hpp", ".mm"}
 _SOURCE_EXTS = _CPP_EXTS | {".bzl", ".css", ".html", ".js", ".py", ".sh", ".ts", ".tsx"}
+_EXCLUDED_DIRECTORY_NAMES = {".git", "node_modules", "third_party"}
+_EXCLUDED_DIRECTORY_PREFIXES = ("bazel-",)
 
 
 def _is_suppressed(raw_lines: List[str], line: int) -> bool:
@@ -436,20 +439,30 @@ def check_file(path: Path) -> List[Tuple[int, str, str]]:
 
 
 def _iter_source_files(paths: List[Path]) -> List[Path]:
-    exclude_prefixes = ("third_party/", "bazel-", ".git/")
     result: List[Path] = []
     for p in paths:
         if p.is_file():
             if p.suffix in _SOURCE_EXTS:
                 result.append(p)
         elif p.is_dir():
-            for sub in p.rglob("*"):
-                if sub.suffix not in _SOURCE_EXTS:
-                    continue
-                rel = sub.as_posix()
-                if any(rel.startswith(ex) or f"/{ex}" in rel for ex in exclude_prefixes):
-                    continue
-                result.append(sub)
+            if p.name in _EXCLUDED_DIRECTORY_NAMES or p.name.startswith(
+                _EXCLUDED_DIRECTORY_PREFIXES
+            ):
+                continue
+
+            for root, directory_names, file_names in os.walk(p):
+                directory_names[:] = [
+                    name
+                    for name in directory_names
+                    if name not in _EXCLUDED_DIRECTORY_NAMES
+                    and not name.startswith(_EXCLUDED_DIRECTORY_PREFIXES)
+                ]
+                root_path = Path(root)
+                result.extend(
+                    root_path / name
+                    for name in file_names
+                    if Path(name).suffix in _SOURCE_EXTS
+                )
     return sorted(result)
 
 

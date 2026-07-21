@@ -238,6 +238,7 @@ void PrintUsage(std::string_view argv0) {
         return false;
       }
       *printDiagnostics = true;
+      options->collectTexturePixelStats = true;
       continue;
     }
 
@@ -254,6 +255,7 @@ void PrintUsage(std::string_view argv0) {
       if (printDiagnostics != nullptr) {
         *printDiagnostics = true;
       }
+      options->collectTexturePixelStats = true;
       continue;
     }
 

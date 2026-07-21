@@ -91,9 +91,9 @@ inline constexpr double kViewportCullSlackDevicePx = 1.0;
 /// pre-divided by the CTM's scale factor (see `toStrokeParams`), so the cull
 /// inflate must use that same adjusted width or a downscaling CTM would make
 /// the bounds under-count and wrongly cull a visible stroke.
-std::optional<Box2d> LocalDrawableBoundsWithStroke(
-    const EntityHandle& dataHandle, const components::ComputedStyleComponent& style,
-    const Transform2d& worldFromEntity) {
+std::optional<Box2d> LocalDrawableBoundsWithStroke(const EntityHandle& dataHandle,
+                                                   const components::ComputedStyleComponent& style,
+                                                   const Transform2d& worldFromEntity) {
   const auto* path = dataHandle.try_get<components::ComputedPathComponent>();
   if (!path) {
     // Text and <image> draws are not culled by this path for now: text
@@ -1697,9 +1697,8 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
           std::any_of(subtreeMarkers_.begin(), subtreeMarkers_.end(),
                       [](const DeferredPop& m) { return m.hasFilterLayer; });
       if (!insideFilterLayer) {
-        if (const auto localBounds =
-                LocalDrawableBoundsWithStroke(instance.dataHandle(registry), style,
-                                              instance.worldFromEntityTransform);
+        if (const auto localBounds = LocalDrawableBoundsWithStroke(
+                instance.dataHandle(registry), style, instance.worldFromEntityTransform);
             localBounds.has_value()) {
           const Transform2d deviceFromLocal =
               instance.worldFromEntityTransform * surfaceFromCanvasTransform_;
@@ -1970,9 +1969,8 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
           std::any_of(localDeferred.begin(), localDeferred.end(),
                       [](const DeferredPop& m) { return m.hasFilterLayer; });
       if (!insideFilterLayer) {
-        if (const auto localBounds =
-                LocalDrawableBoundsWithStroke(instance.dataHandle(registry), style,
-                                              instance.worldFromEntityTransform);
+        if (const auto localBounds = LocalDrawableBoundsWithStroke(
+                instance.dataHandle(registry), style, instance.worldFromEntityTransform);
             localBounds.has_value()) {
           const Transform2d deviceFromLocal =
               instance.worldFromEntityTransform * surfaceFromCanvasTransform_;
@@ -2178,27 +2176,39 @@ int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
       continue;
     }
 
-    std::optional<Box2d> maskBounds;
-    if (!mc->useAutoBounds()) {
-      Box2d maskUnitsBounds;
-      if (mc->maskUnits == MaskUnits::ObjectBoundingBox) {
-        maskUnitsBounds = shapeLocalBounds;
-      } else {
-        maskUnitsBounds = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
+    const bool objectBoundingBox = mc->maskUnits == MaskUnits::ObjectBoundingBox;
+    const Box2d maskUnitsBounds =
+        objectBoundingBox ? shapeLocalBounds
+                          : components::LayoutSystem().getViewBox(instance.dataHandle(registry));
+
+    const Lengthd x = mc->x.value_or(Lengthd(-10.0, Lengthd::Unit::Percent));
+    const Lengthd y = mc->y.value_or(Lengthd(-10.0, Lengthd::Unit::Percent));
+    const Lengthd width = mc->width.value_or(Lengthd(120.0, Lengthd::Unit::Percent));
+    const Lengthd height = mc->height.value_or(Lengthd(120.0, Lengthd::Unit::Percent));
+
+    // In an objectBoundingBox coordinate system, unitless values are fractions of the target
+    // bounds and positions are relative to its origin. Percentages use the same origin, while
+    // absolute lengths retain their CSS pixel conversion. The default -10%/-10%/120%/120%
+    // region is real clipping state too, rather than an unbounded auto region.
+    const auto resolveMaskLength = [&](const Lengthd& length, Lengthd::Extent extent,
+                                       bool isPosition) {
+      const double extentPixels =
+          extent == Lengthd::Extent::X ? maskUnitsBounds.width() : maskUnitsBounds.height();
+      double pixels = objectBoundingBox && length.unit == Lengthd::Unit::None
+                          ? length.value * extentPixels
+                          : length.toPixels(maskUnitsBounds, FontMetrics(), extent);
+      if (objectBoundingBox && isPosition) {
+        pixels +=
+            extent == Lengthd::Extent::X ? maskUnitsBounds.topLeft.x : maskUnitsBounds.topLeft.y;
       }
+      return pixels;
+    };
 
-      const Lengthd x = mc->x.value_or(Lengthd(-10.0, Lengthd::Unit::Percent));
-      const Lengthd y = mc->y.value_or(Lengthd(-10.0, Lengthd::Unit::Percent));
-      const Lengthd width = mc->width.value_or(Lengthd(120.0, Lengthd::Unit::Percent));
-      const Lengthd height = mc->height.value_or(Lengthd(120.0, Lengthd::Unit::Percent));
-
-      const double xPx = x.toPixels(maskUnitsBounds, FontMetrics(), Lengthd::Extent::X);
-      const double yPx = y.toPixels(maskUnitsBounds, FontMetrics(), Lengthd::Extent::Y);
-      const double wPx = width.toPixels(maskUnitsBounds, FontMetrics(), Lengthd::Extent::X);
-      const double hPx = height.toPixels(maskUnitsBounds, FontMetrics(), Lengthd::Extent::Y);
-
-      maskBounds = Box2d::FromXYWH(xPx, yPx, wPx, hPx);
-    }
+    const double xPx = resolveMaskLength(x, Lengthd::Extent::X, true);
+    const double yPx = resolveMaskLength(y, Lengthd::Extent::Y, true);
+    const double wPx = resolveMaskLength(width, Lengthd::Extent::X, false);
+    const double hPx = resolveMaskLength(height, Lengthd::Extent::Y, false);
+    const std::optional<Box2d> maskBounds = Box2d::FromXYWH(xPx, yPx, wPx, hPx);
 
     if (verbose_) {
       std::cout << "[renderMask] chain depth=" << chain.size()

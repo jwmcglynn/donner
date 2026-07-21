@@ -36,6 +36,7 @@ genrule(
 
 py_test(
     name = "embed_resources_tests",
+    size = "small",
     srcs = ["embed_resources_tests.py"],
     args = [
         "--generated_header_name",
@@ -59,6 +60,7 @@ py_test(
 
 py_test(
     name = "generate_build_report_tests",
+    size = "small",
     srcs = [
         "generate_build_report.py",
         "generate_build_report_tests.py",
@@ -67,6 +69,7 @@ py_test(
 
 py_test(
     name = "check_lcov_report_tests",
+    size = "small",
     srcs = [
         "check_lcov_report.py",
         "check_lcov_report_tests.py",
@@ -75,6 +78,7 @@ py_test(
 
 py_test(
     name = "coverage_instrumentable_targets_tests",
+    size = "small",
     srcs = [
         "coverage_instrumentable_targets.py",
         "coverage_instrumentable_targets_tests.py",
@@ -83,6 +87,7 @@ py_test(
 
 py_test(
     name = "coverage_variant_trim_tests",
+    size = "small",
     srcs = [
         "coverage_variant_trim.py",
         "coverage_variant_trim_tests.py",
@@ -91,6 +96,7 @@ py_test(
 
 py_test(
     name = "filter_coverage_tests",
+    size = "small",
     srcs = [
         "filter_coverage.py",
         "filter_coverage_tests.py",
@@ -99,6 +105,7 @@ py_test(
 
 py_test(
     name = "ci_diagnostics_report_tests",
+    size = "small",
     srcs = [
         "ci_diagnostics_report.py",
         "ci_diagnostics_report_tests.py",
@@ -107,6 +114,7 @@ py_test(
 
 py_test(
     name = "lcov_metrics_tests",
+    size = "small",
     srcs = [
         "lcov_metrics.py",
         "lcov_metrics_tests.py",
@@ -115,6 +123,7 @@ py_test(
 
 py_test(
     name = "feature_loc_tests",
+    size = "small",
     srcs = [
         "feature_loc.py",
         "feature_loc_tests.py",
@@ -125,6 +134,7 @@ py_test(
 # a real Bazel test target (see binary_size_tests.py for why).
 py_test(
     name = "binary_size_tests",
+    size = "small",
     srcs = ["binary_size_tests.py"],
     data = ["binary_size.sh"],
     deps = ["@rules_python//python/runfiles"],
@@ -138,6 +148,7 @@ py_binary(
 
 py_test(
     name = "check_design_doc_provenance_tests",
+    size = "small",
     srcs = [
         "check_design_doc_provenance.py",
         "check_design_doc_provenance_tests.py",

@@ -176,8 +176,10 @@ jobs:
           (
             cd donner/editor/wasm/tests
             npm run test:isolation-fallback
-            npx playwright test static-host-isolation.spec.ts --browser=firefox
-            npx playwright test static-host-isolation.spec.ts --browser=webkit
+            npx playwright test static-host-isolation.spec.ts \
+              --config=playwright.firefox.config.js
+            npx playwright test static-host-isolation.spec.ts \
+              --config=playwright.webkit.config.js
           )
           cleanup
           trap - EXIT

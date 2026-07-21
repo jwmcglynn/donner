@@ -27,6 +27,7 @@ py_binary(
 
 py_test(
     name = "manifest_validation_tests",
+    size = "small",
     srcs = [
         "jsonschema_lite.py",
         "manifest_validation.py",
@@ -38,6 +39,7 @@ py_test(
 
 py_test(
     name = "security_tests",
+    size = "small",
     srcs = [
         "jsonschema_lite.py",
         "manifest_validation.py",
@@ -63,6 +65,7 @@ py_binary(
 
 py_test(
     name = "spec_seed_tests",
+    size = "small",
     srcs = [
         "jsonschema_lite.py",
         "spec_seed.py",
@@ -94,6 +97,7 @@ py_binary(
 
 py_test(
     name = "spec_coverage_lint_tests",
+    size = "small",
     srcs = [
         "jsonschema_lite.py",
         "path_safety.py",
@@ -132,6 +136,7 @@ py_binary(
 
 py_test(
     name = "runner_tests",
+    size = "small",
     srcs = [
         "adapter_protocol.py",
         "jsonschema_lite.py",
@@ -150,6 +155,7 @@ py_test(
 
 py_test(
     name = "adapter_contract_tests",
+    size = "small",
     srcs = [
         "adapter_contract_tests.py",
         "adapter_protocol.py",
@@ -173,6 +179,7 @@ py_binary(
 
 py_test(
     name = "resvg_base_manifest_tests",
+    size = "small",
     srcs = [
         "jsonschema_lite.py",
         "manifest_validation.py",

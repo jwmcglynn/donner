@@ -36,6 +36,7 @@
 #include "donner/svg/renderer/RendererInterface.h"
 
 struct GLFWwindow;
+struct ImFont;
 using GLFWscrollfun = void (*)(GLFWwindow*, double, double);
 
 namespace donner::geode {
@@ -110,6 +111,17 @@ struct EditorWindowFrameTiming {
   double readbackMs = 0.0;
   /// End-frame time spent presenting or swapping the surface.
   double presentMs = 0.0;
+};
+
+/// Fonts loaded into this window's ImGui context for the editor shell.
+struct EditorWindowFonts {
+  ImFont* uiRegular = nullptr;
+  ImFont* uiBold = nullptr;
+  ImFont* code = nullptr;
+
+  [[nodiscard]] bool complete() const {
+    return uiRegular != nullptr && uiBold != nullptr && code != nullptr;
+  }
 };
 
 /// ImGui input state to inject for deterministic editor replay.
@@ -250,6 +262,13 @@ public:
   /// Effective UI display scale used for ImGui fonts and framebuffer coordinates.
   [[nodiscard]] double displayScale() const { return uiScaleConfig_.displayScale; }
 
+  /// Fonts already installed by an EditorShell sharing this ImGui context.
+  [[nodiscard]] const EditorWindowFonts& editorFonts() const { return editorFonts_; }
+
+  /// Remember the editor fonts without changing their ImGui debug names.
+  /// @param fonts Context-local font pointers owned by the ImGui atlas.
+  void setEditorFonts(EditorWindowFonts fonts) { editorFonts_ = fonts; }
+
   /// Timing for the most recent `beginFrame` call.
   [[nodiscard]] double lastBeginFrameMs() const { return lastBeginFrameMs_; }
 
@@ -299,6 +318,7 @@ private:
   int textureWidth_ = 0;
   int textureHeight_ = 0;
   UiScaleConfig uiScaleConfig_;
+  EditorWindowFonts editorFonts_;
   double lastBeginFrameMs_ = 0.0;
   EditorWindowFrameTiming lastEndFrameTiming_;
   /// When > 0, the content scale to force into ImGui's `DisplayFramebufferScale`

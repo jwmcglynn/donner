@@ -469,17 +469,23 @@ TEST(EditorControlSessionTest, DraggingSplashBackgroundDropsGhostPixelsFromPrese
   ASSERT_GE(drag.body["frames"].size(), 2u) << drag.body.dump(2);
   const json& moveFrame = drag.body["frames"][1];
   ASSERT_EQ(moveFrame.value("label", ""), "move_1") << moveFrame.dump(2);
-  ASSERT_TRUE(moveFrame["display_before_render_bitmap"]["alpha"].is_object()) << moveFrame.dump(2);
-  EXPECT_EQ(moveFrame["display_before_render_bitmap"]["alpha"]["corner_samples"]["top_left"]["a"],
-            0)
+  ASSERT_TRUE(moveFrame.contains("display_before_render_bitmap")) << moveFrame.dump(2);
+  const json& beforeBitmap = moveFrame.at("display_before_render_bitmap");
+  ASSERT_TRUE(beforeBitmap.is_object() && beforeBitmap.contains("alpha")) << moveFrame.dump(2);
+  const json& beforeAlpha = beforeBitmap.at("alpha");
+  ASSERT_TRUE(beforeAlpha.is_object()) << moveFrame.dump(2);
+  EXPECT_EQ(beforeAlpha.at("corner_samples").at("top_left").at("a"), 0)
       << "The immediate held-drag display capture should expose transparent canvas at the old "
          "left edge before the next render result lands.";
-  ASSERT_TRUE(moveFrame["display_after_render_bitmap"]["alpha"].is_object()) << moveFrame.dump(2);
-  EXPECT_EQ(moveFrame["display_after_render_bitmap"]["alpha"]["corner_samples"]["top_left"]["a"], 0)
+  ASSERT_TRUE(moveFrame.contains("display_after_render_bitmap")) << moveFrame.dump(2);
+  const json& afterBitmap = moveFrame.at("display_after_render_bitmap");
+  ASSERT_TRUE(afterBitmap.is_object() && afterBitmap.contains("alpha")) << moveFrame.dump(2);
+  const json& afterAlpha = afterBitmap.at("alpha");
+  ASSERT_TRUE(afterAlpha.is_object()) << moveFrame.dump(2);
+  EXPECT_EQ(afterAlpha.at("corner_samples").at("top_left").at("a"), 0)
       << "After #Background moves right during an active drag, the presented frame should expose "
          "transparent canvas at the old left edge instead of keeping stale background pixels.";
-  EXPECT_GT(moveFrame["display_after_render_bitmap"]["alpha"].value("transparent_pixels", 0u), 0u)
-      << moveFrame["display_after_render_bitmap"].dump(2);
+  EXPECT_GT(afterAlpha.value("transparent_pixels", 0u), 0u) << afterBitmap.dump(2);
 }
 
 TEST(EditorControlSessionTest, InvalidToolCallReturnsErrorResult) {

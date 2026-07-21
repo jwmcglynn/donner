@@ -231,7 +231,14 @@ void EditorControlSession::HeadlessTextureCache::uploadComposited(
   tiles_.reserve(preview.tiles.size());
 
   for (const RenderResult::CompositedTile& tile : preview.tiles) {
-    const bool reusingExistingTexture = tile.bitmap.empty();
+    svg::RendererBitmap textureReadback;
+    const svg::RendererBitmap* payload = &tile.bitmap;
+    if (payload->empty() && tile.textureSnapshot != nullptr) {
+      textureReadback = tile.textureSnapshot->takeSnapshot();
+      payload = &textureReadback;
+    }
+
+    const bool reusingExistingTexture = payload->empty();
     if (reusingExistingTexture) {
       const auto cachedIt = tileTextures_.find(tile.id);
       if (cachedIt == tileTextures_.end()) {
@@ -259,12 +266,12 @@ void EditorControlSession::HeadlessTextureCache::uploadComposited(
 
     CachedTextureEntry& entry = tileTextures_[tile.id];
     const bool needsUpload = entry.bitmap.empty() || entry.generation != tile.generation ||
-                             entry.bitmapDimsPx != tile.bitmap.dimensions;
+                             entry.bitmapDimsPx != payload->dimensions;
     if (needsUpload) {
       entry.generation = tile.generation;
-      entry.bitmapDimsPx = tile.bitmap.dimensions;
-      entry.contentHash = BitmapContentHash(tile.bitmap).value_or("");
-      entry.bitmap = tile.bitmap;
+      entry.bitmapDimsPx = payload->dimensions;
+      entry.contentHash = BitmapContentHash(*payload).value_or("");
+      entry.bitmap = *payload;
     }
     entry.kind = tile.kind;
 
@@ -272,7 +279,7 @@ void EditorControlSession::HeadlessTextureCache::uploadComposited(
     view.kind = tile.kind;
     view.id = tile.id;
     view.generation = tile.generation;
-    view.bitmapDimsPx = tile.bitmap.dimensions;
+    view.bitmapDimsPx = payload->dimensions;
     view.canvasOffsetDoc = tile.canvasOffsetDoc;
     view.bitmapDimsDoc = tile.bitmapDimsDoc;
     view.dragTranslationDoc = tile.dragTranslationDoc;
@@ -520,6 +527,7 @@ bool EditorControlSession::renderCurrentFrame(std::vector<CapturedRenderResult>*
   displayPresentation_.clearSettlingIfSelectionChanged(selectedEntity, activePreview.has_value());
 
   RenderRequest request(renderer_, app_.document().document());
+  request.captureCpuSnapshot = true;
   request.version = nextRenderVersion_++;
   request.documentGeneration = app_.document().documentGeneration();
   request.structuralRemap = app_.document().consumePendingStructuralRemap();

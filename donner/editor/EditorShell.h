@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <future>
 #include <memory>
 #include <optional>
@@ -40,7 +41,9 @@
 #include "donner/editor/TextInspectorPanel.h"
 #include "donner/editor/TextTool.h"
 #include "donner/editor/ViewportInteractionController.h"
+#include "donner/svg/SVGDocumentHandle.h"
 #include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/renderer/RendererTinySkia.h"
 #include "donner/svg/resources/FontCatalog.h"
 
 namespace donner::editor::gui {
@@ -298,6 +301,11 @@ public:
   }
 
 private:
+  enum class HistoryAction : std::uint8_t {
+    Undo,
+    Redo,
+  };
+
   bool tryOpenPath(std::string_view path, std::string* error);
   bool tryLoadSource(std::string_view source, std::optional<std::string> path, std::string* error);
   void queuePendingSampleLoad(std::string sampleId);
@@ -346,6 +354,8 @@ private:
   bool tryExportViewportSvgToPath(std::string_view path, std::string* error);
   bool synchronizeSourceBeforeSave(std::string* error);
   void updateWindowTitle();
+  void requestHistoryAction(HistoryAction action);
+  void applyPendingHistoryActions();
   void applyMenuActions(const MenuBarActions& menuActions);
   /// Build the contextual text-formatting bar's state for this frame: whether
   /// it is visible (single `<text>` selected or an active editing session), the
@@ -497,18 +507,19 @@ private:
   /// retention-swept (unlike `thumbnailTextures_`), so the four icons upload
   /// once and persist for the process lifetime.
   GlTextureCache toolbarIconTextures_;
-  /// Clean offscreen renderer used only for Layers-panel thumbnails. This
-  /// shares the editor's Geode device but is never bound to the live framebuffer,
-  /// so row previews cannot inherit presentation state from the main renderer.
-  svg::Renderer layerThumbnailRenderer_;
-  /// Offscreen renderer and owned bitmaps for the four built-in sample cards.
-  svg::Renderer sampleThumbnailRenderer_;
+  /// CPU renderer for Layers-panel thumbnails. The results are CPU bitmaps for
+  /// ImGui upload, so using Geode here would serialize one GPU readback per row.
+  svg::RendererTinySkia layerThumbnailRenderer_;
+  /// CPU renderer and owned bitmaps for the four built-in sample cards.
+  svg::RendererTinySkia sampleThumbnailRenderer_;
   std::vector<std::optional<svg::RendererBitmap>> sampleThumbnailBitmaps_;
   std::size_t sampleThumbnailGenerationCursor_ = 0;
   RenderCoordinator renderCoordinator_;
   RotateCursorSet rotateCursorSet_;
   DocumentSyncController documentSyncController_;
   ViewportInteractionController interactionController_;
+  svg::SVGDocumentHandle documentViewBoxCacheDocument_;
+  std::optional<Box2d> documentViewBoxCache_;
   std::optional<ViewportState> pendingViewportReplayOverride_;
   std::optional<EditorShellDocumentReplayInput> pendingDocumentSpaceReplayInput_;
   /// True while the save modal is being used for File → Export Viewport as SVG
@@ -522,6 +533,8 @@ private:
   bool pendingViewportExportOverlay_ = false;
   bool contentOnlyCaptureForNextFrame_ = false;
   bool contentOnlyCaptureThisFrame_ = false;
+  /// History commands waiting for the async renderer to release document read access.
+  std::deque<HistoryAction> pendingHistoryActions_;
   bool requestRenderAtEndOfFrame_ = false;
   /// Render-pane ImGui scroll state sampled each frame for diagnostics.
   float renderPaneScrollYForDiagnostics_ = 0.0f;

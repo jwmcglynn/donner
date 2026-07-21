@@ -65,7 +65,7 @@ bool GeodeSupportsFeature(RendererBackendFeature feature) {
     case RendererBackendFeature::FilterEffects: return true;
     case RendererBackendFeature::Text: return false;
     case RendererBackendFeature::TextFull: return false;
-    case RendererBackendFeature::AsciiSnapshot: return false;
+    case RendererBackendFeature::AsciiSnapshot: return true;
   }
 
   return false;
@@ -115,15 +115,14 @@ public:
 
 RendererBitmap GeodeRender(SVGDocument& document, bool verbose) {
   RendererGeode& renderer = SharedTestRenderer(verbose);
+  renderer.setAntialias(true);
   renderer.draw(document);
   return renderer.takeSnapshot();
 }
 
 RendererBitmap GeodeRenderForAscii(SVGDocument& document) {
-  // Geode has no anti-aliasing toggle - ASCII snapshots aren't supported,
-  // but routing through the same shared renderer keeps the driver
-  // resource budget bounded.
   RendererGeode& renderer = SharedTestRenderer();
+  renderer.setAntialias(false);
   renderer.draw(document);
   return renderer.takeSnapshot();
 }

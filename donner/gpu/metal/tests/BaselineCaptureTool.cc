@@ -7,12 +7,15 @@
 ///   bazel run --config=geode //donner/gpu/metal/tests:baseline_capture_tool -- \
 ///     $(bazel info workspace)/donner/gpu/metal/tests/testdata/solid_fill_baseline.png
 
+#include <atomic>
 #include <cstdio>
+#include <memory>
 #include <vector>
 
 #include "donner/gpu/metal/tests/BaselineScene.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/geode/GeoEncoder.h"
+#include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
@@ -79,23 +82,24 @@ int CaptureBaseline(const char* outputPath) {
 
   // Map and write the PNG.
   struct MapState {
-    bool done = false;
-    bool ok = false;
-  } mapState;
+    std::atomic<bool> done = false;
+    std::atomic<bool> ok = false;
+  };
+  auto mapState = std::make_shared<MapState>();
   wgpu::BufferMapCallbackInfo mapCb{wgpu::Default};
   mapCb.callback = [](WGPUMapAsyncStatus status, WGPUStringView /*message*/, void* userdata1,
                       void* /*userdata2*/) {
-    auto* state = static_cast<MapState*>(userdata1);
-    state->ok = (status == WGPUMapAsyncStatus_Success);
-    state->done = true;
+    const std::shared_ptr<MapState> state = geode::takeWgpuCallbackState<MapState>(userdata1);
+    state->ok.store(status == WGPUMapAsyncStatus_Success, std::memory_order_relaxed);
+    state->done.store(true, std::memory_order_release);
   };
-  mapCb.userdata1 = &mapState;
+  mapCb.userdata1 = geode::retainWgpuCallbackState(mapState);
   mapCb.userdata2 = nullptr;
   readback.mapAsync(wgpu::MapMode::Read, 0, kBytesPerRow * kBaselineSize, mapCb);
-  while (!mapState.done) {
+  while (!mapState->done.load(std::memory_order_acquire)) {
     device->device().poll(true, nullptr);
   }
-  if (!mapState.ok) {
+  if (!mapState->ok.load(std::memory_order_relaxed)) {
     std::fprintf(stderr, "Readback buffer map failed\n");
     return 1;
   }

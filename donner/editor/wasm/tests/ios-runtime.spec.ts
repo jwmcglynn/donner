@@ -14,7 +14,7 @@ interface RuntimeOptions {
 }
 
 const kFatalRuntimePattern =
-  /Aborted|Assertion failed|RuntimeError|Pthread .* sent an error|WebAssembly runtime unavailable|Unhandled promise rejection/i;
+  /Aborted|Assertion failed|RuntimeError|Pthread .* sent an error|WebAssembly runtime unavailable|Unhandled promise rejection|Blocking on the main thread is very dangerous/i;
 
 async function startRuntime(page: Page, options: RuntimeOptions = {}) {
   if (options.disableWebGpu) {

@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <utility>
 
 #include "donner/base/Box.h"
 #include "donner/base/FillRule.h"
@@ -223,6 +224,19 @@ std::vector<uint8_t> CpuDiffuseLightingReferenceForFlatSource(
   return UnpremultiplyRgba(dst->data());
 }
 
+TEST(RendererGeodeDeviceSharing, DefaultRenderersReuseHeadlessDevice) {
+  const int before = geode::GeodeDevice::headlessCreationCountForTesting();
+  int afterFirst = 0;
+  {
+    RendererGeode first;
+    afterFirst = geode::GeodeDevice::headlessCreationCountForTesting();
+  }
+  RendererGeode second;
+
+  EXPECT_LE(afterFirst, before + 1);
+  EXPECT_EQ(geode::GeodeDevice::headlessCreationCountForTesting(), afterFirst);
+}
+
 class RendererGeodeTest : public ::testing::Test {
 protected:
   /// Returns a process-wide shared GeodeDevice (created once, destroyed at exit).
@@ -290,6 +304,45 @@ TEST_F(RendererGeodeTest, EmptyFrameIsTransparent) {
   EXPECT_THAT(pixel, IsTransparent()) << "Empty frame should be transparent";
 }
 
+TEST_F(RendererGeodeTest, SharedDeviceSurvivesRendererTeardown) {
+  for (int iteration = 0; iteration < 3; ++iteration) {
+    RendererGeode renderer = createRenderer();
+    beginFrame(renderer);
+    renderer.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
+    renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+    renderer.endFrame();
+
+    const RendererBitmap snapshot = renderer.takeSnapshot();
+    ASSERT_FALSE(snapshot.empty()) << "iteration " << iteration;
+    EXPECT_THAT(pixelAt(snapshot, 32, 32), RgbaEq(0, 255, 0, 255)) << "iteration " << iteration;
+  }
+}
+
+TEST_F(RendererGeodeTest, MoveAssignmentDetachesDisplacedCounters) {
+  const std::shared_ptr<geode::GeodeDevice> device = sharedDevice();
+  RendererGeode source(device);
+  RendererGeode destination(device);
+
+  ASSERT_NE(device->counters(), nullptr);
+  destination = std::move(source);
+
+  // Move-assignment destroys the destination's old Impl. The device must not
+  // retain that Impl's counter address while the moved-in renderer is idle.
+  EXPECT_EQ(device->counters(), nullptr);
+
+  // The moved-in renderer must rebind its counters at the next frame and
+  // remain fully usable.
+  beginFrame(destination);
+  EXPECT_NE(device->counters(), nullptr);
+  destination.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
+  destination.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  destination.endFrame();
+
+  const RendererBitmap snapshot = destination.takeSnapshot();
+  ASSERT_FALSE(snapshot.empty());
+  EXPECT_THAT(pixelAt(snapshot, 32, 32), RgbaEq(0, 255, 0, 255));
+}
+
 TEST_F(RendererGeodeTest, EmptyFrameAfterOpaqueFrameClearsReusedTarget) {
   RendererGeode renderer = createRenderer();
   beginFrame(renderer);
@@ -339,6 +392,9 @@ TEST_F(RendererGeodeTest, TakeTextureSnapshotReturnsTextureAndDetachesTarget) {
   const auto* geodeTexture = static_cast<const RendererGeodeTextureSnapshot*>(texture.get());
   EXPECT_TRUE(static_cast<bool>(geodeTexture->texture()));
   EXPECT_TRUE(static_cast<bool>(geodeTexture->textureView()));
+  const RendererBitmap textureBitmap = texture->takeSnapshot();
+  ASSERT_FALSE(textureBitmap.empty());
+  EXPECT_THAT(pixelAt(textureBitmap, 8, 8), RgbaEq(255, 0, 0, 255));
 
   EXPECT_TRUE(renderer.takeSnapshot().empty()) << "Texture export detaches the internal target so "
                                                   "presentation cannot be overwritten by readback";
@@ -2177,7 +2233,6 @@ TEST_F(RendererGeodeTest, FilterAppliedBeforeClipPathSvgRenderingOrder) {
   EXPECT_THAT(outside, IsTransparent()) << "Outside the clip must be transparent - the "
                                            "filter result is clipped on composite";
 }
-
 
 // A GeodeDevice that fails to initialize (e.g. no Vulkan adapter on a GPU-less
 // worker) leaves RendererGeode in \"no-op mode\". Every rendering entry point

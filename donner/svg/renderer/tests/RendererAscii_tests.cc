@@ -39,6 +39,17 @@ TEST(RendererAsciiTests, TinySkiaMismatchDoesNotFallBackToDefault) {
   EXPECT_FALSE(geodeImage.matchBackend().defaultPattern("geode\n").tinySkia("tiny-skia\n"));
 }
 
+TEST(RendererAsciiTests, GeodeAlternativeMatchesExactly) {
+  if (ActiveRendererBackend() != RendererBackend::Geode) {
+    GTEST_SKIP() << "Geode-specific matcher regression";
+  }
+
+  const AsciiImage alternativeImage{"alternative\n"};
+  EXPECT_TRUE(alternativeImage.matchBackend()
+                  .geode("primary\n")
+                  .geodeAlternative("alternative\n"));
+}
+
 TEST(RendererAsciiTests, TspanPaintOrderMatchesExplicitStrokeThenFillPasses) {
   const AsciiImage actual = RendererTestUtils::renderToAsciiImage(
       R"(

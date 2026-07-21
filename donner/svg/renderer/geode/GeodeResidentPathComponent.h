@@ -156,30 +156,20 @@ struct GeodeResidentSlot {
     return *this;
   }
 
-  /// Release the GPU buffer + bind group and settle the live-bytes gauge.
-  /// Safe to call on an empty slot. Called on geometry change (component
-  /// removal) and on document teardown; both happen after the frame that
-  /// used the buffer was submitted, so dropping the handle is safe
-  /// (wgpu-native ref-counts resources referenced by submitted command
-  /// buffers).
-  void reset(bool destroyBuffer = true) {
+  /// Release the GPU buffer + bind group handles and settle the live-bytes
+  /// gauge. Safe to call on an empty slot. A geometry mutation can remove
+  /// this component after a draw has referenced the buffer but before the
+  /// frame's command encoder is submitted. Do not call `Buffer::destroy()`
+  /// here: WebGPU makes that buffer unusable immediately, invalidating the
+  /// already-recorded draw. Releasing our handles is sufficient because the
+  /// command encoder keeps the referenced resources alive until it is done.
+  void reset() {
     if (accountedBytes != 0 && liveBytesGauge) {
       liveBytesGauge->fetch_sub(accountedBytes, std::memory_order_relaxed);
     }
     accountedBytes = 0;
     bindGroup.reset();
-    if (buffer) {
-      // `destroyBuffer` is false only when the buffer was created by a
-      // DIFFERENT (possibly already-destroyed) device than the one now
-      // rendering - see `owningDeviceId`. In that case we must not call
-      // `wgpu::Buffer::destroy()`, which routes into the owning device;
-      // dropping our ref via `buffer.reset()` is the only safe teardown
-      // (wgpu-native frees the backing when the last ref drops).
-      if (destroyBuffer) {
-        buffer.get().destroy();
-      }
-      buffer.reset();
-    }
+    buffer.reset();
     resident = false;
     encodedKey = nullptr;
     encodedFingerprint = 0;

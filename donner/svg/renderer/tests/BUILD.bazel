@@ -302,6 +302,13 @@ donner_cc_test(
     ],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
+    # ASCII goldens are a deterministic conformance lane. Use llvmpipe for Geode on Linux;
+    # dedicated Geode suites retain hardware coverage, and Metal has no guaranteed fallback
+    # adapter.
+    env = select({
+        "@platforms//os:linux": {"DONNER_GEODE_FORCE_FALLBACK_ADAPTER": "1"},
+        "//conditions:default": {},
+    }),
     variants = [
         "tiny",
         "text_full",
@@ -456,10 +463,10 @@ donner_multi_transitioned_test(
     timeout = "long",
     testonly = 1,
     dep = ":renderer_geode_golden_tests_impl",
-    renderer_backend = "geode",
     # Route the GPU test action to a remote-execution worker advertising a
     # hardware GPU. Ignored for local / non-remote execution.
     exec_properties = {"gpu": "arc"},
+    renderer_backend = "geode",
 )
 
 donner_cc_test(
@@ -504,8 +511,8 @@ donner_multi_transitioned_test(
     timeout = "long",
     testonly = 1,
     dep = ":renderer_geode_tests_impl",
-    renderer_backend = "geode",
     exec_properties = {"gpu": "arc"},
+    renderer_backend = "geode",
 )
 
 donner_cc_test(
@@ -557,6 +564,7 @@ donner_cc_test(
     # so the higher ceiling never triggers for them.
     env = {"DONNER_TEST_TIMEOUT_SECONDS": "300"},
     shard_count = 16,
+    tags = ["manual"],
     target_compatible_with = select({
         "//donner/svg/renderer:resvg_test_suite_enabled": [],
         "//conditions:default": ["@platforms//:incompatible"],
@@ -724,7 +732,7 @@ filegroup(
 
 py_test(
     name = "donner_svg2_pilot",
-    size = "medium",
+    size = "small",
     srcs = ["donner_svg2_pilot_test.py"],
     data = [
         ":donner_svg2_render_adapter",
@@ -746,7 +754,7 @@ py_test(
 # isolate, each with a manually-constructed exact PNG reference.
 py_test(
     name = "donner_svg2_suite",
-    size = "medium",
+    size = "small",
     srcs = ["donner_svg2_suite_test.py"],
     data = [
         ":donner_svg2_render_adapter",

@@ -45,13 +45,6 @@ constexpr uint64_t kStorageOffsetAlignment = 256u;
 // wgpu-native backends (`minUniformBufferOffsetAlignment`).
 constexpr uint64_t kUniformOffsetAlignment = 256u;
 
-template <typename Handle>
-void DestroyResourceBacking(ScopedWgpuHandle<Handle>& handle) {
-  if (handle) {
-    handle.get().destroy();
-  }
-}
-
 /// Layout of the per-draw uniform buffer (must match shaders/slug_fill.wgsl).
 ///
 /// WGSL struct layout requires the total size to be a multiple of the largest
@@ -75,7 +68,7 @@ struct alignas(16) Uniforms {
   // its averaged coverage into the fragment colour. A 1x1 dummy
   // texture is always bound so the `textureSample` is always legal.
   uint32_t hasClipMask;  // 176 .. 180
-  uint32_t _clipPad0;    // 180 .. 184 - std140 alignment for next vec4 array
+  uint32_t antialias;    // 180 .. 184 - 0 = binary coverage, 1 = analytic AA
   uint32_t _clipPad1;    // 184 .. 188
   uint32_t _clipPad2;    // 188 .. 192
   // Band-grid parameters (0041 §8.1). Two vec4-aligned rows: the fragment
@@ -188,7 +181,7 @@ struct alignas(16) GradientUniforms {
   // half-plane rows.
   uint32_t hasClipPolygon;  // 480 .. 484
   uint32_t hasClipMask;     // 484 .. 488
-  uint32_t _clipPad1;       // 488 .. 492
+  uint32_t antialias;       // 488 .. 492 - 0 = binary coverage, 1 = analytic AA
   uint32_t _clipPad2;       // 492 .. 496
   // Band-grid parameters (0041 §8.1), matching the WGSL `GradientUniforms`.
   float gridYBase;              // 496 .. 500
@@ -261,41 +254,35 @@ struct GeoEncoder::Impl {
   /// returns the fully-grown buffers instead of destroying them. See
   /// `GeodeBufferPool` and design doc 0030 M1.
   GeodeBufferPool* bufferPool = nullptr;
+  bool antialias = true;
 
-  void destroyArenaBackings(Arena& arena) {
+  void releaseArenaResources(Arena& arena) {
     // With a pool installed, the current (largest, fully-grown) buffer
-    // is recycled for the next frame's encoders instead of destroyed.
-    // Retired buffers are the outgrown smaller generations - steady
-    // state has none - so they are destroyed as before. Safe because
-    // encoder destruction only happens after the commands referencing
-    // these buffers were submitted (same invariant the eager destroy
-    // below already relies on).
+    // is recycled for the next frame's encoders. Otherwise release the
+    // handle without explicitly destroying its backing. Submitted WebGPU
+    // commands retain their resources until completion; calling destroy()
+    // here can invalidate those in-flight commands on some Vulkan drivers.
     if (bufferPool != nullptr && arena.buffer) {
       bufferPool->release(std::move(arena.buffer), arena.usage, arena.label, arena.capacity);
     }
-    DestroyResourceBacking(arena.buffer);
     arena.buffer.reset();
-    for (ScopedWgpuHandle<wgpu::Buffer>& buffer : arena.retired) {
-      DestroyResourceBacking(buffer);
-      buffer.reset();
-    }
     arena.retired.clear();
   }
 
-  void destroyOwnedResourceBackings() {
+  void releaseOwnedResources() {
     pass.reset();
     maskPass.reset();
 
-    destroyArenaBackings(vertexArena);
-    destroyArenaBackings(bandArena);
-    destroyArenaBackings(curveArena);
-    destroyArenaBackings(uniformArena);
-    destroyArenaBackings(vBandArena);
-    destroyArenaBackings(vCurveArena);
-    destroyArenaBackings(hGridArena);
-    destroyArenaBackings(vGridArena);
-    destroyArenaBackings(instanceTransformArena);
-    transientResources.destroyBackings();
+    releaseArenaResources(vertexArena);
+    releaseArenaResources(bandArena);
+    releaseArenaResources(curveArena);
+    releaseArenaResources(uniformArena);
+    releaseArenaResources(vBandArena);
+    releaseArenaResources(vCurveArena);
+    releaseArenaResources(hGridArena);
+    releaseArenaResources(vGridArena);
+    releaseArenaResources(instanceTransformArena);
+    transientResources.releaseAll();
   }
 
   // When true, this encoder owns its `commandEncoder` and `finish()`
@@ -836,7 +823,7 @@ GeoEncoder::GeoEncoder(GeodeDevice& device, const GeodePipeline& fillPipeline,
 
 GeoEncoder::~GeoEncoder() {
   if (impl_) {
-    impl_->destroyOwnedResourceBackings();
+    impl_->releaseOwnedResources();
   }
 }
 GeoEncoder::GeoEncoder(GeoEncoder&&) noexcept = default;
@@ -1053,7 +1040,7 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
     float gridXBase;          // 92 ..  96
     float gridVStride;        // 96 .. 100
     uint32_t gridVBandCount;  // 100 .. 104
-    uint32_t _gridPad0;       // 104 .. 108
+    uint32_t antialias;       // 104 .. 108 - 0 = binary coverage, 1 = analytic AA
     uint32_t _gridPad1;       // 108 .. 112
   };
   static_assert(sizeof(MaskUniforms) == 112, "MaskUniforms layout mismatch");
@@ -1064,6 +1051,7 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
   u.viewport[1] = static_cast<float>(impl_->targetHeight);
   u.fillRule = (rule == FillRule::EvenOdd) ? 1u : 0u;
   u.hasClipMask = impl_->activeClipMaskView ? 1u : 0u;
+  u.antialias = impl_->antialias ? 1u : 0u;
   u.gridYBase = encoded.yBase;
   u.gridHStride = encoded.hStride;
   u.gridHBandCount = encoded.hBandCount;
@@ -1163,6 +1151,10 @@ void GeoEncoder::setBufferPool(GeodeBufferPool* pool) {
   impl_->bufferPool = pool;
 }
 
+void GeoEncoder::setAntialias(bool antialias) {
+  impl_->antialias = antialias;
+}
+
 void GeoEncoder::setLoadPreserve() {
   // No-op if a pass is already open - loadOp is a pass-construction
   // parameter and can't be changed mid-pass. The RendererGeode caller
@@ -1259,6 +1251,7 @@ void GeoEncoder::Impl::populateFillUniform(Uniforms& u, const EncodedPath& encod
   u.patternOpacity = args.patternOpacity;
   writeClipPolygonUniforms(u.hasClipPolygon, u.clipPolygonPlanes);
   u.hasClipMask = activeClipMaskView ? 1u : 0u;
+  u.antialias = antialias ? 1u : 0u;
   u.gridYBase = encoded.yBase;
   u.gridHStride = encoded.hStride;
   u.gridHBandCount = encoded.hBandCount;
@@ -1270,13 +1263,12 @@ void GeoEncoder::Impl::populateFillUniform(Uniforms& u, const EncodedPath& encod
 void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const EncodedPath& encoded) {
   // Drop any previous residence (first upload, a re-upload after the stroke
   // slot rebuilt in place, or a re-upload because a DIFFERENT device now
-  // renders this document). Frees the old buffer and settles the live-bytes
-  // gauge before we account the new allocation. When the existing buffer
-  // belongs to a different device we release our ref WITHOUT calling
-  // `destroy()`: that device may already be gone, and destroy() would route
-  // into it (see `GeodeResidentSlot::owningDeviceId`).
-  const bool ownedByCurrentDevice = slot.owningDeviceId == device->deviceId();
-  slot.reset(/*destroyBuffer=*/ownedByCurrentDevice);
+  // renders this document). Releases the old handles and settles the
+  // live-bytes gauge before we account the new allocation. `reset()` never
+  // calls `Buffer::destroy()`: an earlier draw in the open command encoder
+  // may still reference the old buffer, and releasing our handle lets WebGPU
+  // retain that resource for exactly as long as the recorded work needs it.
+  slot.reset();
 
   const uint64_t vBytes = encoded.quadVertices.size() * sizeof(EncodedPath::Vertex);
   const uint64_t bandsBytes = encoded.bands.size() * sizeof(EncodedPath::Band);
@@ -1315,8 +1307,8 @@ void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const Enc
   wgpu::BufferDescriptor desc = {};
   desc.label = wgpuLabel("GeodeResidentPath");
   desc.size = totalSize;
-  desc.usage = wgpu::BufferUsage::Vertex | wgpu::BufferUsage::Storage |
-               wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
+  desc.usage = wgpu::BufferUsage::Vertex | wgpu::BufferUsage::Storage | wgpu::BufferUsage::Uniform |
+               wgpu::BufferUsage::CopyDst;
   slot.buffer.reset(device->device().createBuffer(desc));
   device->countBuffer();
 
@@ -1790,6 +1782,7 @@ void GeoEncoder::fillPathLinearGradient(const Path& path, const LinearGradientPa
   u.gradientKind = kGradientKindLinear;
   impl_->writeClipPolygonUniforms(u.hasClipPolygon, u.clipPolygonPlanes);
   u.hasClipMask = impl_->activeClipMaskView ? 1u : 0u;
+  u.antialias = impl_->antialias ? 1u : 0u;
 
   u.startGrad[0] = static_cast<float>(params.startGrad.x);
   u.startGrad[1] = static_cast<float>(params.startGrad.y);
@@ -1837,6 +1830,7 @@ void GeoEncoder::fillPathRadialGradient(const Path& path, const RadialGradientPa
   u.gradientKind = kGradientKindRadial;
   impl_->writeClipPolygonUniforms(u.hasClipPolygon, u.clipPolygonPlanes);
   u.hasClipMask = impl_->activeClipMaskView ? 1u : 0u;
+  u.antialias = impl_->antialias ? 1u : 0u;
 
   u.radialCenter[0] = static_cast<float>(params.center.x);
   u.radialCenter[1] = static_cast<float>(params.center.y);

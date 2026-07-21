@@ -145,7 +145,7 @@ donner_cc_library(
         "//donner/base",
         "//donner/svg",
         "//donner/svg/parser",
-        "//donner/svg/renderer",
+        "//donner/svg/renderer:renderer_tiny_skia",
     ] + select({
         ":wasm_tiny_skia_enabled": [
             "//third_party/emscripten-glfw",
@@ -688,6 +688,7 @@ donner_cc_library(
         "//donner/svg/parser",
         "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer:renderer_tiny_skia",
     ],
 )
 
@@ -971,6 +972,7 @@ donner_cc_library(
         "//donner/svg",
         "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer:renderer_tiny_skia",
         "//donner/svg/resources:font_catalog",
         "//donner/svg/resources:font_manager",
         "//third_party/fira-code",

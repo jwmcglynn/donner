@@ -31,7 +31,7 @@
       "operations": [
         "draw"
       ],
-      "sha256": "c733ce3c9218339ae4a71a067e41a93cffdecba1f82943ff71cff7db0f58d8cd",
+      "sha256": "fbd08d139c1d95b13b02a641961242596530393309a0466fa71f599bc12bb7d0",
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
         "wgpuLifetimeTextureCreates"
@@ -100,7 +100,7 @@
         "createView",
         "writeTexture"
       ],
-      "sha256": "089a2fa8aa762226a48600a89b2f69f28938528f6a9bdf534a52eb66ea24861e",
+      "sha256": "a4ff09ecb143e258b403e38c3a05f10d72da002365dcbf89f88ccb4fce829607",
       "wgpuCFunctions": [
         "wgpuLabel",
         "wgpuLifetimeBufferCreates",
@@ -170,6 +170,7 @@
         "copyTextureToBuffer",
         "createBuffer",
         "createCommandEncoder",
+        "createTexture",
         "createView",
         "finish",
         "getCapabilities",
@@ -184,10 +185,11 @@
         "submit",
         "unmap"
       ],
-      "sha256": "770a3a6b7f55d19cd53832af709d3d26a0d099326fe5a87c5305124c441eebb7",
+      "sha256": "e9c34530878e3f3af813a346fe2ecebdce59feb21d4bb05825686e01b7cf3602",
       "wgpuCFunctions": [
         "wgpuCreateInstance",
         "wgpuDirectRenderCallback_",
+        "wgpuForceFallbackAdapterRequested",
         "wgpuInstanceCreateSurface",
         "wgpuLabel",
         "wgpuReadbackStats",
@@ -199,6 +201,8 @@
         "WGPUDevice",
         "WGPUEmscriptenSurfaceSourceCanvasHTMLSelector",
         "WGPUErrorType",
+        "WGPUInstanceFeatureName",
+        "WGPUInstanceFeatureName_TimedWaitAny",
         "WGPUMapAsyncStatus",
         "WGPUMapAsyncStatus_Success",
         "WGPUStringView",
@@ -226,7 +230,10 @@
         "Device",
         "DeviceDescriptor",
         "Extent3D",
+        "Future",
+        "FutureWaitInfo",
         "Instance",
+        "InstanceDescriptor",
         "LoadOp",
         "MapMode",
         "PresentMode",
@@ -244,14 +251,17 @@
         "TexelCopyBufferInfo",
         "TexelCopyTextureInfo",
         "Texture",
+        "TextureDescriptor",
+        "TextureDimension",
         "TextureFormat",
         "TextureUsage",
         "TextureView",
+        "WaitStatus",
         "createInstance"
       ]
     },
     "donner/editor/gui/EditorWindow.h": {
-      "sha256": "abf184715a0dddc27516a390fecdbf39b7d2e3d95a361e02026eafd10e0d8a9b",
+      "sha256": "56f6c42fe05558c30cd17ad0564dd69a04e0cc979d97ef65e82202757cb2aad6",
       "wgpuCFunctions": [
         "wgpuDirectRenderCallback_",
         "wgpuState_",
@@ -262,14 +272,14 @@
       ]
     },
     "donner/editor/tests/EditorRnrGlReplay.cc": {
-      "sha256": "74f62d826e0b0ee7a14fe6c0403bd89f8385eecc3bf8562cccbedaf5a5a1e1da",
+      "sha256": "a436eac4e5c755e761a65d515ce2fbb4551f0e11ef079401c3f21b6117a35724",
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
         "wgpuLifetimeTextureCreates"
       ]
     },
     "donner/editor/tests/EditorShell_tests.cc": {
-      "sha256": "be93cf6d1d89c97e3dde48c6692f8cfe96d9f212630d17babe26ea382ffb58c9",
+      "sha256": "70f4f5ee031f22342db7fd145a48a9e1f2a31abad6ccb0e63210e215e50f9e1f",
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
         "wgpuLifetimeTextureCreates"
@@ -279,7 +289,7 @@
       "operations": [
         "draw"
       ],
-      "sha256": "ebd74326afa96e1815412ae1a66981f2dc5ca1d78588566ce9dc1a6fbf5339a7",
+      "sha256": "438b9c68a747a4b0086ff14a3a00738ce44114c8e6e18a20f3572acc9f22b0bb",
       "wgpuCTypes": [
         "WGPUTextureView"
       ]
@@ -323,7 +333,7 @@
         "submit",
         "unmap"
       ],
-      "sha256": "177b603fa6d19acd29ef35baf8f6da2658430a80f8fbb1ec4a86acb793da803f",
+      "sha256": "4e83ae83ab39a06639dd801a8a444d58f3598fd589356f4d94f3a1d6e1852580",
       "wgpuCFunctions": [
         "wgpuLabel"
       ],
@@ -406,7 +416,6 @@
         "createCommandEncoder",
         "createTexture",
         "createView",
-        "destroy",
         "draw",
         "finish",
         "getConstMappedRange",
@@ -415,10 +424,9 @@
         "submit",
         "unmap"
       ],
-      "sha256": "ef1182ecf375b24b45ad07f125d1df00fa5eb6722795cee9f56395f493c4e475",
+      "sha256": "d4980c0b648a1b5341fdf62593c187a5ca73df3ba82557c9cdfdf25c6d0de297",
       "wgpuCFunctions": [
         "wgpuDevicePoll",
-        "wgpuInstanceProcessEvents",
         "wgpuLabel"
       ],
       "wgpuCTypes": [
@@ -440,6 +448,8 @@
         "Default",
         "Device",
         "Extent3D",
+        "Future",
+        "FutureWaitInfo",
         "MapMode",
         "TexelCopyBufferInfo",
         "TexelCopyTextureInfo",
@@ -448,11 +458,12 @@
         "TextureDimension",
         "TextureFormat",
         "TextureUsage",
-        "TextureView"
+        "TextureView",
+        "WaitStatus"
       ]
     },
     "donner/svg/renderer/RendererGeode.h": {
-      "sha256": "71233af9a2c424b98610fef599f70e9a3d6cb666c200d9959d9a9bcd99512596",
+      "sha256": "783379c0b5785a88998edc1fd9c1d80767ddf8864f41876c2635a06591a64faa",
       "wgpuCppTokens": [
         "Texture",
         "TextureFormat",
@@ -468,7 +479,6 @@
         "createCommandEncoder",
         "createSampler",
         "createView",
-        "destroy",
         "draw",
         "finish",
         "setBindGroup",
@@ -478,7 +488,7 @@
         "submit",
         "writeBuffer"
       ],
-      "sha256": "fdb350f1d5b44c43b356b29d2b91611d8953b71b7984c89cc19a7f5dd1598c76",
+      "sha256": "07a47714c2ba361d457dfd2cfc1811d3611cfd994b83a273c613cc47e0969e34",
       "wgpuCFunctions": [
         "wgpuLabel"
       ],
@@ -514,7 +524,7 @@
         "finish",
         "submit"
       ],
-      "sha256": "136b9adb784f6e60a6da4fae804e20aa99c56e3c4cfdc33cd946a8ebc96c1c04",
+      "sha256": "f53ab24b8b7a3d03075bab145c090fb26341e2fba735e88528ad6978e073fae6",
       "wgpuCppTokens": [
         "CommandEncoder",
         "Device",
@@ -600,11 +610,12 @@
         "writeBuffer",
         "writeTexture"
       ],
-      "sha256": "6f3cf559a1be50315d9d9fe09e71c3efcc41e4b8701b8c0bef8c3ed9ba3c5933",
+      "sha256": "1677c499ba3e6837bb258b235791b0aff3d1e8d9ed90c419b9e34c022182d52e",
       "wgpuCFunctions": [
         "wgpuAdapterGetInfo",
         "wgpuAdapterInfoFreeMembers",
         "wgpuCreateInstance",
+        "wgpuForceFallbackAdapterRequested",
         "wgpuInstanceRequestAdapter"
       ],
       "wgpuCTypes": [
@@ -623,6 +634,9 @@
         "WGPUBackendType_Vulkan",
         "WGPUBackendType_WebGPU",
         "WGPUDevice",
+        "WGPUDeviceLostReason",
+        "WGPUDeviceLostReason_Destroyed",
+        "WGPUDeviceLostReason_InstanceDropped",
         "WGPUErrorType",
         "WGPUInstanceBackend",
         "WGPUInstanceBackend_All",
@@ -632,6 +646,8 @@
         "WGPUInstanceBackend_GL",
         "WGPUInstanceBackend_Metal",
         "WGPUInstanceBackend_Vulkan",
+        "WGPUInstanceFeatureName",
+        "WGPUInstanceFeatureName_TimedWaitAny",
         "WGPUQueueWorkDoneCallback",
         "WGPUQueueWorkDoneStatus",
         "WGPUStatus_Success",
@@ -675,7 +691,7 @@
       "operations": [
         "poll"
       ],
-      "sha256": "6da2909057823a61d38814f13d2d87f37d74761a91b84f908c2bf37f267648ca",
+      "sha256": "e134d07fb6f805ab6b9565c42923c36eaa759dc0d4fb236795e423902952fb54",
       "wgpuCFunctions": [
         "wgpuDevicePoll"
       ],
@@ -683,6 +699,7 @@
         "Adapter",
         "Buffer",
         "Device",
+        "Instance",
         "Queue",
         "Sampler",
         "Texture",
@@ -866,10 +883,7 @@
       ]
     },
     "donner/svg/renderer/geode/GeodeResidentPathComponent.h": {
-      "operations": [
-        "destroy"
-      ],
-      "sha256": "665e10c2b453c79918e115067952323dbc6d7fface73e7261d8e3e4ab15813ba",
+      "sha256": "87b81c2130b47dad4e6593ec03b71000ec44ba38101c8541960e2c124df871bb",
       "wgpuCppTokens": [
         "BindGroup",
         "Buffer"
@@ -952,11 +966,11 @@
     },
     "donner/svg/renderer/geode/GeodeWgpuUtil.h": {
       "operations": [
-        "destroy",
         "release"
       ],
-      "sha256": "ff01a58c3c6af56e183cf78dd686eafe31f1eef44dee5f902c391a90e023151e",
+      "sha256": "95cd0f5a354050d95f772e127b62f54ea587295481a9eb5cba5c2e19ce4363dd",
       "wgpuCFunctions": [
+        "wgpuForceFallbackAdapterRequested",
         "wgpuLabel"
       ],
       "wgpuCppTokens": [
@@ -982,7 +996,7 @@
         "unmap",
         "writeTexture"
       ],
-      "sha256": "5f459cdefafbe09b961ef440b4f7581d00461bf9ddddb4a40c6bcbf0dde2a49c",
+      "sha256": "b46780013c07d5db243a358395aacb18aa08f32d0e6c752675ecea1cc9ef07c1",
       "wgpuCFunctions": [
         "wgpuLabel"
       ],
@@ -1027,7 +1041,7 @@
         "unmap",
         "writeBuffer"
       ],
-      "sha256": "0f67fdede7818b9fdadb3ce572a0019b623770209d111efb046019cbe7612769",
+      "sha256": "cddc9e122e26f48c05c59df0108cd5ef2c97ed4ebe3b3d91f12765ddebec3eab",
       "wgpuCFunctions": [
         "wgpuLabel"
       ],
@@ -1068,7 +1082,7 @@
         "createTexture",
         "release"
       ],
-      "sha256": "f1bf1df7a0113024bb3deaaa2a77639075e8da289c0a883c9af04c3b624b0bb3",
+      "sha256": "39c06c1aaa3b6094242ae0c80a3e22c0e2712facd21ba9c807b54f90375e8bab",
       "wgpuCFunctions": [
         "wgpuLabel"
       ],
@@ -1107,7 +1121,7 @@
       "operations": [
         "draw"
       ],
-      "sha256": "01b5f8f621279122329765ebf73b9f18093c2fa2bfdcebead4aa175f67aed040",
+      "sha256": "d3ec0497a7acb8ba39ca7ae1d85d0fd4643baa404dcbe0d23041f7e9bd2d9672",
       "wgpuCppTokens": [
         "TextureFormat"
       ]
@@ -1116,7 +1130,7 @@
       "operations": [
         "draw"
       ],
-      "sha256": "c4192606c58d84efb21dbb56bb82ad8667654addd05371270fde09476cfd2944",
+      "sha256": "cd48eeec5173e6b295fad32550c3105c6f1b93511b6ccff158ecc31b34102548",
       "wgpuCppTokens": [
         "Texture"
       ]
@@ -1132,7 +1146,7 @@
         "requestAdapter",
         "requestDevice"
       ],
-      "sha256": "ef942784f126d18a002fa62c0c91b6a364ed00802e47292b24d04e7e0eb20d0c",
+      "sha256": "886643433167c37d583fd7ac7181998874946be08ec0cc2276609b1bb5dce954",
       "wgpuCFunctions": [
         "wgpuCreateInstance",
         "wgpuSurfacePresent"
@@ -1195,6 +1209,7 @@
   },
   "wgpuPatchFiles": [
     "examples/third_party/patches/imgui_wgpu_texture_cache.patch",
+    "third_party/patches/imgui-explicit-raw-memory.patch",
     "third_party/patches/imgui_bazel_build_files.patch",
     "third_party/patches/imgui_wgpu_emscripten_dawn.patch",
     "third_party/patches/imgui_wgpu_premultiplied_textures.patch",

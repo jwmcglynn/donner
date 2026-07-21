@@ -26,7 +26,7 @@ struct Uniforms {
   xBase: f32,
   vStride: f32,
   vBandCount: u32,
-  _gridPad0: u32,
+  antialias: u32,
   _gridPad1: u32,
 };
 
@@ -150,6 +150,7 @@ fn solve_quadratic(a: f32, b: f32, c: f32) -> vec2f {
 struct RayCoverage {
   cov: f32,
   wgt: f32,
+  winding: f32,
 };
 
 // Ownership of a shared vertex on the monotone axis, as a direction-independent
@@ -170,6 +171,7 @@ fn accumulateHoriz(slot: u32, sample: vec2f, ppemX: f32) -> RayCoverage {
   var result: RayCoverage;
   result.cov = 0.0;
   result.wgt = 0.0;
+  result.winding = 0.0;
   if (slot == kNoBand) {
     return result;
   }
@@ -195,6 +197,7 @@ fn accumulateHoriz(slot: u32, sample: vec2f, ppemX: f32) -> RayCoverage {
       let s = select(-1.0, 1.0, dy_dt >= 0.0);
       result.cov = result.cov + s * saturate(r + 0.5);
       result.wgt = max(result.wgt, saturate(1.0 - abs(r) * 2.0));
+      result.winding = result.winding + s * select(0.0, 1.0, r >= 0.0);
     }
   }
   return result;
@@ -204,6 +207,7 @@ fn accumulateVert(slot: u32, sample: vec2f, ppemY: f32) -> RayCoverage {
   var result: RayCoverage;
   result.cov = 0.0;
   result.wgt = 0.0;
+  result.winding = 0.0;
   if (slot == kNoBand) {
     return result;
   }
@@ -229,6 +233,7 @@ fn accumulateVert(slot: u32, sample: vec2f, ppemY: f32) -> RayCoverage {
       let s = select(1.0, -1.0, dx_dt >= 0.0);
       result.cov = result.cov + s * saturate(r + 0.5);
       result.wgt = max(result.wgt, saturate(1.0 - abs(r) * 2.0));
+      result.winding = result.winding + s * select(0.0, 1.0, r >= 0.0);
     }
   }
   return result;
@@ -256,6 +261,7 @@ fn fs_main(in: VertexOutput) -> FragOutput {
   var hCov: RayCoverage;
   hCov.cov = 0.0;
   hCov.wgt = 0.0;
+  hCov.winding = 0.0;
   if (uniforms.hBandCount > 0u) {
     let hi = clamp(i32((in.sample_pos.y - uniforms.yBase) / uniforms.hStride),
                    0, i32(uniforms.hBandCount) - 1);
@@ -265,6 +271,7 @@ fn fs_main(in: VertexOutput) -> FragOutput {
   var vCov: RayCoverage;
   vCov.cov = 0.0;
   vCov.wgt = 0.0;
+  vCov.winding = 0.0;
   if (uniforms.vBandCount > 0u) {
     let vj = clamp(i32((in.sample_pos.x - uniforms.xBase) / uniforms.vStride),
                    0, i32(uniforms.vBandCount) - 1);
@@ -272,7 +279,14 @@ fn fs_main(in: VertexOutput) -> FragOutput {
   }
 
   var coverage = calc_coverage(hCov, vCov);
-  if (uniforms.fillRule == 0u) {
+  if (uniforms.antialias == 0u) {
+    let winding = u32(abs(hCov.winding));
+    if (uniforms.fillRule == 0u) {
+      coverage = select(0.0, 1.0, winding != 0u);
+    } else {
+      coverage = f32(winding & 1u);
+    }
+  } else if (uniforms.fillRule == 0u) {
     coverage = saturate(coverage);
   } else {
     coverage = 1.0 - abs(1.0 - fract(coverage * 0.5) * 2.0);

@@ -89,11 +89,14 @@ int CountGreenPixels(const svg::RendererBitmap& bitmap) {
 double MeanLumaAt(const svg::RendererBitmap& bitmap, int centerX, int centerY, int radius) {
   double total = 0.0;
   int count = 0;
-  for (int y = centerY - radius; y <= centerY + radius; ++y) {
+  // Use a half-open 2r-by-2r footprint. Inclusive bounds produce a 2r+1
+  // footprint, so the 1x and 2x samples cover different source areas (5x5
+  // versus 9x9 for radii 2 and 4) and report a false luma shift on gradients.
+  for (int y = centerY - radius; y < centerY + radius; ++y) {
     if (y < 0 || y >= bitmap.dimensions.y) {
       continue;
     }
-    for (int x = centerX - radius; x <= centerX + radius; ++x) {
+    for (int x = centerX - radius; x < centerX + radius; ++x) {
       if (x < 0 || x >= bitmap.dimensions.x) {
         continue;
       }
@@ -522,6 +525,29 @@ TEST(EditorWindowTest, ComputeUiScaleConfigClampsToOne) {
 }
 
 #if defined(DONNER_EDITOR_WGPU)
+#if defined(__linux__)
+TEST(EditorWindowTest, WgpuOffscreenTargetSupportsHeadlessReadback) {
+  EditorWindow window(EditorWindowOptions{
+      .title = "Headless WGPU Readback Test",
+      .initialWidth = 64,
+      .initialHeight = 48,
+      .visible = false,
+      .offscreen = true,
+      .clearColor = {0.0f, 0.0f, 1.0f, 1.0f},
+      .enableFramebufferReadback = true,
+  });
+  ASSERT_TRUE(window.valid());
+  ASSERT_NE(window.geodeFramebufferDevice(), nullptr);
+
+  window.beginFrame();
+  const svg::RendererBitmap actual = window.endFrameAndReadPixels();
+  ASSERT_FALSE(actual.empty());
+  EXPECT_EQ(actual.dimensions, Vector2i(64, 48));
+  EXPECT_THAT(PixelAt(actual, 8, 8),
+              Rgba(testing::Le(3), testing::Le(3), Near(255, 3), testing::Eq(255)));
+}
+#endif
+
 TEST(EditorWindowTest, NumericDragFieldsSupportSimpleClickToEdit) {
   EditorWindow window(EditorWindowOptions{
       .title = "Numeric Click To Edit Test",
@@ -894,6 +920,7 @@ TEST(EditorWindowTest, WgpuPresentsFilledSplashPenLayerAfterStyleMutation) {
   penTool.onMouseDown(app, Vector2d(247.0, 191.5), MouseModifiers{});
   ASSERT_TRUE(app.flushFrame());
   penTool.onMouseDown(app, Vector2d(313.0, 121.5), MouseModifiers{.pixelsPerDocUnit = 1.0});
+  penTool.onMouseUp(app, Vector2d(313.0, 121.5));
   ASSERT_TRUE(app.flushFrame());
   ASSERT_FALSE(penTool.isDrafting());
   ASSERT_EQ(app.selectedElements().size(), 1u);
@@ -1123,6 +1150,7 @@ TEST(EditorWindowTest, WgpuPenFillLiveSourceSyncPublishesFilledLayerTile) {
   penTool.onMouseDown(app, Vector2d(40.0, 70.0), MouseModifiers{});
   frame();
   penTool.onMouseDown(app, Vector2d(10.0, 10.0), MouseModifiers{.pixelsPerDocUnit = 1.0});
+  penTool.onMouseUp(app, Vector2d(10.0, 10.0));
   settle();
   ASSERT_FALSE(penTool.isDrafting());
   ASSERT_EQ(app.selectedElements().size(), 1u);

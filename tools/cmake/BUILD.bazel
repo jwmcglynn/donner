@@ -15,6 +15,7 @@ py_library(
 
 py_test(
     name = "gen_cmakelists_test",
+    size = "small",
     srcs = ["gen_cmakelists_test.py"],
     data = [
         "external_deps.json",

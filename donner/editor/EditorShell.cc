@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -38,6 +39,7 @@
 #include "donner/editor/EditorShellInternal.h"
 #include "donner/editor/EditorShellPresentation.h"
 #include "donner/editor/EditorTheme.h"
+#include "donner/editor/EmbeddedSvgIcon.h"
 #include "donner/editor/FillStrokeWidget.h"
 #include "donner/editor/FocusView.h"
 #include "donner/editor/FrameMissTelemetry.h"
@@ -641,16 +643,14 @@ std::size_t FirstSourceContentOffset(std::string_view source, std::size_t lineSt
   return offset;
 }
 
-Box2d ResolveDocumentViewBox(svg::SVGDocument& document) {
+Box2d ResolveDocumentViewBoxWithAccess(svg::SVGDocument& document) {
   std::optional<Box2d> viewBox;
   std::optional<Lengthd> rootWidth;
   std::optional<Lengthd> rootHeight;
-  document.withReadAccess([&](svg::DocumentReadAccess&) {
-    const svg::SVGSVGElement svgElement = document.svgElement();
-    viewBox = svgElement.viewBox();
-    rootWidth = svgElement.width();
-    rootHeight = svgElement.height();
-  });
+  const svg::SVGSVGElement svgElement = document.svgElement();
+  viewBox = svgElement.viewBox();
+  rootWidth = svgElement.width();
+  rootHeight = svgElement.height();
   if (viewBox.has_value()) {
     return *viewBox;
   }
@@ -685,6 +685,20 @@ Box2d ResolveDocumentViewBox(svg::SVGDocument& document) {
   return Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0);
 }
 
+Box2d ResolveDocumentViewBox(svg::SVGDocument& document) {
+  svg::DocumentReadAccess access = document.readAccess();
+  return ResolveDocumentViewBoxWithAccess(document);
+}
+
+std::optional<Box2d> TryResolveDocumentViewBox(svg::SVGDocument& document) {
+  std::optional<svg::DocumentReadAccess> access = document.tryReadAccess();
+  if (!access.has_value()) {
+    return std::nullopt;
+  }
+
+  return ResolveDocumentViewBoxWithAccess(document);
+}
+
 }  // namespace internal
 
 using namespace internal;
@@ -716,8 +730,8 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       thumbnailTextures_(window.geodeDevice()),
       sampleThumbnailTextures_(window.geodeDevice()),
       toolbarIconTextures_(window.geodeDevice()),
-      layerThumbnailRenderer_(window.geodeDevice()),
-      sampleThumbnailRenderer_(window.geodeDevice()),
+      layerThumbnailRenderer_(),
+      sampleThumbnailRenderer_(),
       renderCoordinator_(window.geodeDevice()),
       rotateCursorSet_(),
       documentSyncController_(InitialDocumentSyncSource(options_)),
@@ -764,27 +778,43 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
   });
 
   ImGuiIO& io = ImGui::GetIO();
-  ImFontConfig fontCfg;
-  fontCfg.FontDataOwnedByAtlas = false;
-  const double displayScale = window_.displayScale();
-  std::ignore = io.Fonts->AddFontFromMemoryTTF(
-      const_cast<unsigned char*>(embedded::kRobotoRegularTtf.data()),
-      static_cast<int>(embedded::kRobotoRegularTtf.size()), static_cast<float>(15.0 * displayScale),
-      &fontCfg, kEditorGlyphRanges);
-  uiFontBold_ = io.Fonts->AddFontFromMemoryTTF(
-      const_cast<unsigned char*>(embedded::kRobotoBoldTtf.data()),
-      static_cast<int>(embedded::kRobotoBoldTtf.size()), static_cast<float>(15.0 * displayScale),
-      &fontCfg, kEditorGlyphRanges);
-  codeFont_ = io.Fonts->AddFontFromMemoryTTF(
-      const_cast<unsigned char*>(embedded::kFiraCodeRegularTtf.data()),
-      static_cast<int>(embedded::kFiraCodeRegularTtf.size()),
-      static_cast<float>(14.0 * displayScale), &fontCfg, kEditorGlyphRanges);
-  ImFontConfig codeSymbolFontCfg = fontCfg;
-  codeSymbolFontCfg.MergeMode = true;
-  std::ignore = io.Fonts->AddFontFromMemoryTTF(
-      const_cast<unsigned char*>(embedded::kRobotoRegularTtf.data()),
-      static_cast<int>(embedded::kRobotoRegularTtf.size()), static_cast<float>(14.0 * displayScale),
-      &codeSymbolFontCfg, kEditorSymbolGlyphRanges);
+  const gui::EditorWindowFonts& existingFonts = window_.editorFonts();
+  if (existingFonts.complete()) {
+    // Multiple EditorShell instances can share one EditorWindow in tests and
+    // document-replacement workflows. Re-adding fonts after the WGPU backend
+    // has uploaded the atlas clears its texture id, leaving the next draw with
+    // a null texture view. Reuse the window-owned context-local pointers
+    // without changing the fonts' ImGui debug names.
+    uiFontBold_ = existingFonts.uiBold;
+    codeFont_ = existingFonts.code;
+  } else {
+    ImFontConfig fontCfg;
+    fontCfg.FontDataOwnedByAtlas = false;
+    const double displayScale = window_.displayScale();
+    ImFont* uiFontRegular = io.Fonts->AddFontFromMemoryTTF(
+        const_cast<unsigned char*>(embedded::kRobotoRegularTtf.data()),
+        static_cast<int>(embedded::kRobotoRegularTtf.size()),
+        static_cast<float>(15.0 * displayScale), &fontCfg, kEditorGlyphRanges);
+    uiFontBold_ = io.Fonts->AddFontFromMemoryTTF(
+        const_cast<unsigned char*>(embedded::kRobotoBoldTtf.data()),
+        static_cast<int>(embedded::kRobotoBoldTtf.size()), static_cast<float>(15.0 * displayScale),
+        &fontCfg, kEditorGlyphRanges);
+    codeFont_ = io.Fonts->AddFontFromMemoryTTF(
+        const_cast<unsigned char*>(embedded::kFiraCodeRegularTtf.data()),
+        static_cast<int>(embedded::kFiraCodeRegularTtf.size()),
+        static_cast<float>(14.0 * displayScale), &fontCfg, kEditorGlyphRanges);
+    ImFontConfig codeSymbolFontCfg = fontCfg;
+    codeSymbolFontCfg.MergeMode = true;
+    std::ignore = io.Fonts->AddFontFromMemoryTTF(
+        const_cast<unsigned char*>(embedded::kRobotoRegularTtf.data()),
+        static_cast<int>(embedded::kRobotoRegularTtf.size()),
+        static_cast<float>(14.0 * displayScale), &codeSymbolFontCfg, kEditorSymbolGlyphRanges);
+    window_.setEditorFonts({
+        .uiRegular = uiFontRegular,
+        .uiBold = uiFontBold_,
+        .code = codeFont_,
+    });
+  }
 
   if (!app_.loadFromString(*initialSource)) {
     // Keep the shell alive so the user can still edit/fix the file from the source pane.
@@ -800,6 +830,11 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
   // against the raw file bytes would leave the dirty flag latched on.
   app_.setCleanSourceText(textEditor_.getText());
   renderCoordinator_.refreshSelectionBoundsCache(app_);
+  if (app_.hasDocument()) {
+    svg::SVGDocument& document = app_.document().document();
+    documentViewBoxCacheDocument_ = document.handle();
+    documentViewBoxCache_ = ResolveDocumentViewBox(document);
+  }
   textures_.initialize();
 #ifdef DONNER_EDITOR_WGPU
   if (window_.geodeFramebufferDevice() != nullptr) {
@@ -1339,6 +1374,10 @@ bool EditorShell::tryLoadSource(std::string_view source, std::optional<std::stri
     return false;
   }
 
+  svg::SVGDocument& document = app_.document().document();
+  documentViewBoxCacheDocument_ = document.handle();
+  documentViewBoxCache_ = ResolveDocumentViewBox(document);
+
   showSamplePicker_ = false;
   textEditor_.setText(std::string(source));
   textEditor_.resetTextChanged();
@@ -1677,6 +1716,38 @@ void EditorShell::updateWindowTitle() {
   ApplyNativeWindowChrome(window_.rawHandle(), chromeState);
 }
 
+void EditorShell::requestHistoryAction(HistoryAction action) {
+  pendingHistoryActions_.push_back(action);
+  applyPendingHistoryActions();
+  if (!pendingHistoryActions_.empty()) {
+    window_.wakeEventLoop();
+  }
+}
+
+void EditorShell::applyPendingHistoryActions() {
+  if (pendingHistoryActions_.empty() || renderCoordinator_.asyncRenderer().isBusy()) {
+    return;
+  }
+
+  bool applied = false;
+  while (!pendingHistoryActions_.empty()) {
+    const HistoryAction action = pendingHistoryActions_.front();
+    pendingHistoryActions_.pop_front();
+    if (action == HistoryAction::Undo) {
+      if (app_.canUndo()) {
+        app_.undo();
+        applied = true;
+      }
+    } else if (app_.canRedo()) {
+      app_.redo();
+      applied = true;
+    }
+  }
+  if (applied) {
+    requestRenderAtEndOfFrame_ = true;
+  }
+}
+
 void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
   if (menuActions.openAbout) {
     dialogPresenter_.requestAbout();
@@ -1707,11 +1778,11 @@ void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
   if (menuActions.quit) {
     glfwSetWindowShouldClose(window_.rawHandle(), GLFW_TRUE);
   }
-  if (menuActions.undo && app_.canUndo()) {
-    app_.undo();
+  if (menuActions.undo) {
+    requestHistoryAction(HistoryAction::Undo);
   }
-  if (menuActions.redo && app_.canRedo()) {
-    app_.redo();
+  if (menuActions.redo) {
+    requestHistoryAction(HistoryAction::Redo);
   }
   const bool sourcePaneFocusedForMenu =
       !adaptiveUiLayout_.compactTouch() && sourcePaneVisible_ && textEditor_.isFocused();
@@ -1854,11 +1925,9 @@ void EditorShell::handleGlobalShortcuts() {
 
   if (!sourcePaneFocused) {
     if (pressedZ && cmd && !shift) {
-      if (app_.canUndo()) {
-        app_.undo();
-      }
-    } else if (pressedZ && cmd && shift && app_.canRedo()) {
-      app_.redo();
+      requestHistoryAction(HistoryAction::Undo);
+    } else if (pressedZ && cmd && shift) {
+      requestHistoryAction(HistoryAction::Redo);
     }
   }
 
@@ -2730,11 +2799,10 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   renderPaneScrollMaxYForDiagnostics_ = ImGui::GetScrollMaxY();
   const ImVec2 contentRegion = ImGui::GetContentRegionAvail();
   const ImVec2 paneOriginImGui = ImGui::GetCursorScreenPos();
-  interactionController_.updatePaneLayout(
-      Vector2d(paneOriginImGui.x, paneOriginImGui.y), Vector2d(contentRegion.x, contentRegion.y),
-      app_.hasDocument() ? std::make_optional(ResolveDocumentViewBox(app_.document().document()))
-                         : std::nullopt,
-      /*preservePaneCenterDocumentPoint=*/true);
+  interactionController_.updatePaneLayout(Vector2d(paneOriginImGui.x, paneOriginImGui.y),
+                                          Vector2d(contentRegion.x, contentRegion.y),
+                                          documentViewBoxCache_,
+                                          /*preservePaneCenterDocumentPoint=*/true);
   interactionController_.updateDevicePixelRatio(window_.contentScale().x);
 
   if (pendingViewportReplayOverride_.has_value()) {
@@ -3930,13 +3998,11 @@ void EditorShell::renderCompactTopBar() {
   }
   ImGui::SameLine(0.0f, kButtonGap);
   if (button("##compact_undo", CompactIcon::Undo, "Undo", app_.canUndo(), false)) {
-    app_.undo();
-    requestRenderAtEndOfFrame_ = true;
+    requestHistoryAction(HistoryAction::Undo);
   }
   ImGui::SameLine(0.0f, kButtonGap);
   if (button("##compact_redo", CompactIcon::Redo, "Redo", app_.canRedo(), false)) {
-    app_.redo();
-    requestRenderAtEndOfFrame_ = true;
+    requestHistoryAction(HistoryAction::Redo);
   }
   ImGui::SameLine(0.0f, kButtonGap);
   if (button("##compact_layers", CompactIcon::Layers, "Layers", true,
@@ -4004,10 +4070,9 @@ void EditorShell::renderSidebars() {
     // Compact sheets use deterministic fill swatches. Avoiding per-row raster
     // rendering and texture uploads keeps the touch panel responsive and also
     // avoids backend-specific thumbnail presentation differences in Wasm.
-    layersPanel_.refreshSnapshot(
-        app_, compactSheet ? nullptr : &layerThumbnailRenderer_,
-        compactSheet ? LayersPanel::ThumbnailRefreshMode::SwatchesOnly
-                     : LayersPanel::ThumbnailRefreshMode::Render);
+    layersPanel_.refreshSnapshot(app_, compactSheet ? nullptr : &layerThumbnailRenderer_,
+                                 compactSheet ? LayersPanel::ThumbnailRefreshMode::SwatchesOnly
+                                              : LayersPanel::ThumbnailRefreshMode::Render);
   }
   EditorApp* liveAppForClicks = rendererBusy ? nullptr : &app_;
 
@@ -4600,7 +4665,8 @@ void EditorShell::updateSourceStructuralDrag() {
   }
 
   if (const std::optional<Coordinates> dropTarget = textEditor_.takeSourceGutterDropTarget()) {
-    // Re-evaluate from the release coordinate: the pointer can move and release between drag frames.
+    // Re-evaluate from the release coordinate: the pointer can move and release between drag
+    // frames.
     evaluateDragTarget(*dropTarget);
     if (sourceStructuralMovePlan_.has_value() &&
         CommitSourceStructuralMove(app_, *sourceStructuralMovePlan_, source) ==
@@ -5564,6 +5630,7 @@ void EditorShell::runFrame() {
 
   renderCoordinator_.pollRenderResult(app_, interactionController_.viewport(), textures_,
                                       &interactionController_.frameHistory());
+  applyPendingHistoryActions();
   markPhase(mainFrameCost.renderPollMs);
 
   if (!renderCoordinator_.asyncRenderer().isBusy()) {
@@ -5610,6 +5677,21 @@ void EditorShell::runFrame() {
   documentSyncController_.syncParseErrorMarkers(app_, textEditor_);
   documentSyncController_.applyPendingWritebacks(app_, selectTool_, textEditor_);
   markPhase(mainFrameCost.documentSyncMs);
+
+  if (!app_.hasDocument()) {
+    documentViewBoxCacheDocument_.reset();
+    documentViewBoxCache_.reset();
+  } else {
+    svg::SVGDocument& document = app_.document().document();
+    const svg::SVGDocumentHandle documentHandle = document.handle();
+    if (documentViewBoxCacheDocument_ != documentHandle) {
+      documentViewBoxCacheDocument_ = documentHandle;
+      documentViewBoxCache_.reset();
+    }
+    if (std::optional<Box2d> viewBox = TryResolveDocumentViewBox(document)) {
+      documentViewBoxCache_ = *viewBox;
+    }
+  }
 
   const Vector2i windowSize = window_.windowSize();
 #ifdef __EMSCRIPTEN__
@@ -5670,11 +5752,8 @@ void EditorShell::runFrame() {
       renderPaneSize = Vector2d(centralNode->Size.x, centralNode->Size.y);
     }
   }
-  interactionController_.updatePaneLayout(
-      renderPaneOrigin, renderPaneSize,
-      app_.hasDocument() ? std::make_optional(ResolveDocumentViewBox(app_.document().document()))
-                         : std::nullopt,
-      /*preservePaneCenterDocumentPoint=*/true);
+  interactionController_.updatePaneLayout(renderPaneOrigin, renderPaneSize, documentViewBoxCache_,
+                                          /*preservePaneCenterDocumentPoint=*/true);
   markPhase(mainFrameCost.layoutMs);
 
   handleGlobalShortcuts();

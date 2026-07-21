@@ -50,8 +50,8 @@ google_fonts_catalog_inc(
 
 cc_library(
     name = "google_fonts_catalog_inc",
-    textual_hdrs = ["embed_resources/GoogleFontsCatalog.inc"],
     includes = ["."],
+    textual_hdrs = ["embed_resources/GoogleFontsCatalog.inc"],
     visibility = ["//donner:__subpackages__"],
 )
 
@@ -63,6 +63,7 @@ google_fonts_manifest(
 
 py_test(
     name = "integrity_test",
+    size = "small",
     srcs = ["integrity_test.py"],
     args = ["$(location :manifest_json_gen)"],
     data = [":manifest_json_gen"],

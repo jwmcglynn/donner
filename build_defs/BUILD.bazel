@@ -11,9 +11,22 @@ exports_files(
 
 py_test(
     name = "check_banned_patterns_tests",
+    size = "small",
     srcs = [
         "check_banned_patterns.py",
         "check_banned_patterns_tests.py",
+    ],
+)
+
+py_test(
+    name = "geode_test_scheduling_tests",
+    size = "small",
+    srcs = [
+        "geode_test_scheduling_tests.py",
+    ],
+    data = [
+        ":rules.bzl",
+        "//:.bazelrc",
     ],
 )
 
@@ -45,6 +58,7 @@ bool_flag(
 
 banned_deps_test(
     name = "check_banned_deps_test",
+    size = "small",
     allowed = [
         "//third_party:zlib",
         "//third_party:freetype",

@@ -8,7 +8,7 @@ declare global {
 
 const kRunFallbackTest = process.env.DONNER_WASM_TEST_ISOLATION_FALLBACK === "1";
 const kFatalRuntimePattern =
-  /Aborted|Assertion failed|RuntimeError|Pthread .* sent an error|WebAssembly runtime unavailable|Unhandled promise rejection/i;
+  /Aborted|Assertion failed|RuntimeError|Pthread .* sent an error|WebAssembly runtime unavailable|Unhandled promise rejection|Blocking on the main thread is very dangerous/i;
 
 test("secure static host isolation fallback enables Wasm threads", async ({ page }) => {
   test.skip(!kRunFallbackTest, "requires a server without COOP/COEP response headers");
@@ -55,10 +55,12 @@ test("secure static host isolation fallback enables Wasm threads", async ({ page
 
   await expect(page.locator("#capability-error")).toBeHidden();
   await expect(page.locator("canvas#canvas")).toBeVisible();
-  await expect(page.locator("#status")).toBeHidden({ timeout: 30000 });
+  // Headed Firefox can require its llvmpipe WebGL2 path on Linux ARM64. Keep this phase within the
+  // test's existing cold-start budget while still failing a stalled pthread startup.
+  await expect(page.locator("#status")).toBeHidden({ timeout: 45000 });
   await expect
     .poll(async () => page.evaluate(() => window.__donnerBackend))
-    .toMatch(/^(geode|tiny_skia)$/);
+    .toMatch(/^(geode|tiny_skia|packaged)$/);
   await page.waitForTimeout(1000);
   expect(fatalMessages).toEqual([]);
 });

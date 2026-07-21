@@ -192,6 +192,7 @@ int main(int argc, char* argv[]) {
 
   // --- Geode: wrap host device via the embedding API (non-owning) ---
   donner::geode::GeodeEmbedConfig embedConfig;
+  embedConfig.instance = instance;
   embedConfig.device = device;
   embedConfig.queue = queue;
   embedConfig.adapter = adapter;

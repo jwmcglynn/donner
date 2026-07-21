@@ -638,6 +638,18 @@ class EditorShellTestAccess {
 public:
   static EditorApp& App(EditorShell& shell) { return shell.app_; }
   static const EditorApp& App(const EditorShell& shell) { return shell.app_; }
+  static std::size_t PendingHistoryActionCount(const EditorShell& shell) {
+    return shell.pendingHistoryActions_.size();
+  }
+
+  static void RequestUndo(EditorShell& shell) {
+    shell.requestHistoryAction(EditorShell::HistoryAction::Undo);
+  }
+
+  static void RequestRedo(EditorShell& shell) {
+    shell.requestHistoryAction(EditorShell::HistoryAction::Redo);
+  }
+
   static TextEditor& Source(EditorShell& shell) { return shell.textEditor_; }
   static const TextEditor& Source(const EditorShell& shell) { return shell.textEditor_; }
 
@@ -1905,21 +1917,15 @@ TEST(EditorShellTest, SampleLoadRequiresConfirmationForPendingSourceEdits) {
 
   EXPECT_TRUE(EditorShellTestAccess::PendingSampleLoadNeedsConfirmation(shell));
   EXPECT_EQ(EditorShellTestAccess::PendingSampleLoad(shell), "basic-shapes");
-  EXPECT_FALSE(EditorShellTestAccess::App(shell)
-                   .document()
-                   .document()
-                   .querySelector("polygon")
-                   .has_value());
+  EXPECT_FALSE(
+      EditorShellTestAccess::App(shell).document().document().querySelector("polygon").has_value());
 
   EditorShellTestAccess::ConfirmPendingSampleLoadDiscard(shell);
   EditorShellTestAccess::ProcessPendingSampleLoad(shell);
 
   EXPECT_TRUE(EditorShellTestAccess::PendingSampleLoad(shell).empty());
-  EXPECT_TRUE(EditorShellTestAccess::App(shell)
-                  .document()
-                  .document()
-                  .querySelector("polygon")
-                  .has_value());
+  EXPECT_TRUE(
+      EditorShellTestAccess::App(shell).document().document().querySelector("polygon").has_value());
 }
 
 TEST(EditorShellTest, NewerFileAndRevertRequestsCancelDeferredSampleReplacement) {
@@ -2694,11 +2700,15 @@ TEST(EditorShellTest, PrivateUiRenderHelpersCoverPaneToolbarAndPanelStates) {
                                                   /*paneOriginY=*/0.0f, /*paneHeight=*/220.0f,
                                                   /*sourcePaneWidth=*/260.0f);
   window.endFrame();
+  const ImTextureID fontTextureBeforeSecondShell = ImGui::GetIO().Fonts->TexID;
+  ASSERT_NE(fontTextureBeforeSecondShell, 0u);
 
   EditorShellTestAccess::SetSourcePaneVisible(shell, false);
   EditorShellTestAccess::SetSourceFocusMode(shell, true);
   EditorShell invalidShell(window, OptionsWithSource("<svg><rect></svg>"));
   ASSERT_TRUE(invalidShell.valid());
+  EXPECT_EQ(ImGui::GetIO().Fonts->TexID, fontTextureBeforeSecondShell)
+      << "A second shell sharing the ImGui context must reuse its font atlas.";
 
   if (!ImGui::GetIO().Fonts->IsBuilt()) {
     ImGui::GetIO().Fonts->Build();
@@ -3899,6 +3909,33 @@ void ClickAt(gui::EditorWindow& window, EditorShell& shell, const ImVec2& pos) {
   RunFrameWithMouse(window, shell, pos, /*mouseDown=*/false);
 }
 
+enum class HistoryAvailability {
+  None,
+  UndoOnly,
+  RedoOnly,
+  UndoAndRedo,
+};
+
+HistoryAvailability CurrentHistoryAvailability(const EditorApp& app) {
+  if (app.canUndo()) {
+    return app.canRedo() ? HistoryAvailability::UndoAndRedo : HistoryAvailability::UndoOnly;
+  }
+  return app.canRedo() ? HistoryAvailability::RedoOnly : HistoryAvailability::None;
+}
+
+bool RunFramesUntilHistoryState(gui::EditorWindow& window, EditorShell& shell,
+                                HistoryAvailability expectedAvailability) {
+  constexpr int kMaxFrames = 200;
+  for (int frame = 0; frame < kMaxFrames; ++frame) {
+    if (CurrentHistoryAvailability(EditorShellTestAccess::App(shell)) == expectedAvailability) {
+      return true;
+    }
+    RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), /*mouseDown=*/false);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  return false;
+}
+
 /// Center of the Nth compact top-bar button (Open, Undo, Redo, Layers,
 /// Inspector), derived from the same layout math as renderCompactTopBar.
 ImVec2 CompactTopBarButtonCenter(const gui::EditorWindow& window, const EditorShell& shell,
@@ -3973,18 +4010,60 @@ TEST(EditorShellTest, CompactUndoRedoButtonsDriveDocumentHistory) {
   ASSERT_TRUE(EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell));
   ASSERT_TRUE(EditorShellTestAccess::App(shell).canUndo());
 
+  shell.asyncRendererForReplay().setReplayRenderDelayForTesting(std::chrono::milliseconds(200));
   RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), /*mouseDown=*/false);
   ASSERT_TRUE(EditorShellTestAccess::AdaptiveUiLayout(shell).compactTouch());
+  ASSERT_TRUE(shell.asyncRendererForReplay().isBusy());
 
-  // Undo removes the pasted shape from the document history.
+  // Undo requested while the renderer owns the document is deferred until the worker releases
+  // its read access, then removes the pasted shape from the document history.
   ClickAt(window, shell, CompactTopBarButtonCenter(window, shell, 1));
+  ASSERT_TRUE(RunFramesUntilHistoryState(window, shell, HistoryAvailability::RedoOnly));
   EXPECT_FALSE(EditorShellTestAccess::App(shell).canUndo());
   EXPECT_TRUE(EditorShellTestAccess::App(shell).canRedo());
 
   // Redo restores it.
   ClickAt(window, shell, CompactTopBarButtonCenter(window, shell, 2));
+  ASSERT_TRUE(RunFramesUntilHistoryState(window, shell, HistoryAvailability::UndoOnly));
   EXPECT_TRUE(EditorShellTestAccess::App(shell).canUndo());
   EXPECT_FALSE(EditorShellTestAccess::App(shell).canRedo());
+}
+
+TEST(EditorShellTest, DeferredHistoryPreservesRepeatedCommands) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::UseInMemoryShapeClipboard(shell);
+
+  auto target = EditorShellTestAccess::App(shell).document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  EditorShellTestAccess::App(shell).setSelection(*target);
+  EditorShellTestAccess::CopySelectedShapesToClipboard(shell);
+  for (int i = 0; i < 2; ++i) {
+    EditorShellTestAccess::PasteShapesFromClipboard(shell, /*inFront=*/false);
+    ASSERT_TRUE(EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell));
+  }
+
+  shell.asyncRendererForReplay().setReplayRenderDelayForTesting(std::chrono::milliseconds(200));
+  RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), /*mouseDown=*/false);
+  ASSERT_TRUE(shell.asyncRendererForReplay().isBusy());
+
+  EditorShellTestAccess::RequestUndo(shell);
+  EditorShellTestAccess::RequestUndo(shell);
+  EXPECT_EQ(EditorShellTestAccess::PendingHistoryActionCount(shell), 2u);
+  ASSERT_TRUE(RunFramesUntilHistoryState(window, shell, HistoryAvailability::RedoOnly));
+  EXPECT_EQ(EditorShellTestAccess::PendingHistoryActionCount(shell), 0u);
+
+  ASSERT_TRUE(shell.asyncRendererForReplay().isBusy());
+  EditorShellTestAccess::RequestRedo(shell);
+  EditorShellTestAccess::RequestRedo(shell);
+  EXPECT_EQ(EditorShellTestAccess::PendingHistoryActionCount(shell), 2u);
+  ASSERT_TRUE(RunFramesUntilHistoryState(window, shell, HistoryAvailability::UndoOnly));
+  EXPECT_EQ(EditorShellTestAccess::PendingHistoryActionCount(shell), 0u);
 }
 
 TEST(EditorShellTest, CompactSheetHeaderCloseButtonHidesPanel) {

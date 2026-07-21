@@ -4,13 +4,16 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <atomic>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include "donner/base/FillRule.h"
 #include "donner/base/Path.h"
 #include "donner/base/Transform.h"
 #include "donner/css/Color.h"
+#include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
@@ -100,23 +103,24 @@ protected:
     // callback-info form; plumb the done flag through `userdata1` and spin
     // on `device.poll(true, nullptr)` which drains pending callbacks.
     struct MapState {
-      bool done = false;
-      bool ok = false;
-    } mapState;
+      std::atomic<bool> done = false;
+      std::atomic<bool> ok = false;
+    };
+    auto mapState = std::make_shared<MapState>();
     wgpu::BufferMapCallbackInfo mapCb{wgpu::Default};
     mapCb.callback = [](WGPUMapAsyncStatus status, WGPUStringView /*message*/, void* userdata1,
                         void* /*userdata2*/) {
-      auto* s = static_cast<MapState*>(userdata1);
-      s->ok = (status == WGPUMapAsyncStatus_Success);
-      s->done = true;
+      const std::shared_ptr<MapState> state = takeWgpuCallbackState<MapState>(userdata1);
+      state->ok.store(status == WGPUMapAsyncStatus_Success, std::memory_order_relaxed);
+      state->done.store(true, std::memory_order_release);
     };
-    mapCb.userdata1 = &mapState;
+    mapCb.userdata1 = retainWgpuCallbackState(mapState);
     mapCb.userdata2 = nullptr;
     readback_.mapAsync(wgpu::MapMode::Read, 0, kBytesPerRow * kSize, mapCb);
-    while (!mapState.done) {
+    while (!mapState->done.load(std::memory_order_acquire)) {
       device_->device().poll(true, nullptr);
     }
-    EXPECT_TRUE(mapState.ok) << "buffer map failed";
+    EXPECT_TRUE(mapState->ok.load(std::memory_order_relaxed)) << "buffer map failed";
 
     const uint8_t* mapped =
         static_cast<const uint8_t*>(readback_.getConstMappedRange(0, kBytesPerRow * kSize));

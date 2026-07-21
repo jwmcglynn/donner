@@ -42,6 +42,7 @@ donner_cc_test(
 
 donner_cc_test(
     name = "svg_tests",
+    size = "small",
     srcs = [
         "DonnerController_tests.cc",
         "ElementStyle_tests.cc",

@@ -81,6 +81,35 @@ TEST(SVGDocumentConcurrencyTests, AccessGuardsExposeRegistry) {
   EXPECT_EQ(&readAccess.registry(), &document.registry());
 }
 
+TEST(SVGDocumentConcurrencyTests, TryReadAccessDoesNotWaitForConcurrentWriter) {
+  SVGDocument document;
+  document.setThreadingMode(ThreadingMode::ConcurrentDom);
+
+  std::atomic<bool> writerHasAccess = false;
+  std::atomic<bool> releaseWriter = false;
+  std::thread writer([document, &writerHasAccess, &releaseWriter]() mutable {
+    DocumentWriteAccess writeAccess = document.writeAccess();
+    writerHasAccess.store(true, std::memory_order_release);
+    while (!releaseWriter.load(std::memory_order_acquire)) {
+      std::this_thread::yield();
+    }
+  });
+
+  while (!writerHasAccess.load(std::memory_order_acquire)) {
+    std::this_thread::yield();
+  }
+
+  std::optional<DocumentReadAccess> blockedRead = document.tryReadAccess();
+  EXPECT_FALSE(blockedRead.has_value());
+
+  releaseWriter.store(true, std::memory_order_release);
+  writer.join();
+
+  std::optional<DocumentReadAccess> availableRead = document.tryReadAccess();
+  ASSERT_TRUE(availableRead.has_value());
+  EXPECT_EQ(&availableRead->registry(), &document.unsafeRegistry());
+}
+
 TEST(SVGDocumentConcurrencyTests, AccessDiagnosticsTrackConcurrentDomLocks) {
   SVGDocument document;
   document.setThreadingMode(ThreadingMode::ConcurrentDom);

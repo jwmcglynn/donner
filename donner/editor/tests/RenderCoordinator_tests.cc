@@ -167,11 +167,11 @@ TEST(RenderCoordinatorPolicyTest, PendingSelectedLayerRasterizationBypassesViewp
 
   EXPECT_TRUE(ShouldDeferSelectedViewportRefresh(
       selectedEntity, /*hasActiveDrag=*/false, /*currentVersion=*/8, /*displayedDocVersion=*/8,
-      /*hasCachedSelectedTexture=*/true, /*rasterViewportSettled=*/false,
+      /*hasCachedPresentation=*/true, /*rasterViewportSettled=*/false,
       /*needsOverviewInfill=*/false, /*pendingSelectedLayerRasterization=*/false));
   EXPECT_FALSE(ShouldDeferSelectedViewportRefresh(
       selectedEntity, /*hasActiveDrag=*/false, /*currentVersion=*/8, /*displayedDocVersion=*/8,
-      /*hasCachedSelectedTexture=*/true, /*rasterViewportSettled=*/false,
+      /*hasCachedPresentation=*/true, /*rasterViewportSettled=*/false,
       /*needsOverviewInfill=*/false, /*pendingSelectedLayerRasterization=*/true))
       << "A style/fill edit marks the selected layer pixels stale; the coordinator must request "
          "the forced layer rasterization immediately instead of deferring forever on an unsettled "
@@ -183,27 +183,27 @@ TEST(RenderCoordinatorPolicyTest, SelectedViewportRefreshDeferRequiresEveryPredi
 
   EXPECT_FALSE(ShouldDeferSelectedViewportRefresh(
       entt::null, /*hasActiveDrag=*/false, /*currentVersion=*/8, /*displayedDocVersion=*/8,
-      /*hasCachedSelectedTexture=*/true, /*rasterViewportSettled=*/false,
+      /*hasCachedPresentation=*/true, /*rasterViewportSettled=*/false,
       /*needsOverviewInfill=*/false, /*pendingSelectedLayerRasterization=*/false));
   EXPECT_FALSE(ShouldDeferSelectedViewportRefresh(
       selectedEntity, /*hasActiveDrag=*/true, /*currentVersion=*/8, /*displayedDocVersion=*/8,
-      /*hasCachedSelectedTexture=*/true, /*rasterViewportSettled=*/false,
+      /*hasCachedPresentation=*/true, /*rasterViewportSettled=*/false,
       /*needsOverviewInfill=*/false, /*pendingSelectedLayerRasterization=*/false));
   EXPECT_FALSE(ShouldDeferSelectedViewportRefresh(
       selectedEntity, /*hasActiveDrag=*/false, /*currentVersion=*/9, /*displayedDocVersion=*/8,
-      /*hasCachedSelectedTexture=*/true, /*rasterViewportSettled=*/false,
+      /*hasCachedPresentation=*/true, /*rasterViewportSettled=*/false,
       /*needsOverviewInfill=*/false, /*pendingSelectedLayerRasterization=*/false));
   EXPECT_FALSE(ShouldDeferSelectedViewportRefresh(
       selectedEntity, /*hasActiveDrag=*/false, /*currentVersion=*/8, /*displayedDocVersion=*/8,
-      /*hasCachedSelectedTexture=*/false, /*rasterViewportSettled=*/false,
+      /*hasCachedPresentation=*/false, /*rasterViewportSettled=*/false,
       /*needsOverviewInfill=*/false, /*pendingSelectedLayerRasterization=*/false));
   EXPECT_FALSE(ShouldDeferSelectedViewportRefresh(
       selectedEntity, /*hasActiveDrag=*/false, /*currentVersion=*/8, /*displayedDocVersion=*/8,
-      /*hasCachedSelectedTexture=*/true, /*rasterViewportSettled=*/true,
+      /*hasCachedPresentation=*/true, /*rasterViewportSettled=*/true,
       /*needsOverviewInfill=*/false, /*pendingSelectedLayerRasterization=*/false));
   EXPECT_FALSE(ShouldDeferSelectedViewportRefresh(
       selectedEntity, /*hasActiveDrag=*/false, /*currentVersion=*/8, /*displayedDocVersion=*/8,
-      /*hasCachedSelectedTexture=*/true, /*rasterViewportSettled=*/false,
+      /*hasCachedPresentation=*/true, /*rasterViewportSettled=*/false,
       /*needsOverviewInfill=*/true, /*pendingSelectedLayerRasterization=*/false));
 }
 
