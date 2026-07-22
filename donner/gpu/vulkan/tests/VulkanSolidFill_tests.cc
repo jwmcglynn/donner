@@ -1,36 +1,54 @@
 /// @file
-/// The Metal solid-fill vertical slice (design 0053 phase 3): renders the shared baseline scene
-/// through donner::gpu::metal::MetalDevice with the MSL emitted from the solid-fill IR program,
-/// and compares pixels against the frozen baseline captured from the current production
-/// renderer.
+/// The Vulkan solid-fill vertical slice (design 0053 packet 7): renders the shared baseline
+/// scene through donner::gpu::vulkan::VulkanDevice with the SPIR-V emitted from the solid-fill
+/// IR program, renders the IDENTICAL scene through the production wgpu path in the same process
+/// (GeodeDevice::CreateHeadless + GeoEncoder, exactly like the baseline capture tool), and
+/// compares the two renders with the blessed pixelmatch comparator at strict identity.
+///
+/// Why a same-process A/B instead of a committed PNG: this is the frozen-baseline pattern
+/// executed per-device. Both halves run on the same physical (or software) Vulkan
+/// implementation, so the identity gate stays valid on the CI default (Mesa lavapipe software
+/// Vulkan) and on physical-GPU remote-execution workers alike, without one committed PNG having
+/// to match every rasterizer. The wgpu render is also written to TEST_UNDECLARED_OUTPUTS_DIR so
+/// any run can freeze a device-specific PNG artifact.
 ///
 /// The geometry, uniforms, and draw sequence mirror the production encoder's fillPath data flow
-/// exactly: GeodePathEncoder banding, the same clip-space MVP construction (pixel -> clip with
-/// the Y flip for a top-left origin), premultiplied colors, an identity per-instance transform
-/// at binding 7, and 1x1 dummy pattern/clip textures at bindings 3..6.
+/// exactly, matching MetalSolidFill_tests.cc: GeodePathEncoder banding, the same clip-space MVP
+/// construction (pixel -> clip with the Y flip for a top-left origin), premultiplied colors, an
+/// identity per-instance transform at binding 7, and 1x1 dummy pattern/clip textures at
+/// bindings 3..6.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <array>
+#include <atomic>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "donner/base/Transform.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/gpu/CommandEncoder.h"
-#include "donner/gpu/metal/MetalDevice.h"
-#include "donner/gpu/shader/MslEmitter.h"
+#include "donner/gpu/shader/SpirvEmitter.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/tests/BaselineScene.h"
+#include "donner/gpu/vulkan/VulkanDevice.h"
+#include "donner/svg/renderer/RendererImageIO.h"
+#include "donner/svg/renderer/geode/GeoEncoder.h"
+#include "donner/svg/renderer/geode/GeodeCallbackState.h"
+#include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePathEncoder.h"
+#include "donner/svg/renderer/geode/GeodePipeline.h"
+#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
-using testing::HasSubstr;
-
-namespace donner::gpu::metal::tests {
+namespace donner::gpu::vulkan::tests {
 namespace {
 
 using geode::EncodedPath;
@@ -71,7 +89,9 @@ static_assert(sizeof(Uniforms) == 288, "Uniforms must match the shader layout");
 
 /// Builds the same clip-space MVP the production encoder computes: scene -> pixel via
 /// \p pixelFromScene, then pixel -> clip with x_clip = 2x/W - 1 and y_clip = -2y/H + 1 (the Y
-/// flip for a top-left pixel origin). Column-major mat4.
+/// flip for a top-left pixel origin). Column-major mat4. The VulkanDevice backend restores this
+/// WebGPU clip-space convention via a negative-height viewport, so the identical values are
+/// correct here.
 void BuildMvp(const Transform2d& pixelFromScene, float* out16) {
   const double sx = 2.0 / static_cast<double>(kBaselineSize);
   const double sy = -2.0 / static_cast<double>(kBaselineSize);
@@ -99,6 +119,103 @@ void BuildIdentity(float* out16) {
   out16[0] = out16[5] = out16[10] = out16[15] = 1.0f;
 }
 
+/// Renders the shared baseline scene through the production wgpu path as a black box (the exact
+/// BaselineCaptureTool.cc flow: GeodeDevice::CreateHeadless + GeoEncoder + mapped readback) and
+/// returns the RGBA8 pixels, or empty on failure.
+std::optional<std::vector<uint8_t>> RenderWgpuBaseline() {
+  auto device = geode::GeodeDevice::CreateHeadless();
+  if (!device) {
+    return std::nullopt;
+  }
+
+  geode::GeodePipeline pipeline(device->device(), wgpu::TextureFormat::RGBA8Unorm);
+  geode::GeodeGradientPipeline gradientPipeline(device->device(), wgpu::TextureFormat::RGBA8Unorm);
+  geode::GeodeImagePipeline imagePipeline(device->device(), wgpu::TextureFormat::RGBA8Unorm);
+
+  wgpu::TextureDescriptor td = {};
+  td.label = geode::wgpuLabel("VulkanSliceBaselineTarget");
+  td.size = {kBaselineSize, kBaselineSize, 1};
+  td.format = wgpu::TextureFormat::RGBA8Unorm;
+  td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc;
+  td.mipLevelCount = 1;
+  td.sampleCount = 1;
+  td.dimension = wgpu::TextureDimension::_2D;
+  wgpu::Texture target = device->device().createTexture(td);
+
+  wgpu::BufferDescriptor bd = {};
+  bd.label = geode::wgpuLabel("VulkanSliceBaselineReadback");
+  bd.size = kBytesPerRow * kBaselineSize;
+  bd.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
+  wgpu::Buffer readback = device->device().createBuffer(bd);
+
+  {
+    geode::GeoEncoder encoder(*device, pipeline, gradientPipeline, imagePipeline, target);
+    encoder.clear(css::RGBA(0, 0, 0, 0));  // Transparent background.
+    encoder.setTransform(BaselinePixelFromScene());
+    for (const BaselinePathSpec& spec : BaselineScenePaths()) {
+      encoder.fillPath(spec.path, spec.color, spec.rule);
+    }
+    encoder.finish();
+  }
+
+  // Copy the render target into the mappable readback buffer.
+  {
+    wgpu::CommandEncoder enc = device->device().createCommandEncoder();
+    wgpu::TexelCopyTextureInfo src = {};
+    src.texture = target;
+    src.mipLevel = 0;
+    src.origin = {0, 0, 0};
+    wgpu::TexelCopyBufferInfo dst = {};
+    dst.buffer = readback;
+    dst.layout.bytesPerRow = kBytesPerRow;
+    dst.layout.rowsPerImage = kBaselineSize;
+    wgpu::Extent3D copySize = {kBaselineSize, kBaselineSize, 1};
+    enc.copyTextureToBuffer(src, dst, copySize);
+    wgpu::CommandBuffer cmd = enc.finish();
+    device->queue().submit(1, &cmd);
+  }
+
+  struct MapState {
+    std::atomic<bool> done = false;
+    std::atomic<bool> ok = false;
+  };
+  auto mapState = std::make_shared<MapState>();
+  wgpu::BufferMapCallbackInfo mapCb{wgpu::Default};
+  mapCb.callback = [](WGPUMapAsyncStatus status, WGPUStringView /*message*/, void* userdata1,
+                      void* /*userdata2*/) {
+    const std::shared_ptr<MapState> state = geode::takeWgpuCallbackState<MapState>(userdata1);
+    state->ok.store(status == WGPUMapAsyncStatus_Success, std::memory_order_relaxed);
+    state->done.store(true, std::memory_order_release);
+  };
+  mapCb.userdata1 = geode::retainWgpuCallbackState(mapState);
+  mapCb.userdata2 = nullptr;
+  readback.mapAsync(wgpu::MapMode::Read, 0, kBytesPerRow * kBaselineSize, mapCb);
+  while (!mapState->done.load(std::memory_order_acquire)) {
+    device->device().poll(true, nullptr);
+  }
+  if (!mapState->ok.load(std::memory_order_relaxed)) {
+    return std::nullopt;
+  }
+
+  const uint8_t* mapped =
+      static_cast<const uint8_t*>(readback.getConstMappedRange(0, kBytesPerRow * kBaselineSize));
+  std::vector<uint8_t> pixels(mapped, mapped + kBytesPerRow * kBaselineSize);
+  readback.unmap();
+  return pixels;
+}
+
+/// Writes \p pixels as a PNG artifact under TEST_UNDECLARED_OUTPUTS_DIR (best-effort) so any
+/// run can freeze a device-specific baseline PNG.
+void WriteUndeclaredOutputPng(const std::vector<uint8_t>& pixels, const char* fileName) {
+  const char* outputsDir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR");
+  if (outputsDir == nullptr) {
+    return;
+  }
+  const std::string path = std::string(outputsDir) + "/" + fileName;
+  svg::RendererImageIO::writeRgbaPixelsToPngFile(path.c_str(), pixels, kBaselineSize, kBaselineSize,
+                                                 kBaselineSize);
+}
+
 /// A storage buffer plus the byte size it was created with, so bind groups can bind the FULL
 /// range honestly. Vulkan enforces VkDescriptorBufferInfo.range, so binding a smaller range
 /// than the shader indexes would read out of bounds; Metal ignores the range, but both slices
@@ -122,12 +239,19 @@ struct PathDraw {
   uint32_t vertexCount = 0;  //!< Draw vertex count.
 };
 
-class MetalSolidFillTest : public testing::Test {
+class VulkanSolidFillTest : public testing::Test {
 protected:
   void SetUp() override {
-    device_ = MetalDevice::Create();
+    device_ = VulkanDevice::Create();
     if (!device_) {
-      GTEST_SKIP() << "No Metal device available";
+      // CI sets DONNER_REQUIRE_VULKAN=1 (see BUILD.bazel) so a missing driver is a red test
+      // instead of a silent skip; local runs without a Vulkan runtime still skip.
+      const char* requireVulkan = std::getenv("DONNER_REQUIRE_VULKAN");
+      if (requireVulkan != nullptr && std::string_view(requireVulkan) == "1") {
+        FAIL() << "DONNER_REQUIRE_VULKAN=1 is set but no Vulkan 1.1 device is available; the "
+                  "vertical-slice gate must not be skipped on this runner";
+      }
+      GTEST_SKIP() << "No Vulkan 1.1 device available";
     }
   }
 
@@ -159,10 +283,10 @@ protected:
     return SizedBuffer{std::move(buffer), byteCount};
   }
 
-  std::unique_ptr<MetalDevice> device_;
+  std::unique_ptr<VulkanDevice> device_;
 };
 
-TEST_F(MetalSolidFillTest, ReadBackBufferRejectsStaleHandleAfterSlotReuse) {
+TEST_F(VulkanSolidFillTest, ReadBackBufferRejectsStaleHandleAfterSlotReuse) {
   // The readback helper must validate the handle's generation: after destroy + recreate the
   // freed slot is reused, and a stale handle must fail closed instead of reading the wrong
   // buffer.
@@ -189,16 +313,22 @@ TEST_F(MetalSolidFillTest, ReadBackBufferRejectsStaleHandleAfterSlotReuse) {
   EXPECT_EQ(stale.error().type, GpuErrorType::InvalidHandle) << stale.error();
 }
 
-TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
-  // ----- Shader module and pipeline from the emitted MSL -----
+TEST_F(VulkanSolidFillTest, MatchesProductionWgpuRender) {
+  // ----- The production wgpu half: the frozen-baseline pattern executed per-device -----
+  std::optional<std::vector<uint8_t>> productionPixels = RenderWgpuBaseline();
+  ASSERT_TRUE(productionPixels.has_value())
+      << "The production wgpu path could not render the baseline scene on this device";
+  WriteUndeclaredOutputPng(*productionPixels, "wgpu_solid_fill_baseline.png");
+
+  // ----- Shader module and pipeline from the emitted SPIR-V -----
   shader::ShaderResult<shader::IrModule> irModule = shader::programs::BuildSolidFillModule();
   ASSERT_FALSE(irModule.hasError()) << irModule.error();
-  shader::ShaderResult<std::string> msl = shader::EmitMsl(irModule.result());
-  ASSERT_FALSE(msl.hasError()) << msl.error();
+  shader::ShaderResult<std::vector<uint32_t>> spirv = shader::EmitSpirv(irModule.result());
+  ASSERT_FALSE(spirv.hasError()) << spirv.error();
 
   ShaderModule shaderModule =
-      unwrap(device_->createShaderModule(ShaderModuleDescriptor{"solidFill", RcString(msl.result()),
-                                                                ShaderSourceKind::Msl}),
+      unwrap(device_->createShaderModule(ShaderModuleDescriptor{
+                 "solidFill", RcString(), ShaderSourceKind::Spirv, std::move(spirv).result()}),
              "createShaderModule");
 
   // The 12-entry bind group layout mirroring the production solid-fill pipeline's stage
@@ -402,27 +532,33 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
   Result<uint64_t> serial = device_->submit(std::move(commands).result());
   ASSERT_FALSE(serial.hasError()) << serial.error();
 
-  // The command buffer must complete without a Metal execution error.
-  ASSERT_TRUE(device_->waitForSerial(serial.result(), /*timeoutSeconds=*/30.0))
-      << "Command buffer did not complete cleanly: " << device_->lastErrorForTest();
+  // The submission must complete without a Vulkan execution error.
+  ASSERT_TRUE(device_->waitForSerial(serial.result(), /*timeoutSeconds=*/120.0))
+      << "Submission did not complete cleanly: " << device_->lastErrorForTest();
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 
-  // ----- Pixel comparison against the frozen baseline -----
+  // ----- Pixel comparison: Vulkan slice vs the in-process production wgpu render -----
   Result<std::vector<uint8_t>> pixels = device_->readBackBuffer(readback);
   ASSERT_FALSE(pixels.hasError()) << pixels.error();
 
-  svg::RendererBitmap bitmap;
-  bitmap.dimensions = Vector2i(static_cast<int>(kBaselineSize), static_cast<int>(kBaselineSize));
-  bitmap.pixels = std::move(pixels).result();
-  bitmap.rowBytes = kBytesPerRow;
-  bitmap.alphaType = svg::AlphaType::Premultiplied;
+  svg::RendererBitmap actual;
+  actual.dimensions = Vector2i(static_cast<int>(kBaselineSize), static_cast<int>(kBaselineSize));
+  actual.pixels = std::move(pixels).result();
+  actual.rowBytes = kBytesPerRow;
+  actual.alphaType = svg::AlphaType::Premultiplied;
 
-  // Strict identity: the Metal slice must reproduce the frozen baseline byte-for-byte (zero
-  // mismatched pixels, anti-aliased pixels included).
-  editor::tests::CompareBitmapToGolden(
-      bitmap, "donner/gpu/metal/tests/testdata/solid_fill_baseline.png", "metal_solid_fill",
-      editor::tests::PixelmatchIdentityParams());
+  svg::RendererBitmap expected;
+  expected.dimensions = Vector2i(static_cast<int>(kBaselineSize), static_cast<int>(kBaselineSize));
+  expected.pixels = std::move(*productionPixels);
+  expected.rowBytes = kBytesPerRow;
+  expected.alphaType = svg::AlphaType::Premultiplied;
+
+  // Strict identity: same scene, same device, same analytic-coverage shader semantics - zero
+  // mismatched pixels, anti-aliased pixels included. On mismatch the comparator writes
+  // actual/expected/diff PNGs to TEST_UNDECLARED_OUTPUTS_DIR.
+  editor::tests::CompareBitmapToBitmap(actual, expected, "vulkan_solid_fill",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 }  // namespace
-}  // namespace donner::gpu::metal::tests
+}  // namespace donner::gpu::vulkan::tests

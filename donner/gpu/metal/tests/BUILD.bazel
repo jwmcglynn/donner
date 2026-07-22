@@ -4,19 +4,10 @@ load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_
 # frozen-baseline scene, the geode-gated black-box capture tool that produced
 # the committed baseline PNG, and the Metal solid-fill pixel-comparison test.
 
-donner_cc_library(
-    name = "baseline_scene",
-    testonly = 1,
-    hdrs = ["BaselineScene.h"],
-    deps = [
-        "//donner/base",
-        "//donner/css",
-    ],
-)
-
 # Black-box baseline capture (design 0053 phase 3): renders the shared scene
 # through the current production renderer and writes the PNG committed under
-# testdata/. Geode-gated; see testdata/README.md for the capture command.
+# testdata/. Geode-gated (works on any platform with a WebGPU-capable device,
+# not just macOS); see testdata/README.md for the capture command.
 donner_cc_binary(
     name = "baseline_capture_tool",
     testonly = 1,
@@ -26,7 +17,7 @@ donner_cc_binary(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
-        ":baseline_scene",
+        "//donner/gpu:baseline_scene",
         "//donner/svg/renderer:renderer_image_io",
         "//donner/svg/renderer/geode:geo_encoder",
         "//donner/svg/renderer/geode:geode_device",
@@ -48,9 +39,9 @@ donner_cc_test(
     },
     target_compatible_with = ["@platforms//os:macos"],
     deps = [
-        ":baseline_scene",
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/gpu",
+        "//donner/gpu:baseline_scene",
         "//donner/gpu/metal:metal_device",
         "//donner/gpu/shader",
         "//donner/gpu/shader:programs",

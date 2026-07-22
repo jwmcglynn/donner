@@ -1,0 +1,62 @@
+load("//build_defs:rules.bzl", "donner_cc_test", "donner_multi_transitioned_test")
+
+# The Vulkan solid-fill vertical slice (design 0053 packet 7): renders the
+# shared baseline scene through donner::gpu + the emitted SPIR-V and compares
+# it at strict identity against an in-process render of the identical scene
+# through the production wgpu path (the frozen-baseline pattern executed
+# per-device, valid on software Vulkan and physical GPUs alike).
+#
+# Linux-only: this is the one platform where both halves execute (the Vulkan
+# loader on the RHI side, wgpu-native's Vulkan backend on the production
+# side). The wgpu half needs the geode configuration, so the test is wrapped
+# in the same donner_multi_transitioned_test mechanism as the geode-lane
+# renderer suites - reachable from plain `bazel test //...` without
+# --config=geode. On macOS the impl target is incompatible and the wrapper is
+# skipped.
+donner_cc_test(
+    name = "vulkan_solid_fill_tests_impl",
+    srcs = ["VulkanSolidFill_tests.cc"],
+    # A missing Vulkan driver must be a red test in CI, never a silent skip:
+    # the target is linux-only and the CI lanes install a software Vulkan
+    # implementation, so VulkanDevice::Create() must succeed there. The
+    # transition wrapper forwards this env (RunEnvironmentInfo).
+    env = {"DONNER_REQUIRE_VULKAN": "1"},
+    linkopts = ["-lvulkan"],
+    target_compatible_with = ["@platforms//os:linux"] + select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "//donner/base",
+        "//donner/base:gtest_timeout_main",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/gpu",
+        "//donner/gpu:baseline_scene",
+        "//donner/gpu/shader",
+        "//donner/gpu/shader:programs",
+        "//donner/gpu/vulkan:vulkan_device",
+        "//donner/svg/renderer:renderer_image_io",
+        "//donner/svg/renderer/geode:geo_encoder",
+        "//donner/svg/renderer/geode:geode_device",
+        "//donner/svg/renderer/geode:geode_path_encoder",
+        "//donner/svg/renderer/geode:geode_wgpu_util",
+        "//third_party/webgpu-cpp:webgpu_cpp",
+    ],
+)
+
+# Transition wrapper: flips renderer_backend=geode + enable_geode=true so this
+# target is reachable from `bazel test //...` without --config=geode.
+donner_multi_transitioned_test(
+    name = "vulkan_solid_fill_tests",
+    # Software Vulkan (lavapipe) rendering is slow in fastbuild; cap explicitly
+    # at 900 s so a driver hang gets killed in 15 min instead of rolling up to
+    # the default 3600 s.
+    size = "large",
+    timeout = "long",
+    testonly = 1,
+    dep = ":vulkan_solid_fill_tests_impl",
+    # Route the GPU test action to a remote-execution worker advertising a
+    # hardware GPU. Ignored for local / non-remote execution.
+    exec_properties = {"gpu": "arc"},
+    renderer_backend = "geode",
+)

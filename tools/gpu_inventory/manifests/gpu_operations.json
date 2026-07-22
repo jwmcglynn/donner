@@ -333,7 +333,7 @@
         "submit",
         "unmap"
       ],
-      "sha256": "4e83ae83ab39a06639dd801a8a444d58f3598fd589356f4d94f3a1d6e1852580",
+      "sha256": "c19341d6d0216c125a2e6964cf0de901b8788420156ab124c5998e70dc385397",
       "wgpuCFunctions": [
         "wgpuLabel"
       ],
@@ -406,6 +406,47 @@
         "VertexBufferLayout",
         "VertexFormat",
         "VertexStepMode"
+      ]
+    },
+    "donner/gpu/vulkan/tests/VulkanSolidFill_tests.cc": {
+      "operations": [
+        "copyTextureToBuffer",
+        "createBuffer",
+        "createCommandEncoder",
+        "createTexture",
+        "finish",
+        "getConstMappedRange",
+        "mapAsync",
+        "poll",
+        "submit",
+        "unmap"
+      ],
+      "sha256": "2d009d3cf73416973d470ca63c4f95b76e00607cb8eba6a29f11fb2a33a017c2",
+      "wgpuCFunctions": [
+        "wgpuLabel"
+      ],
+      "wgpuCTypes": [
+        "WGPUMapAsyncStatus",
+        "WGPUMapAsyncStatus_Success",
+        "WGPUStringView"
+      ],
+      "wgpuCppTokens": [
+        "Buffer",
+        "BufferDescriptor",
+        "BufferMapCallbackInfo",
+        "BufferUsage",
+        "CommandBuffer",
+        "CommandEncoder",
+        "Default",
+        "Extent3D",
+        "MapMode",
+        "TexelCopyBufferInfo",
+        "TexelCopyTextureInfo",
+        "Texture",
+        "TextureDescriptor",
+        "TextureDimension",
+        "TextureFormat",
+        "TextureUsage"
       ]
     },
     "donner/svg/renderer/RendererGeode.cc": {

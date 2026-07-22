@@ -18,6 +18,7 @@ donner_cc_library(
         "IrSerialization.cc",
         "IrType.cc",
         "MslEmitter.cc",
+        "SpirvEmitter.cc",
         "WgslEmitter.cc",
     ],
     hdrs = [
@@ -30,6 +31,7 @@ donner_cc_library(
         "MslEmitter.h",
         "ShaderError.h",
         "ShaderResult.h",
+        "SpirvEmitter.h",
         "WgslEmitter.h",
     ],
     visibility = donner_internal_visibility(),
@@ -61,10 +63,12 @@ donner_cc_test(
         "tests/MslEmitter_tests.cc",
         "tests/ShaderTestUtils.h",
         "tests/SolidFillProgram_tests.cc",
+        "tests/SpirvEmitter_tests.cc",
         "tests/WgslEmitter_tests.cc",
     ],
     data = [
         "tests/testdata/solid_fill.msl",
+        "tests/testdata/solid_fill.spv",
         "tests/testdata/solid_fill.wgsl",
     ],
     deps = [
@@ -87,6 +91,23 @@ donner_cc_test(
         "tests/ShaderTestUtils.h",
     ],
     target_compatible_with = ["@platforms//os:macos"],
+    deps = [
+        ":programs",
+        ":shader",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+# Out-of-process SPIR-V validation: the emitted solid-fill SPIR-V must pass
+# `spirv-val --target-env vulkan1.1` (an out-of-process verification tool per
+# design 0053, not a build dependency). Skips cleanly when spirv-val is not
+# installed.
+donner_cc_test(
+    name = "spirv_val_validation_tests",
+    srcs = [
+        "tests/ShaderTestUtils.h",
+        "tests/SpirvValValidation_tests.cc",
+    ],
     deps = [
         ":programs",
         ":shader",

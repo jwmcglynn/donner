@@ -208,8 +208,9 @@ enum class StoreOp : uint8_t {
 
 /// Shader source language of a \ref ShaderModuleDescriptor.
 enum class ShaderSourceKind : uint8_t {
-  Wgsl,  //!< WGSL text.
-  Msl,   //!< Metal Shading Language text.
+  Wgsl,   //!< WGSL text.
+  Msl,    //!< Metal Shading Language text.
+  Spirv,  //!< SPIR-V binary words (`spirvWords`; `sourceText` must be empty).
 };
 
 /// Ostream output operator. @param os Output stream. @param value Value to output.
@@ -371,11 +372,15 @@ struct PipelineLayoutDescriptor {
 };
 
 /// Descriptor for `Device::createShaderModule`. Source is trusted generated build output, never
-/// runtime input from documents.
+/// runtime input from documents. Exactly one source representation must be populated: text kinds
+/// (\ref ShaderSourceKind::Wgsl, \ref ShaderSourceKind::Msl) require nonempty `sourceText` and
+/// empty `spirvWords`; \ref ShaderSourceKind::Spirv requires nonempty `spirvWords` and empty
+/// `sourceText`. `Device::createShaderModule` fails closed on any other combination.
 struct ShaderModuleDescriptor {
   RcString label;                                        //!< Debug label.
-  RcString sourceText;                                   //!< Shader source text. Must be nonempty.
+  RcString sourceText;                                   //!< Shader source text (text kinds only).
   ShaderSourceKind sourceKind = ShaderSourceKind::Wgsl;  //!< Source language.
+  std::vector<uint32_t> spirvWords;  //!< SPIR-V words (\ref ShaderSourceKind::Spirv only).
 };
 
 /// One vertex attribute within a \ref VertexBufferLayout.

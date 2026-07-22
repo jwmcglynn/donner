@@ -36,6 +36,20 @@ donner_cc_library(
     ],
 )
 
+# The frozen-baseline scene shared by the design 0053 vertical slices: the
+# black-box capture tool and the Metal and Vulkan solid-fill slice tests all
+# consume identical inputs from this header.
+donner_cc_library(
+    name = "baseline_scene",
+    testonly = 1,
+    hdrs = ["tests/BaselineScene.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        "//donner/base",
+        "//donner/css",
+    ],
+)
+
 donner_cc_test(
     name = "gpu_tests",
     srcs = [

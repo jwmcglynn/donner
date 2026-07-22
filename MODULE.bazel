@@ -95,6 +95,11 @@ local_repository(
 )
 
 bazel_dep(name = "rules_license", version = "1.0.0")
+
+# Vulkan-Headers for the donner/gpu Vulkan backend (design 0053). Headers only:
+# the library compiles everywhere; the Vulkan loader is linked (and the backend
+# executes) only on Linux test/tool targets.
+bazel_dep(name = "vulkan_headers", version = "1.4.349")
 bazel_dep(name = "freetype", version = "2.13.3.bcr.1")
 bazel_dep(name = "libpng", version = "1.6.54")
 
