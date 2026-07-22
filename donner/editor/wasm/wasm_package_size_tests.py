@@ -61,6 +61,26 @@ def _wasm_function_body_sizes(path: Path) -> list[int]:
     raise ValueError(f"WebAssembly code section is missing: {path}")
 
 
+def _wasm_section_vector_count(path: Path, expected_section_id: int) -> int:
+    data = path.read_bytes()
+    if data[:8] != b"\x00asm\x01\x00\x00\x00":
+        raise ValueError(f"invalid WebAssembly header: {path}")
+
+    offset = 8
+    while offset < len(data):
+        section_id = data[offset]
+        section_size, payload_offset = _decode_u32_leb(data, offset + 1)
+        section_end = payload_offset + section_size
+        if section_end > len(data):
+            raise ValueError(f"truncated WebAssembly section {section_id}: {path}")
+        if section_id == expected_section_id:
+            count, _ = _decode_u32_leb(data, payload_offset)
+            return count
+        offset = section_end
+
+    return 0
+
+
 class PackageSizeAccountingTest(unittest.TestCase):
     def test_runtime_memory_reservation_is_not_counted_as_download_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -79,12 +99,20 @@ class PackageSizeAccountingTest(unittest.TestCase):
             wasm_path.write_bytes(b"\x00asm\x01\x00\x00\x00\x0a\x04\x01\x02\x00\x0b")
             self.assertEqual(_wasm_function_body_sizes(wasm_path), [2])
 
+    def test_section_vector_count_is_read_from_the_requested_section(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wasm_path = Path(directory) / "tiny.wasm"
+            wasm_path.write_bytes(b"\x00asm\x01\x00\x00\x00\x0b\x07\x02\x01\x01a\x01\x01b")
+            self.assertEqual(_wasm_section_vector_count(wasm_path, 11), 2)
+            self.assertEqual(_wasm_section_vector_count(wasm_path, 12), 0)
+
 
 class WasmPackageSizeTest(unittest.TestCase):
     package_dir: Path
     max_wasm_raw_bytes: int
     max_wasm_gzip_bytes: int
     max_wasm_function_body_bytes: int
+    max_wasm_data_segments: int
     max_js_raw_bytes: int
     max_js_gzip_bytes: int
     max_total_raw_bytes: int
@@ -165,6 +193,16 @@ class WasmPackageSizeTest(unittest.TestCase):
             "one editor.wasm function exceeds the browser tier-compiler complexity budget",
         )
 
+    def test_static_memory_initializer_fits_browser_tier_compiler_budget(self) -> None:
+        wasm_path = self.package_dir / "editor.wasm"
+        data_segment_count = _wasm_section_vector_count(wasm_path, 11)
+        print(f"editor-wasm-data-segments count={data_segment_count}")
+        self.assertLessEqual(
+            data_segment_count,
+            self.max_wasm_data_segments,
+            "editor.wasm has enough passive data segments to create a pathological memory initializer",
+        )
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -172,6 +210,7 @@ if __name__ == "__main__":
     parser.add_argument("--max-wasm-raw-bytes", type=int, required=True)
     parser.add_argument("--max-wasm-gzip-bytes", type=int, required=True)
     parser.add_argument("--max-wasm-function-body-bytes", type=int, required=True)
+    parser.add_argument("--max-wasm-data-segments", type=int, required=True)
     parser.add_argument("--max-js-raw-bytes", type=int, required=True)
     parser.add_argument("--max-js-gzip-bytes", type=int, required=True)
     parser.add_argument("--max-total-raw-bytes", type=int, required=True)
@@ -182,6 +221,7 @@ if __name__ == "__main__":
     WasmPackageSizeTest.max_wasm_raw_bytes = args.max_wasm_raw_bytes
     WasmPackageSizeTest.max_wasm_gzip_bytes = args.max_wasm_gzip_bytes
     WasmPackageSizeTest.max_wasm_function_body_bytes = args.max_wasm_function_body_bytes
+    WasmPackageSizeTest.max_wasm_data_segments = args.max_wasm_data_segments
     WasmPackageSizeTest.max_js_raw_bytes = args.max_js_raw_bytes
     WasmPackageSizeTest.max_js_gzip_bytes = args.max_js_gzip_bytes
     WasmPackageSizeTest.max_total_raw_bytes = args.max_total_raw_bytes
