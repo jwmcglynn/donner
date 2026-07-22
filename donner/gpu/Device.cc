@@ -966,8 +966,16 @@ Result<std::vector<Device::SubmissionUse>> Device::validateSubmissionResources(
             if (groupRecord.hasError()) {
               return std::move(groupRecord).error();
             }
-            // Re-validate every resource the group references so a destroyed entry resource
-            // fails closed even though the group object itself is alive.
+            // Re-validate everything the group references so a destroyed dependency fails
+            // closed even though the group object itself is alive: the layout the group was
+            // created against (backends read it at encode time) and every entry resource.
+            auto layoutRecord = check(
+                bindGroupLayouts_, groupRecord.result()->layoutIdentity,
+                ResourceKind::BindGroupLayout, BindGroupLayoutTag::kName,
+                std::format("bind group \"{}\"", groupRecord.result()->descriptor.label.str()));
+            if (layoutRecord.hasError()) {
+              return std::move(layoutRecord).error();
+            }
             for (const BindGroupEntry& entry : groupRecord.result()->descriptor.entries) {
               const std::string context =
                   std::format("bind group \"{}\" entry binding {}",
