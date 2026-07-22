@@ -67,7 +67,8 @@ protected:
 };
 
 /// Records the representative solid-fill stream: every resource creation, queue write, a full
-/// render pass, a readback copy, a destroy, and a submission.
+/// render pass, a readback copy, a destroy, and a submission, followed by the RAII teardown of
+/// every remaining handle in reverse declaration order as the locals go out of scope.
 void RecordRepresentativeStream(RecordingDevice& device) {
   const Texture target = GetResultOrFail(device.createTexture(
       TextureDescriptor{"target", Extent2d{4, 4}, TextureFormat::RGBA8Unorm,
@@ -87,7 +88,7 @@ void RecordRepresentativeStream(RecordingDevice& device) {
       BufferDescriptor{"uniforms", 16, BufferUsage::Uniform | BufferUsage::CopyDst}));
   const Buffer readbackBuffer = GetResultOrFail(device.createBuffer(
       BufferDescriptor{"readback", 1024, BufferUsage::CopyDst | BufferUsage::MapRead}));
-  const Buffer scratchBuffer =
+  Buffer scratchBuffer =
       GetResultOrFail(device.createBuffer(BufferDescriptor{"scratch", 8, BufferUsage::CopySrc}));
 
   const BindGroupLayout bindGroupLayout =
@@ -126,7 +127,7 @@ void RecordRepresentativeStream(RecordingDevice& device) {
   EXPECT_THAT(device.writeTexture(image, MakeBytes(3 * 256 + 16), TexelCopyBufferLayout{0, 256, 4},
                                   Extent2d{4, 4}),
               IsOk());
-  EXPECT_THAT(device.destroyBuffer(scratchBuffer), IsOk());
+  EXPECT_THAT(device.destroyBuffer(std::move(scratchBuffer)), IsOk());
 
   std::unique_ptr<CommandEncoder> encoder = GetResultOrFail(device.createCommandEncoder());
   RenderPassEncoder* pass = GetResultOrFail(encoder->beginRenderPass(RenderPassDescriptor{
@@ -239,6 +240,18 @@ submit serial=1 commandBuffer#0 commandCount=9
   draw vertexCount=6 instanceCount=1 firstVertex=0 firstInstance=0
   endRenderPass
   copyTextureToBuffer texture=texture#0 buffer=buffer#2 offsetBytes=0 bytesPerRow=256 rowsPerImage=4 copySize=4x4
+destroy renderPipeline#0
+destroy shaderModule#0
+destroy bindGroup#0
+destroy pipelineLayout#0
+destroy bindGroupLayout#0
+destroy buffer#2
+destroy buffer#1
+destroy buffer#0
+destroy sampler#0
+destroy texture#1
+destroy textureView#0
+destroy texture#0
 )";
   // clang-format on
 

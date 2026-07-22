@@ -155,16 +155,22 @@ TEST_F(MetalSolidFillTest, ReadBackBufferRejectsStaleHandleAfterSlotReuse) {
   Buffer original = unwrap(device_->createBuffer(BufferDescriptor{
                                "original", 16, BufferUsage::CopyDst | BufferUsage::MapRead}),
                            "createBuffer original");
-  const Status destroyStatus = device_->destroyBuffer(original);
+  const uint32_t originalSlot = original.slotIndex();
+  const uint32_t originalGeneration = original.generation();
+  const uint64_t deviceId = original.deviceId();
+  const Status destroyStatus = device_->destroyBuffer(std::move(original));
   ASSERT_FALSE(destroyStatus.hasError()) << destroyStatus.error();
 
   Buffer replacement = unwrap(device_->createBuffer(BufferDescriptor{
                                   "replacement", 16, BufferUsage::CopyDst | BufferUsage::MapRead}),
                               "createBuffer replacement");
-  ASSERT_EQ(replacement.slotIndex(), original.slotIndex());
-  ASSERT_NE(replacement.generation(), original.generation());
+  ASSERT_EQ(replacement.slotIndex(), originalSlot);
+  ASSERT_NE(replacement.generation(), originalGeneration);
 
-  Result<std::vector<uint8_t>> stale = device_->readBackBuffer(original);
+  // Forge a handle carrying the retired generation (destroy consumed the real handle), proving
+  // the readback helper checks generation, not just slot.
+  const Buffer staleHandle = Buffer::CreateForBackend(originalSlot, originalGeneration, deviceId);
+  Result<std::vector<uint8_t>> stale = device_->readBackBuffer(staleHandle);
   ASSERT_TRUE(stale.hasError()) << "stale readback unexpectedly succeeded";
   EXPECT_EQ(stale.error().type, GpuErrorType::InvalidHandle) << stale.error();
 }

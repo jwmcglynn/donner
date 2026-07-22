@@ -21,6 +21,14 @@ TEST(HandlesTests, DefaultConstructedIsNull) {
   EXPECT_THAT(buffer.deviceId(), Eq(0u));
 }
 
+TEST(HandlesTests, HandleWithoutDeviceAliveTokenIsInert) {
+  // CreateForBackend without a device-alive token mints an inert handle: destroying it must not
+  // dereference the (nonexistent) device. Simply exiting this scope is the assertion; ASAN
+  // catches a violation.
+  const Buffer buffer = Buffer::CreateForBackend(1, 1, 42);
+  EXPECT_TRUE(buffer.isValid());
+}
+
 TEST(HandlesTests, CreateForBackendIsValid) {
   const Buffer buffer = Buffer::CreateForBackend(3, 2, 77);
   EXPECT_TRUE(buffer.isValid());

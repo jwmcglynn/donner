@@ -3,10 +3,11 @@ load("//build_defs:visibility.bzl", "donner_internal_visibility")
 
 # donner::gpu - the Donner-owned GPU runtime (design doc 0053).
 #
-# Packet 2 of the design's change sequence: typed immutable descriptors, explicit Result/Status
-# errors, move-only generation-checked handles, fail-closed validation shared by every backend,
-# and the deterministic recording backend. Platform backends and the shader IR land in later
-# packets; production rendering stays on the existing Geode path until then.
+# Packets 2 and 3 of the design's change sequence: typed immutable descriptors, explicit
+# Result/Status errors, move-only RAII generation-checked handles, deferred destruction by
+# submission serial, submit-time re-validation of recorded commands, fail-closed validation
+# shared by every backend, and the deterministic recording backend. Production rendering stays
+# on the existing Geode path until the migration packets.
 
 donner_cc_library(
     name = "gpu",
@@ -45,6 +46,7 @@ donner_cc_test(
         "tests/HandleLifetime_tests.cc",
         "tests/Handles_tests.cc",
         "tests/RecordingDevice_tests.cc",
+        "tests/ResourceLifetime_tests.cc",
     ],
     deps = [
         ":gpu",

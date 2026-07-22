@@ -2,39 +2,43 @@
 /// @file
 /// Validated command value types recorded by \c donner::gpu::CommandEncoder.
 ///
-/// Commands store only validated Donner value objects and slot-based resource identifiers, never
+/// Commands store only validated Donner value objects and slot-based resource identities, never
 /// raw pointers or native handles (design 0053 "Command model"), so recorded streams serialize
-/// deterministically and contain no process state.
+/// deterministically and contain no process state. Each referenced resource is stored as a
+/// \ref ResourceIdentity (slot plus generation): `Device::submit` re-validates every identity, so
+/// a resource destroyed between recording and submission fails closed instead of reaching a
+/// backend.
 
 #include <cstdint>
 #include <variant>
 
 #include "donner/gpu/Descriptors.h"
+#include "donner/gpu/Handles.h"
 
 namespace donner::gpu {
 
 /// Recorded `beginRenderPass`. Attachment references inside the descriptor are validated before
-/// recording.
+/// recording and re-validated at submission.
 struct BeginRenderPassCommand {
   RenderPassDescriptor descriptor;  //!< Validated pass descriptor.
 };
 
 /// Recorded `setPipeline`.
 struct SetPipelineCommand {
-  uint32_t pipelineSlot = 0;  //!< Render pipeline slot index.
+  ResourceIdentity pipelineId;  //!< Render pipeline identity.
 };
 
 /// Recorded `setBindGroup`.
 struct SetBindGroupCommand {
-  uint32_t index = 0;          //!< Bind group index.
-  uint32_t bindGroupSlot = 0;  //!< Bind group slot index.
+  uint32_t index = 0;            //!< Bind group index.
+  ResourceIdentity bindGroupId;  //!< Bind group identity.
 };
 
 /// Recorded `setVertexBuffer`.
 struct SetVertexBufferCommand {
-  uint32_t slot = 0;         //!< Vertex buffer slot index in the pipeline layout.
-  uint32_t bufferSlot = 0;   //!< Buffer slot index.
-  uint64_t offsetBytes = 0;  //!< Byte offset of the first element.
+  uint32_t slot = 0;          //!< Vertex buffer slot index in the pipeline layout.
+  ResourceIdentity bufferId;  //!< Buffer identity.
+  uint64_t offsetBytes = 0;   //!< Byte offset of the first element.
 };
 
 /// Recorded `setScissorRect`.
@@ -68,8 +72,8 @@ struct EndRenderPassCommand {};
 
 /// Recorded `copyTextureToBuffer` (readback staging copy).
 struct CopyTextureToBufferCommand {
-  uint32_t textureSlot = 0;      //!< Source texture slot index.
-  uint32_t bufferSlot = 0;       //!< Destination buffer slot index.
+  ResourceIdentity textureId;    //!< Source texture identity.
+  ResourceIdentity bufferId;     //!< Destination buffer identity.
   TexelCopyBufferLayout layout;  //!< Destination row layout.
   Extent2d copySize;             //!< Copy extent in texels.
 };

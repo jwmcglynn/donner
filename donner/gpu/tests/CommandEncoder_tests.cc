@@ -282,7 +282,7 @@ TEST_F(CommandEncoderTests, CopyTextureToBufferRejectsMissingCopySrc) {
 }
 
 TEST_F(CommandEncoderTests, BeginRenderPassRejectsStaleView) {
-  ASSERT_THAT(device_.destroyTextureView(targetView_), IsOk());
+  ASSERT_THAT(device_.destroyTextureView(std::move(targetView_)), IsOk());
   EXPECT_THAT(encoder_->beginRenderPass(passDescriptor()), IsGpuError(GpuErrorType::InvalidHandle));
 }
 
@@ -299,7 +299,7 @@ TEST_F(CommandEncoderTests, BeginRenderPassRejectsNonRenderableView) {
 }
 
 TEST_F(CommandEncoderTests, SetBindGroupRejectsDestroyedBuffer) {
-  ASSERT_THAT(device_.destroyBuffer(uniformBuffer_), IsOk());
+  ASSERT_THAT(device_.destroyBuffer(std::move(uniformBuffer_)), IsOk());
 
   RenderPassEncoder* pass = beginPass();
   EXPECT_THAT(pass->setBindGroup(0, bindGroup_),
@@ -307,12 +307,13 @@ TEST_F(CommandEncoderTests, SetBindGroupRejectsDestroyedBuffer) {
 }
 
 TEST_F(CommandEncoderTests, SetBindGroupRejectsBufferSlotReuse) {
-  ASSERT_THAT(device_.destroyBuffer(uniformBuffer_), IsOk());
+  const uint32_t uniformSlot = uniformBuffer_.slotIndex();
+  ASSERT_THAT(device_.destroyBuffer(std::move(uniformBuffer_)), IsOk());
 
   // The replacement reuses the freed buffer slot; the group's stale reference must not alias it.
   const Buffer replacement = GetResultOrFail(device_.createBuffer(
       BufferDescriptor{"replacement", 16, BufferUsage::Uniform | BufferUsage::CopyDst}));
-  ASSERT_THAT(replacement.slotIndex(), Eq(uniformBuffer_.slotIndex()));
+  ASSERT_THAT(replacement.slotIndex(), Eq(uniformSlot));
 
   RenderPassEncoder* pass = beginPass();
   EXPECT_THAT(pass->setBindGroup(0, bindGroup_),
@@ -348,7 +349,7 @@ protected:
 };
 
 TEST_F(SetBindGroupTextureTests, RejectsDestroyedTextureView) {
-  ASSERT_THAT(device_.destroyTextureView(sampledView_), IsOk());
+  ASSERT_THAT(device_.destroyTextureView(std::move(sampledView_)), IsOk());
 
   RenderPassEncoder* pass = beginPass();
   EXPECT_THAT(pass->setBindGroup(1, textureGroup_),
@@ -356,7 +357,7 @@ TEST_F(SetBindGroupTextureTests, RejectsDestroyedTextureView) {
 }
 
 TEST_F(SetBindGroupTextureTests, RejectsDestroyedUnderlyingTexture) {
-  ASSERT_THAT(device_.destroyTexture(sampledTexture_), IsOk());
+  ASSERT_THAT(device_.destroyTexture(std::move(sampledTexture_)), IsOk());
 
   RenderPassEncoder* pass = beginPass();
   EXPECT_THAT(
@@ -365,7 +366,7 @@ TEST_F(SetBindGroupTextureTests, RejectsDestroyedUnderlyingTexture) {
 }
 
 TEST_F(SetBindGroupTextureTests, RejectsDestroyedSampler) {
-  ASSERT_THAT(device_.destroySampler(sampler_), IsOk());
+  ASSERT_THAT(device_.destroySampler(std::move(sampler_)), IsOk());
 
   RenderPassEncoder* pass = beginPass();
   EXPECT_THAT(pass->setBindGroup(1, textureGroup_),
