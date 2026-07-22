@@ -850,6 +850,101 @@ for (
   });
 }
 
+test("carousel never exposes the placeholder viewport for Donner Splash", async ({ page }) => {
+  const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
+  const canvas = page.locator("canvas#canvas");
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  if (bounds === null) {
+    return;
+  }
+
+  await page.evaluate(() => {
+    type VisibleSurfaceSample = {
+      frame: number;
+      height: number;
+      rectHeight: number;
+      rectWidth: number;
+      slot: string;
+      width: number;
+    };
+    const samples: VisibleSurfaceSample[] = [];
+    const capture = () => {
+      for (const id of ["donner-document-canvas", "donner-document-canvas-back"]) {
+        const surface = document.getElementById(id) as HTMLCanvasElement | null;
+        if (surface?.dataset.directSurfaceVisible !== "true") {
+          continue;
+        }
+        const rect = surface.getBoundingClientRect();
+        const sample = {
+          frame: Number(surface.dataset.directSurfaceFrame || 0),
+          height: surface.height,
+          rectHeight: rect.height,
+          rectWidth: rect.width,
+          slot: id,
+          width: surface.width,
+        };
+        const previous = samples.at(-1);
+        if (JSON.stringify(previous) !== JSON.stringify(sample)) {
+          samples.push(sample);
+        }
+      }
+      (window as Window & { __donnerVisibleSurfaceSamples?: VisibleSurfaceSample[] })
+        .__donnerVisibleSurfaceSamples = samples;
+    };
+    const observer = new MutationObserver(capture);
+    for (const id of ["donner-document-canvas", "donner-document-canvas-back"]) {
+      const surface = document.getElementById(id);
+      if (surface) {
+        observer.observe(surface, { attributes: true });
+      }
+    }
+    (window as Window & { __donnerVisibleSurfaceObserver?: MutationObserver })
+      .__donnerVisibleSurfaceObserver = observer;
+    capture();
+  });
+
+  const beforeFrame = await page.evaluate(() =>
+    Math.max(
+      ...["donner-document-canvas", "donner-document-canvas-back"].map((id) =>
+        Number(document.getElementById(id)?.getAttribute("data-direct-surface-frame") || 0)
+      ),
+    )
+  );
+  await page.mouse.click(bounds.x + bounds.width * 0.24, bounds.y + 282);
+  await expect(canvas).toHaveAttribute("data-active-sample-id", "donner-splash");
+  await expect
+    .poll(async () => Number(await page.locator("canvas[data-direct-surface-visible=\"true\"]")
+      .getAttribute("data-direct-surface-frame") || 0), {
+      message: "expected Donner Splash to present a document surface",
+      timeout: 5000,
+      intervals: [8, 16, 25, 50],
+    })
+    .toBeGreaterThan(beforeFrame);
+
+  const visibleSamples = await page.evaluate(() => {
+    const state = window as Window & {
+      __donnerVisibleSurfaceObserver?: MutationObserver;
+      __donnerVisibleSurfaceSamples?: Array<{
+        frame: number;
+        height: number;
+        rectHeight: number;
+        rectWidth: number;
+        slot: string;
+        width: number;
+      }>;
+    };
+    state.__donnerVisibleSurfaceObserver?.disconnect();
+    return state.__donnerVisibleSurfaceSamples || [];
+  });
+
+  expect(visibleSamples.length).toBeGreaterThan(0);
+  const firstVisible = visibleSamples[0];
+  expect(firstVisible.width / firstVisible.height).toBeCloseTo(892 / 512, 2);
+  expect(firstVisible.rectWidth / firstVisible.rectHeight).toBeCloseTo(892 / 512, 2);
+  expect(fatalMessages).toEqual([]);
+});
+
 test("Text and Style renders embedded glyphs without font requests", async ({ page }) => {
   const fontNetworkRequests: string[] = [];
   page.on("request", (request) => {
