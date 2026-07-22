@@ -19,6 +19,48 @@ def _package_raw_size(package_dir: Path) -> int:
     return sum(path.stat().st_size for path in package_dir.rglob("*") if path.is_file())
 
 
+def _decode_u32_leb(data: bytes, offset: int) -> tuple[int, int]:
+    value = 0
+    for shift in range(0, 35, 7):
+        if offset >= len(data):
+            raise ValueError("truncated unsigned LEB128 value")
+        byte = data[offset]
+        offset += 1
+        value |= (byte & 0x7F) << shift
+        if byte < 0x80:
+            return value, offset
+    raise ValueError("unsigned LEB128 value exceeds 32 bits")
+
+
+def _wasm_function_body_sizes(path: Path) -> list[int]:
+    data = path.read_bytes()
+    if data[:8] != b"\x00asm\x01\x00\x00\x00":
+        raise ValueError(f"invalid WebAssembly header: {path}")
+
+    offset = 8
+    while offset < len(data):
+        section_id = data[offset]
+        section_size, payload_offset = _decode_u32_leb(data, offset + 1)
+        section_end = payload_offset + section_size
+        if section_end > len(data):
+            raise ValueError(f"truncated WebAssembly section {section_id}: {path}")
+        if section_id == 10:
+            function_count, body_offset = _decode_u32_leb(data, payload_offset)
+            body_sizes = []
+            for _ in range(function_count):
+                body_size, body_offset = _decode_u32_leb(data, body_offset)
+                body_sizes.append(body_size)
+                body_offset += body_size
+                if body_offset > section_end:
+                    raise ValueError(f"truncated WebAssembly function body: {path}")
+            if body_offset != section_end:
+                raise ValueError(f"unexpected trailing WebAssembly code bytes: {path}")
+            return body_sizes
+        offset = section_end
+
+    raise ValueError(f"WebAssembly code section is missing: {path}")
+
+
 class PackageSizeAccountingTest(unittest.TestCase):
     def test_runtime_memory_reservation_is_not_counted_as_download_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -31,11 +73,18 @@ class PackageSizeAccountingTest(unittest.TestCase):
             self.assertEqual(_package_raw_size(package_dir), len(javascript) + len(wasm))
             self.assertLess(_package_raw_size(package_dir), 64 * 1024 * 1024)
 
+    def test_function_body_sizes_are_read_from_the_code_section(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wasm_path = Path(directory) / "tiny.wasm"
+            wasm_path.write_bytes(b"\x00asm\x01\x00\x00\x00\x0a\x04\x01\x02\x00\x0b")
+            self.assertEqual(_wasm_function_body_sizes(wasm_path), [2])
+
 
 class WasmPackageSizeTest(unittest.TestCase):
     package_dir: Path
     max_wasm_raw_bytes: int
     max_wasm_gzip_bytes: int
+    max_wasm_function_body_bytes: int
     max_js_raw_bytes: int
     max_js_gzip_bytes: int
     max_total_raw_bytes: int
@@ -102,12 +151,27 @@ class WasmPackageSizeTest(unittest.TestCase):
             "editor.js compressed transfer size exceeded its production budget",
         )
 
+    def test_wasm_functions_fit_browser_tier_compiler_budget(self) -> None:
+        wasm_path = self.package_dir / "editor.wasm"
+        function_body_sizes = _wasm_function_body_sizes(wasm_path)
+        largest_body_bytes = max(function_body_sizes, default=0)
+        print(
+            "editor-wasm-function-size "
+            f"largest_body={largest_body_bytes} function_count={len(function_body_sizes)}"
+        )
+        self.assertLessEqual(
+            largest_body_bytes,
+            self.max_wasm_function_body_bytes,
+            "one editor.wasm function exceeds the browser tier-compiler complexity budget",
+        )
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--package-dir", type=Path, required=True)
     parser.add_argument("--max-wasm-raw-bytes", type=int, required=True)
     parser.add_argument("--max-wasm-gzip-bytes", type=int, required=True)
+    parser.add_argument("--max-wasm-function-body-bytes", type=int, required=True)
     parser.add_argument("--max-js-raw-bytes", type=int, required=True)
     parser.add_argument("--max-js-gzip-bytes", type=int, required=True)
     parser.add_argument("--max-total-raw-bytes", type=int, required=True)
@@ -117,6 +181,7 @@ if __name__ == "__main__":
     WasmPackageSizeTest.package_dir = args.package_dir
     WasmPackageSizeTest.max_wasm_raw_bytes = args.max_wasm_raw_bytes
     WasmPackageSizeTest.max_wasm_gzip_bytes = args.max_wasm_gzip_bytes
+    WasmPackageSizeTest.max_wasm_function_body_bytes = args.max_wasm_function_body_bytes
     WasmPackageSizeTest.max_js_raw_bytes = args.max_js_raw_bytes
     WasmPackageSizeTest.max_js_gzip_bytes = args.max_js_gzip_bytes
     WasmPackageSizeTest.max_total_raw_bytes = args.max_total_raw_bytes
