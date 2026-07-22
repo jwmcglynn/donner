@@ -176,6 +176,7 @@ std::ostream& operator<<(std::ostream& os, ShaderSourceKind value) {
   switch (value) {
     case ShaderSourceKind::Wgsl: return os << "Wgsl";
     case ShaderSourceKind::Msl: return os << "Msl";
+    case ShaderSourceKind::Spirv: return os << "Spirv";
   }
   return os << "Unknown";
 }
@@ -285,7 +286,8 @@ bool IsKnownEnumValue(StoreOp value) {
 bool IsKnownEnumValue(ShaderSourceKind value) {
   switch (value) {
     case ShaderSourceKind::Wgsl:
-    case ShaderSourceKind::Msl: return true;
+    case ShaderSourceKind::Msl:
+    case ShaderSourceKind::Spirv: return true;
   }
   return false;
 }

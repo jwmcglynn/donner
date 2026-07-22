@@ -242,6 +242,32 @@ TEST_F(DeviceValidationTests, CreateShaderModuleRejectsEmptySource) {
       IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor, HasSubstr("sourceText is empty")));
 }
 
+TEST_F(DeviceValidationTests, CreateShaderModuleAcceptsSpirvWords) {
+  EXPECT_THAT(device_.createShaderModule(ShaderModuleDescriptor{
+                  "spirv", "", ShaderSourceKind::Spirv, {0x07230203u, 0x00010300u}}),
+              HasResult());
+}
+
+TEST_F(DeviceValidationTests, CreateShaderModuleRejectsSpirvKindWithoutWords) {
+  EXPECT_THAT(
+      device_.createShaderModule(ShaderModuleDescriptor{"empty", "", ShaderSourceKind::Spirv}),
+      IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor, HasSubstr("spirvWords is empty")));
+}
+
+TEST_F(DeviceValidationTests, CreateShaderModuleRejectsSpirvKindWithSourceText) {
+  EXPECT_THAT(device_.createShaderModule(ShaderModuleDescriptor{
+                  "both", "@vertex fn vsMain() {}", ShaderSourceKind::Spirv, {0x07230203u}}),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor,
+                                    HasSubstr("sourceText must be empty for sourceKind Spirv")));
+}
+
+TEST_F(DeviceValidationTests, CreateShaderModuleRejectsTextKindWithSpirvWords) {
+  EXPECT_THAT(device_.createShaderModule(ShaderModuleDescriptor{
+                  "both", "@vertex fn vsMain() {}", ShaderSourceKind::Wgsl, {0x07230203u}}),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor,
+                                    HasSubstr("spirvWords must be empty for text source kinds")));
+}
+
 // == createBindGroup ==========================================================================
 
 class BindGroupValidationTests : public DeviceValidationTests {

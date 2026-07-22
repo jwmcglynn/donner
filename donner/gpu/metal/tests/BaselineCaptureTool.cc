@@ -12,7 +12,7 @@
 #include <memory>
 #include <vector>
 
-#include "donner/gpu/metal/tests/BaselineScene.h"
+#include "donner/gpu/tests/BaselineScene.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/geode/GeoEncoder.h"
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
@@ -23,6 +23,11 @@
 
 namespace donner::gpu::metal::tests {
 namespace {
+
+using gpu::tests::BaselinePathSpec;
+using gpu::tests::BaselinePixelFromScene;
+using gpu::tests::BaselineScenePaths;
+using gpu::tests::kBaselineSize;
 
 constexpr uint32_t kBytesPerRow = kBaselineSize * 4;  // 1024; already 256-byte aligned.
 

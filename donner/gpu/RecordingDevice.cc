@@ -262,13 +262,22 @@ Status RecordingDevice::onCreatePipelineLayout(uint32_t slotIndex,
 
 Status RecordingDevice::onCreateShaderModule(uint32_t slotIndex,
                                              const ShaderModuleDescriptor& descriptor) {
-  const std::string_view source(descriptor.sourceText);
   std::ostringstream os = MakeLineStream();
   os << "createShaderModule " << RefId(ShaderModuleTag::kName, slotIndex)
-     << " label=" << QuoteLabel(descriptor.label) << " sourceKind=" << descriptor.sourceKind
-     << " sourceBytes=" << source.size() << " sourceHash="
-     << HashBytes(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(source.data()),
-                                           source.size()));
+     << " label=" << QuoteLabel(descriptor.label) << " sourceKind=" << descriptor.sourceKind;
+  if (descriptor.sourceKind == ShaderSourceKind::Spirv) {
+    // Binary kinds record word count + content hash, mirroring the sourceBytes/sourceHash format
+    // below. Words are hashed as their in-memory bytes; all supported targets are little-endian.
+    os << " spirvWords=" << descriptor.spirvWords.size() << " spirvHash="
+       << HashBytes(std::span<const uint8_t>(
+              reinterpret_cast<const uint8_t*>(descriptor.spirvWords.data()),
+              descriptor.spirvWords.size() * sizeof(uint32_t)));
+  } else {
+    const std::string_view source(descriptor.sourceText);
+    os << " sourceBytes=" << source.size() << " sourceHash="
+       << HashBytes(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(source.data()),
+                                             source.size()));
+  }
   lines_.push_back(os.str());
   return OkStatus();
 }

@@ -1,12 +1,14 @@
 #pragma once
 /// @file
-/// The frozen-baseline scene shared by the baseline capture tool and the Metal vertical slice
-/// test (design 0053 phase 3).
+/// The frozen-baseline scene shared by the baseline capture tool and the per-backend vertical
+/// slice tests (design 0053).
 ///
-/// Both sides must consume IDENTICAL inputs: the capture tool renders this scene through the
+/// All consumers must render IDENTICAL inputs: the capture tool renders this scene through the
 /// current production renderer as a black box and commits the PNG; the Metal slice renders the
-/// same scene through donner::gpu + the MSL emitter and compares pixels against that PNG. Only
-/// Donner-owned, deterministic content appears here.
+/// same scene through donner::gpu + the MSL emitter and compares pixels against that PNG; the
+/// Vulkan slice renders it through donner::gpu + the SPIR-V emitter and compares against an
+/// in-process production render of the same scene. Only Donner-owned, deterministic content
+/// appears here.
 
 #include <cmath>
 #include <cstdint>
@@ -17,7 +19,7 @@
 #include "donner/base/Transform.h"
 #include "donner/css/Color.h"
 
-namespace donner::gpu::metal::tests {
+namespace donner::gpu::tests {
 
 /// Baseline render target size in pixels (square RGBA8, transparent background).
 inline constexpr uint32_t kBaselineSize = 256;
@@ -101,4 +103,4 @@ inline std::vector<BaselinePathSpec> BaselineScenePaths() {
   return paths;
 }
 
-}  // namespace donner::gpu::metal::tests
+}  // namespace donner::gpu::tests
