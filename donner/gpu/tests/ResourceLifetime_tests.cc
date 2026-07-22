@@ -299,6 +299,37 @@ TEST_F(SubmitStalenessTests, DestroyedBindGroupRejectsSubmit) {
               IsGpuErrorWithMessage(GpuErrorType::InvalidHandle, HasSubstr("destroyed bindGroup")));
 }
 
+TEST_F(SubmitStalenessTests, DestroyedBindGroupLayoutRejectsSubmit) {
+  CommandBuffer commands = recordScene();
+  // The bind group stays alive; only the layout it was created against dies. The layout is a
+  // transitive dependency of the group (backends read it at encode time), so submission must
+  // fail closed.
+  ASSERT_THAT(device_.destroyBindGroupLayout(std::move(bindGroupLayout_)), IsOk());
+  EXPECT_THAT(device_.submit(std::move(commands)),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidHandle,
+                                    AllOf(HasSubstr("bind group \"solidUniforms\""),
+                                          HasSubstr("destroyed bindGroupLayout"))));
+}
+
+TEST_F(SubmitStalenessTests, RecycledBindGroupLayoutSlotRejectsSubmit) {
+  CommandBuffer commands = recordScene();
+  const uint32_t layoutSlot = bindGroupLayout_.slotIndex();
+  ASSERT_THAT(device_.destroyBindGroupLayout(std::move(bindGroupLayout_)), IsOk());
+
+  // A different layout reuses the freed slot; the group's recorded layout identity must not
+  // alias it (the replacement's entries would misbind stages at encode time).
+  const BindGroupLayout replacement =
+      GetResultOrFail(device_.createBindGroupLayout(BindGroupLayoutDescriptor{
+          "replacementLayout",
+          {BindGroupLayoutEntry{5, ShaderStage::Fragment, BindingType::FilteringSampler}}}));
+  ASSERT_THAT(replacement.slotIndex(), Eq(layoutSlot));
+
+  EXPECT_THAT(device_.submit(std::move(commands)),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidHandle,
+                                    AllOf(HasSubstr("bind group \"solidUniforms\""),
+                                          HasSubstr("destroyed bindGroupLayout"))));
+}
+
 TEST_F(SubmitStalenessTests, DestroyedBindGroupEntryBufferRejectsSubmit) {
   CommandBuffer commands = recordScene();
   // The bind group itself stays alive; only the buffer one of its entries references dies.
