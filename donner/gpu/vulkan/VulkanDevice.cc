@@ -11,10 +11,13 @@
 #include <vulkan/vulkan.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstring>
 #include <format>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -299,6 +302,44 @@ VkImageSubresourceRange FullColorRange() {
   return range;
 }
 
+/// Latched first-failure state shared with the debug-utils messenger callback. Vulkan may
+/// invoke the callback from any thread, so the flag is atomic and the message is mutex-guarded;
+/// the owning device reads it from its single owning thread.
+struct ErrorState {
+  std::atomic<bool> hadError{false};  //!< True once any failure was recorded.
+  std::mutex mutex;                   //!< Guards \ref message.
+  std::string message;                //!< First recorded failure message.
+
+  /// Latches \p newMessage (first failure wins). @param newMessage Failure description.
+  void record(std::string newMessage) {
+    hadError.store(true, std::memory_order_release);
+    const std::lock_guard<std::mutex> lock(mutex);
+    if (message.empty()) {
+      message = std::move(newMessage);
+    }
+  }
+
+  /// Returns the first recorded failure message (empty if none).
+  std::string firstMessage() {
+    const std::lock_guard<std::mutex> lock(mutex);
+    return message;
+  }
+};
+
+/// Debug-utils messenger callback: latches validation ERROR-severity messages into the device
+/// error state, so tests observe validation findings as red assertions instead of log lines.
+VKAPI_ATTR VkBool32 VKAPI_CALL ValidationMessengerCallback(
+    VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUtilsMessageTypeFlagsEXT /*types*/,
+    const VkDebugUtilsMessengerCallbackDataEXT* callbackData, void* userData) {
+  if ((severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) != 0 && userData != nullptr) {
+    static_cast<ErrorState*>(userData)->record(std::format(
+        "Vulkan validation error: {}",
+        (callbackData != nullptr && callbackData->pMessage != nullptr) ? callbackData->pMessage
+                                                                       : "(no message)"));
+  }
+  return VK_FALSE;
+}
+
 /// Records a conservative full image layout transition: ALL_COMMANDS to ALL_COMMANDS with
 /// memory-availability source access and read+write destination access. Intentionally maximal
 /// (design 0053 "Vulkan": the first implementation is conservative and validation-clean);
@@ -366,10 +407,13 @@ struct VulkanDevice::Impl {
     BindGroupLayoutDescriptor descriptor;           //!< Validated creation descriptor.
   };
 
-  /// A descriptor set plus its dedicated one-set pool (destroying the pool frees the set).
+  /// A descriptor set plus its dedicated one-set pool (destroying the pool frees the set) and
+  /// the texture slots its sampled-texture entries reference (snapshotted at creation), so
+  /// encode can pre-transition sampled textures to the layout the descriptor writes declare.
   struct BindGroupRecord {
-    VkDescriptorPool pool = VK_NULL_HANDLE;  //!< Dedicated descriptor pool.
-    VkDescriptorSet set = VK_NULL_HANDLE;    //!< The allocated descriptor set.
+    VkDescriptorPool pool = VK_NULL_HANDLE;     //!< Dedicated descriptor pool.
+    VkDescriptorSet set = VK_NULL_HANDLE;       //!< The allocated descriptor set.
+    std::vector<uint32_t> sampledTextureSlots;  //!< Texture slots of sampled-texture entries.
   };
 
   /// Shared ownership wrapper for a VkPipelineLayout. Pipelines retain the wrapper so
@@ -420,14 +464,28 @@ struct VulkanDevice::Impl {
 
   std::vector<InFlightSubmission> inFlight;  //!< Pending submissions, ascending serial.
   uint64_t completedSerialValue = 0;         //!< Highest fence-confirmed completed serial.
-  bool hadError = false;                     //!< True once a Vulkan wait/poll call failed.
-  std::string lastError;                     //!< Message of the first captured failure.
 
-  /// Records the first asynchronous failure (fence wait/status error).
-  void recordError(std::string message) {
-    hadError = true;
-    if (lastError.empty()) {
-      lastError = std::move(message);
+  /// Latched first failure (fence wait/poll errors, validation ERROR messages). Held by
+  /// unique_ptr so the messenger callback's userData pointer stays stable.
+  std::unique_ptr<ErrorState> errorState = std::make_unique<ErrorState>();
+
+  VkDebugUtilsMessengerEXT debugMessenger = VK_NULL_HANDLE;  //!< Validation message latch.
+  /// vkDestroyDebugUtilsMessengerEXT, resolved at instance creation (extension functions are
+  /// not exported by the loader statically).
+  PFN_vkDestroyDebugUtilsMessengerEXT destroyDebugMessengerFn = nullptr;
+
+  /// Records the first failure (fence wait/poll error or validation error).
+  void recordError(std::string message) { errorState->record(std::move(message)); }
+
+  /// Returns true once any failure was recorded.
+  bool hasError() const { return errorState->hadError.load(std::memory_order_acquire); }
+
+  /// Destroys the debug-utils messenger; must run before the instance is destroyed.
+  void destroyDebugMessenger() {
+    if (debugMessenger != VK_NULL_HANDLE && destroyDebugMessengerFn != nullptr &&
+        instance != VK_NULL_HANDLE) {
+      destroyDebugMessengerFn(instance, debugMessenger, nullptr);
+      debugMessenger = VK_NULL_HANDLE;
     }
   }
 
@@ -569,6 +627,7 @@ struct VulkanDevice::Impl {
   /// destructor after in-flight submissions have completed (or timed out).
   void teardown() {
     if (device == VK_NULL_HANDLE) {
+      destroyDebugMessenger();
       if (instance != VK_NULL_HANDLE) {
         vkDestroyInstance(instance, nullptr);
         instance = VK_NULL_HANDLE;
@@ -643,6 +702,7 @@ struct VulkanDevice::Impl {
     }
     vkDestroyDevice(device, nullptr);
     device = VK_NULL_HANDLE;
+    destroyDebugMessenger();
     if (instance != VK_NULL_HANDLE) {
       vkDestroyInstance(instance, nullptr);
       instance = VK_NULL_HANDLE;
@@ -677,6 +737,27 @@ std::unique_ptr<VulkanDevice> VulkanDevice::Create() {
     }
   }
 
+  // Enable the debug-utils messenger extension only alongside the validation layer, and only
+  // when the loader enumerates it: it turns validation ERROR messages into latched device
+  // errors (see ValidationMessengerCallback) instead of log lines.
+  std::vector<const char*> enabledExtensions;
+  if (!enabledLayers.empty()) {
+    uint32_t extensionCount = 0;
+    if (vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, nullptr) == VK_SUCCESS &&
+        extensionCount > 0) {
+      std::vector<VkExtensionProperties> extensions(extensionCount);
+      if (vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, extensions.data()) ==
+          VK_SUCCESS) {
+        for (const VkExtensionProperties& extension : extensions) {
+          if (std::strcmp(extension.extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == 0) {
+            enabledExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+            break;
+          }
+        }
+      }
+    }
+  }
+
   VkApplicationInfo applicationInfo = {};
   applicationInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
   applicationInfo.pApplicationName = "donner";
@@ -690,7 +771,10 @@ std::unique_ptr<VulkanDevice> VulkanDevice::Create() {
   instanceInfo.pApplicationInfo = &applicationInfo;
   instanceInfo.enabledLayerCount = static_cast<uint32_t>(enabledLayers.size());
   instanceInfo.ppEnabledLayerNames = enabledLayers.empty() ? nullptr : enabledLayers.data();
-  // Headless: no surface extensions.
+  // Headless: no surface extensions; debug utils only (see above).
+  instanceInfo.enabledExtensionCount = static_cast<uint32_t>(enabledExtensions.size());
+  instanceInfo.ppEnabledExtensionNames =
+      enabledExtensions.empty() ? nullptr : enabledExtensions.data();
 
   VkInstance instance = VK_NULL_HANDLE;
   if (vkCreateInstance(&instanceInfo, nullptr, &instance) != VK_SUCCESS) {
@@ -741,6 +825,19 @@ std::unique_ptr<VulkanDevice> VulkanDevice::Create() {
     return nullptr;
   }
 
+  // WebGPU semantics require bounds-checked buffer access; robustBufferAccess is the Vulkan
+  // feature that provides it, and its support is mandatory (the specification's "Features"
+  // chapter), so requiring it cannot lose devices. Fail closed anyway if a broken
+  // implementation reports it unsupported.
+  VkPhysicalDeviceFeatures supportedFeatures = {};
+  vkGetPhysicalDeviceFeatures(selectedDevice, &supportedFeatures);
+  if (supportedFeatures.robustBufferAccess != VK_TRUE) {
+    vkDestroyInstance(instance, nullptr);
+    return nullptr;
+  }
+  VkPhysicalDeviceFeatures enabledFeatures = {};
+  enabledFeatures.robustBufferAccess = VK_TRUE;
+
   const float queuePriority = 1.0f;
   VkDeviceQueueCreateInfo queueInfo = {};
   queueInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
@@ -748,12 +845,14 @@ std::unique_ptr<VulkanDevice> VulkanDevice::Create() {
   queueInfo.queueCount = 1;
   queueInfo.pQueuePriorities = &queuePriority;
 
-  // Vulkan 1.1 core only: no device extensions, no optional features (read-only storage buffer
-  // access in the fragment stage and negative-height viewports are core).
+  // Vulkan 1.1 core only: no device extensions, and no optional features beyond the mandatory
+  // robustBufferAccess (read-only storage buffer access in the fragment stage and
+  // negative-height viewports are core).
   VkDeviceCreateInfo deviceInfo = {};
   deviceInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
   deviceInfo.queueCreateInfoCount = 1;
   deviceInfo.pQueueCreateInfos = &queueInfo;
+  deviceInfo.pEnabledFeatures = &enabledFeatures;
 
   VkDevice device = VK_NULL_HANDLE;
   if (vkCreateDevice(selectedDevice, &deviceInfo, nullptr, &device) != VK_SUCCESS) {
@@ -780,6 +879,27 @@ std::unique_ptr<VulkanDevice> VulkanDevice::Create() {
   impl.commandPool = commandPool;
   vkGetDeviceQueue(device, selectedQueueFamily, 0, &impl.queue);
   vkGetPhysicalDeviceMemoryProperties(selectedDevice, &impl.memoryProperties);
+
+  if (!enabledExtensions.empty()) {
+    // Latch validation ERROR messages into the device error state. Best-effort: on any failure
+    // the messenger stays absent and validation output remains log-only.
+    const auto createMessengerFn = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
+        vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT"));
+    impl.destroyDebugMessengerFn = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
+        vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT"));
+    if (createMessengerFn != nullptr && impl.destroyDebugMessengerFn != nullptr) {
+      VkDebugUtilsMessengerCreateInfoEXT messengerInfo = {};
+      messengerInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+      messengerInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+      messengerInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT;
+      messengerInfo.pfnUserCallback = ValidationMessengerCallback;
+      messengerInfo.pUserData = impl.errorState.get();
+      if (createMessengerFn(instance, &messengerInfo, nullptr, &impl.debugMessenger) !=
+          VK_SUCCESS) {
+        impl.debugMessenger = VK_NULL_HANDLE;
+      }
+    }
+  }
   return result;
 }
 
@@ -809,7 +929,7 @@ uint64_t VulkanDevice::completedSerial() const {
 bool VulkanDevice::waitForSerial(uint64_t serial, double timeoutSeconds) {
   Impl& impl = *impl_;
   impl.pollCompleted();
-  if (impl.hadError) {
+  if (impl.hasError()) {
     return false;
   }
   if (impl.completedSerialValue >= serial) {
@@ -838,7 +958,7 @@ bool VulkanDevice::waitForSerial(uint64_t serial, double timeoutSeconds) {
     return false;
   }
   impl.pollCompleted();
-  return !impl.hadError && impl.completedSerialValue >= serial;
+  return !impl.hasError() && impl.completedSerialValue >= serial;
 }
 
 Result<std::vector<uint8_t>> VulkanDevice::readBackBuffer(const Buffer& buffer) {
@@ -859,7 +979,7 @@ Result<std::vector<uint8_t>> VulkanDevice::readBackBuffer(const Buffer& buffer) 
 }
 
 std::string VulkanDevice::lastErrorForTest() const {
-  return impl_->lastError;
+  return impl_->errorState->firstMessage();
 }
 
 Status VulkanDevice::onCreateBuffer(uint32_t slotIndex, const BufferDescriptor& descriptor) {
@@ -1138,6 +1258,9 @@ Status VulkanDevice::onCreateBindGroup(uint32_t slotIndex, const BindGroupDescri
       imageInfos[i] = VkDescriptorImageInfo{VK_NULL_HANDLE, view->view,
                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
       write.pImageInfo = &imageInfos[i];
+      // Snapshot the sampled texture slot so onSubmit can pre-transition it to the layout the
+      // descriptor declares before a pass that binds this group.
+      record.sampledTextureSlots.push_back(view->textureSlot);
     } else if (const SamplerBinding* samplerBinding =
                    std::get_if<SamplerBinding>(&entry.resource)) {
       const uint32_t samplerSlot = samplerBinding->sampler.slotIndex();
@@ -1610,6 +1733,14 @@ Status VulkanDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t>
   if (const VkResult result =
           vkWaitForFences(impl.device, 1, &fence, VK_TRUE, kUploadFenceTimeoutNs);
       result != VK_SUCCESS) {
+    if (result == VK_TIMEOUT) {
+      // The submission is still pending: destroying its fence, command buffer, or staging
+      // buffer now would violate their in-use requirements, trading a clean failure for
+      // undefined behavior. Deliberately leak them and fail closed; the device destructor's
+      // vkDeviceWaitIdle is the backstop before final teardown.
+      return VkError("vkWaitForFences (writeTexture, still pending; leaking upload objects)",
+                     result);
+    }
     cleanup();
     return VkError("vkWaitForFences (writeTexture)", result);
   }
@@ -1659,8 +1790,50 @@ Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferS
   const Impl::RenderPipelineRecord* currentPipeline = nullptr;
   std::vector<VkDescriptorSet> boundSets(kMaxBindGroups, VK_NULL_HANDLE);
 
-  for (const Command& command : commands) {
+  // Layout transitions recorded into this command buffer are staged here and committed to the
+  // per-texture tracked state only after vkQueueSubmit succeeds: a failed encode or submit must
+  // not leave tracked layouts claiming transitions the GPU never executed (the synchronous
+  // onWriteTexture upload follows the same commit-after-success pattern).
+  std::map<uint32_t, VkImageLayout> stagedLayouts;
+  const auto layoutOf = [&stagedLayouts](uint32_t textureSlot, const Impl::TextureRecord& record) {
+    const auto it = stagedLayouts.find(textureSlot);
+    return it != stagedLayouts.end() ? it->second : record.currentLayout;
+  };
+
+  for (size_t commandIndex = 0; commandIndex < commands.size(); ++commandIndex) {
+    const Command& command = commands[commandIndex];
     if (const auto* beginPass = std::get_if<BeginRenderPassCommand>(&command)) {
+      // Barriers are illegal inside a render pass, so pre-scan this pass's commands for bind
+      // groups and transition every referenced sampled texture to SHADER_READ_ONLY_OPTIMAL (the
+      // layout the descriptor writes declare) before the pass begins. An UNDEFINED oldLayout
+      // for a never-written texture is valid; its contents are undefined either way.
+      for (size_t scanIndex = commandIndex + 1; scanIndex < commands.size(); ++scanIndex) {
+        if (std::get_if<EndRenderPassCommand>(&commands[scanIndex]) != nullptr) {
+          break;
+        }
+        const auto* scannedBindGroup = std::get_if<SetBindGroupCommand>(&commands[scanIndex]);
+        if (scannedBindGroup == nullptr) {
+          continue;
+        }
+        const Impl::BindGroupRecord* scannedGroup =
+            FindRecord(impl.bindGroups, scannedBindGroup->bindGroupId.slotIndex);
+        if (scannedGroup == nullptr) {
+          continue;  // The SetBindGroupCommand handler below fails closed on this.
+        }
+        for (const uint32_t sampledSlot : scannedGroup->sampledTextureSlots) {
+          const Impl::TextureRecord* sampled = FindRecord(impl.textures, sampledSlot);
+          if (sampled == nullptr) {
+            continue;  // Submit-time re-validation makes this unreachable.
+          }
+          const VkImageLayout current = layoutOf(sampledSlot, *sampled);
+          if (current != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+            RecordImageBarrier(commandBuffer, sampled->image, current,
+                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            stagedLayouts[sampledSlot] = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+          }
+        }
+      }
+
       const std::vector<RenderPassColorAttachment>& attachmentDescriptors =
           beginPass->descriptor.colorAttachments;
 
@@ -1683,9 +1856,9 @@ Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferS
 
         // Conservative explicit transition to the attachment layout; the pass then begins and
         // ends in COLOR_ATTACHMENT_OPTIMAL.
-        RecordImageBarrier(commandBuffer, texture->image, texture->currentLayout,
+        RecordImageBarrier(commandBuffer, texture->image, layoutOf(view->textureSlot, *texture),
                            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-        texture->currentLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        stagedLayouts[view->textureSlot] = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
         VkAttachmentDescription attachmentDescription = {};
         attachmentDescription.format = ToVkFormat(texture->format);
@@ -1708,6 +1881,8 @@ Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferS
         clearValue.color.float32[3] = static_cast<float>(attachment.clearColor[3]);
         clearValues.push_back(clearValue);
 
+        // All attachments share one extent (base-class beginRenderPass validation), so the
+        // last one is authoritative.
         passExtent = texture->size;
       }
 
@@ -1902,9 +2077,10 @@ Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferS
                         copy->layout.offsetBytes)});
       }
 
-      RecordImageBarrier(commandBuffer, texture->image, texture->currentLayout,
+      RecordImageBarrier(commandBuffer, texture->image,
+                         layoutOf(copy->textureId.slotIndex, *texture),
                          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-      texture->currentLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+      stagedLayouts[copy->textureId.slotIndex] = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
 
       const uint32_t texelSize = TextureFormatBytesPerTexel(texture->format);
       VkBufferImageCopy copyRegion = {};
@@ -1960,6 +2136,14 @@ Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferS
       result != VK_SUCCESS) {
     vkDestroyFence(impl.device, fence, nullptr);
     return failEncoding(VkError("vkQueueSubmit", result));
+  }
+
+  // The GPU will execute the recorded transitions: commit the staged layouts to the tracked
+  // per-texture state.
+  for (const auto& [textureSlot, layout] : stagedLayouts) {
+    if (Impl::TextureRecord* texture = FindRecord(impl.textures, textureSlot)) {
+      texture->currentLayout = layout;
+    }
   }
 
   Impl::InFlightSubmission submission;

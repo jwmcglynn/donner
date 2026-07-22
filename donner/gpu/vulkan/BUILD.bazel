@@ -1,5 +1,6 @@
 load("//build_defs:rules.bzl", "donner_cc_library")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
+load("//build_defs:package.bzl", "donner_package")
 
 # donner::gpu::vulkan - the Vulkan backend of the Donner GPU runtime (design
 # doc 0053, change sequence packet 7).
@@ -22,3 +23,5 @@ donner_cc_library(
         "@vulkan_headers",
     ],
 )
+
+donner_package()

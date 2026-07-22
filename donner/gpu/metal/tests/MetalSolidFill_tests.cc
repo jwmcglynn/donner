@@ -169,9 +169,13 @@ bool ExpandLegacyAxis(std::span<const EncodedPath::Band> bands,
   return true;
 }
 
+/// A storage buffer plus the byte size it was created with, so bind groups can bind the FULL
+/// range honestly. Vulkan enforces VkDescriptorBufferInfo.range, so binding a smaller range than
+/// the shader indexes would read out of bounds; Metal ignores the range, but both slices bind the
+/// same honest sizes.
 struct SizedBuffer {
-  Buffer buffer;
-  uint64_t sizeBytes = 0;
+  Buffer buffer;           //!< The storage buffer.
+  uint64_t sizeBytes = 0;  //!< Byte size the buffer was created with.
 };
 
 /// One path's GPU resources.
@@ -208,6 +212,7 @@ protected:
 
   /// Creates a storage buffer holding \p bytes. Empty buffers receive a zero-filled dummy large
   /// enough for one shader element so Metal validation can prove every runtime-array binding.
+  /// Returns the buffer with its created byte size so bind groups bind the full range.
   SizedBuffer storageBuffer(const char* label, const void* data, size_t byteCount,
                             size_t emptyByteCount = sizeof(uint32_t)) {
     const std::array<uint8_t, sizeof(LegacyBand)> dummy = {};
@@ -418,6 +423,9 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
         std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&uniforms), sizeof(uniforms)));
     ASSERT_FALSE(uniformWrite.hasError()) << uniformWrite.error();
 
+    // Storage buffers bind their FULL created byte size: the fragment shader indexes past
+    // element 0, and Vulkan enforces the bound range (Metal ignores it, but both slices bind
+    // the same honest sizes).
     std::vector<BindGroupEntry> entries;
     entries.push_back({0, BufferBinding{draw.uniformBuffer, 0, sizeof(Uniforms)}});
     entries.push_back({1, BufferBinding{draw.bands.buffer, 0, draw.bands.sizeBytes}});
