@@ -6152,8 +6152,10 @@ void EditorShell::runFrame() {
       }
       // UI mutations can be queued while the async renderer is busy. When they flush here, the
       // DOM/source panes already reflect the edit, so request a matching document render instead of
-      // continuing to present stale composited textures.
-      requestRenderAtEndOfFrame_ = true;
+      // continuing to present stale composited textures. The welcome document is only a source/UI
+      // placeholder, though: rendering it races the selected sample's first correctly fitted
+      // surface and can expose the placeholder viewport between the picker and the sample.
+      requestRenderAtEndOfFrame_ = !showSamplePicker_ || samplePresentationPending_;
     }
   }
   processPendingSampleLoad();

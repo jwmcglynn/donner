@@ -62,6 +62,11 @@ _COMMON_LINKOPTS = [
     # still compressing local glue. ADVANCED rewrites cross-language contracts
     # such as the input bridge and can leave the editor unresponsive.
     "--closure-args=--compilation_level=SIMPLE_OPTIMIZATIONS",
+    # Binaryen's memory-packing pass splits the linker's merged static image at every zero-filled
+    # gap. Pthread builds must initialize each resulting passive segment in __wasm_init_memory;
+    # Safari's optimizing compiler spends gigabytes compiling that generated function. Preserve
+    # the merged image and also cap Binaryen's otherwise-unlimited one-caller inlining threshold.
+    "-sBINARYEN_EXTRA_PASSES=--skip-pass=memory-packing,--one-caller-inline-max-function-size=1000,--inline-max-combined-binary-size=196608",
     "-pthread",
     "-sALLOW_MEMORY_GROWTH=1",
     "-sMAXIMUM_MEMORY=512MB",
@@ -238,7 +243,7 @@ py_test(
         "--package-dir",
         "$(rootpath :wasm_web_package)",
         "--max-wasm-raw-bytes",
-        "13800000",
+        "13950000",
         "--max-wasm-gzip-bytes",
         "5350000",
         "--max-wasm-function-body-bytes",
@@ -250,7 +255,7 @@ py_test(
         "--max-js-gzip-bytes",
         "49000",
         "--max-total-raw-bytes",
-        "14050000",
+        "14200000",
         "--expected-js-property",
         "__donnerLastScrollEvent",
         "--expected-js-property",
