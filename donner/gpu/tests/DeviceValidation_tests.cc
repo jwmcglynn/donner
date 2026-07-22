@@ -220,11 +220,11 @@ TEST_F(DeviceValidationTests, CreatePipelineLayoutRejectsTooManyGroups) {
 }
 
 TEST_F(DeviceValidationTests, CreatePipelineLayoutRejectsStaleLayout) {
-  const BindGroupLayout layout =
-      GetResultOrFail(device_.createBindGroupLayout(BindGroupLayoutDescriptor{
-          "uniforms", {BindGroupLayoutEntry{0, ShaderStage::Vertex, BindingType::UniformBuffer}}}));
-  EXPECT_THAT(device_.destroyBindGroupLayout(layout), IsOk());
-  EXPECT_THAT(device_.createPipelineLayout(PipelineLayoutDescriptor{"stale", {layout}}),
+  BindGroupLayout layout = GetResultOrFail(device_.createBindGroupLayout(BindGroupLayoutDescriptor{
+      "uniforms", {BindGroupLayoutEntry{0, ShaderStage::Vertex, BindingType::UniformBuffer}}}));
+  const BindGroupLayoutRef staleRef(layout);
+  EXPECT_THAT(device_.destroyBindGroupLayout(std::move(layout)), IsOk());
+  EXPECT_THAT(device_.createPipelineLayout(PipelineLayoutDescriptor{"stale", {staleRef}}),
               IsGpuError(GpuErrorType::InvalidHandle));
 }
 
@@ -467,9 +467,10 @@ TEST_F(RenderPipelineValidationTests, RejectsMultisample) {
 }
 
 TEST_F(RenderPipelineValidationTests, RejectsStaleLayout) {
-  EXPECT_THAT(device_.destroyPipelineLayout(layout_), IsOk());
-  EXPECT_THAT(device_.createRenderPipeline(validDescriptor()),
-              IsGpuError(GpuErrorType::InvalidHandle));
+  // Build the descriptor first so it holds a genuinely stale layout reference.
+  const RenderPipelineDescriptor descriptor = validDescriptor();
+  EXPECT_THAT(device_.destroyPipelineLayout(std::move(layout_)), IsOk());
+  EXPECT_THAT(device_.createRenderPipeline(descriptor), IsGpuError(GpuErrorType::InvalidHandle));
 }
 
 // == writeBuffer ==============================================================================

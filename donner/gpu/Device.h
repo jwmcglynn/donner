@@ -44,11 +44,12 @@ public:
       freeList_.pop_back();
       Slot& slot = slots_[slotIndex];
       slot.alive = true;
+      slot.lastUseSerial = 0;
       slot.record = std::move(record);
       return slotIndex;
     }
 
-    slots_.push_back(Slot{1, true, std::move(record)});
+    slots_.push_back(Slot{1, true, 0, std::move(record)});
     return static_cast<uint32_t>(slots_.size() - 1);
   }
 
@@ -88,24 +89,63 @@ public:
   uint32_t generationOf(uint32_t slotIndex) const { return slots_[slotIndex].generation; }
 
   /**
-   * Releases the record at \p slotIndex: marks the slot dead, bumps its generation so remaining
-   * identifiers fail closed, and queues the slot for reuse.
+   * Releases the record at \p slotIndex immediately: \ref retire plus \ref recycle. Used when the
+   * resource was never visible to submissions (creation rollback, command buffer consumption).
    *
    * @param slotIndex Slot index; must refer to an alive slot.
    */
   void release(uint32_t slotIndex) {
+    retire(slotIndex);
+    recycle(slotIndex);
+  }
+
+  /**
+   * Retires the record at \p slotIndex: marks the slot dead and bumps its generation so remaining
+   * identifiers fail closed, but does NOT queue the slot for reuse. The caller must \ref recycle
+   * the slot once the backend object is safe to destroy; until then, no new resource can occupy
+   * the slot, so in-flight backend state cannot be aliased.
+   *
+   * @param slotIndex Slot index; must refer to an alive slot.
+   */
+  void retire(uint32_t slotIndex) {
     Slot& slot = slots_[slotIndex];
     slot.alive = false;
     slot.record.reset();
     ++slot.generation;
-    freeList_.push_back(slotIndex);
   }
+
+  /**
+   * Queues a retired slot for reuse. Called after the backend object is destroyed.
+   *
+   * @param slotIndex Slot index; must refer to a retired slot.
+   */
+  void recycle(uint32_t slotIndex) { freeList_.push_back(slotIndex); }
+
+  /**
+   * Records that the resource at \p slotIndex is referenced by the submission with
+   * \p submissionSerial. Serials increase monotonically, so the stored value is the last use.
+   *
+   * @param slotIndex Slot index; must refer to an alive slot.
+   * @param submissionSerial Serial of the submission referencing the resource.
+   */
+  void markUsed(uint32_t slotIndex, uint64_t submissionSerial) {
+    slots_[slotIndex].lastUseSerial = submissionSerial;
+  }
+
+  /**
+   * Serial of the last submission referencing \p slotIndex (0 if never submitted). Valid for
+   * retired slots too: retiring preserves the last use so deferred destruction can key on it.
+   *
+   * @param slotIndex Slot index; must be in range.
+   */
+  uint64_t lastUseOf(uint32_t slotIndex) const { return slots_[slotIndex].lastUseSerial; }
 
 private:
   /// One slot: generation counter plus the stored record while alive.
   struct Slot {
-    uint32_t generation = 1;       //!< Bumped on release; a handle matches only its generation.
+    uint32_t generation = 1;       //!< Bumped on retire; a handle matches only its generation.
     bool alive = false;            //!< True while the slot holds a live resource.
+    uint64_t lastUseSerial = 0;    //!< Serial of the last submission referencing this slot.
     std::optional<Record> record;  //!< Stored record; empty while dead.
   };
 
@@ -145,16 +185,23 @@ Result<uint64_t> ValidateTexelCopyInternal(const TexelCopyBufferLayout& layout,
  * (\ref GpuErrorType::DeviceMismatch) and slot generation (\ref GpuErrorType::InvalidHandle), so
  * destroyed or foreign handles fail before reaching a backend.
  *
- * Lifetime: resources are freed by explicit `destroy*` calls; device teardown frees everything
- * that remains (handles are not RAII in this packet, see Handles.h). Handles must not be used
- * after their device is destroyed.
+ * Lifetime (design 0053 "Core types and ownership"): handles are move-only RAII - dropping a live
+ * handle releases the resource, an explicit `destroy*(std::move(handle))` call releases it early
+ * and reports errors, and device teardown frees everything that remains. A handle that outlives
+ * its device releases nothing (its device-alive token has expired). Destruction is deferred by
+ * submission serial: destroying a resource makes its handles and references stale immediately,
+ * but the backend object is kept alive - and its slot is not reused - until every submission
+ * referencing it has completed (\ref completedSerial). Deferred backend releases are processed by
+ * \ref poll and opportunistically by `destroy*` and \ref submit.
  *
  * Thread affinity: a Device and everything created from it must be used from one thread at a
  * time, matching the async-renderer worker ownership model.
  */
 class Device {
 public:
-  /// Destructor; frees all remaining resources.
+  /// Destructor; expires the device-alive token (so handles that outlive the device release
+  /// nothing) and frees all remaining resources. Backends that submit asynchronously must wait
+  /// for in-flight submissions in their own destructor before backend state is torn down.
   virtual ~Device();
 
   Device(const Device&) = delete;
@@ -238,33 +285,36 @@ public:
    */
   Result<RenderPipeline> createRenderPipeline(const RenderPipelineDescriptor& descriptor);
 
-  /// Destroys a buffer; the handle and all references to it become stale.
-  /// @param buffer Handle to destroy.
-  Status destroyBuffer(const Buffer& buffer);
-  /// Destroys a texture; the handle and all references to it become stale.
-  /// @param texture Handle to destroy.
-  Status destroyTexture(const Texture& texture);
-  /// Destroys a texture view; the handle and all references to it become stale.
+  // The destroy* methods consume the handle: on success it becomes stale immediately (along with
+  // all references to it) while the backend object is deferred until in-flight submissions
+  // complete; on failure the handle is still consumed, and if it named a live resource of a
+  // DIFFERENT device, that resource is released through RAII on its owning device (the error is
+  // still reported). Either way the caller's handle is null afterwards, so explicit destroy plus
+  // RAII can never double-free.
+
+  /// Destroys a buffer (see the destroy contract above). @param buffer Handle to destroy.
+  Status destroyBuffer(Buffer&& buffer);
+  /// Destroys a texture (see the destroy contract above). @param texture Handle to destroy.
+  Status destroyTexture(Texture&& texture);
+  /// Destroys a texture view (see the destroy contract above).
   /// @param textureView Handle to destroy.
-  Status destroyTextureView(const TextureView& textureView);
-  /// Destroys a sampler; the handle and all references to it become stale.
-  /// @param sampler Handle to destroy.
-  Status destroySampler(const Sampler& sampler);
-  /// Destroys a bind group layout; the handle and all references to it become stale.
+  Status destroyTextureView(TextureView&& textureView);
+  /// Destroys a sampler (see the destroy contract above). @param sampler Handle to destroy.
+  Status destroySampler(Sampler&& sampler);
+  /// Destroys a bind group layout (see the destroy contract above).
   /// @param bindGroupLayout Handle to destroy.
-  Status destroyBindGroupLayout(const BindGroupLayout& bindGroupLayout);
-  /// Destroys a bind group; the handle and all references to it become stale.
-  /// @param bindGroup Handle to destroy.
-  Status destroyBindGroup(const BindGroup& bindGroup);
-  /// Destroys a pipeline layout; the handle and all references to it become stale.
+  Status destroyBindGroupLayout(BindGroupLayout&& bindGroupLayout);
+  /// Destroys a bind group (see the destroy contract above). @param bindGroup Handle to destroy.
+  Status destroyBindGroup(BindGroup&& bindGroup);
+  /// Destroys a pipeline layout (see the destroy contract above).
   /// @param pipelineLayout Handle to destroy.
-  Status destroyPipelineLayout(const PipelineLayout& pipelineLayout);
-  /// Destroys a shader module; the handle and all references to it become stale.
+  Status destroyPipelineLayout(PipelineLayout&& pipelineLayout);
+  /// Destroys a shader module (see the destroy contract above).
   /// @param shaderModule Handle to destroy.
-  Status destroyShaderModule(const ShaderModule& shaderModule);
-  /// Destroys a render pipeline; the handle and all references to it become stale.
+  Status destroyShaderModule(ShaderModule&& shaderModule);
+  /// Destroys a render pipeline (see the destroy contract above).
   /// @param renderPipeline Handle to destroy.
-  Status destroyRenderPipeline(const RenderPipeline& renderPipeline);
+  Status destroyRenderPipeline(RenderPipeline&& renderPipeline);
 
   /// Creates a command encoder recording against this device. The encoder must not outlive the
   /// device.
@@ -296,16 +346,27 @@ public:
 
   /**
    * Submits a finished command buffer, consuming it, and returns the assigned submission serial.
-   * Serials start at 1 and increase by 1 per submission; a submission rejected by the backend
-   * does not consume a serial.
+   * Serials start at 1 and increase by 1 per submission; a submission rejected here or by the
+   * backend does not consume a serial.
    *
-   * Known gap: commands are validated at recording time, so destroying a resource between
-   * recording and submit is not yet detected here. Deferred-destruction validation arrives with
-   * the resource-lifetime and submission packet (design 0053 change sequence step 3).
+   * Every resource a recorded command references - including bind-group entry resources and the
+   * textures behind attachment and entry views - is re-validated against its recorded
+   * (slot, generation) identity, so a resource destroyed between recording and submission fails
+   * closed with \ref GpuErrorType::InvalidHandle instead of reaching a backend. On success those
+   * resources are marked in-use by the new serial, which defers their backend destruction until
+   * the submission completes.
    *
    * @param commandBuffer Command buffer to submit; consumed even on failure.
    */
   Result<uint64_t> submit(CommandBuffer commandBuffer);
+
+  /**
+   * Processes deferred destructions: releases the backend object of every destroyed resource
+   * whose last referencing submission has completed (\ref completedSerial), and recycles its
+   * slot. Called opportunistically by `destroy*` and \ref submit; call it directly after waiting
+   * for completion to reclaim resources promptly.
+   */
+  void poll();
 
   /// Serial assigned to the most recent submission (0 if none yet).
   uint64_t lastSubmittedSerial() const { return lastSubmittedSerial_; }
@@ -397,15 +458,6 @@ private:
   struct TextureRecord {
     TextureDescriptor descriptor;  //!< Creation descriptor.
   };
-  /// Identity of a resource at a point in time: slot plus generation, so slot reuse cannot alias
-  /// two different resources.
-  struct ResourceIdentity {
-    uint32_t slotIndex = 0;   //!< Resource slot index.
-    uint32_t generation = 0;  //!< Slot generation at capture time.
-
-    /// Equality operator. @param other Identity to compare against.
-    bool operator==(const ResourceIdentity& other) const = default;
-  };
   /// Validated per-view state. Consumers re-resolve the viewed texture through
   /// \ref resolveViewedTexture on every use, so a view cannot outlive its texture unnoticed.
   struct TextureViewRecord {
@@ -466,15 +518,82 @@ private:
    */
   Result<const TextureRecord*> resolveViewedTexture(const TextureViewRecord& viewRecord) const;
 
+  /// Resource kinds with deferrable backend destruction, indexing the destroy dispatch in
+  /// \ref recycleRetiredSlot.
+  enum class ResourceKind : uint8_t {
+    Buffer,
+    Texture,
+    TextureView,
+    Sampler,
+    BindGroupLayout,
+    BindGroup,
+    PipelineLayout,
+    ShaderModule,
+    RenderPipeline,
+  };
+
+  /// A destroyed resource whose backend object is awaiting submission completion.
+  struct PendingDestroy {
+    uint64_t readySerial = 0;  //!< Backend destruction is safe once completedSerial() >= this.
+    ResourceKind kind = ResourceKind::Buffer;  //!< Resource kind, for table dispatch.
+    uint32_t slotIndex = 0;                    //!< Retired slot index.
+  };
+
   /// Allocates a slot in \p table and mints a handle carrying this device's identity.
   /// @param table Destination table. @param record Validated record to store.
   template <typename Tag, typename Record>
   Handle<Tag> allocateHandle(details::SlotTable<Record>& table, Record&& record);
 
-  /// Shared implementation of the `destroy*` methods.
+  /// Shared implementation of the `destroy*` methods: consumes the handle, retires the slot
+  /// immediately, and defers the backend release until in-flight submissions complete.
   /// @param table Table for the handle's resource type. @param handle Handle to destroy.
+  /// @param kind Resource kind for deferred dispatch.
   template <typename Record, typename Tag>
-  Status destroyResource(details::SlotTable<Record>& table, const Handle<Tag>& handle);
+  Status destroyResource(details::SlotTable<Record>& table, Handle<Tag>&& handle,
+                         ResourceKind kind);
+
+  /// Releases the backend object of a retired slot and recycles the slot for reuse.
+  /// @param kind Resource kind. @param slotIndex Retired slot index.
+  void recycleRetiredSlot(ResourceKind kind, uint32_t slotIndex);
+
+  /// Retires a resolved resource: defers the backend release if the resource is referenced by an
+  /// incomplete submission, otherwise releases it immediately.
+  /// @param kind Resource kind. @param slotIndex Slot index. @param lastUseSerial Serial of the
+  /// last submission referencing the resource.
+  void retireResource(ResourceKind kind, uint32_t slotIndex, uint64_t lastUseSerial);
+
+  /// RAII destructor path: destroys the resource identified by (\p slotIndex, \p generation) in
+  /// \p table if it is still alive; a silent no-op when the identity is stale.
+  /// @param table Table for the resource type. @param slotIndex Slot index.
+  /// @param generation Generation the handle carried. @param kind Resource kind.
+  template <typename Record>
+  void releaseFromRaii(details::SlotTable<Record>& table, uint32_t slotIndex, uint32_t generation,
+                       ResourceKind kind);
+
+  template <typename Tag>
+  friend void details::ReleaseHandleFromRaii(Device& device, uint32_t slotIndex,
+                                             uint32_t generation);
+
+  /// One resource referenced by a submission, collected during validation and marked in-use
+  /// after the backend accepts the submission.
+  struct SubmissionUse {
+    ResourceKind kind = ResourceKind::Buffer;  //!< Resource kind, for table dispatch.
+    uint32_t slotIndex = 0;                    //!< Resource slot index.
+  };
+
+  /// Validates every resource identity referenced by \p commands - including transitive
+  /// bind-group entry resources and the textures behind attachment and entry views - and returns
+  /// the referenced resources. A destroyed reference fails closed with
+  /// \ref GpuErrorType::InvalidHandle.
+  /// @param commands Recorded commands.
+  Result<std::vector<SubmissionUse>> validateSubmissionResources(
+      std::span<const Command> commands) const;
+
+  /// Marks every collected resource as used by \p submissionSerial, deferring its backend
+  /// destruction until that submission completes.
+  /// @param uses Resources collected by \ref validateSubmissionResources.
+  /// @param submissionSerial Serial assigned to the accepted submission.
+  void markSubmissionUses(std::span<const SubmissionUse> uses, uint64_t submissionSerial);
 
   /// Registers a finished command stream from an encoder and returns its handle.
   /// @param commands Validated commands in recording order.
@@ -485,6 +604,14 @@ private:
 
   uint64_t deviceId_ = 0;
   uint64_t lastSubmittedSerial_ = 0;
+
+  /// Device-alive token shared with every minted handle: `~Device` releases it, so a handle
+  /// destroyed after its device skips the RAII release.
+  std::shared_ptr<Device*> aliveToken_;
+
+  /// Destroyed resources awaiting backend release, in destruction order (drained FIFO by
+  /// \ref poll so backend release order is deterministic).
+  std::vector<PendingDestroy> pendingDestroys_;
 
   details::SlotTable<BufferRecord> buffers_;
   details::SlotTable<TextureRecord> textures_;
