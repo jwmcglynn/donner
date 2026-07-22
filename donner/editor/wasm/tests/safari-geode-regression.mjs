@@ -26,6 +26,8 @@
  *   DONNER_SAFARI_REQUIRED=1      Treat unavailable Safari automation as failure, not a skip.
  *   DONNER_SAFARI_SEAM_ONLY=1     Stop after the fractional-pan compositor pixel probe.
  *   DONNER_SAFARI_LIVE_PAN_ONLY=1 Capture trusted wheel-pan frames and fail on any edge leak.
+ *   DONNER_SAFARI_MEMORY_ONLY=1   Hold Donner Splash for 90 seconds and detect resource growth or
+ *                                  a Safari significant-memory reload.
  */
 
 import assert from "node:assert/strict";
@@ -42,6 +44,7 @@ const kExpectedWasmSha256 = process.env.DONNER_SAFARI_EXPECTED_WASM_SHA256 || ""
 const kAllowUnpinnedPackage = process.env.DONNER_SAFARI_ALLOW_UNPINNED_PACKAGE === "1";
 const kSeamOnly = process.env.DONNER_SAFARI_SEAM_ONLY === "1";
 const kLivePanOnly = process.env.DONNER_SAFARI_LIVE_PAN_ONLY === "1";
+const kMemoryOnly = process.env.DONNER_SAFARI_MEMORY_ONLY === "1";
 const kTimeoutMs = Number(process.env.DONNER_SAFARI_TIMEOUT_MS || 30_000);
 const kRunId = new Date().toISOString().replaceAll(/[^0-9A-Za-z]/g, "");
 const kArtifactDir = process.env.DONNER_SAFARI_ARTIFACT_DIR
@@ -711,12 +714,14 @@ async function readState(driver) {
       frameSchedulingInitialized: Object.hasOwn(window, '__donnerEditorFrameRequested'),
       headlessDeviceCreations: window.__donnerHeadlessDeviceCreations || 0,
       heapBytes: window.HEAPU8?.length || window.Module?.wasmMemory?.buffer?.byteLength || 0,
+      layerThumbnails: window.__donnerLayerThumbnailStats || null,
       loadingHidden: Boolean(loading?.hidden),
       mainLoopRenderedFrames: window.__donnerMainLoopRenderedFrames || 0,
       documentHasFocus: document.hasFocus(),
       timerTicks: window.__donnerSafariRegressionTimerTicks || 0,
       visibilityState: document.visibilityState,
       pageTimeOrigin: performance.timeOrigin,
+      presentationResources: window.__donnerPresentationResourceStats || null,
       runtimeInitializedAtMs: window.__donnerRuntimeInitializedAtMs || 0,
       runtime: window.__donnerWorkerRuntimeStats || null,
       surface: surface ? {
@@ -729,6 +734,14 @@ async function readState(driver) {
         width: surface.width,
       } : null,
       surfaceMode: window.__donnerWorkerSurfaceMode || null,
+      surfaceBacking: Array.from(document.querySelectorAll('canvas')).map((element) => ({
+        backingBytes: Number(element.width || 0) * Number(element.height || 0) * 4,
+        height: Number(element.height || 0),
+        id: element.id || '',
+        visible: getComputedStyle(element).display !== 'none'
+          && getComputedStyle(element).visibility !== 'hidden',
+        width: Number(element.width || 0),
+      })),
       thumbnailStats: window.__donnerSampleThumbnailStats || null,
       visibleSurfaceCount: visibleSurfaces.length,
       wakeFailure: window.__donnerWorkerTaskWakeFailureStats || null,
@@ -871,7 +884,9 @@ async function runRegression(driver, editorUrl, result) {
   const canvas = result.thumbnailDiagnostic.canvasRect;
   const beforeSampleToken = Number(result.thumbnailDiagnostic.accepted?.token || 0);
   const beforeSampleResults = Number(result.thumbnailDiagnostic.worker?.completedResults || 0);
-  const sample = kLivePanOnly
+  const sample = kMemoryOnly
+    ? { id: "donner-splash", label: "Donner Splash", xFraction: 0.24 }
+    : kLivePanOnly
     ? { id: "text-style", label: "Text and Style", xFraction: 0.6875 }
     : { id: "basic-shapes", label: "Basic Shapes", xFraction: 0.5 };
   const sampleClickPoint = {
@@ -953,6 +968,64 @@ async function runRegression(driver, editorUrl, result) {
   assertAcceptedEpoch(sample.label, result.selectedSample, beforeSampleToken);
   assertFlatHeap(sample.label, result.selectedSample, initialHeapBytes);
   result.selectedSampleScreenshot = await capture(driver, `03-${sample.id}`);
+
+  if (kMemoryOnly) {
+    const pageTimeOrigin = Number(result.selectedSample.pageTimeOrigin || 0);
+    const settledWorkerResults = Number(result.selectedSample.worker?.completedResults || 0);
+    const settledTextureCreates = Number(
+      result.selectedSample.presentationResources?.lifetimeTextureCreates || 0,
+    );
+    const settledTrackedBytes = Number(
+      result.selectedSample.presentationResources?.totalTrackedBytes || 0,
+    );
+    result.memoryDwell = [];
+    for (let second = 1; second <= 90; ++second) {
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      const state = await readState(driver);
+      assertNoFatal(`Safari memory dwell ${second}s`, [state]);
+      assert.ok(
+        Math.abs(Number(state.pageTimeOrigin || 0) - pageTimeOrigin) < 1,
+        `Safari reloaded the editor during the memory dwell at ${second}s`,
+      );
+      assert.equal(
+        state.activeSample?.sampleId,
+        sample.id,
+        `Safari returned to the picker during the memory dwell at ${second}s`,
+      );
+      assertFlatHeap(`Safari memory dwell ${second}s`, state, initialHeapBytes);
+      const resourceStats = state.presentationResources || {};
+      result.memoryDwell.push({
+        canvasBackingBytes: (state.surfaceBacking || []).reduce(
+          (total, surface) => total + Number(surface.backingBytes || 0),
+          0,
+        ),
+        heapBytes: Number(state.heapBytes || 0),
+        mainLoopRenderedFrames: Number(state.mainLoopRenderedFrames || 0),
+        pageTimeOrigin: Number(state.pageTimeOrigin || 0),
+        resourceStats,
+        second,
+        workerResults: Number(state.worker?.completedResults || 0),
+      });
+    }
+    const finalState = result.memoryDwell.at(-1);
+    assert.equal(
+      finalState.workerResults,
+      settledWorkerResults,
+      "Safari kept producing document results while the Splash was idle",
+    );
+    assert.equal(
+      Number(finalState.resourceStats?.lifetimeTextureCreates || 0),
+      settledTextureCreates,
+      "Safari kept allocating WebGPU textures while the Splash was idle",
+    );
+    assert.equal(
+      Number(finalState.resourceStats?.totalTrackedBytes || 0),
+      settledTrackedBytes,
+      "Safari presentation resources grew while the Splash was idle",
+    );
+    result.memoryDwellScreenshot = await capture(driver, "04-memory-dwell");
+    return;
+  }
 
   if (kLivePanOnly) {
     const panPoint = {
@@ -1401,7 +1474,13 @@ async function main() {
     artifactDir: kArtifactDir,
     driverUrl: kDriverUrl,
     editorUrl: editorUrl.href,
-    scope: kLivePanOnly ? "live-pan-seam" : kSeamOnly ? "fractional-pan-seam" : "full",
+    scope: kMemoryOnly
+      ? "significant-memory"
+      : kLivePanOnly
+      ? "live-pan-seam"
+      : kSeamOnly
+      ? "fractional-pan-seam"
+      : "full",
     startedAt: new Date().toISOString(),
   };
   const driver = new SafariDriverClient(kDriverUrl);
@@ -1448,7 +1527,9 @@ async function main() {
     result.completedAt = new Date().toISOString();
     result.passed = true;
     fs.writeFileSync(path.join(kArtifactDir, "result.json"), JSON.stringify(result, null, 2));
-    const passLabel = kLivePanOnly
+    const passLabel = kMemoryOnly
+      ? "real Apple Safari 90-second memory dwell"
+      : kLivePanOnly
       ? "real Apple Safari live-pan edge pixels"
       : kSeamOnly
       ? "real Apple Safari fractional-pan edge pixels"
