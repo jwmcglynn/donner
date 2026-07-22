@@ -16,6 +16,11 @@ load("//build_defs:rules.bzl", "donner_cc_test", "donner_multi_transitioned_test
 donner_cc_test(
     name = "vulkan_solid_fill_tests_impl",
     srcs = ["VulkanSolidFill_tests.cc"],
+    # A missing Vulkan driver must be a red test in CI, never a silent skip:
+    # the target is linux-only and the CI lanes install a software Vulkan
+    # implementation, so VulkanDevice::Create() must succeed there. The
+    # transition wrapper forwards this env (RunEnvironmentInfo).
+    env = {"DONNER_REQUIRE_VULKAN": "1"},
     linkopts = ["-lvulkan"],
     target_compatible_with = ["@platforms//os:linux"] + select({
         "//donner/svg/renderer/geode:geode_enabled": [],

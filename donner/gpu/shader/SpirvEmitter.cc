@@ -713,8 +713,12 @@ uint32_t Emitter::constI32(int32_t value) {
 
 uint32_t Emitter::constF32(float value) {
   if (!std::isfinite(value)) {
-    latch(std::format("non-finite float literal in function \"{}\" cannot be emitted as SPIR-V",
-                      currentFunctionName_));
+    latch(
+        currentFunctionName_.empty()
+            ? std::string(
+                  "non-finite float literal in a module constant cannot be emitted as SPIR-V")
+            : std::format("non-finite float literal in function \"{}\" cannot be emitted as SPIR-V",
+                          currentFunctionName_));
     return 0;
   }
   const uint32_t bits = std::bit_cast<uint32_t>(value);
@@ -1056,10 +1060,22 @@ void Emitter::emitStatement(const IrStmt& statement) {
       return;
     }
     case IrStmt::Kind::Break:
+      // Defense in depth: the IR builder rejects break outside a loop.
+      if (loopStack_.empty()) {
+        latch(std::format("break outside a loop in function \"{}\" cannot be emitted as SPIR-V",
+                          currentFunctionName_));
+        return;
+      }
       Instr(functions_, kOpBranch, {loopStack_.back().first});
       blockTerminated_ = true;
       return;
     case IrStmt::Kind::Continue:
+      // Defense in depth: the IR builder rejects continue outside a loop.
+      if (loopStack_.empty()) {
+        latch(std::format("continue outside a loop in function \"{}\" cannot be emitted as SPIR-V",
+                          currentFunctionName_));
+        return;
+      }
       Instr(functions_, kOpBranch, {loopStack_.back().second});
       blockTerminated_ = true;
       return;

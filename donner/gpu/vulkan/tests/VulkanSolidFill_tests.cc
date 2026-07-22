@@ -28,6 +28,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -215,16 +216,25 @@ void WriteUndeclaredOutputPng(const std::vector<uint8_t>& pixels, const char* fi
                                                  kBaselineSize);
 }
 
+/// A storage buffer plus the byte size it was created with, so bind groups can bind the FULL
+/// range honestly. Vulkan enforces VkDescriptorBufferInfo.range, so binding a smaller range
+/// than the shader indexes would read out of bounds; Metal ignores the range, but both slices
+/// bind the same honest sizes.
+struct SizedBuffer {
+  Buffer buffer;          //!< The storage buffer.
+  uint64_t byteSize = 0;  //!< Byte size the buffer was created with.
+};
+
 /// One path's GPU resources.
 struct PathDraw {
   Buffer vertexBuffer;       //!< Quad vertices (6 x 20 bytes).
   Buffer uniformBuffer;      //!< 288-byte Uniforms.
-  Buffer bands;              //!< Horizontal bands (or 4-byte dummy).
-  Buffer curves;             //!< Horizontal curves (or dummy).
-  Buffer vBands;             //!< Vertical bands (or dummy).
-  Buffer vCurves;            //!< Vertical curves (or dummy).
-  Buffer hGrid;              //!< Horizontal band grid (or dummy).
-  Buffer vGrid;              //!< Vertical band grid (or dummy).
+  SizedBuffer bands;         //!< Horizontal bands (or 4-byte dummy).
+  SizedBuffer curves;        //!< Horizontal curves (or dummy).
+  SizedBuffer vBands;        //!< Vertical bands (or dummy).
+  SizedBuffer vCurves;       //!< Vertical curves (or dummy).
+  SizedBuffer hGrid;         //!< Horizontal band grid (or dummy).
+  SizedBuffer vGrid;         //!< Vertical band grid (or dummy).
   BindGroup bindGroup;       //!< The 12-entry solid-fill bind group.
   uint32_t vertexCount = 0;  //!< Draw vertex count.
 };
@@ -234,6 +244,13 @@ protected:
   void SetUp() override {
     device_ = VulkanDevice::Create();
     if (!device_) {
+      // CI sets DONNER_REQUIRE_VULKAN=1 (see BUILD.bazel) so a missing driver is a red test
+      // instead of a silent skip; local runs without a Vulkan runtime still skip.
+      const char* requireVulkan = std::getenv("DONNER_REQUIRE_VULKAN");
+      if (requireVulkan != nullptr && std::string_view(requireVulkan) == "1") {
+        FAIL() << "DONNER_REQUIRE_VULKAN=1 is set but no Vulkan 1.1 device is available; the "
+                  "vertical-slice gate must not be skipped on this runner";
+      }
       GTEST_SKIP() << "No Vulkan 1.1 device available";
     }
   }
@@ -249,8 +266,9 @@ protected:
 
   /// Creates a storage buffer holding \p bytes (or a 4-byte zero dummy when empty), mirroring
   /// the production encoder's empty-region dummies (the shader's band-count gates never
-  /// dereference them).
-  Buffer storageBuffer(const char* label, const void* data, size_t byteCount) {
+  /// dereference them). Returns the buffer with its created byte size so bind groups bind the
+  /// full range.
+  SizedBuffer storageBuffer(const char* label, const void* data, size_t byteCount) {
     const uint32_t dummy = 0;
     if (byteCount == 0) {
       data = &dummy;
@@ -262,7 +280,7 @@ protected:
     const Status writeStatus = device_->writeBuffer(
         buffer, 0, std::span<const uint8_t>(static_cast<const uint8_t*>(data), byteCount));
     EXPECT_FALSE(writeStatus.hasError()) << writeStatus.error();
-    return buffer;
+    return SizedBuffer{std::move(buffer), byteCount};
   }
 
   std::unique_ptr<VulkanDevice> device_;
@@ -392,7 +410,7 @@ TEST_F(VulkanSolidFillTest, MatchesProductionWgpuRender) {
     float row0[4] = {1.0f, 0.0f, 0.0f, 0.0f};
     float row1[4] = {0.0f, 1.0f, 0.0f, 0.0f};
   } identityTransform;
-  Buffer instanceTransforms =
+  SizedBuffer instanceTransforms =
       storageBuffer("instanceTransforms", &identityTransform, sizeof(identityTransform));
 
   // ----- Per-path geometry, uniforms, and bind groups (the production fillPath data flow) ----
@@ -460,19 +478,23 @@ TEST_F(VulkanSolidFillTest, MatchesProductionWgpuRender) {
         std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&uniforms), sizeof(uniforms)));
     ASSERT_FALSE(uniformWrite.hasError()) << uniformWrite.error();
 
+    // Storage buffers bind their FULL created byte size: the fragment shader indexes past
+    // element 0, and Vulkan enforces the bound range (Metal ignores it, but both slices bind
+    // the same honest sizes).
     std::vector<BindGroupEntry> entries;
     entries.push_back({0, BufferBinding{draw.uniformBuffer, 0, sizeof(Uniforms)}});
-    entries.push_back({1, BufferBinding{draw.bands, 0, 4}});
-    entries.push_back({2, BufferBinding{draw.curves, 0, 4}});
+    entries.push_back({1, BufferBinding{draw.bands.buffer, 0, draw.bands.byteSize}});
+    entries.push_back({2, BufferBinding{draw.curves.buffer, 0, draw.curves.byteSize}});
     entries.push_back({3, TextureViewBinding{dummyView}});
     entries.push_back({4, SamplerBinding{dummySampler}});
     entries.push_back({5, TextureViewBinding{dummyView}});
     entries.push_back({6, SamplerBinding{dummySampler}});
-    entries.push_back({7, BufferBinding{instanceTransforms, 0, sizeof(identityTransform)}});
-    entries.push_back({8, BufferBinding{draw.vBands, 0, 4}});
-    entries.push_back({9, BufferBinding{draw.vCurves, 0, 4}});
-    entries.push_back({10, BufferBinding{draw.hGrid, 0, 4}});
-    entries.push_back({11, BufferBinding{draw.vGrid, 0, 4}});
+    entries.push_back(
+        {7, BufferBinding{instanceTransforms.buffer, 0, instanceTransforms.byteSize}});
+    entries.push_back({8, BufferBinding{draw.vBands.buffer, 0, draw.vBands.byteSize}});
+    entries.push_back({9, BufferBinding{draw.vCurves.buffer, 0, draw.vCurves.byteSize}});
+    entries.push_back({10, BufferBinding{draw.hGrid.buffer, 0, draw.hGrid.byteSize}});
+    entries.push_back({11, BufferBinding{draw.vGrid.buffer, 0, draw.vGrid.byteSize}});
     draw.bindGroup = unwrap(device_->createBindGroup(BindGroupDescriptor{
                                 "solidFillGroup", bindGroupLayout, std::move(entries)}),
                             "createBindGroup");
