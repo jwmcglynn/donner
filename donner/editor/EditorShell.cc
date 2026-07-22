@@ -139,6 +139,40 @@ EM_JS(void, PublishInteractionStats,
         };
       });
 
+EM_JS(void, PublishLayerThumbnailStats,
+      (double rowCount, double renderedCount, double reusedCount, double deferredCount,
+       double bitmapCount, double bitmapBytes, double textureCount), {
+        window['__donnerLayerThumbnailStats'] = {
+          rowCount,
+          renderedCount,
+          reusedCount,
+          deferredCount,
+          bitmapCount,
+          bitmapBytes,
+          textureCount,
+        };
+      });
+
+EM_JS(void, PublishPresentationResourceStats,
+      (double totalTrackedBytes, double peakTrackedBytes, double pendingRetiredBytes,
+       double agedRetiredBytes, double activeTileTextures, double overviewTileTextures,
+       double pendingRetiredTextures, double agedRetiredTextures, double retiredFrameCount,
+       double lifetimeTextureCreates, double lifetimeBufferCreates), {
+        window['__donnerPresentationResourceStats'] = {
+          totalTrackedBytes,
+          peakTrackedBytes,
+          pendingRetiredBytes,
+          agedRetiredBytes,
+          activeTileTextures,
+          overviewTileTextures,
+          pendingRetiredTextures,
+          agedRetiredTextures,
+          retiredFrameCount,
+          lifetimeTextureCreates,
+          lifetimeBufferCreates,
+        };
+      });
+
 #endif
 
 #if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
@@ -6348,6 +6382,37 @@ void EditorShell::runFrame() {
   maybeLogFrameMissTelemetry(frameCost);
   maybeLogResourceDiagnostics(frameCost);
 #ifdef __EMSCRIPTEN__
+  const LayersPanel::ThumbnailRefreshStats& layerThumbnailStats =
+      layersPanel_.thumbnailRefreshStats();
+  std::size_t layerThumbnailBitmapCount = 0u;
+  std::size_t layerThumbnailBitmapBytes = 0u;
+  for (const LayerTreeRow& row : layersPanel_.rows()) {
+    if (const svg::RendererBitmap* thumbnail = layersPanel_.rowThumbnail(row.stableId);
+        thumbnail != nullptr && !thumbnail->empty()) {
+      ++layerThumbnailBitmapCount;
+      layerThumbnailBitmapBytes += thumbnail->pixels.size();
+    }
+  }
+  PublishLayerThumbnailStats(
+      static_cast<double>(layerThumbnailStats.rowCount),
+      static_cast<double>(layerThumbnailStats.renderedCount),
+      static_cast<double>(layerThumbnailStats.reusedCount),
+      static_cast<double>(layerThumbnailStats.deferredCount),
+      static_cast<double>(layerThumbnailBitmapCount),
+      static_cast<double>(layerThumbnailBitmapBytes),
+      static_cast<double>(textures_.thumbnailTextureCount()));
+  PublishPresentationResourceStats(
+      static_cast<double>(presentationResources.totalTrackedBytes),
+      static_cast<double>(presentationResources.peakTrackedBytes),
+      static_cast<double>(presentationResources.pendingRetiredBytes),
+      static_cast<double>(presentationResources.agedRetiredBytes),
+      static_cast<double>(presentationResources.activeTileTextures),
+      static_cast<double>(presentationResources.overviewTileTextures),
+      static_cast<double>(presentationResources.pendingRetiredTextures),
+      static_cast<double>(presentationResources.agedRetiredTextures),
+      static_cast<double>(presentationResources.retiredFrameCount),
+      static_cast<double>(presentationResources.wgpuLifetimeTextureCreates),
+      static_cast<double>(presentationResources.wgpuLifetimeBufferCreates));
   PublishInteractionStats(static_cast<int>(app_.selectedElements().size()),
                           interactionController_.pendingClick().has_value() ? 1 : 0,
                           renderCoordinator_.asyncRenderer().isBusy() ? 1 : 0,

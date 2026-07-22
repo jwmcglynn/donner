@@ -109,6 +109,28 @@ declare global {
       acceptedAtMs: number;
       publishedAtMs: number;
     };
+    __donnerLayerThumbnailStats?: {
+      rowCount: number;
+      renderedCount: number;
+      reusedCount: number;
+      deferredCount: number;
+      bitmapCount: number;
+      bitmapBytes: number;
+      textureCount: number;
+    };
+    __donnerPresentationResourceStats?: {
+      totalTrackedBytes: number;
+      peakTrackedBytes: number;
+      pendingRetiredBytes: number;
+      agedRetiredBytes: number;
+      activeTileTextures: number;
+      overviewTileTextures: number;
+      pendingRetiredTextures: number;
+      agedRetiredTextures: number;
+      retiredFrameCount: number;
+      lifetimeTextureCreates: number;
+      lifetimeBufferCreates: number;
+    };
   }
 }
 
@@ -1588,6 +1610,16 @@ test("wasm editor renders layer panel previews after loading a document", async 
       })
       .toBeGreaterThanOrEqual(request);
   }
+  await expect
+    .poll(async () => page.evaluate(() => window.__donnerLayerThumbnailStats?.bitmapCount || 0), {
+      message: "expected the Layers panel to render SVG row thumbnails instead of fallback swatches",
+      timeout: 20000,
+      intervals: [16, 25, 50, 100],
+    })
+    .toBeGreaterThan(0);
+  const thumbnailStats = await page.evaluate(() => window.__donnerLayerThumbnailStats);
+  expect(thumbnailStats?.bitmapBytes).toBeGreaterThan(0);
+  expect(thumbnailStats?.textureCount).toBeGreaterThan(0);
   await expect
     .poll(async () => {
       const stats = await readLayerPreviewColorStats(page);
