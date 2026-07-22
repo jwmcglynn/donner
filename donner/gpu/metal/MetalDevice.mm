@@ -197,7 +197,10 @@ struct MetalDevice::Impl {
   /// A bind group plus the layout slot it was created against (for per-binding visibility).
   struct BindGroupRecord {
     BindGroupDescriptor descriptor;  //!< Validated creation descriptor (entries).
-    uint32_t layoutSlot = 0;         //!< Slot of the bind group layout.
+    /// Snapshot of the layout the group was created against, taken at creation time. Layouts
+    /// are immutable value descriptors, so the copy stays correct even if the layout object is
+    /// destroyed and its slot recycled; encode never looks the layout up by slot.
+    BindGroupLayoutDescriptor layout;
   };
 
   /// A compiled render pipeline plus the encoder state every draw through it uses (cull mode
@@ -370,9 +373,17 @@ Status MetalDevice::onCreateBindGroupLayout(uint32_t slotIndex,
 }
 
 Status MetalDevice::onCreateBindGroup(uint32_t slotIndex, const BindGroupDescriptor& descriptor) {
+  // The base class validated the layout reference before this hook, so the slot lookup cannot
+  // miss; the descriptor is snapshotted into the record (see Impl::BindGroupRecord::layout).
+  const BindGroupLayoutDescriptor* layout =
+      FindRecord(impl_->bindGroupLayouts, descriptor.layout.slotIndex());
+  if (layout == nullptr) {
+    return GpuError{GpuErrorType::InvalidState,
+                    std::format("bind group layout slot {} has no Metal-side descriptor",
+                                descriptor.layout.slotIndex())};
+  }
   SetSlot(impl_->bindGroups, slotIndex,
-          std::optional<Impl::BindGroupRecord>(
-              Impl::BindGroupRecord{descriptor, descriptor.layout.slotIndex()}));
+          std::optional<Impl::BindGroupRecord>(Impl::BindGroupRecord{descriptor, *layout}));
   return OkStatus();
 }
 
@@ -635,15 +646,13 @@ Status MetalDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferSl
       }
       const Impl::BindGroupRecord* bindGroup =
           FindRecord(impl_->bindGroups, setBindGroup->bindGroupId.slotIndex);
-      const BindGroupLayoutDescriptor* layout =
-          bindGroup != nullptr ? FindRecord(impl_->bindGroupLayouts, bindGroup->layoutSlot)
-                               : nullptr;
-      if (renderEncoder == nil || bindGroup == nullptr || layout == nullptr) {
+      if (renderEncoder == nil || bindGroup == nullptr) {
         return failEncoding(
             GpuError{GpuErrorType::InvalidState,
                      std::format("setBindGroup: bind group slot {} is not encodable",
                                  setBindGroup->bindGroupId.slotIndex)});
       }
+      const BindGroupLayoutDescriptor* layout = &bindGroup->layout;
 
       Status bindStatus = OkStatus();
       for (const BindGroupEntry& entry : bindGroup->descriptor.entries) {

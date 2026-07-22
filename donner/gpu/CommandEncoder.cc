@@ -228,9 +228,19 @@ Status CommandEncoder::passSetBindGroup(uint32_t index, const BindGroup& bindGro
     return fail(std::move(record).error());
   }
 
-  // Re-resolve every resource the group references: a buffer, texture view (and its texture),
-  // or sampler destroyed after createBindGroup - including slot reuse - must fail closed here
-  // instead of reaching a backend.
+  // Re-resolve everything the group references: the layout it was created against (backends
+  // read it at encode time) plus every entry buffer, texture view (and its texture), and
+  // sampler. A dependency destroyed after createBindGroup - including slot reuse - must fail
+  // closed here instead of reaching a backend.
+  const Device::BindGroupLayoutRecord* layoutRecord = device_->bindGroupLayouts_.find(
+      record.result()->layoutIdentity.slotIndex, record.result()->layoutIdentity.generation);
+  if (layoutRecord == nullptr) {
+    return fail(Err(GpuErrorType::InvalidHandle,
+                    std::format("setBindGroup: bind group \"{}\" is stale; the layout it was "
+                                "created against was destroyed (layout slot {})",
+                                record.result()->descriptor.label.str(),
+                                record.result()->layoutIdentity.slotIndex)));
+  }
   for (const BindGroupEntry& entry : record.result()->descriptor.entries) {
     if (const BufferBinding* bufferBinding = std::get_if<BufferBinding>(&entry.resource)) {
       auto bufferRecord =

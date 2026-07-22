@@ -49,7 +49,8 @@ public:
       return slotIndex;
     }
 
-    slots_.push_back(Slot{1, true, 0, std::move(record)});
+    slots_.push_back(
+        Slot{.generation = 1, .alive = true, .lastUseSerial = 0, .record = std::move(record)});
     return static_cast<uint32_t>(slots_.size() - 1);
   }
 
@@ -193,6 +194,12 @@ Result<uint64_t> ValidateTexelCopyInternal(const TexelCopyBufferLayout& layout,
  * but the backend object is kept alive - and its slot is not reused - until every submission
  * referencing it has completed (\ref completedSerial). Deferred backend releases are processed by
  * \ref poll and opportunistically by `destroy*` and \ref submit.
+ *
+ * Two resource kinds are intentionally exempt from submission pinning because commands never
+ * reference them: \ref PipelineLayout and \ref ShaderModule are consumed at pipeline creation
+ * only, so destroying one releases its backend object immediately. Backends must snapshot or
+ * retain whatever they need from them when the pipeline is created (Metal's compiled pipeline
+ * state retains its functions; the Vulkan backend must do the equivalent when it lands).
  *
  * Thread affinity: a Device and everything created from it must be used from one thread at a
  * time, matching the async-renderer worker ownership model.

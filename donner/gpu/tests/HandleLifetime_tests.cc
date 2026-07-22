@@ -63,8 +63,8 @@ TEST_F(HandleLifetimeTests, ExplicitDestroyThenRaiiDoesNotDoubleDestroy) {
   // Exactly one destroy line: the RAII release of the consumed handle is a no-op.
   const std::string capture = device_.serialize();
   const size_t first = capture.find("destroy buffer#0");
-  ASSERT_THAT(first, Ne(std::string::npos));
-  EXPECT_THAT(capture.find("destroy buffer#0", first + 1), Eq(std::string::npos));
+  ASSERT_THAT(first, Ne(std::string::npos)) << "no destroy recorded; capture:\n" << capture;
+  EXPECT_THAT(capture.substr(first + 1), Not(HasSubstr("destroy buffer#0")));
 }
 
 TEST_F(HandleLifetimeTests, MoveAssignReleasesPreviouslyOwnedResource) {

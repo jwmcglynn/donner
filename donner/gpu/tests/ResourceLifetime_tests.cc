@@ -23,6 +23,7 @@ using testing::Eq;
 using testing::HasSubstr;
 using testing::IsEmpty;
 using testing::Ne;
+using testing::Not;
 
 namespace donner::gpu {
 namespace {
@@ -378,6 +379,43 @@ TEST_F(SubmitStalenessTests, RejectedSubmitDoesNotBurnSerial) {
       BufferDescriptor{"vertices2", 48, BufferUsage::Vertex | BufferUsage::CopyDst}));
   CommandBuffer freshCommands = recordScene();
   EXPECT_THAT(GetResultOrFail(device_.submit(std::move(freshCommands))), Eq(uint64_t{1}));
+}
+
+TEST_F(SubmitStalenessTests, DroppedCommandBufferReleasesSlotWithoutBackendNotification) {
+  uint32_t droppedSlot = 0;
+  {
+    const CommandBuffer dropped = recordScene();
+    droppedSlot = dropped.slotIndex();
+  }
+
+  // The RAII release freed the slot (the next finished buffer reuses it) and command buffers
+  // have no backend object, so no destroy line was recorded.
+  const CommandBuffer next = recordScene();
+  EXPECT_THAT(next.slotIndex(), Eq(droppedSlot));
+  EXPECT_THAT(device_.serialize(), Not(HasSubstr("destroy commandBuffer")));
+}
+
+TEST_F(SubmitStalenessTests, DoubleSubmitFailsClosed) {
+  CommandBuffer commands = recordScene();
+  ASSERT_THAT(device_.submit(std::move(commands)), HasResult());
+
+  // The first submit consumed the handle; the second sees a null handle.
+  EXPECT_THAT(device_.submit(std::move(commands)),  // NOLINT(bugprone-use-after-move)
+              IsGpuErrorWithMessage(GpuErrorType::InvalidHandle, HasSubstr("null")));
+}
+
+TEST_F(SubmitStalenessTests, ForgedConsumedCommandBufferIsStale) {
+  CommandBuffer commands = recordScene();
+  const uint32_t slot = commands.slotIndex();
+  const uint32_t generation = commands.generation();
+  const uint64_t deviceId = commands.deviceId();
+  ASSERT_THAT(device_.submit(std::move(commands)), HasResult());
+
+  // A forged handle carrying the consumed generation must resolve as stale, not alias a later
+  // command buffer occupying the slot.
+  CommandBuffer forged = CommandBuffer::CreateForBackend(slot, generation, deviceId);
+  EXPECT_THAT(device_.submit(std::move(forged)),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidHandle, HasSubstr("stale")));
 }
 
 TEST_F(SubmitStalenessTests, DestroyedSamplerEntryRejectsSubmit) {
