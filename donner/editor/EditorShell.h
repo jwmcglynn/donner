@@ -667,6 +667,9 @@ private:
   bool sourcePaneVisible_ = false;
   bool showSamplePicker_ = false;
   bool welcomePlaceholderActive_ = false;
+  /// Keep the picker covering the render pane until the selected sample has a current-viewport
+  /// presentation. This prevents the startup placeholder surface from becoming user-visible.
+  bool samplePresentationPending_ = false;
   std::string activeSampleId_;
   std::string pendingSampleLoadId_;
   bool pendingSampleLoadNeedsConfirmation_ = false;

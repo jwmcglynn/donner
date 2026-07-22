@@ -1108,6 +1108,13 @@ test("browser presents the first Basic Shapes drag frame within the interaction 
       () => window.__donnerWgpuReadbackStats?.selectionChromePixels || 0,
     );
     await page.mouse.click(blueRectCenter.x, blueRectCenter.y);
+    await expect
+      .poll(async () => page.evaluate(() => window.__donnerInteractionStats?.selectedCount || 0), {
+        message: "expected shape selection before capturing its overlay",
+        timeout: 2000,
+        intervals: [16, 25, 50, 100],
+      })
+      .toBeGreaterThan(0);
     const selectionRequest = await requestWgpuDiagnostic(page);
     await expect
       .poll(async () => page.evaluate(() => window.__donnerWgpuReadbackStats?.request || 0), {
@@ -1742,6 +1749,13 @@ test("Geode WASM presents selection path overlay pixels", async ({ page }) => {
     () => window.__donnerWgpuReadbackStats?.selectionChromePixels || 0,
   );
   await page.mouse.click(documentBounds.x + coloredPixel.x, documentBounds.y + coloredPixel.y);
+  await expect
+    .poll(async () => page.evaluate(() => window.__donnerInteractionStats?.selectedCount || 0), {
+      message: "expected shape selection before capturing its overlay",
+      timeout: 2000,
+      intervals: [16, 25, 50, 100],
+    })
+    .toBeGreaterThan(0);
   const selectionRequest = await requestWgpuDiagnostic(page);
   await page.mouse.move(
     documentBounds.x + coloredPixel.x + 4,

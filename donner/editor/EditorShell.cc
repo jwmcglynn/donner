@@ -1598,6 +1598,7 @@ bool EditorShell::tryLoadSource(std::string_view source, std::optional<std::stri
 
   cancelSampleThumbnailGeneration();
   welcomePlaceholderActive_ = false;
+  samplePresentationPending_ = false;
   showSamplePicker_ = false;
   textEditor_.setText(std::string(source));
   textEditor_.resetTextChanged();
@@ -1681,7 +1682,11 @@ void EditorShell::processPendingSampleLoad() {
 #ifdef __EMSCRIPTEN__
     PublishActiveSampleId(activeSampleId_.c_str());
 #endif
-    showSamplePicker_ = false;
+    samplePresentationPending_ = true;
+    showSamplePicker_ = true;
+    // The picker click runs after the render pane has already laid out this frame. Defer the first
+    // sample request until the next frame has fitted the new intrinsic viewBox.
+    requestRenderAtEndOfFrame_ = false;
   } else {
     showSamplePicker_ = true;
     std::fprintf(stderr, "[editor] failed to load built-in sample %s: %s\n", sampleId.c_str(),
@@ -3145,15 +3150,23 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
       ImGui::GetMousePos(), referenceChipRect, toolPaletteRect, textFormatBarRect,
       editingScopeBreadcrumbRect, canvasZoomControlRect, compactPanelRect);
 
-  ImGui::SetNextItemAllowOverlap();
-  ImGui::InvisibleButton("##render_canvas", contentRegion,
-                         ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonMiddle);
-  const bool paneHovered = ImGui::IsItemHovered();
-  const bool canvasHovered = paneHovered && !canvasChromeHovered && !showSamplePicker_;
   const Box2d paneRect = Box2d::FromXYWH(interactionController_.viewport().paneOrigin.x,
                                          interactionController_.viewport().paneOrigin.y,
                                          interactionController_.viewport().paneSize.x,
                                          interactionController_.viewport().paneSize.y);
+  ImGui::SetNextItemAllowOverlap();
+  ImGui::InvisibleButton("##render_canvas", contentRegion,
+                         ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonMiddle);
+  const bool popupCapturingInput =
+      ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
+  const ImVec2 mousePosition = ImGui::GetMousePos();
+  // The sample picker is a full-pane ImGui window. On the first event-driven frame after it closes,
+  // ImGui's hovered-window cache still names that previous-frame window even though the matching
+  // document surface is already visible. Use the authoritative pane geometry for canvas input and
+  // explicitly exclude every real overlap instead of dropping that first click.
+  const bool paneHovered = paneRect.contains(Vector2d(mousePosition.x, mousePosition.y));
+  const bool canvasHovered = paneHovered && !canvasChromeHovered && !showSamplePicker_ &&
+                             !popupCapturingInput;
 
   const bool spaceHeld = ImGui::IsKeyDown(ImGuiKey_Space);
   const bool middleDown = ImGui::IsMouseDown(ImGuiMouseButton_Middle);
@@ -3204,8 +3217,8 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
     }
   }
 
-  const bool modalCapturingInput = showSamplePicker_ || canvasChromeHovered ||
-                                   ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
+  const bool modalCapturingInput =
+      showSamplePicker_ || canvasChromeHovered || popupCapturingInput;
   // Publish the canvas scroll-capture rect for the raw GLFW scroll callback:
   // wheel events inside the render pane are consumed by the canvas (pan/zoom)
   // and must not also reach ImGui window scrolling, or scrolling the canvas
@@ -3678,7 +3691,9 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
 
   applyPendingDocumentSpaceReplayInputForTesting();
 
-  if (!showSamplePicker_ && !renderCoordinator_.asyncRenderer().isBusy() && app_.hasDocument()) {
+  if ((!showSamplePicker_ || samplePresentationPending_) &&
+      !renderCoordinator_.asyncRenderer().isBusy() && app_.hasDocument() &&
+      viewportInitialized_) {
     requestRenderAtEndOfFrame_ = true;
   }
 
@@ -4470,9 +4485,6 @@ void EditorShell::renderSidebars() {
     LayersPanel::ThumbnailRefreshMode thumbnailMode =
         compactSheet || !presentationCurrent ? LayersPanel::ThumbnailRefreshMode::SwatchesOnly
                                              : LayersPanel::ThumbnailRefreshMode::RenderIncremental;
-#if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
-    thumbnailMode = LayersPanel::ThumbnailRefreshMode::SwatchesOnly;
-#endif
     layersPanel_.refreshSnapshot(app_,
                                  thumbnailMode == LayersPanel::ThumbnailRefreshMode::SwatchesOnly
                                      ? nullptr
@@ -6111,6 +6123,12 @@ void EditorShell::runFrame() {
   renderCoordinator_.pollRenderResult(app_, interactionController_.viewport(), textures_,
                                       &interactionController_.frameHistory());
   applyPendingHistoryActions();
+  if (samplePresentationPending_ && viewportInitialized_ && app_.hasDocument() &&
+      renderCoordinator_.displayedDocVersionForDiagnostics() ==
+          app_.document().currentFrameVersion()) {
+    samplePresentationPending_ = false;
+    showSamplePicker_ = false;
+  }
   markPhase(mainFrameCost.renderPollMs);
 
   if (!renderCoordinator_.asyncRenderer().isBusy()) {
@@ -6400,7 +6418,7 @@ void EditorShell::runFrame() {
       static_cast<double>(layerThumbnailStats.deferredCount),
       static_cast<double>(layerThumbnailBitmapCount),
       static_cast<double>(layerThumbnailBitmapBytes),
-      static_cast<double>(textures_.thumbnailTextureCount()));
+      static_cast<double>(thumbnailTextures_.thumbnailTextureCount()));
   PublishPresentationResourceStats(
       static_cast<double>(presentationResources.totalTrackedBytes),
       static_cast<double>(presentationResources.peakTrackedBytes),

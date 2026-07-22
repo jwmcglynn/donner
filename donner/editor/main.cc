@@ -125,9 +125,15 @@ void RunEditorFrame(donner::editor::gui::EditorWindow& window, donner::editor::E
 
 #ifdef __EMSCRIPTEN__
 struct WasmEditorLoopState {
+  using RenderFrameCallback = void (*)(donner::editor::gui::EditorWindow&,
+                                       donner::editor::EditorShell&);
+
   std::unique_ptr<donner::editor::gui::EditorWindow> window;
   std::unique_ptr<donner::editor::EditorShell> shell;
   std::optional<double> nextIdleWakeAtMs;
+  // This must remain an indirect call. Binaryen otherwise folds the entire editor render path into
+  // the requestAnimationFrame callback, which Safari tier-compiles even while the editor is idle.
+  RenderFrameCallback renderFrame = &RunEditorFrame;
 };
 
 void RunWasmEditorFrame(void* userdata) {
@@ -154,7 +160,7 @@ void RunWasmEditorFrame(void* userdata) {
     return;
   }
 
-  RunEditorFrame(*state->window, *state->shell);
+  state->renderFrame(*state->window, *state->shell);
   MarkWasmEditorFrameRendered();
   if (const std::optional<float> wakeSeconds = state->shell->nextIdleWakeSeconds()) {
     state->nextIdleWakeAtMs = emscripten_get_now() + std::max(0.0f, *wakeSeconds) * 1000.0;

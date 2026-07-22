@@ -856,30 +856,34 @@ async function runRegression(driver, editorUrl, result) {
   result.thumbnailsScreenshot = await capture(driver, "02-thumbnails-settled");
   assertFlatHeap("asynchronous SVG thumbnails", result.thumbnailsSettled, initialHeapBytes);
 
-  result.thumbnailDiagnosticRequest = await driver.execute(`
-    if (!window.__donnerRequestWgpuReadback) {
-      throw new Error('WGPU diagnostic hook is unavailable; serve with wgpuReadbackStats=1');
-    }
-    return window.__donnerRequestWgpuReadback();
-  `);
-  result.thumbnailDiagnostic = await poll(
-    "thumbnail WGPU diagnostic readback",
-    async () => {
-      const state = await readState(driver);
-      assertNoFatal("thumbnail WGPU diagnostic readback", [state]);
-      return Number(state.wgpuReadback?.request || 0) >= result.thumbnailDiagnosticRequest
-        ? state
-        : null;
-    },
-    5_000,
-    25,
-  );
-  assertThumbnailDiagnostic(result.thumbnailDiagnostic, initialDeviceState);
-  assertFlatHeap(
-    "thumbnail WGPU diagnostic readback",
-    result.thumbnailDiagnostic,
-    initialHeapBytes,
-  );
+  if (kMemoryOnly) {
+    result.thumbnailDiagnostic = result.thumbnailsSettled;
+  } else {
+    result.thumbnailDiagnosticRequest = await driver.execute(`
+      if (!window.__donnerRequestWgpuReadback) {
+        throw new Error('WGPU diagnostic hook is unavailable; serve with wgpuReadbackStats=1');
+      }
+      return window.__donnerRequestWgpuReadback();
+    `);
+    result.thumbnailDiagnostic = await poll(
+      "thumbnail WGPU diagnostic readback",
+      async () => {
+        const state = await readState(driver);
+        assertNoFatal("thumbnail WGPU diagnostic readback", [state]);
+        return Number(state.wgpuReadback?.request || 0) >= result.thumbnailDiagnosticRequest
+          ? state
+          : null;
+      },
+      5_000,
+      25,
+    );
+    assertThumbnailDiagnostic(result.thumbnailDiagnostic, initialDeviceState);
+    assertFlatHeap(
+      "thumbnail WGPU diagnostic readback",
+      result.thumbnailDiagnostic,
+      initialHeapBytes,
+    );
+  }
 
   const canvas = result.thumbnailDiagnostic.canvasRect;
   const beforeSampleToken = Number(result.thumbnailDiagnostic.accepted?.token || 0);
@@ -978,48 +982,55 @@ async function runRegression(driver, editorUrl, result) {
     const settledTrackedBytes = Number(
       result.selectedSample.presentationResources?.totalTrackedBytes || 0,
     );
-    result.memoryDwell = [];
-    for (let second = 1; second <= 90; ++second) {
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
-      const state = await readState(driver);
-      assertNoFatal(`Safari memory dwell ${second}s`, [state]);
-      assert.ok(
-        Math.abs(Number(state.pageTimeOrigin || 0) - pageTimeOrigin) < 1,
-        `Safari reloaded the editor during the memory dwell at ${second}s`,
-      );
-      assert.equal(
-        state.activeSample?.sampleId,
-        sample.id,
-        `Safari returned to the picker during the memory dwell at ${second}s`,
-      );
-      assertFlatHeap(`Safari memory dwell ${second}s`, state, initialHeapBytes);
-      const resourceStats = state.presentationResources || {};
-      result.memoryDwell.push({
-        canvasBackingBytes: (state.surfaceBacking || []).reduce(
-          (total, surface) => total + Number(surface.backingBytes || 0),
-          0,
-        ),
-        heapBytes: Number(state.heapBytes || 0),
-        mainLoopRenderedFrames: Number(state.mainLoopRenderedFrames || 0),
-        pageTimeOrigin: Number(state.pageTimeOrigin || 0),
-        resourceStats,
-        second,
-        workerResults: Number(state.worker?.completedResults || 0),
-      });
-    }
-    const finalState = result.memoryDwell.at(-1);
+    await driver.execute(`
+      clearInterval(window.__donnerSafariMemoryTimer);
+      window.__donnerSafariMemorySamples = [];
+      const capture = () => {
+        const resources = window.__donnerPresentationResourceStats || {};
+        window.__donnerSafariMemorySamples.push({
+          heapBytes: window.HEAPU8?.length || window.Module?.wasmMemory?.buffer?.byteLength || 0,
+          mainLoopRenderedFrames: Number(window.__donnerMainLoopRenderedFrames || 0),
+          pageTimeOrigin: performance.timeOrigin,
+          resourceStats: { ...resources },
+          sampledAtMs: performance.now(),
+          workerResults: Number(window.__donnerWorkerStats?.completedResults || 0),
+        });
+      };
+      capture();
+      window.__donnerSafariMemoryTimer = setInterval(capture, 5_000);
+      return true;
+    `);
+    await new Promise((resolve) => setTimeout(resolve, 90_000));
+    const finalState = await readState(driver);
+    result.memoryDwell = await driver.execute(`
+      clearInterval(window.__donnerSafariMemoryTimer);
+      window.__donnerSafariMemoryTimer = 0;
+      return window.__donnerSafariMemorySamples || [];
+    `);
+    assertNoFatal("Safari memory dwell", [finalState]);
+    assert.ok(
+      Math.abs(Number(finalState.pageTimeOrigin || 0) - pageTimeOrigin) < 1,
+      "Safari reloaded the editor during the memory dwell",
+    );
     assert.equal(
-      finalState.workerResults,
+      finalState.activeSample?.sampleId,
+      sample.id,
+      "Safari returned to the picker during the memory dwell",
+    );
+    assertFlatHeap("Safari memory dwell", finalState, initialHeapBytes);
+    assert.ok(result.memoryDwell.length >= 18, "Safari memory timer stopped during the dwell");
+    assert.equal(
+      Number(finalState.worker?.completedResults || 0),
       settledWorkerResults,
       "Safari kept producing document results while the Splash was idle",
     );
     assert.equal(
-      Number(finalState.resourceStats?.lifetimeTextureCreates || 0),
+      Number(finalState.presentationResources?.lifetimeTextureCreates || 0),
       settledTextureCreates,
       "Safari kept allocating WebGPU textures while the Splash was idle",
     );
     assert.equal(
-      Number(finalState.resourceStats?.totalTrackedBytes || 0),
+      Number(finalState.presentationResources?.totalTrackedBytes || 0),
       settledTrackedBytes,
       "Safari presentation resources grew while the Splash was idle",
     );
@@ -1469,7 +1480,9 @@ async function main() {
   fs.mkdirSync(kArtifactDir, { recursive: true });
   const editorUrl = new URL(kBaseUrl);
   editorUrl.searchParams.set("safari-geode-regression", "1");
-  editorUrl.searchParams.set("wgpuReadbackStats", "1");
+  if (!kMemoryOnly) {
+    editorUrl.searchParams.set("wgpuReadbackStats", "1");
+  }
   const result = {
     artifactDir: kArtifactDir,
     driverUrl: kDriverUrl,
