@@ -1,7 +1,7 @@
 # Frozen baseline for the Metal solid-fill vertical slice
 
 `solid_fill_baseline.png` is the design 0053 phase 3 frozen baseline: the shared baseline scene
-(`donner/gpu/metal/tests/BaselineScene.h` - a translucent red quadratic-segment circle
+(`donner/gpu/tests/BaselineScene.h` - a translucent red quadratic-segment circle
 (non-zero), a self-intersecting blue star (even-odd), and an opaque green cubic blob overlapping
 both) rendered at 256x256 RGBA8 over a transparent background.
 

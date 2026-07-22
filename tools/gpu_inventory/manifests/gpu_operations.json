@@ -355,6 +355,46 @@
         "VertexStepMode"
       ]
     },
+    "donner/gpu/vulkan/tests/VulkanSolidFill_tests.cc": {
+      "operations": [
+        "copyTextureToBuffer",
+        "createBuffer",
+        "createCommandEncoder",
+        "createTexture",
+        "finish",
+        "getConstMappedRange",
+        "mapAsync",
+        "poll",
+        "submit",
+        "unmap"
+      ],
+      "wgpuCFunctions": [
+        "wgpuLabel"
+      ],
+      "wgpuCTypes": [
+        "WGPUMapAsyncStatus",
+        "WGPUMapAsyncStatus_Success",
+        "WGPUStringView"
+      ],
+      "wgpuCppTokens": [
+        "Buffer",
+        "BufferDescriptor",
+        "BufferMapCallbackInfo",
+        "BufferUsage",
+        "CommandBuffer",
+        "CommandEncoder",
+        "Default",
+        "Extent3D",
+        "MapMode",
+        "TexelCopyBufferInfo",
+        "TexelCopyTextureInfo",
+        "Texture",
+        "TextureDescriptor",
+        "TextureDimension",
+        "TextureFormat",
+        "TextureUsage"
+      ]
+    },
     "donner/svg/renderer/RendererGeode.cc": {
       "operations": [
         "beginComputePass",

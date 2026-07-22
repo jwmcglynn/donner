@@ -1,0 +1,24 @@
+load("//build_defs:rules.bzl", "donner_cc_library")
+load("//build_defs:visibility.bzl", "donner_internal_visibility")
+
+# donner::gpu::vulkan - the Vulkan backend of the Donner GPU runtime (design
+# doc 0053, change sequence packet 7).
+#
+# Minimal vertical slice: host-visible buffers, device-local textures with
+# staged uploads, SPIR-V shader modules, the solid-fill render pipeline
+# family, render pass replay, and texture-to-buffer readback. Compiles on
+# every platform against the hermetic Vulkan-Headers module; the Vulkan
+# loader is linked (and the backend executes) only on Linux targets - see
+# tests/BUILD.bazel for the loader linkopts and OS gating.
+
+donner_cc_library(
+    name = "vulkan_device",
+    srcs = ["VulkanDevice.cc"],
+    hdrs = ["VulkanDevice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        "//donner/base",
+        "//donner/gpu",
+        "@vulkan_headers",
+    ],
+)

@@ -258,6 +258,33 @@ destroy texture#0
   EXPECT_THAT(device.serialize(), Eq(kExpected));
 }
 
+TEST(RecordingDeviceTests, SpirvShaderModuleSerializesWordCountAndHash) {
+  RecordingDevice device;
+  const ShaderModule module = GetResultOrFail(device.createShaderModule(ShaderModuleDescriptor{
+      "spirvFill", "", ShaderSourceKind::Spirv, {0x07230203u, 0x00010300u, 0x0008000bu}}));
+  (void)module;
+
+  // Binary modules record word count + content hash; the text-kind sourceBytes/sourceHash pair
+  // must not appear (the golden test above pins the text-kind format byte-for-byte).
+  EXPECT_THAT(device.serialize(),
+              HasSubstr("createShaderModule shaderModule#0 label=\"spirvFill\" sourceKind=Spirv "
+                        "spirvWords=3 spirvHash="));
+  EXPECT_THAT(device.serialize(), Not(HasSubstr("sourceBytes")));
+}
+
+TEST(RecordingDeviceTests, SpirvShaderModuleSerializationIsDeterministic) {
+  const auto record = [](RecordingDevice& device) {
+    const ShaderModule module = GetResultOrFail(device.createShaderModule(ShaderModuleDescriptor{
+        "spirvFill", "", ShaderSourceKind::Spirv, {0x07230203u, 0x00010300u}}));
+    (void)module;
+  };
+  RecordingDevice first;
+  RecordingDevice second;
+  record(first);
+  record(second);
+  EXPECT_THAT(first.serialize(), Eq(second.serialize()));
+}
+
 TEST(RecordingDeviceTests, SerializationContainsNoPointers) {
   RecordingDevice device;
   RecordRepresentativeStream(device);

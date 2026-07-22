@@ -669,8 +669,26 @@ Result<ShaderModule> Device::createShaderModule(const ShaderModuleDescriptor& de
       status.hasError()) {
     return std::move(status).error();
   }
-  if (descriptor.sourceText.empty()) {
-    return Err(GpuErrorType::InvalidDescriptor, "ShaderModuleDescriptor.sourceText is empty");
+  // Exactly one source representation must be populated for the descriptor's kind: binary kinds
+  // must not smuggle text and text kinds must not smuggle words, so a backend never has to guess
+  // which representation is authoritative.
+  if (descriptor.sourceKind == ShaderSourceKind::Spirv) {
+    if (descriptor.spirvWords.empty()) {
+      return Err(GpuErrorType::InvalidDescriptor,
+                 "ShaderModuleDescriptor.spirvWords is empty for sourceKind Spirv");
+    }
+    if (!descriptor.sourceText.empty()) {
+      return Err(GpuErrorType::InvalidDescriptor,
+                 "ShaderModuleDescriptor.sourceText must be empty for sourceKind Spirv");
+    }
+  } else {
+    if (descriptor.sourceText.empty()) {
+      return Err(GpuErrorType::InvalidDescriptor, "ShaderModuleDescriptor.sourceText is empty");
+    }
+    if (!descriptor.spirvWords.empty()) {
+      return Err(GpuErrorType::InvalidDescriptor,
+                 "ShaderModuleDescriptor.spirvWords must be empty for text source kinds");
+    }
   }
 
   ShaderModule handle =
