@@ -974,13 +974,60 @@ async function runRegression(driver, editorUrl, result) {
   result.selectedSampleScreenshot = await capture(driver, `03-${sample.id}`);
 
   if (kMemoryOnly) {
-    const pageTimeOrigin = Number(result.selectedSample.pageTimeOrigin || 0);
-    const settledWorkerResults = Number(result.selectedSample.worker?.completedResults || 0);
+    let previousResourceSignature = "";
+    let stableResourceSamples = 0;
+    result.memorySettle = [];
+    result.memoryBaseline = await poll(
+      "Splash layer thumbnails and presentation resources",
+      async () => {
+        const state = await readState(driver);
+        assertNoFatal("Splash layer thumbnails and presentation resources", [state]);
+        const layers = state.layerThumbnails || {};
+        const resources = state.presentationResources || {};
+        const signature = JSON.stringify({
+          bitmapBytes: Number(layers.bitmapBytes || 0),
+          bitmapCount: Number(layers.bitmapCount || 0),
+          lifetimeBufferCreates: Number(resources.lifetimeBufferCreates || 0),
+          lifetimeTextureCreates: Number(resources.lifetimeTextureCreates || 0),
+          textureCount: Number(layers.textureCount || 0),
+          totalTrackedBytes: Number(resources.totalTrackedBytes || 0),
+          workerResults: Number(state.worker?.completedResults || 0),
+        });
+        result.memorySettle.push({
+          deferredCount: Number(layers.deferredCount || 0),
+          sampledAtMs: Date.now(),
+          signature,
+        });
+        const thumbnailsReady = Number(layers.rowCount || 0) > 0
+          && Number(layers.deferredCount || 0) === 0
+          && Number(layers.bitmapCount || 0) > 0;
+        if (!thumbnailsReady) {
+          previousResourceSignature = "";
+          stableResourceSamples = 0;
+          return null;
+        }
+        if (signature === previousResourceSignature) {
+          stableResourceSamples += 1;
+        } else {
+          previousResourceSignature = signature;
+          stableResourceSamples = 1;
+        }
+        return stableResourceSamples >= 4 ? state : null;
+      },
+      Math.max(kTimeoutMs, 45_000),
+      500,
+    );
+    result.memoryBaselineScreenshot = await capture(driver, "03b-memory-baseline");
+    const pageTimeOrigin = Number(result.memoryBaseline.pageTimeOrigin || 0);
+    const settledWorkerResults = Number(result.memoryBaseline.worker?.completedResults || 0);
     const settledTextureCreates = Number(
-      result.selectedSample.presentationResources?.lifetimeTextureCreates || 0,
+      result.memoryBaseline.presentationResources?.lifetimeTextureCreates || 0,
+    );
+    const settledBufferCreates = Number(
+      result.memoryBaseline.presentationResources?.lifetimeBufferCreates || 0,
     );
     const settledTrackedBytes = Number(
-      result.selectedSample.presentationResources?.totalTrackedBytes || 0,
+      result.memoryBaseline.presentationResources?.totalTrackedBytes || 0,
     );
     await driver.execute(`
       clearInterval(window.__donnerSafariMemoryTimer);
@@ -1028,6 +1075,11 @@ async function runRegression(driver, editorUrl, result) {
       Number(finalState.presentationResources?.lifetimeTextureCreates || 0),
       settledTextureCreates,
       "Safari kept allocating WebGPU textures while the Splash was idle",
+    );
+    assert.equal(
+      Number(finalState.presentationResources?.lifetimeBufferCreates || 0),
+      settledBufferCreates,
+      "Safari kept allocating WebGPU buffers while the Splash was idle",
     );
     assert.equal(
       Number(finalState.presentationResources?.totalTrackedBytes || 0),
