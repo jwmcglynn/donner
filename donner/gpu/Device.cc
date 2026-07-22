@@ -284,26 +284,149 @@ uint64_t Device::NextDeviceId() {
   return counter.fetch_add(1, std::memory_order_relaxed);
 }
 
-Device::Device() : deviceId_(NextDeviceId()) {}
+Device::Device() : deviceId_(NextDeviceId()), aliveToken_(std::make_shared<Device*>(this)) {}
 
-Device::~Device() = default;
+Device::~Device() {
+  // Expire the device-alive token first: handles destroyed after this point release nothing.
+  // Deferred backend releases still pending are dropped with the device - backend destructors
+  // own the teardown of any remaining backend state (waiting for in-flight submissions first
+  // where the backend executes asynchronously).
+  aliveToken_.reset();
+}
 
 template <typename Tag, typename Record>
 Handle<Tag> Device::allocateHandle(details::SlotTable<Record>& table, Record&& record) {
   const uint32_t slotIndex = table.allocate(std::move(record));
-  return Handle<Tag>::CreateForBackend(slotIndex, table.generationOf(slotIndex), deviceId_);
+  return Handle<Tag>::CreateForBackend(slotIndex, table.generationOf(slotIndex), deviceId_,
+                                       aliveToken_);
+}
+
+void Device::recycleRetiredSlot(ResourceKind kind, uint32_t slotIndex) {
+  switch (kind) {
+    case ResourceKind::Buffer:
+      onDestroyResource(BufferTag::kName, slotIndex);
+      buffers_.recycle(slotIndex);
+      return;
+    case ResourceKind::Texture:
+      onDestroyResource(TextureTag::kName, slotIndex);
+      textures_.recycle(slotIndex);
+      return;
+    case ResourceKind::TextureView:
+      onDestroyResource(TextureViewTag::kName, slotIndex);
+      textureViews_.recycle(slotIndex);
+      return;
+    case ResourceKind::Sampler:
+      onDestroyResource(SamplerTag::kName, slotIndex);
+      samplers_.recycle(slotIndex);
+      return;
+    case ResourceKind::BindGroupLayout:
+      onDestroyResource(BindGroupLayoutTag::kName, slotIndex);
+      bindGroupLayouts_.recycle(slotIndex);
+      return;
+    case ResourceKind::BindGroup:
+      onDestroyResource(BindGroupTag::kName, slotIndex);
+      bindGroups_.recycle(slotIndex);
+      return;
+    case ResourceKind::PipelineLayout:
+      onDestroyResource(PipelineLayoutTag::kName, slotIndex);
+      pipelineLayouts_.recycle(slotIndex);
+      return;
+    case ResourceKind::ShaderModule:
+      onDestroyResource(ShaderModuleTag::kName, slotIndex);
+      shaderModules_.recycle(slotIndex);
+      return;
+    case ResourceKind::RenderPipeline:
+      onDestroyResource(RenderPipelineTag::kName, slotIndex);
+      renderPipelines_.recycle(slotIndex);
+      return;
+  }
+}
+
+void Device::retireResource(ResourceKind kind, uint32_t slotIndex, uint64_t lastUseSerial) {
+  if (lastUseSerial <= completedSerial()) {
+    recycleRetiredSlot(kind, slotIndex);
+  } else {
+    pendingDestroys_.push_back(PendingDestroy{lastUseSerial, kind, slotIndex});
+  }
+}
+
+void Device::poll() {
+  const uint64_t completed = completedSerial();
+  size_t writeIndex = 0;
+  for (const PendingDestroy& pending : pendingDestroys_) {
+    if (pending.readySerial <= completed) {
+      recycleRetiredSlot(pending.kind, pending.slotIndex);
+    } else {
+      pendingDestroys_[writeIndex++] = pending;
+    }
+  }
+  pendingDestroys_.resize(writeIndex);
 }
 
 template <typename Record, typename Tag>
-Status Device::destroyResource(details::SlotTable<Record>& table, const Handle<Tag>& handle) {
-  auto resolved = resolve(table, handle, Tag::kName);
+Status Device::destroyResource(details::SlotTable<Record>& table, Handle<Tag>&& handle,
+                               ResourceKind kind) {
+  // Take ownership so the caller's handle is null afterwards. On any early return the local's
+  // RAII release runs: a stale no-op after a successful retire below, an actual release on the
+  // owning device when the handle belongs to a different device.
+  const Handle<Tag> consumed = std::move(handle);
+  poll();
+  auto resolved = resolve(table, consumed, Tag::kName);
   if (resolved.hasError()) {
     return std::move(resolved).error();
   }
-  table.release(handle.slotIndex());
-  onDestroyResource(Tag::kName, handle.slotIndex());
+  const uint32_t slotIndex = consumed.slotIndex();
+  const uint64_t lastUseSerial = table.lastUseOf(slotIndex);
+  table.retire(slotIndex);
+  retireResource(kind, slotIndex, lastUseSerial);
   return OkStatus();
 }
+
+template <typename Record>
+void Device::releaseFromRaii(details::SlotTable<Record>& table, uint32_t slotIndex,
+                             uint32_t generation, ResourceKind kind) {
+  if (table.find(slotIndex, generation) == nullptr) {
+    return;  // Already destroyed explicitly (or consumed); RAII release is a no-op.
+  }
+  const uint64_t lastUseSerial = table.lastUseOf(slotIndex);
+  table.retire(slotIndex);
+  retireResource(kind, slotIndex, lastUseSerial);
+}
+
+namespace details {
+
+/// Defines the RAII release hook for one handle tag.
+#define DONNER_GPU_DEFINE_RAII_RELEASE(TagType, tableMember, kindValue)                           \
+  template <>                                                                                     \
+  void ReleaseHandleFromRaii<TagType>(Device & device, uint32_t slotIndex, uint32_t generation) { \
+    device.releaseFromRaii(device.tableMember, slotIndex, generation,                             \
+                           Device::ResourceKind::kindValue);                                      \
+  }
+
+DONNER_GPU_DEFINE_RAII_RELEASE(BufferTag, buffers_, Buffer)
+DONNER_GPU_DEFINE_RAII_RELEASE(TextureTag, textures_, Texture)
+DONNER_GPU_DEFINE_RAII_RELEASE(TextureViewTag, textureViews_, TextureView)
+DONNER_GPU_DEFINE_RAII_RELEASE(SamplerTag, samplers_, Sampler)
+DONNER_GPU_DEFINE_RAII_RELEASE(BindGroupLayoutTag, bindGroupLayouts_, BindGroupLayout)
+DONNER_GPU_DEFINE_RAII_RELEASE(BindGroupTag, bindGroups_, BindGroup)
+DONNER_GPU_DEFINE_RAII_RELEASE(PipelineLayoutTag, pipelineLayouts_, PipelineLayout)
+DONNER_GPU_DEFINE_RAII_RELEASE(ShaderModuleTag, shaderModules_, ShaderModule)
+DONNER_GPU_DEFINE_RAII_RELEASE(RenderPipelineTag, renderPipelines_, RenderPipeline)
+
+#undef DONNER_GPU_DEFINE_RAII_RELEASE
+
+/// Command buffers have no backend object until submission, so a dropped unsubmitted command
+/// buffer releases its recorded commands immediately with no backend notification.
+template <>
+void ReleaseHandleFromRaii<CommandBufferTag>(Device& device, uint32_t slotIndex,
+                                             uint32_t generation) {
+  if (device.commandBuffers_.find(slotIndex, generation) == nullptr) {
+    return;  // Already submitted (consumed); nothing to release.
+  }
+  device.commandBuffers_.release(slotIndex);
+}
+
+}  // namespace details
 
 Result<Buffer> Device::createBuffer(const BufferDescriptor& descriptor) {
   if (Status status = ValidateBufferDescriptor(descriptor); status.hasError()) {
@@ -642,40 +765,45 @@ Result<RenderPipeline> Device::createRenderPipeline(const RenderPipelineDescript
   return handle;
 }
 
-Status Device::destroyBuffer(const Buffer& buffer) {
-  return destroyResource(buffers_, buffer);
+// Each destroy* consumes the handle: destroyResource retires the identity (so the RAII release
+// of the moved-in parameter is a stale no-op), and on validation failure the dropped parameter's
+// RAII release still runs against the handle's own device, so nothing leaks.
+
+Status Device::destroyBuffer(Buffer&& buffer) {
+  return destroyResource(buffers_, std::move(buffer), ResourceKind::Buffer);
 }
 
-Status Device::destroyTexture(const Texture& texture) {
-  return destroyResource(textures_, texture);
+Status Device::destroyTexture(Texture&& texture) {
+  return destroyResource(textures_, std::move(texture), ResourceKind::Texture);
 }
 
-Status Device::destroyTextureView(const TextureView& textureView) {
-  return destroyResource(textureViews_, textureView);
+Status Device::destroyTextureView(TextureView&& textureView) {
+  return destroyResource(textureViews_, std::move(textureView), ResourceKind::TextureView);
 }
 
-Status Device::destroySampler(const Sampler& sampler) {
-  return destroyResource(samplers_, sampler);
+Status Device::destroySampler(Sampler&& sampler) {
+  return destroyResource(samplers_, std::move(sampler), ResourceKind::Sampler);
 }
 
-Status Device::destroyBindGroupLayout(const BindGroupLayout& bindGroupLayout) {
-  return destroyResource(bindGroupLayouts_, bindGroupLayout);
+Status Device::destroyBindGroupLayout(BindGroupLayout&& bindGroupLayout) {
+  return destroyResource(bindGroupLayouts_, std::move(bindGroupLayout),
+                         ResourceKind::BindGroupLayout);
 }
 
-Status Device::destroyBindGroup(const BindGroup& bindGroup) {
-  return destroyResource(bindGroups_, bindGroup);
+Status Device::destroyBindGroup(BindGroup&& bindGroup) {
+  return destroyResource(bindGroups_, std::move(bindGroup), ResourceKind::BindGroup);
 }
 
-Status Device::destroyPipelineLayout(const PipelineLayout& pipelineLayout) {
-  return destroyResource(pipelineLayouts_, pipelineLayout);
+Status Device::destroyPipelineLayout(PipelineLayout&& pipelineLayout) {
+  return destroyResource(pipelineLayouts_, std::move(pipelineLayout), ResourceKind::PipelineLayout);
 }
 
-Status Device::destroyShaderModule(const ShaderModule& shaderModule) {
-  return destroyResource(shaderModules_, shaderModule);
+Status Device::destroyShaderModule(ShaderModule&& shaderModule) {
+  return destroyResource(shaderModules_, std::move(shaderModule), ResourceKind::ShaderModule);
 }
 
-Status Device::destroyRenderPipeline(const RenderPipeline& renderPipeline) {
-  return destroyResource(renderPipelines_, renderPipeline);
+Status Device::destroyRenderPipeline(RenderPipeline&& renderPipeline) {
+  return destroyResource(renderPipelines_, std::move(renderPipeline), ResourceKind::RenderPipeline);
 }
 
 Result<std::unique_ptr<CommandEncoder>> Device::createCommandEncoder() {
@@ -739,6 +867,8 @@ Status Device::writeTexture(const Texture& texture, std::span<const uint8_t> dat
 }
 
 Result<uint64_t> Device::submit(CommandBuffer commandBuffer) {
+  poll();
+
   auto record = resolve(commandBuffers_, commandBuffer, CommandBufferTag::kName);
   if (record.hasError()) {
     return std::move(record).error();
@@ -750,14 +880,182 @@ Result<uint64_t> Device::submit(CommandBuffer commandBuffer) {
       std::move(commandBuffers_.findMutable(slotIndex, commandBuffer.generation())->commands);
   commandBuffers_.release(slotIndex);
 
+  // Re-validate every recorded resource identity: a resource destroyed between recording and
+  // submission fails closed here, before the backend sees the commands.
+  Result<std::vector<SubmissionUse>> uses = validateSubmissionResources(commands);
+  if (uses.hasError()) {
+    return std::move(uses).error();
+  }
+
   // Advance the serial only after the backend accepts the submission: a failed submit must not
-  // burn a serial, or completion waiters would treat the failed work as finished.
+  // burn a serial, or completion waiters would treat the failed work as finished. Resources are
+  // marked in-use only for accepted submissions for the same reason.
   const uint64_t serial = lastSubmittedSerial_ + 1;
   if (Status status = onSubmit(serial, slotIndex, commands); status.hasError()) {
     return std::move(status).error();
   }
   lastSubmittedSerial_ = serial;
+  markSubmissionUses(uses.result(), serial);
   return serial;
+}
+
+Result<std::vector<Device::SubmissionUse>> Device::validateSubmissionResources(
+    std::span<const Command> commands) const {
+  std::vector<SubmissionUse> uses;
+
+  // Resolves one recorded identity against its table, failing closed when it is stale.
+  const auto check = [&uses]<typename Record>(const details::SlotTable<Record>& table,
+                                              const ResourceIdentity& identity, ResourceKind kind,
+                                              std::string_view resourceName,
+                                              std::string_view context) -> Result<const Record*> {
+    const Record* record = table.find(identity.slotIndex, identity.generation);
+    if (record == nullptr) {
+      return GpuError{GpuErrorType::InvalidHandle,
+                      std::format("submit: {} references destroyed {} (slot {})", context,
+                                  resourceName, identity.slotIndex)};
+    }
+    uses.push_back(SubmissionUse{kind, identity.slotIndex});
+    return record;
+  };
+
+  // Resolves a texture view plus the texture behind it (a view of a destroyed texture must fail
+  // even if the view itself is alive).
+  const auto checkViewAndTexture = [this, &check](const ResourceIdentity& viewIdentity,
+                                                  std::string_view context) -> Status {
+    auto viewRecord = check(textureViews_, viewIdentity, ResourceKind::TextureView,
+                            TextureViewTag::kName, context);
+    if (viewRecord.hasError()) {
+      return std::move(viewRecord).error();
+    }
+    auto textureRecord = check(textures_, viewRecord.result()->textureIdentity,
+                               ResourceKind::Texture, TextureTag::kName, context);
+    if (textureRecord.hasError()) {
+      return std::move(textureRecord).error();
+    }
+    return OkStatus();
+  };
+
+  for (const Command& command : commands) {
+    Status status = std::visit(
+        [&](const auto& typedCommand) -> Status {
+          using CommandType = std::remove_cvref_t<decltype(typedCommand)>;
+
+          if constexpr (std::is_same_v<CommandType, BeginRenderPassCommand>) {
+            for (const RenderPassColorAttachment& attachment :
+                 typedCommand.descriptor.colorAttachments) {
+              const ResourceIdentity viewIdentity{attachment.view.slotIndex(),
+                                                  attachment.view.generation()};
+              if (Status attachmentStatus =
+                      checkViewAndTexture(viewIdentity, "render pass attachment");
+                  attachmentStatus.hasError()) {
+                return attachmentStatus;
+              }
+            }
+            return OkStatus();
+          } else if constexpr (std::is_same_v<CommandType, SetPipelineCommand>) {
+            auto pipelineRecord =
+                check(renderPipelines_, typedCommand.pipelineId, ResourceKind::RenderPipeline,
+                      RenderPipelineTag::kName, "recorded setPipeline");
+            if (pipelineRecord.hasError()) {
+              return std::move(pipelineRecord).error();
+            }
+            return OkStatus();
+          } else if constexpr (std::is_same_v<CommandType, SetBindGroupCommand>) {
+            auto groupRecord = check(bindGroups_, typedCommand.bindGroupId, ResourceKind::BindGroup,
+                                     BindGroupTag::kName, "recorded setBindGroup");
+            if (groupRecord.hasError()) {
+              return std::move(groupRecord).error();
+            }
+            // Re-validate every resource the group references so a destroyed entry resource
+            // fails closed even though the group object itself is alive.
+            for (const BindGroupEntry& entry : groupRecord.result()->descriptor.entries) {
+              const std::string context =
+                  std::format("bind group \"{}\" entry binding {}",
+                              groupRecord.result()->descriptor.label.str(), entry.binding);
+              if (const BufferBinding* bufferBinding =
+                      std::get_if<BufferBinding>(&entry.resource)) {
+                const ResourceIdentity bufferIdentity{bufferBinding->buffer.slotIndex(),
+                                                      bufferBinding->buffer.generation()};
+                auto bufferRecord = check(buffers_, bufferIdentity, ResourceKind::Buffer,
+                                          BufferTag::kName, context);
+                if (bufferRecord.hasError()) {
+                  return std::move(bufferRecord).error();
+                }
+              } else if (const TextureViewBinding* viewBinding =
+                             std::get_if<TextureViewBinding>(&entry.resource)) {
+                const ResourceIdentity viewIdentity{viewBinding->view.slotIndex(),
+                                                    viewBinding->view.generation()};
+                if (Status entryStatus = checkViewAndTexture(viewIdentity, context);
+                    entryStatus.hasError()) {
+                  return entryStatus;
+                }
+              } else if (const SamplerBinding* samplerBinding =
+                             std::get_if<SamplerBinding>(&entry.resource)) {
+                const ResourceIdentity samplerIdentity{samplerBinding->sampler.slotIndex(),
+                                                       samplerBinding->sampler.generation()};
+                auto samplerRecord = check(samplers_, samplerIdentity, ResourceKind::Sampler,
+                                           SamplerTag::kName, context);
+                if (samplerRecord.hasError()) {
+                  return std::move(samplerRecord).error();
+                }
+              }
+            }
+            return OkStatus();
+          } else if constexpr (std::is_same_v<CommandType, SetVertexBufferCommand>) {
+            auto bufferRecord = check(buffers_, typedCommand.bufferId, ResourceKind::Buffer,
+                                      BufferTag::kName, "recorded setVertexBuffer");
+            if (bufferRecord.hasError()) {
+              return std::move(bufferRecord).error();
+            }
+            return OkStatus();
+          } else if constexpr (std::is_same_v<CommandType, CopyTextureToBufferCommand>) {
+            auto textureRecord = check(textures_, typedCommand.textureId, ResourceKind::Texture,
+                                       TextureTag::kName, "recorded copyTextureToBuffer");
+            if (textureRecord.hasError()) {
+              return std::move(textureRecord).error();
+            }
+            auto bufferRecord = check(buffers_, typedCommand.bufferId, ResourceKind::Buffer,
+                                      BufferTag::kName, "recorded copyTextureToBuffer");
+            if (bufferRecord.hasError()) {
+              return std::move(bufferRecord).error();
+            }
+            return OkStatus();
+          } else {
+            return OkStatus();
+          }
+        },
+        command);
+    if (status.hasError()) {
+      return std::move(status).error();
+    }
+  }
+  return uses;
+}
+
+void Device::markSubmissionUses(std::span<const SubmissionUse> uses, uint64_t submissionSerial) {
+  for (const SubmissionUse& use : uses) {
+    switch (use.kind) {
+      case ResourceKind::Buffer: buffers_.markUsed(use.slotIndex, submissionSerial); break;
+      case ResourceKind::Texture: textures_.markUsed(use.slotIndex, submissionSerial); break;
+      case ResourceKind::TextureView:
+        textureViews_.markUsed(use.slotIndex, submissionSerial);
+        break;
+      case ResourceKind::Sampler: samplers_.markUsed(use.slotIndex, submissionSerial); break;
+      case ResourceKind::BindGroupLayout:
+        bindGroupLayouts_.markUsed(use.slotIndex, submissionSerial);
+        break;
+      case ResourceKind::BindGroup: bindGroups_.markUsed(use.slotIndex, submissionSerial); break;
+      case ResourceKind::PipelineLayout:
+        pipelineLayouts_.markUsed(use.slotIndex, submissionSerial);
+        break;
+      case ResourceKind::ShaderModule:
+        shaderModules_.markUsed(use.slotIndex, submissionSerial);
+        break;
+      case ResourceKind::RenderPipeline:
+        renderPipelines_.markUsed(use.slotIndex, submissionSerial);
+        break;
+    }
+  }
 }
 
 Status Device::validateBufferHandleForBackend(const Buffer& buffer) const {

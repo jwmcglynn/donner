@@ -235,7 +235,16 @@ std::unique_ptr<MetalDevice> MetalDevice::Create() {
 
 MetalDevice::MetalDevice() : impl_(std::make_unique<Impl>()) {}
 
-MetalDevice::~MetalDevice() = default;
+MetalDevice::~MetalDevice() {
+  // Wait for in-flight submissions so deferred destructions drain before Impl teardown releases
+  // the remaining Metal objects. On timeout (a hung submission) teardown proceeds anyway: Metal
+  // itself retains every resource referenced by a committed command buffer until it completes,
+  // so releasing our references cannot free memory the GPU is still using.
+  if (lastSubmittedSerial() > completedSerial()) {
+    waitForSerial(lastSubmittedSerial(), /*timeoutSeconds=*/5.0);
+  }
+  poll();
+}
 
 uint64_t MetalDevice::completedSerial() const {
   return impl_->completionState->completedSerial.load(std::memory_order_acquire);
@@ -485,8 +494,8 @@ Status MetalDevice::onCreateRenderPipeline(uint32_t slotIndex,
   }
 
   SetSlot(impl_->renderPipelines, slotIndex,
-          std::optional<Impl::RenderPipelineRecord>(Impl::RenderPipelineRecord{
-              pipelineState, descriptor.topology, descriptor.cullMode}));
+          std::optional<Impl::RenderPipelineRecord>(
+              Impl::RenderPipelineRecord{pipelineState, descriptor.topology, descriptor.cullMode}));
   return OkStatus();
 }
 
@@ -605,18 +614,18 @@ Status MetalDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferSl
       }
     } else if (const auto* setPipeline = std::get_if<SetPipelineCommand>(&command)) {
       const Impl::RenderPipelineRecord* pipeline =
-          FindRecord(impl_->renderPipelines, setPipeline->pipelineSlot);
+          FindRecord(impl_->renderPipelines, setPipeline->pipelineId.slotIndex);
       if (renderEncoder == nil || pipeline == nullptr || pipeline->state == nil) {
         return failEncoding(GpuError{GpuErrorType::InvalidState,
                                      std::format("setPipeline: pipeline slot {} is not encodable",
-                                                 setPipeline->pipelineSlot)});
+                                                 setPipeline->pipelineId.slotIndex)});
       }
       [renderEncoder setRenderPipelineState:pipeline->state];
       // Cull mode is encoder state in Metal; apply the pipeline's recorded mode at bind time.
       // Behavioral coverage requires winding-controlled geometry, which arrives with the Geode
       // pipeline migration packets; the solid-fill slice always uses CullMode::None.
-      [renderEncoder setCullMode:(pipeline->cullMode == CullMode::Back ? MTLCullModeBack
-                                                                       : MTLCullModeNone)];
+      [renderEncoder
+          setCullMode:(pipeline->cullMode == CullMode::Back ? MTLCullModeBack : MTLCullModeNone)];
       currentTopology = pipeline->topology;
     } else if (const auto* setBindGroup = std::get_if<SetBindGroupCommand>(&command)) {
       if (setBindGroup->index != 0) {
@@ -625,7 +634,7 @@ Status MetalDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferSl
                      "the Metal backend maps bind group 0 only in this slice (MslBindingMap.h)"});
       }
       const Impl::BindGroupRecord* bindGroup =
-          FindRecord(impl_->bindGroups, setBindGroup->bindGroupSlot);
+          FindRecord(impl_->bindGroups, setBindGroup->bindGroupId.slotIndex);
       const BindGroupLayoutDescriptor* layout =
           bindGroup != nullptr ? FindRecord(impl_->bindGroupLayouts, bindGroup->layoutSlot)
                                : nullptr;
@@ -633,7 +642,7 @@ Status MetalDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferSl
         return failEncoding(
             GpuError{GpuErrorType::InvalidState,
                      std::format("setBindGroup: bind group slot {} is not encodable",
-                                 setBindGroup->bindGroupSlot)});
+                                 setBindGroup->bindGroupId.slotIndex)});
       }
 
       Status bindStatus = OkStatus();
@@ -724,11 +733,11 @@ Status MetalDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferSl
             GpuError{GpuErrorType::Unsupported,
                      "the Metal backend supports vertex buffer slot 0 only in this slice"});
       }
-      id<MTLBuffer> buffer = GetSlot(impl_->buffers, setVertexBuffer->bufferSlot);
+      id<MTLBuffer> buffer = GetSlot(impl_->buffers, setVertexBuffer->bufferId.slotIndex);
       if (renderEncoder == nil || buffer == nil) {
         return failEncoding(GpuError{GpuErrorType::InvalidState,
                                      std::format("setVertexBuffer: buffer slot {} is not encodable",
-                                                 setVertexBuffer->bufferSlot)});
+                                                 setVertexBuffer->bufferId.slotIndex)});
       }
       [renderEncoder setVertexBuffer:buffer
                               offset:setVertexBuffer->offsetBytes
@@ -768,8 +777,8 @@ Status MetalDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferSl
         return failEncoding(
             GpuError{GpuErrorType::InvalidState, "copyTextureToBuffer inside a render pass"});
       }
-      id<MTLTexture> texture = GetSlot(impl_->textures, copy->textureSlot);
-      id<MTLBuffer> buffer = GetSlot(impl_->buffers, copy->bufferSlot);
+      id<MTLTexture> texture = GetSlot(impl_->textures, copy->textureId.slotIndex);
+      id<MTLBuffer> buffer = GetSlot(impl_->buffers, copy->bufferId.slotIndex);
       if (texture == nil || buffer == nil) {
         return GpuError{GpuErrorType::InvalidState,
                         "copyTextureToBuffer: source texture or destination buffer is missing"};
