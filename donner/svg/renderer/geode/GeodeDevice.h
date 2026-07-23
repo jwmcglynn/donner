@@ -7,6 +7,7 @@
 #include <vector>
 #include <webgpu/webgpu.hpp>
 
+#include "donner/base/Utils.h"
 #include "donner/gpu/Handles.h"
 #include "donner/svg/renderer/geode/GeodeCounters.h"
 #include "donner/svg/renderer/geode/GeodeGpuContext.h"
@@ -380,12 +381,12 @@ public:
   /// The TEMPORARY design-0053 Phase 1 adapter implementing \c donner::gpu::Device over this
   /// device's wgpu objects. Owned here alongside the shared pipelines (which are created
   /// through it); see GeodeWgpuAdapterDevice.h for the removal gates.
-  GeodeWgpuAdapterDevice& adapterDevice() const;
+  GeodeWgpuAdapterDevice& adapterDevice() const UTILS_LIFETIME_BOUND;
 
   /// The \c donner::gpu recording context Geode's encoders draw through: the adapter device,
   /// the shared dummy resources above, and counter forwarding back to this device. Valid for
   /// the device's lifetime once construction succeeds.
-  const GeodeGpuContext& gpuContext() const;
+  const GeodeGpuContext& gpuContext() const UTILS_LIFETIME_BOUND;
 
 private:
   GeodeDevice();
