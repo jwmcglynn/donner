@@ -5,7 +5,8 @@
 /// TEMPORARY design-0053 Phase 1 adapter. Removal gates: deleted per-platform at the Metal
 /// cutover (change-seq 12), Linux/Windows Vulkan cutover (15), browser-bridge cutover (17); each
 /// escape hatch is deleted with the packet that migrates its last caller (filters 10,
-/// readback/presentation 11, ImGui 18, pipeline hatches 8b).
+/// readback/presentation 11, ImGui 18; the 8a pipeline/bind-group-layout/sampler hatches were
+/// deleted in packet 8b when GeoEncoder migrated onto gpu::CommandEncoder).
 
 #include <atomic>
 #include <cstdint>
@@ -51,15 +52,34 @@ public:
   ~GeodeWgpuAdapterDevice() override;
 
   /// Serial of the most recent submission whose queue work-done callback has fired (0 if none).
-  /// wgpu delivers the callbacks during \ref waitForSerial's polling (and opportunistically on
-  /// submit), so call \ref waitForSerial to guarantee progress.
+  /// wgpu delivers the callbacks while wgpu is polled - \ref pollCompletions (non-blocking) and
+  /// \ref waitForSerial (blocking) both drive it.
   ///
   /// \warning The base class's `Device::poll()` does NOT drive wgpu polling - it only processes
-  /// deferred destructions against the serial this method reports. Per-frame destroy+poll churn
-  /// therefore defers unboundedly until something waits: packet 8b's frame loop must call
-  /// \ref waitForSerial on its frame cadence (or extend the adapter with a non-blocking wgpu
-  /// poll) so completions are observed and deferred destroys drain.
+  /// deferred destructions against the serial this method reports. The frame cadence MUST call
+  /// \ref pollCompletions (or \ref waitForSerial) so completions are observed and deferred
+  /// destroys drain; otherwise per-frame destroy churn defers unboundedly.
   uint64_t completedSerial() const override;
+
+  /**
+   * Non-blocking completion pump for the frame cadence: delivers any ready queue work-done
+   * callbacks (advancing \ref completedSerial), then processes the base class's deferred
+   * destructions against the new serial.
+   *
+   * On native this calls `wgpu::Device::poll(wait=false)`; on Emscripten the browser event loop
+   * delivers the callbacks between frames, so only the base `Device::poll()` runs.
+   *
+   * On wasm/Emscripten, completions therefore only advance across event-loop yields: a
+   * non-yielding multi-frame flow (e.g. a loop rendering many frames without returning to the
+   * browser) never observes a new \ref completedSerial, so deferred destroys accumulate for the
+   * duration of that flow. Such flows must yield to the event loop or call \ref waitForSerial
+   * (which yields through Asyncify) to drain them.
+   *
+   * \warning Something on the frame cadence MUST call this (or \ref waitForSerial): the
+   * deferred-destruction queue otherwise accumulates unboundedly (see the warning on
+   * \ref completedSerial). `RendererGeode::endFrame` is the production caller.
+   */
+  void pollCompletions();
 
   /**
    * Blocks until \ref completedSerial reaches \p serial or \p timeoutSeconds elapses, driving
@@ -107,34 +127,6 @@ public:
    * @param textureView Live texture view handle of this adapter.
    */
   wgpu::TextureView wgpuTextureViewOf(const gpu::TextureView& textureView) const;
-
-  /**
-   * TEMPORARY escape hatch for 8a only - deleted in packet 8b when GeoEncoder records through
-   * \c donner::gpu::CommandEncoder: returns the wgpu render pipeline behind \p pipeline so the
-   * still-wgpu GeoEncoder can bind pipelines whose creation already migrated. Borrowed.
-   *
-   * @param pipeline Live render pipeline handle of this adapter.
-   */
-  wgpu::RenderPipeline wgpuRenderPipelineOf(const gpu::RenderPipeline& pipeline) const;
-
-  /**
-   * TEMPORARY escape hatch for 8a only - deleted in packet 8b when GeoEncoder's bind-group
-   * creation migrates: returns the wgpu bind group layout behind \p layout so the still-wgpu
-   * GeoEncoder can create its per-draw bind groups against migrated layouts. Borrowed.
-   *
-   * @param layout Live bind group layout handle of this adapter.
-   */
-  wgpu::BindGroupLayout wgpuBindGroupLayoutOf(const gpu::BindGroupLayout& layout) const;
-
-  /**
-   * TEMPORARY escape hatch for 8a only - deleted in packet 8b when GeoEncoder's and
-   * GeodeTextureEncoder's bind-group creation migrates: returns the wgpu sampler behind
-   * \p sampler so still-wgpu bind groups can reference migrated samplers (e.g. the image-blit
-   * pipeline's shared samplers). Borrowed.
-   *
-   * @param sampler Live sampler handle of this adapter.
-   */
-  wgpu::Sampler wgpuSamplerOf(const gpu::Sampler& sampler) const;
 
 protected:
   gpu::Status onCreateBuffer(uint32_t slotIndex, const gpu::BufferDescriptor& descriptor) override;

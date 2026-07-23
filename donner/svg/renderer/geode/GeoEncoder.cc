@@ -1,17 +1,20 @@
 #include "donner/svg/renderer/geode/GeoEncoder.h"
 
 #include <algorithm>
+#include <array>
+#include <cstdio>
 #include <cstring>
+#include <span>
+#include <utility>
 #include <vector>
 
 #include "donner/svg/renderer/geode/GeodeBufferPool.h"
-#include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeGpuContext.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePathEncoder.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
 #include "donner/svg/renderer/geode/GeodeResidentPathComponent.h"
 #include "donner/svg/renderer/geode/GeodeTextureEncoder.h"
-#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "donner/svg/resources/ImageResource.h"
 
 namespace donner::geode {
@@ -29,20 +32,18 @@ constexpr uint64_t alignUp(uint64_t value, uint64_t alignment) {
   return (value + alignment - 1u) & ~(alignment - 1u);
 }
 
-// WebGPU binding offset alignment requirements for the per-draw arenas
+// Binding offset alignment requirements for the per-draw arenas
 // (design doc 0030 Milestone 1).
 //
-// Vertex buffer: `setVertexBuffer(slot, buffer, offset, size)` requires
-// `offset` be a multiple of 4 (WebGPU spec §23.8).
+// Vertex buffer: `setVertexBuffer(slot, buffer, offset)` offsets stay
+// 4-aligned (the WebGPU floor; vertex buffers bind outside bind groups so
+// the 256-byte binding-offset alignment below does not apply to them).
 constexpr uint64_t kVertexOffsetAlignment = 4u;
-// Storage buffer bind-group offset: defaults to 256 across wgpu-native
-// backends (the spec-mandated floor for portability). Querying the
-// device's `minStorageBufferOffsetAlignment` would let us tighten this
-// to 16 or 32 on modern adapters, but 256 is safe everywhere and the
-// wasted-tail memory is negligible at typical path sizes.
+// Storage buffer bind-group offset: the donner::gpu runtime enforces the
+// portable 256-byte binding offset alignment (gpu::kBindingOffsetAlignment),
+// the strictest floor across the native APIs it targets.
 constexpr uint64_t kStorageOffsetAlignment = 256u;
-// Uniform buffer bind-group offset: same 256-byte default across
-// wgpu-native backends (`minUniformBufferOffsetAlignment`).
+// Uniform buffer bind-group offset: same portable 256-byte alignment.
 constexpr uint64_t kUniformOffsetAlignment = 256u;
 
 /// Layout of the per-draw uniform buffer (must match shaders/slug_fill.wgsl).
@@ -200,10 +201,25 @@ static_assert(sizeof(GradientUniforms) == 592, "GradientUniforms struct layout m
 constexpr uint32_t kGradientKindLinear = 0u;
 constexpr uint32_t kGradientKindRadial = 1u;
 
+/// Logs a translation failure to stderr. Draw helpers fail closed by skipping the draw; the
+/// enclosing command encoder additionally latches its own first recording error, which surfaces
+/// at finish (poisoned-encoder discipline).
+void LogGpuError(const char* what, const gpu::GpuError& error) {
+  std::fprintf(stderr, "[Geode] %s failed: %s\n", what, error.message.c_str());
+}
+
+/// Wraps a POD value as the byte span `gpu::Device::writeBuffer` consumes.
+/// @param data Pointer to the payload. @param size Payload byte count.
+std::span<const uint8_t> ByteSpan(const void* data, uint64_t size) {
+  return std::span<const uint8_t>(static_cast<const uint8_t*>(data), static_cast<size_t>(size));
+}
+
 }  // namespace
 
 struct GeoEncoder::Impl {
-  GeodeDevice* device;
+  /// The donner::gpu recording context (device, shared dummies, counter hooks). Non-owning;
+  /// wired by GeodeDevice for production and by test harnesses directly.
+  const GeodeGpuContext* context = nullptr;
   const GeodePipeline* pipeline;
   const GeodeGradientPipeline* gradientPipeline;
   const GeodeImagePipeline* imagePipeline;
@@ -222,15 +238,17 @@ struct GeoEncoder::Impl {
   /// Lifetime: when the arena grows, the previous buffer is moved into
   /// `retired` and kept alive for the encoder's lifetime. Commands
   /// already recorded into the command encoder that reference the
-  /// old buffer remain valid because the `wgpu::Buffer` RAII wrapper
-  /// holds the handle until the `Arena` itself is destroyed (at
-  /// encoder destruction, after `finish()` has submitted all work).
+  /// old buffer remain valid because the `gpu::Buffer` RAII handle
+  /// stays live until the `Arena` itself is destroyed (at encoder
+  /// destruction, after `finish()` has submitted all work) - mandatory
+  /// under the runtime: `gpu::Device::submit` re-validates every recorded
+  /// buffer identity and fails closed on a destroyed one.
   struct Arena {
-    ScopedWgpuHandle<wgpu::Buffer> buffer;
+    gpu::Buffer buffer;
     uint64_t capacity = 0;
     uint64_t offset = 0;  // Next unused byte within `buffer`.
-    std::vector<ScopedWgpuHandle<wgpu::Buffer>> retired;
-    wgpu::BufferUsage usage = wgpu::BufferUsage::CopyDst;
+    std::vector<gpu::Buffer> retired;
+    gpu::BufferUsage usage = gpu::BufferUsage::CopyDst;
     const char* label = "GeodeArena";
   };
   Arena vertexArena;
@@ -258,20 +276,20 @@ struct GeoEncoder::Impl {
 
   void releaseArenaResources(Arena& arena) {
     // With a pool installed, the current (largest, fully-grown) buffer
-    // is recycled for the next frame's encoders. Otherwise release the
-    // handle without explicitly destroying its backing. Submitted WebGPU
-    // commands retain their resources until completion; calling destroy()
-    // here can invalidate those in-flight commands on some Vulkan drivers.
-    if (bufferPool != nullptr && arena.buffer) {
+    // is recycled for the next frame's encoders. Otherwise the RAII
+    // release defers backing destruction until every submission that
+    // referenced the buffer completes (the runtime's serial-deferred
+    // destruction), so in-flight commands stay valid.
+    if (bufferPool != nullptr && arena.buffer.isValid()) {
       bufferPool->release(std::move(arena.buffer), arena.usage, arena.label, arena.capacity);
     }
-    arena.buffer.reset();
+    arena.buffer = gpu::Buffer();
     arena.retired.clear();
   }
 
   void releaseOwnedResources() {
-    pass.reset();
-    maskPass.reset();
+    pass = nullptr;
+    maskPass = nullptr;
 
     releaseArenaResources(vertexArena);
     releaseArenaResources(bandArena);
@@ -282,7 +300,7 @@ struct GeoEncoder::Impl {
     releaseArenaResources(hGridArena);
     releaseArenaResources(vGridArena);
     releaseArenaResources(instanceTransformArena);
-    transientResources.releaseAll();
+    transientResources.clear();
   }
 
   // When true, this encoder owns its `commandEncoder` and `finish()`
@@ -293,10 +311,17 @@ struct GeoEncoder::Impl {
 
   /// Allocate `size` bytes in `arena` at an offset aligned to
   /// `alignment`, growing if necessary. Writes `size` bytes of `data`
-  /// into the buffer via `queue.writeBuffer`. Returns the
-  /// (buffer, offset) pair the draw should bind.
+  /// into the buffer via `gpu::Device::writeBuffer`. Returns the
+  /// (buffer, offset) pair the draw should bind. On an allocation
+  /// failure the arena's buffer stays null and later draw steps fail
+  /// closed (bind-group creation rejects the null handle, skipping the
+  /// draw); the runtime re-validates everything at submit regardless.
+  ///
+  /// NOTE: buffer creates and writes are counted by the adapter's
+  /// creation/write hooks, so no explicit count* calls here - counter
+  /// totals are unchanged from the pre-RHI recording path.
   struct Allocation {
-    const wgpu::Buffer* buffer;
+    const gpu::Buffer* buffer;
     uint64_t offset;
     uint64_t size;
   };
@@ -306,7 +331,7 @@ struct GeoEncoder::Impl {
       // Retire the current buffer (if any) so already-recorded commands
       // can still reference it through encoder submission time, then
       // allocate a new, larger buffer.
-      if (arena.buffer) {
+      if (arena.buffer.isValid()) {
         arena.retired.push_back(std::move(arena.buffer));
       }
       constexpr uint64_t kMinGrow = uint64_t{64} * 1024;
@@ -317,29 +342,32 @@ struct GeoEncoder::Impl {
       // back to a fresh allocation when the pool has no fit.
       if (bufferPool != nullptr) {
         uint64_t pooledCapacity = 0;
-        ScopedWgpuHandle<wgpu::Buffer> pooled =
-            bufferPool->acquire(arena.usage, arena.label, newCap, &pooledCapacity);
-        if (pooled) {
+        gpu::Buffer pooled = bufferPool->acquire(arena.usage, arena.label, newCap, &pooledCapacity);
+        if (pooled.isValid()) {
           arena.buffer = std::move(pooled);
           arena.capacity = pooledCapacity;
         }
       }
-      if (!arena.buffer) {
-        wgpu::BufferDescriptor desc = {};
-        desc.label = wgpuLabel(arena.label);
-        desc.size = newCap;
-        desc.usage = arena.usage;
-        arena.buffer.reset(device->device().createBuffer(desc));
-        device->countBuffer();
+      if (!arena.buffer.isValid()) {
+        gpu::Result<gpu::Buffer> created = context->gpuDevice->createBuffer(
+            gpu::BufferDescriptor{arena.label, newCap, arena.usage});
+        if (created.hasError()) {
+          LogGpuError(arena.label, created.error());
+          arena.capacity = 0;
+          arena.offset = 0;
+          return {&arena.buffer, 0, size};
+        }
+        arena.buffer = std::move(created).result();
         arena.capacity = newCap;
       }
       arena.offset = 0;
       alignedOffset = 0;
     }
-    device->queue().writeBuffer(arena.buffer.get(), alignedOffset, data, size);
-    device->countBufferWrite(size);
+    // Errors fail closed downstream (null/stale handles are rejected at bind-group creation and
+    // re-validated at submit), so the Status is intentionally not re-checked per write.
+    (void)context->gpuDevice->writeBuffer(arena.buffer, alignedOffset, ByteSpan(data, size));
     arena.offset = alignedOffset + size;
-    return {&arena.buffer.get(), alignedOffset, size};
+    return {&arena.buffer, alignedOffset, size};
   }
 
   /// Allocate a read-only storage binding for `byteCount` bytes of `data`,
@@ -408,8 +436,6 @@ struct GeoEncoder::Impl {
     u.gridVStride = encoded.vStride;
     u.gridVBandCount = encoded.vBandCount;
 
-    const wgpu::Device& dev = device->device();
-
     const uint64_t vbSize = roundUp4(encoded.quadVertices.size() * sizeof(EncodedPath::Vertex));
     const auto vbAlloc =
         allocInArena(vertexArena, encoded.quadVertices.data(), vbSize, kVertexOffsetAlignment);
@@ -430,85 +456,69 @@ struct GeoEncoder::Impl {
     const auto uniAlloc =
         allocInArena(uniformArena, &u, sizeof(GradientUniforms), kUniformOffsetAlignment);
 
-    wgpu::BindGroupEntry entries[9] = {};
-    entries[0].binding = 0;
-    entries[0].buffer = *uniAlloc.buffer;
-    entries[0].offset = uniAlloc.offset;
-    entries[0].size = uniAlloc.size;
-    entries[1].binding = 1;
-    entries[1].buffer = *bandsAlloc.buffer;
-    entries[1].offset = bandsAlloc.offset;
-    entries[1].size = bandsAlloc.size;
-    entries[2].binding = 2;
-    entries[2].buffer = *curvesAlloc.buffer;
-    entries[2].offset = curvesAlloc.offset;
-    entries[2].size = curvesAlloc.size;
-    entries[3].binding = 3;
-    entries[3].textureView = currentClipMaskView();
-    entries[4].binding = 4;
-    entries[4].sampler = device->dummyClipMaskSampler();
-    entries[5].binding = 5;
-    entries[5].buffer = *vBandsAlloc.buffer;
-    entries[5].offset = vBandsAlloc.offset;
-    entries[5].size = vBandsAlloc.size;
-    entries[6].binding = 6;
-    entries[6].buffer = *vCurvesAlloc.buffer;
-    entries[6].offset = vCurvesAlloc.offset;
-    entries[6].size = vCurvesAlloc.size;
-    entries[7].binding = 7;
-    entries[7].buffer = *hGridAlloc.buffer;
-    entries[7].offset = hGridAlloc.offset;
-    entries[7].size = hGridAlloc.size;
-    entries[8].binding = 8;
-    entries[8].buffer = *vGridAlloc.buffer;
-    entries[8].offset = vGridAlloc.offset;
-    entries[8].size = vGridAlloc.size;
+    gpu::Result<gpu::BindGroup> bindGroupResult =
+        context->gpuDevice->createBindGroup(gpu::BindGroupDescriptor{
+            "GeodeGradientBindGroup",
+            gradientPipeline->bindGroupLayout(),
+            {
+                gpu::BindGroupEntry{
+                    0, gpu::BufferBinding{*uniAlloc.buffer, uniAlloc.offset, uniAlloc.size}},
+                gpu::BindGroupEntry{
+                    1, gpu::BufferBinding{*bandsAlloc.buffer, bandsAlloc.offset, bandsAlloc.size}},
+                gpu::BindGroupEntry{2, gpu::BufferBinding{*curvesAlloc.buffer, curvesAlloc.offset,
+                                                          curvesAlloc.size}},
+                gpu::BindGroupEntry{3, gpu::TextureViewBinding{currentClipMaskView()}},
+                gpu::BindGroupEntry{4, gpu::SamplerBinding{*context->dummyClipMaskSampler}},
+                gpu::BindGroupEntry{5, gpu::BufferBinding{*vBandsAlloc.buffer, vBandsAlloc.offset,
+                                                          vBandsAlloc.size}},
+                gpu::BindGroupEntry{6, gpu::BufferBinding{*vCurvesAlloc.buffer, vCurvesAlloc.offset,
+                                                          vCurvesAlloc.size}},
+                gpu::BindGroupEntry{
+                    7, gpu::BufferBinding{*hGridAlloc.buffer, hGridAlloc.offset, hGridAlloc.size}},
+                gpu::BindGroupEntry{
+                    8, gpu::BufferBinding{*vGridAlloc.buffer, vGridAlloc.offset, vGridAlloc.size}},
+            }});
+    if (bindGroupResult.hasError()) {
+      LogGpuError("GeodeGradientBindGroup createBindGroup", bindGroupResult.error());
+      return;
+    }
+    const gpu::BindGroup& bindGroup =
+        transientResources.bindGroups.emplace_back(std::move(bindGroupResult).result());
 
-    wgpu::BindGroupDescriptor bgDesc = {};
-    bgDesc.label = wgpuLabel("GeodeGradientBindGroup");
-    bgDesc.layout = gradientPipeline->bindGroupLayout();
-    bgDesc.entryCount = 9;
-    bgDesc.entries = entries;
-    wgpu::BindGroup bindGroup = transientResources.retain(dev.createBindGroup(bgDesc));
-    device->countBindGroup();
-
-    pass.get().setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
-    pass.get().setBindGroup(0, bindGroup, 0, nullptr);
-    pass.get().draw(static_cast<uint32_t>(encoded.quadVertices.size()), 1, 0, 0);
-    device->countDraw();
+    pass->setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset);
+    pass->setBindGroup(0, bindGroup);
+    pass->draw(static_cast<uint32_t>(encoded.quadVertices.size()), 1, 0, 0);
+    context->countDraw();
   }
-  // Direct-render texture. External code may sample or copy from it.
-  wgpu::Texture target;
-  ScopedWgpuHandle<wgpu::TextureView> targetView;
-  ScopedWgpuHandle<wgpu::CommandEncoder> ownedCommandEncoder;
-  wgpu::CommandEncoder commandEncoder;
+  // View of the direct-render texture (the target handle itself is owned by the caller, which
+  // must keep it alive through the frame's submit).
+  gpu::TextureView targetView;
+  std::unique_ptr<gpu::CommandEncoder> ownedCommandEncoder;
+  /// The command encoder recording targets: `ownedCommandEncoder.get()` in owning mode, the
+  /// caller's shared encoder otherwise. Non-owning.
+  gpu::CommandEncoder* commandEncoder = nullptr;
   uint32_t targetWidth;
   uint32_t targetHeight;
-  // Dummy texture / sampler resources are now owned by `GeodeDevice`
-  // and shared across every GeoEncoder - see `GeodeDevice::dummyPatternTexture()`
-  // and the M4.2 notes in design doc 0030. Access them via
-  // `device->dummyPatternTextureView()`, etc. The bind-group layout
-  // always includes the pattern + clip-mask slots so the pipeline can
-  // be shared between solid/pattern/gradient/masked draws; the device
-  // dummies fill the unused slots.
+  // Dummy texture / sampler resources are owned by `GeodeDevice` and
+  // shared across every GeoEncoder via the context - see the M4.2 notes in
+  // design doc 0030. The bind-group layout always includes the pattern +
+  // clip-mask slots so the pipeline can be shared between
+  // solid/pattern/gradient/masked draws; the shared dummies fill the
+  // unused slots.
 
   // Currently-bound clip mask state (Phase 3b). When
-  // `activeClipMaskView` is non-null, `hasClipMask == 1` in the
+  // `activeClipMaskView` is valid, `hasClipMask == 1` in the
   // uniforms and draws sample `activeClipMaskView` through the
-  // clip-mask binding. When null, the device's shared dummy is bound.
+  // clip-mask binding. When null, the context's shared dummy is bound.
   //
-  // `activeClipMaskTexture` keeps the VIEW's parent texture alive for
-  // as long as the encoder holds the view. Without this keepalive,
-  // when the clip-stack entry that originated the view is destroyed
-  // (in `RendererGeode::popClip` - `clipStack.pop_back()` happens
-  // BEFORE the follow-up `updateEncoderScissor`), the underlying
-  // Vulkan `VkImage` / `VkImageView` are freed while our C++ handle
-  // still points at them. A subsequent `createBindGroup` then passes
-  // a stale `VkImageView` handle to the Vulkan driver, tripping
-  // lvp's `vk_object_base_assert_valid` on debug Mesa and corrupting
-  // the heap on release Mesa - see issue #551.
-  wgpu::Texture activeClipMaskTexture;
-  wgpu::TextureView activeClipMaskView;
+  // Lifetime (issue #551 redesign): the ref is a non-owning identity.
+  // `RendererGeode` guarantees the referenced view handle (and its parent
+  // texture) stay alive through the frame's submit by parking popped
+  // clip-stack handles in frame-end keepalive lists; the runtime's
+  // bind-group creation and submit-time re-validation fail closed if that
+  // discipline is ever violated, replacing the historical Vulkan
+  // use-after-free with a loud error.
+  gpu::TextureViewRef activeClipMaskView;
 
   // Non-owning pointer to the device's shared `GeodeMaskPipeline`.
   // Built on demand via `GeodeDevice::maskPipeline()` the first time
@@ -525,7 +535,10 @@ struct GeoEncoder::Impl {
   // so main-pass draw code picks back up exactly where it left off
   // when the mask pass ends.
   bool maskPassOpen = false;
-  ScopedWgpuHandle<wgpu::RenderPassEncoder> maskPass;
+  /// The active mask pass, owned by `commandEncoder`. Null when closed. (The runtime hands out
+  /// one pass-encoder object per command encoder, so this may alias `pass`; the open/closed
+  /// flags are authoritative.)
+  gpu::RenderPassEncoder* maskPass = nullptr;
   // Transform active when the mask pass was opened, so mask draws use
   // the same device-pixel space as the parent content. The mask pass
   // always renders into the mask texture the caller passed in, which
@@ -533,17 +546,20 @@ struct GeoEncoder::Impl {
   Transform2d maskPassSavedTransform = Transform2d();
 
   // Pending draws are recorded into a render pass that's lazily opened.
-  // The first clear/fill triggers `beginPass()`; finish() ends it.
+  // The first clear/fill triggers `ensurePassOpen()`; finish() ends it.
   bool passOpen = false;
-  ScopedWgpuHandle<wgpu::RenderPassEncoder> pass;
+  /// The active main pass, owned by `commandEncoder`. Null when closed.
+  gpu::RenderPassEncoder* pass = nullptr;
 
   // Per-encoder resources created while recording draw calls. They are
   // released together when the encoder is destroyed, after `finish()` has
-  // ended the open pass and submitted the command buffer in owning mode.
-  ScopedWgpuResourceArena transientResources;
+  // ended the open pass and submitted the command buffer in owning mode
+  // (mandatory: submit re-validates every recorded resource identity).
+  GeodeTransientResources transientResources;
 
   // Default load op = clear-to-transparent until clear() is called explicitly.
-  wgpu::Color clearColor = {0.0, 0.0, 0.0, 0.0};
+  // Premultiplied RGBA.
+  std::array<double, 4> clearColor = {0.0, 0.0, 0.0, 0.0};
   bool hasExplicitClear = false;
   // When true, the next render pass uses LoadOp::Load so previously
   // submitted content is preserved. Set via `setLoadPreserve()`.
@@ -602,54 +618,53 @@ struct GeoEncoder::Impl {
       return;
     }
     if (scissorActive) {
-      // Clamp to the target so out-of-bounds scissor rects don't trigger
-      // WebGPU validation errors. Required when the clip rect is outside
-      // the current viewport (e.g., a nested SVG positioned at the edge).
+      // Clamp to the target so out-of-bounds scissor rects don't trip the
+      // runtime's fail-closed validation. Required when the clip rect is
+      // outside the current viewport (e.g., a nested SVG positioned at the
+      // edge).
       uint32_t x = std::min(scissorX, targetWidth);
       uint32_t y = std::min(scissorY, targetHeight);
       uint32_t maxW = targetWidth - x;
       uint32_t maxH = targetHeight - y;
       uint32_t w = std::min(scissorW, maxW);
       uint32_t h = std::min(scissorH, maxH);
-      pass.get().setScissorRect(x, y, w, h);
+      pass->setScissorRect(x, y, w, h);
     } else {
-      pass.get().setScissorRect(0, 0, targetWidth, targetHeight);
+      pass->setScissorRect(0, 0, targetWidth, targetHeight);
     }
   }
 
   /// Return the texture view that should be bound to the clip-mask
-  /// slot for the next draw - the active mask if set, or the device's
-  /// shared identity-mask dummy otherwise (see
-  /// `GeodeDevice::dummyClipMaskTextureView()`).
-  const wgpu::TextureView& currentClipMaskView() {
-    if (activeClipMaskView) {
+  /// slot for the next draw - the active mask if set, or the context's
+  /// shared identity-mask dummy otherwise.
+  gpu::TextureViewRef currentClipMaskView() const {
+    if (activeClipMaskView.isValid()) {
       return activeClipMaskView;
     }
-    return device->dummyClipMaskTextureView();
+    return *context->dummyClipMaskTextureView;
   }
 
-  /// Open the render pass on demand.
-  void ensurePassOpen() {
+  /// Open the render pass on demand. Returns true when a pass is open and
+  /// draws can record; false when opening failed (the failure is logged and
+  /// the encoder's poisoned-latch carries the root cause to finish()).
+  bool ensurePassOpen() {
     if (passOpen) {
-      return;
+      return true;
     }
-    wgpu::RenderPassColorAttachment color = {};
-
-    color.view = targetView.get();
-    color.loadOp = loadPreserve ? wgpu::LoadOp::Load : wgpu::LoadOp::Clear;
-    color.storeOp = wgpu::StoreOp::Store;
-    color.clearValue = clearColor;
-    // Dawn (browser WebGPU) rejects depthSlice=0 on non-3D views with
-    // "Depth slice was provided but the color attachment's view is not
-    // 3D". wgpu-native is lenient. Set the UNDEFINED sentinel for
-    // cross-backend compatibility.
-    color.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
-
-    wgpu::RenderPassDescriptor desc = {};
-    desc.colorAttachmentCount = 1;
-    desc.colorAttachments = &color;
-    desc.label = wgpuLabel("GeoEncoderPass");
-    pass.reset(commandEncoder.beginRenderPass(desc));
+    if (commandEncoder == nullptr) {
+      return false;  // Owned-mode command encoder creation failed (already logged).
+    }
+    gpu::Result<gpu::RenderPassEncoder*> passResult =
+        commandEncoder->beginRenderPass(gpu::RenderPassDescriptor{
+            "GeoEncoderPass",
+            {gpu::RenderPassColorAttachment{targetView,
+                                            loadPreserve ? gpu::LoadOp::Load : gpu::LoadOp::Clear,
+                                            gpu::StoreOp::Store, clearColor}}});
+    if (passResult.hasError()) {
+      LogGpuError("GeoEncoderPass beginRenderPass", passResult.error());
+      return false;
+    }
+    pass = passResult.result();
     // Pipelines are set per-draw - `fillPath` / `fillPathLinearGradient` /
     // `drawImage` each rebind their own pipeline before issuing a draw call.
     // Re-binding only happens when the bound pipeline differs from the next
@@ -662,6 +677,7 @@ struct GeoEncoder::Impl {
     // encoder). Also ensures a fresh pass re-applies the scissor if a
     // previous pass was finished and a new one opened.
     applyScissorIfPassOpen();
+    return true;
   }
 
   /// Track which pipeline is currently bound so we can emit `SetPipeline`
@@ -673,24 +689,24 @@ struct GeoEncoder::Impl {
   bool currentPipelineIsGradient = false;
   void bindSolidPipeline() {
     if (currentPipeline != BoundPipeline::kSolid) {
-      pass.get().setPipeline(pipeline->pipeline());
-      device->countPipelineSwitch();
+      pass->setPipeline(pipeline->pipeline());
+      context->countPipelineSwitch();
       currentPipeline = BoundPipeline::kSolid;
       currentPipelineIsGradient = false;
     }
   }
   void bindGradientPipeline() {
     if (currentPipeline != BoundPipeline::kGradient) {
-      pass.get().setPipeline(gradientPipeline->pipeline());
-      device->countPipelineSwitch();
+      pass->setPipeline(gradientPipeline->pipeline());
+      context->countPipelineSwitch();
       currentPipeline = BoundPipeline::kGradient;
       currentPipelineIsGradient = true;
     }
   }
-  void bindImagePipeline(const wgpu::RenderPipeline& imageRenderPipeline) {
+  void bindImagePipeline(const gpu::RenderPipeline& imageRenderPipeline) {
     if (currentPipeline != BoundPipeline::kImage) {
-      pass.get().setPipeline(imageRenderPipeline);
-      device->countPipelineSwitch();
+      pass->setPipeline(imageRenderPipeline);
+      context->countPipelineSwitch();
       currentPipeline = BoundPipeline::kImage;
       currentPipelineIsGradient = false;
     }
@@ -751,18 +767,24 @@ struct GeoEncoder::Impl {
 // Shared initialisation used by both constructors of GeoEncoder. Fills
 // in everything on Impl except `commandEncoder` (which differs between
 // the owning and shared-CommandEncoder flavours).
-void GeoEncoder::initImpl(GeoEncoder::Impl& impl, GeodeDevice& device,
+void GeoEncoder::initImpl(GeoEncoder::Impl& impl, const GeodeGpuContext& context,
                           const GeodePipeline& fillPipeline,
                           const GeodeGradientPipeline& gradientPipeline,
-                          const GeodeImagePipeline& imagePipeline, const wgpu::Texture& target) {
-  impl.device = &device;
+                          const GeodeImagePipeline& imagePipeline, const gpu::Texture& target,
+                          const gpu::Extent2d& targetSize) {
+  impl.context = &context;
   impl.pipeline = &fillPipeline;
   impl.gradientPipeline = &gradientPipeline;
   impl.imagePipeline = &imagePipeline;
-  impl.target = target;
-  impl.targetView.reset(target.createView());
-  impl.targetWidth = target.getWidth();
-  impl.targetHeight = target.getHeight();
+  gpu::Result<gpu::TextureView> viewResult =
+      context.gpuDevice->createTextureView(target, gpu::TextureViewDescriptor{"GeoEncoderTarget"});
+  if (viewResult.hasError()) {
+    LogGpuError("GeoEncoderTarget createTextureView", viewResult.error());
+  } else {
+    impl.targetView = std::move(viewResult).result();
+  }
+  impl.targetWidth = targetSize.width;
+  impl.targetHeight = targetSize.height;
 }
 
 // Post-init: configure per-draw arenas. Runs once `commandEncoder`
@@ -775,48 +797,53 @@ void GeoEncoder::finalizeImpl(GeoEncoder::Impl& impl) {
   // Configure per-draw arenas (bump-allocated GPU buffers, design
   // doc 0030 Milestone 1). They stay empty here; the first draw
   // triggers lazy growth to 64 KiB and doubles from there.
-  impl.vertexArena.usage = wgpu::BufferUsage::Vertex | wgpu::BufferUsage::CopyDst;
+  impl.vertexArena.usage = gpu::BufferUsage::Vertex | gpu::BufferUsage::CopyDst;
   impl.vertexArena.label = "GeodeVertexArena";
-  impl.bandArena.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+  impl.bandArena.usage = gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst;
   impl.bandArena.label = "GeodeBandArena";
-  impl.curveArena.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+  impl.curveArena.usage = gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst;
   impl.curveArena.label = "GeodeCurveArena";
-  impl.uniformArena.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
+  impl.uniformArena.usage = gpu::BufferUsage::Uniform | gpu::BufferUsage::CopyDst;
   impl.uniformArena.label = "GeodeUniformArena";
-  impl.instanceTransformArena.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+  impl.instanceTransformArena.usage = gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst;
   impl.instanceTransformArena.label = "GeodeInstanceTransformArena";
-  impl.vBandArena.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+  impl.vBandArena.usage = gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst;
   impl.vBandArena.label = "GeodeVBandArena";
-  impl.vCurveArena.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+  impl.vCurveArena.usage = gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst;
   impl.vCurveArena.label = "GeodeVCurveArena";
-  impl.hGridArena.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+  impl.hGridArena.usage = gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst;
   impl.hGridArena.label = "GeodeHGridArena";
-  impl.vGridArena.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+  impl.vGridArena.usage = gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst;
   impl.vGridArena.label = "GeodeVGridArena";
 }
 
-GeoEncoder::GeoEncoder(GeodeDevice& device, const GeodePipeline& fillPipeline,
+GeoEncoder::GeoEncoder(const GeodeGpuContext& context, const GeodePipeline& fillPipeline,
                        const GeodeGradientPipeline& gradientPipeline,
-                       const GeodeImagePipeline& imagePipeline, const wgpu::Texture& target)
+                       const GeodeImagePipeline& imagePipeline, const gpu::Texture& target,
+                       const gpu::Extent2d& targetSize)
     : impl_(std::make_unique<Impl>()) {
-  initImpl(*impl_, device, fillPipeline, gradientPipeline, imagePipeline, target);
+  initImpl(*impl_, context, fillPipeline, gradientPipeline, imagePipeline, target, targetSize);
 
-  wgpu::CommandEncoderDescriptor desc = {};
-  desc.label = wgpuLabel("GeoEncoder");
-  impl_->ownedCommandEncoder.reset(device.device().createCommandEncoder(desc));
+  gpu::Result<std::unique_ptr<gpu::CommandEncoder>> encoderResult =
+      context.gpuDevice->createCommandEncoder();
+  if (encoderResult.hasError()) {
+    LogGpuError("GeoEncoder createCommandEncoder", encoderResult.error());
+  } else {
+    impl_->ownedCommandEncoder = std::move(encoderResult).result();
+  }
   impl_->commandEncoder = impl_->ownedCommandEncoder.get();
   impl_->ownsCommandEncoder = true;
 
   finalizeImpl(*impl_);
 }
 
-GeoEncoder::GeoEncoder(GeodeDevice& device, const GeodePipeline& fillPipeline,
+GeoEncoder::GeoEncoder(const GeodeGpuContext& context, const GeodePipeline& fillPipeline,
                        const GeodeGradientPipeline& gradientPipeline,
-                       const GeodeImagePipeline& imagePipeline, const wgpu::Texture& target,
-                       wgpu::CommandEncoder sharedCommandEncoder)
+                       const GeodeImagePipeline& imagePipeline, const gpu::Texture& target,
+                       const gpu::Extent2d& targetSize, gpu::CommandEncoder& sharedCommandEncoder)
     : impl_(std::make_unique<Impl>()) {
-  initImpl(*impl_, device, fillPipeline, gradientPipeline, imagePipeline, target);
-  impl_->commandEncoder = std::move(sharedCommandEncoder);
+  initImpl(*impl_, context, fillPipeline, gradientPipeline, imagePipeline, target, targetSize);
+  impl_->commandEncoder = &sharedCommandEncoder;
   impl_->ownsCommandEncoder = false;
   finalizeImpl(*impl_);
 }
@@ -843,10 +870,10 @@ void GeoEncoder::clear(const css::RGBA& color) {
   // texture contents are premultiplied throughout. Clearing with a straight-
   // alpha value would break that invariant for any semi-transparent clear.
   const double alpha = color.a / 255.0;
-  impl_->clearColor.r = (color.r / 255.0) * alpha;
-  impl_->clearColor.g = (color.g / 255.0) * alpha;
-  impl_->clearColor.b = (color.b / 255.0) * alpha;
-  impl_->clearColor.a = alpha;
+  impl_->clearColor[0] = (color.r / 255.0) * alpha;
+  impl_->clearColor[1] = (color.g / 255.0) * alpha;
+  impl_->clearColor[2] = (color.b / 255.0) * alpha;
+  impl_->clearColor[3] = alpha;
   impl_->hasExplicitClear = true;
 }
 
@@ -935,8 +962,8 @@ void GeoEncoder::clearClipPolygon() {
 // Phase 3b: clip mask pass
 // ============================================================================
 
-void GeoEncoder::beginMaskPass(const wgpu::Texture& mask) {
-  if (!mask) {
+void GeoEncoder::beginMaskPass(const gpu::Texture& mask) {
+  if (!mask.isValid()) {
     return;
   }
 
@@ -948,40 +975,44 @@ void GeoEncoder::beginMaskPass(const wgpu::Texture& mask) {
   // run on the next open.
   const bool mainPassWasOpen = impl_->passOpen;
   if (mainPassWasOpen) {
-    impl_->pass.get().end();
-    impl_->pass.reset();
+    impl_->pass->end();
+    impl_->pass = nullptr;
     impl_->passOpen = false;
     impl_->loadPreserve = true;
   }
 
-  // Fetch the device's shared mask pipeline - lazily built on first
+  // Fetch the context's shared mask pipeline - lazily built on first
   // `maskPipeline()` call.
   if (!impl_->maskPipelineOwned) {
-    impl_->maskPipelineOwned = &impl_->device->maskPipeline();
+    impl_->maskPipelineOwned = &impl_->context->maskPipeline();
   }
 
   impl_->maskPassSavedTransform = impl_->transform;
 
-  wgpu::TextureView maskView = impl_->transientResources.retain(mask.createView());
+  gpu::Result<gpu::TextureView> maskViewResult = impl_->context->gpuDevice->createTextureView(
+      mask, gpu::TextureViewDescriptor{"GeoEncoderMaskTarget"});
+  if (maskViewResult.hasError()) {
+    LogGpuError("GeoEncoderMaskTarget createTextureView", maskViewResult.error());
+    return;
+  }
+  const gpu::TextureView& maskView =
+      impl_->transientResources.views.emplace_back(std::move(maskViewResult).result());
 
-  wgpu::RenderPassColorAttachment color = {};
-  color.view = maskView;
-  color.loadOp = wgpu::LoadOp::Clear;
-  color.storeOp = wgpu::StoreOp::Store;
-  color.clearValue = {0.0, 0.0, 0.0, 0.0};
-  // See ensurePassOpen above - Dawn requires UNDEFINED on non-3D views.
-  color.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
-
-  wgpu::RenderPassDescriptor desc = {};
-  desc.colorAttachmentCount = 1;
-  desc.colorAttachments = &color;
-  desc.label = wgpuLabel("GeoEncoderMaskPass");
-  impl_->maskPass.reset(impl_->commandEncoder.beginRenderPass(desc));
-  impl_->maskPass.get().setPipeline(impl_->maskPipelineOwned->pipeline());
-  impl_->device->countPipelineSwitch();
+  gpu::Result<gpu::RenderPassEncoder*> maskPassResult =
+      impl_->commandEncoder->beginRenderPass(gpu::RenderPassDescriptor{
+          "GeoEncoderMaskPass",
+          {gpu::RenderPassColorAttachment{
+              maskView, gpu::LoadOp::Clear, gpu::StoreOp::Store, {0.0, 0.0, 0.0, 0.0}}}});
+  if (maskPassResult.hasError()) {
+    LogGpuError("GeoEncoderMaskPass beginRenderPass", maskPassResult.error());
+    return;
+  }
+  impl_->maskPass = maskPassResult.result();
+  impl_->maskPass->setPipeline(impl_->maskPipelineOwned->pipeline());
+  impl_->context->countPipelineSwitch();
   // Full-target scissor so clip-path fills aren't clipped by any
   // outer scissor still cached in the encoder state.
-  impl_->maskPass.get().setScissorRect(0, 0, impl_->targetWidth, impl_->targetHeight);
+  impl_->maskPass->setScissorRect(0, 0, impl_->targetWidth, impl_->targetHeight);
   impl_->maskPassOpen = true;
 }
 
@@ -997,7 +1028,7 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
   EncodedPath ownedEncoded;
   const EncodedPath* encodedPtr = precomputedEncoded;
   if (!encodedPtr) {
-    impl_->device->countPathEncode();
+    impl_->context->countPathEncode();
     ownedEncoded = GeodePathEncoder::encode(path, rule);
     encodedPtr = &ownedEncoded;
   }
@@ -1005,8 +1036,6 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
   if (encoded.empty()) {
     return;
   }
-
-  const wgpu::Device& dev = impl_->device->device();
 
   // Analytic dual-ray buffers (0041 §8): single quad + H/V bands/curves/grids.
   const uint64_t vbSize = roundUp4(encoded.quadVertices.size() * sizeof(EncodedPath::Vertex));
@@ -1050,7 +1079,7 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
   u.viewport[0] = static_cast<float>(impl_->targetWidth);
   u.viewport[1] = static_cast<float>(impl_->targetHeight);
   u.fillRule = (rule == FillRule::EvenOdd) ? 1u : 0u;
-  u.hasClipMask = impl_->activeClipMaskView ? 1u : 0u;
+  u.hasClipMask = impl_->activeClipMaskView.isValid() ? 1u : 0u;
   u.antialias = impl_->antialias ? 1u : 0u;
   u.gridYBase = encoded.yBase;
   u.gridHStride = encoded.hStride;
@@ -1062,60 +1091,47 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
   const auto uniAlloc =
       impl_->allocInArena(impl_->uniformArena, &u, sizeof(MaskUniforms), kUniformOffsetAlignment);
 
-  wgpu::BindGroupEntry entries[9] = {};
-  entries[0].binding = 0;
-  entries[0].buffer = *uniAlloc.buffer;
-  entries[0].offset = uniAlloc.offset;
-  entries[0].size = uniAlloc.size;
-  entries[1].binding = 1;
-  entries[1].buffer = *bandsAlloc.buffer;
-  entries[1].offset = bandsAlloc.offset;
-  entries[1].size = bandsAlloc.size;
-  entries[2].binding = 2;
-  entries[2].buffer = *curvesAlloc.buffer;
-  entries[2].offset = curvesAlloc.offset;
-  entries[2].size = curvesAlloc.size;
-  entries[3].binding = 3;
-  entries[3].textureView = impl_->currentClipMaskView();
-  entries[4].binding = 4;
-  entries[4].sampler = impl_->device->dummyClipMaskSampler();
-  entries[5].binding = 5;
-  entries[5].buffer = *vBandsAlloc.buffer;
-  entries[5].offset = vBandsAlloc.offset;
-  entries[5].size = vBandsAlloc.size;
-  entries[6].binding = 6;
-  entries[6].buffer = *vCurvesAlloc.buffer;
-  entries[6].offset = vCurvesAlloc.offset;
-  entries[6].size = vCurvesAlloc.size;
-  entries[7].binding = 7;
-  entries[7].buffer = *hGridAlloc.buffer;
-  entries[7].offset = hGridAlloc.offset;
-  entries[7].size = hGridAlloc.size;
-  entries[8].binding = 8;
-  entries[8].buffer = *vGridAlloc.buffer;
-  entries[8].offset = vGridAlloc.offset;
-  entries[8].size = vGridAlloc.size;
+  gpu::Result<gpu::BindGroup> bindGroupResult =
+      impl_->context->gpuDevice->createBindGroup(gpu::BindGroupDescriptor{
+          "GeodeMaskBindGroup",
+          impl_->maskPipelineOwned->bindGroupLayout(),
+          {
+              gpu::BindGroupEntry{
+                  0, gpu::BufferBinding{*uniAlloc.buffer, uniAlloc.offset, uniAlloc.size}},
+              gpu::BindGroupEntry{
+                  1, gpu::BufferBinding{*bandsAlloc.buffer, bandsAlloc.offset, bandsAlloc.size}},
+              gpu::BindGroupEntry{
+                  2, gpu::BufferBinding{*curvesAlloc.buffer, curvesAlloc.offset, curvesAlloc.size}},
+              gpu::BindGroupEntry{3, gpu::TextureViewBinding{impl_->currentClipMaskView()}},
+              gpu::BindGroupEntry{4, gpu::SamplerBinding{*impl_->context->dummyClipMaskSampler}},
+              gpu::BindGroupEntry{
+                  5, gpu::BufferBinding{*vBandsAlloc.buffer, vBandsAlloc.offset, vBandsAlloc.size}},
+              gpu::BindGroupEntry{6, gpu::BufferBinding{*vCurvesAlloc.buffer, vCurvesAlloc.offset,
+                                                        vCurvesAlloc.size}},
+              gpu::BindGroupEntry{
+                  7, gpu::BufferBinding{*hGridAlloc.buffer, hGridAlloc.offset, hGridAlloc.size}},
+              gpu::BindGroupEntry{
+                  8, gpu::BufferBinding{*vGridAlloc.buffer, vGridAlloc.offset, vGridAlloc.size}},
+          }});
+  if (bindGroupResult.hasError()) {
+    LogGpuError("GeodeMaskBindGroup createBindGroup", bindGroupResult.error());
+    return;
+  }
+  const gpu::BindGroup& bindGroup =
+      impl_->transientResources.bindGroups.emplace_back(std::move(bindGroupResult).result());
 
-  wgpu::BindGroupDescriptor bgDesc = {};
-  bgDesc.label = wgpuLabel("GeodeMaskBindGroup");
-  bgDesc.layout = impl_->maskPipelineOwned->bindGroupLayout();
-  bgDesc.entryCount = 9;
-  bgDesc.entries = entries;
-  wgpu::BindGroup bindGroup = impl_->transientResources.retain(dev.createBindGroup(bgDesc));
-  impl_->device->countBindGroup();
-
-  impl_->maskPass.get().setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
-  impl_->maskPass.get().setBindGroup(0, bindGroup, 0, nullptr);
-  impl_->maskPass.get().draw(static_cast<uint32_t>(encoded.quadVertices.size()), 1, 0, 0);
-  impl_->device->countDraw();
+  impl_->maskPass->setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset);
+  impl_->maskPass->setBindGroup(0, bindGroup);
+  impl_->maskPass->draw(static_cast<uint32_t>(encoded.quadVertices.size()), 1, 0, 0);
+  impl_->context->countDraw();
 }
 
 void GeoEncoder::endMaskPass() {
   if (!impl_->maskPassOpen) {
     return;
   }
-  impl_->maskPass.get().end();
-  impl_->maskPass.reset();
+  impl_->maskPass->end();
+  impl_->maskPass = nullptr;
   impl_->maskPassOpen = false;
   // Rebind pipeline tracker - the main pass will need to re-select a
   // pipeline on its next draw.
@@ -1126,25 +1142,16 @@ void GeoEncoder::endMaskPass() {
   impl_->transform = impl_->maskPassSavedTransform;
 }
 
-void GeoEncoder::setClipMask(const wgpu::TextureView& maskView) {
-  impl_->activeClipMaskView = maskView;
-  // activeClipMaskTexture keepalive is left empty by this overload; the
-  // caller must guarantee the parent stays alive. The 2-arg overload
-  // is preferred for any path that doesn't own the texture's lifetime
-  // at the call site (e.g. `RendererGeode::updateEncoderScissor`
-  // pulling the view off a clip-stack entry that may be destroyed
-  // before the next draw).
-  impl_->activeClipMaskTexture = wgpu::Texture{};
-}
-
-void GeoEncoder::setClipMask(const wgpu::Texture& maskTexture, const wgpu::TextureView& maskView) {
-  impl_->activeClipMaskTexture = maskTexture;
+void GeoEncoder::setClipMask(gpu::TextureViewRef maskView) {
+  // Non-owning identity: the caller (RendererGeode's clip stack + frame-end
+  // keepalive lists) guarantees the referenced view handle stays alive until
+  // the frame's submit. See the `activeClipMaskView` field comment and issue
+  // #551 for the lifetime redesign.
   impl_->activeClipMaskView = maskView;
 }
 
 void GeoEncoder::clearClipMask() {
-  impl_->activeClipMaskView = wgpu::TextureView{};
-  impl_->activeClipMaskTexture = wgpu::Texture{};
+  impl_->activeClipMaskView = gpu::TextureViewRef{};
 }
 
 void GeoEncoder::setBufferPool(GeodeBufferPool* pool) {
@@ -1186,20 +1193,22 @@ struct GeoEncoder::FillDrawArgs {
   // Solid-fill-only fields (ignored when paintMode == 1).
   float solidColor[4];  // Premultiplied.
 
-  // Pattern-fill-only fields (ignored when paintMode == 0).
-  wgpu::TextureView patternView;
-  wgpu::Sampler patternSampler;
+  // Pattern-fill-only fields (ignored when paintMode == 0). Non-owning
+  // identities; the referenced handles stay alive in the encoder's
+  // transients (per-call pattern view/sampler) or on the context (dummies).
+  gpu::TextureViewRef patternView;
+  gpu::SamplerRef patternSampler;
   Transform2d patternFromPath;
   Vector2d tileSize;
   float patternOpacity;
 
   /// M6 Bullet 2: optional per-instance transform buffer. When null,
-  /// `submitFillDraw` binds `GeodeDevice::identityInstanceTransformBuffer`
+  /// `submitFillDraw` binds the context's identityInstanceTransformBuffer
   /// (single-instance draws). When set, the caller has uploaded N
   /// copies of the 2-vec4f `InstanceTransform` struct at
   /// `instanceTransformsOffset`, and `submitFillDraw` issues a draw
   /// with `instanceCount == N`.
-  const wgpu::Buffer* instanceTransformsBuffer = nullptr;
+  const gpu::Buffer* instanceTransformsBuffer = nullptr;
   uint64_t instanceTransformsOffset = 0;
   uint64_t instanceTransformsSize = 0;
   uint32_t instanceCount = 1;
@@ -1219,11 +1228,11 @@ void GeoEncoder::fillPath(const Path& path, const css::RGBA& color, FillRule rul
   args.solidColor[3] = alpha;
   args.patternOpacity = 1.0f;
 
-  // Solid-mode binds the pre-created dummy texture + sampler so the
+  // Solid-mode binds the shared dummy texture + sampler so the
   // bind group layout (which always includes pattern bindings) is
-  // complete. Both are built once in the encoder constructor.
-  args.patternView = impl_->device->dummyPatternTextureView();
-  args.patternSampler = impl_->device->dummyPatternSampler();
+  // complete. Both are owned by the device and shared via the context.
+  args.patternView = *impl_->context->dummyPatternTextureView;
+  args.patternSampler = *impl_->context->dummyPatternSampler;
   args.tileSize = Vector2d(1.0, 1.0);
   args.patternFromPath = Transform2d();
 
@@ -1250,7 +1259,7 @@ void GeoEncoder::Impl::populateFillUniform(Uniforms& u, const EncodedPath& encod
   u.paintMode = args.paintMode;
   u.patternOpacity = args.patternOpacity;
   writeClipPolygonUniforms(u.hasClipPolygon, u.clipPolygonPlanes);
-  u.hasClipMask = activeClipMaskView ? 1u : 0u;
+  u.hasClipMask = activeClipMaskView.isValid() ? 1u : 0u;
   u.antialias = antialias ? 1u : 0u;
   u.gridYBase = encoded.yBase;
   u.gridHStride = encoded.hStride;
@@ -1304,13 +1313,17 @@ void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const Enc
   const uint64_t totalSize = cursor;
   const uint64_t geometrySize = slot.uniform.offset;  // everything before the uniform.
 
-  wgpu::BufferDescriptor desc = {};
-  desc.label = wgpuLabel("GeodeResidentPath");
-  desc.size = totalSize;
-  desc.usage = wgpu::BufferUsage::Vertex | wgpu::BufferUsage::Storage | wgpu::BufferUsage::Uniform |
-               wgpu::BufferUsage::CopyDst;
-  slot.buffer.reset(device->device().createBuffer(desc));
-  device->countBuffer();
+  // NOTE: the create + writes below are counted by the adapter's creation/write hooks
+  // (countBuffer once, countBufferWrite per write), matching the pre-RHI totals.
+  gpu::Result<gpu::Buffer> bufferResult = context->gpuDevice->createBuffer(
+      gpu::BufferDescriptor{"GeodeResidentPath", totalSize,
+                            gpu::BufferUsage::Vertex | gpu::BufferUsage::Storage |
+                                gpu::BufferUsage::Uniform | gpu::BufferUsage::CopyDst});
+  if (bufferResult.hasError()) {
+    LogGpuError("GeodeResidentPath createBuffer", bufferResult.error());
+    return;
+  }
+  slot.buffer = std::move(bufferResult).result();
 
   // Assemble the geometry portion in one zero-filled staging blob so
   // padding + dummy regions read as zero, then upload it in a single
@@ -1330,69 +1343,67 @@ void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const Enc
   blit(slot.hGrid, encoded.hBandGrid.data(), hGridBytes);
   blit(slot.vGrid, encoded.vBandGrid.data(), vGridBytes);
 
-  device->queue().writeBuffer(slot.buffer.get(), 0, staging.data(), geometrySize);
-  device->countBufferWrite(geometrySize);
+  (void)context->gpuDevice->writeBuffer(slot.buffer, 0, ByteSpan(staging.data(), geometrySize));
 
   slot.vertexCount = static_cast<uint32_t>(encoded.quadVertices.size());
   slot.resident = true;
   slot.lastUniform.clear();  // Force the first uniform write below.
 
-  slot.liveBytesGauge = device->residentBytesGauge();
+  slot.liveBytesGauge = context->residentBytesGauge;
   slot.accountedBytes = static_cast<int64_t>(totalSize);
-  slot.liveBytesGauge->fetch_add(slot.accountedBytes, std::memory_order_relaxed);
+  if (slot.liveBytesGauge) {
+    slot.liveBytesGauge->fetch_add(slot.accountedBytes, std::memory_order_relaxed);
+  } else {
+    slot.accountedBytes = 0;  // No gauge (test harness) - keep reset() balanced.
+  }
 
-  // Stamp the current device's identity so a later render by a different
+  // Stamp the current gpu::Device's identity so a later render by a different
   // device re-uploads instead of binding this device's buffer / bind group
-  // into the other device's render pass (WebGPU rejects that).
-  slot.owningDeviceId = device->deviceId();
+  // into the other device's render pass (the runtime fails closed on that).
+  slot.owningDeviceId = context->gpuDevice->deviceId();
 }
 
 void GeoEncoder::Impl::buildResidentBindGroup(GeodeResidentSlot& slot) {
-  const wgpu::Device& dev = device->device();
-  const wgpu::Buffer& buf = slot.buffer.get();
-
-  wgpu::BindGroupEntry entries[12] = {};
-  auto bufEntry = [&](int i, uint32_t binding, const GeodeResidentSlot::Region& r) {
-    entries[i].binding = binding;
-    entries[i].buffer = buf;
-    entries[i].offset = r.offset;
-    entries[i].size = r.size;
+  const gpu::BufferRef buf = slot.buffer;
+  const auto bufEntry = [&](uint32_t binding, const GeodeResidentSlot::Region& r) {
+    return gpu::BindGroupEntry{binding, gpu::BufferBinding{buf, r.offset, r.size}};
   };
-  bufEntry(0, 0, slot.uniform);
-  bufEntry(1, 1, slot.bands);
-  bufEntry(2, 2, slot.curves);
-  entries[3].binding = 3;
-  entries[3].textureView = device->dummyPatternTextureView();
-  entries[4].binding = 4;
-  entries[4].sampler = device->dummyPatternSampler();
-  // Residence is only taken with no active clip, so the clip-mask slot is
-  // always the device's identity-coverage dummy - bind it directly so the
-  // cached bind group is deterministic.
-  entries[5].binding = 5;
-  entries[5].textureView = device->dummyClipMaskTextureView();
-  entries[6].binding = 6;
-  entries[6].sampler = device->dummyClipMaskSampler();
-  entries[7].binding = 7;
-  entries[7].buffer = device->identityInstanceTransformBuffer();
-  entries[7].offset = 0;
-  entries[7].size = 32u;
-  bufEntry(8, 8, slot.vBands);
-  bufEntry(9, 9, slot.vCurves);
-  bufEntry(10, 10, slot.hGrid);
-  bufEntry(11, 11, slot.vGrid);
 
-  wgpu::BindGroupDescriptor bgDesc = {};
-  bgDesc.label = wgpuLabel("GeodeResidentBindGroup");
-  bgDesc.layout = pipeline->bindGroupLayout();
-  bgDesc.entryCount = 12;
-  bgDesc.entries = entries;
-  slot.bindGroup.reset(dev.createBindGroup(bgDesc));
-  device->countBindGroup();
+  // Residence is only taken with no active clip, so the clip-mask slot is
+  // always the shared identity-coverage dummy - bind it directly so the
+  // cached bind group is deterministic. Counted by the adapter's
+  // countBindGroup hook, matching the pre-RHI total.
+  gpu::Result<gpu::BindGroup> bindGroupResult =
+      context->gpuDevice->createBindGroup(gpu::BindGroupDescriptor{
+          "GeodeResidentBindGroup",
+          pipeline->bindGroupLayout(),
+          {
+              bufEntry(0, slot.uniform),
+              bufEntry(1, slot.bands),
+              bufEntry(2, slot.curves),
+              gpu::BindGroupEntry{3, gpu::TextureViewBinding{*context->dummyPatternTextureView}},
+              gpu::BindGroupEntry{4, gpu::SamplerBinding{*context->dummyPatternSampler}},
+              gpu::BindGroupEntry{5, gpu::TextureViewBinding{*context->dummyClipMaskTextureView}},
+              gpu::BindGroupEntry{6, gpu::SamplerBinding{*context->dummyClipMaskSampler}},
+              gpu::BindGroupEntry{
+                  7, gpu::BufferBinding{*context->identityInstanceTransformBuffer, 0, 32u}},
+              bufEntry(8, slot.vBands),
+              bufEntry(9, slot.vCurves),
+              bufEntry(10, slot.hGrid),
+              bufEntry(11, slot.vGrid),
+          }});
+  if (bindGroupResult.hasError()) {
+    LogGpuError("GeodeResidentBindGroup createBindGroup", bindGroupResult.error());
+    return;
+  }
+  slot.bindGroup = std::move(bindGroupResult).result();
 }
 
 void GeoEncoder::Impl::submitResidentFillDraw(GeodeResidentSlot& slot, const EncodedPath& encoded,
                                               const FillDrawArgs& args) {
-  ensurePassOpen();
+  if (!ensurePassOpen()) {
+    return;
+  }
   bindSolidPipeline();
 
   // Ensure the geometry is resident and current AND owned by THIS device.
@@ -1402,13 +1413,16 @@ void GeoEncoder::Impl::submitResidentFillDraw(GeodeResidentSlot& slot, const Enc
   // second device rendering a document whose residence was filled by a
   // now-different device (WebGPU rejects cross-device buffers / bind groups).
   const uint64_t fingerprint = residentFingerprint(encoded);
-  const bool needUpload = !slot.resident || !slot.buffer || slot.encodedKey != &encoded ||
+  const bool needUpload = !slot.resident || !slot.buffer.isValid() || slot.encodedKey != &encoded ||
                           slot.encodedFingerprint != fingerprint ||
-                          slot.owningDeviceId != device->deviceId();
+                          slot.owningDeviceId != context->gpuDevice->deviceId();
   if (needUpload) {
     uploadResidentGeometry(slot, encoded);
     slot.encodedKey = &encoded;
     slot.encodedFingerprint = fingerprint;
+    if (!slot.resident) {
+      return;  // Upload failed (logged); fail closed by skipping the draw.
+    }
   }
 
   // Rewrite the uniform only when it actually changed. A static
@@ -1420,19 +1434,22 @@ void GeoEncoder::Impl::submitResidentFillDraw(GeodeResidentSlot& slot, const Enc
   const auto* uBytes = reinterpret_cast<const uint8_t*>(&u);
   if (slot.lastUniform.size() != sizeof(Uniforms) ||
       std::memcmp(slot.lastUniform.data(), uBytes, sizeof(Uniforms)) != 0) {
-    device->queue().writeBuffer(slot.buffer.get(), slot.uniform.offset, &u, sizeof(Uniforms));
-    device->countBufferWrite(sizeof(Uniforms));
+    (void)context->gpuDevice->writeBuffer(slot.buffer, slot.uniform.offset,
+                                          ByteSpan(&u, sizeof(Uniforms)));
     slot.lastUniform.assign(uBytes, uBytes + sizeof(Uniforms));
   }
 
-  if (!slot.bindGroup) {
+  if (!slot.bindGroup.isValid()) {
     buildResidentBindGroup(slot);
+    if (!slot.bindGroup.isValid()) {
+      return;  // Bind group creation failed (logged); skip the draw.
+    }
   }
 
-  pass.get().setVertexBuffer(0, slot.buffer.get(), slot.vertex.offset, slot.vertex.size);
-  pass.get().setBindGroup(0, slot.bindGroup.get(), 0, nullptr);
-  pass.get().draw(slot.vertexCount, 1, 0, 0);
-  device->countDraw();
+  pass->setVertexBuffer(0, slot.buffer, slot.vertex.offset);
+  pass->setBindGroup(0, slot.bindGroup);
+  pass->draw(slot.vertexCount, 1, 0, 0);
+  context->countDraw();
 }
 
 void GeoEncoder::fillPathResident(GeodeResidentSlot& slot, const EncodedPath& encoded,
@@ -1454,15 +1471,15 @@ void GeoEncoder::fillPathResident(GeodeResidentSlot& slot, const EncodedPath& en
   args.solidColor[2] = (color.b / 255.0f) * alpha;
   args.solidColor[3] = alpha;
   args.patternOpacity = 1.0f;
-  args.patternView = impl_->device->dummyPatternTextureView();
-  args.patternSampler = impl_->device->dummyPatternSampler();
+  args.patternView = *impl_->context->dummyPatternTextureView;
+  args.patternSampler = *impl_->context->dummyPatternSampler;
   args.tileSize = Vector2d(1.0, 1.0);
   args.patternFromPath = Transform2d();
 
   // Residence is only safe (bind group stable, uniform clip flags zero)
   // when no clip mask / clip polygon / mask pass is active. Otherwise fall
   // back to the wave-1 arena path so clipped / masked draws stay exact.
-  if (impl_->activeClipMaskView || impl_->clipPolygonActive || impl_->maskPassOpen) {
+  if (impl_->activeClipMaskView.isValid() || impl_->clipPolygonActive || impl_->maskPassOpen) {
     submitFillDraw(args);
     return;
   }
@@ -1476,7 +1493,8 @@ void GeoEncoder::fillPathResident(GeodeResidentSlot& slot, const EncodedPath& en
   // from a DIFFERENT device that previously rendered this document is not a
   // same-frame repeat and must re-upload (submitResidentFillDraw re-uploads
   // on the device-id mismatch) rather than fall back.
-  if (slot.owningDeviceId == impl_->device->deviceId() && slot.lastResidentFrame == frameId) {
+  if (slot.owningDeviceId == impl_->context->gpuDevice->deviceId() &&
+      slot.lastResidentFrame == frameId) {
     submitFillDraw(args);
     return;
   }
@@ -1517,8 +1535,8 @@ void GeoEncoder::fillPathInstanced(const EncodedPath& encoded, const css::RGBA& 
   args.solidColor[2] = (color.b / 255.0f) * alpha;
   args.solidColor[3] = alpha;
   args.patternOpacity = 1.0f;
-  args.patternView = impl_->device->dummyPatternTextureView();
-  args.patternSampler = impl_->device->dummyPatternSampler();
+  args.patternView = *impl_->context->dummyPatternTextureView;
+  args.patternSampler = *impl_->context->dummyPatternSampler;
   args.tileSize = Vector2d(1.0, 1.0);
   args.patternFromPath = Transform2d();
 
@@ -1532,7 +1550,8 @@ void GeoEncoder::fillPathInstanced(const EncodedPath& encoded, const css::RGBA& 
 
 void GeoEncoder::fillPathPattern(const Path& path, FillRule rule, const PatternPaint& paint,
                                  const EncodedPath* precomputedEncoded) {
-  if (!paint.tile || paint.tileSize.x <= 0.0 || paint.tileSize.y <= 0.0) {
+  if (paint.tile == nullptr || !paint.tile->isValid() || paint.tileSize.x <= 0.0 ||
+      paint.tileSize.y <= 0.0) {
     return;
   }
 
@@ -1540,23 +1559,34 @@ void GeoEncoder::fillPathPattern(const Path& path, FillRule rule, const PatternP
   // wrap mode; the shader also performs explicit modulo-style wrapping
   // via `fract()` so texture sampling never steps outside [0,1] UVs, but
   // Repeat is still the right conceptual wrap mode for any implicit
-  // derivative / mip work WebGPU might do on the sampler.
-  wgpu::SamplerDescriptor sd{wgpu::Default};
-  sd.label = wgpuLabel("GeoEncoderPatternSampler");
-  sd.addressModeU = wgpu::AddressMode::Repeat;
-  sd.addressModeV = wgpu::AddressMode::Repeat;
-  sd.minFilter = wgpu::FilterMode::Linear;
-  sd.magFilter = wgpu::FilterMode::Linear;
-  sd.maxAnisotropy = 1;
-  wgpu::Sampler sampler =
-      impl_->transientResources.retain(impl_->device->device().createSampler(sd));
+  // derivative / mip work the sampler might feed. Created per-call, exactly
+  // like the pre-RHI path (sampler creation is uncounted in both).
+  gpu::Result<gpu::Sampler> samplerResult =
+      impl_->context->gpuDevice->createSampler(gpu::SamplerDescriptor{
+          "GeoEncoderPatternSampler", gpu::FilterMode::Linear, gpu::FilterMode::Linear,
+          gpu::AddressMode::Repeat, gpu::AddressMode::Repeat});
+  if (samplerResult.hasError()) {
+    LogGpuError("GeoEncoderPatternSampler createSampler", samplerResult.error());
+    return;
+  }
+  const gpu::Sampler& sampler =
+      impl_->transientResources.samplers.emplace_back(std::move(samplerResult).result());
+
+  gpu::Result<gpu::TextureView> tileViewResult = impl_->context->gpuDevice->createTextureView(
+      *paint.tile, gpu::TextureViewDescriptor{"GeoEncoderPatternTileView"});
+  if (tileViewResult.hasError()) {
+    LogGpuError("GeoEncoderPatternTileView createTextureView", tileViewResult.error());
+    return;
+  }
+  const gpu::TextureView& tileView =
+      impl_->transientResources.views.emplace_back(std::move(tileViewResult).result());
 
   FillDrawArgs args = {};
   args.path = &path;
   args.rule = rule;
   args.precomputedEncoded = precomputedEncoded;
   args.paintMode = 1u;
-  args.patternView = impl_->transientResources.retain(paint.tile.createView());
+  args.patternView = tileView;
   args.patternSampler = sampler;
   args.patternFromPath = paint.patternFromPath;
   args.tileSize = paint.tileSize;
@@ -1566,9 +1596,11 @@ void GeoEncoder::fillPathPattern(const Path& path, FillRule rule, const PatternP
 }
 
 void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
-  // Dummy resources are pre-created in the encoder constructor; no
-  // per-draw ensure call is needed.
-  impl_->ensurePassOpen();
+  // Dummy resources are shared on the context; no per-draw ensure call is
+  // needed.
+  if (!impl_->ensurePassOpen()) {
+    return;
+  }
   // `bindSolidPipeline` is the single source of truth for the current
   // pipeline - it issues `setPipeline` only when the tracker reports a
   // change (from image / gradient / None). Calling `setPipeline`
@@ -1583,7 +1615,7 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
   EncodedPath ownedEncoded;
   const EncodedPath* encodedPtr = args.precomputedEncoded;
   if (!encodedPtr) {
-    impl_->device->countPathEncode();
+    impl_->context->countPathEncode();
     ownedEncoded = GeodePathEncoder::encode(*args.path, args.rule);
     encodedPtr = &ownedEncoded;
   }
@@ -1591,8 +1623,6 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
   if (encoded.empty()) {
     return;  // Nothing to draw.
   }
-
-  const wgpu::Device& dev = impl_->device->device();
 
   // 2. Allocate and upload GPU buffers via the per-encoder arenas. The
   // analytic dual-ray fill (0041 §8) draws the SINGLE bounding quad
@@ -1627,72 +1657,52 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
   // 3. Bind group - twelve entries: uniforms, H bands SSBO, H curves SSBO,
   // pattern texture, pattern sampler, clip-mask texture, clip-mask sampler,
   // per-instance transforms SSBO, V bands SSBO, V curves SSBO, H band grid,
-  // V band grid.
-  wgpu::BindGroupEntry entries[12] = {};
-  entries[0].binding = 0;
-  entries[0].buffer = *uniAlloc.buffer;
-  entries[0].offset = uniAlloc.offset;
-  entries[0].size = uniAlloc.size;
-  entries[1].binding = 1;
-  entries[1].buffer = *bandsAlloc.buffer;
-  entries[1].offset = bandsAlloc.offset;
-  entries[1].size = bandsAlloc.size;
-  entries[2].binding = 2;
-  entries[2].buffer = *curvesAlloc.buffer;
-  entries[2].offset = curvesAlloc.offset;
-  entries[2].size = curvesAlloc.size;
-  entries[3].binding = 3;
-  entries[3].textureView = args.patternView;
-  entries[4].binding = 4;
-  entries[4].sampler = args.patternSampler;
-  entries[5].binding = 5;
-  entries[5].textureView = impl_->currentClipMaskView();
-  entries[6].binding = 6;
-  entries[6].sampler = impl_->device->dummyClipMaskSampler();
-  entries[7].binding = 7;
-  if (args.instanceTransformsBuffer != nullptr) {
-    entries[7].buffer = *args.instanceTransformsBuffer;
-    entries[7].offset = args.instanceTransformsOffset;
-    entries[7].size = args.instanceTransformsSize;
-  } else {
-    // One-element identity buffer owned by GeodeDevice. Layout is two
-    // vec4f rows = 32 bytes; kept in sync with the WGSL
-    // `InstanceTransform` struct in `shaders/slug_fill.wgsl`.
-    entries[7].buffer = impl_->device->identityInstanceTransformBuffer();
-    entries[7].offset = 0;
-    entries[7].size = 32u;
-  }
-  entries[8].binding = 8;
-  entries[8].buffer = *vBandsAlloc.buffer;
-  entries[8].offset = vBandsAlloc.offset;
-  entries[8].size = vBandsAlloc.size;
-  entries[9].binding = 9;
-  entries[9].buffer = *vCurvesAlloc.buffer;
-  entries[9].offset = vCurvesAlloc.offset;
-  entries[9].size = vCurvesAlloc.size;
-  entries[10].binding = 10;
-  entries[10].buffer = *hGridAlloc.buffer;
-  entries[10].offset = hGridAlloc.offset;
-  entries[10].size = hGridAlloc.size;
-  entries[11].binding = 11;
-  entries[11].buffer = *vGridAlloc.buffer;
-  entries[11].offset = vGridAlloc.offset;
-  entries[11].size = vGridAlloc.size;
+  // V band grid. Binding 7 defaults to the one-element identity buffer
+  // shared on the context (two vec4f rows = 32 bytes, kept in sync with the
+  // WGSL `InstanceTransform` struct in `shaders/slug_fill.wgsl`).
+  const gpu::BufferBinding instanceTransformsBinding =
+      args.instanceTransformsBuffer != nullptr
+          ? gpu::BufferBinding{*args.instanceTransformsBuffer, args.instanceTransformsOffset,
+                               args.instanceTransformsSize}
+          : gpu::BufferBinding{*impl_->context->identityInstanceTransformBuffer, 0, 32u};
 
-  wgpu::BindGroupDescriptor bgDesc = {};
-  bgDesc.label = wgpuLabel("GeodeBindGroup");
-  bgDesc.layout = impl_->pipeline->bindGroupLayout();
-  bgDesc.entryCount = 12;
-  bgDesc.entries = entries;
-  wgpu::BindGroup bindGroup = impl_->transientResources.retain(dev.createBindGroup(bgDesc));
-  impl_->device->countBindGroup();
+  gpu::Result<gpu::BindGroup> bindGroupResult =
+      impl_->context->gpuDevice->createBindGroup(gpu::BindGroupDescriptor{
+          "GeodeBindGroup",
+          impl_->pipeline->bindGroupLayout(),
+          {
+              gpu::BindGroupEntry{
+                  0, gpu::BufferBinding{*uniAlloc.buffer, uniAlloc.offset, uniAlloc.size}},
+              gpu::BindGroupEntry{
+                  1, gpu::BufferBinding{*bandsAlloc.buffer, bandsAlloc.offset, bandsAlloc.size}},
+              gpu::BindGroupEntry{
+                  2, gpu::BufferBinding{*curvesAlloc.buffer, curvesAlloc.offset, curvesAlloc.size}},
+              gpu::BindGroupEntry{3, gpu::TextureViewBinding{args.patternView}},
+              gpu::BindGroupEntry{4, gpu::SamplerBinding{args.patternSampler}},
+              gpu::BindGroupEntry{5, gpu::TextureViewBinding{impl_->currentClipMaskView()}},
+              gpu::BindGroupEntry{6, gpu::SamplerBinding{*impl_->context->dummyClipMaskSampler}},
+              gpu::BindGroupEntry{7, instanceTransformsBinding},
+              gpu::BindGroupEntry{
+                  8, gpu::BufferBinding{*vBandsAlloc.buffer, vBandsAlloc.offset, vBandsAlloc.size}},
+              gpu::BindGroupEntry{9, gpu::BufferBinding{*vCurvesAlloc.buffer, vCurvesAlloc.offset,
+                                                        vCurvesAlloc.size}},
+              gpu::BindGroupEntry{
+                  10, gpu::BufferBinding{*hGridAlloc.buffer, hGridAlloc.offset, hGridAlloc.size}},
+              gpu::BindGroupEntry{
+                  11, gpu::BufferBinding{*vGridAlloc.buffer, vGridAlloc.offset, vGridAlloc.size}},
+          }});
+  if (bindGroupResult.hasError()) {
+    LogGpuError("GeodeBindGroup createBindGroup", bindGroupResult.error());
+    return;
+  }
+  const gpu::BindGroup& bindGroup =
+      impl_->transientResources.bindGroups.emplace_back(std::move(bindGroupResult).result());
 
   // 4. Record the draw call - one quad (6 vertices) per path.
-  impl_->pass.get().setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
-  impl_->pass.get().setBindGroup(0, bindGroup, 0, nullptr);
-  impl_->pass.get().draw(static_cast<uint32_t>(encoded.quadVertices.size()), args.instanceCount, 0,
-                         0);
-  impl_->device->countDraw();
+  impl_->pass->setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset);
+  impl_->pass->setBindGroup(0, bindGroup);
+  impl_->pass->draw(static_cast<uint32_t>(encoded.quadVertices.size()), args.instanceCount, 0, 0);
+  impl_->context->countDraw();
 }
 
 namespace {
@@ -1753,9 +1763,10 @@ void GeoEncoder::fillPathLinearGradient(const Path& path, const LinearGradientPa
   }
 
   // Gradient bind group includes a clip-mask binding (Phase 3b); the
-  // dummy that stands in when no clip is active is pre-created in the
-  // encoder constructor.
-  impl_->ensurePassOpen();
+  // dummy that stands in when no clip is active is shared on the context.
+  if (!impl_->ensurePassOpen()) {
+    return;
+  }
   impl_->bindGradientPipeline();
 
   // 1. CPU encode the path into Slug band data (same as fillPath) -
@@ -1763,7 +1774,7 @@ void GeoEncoder::fillPathLinearGradient(const Path& path, const LinearGradientPa
   EncodedPath ownedEncoded;
   const EncodedPath* encodedPtr = precomputedEncoded;
   if (!encodedPtr) {
-    impl_->device->countPathEncode();
+    impl_->context->countPathEncode();
     ownedEncoded = GeodePathEncoder::encode(path, rule);
     encodedPtr = &ownedEncoded;
   }
@@ -1781,7 +1792,7 @@ void GeoEncoder::fillPathLinearGradient(const Path& path, const LinearGradientPa
                                                              params.spreadMode, params.stops, rule);
   u.gradientKind = kGradientKindLinear;
   impl_->writeClipPolygonUniforms(u.hasClipPolygon, u.clipPolygonPlanes);
-  u.hasClipMask = impl_->activeClipMaskView ? 1u : 0u;
+  u.hasClipMask = impl_->activeClipMaskView.isValid() ? 1u : 0u;
   u.antialias = impl_->antialias ? 1u : 0u;
 
   u.startGrad[0] = static_cast<float>(params.startGrad.x);
@@ -1804,15 +1815,17 @@ void GeoEncoder::fillPathRadialGradient(const Path& path, const RadialGradientPa
     return;
   }
 
-  // Dummy texture for the clip-mask slot is pre-created in the encoder
-  // constructor (see fillPathLinearGradient note).
-  impl_->ensurePassOpen();
+  // Dummy texture for the clip-mask slot is shared on the context (see
+  // fillPathLinearGradient note).
+  if (!impl_->ensurePassOpen()) {
+    return;
+  }
   impl_->bindGradientPipeline();
 
   EncodedPath ownedEncoded;
   const EncodedPath* encodedPtr = precomputedEncoded;
   if (!encodedPtr) {
-    impl_->device->countPathEncode();
+    impl_->context->countPathEncode();
     ownedEncoded = GeodePathEncoder::encode(path, rule);
     encodedPtr = &ownedEncoded;
   }
@@ -1829,7 +1842,7 @@ void GeoEncoder::fillPathRadialGradient(const Path& path, const RadialGradientPa
                                                              params.spreadMode, params.stops, rule);
   u.gradientKind = kGradientKindRadial;
   impl_->writeClipPolygonUniforms(u.hasClipPolygon, u.clipPolygonPlanes);
-  u.hasClipMask = impl_->activeClipMaskView ? 1u : 0u;
+  u.hasClipMask = impl_->activeClipMaskView.isValid() ? 1u : 0u;
   u.antialias = impl_->antialias ? 1u : 0u;
 
   u.radialCenter[0] = static_cast<float>(params.center.x);
@@ -1842,11 +1855,13 @@ void GeoEncoder::fillPathRadialGradient(const Path& path, const RadialGradientPa
   impl_->submitGradientDraw(u, encoded);
 }
 
-void GeoEncoder::blitFullTarget(const wgpu::Texture& src, double opacity) {
-  if (!src) {
+void GeoEncoder::blitFullTarget(const gpu::Texture& src, double opacity) {
+  if (!src.isValid()) {
     return;
   }
-  impl_->ensurePassOpen();
+  if (!impl_->ensurePassOpen()) {
+    return;
+  }
   impl_->bindImagePipeline(impl_->imagePipeline->pipeline());
 
   // Identity MVP: map target-pixel coords (0..W, 0..H) directly to clip
@@ -1878,17 +1893,19 @@ void GeoEncoder::blitFullTarget(const wgpu::Texture& src, double opacity) {
   qp.sourceIsPremultiplied = true;
   qp.clipMaskView = impl_->activeClipMaskView;
 
-  GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass.get(),
-                                        src, mvp, impl_->targetWidth, impl_->targetHeight, qp,
+  GeodeTextureEncoder::drawTexturedQuad(*impl_->context, *impl_->imagePipeline, *impl_->pass, src,
+                                        mvp, impl_->targetWidth, impl_->targetHeight, qp,
                                         impl_->transientResources);
 }
 
-void GeoEncoder::blitFullTargetMasked(const wgpu::Texture& content, const wgpu::Texture& mask,
+void GeoEncoder::blitFullTargetMasked(const gpu::Texture& content, const gpu::Texture& mask,
                                       const std::optional<Box2d>& maskBounds) {
-  if (!content || !mask) {
+  if (!content.isValid() || !mask.isValid()) {
     return;
   }
-  impl_->ensurePassOpen();
+  if (!impl_->ensurePassOpen()) {
+    return;
+  }
   impl_->bindImagePipeline(impl_->imagePipeline->pipeline());
 
   // Identity MVP for target-pixel → clip space, same as blitFullTarget.
@@ -1912,24 +1929,26 @@ void GeoEncoder::blitFullTargetMasked(const wgpu::Texture& content, const wgpu::
   // Geode's premultiplied source-over pipeline, so they're already
   // in premultiplied alpha.
   qp.sourceIsPremultiplied = true;
-  qp.maskTexture = mask;
+  qp.maskTexture = &mask;
   qp.clipMaskView = impl_->activeClipMaskView;
   if (maskBounds.has_value()) {
     qp.applyMaskBounds = true;
     qp.maskBounds = *maskBounds;
   }
 
-  GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass.get(),
+  GeodeTextureEncoder::drawTexturedQuad(*impl_->context, *impl_->imagePipeline, *impl_->pass,
                                         content, mvp, impl_->targetWidth, impl_->targetHeight, qp,
                                         impl_->transientResources);
 }
 
-void GeoEncoder::blitFullTargetBlended(const wgpu::Texture& layer, const wgpu::Texture& dstSnapshot,
+void GeoEncoder::blitFullTargetBlended(const gpu::Texture& layer, const gpu::Texture& dstSnapshot,
                                        uint32_t blendMode, double opacity) {
-  if (!layer || !dstSnapshot || blendMode == 0u) {
+  if (!layer.isValid() || !dstSnapshot.isValid() || blendMode == 0u) {
     return;
   }
-  impl_->ensurePassOpen();
+  if (!impl_->ensurePassOpen()) {
+    return;
+  }
   impl_->bindImagePipeline(impl_->imagePipeline->pipeline());
 
   // Identity MVP for target-pixel → clip space, same as blitFullTarget.
@@ -1959,11 +1978,11 @@ void GeoEncoder::blitFullTargetBlended(const wgpu::Texture& layer, const wgpu::T
   // stored in premultiplied alpha.
   qp.sourceIsPremultiplied = true;
   qp.blendMode = blendMode;
-  qp.dstSnapshotTexture = dstSnapshot;
+  qp.dstSnapshotTexture = &dstSnapshot;
   qp.clipMaskView = impl_->activeClipMaskView;
 
-  GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass.get(),
-                                        layer, mvp, impl_->targetWidth, impl_->targetHeight, qp,
+  GeodeTextureEncoder::drawTexturedQuad(*impl_->context, *impl_->imagePipeline, *impl_->pass, layer,
+                                        mvp, impl_->targetWidth, impl_->targetHeight, qp,
                                         impl_->transientResources);
 }
 
@@ -1990,16 +2009,20 @@ void GeoEncoder::drawImage(const svg::ImageResource& image, const Box2d& destRec
     return;
   }
 
-  impl_->ensurePassOpen();
-  impl_->bindImagePipeline(impl_->imagePipeline->pipeline());
-
-  // Upload the image to a sampled texture.
-  wgpu::Texture texture = impl_->transientResources.retain(GeodeTextureEncoder::uploadRgba8Texture(
-      *impl_->device, image.data.data(), static_cast<uint32_t>(image.width),
-      static_cast<uint32_t>(image.height)));
-  if (!texture) {
+  if (!impl_->ensurePassOpen()) {
     return;
   }
+  impl_->bindImagePipeline(impl_->imagePipeline->pipeline());
+
+  // Upload the image to a sampled texture, retained until the frame's submit.
+  gpu::Texture uploaded = GeodeTextureEncoder::uploadRgba8Texture(
+      *impl_->context, image.data.data(), static_cast<uint32_t>(image.width),
+      static_cast<uint32_t>(image.height));
+  if (!uploaded.isValid()) {
+    return;
+  }
+  const gpu::Texture& texture =
+      impl_->transientResources.textures.emplace_back(std::move(uploaded));
 
   // Build the same MVP the Slug-fill path uses, so the image's local-space
   // destination rectangle lands in the correct spot after the current
@@ -2015,18 +2038,20 @@ void GeoEncoder::drawImage(const svg::ImageResource& image, const Box2d& destRec
       pixelated ? GeodeTextureEncoder::Filter::Nearest : GeodeTextureEncoder::Filter::Linear;
   qp.clipMaskView = impl_->activeClipMaskView;
 
-  GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass.get(),
+  GeodeTextureEncoder::drawTexturedQuad(*impl_->context, *impl_->imagePipeline, *impl_->pass,
                                         texture, mvp, impl_->targetWidth, impl_->targetHeight, qp,
                                         impl_->transientResources);
 }
 
-void GeoEncoder::drawTexture(const wgpu::Texture& texture, const Box2d& destRect, double opacity,
+void GeoEncoder::drawTexture(const gpu::Texture& texture, const Box2d& destRect, double opacity,
                              bool pixelated) {
-  if (!texture || destRect.isEmpty() || opacity <= 0.0) {
+  if (!texture.isValid() || destRect.isEmpty() || opacity <= 0.0) {
     return;
   }
 
-  impl_->ensurePassOpen();
+  if (!impl_->ensurePassOpen()) {
+    return;
+  }
   impl_->bindImagePipeline(impl_->imagePipeline->pipeline());
 
   float mvp[16];
@@ -2044,23 +2069,24 @@ void GeoEncoder::drawTexture(const wgpu::Texture& texture, const Box2d& destRect
   qp.sourceIsPremultiplied = true;
   qp.clipMaskView = impl_->activeClipMaskView;
 
-  GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass.get(),
+  GeodeTextureEncoder::drawTexturedQuad(*impl_->context, *impl_->imagePipeline, *impl_->pass,
                                         texture, mvp, impl_->targetWidth, impl_->targetHeight, qp,
                                         impl_->transientResources);
 }
 
 void GeoEncoder::finish() {
   if (impl_->passOpen) {
-    impl_->pass.get().end();
-    impl_->pass.reset();
+    impl_->pass->end();
+    impl_->pass = nullptr;
     impl_->passOpen = false;
   } else if (impl_->hasExplicitClear) {
     // No draws but a clear was requested - open and immediately close a pass
     // so the clear actually happens.
-    impl_->ensurePassOpen();
-    impl_->pass.get().end();
-    impl_->pass.reset();
-    impl_->passOpen = false;
+    if (impl_->ensurePassOpen()) {
+      impl_->pass->end();
+      impl_->pass = nullptr;
+      impl_->passOpen = false;
+    }
   }
 
   // In shared-CommandEncoder mode (design doc 0030 Milestone 3), the
@@ -2070,13 +2096,23 @@ void GeoEncoder::finish() {
     return;
   }
 
-  {
-    ScopedWgpuHandle<wgpu::CommandBuffer> cmdBuf(impl_->commandEncoder.finish());
-    impl_->device->queue().submit(1, &cmdBuf.get());
-    impl_->device->countSubmit();
+  if (impl_->ownedCommandEncoder) {
+    gpu::Result<gpu::CommandBuffer> commandBufferResult = impl_->ownedCommandEncoder->finish();
+    if (commandBufferResult.hasError()) {
+      // The poisoned-encoder latch surfaces the FIRST recording error here.
+      LogGpuError("GeoEncoder finish", commandBufferResult.error());
+    } else {
+      gpu::Result<uint64_t> submitResult =
+          impl_->context->gpuDevice->submit(std::move(commandBufferResult).result());
+      if (submitResult.hasError()) {
+        LogGpuError("GeoEncoder submit", submitResult.error());
+      } else {
+        impl_->context->countSubmit();
+      }
+    }
   }
   impl_->ownedCommandEncoder.reset();
-  impl_->commandEncoder = wgpu::CommandEncoder();
+  impl_->commandEncoder = nullptr;
 }
 
 }  // namespace donner::geode

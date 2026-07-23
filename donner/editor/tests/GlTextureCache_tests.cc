@@ -7,6 +7,7 @@
 #ifdef DONNER_EDITOR_WGPU
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #endif
 #include "gtest/gtest.h"
 
@@ -284,20 +285,19 @@ std::shared_ptr<const svg::RendererTextureSnapshot> CreateCountingGeodeTextureSn
     return nullptr;
   }
 
-  wgpu::TextureDescriptor textureDesc = {};
-  textureDesc.size = {static_cast<uint32_t>(dimensions.x), static_cast<uint32_t>(dimensions.y), 1};
-  textureDesc.mipLevelCount = 1;
-  textureDesc.sampleCount = 1;
-  textureDesc.dimension = wgpu::TextureDimension::_2D;
-  textureDesc.format = wgpu::TextureFormat::RGBA8Unorm;
-  textureDesc.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
-  wgpu::Texture texture = device->device().createTexture(textureDesc);
-  if (!texture) {
+  donner::gpu::Result<donner::gpu::Texture> texture =
+      device->adapterDevice().createTexture(donner::gpu::TextureDescriptor{
+          "CountingGeodeSnapshot",
+          donner::gpu::Extent2d{static_cast<uint32_t>(dimensions.x),
+                                static_cast<uint32_t>(dimensions.y)},
+          donner::gpu::TextureFormat::RGBA8Unorm,
+          donner::gpu::TextureUsage::Sampled | donner::gpu::TextureUsage::CopyDst});
+  if (texture.hasError()) {
     return nullptr;
   }
 
   return std::shared_ptr<const svg::RendererTextureSnapshot>(
-      new svg::RendererGeodeTextureSnapshot(device, texture, dimensions,
+      new svg::RendererGeodeTextureSnapshot(device, std::move(texture).result(), dimensions,
                                             wgpu::TextureFormat::RGBA8Unorm),
       [destructionCount](const svg::RendererTextureSnapshot* snapshot) {
         delete snapshot;

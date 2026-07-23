@@ -1,20 +1,20 @@
 #include "donner/svg/renderer/geode/GeodeTextureEncoder.h"
 
+#include <cstdio>
 #include <cstring>
+#include <span>
+#include <utility>
 #include <vector>
 
-#include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
-#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::geode {
 
 namespace {
 
-/// WebGPU requires `bytesPerRow` to be 256-aligned when copying buffer → texture.
-/// `queue.writeTexture` accepts unaligned rows only on some backends, so we
-/// normalize: if the natural row stride isn't 256-aligned, copy through a
-/// padded staging buffer before upload.
+/// The donner::gpu runtime requires `bytesPerRow` to be 256-aligned for texture writes
+/// (`gpu::kTexelRowPitchAlignment`). If the natural row stride isn't 256-aligned, rows are
+/// copied through a padded staging buffer before upload.
 constexpr uint32_t kBytesPerRowAlignment = 256u;
 
 constexpr uint32_t alignUp(uint32_t value, uint32_t alignment) {
@@ -48,82 +48,74 @@ struct alignas(16) Uniforms {
 };
 static_assert(sizeof(Uniforms) == 160, "Image-blit Uniforms layout mismatch");
 
+/// Logs a translation failure. Draw helpers fail closed by skipping the draw; the enclosing
+/// command encoder's poisoned-latch (if the same root cause also poisoned recording) surfaces
+/// at finish.
+void LogGpuError(const char* what, const gpu::GpuError& error) {
+  std::fprintf(stderr, "[Geode] %s failed: %s\n", what, error.message.c_str());
+}
+
 }  // namespace
 
-wgpu::Texture GeodeTextureEncoder::uploadRgba8Texture(GeodeDevice& device,
-                                                      const uint8_t* rgbaPixels, uint32_t width,
-                                                      uint32_t height) {
-  if (rgbaPixels == nullptr || width == 0u || height == 0u) {
-    return wgpu::Texture();
+gpu::Texture GeodeTextureEncoder::uploadRgba8Texture(const GeodeGpuContext& context,
+                                                     const uint8_t* rgbaPixels, uint32_t width,
+                                                     uint32_t height) {
+  if (context.gpuDevice == nullptr || rgbaPixels == nullptr || width == 0u || height == 0u) {
+    return gpu::Texture();
   }
 
-  const wgpu::Device& dev = device.device();
-  const wgpu::Queue& queue = device.queue();
-
-  wgpu::TextureDescriptor td = {};
-  td.label = wgpuLabel("GeodeUploadedImage");
-  td.size = {width, height, 1};
-  td.format = wgpu::TextureFormat::RGBA8Unorm;
-  td.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
-  td.mipLevelCount = 1;
-  td.sampleCount = 1;
-  td.dimension = wgpu::TextureDimension::_2D;
-  wgpu::Texture texture = dev.createTexture(td);
-  if (!texture) {
-    return wgpu::Texture();
+  gpu::Result<gpu::Texture> textureResult = context.gpuDevice->createTexture(gpu::TextureDescriptor{
+      "GeodeUploadedImage", gpu::Extent2d{width, height}, gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
+  if (textureResult.hasError()) {
+    LogGpuError("GeodeUploadedImage createTexture", textureResult.error());
+    return gpu::Texture();
   }
-  device.countTexture();
+  gpu::Texture texture = std::move(textureResult).result();
 
   const uint32_t unpaddedBytesPerRow = width * 4u;
   const uint32_t paddedBytesPerRow = alignUp(unpaddedBytesPerRow, kBytesPerRowAlignment);
+  const gpu::TexelCopyBufferLayout layout{0, paddedBytesPerRow, height};
+  const gpu::Extent2d writeSize{width, height};
 
-  wgpu::TexelCopyTextureInfo dst = {};
-  dst.texture = texture;
-  dst.mipLevel = 0;
-  dst.origin = {0, 0, 0};
-  dst.aspect = wgpu::TextureAspect::All;
-
-  wgpu::TexelCopyBufferLayout layout = {};
-  layout.offset = 0;
-  layout.bytesPerRow = paddedBytesPerRow;
-  layout.rowsPerImage = height;
-
-  wgpu::Extent3D writeSize = {width, height, 1};
-
+  gpu::Status writeStatus = gpu::OkStatus();
   if (unpaddedBytesPerRow == paddedBytesPerRow) {
     // Fast path - source rows already 256-aligned. Upload directly.
     const size_t byteCount = static_cast<size_t>(unpaddedBytesPerRow) * height;
-    queue.writeTexture(dst, rgbaPixels, byteCount, layout, writeSize);
-    device.countTextureWrite(byteCount);
+    writeStatus = context.gpuDevice->writeTexture(
+        texture, std::span<const uint8_t>(rgbaPixels, byteCount), layout, writeSize);
   } else {
     // Slow path - copy into a padded staging buffer. `std::vector` is the
     // allowed allocation path (stdlib, not raw malloc/free). We size-cap on
-    // the same uint32_t × uint32_t × 4 that the GPU already accepted for
+    // the same uint32_t x uint32_t x 4 that the GPU already accepted for
     // the texture, so overflow is not a concern here.
     std::vector<uint8_t> staging(static_cast<size_t>(paddedBytesPerRow) * height, 0u);
     for (uint32_t y = 0; y < height; ++y) {
       std::memcpy(staging.data() + static_cast<size_t>(y) * paddedBytesPerRow,
                   rgbaPixels + static_cast<size_t>(y) * unpaddedBytesPerRow, unpaddedBytesPerRow);
     }
-    queue.writeTexture(dst, staging.data(), staging.size(), layout, writeSize);
-    device.countTextureWrite(staging.size());
+    writeStatus = context.gpuDevice->writeTexture(
+        texture, std::span<const uint8_t>(staging.data(), staging.size()), layout, writeSize);
+  }
+  if (writeStatus.hasError()) {
+    LogGpuError("GeodeUploadedImage writeTexture", writeStatus.error());
+    return gpu::Texture();
   }
 
   return texture;
 }
 
-void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device, const GeodeImagePipeline& pipeline,
-                                           const wgpu::RenderPassEncoder& pass,
-                                           const wgpu::Texture& texture, const float mvp[16],
+void GeodeTextureEncoder::drawTexturedQuad(const GeodeGpuContext& context,
+                                           const GeodeImagePipeline& pipeline,
+                                           gpu::RenderPassEncoder& pass,
+                                           const gpu::Texture& texture, const float mvp[16],
                                            uint32_t targetWidth, uint32_t targetHeight,
                                            const QuadParams& params,
-                                           ScopedWgpuResourceArena& resourceArena) {
-  if (!texture) {
+                                           GeodeTransientResources& transients) {
+  if (context.gpuDevice == nullptr || !texture.isValid()) {
     return;
   }
-
-  const wgpu::Device& dev = device.device();
-  const wgpu::Queue& queue = device.queue();
+  gpu::Device& device = *context.gpuDevice;
 
   // Build uniform buffer.
   Uniforms u = {};
@@ -140,73 +132,111 @@ void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device, const GeodeImage
   u.targetSize[1] = static_cast<float>(targetHeight);
   u.opacity = static_cast<float>(params.opacity);
   u.sourceIsPremult = params.sourceIsPremultiplied ? 1u : 0u;
-  u.maskMode = params.maskTexture ? 1u : 0u;
+  u.maskMode = params.maskTexture != nullptr ? 1u : 0u;
   u.applyMaskBounds = params.applyMaskBounds ? 1u : 0u;
   u.maskBounds[0] = static_cast<float>(params.maskBounds.topLeft.x);
   u.maskBounds[1] = static_cast<float>(params.maskBounds.topLeft.y);
   u.maskBounds[2] = static_cast<float>(params.maskBounds.bottomRight.x);
   u.maskBounds[3] = static_cast<float>(params.maskBounds.bottomRight.y);
   u.blendMode = params.blendMode;
-  u.hasClipMask = params.clipMaskView ? 1u : 0u;
+  u.hasClipMask = params.clipMaskView.isValid() ? 1u : 0u;
 
-  wgpu::BufferDescriptor uniDesc = {};
-  uniDesc.label = wgpuLabel("GeodeImageBlitUniforms");
-  uniDesc.size = sizeof(Uniforms);
-  uniDesc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
-  wgpu::Buffer uniBuf = resourceArena.retain(dev.createBuffer(uniDesc));
-  device.countBuffer();
-  queue.writeBuffer(uniBuf, 0, &u, sizeof(Uniforms));
-  device.countBufferWrite(sizeof(Uniforms));
+  gpu::Result<gpu::Buffer> uniformResult = device.createBuffer(
+      gpu::BufferDescriptor{"GeodeImageBlitUniforms", sizeof(Uniforms),
+                            gpu::BufferUsage::Uniform | gpu::BufferUsage::CopyDst});
+  if (uniformResult.hasError()) {
+    LogGpuError("GeodeImageBlitUniforms createBuffer", uniformResult.error());
+    return;
+  }
+  const gpu::Buffer& uniformBuffer =
+      transients.buffers.emplace_back(std::move(uniformResult).result());
+  gpu::Status writeStatus = device.writeBuffer(
+      uniformBuffer, 0,
+      std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&u), sizeof(Uniforms)));
+  if (writeStatus.hasError()) {
+    LogGpuError("GeodeImageBlitUniforms writeBuffer", writeStatus.error());
+    return;
+  }
 
   // Pick sampler based on requested filter mode.
-  const wgpu::Sampler& sampler =
+  const gpu::Sampler& sampler =
       (params.filter == Filter::Nearest) ? pipeline.nearestSampler() : pipeline.linearSampler();
 
   // Bind group - optional texture bindings must always carry a valid
-  // view. When their owning feature flags are off, we bind the source
-  // content texture view as a cheap dummy (the shader never samples it
-  // because the corresponding mode guard is 0).
-  wgpu::TextureView view = resourceArena.retain(texture.createView());
-  wgpu::TextureView maskView =
-      params.maskTexture ? resourceArena.retain(params.maskTexture.createView()) : view;
-  wgpu::TextureView dstView = params.dstSnapshotTexture
-                                  ? resourceArena.retain(params.dstSnapshotTexture.createView())
-                                  : view;
-  wgpu::TextureView clipMaskView = params.clipMaskView ? params.clipMaskView : view;
-  wgpu::BindGroupEntry entries[7] = {};
-  entries[0].binding = 0;
-  entries[0].buffer = uniBuf;
-  entries[0].size = sizeof(Uniforms);
-  entries[1].binding = 1;
-  entries[1].sampler = sampler;
-  entries[2].binding = 2;
-  entries[2].textureView = view;
-  entries[3].binding = 3;
-  entries[3].textureView = maskView;
-  entries[4].binding = 4;
-  entries[4].textureView = dstView;
-  entries[5].binding = 5;
-  entries[5].textureView = clipMaskView;
-  entries[6].binding = 6;
-  entries[6].sampler = pipeline.clipMaskSampler();
+  // view. When their owning feature flags are off, we bind the content
+  // view as a cheap dummy (the shader never samples it because the
+  // corresponding mode guard is 0). References of the ONE created content
+  // view are copied for the dummy slots - refs are copyable identities, so
+  // no extra views are created.
+  const auto makeView = [&](const gpu::Texture& viewed,
+                            const char* what) -> const gpu::TextureView* {
+    gpu::Result<gpu::TextureView> viewResult =
+        device.createTextureView(viewed, gpu::TextureViewDescriptor{"GeodeImageBlitView"});
+    if (viewResult.hasError()) {
+      LogGpuError(what, viewResult.error());
+      return nullptr;
+    }
+    return &transients.views.emplace_back(std::move(viewResult).result());
+  };
 
-  wgpu::BindGroupDescriptor bgDesc = {};
-  bgDesc.label = wgpuLabel("GeodeImageBlitBindGroup");
-  bgDesc.layout = pipeline.bindGroupLayout();
-  bgDesc.entryCount = 7;
-  bgDesc.entries = entries;
-  wgpu::BindGroup bindGroup = resourceArena.retain(dev.createBindGroup(bgDesc));
-  device.countBindGroup();
+  const gpu::TextureView* contentView =
+      makeView(texture, "GeodeImageBlit content createTextureView");
+  if (contentView == nullptr) {
+    return;
+  }
+  gpu::TextureViewRef contentViewRef = *contentView;
+  gpu::TextureViewRef maskViewRef = contentViewRef;
+  if (params.maskTexture != nullptr) {
+    const gpu::TextureView* maskView =
+        makeView(*params.maskTexture, "GeodeImageBlit mask createTextureView");
+    if (maskView == nullptr) {
+      return;
+    }
+    maskViewRef = *maskView;
+  }
+  gpu::TextureViewRef dstViewRef = contentViewRef;
+  if (params.dstSnapshotTexture != nullptr) {
+    const gpu::TextureView* dstView =
+        makeView(*params.dstSnapshotTexture, "GeodeImageBlit dstSnapshot createTextureView");
+    if (dstView == nullptr) {
+      return;
+    }
+    dstViewRef = *dstView;
+  }
+  const gpu::TextureViewRef clipMaskViewRef =
+      params.clipMaskView.isValid() ? params.clipMaskView : contentViewRef;
+
+  gpu::Result<gpu::BindGroup> bindGroupResult = device.createBindGroup(gpu::BindGroupDescriptor{
+      "GeodeImageBlitBindGroup",
+      pipeline.bindGroupLayout(),
+      {
+          gpu::BindGroupEntry{0, gpu::BufferBinding{uniformBuffer, 0, sizeof(Uniforms)}},
+          gpu::BindGroupEntry{1, gpu::SamplerBinding{sampler}},
+          gpu::BindGroupEntry{2, gpu::TextureViewBinding{contentViewRef}},
+          gpu::BindGroupEntry{3, gpu::TextureViewBinding{maskViewRef}},
+          gpu::BindGroupEntry{4, gpu::TextureViewBinding{dstViewRef}},
+          gpu::BindGroupEntry{5, gpu::TextureViewBinding{clipMaskViewRef}},
+          gpu::BindGroupEntry{6, gpu::SamplerBinding{pipeline.clipMaskSampler()}},
+      }});
+  if (bindGroupResult.hasError()) {
+    LogGpuError("GeodeImageBlitBindGroup createBindGroup", bindGroupResult.error());
+    return;
+  }
+  // NOTE: bind-group / buffer creates and buffer writes are counted by the adapter's
+  // creation/write hooks (GeodeWgpuAdapterDevice), so no explicit count* calls here - counter
+  // totals are unchanged from the pre-RHI recording path.
+  const gpu::BindGroup& bindGroup =
+      transients.bindGroups.emplace_back(std::move(bindGroupResult).result());
 
   // The caller is expected to have invoked `GeoEncoder::bindImagePipeline`
   // already, which is the sole place the image pipeline is bound + counted.
-  // Set the pipeline here too as a defensive no-op (Dawn collapses the
-  // rebind on GPU); skip counting so `pipelineSwitches` reflects actual
+  // Set the pipeline here too as a defensive no-op (the backend collapses
+  // the rebind); skip counting so `pipelineSwitches` reflects actual
   // pipeline transitions.
   pass.setPipeline(pipeline.pipeline());
-  pass.setBindGroup(0, bindGroup, 0, nullptr);
+  pass.setBindGroup(0, bindGroup);
   pass.draw(6, 1, 0, 0);
-  device.countDraw();
+  context.countDraw();
 }
 
 }  // namespace donner::geode

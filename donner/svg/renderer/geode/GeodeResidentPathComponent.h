@@ -26,9 +26,10 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <utility>
 #include <vector>
 
-#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+#include "donner/gpu/Handles.h"
 
 namespace donner::geode {
 
@@ -39,20 +40,20 @@ namespace donner::geode {
 /// and bind group are built once by `GeoEncoder` on first residence and
 /// reused every subsequent unchanged frame.
 ///
-/// Move-only (owns wgpu handles). Default-constructed slots are empty;
+/// Move-only (owns donner::gpu handles). Default-constructed slots are empty;
 /// `GeoEncoder::fillPathResident` populates them lazily.
 struct GeodeResidentSlot {
   /// Combined Vertex|Storage|Uniform|CopyDst buffer. Layout (each region
   /// offset satisfies the binding's alignment requirement):
   ///   [ vertex quad | bands | curves | vBands | vCurves | hGrid | vGrid | uniform ]
-  ScopedWgpuHandle<wgpu::Buffer> buffer;
+  gpu::Buffer buffer;
 
   /// Cached fill bind group. All twelve bindings reference stable
   /// objects (this slot's `buffer` sub-ranges + device-owned dummy
   /// texture/sampler/identity-instance handles), so it survives frames
   /// and encoders. Rebuilt only when the geometry buffer is
   /// re-allocated.
-  ScopedWgpuHandle<wgpu::BindGroup> bindGroup;
+  gpu::BindGroup bindGroup;
 
   /// A byte sub-range of `buffer`. `size == 0` is never bound directly -
   /// empty SSBO regions reserve a 4-byte zero-filled slot so the shader's
@@ -85,15 +86,16 @@ struct GeodeResidentSlot {
   /// once per frame (Tiger / Lion). Sentinel `~0` means "never drawn".
   uint64_t lastResidentFrame = ~uint64_t{0};
 
-  /// Process-unique id (see `GeodeDevice::deviceId()`) of the device that
-  /// created `buffer` / `bindGroup`. A document's ECS residence components
-  /// can outlive the device that filled them and later be rendered by a
-  /// second `RendererGeode` / `GeodeDevice`; WebGPU rejects a bind group or
-  /// buffer from device A inside device B's render pass. When this id does
-  /// not match the current device at draw time the slot is treated as
-  /// non-resident and re-uploaded onto the current device (the stale handles
-  /// are released without touching the old device). `0` means "no device
-  /// owns this slot yet".
+  /// Process-unique id (see `gpu::Device::deviceId()`, i.e. the identity of
+  /// the GeodeDevice's adapter device) of the device that created `buffer` /
+  /// `bindGroup`. A document's ECS residence components can outlive the
+  /// device that filled them and later be rendered by a second
+  /// `RendererGeode` / `GeodeDevice`; the donner::gpu runtime fails closed
+  /// (DeviceMismatch) on a bind group or buffer from device A inside device
+  /// B's render pass. When this id does not match the current device at draw
+  /// time the slot is treated as non-resident and re-uploaded onto the
+  /// current device (the stale handles are released without touching the old
+  /// device). `0` means "no device owns this slot yet".
   uint64_t owningDeviceId = 0;
 
   /// True once `buffer` + `bindGroup` hold the current encode. Cleared
@@ -157,19 +159,24 @@ struct GeodeResidentSlot {
   }
 
   /// Release the GPU buffer + bind group handles and settle the live-bytes
-  /// gauge. Safe to call on an empty slot. A geometry mutation can remove
-  /// this component after a draw has referenced the buffer but before the
-  /// frame's command encoder is submitted. Do not call `Buffer::destroy()`
-  /// here: WebGPU makes that buffer unusable immediately, invalidating the
-  /// already-recorded draw. Releasing our handles is sufficient because the
-  /// command encoder keeps the referenced resources alive until it is done.
+  /// gauge. Safe to call on an empty slot.
+  ///
+  /// Lifetime contract under the donner::gpu runtime: destroying a handle
+  /// that an already-SUBMITTED frame references is safe - the backend
+  /// object's destruction is deferred by submission serial. But a handle
+  /// referenced by RECORDED-BUT-UNSUBMITTED commands must NOT be dropped
+  /// before submit: `gpu::Device::submit` re-validates every recorded
+  /// identity and fails closed on a stale one. The existing flow guarantees
+  /// this: invalidation (the ComputedPathComponent listener and the stroke
+  /// slot rebuild) runs pre-recording, and same-frame repeat draws fall back
+  /// to the arena path before any re-upload would touch this slot.
   void reset() {
     if (accountedBytes != 0 && liveBytesGauge) {
       liveBytesGauge->fetch_sub(accountedBytes, std::memory_order_relaxed);
     }
     accountedBytes = 0;
-    bindGroup.reset();
-    buffer.reset();
+    bindGroup = gpu::BindGroup();
+    buffer = gpu::Buffer();
     resident = false;
     encodedKey = nullptr;
     encodedFingerprint = 0;

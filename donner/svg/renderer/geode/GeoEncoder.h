@@ -5,13 +5,13 @@
 #include <cstdint>
 #include <memory>
 #include <span>
-#include <webgpu/webgpu.hpp>
 
 #include "donner/base/Box.h"
 #include "donner/base/FillRule.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/css/Color.h"
+#include "donner/gpu/CommandEncoder.h"
 
 namespace donner {
 class Path;
@@ -24,10 +24,10 @@ struct ImageResource;
 namespace donner::geode {
 
 struct EncodedPath;
+struct GeodeGpuContext;
 struct GeodeResidentSlot;
 
 class GeodeBufferPool;
-class GeodeDevice;
 class GeodeImagePipeline;
 class GeodePipeline;
 class GeodeGradientPipeline;
@@ -128,35 +128,41 @@ public:
   /**
    * Create an encoder targeting the given texture.
    *
-   * @param device The Geode device (owns the wgpu::Device + queue).
+   * @param context The Geode GPU recording context (see `GeodeDevice::gpuContext()`); must
+   *   outlive the encoder.
    * @param fillPipeline The Slug fill pipeline.
    * @param gradientPipeline The Slug gradient-fill pipeline.
    * @param imagePipeline The image-blit pipeline.
    * @param target Single-sample render target. Usage must include
-   *   `RenderAttachment`; add `TextureBinding` or `CopySrc` when callers
-   *   sample or read it after rendering. The texture must outlive `finish()`.
+   *   `RenderAttachment`; add `Sampled` or `CopySrc` when callers
+   *   sample or read it after rendering. The texture handle must stay alive
+   *   through `finish()`'s submit - `gpu::Device::submit` fails closed on a
+   *   destroyed recorded resource.
+   * @param targetSize The target texture's extent in texels (the gpu::Texture
+   *   handle intentionally does not expose its size; callers always know it).
    */
-  GeoEncoder(GeodeDevice& device, const GeodePipeline& fillPipeline,
+  GeoEncoder(const GeodeGpuContext& context, const GeodePipeline& fillPipeline,
              const GeodeGradientPipeline& gradientPipeline, const GeodeImagePipeline& imagePipeline,
-             const wgpu::Texture& target);
+             const gpu::Texture& target, const gpu::Extent2d& targetSize);
 
   /**
    * Shared-CommandEncoder constructor (design doc 0030 Milestone 3).
-   * Uses the provided `sharedCommandEncoder` instead of creating its own.
-   * When this overload is used, `finish()` only ends any open render
+   * Records into the provided `sharedCommandEncoder` instead of creating its
+   * own. When this overload is used, `finish()` only ends any open render
    * pass - it does NOT finish the CommandEncoder or submit to the
-   * queue. The caller (typically `RendererGeode`) owns the lifetime of
+   * device. The caller (typically `RendererGeode`) owns the lifetime of
    * the shared encoder and is responsible for calling
-   * `sharedCommandEncoder.finish()` + `queue.submit()` exactly once at
+   * `sharedCommandEncoder.finish()` + `gpu::Device::submit` exactly once at
    * the end of the frame.
    *
    * Enables push/pop of isolated layers / filter layers / mask layers
-   * without forcing a queue submit per layer boundary - the whole
+   * without forcing a submit per layer boundary - the whole
    * frame's render passes batch into a single command buffer.
    */
-  GeoEncoder(GeodeDevice& device, const GeodePipeline& fillPipeline,
+  GeoEncoder(const GeodeGpuContext& context, const GeodePipeline& fillPipeline,
              const GeodeGradientPipeline& gradientPipeline, const GeodeImagePipeline& imagePipeline,
-             const wgpu::Texture& target, wgpu::CommandEncoder sharedCommandEncoder);
+             const gpu::Texture& target, const gpu::Extent2d& targetSize,
+             gpu::CommandEncoder& sharedCommandEncoder);
 
   ~GeoEncoder();
 
@@ -260,9 +266,10 @@ public:
    * main pass (with `LoadOp::Load`) when the next draw lands.
    *
    * @param mask Single-sample RGBA8Unorm target. Sampled by
-   *   `setClipMask` after `endMaskPass`.
+   *   `setClipMask` after `endMaskPass`. The handle must stay alive through
+   *   the frame's submit.
    */
-  void beginMaskPass(const wgpu::Texture& mask);
+  void beginMaskPass(const gpu::Texture& mask);
 
   /**
    * Fill `path` into the currently open mask pass using the Slug mask
@@ -289,21 +296,15 @@ public:
    * The shader samples `.r` at the pixel center and multiplies it
    * into fragment coverage, so the mask represents a pre-rendered
    * clip region in [0, 1].
-   */
-  void setClipMask(const wgpu::TextureView& maskView);
-
-  /**
-   * Preferred overload: sets both the view AND the parent texture so the
-   * encoder keeps the underlying Vulkan resource alive for as long as it's
-   * bound. The 1-arg overload is kept only for call sites that guarantee
-   * the parent's lifetime by other means.
    *
-   * See the `activeClipMaskTexture` field comment (and issue #551) for
-   * the bug this addresses - without the parent keepalive, popping the
-   * clip stack can free a VkImage while the encoder's
-   * `createBindGroup` still references its view.
+   * Lifetime (issue #551 redesign): the ref is a non-owning identity; the
+   * CALLER must keep the referenced view handle (and its parent texture
+   * handle) alive until the frame's submit - `RendererGeode` parks popped
+   * clip-stack views/textures in frame-end keepalive lists. The runtime
+   * fails closed at submit if the discipline is violated, instead of the
+   * historical use-after-free.
    */
-  void setClipMask(const wgpu::Texture& maskTexture, const wgpu::TextureView& maskView);
+  void setClipMask(gpu::TextureViewRef maskView);
 
   /// Remove any active clip mask, restoring unclipped rasterisation.
   void clearClipMask();
@@ -317,10 +318,11 @@ public:
    * `setTransform` does NOT affect the blit (it's a device-pixel-space
    * operation, not a model-space draw).
    *
-   * @param src Source texture (RGBA8, premultiplied).
+   * @param src Source texture (RGBA8, premultiplied). Must stay alive
+   *   through the frame's submit.
    * @param opacity Overall alpha multiplier in [0, 1].
    */
-  void blitFullTarget(const wgpu::Texture& src, double opacity);
+  void blitFullTarget(const gpu::Texture& src, double opacity);
 
   /**
    * Phase 3c `<mask>` compositing. Same as @ref blitFullTarget but
@@ -337,7 +339,7 @@ public:
    *   per-pixel coverage multiplier on the content.
    * @param maskBounds Optional clip rect in target-pixel space.
    */
-  void blitFullTargetMasked(const wgpu::Texture& content, const wgpu::Texture& mask,
+  void blitFullTargetMasked(const gpu::Texture& content, const gpu::Texture& mask,
                             const std::optional<Box2d>& maskBounds);
 
   /**
@@ -364,14 +366,14 @@ public:
    *   combo on the same element composes correctly - the source
    *   colour that enters the blend is `layer * opacity`.
    */
-  void blitFullTargetBlended(const wgpu::Texture& layer, const wgpu::Texture& dstSnapshot,
+  void blitFullTargetBlended(const gpu::Texture& layer, const gpu::Texture& dstSnapshot,
                              uint32_t blendMode, double opacity);
 
   /**
    * Draw a raster image into the given destination rectangle.
    *
    * The image's straight-alpha RGBA8 pixels are uploaded to a fresh
-   * `wgpu::Texture` and sampled through the image-blit pipeline. The
+   * `gpu::Texture` and sampled through the image-blit pipeline. The
    * current transform is applied via the MVP matrix, and the destination
    * rectangle is specified in local (pre-transform) coordinates - i.e.,
    * the transform and the rect compose the same way as any other draw
@@ -394,7 +396,7 @@ public:
    * texture is sampled directly without a CPU upload. The texture is expected
    * to contain premultiplied RGBA, matching Geode render-target snapshots.
    */
-  void drawTexture(const wgpu::Texture& texture, const Box2d& destRect, double opacity,
+  void drawTexture(const gpu::Texture& texture, const Box2d& destRect, double opacity,
                    bool pixelated);
 
   /**
@@ -535,8 +537,10 @@ public:
    * provided transform to map path-space positions into tile-space.
    */
   struct PatternPaint {
-    /// Pre-rendered tile texture (RGBA8, premultiplied).
-    wgpu::Texture tile;
+    /// Pre-rendered tile texture (RGBA8, premultiplied). Non-owning: the
+    /// caller keeps the handle alive through the frame's submit. Null skips
+    /// the draw.
+    const gpu::Texture* tile = nullptr;
     /// Size of the tile rectangle in pattern space (width, height). The
     /// shader uses this to wrap sample positions via `fract()`.
     Vector2d tileSize;
@@ -579,9 +583,11 @@ private:
 
   /// Shared construction helpers used by both constructors. Factored out
   /// to avoid duplicating ~20 lines of setup. See GeoEncoder.cc.
-  static void initImpl(Impl& impl, GeodeDevice& device, const GeodePipeline& fillPipeline,
+  static void initImpl(Impl& impl, const GeodeGpuContext& context,
+                       const GeodePipeline& fillPipeline,
                        const GeodeGradientPipeline& gradientPipeline,
-                       const GeodeImagePipeline& imagePipeline, const wgpu::Texture& target);
+                       const GeodeImagePipeline& imagePipeline, const gpu::Texture& target,
+                       const gpu::Extent2d& targetSize);
   static void finalizeImpl(Impl& impl);
 
   std::unique_ptr<Impl> impl_;

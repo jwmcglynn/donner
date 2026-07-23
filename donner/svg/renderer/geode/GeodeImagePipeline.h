@@ -2,13 +2,9 @@
 /// @file
 /// Render pipeline for the image-blit shader (textured quad).
 
-#include <webgpu/webgpu.hpp>
-
 #include "donner/gpu/Device.h"
 
 namespace donner::geode {
-
-class GeodeWgpuAdapterDevice;
 
 /**
  * Caches a compiled render pipeline for the image-blit shader plus its bind group layout and
@@ -21,9 +17,8 @@ class GeodeWgpuAdapterDevice;
  * repeating fill.
  *
  * The pipeline and samplers are created through the \c donner::gpu runtime (design 0053
- * packet 8): the class holds the RAII `donner::gpu` handles, and - TEMPORARY for 8a while
- * GeoEncoder / GeodeTextureEncoder still record through wgpu - caches the borrowed wgpu objects
- * resolved through the adapter's escape hatches (deleted in packet 8b).
+ * packet 8): the class holds the RAII `donner::gpu` handles that GeoEncoder /
+ * GeodeTextureEncoder record against through `gpu::CommandEncoder` (packet 8b).
  *
  * Bind group layout (matches `shaders/image_blit.wgsl`):
  * - binding 0: uniform buffer (mvp, destRect, srcRect, targetSize, opacity, flags)
@@ -42,11 +37,12 @@ public:
   /**
    * Create an image-blit pipeline for the given device and target format.
    *
-   * @param adapterDevice The Donner GPU device (wgpu adapter) owned by the GeodeDevice.
+   * @param gpuDevice The Donner GPU device (in the transition phase, the GeodeDevice-owned
+   *   wgpu adapter) the pipeline objects are created on.
    * @param colorFormat The pixel format of the render target this pipeline
    *   will draw into. Must match the target texture's format at draw time.
    */
-  GeodeImagePipeline(GeodeWgpuAdapterDevice& adapterDevice, gpu::TextureFormat colorFormat);
+  GeodeImagePipeline(gpu::Device& gpuDevice, gpu::TextureFormat colorFormat);
 
   ~GeodeImagePipeline() = default;
   GeodeImagePipeline(const GeodeImagePipeline&) = delete;
@@ -56,24 +52,25 @@ public:
   /// Move assignment operator.
   GeodeImagePipeline& operator=(GeodeImagePipeline&&) noexcept = default;
 
-  /// The compiled render pipeline (TEMPORARY 8a wgpu alias for the still-wgpu encoders).
-  const wgpu::RenderPipeline& pipeline() const { return borrowedPipeline_; }
+  /// The compiled render pipeline.
+  const gpu::RenderPipeline& pipeline() const { return pipeline_; }
 
-  /// Bind group layout used by the pipeline (TEMPORARY 8a wgpu alias).
-  const wgpu::BindGroupLayout& bindGroupLayout() const { return borrowedBindGroupLayout_; }
+  /// Bind group layout used by the pipeline. Bind groups for draws MUST be created against this
+  /// exact handle: `gpu::RenderPassEncoder::draw` validates bind-group-layout identity against
+  /// the pipeline layout.
+  const gpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_; }
 
   /// Bilinear (mag/min filter = Linear) sampler, clamped to edge.
   /// Used for the default `image-rendering` and the SVG spec's
-  /// "smooth" image sampling. (TEMPORARY 8a wgpu alias.)
-  const wgpu::Sampler& linearSampler() const { return borrowedLinearSampler_; }
+  /// "smooth" image sampling.
+  const gpu::Sampler& linearSampler() const { return linearSampler_; }
 
   /// Nearest-neighbor sampler, clamped to edge. Used when
-  /// `ImageParams::imageRenderingPixelated` is true. (TEMPORARY 8a wgpu alias.)
-  const wgpu::Sampler& nearestSampler() const { return borrowedNearestSampler_; }
+  /// `ImageParams::imageRenderingPixelated` is true.
+  const gpu::Sampler& nearestSampler() const { return nearestSampler_; }
 
   /// Linear clamp-to-edge sampler used for Phase 3b clip-mask textures.
-  /// (TEMPORARY 8a wgpu alias.)
-  const wgpu::Sampler& clipMaskSampler() const { return borrowedClipMaskSampler_; }
+  const gpu::Sampler& clipMaskSampler() const { return clipMaskSampler_; }
 
   /// Color format the pipeline was built for.
   gpu::TextureFormat colorFormat() const { return colorFormat_; }
@@ -87,14 +84,6 @@ private:
   gpu::Sampler linearSampler_;
   gpu::Sampler nearestSampler_;
   gpu::Sampler clipMaskSampler_;
-
-  // TEMPORARY 8a: borrowed wgpu aliases resolved through the adapter's escape hatches so the
-  // still-wgpu encoders can bind them. Deleted in packet 8b.
-  wgpu::RenderPipeline borrowedPipeline_;
-  wgpu::BindGroupLayout borrowedBindGroupLayout_;
-  wgpu::Sampler borrowedLinearSampler_;
-  wgpu::Sampler borrowedNearestSampler_;
-  wgpu::Sampler borrowedClipMaskSampler_;
 };
 
 }  // namespace donner::geode

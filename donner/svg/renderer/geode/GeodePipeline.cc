@@ -6,7 +6,6 @@
 
 #include "donner/base/Utils.h"
 #include "donner/svg/renderer/geode/GeodeShaders.h"
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 
 namespace donner::geode {
 
@@ -52,7 +51,7 @@ gpu::BindGroupLayoutEntry FragmentStorageEntry(uint32_t binding) {
 
 }  // namespace
 
-GeodePipeline::GeodePipeline(GeodeWgpuAdapterDevice& adapterDevice, gpu::TextureFormat colorFormat)
+GeodePipeline::GeodePipeline(gpu::Device& gpuDevice, gpu::TextureFormat colorFormat)
     : colorFormat_(colorFormat) {
   // ----- Bind group layout -----
   // Twelve bindings: uniforms, bands SSBO, curves SSBO, pattern texture,
@@ -85,18 +84,18 @@ GeodePipeline::GeodePipeline(GeodeWgpuAdapterDevice& adapterDevice, gpu::Texture
       FragmentStorageEntry(10),
       FragmentStorageEntry(11),
   };
-  bindGroupLayout_ = UnwrapOrAbort(adapterDevice.createBindGroupLayout(
-                                       gpu::BindGroupLayoutDescriptor{"GeodeSlugFillBGL", entries}),
-                                   "GeodeSlugFillBGL createBindGroupLayout");
+  bindGroupLayout_ = UnwrapOrAbort(
+      gpuDevice.createBindGroupLayout(gpu::BindGroupLayoutDescriptor{"GeodeSlugFillBGL", entries}),
+      "GeodeSlugFillBGL createBindGroupLayout");
 
-  pipelineLayout_ = UnwrapOrAbort(adapterDevice.createPipelineLayout(gpu::PipelineLayoutDescriptor{
+  pipelineLayout_ = UnwrapOrAbort(gpuDevice.createPipelineLayout(gpu::PipelineLayoutDescriptor{
                                       "GeodeSlugFillPL", {bindGroupLayout_}}),
                                   "GeodeSlugFillPL createPipelineLayout");
 
-  shaderModule_ = UnwrapOrAbort(createSlugFillShader(adapterDevice), "SlugFill shader module");
+  shaderModule_ = UnwrapOrAbort(createSlugFillShader(gpuDevice), "SlugFill shader module");
 
   pipeline_ = UnwrapOrAbort(
-      adapterDevice.createRenderPipeline(gpu::RenderPipelineDescriptor{
+      gpuDevice.createRenderPipeline(gpu::RenderPipelineDescriptor{
           "GeodeSlugFill", pipelineLayout_,
           gpu::VertexState{shaderModule_, "vs_main", {SlugVertexBufferLayout()}},
           gpu::FragmentState{shaderModule_,
@@ -104,17 +103,13 @@ GeodePipeline::GeodePipeline(GeodeWgpuAdapterDevice& adapterDevice, gpu::Texture
                              {gpu::ColorTargetState{colorFormat_, PremultipliedSourceOverBlend()}}},
           gpu::PrimitiveTopology::TriangleList, gpu::CullMode::None}),
       "GeodeSlugFill createRenderPipeline");
-
-  borrowedPipeline_ = adapterDevice.wgpuRenderPipelineOf(pipeline_);
-  borrowedBindGroupLayout_ = adapterDevice.wgpuBindGroupLayoutOf(bindGroupLayout_);
 }
 
 // ============================================================================
 // GeodeGradientPipeline
 // ============================================================================
 
-GeodeGradientPipeline::GeodeGradientPipeline(GeodeWgpuAdapterDevice& adapterDevice,
-                                             gpu::TextureFormat colorFormat)
+GeodeGradientPipeline::GeodeGradientPipeline(gpu::Device& gpuDevice, gpu::TextureFormat colorFormat)
     : colorFormat_(colorFormat) {
   // Nine bindings - uniforms, H bands SSBO, H curves SSBO, clip-mask texture,
   // clip-mask sampler, and (analytic dual-ray, 0041 s8) V bands SSBO, V curves
@@ -134,20 +129,18 @@ GeodeGradientPipeline::GeodeGradientPipeline(GeodeWgpuAdapterDevice& adapterDevi
       FragmentStorageEntry(7),
       FragmentStorageEntry(8),
   };
-  bindGroupLayout_ =
-      UnwrapOrAbort(adapterDevice.createBindGroupLayout(
-                        gpu::BindGroupLayoutDescriptor{"GeodeSlugGradientBGL", entries}),
-                    "GeodeSlugGradientBGL createBindGroupLayout");
+  bindGroupLayout_ = UnwrapOrAbort(gpuDevice.createBindGroupLayout(gpu::BindGroupLayoutDescriptor{
+                                       "GeodeSlugGradientBGL", entries}),
+                                   "GeodeSlugGradientBGL createBindGroupLayout");
 
-  pipelineLayout_ = UnwrapOrAbort(adapterDevice.createPipelineLayout(gpu::PipelineLayoutDescriptor{
+  pipelineLayout_ = UnwrapOrAbort(gpuDevice.createPipelineLayout(gpu::PipelineLayoutDescriptor{
                                       "GeodeSlugGradientPL", {bindGroupLayout_}}),
                                   "GeodeSlugGradientPL createPipelineLayout");
 
-  shaderModule_ =
-      UnwrapOrAbort(createSlugGradientShader(adapterDevice), "SlugGradient shader module");
+  shaderModule_ = UnwrapOrAbort(createSlugGradientShader(gpuDevice), "SlugGradient shader module");
 
   pipeline_ = UnwrapOrAbort(
-      adapterDevice.createRenderPipeline(gpu::RenderPipelineDescriptor{
+      gpuDevice.createRenderPipeline(gpu::RenderPipelineDescriptor{
           "GeodeSlugGradient", pipelineLayout_,
           gpu::VertexState{shaderModule_, "vs_main", {SlugVertexBufferLayout()}},
           gpu::FragmentState{shaderModule_,
@@ -155,16 +148,13 @@ GeodeGradientPipeline::GeodeGradientPipeline(GeodeWgpuAdapterDevice& adapterDevi
                              {gpu::ColorTargetState{colorFormat_, PremultipliedSourceOverBlend()}}},
           gpu::PrimitiveTopology::TriangleList, gpu::CullMode::None}),
       "GeodeSlugGradient createRenderPipeline");
-
-  borrowedPipeline_ = adapterDevice.wgpuRenderPipelineOf(pipeline_);
-  borrowedBindGroupLayout_ = adapterDevice.wgpuBindGroupLayoutOf(bindGroupLayout_);
 }
 
 // ============================================================================
 // GeodeMaskPipeline
 // ============================================================================
 
-GeodeMaskPipeline::GeodeMaskPipeline(GeodeWgpuAdapterDevice& adapterDevice) {
+GeodeMaskPipeline::GeodeMaskPipeline(gpu::Device& gpuDevice) {
   // Nine bindings - uniforms, H bands SSBO, H curves SSBO, nested clip mask
   // texture, nested clip mask sampler, and (analytic dual-ray, 0041 s8) V bands
   // SSBO, V curves SSBO, H band grid, V band grid. The clip-mask slot is always
@@ -182,15 +172,15 @@ GeodeMaskPipeline::GeodeMaskPipeline(GeodeWgpuAdapterDevice& adapterDevice) {
       FragmentStorageEntry(7),
       FragmentStorageEntry(8),
   };
-  bindGroupLayout_ = UnwrapOrAbort(adapterDevice.createBindGroupLayout(
-                                       gpu::BindGroupLayoutDescriptor{"GeodeSlugMaskBGL", entries}),
-                                   "GeodeSlugMaskBGL createBindGroupLayout");
+  bindGroupLayout_ = UnwrapOrAbort(
+      gpuDevice.createBindGroupLayout(gpu::BindGroupLayoutDescriptor{"GeodeSlugMaskBGL", entries}),
+      "GeodeSlugMaskBGL createBindGroupLayout");
 
-  pipelineLayout_ = UnwrapOrAbort(adapterDevice.createPipelineLayout(gpu::PipelineLayoutDescriptor{
+  pipelineLayout_ = UnwrapOrAbort(gpuDevice.createPipelineLayout(gpu::PipelineLayoutDescriptor{
                                       "GeodeSlugMaskPL", {bindGroupLayout_}}),
                                   "GeodeSlugMaskPL createPipelineLayout");
 
-  shaderModule_ = UnwrapOrAbort(createSlugMaskShader(adapterDevice), "SlugMask shader module");
+  shaderModule_ = UnwrapOrAbort(createSlugMaskShader(gpuDevice), "SlugMask shader module");
 
   // Max-blend unions scalar analytic coverage from multiple clip paths.
   const gpu::BlendState maxBlend{
@@ -198,7 +188,7 @@ GeodeMaskPipeline::GeodeMaskPipeline(GeodeWgpuAdapterDevice& adapterDevice) {
       gpu::BlendComponent{gpu::BlendFactor::One, gpu::BlendFactor::One, gpu::BlendOperation::Max}};
 
   pipeline_ = UnwrapOrAbort(
-      adapterDevice.createRenderPipeline(gpu::RenderPipelineDescriptor{
+      gpuDevice.createRenderPipeline(gpu::RenderPipelineDescriptor{
           "GeodeSlugMask", pipelineLayout_,
           gpu::VertexState{shaderModule_, "vs_main", {SlugVertexBufferLayout()}},
           gpu::FragmentState{shaderModule_,
@@ -206,9 +196,6 @@ GeodeMaskPipeline::GeodeMaskPipeline(GeodeWgpuAdapterDevice& adapterDevice) {
                              {gpu::ColorTargetState{gpu::TextureFormat::RGBA8Unorm, maxBlend}}},
           gpu::PrimitiveTopology::TriangleList, gpu::CullMode::None}),
       "GeodeSlugMask createRenderPipeline");
-
-  borrowedPipeline_ = adapterDevice.wgpuRenderPipelineOf(pipeline_);
-  borrowedBindGroupLayout_ = adapterDevice.wgpuBindGroupLayoutOf(bindGroupLayout_);
 }
 
 }  // namespace donner::geode

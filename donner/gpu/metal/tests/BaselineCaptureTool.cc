@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cstdio>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "donner/gpu/tests/BaselineScene.h"
@@ -19,6 +20,7 @@
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::gpu::metal::tests {
@@ -44,15 +46,18 @@ int CaptureBaseline(const char* outputPath) {
   geode::GeodeGradientPipeline& gradientPipeline = device->gradientPipeline();
   geode::GeodeImagePipeline& imagePipeline = device->imagePipeline();
 
-  wgpu::TextureDescriptor td = {};
-  td.label = geode::wgpuLabel("BaselineTarget");
-  td.size = {kBaselineSize, kBaselineSize, 1};
-  td.format = wgpu::TextureFormat::RGBA8Unorm;
-  td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc;
-  td.mipLevelCount = 1;
-  td.sampleCount = 1;
-  td.dimension = wgpu::TextureDimension::_2D;
-  wgpu::Texture target = device->device().createTexture(td);
+  // Render target created through the donner::gpu adapter (packet 8b); the raw-wgpu readback
+  // below resolves it via the adapter's wgpuTextureOf escape hatch (readback migrates in
+  // packet 11).
+  Result<Texture> targetResult = device->adapterDevice().createTexture(TextureDescriptor{
+      "BaselineTarget", Extent2d{kBaselineSize, kBaselineSize}, TextureFormat::RGBA8Unorm,
+      TextureUsage::RenderAttachment | TextureUsage::CopySrc});
+  if (targetResult.hasError()) {
+    std::fprintf(stderr, "BaselineTarget createTexture failed: %s\n",
+                 targetResult.error().message.c_str());
+    return 1;
+  }
+  const Texture target = std::move(targetResult).result();
 
   wgpu::BufferDescriptor bd = {};
   bd.label = geode::wgpuLabel("BaselineReadback");
@@ -61,7 +66,8 @@ int CaptureBaseline(const char* outputPath) {
   wgpu::Buffer readback = device->device().createBuffer(bd);
 
   {
-    geode::GeoEncoder encoder(*device, pipeline, gradientPipeline, imagePipeline, target);
+    geode::GeoEncoder encoder(device->gpuContext(), pipeline, gradientPipeline, imagePipeline,
+                              target, Extent2d{kBaselineSize, kBaselineSize});
     encoder.clear(css::RGBA(0, 0, 0, 0));  // Transparent background.
     encoder.setTransform(BaselinePixelFromScene());
     for (const BaselinePathSpec& spec : BaselineScenePaths()) {
@@ -74,7 +80,7 @@ int CaptureBaseline(const char* outputPath) {
   {
     wgpu::CommandEncoder enc = device->device().createCommandEncoder();
     wgpu::TexelCopyTextureInfo src = {};
-    src.texture = target;
+    src.texture = device->adapterDevice().wgpuTextureOf(target);
     src.mipLevel = 0;
     src.origin = {0, 0, 0};
     wgpu::TexelCopyBufferInfo dst = {};

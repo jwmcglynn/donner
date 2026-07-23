@@ -383,6 +383,7 @@ donner_cc_library(
         "//donner/svg/renderer/geode:geode_resident_path_component",
         "//donner/svg/renderer/geode:geode_path_encoder",
         "//donner/svg/renderer/geode:geode_wgpu_util",
+        "//donner/gpu",
         "//donner/svg/resources:image_resource",
         "//third_party/webgpu-cpp:webgpu_cpp",
     ] + select({
