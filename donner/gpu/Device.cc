@@ -573,6 +573,13 @@ Result<BindGroup> Device::createBindGroup(const BindGroupDescriptor& descriptor)
           return Err(GpuErrorType::InvalidDescriptor,
                      std::format("BindGroupEntry binding {}: sizeBytes is 0", match->binding));
         }
+        if (bufferBinding->offsetBytes % kBindingOffsetAlignment != 0) {
+          return Err(
+              GpuErrorType::InvalidDescriptor,
+              std::format("BindGroupEntry binding {}: offsetBytes {} is not a multiple of "
+                          "the {}-byte binding offset alignment",
+                          match->binding, bufferBinding->offsetBytes, kBindingOffsetAlignment));
+        }
         const std::optional<uint64_t> bindingEnd =
             CheckedAdd(bufferBinding->offsetBytes, bufferBinding->sizeBytes);
         if (!bindingEnd || *bindingEnd > bufferRecord.result()->descriptor.byteSize) {
@@ -1012,6 +1019,40 @@ Status Device::checkSubmissionBindGroup(const ResourceIdentity& groupIdentity,
   return OkStatus();
 }
 
+Status Device::checkSubmissionCopyToBuffer(const CopyTextureToBufferCommand& command,
+                                           std::vector<SubmissionUse>& uses) const {
+  auto textureRecord =
+      checkSubmissionResource(textures_, command.textureId, ResourceKind::Texture,
+                              TextureTag::kName, "recorded copyTextureToBuffer", uses);
+  if (textureRecord.hasError()) {
+    return std::move(textureRecord).error();
+  }
+  auto bufferRecord =
+      checkSubmissionResource(buffers_, command.bufferId, ResourceKind::Buffer, BufferTag::kName,
+                              "recorded copyTextureToBuffer", uses);
+  if (bufferRecord.hasError()) {
+    return std::move(bufferRecord).error();
+  }
+  return OkStatus();
+}
+
+Status Device::checkSubmissionCopyToTexture(const CopyTextureToTextureCommand& command,
+                                            std::vector<SubmissionUse>& uses) const {
+  auto sourceRecord =
+      checkSubmissionResource(textures_, command.textureSrcId, ResourceKind::Texture,
+                              TextureTag::kName, "recorded copyTextureToTexture", uses);
+  if (sourceRecord.hasError()) {
+    return std::move(sourceRecord).error();
+  }
+  auto destinationRecord =
+      checkSubmissionResource(textures_, command.textureDstId, ResourceKind::Texture,
+                              TextureTag::kName, "recorded copyTextureToTexture", uses);
+  if (destinationRecord.hasError()) {
+    return std::move(destinationRecord).error();
+  }
+  return OkStatus();
+}
+
 Status Device::checkSubmissionCommand(const Command& command,
                                       std::vector<SubmissionUse>& uses) const {
   return std::visit(
@@ -1039,19 +1080,9 @@ Status Device::checkSubmissionCommand(const Command& command,
           }
           return OkStatus();
         } else if constexpr (std::is_same_v<CommandType, CopyTextureToBufferCommand>) {
-          auto textureRecord =
-              checkSubmissionResource(textures_, typedCommand.textureId, ResourceKind::Texture,
-                                      TextureTag::kName, "recorded copyTextureToBuffer", uses);
-          if (textureRecord.hasError()) {
-            return std::move(textureRecord).error();
-          }
-          auto bufferRecord =
-              checkSubmissionResource(buffers_, typedCommand.bufferId, ResourceKind::Buffer,
-                                      BufferTag::kName, "recorded copyTextureToBuffer", uses);
-          if (bufferRecord.hasError()) {
-            return std::move(bufferRecord).error();
-          }
-          return OkStatus();
+          return checkSubmissionCopyToBuffer(typedCommand, uses);
+        } else if constexpr (std::is_same_v<CommandType, CopyTextureToTextureCommand>) {
+          return checkSubmissionCopyToTexture(typedCommand, uses);
         } else {
           return OkStatus();
         }

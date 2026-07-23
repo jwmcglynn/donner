@@ -423,5 +423,85 @@ TEST_F(CommandEncoderTests, SubmitNullCommandBufferFails) {
   EXPECT_THAT(device_.submit(CommandBuffer()), IsGpuError(GpuErrorType::InvalidHandle));
 }
 
+/// Texture-to-texture copy tests, on top of the solid-fill fixture: `target_` is the 4x4
+/// RGBA8Unorm CopySrc source; each test creates the destination it needs.
+class CopyTextureToTextureTests : public CommandEncoderTests {
+protected:
+  Texture createDestination(Extent2d size = Extent2d{4, 4},
+                            TextureFormat format = TextureFormat::RGBA8Unorm,
+                            TextureUsage usage = TextureUsage::CopyDst) {
+    return GetResultOrFail(
+        device_.createTexture(TextureDescriptor{"copyDst", size, format, usage}));
+  }
+};
+
+TEST_F(CopyTextureToTextureTests, WholeRectCopyEncodesAndSubmits) {
+  const Texture destination = createDestination();
+  EXPECT_THAT(encoder_->copyTextureToTexture(target_, destination, Extent2d{4, 4}), IsOk());
+
+  auto finished = encoder_->finish();
+  ASSERT_THAT(finished, HasResult());
+  EXPECT_THAT(device_.submit(std::move(finished).result()), HasResult());
+}
+
+TEST_F(CopyTextureToTextureTests, SmallerThanBothExtentsIsAccepted) {
+  const Texture destination = createDestination(Extent2d{2, 4});
+  EXPECT_THAT(encoder_->copyTextureToTexture(target_, destination, Extent2d{2, 2}), IsOk());
+}
+
+TEST_F(CopyTextureToTextureTests, DuringPassFails) {
+  const Texture destination = createDestination();
+  beginPass();
+  EXPECT_THAT(encoder_->copyTextureToTexture(target_, destination, Extent2d{4, 4}),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("inside a render pass")));
+}
+
+TEST_F(CopyTextureToTextureTests, RejectsFormatMismatch) {
+  const Texture bgraDestination =
+      createDestination(Extent2d{4, 4}, TextureFormat::BGRA8Unorm, TextureUsage::CopyDst);
+  EXPECT_THAT(encoder_->copyTextureToTexture(target_, bgraDestination, Extent2d{4, 4}),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor,
+                                    HasSubstr("different formats (RGBA8Unorm vs BGRA8Unorm)")));
+}
+
+TEST_F(CopyTextureToTextureTests, RejectsMissingCopySrc) {
+  const Texture noCopySrc = GetResultOrFail(device_.createTexture(TextureDescriptor{
+      "noCopySrc", Extent2d{4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::RenderAttachment}));
+  const Texture destination = createDestination();
+  EXPECT_THAT(encoder_->copyTextureToTexture(noCopySrc, destination, Extent2d{4, 4}),
+              IsGpuErrorWithMessage(GpuErrorType::UsageMismatch, HasSubstr("CopySrc")));
+}
+
+TEST_F(CopyTextureToTextureTests, RejectsMissingCopyDst) {
+  const Texture noCopyDst =
+      createDestination(Extent2d{4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::Sampled);
+  EXPECT_THAT(encoder_->copyTextureToTexture(target_, noCopyDst, Extent2d{4, 4}),
+              IsGpuErrorWithMessage(GpuErrorType::UsageMismatch, HasSubstr("CopyDst")));
+}
+
+TEST_F(CopyTextureToTextureTests, RejectsZeroCopySize) {
+  const Texture destination = createDestination();
+  EXPECT_THAT(encoder_->copyTextureToTexture(target_, destination, Extent2d{4, 0}),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor, HasSubstr("zero dimension")));
+}
+
+TEST_F(CopyTextureToTextureTests, RejectsCopyBeyondSourceExtent) {
+  const Texture destination = createDestination(Extent2d{8, 8});
+  EXPECT_THAT(encoder_->copyTextureToTexture(target_, destination, Extent2d{8, 8}),
+              IsGpuErrorWithMessage(GpuErrorType::OutOfBounds, HasSubstr("exceeds source")));
+}
+
+TEST_F(CopyTextureToTextureTests, RejectsCopyBeyondDestinationExtent) {
+  const Texture destination = createDestination(Extent2d{2, 2});
+  EXPECT_THAT(encoder_->copyTextureToTexture(target_, destination, Extent2d{4, 4}),
+              IsGpuErrorWithMessage(GpuErrorType::OutOfBounds, HasSubstr("exceeds destination")));
+}
+
+TEST_F(CopyTextureToTextureTests, RejectsNullSourceHandle) {
+  const Texture destination = createDestination();
+  EXPECT_THAT(encoder_->copyTextureToTexture(Texture(), destination, Extent2d{4, 4}),
+              IsGpuError(GpuErrorType::InvalidHandle));
+}
+
 }  // namespace
 }  // namespace donner::gpu

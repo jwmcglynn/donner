@@ -2436,6 +2436,10 @@ Status VulkanDevice::Impl::encodeCommand(EncodingState& state, std::span<const C
     return encodeEndRenderPass(state);
   } else if (const auto* copy = std::get_if<CopyTextureToBufferCommand>(&command)) {
     return encodeCopyTextureToBuffer(state, *copy);
+  } else if (std::get_if<CopyTextureToTextureCommand>(&command) != nullptr) {
+    return GpuError{GpuErrorType::Unsupported,
+                    "the Vulkan backend does not implement copyTextureToTexture yet; arrives with "
+                    "its presentation/readback packet"};
   }
   return OkStatus();
 }

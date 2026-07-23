@@ -153,6 +153,20 @@ public:
                              const Extent2d& copySize);
 
   /**
+   * Records a texture-to-texture copy starting at texel (0, 0) of both textures (the RHI's
+   * whole-rect copy convention). Not allowed inside a render pass. Both textures must be live
+   * handles of this device and share one \ref TextureFormat, \p source needs
+   * \ref TextureUsage::CopySrc, \p destination needs \ref TextureUsage::CopyDst, and
+   * \p copySize must be nonzero and fit inside both texture extents.
+   *
+   * @param source Source texture; needs \ref TextureUsage::CopySrc.
+   * @param destination Destination texture; needs \ref TextureUsage::CopyDst.
+   * @param copySize Copy extent in texels.
+   */
+  Status copyTextureToTexture(const Texture& source, const Texture& destination,
+                              const Extent2d& copySize);
+
+  /**
    * Finishes recording and registers the command buffer with the device. Fails with the first
    * recorded error if any operation failed, or with \ref GpuErrorType::InvalidState if a pass is
    * still active or the encoder already finished.

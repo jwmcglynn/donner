@@ -633,6 +633,18 @@ private:
   Status checkSubmissionBindGroup(const ResourceIdentity& groupIdentity,
                                   std::vector<SubmissionUse>& uses) const;
 
+  /// Resolves the texture and buffer a recorded texture-to-buffer copy references.
+  /// @param command Recorded copy command.
+  /// @param uses Accumulator of resources referenced by the submission.
+  Status checkSubmissionCopyToBuffer(const CopyTextureToBufferCommand& command,
+                                     std::vector<SubmissionUse>& uses) const;
+
+  /// Resolves both textures a recorded texture-to-texture copy references.
+  /// @param command Recorded copy command.
+  /// @param uses Accumulator of resources referenced by the submission.
+  Status checkSubmissionCopyToTexture(const CopyTextureToTextureCommand& command,
+                                      std::vector<SubmissionUse>& uses) const;
+
   /// Resolves every resource one recorded command references.
   /// @param command Recorded command.
   /// @param uses Accumulator of resources referenced by the submission.
