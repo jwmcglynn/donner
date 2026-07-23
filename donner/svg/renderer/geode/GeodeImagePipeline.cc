@@ -6,7 +6,6 @@
 
 #include "donner/base/Utils.h"
 #include "donner/svg/renderer/geode/GeodeShaders.h"
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 
 namespace donner::geode {
 
@@ -25,8 +24,7 @@ T UnwrapOrAbort(gpu::Result<T>&& result, const char* what) {
 
 }  // namespace
 
-GeodeImagePipeline::GeodeImagePipeline(GeodeWgpuAdapterDevice& adapterDevice,
-                                       gpu::TextureFormat colorFormat)
+GeodeImagePipeline::GeodeImagePipeline(gpu::Device& gpuDevice, gpu::TextureFormat colorFormat)
     : colorFormat_(colorFormat) {
   // ----- Bind group layout -----
   // Seven bindings: uniform buffer, sampler, sampled content texture,
@@ -48,16 +46,15 @@ GeodeImagePipeline::GeodeImagePipeline(GeodeWgpuAdapterDevice& adapterDevice,
                                 gpu::BindingType::SampledTexture2dFloat},
       gpu::BindGroupLayoutEntry{6, gpu::ShaderStage::Fragment, gpu::BindingType::FilteringSampler},
   };
-  bindGroupLayout_ =
-      UnwrapOrAbort(adapterDevice.createBindGroupLayout(
-                        gpu::BindGroupLayoutDescriptor{"GeodeImageBlitBGL", entries}),
-                    "GeodeImageBlitBGL createBindGroupLayout");
+  bindGroupLayout_ = UnwrapOrAbort(
+      gpuDevice.createBindGroupLayout(gpu::BindGroupLayoutDescriptor{"GeodeImageBlitBGL", entries}),
+      "GeodeImageBlitBGL createBindGroupLayout");
 
-  pipelineLayout_ = UnwrapOrAbort(adapterDevice.createPipelineLayout(gpu::PipelineLayoutDescriptor{
+  pipelineLayout_ = UnwrapOrAbort(gpuDevice.createPipelineLayout(gpu::PipelineLayoutDescriptor{
                                       "GeodeImageBlitPL", {bindGroupLayout_}}),
                                   "GeodeImageBlitPL createPipelineLayout");
 
-  shaderModule_ = UnwrapOrAbort(createImageBlitShader(adapterDevice), "ImageBlit shader module");
+  shaderModule_ = UnwrapOrAbort(createImageBlitShader(gpuDevice), "ImageBlit shader module");
 
   // ----- Fragment / blending -----
   // Same premultiplied-source-over as the Slug fill pipeline. The fragment
@@ -72,7 +69,7 @@ GeodeImagePipeline::GeodeImagePipeline(GeodeWgpuAdapterDevice& adapterDevice,
   // ----- Render pipeline -----
   // No vertex buffers - the shader generates corners from vertex_index.
   pipeline_ = UnwrapOrAbort(
-      adapterDevice.createRenderPipeline(gpu::RenderPipelineDescriptor{
+      gpuDevice.createRenderPipeline(gpu::RenderPipelineDescriptor{
           "GeodeImageBlit", pipelineLayout_, gpu::VertexState{shaderModule_, "vs_main", {}},
           gpu::FragmentState{
               shaderModule_, "fs_main", {gpu::ColorTargetState{colorFormat_, blend}}},
@@ -83,29 +80,23 @@ GeodeImagePipeline::GeodeImagePipeline(GeodeWgpuAdapterDevice& adapterDevice,
   // Linear (bilinear) sampler - the default for SVG's "smooth" image
   // rendering. Clamp-to-edge addressing matches the previous wgpu defaults.
   linearSampler_ =
-      UnwrapOrAbort(adapterDevice.createSampler(gpu::SamplerDescriptor{
+      UnwrapOrAbort(gpuDevice.createSampler(gpu::SamplerDescriptor{
                         "GeodeImageBlitLinear", gpu::FilterMode::Linear, gpu::FilterMode::Linear,
                         gpu::AddressMode::ClampToEdge, gpu::AddressMode::ClampToEdge}),
                     "GeodeImageBlitLinear createSampler");
 
   // Nearest sampler - for `image-rendering: pixelated`.
   nearestSampler_ =
-      UnwrapOrAbort(adapterDevice.createSampler(gpu::SamplerDescriptor{
+      UnwrapOrAbort(gpuDevice.createSampler(gpu::SamplerDescriptor{
                         "GeodeImageBlitNearest", gpu::FilterMode::Nearest, gpu::FilterMode::Nearest,
                         gpu::AddressMode::ClampToEdge, gpu::AddressMode::ClampToEdge}),
                     "GeodeImageBlitNearest createSampler");
 
   clipMaskSampler_ =
-      UnwrapOrAbort(adapterDevice.createSampler(gpu::SamplerDescriptor{
+      UnwrapOrAbort(gpuDevice.createSampler(gpu::SamplerDescriptor{
                         "GeodeImageBlitClipMask", gpu::FilterMode::Linear, gpu::FilterMode::Linear,
                         gpu::AddressMode::ClampToEdge, gpu::AddressMode::ClampToEdge}),
                     "GeodeImageBlitClipMask createSampler");
-
-  borrowedPipeline_ = adapterDevice.wgpuRenderPipelineOf(pipeline_);
-  borrowedBindGroupLayout_ = adapterDevice.wgpuBindGroupLayoutOf(bindGroupLayout_);
-  borrowedLinearSampler_ = adapterDevice.wgpuSamplerOf(linearSampler_);
-  borrowedNearestSampler_ = adapterDevice.wgpuSamplerOf(nearestSampler_);
-  borrowedClipMaskSampler_ = adapterDevice.wgpuSamplerOf(clipMaskSampler_);
 }
 
 }  // namespace donner::geode

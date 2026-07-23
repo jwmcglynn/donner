@@ -216,9 +216,8 @@ TEST_F(GeodeWgpuAdapterDeviceTests, FamilySceneRendersAndCompletes) {
                       gpu::BlendComponent{gpu::BlendFactor::One, gpu::BlendFactor::OneMinusSrcAlpha,
                                           gpu::BlendOperation::Add}}}}}}));
 
-  // The TEMPORARY 8a escape hatches resolve migrated objects for the still-wgpu GeoEncoder.
-  EXPECT_TRUE(static_cast<bool>(adapter_->wgpuRenderPipelineOf(pipeline)));
-  EXPECT_TRUE(static_cast<bool>(adapter_->wgpuBindGroupLayoutOf(uniformLayout)));
+  // The remaining TEMPORARY escape hatches (readback/presentation, deleted in packet 11)
+  // resolve wgpu objects behind migrated textures/views.
   EXPECT_TRUE(static_cast<bool>(adapter_->wgpuTextureOf(target)));
   EXPECT_TRUE(static_cast<bool>(adapter_->wgpuTextureViewOf(targetView)));
 
@@ -283,6 +282,41 @@ TEST_F(GeodeWgpuAdapterDeviceTests, FamilySceneRendersAndCompletes) {
   EXPECT_THAT(PixelAt(copiedPixels, 0, 0), ElementsAre(0, 0, 128, 255));
   EXPECT_THAT(PixelAt(copiedPixels, 2, 2), ElementsAre(0, 0, 128, 255));
   EXPECT_THAT(PixelAt(copiedPixels, 3, 3), ElementsAre(0, 0, 128, 255));
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, PollCompletionsAdvancesSerialAndDrainsDestroys) {
+  // A texture destroyed after a submission that referenced it defers its backend release until
+  // the completion is observed. pollCompletions is the non-blocking frame-cadence pump that
+  // delivers the work-done callback and drains the deferred destroy; this pins that it is safe
+  // to call repeatedly and that the completed serial catches up to the submission.
+  gpu::Texture texture = gpu::GetResultOrFail(adapter_->createTexture(
+      gpu::TextureDescriptor{"pollTarget", gpu::Extent2d{4, 4}, gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::RenderAttachment}));
+  const gpu::TextureView view = gpu::GetResultOrFail(
+      adapter_->createTextureView(texture, gpu::TextureViewDescriptor{"pollTargetView"}));
+
+  std::unique_ptr<gpu::CommandEncoder> encoder =
+      gpu::GetResultOrFail(adapter_->createCommandEncoder());
+  gpu::RenderPassEncoder* pass =
+      gpu::GetResultOrFail(encoder->beginRenderPass(gpu::RenderPassDescriptor{
+          "pollPass",
+          {gpu::RenderPassColorAttachment{
+              view, gpu::LoadOp::Clear, gpu::StoreOp::Store, {0, 0, 0, 1}}}}));
+  ASSERT_NE(pass, nullptr);
+  EXPECT_THAT(pass->end(), gpu::IsOk());
+  gpu::CommandBuffer commands = gpu::GetResultOrFail(encoder->finish());
+  const uint64_t serial = gpu::GetResultOrFail(adapter_->submit(std::move(commands)));
+
+  ASSERT_TRUE(adapter_->waitForSerial(serial, /*timeoutSeconds=*/30.0));
+  EXPECT_THAT(adapter_->completedSerial(), Ge(serial));
+
+  // Destroy the referenced texture, then pump. The completion already landed via waitForSerial,
+  // so a single pollCompletions must both leave completedSerial at (or past) the submission and
+  // process the deferred backend release without crashing; extra pumps are harmless no-ops.
+  EXPECT_THAT(adapter_->destroyTexture(std::move(texture)), gpu::IsOk());
+  adapter_->pollCompletions();
+  adapter_->pollCompletions();
+  EXPECT_THAT(adapter_->completedSerial(), Ge(serial));
 }
 
 TEST_F(GeodeWgpuAdapterDeviceTests, ImportedExternalTextureIsUsableAndNotOwned) {

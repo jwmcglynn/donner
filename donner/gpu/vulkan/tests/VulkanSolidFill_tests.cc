@@ -46,6 +46,7 @@
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePathEncoder.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::gpu::vulkan::tests {
@@ -128,19 +129,22 @@ std::optional<std::vector<uint8_t>> RenderWgpuBaseline() {
     return std::nullopt;
   }
 
-  geode::GeodePipeline pipeline(device->device(), wgpu::TextureFormat::RGBA8Unorm);
-  geode::GeodeGradientPipeline gradientPipeline(device->device(), wgpu::TextureFormat::RGBA8Unorm);
-  geode::GeodeImagePipeline imagePipeline(device->device(), wgpu::TextureFormat::RGBA8Unorm);
+  // The device-owned shared pipelines (headless devices default to RGBA8Unorm targets).
+  geode::GeodePipeline& pipeline = device->pipeline();
+  geode::GeodeGradientPipeline& gradientPipeline = device->gradientPipeline();
+  geode::GeodeImagePipeline& imagePipeline = device->imagePipeline();
 
-  wgpu::TextureDescriptor td = {};
-  td.label = geode::wgpuLabel("VulkanSliceBaselineTarget");
-  td.size = {kBaselineSize, kBaselineSize, 1};
-  td.format = wgpu::TextureFormat::RGBA8Unorm;
-  td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc;
-  td.mipLevelCount = 1;
-  td.sampleCount = 1;
-  td.dimension = wgpu::TextureDimension::_2D;
-  wgpu::Texture target = device->device().createTexture(td);
+  // Render target created through the donner::gpu adapter (packet 8b); the raw-wgpu readback
+  // below resolves it via the adapter's wgpuTextureOf escape hatch (packet 11).
+  donner::gpu::Result<donner::gpu::Texture> targetResult =
+      device->adapterDevice().createTexture(donner::gpu::TextureDescriptor{
+          "VulkanSliceBaselineTarget", donner::gpu::Extent2d{kBaselineSize, kBaselineSize},
+          donner::gpu::TextureFormat::RGBA8Unorm,
+          donner::gpu::TextureUsage::RenderAttachment | donner::gpu::TextureUsage::CopySrc});
+  if (targetResult.hasError()) {
+    return std::nullopt;
+  }
+  const donner::gpu::Texture target = std::move(targetResult).result();
 
   wgpu::BufferDescriptor bd = {};
   bd.label = geode::wgpuLabel("VulkanSliceBaselineReadback");
@@ -149,7 +153,8 @@ std::optional<std::vector<uint8_t>> RenderWgpuBaseline() {
   wgpu::Buffer readback = device->device().createBuffer(bd);
 
   {
-    geode::GeoEncoder encoder(*device, pipeline, gradientPipeline, imagePipeline, target);
+    geode::GeoEncoder encoder(device->gpuContext(), pipeline, gradientPipeline, imagePipeline,
+                              target, donner::gpu::Extent2d{kBaselineSize, kBaselineSize});
     encoder.clear(css::RGBA(0, 0, 0, 0));  // Transparent background.
     encoder.setTransform(BaselinePixelFromScene());
     for (const BaselinePathSpec& spec : BaselineScenePaths()) {
@@ -162,7 +167,7 @@ std::optional<std::vector<uint8_t>> RenderWgpuBaseline() {
   {
     wgpu::CommandEncoder enc = device->device().createCommandEncoder();
     wgpu::TexelCopyTextureInfo src = {};
-    src.texture = target;
+    src.texture = device->adapterDevice().wgpuTextureOf(target);
     src.mipLevel = 0;
     src.origin = {0, 0, 0};
     wgpu::TexelCopyBufferInfo dst = {};

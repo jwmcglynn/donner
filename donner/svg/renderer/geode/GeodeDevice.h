@@ -7,7 +7,9 @@
 #include <vector>
 #include <webgpu/webgpu.hpp>
 
+#include "donner/gpu/Handles.h"
 #include "donner/svg/renderer/geode/GeodeCounters.h"
+#include "donner/svg/renderer/geode/GeodeGpuContext.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::geode {
@@ -298,31 +300,29 @@ public:
   ///
   /// GeoEncoder's bind groups always include pattern + clip-mask
   /// texture/sampler slots, even when the current draw doesn't
-  /// actually use them. Each slot is filled with a 1×1 "identity"
+  /// actually use them. Each slot is filled with a 1x1 "identity"
   /// texture when the feature is inactive. Prior to M4.2 every
   /// GeoEncoder instance created its own dummies (two textures per
   /// encoder), which showed up as 2+ `textureCreates` per frame per
   /// push/pop. Caching the dummies on the device - one instance per
-  /// GeodeDevice - drops that to zero steady-state.
+  /// GeodeDevice - drops that to zero steady-state. The dummies are
+  /// \c donner::gpu handles created through the device's adapter
+  /// (design 0053 packet 8b) and shared via \ref gpuContext.
 
-  /// 1×1 opaque-black RGBA8 dummy. Bound into the pattern slot when
-  /// the current draw is solid / gradient (not a pattern). The shader
-  /// does not sample from it, but the bind group layout still requires
-  /// a valid binding.
-  const wgpu::Texture& dummyPatternTexture() const;
-  /// View of `dummyPatternTexture()`.
-  const wgpu::TextureView& dummyPatternTextureView() const;
+  /// View of the 1x1 opaque-black RGBA8 dummy bound into the pattern
+  /// slot when the current draw is solid / gradient (not a pattern).
+  /// The shader does not sample from it, but the bind group layout
+  /// still requires a valid binding.
+  const gpu::TextureView& dummyPatternTextureView() const;
   /// Linear-Repeat sampler used for both the dummy and real pattern tiles.
-  const wgpu::Sampler& dummyPatternSampler() const;
+  const gpu::Sampler& dummyPatternSampler() const;
 
-  /// 1×1 R8Unorm with value `0xFF` (= 1.0 coverage). Bound into the
+  /// View of the 1x1 dummy with full coverage (1.0). Bound into the
   /// clip-mask slot when no clip mask is active - the shader
   /// multiplies coverage by this value, so `1.0` is a no-op.
-  const wgpu::Texture& dummyClipMaskTexture() const;
-  /// View of `dummyClipMaskTexture()`.
-  const wgpu::TextureView& dummyClipMaskTextureView() const;
+  const gpu::TextureView& dummyClipMaskTextureView() const;
   /// Linear-ClampToEdge sampler used for both the dummy and real clip masks.
-  const wgpu::Sampler& dummyClipMaskSampler() const;
+  const gpu::Sampler& dummyClipMaskSampler() const;
 
   /// One-element instance-transform storage buffer carrying the identity
   /// affine. Bound at binding 7 of the Slug fill bind-group layout by
@@ -334,7 +334,7 @@ public:
   /// `shaders/slug_fill.wgsl`: two `vec4f` per entry, row-major affine,
   /// so the identity is `{(1, 0, 0, 0), (0, 1, 0, 0)}`. The `.z`
   /// components carry the translation (0 for identity).
-  const wgpu::Buffer& identityInstanceTransformBuffer() const;
+  const gpu::Buffer& identityInstanceTransformBuffer() const;
   /// @}
 
   /// @name Shared render / compute pipelines (issue #575 fix)
@@ -381,6 +381,11 @@ public:
   /// device's wgpu objects. Owned here alongside the shared pipelines (which are created
   /// through it); see GeodeWgpuAdapterDevice.h for the removal gates.
   GeodeWgpuAdapterDevice& adapterDevice() const;
+
+  /// The \c donner::gpu recording context Geode's encoders draw through: the adapter device,
+  /// the shared dummy resources above, and counter forwarding back to this device. Valid for
+  /// the device's lifetime once construction succeeds.
+  const GeodeGpuContext& gpuContext() const;
 
 private:
   GeodeDevice();

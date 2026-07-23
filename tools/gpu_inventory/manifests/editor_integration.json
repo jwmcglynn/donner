@@ -347,14 +347,10 @@
       "operations": [
         "createTexture"
       ],
-      "sha256": "9cc6cc67790eb2e0a605496c9834eb6624306e049dd40db6a9a2ccb93b065e26",
+      "sha256": "83f26e9df3917d04bbb91c13e1592e961af214a258f07b18b182ad285b01014b",
       "usesEditorWgpuDefine": true,
       "wgpuCppTokens": [
-        "Texture",
-        "TextureDescriptor",
-        "TextureDimension",
-        "TextureFormat",
-        "TextureUsage"
+        "TextureFormat"
       ]
     },
     "donner/editor/tests/LayersPanel_tests.cc": {

@@ -83,8 +83,7 @@ donner_cc_library(
     target_compatible_with = _GEODE_ONLY,
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
-        ":geode_wgpu_util",
-        "//third_party/webgpu-cpp:webgpu_cpp",
+        "//donner/gpu",
     ],
 )
 
@@ -157,6 +156,7 @@ donner_cc_library(
         "GeodeCheckerboardPipeline.h",
         "GeodeDevice.h",
         "GeodeFilterEngine.h",
+        "GeodeGpuContext.h",
         "GeodeImagePipeline.h",
         "GeodePipeline.h",
         "GeodeWgpuAdapterDevice.h",
@@ -549,7 +549,7 @@ donner_cc_library(
     deps = [
         ":geode_device",
         "//donner/base",
-        "//third_party/webgpu-cpp:webgpu_cpp",
+        "//donner/gpu",
     ],
 )
 
@@ -574,8 +574,8 @@ donner_cc_library(
         ":geode_texture_encoder",
         "//donner/base",
         "//donner/css",
+        "//donner/gpu",
         "//donner/svg/resources:image_resource",
-        "//third_party/webgpu-cpp:webgpu_cpp",
     ],
 )
 
@@ -586,10 +586,13 @@ donner_cc_test(
     deps = [
         ":geo_encoder",
         ":geode_device",
+        ":geode_texture_encoder",
         ":geode_wgpu_util",
         "//donner/base",
         "//donner/base:gtest_timeout_main",
         "//donner/css",
+        "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
         "//donner/svg/renderer/tests:rgba_test_matchers",
         "//donner/svg/resources:image_resource",
     ],

@@ -263,6 +263,19 @@ uint64_t GeodeWgpuAdapterDevice::completedSerial() const {
   return completionState_->completedSerial.load(std::memory_order_acquire);
 }
 
+void GeodeWgpuAdapterDevice::pollCompletions() {
+#ifndef __EMSCRIPTEN__
+  // Deliver any ready queue work-done callbacks so completedSerial advances. Non-blocking: a
+  // frame cadence must never stall on GPU completion.
+  geodeDevice_.device().poll(/*wait=*/false, nullptr);
+#else
+  // On Emscripten the browser event loop delivers the callbacks between frames; polling the
+  // device here would yield through Asyncify, which the frame cadence must not do.
+#endif
+  // Process deferred destructions against the (possibly advanced) completed serial.
+  poll();
+}
+
 bool GeodeWgpuAdapterDevice::waitForSerial(uint64_t serial, double timeoutSeconds) {
   const auto deadline = std::chrono::steady_clock::now() +
                         std::chrono::duration_cast<std::chrono::steady_clock::duration>(
@@ -315,29 +328,6 @@ wgpu::TextureView GeodeWgpuAdapterDevice::wgpuTextureViewOf(
     return wgpu::TextureView();
   }
   return GetHandle(slotTextureViews_, textureView.slotIndex());
-}
-
-wgpu::RenderPipeline GeodeWgpuAdapterDevice::wgpuRenderPipelineOf(
-    const gpu::RenderPipeline& pipeline) const {
-  if (!pipeline.isValid() || pipeline.deviceId() != deviceId()) {
-    return wgpu::RenderPipeline();
-  }
-  return GetHandle(slotRenderPipelines_, pipeline.slotIndex());
-}
-
-wgpu::BindGroupLayout GeodeWgpuAdapterDevice::wgpuBindGroupLayoutOf(
-    const gpu::BindGroupLayout& layout) const {
-  if (!layout.isValid() || layout.deviceId() != deviceId()) {
-    return wgpu::BindGroupLayout();
-  }
-  return GetHandle(slotBindGroupLayouts_, layout.slotIndex());
-}
-
-wgpu::Sampler GeodeWgpuAdapterDevice::wgpuSamplerOf(const gpu::Sampler& sampler) const {
-  if (!sampler.isValid() || sampler.deviceId() != deviceId()) {
-    return wgpu::Sampler();
-  }
-  return GetHandle(slotSamplers_, sampler.slotIndex());
 }
 
 gpu::TextureFormat GpuTextureFormatFromWgpu(wgpu::TextureFormat format) {
@@ -880,9 +870,11 @@ gpu::Status GeodeWgpuAdapterDevice::onSubmit(uint64_t submissionSerial,
                 return failEncoding(
                     GpuError{GpuErrorType::InvalidState, "draw outside a render pass"});
               }
+              // NOTE: draws are counted at record time by the encoders (GeoEncoder /
+              // GeodeTextureEncoder), preserving pre-RHI counter timing; counting here too
+              // would double-count every draw.
               pass.get().draw(draw.vertexCount, draw.instanceCount, draw.firstVertex,
                               draw.firstInstance);
-              geodeDevice_.countDraw();
               return OkStatus();
             },
             [&](const gpu::EndRenderPassCommand&) -> gpu::Status {
@@ -963,8 +955,9 @@ gpu::Status GeodeWgpuAdapterDevice::onSubmit(uint64_t submissionSerial,
   if (!commandBuffer) {
     return GpuError{GpuErrorType::InvalidState, "wgpu command buffer finish failed"};
   }
+  // NOTE: submits are counted by the callers that own the frame cadence (GeoEncoder's owned
+  // mode and RendererGeode's frame submit), preserving pre-RHI counter timing.
   geodeDevice_.queue().submit(1, &commandBuffer.get());
-  geodeDevice_.countSubmit();
 
   // Advance completedSerial when the queue drains. Callback-mode handling (wgpu-native vs
   // emdawnwebgpu) is centralized in notifyWhenSubmittedWorkDone; waitForSerial's poll loop

@@ -2,13 +2,9 @@
 /// @file
 /// Render pipeline for the Slug fill algorithm.
 
-#include <webgpu/webgpu.hpp>
-
 #include "donner/gpu/Device.h"
 
 namespace donner::geode {
-
-class GeodeWgpuAdapterDevice;
 
 /**
  * Caches a compiled render pipeline for the Slug fill shader, plus its bind group layout.
@@ -18,9 +14,8 @@ class GeodeWgpuAdapterDevice;
  * draw call but the pipeline state object can be reused.
  *
  * The pipeline is created through the \c donner::gpu runtime (design 0053 packet 8): the class
- * holds the RAII `donner::gpu` handles, and - TEMPORARY for 8a while GeoEncoder still records
- * through wgpu - caches the borrowed wgpu objects resolved through the adapter's escape hatches
- * (deleted in packet 8b).
+ * holds the RAII `donner::gpu` handles, and GeoEncoder records against them through
+ * `gpu::CommandEncoder` (packet 8b).
  *
  * The bind group layout matches the shader in `shaders/slug_fill.wgsl`:
  * - binding 0: uniform buffer (Uniforms struct: mvp, patternFromPath, viewport,
@@ -45,11 +40,12 @@ public:
   /**
    * Create a Slug fill pipeline for the given device and color target format.
    *
-   * @param adapterDevice The Donner GPU device (wgpu adapter) owned by the GeodeDevice.
+   * @param gpuDevice The Donner GPU device (in the transition phase, the GeodeDevice-owned
+   *   wgpu adapter) the pipeline objects are created on.
    * @param colorFormat The pixel format of the render target this pipeline
    *   will draw into. Must match the target texture's format at draw time.
    */
-  GeodePipeline(GeodeWgpuAdapterDevice& adapterDevice, gpu::TextureFormat colorFormat);
+  GeodePipeline(gpu::Device& gpuDevice, gpu::TextureFormat colorFormat);
 
   ~GeodePipeline() = default;
   GeodePipeline(const GeodePipeline&) = delete;
@@ -59,11 +55,13 @@ public:
   /// Move assignment operator.
   GeodePipeline& operator=(GeodePipeline&&) noexcept = default;
 
-  /// The compiled render pipeline (TEMPORARY 8a wgpu alias for the still-wgpu GeoEncoder).
-  const wgpu::RenderPipeline& pipeline() const { return borrowedPipeline_; }
+  /// The compiled render pipeline.
+  const gpu::RenderPipeline& pipeline() const { return pipeline_; }
 
-  /// The bind group layout used by the pipeline (TEMPORARY 8a wgpu alias).
-  const wgpu::BindGroupLayout& bindGroupLayout() const { return borrowedBindGroupLayout_; }
+  /// The bind group layout used by the pipeline. Bind groups for draws MUST be created against
+  /// this exact handle: `gpu::RenderPassEncoder::draw` validates bind-group-layout identity
+  /// against the pipeline layout.
+  const gpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_; }
 
   /// Color format the pipeline was built for.
   gpu::TextureFormat colorFormat() const { return colorFormat_; }
@@ -74,11 +72,6 @@ private:
   gpu::BindGroupLayout bindGroupLayout_;
   gpu::PipelineLayout pipelineLayout_;
   gpu::RenderPipeline pipeline_;
-
-  // TEMPORARY 8a: borrowed wgpu aliases resolved through the adapter's escape hatches so the
-  // still-wgpu GeoEncoder can bind them. Deleted in packet 8b.
-  wgpu::RenderPipeline borrowedPipeline_;
-  wgpu::BindGroupLayout borrowedBindGroupLayout_;
 };
 
 /**
@@ -98,7 +91,7 @@ private:
 class GeodeGradientPipeline {
 public:
   /// Construct a gradient pipeline for the given device and color target format.
-  GeodeGradientPipeline(GeodeWgpuAdapterDevice& adapterDevice, gpu::TextureFormat colorFormat);
+  GeodeGradientPipeline(gpu::Device& gpuDevice, gpu::TextureFormat colorFormat);
 
   ~GeodeGradientPipeline() = default;
   GeodeGradientPipeline(const GeodeGradientPipeline&) = delete;
@@ -108,10 +101,11 @@ public:
   /// Move assignment operator.
   GeodeGradientPipeline& operator=(GeodeGradientPipeline&&) noexcept = default;
 
-  /// The compiled render pipeline (TEMPORARY 8a wgpu alias for the still-wgpu GeoEncoder).
-  const wgpu::RenderPipeline& pipeline() const { return borrowedPipeline_; }
-  /// The bind group layout used by the pipeline (TEMPORARY 8a wgpu alias).
-  const wgpu::BindGroupLayout& bindGroupLayout() const { return borrowedBindGroupLayout_; }
+  /// The compiled render pipeline.
+  const gpu::RenderPipeline& pipeline() const { return pipeline_; }
+  /// The bind group layout used by the pipeline (see GeodePipeline::bindGroupLayout on the
+  /// layout-identity requirement).
+  const gpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_; }
   /// Color format the pipeline was built for.
   gpu::TextureFormat colorFormat() const { return colorFormat_; }
 
@@ -121,10 +115,6 @@ private:
   gpu::BindGroupLayout bindGroupLayout_;
   gpu::PipelineLayout pipelineLayout_;
   gpu::RenderPipeline pipeline_;
-
-  // TEMPORARY 8a wgpu aliases; deleted in packet 8b (see GeodePipeline).
-  wgpu::RenderPipeline borrowedPipeline_;
-  wgpu::BindGroupLayout borrowedBindGroupLayout_;
 };
 
 /**
@@ -153,7 +143,7 @@ public:
    * Create a Slug mask pipeline for the given device. Renders into a
    * single-sampled RGBA8Unorm texture.
    */
-  explicit GeodeMaskPipeline(GeodeWgpuAdapterDevice& adapterDevice);
+  explicit GeodeMaskPipeline(gpu::Device& gpuDevice);
 
   ~GeodeMaskPipeline() = default;
   GeodeMaskPipeline(const GeodeMaskPipeline&) = delete;
@@ -161,10 +151,11 @@ public:
   GeodeMaskPipeline(GeodeMaskPipeline&&) noexcept = default;
   GeodeMaskPipeline& operator=(GeodeMaskPipeline&&) noexcept = default;
 
-  /// The compiled render pipeline (TEMPORARY 8a wgpu alias for the still-wgpu GeoEncoder).
-  const wgpu::RenderPipeline& pipeline() const { return borrowedPipeline_; }
-  /// The bind group layout used by the pipeline (TEMPORARY 8a wgpu alias).
-  const wgpu::BindGroupLayout& bindGroupLayout() const { return borrowedBindGroupLayout_; }
+  /// The compiled render pipeline.
+  const gpu::RenderPipeline& pipeline() const { return pipeline_; }
+  /// The bind group layout used by the pipeline (see GeodePipeline::bindGroupLayout on the
+  /// layout-identity requirement).
+  const gpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_; }
   /// The color format the pipeline targets. Always `RGBA8Unorm`.
   gpu::TextureFormat colorFormat() const { return gpu::TextureFormat::RGBA8Unorm; }
 
@@ -173,10 +164,6 @@ private:
   gpu::BindGroupLayout bindGroupLayout_;
   gpu::PipelineLayout pipelineLayout_;
   gpu::RenderPipeline pipeline_;
-
-  // TEMPORARY 8a wgpu aliases; deleted in packet 8b (see GeodePipeline).
-  wgpu::RenderPipeline borrowedPipeline_;
-  wgpu::BindGroupLayout borrowedBindGroupLayout_;
 };
 
 }  // namespace donner::geode

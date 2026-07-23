@@ -538,11 +538,11 @@ TEST_F(RendererGeodeTest, EmbeddedDeviceDrawPathExportsTextureSnapshot) {
   ASSERT_NE(embeddedUnique, nullptr);
 
   std::shared_ptr<geode::GeodeDevice> embedded(std::move(embeddedUnique));
-  ASSERT_TRUE(static_cast<bool>(embedded->dummyPatternTextureView()));
-  ASSERT_TRUE(static_cast<bool>(embedded->dummyPatternSampler()));
-  ASSERT_TRUE(static_cast<bool>(embedded->dummyClipMaskTextureView()));
-  ASSERT_TRUE(static_cast<bool>(embedded->dummyClipMaskSampler()));
-  ASSERT_TRUE(static_cast<bool>(embedded->identityInstanceTransformBuffer()));
+  ASSERT_TRUE(embedded->dummyPatternTextureView().isValid());
+  ASSERT_TRUE(embedded->dummyPatternSampler().isValid());
+  ASSERT_TRUE(embedded->dummyClipMaskTextureView().isValid());
+  ASSERT_TRUE(embedded->dummyClipMaskSampler().isValid());
+  ASSERT_TRUE(embedded->identityInstanceTransformBuffer().isValid());
 
   RendererGeode renderer(embedded);
   beginFrame(renderer);

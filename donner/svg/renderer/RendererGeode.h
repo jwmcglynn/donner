@@ -17,6 +17,7 @@
 
 #include "donner/base/Box.h"
 #include "donner/base/Transform.h"
+#include "donner/gpu/Handles.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/geode/GeodeCounters.h"
@@ -39,7 +40,10 @@ namespace donner::svg {
  *
  * The snapshot keeps the backing \ref geode::GeodeDevice and texture alive so
  * editor presentation code can sample the texture after the renderer has moved
- * on to a later frame.
+ * on to a later frame. The snapshot owns the \c donner::gpu texture handle;
+ * the wgpu texture/view surface is derived through the adapter's escape hatch
+ * at construction (TEMPORARY - the wgpu surface is deleted in packet 18,
+ * ImGui/editor).
  */
 class RendererGeodeTextureSnapshot final : public RendererTextureSnapshot {
 public:
@@ -47,11 +51,12 @@ public:
    * Construct a Geode texture snapshot.
    *
    * @param device Shared Geode device that owns the WebGPU handle lifetime.
-   * @param texture Resolved single-sample texture containing the rendered frame.
+   * @param texture Resolved single-sample texture containing the rendered frame; ownership
+   *   moves into the snapshot. Must be a live texture of `device->adapterDevice()`.
    * @param dimensions Texture dimensions in device pixels.
    * @param format Texture format.
    */
-  RendererGeodeTextureSnapshot(std::shared_ptr<geode::GeodeDevice> device, wgpu::Texture texture,
+  RendererGeodeTextureSnapshot(std::shared_ptr<geode::GeodeDevice> device, gpu::Texture texture,
                                Vector2i dimensions, wgpu::TextureFormat format);
   ~RendererGeodeTextureSnapshot() override = default;
 
@@ -62,7 +67,11 @@ public:
   [[nodiscard]] AlphaType alphaType() const override { return AlphaType::Premultiplied; }
   [[nodiscard]] RendererBitmap takeSnapshot() const override;
 
-  /// Resolved single-sample WebGPU texture.
+  /// The owned \c donner::gpu texture handle.
+  [[nodiscard]] const gpu::Texture& gpuTexture() const { return gpuTexture_; }
+
+  /// Resolved single-sample WebGPU texture (TEMPORARY escape-hatch surface for the editor's
+  /// ImGui presentation - deleted in packet 18).
   [[nodiscard]] const wgpu::Texture& texture() const { return texture_.get(); }
 
   /// Lazily-created texture view suitable for ImGui_ImplWGPU's ImTextureID.
@@ -73,6 +82,9 @@ public:
 
 private:
   std::shared_ptr<geode::GeodeDevice> device_;
+  gpu::Texture gpuTexture_;
+  /// Owned +1 wgpu reference derived from `gpuTexture_` at construction so presentation code
+  /// keeps a stable wgpu surface and destruction releases deterministically.
   geode::ScopedWgpuHandle<wgpu::Texture> texture_;
   mutable geode::ScopedWgpuHandle<wgpu::TextureView> textureView_;
   Vector2i dimensions_ = Vector2i::Zero();

@@ -13,10 +13,13 @@
 #include "donner/base/Path.h"
 #include "donner/base/Transform.h"
 #include "donner/css/Color.h"
+#include "donner/gpu/tests/GpuTestUtils.h"
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
+#include "donner/svg/renderer/geode/GeodeTextureEncoder.h"
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/resources/ImageResource.h"
@@ -61,17 +64,14 @@ protected:
     gradientPipeline_ = &device_->gradientPipeline();
     imagePipeline_ = &device_->imagePipeline();
 
-    wgpu::TextureDescriptor td = {};
-    td.label = wgpuLabel("TestTarget");
-    td.size = {kSize, kSize, 1};
-    td.format = kFormat;
-    td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc |
-               wgpu::TextureUsage::TextureBinding;
-    td.mipLevelCount = 1;
-    td.sampleCount = 1;
-    td.dimension = wgpu::TextureDimension::_2D;
-    target_ = device_->device().createTexture(td);
-    ASSERT_TRUE(static_cast<bool>(target_));
+    // The render target is a donner::gpu texture created through the device's adapter
+    // (design 0053 packet 8b); the raw-wgpu readback below resolves it through the
+    // adapter's wgpuTextureOf escape hatch (readback migrates in packet 11).
+    target_ = gpu::GetResultOrFail(device_->adapterDevice().createTexture(gpu::TextureDescriptor{
+        "TestTarget", gpu::Extent2d{kSize, kSize}, gpu::TextureFormat::RGBA8Unorm,
+        gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc |
+            gpu::TextureUsage::Sampled}));
+    ASSERT_TRUE(target_.isValid());
 
     wgpu::BufferDescriptor bd = {};
     bd.label = wgpuLabel("TestReadback");
@@ -88,7 +88,7 @@ protected:
     wgpu::CommandEncoder enc = device_->device().createCommandEncoder();
 
     wgpu::TexelCopyTextureInfo src = {};
-    src.texture = target_;
+    src.texture = device_->adapterDevice().wgpuTextureOf(target_);
     src.mipLevel = 0;
     src.origin = {0, 0, 0};
 
@@ -147,11 +147,18 @@ protected:
     return {pixels[off], pixels[off + 1], pixels[off + 2], pixels[off + 3]};
   }
 
+  /// Convenience: construct an owned-mode GeoEncoder against the fixture's target through the
+  /// device's gpu context.
+  GeoEncoder makeEncoder() {
+    return GeoEncoder(device_->gpuContext(), *pipeline_, *gradientPipeline_, *imagePipeline_,
+                      target_, gpu::Extent2d{kSize, kSize});
+  }
+
   std::shared_ptr<GeodeDevice> device_;
   GeodePipeline* pipeline_ = nullptr;
   GeodeGradientPipeline* gradientPipeline_ = nullptr;
   GeodeImagePipeline* imagePipeline_ = nullptr;
-  wgpu::Texture target_;
+  gpu::Texture target_;
   wgpu::Buffer readback_;
 };
 
@@ -159,7 +166,7 @@ protected:
 
 /// Clear the direct render target and read it back without a resolve attachment.
 TEST_F(GeoEncoderTest, ClearWritesDirectTarget) {
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  GeoEncoder encoder = makeEncoder();
   encoder.clear(css::RGBA(0, 128, 255, 255));  // Half-saturated blue.
   encoder.finish();
 
@@ -172,7 +179,7 @@ TEST_F(GeoEncoderTest, ClearWritesDirectTarget) {
 TEST_F(GeoEncoderTest, FillRect) {
   Path path = PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build();
 
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  GeoEncoder encoder = makeEncoder();
   encoder.clear(css::RGBA(0, 0, 0, 255));  // Black.
   encoder.fillPath(path, css::RGBA(255, 0, 0, 255), FillRule::NonZero);
   encoder.finish();
@@ -197,7 +204,7 @@ TEST_F(GeoEncoderTest, FillTriangle) {
                   .closePath()
                   .build();
 
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  GeoEncoder encoder = makeEncoder();
   encoder.clear(css::RGBA(0, 0, 0, 255));
   encoder.fillPath(path, css::RGBA(0, 255, 0, 255), FillRule::NonZero);
   encoder.finish();
@@ -245,7 +252,7 @@ TEST_F(GeoEncoderTest, FillLinearGradientUserSpace) {
   params.spreadMode = 0;                    // pad
   params.stops = std::span<const LinearGradientParams::Stop>(stops, 2);
 
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  GeoEncoder encoder = makeEncoder();
   encoder.clear(css::RGBA(0, 0, 0, 255));
   encoder.fillPathLinearGradient(path, params, FillRule::NonZero);
   encoder.finish();
@@ -289,7 +296,7 @@ TEST_F(GeoEncoderTest, FillLinearGradientRepeat) {
   params.spreadMode = 2;  // repeat
   params.stops = std::span<const LinearGradientParams::Stop>(stops, 2);
 
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  GeoEncoder encoder = makeEncoder();
   encoder.clear(css::RGBA(0, 0, 0, 255));
   encoder.fillPathLinearGradient(path, params, FillRule::NonZero);
   encoder.finish();
@@ -331,7 +338,7 @@ TEST_F(GeoEncoderTest, FillRadialGradientConcentric) {
   params.spreadMode = 0;  // pad
   params.stops = std::span<const RadialGradientParams::Stop>(stops, 2);
 
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  GeoEncoder encoder = makeEncoder();
   encoder.clear(css::RGBA(0, 0, 0, 255));
   encoder.fillPathRadialGradient(path, params, FillRule::NonZero);
   encoder.finish();
@@ -376,7 +383,7 @@ TEST_F(GeoEncoderTest, FillRadialGradientFocal) {
   params.spreadMode = 0;
   params.stops = std::span<const RadialGradientParams::Stop>(stops, 2);
 
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  GeoEncoder encoder = makeEncoder();
   encoder.clear(css::RGBA(0, 0, 0, 255));
   encoder.fillPathRadialGradient(path, params, FillRule::NonZero);
   encoder.finish();
@@ -396,7 +403,7 @@ TEST_F(GeoEncoderTest, FillRadialGradientFocal) {
 TEST_F(GeoEncoderTest, FillCircle) {
   Path path = PathBuilder().addCircle(Vector2d(32, 32), 20).build();
 
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  GeoEncoder encoder = makeEncoder();
   encoder.clear(css::RGBA(0, 0, 0, 255));
   encoder.fillPath(path, css::RGBA(0, 0, 255, 255), FillRule::NonZero);
   encoder.finish();
@@ -430,7 +437,7 @@ svg::ImageResource makeMagentaImage2x2() {
 /// Verify that the destination pixels are magenta and the outside is
 /// untouched.
 TEST_F(GeoEncoderTest, DrawImageFillsDestRect) {
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  GeoEncoder encoder = makeEncoder();
   encoder.clear(css::RGBA(0, 0, 0, 255));
 
   svg::ImageResource image = makeMagentaImage2x2();
@@ -453,7 +460,7 @@ TEST_F(GeoEncoderTest, DrawImageFillsDestRect) {
 /// opacity - the result should read back as ~(128, 0, 0, 255) over black
 /// with premultiplied source-over.
 TEST_F(GeoEncoderTest, DrawImageHonorsOpacity) {
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  GeoEncoder encoder = makeEncoder();
   encoder.clear(css::RGBA(0, 0, 0, 255));
 
   svg::ImageResource image;
@@ -476,7 +483,7 @@ TEST_F(GeoEncoderTest, DrawImageHonorsOpacity) {
 /// this test shipped, future refactors that forget to re-bind the Slug
 /// fill pipeline between pipeline switches will regress here.
 TEST_F(GeoEncoderTest, FillThenImageThenFill) {
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  GeoEncoder encoder = makeEncoder();
   encoder.clear(css::RGBA(0, 0, 0, 255));
 
   // 1) Fill a red rect covering the top half.
@@ -524,34 +531,19 @@ TEST_F(GeoEncoderTest, FillPathPatternSolidTile) {
     tilePixels[i + 2] = 0;
     tilePixels[i + 3] = 255;
   }
-  wgpu::TextureDescriptor td = {};
-  td.label = wgpuLabel("PatternTile");
-  td.size = {kTileDim, kTileDim, 1};
-  td.format = kFormat;
-  td.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
-  td.mipLevelCount = 1;
-  td.sampleCount = 1;
-  td.dimension = wgpu::TextureDimension::_2D;
-  wgpu::Texture tile = device_->device().createTexture(td);
-  ASSERT_TRUE(static_cast<bool>(tile));
-
-  wgpu::TexelCopyTextureInfo dst = {};
-  dst.texture = tile;
-  wgpu::TexelCopyBufferLayout layout = {};
-  layout.bytesPerRow = kTileDim * 4;
-  layout.rowsPerImage = kTileDim;
-  wgpu::Extent3D extent = {kTileDim, kTileDim, 1};
-  device_->queue().writeTexture(dst, tilePixels.data(), tilePixels.size(), layout, extent);
+  const gpu::Texture tile = GeodeTextureEncoder::uploadRgba8Texture(
+      device_->gpuContext(), tilePixels.data(), kTileDim, kTileDim);
+  ASSERT_TRUE(tile.isValid());
 
   // 2. Fill a path with the pattern. The tile size in pattern-space is
   // 4x4 so the shader wraps every 4 pixels; since the path spans more than
   // one tile, the wrap logic is exercised.
   Path path = PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build();
 
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  GeoEncoder encoder = makeEncoder();
   encoder.clear(css::RGBA(0, 0, 0, 255));
   GeoEncoder::PatternPaint paint;
-  paint.tile = tile;
+  paint.tile = &tile;
   paint.tileSize = Vector2d(4.0, 4.0);
   paint.patternFromPath = Transform2d();  // Identity: target space == pattern space.
   paint.opacity = 1.0;
