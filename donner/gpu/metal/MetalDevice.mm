@@ -807,6 +807,11 @@ Status MetalDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferSl
           destinationBytesPerImage:static_cast<uint64_t>(copy->layout.bytesPerRow) *
                                    copy->layout.rowsPerImage];
       [blitEncoder endEncoding];
+    } else if (std::get_if<CopyTextureToTextureCommand>(&command) != nullptr) {
+      return failEncoding(
+          GpuError{GpuErrorType::Unsupported,
+                   "the Metal backend does not implement copyTextureToTexture yet; arrives with "
+                   "its presentation/readback packet"});
     }
   }
 

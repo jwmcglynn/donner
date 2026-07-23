@@ -333,9 +333,8 @@ struct TextureDescriptor {
   Extent2d size;                                     //!< Extent in texels. Must be nonzero.
   TextureFormat format = TextureFormat::RGBA8Unorm;  //!< Texel format.
   TextureUsage usage = TextureUsage::None;           //!< Usage flags. Must not be empty.
-  uint32_t sampleCount = 1;  //!< Samples per texel. Only 1 is accepted today; multisampled
-                             //!< attachments plus a resolve-target story arrive with the Geode
-                             //!< pipeline migration packets.
+  uint32_t sampleCount = 1;  //!< Samples per texel. Must be 1: the runtime is single-sample by
+                             //!< design (analytical coverage, design 0041).
 };
 
 /// Descriptor for `Device::createTextureView`. Views cover the whole texture.
@@ -439,8 +438,8 @@ struct RenderPipelineDescriptor {
   FragmentState fragment;                                        //!< Fragment stage.
   PrimitiveTopology topology = PrimitiveTopology::TriangleList;  //!< Primitive topology.
   CullMode cullMode = CullMode::None;                            //!< Face culling mode.
-  uint32_t multisampleCount = 1;  //!< Samples per pixel. Only 1 is accepted today; multisample
-                                  //!< support arrives with the Geode pipeline migration packets.
+  uint32_t multisampleCount = 1;  //!< Samples per pixel. Must be 1: the runtime is single-sample
+                                  //!< by design (analytical coverage, design 0041).
 };
 
 /// One color attachment of a \ref RenderPassDescriptor.
@@ -481,7 +480,8 @@ struct TexelCopyBufferLayout {
 /// A buffer range bound through a bind group.
 struct BufferBinding {
   BufferRef buffer;          //!< Bound buffer.
-  uint64_t offsetBytes = 0;  //!< Byte offset of the bound range.
+  uint64_t offsetBytes = 0;  //!< Byte offset of the bound range. Must be a multiple of
+                             //!< \ref donner::gpu::kBindingOffsetAlignment (256).
   uint64_t sizeBytes = 0;    //!< Byte size of the bound range. Must be nonzero.
 };
 

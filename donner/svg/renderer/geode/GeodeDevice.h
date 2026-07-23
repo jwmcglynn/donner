@@ -23,6 +23,7 @@ class GeodeGradientPipeline;
 class GeodeImagePipeline;
 class GeodeMaskPipeline;
 class GeodeFilterEngine;
+class GeodeWgpuAdapterDevice;
 
 /**
  * Configuration for embedding Geode into a host application that already owns a
@@ -375,6 +376,11 @@ public:
   /// it, so headless/WASM consumers never pay the compile cost.
   GeodeCheckerboardPipeline& checkerboardPipeline() const;
   /// @}
+
+  /// The TEMPORARY design-0053 Phase 1 adapter implementing \c donner::gpu::Device over this
+  /// device's wgpu objects. Owned here alongside the shared pipelines (which are created
+  /// through it); see GeodeWgpuAdapterDevice.h for the removal gates.
+  GeodeWgpuAdapterDevice& adapterDevice() const;
 
 private:
   GeodeDevice();

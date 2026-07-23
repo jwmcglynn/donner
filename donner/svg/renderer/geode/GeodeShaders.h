@@ -4,7 +4,13 @@
 
 #include <webgpu/webgpu.hpp>
 
+#include "donner/gpu/Device.h"
+
 namespace donner::geode {
+
+// The four pipeline-family creators below build shader modules through the donner::gpu runtime
+// (design 0053 packet 8); the filter creators further down still compile through wgpu directly
+// and migrate with the filter packet.
 
 /**
  * Compile the Slug fill shader for the given device.
@@ -24,10 +30,10 @@ namespace donner::geode {
  * - `@location(1) normal: vec2f`   - outward normal for dilation
  * - `@location(2) bandIndex: u32`  - which band this vertex belongs to
  *
- * @return A valid shader module on success, or an empty module if compilation
- *   failed (errors go to the device's uncaptured error callback).
+ * @param device Donner GPU device (in this transition phase, the wgpu adapter).
+ * @return The shader module handle, or the creation error.
  */
-wgpu::ShaderModule createSlugFillShader(const wgpu::Device& device);
+gpu::Result<gpu::ShaderModule> createSlugFillShader(gpu::Device& device);
 
 /**
  * Compile the Slug gradient-fill shader for the given device.
@@ -37,10 +43,10 @@ wgpu::ShaderModule createSlugFillShader(const wgpu::Device& device);
  * spread mode, stops) alongside the Slug coverage machinery. See
  * `shaders/slug_gradient.wgsl` for the exact struct layout.
  *
- * @return A valid shader module on success, or an empty module if compilation
- *   failed (errors go to the device's uncaptured error callback).
+ * @param device Donner GPU device (in this transition phase, the wgpu adapter).
+ * @return The shader module handle, or the creation error.
  */
-wgpu::ShaderModule createSlugGradientShader(const wgpu::Device& device);
+gpu::Result<gpu::ShaderModule> createSlugGradientShader(gpu::Device& device);
 
 /**
  * Compile the path-clip mask shader for the given device.
@@ -52,8 +58,11 @@ wgpu::ShaderModule createSlugGradientShader(const wgpu::Device& device);
  * the Phase 3b path-clipping pipeline to materialise a per-pixel clip
  * mask texture that subsequent fill / gradient draws sample as a
  * coverage multiplier.
+ *
+ * @param device Donner GPU device (in this transition phase, the wgpu adapter).
+ * @return The shader module handle, or the creation error.
  */
-wgpu::ShaderModule createSlugMaskShader(const wgpu::Device& device);
+gpu::Result<gpu::ShaderModule> createSlugMaskShader(gpu::Device& device);
 
 /**
  * Compile the image-blit shader for the given device.
@@ -68,10 +77,10 @@ wgpu::ShaderModule createSlugMaskShader(const wgpu::Device& device);
  *
  * and no vertex buffer - corners are generated from `@builtin(vertex_index)`.
  *
- * @return A valid shader module on success, or an empty module if compilation
- *   failed (errors go to the device's uncaptured error callback).
+ * @param device Donner GPU device (in this transition phase, the wgpu adapter).
+ * @return The shader module handle, or the creation error.
  */
-wgpu::ShaderModule createImageBlitShader(const wgpu::Device& device);
+gpu::Result<gpu::ShaderModule> createImageBlitShader(gpu::Device& device);
 
 /**
  * Compile the Gaussian blur compute shader for the given device.

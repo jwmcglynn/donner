@@ -331,8 +331,42 @@ TEST_F(BindGroupValidationTests, RejectsBufferWithoutUniformUsage) {
 TEST_F(BindGroupValidationTests, RejectsOutOfBoundsBufferRange) {
   const Buffer uniform = createUniformBuffer(/*byteSize=*/16);
   EXPECT_THAT(device_.createBindGroup(BindGroupDescriptor{
-                  "group", uniformLayout_, {BindGroupEntry{0, BufferBinding{uniform, 8, 16}}}}),
+                  "group", uniformLayout_, {BindGroupEntry{0, BufferBinding{uniform, 0, 32}}}}),
               IsGpuError(GpuErrorType::OutOfBounds));
+}
+
+TEST_F(BindGroupValidationTests, AcceptsAlignedNonzeroBufferOffset) {
+  const Buffer uniform = createUniformBuffer(/*byteSize=*/kBindingOffsetAlignment + 16);
+  EXPECT_THAT(device_.createBindGroup(BindGroupDescriptor{
+                  "group",
+                  uniformLayout_,
+                  {BindGroupEntry{0, BufferBinding{uniform, kBindingOffsetAlignment, 16}}}}),
+              HasResult());
+}
+
+TEST_F(BindGroupValidationTests, RejectsMisalignedUniformBufferOffset) {
+  const Buffer uniform = createUniformBuffer(/*byteSize=*/64);
+  EXPECT_THAT(device_.createBindGroup(BindGroupDescriptor{
+                  "group", uniformLayout_, {BindGroupEntry{0, BufferBinding{uniform, 8, 16}}}}),
+              IsGpuErrorWithMessage(
+                  GpuErrorType::InvalidDescriptor,
+                  HasSubstr("offsetBytes 8 is not a multiple of the 256-byte binding offset "
+                            "alignment")));
+}
+
+TEST_F(BindGroupValidationTests, RejectsMisalignedStorageBufferOffset) {
+  const BindGroupLayout storageLayout =
+      GetResultOrFail(device_.createBindGroupLayout(BindGroupLayoutDescriptor{
+          "storage",
+          {BindGroupLayoutEntry{0, ShaderStage::Vertex, BindingType::ReadOnlyStorageBuffer}}}));
+  const Buffer storage =
+      GetResultOrFail(device_.createBuffer(BufferDescriptor{"storage", 64, BufferUsage::Storage}));
+  EXPECT_THAT(device_.createBindGroup(BindGroupDescriptor{
+                  "group", storageLayout, {BindGroupEntry{0, BufferBinding{storage, 4, 16}}}}),
+              IsGpuErrorWithMessage(
+                  GpuErrorType::InvalidDescriptor,
+                  HasSubstr("offsetBytes 4 is not a multiple of the 256-byte binding offset "
+                            "alignment")));
 }
 
 TEST_F(BindGroupValidationTests, RejectsZeroSizeBufferRange) {

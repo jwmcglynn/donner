@@ -20,6 +20,7 @@
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 
 namespace donner::geode {
 
@@ -128,31 +129,13 @@ void WaitForSubmittedWork(const wgpu::Device& device, const wgpu::Queue& queue) 
 
   struct WorkDoneState {
     std::atomic<bool> done = false;
+
+    /// Callback hook for `notifyWhenSubmittedWorkDone`.
+    void onWorkDone() { done.store(true, std::memory_order_release); }
   };
   auto state = std::make_shared<WorkDoneState>();
 
-  wgpu::QueueWorkDoneCallbackInfo callbackInfo{wgpu::Default};
-  callbackInfo.mode = wgpu::CallbackMode::AllowSpontaneous;
-  // emdawnwebgpu's WGPUQueueWorkDoneCallback carries an extra WGPUStringView
-  // message parameter that wgpu-native's doesn't; match whichever the active
-  // header declares.
-#if defined(__EMSCRIPTEN__)
-  callbackInfo.callback = [](WGPUQueueWorkDoneStatus /*status*/, WGPUStringView /*message*/,
-                             void* userdata1, void* /*userdata2*/) {
-    const std::shared_ptr<WorkDoneState> state = takeWgpuCallbackState<WorkDoneState>(userdata1);
-    state->done.store(true, std::memory_order_release);
-  };
-#else
-  callbackInfo.callback = [](WGPUQueueWorkDoneStatus /*status*/, void* userdata1,
-                             void* /*userdata2*/) {
-    const std::shared_ptr<WorkDoneState> state = takeWgpuCallbackState<WorkDoneState>(userdata1);
-    state->done.store(true, std::memory_order_release);
-  };
-#endif
-  callbackInfo.userdata1 = retainWgpuCallbackState(state);
-  callbackInfo.userdata2 = nullptr;
-
-  queue.onSubmittedWorkDone(callbackInfo);
+  notifyWhenSubmittedWorkDone(queue, state);
   for (int pollIter = 0; !state->done.load(std::memory_order_acquire) && pollIter < 2000;
        ++pollIter) {
     device.poll(true, nullptr);
@@ -198,6 +181,12 @@ struct GeodeDevice::Impl {
   // struct: two vec4f rows carrying the identity affine
   // `{(1,0,0,0), (0,1,0,0)}`.
   ScopedWgpuHandle<wgpu::Buffer> identityInstanceTransformBuffer;
+
+  // TEMPORARY design-0053 Phase 1 adapter (see GeodeWgpuAdapterDevice.h for the removal
+  // gates). Declared ABOVE the pipelines: the pipeline classes hold donner::gpu RAII handles
+  // whose destructors release through the adapter, so the adapter must destruct after them
+  // (reverse-declaration order).
+  std::unique_ptr<GeodeWgpuAdapterDevice> adapterDevice;
 
   // Shared render / compute pipelines. Constructed once per GeodeDevice
   // in `initSharedPipelines` - see the public `pipeline()` / ... / `filterEngine()`
@@ -483,9 +472,13 @@ GeodeMaskPipeline& GeodeDevice::maskPipeline() const {
     // Lazy: most documents never hit the clip-path mask pass, and
     // production WASM callers that never need it should not pay the
     // pipeline-compile cost at startup.
-    impl_->maskPipeline = std::make_unique<GeodeMaskPipeline>(device_);
+    impl_->maskPipeline = std::make_unique<GeodeMaskPipeline>(*impl_->adapterDevice);
   }
   return *impl_->maskPipeline;
+}
+
+GeodeWgpuAdapterDevice& GeodeDevice::adapterDevice() const {
+  return *impl_->adapterDevice;
 }
 GeodeFilterEngine& GeodeDevice::filterEngine() const {
   return *impl_->filterEngine;
@@ -630,11 +623,12 @@ void GeodeDevice::initSharedResources() {
 void GeodeDevice::initSharedPipelines() {
   // Requires device_ / queue_ / textureFormat_ to be fully populated.
   // `CreateHeadless` and `CreateFromExternal` both call this as the final step.
-  const wgpu::TextureFormat fmt = textureFormat_;
+  const gpu::TextureFormat fmt = GpuTextureFormatFromWgpu(textureFormat_);
 
-  impl_->pipeline = std::make_unique<GeodePipeline>(device_, fmt);
-  impl_->gradientPipeline = std::make_unique<GeodeGradientPipeline>(device_, fmt);
-  impl_->imagePipeline = std::make_unique<GeodeImagePipeline>(device_, fmt);
+  impl_->adapterDevice = std::make_unique<GeodeWgpuAdapterDevice>(*this);
+  impl_->pipeline = std::make_unique<GeodePipeline>(*impl_->adapterDevice, fmt);
+  impl_->gradientPipeline = std::make_unique<GeodeGradientPipeline>(*impl_->adapterDevice, fmt);
+  impl_->imagePipeline = std::make_unique<GeodeImagePipeline>(*impl_->adapterDevice, fmt);
   // Mask pipeline is built on first `maskPipeline()` access - see header.
   impl_->filterEngine = std::make_unique<GeodeFilterEngine>(*this, /*verbose=*/false);
 }

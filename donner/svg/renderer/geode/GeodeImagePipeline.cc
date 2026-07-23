@@ -1,11 +1,32 @@
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 
+#include <cstdio>
+#include <utility>
+#include <vector>
+
+#include "donner/base/Utils.h"
 #include "donner/svg/renderer/geode/GeodeShaders.h"
-#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 
 namespace donner::geode {
 
-GeodeImagePipeline::GeodeImagePipeline(const wgpu::Device& device, wgpu::TextureFormat colorFormat)
+namespace {
+
+/// Unwraps a `donner::gpu` creation result, halting on failure (see GeodePipeline.cc's
+/// UnwrapOrAbort for the rationale).
+template <typename T>
+T UnwrapOrAbort(gpu::Result<T>&& result, const char* what) {
+  if (result.hasError()) {
+    std::fprintf(stderr, "[Geode] %s failed: %s\n", what, result.error().message.c_str());
+    UTILS_RELEASE_ASSERT_MSG(false, "Geode image pipeline construction failed");
+  }
+  return std::move(result).result();
+}
+
+}  // namespace
+
+GeodeImagePipeline::GeodeImagePipeline(GeodeWgpuAdapterDevice& adapterDevice,
+                                       gpu::TextureFormat colorFormat)
     : colorFormat_(colorFormat) {
   // ----- Bind group layout -----
   // Seven bindings: uniform buffer, sampler, sampled content texture,
@@ -13,133 +34,78 @@ GeodeImagePipeline::GeodeImagePipeline(const wgpu::Device& device, wgpu::Texture
   // snapshot texture (Phase 3d blend modes), sampled Phase 3b
   // clip-mask texture, clip-mask sampler. Optional textures always
   // bind some valid view so the layout stays stable across every draw.
-  wgpu::BindGroupLayoutEntry entries[7] = {};
+  const std::vector<gpu::BindGroupLayoutEntry> entries = {
+      gpu::BindGroupLayoutEntry{0, gpu::ShaderStage::Vertex | gpu::ShaderStage::Fragment,
+                                gpu::BindingType::UniformBuffer},
+      gpu::BindGroupLayoutEntry{1, gpu::ShaderStage::Fragment, gpu::BindingType::FilteringSampler},
+      gpu::BindGroupLayoutEntry{2, gpu::ShaderStage::Fragment,
+                                gpu::BindingType::SampledTexture2dFloat},
+      gpu::BindGroupLayoutEntry{3, gpu::ShaderStage::Fragment,
+                                gpu::BindingType::SampledTexture2dFloat},
+      gpu::BindGroupLayoutEntry{4, gpu::ShaderStage::Fragment,
+                                gpu::BindingType::SampledTexture2dFloat},
+      gpu::BindGroupLayoutEntry{5, gpu::ShaderStage::Fragment,
+                                gpu::BindingType::SampledTexture2dFloat},
+      gpu::BindGroupLayoutEntry{6, gpu::ShaderStage::Fragment, gpu::BindingType::FilteringSampler},
+  };
+  bindGroupLayout_ =
+      UnwrapOrAbort(adapterDevice.createBindGroupLayout(
+                        gpu::BindGroupLayoutDescriptor{"GeodeImageBlitBGL", entries}),
+                    "GeodeImageBlitBGL createBindGroupLayout");
 
-  entries[0].binding = 0;
-  entries[0].visibility = wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment;
-  entries[0].buffer.type = wgpu::BufferBindingType::Uniform;
-  entries[0].buffer.minBindingSize = 0;
+  pipelineLayout_ = UnwrapOrAbort(adapterDevice.createPipelineLayout(gpu::PipelineLayoutDescriptor{
+                                      "GeodeImageBlitPL", {bindGroupLayout_}}),
+                                  "GeodeImageBlitPL createPipelineLayout");
 
-  entries[1].binding = 1;
-  entries[1].visibility = wgpu::ShaderStage::Fragment;
-  entries[1].sampler.type = wgpu::SamplerBindingType::Filtering;
-
-  entries[2].binding = 2;
-  entries[2].visibility = wgpu::ShaderStage::Fragment;
-  entries[2].texture.sampleType = wgpu::TextureSampleType::Float;
-  entries[2].texture.viewDimension = wgpu::TextureViewDimension::_2D;
-  entries[2].texture.multisampled = false;
-
-  entries[3].binding = 3;
-  entries[3].visibility = wgpu::ShaderStage::Fragment;
-  entries[3].texture.sampleType = wgpu::TextureSampleType::Float;
-  entries[3].texture.viewDimension = wgpu::TextureViewDimension::_2D;
-  entries[3].texture.multisampled = false;
-
-  entries[4].binding = 4;
-  entries[4].visibility = wgpu::ShaderStage::Fragment;
-  entries[4].texture.sampleType = wgpu::TextureSampleType::Float;
-  entries[4].texture.viewDimension = wgpu::TextureViewDimension::_2D;
-  entries[4].texture.multisampled = false;
-
-  entries[5].binding = 5;
-  entries[5].visibility = wgpu::ShaderStage::Fragment;
-  entries[5].texture.sampleType = wgpu::TextureSampleType::Float;
-  entries[5].texture.viewDimension = wgpu::TextureViewDimension::_2D;
-  entries[5].texture.multisampled = false;
-
-  entries[6].binding = 6;
-  entries[6].visibility = wgpu::ShaderStage::Fragment;
-  entries[6].sampler.type = wgpu::SamplerBindingType::Filtering;
-
-  wgpu::BindGroupLayoutDescriptor bglDesc = {};
-  bglDesc.label = wgpuLabel("GeodeImageBlitBGL");
-  bglDesc.entryCount = 7;
-  bglDesc.entries = entries;
-  bindGroupLayout_.reset(device.createBindGroupLayout(bglDesc));
-
-  // ----- Pipeline layout -----
-  wgpu::PipelineLayoutDescriptor plDesc = {};
-  plDesc.label = wgpuLabel("GeodeImageBlitPL");
-  plDesc.bindGroupLayoutCount = 1;
-  WGPUBindGroupLayout layouts[1] = {bindGroupLayout_.get()};
-  plDesc.bindGroupLayouts = layouts;
-  ScopedWgpuHandle<wgpu::PipelineLayout> pipelineLayout(device.createPipelineLayout(plDesc));
-
-  // ----- Shader module -----
-  ScopedWgpuHandle<wgpu::ShaderModule> shader(createImageBlitShader(device));
+  shaderModule_ = UnwrapOrAbort(createImageBlitShader(adapterDevice), "ImageBlit shader module");
 
   // ----- Fragment / blending -----
   // Same premultiplied-source-over as the Slug fill pipeline. The fragment
   // shader premultiplies the straight-alpha texture sample before emitting
   // the color so this blend equation is correct.
-  wgpu::BlendState blend = {};
-  blend.color.srcFactor = wgpu::BlendFactor::One;
-  blend.color.dstFactor = wgpu::BlendFactor::OneMinusSrcAlpha;
-  blend.color.operation = wgpu::BlendOperation::Add;
-  blend.alpha.srcFactor = wgpu::BlendFactor::One;
-  blend.alpha.dstFactor = wgpu::BlendFactor::OneMinusSrcAlpha;
-  blend.alpha.operation = wgpu::BlendOperation::Add;
-
-  wgpu::ColorTargetState colorTarget = {};
-  colorTarget.format = colorFormat_;
-  colorTarget.blend = &blend;
-  colorTarget.writeMask = wgpu::ColorWriteMask::All;
-
-  wgpu::FragmentState fragmentState = {};
-  fragmentState.module = shader.get();
-  fragmentState.entryPoint = wgpuLabel("fs_main");
-  fragmentState.targetCount = 1;
-  fragmentState.targets = &colorTarget;
+  const gpu::BlendState blend{
+      gpu::BlendComponent{gpu::BlendFactor::One, gpu::BlendFactor::OneMinusSrcAlpha,
+                          gpu::BlendOperation::Add},
+      gpu::BlendComponent{gpu::BlendFactor::One, gpu::BlendFactor::OneMinusSrcAlpha,
+                          gpu::BlendOperation::Add}};
 
   // ----- Render pipeline -----
   // No vertex buffers - the shader generates corners from vertex_index.
-  wgpu::RenderPipelineDescriptor rpDesc = {};
-  rpDesc.label = wgpuLabel("GeodeImageBlit");
-  rpDesc.layout = pipelineLayout.get();
-  rpDesc.vertex.module = shader.get();
-  rpDesc.vertex.entryPoint = wgpuLabel("vs_main");
-  rpDesc.vertex.bufferCount = 0;
-  rpDesc.vertex.buffers = nullptr;
-
-  rpDesc.primitive.topology = wgpu::PrimitiveTopology::TriangleList;
-  rpDesc.primitive.cullMode = wgpu::CullMode::None;
-
-  rpDesc.fragment = &fragmentState;
-  rpDesc.multisample.count = 1;
-  rpDesc.multisample.mask = 0xFFFFFFFF;
-
-  pipeline_.reset(device.createRenderPipeline(rpDesc));
+  pipeline_ = UnwrapOrAbort(
+      adapterDevice.createRenderPipeline(gpu::RenderPipelineDescriptor{
+          "GeodeImageBlit", pipelineLayout_, gpu::VertexState{shaderModule_, "vs_main", {}},
+          gpu::FragmentState{
+              shaderModule_, "fs_main", {gpu::ColorTargetState{colorFormat_, blend}}},
+          gpu::PrimitiveTopology::TriangleList, gpu::CullMode::None}),
+      "GeodeImageBlit createRenderPipeline");
 
   // ----- Samplers -----
   // Linear (bilinear) sampler - the default for SVG's "smooth" image
-  // rendering.
-  //
-  // `{wgpu::Default}` runs `SamplerDescriptor::setDefault()` (clamp-to-edge,
-  // nearest filtering, lodMaxClamp=32) and critically `maxAnisotropy = 1`,
-  // which wgpu-native validates as non-zero. Plain `= {}` would leave
-  // `maxAnisotropy = 0` and fail createSampler validation on native.
-  wgpu::SamplerDescriptor linearDesc{wgpu::Default};
-  linearDesc.label = wgpuLabel("GeodeImageBlitLinear");
-  linearDesc.magFilter = wgpu::FilterMode::Linear;
-  linearDesc.minFilter = wgpu::FilterMode::Linear;
-  linearDesc.maxAnisotropy = 1;
-  linearSampler_.reset(device.createSampler(linearDesc));
+  // rendering. Clamp-to-edge addressing matches the previous wgpu defaults.
+  linearSampler_ =
+      UnwrapOrAbort(adapterDevice.createSampler(gpu::SamplerDescriptor{
+                        "GeodeImageBlitLinear", gpu::FilterMode::Linear, gpu::FilterMode::Linear,
+                        gpu::AddressMode::ClampToEdge, gpu::AddressMode::ClampToEdge}),
+                    "GeodeImageBlitLinear createSampler");
 
   // Nearest sampler - for `image-rendering: pixelated`.
-  wgpu::SamplerDescriptor nearestDesc{wgpu::Default};
-  nearestDesc.label = wgpuLabel("GeodeImageBlitNearest");
-  nearestDesc.maxAnisotropy = 1;
-  nearestSampler_.reset(device.createSampler(nearestDesc));
+  nearestSampler_ =
+      UnwrapOrAbort(adapterDevice.createSampler(gpu::SamplerDescriptor{
+                        "GeodeImageBlitNearest", gpu::FilterMode::Nearest, gpu::FilterMode::Nearest,
+                        gpu::AddressMode::ClampToEdge, gpu::AddressMode::ClampToEdge}),
+                    "GeodeImageBlitNearest createSampler");
 
-  wgpu::SamplerDescriptor clipMaskDesc{wgpu::Default};
-  clipMaskDesc.label = wgpuLabel("GeodeImageBlitClipMask");
-  clipMaskDesc.addressModeU = wgpu::AddressMode::ClampToEdge;
-  clipMaskDesc.addressModeV = wgpu::AddressMode::ClampToEdge;
-  clipMaskDesc.magFilter = wgpu::FilterMode::Linear;
-  clipMaskDesc.minFilter = wgpu::FilterMode::Linear;
-  clipMaskDesc.maxAnisotropy = 1;
-  clipMaskSampler_.reset(device.createSampler(clipMaskDesc));
+  clipMaskSampler_ =
+      UnwrapOrAbort(adapterDevice.createSampler(gpu::SamplerDescriptor{
+                        "GeodeImageBlitClipMask", gpu::FilterMode::Linear, gpu::FilterMode::Linear,
+                        gpu::AddressMode::ClampToEdge, gpu::AddressMode::ClampToEdge}),
+                    "GeodeImageBlitClipMask createSampler");
+
+  borrowedPipeline_ = adapterDevice.wgpuRenderPipelineOf(pipeline_);
+  borrowedBindGroupLayout_ = adapterDevice.wgpuBindGroupLayoutOf(bindGroupLayout_);
+  borrowedLinearSampler_ = adapterDevice.wgpuSamplerOf(linearSampler_);
+  borrowedNearestSampler_ = adapterDevice.wgpuSamplerOf(nearestSampler_);
+  borrowedClipMaskSampler_ = adapterDevice.wgpuSamplerOf(clipMaskSampler_);
 }
 
 }  // namespace donner::geode

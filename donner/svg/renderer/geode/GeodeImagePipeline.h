@@ -4,19 +4,26 @@
 
 #include <webgpu/webgpu.hpp>
 
-#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+#include "donner/gpu/Device.h"
 
 namespace donner::geode {
 
+class GeodeWgpuAdapterDevice;
+
 /**
- * Caches a compiled `wgpu::RenderPipeline` for the image-blit shader plus its
- * bind group layout and two reusable samplers (linear and nearest).
+ * Caches a compiled render pipeline for the image-blit shader plus its bind group layout and
+ * two reusable samplers (linear and nearest).
  *
  * One `GeodeImagePipeline` is sufficient per `(device, render-target-format)`
  * pair. It is used both by `drawImage` (SVG `<image>` elements) and, in
  * Phase 2H, by the pattern renderer: the pattern tile is rendered to an
  * offscreen texture and then sampled with this same pipeline as a
  * repeating fill.
+ *
+ * The pipeline and samplers are created through the \c donner::gpu runtime (design 0053
+ * packet 8): the class holds the RAII `donner::gpu` handles, and - TEMPORARY for 8a while
+ * GeoEncoder / GeodeTextureEncoder still record through wgpu - caches the borrowed wgpu objects
+ * resolved through the adapter's escape hatches (deleted in packet 8b).
  *
  * Bind group layout (matches `shaders/image_blit.wgsl`):
  * - binding 0: uniform buffer (mvp, destRect, srcRect, targetSize, opacity, flags)
@@ -35,11 +42,11 @@ public:
   /**
    * Create an image-blit pipeline for the given device and target format.
    *
-   * @param device The WebGPU device.
+   * @param adapterDevice The Donner GPU device (wgpu adapter) owned by the GeodeDevice.
    * @param colorFormat The pixel format of the render target this pipeline
    *   will draw into. Must match the target texture's format at draw time.
    */
-  GeodeImagePipeline(const wgpu::Device& device, wgpu::TextureFormat colorFormat);
+  GeodeImagePipeline(GeodeWgpuAdapterDevice& adapterDevice, gpu::TextureFormat colorFormat);
 
   ~GeodeImagePipeline() = default;
   GeodeImagePipeline(const GeodeImagePipeline&) = delete;
@@ -49,34 +56,45 @@ public:
   /// Move assignment operator.
   GeodeImagePipeline& operator=(GeodeImagePipeline&&) noexcept = default;
 
-  /// The compiled render pipeline.
-  const wgpu::RenderPipeline& pipeline() const { return pipeline_.get(); }
+  /// The compiled render pipeline (TEMPORARY 8a wgpu alias for the still-wgpu encoders).
+  const wgpu::RenderPipeline& pipeline() const { return borrowedPipeline_; }
 
-  /// Bind group layout used by the pipeline.
-  const wgpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_.get(); }
+  /// Bind group layout used by the pipeline (TEMPORARY 8a wgpu alias).
+  const wgpu::BindGroupLayout& bindGroupLayout() const { return borrowedBindGroupLayout_; }
 
   /// Bilinear (mag/min filter = Linear) sampler, clamped to edge.
   /// Used for the default `image-rendering` and the SVG spec's
-  /// "smooth" image sampling.
-  const wgpu::Sampler& linearSampler() const { return linearSampler_.get(); }
+  /// "smooth" image sampling. (TEMPORARY 8a wgpu alias.)
+  const wgpu::Sampler& linearSampler() const { return borrowedLinearSampler_; }
 
   /// Nearest-neighbor sampler, clamped to edge. Used when
-  /// `ImageParams::imageRenderingPixelated` is true.
-  const wgpu::Sampler& nearestSampler() const { return nearestSampler_.get(); }
+  /// `ImageParams::imageRenderingPixelated` is true. (TEMPORARY 8a wgpu alias.)
+  const wgpu::Sampler& nearestSampler() const { return borrowedNearestSampler_; }
 
   /// Linear clamp-to-edge sampler used for Phase 3b clip-mask textures.
-  const wgpu::Sampler& clipMaskSampler() const { return clipMaskSampler_.get(); }
+  /// (TEMPORARY 8a wgpu alias.)
+  const wgpu::Sampler& clipMaskSampler() const { return borrowedClipMaskSampler_; }
 
   /// Color format the pipeline was built for.
-  wgpu::TextureFormat colorFormat() const { return colorFormat_; }
+  gpu::TextureFormat colorFormat() const { return colorFormat_; }
 
 private:
-  wgpu::TextureFormat colorFormat_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> bindGroupLayout_;
-  ScopedWgpuHandle<wgpu::RenderPipeline> pipeline_;
-  ScopedWgpuHandle<wgpu::Sampler> linearSampler_;
-  ScopedWgpuHandle<wgpu::Sampler> nearestSampler_;
-  ScopedWgpuHandle<wgpu::Sampler> clipMaskSampler_;
+  gpu::TextureFormat colorFormat_ = gpu::TextureFormat::RGBA8Unorm;
+  gpu::ShaderModule shaderModule_;
+  gpu::BindGroupLayout bindGroupLayout_;
+  gpu::PipelineLayout pipelineLayout_;
+  gpu::RenderPipeline pipeline_;
+  gpu::Sampler linearSampler_;
+  gpu::Sampler nearestSampler_;
+  gpu::Sampler clipMaskSampler_;
+
+  // TEMPORARY 8a: borrowed wgpu aliases resolved through the adapter's escape hatches so the
+  // still-wgpu encoders can bind them. Deleted in packet 8b.
+  wgpu::RenderPipeline borrowedPipeline_;
+  wgpu::BindGroupLayout borrowedBindGroupLayout_;
+  wgpu::Sampler borrowedLinearSampler_;
+  wgpu::Sampler borrowedNearestSampler_;
+  wgpu::Sampler borrowedClipMaskSampler_;
 };
 
 }  // namespace donner::geode

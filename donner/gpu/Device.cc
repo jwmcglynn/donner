@@ -573,6 +573,13 @@ Result<BindGroup> Device::createBindGroup(const BindGroupDescriptor& descriptor)
           return Err(GpuErrorType::InvalidDescriptor,
                      std::format("BindGroupEntry binding {}: sizeBytes is 0", match->binding));
         }
+        if (bufferBinding->offsetBytes % kBindingOffsetAlignment != 0) {
+          return Err(
+              GpuErrorType::InvalidDescriptor,
+              std::format("BindGroupEntry binding {}: offsetBytes {} is not a multiple of "
+                          "the {}-byte binding offset alignment",
+                          match->binding, bufferBinding->offsetBytes, kBindingOffsetAlignment));
+        }
         const std::optional<uint64_t> bindingEnd =
             CheckedAdd(bufferBinding->offsetBytes, bufferBinding->sizeBytes);
         if (!bindingEnd || *bindingEnd > bufferRecord.result()->descriptor.byteSize) {
@@ -1046,6 +1053,19 @@ Result<std::vector<Device::SubmissionUse>> Device::validateSubmissionResources(
               return std::move(bufferRecord).error();
             }
             return OkStatus();
+          } else if constexpr (std::is_same_v<CommandType, CopyTextureToTextureCommand>) {
+            auto sourceRecord = check(textures_, typedCommand.textureSrcId, ResourceKind::Texture,
+                                      TextureTag::kName, "recorded copyTextureToTexture");
+            if (sourceRecord.hasError()) {
+              return std::move(sourceRecord).error();
+            }
+            auto destinationRecord =
+                check(textures_, typedCommand.textureDstId, ResourceKind::Texture,
+                      TextureTag::kName, "recorded copyTextureToTexture");
+            if (destinationRecord.hasError()) {
+              return std::move(destinationRecord).error();
+            }
+            return OkStatus();
           } else {
             return OkStatus();
           }
@@ -1088,6 +1108,26 @@ Status Device::validateBufferHandleForBackend(const Buffer& buffer) const {
   auto record = resolve(buffers_, buffer, BufferTag::kName);
   if (record.hasError()) {
     return std::move(record).error();
+  }
+  return OkStatus();
+}
+
+Status Device::validateTextureHandleForBackend(const Texture& texture) const {
+  auto record = resolve(textures_, texture, TextureTag::kName);
+  if (record.hasError()) {
+    return std::move(record).error();
+  }
+  return OkStatus();
+}
+
+Status Device::validateTextureViewHandleForBackend(const TextureView& textureView) const {
+  auto record = resolve(textureViews_, textureView, TextureViewTag::kName);
+  if (record.hasError()) {
+    return std::move(record).error();
+  }
+  auto viewedTexture = resolveViewedTexture(*record.result());
+  if (viewedTexture.hasError()) {
+    return std::move(viewedTexture).error();
   }
   return OkStatus();
 }

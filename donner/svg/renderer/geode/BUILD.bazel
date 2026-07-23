@@ -146,6 +146,11 @@ donner_cc_library(
         "GeodeFilterEngine.cc",
         "GeodeImagePipeline.cc",
         "GeodePipeline.cc",
+        # TEMPORARY design-0053 Phase 1 adapter (see GeodeWgpuAdapterDevice.h
+        # for the removal gates). Folded into geode_device like the pipelines
+        # so GeodeDevice can own the adapter alongside the shared pipelines
+        # it constructs (packet 8a+) without a circular dependency.
+        "GeodeWgpuAdapterDevice.cc",
     ],
     hdrs = [
         "GeodeCallbackState.h",
@@ -154,6 +159,7 @@ donner_cc_library(
         "GeodeFilterEngine.h",
         "GeodeImagePipeline.h",
         "GeodePipeline.h",
+        "GeodeWgpuAdapterDevice.h",
     ],
     # wgpu-native's prebuilt libwgpu_native.dylib ships with its Metal
     # backend already linked, so no per-target framework linkopts are
@@ -184,9 +190,31 @@ donner_cc_library(
         ":geode_shaders",
         ":geode_wgpu_util",
         "//donner/base",
+        "//donner/gpu",
         "//donner/svg/components/filter:components",
         "//third_party/webgpu-cpp:webgpu_cpp",
     ],
+)
+
+donner_cc_test(
+    name = "geode_wgpu_adapter_device_tests_impl",
+    srcs = ["tests/GeodeWgpuAdapterDevice_tests.cc"],
+    target_compatible_with = _GEODE_ONLY,
+    deps = [
+        ":geode_device",
+        "//donner/base:gtest_timeout_main",
+        "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
+    ],
+)
+
+donner_multi_transitioned_test(
+    name = "geode_wgpu_adapter_device_tests",
+    # See geode_device_tests for the rationale on the short timeout.
+    timeout = "short",
+    testonly = 1,
+    dep = ":geode_wgpu_adapter_device_tests_impl",
+    renderer_backend = "geode",
 )
 
 donner_cc_test(
@@ -480,6 +508,8 @@ donner_cc_library(
         ":slug_fill_wgsl",
         ":slug_gradient_wgsl",
         ":slug_mask_wgsl",
+        "//donner/base",
+        "//donner/gpu",
         "//third_party/webgpu-cpp:webgpu_cpp",
     ],
 )
