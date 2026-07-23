@@ -297,7 +297,9 @@ gpu::Result<gpu::Texture> GeodeWgpuAdapterDevice::importExternalTexture(wgpu::Te
 }
 
 wgpu::Texture GeodeWgpuAdapterDevice::wgpuTextureOf(const gpu::Texture& texture) const {
-  if (!texture.isValid() || texture.deviceId() != deviceId() ||
+  // Full base-class validation (null, device identity, AND generation), so a stale or forged
+  // handle cannot bridge the slot's new occupant to raw wgpu.
+  if (validateTextureHandleForBackend(texture).hasError() ||
       texture.slotIndex() >= slotTextures_.size()) {
     return wgpu::Texture();
   }
@@ -306,7 +308,10 @@ wgpu::Texture GeodeWgpuAdapterDevice::wgpuTextureOf(const gpu::Texture& texture)
 
 wgpu::TextureView GeodeWgpuAdapterDevice::wgpuTextureViewOf(
     const gpu::TextureView& textureView) const {
-  if (!textureView.isValid() || textureView.deviceId() != deviceId()) {
+  // Full base-class validation including viewed-texture re-resolution, so a view whose Donner
+  // texture was destroyed (or slot-recycled) fails closed here exactly like it does on every
+  // normal Device path instead of bridging a stale view to raw wgpu.
+  if (validateTextureViewHandleForBackend(textureView).hasError()) {
     return wgpu::TextureView();
   }
   return GetHandle(slotTextureViews_, textureView.slotIndex());
