@@ -586,7 +586,7 @@
         "writeBuffer",
         "writeTexture"
       ],
-      "sha256": "f793ac2b56b74daa32297aa20fa88c0b4eae6b5d8cf0cdc629b75b0cfb5e984c",
+      "sha256": "19a6f707fdfec0133abf771a7cb6b6dcb43023bd02bb713d55c3cd385d11d1f7",
       "wgpuCFunctions": [
         "wgpuAdapterGetInfo",
         "wgpuAdapterInfoFreeMembers",

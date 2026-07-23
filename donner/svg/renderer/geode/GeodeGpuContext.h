@@ -9,6 +9,7 @@
 #include <memory>
 #include <vector>
 
+#include "donner/gpu/GpuResult.h"
 #include "donner/gpu/Handles.h"
 
 namespace donner::gpu {
@@ -19,6 +20,36 @@ namespace donner::geode {
 
 class GeodeDevice;
 class GeodeMaskPipeline;
+
+/**
+ * The shared identity resources every \c GeoEncoder bind group references: the 1x1 dummy
+ * pattern / clip-mask textures (plus views and samplers) bound into inactive pattern and
+ * clip-mask slots, and the one-element identity instance-transform storage buffer bound at
+ * binding 7 of non-instanced Slug fills.
+ *
+ * Created once per \c gpu::Device via \ref Create. Production calls it from
+ * `GeodeDevice::initSharedResources` against the device's adapter; the GPU-less
+ * RecordingDevice test harness calls it directly so captured command streams carry the exact
+ * production labels and payloads. Defined in GeodeDevice.cc.
+ */
+struct GeodeSharedGpuResources {
+  gpu::Texture dummyPatternTexture;           //!< 1x1 opaque-black RGBA8 pattern dummy.
+  gpu::TextureView dummyPatternTextureView;   //!< View over \ref dummyPatternTexture.
+  gpu::Sampler dummyPatternSampler;           //!< Linear-Repeat pattern sampler.
+  gpu::Texture dummyClipMaskTexture;          //!< 1x1 full-coverage RGBA8 clip-mask dummy.
+  gpu::TextureView dummyClipMaskTextureView;  //!< View over \ref dummyClipMaskTexture.
+  gpu::Sampler dummyClipMaskSampler;          //!< Linear-ClampToEdge clip-mask sampler.
+  /// 32-byte identity instance-transform buffer (two vec4f rows: `{(1,0,0,0), (0,1,0,0)}`).
+  gpu::Buffer identityInstanceTransformBuffer;
+
+  /**
+   * Creates the shared resources on \p gpuDevice, including the 1x1 texture uploads and the
+   * identity-buffer write. Returns the first creation/write error unchanged.
+   *
+   * @param gpuDevice The device the resources are created on; must outlive the result.
+   */
+  static gpu::Result<GeodeSharedGpuResources> Create(gpu::Device& gpuDevice);
+};
 
 /**
  * Everything \c GeoEncoder and \c GeodeTextureEncoder need to record a frame through the

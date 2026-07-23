@@ -125,26 +125,6 @@ wgpu::Instance CreateHeadlessInstance(wgpu::BackendType backendType) {
 #endif
 }
 
-/// Unwraps a donner::gpu creation result during device construction, halting on failure: the
-/// shared dummies are fixed-shape 1x1 resources against a device that just initialized, so a
-/// creation error here is a lost device or a build defect, not a recoverable runtime state.
-template <typename T>
-T UnwrapOrAbortDeviceInit(gpu::Result<T>&& result, const char* what) {
-  if (result.hasError()) {
-    std::fprintf(stderr, "[Geode] %s failed: %s\n", what, result.error().message.c_str());
-    UTILS_RELEASE_ASSERT_MSG(false, "Geode shared-resource construction failed");
-  }
-  return std::move(result).result();
-}
-
-/// Status overload of \ref UnwrapOrAbortDeviceInit for queue writes.
-void UnwrapOrAbortDeviceInit(gpu::Status&& status, const char* what) {
-  if (status.hasError()) {
-    std::fprintf(stderr, "[Geode] %s failed: %s\n", what, status.error().message.c_str());
-    UTILS_RELEASE_ASSERT_MSG(false, "Geode shared-resource construction failed");
-  }
-}
-
 void WaitForSubmittedWork(const wgpu::Device& device, const wgpu::Queue& queue) {
   if (!device || !queue) {
     return;
@@ -182,22 +162,10 @@ struct GeodeDevice::Impl {
 
   // Shared dummies used by every GeoEncoder's bind groups - see the comment block on
   // `GeodeDevice::dummyPatternTextureView()`. donner::gpu handles created through the adapter
-  // once at device-construction time, before counters are installed, so they never count
-  // against per-frame `textureCreates` ceilings. Declared BELOW the adapter so they release
-  // while the adapter is alive.
-  gpu::Texture dummyPatternTexture;
-  gpu::TextureView dummyPatternTextureView;
-  gpu::Sampler dummyPatternSampler;
-  gpu::Texture dummyClipMaskTexture;
-  gpu::TextureView dummyClipMaskTextureView;
-  gpu::Sampler dummyClipMaskSampler;
-
-  // M6 Bullet 2: 1-element instance-transform buffer bound by every
-  // non-instanced solid fill. Uploaded once at device-construction time,
-  // never modified. Layout matches the WGSL `InstanceTransform`
-  // struct: two vec4f rows carrying the identity affine
-  // `{(1,0,0,0), (0,1,0,0)}`.
-  gpu::Buffer identityInstanceTransformBuffer;
+  // (via `GeodeSharedGpuResources::Create`) once at device-construction time, before counters
+  // are installed, so they never count against per-frame `textureCreates` ceilings. Declared
+  // BELOW the adapter so they release while the adapter is alive.
+  GeodeSharedGpuResources sharedResources;
 
   /// The donner::gpu recording context handed to GeoEncoder / GeodeTextureEncoder. Wired in
   /// `initSharedPipelines` after the adapter and dummies exist.
@@ -452,19 +420,19 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
 }
 
 const gpu::TextureView& GeodeDevice::dummyPatternTextureView() const {
-  return impl_->dummyPatternTextureView;
+  return impl_->sharedResources.dummyPatternTextureView;
 }
 const gpu::Sampler& GeodeDevice::dummyPatternSampler() const {
-  return impl_->dummyPatternSampler;
+  return impl_->sharedResources.dummyPatternSampler;
 }
 const gpu::TextureView& GeodeDevice::dummyClipMaskTextureView() const {
-  return impl_->dummyClipMaskTextureView;
+  return impl_->sharedResources.dummyClipMaskTextureView;
 }
 const gpu::Sampler& GeodeDevice::dummyClipMaskSampler() const {
-  return impl_->dummyClipMaskSampler;
+  return impl_->sharedResources.dummyClipMaskSampler;
 }
 const gpu::Buffer& GeodeDevice::identityInstanceTransformBuffer() const {
-  return impl_->identityInstanceTransformBuffer;
+  return impl_->sharedResources.identityInstanceTransformBuffer;
 }
 
 GeodePipeline& GeodeDevice::pipeline() const {
@@ -552,83 +520,125 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateFromExternal(const GeodeEmbedCon
   return result;
 }
 
-void GeodeDevice::initSharedResources() {
-  // The design-0053 adapter is created FIRST: the shared dummies below and the pipelines in
-  // `initSharedPipelines` are all donner::gpu resources created through it.
-  impl_->adapterDevice = std::make_unique<GeodeWgpuAdapterDevice>(*this);
-  GeodeWgpuAdapterDevice& adapter = *impl_->adapterDevice;
+gpu::Result<GeodeSharedGpuResources> GeodeSharedGpuResources::Create(gpu::Device& gpuDevice) {
+  GeodeSharedGpuResources resources;
 
   // Shared dummy textures / samplers used by every GeoEncoder. These are 1x1
   // identity fills for the pattern and clip-mask bind slots when the current
-  // draw doesn't actually use them. Created before any setCounters() call so
-  // the allocations never count against per-frame ceilings.
+  // draw doesn't actually use them.
   //
   // The 1x1 uploads pass bytesPerRow=256 with 4 bytes of pixel data: the runtime requires
   // 256-aligned rows, and validates that the data covers `offset + 0 * bytesPerRow +
   // rowBytes(4)` bytes, so the short final row is accepted.
   {
-    impl_->dummyPatternTexture = UnwrapOrAbortDeviceInit(
-        adapter.createTexture(gpu::TextureDescriptor{
-            "GeodeDeviceDummyPattern", gpu::Extent2d{1, 1}, gpu::TextureFormat::RGBA8Unorm,
-            gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst}),
-        "GeodeDeviceDummyPattern createTexture");
+    gpu::Result<gpu::Texture> texture = gpuDevice.createTexture(gpu::TextureDescriptor{
+        "GeodeDeviceDummyPattern", gpu::Extent2d{1, 1}, gpu::TextureFormat::RGBA8Unorm,
+        gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
+    if (texture.hasError()) {
+      return std::move(texture).error();
+    }
+    resources.dummyPatternTexture = std::move(texture).result();
 
     const uint8_t pixel[4] = {0, 0, 0, 255};
-    UnwrapOrAbortDeviceInit(
-        adapter.writeTexture(impl_->dummyPatternTexture, std::span<const uint8_t>(pixel, 4),
-                             gpu::TexelCopyBufferLayout{0, 256, 1}, gpu::Extent2d{1, 1}),
-        "GeodeDeviceDummyPattern writeTexture");
-    impl_->dummyPatternTextureView = UnwrapOrAbortDeviceInit(
-        adapter.createTextureView(impl_->dummyPatternTexture,
-                                  gpu::TextureViewDescriptor{"GeodeDeviceDummyPatternView"}),
-        "GeodeDeviceDummyPattern createTextureView");
+    gpu::Status writeStatus =
+        gpuDevice.writeTexture(resources.dummyPatternTexture, std::span<const uint8_t>(pixel, 4),
+                               gpu::TexelCopyBufferLayout{0, 256, 1}, gpu::Extent2d{1, 1});
+    if (writeStatus.hasError()) {
+      return std::move(writeStatus).error();
+    }
 
-    impl_->dummyPatternSampler = UnwrapOrAbortDeviceInit(
-        adapter.createSampler(gpu::SamplerDescriptor{
-            "GeodeDeviceDummyPatternSampler", gpu::FilterMode::Linear, gpu::FilterMode::Linear,
-            gpu::AddressMode::Repeat, gpu::AddressMode::Repeat}),
-        "GeodeDeviceDummyPatternSampler createSampler");
+    gpu::Result<gpu::TextureView> view = gpuDevice.createTextureView(
+        resources.dummyPatternTexture, gpu::TextureViewDescriptor{"GeodeDeviceDummyPatternView"});
+    if (view.hasError()) {
+      return std::move(view).error();
+    }
+    resources.dummyPatternTextureView = std::move(view).result();
+
+    gpu::Result<gpu::Sampler> sampler = gpuDevice.createSampler(gpu::SamplerDescriptor{
+        "GeodeDeviceDummyPatternSampler", gpu::FilterMode::Linear, gpu::FilterMode::Linear,
+        gpu::AddressMode::Repeat, gpu::AddressMode::Repeat});
+    if (sampler.hasError()) {
+      return std::move(sampler).error();
+    }
+    resources.dummyPatternSampler = std::move(sampler).result();
   }
 
   {
-    impl_->dummyClipMaskTexture = UnwrapOrAbortDeviceInit(
-        adapter.createTexture(gpu::TextureDescriptor{
-            "GeodeDeviceDummyClipMask", gpu::Extent2d{1, 1}, gpu::TextureFormat::RGBA8Unorm,
-            gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst}),
-        "GeodeDeviceDummyClipMask createTexture");
+    gpu::Result<gpu::Texture> texture = gpuDevice.createTexture(gpu::TextureDescriptor{
+        "GeodeDeviceDummyClipMask", gpu::Extent2d{1, 1}, gpu::TextureFormat::RGBA8Unorm,
+        gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
+    if (texture.hasError()) {
+      return std::move(texture).error();
+    }
+    resources.dummyClipMaskTexture = std::move(texture).result();
 
     const uint8_t mpixel[4] = {0xFF, 0xFF, 0xFF, 0xFF};
-    UnwrapOrAbortDeviceInit(
-        adapter.writeTexture(impl_->dummyClipMaskTexture, std::span<const uint8_t>(mpixel, 4),
-                             gpu::TexelCopyBufferLayout{0, 256, 1}, gpu::Extent2d{1, 1}),
-        "GeodeDeviceDummyClipMask writeTexture");
-    impl_->dummyClipMaskTextureView = UnwrapOrAbortDeviceInit(
-        adapter.createTextureView(impl_->dummyClipMaskTexture,
-                                  gpu::TextureViewDescriptor{"GeodeDeviceDummyClipMaskView"}),
-        "GeodeDeviceDummyClipMask createTextureView");
+    gpu::Status writeStatus =
+        gpuDevice.writeTexture(resources.dummyClipMaskTexture, std::span<const uint8_t>(mpixel, 4),
+                               gpu::TexelCopyBufferLayout{0, 256, 1}, gpu::Extent2d{1, 1});
+    if (writeStatus.hasError()) {
+      return std::move(writeStatus).error();
+    }
 
-    impl_->dummyClipMaskSampler = UnwrapOrAbortDeviceInit(
-        adapter.createSampler(gpu::SamplerDescriptor{
-            "GeodeDeviceDummyClipMaskSampler", gpu::FilterMode::Linear, gpu::FilterMode::Linear,
-            gpu::AddressMode::ClampToEdge, gpu::AddressMode::ClampToEdge}),
-        "GeodeDeviceDummyClipMaskSampler createSampler");
+    gpu::Result<gpu::TextureView> view = gpuDevice.createTextureView(
+        resources.dummyClipMaskTexture, gpu::TextureViewDescriptor{"GeodeDeviceDummyClipMaskView"});
+    if (view.hasError()) {
+      return std::move(view).error();
+    }
+    resources.dummyClipMaskTextureView = std::move(view).result();
+
+    gpu::Result<gpu::Sampler> sampler = gpuDevice.createSampler(gpu::SamplerDescriptor{
+        "GeodeDeviceDummyClipMaskSampler", gpu::FilterMode::Linear, gpu::FilterMode::Linear,
+        gpu::AddressMode::ClampToEdge, gpu::AddressMode::ClampToEdge});
+    if (sampler.hasError()) {
+      return std::move(sampler).error();
+    }
+    resources.dummyClipMaskSampler = std::move(sampler).result();
   }
 
   {
+    // M6 Bullet 2: 1-element instance-transform buffer bound by every non-instanced solid
+    // fill. Uploaded once, never modified. Layout matches the WGSL `InstanceTransform`
+    // struct: two vec4f rows carrying the identity affine `{(1,0,0,0), (0,1,0,0)}`.
     const float identity[8] = {
         1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f,
     };
-    impl_->identityInstanceTransformBuffer =
-        UnwrapOrAbortDeviceInit(adapter.createBuffer(gpu::BufferDescriptor{
-                                    "GeodeDeviceIdentityInstanceTransform", sizeof(identity),
-                                    gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst}),
-                                "GeodeDeviceIdentityInstanceTransform createBuffer");
-    UnwrapOrAbortDeviceInit(
-        adapter.writeBuffer(
-            impl_->identityInstanceTransformBuffer, 0,
-            std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(identity), sizeof(identity))),
-        "GeodeDeviceIdentityInstanceTransform writeBuffer");
+    gpu::Result<gpu::Buffer> buffer = gpuDevice.createBuffer(
+        gpu::BufferDescriptor{"GeodeDeviceIdentityInstanceTransform", sizeof(identity),
+                              gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst});
+    if (buffer.hasError()) {
+      return std::move(buffer).error();
+    }
+    resources.identityInstanceTransformBuffer = std::move(buffer).result();
+
+    gpu::Status writeStatus = gpuDevice.writeBuffer(
+        resources.identityInstanceTransformBuffer, 0,
+        std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(identity), sizeof(identity)));
+    if (writeStatus.hasError()) {
+      return std::move(writeStatus).error();
+    }
   }
+
+  return resources;
+}
+
+void GeodeDevice::initSharedResources() {
+  // The design-0053 adapter is created FIRST: the shared dummies below and the pipelines in
+  // `initSharedPipelines` are all donner::gpu resources created through it.
+  impl_->adapterDevice = std::make_unique<GeodeWgpuAdapterDevice>(*this);
+
+  // Created before any setCounters() call so the allocations never count against per-frame
+  // ceilings. Aborts on failure: the shared dummies are fixed-shape 1x1 resources against a
+  // device that just initialized, so a creation error here is a lost device or a build defect,
+  // not a recoverable runtime state.
+  gpu::Result<GeodeSharedGpuResources> resources =
+      GeodeSharedGpuResources::Create(*impl_->adapterDevice);
+  if (resources.hasError()) {
+    std::fprintf(stderr, "[Geode] shared GPU resource creation failed: %s\n",
+                 resources.error().message.c_str());
+    UTILS_RELEASE_ASSERT_MSG(false, "Geode shared-resource construction failed");
+  }
+  impl_->sharedResources = std::move(resources).result();
 }
 
 void GeodeDevice::initSharedPipelines() {
@@ -646,11 +656,12 @@ void GeodeDevice::initSharedPipelines() {
   // Wire the donner::gpu recording context Geode's encoders draw through.
   impl_->gpuContext.gpuDevice = impl_->adapterDevice.get();
   impl_->gpuContext.geodeDevice = this;
-  impl_->gpuContext.dummyPatternTextureView = &impl_->dummyPatternTextureView;
-  impl_->gpuContext.dummyPatternSampler = &impl_->dummyPatternSampler;
-  impl_->gpuContext.dummyClipMaskTextureView = &impl_->dummyClipMaskTextureView;
-  impl_->gpuContext.dummyClipMaskSampler = &impl_->dummyClipMaskSampler;
-  impl_->gpuContext.identityInstanceTransformBuffer = &impl_->identityInstanceTransformBuffer;
+  impl_->gpuContext.dummyPatternTextureView = &impl_->sharedResources.dummyPatternTextureView;
+  impl_->gpuContext.dummyPatternSampler = &impl_->sharedResources.dummyPatternSampler;
+  impl_->gpuContext.dummyClipMaskTextureView = &impl_->sharedResources.dummyClipMaskTextureView;
+  impl_->gpuContext.dummyClipMaskSampler = &impl_->sharedResources.dummyClipMaskSampler;
+  impl_->gpuContext.identityInstanceTransformBuffer =
+      &impl_->sharedResources.identityInstanceTransformBuffer;
   impl_->gpuContext.residentBytesGauge = residentBytesGauge();
 }
 

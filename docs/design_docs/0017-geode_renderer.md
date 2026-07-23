@@ -13,7 +13,7 @@ structural divergences). Each backend now gates against the shared resvg referen
 directly (`GeodeGolden`/`TinyGolden`); geode-vs-tiny parity comparison was retired.
 **Author:** Jeff McGlynn
 **Created:** 2026-04-07
-**Last updated:** 2026-05-29
+**Last updated:** 2026-07-22
 
 ## Implementation status
 
@@ -63,13 +63,14 @@ directly (`GeodeGolden`/`TinyGolden`); geode-vs-tiny parity comparison was retir
     (`GeodeTextureEncoder`). Supports bilinear and nearest sampling
     (`image-rendering: pixelated`), `ImageParams::opacity` combined with
     `paint.opacity`, and honors the current transform stack. Texture
-    uploads go through `wgpu::Queue::WriteTexture` with `bytesPerRow`
-    normalized to 256-byte alignment on the slow path (the fast path
-    uploads directly when `width*4` is already aligned). `GeoEncoder`
+    uploads go through `gpu::Device::writeTexture` (the `donner::gpu`
+    runtime) with `bytesPerRow` normalized to 256-byte alignment on the
+    slow path (the fast path uploads directly when `width*4` is already
+    aligned). `GeoEncoder`
     now `SetPipeline`s the Slug fill pipeline on every `fillPath` so
     it's safe to interleave fills and image draws within one pass.
     **Reusable for Phase 2H patterns:** `GeodeTextureEncoder::drawTexturedQuad`
-    takes a pre-uploaded `wgpu::Texture` plus explicit `destRect`/`srcRect`
+    takes a pre-uploaded `gpu::Texture` plus explicit `destRect`/`srcRect`
     in target-pixel / UV space. Phase 2H will render the pattern tile to
     an offscreen texture (via `GeoSurface`), then call `drawTexturedQuad`
     with the repeating `srcRect` to stamp the tile across the fill region.
@@ -111,6 +112,18 @@ directly (`GeodeGolden`/`TinyGolden`); geode-vs-tiny parity comparison was retir
   deleted. Intel Arc validation still needs to cover the driver independently:
   Mesa ANV 25.2.8 exhibited non-deterministic hangs even for empty render
   passes, outside shader execution.
+- **Design 0053 GPU-runtime migration**: partially complete. Pipeline
+  construction (`GeodePipeline`, `GeodeGradientPipeline`, `GeodeMaskPipeline`,
+  `GeodeImagePipeline`) and frame recording (`GeoEncoder`,
+  `GeodeTextureEncoder`, `RendererGeode`) go through the `donner::gpu` runtime
+  (see [0053](0053-native_gpu_hal.md)); their direct wgpu descriptor and
+  recording paths are deleted. wgpu remains only behind the transitional
+  `GeodeWgpuAdapterDevice` plus annotated escape-hatch call sites: the filter
+  engine and checkerboard pipeline (packet 10), readback/presentation
+  (packet 11), and the editor/ImGui surfaces (packet 18). The migrated
+  recording family is drivable with no GPU and no wgpu against
+  `gpu::RecordingDevice`; the pinned command-stream captures live in
+  `donner/svg/renderer/geode/tests/GeoEncoderRecording_tests.cc`.
 
 
 ## Summary

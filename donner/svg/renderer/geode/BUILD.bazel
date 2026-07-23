@@ -605,6 +605,36 @@ donner_multi_transitioned_test(
     renderer_backend = "geode",
 )
 
+# GPU-less command-stream captures of the migrated recording family against
+# gpu::RecordingDevice (design 0053 packet 8b). Never creates a GeodeDevice or
+# touches a GPU; the captures anchor structural counter parity for the later
+# Metal / Vulkan production packets.
+donner_cc_test(
+    name = "geo_encoder_recording_tests_impl",
+    srcs = ["tests/GeoEncoderRecording_tests.cc"],
+    target_compatible_with = _GEODE_ONLY,
+    deps = [
+        ":geo_encoder",
+        ":geode_device",
+        ":geode_path_encoder",
+        ":geode_resident_path_component",
+        "//donner/base",
+        "//donner/base:gtest_timeout_main",
+        "//donner/css",
+        "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/svg/resources:image_resource",
+    ],
+)
+
+donner_multi_transitioned_test(
+    name = "geo_encoder_recording_tests",
+    timeout = "short",
+    testonly = 1,
+    dep = ":geo_encoder_recording_tests_impl",
+    renderer_backend = "geode",
+)
+
 # Geode perf-counter assertions. See design doc 0030 (geode_performance).
 # Each later milestone tightens the ceilings in this suite; M0 ceilings
 # match current observed behaviour so the baseline is stable.

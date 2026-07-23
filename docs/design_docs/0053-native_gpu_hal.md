@@ -368,12 +368,22 @@ directory drops.
 
 ### Phase 1: Live RHI extraction
 
-- [ ] Introduce `donner::gpu` descriptors, status types, ownership wrappers, and recording backend.
+- [x] Introduce `donner::gpu` descriptors, status types, ownership wrappers, and recording backend
+      (`donner/gpu/`: `Descriptors`, `GpuResult`, `Handles`, `RecordingDevice`).
 - [ ] Move Geode call sites behind the RHI in small families while keeping one production renderer
-      path per build.
+      path per build. (Partial: the pipeline family - `GeodePipeline`, `GeodeGradientPipeline`,
+      `GeodeMaskPipeline`, `GeodeImagePipeline` - plus encoder recording - `GeoEncoder`,
+      `GeodeTextureEncoder`, `RendererGeode` - record through `donner::gpu` via the transitional
+      `GeodeWgpuAdapterDevice`, and the recording family runs GPU-free against `RecordingDevice`
+      with pinned captures in `geode/tests/GeoEncoderRecording_tests.cc`. The filter engine and
+      checkerboard pipeline, readback/presentation, and editor/ImGui surfaces remain on wgpu -
+      packets 10, 11, and 18.)
 - [ ] Add model tests for lifetime, submission serials, descriptor validation, and device loss.
 - [ ] Remove every migrated `wgpu` call and type in the same packet; temporary adapter code carries
-      an explicit removal gate.
+      an explicit removal gate. (Holding for the families migrated so far - their wgpu descriptor
+      and recording paths are deleted, and remaining wgpu use sits behind `GeodeWgpuAdapterDevice`
+      plus annotated escape-hatch call sites. Not complete until filters, readback/presentation,
+      and the editor surfaces migrate - packets 10, 11, and 18.)
 
 ### Phase 2: Shader IR vertical slice
 
