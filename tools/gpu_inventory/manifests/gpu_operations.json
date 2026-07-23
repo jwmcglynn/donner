@@ -1014,23 +1014,14 @@
         "writeBuffer",
         "writeTexture"
       ],
-      "sha256": "df5579489aa048f8cf0fdec5e1023c636481c4fba0719e0b67390895b8325b39",
+      "sha256": "f9495939faa8facff508b22b84a313cff807d1b1c0f9c50df2d7c57eaf342bd9",
       "wgpuCFunctions": [
         "wgpuBindGroupLayoutOf",
-        "wgpuBindGroupLayouts_",
-        "wgpuBindGroups_",
-        "wgpuBuffers_",
         "wgpuLabel",
-        "wgpuPipelineLayouts_",
         "wgpuRenderPipelineOf",
-        "wgpuRenderPipelines_",
         "wgpuSamplerOf",
-        "wgpuSamplers_",
-        "wgpuShaderModules_",
         "wgpuTextureOf",
-        "wgpuTextureViewOf",
-        "wgpuTextureViews_",
-        "wgpuTextures_"
+        "wgpuTextureViewOf"
       ],
       "wgpuCTypes": [
         "WGPUBindGroupLayout",
@@ -1102,22 +1093,13 @@
       ]
     },
     "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h": {
-      "sha256": "4a5129bf99a7ab644bf0e9085b7ae6851f5ef718c0aeb303637f2b7cbe1b82c9",
+      "sha256": "6e3e430a3b62a522067086c583840b29d7a6435aa93bbf6b7004a28c35a78948",
       "wgpuCFunctions": [
         "wgpuBindGroupLayoutOf",
-        "wgpuBindGroupLayouts_",
-        "wgpuBindGroups_",
-        "wgpuBuffers_",
-        "wgpuPipelineLayouts_",
         "wgpuRenderPipelineOf",
-        "wgpuRenderPipelines_",
         "wgpuSamplerOf",
-        "wgpuSamplers_",
-        "wgpuShaderModules_",
         "wgpuTextureOf",
-        "wgpuTextureViewOf",
-        "wgpuTextureViews_",
-        "wgpuTextures_"
+        "wgpuTextureViewOf"
       ],
       "wgpuCppTokens": [
         "BindGroup",
@@ -1288,6 +1270,11 @@
       ],
       "wgpuCFunctions": [
         "wgpuLabel"
+      ],
+      "wgpuCTypes": [
+        "WGPUMapAsyncStatus",
+        "WGPUMapAsyncStatus_Success",
+        "WGPUStringView"
       ],
       "wgpuCppTokens": [
         "Device",

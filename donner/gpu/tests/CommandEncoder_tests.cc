@@ -503,5 +503,13 @@ TEST_F(CopyTextureToTextureTests, RejectsNullSourceHandle) {
               IsGpuError(GpuErrorType::InvalidHandle));
 }
 
+TEST_F(CopyTextureToTextureTests, RejectsSelfCopy) {
+  // WebGPU forbids copyTextureToTexture where source and destination are the same texture.
+  EXPECT_THAT(
+      encoder_->copyTextureToTexture(target_, target_, Extent2d{4, 4}),
+      IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor,
+                            HasSubstr("source and destination are the same texture \"target\"")));
+}
+
 }  // namespace
 }  // namespace donner::gpu

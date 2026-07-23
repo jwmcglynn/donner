@@ -271,10 +271,9 @@ TEST(RecordingDeviceTests, CopyTextureToTextureSerializesSourceDestinationAndSiz
   ASSERT_THAT(commandBuffer, HasResult());
   ASSERT_THAT(device.submit(std::move(commandBuffer).result()), HasResult());
 
-  // Line format: source identity first, destination second, then the copy extent.
+  // Line format: labeled src and dst identities, then the copy extent.
   EXPECT_THAT(device.serialize(),
-              HasSubstr("  copyTextureToTexture texture=texture#0 texture=texture#1 "
-                        "copySize=4x4\n"));
+              HasSubstr("  copyTextureToTexture src=texture#0 dst=texture#1 copySize=4x4\n"));
 }
 
 TEST(RecordingDeviceTests, SpirvShaderModuleSerializesWordCountAndHash) {

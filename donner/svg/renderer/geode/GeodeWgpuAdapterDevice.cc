@@ -1,5 +1,6 @@
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 
+#include <cassert>
 #include <chrono>
 #include <format>
 #include <string_view>
@@ -33,6 +34,15 @@ template <typename Handle>
 Handle GetHandle(const std::vector<ScopedWgpuHandle<Handle>>& table, uint32_t slotIndex) {
   return slotIndex < table.size() ? table[slotIndex].get() : Handle{};
 }
+
+/// Overload set for exhaustive std::visit dispatch: adding a new `gpu::Command` alternative
+/// without a matching handler is a compile error instead of a silently dropped command.
+template <typename... Ts>
+struct Overloaded : Ts... {
+  using Ts::operator()...;
+};
+template <typename... Ts>
+Overloaded(Ts...) -> Overloaded<Ts...>;
 
 wgpu::TextureFormat ToWgpuTextureFormat(gpu::TextureFormat format) {
   switch (format) {
@@ -288,10 +298,10 @@ gpu::Result<gpu::Texture> GeodeWgpuAdapterDevice::importExternalTexture(wgpu::Te
 
 wgpu::Texture GeodeWgpuAdapterDevice::wgpuTextureOf(const gpu::Texture& texture) const {
   if (!texture.isValid() || texture.deviceId() != deviceId() ||
-      texture.slotIndex() >= wgpuTextures_.size()) {
+      texture.slotIndex() >= slotTextures_.size()) {
     return wgpu::Texture();
   }
-  return wgpuTextures_[texture.slotIndex()].texture;
+  return slotTextures_[texture.slotIndex()].texture;
 }
 
 wgpu::TextureView GeodeWgpuAdapterDevice::wgpuTextureViewOf(
@@ -299,7 +309,7 @@ wgpu::TextureView GeodeWgpuAdapterDevice::wgpuTextureViewOf(
   if (!textureView.isValid() || textureView.deviceId() != deviceId()) {
     return wgpu::TextureView();
   }
-  return GetHandle(wgpuTextureViews_, textureView.slotIndex());
+  return GetHandle(slotTextureViews_, textureView.slotIndex());
 }
 
 wgpu::RenderPipeline GeodeWgpuAdapterDevice::wgpuRenderPipelineOf(
@@ -307,7 +317,7 @@ wgpu::RenderPipeline GeodeWgpuAdapterDevice::wgpuRenderPipelineOf(
   if (!pipeline.isValid() || pipeline.deviceId() != deviceId()) {
     return wgpu::RenderPipeline();
   }
-  return GetHandle(wgpuRenderPipelines_, pipeline.slotIndex());
+  return GetHandle(slotRenderPipelines_, pipeline.slotIndex());
 }
 
 wgpu::BindGroupLayout GeodeWgpuAdapterDevice::wgpuBindGroupLayoutOf(
@@ -315,14 +325,14 @@ wgpu::BindGroupLayout GeodeWgpuAdapterDevice::wgpuBindGroupLayoutOf(
   if (!layout.isValid() || layout.deviceId() != deviceId()) {
     return wgpu::BindGroupLayout();
   }
-  return GetHandle(wgpuBindGroupLayouts_, layout.slotIndex());
+  return GetHandle(slotBindGroupLayouts_, layout.slotIndex());
 }
 
 wgpu::Sampler GeodeWgpuAdapterDevice::wgpuSamplerOf(const gpu::Sampler& sampler) const {
   if (!sampler.isValid() || sampler.deviceId() != deviceId()) {
     return wgpu::Sampler();
   }
-  return GetHandle(wgpuSamplers_, sampler.slotIndex());
+  return GetHandle(slotSamplers_, sampler.slotIndex());
 }
 
 gpu::TextureFormat GpuTextureFormatFromWgpu(wgpu::TextureFormat format) {
@@ -353,7 +363,7 @@ gpu::Status GeodeWgpuAdapterDevice::onCreateBuffer(uint32_t slotIndex,
   }
   geodeDevice_.countBuffer();
 
-  SetSlot(wgpuBuffers_, slotIndex, ScopedWgpuHandle<wgpu::Buffer>(buffer));
+  SetSlot(slotBuffers_, slotIndex, ScopedWgpuHandle<wgpu::Buffer>(buffer));
   return OkStatus();
 }
 
@@ -361,7 +371,7 @@ gpu::Status GeodeWgpuAdapterDevice::onCreateTexture(uint32_t slotIndex,
                                                     const gpu::TextureDescriptor& descriptor) {
   if (pendingImport_) {
     // importExternalTexture path: register the borrowed texture; no ownership is taken.
-    SetSlot(wgpuTextures_, slotIndex,
+    SetSlot(slotTextures_, slotIndex,
             TextureSlot{ScopedWgpuHandle<wgpu::Texture>(), pendingImport_});
     return OkStatus();
   }
@@ -384,15 +394,15 @@ gpu::Status GeodeWgpuAdapterDevice::onCreateTexture(uint32_t slotIndex,
   }
   geodeDevice_.countTexture();
 
-  SetSlot(wgpuTextures_, slotIndex, TextureSlot{ScopedWgpuHandle<wgpu::Texture>(texture), texture});
+  SetSlot(slotTextures_, slotIndex, TextureSlot{ScopedWgpuHandle<wgpu::Texture>(texture), texture});
   return OkStatus();
 }
 
 gpu::Status GeodeWgpuAdapterDevice::onCreateTextureView(
     uint32_t slotIndex, uint32_t textureSlotIndex, const gpu::TextureViewDescriptor& descriptor) {
   (void)descriptor;  // Views cover the whole texture; wgpu's default view matches.
-  wgpu::Texture texture = textureSlotIndex < wgpuTextures_.size()
-                              ? wgpuTextures_[textureSlotIndex].texture
+  wgpu::Texture texture = textureSlotIndex < slotTextures_.size()
+                              ? slotTextures_[textureSlotIndex].texture
                               : wgpu::Texture();
   if (!texture) {
     return GpuError{GpuErrorType::InvalidState,
@@ -406,7 +416,7 @@ gpu::Status GeodeWgpuAdapterDevice::onCreateTextureView(
         std::format("wgpu texture view creation failed for texture slot {}", textureSlotIndex)};
   }
 
-  SetSlot(wgpuTextureViews_, slotIndex, ScopedWgpuHandle<wgpu::TextureView>(view));
+  SetSlot(slotTextureViews_, slotIndex, ScopedWgpuHandle<wgpu::TextureView>(view));
   return OkStatus();
 }
 
@@ -428,7 +438,7 @@ gpu::Status GeodeWgpuAdapterDevice::onCreateSampler(uint32_t slotIndex,
                                                             std::string_view(descriptor.label))};
   }
 
-  SetSlot(wgpuSamplers_, slotIndex, ScopedWgpuHandle<wgpu::Sampler>(sampler));
+  SetSlot(slotSamplers_, slotIndex, ScopedWgpuHandle<wgpu::Sampler>(sampler));
   return OkStatus();
 }
 
@@ -454,7 +464,7 @@ gpu::Status GeodeWgpuAdapterDevice::onCreateBindGroupLayout(
                                 std::string_view(descriptor.label))};
   }
 
-  SetSlot(wgpuBindGroupLayouts_, slotIndex, ScopedWgpuHandle<wgpu::BindGroupLayout>(layout));
+  SetSlot(slotBindGroupLayouts_, slotIndex, ScopedWgpuHandle<wgpu::BindGroupLayout>(layout));
   return OkStatus();
 }
 
@@ -462,7 +472,7 @@ gpu::Status GeodeWgpuAdapterDevice::onCreateBindGroup(uint32_t slotIndex,
                                                       const gpu::BindGroupDescriptor& descriptor) {
   // Creation-time layout lookup only (the base class just validated the reference); the created
   // wgpu bind group retains its layout internally, so encoding never resolves layouts by slot.
-  wgpu::BindGroupLayout layout = GetHandle(wgpuBindGroupLayouts_, descriptor.layout.slotIndex());
+  wgpu::BindGroupLayout layout = GetHandle(slotBindGroupLayouts_, descriptor.layout.slotIndex());
   if (!layout) {
     return GpuError{
         GpuErrorType::InvalidState,
@@ -475,7 +485,7 @@ gpu::Status GeodeWgpuAdapterDevice::onCreateBindGroup(uint32_t slotIndex,
     entries[i].binding = entry.binding;
     if (const gpu::BufferBinding* bufferBinding =
             std::get_if<gpu::BufferBinding>(&entry.resource)) {
-      wgpu::Buffer buffer = GetHandle(wgpuBuffers_, bufferBinding->buffer.slotIndex());
+      wgpu::Buffer buffer = GetHandle(slotBuffers_, bufferBinding->buffer.slotIndex());
       if (!buffer) {
         return GpuError{GpuErrorType::InvalidState,
                         std::format("bind group entry binding {} does not resolve to a wgpu "
@@ -487,7 +497,7 @@ gpu::Status GeodeWgpuAdapterDevice::onCreateBindGroup(uint32_t slotIndex,
       entries[i].size = bufferBinding->sizeBytes;
     } else if (const gpu::TextureViewBinding* viewBinding =
                    std::get_if<gpu::TextureViewBinding>(&entry.resource)) {
-      wgpu::TextureView view = GetHandle(wgpuTextureViews_, viewBinding->view.slotIndex());
+      wgpu::TextureView view = GetHandle(slotTextureViews_, viewBinding->view.slotIndex());
       if (!view) {
         return GpuError{GpuErrorType::InvalidState,
                         std::format("bind group entry binding {} does not resolve to a wgpu "
@@ -497,7 +507,7 @@ gpu::Status GeodeWgpuAdapterDevice::onCreateBindGroup(uint32_t slotIndex,
       entries[i].textureView = view;
     } else if (const gpu::SamplerBinding* samplerBinding =
                    std::get_if<gpu::SamplerBinding>(&entry.resource)) {
-      wgpu::Sampler sampler = GetHandle(wgpuSamplers_, samplerBinding->sampler.slotIndex());
+      wgpu::Sampler sampler = GetHandle(slotSamplers_, samplerBinding->sampler.slotIndex());
       if (!sampler) {
         return GpuError{GpuErrorType::InvalidState,
                         std::format("bind group entry binding {} does not resolve to a wgpu "
@@ -522,7 +532,7 @@ gpu::Status GeodeWgpuAdapterDevice::onCreateBindGroup(uint32_t slotIndex,
   }
   geodeDevice_.countBindGroup();
 
-  SetSlot(wgpuBindGroups_, slotIndex, ScopedWgpuHandle<wgpu::BindGroup>(group));
+  SetSlot(slotBindGroups_, slotIndex, ScopedWgpuHandle<wgpu::BindGroup>(group));
   return OkStatus();
 }
 
@@ -531,7 +541,7 @@ gpu::Status GeodeWgpuAdapterDevice::onCreatePipelineLayout(
   std::vector<WGPUBindGroupLayout> layouts(descriptor.bindGroupLayouts.size());
   for (size_t i = 0; i < descriptor.bindGroupLayouts.size(); ++i) {
     wgpu::BindGroupLayout layout =
-        GetHandle(wgpuBindGroupLayouts_, descriptor.bindGroupLayouts[i].slotIndex());
+        GetHandle(slotBindGroupLayouts_, descriptor.bindGroupLayouts[i].slotIndex());
     if (!layout) {
       return GpuError{GpuErrorType::InvalidState,
                       std::format("pipeline layout references bind group layout slot {} with no "
@@ -553,7 +563,7 @@ gpu::Status GeodeWgpuAdapterDevice::onCreatePipelineLayout(
                                 std::string_view(descriptor.label))};
   }
 
-  SetSlot(wgpuPipelineLayouts_, slotIndex, ScopedWgpuHandle<wgpu::PipelineLayout>(layout));
+  SetSlot(slotPipelineLayouts_, slotIndex, ScopedWgpuHandle<wgpu::PipelineLayout>(layout));
   return OkStatus();
 }
 
@@ -581,17 +591,17 @@ gpu::Status GeodeWgpuAdapterDevice::onCreateShaderModule(
                                 std::string_view(descriptor.label))};
   }
 
-  SetSlot(wgpuShaderModules_, slotIndex, ScopedWgpuHandle<wgpu::ShaderModule>(module));
+  SetSlot(slotShaderModules_, slotIndex, ScopedWgpuHandle<wgpu::ShaderModule>(module));
   return OkStatus();
 }
 
 gpu::Status GeodeWgpuAdapterDevice::onCreateRenderPipeline(
     uint32_t slotIndex, const gpu::RenderPipelineDescriptor& descriptor) {
-  wgpu::PipelineLayout layout = GetHandle(wgpuPipelineLayouts_, descriptor.layout.slotIndex());
+  wgpu::PipelineLayout layout = GetHandle(slotPipelineLayouts_, descriptor.layout.slotIndex());
   wgpu::ShaderModule vertexModule =
-      GetHandle(wgpuShaderModules_, descriptor.vertex.module.slotIndex());
+      GetHandle(slotShaderModules_, descriptor.vertex.module.slotIndex());
   wgpu::ShaderModule fragmentModule =
-      GetHandle(wgpuShaderModules_, descriptor.fragment.module.slotIndex());
+      GetHandle(slotShaderModules_, descriptor.fragment.module.slotIndex());
   if (!layout || !vertexModule || !fragmentModule) {
     return GpuError{GpuErrorType::InvalidState,
                     std::format("render pipeline '{}' references a layout or shader module with "
@@ -665,7 +675,7 @@ gpu::Status GeodeWgpuAdapterDevice::onCreateRenderPipeline(
                                 std::string_view(descriptor.label))};
   }
 
-  SetSlot(wgpuRenderPipelines_, slotIndex, ScopedWgpuHandle<wgpu::RenderPipeline>(pipeline));
+  SetSlot(slotRenderPipelines_, slotIndex, ScopedWgpuHandle<wgpu::RenderPipeline>(pipeline));
   return OkStatus();
 }
 
@@ -673,29 +683,34 @@ void GeodeWgpuAdapterDevice::onDestroyResource(std::string_view resourceName, ui
   // Clearing a slot releases the owned wgpu reference (imported external textures carry no
   // owned reference, so their backing object is untouched).
   if (resourceName == "buffer") {
-    SetSlot(wgpuBuffers_, slotIndex, ScopedWgpuHandle<wgpu::Buffer>());
+    SetSlot(slotBuffers_, slotIndex, ScopedWgpuHandle<wgpu::Buffer>());
   } else if (resourceName == "texture") {
-    SetSlot(wgpuTextures_, slotIndex, TextureSlot{});
+    SetSlot(slotTextures_, slotIndex, TextureSlot{});
   } else if (resourceName == "textureView") {
-    SetSlot(wgpuTextureViews_, slotIndex, ScopedWgpuHandle<wgpu::TextureView>());
+    SetSlot(slotTextureViews_, slotIndex, ScopedWgpuHandle<wgpu::TextureView>());
   } else if (resourceName == "sampler") {
-    SetSlot(wgpuSamplers_, slotIndex, ScopedWgpuHandle<wgpu::Sampler>());
+    SetSlot(slotSamplers_, slotIndex, ScopedWgpuHandle<wgpu::Sampler>());
   } else if (resourceName == "bindGroupLayout") {
-    SetSlot(wgpuBindGroupLayouts_, slotIndex, ScopedWgpuHandle<wgpu::BindGroupLayout>());
+    SetSlot(slotBindGroupLayouts_, slotIndex, ScopedWgpuHandle<wgpu::BindGroupLayout>());
   } else if (resourceName == "bindGroup") {
-    SetSlot(wgpuBindGroups_, slotIndex, ScopedWgpuHandle<wgpu::BindGroup>());
+    SetSlot(slotBindGroups_, slotIndex, ScopedWgpuHandle<wgpu::BindGroup>());
   } else if (resourceName == "pipelineLayout") {
-    SetSlot(wgpuPipelineLayouts_, slotIndex, ScopedWgpuHandle<wgpu::PipelineLayout>());
+    SetSlot(slotPipelineLayouts_, slotIndex, ScopedWgpuHandle<wgpu::PipelineLayout>());
   } else if (resourceName == "shaderModule") {
-    SetSlot(wgpuShaderModules_, slotIndex, ScopedWgpuHandle<wgpu::ShaderModule>());
+    SetSlot(slotShaderModules_, slotIndex, ScopedWgpuHandle<wgpu::ShaderModule>());
   } else if (resourceName == "renderPipeline") {
-    SetSlot(wgpuRenderPipelines_, slotIndex, ScopedWgpuHandle<wgpu::RenderPipeline>());
+    SetSlot(slotRenderPipelines_, slotIndex, ScopedWgpuHandle<wgpu::RenderPipeline>());
+  } else {
+    // A resource kind this adapter does not track would leak its wgpu object silently. Loud in
+    // debug so a new kind added to the runtime is wired up here; release-safe no-op (the base
+    // class owns the bookkeeping either way).
+    assert(false && "GeodeWgpuAdapterDevice::onDestroyResource: unknown resource kind");
   }
 }
 
 gpu::Status GeodeWgpuAdapterDevice::onWriteBuffer(uint32_t slotIndex, uint64_t offsetBytes,
                                                   std::span<const uint8_t> data) {
-  wgpu::Buffer buffer = GetHandle(wgpuBuffers_, slotIndex);
+  wgpu::Buffer buffer = GetHandle(slotBuffers_, slotIndex);
   if (!buffer) {
     return GpuError{GpuErrorType::InvalidState,
                     std::format("buffer slot {} has no wgpu buffer", slotIndex)};
@@ -719,7 +734,7 @@ gpu::Status GeodeWgpuAdapterDevice::onWriteTexture(uint32_t slotIndex,
                                                    const gpu::TexelCopyBufferLayout& dataLayout,
                                                    const gpu::Extent2d& writeSize) {
   wgpu::Texture texture =
-      slotIndex < wgpuTextures_.size() ? wgpuTextures_[slotIndex].texture : wgpu::Texture();
+      slotIndex < slotTextures_.size() ? slotTextures_[slotIndex].texture : wgpu::Texture();
   if (!texture) {
     return GpuError{GpuErrorType::InvalidState,
                     std::format("texture slot {} has no wgpu texture", slotIndex)};
@@ -759,134 +774,176 @@ gpu::Status GeodeWgpuAdapterDevice::onSubmit(uint64_t submissionSerial,
     return std::move(error);
   };
 
+  // Exhaustive dispatch: every `gpu::Command` alternative has a handler, so adding a new
+  // command to the variant without wiring it here is a compile error instead of a validated,
+  // submitted, "completed", never-executed no-op.
   for (const gpu::Command& command : commands) {
-    if (const auto* beginPass = std::get_if<gpu::BeginRenderPassCommand>(&command)) {
-      const auto& attachments = beginPass->descriptor.colorAttachments;
-      std::vector<wgpu::RenderPassColorAttachment> colorAttachments(attachments.size());
-      for (size_t i = 0; i < attachments.size(); ++i) {
-        const gpu::RenderPassColorAttachment& attachment = attachments[i];
-        wgpu::TextureView view = GetHandle(wgpuTextureViews_, attachment.view.slotIndex());
-        if (!view) {
-          return failEncoding(GpuError{
-              GpuErrorType::InvalidState,
-              std::format("render pass attachment {} does not resolve to a wgpu texture view", i)});
-        }
-        colorAttachments[i].view = view;
-        colorAttachments[i].loadOp = ToWgpuLoadOp(attachment.loadOp);
-        colorAttachments[i].storeOp = ToWgpuStoreOp(attachment.storeOp);
-        colorAttachments[i].clearValue = {attachment.clearColor[0], attachment.clearColor[1],
-                                          attachment.clearColor[2], attachment.clearColor[3]};
-        // Dawn (browser WebGPU) rejects depthSlice=0 on non-3D views; wgpu-native is lenient.
-        // Set the UNDEFINED sentinel for cross-backend compatibility (see GeoEncoder).
-        colorAttachments[i].depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
-      }
+    gpu::Status commandStatus = std::visit(
+        Overloaded{
+            [&](const gpu::BeginRenderPassCommand& beginPass) -> gpu::Status {
+              const auto& attachments = beginPass.descriptor.colorAttachments;
+              std::vector<wgpu::RenderPassColorAttachment> colorAttachments(attachments.size());
+              for (size_t i = 0; i < attachments.size(); ++i) {
+                const gpu::RenderPassColorAttachment& attachment = attachments[i];
+                wgpu::TextureView view = GetHandle(slotTextureViews_, attachment.view.slotIndex());
+                if (!view) {
+                  return failEncoding(GpuError{
+                      GpuErrorType::InvalidState,
+                      std::format("render pass attachment {} does not resolve to a wgpu texture "
+                                  "view",
+                                  i)});
+                }
+                colorAttachments[i].view = view;
+                colorAttachments[i].loadOp = ToWgpuLoadOp(attachment.loadOp);
+                colorAttachments[i].storeOp = ToWgpuStoreOp(attachment.storeOp);
+                colorAttachments[i].clearValue = {
+                    attachment.clearColor[0], attachment.clearColor[1], attachment.clearColor[2],
+                    attachment.clearColor[3]};
+                // Dawn (browser WebGPU) rejects depthSlice=0 on non-3D views; wgpu-native is
+                // lenient. Set the UNDEFINED sentinel for cross-backend compatibility (see
+                // GeoEncoder).
+                colorAttachments[i].depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+              }
 
-      wgpu::RenderPassDescriptor passDescriptor = {};
-      passDescriptor.label = wgpuLabel(std::string_view(beginPass->descriptor.label));
-      passDescriptor.colorAttachmentCount = colorAttachments.size();
-      passDescriptor.colorAttachments = colorAttachments.data();
-      pass.reset(encoder.get().beginRenderPass(passDescriptor));
-      if (!pass) {
-        return GpuError{GpuErrorType::InvalidState, "wgpu render pass creation failed"};
-      }
-    } else if (const auto* setPipeline = std::get_if<gpu::SetPipelineCommand>(&command)) {
-      wgpu::RenderPipeline pipeline =
-          GetHandle(wgpuRenderPipelines_, setPipeline->pipelineId.slotIndex);
-      if (!pass || !pipeline) {
-        return failEncoding(GpuError{GpuErrorType::InvalidState,
-                                     std::format("setPipeline: pipeline slot {} is not encodable",
-                                                 setPipeline->pipelineId.slotIndex)});
-      }
-      pass.get().setPipeline(pipeline);
-    } else if (const auto* setBindGroup = std::get_if<gpu::SetBindGroupCommand>(&command)) {
-      wgpu::BindGroup group = GetHandle(wgpuBindGroups_, setBindGroup->bindGroupId.slotIndex);
-      if (!pass || !group) {
-        return failEncoding(
-            GpuError{GpuErrorType::InvalidState,
-                     std::format("setBindGroup: bind group slot {} is not encodable",
-                                 setBindGroup->bindGroupId.slotIndex)});
-      }
-      pass.get().setBindGroup(setBindGroup->index, group, 0, nullptr);
-    } else if (const auto* setVertexBuffer = std::get_if<gpu::SetVertexBufferCommand>(&command)) {
-      wgpu::Buffer buffer = GetHandle(wgpuBuffers_, setVertexBuffer->bufferId.slotIndex);
-      if (!pass || !buffer) {
-        return failEncoding(GpuError{GpuErrorType::InvalidState,
-                                     std::format("setVertexBuffer: buffer slot {} is not encodable",
-                                                 setVertexBuffer->bufferId.slotIndex)});
-      }
-      pass.get().setVertexBuffer(setVertexBuffer->slot, buffer, setVertexBuffer->offsetBytes,
-                                 WGPU_WHOLE_SIZE);
-    } else if (const auto* setScissor = std::get_if<gpu::SetScissorRectCommand>(&command)) {
-      if (!pass) {
-        return failEncoding(
-            GpuError{GpuErrorType::InvalidState, "setScissorRect outside a render pass"});
-      }
-      pass.get().setScissorRect(setScissor->x, setScissor->y, setScissor->width,
-                                setScissor->height);
-    } else if (const auto* setViewport = std::get_if<gpu::SetViewportCommand>(&command)) {
-      if (!pass) {
-        return failEncoding(
-            GpuError{GpuErrorType::InvalidState, "setViewport outside a render pass"});
-      }
-      pass.get().setViewport(setViewport->x, setViewport->y, setViewport->width,
-                             setViewport->height, setViewport->minDepth, setViewport->maxDepth);
-    } else if (const auto* draw = std::get_if<gpu::DrawCommand>(&command)) {
-      if (!pass) {
-        return failEncoding(GpuError{GpuErrorType::InvalidState, "draw outside a render pass"});
-      }
-      pass.get().draw(draw->vertexCount, draw->instanceCount, draw->firstVertex,
-                      draw->firstInstance);
-      geodeDevice_.countDraw();
-    } else if (std::get_if<gpu::EndRenderPassCommand>(&command) != nullptr) {
-      if (!pass) {
-        return GpuError{GpuErrorType::InvalidState, "endRenderPass without an active render pass"};
-      }
-      pass.get().end();
-      pass.reset();
-    } else if (const auto* copy = std::get_if<gpu::CopyTextureToBufferCommand>(&command)) {
-      if (pass) {
-        return failEncoding(
-            GpuError{GpuErrorType::InvalidState, "copyTextureToBuffer inside a render pass"});
-      }
-      wgpu::Texture texture = copy->textureId.slotIndex < wgpuTextures_.size()
-                                  ? wgpuTextures_[copy->textureId.slotIndex].texture
-                                  : wgpu::Texture();
-      wgpu::Buffer buffer = GetHandle(wgpuBuffers_, copy->bufferId.slotIndex);
-      if (!texture || !buffer) {
-        return GpuError{GpuErrorType::InvalidState,
-                        "copyTextureToBuffer: source texture or destination buffer is missing"};
-      }
-      wgpu::TexelCopyTextureInfo source = {};
-      source.texture = texture;
-      wgpu::TexelCopyBufferInfo destination = {};
-      destination.buffer = buffer;
-      destination.layout.offset = copy->layout.offsetBytes;
-      destination.layout.bytesPerRow = copy->layout.bytesPerRow;
-      destination.layout.rowsPerImage = copy->layout.rowsPerImage;
-      const wgpu::Extent3D extent = {copy->copySize.width, copy->copySize.height, 1u};
-      encoder.get().copyTextureToBuffer(source, destination, extent);
-    } else if (const auto* textureCopy = std::get_if<gpu::CopyTextureToTextureCommand>(&command)) {
-      if (pass) {
-        return failEncoding(
-            GpuError{GpuErrorType::InvalidState, "copyTextureToTexture inside a render pass"});
-      }
-      wgpu::Texture sourceTexture = textureCopy->textureSrcId.slotIndex < wgpuTextures_.size()
-                                        ? wgpuTextures_[textureCopy->textureSrcId.slotIndex].texture
-                                        : wgpu::Texture();
-      wgpu::Texture destinationTexture =
-          textureCopy->textureDstId.slotIndex < wgpuTextures_.size()
-              ? wgpuTextures_[textureCopy->textureDstId.slotIndex].texture
-              : wgpu::Texture();
-      if (!sourceTexture || !destinationTexture) {
-        return GpuError{GpuErrorType::InvalidState,
-                        "copyTextureToTexture: source or destination texture is missing"};
-      }
-      wgpu::TexelCopyTextureInfo source = {};
-      source.texture = sourceTexture;
-      wgpu::TexelCopyTextureInfo destination = {};
-      destination.texture = destinationTexture;
-      const wgpu::Extent3D extent = {textureCopy->copySize.width, textureCopy->copySize.height, 1u};
-      encoder.get().copyTextureToTexture(source, destination, extent);
+              wgpu::RenderPassDescriptor passDescriptor = {};
+              passDescriptor.label = wgpuLabel(std::string_view(beginPass.descriptor.label));
+              passDescriptor.colorAttachmentCount = colorAttachments.size();
+              passDescriptor.colorAttachments = colorAttachments.data();
+              pass.reset(encoder.get().beginRenderPass(passDescriptor));
+              if (!pass) {
+                return GpuError{GpuErrorType::InvalidState, "wgpu render pass creation failed"};
+              }
+              return OkStatus();
+            },
+            [&](const gpu::SetPipelineCommand& setPipeline) -> gpu::Status {
+              wgpu::RenderPipeline pipeline =
+                  GetHandle(slotRenderPipelines_, setPipeline.pipelineId.slotIndex);
+              if (!pass || !pipeline) {
+                return failEncoding(
+                    GpuError{GpuErrorType::InvalidState,
+                             std::format("setPipeline: pipeline slot {} is not encodable",
+                                         setPipeline.pipelineId.slotIndex)});
+              }
+              pass.get().setPipeline(pipeline);
+              return OkStatus();
+            },
+            [&](const gpu::SetBindGroupCommand& setBindGroup) -> gpu::Status {
+              wgpu::BindGroup group =
+                  GetHandle(slotBindGroups_, setBindGroup.bindGroupId.slotIndex);
+              if (!pass || !group) {
+                return failEncoding(
+                    GpuError{GpuErrorType::InvalidState,
+                             std::format("setBindGroup: bind group slot {} is not encodable",
+                                         setBindGroup.bindGroupId.slotIndex)});
+              }
+              pass.get().setBindGroup(setBindGroup.index, group, 0, nullptr);
+              return OkStatus();
+            },
+            [&](const gpu::SetVertexBufferCommand& setVertexBuffer) -> gpu::Status {
+              wgpu::Buffer buffer = GetHandle(slotBuffers_, setVertexBuffer.bufferId.slotIndex);
+              if (!pass || !buffer) {
+                return failEncoding(
+                    GpuError{GpuErrorType::InvalidState,
+                             std::format("setVertexBuffer: buffer slot {} is not encodable",
+                                         setVertexBuffer.bufferId.slotIndex)});
+              }
+              pass.get().setVertexBuffer(setVertexBuffer.slot, buffer, setVertexBuffer.offsetBytes,
+                                         WGPU_WHOLE_SIZE);
+              return OkStatus();
+            },
+            [&](const gpu::SetScissorRectCommand& setScissor) -> gpu::Status {
+              if (!pass) {
+                return failEncoding(
+                    GpuError{GpuErrorType::InvalidState, "setScissorRect outside a render pass"});
+              }
+              pass.get().setScissorRect(setScissor.x, setScissor.y, setScissor.width,
+                                        setScissor.height);
+              return OkStatus();
+            },
+            [&](const gpu::SetViewportCommand& setViewport) -> gpu::Status {
+              if (!pass) {
+                return failEncoding(
+                    GpuError{GpuErrorType::InvalidState, "setViewport outside a render pass"});
+              }
+              pass.get().setViewport(setViewport.x, setViewport.y, setViewport.width,
+                                     setViewport.height, setViewport.minDepth,
+                                     setViewport.maxDepth);
+              return OkStatus();
+            },
+            [&](const gpu::DrawCommand& draw) -> gpu::Status {
+              if (!pass) {
+                return failEncoding(
+                    GpuError{GpuErrorType::InvalidState, "draw outside a render pass"});
+              }
+              pass.get().draw(draw.vertexCount, draw.instanceCount, draw.firstVertex,
+                              draw.firstInstance);
+              geodeDevice_.countDraw();
+              return OkStatus();
+            },
+            [&](const gpu::EndRenderPassCommand&) -> gpu::Status {
+              if (!pass) {
+                return GpuError{GpuErrorType::InvalidState,
+                                "endRenderPass without an active render pass"};
+              }
+              pass.get().end();
+              pass.reset();
+              return OkStatus();
+            },
+            [&](const gpu::CopyTextureToBufferCommand& copy) -> gpu::Status {
+              if (pass) {
+                return failEncoding(GpuError{GpuErrorType::InvalidState,
+                                             "copyTextureToBuffer inside a render pass"});
+              }
+              wgpu::Texture texture = copy.textureId.slotIndex < slotTextures_.size()
+                                          ? slotTextures_[copy.textureId.slotIndex].texture
+                                          : wgpu::Texture();
+              wgpu::Buffer buffer = GetHandle(slotBuffers_, copy.bufferId.slotIndex);
+              if (!texture || !buffer) {
+                return GpuError{
+                    GpuErrorType::InvalidState,
+                    "copyTextureToBuffer: source texture or destination buffer is missing"};
+              }
+              wgpu::TexelCopyTextureInfo source = {};
+              source.texture = texture;
+              wgpu::TexelCopyBufferInfo destination = {};
+              destination.buffer = buffer;
+              destination.layout.offset = copy.layout.offsetBytes;
+              destination.layout.bytesPerRow = copy.layout.bytesPerRow;
+              destination.layout.rowsPerImage = copy.layout.rowsPerImage;
+              const wgpu::Extent3D extent = {copy.copySize.width, copy.copySize.height, 1u};
+              encoder.get().copyTextureToBuffer(source, destination, extent);
+              return OkStatus();
+            },
+            [&](const gpu::CopyTextureToTextureCommand& textureCopy) -> gpu::Status {
+              if (pass) {
+                return failEncoding(GpuError{GpuErrorType::InvalidState,
+                                             "copyTextureToTexture inside a render pass"});
+              }
+              wgpu::Texture sourceTexture =
+                  textureCopy.textureSrcId.slotIndex < slotTextures_.size()
+                      ? slotTextures_[textureCopy.textureSrcId.slotIndex].texture
+                      : wgpu::Texture();
+              wgpu::Texture destinationTexture =
+                  textureCopy.textureDstId.slotIndex < slotTextures_.size()
+                      ? slotTextures_[textureCopy.textureDstId.slotIndex].texture
+                      : wgpu::Texture();
+              if (!sourceTexture || !destinationTexture) {
+                return GpuError{GpuErrorType::InvalidState,
+                                "copyTextureToTexture: source or destination texture is missing"};
+              }
+              wgpu::TexelCopyTextureInfo source = {};
+              source.texture = sourceTexture;
+              wgpu::TexelCopyTextureInfo destination = {};
+              destination.texture = destinationTexture;
+              const wgpu::Extent3D extent = {textureCopy.copySize.width,
+                                             textureCopy.copySize.height, 1u};
+              encoder.get().copyTextureToTexture(source, destination, extent);
+              return OkStatus();
+            },
+        },
+        command);
+    if (commandStatus.hasError()) {
+      return commandStatus;
     }
   }
 

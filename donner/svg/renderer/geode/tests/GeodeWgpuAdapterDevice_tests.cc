@@ -9,6 +9,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <utility>
@@ -16,10 +17,14 @@
 
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
+#include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
+using testing::ElementsAre;
 using testing::Ge;
 using testing::HasSubstr;
+using testing::Not;
 
 namespace donner::geode {
 namespace {
@@ -51,6 +56,72 @@ std::vector<uint8_t> MakeBytes(size_t count) {
   return bytes;
 }
 
+constexpr uint32_t kSceneSize = 4;
+constexpr uint32_t kReadbackBytesPerRow = 256;  // 4x4 RGBA rows padded to the copy alignment.
+
+/// Reads a 4x4 RGBA8 texture back to the host through raw wgpu (the adapter's own readback
+/// story arrives in packet 11), mirroring the map-and-poll pattern the existing Geode tests
+/// use. Returns the padded rows (kReadbackBytesPerRow per row), or empty on failure.
+std::vector<uint8_t> ReadbackTexturePixels(GeodeDevice& device, wgpu::Texture texture) {
+  const uint64_t byteSize = uint64_t{kReadbackBytesPerRow} * kSceneSize;
+  wgpu::BufferDescriptor bufferDescriptor = {};
+  bufferDescriptor.label = wgpuLabel("readbackStaging");
+  bufferDescriptor.size = byteSize;
+  bufferDescriptor.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
+  ScopedWgpuHandle<wgpu::Buffer> readback(device.device().createBuffer(bufferDescriptor));
+  if (!readback) {
+    return {};
+  }
+
+  ScopedWgpuHandle<wgpu::CommandEncoder> encoder(device.device().createCommandEncoder());
+  wgpu::TexelCopyTextureInfo source = {};
+  source.texture = texture;
+  wgpu::TexelCopyBufferInfo destination = {};
+  destination.buffer = readback.get();
+  destination.layout.bytesPerRow = kReadbackBytesPerRow;
+  destination.layout.rowsPerImage = kSceneSize;
+  const wgpu::Extent3D copySize = {kSceneSize, kSceneSize, 1};
+  encoder.get().copyTextureToBuffer(source, destination, copySize);
+  ScopedWgpuHandle<wgpu::CommandBuffer> commandBuffer(encoder.get().finish());
+  device.queue().submit(1, &commandBuffer.get());
+
+  struct MapState {
+    std::atomic<bool> done = false;
+    std::atomic<bool> ok = false;
+  };
+  auto mapState = std::make_shared<MapState>();
+  wgpu::BufferMapCallbackInfo mapCallback{wgpu::Default};
+  mapCallback.mode = wgpu::CallbackMode::AllowSpontaneous;
+  mapCallback.callback = [](WGPUMapAsyncStatus status, WGPUStringView /*message*/, void* userdata1,
+                            void* /*userdata2*/) {
+    const std::shared_ptr<MapState> state = takeWgpuCallbackState<MapState>(userdata1);
+    state->ok.store(status == WGPUMapAsyncStatus_Success, std::memory_order_relaxed);
+    state->done.store(true, std::memory_order_release);
+  };
+  mapCallback.userdata1 = retainWgpuCallbackState(mapState);
+  mapCallback.userdata2 = nullptr;
+  readback.get().mapAsync(wgpu::MapMode::Read, 0, byteSize, mapCallback);
+  for (int pollIter = 0; pollIter < 2000 && !mapState->done.load(std::memory_order_acquire);
+       ++pollIter) {
+    device.device().poll(true, nullptr);
+  }
+  if (!mapState->ok.load(std::memory_order_relaxed)) {
+    return {};
+  }
+
+  const uint8_t* mapped =
+      static_cast<const uint8_t*>(readback.get().getConstMappedRange(0, byteSize));
+  std::vector<uint8_t> pixels(mapped, mapped + byteSize);
+  readback.get().unmap();
+  return pixels;
+}
+
+/// Returns the 4 RGBA bytes of pixel (x, y) from padded readback rows.
+std::vector<uint8_t> PixelAt(const std::vector<uint8_t>& pixels, uint32_t x, uint32_t y) {
+  const size_t base = size_t{y} * kReadbackBytesPerRow + size_t{x} * 4;
+  return std::vector<uint8_t>(pixels.begin() + base, pixels.begin() + base + 4);
+}
+
 class GeodeWgpuAdapterDeviceTests : public testing::Test {
 protected:
   void SetUp() override {
@@ -73,7 +144,7 @@ TEST_F(GeodeWgpuAdapterDeviceTests, FamilySceneRendersAndCompletes) {
       adapter_->createTextureView(target, gpu::TextureViewDescriptor{"targetView"}));
   const gpu::Texture copyDestination = gpu::GetResultOrFail(adapter_->createTexture(
       gpu::TextureDescriptor{"copyDestination", gpu::Extent2d{4, 4}, gpu::TextureFormat::RGBA8Unorm,
-                             gpu::TextureUsage::CopyDst}));
+                             gpu::TextureUsage::CopyDst | gpu::TextureUsage::CopySrc}));
 
   const gpu::Texture sampled = gpu::GetResultOrFail(adapter_->createTexture(
       gpu::TextureDescriptor{"sampled", gpu::Extent2d{4, 4}, gpu::TextureFormat::RGBA8Unorm,
@@ -186,10 +257,32 @@ TEST_F(GeodeWgpuAdapterDeviceTests, FamilySceneRendersAndCompletes) {
   EXPECT_THAT(serial, Ge(uint64_t{1}));
 
   // The submission must complete on the real device and advance completedSerial.
-  EXPECT_TRUE(adapter_->waitForSerial(serial, /*timeoutSeconds=*/30.0))
+  ASSERT_TRUE(adapter_->waitForSerial(serial, /*timeoutSeconds=*/30.0))
       << "submission " << serial
       << " did not complete; completedSerial=" << adapter_->completedSerial();
   EXPECT_THAT(adapter_->completedSerial(), Ge(serial));
+
+  // ----- Pixel observation -----
+  // The recorded clear color {0, 0, 0.5, 1} maps to RGBA8 bytes (0, 0, 128, 255). The draw
+  // contributes no coverage (the placeholder vertex bytes decode to near-zero denormal float
+  // positions, producing zero-area triangles), so every pixel of the target must hold the
+  // clear color exactly - a wrong clearValue channel mapping, a LoadOp transposition, or a
+  // draw-parameter swap all show up here as wrong bytes.
+  const std::vector<uint8_t> targetPixels =
+      ReadbackTexturePixels(*geodeDevice_, adapter_->wgpuTextureOf(target));
+  ASSERT_THAT(targetPixels, Not(testing::IsEmpty())) << "target readback failed";
+  EXPECT_THAT(PixelAt(targetPixels, 0, 0), ElementsAre(0, 0, 128, 255));
+  EXPECT_THAT(PixelAt(targetPixels, 2, 2), ElementsAre(0, 0, 128, 255));
+  EXPECT_THAT(PixelAt(targetPixels, 3, 3), ElementsAre(0, 0, 128, 255));
+
+  // The recorded copyTextureToTexture must have propagated the same bytes into the copy
+  // destination, proving the copy executed rather than merely completing.
+  const std::vector<uint8_t> copiedPixels =
+      ReadbackTexturePixels(*geodeDevice_, adapter_->wgpuTextureOf(copyDestination));
+  ASSERT_THAT(copiedPixels, Not(testing::IsEmpty())) << "copy destination readback failed";
+  EXPECT_THAT(PixelAt(copiedPixels, 0, 0), ElementsAre(0, 0, 128, 255));
+  EXPECT_THAT(PixelAt(copiedPixels, 2, 2), ElementsAre(0, 0, 128, 255));
+  EXPECT_THAT(PixelAt(copiedPixels, 3, 3), ElementsAre(0, 0, 128, 255));
 }
 
 TEST_F(GeodeWgpuAdapterDeviceTests, ImportedExternalTextureIsUsableAndNotOwned) {

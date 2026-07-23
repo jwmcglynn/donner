@@ -53,15 +53,25 @@ public:
   /// Serial of the most recent submission whose queue work-done callback has fired (0 if none).
   /// wgpu delivers the callbacks during \ref waitForSerial's polling (and opportunistically on
   /// submit), so call \ref waitForSerial to guarantee progress.
+  ///
+  /// \warning The base class's `Device::poll()` does NOT drive wgpu polling - it only processes
+  /// deferred destructions against the serial this method reports. Per-frame destroy+poll churn
+  /// therefore defers unboundedly until something waits: packet 8b's frame loop must call
+  /// \ref waitForSerial on its frame cadence (or extend the adapter with a non-blocking wgpu
+  /// poll) so completions are observed and deferred destroys drain.
   uint64_t completedSerial() const override;
 
   /**
    * Blocks until \ref completedSerial reaches \p serial or \p timeoutSeconds elapses, driving
    * `wgpu::Device::poll` so queued work-done callbacks are delivered (on Emscripten the poll
-   * shim yields through Asyncify, mirroring \ref GeodeDevice's wait machinery).
+   * shim yields through Asyncify, mirroring \ref GeodeDevice's wait machinery). This is the
+   * only entry point that drives wgpu polling for this adapter - see the warning on
+   * \ref completedSerial.
    *
    * @param serial Submission serial to wait for.
    * @param timeoutSeconds Maximum time to wait, in seconds.
+   * @return True once \ref completedSerial reached \p serial; false if the timeout (or the
+   *   bounded poll-iteration budget) elapsed first.
    */
   bool waitForSerial(uint64_t serial, double timeoutSeconds);
 
@@ -168,15 +178,15 @@ private:
 
   GeodeDevice& geodeDevice_;
 
-  std::vector<ScopedWgpuHandle<wgpu::Buffer>> wgpuBuffers_;
-  std::vector<TextureSlot> wgpuTextures_;
-  std::vector<ScopedWgpuHandle<wgpu::TextureView>> wgpuTextureViews_;
-  std::vector<ScopedWgpuHandle<wgpu::Sampler>> wgpuSamplers_;
-  std::vector<ScopedWgpuHandle<wgpu::BindGroupLayout>> wgpuBindGroupLayouts_;
-  std::vector<ScopedWgpuHandle<wgpu::BindGroup>> wgpuBindGroups_;
-  std::vector<ScopedWgpuHandle<wgpu::PipelineLayout>> wgpuPipelineLayouts_;
-  std::vector<ScopedWgpuHandle<wgpu::ShaderModule>> wgpuShaderModules_;
-  std::vector<ScopedWgpuHandle<wgpu::RenderPipeline>> wgpuRenderPipelines_;
+  std::vector<ScopedWgpuHandle<wgpu::Buffer>> slotBuffers_;
+  std::vector<TextureSlot> slotTextures_;
+  std::vector<ScopedWgpuHandle<wgpu::TextureView>> slotTextureViews_;
+  std::vector<ScopedWgpuHandle<wgpu::Sampler>> slotSamplers_;
+  std::vector<ScopedWgpuHandle<wgpu::BindGroupLayout>> slotBindGroupLayouts_;
+  std::vector<ScopedWgpuHandle<wgpu::BindGroup>> slotBindGroups_;
+  std::vector<ScopedWgpuHandle<wgpu::PipelineLayout>> slotPipelineLayouts_;
+  std::vector<ScopedWgpuHandle<wgpu::ShaderModule>> slotShaderModules_;
+  std::vector<ScopedWgpuHandle<wgpu::RenderPipeline>> slotRenderPipelines_;
 
   std::shared_ptr<CompletionState> completionState_ = std::make_shared<CompletionState>();
 
