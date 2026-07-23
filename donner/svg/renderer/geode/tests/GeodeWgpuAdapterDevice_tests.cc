@@ -310,6 +310,43 @@ TEST_F(GeodeWgpuAdapterDeviceTests, ImportedExternalTextureIsUsableAndNotOwned) 
   EXPECT_EQ(externalTexture.get().getWidth(), 4u);
 }
 
+TEST_F(GeodeWgpuAdapterDeviceTests, TextureViewHatchRejectsViewOfDestroyedTexture) {
+  gpu::Texture texture = gpu::GetResultOrFail(adapter_->createTexture(
+      gpu::TextureDescriptor{"doomed", gpu::Extent2d{4, 4}, gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::RenderAttachment}));
+  const gpu::TextureView view = gpu::GetResultOrFail(
+      adapter_->createTextureView(texture, gpu::TextureViewDescriptor{"doomedView"}));
+
+  // While the texture is alive the hatch bridges the view.
+  EXPECT_NE(adapter_->wgpuTextureViewOf(view), nullptr);
+
+  // Destroying the texture makes the view stale everywhere, including the raw-wgpu bridge: the
+  // hatch must re-resolve the viewed texture like every normal Device path does, so a caller
+  // cannot bind a view whose Donner texture is gone.
+  ASSERT_THAT(adapter_->destroyTexture(std::move(texture)), gpu::IsOk());
+  EXPECT_EQ(adapter_->wgpuTextureViewOf(view), nullptr);
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, TextureHatchRejectsStaleGeneration) {
+  gpu::Texture original = gpu::GetResultOrFail(adapter_->createTexture(
+      gpu::TextureDescriptor{"original", gpu::Extent2d{4, 4}, gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::CopySrc}));
+  const uint32_t slot = original.slotIndex();
+  const uint32_t generation = original.generation();
+  const uint64_t deviceId = original.deviceId();
+  ASSERT_THAT(adapter_->destroyTexture(std::move(original)), gpu::IsOk());
+
+  const gpu::Texture replacement = gpu::GetResultOrFail(adapter_->createTexture(
+      gpu::TextureDescriptor{"replacement", gpu::Extent2d{8, 8}, gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::CopySrc}));
+  ASSERT_EQ(replacement.slotIndex(), slot);
+
+  // A forged handle carrying the retired generation must not alias the slot's new occupant.
+  const gpu::Texture staleHandle = gpu::Texture::CreateForBackend(slot, generation, deviceId);
+  EXPECT_EQ(adapter_->wgpuTextureOf(staleHandle), nullptr);
+  EXPECT_NE(adapter_->wgpuTextureOf(replacement), nullptr);
+}
+
 TEST_F(GeodeWgpuAdapterDeviceTests, SpirvShaderKindFailsClosedAsUnsupported) {
   EXPECT_THAT(adapter_->createShaderModule(gpu::ShaderModuleDescriptor{
                   "spirv", "", gpu::ShaderSourceKind::Spirv, {0x07230203u, 0x00010300u}}),
