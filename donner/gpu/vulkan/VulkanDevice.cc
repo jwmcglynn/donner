@@ -2107,6 +2107,11 @@ Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferS
       vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
                            VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &bufferBarrier, 0,
                            nullptr);
+    } else if (std::get_if<CopyTextureToTextureCommand>(&command) != nullptr) {
+      return failEncoding(
+          GpuError{GpuErrorType::Unsupported,
+                   "the Vulkan backend does not implement copyTextureToTexture yet; arrives with "
+                   "its presentation/readback packet"});
     }
   }
 

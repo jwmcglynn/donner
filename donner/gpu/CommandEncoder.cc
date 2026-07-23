@@ -469,6 +469,74 @@ Status CommandEncoder::copyTextureToBuffer(const TexelCopyTextureInfo& source,
   return OkStatus();
 }
 
+Status CommandEncoder::copyTextureToTexture(const Texture& source, const Texture& destination,
+                                            const Extent2d& copySize) {
+  if (std::optional<GpuError> error = checkRecordable(/*requireActivePass=*/false)) {
+    return fail(std::move(*error));
+  }
+  if (inRenderPass_) {
+    return fail(
+        Err(GpuErrorType::InvalidState, "copyTextureToTexture: not allowed inside a render pass"));
+  }
+  auto sourceRecord = device_->resolve(device_->textures_, source, TextureTag::kName);
+  if (sourceRecord.hasError()) {
+    return fail(std::move(sourceRecord).error());
+  }
+  auto destinationRecord = device_->resolve(device_->textures_, destination, TextureTag::kName);
+  if (destinationRecord.hasError()) {
+    return fail(std::move(destinationRecord).error());
+  }
+  const TextureDescriptor& sourceDescriptor = sourceRecord.result()->descriptor;
+  const TextureDescriptor& destinationDescriptor = destinationRecord.result()->descriptor;
+  if (sourceDescriptor.format != destinationDescriptor.format) {
+    std::ostringstream formats;
+    formats << sourceDescriptor.format << " vs " << destinationDescriptor.format;
+    return fail(Err(GpuErrorType::InvalidDescriptor,
+                    std::format("copyTextureToTexture: source \"{}\" and destination \"{}\" have "
+                                "different formats ({})",
+                                sourceDescriptor.label.str(), destinationDescriptor.label.str(),
+                                formats.str())));
+  }
+  if (!HasAllFlags(sourceDescriptor.usage, TextureUsage::CopySrc)) {
+    return fail(Err(GpuErrorType::UsageMismatch,
+                    std::format("copyTextureToTexture: texture \"{}\" lacks the CopySrc usage",
+                                sourceDescriptor.label.str())));
+  }
+  if (!HasAllFlags(destinationDescriptor.usage, TextureUsage::CopyDst)) {
+    return fail(Err(GpuErrorType::UsageMismatch,
+                    std::format("copyTextureToTexture: texture \"{}\" lacks the CopyDst usage",
+                                destinationDescriptor.label.str())));
+  }
+  if (copySize.width == 0 || copySize.height == 0) {
+    return fail(Err(GpuErrorType::InvalidDescriptor,
+                    std::format("copyTextureToTexture: copy size {}x{} has a zero dimension",
+                                copySize.width, copySize.height)));
+  }
+  // Copies are whole-rect from texel (0, 0), so fitting reduces to per-axis extent comparisons
+  // (no origin addition to overflow-check).
+  if (copySize.width > sourceDescriptor.size.width ||
+      copySize.height > sourceDescriptor.size.height) {
+    return fail(
+        Err(GpuErrorType::OutOfBounds,
+            std::format("copyTextureToTexture: copy size {}x{} exceeds source \"{}\" size {}x{}",
+                        copySize.width, copySize.height, sourceDescriptor.label.str(),
+                        sourceDescriptor.size.width, sourceDescriptor.size.height)));
+  }
+  if (copySize.width > destinationDescriptor.size.width ||
+      copySize.height > destinationDescriptor.size.height) {
+    return fail(Err(
+        GpuErrorType::OutOfBounds,
+        std::format("copyTextureToTexture: copy size {}x{} exceeds destination \"{}\" size {}x{}",
+                    copySize.width, copySize.height, destinationDescriptor.label.str(),
+                    destinationDescriptor.size.width, destinationDescriptor.size.height)));
+  }
+
+  commands_.push_back(CopyTextureToTextureCommand{
+      ResourceIdentity{source.slotIndex(), source.generation()},
+      ResourceIdentity{destination.slotIndex(), destination.generation()}, copySize});
+  return OkStatus();
+}
+
 Result<CommandBuffer> CommandEncoder::finish() {
   if (firstError_) {
     return *firstError_;

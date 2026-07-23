@@ -182,6 +182,29 @@ TEST_F(DeferredDestructionTests, BothCopyOperandsDeferAndReleaseInDestructionOrd
   EXPECT_THAT(device_.backendReleases(), ElementsAre(textureId, bufferId));
 }
 
+TEST_F(DeferredDestructionTests, TextureCopyOperandsDeferAndReleaseInDestructionOrder) {
+  Texture source = createSourceTexture();
+  Texture destination = GetResultOrFail(device_.createTexture(TextureDescriptor{
+      "destination", Extent2d{4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::CopyDst}));
+  const std::string sourceId = "texture#" + std::to_string(source.slotIndex());
+  const std::string destinationId = "texture#" + std::to_string(destination.slotIndex());
+
+  std::unique_ptr<CommandEncoder> encoder = GetResultOrFail(device_.createCommandEncoder());
+  ASSERT_THAT(encoder->copyTextureToTexture(source, destination, Extent2d{4, 4}), IsOk());
+  CommandBuffer commands = GetResultOrFail(encoder->finish());
+  const uint64_t serial = GetResultOrFail(device_.submit(std::move(commands)));
+
+  // Both copy operands are pinned by the in-flight submission: destruction is deferred.
+  EXPECT_THAT(device_.destroyTexture(std::move(source)), IsOk());
+  EXPECT_THAT(device_.destroyTexture(std::move(destination)), IsOk());
+  device_.poll();
+  EXPECT_THAT(device_.backendReleases(), IsEmpty());
+
+  device_.completeUpTo(serial);
+  device_.poll();
+  EXPECT_THAT(device_.backendReleases(), ElementsAre(sourceId, destinationId));
+}
+
 TEST_F(DeferredDestructionTests, LaterSubmissionExtendsDeferral) {
   Texture texture = createSourceTexture();
   Buffer buffer = createReadbackBuffer();
@@ -366,6 +389,49 @@ TEST_F(SubmitStalenessTests, DestroyedCopyDestinationRejectsSubmit) {
       device_.submit(std::move(commands)),
       IsGpuErrorWithMessage(GpuErrorType::InvalidHandle, AllOf(HasSubstr("copyTextureToBuffer"),
                                                                HasSubstr("destroyed buffer"))));
+}
+
+/// Fixture recording a texture-to-texture copy so each operand can be destroyed between
+/// finish() and submit(), mirroring the copyTextureToBuffer staleness coverage.
+class TextureCopySubmitStalenessTests : public SubmitStalenessTests {
+protected:
+  void SetUp() override {
+    SubmitStalenessTests::SetUp();
+    copyDestination_ = GetResultOrFail(device_.createTexture(TextureDescriptor{
+        "copyDestination", Extent2d{4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::CopyDst}));
+  }
+
+  /// Records just the texture-to-texture copy and returns the finished command buffer.
+  CommandBuffer recordTextureCopy() {
+    std::unique_ptr<CommandEncoder> encoder = GetResultOrFail(device_.createCommandEncoder());
+    EXPECT_THAT(encoder->copyTextureToTexture(target_, copyDestination_, Extent2d{4, 4}), IsOk());
+    return GetResultOrFail(encoder->finish());
+  }
+
+  Texture copyDestination_;
+};
+
+TEST_F(TextureCopySubmitStalenessTests, IntactCopySubmits) {
+  CommandBuffer commands = recordTextureCopy();
+  EXPECT_THAT(device_.submit(std::move(commands)), HasResult());
+}
+
+TEST_F(TextureCopySubmitStalenessTests, DestroyedCopySourceRejectsSubmit) {
+  CommandBuffer commands = recordTextureCopy();
+  ASSERT_THAT(device_.destroyTexture(std::move(target_)), IsOk());
+  EXPECT_THAT(
+      device_.submit(std::move(commands)),
+      IsGpuErrorWithMessage(GpuErrorType::InvalidHandle, AllOf(HasSubstr("copyTextureToTexture"),
+                                                               HasSubstr("destroyed texture"))));
+}
+
+TEST_F(TextureCopySubmitStalenessTests, DestroyedCopyDestinationRejectsSubmit) {
+  CommandBuffer commands = recordTextureCopy();
+  ASSERT_THAT(device_.destroyTexture(std::move(copyDestination_)), IsOk());
+  EXPECT_THAT(
+      device_.submit(std::move(commands)),
+      IsGpuErrorWithMessage(GpuErrorType::InvalidHandle, AllOf(HasSubstr("copyTextureToTexture"),
+                                                               HasSubstr("destroyed texture"))));
 }
 
 TEST_F(SubmitStalenessTests, RejectedSubmitDoesNotBurnSerial) {

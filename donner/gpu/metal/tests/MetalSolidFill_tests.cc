@@ -189,6 +189,30 @@ TEST_F(MetalSolidFillTest, ReadBackBufferRejectsStaleHandleAfterSlotReuse) {
   EXPECT_EQ(stale.error().type, GpuErrorType::InvalidHandle) << stale.error();
 }
 
+TEST_F(MetalSolidFillTest, CopyTextureToTextureFailsClosedAsUnsupported) {
+  // The RHI records and validates the copy, but the Metal backend does not execute it yet: the
+  // submission must fail closed with Unsupported instead of silently dropping the copy.
+  const Texture source =
+      unwrap(device_->createTexture(TextureDescriptor{
+                 "copySource", Extent2d{4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::CopySrc}),
+             "createTexture copySource");
+  const Texture destination = unwrap(
+      device_->createTexture(TextureDescriptor{"copyDestination", Extent2d{4, 4},
+                                               TextureFormat::RGBA8Unorm, TextureUsage::CopyDst}),
+      "createTexture copyDestination");
+
+  std::unique_ptr<CommandEncoder> encoder =
+      unwrap(device_->createCommandEncoder(), "createCommandEncoder");
+  const Status copyStatus = encoder->copyTextureToTexture(source, destination, Extent2d{4, 4});
+  ASSERT_FALSE(copyStatus.hasError()) << copyStatus.error();
+  CommandBuffer commands = unwrap(encoder->finish(), "finish");
+
+  Result<uint64_t> submitted = device_->submit(std::move(commands));
+  ASSERT_TRUE(submitted.hasError()) << "copyTextureToTexture submission unexpectedly succeeded";
+  EXPECT_EQ(submitted.error().type, GpuErrorType::Unsupported) << submitted.error();
+  EXPECT_THAT(submitted.error().message, testing::HasSubstr("copyTextureToTexture"));
+}
+
 TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
   // ----- Shader module and pipeline from the emitted MSL -----
   shader::ShaderResult<shader::IrModule> irModule = shader::programs::BuildSolidFillModule();
