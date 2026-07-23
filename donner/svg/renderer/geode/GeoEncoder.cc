@@ -1213,7 +1213,7 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   /// pipeline object is created on first use.
   void bindSolidBatchedPipeline() {
     if (currentPipeline != BoundPipeline::kSolidBatched) {
-      pass.get().setPipeline(pipeline->batchedPipeline(device->device()));
+      pass.get().setPipeline(pipeline->batchedPipeline());
       device->countPipelineSwitch();
       currentPipeline = BoundPipeline::kSolidBatched;
       currentPipelineIsGradient = false;

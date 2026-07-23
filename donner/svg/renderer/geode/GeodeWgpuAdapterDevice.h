@@ -116,6 +116,16 @@ public:
    */
   wgpu::BindGroupLayout wgpuBindGroupLayoutOf(const gpu::BindGroupLayout& layout) const;
 
+  /**
+   * TEMPORARY escape hatch for 8a only - deleted in packet 8b when GeoEncoder's and
+   * GeodeTextureEncoder's bind-group creation migrates: returns the wgpu sampler behind
+   * \p sampler so still-wgpu bind groups can reference migrated samplers (e.g. the image-blit
+   * pipeline's shared samplers). Borrowed.
+   *
+   * @param sampler Live sampler handle of this adapter.
+   */
+  wgpu::Sampler wgpuSamplerOf(const gpu::Sampler& sampler) const;
+
 protected:
   gpu::Status onCreateBuffer(uint32_t slotIndex, const gpu::BufferDescriptor& descriptor) override;
   gpu::Status onCreateTexture(uint32_t slotIndex,
@@ -174,5 +184,14 @@ private:
   /// texture instead of creating a new one.
   wgpu::Texture pendingImport_;
 };
+
+/**
+ * Maps a wgpu render-target format onto the \c donner::gpu format enum. Halts (release assert)
+ * on formats outside the runtime's supported set - RGBA8Unorm, BGRA8Unorm, R8Unorm - which are
+ * the only formats Geode's shaders and render targets are built for.
+ *
+ * @param format wgpu texture format to map.
+ */
+gpu::TextureFormat GpuTextureFormatFromWgpu(wgpu::TextureFormat format);
 
 }  // namespace donner::geode

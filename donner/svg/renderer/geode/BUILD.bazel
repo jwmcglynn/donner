@@ -652,6 +652,8 @@ donner_cc_library(
         ":slug_gradient_wgsl",
         ":slug_mask_wgsl",
         ":snapshot_unpremultiply_wgsl",
+        "//donner/base",
+        "//donner/gpu",
         "//third_party/webgpu-cpp:webgpu_cpp",
     ],
 )

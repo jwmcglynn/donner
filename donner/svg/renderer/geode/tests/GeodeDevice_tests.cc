@@ -339,7 +339,7 @@ TEST(GeodeDevice, BatchedFillPipelineCompilesWithoutValidationErrors) {
   ASSERT_NE(device, nullptr);
 
   testing::internal::CaptureStderr();
-  const wgpu::RenderPipeline& batched = device->pipeline().batchedPipeline(device->device());
+  const wgpu::RenderPipeline& batched = device->pipeline().batchedPipeline();
   const std::string errors = testing::internal::GetCapturedStderr();
 
   EXPECT_TRUE(static_cast<bool>(batched)) << "Batched fill pipeline creation returned null.";
@@ -349,7 +349,7 @@ TEST(GeodeDevice, BatchedFillPipelineCompilesWithoutValidationErrors) {
 
   // Built on first use, then cached: a second call must hand back the same
   // pipeline rather than recompiling it.
-  EXPECT_EQ(&device->pipeline().batchedPipeline(device->device()), &batched);
+  EXPECT_EQ(&device->pipeline().batchedPipeline(), &batched);
 }
 
 /// Regression test for issue #575: texture / buffer allocation

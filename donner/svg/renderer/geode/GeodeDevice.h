@@ -38,6 +38,7 @@ class GeodeGradientPipeline;
 class GeodeImagePipeline;
 class GeodeMaskPipeline;
 class GeodeFilterEngine;
+class GeodeWgpuAdapterDevice;
 class GeodeSnapshotReadbackPipeline;
 
 /**
@@ -745,6 +746,11 @@ public:
   /// pipeline, so a consumer only pays for the variant it actually draws.
   GeodeCheckerboardPipeline& checkerboardUnderlayPipeline() const;
   /// @}
+
+  /// The TEMPORARY design-0053 Phase 1 adapter implementing \c donner::gpu::Device over this
+  /// device's wgpu objects. Owned here alongside the shared pipelines (which are created
+  /// through it); see GeodeWgpuAdapterDevice.h for the removal gates.
+  GeodeWgpuAdapterDevice& adapterDevice() const;
 
 private:
   GeodeDevice();

@@ -318,6 +318,26 @@ wgpu::BindGroupLayout GeodeWgpuAdapterDevice::wgpuBindGroupLayoutOf(
   return GetHandle(wgpuBindGroupLayouts_, layout.slotIndex());
 }
 
+wgpu::Sampler GeodeWgpuAdapterDevice::wgpuSamplerOf(const gpu::Sampler& sampler) const {
+  if (!sampler.isValid() || sampler.deviceId() != deviceId()) {
+    return wgpu::Sampler();
+  }
+  return GetHandle(wgpuSamplers_, sampler.slotIndex());
+}
+
+gpu::TextureFormat GpuTextureFormatFromWgpu(wgpu::TextureFormat format) {
+  switch (static_cast<WGPUTextureFormat>(format)) {
+    case WGPUTextureFormat_RGBA8Unorm: return gpu::TextureFormat::RGBA8Unorm;
+    case WGPUTextureFormat_BGRA8Unorm: return gpu::TextureFormat::BGRA8Unorm;
+    case WGPUTextureFormat_R8Unorm: return gpu::TextureFormat::R8Unorm;
+    default: break;
+  }
+  UTILS_RELEASE_ASSERT_MSG(false,
+                           "wgpu texture format is outside the donner::gpu supported set "
+                           "(RGBA8Unorm / BGRA8Unorm / R8Unorm)");
+  return gpu::TextureFormat::RGBA8Unorm;
+}
+
 gpu::Status GeodeWgpuAdapterDevice::onCreateBuffer(uint32_t slotIndex,
                                                    const gpu::BufferDescriptor& descriptor) {
   wgpu::BufferDescriptor bufferDescriptor = {};
