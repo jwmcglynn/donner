@@ -38,9 +38,11 @@ int CaptureBaseline(const char* outputPath) {
     return 1;
   }
 
-  geode::GeodePipeline pipeline(device->device(), wgpu::TextureFormat::RGBA8Unorm);
-  geode::GeodeGradientPipeline gradientPipeline(device->device(), wgpu::TextureFormat::RGBA8Unorm);
-  geode::GeodeImagePipeline imagePipeline(device->device(), wgpu::TextureFormat::RGBA8Unorm);
+  // The device-owned shared pipelines (headless devices default to RGBA8Unorm targets, matching
+  // the baseline scene). Pipeline construction lives on GeodeDevice per the ownership rule.
+  geode::GeodePipeline& pipeline = device->pipeline();
+  geode::GeodeGradientPipeline& gradientPipeline = device->gradientPipeline();
+  geode::GeodeImagePipeline& imagePipeline = device->imagePipeline();
 
   wgpu::TextureDescriptor td = {};
   td.label = geode::wgpuLabel("BaselineTarget");

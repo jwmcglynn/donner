@@ -508,6 +508,8 @@ donner_cc_library(
         ":slug_fill_wgsl",
         ":slug_gradient_wgsl",
         ":slug_mask_wgsl",
+        "//donner/base",
+        "//donner/gpu",
         "//third_party/webgpu-cpp:webgpu_cpp",
     ],
 )

@@ -1,5 +1,8 @@
 #include "donner/svg/renderer/geode/GeodeShaders.h"
 
+#include <string_view>
+
+#include "donner/base/RcString.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "embed_resources/FilterBlendWgsl.h"
 #include "embed_resources/FilterColorMatrixWgsl.h"
@@ -53,26 +56,41 @@ wgpu::ShaderModule createShaderFromWgsl(const wgpu::Device& device, const char* 
   return device.createShaderModule(desc);
 }
 
+/// Build a `donner::gpu` WGSL shader module from an embedded source blob: the pipeline-family
+/// path through the Donner GPU runtime (design 0053 packet 8). The source bytes are identical
+/// to what the raw-wgpu helper above fed the driver, so migrated pipelines compile
+/// byte-identical WGSL.
+gpu::Result<gpu::ShaderModule> createGpuShaderFromWgsl(gpu::Device& device, const char* label,
+                                                       const unsigned char* source,
+                                                       size_t sourceSize) {
+  gpu::ShaderModuleDescriptor descriptor;
+  descriptor.label = label;
+  descriptor.sourceText =
+      RcString(std::string_view(reinterpret_cast<const char*>(source), sourceSize));
+  descriptor.sourceKind = gpu::ShaderSourceKind::Wgsl;
+  return device.createShaderModule(descriptor);
+}
+
 }  // namespace
 
-wgpu::ShaderModule createSlugFillShader(const wgpu::Device& device) {
-  return createShaderFromWgsl(device, "SlugFill", donner::embedded::kSlugFillWgsl.data(),
-                              donner::embedded::kSlugFillWgsl.size());
+gpu::Result<gpu::ShaderModule> createSlugFillShader(gpu::Device& device) {
+  return createGpuShaderFromWgsl(device, "SlugFill", donner::embedded::kSlugFillWgsl.data(),
+                                 donner::embedded::kSlugFillWgsl.size());
 }
 
-wgpu::ShaderModule createSlugGradientShader(const wgpu::Device& device) {
-  return createShaderFromWgsl(device, "SlugGradient", donner::embedded::kSlugGradientWgsl.data(),
-                              donner::embedded::kSlugGradientWgsl.size());
+gpu::Result<gpu::ShaderModule> createSlugGradientShader(gpu::Device& device) {
+  return createGpuShaderFromWgsl(device, "SlugGradient", donner::embedded::kSlugGradientWgsl.data(),
+                                 donner::embedded::kSlugGradientWgsl.size());
 }
 
-wgpu::ShaderModule createSlugMaskShader(const wgpu::Device& device) {
-  return createShaderFromWgsl(device, "SlugMask", donner::embedded::kSlugMaskWgsl.data(),
-                              donner::embedded::kSlugMaskWgsl.size());
+gpu::Result<gpu::ShaderModule> createSlugMaskShader(gpu::Device& device) {
+  return createGpuShaderFromWgsl(device, "SlugMask", donner::embedded::kSlugMaskWgsl.data(),
+                                 donner::embedded::kSlugMaskWgsl.size());
 }
 
-wgpu::ShaderModule createImageBlitShader(const wgpu::Device& device) {
-  return createShaderFromWgsl(device, "ImageBlit", donner::embedded::kImageBlitWgsl.data(),
-                              donner::embedded::kImageBlitWgsl.size());
+gpu::Result<gpu::ShaderModule> createImageBlitShader(gpu::Device& device) {
+  return createGpuShaderFromWgsl(device, "ImageBlit", donner::embedded::kImageBlitWgsl.data(),
+                                 donner::embedded::kImageBlitWgsl.size());
 }
 
 wgpu::ShaderModule createGaussianBlurShader(const wgpu::Device& device) {

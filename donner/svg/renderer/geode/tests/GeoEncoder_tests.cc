@@ -53,9 +53,11 @@ protected:
     device_ = sharedDevice();
     ASSERT_NE(device_, nullptr);
 
-    pipeline_ = std::make_unique<GeodePipeline>(device_->device(), kFormat);
-    gradientPipeline_ = std::make_unique<GeodeGradientPipeline>(device_->device(), kFormat);
-    imagePipeline_ = std::make_unique<GeodeImagePipeline>(device_->device(), kFormat);
+    // The device-owned shared pipelines (the shared headless device's target format is
+    // kFormat). Pipeline construction lives on GeodeDevice per the ownership rule.
+    pipeline_ = &device_->pipeline();
+    gradientPipeline_ = &device_->gradientPipeline();
+    imagePipeline_ = &device_->imagePipeline();
 
     wgpu::TextureDescriptor td = {};
     td.label = wgpuLabel("TestTarget");
@@ -144,9 +146,9 @@ protected:
   }
 
   std::shared_ptr<GeodeDevice> device_;
-  std::unique_ptr<GeodePipeline> pipeline_;
-  std::unique_ptr<GeodeGradientPipeline> gradientPipeline_;
-  std::unique_ptr<GeodeImagePipeline> imagePipeline_;
+  GeodePipeline* pipeline_ = nullptr;
+  GeodeGradientPipeline* gradientPipeline_ = nullptr;
+  GeodeImagePipeline* imagePipeline_ = nullptr;
   wgpu::Texture target_;
   wgpu::Buffer readback_;
 };
