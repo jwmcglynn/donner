@@ -240,8 +240,9 @@ submit serial=1 commandBuffer#0 commandCount=7
 /// Scene 3: resident fill across two frames with an identical camera and color. Frame 1
 /// uploads the geometry, writes the uniform, and builds the cached bind group; frame 2 must
 /// record ZERO buffer creates, buffer writes, and bind-group creates for the resident draw -
-/// the design 0030 wave-2 steady-state proof, now pinned structurally.
-TEST_F(GeoEncoderRecordingTest, ResidentFillSteadyStateSecondFrameCreatesNothing) {
+/// the design 0030 wave-2 steady-state proof, now pinned structurally. (Frame 2 legitimately
+/// recreates the target view, so only buffers and bind groups are claimed zero.)
+TEST_F(GeoEncoderRecordingTest, ResidentFillSteadyStateSecondFrameCreatesNoBuffersOrBindGroups) {
   Path path = PathBuilder().addRect(Box2d({8, 8}, {56, 56})).build();
   const EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
   GeodeResidentSlot slot;
@@ -556,6 +557,93 @@ submit serial=1 commandBuffer#0 commandCount=8
   setPipeline renderPipeline#2
   setPipeline renderPipeline#2
   setBindGroup index=0 bindGroup=bindGroup#0
+  draw vertexCount=6 instanceCount=1 firstVertex=0 firstInstance=0
+  endRenderPass
+)";
+  // clang-format on
+  ExpectCaptureEquals(device_.serialize(), kExpected);
+}
+
+/// Scene 9: the clip-mask family. `beginMaskPass` closes the (not-yet-open) main pass and
+/// renders a clip path into an RGBA8 coverage texture through the Slug mask pipeline
+/// (`fillPathIntoMask` / `endMaskPass`), then `setClipMask` rebinds the resolved mask view so
+/// the follow-up solid fill samples it at binding 5 instead of the dummy. Wires
+/// `GeodeGpuContext::maskPipelineOverride` to a `GeodeMaskPipeline` built against the
+/// RecordingDevice - the production path resolves the pipeline lazily through `GeodeDevice`,
+/// which this GPU-less suite has no instance of.
+TEST_F(GeoEncoderRecordingTest, MaskPassFillThenClipMaskedFill) {
+  GeodeMaskPipeline maskPipeline(device_);
+  context_.maskPipelineOverride = &maskPipeline;
+
+  const gpu::Texture maskTexture = GetResultOrFail(device_.createTexture(gpu::TextureDescriptor{
+      "RendererGeodeClipMask", gpu::Extent2d{kSize, kSize}, gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::Sampled}));
+
+  Path clipPath = PathBuilder().addRect(Box2d({8, 8}, {40, 40})).build();
+  Path fillPath = PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build();
+
+  GeoEncoder encoder = makeEncoder();
+  encoder.clear(css::RGBA(255, 255, 255, 255));
+  encoder.beginMaskPass(maskTexture);
+  encoder.fillPathIntoMask(clipPath, FillRule::NonZero);
+  encoder.endMaskPass();
+
+  // Mirrors RendererGeode::pushClip: the renderer creates the resolve view over the mask
+  // texture and rebinds it for the clipped content draws.
+  const gpu::TextureView maskView = GetResultOrFail(device_.createTextureView(
+      maskTexture, gpu::TextureViewDescriptor{"RendererGeodeClipMaskView"}));
+  encoder.setClipMask(maskView);
+  encoder.fillPath(fillPath, css::RGBA(255, 0, 0, 255), FillRule::NonZero);
+  encoder.finish();
+
+  // clang-format off
+  const std::string kExpected = FixturePreamble() + R"(createBindGroupLayout bindGroupLayout#3 label="GeodeSlugMaskBGL" entries=[{binding=0 visibility=Vertex|Fragment type=UniformBuffer} {binding=1 visibility=Fragment type=ReadOnlyStorageBuffer} {binding=2 visibility=Fragment type=ReadOnlyStorageBuffer} {binding=3 visibility=Fragment type=SampledTexture2dFloat} {binding=4 visibility=Fragment type=FilteringSampler} {binding=5 visibility=Fragment type=ReadOnlyStorageBuffer} {binding=6 visibility=Fragment type=ReadOnlyStorageBuffer} {binding=7 visibility=Fragment type=ReadOnlyStorageBuffer} {binding=8 visibility=Fragment type=ReadOnlyStorageBuffer}]
+createPipelineLayout pipelineLayout#3 label="GeodeSlugMaskPL" bindGroupLayouts=[bindGroupLayout#3]
+createShaderModule shaderModule#3 label="SlugMask" sourceKind=Wgsl sourceBytes=10068 sourceHash=e44ed2c652f71707
+createRenderPipeline renderPipeline#3 label="GeodeSlugMask" layout=pipelineLayout#3 vertex={module=shaderModule#3 entryPoint="vs_main" buffers=[{strideBytes=20 stepMode=Vertex attributes=[{format=Float32x2 offsetBytes=0 shaderLocation=0} {format=Float32x2 offsetBytes=8 shaderLocation=1} {format=Uint32 offsetBytes=16 shaderLocation=2}]}]} fragment={module=shaderModule#3 entryPoint="fs_main" targets=[{format=RGBA8Unorm blend={color={srcFactor=One dstFactor=One operation=Max} alpha={srcFactor=One dstFactor=One operation=Max}} writeMask=Red|Green|Blue|Alpha}]} topology=TriangleList cullMode=None multisampleCount=1
+createTexture texture#3 label="RendererGeodeClipMask" size=64x64 format=RGBA8Unorm usage=RenderAttachment|Sampled sampleCount=1
+createTextureView textureView#2 label="GeoEncoderTarget" texture=texture#2
+createTextureView textureView#3 label="GeoEncoderMaskTarget" texture=texture#3
+createBuffer buffer#1 label="GeodeVertexArena" byteSize=65536 usage=Vertex|CopyDst
+writeBuffer buffer#1 offsetBytes=0 byteCount=120 dataHash=86c14d9bbd3395b5
+createBuffer buffer#2 label="GeodeBandArena" byteSize=65536 usage=Storage|CopyDst
+writeBuffer buffer#2 offsetBytes=0 byteCount=32 dataHash=de19c9e003de12b6
+createBuffer buffer#3 label="GeodeCurveArena" byteSize=65536 usage=Storage|CopyDst
+writeBuffer buffer#3 offsetBytes=0 byteCount=72 dataHash=856e5bbaf55dd9d5
+createBuffer buffer#4 label="GeodeVBandArena" byteSize=65536 usage=Storage|CopyDst
+writeBuffer buffer#4 offsetBytes=0 byteCount=32 dataHash=de19c9e003de12b6
+createBuffer buffer#5 label="GeodeVCurveArena" byteSize=65536 usage=Storage|CopyDst
+writeBuffer buffer#5 offsetBytes=0 byteCount=72 dataHash=842c640d8a3ebf95
+createBuffer buffer#6 label="GeodeHGridArena" byteSize=65536 usage=Storage|CopyDst
+writeBuffer buffer#6 offsetBytes=0 byteCount=4 dataHash=4d25767f9dce13f5
+createBuffer buffer#7 label="GeodeVGridArena" byteSize=65536 usage=Storage|CopyDst
+writeBuffer buffer#7 offsetBytes=0 byteCount=4 dataHash=4d25767f9dce13f5
+createBuffer buffer#8 label="GeodeUniformArena" byteSize=65536 usage=Uniform|CopyDst
+writeBuffer buffer#8 offsetBytes=0 byteCount=112 dataHash=c5a4e9a486a20924
+createBindGroup bindGroup#0 label="GeodeMaskBindGroup" layout=bindGroupLayout#3 entries=[{binding=0 buffer=buffer#8 offsetBytes=0 sizeBytes=112} {binding=1 buffer=buffer#2 offsetBytes=0 sizeBytes=32} {binding=2 buffer=buffer#3 offsetBytes=0 sizeBytes=72} {binding=3 textureView=textureView#1} {binding=4 sampler=sampler#1} {binding=5 buffer=buffer#4 offsetBytes=0 sizeBytes=32} {binding=6 buffer=buffer#5 offsetBytes=0 sizeBytes=72} {binding=7 buffer=buffer#6 offsetBytes=0 sizeBytes=4} {binding=8 buffer=buffer#7 offsetBytes=0 sizeBytes=4}]
+createTextureView textureView#4 label="RendererGeodeClipMaskView" texture=texture#3
+writeBuffer buffer#1 offsetBytes=120 byteCount=120 dataHash=36ff4236ea0065f5
+writeBuffer buffer#2 offsetBytes=256 byteCount=32 dataHash=c6fd1e2a3b928a36
+writeBuffer buffer#3 offsetBytes=256 byteCount=72 dataHash=b4ead2ffbd88266c
+writeBuffer buffer#4 offsetBytes=256 byteCount=32 dataHash=c6fd1e2a3b928a36
+writeBuffer buffer#5 offsetBytes=256 byteCount=72 dataHash=467c6868522c325c
+writeBuffer buffer#6 offsetBytes=256 byteCount=4 dataHash=4d25767f9dce13f5
+writeBuffer buffer#7 offsetBytes=256 byteCount=4 dataHash=4d25767f9dce13f5
+writeBuffer buffer#8 offsetBytes=256 byteCount=288 dataHash=5d3dbca9cb0ccd88
+createBindGroup bindGroup#1 label="GeodeBindGroup" layout=bindGroupLayout#0 entries=[{binding=0 buffer=buffer#8 offsetBytes=256 sizeBytes=288} {binding=1 buffer=buffer#2 offsetBytes=256 sizeBytes=32} {binding=2 buffer=buffer#3 offsetBytes=256 sizeBytes=72} {binding=3 textureView=textureView#0} {binding=4 sampler=sampler#0} {binding=5 textureView=textureView#4} {binding=6 sampler=sampler#1} {binding=7 buffer=buffer#0 offsetBytes=0 sizeBytes=32} {binding=8 buffer=buffer#4 offsetBytes=256 sizeBytes=32} {binding=9 buffer=buffer#5 offsetBytes=256 sizeBytes=72} {binding=10 buffer=buffer#6 offsetBytes=256 sizeBytes=4} {binding=11 buffer=buffer#7 offsetBytes=256 sizeBytes=4}]
+submit serial=1 commandBuffer#0 commandCount=14
+  beginRenderPass label="GeoEncoderMaskPass" colorAttachments=[{view=textureView#3 loadOp=Clear storeOp=Store clearColor=(0 0 0 0)}]
+  setPipeline renderPipeline#3
+  setScissorRect x=0 y=0 width=64 height=64
+  setVertexBuffer slot=0 buffer=buffer#1 offsetBytes=0
+  setBindGroup index=0 bindGroup=bindGroup#0
+  draw vertexCount=6 instanceCount=1 firstVertex=0 firstInstance=0
+  endRenderPass
+  beginRenderPass label="GeoEncoderPass" colorAttachments=[{view=textureView#2 loadOp=Clear storeOp=Store clearColor=(1 1 1 1)}]
+  setScissorRect x=0 y=0 width=64 height=64
+  setPipeline renderPipeline#0
+  setVertexBuffer slot=0 buffer=buffer#1 offsetBytes=120
+  setBindGroup index=0 bindGroup=bindGroup#1
   draw vertexCount=6 instanceCount=1 firstVertex=0 firstInstance=0
   endRenderPass
 )";

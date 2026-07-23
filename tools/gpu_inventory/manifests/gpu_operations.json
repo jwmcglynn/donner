@@ -453,7 +453,7 @@
         "submit",
         "unmap"
       ],
-      "sha256": "64d21ae3b9d1a09901f8abf51d99b17dbdbd3858c00c8f988ea0b79ec161e48a",
+      "sha256": "7fa32d8485f1e2a104389865048b0e891eb5d6d8cb20bed8dff449b619d59d68",
       "wgpuCFunctions": [
         "wgpuDevicePoll",
         "wgpuLabel",
@@ -491,7 +491,7 @@
       ]
     },
     "donner/svg/renderer/RendererGeode.h": {
-      "sha256": "b7e9dbcfc6181882e002b573c15bcef48d9a6b0aaa307cef80bf491f63988a17",
+      "sha256": "501fb565984ac2fe0741dc92d3556f76c5affdd158ecd4f018244538cff34060",
       "wgpuCppTokens": [
         "Texture",
         "TextureFormat",
@@ -586,7 +586,7 @@
         "writeBuffer",
         "writeTexture"
       ],
-      "sha256": "19a6f707fdfec0133abf771a7cb6b6dcb43023bd02bb713d55c3cd385d11d1f7",
+      "sha256": "98ed6d8f424ca91d319f3fb28af840fec35553297dd569bf1de26c39f0abd269",
       "wgpuCFunctions": [
         "wgpuAdapterGetInfo",
         "wgpuAdapterInfoFreeMembers",
@@ -790,7 +790,7 @@
         "writeBuffer",
         "writeTexture"
       ],
-      "sha256": "856122f255e659b6ee271cfb7e4e24eaa1428f2b045892122d7fa8c97033ecb5",
+      "sha256": "b448e7a9baa85e90746be768bc1c0d493eee13d05a755ea3de882cd747dffef1",
       "wgpuCFunctions": [
         "wgpuLabel",
         "wgpuTextureOf",
@@ -866,7 +866,7 @@
       ]
     },
     "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h": {
-      "sha256": "13c80ddf66e20d6406ea520815ed3f424fcf78ae3e70023d322463e8839585ef",
+      "sha256": "8bcc1c0a44cd34d971cb8f82150f41d7797190f178fe37c4196175af875211e3",
       "wgpuCFunctions": [
         "wgpuTextureOf",
         "wgpuTextureViewOf"
@@ -1040,7 +1040,7 @@
         "submit",
         "unmap"
       ],
-      "sha256": "45f8d3628e6a11fde3416c5f70dfbe52132ea7e87e904d6bda17908859df7e19",
+      "sha256": "f8b7f050cc422a607822108d9f67c5273bdbb0844feecaf908aeef607498b8d5",
       "wgpuCFunctions": [
         "wgpuLabel",
         "wgpuTextureOf",

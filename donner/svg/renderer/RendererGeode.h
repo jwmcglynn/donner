@@ -40,19 +40,37 @@ namespace donner::svg {
  *
  * The snapshot keeps the backing \ref geode::GeodeDevice and texture alive so
  * editor presentation code can sample the texture after the renderer has moved
- * on to a later frame. The snapshot owns the \c donner::gpu texture handle;
- * the wgpu texture/view surface is derived through the adapter's escape hatch
- * at construction (TEMPORARY - the wgpu surface is deleted in packet 18,
- * ImGui/editor).
+ * on to a later frame. The snapshot carries only owned +1 wgpu references
+ * (texture and lazily-created view), NOT a \c donner::gpu handle - see the
+ * constructor for the cross-thread rationale. The wgpu surface is derived
+ * through the adapter's escape hatch at construction (TEMPORARY - the wgpu
+ * surface is deleted in packet 18, ImGui/editor).
  */
 class RendererGeodeTextureSnapshot final : public RendererTextureSnapshot {
 public:
   /**
-   * Construct a Geode texture snapshot.
+   * Construct a Geode texture snapshot. Must be called on the renderer thread
+   * that owns `device`'s adapter.
+   *
+   * Threading: snapshots are handed to the editor UI thread (GlTextureCache,
+   * debug-panel thumbnails), which may drop the last `shared_ptr` there while
+   * the AsyncRenderer worker still owns the adapter. \c donner::gpu::Device is
+   * single-threaded, so a \c gpu::Texture RAII release from the UI thread
+   * would race the adapter's slot tables and deferred-destroy queue. wgpu
+   * refcounting IS thread-safe, so an owned +1 wgpu reference is the only
+   * ownership the snapshot can safely carry across threads. The constructor
+   * therefore derives the +1 wgpu reference and releases the \c gpu::Texture
+   * handle right here, on the renderer thread. Releasing it while the frame
+   * that rendered it is still in flight on the GPU is safe by design (the
+   * runtime defers the backend release by submission serial); it is safe from
+   * unsubmitted-command validation failures because `takeTextureSnapshot`
+   * runs only after `endFrame`'s submit, so no still-unsubmitted recorded
+   * commands reference the handle.
    *
    * @param device Shared Geode device that owns the WebGPU handle lifetime.
-   * @param texture Resolved single-sample texture containing the rendered frame; ownership
-   *   moves into the snapshot. Must be a live texture of `device->adapterDevice()`.
+   * @param texture Resolved single-sample texture containing the rendered frame; consumed by
+   *   the constructor (its wgpu backing is retained, the gpu handle is released). Must be a
+   *   live texture of `device->adapterDevice()`.
    * @param dimensions Texture dimensions in device pixels.
    * @param format Texture format.
    */
@@ -67,9 +85,6 @@ public:
   [[nodiscard]] AlphaType alphaType() const override { return AlphaType::Premultiplied; }
   [[nodiscard]] RendererBitmap takeSnapshot() const override;
 
-  /// The owned \c donner::gpu texture handle.
-  [[nodiscard]] const gpu::Texture& gpuTexture() const { return gpuTexture_; }
-
   /// Resolved single-sample WebGPU texture (TEMPORARY escape-hatch surface for the editor's
   /// ImGui presentation - deleted in packet 18).
   [[nodiscard]] const wgpu::Texture& texture() const { return texture_.get(); }
@@ -82,9 +97,9 @@ public:
 
 private:
   std::shared_ptr<geode::GeodeDevice> device_;
-  gpu::Texture gpuTexture_;
-  /// Owned +1 wgpu reference derived from `gpuTexture_` at construction so presentation code
-  /// keeps a stable wgpu surface and destruction releases deterministically.
+  /// Owned +1 wgpu reference derived from the constructor's `gpu::Texture` so presentation code
+  /// keeps a stable wgpu surface; the final release (any thread) is a thread-safe wgpu refcount
+  /// decrement. See the constructor comment for why no gpu handle is stored.
   geode::ScopedWgpuHandle<wgpu::Texture> texture_;
   mutable geode::ScopedWgpuHandle<wgpu::TextureView> textureView_;
   Vector2i dimensions_ = Vector2i::Zero();

@@ -69,6 +69,12 @@ public:
    * On native this calls `wgpu::Device::poll(wait=false)`; on Emscripten the browser event loop
    * delivers the callbacks between frames, so only the base `Device::poll()` runs.
    *
+   * On wasm/Emscripten, completions therefore only advance across event-loop yields: a
+   * non-yielding multi-frame flow (e.g. a loop rendering many frames without returning to the
+   * browser) never observes a new \ref completedSerial, so deferred destroys accumulate for the
+   * duration of that flow. Such flows must yield to the event loop or call \ref waitForSerial
+   * (which yields through Asyncify) to drain them.
+   *
    * \warning Something on the frame cadence MUST call this (or \ref waitForSerial): the
    * deferred-destruction queue otherwise accumulates unboundedly (see the warning on
    * \ref completedSerial). `RendererGeode::endFrame` is the production caller.

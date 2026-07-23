@@ -63,21 +63,23 @@ using ::donner::geode::wgpuLabel;
 RendererGeodeTextureSnapshot::RendererGeodeTextureSnapshot(
     std::shared_ptr<geode::GeodeDevice> device, gpu::Texture texture, Vector2i dimensions,
     wgpu::TextureFormat format)
-    : device_(std::move(device)),
-      gpuTexture_(std::move(texture)),
-      dimensions_(dimensions),
-      format_(format) {
+    : device_(std::move(device)), dimensions_(dimensions), format_(format) {
   // TEMPORARY escape-hatch call site - deleted in packet 18 (ImGui/editor): derive the wgpu
-  // surface presentation code samples from the owned gpu::Texture. The extra addRef makes this
-  // an owned +1 reference, so the wgpu object outlives any deferred adapter-slot release and
-  // snapshot destruction releases it deterministically.
-  if (device_ && gpuTexture_.isValid()) {
-    wgpu::Texture borrowed = device_->adapterDevice().wgpuTextureOf(gpuTexture_);
+  // surface presentation code samples from the consumed gpu::Texture. The extra addRef makes
+  // this an owned +1 reference, so the wgpu object outlives the adapter-slot release below and
+  // snapshot destruction releases it deterministically (and thread-safely) from any thread.
+  if (device_ && texture.isValid()) {
+    wgpu::Texture borrowed = device_->adapterDevice().wgpuTextureOf(texture);
     if (borrowed) {
       borrowed.addRef();
       texture_.reset(borrowed);
     }
   }
+  // `texture` goes out of scope HERE, on the renderer thread - the only thread allowed to touch
+  // the single-threaded gpu::Device (see the constructor Doxygen in RendererGeode.h). The
+  // runtime defers the backend release by submission serial, so this is safe while the frame
+  // that rendered the texture is still in flight; `RendererGeode::takeTextureSnapshot` runs
+  // after `endFrame`'s submit, so no unsubmitted recorded commands reference the handle.
 }
 
 const wgpu::TextureView& RendererGeodeTextureSnapshot::textureView() const {
@@ -3046,6 +3048,15 @@ void RendererGeode::popFilterLayer() {
   // sample from `layerTexture`. Flush the shared encoder (1 extra
   // submit, paid only on frames that use a filter).
   impl_->flushFrameCommandEncoder();
+  if (!impl_->frameCommandEncoder) {
+    // The flush's fresh createCommandEncoder failed (fallible adapter path, logged there). Fail
+    // closed like the beginPatternTile guard: skip the filter composite instead of letting
+    // makeEncoder dereference the null frame encoder. Subsequent recording treats the
+    // no-encoder state as a no-op.
+    impl_->target = frame.savedTarget;
+    impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
+    return;
+  }
 
   // When the filter buffer was expanded to capture negative-coordinate content, adjust
   // deviceFromFilter to include the offset so the filter engine interprets coordinates correctly.
@@ -3195,9 +3206,15 @@ void RendererGeode::popFilterLayer() {
   // TEMPORARY escape-hatch call site - deleted in packet 10 (filters): the engine consumes and
   // returns raw wgpu textures.
   wgpu::Texture filteredTexture = layerWgpu;
+  bool filterExecutionFailed = false;
   if (impl_->filterEngine && !frame.filterGraph.empty()) {
     filteredTexture = impl_->filterEngine->execute(frame.filterGraph, layerWgpu, frame.filterRegion,
                                                    bufferDeviceFromFilter);
+    // Pre-migration parity: when the filter engine fails (null result), draw NOTHING - the
+    // wgpu-era `blitFullTarget(null texture)` was a no-op, so a failed filter left the
+    // destination untouched rather than compositing the unfiltered layer. Distinct from the
+    // empty/passthrough graph case below, where the captured layer IS composited.
+    filterExecutionFailed = !filteredTexture;
   }
 
   // Restore outer target and create a fresh encoder that preserves its
@@ -3209,7 +3226,10 @@ void RendererGeode::popFilterLayer() {
   newEncoder->setLoadPreserve();
   impl_->encoder = std::move(newEncoder);
   impl_->updateEncoderScissor();
-  if (frame.filterBufferOffsetX != 0 || frame.filterBufferOffsetY != 0) {
+  if (filterExecutionFailed) {
+    // Draw nothing (see the parity comment above). The encoder/target restore above still runs
+    // so subsequent draws land on the outer target.
+  } else if (frame.filterBufferOffsetX != 0 || frame.filterBufferOffsetY != 0) {
     // The filter result is in an expanded texture. Extract the viewport-sized region at the
     // buffer offset using a GPU texture copy, then blit the viewport-sized result. This
     // sub-rect extraction copies from a NONZERO origin, which the donner::gpu whole-rect copy
@@ -4450,6 +4470,9 @@ std::shared_ptr<const RendererTextureSnapshot> RendererGeode::takeTextureSnapsho
   impl_->targetWidth = 0;
   impl_->targetHeight = 0;
 
+  // The snapshot constructor consumes (and releases) the gpu handle on this thread; this call
+  // runs after `endFrame`'s submit, so no unsubmitted recorded commands reference it. See the
+  // constructor Doxygen in RendererGeode.h for the cross-thread ownership rationale.
   return std::make_shared<RendererGeodeTextureSnapshot>(impl_->device, std::move(*texture),
                                                         dimensions, impl_->textureFormat);
 }

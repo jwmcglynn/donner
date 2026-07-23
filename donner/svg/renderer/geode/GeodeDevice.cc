@@ -738,6 +738,9 @@ GeodeMaskPipeline& GeodeGpuContext::maskPipeline() const {
   if (maskPipelineOverride != nullptr) {
     return *maskPipelineOverride;
   }
+  UTILS_RELEASE_ASSERT_MSG(geodeDevice != nullptr,
+                           "GeodeGpuContext::maskPipeline requires maskPipelineOverride or a "
+                           "wired geodeDevice");
   return geodeDevice->maskPipeline();
 }
 
