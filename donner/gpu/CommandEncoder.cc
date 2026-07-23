@@ -486,6 +486,15 @@ Status CommandEncoder::copyTextureToTexture(const Texture& source, const Texture
   if (destinationRecord.hasError()) {
     return fail(std::move(destinationRecord).error());
   }
+  // WebGPU forbids self-copy: source and destination must be different textures
+  // ("GPUCommandEncoder.copyTextureToTexture" validation; overlapping copies are undefined).
+  if (source.slotIndex() == destination.slotIndex() &&
+      source.generation() == destination.generation()) {
+    return fail(Err(GpuErrorType::InvalidDescriptor,
+                    std::format("copyTextureToTexture: source and destination are the same "
+                                "texture \"{}\"",
+                                sourceRecord.result()->descriptor.label.str())));
+  }
   const TextureDescriptor& sourceDescriptor = sourceRecord.result()->descriptor;
   const TextureDescriptor& destinationDescriptor = destinationRecord.result()->descriptor;
   if (sourceDescriptor.format != destinationDescriptor.format) {

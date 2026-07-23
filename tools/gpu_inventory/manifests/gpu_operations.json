@@ -985,23 +985,14 @@
         "writeBuffer",
         "writeTexture"
       ],
-      "sha256": "df5579489aa048f8cf0fdec5e1023c636481c4fba0719e0b67390895b8325b39",
+      "sha256": "f9495939faa8facff508b22b84a313cff807d1b1c0f9c50df2d7c57eaf342bd9",
       "wgpuCFunctions": [
         "wgpuBindGroupLayoutOf",
-        "wgpuBindGroupLayouts_",
-        "wgpuBindGroups_",
-        "wgpuBuffers_",
         "wgpuLabel",
-        "wgpuPipelineLayouts_",
         "wgpuRenderPipelineOf",
-        "wgpuRenderPipelines_",
         "wgpuSamplerOf",
-        "wgpuSamplers_",
-        "wgpuShaderModules_",
         "wgpuTextureOf",
-        "wgpuTextureViewOf",
-        "wgpuTextureViews_",
-        "wgpuTextures_"
+        "wgpuTextureViewOf"
       ],
       "wgpuCTypes": [
         "WGPUBindGroupLayout",
@@ -1073,22 +1064,13 @@
       ]
     },
     "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h": {
-      "sha256": "4a5129bf99a7ab644bf0e9085b7ae6851f5ef718c0aeb303637f2b7cbe1b82c9",
+      "sha256": "6e3e430a3b62a522067086c583840b29d7a6435aa93bbf6b7004a28c35a78948",
       "wgpuCFunctions": [
         "wgpuBindGroupLayoutOf",
-        "wgpuBindGroupLayouts_",
-        "wgpuBindGroups_",
-        "wgpuBuffers_",
-        "wgpuPipelineLayouts_",
         "wgpuRenderPipelineOf",
-        "wgpuRenderPipelines_",
         "wgpuSamplerOf",
-        "wgpuSamplers_",
-        "wgpuShaderModules_",
         "wgpuTextureOf",
-        "wgpuTextureViewOf",
-        "wgpuTextureViews_",
-        "wgpuTextures_"
+        "wgpuTextureViewOf"
       ],
       "wgpuCppTokens": [
         "BindGroup",
@@ -1136,7 +1118,7 @@
         "unmap",
         "writeTexture"
       ],
-      "sha256": "bc04d588da5f3370b8effcfd5f6d3d68950aedc0701d1743c02fdc43e8df6af4",
+      "sha256": "6eaeac5abaf53cc2fb194ec9a0f6acb13f617cb5a0fffc83eb006f9cefdb7479",
       "wgpuCFunctions": [
         "wgpuLabel"
       ],
@@ -1253,9 +1235,18 @@
     },
     "donner/svg/renderer/geode/tests/GeodeWgpuAdapterDevice_tests.cc": {
       "operations": [
-        "createTexture"
+        "copyTextureToBuffer",
+        "createBuffer",
+        "createCommandEncoder",
+        "createTexture",
+        "finish",
+        "getConstMappedRange",
+        "mapAsync",
+        "poll",
+        "submit",
+        "unmap"
       ],
-      "sha256": "f3d1afb6a795907808e037e92fd253dbbfbd5e9f3fa4f661aad361395af457f9",
+      "sha256": "b39eaa703aa4aa67a2efcca1d0d4f9d543fbdea223206d55e9d8e3049ee5a62f",
       "wgpuCFunctions": [
         "wgpuBindGroupLayoutOf",
         "wgpuLabel",
@@ -1263,7 +1254,24 @@
         "wgpuTextureOf",
         "wgpuTextureViewOf"
       ],
+      "wgpuCTypes": [
+        "WGPUMapAsyncStatus",
+        "WGPUMapAsyncStatus_Success",
+        "WGPUStringView"
+      ],
       "wgpuCppTokens": [
+        "Buffer",
+        "BufferDescriptor",
+        "BufferMapCallbackInfo",
+        "BufferUsage",
+        "CallbackMode",
+        "CommandBuffer",
+        "CommandEncoder",
+        "Default",
+        "Extent3D",
+        "MapMode",
+        "TexelCopyBufferInfo",
+        "TexelCopyTextureInfo",
         "Texture",
         "TextureDescriptor",
         "TextureDimension",

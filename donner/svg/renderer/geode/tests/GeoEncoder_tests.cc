@@ -53,8 +53,10 @@ protected:
     device_ = sharedDevice();
     ASSERT_NE(device_, nullptr);
 
-    // The device-owned shared pipelines (the shared headless device's target format is
-    // kFormat). Pipeline construction lives on GeodeDevice per the ownership rule.
+    // The device-owned shared pipelines target the device's format; the per-test render
+    // targets are created with kFormat, so the two must agree. Pipeline construction lives on
+    // GeodeDevice per the ownership rule.
+    ASSERT_EQ(device_->textureFormat(), kFormat);
     pipeline_ = &device_->pipeline();
     gradientPipeline_ = &device_->gradientPipeline();
     imagePipeline_ = &device_->imagePipeline();
