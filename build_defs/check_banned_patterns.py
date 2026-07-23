@@ -147,11 +147,17 @@ _RULES: List[_Rule] = [
         # wgpu-native pipeline constructor, and its recording backend never touches a driver.
         # Pipeline ownership rules for the new runtime are enforced by its Device API and model
         # tests.
+        # GeodeWgpuAdapterDevice.cc is the design-0053 transition adapter: its
+        # `onCreateRenderPipeline` hook is the wgpu translation of the runtime's validated
+        # `donner::gpu::Device::createRenderPipeline`, and the pipelines it constructs are the
+        # same GeodeDevice-owned singletons as before (the pipeline classes cache the handles;
+        # the adapter slot-owns the wgpu objects for the device's lifetime).
         exempt_path_prefixes=(
             "donner/svg/renderer/geode/GeodePipeline.cc",
             "donner/svg/renderer/geode/GeodeImagePipeline.cc",
             "donner/svg/renderer/geode/GeodeFilterEngine.cc",
             "donner/svg/renderer/geode/GeodeCheckerboardPipeline.cc",
+            "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.cc",
             "donner/svg/renderer/geode/tests/GeoEncoder_tests.cc",
             "donner/svg/renderer/geode/tests/GeodeShaders_tests.cc",
             "donner/gpu/",

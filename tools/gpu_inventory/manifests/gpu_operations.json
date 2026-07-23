@@ -580,6 +580,24 @@
         "BufferUsage"
       ]
     },
+    "donner/svg/renderer/geode/GeodeCallbackState.h": {
+      "operations": [
+        "onSubmittedWorkDone",
+        "poll"
+      ],
+      "sha256": "781485ed8dbe02247a3c84906458c865adcb0fd02df55fa703bff9b44347d509",
+      "wgpuCTypes": [
+        "WGPUQueueWorkDoneCallback",
+        "WGPUQueueWorkDoneStatus",
+        "WGPUStringView"
+      ],
+      "wgpuCppTokens": [
+        "CallbackMode",
+        "Default",
+        "Queue",
+        "QueueWorkDoneCallbackInfo"
+      ]
+    },
     "donner/svg/renderer/geode/GeodeCheckerboardPipeline.cc": {
       "operations": [
         "createBindGroupLayout",
@@ -644,14 +662,13 @@
         "destroy",
         "getQueue",
         "hasFeature",
-        "onSubmittedWorkDone",
         "poll",
         "requestAdapter",
         "requestDevice",
         "writeBuffer",
         "writeTexture"
       ],
-      "sha256": "1677c499ba3e6837bb258b235791b0aff3d1e8d9ed90c419b9e34c022182d52e",
+      "sha256": "2316bef77c5b7484fcffa8d9bcb5a4a2aaf3c98dc86f7cc67bdc09a213146c3d",
       "wgpuCFunctions": [
         "wgpuAdapterGetInfo",
         "wgpuAdapterInfoFreeMembers",
@@ -689,8 +706,6 @@
         "WGPUInstanceBackend_Vulkan",
         "WGPUInstanceFeatureName",
         "WGPUInstanceFeatureName_TimedWaitAny",
-        "WGPUQueueWorkDoneCallback",
-        "WGPUQueueWorkDoneStatus",
         "WGPUStatus_Success",
         "WGPUStringView"
       ],
@@ -712,7 +727,6 @@
         "InstanceDescriptor",
         "InstanceExtras",
         "Queue",
-        "QueueWorkDoneCallbackInfo",
         "RequestAdapterOptions",
         "Sampler",
         "SamplerDescriptor",
@@ -1005,6 +1019,145 @@
         "TextureView"
       ]
     },
+    "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.cc": {
+      "operations": [
+        "beginRenderPass",
+        "copyTextureToBuffer",
+        "copyTextureToTexture",
+        "createBindGroup",
+        "createBindGroupLayout",
+        "createBuffer",
+        "createCommandEncoder",
+        "createPipelineLayout",
+        "createRenderPipeline",
+        "createSampler",
+        "createShaderModule",
+        "createTexture",
+        "createView",
+        "draw",
+        "finish",
+        "poll",
+        "setBindGroup",
+        "setPipeline",
+        "setScissorRect",
+        "setVertexBuffer",
+        "setViewport",
+        "submit",
+        "writeBuffer",
+        "writeTexture"
+      ],
+      "sha256": "9abb34016459d7da23a8cfa79822e3e388e3b27981ce405d5723e3f2ab77145f",
+      "wgpuCFunctions": [
+        "wgpuBindGroupLayoutOf",
+        "wgpuBindGroupLayouts_",
+        "wgpuBindGroups_",
+        "wgpuBuffers_",
+        "wgpuLabel",
+        "wgpuPipelineLayouts_",
+        "wgpuRenderPipelineOf",
+        "wgpuRenderPipelines_",
+        "wgpuSamplers_",
+        "wgpuShaderModules_",
+        "wgpuTextureOf",
+        "wgpuTextureViewOf",
+        "wgpuTextureViews_",
+        "wgpuTextures_"
+      ],
+      "wgpuCTypes": [
+        "WGPUBindGroupLayout",
+        "WGPUBufferUsage",
+        "WGPUColorWriteMask",
+        "WGPUShaderStage",
+        "WGPUTextureUsage"
+      ],
+      "wgpuCppTokens": [
+        "AddressMode",
+        "BindGroup",
+        "BindGroupDescriptor",
+        "BindGroupEntry",
+        "BindGroupLayout",
+        "BindGroupLayoutDescriptor",
+        "BindGroupLayoutEntry",
+        "BlendFactor",
+        "BlendOperation",
+        "BlendState",
+        "Buffer",
+        "BufferBindingType",
+        "BufferDescriptor",
+        "BufferUsage",
+        "ColorTargetState",
+        "ColorWriteMask",
+        "CommandBuffer",
+        "CommandEncoder",
+        "CullMode",
+        "Default",
+        "Extent3D",
+        "FilterMode",
+        "FragmentState",
+        "LoadOp",
+        "PipelineLayout",
+        "PipelineLayoutDescriptor",
+        "PrimitiveTopology",
+        "RenderPassColorAttachment",
+        "RenderPassDescriptor",
+        "RenderPassEncoder",
+        "RenderPipeline",
+        "RenderPipelineDescriptor",
+        "Sampler",
+        "SamplerBindingType",
+        "SamplerDescriptor",
+        "ShaderModule",
+        "ShaderModuleDescriptor",
+        "ShaderSourceWGSL",
+        "ShaderStage",
+        "StoreOp",
+        "TexelCopyBufferInfo",
+        "TexelCopyBufferLayout",
+        "TexelCopyTextureInfo",
+        "Texture",
+        "TextureDescriptor",
+        "TextureDimension",
+        "TextureFormat",
+        "TextureSampleType",
+        "TextureUsage",
+        "TextureView",
+        "TextureViewDimension",
+        "VertexAttribute",
+        "VertexBufferLayout",
+        "VertexFormat",
+        "VertexStepMode"
+      ]
+    },
+    "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h": {
+      "sha256": "e16d0a9511905be1b2825554682eefd92f3b337589bc19d0f5aaf3c9ea513669",
+      "wgpuCFunctions": [
+        "wgpuBindGroupLayoutOf",
+        "wgpuBindGroupLayouts_",
+        "wgpuBindGroups_",
+        "wgpuBuffers_",
+        "wgpuPipelineLayouts_",
+        "wgpuRenderPipelineOf",
+        "wgpuRenderPipelines_",
+        "wgpuSamplers_",
+        "wgpuShaderModules_",
+        "wgpuTextureOf",
+        "wgpuTextureViewOf",
+        "wgpuTextureViews_",
+        "wgpuTextures_"
+      ],
+      "wgpuCppTokens": [
+        "BindGroup",
+        "BindGroupLayout",
+        "Buffer",
+        "Device",
+        "PipelineLayout",
+        "RenderPipeline",
+        "Sampler",
+        "ShaderModule",
+        "Texture",
+        "TextureView"
+      ]
+    },
     "donner/svg/renderer/geode/GeodeWgpuUtil.h": {
       "operations": [
         "release"
@@ -1150,6 +1303,26 @@
       "sha256": "c0c2d191d029348686102352feaf8e0cf7150ba1204b5f118a47444c1e2d8348",
       "wgpuCppTokens": [
         "ShaderModule"
+      ]
+    },
+    "donner/svg/renderer/geode/tests/GeodeWgpuAdapterDevice_tests.cc": {
+      "operations": [
+        "createTexture"
+      ],
+      "sha256": "f3d1afb6a795907808e037e92fd253dbbfbd5e9f3fa4f661aad361395af457f9",
+      "wgpuCFunctions": [
+        "wgpuBindGroupLayoutOf",
+        "wgpuLabel",
+        "wgpuRenderPipelineOf",
+        "wgpuTextureOf",
+        "wgpuTextureViewOf"
+      ],
+      "wgpuCppTokens": [
+        "Texture",
+        "TextureDescriptor",
+        "TextureDimension",
+        "TextureFormat",
+        "TextureUsage"
       ]
     },
     "donner/svg/renderer/tests/RendererGeodeGolden_tests.cc": {

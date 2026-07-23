@@ -128,31 +128,13 @@ void WaitForSubmittedWork(const wgpu::Device& device, const wgpu::Queue& queue) 
 
   struct WorkDoneState {
     std::atomic<bool> done = false;
+
+    /// Callback hook for `notifyWhenSubmittedWorkDone`.
+    void onWorkDone() { done.store(true, std::memory_order_release); }
   };
   auto state = std::make_shared<WorkDoneState>();
 
-  wgpu::QueueWorkDoneCallbackInfo callbackInfo{wgpu::Default};
-  callbackInfo.mode = wgpu::CallbackMode::AllowSpontaneous;
-  // emdawnwebgpu's WGPUQueueWorkDoneCallback carries an extra WGPUStringView
-  // message parameter that wgpu-native's doesn't; match whichever the active
-  // header declares.
-#if defined(__EMSCRIPTEN__)
-  callbackInfo.callback = [](WGPUQueueWorkDoneStatus /*status*/, WGPUStringView /*message*/,
-                             void* userdata1, void* /*userdata2*/) {
-    const std::shared_ptr<WorkDoneState> state = takeWgpuCallbackState<WorkDoneState>(userdata1);
-    state->done.store(true, std::memory_order_release);
-  };
-#else
-  callbackInfo.callback = [](WGPUQueueWorkDoneStatus /*status*/, void* userdata1,
-                             void* /*userdata2*/) {
-    const std::shared_ptr<WorkDoneState> state = takeWgpuCallbackState<WorkDoneState>(userdata1);
-    state->done.store(true, std::memory_order_release);
-  };
-#endif
-  callbackInfo.userdata1 = retainWgpuCallbackState(state);
-  callbackInfo.userdata2 = nullptr;
-
-  queue.onSubmittedWorkDone(callbackInfo);
+  notifyWhenSubmittedWorkDone(queue, state);
   for (int pollIter = 0; !state->done.load(std::memory_order_acquire) && pollIter < 2000;
        ++pollIter) {
     device.poll(true, nullptr);
