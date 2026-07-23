@@ -1112,6 +1112,26 @@ Status Device::validateBufferHandleForBackend(const Buffer& buffer) const {
   return OkStatus();
 }
 
+Status Device::validateTextureHandleForBackend(const Texture& texture) const {
+  auto record = resolve(textures_, texture, TextureTag::kName);
+  if (record.hasError()) {
+    return std::move(record).error();
+  }
+  return OkStatus();
+}
+
+Status Device::validateTextureViewHandleForBackend(const TextureView& textureView) const {
+  auto record = resolve(textureViews_, textureView, TextureViewTag::kName);
+  if (record.hasError()) {
+    return std::move(record).error();
+  }
+  auto viewedTexture = resolveViewedTexture(*record.result());
+  if (viewedTexture.hasError()) {
+    return std::move(viewedTexture).error();
+  }
+  return OkStatus();
+}
+
 CommandBuffer Device::registerCommandBuffer(std::vector<Command>&& commands) {
   return allocateHandle<CommandBufferTag>(commandBuffers_,
                                           CommandBufferRecord{std::move(commands)});

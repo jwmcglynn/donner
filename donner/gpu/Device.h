@@ -447,6 +447,23 @@ protected:
    */
   Status validateBufferHandleForBackend(const Buffer& buffer) const;
 
+  /**
+   * Validates a texture handle for backend-provided auxiliary entry points, running the same
+   * null/device-identity/generation checks the template-method public API performs.
+   *
+   * @param texture Handle to validate.
+   */
+  Status validateTextureHandleForBackend(const Texture& texture) const;
+
+  /**
+   * Validates a texture view handle for backend-provided auxiliary entry points: the view
+   * itself plus a re-resolution of its viewed texture, so a view of a destroyed (or
+   * slot-recycled) texture fails closed exactly like it does on the normal Device paths.
+   *
+   * @param textureView Handle to validate.
+   */
+  Status validateTextureViewHandleForBackend(const TextureView& textureView) const;
+
   /// Backend hook: a validated command buffer was submitted.
   /// @param submissionSerial Serial assigned to this submission.
   /// @param commandBufferSlotIndex Slot the command buffer occupied before being consumed.
