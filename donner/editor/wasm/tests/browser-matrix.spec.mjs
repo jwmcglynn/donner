@@ -109,3 +109,26 @@ test("real Safari gate pins the served Wasm and scopes every visibility probe", 
     "a reload must pass the same visible-rAF preflight as initial navigation",
   );
 });
+
+test("real Safari memory gate clicks Donner Splash and dwells for five minutes", () => {
+  const harness = readFileSync(
+    path.join(testDirectory, "safari-geode-regression.mjs"),
+    "utf8",
+  );
+
+  assert.match(
+    harness,
+    /kMemoryOnly[\s\S]*id:\s*"donner-splash"[\s\S]*await click\(driver,\s*sampleClickPoint\.x,\s*sampleClickPoint\.y\)[\s\S]*activeSample\?\.sampleId === sample\.id/,
+    "the memory gate must enter the Splash through the trusted carousel click path",
+  );
+  assert.match(
+    harness,
+    /const kMemoryDwellMs = 5 \* 60 \* 1_000;/,
+    "the Safari significant-memory gate must cover the five-minute reload window",
+  );
+  assert.match(
+    harness,
+    /result\.memoryDwell\.length >= kMemoryDwellMs \/ kMemorySampleIntervalMs/,
+    "the gate must prove its sampler stayed alive throughout the five-minute dwell",
+  );
+});
