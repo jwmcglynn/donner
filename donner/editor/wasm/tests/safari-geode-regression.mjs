@@ -26,7 +26,7 @@
  *   DONNER_SAFARI_REQUIRED=1      Treat unavailable Safari automation as failure, not a skip.
  *   DONNER_SAFARI_SEAM_ONLY=1     Stop after the fractional-pan compositor pixel probe.
  *   DONNER_SAFARI_LIVE_PAN_ONLY=1 Capture trusted wheel-pan frames and fail on any edge leak.
- *   DONNER_SAFARI_MEMORY_ONLY=1   Hold Donner Splash for 90 seconds and detect resource growth or
+ *   DONNER_SAFARI_MEMORY_ONLY=1   Hold Donner Splash for five minutes and detect resource growth or
  *                                  a Safari significant-memory reload.
  */
 
@@ -45,6 +45,8 @@ const kAllowUnpinnedPackage = process.env.DONNER_SAFARI_ALLOW_UNPINNED_PACKAGE =
 const kSeamOnly = process.env.DONNER_SAFARI_SEAM_ONLY === "1";
 const kLivePanOnly = process.env.DONNER_SAFARI_LIVE_PAN_ONLY === "1";
 const kMemoryOnly = process.env.DONNER_SAFARI_MEMORY_ONLY === "1";
+const kMemoryDwellMs = 5 * 60 * 1_000;
+const kMemorySampleIntervalMs = 5_000;
 const kTimeoutMs = Number(process.env.DONNER_SAFARI_TIMEOUT_MS || 30_000);
 const kRunId = new Date().toISOString().replaceAll(/[^0-9A-Za-z]/g, "");
 const kArtifactDir = process.env.DONNER_SAFARI_ARTIFACT_DIR
@@ -1044,10 +1046,10 @@ async function runRegression(driver, editorUrl, result) {
         });
       };
       capture();
-      window.__donnerSafariMemoryTimer = setInterval(capture, 5_000);
+      window.__donnerSafariMemoryTimer = setInterval(capture, ${kMemorySampleIntervalMs});
       return true;
     `);
-    await new Promise((resolve) => setTimeout(resolve, 90_000));
+    await new Promise((resolve) => setTimeout(resolve, kMemoryDwellMs));
     const finalState = await readState(driver);
     result.memoryDwell = await driver.execute(`
       clearInterval(window.__donnerSafariMemoryTimer);
@@ -1065,7 +1067,10 @@ async function runRegression(driver, editorUrl, result) {
       "Safari returned to the picker during the memory dwell",
     );
     assertFlatHeap("Safari memory dwell", finalState, initialHeapBytes);
-    assert.ok(result.memoryDwell.length >= 18, "Safari memory timer stopped during the dwell");
+    assert.ok(
+      result.memoryDwell.length >= kMemoryDwellMs / kMemorySampleIntervalMs,
+      "Safari memory timer stopped during the dwell",
+    );
     assert.equal(
       Number(finalState.worker?.completedResults || 0),
       settledWorkerResults,
@@ -1593,7 +1598,7 @@ async function main() {
     result.passed = true;
     fs.writeFileSync(path.join(kArtifactDir, "result.json"), JSON.stringify(result, null, 2));
     const passLabel = kMemoryOnly
-      ? "real Apple Safari 90-second memory dwell"
+      ? "real Apple Safari five-minute Splash memory dwell"
       : kLivePanOnly
       ? "real Apple Safari live-pan edge pixels"
       : kSeamOnly
