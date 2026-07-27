@@ -131,4 +131,19 @@ test("real Safari memory gate clicks Donner Splash and dwells for five minutes",
     /result\.memoryDwell\.length >= kMemoryDwellMs \/ kMemorySampleIntervalMs/,
     "the gate must prove its sampler stayed alive throughout the five-minute dwell",
   );
+  assert.match(
+    harness,
+    /const kMemoryMaxWebContentRssBytes = 512 \* 1024 \* 1024;/,
+    "the gate must fail before Safari's WebContent process reaches termination pressure",
+  );
+  assert.match(
+    harness,
+    /result\.memoryWebContentSamples\.push[\s\S]*rssBytes[\s\S]*kMemoryMaxWebContentRssBytes/,
+    "the gate must observe WebContent RSS outside the page's Wasm and WebGPU counters",
+  );
+  assert.match(
+    harness,
+    /Safari WebContent process exited during the memory dwell/,
+    "a WebContent process replacement must be reported as a reload or termination",
+  );
 });
