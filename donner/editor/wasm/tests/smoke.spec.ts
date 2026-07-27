@@ -859,9 +859,11 @@ for (
       }).toBe(true);
     } finally {
       console.log(
-        `carousel-presentation sample=${sample.id} timings=${JSON.stringify(phaseTimings)} runtime=${
-          JSON.stringify(workerRuntimeBeforeClick)
-        } worker=${JSON.stringify(completedWorkerStats)}`,
+        `carousel-presentation sample=${sample.id} timings=${
+          JSON.stringify(phaseTimings)
+        } runtime=${JSON.stringify(workerRuntimeBeforeClick)} worker=${
+          JSON.stringify(completedWorkerStats)
+        }`,
       );
     }
     expect(phaseTimings.presentedMs).toBeLessThan(carouselDeadlineMs);
@@ -938,8 +940,11 @@ test("carousel never exposes the placeholder viewport for Donner Splash", async 
   await page.mouse.click(bounds.x + bounds.width * 0.24, bounds.y + 282);
   await expect(canvas).toHaveAttribute("data-active-sample-id", "donner-splash");
   await expect
-    .poll(async () => Number(await page.locator("canvas[data-direct-surface-visible=\"true\"]")
-      .getAttribute("data-direct-surface-frame") || 0), {
+    .poll(async () =>
+      Number(
+        await page.locator("canvas[data-direct-surface-visible=\"true\"]")
+          .getAttribute("data-direct-surface-frame") || 0,
+      ), {
       message: "expected Donner Splash to present a document surface",
       timeout: 5000,
       intervals: [8, 16, 25, 50],
@@ -1619,7 +1624,8 @@ test("wasm editor renders layer panel previews after loading a document", async 
   }
   await expect
     .poll(async () => page.evaluate(() => window.__donnerLayerThumbnailStats?.bitmapCount || 0), {
-      message: "expected the Layers panel to render SVG row thumbnails instead of fallback swatches",
+      message:
+        "expected the Layers panel to render SVG row thumbnails instead of fallback swatches",
       timeout: 20000,
       intervals: [16, 25, 50, 100],
     })
@@ -1637,6 +1643,77 @@ test("wasm editor renders layer panel previews after loading a document", async 
     })
     .toBe(true);
 
+  expect(fatalMessages).toEqual([]);
+});
+
+test("wasm editor drains thumbnails for expanded sublayers", async ({ page }) => {
+  const fatalMessages = await openEditor(page, { wgpuReadbackStats: kBackend === "geode" });
+  const canvas = page.locator("canvas#canvas");
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  if (bounds === null) {
+    return;
+  }
+
+  await page.mouse.click(bounds.x + bounds.width * 0.25, bounds.y + 282);
+  await expect(canvas).toHaveAttribute("data-active-sample-id", "donner-splash");
+  await expect
+    .poll(async () => {
+      const stats = await page.evaluate(() => window.__donnerLayerThumbnailStats);
+      if (
+        !stats || stats.rowCount <= 1 || stats.deferredCount !== 0
+        || stats.bitmapCount !== stats.rowCount || stats.textureCount < stats.bitmapCount
+      ) {
+        return 0;
+      }
+      return stats.rowCount;
+    }, {
+      message: "expected the initially visible Splash layers to finish their thumbnail batch",
+      timeout: 20000,
+      intervals: [16, 25, 50, 100],
+    })
+    .toBeGreaterThan(1);
+  const initialRowCount = await page.evaluate(
+    () => window.__donnerLayerThumbnailStats?.rowCount || 0,
+  );
+
+  // The top-level Splash group is expanded by default. Its Sunburst child is the second visible
+  // sublayer and contains two nested children, which makes one thumbnail remain deferred after the
+  // first incremental pass.
+  await page.mouse.click(
+    bounds.x + bounds.width - kRightPaneWidth + 35,
+    bounds.y + 125,
+  );
+  await expect
+    .poll(async () => {
+      const stats = await page.evaluate(() => window.__donnerLayerThumbnailStats);
+      return Boolean(
+        stats
+          && stats.rowCount > initialRowCount
+          && stats.deferredCount === 0
+          && stats.bitmapCount === stats.rowCount
+          && stats.textureCount >= stats.bitmapCount,
+      );
+    }, {
+      message: "expected every expanded Sunburst sublayer to publish a bitmap and Wasm texture",
+      timeout: 20000,
+      intervals: [16, 25, 50, 100],
+    })
+    .toBe(true);
+
+  if (kBackend === "geode") {
+    const request = await requestWgpuDiagnostic(page);
+    await expect
+      .poll(async () => page.evaluate(() => window.__donnerWgpuReadbackStats?.request || 0), {
+        message: "expected a WGPU capture after the expanded sublayer thumbnails settled",
+        timeout: 5000,
+        intervals: [16, 25, 50, 100],
+      })
+      .toBeGreaterThanOrEqual(request);
+  }
+  const previewStats = await readLayerPreviewColorStats(page);
+  expect(previewStats.coloredPixels).toBeGreaterThan(100);
+  expect(previewStats.maxChannel).toBeGreaterThan(80);
   expect(fatalMessages).toEqual([]);
 });
 

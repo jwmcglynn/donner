@@ -475,8 +475,7 @@ bool ShouldRefreshSidebarSnapshots(bool rendererBusy, bool interactionActive) no
 }
 
 bool SidebarSnapshotRefreshPendingAfterPass(std::size_t deferredThumbnailCount) noexcept {
-  std::ignore = deferredThumbnailCount;
-  return false;
+  return deferredThumbnailCount > 0u;
 }
 
 bool SamplePickerActionsNeedFollowupFrame(bool dismiss, bool openFile) noexcept {
