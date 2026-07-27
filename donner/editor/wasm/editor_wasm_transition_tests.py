@@ -9,13 +9,13 @@ class EditorWasmTransitionTest(unittest.TestCase):
         expected = """\
 compilation_mode=opt
 copt_pthread=True
-copt_oz=False
+copt_oz=True
 cxxopt_constexpr=True
 disable_perf_opt_transition=True
 editor_wasm_enabled=True
 geode_enabled=True
 linkopt_pthread=True
-linkopt_oz=False
+linkopt_oz=True
 renderer_backend=geode
 renderer_wasm_enabled=True
 text=True

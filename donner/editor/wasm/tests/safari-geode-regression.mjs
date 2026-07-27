@@ -51,6 +51,7 @@ const kMemoryMaxWebContentRssBytes = 512 * 1024 * 1024;
 const kMemorySampleIntervalMs = 5_000;
 const kTimeoutMs = Number(process.env.DONNER_SAFARI_TIMEOUT_MS || 30_000);
 const kRunId = new Date().toISOString().replaceAll(/[^0-9A-Za-z]/g, "");
+const kPageLifetimeToken = crypto.randomUUID();
 const kArtifactDir = process.env.DONNER_SAFARI_ARTIFACT_DIR
   || path.join(os.tmpdir(), `donner-safari-geode-${kRunId}`);
 const kFatalPattern =
@@ -113,6 +114,26 @@ function safariWebContentProcesses() {
     });
   }
   return processes;
+}
+
+function bringSafariAutomationWindowForward() {
+  if (process.platform !== "darwin") {
+    return;
+  }
+  execFileSync(
+    "/usr/bin/osascript",
+    [
+      "-e",
+      "tell application \"Safari\"",
+      "-e",
+      "activate",
+      "-e",
+      "if (count of windows) > 0 then set index of last window to 1",
+      "-e",
+      "end tell",
+    ],
+    { stdio: "ignore" },
+  );
 }
 
 class SafariDriverClient {
@@ -221,7 +242,26 @@ function pointerMove(x, y, duration = 0) {
 }
 
 async function click(driver, x, y) {
+  // SafariDriver 26 can update the pointer location used by pointerDown without dispatching the
+  // pointerMove/mousemove pair that Emscripten uses to update ImGui's mouse position. Prime only
+  // that position with a synthetic motion event, then require the actual activation events below
+  // to remain trusted WebDriver input.
+  await driver.execute(
+    `
+    const [x, y] = arguments;
+    const target = document.elementFromPoint(x, y);
+    target?.dispatchEvent(new MouseEvent('mousemove', {
+      bubbles: true,
+      cancelable: true,
+      clientX: x,
+      clientY: y,
+      view: window,
+    }));
+    `,
+    [Math.round(x), Math.round(y)],
+  );
   await driver.actions([
+    pointerMove(Math.max(0, x - 40), Math.max(0, y - 40), 40),
     pointerMove(x, y, 80),
     { type: "pause", duration: 50 },
     { type: "pointerDown", button: 0 },
@@ -638,12 +678,15 @@ function assertThumbnailDiagnostic(state, initialDeviceState) {
 }
 
 async function installErrorCapture(driver) {
-  await driver.execute(`
+  await driver.execute(
+    `
+    const [pageLifetimeToken] = arguments;
     clearInterval(window.__donnerSafariRegressionTimer);
     if (window.__donnerSafariRegressionAnimationFrameRequest) {
       cancelAnimationFrame(window.__donnerSafariRegressionAnimationFrameRequest);
     }
     window.__donnerSafariRegressionErrors = [];
+    window.__donnerSafariRegressionPageLifetimeToken = pageLifetimeToken;
     window.__donnerSafariRegressionAnimationFrames = 0;
     window.__donnerSafariRegressionTimerTicks = 0;
     window.__donnerSafariRegressionAnimationFrameRequest = requestAnimationFrame(() => {
@@ -681,7 +724,9 @@ async function installErrorCapture(driver) {
       };
     }
     return true;
-  `);
+  `,
+    [kPageLifetimeToken],
+  );
 }
 
 async function cleanupVisibleSafariAnimationFrameProbe(driver) {
@@ -745,6 +790,7 @@ async function readState(driver) {
       documentHasFocus: document.hasFocus(),
       timerTicks: window.__donnerSafariRegressionTimerTicks || 0,
       visibilityState: document.visibilityState,
+      pageLifetimeToken: window.__donnerSafariRegressionPageLifetimeToken || null,
       pageTimeOrigin: performance.timeOrigin,
       presentationResources: window.__donnerPresentationResourceStats || null,
       runtimeInitializedAtMs: window.__donnerRuntimeInitializedAtMs || 0,
@@ -851,6 +897,7 @@ async function runRegression(driver, editorUrl, result) {
     result.windowRectWarning = String(error);
   });
   await driver.navigate(editorUrl);
+  bringSafariAutomationWindowForward();
   await installErrorCapture(driver);
   result.visibleAutomation = await requireVisibleSafariAnimationFrame(driver);
 
@@ -1058,7 +1105,11 @@ async function runRegression(driver, editorUrl, result) {
       100,
     );
     result.memoryWebContentSamples = [result.memoryWebContentProcess];
-    const pageTimeOrigin = Number(result.memoryBaseline.pageTimeOrigin || 0);
+    assert.equal(
+      result.memoryBaseline.pageLifetimeToken,
+      kPageLifetimeToken,
+      "Safari memory baseline did not preserve the harness page lifetime token",
+    );
     const settledWorkerResults = Number(result.memoryBaseline.worker?.completedResults || 0);
     const settledTextureCreates = Number(
       result.memoryBaseline.presentationResources?.lifetimeTextureCreates || 0,
@@ -1109,8 +1160,9 @@ async function runRegression(driver, editorUrl, result) {
       return window.__donnerSafariMemorySamples || [];
     `);
     assertNoFatal("Safari memory dwell", [finalState]);
-    assert.ok(
-      Math.abs(Number(finalState.pageTimeOrigin || 0) - pageTimeOrigin) < 1,
+    assert.equal(
+      finalState.pageLifetimeToken,
+      kPageLifetimeToken,
       "Safari reloaded the editor during the memory dwell",
     );
     assert.equal(
@@ -1463,8 +1515,12 @@ async function runRegression(driver, editorUrl, result) {
   // shape while proving the worker, accepted surface, Wasm heap, and page lifetime remain stable.
   result.resizeChurn = [];
   let resizeToken = Number(result.afterWakeBurst.accepted?.token || 0);
-  const initialPageTimeOrigin = Number(result.initial.pageTimeOrigin || 0);
-  assert.ok(initialPageTimeOrigin > 0, "Safari did not expose a stable page time origin");
+  const initialPageLifetimeToken = result.initial.pageLifetimeToken;
+  assert.equal(
+    initialPageLifetimeToken,
+    kPageLifetimeToken,
+    "Safari did not preserve the harness page lifetime token",
+  );
   for (let iteration = 0; iteration < 24; ++iteration) {
     const width = 1400 + (iteration % 12) * 13;
     const height = 850 + Math.floor(iteration / 12) * 37 + (iteration % 3) * 7;
@@ -1482,8 +1538,8 @@ async function runRegression(driver, editorUrl, result) {
     assertAcceptedEpoch(`Safari primary-target resize churn ${iteration + 1}`, state, resizeToken);
     assertFlatHeap(`Safari primary-target resize churn ${iteration + 1}`, state, initialHeapBytes);
     assert.equal(
-      Number(state.pageTimeOrigin || 0),
-      initialPageTimeOrigin,
+      state.pageLifetimeToken,
+      initialPageLifetimeToken,
       `Safari reloaded the page under resize memory pressure at iteration ${iteration + 1}`,
     );
     resizeToken = Number(state.accepted.token);
@@ -1510,8 +1566,8 @@ async function runRegression(driver, editorUrl, result) {
   assertAcceptedEpoch("Safari resize-churn restore", result.afterResizeChurn, resizeToken);
   assertFlatHeap("Safari resize-churn restore", result.afterResizeChurn, initialHeapBytes);
   assert.equal(
-    Number(result.afterResizeChurn.pageTimeOrigin || 0),
-    initialPageTimeOrigin,
+    result.afterResizeChurn.pageLifetimeToken,
+    initialPageLifetimeToken,
     "Safari reloaded the page while restoring the viewport after resize churn",
   );
   result.afterResizeChurnScreenshot = await capture(driver, "06-after-resize-churn");

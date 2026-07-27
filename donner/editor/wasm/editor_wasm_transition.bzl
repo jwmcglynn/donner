@@ -19,16 +19,22 @@ def _editor_wasm_geode_transition_impl(settings, _attr):
         "//donner/svg/renderer/geode:enable_geode": True,
         "//command_line_option:compilation_mode": "opt",
         "//command_line_option:copt": _append_once(
-            settings["//command_line_option:copt"],
-            "-pthread",
+            _append_once(
+                settings["//command_line_option:copt"],
+                "-pthread",
+            ),
+            "-Oz",
         ),
         "//command_line_option:cxxopt": _append_once(
             settings["//command_line_option:cxxopt"],
             "-fconstexpr-steps=10000000",
         ),
         "//command_line_option:linkopt": _append_once(
-            settings["//command_line_option:linkopt"],
-            "-pthread",
+            _append_once(
+                settings["//command_line_option:linkopt"],
+                "-pthread",
+            ),
+            "-Oz",
         ),
     }
 

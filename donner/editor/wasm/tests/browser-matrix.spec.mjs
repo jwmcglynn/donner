@@ -146,4 +146,9 @@ test("real Safari memory gate clicks Donner Splash and dwells for five minutes",
     /Safari WebContent process exited during the memory dwell/,
     "a WebContent process replacement must be reported as a reload or termination",
   );
+  assert.match(
+    harness,
+    /__donnerSafariRegressionPageLifetimeToken[\s\S]*finalState\.pageLifetimeToken[\s\S]*kPageLifetimeToken/,
+    "reload detection must use a stable page token rather than Safari's drifting time origin",
+  );
 });
