@@ -31,6 +31,7 @@
  */
 
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -46,6 +47,7 @@ const kSeamOnly = process.env.DONNER_SAFARI_SEAM_ONLY === "1";
 const kLivePanOnly = process.env.DONNER_SAFARI_LIVE_PAN_ONLY === "1";
 const kMemoryOnly = process.env.DONNER_SAFARI_MEMORY_ONLY === "1";
 const kMemoryDwellMs = 5 * 60 * 1_000;
+const kMemoryMaxWebContentRssBytes = 512 * 1024 * 1024;
 const kMemorySampleIntervalMs = 5_000;
 const kTimeoutMs = Number(process.env.DONNER_SAFARI_TIMEOUT_MS || 30_000);
 const kRunId = new Date().toISOString().replaceAll(/[^0-9A-Za-z]/g, "");
@@ -91,6 +93,27 @@ function expectedWasmSha256ForRun() {
 }
 
 class SafariAutomationUnavailable extends Error {}
+
+function safariWebContentProcesses() {
+  const output = execFileSync(
+    "/bin/ps",
+    ["-ax", "-o", "pid=,rss=,%cpu=,command="],
+    { encoding: "utf8" },
+  );
+  const processes = [];
+  for (const line of output.split("\n")) {
+    const match = line.match(/^\s*(\d+)\s+(\d+)\s+([\d.]+)\s+(.+)$/);
+    if (!match || !match[4].endsWith("/com.apple.WebKit.WebContent")) {
+      continue;
+    }
+    processes.push({
+      pid: Number(match[1]),
+      rssBytes: Number(match[2]) * 1024,
+      cpuPercent: Number(match[3]),
+    });
+  }
+  return processes;
+}
 
 class SafariDriverClient {
   constructor(baseUrl) {
@@ -808,6 +831,9 @@ async function capture(driver, name) {
 }
 
 async function runRegression(driver, editorUrl, result) {
+  const initialWebContentPids = kMemoryOnly
+    ? new Set(safariWebContentProcesses().map((process) => process.pid))
+    : new Set();
   const capabilities = await driver.createSession();
   result.capabilities = capabilities;
   assert.match(
@@ -1020,6 +1046,18 @@ async function runRegression(driver, editorUrl, result) {
       500,
     );
     result.memoryBaselineScreenshot = await capture(driver, "03b-memory-baseline");
+    result.memoryWebContentProcess = await poll(
+      "Safari automation WebContent process",
+      async () => {
+        const candidates = safariWebContentProcesses()
+          .filter((process) => !initialWebContentPids.has(process.pid))
+          .sort((left, right) => right.rssBytes - left.rssBytes);
+        return candidates[0] || null;
+      },
+      5_000,
+      100,
+    );
+    result.memoryWebContentSamples = [result.memoryWebContentProcess];
     const pageTimeOrigin = Number(result.memoryBaseline.pageTimeOrigin || 0);
     const settledWorkerResults = Number(result.memoryBaseline.worker?.completedResults || 0);
     const settledTextureCreates = Number(
@@ -1049,7 +1087,21 @@ async function runRegression(driver, editorUrl, result) {
       window.__donnerSafariMemoryTimer = setInterval(capture, ${kMemorySampleIntervalMs});
       return true;
     `);
-    await new Promise((resolve) => setTimeout(resolve, kMemoryDwellMs));
+    const memoryDeadline = Date.now() + kMemoryDwellMs;
+    while (Date.now() < memoryDeadline) {
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.min(kMemorySampleIntervalMs, memoryDeadline - Date.now()))
+      );
+      const webContentSample = safariWebContentProcesses()
+        .find((process) => process.pid === result.memoryWebContentProcess.pid);
+      assert.ok(webContentSample, "Safari WebContent process exited during the memory dwell");
+      result.memoryWebContentSamples.push(webContentSample);
+      assert.ok(
+        webContentSample.rssBytes <= kMemoryMaxWebContentRssBytes,
+        `Safari WebContent RSS ${webContentSample.rssBytes} exceeded `
+          + `${kMemoryMaxWebContentRssBytes} bytes during the memory dwell`,
+      );
+    }
     const finalState = await readState(driver);
     result.memoryDwell = await driver.execute(`
       clearInterval(window.__donnerSafariMemoryTimer);
