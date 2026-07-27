@@ -448,6 +448,12 @@ TEST(EditorShellInternalTest, SidebarSnapshotRefreshYieldsToInteractionAndRender
       /*rendererBusy=*/true, /*interactionActive=*/true));
 }
 
+TEST(EditorShellInternalTest, DeferredLayerThumbnailsRetainSidebarRefreshObligation) {
+  EXPECT_FALSE(internal::SidebarSnapshotRefreshPendingAfterPass(/*deferredThumbnailCount=*/0u));
+  EXPECT_TRUE(internal::SidebarSnapshotRefreshPendingAfterPass(/*deferredThumbnailCount=*/3u))
+      << "deferred nested thumbnails need a durable refresh obligation, not a one-shot wake";
+}
+
 TEST(EditorShellInternalTest, BusyFrameReplaysDocumentUiBooleansWithoutEvaluatingLiveResolver) {
   bool resolverCalled = false;
   EXPECT_TRUE(internal::ResolveCachedDocumentBoolForFrame(
