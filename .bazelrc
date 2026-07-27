@@ -177,7 +177,9 @@ common:editor-wasm --//donner/editor/wasm:enable_wasm=true
 common:editor-wasm --//donner/svg/renderer:text=true
 common:editor-wasm --//donner/svg/renderer:text_full=false
 build:editor-wasm --copt=-pthread
+build:editor-wasm --copt=-Oz
 build:editor-wasm --linkopt=-pthread
+build:editor-wasm --linkopt=-Oz
 build:editor-wasm -c opt
 
 # Software-fallback editor WASM build. Uses the tiny_skia CPU backend (via

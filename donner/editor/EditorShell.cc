@@ -3036,6 +3036,32 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
   ImGui::PopID();
 }
 
+bool EditorShell::setActiveGestureCursor(
+    const std::optional<SelectTool::ActiveGesturePreview>& activeGesturePreview) {
+  if (!activeGesturePreview.has_value()) {
+    return false;
+  }
+  const SelectTool::ActiveGestureKind kind = activeGesturePreview->kind;
+  const bool applied = kind == SelectTool::ActiveGestureKind::Rotate
+                           ? rotateCursorSet_.setRotateCursor(activeGesturePreview->corner)
+                       : kind == SelectTool::ActiveGestureKind::Resize
+                           ? rotateCursorSet_.setScaleCursor(activeGesturePreview->corner)
+                           : false;
+  if (kind != SelectTool::ActiveGestureKind::Rotate &&
+      kind != SelectTool::ActiveGestureKind::Resize) {
+    return false;
+  }
+
+  if (applied) {
+    SetImGuiOsCursorManagementEnabled(false);
+  } else {
+    rotateCursorSet_.clearIfActive();
+    SetImGuiOsCursorManagementEnabled(true);
+    ImGui::SetMouseCursor(ImGuiMouseCursor_Arrow);
+  }
+  return true;
+}
+
 void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   // The render pane is docked into the DockSpace central node (see
   // renderDockSpaceHost); the DockSpace owns its position and size, so we no
@@ -3139,31 +3165,6 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   // Hold the matching custom cursor for the whole rotate/scale drag, not just
   // while hovering the handle, so it doesn't flicker back to the arrow as the
   // pointer leaves the handle mid-gesture.
-  const auto setActiveGestureCursor =
-      [&](const std::optional<SelectTool::ActiveGesturePreview>& activeGesturePreview) {
-        if (!activeGesturePreview.has_value()) {
-          return false;
-        }
-        const SelectTool::ActiveGestureKind kind = activeGesturePreview->kind;
-        const bool applied = kind == SelectTool::ActiveGestureKind::Rotate
-                                 ? rotateCursorSet_.setRotateCursor(activeGesturePreview->corner)
-                             : kind == SelectTool::ActiveGestureKind::Resize
-                                 ? rotateCursorSet_.setScaleCursor(activeGesturePreview->corner)
-                                 : false;
-        if (kind != SelectTool::ActiveGestureKind::Rotate &&
-            kind != SelectTool::ActiveGestureKind::Resize) {
-          return false;
-        }
-
-        if (applied) {
-          SetImGuiOsCursorManagementEnabled(false);
-        } else {
-          rotateCursorSet_.clearIfActive();
-          SetImGuiOsCursorManagementEnabled(true);
-          ImGui::SetMouseCursor(ImGuiMouseCursor_Arrow);
-        }
-        return true;
-      };
   const auto activeGesturePreviewBeforeInput = selectTool_.activeGesturePreview();
   const bool rotateCursorLocked = setActiveGestureCursor(activeGesturePreviewBeforeInput);
   std::ignore = interactionController_.updatePanState(canvasHovered, spaceHeld, middleDown,
@@ -3657,6 +3658,16 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
 
   applyPendingDocumentSpaceReplayInputForTesting();
 
+  renderRenderPanePresentation(contentRegion, paneOriginImGui, paneRect, toolPaletteRect,
+                               hoverTransformIntent, rotateCursorLocked, penToolActive,
+                               textToolActive);
+  ImGui::End();
+}
+
+void EditorShell::renderRenderPanePresentation(
+    const ImVec2& contentRegion, const ImVec2& paneOriginImGui, const Box2d& paneRect,
+    const Box2d& toolPaletteRect, const SelectionTransformHandleIntent& hoverTransformIntent,
+    bool rotateCursorLocked, bool penToolActive, bool textToolActive) {
   if ((!showSamplePicker_ || samplePresentationPending_) &&
       !renderCoordinator_.asyncRenderer().isBusy() && app_.hasDocument() &&
       viewportInitialized_) {
@@ -3875,7 +3886,6 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
     }
     renderRenderPaneContextMenu();
   }
-  ImGui::End();
 }
 
 void EditorShell::ensureSampleThumbnails() {
@@ -4459,9 +4469,14 @@ void EditorShell::renderSidebars() {
                                      ? nullptr
                                      : &layerThumbnailRenderer_,
                                  thumbnailMode);
+    sidebarSnapshotRefreshPending_ = false;
     if (layersPanel_.thumbnailRefreshStats().deferredCount > 0u) {
       window_.wakeEventLoop();
     }
+  } else if (!showSamplePicker_ && sidebarSnapshotRefreshPending_) {
+    // Preserve the refresh obligation across a renderer-busy frame or a trickled mouse transition.
+    // This is bounded: the flag is cleared by the first idle refresh above.
+    window_.wakeEventLoop();
   }
   EditorApp* liveAppForClicks = rendererBusy ? nullptr : &app_;
 
@@ -6090,6 +6105,11 @@ void EditorShell::runFrame() {
           app_.document().currentFrameVersion()) {
     samplePresentationPending_ = false;
     showSamplePicker_ = false;
+    sidebarSnapshotRefreshPending_ = true;
+    // Accepting the worker surface can happen on a frame where the renderer still appears busy or
+    // ImGui is still trickling the picker click. Keep requesting frames until renderSidebars()
+    // consumes the explicit refresh obligation on an idle frame.
+    window_.wakeEventLoop();
   }
   markPhase(mainFrameCost.renderPollMs);
 

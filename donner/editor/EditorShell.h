@@ -371,6 +371,12 @@ private:
   void selectAllCanvasElements();
   void renderSourcePane(float paneOriginY, float paneHeight, float paneWidth, ImFont* codeFont);
   void renderRenderPane(ImGuiWindowFlags paneFlags);
+  [[nodiscard]] bool setActiveGestureCursor(
+      const std::optional<SelectTool::ActiveGesturePreview>& activeGesturePreview);
+  void renderRenderPanePresentation(const ImVec2& contentRegion, const ImVec2& paneOriginImGui,
+                                    const Box2d& paneRect, const Box2d& toolPaletteRect,
+                                    const SelectionTransformHandleIntent& hoverTransformIntent,
+                                    bool rotateCursorLocked, bool penToolActive, bool textToolActive);
   [[nodiscard]] Box2d toolPaletteScreenRect(const ImVec2& paneOrigin,
                                             const ImVec2& contentRegion) const;
   [[nodiscard]] Box2d canvasZoomControlScreenRect() const;
@@ -550,6 +556,10 @@ private:
   SamplePickerPresenter samplePickerPresenter_;
   TextFormatBarPresenter textFormatBarPresenter_;
   SidebarPresenter sidebarPresenter_;
+  /// A loaded sample has replaced the welcome document, but Layers and Inspector have not yet
+  /// captured an idle snapshot of it. Kept until refresh succeeds so a busy renderer or a
+  /// trickled input transition cannot consume the only follow-up frame.
+  bool sidebarSnapshotRefreshPending_ = false;
   /// Last paint presentation read while the document was idle. The renderer
   /// owns the document registry while busy, so worker frames replay this
   /// value instead of substituting the unrelated authoring paint.
