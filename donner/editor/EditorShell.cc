@@ -473,6 +473,11 @@ bool ShouldRefreshSidebarSnapshots(bool rendererBusy, bool interactionActive) no
   return !rendererBusy && !interactionActive;
 }
 
+bool SidebarSnapshotRefreshPendingAfterPass(std::size_t deferredThumbnailCount) noexcept {
+  std::ignore = deferredThumbnailCount;
+  return false;
+}
+
 bool SamplePickerActionsNeedFollowupFrame(bool dismiss, bool openFile) noexcept {
   return dismiss || openFile;
 }
@@ -4469,7 +4474,8 @@ void EditorShell::renderSidebars() {
                                      ? nullptr
                                      : &layerThumbnailRenderer_,
                                  thumbnailMode);
-    sidebarSnapshotRefreshPending_ = false;
+    sidebarSnapshotRefreshPending_ = internal::SidebarSnapshotRefreshPendingAfterPass(
+        layersPanel_.thumbnailRefreshStats().deferredCount);
     if (layersPanel_.thumbnailRefreshStats().deferredCount > 0u) {
       window_.wakeEventLoop();
     }

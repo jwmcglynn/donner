@@ -100,6 +100,8 @@ enum class DeferredRenderAction {
                                                         bool hasPendingMutations) noexcept;
 [[nodiscard]] bool ShouldRefreshSidebarSnapshots(bool rendererBusy,
                                                  bool interactionActive) noexcept;
+[[nodiscard]] bool SidebarSnapshotRefreshPendingAfterPass(
+    std::size_t deferredThumbnailCount) noexcept;
 
 /// Resolve a document-derived UI boolean without ever entering the live document while the
 /// renderer owns it. Busy frames replay the value from the last complete UI epoch.
