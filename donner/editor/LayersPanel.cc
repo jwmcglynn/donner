@@ -220,7 +220,7 @@ ImU32 ToImU32(const css::RGBA& rgba) {
 }  // namespace
 
 void LayersPanel::refreshSnapshot(const EditorApp& app, svg::Renderer* renderer,
-                                  ThumbnailRefreshMode mode) {
+                                  ThumbnailRefreshMode mode, bool canvasPresentationCurrent) {
   const auto renderStart = std::chrono::steady_clock::now();
   const auto finishTiming = [this, renderStart]() {
     thumbnailRefreshStats_.renderMs =
@@ -296,7 +296,8 @@ void LayersPanel::refreshSnapshot(const EditorApp& app, svg::Renderer* renderer,
 
   const bool thumbnailRenderingRequested = mode != ThumbnailRefreshMode::SwatchesOnly;
   const bool renderThumbnails =
-      thumbnailRenderingRequested && !app.document().document().hasPendingRenderInvalidation();
+      thumbnailRenderingRequested &&
+      (canvasPresentationCurrent || !app.document().document().hasPendingRenderInvalidation());
   const Vector2i thumbnailMaxSizePx(kPreviewWidthPx, kPreviewHeightPx);
   if (thumbnailRenderingRequested && !renderThumbnails) {
     thumbnailRefreshStats_.skippedForCanvasInvalidationCount = model_.rows().size();
@@ -347,14 +348,24 @@ void LayersPanel::refreshSnapshot(const EditorApp& app, svg::Renderer* renderer,
     // Render the row's element subtree to a real RGBA thumbnail through the
     // Donner renderer. Rows whose subtree has no boundable geometry come back
     // empty and fall back to the swatch.
-    svg::RendererBitmap thumbnail =
-        renderer->renderElementToBitmap(pending.element, thumbnailMaxSizePx);
     ++thumbnailRefreshStats_.renderedCount;
     CachedThumbnail& cacheEntry = thumbnailBitmapByStableId_[pending.stableId];
     cacheEntry.documentFrameVersion = thumbnailRefreshStats_.documentFrameVersion;
     cacheEntry.maxSizePx = thumbnailMaxSizePx;
-    if (!thumbnail.empty()) {
-      cacheEntry.bitmap = std::move(thumbnail);
+    if (renderer->requiresTextureSnapshotPresentation()) {
+      std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot =
+          renderer->renderElementToTextureSnapshot(pending.element, thumbnailMaxSizePx);
+      if (textureSnapshot != nullptr) {
+        cacheEntry.bitmap = {};
+        cacheEntry.textureSnapshot = std::move(textureSnapshot);
+      }
+    } else {
+      svg::RendererBitmap thumbnail =
+          renderer->renderElementToBitmap(pending.element, thumbnailMaxSizePx);
+      if (!thumbnail.empty()) {
+        cacheEntry.bitmap = std::move(thumbnail);
+        cacheEntry.textureSnapshot.reset();
+      }
     }
   }
   thumbnailRefreshStats_.deferredCount = pendingThumbnails_.size() - pendingThumbnailCursor_;
@@ -389,6 +400,15 @@ const svg::RendererBitmap* LayersPanel::rowThumbnail(std::uint64_t stableId) con
     return nullptr;
   }
   return &it->second.bitmap;
+}
+
+const std::shared_ptr<const svg::RendererTextureSnapshot>* LayersPanel::rowTextureThumbnail(
+    std::uint64_t stableId) const {
+  const auto it = thumbnailBitmapByStableId_.find(stableId);
+  if (it == thumbnailBitmapByStableId_.end() || it->second.textureSnapshot == nullptr) {
+    return nullptr;
+  }
+  return &it->second.textureSnapshot;
 }
 
 bool LayersPanel::consumeSelectionChanged() {
@@ -551,7 +571,8 @@ void LayersPanel::beginRename(std::uint64_t stableId) {
 
 void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& textureProvider,
                          const IconTextureProvider& iconTextureProvider,
-                         float minimumInteractionHeight) {
+                         float minimumInteractionHeight,
+                         const ThumbnailTextureSnapshotProvider& textureSnapshotProvider) {
   const std::vector<LayerTreeRow>& rows = model_.rows();
   if (rows.empty()) {
     ImGui::TextDisabled("(no document)");
@@ -617,20 +638,28 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
     const ImVec2 slotMin(slotCellMin.x, slotCellMin.y + (rowHeight - kPreviewHeight) * 0.5f);
     const ImVec2 slotMax(slotMin.x + kPreviewWidth, slotMin.y + kPreviewHeight);
     const svg::RendererBitmap* thumbnailBitmap = nullptr;
+    const svg::RendererTextureSnapshot* thumbnailTextureSnapshot = nullptr;
     ThumbnailTexture thumbnailTexture;
-    if (textureProvider) {
-      if (const auto thumbnailIt = thumbnailBitmapByStableId_.find(row.stableId);
-          thumbnailIt != thumbnailBitmapByStableId_.end() && !thumbnailIt->second.bitmap.empty()) {
+    if (const auto thumbnailIt = thumbnailBitmapByStableId_.find(row.stableId);
+        thumbnailIt != thumbnailBitmapByStableId_.end()) {
+      if (textureSnapshotProvider && thumbnailIt->second.textureSnapshot != nullptr) {
+        thumbnailTextureSnapshot = thumbnailIt->second.textureSnapshot.get();
+        thumbnailTexture =
+            textureSnapshotProvider(row.stableId, thumbnailIt->second.textureSnapshot);
+      } else if (textureProvider && !thumbnailIt->second.bitmap.empty()) {
         thumbnailBitmap = &thumbnailIt->second.bitmap;
         thumbnailTexture = textureProvider(row.stableId, *thumbnailBitmap);
       }
     }
 
     ImVec2 thumbnailSize(kPreviewHeight, kPreviewHeight);
-    if (thumbnailTexture.texture != 0 && thumbnailBitmap != nullptr) {
-      thumbnailSize =
-          ImVec2(std::min(kPreviewWidth, static_cast<float>(thumbnailBitmap->dimensions.x)),
-                 std::min(kPreviewHeight, static_cast<float>(thumbnailBitmap->dimensions.y)));
+    if (thumbnailTexture.texture != 0 &&
+        (thumbnailBitmap != nullptr || thumbnailTextureSnapshot != nullptr)) {
+      const Vector2i dimensions = thumbnailBitmap != nullptr
+                                      ? thumbnailBitmap->dimensions
+                                      : thumbnailTextureSnapshot->dimensions();
+      thumbnailSize = ImVec2(std::min(kPreviewWidth, static_cast<float>(dimensions.x)),
+                             std::min(kPreviewHeight, static_cast<float>(dimensions.y)));
     }
 
     const ImVec2 swatchMin(slotMin.x + (kPreviewWidth - thumbnailSize.x) * 0.5f,

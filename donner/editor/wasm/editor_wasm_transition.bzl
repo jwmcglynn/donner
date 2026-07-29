@@ -82,6 +82,28 @@ editor_wasm_geode_transitioned_target = rule(
     },
 )
 
+def _editor_wasm_geode_only_guard_impl(ctx):
+    editor_wasm_enabled = ctx.attr._editor_wasm_enabled[BuildSettingInfo].value
+    renderer_backend = ctx.attr._renderer_backend[BuildSettingInfo].value
+    if editor_wasm_enabled and renderer_backend != "geode":
+        fail(
+            "Donner editor Wasm is Geode-only; renderer_backend must be 'geode', got '{}'".format(
+                renderer_backend,
+            ),
+        )
+
+    output = ctx.actions.declare_file(ctx.label.name + ".txt")
+    ctx.actions.write(output, "renderer_backend={}\n".format(renderer_backend))
+    return [DefaultInfo(files = depset([output]))]
+
+editor_wasm_geode_only_guard = rule(
+    implementation = _editor_wasm_geode_only_guard_impl,
+    attrs = {
+        "_editor_wasm_enabled": attr.label(default = "//donner/editor/wasm:enable_wasm"),
+        "_renderer_backend": attr.label(default = "//donner/svg/renderer:renderer_backend"),
+    },
+)
+
 def _editor_wasm_config_probe_impl(ctx):
     output = ctx.actions.declare_file(ctx.label.name + ".txt")
     values = [
@@ -128,15 +150,13 @@ def _editor_wasm_runtime_options_probe_impl(ctx):
     output = ctx.actions.declare_file(ctx.label.name + ".txt")
     values = ctx.attr.linkopts
     lines = [
-        "asyncify_common={}".format("-sASYNCIFY" in values),
-        "asyncify_geode={}".format("-sASYNCIFY" in ctx.attr.geode_linkopts),
+        "asyncify={}".format("-sASYNCIFY" in values),
         "closure={}".format("--closure=1" in values),
         "closure_simple={}".format(
             "--closure-args=--compilation_level=SIMPLE_OPTIMIZATIONS" in values,
         ),
         "exports_ccall={}".format("-sEXPORTED_RUNTIME_METHODS=ccall" in values),
-        "initial_memory_64_common={}".format("-sINITIAL_MEMORY=64MB" in values),
-        "initial_memory_64_geode={}".format("-sINITIAL_MEMORY=64MB" in ctx.attr.geode_linkopts),
+        "initial_memory_64={}".format("-sINITIAL_MEMORY=64MB" in values),
         "pthread_pool_size_one={}".format("-sPTHREAD_POOL_SIZE=1" in values),
         "pthread_pool_size_two={}".format("-sPTHREAD_POOL_SIZE=2" in values),
     ]
@@ -146,7 +166,6 @@ def _editor_wasm_runtime_options_probe_impl(ctx):
 editor_wasm_runtime_options_probe = rule(
     implementation = _editor_wasm_runtime_options_probe_impl,
     attrs = {
-        "geode_linkopts": attr.string_list(mandatory = True),
         "linkopts": attr.string_list(mandatory = True),
     },
 )

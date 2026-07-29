@@ -208,6 +208,12 @@ ALL_KNOWN_LICENSES = [
     "@zlib//:license",
 ]
 
+GEODE_EDITOR_LICENSES = [
+    license
+    for license in ALL_KNOWN_LICENSES
+    if license != ":tiny-skia-cpp"
+]
+
 donner_notice_file(
     name = "notice_default",
     licenses = DEFAULT_LICENSES,
@@ -228,7 +234,10 @@ donner_notice_file(
 
 donner_notice_file_auto(
     name = "notice_editor",
-    available_licenses = ALL_KNOWN_LICENSES,
+    available_licenses = select({
+        "//donner/editor/wasm:wasm_enabled": GEODE_EDITOR_LICENSES,
+        "//conditions:default": ALL_KNOWN_LICENSES,
+    }),
     target = select({
         "//donner/editor/wasm:wasm_enabled": "//donner/editor/wasm:notice_inputs",
         "//conditions:default": "//donner/editor:editor_notice_inputs",

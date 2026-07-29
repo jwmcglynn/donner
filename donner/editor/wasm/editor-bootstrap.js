@@ -176,11 +176,9 @@ function ShowCapabilityError(message) {
 }
 
 window.__donnerReportWorkerSurfaceUnavailable = function() {
-  const fallbackHint = window.__donnerBackend === "geode"
-    ? "Reload with ?renderer=tiny_skia to use the software renderer."
-    : "Open the TinySkia software-renderer build to continue.";
   ShowCapabilityError(
-    "The WebGPU renderer could not present its canvas surface. " + fallbackHint,
+    "The Geode WebGPU renderer could not present its canvas surface. "
+      + "Update or enable WebGPU in this browser to continue.",
   );
 };
 
@@ -468,7 +466,7 @@ window.__donnerBackendPromise
       return;
     }
     SetLoadingPhase(
-      `Downloading the ${backend.name === "geode" ? "WebGPU" : "software"} editor…`,
+      "Downloading the Geode WebGPU editor…",
       12,
       "Compiling the editor on first visit; later loads use the browser cache",
     );
@@ -488,7 +486,7 @@ window.__donnerBackendPromise
     loader.type = "text/javascript";
     loader.src = backend.base + "editor.js";
     loader.addEventListener("error", () => {
-      ShowCapabilityError(`Unable to load the ${backend.name} renderer package.`);
+      ShowCapabilityError("Unable to load the Geode WebGPU renderer package.");
     });
     document.body.appendChild(loader);
   })

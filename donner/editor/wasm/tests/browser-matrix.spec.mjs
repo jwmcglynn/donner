@@ -37,8 +37,8 @@ test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", 
     /Firefox bakes the Splash letter and overlay into one accepted surface epoch/,
   );
 
-  const webkit = projects.get("webkit-tiny-skia-carousel");
-  assert.ok(webkit, "missing WebKit TinySkia carousel project");
+  const webkit = projects.get("webkit-geode-carousel");
+  assert.ok(webkit, "missing WebKit Geode carousel project");
   assert.equal(webkit.use.browserName, "webkit");
   assert.match(
     String(webkit.grep),
@@ -46,7 +46,7 @@ test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", 
   );
   assert.match(
     String(webkit.grep),
-    /WebKit TinySkia survives a burst of drag wakeups without fatal errors/,
+    /WebKit Geode survives a burst of drag wakeups without fatal errors/,
   );
 
   const packageJson = JSON.parse(readFileSync(path.join(testDirectory, "package.json"), "utf8"));
@@ -69,9 +69,10 @@ test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", 
     normalizedWorkflow,
     /bazelisk test --config=editor-wasm --test_output=errors --remote_download_outputs=all \/\/donner\/editor\/wasm:wasm_geode_package_size_tests/,
   );
-  assert.match(
-    normalizedWorkflow,
-    /bazelisk test --config=editor-wasm-tiny-skia --test_output=errors --remote_download_outputs=all \/\/donner\/editor\/wasm:wasm_tiny_skia_package_size_tests/,
+  assert.match(workflow, /geode_excludes_tiny_skia_audit/);
+  assert.doesNotMatch(
+    workflow,
+    /editor-wasm-tiny-skia|wasm_tiny_skia|package-tiny_skia|backend:\s*tiny_skia/,
   );
   assert.match(
     normalizedWorkflow,
@@ -79,9 +80,9 @@ test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", 
   );
   assert.match(
     normalizedWorkflow,
-    /npm --prefix donner\/editor\/wasm\/tests run test:compatibility -- --project=webkit-tiny-skia-carousel/,
+    /npm --prefix donner\/editor\/wasm\/tests run test:compatibility -- --project=webkit-geode-carousel/,
   );
-  assert.match(workflow, /npm --prefix donner\/editor\/wasm\/tests run test:ios/);
+  assert.doesNotMatch(workflow, /test:ios|playwright\\.ios/);
 });
 
 test("real Safari gate pins the served Wasm and scopes every visibility probe", () => {

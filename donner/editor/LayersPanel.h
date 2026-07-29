@@ -18,6 +18,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -77,6 +78,9 @@ public:
   };
   using ThumbnailTextureProvider =
       std::function<ThumbnailTexture(std::uint64_t stableId, const svg::RendererBitmap& bitmap)>;
+  using ThumbnailTextureSnapshotProvider = std::function<ThumbnailTexture(
+      std::uint64_t stableId,
+      const std::shared_ptr<const svg::RendererTextureSnapshot>& textureSnapshot)>;
 
   /// Maps a static layer-affordance icon bitmap to an ImGui texture handle for
   /// display. The icon bitmaps are rendered from embedded Bootstrap SVG resources
@@ -131,8 +135,13 @@ public:
   /// @param app Live editor app to snapshot.
   /// @param renderer Optional renderer to use for thumbnail rasterization.
   /// @param mode Whether to render thumbnails or refresh only the row swatches.
+  /// @param canvasPresentationCurrent True only when the canvas has already
+  ///   presented this exact document version. In that state thumbnail rendering
+  ///   may preserve and work through live render invalidation that belongs to
+  ///   the already-consumed async snapshot.
   void refreshSnapshot(const EditorApp& app, svg::Renderer* renderer = nullptr,
-                       ThumbnailRefreshMode mode = ThumbnailRefreshMode::Render);
+                       ThumbnailRefreshMode mode = ThumbnailRefreshMode::Render,
+                       bool canvasPresentationCurrent = false);
 
   /// Render the panel into the current ImGui window. Must be called inside an
   /// `ImGui::Begin(...) / End()` pair. When @p liveApp is null (the worker owns
@@ -149,7 +158,8 @@ public:
   ///   default by passing zero.
   void render(EditorApp* liveApp, const ThumbnailTextureProvider& textureProvider = {},
               const IconTextureProvider& iconTextureProvider = {},
-              float minimumInteractionHeight = 0.0f);
+              float minimumInteractionHeight = 0.0f,
+              const ThumbnailTextureSnapshotProvider& textureSnapshotProvider = {});
 
   /// Set the current locked-rejection flash (or clear it with `std::nullopt`).
   /// When set with a positive intensity and the flashed element matches a
@@ -272,6 +282,8 @@ public:
   ///
   /// @param stableId Stable id of the row.
   [[nodiscard]] const svg::RendererBitmap* rowThumbnail(std::uint64_t stableId) const;
+  [[nodiscard]] const std::shared_ptr<const svg::RendererTextureSnapshot>* rowTextureThumbnail(
+      std::uint64_t stableId) const;
 
   /// Whether the most recent `render` / `handleRowClick` changed the editor
   /// selection. Consumes the flag. Used by `EditorShell` to fire the existing
@@ -306,6 +318,7 @@ private:
 
   struct CachedThumbnail {
     svg::RendererBitmap bitmap;
+    std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot;
     std::uint64_t documentFrameVersion = 0;
     Vector2i maxSizePx = Vector2i::Zero();
   };

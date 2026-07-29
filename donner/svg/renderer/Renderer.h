@@ -97,6 +97,17 @@ public:
   [[nodiscard]] RendererBitmap renderElementToBitmap(SVGElement element, Vector2i sizePx);
 
   /**
+   * Renders an element subtree into a directly sampleable backend texture.
+   *
+   * This is the GPU-native counterpart to \ref renderElementToBitmap. It uses
+   * the same bounds, crop, and isolated offscreen draw, then transfers
+   * ownership of the rendered target instead of reading it back through the
+   * CPU. Backends without texture snapshots return nullptr.
+   */
+  [[nodiscard]] std::shared_ptr<const RendererTextureSnapshot> renderElementToTextureSnapshot(
+      SVGElement element, Vector2i sizePx);
+
+  /**
    * Begins a render pass for the given viewport.
    *
    * @param viewport The viewport dimensions for the render pass.
@@ -307,6 +318,7 @@ public:
 
 private:
   std::unique_ptr<RendererInterface> impl_;
+  std::unique_ptr<RendererInterface> elementTextureThumbnailRenderer_;
 };
 
 }  // namespace donner::svg

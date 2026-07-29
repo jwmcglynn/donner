@@ -86,9 +86,6 @@ donner_cc_library(
             "//third_party/webgpu-cpp:webgpu_cpp",
             "@imgui//:imgui_wgpu_backend",
         ],
-        "//donner/editor:wasm_tiny_skia_enabled": [
-            "//third_party/emscripten-glfw",
-        ],
         "//donner/svg/renderer:renderer_backend_geode": [
             ":editor_wgpu_surface",
             "//donner/svg/renderer/geode:geode_device",
