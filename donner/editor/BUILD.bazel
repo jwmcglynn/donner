@@ -32,14 +32,6 @@ config_setting(
 )
 
 config_setting(
-    name = "wasm_tiny_skia_enabled",
-    flag_values = {
-        "//donner/editor/wasm:enable_wasm": "true",
-        "//donner/svg/renderer:renderer_backend": "tiny_skia",
-    },
-)
-
-config_setting(
     name = "linux_tracy_enabled",
     constraint_values = ["@platforms//os:linux"],
     flag_values = {
@@ -145,15 +137,9 @@ donner_cc_library(
         "//donner/base",
         "//donner/svg",
         "//donner/svg/parser",
-        "//donner/svg/renderer:renderer_tiny_skia",
-    ] + select({
-        ":wasm_tiny_skia_enabled": [
-            "//third_party/emscripten-glfw",
-        ],
-        "//conditions:default": [
-            "@glfw",
-        ],
-    }),
+        "//donner/svg/renderer",
+        "@glfw",
+    ],
 )
 
 donner_cc_library(
@@ -531,9 +517,6 @@ donner_cc_library(
             "//third_party/emscripten-glfw",
             "@imgui//:imgui_wgpu_backend",
         ],
-        ":wasm_tiny_skia_enabled": [
-            "//third_party/emscripten-glfw",
-        ],
         "//donner/svg/renderer:renderer_backend_geode": [
             "//donner/svg/renderer:renderer_geode",
             "@imgui//:imgui_wgpu_backend",
@@ -553,9 +536,6 @@ donner_cc_library(
         ":render_pane_gesture",
         "//donner/editor/gui:editor_window",
     ] + select({
-        ":wasm_tiny_skia_enabled": [
-            "//third_party/emscripten-glfw",
-        ],
         "@platforms//os:macos": [
             ":pinch_event_monitor_macos",
             "@glfw",
@@ -798,9 +778,6 @@ donner_cc_library(
             "//donner/svg/renderer:renderer_geode",
             "//third_party/emscripten-glfw",
             "@imgui//:imgui_wgpu_backend",
-        ],
-        ":wasm_tiny_skia_enabled": [
-            "//third_party/emscripten-glfw",
         ],
         "//donner/svg/renderer:renderer_backend_geode": [
             "//donner/svg/renderer:renderer_geode",

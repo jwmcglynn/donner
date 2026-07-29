@@ -28,19 +28,8 @@ permissions:
   contents: read
 
 jobs:
-  # The two wasm package builds are independent (separate Bazel configs) and
-  # historically ran back-to-back in one job, so the lane's wall time was the
-  # SUM of both compiles. Splitting them into a matrix runs them in parallel
-  # and hands the packages to the `test` job as artifacts, so wall time is the
-  # MAX of the two compiles plus the (short) browser-test phase. The combined
-  # "compatible" deployment candidate is still staged only in `test`, after
-  # all three browser lanes pass (see docs/design_docs/0056).
   build:
     runs-on: macos-26
-    strategy:
-      fail-fast: false
-      matrix:
-        backend: [geode, tiny_skia]
     steps:
       - uses: actions/checkout@v7
 
@@ -48,78 +37,34 @@ jobs:
         uses: bazel-contrib/setup-bazel@0.19.0
         with:
           bazelisk-cache: true
-          # Scoped per backend so the two matrix legs do not race a shared
-          # cache key on save, and each leg restores only the outputs it needs.
-          disk-cache: editor-wasm-${{ runner.os }}-${{ matrix.backend }}
+          disk-cache: editor-wasm-${{ runner.os }}-geode
           repository-cache: true
           external-cache: true
-          # PR code may restore trusted cache entries, but must not publish
-          # entries into caches consumed by scheduled release-candidate runs.
           cache-save: ${{ github.event_name != 'pull_request' }}
 
-      # The size test owns the exact shipped package as test data, so one
-      # command both builds the handoff artifact and enforces its transfer
-      # budget. Keep the targets explicit because their manual tag prevents a
-      # wildcard test under a native config from pulling in Emscripten.
-      - name: Build and size-check editor wasm package (Geode)
-        if: matrix.backend == 'geode'
+      - name: Build and size-check Geode editor Wasm package
         run: |
-          bazelisk test --config=editor-wasm --test_output=errors \
-            --remote_download_outputs=all \
-            //donner/editor/wasm:wasm_geode_package_size_tests
+          bazelisk test --test_output=errors \
+            //donner/editor/wasm:editor_wasm_transition_tests \
+            //donner/svg/renderer:geode_excludes_tiny_skia_audit
+          bazelisk test --config=editor-wasm --test_output=errors --remote_download_outputs=all //donner/editor/wasm:wasm_geode_package_size_tests
 
-      - name: Build and size-check editor wasm package (tiny_skia)
-        if: matrix.backend == 'tiny_skia'
-        run: |
-          bazelisk test --config=editor-wasm-tiny-skia --test_output=errors \
-            --remote_download_outputs=all \
-            //donner/editor/wasm:wasm_tiny_skia_package_size_tests
-
-      - name: Setup Node
-        if: matrix.backend == 'tiny_skia'
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24
-
-      # JS-glue size safety gate. This is the only CI exercise of
-      # --config=wasm-size (--closure=1 + -sFILESYSTEM=0): it builds the
-      # tiny_skia svg-renderer wasm module with the shipped glue minification,
-      # then loads it under Node and asserts on rendered pixels. Without this a
-      # closure/filesystem-trim glue regression would pass CI silently. The
-      # render_test target keeps its `manual` tag (so plain wildcard builds under
-      # the wrong config do not pull in the wasm outputs); it is invoked here
-      # explicitly under the wasm-size config, in the matrix leg that builds the
-      # tiny_skia wasm outputs.
-      - name: WASM JS-glue render gate (closure + FILESYSTEM=0)
-        if: matrix.backend == 'tiny_skia'
-        run: |
-          bazelisk test --config=wasm-size --test_output=errors \
-            //donner/svg/renderer/wasm:render_test
-
-      # Materialize the package outside bazel-out (dereferencing symlinks) so
-      # the artifact contains plain files for the `test` job to download.
       - name: Stage package for handoff
         id: stage-package
         run: |
           set -euo pipefail
-
-          if [[ "${{ matrix.backend }}" == "geode" ]]; then
-            pkg_rel=$(bazelisk cquery --config=editor-wasm --output=files \
-              //donner/editor/wasm:wasm_web_package | head -n1)
-          else
-            pkg_rel=$(bazelisk cquery --config=editor-wasm-tiny-skia --output=files \
-              //donner/editor/wasm:wasm_tiny_skia_web_package | head -n1)
-          fi
+          pkg_rel=$(bazelisk cquery --config=editor-wasm --output=files \
+            //donner/editor/wasm:wasm_web_package | head -n1)
           pkg_dir=$(cd "${pkg_rel}" && pwd -P)
-          handoff_dir="${RUNNER_TEMP}/editor-wasm-package-${{ matrix.backend }}"
+          handoff_dir="${RUNNER_TEMP}/editor-wasm-package-geode"
           mkdir -p "${handoff_dir}"
           cp -RL "${pkg_dir}/." "${handoff_dir}/"
           echo "handoff_dir=${handoff_dir}" >> "${GITHUB_OUTPUT}"
 
-      - name: Upload package artifact
+      - name: Upload Geode package artifact
         uses: actions/upload-artifact@v7
         with:
-          name: editor-wasm-package-${{ matrix.backend }}-${{ github.sha }}
+          name: editor-wasm-package-geode-${{ github.sha }}
           path: ${{ steps.stage-package.outputs.handoff_dir }}
           if-no-files-found: error
           retention-days: 3
@@ -136,12 +81,6 @@ jobs:
           name: editor-wasm-package-geode-${{ github.sha }}
           path: ${{ runner.temp }}/editor-wasm-package-geode
 
-      - name: Download tiny_skia package
-        uses: actions/download-artifact@v8
-        with:
-          name: editor-wasm-package-tiny_skia-${{ github.sha }}
-          path: ${{ runner.temp }}/editor-wasm-package-tiny_skia
-
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
@@ -153,74 +92,18 @@ jobs:
           npm ci
           npx playwright install chromium firefox webkit
 
-      - name: Verify renderer selector
+      - name: Verify Geode-only package contracts
         working-directory: donner/editor/wasm/tests
         run: npm run test:selector
 
-      - name: Stage compatible browser package
-        id: stage-compatible-package
-        run: |
-          set -euo pipefail
-
-          geode_dir="${RUNNER_TEMP}/editor-wasm-package-geode"
-          tiny_skia_dir="${RUNNER_TEMP}/editor-wasm-package-tiny_skia"
-          compatible_dir="${RUNNER_TEMP}/donner-editor-wasm-compatible-site-${GITHUB_SHA}"
-          donner/editor/wasm/stage-compatible-package.sh \
-            "${geode_dir}" "${tiny_skia_dir}" "${compatible_dir}"
-          echo "compatible_dir=${compatible_dir}" >> "${GITHUB_OUTPUT}"
-
-      - name: Verify static-host isolation fallback
-        env:
-          DONNER_WASM_TEST_ISOLATION_FALLBACK: "1"
-        run: |
-          set -euo pipefail
-
-          pkg_dir="${{ steps.stage-compatible-package.outputs.compatible_dir }}"
-          server_log="${RUNNER_TEMP}/editor-wasm-isolation-fallback-server.log"
-          PYTHONUNBUFFERED=1 python3 tools/http/simple_webserver.py \
-            --no-https --no-cross-origin-isolation --host 127.0.0.1 \
-            --dir "${pkg_dir}" >"${server_log}" 2>&1 &
-          server_pid=$!
-          cleanup() {
-            kill "${server_pid}" 2>/dev/null || true
-            wait "${server_pid}" 2>/dev/null || true
-          }
-          trap cleanup EXIT
-
-          server_url=""
-          for _ in $(seq 1 60); do
-            server_url=$(sed -n 's/^Serving at //p' "${server_log}" | head -n1)
-            if [[ -n "${server_url}" ]]; then break; fi
-            if ! kill -0 "${server_pid}" 2>/dev/null; then
-              cat "${server_log}"
-              wait "${server_pid}" 2>/dev/null || true
-              exit 1
-            fi
-            sleep 1
-          done
-          test -n "${server_url}"
-          export DONNER_WASM_BASE_URL="${server_url}"
-
-          (
-            cd donner/editor/wasm/tests
-            npm run test:isolation-fallback
-            npx playwright test static-host-isolation.spec.ts \
-              --config=playwright.firefox.config.js
-            npx playwright test static-host-isolation.spec.ts \
-              --config=playwright.webkit.config.js
-          )
-          cleanup
-          trap - EXIT
-
-      - name: Serve compatible package and run headed Geode browser suites
+      - name: Serve Geode package and run browser suites
         env:
           DONNER_WASM_BACKEND: geode
           DONNER_WASM_REQUIRE_WEBGPU: "1"
         run: |
           set -euo pipefail
-
-          pkg_dir="${{ steps.stage-compatible-package.outputs.compatible_dir }}"
-          server_log="${RUNNER_TEMP}/editor-wasm-compatible-geode-server.log"
+          pkg_dir="${RUNNER_TEMP}/editor-wasm-package-geode"
+          server_log="${RUNNER_TEMP}/editor-wasm-geode-server.log"
           PYTHONUNBUFFERED=1 python3 tools/http/simple_webserver.py --no-https --host 127.0.0.1 \
             --dir "${pkg_dir}" >"${server_log}" 2>&1 &
           server_pid=$!
@@ -246,82 +129,8 @@ jobs:
           curl -fsS -o /dev/null "${DONNER_WASM_BASE_URL}/index.html"
 
           bash donner/editor/wasm/tests/run_tests.sh --headed
-          npm --prefix donner/editor/wasm/tests run test:compatibility -- \
-            --project=firefox-geode-resize --headed
-          cleanup
-          trap - EXIT
-
-      - name: Serve tiny_skia package and run browser suites
-        env:
-          DONNER_WASM_BACKEND: tiny_skia
-        run: |
-          set -euo pipefail
-
-          pkg_dir="${RUNNER_TEMP}/editor-wasm-package-tiny_skia"
-          server_log="${RUNNER_TEMP}/editor-wasm-tiny-skia-server.log"
-          PYTHONUNBUFFERED=1 python3 tools/http/simple_webserver.py --no-https --host 127.0.0.1 \
-            --dir "${pkg_dir}" >"${server_log}" 2>&1 &
-          server_pid=$!
-          cleanup() {
-            kill "${server_pid}" 2>/dev/null || true
-            wait "${server_pid}" 2>/dev/null || true
-          }
-          trap cleanup EXIT
-
-          server_url=""
-          for _ in $(seq 1 60); do
-            server_url=$(sed -n 's/^Serving at //p' "${server_log}" | head -n1)
-            if [[ -n "${server_url}" ]]; then break; fi
-            if ! kill -0 "${server_pid}" 2>/dev/null; then
-              cat "${server_log}"
-              wait "${server_pid}" 2>/dev/null || true
-              exit 1
-            fi
-            sleep 1
-          done
-          test -n "${server_url}"
-          export DONNER_WASM_BASE_URL="${server_url}"
-          curl -fsS -o /dev/null "${DONNER_WASM_BASE_URL}/index.html"
-
-          bash donner/editor/wasm/tests/run_tests.sh
-          npm --prefix donner/editor/wasm/tests run test:compatibility -- \
-            --project=webkit-tiny-skia-carousel --headed
-          cleanup
-          trap - EXIT
-
-      - name: Serve compatible package and run iPhone-profile WebKit suite
-        run: |
-          set -euo pipefail
-
-          pkg_dir="${{ steps.stage-compatible-package.outputs.compatible_dir }}"
-          server_log="${RUNNER_TEMP}/editor-wasm-compatible-ios-server.log"
-          PYTHONUNBUFFERED=1 python3 tools/http/simple_webserver.py --no-https --host 127.0.0.1 \
-            --dir "${pkg_dir}" >"${server_log}" 2>&1 &
-          server_pid=$!
-          cleanup() {
-            kill "${server_pid}" 2>/dev/null || true
-            wait "${server_pid}" 2>/dev/null || true
-          }
-          trap cleanup EXIT
-
-          server_url=""
-          for _ in $(seq 1 60); do
-            server_url=$(sed -n 's/^Serving at //p' "${server_log}" | head -n1)
-            if [[ -n "${server_url}" ]]; then break; fi
-            if ! kill -0 "${server_pid}" 2>/dev/null; then
-              cat "${server_log}"
-              wait "${server_pid}" 2>/dev/null || true
-              exit 1
-            fi
-            sleep 1
-          done
-          test -n "${server_url}"
-          export DONNER_WASM_BASE_URL="${server_url}"
-          curl -fsS -o /dev/null "${DONNER_WASM_BASE_URL}/index.html"
-
-          npm --prefix donner/editor/wasm/tests run test:ios
-          cleanup
-          trap - EXIT
+          npm --prefix donner/editor/wasm/tests run test:compatibility -- --project=firefox-geode-resize --headed
+          npm --prefix donner/editor/wasm/tests run test:compatibility -- --project=webkit-geode-carousel --headed
 
       - name: Upload Playwright failure artifacts
         if: failure()
@@ -332,16 +141,15 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Stage immutable compatible deployment candidate
-        id: stage-compatible-candidate
+      - name: Stage immutable Geode deployment candidate
+        id: stage-candidate
         run: |
           set -euo pipefail
-
-          pkg_dir="${{ steps.stage-compatible-package.outputs.compatible_dir }}"
-          candidate_dir="${RUNNER_TEMP}/donner-editor-wasm-compatible-${GITHUB_SHA}"
+          pkg_dir="${RUNNER_TEMP}/editor-wasm-package-geode"
+          candidate_dir="${RUNNER_TEMP}/donner-editor-wasm-geode-${GITHUB_SHA}"
           site_dir="${candidate_dir}/site"
           deploy_dir="${candidate_dir}/deploy"
-          mkdir -p "${site_dir}" "${deploy_dir}/geode" "${deploy_dir}/tiny_skia"
+          mkdir -p "${site_dir}" "${deploy_dir}"
           cp -R "${pkg_dir}/." "${site_dir}/"
 
           expected_site_files=$(
@@ -350,33 +158,27 @@ jobs:
               donner_icon.svg \
               editor-bootstrap.js \
               editor.css \
+              editor.js \
+              editor.wasm \
               enable-threads.js \
-              geode/editor.js \
-              geode/editor.wasm \
               index.html \
-              tiny_skia/editor.js \
-              tiny_skia/editor.wasm \
               worker-surface-selector.js \
               | LC_ALL=C sort
           )
           actual_site_files=$(cd "${site_dir}" && find . -type f | sed 's|^./||' | LC_ALL=C sort)
           test "${actual_site_files}" = "${expected_site_files}"
 
-          for shared_file in \
-            backend-selector.js donner_icon.svg editor-bootstrap.js editor.css enable-threads.js \
-            index.html worker-surface-selector.js; do
-            cp "${site_dir}/${shared_file}" "${deploy_dir}/${shared_file}"
+          for file in \
+            backend-selector.js donner_icon.svg editor-bootstrap.js editor.css editor.js \
+            enable-threads.js index.html worker-surface-selector.js; do
+            cp "${site_dir}/${file}" "${deploy_dir}/${file}"
           done
-          for backend in geode tiny_skia; do
-            cp "${site_dir}/${backend}/editor.js" "${deploy_dir}/${backend}/editor.js"
-            gzip -n -9 -c "${site_dir}/${backend}/editor.wasm" \
-              > "${deploy_dir}/${backend}/editor.wasm.gz"
-            test "$(wc -c < "${deploy_dir}/${backend}/editor.wasm.gz")" -le 20971520
-          done
+          gzip -n -9 -c "${site_dir}/editor.wasm" > "${deploy_dir}/editor.wasm.gz"
+          test "$(wc -c < "${deploy_dir}/editor.wasm.gz")" -le 20971520
 
           lockfile_sha256=$(shasum -a 256 donner/editor/wasm/tests/package-lock.json | awk '{print $1}')
           printf '%s\n' \
-            "{\"source_revision\":\"${GITHUB_SHA}\",\"lockfile_sha256\":\"${lockfile_sha256}\",\"bazel_configs\":[\"editor-wasm\",\"editor-wasm-tiny-skia\"],\"targets\":[\"//donner/editor/wasm:wasm_web_package\",\"//donner/editor/wasm:wasm_tiny_skia_web_package\"],\"transport_encoding\":\"gzip\"}" \
+            "{\"source_revision\":\"${GITHUB_SHA}\",\"lockfile_sha256\":\"${lockfile_sha256}\",\"bazel_configs\":[\"editor-wasm\"],\"targets\":[\"//donner/editor/wasm:wasm_web_package\"],\"renderer\":\"geode\",\"transport_encoding\":\"gzip\"}" \
             > "${candidate_dir}/provenance.json"
 
           (
@@ -385,21 +187,20 @@ jobs:
               shasum -a 256 "${file}"
             done > SHA256SUMS
           )
-
           echo "candidate_dir=${candidate_dir}" >> "${GITHUB_OUTPUT}"
 
-      - name: Upload compatible deployment candidate
-        id: upload-compatible-candidate
+      - name: Upload Geode deployment candidate
+        id: upload-candidate
         uses: actions/upload-artifact@v7
         with:
-          name: donner-editor-wasm-compatible-${{ github.sha }}
-          path: ${{ steps.stage-compatible-candidate.outputs.candidate_dir }}
+          name: donner-editor-wasm-geode-${{ github.sha }}
+          path: ${{ steps.stage-candidate.outputs.candidate_dir }}
           if-no-files-found: error
           retention-days: 30
 
       - name: Record deployment candidate digest
         run: |
-          echo "### Compatible deployment candidate" >> "${GITHUB_STEP_SUMMARY}"
+          echo "### Geode deployment candidate" >> "${GITHUB_STEP_SUMMARY}"
           echo "- Source revision: \`${GITHUB_SHA}\`" >> "${GITHUB_STEP_SUMMARY}"
-          echo "- Artifact digest: \`${{ steps.upload-compatible-candidate.outputs.artifact-digest }}\`" \
+          echo "- Artifact digest: \`${{ steps.upload-candidate.outputs.artifact-digest }}\`" \
             >> "${GITHUB_STEP_SUMMARY}"

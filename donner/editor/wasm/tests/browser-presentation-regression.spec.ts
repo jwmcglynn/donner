@@ -20,7 +20,7 @@ declare global {
       completedResults: number;
     };
     __donnerAcceptedPresentation?: {
-      kind: "geode" | "tiny_skia";
+      kind: "geode";
       selectionChromeBaked?: boolean;
       token: number;
     };
@@ -890,12 +890,10 @@ test("Firefox bakes the Splash letter and overlay into one accepted surface epoc
   expect(failures).toEqual([]);
 });
 
-test("WebKit TinySkia survives a burst of drag wakeups without fatal errors", async ({ browserName, page }) => {
-  test.skip(browserName !== "webkit", "WebKit TinySkia regression");
+test("WebKit Geode survives a burst of drag wakeups without fatal errors", async ({ browserName, page }) => {
+  test.skip(browserName !== "webkit", "WebKit Geode regression");
   const failures = await openEditor(page);
-  expect(["packaged", "tiny_skia"]).toContain(
-    await page.evaluate(() => window.__donnerBackend),
-  );
+  expect(await page.evaluate(() => window.__donnerBackend)).toBe("geode");
 
   const editorCanvas = page.locator("canvas#canvas");
   const editorBounds = await editorCanvas.boundingBox();

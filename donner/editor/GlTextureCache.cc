@@ -851,6 +851,54 @@ GlTextureCache::ThumbnailTextureView GlTextureCache::uploadThumbnail(
   };
 }
 
+GlTextureCache::ThumbnailTextureView GlTextureCache::retainThumbnailTextureSnapshot(
+    std::uint64_t key, std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot) {
+#ifdef DONNER_EDITOR_WGPU
+  CachedTextureEntry& entry = thumbnailTextures_[key];
+  if (textureSnapshot == entry.textureSnapshot && entry.texture != 0) {
+    return ThumbnailTextureView{
+        .texture = ToImTextureId(entry.texture),
+        .uvBottomRight = entry.uvBottomRight,
+    };
+  }
+
+  const NativeTextureHandle textureId = ToImTextureId(textureSnapshot.get());
+  if (textureId == 0) {
+    return {};
+  }
+
+  if (entry.texture != 0) {
+    RetiredSnapshotBatch retiredSnapshots;
+    retiredSnapshots.push_back(RetiredSnapshot{
+        .texture = entry.texture,
+        .snapshot = std::move(entry.textureSnapshot),
+        .uploadedTexture = std::move(entry.uploadedTexture),
+    });
+    retireSnapshots(std::move(retiredSnapshots));
+  }
+
+  ImGui_ImplWGPU_AddTexturePremultipliedAlphaRef(textureId);
+  entry.texture = textureId;
+  entry.textureSnapshot = std::move(textureSnapshot);
+  entry.uploadedTexture.reset();
+  entry.identity = CompositedTileTextureIdentity{};
+  entry.uploadedGeneration = 0;
+  entry.width = entry.textureSnapshot->dimensions().x;
+  entry.height = entry.textureSnapshot->dimensions().y;
+  entry.allocatedWidth = entry.width;
+  entry.allocatedHeight = entry.height;
+  entry.uvBottomRight = Vector2d(1.0, 1.0);
+  return ThumbnailTextureView{
+      .texture = ToImTextureId(entry.texture),
+      .uvBottomRight = entry.uvBottomRight,
+  };
+#else
+  (void)key;
+  (void)textureSnapshot;
+  return {};
+#endif
+}
+
 void GlTextureCache::retainThumbnailsOnly(const std::vector<std::uint64_t>& liveKeys) {
   if (thumbnailTextures_.empty()) {
     return;

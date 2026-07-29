@@ -26,13 +26,11 @@ text_full=False
     def test_preserves_browser_contracts_and_reserves_a_proxy_worker(self) -> None:
         actual = pathlib.Path(sys.argv[2]).read_text(encoding="utf-8")
         expected = """\
-asyncify_common=False
-asyncify_geode=True
+asyncify=True
 closure=True
 closure_simple=True
 exports_ccall=False
-initial_memory_64_common=False
-initial_memory_64_geode=True
+initial_memory_64=True
 pthread_pool_size_one=False
 pthread_pool_size_two=True
 """

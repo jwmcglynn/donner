@@ -25,10 +25,10 @@ module.exports = defineConfig({
       },
     },
     {
-      name: "webkit-tiny-skia-carousel",
+      name: "webkit-geode-carousel",
       grep: [
         /carousel loads Basic Shapes on the first interactive frame/,
-        /WebKit TinySkia survives a burst of drag wakeups without fatal errors/,
+        /WebKit Geode survives a burst of drag wakeups without fatal errors/,
       ],
       use: {
         ...devices["Desktop Safari"],

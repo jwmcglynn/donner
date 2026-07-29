@@ -3,12 +3,15 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
 
-async function loadSelector() {
-  const source = await readFile(new URL("../backend-selector.js", import.meta.url), "utf8");
-  const context = vm.createContext({});
-  vm.runInContext(source, context, { filename: "backend-selector.js" });
-  assert.equal(typeof context.SelectDonnerBackend, "function");
-  return context.SelectDonnerBackend;
+async function loadPackagedBackend() {
+  const source = await readFile(new URL("../single/backend-selector.js", import.meta.url), "utf8");
+  const window = {};
+  const context = vm.createContext({ Promise, window });
+  vm.runInContext(source, context, { filename: "single/backend-selector.js" });
+  return {
+    backend: window.__donnerBackend,
+    selection: await window.__donnerBackendPromise,
+  };
 }
 
 async function loadWorkerSurfaceUtilities() {
@@ -16,26 +19,6 @@ async function loadWorkerSurfaceUtilities() {
   const context = vm.createContext({});
   vm.runInContext(source, context, { filename: "worker-surface-selector.js" });
   return context;
-}
-
-async function loadBrowserSelector({ hasWebGl2 }) {
-  const source = await readFile(new URL("../backend-selector.js", import.meta.url), "utf8");
-  const window = { location: { search: "" } };
-  const context = vm.createContext({
-    URLSearchParams,
-    document: {
-      createElement: () => ({
-        getContext: () =>
-          hasWebGl2
-            ? { getExtension: () => ({ loseContext() {} }) }
-            : null,
-      }),
-    },
-    navigator: {},
-    window,
-  });
-  vm.runInContext(source, context, { filename: "backend-selector.js" });
-  return { selection: window.__donnerBackendPromise };
 }
 
 async function runBootstrapWithoutThreads() {
@@ -52,7 +35,7 @@ async function runBootstrapWithoutThreads() {
     "capability-error-detail": { textContent: "" },
   };
   const window = {
-    __donnerBackendPromise: Promise.reject(new Error("WebGL2 is unavailable")),
+    __donnerBackendPromise: Promise.reject(new Error("WebGPU is unavailable")),
     addEventListener() {},
     isSecureContext: false,
   };
@@ -102,7 +85,7 @@ async function loadTouchPointerBridge() {
     "capability-error-detail": { textContent: "" },
   };
   const window = {
-    __donnerBackendPromise: Promise.reject(new Error("WebGL2 is unavailable")),
+    __donnerBackendPromise: Promise.reject(new Error("WebGPU is unavailable")),
     addEventListener() {},
     isSecureContext: false,
     PointerEvent: function PointerEvent() {},
@@ -270,7 +253,7 @@ async function loadBootstrapAssetOrder() {
     "capability-error-detail": { textContent: "" },
   };
   const window = {
-    __donnerBackendPromise: Promise.resolve({ name: "geode", base: "geode/" }),
+    __donnerBackendPromise: Promise.resolve({ name: "geode", base: "" }),
     addEventListener() {},
     isSecureContext: true,
   };
@@ -297,14 +280,10 @@ async function loadBootstrapAssetOrder() {
   return appended;
 }
 
-test("auto mode prefers Geode when WebGPU has an adapter", async () => {
-  const selectBackend = await loadSelector();
-  const result = await selectBackend({
-    requestedBackend: "auto",
-    requestWebGpuAdapter: async () => ({}),
-    hasWebGl2: () => true,
-  });
-  assert.deepEqual({ ...result }, { name: "geode", base: "geode/" });
+test("packaged editor selects only Geode", async () => {
+  const result = await loadPackagedBackend();
+  assert.equal(result.backend, "geode");
+  assert.deepEqual({ ...result.selection }, { name: "geode", base: "" });
 });
 
 test("bootstrap starts the selected Wasm download before loading JavaScript glue", async () => {
@@ -313,9 +292,9 @@ test("bootstrap starts the selected Wasm download before loading JavaScript glue
   assert.equal(appended[0]?.rel, "preload");
   assert.equal(appended[0]?.as, "fetch");
   assert.equal(appended[0]?.type, "application/wasm");
-  assert.equal(appended[0]?.href, "geode/editor.wasm");
+  assert.equal(appended[0]?.href, "editor.wasm");
   assert.equal(appended[1]?.tagName, "SCRIPT");
-  assert.equal(appended[1]?.src, "geode/editor.js");
+  assert.equal(appended[1]?.src, "editor.js");
 });
 
 test("Safari retains worker frames while Firefox uses one stable direct surface", async () => {
@@ -544,7 +523,7 @@ test("Safari bitmap surface quantizes a fractional pan without resampling its ba
 
 test("bitmap bridge retains zero-copy handoff and presents backing texels without stretching", async () => {
   const { bitmapTransfers, context, drawImageCalls, elements } = await loadReadyHandoff({
-    backend: "packaged",
+    backend: "geode",
     devicePixelRatio: 2,
     workerSurfaceUtilities: true,
   });
@@ -709,7 +688,7 @@ test("trackpad gesture bridge prevents page zoom and emits editor wheel zoom", a
 
 test("loading screen remains until the editor presents its first frame", async () => {
   const { context, elements, focusCount, loadingClasses, timers, windowHandlers } =
-    await loadReadyHandoff({ backend: "tiny_skia" });
+    await loadReadyHandoff({ backend: "geode" });
 
   context.Module.onRuntimeInitialized();
   assert.equal(elements["loading-screen"].hidden, false);
@@ -729,9 +708,9 @@ test("loading screen remains until the editor presents its first frame", async (
   assert.equal(elements["loading-screen"].hidden, true);
 });
 
-test("packaged Geode loading waits for both the first frame and worker runtime", async () => {
+test("Geode loading waits for both the first frame and worker runtime", async () => {
   const { context, elements, focusCount, loadingClasses, timers, windowHandlers } =
-    await loadReadyHandoff({ backend: "packaged" });
+    await loadReadyHandoff({ backend: "geode" });
 
   context.window.__donnerRequiresWorkerRuntime = true;
   context.Module.onRuntimeInitialized();
@@ -764,7 +743,7 @@ test("packaged Geode loading waits for both the first frame and worker runtime",
 
 test("worker surface diagnostics retain acceptance for either message order", async () => {
   for (const diagnosticFirst of [true, false]) {
-    const { context } = await loadReadyHandoff({ backend: "packaged" });
+    const { context } = await loadReadyHandoff({ backend: "geode" });
     const publishDiagnostic = () =>
       context.Module.publishDonnerWorkerSurfaceDiagnostic(7, 100, 20, 80, 255, 60, 12);
     const acceptSurface = () =>
@@ -801,7 +780,7 @@ test("worker surface diagnostics retain acceptance for either message order", as
 });
 
 test("terminal worker-surface failure uses the capability error handoff", async () => {
-  const { context, elements } = await loadReadyHandoff({ backend: "packaged" });
+  const { context, elements } = await loadReadyHandoff({ backend: "geode" });
 
   assert.equal(typeof context.window.__donnerReportWorkerSurfaceUnavailable, "function");
   context.window.__donnerReportWorkerSurfaceUnavailable();
@@ -809,15 +788,9 @@ test("terminal worker-surface failure uses the capability error handoff", async 
   assert.equal(elements["capability-error"].hidden, false);
   assert.equal(elements.canvas.hidden, true);
   assert.match(elements["capability-error-detail"].textContent, /WebGPU.*surface/i);
-  assert.match(elements["capability-error-detail"].textContent, /TinySkia.*build/i);
+  assert.match(elements["capability-error-detail"].textContent, /Geode WebGPU/i);
+  assert.match(elements["capability-error-detail"].textContent, /enable WebGPU/i);
   assert.doesNotMatch(elements["capability-error-detail"].textContent, /\?renderer=/);
-
-  const combined = await loadReadyHandoff({ backend: "geode" });
-  combined.context.window.__donnerReportWorkerSurfaceUnavailable();
-  assert.match(
-    combined.elements["capability-error-detail"].textContent,
-    /\?renderer=tiny_skia/,
-  );
 });
 
 test("renderer pthread can report terminal wake failure through the main handler", async () => {
@@ -844,84 +817,7 @@ test("renderer pthread can report terminal wake failure through the main handler
   assert.equal(elements["capability-error"].hidden, false);
   assert.ok(consoleMessages.error.some((message) => /pthread wake rejected/.test(message)));
   assert.equal(elements.canvas.hidden, true);
-  assert.match(elements["capability-error-detail"].textContent, /\?renderer=tiny_skia/);
-});
-
-test("auto mode falls back to TinySkia when WebGPU is absent", async () => {
-  const selectBackend = await loadSelector();
-  const result = await selectBackend({
-    requestedBackend: "auto",
-    requestWebGpuAdapter: null,
-    hasWebGl2: () => true,
-  });
-  assert.deepEqual({ ...result }, { name: "tiny_skia", base: "tiny_skia/" });
-});
-
-test("auto mode falls back when WebGPU exposes no adapter", async () => {
-  const selectBackend = await loadSelector();
-  const result = await selectBackend({
-    requestedBackend: "auto",
-    requestWebGpuAdapter: async () => null,
-    hasWebGl2: () => true,
-  });
-  assert.deepEqual({ ...result }, { name: "tiny_skia", base: "tiny_skia/" });
-});
-
-test("an explicit TinySkia request does not probe WebGPU", async () => {
-  const selectBackend = await loadSelector();
-  let webGpuProbes = 0;
-  const result = await selectBackend({
-    requestedBackend: "tiny_skia",
-    requestWebGpuAdapter: async () => {
-      webGpuProbes += 1;
-      return {};
-    },
-    hasWebGl2: () => true,
-  });
-  assert.deepEqual({ ...result }, { name: "tiny_skia", base: "tiny_skia/" });
-  assert.equal(webGpuProbes, 0);
-});
-
-test("rejects a forced Geode backend without a WebGPU adapter", async () => {
-  const selectBackend = await loadSelector();
-  await assert.rejects(
-    selectBackend({
-      requestedBackend: "geode",
-      requestWebGpuAdapter: async () => null,
-      hasWebGl2: () => true,
-    }),
-    /WebGPU adapter/,
-  );
-});
-
-test("rejects TinySkia when WebGL2 is unavailable", async () => {
-  const selectBackend = await loadSelector();
-  await assert.rejects(
-    selectBackend({
-      requestedBackend: "auto",
-      requestWebGpuAdapter: null,
-      hasWebGl2: () => false,
-    }),
-    /WebGL2/,
-  );
-});
-
-test("rejects unknown backend overrides", async () => {
-  const selectBackend = await loadSelector();
-  await assert.rejects(
-    selectBackend({
-      requestedBackend: "metal",
-      requestWebGpuAdapter: async () => ({}),
-      hasWebGl2: () => true,
-    }),
-    /Unknown renderer backend/,
-  );
-});
-
-test("browser capability rejection is handled by the published promise", async () => {
-  const { selection } = await loadBrowserSelector({ hasWebGl2: false });
-  await assert.rejects(selection, /WebGL2/);
-  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(elements["capability-error-detail"].textContent, /enable WebGPU/i);
 });
 
 test("bootstrap consumes backend rejection when threads are unavailable", async () => {

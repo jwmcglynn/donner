@@ -207,6 +207,8 @@ public:
     Vector2d uvBottomRight = Vector2d(1.0, 1.0);  ///< Bottom-right valid payload UV.
   };
   ThumbnailTextureView uploadThumbnail(std::uint64_t key, const svg::RendererBitmap& bitmap);
+  ThumbnailTextureView retainThumbnailTextureSnapshot(
+      std::uint64_t key, std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot);
 
   /// Current transparent selection-chrome texture, composited by the render-pane ImGui draw list
   /// so editor popups and menus remain above it.

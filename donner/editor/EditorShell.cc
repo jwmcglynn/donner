@@ -141,15 +141,20 @@ EM_JS(void, PublishInteractionStats,
 
 EM_JS(void, PublishLayerThumbnailStats,
       (double rowCount, double renderedCount, double reusedCount, double deferredCount,
-       double bitmapCount, double bitmapBytes, double textureCount), {
+       double skippedForCanvasInvalidationCount, double snapshotRebuildCount, double bitmapCount,
+       double bitmapBytes, double textureSnapshotCount, double textureCount),
+      {
         window['__donnerLayerThumbnailStats'] = {
-          rowCount,
-          renderedCount,
-          reusedCount,
-          deferredCount,
-          bitmapCount,
-          bitmapBytes,
-          textureCount,
+            rowCount,
+            renderedCount,
+            reusedCount,
+            deferredCount,
+            skippedForCanvasInvalidationCount,
+            snapshotRebuildCount,
+            bitmapCount,
+            bitmapBytes,
+            textureSnapshotCount,
+            textureCount,
         };
       });
 
@@ -4499,14 +4504,22 @@ void EditorShell::renderSidebars() {
     LayersPanel::ThumbnailRefreshMode thumbnailMode =
         compactSheet || !presentationCurrent ? LayersPanel::ThumbnailRefreshMode::SwatchesOnly
                                              : LayersPanel::ThumbnailRefreshMode::RenderIncremental;
+    const bool thumbnailRefreshWasPending = sidebarSnapshotRefreshPending_;
     layersPanel_.refreshSnapshot(app_,
                                  thumbnailMode == LayersPanel::ThumbnailRefreshMode::SwatchesOnly
                                      ? nullptr
                                      : &layerThumbnailRenderer_,
-                                 thumbnailMode);
-    sidebarSnapshotRefreshPending_ = internal::SidebarSnapshotRefreshPendingAfterPass(
-        layersPanel_.thumbnailRefreshStats().deferredCount);
-    if (layersPanel_.thumbnailRefreshStats().deferredCount > 0u) {
+                                 thumbnailMode, presentationCurrent);
+    // A transient SwatchesOnly pass means the canvas presentation is catching
+    // up; it is not evidence that the incremental thumbnail queue completed.
+    // Preserve the existing obligation so Firefox timing cannot render the
+    // first row, clear the queue signal, and leave every later row black.
+    sidebarSnapshotRefreshPending_ =
+        thumbnailMode == LayersPanel::ThumbnailRefreshMode::SwatchesOnly
+            ? thumbnailRefreshWasPending
+            : internal::SidebarSnapshotRefreshPendingAfterPass(
+                  layersPanel_.thumbnailRefreshStats().deferredCount);
+    if (sidebarSnapshotRefreshPending_) {
       window_.wakeEventLoop();
     }
   } else if (!showSamplePicker_ && sidebarSnapshotRefreshPending_) {
@@ -4568,6 +4581,17 @@ void EditorShell::renderSidebars() {
         .uvBottomRight = uploaded.uvBottomRight,
     };
   };
+  const LayersPanel::ThumbnailTextureSnapshotProvider thumbnailTextureSnapshotProvider =
+      [this](std::uint64_t stableId,
+             const std::shared_ptr<const svg::RendererTextureSnapshot>& textureSnapshot)
+      -> LayersPanel::ThumbnailTexture {
+    const GlTextureCache::ThumbnailTextureView retained =
+        thumbnailTextures_.retainThumbnailTextureSnapshot(stableId, textureSnapshot);
+    return LayersPanel::ThumbnailTexture{
+        .texture = retained.texture,
+        .uvBottomRight = retained.uvBottomRight,
+    };
+  };
   const LayersPanel::IconTextureProvider layerIconTextureProvider =
       [this, &liveThumbnailKeys](std::uint64_t stableId,
                                  const svg::RendererBitmap& bitmap) -> LayersPanel::IconTexture {
@@ -4627,7 +4651,9 @@ void EditorShell::renderSidebars() {
   layersPanel_.render(
       liveAppForClicks,
       compactSheet ? LayersPanel::ThumbnailTextureProvider{} : thumbnailTextureProvider,
-      layerIconTextureProvider, compactSheet ? 44.0f : 0.0f);
+      layerIconTextureProvider, compactSheet ? 44.0f : 0.0f,
+      compactSheet ? LayersPanel::ThumbnailTextureSnapshotProvider{}
+                   : thumbnailTextureSnapshotProvider);
   // Feed the Layers-panel hover into the shared source-hover preview so the
   // canvas (and source pane) highlight the hovered element, the same way
   // hovering a source-pane token does.
@@ -6431,11 +6457,16 @@ void EditorShell::runFrame() {
       layersPanel_.thumbnailRefreshStats();
   std::size_t layerThumbnailBitmapCount = 0u;
   std::size_t layerThumbnailBitmapBytes = 0u;
+  std::size_t layerThumbnailTextureSnapshotCount = 0u;
   for (const LayerTreeRow& row : layersPanel_.rows()) {
     if (const svg::RendererBitmap* thumbnail = layersPanel_.rowThumbnail(row.stableId);
         thumbnail != nullptr && !thumbnail->empty()) {
       ++layerThumbnailBitmapCount;
       layerThumbnailBitmapBytes += thumbnail->pixels.size();
+    }
+    if (const auto* textureSnapshot = layersPanel_.rowTextureThumbnail(row.stableId);
+        textureSnapshot != nullptr && *textureSnapshot != nullptr) {
+      ++layerThumbnailTextureSnapshotCount;
     }
   }
   PublishLayerThumbnailStats(
@@ -6443,8 +6474,11 @@ void EditorShell::runFrame() {
       static_cast<double>(layerThumbnailStats.renderedCount),
       static_cast<double>(layerThumbnailStats.reusedCount),
       static_cast<double>(layerThumbnailStats.deferredCount),
+      static_cast<double>(layerThumbnailStats.skippedForCanvasInvalidationCount),
+      static_cast<double>(layerThumbnailStats.snapshotRebuildCount),
       static_cast<double>(layerThumbnailBitmapCount),
       static_cast<double>(layerThumbnailBitmapBytes),
+      static_cast<double>(layerThumbnailTextureSnapshotCount),
       static_cast<double>(thumbnailTextures_.thumbnailTextureCount()));
   PublishPresentationResourceStats(
       static_cast<double>(presentationResources.totalTrackedBytes),

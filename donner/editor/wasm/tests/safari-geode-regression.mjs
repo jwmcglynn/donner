@@ -902,7 +902,7 @@ async function runRegression(driver, editorUrl, result) {
   result.visibleAutomation = await requireVisibleSafariAnimationFrame(driver);
 
   result.initial = await waitForEditor(driver, "initial Safari editor startup");
-  assert.ok(["geode", "packaged"].includes(result.initial.backend), "package was not Geode");
+  assert.equal(result.initial.backend, "geode", "package was not Geode");
   assert.equal(result.initial.runtime.initializationCount, 1, "worker initialized more than once");
   assert.ok(result.initial.runtime.workerDeviceCreations >= 1, "worker created no WebGPU device");
   assert.equal(

@@ -696,6 +696,35 @@ TEST(LayersPanelTest, RefreshSnapshotSkipsLiveThumbnailRenderWhileCanvasInvalida
          "compositor consumes a pending invalidation.";
 }
 
+TEST(LayersPanelTest, CurrentCanvasPresentationAllowsThumbnailRenderWithoutConsumingInvalidation) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40">
+    <rect id="background" width="40" height="40" fill="red"/>
+    <rect id="foreground" x="10" y="10" width="10" height="10" fill="blue"/>
+  </svg>)");
+
+  svg::Renderer renderer;
+  renderer.draw(app.document().document());
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const int index = RowIndex(panel, "background");
+  ASSERT_GE(index, 0);
+  const svg::SVGElement target = panel.rows()[static_cast<std::size_t>(index)].element;
+
+  panel.handleEyeClick(app, static_cast<std::size_t>(index));
+  EXPECT_TRUE(app.document().flushFrame());
+  ASSERT_TRUE(svg::tests::ElementHasRenderInstanceDirtyFlag(target));
+
+  panel.refreshSnapshot(app, &renderer, LayersPanel::ThumbnailRefreshMode::Render,
+                        /*canvasPresentationCurrent=*/true);
+
+  EXPECT_EQ(panel.thumbnailRefreshStats().skippedForCanvasInvalidationCount, 0u);
+  EXPECT_TRUE(svg::tests::ElementHasRenderInstanceDirtyFlag(target))
+      << "thumbnail rendering may inspect an already-presented version but must restore its "
+         "live invalidation for later document work";
+}
+
 TEST(LayersPanelTest, RefreshSnapshotUsesLiveRenderTreeForThumbnailsWhenCanvasIsClean) {
   EditorApp app;
   LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40">

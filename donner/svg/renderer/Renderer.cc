@@ -447,6 +447,53 @@ RendererBitmap Renderer::renderElementToBitmap(SVGElement element, Vector2i size
   return RenderElementToBitmap(*impl_, element, sizePx);
 }
 
+std::shared_ptr<const RendererTextureSnapshot> Renderer::renderElementToTextureSnapshot(
+    SVGElement element, Vector2i sizePx) {
+  if (sizePx.x <= 0 || sizePx.y <= 0) {
+    return nullptr;
+  }
+
+  SVGDocument document = element.ownerDocument();
+  DocumentWriteAccess access = document.writeAccess();
+  Registry& registry = document.registry();
+  ScopedRenderInvalidationRestore restoreInvalidation(registry);
+
+  ParseWarningSink warnings;
+  RendererUtils::prepareDocumentForRendering(document, /*verbose=*/false, warnings);
+
+  std::unordered_set<Entity> subtreeEntities;
+  CollectSubtreeEntities(element, subtreeEntities);
+  const SubtreeRenderSpan span = ResolveSubtreeRenderSpan(registry, subtreeEntities);
+  if (span.firstEntity == entt::null || span.lastEntity == entt::null ||
+      !span.worldBounds.has_value() || span.worldBounds->isEmpty()) {
+    return nullptr;
+  }
+
+  Box2d cropBounds = *span.worldBounds;
+  if (const std::optional<Box2d> rootCanvasBounds = RootViewBoxCanvasBounds(document, registry)) {
+    const std::optional<Box2d> visibleBounds = IntersectBoxes(cropBounds, *rootCanvasBounds);
+    if (!visibleBounds.has_value()) {
+      return nullptr;
+    }
+    cropBounds = *visibleBounds;
+  }
+
+  if (elementTextureThumbnailRenderer_ == nullptr) {
+    elementTextureThumbnailRenderer_ = impl_->createOffscreenInstance();
+  }
+  if (elementTextureThumbnailRenderer_ == nullptr) {
+    return nullptr;
+  }
+
+  const Vector2i textureSizePx = ComputeThumbnailBitmapSize(cropBounds, sizePx);
+  const ThumbnailTransform thumbnailTransform =
+      ComputeThumbnailTransform(cropBounds, textureSizePx);
+  RendererDriver driver(*elementTextureThumbnailRenderer_);
+  driver.drawEntityRange(registry, span.firstEntity, span.lastEntity, thumbnailTransform.viewport,
+                         thumbnailTransform.surfaceFromCanvas);
+  return elementTextureThumbnailRenderer_->takeTextureSnapshot();
+}
+
 void Renderer::beginFrame(const RenderViewport& viewport) {
   impl_->beginFrame(viewport);
 }

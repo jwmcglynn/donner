@@ -6,6 +6,7 @@ load("//tools/http:serve_http.bzl", "serve_http")
 load(
     ":editor_wasm_transition.bzl",
     "editor_wasm_config_probe",
+    "editor_wasm_geode_only_guard",
     "editor_wasm_geode_transitioned_target",
     "editor_wasm_runtime_options_probe",
 )
@@ -55,8 +56,8 @@ _EMDAWNWEBGPU_LINKOPTS = [
     "-sASYNCIFY_STACK_SIZE=16384",
 ]
 
-# Linker flags shared by both renderer backends.
-_COMMON_LINKOPTS = [
+# Linker flags for the Geode-only editor WebAssembly binary.
+_EDITOR_LINKOPTS = [
     "--closure=1",
     # SIMPLE keeps DOM, Emscripten, and WebGPU property names intact while
     # still compressing local glue. ADVANCED rewrites cross-language contracts
@@ -78,18 +79,12 @@ _COMMON_LINKOPTS = [
     "-sSTACK_SIZE=1048576",
     "-sUSE_PTHREADS=1",
     "-sENVIRONMENT=web,worker",
-]
-
-_EDITOR_LINKOPTS = _COMMON_LINKOPTS
-
-_GEODE_LINKOPTS = [
     # Geode's synchronous WebGPU bridge yields while creating devices and
-    # waiting for mapped buffers. TinySkia has no asynchronous C++ call path.
+    # waiting for mapped buffers.
     "-sASYNCIFY",
     # Safari can leave a pooled pthread with stale Wasm heap views when shared memory grows after
     # the pool starts. Geode's UI device, renderer device, fonts, and asynchronous SVG thumbnails
-    # peak near 58 MiB during the browser regression, so start above that boundary. Keep this out
-    # of the common options so TinySkia does not pay the additional initial-memory commitment.
+    # peak near 58 MiB during the browser regression, so start above that boundary.
     "-sINITIAL_MEMORY=64MB",
     "-sOFFSCREENCANVAS_SUPPORT=1",
 ] + _EMDAWNWEBGPU_LINKOPTS
@@ -106,20 +101,19 @@ cc_library(
     ],
 )
 
+editor_wasm_geode_only_guard(
+    name = "_geode_only_guard",
+    visibility = ["//visibility:private"],
+)
+
 cc_binary(
     name = "_editor_wasm_binary",
     srcs = ["//donner/editor:main.cc"],
-    additional_linker_inputs = select({
-        "//donner/svg/renderer:renderer_backend_geode": _EMDAWNWEBGPU_JS_LIBS,
-        "//conditions:default": [],
-    }),
+    additional_linker_inputs = _EMDAWNWEBGPU_JS_LIBS + [":_geode_only_guard"],
     copts = [
         "-pthread",
     ],
-    linkopts = _EDITOR_LINKOPTS + select({
-        "//donner/svg/renderer:renderer_backend_geode": _GEODE_LINKOPTS,
-        "//conditions:default": [],
-    }),
+    linkopts = _EDITOR_LINKOPTS,
     tags = [
         "manual",
         "wasm",
@@ -205,7 +199,6 @@ editor_wasm_geode_transitioned_target(
 editor_wasm_runtime_options_probe(
     name = "_editor_wasm_runtime_options_probe",
     testonly = True,
-    geode_linkopts = _GEODE_LINKOPTS,
     linkopts = _EDITOR_LINKOPTS,
     visibility = ["//visibility:private"],
 )
@@ -221,17 +214,6 @@ py_test(
     data = [
         ":_editor_wasm_geode_transition_test_data",
         ":_editor_wasm_runtime_options_probe",
-    ],
-)
-
-sh_test(
-    name = "stage_compatible_package_tests",
-    size = "small",
-    srcs = ["stage-compatible-package_test.sh"],
-    args = ["$(rootpath :stage-compatible-package.sh)"],
-    data = [
-        "backend-selector.js",
-        "stage-compatible-package.sh",
     ],
 )
 
@@ -280,121 +262,13 @@ py_test(
         "data-active-sample-id",
         "--expected-js-property",
         "zoomModifierHeld",
+        "--forbidden-js-token",
+        "tiny_skia",
+        "--forbidden-js-token",
+        "TinySkia",
     ],
     data = [":wasm_web_package"],
     main = "wasm_package_size_tests.py",
-    tags = [
-        "manual",
-        "wasm",
-    ],
-    target_compatible_with = select({
-        ":wasm_enabled": [],
-        "//conditions:default": ["@platforms//:incompatible"],
-    }),
-)
-
-# tiny_skia (software-fallback) editor WASM variant. Build with
-# --config=editor-wasm-tiny-skia. This reuses :_editor_wasm_binary, whose
-# emdawnwebgpu JS libraries are select()-gated to the Geode backend; under the
-# tiny_skia renderer backend that select resolves to the empty default, so this
-# binary never links the WebGPU bindings. The tiny_skia renderer draws the
-# document into the WebGL canvas, so headless screenshots capture real pixels.
-#
-# Outputs land under a `tiny_skia/` subdirectory so their file labels do not
-# collide with the Geode `:wasm` rule's editor.js/editor.wasm outputs, while
-# their basenames stay editor.js/editor.wasm so index.html loads them unchanged.
-wasm_cc_binary(
-    name = "wasm_tiny_skia",
-    cc_target = ":_editor_wasm_binary",
-    outputs = [
-        "tiny_skia/editor.js",
-        "tiny_skia/editor.wasm",
-    ],
-    tags = [
-        "manual",
-        "wasm",
-    ],
-    target_compatible_with = select({
-        ":wasm_enabled": [],
-        "//conditions:default": ["@platforms//:incompatible"],
-    }),
-)
-
-web_package(
-    name = "wasm_tiny_skia_web_package",
-    srcs = [
-        "editor.css",
-        "editor-bootstrap.js",
-        "enable-threads.js",
-        "index.html",
-        "single/backend-selector.js",
-        "worker-surface-selector.js",
-        "//:donner_icon.svg",
-    ],
-    tags = [
-        "manual",
-        "wasm",
-    ],
-    target_compatible_with = select({
-        ":wasm_enabled": [],
-        "//conditions:default": ["@platforms//:incompatible"],
-    }),
-    wasm_deps = [":wasm_tiny_skia"],
-)
-
-py_test(
-    name = "wasm_tiny_skia_package_size_tests",
-    size = "small",
-    srcs = ["wasm_package_size_tests.py"],
-    args = [
-        "--package-dir",
-        "$(rootpath :wasm_tiny_skia_web_package)",
-        "--max-wasm-raw-bytes",
-        "10500000",
-        "--max-wasm-gzip-bytes",
-        "4600000",
-        "--max-wasm-function-body-bytes",
-        "65536",
-        "--max-wasm-data-segments",
-        "64",
-        "--max-js-raw-bytes",
-        "148000",
-        "--max-js-gzip-bytes",
-        "42000",
-        "--max-total-raw-bytes",
-        "10700000",
-        "--expected-js-property",
-        "__donnerLastScrollEvent",
-        "--expected-js-property",
-        "__donnerActiveSampleStats",
-        "--expected-js-property",
-        "__donnerAcceptedPresentation",
-        "--expected-js-property",
-        "data-active-sample-id",
-        "--expected-js-property",
-        "data-tiny-presentation-version",
-        "--expected-js-property",
-        "zoomModifierHeld",
-        "--forbidden-js-token",
-        "transferControlToOffscreen",
-        "--forbidden-js-token",
-        "Asyncify",
-    ],
-    data = [":wasm_tiny_skia_web_package"],
-    main = "wasm_package_size_tests.py",
-    tags = [
-        "manual",
-        "wasm",
-    ],
-    target_compatible_with = select({
-        ":wasm_enabled": [],
-        "//conditions:default": ["@platforms//:incompatible"],
-    }),
-)
-
-serve_http(
-    name = "serve_http_tiny_skia",
-    dir = ":wasm_tiny_skia_web_package",
     tags = [
         "manual",
         "wasm",

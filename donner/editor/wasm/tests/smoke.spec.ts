@@ -55,7 +55,7 @@ declare global {
       activatedAtMs: number;
     };
     __donnerAcceptedPresentation?: {
-      kind: "geode" | "tiny_skia";
+      kind: "geode";
       token: number;
       presentedAtMs: number;
     };
@@ -114,8 +114,11 @@ declare global {
       renderedCount: number;
       reusedCount: number;
       deferredCount: number;
+      skippedForCanvasInvalidationCount: number;
+      snapshotRebuildCount: number;
       bitmapCount: number;
       bitmapBytes: number;
+      textureSnapshotCount: number;
       textureCount: number;
     };
     __donnerPresentationResourceStats?: {
@@ -155,13 +158,7 @@ const kSourcePaneWidth = 560;
 const kRightPaneWidth = 420;
 const kWelcomeContentMaxWidth = 920;
 
-// Which renderer backend the served package was built with. The Geode/WebGPU
-// lane publishes window.__donnerWgpuReadbackStats and mirrors those mapped
-// pixels into Canvas2D so headless screenshots exercise real Geode output
-// without relying on platform-specific WebGPU swapchain interop. The tiny_skia
-// software lane draws into the WebGL canvas. Default to "geode" so existing
-// invocations keep their behavior.
-const kBackend = (process.env.DONNER_WASM_BACKEND || "geode").toLowerCase();
+const kBackend = "geode";
 const kRequireWebGpu = process.env.DONNER_WASM_REQUIRE_WEBGPU === "1";
 // Match Chromium's webgpu-swiftshader test configuration. Dawn selects
 // SwiftShader for WebGPU while the pixel-validation lane uses explicit texture
@@ -266,28 +263,7 @@ async function readLayerPreviewColorStats(page: Page): Promise<CanvasColorStats>
       "Geode layer pixels require an explicit WGPU readback; browser screenshots omit WebGPU swapchains",
     );
   }
-
-  const region = await page.evaluate(({ rightPaneWidth }) => {
-    const canvas = document.getElementById("canvas") as HTMLCanvasElement | null;
-    if (!canvas) {
-      throw new Error("canvas not found");
-    }
-
-    // The Layers panel thumbnail swatches sit in a narrow column at the left
-    // edge of the right sidebar, just inside its border. In the software
-    // (tiny_skia) screenshot lane the layers list renders at the TOP of the
-    // sidebar (below the menu bar), so scan the upper portion of that column.
-    // Geode mirrors its explicit texture readback into this Canvas2D surface,
-    // so both backends validate the pixels users actually see.
-    return {
-      x: canvas.clientWidth - rightPaneWidth + 8,
-      y: Math.max(1, canvas.clientHeight * 0.05),
-      width: 90,
-      height: Math.max(1, canvas.clientHeight * 0.42),
-    };
-  }, { rightPaneWidth: kRightPaneWidth });
-
-  return readCanvasColorStats(page, region);
+  throw new Error("The editor Wasm package must use Geode");
 }
 
 async function openEditor(page: Page, options: OpenEditorOptions = {}): Promise<string[]> {
@@ -330,22 +306,16 @@ async function openEditor(page: Page, options: OpenEditorOptions = {}): Promise<
       timeout: 20000,
     })
     .toBe(true);
-  // The tiny_skia software lane renders through WebGL and does not require
-  // WebGPU, so only gate the Geode lane on navigator.gpu.
-  if (kBackend !== "tiny_skia") {
-    const hasWebGpu = await page.evaluate(() => "gpu" in navigator);
-    if (!hasWebGpu && kRequireWebGpu) {
-      throw new Error("Geode smoke suite requires WebGPU, but navigator.gpu is unavailable");
-    }
-    test.skip(!hasWebGpu, "Browser does not expose navigator.gpu");
+  const hasWebGpu = await page.evaluate(() => "gpu" in navigator);
+  if (!hasWebGpu && kRequireWebGpu) {
+    throw new Error("Geode smoke suite requires WebGPU, but navigator.gpu is unavailable");
   }
+  test.skip(!hasWebGpu, "Browser does not expose navigator.gpu");
 
   await expect(page.locator("canvas#canvas")).toBeVisible();
   await expect(page.locator("#status")).toBeHidden({ timeout: 20000 });
   const selectedBackend = await page.evaluate(() => window.__donnerBackend);
-  if (selectedBackend !== "packaged") {
-    expect(selectedBackend).toBe(kBackend);
-  }
+  expect(selectedBackend).toBe(kBackend);
   await page.waitForTimeout(options.postInitializationDwellMs ?? 2000);
 
   return fatalMessages;
@@ -834,18 +804,12 @@ for (
       const acceptedPresentation = state.acceptedPresentation;
       const acceptedTokenAdvanced = acceptedPresentation
         && acceptedPresentation.token > (beforeAcceptedPresentation?.token || 0);
-      const pixelsPresented = kBackend === "geode"
-        ? await (async () => {
-          const visibleSurface = page.locator("canvas[data-direct-surface-visible=\"true\"]");
-          return acceptedPresentation?.kind === "geode"
-            && acceptedTokenAdvanced
-            && await visibleSurface.count() === 1
-            && Number(await visibleSurface.getAttribute("data-direct-surface-frame"))
-              > beforeSurfaceFrame;
-        })()
-        : acceptedPresentation?.kind === "tiny_skia"
-          && acceptedTokenAdvanced
-          && (await readRenderPaneColorStats(page)).coloredPixels > 500;
+      const visibleSurface = page.locator("canvas[data-direct-surface-visible=\"true\"]");
+      const pixelsPresented = acceptedPresentation?.kind === "geode"
+        && acceptedTokenAdvanced
+        && await visibleSurface.count() === 1
+        && Number(await visibleSurface.getAttribute("data-direct-surface-frame"))
+          > beforeSurfaceFrame;
       if (pixelsPresented && acceptedPresentation) {
         phaseTimings.presentedMs = acceptedPresentation.presentedAtMs - clickStartedAt;
       }
@@ -1736,7 +1700,8 @@ test("Firefox renders every visible Splash layer thumbnail", async ({ browserNam
         return Boolean(
           stats
             && stats.rowCount > 1
-            && stats.deferredCount === 0,
+            && stats.deferredCount === 0
+            && stats.renderedCount + stats.reusedCount === stats.rowCount,
         );
       });
     }, {
@@ -1746,8 +1711,11 @@ test("Firefox renders every visible Splash layer thumbnail", async ({ browserNam
     })
     .toBe(true);
   const settledStats = await page.evaluate(() => window.__donnerLayerThumbnailStats);
-  expect(settledStats?.bitmapCount).toBe(settledStats?.rowCount);
-  expect(settledStats?.textureCount).toBeGreaterThanOrEqual(settledStats?.bitmapCount || 0);
+  expect(settledStats?.bitmapCount).toBe(0);
+  expect(settledStats?.textureSnapshotCount).toBe(settledStats?.rowCount);
+  expect(settledStats?.textureCount).toBeGreaterThanOrEqual(
+    settledStats?.textureSnapshotCount || 0,
+  );
 
   const thumbnailRegions = [
     {
