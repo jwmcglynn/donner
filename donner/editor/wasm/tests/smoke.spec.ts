@@ -1731,16 +1731,20 @@ test("Firefox renders every visible Splash layer thumbnail", async ({ browserNam
   await expect(canvas).toHaveAttribute("data-active-sample-id", "donner-splash");
   await expect
     .poll(async () => {
-      const deferredCount = await page.evaluate(
-        () => window.__donnerLayerThumbnailStats?.deferredCount,
-      );
-      return deferredCount ?? -1;
+      return page.evaluate(() => {
+        const stats = window.__donnerLayerThumbnailStats;
+        return Boolean(
+          stats
+            && stats.rowCount > 1
+            && stats.deferredCount === 0,
+        );
+      });
     }, {
-      message: "expected Firefox to drain every initially visible Splash thumbnail",
+      message: "expected Firefox to publish every initially visible Splash thumbnail",
       timeout: 20000,
       intervals: [16, 25, 50, 100],
     })
-    .toBe(0);
+    .toBe(true);
   const settledStats = await page.evaluate(() => window.__donnerLayerThumbnailStats);
   expect(settledStats?.bitmapCount).toBe(settledStats?.rowCount);
   expect(settledStats?.textureCount).toBeGreaterThanOrEqual(settledStats?.bitmapCount || 0);
