@@ -14,6 +14,7 @@ module.exports = defineConfig({
         /Firefox presents every accepted drag epoch on one stable surface/,
         /Firefox never exposes the checkerboard while dragging a Splash letter/,
         /Firefox bakes the Splash letter and overlay into one accepted surface epoch/,
+        /Firefox renders every visible Splash layer thumbnail/,
       ],
       use: {
         ...devices["Desktop Firefox"],
