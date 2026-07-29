@@ -1717,6 +1717,60 @@ test("wasm editor drains thumbnails for expanded sublayers", async ({ page }) =>
   expect(fatalMessages).toEqual([]);
 });
 
+test("Firefox renders every visible Splash layer thumbnail", async ({ browserName, page }) => {
+  test.skip(browserName !== "firefox", "Firefox Geode thumbnail presentation regression");
+  const fatalMessages = await openEditor(page);
+  const canvas = page.locator("canvas#canvas");
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  if (bounds === null) {
+    return;
+  }
+
+  await page.mouse.click(bounds.x + bounds.width * 0.25, bounds.y + 282);
+  await expect(canvas).toHaveAttribute("data-active-sample-id", "donner-splash");
+  await expect
+    .poll(async () => {
+      const deferredCount = await page.evaluate(
+        () => window.__donnerLayerThumbnailStats?.deferredCount,
+      );
+      return deferredCount ?? -1;
+    }, {
+      message: "expected Firefox to drain every initially visible Splash thumbnail",
+      timeout: 20000,
+      intervals: [16, 25, 50, 100],
+    })
+    .toBe(0);
+  const settledStats = await page.evaluate(() => window.__donnerLayerThumbnailStats);
+  expect(settledStats?.bitmapCount).toBe(settledStats?.rowCount);
+  expect(settledStats?.textureCount).toBeGreaterThanOrEqual(settledStats?.bitmapCount || 0);
+
+  const thumbnailRegions = [
+    {
+      name: "Sunburst",
+      x: bounds.width - kRightPaneWidth + 60,
+      y: 112,
+      width: 30,
+      height: 26,
+    },
+    {
+      name: "Blue_center_burst",
+      x: bounds.width - kRightPaneWidth + 60,
+      y: 172,
+      width: 30,
+      height: 26,
+    },
+  ];
+  for (const region of thumbnailRegions) {
+    const stats = await readCanvasColorStats(page, region);
+    expect(stats.coloredPixels, `${region.name} must show its rendered SVG thumbnail`)
+      .toBeGreaterThan(
+        20,
+      );
+  }
+  expect(fatalMessages).toEqual([]);
+});
+
 test("WASM trackpad pinch wheel reaches editor as zoom gesture", async ({ page }) => {
   const fatalMessages = await openEditor(page);
   const canvas = page.locator("canvas#canvas");
