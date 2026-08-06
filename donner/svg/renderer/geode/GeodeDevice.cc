@@ -199,7 +199,7 @@ void WaitForSubmittedWork(const wgpu::Device& device, const wgpu::Queue& queue) 
     const std::shared_ptr<WorkDoneState> state = takeWgpuCallbackState<WorkDoneState>(userdata1);
     state->done.store(true, std::memory_order_release);
   };
-  callbackInfo.userdata1 = &state;
+  callbackInfo.userdata1 = retainWgpuCallbackState(state);
   callbackInfo.userdata2 = nullptr;
 
   queue.onSubmittedWorkDone(callbackInfo);
