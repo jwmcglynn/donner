@@ -247,53 +247,33 @@ void CopySurfaceTextureToReadbackBuffer(const wgpu::Texture& texture, const wgpu
   encoder.copyTextureToBuffer(src, dst, copySize);
 }
 
-bool MapReadbackBuffer(const wgpu::Instance& instance, const wgpu::Device& device,
-                       const wgpu::Buffer& buffer, uint64_t size) {
-#ifdef __EMSCRIPTEN__
-  (void)device;
-  if (!instance) {
-    return false;
-  }
-#else
-  (void)instance;
-#endif
+bool MapReadbackBuffer(const wgpu::Device& device, const wgpu::Buffer& buffer, uint64_t size) {
   struct MapState {
-    std::atomic<bool> done = false;
-    std::atomic<bool> ok = false;
-  };
-  auto mapState = std::make_shared<MapState>();
+    bool done = false;
+    bool ok = false;
+  } mapState;
 
   wgpu::BufferMapCallbackInfo mapCb{wgpu::Default};
   mapCb.callback = [](WGPUMapAsyncStatus status, WGPUStringView /*message*/, void* userdata1,
                       void* /*userdata2*/) {
-    const std::shared_ptr<MapState> state = geode::takeWgpuCallbackState<MapState>(userdata1);
-    state->ok.store(status == WGPUMapAsyncStatus_Success, std::memory_order_relaxed);
-    state->done.store(true, std::memory_order_release);
+    auto* state = static_cast<MapState*>(userdata1);
+    state->ok = (status == WGPUMapAsyncStatus_Success);
+    state->done = true;
   };
-#ifdef __EMSCRIPTEN__
-  mapCb.mode = wgpu::CallbackMode::WaitAnyOnly;
-#else
-  mapCb.mode = wgpu::CallbackMode::AllowSpontaneous;
-#endif
-  mapCb.userdata1 = geode::retainWgpuCallbackState(mapState);
+  mapCb.userdata1 = &mapState;
   mapCb.userdata2 = nullptr;
-  [[maybe_unused]] const wgpu::Future mapFuture =
-      buffer.mapAsync(wgpu::MapMode::Read, 0, size, mapCb);
+  mapCb.mode = wgpu::CallbackMode::AllowSpontaneous;
+  buffer.mapAsync(wgpu::MapMode::Read, 0, size, mapCb);
 
-#ifdef __EMSCRIPTEN__
-  wgpu::FutureWaitInfo waitInfo{wgpu::Default};
-  waitInfo.future = mapFuture;
-  constexpr uint64_t kMapTimeoutNs = 30'000'000'000ull;
-  if (instance.waitAny(1, &waitInfo, kMapTimeoutNs) != wgpu::WaitStatus::Success ||
-      !waitInfo.completed) {
-    return false;
-  }
-#else
-  while (!mapState->done.load(std::memory_order_acquire)) {
+  int pollCount = 0;
+  while (!mapState.done) {
     device.poll(true, nullptr);
+    ++pollCount;
+    if (pollCount > 2000) {
+      break;
+    }
   }
-#endif
-  return mapState->ok.load(std::memory_order_relaxed);
+  return mapState.ok;
 }
 #endif
 
@@ -388,20 +368,6 @@ EM_JS(bool, WgpuReadbackStatsEnabled, (), {
   }
   return enabled;
 });
-EM_JS(void, PresentWgpuReadbackBitmap, (const uint8_t* pixels, int width, int height, int rowBytes),
-      {
-        const canvas = Module.canvas;
-        const context = canvas ? canvas.getContext("2d") : null;
-        if (!context || width <= 0 || height <= 0 || rowBytes != width * 4) {
-          return;
-        }
-        const byteLength = rowBytes * height;
-        // Threaded Wasm stores HEAPU8 in a SharedArrayBuffer, which ImageData
-        // intentionally rejects. Copy into a normal JS-owned buffer first.
-        const rgba = new Uint8ClampedArray(byteLength);
-        rgba.set(HEAPU8.subarray(pixels, pixels + byteLength));
-        context.putImageData(new ImageData(rgba, width, height), 0, 0);
-      });
 EM_JS(int, PeekWgpuReadbackRequest, (), {
   const request = Number(window['__donnerWgpuReadbackRequested'] || 0);
   const completed = Number(window['__donnerWgpuReadbackCompleted'] || 0);
@@ -982,14 +948,10 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     glfwTerminate();
     return;
   }
-  bool useOffscreenWgpuTarget = useNullPlatform;
-#ifdef __EMSCRIPTEN__
-  // The smoke-test readback lane renders into a regular WebGPU texture and
-  // presents the mapped pixels through Canvas2D. This keeps pixel validation
-  // independent of headless browsers whose WebGPU swapchain cannot allocate a
-  // compositor-compatible shared-image backing.
-  useOffscreenWgpuTarget = useOffscreenWgpuTarget || WgpuReadbackStatsEnabled();
-#endif
+  // The browser readback-stats lane keeps the real canvas surface: pixel
+  // probes flow through the asynchronous smoke-readback path against the
+  // presented swapchain (with CopySrc usage), not an offscreen mirror.
+  const bool useOffscreenWgpuTarget = useNullPlatform;
   if (!useOffscreenWgpuTarget) {
     wgpuState_->surface = CreateEditorWgpuSurface(wgpuState_->instance, window_);
     if (!wgpuState_->surface) {
@@ -1764,8 +1726,7 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     timing.readbackMs += ElapsedMs(readbackStart);
   }
   if (targetReadback != nullptr && readbackBuffer &&
-      MapReadbackBuffer(wgpuState_->instance, wgpuState_->device, readbackBuffer.get(),
-                        readbackBufferSize)) {
+      MapReadbackBuffer(wgpuState_->device, readbackBuffer.get(), readbackBufferSize)) {
     const auto readbackStart = std::chrono::steady_clock::now();
     const uint8_t* mapped = static_cast<const uint8_t*>(
         readbackBuffer.get().getConstMappedRange(0, readbackBufferSize));
@@ -1788,9 +1749,6 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   }
   if (publishSmokeReadbackStats && targetReadback != nullptr && !targetReadback->empty()) {
     PublishWgpuReadbackStatsForSmokeTests(*targetReadback);
-    PresentWgpuReadbackBitmap(targetReadback->pixels.data(), targetReadback->dimensions.x,
-                              targetReadback->dimensions.y,
-                              static_cast<int>(targetReadback->rowBytes));
   }
 #endif
   {

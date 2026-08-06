@@ -1588,16 +1588,22 @@ test("wasm editor renders layer panel previews after loading a document", async 
       })
       .toBeGreaterThanOrEqual(request);
   }
+  // Geode-only Wasm renders row thumbnails as GPU texture snapshots; a CPU
+  // bitmap fallback would mean the texture path silently degraded.
   await expect
-    .poll(async () => page.evaluate(() => window.__donnerLayerThumbnailStats?.bitmapCount || 0), {
-      message:
-        "expected the Layers panel to render SVG row thumbnails instead of fallback swatches",
-      timeout: 20000,
-      intervals: [16, 25, 50, 100],
-    })
+    .poll(
+      async () =>
+        page.evaluate(() => window.__donnerLayerThumbnailStats?.textureSnapshotCount || 0),
+      {
+        message:
+          "expected the Layers panel to render SVG row thumbnails instead of fallback swatches",
+        timeout: 20000,
+        intervals: [16, 25, 50, 100],
+      },
+    )
     .toBeGreaterThan(0);
   const thumbnailStats = await page.evaluate(() => window.__donnerLayerThumbnailStats);
-  expect(thumbnailStats?.bitmapBytes).toBeGreaterThan(0);
+  expect(thumbnailStats?.bitmapCount).toBe(0);
   expect(thumbnailStats?.textureCount).toBeGreaterThan(0);
   await expect
     .poll(async () => {
@@ -1628,7 +1634,8 @@ test("wasm editor drains thumbnails for expanded sublayers", async ({ page }) =>
       const stats = await page.evaluate(() => window.__donnerLayerThumbnailStats);
       if (
         !stats || stats.rowCount <= 1 || stats.deferredCount !== 0
-        || stats.bitmapCount !== stats.rowCount || stats.textureCount < stats.bitmapCount
+        || stats.textureSnapshotCount !== stats.rowCount
+        || stats.textureCount < stats.textureSnapshotCount
       ) {
         return 0;
       }
@@ -1657,7 +1664,7 @@ test("wasm editor drains thumbnails for expanded sublayers", async ({ page }) =>
         stats
           && stats.rowCount > initialRowCount
           && stats.deferredCount === 0
-          && stats.bitmapCount === stats.rowCount
+          && stats.textureSnapshotCount === stats.rowCount
           && stats.textureCount >= stats.bitmapCount,
       );
     }, {
