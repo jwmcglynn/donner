@@ -887,7 +887,7 @@ inline DocumentReadAccess::DocumentReadAccess(DocumentState& documentState)
 inline DocumentReadAccess::DocumentReadAccess(DocumentState& documentState, TryLockTag)
     : documentState_(&documentState) {
   if (documentState.threadingMode_ == ThreadingMode::ConcurrentDom) {
-    if (DocumentState::activeWriteDocument_ != &documentState &&
+    if (!documentState.currentThreadHasWriteAccess() &&
         !documentState.currentThreadHasReadAccess()) {
       if (!documentState.accessMutex_.tryLockRead()) {
         documentState_ = nullptr;

@@ -1171,6 +1171,10 @@ void GeoEncoder::setGeometryDebugSink(GeometryDebugSink* sink, const Transform2d
   impl_->geometryDebugRootFromTarget = rootFromTarget;
 }
 
+void GeoEncoder::setAntialias(bool antialias) {
+  impl_->antialias = antialias;
+}
+
 void GeoEncoder::setLoadPreserve() {
   // No-op if a pass is already open - loadOp is a pass-construction
   // parameter and can't be changed mid-pass. The RendererGeode caller

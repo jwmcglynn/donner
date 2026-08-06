@@ -1223,6 +1223,13 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink {
   /// `texturePool` (M4.2) on the buffer side.
   geode::GeodeBufferPool arenaBufferPool;
 
+  /// Apply the renderer-wide encoder configuration shared by every encoder
+  /// this renderer constructs: arena buffer recycling and the antialias mode.
+  void configureEncoder(geode::GeoEncoder& encoderToConfigure) {
+    encoderToConfigure.setBufferPool(&arenaBufferPool);
+    encoderToConfigure.setAntialias(antialias);
+  }
+
   /// Per-renderer frame index used to age resident path-cache entries.
   uint64_t currentFrameIndex = 0;
 
@@ -1601,7 +1608,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink {
   /// resource-internal geometry must not leak into the document overlay.
   void configurePathEncoder(geode::GeoEncoder& pathEncoder, bool collectGeometry = true,
                             int additionalFilterOffsetX = 0, int additionalFilterOffsetY = 0) {
-    pathEncoder.setBufferPool(&arenaBufferPool);
+    configureEncoder(pathEncoder);
     if (debugGeometryOverlay && collectGeometry) {
       pathEncoder.setGeometryDebugSink(this, geometryDebugRootFromCurrentTarget(
                                                  additionalFilterOffsetX, additionalFilterOffsetY));
@@ -1700,7 +1707,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink {
 
     encoder = std::make_unique<geode::GeoEncoder>(
         *device, *pipeline, *gradientPipeline, *imagePipeline, target, frameCommandEncoder.get());
-    encoder->setBufferPool(&arenaBufferPool);
+    configureEncoder(*encoder);
     encoder->setLoadPreserve();
     encoder->setTransform(Transform2d());
     encoder->fillPath(builder.build(), css::RGBA(255, 0, 255, 255), FillRule::NonZero);
@@ -4567,15 +4574,19 @@ RendererBitmap RendererGeode::takeSnapshot() const {
   return takeSnapshotInterruptibly({});
 }
 
-RendererBitmap RendererGeode::takeSnapshotInterruptibly(
-    const std::function<bool()>& shouldCancel) const {
+// Read a Geode-rendered texture back into a tightly packed straight-alpha RGBA
+// bitmap. Shared by the live renderer target and detached texture snapshots.
+static RendererBitmap ReadGeodeTextureSnapshot(const std::shared_ptr<geode::GeodeDevice>& device,
+                                               const wgpu::Texture& texture, Vector2i dimensions,
+                                               wgpu::TextureFormat format,
+                                               const std::function<bool()>& shouldCancel) {
   RendererBitmap bitmap;
   // Close the traversal-to-snapshot race before allocating a readback buffer or submitting any GPU
   // work. A main-document request may arrive immediately after the thumbnail finishes drawing.
   if (shouldCancel && shouldCancel()) {
     return bitmap;
   }
-  if (!impl_->device || !impl_->target || impl_->pixelWidth <= 0 || impl_->pixelHeight <= 0) {
+  if (!device || !texture || dimensions.x <= 0 || dimensions.y <= 0) {
     return bitmap;
   }
 
@@ -4652,13 +4663,13 @@ RendererBitmap RendererGeode::takeSnapshotInterruptibly(
     // observe a superseding main-document request promptly. emdawnwebgpu's poll implementation
     // yields its Asyncify-enabled worker for roughly 5 ms regardless of `wait`; native polling is
     // non-blocking and gets a short sleep to avoid spinning.
-    impl_->device->device().poll(false, nullptr);
+    device->device().poll(false, nullptr);
     ++pollIter;
 #ifndef __EMSCRIPTEN__
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
 #endif
   }
-  impl_->device->recordReadback(/*usedTimedWaitAny=*/false, pollIter);
+  device->recordReadback(/*usedTimedWaitAny=*/false, pollIter);
   if (cancelled) {
     // Cancelling a pending map schedules its callback with an aborted status. The callback's
     // reference keeps `mapState` valid even when delivery happens after this method returns.
@@ -4726,6 +4737,21 @@ RendererBitmap RendererGeode::takeSnapshotInterruptibly(
   }
   readback.get().unmap();
   return bitmap;
+}
+
+RendererBitmap RendererGeodeTextureSnapshot::takeSnapshot() const {
+  return ReadGeodeTextureSnapshot(device_, texture_, dimensions_, format_,
+                                  /*shouldCancel=*/{});
+}
+
+RendererBitmap RendererGeode::takeSnapshotInterruptibly(
+    const std::function<bool()>& shouldCancel) const {
+  if (!impl_->device || !impl_->target || impl_->pixelWidth <= 0 || impl_->pixelHeight <= 0) {
+    return RendererBitmap{};
+  }
+  return ReadGeodeTextureSnapshot(impl_->device, impl_->target,
+                                  Vector2i(impl_->pixelWidth, impl_->pixelHeight),
+                                  impl_->textureFormat, shouldCancel);
 }
 
 RendererReadbackStats RendererGeode::consumeReadbackStats() {

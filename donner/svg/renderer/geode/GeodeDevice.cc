@@ -312,10 +312,6 @@ GeodeDevice::~GeodeDevice() {
   ReleaseWgpuHandle(instance);
 }
 
-const wgpu::Instance& GeodeDevice::instance() const {
-  return impl_->instance;
-}
-
 void GeodeDevice::recordReadback(bool usedTimedWaitAny, int pollIterations) {
   readbackCount_.fetch_add(1, std::memory_order_relaxed);
   readbackPollIterations_.fetch_add(pollIterations, std::memory_order_relaxed);

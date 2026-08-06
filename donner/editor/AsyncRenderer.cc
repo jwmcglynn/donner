@@ -2294,7 +2294,8 @@ void AsyncRenderer::workerLoop() {
     compositor_->setSkipMainComposeDuringSplit(false);
 #else
     const bool splitPreviewSafe = !desiredPromotionIncomplete;
-    compositor_->setSkipMainComposeDuringSplit(activeDragRequest && splitPreviewSafe);
+    compositor_->setSkipMainComposeDuringSplit(activeDragRequest && splitPreviewSafe &&
+                                               !request.captureCpuSnapshot);
 #endif
     workerTiming.setupMs = elapsedSince(workerStart);
 
@@ -2646,7 +2647,8 @@ void AsyncRenderer::workerLoop() {
     PresentationSnapshotPlan snapshotPlan;
 #ifndef DONNER_WASM_WORKER_SURFACE
     snapshotPlan = ChoosePresentationSnapshotPlan(
-        compositedPreview.has_value(), requestRenderer.requiresTextureSnapshotPresentation());
+        compositedPreview.has_value(), requestRenderer.requiresTextureSnapshotPresentation(),
+        request.captureCpuSnapshot);
 #endif
     {
       const auto finalSnapshotStart = std::chrono::steady_clock::now();
