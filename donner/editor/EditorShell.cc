@@ -48,6 +48,7 @@
 #include "donner/editor/KeyboardShortcutPolicy.h"
 #include "donner/editor/LockState.h"
 #include "donner/editor/NativeWindowChrome.h"
+#include "donner/editor/PinchZoomPolicy.h"
 #include "donner/editor/SelectionTransformHandles.h"
 #include "donner/editor/ShapeClipboardCommands.h"
 #include "donner/editor/ShapeClipboardPayload.h"
@@ -248,7 +249,10 @@ constexpr float kKeyboardZoomStep = 1.5f;
 constexpr float kMinRightPaneWidth = 220.0f;
 constexpr float kMaxRightPaneWidth = 900.0f;
 constexpr double kTrackpadPanPixelsPerScrollUnit = 10.0;
-constexpr double kWheelZoomStep = 1.1;
+// `kWheelZoomStep` intentionally has no definition here: it is shared policy
+// owned by `donner/editor/PinchZoomPolicy.h` (enclosing `donner::editor`
+// namespace) so the desktop pinch monitor, the browser pinch bridge, and this
+// shell can never drift apart. Unqualified uses below resolve to it.
 constexpr double kSelectMarqueeHoldDelaySeconds = 0.20;
 constexpr int kMaxSaveSyncFlushPasses = 4;
 constexpr float kSelectionSizeChipPaddingX = 6.0f;

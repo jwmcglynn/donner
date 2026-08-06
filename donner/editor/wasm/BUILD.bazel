@@ -30,6 +30,7 @@ config_setting(
 _EDITOR_WASM_BINARY_DEPS = [
     "//donner/editor:editor_shell",
     "//donner/editor:editor_splash",
+    "//donner/editor:pinch_zoom_policy",
     "//donner/editor/gui:editor_window",
 ]
 

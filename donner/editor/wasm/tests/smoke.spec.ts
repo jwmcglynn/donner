@@ -16,7 +16,9 @@ declare global {
     __donnerLastScrollEvent?: {
       zoomModifierHeld?: boolean;
       yoffset?: number;
+      count?: number;
     };
+    __donnerPinchWheelDeltaPerLnScale?: number;
     __donnerWorkerStats?: {
       completedResults: number;
       publishedAtMs: number;
@@ -1788,6 +1790,140 @@ test("WASM trackpad pinch wheel reaches editor as zoom gesture", async ({ page }
   await expect
     .poll(async () => page.evaluate(() => window.__donnerLastScrollEvent?.yoffset))
     .toBeGreaterThan(0);
+  expect(fatalMessages).toEqual([]);
+});
+
+// The render-pane classifier applies `zoomFactor = pow(kWheelZoomStep, yoffset)`,
+// and the Wasm GLFW port converts a DOM_DELTA_PIXEL wheel event into
+// `yoffset = -deltaY / kWasmWheelPixelsPerScrollUnit`. Both constants are owned
+// by donner/editor/PinchZoomPolicy.h; these mirrors let the browser tests assert
+// magnitude instead of sign.
+const kWheelZoomStep = 1.1;
+const kWasmWheelPixelsPerScrollUnit = 100;
+
+async function readScrollEventYOffset(page: Page, previousCount: number): Promise<number> {
+  await expect
+    .poll(async () => page.evaluate(() => window.__donnerLastScrollEvent?.count ?? 0), {
+      message: "expected the synthesized wheel event to reach the editor scroll callback",
+      timeout: 10000,
+    })
+    .toBeGreaterThan(previousCount);
+  const scrollEvent = await page.evaluate(() => window.__donnerLastScrollEvent);
+  expect(scrollEvent?.zoomModifierHeld).toBe(true);
+  expect(typeof scrollEvent?.yoffset).toBe("number");
+  return scrollEvent?.yoffset as number;
+}
+
+test("WASM trackpad pinch gesture zooms by the gesture scale", async ({ page }) => {
+  const fatalMessages = await openEditor(page);
+  const canvas = page.locator("canvas#canvas");
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  if (bounds === null) {
+    return;
+  }
+
+  // The editor publishes the C++-owned pinch policy at Wasm startup; the page's
+  // WebKit gesture bridge must be driving off that value, not a stale literal.
+  const publishedDeltaPerLnScale = await page.evaluate(() =>
+    window.__donnerPinchWheelDeltaPerLnScale
+  );
+  expect(publishedDeltaPerLnScale).toBeCloseTo(
+    kWasmWheelPixelsPerScrollUnit / Math.log(kWheelZoomStep),
+    6,
+  );
+
+  const center = {
+    x: bounds.x + bounds.width * 0.5,
+    y: bounds.y + bounds.height * 0.5,
+  };
+  await page.mouse.move(center.x, center.y);
+  const beforeCount = await page.evaluate(() => window.__donnerLastScrollEvent?.count ?? 0);
+
+  // WebKit's non-standard GestureEvent has no cross-browser constructor, so
+  // synthesize the shape the bridge reads: a cancelable event carrying `scale`.
+  const gestureScale = 1.5;
+  await page.evaluate(({ x, y, scale }) => {
+    const target = document.getElementById("canvas");
+    if (!target) {
+      throw new Error("canvas not found");
+    }
+
+    const dispatchGesture = (type: string, gestureScale: number) => {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      Object.assign(event, { scale: gestureScale, rotation: 0, clientX: x, clientY: y });
+      target.dispatchEvent(event);
+    };
+
+    dispatchGesture("gesturestart", 1);
+    dispatchGesture("gesturechange", scale);
+    dispatchGesture("gestureend", scale);
+  }, { ...center, scale: gestureScale });
+
+  const yoffset = await readScrollEventYOffset(page, beforeCount);
+
+  // A pinch to `scale` must zoom the document by exactly `scale`, matching the
+  // native macOS pinch path. In scroll units that is ln(scale) / ln(1.1).
+  const expectedYOffset = Math.log(gestureScale) / Math.log(kWheelZoomStep);
+  expect(
+    Math.abs(yoffset - expectedYOffset) / expectedYOffset,
+    `pinch to ${gestureScale} must yield yoffset ${expectedYOffset}, got ${yoffset}`,
+  ).toBeLessThan(0.02);
+  expect(Math.pow(kWheelZoomStep, yoffset)).toBeCloseTo(gestureScale, 2);
+  expect(fatalMessages).toEqual([]);
+});
+
+test("WASM ctrl+wheel pinch zooms by the shared wheel-zoom policy", async ({ page }) => {
+  const fatalMessages = await openEditor(page);
+  const canvas = page.locator("canvas#canvas");
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  if (bounds === null) {
+    return;
+  }
+
+  const center = {
+    x: bounds.x + bounds.width * 0.5,
+    y: bounds.y + bounds.height * 0.5,
+  };
+  await page.mouse.move(center.x, center.y);
+  const beforeCount = await page.evaluate(() => window.__donnerLastScrollEvent?.count ?? 0);
+
+  // Chromium and Firefox deliver trackpad pinch on this raw ctrl+wheel channel
+  // rather than through gesture events, so pin the pixels-to-scroll-unit half
+  // of the policy directly.
+  const deltaY = -250;
+  const browserDefaultAllowed = await page.evaluate(({ x, y, deltaY }) => {
+    const target = document.getElementById("canvas");
+    if (!target) {
+      throw new Error("canvas not found");
+    }
+
+    return target.dispatchEvent(
+      new WheelEvent("wheel", {
+        bubbles: true,
+        cancelable: true,
+        clientX: x,
+        clientY: y,
+        ctrlKey: true,
+        deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+        deltaY,
+      }),
+    );
+  }, { ...center, deltaY });
+  expect(browserDefaultAllowed).toBe(false);
+
+  const yoffset = await readScrollEventYOffset(page, beforeCount);
+
+  const expectedYOffset = -deltaY / kWasmWheelPixelsPerScrollUnit;
+  expect(
+    Math.abs(yoffset - expectedYOffset) / expectedYOffset,
+    `ctrl+wheel deltaY ${deltaY} must yield yoffset ${expectedYOffset}, got ${yoffset}`,
+  ).toBeLessThan(0.02);
+  expect(Math.pow(kWheelZoomStep, yoffset)).toBeCloseTo(
+    Math.pow(kWheelZoomStep, expectedYOffset),
+    3,
+  );
   expect(fatalMessages).toEqual([]);
 });
 

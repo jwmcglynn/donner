@@ -264,6 +264,28 @@ function InstallTouchPointerBridge(targetCanvas) {
   targetCanvas.addEventListener("pointercancel", finishTouch);
 }
 
+// Wheel deltaY (CSS pixels) to synthesize per unit of ln(scale) when WebKit
+// reports a trackpad pinch. The editor publishes the authoritative value as
+// window.__donnerPinchWheelDeltaPerLnScale once the Wasm runtime starts (see
+// donner/editor/PinchZoomPolicy.h); this fallback covers the window before that
+// and must stay in sync with it.
+//
+// Derivation: the Wasm GLFW port turns a DOM_DELTA_PIXEL wheel event into
+// yoffset = -deltaY / 100, and the render-pane classifier applies
+// zoomFactor = pow(1.1, yoffset). Requiring zoomFactor === scale gives
+// K = 100 / Math.log(1.1) = 1049.205868725706...
+//
+// The previous value of 500 made browser pinch zoom 2.0984x too slow in log
+// space relative to the native macOS pinch path.
+const kPinchWheelDeltaPerLnScaleFallback = 1049.2059;
+
+function PinchWheelDeltaPerLnScale() {
+  const published = window.__donnerPinchWheelDeltaPerLnScale;
+  return Number.isFinite(published) && published > 0
+    ? published
+    : kPinchWheelDeltaPerLnScaleFallback;
+}
+
 function InstallTrackpadGestureBridge(targetCanvas) {
   let previousScale = 1;
   const preventPageZoom = (event) => {
@@ -287,7 +309,7 @@ function InstallTrackpadGestureBridge(targetCanvas) {
         clientY: event.clientY,
         ctrlKey: true,
         deltaMode: WheelEvent.DOM_DELTA_PIXEL,
-        deltaY: -Math.log(Math.max(incrementalScale, 0.001)) * 500,
+        deltaY: -Math.log(Math.max(incrementalScale, 0.001)) * PinchWheelDeltaPerLnScale(),
       }),
     );
   }, { passive: false });

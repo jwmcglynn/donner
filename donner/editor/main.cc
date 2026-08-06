@@ -41,12 +41,21 @@ EM_JS(void, MarkWasmEditorFrameRendered, (), {
   window['__donnerMainLoopRenderedFrames'] =
       Number(window['__donnerMainLoopRenderedFrames'] || 0) + 1;
 });
+
+// Publish the C++-owned pinch policy so the page's WebKit gesture bridge
+// synthesizes wheel deltas calibrated against the same zoom-step model the
+// classifier uses. See donner/editor/PinchZoomPolicy.h for the derivation; the
+// bootstrap keeps a numeric fallback for the window between page load and
+// runtime initialization.
+EM_JS(void, PublishWasmPinchZoomPolicy, (double wheelDeltaPerLnScale),
+      { window['__donnerPinchWheelDeltaPerLnScale'] = wheelDeltaPerLnScale; });
 #else
 #include "donner/base/FailureSignalHandler.h"
 #endif
 
 #include "donner/editor/EditorShell.h"
 #include "donner/editor/Notice.h"
+#include "donner/editor/PinchZoomPolicy.h"
 #include "donner/editor/TracyWrapper.h"
 #include "donner/editor/gui/EditorWindow.h"
 
@@ -263,6 +272,7 @@ int main(int argc, char** argv) {
 #ifdef __EMSCRIPTEN__
   auto* loopState = new WasmEditorLoopState{std::move(window), std::move(shell), std::nullopt};
   InitializeWasmEditorFrameScheduling();
+  PublishWasmPinchZoomPolicy(donner::editor::PinchWheelDeltaPerLnScale());
   // The browser presents the WebGPU canvas when the requestAnimationFrame callback returns.
   emscripten_set_main_loop_arg(&RunWasmEditorFrame, loopState, /*fps=*/0,
                                /*simulateInfiniteLoop=*/true);

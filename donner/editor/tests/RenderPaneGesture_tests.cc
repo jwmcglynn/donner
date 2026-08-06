@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "donner/editor/PinchEventMonitor.h"
+#include "donner/editor/PinchZoomPolicy.h"
 
 namespace donner::editor {
 namespace {
@@ -82,6 +83,53 @@ TEST(RenderPaneGestureTest, PinchMagnificationMapsToEquivalentZoomOutScrollDelta
                                                              /*wheelZoomStep=*/1.1);
 
   EXPECT_NEAR(std::pow(1.1, scrollDelta), 0.8, 1e-12);
+}
+
+TEST(RenderPaneGestureTest, PinchMagnificationRoundTripsToTheExactZoomFactor) {
+  // The whole pinch policy rests on this identity: a Cocoa magnification of `m`
+  // must zoom the document by exactly `1 + m` after the classifier re-applies
+  // the wheel-zoom step. Sweep the useful magnification range rather than
+  // spot-checking two values, so any change to either half of the conversion
+  // fails here.
+  for (double magnification = -0.5; magnification <= 2.0 + 1e-12; magnification += 0.01) {
+    const double scrollDelta = PinchMagnificationToScrollDelta(magnification, kWheelZoomStep);
+    EXPECT_NEAR(std::pow(kWheelZoomStep, scrollDelta), 1.0 + magnification, 1e-9)
+        << "magnification=" << magnification;
+  }
+}
+
+TEST(RenderPaneGestureTest, PinchWheelDeltaPerLnScaleMatchesTheClassifierStep) {
+  // Pins the browser bridge constant to its derivation. The Wasm GLFW port
+  // converts DOM_DELTA_PIXEL wheel input with `yoffset = -deltaY / 100`, so a
+  // bridge emitting `deltaY = -K * ln(scale)` zooms by exactly `scale` only
+  // when `K == 100 / ln(kWheelZoomStep)`.
+  EXPECT_NEAR(PinchWheelDeltaPerLnScale(), 100.0 / std::log(1.1), 1e-12);
+  EXPECT_NEAR(PinchWheelDeltaPerLnScale(), 1049.205868725706, 1e-9);
+
+  // The literal fallback baked into editor-bootstrap.js, for the window between
+  // page load and Wasm runtime initialization, must stay within rounding
+  // distance of the published value.
+  EXPECT_NEAR(PinchWheelDeltaPerLnScale(), 1049.2059, 1e-3);
+}
+
+TEST(RenderPaneGestureTest, BrowserPinchWheelDeltaZoomsByTheGestureScale) {
+  // End-to-end policy check across the browser path, with the emscripten-glfw
+  // pixel-to-scroll-unit conversion modeled inline.
+  for (const double scale : {0.5, 0.8, 1.25, 2.0, 3.0}) {
+    const double bridgeDeltaY = -std::log(scale) * PinchWheelDeltaPerLnScale();
+    const double glfwYOffset = -bridgeDeltaY / kWasmWheelPixelsPerScrollUnit;
+    const RenderPaneScrollEvent event{
+        .scrollDelta = Vector2d(0.0, glfwYOffset),
+        .cursorScreen = Vector2d(400.0, 300.0),
+        .zoomModifierHeld = true,
+    };
+
+    const auto action = ClassifyRenderPaneScrollGesture(event, MakeContext(), kWheelZoomStep,
+                                                        /*panPixelsPerScrollUnit=*/10.0);
+    ASSERT_TRUE(action.has_value()) << "scale=" << scale;
+    EXPECT_EQ(action->type, RenderPaneGestureActionType::Zoom);
+    EXPECT_NEAR(action->zoomFactor, scale, 1e-9) << "scale=" << scale;
+  }
 }
 
 TEST(RenderPaneGestureTest, DegeneratePinchMagnificationIsIgnored) {

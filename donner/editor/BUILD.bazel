@@ -222,6 +222,11 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "pinch_zoom_policy",
+    hdrs = ["PinchZoomPolicy.h"],
+)
+
+donner_cc_library(
     name = "pinch_event_monitor",
     srcs = ["PinchEventMonitor.cc"] + select({
         "@platforms//os:macos": [],
@@ -229,6 +234,7 @@ donner_cc_library(
     }),
     hdrs = ["PinchEventMonitor.h"],
     deps = [
+        ":pinch_zoom_policy",
         ":render_pane_gesture",
     ],
 )
@@ -924,6 +930,7 @@ donner_cc_library(
         ":native_dialog_coordinator",
         ":native_window_chrome",
         ":pen_tool",
+        ":pinch_zoom_policy",
         ":render_coordinator",
         ":render_pane_presenter",
         ":rotate_cursor_set",
@@ -1264,6 +1271,7 @@ donner_cc_binary(
         ":editor_shell",
         ":editor_splash",
         ":notice",
+        ":pinch_zoom_policy",
         ":tracy_wrapper",
         "//donner/base",
         "//donner/base:failure_signal_handler",

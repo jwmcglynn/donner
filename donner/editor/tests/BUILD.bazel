@@ -285,6 +285,7 @@ donner_cc_test(
     srcs = ["RenderPaneGesture_tests.cc"],
     deps = [
         "//donner/editor:pinch_event_monitor",
+        "//donner/editor:pinch_zoom_policy",
         "//donner/editor:render_pane_gesture",
         "@com_google_gtest//:gtest_main",
     ],
