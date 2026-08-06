@@ -14,11 +14,14 @@ const capabilityErrorDetail = document.getElementById("capability-error-detail")
 let editorRevealed = false;
 const documentBitmapContexts = [null, null];
 window.__donnerBootstrapStartedAtMs = performance.now();
+// Served-page contract: the browser tier ships a single Geode WebGPU package. Browser suites read
+// this global to assert which renderer the served page selected, so publish it before any async
+// work can observe the page.
+window.__donnerBackend = "geode";
 
 function ApplyWorkerDocumentSurfaceLayout(layout) {
-  const layoutPolicy = window.__donnerWorkerSurfaceLayoutPolicy || "single-visible";
   const plan = typeof globalThis.CreateDonnerWorkerSurfaceLayoutPlan === "function"
-    ? globalThis.CreateDonnerWorkerSurfaceLayoutPlan(layout, layoutPolicy)
+    ? globalThis.CreateDonnerWorkerSurfaceLayoutPlan(layout)
     : documentCanvases.map((_, slot) => {
       const visibleSlot = Math.max(
         0,
@@ -27,7 +30,7 @@ function ApplyWorkerDocumentSurfaceLayout(layout) {
       const accepted = Boolean(layout.visible) && layout.width > 0
         && layout.height > 0
         && slot === visibleSlot;
-      return { accepted, compositorVisible: accepted, slot, zIndex: accepted ? 1 : 0 };
+      return { accepted, slot, zIndex: accepted ? 1 : 0 };
     });
   const acceptedSurface = plan.find((surfaceLayout) => surfaceLayout.accepted);
   if (
@@ -47,15 +50,11 @@ function ApplyWorkerDocumentSurfaceLayout(layout) {
       surfaceLayout.accepted ? "true" : "false",
     );
     surfaceCanvas.setAttribute(
-      "data-direct-surface-compositor-resident",
-      surfaceLayout.compositorVisible ? "true" : "false",
-    );
-    surfaceCanvas.setAttribute(
       "data-direct-surface-selection-chrome-baked",
       surfaceLayout.accepted && layout.selectionChromeBaked ? "true" : "false",
     );
     surfaceCanvas.style.zIndex = String(surfaceLayout.zIndex);
-    if (!surfaceLayout.compositorVisible) {
+    if (!surfaceLayout.accepted) {
       surfaceCanvas.style.visibility = "hidden";
       continue;
     }
@@ -84,9 +83,6 @@ function ApplyWorkerDocumentSurfaceLayout(layout) {
     surfaceCanvas.style.clipPath =
       `inset(${pixelLayout.clipTop}px ${pixelLayout.clipRight}px ${pixelLayout.clipBottom}px ${pixelLayout.clipLeft}px)`;
     surfaceCanvas.style.visibility = "visible";
-    if (!surfaceLayout.accepted) {
-      continue;
-    }
     surfaceCanvas.setAttribute("data-direct-surface-frame", String(pixelLayout.frameToken));
     const accepted = window.__donnerAcceptedPresentation;
     if (accepted?.kind !== "geode" || accepted.token !== pixelLayout.frameToken) {
@@ -482,38 +478,29 @@ canvas.addEventListener("webglcontextlost", function(event) {
   event.preventDefault();
 }, false);
 
-window.__donnerBackendPromise
-  .then((backend) => {
-    if (!window.__donnerCanStartWasm) {
-      return;
-    }
-    SetLoadingPhase(
-      "Downloading the Geode WebGPU editor…",
-      12,
-      "Compiling the editor on first visit; later loads use the browser cache",
-    );
-    // Start the large Wasm transfer immediately. Emscripten cannot request it
-    // until editor.js has downloaded and executed; a matching fetch preload
-    // lets the browser overlap that glue work with Wasm download/compilation.
-    const wasmPreload = document.createElement("link");
-    wasmPreload.rel = "preload";
-    wasmPreload.as = "fetch";
-    wasmPreload.type = "application/wasm";
-    wasmPreload.crossOrigin = "anonymous";
-    wasmPreload.href = backend.base + "editor.wasm";
-    document.head.appendChild(wasmPreload);
+if (window.__donnerCanStartWasm) {
+  SetLoadingPhase(
+    "Downloading the Geode WebGPU editor…",
+    12,
+    "Compiling the editor on first visit; later loads use the browser cache",
+  );
+  // Start the large Wasm transfer immediately. Emscripten cannot request it
+  // until editor.js has downloaded and executed; a matching fetch preload
+  // lets the browser overlap that glue work with Wasm download/compilation.
+  const wasmPreload = document.createElement("link");
+  wasmPreload.rel = "preload";
+  wasmPreload.as = "fetch";
+  wasmPreload.type = "application/wasm";
+  wasmPreload.crossOrigin = "anonymous";
+  wasmPreload.href = "editor.wasm";
+  document.head.appendChild(wasmPreload);
 
-    const loader = document.createElement("script");
-    loader.async = true;
-    loader.type = "text/javascript";
-    loader.src = backend.base + "editor.js";
-    loader.addEventListener("error", () => {
-      ShowCapabilityError("Unable to load the Geode WebGPU renderer package.");
-    });
-    document.body.appendChild(loader);
-  })
-  .catch((error) => {
-    if (window.__donnerCanStartWasm) {
-      ShowCapabilityError(String(error));
-    }
+  const loader = document.createElement("script");
+  loader.async = true;
+  loader.type = "text/javascript";
+  loader.src = "editor.js";
+  loader.addEventListener("error", () => {
+    ShowCapabilityError("Unable to load the Geode WebGPU renderer package.");
   });
+  document.body.appendChild(loader);
+}

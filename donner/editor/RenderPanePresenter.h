@@ -30,7 +30,6 @@ struct RenderPanePresenterState {
   const std::optional<SelectTool::ActiveDragPreview>& activeDragPreview;
   const std::optional<SelectTool::ActiveDragPreview>& displayedDragPreview;
   Vector2d contentRegion = Vector2d::Zero();
-  std::uint64_t presentationVersion = 0;
   Entity suppressedLayerEntity = entt::null;
   bool suppressDragTargetTiles = false;
   bool documentPresentedDirectly = false;

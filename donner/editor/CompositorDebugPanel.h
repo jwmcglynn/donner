@@ -25,10 +25,8 @@
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/LayerInspectorDiagnostics.h"
 
-#ifdef __EMSCRIPTEN__
-#define GLFW_INCLUDE_ES3
-#include <GLES3/gl3.h>
-#elif !defined(DONNER_EDITOR_WGPU)
+// The browser tier is Geode-only, so the OpenGL debug-texture path is desktop-only.
+#ifndef DONNER_EDITOR_WGPU
 #include "glad/glad.h"
 #endif
 

@@ -8,7 +8,7 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/svg/SVGSVGElement.h"
 #include "donner/svg/parser/SVGParser.h"
-#include "donner/svg/renderer/RendererTinySkia.h"
+#include "donner/svg/renderer/Renderer.h"
 
 namespace donner::editor {
 namespace {

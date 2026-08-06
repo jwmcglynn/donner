@@ -31,6 +31,10 @@
 #include "donner/editor/LayerTreeModel.h"
 #include "donner/svg/renderer/RendererInterface.h"
 
+namespace donner::svg {
+class Renderer;
+}
+
 namespace donner::editor {
 
 /// Current "this element is locked, you can't select it" flash fed into the

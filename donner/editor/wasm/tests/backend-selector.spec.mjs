@@ -3,17 +3,6 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
 
-async function loadPackagedBackend() {
-  const source = await readFile(new URL("../single/backend-selector.js", import.meta.url), "utf8");
-  const window = {};
-  const context = vm.createContext({ Promise, window });
-  vm.runInContext(source, context, { filename: "single/backend-selector.js" });
-  return {
-    backend: window.__donnerBackend,
-    selection: await window.__donnerBackendPromise,
-  };
-}
-
 async function loadWorkerSurfaceUtilities() {
   const source = await readFile(new URL("../worker-surface-selector.js", import.meta.url), "utf8");
   const context = vm.createContext({});
@@ -35,7 +24,6 @@ async function runBootstrapWithoutThreads() {
     "capability-error-detail": { textContent: "" },
   };
   const window = {
-    __donnerBackendPromise: Promise.reject(new Error("WebGPU is unavailable")),
     addEventListener() {},
     isSecureContext: false,
   };
@@ -85,7 +73,6 @@ async function loadTouchPointerBridge() {
     "capability-error-detail": { textContent: "" },
   };
   const window = {
-    __donnerBackendPromise: Promise.reject(new Error("WebGPU is unavailable")),
     addEventListener() {},
     isSecureContext: false,
     PointerEvent: function PointerEvent() {},
@@ -115,7 +102,7 @@ async function loadTouchPointerBridge() {
 }
 
 async function loadReadyHandoff(
-  { backend, devicePixelRatio, workerSurfaceUtilities = false } = {},
+  { devicePixelRatio, workerSurfaceUtilities = false } = {},
 ) {
   const source = await readFile(new URL("../editor-bootstrap.js", import.meta.url), "utf8");
   const windowHandlers = new Map();
@@ -182,8 +169,6 @@ async function loadReadyHandoff(
     "capability-error-detail": { textContent: "" },
   };
   const window = {
-    __donnerBackend: backend,
-    __donnerBackendPromise: new Promise(() => {}),
     addEventListener(type, handler) {
       windowHandlers.set(type, handler);
     },
@@ -198,6 +183,11 @@ async function loadReadyHandoff(
     },
     document: {
       body: { appendChild() {} },
+      createElement: (tagName) => ({
+        tagName: tagName.toUpperCase(),
+        addEventListener() {},
+      }),
+      head: { appendChild() {} },
       getElementById: (id) => elements[id],
     },
     SharedArrayBuffer: function SharedArrayBuffer() {},
@@ -253,7 +243,6 @@ async function loadBootstrapAssetOrder() {
     "capability-error-detail": { textContent: "" },
   };
   const window = {
-    __donnerBackendPromise: Promise.resolve({ name: "geode", base: "" }),
     addEventListener() {},
     isSecureContext: true,
   };
@@ -280,13 +269,12 @@ async function loadBootstrapAssetOrder() {
   return appended;
 }
 
-test("packaged editor selects only Geode", async () => {
-  const result = await loadPackagedBackend();
-  assert.equal(result.backend, "geode");
-  assert.deepEqual({ ...result.selection }, { name: "geode", base: "" });
+test("bootstrap publishes the Geode-only served-page backend", async () => {
+  const { context } = await loadReadyHandoff();
+  assert.equal(context.window.__donnerBackend, "geode");
 });
 
-test("bootstrap starts the selected Wasm download before loading JavaScript glue", async () => {
+test("bootstrap starts the Wasm download before loading JavaScript glue", async () => {
   const appended = await loadBootstrapAssetOrder();
   assert.equal(appended[0]?.tagName, "LINK");
   assert.equal(appended[0]?.rel, "preload");
@@ -318,32 +306,21 @@ test("Safari retains worker frames while Firefox uses one stable direct surface"
     selectLayoutPolicy({ browserEngine: "Gecko", workerSurfaceMode: "bitmap-bridge" }),
     "single-visible",
   );
+  // Exactly one slot is ever composited: the plan never retains the inactive surface.
   assert.deepEqual(
-    [...createLayoutPlan(
-      { visible: true, surfaceSlot: 1, width: 640, height: 400 },
-      "single-visible",
-    )].map(({ accepted, compositorVisible, zIndex }) => ({
-      accepted,
-      compositorVisible,
-      zIndex,
-    })),
+    [...createLayoutPlan({ visible: true, surfaceSlot: 1, width: 640, height: 400 })]
+      .map(({ accepted, zIndex }) => ({ accepted, zIndex })),
     [
-      { accepted: false, compositorVisible: false, zIndex: 0 },
-      { accepted: true, compositorVisible: true, zIndex: 1 },
+      { accepted: false, zIndex: 0 },
+      { accepted: true, zIndex: 1 },
     ],
   );
   assert.deepEqual(
-    [...createLayoutPlan(
-      { visible: true, surfaceSlot: 0, width: 640, height: 400 },
-      "single-visible",
-    )].map(({ accepted, compositorVisible, zIndex }) => ({
-      accepted,
-      compositorVisible,
-      zIndex,
-    })),
+    [...createLayoutPlan({ visible: true, surfaceSlot: 0, width: 640, height: 400 })]
+      .map(({ accepted, zIndex }) => ({ accepted, zIndex })),
     [
-      { accepted: true, compositorVisible: true, zIndex: 1 },
-      { accepted: false, compositorVisible: false, zIndex: 0 },
+      { accepted: true, zIndex: 1 },
+      { accepted: false, zIndex: 0 },
     ],
   );
 });
@@ -523,7 +500,6 @@ test("Safari bitmap surface quantizes a fractional pan without resampling its ba
 
 test("bitmap bridge retains zero-copy handoff and presents backing texels without stretching", async () => {
   const { bitmapTransfers, context, drawImageCalls, elements } = await loadReadyHandoff({
-    backend: "geode",
     devicePixelRatio: 2,
     workerSurfaceUtilities: true,
   });
@@ -688,7 +664,7 @@ test("trackpad gesture bridge prevents page zoom and emits editor wheel zoom", a
 
 test("loading screen remains until the editor presents its first frame", async () => {
   const { context, elements, focusCount, loadingClasses, timers, windowHandlers } =
-    await loadReadyHandoff({ backend: "geode" });
+    await loadReadyHandoff();
 
   context.Module.onRuntimeInitialized();
   assert.equal(elements["loading-screen"].hidden, false);
@@ -710,7 +686,7 @@ test("loading screen remains until the editor presents its first frame", async (
 
 test("Geode loading waits for both the first frame and worker runtime", async () => {
   const { context, elements, focusCount, loadingClasses, timers, windowHandlers } =
-    await loadReadyHandoff({ backend: "geode" });
+    await loadReadyHandoff();
 
   context.window.__donnerRequiresWorkerRuntime = true;
   context.Module.onRuntimeInitialized();
@@ -743,7 +719,7 @@ test("Geode loading waits for both the first frame and worker runtime", async ()
 
 test("worker surface diagnostics retain acceptance for either message order", async () => {
   for (const diagnosticFirst of [true, false]) {
-    const { context } = await loadReadyHandoff({ backend: "geode" });
+    const { context } = await loadReadyHandoff();
     const publishDiagnostic = () =>
       context.Module.publishDonnerWorkerSurfaceDiagnostic(7, 100, 20, 80, 255, 60, 12);
     const acceptSurface = () =>
@@ -780,7 +756,7 @@ test("worker surface diagnostics retain acceptance for either message order", as
 });
 
 test("terminal worker-surface failure uses the capability error handoff", async () => {
-  const { context, elements } = await loadReadyHandoff({ backend: "geode" });
+  const { context, elements } = await loadReadyHandoff();
 
   assert.equal(typeof context.window.__donnerReportWorkerSurfaceUnavailable, "function");
   context.window.__donnerReportWorkerSurfaceUnavailable();
@@ -794,7 +770,7 @@ test("terminal worker-surface failure uses the capability error handoff", async 
 });
 
 test("renderer pthread can report terminal wake failure through the main handler", async () => {
-  const { consoleMessages, context, elements } = await loadReadyHandoff({ backend: "geode" });
+  const { consoleMessages, context, elements } = await loadReadyHandoff();
 
   assert.equal(typeof context.Module.reportDonnerWorkerTaskWakeFailure, "function");
   context.Module.reportDonnerWorkerTaskWakeFailure(1, 0, 1, 0, 0);
@@ -820,16 +796,17 @@ test("renderer pthread can report terminal wake failure through the main handler
   assert.match(elements["capability-error-detail"].textContent, /enable WebGPU/i);
 });
 
-test("bootstrap consumes backend rejection when threads are unavailable", async () => {
+test("bootstrap reports the capability error and skips the download without threads", async () => {
   let unhandledRejection;
   const onUnhandledRejection = (reason) => {
     unhandledRejection = reason;
   };
   process.on("unhandledRejection", onUnhandledRejection);
-  const { elements } = await runBootstrapWithoutThreads();
+  const { elements, window } = await runBootstrapWithoutThreads();
   process.off("unhandledRejection", onUnhandledRejection);
 
   assert.equal(unhandledRejection, undefined);
+  assert.equal(window.__donnerCanStartWasm, false);
   assert.equal(elements["capability-error"].hidden, false);
   assert.match(elements["capability-error-detail"].textContent, /SharedArrayBuffer/);
 });

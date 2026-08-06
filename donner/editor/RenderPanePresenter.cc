@@ -11,10 +11,6 @@
 #include <span>
 #include <vector>
 
-#if defined(__EMSCRIPTEN__) && !defined(DONNER_EDITOR_WGPU)
-#include <emscripten/emscripten.h>
-#endif
-
 #include "donner/editor/ImGuiIncludes.h"
 #if defined(__clang__)
 #if __has_warning("-Wnontrivial-memcall")
@@ -32,23 +28,6 @@
 #include "donner/editor/PresentedFrameComposer.h"
 
 namespace donner::editor {
-
-#if defined(__EMSCRIPTEN__) && !defined(DONNER_EDITOR_WGPU)
-EM_JS(void, PublishTinyPresentationVersion, (double version), {
-  const canvas = document.getElementById('canvas');
-  if (canvas) {
-    canvas.setAttribute('data-tiny-presentation-version', String(version));
-  }
-  const accepted = window['__donnerAcceptedPresentation'];
-  if (!accepted || accepted['kind'] != 'tiny_skia' || accepted['token'] != version) {
-    window['__donnerAcceptedPresentation'] = {
-      'kind' : 'tiny_skia',
-      'token' : version,
-      'presentedAtMs' : performance.now(),
-    };
-  }
-});
-#endif
 
 namespace {
 
@@ -788,15 +767,6 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
     paneDrawList->PopClipRect();
   }
   paneDrawList->PopClipRect();
-
-#if defined(__EMSCRIPTEN__) && !defined(DONNER_EDITOR_WGPU)
-  // Publish only after this accepted document version has contributed image commands to the frame.
-  // JavaScript cannot observe the value until the synchronous Wasm frame returns, after ImGui's GL
-  // submission, so browser tests cannot mistake a prior colored canvas for the new sample.
-  if (state.presentationVersion != 0u) {
-    PublishTinyPresentationVersion(static_cast<double>(state.presentationVersion));
-  }
-#endif
 
   if (state.perfOverlayMode == PerfOverlayMode::FpsPill) {
     RenderFpsPill(state.frameHistory, state.contentRegion);

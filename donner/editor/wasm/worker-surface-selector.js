@@ -17,22 +17,21 @@ function SelectDonnerWorkerSurfaceMode(options) {
 
 function SelectDonnerWorkerSurfaceLayoutPolicy(options) {
   void options;
-  // A WebGPU surface already owns a browser-managed swapchain. Alternating two
-  // independent DOM canvases adds a second, unsynchronized presentation layer:
-  // Gecko can briefly expose the newly promoted canvas before its current
-  // texture is latched, or revisit the other canvas's older drag epoch.
+  // A WebGPU surface already owns a browser-managed swapchain, so exactly one document
+  // canvas is ever composited. Keeping the inactive slot resident added a second,
+  // unsynchronized presentation layer: Gecko could briefly expose the newly promoted
+  // canvas before its current texture was latched, or revisit the other canvas's older
+  // drag epoch. Only this policy exists; the value is published for browser diagnostics.
   return "single-visible";
 }
 
-function CreateDonnerWorkerSurfaceLayoutPlan(layout, policy) {
+function CreateDonnerWorkerSurfaceLayoutPlan(layout) {
   const visibleSlot = Math.max(0, Math.min(1, Number(layout.surfaceSlot)));
   const hasVisibleSurface = Boolean(layout.visible) && layout.width > 0 && layout.height > 0;
-  const retainInactiveSurface = hasVisibleSurface && policy === "occluded-double-buffer";
   return [0, 1].map((slot) => {
     const accepted = hasVisibleSurface && slot === visibleSlot;
     return {
       accepted,
-      compositorVisible: accepted || retainInactiveSurface,
       slot,
       zIndex: accepted ? 1 : 0,
     };

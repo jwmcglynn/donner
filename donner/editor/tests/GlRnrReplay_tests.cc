@@ -2796,7 +2796,7 @@ TEST(GlRnrReplayTest, TypingIntoTextKeepsTextPixelsPresentEveryFrame) {
               << " removed=" << diag->lastFlushRemovedElements
               << " invalidated=" << diag->lastFlushCacheInvalidatedElements.size()
               << " green=" << (bmp.has_value() ? greenPixels(*bmp) : -1)
-              << " cyanChrome=" << (bmp.has_value() ? cyanChromePixels(*bmp) : -1) << " tiles=";
+              << " chrome=" << (bmp.has_value() ? selectionChromePixels(*bmp) : -1) << " tiles=";
     for (const auto& tile : diag->tiles) {
       std::cerr << tile.id << "(g" << tile.generation << ",grn" << tile.textureGreenPixels << ") ";
     }

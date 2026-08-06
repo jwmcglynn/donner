@@ -154,7 +154,6 @@ jobs:
 
           expected_site_files=$(
             printf '%s\n' \
-              backend-selector.js \
               donner_icon.svg \
               editor-bootstrap.js \
               editor.css \
@@ -169,7 +168,7 @@ jobs:
           test "${actual_site_files}" = "${expected_site_files}"
 
           for file in \
-            backend-selector.js donner_icon.svg editor-bootstrap.js editor.css editor.js \
+            donner_icon.svg editor-bootstrap.js editor.css editor.js \
             enable-threads.js index.html worker-surface-selector.js; do
             cp "${site_dir}/${file}" "${deploy_dir}/${file}"
           done

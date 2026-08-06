@@ -25,7 +25,7 @@ declare global {
       token: number;
     };
     __donnerWorkerSurfaceMode?: "direct-surface" | "bitmap-bridge";
-    __donnerWorkerSurfaceLayoutPolicy?: "occluded-double-buffer" | "single-visible";
+    __donnerWorkerSurfaceLayoutPolicy?: "single-visible";
     __donnerAcceptedFrameMutations?: number[];
     __donnerAcceptedFrameBoundaryViolations?: Array<{ acknowledged: number; frame: number }>;
     __donnerAcceptedFrameObserver?: MutationObserver;

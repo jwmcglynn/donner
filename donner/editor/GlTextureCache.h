@@ -10,10 +10,8 @@
 #include <unordered_set>
 #include <vector>
 
-#if defined(__EMSCRIPTEN__) && !defined(DONNER_EDITOR_WGPU)
-#define GLFW_INCLUDE_ES3
-#include <GLES3/gl3.h>
-#elif !defined(DONNER_EDITOR_WGPU)
+// The browser tier is Geode-only, so the OpenGL presentation path is desktop-only.
+#ifndef DONNER_EDITOR_WGPU
 #include "glad/glad.h"
 #endif
 

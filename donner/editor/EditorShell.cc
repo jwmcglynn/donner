@@ -897,6 +897,11 @@ Box2d ResolveDocumentViewBoxWithAccess(svg::SVGDocument& document) {
   return Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0);
 }
 
+Box2d ResolveDocumentViewBox(svg::SVGDocument& document) {
+  svg::DocumentReadAccess access = document.readAccess();
+  return ResolveDocumentViewBoxWithAccess(document);
+}
+
 std::optional<Box2d> ResolveDocumentViewBoxForFrame(svg::SVGDocument& document, bool rendererBusy) {
   if (rendererBusy) {
     // The viewport already owns the last complete document epoch. Returning nullopt tells
@@ -3900,7 +3905,6 @@ void EditorShell::renderRenderPanePresentation(
       .activeDragPreview = activeDragPreview,
       .displayedDragPreview = displayedDragPreview,
       .contentRegion = Vector2d(contentRegion.x, contentRegion.y),
-      .presentationVersion = renderCoordinator_.displayedDocVersion(),
       .suppressedLayerEntity = presentSuppressedLayerEntity,
       .suppressDragTargetTiles = suppressDragTargetTiles,
       .documentPresentedDirectly = documentPresentedDirectly,
@@ -6250,7 +6254,8 @@ void EditorShell::runFrame() {
       documentViewBoxCacheDocument_ = documentHandle;
       documentViewBoxCache_.reset();
     }
-    if (std::optional<Box2d> viewBox = TryResolveDocumentViewBox(document)) {
+    if (std::optional<Box2d> viewBox = ResolveDocumentViewBoxForFrame(
+            document, renderCoordinator_.asyncRenderer().isBusy())) {
       documentViewBoxCache_ = *viewBox;
     }
   }

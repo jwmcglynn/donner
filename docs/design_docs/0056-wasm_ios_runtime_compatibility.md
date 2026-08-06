@@ -41,7 +41,6 @@ index.html
 editor.css
 editor-bootstrap.js
 enable-threads.js
-backend-selector.js
 worker-surface-selector.js
 donner_icon.svg
 editor.js

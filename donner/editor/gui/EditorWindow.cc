@@ -2,17 +2,12 @@
 
 #include <algorithm>
 #include <atomic>
+// The browser tier is Geode-only, so `__EMSCRIPTEN__` always implies `DONNER_EDITOR_WGPU`.
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
-
-#ifdef DONNER_EDITOR_WGPU
 #include <webgpu/webgpu.h>
 
 #include <webgpu/webgpu.hpp>
-#else
-#define GLFW_INCLUDE_ES3
-#include <GLES3/gl3.h>
-#endif
 
 #include "GLFW/emscripten_glfw3.h"
 #elif defined(DONNER_EDITOR_WGPU)
@@ -393,6 +388,20 @@ EM_JS(bool, WgpuReadbackStatsEnabled, (), {
   }
   return enabled;
 });
+EM_JS(void, PresentWgpuReadbackBitmap, (const uint8_t* pixels, int width, int height, int rowBytes),
+      {
+        const canvas = Module.canvas;
+        const context = canvas ? canvas.getContext("2d") : null;
+        if (!context || width <= 0 || height <= 0 || rowBytes != width * 4) {
+          return;
+        }
+        const byteLength = rowBytes * height;
+        // Threaded Wasm stores HEAPU8 in a SharedArrayBuffer, which ImageData
+        // intentionally rejects. Copy into a normal JS-owned buffer first.
+        const rgba = new Uint8ClampedArray(byteLength);
+        rgba.set(HEAPU8.subarray(pixels, pixels + byteLength));
+        context.putImageData(new ImageData(rgba, width, height), 0, 0);
+      });
 EM_JS(int, PeekWgpuReadbackRequest, (), {
   const request = Number(window['__donnerWgpuReadbackRequested'] || 0);
   const completed = Number(window['__donnerWgpuReadbackCompleted'] || 0);
@@ -886,14 +895,12 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   }
 
 #ifdef __EMSCRIPTEN__
-  // emscripten-glfw runs on WebGL2, not desktop GL, so neither the
+  // emscripten-glfw does not own the browser graphics API, so neither the
   // version hints nor `GLFW_OPENGL_PROFILE` apply - setting them only
   // produces "Hint ... not currently supported on this platform"
   // warnings at startup.
   glfwWindowHint(GLFW_SCALE_FRAMEBUFFER, GLFW_TRUE);
-#ifdef DONNER_EDITOR_WGPU
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-#endif
   emscripten_glfw_set_next_window_canvas_selector("#canvas");
 #elif defined(DONNER_EDITOR_WGPU)
   glfwWindowHint(GLFW_VISIBLE, options_.visible ? GLFW_TRUE : GLFW_FALSE);
@@ -962,9 +969,6 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   }
 
 #ifdef __EMSCRIPTEN__
-#ifndef DONNER_EDITOR_WGPU
-  glfwMakeContextCurrent(window_);
-#endif
   emscripten_glfw_make_canvas_resizable(window_, "window", nullptr);
 #endif
 
@@ -1028,24 +1032,31 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
 #if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
   enableSurfaceReadback = enableSurfaceReadback || WgpuReadbackStatsEnabled();
 #endif
-  wgpuState_->surfaceUsage = SurfaceUsageForCapabilities(caps, enableSurfaceReadback);
+  if (wgpuState_->surface) {
+    wgpu::SurfaceCapabilities caps;
+    wgpuState_->surface.getCapabilities(wgpuState_->adapter, &caps);
+    wgpuState_->surfaceFormat = ChooseSurfaceFormat(caps);
+    wgpuState_->surfaceUsage = SurfaceUsageForCapabilities(caps, enableSurfaceReadback);
 #ifdef __EMSCRIPTEN__
-  wgpuState_->alphaMode = wgpu::CompositeAlphaMode::Auto;
-  for (size_t i = 0; i < caps.alphaModeCount; ++i) {
-    if (caps.alphaModes[i] == wgpu::CompositeAlphaMode::Premultiplied) {
-      wgpuState_->alphaMode = caps.alphaModes[i];
-      break;
+    wgpuState_->alphaMode = wgpu::CompositeAlphaMode::Auto;
+    for (size_t i = 0; i < caps.alphaModeCount; ++i) {
+      if (caps.alphaModes[i] == wgpu::CompositeAlphaMode::Premultiplied) {
+        wgpuState_->alphaMode = caps.alphaModes[i];
+        break;
+      }
     }
-  }
 #else
-  if (caps.alphaModeCount > 0) {
-    wgpuState_->alphaMode = wgpu::CompositeAlphaMode{caps.alphaModes[0]};
+    if (caps.alphaModeCount > 0) {
+      wgpuState_->alphaMode = wgpu::CompositeAlphaMode{caps.alphaModes[0]};
+    } else {
+      wgpuState_->alphaMode = wgpu::CompositeAlphaMode::Auto;
+    }
+#endif
+    caps.freeMembers();
   } else {
     wgpuState_->surfaceFormat = wgpu::TextureFormat::BGRA8Unorm;
     wgpuState_->surfaceUsage = OffscreenTextureUsage(enableSurfaceReadback);
   }
-#endif
-  caps.freeMembers();
 
   int surfaceWidth = 0;
   int surfaceHeight = 0;
@@ -1229,11 +1240,8 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     std::fprintf(stderr, "EditorWindow: ImGui_ImplGlfw_InitForOpenGL failed\n");
     return;
   }
-#ifdef __EMSCRIPTEN__
-  if (!ImGui_ImplOpenGL3_Init("#version 300 es")) {
-#else
+  // The OpenGL backend is desktop-only; the browser tier is Geode-only.
   if (!ImGui_ImplOpenGL3_Init("#version 330 core")) {
-#endif
     std::fprintf(stderr, "EditorWindow: ImGui_ImplOpenGL3_Init failed\n");
     return;
   }
@@ -1600,28 +1608,22 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
         surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal) {
       donner::geode::ScopedWgpuHandle<wgpu::Texture> failedTexture(
           wgpu::Texture(surfaceTexture.texture));
+#if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
+      if (surfaceTexture.status == WGPUSurfaceGetCurrentTextureStatus_Timeout) {
+        surfaceFailureKind = internal::WgpuSurfaceFailureKind::Timeout;
+      } else if (surfaceTexture.status == WGPUSurfaceGetCurrentTextureStatus_Outdated ||
+                 surfaceTexture.status == WGPUSurfaceGetCurrentTextureStatus_Lost) {
+        surfaceFailureKind = internal::WgpuSurfaceFailureKind::OutdatedOrLost;
+      } else {
+        surfaceFailureKind = internal::WgpuSurfaceFailureKind::Fatal;
+      }
+#endif
       return;
     }
     acquiredSurfaceTexture.reset(wgpu::Texture(surfaceTexture.texture));
     target = acquiredSurfaceTexture.get();
   } else {
     target = wgpuState_->offscreenTexture.get();
-  }
-  if (surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal &&
-      surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal) {
-    donner::geode::ScopedWgpuHandle<wgpu::Texture> failedTexture(
-        wgpu::Texture(surfaceTexture.texture));
-#if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
-    if (surfaceTexture.status == WGPUSurfaceGetCurrentTextureStatus_Timeout) {
-      surfaceFailureKind = internal::WgpuSurfaceFailureKind::Timeout;
-    } else if (surfaceTexture.status == WGPUSurfaceGetCurrentTextureStatus_Outdated ||
-               surfaceTexture.status == WGPUSurfaceGetCurrentTextureStatus_Lost) {
-      surfaceFailureKind = internal::WgpuSurfaceFailureKind::OutdatedOrLost;
-    } else {
-      surfaceFailureKind = internal::WgpuSurfaceFailureKind::Fatal;
-    }
-#endif
-    return;
   }
   SurfacePresentGuard presentGuard(wgpuState_->surface);
   const bool shouldReadback =
@@ -1762,7 +1764,8 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     timing.readbackMs += ElapsedMs(readbackStart);
   }
   if (targetReadback != nullptr && readbackBuffer &&
-      MapReadbackBuffer(wgpuState_->device, readbackBuffer.get(), readbackBufferSize)) {
+      MapReadbackBuffer(wgpuState_->instance, wgpuState_->device, readbackBuffer.get(),
+                        readbackBufferSize)) {
     const auto readbackStart = std::chrono::steady_clock::now();
     const uint8_t* mapped = static_cast<const uint8_t*>(
         readbackBuffer.get().getConstMappedRange(0, readbackBufferSize));
@@ -1813,9 +1816,7 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     const std::size_t rowBytes = static_cast<std::size_t>(displayW) * kChannels;
     std::vector<uint8_t> bottomUp(rowBytes * static_cast<std::size_t>(displayH));
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
-#ifndef __EMSCRIPTEN__
     glReadBuffer(GL_BACK);
-#endif
     glReadPixels(0, 0, displayW, displayH, GL_RGBA, GL_UNSIGNED_BYTE, bottomUp.data());
     readback->dimensions = Vector2i(displayW, displayH);
     readback->rowBytes = rowBytes;
@@ -1828,9 +1829,6 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     }
     timing.readbackMs = ElapsedMs(readbackStart);
   }
-#ifndef __EMSCRIPTEN__
-  // emscripten-glfw intentionally doesn't implement `glfwSwapBuffers`;
-  // the browser drives presentation via `requestAnimationFrame`.
   {
     ZoneScopedN("glfwSwapBuffers");
     const auto presentStart = std::chrono::steady_clock::now();
@@ -1838,17 +1836,12 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     timing.presentMs = ElapsedMs(presentStart);
   }
 #endif
-#endif
 #ifdef __EMSCRIPTEN__
   // Keep the HTML loading surface visible until a real editor frame has reached the browser
   // presentation path. Runtime initialization alone precedes this point by several seconds on a
   // cold load.
-#if defined(DONNER_EDITOR_WGPU)
   PublishFirstPresentedFrame(geode::GeodeDevice::headlessCreationCountForTesting());
   surfaceFrameCompleted = true;
-#else
-  PublishFirstPresentedFrame(/*headlessDeviceCreations=*/0);
-#endif
 #endif
 }
 

@@ -150,7 +150,6 @@ web_package(
         "editor-bootstrap.js",
         "enable-threads.js",
         "index.html",
-        "single/backend-selector.js",
         "worker-surface-selector.js",
         "//:donner_icon.svg",
     ],
