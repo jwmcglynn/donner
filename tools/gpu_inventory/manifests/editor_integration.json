@@ -88,7 +88,7 @@
       "usesEditorWgpuDefine": true
     },
     "donner/editor/EditorShell.cc": {
-      "sha256": "b604ced872b3f8b0f13a75709671eb4386fb1e255a17ec91652962f65d8d9f8d",
+      "sha256": "e24e5c82db0df0308fcb483387a187e249634bbbe49fdc86577c033355143684",
       "usesEditorWgpuDefine": true,
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
@@ -96,7 +96,7 @@
       ]
     },
     "donner/editor/EditorShell.h": {
-      "sha256": "33ed43aea07ca0262241706403cd0cf18302d95d5df7313cbcb77faf34326ba1",
+      "sha256": "fea5ec3046860e748b4b150ff8d68f47d4fb0c6a5d03c865b830dc0c0ef2b408",
       "usesEditorWgpuDefine": true
     },
     "donner/editor/EditorShellPresentation.cc": {
