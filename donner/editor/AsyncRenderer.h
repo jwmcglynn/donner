@@ -32,6 +32,7 @@
 /// `!isBusy()` unless they are using guarded access for immediate overlay presentation. The UI
 /// thread must not call any method on the worker `Renderer` at any time - it lives on the worker.
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -521,6 +522,52 @@ private:
   std::atomic_bool scheduled_{false};
 };
 
+/// Attribution of one worker-to-UI handoff, in milliseconds.
+struct HandoffTimings {
+  /// Total time from worker render completion until the UI thread accepted the result.
+  double pollDelayMs = 0.0;
+  /// Portion spent waiting for the worker's task-boundary acknowledgment.
+  double taskBoundaryMs = 0.0;
+  /// Portion spent waiting for the UI thread's next frame once the result was pollable.
+  double wakeToPollMs = 0.0;
+};
+
+/**
+ * Split the worker-to-UI handoff delay into its task-boundary hop and its UI-frame wait.
+ *
+ * The result becomes pollable at the task-boundary acknowledgment when the platform requires one
+ * (browser worker surfaces), and at render completion otherwise. Separating the two stages is what
+ * distinguishes "the worker took too long to hand the frame over" from "the UI thread had not run a
+ * frame yet".
+ *
+ * A default-constructed time_point means "not recorded": an unrecorded completion yields all-zero
+ * timings, and an unrecorded boundary attributes the whole delay to the UI-frame wait. Timestamps
+ * that go backwards are clamped to zero rather than reported as negative durations.
+ *
+ * @param workerCompletedAt When the worker finished the render and staged the result.
+ * @param taskBoundaryAt When the worker acknowledged the browser task boundary.
+ * @param polledAt When the UI thread accepted the result.
+ */
+inline HandoffTimings ComputeHandoffTimings(std::chrono::steady_clock::time_point workerCompletedAt,
+                                            std::chrono::steady_clock::time_point taskBoundaryAt,
+                                            std::chrono::steady_clock::time_point polledAt) {
+  HandoffTimings timings;
+  if (workerCompletedAt.time_since_epoch().count() == 0) {
+    return timings;
+  }
+  const auto elapsedMs = [](std::chrono::steady_clock::duration duration) {
+    return std::max(0.0, std::chrono::duration<double, std::milli>(duration).count());
+  };
+  timings.pollDelayMs = elapsedMs(polledAt - workerCompletedAt);
+  if (taskBoundaryAt.time_since_epoch().count() == 0 || taskBoundaryAt < workerCompletedAt) {
+    timings.wakeToPollMs = timings.pollDelayMs;
+    return timings;
+  }
+  timings.taskBoundaryMs = elapsedMs(taskBoundaryAt - workerCompletedAt);
+  timings.wakeToPollMs = elapsedMs(polledAt - taskBoundaryAt);
+  return timings;
+}
+
 /// Presentation payload plus the document version it was rendered from.
 struct RenderResult {
   /// Internal timing split for one async worker iteration.
@@ -543,6 +590,12 @@ struct RenderResult {
     double diagnosticsMs = 0.0;
     /// Time from worker result completion until the UI thread polls it.
     double pollDelayMs = 0.0;
+    /// Portion of `pollDelayMs` spent waiting for the worker event-loop turn that acknowledges
+    /// the browser's canvas-presentation task boundary. Zero when no boundary hop was needed.
+    double taskBoundaryMs = 0.0;
+    /// Portion of `pollDelayMs` spent waiting for the UI thread's next frame after the result
+    /// became pollable. This is the handoff's animation-frame phase wait.
+    double wakeToPollMs = 0.0;
     /// GPU-to-CPU readbacks performed by the worker renderer and its offscreen instances.
     int readbackCount = 0;
     /// Legacy device-poll iterations used while waiting for those readbacks.
@@ -645,6 +698,9 @@ struct RenderResult {
   WorkerTimingBreakdown workerTiming;
   /// Internal completion timestamp used to populate `workerTiming.pollDelayMs` on acceptance.
   std::chrono::steady_clock::time_point workerCompletedAt;
+  /// Internal timestamp of the worker task-boundary acknowledgment, when the platform needs one.
+  /// Default-constructed (zero) when the result became pollable at completion.
+  std::chrono::steady_clock::time_point workerTaskBoundaryAt;
   /// Worker-owned browser-surface outcome for this result.
   DirectSurfacePresentationOutcome directSurfaceOutcome = DirectSurfacePresentationOutcome::None;
   /// Monotonic count of direct worker-surface frames presented this session.

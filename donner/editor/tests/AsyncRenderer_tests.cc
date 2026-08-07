@@ -1761,6 +1761,96 @@ TEST(AsyncRendererTest, ForcedWasmWorkerCancellationAbandonsThreadAffinedRuntime
          "member destruction";
 }
 
+TEST(AsyncRendererTest, HandoffTimingsSplitTheTaskBoundaryHopFromTheUiFrameWait) {
+  const auto completed = std::chrono::steady_clock::time_point(std::chrono::milliseconds(1000));
+  const auto boundary = std::chrono::steady_clock::time_point(std::chrono::milliseconds(1006));
+  const auto polled = std::chrono::steady_clock::time_point(std::chrono::milliseconds(1010));
+
+  const HandoffTimings split = ComputeHandoffTimings(completed, boundary, polled);
+  EXPECT_DOUBLE_EQ(split.pollDelayMs, 10.0);
+  EXPECT_DOUBLE_EQ(split.taskBoundaryMs, 6.0)
+      << "A worker event-loop hop that costs whole milliseconds must be attributable on its own, "
+         "not hidden inside the aggregate poll delay";
+  EXPECT_DOUBLE_EQ(split.wakeToPollMs, 4.0);
+}
+
+TEST(AsyncRendererTest, HandoffTimingsAttributeAnUnrecordedBoundaryToTheUiFrameWait) {
+  const auto completed = std::chrono::steady_clock::time_point(std::chrono::milliseconds(1000));
+  const auto polled = std::chrono::steady_clock::time_point(std::chrono::milliseconds(1005));
+
+  // Platforms whose results are pollable at completion (desktop) record no boundary.
+  const HandoffTimings split = ComputeHandoffTimings(completed, {}, polled);
+  EXPECT_DOUBLE_EQ(split.pollDelayMs, 5.0);
+  EXPECT_DOUBLE_EQ(split.taskBoundaryMs, 0.0);
+  EXPECT_DOUBLE_EQ(split.wakeToPollMs, 5.0);
+}
+
+TEST(AsyncRendererTest, HandoffTimingsAreZeroWithoutACompletionTimestamp) {
+  const auto polled = std::chrono::steady_clock::time_point(std::chrono::milliseconds(1005));
+
+  const HandoffTimings split = ComputeHandoffTimings({}, {}, polled);
+  EXPECT_DOUBLE_EQ(split.pollDelayMs, 0.0);
+  EXPECT_DOUBLE_EQ(split.taskBoundaryMs, 0.0);
+  EXPECT_DOUBLE_EQ(split.wakeToPollMs, 0.0);
+}
+
+TEST(AsyncRendererTest, HandoffTimingsClampTimestampsThatGoBackwards) {
+  const auto completed = std::chrono::steady_clock::time_point(std::chrono::milliseconds(1000));
+  const auto boundary = std::chrono::steady_clock::time_point(std::chrono::milliseconds(990));
+  const auto polled = std::chrono::steady_clock::time_point(std::chrono::milliseconds(1004));
+
+  // A boundary older than the completion belongs to a superseded frame; charge the whole delay to
+  // the UI-frame wait rather than reporting a negative hop.
+  const HandoffTimings split = ComputeHandoffTimings(completed, boundary, polled);
+  EXPECT_DOUBLE_EQ(split.pollDelayMs, 4.0);
+  EXPECT_DOUBLE_EQ(split.taskBoundaryMs, 0.0);
+  EXPECT_DOUBLE_EQ(split.wakeToPollMs, 4.0);
+}
+
+TEST(AsyncRendererTest, AcknowledgedDirectSurfaceBoundaryReportsItsOwnHandoffCost) {
+  AsyncRenderer asyncRenderer;
+  RenderResult pending;
+  pending.version = 11;
+  pending.directSurfaceOutcome = DirectSurfacePresentationOutcome::Presented;
+  pending.directSurfaceFrames = 31;
+  pending.workerCompletedAt = std::chrono::steady_clock::now();
+  asyncRenderer.stageDirectSurfaceResultPendingTaskBoundaryForTesting(std::move(pending));
+
+  ASSERT_TRUE(asyncRenderer.acknowledgeDirectSurfaceTaskBoundaryForTesting());
+  const std::optional<RenderResult> accepted = asyncRenderer.pollResult();
+  ASSERT_TRUE(accepted.has_value());
+  EXPECT_GT(accepted->workerTiming.pollDelayMs, 0.0);
+  EXPECT_NEAR(accepted->workerTiming.taskBoundaryMs + accepted->workerTiming.wakeToPollMs,
+              accepted->workerTiming.pollDelayMs, 1e-6)
+      << "The two handoff stages must account for the whole poll delay";
+}
+
+TEST(AsyncRendererTest, DirectSurfaceBoundaryWakesTheUiLoopExactlyOncePerFrame) {
+  AsyncRenderer asyncRenderer;
+  int wakeCount = 0;
+  asyncRenderer.setWakeCallback([&] { ++wakeCount; });
+
+  RenderResult pending;
+  pending.version = 5;
+  pending.directSurfaceOutcome = DirectSurfacePresentationOutcome::Presented;
+  pending.directSurfaceFrames = 41;
+  asyncRenderer.stageDirectSurfaceResultPendingTaskBoundaryForTesting(std::move(pending));
+  EXPECT_EQ(wakeCount, 0) << "A result still behind its task boundary is not yet presentable, so "
+                             "it must not wake the UI loop";
+
+  ASSERT_TRUE(asyncRenderer.acknowledgeDirectSurfaceTaskBoundaryForTesting(41));
+  EXPECT_EQ(wakeCount, 1);
+
+  // A late duplicate callback for the same frame must not queue a second UI frame: the wake is a
+  // single pending request, not a queue, and an idle editor has to stay idle.
+  EXPECT_FALSE(asyncRenderer.acknowledgeDirectSurfaceTaskBoundaryForTesting(41));
+  EXPECT_EQ(wakeCount, 1);
+
+  ASSERT_TRUE(asyncRenderer.pollResult().has_value());
+  EXPECT_FALSE(asyncRenderer.acknowledgeDirectSurfaceTaskBoundaryForTesting(41));
+  EXPECT_EQ(wakeCount, 1) << "Acknowledging a drained frame must not wake an idle editor";
+}
+
 TEST(AsyncRendererTest, DirectSurfaceResultWaitsForNextWorkerTaskBoundary) {
   AsyncRenderer asyncRenderer;
   RenderResult pending;

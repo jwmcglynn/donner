@@ -32,6 +32,8 @@ declare global {
       presentMs: number;
       diagnosticsMs: number;
       pollDelayMs: number;
+      taskBoundaryMs: number;
+      wakeToPollMs: number;
       firstFrameDrawMs: number;
       firstFramePlanningMs: number;
       firstFrameWarmupMs: number;

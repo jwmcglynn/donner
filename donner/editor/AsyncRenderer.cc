@@ -168,6 +168,46 @@ EM_JS(void, ReportWorkerTaskWakeFailure,
 EM_JS(void, PublishDirectSurfaceTaskBoundaryAcknowledgment, (double frameToken),
       { window['__donnerDirectSurfaceTaskBoundaryToken'] = frameToken; });
 
+// Run `callback(userdata)` in the worker's next event-loop task, so the browser has committed the
+// WebGPU canvas this task presented before the acknowledgment observes it.
+//
+// A `MessagePort` message is a task like `setTimeout` but carries no timer clamp. That matters
+// here because the wake chain re-enters through a timer callback: the next proxied worker task
+// arrives as a microtask of this acknowledgment (Emscripten's mailbox resolves an
+// `Atomics.waitAsync` promise), so a `setTimeout`-based hop inherits and keeps incrementing the
+// nesting level until every hop pays the browsers' 4 ms nested-timer minimum. Measured on this
+// exact chain shape, a `setTimeout(0)` hop costs ~6 ms per frame in both Chromium and Gecko while
+// the port hop costs ~0 ms, and that per-frame cost is what pushes the handoff past the animation
+// frame the result was rendered for.
+EM_JS(void, ScheduleWorkerTaskBoundaryCallback, (void* callback, void* userdata), {
+  let state = globalThis['__donnerWorkerTaskBoundary'];
+  if (typeof state == 'undefined') {
+    state = false;
+    if (typeof MessageChannel == 'function') {
+      const channel = new MessageChannel();
+      const queue = [];
+      channel.port1.onmessage = function() {
+        const entry = queue.shift();
+        if (entry) {
+          callUserCallback(function() { getWasmTableEntry(entry[0])(entry[1]); });
+        }
+      };
+      channel.port1.start();
+      state = {'port' : channel.port2, 'queue' : queue};
+    }
+    globalThis['__donnerWorkerTaskBoundary'] = state;
+  }
+  if (!state) {
+    // No MessageChannel: any real task boundary still satisfies the presentation contract.
+    setTimeout(
+        function() { callUserCallback(function() { getWasmTableEntry(callback)(userdata); }); }, 0);
+    return;
+  }
+  state['queue'].push([ callback, userdata ]);
+  state['port'].postMessage(0);
+});
+EM_JS_DEPS(donner_worker_task_boundary, "$getWasmTableEntry,$callUserCallback");
+
 enum class WorkerSurfacePresentDisposition : std::uint8_t {
   Presented,
   RetryNextWorkerTask,
@@ -1144,8 +1184,8 @@ void AsyncRenderer::runWorkerTask(void* self) {
         .control = renderer.wasmWorkerRuntimeInitControl_,
         .frameToken = *presentationBoundaryToken,
     };
-    (void)emscripten_set_timeout(&AsyncRenderer::acknowledgeDirectSurfaceTaskBoundary,
-                                 /*msecs=*/0.0, context);
+    ScheduleWorkerTaskBoundaryCallback(
+        reinterpret_cast<void*>(&AsyncRenderer::acknowledgeDirectSurfaceTaskBoundary), context);
   } else if (disposition == WorkerTaskCompletionDisposition::ScheduleFollowUp) {
     renderer.scheduleWorkerTask();
   }
@@ -1470,6 +1510,9 @@ bool AsyncRenderer::acknowledgeDirectSurfaceTaskBoundaryLocked(std::uint64_t fra
   }
   DoneState done = std::move(pending->done);
   done.directSurfaceTaskBoundaryAcknowledged = true;
+  // The result only becomes pollable here, so this is the handoff point the UI-frame wait is
+  // measured from. Recording it separates the worker's event-loop hop from that wait.
+  done.result.workerTaskBoundaryAt = std::chrono::steady_clock::now();
   workerState_ = std::move(done);
   wake = wakeCallback_;
   return true;
@@ -1676,12 +1719,11 @@ std::optional<RenderResult> AsyncRenderer::pollResult() {
     const bool publishDirectSurfaceBoundaryAcknowledgment =
         done->directSurfaceTaskBoundaryAcknowledged;
 #endif
-    if (result.workerCompletedAt.time_since_epoch().count() != 0) {
-      result.workerTiming.pollDelayMs =
-          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
-                                                    result.workerCompletedAt)
-              .count();
-    }
+    const HandoffTimings handoff = ComputeHandoffTimings(
+        result.workerCompletedAt, result.workerTaskBoundaryAt, std::chrono::steady_clock::now());
+    result.workerTiming.pollDelayMs = handoff.pollDelayMs;
+    result.workerTiming.taskBoundaryMs = handoff.taskBoundaryMs;
+    result.workerTiming.wakeToPollMs = handoff.wakeToPollMs;
     if (!result.overviewInfillOnly) {
       notePublishedCompositedPreview(result.compositedPreview);
     }
