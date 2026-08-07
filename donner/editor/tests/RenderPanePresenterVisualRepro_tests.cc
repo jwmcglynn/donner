@@ -382,6 +382,21 @@ TEST(RenderPanePresenterVisualReproTest,
       &window, &textures, entt::null, std::nullopt, std::nullopt,
       /*documentPresentedDirectly=*/true, /*compositorTileOverlay=*/true,
       kLiveZoomAheadOfPresentation);
+  // Aligned baseline: the same overlay with the live viewport matching the
+  // presented one. Its extent is this host's presented-tile far corner plus
+  // whatever label overhang this host's text rendering produces, which makes
+  // the divergence assertion below host-independent.
+  const svg::RendererBitmap alignedWithoutOverlay = CapturePresenterFrame(
+      &window, &textures, entt::null, std::nullopt, std::nullopt,
+      /*documentPresentedDirectly=*/true, /*compositorTileOverlay=*/false,
+      /*liveZoomAheadOfPresentation=*/1.0);
+  const svg::RendererBitmap alignedWithOverlay = CapturePresenterFrame(
+      &window, &textures, entt::null, std::nullopt, std::nullopt,
+      /*documentPresentedDirectly=*/true, /*compositorTileOverlay=*/true,
+      /*liveZoomAheadOfPresentation=*/1.0);
+  ASSERT_FALSE(alignedWithoutOverlay.empty());
+  ASSERT_FALSE(alignedWithOverlay.empty());
+  ASSERT_EQ(alignedWithOverlay.pixels.size(), alignedWithoutOverlay.pixels.size());
   ASSERT_FALSE(withoutOverlay.empty());
   ASSERT_FALSE(withOverlay.empty());
   ASSERT_EQ(withOverlay.pixels.size(), withoutOverlay.pixels.size());
@@ -416,14 +431,45 @@ TEST(RenderPanePresenterVisualReproTest,
   }
 
   EXPECT_GT(changedPixels, 0) << "The compositor tile overlay must draw something at all.";
-  // The tile covers document (54,44)-(132,122). Presented at 1x that is where
-  // the pixels are; drawn against the 2x live viewport it would reach
-  // (108,88)-(264,244). Anything past the presented tile's far corner is chrome
-  // annotating pixels that are not underneath it.
-  EXPECT_LT(changedMaxLogicalX, 160.0)
+
+  double alignedMaxLogicalX = 0.0;
+  double alignedMaxLogicalY = 0.0;
+  int alignedChangedPixels = 0;
+  for (int y = 0; y < alignedWithOverlay.dimensions.y; ++y) {
+    for (int x = 0; x < alignedWithOverlay.dimensions.x; ++x) {
+      const std::size_t offset = static_cast<std::size_t>(y) * alignedWithOverlay.rowBytes +
+                                 static_cast<std::size_t>(x) * 4u;
+      if (offset + 3u >= alignedWithOverlay.pixels.size()) {
+        continue;
+      }
+      const bool changed =
+          alignedWithOverlay.pixels[offset + 0u] != alignedWithoutOverlay.pixels[offset + 0u] ||
+          alignedWithOverlay.pixels[offset + 1u] != alignedWithoutOverlay.pixels[offset + 1u] ||
+          alignedWithOverlay.pixels[offset + 2u] != alignedWithoutOverlay.pixels[offset + 2u] ||
+          alignedWithOverlay.pixels[offset + 3u] != alignedWithoutOverlay.pixels[offset + 3u];
+      if (!changed) {
+        continue;
+      }
+      ++alignedChangedPixels;
+      alignedMaxLogicalX =
+          std::max(alignedMaxLogicalX, static_cast<double>(x) / readbackFromLogicalX);
+      alignedMaxLogicalY =
+          std::max(alignedMaxLogicalY, static_cast<double>(y) / readbackFromLogicalY);
+    }
+  }
+  ASSERT_GT(alignedChangedPixels, 0)
+      << "The aligned baseline overlay must draw something at all.";
+
+  // The tile covers document (54,44)-(132,122); drawn against the 2x live
+  // viewport its annotations would land at roughly twice the offset and size.
+  // The aligned baseline captures this host's exact presented extent including
+  // label overhang, so the diverged render must match it within a couple of
+  // pixels: chrome annotates pixels and must not move when only the live
+  // viewport does.
+  EXPECT_LE(changedMaxLogicalX, alignedMaxLogicalX + 2.0)
       << "Compositor tile overlay ran past the presented tile in x; it followed the live viewport "
          "instead of the transform the presented pixels were placed with.";
-  EXPECT_LT(changedMaxLogicalY, 150.0)
+  EXPECT_LE(changedMaxLogicalY, alignedMaxLogicalY + 2.0)
       << "Compositor tile overlay ran past the presented tile in y; it followed the live viewport "
          "instead of the transform the presented pixels were placed with.";
 }
