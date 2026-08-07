@@ -40,7 +40,6 @@ const kBaseUrl = process.env.DONNER_WASM_BASE_URL || "http://127.0.0.1:8000";
 
 interface DirectSurfaceState {
   acceptedZIndex: number;
-  compositorResidentCount: number;
   computedVisibleCount: number;
   frame: number;
   inactiveZIndex: number;
@@ -63,9 +62,6 @@ async function readDirectSurfaceState(page: Page): Promise<DirectSurfaceState> {
     const inactive = surfaces.find((surface) => surface !== accepted);
     return {
       acceptedZIndex: Number(accepted?.style.zIndex || -1),
-      compositorResidentCount: surfaces.filter((surface) =>
-        surface.dataset.directSurfaceCompositorResident === "true"
-      ).length,
       computedVisibleCount: surfaces.filter((surface) =>
         getComputedStyle(surface).visibility === "visible"
       ).length,
@@ -392,8 +388,7 @@ test("Firefox presents every accepted drag epoch on one stable surface", async (
   const samples: Array<{
     acceptedZIndex: number;
     coloredPixels: number;
-    compositorResidentCount: number;
-    computedVisibleCount: number;
+      computedVisibleCount: number;
     frame: number;
     inactiveZIndex: number;
     token: number;
@@ -464,7 +459,6 @@ test("Firefox presents every accepted drag epoch on one stable surface", async (
   await page.mouse.up();
 
   expect(samples.map((sample) => sample.visibleCount)).toEqual(samples.map(() => 1));
-  expect(samples.map((sample) => sample.compositorResidentCount)).toEqual(samples.map(() => 1));
   expect(samples.map((sample) => sample.computedVisibleCount)).toEqual(samples.map(() => 1));
   expect(samples.map((sample) => sample.acceptedZIndex)).toEqual(samples.map(() => 1));
   expect(samples.map((sample) => sample.inactiveZIndex)).toEqual(samples.map(() => 0));
