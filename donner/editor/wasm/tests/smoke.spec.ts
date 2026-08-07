@@ -62,6 +62,7 @@ declare global {
       kind: "geode";
       token: number;
       presentedAtMs: number;
+      selectionChromeBaked?: boolean;
     };
     __donnerWgpuReadbackStats?: {
       frame: number;
@@ -342,6 +343,49 @@ async function requestWgpuDiagnostic(page: Page): Promise<number> {
     }
     return window.__donnerRequestWgpuReadback();
   });
+}
+
+// A landed worker result is not a settled presentation. Loading a sample can
+// queue follow-up renders (the debounced canvas-size commit, an epoch retry,
+// the post-drag settled-selection refresh), and a drag release always queues
+// one settle render behind the frame the pointer already produced. Tests that
+// assert "no further renders happened" - or that probe a diagnostic which only
+// a *specific* accepted epoch can answer - must start from quiescence, not
+// from "one result landed".
+//
+// Quiescence here means: the worker is idle and `completedResults` has not
+// moved for a continuous settle window. Returns the settled result count.
+async function waitForPresentationQuiescence(
+  page: Page,
+  options: { message: string; settleMs?: number; timeout?: number },
+): Promise<number> {
+  // The settle window has to outlast the longest bounded follow-up the renderer
+  // can schedule without the worker looking busy: the 120 ms canvas-size commit
+  // debounce and the direct-surface retry backoff, which tops out at 1 s.
+  const settleMs = options.settleMs ?? scaledMs(400);
+  const deadline = Date.now() + (options.timeout ?? scaledMs(6000));
+  let lastCount = -1;
+  let stableSince = Date.now();
+  for (;;) {
+    const snapshot = await page.evaluate(() => ({
+      completed: window.__donnerWorkerStats?.completedResults || 0,
+      busy: window.__donnerInteractionStats?.workerBusy ?? false,
+    }));
+    const now = Date.now();
+    if (snapshot.busy || snapshot.completed !== lastCount) {
+      lastCount = snapshot.completed;
+      stableSince = now;
+    } else if (now - stableSince >= settleMs) {
+      return lastCount;
+    }
+    if (now >= deadline) {
+      throw new Error(
+        `${options.message}: presentation never quiesced (completedResults=${snapshot.completed}, `
+          + `workerBusy=${snapshot.busy})`,
+      );
+    }
+    await page.waitForTimeout(25);
+  }
 }
 
 test("wasm editor starts without runtime abort", async ({ page }) => {
@@ -1073,12 +1117,22 @@ test("browser presents the first Basic Shapes drag frame within the interaction 
     }
     : { x: bounds.x + 408, y: bounds.y + 353 };
   if (kBackend === "geode") {
-    const beforeSelectionResult = await page.evaluate(
-      () => window.__donnerWorkerStats?.completedResults || 0,
-    );
+    // `selectionChromePixels` reads the ImGui canvas, so it can only see chrome
+    // the overlay drew. Once any render lands while a selection is live, the
+    // worker bakes the chrome into its own surface, `selectionChromeBaked` goes
+    // true, and EditorShell stops drawing it into the overlay - the probe then
+    // reads zero forever. Start the click from a quiesced presentation so no
+    // leftover load render can move the chrome out from under the probe.
+    const beforeSelectionResult = await waitForPresentationQuiescence(page, {
+      message: "expected the Basic Shapes presentation to settle before selecting a shape",
+    });
     const beforeSelectionFrame = Number(
       await documentCanvas.getAttribute("data-direct-surface-frame"),
     );
+    expect(
+      await page.evaluate(() => window.__donnerAcceptedPresentation?.selectionChromeBaked ?? false),
+      "expected an unbaked accepted epoch so overlay-only chrome is observable",
+    ).toBe(false);
     const baselineRequest = await requestWgpuDiagnostic(page);
     await expect
       .poll(async () => page.evaluate(() => window.__donnerWgpuReadbackStats?.request || 0), {
@@ -1106,20 +1160,33 @@ test("browser presents the first Basic Shapes drag frame within the interaction 
         intervals: [16, 25, 50, 100],
       })
       .toBeGreaterThanOrEqual(selectionRequest);
+    let selectionChromeDelta = 0;
+    let selectionFeedbackDiagnostic = "";
     await expect
       .poll(
         async () => {
-          const delta = (await page.evaluate(
-            () => window.__donnerWgpuReadbackStats?.selectionChromePixels || 0,
-          )) - beforeSelectionChrome;
-          if (delta > 50) {
-            return delta;
+          const snapshot = await page.evaluate(() => ({
+            chrome: window.__donnerWgpuReadbackStats?.selectionChromePixels || 0,
+            completed: window.__donnerWorkerStats?.completedResults || 0,
+            baked: window.__donnerAcceptedPresentation?.selectionChromeBaked ?? false,
+          }));
+          selectionChromeDelta = snapshot.chrome - beforeSelectionChrome;
+          if (selectionChromeDelta > 50) {
+            return "overlay-chrome";
+          }
+          if (snapshot.baked || snapshot.completed !== beforeSelectionResult) {
+            // A render landed while the selection was live, so the worker baked
+            // the chrome into its own surface and this probe (which reads the
+            // ImGui canvas) can never see it. Stop polling and report the real
+            // failure instead of starving until the timeout.
+            selectionFeedbackDiagnostic = JSON.stringify(snapshot);
+            return "rerendered-after-selection";
           }
           // The completed capture may predate the overlay's first rendered
           // frame on slow hosts; request a fresh diagnostic for the next read
           // instead of polling a stale snapshot forever.
           await requestWgpuDiagnostic(page);
-          return delta;
+          return "waiting";
         },
         {
           message: "expected overlay-only selection feedback before starting the drag",
@@ -1127,7 +1194,12 @@ test("browser presents the first Basic Shapes drag frame within the interaction 
           intervals: [100, 250, 500],
         },
       )
-      .toBeGreaterThan(50);
+      .not.toBe("waiting");
+    expect(
+      selectionFeedbackDiagnostic,
+      "a selection click must not trigger a render; the baked epoch hides overlay chrome",
+    ).toBe("");
+    expect(selectionChromeDelta).toBeGreaterThan(50);
     expect(await page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0)).toBe(
       beforeSelectionResult,
     );
@@ -1334,9 +1406,12 @@ test("Geode WASM selects through the overlay without document rerender or recurr
     x: documentBounds.x + documentBounds.width * (122 / 640),
     y: documentBounds.y + documentBounds.height * (92 / 400),
   };
-  const beforeSelection = await page.evaluate(
-    () => window.__donnerWorkerStats?.completedResults || 0,
-  );
+  // "One result landed" is not "the load settled" - the debounced canvas-size
+  // commit and epoch retries can still be queued. Baseline the no-rerender
+  // assertion below against a quiesced presentation instead.
+  const beforeSelection = await waitForPresentationQuiescence(page, {
+    message: "expected the Basic Shapes presentation to settle before selecting a shape",
+  });
   const beforeSelectionFrame = Number(
     await documentCanvas.getAttribute("data-direct-surface-frame"),
   );
@@ -1406,9 +1481,13 @@ test("Geode WASM selects through the overlay without document rerender or recurr
     })
     .toBeGreaterThan(beforeMouseUpFrame);
 
-  const settledCount = await page.evaluate(
-    () => window.__donnerWorkerStats?.completedResults || 0,
-  );
+  // Releasing a drag queues exactly one settled-selection refresh behind the
+  // frame the pointer already produced, so the first post-mouse-up surface
+  // frame is not the last result. Let that bounded settle finish (it not
+  // finishing is itself a failure), then assert nothing keeps re-rendering.
+  const settledCount = await waitForPresentationQuiescence(page, {
+    message: "expected the drag-release settle to finish",
+  });
   await page.waitForTimeout(1500);
   expect(await page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0)).toBe(
     settledCount,
