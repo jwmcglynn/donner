@@ -35,17 +35,17 @@ body {
   border: 0;
   pointer-events: none;
   transform-origin: 0 0;
-  background-color: #fff;
-  background-image: linear-gradient(45deg, #e5e8ea 25%, transparent 25%),
-    linear-gradient(-45deg, #e5e8ea 25%, transparent 25%),
-    linear-gradient(45deg, transparent 75%, #e5e8ea 75%),
-    linear-gradient(-45deg, transparent 75%, #e5e8ea 75%);
-  background-position:
-    0 0,
-    0 8px,
-    8px -8px,
-    -8px 0;
-  background-size: 16px 16px;
+
+  /*
+   * Solid editor background, matching the page background that uncovered
+   * render-pane pixels already show outside the document rect. The
+   * transparency checkerboard belongs to the WGSL checkerboard pass that runs
+   * inside the presented pixels; a second CSS checkerboard here was a separate
+   * implementation whose geometry followed the element rather than the
+   * presented pixels, so it showed through whenever those pixels lagged a
+   * layout write.
+   */
+  background-color: #101317;
 }
 
 #donner-worker-document-canvas {

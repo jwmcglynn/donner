@@ -181,63 +181,6 @@ EM_JS(void, PublishPresentationResourceStats,
 
 #endif
 
-#if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
-EM_JS(void, UpdateWorkerDocumentSurfaceLayout,
-      (int visible, int surfaceSlot, double left, double top, double width, double height,
-       double clipLeft, double clipTop, double clipRight, double clipBottom, double frameCount,
-       int selectionChromeBaked),
-      {
-        const layout = {
-          visible : Boolean(visible),
-          surfaceSlot,
-          left,
-          top,
-          width,
-          height,
-          clipLeft,
-          clipTop,
-          clipRight,
-          clipBottom,
-          frameToken : Number(frameCount),
-          selectionChromeBaked : Boolean(selectionChromeBaked),
-        };
-        if (window['__donnerWorkerSurfaceMode'] == 'bitmap-bridge' &&
-            typeof Module['updateDonnerBitmapSurfaceLayout'] == 'function') {
-          Module['updateDonnerBitmapSurfaceLayout'](layout);
-          return;
-        }
-        if (typeof window['__donnerApplyWorkerDocumentSurfaceLayout'] == 'function') {
-          window['__donnerApplyWorkerDocumentSurfaceLayout'](layout);
-          return;
-        }
-        const canvases = [
-          document.getElementById('donner-document-canvas'),
-          document.getElementById('donner-document-canvas-back'),
-        ];
-        const visibleSlot = Math.max(0, Math.min(canvases.length - 1, surfaceSlot));
-        for (let slot = 0; slot < canvases.length; ++slot) {
-          const canvas = canvases[slot];
-          if (!canvas) continue;
-          const show = Boolean(visible) && width > 0 && height > 0 && slot == visibleSlot;
-          canvas.setAttribute('data-direct-surface-visible', show ? 'true' : 'false');
-          canvas.setAttribute('data-direct-surface-selection-chrome-baked',
-                              show && selectionChromeBaked ? 'true' : 'false');
-          if (!show) {
-            canvas.style.visibility = 'hidden';
-            continue;
-          }
-          canvas.style.left = String(left) + 'px';
-          canvas.style.top = String(top) + 'px';
-          canvas.style.width = String(width) + 'px';
-          canvas.style.height = String(height) + 'px';
-          canvas.style.clipPath = 'inset(' + clipTop + 'px ' + clipRight + 'px ' + clipBottom +
-                                  'px ' + clipLeft + 'px)';
-          canvas.style.visibility = 'visible';
-          canvas.setAttribute('data-direct-surface-frame', String(frameCount));
-        }
-      });
-#endif
-
 namespace internal {
 
 constexpr float kMinSourcePaneWidth = 240.0f;
@@ -952,6 +895,14 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       inputBridge_(window_, kWheelZoomStep),
       compositorDebugPanel_(window.geodeDevice()),
       dialogPresenter_(options_.editorNoticeText) {
+  // One presenter owns where document pixels land for the whole session; the
+  // platform fork lives here rather than in the per-frame presentation path.
+  documentPresenter_ = MakeDocumentPresenter(
+      DefaultDocumentPresentationTarget(),
+      [this](std::optional<FramebufferUnderlayPlan> plan) {
+        installFramebufferUnderlayPlan(std::move(plan));
+      },
+      DefaultWorkerSurfaceLayoutSink());
   renderCoordinator_.asyncRenderer().setCompositorDiagnosticsEnabled(false);
   // Install the embedded + system font catalog as the process-wide default provider, so every
   // document FontManager created by the render paths resolves font-family names against embedded
@@ -3716,6 +3667,29 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   ImGui::End();
 }
 
+void EditorShell::installFramebufferUnderlayPlan(
+    [[maybe_unused]] std::optional<FramebufferUnderlayPlan> plan) {
+#ifdef DONNER_EDITOR_WGPU
+  if (!plan.has_value()) {
+    window_.setWgpuUnderlayRenderCallback({});
+    return;
+  }
+  window_.setWgpuUnderlayRenderCallback(
+      [this, plan = std::move(*plan)](const gui::EditorWindowWgpuRenderTarget& target) {
+        if (directCheckerboardRenderer_ == nullptr || directDocumentRenderer_ == nullptr) {
+          return;
+        }
+        lastDirectPresentationCost_ = DrawDocumentPresentationToFramebuffer(
+            *directCheckerboardRenderer_, *directDocumentRenderer_, target, plan.viewport,
+            plan.documentClipRect, plan.overviewTiles, plan.tiles, plan.activeDragPreview,
+            plan.displayedDragPreview, plan.suppressedLayerEntity, plan.suppressDragTargetTiles);
+      });
+#else
+  // Without a WebGPU window target there is no framebuffer underlay to install;
+  // `RenderPanePresenter` draws document tiles through the ImGui draw list.
+#endif
+}
+
 void EditorShell::renderRenderPanePresentation(
     const ImVec2& contentRegion, const ImVec2& paneOriginImGui, const Box2d& paneRect,
     const Box2d& toolPaletteRect, const SelectionTransformHandleIntent& hoverTransformIntent,
@@ -3726,40 +3700,26 @@ void EditorShell::renderRenderPanePresentation(
     requestRenderAtEndOfFrame_ = true;
   }
 
-  // Resolve browser direct-surface ownership before choosing the overlay epoch. A worker surface
+  // Resolve external-surface ownership before choosing the overlay epoch. A worker surface
   // already contains its drag transform in the accepted pixels; unlike an in-process composited
   // tile, the UI thread cannot advance those pixels with the live pointer transform. Selection
   // chrome must therefore reuse the transform represented by that accepted surface.
-  bool documentPresentedDirectly = false;
-  bool workerDocumentSurfacePresented = false;
-  [[maybe_unused]] bool workerSurfaceSelectionChromeBaked = false;
-#if defined(DONNER_EDITOR_WGPU) && defined(__EMSCRIPTEN__)
+  // Only builds that can present through an external surface pay for the
+  // worker's lock; the framebuffer presenter never reads this state.
   const DirectSurfacePresentationState directSurface =
-      renderCoordinator_.asyncRenderer().directSurfacePresentation();
-  if (!contentOnlyCaptureThisFrame_ && !showSamplePicker_ && directSurface.active) {
-    const Box2d surfaceRect = interactionController_.viewport().documentToScreen(
-        directSurface.rasterViewport.documentRect);
-    const std::optional<Box2d> clippedSurfaceRect = PresentedImageClipRect(paneRect, surfaceRect);
-    if (clippedSurfaceRect.has_value() && surfaceRect.width() > 0.0 && surfaceRect.height() > 0.0) {
-      workerDocumentSurfacePresented = true;
-      documentPresentedDirectly = true;
-      workerSurfaceSelectionChromeBaked = directSurface.selectionChromeBaked;
-      UpdateWorkerDocumentSurfaceLayout(
-          1, directSurface.surfaceSlot, surfaceRect.topLeft.x, surfaceRect.topLeft.y,
-          surfaceRect.width(), surfaceRect.height(),
-          clippedSurfaceRect->topLeft.x - surfaceRect.topLeft.x,
-          clippedSurfaceRect->topLeft.y - surfaceRect.topLeft.y,
-          surfaceRect.bottomRight.x - clippedSurfaceRect->bottomRight.x,
-          surfaceRect.bottomRight.y - clippedSurfaceRect->bottomRight.y,
-          static_cast<double>(directSurface.frameCount),
-          directSurface.selectionChromeBaked ? 1 : 0);
-    }
-  }
-  if (!workerDocumentSurfacePresented) {
-    UpdateWorkerDocumentSurfaceLayout(0, directSurface.surfaceSlot, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-                                      0.0, 0.0, static_cast<double>(directSurface.frameCount), 0);
-  }
-#endif
+      documentPresenter_->presentsToExternalSurface()
+          ? renderCoordinator_.asyncRenderer().directSurfacePresentation()
+          : DirectSurfacePresentationState{};
+  const DocumentPresentationResult presentation =
+      documentPresenter_->resolveExternalSurface(DocumentPresentationFrame{
+          .viewport = interactionController_.viewport(),
+          .paneRect = paneRect,
+          .presentationSuppressed = contentOnlyCaptureThisFrame_ || showSamplePicker_,
+          .workerSurface = directSurface,
+      });
+  bool documentPresentedDirectly = presentation.documentPresentedDirectly;
+  const bool workerDocumentSurfacePresented = presentation.externalSurfacePresented;
+  [[maybe_unused]] const bool workerSurfaceSelectionChromeBaked = presentation.selectionChromeBaked;
 
   const auto liveActiveDragPreview = selectTool_.activeDragPreview();
   const auto activeGesturePreview = selectTool_.activeGesturePreview();
@@ -3818,8 +3778,8 @@ void EditorShell::renderRenderPanePresentation(
       MemorySampleFromPresentationResources(textures_.presentationResourceStats()));
   // Document tiles use the direct framebuffer path where possible. Selection chrome is prepared
   // separately below as a transparent Donner-rendered texture in the render-pane draw order.
+  std::optional<FramebufferUnderlayPlan> underlayPlan;
 #ifdef DONNER_EDITOR_WGPU
-  window_.setWgpuUnderlayRenderCallback({});
   const std::optional<Box2d> directDocumentClipRect =
       PresentedImageClipRect(paneRect, interactionController_.viewport().imageScreenRect());
   const auto isDirectlyPresentableTile = [&](const GlTextureCache::TileView& tile) {
@@ -3852,30 +3812,28 @@ void EditorShell::renderRenderPanePresentation(
        hasDirectlyPresentableTile(textures_.tiles())) &&
       (!drawOverviewTiles || canPresentTileSetDirectly(textures_.overviewTiles())) &&
       canPresentTileSetDirectly(textures_.tiles())) {
-    documentPresentedDirectly = true;
-    const ViewportState documentViewport = interactionController_.viewport();
-    const Box2d documentClipRect = *directDocumentClipRect;
     std::vector<GlTextureCache::TileView> directOverviewTiles;
     if (drawOverviewTiles) {
       directOverviewTiles.assign(textures_.overviewTiles().begin(),
                                  textures_.overviewTiles().end());
     }
-    std::vector<GlTextureCache::TileView> directTiles(textures_.tiles().begin(),
-                                                      textures_.tiles().end());
-    window_.setWgpuUnderlayRenderCallback(
-        [this, documentViewport, documentClipRect,
-         directOverviewTiles = std::move(directOverviewTiles), directTiles = std::move(directTiles),
-         activeDragPreview, displayedDragPreview, presentSuppressedLayerEntity,
-         suppressDragTargetTiles](const gui::EditorWindowWgpuRenderTarget& target) {
-          if (directCheckerboardRenderer_ == nullptr || directDocumentRenderer_ == nullptr) {
-            return;
-          }
-          lastDirectPresentationCost_ = DrawDocumentPresentationToFramebuffer(
-              *directCheckerboardRenderer_, *directDocumentRenderer_, target, documentViewport,
-              documentClipRect, directOverviewTiles, directTiles, activeDragPreview,
-              displayedDragPreview, presentSuppressedLayerEntity, suppressDragTargetTiles);
-        });
+    underlayPlan = FramebufferUnderlayPlan{
+        .viewport = interactionController_.viewport(),
+        .documentClipRect = *directDocumentClipRect,
+        .overviewTiles = std::move(directOverviewTiles),
+        .tiles = std::vector<GlTextureCache::TileView>(textures_.tiles().begin(),
+                                                       textures_.tiles().end()),
+        .activeDragPreview = activeDragPreview,
+        .displayedDragPreview = displayedDragPreview,
+        .suppressedLayerEntity = presentSuppressedLayerEntity,
+        .suppressDragTargetTiles = suppressDragTargetTiles,
+    };
   }
+#endif
+  if (documentPresenter_->presentUnderlay(std::move(underlayPlan))) {
+    documentPresentedDirectly = true;
+  }
+#ifdef DONNER_EDITOR_WGPU
 
   // Browser WebGPU surface textures are a poor cross-backend seam for a second vector append pass.
   // Rasterize chrome into a transparent Geode texture, then let RenderPanePresenter place it in

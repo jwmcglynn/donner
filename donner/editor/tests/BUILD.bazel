@@ -301,6 +301,20 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "document_presenter_tests",
+    srcs = ["DocumentPresenter_tests.cc"],
+    defines = select({
+        "//donner/svg/renderer:renderer_backend_geode": ["DONNER_EDITOR_WGPU"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        "//donner/base",
+        "//donner/editor:document_presenter",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "render_pane_presenter_tests",
     srcs = ["RenderPanePresenter_tests.cc"],
     data = ["//:donner_splash_v0_8_editable.svg"],

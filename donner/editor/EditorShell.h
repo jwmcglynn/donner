@@ -15,6 +15,7 @@
 #include "donner/editor/ClipboardInterface.h"
 #include "donner/editor/CompositorDebugPanel.h"
 #include "donner/editor/DialogPresenter.h"
+#include "donner/editor/DocumentPresenter.h"
 #include "donner/editor/DocumentSyncController.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorInputBridge.h"
@@ -389,6 +390,10 @@ private:
                                     const Box2d& paneRect, const Box2d& toolPaletteRect,
                                     const SelectionTransformHandleIntent& hoverTransformIntent,
                                     bool rotateCursorLocked, bool penToolActive, bool textToolActive);
+  /// Sink behind `documentPresenter_`'s framebuffer underlay: installs one
+  /// frame's tile plan on the window, or clears the underlay on `nullopt`.
+  /// The window-side WebGPU wiring is confined here.
+  void installFramebufferUnderlayPlan(std::optional<FramebufferUnderlayPlan> plan);
   [[nodiscard]] Box2d toolPaletteScreenRect(const ImVec2& paneOrigin,
                                             const ImVec2& contentRegion) const;
   [[nodiscard]] Box2d canvasZoomControlScreenRect() const;
@@ -595,6 +600,10 @@ private:
   RenderPanePresenter renderPanePresenter_;
   DialogPresenter dialogPresenter_;
   NativeDialogCoordinator nativeDialogs_;
+  /// Owns where this frame's document pixels land. Constructed once for the
+  /// session's presentation target, so the per-frame path carries no platform
+  /// fork. Never null after construction.
+  std::unique_ptr<DocumentPresenter> documentPresenter_;
 #ifdef DONNER_EDITOR_WGPU
   std::unique_ptr<FramebufferCheckerboardRenderer> directCheckerboardRenderer_;
   std::unique_ptr<svg::RendererGeode> directDocumentRenderer_;

@@ -69,7 +69,7 @@ function ApplyWorkerDocumentSurfaceLayout(layout) {
       // WebKit promotes the canvas bitmap into a compositor layer independently from the
       // element's CSS background. Repositioning the layout box can expose that background for
       // one frame at a device-pixel-aligned edge. Keep the box stationary and translate the
-      // composited element instead, so the bitmap and checkerboard move in one atomic property.
+      // composited element instead, so the bitmap and its backdrop move in one atomic property.
       surfaceCanvas.style.left = "0px";
       surfaceCanvas.style.top = "0px";
       surfaceCanvas.style.transform = `translate3d(${pixelLayout.left}px, ${pixelLayout.top}px, 0)`;

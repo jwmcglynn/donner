@@ -403,6 +403,16 @@ void RenderMemoryGraph(const FrameHistory& history) {
   DrawProfilerLegendItem(kMemoryOtherColor, "other", /*sameLine=*/true);
 }
 
+/// Draw-list transparency checkerboard, in the same two greys and cell size as
+/// the WGSL `FramebufferCheckerboardRenderer`.
+///
+/// This is not dead code behind the WGSL pass: it is the only checkerboard on
+/// builds without a WebGPU window target, and on WebGPU builds it still covers
+/// every frame that presents through the draw list instead of the framebuffer
+/// underlay - no directly presentable Geode tiles yet (document load), a tile
+/// set with a non-Geode backend, no framebuffer device, and content-only
+/// captures. Those frames have no framebuffer pass to route through, so they
+/// cannot be folded into the WGSL renderer.
 void DrawCheckerboard(ImDrawList* drawList, const ImVec2& topLeft, const ImVec2& bottomRight) {
   constexpr float kCheckerSize = static_cast<float>(kRenderPaneCheckerboardSize);
   const ImVec2 snappedTopLeft(std::floor(topLeft.x), std::floor(topLeft.y));
