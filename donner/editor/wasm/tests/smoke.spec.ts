@@ -1621,10 +1621,18 @@ test("wasm editor renders layer panel previews after loading a document", async 
   await expect
     .poll(async () => {
       const stats = await readLayerPreviewColorStats(page);
-      return stats.coloredPixels > 100 && stats.maxChannel > 80;
+      if (stats.coloredPixels > 100 && stats.maxChannel > 80) {
+        return true;
+      }
+      // The stored capture may predate the thumbnail batch (thumbnails settle
+      // later on slow hosts); request a fresh diagnostic for the next read
+      // instead of polling a stale snapshot forever.
+      await requestWgpuDiagnostic(page);
+      return false;
     }, {
       message: "expected colored thumbnail pixels in the Layers panel preview column",
       timeout: 20000,
+      intervals: [100, 250, 500],
     })
     .toBe(true);
 
