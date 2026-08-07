@@ -89,6 +89,11 @@ async function openEditor(page: Page): Promise<string[]> {
 
   await page.goto(kBaseUrl, { waitUntil: "domcontentloaded" });
   await expect.poll(() => page.evaluate(() => window.__donnerCanStartWasm)).toBe(true);
+  // Playwright's bundled WebKit ships no WebGPU, so the Geode-only package
+  // cannot boot there; real-Safari validation covers that engine. Skip
+  // instead of stalling on the loading screen.
+  const hasWebGpu = await page.evaluate(() => "gpu" in navigator);
+  test.skip(!hasWebGpu, "Browser does not expose navigator.gpu");
   await expect(page.locator("#status")).toBeHidden({ timeout: 20_000 });
   return failures;
 }

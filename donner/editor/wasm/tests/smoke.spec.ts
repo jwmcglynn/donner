@@ -318,9 +318,12 @@ async function openEditor(page: Page, options: OpenEditorOptions = {}): Promise<
     })
     .toBe(true);
   const hasWebGpu = await page.evaluate(() => "gpu" in navigator);
-  if (!hasWebGpu && kRequireWebGpu) {
+  const browserName = page.context().browser()?.browserType().name();
+  if (!hasWebGpu && kRequireWebGpu && browserName !== "webkit") {
     throw new Error("Geode smoke suite requires WebGPU, but navigator.gpu is unavailable");
   }
+  // Playwright's bundled WebKit ships no WebGPU; the Geode-only package needs
+  // real Safari for that engine, which runs in the headed validation lane.
   test.skip(!hasWebGpu, "Browser does not expose navigator.gpu");
 
   await expect(page.locator("canvas#canvas")).toBeVisible();
