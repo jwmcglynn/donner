@@ -253,12 +253,16 @@ constexpr std::string_view kBlankPenCanvasSvg =
 //
 // `EditorShell` will not request a document render before it latches `viewportInitialized_` (the
 // placeholder-viewport guard: a render posted against a not-yet-settled pane would present at the
-// wrong fit and then jump). The latch accepts a render pane that already fits the DockSpace's
-// central node, which the replay window satisfies on its first frame, so frame 0 fits the viewport,
-// latches it, and posts the first render, and frame 1 is the first frame that can poll and present
-// a result. Captures and presentation diagnostics for a freshly loaded document therefore start
-// here.
-constexpr std::uint64_t kFirstPresentedReplayFrame = 1;
+// wrong fit and then jump). On a cold start frame 0 cannot satisfy that latch: the DockSpace's
+// right column has not been split off the host yet, so frame 0's render pane is the whole host and
+// `RenderPaneViewportLatchReady` rejects it, and there is no previous frame to corroborate it
+// against either. Frame 1 is the first settled pane, so it fits the viewport, latches it, and posts
+// the first render; frame 2 is the first frame that can poll and present a result. Captures and
+// presentation diagnostics for a freshly loaded document therefore start here.
+//
+// This is a cold-start cost only. Loading a document into an already-running editor (the sample
+// carousel) latches on the load frame itself, because the dock layout is already settled then.
+constexpr std::uint64_t kFirstPresentedReplayFrame = 2;
 
 std::optional<std::filesystem::path> WriteStaticContentReplay(
     const std::filesystem::path& outputDir, std::string_view name, std::uint64_t lastFrame) {
@@ -3299,8 +3303,15 @@ TEST(GlRnrReplayTest, ReplaysSourcePaneCharacterInput) {
 
   std::optional<svg::RendererBitmap> bitmap = LoadCaptureBitmap(result, 63);
   ASSERT_TRUE(bitmap.has_value());
+  // Captures are in framebuffer pixels; the crop below is expressed in the recording's logical
+  // window pixels, so scale it by the host's device pixel ratio (2 on a HiDPI display).
+  const int captureScale =
+      std::max(1, bitmap->dimensions.x / static_cast<int>(file.metadata.windowWidth));
   const svg::RendererBitmap renderPaneCrop =
-      CropBitmap(*bitmap, PixelCrop{.x = 560, .y = 0, .width = 500, .height = 600});
+      CropBitmap(*bitmap, PixelCrop{.x = 560 * captureScale,
+                                    .y = 0,
+                                    .width = 500 * captureScale,
+                                    .height = 600 * captureScale});
   EXPECT_GT(CountBrightGreenPixels(renderPaneCrop), 100);
 
   std::error_code ec;

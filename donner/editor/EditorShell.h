@@ -643,14 +643,20 @@ private:
 
   std::string lastWindowTitle_;
   bool viewportInitialized_ = false;
-  /// Previous frame's canvas (render pane) content-region size, used to detect
-  /// when the docked central node has settled before latching the initial
-  /// fit-to-actual-size.
+  /// Previous frame's canvas (render pane) content-region size. The fallback half of
+  /// `RenderPaneViewportLatchReady`, for dock trees its geometry policy does not describe.
   Vector2d lastRenderPaneContentSize_ = Vector2d(-1.0, -1.0);
-  /// Size of the DockSpace central node as of this frame's dock-host pass, or
-  /// zero before the DockSpace has built one. Lets the fit-to-actual-size latch
-  /// accept an already-settled render pane on its first frame.
+  /// Size of the DockSpace central node as of this frame's dock-host pass, or zero before the
+  /// DockSpace has built one.
   Vector2d dockCentralNodeSize_ = Vector2d::Zero();
+  /// Screen origin of the DockSpace central node as of this frame's dock-host pass.
+  Vector2d dockCentralNodeOrigin_ = Vector2d::Zero();
+  /// Dock host rect the shell itself submitted this frame, in screen pixels, and the same rect
+  /// from the previous frame. Both are computed from the window size and the shell's own pane
+  /// state rather than read back from ImGui, so comparing them detects a moving layout that no
+  /// amount of ImGui introspection could.
+  LayoutRect dockHostRect_;
+  LayoutRect previousDockHostRect_;
   /// Requested width (in pixels) of the right-side panel column. Seeds the
   /// initial DockSpace right-column split; after the layout is built the
   /// DockSpace owns panel sizing.

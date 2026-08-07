@@ -210,5 +210,124 @@ TEST(EditorShellLayoutTest, DraggingSplitterDownPreservesLayerMinimum) {
   EXPECT_FLOAT_EQ(nextFraction, 0.2f);
 }
 
+
+// The render pane geometry of a settled desktop frame: a 1280x699 dock host below the menu bar,
+// split into a 947-wide canvas column and a right sidebar column, with the docked pane window
+// filling the central node and its content region inset by ImGui's window padding.
+RenderPaneLatchInput SettledDesktopFrame() {
+  const LayoutRect host{.x = 32.0f, .y = 21.0f, .width = 1248.0f, .height = 699.0f};
+  const LayoutRect centralNode{.x = 32.0f, .y = 21.0f, .width = 947.0f, .height = 699.0f};
+  return RenderPaneLatchInput{
+      .paneWindow = centralNode,
+      .dockCentralNode = centralNode,
+      .dockHost = host,
+      .previousDockHost = host,
+      .paneContentWidth = centralNode.width - 16.0f,
+      .paneContentHeight = centralNode.height - 16.0f,
+      .previousPaneContentWidth = -1.0f,
+      .previousPaneContentHeight = -1.0f,
+      .sidebarColumnIncluded = true,
+  };
+}
+
+TEST(EditorShellLayoutTest, LatchesSettledDockedRenderPaneOnItsFirstFrame) {
+  // No content-region history at all: the geometry alone proves the pane is settled, so a document
+  // loaded into an already-running editor never spends a frame at the placeholder fit.
+  EXPECT_TRUE(RenderPaneViewportLatchReady(SettledDesktopFrame()));
+}
+
+TEST(EditorShellLayoutTest, RejectsRenderPaneBeforeTheSidebarColumnIsSplitOff) {
+  // Cold start: the freshly docked pane still spans the whole host because the right column has
+  // not been split off yet. It fits inside the central node (they are the same rect), which is
+  // exactly why a fits-within test accepts it, and it must still be rejected.
+  RenderPaneLatchInput input = SettledDesktopFrame();
+  input.dockCentralNode.width = input.dockHost.width;
+  input.paneWindow = input.dockCentralNode;
+  input.paneContentWidth = input.dockCentralNode.width - 16.0f;
+
+  EXPECT_FALSE(RenderPaneViewportLatchReady(input));
+}
+
+TEST(EditorShellLayoutTest, RejectsRenderPaneShorterThanItsDockHost) {
+  // The pre-settle rectangle that clips the document and presents the placeholder viewport is
+  // *smaller* than the settled one, so it passes any "fits inside the central node" test. It
+  // cannot pass this one: the shell computed the host height itself this frame.
+  RenderPaneLatchInput input = SettledDesktopFrame();
+  input.dockCentralNode.height = 446.0f;
+  input.paneWindow = input.dockCentralNode;
+  input.paneContentHeight = input.dockCentralNode.height - 16.0f;
+
+  EXPECT_FALSE(RenderPaneViewportLatchReady(input));
+}
+
+TEST(EditorShellLayoutTest, RejectsRenderPaneWindowThatHasNotAdoptedTheCentralNode) {
+  // ImGui has resized the node but the docked window still reports the previous rect. Rejected
+  // whether that stale rect is larger or smaller than the node.
+  RenderPaneLatchInput smaller = SettledDesktopFrame();
+  smaller.paneWindow.width -= 120.0f;
+  smaller.paneContentWidth = smaller.paneWindow.width - 16.0f;
+  EXPECT_FALSE(RenderPaneViewportLatchReady(smaller));
+
+  RenderPaneLatchInput larger = SettledDesktopFrame();
+  larger.paneWindow.width += 120.0f;
+  larger.paneContentWidth = larger.paneWindow.width - 16.0f;
+  EXPECT_FALSE(RenderPaneViewportLatchReady(larger));
+}
+
+TEST(EditorShellLayoutTest, RejectsRenderPaneWhileTheDockHostIsStillMoving) {
+  // Nothing downstream of a host that moved this frame is settled, no matter how self-consistent
+  // ImGui's own report is.
+  RenderPaneLatchInput input = SettledDesktopFrame();
+  input.previousDockHost.height += 66.0f;
+
+  EXPECT_FALSE(RenderPaneViewportLatchReady(input));
+}
+
+TEST(EditorShellLayoutTest, RejectsRepeatedContentRegionWhileTheDockHostIsStillMoving) {
+  // The two-frame content-region fallback would otherwise pair a pre-change frame with a
+  // post-change one and latch a rectangle that is about to be replaced.
+  RenderPaneLatchInput input = SettledDesktopFrame();
+  input.dockCentralNode = LayoutRect{};
+  input.paneWindow = LayoutRect{};
+  input.previousPaneContentWidth = input.paneContentWidth;
+  input.previousPaneContentHeight = input.paneContentHeight;
+  input.previousDockHost.width += 240.0f;
+
+  EXPECT_FALSE(RenderPaneViewportLatchReady(input));
+}
+
+TEST(EditorShellLayoutTest, FallsBackToTwoStableFramesForAnUnrecognizedDockTree) {
+  // A customized dock tree restored from the persisted layout need not put the canvas in a plain
+  // column split; the pane must still be able to latch, just not on its first frame.
+  RenderPaneLatchInput input = SettledDesktopFrame();
+  input.dockCentralNode.y += 40.0f;
+  input.paneWindow = input.dockCentralNode;
+  EXPECT_FALSE(RenderPaneViewportLatchReady(input));
+
+  input.previousPaneContentWidth = input.paneContentWidth;
+  input.previousPaneContentHeight = input.paneContentHeight;
+  EXPECT_TRUE(RenderPaneViewportLatchReady(input));
+}
+
+TEST(EditorShellLayoutTest, LatchesCompactCanvasNodeThatSpansItsHost) {
+  // The compact-touch profile docks the canvas into the root node, so there is no column to split
+  // off and the node legitimately spans the host.
+  RenderPaneLatchInput input = SettledDesktopFrame();
+  input.sidebarColumnIncluded = false;
+  input.dockCentralNode.width = input.dockHost.width;
+  input.paneWindow = input.dockCentralNode;
+  input.paneContentWidth = input.dockCentralNode.width - 16.0f;
+
+  EXPECT_TRUE(RenderPaneViewportLatchReady(input));
+}
+
+TEST(EditorShellLayoutTest, RejectsRenderPaneBeforeTheHostHasAnySize) {
+  RenderPaneLatchInput input = SettledDesktopFrame();
+  input.dockHost = LayoutRect{};
+  input.previousDockHost = LayoutRect{};
+
+  EXPECT_FALSE(RenderPaneViewportLatchReady(input));
+}
+
 }  // namespace
 }  // namespace donner::editor

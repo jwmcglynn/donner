@@ -3538,29 +3538,33 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
     viewportInitialized_ = true;
   }
 
-  // The canvas is docked into the DockSpace central node, whose size only
-  // settles after ImGui has run a dock update. On the very first frame the
-  // freshly-docked "Render" window briefly reports the full host width before
-  // the right-column split is applied. Fit-to-actual-size must not latch on that
-  // transient size (it would center the document for the wrong pane and clip it
-  // once the pane settles), so we keep re-fitting until the pane size is stable
-  // across two consecutive frames, then latch.
+  // The canvas is docked into the DockSpace central node, so ImGui owns the pane rectangle and
+  // reports transient values while a layout change propagates. Fit-to-actual-size must not latch
+  // on a transient rectangle: it would fit the document to the wrong pane, render against that
+  // fit, and present the result before the pane settles.
   //
-  // The DockSpace itself already knows the settled size: `renderDockSpaceHost`
-  // ran earlier this frame and recorded the central node's rect. A content
-  // region that already fits inside that node is post-split by construction, so
-  // it is accepted immediately rather than costing the document a frame of
-  // placeholder presentation. The transient full-host-width report is strictly
-  // wider than the central node, so it still fails this test and falls back to
-  // the two-frame rule.
-  const bool renderPaneFitsDockCentralNode =
-      dockCentralNodeSize_.x > 0.0 && dockCentralNodeSize_.y > 0.0 &&
-      static_cast<double>(contentRegion.x) <= dockCentralNodeSize_.x + 1.0 &&
-      static_cast<double>(contentRegion.y) <= dockCentralNodeSize_.y + 1.0;
-  const bool renderPaneSizeStable =
-      renderPaneFitsDockCentralNode ||
-      (std::abs(contentRegion.x - lastRenderPaneContentSize_.x) < 1.0f &&
-       std::abs(contentRegion.y - lastRenderPaneContentSize_.y) < 1.0f);
+  // `RenderPaneViewportLatchReady` holds the policy (and its argument for why it is timing-robust)
+  // as pure layout code. Everything it needs beyond ImGui's own report is geometry the shell
+  // computed for itself in `renderDockSpaceHost` earlier this frame.
+  const ImVec2 paneWindowOrigin = ImGui::GetWindowPos();
+  const ImVec2 paneWindowSize = ImGui::GetWindowSize();
+  const bool renderPaneSizeStable = RenderPaneViewportLatchReady(RenderPaneLatchInput{
+      .paneWindow = LayoutRect{.x = paneWindowOrigin.x,
+                               .y = paneWindowOrigin.y,
+                               .width = paneWindowSize.x,
+                               .height = paneWindowSize.y},
+      .dockCentralNode = LayoutRect{.x = static_cast<float>(dockCentralNodeOrigin_.x),
+                                    .y = static_cast<float>(dockCentralNodeOrigin_.y),
+                                    .width = static_cast<float>(dockCentralNodeSize_.x),
+                                    .height = static_cast<float>(dockCentralNodeSize_.y)},
+      .dockHost = dockHostRect_,
+      .previousDockHost = previousDockHostRect_,
+      .paneContentWidth = contentRegion.x,
+      .paneContentHeight = contentRegion.y,
+      .previousPaneContentWidth = static_cast<float>(lastRenderPaneContentSize_.x),
+      .previousPaneContentHeight = static_cast<float>(lastRenderPaneContentSize_.y),
+      .sidebarColumnIncluded = !adaptiveUiLayout_.compactTouch(),
+  });
   lastRenderPaneContentSize_ = Vector2d(contentRegion.x, contentRegion.y);
   if (!viewportInitialized_ && interactionController_.viewport().paneSize.x > 0.0 &&
       interactionController_.viewport().paneSize.y > 0.0 && app_.hasDocument()) {
@@ -4933,15 +4937,18 @@ void EditorShell::renderDockSpaceHost(float hostX, float hostY, float hostWidth,
   dockSidebarsIncludedInLayout_ = sidebarsIncluded;
 
   ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f), EditorDockSpaceFlags(dockLayoutLocked_));
-  // The central node's size is authoritative for the render pane before the pane
-  // window itself has reported a settled content region, so the first-frame
-  // fit-to-actual-size latch can accept a correct pane size immediately instead
-  // of spending a frame proving it stable.
+  // Record the central node's rect alongside the host rect the shell just laid out. Comparing the
+  // two is how `RenderPaneViewportLatchReady` tells a settled render pane from a rectangle ImGui
+  // is still propagating, without waiting to see the same value twice.
   if (const ImGuiDockNode* centralNode = ImGui::DockBuilderGetCentralNode(dockspaceId)) {
     dockCentralNodeSize_ = Vector2d(centralNode->Size.x, centralNode->Size.y);
+    dockCentralNodeOrigin_ = Vector2d(centralNode->Pos.x, centralNode->Pos.y);
   } else {
     dockCentralNodeSize_ = Vector2d::Zero();
+    dockCentralNodeOrigin_ = Vector2d::Zero();
   }
+  previousDockHostRect_ = dockHostRect_;
+  dockHostRect_ = LayoutRect{.x = hostX, .y = hostY, .width = hostWidth, .height = hostHeight};
   ImGui::End();
 }
 
