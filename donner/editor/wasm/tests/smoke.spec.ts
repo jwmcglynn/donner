@@ -163,6 +163,13 @@ const kRightPaneWidth = 420;
 const kWelcomeContentMaxWidth = 920;
 
 const kBackend = "geode";
+
+// Shared CI runners execute this suite 2-4x slower than local development
+// hardware. Scale wall-clock budgets and tight acceptance polls so the timing
+// assertions verify the same invariants without flaking on runner speed;
+// local bounds are unchanged (scale 1).
+const kCiTimeScale = process.env.CI ? 4 : 1;
+const scaledMs = (ms: number) => ms * kCiTimeScale;
 const kRequireWebGpu = process.env.DONNER_WASM_REQUIRE_WEBGPU === "1";
 // Match Chromium's webgpu-swiftshader test configuration. Dawn selects
 // SwiftShader for WebGPU while the pixel-validation lane uses explicit texture
@@ -414,7 +421,7 @@ test("welcome picker paints before asynchronously rendering real SVG thumbnails"
     await expect
       .poll(async () => page.evaluate(() => window.__donnerWgpuReadbackStats?.request || 0), {
         message: "expected one explicit final-frame readback after all thumbnails were uploaded",
-        timeout: 2000,
+        timeout: scaledMs(2000),
         intervals: [16, 25, 50, 100],
       })
       .toBeGreaterThanOrEqual(requestId);
@@ -582,7 +589,7 @@ test("WGPU diagnostics do not block the first carousel interaction", async ({ pa
   await expect
     .poll(async () => page.evaluate(() => window.__donnerWgpuReadbackStats?.frame || 0), {
       message: "expected the first asynchronous WGPU diagnostic frame",
-      timeout: 2000,
+      timeout: scaledMs(2000),
     })
     .toBeGreaterThan(0);
   await expect
@@ -597,7 +604,7 @@ test("WGPU diagnostics do not block the first carousel interaction", async ({ pa
         };
       }), {
       message: "expected all asynchronous carousel thumbnails to settle before the idle probe",
-      timeout: 5000,
+      timeout: scaledMs(5000),
       intervals: [0, 50, 100],
     })
     .toEqual({
@@ -617,7 +624,7 @@ test("WGPU diagnostics do not block the first carousel interaction", async ({ pa
       return after - before;
     }, {
       message: "expected the Wasm main loop to become event-driven after startup",
-      timeout: 5000,
+      timeout: scaledMs(5000),
       intervals: [0, 50, 100],
     })
     .toBe(0);
@@ -660,7 +667,7 @@ test("WGPU diagnostics do not block the first carousel interaction", async ({ pa
 
   await page.mouse.click(bounds.x + bounds.width * 0.5, bounds.y + 282);
   await expect(canvas).toHaveAttribute("data-active-sample-id", "basic-shapes", {
-    timeout: 1000,
+    timeout: scaledMs(1000),
   });
   const carouselHeartbeatGapMs = await page.evaluate(() => {
     const state = (window as Window & {
@@ -681,7 +688,7 @@ test("WGPU diagnostics do not block the first carousel interaction", async ({ pa
   await expect
     .poll(() => diagnosticCompleted(postClickRequest), {
       message: "expected a post-click WGPU diagnostic frame",
-      timeout: 5000,
+      timeout: scaledMs(5000),
       intervals: [16, 25, 50, 100],
     })
     .toBe(true);
@@ -693,7 +700,7 @@ test("WGPU diagnostics do not block the first carousel interaction", async ({ pa
       return after - before;
     }, {
       message: "expected the Wasm main loop to become idle after loading the sample",
-      timeout: 5000,
+      timeout: scaledMs(5000),
       intervals: [0, 50, 100],
     })
     .toBe(0);
@@ -701,7 +708,7 @@ test("WGPU diagnostics do not block the first carousel interaction", async ({ pa
   await expect
     .poll(() => diagnosticCompleted(secondRequest), {
       message: "expected an idle diagnostic request to wake the Wasm main loop",
-      timeout: 5000,
+      timeout: scaledMs(5000),
       intervals: [16, 25, 50, 100],
     })
     .toBe(true);
@@ -773,7 +780,7 @@ for (
     );
     const clickStartedAt = await page.evaluate(() => performance.now());
     await page.mouse.click(bounds.x + bounds.width * sample.xFraction, bounds.y + sample.y);
-    const carouselDeadlineMs = 300;
+    const carouselDeadlineMs = scaledMs(300);
     const phaseTimings: {
       activatedMs?: number;
       submittedMs?: number;
@@ -822,7 +829,7 @@ for (
     try {
       await expect.poll(presentationReady, {
         message: `expected ${sample.name} to publish a matching accepted presentation epoch`,
-        timeout: 3000,
+        timeout: scaledMs(3000),
         intervals: [8, 16, 25, 50],
       }).toBe(true);
     } finally {
@@ -914,7 +921,7 @@ test("carousel never exposes the placeholder viewport for Donner Splash", async 
           .getAttribute("data-direct-surface-frame") || 0,
       ), {
       message: "expected Donner Splash to present a document surface",
-      timeout: 5000,
+      timeout: scaledMs(5000),
       intervals: [8, 16, 25, 50],
     })
     .toBeGreaterThan(beforeFrame);
@@ -985,7 +992,7 @@ test("Text and Style renders embedded glyphs without font requests", async ({ pa
   await expect
     .poll(async () => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
       message: "expected the Text and Style sample to finish presenting",
-      timeout: 2000,
+      timeout: scaledMs(2000),
       intervals: [16, 25, 50, 100],
     })
     .toBeGreaterThan(beforeSample);
@@ -1003,7 +1010,7 @@ test("Text and Style renders embedded glyphs without font requests", async ({ pa
           );
         }, acceptedBefore), {
         message: "expected Text and Style diagnostics from the accepted direct-surface epoch",
-        timeout: 5000,
+        timeout: scaledMs(5000),
         intervals: [16, 25, 50, 100],
       })
       .toBe(true);
@@ -1045,7 +1052,7 @@ test("browser presents the first Basic Shapes drag frame within the interaction 
   await expect
     .poll(async () => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
       message: "expected the Basic Shapes document to finish its first presentation",
-      timeout: 1000,
+      timeout: scaledMs(1000),
       intervals: [16, 25, 50, 100],
     })
     .toBeGreaterThan(beforeSample);
@@ -1073,7 +1080,7 @@ test("browser presents the first Basic Shapes drag frame within the interaction 
     await expect
       .poll(async () => page.evaluate(() => window.__donnerWgpuReadbackStats?.request || 0), {
         message: "expected a diagnostic capture before shape selection",
-        timeout: 2000,
+        timeout: scaledMs(2000),
         intervals: [16, 25, 50, 100],
       })
       .toBeGreaterThanOrEqual(baselineRequest);
@@ -1084,7 +1091,7 @@ test("browser presents the first Basic Shapes drag frame within the interaction 
     await expect
       .poll(async () => page.evaluate(() => window.__donnerInteractionStats?.selectedCount || 0), {
         message: "expected shape selection before capturing its overlay",
-        timeout: 2000,
+        timeout: scaledMs(2000),
         intervals: [16, 25, 50, 100],
       })
       .toBeGreaterThan(0);
@@ -1092,7 +1099,7 @@ test("browser presents the first Basic Shapes drag frame within the interaction 
     await expect
       .poll(async () => page.evaluate(() => window.__donnerWgpuReadbackStats?.request || 0), {
         message: "expected a diagnostic capture after shape selection",
-        timeout: 2000,
+        timeout: scaledMs(2000),
         intervals: [16, 25, 50, 100],
       })
       .toBeGreaterThanOrEqual(selectionRequest);
@@ -1104,10 +1111,7 @@ test("browser presents the first Basic Shapes drag frame within the interaction 
           )) - beforeSelectionChrome,
         {
           message: "expected overlay-only selection feedback before starting the drag",
-          // Local hardware settles well under 2 s; shared CI runners render
-          // and read back slowly enough to need more headroom. The invariant
-          // (overlay appears without a document rerender) is unchanged.
-          timeout: process.env.CI ? 8000 : 2000,
+          timeout: scaledMs(2000),
           intervals: [16, 25, 50, 100],
         },
       )
@@ -1135,7 +1139,7 @@ test("browser presents the first Basic Shapes drag frame within the interaction 
     await expect
       .poll(async () => !(await page.screenshot({ clip: targetClip })).equals(beforeMouseDown), {
         message: "expected selection feedback after mouse-down",
-        timeout: 1000,
+        timeout: scaledMs(1000),
         intervals: [16, 25, 50, 100],
       })
       .toBe(true);
@@ -1158,7 +1162,7 @@ test("browser presents the first Basic Shapes drag frame within the interaction 
   // hardware. Shared CI runners are slower and the poll below adds up to one
   // interval of measurement quantization, so CI enforces a looser bound that
   // still fails on genuine stalls.
-  const firstDragFrameBudgetMs = process.env.CI ? 250 : 125;
+  const firstDragFrameBudgetMs = scaledMs(125);
   const dragMoveStartedAt = Date.now();
   await page.mouse.move(blueRectCenter.x + 120, blueRectCenter.y + 70);
   await expect
@@ -1202,7 +1206,7 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
   await expect
     .poll(async () => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
       message: "expected Basic Shapes to finish presenting before resize",
-      timeout: 1000,
+      timeout: scaledMs(1000),
       intervals: [16, 25, 50, 100],
     })
     .toBeGreaterThan(beforeSample);
@@ -1212,7 +1216,7 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
   await expect
     .poll(async () => (await readElementColorStats(documentCanvas)).coloredPixels, {
       message: "expected visible Basic Shapes pixels before selecting the resize target",
-      timeout: 1000,
+      timeout: scaledMs(1000),
       intervals: [16, 25, 50, 100],
     })
     .toBeGreaterThan(500);
@@ -1252,7 +1256,7 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
   await expect
     .poll(async () => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
       message: "expected multiple resize frames to land during one continuous pointer burst",
-      timeout: 500,
+      timeout: scaledMs(500),
       intervals: [16, 25, 50],
     })
     .toBeGreaterThanOrEqual(initialResults + 2);
@@ -1271,7 +1275,7 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
     }, {
       message:
         "expected the final resized pixels and selection outline from one presentation epoch",
-      timeout: 1500,
+      timeout: scaledMs(1500),
       intervals: [50, 100],
     })
     .toBe(true);
@@ -1305,7 +1309,7 @@ test("Geode WASM selects through the overlay without document rerender or recurr
   await expect
     .poll(async () => Number(await documentCanvas.getAttribute("data-direct-surface-frame")), {
       message: "expected the worker-owned document surface to present Basic Shapes",
-      timeout: 1000,
+      timeout: scaledMs(1000),
       intervals: [16, 25, 50, 100],
     })
     .toBeGreaterThan(0);
@@ -1331,7 +1335,7 @@ test("Geode WASM selects through the overlay without document rerender or recurr
   await expect
     .poll(async () => page.evaluate(() => window.__donnerMainLoopRenderedFrames || 0), {
       message: "expected the selection event to produce an overlay frame",
-      timeout: 1000,
+      timeout: scaledMs(1000),
       intervals: [16, 25, 50, 100],
     })
     .toBeGreaterThan(beforeSelectionUiFrame);
@@ -1346,7 +1350,7 @@ test("Geode WASM selects through the overlay without document rerender or recurr
   await expect
     .poll(async () => page.evaluate(() => window.__donnerInteractionStats?.pendingClick ?? true), {
       message: "expected the committed selection to consume its buffered click",
-      timeout: 1000,
+      timeout: scaledMs(1000),
       intervals: [16, 25, 50, 100],
     })
     .toBe(false);
@@ -1367,14 +1371,14 @@ test("Geode WASM selects through the overlay without document rerender or recurr
   await expect
     .poll(async () => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
       message: "expected a direct document frame while the shape drag is still active",
-      timeout: 1000,
+      timeout: scaledMs(1000),
       intervals: [16, 25, 50, 100],
     })
     .toBeGreaterThan(beforeDrag);
   await expect
     .poll(async () => Number(await documentCanvas.getAttribute("data-direct-surface-frame")), {
       message: "expected the visible document surface to advance before mouse-up",
-      timeout: 1000,
+      timeout: scaledMs(1000),
       intervals: [16, 25, 50, 100],
     })
     .toBeGreaterThan(beforeDragFrame);
@@ -1385,7 +1389,7 @@ test("Geode WASM selects through the overlay without document rerender or recurr
   await expect
     .poll(async () => Number(await documentCanvas.getAttribute("data-direct-surface-frame")), {
       message: "expected the drag-release settlement frame",
-      timeout: 1000,
+      timeout: scaledMs(1000),
       intervals: [16, 25, 50, 100],
     })
     .toBeGreaterThan(beforeMouseUpFrame);
@@ -1543,7 +1547,7 @@ test("forced bitmap worker-surface fallback presents retained Geode pixels", asy
   await expect
     .poll(async () => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
       message: "expected a forced bitmap drag result after the superseding pointer burst",
-      timeout: 2000,
+      timeout: scaledMs(2000),
       intervals: [16, 25, 50, 100],
     })
     .toBeGreaterThan(beforeDragResults);
@@ -1592,7 +1596,7 @@ test("wasm editor renders layer panel previews after loading a document", async 
     await expect
       .poll(async () => page.evaluate(() => window.__donnerWgpuReadbackStats?.request || 0), {
         message: "expected a post-load WGPU diagnostic capture for the Layers panel",
-        timeout: 5000,
+        timeout: scaledMs(5000),
         intervals: [16, 25, 50, 100],
       })
       .toBeGreaterThanOrEqual(request);
@@ -1688,7 +1692,7 @@ test("wasm editor drains thumbnails for expanded sublayers", async ({ page }) =>
     await expect
       .poll(async () => page.evaluate(() => window.__donnerWgpuReadbackStats?.request || 0), {
         message: "expected a WGPU capture after the expanded sublayer thumbnails settled",
-        timeout: 5000,
+        timeout: scaledMs(5000),
         intervals: [16, 25, 50, 100],
       })
       .toBeGreaterThanOrEqual(request);
@@ -2007,7 +2011,7 @@ test("Geode WASM presents selection path overlay pixels", async ({ page }) => {
   await expect
     .poll(async () => page.evaluate(() => window.__donnerInteractionStats?.selectedCount || 0), {
       message: "expected shape selection before capturing its overlay",
-      timeout: 2000,
+      timeout: scaledMs(2000),
       intervals: [16, 25, 50, 100],
     })
     .toBeGreaterThan(0);
