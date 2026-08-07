@@ -232,6 +232,14 @@ if [[ -n "$runfiles_dir" && -e "$runfiles_dir/$logical_impl" ]]; then
   for candidate in "$runfiles_dir"/*/_solib_*/*; do
     if [[ -d "$candidate" ]]; then
       append_library_dir "$candidate"
+    else
+      case "$candidate" in
+        *.dylib|*.so)
+          # Flat _solib layouts place libraries directly in _solib_*; append
+          # the file's parent, as the manifest branch does.
+          append_library_dir "${{candidate%/*}}"
+          ;;
+      esac
     fi
   done
 elif [[ -n "$manifest" && -f "$manifest" ]]; then
