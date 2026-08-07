@@ -579,6 +579,12 @@ donner_cc_fuzzer(
     name = "inspector_ui_fuzzer",
     srcs = ["InspectorUi_fuzzer.cc"],
     corpus = "testdata/inspector_ui_fuzzer_corpus",
+    # The first fuzzed frame stands up the ImGui atlas and table state; under
+    # ASan on a loaded shared runner that setup alone can cross the default
+    # 2-second per-input alarm (observed repeatedly in CI on the trivial
+    # newline input, while passing locally in every run). A genuine hang still
+    # trips comfortably at 10 seconds.
+    per_input_timeout_seconds = 10,
     deps = [
         "//donner/editor:editor_app",
         "//donner/editor:editor_theme",
