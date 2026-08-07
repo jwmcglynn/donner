@@ -1104,7 +1104,10 @@ test("browser presents the first Basic Shapes drag frame within the interaction 
           )) - beforeSelectionChrome,
         {
           message: "expected overlay-only selection feedback before starting the drag",
-          timeout: 2000,
+          // Local hardware settles well under 2 s; shared CI runners render
+          // and read back slowly enough to need more headroom. The invariant
+          // (overlay appears without a document rerender) is unchanged.
+          timeout: process.env.CI ? 8000 : 2000,
           intervals: [16, 25, 50, 100],
         },
       )
