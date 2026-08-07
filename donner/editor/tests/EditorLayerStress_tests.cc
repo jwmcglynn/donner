@@ -295,7 +295,13 @@ protected:
   RenderResult RenderPhase(std::string_view phase, bool repostWhileBusy = false) {
     auto result = RequestRenderAndWait(asyncRenderer_, renderer_, app_, selectTool_, ++version_,
                                        phase, repostWhileBusy);
-    EXPECT_FALSE(asyncRenderer_.isBusy()) << phase << ": worker stayed busy after result";
+    // The result is already the correct frame, but the compositor defers its first-frame cache
+    // warmup to a later worker turn (`CompositorConfig::deferFirstFrameWarmup`), which keeps the
+    // renderer busy past `pollResult()`. The invariant under test is that the worker always
+    // drains, not that it is idle the instant a result is handed over.
+    EXPECT_TRUE(asyncRenderer_.waitUntilNoRenderInFlightForTesting(
+        std::chrono::steady_clock::now() + std::chrono::seconds(5)))
+        << phase << ": worker stayed busy after result";
     EXPECT_TRUE(result.has_value()) << phase;
     return std::move(*result);
   }

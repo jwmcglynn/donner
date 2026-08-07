@@ -747,8 +747,12 @@ PresentationSnapshotPlan ChoosePresentationSnapshotPlan(bool hasCompositedPrevie
     };
   }
 
+  // Without a composited preview the CPU bitmap *is* the presented frame, so it is always read
+  // back. When a preview covers the frame the readback is pure overhead for presentation, but
+  // `captureCpuSnapshot` callers (replay harnesses, goldens, thumbnail and diagnostic captures)
+  // consume `RenderResult::bitmap` directly and must still receive one.
   return PresentationSnapshotPlan{
-      .captureCpuSnapshot = !hasCompositedPreview,
+      .captureCpuSnapshot = captureCpuSnapshot || !hasCompositedPreview,
   };
 }
 
@@ -2495,11 +2499,10 @@ void AsyncRenderer::workerLoop() {
         requestRenderer.setPreserveTargetOnBeginFrame(true);
         requestRenderer.beginFrame(viewport);
         svg::ResolvedClip surfaceClip;
-        surfaceClip.clipRect =
-            Box2d::FromXYWH(0.0, 0.0, viewport.size.x, viewport.size.y);
+        surfaceClip.clipRect = Box2d::FromXYWH(0.0, 0.0, viewport.size.x, viewport.size.y);
         requestRenderer.pushClip(surfaceClip);
-        OverlayRenderer::drawChromeFromSnapshot(
-            requestRenderer, *request.directSurfaceSelectionChrome);
+        OverlayRenderer::drawChromeFromSnapshot(requestRenderer,
+                                                *request.directSurfaceSelectionChrome);
         requestRenderer.popClip();
         requestRenderer.endFrame();
         requestRenderer.setPreserveTargetOnBeginFrame(false);

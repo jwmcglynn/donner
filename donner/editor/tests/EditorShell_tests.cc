@@ -221,8 +221,7 @@ TEST(EditorShellPresentationTest, BakedSelectionChromeLeavesDynamicMainThreadChr
   pathBuilder.lineTo(Vector2d(20.0, 20.0));
 
   SelectionChromeSnapshot snapshot;
-  snapshot.paths.push_back(
-      SelectionChromeSnapshot::PathItem{.pathDoc = pathBuilder.build()});
+  snapshot.paths.push_back(SelectionChromeSnapshot::PathItem{.pathDoc = pathBuilder.build()});
   snapshot.aabbsDoc.push_back(Box2d::FromXYWH(10.0, 10.0, 10.0, 10.0));
   snapshot.handleBoxesDoc.push_back(Box2d::FromXYWH(8.0, 8.0, 4.0, 4.0));
   snapshot.textBaselinesDoc.push_back(SelectionChromeSnapshot::TextBaseline{
@@ -2676,8 +2675,8 @@ TEST(EditorShellTest, FullDesktopFrameLoopPresentsShapeDragBeforeMouseUp) {
       status.activeDragPreview->documentFromCachedDocument.transformPosition(kTargetProbePoint);
   const Vector2d representedProbe =
       status.displayedDragPreview->documentFromCachedDocument.transformPosition(kTargetProbePoint);
-  const bool hasLiveDragTile = std::ranges::any_of(
-      status.tiles, [&](const LayerInspectorStatusReadback::Tile& tile) {
+  const bool hasLiveDragTile =
+      std::ranges::any_of(status.tiles, [&](const LayerInspectorStatusReadback::Tile& tile) {
         if (!tile.isDragTarget) {
           return false;
         }
@@ -4234,6 +4233,10 @@ TEST(EditorShellTest, SamplePickerAppearsBeforeGeneratingThumbnailsAcrossFrames)
 
   // The first frame must paint the complete picker before any sample SVG parsing or raster work
   // starts. This keeps thumbnail generation off the startup-to-carousel critical path.
+  //
+  // Thumbnail rasterization lives in `prepareFrame()`, which `RunEditorFrame` calls *before*
+  // `beginFrame()` so raster work never runs inside an active ImGui frame. Rendering the picker
+  // through `runFrame()` alone must therefore never rasterize.
   EditorShellTestAccess::SetShowSamplePicker(shell, true);
   EXPECT_EQ(EditorShellTestAccess::SampleThumbnailCursor(shell), 0u);
 
@@ -4245,9 +4248,11 @@ TEST(EditorShellTest, SamplePickerAppearsBeforeGeneratingThumbnailsAcrossFrames)
   EXPECT_EQ(EditorShellTestAccess::SampleThumbnailCursor(shell), 0u);
   EXPECT_EQ(EditorShellTestAccess::SampleThumbnailGeneratedCount(shell), 0u);
 
-  // Later frames may start bounded background work and publish one result at a time.
+  // Later frames may start bounded background work and publish one result at a time. Drive them
+  // exactly as `RunEditorFrame` does: prepare, then begin/run/end the ImGui frame.
   std::size_t previousGeneratedCount = 0u;
   for (std::size_t frame = 0; frame < 500u; ++frame) {
+    shell.prepareFrame();
     window.beginFrame();
     shell.runFrame();
     window.endFrame();

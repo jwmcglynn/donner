@@ -249,6 +249,16 @@ constexpr std::string_view kBlankPenCanvasSvg =
     "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"80\" "
     "viewBox=\"0 0 80 80\"></svg>";
 
+// First replay frame whose framebuffer can contain document pixels.
+//
+// `EditorShell` only latches `viewportInitialized_` once the render pane reports the same content
+// size on two consecutive frames, and it will not request a document render before that latch (the
+// placeholder-viewport guard: a render posted against a not-yet-settled pane would present at the
+// wrong fit and then jump). So frame 0 fits the viewport, frame 1 latches it and posts the first
+// render, and frame 2 is the first frame that can poll and present a result. Captures and
+// presentation diagnostics for a freshly loaded document therefore start here.
+constexpr std::uint64_t kFirstPresentedReplayFrame = 2;
+
 std::optional<std::filesystem::path> WriteStaticContentReplay(
     const std::filesystem::path& outputDir, std::string_view name, std::uint64_t lastFrame) {
   std::error_code createDirError;
@@ -2123,15 +2133,15 @@ int CountLegacyBluePenPixels(const svg::RendererBitmap& bitmap) {
 
 TEST(GlRnrReplayTest, ContentOnlyDocumentCanvasCaptureMatchesRendererGroundTruth) {
   const std::filesystem::path outputDir = DiagnosticOutputDir() / "content_only_ground_truth";
-  const std::optional<std::filesystem::path> replayPath =
-      WriteStaticContentReplay(outputDir, "content_only_ground_truth.rnr", 1);
+  const std::optional<std::filesystem::path> replayPath = WriteStaticContentReplay(
+      outputDir, "content_only_ground_truth.rnr", kFirstPresentedReplayFrame);
   ASSERT_TRUE(replayPath.has_value());
 
   repro::GlRnrReplayOptions options;
   options.rnrPath = *replayPath;
   options.outputDir = outputDir;
-  options.captureFrames.insert(1);
-  options.maxFrame = 1;
+  options.captureFrames.insert(kFirstPresentedReplayFrame);
+  options.maxFrame = kFirstPresentedReplayFrame;
   options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
   options.pace = false;
   options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
@@ -2141,7 +2151,7 @@ TEST(GlRnrReplayTest, ContentOnlyDocumentCanvasCaptureMatchesRendererGroundTruth
   std::string error;
   ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
-  std::optional<svg::RendererBitmap> actual = LoadCaptureBitmap(result, 1);
+  std::optional<svg::RendererBitmap> actual = LoadCaptureBitmap(result, kFirstPresentedReplayFrame);
   ASSERT_TRUE(actual.has_value());
   std::optional<svg::RendererBitmap> rendererReference =
       RenderGroundTruth(kStaticContentOnlySvg, Vector2i(200, 120));
@@ -2157,15 +2167,15 @@ TEST(GlRnrReplayTest, ContentOnlyDocumentCanvasCaptureMatchesRendererGroundTruth
 
 TEST(GlRnrReplayTest, DirectDocumentCanvasCaptureIsNotDimmedByRenderPaneBackground) {
   const std::filesystem::path outputDir = DiagnosticOutputDir() / "direct_document_not_dimmed";
-  const std::optional<std::filesystem::path> replayPath =
-      WriteStaticContentReplay(outputDir, "direct_document_not_dimmed.rnr", 1);
+  const std::optional<std::filesystem::path> replayPath = WriteStaticContentReplay(
+      outputDir, "direct_document_not_dimmed.rnr", kFirstPresentedReplayFrame);
   ASSERT_TRUE(replayPath.has_value());
 
   repro::GlRnrReplayOptions options;
   options.rnrPath = *replayPath;
   options.outputDir = outputDir;
-  options.captureFrames.insert(1);
-  options.maxFrame = 1;
+  options.captureFrames.insert(kFirstPresentedReplayFrame);
+  options.maxFrame = kFirstPresentedReplayFrame;
   options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
   options.pace = false;
   options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
@@ -2175,7 +2185,7 @@ TEST(GlRnrReplayTest, DirectDocumentCanvasCaptureIsNotDimmedByRenderPaneBackgrou
   std::string error;
   ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
-  std::optional<svg::RendererBitmap> actual = LoadCaptureBitmap(result, 1);
+  std::optional<svg::RendererBitmap> actual = LoadCaptureBitmap(result, kFirstPresentedReplayFrame);
   ASSERT_TRUE(actual.has_value());
   ASSERT_GT(actual->dimensions.x, 0);
   ASSERT_GT(actual->dimensions.y, 0);
@@ -3063,8 +3073,8 @@ TEST(GlRnrReplayTest, ColorPickerFillOnPenPathRerendersGeodePromotedLayer) {
 
 TEST(GlRnrReplayTest, DrainEachFrameContentCaptureIsDeterministicAcrossPaceAndDelay) {
   const std::filesystem::path outputDir = DiagnosticOutputDir() / "deterministic_replay_matrix";
-  const std::optional<std::filesystem::path> replayPath =
-      WriteStaticContentReplay(outputDir, "deterministic_replay_matrix.rnr", 1);
+  const std::optional<std::filesystem::path> replayPath = WriteStaticContentReplay(
+      outputDir, "deterministic_replay_matrix.rnr", kFirstPresentedReplayFrame);
   ASSERT_TRUE(replayPath.has_value());
 
   std::optional<svg::RendererBitmap> baselineCapture;
@@ -3076,8 +3086,8 @@ TEST(GlRnrReplayTest, DrainEachFrameContentCaptureIsDeterministicAcrossPaceAndDe
       options.rnrPath = *replayPath;
       options.outputDir = outputDir / (std::string(pace ? "paced" : "unpaced") + "_delay_" +
                                        std::to_string(delayMs));
-      options.captureFrames.insert(1);
-      options.maxFrame = 1;
+      options.captureFrames.insert(kFirstPresentedReplayFrame);
+      options.maxFrame = kFirstPresentedReplayFrame;
       options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
       options.pace = pace;
       options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
@@ -3088,12 +3098,14 @@ TEST(GlRnrReplayTest, DrainEachFrameContentCaptureIsDeterministicAcrossPaceAndDe
       std::string error;
       ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
-      std::optional<svg::RendererBitmap> capture = LoadCaptureBitmap(result, 1);
+      std::optional<svg::RendererBitmap> capture =
+          LoadCaptureBitmap(result, kFirstPresentedReplayFrame);
       ASSERT_TRUE(capture.has_value());
       const svg::RendererBitmap normalizedCapture = NormalizeBitmap(*capture);
       // Frame 0 observes initial async-renderer warm-up and can report a transient stale canvas on
       // slower software GL hosts. The invariant for this matrix is the explicit capture frame.
-      const std::string captureFrameDiagnostics = CanonicalReplayDiagnostics(result, 1u, 1u);
+      const std::string captureFrameDiagnostics = CanonicalReplayDiagnostics(
+          result, kFirstPresentedReplayFrame, kFirstPresentedReplayFrame);
       const std::string label = std::string("gl_replay_matrix_") + (pace ? "paced" : "unpaced") +
                                 "_delay_" + std::to_string(delayMs);
 
@@ -3115,14 +3127,14 @@ TEST(GlRnrReplayTest, DrainEachFrameContentCaptureIsDeterministicAcrossPaceAndDe
 TEST(GlRnrReplayTest, HoldFramesBehindRecordsWithheldReplayDiagnostics) {
   const std::filesystem::path outputDir = DiagnosticOutputDir() / "hold_frames_behind";
   const std::optional<std::filesystem::path> replayPath =
-      WriteStaticContentReplay(outputDir, "hold_frames_behind.rnr", 2);
+      WriteStaticContentReplay(outputDir, "hold_frames_behind.rnr", kFirstPresentedReplayFrame + 1);
   ASSERT_TRUE(replayPath.has_value());
 
   repro::GlRnrReplayOptions options;
   options.rnrPath = *replayPath;
   options.outputDir = outputDir;
-  options.captureFrames.insert(2);
-  options.maxFrame = 2;
+  options.captureFrames.insert(kFirstPresentedReplayFrame + 1);
+  options.maxFrame = kFirstPresentedReplayFrame + 1;
   options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
   options.pace = false;
   options.workerScheduling = repro::GlRnrReplayWorkerScheduling::HoldFramesBehind;
@@ -3134,7 +3146,10 @@ TEST(GlRnrReplayTest, HoldFramesBehindRecordsWithheldReplayDiagnostics) {
   std::string error;
   ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
-  const repro::GlRnrReplayFrameDiagnostics* withheld = FindFrameDiagnostics(result, 1);
+  // The first result is ready on `kFirstPresentedReplayFrame`; `holdFramesBehind = 1` withholds it
+  // for exactly that one poll and releases it on the next frame.
+  const repro::GlRnrReplayFrameDiagnostics* withheld =
+      FindFrameDiagnostics(result, kFirstPresentedReplayFrame);
   ASSERT_NE(withheld, nullptr);
   EXPECT_EQ(withheld->replayWorkerScheduling, repro::GlRnrReplayWorkerScheduling::HoldFramesBehind);
   EXPECT_EQ(withheld->replayWorkerRenderDelayMsForTesting, 1);
@@ -3142,11 +3157,12 @@ TEST(GlRnrReplayTest, HoldFramesBehindRecordsWithheldReplayDiagnostics) {
   EXPECT_EQ(withheld->replayResultHoldPollsThisFrame, 1u);
   EXPECT_TRUE(withheld->replayResultWithheld);
 
-  const repro::GlRnrReplayFrameDiagnostics* released = FindFrameDiagnostics(result, 2);
+  const repro::GlRnrReplayFrameDiagnostics* released =
+      FindFrameDiagnostics(result, kFirstPresentedReplayFrame + 1);
   ASSERT_NE(released, nullptr);
   EXPECT_EQ(released->replayResultHoldPollsThisFrame, 0u);
   EXPECT_FALSE(released->replayResultWithheld);
-  EXPECT_NE(FindCapture(result, 2), nullptr);
+  EXPECT_NE(FindCapture(result, kFirstPresentedReplayFrame + 1), nullptr);
 
   RemoveDiagnosticOutputOnSuccess(outputDir);
 }
@@ -3464,8 +3480,13 @@ TEST(GlRnrReplayTest, GeodeDragZoomRebuildsDonnerDGestureBoundsEveryPresentedFra
         << "Selection overlay was not rebuilt for presented zoom frame " << frame;
     EXPECT_TRUE(diagnostics->frameCost.overlay.selectionBoundsOnly)
         << "Active drag should use gesture-owned bounds chrome on presented zoom frame " << frame;
-    EXPECT_EQ(diagnostics->frameCost.overlay.pathCount, 0)
-        << "Active drag re-traversed selected path geometry on presented zoom frame " << frame;
+    // Gesture-owned bounds chrome keeps exactly one selection outline per selected element so the
+    // outline scales and rotates with the presented object; it drops per-element AABBs and
+    // path-point chrome. Pinned by
+    // `OverlayRendererTest.ActiveCombinedBoundsPreviewKeepsScaledSelectionPath`.
+    EXPECT_EQ(diagnostics->frameCost.overlay.pathCount, 1)
+        << "Active drag lost the gesture-scaled selection outline on presented zoom frame "
+        << frame;
     EXPECT_EQ(diagnostics->frameCost.overlay.handleCount, 4)
         << "Selection transform handles were not rebuilt for presented zoom frame " << frame;
     EXPECT_GT(diagnostics->frameCost.overlay.payloadBytes, 0u)

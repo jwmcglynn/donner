@@ -207,6 +207,17 @@ TEST(AsyncRendererPresentationPolicyTest, CpuPresentationSkipsRedundantSnapshotW
   EXPECT_FALSE(plan.captureTextureSnapshot);
 }
 
+TEST(AsyncRendererPresentationPolicyTest, CpuPresentationHonorsExplicitSnapshotRequestWithTiles) {
+  const PresentationSnapshotPlan plan = ChoosePresentationSnapshotPlan(
+      /*hasCompositedPreview=*/true, /*requiresTextureSnapshotPresentation=*/false,
+      /*captureCpuSnapshot=*/true);
+
+  EXPECT_TRUE(plan.captureCpuSnapshot)
+      << "Replay harnesses and goldens read RenderResult::bitmap directly, so the "
+         "composited-preview readback optimization must not drop an explicit CPU snapshot request";
+  EXPECT_FALSE(plan.captureTextureSnapshot);
+}
+
 TEST(AsyncRendererPresentationPolicyTest, CpuPresentationCapturesFallbackWhenTilesAreMissing) {
   const PresentationSnapshotPlan plan = ChoosePresentationSnapshotPlan(
       /*hasCompositedPreview=*/false, /*requiresTextureSnapshotPresentation=*/false,
