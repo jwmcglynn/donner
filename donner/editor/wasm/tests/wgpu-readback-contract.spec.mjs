@@ -171,10 +171,23 @@ test("direct worker surfaces cross a local event-loop task before acceptance", (
   assert.ok(taskCompletion, "expected the worker task-boundary handoff");
   assert.match(
     taskCompletion[1],
-    /emscripten_set_timeout\(&AsyncRenderer::acknowledgeDirectSurfaceTaskBoundary,/,
-    "a zero-delay worker-local timer must return through JavaScript before accepting the surface",
+    /ScheduleWorkerTaskBoundaryCallback\(\s*reinterpret_cast<void\*>\(&AsyncRenderer::acknowledgeDirectSurfaceTaskBoundary\)/,
+    "a worker-local macrotask hop must return through JavaScript before accepting the surface",
+  );
+  // The hop must be a macrotask (MessagePort message with a setTimeout
+  // fallback), never a same-turn call, a microtask, or a nested timer that
+  // compounds into the browsers' nested-timer clamp.
+  assert.match(
+    workerRendererSource,
+    /ScheduleWorkerTaskBoundaryCallback[\s\S]{0,2400}?MessageChannel/,
+    "the task boundary must ride a MessagePort macrotask",
   );
   assert.doesNotMatch(taskCompletion[1], /emscripten_set_immediate/);
+  assert.doesNotMatch(
+    taskCompletion[1],
+    /emscripten_set_timeout/,
+    "a timer hop inherits the callers' timer-nesting level and hits the 4 ms nested-timer clamp",
+  );
   assert.doesNotMatch(
     taskCompletion[1],
     /emscripten_proxy_async\([^;]*acknowledgeDirectSurfaceTaskBoundary/,
