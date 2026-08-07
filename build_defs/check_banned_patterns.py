@@ -120,6 +120,14 @@ _RULES: List[_Rule] = [
             "pixels through the editor's direct framebuffer path or into an explicit intermediate "
             "texture so document pixels and direct overlays share the same presentation space."
         ),
+        # RenderPanePresenter's draw-list tile path is the documented fallback
+        # when no directly presentable frame exists: non-WGPU builds, and Geode
+        # frames before the first direct tile. Its quads carry the affine
+        # drag-preview transform, which the axis-aligned AddImage form cannot
+        # express. Folding this fallback into the framebuffer composition path
+        # is tracked as part of the presentation-path unification; until then
+        # this is the one sanctioned AddImageQuad call site.
+        exempt_path_prefixes=("donner/editor/RenderPanePresenter.cc",),
     ),
     _Rule(
         pattern=re.compile(r"\.createRenderPipeline\b|\.createComputePipeline\b"),
