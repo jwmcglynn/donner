@@ -1667,7 +1667,7 @@ test("wasm editor drains thumbnails for expanded sublayers", async ({ page }) =>
           && stats.rowCount > initialRowCount
           && stats.deferredCount === 0
           && stats.textureSnapshotCount === stats.rowCount
-          && stats.textureCount >= stats.bitmapCount,
+          && stats.textureCount >= stats.textureSnapshotCount,
       );
     }, {
       message: "expected every expanded Sunburst sublayer to publish a bitmap and Wasm texture",

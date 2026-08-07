@@ -248,32 +248,38 @@ void CopySurfaceTextureToReadbackBuffer(const wgpu::Texture& texture, const wgpu
 }
 
 bool MapReadbackBuffer(const wgpu::Device& device, const wgpu::Buffer& buffer, uint64_t size) {
+  // AllowSpontaneous + a bounded poll-yield loop: a timed waitAny cannot
+  // complete on the browser main thread, and the poll bailout means the
+  // callback can fire after this frame returns, so the state must be
+  // heap-retained until the callback consumes it.
   struct MapState {
-    bool done = false;
-    bool ok = false;
-  } mapState;
+    std::atomic<bool> done = false;
+    std::atomic<bool> ok = false;
+  };
+  auto mapState = std::make_shared<MapState>();
 
   wgpu::BufferMapCallbackInfo mapCb{wgpu::Default};
   mapCb.callback = [](WGPUMapAsyncStatus status, WGPUStringView /*message*/, void* userdata1,
                       void* /*userdata2*/) {
-    auto* state = static_cast<MapState*>(userdata1);
-    state->ok = (status == WGPUMapAsyncStatus_Success);
-    state->done = true;
+    const std::shared_ptr<MapState> state =
+        donner::geode::takeWgpuCallbackState<MapState>(userdata1);
+    state->ok.store(status == WGPUMapAsyncStatus_Success, std::memory_order_relaxed);
+    state->done.store(true, std::memory_order_release);
   };
-  mapCb.userdata1 = &mapState;
+  mapCb.userdata1 = donner::geode::retainWgpuCallbackState(mapState);
   mapCb.userdata2 = nullptr;
   mapCb.mode = wgpu::CallbackMode::AllowSpontaneous;
   buffer.mapAsync(wgpu::MapMode::Read, 0, size, mapCb);
 
   int pollCount = 0;
-  while (!mapState.done) {
+  while (!mapState->done.load(std::memory_order_acquire)) {
     device.poll(true, nullptr);
     ++pollCount;
     if (pollCount > 2000) {
       break;
     }
   }
-  return mapState.ok;
+  return mapState->ok.load(std::memory_order_relaxed);
 }
 #endif
 
@@ -1471,8 +1477,8 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   if (targetReadback != nullptr) {
     *targetReadback = svg::RendererBitmap{};
   }
-  if (wgpuState_ == nullptr || !wgpuState_->surface || !wgpuState_->device || displayW <= 0 ||
-      displayH <= 0) {
+  if (wgpuState_ == nullptr || !wgpuState_->device || displayW <= 0 || displayH <= 0 ||
+      (!wgpuState_->surface && !wgpuState_->offscreenTexture)) {
 #if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
     // There is no persistent WGPU state in which to count retries. Complete this diagnostic
     // request as a terminal setup failure rather than rearming an impossible capture forever.
@@ -1586,6 +1592,9 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     target = acquiredSurfaceTexture.get();
   } else {
     target = wgpuState_->offscreenTexture.get();
+  }
+  if (!target) {
+    return;
   }
   SurfacePresentGuard presentGuard(wgpuState_->surface);
   const bool shouldReadback =

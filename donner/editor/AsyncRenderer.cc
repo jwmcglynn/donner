@@ -2696,6 +2696,9 @@ void AsyncRenderer::workerLoop() {
     svg::RendererBitmap bitmap;
     std::shared_ptr<const svg::RendererTextureSnapshot> fullCanvasTexture;
     PresentationSnapshotPlan snapshotPlan;
+    // Worker-surface builds present GPU-native frames and ignore
+    // request.captureCpuSnapshot; browser diagnostics read pixels through the
+    // async smoke-readback path instead.
 #ifndef DONNER_WASM_WORKER_SURFACE
     snapshotPlan = ChoosePresentationSnapshotPlan(
         compositedPreview.has_value(), requestRenderer.requiresTextureSnapshotPresentation(),

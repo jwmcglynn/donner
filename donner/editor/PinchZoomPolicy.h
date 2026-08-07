@@ -42,7 +42,7 @@ inline constexpr double kWasmWheelPixelsPerScrollUnit = 100.0;
 /// ```
 /// Requiring `zoom == scale` gives
 /// `K = kWasmWheelPixelsPerScrollUnit / ln(kWheelZoomStep) = 100 / ln(1.1)`,
-/// which is approximately 1049.1892. That is the browser analogue of the
+/// which is approximately 1049.2059. That is the browser analogue of the
 /// desktop identity
 /// `pow(kWheelZoomStep, PinchMagnificationToScrollDelta(m, kWheelZoomStep)) == 1 + m`.
 ///

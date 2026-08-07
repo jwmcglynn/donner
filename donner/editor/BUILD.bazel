@@ -139,7 +139,10 @@ donner_cc_library(
         "//donner/svg/parser",
         "//donner/svg/renderer",
         "@glfw",
-    ],
+    ] + select({
+        ":wasm_geode_enabled": [],
+        "//conditions:default": ["//donner/svg/renderer:renderer_tiny_skia"],
+    }),
 )
 
 donner_cc_library(
@@ -680,7 +683,6 @@ donner_cc_library(
         "//donner/svg/parser",
         "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_interface",
-        "//donner/svg/renderer:renderer_tiny_skia",
     ],
 )
 

@@ -25,7 +25,11 @@
 #include "donner/editor/ScaleCursorSvg.h"
 #include "donner/editor/SelectCursorSvg.h"
 #include "donner/svg/parser/SVGParser.h"
+#ifndef __EMSCRIPTEN__
+#include "donner/svg/renderer/RendererTinySkia.h"
+#else
 #include "donner/svg/renderer/Renderer.h"
+#endif
 
 namespace donner::editor {
 
@@ -415,7 +419,19 @@ std::optional<RotateCursorImage> RenderImageFromSvg(
   }
 
   svg::SVGDocument document = std::move(parseResult.result());
+#ifndef __EMSCRIPTEN__
+  // Cursor SVGs always need a CPU bitmap for GLFW. Rendering them through the
+  // selected Geode backend would submit GPU work and synchronously read it back
+  // during editor startup, before the first document frame. Keep this small,
+  // fixed-size rasterization on TinySkia even when document rendering uses
+  // Geode.
+  (void)geodeDevice;
+  svg::RendererTinySkia renderer;
+#else
+  // Unreachable in practice: the browser registers CSS cursors instead. Kept
+  // compiling against the Geode-only dependency set.
   svg::Renderer renderer(std::move(geodeDevice));
+#endif
   renderer.draw(document);
   svg::RendererBitmap bitmap = renderer.takeSnapshot();
   std::optional<std::vector<unsigned char>> rgba =

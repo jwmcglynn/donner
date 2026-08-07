@@ -716,7 +716,11 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
     }
     const float uvRight = static_cast<float>(tile.uvBottomRight.x);
     const float uvBottom = static_cast<float>(tile.uvBottomRight.y);
-    paneDrawList->AddImageQuad(
+    // Draw-list fallback for frames with no directly presentable Geode tile and
+    // for non-WGPU builds; the quads carry the affine drag-preview transform
+    // that AddImage cannot express. Retired by the presentation-path
+    // unification.
+    paneDrawList->AddImageQuad(  // NOLINT(banned_patterns: sanctioned fallback presentation)
         tile.texture, ToImVec2(tileQuad->topLeft), ToImVec2(tileQuad->topRight),
         ToImVec2(tileQuad->bottomRight), ToImVec2(tileQuad->bottomLeft), ImVec2(0.0f, 0.0f),
         ImVec2(uvRight, 0.0f), ImVec2(uvRight, uvBottom), ImVec2(0.0f, uvBottom));

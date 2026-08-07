@@ -377,6 +377,32 @@ TEST(DocumentPresenterTest, ADocumentSwapHoldsTheLastAcceptedPlacement) {
   EXPECT_TRUE(sinks.installedPlans().empty());
 }
 
+TEST(DocumentPresenterTest, TheSwapHoldExpiresWhenNoReplacementEpochArrives) {
+  RecordingSinks sinks;
+  const std::unique_ptr<DocumentPresenter> presenter = MakeDocumentPresenter(
+      DocumentPresentationTarget::WorkerSurface, sinks.planSink(), sinks.layoutSink());
+
+  std::ignore = presenter->resolveExternalSurface(TestFrame(ActiveSurface(11)));
+  std::ignore = presenter->presentUnderlay(std::nullopt);
+
+  DirectSurfacePresentationState invalidated = ActiveSurface(11);
+  invalidated.active = false;
+
+  // The hold bridges a document swap; a replacement epoch that never arrives
+  // (a parked terminal surface failure, a wedged worker) must not freeze the
+  // outgoing document on screen forever. After the frame budget the surface
+  // hides and the framebuffer underlay takes the pane again.
+  DocumentPresentationResult result;
+  for (int frame = 0; frame < 121; ++frame) {
+    result = presenter->resolveExternalSurface(TestFrame(invalidated));
+    std::ignore = presenter->presentUnderlay(TestPlan());
+  }
+
+  EXPECT_FALSE(result.externalSurfacePresented);
+  EXPECT_FALSE(sinks.layouts.back().visible);
+  EXPECT_FALSE(sinks.installedPlans().empty());
+}
+
 TEST(DocumentPresenterTest, TheNewDocumentsFirstEpochReplacesTheHeldPlacement) {
   RecordingSinks sinks;
   const std::unique_ptr<DocumentPresenter> presenter = MakeDocumentPresenter(

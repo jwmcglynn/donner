@@ -177,8 +177,9 @@ DocumentPresentationResult WorkerSurfacePresenter::resolveExternalSurface(
   frameOpen_ = true;
 
   std::optional<WorkerSurfaceLayout> layout = ComputeWorkerSurfaceLayout(frame);
+  constexpr int kMaxHeldFrames = 120;
   if (!layout.has_value() && !frame.presentationSuppressed && !frame.workerSurface.active &&
-      heldLayout_.has_value()) {
+      heldLayout_.has_value() && heldFrameCount_ < kMaxHeldFrames) {
     // A full document replacement invalidates the accepted epoch the instant the
     // new document loads, before any replacement epoch exists. Hiding the
     // surface there drops the render pane to the bare editor background for
@@ -188,6 +189,7 @@ DocumentPresentationResult WorkerSurfacePresenter::resolveExternalSurface(
     // hold the last accepted placement instead. The loading affordance and the
     // new document's first epoch both land on top of it.
     layout = *heldLayout_;
+    ++heldFrameCount_;
   }
   // The hidden update carries the same frame token as a visible one so the
   // surface's accepted epoch stays observable across frames it does not own.
@@ -197,6 +199,7 @@ DocumentPresentationResult WorkerSurfacePresenter::resolveExternalSurface(
                                           .frameToken = frame.workerSurface.frameCount});
   if (frame.workerSurface.active && layout.has_value()) {
     heldLayout_ = applied;
+    heldFrameCount_ = 0;
   } else if (frame.presentationSuppressed) {
     // The sample picker and content-only captures own the pane outright; nothing
     // accepted survives them.

@@ -274,6 +274,12 @@ private:
   /// Last placement an accepted epoch produced, replayed while a document swap
   /// leaves the worker with no accepted epoch at all.
   std::optional<WorkerSurfaceLayout> heldLayout_;
+  /// Frames the hold has covered since the accepted epoch went inactive. The
+  /// hold is a bridge across a document swap, not a steady state: if no
+  /// replacement epoch arrives within the budget (a parked terminal surface
+  /// failure, a wedged worker), drop it so the framebuffer underlay's
+  /// checkerboard fallback takes the pane, matching desktop behavior.
+  int heldFrameCount_ = 0;
   bool frameOpen_ = false;
   bool surfaceOwnsFrame_ = false;
   std::uint64_t refusedUnderlayPresents_ = 0;

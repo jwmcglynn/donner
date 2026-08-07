@@ -62,3 +62,7 @@ examples/svg_viewer_screenshot.png
 
 # BuildBuddy remote-cache fragment, written by CI only; never committed.
 .buildbuddy.bazelrc
+
+# Playwright run artifacts (browser test harness output).
+donner/editor/wasm/tests/playwright-report/
+donner/editor/wasm/tests/test-results/
