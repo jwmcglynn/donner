@@ -766,6 +766,11 @@ bool DirectSurfacePresentationGenerationIsCurrent(std::uint64_t requestDocumentG
   return requestDocumentGeneration >= minimumDocumentGeneration;
 }
 
+bool DirectSurfacePlacementViewportIsUsable(const ViewportState& viewport) {
+  return viewport.pixelsPerDocUnit() > 0.0 && viewport.paneSize.x > 0.0 &&
+         viewport.paneSize.y > 0.0;
+}
+
 WorkerTaskFollowUp ChooseWorkerTaskFollowUp(bool hasPendingRequest,
                                             bool cancellationPending) noexcept {
   return hasPendingRequest || cancellationPending ? WorkerTaskFollowUp::SchedulePendingRequest
@@ -1388,6 +1393,7 @@ void AsyncRenderer::commitDirectSurfacePresentation(RenderResult& result) {
   lastDirectSurfacePresentation_ = DirectSurfacePresentationState{
       .active = true,
       .rasterViewport = result.rasterViewport,
+      .viewport = result.viewport,
       .frameCount = result.directSurfaceFrames,
       .surfaceSlot = result.directSurfaceSlot,
       .selectionChromeBaked = result.directSurfaceSelectionChromeBaked,
@@ -2708,6 +2714,7 @@ void AsyncRenderer::workerLoop() {
           done.result.bitmap = std::move(bitmap);
           done.result.compositedPreview = std::move(compositedPreview);
           done.result.rasterViewport = rasterViewport;
+          done.result.viewport = request.viewport;
           done.result.overviewInfillOnly = request.overviewInfillOnly;
           done.result.version = request.version;
           done.result.documentGeneration = request.documentGeneration;

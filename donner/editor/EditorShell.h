@@ -616,6 +616,10 @@ private:
   /// when the docked central node has settled before latching the initial
   /// fit-to-actual-size.
   Vector2d lastRenderPaneContentSize_ = Vector2d(-1.0, -1.0);
+  /// Size of the DockSpace central node as of this frame's dock-host pass, or
+  /// zero before the DockSpace has built one. Lets the fit-to-actual-size latch
+  /// accept an already-settled render pane on its first frame.
+  Vector2d dockCentralNodeSize_ = Vector2d::Zero();
   /// Requested width (in pixels) of the right-side panel column. Seeds the
   /// initial DockSpace right-column split; after the layout is built the
   /// DockSpace owns panel sizing.

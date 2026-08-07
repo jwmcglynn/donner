@@ -1,7 +1,9 @@
 import { expect, type Page, test } from "@playwright/test";
 import {
   captureSplashCompositeFrame,
+  type CssRegion,
   type PixelBounds,
+  readEditorBackgroundCoverage,
   readCssPngPixelDifferenceStats,
   readEditorPixelBoundsFromPng,
   readEditorResizePixelBounds,
@@ -931,5 +933,291 @@ test("WebKit Geode survives a burst of drag wakeups without fatal errors", async
       intervals: [16, 25, 50, 100],
     })
     .toBeGreaterThan(beforeDrag);
+  expect(failures).toEqual([]);
+});
+
+interface SurfaceLayoutSample {
+  frame: number;
+  height: number;
+  left: number;
+  top: number;
+  visible: boolean;
+  width: number;
+}
+
+declare global {
+  interface Window {
+    __donnerSurfaceLayoutSamples?: SurfaceLayoutSample[];
+    __donnerSurfaceLayoutObserver?: MutationObserver;
+    __donnerStopSurfaceLayoutSampling?: () => void;
+  }
+}
+
+/**
+ * Record every worker-surface layout write the editor performs.
+ *
+ * The presenter rewrites the surface's CSS geometry once per UI frame, so a
+ * mutation observer sees every intermediate placement. Screenshot sampling
+ * cannot: a single capture costs several frames, which is long enough for the
+ * worker to land the epoch that hides the defect.
+ */
+async function recordSurfaceLayouts(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const surfaces = ["donner-document-canvas", "donner-document-canvas-back"];
+    const samples: SurfaceLayoutSample[] = [];
+    // One sample per capture describing what the pane actually shows: the editor
+    // keeps a front/back surface pair and only ever marks one of them visible,
+    // so the inactive slot's permanent `visible=false` is not a blank frame.
+    const capture = () => {
+      const shown = surfaces
+        .map((id) => document.getElementById(id) as HTMLCanvasElement | null)
+        .find((surface) => surface?.dataset.directSurfaceVisible === "true") || null;
+      const rect = shown?.getBoundingClientRect();
+      const sample: SurfaceLayoutSample = {
+        frame: Number(shown?.dataset.directSurfaceFrame || 0),
+        height: rect?.height || 0,
+        left: rect?.x || 0,
+        top: rect?.y || 0,
+        visible: shown !== null,
+        width: rect?.width || 0,
+      };
+      const previous = samples.at(-1);
+      if (previous === undefined || JSON.stringify(previous) !== JSON.stringify(sample)) {
+        samples.push(sample);
+      }
+      window.__donnerSurfaceLayoutSamples = samples;
+    };
+    const observer = new MutationObserver(capture);
+    for (const id of surfaces) {
+      const surface = document.getElementById(id);
+      if (surface !== null) {
+        observer.observe(surface, { attributes: true });
+      }
+    }
+    // Also sample once per animation frame. Several editor frames can land
+    // inside one microtask checkpoint, and a mutation callback only ever sees
+    // the DOM's final state for that checkpoint; the per-frame sampler is what
+    // makes a one-frame placement defect observable.
+    let sampling = true;
+    const sampleFrame = () => {
+      if (!sampling) {
+        return;
+      }
+      capture();
+      requestAnimationFrame(sampleFrame);
+    };
+    requestAnimationFrame(sampleFrame);
+    window.__donnerStopSurfaceLayoutSampling = () => {
+      sampling = false;
+    };
+    window.__donnerSurfaceLayoutObserver = observer;
+    window.__donnerSurfaceLayoutSamples = samples;
+    capture();
+  });
+}
+
+async function readSurfaceLayouts(page: Page): Promise<SurfaceLayoutSample[]> {
+  return page.evaluate(() => {
+    window.__donnerStopSurfaceLayoutSampling?.();
+    window.__donnerSurfaceLayoutObserver?.disconnect();
+    return window.__donnerSurfaceLayoutSamples || [];
+  });
+}
+
+/**
+ * Dispatch `count` ctrl+wheel pinch-zoom notches, as Chromium delivers trackpad
+ * pinch. All notches go out in one task so the editor sees the whole zoom delta
+ * before it can render, which is exactly the trackpad case: the viewport runs
+ * ahead of the worker's accepted epoch.
+ */
+async function pinchZoom(
+  page: Page,
+  at: { x: number; y: number },
+  deltaY: number,
+  count = 1,
+): Promise<void> {
+  await page.evaluate(({ x, y, deltaY, count }) => {
+    const target = document.getElementById("canvas");
+    if (target === null) {
+      throw new Error("canvas not found");
+    }
+    for (let notch = 0; notch < count; ++notch) {
+      target.dispatchEvent(
+        new WheelEvent("wheel", {
+          bubbles: true,
+          cancelable: true,
+          clientX: x,
+          clientY: y,
+          ctrlKey: true,
+          deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+          deltaY,
+        }),
+      );
+    }
+  }, { ...at, deltaY, count });
+}
+
+function coversRegion(sample: SurfaceLayoutSample, region: CssRegion): boolean {
+  return sample.visible
+    && sample.left <= region.x + 0.5
+    && sample.top <= region.y + 0.5
+    && sample.left + sample.width >= region.x + region.width - 0.5
+    && sample.top + sample.height >= region.y + region.height - 0.5;
+}
+
+async function openDonnerSplash(page: Page): Promise<{
+  editorBounds: { x: number; y: number; width: number; height: number };
+}> {
+  const editorCanvas = page.locator("canvas#canvas");
+  const editorBounds = await editorCanvas.boundingBox();
+  expect(editorBounds).not.toBeNull();
+  if (editorBounds === null) {
+    throw new Error("editor canvas is missing");
+  }
+  await page.mouse.click(editorBounds.x + editorBounds.width * 0.24, editorBounds.y + 282);
+  await expect(editorCanvas).toHaveAttribute("data-active-sample-id", "donner-splash");
+  await expect(page.locator("canvas[data-direct-surface-visible=\"true\"]")).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => window.__donnerAcceptedPresentation?.token || 0), {
+      message: "Donner Splash must publish an accepted worker presentation epoch",
+      timeout: 5_000,
+      intervals: [16, 25, 50, 100],
+    })
+    .toBeGreaterThan(0);
+  return { editorBounds };
+}
+
+test("a zoom storm never uncovers the editor background under the Donner Splash", async ({ page }) => {
+  const failures = await openEditor(page);
+  const { editorBounds } = await openDonnerSplash(page);
+
+  // A rectangle strictly inside the render pane. Once the document is zoomed in
+  // far enough to cover it, every frame that fails to cover it is showing the
+  // editor background where document pixels belong.
+  const probeRegion = {
+    x: editorBounds.x + 320,
+    y: editorBounds.y + 200,
+    width: 480,
+    height: 420,
+  };
+  const probeCenter = {
+    x: probeRegion.x + probeRegion.width * 0.5,
+    y: probeRegion.y + probeRegion.height * 0.5,
+  };
+
+  // Zoom in one settled notch at a time until the surface covers the probe.
+  const surfaceCoversProbe = async () => {
+    const box = await page.locator("canvas[data-direct-surface-visible=\"true\"]").boundingBox();
+    return box !== null
+      && coversRegion(
+        { frame: 0, height: box.height, left: box.x, top: box.y, visible: true, width: box.width },
+        probeRegion,
+      );
+  };
+  // The render pane classifies wheel input only while it is the hovered window.
+  await page.mouse.move(probeCenter.x, probeCenter.y);
+  const zoomInBoxes: Array<{ height: number; width: number } | null> = [];
+  for (let notch = 0; notch < 10 && !(await surfaceCoversProbe()); ++notch) {
+    await pinchZoom(page, probeCenter, -250);
+    await page.waitForTimeout(200);
+    const box = await page.locator("canvas[data-direct-surface-visible=\"true\"]").boundingBox();
+    zoomInBoxes.push(box === null ? null : { height: box.height, width: box.width });
+  }
+  expect(
+    await surfaceCoversProbe(),
+    `zooming in never produced a document surface covering the probe region;`
+      + ` boxes=${JSON.stringify(zoomInBoxes)}`,
+  ).toBe(true);
+  expect(
+    zoomInBoxes.length,
+    `the document already covered the probe region without zooming: ${JSON.stringify(zoomInBoxes)}`,
+  ).toBeGreaterThan(0);
+
+  await recordSurfaceLayouts(page);
+
+  // Zoom out and back in. Each notch changes the live viewport by ~27% while the
+  // worker's accepted epoch is still the previous raster, so placing that epoch
+  // through the live viewport shrinks the surface inside the pane and uncovers
+  // the editor background until the worker catches up.
+  //
+  // The assertion is on the surface's CSS geometry rather than on screenshots:
+  // headless Chromium does not capture the worker-owned WebGPU canvas in
+  // `page.screenshot()` (every pixel of it reads back as the page background),
+  // so a pixel probe cannot tell "document missing" from "document present"
+  // here. Geometry is the same defect one step earlier, and the per-frame
+  // sampler sees every intermediate placement.
+  for (let burst = 0; burst < 3; ++burst) {
+    await pinchZoom(page, probeCenter, 250);
+    await page.waitForTimeout(200);
+    await pinchZoom(page, probeCenter, -250);
+    await page.waitForTimeout(200);
+  }
+
+  const samples = await readSurfaceLayouts(page);
+  expect(samples.length, "no worker surface layout writes were observed").toBeGreaterThan(0);
+  // Guard against an inconclusive run: synthesized wheel notches are not always
+  // accepted, and a storm the editor ignored proves nothing.
+  const presentedWidths = new Set(
+    samples.filter((sample) => sample.visible).map((sample) => Math.round(sample.width)),
+  );
+  expect(
+    presentedWidths.size,
+    `the zoom storm never changed the presented document scale: ${JSON.stringify(samples)}`,
+  ).toBeGreaterThan(1);
+  const uncovered = samples.filter((sample) => !coversRegion(sample, probeRegion));
+  expect(
+    uncovered,
+    `zoom storm exposed the editor background on ${uncovered.length}/${samples.length} surface`
+      + ` layouts; probe=${JSON.stringify(probeRegion)} first=${JSON.stringify(uncovered.slice(0, 6))}`,
+  ).toEqual([]);
+  console.log(`zoom-storm zoomIn=${JSON.stringify(zoomInBoxes)} layouts=${samples.length}`);
+  expect(failures).toEqual([]);
+});
+
+test("loading a document never leaves the render pane without a presenter", async ({ page }) => {
+  const failures = await openEditor(page);
+  const editorCanvas = page.locator("canvas#canvas");
+  const editorBounds = await editorCanvas.boundingBox();
+  expect(editorBounds).not.toBeNull();
+  if (editorBounds === null) {
+    return;
+  }
+
+  const acceptedFrame = () =>
+    page.evaluate(() =>
+      Math.max(
+        ...["donner-document-canvas", "donner-document-canvas-back"].map((id) =>
+          Number(document.getElementById(id)?.getAttribute("data-direct-surface-frame") || 0)
+        ),
+      )
+    );
+  const beforeFrame = await acceptedFrame();
+  await recordSurfaceLayouts(page);
+
+  await page.mouse.click(editorBounds.x + editorBounds.width * 0.24, editorBounds.y + 282);
+  await expect(editorCanvas).toHaveAttribute("data-active-sample-id", "donner-splash");
+  await expect
+    .poll(acceptedFrame, {
+      message: "expected Donner Splash to present an accepted document surface",
+      timeout: 5_000,
+      intervals: [8, 16, 25, 50],
+    })
+    .toBeGreaterThan(beforeFrame);
+  // Let the picker close and steady state settle, so any post-load blank frame
+  // is inside the sampled window.
+  await page.waitForTimeout(500);
+
+  const samples = await readSurfaceLayouts(page);
+  // Everything up to and including the first visible placement is the sample
+  // picker owning the pane, which suppresses document presentation by design.
+  // From there on the pane belongs to the document and a hidden surface is a
+  // blank frame.
+  const firstVisible = samples.findIndex((sample) => sample.visible);
+  expect(firstVisible, "the document surface never became visible").toBeGreaterThanOrEqual(0);
+  const blank = samples.slice(firstVisible).filter((sample) => !sample.visible);
+  expect(
+    blank,
+    `the document surface went blank after presenting: ${JSON.stringify(samples)}`,
+  ).toEqual([]);
   expect(failures).toEqual([]);
 });

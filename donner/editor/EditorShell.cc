@@ -3100,9 +3100,22 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   // transient size (it would center the document for the wrong pane and clip it
   // once the pane settles), so we keep re-fitting until the pane size is stable
   // across two consecutive frames, then latch.
+  //
+  // The DockSpace itself already knows the settled size: `renderDockSpaceHost`
+  // ran earlier this frame and recorded the central node's rect. A content
+  // region that already fits inside that node is post-split by construction, so
+  // it is accepted immediately rather than costing the document a frame of
+  // placeholder presentation. The transient full-host-width report is strictly
+  // wider than the central node, so it still fails this test and falls back to
+  // the two-frame rule.
+  const bool renderPaneFitsDockCentralNode =
+      dockCentralNodeSize_.x > 0.0 && dockCentralNodeSize_.y > 0.0 &&
+      static_cast<double>(contentRegion.x) <= dockCentralNodeSize_.x + 1.0 &&
+      static_cast<double>(contentRegion.y) <= dockCentralNodeSize_.y + 1.0;
   const bool renderPaneSizeStable =
-      std::abs(contentRegion.x - lastRenderPaneContentSize_.x) < 1.0f &&
-      std::abs(contentRegion.y - lastRenderPaneContentSize_.y) < 1.0f;
+      renderPaneFitsDockCentralNode ||
+      (std::abs(contentRegion.x - lastRenderPaneContentSize_.x) < 1.0f &&
+       std::abs(contentRegion.y - lastRenderPaneContentSize_.y) < 1.0f);
   lastRenderPaneContentSize_ = Vector2d(contentRegion.x, contentRegion.y);
   if (!viewportInitialized_ && interactionController_.viewport().paneSize.x > 0.0 &&
       interactionController_.viewport().paneSize.y > 0.0 && app_.hasDocument()) {
@@ -4861,6 +4874,15 @@ void EditorShell::renderDockSpaceHost(float hostX, float hostY, float hostWidth,
   dockSidebarsIncludedInLayout_ = sidebarsIncluded;
 
   ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f), EditorDockSpaceFlags(dockLayoutLocked_));
+  // The central node's size is authoritative for the render pane before the pane
+  // window itself has reported a settled content region, so the first-frame
+  // fit-to-actual-size latch can accept a correct pane size immediately instead
+  // of spending a frame proving it stable.
+  if (const ImGuiDockNode* centralNode = ImGui::DockBuilderGetCentralNode(dockspaceId)) {
+    dockCentralNodeSize_ = Vector2d(centralNode->Size.x, centralNode->Size.y);
+  } else {
+    dockCentralNodeSize_ = Vector2d::Zero();
+  }
   ImGui::End();
 }
 

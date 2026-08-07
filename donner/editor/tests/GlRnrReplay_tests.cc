@@ -251,13 +251,14 @@ constexpr std::string_view kBlankPenCanvasSvg =
 
 // First replay frame whose framebuffer can contain document pixels.
 //
-// `EditorShell` only latches `viewportInitialized_` once the render pane reports the same content
-// size on two consecutive frames, and it will not request a document render before that latch (the
+// `EditorShell` will not request a document render before it latches `viewportInitialized_` (the
 // placeholder-viewport guard: a render posted against a not-yet-settled pane would present at the
-// wrong fit and then jump). So frame 0 fits the viewport, frame 1 latches it and posts the first
-// render, and frame 2 is the first frame that can poll and present a result. Captures and
-// presentation diagnostics for a freshly loaded document therefore start here.
-constexpr std::uint64_t kFirstPresentedReplayFrame = 2;
+// wrong fit and then jump). The latch accepts a render pane that already fits the DockSpace's
+// central node, which the replay window satisfies on its first frame, so frame 0 fits the viewport,
+// latches it, and posts the first render, and frame 1 is the first frame that can poll and present
+// a result. Captures and presentation diagnostics for a freshly loaded document therefore start
+// here.
+constexpr std::uint64_t kFirstPresentedReplayFrame = 1;
 
 std::optional<std::filesystem::path> WriteStaticContentReplay(
     const std::filesystem::path& outputDir, std::string_view name, std::uint64_t lastFrame) {

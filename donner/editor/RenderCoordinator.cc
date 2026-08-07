@@ -1046,6 +1046,9 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   req.version = currentVersion;
   req.documentGeneration = app.document().documentGeneration();
   req.rasterViewport = requestRasterViewport;
+  // The presenter places the accepted surface with this transform, so it must be
+  // the exact viewport `requestRasterViewport` was derived from.
+  req.viewport = viewport;
   req.overviewInfillOnly = requestOverviewInfill;
   // Drain any pending structural remap from a recent `setDocumentMaybe
   // Structural` call. Non-empty remap lets the worker preserve the

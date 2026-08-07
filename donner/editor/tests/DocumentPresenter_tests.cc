@@ -34,10 +34,37 @@ DirectSurfacePresentationState ActiveSurface(std::uint64_t frameCount, int surfa
   DirectSurfacePresentationState surface;
   surface.active = true;
   surface.rasterViewport.documentRect = Box2d::FromXYWH(0.0, 0.0, 40.0, 30.0);
+  // Epochs published by the worker carry the viewport they were rasterized
+  // against; the default epoch matches the live test viewport exactly.
+  surface.viewport = TestViewport();
   surface.frameCount = frameCount;
   surface.surfaceSlot = surfaceSlot;
   surface.selectionChromeBaked = selectionChromeBaked;
   return surface;
+}
+
+/// A viewport-bounded high-zoom epoch: the raster covers the 200x100 pane plus a
+/// 32-screen-pixel margin on each side, at 4 screen pixels per document unit.
+DirectSurfacePresentationState BoundedActiveSurface(std::uint64_t frameCount = 3) {
+  ViewportState epoch = TestViewport();
+  epoch.zoom = 4.0;
+  epoch.panDocPoint = Vector2d(0.0, 0.0);
+  epoch.panScreenPoint = Vector2d(0.0, 0.0);
+
+  DirectSurfacePresentationState surface;
+  surface.active = true;
+  surface.viewport = epoch;
+  surface.rasterViewport.viewportBounded = true;
+  surface.rasterViewport.documentRect =
+      epoch.screenToDocument(Box2d(Vector2d(-32.0, -32.0), Vector2d(232.0, 132.0)));
+  surface.rasterViewport.outputSizePx = Vector2i(264, 164);
+  surface.frameCount = frameCount;
+  return surface;
+}
+
+/// Screen rect the layout's pixels are actually placed over.
+Box2d LayoutRect(const WorkerSurfaceLayout& layout) {
+  return Box2d::FromXYWH(layout.left, layout.top, layout.width, layout.height);
 }
 
 DocumentPresentationFrame TestFrame(DirectSurfacePresentationState surface,
@@ -149,8 +176,11 @@ TEST(DocumentPresenterTest, WorkerSurfaceLayoutMapsTheDocumentRectThroughTheView
 }
 
 TEST(DocumentPresenterTest, WorkerSurfaceLayoutCarriesPaneClipInsets) {
-  DocumentPresentationFrame frame = TestFrame(ActiveSurface(3));
+  DirectSurfacePresentationState surface = ActiveSurface(3);
   // Slide the document up and left so it overhangs the pane's top-left corner.
+  // The epoch was rasterized there, so its own viewport carries the pan.
+  surface.viewport.panScreenPoint = Vector2d(-8.0, -6.0);
+  DocumentPresentationFrame frame = TestFrame(surface);
   frame.viewport.panScreenPoint = Vector2d(-8.0, -6.0);
 
   const std::optional<WorkerSurfaceLayout> layout = ComputeWorkerSurfaceLayout(frame);
@@ -165,7 +195,9 @@ TEST(DocumentPresenterTest, WorkerSurfaceLayoutCarriesPaneClipInsets) {
 }
 
 TEST(DocumentPresenterTest, WorkerSurfaceHiddenWhenScrolledOutOfThePane) {
-  DocumentPresentationFrame frame = TestFrame(ActiveSurface(3));
+  DirectSurfacePresentationState surface = ActiveSurface(3);
+  surface.viewport.panScreenPoint = Vector2d(500.0, 500.0);
+  DocumentPresentationFrame frame = TestFrame(surface);
   frame.viewport.panScreenPoint = Vector2d(500.0, 500.0);
 
   EXPECT_FALSE(ComputeWorkerSurfaceLayout(frame).has_value());
@@ -182,6 +214,237 @@ TEST(DocumentPresenterTest, WorkerSurfaceHiddenWhilePresentationIsSuppressed) {
   EXPECT_FALSE(
       ComputeWorkerSurfaceLayout(TestFrame(ActiveSurface(3), /*presentationSuppressed=*/true))
           .has_value());
+}
+
+// ---------------------------------------------------------------------------
+// Epoch-consistent placement
+// ---------------------------------------------------------------------------
+
+TEST(DocumentPresenterTest, EpochViewportMatchingTheLiveViewportPlacesTheSurfaceUnchanged) {
+  // Same-epoch: the live viewport and the epoch's viewport agree, so epoch
+  // placement is a no-op against the historical live-viewport placement.
+  const std::optional<WorkerSurfaceLayout> layout =
+      ComputeWorkerSurfaceLayout(TestFrame(ActiveSurface(3)));
+
+  ASSERT_TRUE(layout.has_value());
+  EXPECT_DOUBLE_EQ(layout->left, 10.0);
+  EXPECT_DOUBLE_EQ(layout->top, 20.0);
+  EXPECT_DOUBLE_EQ(layout->width, 40.0);
+  EXPECT_DOUBLE_EQ(layout->height, 30.0);
+}
+
+TEST(DocumentPresenterTest, LiveZoomAheadOfTheEpochKeepsTheEpochPlacement) {
+  DocumentPresentationFrame frame = TestFrame(ActiveSurface(3));
+  // The user has zoomed to 300% since the accepted epoch was rasterized. The
+  // epoch's 40x30 document rect still only holds 40x30 screen pixels' worth of
+  // content, so stretching it to 120x90 would magnify pixels past their
+  // coverage instead of showing the region they cover.
+  frame.viewport.zoom = 3.0;
+
+  const std::optional<WorkerSurfaceLayout> layout = ComputeWorkerSurfaceLayout(frame);
+
+  ASSERT_TRUE(layout.has_value());
+  EXPECT_DOUBLE_EQ(layout->left, 10.0);
+  EXPECT_DOUBLE_EQ(layout->top, 20.0);
+  EXPECT_DOUBLE_EQ(layout->width, 40.0);
+  EXPECT_DOUBLE_EQ(layout->height, 30.0);
+}
+
+TEST(DocumentPresenterTest, LivePanAheadOfTheEpochKeepsTheEpochPlacement) {
+  DocumentPresentationFrame frame = TestFrame(ActiveSurface(3));
+  frame.viewport.panScreenPoint = Vector2d(60.0, 45.0);
+
+  const std::optional<WorkerSurfaceLayout> layout = ComputeWorkerSurfaceLayout(frame);
+
+  ASSERT_TRUE(layout.has_value());
+  EXPECT_DOUBLE_EQ(layout->left, 10.0);
+  EXPECT_DOUBLE_EQ(layout->top, 20.0);
+  EXPECT_DOUBLE_EQ(layout->width, 40.0);
+  EXPECT_DOUBLE_EQ(layout->height, 30.0);
+}
+
+TEST(DocumentPresenterTest, EpochNewerThanTheLiveViewportStillPlacesByItsOwnTransform) {
+  // A race the other way: the worker rasterized against a viewport the UI thread
+  // has not observed yet (its own snapshot is a frame behind). The pixels still
+  // belong where the epoch says, not where the older live viewport says.
+  DirectSurfacePresentationState surface = ActiveSurface(3);
+  surface.viewport.zoom = 2.0;
+  surface.viewport.panScreenPoint = Vector2d(4.0, 6.0);
+
+  const std::optional<WorkerSurfaceLayout> layout = ComputeWorkerSurfaceLayout(TestFrame(surface));
+
+  ASSERT_TRUE(layout.has_value());
+  EXPECT_DOUBLE_EQ(layout->left, 4.0);
+  EXPECT_DOUBLE_EQ(layout->top, 6.0);
+  EXPECT_DOUBLE_EQ(layout->width, 80.0);
+  EXPECT_DOUBLE_EQ(layout->height, 60.0);
+}
+
+TEST(DocumentPresenterTest, EpochPlacementNeverStretchesPastTheRasterItCovers) {
+  const DirectSurfacePresentationState surface = BoundedActiveSurface();
+  DocumentPresentationFrame frame = TestFrame(surface);
+  frame.viewport.zoom = 1.0;  // Zoomed far out since the epoch was rasterized.
+
+  const std::optional<WorkerSurfaceLayout> layout = ComputeWorkerSurfaceLayout(frame);
+
+  ASSERT_TRUE(layout.has_value());
+  // One raster device pixel per screen pixel at the epoch's device pixel ratio:
+  // the surface is placed at exactly the size its pixels cover.
+  EXPECT_DOUBLE_EQ(layout->width * surface.viewport.devicePixelRatio,
+                   static_cast<double>(surface.rasterViewport.outputSizePx.x));
+  EXPECT_DOUBLE_EQ(layout->height * surface.viewport.devicePixelRatio,
+                   static_cast<double>(surface.rasterViewport.outputSizePx.y));
+}
+
+TEST(DocumentPresenterTest, ZoomingOutAheadOfABoundedEpochStillCoversThePane) {
+  // The B2 regression: a viewport-bounded epoch covers the pane plus margin at
+  // its own zoom. Mapping its document rect through a zoomed-out live viewport
+  // shrinks the surface inside the pane and uncovers the editor background.
+  const DirectSurfacePresentationState surface = BoundedActiveSurface();
+  DocumentPresentationFrame frame = TestFrame(surface);
+  frame.viewport.zoom = 1.0;
+
+  const std::optional<WorkerSurfaceLayout> layout = ComputeWorkerSurfaceLayout(frame);
+
+  ASSERT_TRUE(layout.has_value());
+  const Box2d placed = LayoutRect(*layout);
+  EXPECT_LE(placed.topLeft.x, frame.paneRect.topLeft.x);
+  EXPECT_LE(placed.topLeft.y, frame.paneRect.topLeft.y);
+  EXPECT_GE(placed.bottomRight.x, frame.paneRect.bottomRight.x);
+  EXPECT_GE(placed.bottomRight.y, frame.paneRect.bottomRight.y);
+  // The pane clip trims the margin the epoch rasterized outside the pane.
+  EXPECT_DOUBLE_EQ(layout->clipLeft, 32.0);
+  EXPECT_DOUBLE_EQ(layout->clipTop, 32.0);
+  EXPECT_DOUBLE_EQ(layout->clipRight, 32.0);
+  EXPECT_DOUBLE_EQ(layout->clipBottom, 32.0);
+}
+
+TEST(DocumentPresenterTest, ADegenerateEpochViewportFallsBackToTheLiveViewport) {
+  DirectSurfacePresentationState surface = ActiveSurface(3);
+  surface.viewport = ViewportState{};  // No pane, as published before this field existed.
+  DocumentPresentationFrame frame = TestFrame(surface);
+  frame.viewport.zoom = 2.0;
+
+  const std::optional<WorkerSurfaceLayout> layout = ComputeWorkerSurfaceLayout(frame);
+
+  ASSERT_TRUE(layout.has_value());
+  EXPECT_DOUBLE_EQ(layout->left, 10.0);
+  EXPECT_DOUBLE_EQ(layout->top, 20.0);
+  EXPECT_DOUBLE_EQ(layout->width, 80.0);
+  EXPECT_DOUBLE_EQ(layout->height, 60.0);
+}
+
+TEST(DocumentPresenterTest, TheLivePaneStillOwnsTheClip) {
+  DirectSurfacePresentationState surface = ActiveSurface(3);
+  surface.viewport.panScreenPoint = Vector2d(-8.0, -6.0);
+
+  DocumentPresentationFrame frame = TestFrame(surface);
+  const std::optional<WorkerSurfaceLayout> layout = ComputeWorkerSurfaceLayout(frame);
+
+  ASSERT_TRUE(layout.has_value());
+  EXPECT_DOUBLE_EQ(layout->left, -8.0);
+  EXPECT_DOUBLE_EQ(layout->top, -6.0);
+  EXPECT_DOUBLE_EQ(layout->clipLeft, 8.0);
+  EXPECT_DOUBLE_EQ(layout->clipTop, 6.0);
+}
+
+// ---------------------------------------------------------------------------
+// Document replacement
+// ---------------------------------------------------------------------------
+
+TEST(DocumentPresenterTest, ADocumentSwapHoldsTheLastAcceptedPlacement) {
+  RecordingSinks sinks;
+  const std::unique_ptr<DocumentPresenter> presenter = MakeDocumentPresenter(
+      DocumentPresentationTarget::WorkerSurface, sinks.planSink(), sinks.layoutSink());
+
+  std::ignore = presenter->resolveExternalSurface(TestFrame(ActiveSurface(11)));
+  std::ignore = presenter->presentUnderlay(std::nullopt);
+
+  // Loading a new document invalidates the accepted epoch before any
+  // replacement epoch exists.
+  DirectSurfacePresentationState invalidated = ActiveSurface(11);
+  invalidated.active = false;
+  const DocumentPresentationResult result =
+      presenter->resolveExternalSurface(TestFrame(invalidated));
+
+  EXPECT_TRUE(result.externalSurfacePresented);
+  ASSERT_EQ(sinks.layouts.size(), 2u);
+  EXPECT_TRUE(sinks.layouts.back().visible);
+  EXPECT_EQ(sinks.layouts.back().frameToken, 11u);
+  EXPECT_DOUBLE_EQ(sinks.layouts.back().width, sinks.layouts.front().width);
+  // The held frame must not present the framebuffer underlay underneath it.
+  EXPECT_FALSE(presenter->presentUnderlay(TestPlan()));
+  EXPECT_TRUE(sinks.installedPlans().empty());
+}
+
+TEST(DocumentPresenterTest, TheNewDocumentsFirstEpochReplacesTheHeldPlacement) {
+  RecordingSinks sinks;
+  const std::unique_ptr<DocumentPresenter> presenter = MakeDocumentPresenter(
+      DocumentPresentationTarget::WorkerSurface, sinks.planSink(), sinks.layoutSink());
+
+  std::ignore = presenter->resolveExternalSurface(TestFrame(ActiveSurface(11)));
+  DirectSurfacePresentationState invalidated = ActiveSurface(11);
+  invalidated.active = false;
+  std::ignore = presenter->resolveExternalSurface(TestFrame(invalidated));
+
+  DirectSurfacePresentationState replacement = ActiveSurface(12);
+  replacement.rasterViewport.documentRect = Box2d::FromXYWH(0.0, 0.0, 80.0, 20.0);
+  std::ignore = presenter->resolveExternalSurface(TestFrame(replacement));
+
+  ASSERT_EQ(sinks.layouts.size(), 3u);
+  EXPECT_EQ(sinks.layouts.back().frameToken, 12u);
+  EXPECT_DOUBLE_EQ(sinks.layouts.back().width, 80.0);
+  EXPECT_DOUBLE_EQ(sinks.layouts.back().height, 20.0);
+}
+
+TEST(DocumentPresenterTest, NothingIsHeldBeforeTheFirstAcceptedEpoch) {
+  RecordingSinks sinks;
+  const std::unique_ptr<DocumentPresenter> presenter = MakeDocumentPresenter(
+      DocumentPresentationTarget::WorkerSurface, sinks.planSink(), sinks.layoutSink());
+
+  DirectSurfacePresentationState inactive;
+  const DocumentPresentationResult result = presenter->resolveExternalSurface(TestFrame(inactive));
+
+  EXPECT_FALSE(result.externalSurfacePresented);
+  ASSERT_EQ(sinks.layouts.size(), 1u);
+  EXPECT_FALSE(sinks.layouts.front().visible);
+}
+
+TEST(DocumentPresenterTest, PresentationSuppressionDropsTheHeldPlacement) {
+  RecordingSinks sinks;
+  const std::unique_ptr<DocumentPresenter> presenter = MakeDocumentPresenter(
+      DocumentPresentationTarget::WorkerSurface, sinks.planSink(), sinks.layoutSink());
+
+  std::ignore = presenter->resolveExternalSurface(TestFrame(ActiveSurface(11)));
+  // The sample picker owns the pane outright; nothing accepted survives it.
+  std::ignore =
+      presenter->resolveExternalSurface(TestFrame(ActiveSurface(11), /*presentationSuppressed=*/true));
+
+  DirectSurfacePresentationState invalidated = ActiveSurface(11);
+  invalidated.active = false;
+  const DocumentPresentationResult result =
+      presenter->resolveExternalSurface(TestFrame(invalidated));
+
+  EXPECT_FALSE(result.externalSurfacePresented);
+  ASSERT_EQ(sinks.layouts.size(), 3u);
+  EXPECT_FALSE(sinks.layouts.back().visible);
+}
+
+TEST(DocumentPresenterTest, AnAcceptedEpochScrolledOutOfThePaneIsNotHeld) {
+  RecordingSinks sinks;
+  const std::unique_ptr<DocumentPresenter> presenter = MakeDocumentPresenter(
+      DocumentPresentationTarget::WorkerSurface, sinks.planSink(), sinks.layoutSink());
+
+  std::ignore = presenter->resolveExternalSurface(TestFrame(ActiveSurface(11)));
+
+  // Still accepted, just panned off screen: a legitimate hide, not a swap.
+  DirectSurfacePresentationState surface = ActiveSurface(12);
+  surface.viewport.panScreenPoint = Vector2d(500.0, 500.0);
+  const DocumentPresentationResult result = presenter->resolveExternalSurface(TestFrame(surface));
+
+  EXPECT_FALSE(result.externalSurfacePresented);
+  ASSERT_EQ(sinks.layouts.size(), 2u);
+  EXPECT_FALSE(sinks.layouts.back().visible);
 }
 
 // ---------------------------------------------------------------------------

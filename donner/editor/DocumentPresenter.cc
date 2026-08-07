@@ -86,14 +86,37 @@ WorkerSurfaceLayoutSink DefaultWorkerSurfaceLayoutSink() {
 #endif
 }
 
+namespace {
+
+const ViewportState& WorkerSurfacePlacementViewport(const DocumentPresentationFrame& frame) {
+  // Place the accepted pixels with the transform they were rasterized against.
+  //
+  // The live viewport is one or more worker frames ahead during a zoom or pan
+  // gesture. A viewport-bounded high-zoom raster only covers the pane plus
+  // `kHighZoomRasterMarginScreenPx`, so mapping its document rect through a
+  // later, zoomed-out viewport shrinks the surface below the pane and uncovers
+  // the editor background inside the render pane. Using the epoch's own
+  // viewport keeps geometry and pixels changing together: the surface holds its
+  // last valid placement until the next epoch replaces both at once.
+  //
+  // Epochs published before this field existed (and worker fallbacks that never
+  // saw a live viewport) carry a degenerate viewport; those fall back to the
+  // live transform, which is the pre-existing behavior.
+  return DirectSurfacePlacementViewportIsUsable(frame.workerSurface.viewport)
+             ? frame.workerSurface.viewport
+             : frame.viewport;
+}
+
+}  // namespace
+
 std::optional<WorkerSurfaceLayout> ComputeWorkerSurfaceLayout(
     const DocumentPresentationFrame& frame) {
   if (frame.presentationSuppressed || !frame.workerSurface.active) {
     return std::nullopt;
   }
 
-  const Box2d surfaceRect =
-      frame.viewport.documentToScreen(frame.workerSurface.rasterViewport.documentRect);
+  const Box2d surfaceRect = WorkerSurfacePlacementViewport(frame).documentToScreen(
+      frame.workerSurface.rasterViewport.documentRect);
   const std::optional<Box2d> clippedSurfaceRect =
       PresentedImageClipRect(frame.paneRect, surfaceRect);
   if (!clippedSurfaceRect.has_value() || surfaceRect.width() <= 0.0 ||
@@ -153,13 +176,32 @@ DocumentPresentationResult WorkerSurfacePresenter::resolveExternalSurface(
     const DocumentPresentationFrame& frame) {
   frameOpen_ = true;
 
-  const std::optional<WorkerSurfaceLayout> layout = ComputeWorkerSurfaceLayout(frame);
+  std::optional<WorkerSurfaceLayout> layout = ComputeWorkerSurfaceLayout(frame);
+  if (!layout.has_value() && !frame.presentationSuppressed && !frame.workerSurface.active &&
+      heldLayout_.has_value()) {
+    // A full document replacement invalidates the accepted epoch the instant the
+    // new document loads, before any replacement epoch exists. Hiding the
+    // surface there drops the render pane to the bare editor background for
+    // every frame until the new document's first worker frame lands. The
+    // worker canvas still holds the outgoing document's pixels - it is only
+    // cleared inside the same worker task that presents the replacement - so
+    // hold the last accepted placement instead. The loading affordance and the
+    // new document's first epoch both land on top of it.
+    layout = *heldLayout_;
+  }
   // The hidden update carries the same frame token as a visible one so the
   // surface's accepted epoch stays observable across frames it does not own.
   const WorkerSurfaceLayout applied =
       layout.value_or(WorkerSurfaceLayout{.visible = false,
                                           .surfaceSlot = frame.workerSurface.surfaceSlot,
                                           .frameToken = frame.workerSurface.frameCount});
+  if (frame.workerSurface.active && layout.has_value()) {
+    heldLayout_ = applied;
+  } else if (frame.presentationSuppressed) {
+    // The sample picker and content-only captures own the pane outright; nothing
+    // accepted survives them.
+    heldLayout_.reset();
+  }
   lastLayout_ = applied;
   if (layoutSink_) {
     layoutSink_(applied);

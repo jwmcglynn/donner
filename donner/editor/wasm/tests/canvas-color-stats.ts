@@ -668,3 +668,41 @@ export async function readEditorResizePixelBounds(
       }),
   };
 }
+
+export interface EditorBackgroundCoverageStats {
+  editorBackgroundPixels: number;
+  samples: number;
+}
+
+/**
+ * Count pixels showing the bare editor background inside a page region.
+ *
+ * The editor page and the worker document canvases share `#101317`, which is
+ * what an uncovered render pane shows. The Donner Splash artboard is `#10131e`:
+ * same red and green, six levels more blue, so the blue ceiling here separates
+ * "no document pixels" from "the document's own dark background".
+ */
+export async function readEditorBackgroundCoverage(
+  page: Page,
+  region: CssRegion,
+): Promise<EditorBackgroundCoverageStats> {
+  const image = decodePng(await page.screenshot({ clip: region }));
+  let editorBackgroundPixels = 0;
+  for (let offset = 0; offset < image.data.length; offset += image.channels) {
+    const red = image.data[offset];
+    const green = image.data[offset + 1];
+    const blue = image.data[offset + 2];
+    const alpha = image.channels === 4 ? image.data[offset + 3] : 255;
+    if (alpha < 200) {
+      continue;
+    }
+    if (
+      red >= 12 && red <= 20
+      && green >= 15 && green <= 23
+      && blue >= 19 && blue <= 26
+    ) {
+      ++editorBackgroundPixels;
+    }
+  }
+  return { editorBackgroundPixels, samples: image.width * image.height };
+}

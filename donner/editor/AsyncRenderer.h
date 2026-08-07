@@ -179,6 +179,13 @@ struct RenderRequest {
   /// editor camera so the worker can render a bounded high-zoom output
   /// surface without reading live UI state.
   EditorRasterViewport rasterViewport;
+  /// Live editor viewport \ref rasterViewport was derived from.
+  ///
+  /// Carried through the worker untouched so presentation can place the
+  /// resulting pixels with the same screen transform they were rasterized
+  /// against. Placing them through a later viewport would stretch a
+  /// viewport-bounded raster past the document region it actually covers.
+  ViewportState viewport;
   /// True when this request should produce only a low-resolution full-document overview infill.
   ///
   /// The worker still keeps the selected entity promoted, but skips the composited split preview
@@ -622,6 +629,8 @@ struct RenderResult {
   std::optional<CompositedPreview> compositedPreview;
   /// Raster viewport used to produce this result.
   EditorRasterViewport rasterViewport;
+  /// Editor viewport \ref rasterViewport was derived from, copied from the request.
+  ViewportState viewport;
   /// True when this result should update only retained overview infill.
   bool overviewInfillOnly = false;
   std::uint64_t version = 0;
@@ -720,10 +729,20 @@ struct SampleThumbnailRenderStats {
 struct DirectSurfacePresentationState {
   bool active = false;
   EditorRasterViewport rasterViewport;
+  /// Editor viewport the accepted pixels were rasterized against.
+  ///
+  /// Presentation places the surface with this transform rather than the live
+  /// one, so an accepted epoch's geometry and its pixels always change
+  /// together. A degenerate value (zero pane, non-positive zoom) means the
+  /// epoch published no usable transform and the live viewport is used instead.
+  ViewportState viewport;
   std::uint64_t frameCount = 0;
   int surfaceSlot = 0;
   bool selectionChromeBaked = false;
 };
+
+/// Whether \p viewport can place an accepted surface epoch on screen.
+[[nodiscard]] bool DirectSurfacePlacementViewportIsUsable(const ViewportState& viewport);
 
 /**
  * Return whether a worker-surface result may replace the currently loaded document surface.

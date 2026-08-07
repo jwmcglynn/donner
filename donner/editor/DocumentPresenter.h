@@ -152,8 +152,12 @@ struct DocumentPresentationResult {
 /// Screen placement for a worker-owned document surface this frame, or
 /// `std::nullopt` when the surface must stay hidden.
 ///
-/// Pure geometry: the document rect mapped through the live viewport, rejected
-/// when it is empty or falls entirely outside the render pane.
+/// Pure geometry: the accepted epoch's document rect mapped through the viewport
+/// that epoch was rasterized against (falling back to the live viewport when the
+/// epoch published none), rejected when it is empty or falls entirely outside the
+/// live render pane. Placing an epoch through a later viewport would stretch a
+/// viewport-bounded high-zoom raster past the region its pixels cover and uncover
+/// the editor background inside the pane.
 [[nodiscard]] std::optional<WorkerSurfaceLayout> ComputeWorkerSurfaceLayout(
     const DocumentPresentationFrame& frame);
 
@@ -260,10 +264,16 @@ public:
   /// The layout most recently handed to the sink. Diagnostic/testing only.
   [[nodiscard]] const std::optional<WorkerSurfaceLayout>& lastLayout() const { return lastLayout_; }
 
+  /// The accepted placement held across a document replacement. Diagnostic/testing only.
+  [[nodiscard]] const std::optional<WorkerSurfaceLayout>& heldLayout() const { return heldLayout_; }
+
 private:
   WorkerSurfaceLayoutSink layoutSink_;
   std::unique_ptr<DocumentPresenter> fallback_;
   std::optional<WorkerSurfaceLayout> lastLayout_;
+  /// Last placement an accepted epoch produced, replayed while a document swap
+  /// leaves the worker with no accepted epoch at all.
+  std::optional<WorkerSurfaceLayout> heldLayout_;
   bool frameOpen_ = false;
   bool surfaceOwnsFrame_ = false;
   std::uint64_t refusedUnderlayPresents_ = 0;
