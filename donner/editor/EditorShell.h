@@ -384,6 +384,37 @@ private:
   void selectAllCanvasElements();
   void renderSourcePane(float paneOriginY, float paneHeight, float paneWidth, ImFont* codeFont);
   void renderRenderPane(ImGuiWindowFlags paneFlags);
+  // Frame stages split out of `runFrame` and `renderRenderPane`, deliberately kept out of line.
+  //
+  // Those two are the editor's frame-sized functions: everything the shell does in a frame is
+  // reachable from them. Folded together they compile to a single Wasm function body large enough
+  // to trip the browser tier-compiler complexity budget enforced by
+  // `//donner/editor/wasm:wasm_geode_package_size_tests`, and Safari's optimizing compiler then
+  // spends gigabytes tiering up that one body. The `noinline` attributes are the source-side guard
+  // for that budget, not a performance hint: each stage runs at most once per frame, so the extra
+  // call is unmeasurable next to the work it performs.
+  [[gnu::noinline]] void snapshotReproFrame();
+  [[gnu::noinline]] void renderMenuBarAndDialogs(bool compactUi);
+  [[gnu::noinline]] void applyDeferredRenderRequest();
+  [[gnu::noinline]] void recordFrameTelemetry(
+      const FrameCostBreakdown::MainFrame& mainFrameCost,
+      const FrameCostBreakdown::DirectPresentation& directPresentationCost);
+  /// Selection transform-handle hit test against the idle-frame bounds cache. Returns an empty
+  /// intent when the cache does not describe the current selection.
+  [[nodiscard]] SelectionTransformHandleIntent cachedSelectionHandleIntentAt(
+      const Vector2d& documentPoint, bool includeRotate, double pointerHitTestPixelsPerDocUnit);
+  [[nodiscard]] [[gnu::noinline]] SelectionTransformHandleIntent updateRenderPaneToolCursor(
+      bool rotateCursorLocked, bool toolEligible, bool showPanCursor, bool selectToolActive,
+      bool penToolActive, bool textToolActive, double pointerHitTestPixelsPerDocUnit);
+  [[gnu::noinline]] void dispatchBufferedRenderPaneClick(bool selectToolActive, bool penToolActive,
+                                                         bool textToolActive,
+                                                         double pointerHitTestPixelsPerDocUnit);
+  [[gnu::noinline]] void updateRenderPaneSelectionDrag(bool spaceHeld,
+                                                       double pointerHitTestPixelsPerDocUnit);
+  [[gnu::noinline]] void updateRenderPaneTextPointer(bool spaceHeld);
+  [[gnu::noinline]] void updateRenderPanePenPointer(bool penToolActive, bool spaceHeld,
+                                                    double pointerHitTestPixelsPerDocUnit);
+  [[gnu::noinline]] void updateRenderPaneTextChrome(bool textToolActive);
   [[nodiscard]] bool setActiveGestureCursor(
       const std::optional<SelectTool::ActiveGesturePreview>& activeGesturePreview);
   void renderRenderPanePresentation(const ImVec2& contentRegion, const ImVec2& paneOriginImGui,

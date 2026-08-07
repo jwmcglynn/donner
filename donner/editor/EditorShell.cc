@@ -3065,6 +3065,451 @@ bool EditorShell::setActiveGestureCursor(
   return true;
 }
 
+SelectionTransformHandleIntent EditorShell::cachedSelectionHandleIntentAt(
+    const Vector2d& documentPoint, bool includeRotate, double pointerHitTestPixelsPerDocUnit) {
+  const auto& boundsCache = renderCoordinator_.selectionBoundsCache();
+  if (boundsCache.lastSelection != app_.selectedElements()) {
+    return SelectionTransformHandleIntent{};
+  }
+  const std::vector<Box2d>& boundsDoc = !boundsCache.displayedBoundsDoc.empty()
+                                            ? boundsCache.displayedBoundsDoc
+                                            : boundsCache.pendingBoundsDoc;
+  return HitTestSelectionTransformHandles(boundsDoc, documentPoint, pointerHitTestPixelsPerDocUnit,
+                                          includeRotate);
+}
+
+SelectionTransformHandleIntent EditorShell::updateRenderPaneToolCursor(
+    bool rotateCursorLocked, bool toolEligible, bool showPanCursor, bool selectToolActive,
+    bool penToolActive, bool textToolActive, double pointerHitTestPixelsPerDocUnit) {
+  const auto screenToDocument = [this](const ImVec2& screenPoint) -> Vector2d {
+    return interactionController_.viewport().screenToDocument(
+        Vector2d(screenPoint.x, screenPoint.y));
+  };
+
+  SelectionTransformHandleIntent hoverTransformIntent;
+  if (penToolActive && !rotateCursorLocked && toolEligible) {
+    // Contextual pen hint: the close-path cursor when a click would close the
+    // active contour, otherwise the base nib. (Add/remove-anchor hints exist in
+    // the cursor set but await a pen hover-intent query to wire live.)
+    PenCursorHint penHint = PenCursorHint::Base;
+    if (penTool_.isDrafting()) {
+      MouseModifiers hoverModifiers;
+      hoverModifiers.shift = ImGui::GetIO().KeyShift;
+      hoverModifiers.option = ImGui::GetIO().KeyAlt;
+      hoverModifiers.command = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
+      hoverModifiers.pixelsPerDocUnit = pointerHitTestPixelsPerDocUnit;
+      if (penTool_.wouldCloseAt(screenToDocument(ImGui::GetMousePos()), hoverModifiers)) {
+        penHint = PenCursorHint::Close;
+      }
+    }
+    if (rotateCursorSet_.setPenCursor(penHint)) {
+      SetImGuiOsCursorManagementEnabled(false);
+    } else {
+      rotateCursorSet_.clearIfActive();
+      SetImGuiOsCursorManagementEnabled(true);
+      ImGui::SetMouseCursor(ImGuiMouseCursor_Arrow);
+    }
+  } else if (selectToolActive && !rotateCursorLocked && toolEligible &&
+             !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+    hoverTransformIntent = cachedSelectionHandleIntentAt(screenToDocument(ImGui::GetMousePos()),
+                                                         /*includeRotate=*/!ImGui::GetIO().KeyShift,
+                                                         pointerHitTestPixelsPerDocUnit);
+    if (hoverTransformIntent.kind != SelectionTransformHandleKind::None) {
+      // Custom cursors over the selection handles: rotate glyph on a rotate
+      // handle, scale glyph on a resize handle; fall back to ImGui's built-in
+      // cursor only if the custom one can't be applied.
+      const bool appliedCustomHandleCursor =
+          hoverTransformIntent.kind == SelectionTransformHandleKind::Rotate
+              ? rotateCursorSet_.setRotateCursor(hoverTransformIntent.corner)
+          : hoverTransformIntent.kind == SelectionTransformHandleKind::Resize
+              ? rotateCursorSet_.setScaleCursor(hoverTransformIntent.corner)
+              : false;
+      if (appliedCustomHandleCursor) {
+        SetImGuiOsCursorManagementEnabled(false);
+      } else {
+        rotateCursorSet_.clearIfActive();
+        SetImGuiOsCursorManagementEnabled(true);
+        ImGui::SetMouseCursor(CursorForTransformHandleIntent(hoverTransformIntent));
+      }
+    } else if (rotateCursorSet_.setSelectCursor()) {
+      // Custom arrow (no tail) over empty canvas in the select tool.
+      SetImGuiOsCursorManagementEnabled(false);
+    } else {
+      rotateCursorSet_.clearIfActive();
+      SetImGuiOsCursorManagementEnabled(true);
+    }
+  } else if (textToolActive && !rotateCursorLocked && toolEligible) {
+    // Text-tool cursor feedback: resize/rotate cursors over the session
+    // frame's handles (held through an active frame gesture), and the
+    // I-beam everywhere else on the canvas.
+    SelectionTransformHandleIntent textFrameIntent;
+    if (textTool_.isAdjustingFrame()) {
+      textFrameIntent.kind = textTool_.isRotatingFrame() ? SelectionTransformHandleKind::Rotate
+                                                         : SelectionTransformHandleKind::Resize;
+      textFrameIntent.corner = textTool_.frameCorner();
+    } else if (textTool_.isEditing() && !ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+               !renderCoordinator_.asyncRenderer().isBusy()) {
+      textFrameIntent = textTool_.frameHandleIntentAt(screenToDocument(ImGui::GetMousePos()),
+                                                      pointerHitTestPixelsPerDocUnit,
+                                                      /*includeRotate=*/!ImGui::GetIO().KeyShift);
+    }
+    if (textFrameIntent.kind == SelectionTransformHandleKind::Rotate &&
+        rotateCursorSet_.setRotateCursor(textFrameIntent.corner)) {
+      SetImGuiOsCursorManagementEnabled(false);
+    } else {
+      rotateCursorSet_.clearIfActive();
+      SetImGuiOsCursorManagementEnabled(true);
+      ImGui::SetMouseCursor(textFrameIntent.kind != SelectionTransformHandleKind::None
+                                ? CursorForTransformHandleIntent(textFrameIntent)
+                                : ImGuiMouseCursor_TextInput);
+    }
+  } else if (!rotateCursorLocked && !toolEligible && !showPanCursor) {
+    rotateCursorSet_.clearIfActive();
+    SetImGuiOsCursorManagementEnabled(true);
+  }
+  return hoverTransformIntent;
+}
+
+void EditorShell::dispatchBufferedRenderPaneClick(bool selectToolActive, bool penToolActive,
+                                                  bool textToolActive,
+                                                  double pointerHitTestPixelsPerDocUnit) {
+  // Design doc 0033 §M8 - click→drag handoff doesn't wait for raster.
+  //
+  // Fast path: if the user clicks inside the bounds of the currently-
+  // selected element and outside cached later-painted bounds, we can
+  // start the re-drag IMMEDIATELY without gating on `!isBusy()`. The
+  // check uses `SelectionBoundsCache` - populated on idle frames - so
+  // the call doesn't touch the registry the worker is mid-mutating. The
+  // previous M8 attempt failed because it called the live
+  // `SnapshotSelectionWorldBounds` during the busy window; the
+  // cache-based check fixes the race.
+  //
+  // Slow path: anything else (selection change, marquee, shift-click,
+  // empty cache, multi-select) still waits for `!isBusy()` and goes
+  // through the full `onMouseDown` flow. The follow-up registry-
+  // reading work (`refreshSelectionBoundsCache`, overlay rasterize,
+  // render request) is deferred to the next idle frame for both
+  // paths, so the user sees the click acknowledged immediately even
+  // when the chrome catches up a frame later.
+  if (interactionController_.pendingClick().has_value()) {
+    const auto& pendingClick = *interactionController_.pendingClick();
+    std::optional<svg::DocumentWriteAccess> pendingClickDocumentAccess =
+        app_.hasDocument() ? app_.document().document().tryWriteAccess() : std::nullopt;
+    const bool documentWriteAvailable = pendingClickDocumentAccess.has_value();
+    const auto& boundsCache = renderCoordinator_.selectionBoundsCache();
+    const bool cacheMatchesSelection = boundsCache.lastSelection == app_.selectedElements();
+    const std::vector<Box2d>& redragBoundsDoc = !boundsCache.displayedBoundsDoc.empty()
+                                                    ? boundsCache.displayedBoundsDoc
+                                                    : boundsCache.pendingBoundsDoc;
+    const std::vector<Box2d>& redragOccludingBoundsDoc =
+        !boundsCache.displayedOccludingBoundsDoc.empty() ? boundsCache.displayedOccludingBoundsDoc
+                                                         : boundsCache.pendingOccludingBoundsDoc;
+    const SelectionTransformHandleIntent pendingHandleIntent =
+        cacheMatchesSelection
+            ? cachedSelectionHandleIntentAt(pendingClick.documentPoint,
+                                            /*includeRotate=*/!pendingClick.modifiers.shift,
+                                            pointerHitTestPixelsPerDocUnit)
+            : SelectionTransformHandleIntent{};
+    bool tookFastRedrag =
+        documentWriteAvailable && selectToolActive && !pendingClick.modifiers.doubleClick &&
+        cacheMatchesSelection && pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
+        selectTool_.tryStartRedragOnSelected(app_, pendingClick.documentPoint,
+                                             pendingClick.modifiers, redragBoundsDoc,
+                                             redragOccludingBoundsDoc);
+    if (!tookFastRedrag && !pendingClick.modifiers.doubleClick && documentWriteAvailable &&
+        renderCoordinator_.asyncRenderer().isBusy() && selectToolActive && cacheMatchesSelection &&
+        pendingHandleIntent.kind == SelectionTransformHandleKind::None) {
+      // The occlusion cache uses broad AABBs for later-painted elements. When the worker is busy,
+      // prefer an optimistic re-drag of the current selection over freezing behind a conservative
+      // false-positive overlap; the idle path above still uses full hit-testing for retargets.
+      tookFastRedrag = selectTool_.tryStartRedragOnSelected(app_, pendingClick.documentPoint,
+                                                            pendingClick.modifiers, redragBoundsDoc,
+                                                            std::span<const Box2d>());
+    }
+    switch (PendingClickBusyActionForState(tookFastRedrag, !documentWriteAvailable)) {
+      case PendingClickBusyAction::CompleteFastRedrag:
+        lastPostedScreenPoint_.reset();
+        interactionController_.clearPendingClick();
+        pendingClickFollowupAfterIdle_ = true;
+        break;
+
+      case PendingClickBusyAction::RunIdleClickPath: {
+        const bool leftMouseDown = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+        const bool selectHoldElapsed =
+            pendingSelectClickStartSeconds_.has_value() &&
+            ImGui::GetTime() - *pendingSelectClickStartSeconds_ >= kSelectMarqueeHoldDelaySeconds;
+        const bool selectDragIntent = ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f);
+        const bool pendingClickHitsSelection =
+            selectToolActive && pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
+            selectTool_.clickHitsCurrentSelection(app_, pendingClick.documentPoint);
+        // A press that lands on an immediately-selectable element implicitly
+        // selects-and-drags it; a marquee starts when the first click is on empty
+        // space or on something that cannot be selected from the canvas, such as
+        // a locked layer. Without this, a press-drag whose mouse-down was deferred
+        // (worker busy) misclassifies as a marquee and the element is never
+        // selected (gl_rnr GeodeDragZoomRerasterizes... selection-loss). We are in
+        // the `!isBusy()` branch here, so `hitTest` is race-safe (same gate
+        // `onMouseDown` uses).
+        const bool pendingClickHitsImmediatelySelectableElement =
+            selectToolActive && pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
+            !pendingClickHitsSelection &&
+            selectTool_.clickHitsImmediatelySelectableElement(app_, pendingClick.documentPoint);
+        const bool pendingClickCanStartMarquee =
+            selectToolActive && pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
+            !pendingClickHitsSelection && !pendingClickHitsImmediatelySelectableElement;
+        switch (PendingClickIdleActionForState(leftMouseDown, pendingClickCanStartMarquee,
+                                               selectHoldElapsed, selectDragIntent)) {
+          case PendingClickIdleAction::BeginMarquee:
+            lastPostedScreenPoint_.reset();
+            selectTool_.beginMarquee(app_, pendingClick.documentPoint,
+                                     pendingClick.modifiers.shift);
+            renderCoordinator_.refreshSelectionBoundsCache(app_);
+            requestRenderAtEndOfFrame_ = true;
+            renderCoordinator_.rasterizeOverlayForCurrentSelection(
+                app_, interactionController_.viewport(), selectTool_.marqueeRect(),
+                selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview(),
+                selectionChromeDetailForActiveTool());
+            interactionController_.clearPendingClick();
+            break;
+
+          case PendingClickIdleAction::WaitForMarqueeIntent:
+            // Keep the click buffered until mouse-up selects, pointer movement starts marquee, or
+            // the hold delay above starts marquee. This prevents full-canvas/background elements
+            // from being selected just because the user is preparing a marquee drag.
+            break;
+
+          case PendingClickIdleAction::DispatchSlowPath: {
+            // Slow path: full `onMouseDown` (hitTest + selection change +
+            // possible drag start). Race-safe only when the worker is idle.
+            lastPostedScreenPoint_.reset();
+            bool queuedMutationForNextFrame = false;
+            if (selectToolActive) {
+              if (tryBeginTextEditingFromSelectDoubleClick(pendingClick.documentPoint,
+                                                           pendingClick.modifiers)) {
+                if (!leftMouseDown) {
+                  textTool_.onMouseUp(app_, pendingClick.documentPoint);
+                }
+              } else {
+                selectTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
+                if (!leftMouseDown) {
+                  selectTool_.onMouseUp(app_, pendingClick.documentPoint);
+                }
+              }
+            } else if (penToolActive) {
+              penTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
+              if (!leftMouseDown && penTool_.isDraggingAnchor()) {
+                penTool_.onMouseUp(app_, pendingClick.documentPoint);
+              }
+              queuedMutationForNextFrame = true;
+            } else if (textToolActive) {
+              textTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
+              if (!leftMouseDown) {
+                // Click already released: finish the gesture (double-click opens
+                // a point-text session; a plain click on empty canvas is a
+                // no-op). The tool flushes internally, so refresh the
+                // presentation directly instead of through the queued-flush helper.
+                textTool_.onMouseUp(app_, pendingClick.documentPoint);
+                refreshAfterToolDrivenFlush();
+              }
+            }
+            if (queuedMutationForNextFrame) {
+              flushQueuedMutationAndRefreshOverlay();
+            } else {
+              renderCoordinator_.refreshSelectionBoundsCache(app_);
+              requestRenderAtEndOfFrame_ = true;
+              renderCoordinator_.rasterizeOverlayForCurrentSelection(
+                  app_, interactionController_.viewport(), selectTool_.marqueeRect(),
+                  selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview(),
+                  selectionChromeDetailForActiveTool());
+            }
+            interactionController_.clearPendingClick();
+            break;
+          }
+        }
+        break;
+      }
+
+      case PendingClickBusyAction::CancelBusyRender:
+        // Worker is busy with a (likely-stale) prewarm render at the
+        // previous canvas size or zoom. Cancel it so the next idle frame
+        // can run the slow-path mouseDown immediately, rather than
+        // waiting up to seconds for the in-flight prewarm to finish at
+        // high zoom. The render in flight is dispensable - it was a
+        // selection prewarm, not a drag, and the click is about to
+        // supersede the selection state anyway.
+        renderCoordinator_.asyncRenderer().cancelInFlight();
+        break;
+    }
+  }
+}
+
+void EditorShell::updateRenderPaneSelectionDrag(bool spaceHeld,
+                                                double pointerHitTestPixelsPerDocUnit) {
+  const auto screenToDocument = [this](const ImVec2& screenPoint) -> Vector2d {
+    return interactionController_.viewport().screenToDocument(
+        Vector2d(screenPoint.x, screenPoint.y));
+  };
+  if (selectTool_.isDragging() || selectTool_.isMarqueeing()) {
+    if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && !spaceHeld) {
+      const ImVec2 currentScreen = ImGui::GetMousePos();
+      // Local drag state is UI-thread owned and feeds composited presentation directly, so keep it
+      // moving while the async renderer is busy. DOM writes are queued and coalesced until the
+      // worker releases the document.
+      if (ShouldPostDragMove<ImVec2>(currentScreen, lastPostedScreenPoint_,
+                                     /*pendingFrameInFlight=*/false)) {
+        MouseModifiers modifiers;
+        modifiers.shift = ImGui::GetIO().KeyShift;
+        modifiers.option = ImGui::GetIO().KeyAlt;
+        modifiers.pixelsPerDocUnit = pointerHitTestPixelsPerDocUnit;
+        selectTool_.onMouseMove(app_, screenToDocument(currentScreen), /*buttonHeld=*/true,
+                                modifiers);
+        lastPostedScreenPoint_ = currentScreen;
+        flushInteractiveDragMutationAndRequestRender();
+      }
+    }
+    if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+      const auto previewBeforeRelease = selectTool_.activeDragPreview();
+      const bool previewHadVisualChange =
+          previewBeforeRelease.has_value() &&
+          (!previewBeforeRelease->documentFromCachedDocument.isIdentity() ||
+           previewBeforeRelease->translation != Vector2d::Zero());
+      selectTool_.onMouseUp(app_, screenToDocument(ImGui::GetMousePos()));
+      lastPostedScreenPoint_.reset();
+      if (previewBeforeRelease.has_value()) {
+        if (previewHadVisualChange) {
+          const std::uint64_t settleTargetVersion = PostReleaseSettleTargetVersion(
+              app_.document().currentFrameVersion(), app_.document().hasPendingMutations());
+          renderCoordinator_.compositedPresentation().beginSettling(previewBeforeRelease,
+                                                                    settleTargetVersion);
+        }
+        if (!renderCoordinator_.asyncRenderer().isBusy() &&
+            (app_.flushFrame() || previewHadVisualChange)) {
+          renderCoordinator_.compositedPresentation().beginSettling(
+              previewBeforeRelease, app_.document().currentFrameVersion());
+          renderCoordinator_.refreshSelectionBoundsCache(app_);
+          renderCoordinator_.rasterizeOverlayForCurrentSelection(
+              app_, interactionController_.viewport(), selectTool_.marqueeRect(), std::nullopt,
+              std::nullopt, selectionChromeDetailForActiveTool());
+        }
+      } else if (!renderCoordinator_.asyncRenderer().isBusy()) {
+        renderCoordinator_.refreshSelectionBoundsCache(app_);
+        renderCoordinator_.rasterizeOverlayForCurrentSelection(
+            app_, interactionController_.viewport(), selectTool_.marqueeRect(), std::nullopt,
+            std::nullopt, selectionChromeDetailForActiveTool());
+      }
+    }
+  }
+}
+
+void EditorShell::updateRenderPaneTextPointer(bool spaceHeld) {
+  const auto screenToDocument = [this](const ImVec2& screenPoint) -> Vector2d {
+    return interactionController_.viewport().screenToDocument(
+        Vector2d(screenPoint.x, screenPoint.y));
+  };
+  // Text-tool live pointer path: the pending-click buffer delivers the
+  // mousedown (starting the box drag or a frame handle gesture), but the
+  // drag extension and the release come from the live ImGui pointer, exactly
+  // like the pen tool's anchor drag below.
+  if (activeTool_ == ActiveTool::Text &&
+      (textTool_.isDraggingBox() || textTool_.isAdjustingFrame() || textTool_.isSelectingText())) {
+    if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && !spaceHeld) {
+      const bool rotatingFrame = textTool_.isRotatingFrame();
+      const bool selectingText = textTool_.isSelectingText();
+      textTool_.onMouseMove(app_, screenToDocument(ImGui::GetMousePos()), /*buttonHeld=*/true);
+      if (rotatingFrame) {
+        refreshAfterToolDrivenFlush();
+      } else if (!selectingText) {
+        window_.wakeEventLoop();
+      }
+    }
+    if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+      const bool selectingText = textTool_.isSelectingText();
+      textTool_.onMouseUp(app_, screenToDocument(ImGui::GetMousePos()));
+      if (!selectingText) {
+        refreshAfterToolDrivenFlush();
+      }
+    }
+  }
+}
+
+void EditorShell::updateRenderPanePenPointer(bool penToolActive, bool spaceHeld,
+                                             double pointerHitTestPixelsPerDocUnit) {
+  const auto screenToDocument = [this](const ImVec2& screenPoint) -> Vector2d {
+    return interactionController_.viewport().screenToDocument(
+        Vector2d(screenPoint.x, screenPoint.y));
+  };
+  if (penToolActive && penTool_.isDraggingAnchor()) {
+    if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && !spaceHeld) {
+      MouseModifiers dragModifiers;
+      dragModifiers.shift = ImGui::GetIO().KeyShift;
+      dragModifiers.option = ImGui::GetIO().KeyAlt;
+      dragModifiers.command = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
+      dragModifiers.pixelsPerDocUnit = pointerHitTestPixelsPerDocUnit;
+      penTool_.onMouseMove(app_, screenToDocument(ImGui::GetMousePos()), /*buttonHeld=*/true,
+                           dragModifiers);
+      if (app_.document().hasPendingMutations() && flushQueuedMutationAndRefreshOverlay()) {
+        penDragFlushedThisFrame_ = true;
+      }
+    }
+    if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+      penTool_.onMouseUp(app_, screenToDocument(ImGui::GetMousePos()));
+      flushQueuedMutationAndRefreshOverlay();
+    }
+  }
+
+  // Pen hover chrome: while drafting with the button up, rubber-band the
+  // segment a click would commit and highlight the close-path target when the
+  // pointer is within closing range.
+  if (penToolActive && penTool_.isDrafting() && !penTool_.isDraggingAnchor() && !spaceHeld &&
+      !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+    MouseModifiers hoverModifiers;
+    hoverModifiers.shift = ImGui::GetIO().KeyShift;
+    hoverModifiers.option = ImGui::GetIO().KeyAlt;
+    hoverModifiers.command = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
+    hoverModifiers.pixelsPerDocUnit = pointerHitTestPixelsPerDocUnit;
+    const Vector2d hoverDocPoint = screenToDocument(ImGui::GetMousePos());
+    renderCoordinator_.setPenHoverChrome(penTool_.previewSegmentPath(hoverDocPoint, hoverModifiers),
+                                         penTool_.wouldCloseAt(hoverDocPoint, hoverModifiers)
+                                             ? std::make_optional(penTool_.draftStartPoint())
+                                             : std::nullopt);
+  } else {
+    renderCoordinator_.setPenHoverChrome(std::nullopt, std::nullopt);
+  }
+}
+
+void EditorShell::updateRenderPaneTextChrome(bool textToolActive) {
+  const auto screenToDocument = [this](const ImVec2& screenPoint) -> Vector2d {
+    return interactionController_.viewport().screenToDocument(
+        Vector2d(screenPoint.x, screenPoint.y));
+  };
+  if (textToolActive && textTool_.isEditing() &&
+      (ImGui::GetIO().MouseDelta.x != 0.0f || ImGui::GetIO().MouseDelta.y != 0.0f)) {
+    textTool_.notifyPointerMoved(screenToDocument(ImGui::GetMousePos()));
+  }
+
+  // Text-editing chrome: caret + box frame while a session is active, or the
+  // live rectangle while a text box is being dragged out.
+  if (textToolActive && textTool_.isDraggingBox()) {
+    renderCoordinator_.setTextEditingChrome(std::nullopt, std::nullopt);
+    renderCoordinator_.setTextBoxDragPreview(
+        TextBoxDragPreviewFromTool(textTool_.dragPreviewChrome()));
+  } else if (textToolActive && textTool_.isEditing()) {
+    if (const auto textChrome = textTool_.editingChrome(app_); textChrome.has_value()) {
+      // Caret blink and point-frame fade redraw through timed overlay wakes;
+      // neither animation schedules a content render.
+      renderCoordinator_.setTextEditingChrome(
+          textTool_.caretBlinkVisible() ? std::make_optional(SelectionChromeSnapshot::TextCaret{
+                                              textChrome->caretTopDoc, textChrome->caretBottomDoc})
+                                        : std::nullopt,
+          textChrome->frameCornersDoc, textChrome->frameOpacity, textChrome->selectionQuadsDoc);
+    }
+    renderCoordinator_.setTextBoxDragPreview(std::nullopt);
+  } else {
+    renderCoordinator_.setTextEditingChrome(std::nullopt, std::nullopt);
+    renderCoordinator_.setTextBoxDragPreview(std::nullopt);
+  }
+}
+
 void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   // The render pane is docked into the DockSpace central node (see
   // renderDockSpaceHost); the DockSpace owns its position and size, so we no
@@ -3239,97 +3684,9 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   const bool selectToolActive = activeTool_ == ActiveTool::Select;
   const bool penToolActive = activeTool_ == ActiveTool::Pen;
   const bool textToolActive = activeTool_ == ActiveTool::Text;
-  const auto cachedHandleIntentAt = [&](const Vector2d& documentPoint, bool includeRotate) {
-    const auto& boundsCache = renderCoordinator_.selectionBoundsCache();
-    if (boundsCache.lastSelection != app_.selectedElements()) {
-      return SelectionTransformHandleIntent{};
-    }
-    const std::vector<Box2d>& boundsDoc = !boundsCache.displayedBoundsDoc.empty()
-                                              ? boundsCache.displayedBoundsDoc
-                                              : boundsCache.pendingBoundsDoc;
-    return HitTestSelectionTransformHandles(boundsDoc, documentPoint,
-                                            pointerHitTestPixelsPerDocUnit, includeRotate);
-  };
-  SelectionTransformHandleIntent hoverTransformIntent;
-  if (penToolActive && !rotateCursorLocked && toolEligible) {
-    // Contextual pen hint: the close-path cursor when a click would close the
-    // active contour, otherwise the base nib. (Add/remove-anchor hints exist in
-    // the cursor set but await a pen hover-intent query to wire live.)
-    PenCursorHint penHint = PenCursorHint::Base;
-    if (penTool_.isDrafting()) {
-      MouseModifiers hoverModifiers;
-      hoverModifiers.shift = ImGui::GetIO().KeyShift;
-      hoverModifiers.option = ImGui::GetIO().KeyAlt;
-      hoverModifiers.command = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
-      hoverModifiers.pixelsPerDocUnit = pointerHitTestPixelsPerDocUnit;
-      if (penTool_.wouldCloseAt(screenToDocument(ImGui::GetMousePos()), hoverModifiers)) {
-        penHint = PenCursorHint::Close;
-      }
-    }
-    if (rotateCursorSet_.setPenCursor(penHint)) {
-      SetImGuiOsCursorManagementEnabled(false);
-    } else {
-      rotateCursorSet_.clearIfActive();
-      SetImGuiOsCursorManagementEnabled(true);
-      ImGui::SetMouseCursor(ImGuiMouseCursor_Arrow);
-    }
-  } else if (selectToolActive && !rotateCursorLocked && toolEligible &&
-             !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-    hoverTransformIntent = cachedHandleIntentAt(screenToDocument(ImGui::GetMousePos()),
-                                                /*includeRotate=*/!ImGui::GetIO().KeyShift);
-    if (hoverTransformIntent.kind != SelectionTransformHandleKind::None) {
-      // Custom cursors over the selection handles: rotate glyph on a rotate
-      // handle, scale glyph on a resize handle; fall back to ImGui's built-in
-      // cursor only if the custom one can't be applied.
-      const bool appliedCustomHandleCursor =
-          hoverTransformIntent.kind == SelectionTransformHandleKind::Rotate
-              ? rotateCursorSet_.setRotateCursor(hoverTransformIntent.corner)
-          : hoverTransformIntent.kind == SelectionTransformHandleKind::Resize
-              ? rotateCursorSet_.setScaleCursor(hoverTransformIntent.corner)
-              : false;
-      if (appliedCustomHandleCursor) {
-        SetImGuiOsCursorManagementEnabled(false);
-      } else {
-        rotateCursorSet_.clearIfActive();
-        SetImGuiOsCursorManagementEnabled(true);
-        ImGui::SetMouseCursor(CursorForTransformHandleIntent(hoverTransformIntent));
-      }
-    } else if (rotateCursorSet_.setSelectCursor()) {
-      // Custom arrow (no tail) over empty canvas in the select tool.
-      SetImGuiOsCursorManagementEnabled(false);
-    } else {
-      rotateCursorSet_.clearIfActive();
-      SetImGuiOsCursorManagementEnabled(true);
-    }
-  } else if (textToolActive && !rotateCursorLocked && toolEligible) {
-    // Text-tool cursor feedback: resize/rotate cursors over the session
-    // frame's handles (held through an active frame gesture), and the
-    // I-beam everywhere else on the canvas.
-    SelectionTransformHandleIntent textFrameIntent;
-    if (textTool_.isAdjustingFrame()) {
-      textFrameIntent.kind = textTool_.isRotatingFrame() ? SelectionTransformHandleKind::Rotate
-                                                         : SelectionTransformHandleKind::Resize;
-      textFrameIntent.corner = textTool_.frameCorner();
-    } else if (textTool_.isEditing() && !ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
-               !renderCoordinator_.asyncRenderer().isBusy()) {
-      textFrameIntent = textTool_.frameHandleIntentAt(screenToDocument(ImGui::GetMousePos()),
-                                                      pointerHitTestPixelsPerDocUnit,
-                                                      /*includeRotate=*/!ImGui::GetIO().KeyShift);
-    }
-    if (textFrameIntent.kind == SelectionTransformHandleKind::Rotate &&
-        rotateCursorSet_.setRotateCursor(textFrameIntent.corner)) {
-      SetImGuiOsCursorManagementEnabled(false);
-    } else {
-      rotateCursorSet_.clearIfActive();
-      SetImGuiOsCursorManagementEnabled(true);
-      ImGui::SetMouseCursor(textFrameIntent.kind != SelectionTransformHandleKind::None
-                                ? CursorForTransformHandleIntent(textFrameIntent)
-                                : ImGuiMouseCursor_TextInput);
-    }
-  } else if (!rotateCursorLocked && !toolEligible && !showPanCursor) {
-    rotateCursorSet_.clearIfActive();
-    SetImGuiOsCursorManagementEnabled(true);
-  }
+  const SelectionTransformHandleIntent hoverTransformIntent =
+      updateRenderPaneToolCursor(rotateCursorLocked, toolEligible, showPanCursor, selectToolActive,
+                                 penToolActive, textToolActive, pointerHitTestPixelsPerDocUnit);
   // Double-click while drafting commits the in-progress open path (no trailing
   // Z) as one undoable command, matching Enter. Checked before the click is
   // buffered so the double-click doesn't also place a stray anchor.
@@ -3349,173 +3706,8 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
     pendingSelectClickStartSeconds_ = ImGui::GetTime();
   }
 
-  // Design doc 0033 §M8 - click→drag handoff doesn't wait for raster.
-  //
-  // Fast path: if the user clicks inside the bounds of the currently-
-  // selected element and outside cached later-painted bounds, we can
-  // start the re-drag IMMEDIATELY without gating on `!isBusy()`. The
-  // check uses `SelectionBoundsCache` - populated on idle frames - so
-  // the call doesn't touch the registry the worker is mid-mutating. The
-  // previous M8 attempt failed because it called the live
-  // `SnapshotSelectionWorldBounds` during the busy window; the
-  // cache-based check fixes the race.
-  //
-  // Slow path: anything else (selection change, marquee, shift-click,
-  // empty cache, multi-select) still waits for `!isBusy()` and goes
-  // through the full `onMouseDown` flow. The follow-up registry-
-  // reading work (`refreshSelectionBoundsCache`, overlay rasterize,
-  // render request) is deferred to the next idle frame for both
-  // paths, so the user sees the click acknowledged immediately even
-  // when the chrome catches up a frame later.
-  if (interactionController_.pendingClick().has_value()) {
-    const auto& pendingClick = *interactionController_.pendingClick();
-    std::optional<svg::DocumentWriteAccess> pendingClickDocumentAccess =
-        app_.hasDocument() ? app_.document().document().tryWriteAccess() : std::nullopt;
-    const bool documentWriteAvailable = pendingClickDocumentAccess.has_value();
-    const auto& boundsCache = renderCoordinator_.selectionBoundsCache();
-    const bool cacheMatchesSelection = boundsCache.lastSelection == app_.selectedElements();
-    const std::vector<Box2d>& redragBoundsDoc = !boundsCache.displayedBoundsDoc.empty()
-                                                    ? boundsCache.displayedBoundsDoc
-                                                    : boundsCache.pendingBoundsDoc;
-    const std::vector<Box2d>& redragOccludingBoundsDoc =
-        !boundsCache.displayedOccludingBoundsDoc.empty() ? boundsCache.displayedOccludingBoundsDoc
-                                                         : boundsCache.pendingOccludingBoundsDoc;
-    const SelectionTransformHandleIntent pendingHandleIntent =
-        cacheMatchesSelection
-            ? cachedHandleIntentAt(pendingClick.documentPoint,
-                                   /*includeRotate=*/!pendingClick.modifiers.shift)
-            : SelectionTransformHandleIntent{};
-    bool tookFastRedrag =
-        documentWriteAvailable && selectToolActive && !pendingClick.modifiers.doubleClick &&
-        cacheMatchesSelection && pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
-        selectTool_.tryStartRedragOnSelected(app_, pendingClick.documentPoint,
-                                             pendingClick.modifiers, redragBoundsDoc,
-                                             redragOccludingBoundsDoc);
-    if (!tookFastRedrag && !pendingClick.modifiers.doubleClick && documentWriteAvailable &&
-        renderCoordinator_.asyncRenderer().isBusy() && selectToolActive && cacheMatchesSelection &&
-        pendingHandleIntent.kind == SelectionTransformHandleKind::None) {
-      // The occlusion cache uses broad AABBs for later-painted elements. When the worker is busy,
-      // prefer an optimistic re-drag of the current selection over freezing behind a conservative
-      // false-positive overlap; the idle path above still uses full hit-testing for retargets.
-      tookFastRedrag = selectTool_.tryStartRedragOnSelected(app_, pendingClick.documentPoint,
-                                                            pendingClick.modifiers, redragBoundsDoc,
-                                                            std::span<const Box2d>());
-    }
-    switch (PendingClickBusyActionForState(tookFastRedrag, !documentWriteAvailable)) {
-      case PendingClickBusyAction::CompleteFastRedrag:
-        lastPostedScreenPoint_.reset();
-        interactionController_.clearPendingClick();
-        pendingClickFollowupAfterIdle_ = true;
-        break;
-
-      case PendingClickBusyAction::RunIdleClickPath: {
-        const bool leftMouseDown = ImGui::IsMouseDown(ImGuiMouseButton_Left);
-        const bool selectHoldElapsed =
-            pendingSelectClickStartSeconds_.has_value() &&
-            ImGui::GetTime() - *pendingSelectClickStartSeconds_ >= kSelectMarqueeHoldDelaySeconds;
-        const bool selectDragIntent = ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f);
-        const bool pendingClickHitsSelection =
-            selectToolActive && pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
-            selectTool_.clickHitsCurrentSelection(app_, pendingClick.documentPoint);
-        // A press that lands on an immediately-selectable element implicitly
-        // selects-and-drags it; a marquee starts when the first click is on empty
-        // space or on something that cannot be selected from the canvas, such as
-        // a locked layer. Without this, a press-drag whose mouse-down was deferred
-        // (worker busy) misclassifies as a marquee and the element is never
-        // selected (gl_rnr GeodeDragZoomRerasterizes... selection-loss). We are in
-        // the `!isBusy()` branch here, so `hitTest` is race-safe (same gate
-        // `onMouseDown` uses).
-        const bool pendingClickHitsImmediatelySelectableElement =
-            selectToolActive && pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
-            !pendingClickHitsSelection &&
-            selectTool_.clickHitsImmediatelySelectableElement(app_, pendingClick.documentPoint);
-        const bool pendingClickCanStartMarquee =
-            selectToolActive && pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
-            !pendingClickHitsSelection && !pendingClickHitsImmediatelySelectableElement;
-        switch (PendingClickIdleActionForState(leftMouseDown, pendingClickCanStartMarquee,
-                                               selectHoldElapsed, selectDragIntent)) {
-          case PendingClickIdleAction::BeginMarquee:
-            lastPostedScreenPoint_.reset();
-            selectTool_.beginMarquee(app_, pendingClick.documentPoint,
-                                     pendingClick.modifiers.shift);
-            renderCoordinator_.refreshSelectionBoundsCache(app_);
-            requestRenderAtEndOfFrame_ = true;
-            renderCoordinator_.rasterizeOverlayForCurrentSelection(
-                app_, interactionController_.viewport(), selectTool_.marqueeRect(),
-                selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview(),
-                selectionChromeDetailForActiveTool());
-            interactionController_.clearPendingClick();
-            break;
-
-          case PendingClickIdleAction::WaitForMarqueeIntent:
-            // Keep the click buffered until mouse-up selects, pointer movement starts marquee, or
-            // the hold delay above starts marquee. This prevents full-canvas/background elements
-            // from being selected just because the user is preparing a marquee drag.
-            break;
-
-          case PendingClickIdleAction::DispatchSlowPath: {
-            // Slow path: full `onMouseDown` (hitTest + selection change +
-            // possible drag start). Race-safe only when the worker is idle.
-            lastPostedScreenPoint_.reset();
-            bool queuedMutationForNextFrame = false;
-            if (selectToolActive) {
-              if (tryBeginTextEditingFromSelectDoubleClick(pendingClick.documentPoint,
-                                                           pendingClick.modifiers)) {
-                if (!leftMouseDown) {
-                  textTool_.onMouseUp(app_, pendingClick.documentPoint);
-                }
-              } else {
-                selectTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
-                if (!leftMouseDown) {
-                  selectTool_.onMouseUp(app_, pendingClick.documentPoint);
-                }
-              }
-            } else if (penToolActive) {
-              penTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
-              if (!leftMouseDown && penTool_.isDraggingAnchor()) {
-                penTool_.onMouseUp(app_, pendingClick.documentPoint);
-              }
-              queuedMutationForNextFrame = true;
-            } else if (textToolActive) {
-              textTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
-              if (!leftMouseDown) {
-                // Click already released: finish the gesture (double-click opens
-                // a point-text session; a plain click on empty canvas is a
-                // no-op). The tool flushes internally, so refresh the
-                // presentation directly instead of through the queued-flush helper.
-                textTool_.onMouseUp(app_, pendingClick.documentPoint);
-                refreshAfterToolDrivenFlush();
-              }
-            }
-            if (queuedMutationForNextFrame) {
-              flushQueuedMutationAndRefreshOverlay();
-            } else {
-              renderCoordinator_.refreshSelectionBoundsCache(app_);
-              requestRenderAtEndOfFrame_ = true;
-              renderCoordinator_.rasterizeOverlayForCurrentSelection(
-                  app_, interactionController_.viewport(), selectTool_.marqueeRect(),
-                  selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview(),
-                  selectionChromeDetailForActiveTool());
-            }
-            interactionController_.clearPendingClick();
-            break;
-          }
-        }
-        break;
-      }
-
-      case PendingClickBusyAction::CancelBusyRender:
-        // Worker is busy with a (likely-stale) prewarm render at the
-        // previous canvas size or zoom. Cancel it so the next idle frame
-        // can run the slow-path mouseDown immediately, rather than
-        // waiting up to seconds for the in-flight prewarm to finish at
-        // high zoom. The render in flight is dispensable - it was a
-        // selection prewarm, not a drag, and the click is about to
-        // supersede the selection state anyway.
-        renderCoordinator_.asyncRenderer().cancelInFlight();
-        break;
-    }
-  }
+  dispatchBufferedRenderPaneClick(selectToolActive, penToolActive, textToolActive,
+                                  pointerHitTestPixelsPerDocUnit);
 
   // After-idle follow-up for the M8 fast-path click. This reads the
   // live registry, so it must wait for the worker to land. Keep the
@@ -3527,150 +3719,17 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
     pendingClickFollowupAfterIdle_ = false;
   }
 
-  if (selectTool_.isDragging() || selectTool_.isMarqueeing()) {
-    if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && !spaceHeld) {
-      const ImVec2 currentScreen = ImGui::GetMousePos();
-      // Local drag state is UI-thread owned and feeds composited presentation directly, so keep it
-      // moving while the async renderer is busy. DOM writes are queued and coalesced until the
-      // worker releases the document.
-      if (ShouldPostDragMove<ImVec2>(currentScreen, lastPostedScreenPoint_,
-                                     /*pendingFrameInFlight=*/false)) {
-        MouseModifiers modifiers;
-        modifiers.shift = ImGui::GetIO().KeyShift;
-        modifiers.option = ImGui::GetIO().KeyAlt;
-        modifiers.pixelsPerDocUnit = pointerHitTestPixelsPerDocUnit;
-        selectTool_.onMouseMove(app_, screenToDocument(currentScreen), /*buttonHeld=*/true,
-                                modifiers);
-        lastPostedScreenPoint_ = currentScreen;
-        flushInteractiveDragMutationAndRequestRender();
-      }
-    }
-    if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
-      const auto previewBeforeRelease = selectTool_.activeDragPreview();
-      const bool previewHadVisualChange =
-          previewBeforeRelease.has_value() &&
-          (!previewBeforeRelease->documentFromCachedDocument.isIdentity() ||
-           previewBeforeRelease->translation != Vector2d::Zero());
-      selectTool_.onMouseUp(app_, screenToDocument(ImGui::GetMousePos()));
-      lastPostedScreenPoint_.reset();
-      if (previewBeforeRelease.has_value()) {
-        if (previewHadVisualChange) {
-          const std::uint64_t settleTargetVersion = PostReleaseSettleTargetVersion(
-              app_.document().currentFrameVersion(), app_.document().hasPendingMutations());
-          renderCoordinator_.compositedPresentation().beginSettling(previewBeforeRelease,
-                                                                    settleTargetVersion);
-        }
-        if (!renderCoordinator_.asyncRenderer().isBusy() &&
-            (app_.flushFrame() || previewHadVisualChange)) {
-          renderCoordinator_.compositedPresentation().beginSettling(
-              previewBeforeRelease, app_.document().currentFrameVersion());
-          renderCoordinator_.refreshSelectionBoundsCache(app_);
-          renderCoordinator_.rasterizeOverlayForCurrentSelection(
-              app_, interactionController_.viewport(), selectTool_.marqueeRect(), std::nullopt,
-              std::nullopt, selectionChromeDetailForActiveTool());
-        }
-      } else if (!renderCoordinator_.asyncRenderer().isBusy()) {
-        renderCoordinator_.refreshSelectionBoundsCache(app_);
-        renderCoordinator_.rasterizeOverlayForCurrentSelection(
-            app_, interactionController_.viewport(), selectTool_.marqueeRect(), std::nullopt,
-            std::nullopt, selectionChromeDetailForActiveTool());
-      }
-    }
-  }
+  updateRenderPaneSelectionDrag(spaceHeld, pointerHitTestPixelsPerDocUnit);
 
   if (!interactionController_.pendingClick().has_value()) {
     pendingSelectClickStartSeconds_.reset();
   }
 
-  // Text-tool live pointer path: the pending-click buffer delivers the
-  // mousedown (starting the box drag or a frame handle gesture), but the
-  // drag extension and the release come from the live ImGui pointer, exactly
-  // like the pen tool's anchor drag below.
-  if (activeTool_ == ActiveTool::Text &&
-      (textTool_.isDraggingBox() || textTool_.isAdjustingFrame() || textTool_.isSelectingText())) {
-    if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && !spaceHeld) {
-      const bool rotatingFrame = textTool_.isRotatingFrame();
-      const bool selectingText = textTool_.isSelectingText();
-      textTool_.onMouseMove(app_, screenToDocument(ImGui::GetMousePos()), /*buttonHeld=*/true);
-      if (rotatingFrame) {
-        refreshAfterToolDrivenFlush();
-      } else if (!selectingText) {
-        window_.wakeEventLoop();
-      }
-    }
-    if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
-      const bool selectingText = textTool_.isSelectingText();
-      textTool_.onMouseUp(app_, screenToDocument(ImGui::GetMousePos()));
-      if (!selectingText) {
-        refreshAfterToolDrivenFlush();
-      }
-    }
-  }
+  updateRenderPaneTextPointer(spaceHeld);
 
-  if (penToolActive && penTool_.isDraggingAnchor()) {
-    if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && !spaceHeld) {
-      MouseModifiers dragModifiers;
-      dragModifiers.shift = ImGui::GetIO().KeyShift;
-      dragModifiers.option = ImGui::GetIO().KeyAlt;
-      dragModifiers.command = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
-      dragModifiers.pixelsPerDocUnit = pointerHitTestPixelsPerDocUnit;
-      penTool_.onMouseMove(app_, screenToDocument(ImGui::GetMousePos()), /*buttonHeld=*/true,
-                           dragModifiers);
-      if (app_.document().hasPendingMutations() && flushQueuedMutationAndRefreshOverlay()) {
-        penDragFlushedThisFrame_ = true;
-      }
-    }
-    if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
-      penTool_.onMouseUp(app_, screenToDocument(ImGui::GetMousePos()));
-      flushQueuedMutationAndRefreshOverlay();
-    }
-  }
+  updateRenderPanePenPointer(penToolActive, spaceHeld, pointerHitTestPixelsPerDocUnit);
 
-  // Pen hover chrome: while drafting with the button up, rubber-band the
-  // segment a click would commit and highlight the close-path target when the
-  // pointer is within closing range.
-  if (penToolActive && penTool_.isDrafting() && !penTool_.isDraggingAnchor() && !spaceHeld &&
-      !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-    MouseModifiers hoverModifiers;
-    hoverModifiers.shift = ImGui::GetIO().KeyShift;
-    hoverModifiers.option = ImGui::GetIO().KeyAlt;
-    hoverModifiers.command = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
-    hoverModifiers.pixelsPerDocUnit = pointerHitTestPixelsPerDocUnit;
-    const Vector2d hoverDocPoint = screenToDocument(ImGui::GetMousePos());
-    renderCoordinator_.setPenHoverChrome(penTool_.previewSegmentPath(hoverDocPoint, hoverModifiers),
-                                         penTool_.wouldCloseAt(hoverDocPoint, hoverModifiers)
-                                             ? std::make_optional(penTool_.draftStartPoint())
-                                             : std::nullopt);
-  } else {
-    renderCoordinator_.setPenHoverChrome(std::nullopt, std::nullopt);
-  }
-
-  if (textToolActive && textTool_.isEditing() &&
-      (ImGui::GetIO().MouseDelta.x != 0.0f || ImGui::GetIO().MouseDelta.y != 0.0f)) {
-    textTool_.notifyPointerMoved(screenToDocument(ImGui::GetMousePos()));
-  }
-
-  // Text-editing chrome: caret + box frame while a session is active, or the
-  // live rectangle while a text box is being dragged out.
-  if (textToolActive && textTool_.isDraggingBox()) {
-    renderCoordinator_.setTextEditingChrome(std::nullopt, std::nullopt);
-    renderCoordinator_.setTextBoxDragPreview(
-        TextBoxDragPreviewFromTool(textTool_.dragPreviewChrome()));
-  } else if (textToolActive && textTool_.isEditing()) {
-    if (const auto textChrome = textTool_.editingChrome(app_); textChrome.has_value()) {
-      // Caret blink and point-frame fade redraw through timed overlay wakes;
-      // neither animation schedules a content render.
-      renderCoordinator_.setTextEditingChrome(
-          textTool_.caretBlinkVisible() ? std::make_optional(SelectionChromeSnapshot::TextCaret{
-                                              textChrome->caretTopDoc, textChrome->caretBottomDoc})
-                                        : std::nullopt,
-          textChrome->frameCornersDoc, textChrome->frameOpacity, textChrome->selectionQuadsDoc);
-    }
-    renderCoordinator_.setTextBoxDragPreview(std::nullopt);
-  } else {
-    renderCoordinator_.setTextEditingChrome(std::nullopt, std::nullopt);
-    renderCoordinator_.setTextBoxDragPreview(std::nullopt);
-  }
+  updateRenderPaneTextChrome(textToolActive);
 
   applyPendingDocumentSpaceReplayInputForTesting();
 
@@ -6082,6 +6141,200 @@ void EditorShell::prepareFrame() {
   }
 }
 
+void EditorShell::snapshotReproFrame() {
+  if (!reproRecorder_) {
+    return;
+  }
+
+  // Snapshot before any widget consumes input events. ImGui's IO
+  // state for the frame has been populated by
+  // `ImGui_ImplGlfw_NewFrame` (called in `window_.beginFrame()`
+  // upstream of `runFrame`); nothing below has touched it yet.
+  //
+  // The viewport snapshot is the OUTCOME of any previous frame's
+  // viewport mutation (pinch-zoom, keyboard zoom, pan). Capturing
+  // it every frame is what lets `RnrReplayTest`'s
+  // `ApplyRecordedViewport` reconstruct zoom changes during
+  // playback, even for gestures (macOS trackpad pinch via
+  // `PinchEventMonitor`) that bypass ImGui's input boundary and
+  // therefore aren't visible to the recorder as discrete events.
+  const ViewportState& vp = interactionController_.viewport();
+  repro::FrameContext frameContext;
+  frameContext.viewport = repro::ReproViewport{
+      .paneOriginX = vp.paneOrigin.x,
+      .paneOriginY = vp.paneOrigin.y,
+      .paneSizeW = vp.paneSize.x,
+      .paneSizeH = vp.paneSize.y,
+      .devicePixelRatio = vp.devicePixelRatio,
+      .zoom = vp.zoom,
+      .panDocX = vp.panDocPoint.x,
+      .panDocY = vp.panDocPoint.y,
+      .panScreenX = vp.panScreenPoint.x,
+      .panScreenY = vp.panScreenPoint.y,
+      .viewBoxX = vp.documentViewBox.topLeft.x,
+      .viewBoxY = vp.documentViewBox.topLeft.y,
+      .viewBoxW = vp.documentViewBox.size().x,
+      .viewBoxH = vp.documentViewBox.size().y,
+  };
+  reproRecorder_->snapshotFrame(frameContext);
+}
+
+void EditorShell::renderMenuBarAndDialogs(bool compactUi) {
+  const bool rendererIdle = !renderCoordinator_.asyncRenderer().isBusy();
+  MenuBarState menuState{
+      .sourcePaneFocused = !compactUi && sourcePaneVisible_ && textEditor_.isFocused(),
+      .canSave = app_.hasDocument(),
+      .canRevert = app_.hasDocument() && app_.isDirty() && !app_.cleanSourceText().empty(),
+      .canUndo = app_.canUndo(),
+      .canRedo = app_.canRedo(),
+      .sourceFocusMode = sourceFocusMode_,
+      .hasShapeSelection = app_.hasSelection(),
+      .hasShapeClipboard = shapeClipboard_ != nullptr && shapeClipboard_->hasText(),
+      .hasTextSelection = cachedSelectionIsAllText_,
+      .canGroup = rendererIdle && app_.groupSelectionAvailability().canApply,
+      .canUngroup = rendererIdle && app_.ungroupSelectionAvailability().canApply,
+      .hasSelectableElements = cachedCanvasHasSelectableElements_,
+      .showCompositorDebugPanel = showCompositorDebugPanel_,
+      .compositorTileOverlay = compositorTileOverlay_,
+      .geometryDebugOverlay = geometryDebugOverlay_,
+      .perfOverlayMode = perfOverlayMode_,
+      .panelLayoutLocked = dockLayoutLocked_,
+  };
+  MenuBarActions menuActions;
+  if (compactUi) {
+    renderCompactTopBar();
+  } else {
+    menuActions = menuBarPresenter_.render(menuState, uiFontBold_);
+  }
+  applyMenuActions(menuActions);
+
+  // On macOS, service any pending open/save with a native OS panel; this
+  // consumes the request so the ImGui modal below stays closed. On other
+  // platforms it is a no-op and the ImGui modal renders as before.
+  serviceNativeDialogs();
+  dialogPresenter_.render(
+      [this](std::string_view path, std::string* error) { return tryOpenPath(path, error); },
+      [this](std::string_view path, std::string* error) {
+        return pendingViewportExport_ ? tryExportViewportSvgToPath(path, error)
+                                      : trySavePath(path, error);
+      });
+}
+
+void EditorShell::applyDeferredRenderRequest() {
+  if (!requestRenderAtEndOfFrame_) {
+    return;
+  }
+
+  if (renderCoordinator_.presentationRefreshPending() &&
+      renderCoordinator_.asyncRenderer().isBusy()) {
+    // A renderer-setting flip makes speculative warmup and any in-flight frame stale. Cancel it
+    // so its completion wake can submit the forced refresh without blocking the UI on the live
+    // document guard.
+    renderCoordinator_.asyncRenderer().cancelInFlight();
+  }
+  switch (internal::DeferredRenderActionForState(app_.hasDocument(), penDragFlushedThisFrame_,
+                                                 renderCoordinator_.asyncRenderer().isBusy())) {
+    case internal::DeferredRenderAction::ClearRequest: requestRenderAtEndOfFrame_ = false; break;
+    case internal::DeferredRenderAction::WakeForPenDrag:
+      // An actively-moving pen drag flushed new path geometry this frame. The
+      // live preview already presents that geometry, so skip the async render
+      // request: keeping the worker idle guarantees the next drag frame's
+      // flush is never blocked behind a busy render (the source of pen-drag
+      // frame stutter). The request flag stays set and fires on the first
+      // frame the pointer pauses; wake the loop so that frame happens even
+      // without further input.
+      window_.wakeEventLoop();
+      break;
+    case internal::DeferredRenderAction::SubmitRender:
+      renderCoordinator_.maybeRequestRender(app_, selectTool_, interactionController_.viewport(),
+                                            &textures_, /*supersedeInFlight=*/false,
+                                            selectionChromeDetailForActiveTool());
+      requestRenderAtEndOfFrame_ = false;
+      break;
+    case internal::DeferredRenderAction::WaitForRendererCompletion:
+      // AsyncRenderer's completion callback wakes the host. Posting another
+      // wake here would spin the Wasm main thread at requestAnimationFrame
+      // cadence for the entire worker render.
+      break;
+  }
+}
+
+void EditorShell::recordFrameTelemetry(
+    const FrameCostBreakdown::MainFrame& mainFrameCost,
+    const FrameCostBreakdown::DirectPresentation& directPresentationCost) {
+  FrameCostBreakdown frameCost = renderCoordinator_.lastFrameCostBreakdown();
+  const gui::EditorWindowFrameTiming& hostEndFrameTiming = window_.lastEndFrameTiming();
+  frameCost.mainFrame = mainFrameCost;
+  frameCost.hostFrame = FrameCostBreakdown::HostFrame{
+      .beginFrameMs = window_.lastBeginFrameMs(),
+      .previousEndFrameMs = hostEndFrameTiming.endFrameMs,
+      .previousImguiRenderMs = hostEndFrameTiming.imguiRenderMs,
+      .previousSurfaceAcquireMs = hostEndFrameTiming.surfaceAcquireMs,
+      .previousUnderlayMs = hostEndFrameTiming.underlayMs,
+      .previousImguiDrawMs = hostEndFrameTiming.imguiDrawMs,
+      .previousDirectMs = hostEndFrameTiming.directMs,
+      .previousReadbackMs = hostEndFrameTiming.readbackMs,
+      .previousPresentMs = hostEndFrameTiming.presentMs,
+  };
+  frameCost.directPresentation = directPresentationCost;
+  if (sourcePaneVisible_) {
+    frameCost.sourceRopes = textEditor_.lastSourceRopeCost();
+  }
+  latestFrameCostForReadback_ = frameCost;
+  interactionController_.frameHistory().setLatestFrameCost(frameCost);
+  const PresentationResourceStats presentationResources = textures_.presentationResourceStats();
+  interactionController_.frameHistory().setLatestMemorySample(
+      MemorySampleFromPresentationResources(presentationResources));
+  maybeLogFrameMissTelemetry(frameCost);
+  maybeLogResourceDiagnostics(frameCost);
+#ifdef __EMSCRIPTEN__
+  const LayersPanel::ThumbnailRefreshStats& layerThumbnailStats =
+      layersPanel_.thumbnailRefreshStats();
+  std::size_t layerThumbnailBitmapCount = 0u;
+  std::size_t layerThumbnailBitmapBytes = 0u;
+  std::size_t layerThumbnailTextureSnapshotCount = 0u;
+  for (const LayerTreeRow& row : layersPanel_.rows()) {
+    if (const svg::RendererBitmap* thumbnail = layersPanel_.rowThumbnail(row.stableId);
+        thumbnail != nullptr && !thumbnail->empty()) {
+      ++layerThumbnailBitmapCount;
+      layerThumbnailBitmapBytes += thumbnail->pixels.size();
+    }
+    if (const auto* textureSnapshot = layersPanel_.rowTextureThumbnail(row.stableId);
+        textureSnapshot != nullptr && *textureSnapshot != nullptr) {
+      ++layerThumbnailTextureSnapshotCount;
+    }
+  }
+  PublishLayerThumbnailStats(
+      static_cast<double>(layerThumbnailStats.rowCount),
+      static_cast<double>(layerThumbnailStats.renderedCount),
+      static_cast<double>(layerThumbnailStats.reusedCount),
+      static_cast<double>(layerThumbnailStats.deferredCount),
+      static_cast<double>(layerThumbnailStats.skippedForCanvasInvalidationCount),
+      static_cast<double>(layerThumbnailStats.snapshotRebuildCount),
+      static_cast<double>(layerThumbnailBitmapCount),
+      static_cast<double>(layerThumbnailBitmapBytes),
+      static_cast<double>(layerThumbnailTextureSnapshotCount),
+      static_cast<double>(thumbnailTextures_.thumbnailTextureCount()));
+  PublishPresentationResourceStats(
+      static_cast<double>(presentationResources.totalTrackedBytes),
+      static_cast<double>(presentationResources.peakTrackedBytes),
+      static_cast<double>(presentationResources.pendingRetiredBytes),
+      static_cast<double>(presentationResources.agedRetiredBytes),
+      static_cast<double>(presentationResources.activeTileTextures),
+      static_cast<double>(presentationResources.overviewTileTextures),
+      static_cast<double>(presentationResources.pendingRetiredTextures),
+      static_cast<double>(presentationResources.agedRetiredTextures),
+      static_cast<double>(presentationResources.retiredFrameCount),
+      static_cast<double>(presentationResources.wgpuLifetimeTextureCreates),
+      static_cast<double>(presentationResources.wgpuLifetimeBufferCreates));
+  PublishInteractionStats(static_cast<int>(app_.selectedElements().size()),
+                          interactionController_.pendingClick().has_value() ? 1 : 0,
+                          renderCoordinator_.asyncRenderer().isBusy() ? 1 : 0,
+                          selectTool_.isDragging() ? 1 : 0,
+                          static_cast<double>(frameTelemetryFrame_));
+#endif
+}
+
 void EditorShell::runFrame() {
   ZoneScopedN("EditorShell::runFrame");
   ++frameTelemetryFrame_;
@@ -6099,39 +6352,7 @@ void EditorShell::runFrame() {
   contentOnlyCaptureForNextFrame_ = false;
   textures_.advancePresentationFrame();
   compositorDebugPanel_.advancePresentationFrame();
-  if (reproRecorder_) {
-    // Snapshot before any widget consumes input events. ImGui's IO
-    // state for the frame has been populated by
-    // `ImGui_ImplGlfw_NewFrame` (called in `window_.beginFrame()`
-    // upstream of `runFrame`); nothing below has touched it yet.
-    //
-    // The viewport snapshot is the OUTCOME of any previous frame's
-    // viewport mutation (pinch-zoom, keyboard zoom, pan). Capturing
-    // it every frame is what lets `RnrReplayTest`'s
-    // `ApplyRecordedViewport` reconstruct zoom changes during
-    // playback, even for gestures (macOS trackpad pinch via
-    // `PinchEventMonitor`) that bypass ImGui's input boundary and
-    // therefore aren't visible to the recorder as discrete events.
-    const ViewportState& vp = interactionController_.viewport();
-    repro::FrameContext frameContext;
-    frameContext.viewport = repro::ReproViewport{
-        .paneOriginX = vp.paneOrigin.x,
-        .paneOriginY = vp.paneOrigin.y,
-        .paneSizeW = vp.paneSize.x,
-        .paneSizeH = vp.paneSize.y,
-        .devicePixelRatio = vp.devicePixelRatio,
-        .zoom = vp.zoom,
-        .panDocX = vp.panDocPoint.x,
-        .panDocY = vp.panDocPoint.y,
-        .panScreenX = vp.panScreenPoint.x,
-        .panScreenY = vp.panScreenPoint.y,
-        .viewBoxX = vp.documentViewBox.topLeft.x,
-        .viewBoxY = vp.documentViewBox.topLeft.y,
-        .viewBoxW = vp.documentViewBox.size().x,
-        .viewBoxH = vp.documentViewBox.size().y,
-    };
-    reproRecorder_->snapshotFrame(frameContext);
-  }
+  snapshotReproFrame();
   const float frameDeltaMs = ImGui::GetIO().DeltaTime * 1000.0f;
   interactionController_.noteFrameDelta(frameDeltaMs);
 
@@ -6311,44 +6532,7 @@ void EditorShell::runFrame() {
   handleGlobalShortcuts();
   markPhase(mainFrameCost.shortcutsMs);
 
-  const bool rendererIdle = !renderCoordinator_.asyncRenderer().isBusy();
-  MenuBarState menuState{
-      .sourcePaneFocused = !compactUi && sourcePaneVisible_ && textEditor_.isFocused(),
-      .canSave = app_.hasDocument(),
-      .canRevert = app_.hasDocument() && app_.isDirty() && !app_.cleanSourceText().empty(),
-      .canUndo = app_.canUndo(),
-      .canRedo = app_.canRedo(),
-      .sourceFocusMode = sourceFocusMode_,
-      .hasShapeSelection = app_.hasSelection(),
-      .hasShapeClipboard = shapeClipboard_ != nullptr && shapeClipboard_->hasText(),
-      .hasTextSelection = cachedSelectionIsAllText_,
-      .canGroup = rendererIdle && app_.groupSelectionAvailability().canApply,
-      .canUngroup = rendererIdle && app_.ungroupSelectionAvailability().canApply,
-      .hasSelectableElements = cachedCanvasHasSelectableElements_,
-      .showCompositorDebugPanel = showCompositorDebugPanel_,
-      .compositorTileOverlay = compositorTileOverlay_,
-      .geometryDebugOverlay = geometryDebugOverlay_,
-      .perfOverlayMode = perfOverlayMode_,
-      .panelLayoutLocked = dockLayoutLocked_,
-  };
-  MenuBarActions menuActions;
-  if (compactUi) {
-    renderCompactTopBar();
-  } else {
-    menuActions = menuBarPresenter_.render(menuState, uiFontBold_);
-  }
-  applyMenuActions(menuActions);
-
-  // On macOS, service any pending open/save with a native OS panel; this
-  // consumes the request so the ImGui modal below stays closed. On other
-  // platforms it is a no-op and the ImGui modal renders as before.
-  serviceNativeDialogs();
-  dialogPresenter_.render(
-      [this](std::string_view path, std::string* error) { return tryOpenPath(path, error); },
-      [this](std::string_view path, std::string* error) {
-        return pendingViewportExport_ ? tryExportViewportSvgToPath(path, error)
-                                      : trySavePath(path, error);
-      });
+  renderMenuBarAndDialogs(compactUi);
   markPhase(mainFrameCost.menusDialogsMs);
 
   std::ignore = highlightSelectionSourceIfNeeded();
@@ -6380,113 +6564,10 @@ void EditorShell::runFrame() {
                        ImVec2(static_cast<float>(windowSize.x), paneHeight));
   }
   markPhase(mainFrameCost.splittersMs);
-  if (requestRenderAtEndOfFrame_) {
-    if (renderCoordinator_.presentationRefreshPending() &&
-        renderCoordinator_.asyncRenderer().isBusy()) {
-      // A renderer-setting flip makes speculative warmup and any in-flight frame stale. Cancel it
-      // so its completion wake can submit the forced refresh without blocking the UI on the live
-      // document guard.
-      renderCoordinator_.asyncRenderer().cancelInFlight();
-    }
-    switch (internal::DeferredRenderActionForState(app_.hasDocument(), penDragFlushedThisFrame_,
-                                                   renderCoordinator_.asyncRenderer().isBusy())) {
-      case internal::DeferredRenderAction::ClearRequest: requestRenderAtEndOfFrame_ = false; break;
-      case internal::DeferredRenderAction::WakeForPenDrag:
-        // An actively-moving pen drag flushed new path geometry this frame. The
-        // live preview already presents that geometry, so skip the async render
-        // request: keeping the worker idle guarantees the next drag frame's
-        // flush is never blocked behind a busy render (the source of pen-drag
-        // frame stutter). The request flag stays set and fires on the first
-        // frame the pointer pauses; wake the loop so that frame happens even
-        // without further input.
-        window_.wakeEventLoop();
-        break;
-      case internal::DeferredRenderAction::SubmitRender:
-        renderCoordinator_.maybeRequestRender(app_, selectTool_, interactionController_.viewport(),
-                                              &textures_, /*supersedeInFlight=*/false,
-                                              selectionChromeDetailForActiveTool());
-        requestRenderAtEndOfFrame_ = false;
-        break;
-      case internal::DeferredRenderAction::WaitForRendererCompletion:
-        // AsyncRenderer's completion callback wakes the host. Posting another
-        // wake here would spin the Wasm main thread at requestAnimationFrame
-        // cadence for the entire worker render.
-        break;
-    }
-  }
+  applyDeferredRenderRequest();
   penDragFlushedThisFrame_ = false;
   markPhase(mainFrameCost.endRenderRequestMs);
-  FrameCostBreakdown frameCost = renderCoordinator_.lastFrameCostBreakdown();
-  const gui::EditorWindowFrameTiming& hostEndFrameTiming = window_.lastEndFrameTiming();
-  frameCost.mainFrame = mainFrameCost;
-  frameCost.hostFrame = FrameCostBreakdown::HostFrame{
-      .beginFrameMs = window_.lastBeginFrameMs(),
-      .previousEndFrameMs = hostEndFrameTiming.endFrameMs,
-      .previousImguiRenderMs = hostEndFrameTiming.imguiRenderMs,
-      .previousSurfaceAcquireMs = hostEndFrameTiming.surfaceAcquireMs,
-      .previousUnderlayMs = hostEndFrameTiming.underlayMs,
-      .previousImguiDrawMs = hostEndFrameTiming.imguiDrawMs,
-      .previousDirectMs = hostEndFrameTiming.directMs,
-      .previousReadbackMs = hostEndFrameTiming.readbackMs,
-      .previousPresentMs = hostEndFrameTiming.presentMs,
-  };
-  frameCost.directPresentation = directPresentationCost;
-  if (sourcePaneVisible_) {
-    frameCost.sourceRopes = textEditor_.lastSourceRopeCost();
-  }
-  latestFrameCostForReadback_ = frameCost;
-  interactionController_.frameHistory().setLatestFrameCost(frameCost);
-  const PresentationResourceStats presentationResources = textures_.presentationResourceStats();
-  interactionController_.frameHistory().setLatestMemorySample(
-      MemorySampleFromPresentationResources(presentationResources));
-  maybeLogFrameMissTelemetry(frameCost);
-  maybeLogResourceDiagnostics(frameCost);
-#ifdef __EMSCRIPTEN__
-  const LayersPanel::ThumbnailRefreshStats& layerThumbnailStats =
-      layersPanel_.thumbnailRefreshStats();
-  std::size_t layerThumbnailBitmapCount = 0u;
-  std::size_t layerThumbnailBitmapBytes = 0u;
-  std::size_t layerThumbnailTextureSnapshotCount = 0u;
-  for (const LayerTreeRow& row : layersPanel_.rows()) {
-    if (const svg::RendererBitmap* thumbnail = layersPanel_.rowThumbnail(row.stableId);
-        thumbnail != nullptr && !thumbnail->empty()) {
-      ++layerThumbnailBitmapCount;
-      layerThumbnailBitmapBytes += thumbnail->pixels.size();
-    }
-    if (const auto* textureSnapshot = layersPanel_.rowTextureThumbnail(row.stableId);
-        textureSnapshot != nullptr && *textureSnapshot != nullptr) {
-      ++layerThumbnailTextureSnapshotCount;
-    }
-  }
-  PublishLayerThumbnailStats(
-      static_cast<double>(layerThumbnailStats.rowCount),
-      static_cast<double>(layerThumbnailStats.renderedCount),
-      static_cast<double>(layerThumbnailStats.reusedCount),
-      static_cast<double>(layerThumbnailStats.deferredCount),
-      static_cast<double>(layerThumbnailStats.skippedForCanvasInvalidationCount),
-      static_cast<double>(layerThumbnailStats.snapshotRebuildCount),
-      static_cast<double>(layerThumbnailBitmapCount),
-      static_cast<double>(layerThumbnailBitmapBytes),
-      static_cast<double>(layerThumbnailTextureSnapshotCount),
-      static_cast<double>(thumbnailTextures_.thumbnailTextureCount()));
-  PublishPresentationResourceStats(
-      static_cast<double>(presentationResources.totalTrackedBytes),
-      static_cast<double>(presentationResources.peakTrackedBytes),
-      static_cast<double>(presentationResources.pendingRetiredBytes),
-      static_cast<double>(presentationResources.agedRetiredBytes),
-      static_cast<double>(presentationResources.activeTileTextures),
-      static_cast<double>(presentationResources.overviewTileTextures),
-      static_cast<double>(presentationResources.pendingRetiredTextures),
-      static_cast<double>(presentationResources.agedRetiredTextures),
-      static_cast<double>(presentationResources.retiredFrameCount),
-      static_cast<double>(presentationResources.wgpuLifetimeTextureCreates),
-      static_cast<double>(presentationResources.wgpuLifetimeBufferCreates));
-  PublishInteractionStats(static_cast<int>(app_.selectedElements().size()),
-                          interactionController_.pendingClick().has_value() ? 1 : 0,
-                          renderCoordinator_.asyncRenderer().isBusy() ? 1 : 0,
-                          selectTool_.isDragging() ? 1 : 0,
-                          static_cast<double>(frameTelemetryFrame_));
-#endif
+  recordFrameTelemetry(mainFrameCost, directPresentationCost);
   contentOnlyCaptureThisFrame_ = false;
 }
 

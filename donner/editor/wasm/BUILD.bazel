@@ -68,7 +68,15 @@ _EDITOR_LINKOPTS = [
     # gap. Pthread builds must initialize each resulting passive segment in __wasm_init_memory;
     # Safari's optimizing compiler spends gigabytes compiling that generated function. Preserve
     # the merged image and also cap Binaryen's otherwise-unlimited one-caller inlining threshold.
-    "-sBINARYEN_EXTRA_PASSES=--skip-pass=memory-packing,--one-caller-inline-max-function-size=1000,--inline-max-combined-binary-size=196608",
+    #
+    # That threshold is measured in Binaryen IR nodes, not bytes, so 1000 nodes was large enough to
+    # swallow whole frame stages back into their single caller: the `noinline` stages split out of
+    # `EditorShell::runFrame` and `EditorShell::renderRenderPane` were re-merged after the link and
+    # both frame bodies stayed over the tier-compiler budget. 400 still inlines single-use wrappers
+    # but leaves any real frame stage as its own Wasm function; it costs ~40 KiB of raw module size
+    # and takes the largest function body from 46,391 to 28,417 bytes. This is a tightening of the
+    # Safari contract; it is never to be relaxed back.
+    "-sBINARYEN_EXTRA_PASSES=--skip-pass=memory-packing,--one-caller-inline-max-function-size=400,--inline-max-combined-binary-size=196608",
     "-pthread",
     "-sALLOW_MEMORY_GROWTH=1",
     "-sMAXIMUM_MEMORY=512MB",
