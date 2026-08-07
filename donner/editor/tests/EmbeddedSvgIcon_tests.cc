@@ -14,6 +14,7 @@
 #include <string_view>
 
 #ifdef DONNER_GEODE_BACKEND_AVAILABLE
+#include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #endif
 
