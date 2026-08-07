@@ -109,6 +109,14 @@ const ViewportState& WorkerSurfacePlacementViewport(const DocumentPresentationFr
 
 }  // namespace
 
+bool DocumentPresentationMappingChanged(const ViewportState& before, const ViewportState& after) {
+  return before.zoom != after.zoom || before.panDocPoint != after.panDocPoint ||
+         before.panScreenPoint != after.panScreenPoint ||
+         before.documentViewBox.topLeft != after.documentViewBox.topLeft ||
+         before.documentViewBox.bottomRight != after.documentViewBox.bottomRight ||
+         before.devicePixelRatio != after.devicePixelRatio;
+}
+
 std::optional<WorkerSurfaceLayout> ComputeWorkerSurfaceLayout(
     const DocumentPresentationFrame& frame) {
   if (frame.presentationSuppressed || !frame.workerSurface.active) {
@@ -144,9 +152,11 @@ FramebufferUnderlayPresenter::FramebufferUnderlayPresenter(FramebufferUnderlayPl
     : planSink_(std::move(planSink)) {}
 
 DocumentPresentationResult FramebufferUnderlayPresenter::resolveExternalSurface(
-    const DocumentPresentationFrame& /*frame*/) {
+    const DocumentPresentationFrame& frame) {
   frameOpen_ = true;
-  return DocumentPresentationResult{};
+  // The underlay draws this frame's tiles with the live transform, so the
+  // presented pixels are in the live viewport by construction.
+  return DocumentPresentationResult{.presentedViewport = frame.viewport};
 }
 
 bool FramebufferUnderlayPresenter::presentUnderlay(std::optional<FramebufferUnderlayPlan> plan) {
@@ -177,6 +187,7 @@ DocumentPresentationResult WorkerSurfacePresenter::resolveExternalSurface(
   frameOpen_ = true;
 
   std::optional<WorkerSurfaceLayout> layout = ComputeWorkerSurfaceLayout(frame);
+  bool heldViewportIsPresented = false;
   constexpr int kMaxHeldFrames = 120;
   if (!layout.has_value() && !frame.presentationSuppressed && !frame.workerSurface.active &&
       heldLayout_.has_value() && heldFrameCount_ < kMaxHeldFrames) {
@@ -189,6 +200,7 @@ DocumentPresentationResult WorkerSurfacePresenter::resolveExternalSurface(
     // hold the last accepted placement instead. The loading affordance and the
     // new document's first epoch both land on top of it.
     layout = *heldLayout_;
+    heldViewportIsPresented = true;
     ++heldFrameCount_;
   }
   // The hidden update carries the same frame token as a visible one so the
@@ -199,11 +211,16 @@ DocumentPresentationResult WorkerSurfacePresenter::resolveExternalSurface(
                                           .frameToken = frame.workerSurface.frameCount});
   if (frame.workerSurface.active && layout.has_value()) {
     heldLayout_ = applied;
+    // The held placement is only meaningful together with the transform that
+    // produced it: anything drawn onto those pixels while they are held has to
+    // use the same viewport.
+    heldViewport_ = WorkerSurfacePlacementViewport(frame);
     heldFrameCount_ = 0;
   } else if (frame.presentationSuppressed) {
     // The sample picker and content-only captures own the pane outright; nothing
     // accepted survives them.
     heldLayout_.reset();
+    heldViewport_.reset();
   }
   lastLayout_ = applied;
   if (layoutSink_) {
@@ -215,10 +232,21 @@ DocumentPresentationResult WorkerSurfacePresenter::resolveExternalSurface(
     std::ignore = fallback_->resolveExternalSurface(frame);
   }
 
+  // On a frame the worker surface owns, document pixels sit in the accepted
+  // epoch's transform (or the held one while a document swap replays it).
+  // Otherwise the underlay drew them live.
+  ViewportState presentedViewport = frame.viewport;
+  if (surfaceOwnsFrame_) {
+    presentedViewport = heldViewportIsPresented && heldViewport_.has_value()
+                            ? *heldViewport_
+                            : WorkerSurfacePlacementViewport(frame);
+  }
+
   return DocumentPresentationResult{
       .documentPresentedDirectly = surfaceOwnsFrame_,
       .externalSurfacePresented = surfaceOwnsFrame_,
       .selectionChromeBaked = surfaceOwnsFrame_ && applied.selectionChromeBaked,
+      .presentedViewport = std::move(presentedViewport),
   };
 }
 

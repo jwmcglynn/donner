@@ -349,6 +349,105 @@ TEST(DocumentPresenterTest, TheLivePaneStillOwnsTheClip) {
 }
 
 // ---------------------------------------------------------------------------
+// Presented viewport
+// ---------------------------------------------------------------------------
+
+TEST(DocumentPresenterTest, TheUnderlayPresentsInTheLiveViewport) {
+  RecordingSinks sinks;
+  const std::unique_ptr<DocumentPresenter> presenter = MakeDocumentPresenter(
+      DocumentPresentationTarget::FramebufferUnderlay, sinks.planSink(), sinks.layoutSink());
+
+  DocumentPresentationFrame frame = TestFrame(ActiveSurface(3));
+  frame.viewport.zoom = 2.5;
+
+  const DocumentPresentationResult result = presenter->resolveExternalSurface(frame);
+
+  EXPECT_DOUBLE_EQ(result.presentedViewport.zoom, 2.5);
+}
+
+TEST(DocumentPresenterTest, TheWorkerSurfacePresentsInTheAcceptedEpochsViewport) {
+  RecordingSinks sinks;
+  const std::unique_ptr<DocumentPresenter> presenter = MakeDocumentPresenter(
+      DocumentPresentationTarget::WorkerSurface, sinks.planSink(), sinks.layoutSink());
+
+  DirectSurfacePresentationState surface = ActiveSurface(3);
+  surface.viewport.zoom = 1.0;
+  DocumentPresentationFrame frame = TestFrame(surface);
+  // The UI thread has zoomed since the worker rasterized this epoch. Chrome
+  // drawn at 3.0 would float away from pixels placed at 1.0.
+  frame.viewport.zoom = 3.0;
+
+  const DocumentPresentationResult result = presenter->resolveExternalSurface(frame);
+
+  ASSERT_TRUE(result.externalSurfacePresented);
+  EXPECT_DOUBLE_EQ(result.presentedViewport.zoom, 1.0);
+}
+
+TEST(DocumentPresenterTest, AFrameTheWorkerSurfaceDoesNotOwnPresentsInTheLiveViewport) {
+  RecordingSinks sinks;
+  const std::unique_ptr<DocumentPresenter> presenter = MakeDocumentPresenter(
+      DocumentPresentationTarget::WorkerSurface, sinks.planSink(), sinks.layoutSink());
+
+  DirectSurfacePresentationState inactive;
+  inactive.viewport = TestViewport();
+  inactive.viewport.zoom = 1.0;
+  DocumentPresentationFrame frame = TestFrame(inactive);
+  frame.viewport.zoom = 3.0;
+
+  const DocumentPresentationResult result = presenter->resolveExternalSurface(frame);
+
+  ASSERT_FALSE(result.externalSurfacePresented);
+  EXPECT_DOUBLE_EQ(result.presentedViewport.zoom, 3.0);
+}
+
+TEST(DocumentPresenterTest, AHeldPlacementPresentsInTheViewportThatProducedIt) {
+  RecordingSinks sinks;
+  const std::unique_ptr<DocumentPresenter> presenter = MakeDocumentPresenter(
+      DocumentPresentationTarget::WorkerSurface, sinks.planSink(), sinks.layoutSink());
+
+  DirectSurfacePresentationState surface = ActiveSurface(11);
+  surface.viewport.zoom = 1.0;
+  std::ignore = presenter->resolveExternalSurface(TestFrame(surface));
+
+  DirectSurfacePresentationState invalidated = surface;
+  invalidated.active = false;
+  DocumentPresentationFrame frame = TestFrame(invalidated);
+  frame.viewport.zoom = 3.0;
+  const DocumentPresentationResult result = presenter->resolveExternalSurface(frame);
+
+  ASSERT_TRUE(result.externalSurfacePresented);
+  EXPECT_DOUBLE_EQ(result.presentedViewport.zoom, 1.0);
+}
+
+TEST(DocumentPresenterTest, PresentationMappingChangeTracksWhatMovesTheDocument) {
+  const ViewportState base = TestViewport();
+
+  EXPECT_FALSE(DocumentPresentationMappingChanged(base, base));
+
+  ViewportState zoomed = base;
+  zoomed.zoom = 2.0;
+  EXPECT_TRUE(DocumentPresentationMappingChanged(base, zoomed));
+
+  ViewportState panned = base;
+  panned.panScreenPoint = Vector2d(11.0, 20.0);
+  EXPECT_TRUE(DocumentPresentationMappingChanged(base, panned));
+
+  ViewportState refitted = base;
+  refitted.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 41.0, 30.0);
+  EXPECT_TRUE(DocumentPresentationMappingChanged(base, refitted));
+
+  ViewportState rescaled = base;
+  rescaled.devicePixelRatio = 2.0;
+  EXPECT_TRUE(DocumentPresentationMappingChanged(base, rescaled));
+
+  // Moving the pane does not move the document inside it.
+  ViewportState movedPane = base;
+  movedPane.paneOrigin = Vector2d(5.0, 7.0);
+  movedPane.paneSize = Vector2d(180.0, 90.0);
+  EXPECT_FALSE(DocumentPresentationMappingChanged(base, movedPane));
+}
+
+// ---------------------------------------------------------------------------
 // Document replacement
 // ---------------------------------------------------------------------------
 

@@ -3796,6 +3796,14 @@ void EditorShell::renderRenderPanePresentation(
   bool documentPresentedDirectly = presentation.documentPresentedDirectly;
   const bool workerDocumentSurfacePresented = presentation.externalSurfacePresented;
   [[maybe_unused]] const bool workerSurfaceSelectionChromeBaked = presentation.selectionChromeBaked;
+  // Everything drawn onto the document this frame - selection chrome, the
+  // compositor tile overlay, the presented image clip - belongs in the same
+  // transform the presented pixels landed in. That is the live viewport
+  // whenever the framebuffer underlay presents, and the accepted worker epoch's
+  // own viewport when a worker surface does; using the live viewport there
+  // separates gesture feedback from the pixels it annotates by however far the
+  // UI thread has run ahead of the worker.
+  const ViewportState& presentedDocumentViewport = presentation.presentedViewport;
 
   const auto liveActiveDragPreview = selectTool_.activeDragPreview();
   const auto activeGesturePreview = selectTool_.activeGesturePreview();
@@ -3921,11 +3929,21 @@ void EditorShell::renderRenderPanePresentation(
     if (workerSurfaceSelectionChromeBaked) {
       overlaySnapshot = OverlayWithoutBakedSelectionChrome(std::move(overlaySnapshot));
     }
-    if (overlaySnapshotChanged || textures_.overlayTexture().texture == 0) {
+    // The overlay texture is placed in screen space, so it must be re-rasterized
+    // when the presented transform moves even if the chrome's document-space
+    // geometry did not: an accepted epoch landing is a placement change for the
+    // chrome exactly as much as it is for the document pixels.
+    const bool presentedViewportMoved =
+        !lastOverlayPresentedViewport_.has_value() ||
+        DocumentPresentationMappingChanged(*lastOverlayPresentedViewport_,
+                                           presentedDocumentViewport);
+    if (overlaySnapshotChanged || presentedViewportMoved ||
+        textures_.overlayTexture().texture == 0) {
       RenderedOverlayTexture renderedOverlay = RenderImmediateOverlaySnapshotToTexture(
-          *directOverlayRenderer_, interactionController_.viewport(), overlaySnapshot);
+          *directOverlayRenderer_, presentedDocumentViewport, overlaySnapshot);
       textures_.updateOverlayTexture(std::move(renderedOverlay.textureSnapshot),
                                      renderedOverlay.screenRect);
+      lastOverlayPresentedViewport_ = presentedDocumentViewport;
     }
   } else {
     textures_.resetOverlay();
@@ -3933,6 +3951,7 @@ void EditorShell::renderRenderPanePresentation(
 #endif
   RenderPanePresenterState paneState{
       .viewport = interactionController_.viewport(),
+      .presentedDocumentViewport = &presentedDocumentViewport,
       .frameHistory = interactionController_.frameHistory(),
       .textures = textures_,
       .immediateOverlaySnapshot = renderCoordinator_.immediateOverlaySnapshot(),

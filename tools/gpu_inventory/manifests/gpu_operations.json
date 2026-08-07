@@ -70,7 +70,7 @@
       ]
     },
     "donner/editor/EditorShell.cc": {
-      "sha256": "e24e5c82db0df0308fcb483387a187e249634bbbe49fdc86577c033355143684",
+      "sha256": "4edd65c7a330fdfffcb72dd2129a709fb49eed2705b0e8924c17767c27d62ef8",
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
         "wgpuLifetimeTextureCreates"

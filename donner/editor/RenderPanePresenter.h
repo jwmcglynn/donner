@@ -23,7 +23,19 @@ inline constexpr double kRenderPaneCheckerboardSize = 16.0;
 inline constexpr double kFramebufferCheckerboardSize = kRenderPaneCheckerboardSize;
 
 struct RenderPanePresenterState {
+  /// Live viewport for this frame. Owns pane geometry: the pane rect, the
+  /// content region, and everything anchored to the window rather than to the
+  /// document.
   const ViewportState& viewport;
+  /// Viewport the document pixels presented this frame are actually placed
+  /// with, or null when that is the live viewport.
+  ///
+  /// A worker-owned surface is positioned with the viewport its accepted epoch
+  /// was rasterized against, which can be one or more worker frames behind the
+  /// live one. Everything drawn in document space - the presented image clip
+  /// rect, tile quads, and the compositor tile overlay - must use that same
+  /// transform, or it annotates pixels that are no longer underneath it.
+  const ViewportState* presentedDocumentViewport = nullptr;
   const FrameHistory& frameHistory;
   const GlTextureCache& textures;
   const std::optional<SelectionChromeSnapshot>& immediateOverlaySnapshot;

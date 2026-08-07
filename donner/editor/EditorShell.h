@@ -579,6 +579,10 @@ private:
   svg::SVGDocumentHandle documentViewBoxCacheDocument_;
   std::optional<Box2d> documentViewBoxCache_;
   std::optional<ViewportState> pendingViewportReplayOverride_;
+  /// Transform the current selection-chrome overlay texture was rasterized and
+  /// placed with. The overlay is screen-space, so a new accepted worker epoch
+  /// moving the presented document is on its own a reason to re-rasterize it.
+  std::optional<ViewportState> lastOverlayPresentedViewport_;
   std::optional<EditorShellDocumentReplayInput> pendingDocumentSpaceReplayInput_;
   /// True while the save modal is being used for File → Export Viewport as SVG
   /// rather than an ordinary document save. Routes the dialog's write callback

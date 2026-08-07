@@ -141,7 +141,8 @@ svg::RendererBitmap CapturePresenterFrame(
     gui::EditorWindow* window, GlTextureCache* textures, Entity suppressedLayerEntity,
     std::optional<SelectTool::ActiveDragPreview> activePreview = std::nullopt,
     std::optional<SelectTool::ActiveDragPreview> displayedPreview = std::nullopt,
-    bool documentPresentedDirectly = false, bool compositorTileOverlay = false) {
+    bool documentPresentedDirectly = false, bool compositorTileOverlay = false,
+    std::optional<double> liveZoomAheadOfPresentation = std::nullopt) {
   ViewportState viewport;
   viewport.paneOrigin = Vector2d(0.0, 0.0);
   viewport.paneSize = Vector2d(kLogicalWidth, kLogicalHeight);
@@ -170,8 +171,18 @@ svg::RendererBitmap CapturePresenterFrame(
       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
       ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus;
   ImGui::Begin("display-none-suppression-repro", nullptr, kWindowFlags);
+  // `viewport` above is the transform the presented pixels are in. When the
+  // caller asks for a live viewport that has run ahead of presentation - the
+  // browser's worker surface lagging behind a zoom - the live viewport takes
+  // the higher zoom and the presented one stays behind, exactly as the shell
+  // hands them to the presenter.
+  ViewportState liveViewport = viewport;
+  if (liveZoomAheadOfPresentation.has_value()) {
+    liveViewport.zoom = *liveZoomAheadOfPresentation;
+  }
   presenter.render(RenderPanePresenterState{
-      .viewport = viewport,
+      .viewport = liveViewport,
+      .presentedDocumentViewport = &viewport,
       .frameHistory = frameHistory,
       .textures = *textures,
       .immediateOverlaySnapshot = noOverlaySnapshot,
@@ -329,6 +340,92 @@ TEST(RenderPanePresenterVisualReproTest,
   EXPECT_GT(changedPixels, 0)
       << "The View-menu compositor tile overlay must draw metadata-only worker tile bounds over "
          "the directly presented document surface.";
+}
+
+TEST(RenderPanePresenterVisualReproTest,
+     CompositorTileOverlayFollowsPresentedPixelsWhenTheLiveViewportRunsAhead) {
+  gui::EditorWindow window(gui::EditorWindowOptions{
+      .title = "Compositor Tile Overlay Presented-Viewport Repro",
+      .initialWidth = kLogicalWidth,
+      .initialHeight = kLogicalHeight,
+      .visible = false,
+      .offscreen = true,
+      .offscreenContentScale = 1.0,
+      .clearColor = {0.08f, 0.09f, 0.10f, 1.0f},
+      .enableFramebufferReadback = true,
+  });
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+
+  RenderResult::CompositedPreview preview;
+  RenderResult::CompositedTile tile =
+      MakeTile("layer:7", RenderResult::CompositedTile::Kind::Layer, kVisibleDragEntity,
+               Vector2d(54.0, 44.0), Vector2d(78.0, 78.0), kVisibleDragLayer,
+               /*isDragTarget=*/false);
+  tile.bitmap = svg::RendererBitmap{};
+  preview.tiles.push_back(std::move(tile));
+
+  GlTextureCache textures(window.geodeDevice());
+  textures.initialize();
+  textures.uploadComposited(preview);
+
+  // A worker surface presents at 1x while the UI thread has already zoomed to
+  // 2x. Document-space chrome drawn with the live transform lands at twice the
+  // offset and twice the size, floating off the pixels it is annotating.
+  constexpr double kLiveZoomAheadOfPresentation = 2.0;
+  const svg::RendererBitmap withoutOverlay = CapturePresenterFrame(
+      &window, &textures, entt::null, std::nullopt, std::nullopt,
+      /*documentPresentedDirectly=*/true, /*compositorTileOverlay=*/false,
+      kLiveZoomAheadOfPresentation);
+  const svg::RendererBitmap withOverlay = CapturePresenterFrame(
+      &window, &textures, entt::null, std::nullopt, std::nullopt,
+      /*documentPresentedDirectly=*/true, /*compositorTileOverlay=*/true,
+      kLiveZoomAheadOfPresentation);
+  ASSERT_FALSE(withoutOverlay.empty());
+  ASSERT_FALSE(withOverlay.empty());
+  ASSERT_EQ(withOverlay.pixels.size(), withoutOverlay.pixels.size());
+
+  const double readbackFromLogicalX =
+      static_cast<double>(withOverlay.dimensions.x) / static_cast<double>(kLogicalWidth);
+  const double readbackFromLogicalY =
+      static_cast<double>(withOverlay.dimensions.y) / static_cast<double>(kLogicalHeight);
+  int changedPixels = 0;
+  double changedMaxLogicalX = 0.0;
+  double changedMaxLogicalY = 0.0;
+  for (int y = 0; y < withOverlay.dimensions.y; ++y) {
+    for (int x = 0; x < withOverlay.dimensions.x; ++x) {
+      const std::size_t offset =
+          static_cast<std::size_t>(y) * withOverlay.rowBytes + static_cast<std::size_t>(x) * 4u;
+      if (offset + 3u >= withOverlay.pixels.size()) {
+        continue;
+      }
+      const bool changed = withOverlay.pixels[offset + 0u] != withoutOverlay.pixels[offset + 0u] ||
+                           withOverlay.pixels[offset + 1u] != withoutOverlay.pixels[offset + 1u] ||
+                           withOverlay.pixels[offset + 2u] != withoutOverlay.pixels[offset + 2u] ||
+                           withOverlay.pixels[offset + 3u] != withoutOverlay.pixels[offset + 3u];
+      if (!changed) {
+        continue;
+      }
+      ++changedPixels;
+      changedMaxLogicalX =
+          std::max(changedMaxLogicalX, static_cast<double>(x) / readbackFromLogicalX);
+      changedMaxLogicalY =
+          std::max(changedMaxLogicalY, static_cast<double>(y) / readbackFromLogicalY);
+    }
+  }
+
+  EXPECT_GT(changedPixels, 0) << "The compositor tile overlay must draw something at all.";
+  // The tile covers document (54,44)-(132,122). Presented at 1x that is where
+  // the pixels are; drawn against the 2x live viewport it would reach
+  // (108,88)-(264,244). Anything past the presented tile's far corner is chrome
+  // annotating pixels that are not underneath it.
+  EXPECT_LT(changedMaxLogicalX, 160.0)
+      << "Compositor tile overlay ran past the presented tile in x; it followed the live viewport "
+         "instead of the transform the presented pixels were placed with.";
+  EXPECT_LT(changedMaxLogicalY, 150.0)
+      << "Compositor tile overlay ran past the presented tile in y; it followed the live viewport "
+         "instead of the transform the presented pixels were placed with.";
 }
 
 TEST(RenderPanePresenterVisualReproTest, OverviewInfillDoesNotBleedThroughTransparentActiveTile) {

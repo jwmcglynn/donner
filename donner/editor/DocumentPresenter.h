@@ -147,7 +147,30 @@ struct DocumentPresentationResult {
   /// True when the presented external surface already contains selection
   /// chrome, so the overlay pass must drop the baked primitives.
   bool selectionChromeBaked = false;
+  /// The viewport this frame's presented document pixels are placed with.
+  ///
+  /// Equal to the live viewport whenever the framebuffer underlay presents, and
+  /// to the accepted epoch's own viewport when a worker surface does. Every
+  /// caller that draws *onto* the document - selection chrome, the compositor
+  /// tile overlay, the presented image clip - must use this rather than the
+  /// live viewport, or gesture feedback separates from the pixels it annotates
+  /// by however far the live viewport has run ahead of the worker.
+  ViewportState presentedViewport;
 };
+
+/**
+ * Return whether two viewports place document pixels differently on screen.
+ *
+ * Compares only what moves the document: the screen/document mapping, the
+ * artboard rect, and the device pixel ratio the chrome is rasterized at. Pane
+ * origin and size are deliberately excluded - the pane moving does not by
+ * itself move the document within it.
+ *
+ * @param before Viewport the presented pixels were previously placed with.
+ * @param after Viewport they are placed with now.
+ */
+[[nodiscard]] bool DocumentPresentationMappingChanged(const ViewportState& before,
+                                                      const ViewportState& after);
 
 /// Screen placement for a worker-owned document surface this frame, or
 /// `std::nullopt` when the surface must stay hidden.
@@ -274,6 +297,9 @@ private:
   /// Last placement an accepted epoch produced, replayed while a document swap
   /// leaves the worker with no accepted epoch at all.
   std::optional<WorkerSurfaceLayout> heldLayout_;
+  /// Transform \ref heldLayout_ was produced with, so chrome drawn over held
+  /// pixels stays in the same frame as those pixels.
+  std::optional<ViewportState> heldViewport_;
   /// Frames the hold has covered since the accepted epoch went inactive. The
   /// hold is a bridge across a document swap, not a steady state: if no
   /// replacement epoch arrives within the budget (a parked terminal surface

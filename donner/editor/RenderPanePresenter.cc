@@ -656,7 +656,14 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
       paneRect.bottomRight.y <= paneRect.topLeft.y) {
     return;
   }
-  const Box2d screenRect = state.viewport.imageScreenRect();
+  // Document-space drawing follows the pixels that are actually on screen. Pane
+  // geometry above stays on the live viewport; the artboard rect, tile quads,
+  // and the compositor tile overlay below all have to sit in the same transform
+  // the presented document pixels were placed with.
+  const ViewportState& documentViewport = state.presentedDocumentViewport != nullptr
+                                              ? *state.presentedDocumentViewport
+                                              : state.viewport;
+  const Box2d screenRect = documentViewport.imageScreenRect();
   const std::optional<Box2d> imageClipRect = PresentedImageClipRect(paneRect, screenRect);
   const ImVec2 imageOrigin(static_cast<float>(screenRect.topLeft.x),
                            static_cast<float>(screenRect.topLeft.y));
@@ -673,7 +680,7 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
     return;
   }
 
-  const double pxPerDoc = state.viewport.pixelsPerDocUnit();
+  const double pxPerDoc = documentViewport.pixelsPerDocUnit();
   const Vector2d imageOriginScreen(imageOrigin.x, imageOrigin.y);
   const Transform2d screenFromCanvasTransform =
       Transform2d::Scale(pxPerDoc) * Transform2d::Translate(imageOriginScreen);
