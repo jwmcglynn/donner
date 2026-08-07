@@ -1108,14 +1108,23 @@ test("browser presents the first Basic Shapes drag frame within the interaction 
       .toBeGreaterThanOrEqual(selectionRequest);
     await expect
       .poll(
-        async () =>
-          (await page.evaluate(
+        async () => {
+          const delta = (await page.evaluate(
             () => window.__donnerWgpuReadbackStats?.selectionChromePixels || 0,
-          )) - beforeSelectionChrome,
+          )) - beforeSelectionChrome;
+          if (delta > 50) {
+            return delta;
+          }
+          // The completed capture may predate the overlay's first rendered
+          // frame on slow hosts; request a fresh diagnostic for the next read
+          // instead of polling a stale snapshot forever.
+          await requestWgpuDiagnostic(page);
+          return delta;
+        },
         {
           message: "expected overlay-only selection feedback before starting the drag",
           timeout: scaledMs(2000),
-          intervals: [16, 25, 50, 100],
+          intervals: [100, 250, 500],
         },
       )
       .toBeGreaterThan(50);
