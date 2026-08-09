@@ -454,74 +454,38 @@ RendererBitmap RenderDocumentsToAtlasBitmap(RendererInterface& renderer,
   viewport.size = Vector2d(atlasSizePx.x, atlasSizePx.y);
   viewport.devicePixelRatio = 1.0;
 
-  struct PreparedTile {
-    Registry* registry = nullptr;
-    Entity firstEntity = entt::null;
-    Entity lastEntity = entt::null;
-    Transform2d atlasFromCanvas;
-  };
-
-  // Access guards are held for the whole pass: the tiles are prepared up front
-  // so the draw loop can stay inside one begin/end frame window.
+  // Access guards are held for the whole pass so the draw loop can stay inside
+  // one begin/end frame window.
   std::vector<DocumentWriteAccess> accessGuards;
-  std::vector<PreparedTile> tiles;
+  std::vector<SVGDocument*> tileDocuments;
+  std::vector<Transform2d> tileTransforms;
   accessGuards.reserve(placements.size());
-  tiles.reserve(placements.size());
-
+  tileDocuments.reserve(placements.size());
+  tileTransforms.reserve(placements.size());
   for (const AtlasDocumentPlacement& placement : placements) {
     if (placement.document == nullptr) {
       continue;
     }
-
-    SVGDocument& document = *placement.document;
-    accessGuards.emplace_back(document.writeAccess());
-    Registry& registry = document.registry();
-
-    ParseWarningSink warnings = ParseWarningSink::Disabled();
-    RendererUtils::prepareDocumentForRendering(document, /*verbose=*/false, warnings);
-
-    // The whole document is one draw-order range, so the tile spans the
-    // lowest- through highest-ordered rendering instance.
-    PreparedTile tile;
-    int firstDrawOrder = 0;
-    int lastDrawOrder = 0;
-    for (auto view = registry.view<const components::RenderingInstanceComponent>();
-         auto storageEntity : view) {
-      const auto& instance = view.get<const components::RenderingInstanceComponent>(storageEntity);
-      if (tile.firstEntity == entt::null || instance.drawOrder < firstDrawOrder) {
-        firstDrawOrder = instance.drawOrder;
-        tile.firstEntity = storageEntity;
-      }
-      if (tile.lastEntity == entt::null || instance.drawOrder > lastDrawOrder) {
-        lastDrawOrder = instance.drawOrder;
-        tile.lastEntity = storageEntity;
-      }
-    }
-    if (tile.firstEntity == entt::null || tile.lastEntity == entt::null) {
-      continue;
-    }
-
-    tile.registry = &registry;
-    tile.atlasFromCanvas =
-        Transform2d::Translate(Vector2d(placement.originPx.x, placement.originPx.y));
-    tiles.push_back(tile);
+    accessGuards.emplace_back(placement.document->writeAccess());
+    tileDocuments.push_back(placement.document);
+    tileTransforms.push_back(
+        Transform2d::Translate(Vector2d(placement.originPx.x, placement.originPx.y)));
   }
 
-  if (tiles.empty()) {
+  if (tileDocuments.empty()) {
     return RendererBitmap{};
   }
 
   renderer.beginFrame(viewport);
   RendererDriver driver(renderer);
-  for (const PreparedTile& tile : tiles) {
+  for (std::size_t i = 0; i < tileDocuments.size(); ++i) {
     // A root `<svg>` viewport clip is pushed *before* its own entity transform
     // is set (see `RendererDriver::drawPreparedEntityRange`), so it lands in
     // whatever matrix the renderer already holds. Standalone rendering leaves
     // that as the identity that `beginFrame` installs; here the tile offset has
     // to be active first or the clip would scissor the tile away.
-    renderer.setTransform(tile.atlasFromCanvas);
-    driver.drawEntityRangeIntoCurrentFrame(*tile.registry, tile.firstEntity, tile.lastEntity,
-                                           viewport, tile.atlasFromCanvas);
+    renderer.setTransform(tileTransforms[i]);
+    driver.drawDocumentIntoCurrentFrame(*tileDocuments[i], viewport, tileTransforms[i]);
   }
   renderer.endFrame();
 

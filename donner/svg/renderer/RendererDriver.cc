@@ -1129,6 +1129,32 @@ bool RendererDriver::drawEntityRangeInterruptibly(Registry& registry, Entity fir
   return completed;
 }
 
+void RendererDriver::drawDocumentIntoCurrentFrame(SVGDocument& document,
+                                                  const RenderViewport& viewport,
+                                                  const Transform2d& surfaceFromCanvas) {
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
+
+  const std::unordered_set<Entity> feImageShadowEntities =
+      collectOffscreenFeImageShadowEntities(document.registry());
+  std::vector<Entity> mainEntities;
+  RenderingInstanceView instances(document.registry());
+  while (!instances.done()) {
+    const Entity entity = instances.currentEntity();
+    if (feImageShadowEntities.count(entity) == 0) {
+      mainEntities.push_back(entity);
+    }
+    instances.advance();
+  }
+
+  if (mainEntities.empty()) {
+    return;
+  }
+
+  drawEntityRangeIntoCurrentFrame(document.registry(), mainEntities.front(), mainEntities.back(),
+                                  viewport, surfaceFromCanvas);
+}
+
 void RendererDriver::drawEntityRangeIntoCurrentFrame(Registry& registry, Entity firstEntity,
                                                      Entity lastEntity,
                                                      const RenderViewport& viewport,

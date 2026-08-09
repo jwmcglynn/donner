@@ -136,6 +136,24 @@ public:
                                        const Transform2d& surfaceFromCanvas);
 
   /**
+   * Prepare and draw a whole document into the renderer's already-open frame,
+   * using the same main-entity selection as `drawInterruptibly` (traversal
+   * order, offscreen feImage shadow entities excluded). Use this instead of
+   * deriving an entity range by hand: a range computed from a different
+   * ordering can cross `drawEntityRange`'s first/last walk and unbalance
+   * layer bookkeeping.
+   *
+   * The caller owns beginFrame/endFrame and holds the document's write access.
+   *
+   * @param document Document to draw; prepared for rendering by this call.
+   * @param viewport Viewport for the active render pass.
+   * @param surfaceFromCanvas Transform that maps canvas coords to the active
+   *     render surface.
+   */
+  void drawDocumentIntoCurrentFrame(SVGDocument& document, const RenderViewport& viewport,
+                                    const Transform2d& surfaceFromCanvas);
+
+  /**
    * Compute the canvas-space bounding box of every pixel a subsequent
    * `drawEntityRange(registry, firstEntity, lastEntity, viewport,
    * baseTransform)` call would write to. Runs the same entity traversal
