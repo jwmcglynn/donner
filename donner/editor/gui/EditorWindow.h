@@ -57,6 +57,27 @@ namespace internal {
   return emscriptenBuild;
 }
 
+/// Opaque fallback clear color for the browser UI surface, matching the page
+/// background painted behind the canvas (`donner/editor/wasm/editor.css`:
+/// `background: #101317`).
+inline constexpr std::array<float, 4> kWasmOpaqueSurfaceClearColor = {
+    16.0f / 255.0f, 19.0f / 255.0f, 23.0f / 255.0f, 1.0f};
+
+/// Pick the browser UI surface's clear color.
+///
+/// The Wasm UI surface clears uncovered render-pane pixels to alpha 0 so the
+/// worker's document canvas composites underneath it. That only produces
+/// transparency when the configured surface honors the alpha channel; a surface
+/// composited as opaque turns the same clear into solid black and blanks the
+/// whole editor area until real content covers it. Keep the transparent clear
+/// only when the surface actually reports premultiplied alpha; otherwise clear
+/// to the page background so the result matches what the page already paints
+/// behind the canvas.
+[[nodiscard]] constexpr std::array<float, 4> WasmSurfaceClearColor(
+    std::array<float, 4> transparentClearColor, bool premultipliedAlphaSupported) noexcept {
+  return premultipliedAlphaSupported ? transparentClearColor : kWasmOpaqueSurfaceClearColor;
+}
+
 enum class WgpuSurfaceFailureKind {
   Timeout,
   OutdatedOrLost,

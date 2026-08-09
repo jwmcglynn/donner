@@ -1013,6 +1013,17 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
         break;
       }
     }
+    // The constructor optimistically set an alpha-0 clear so the worker's
+    // document canvas can composite under the UI surface. That is only correct
+    // once the surface is known to honor the alpha channel; without
+    // premultiplied compositing the same clear presents as opaque black.
+    {
+      const std::array<float, 4> clearColor = internal::WasmSurfaceClearColor(
+          {options_.clearColor[0], options_.clearColor[1], options_.clearColor[2],
+           options_.clearColor[3]},
+          wgpuState_->alphaMode == wgpu::CompositeAlphaMode::Premultiplied);
+      std::copy(clearColor.begin(), clearColor.end(), std::begin(options_.clearColor));
+    }
 #else
     if (caps.alphaModeCount > 0) {
       wgpuState_->alphaMode = wgpu::CompositeAlphaMode{caps.alphaModes[0]};

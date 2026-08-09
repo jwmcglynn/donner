@@ -268,7 +268,7 @@
         "submit",
         "unmap"
       ],
-      "sha256": "5649ee27acce44c5eabd76843570beb98ff45270e42c06ecf5a45ef5a704e19c",
+      "sha256": "d8f077bc0011520dd0ea6e0c5356fcfd930534851f01c7ad09196a7d20e5d993",
       "usesEditorWgpuDefine": true,
       "wgpuCFunctions": [
         "wgpuCreateInstance",
@@ -345,7 +345,7 @@
       ]
     },
     "donner/editor/gui/EditorWindow.h": {
-      "sha256": "252adb6d843937ffa48da554d5de088d6365d08b308810c27b460c8d399a31d3",
+      "sha256": "cefff5d75fab9dbbfef6100f7158952367bb474a589c8c498fb6692439a1a4a6",
       "usesEditorWgpuDefine": true,
       "wgpuCFunctions": [
         "wgpuDirectRenderCallback_",
@@ -383,7 +383,7 @@
       "operations": [
         "draw"
       ],
-      "sha256": "1aab4182a59402cd478b314b572e210cf5ad54632ae3c7beda027b5c46da6c6b",
+      "sha256": "25867610124ee8e9729da9eb04d93828b5acc7c912557c263ea1e7c7c39566dc",
       "usesEditorWgpuDefine": true,
       "wgpuCTypes": [
         "WGPUTextureView"

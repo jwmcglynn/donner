@@ -539,6 +539,21 @@ TEST(EditorWindowTest, WasmSurfaceFailuresUseStatusAwareBoundedRetries) {
             (internal::WgpuSurfaceRetryDecision{}));
 }
 
+TEST(EditorWindowTest, WasmSurfaceClearColorNeverRequiresUnsupportedTransparency) {
+  constexpr std::array<float, 4> kTransparent = {0.11f, 0.11f, 0.13f, 0.0f};
+
+  // A premultiplied-alpha surface composites the transparent clear correctly,
+  // so uncovered render-pane pixels keep showing the worker document canvas.
+  EXPECT_EQ(internal::WasmSurfaceClearColor(kTransparent, /*premultipliedAlphaSupported=*/true),
+            kTransparent);
+
+  // Without premultiplied compositing the same clear would present as opaque
+  // black; fall back to the page background already painted behind the canvas.
+  EXPECT_EQ(internal::WasmSurfaceClearColor(kTransparent, /*premultipliedAlphaSupported=*/false),
+            internal::kWasmOpaqueSurfaceClearColor);
+  EXPECT_FLOAT_EQ(internal::kWasmOpaqueSurfaceClearColor[3], 1.0f);
+}
+
 TEST(EditorWindowTest, WasmDiagnosticReadbackFailuresUseBoundedRetries) {
   EXPECT_EQ(internal::WgpuDiagnosticReadbackDecisionFor(true, 2u),
             (internal::WgpuDiagnosticReadbackDecision{
