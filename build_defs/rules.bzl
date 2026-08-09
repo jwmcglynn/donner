@@ -93,6 +93,26 @@ def libc_compat_deps():
         "//conditions:default": [],
     })
 
+def test_crash_handler_deps():
+    """
+    Returns the alwayslink dep that installs a crash signal handler in a test
+    binary.
+
+    Upstream `gtest_main` installs none, so a test killed by SIGSEGV leaves a log
+    that stops at its `[ RUN ]` line with no stack - the crash is then only
+    diagnosable by reproducing it, which a CI-only failure by definition resists.
+    Linked into every `donner_cc_test` so the first occurrence is the one that
+    gets diagnosed.
+
+    Restricted to platforms whose libc provides `execinfo.h`/`dladdr`; Emscripten
+    and other targets fall back to no handler.
+    """
+    return select({
+        "@platforms//os:linux": ["//donner/base:test_crash_handler"],
+        "@platforms//os:macos": ["//donner/base:test_crash_handler"],
+        "//conditions:default": [],
+    })
+
 def fuzzer_compatible_with():
     """
     Returns a list of labels that the fuzzer rules are compatible with.
@@ -593,7 +613,7 @@ def donner_cc_test(
         name = name,
         srcs = srcs,
         linkopts = donner_linkopts,
-        deps = deps + libc_compat_deps(),
+        deps = deps + libc_compat_deps() + test_crash_handler_deps(),
         tags = tags,
         **kwargs
     )

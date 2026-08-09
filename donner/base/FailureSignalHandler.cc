@@ -211,9 +211,8 @@ void failureSignalHandler(int signo) {
   raise(signo);
 }
 
-}  // namespace
-
-void InstallFailureSignalHandler() {
+/// Replace the crash dispositions, recording what was there before.
+void installHandlers() {
   prewarmSymbolization();
 
   for (size_t i = 0; i < kNumFailureSignals; ++i) {
@@ -224,6 +223,23 @@ void InstallFailureSignalHandler() {
 
     sigaction(kFailureSignals[i].signo, &action, &previousActions()[i]);
   }
+}
+
+}  // namespace
+
+void InstallFailureSignalHandler() {
+  // Install exactly once. A second install would record *this* handler as the
+  // "previous action", so the restore-and-re-raise at the end of
+  // `failureSignalHandler` would re-enter the handler instead of reaching the
+  // default disposition, and the process would spin printing stacks forever
+  // instead of dying. Callers can therefore install defensively: a binary that
+  // links both `//donner/base:test_crash_handler` and a `main()` that installs
+  // explicitly gets one set of handlers.
+  static const bool kInstalled = [] {
+    installHandlers();
+    return true;
+  }();
+  (void)kInstalled;
 }
 
 }  // namespace donner

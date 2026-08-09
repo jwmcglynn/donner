@@ -1,4 +1,5 @@
 load("@rules_python//python:defs.bzl", "py_test")
+load("//build_defs:rules.bzl", "donner_cc_test")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -73,7 +74,7 @@ cc_binary(
     ],
 )
 
-cc_test(
+donner_cc_test(
     name = "editor_control_session_tests",
     size = "small",
     srcs = ["EditorControlSession_tests.cc"],

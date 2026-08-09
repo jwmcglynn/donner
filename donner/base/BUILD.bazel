@@ -72,6 +72,21 @@ donner_cc_library(
     visibility = ["//visibility:public"],
 )
 
+# Linked into every donner_cc_test so a crashing test prints a stack instead of
+# a log that stops at its `[ RUN ]` line. See tests/InstallCrashHandler.cc.
+donner_cc_library(
+    name = "test_crash_handler",
+    testonly = 1,
+    srcs = [
+        "tests/InstallCrashHandler.cc",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":failure_signal_handler",
+    ],
+    alwayslink = 1,
+)
+
 donner_cc_library(
     name = "base_test_utils",
     testonly = 1,
