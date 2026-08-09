@@ -1132,6 +1132,24 @@ test("a zoom storm never uncovers the editor background under the Donner Splash"
     `the document already covered the probe region without zooming: ${JSON.stringify(zoomInBoxes)}`,
   ).toBeGreaterThan(0);
 
+  // Headroom before the storm. At the document's natural fit the probe region
+  // genuinely overhangs the surface by a few pixels, and the storm below
+  // deliberately zooms out a notch at a time. Stopping the loop above the
+  // instant coverage first holds can leave the storm's own zoom-out landing
+  // back on that legitimate overhang, which the coverage assertion cannot tell
+  // apart from the stale-epoch defect this test guards. How much slack the loop
+  // happens to leave depends on how far presentation lags the live viewport, so
+  // it is not something to rely on: zoom in explicitly past the boundary.
+  const kZoomHeadroomNotches = 2;
+  for (let notch = 0; notch < kZoomHeadroomNotches; ++notch) {
+    await pinchZoom(page, probeCenter, -250);
+    await page.waitForTimeout(200);
+  }
+  expect(
+    await surfaceCoversProbe(),
+    "the zoom headroom notches left the document surface off the probe region",
+  ).toBe(true);
+
   await recordSurfaceLayouts(page);
 
   // Zoom out and back in. Each notch changes the live viewport by ~27% while the

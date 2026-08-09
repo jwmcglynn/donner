@@ -569,6 +569,10 @@ private:
   std::size_t sampleThumbnailGenerationCursor_ = 0;
   std::optional<std::size_t> sampleThumbnailInFlightIndex_;
   bool samplePickerHasPresentedFrame_ = false;
+  /// Set when the worker refused a thumbnail request because its runtime was
+  /// still initializing. Nothing else wakes the on-demand loop for that, so the
+  /// picker arms its own short idle retry. @see nextIdleWakeSeconds
+  bool sampleThumbnailRetryPending_ = false;
   /// Embedded + system font catalog. It is declared before the render coordinator so it outlives
   /// every worker-side FontManager and offscreen renderer during reverse-order destruction.
   svg::FontCatalog fontCatalog_;

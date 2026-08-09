@@ -18,6 +18,7 @@
 #include "donner/base/Vector2.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorApp.h"
+#include "donner/editor/EmbeddedSvgIcon.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/svg/renderer/RendererInterface.h"
@@ -322,5 +323,11 @@ private:
   /// state). Reset implicitly as entities change across document reloads.
   mutable std::unordered_set<std::uint32_t> treeExpandedEntities_;
 };
+
+/// Every inspector path-operation button icon, for the shell's startup prewarm
+/// batch. These first appear when a selection makes the boolean-op row
+/// available, so batching them with the boot icons keeps that first selection
+/// from stalling on a run of GPU readbacks.
+[[nodiscard]] std::span<const EmbeddedSvgIconRequest> SidebarIconPrewarmRequests();
 
 }  // namespace donner::editor

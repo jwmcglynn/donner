@@ -32,6 +32,7 @@
 #include "donner/base/StringUtils.h"
 #include "donner/css/parser/ColorParser.h"
 #include "donner/editor/AttributeWriteback.h"
+#include "donner/editor/DisclosureChevron.h"
 #include "donner/editor/DocumentSave.h"
 #include "donner/editor/DragCoalesce.h"
 #include "donner/editor/EditorDockLayout.h"
@@ -875,6 +876,24 @@ std::optional<SelectionChromeSnapshot::TextBoxDragPreview> TextBoxDragPreviewFro
   };
 }
 
+/// Rasterize every embedded UI icon in one batched pass before the first frame.
+///
+/// Each icon used to be rasterized lazily at its first draw, and each
+/// rasterization ends in a GPU-to-CPU readback. In a browser that readback is an
+/// asynchronous buffer mapping resolved from the frame loop, so the first frame
+/// paid several of them back to back and stalled for hundreds of milliseconds.
+/// Batching them collapses the set into a single readback taken before the UI
+/// starts drawing; the per-icon calls then hit the prewarmed cache.
+void PrewarmEditorIcons() {
+  std::vector<EmbeddedSvgIconRequest> requests;
+  for (const std::span<const EmbeddedSvgIconRequest> group :
+       {ToolbarIconPrewarmRequests(), DisclosureChevronPrewarmRequests(),
+        LayersPanelIconPrewarmRequests(), SidebarIconPrewarmRequests()}) {
+    requests.insert(requests.end(), group.begin(), group.end());
+  }
+  PrewarmEmbeddedSvgIcons(requests);
+}
+
 EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     : window_(window),
       options_(std::move(options)),
@@ -1016,6 +1035,7 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     ConfigureEmbeddedSvgIconRenderer(*directOverlayRenderer_);
   }
 #endif
+  PrewarmEditorIcons();
   if (!rotateCursorSet_.initialize(window_.rawHandle(), window_.geodeDevice())) {
     std::fprintf(stderr, "[editor] custom rotate cursor unavailable; using fallback cursor\n");
   }
@@ -1060,6 +1080,13 @@ std::optional<float> EditorShell::nextIdleWakeSeconds() const {
     result = result.has_value() ? std::min(*result, clampedWakeSeconds) : clampedWakeSeconds;
   };
 
+  // Sample-picker thumbnails refused by an initializing worker runtime: poll
+  // back soon enough that the carousel fills in without a visible gap, slowly
+  // enough that a still-initializing runtime is not spun on.
+  if (sampleThumbnailRetryPending_) {
+    constexpr float kSampleThumbnailRetryWakeSeconds = 0.05f;
+    includeWake(kSampleThumbnailRetryWakeSeconds);
+  }
   includeWake(documentSyncController_.nextTextSyncWakeSeconds());
   includeWake(renderCoordinator_.nextDirectSurfaceRetryWakeSeconds());
   includeWake(textEditor_.nextFlashWakeSeconds());
@@ -4042,10 +4069,13 @@ void EditorShell::ensureSampleThumbnails() {
   }
 
   if (sampleThumbnailGenerationCursor_ >= samples.size()) {
+    sampleThumbnailRetryPending_ = false;
     publishStats();
     return;
   }
   if (sampleThumbnailInFlightIndex_.has_value() || asyncRenderer.isBusy()) {
+    // Work in flight ends in a completion callback, which wakes the loop.
+    sampleThumbnailRetryPending_ = false;
     publishStats();
     return;
   }
@@ -4061,6 +4091,15 @@ void EditorShell::ensureSampleThumbnails() {
 #endif
   if (asyncRenderer.requestSampleThumbnail(std::move(request))) {
     sampleThumbnailInFlightIndex_ = index;
+    sampleThumbnailRetryPending_ = false;
+  } else {
+    // The worker runtime can still be initializing when the picker's first
+    // frames land - the two race, and which side wins moves with how fast the
+    // first frame gets presented. A refused request leaves nothing in flight,
+    // so no completion callback will ever wake the on-demand loop again and the
+    // carousel would keep its placeholders forever. Arm a short idle retry
+    // instead of blocking the frame on worker readiness.
+    sampleThumbnailRetryPending_ = true;
   }
   publishStats();
 }
@@ -4068,6 +4107,7 @@ void EditorShell::ensureSampleThumbnails() {
 void EditorShell::cancelSampleThumbnailGeneration() {
   renderCoordinator_.asyncRenderer().cancelSampleThumbnailWork();
   sampleThumbnailInFlightIndex_.reset();
+  sampleThumbnailRetryPending_ = false;
 }
 
 void EditorShell::renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& contentRegion) {

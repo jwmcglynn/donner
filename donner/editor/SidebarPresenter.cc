@@ -464,6 +464,22 @@ constexpr double kMinimumSpanForScale = 1e-6;
 
 }  // namespace
 
+std::span<const EmbeddedSvgIconRequest> SidebarIconPrewarmRequests() {
+  static const std::array<EmbeddedSvgIconRequest, 5> kRequests = {{
+      {BootstrapSvgForPathOperation(PathOperationKind::Union), kPathOperationIconRasterSizePx,
+       /*tintableMask=*/true},
+      {BootstrapSvgForPathOperation(PathOperationKind::Intersect), kPathOperationIconRasterSizePx,
+       /*tintableMask=*/true},
+      {BootstrapSvgForPathOperation(PathOperationKind::SubtractFront),
+       kPathOperationIconRasterSizePx, /*tintableMask=*/true},
+      {BootstrapSvgForPathOperation(PathOperationKind::SubtractBack),
+       kPathOperationIconRasterSizePx, /*tintableMask=*/true},
+      {BootstrapSvgForPathOperation(PathOperationKind::Exclude), kPathOperationIconRasterSizePx,
+       /*tintableMask=*/true},
+  }};
+  return kRequests;
+}
+
 std::optional<DecomposedTransform> DecomposeTransform(const Transform2d& transform) {
   const double a = transform.data[0];
   const double b = transform.data[1];

@@ -20,6 +20,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -27,6 +28,7 @@
 #include "donner/base/Vector2.h"
 #include "donner/css/Color.h"
 #include "donner/editor/EditorApp.h"
+#include "donner/editor/EmbeddedSvgIcon.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/LayerTreeModel.h"
 #include "donner/svg/renderer/RendererInterface.h"
@@ -48,6 +50,13 @@ struct LayersLockedRejectionFlash {
   /// Fade intensity in (0, 1]; scales the red row-highlight alpha at draw time.
   float intensity = 0.0f;
 };
+
+/// Every per-row affordance icon (visible/hidden, locked/unlocked) the panel can
+/// draw, for the shell's startup prewarm batch. The visible and unlocked masks
+/// are on screen from the first frame; the toggled states cost nothing extra to
+/// rasterize in the same batch and keep the first toggle from stalling on a
+/// readback.
+[[nodiscard]] std::span<const EmbeddedSvgIconRequest> LayersPanelIconPrewarmRequests();
 
 /// ImGui Layers panel backed by a `LayerTreeModel` snapshot.
 class LayersPanel {

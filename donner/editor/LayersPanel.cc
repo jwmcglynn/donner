@@ -1,6 +1,7 @@
 #include "donner/editor/LayersPanel.h"
 
 #include <algorithm>
+#include <array>
 #include <cfloat>
 #include <chrono>
 #include <cstdint>
@@ -64,6 +65,14 @@ std::span<const unsigned char> BootstrapSvgForIcon(LayerAffordanceIcon icon) {
   }
   return embedded::kBootstrapEyeSvg;
 }
+
+/// Every affordance icon, in enum order.
+constexpr std::array<LayerAffordanceIcon, 4> kLayerAffordanceIcons = {
+    LayerAffordanceIcon::Visible,
+    LayerAffordanceIcon::Hidden,
+    LayerAffordanceIcon::Locked,
+    LayerAffordanceIcon::Unlocked,
+};
 
 const std::optional<svg::RendererBitmap>& CachedBootstrapIconBitmap(LayerAffordanceIcon icon) {
   switch (icon) {
@@ -218,6 +227,20 @@ ImU32 ToImU32(const css::RGBA& rgba) {
 }
 
 }  // namespace
+
+std::span<const EmbeddedSvgIconRequest> LayersPanelIconPrewarmRequests() {
+  static const std::array<EmbeddedSvgIconRequest, kLayerAffordanceIcons.size()> kRequests = {{
+      {BootstrapSvgForIcon(LayerAffordanceIcon::Visible), kAffordanceIconRasterSizePx,
+       /*tintableMask=*/true},
+      {BootstrapSvgForIcon(LayerAffordanceIcon::Hidden), kAffordanceIconRasterSizePx,
+       /*tintableMask=*/true},
+      {BootstrapSvgForIcon(LayerAffordanceIcon::Locked), kAffordanceIconRasterSizePx,
+       /*tintableMask=*/true},
+      {BootstrapSvgForIcon(LayerAffordanceIcon::Unlocked), kAffordanceIconRasterSizePx,
+       /*tintableMask=*/true},
+  }};
+  return kRequests;
+}
 
 void LayersPanel::refreshSnapshot(const EditorApp& app, svg::Renderer* renderer,
                                   ThumbnailRefreshMode mode, bool canvasPresentationCurrent) {

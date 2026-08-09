@@ -1,7 +1,10 @@
 #include "donner/editor/EmbeddedSvgIcon.h"
 
+#include <algorithm>
+#include <cstddef>
 #include <memory>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 
 #include "donner/base/Length.h"
@@ -62,13 +65,9 @@ svg::RendererInterface& SharedIconRenderer() {
   return *state.fallbackRenderer;
 }
 
-std::optional<svg::RendererBitmap> RenderEmbeddedSvgBitmap(std::span<const unsigned char> svgBytes,
-                                                           int outputSizePx,
-                                                           bool normalizeToTintableMask) {
-  if (outputSizePx <= 0) {
-    return std::nullopt;
-  }
-
+/// Parse an embedded icon and size its root viewport to the requested square.
+std::optional<svg::SVGDocument> ParseEmbeddedSvgIcon(std::span<const unsigned char> svgBytes,
+                                                     int outputSizePx) {
   ParseWarningSink warnings = ParseWarningSink::Disabled();
   auto parseResult = svg::parser::SVGParser::ParseSVG(StringViewFromSpan(svgBytes), warnings);
   if (parseResult.hasError()) {
@@ -79,9 +78,87 @@ std::optional<svg::RendererBitmap> RenderEmbeddedSvgBitmap(std::span<const unsig
   svg::SVGSVGElement root = document.svgElement();
   root.setWidth(Lengthd(outputSizePx, Lengthd::Unit::Px));
   root.setHeight(Lengthd(outputSizePx, Lengthd::Unit::Px));
+  return document;
+}
+
+/// Identifies a prewarmed rasterization. Embedded resources are static arrays,
+/// so the source pointer and length identify the asset without hashing bytes.
+struct PrewarmedIconKey {
+  const unsigned char* data = nullptr;
+  std::size_t size = 0;
+  int outputSizePx = 0;
+  bool tintableMask = true;
+
+  bool operator==(const PrewarmedIconKey&) const = default;
+};
+
+struct PrewarmedIconKeyHash {
+  std::size_t operator()(const PrewarmedIconKey& key) const {
+    std::size_t hash = std::hash<const void*>()(key.data);
+    hash = hash * 31u + std::hash<std::size_t>()(key.size);
+    hash = hash * 31u + std::hash<int>()(key.outputSizePx);
+    return hash * 31u + (key.tintableMask ? 1u : 0u);
+  }
+};
+
+PrewarmedIconKey KeyForRequest(const EmbeddedSvgIconRequest& request) {
+  return PrewarmedIconKey{request.svgBytes.data(), request.svgBytes.size(), request.outputSizePx,
+                          request.tintableMask};
+}
+
+using PrewarmedIconMap =
+    std::unordered_map<PrewarmedIconKey, svg::RendererBitmap, PrewarmedIconKeyHash>;
+
+PrewarmedIconMap& PrewarmedIcons() {
+  static PrewarmedIconMap icons;
+  return icons;
+}
+
+/// Maximum atlas row width in device pixels. Icons are small (16-80 px), so a
+/// shelf this wide keeps the atlas to a couple of rows while staying far below
+/// any backend's maximum texture dimension.
+constexpr int kIconAtlasMaxWidthPx = 1024;
+
+/// Copy one square tile out of the atlas into a tightly-packed bitmap.
+svg::RendererBitmap SliceAtlasTile(const svg::RendererBitmap& atlas, Vector2i originPx,
+                                   int sizePx) {
+  svg::RendererBitmap tile;
+  tile.dimensions = Vector2i(sizePx, sizePx);
+  tile.rowBytes = static_cast<std::size_t>(sizePx) * 4u;
+  tile.alphaType = atlas.alphaType;
+  tile.pixels.resize(tile.rowBytes * static_cast<std::size_t>(sizePx));
+
+  for (int y = 0; y < sizePx; ++y) {
+    const unsigned char* source = atlas.pixels.data() +
+                                  static_cast<std::size_t>(originPx.y + y) * atlas.rowBytes +
+                                  static_cast<std::size_t>(originPx.x) * 4u;
+    unsigned char* destination = tile.pixels.data() + static_cast<std::size_t>(y) * tile.rowBytes;
+    std::copy_n(source, tile.rowBytes, destination);
+  }
+  return tile;
+}
+
+std::optional<svg::RendererBitmap> RenderEmbeddedSvgBitmap(std::span<const unsigned char> svgBytes,
+                                                           int outputSizePx,
+                                                           bool normalizeToTintableMask) {
+  if (outputSizePx <= 0) {
+    return std::nullopt;
+  }
+
+  const PrewarmedIconMap& prewarmed = PrewarmedIcons();
+  if (const auto it = prewarmed.find(PrewarmedIconKey{svgBytes.data(), svgBytes.size(),
+                                                      outputSizePx, normalizeToTintableMask});
+      it != prewarmed.end()) {
+    return it->second;
+  }
+
+  std::optional<svg::SVGDocument> document = ParseEmbeddedSvgIcon(svgBytes, outputSizePx);
+  if (!document.has_value()) {
+    return std::nullopt;
+  }
 
   svg::RendererInterface& renderer = SharedIconRenderer();
-  renderer.draw(document);
+  renderer.draw(*document);
   svg::RendererBitmap bitmap = renderer.takeSnapshot();
   if (bitmap.empty()) {
     return std::nullopt;
@@ -119,6 +196,117 @@ std::optional<svg::RendererBitmap> RenderEmbeddedSvgIcon(std::span<const unsigne
 std::optional<svg::RendererBitmap> RenderEmbeddedSvgArtwork(std::span<const unsigned char> svgBytes,
                                                             int outputSizePx) {
   return RenderEmbeddedSvgBitmap(svgBytes, outputSizePx, /*normalizeToTintableMask=*/false);
+}
+
+std::vector<std::optional<svg::RendererBitmap>> RenderEmbeddedSvgIconBatch(
+    std::span<const EmbeddedSvgIconRequest> requests) {
+  std::vector<std::optional<svg::RendererBitmap>> results(requests.size());
+  if (requests.empty()) {
+    return results;
+  }
+
+  struct AtlasSlot {
+    std::size_t requestIndex = 0;
+    Vector2i originPx = Vector2i::Zero();
+    int sizePx = 0;
+  };
+
+  // Documents are kept alive (and pointer-stable) until the atlas pass is done.
+  std::vector<svg::SVGDocument> documents;
+  std::vector<AtlasSlot> slots;
+  documents.reserve(requests.size());
+  slots.reserve(requests.size());
+
+  // Shelf packing: fill a row left to right, wrap when the next tile would
+  // exceed the row width. Tiles are square, so a row is as tall as its largest.
+  int cursorX = 0;
+  int cursorY = 0;
+  int rowHeightPx = 0;
+  int atlasWidthPx = 0;
+  for (std::size_t i = 0; i < requests.size(); ++i) {
+    const EmbeddedSvgIconRequest& request = requests[i];
+    if (request.outputSizePx <= 0) {
+      continue;
+    }
+
+    std::optional<svg::SVGDocument> document =
+        ParseEmbeddedSvgIcon(request.svgBytes, request.outputSizePx);
+    if (!document.has_value()) {
+      continue;
+    }
+
+    if (cursorX > 0 && cursorX + request.outputSizePx > kIconAtlasMaxWidthPx) {
+      cursorY += rowHeightPx;
+      cursorX = 0;
+      rowHeightPx = 0;
+    }
+
+    slots.push_back(AtlasSlot{i, Vector2i(cursorX, cursorY), request.outputSizePx});
+    documents.push_back(std::move(*document));
+
+    cursorX += request.outputSizePx;
+    rowHeightPx = std::max(rowHeightPx, request.outputSizePx);
+    atlasWidthPx = std::max(atlasWidthPx, cursorX);
+  }
+
+  if (slots.empty()) {
+    return results;
+  }
+
+  std::vector<svg::AtlasDocumentPlacement> placements;
+  placements.reserve(slots.size());
+  for (std::size_t slotIndex = 0; slotIndex < slots.size(); ++slotIndex) {
+    placements.push_back(
+        svg::AtlasDocumentPlacement{&documents[slotIndex], slots[slotIndex].originPx});
+  }
+
+  const Vector2i atlasSizePx(atlasWidthPx, cursorY + rowHeightPx);
+  const svg::RendererBitmap atlas =
+      svg::RenderDocumentsToAtlasBitmap(SharedIconRenderer(), placements, atlasSizePx);
+  // A backend that produced a smaller target than asked for cannot be sliced by
+  // the layout that was planned against the requested size. Fall back to the
+  // per-icon path rather than reading past the rows that came back.
+  if (atlas.dimensions.x < atlasSizePx.x || atlas.dimensions.y < atlasSizePx.y) {
+    return results;
+  }
+
+  for (const AtlasSlot& slot : slots) {
+    svg::RendererBitmap tile = SliceAtlasTile(atlas, slot.originPx, slot.sizePx);
+    if (requests[slot.requestIndex].tintableMask) {
+      NormalizeIconBitmapToTintableAlphaMask(&tile);
+    }
+    results[slot.requestIndex] = std::move(tile);
+  }
+  return results;
+}
+
+void PrewarmEmbeddedSvgIcons(std::span<const EmbeddedSvgIconRequest> requests) {
+  PrewarmedIconMap& prewarmed = PrewarmedIcons();
+
+  // Distinct rasterizations only: several affordances share one asset (the
+  // subtract-front and subtract-back buttons draw the same Bootstrap glyph),
+  // and an already-prewarmed icon needs no second tile.
+  std::vector<EmbeddedSvgIconRequest> uniqueRequests;
+  std::vector<PrewarmedIconKey> uniqueKeys;
+  uniqueRequests.reserve(requests.size());
+  uniqueKeys.reserve(requests.size());
+  for (const EmbeddedSvgIconRequest& request : requests) {
+    const PrewarmedIconKey key = KeyForRequest(request);
+    if (prewarmed.contains(key) ||
+        std::find(uniqueKeys.begin(), uniqueKeys.end(), key) != uniqueKeys.end()) {
+      continue;
+    }
+    uniqueKeys.push_back(key);
+    uniqueRequests.push_back(request);
+  }
+
+  std::vector<std::optional<svg::RendererBitmap>> bitmaps =
+      RenderEmbeddedSvgIconBatch(uniqueRequests);
+  for (std::size_t i = 0; i < bitmaps.size(); ++i) {
+    if (bitmaps[i].has_value()) {
+      prewarmed.insert_or_assign(uniqueKeys[i], std::move(*bitmaps[i]));
+    }
+  }
 }
 
 }  // namespace donner::editor

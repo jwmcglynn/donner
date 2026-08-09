@@ -2,6 +2,7 @@
 /// @file
 
 #include <memory>
+#include <span>
 
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
@@ -26,6 +27,42 @@ namespace donner::svg {
  */
 [[nodiscard]] RendererBitmap RenderElementToBitmap(RendererInterface& renderer, SVGElement element,
                                                    Vector2i sizePx);
+
+/**
+ * Placement of one document inside a shared atlas render target.
+ *
+ * @see RenderDocumentsToAtlasBitmap
+ */
+struct AtlasDocumentPlacement {
+  /// Document to rasterize. Must outlive the atlas call; null entries are skipped.
+  SVGDocument* document = nullptr;
+  /// Top-left corner of this document's tile, in atlas device pixels.
+  Vector2i originPx = Vector2i::Zero();
+};
+
+/**
+ * Rasterize several documents into one render target and read it back once.
+ *
+ * Each document is drawn at its own atlas origin inside a single
+ * `beginFrame`/`endFrame` window, so the whole set costs exactly one
+ * GPU-to-CPU readback instead of one per document. Where a readback is a round
+ * trip through an asynchronous buffer mapping - WebGPU in a browser - that
+ * difference dominates: N serialized readback latencies collapse into one.
+ *
+ * Every tile renders as it would standalone: each document is prepared and
+ * traversed through the same driver path, translated by its origin. Slicing the
+ * returned atlas therefore yields per-document bitmaps identical to rendering
+ * each document on its own.
+ *
+ * @param renderer Backend instance used for the atlas pass.
+ * @param placements Documents and their atlas origins. Tiles must not overlap.
+ * @param atlasSizePx Atlas dimensions in device pixels, large enough to contain
+ *   every placed tile.
+ * @return The atlas bitmap, or an empty bitmap when nothing could be rendered.
+ */
+[[nodiscard]] RendererBitmap RenderDocumentsToAtlasBitmap(
+    RendererInterface& renderer, std::span<const AtlasDocumentPlacement> placements,
+    Vector2i atlasSizePx);
 
 /**
  * Backend-agnostic renderer that resolves to the active build backend (Skia or tiny-skia).
