@@ -36,6 +36,12 @@ declare global {
   }
 }
 
+// Shared CI runners execute this suite 2-4x slower than local development
+// hardware. Scale tight acceptance polls so the timing assertions verify the
+// same invariants without flaking on runner speed; local bounds are unchanged.
+const kCiTimeScale = process.env.CI ? 4 : 1;
+const scaledMs = (ms: number) => ms * kCiTimeScale;
+
 const kBaseUrl = process.env.DONNER_WASM_BASE_URL || "http://127.0.0.1:8000";
 
 interface DirectSurfaceState {
@@ -118,7 +124,7 @@ async function openBasicShapes(page: Page): Promise<{
   await expect
     .poll(() => page.evaluate(() => window.__donnerAcceptedPresentation?.token || 0), {
       message: "Basic Shapes must have its own accepted worker presentation before capture",
-      timeout: 5_000,
+      timeout: scaledMs(5_000),
       intervals: [16, 25, 50, 100],
     })
     .toBeGreaterThan(beforeSampleFrame);
@@ -187,7 +193,7 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
   await expect
     .poll(() => page.evaluate(() => window.__donnerAcceptedPresentation?.token || 0), {
       message: "Compositor Tile Overlay must publish metadata for a newly accepted worker frame",
-      timeout: 2_000,
+      timeout: scaledMs(2_000),
       intervals: [16, 25, 50, 100],
     })
     .toBeGreaterThan(beforeCompositorFrame);
@@ -253,7 +259,7 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
   await expect
     .poll(() => page.evaluate(() => window.__donnerAcceptedPresentation?.token || 0), {
       message: "Geometry Debug Overlay must schedule and accept a freshly rasterized worker frame",
-      timeout: 2_000,
+      timeout: scaledMs(2_000),
       intervals: [16, 25, 50, 100],
     })
     .toBeGreaterThan(beforeGeometryFrame);
@@ -344,7 +350,7 @@ test("Firefox presents every accepted drag epoch on one stable surface", async (
   await expect
     .poll(() => readElementColorStats(documentCanvas).then((stats) => stats.coloredPixels), {
       message: "expected the initial Basic Shapes worker surface before starting the drag",
-      timeout: 2_000,
+      timeout: scaledMs(2_000),
       intervals: [16, 25, 50, 100],
     })
     .toBeGreaterThan(500);
@@ -418,7 +424,7 @@ test("Firefox presents every accepted drag epoch on one stable surface", async (
           ),
         ), {
         message: `expected an accepted worker surface for drag step ${step}`,
-        timeout: 2_000,
+        timeout: scaledMs(2_000),
         intervals: [16, 25, 50, 100],
       })
       .toBeGreaterThan(previousFrame);
@@ -582,7 +588,7 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
         ),
       ), {
         message: `expected an accepted Splash drag epoch for step ${step}`,
-        timeout: 2_000,
+        timeout: scaledMs(2_000),
         intervals: [16, 25, 50, 100],
       })
       .toBeGreaterThan(previousFrame);
@@ -670,7 +676,7 @@ test("Firefox bakes the Splash letter and overlay into one accepted surface epoc
   await expect
     .poll(() => page.evaluate(() => window.__donnerAcceptedPresentation?.token || 0), {
       message: "expected a newly accepted Splash surface",
-      timeout: 5_000,
+      timeout: scaledMs(5_000),
       intervals: [16, 25, 50, 100],
     })
     .toBeGreaterThan(beforeSampleFrame);
@@ -711,7 +717,7 @@ test("Firefox bakes the Splash letter and overlay into one accepted surface epoc
     return unselectedBaseline.yellow?.pixels || 0;
   }, {
     message: "the rendered Splash D must become visible before the immediate drag",
-    timeout: 5_000,
+    timeout: scaledMs(5_000),
     intervals: [0, 8, 16],
   }).toBeGreaterThan(20);
   expect(unselectedBaseline.yellow, "the rendered Splash D was not present before selection").not
@@ -749,7 +755,7 @@ test("Firefox bakes the Splash letter and overlay into one accepted surface epoc
   await expect
     .poll(() => page.evaluate(() => window.__donnerAcceptedPresentation?.token || 0), {
       message: "expected a drag epoch after moving the Splash D",
-      timeout: 5_000,
+      timeout: scaledMs(5_000),
       intervals: [16, 25, 50, 100],
     })
     .toBeGreaterThan(tokenBeforeDrag);
@@ -909,7 +915,7 @@ test("WebKit Geode survives a burst of drag wakeups without fatal errors", async
   await expect
     .poll(() => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
       message: "expected Basic Shapes to finish presenting before the WebKit drag burst",
-      timeout: 2_000,
+      timeout: scaledMs(2_000),
       intervals: [16, 25, 50, 100],
     })
     .toBeGreaterThan(beforeSample);
@@ -928,7 +934,7 @@ test("WebKit Geode survives a burst of drag wakeups without fatal errors", async
   await expect
     .poll(() => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
       message: "expected WebKit to complete a render after the drag wakeup burst",
-      timeout: 2_000,
+      timeout: scaledMs(2_000),
       intervals: [16, 25, 50, 100],
     })
     .toBeGreaterThan(beforeDrag);
@@ -1079,7 +1085,7 @@ async function openDonnerSplash(page: Page): Promise<{
   await expect
     .poll(() => page.evaluate(() => window.__donnerAcceptedPresentation?.token || 0), {
       message: "Donner Splash must publish an accepted worker presentation epoch",
-      timeout: 5_000,
+      timeout: scaledMs(5_000),
       intervals: [16, 25, 50, 100],
     })
     .toBeGreaterThan(0);
@@ -1216,7 +1222,7 @@ test("loading a document never leaves the render pane without a presenter", asyn
   await expect
     .poll(acceptedFrame, {
       message: "expected Donner Splash to present an accepted document surface",
-      timeout: 5_000,
+      timeout: scaledMs(5_000),
       intervals: [8, 16, 25, 50],
     })
     .toBeGreaterThan(beforeFrame);
