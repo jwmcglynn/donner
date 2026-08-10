@@ -15,6 +15,7 @@
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/TracyWrapper.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/core/Display.h"
 
 namespace donner::editor {
@@ -486,6 +487,7 @@ void RenderCoordinator::resetForLoadedDocument(std::uint64_t documentGeneration)
   lastOverlayActiveBoundsPreview_.reset();
   penLivePreviewElement_.reset();
   lastOverlayPenLivePreviewElement_.reset();
+  lastOverlayPenLiveSpline_.reset();
   penHoverPreviewSegmentDoc_.reset();
   penHoverCloseAffordanceDoc_.reset();
   lastOverlayPenHoverPreviewSegmentDoc_.reset();
@@ -573,9 +575,25 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   const bool overlayInteractionActive =
       effectiveDocumentDragPreview.has_value() || representedDragPreview.has_value() ||
       marqueeRectDoc.has_value() || activeBoundsPreview.has_value() || lockedFlashActive;
+  // The pen tool mutates the previewed path in place on one element, so identity comparison
+  // against `lastOverlayPenLivePreviewElement_` below cannot see an anchor/handle drag growing
+  // the geometry. Sample the element's current spline (element space; transforms are covered by
+  // the canvas-from-document and version terms) and compare it against the spline the current
+  // snapshot captured. Only computed while the pen preview is active.
+  std::optional<Path> currentPenLiveSpline;
+  if (penLivePreviewElement_.has_value()) {
+    currentPenLiveSpline = penLivePreviewElement_->withWriteAccess(
+        [this](svg::DocumentWriteAccess&, EntityHandle) -> std::optional<Path> {
+          if (!penLivePreviewElement_->isa<svg::SVGGeometryElement>()) {
+            return std::nullopt;
+          }
+          return penLivePreviewElement_->cast<svg::SVGGeometryElement>().computedSpline();
+        });
+  }
   const bool overlayGeometryDiffers =
       overlaySelection != lastOverlaySelectionVec_ ||
       sourceHoverElements_ != lastOverlaySourceHoverVec_ ||
+      currentPenLiveSpline != lastOverlayPenLiveSpline_ ||
       marqueeRectDoc != lastOverlayMarqueeRectDoc_ ||
       currentOverlayRasterSize != lastOverlayRasterSize_ || !lastOverlayScreenRect_.has_value() ||
       currentOverlayScreenRect != *lastOverlayScreenRect_ ||
@@ -699,6 +717,7 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
                 static_cast<std::uint64_t>(std::max(0, currentOverlayRasterSize.y)) * 4u
           : 0u;
   immediateOverlaySnapshot_ = chromeSnapshot;
+  ++overlaySnapshotGeneration_;
 
   lastOverlaySelectionVec_ = overlaySelection;
   lastOverlaySourceHoverVec_ = sourceHoverElements_;
@@ -711,6 +730,7 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   lastOverlayMarqueeRectDoc_ = marqueeRectDoc;
   lastOverlayActiveBoundsPreview_ = activeBoundsPreview;
   lastOverlayPenLivePreviewElement_ = penLivePreviewElement_;
+  lastOverlayPenLiveSpline_ = std::move(currentPenLiveSpline);
   lastOverlayPenHoverPreviewSegmentDoc_ = penHoverPreviewSegmentDoc_;
   lastOverlayPenHoverCloseAffordanceDoc_ = penHoverCloseAffordanceDoc_;
   lastOverlayTextEditingCaretDoc_ = textEditingCaretDoc_;

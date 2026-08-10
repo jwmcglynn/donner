@@ -207,6 +207,17 @@ public:
     return penLivePreviewElement_;
   }
 
+  /// Monotonic count of immediate overlay snapshot captures. The overlay is
+  /// re-captured from several call sites (the per-frame presentation pass, but
+  /// also tool event handlers that update chrome mid-frame) whose boolean
+  /// returns are discarded; consumers that rasterize the snapshot into a
+  /// texture must compare this generation against the one they last drew
+  /// rather than trust any single call's "changed" return, or a capture made
+  /// by an earlier caller in the same frame is silently never presented.
+  [[nodiscard]] std::uint64_t overlaySnapshotGeneration() const {
+    return overlaySnapshotGeneration_;
+  }
+
   /// Set (or clear) the Pen tool's hover chrome for the next overlay capture:
   /// the rubber-band preview of the segment a click would commit, and the
   /// close-path affordance point when the pointer is within closing range.
@@ -378,6 +389,15 @@ private:
   /// Pen live-preview element baked into the current immediate overlay snapshot. Used to
   /// invalidate cached chrome when the preview target appears/changes/clears.
   std::optional<svg::SVGElement> lastOverlayPenLivePreviewElement_;
+  /// The live preview element's computed spline (element space) observed when the current
+  /// overlay snapshot was captured. Pen anchor/handle drags mutate the path in place on the
+  /// SAME element with no other overlay input changing, so element identity alone froze the
+  /// snapshot at its first - possibly degenerate - capture while the pen preview suppressed
+  /// the element's raster tile, leaving the edited path invisible for the rest of the drag.
+  /// Comparing the spline itself re-captures the overlay whenever the geometry changes.
+  std::optional<Path> lastOverlayPenLiveSpline_;
+  /// See `overlaySnapshotGeneration()`.
+  std::uint64_t overlaySnapshotGeneration_ = 0;
   /// Pen hover chrome pushed by the shell each frame: rubber-band segment
   /// preview + close-path affordance (document space).
   std::optional<Path> penHoverPreviewSegmentDoc_;

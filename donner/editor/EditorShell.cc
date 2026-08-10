@@ -4009,13 +4009,21 @@ void EditorShell::renderRenderPanePresentation(
         !lastOverlayPresentedViewport_.has_value() ||
         DocumentPresentationMappingChanged(*lastOverlayPresentedViewport_,
                                            presentedDocumentViewport);
-    if (overlaySnapshotChanged || presentedViewportMoved ||
+    // Gate on the coordinator's capture generation, not this frame's
+    // rasterize-call return: the overlay is captured from several sites (tool
+    // event handlers, mid-frame chrome updates) whose returns are discarded,
+    // and by the time the presentation pass runs, its own call correctly
+    // reports "unchanged" for a snapshot some earlier caller replaced this
+    // frame. Comparing generations presents every capture exactly once.
+    const std::uint64_t overlayGeneration = renderCoordinator_.overlaySnapshotGeneration();
+    if (overlayGeneration != lastDrawnOverlaySnapshotGeneration_ || presentedViewportMoved ||
         textures_.overlayTexture().texture == 0) {
       RenderedOverlayTexture renderedOverlay = RenderImmediateOverlaySnapshotToTexture(
           *directOverlayRenderer_, presentedDocumentViewport, overlaySnapshot);
       textures_.updateOverlayTexture(std::move(renderedOverlay.textureSnapshot),
                                      renderedOverlay.screenRect);
       lastOverlayPresentedViewport_ = presentedDocumentViewport;
+      lastDrawnOverlaySnapshotGeneration_ = overlayGeneration;
     }
   } else {
     textures_.resetOverlay();

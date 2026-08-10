@@ -613,6 +613,9 @@ private:
   /// placed with. The overlay is screen-space, so a new accepted worker epoch
   /// moving the presented document is on its own a reason to re-rasterize it.
   std::optional<ViewportState> lastOverlayPresentedViewport_;
+  /// The coordinator overlay-snapshot generation last rasterized into the
+  /// overlay texture. See RenderCoordinator::overlaySnapshotGeneration().
+  std::uint64_t lastDrawnOverlaySnapshotGeneration_ = 0;
   std::optional<EditorShellDocumentReplayInput> pendingDocumentSpaceReplayInput_;
   /// True while the save modal is being used for File → Export Viewport as SVG
   /// rather than an ordinary document save. Routes the dialog's write callback
