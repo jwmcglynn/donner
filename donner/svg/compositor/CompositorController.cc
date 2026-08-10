@@ -1077,7 +1077,14 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   // Any foreground render supersedes the deferred cold-frame warmup. The normal frame path below
   // will populate whatever retained payloads are still missing, with the current viewport and DOM.
   firstFrameWarmupPending_ = false;
-  lastRenderFrameStats_ = RenderFrameStats{};
+  {
+    // Per-frame counters reset; the offscreen pool totals are controller-
+    // lifetime monotonic (see RenderFrameStats).
+    RenderFrameStats fresh;
+    fresh.offscreenCreateTotal = lastRenderFrameStats_.offscreenCreateTotal;
+    fresh.offscreenRecycleTotal = lastRenderFrameStats_.offscreenRecycleTotal;
+    lastRenderFrameStats_ = fresh;
+  }
   const auto elapsedMsSince = [](std::chrono::steady_clock::time_point start) {
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
         .count();

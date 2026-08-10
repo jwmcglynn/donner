@@ -46,9 +46,11 @@ uint64_t SegmentTileId(Entity left, Entity right) {
 std::unique_ptr<RendererInterface> CompositorController::acquireOffscreen() {
   if (pooledOffscreen_ != nullptr) {
     ++lastRenderFrameStats_.offscreenRecycleCount;
+    ++lastRenderFrameStats_.offscreenRecycleTotal;
     return std::move(pooledOffscreen_);
   }
   ++lastRenderFrameStats_.offscreenCreateCount;
+  ++lastRenderFrameStats_.offscreenCreateTotal;
   return renderer().createOffscreenInstance();
 }
 

@@ -19,7 +19,12 @@ declare global {
     __donnerBackend?: string;
     __donnerCanStartWasm?: boolean;
     __donnerWorkerStats?: {
+      cachedTileCount?: number;
       completedResults: number;
+      offscreenCreateCount?: number;
+      offscreenCreateTotal?: number;
+      offscreenRecycleCount?: number;
+      offscreenRecycleTotal?: number;
     };
     __donnerAcceptedPresentation?: {
       kind: "geode";
@@ -1194,6 +1199,69 @@ test("a zoom storm never uncovers the editor background under the Donner Splash"
       + ` layouts; probe=${JSON.stringify(probeRegion)} first=${JSON.stringify(uncovered.slice(0, 6))}`,
   ).toEqual([]);
   console.log(`zoom-storm zoomIn=${JSON.stringify(zoomInBoxes)} layouts=${samples.length}`);
+  expect(failures).toEqual([]);
+});
+
+test("a size-commit re-rasterize reuses the pooled offscreen renderer", async ({ page }) => {
+  // Regression pin for the ~200 ms zoom hitch: a canvas-size commit re-
+  // rasterizes every compositor tile, and the worker used to construct and
+  // tear down one offscreen renderer per tile (each teardown blocking on two
+  // GPU-idle device polls). Tiles must now be served by the compositor's
+  // pooled instance: a settled post-zoom re-rasterize frame reports zero
+  // offscreen constructions while still rasterizing tiles. The tile count
+  // also proves rasterization is not starved by the pooled pass - request and
+  // callback delivery now rides the explicit between-tiles yield instead of
+  // the removed teardown polls.
+  const failures = await openEditor(page);
+  const { editorBounds } = await openDonnerSplash(page);
+  const zoomPoint = {
+    x: editorBounds.x + 480,
+    y: editorBounds.y + 320,
+  };
+  await page.mouse.move(zoomPoint.x, zoomPoint.y);
+
+  // Settle the load, then snapshot the monotonic pool totals. The totals are
+  // controller-lifetime, so the assertions below hold across whichever frames
+  // the async stat polls happen to observe.
+  const readPoolTotals = () =>
+    page.evaluate(() => ({
+      completedResults: window.__donnerWorkerStats?.completedResults ?? 0,
+      offscreenCreateTotal: window.__donnerWorkerStats?.offscreenCreateTotal ?? -1,
+      offscreenRecycleTotal: window.__donnerWorkerStats?.offscreenRecycleTotal ?? -1,
+    }));
+  await expect
+    .poll(async () => (await readPoolTotals()).offscreenCreateTotal, {
+      message: "the loaded document never published offscreen pool totals",
+      timeout: scaledMs(5_000),
+    })
+    .toBeGreaterThanOrEqual(1);
+  const beforeZoom = await readPoolTotals();
+
+  // Zoom in and hold still: past the canvas-size commit debounce the worker
+  // re-rasterizes every compositor tile at the committed canvas size.
+  await pinchZoom(page, zoomPoint, -250);
+
+  // The recycle total must grow - the re-rasterize served its tiles from the
+  // pool. Starvation of the rasterize pass (the failure mode of removing the
+  // teardown polls without the between-tiles yield) times out here with the
+  // total frozen.
+  await expect
+    .poll(async () => (await readPoolTotals()).offscreenRecycleTotal, {
+      message: "no tile was rasterized from the pooled offscreen renderer after the size commit",
+      timeout: scaledMs(8_000),
+    })
+    .toBeGreaterThan(beforeZoom.offscreenRecycleTotal);
+
+  const afterZoom = await readPoolTotals();
+  // A superseding request may legitimately cancel one pass mid-draw, which
+  // discards (not recycles) the in-flight instance and constructs one
+  // replacement. Per-tile construction - the regression this test pins -
+  // grows the total by the full tile count for every rasterize pass.
+  expect(
+    afterZoom.offscreenCreateTotal,
+    `the size-commit re-rasterize constructed offscreen renderers instead of reusing the pool:`
+      + ` before=${JSON.stringify(beforeZoom)} after=${JSON.stringify(afterZoom)}`,
+  ).toBeLessThanOrEqual(beforeZoom.offscreenCreateTotal + 1);
   expect(failures).toEqual([]);
 });
 

@@ -802,6 +802,13 @@ public:
     int offscreenCreateCount = 0;
     /// Tile rasterizations served by the pooled offscreen instance.
     int offscreenRecycleCount = 0;
+    /// Monotonic controller-lifetime totals of the two counts above. Browser
+    /// regression tests poll published stats asynchronously and can miss any
+    /// individual frame's per-frame values; the totals let them assert
+    /// "tiles rasterized without constructing instances" across a window
+    /// without sampling the exact re-rasterize frame.
+    int offscreenCreateTotal = 0;
+    int offscreenRecycleTotal = 0;
   };
 
   /// Return the current render-frame raster cost split.
