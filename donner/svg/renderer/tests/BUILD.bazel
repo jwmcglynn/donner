@@ -466,9 +466,10 @@ donner_multi_transitioned_test(
     timeout = "long",
     testonly = 1,
     dep = ":renderer_geode_golden_tests_impl",
-    # Route the GPU test action to a remote-execution worker advertising a
-    # hardware GPU. Ignored for local / non-remote execution.
-    exec_properties = {"gpu": "arc"},
+    # Route the GPU test action to a remote-execution worker with a physical
+    # GPU (`gpu=present`: any real adapter, not a software rasterizer or a
+    # GPU-less hosted runner). Ignored for local / non-remote execution.
+    exec_properties = {"gpu": "present"},
     renderer_backend = "geode",
 )
 
@@ -514,7 +515,7 @@ donner_multi_transitioned_test(
     timeout = "long",
     testonly = 1,
     dep = ":renderer_geode_tests_impl",
-    exec_properties = {"gpu": "arc"},
+    exec_properties = {"gpu": "present"},
     renderer_backend = "geode",
 )
 
@@ -644,9 +645,9 @@ donner_variant_cc_test(
             "text_full": "false",
             "args": ["--gtest_filter=-*_TinyGolden"],
             "shard_count": 16,
-            # Route only this GPU variant to a remote-execution worker that
-            # advertises a hardware GPU. Ignored for local / non-remote runs.
-            "exec_properties": {"gpu": "arc"},
+            # Route only this GPU variant to a remote-execution worker with a
+            # physical GPU (`gpu=present`). Ignored for local / non-remote runs.
+            "exec_properties": {"gpu": "present"},
         },
     ],
     # Hundreds of independent image comparisons per variant. Unsharded, the
