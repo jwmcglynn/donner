@@ -957,7 +957,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   // The browser readback-stats lane keeps the real canvas surface: pixel
   // probes flow through the asynchronous smoke-readback path against the
   // presented swapchain (with CopySrc usage), not an offscreen mirror.
-  const bool useOffscreenWgpuTarget = useNullPlatform;
+  const bool useOffscreenWgpuTarget = useNullPlatform || options_.forceOffscreenRenderTarget;
   if (!useOffscreenWgpuTarget) {
     wgpuState_->surface = CreateEditorWgpuSurface(wgpuState_->instance, window_);
     if (!wgpuState_->surface) {
@@ -1292,6 +1292,21 @@ Vector2i EditorWindow::windowSize() const {
   return Vector2i(width, height);
 }
 
+Vector2i EditorWindow::framebufferSize() const {
+  if (window_ == nullptr) {
+    return Vector2i::Zero();
+  }
+
+#ifdef __EMSCRIPTEN__
+  return Vector2i(CanvasPixelWidth(), CanvasPixelHeight());
+#else
+  int width = 0;
+  int height = 0;
+  glfwGetFramebufferSize(window_, &width, &height);
+  return Vector2i(width, height);
+#endif
+}
+
 Vector2d EditorWindow::contentScale() const {
   if (window_ == nullptr) {
     return Vector2d::Zero();
@@ -1333,6 +1348,11 @@ std::shared_ptr<geode::GeodeDevice> EditorWindow::geodeDevice() const {
 }
 
 #ifdef DONNER_EDITOR_WGPU
+bool EditorWindow::usingOffscreenRenderTarget() const {
+  return wgpuState_ != nullptr && !wgpuState_->surface &&
+         static_cast<bool>(wgpuState_->offscreenTexture);
+}
+
 std::shared_ptr<geode::GeodeDevice> EditorWindow::geodeFramebufferDevice() const {
   return wgpuState_ != nullptr ? wgpuState_->framebufferGeodeDevice : nullptr;
 }

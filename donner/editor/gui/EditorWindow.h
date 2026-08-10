@@ -170,6 +170,16 @@ struct EditorWindowOptions {
   /// available. macOS keeps a native GPU-backed Cocoa context and relies on
   /// `visible = false` for hidden replay windows.
   bool offscreen = false;
+  /// Force the WebGPU frame path to render into an offscreen texture instead of
+  /// a presentable window surface, on every platform.
+  ///
+  /// Linux replay reaches that arm implicitly through GLFW's windowless "null"
+  /// platform, so on macOS - which always builds a real (possibly hidden) Cocoa
+  /// surface - the offscreen arm is otherwise unreachable and untestable. This
+  /// flag makes it reachable anywhere a WebGPU device exists, so a single test
+  /// can cover the offscreen target creation, resize, and readback path on both
+  /// the Linux and macOS lanes. No effect in non-WebGPU (OpenGL) builds.
+  bool forceOffscreenRenderTarget = false;
   /// Content/display scale to emulate for hidden replay windows. Replay sets
   /// this to the recorded scale so framebuffer readback reproduces the pixel
   /// geometry of captures taken on a HiDPI machine.
@@ -361,6 +371,11 @@ public:
   /// Logical window size in screen coordinates.
   [[nodiscard]] Vector2i windowSize() const;
 
+  /// Physical framebuffer size in pixels. Equals \ref windowSize scaled by the
+  /// backing display scale, and matches the dimensions of a bitmap returned by
+  /// \ref endFrameAndReadPixels. (0, 0) when the window failed to initialize.
+  [[nodiscard]] Vector2i framebufferSize() const;
+
   /// Backing display content scale (for example 2.0 on a Retina display).
   [[nodiscard]] Vector2d contentScale() const;
 
@@ -396,6 +411,13 @@ public:
   [[nodiscard]] std::shared_ptr<geode::GeodeDevice> geodeDevice() const;
 
 #ifdef DONNER_EDITOR_WGPU
+  /// True when frames render into an offscreen WebGPU texture rather than a
+  /// presentable window surface. That is the case for headless/offscreen Linux
+  /// replay (GLFW's null platform) and whenever
+  /// \ref EditorWindowOptions::forceOffscreenRenderTarget was requested.
+  /// False in OpenGL builds and before the WebGPU device came up.
+  [[nodiscard]] bool usingOffscreenRenderTarget() const;
+
   /// Shared Geode device for direct append passes into the editor framebuffer.
   [[nodiscard]] std::shared_ptr<geode::GeodeDevice> geodeFramebufferDevice() const;
 
