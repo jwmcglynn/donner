@@ -43,6 +43,25 @@ uint64_t SegmentTileId(Entity left, Entity right) {
 
 }  // namespace
 
+std::unique_ptr<RendererInterface> CompositorController::acquireOffscreen() {
+  if (pooledOffscreen_ != nullptr) {
+    ++lastRenderFrameStats_.offscreenRecycleCount;
+    return std::move(pooledOffscreen_);
+  }
+  ++lastRenderFrameStats_.offscreenCreateCount;
+  return renderer().createOffscreenInstance();
+}
+
+void CompositorController::recycleOffscreen(std::unique_ptr<RendererInterface> offscreen) {
+  pooledOffscreen_ = std::move(offscreen);
+}
+
+void CompositorController::yieldBetweenTiles() {
+  if (config_.yieldBetweenTiles) {
+    config_.yieldBetweenTiles();
+  }
+}
+
 void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderViewport& viewport,
                                           const Transform2d& surfaceFromCanvas) {
   ZoneScopedN("Compositor::rasterizeLayer");
@@ -84,7 +103,7 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
          presentationCost.redrawCost <= presentationCost.cacheOverheadCost);
   }
 
-  auto offscreen = renderer().createOffscreenInstance();
+  auto offscreen = acquireOffscreen();
   UTILS_RELEASE_ASSERT(offscreen != nullptr);
   RendererDriver driver(*offscreen);
 
@@ -127,6 +146,10 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
   } else {
     layer.setBitmap(offscreen->takeSnapshot(), surfaceFromEntity);
   }
+  // The snapshot detached the offscreen's target; the instance is clean and
+  // reusable. Cancellation paths above return without recycling, so a
+  // half-drawn frame's state is destroyed rather than pooled.
+  recycleOffscreen(std::move(offscreen));
   // `setBitmap`/`setTextureSnapshot` bump a per-object generation that resets
   // to 1 for every freshly-built layer. After a document replace reuses entity
   // ids, that "1" collides with the generation the editor's GL texture cache
@@ -176,6 +199,7 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
   // The fast path in `renderFrame` is what updates `canvasFromBitmap_`
   // for DOM-driven deltas; rasterization itself just refreshes the
   // bitmap's content and the stamped `bitmapEntityFromWorldTransform`.
+  yieldBetweenTiles();
 }
 
 void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& viewport,
@@ -392,7 +416,7 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
       std::unique_ptr<RendererInterface> offscreen;
       {
         ZoneScopedN("Compositor::segment::createOffscreen");
-        offscreen = renderer().createOffscreenInstance();
+        offscreen = acquireOffscreen();
       }
       UTILS_RELEASE_ASSERT(offscreen != nullptr);
 
@@ -420,6 +444,7 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
           staticSegments_[i] = offscreen->takeSnapshot();
           staticSegmentTextures_[i].reset();
         }
+        recycleOffscreen(std::move(offscreen));
         staticSegmentOffsets_[i] = tightBoundsSnapped.topLeft;
       } else {
         ZoneScopedN("Compositor::segment::drawEntityRange");
@@ -441,6 +466,7 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
           staticSegments_[i] = offscreen->takeSnapshot();
           staticSegmentTextures_[i].reset();
         }
+        recycleOffscreen(std::move(offscreen));
         staticSegmentOffsets_[i] = Vector2d::Zero();
       }
     }
@@ -524,6 +550,11 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
     }
     if (i < staticSegmentLastRasterizeMs_.size()) {
       staticSegmentLastRasterizeMs_[i] = elapsedMs;
+    }
+    if (!segmentIsEmpty) {
+      // After the segment's timing stamp so the yield never inflates the
+      // measured rasterize time that dynamic-immediate promotion consumes.
+      yieldBetweenTiles();
     }
   }
 }

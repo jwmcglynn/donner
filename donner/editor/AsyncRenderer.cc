@@ -2141,6 +2141,16 @@ void AsyncRenderer::workerLoop() {
       // The first full-document draw is already correct. Publish it first, then warm retained
       // caches from the worker's independent low-priority lane after the result is accepted.
       compositorConfig.deferFirstFrameWarmup = true;
+#ifdef DONNER_WASM_WORKER_SURFACE
+      // With pooled offscreen renderers, a multi-tile rasterize pass no longer
+      // performs the per-tile teardown device polls whose ASYNCIFY suspensions
+      // incidentally serviced the worker's event loop mid-pass. Canvas-size
+      // commits and WebGPU callbacks arrive as worker events, so yield for one
+      // event-loop turn at each tile boundary instead. A cancellation
+      // delivered by the yield is observed at the compositor's next
+      // `isCancelled()` poll, immediately after this callback returns.
+      compositorConfig.yieldBetweenTiles = []() { emscripten_sleep(0); };
+#endif
       // CompositorController stores its SVGDocument by reference. Bind that reference to the
       // AsyncRenderer-owned value before constructing the controller: RenderLease is destroyed
       // after this request, while deferred warmup and later frames intentionally outlive it.

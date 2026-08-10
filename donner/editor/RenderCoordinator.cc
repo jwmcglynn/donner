@@ -28,8 +28,9 @@ EM_JS(void, PublishWorkerTimingStats,
        double diagnosticsMs, double pollDelayMs, double taskBoundaryMs, double wakeToPollMs,
        double firstFrameDrawMs, double firstFramePlanningMs, double firstFrameWarmupMs,
        double immediateRasterizeMs, double cachedRasterizeMs, int immediateTileCount,
-       int cachedTileCount, int readbackCount, int readbackPollIterations, int usedTimedWaitAny,
-       double directSurfaceFrames, int directSurfacePresented),
+       int cachedTileCount, int offscreenCreateCount, int offscreenRecycleCount, int readbackCount,
+       int readbackPollIterations, int usedTimedWaitAny, double directSurfaceFrames,
+       int directSurfacePresented),
       {
         const previous = window['__donnerWorkerStats'];
         window['__donnerWorkerStats'] = {
@@ -54,6 +55,8 @@ EM_JS(void, PublishWorkerTimingStats,
           'cachedRasterizeMs' : cachedRasterizeMs,
           'immediateTileCount' : immediateTileCount,
           'cachedTileCount' : cachedTileCount,
+          'offscreenCreateCount' : offscreenCreateCount,
+          'offscreenRecycleCount' : offscreenRecycleCount,
           'readbackCount' : readbackCount,
           'readbackPollIterations' : readbackPollIterations,
           'readbackWaitStrategy' : directSurfacePresented
@@ -787,6 +790,7 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
       compositorStats.firstFramePlanningMs, compositorStats.firstFrameWarmupMs,
       compositorStats.immediateRasterizeMs, compositorStats.cachedRasterizeMs,
       compositorStats.immediateTileCount, compositorStats.cachedTileCount,
+      compositorStats.offscreenCreateCount, compositorStats.offscreenRecycleCount,
       result.workerTiming.readbackCount, result.workerTiming.readbackPollIterations,
       result.workerTiming.usedTimedWaitAny ? 1 : 0, static_cast<double>(result.directSurfaceFrames),
       result.directSurfaceOutcome == DirectSurfacePresentationOutcome::Presented ? 1 : 0);

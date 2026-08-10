@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -250,6 +251,17 @@ struct CompositorConfig {
   /// This keeps cache preparation off the click-to-present critical path without abandoning the
   /// prewarm that makes the first drag responsive.
   bool deferFirstFrameWarmup = false;
+
+  /// Invoked between tile rasterizations (the same coarse safe points where
+  /// `isCancelled()` is polled). Owners whose event delivery requires the
+  /// rendering thread to periodically service its event loop install a
+  /// bounded yield here: the browser worker's canvas-size commits and WebGPU
+  /// callbacks arrive as worker events, and a multi-tile rasterize pass with
+  /// pooled offscreen renderers otherwise never yields mid-pass. The callback
+  /// must be cheap and reentrancy-safe with respect to compositor state: it
+  /// may deliver a cancellation (observed at the next `isCancelled()` poll)
+  /// but must not call back into this controller. Empty means no yield.
+  std::function<void()> yieldBetweenTiles;
 };
 
 /**
@@ -782,6 +794,14 @@ public:
     int immediateTileCount = 0;
     /// Count of segment/layer tiles charged to cached raster work.
     int cachedTileCount = 0;
+    /// Offscreen renderer instances constructed this frame. With pooling,
+    /// a steady-state frame reuses the pooled instance and reports 0 or 1
+    /// here regardless of tile count; per-tile construction (the pre-pool
+    /// behavior whose teardown polls dominated size-commit frames) would
+    /// report one per tile. Pinned by regression tests.
+    int offscreenCreateCount = 0;
+    /// Tile rasterizations served by the pooled offscreen instance.
+    int offscreenRecycleCount = 0;
   };
 
   /// Return the current render-frame raster cost split.
@@ -965,6 +985,25 @@ private:
   /// Rasterize a single promoted layer into its bitmap cache.
   void rasterizeLayer(CompositorLayer& layer, const RenderViewport& viewport,
                       const Transform2d& surfaceFromCanvas);
+
+  /// Take the pooled offscreen renderer, or construct a fresh one when the
+  /// pool is empty. Tile rasterization used to construct and destroy one
+  /// offscreen renderer per tile; on the browser WebGPU backend each
+  /// destructor blocks on two GPU-idle device polls (~14.5 ms per tile), and
+  /// that teardown dominated multi-tile size-commit frames. Callers return a
+  /// CLEAN instance via `recycleOffscreen` after taking its snapshot, and
+  /// simply drop the instance on cancellation paths so a half-drawn frame's
+  /// state is never reused.
+  [[nodiscard]] std::unique_ptr<RendererInterface> acquireOffscreen();
+
+  /// Return a cleanly-finished offscreen renderer to the single-slot pool.
+  void recycleOffscreen(std::unique_ptr<RendererInterface> offscreen);
+
+  /// Invoke `config_.yieldBetweenTiles` if installed. Called at the coarse
+  /// per-tile safe points, after a tile's snapshot is taken and before the
+  /// next tile's `isCancelled()` poll (so a cancellation delivered by the
+  /// yield takes effect immediately).
+  void yieldBetweenTiles();
 
   /// Populate the retained caches discovered after the first full-document draw.
   void warmFirstFrameCaches(const RenderViewport& viewport, const Transform2d& surfaceFromCanvas);
@@ -1253,6 +1292,10 @@ private:
   bool firstFrameWarmupPending_ = false;
   bool offscreenSupportKnown_ = false;
   bool offscreenSupported_ = false;
+  /// Single-slot pool for tile-rasterization offscreen renderers. See
+  /// `acquireOffscreen`. Destroyed with the controller (one teardown per
+  /// compositor lifetime instead of one per tile).
+  std::unique_ptr<RendererInterface> pooledOffscreen_;
   /// When true, `composeLayers` skips the main-renderer draw calls while
   /// the split bg/drag/fg cache is populated - the editor reads those
   /// bitmaps directly, so the main-renderer output would go unconsumed.

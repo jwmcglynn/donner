@@ -2247,4 +2247,112 @@ TEST_F(CompositorControllerTest, RemapAfterStructuralReplaceFailsWhenLayerRangeI
   compositor.resetAllLayers();
 }
 
+// Tile rasterization pools its offscreen renderer: the first acquisition of a
+// compositor's lifetime constructs an instance and every later tile reuses
+// it. The pre-pool behavior (one construct + teardown per tile) is what made
+// multi-tile size-commit frames hitch on the browser backend - each teardown
+// blocks on two GPU-idle device polls - so a regression here is a direct
+// reintroduction of that hitch.
+TEST_F(CompositorControllerTest, PooledOffscreenIsReusedAcrossTilesAndFrames) {
+  configureMockForCaching();
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="a" x="0" width="20" height="20" fill="red" />
+    <rect id="b" x="30" width="20" height="20" fill="green" />
+    <rect id="c" x="60" width="20" height="20" fill="blue" />
+  )svg");
+  auto a = document.querySelector("#a");
+  auto b = document.querySelector("#b");
+  ASSERT_TRUE(a.has_value());
+  ASSERT_TRUE(b.has_value());
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(a->unsafeEntityHandle().entity()));
+  ASSERT_TRUE(compositor.promoteEntity(b->unsafeEntityHandle().entity()));
+
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  const auto firstFrame = compositor.lastRenderFrameStats();
+  EXPECT_EQ(firstFrame.offscreenCreateCount, 1)
+      << "the first frame constructs exactly one offscreen instance (the support probe), "
+         "then every tile reuses it";
+  EXPECT_GE(firstFrame.offscreenRecycleCount, 2) << "later tiles must draw on the pooled instance";
+
+  // A canvas size change invalidates every cached tile; the full re-rasterize
+  // must still not construct a new offscreen instance.
+  compositor.renderFrame(RenderViewport{Vector2i(kTestSvgDefaultSize.x / 2,  //
+                                                 kTestSvgDefaultSize.y / 2)});
+  const auto secondFrame = compositor.lastRenderFrameStats();
+  EXPECT_EQ(secondFrame.offscreenCreateCount, 0)
+      << "steady-state frames rasterize every tile on the pooled instance";
+  EXPECT_GE(secondFrame.offscreenRecycleCount, 2);
+}
+
+// `CompositorConfig::yieldBetweenTiles` fires exactly once per rasterized
+// tile, after that tile's timing stamp. The browser worker installs a bounded
+// event-loop yield here because pooled offscreen renderers removed the
+// per-tile teardown suspensions that used to (incidentally) service canvas
+// size commits and WebGPU callbacks mid-pass.
+TEST_F(CompositorControllerTest, YieldBetweenTilesFiresPerRasterizedTile) {
+  configureMockForCaching();
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="a" x="0" width="20" height="20" fill="red" />
+    <rect id="b" x="30" width="20" height="20" fill="green" />
+  )svg");
+  auto a = document.querySelector("#a");
+  ASSERT_TRUE(a.has_value());
+
+  int yieldCount = 0;
+  CompositorConfig config;
+  config.yieldBetweenTiles = [&yieldCount]() { ++yieldCount; };
+  CompositorController compositor(document, renderer_, config);
+  ASSERT_TRUE(compositor.promoteEntity(a->unsafeEntityHandle().entity()));
+
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  const auto stats = compositor.lastRenderFrameStats();
+  EXPECT_EQ(yieldCount, stats.immediateTileCount + stats.cachedTileCount)
+      << "one yield per rasterized tile (empty segments neither rasterize nor yield)";
+  EXPECT_GT(yieldCount, 0) << "test setup must rasterize at least one tile";
+
+  // A clean frame rasterizes nothing and must not yield.
+  const int yieldsAfterFirstFrame = yieldCount;
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  EXPECT_EQ(yieldCount, yieldsAfterFirstFrame);
+}
+
+// A cancellation delivered AT the between-tiles safe point (exactly how the
+// browser worker receives a superseding viewport request during the yield)
+// stops the pass at the next tile boundary, keeps the cleanly-recycled pooled
+// instance, and lets the following frame finish the remaining tiles without
+// constructing a new offscreen renderer.
+TEST_F(CompositorControllerTest, CancellationAtYieldSafePointPreservesPooledOffscreen) {
+  configureMockForCaching();
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="a" x="0" width="20" height="20" fill="red" />
+    <rect id="b" x="30" width="20" height="20" fill="green" />
+    <rect id="c" x="60" width="20" height="20" fill="blue" />
+  )svg");
+  auto a = document.querySelector("#a");
+  auto b = document.querySelector("#b");
+  ASSERT_TRUE(a.has_value());
+  ASSERT_TRUE(b.has_value());
+
+  CancellationToken token;
+  CompositorConfig config;
+  config.yieldBetweenTiles = [&token]() { token.cancel(); };
+  CompositorController compositor(document, renderer_, config);
+  ASSERT_TRUE(compositor.promoteEntity(a->unsafeEntityHandle().entity()));
+  ASSERT_TRUE(compositor.promoteEntity(b->unsafeEntityHandle().entity()));
+
+  EXPECT_FALSE(compositor.renderFrame(RenderViewport{kTestSvgDefaultSize}, token))
+      << "the yield-delivered cancellation must stop the pass";
+  const auto cancelledFrame = compositor.lastRenderFrameStats();
+  EXPECT_LE(cancelledFrame.offscreenCreateCount, 1);
+
+  // The interrupted pass recycled its last tile's instance before yielding;
+  // the completion frame reuses it for every remaining tile.
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  const auto completionFrame = compositor.lastRenderFrameStats();
+  EXPECT_EQ(completionFrame.offscreenCreateCount, 0)
+      << "a safe-point cancellation must not discard the pooled offscreen instance";
+}
+
 }  // namespace donner::svg::compositor

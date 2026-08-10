@@ -952,10 +952,17 @@ void CompositorController::setTightBoundedSegmentsEnabled(bool enabled) {
 
 void CompositorController::warmFirstFrameCaches(const RenderViewport& viewport,
                                                 const Transform2d& surfaceFromCanvas) {
-  if (offscreenSupported_ ||
-      (!offscreenSupportKnown_ && renderer().createOffscreenInstance() != nullptr)) {
-    offscreenSupported_ = true;
+  if (!offscreenSupportKnown_) {
+    // Probe through the pool so a successful probe's instance is retained
+    // for the tile rasterizations below instead of being torn down (the
+    // teardown blocks on GPU-idle device polls on the browser backend).
+    if (auto probe = acquireOffscreen()) {
+      recycleOffscreen(std::move(probe));
+      offscreenSupported_ = true;
+    }
     offscreenSupportKnown_ = true;
+  }
+  if (offscreenSupported_) {
     const Vector2i currentCanvasSize = BitmapDimensionsForViewport(viewport);
     {
       uint32_t liveHints = 0;
@@ -1675,7 +1682,12 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   }
 
   if (!offscreenSupportKnown_) {
-    offscreenSupported_ = renderer().createOffscreenInstance() != nullptr;
+    // Probe through the pool: a successful probe leaves its instance pooled
+    // for the rasterize loop below rather than paying a teardown.
+    if (auto probe = acquireOffscreen()) {
+      recycleOffscreen(std::move(probe));
+      offscreenSupported_ = true;
+    }
     offscreenSupportKnown_ = true;
   }
 
