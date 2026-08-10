@@ -43,6 +43,15 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "ui_frame_gate_tests",
+    srcs = ["UiFrameGate_tests.cc"],
+    deps = [
+        "//donner/editor:ui_frame_gate",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "editor_theme_tests",
     srcs = ["EditorTheme_tests.cc"],
     deps = [
@@ -171,6 +180,32 @@ donner_cc_test(
             "//donner/svg/renderer/tests:renderer_image_test_utils",
             "//donner/svg/renderer/tests:rgba_test_matchers",
             "@imgui//:imgui_wgpu_backend",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+# The surface-less arm of the editor's WebGPU frame path. Split out of
+# `editor_window_tests` so it can carry a `geode` variant: that is what makes
+# `bazel test //...` run it on both the macOS and Linux lanes, which is the only
+# way this arm gets executed anywhere. macOS always builds a real window
+# surface, and the default tiny_skia backend compiles the WebGPU path out
+# entirely, so headless Linux replay was previously its sole coverage.
+donner_cc_test(
+    name = "editor_window_offscreen_target_tests",
+    srcs = ["EditorWindowOffscreenTarget_tests.cc"],
+    defines = select({
+        "//donner/svg/renderer:renderer_backend_geode": ["DONNER_EDITOR_WGPU"],
+        "//conditions:default": [],
+    }),
+    variants = ["geode"],
+    deps = [
+        "//donner/editor/gui:editor_window",
+        "@com_google_gtest//:gtest_main",
+    ] + select({
+        "//donner/svg/renderer:renderer_backend_geode": [
+            "//donner/svg/renderer:renderer_interface",
+            "//donner/svg/renderer/tests:rgba_test_matchers",
         ],
         "//conditions:default": [],
     }),

@@ -38,7 +38,25 @@ declare global {
     __donnerAcceptedFrameObserver?: MutationObserver;
     __donnerDirectSurfaceTaskBoundaryToken?: number;
     __donnerObserveDirectSurfaceAcceptance?: (frameToken: number) => void;
+    __donnerFrameLoopStats?: FrameLoopStats;
   }
+}
+
+// Per-frame main-loop accounting published by `donner/editor/main.cc`. `uiRebuilds` counts frames
+// that reran the immediate-mode UI; `presentationOnlyFrames` counts frames that only republished
+// the worker-owned document surface.
+interface FrameLoopStats {
+  callbacks: number;
+  renderedFrames: number;
+  uiRebuilds: number;
+  presentationOnlyFrames: number;
+  inputTriggeredFrames: number;
+  workerTriggeredFrames: number;
+  timerTriggeredFrames: number;
+  workerOnlyFrames: number;
+  lastFrameUiRebuilt: boolean;
+  uiFrameMsSamples: number[];
+  presentationOnlyMsSamples: number[];
 }
 
 // Shared CI runners execute this suite 2-4x slower than local development
@@ -1229,12 +1247,17 @@ test("a size-commit re-rasterize reuses the pooled offscreen renderer", async ({
       offscreenCreateTotal: window.__donnerWorkerStats?.offscreenCreateTotal ?? -1,
       offscreenRecycleTotal: window.__donnerWorkerStats?.offscreenRecycleTotal ?? -1,
     }));
+  // The totals publish with each completed result, one result behind the
+  // compositor's live counters: the load-time pool construction happens in
+  // the deferred warmup lane and only becomes visible in stats once the next
+  // render lands, so a 0 baseline here is normal. Require only that the
+  // fields exist.
   await expect
     .poll(async () => (await readPoolTotals()).offscreenCreateTotal, {
       message: "the loaded document never published offscreen pool totals",
       timeout: scaledMs(5_000),
     })
-    .toBeGreaterThanOrEqual(1);
+    .toBeGreaterThanOrEqual(0);
   const beforeZoom = await readPoolTotals();
 
   // Zoom in and hold still: past the canvas-size commit debounce the worker
@@ -1253,15 +1276,17 @@ test("a size-commit re-rasterize reuses the pooled offscreen renderer", async ({
     .toBeGreaterThan(beforeZoom.offscreenRecycleTotal);
 
   const afterZoom = await readPoolTotals();
-  // A superseding request may legitimately cancel one pass mid-draw, which
-  // discards (not recycles) the in-flight instance and constructs one
-  // replacement. Per-tile construction - the regression this test pins -
-  // grows the total by the full tile count for every rasterize pass.
+  // Two constructions are legitimate in this window: the pool's initial
+  // instance (invisible in the baseline when it happened in the deferred
+  // warmup lane, see above) and one replacement after a superseding request
+  // cancels a pass mid-draw (cancellation discards rather than recycles).
+  // Per-tile construction - the regression this test pins - grows the total
+  // by the full tile count for every rasterize pass instead.
   expect(
     afterZoom.offscreenCreateTotal,
     `the size-commit re-rasterize constructed offscreen renderers instead of reusing the pool:`
       + ` before=${JSON.stringify(beforeZoom)} after=${JSON.stringify(afterZoom)}`,
-  ).toBeLessThanOrEqual(beforeZoom.offscreenCreateTotal + 1);
+  ).toBeLessThanOrEqual(beforeZoom.offscreenCreateTotal + 2);
   expect(failures).toEqual([]);
 });
 
@@ -1310,5 +1335,102 @@ test("loading a document never leaves the render pane without a presenter", asyn
     blank,
     `the document surface went blank after presenting: ${JSON.stringify(samples)}`,
   ).toEqual([]);
+  expect(failures).toEqual([]);
+});
+
+
+// Reads the main-loop frame gate probe published by donner/editor/main.cc.
+async function readFrameLoopStats(page: Page): Promise<FrameLoopStats> {
+  const stats = await page.evaluate(() => window.__donnerFrameLoopStats);
+  expect(stats, "the editor must publish __donnerFrameLoopStats").toBeTruthy();
+  return stats as FrameLoopStats;
+}
+
+// Each burst delivers its notches inside one task, so a burst can only produce a small, bounded
+// number of input-driven frames however slowly the engine runs. Two per burst leaves room for
+// ImGui trickling a wheel transition across frames without letting a per-epoch UI rebuild pass.
+const kStormBursts = 4;
+const kMaxInputFramesPerBurst = 2;
+
+test("worker-only frames present the document without rebuilding the UI", async ({ page }) => {
+  const failures = await openEditor(page);
+  const { canvasBounds } = await openBasicShapes(page);
+
+  const paneCenter = { x: canvasBounds.width * 0.55, y: canvasBounds.height * 0.5 };
+  // Park the pointer over the canvas and let ImGui's hover and tooltip delays saturate. The gate
+  // refuses to skip while a hover timer could still fire, so an unsettled pointer would make this
+  // test measure the wrong thing.
+  await page.mouse.move(canvasBounds.x + paneCenter.x, canvasBounds.y + paneCenter.y);
+  await page.waitForTimeout(scaledMs(1_500));
+
+  const before = await readFrameLoopStats(page);
+  const beforeSurface = await readDirectSurfaceState(page);
+
+  // A gesture storm shaped like a real trackpad pinch: a burst of notches delivered in one task,
+  // then a settle window in which the only thing waking the main loop is the render worker
+  // publishing epochs.
+  for (let burst = 0; burst < kStormBursts; ++burst) {
+    await pinchZoom(page, paneCenter, burst % 2 === 0 ? 70 : -70, 6);
+    await page.waitForTimeout(scaledMs(350));
+  }
+  await page.waitForTimeout(scaledMs(500));
+
+  const after = await readFrameLoopStats(page);
+  const afterSurface = await readDirectSurfaceState(page);
+  const presentationOnlyFrames = after.presentationOnlyFrames - before.presentationOnlyFrames;
+  const uiRebuilds = after.uiRebuilds - before.uiRebuilds;
+  const detail = `rebuilds=${uiRebuilds} presentationOnly=${presentationOnlyFrames}` +
+    ` surface=${beforeSurface.frame}->${afterSurface.frame}`;
+
+  // The document surface advanced across the storm, and it did so on frames that never reran the
+  // UI: this is the whole contract - the document updates while the immediate-mode UI does not.
+  expect(
+    afterSurface.frame,
+    `the worker document surface must advance across the storm (${detail})`,
+  ).toBeGreaterThan(beforeSurface.frame);
+  expect(afterSurface.visibleCount).toBe(1);
+  expect(
+    presentationOnlyFrames,
+    `every burst must produce at least one worker epoch that skips the UI rebuild (${detail})`,
+  ).toBeGreaterThanOrEqual(kStormBursts);
+  expect(
+    uiRebuilds,
+    `worker epochs must not each pay for a full UI rebuild (${detail})`,
+  ).toBeLessThanOrEqual(kStormBursts * kMaxInputFramesPerBurst);
+  expect(after.lastFrameUiRebuilt, `the settled storm tail must be presentation-only (${detail})`)
+    .toBe(false);
+
+  // A synthetic hover is a DOM input event, so it must take the next frame back off the skip path.
+  const beforeHover = await readFrameLoopStats(page);
+  await page.mouse.move(canvasBounds.x + canvasBounds.width - 200, canvasBounds.y + 320);
+  await expect
+    .poll(async () => (await readFrameLoopStats(page)).uiRebuilds, {
+      message: "expected a synthetic hover to force a full UI rebuild",
+      timeout: scaledMs(3_000),
+      intervals: [16, 25, 50, 100],
+    })
+    .toBeGreaterThan(beforeHover.uiRebuilds);
+
+  expect(failures).toEqual([]);
+});
+
+test("an idle editor runs no frames at all", async ({ page }) => {
+  const failures = await openEditor(page);
+  await openBasicShapes(page);
+  await page.waitForTimeout(scaledMs(2_000));
+
+  const before = await readFrameLoopStats(page);
+  await page.waitForTimeout(scaledMs(2_000));
+  const after = await readFrameLoopStats(page);
+
+  // The browser keeps invoking the animation-frame callback; the editor must decline every one of
+  // them, on the presentation-only path as much as on the full-UI path.
+  expect(after.callbacks, "the browser must keep clocking the main loop")
+    .toBeGreaterThan(before.callbacks);
+  expect(
+    after.renderedFrames - before.renderedFrames,
+    "an idle editor must render no frames",
+  ).toBe(0);
+  expect(after.presentationOnlyFrames - before.presentationOnlyFrames).toBe(0);
   expect(failures).toEqual([]);
 });

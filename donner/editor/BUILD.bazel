@@ -898,6 +898,13 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "ui_frame_gate",
+    srcs = ["UiFrameGate.cc"],
+    hdrs = ["UiFrameGate.h"],
+    deps = [],
+)
+
+donner_cc_library(
     name = "editor_dock_layout",
     srcs = ["EditorDockLayout.cc"],
     hdrs = ["EditorDockLayout.h"],
@@ -980,6 +987,7 @@ donner_cc_library(
         ":tool_keybinding",
         ":toolbar_icon_set",
         ":tracy_wrapper",
+        ":ui_frame_gate",
         ":undo_timeline",
         ":viewport_interaction_controller",
         ":viewport_svg_export",

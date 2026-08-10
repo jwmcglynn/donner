@@ -23,6 +23,9 @@ public:
 
   /// Returns the queued render-pane scroll events captured since the previous frame.
   [[nodiscard]] std::vector<RenderPaneScrollEvent>& events() { return pendingScrollEvents_.events; }
+  [[nodiscard]] const std::vector<RenderPaneScrollEvent>& events() const {
+    return pendingScrollEvents_.events;
+  }
 
   /// Clears the queued render-pane scroll events.
   void clear();

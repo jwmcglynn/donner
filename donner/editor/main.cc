@@ -34,12 +34,78 @@ EM_JS(void, InitializeWasmEditorFrameScheduling, (), {
 EM_JS(bool, ConsumeBrowserEditorFrameRequest, (), {
   const requested = Boolean(window['__donnerEditorFrameRequested']);
   window['__donnerEditorFrameRequested'] = false;
+  // Counted here rather than from its own call: this already runs on every animation-frame
+  // callback, including the ones the editor declines, so an idle page pays no extra boundary
+  // crossing for the probe.
+  const stats = window['__donnerFrameLoopStats'];
+  if (stats) {
+    stats['callbacks'] = (stats['callbacks'] | 0) + 1;
+  }
   return requested;
 });
 
 EM_JS(void, MarkWasmEditorFrameRendered, (), {
   window['__donnerMainLoopRenderedFrames'] =
       Number(window['__donnerMainLoopRenderedFrames'] || 0) + 1;
+});
+
+// Per-frame main-loop probe. Browser suites read `__donnerFrameLoopStats` to assert how many
+// frames rebuilt the immediate-mode ImGui UI versus presented the worker document surface only,
+// and the perf lane reads `uiFrameMsSamples` to compute the UI-frame cost distribution.
+//
+// Every property is quoted: the Wasm package is minified with Closure, which renames unquoted
+// object members and would leave the browser suites reading `undefined`. The sample arrays are
+// capped so a long session cannot grow the page heap without bound.
+EM_JS(void, EnsureWasmFrameLoopStats, (), {
+  if (!window['__donnerFrameLoopStats']) {
+    window['__donnerFrameLoopStats'] = {
+      'callbacks' : 0,
+      'renderedFrames' : 0,
+      'uiRebuilds' : 0,
+      'presentationOnlyFrames' : 0,
+      'inputTriggeredFrames' : 0,
+      'workerTriggeredFrames' : 0,
+      'timerTriggeredFrames' : 0,
+      'workerOnlyFrames' : 0,
+      'lastFrameUiRebuilt' : true,
+      'uiFrameMsSamples' : [],
+      'presentationOnlyMsSamples' : [],
+    };
+  }
+});
+
+EM_JS(void, RecordWasmFrameLoopSample, (int triggerBits, int uiRebuilt, double frameMs), {
+  const stats = window['__donnerFrameLoopStats'];
+  if (!stats) {
+    return;
+  }
+
+  stats['renderedFrames'] = (stats['renderedFrames'] | 0) + 1;
+  stats['lastFrameUiRebuilt'] = Boolean(uiRebuilt);
+  if (triggerBits & 1) {
+    stats['workerTriggeredFrames'] = (stats['workerTriggeredFrames'] | 0) + 1;
+  }
+  if (triggerBits & 2) {
+    stats['inputTriggeredFrames'] = (stats['inputTriggeredFrames'] | 0) + 1;
+  }
+  if (triggerBits & 4) {
+    stats['timerTriggeredFrames'] = (stats['timerTriggeredFrames'] | 0) + 1;
+  }
+  if (triggerBits == 1) {
+    stats['workerOnlyFrames'] = (stats['workerOnlyFrames'] | 0) + 1;
+  }
+  const kMaxSamples = 4096;
+  if (uiRebuilt) {
+    stats['uiRebuilds'] = (stats['uiRebuilds'] | 0) + 1;
+    if (stats['uiFrameMsSamples'].length < kMaxSamples) {
+      stats['uiFrameMsSamples'].push(frameMs);
+    }
+  } else {
+    stats['presentationOnlyFrames'] = (stats['presentationOnlyFrames'] | 0) + 1;
+    if (stats['presentationOnlyMsSamples'].length < kMaxSamples) {
+      stats['presentationOnlyMsSamples'].push(frameMs);
+    }
+  }
 });
 
 // Publish the C++-owned pinch policy so the page's WebKit gesture bridge
@@ -171,9 +237,25 @@ void RunWasmEditorFrame(void* userdata) {
   if (!editorRequested && !browserRequested && !timerDue) {
     return;
   }
+  const int triggerBits =
+      (editorRequested ? 1 : 0) | (browserRequested ? 2 : 0) | (timerDue ? 4 : 0);
 
   state->frameActive = true;
-  state->renderFrame(*state->window, *state->shell);
+  const double frameStartMs = emscripten_get_now();
+  // Immediate-mode UI is rebuilt from scratch every frame, and on this build that rebuild is the
+  // dominant per-frame cost. A frame woken only by the render worker publishing a fresh document
+  // epoch changes nothing the UI draws - the document lives on its own canvas - so the gate lets
+  // that frame place the document surface and leave the UI canvas showing the frame it already
+  // presented. See donner/editor/UiFrameGate.h for the full predicate.
+  const donner::editor::UiFrameWork work =
+      state->shell->classifyFrameWork(editorRequested, browserRequested, timerDue);
+  const bool uiRebuilt = work != donner::editor::UiFrameWork::PresentationOnly;
+  if (uiRebuilt) {
+    state->renderFrame(*state->window, *state->shell);
+  } else {
+    state->shell->runPresentationOnlyFrame();
+  }
+  RecordWasmFrameLoopSample(triggerBits, uiRebuilt ? 1 : 0, emscripten_get_now() - frameStartMs);
   MarkWasmEditorFrameRendered();
   if (const std::optional<float> wakeSeconds = state->shell->nextIdleWakeSeconds()) {
     state->nextIdleWakeAtMs = emscripten_get_now() + std::max(0.0f, *wakeSeconds) * 1000.0;
@@ -277,6 +359,7 @@ int main(int argc, char** argv) {
 #ifdef __EMSCRIPTEN__
   auto* loopState = new WasmEditorLoopState{std::move(window), std::move(shell), std::nullopt};
   InitializeWasmEditorFrameScheduling();
+  EnsureWasmFrameLoopStats();
   PublishWasmPinchZoomPolicy(donner::editor::PinchWheelDeltaPerLnScale());
   // The browser presents the WebGPU canvas when the requestAnimationFrame callback returns.
   emscripten_set_main_loop_arg(&RunWasmEditorFrame, loopState, /*fps=*/0,
