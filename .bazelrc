@@ -214,12 +214,14 @@ build:macos --features=oso_prefix_is_pwd
 # std::filesystem and std::format floating-point formatting.
 build:macos --macos_minimum_os=13.3
 
-# apple_support's clang wrapper expects these Xcode paths. The local Darwin
-# sandbox sets them implicitly; remote execution does not.
+# apple_support's clang wrapper expects DEVELOPER_DIR. The local Darwin
+# sandbox sets it implicitly; remote execution does not. SDKROOT must NOT be
+# pinned here: the apple toolchain supplies its own (versioned) SDKROOT per
+# action, and a second value from action_env crashes analysis/spawn setup
+# with a duplicate-key error once the installed Xcode ships versioned SDK
+# directories (first seen with Xcode 26.5).
 build:re --action_env=DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 build:re --host_action_env=DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
-build:re --action_env=SDKROOT=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
-build:re --host_action_env=SDKROOT=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
 # NativeLink's sandbox can SIGKILL Tracy's static client startup before
 # gtest main runs (the test exits 9 with no gtest output). Keep editor
 # profiling enabled by default, but build the no-op wrapper for any action
