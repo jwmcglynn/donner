@@ -492,15 +492,15 @@ TEST_F(RnrReplayTest, FilterDisappearRepro3MatchesGoldenAfterSecondMouseUp) {
       << "Replay ended before the second mouse-up checkpoint";
   ASSERT_FALSE(snapshot.bitmap.empty()) << "Replay produced an empty final bitmap";
 
-  // TinySkia has a bounded cross-toolchain rounding difference in this filtered image. Use the
-  // project's pixelmatch path with a threshold below the renderer suite default, while allowing
-  // no pixels outside that perceptual threshold.
+  // Both backends have a bounded cross-toolchain rounding difference in this filtered image
+  // (TinySkia across toolchains; Geode across GPU rasterizers - llvmpipe shifts 42 antialiased
+  // edge pixels by exactly one LSB vs the Metal-rendered golden). Use the project's pixelmatch
+  // path with a threshold below the renderer suite default, while allowing no pixels outside
+  // that perceptual threshold.
   const std::string_view goldenPath =
       snapshot.usesTexturePresentation ? kGeodeGoldenPath : kTinySkiaGoldenPath;
   tests::CompareBitmapToGolden(snapshot.bitmap, goldenPath, "rnr_replay_repro3_after_mup2",
-                               snapshot.usesTexturePresentation
-                                   ? tests::PixelmatchIdentityParams()
-                                   : tests::ApprovedPixelToleranceParams(0.01f, 0, true));
+                               tests::ApprovedPixelToleranceParams(0.01f, 0, true));
 }
 
 // Structural remaps must preserve the compositor across drag-release source

@@ -641,6 +641,7 @@ TEST(EditorWindowTest, WgpuOffscreenTargetSupportsHeadlessReadback) {
   EXPECT_EQ(actual.dimensions, Vector2i(64, 48));
   EXPECT_THAT(PixelAt(actual, 8, 8),
               Rgba(testing::Le(3), testing::Le(3), Near(255, 3), testing::Eq(255)));
+  EXPECT_TRUE(window.usingOffscreenRenderTarget());
 }
 #endif
 
@@ -1527,11 +1528,24 @@ TEST(EditorWindowTest, WgpuLayersPanelPresentsBackgroundStickerThumbnailLikeGold
 
   const std::optional<LayerTreeRow> row = FindLayerRow(panel, "Background_sticker");
   ASSERT_TRUE(row.has_value());
-  const svg::RendererBitmap* panelThumbnail = panel.rowThumbnail(row->stableId);
-  ASSERT_NE(panelThumbnail, nullptr);
-  EXPECT_EQ(panelThumbnail->dimensions, goldenBitmap->dimensions)
-      << "The UI presentation test isolates ImGui/WGPU by uploading the approved golden, but the "
-         "row layout must still reserve the approved thumbnail size.";
+  if (thumbnailRenderer.requiresTextureSnapshotPresentation()) {
+    // Geode presents row thumbnails as GPU texture snapshots; the CPU-bitmap
+    // cache is intentionally left empty on that path
+    // (LayersPanel::refreshSnapshot), so assert the texture form instead.
+    const std::shared_ptr<const svg::RendererTextureSnapshot>* panelTexture =
+        panel.rowTextureThumbnail(row->stableId);
+    ASSERT_NE(panelTexture, nullptr);
+    ASSERT_NE(*panelTexture, nullptr);
+    EXPECT_EQ((*panelTexture)->dimensions(), goldenBitmap->dimensions)
+        << "The UI presentation test isolates ImGui/WGPU by uploading the approved golden, but "
+           "the row layout must still reserve the approved thumbnail size.";
+  } else {
+    const svg::RendererBitmap* panelThumbnail = panel.rowThumbnail(row->stableId);
+    ASSERT_NE(panelThumbnail, nullptr);
+    EXPECT_EQ(panelThumbnail->dimensions, goldenBitmap->dimensions)
+        << "The UI presentation test isolates ImGui/WGPU by uploading the approved golden, but "
+           "the row layout must still reserve the approved thumbnail size.";
+  }
 
   GlTextureCache textures(window.geodeDevice());
   textures.initialize();
