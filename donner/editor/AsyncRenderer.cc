@@ -265,6 +265,8 @@ struct WorkerSurfacePresentResult {
   WorkerSurfacePresentDisposition disposition = WorkerSurfacePresentDisposition::TerminalFailure;
   WorkerSurfaceFailureKind terminalFailure = WorkerSurfaceFailureKind::Fatal;
   int surfaceSlot = 0;
+  /// Backing-store size the surface canvas is configured at (device pixels).
+  Vector2i configuredBackingSize = Vector2i::Zero();
 };
 
 WorkerSurfaceFailureKind WorkerSurfaceFailureForStatus(WGPUSurfaceGetCurrentTextureStatus status) {
@@ -312,7 +314,7 @@ public:
 
   [[nodiscard]] WorkerSurfacePresentResult present(
       const svg::RendererTextureSnapshot* textureSnapshot, int requestedSurfaceSlot,
-      std::uint64_t frameToken) {
+      std::uint64_t frameToken, Vector2i backingCapPx) {
     if (surfaces_.empty() || textureSnapshot == nullptr ||
         textureSnapshot->backend() != svg::RendererTextureSnapshotBackend::Geode) {
       ReportWorkerSurfaceFailure(1);
@@ -344,8 +346,43 @@ public:
       return handleFailure(target, surfaceSlot, WorkerSurfaceFailureKind::Incompatible, 5);
     }
 
-    if (dimensions != target.configuredSize) {
-      if (emscripten_set_canvas_element_size(target.canvasSelector, dimensions.x, dimensions.y) !=
+    // Configure the backing store at the viewport's raster cap, not the
+    // content size: resizing a transferred OffscreenCanvas clears it, and the
+    // cleared frame reaches the compositor before the drawn one, flashing the
+    // editor background on every raster-size change during a zoom gesture.
+    // At the cap the size is a function of pane geometry only, so gestures
+    // never re-configure. Content is blitted into the top-left corner and the
+    // remainder stays transparent; presentation layout scales the element and
+    // extends its clip so only the content region shows. The WebKit bitmap
+    // bridge snapshots the whole canvas, so it keeps exact sizing.
+    Vector2i backing = dimensions;
+    if (!publishBitmap_) {
+      // Start at the viewport's raster cap and never shrink: the unbounded
+      // raster branch can legitimately exceed the per-axis pane cap (a wide
+      // document at moderate zoom rasterizes wider than the pane while its
+      // area stays below the viewport-bounded alternative), and every
+      // reconfigure is a visible background flash. Growing to the running
+      // maximum converges within the first gesture; the allocation stays
+      // bounded by the hard canvas dimension cap.
+      const auto growTo = [](int needed, int configured, int cap) {
+        int size = std::max(needed, cap);
+        size = std::max(size, configured);
+        if (configured > 0 && size > configured) {
+          // Each reconfigure is one visible flash, so grow geometrically:
+          // repeated small increases during a zoom-in ramp coalesce into one
+          // or two reconfigures instead of one per epoch. Overshoot is
+          // clamped so it can never exceed the hard canvas dimension cap.
+          const int overshoot = std::min(configured + configured / 4,
+                                         static_cast<int>(ViewportState::kMaxCanvasDim));
+          size = std::max(size, overshoot);
+        }
+        return size;
+      };
+      backing.x = growTo(dimensions.x, target.configuredSize.x, backingCapPx.x);
+      backing.y = growTo(dimensions.y, target.configuredSize.y, backingCapPx.y);
+    }
+    if (backing != target.configuredSize) {
+      if (emscripten_set_canvas_element_size(target.canvasSelector, backing.x, backing.y) !=
           EMSCRIPTEN_RESULT_SUCCESS) {
         return handleFailure(target, surfaceSlot, WorkerSurfaceFailureKind::Setup, 3);
       }
@@ -353,12 +390,12 @@ public:
       config.device = device_->device();
       config.format = target.format;
       config.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopyDst;
-      config.width = static_cast<uint32_t>(dimensions.x);
-      config.height = static_cast<uint32_t>(dimensions.y);
+      config.width = static_cast<uint32_t>(backing.x);
+      config.height = static_cast<uint32_t>(backing.y);
       config.presentMode = wgpu::PresentMode::Fifo;
       config.alphaMode = target.alphaMode;
       target.surface.get().configure(config);
-      target.configuredSize = dimensions;
+      target.configuredSize = backing;
     }
 
     wgpu::SurfaceTexture surfaceTexture;
@@ -400,6 +437,7 @@ public:
     return WorkerSurfacePresentResult{
         .disposition = WorkerSurfacePresentDisposition::Presented,
         .surfaceSlot = surfaceSlot,
+        .configuredBackingSize = target.configuredSize,
     };
   }
 
@@ -1437,6 +1475,7 @@ void AsyncRenderer::commitDirectSurfacePresentation(RenderResult& result) {
       .frameCount = result.directSurfaceFrames,
       .surfaceSlot = result.directSurfaceSlot,
       .selectionChromeBaked = result.directSurfaceSelectionChromeBaked,
+      .surfaceBackingSizePx = result.directSurfaceBackingSizePx,
   };
 }
 
@@ -2587,6 +2626,7 @@ void AsyncRenderer::workerLoop() {
     bool directSurfacePresented = false;
     std::optional<WorkerSurfaceFailureKind> directSurfaceTerminalFailure;
     int directSurfaceSlot = 0;
+    Vector2i directSurfaceBackingSizePx = Vector2i::Zero();
 #ifdef DONNER_WASM_WORKER_SURFACE
     if (renderCompleted) {
       const auto presentStart = std::chrono::steady_clock::now();
@@ -2613,8 +2653,10 @@ void AsyncRenderer::workerLoop() {
         surfaceDiagnostic = requestRenderer.takeSnapshot();
       }
       const WorkerSurfacePresentResult presentation = wasmWorkerRuntime_->surfacePresenter->present(
-          composedTexture, requestedSurfaceSlot, frameToken);
+          composedTexture, requestedSurfaceSlot, frameToken,
+          request.viewport.rasterBackingCapPx());
       directSurfaceSlot = presentation.surfaceSlot;
+      directSurfaceBackingSizePx = presentation.configuredBackingSize;
       if (presentation.disposition == WorkerSurfacePresentDisposition::RetryNextWorkerTask) {
         // The surface rejected this presentation attempt, so the local snapshot has no accepted
         // frame token to describe. The presenter bounds these same-request retries; allow the next
@@ -2780,6 +2822,7 @@ void AsyncRenderer::workerLoop() {
           done.result.directSurfaceEntity = compositorEntity_;
           done.result.directSurfaceDragPreview = request.dragPreview;
           done.result.directSurfaceSlot = directSurfaceSlot;
+          done.result.directSurfaceBackingSizePx = directSurfaceBackingSizePx;
 #ifdef DONNER_WASM_WORKER_SURFACE
           done.result.bitmapBridgeFrameStaged =
               directSurfacePresented && useBitmapWorkerSurfaceBridge_;

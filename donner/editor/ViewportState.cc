@@ -118,6 +118,16 @@ EditorRasterViewport ViewportState::rasterViewport() const {
   return result;
 }
 
+Vector2i ViewportState::rasterBackingCapPx() const {
+  if (paneSize.x <= 0.0 || paneSize.y <= 0.0 || devicePixelRatio <= 0.0) {
+    return Vector2i::Zero();
+  }
+  const double marginDevicePx =
+      static_cast<double>(kHighZoomRasterMarginScreenPx) * devicePixelRatio;
+  return Vector2i(ClampRasterDim(paneSize.x * devicePixelRatio + 2.0 * marginDevicePx),
+                  ClampRasterDim(paneSize.y * devicePixelRatio + 2.0 * marginDevicePx));
+}
+
 EditorRasterViewport ViewportState::selectedPrewarmRasterViewport() const {
   EditorRasterViewport result = rasterViewport();
   if (!result.viewportBounded || paneSize.x <= 0.0 || paneSize.y <= 0.0 ||

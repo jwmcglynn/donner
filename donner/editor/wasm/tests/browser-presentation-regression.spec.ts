@@ -33,6 +33,13 @@ declare global {
     };
     __donnerWorkerSurfaceMode?: "direct-surface" | "bitmap-bridge";
     __donnerWorkerSurfaceLayoutPolicy?: "single-visible";
+    __donnerInteractionStats?: {
+      dragging: boolean;
+      pendingClick: boolean;
+      publishedAtFrame: number;
+      selectedCount: number;
+      workerBusy: boolean;
+    };
     __donnerAcceptedFrameMutations?: number[];
     __donnerAcceptedFrameBoundaryViolations?: Array<{ acknowledged: number; frame: number }>;
     __donnerAcceptedFrameObserver?: MutationObserver;
@@ -178,14 +185,124 @@ async function waitForBrowserComposite(page: Page): Promise<void> {
   );
 }
 
+
+// The presented surface element spans its cap-sized canvas backing store, so
+// its bounding box includes a clipped, transparent surplus band on the right
+// and bottom. Document-space geometry must map through the VISIBLE box: the
+// element box minus the clip-path insets.
+async function visibleSurfaceBounds(
+  locator: import("@playwright/test").Locator,
+): Promise<{ x: number; y: number; width: number; height: number } | null> {
+  return locator.evaluate((el) => {
+    const rect = el.getBoundingClientRect();
+    const clip = getComputedStyle(el).clipPath || "";
+    const inset = clip.match(/inset\(([^)]*)\)/);
+    if (!inset) {
+      return { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
+    }
+    // Engines serialize the inset() shorthand with 1-4 values; expand per the
+    // CSS shorthand rules (top, right, bottom, left).
+    const v = inset[1].trim().split(/\s+/).map((part) => parseFloat(part));
+    if (v.length === 0 || v.some((n) => !Number.isFinite(n))) {
+      return { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
+    }
+    const top = v[0];
+    const right = v.length >= 2 ? v[1] : v[0];
+    const bottom = v.length >= 3 ? v[2] : v[0];
+    const left = v.length >= 4 ? v[3] : right;
+    return {
+      x: rect.left + left,
+      y: rect.top + top,
+      width: rect.width - left - right,
+      height: rect.height - top - bottom,
+    };
+  });
+}
+
+// Restore the page scroll origin and report where it ended up.
+//
+// The worker surface element spans its cap-sized backing store, which is larger
+// than the editor viewport, so the page has a scrollable overflow area it never
+// has in normal use (the editor itself sets `overflow: hidden` and never
+// scrolls). Any Playwright *element* screenshot - which is what
+// `readElementColorStats` takes - first scrolls that element into view, leaving
+// the page scrolled by the overflow amount. Every viewport-relative coordinate
+// measured before such a screenshot (pointer targets, `page.screenshot` clips)
+// is stale afterwards. Tests must return to the origin and re-measure rather
+// than mix pre-scroll and post-scroll geometry.
+async function restoreViewportScrollOrigin(page: Page): Promise<{ x: number; y: number }> {
+  return page.evaluate(() => {
+    window.scrollTo(0, 0);
+    document.documentElement.scrollLeft = 0;
+    document.documentElement.scrollTop = 0;
+    return { x: window.scrollX, y: window.scrollY };
+  });
+}
+
+// Block until the editor can accept a press.
+//
+// A `mouse.down` that lands while a render is still in flight is dropped by the
+// busy worker - a real app fragility tracked separately - and the drag that
+// follows runs as a marquee that never publishes an epoch. That precondition is
+// stated explicitly here instead of being approximated by a fixed sleep:
+// readiness means the async renderer is idle, no click is still pending, and
+// neither the worker result count nor the accepted surface epoch has moved for
+// a continuous settle window (so a queued follow-up render cannot land between
+// the check and the press).
+async function waitForPressReadiness(page: Page, message: string): Promise<void> {
+  const settleMs = scaledMs(250);
+  const deadline = Date.now() + scaledMs(6_000);
+  let lastCompleted = -1;
+  let lastFrame = -1;
+  let stableSince = Date.now();
+  for (;;) {
+    const snapshot = await page.evaluate(() => ({
+      busy: window.__donnerInteractionStats?.workerBusy ?? true,
+      completed: window.__donnerWorkerStats?.completedResults || 0,
+      frame: Number(
+        document.querySelector<HTMLCanvasElement>(
+          "canvas[data-direct-surface-visible=\"true\"]",
+        )?.dataset.directSurfaceFrame || 0,
+      ),
+      pendingClick: window.__donnerInteractionStats?.pendingClick ?? true,
+    }));
+    const now = Date.now();
+    if (
+      snapshot.busy || snapshot.pendingClick || snapshot.completed !== lastCompleted
+      || snapshot.frame !== lastFrame
+    ) {
+      lastCompleted = snapshot.completed;
+      lastFrame = snapshot.frame;
+      stableSince = now;
+    } else if (now - stableSince >= settleMs) {
+      return;
+    }
+    if (now >= deadline) {
+      throw new Error(
+        `${message}: the editor never became ready for a press `
+          + `(${JSON.stringify(snapshot)})`,
+      );
+    }
+    await page.waitForTimeout(16);
+  }
+}
+
 test.use({ viewport: { width: 1600, height: 900 } });
 
 test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edges", async ({ browserName, page }) => {
   test.skip(browserName !== "firefox", "Firefox Geode direct-surface regression");
   const failures = await openEditor(page);
   const { canvasBounds, documentClip } = await openBasicShapes(page);
-  const documentBounds = await page.locator("canvas[data-direct-surface-visible=\"true\"]")
-    .boundingBox();
+  // Document-space geometry (the clip intersection below and
+  // `documentPointInClip`) has to map through the VISIBLE surface box. The
+  // element spans the cap-sized backing store, so its raw bounding box is much
+  // wider and taller than the 640x400 raster it presents; scaling document
+  // coordinates by the element box would place every probe far from the shape
+  // it is meant to sample, and would drag the clipped surplus band into the
+  // "restored baseline" comparison.
+  const documentBounds = await visibleSurfaceBounds(
+    page.locator("canvas[data-direct-surface-visible=\"true\"]"),
+  );
   expect(documentBounds).not.toBeNull();
   if (documentBounds === null) {
     throw new Error("accepted document surface is missing");
@@ -365,11 +482,6 @@ test("Firefox presents every accepted drag epoch on one stable surface", async (
 
   const documentCanvas = page.locator("canvas[data-direct-surface-visible=\"true\"]");
   await expect(documentCanvas).toBeVisible();
-  const documentBounds = await documentCanvas.boundingBox();
-  expect(documentBounds).not.toBeNull();
-  if (documentBounds === null) {
-    return;
-  }
   await expect
     .poll(() => readElementColorStats(documentCanvas).then((stats) => stats.coloredPixels), {
       message: "expected the initial Basic Shapes worker surface before starting the drag",
@@ -412,11 +524,38 @@ test("Firefox presents every accepted drag epoch on one stable surface", async (
     }
   }, boundaryToken);
 
+  // `readElementColorStats` takes an element screenshot, and Playwright scrolls
+  // the target into view first. The cap-sized surface element overflows the
+  // viewport, so those two calls leave the page scrolled; every pointer
+  // coordinate and screenshot clip below must be measured against the restored
+  // origin, not against the pre-screenshot layout.
+  expect(
+    await restoreViewportScrollOrigin(page),
+    "element screenshots scrolled the editor page and it did not return to the origin",
+  ).toEqual({ x: 0, y: 0 });
+  const dragBounds = await visibleSurfaceBounds(documentCanvas);
+  expect(dragBounds).not.toBeNull();
+  if (dragBounds === null) {
+    return;
+  }
+  const dragEditorBounds = await editorCanvas.boundingBox();
+  expect(dragEditorBounds).not.toBeNull();
+  if (dragEditorBounds === null) {
+    return;
+  }
+
   const dragStart = {
-    x: documentBounds.x + documentBounds.width * (122 / 640),
-    y: documentBounds.y + documentBounds.height * (92 / 400),
+    x: dragBounds.x + dragBounds.width * (122 / 640),
+    y: dragBounds.y + dragBounds.height * (92 / 400),
   };
+  // The press must land on a settled editor: a mouse-down while the sample's
+  // first render is still in flight is dropped by the busy worker (the same
+  // fragility the native replay tests defer around), and the whole drag then
+  // runs as a marquee that never produces an epoch. Poll that readiness
+  // explicitly rather than sleeping for it.
+  await waitForBrowserComposite(page);
   await page.mouse.move(dragStart.x, dragStart.y);
+  await waitForPressReadiness(page, "drag press");
   await page.mouse.down();
 
   const samples: Array<{
@@ -431,8 +570,8 @@ test("Firefox presents every accepted drag epoch on one stable surface", async (
     teal: PixelBounds;
   }> = [];
   const probeRegion = {
-    x: editorBounds.x + 280,
-    y: editorBounds.y + 260,
+    x: dragEditorBounds.x + 280,
+    y: dragEditorBounds.y + 260,
     width: 460,
     height: 280,
   };
@@ -1287,6 +1426,115 @@ test("a size-commit re-rasterize reuses the pooled offscreen renderer", async ({
     `the size-commit re-rasterize constructed offscreen renderers instead of reusing the pool:`
       + ` before=${JSON.stringify(beforeZoom)} after=${JSON.stringify(afterZoom)}`,
   ).toBeLessThanOrEqual(beforeZoom.offscreenCreateTotal + 2);
+  expect(failures).toEqual([]);
+});
+
+test("trackpad pan moves the presented document surface", async ({ page }) => {
+  // Pan was doubly broken in browsers: it never requested a worker epoch, and
+  // placement was pinned to the epoch viewport so the surface could not move
+  // between epochs. Both fixes are pinned here: a plain (non-ctrl) wheel over
+  // the pane must move the presented surface.
+  const failures = await openEditor(page);
+  const { editorBounds } = await openDonnerSplash(page);
+  const panPoint = { x: editorBounds.x + 480, y: editorBounds.y + 320 };
+  await page.mouse.move(panPoint.x, panPoint.y);
+  const surface = page.locator("canvas[data-direct-surface-visible=\"true\"]");
+  const before = await surface.boundingBox();
+  expect(before).not.toBeNull();
+
+  await page.evaluate(({ x, y }) => {
+    for (let i = 0; i < 6; ++i) {
+      document.getElementById("canvas")!.dispatchEvent(
+        new WheelEvent("wheel", {
+          bubbles: true,
+          cancelable: true,
+          clientX: x,
+          clientY: y,
+          deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+          deltaX: 0,
+          deltaY: 40,
+        }),
+      );
+    }
+  }, panPoint);
+
+  await expect
+    .poll(
+      async () => {
+        const box = await surface.boundingBox();
+        return box === null || before === null ? 0 : Math.abs(box.y - before.y);
+      },
+      {
+        message: "a plain wheel pan never moved the presented document surface",
+        timeout: scaledMs(5_000),
+      },
+    )
+    .toBeGreaterThan(20);
+  expect(failures).toEqual([]);
+});
+
+test("browser trackpad pinch matches the desktop zoom identity", async ({ page }) => {
+  // A synthesized pinch (ctrl-flagged wheel with no physical key held)
+  // carries deltaY = -100*ln(scale); the input bridge discriminates it and
+  // applies the desktop calibration so the applied zoom equals the gesture's
+  // scale. A pinch to 1.25x must scale the presented surface by 1.25 within
+  // a few percent (raster snapping contributes the tolerance).
+  const failures = await openEditor(page);
+  const { editorBounds } = await openDonnerSplash(page);
+  const zoomPoint = { x: editorBounds.x + 480, y: editorBounds.y + 320 };
+  await page.mouse.move(zoomPoint.x, zoomPoint.y);
+  const surface = page.locator("canvas[data-direct-surface-visible=\"true\"]");
+  const before = await surface.boundingBox();
+  expect(before).not.toBeNull();
+  if (before === null) {
+    return;
+  }
+
+  // The surface element spans its cap-sized backing store, so the element box
+  // barely changes with zoom; the zoom observable is the VISIBLE width - the
+  // element minus its clip-path insets - which tracks the content raster.
+  const visibleWidth = () =>
+    page.evaluate(() => {
+      const el = document.querySelector<HTMLCanvasElement>(
+        "canvas[data-direct-surface-visible=\"true\"]",
+      );
+      if (!el) {
+        return 0;
+      }
+      const rect = el.getBoundingClientRect();
+      const m = (getComputedStyle(el).clipPath || "").match(
+        /inset\(([-\d.]+)px ([-\d.]+)px ([-\d.]+)px ([-\d.]+)px\)/,
+      );
+      if (!m) {
+        return rect.width;
+      }
+      return rect.width - parseFloat(m[2]) - parseFloat(m[4]);
+    });
+  const beforeWidth = await visibleWidth();
+  expect(beforeWidth).toBeGreaterThan(0);
+
+  const kTargetScale = 1.25;
+  await page.evaluate(({ x, y, scale }) => {
+    document.getElementById("canvas")!.dispatchEvent(
+      new WheelEvent("wheel", {
+        bubbles: true,
+        cancelable: true,
+        clientX: x,
+        clientY: y,
+        ctrlKey: true,
+        deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+        deltaY: -100 * Math.log(scale),
+      }),
+    );
+  }, { ...zoomPoint, scale: kTargetScale });
+
+  await expect
+    .poll(async () => (await visibleWidth()) / beforeWidth, {
+      message: "the pinch never scaled the presented document surface",
+      timeout: scaledMs(5_000),
+    })
+    .toBeGreaterThan(kTargetScale * 0.93);
+  expect((await visibleWidth()) / beforeWidth).toBeLessThan(kTargetScale * 1.07);
   expect(failures).toEqual([]);
 });
 

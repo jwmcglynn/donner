@@ -48,14 +48,38 @@ inline constexpr double kWasmWheelPixelsPerScrollUnit = 100.0;
 ///
 /// Engine coverage note: only WebKit reports the non-standard
 /// `gesturestart`/`gesturechange` events the bridge listens to, so this
-/// constant only affects Safari. Chromium and Firefox deliver trackpad pinch as
-/// a raw `ctrl`+wheel event on the *same* channel as a real ctrl+mouse-wheel
-/// zoom, with no attribute that reliably separates the two. Applying a
-/// per-engine gain to that shared channel would fix pinch and simultaneously
-/// break discrete wheel zoom, so the raw ctrl+wheel path deliberately keeps a
-/// gain of 1.0 on every engine.
+/// constant only affects Safari. Chromium and Firefox deliver trackpad pinch
+/// as a raw `ctrl`+wheel event on the same channel as a real ctrl+mouse-wheel
+/// zoom: Chromium synthesizes `deltaY = -100 * ln(1 + magnification)`
+/// (components/input/touchpad_pinch_event_queue.cc) and Gecko synthesizes
+/// `deltaY = -100 * magnification` (widget/InputData.cpp) - equal to first
+/// order for real per-event magnifications. The two cases ARE separable: a
+/// synthesized pinch carries the DOM ctrlKey flag while no Ctrl/Cmd key is
+/// physically held, which the input bridge observes by comparing the
+/// capture-phase DOM flag against `glfwGetKey`. Discriminated pinch events
+/// get `kPinchScrollUnitGain` so a browser pinch matches the desktop's
+/// `zoom = 1 + magnification` per gesture event; a real ctrl+mouse-wheel keeps
+/// gain 1.0 and the discrete `kWheelZoomStep` per notch.
 [[nodiscard]] inline double PinchWheelDeltaPerLnScale() {
   return kWasmWheelPixelsPerScrollUnit / std::log(kWheelZoomStep);
+}
+
+/// Gain applied to a discriminated browser trackpad-pinch scroll unit so the
+/// classifier's `pow(kWheelZoomStep, units)` becomes `exp(rawUnits)`: with the
+/// engines' `deltaY = -100 * ln(scale)` synthesis (100 px per scroll unit),
+/// desktop parity requires multiplying units by `1 / ln(kWheelZoomStep)`.
+/// This is the same derivation as the Safari bridge constant above
+/// (`100 / ln(1.1) == 100 * kPinchScrollUnitGain`).
+[[nodiscard]] inline double PinchScrollUnitGain() {
+  return 1.0 / std::log(kWheelZoomStep);
+}
+
+/// Per-event clamp for discriminated pinch units, in post-gain scroll units:
+/// caps one event's zoom factor at 1.5x (or 1/1.5) so a misclassified event is
+/// merely brisk rather than catastrophic. Real trackpad pinch events carry
+/// per-event magnifications well under this bound.
+[[nodiscard]] inline double MaxPinchScrollUnitsPerEvent() {
+  return std::log(1.5) / std::log(kWheelZoomStep);
 }
 
 }  // namespace donner::editor

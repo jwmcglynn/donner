@@ -12,7 +12,7 @@
         "release",
         "submit"
       ],
-      "sha256": "e71ac159eaf01d0d6dd5ea2fc80b368b95810beb4adb3e30fbbe1447878f7168",
+      "sha256": "c94ece0f645cbbcc87c6e7c3e34c6a75ee27a56ac2095be37e4d8a8b895f84be",
       "wgpuCFunctions": [
         "wgpuInstanceCreateSurface"
       ],
@@ -70,7 +70,7 @@
       ]
     },
     "donner/editor/EditorShell.cc": {
-      "sha256": "e65fe137fd493bdd24bd0611388396c1e3bc54af6a0b4762191624c5cbc5e852",
+      "sha256": "c0b75fa37810de3deae057ba4d4a18db442225d43635be19d3134c5e2f5b6e3c",
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
         "wgpuLifetimeTextureCreates"

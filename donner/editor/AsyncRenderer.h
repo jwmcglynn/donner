@@ -712,6 +712,12 @@ struct RenderResult {
   /// Worker surface slot containing this frame. Direct WebGPU uses slot 0; the bitmap bridge
   /// retains slots 0 and 1 on the main thread.
   int directSurfaceSlot = 0;
+  /// Configured backing-store size of the presenting surface canvas, in device pixels. The
+  /// direct surface is configured once at the viewport's raster backing cap (resizing clears
+  /// the canvas and flashes the background), so this is normally larger than the content in
+  /// rasterViewport and presentation layout must scale and clip accordingly. Zero when
+  /// unknown (bitmap bridge, older epochs).
+  Vector2i directSurfaceBackingSizePx = Vector2i::Zero();
   /// True when a bitmap-bridge back-buffer frame is staged for this result's surface token.
   bool bitmapBridgeFrameStaged = false;
   /// True when Select-mode path/bounds chrome is already part of the direct-surface pixels.
@@ -795,6 +801,9 @@ struct DirectSurfacePresentationState {
   std::uint64_t frameCount = 0;
   int surfaceSlot = 0;
   bool selectionChromeBaked = false;
+  /// Configured surface backing size in device pixels; zero when unknown. See
+  /// RenderResult::directSurfaceBackingSizePx.
+  Vector2i surfaceBackingSizePx = Vector2i::Zero();
 };
 
 /// Whether \p viewport can place an accepted surface epoch on screen.

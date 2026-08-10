@@ -191,6 +191,40 @@ const kLinuxGeodeLaunchArgs = [
 // (source pane 560px, right pane 420px, layer preview at 0.72h..0.96h), so the
 // browser canvas must match that window size for the regions to land on the
 // document render and the layer thumbnails.
+
+// The presented surface element spans its cap-sized canvas backing store, so
+// its bounding box includes a clipped, transparent surplus band on the right
+// and bottom. Document-space geometry must map through the VISIBLE box: the
+// element box minus the clip-path insets.
+async function visibleSurfaceBounds(
+  locator: import("@playwright/test").Locator,
+): Promise<{ x: number; y: number; width: number; height: number } | null> {
+  return locator.evaluate((el) => {
+    const rect = el.getBoundingClientRect();
+    const clip = getComputedStyle(el).clipPath || "";
+    const inset = clip.match(/inset\(([^)]*)\)/);
+    if (!inset) {
+      return { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
+    }
+    // Engines serialize the inset() shorthand with 1-4 values; expand per the
+    // CSS shorthand rules (top, right, bottom, left).
+    const v = inset[1].trim().split(/\s+/).map((part) => parseFloat(part));
+    if (v.length === 0 || v.some((n) => !Number.isFinite(n))) {
+      return { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
+    }
+    const top = v[0];
+    const right = v.length >= 2 ? v[1] : v[0];
+    const bottom = v.length >= 3 ? v[2] : v[0];
+    const left = v.length >= 4 ? v[3] : right;
+    return {
+      x: rect.left + left,
+      y: rect.top + top,
+      width: rect.width - left - right,
+      height: rect.height - top - bottom,
+    };
+  });
+}
+
 test.use({
   viewport: { width: 1600, height: 900 },
   ...(process.platform === "linux" && kBackend === "geode"
@@ -342,6 +376,26 @@ async function requestWgpuDiagnostic(page: Page): Promise<number> {
       throw new Error("WGPU diagnostic request hook is unavailable");
     }
     return window.__donnerRequestWgpuReadback();
+  });
+}
+
+// Restore the page scroll origin and report where it ended up.
+//
+// The worker surface element spans its cap-sized backing store, which is larger
+// than the editor viewport, so the page has a scrollable overflow area it never
+// has in normal use (the editor sets `overflow: hidden` and never scrolls). Any
+// Playwright *element* screenshot - which is what `readElementColorStats` takes
+// - first scrolls that element into view, leaving the page scrolled by the
+// overflow amount. Every viewport-relative coordinate measured before such a
+// screenshot (pointer targets, `page.screenshot` clips) is stale afterwards, so
+// tests must return to the origin and re-measure rather than mix pre-scroll and
+// post-scroll geometry.
+async function restoreViewportScrollOrigin(page: Page): Promise<{ x: number; y: number }> {
+  return page.evaluate(() => {
+    window.scrollTo(0, 0);
+    document.documentElement.scrollLeft = 0;
+    document.documentElement.scrollTop = 0;
+    return { x: window.scrollX, y: window.scrollY };
   });
 }
 
@@ -924,13 +978,32 @@ test("carousel never exposes the placeholder viewport for Donner Splash", async 
           continue;
         }
         const rect = surface.getBoundingClientRect();
+        // The surface is configured once at a size cap, so the backing store
+        // and the element box both span that cap and carry no document aspect
+        // ratio at all. The presented extent is the cap minus the clip-path
+        // insets that hide the surplus band, so both the backing-store sample
+        // and the layout-rect sample are measured through those insets. The
+        // backing store is in device pixels, so the CSS insets are scaled by
+        // the element's device-pixel ratio before being subtracted from it.
+        const clip = getComputedStyle(surface).clipPath || "";
+        const inset = clip.match(/inset\(([^)]*)\)/);
+        const parts = inset
+          ? inset[1].trim().split(/\s+/).map((part) => parseFloat(part))
+          : [];
+        const usable = parts.length > 0 && parts.every((n) => Number.isFinite(n));
+        const clipTop = usable ? parts[0] : 0;
+        const clipRight = usable ? (parts.length >= 2 ? parts[1] : parts[0]) : 0;
+        const clipBottom = usable ? (parts.length >= 3 ? parts[2] : parts[0]) : 0;
+        const clipLeft = usable ? (parts.length >= 4 ? parts[3] : clipRight) : 0;
+        const backingScaleX = rect.width > 0 ? surface.width / rect.width : 1;
+        const backingScaleY = rect.height > 0 ? surface.height / rect.height : 1;
         const sample = {
           frame: Number(surface.dataset.directSurfaceFrame || 0),
-          height: surface.height,
-          rectHeight: rect.height,
-          rectWidth: rect.width,
+          height: surface.height - (clipTop + clipBottom) * backingScaleY,
+          rectHeight: rect.height - clipTop - clipBottom,
+          rectWidth: rect.width - clipLeft - clipRight,
           slot: id,
-          width: surface.width,
+          width: surface.width - (clipLeft + clipRight) * backingScaleX,
         };
         const previous = samples.at(-1);
         if (JSON.stringify(previous) !== JSON.stringify(sample)) {
@@ -990,6 +1063,10 @@ test("carousel never exposes the placeholder viewport for Donner Splash", async 
   });
 
   expect(visibleSamples.length).toBeGreaterThan(0);
+  // Both samples are presented (clip-inset) extents, one derived from the
+  // backing store and one from the layout rect: the very first surface the
+  // carousel makes visible must already carry the Splash artboard aspect, never
+  // a placeholder viewport.
   const firstVisible = visibleSamples[0];
   expect(firstVisible.width / firstVisible.height).toBeCloseTo(892 / 512, 2);
   expect(firstVisible.rectWidth / firstVisible.rectHeight).toBeCloseTo(892 / 512, 2);
@@ -1105,7 +1182,7 @@ test("browser presents the first Basic Shapes drag frame within the interaction 
     .toBeGreaterThan(beforeSample);
 
   const documentCanvas = page.locator("canvas[data-direct-surface-visible=\"true\"]");
-  const documentBounds = kBackend === "geode" ? await documentCanvas.boundingBox() : null;
+  const documentBounds = kBackend === "geode" ? await visibleSurfaceBounds(documentCanvas) : null;
   if (kBackend === "geode") {
     expect(documentBounds).not.toBeNull();
     expect(await page.evaluate(() => window.__donnerWorkerSurfaceDiagnostic)).toBeUndefined();
@@ -1305,11 +1382,25 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
     })
     .toBeGreaterThan(500);
 
-  const blueRectCenter = { x: bounds.x + 408, y: bounds.y + 353 };
-  const resizeHandle = { x: bounds.x + 498, y: bounds.y + 413 };
+  // `readElementColorStats` takes an element screenshot, which Playwright
+  // scrolls into view first; the cap-sized surface overflows the viewport, so
+  // that leaves the page scrolled. Return to the origin and re-measure before
+  // deriving any pointer target or screenshot clip from the editor canvas.
+  expect(
+    await restoreViewportScrollOrigin(page),
+    "element screenshots scrolled the editor page and it did not return to the origin",
+  ).toEqual({ x: 0, y: 0 });
+  const editorBounds = await canvas.boundingBox();
+  expect(editorBounds).not.toBeNull();
+  if (editorBounds === null) {
+    return;
+  }
+
+  const blueRectCenter = { x: editorBounds.x + 408, y: editorBounds.y + 353 };
+  const resizeHandle = { x: editorBounds.x + 498, y: editorBounds.y + 413 };
   const probeRegion = {
-    x: bounds.x + 300,
-    y: bounds.y + 270,
+    x: editorBounds.x + 300,
+    y: editorBounds.y + 270,
     width: 360,
     height: 240,
   };
@@ -1397,7 +1488,7 @@ test("Geode WASM selects through the overlay without document rerender or recurr
       intervals: [16, 25, 50, 100],
     })
     .toBeGreaterThan(0);
-  const documentBounds = await documentCanvas.boundingBox();
+  const documentBounds = await visibleSurfaceBounds(documentCanvas);
   expect(documentBounds).not.toBeNull();
   if (documentBounds === null) {
     return;
@@ -1618,7 +1709,7 @@ test("forced bitmap worker-surface fallback presents retained Geode pixels", asy
     checkVisibleEpoch();
   });
 
-  const documentBounds = await documentCanvas.boundingBox();
+  const documentBounds = await visibleSurfaceBounds(documentCanvas);
   expect(documentBounds).not.toBeNull();
   if (documentBounds === null) {
     return;
@@ -2034,15 +2125,19 @@ test("WASM ctrl+wheel pinch zooms by the shared wheel-zoom policy", async ({ pag
 
   const yoffset = await readScrollEventYOffset(page, beforeCount);
 
-  const expectedYOffset = -deltaY / kWasmWheelPixelsPerScrollUnit;
+  // A ctrl-flagged wheel with no physically held modifier is discriminated as
+  // a browser-synthesized trackpad pinch and receives the desktop pinch
+  // calibration: units scale by 1/ln(kWheelZoomStep) so the applied zoom is
+  // exp(-deltaY/100), then clamp to one 1.5x step per event. deltaY=-250
+  // exceeds the clamp, pinning both the gain and the safety bound.
+  const rawUnits = -deltaY / kWasmWheelPixelsPerScrollUnit;
+  const gained = rawUnits / Math.log(kWheelZoomStep);
+  const maxUnits = Math.log(1.5) / Math.log(kWheelZoomStep);
+  const expectedYOffset = Math.min(gained, maxUnits);
   expect(
     Math.abs(yoffset - expectedYOffset) / expectedYOffset,
-    `ctrl+wheel deltaY ${deltaY} must yield yoffset ${expectedYOffset}, got ${yoffset}`,
+    `discriminated pinch deltaY ${deltaY} must yield clamped yoffset ${expectedYOffset}, got ${yoffset}`,
   ).toBeLessThan(0.02);
-  expect(Math.pow(kWheelZoomStep, yoffset)).toBeCloseTo(
-    Math.pow(kWheelZoomStep, expectedYOffset),
-    3,
-  );
   expect(fatalMessages).toEqual([]);
 });
 
@@ -2083,7 +2178,7 @@ test("Geode WASM presents selection path overlay pixels", async ({ page }) => {
       intervals: [16, 25, 50, 100],
     })
     .toBeGreaterThan(beforeSampleSurfaceFrame);
-  const documentBounds = await documentCanvas.boundingBox();
+  const documentBounds = await visibleSurfaceBounds(documentCanvas);
   expect(documentBounds).not.toBeNull();
   if (documentBounds === null) {
     return;

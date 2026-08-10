@@ -102,9 +102,23 @@ const ViewportState& WorkerSurfacePlacementViewport(const DocumentPresentationFr
   // Epochs published before this field existed (and worker fallbacks that never
   // saw a live viewport) carry a degenerate viewport; those fall back to the
   // live transform, which is the pre-existing behavior.
-  return DirectSurfacePlacementViewportIsUsable(frame.workerSurface.viewport)
-             ? frame.workerSurface.viewport
-             : frame.viewport;
+  if (!DirectSurfacePlacementViewportIsUsable(frame.workerSurface.viewport)) {
+    return frame.viewport;
+  }
+  // A pure pan is a rigid screen translation of the same pixels: follow the
+  // live viewport so the document tracks the pointer at UI frame rate, exactly
+  // like the desktop underlay composites the last raster at the live
+  // transform. The epoch pin below remains for zoom / DPR / view-box changes,
+  // where re-mapping a (possibly viewport-bounded) raster through a different
+  // scale shrinks or shifts it off the pane and uncovers the background.
+  const ViewportState& epoch = frame.workerSurface.viewport;
+  const ViewportState& live = frame.viewport;
+  if (live.zoom == epoch.zoom && live.devicePixelRatio == epoch.devicePixelRatio &&
+      live.documentViewBox.topLeft == epoch.documentViewBox.topLeft &&
+      live.documentViewBox.bottomRight == epoch.documentViewBox.bottomRight) {
+    return live;
+  }
+  return epoch;
 }
 
 }  // namespace
@@ -132,17 +146,39 @@ std::optional<WorkerSurfaceLayout> ComputeWorkerSurfaceLayout(
     return std::nullopt;
   }
 
+  // The surface backing store may be configured larger than the epoch's
+  // content raster (it is sized once at the viewport's raster cap so zoom
+  // gestures never resize-and-clear the canvas). The element box must span
+  // the whole backing store so the content region - the top-left
+  // contentSizePx of it - lands exactly on surfaceRect; the surplus band on
+  // the right and bottom is clipped away.
+  double surplusScreenX = 0.0;
+  double surplusScreenY = 0.0;
+  const Vector2i contentSizePx = frame.workerSurface.rasterViewport.outputSizePx;
+  const Vector2i backingSizePx = frame.workerSurface.surfaceBackingSizePx;
+  if (contentSizePx.x > 0 && contentSizePx.y > 0 && backingSizePx.x > contentSizePx.x) {
+    surplusScreenX = surfaceRect.width() *
+                     static_cast<double>(backingSizePx.x - contentSizePx.x) /
+                     static_cast<double>(contentSizePx.x);
+  }
+  if (contentSizePx.x > 0 && contentSizePx.y > 0 && backingSizePx.y > contentSizePx.y) {
+    surplusScreenY = surfaceRect.height() *
+                     static_cast<double>(backingSizePx.y - contentSizePx.y) /
+                     static_cast<double>(contentSizePx.y);
+  }
+
   return WorkerSurfaceLayout{
       .visible = true,
       .surfaceSlot = frame.workerSurface.surfaceSlot,
       .left = surfaceRect.topLeft.x,
       .top = surfaceRect.topLeft.y,
-      .width = surfaceRect.width(),
-      .height = surfaceRect.height(),
+      .width = surfaceRect.width() + surplusScreenX,
+      .height = surfaceRect.height() + surplusScreenY,
       .clipLeft = clippedSurfaceRect->topLeft.x - surfaceRect.topLeft.x,
       .clipTop = clippedSurfaceRect->topLeft.y - surfaceRect.topLeft.y,
-      .clipRight = surfaceRect.bottomRight.x - clippedSurfaceRect->bottomRight.x,
-      .clipBottom = surfaceRect.bottomRight.y - clippedSurfaceRect->bottomRight.y,
+      .clipRight = surfaceRect.bottomRight.x - clippedSurfaceRect->bottomRight.x + surplusScreenX,
+      .clipBottom =
+          surfaceRect.bottomRight.y - clippedSurfaceRect->bottomRight.y + surplusScreenY,
       .frameToken = frame.workerSurface.frameCount,
       .selectionChromeBaked = frame.workerSurface.selectionChromeBaked,
   };

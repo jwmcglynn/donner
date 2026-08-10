@@ -4,6 +4,7 @@
 #include <emscripten.h>
 #endif
 
+#include <algorithm>
 #include <utility>
 
 #include "GLFW/glfw3.h"
@@ -32,6 +33,13 @@ EM_JS(void, InstallWasmWheelModifierCapture, (), {
   const handler = function(event) {
     state.zoomModifierHeld = !!(event.ctrlKey || event.metaKey);
   };
+  // macOS drops the keyup when Cmd is held across a focus change; never let a
+  // stale modifier shadow classify ordinary scrolls as zoom after a blur.
+  const clear = function() {
+    state.zoomModifierHeld = false;
+  };
+  window.addEventListener("blur", clear);
+  document.addEventListener("visibilitychange", clear);
 
   canvas['__donnerWheelModifierCapture'] = {
     'state': state,
@@ -57,10 +65,12 @@ EM_JS(int, WasmWheelZoomModifierHeld, (), {
   return capture && capture['state'] && capture['state']['zoomModifierHeld'] ? 1 : 0;
 });
 
-EM_JS(void, RecordWasmScrollDebug, (int zoomModifierHeld, double xoffset, double yoffset), {
+EM_JS(void, RecordWasmScrollDebug, (int zoomModifierHeld, double xoffset, double yoffset, int phys, int dom), {
   const previous = window['__donnerLastScrollEvent'];
   window['__donnerLastScrollEvent'] = {
     'zoomModifierHeld': !!zoomModifierHeld,
+    'phys': phys,
+    'dom': dom,
     'xoffset': xoffset,
     'yoffset': yoffset,
     'count': ((previous && previous['count']) || 0) + 1,
@@ -69,11 +79,15 @@ EM_JS(void, RecordWasmScrollDebug, (int zoomModifierHeld, double xoffset, double
 // clang-format on
 #endif
 
+[[nodiscard]] bool IsPhysicalZoomKeyHeld(GLFWwindow* window) {
+  return glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
+         glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS ||
+         glfwGetKey(window, GLFW_KEY_LEFT_SUPER) == GLFW_PRESS ||
+         glfwGetKey(window, GLFW_KEY_RIGHT_SUPER) == GLFW_PRESS;
+}
+
 [[nodiscard]] bool IsZoomModifierHeld(GLFWwindow* window) {
-  const bool keyHeld = glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
-                       glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS ||
-                       glfwGetKey(window, GLFW_KEY_LEFT_SUPER) == GLFW_PRESS ||
-                       glfwGetKey(window, GLFW_KEY_RIGHT_SUPER) == GLFW_PRESS;
+  const bool keyHeld = IsPhysicalZoomKeyHeld(window);
 #ifdef __EMSCRIPTEN__
   return keyHeld || WasmWheelZoomModifierHeld() != 0;
 #else
@@ -129,11 +143,22 @@ void EditorInputBridge::ScrollCallback(GLFWwindow* window, double xoffset, doubl
   }
 
   const bool zoomModifierHeld = IsZoomModifierHeld(window);
+  double effectiveYOffset = yoffset;
 #ifdef __EMSCRIPTEN__
-  RecordWasmScrollDebug(zoomModifierHeld ? 1 : 0, xoffset, yoffset);
+  // A ctrl-flagged wheel with no Ctrl/Cmd physically held is a
+  // browser-synthesized trackpad pinch (Chromium: deltaY = -100*ln(scale),
+  // Gecko: -100*magnification). Those need the desktop pinch calibration so
+  // a pinch gesture matches zoom = 1 + magnification; a real ctrl+mouse-wheel
+  // keeps the discrete per-notch step. See PinchZoomPolicy.h.
+  if (zoomModifierHeld && !IsPhysicalZoomKeyHeld(window) && WasmWheelZoomModifierHeld() != 0) {
+    const double maxUnits = MaxPinchScrollUnitsPerEvent();
+    effectiveYOffset = std::clamp(yoffset * PinchScrollUnitGain(), -maxUnits, maxUnits);
+  }
+  RecordWasmScrollDebug(zoomModifierHeld ? 1 : 0, xoffset, effectiveYOffset,
+                        IsPhysicalZoomKeyHeld(window) ? 1 : 0, WasmWheelZoomModifierHeld());
 #endif
   state->events.push_back(RenderPaneScrollEvent{
-      .scrollDelta = Vector2d(xoffset, yoffset),
+      .scrollDelta = Vector2d(xoffset, effectiveYOffset),
       .cursorScreen = Vector2d(cursorX, cursorY),
       .zoomModifierHeld = zoomModifierHeld,
   });

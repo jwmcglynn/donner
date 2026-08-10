@@ -175,6 +175,88 @@ TEST(DocumentPresenterTest, WorkerSurfaceLayoutMapsTheDocumentRectThroughTheView
   EXPECT_DOUBLE_EQ(layout->clipBottom, 0.0);
 }
 
+TEST(DocumentPresenterTest, PurePanFollowsTheLiveViewport) {
+  // A pan changes only the viewport translation; the epoch's pixels are a
+  // rigid screen translation of themselves, so placement must track the live
+  // viewport at UI frame rate instead of freezing until the next epoch (the
+  // desktop underlay contract). Zoom or view-box changes keep the epoch pin.
+  DirectSurfacePresentationState surface = ActiveSurface(3);
+  DocumentPresentationFrame frame = TestFrame(surface);
+  frame.viewport.panScreenPoint =
+      surface.viewport.panScreenPoint + Vector2d(25.0, -10.0);
+
+  const std::optional<WorkerSurfaceLayout> layout = ComputeWorkerSurfaceLayout(frame);
+  ASSERT_TRUE(layout.has_value());
+  // The exact-size baseline places the surface at (10,20); a live pan of
+  // (+25,-10) must move it to (35,10) in the same frame.
+  EXPECT_DOUBLE_EQ(layout->left, 35.0);
+  EXPECT_DOUBLE_EQ(layout->top, 10.0);
+}
+
+TEST(DocumentPresenterTest, ZoomChangeKeepsTheEpochPlacementPin) {
+  DirectSurfacePresentationState surface = ActiveSurface(3);
+  DocumentPresentationFrame frame = TestFrame(surface);
+  frame.viewport.panScreenPoint =
+      surface.viewport.panScreenPoint + Vector2d(25.0, -10.0);
+  frame.viewport.zoom = surface.viewport.zoom * 1.3;
+
+  const std::optional<WorkerSurfaceLayout> layout = ComputeWorkerSurfaceLayout(frame);
+  ASSERT_TRUE(layout.has_value());
+  // Placement stays with the epoch viewport: geometry and pixels change
+  // together when the next epoch lands.
+  EXPECT_DOUBLE_EQ(layout->left, 10.0);
+  EXPECT_DOUBLE_EQ(layout->top, 20.0);
+}
+
+TEST(DocumentPresenterTest, WorkerSurfaceLayoutScalesAndClipsOversizedBacking) {
+  // The direct surface is configured once at the viewport's raster backing
+  // cap, so the canvas backing store is usually larger than the epoch's
+  // content raster. The element box must span the whole backing store while
+  // the extra right/bottom band is clipped away, so the content region lands
+  // exactly where an exactly-sized surface would have.
+  DirectSurfacePresentationState surface = ActiveSurface(3);
+  surface.rasterViewport.outputSizePx = Vector2i(40, 30);
+  surface.surfaceBackingSizePx = Vector2i(80, 45);  // 2x wider, 1.5x taller.
+  const std::optional<WorkerSurfaceLayout> layout =
+      ComputeWorkerSurfaceLayout(TestFrame(surface));
+
+  ASSERT_TRUE(layout.has_value());
+  // Content screen rect is 40x30 at (10,20) (see the exact-size test above).
+  EXPECT_DOUBLE_EQ(layout->left, 10.0);
+  EXPECT_DOUBLE_EQ(layout->top, 20.0);
+  EXPECT_DOUBLE_EQ(layout->width, 80.0);
+  EXPECT_DOUBLE_EQ(layout->height, 45.0);
+  EXPECT_DOUBLE_EQ(layout->clipLeft, 0.0);
+  EXPECT_DOUBLE_EQ(layout->clipTop, 0.0);
+  EXPECT_DOUBLE_EQ(layout->clipRight, 40.0);
+  EXPECT_DOUBLE_EQ(layout->clipBottom, 15.0);
+}
+
+TEST(DocumentPresenterTest, WorkerSurfaceLayoutUnchangedWhenBackingMatchesOrUnknown) {
+  // Exact-size backing: identical layout to publishing no backing size.
+  DirectSurfacePresentationState exact = ActiveSurface(3);
+  exact.rasterViewport.outputSizePx = Vector2i(40, 30);
+  exact.surfaceBackingSizePx = Vector2i(40, 30);
+  DirectSurfacePresentationState unknown = ActiveSurface(3);
+  unknown.rasterViewport.outputSizePx = Vector2i(40, 30);
+  unknown.surfaceBackingSizePx = Vector2i::Zero();
+
+  const std::optional<WorkerSurfaceLayout> exactLayout =
+      ComputeWorkerSurfaceLayout(TestFrame(exact));
+  const std::optional<WorkerSurfaceLayout> unknownLayout =
+      ComputeWorkerSurfaceLayout(TestFrame(unknown));
+  ASSERT_TRUE(exactLayout.has_value());
+  ASSERT_TRUE(unknownLayout.has_value());
+  EXPECT_DOUBLE_EQ(exactLayout->width, 40.0);
+  EXPECT_DOUBLE_EQ(exactLayout->height, 30.0);
+  EXPECT_DOUBLE_EQ(exactLayout->clipRight, 0.0);
+  EXPECT_DOUBLE_EQ(exactLayout->clipBottom, 0.0);
+  EXPECT_DOUBLE_EQ(unknownLayout->width, 40.0);
+  EXPECT_DOUBLE_EQ(unknownLayout->height, 30.0);
+  EXPECT_DOUBLE_EQ(unknownLayout->clipRight, 0.0);
+  EXPECT_DOUBLE_EQ(unknownLayout->clipBottom, 0.0);
+}
+
 TEST(DocumentPresenterTest, WorkerSurfaceLayoutCarriesPaneClipInsets) {
   DirectSurfacePresentationState surface = ActiveSurface(3);
   // Slide the document up and left so it overhangs the pane's top-left corner.
@@ -250,15 +332,18 @@ TEST(DocumentPresenterTest, LiveZoomAheadOfTheEpochKeepsTheEpochPlacement) {
   EXPECT_DOUBLE_EQ(layout->height, 30.0);
 }
 
-TEST(DocumentPresenterTest, LivePanAheadOfTheEpochKeepsTheEpochPlacement) {
+TEST(DocumentPresenterTest, LivePanAheadOfTheEpochMovesWithTheLiveViewport) {
+  // A pure translation follows the live viewport at UI frame rate (the
+  // desktop underlay contract); only zoom / DPR / view-box changes keep the
+  // epoch placement pin. See PurePanFollowsTheLiveViewport.
   DocumentPresentationFrame frame = TestFrame(ActiveSurface(3));
   frame.viewport.panScreenPoint = Vector2d(60.0, 45.0);
 
   const std::optional<WorkerSurfaceLayout> layout = ComputeWorkerSurfaceLayout(frame);
 
   ASSERT_TRUE(layout.has_value());
-  EXPECT_DOUBLE_EQ(layout->left, 10.0);
-  EXPECT_DOUBLE_EQ(layout->top, 20.0);
+  EXPECT_DOUBLE_EQ(layout->left, 60.0);
+  EXPECT_DOUBLE_EQ(layout->top, 45.0);
   EXPECT_DOUBLE_EQ(layout->width, 40.0);
   EXPECT_DOUBLE_EQ(layout->height, 30.0);
 }
@@ -335,7 +420,11 @@ TEST(DocumentPresenterTest, ADegenerateEpochViewportFallsBackToTheLiveViewport) 
 }
 
 TEST(DocumentPresenterTest, TheLivePaneStillOwnsTheClip) {
+  // A zoom difference keeps the epoch placement pin; the pane still clips the
+  // epoch-placed surface wherever it overhangs. (A translation-only
+  // difference now follows the live viewport instead - covered above.)
   DirectSurfacePresentationState surface = ActiveSurface(3);
+  surface.viewport.zoom = 2.0;
   surface.viewport.panScreenPoint = Vector2d(-8.0, -6.0);
 
   DocumentPresentationFrame frame = TestFrame(surface);
@@ -563,9 +652,13 @@ TEST(DocumentPresenterTest, AnAcceptedEpochScrolledOutOfThePaneIsNotHeld) {
   std::ignore = presenter->resolveExternalSurface(TestFrame(ActiveSurface(11)));
 
   // Still accepted, just panned off screen: a legitimate hide, not a swap.
+  // Both the live viewport and the epoch carry the pan - the user really has
+  // scrolled the document out of the pane.
   DirectSurfacePresentationState surface = ActiveSurface(12);
   surface.viewport.panScreenPoint = Vector2d(500.0, 500.0);
-  const DocumentPresentationResult result = presenter->resolveExternalSurface(TestFrame(surface));
+  DocumentPresentationFrame frame = TestFrame(surface);
+  frame.viewport.panScreenPoint = Vector2d(500.0, 500.0);
+  const DocumentPresentationResult result = presenter->resolveExternalSurface(frame);
 
   EXPECT_FALSE(result.externalSurfacePresented);
   ASSERT_EQ(sinks.layouts.size(), 2u);

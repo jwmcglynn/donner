@@ -232,7 +232,15 @@ constexpr float kSourcePaneCollapseThreshold = kMinSourcePaneWidth;
 constexpr float kKeyboardZoomStep = 1.5f;
 constexpr float kMinRightPaneWidth = 220.0f;
 constexpr float kMaxRightPaneWidth = 900.0f;
+#ifdef __EMSCRIPTEN__
+// emscripten-glfw normalizes every DOM_DELTA_PIXEL wheel at 100 px per scroll
+// unit, where desktop GLFW scales precise trackpad deltas at 10 px per unit.
+// This keeps pan 1:1 with finger travel on both; it also moves macOS mouse
+// wheel pan from 4 px to 40 px per notch, which matches native browser scroll.
+constexpr double kTrackpadPanPixelsPerScrollUnit = 100.0;
+#else
 constexpr double kTrackpadPanPixelsPerScrollUnit = 10.0;
+#endif
 // `kWheelZoomStep` intentionally has no definition here: it is shared policy
 // owned by `donner/editor/PinchZoomPolicy.h` (enclosing `donner::editor`
 // namespace) so the desktop pinch monitor, the browser pinch bridge, and this
@@ -3699,9 +3707,9 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   // pointer leaves the handle mid-gesture.
   const auto activeGesturePreviewBeforeInput = selectTool_.activeGesturePreview();
   const bool rotateCursorLocked = setActiveGestureCursor(activeGesturePreviewBeforeInput);
-  std::ignore = interactionController_.updatePanState(canvasHovered, spaceHeld, middleDown,
-                                                      ImGui::IsMouseDown(ImGuiMouseButton_Left),
-                                                      ImGui::GetMousePos());
+  const bool panMoved = interactionController_.updatePanState(
+      canvasHovered, spaceHeld, middleDown, ImGui::IsMouseDown(ImGuiMouseButton_Left),
+      ImGui::GetMousePos());
   const bool showPanCursor =
       !rotateCursorLocked &&
       ShouldShowRenderPanePanCursor(canvasHovered, spaceHeld, interactionController_.panning());
@@ -3727,7 +3735,11 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   const ScrollConsumptionResult scrollResult = interactionController_.consumeScrollEvents(
       inputBridge_.events(), paneRect, modalCapturingInput, kWheelZoomStep,
       kTrackpadPanPixelsPerScrollUnit);
-  if (scrollResult.zoomChanged) {
+  // Any viewport change needs a fresh worker epoch, not just zoom: on the
+  // browser the presented document only moves when an epoch lands, so a pan
+  // that never requests one is invisible forever (the canvas scrollbar pan
+  // paths below already follow this contract).
+  if (scrollResult.zoomChanged || scrollResult.viewportChanged || panMoved) {
     requestRenderAtEndOfFrame_ = true;
   }
 
