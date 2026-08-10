@@ -12,7 +12,7 @@
         "release",
         "submit"
       ],
-      "sha256": "2bd5abfd3a0c67c7d257092216ff87b657ba7b3cdce8619cd09a9a3cea1dcb61",
+      "sha256": "e71ac159eaf01d0d6dd5ea2fc80b368b95810beb4adb3e30fbbe1447878f7168",
       "wgpuCFunctions": [
         "wgpuInstanceCreateSurface"
       ],
@@ -88,7 +88,7 @@
       "usesEditorWgpuDefine": true
     },
     "donner/editor/EditorShell.cc": {
-      "sha256": "0d64253b7bde489d555136f573d9443a060fe88beaf5fc50e71c57031178a0c4",
+      "sha256": "97cb3026c8891a680a2caef88191165a146b4e98f5837f776e9cea407c6be13c",
       "usesEditorWgpuDefine": true,
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
@@ -96,7 +96,7 @@
       ]
     },
     "donner/editor/EditorShell.h": {
-      "sha256": "42e5094723c3aedce8703cd10537b028cacf5889f00406231ad57bf5f726112a",
+      "sha256": "248c6da3edd45e5471141883653d52b8ecdf85c9ba0b1402b34d1398c27ce766",
       "usesEditorWgpuDefine": true
     },
     "donner/editor/EditorShellPresentation.cc": {
@@ -268,7 +268,7 @@
         "submit",
         "unmap"
       ],
-      "sha256": "d8f077bc0011520dd0ea6e0c5356fcfd930534851f01c7ad09196a7d20e5d993",
+      "sha256": "534ab63dcae14b67951bc0836ab4b784497e70e4ac702d395c33bdf5583cf127",
       "usesEditorWgpuDefine": true,
       "wgpuCFunctions": [
         "wgpuCreateInstance",
@@ -345,7 +345,7 @@
       ]
     },
     "donner/editor/gui/EditorWindow.h": {
-      "sha256": "cefff5d75fab9dbbfef6100f7158952367bb474a589c8c498fb6692439a1a4a6",
+      "sha256": "3b86c3c63a43f19d924c5bf761883695b0b4b0d318b05109a716171655c08565",
       "usesEditorWgpuDefine": true,
       "wgpuCFunctions": [
         "wgpuDirectRenderCallback_",
@@ -374,6 +374,10 @@
         "wgpuLifetimeTextureCreates"
       ]
     },
+    "donner/editor/tests/EditorWindowOffscreenTarget_tests.cc": {
+      "sha256": "fecbefe2fb233b4ac3e624173f03b60c2f21315ddfea6d7b41f60c0145fe738d",
+      "usesEditorWgpuDefine": true
+    },
     "donner/editor/tests/EditorWindow_tests.cc": {
       "imguiWgpuTokens": [
         "ImGui_ImplWGPU_AddTexturePremultipliedAlphaRef",
@@ -383,7 +387,7 @@
       "operations": [
         "draw"
       ],
-      "sha256": "25867610124ee8e9729da9eb04d93828b5acc7c912557c263ea1e7c7c39566dc",
+      "sha256": "1bcf24d230c568722318794d91695bb05c3d15f4bf1e429b14e9bed51e93cbaf",
       "usesEditorWgpuDefine": true,
       "wgpuCTypes": [
         "WGPUTextureView"
