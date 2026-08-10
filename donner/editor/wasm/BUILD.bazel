@@ -91,10 +91,21 @@ _EDITOR_LINKOPTS = [
     # Geode's synchronous WebGPU bridge yields while creating devices and
     # waiting for mapped buffers.
     "-sASYNCIFY",
-    # Safari can leave a pooled pthread with stale Wasm heap views when shared memory grows after
-    # the pool starts. Geode's UI device, renderer device, fonts, and asynchronous SVG thumbnails
-    # peak near 58 MiB during the browser regression, so start above that boundary.
-    "-sINITIAL_MEMORY=64MB",
+    # Safari traps the pooled pthread with `RuntimeError: Out of bounds memory access` on the first
+    # Wasm access it makes after the main thread grows the shared memory. Growth is not a
+    # performance question on Safari, it is fatal, so the only defense is to start with a memory
+    # large enough that boot and ordinary editing never reach `emscripten_resize_heap`.
+    #
+    # Measured on stock Safari 26.2 by serving the built package and instrumenting `growMemory`:
+    # boot's sbrk high-water is above 101 MiB and at or below 128 MiB. At 64 MiB the boot grew
+    # three times inside 13 ms and the renderer pthread died ~50 ms later, before the loader could
+    # hide; at 100 MiB it grew once and died the same way; at 128 MiB and 192 MiB it never grew and
+    # the editor booted in ~0.6 s and survived an open-sample plus zoom storm. 192 MiB is ~1.9x the
+    # measured boot demand, which leaves headroom for a session's documents while staying far below
+    # the 512 MiB WebContent RSS ceiling the Safari regression gate enforces. Do not lower this
+    # without re-measuring boot demand on stock Safari: a value under boot demand is a boot failure,
+    # not a slow boot.
+    "-sINITIAL_MEMORY=192MB",
     "-sOFFSCREENCANVAS_SUPPORT=1",
 ] + _EMDAWNWEBGPU_LINKOPTS
 

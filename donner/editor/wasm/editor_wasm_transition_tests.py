@@ -30,7 +30,7 @@ asyncify=True
 closure=True
 closure_simple=True
 exports_ccall=False
-initial_memory_64=True
+initial_memory_192=True
 pthread_pool_size_one=False
 pthread_pool_size_two=True
 """
