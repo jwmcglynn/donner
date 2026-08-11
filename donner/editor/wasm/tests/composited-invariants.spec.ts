@@ -4,6 +4,7 @@ import {
   backingSizeTransitions,
   blackFrameStats,
   type CompositedProbeResult,
+  describeEmptyReadbacks,
   installCompositedProbe,
   motionFraction,
   readVisibleSurfaceWidth,
@@ -134,12 +135,33 @@ async function parkPointerOverPane(
 // every epoch class the invariants examine.
 const kMinimumProbeSamples = process.env.CI ? 12 : 20;
 
-function assertProbeUsable(result: CompositedProbeResult, minimumSamples: number): void {
+/**
+ * Precondition for EVERY invariant here: the window is long enough to say
+ * something about per-frame behavior.
+ *
+ * Deliberately says nothing about pixels. Most invariants in this file read
+ * only DOM observables - the presented epoch token, the visible surface's CSS
+ * geometry, which DOM canvas carries it, the backing-store size - and the probe
+ * records those whether or not the composited read-back produced anything.
+ * Gating a DOM-only invariant on read-back availability makes it fail for a
+ * reason it does not depend on.
+ */
+function assertProbeSampled(result: CompositedProbeResult, minimumSamples: number): void {
   expect(
     result.samples.length,
     `the probe collected ${result.samples.length} samples, expected at least ${minimumSamples};`
       + " the sampled window was too short to say anything about per-frame behavior",
   ).toBeGreaterThanOrEqual(minimumSamples);
+}
+
+/**
+ * Extra precondition for the invariants that READ PIXELS back.
+ *
+ * Call this only from a test whose assertion consumes `meanAlpha`, `meanLuma`,
+ * `coloredPixels`, or `coloredCentroid*`. For a DOM-only invariant an empty
+ * read-back is irrelevant, not disqualifying.
+ */
+function assertReadbackUsable(result: CompositedProbeResult): void {
   const usable = result.samples.filter((sample) => sample.drawOk).length;
   expect(
     usable / result.samples.length,
@@ -149,14 +171,17 @@ function assertProbeUsable(result: CompositedProbeResult, minimumSamples: number
   // The bounded same-task retry rescues the known Gecko first-read-after-
   // promotion race in 100 percent of observed cases (measured to load average
   // 127). Retries that fire WITHOUT rescuing indicate a different, sustained
-  // snapshot-unavailability bug - fail loudly with the counters instead of
+  // snapshot-unavailability bug - fail loudly with the geometry instead of
   // letting empty samples degrade into the per-invariant bounds, where the
-  // failure mode would be untraceable.
+  // failure mode would be untraceable. The counters alone cannot say which
+  // mode it was, so print the per-sample element box, backing store, and
+  // source rectangle with them.
   if (result.readbackRetries > 0) {
     expect(
       result.readbackRetryRescues,
       `${result.readbackRetries} read-back retries fired but rescued 0 samples - a sustained`
-        + " snapshot-unavailability mode, not the known per-handoff race; capture the counters",
+        + " snapshot-unavailability mode, not the known per-handoff race; "
+        + describeEmptyReadbacks(result.samples),
     ).toBeGreaterThan(0);
   }
 }
@@ -191,7 +216,8 @@ test.describe("composited output invariants", () => {
     });
     const result = await stopCompositedProbe(page);
 
-    assertProbeUsable(result, kMinimumProbeSamples);
+    assertProbeSampled(result, kMinimumProbeSamples);
+    assertReadbackUsable(result);
     // An ignored storm proves nothing: require that the presented scale moved.
     expect(
       distinctVisibleWidths(result),
@@ -300,7 +326,10 @@ test.describe("composited output invariants", () => {
     await page.waitForTimeout(scaledMs(400));
     const result = await stopCompositedProbe(page);
 
-    assertProbeUsable(result, kMinimumProbeSamples);
+    // (b) reads the presented epoch label and the visible surface's CSS
+    // geometry, both DOM state the probe records regardless of what the
+    // read-back returned, so it takes the sample-count precondition only.
+    assertProbeSampled(result, kMinimumProbeSamples);
     expect(
       distinctVisibleWidths(result),
       `the pinch stream never changed the presented scale; stream=${JSON.stringify(stream)}`,
@@ -374,7 +403,9 @@ test.describe("composited output invariants", () => {
     });
     const result = await stopCompositedProbe(page);
 
-    assertProbeUsable(result, kMinimumProbeSamples);
+    // (c) reads the canvas backing-store size, DOM state independent of the
+    // read-back.
+    assertProbeSampled(result, kMinimumProbeSamples);
     const transitions = backingSizeTransitions(result.samples);
     // The first entry is the size at the start of the window, not a change.
     const changes = Math.max(0, transitions.length - 1);
@@ -509,7 +540,9 @@ test.describe("composited output invariants", () => {
     await page.waitForTimeout(scaledMs(400));
     const result = await stopCompositedProbe(page);
 
-    assertProbeUsable(result, kMinimumProbeSamples);
+    // (f) reads which DOM canvas carried each epoch, independent of the
+    // read-back.
+    assertProbeSampled(result, kMinimumProbeSamples);
     const epochs = new Set(
       result.samples.map((sample) => sample.frameToken).filter((token) => token !== 0),
     );

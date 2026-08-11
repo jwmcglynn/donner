@@ -963,12 +963,14 @@ test("carousel never exposes the placeholder viewport for Donner Splash", async 
 
   await page.evaluate(() => {
     type VisibleSurfaceSample = {
+      backingHeight: number;
+      backingWidth: number;
+      boxHeight: number;
+      boxWidth: number;
       frame: number;
-      height: number;
       rectHeight: number;
       rectWidth: number;
       slot: string;
-      width: number;
     };
     const samples: VisibleSurfaceSample[] = [];
     const capture = () => {
@@ -981,10 +983,16 @@ test("carousel never exposes the placeholder viewport for Donner Splash", async 
         // The surface is configured once at a size cap, so the backing store
         // and the element box both span that cap and carry no document aspect
         // ratio at all. The presented extent is the cap minus the clip-path
-        // insets that hide the surplus band, so both the backing-store sample
-        // and the layout-rect sample are measured through those insets. The
-        // backing store is in device pixels, so the CSS insets are scaled by
-        // the element's device-pixel ratio before being subtracted from it.
+        // insets that hide the surplus band, which is what `rect*` records.
+        //
+        // The element box and its clip insets are both written by the main
+        // thread in the same task, so that pair is always one consistent
+        // placement. The backing store is NOT part of that pair: the surface is
+        // a transferred OffscreenCanvas, so `canvas.width`/`height` here report
+        // the worker's last COMMITTED size, which reaches the main thread
+        // independently of the CSS the presenter applies when it accepts an
+        // epoch. It is recorded raw, for diagnosis, and never combined with the
+        // CSS insets - see the assertions below for why.
         const clip = getComputedStyle(surface).clipPath || "";
         const inset = clip.match(/inset\(([^)]*)\)/);
         const parts = inset
@@ -995,15 +1003,15 @@ test("carousel never exposes the placeholder viewport for Donner Splash", async 
         const clipRight = usable ? (parts.length >= 2 ? parts[1] : parts[0]) : 0;
         const clipBottom = usable ? (parts.length >= 3 ? parts[2] : parts[0]) : 0;
         const clipLeft = usable ? (parts.length >= 4 ? parts[3] : clipRight) : 0;
-        const backingScaleX = rect.width > 0 ? surface.width / rect.width : 1;
-        const backingScaleY = rect.height > 0 ? surface.height / rect.height : 1;
         const sample = {
+          backingHeight: surface.height,
+          backingWidth: surface.width,
+          boxHeight: rect.height,
+          boxWidth: rect.width,
           frame: Number(surface.dataset.directSurfaceFrame || 0),
-          height: surface.height - (clipTop + clipBottom) * backingScaleY,
           rectHeight: rect.height - clipTop - clipBottom,
           rectWidth: rect.width - clipLeft - clipRight,
           slot: id,
-          width: surface.width - (clipLeft + clipRight) * backingScaleX,
         };
         const previous = samples.at(-1);
         if (JSON.stringify(previous) !== JSON.stringify(sample)) {
@@ -1050,12 +1058,14 @@ test("carousel never exposes the placeholder viewport for Donner Splash", async 
     const state = window as Window & {
       __donnerVisibleSurfaceObserver?: MutationObserver;
       __donnerVisibleSurfaceSamples?: Array<{
+        backingHeight: number;
+        backingWidth: number;
+        boxHeight: number;
+        boxWidth: number;
         frame: number;
-        height: number;
         rectHeight: number;
         rectWidth: number;
         slot: string;
-        width: number;
       }>;
     };
     state.__donnerVisibleSurfaceObserver?.disconnect();
@@ -1063,13 +1073,57 @@ test("carousel never exposes the placeholder viewport for Donner Splash", async 
   });
 
   expect(visibleSamples.length).toBeGreaterThan(0);
-  // Both samples are presented (clip-inset) extents, one derived from the
-  // backing store and one from the layout rect: the very first surface the
-  // carousel makes visible must already carry the Splash artboard aspect, never
-  // a placeholder viewport.
-  const firstVisible = visibleSamples[0];
-  expect(firstVisible.width / firstVisible.height).toBeCloseTo(892 / 512, 2);
-  expect(firstVisible.rectWidth / firstVisible.rectHeight).toBeCloseTo(892 / 512, 2);
+  // The presented extent is the element box minus its clip-path insets. Both
+  // are main-thread state written in one task, so this is the one quantity that
+  // is always a single consistent placement, and it is what the user actually
+  // sees. EVERY surface the carousel makes visible must already carry the
+  // Splash artboard aspect - the first one included, which is the placeholder
+  // viewport this guards against.
+  for (const [index, sample] of visibleSamples.entries()) {
+    expect(
+      sample.rectWidth / sample.rectHeight,
+      `visible surface sample ${index} presented a non-Splash extent:`
+        + ` ${JSON.stringify(sample)}`,
+    ).toBeCloseTo(892 / 512, 2);
+  }
+  // The backing store is a separate, worker-owned observable and cannot be
+  // combined with the CSS insets at a DOM-mutation instant. The surface is a
+  // transferred OffscreenCanvas: `canvas.width`/`height` on the main thread
+  // report the worker's last committed size, which propagates independently of
+  // the placement the presenter applies when it accepts an epoch. Measured on a
+  // slow runner: the first accepted Splash placement (element box 1387x1117,
+  // `inset(0 494.5px 604.5px 0)`) was already applied while the backing store
+  // still read the unconfigured canvas default of 300x150, and 300x150 measured
+  // through those insets is a 2.8049 aspect - an extent no frame was ever
+  // presented at, produced entirely by mixing two threads' instants.
+  //
+  // What the backing store CAN say is asserted here instead, once its size has
+  // propagated: it must be proportional to the element box, so the presented
+  // extent is not a placeholder-resolution surface stretched over it.
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const surface = document.querySelector<HTMLCanvasElement>(
+            "canvas[data-direct-surface-visible=\"true\"]",
+          );
+          if (surface === null || !(surface.height > 0)) {
+            return null;
+          }
+          const rect = surface.getBoundingClientRect();
+          if (!(rect.width > 0) || !(rect.height > 0)) {
+            return null;
+          }
+          return (surface.width / surface.height) / (rect.width / rect.height);
+        }),
+      {
+        message: "expected the visible Splash surface's backing store to become proportional to"
+          + " its element box",
+        timeout: scaledMs(5000),
+        intervals: [8, 16, 25, 50],
+      },
+    )
+    .toBeCloseTo(1, 2);
   expect(fatalMessages).toEqual([]);
 });
 

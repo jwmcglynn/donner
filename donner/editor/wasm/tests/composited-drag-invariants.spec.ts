@@ -4,6 +4,7 @@ import {
   blackFrameStats,
   type CompositedProbeResult,
   contentMotionFraction,
+  describeEmptyReadbacks,
   dragRegressions,
   installCompositedProbe,
   startCompositedProbe,
@@ -206,12 +207,35 @@ async function selectedCount(page: Page): Promise<number> {
   );
 }
 
-function assertProbeUsable(result: CompositedProbeResult, minimumSamples: number): void {
+/**
+ * Precondition for EVERY invariant here: the window is long enough to say
+ * something about per-frame behavior.
+ *
+ * Deliberately says nothing about pixels. Half the invariants in this file and
+ * its sibling read only DOM observables - the presented epoch token, which DOM
+ * canvas carries it, the backing-store size - and the probe records those
+ * whether or not the composited read-back produced anything. Gating a DOM-only
+ * invariant on read-back availability makes it fail for a reason it does not
+ * depend on, which is what (g) did the first time the read-back guard below
+ * fired on CI: 372 samples read back empty, and the ordering of the presented
+ * epoch labels those same samples carried was never in question.
+ */
+function assertProbeSampled(result: CompositedProbeResult, minimumSamples: number): void {
   expect(
     result.samples.length,
     `the probe collected ${result.samples.length} samples, expected at least ${minimumSamples};`
       + " the sampled window was too short to say anything about per-frame behavior",
   ).toBeGreaterThanOrEqual(minimumSamples);
+}
+
+/**
+ * Extra precondition for the invariants that READ PIXELS back.
+ *
+ * Call this only from a test whose assertion consumes `meanAlpha`, `meanLuma`,
+ * `coloredPixels`, or `coloredCentroid*`. For a DOM-only invariant an empty
+ * read-back is irrelevant, not disqualifying.
+ */
+function assertReadbackUsable(result: CompositedProbeResult): void {
   const usable = result.samples.filter((sample) => sample.drawOk).length;
   expect(
     usable / result.samples.length,
@@ -221,14 +245,17 @@ function assertProbeUsable(result: CompositedProbeResult, minimumSamples: number
   // The bounded same-task retry rescues the known Gecko first-read-after-
   // promotion race in 100 percent of observed cases (measured to load average
   // 127). Retries that fire WITHOUT rescuing indicate a different, sustained
-  // snapshot-unavailability bug - fail loudly with the counters instead of
+  // snapshot-unavailability bug - fail loudly with the geometry instead of
   // letting empty samples degrade into the per-invariant bounds, where the
-  // failure mode would be untraceable.
+  // failure mode would be untraceable. The counters alone cannot say which
+  // mode it was, so print the per-sample element box, backing store, and
+  // source rectangle with them.
   if (result.readbackRetries > 0) {
     expect(
       result.readbackRetryRescues,
       `${result.readbackRetries} read-back retries fired but rescued 0 samples - a sustained`
-        + " snapshot-unavailability mode, not the known per-handoff race; capture the counters",
+        + " snapshot-unavailability mode, not the known per-handoff race; "
+        + describeEmptyReadbacks(result.samples),
     ).toBeGreaterThan(0);
   }
 }
@@ -282,7 +309,10 @@ test.describe("composited drag invariants", () => {
     await page.waitForTimeout(scaledMs(400));
     const result = await stopCompositedProbe(page);
 
-    assertProbeUsable(result, kMinimumProbeSamples);
+    // (g) reads only the presented epoch label, a DOM attribute the probe
+    // records regardless of what the read-back returned, so it takes the
+    // sample-count precondition and nothing else.
+    assertProbeSampled(result, kMinimumProbeSamples);
 
     const violations: Array<{ index: number; from: number; to: number }> = [];
     let lastToken = 0;
@@ -300,6 +330,7 @@ test.describe("composited drag invariants", () => {
     console.log(
       `drag-frame-monotonicity engine=${browserName} samples=${result.samples.length}`
         + ` presentedFrames=${presentedFrames.size} violations=${violations.length}`
+        + ` readbackRetries=${result.readbackRetries}/${result.readbackRetryRescues}`
         + ` pointerEvents=${stream.pointerEvents}`
         + ` meanIntervalMs=${stream.meanIntervalMs.toFixed(1)}`,
     );
@@ -367,7 +398,8 @@ test.describe("composited drag invariants", () => {
     });
     const result = await stopCompositedProbe(page);
 
-    assertProbeUsable(result, kMinimumProbeSamples);
+    assertProbeSampled(result, kMinimumProbeSamples);
+    assertReadbackUsable(result);
 
     const stats = blackFrameStats(result.samples, 40);
     const blankSurfaceSamples = result.samples
@@ -448,7 +480,8 @@ test.describe("composited drag invariants", () => {
     });
     const result = await stopCompositedProbe(page);
 
-    assertProbeUsable(result, kMinimumProbeSamples);
+    assertProbeSampled(result, kMinimumProbeSamples);
+    assertReadbackUsable(result);
     const motion = contentMotionFraction(result.samples);
     console.log(
       `drag-content-motion engine=${browserName} samples=${result.samples.length}`
@@ -528,7 +561,8 @@ test.describe("composited drag invariants", () => {
     });
     const result = await stopCompositedProbe(page);
 
-    assertProbeUsable(result, kMinimumProbeSamples);
+    assertProbeSampled(result, kMinimumProbeSamples);
+    assertReadbackUsable(result);
     const motion = contentMotionFraction(result.samples);
     expect(
       motion.movedSamples,

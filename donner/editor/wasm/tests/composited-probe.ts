@@ -649,6 +649,67 @@ export function blackFrameStats(
   };
 }
 
+/**
+ * A compact description of the samples whose read-back stayed empty.
+ *
+ * The retry counters alone say THAT the browser kept answering empty; they
+ * cannot say why, and the per-sample fields that can - the element box, the
+ * backing store, and the source rectangle derived from them - are the ones the
+ * "WHY THE READ-BACK RETRIES" comment above added for exactly this purpose.
+ * Anything asserting on the counters should print this alongside them, so an
+ * occurrence that does not reproduce locally is still attributable from a log.
+ */
+export function describeEmptyReadbacks(
+  samples: readonly CompositedSample[],
+  meanAlphaThreshold = 40,
+  maxDetail = 4,
+): string {
+  const empty = samples
+    .map((sample, index) => ({ index, sample }))
+    .filter(({ sample }) =>
+      sample.readbackAttempts > 1 && sample.meanAlpha < meanAlphaThreshold
+    );
+  if (empty.length === 0) {
+    return "emptyReadbacks=0";
+  }
+  const distinct = (values: string[]): string[] => Array.from(new Set(values));
+  const detail = empty.slice(0, maxDetail).map(({ index, sample }) => ({
+    index,
+    attempts: sample.readbackAttempts,
+    backing: [sample.backingWidth, sample.backingHeight],
+    element: [Math.round(sample.elementWidth), Math.round(sample.elementHeight)],
+    source: [
+      Math.round(sample.sourceX),
+      Math.round(sample.sourceY),
+      Math.round(sample.sourceWidth),
+      Math.round(sample.sourceHeight),
+    ],
+    clamped: sample.sourceClamped,
+    meanAlpha: Number(sample.meanAlpha.toFixed(2)),
+    surface: sample.surfaceId,
+    frameToken: sample.frameToken,
+  }));
+  return `emptyReadbacks=${empty.length}/${samples.length}`
+    + ` clamped=${empty.filter(({ sample }) => sample.sourceClamped).length}`
+    + ` backingSizes=${
+      JSON.stringify(
+        distinct(empty.map(({ sample }) => `${sample.backingWidth}x${sample.backingHeight}`)),
+      )
+    }`
+    + ` elementSizes=${
+      JSON.stringify(
+        distinct(
+          empty.map(({ sample }) =>
+            `${Math.round(sample.elementWidth)}x${Math.round(sample.elementHeight)}`
+          ),
+        ),
+      )
+    }`
+    + ` surfaces=${JSON.stringify(distinct(empty.map(({ sample }) => sample.surfaceId)))}`
+    + ` frameTokens=[${empty[0].sample.frameToken}..${empty.at(-1)?.sample.frameToken}]`
+    + ` first=${JSON.stringify(detail)}`;
+}
+
 /** One epoch-atomicity violation: pixels and layout disagreed for a window. */
 export interface EpochAtomicityViolation {
   /** Index of the sample where the presented epoch token changed. */

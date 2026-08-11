@@ -2,9 +2,12 @@ const { defineConfig, devices } = require("@playwright/test");
 
 // Gecko lane for the composited-output invariant suite.
 //
-// Chromium coverage for `composited-invariants.spec.ts` comes from the default
-// config (`playwright.config.js`), whose test glob already picks the spec up,
-// so this config exists only to run the same spec on a second engine.
+// Chromium coverage for both composited specs comes from
+// `playwright.composited-chromium.config.js`. The default config
+// (`playwright.config.js`) deliberately ignores them - its headless Chromium
+// rasterizes with SwiftShader - so this config is not a duplicate of anything
+// the default glob picks up; it exists to run the same specs on a second
+// engine.
 //
 // It is a separate config rather than another project in
 // `playwright.compatibility.config.js` because that config pins an explicit
