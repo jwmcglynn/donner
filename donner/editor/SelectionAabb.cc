@@ -279,7 +279,10 @@ std::optional<Box2d> GeometryWorldFrameBounds(const svg::SVGGeometryElement& geo
   strokeStyle.cap = ToLineCap(style.strokeLinecap.get().value());
   strokeStyle.join = ToLineJoin(style.strokeLinejoin.get().value());
   strokeStyle.miterLimit = style.strokeMiterlimit.get().value();
-  const Path strokeOutline = spline->strokeToFill(strokeStyle);
+  // World-space ink bounds are a document-space quantity, not a rasterization:
+  // the outline is only used for its bounding box, so a path-local tolerance is
+  // correct and keeps the reported bounds independent of the view zoom.
+  const Path strokeOutline = spline->strokeToFill(strokeStyle, Path::kLocalFlattenTolerance);
   if (strokeOutline.empty()) {
     return result;
   }

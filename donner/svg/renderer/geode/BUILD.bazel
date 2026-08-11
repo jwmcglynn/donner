@@ -75,6 +75,28 @@ donner_cc_library(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
+# Header-only device-aware curve-flattening tolerance for stroke outlines.
+# Pure transform math with no WebGPU dependency, so it builds (and is tested)
+# regardless of the enable_geode flag.
+donner_cc_library(
+    name = "geode_stroke_tolerance",
+    hdrs = ["GeodeStrokeTolerance.h"],
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+    deps = [
+        "//donner/base",
+    ],
+)
+
+donner_cc_test(
+    name = "geode_stroke_tolerance_tests",
+    srcs = ["tests/GeodeStrokeTolerance_tests.cc"],
+    deps = [
+        ":geode_stroke_tolerance",
+        "//donner/base",
+        "//donner/base:gtest_timeout_main",
+    ],
+)
+
 # Header-only ECS component for wave-2 GPU residence: persistent per-entity
 # GPU buffers for cached encoded paths. See design doc 0030 (wave 2).
 donner_cc_library(

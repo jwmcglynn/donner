@@ -44,6 +44,7 @@
 #include "donner/svg/renderer/geode/GeodePathEncoder.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
 #include "donner/svg/renderer/geode/GeodeResidentPathComponent.h"
+#include "donner/svg/renderer/geode/GeodeStrokeTolerance.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "donner/svg/resources/ImageResource.h"
 #ifdef DONNER_TEXT_ENABLED
@@ -1560,6 +1561,31 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink {
     }
   }
 
+  /// Path-local curve-flattening tolerance for stroke outlines generated at the
+  /// current transform.
+  ///
+  /// Stroke geometry is submitted in path-local (document) space and scaled by
+  /// `deviceFromLocalTransform` on the GPU, so a fixed path-local tolerance is
+  /// magnified by the view scale - a circle flattened once at document scale
+  /// shows as a visible segment chain at any meaningful zoom. Deriving the
+  /// tolerance from the draw-time transform keeps the chord error under
+  /// `geode::kStrokeFlattenDevicePixels` device pixels at every scale. The
+  /// scale is quantized to power-of-two buckets so a continuous zoom re-flattens
+  /// only on bucket crossings.
+  [[nodiscard]] double strokeFlattenTolerance() const {
+    return geode::StrokeFlattenToleranceFor(deviceFromLocalTransform);
+  }
+
+  /// Record a freshly flattened stroke outline for the perf/regression
+  /// counters. Cache hits do not call this, so the counter measures the
+  /// flattening work a frame actually performed - and, because the point count
+  /// scales with the flattening density, it is the observable signal that the
+  /// tolerance tracked the device scale.
+  void countStrokeOutline(const Path& strokedOutline) {
+    ++counters.strokeOutlineFlattens;
+    counters.strokeOutlinePoints += strokedOutline.points().size();
+  }
+
   // --------------------------------------------------------------------
   // M2 path-encode cache (design doc 0030 §Milestone 2).
   //
@@ -1992,19 +2018,26 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink {
   StrokeDerived getStrokeDerived(EntityHandle source, const Path& geometry,
                                  const StrokeStyle& strokeStyle) {
     StrokeDerived result;
+    // Device-aware flattening tolerance for this draw. Part of the cache key
+    // below: a zoom change that crosses a scale bucket must re-flatten instead
+    // of serving the outline tessellated for the old scale.
+    const double flattenTolerance = strokeFlattenTolerance();
     if (source) {
       ensureCacheInvalidationWired(*source.registry());
       auto& cache = source.get_or_emplace<geode::GeodePathCacheComponent>();
-      if (!cache.strokeSlot || cache.strokeSlot->strokeKey != strokeStyle) {
-        // Miss (or stroke-params changed) - rebuild. De-close zero-area closed
-        // subpaths first (see `deCloseZeroAreaSubpaths`) so a degenerate
-        // `M L Z` line strokes into a clean rectangle the analytic shader
-        // covers correctly, instead of overlapping triangles.
-        Path stroked = deCloseZeroAreaSubpaths(geometry).strokeToFill(strokeStyle);
+      if (!cache.strokeSlot || cache.strokeSlot->strokeKey != strokeStyle ||
+          cache.strokeSlot->flattenTolerance != flattenTolerance) {
+        // Miss (or stroke-params / device-scale changed) - rebuild. De-close
+        // zero-area closed subpaths first (see `deCloseZeroAreaSubpaths`) so a
+        // degenerate `M L Z` line strokes into a clean rectangle the analytic
+        // shader covers correctly, instead of overlapping triangles.
+        Path stroked =
+            deCloseZeroAreaSubpaths(geometry).strokeToFill(strokeStyle, flattenTolerance);
         if (stroked.empty()) {
           cache.strokeSlot.reset();
           return result;  // strokedPath stays null.
         }
+        countStrokeOutline(stroked);
         const FillRule fillRule = strokeFillRuleFor(stroked, strokeStyle);
         device->countPathEncode();
         geode::EncodedPath encoded = geode::GeodePathEncoder::encode(stroked, fillRule);
@@ -2013,6 +2046,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink {
         // the toolchain disagreement.
         cache.strokeSlot = geode::GeodePathCacheComponent::StrokeSlot{
             .strokeKey = strokeStyle,
+            .flattenTolerance = flattenTolerance,
             .strokedPath = std::move(stroked),
             .strokedEncode = std::move(encoded),
             .strokeFillRule = fillRule,
@@ -2034,10 +2068,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink {
     }
     // No-entity fallback: compute into the Impl-local scratch buffer.
     // GeoEncoder will encode inline when `encoded` is left null.
-    strokeScratchPath = deCloseZeroAreaSubpaths(geometry).strokeToFill(strokeStyle);
+    strokeScratchPath =
+        deCloseZeroAreaSubpaths(geometry).strokeToFill(strokeStyle, flattenTolerance);
     if (strokeScratchPath.empty()) {
       return result;
     }
+    countStrokeOutline(strokeScratchPath);
     result.strokedPath = &strokeScratchPath;
     result.fillRule = strokeFillRuleFor(strokeScratchPath, strokeStyle);
     return result;
@@ -4268,8 +4304,13 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
           // Closed glyph contours expand to same-winding outer+inner subpaths, so
           // the stroked outline needs `strokeFillRuleFor` (EvenOdd for the ring),
           // not a hardcoded NonZero -- see RendererGeode::drawPath's stroke notes.
-          const Path stroked = placed.strokeToFill(*strokeStyle);
+          // Same device-aware tolerance as `drawPath`'s stroke: glyph outlines
+          // are submitted in text-local space and scaled on the GPU, so the
+          // flattening must track the draw transform or stroked glyphs facet
+          // at high zoom.
+          const Path stroked = placed.strokeToFill(*strokeStyle, impl_->strokeFlattenTolerance());
           if (!stroked.empty()) {
+            impl_->countStrokeOutline(stroked);
             const FillRule strokeRule = Impl::strokeFillRuleFor(stroked, *strokeStyle);
             if (strokeIsGradient) {
               // Gradient stroke: resolve against the text bbox (the *original*
@@ -4381,8 +4422,10 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
           impl_->encoder->fillPath(path, decoFill, FillRule::NonZero);
         }
         if (decoStrokeColor.has_value()) {
-          const Path stroked = path.strokeToFill(*decoStrokeStyle);
+          // Device-aware flattening, as in every other renderer-side stroke.
+          const Path stroked = path.strokeToFill(*decoStrokeStyle, impl_->strokeFlattenTolerance());
           if (!stroked.empty()) {
+            impl_->countStrokeOutline(stroked);
             impl_->encoder->fillPath(stroked, *decoStrokeColor,
                                      Impl::strokeFillRuleFor(stroked, *decoStrokeStyle));
           }
@@ -4663,8 +4706,7 @@ bool RendererGeode::drawCheckerboardUnderlay(const CheckerboardUnderlayParams& p
   passDesc.label = wgpuLabel("RendererGeodeCheckerboardPass");
   passDesc.colorAttachmentCount = 1;
   passDesc.colorAttachments = &color;
-  geode::ScopedWgpuHandle<wgpu::RenderPassEncoder> pass(
-      encoder.get().beginRenderPass(passDesc));
+  geode::ScopedWgpuHandle<wgpu::RenderPassEncoder> pass(encoder.get().beginRenderPass(passDesc));
   if (!pass) {
     return false;
   }

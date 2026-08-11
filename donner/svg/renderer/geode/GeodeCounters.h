@@ -98,6 +98,22 @@ struct GeodeCounters {
   /// already cached; this counter verifies that claim).
   uint64_t textureWriteBytes = 0;
 
+  /// `Path::strokeToFill` calls that actually rebuilt a stroke outline this
+  /// frame (cache hits do not count). Zero on an unchanged-geometry,
+  /// unchanged-zoom frame; one per stroked draw whose stroke params or
+  /// device-scale bucket changed.
+  uint64_t strokeOutlineFlattens = 0;
+
+  /// Total point count across the stroke outlines rebuilt this frame.
+  ///
+  /// The stroke pipeline flattens curves with a tolerance derived from the
+  /// draw-time device transform (see `GeodeStrokeTolerance.h`), so this count
+  /// grows with the view scale. That makes it the observable signal that the
+  /// flattening tracked the device scale: scale-blind flattening yields the
+  /// same point count at 1x and at 32x, which is exactly the defect that makes
+  /// zoomed-in curves render as visible polygons.
+  uint64_t strokeOutlinePoints = 0;
+
   /// Reset all counters to zero. Called at `RendererGeode::beginFrame`.
   void reset() { *this = {}; }
 };

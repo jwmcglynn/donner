@@ -191,7 +191,11 @@ bool GeometryIntersectsRect(const svg::SVGGeometryElement& geometry, const Box2d
     strokeStyle.cap = ToLineCap(style.strokeLinecap.get().value());
     strokeStyle.join = ToLineJoin(style.strokeLinejoin.get().value());
     strokeStyle.miterLimit = style.strokeMiterlimit.get().value();
-    const Path strokePath = spline->strokeToFill(strokeStyle);
+    // Hit testing is a document-space predicate: the result is intersected
+    // against a document-space rect and never rasterized, so the flattening
+    // tolerance belongs in path-local units and must not follow the view zoom
+    // (that would make marquee hits depend on the zoom level).
+    const Path strokePath = spline->strokeToFill(strokeStyle, Path::kLocalFlattenTolerance);
     return FilledPathIntersectsRect(strokePath, FillRule::NonZero, documentFromGeometry,
                                     documentRect);
   }

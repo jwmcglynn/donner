@@ -39,15 +39,26 @@ struct GeodePathCacheComponent {
   std::optional<EncodedPath> fillEncode;
 
   /// Stroke-slot cache. Holds both the `Path::strokeToFill` output
-  /// path and its encoded form, keyed by the source `StrokeStyle`.
+  /// path and its encoded form, keyed by the source `StrokeStyle` plus
+  /// the device-derived curve-flattening tolerance.
   /// Invalidated whenever the fill slot is (geometry change, via the
-  /// entt signal), or on stroke-key mismatch (stroke width/dash/cap/
+  /// entt signal), on stroke-key mismatch (stroke width/dash/cap/
   /// join change via CSS - the old key no longer matches the new one,
-  /// so the next access regenerates).
+  /// so the next access regenerates), or on tolerance mismatch (the
+  /// view scale crossed a flattening bucket).
   struct StrokeSlot {
     /// Equality key. Compared against the caller's `StrokeStyle` to
     /// detect stroke-parameter changes.
     StrokeStyle strokeKey;
+
+    /// Second half of the equality key: the path-local curve-flattening
+    /// tolerance this outline was built with, derived from the draw-time
+    /// device transform (see `GeodeStrokeTolerance.h`). Without it in the
+    /// key, zooming in would keep serving an outline tessellated for the
+    /// old scale and curves would render as visible polygons. Quantized
+    /// upstream to power-of-two scale buckets, so exact comparison is
+    /// stable across a continuous zoom.
+    double flattenTolerance = 0.0;
 
     /// Cached `Path::strokeToFill` output. Reused across draws of
     /// the same entity + stroke-key combination.

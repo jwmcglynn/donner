@@ -123,6 +123,19 @@ public:
     friend std::ostream& operator<<(std::ostream& os, const Command& command);
   };
 
+  /**
+   * Curve-flattening tolerance for callers that consume the flattened result in
+   * the path's OWN coordinate space, such as hit testing and bounds
+   * computation.
+   *
+   * Rendering code must NOT use this value. A renderer submits geometry in
+   * document space and lets the device transform scale it, so a fixed
+   * path-local tolerance is magnified by the view scale and turns curves into
+   * visible polygons. Renderers derive their tolerance from the device
+   * transform instead - see `donner::geode::StrokeFlattenToleranceFor`.
+   */
+  static constexpr double kLocalFlattenTolerance = 0.25;
+
   /// Construct an empty path.
   Path() = default;
 
@@ -307,11 +320,21 @@ public:
    * `width/2` perpendicular to the segment direction, applying the specified line join at corners
    * and line cap at open subpath endpoints.
    *
+   * The tolerance is deliberately NOT defaulted. It is expressed in this path's
+   * own coordinate space, so the correct value depends on the scale at which
+   * the result is consumed: rendering callers must derive it from their device
+   * transform (`donner::geode::StrokeFlattenToleranceFor`), while callers that
+   * stay in path-local space (hit testing, bounds) pass
+   * \ref kLocalFlattenTolerance. Requiring an explicit argument makes that
+   * choice a compile-time obligation for every call site, so a scale-blind
+   * stroke cannot be reintroduced by accident.
+   *
    * @param style Stroke parameters (width, cap, join, miter limit).
-   * @param flattenTolerance Tolerance for curve flattening.
+   * @param flattenTolerance Tolerance for curve flattening, in this path's
+   *   coordinate space.
    * @return A new Path representing the filled outline of the stroke.
    */
-  Path strokeToFill(const StrokeStyle& style, double flattenTolerance = 0.25) const;
+  Path strokeToFill(const StrokeStyle& style, double flattenTolerance) const;
 
   /// @}
 

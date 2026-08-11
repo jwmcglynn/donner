@@ -15,6 +15,13 @@ namespace donner {
 
 namespace {
 
+/// Path-local flattening tolerance for the `strokeToFill` cases below. These
+/// tests assert on path-local geometry and never rasterize, so the local-space
+/// tolerance is the right choice. `strokeToFill` takes the tolerance explicitly
+/// (there is no default) so renderer call sites are forced to derive a
+/// device-aware value instead - see `Path::kLocalFlattenTolerance`.
+constexpr double kFlattenTolerance = Path::kLocalFlattenTolerance;
+
 MATCHER_P(PathCommandVerbIs, expectedVerb, "") {
   return testing::ExplainMatchResult(testing::Eq(expectedVerb), arg.verb, result_listener);
 }
@@ -1173,7 +1180,7 @@ TEST(Path, StrokeToFillSingleLine) {
   Path path = PathBuilder().moveTo({0, 0}).lineTo({10, 0}).build();
   StrokeStyle style;
   style.width = 2.0;
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
   // Should produce a non-empty filled region around the line.
   EXPECT_FALSE(filled.empty());
   Box2d filledBounds = filled.bounds();
@@ -1257,13 +1264,13 @@ TEST(Path, StrokeToFillRoundCap) {
   StrokeStyle style;
   style.width = 2.0;
   style.cap = LineCap::Round;
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
   EXPECT_FALSE(filled.empty());
 
   // A round cap produces a semicircle of arc points at each end, versus
   // butt which is a single lineTo. With two round caps the total point
   // count should be substantially larger than a butt-capped stroke.
-  Path butt = path.strokeToFill({.width = 2.0, .cap = LineCap::Butt});
+  Path butt = path.strokeToFill({.width = 2.0, .cap = LineCap::Butt}, kFlattenTolerance);
   EXPECT_GT(filled.points().size(), butt.points().size())
       << "Round caps should add arc points beyond the butt-cap baseline";
 
@@ -1316,7 +1323,7 @@ TEST(Path, StrokeToFillSquareCap) {
   StrokeStyle style;
   style.width = 2.0;
   style.cap = LineCap::Square;
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
   EXPECT_FALSE(filled.empty());
 
   // Square caps extend halfWidth past each endpoint in the line direction.
@@ -1364,7 +1371,7 @@ TEST(Path, StrokeToFillButtCapShape) {
   StrokeStyle style;
   style.width = 2.0;
   style.cap = LineCap::Butt;
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
   EXPECT_FALSE(filled.empty());
 
   const Box2d bounds = filled.bounds();
@@ -1383,7 +1390,7 @@ TEST(Path, StrokeToFillColinearJoinDoesNotCreateCornerBulge) {
   style.width = 2.0;
   style.join = LineJoin::Round;
 
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
 
   ASSERT_FALSE(filled.empty());
   const Box2d bounds = filled.bounds();
@@ -1402,7 +1409,7 @@ TEST(Path, StrokeToFillRoundCapVertical) {
   StrokeStyle style;
   style.width = 2.0;
   style.cap = LineCap::Round;
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
   EXPECT_FALSE(filled.empty());
 
   const Box2d bounds = filled.bounds();
@@ -1429,7 +1436,7 @@ TEST(Path, StrokeToFillSquareCapDiagonal) {
   StrokeStyle style;
   style.width = 2.0 * std::sqrt(2.0);
   style.cap = LineCap::Square;
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
   EXPECT_FALSE(filled.empty());
 
   // Extended endpoints: (-1, -1) and (11, 11).
@@ -1463,13 +1470,14 @@ TEST(Path, StrokeToFillRoundJoin) {
   StrokeStyle style;
   style.width = 2.0;
   style.join = LineJoin::Round;
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
   EXPECT_FALSE(filled.empty());
 
   // A round join subdivides into an arc at the outside of the corner. The
   // point count should exceed the bevel-joined equivalent by the round-join
   // arc subdivision.
-  Path bevel = path.strokeToFill({.width = 2.0, .cap = LineCap::Butt, .join = LineJoin::Bevel});
+  Path bevel = path.strokeToFill({.width = 2.0, .cap = LineCap::Butt, .join = LineJoin::Bevel},
+                                 kFlattenTolerance);
   EXPECT_GT(filled.points().size(), bevel.points().size())
       << "Round join should add arc points beyond the bevel baseline";
 
@@ -1502,7 +1510,7 @@ TEST(Path, StrokeToFillBevelJoin) {
   StrokeStyle style;
   style.width = 2.0;
   style.join = LineJoin::Bevel;
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
   EXPECT_FALSE(filled.empty());
 
   auto evenOdd = [&](Vector2d p) { return (rayCastWinding(filled, p) & 1) != 0; };
@@ -1546,7 +1554,8 @@ TEST(Path, StrokeToFillMiterLimitFallbackMatchesBevelJoin) {
   StrokeStyle bevel = limitedMiter;
   bevel.join = LineJoin::Bevel;
 
-  EXPECT_EQ(path.strokeToFill(limitedMiter), path.strokeToFill(bevel));
+  EXPECT_EQ(path.strokeToFill(limitedMiter, kFlattenTolerance),
+            path.strokeToFill(bevel, kFlattenTolerance));
 }
 
 TEST(Path, StrokeToFillSharpOpenCornerMiterJoin) {
@@ -1567,7 +1576,7 @@ TEST(Path, StrokeToFillSharpOpenCornerMiterJoin) {
   style.width = 20.0;  // halfWidth = 10
   style.join = LineJoin::Miter;
   style.miterLimit = 4.0;
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
   EXPECT_FALSE(filled.empty());
 
   auto evenOdd = [&](Vector2d p) { return (rayCastWinding(filled, p) & 1) != 0; };
@@ -1629,7 +1638,7 @@ TEST(Path, StrokeToFillClosedPath) {
                   .build();
   StrokeStyle style;
   style.width = 2.0;  // halfWidth = 1
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
   EXPECT_FALSE(filled.empty());
 
   // Regression for 2D (donner_sfv #492 follow-up): the stroked rect should
@@ -1681,7 +1690,7 @@ TEST(Path, StrokeToFillClosedEllipseInteriorIsEmpty) {
   Path ellipse = PathBuilder().addEllipse(Box2d(Vector2d(0, 0), Vector2d(100, 60))).build();
   StrokeStyle style;
   style.width = 4.0;  // halfWidth = 2
-  Path filled = ellipse.strokeToFill(style);
+  Path filled = ellipse.strokeToFill(style, kFlattenTolerance);
   EXPECT_FALSE(filled.empty());
 
   auto evenOdd = [&](Vector2d p) { return (rayCastWinding(filled, p) & 1) != 0; };
@@ -1723,7 +1732,7 @@ TEST(Path, StrokeToFillQuadbezierLensInteriorIsOutside) {
   Path path = PathBuilder().moveTo({115, 165}).quadTo({215, 40}, {315, 165}).build();
   StrokeStyle style;
   style.width = 2.5;
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
 
   auto evenOdd = [&](Vector2d p) { return (rayCastWinding(filled, p) & 1) != 0; };
 
@@ -1740,7 +1749,7 @@ TEST(Path, StrokeToFillCurves) {
   Path path = PathBuilder().moveTo({0, 0}).curveTo({0, 10}, {10, 10}, {10, 0}).build();
   StrokeStyle style;
   style.width = 1.0;
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
   EXPECT_FALSE(filled.empty());
 }
 
@@ -1762,7 +1771,7 @@ TEST(Path, StrokeToFillNearReversalJoinDoesNotSpike) {
   style.width = 1.5;
   style.join = LineJoin::Miter;
   style.miterLimit = 4.0;
-  const Path filled = path.strokeToFill(style);
+  const Path filled = path.strokeToFill(style, kFlattenTolerance);
   ASSERT_FALSE(filled.empty());
 
   // Every outline point must stay within the input's bounds expanded by the
@@ -1802,7 +1811,7 @@ TEST(Path, StrokeToFillDashArraySimple) {
   StrokeStyle style;
   style.width = 2.0;
   style.dashArray = {10.0, 10.0};
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
 
   EXPECT_FALSE(filled.empty());
   // Each dash becomes its own capped polygon subpath.
@@ -1827,8 +1836,8 @@ TEST(Path, StrokeToFillDashArrayOddLengthIsDoubled) {
   styleEven.width = 2.0;
   styleEven.dashArray = {10.0, 10.0};
 
-  Path filledOdd = path.strokeToFill(styleOdd);
-  Path filledEven = path.strokeToFill(styleEven);
+  Path filledOdd = path.strokeToFill(styleOdd, kFlattenTolerance);
+  Path filledEven = path.strokeToFill(styleEven, kFlattenTolerance);
 
   EXPECT_EQ(countSubpaths(filledOdd), countSubpaths(filledEven));
 }
@@ -1845,8 +1854,8 @@ TEST(Path, StrokeToFillDashOffsetShiftsPattern) {
   style5.dashArray = {10.0, 10.0};
   style5.dashOffset = 5.0;
 
-  Path filled0 = path.strokeToFill(style0);
-  Path filled5 = path.strokeToFill(style5);
+  Path filled0 = path.strokeToFill(style0, kFlattenTolerance);
+  Path filled5 = path.strokeToFill(style5, kFlattenTolerance);
   EXPECT_FALSE(filled0.empty());
   EXPECT_FALSE(filled5.empty());
 
@@ -1867,7 +1876,7 @@ TEST(Path, StrokeToFillDashOffsetNegativeWraps) {
   style.width = 2.0;
   style.dashArray = {10.0, 10.0};
   style.dashOffset = -5.0;  // Equivalent to +15 mod 20.
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
   EXPECT_FALSE(filled.empty());
 }
 
@@ -1883,7 +1892,7 @@ TEST(Path, StrokeToFillDashClosedRect) {
   StrokeStyle style;
   style.width = 1.0;
   style.dashArray = {10.0, 10.0};
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
   EXPECT_FALSE(filled.empty());
   // Perimeter 40 / pattern 20 = 2 on-dashes, neither wraps the seam
   // because 40 is an exact multiple of the pattern length.
@@ -1910,7 +1919,7 @@ TEST(Path, StrokeToFillDashClosedWrapsSeam) {
   style.width = 1.0;
   style.dashArray = {30.0, 5.0};
   style.dashOffset = 20.0;
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
   EXPECT_FALSE(filled.empty());
   // We expect 2 on-dashes (one short starting at 0, one wrap-around).
   EXPECT_GE(countSubpaths(filled), 1u);
@@ -1927,7 +1936,7 @@ TEST(Path, StrokeToFillDashPathLengthScaling) {
   style.width = 1.0;
   style.dashArray = {10.0, 10.0};
   style.pathLength = 50.0;
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
   EXPECT_FALSE(filled.empty());
   EXPECT_EQ(countSubpaths(filled), 3u);
 }
@@ -1939,7 +1948,7 @@ TEST(Path, StrokeToFillDashInfinitePathLengthFallsBackToSolid) {
   style.dashArray = {10.0, 10.0};
   style.pathLength = std::numeric_limits<double>::infinity();
 
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
 
   EXPECT_FALSE(filled.empty());
   EXPECT_EQ(countSubpaths(filled), 1u);
@@ -1951,7 +1960,7 @@ TEST(Path, StrokeToFillDashAllZeroIsSolid) {
   StrokeStyle style;
   style.width = 1.0;
   style.dashArray = {0.0, 0.0};
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
   EXPECT_FALSE(filled.empty());
   // Should be exactly one capped subpath, same as undashed.
   EXPECT_EQ(countSubpaths(filled), 1u);
@@ -1965,7 +1974,7 @@ TEST(Path, StrokeToFillDashZeroEntryDoesNotHang) {
   StrokeStyle style;
   style.width = 1.0;
   style.dashArray = {10.0, 0.0};
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
   // Should produce *something*, not hang. (Whether it's one big stroke or
   // chopped up depends on the cycle handling, but it must terminate.)
   EXPECT_FALSE(filled.empty());
@@ -1979,7 +1988,7 @@ TEST(Path, StrokeToFillDashLeadingZeroEntryDoesNotHang) {
   style.width = 1.0;
   style.dashArray = {0.0, 10.0};
 
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
 
   EXPECT_TRUE(filled.empty());
 }
@@ -1991,7 +2000,7 @@ TEST(Path, StrokeToFillDashLeadingZeroRoundCaps) {
   style.cap = LineCap::Round;
   style.dashArray = {0.0, 20.0};
 
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
 
   ASSERT_FALSE(filled.empty());
   EXPECT_EQ(countSubpaths(filled), 5u);
@@ -2006,7 +2015,7 @@ TEST(Path, StrokeToFillDashLeadingZeroSquareCaps) {
   style.cap = LineCap::Square;
   style.dashArray = {0.0, 20.0};
 
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
 
   ASSERT_FALSE(filled.empty());
   EXPECT_EQ(countSubpaths(filled), 5u);
@@ -2021,7 +2030,7 @@ TEST(Path, StrokeToFillDashLeadingZeroSquareCapsPreserveTangent) {
   style.cap = LineCap::Square;
   style.dashArray = {0.0, 20.0};
 
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
 
   ASSERT_FALSE(filled.empty());
   EXPECT_EQ(countSubpaths(filled), 1u);
@@ -2035,7 +2044,7 @@ TEST(Path, StrokeToFillDashNegativeIsSolid) {
   StrokeStyle style;
   style.width = 1.0;
   style.dashArray = {10.0, -5.0, 10.0, 10.0};
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
   EXPECT_FALSE(filled.empty());
   EXPECT_EQ(countSubpaths(filled), 1u);
 }
@@ -2047,7 +2056,7 @@ TEST(Path, StrokeToFillDashOffsetOnPatternBoundaryStartsWithOffEntry) {
   style.dashArray = {10.0, 10.0};
   style.dashOffset = 10.0;
 
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
 
   ASSERT_FALSE(filled.empty());
   EXPECT_NEAR(filled.bounds().topLeft.x, 10.0, 1e-9);
@@ -2061,7 +2070,7 @@ TEST(Path, StrokeToFillDashedZeroLengthSubpathFallsBackToCapShape) {
   style.cap = LineCap::Square;
   style.dashArray = {1.0, 1.0};
 
-  Path filled = pointStroke.strokeToFill(style);
+  Path filled = pointStroke.strokeToFill(style, kFlattenTolerance);
 
   ASSERT_FALSE(filled.empty());
   ExpectNear(filled.bounds().topLeft, Vector2d(3, 3));
@@ -2071,14 +2080,14 @@ TEST(Path, StrokeToFillDashedZeroLengthSubpathFallsBackToCapShape) {
 TEST(Path, StrokeToFillEmptyOrNonPositiveWidthReturnsEmpty) {
   StrokeStyle style;
   style.width = 2.0;
-  EXPECT_TRUE(Path().strokeToFill(style).empty());
+  EXPECT_TRUE(Path().strokeToFill(style, kFlattenTolerance).empty());
 
   Path line = PathBuilder().moveTo({0, 0}).lineTo({10, 0}).build();
   style.width = 0.0;
-  EXPECT_TRUE(line.strokeToFill(style).empty());
+  EXPECT_TRUE(line.strokeToFill(style, kFlattenTolerance).empty());
 
   style.width = -1.0;
-  EXPECT_TRUE(line.strokeToFill(style).empty());
+  EXPECT_TRUE(line.strokeToFill(style, kFlattenTolerance).empty());
 }
 
 TEST(Path, StrokeToFillMoveOnlySubpathsReturnEmpty) {
@@ -2086,13 +2095,13 @@ TEST(Path, StrokeToFillMoveOnlySubpathsReturnEmpty) {
   style.width = 2.0;
 
   Path moveOnly = PathBuilder().moveTo({5, 5}).build();
-  EXPECT_TRUE(moveOnly.strokeToFill(style).empty());
+  EXPECT_TRUE(moveOnly.strokeToFill(style, kFlattenTolerance).empty());
 
   Path closedMoveOnly = PathBuilder().moveTo({5, 5}).closePath().build();
-  EXPECT_TRUE(closedMoveOnly.strokeToFill(style).empty());
+  EXPECT_TRUE(closedMoveOnly.strokeToFill(style, kFlattenTolerance).empty());
 
   style.dashArray = {1.0, 1.0};
-  EXPECT_TRUE(closedMoveOnly.strokeToFill(style).empty());
+  EXPECT_TRUE(closedMoveOnly.strokeToFill(style, kFlattenTolerance).empty());
 }
 
 TEST(Path, StrokeToFillZeroLengthSubpathCaps) {
@@ -2101,12 +2110,12 @@ TEST(Path, StrokeToFillZeroLengthSubpathCaps) {
   StrokeStyle butt;
   butt.width = 4.0;
   butt.cap = LineCap::Butt;
-  EXPECT_TRUE(pointStroke.strokeToFill(butt).empty());
+  EXPECT_TRUE(pointStroke.strokeToFill(butt, kFlattenTolerance).empty());
 
   StrokeStyle square;
   square.width = 4.0;
   square.cap = LineCap::Square;
-  Path squareFill = pointStroke.strokeToFill(square);
+  Path squareFill = pointStroke.strokeToFill(square, kFlattenTolerance);
   ASSERT_FALSE(squareFill.empty());
   ExpectNear(squareFill.bounds().topLeft, Vector2d(3, 3));
   ExpectNear(squareFill.bounds().bottomRight, Vector2d(7, 7));
@@ -2114,7 +2123,7 @@ TEST(Path, StrokeToFillZeroLengthSubpathCaps) {
   StrokeStyle round;
   round.width = 4.0;
   round.cap = LineCap::Round;
-  Path roundFill = pointStroke.strokeToFill(round);
+  Path roundFill = pointStroke.strokeToFill(round, kFlattenTolerance);
   ASSERT_FALSE(roundFill.empty());
   EXPECT_GT(roundFill.points().size(), squareFill.points().size());
   ExpectNear(roundFill.bounds().topLeft, Vector2d(3, 3), 1e-9);
@@ -2127,9 +2136,9 @@ TEST(Path, StrokeToFillDashOversizedPatternFallsBackToSolid) {
   style.width = 10.0;
   style.dashArray.assign(257, 1.0);
 
-  const Path filled = path.strokeToFill(style);
+  const Path filled = path.strokeToFill(style, kFlattenTolerance);
   style.dashArray.clear();
-  const Path solid = path.strokeToFill(style);
+  const Path solid = path.strokeToFill(style, kFlattenTolerance);
 
   ASSERT_FALSE(filled.empty());
   EXPECT_EQ(filled, solid) << "an oversized dash pattern must retain the exact solid outline";
@@ -2142,7 +2151,7 @@ TEST(Path, StrokeToFillDashSkipsZeroLengthSegments) {
   style.width = 1.0;
   style.dashArray = {5.0, 5.0};
 
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
 
   EXPECT_FALSE(filled.empty());
 }
@@ -2159,7 +2168,7 @@ TEST(Path, StrokeToFillUsesCurveBoundaryTangentsAtMixedJoins) {
   style.join = LineJoin::Miter;
   style.miterLimit = 4.0;
 
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
 
   EXPECT_FALSE(filled.empty());
   EXPECT_NE(rayCastWinding(filled, {5, 0}), 0);
@@ -2178,7 +2187,7 @@ TEST(Path, StrokeToFillDegenerateCurveBoundaryTangentsFallBackToChord) {
   style.join = LineJoin::Miter;
   style.miterLimit = 4.0;
 
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
 
   EXPECT_FALSE(filled.empty());
   EXPECT_NE(rayCastWinding(filled, {5, 0}), 0);
@@ -2198,7 +2207,7 @@ TEST(Path, StrokeToFillCurveBoundaryTangentsUseAllDegenerateFallbacks) {
   style.join = LineJoin::Miter;
   style.miterLimit = 4.0;
 
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
 
   EXPECT_FALSE(filled.empty());
   EXPECT_NE(rayCastWinding(filled, {5, 0}), 0);
@@ -2612,7 +2621,7 @@ TEST(Path, StrokeToFillInsideTurnForwardContourDoesNotBacktrack) {
   style.cap = LineCap::Round;
   style.join = LineJoin::Miter;
   style.miterLimit = 4.0;
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
   ASSERT_FALSE(filled.empty());
 
   const auto commands = filled.commands();
@@ -2783,11 +2792,8 @@ TEST(Path, VerticesDegenerateCubicEndTangentFallsBackToEarlierControlPoints) {
   // Cubic where c2 == end: the end tangent (P3 - P2) is zero, so it falls back
   // to P3 - P1 = (5, 0). The interior vertex orientation bisects the incoming
   // +x direction with the outgoing +y line.
-  Path partial = PathBuilder()
-                     .moveTo({0, 0})
-                     .curveTo({5, 0}, {10, 0}, {10, 0})
-                     .lineTo({10, 10})
-                     .build();
+  Path partial =
+      PathBuilder().moveTo({0, 0}).curveTo({5, 0}, {10, 0}, {10, 0}).lineTo({10, 10}).build();
   std::vector<Path::Vertex> partialVerts = partial.vertices();
   ASSERT_EQ(partialVerts.size(), 3u);
   ExpectNear(partialVerts[1].point, Vector2d(10, 0));
@@ -2795,11 +2801,8 @@ TEST(Path, VerticesDegenerateCubicEndTangentFallsBackToEarlierControlPoints) {
 
   // Cubic where c1 == c2 == end: both control-point differences are zero, so
   // the tangent falls all the way back to the end - start chord (+x again).
-  Path chord = PathBuilder()
-                   .moveTo({0, 0})
-                   .curveTo({10, 0}, {10, 0}, {10, 0})
-                   .lineTo({10, 10})
-                   .build();
+  Path chord =
+      PathBuilder().moveTo({0, 0}).curveTo({10, 0}, {10, 0}, {10, 0}).lineTo({10, 10}).build();
   std::vector<Path::Vertex> chordVerts = chord.vertices();
   ASSERT_EQ(chordVerts.size(), 3u);
   ExpectNear(chordVerts[1].point, Vector2d(10, 0));
@@ -2827,7 +2830,7 @@ TEST(Path, StrokeToFillRoundJoinArcCrossesAngleWrap) {
   StrokeStyle style;
   style.width = 2.0;
   style.join = LineJoin::Round;
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
   ASSERT_FALSE(filled.empty());
 
   // The arc midpoint lands at angle 180 degrees: vertex + halfWidth * (-1, 0).
@@ -2854,16 +2857,15 @@ TEST(Path, StrokeToFillNearExact180ReversalMiterDoesNotSpike) {
   style.width = 2.0;
   style.join = LineJoin::Miter;
 
-  Path outsideTurn =
-      PathBuilder().moveTo({0, 0}).lineTo({1, 0}).lineTo({0, -1.5e-10}).build();
-  Path outsideFilled = outsideTurn.strokeToFill(style);
+  Path outsideTurn = PathBuilder().moveTo({0, 0}).lineTo({1, 0}).lineTo({0, -1.5e-10}).build();
+  Path outsideFilled = outsideTurn.strokeToFill(style, kFlattenTolerance);
   ASSERT_FALSE(outsideFilled.empty());
   Box2d outsideBounds = outsideFilled.bounds();
   EXPECT_LE(outsideBounds.width(), 1.5);
   EXPECT_LE(outsideBounds.height(), 2.5);
 
   Path insideTurn = PathBuilder().moveTo({0, 0}).lineTo({1, 0}).lineTo({0, 1.5e-10}).build();
-  Path insideFilled = insideTurn.strokeToFill(style);
+  Path insideFilled = insideTurn.strokeToFill(style, kFlattenTolerance);
   ASSERT_FALSE(insideFilled.empty());
   Box2d insideBounds = insideFilled.bounds();
   EXPECT_LE(insideBounds.width(), 1.5);
@@ -2872,16 +2874,11 @@ TEST(Path, StrokeToFillNearExact180ReversalMiterDoesNotSpike) {
 
 TEST(Path, StrokeToFillMultipleOpenSubpaths) {
   // Two disjoint open subpaths each produce their own stroke ribbon.
-  Path path = PathBuilder()
-                  .moveTo({0, 0})
-                  .lineTo({10, 0})
-                  .moveTo({0, 10})
-                  .lineTo({10, 10})
-                  .build();
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({10, 0}).moveTo({0, 10}).lineTo({10, 10}).build();
 
   StrokeStyle style;
   style.width = 2.0;
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
 
   ASSERT_FALSE(filled.empty());
   EXPECT_EQ(countSubpaths(filled), 2u);
@@ -2904,7 +2901,7 @@ TEST(Path, StrokeToFillCurveBoundaryOverridesSkipSubpathsWithoutCurves) {
 
   StrokeStyle style;
   style.width = 2.0;
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
 
   ASSERT_FALSE(filled.empty());
   EXPECT_EQ(countSubpaths(filled), 2u);
@@ -2924,7 +2921,7 @@ TEST(Path, StrokeToFillQuadWithControlAtEndUsesChordExitTangent) {
   StrokeStyle style;
   style.width = 2.0;
   style.join = LineJoin::Miter;
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
 
   ASSERT_FALSE(filled.empty());
   EXPECT_TRUE(filled.isInside({5, 0.5}));
@@ -2942,7 +2939,7 @@ TEST(Path, StrokeToFillDashCountIsCapped) {
   StrokeStyle style;
   style.width = 1.0;
   style.dashArray = {0.001, 0.001};
-  Path filled = path.strokeToFill(style);
+  Path filled = path.strokeToFill(style, kFlattenTolerance);
 
   ASSERT_FALSE(filled.empty());
   EXPECT_EQ(countSubpaths(filled), 65536u);
