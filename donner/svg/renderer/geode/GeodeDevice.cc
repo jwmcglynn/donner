@@ -258,6 +258,8 @@ struct GeodeDevice::Impl {
   std::unique_ptr<GeodePipeline> pipeline;
   /// Built lazily on first `checkerboardPipeline()` access - see the header.
   std::unique_ptr<GeodeCheckerboardPipeline> checkerboardPipeline;
+  /// Built lazily on first `checkerboardUnderlayPipeline()` access - see the header.
+  std::unique_ptr<GeodeCheckerboardPipeline> checkerboardUnderlayPipeline;
   std::unique_ptr<GeodeGradientPipeline> gradientPipeline;
   std::unique_ptr<GeodeImagePipeline> imagePipeline;
   /// Built lazily on first `maskPipeline()` access - see the header.
@@ -637,10 +639,21 @@ GeodeCheckerboardPipeline& GeodeDevice::checkerboardPipeline() const {
     // Lazy: only the editor's direct framebuffer presentation draws the
     // checkerboard underlay; other consumers should not pay the
     // pipeline-compile cost at startup.
-    impl_->checkerboardPipeline =
-        std::make_unique<GeodeCheckerboardPipeline>(device_, textureFormat_);
+    impl_->checkerboardPipeline = std::make_unique<GeodeCheckerboardPipeline>(
+        device_, textureFormat_, GeodeCheckerboardPipeline::BlendMode::Replace);
   }
   return *impl_->checkerboardPipeline;
+}
+GeodeCheckerboardPipeline& GeodeDevice::checkerboardUnderlayPipeline() const {
+  if (!impl_->checkerboardUnderlayPipeline) {
+    // Lazy for the same reason as `checkerboardPipeline()`, and separate from
+    // it because a build normally draws through exactly one of the two: the
+    // desktop framebuffer path draws the checkerboard first (replace), the
+    // browser worker surface draws it last (destination-over).
+    impl_->checkerboardUnderlayPipeline = std::make_unique<GeodeCheckerboardPipeline>(
+        device_, textureFormat_, GeodeCheckerboardPipeline::BlendMode::DestinationOver);
+  }
+  return *impl_->checkerboardUnderlayPipeline;
 }
 
 std::unique_ptr<GeodeDevice> GeodeDevice::CreateFromExternal(const GeodeEmbedConfig& config) {

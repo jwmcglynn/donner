@@ -412,6 +412,11 @@ public:
   /// presentation path. Built lazily on first access - only the editor draws
   /// it, so headless/WASM consumers never pay the compile cost.
   GeodeCheckerboardPipeline& checkerboardPipeline() const;
+  /// Destination-over variant of \ref checkerboardPipeline, for targets that
+  /// already hold composed premultiplied content and need the checkerboard
+  /// placed underneath it. Built lazily and independently of the replace-blend
+  /// pipeline, so a consumer only pays for the variant it actually draws.
+  GeodeCheckerboardPipeline& checkerboardUnderlayPipeline() const;
   /// @}
 
 private:

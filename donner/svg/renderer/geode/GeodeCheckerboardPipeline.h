@@ -11,10 +11,10 @@ namespace donner::geode {
  * editor's direct framebuffer presentation draws behind transparent document
  * regions, plus its bind group layout.
  *
- * Owned by `GeodeDevice` (lazily, via `GeodeDevice::checkerboardPipeline()`) so
- * every consumer sharing the device reuses one compiled pipeline - wgpu-native
- * retains every pipeline ever constructed, so per-consumer construction leaks
- * (issue #575).
+ * Owned by `GeodeDevice` (lazily, via `GeodeDevice::checkerboardPipeline()` and
+ * `GeodeDevice::checkerboardUnderlayPipeline()`) so every consumer sharing the
+ * device reuses one compiled pipeline per blend mode - wgpu-native retains every
+ * pipeline ever constructed, so per-consumer construction leaks (issue #575).
  *
  * Bind group layout:
  * - binding 0: uniform buffer (\ref Uniforms)
@@ -26,15 +26,34 @@ namespace donner::geode {
  */
 class GeodeCheckerboardPipeline {
 public:
+  /// How the emitted checkerboard combines with whatever is already in the target.
+  enum class BlendMode {
+    /**
+     * Overwrite the target. Used when the checkerboard is drawn first, before
+     * any document pixels land on top of it (the desktop framebuffer underlay).
+     */
+    Replace,
+    /**
+     * Composite the checkerboard *under* the target's existing premultiplied
+     * content: `result = dst + checker * (1 - dst.alpha)`. Used when the
+     * document pixels are already in the target and the checkerboard has to
+     * fill whatever alpha they left behind (the browser worker surface, which
+     * receives an already-composed full-canvas texture).
+     */
+    DestinationOver,
+  };
+
   /// Uniform block consumed by the checkerboard shader.
   struct Uniforms {
-    float targetSize[2];     //!< Render-target size in device pixels.
-    float devicePixelRatio;  //!< Device pixels per logical pixel.
-    float checkerSize;       //!< Checker cell size in logical pixels.
-    float darkColor[4];      //!< RGBA for odd cells.
-    float lightColor[4];     //!< RGBA for even cells.
+    float targetSize[2];      //!< Render-target size in device pixels.
+    float devicePixelRatio;   //!< Device pixels per logical pixel.
+    float checkerSize;        //!< Checker cell size in logical pixels.
+    float darkColor[4];       //!< RGBA for odd cells.
+    float lightColor[4];      //!< RGBA for even cells.
+    float originOffsetPx[2];  //!< Device-pixel offset of the target's top-left from the anchor.
+    float padding[2];         //!< WGSL uniform struct tail padding; must be zero.
   };
-  static_assert(sizeof(Uniforms) == 48);
+  static_assert(sizeof(Uniforms) == 64);
 
   /**
    * Create the checkerboard pipeline for the given device and target format.
@@ -42,8 +61,10 @@ public:
    * @param device The WebGPU device.
    * @param colorFormat The pixel format of the render target this pipeline
    *   will draw into. Must match the target texture's format at draw time.
+   * @param blendMode How the emitted checkerboard combines with the target.
    */
-  GeodeCheckerboardPipeline(const wgpu::Device& device, wgpu::TextureFormat colorFormat);
+  GeodeCheckerboardPipeline(const wgpu::Device& device, wgpu::TextureFormat colorFormat,
+                            BlendMode blendMode = BlendMode::Replace);
 
   ~GeodeCheckerboardPipeline() = default;
   GeodeCheckerboardPipeline(const GeodeCheckerboardPipeline&) = delete;

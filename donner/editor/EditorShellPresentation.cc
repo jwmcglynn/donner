@@ -522,13 +522,29 @@ int FramebufferCheckerboardRenderer::draw(const gui::EditorWindowWgpuRenderTarge
     return 0;
   }
 
+  // Appearance comes from the shared renderer-level constants, not from local
+  // literals: the browser worker surface draws the same checkerboard through
+  // `RendererInterface::drawCheckerboardUnderlay`, and the two must be pixel-
+  // identical for the same document to look the same on both presentation
+  // paths.
+  static_assert(kFramebufferCheckerboardSize == svg::kTransparencyCheckerboardCellLogicalPx);
   const geode::GeodeCheckerboardPipeline::Uniforms uniforms{
       .targetSize = {static_cast<float>(target.framebufferSizePx.x),
                      static_cast<float>(target.framebufferSizePx.y)},
       .devicePixelRatio = static_cast<float>(devicePixelRatio),
       .checkerSize = static_cast<float>(kFramebufferCheckerboardSize),
-      .darkColor = {40.0f / 255.0f, 40.0f / 255.0f, 40.0f / 255.0f, 1.0f},
-      .lightColor = {60.0f / 255.0f, 60.0f / 255.0f, 60.0f / 255.0f, 1.0f},
+      .darkColor = {svg::kTransparencyCheckerboardDarkColor[0],
+                    svg::kTransparencyCheckerboardDarkColor[1],
+                    svg::kTransparencyCheckerboardDarkColor[2],
+                    svg::kTransparencyCheckerboardDarkColor[3]},
+      .lightColor = {svg::kTransparencyCheckerboardLightColor[0],
+                     svg::kTransparencyCheckerboardLightColor[1],
+                     svg::kTransparencyCheckerboardLightColor[2],
+                     svg::kTransparencyCheckerboardLightColor[3]},
+      // The window framebuffer *is* the anchor: the pattern is fixed to the
+      // window and the document slides over it.
+      .originOffsetPx = {0.0f, 0.0f},
+      .padding = {0.0f, 0.0f},
   };
   device_->queue().writeBuffer(uniformBuffer_.get(), 0, &uniforms, sizeof(uniforms));
 

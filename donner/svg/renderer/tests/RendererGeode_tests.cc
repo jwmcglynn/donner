@@ -364,6 +364,155 @@ TEST_F(RendererGeodeTest, EmptyFrameAfterOpaqueFrameClearsReusedTarget) {
       << "A same-size Geode frame with no draws must clear pixels from the previous frame.";
 }
 
+// ---------------------------------------------------------------------------
+// Transparency-checkerboard underlay (`drawCheckerboardUnderlay`)
+//
+// The browser worker surface presents one already-composed full-canvas texture,
+// so unlike the desktop framebuffer path it cannot draw the checkerboard first.
+// These pin the destination-over pass that puts it underneath instead: without
+// it, every see-through document pixel reaches the browser compositor as alpha
+// zero and the page's solid editor background shows where the desktop editor
+// shows checkerboard.
+// ---------------------------------------------------------------------------
+
+/// Light-cell channel value, as an 8-bit sRGB level.
+constexpr int kCheckerLight =
+    static_cast<int>(kTransparencyCheckerboardLightColor[0] * 255.0f + 0.5f);
+/// Dark-cell channel value, as an 8-bit sRGB level.
+constexpr int kCheckerDark = static_cast<int>(kTransparencyCheckerboardDarkColor[0] * 255.0f + 0.5f);
+/// Cell size in logical pixels, as an integer pixel step for sampling.
+constexpr int kCheckerCell = static_cast<int>(kTransparencyCheckerboardCellLogicalPx);
+
+TEST_F(RendererGeodeTest, CheckerboardUnderlayFillsTransparentPixelsWithAlternatingCells) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  renderer.endFrame();
+
+  ASSERT_TRUE(renderer.drawCheckerboardUnderlay(CheckerboardUnderlayParams{}));
+
+  const RendererBitmap snapshot = renderer.takeSnapshot();
+  ASSERT_FALSE(snapshot.empty());
+  // Two horizontally adjacent cells: (0,0) is light, (1,0) is dark.
+  EXPECT_THAT(pixelAt(snapshot, kCheckerCell / 2, kCheckerCell / 2),
+              RgbaEq(kCheckerLight, kCheckerLight, kCheckerLight, 255))
+      << "Cell (0,0) of a fully transparent frame must read as the light checker color";
+  EXPECT_THAT(pixelAt(snapshot, kCheckerCell + kCheckerCell / 2, kCheckerCell / 2),
+              RgbaEq(kCheckerDark, kCheckerDark, kCheckerDark, 255))
+      << "The horizontally adjacent cell must read as the dark checker color";
+  // And vertically, so a solid fill of either color cannot pass.
+  EXPECT_THAT(pixelAt(snapshot, kCheckerCell / 2, kCheckerCell + kCheckerCell / 2),
+              RgbaEq(kCheckerDark, kCheckerDark, kCheckerDark, 255))
+      << "The vertically adjacent cell must read as the dark checker color";
+}
+
+TEST_F(RendererGeodeTest, CheckerboardUnderlayLeavesOpaqueContentUntouched) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d({32, 32}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.endFrame();
+
+  ASSERT_TRUE(renderer.drawCheckerboardUnderlay(CheckerboardUnderlayParams{}));
+
+  const RendererBitmap snapshot = renderer.takeSnapshot();
+  ASSERT_FALSE(snapshot.empty());
+  EXPECT_THAT(pixelAt(snapshot, 48, 48), RgbaEq(255, 0, 0, 255))
+      << "Destination-over must not touch fully opaque document pixels";
+  EXPECT_THAT(pixelAt(snapshot, kCheckerCell / 2, kCheckerCell / 2),
+              RgbaEq(kCheckerLight, kCheckerLight, kCheckerLight, 255))
+      << "Transparent pixels beside the document content must become checkerboard";
+}
+
+TEST_F(RendererGeodeTest, CheckerboardUnderlayBlendsUnderPartialAlpha) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 128)));
+  renderer.drawRect(Box2d({32, 32}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.endFrame();
+
+  ASSERT_TRUE(renderer.drawCheckerboardUnderlay(CheckerboardUnderlayParams{}));
+
+  const RendererBitmap snapshot = renderer.takeSnapshot();
+  ASSERT_FALSE(snapshot.empty());
+  // (48,48) is cell (3,3), a light cell. Premultiplied red over it:
+  // r = 128 + 60 * (1 - 128/255) ~= 158, g = b = 60 * (1 - 128/255) ~= 30.
+  constexpr int kCoverage = 128;
+  const double transmitted = 1.0 - static_cast<double>(kCoverage) / 255.0;
+  const int expectedRed = static_cast<int>(kCoverage + kCheckerLight * transmitted + 0.5);
+  const int expectedGreenBlue = static_cast<int>(kCheckerLight * transmitted + 0.5);
+  EXPECT_THAT(pixelAt(snapshot, 48, 48),
+              Rgba(Near(expectedRed, 2), Near(expectedGreenBlue, 2), Near(expectedGreenBlue, 2),
+                   Near(255, 1)))
+      << "Half-covered document pixels must show the checkerboard through their remaining alpha";
+}
+
+TEST_F(RendererGeodeTest, CheckerboardUnderlayOriginOffsetShiftsTheAnchor) {
+  const auto sampleFirstTwoCells = [&](Vector2d originOffsetPx) {
+    RendererGeode renderer = createRenderer();
+    beginFrame(renderer);
+    renderer.endFrame();
+    CheckerboardUnderlayParams params;
+    params.originOffsetPx = originOffsetPx;
+    EXPECT_TRUE(renderer.drawCheckerboardUnderlay(params));
+    const RendererBitmap snapshot = renderer.takeSnapshot();
+    EXPECT_FALSE(snapshot.empty());
+    return std::pair(pixelAt(snapshot, kCheckerCell / 2, kCheckerCell / 2),
+                     pixelAt(snapshot, kCheckerCell + kCheckerCell / 2, kCheckerCell / 2));
+  };
+
+  // The worker surface pans with the document, so the pattern is anchored by
+  // the surface's on-screen position rather than by the texture origin. One
+  // cell of positive offset must invert the two leading cells...
+  const auto shifted = sampleFirstTwoCells(Vector2d(kCheckerCell, 0.0));
+  EXPECT_THAT(shifted.first, RgbaEq(kCheckerDark, kCheckerDark, kCheckerDark, 255));
+  EXPECT_THAT(shifted.second, RgbaEq(kCheckerLight, kCheckerLight, kCheckerLight, 255));
+
+  // ...and so must one cell of negative offset, which is the case that produces
+  // negative cell indices. Sign-preserving `%` would leave both cells dark.
+  const auto shiftedNegative = sampleFirstTwoCells(Vector2d(-kCheckerCell, 0.0));
+  EXPECT_THAT(shiftedNegative.first, RgbaEq(kCheckerDark, kCheckerDark, kCheckerDark, 255));
+  EXPECT_THAT(shiftedNegative.second, RgbaEq(kCheckerLight, kCheckerLight, kCheckerLight, 255));
+}
+
+TEST_F(RendererGeodeTest, CheckerboardUnderlayCellsAreLogicalPixelsNotDevicePixels) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  renderer.endFrame();
+
+  CheckerboardUnderlayParams params;
+  params.devicePixelRatio = 2.0;
+  ASSERT_TRUE(renderer.drawCheckerboardUnderlay(params));
+
+  const RendererBitmap snapshot = renderer.takeSnapshot();
+  ASSERT_FALSE(snapshot.empty());
+  // At 2x the first cell spans 32 device pixels, so the sample that was dark at
+  // 1x is still inside cell (0,0).
+  EXPECT_THAT(pixelAt(snapshot, kCheckerCell + kCheckerCell / 2, kCheckerCell / 2),
+              RgbaEq(kCheckerLight, kCheckerLight, kCheckerLight, 255))
+      << "Cells are sized in logical pixels, so a 2x ratio doubles their device-pixel extent";
+  EXPECT_THAT(pixelAt(snapshot, 2 * kCheckerCell + kCheckerCell / 2, kCheckerCell / 2),
+              RgbaEq(kCheckerDark, kCheckerDark, kCheckerDark, 255));
+}
+
+TEST_F(RendererGeodeTest, CheckerboardUnderlayRejectsDegenerateParameters) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  renderer.endFrame();
+
+  CheckerboardUnderlayParams zeroRatio;
+  zeroRatio.devicePixelRatio = 0.0;
+  EXPECT_FALSE(renderer.drawCheckerboardUnderlay(zeroRatio));
+
+  CheckerboardUnderlayParams zeroCell;
+  zeroCell.cellSizeLogicalPx = 0.0;
+  EXPECT_FALSE(renderer.drawCheckerboardUnderlay(zeroCell));
+
+  const RendererBitmap snapshot = renderer.takeSnapshot();
+  ASSERT_FALSE(snapshot.empty());
+  EXPECT_THAT(pixelAt(snapshot, kCheckerCell / 2, kCheckerCell / 2), IsTransparent())
+      << "A rejected underlay must leave the target untouched";
+}
+
 /// Width/height should reflect the viewport's device-pixel size after
 /// `beginFrame`.
 TEST_F(RendererGeodeTest, WidthHeightReflectViewport) {

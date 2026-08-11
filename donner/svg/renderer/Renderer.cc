@@ -670,6 +670,10 @@ const RendererTextureSnapshot* Renderer::borrowTextureSnapshot() {
   return impl_->borrowTextureSnapshot();
 }
 
+bool Renderer::drawCheckerboardUnderlay(const CheckerboardUnderlayParams& params) {
+  return impl_->drawCheckerboardUnderlay(params);
+}
+
 bool Renderer::requiresTextureSnapshotPresentation() const {
   return impl_->requiresTextureSnapshotPresentation();
 }

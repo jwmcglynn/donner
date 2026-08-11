@@ -332,6 +332,10 @@ public:
   [[nodiscard]] const RendererTextureSnapshot* borrowTextureSnapshot()
       UTILS_LIFETIME_BOUND override;
 
+  /// Fills the completed frame target's see-through pixels with the
+  /// transparency checkerboard, underneath the content already in it.
+  bool drawCheckerboardUnderlay(const CheckerboardUnderlayParams& params) override;
+
   /// Returns true when this backend requires direct texture presentation.
   [[nodiscard]] bool requiresTextureSnapshotPresentation() const override;
 
