@@ -49,10 +49,14 @@ namespace donner::editor::whole_app_worker {
  * page. Probes known to be worker-local in this build: `__donnerWorkerStats`,
  * `__donnerSampleThumbnailStats`, `__donnerInteractionStats`,
  * `__donnerLayerThumbnailStats`, `__donnerPresentationResourceStats`,
- * `__donnerActiveSampleStats`, `__donnerBrowserCursorStats`, and the
- * `data-active-sample-id` canvas attribute. Query-param features
- * (`?wgpuReadbackStats`, `?workerSurfaceDiagnostic`) read an empty search
- * string and stay off. CSS cursor changes are dropped.
+ * `__donnerActiveSampleStats`, and the `data-active-sample-id` canvas
+ * attribute. Query-param features (`?wgpuReadbackStats`,
+ * `?workerSurfaceDiagnostic`) read an empty search string and stay off.
+ *
+ * CSS cursors are NOT in that set: a cursor is state the user sees, not a
+ * probe, so RotateCursorSet keeps its registry and its writes on the browser
+ * main thread rather than routing them through the stand-in below. Its
+ * `__donnerBrowserCursorStats` therefore reaches the page as well.
  *
  * Must run before any other editor code on the app thread. Cheap and
  * thread-local; makes no cross-thread call.

@@ -45,10 +45,39 @@ constexpr int kPenCursorHotspotYPx = 4;
 constexpr std::string_view kRotationPlaceholder = "rotate(0,16,16)";
 
 #if defined(__EMSCRIPTEN__)
+// A CSS cursor is browser main-thread DOM state. In the whole-app-worker build
+// `main()` runs on a pthread (`PROXY_TO_PTHREAD`) whose JS context has no
+// `document`, and `Module['canvas']` there is the transferred `OffscreenCanvas`
+// wearing the inert `style` stand-in installed by WholeAppWorkerBridge, so a
+// cursor write issued from the app thread is stored and dropped. The registry
+// and every write below therefore run on the browser main thread; on a build
+// where the app already runs there these macros execute inline.
+//
+// The bodies bind their arguments to named locals up front. That keeps the
+// JavaScript readable, and it keeps the registration and application key
+// spelled identically. Object and array literals are built field by field or
+// wrapped in parentheses: the preprocessor does not treat `{}` or `[]` as
+// grouping, so a literal spelled out inline would split the macro argument list.
+//
 // clang-format off: C++ formatting corrupts JavaScript operators and object literals.
-EM_JS(bool, RegisterBrowserCursor,
-      (int cursorId, int cornerIndex, const char* svgSource, int svgLength, int hotspotX,
-       int hotspotY, const char* fallbackSource, int fallbackLength), {
+
+/// Build the CSS cursor value for one variant and memoize it on the main thread.
+///
+/// Synchronous because the body reads @p svgSource and @p fallbackSource
+/// straight out of linear memory; this runs once per variant from initialize().
+bool RegisterBrowserCursor(int cursorId, int cornerIndex, const char* svgSource, int svgLength,
+                           int hotspotX, int hotspotY, const char* fallbackSource,
+                           int fallbackLength) {
+  return MAIN_THREAD_EM_ASM_INT({
+  const cursorId = $0;
+  const cornerIndex = $1;
+  const svgSource = $2;
+  const svgLength = $3;
+  const hotspotX = $4;
+  const hotspotY = $5;
+  const fallbackSource = $6;
+  const fallbackLength = $7;
+
   const bytes = HEAPU8.subarray(svgSource, svgSource + svgLength);
   let binary = "";
   const chunkSize = 0x8000;
@@ -65,55 +94,66 @@ EM_JS(bool, RegisterBrowserCursor,
 
   let registry = Module["__donnerBrowserCursorRegistry"];
   if (!registry) {
-    registry = {
-      entries: new Map(),
-      active: false,
-      activeKey: null,
-      previousInlineCursor: "",
-      previousInlineCursorPriority: "",
-    };
+    registry = {};
+    registry.entries = new Map();
+    registry.active = false;
+    registry.activeKey = null;
+    registry.previousInlineCursor = "";
+    registry.previousInlineCursorPriority = "";
     Module["__donnerBrowserCursorRegistry"] = registry;
   }
   const key = cursorId + ":" + cornerIndex;
-  registry.entries.set(key, {
-    cssValue: cssValue,
-    svgSupported: svgSupported,
-    hotspotX: hotspotX,
-    hotspotY: hotspotY,
-    fallback: fallback,
-  });
+  const entry = {};
+  entry.cssValue = cssValue;
+  entry.svgSupported = svgSupported;
+  entry.hotspotX = hotspotX;
+  entry.hotspotY = hotspotY;
+  entry.fallback = fallback;
+  registry.entries.set(key, entry);
 
   let svgSupportedCount = 0;
-  registry.entries.forEach(function(entry) {
-    if (entry.svgSupported) {
+  registry.entries.forEach(function(each) {
+    if (each.svgSupported) {
       svgSupportedCount += 1;
     }
   });
-  const diagnostics = globalThis["__donnerBrowserCursorStats"] || {
-    applied: 0,
-    applyRequests: 0,
-    domMutations: 0,
-    registered: 0,
-    redundantApplySkips: 0,
-    svgSupported: 0,
-  };
+  let diagnostics = globalThis["__donnerBrowserCursorStats"];
+  if (!diagnostics) {
+    diagnostics = {};
+    diagnostics.applied = 0;
+    diagnostics.applyRequests = 0;
+    diagnostics.domMutations = 0;
+    diagnostics.registered = 0;
+    diagnostics.redundantApplySkips = 0;
+    diagnostics.svgSupported = 0;
+    globalThis["__donnerBrowserCursorStats"] = diagnostics;
+  }
   diagnostics.registered = registry.entries.size;
   diagnostics.svgSupported = svgSupportedCount;
-  globalThis["__donnerBrowserCursorStats"] = diagnostics;
-  return true;
-});
+  return 1;
+  }, cursorId, cornerIndex, svgSource, svgLength, hotspotX, hotspotY, fallbackSource, fallbackLength) != 0;
+}
 
-EM_JS(bool, ApplyBrowserCursor, (int cursorId, int cornerIndex), {
+/// Write a registered variant onto the page canvas.
+///
+/// Posted rather than awaited: the hover path re-asserts the same cursor every
+/// frame, and a synchronous round trip per frame is exactly the cost this build
+/// avoids. The same-key fast path stays inside the body so a repeat request
+/// still costs no DOM mutation.
+void ApplyBrowserCursor(int cursorId, int cornerIndex) {
+  MAIN_THREAD_ASYNC_EM_ASM({
+  const cursorId = $0;
+  const cornerIndex = $1;
   const registry = Module["__donnerBrowserCursorRegistry"];
-  const canvas = Module["canvas"];
+  const canvas = document.getElementById("canvas");
   if (!registry || !canvas) {
-    return false;
+    return;
   }
 
   const key = cursorId + ":" + cornerIndex;
   const entry = registry.entries.get(key);
   if (!entry) {
-    return false;
+    return;
   }
   const diagnostics = globalThis["__donnerBrowserCursorStats"];
   if (diagnostics) {
@@ -123,7 +163,7 @@ EM_JS(bool, ApplyBrowserCursor, (int cursorId, int cornerIndex), {
     if (diagnostics) {
       diagnostics.redundantApplySkips += 1;
     }
-    return true;
+    return;
   }
   if (!registry.active) {
     registry.previousInlineCursor = canvas.style.getPropertyValue("cursor");
@@ -136,16 +176,17 @@ EM_JS(bool, ApplyBrowserCursor, (int cursorId, int cornerIndex), {
     diagnostics.applied += 1;
     diagnostics.domMutations += 1;
     diagnostics.lastKey = key;
-    diagnostics.lastHotspot = [entry.hotspotX, entry.hotspotY];
+    diagnostics.lastHotspot = ([entry.hotspotX, entry.hotspotY]);
     diagnostics.lastFallback = entry.fallback;
     diagnostics.lastSvgSupported = entry.svgSupported;
   }
-  return canvas.style.getPropertyValue("cursor") !== "";
-});
+  }, cursorId, cornerIndex);
+}
 
-EM_JS(void, ClearBrowserCursor, (), {
+void ClearBrowserCursor() {
+  MAIN_THREAD_ASYNC_EM_ASM({
   const registry = Module["__donnerBrowserCursorRegistry"];
-  const canvas = Module["canvas"];
+  const canvas = document.getElementById("canvas");
   if (!registry || !registry.active || !canvas) {
     return;
   }
@@ -160,15 +201,18 @@ EM_JS(void, ClearBrowserCursor, (), {
   registry.activeKey = null;
   registry.previousInlineCursor = "";
   registry.previousInlineCursorPriority = "";
-});
+  });
+}
 
-EM_JS(void, DestroyBrowserCursorRegistry, (), {
+/// Synchronous so the page is back on its own cursor before teardown continues.
+void DestroyBrowserCursorRegistry() {
+  MAIN_THREAD_EM_ASM({
   const registry = Module["__donnerBrowserCursorRegistry"];
   if (!registry) {
     return;
   }
 
-  const canvas = Module["canvas"];
+  const canvas = document.getElementById("canvas");
   if (registry.active && canvas) {
     if (registry.previousInlineCursor) {
       canvas.style.setProperty(
@@ -179,7 +223,8 @@ EM_JS(void, DestroyBrowserCursorRegistry, (), {
   }
   delete Module["__donnerBrowserCursorRegistry"];
   delete globalThis["__donnerBrowserCursorStats"];
-});
+  });
+}
 // clang-format on
 #endif
 
@@ -346,7 +391,12 @@ bool RegisterBrowserCursorVariant(EditorCursor cursor, SelectionTransformCorner 
 }
 
 bool ApplyBrowserCursorVariant(EditorCursor cursor, SelectionTransformCorner corner) {
-  return ApplyBrowserCursor(static_cast<int>(cursor), static_cast<int>(CornerIndex(corner)));
+  ApplyBrowserCursor(static_cast<int>(cursor), static_cast<int>(CornerIndex(corner)));
+  // The write is posted, so there is no style value to read back. Reporting
+  // success on the strength of registration is equivalent: initialize() fails
+  // the whole set unless every variant registered, and each caller has already
+  // checked valid_, so the variant this asks for is always in the registry.
+  return true;
 }
 #endif
 

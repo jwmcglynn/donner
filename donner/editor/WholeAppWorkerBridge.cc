@@ -116,9 +116,11 @@ EM_JS(void, InstallWorkerGlobalShimImpl, (), {
   const emptyRect = function() {
     return {x : 0, y : 0, left : 0, top : 0, right : 0, bottom : 0, width : 0, height : 0};
   };
-  // Enough of CSSStyleDeclaration for the editor's cursor and layout writers.
-  // Values are stored and dropped: CSS on the page is main-thread state this
-  // build does not forward, so cursor changes are a known no-op (see header).
+  // Enough of CSSStyleDeclaration for the editor's layout writers. Values are
+  // stored and dropped: CSS on the page is main-thread state, and a write from
+  // this thread cannot reach it. A writer whose effect the user sees has to
+  // target the main thread directly instead, the way the editor's cursors do
+  // (see header).
   const makeStyle = function() {
     const properties = {};
     const priorities = {};

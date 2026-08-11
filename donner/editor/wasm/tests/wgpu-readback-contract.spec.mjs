@@ -219,10 +219,21 @@ test("renderer thread startup waits for cursor setup and wake wiring", () => {
     2,
     "registration and application must use the same exact cursor key",
   );
+  // The cursor is CSS on the page, which only the browser main thread can
+  // write, so the application hook is a main-thread-proxied `EM_ASM` rather than
+  // a plain `EM_JS` that would run in whichever thread happened to call it. On
+  // the whole-app-worker build that thread is the app pthread, where the write
+  // lands on an inert stand-in and never reaches the page.
   const browserCursorApply = rotateCursorSource.match(
-    /EM_JS\(bool, ApplyBrowserCursor,[\s\S]*?\n\}\);/,
+    /void ApplyBrowserCursor\(int cursorId, int cornerIndex\) \{[\s\S]*?\n\}/,
   );
   assert.ok(browserCursorApply, "expected a browser cursor application hook");
+  assert.match(browserCursorApply[0], /MAIN_THREAD_ASYNC_EM_ASM/);
+  assert.match(
+    browserCursorApply[0],
+    /document\.getElementById\("canvas"\)/,
+    "the cursor must be written to the page canvas, not to the worker's stand-in",
+  );
   assert.match(browserCursorApply[0], /registry\.active && registry\.activeKey === key/);
   assert.ok(
     browserCursorApply[0].indexOf("registry.activeKey === key")
