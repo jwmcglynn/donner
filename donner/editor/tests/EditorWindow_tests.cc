@@ -1493,10 +1493,15 @@ TEST(EditorWindowTest, WgpuLayerThumbnailUploadHonorsPayloadUv) {
   const svg::RendererBitmap actual = window.endFrameAndReadPixels();
 
   ASSERT_FALSE(actual.empty());
-  const std::array<std::uint8_t, 4> center = PixelAt(actual, 37, 28);
+  // ImGui draw coordinates are logical; the readback is in device pixels. On a
+  // 2x host this window reads back 192x192, so sampling raw framebuffer
+  // coordinates lands above the drawn quad's top edge, on the clear color.
+  const Vector2d readbackFromLogical = ReadbackScale(actual, 96, 96);
+  const std::array<std::uint8_t, 4> center = PixelAtLogical(actual, readbackFromLogical, 37, 28);
   EXPECT_THAT(center, Rgba(testing::Le(8), testing::Ge(245), testing::Le(8), testing::Eq(255)))
       << "The middle band should stay green; sampling the full power-of-two texture instead of "
-         "the payload UV shifts the blue edge padding into the center.";
+         "the payload UV shifts the blue edge padding into the center. Readback was "
+      << actual.dimensions << " for a 96x96 logical window.";
 }
 
 TEST(EditorWindowTest, WgpuLayersPanelPresentsBackgroundStickerThumbnailLikeGolden) {
@@ -1550,9 +1555,15 @@ TEST(EditorWindowTest, WgpuLayersPanelPresentsBackgroundStickerThumbnailLikeGold
   GlTextureCache textures(window.geodeDevice());
   textures.initialize();
   GlTextureCache::ThumbnailTextureView actualUpload;
-  const LayersPanel::ThumbnailTextureProvider textureProvider =
-      [targetStableId = row->stableId, &textures, &goldenBitmap, &actualUpload](
-          std::uint64_t stableId, const svg::RendererBitmap&) -> LayersPanel::ThumbnailTexture {
+  // The panel routes each row through exactly one of the two providers
+  // depending on the thumbnail payload `refreshSnapshot` produced: Geode keeps
+  // thumbnails on the GPU and delivers a texture snapshot, every other backend
+  // delivers a CPU bitmap. Wire both, exactly like `EditorShell` does, and
+  // upload the approved golden either way so this test stays a pure ImGui/WGPU
+  // presentation check.
+  const auto uploadTargetRow =
+      [targetStableId = row->stableId, &textures, &goldenBitmap,
+       &actualUpload](std::uint64_t stableId) -> LayersPanel::ThumbnailTexture {
     if (stableId != targetStableId) {
       return LayersPanel::ThumbnailTexture{};
     }
@@ -1563,6 +1574,15 @@ TEST(EditorWindowTest, WgpuLayersPanelPresentsBackgroundStickerThumbnailLikeGold
         .uvBottomRight = actualUpload.uvBottomRight,
     };
   };
+  const LayersPanel::ThumbnailTextureProvider textureProvider =
+      [&uploadTargetRow](std::uint64_t stableId,
+                         const svg::RendererBitmap&) -> LayersPanel::ThumbnailTexture {
+    return uploadTargetRow(stableId);
+  };
+  const LayersPanel::ThumbnailTextureSnapshotProvider textureSnapshotProvider =
+      [&uploadTargetRow](std::uint64_t stableId,
+                         const std::shared_ptr<const svg::RendererTextureSnapshot>&)
+      -> LayersPanel::ThumbnailTexture { return uploadTargetRow(stableId); };
   const GlTextureCache::ThumbnailTextureView expectedUpload =
       textures.uploadThumbnail(/*key=*/0xbac65002u, *goldenBitmap);
   ASSERT_NE(expectedUpload.texture, 0);
@@ -1576,7 +1596,8 @@ TEST(EditorWindowTest, WgpuLayersPanelPresentsBackgroundStickerThumbnailLikeGold
   ImGui::Begin("##layers_panel_thumbnail_presentation", nullptr,
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                    ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar);
-  panel.render(&app, textureProvider);
+  panel.render(&app, textureProvider, /*iconTextureProvider=*/{},
+               /*minimumInteractionHeight=*/0.0f, textureSnapshotProvider);
   const std::optional<ImageDrawRect> actualRect =
       FindTextureDrawRect(*ImGui::GetWindowDrawList(), actualUpload.texture);
   ImGui::End();

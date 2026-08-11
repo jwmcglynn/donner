@@ -387,7 +387,7 @@
       "operations": [
         "draw"
       ],
-      "sha256": "1bcf24d230c568722318794d91695bb05c3d15f4bf1e429b14e9bed51e93cbaf",
+      "sha256": "3e3c802b81473606bc44ccded06402ca177183e1b8073c9bcbc5fb964dda7d71",
       "usesEditorWgpuDefine": true,
       "wgpuCTypes": [
         "WGPUTextureView"

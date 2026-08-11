@@ -4900,6 +4900,22 @@ TEST(AsyncRendererE2ETest, PresentationStaysNonTransparentAcrossDragTargetSwap) 
     return nonTransparent * 100u < pixelCount;
   };
 
+  // A tile carries its pixels in whichever form the backend presents: a CPU
+  // bitmap on TinySkia, a GPU texture snapshot on Geode. The presenter retains
+  // either form across metadata-only frames, so the model has to as well - and
+  // the texture form is read back once so the transparency check below stays a
+  // real pixel check on both backends.
+  const auto tilePayloadPixels =
+      [](const RenderResult::CompositedTile& tile) -> svg::RendererBitmap {
+    if (!tile.bitmap.empty()) {
+      return tile.bitmap;
+    }
+    if (tile.textureSnapshot != nullptr) {
+      return tile.textureSnapshot->takeSnapshot();
+    }
+    return svg::RendererBitmap{};
+  };
+
   std::unordered_map<std::string, svg::RendererBitmap> retainedTileBitmaps;
   auto checkResult = [&](std::string_view phase) {
     auto result = waitForResult();
@@ -4912,8 +4928,8 @@ TEST(AsyncRendererE2ETest, PresentationStaysNonTransparentAcrossDragTargetSwap) 
     ASSERT_TRUE(result->compositedPreview.has_value()) << phase << ": no presentation payload";
     bool currentPresentationHasContent = false;
     for (const RenderResult::CompositedTile& tile : result->compositedPreview->tiles) {
-      if (!tile.bitmap.empty()) {
-        retainedTileBitmaps[tile.id] = tile.bitmap;
+      if (svg::RendererBitmap payload = tilePayloadPixels(tile); !payload.empty()) {
+        retainedTileBitmaps[tile.id] = std::move(payload);
       }
       const auto retained = retainedTileBitmaps.find(tile.id);
       ASSERT_NE(retained, retainedTileBitmaps.end())
