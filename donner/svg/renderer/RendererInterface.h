@@ -581,6 +581,17 @@ public:
   /// back to CPU bitmap readback for normal frame handoff.
   [[nodiscard]] virtual bool requiresTextureSnapshotPresentation() const { return false; }
 
+  /// Returns true when this renderer instance can render element subtrees into directly
+  /// sampleable backend textures (see \ref Renderer::renderElementToTextureSnapshot).
+  ///
+  /// This asks a different question from \ref requiresTextureSnapshotPresentation, which is about
+  /// how *frames* cross the presentation handoff. A backend whose frame handoff has to go through
+  /// CPU bitmaps - because the producing and consuming threads own different devices - can still
+  /// hand same-thread callers a texture for a thumbnail drawn on the caller's own device. Callers
+  /// choosing between \ref Renderer::renderElementToTextureSnapshot and
+  /// \ref Renderer::renderElementToBitmap want this predicate, not that one.
+  [[nodiscard]] virtual bool supportsElementTextureSnapshots() const { return false; }
+
   /**
    * Fill the see-through parts of the completed frame target with the
    * transparency checkerboard, underneath the content already in it.

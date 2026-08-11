@@ -678,6 +678,10 @@ bool Renderer::requiresTextureSnapshotPresentation() const {
   return impl_->requiresTextureSnapshotPresentation();
 }
 
+bool Renderer::supportsElementTextureSnapshots() const {
+  return impl_->supportsElementTextureSnapshots();
+}
+
 std::unique_ptr<RendererInterface> Renderer::createOffscreenInstance() const {
   return impl_->createOffscreenInstance();
 }

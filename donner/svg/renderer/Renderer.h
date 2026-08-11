@@ -354,6 +354,10 @@ public:
   /// Returns true when this backend requires direct texture presentation.
   [[nodiscard]] bool requiresTextureSnapshotPresentation() const override;
 
+  /// Returns true when \ref renderElementToTextureSnapshot can produce a texture on this
+  /// backend, i.e. when thumbnail callers should prefer it over \ref renderElementToBitmap.
+  [[nodiscard]] bool supportsElementTextureSnapshots() const override;
+
   /// Creates an offscreen renderer of the active backend type.
   [[nodiscard]] std::unique_ptr<RendererInterface> createOffscreenInstance() const override;
 

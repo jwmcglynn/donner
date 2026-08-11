@@ -4592,6 +4592,12 @@ std::unique_ptr<RendererInterface> RendererGeode::createOffscreenInstance() cons
   return renderer;
 }
 
+bool RendererGeode::supportsElementTextureSnapshots() const {
+  // Same condition as createOffscreenInstance: element snapshots go through an offscreen instance
+  // on this renderer's device, and there is no snapshot to take without one.
+  return impl_->device != nullptr;
+}
+
 std::shared_ptr<const RendererTextureSnapshot> RendererGeode::takeTextureSnapshot() {
   impl_->borrowedTargetSnapshot.reset();
   if (!impl_->device || !impl_->ownedTarget || impl_->hostTarget || impl_->pixelWidth <= 0 ||

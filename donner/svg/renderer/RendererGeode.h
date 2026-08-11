@@ -383,6 +383,14 @@ public:
 #endif
   }
 
+  /// True whenever this renderer owns a device. An element thumbnail is drawn through an offscreen
+  /// instance that shares that same device, so the resulting texture is directly sampleable by
+  /// anything already drawing with it. That holds on the browser build too: the cross-thread
+  /// limitation above forces CPU bitmaps for the *frame* handoff between the raster thread's
+  /// device and the app thread's device, and says nothing about a thumbnail the caller renders on
+  /// its own thread and device.
+  [[nodiscard]] bool supportsElementTextureSnapshots() const override;
+
 private:
   struct Impl;
   std::unique_ptr<Impl> impl_;

@@ -375,7 +375,12 @@ void LayersPanel::refreshSnapshot(const EditorApp& app, svg::Renderer* renderer,
     CachedThumbnail& cacheEntry = thumbnailBitmapByStableId_[pending.stableId];
     cacheEntry.documentFrameVersion = thumbnailRefreshStats_.documentFrameVersion;
     cacheEntry.maxSizePx = thumbnailMaxSizePx;
-    if (renderer->requiresTextureSnapshotPresentation()) {
+    // Prefer a GPU texture whenever this renderer can make one. The question is whether *this*
+    // renderer can hand back a sampleable texture, not how the compositor's cross-thread frame
+    // handoff works: the caller renders these rows on its own thread and device, so asking
+    // `requiresTextureSnapshotPresentation()` here would drop the browser build onto a pointless
+    // GPU readback plus re-upload per row.
+    if (renderer->supportsElementTextureSnapshots()) {
       std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot =
           renderer->renderElementToTextureSnapshot(pending.element, thumbnailMaxSizePx);
       if (textureSnapshot != nullptr) {
