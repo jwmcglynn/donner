@@ -162,7 +162,7 @@
       ]
     },
     "donner/editor/WholeAppWorkerBridge.cc": {
-      "sha256": "3a41fe9f2c65dafd478fa0f2cc82af66f3efffaed24be5ad04d99b170b2989b4",
+      "sha256": "33f182d4caa983d0745f8873a1ed20c0f5680d409140bb6b5f9b41928533c616",
       "wgpuCFunctions": [
         "wgpuReadbackStats"
       ]

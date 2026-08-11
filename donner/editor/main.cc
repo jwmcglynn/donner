@@ -210,6 +210,13 @@ std::string ScopedImguiIniPath() {
 #endif
 
 void RunEditorFrame(donner::editor::gui::EditorWindow& window, donner::editor::EditorShell& shell) {
+#ifndef __EMSCRIPTEN__
+  // Desktop frames block here until input or the shell's idle timer. The
+  // browser build must NOT: its scheduler is the animation-frame tick that
+  // called this function, and a blocking wait inside that tick deadlocks the
+  // demand-driven loop the first time no DOM event is pending. The wake
+  // sources the wait would sleep on (worker completion, idle timers) are
+  // exactly the tick's trigger bits.
   {
     ZoneScopedN("waitEvents");
     if (const std::optional<float> wakeSeconds = shell.nextIdleWakeSeconds()) {
@@ -218,6 +225,7 @@ void RunEditorFrame(donner::editor::gui::EditorWindow& window, donner::editor::E
       window.waitEvents();
     }
   }
+#endif
   {
     ZoneScopedN("shell.prepareFrame");
     shell.prepareFrame();
