@@ -175,7 +175,6 @@ jobs:
               editor.wasm \
               enable-threads.js \
               index.html \
-              worker-surface-selector.js \
               | LC_ALL=C sort
           )
           actual_site_files=$(cd "${site_dir}" && find . -type f | sed 's|^./||' | LC_ALL=C sort)
@@ -183,7 +182,7 @@ jobs:
 
           for file in \
             donner_icon.svg editor-bootstrap.js editor.css editor.js \
-            enable-threads.js index.html worker-surface-selector.js; do
+            enable-threads.js index.html; do
             cp "${site_dir}/${file}" "${deploy_dir}/${file}"
           done
           gzip -n -9 -c "${site_dir}/editor.wasm" > "${deploy_dir}/editor.wasm.gz"

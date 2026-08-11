@@ -146,9 +146,28 @@ editor_wasm_config_probe = rule(
     fragments = ["cpp"],
 )
 
+def _setting_values(linkopts, name):
+    """Every value the link line supplies for one `-s<NAME>=` Emscripten setting.
+
+    Matched by setting name rather than by exact string so a re-tuned value can
+    never silently slip past the probe, and so a duplicated setting (two
+    `-sINITIAL_MEMORY` flags whose winner is a last-one-wins accident) shows up
+    as two entries instead of one.
+    """
+    prefix = "-s{}=".format(name)
+    return [opt[len(prefix):] for opt in linkopts if opt.startswith(prefix)]
+
+def _single_setting(linkopts, name):
+    values = _setting_values(linkopts, name)
+    if len(values) != 1:
+        return "<{} values>".format(len(values))
+    return values[0]
+
 def _editor_wasm_runtime_options_probe_impl(ctx):
     output = ctx.actions.declare_file(ctx.label.name + ".txt")
     values = ctx.attr.linkopts
+    initial_memory = _single_setting(values, "INITIAL_MEMORY")
+    maximum_memory = _single_setting(values, "MAXIMUM_MEMORY")
     lines = [
         "asyncify={}".format("-sASYNCIFY" in values),
         "closure={}".format("--closure=1" in values),
@@ -156,9 +175,19 @@ def _editor_wasm_runtime_options_probe_impl(ctx):
             "--closure-args=--compilation_level=SIMPLE_OPTIMIZATIONS" in values,
         ),
         "exports_ccall={}".format("-sEXPORTED_RUNTIME_METHODS=ccall" in values),
-        "initial_memory_64={}".format("-sINITIAL_MEMORY=64MB" in values),
-        "pthread_pool_size_one={}".format("-sPTHREAD_POOL_SIZE=1" in values),
-        "pthread_pool_size_two={}".format("-sPTHREAD_POOL_SIZE=2" in values),
+        # Design 0064 single-canvas whole-app contract.
+        "proxy_to_pthread={}".format("-sPROXY_TO_PTHREAD" in values),
+        "offscreencanvases_to_pthread={}".format(
+            _single_setting(values, "OFFSCREENCANVASES_TO_PTHREAD"),
+        ),
+        "offscreencanvas_support={}".format(_single_setting(values, "OFFSCREENCANVAS_SUPPORT")),
+        # Fixed linear memory: growth off, and initial == maximum.
+        "memory_growth={}".format(_single_setting(values, "ALLOW_MEMORY_GROWTH")),
+        "initial_memory={}".format(initial_memory),
+        "maximum_memory={}".format(maximum_memory),
+        "memory_is_fixed={}".format(initial_memory == maximum_memory),
+        # One slot for the app pthread, one for AsyncRenderer's raster thread.
+        "pthread_pool_size={}".format(_single_setting(values, "PTHREAD_POOL_SIZE")),
     ]
     ctx.actions.write(output, "\n".join(lines) + "\n")
     return [DefaultInfo(files = depset([output]))]

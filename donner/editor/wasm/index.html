@@ -10,9 +10,6 @@
     <title>Donner SVG Editor</title>
   </head>
   <body>
-    <canvas id="donner-worker-document-canvas" aria-hidden="true"></canvas>
-    <canvas id="donner-document-canvas" aria-hidden="true"></canvas>
-    <canvas id="donner-document-canvas-back" aria-hidden="true"></canvas>
     <canvas class="emscripten" id="canvas" tabindex="0"></canvas>
     <main id="loading-screen" role="status" aria-live="polite" aria-labelledby="loading-title">
       <section class="loading-card">
@@ -45,12 +42,11 @@
         <h1>WebAssembly runtime unavailable</h1>
         <p id="capability-error-detail"></p>
         <p>
-          This editor requires HTTPS, cross-origin isolation, WebAssembly threads, and either WebGPU
-          or WebGL2.
+          This editor requires HTTPS, cross-origin isolation, WebAssembly threads, OffscreenCanvas,
+          and WebGPU.
         </p>
       </div>
     </div>
-    <script src="worker-surface-selector.js"></script>
     <script src="editor-bootstrap.js"></script>
   </body>
 </html>

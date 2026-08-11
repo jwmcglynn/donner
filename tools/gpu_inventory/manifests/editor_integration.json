@@ -211,6 +211,12 @@
         "wgpuLifetimeTextureCreates"
       ]
     },
+    "donner/editor/WholeAppWorkerBridge.h": {
+      "sha256": "4a4d970e3bf2e70f9c0df5af7e721d8fb26d4bbde8f152fc497db014b4856b81",
+      "wgpuCFunctions": [
+        "wgpuReadbackStats"
+      ]
+    },
     "donner/editor/gui/EditorWgpuSurface.h": {
       "sha256": "be60420bf199f229dd65300b9c4a15c23f51a309fc9b5a32244a2a1699779906",
       "wgpuCppTokens": [

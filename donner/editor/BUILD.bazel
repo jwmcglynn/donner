@@ -31,29 +31,6 @@ config_setting(
     },
 )
 
-# The shipping browser architecture: document pixels live on a worker-owned
-# canvas that the browser composites under the UI canvas.
-config_setting(
-    name = "wasm_geode_worker_surface",
-    flag_values = {
-        "//donner/editor/wasm:enable_wasm": "true",
-        "//donner/editor/wasm:whole_app_worker": "false",
-        "//donner/svg/renderer:renderer_backend": "geode",
-    },
-)
-
-# Design 0064 phase 1 experiment: the whole app runs on one pthread that owns
-# the single transferred canvas, so the desktop framebuffer-underlay path owns
-# document pixels and there is no worker surface at all.
-config_setting(
-    name = "wasm_geode_whole_app_worker",
-    flag_values = {
-        "//donner/editor/wasm:enable_wasm": "true",
-        "//donner/editor/wasm:whole_app_worker": "true",
-        "//donner/svg/renderer:renderer_backend": "geode",
-    },
-)
-
 config_setting(
     name = "linux_tracy_enabled",
     constraint_values = ["@platforms//os:linux"],
@@ -75,22 +52,22 @@ exports_files(
     visibility = ["//donner/editor/wasm:__pkg__"],
 )
 
-# Header-free carrier for the Design 0064 phase 1 experiment define. `defines`
-# propagate to every dependent, so wiring this into the two roots of the editor
-# dependency graph that own browser seams (the window and the document
-# presenter) reaches the shell, the input bridge, and `main.cc` without
-# repeating the select. Resolves to an empty list on the default build, so the
-# default package's compile commands are unchanged.
+# Header-free carrier for the Design 0064 whole-app-in-worker define.
+# `defines` propagate to every dependent, so wiring this into the two roots of
+# the editor dependency graph that own browser seams (the window and the
+# document presenter) reaches the shell, the input bridge, and `main.cc`
+# without repeating the select. Resolves to an empty list off wasm+Geode, so
+# desktop compile commands are unchanged.
 cc_library(
     name = "whole_app_worker_config",
     defines = select({
-        ":wasm_geode_whole_app_worker": ["DONNER_EDITOR_WHOLE_APP_WORKER"],
+        ":wasm_geode_enabled": ["DONNER_EDITOR_WHOLE_APP_WORKER"],
         "//conditions:default": [],
     }),
 )
 
-# Main-thread bridges for the phase 1 experiment. Compiles to nothing unless
-# `whole_app_worker_config` turns the define on.
+# Main-thread bridges for the whole-app-in-worker build. Compiles to nothing
+# unless `whole_app_worker_config` turns the define on.
 donner_cc_library(
     name = "whole_app_worker_bridge",
     srcs = ["WholeAppWorkerBridge.cc"],
@@ -520,10 +497,6 @@ donner_cc_library(
     name = "async_renderer",
     srcs = ["AsyncRenderer.cc"],
     hdrs = ["AsyncRenderer.h"],
-    defines = select({
-        ":wasm_geode_worker_surface": ["DONNER_WASM_WORKER_SURFACE"],
-        "//conditions:default": [],
-    }),
     deps = [
         ":overlay_renderer",
         ":tracy_wrapper",

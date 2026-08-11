@@ -754,6 +754,7 @@ void PublishMemoryAttribution() {
     slot[3] = static_cast<double>(tagTotals.totalAllocations[index]);
   }
 
+  // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         const buffer = $0 >> 3;
@@ -788,7 +789,7 @@ void PublishMemoryAttribution() {
           'compositorLayerTextures', 'renderResultTiles', 'workerFrameSnapshot',
           'presentationTiles', 'presentationOverviewTiles', 'presentationRetired', 'layerThumbnails'
         ]);
-        window['__donnerMemoryCategoryMismatch'] = names.length != = categoryCount;
+        window['__donnerMemoryCategoryMismatch'] = names.length !== categoryCount;
         const categories = {};
         for (let index = 0; index < names.length; ++index) {
           const slot = categoryBase + index * fieldsPerCategory;
@@ -805,7 +806,7 @@ void PublishMemoryAttribution() {
           'workerRenderFrame', 'workerBuildPreview', 'workerFinalSnapshot', 'workerOther',
           'appPollResult', 'appUiFrame', 'appHostFrame', 'appInput'
         ]);
-        window['__donnerMemoryStageMismatch'] = stageNames.length != = stageCount;
+        window['__donnerMemoryStageMismatch'] = stageNames.length !== stageCount;
         const stages = {};
         for (let index = 0; index < stageNames.length; ++index) {
           const slot = stageBase + index * fieldsPerStage;
@@ -821,7 +822,7 @@ void PublishMemoryAttribution() {
         const sizeBuckets = {};
         for (let index = 0; index < bucketCount; ++index) {
           const slot = bucketBase + index * fieldsPerBucket;
-          if (heap[slot + 2] == = 0) {
+          if (heap[slot + 2] === 0) {
             continue;
           }
           sizeBuckets[index] = ({
@@ -845,7 +846,7 @@ void PublishMemoryAttribution() {
           'renderTileRaster', 'gpuReadbackStaging', 'compositorBitmap', 'presentationUpload',
           'imguiDrawLists'
         ]);
-        window['__donnerAllocTagMismatch'] = tagNames.length != = allocTagCount;
+        window['__donnerAllocTagMismatch'] = tagNames.length !== allocTagCount;
         const liveLarge = [];
         for (let index = 0; index < liveLargeCount; ++index) {
           const slot = liveLargeBase + index * fieldsPerLiveLarge;
@@ -857,7 +858,7 @@ void PublishMemoryAttribution() {
         const allocTags = {};
         for (let index = 0; index < allocTagCount; ++index) {
           const slot = allocTagBase + index * fieldsPerAllocTag;
-          if (heap[slot + 3] == = 0) {
+          if (heap[slot + 3] === 0) {
             continue;
           }
           allocTags[tagNames[index]] = ({
@@ -895,6 +896,7 @@ void PublishMemoryAttribution() {
         }
       },
       buffer);
+  // clang-format on
 }
 
 }  // namespace

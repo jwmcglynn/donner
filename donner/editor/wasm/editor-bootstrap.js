@@ -1,9 +1,24 @@
+// The editor's browser bootstrap (Design 0064, whole app in one worker).
+//
+// The page-side contract:
+//
+//   - There is exactly ONE canvas. Emscripten transfers `#canvas` to the app
+//     pthread as an OffscreenCanvas at startup (PROXY_TO_PTHREAD plus
+//     OFFSCREENCANVAS_SUPPORT), so the page never draws into it. There is no
+//     second document canvas, no CSS placement of rendered content, and no
+//     bitmap presentation queue: every presented pixel and every transform
+//     between document space and the screen is produced by Geode inside that
+//     one canvas's WebGPU frame. CSS here styles page scaffolding only (the
+//     loader and the fatal-error surface).
+//   - `main()` runs on a worker. Everything below runs on the browser main
+//     thread and must stay side-effect free with respect to the canvas backing
+//     store, because touching `canvas.width` after the transfer throws.
+//   - The `__donner*` probe surface stays on `window` so the browser suites and
+//     the perf lane keep reading the page. The app thread posts into it through
+//     `MAIN_THREAD_ASYNC_EM_ASM` / shared-memory mirrors (see
+//     `donner/editor/WholeAppWorkerBridge.h`).
+
 const canvas = document.getElementById("canvas");
-const documentCanvas = document.getElementById("donner-document-canvas");
-const documentCanvases = [
-  documentCanvas,
-  document.getElementById("donner-document-canvas-back"),
-];
 const loadingScreen = document.getElementById("loading-screen");
 const status = document.getElementById("status");
 const loadingProgress = document.getElementById("loading-progress");
@@ -12,133 +27,16 @@ const loadingDetail = document.getElementById("loading-detail");
 const capabilityError = document.getElementById("capability-error");
 const capabilityErrorDetail = document.getElementById("capability-error-detail");
 let editorRevealed = false;
-const documentBitmapContexts = [null, null];
+
 window.__donnerBootstrapStartedAtMs = performance.now();
-// Served-page contract: the browser tier ships a single Geode WebGPU package. Browser suites read
-// this global to assert which renderer the served page selected, so publish it before any async
-// work can observe the page.
 window.__donnerBackend = "geode";
-
-function ApplyWorkerDocumentSurfaceLayout(layout) {
-  const plan = typeof globalThis.CreateDonnerWorkerSurfaceLayoutPlan === "function"
-    ? globalThis.CreateDonnerWorkerSurfaceLayoutPlan(layout)
-    : documentCanvases.map((_, slot) => {
-      const visibleSlot = Math.max(
-        0,
-        Math.min(documentCanvases.length - 1, layout.surfaceSlot),
-      );
-      const accepted = Boolean(layout.visible) && layout.width > 0
-        && layout.height > 0
-        && slot === visibleSlot;
-      return { accepted, slot, zIndex: accepted ? 1 : 0 };
-    });
-  const acceptedSurface = plan.find((surfaceLayout) => surfaceLayout.accepted);
-  if (
-    acceptedSurface && window.__donnerWorkerSurfaceMode === "direct-surface"
-    && typeof window.__donnerObserveDirectSurfaceAcceptance === "function"
-  ) {
-    window.__donnerObserveDirectSurfaceAcceptance(layout.frameToken);
-  }
-  for (let slot = 0; slot < documentCanvases.length; ++slot) {
-    const surfaceCanvas = documentCanvases[slot];
-    if (!surfaceCanvas) {
-      continue;
-    }
-    const surfaceLayout = plan[slot];
-    surfaceCanvas.setAttribute(
-      "data-direct-surface-visible",
-      surfaceLayout.accepted ? "true" : "false",
-    );
-    surfaceCanvas.setAttribute(
-      "data-direct-surface-selection-chrome-baked",
-      surfaceLayout.accepted && layout.selectionChromeBaked ? "true" : "false",
-    );
-    surfaceCanvas.style.zIndex = String(surfaceLayout.zIndex);
-    if (!surfaceLayout.accepted) {
-      surfaceCanvas.style.visibility = "hidden";
-      continue;
-    }
-    const pixelLayout = typeof globalThis.CreateDonnerWorkerSurfacePixelLayout === "function"
-      ? globalThis.CreateDonnerWorkerSurfacePixelLayout(layout, window.devicePixelRatio, {
-        height: surfaceCanvas.height,
-        snapToDevicePixels: window.__donnerWorkerSurfaceMode === "bitmap-bridge",
-        width: surfaceCanvas.width,
-      })
-      : layout;
-    if (window.__donnerWorkerSurfaceMode === "bitmap-bridge") {
-      // WebKit promotes the canvas bitmap into a compositor layer independently from the
-      // element's CSS background. Repositioning the layout box can expose that background for
-      // one frame at a device-pixel-aligned edge. Keep the box stationary and translate the
-      // composited element instead, so the bitmap and its backdrop move in one atomic property.
-      surfaceCanvas.style.left = "0px";
-      surfaceCanvas.style.top = "0px";
-      surfaceCanvas.style.transform = `translate3d(${pixelLayout.left}px, ${pixelLayout.top}px, 0)`;
-    } else {
-      surfaceCanvas.style.left = `${pixelLayout.left}px`;
-      surfaceCanvas.style.top = `${pixelLayout.top}px`;
-      surfaceCanvas.style.transform = "";
-    }
-    surfaceCanvas.style.width = `${pixelLayout.width}px`;
-    surfaceCanvas.style.height = `${pixelLayout.height}px`;
-    surfaceCanvas.style.clipPath =
-      `inset(${pixelLayout.clipTop}px ${pixelLayout.clipRight}px ${pixelLayout.clipBottom}px ${pixelLayout.clipLeft}px)`;
-    surfaceCanvas.style.visibility = "visible";
-    surfaceCanvas.setAttribute("data-direct-surface-frame", String(pixelLayout.frameToken));
-    const accepted = window.__donnerAcceptedPresentation;
-    if (accepted?.kind !== "geode" || accepted.token !== pixelLayout.frameToken) {
-      window.__donnerAcceptedPresentation = {
-        kind: "geode",
-        selectionChromeBaked: Boolean(pixelLayout.selectionChromeBaked),
-        token: pixelLayout.frameToken,
-        presentedAtMs: performance.now(),
-      };
-    }
-    const diagnostic = window.__donnerWorkerSurfaceDiagnostic;
-    if (diagnostic?.frameToken === pixelLayout.frameToken && !(diagnostic.acceptedAtMs > 0)) {
-      diagnostic.acceptedAtMs = window.__donnerAcceptedPresentation.presentedAtMs;
-    }
-  }
-}
-
-function DrawWorkerDocumentBitmap(slot, bitmap, width, height, frameToken) {
-  const surfaceCanvas = documentCanvases[slot];
-  if (!surfaceCanvas || !bitmap) {
-    bitmap?.close?.();
-    return;
-  }
-  try {
-    if (surfaceCanvas.width !== width) {
-      surfaceCanvas.width = width;
-    }
-    if (surfaceCanvas.height !== height) {
-      surfaceCanvas.height = height;
-    }
-    if (!documentBitmapContexts[slot]) {
-      documentBitmapContexts[slot] = surfaceCanvas.getContext("bitmaprenderer");
-    }
-    if (documentBitmapContexts[slot]) {
-      documentBitmapContexts[slot].transferFromImageBitmap(bitmap);
-    } else {
-      const context2d = surfaceCanvas.getContext("2d");
-      context2d?.clearRect(0, 0, width, height);
-      context2d?.drawImage(bitmap, 0, 0);
-    }
-    surfaceCanvas.dataset.bitmapBridgeFrame = String(frameToken);
-  } finally {
-    bitmap.close?.();
-  }
-}
-
-const bitmapPresentationQueue = typeof globalThis.CreateDonnerBitmapPresentationQueue === "function"
-  ? globalThis.CreateDonnerBitmapPresentationQueue(
-    DrawWorkerDocumentBitmap,
-    ApplyWorkerDocumentSurfaceLayout,
-  )
-  : null;
-window.__donnerApplyWorkerDocumentSurfaceLayout = ApplyWorkerDocumentSurfaceLayout;
+window.__donnerWholeAppWorker = true;
+// The app thread has its own `performance` time origin. Publish the page's so a
+// worker-side timestamp can be expressed on the page clock without a round trip.
+window.__donnerPageTimeOriginMs = performance.timeOrigin;
 window.__donnerRequiresWorkerRuntime = false;
 window.__donnerWorkerRuntimeStats = {
-  ready: false,
+  ready: true,
   initializationMs: 0,
   maskPipelineMs: 0,
   initializationCount: 0,
@@ -182,14 +80,6 @@ function RevealEditorAfterFirstFrame() {
   if (editorRevealed || !window.__donnerFirstFramePresented) {
     return;
   }
-  if (
-    window.__donnerRequiresWorkerRuntime
-    && !window.__donnerWorkerRuntimeStats?.ready
-  ) {
-    SetLoadingPhase("Starting the renderer…", 98, "Preparing the WebGPU worker");
-    return;
-  }
-
   editorRevealed = true;
   window.__donnerEditorRevealedAtMs = performance.now();
   loadingScreen.classList.add("is-complete");
@@ -208,6 +98,22 @@ window.addEventListener(
   },
   { once: true },
 );
+
+// The app thread cannot dispatch a DOM event, so it flips this flag through the
+// shared-memory bridge and the page polls it until the first frame lands.
+window.__donnerNotifyFirstFramePresented = function() {
+  window.__donnerFirstFramePresented = true;
+  window.dispatchEvent(new Event("donner:first-frame-presented"));
+};
+
+// Event round-trip probe. The capture-phase listener runs before any Emscripten
+// proxying, so the delta the app thread computes against
+// `__donnerLastPointerDownEpochMs` is the full main-thread-to-worker hop.
+window.__donnerInputLatencyMsSamples = [];
+window.__donnerLastPointerDownEpochMs = 0;
+window.addEventListener("pointerdown", () => {
+  window.__donnerLastPointerDownEpochMs = performance.timeOrigin + performance.now();
+}, { capture: true, passive: true });
 
 function InstallTouchPointerBridge(targetCanvas) {
   if (!window.PointerEvent) {
@@ -276,7 +182,9 @@ function InstallTouchPointerBridge(targetCanvas) {
 // Do not fold the classifier's 1/ln(1.1) gain in here. That pre-multiplication
 // (K = 1049.2059) shipped briefly alongside the discriminator and gained Safari
 // pinch input twice, about 10.5x too fast in log space, with the discriminator's
-// per-event clamp flattening every gesture to a full 1.5x step.
+// per-event clamp flattening every gesture to a full 1.5x step. The Design 0064
+// phase 1 experiment bootstrap carried the regressed value; it does not survive
+// into the shipping bootstrap.
 const kPinchWheelDeltaPerLnScaleFallback = 100;
 
 function PinchWheelDeltaPerLnScale() {
@@ -322,12 +230,16 @@ function InstallTrackpadGestureBridge(targetCanvas) {
 InstallTouchPointerBridge(canvas);
 InstallTrackpadGestureBridge(canvas);
 
-window.__donnerCanStartWasm = typeof SharedArrayBuffer !== "undefined";
+window.__donnerCanStartWasm = typeof SharedArrayBuffer !== "undefined"
+  && typeof OffscreenCanvas !== "undefined"
+  && typeof canvas.transferControlToOffscreen === "function";
 if (!window.__donnerCanStartWasm) {
-  const reason = window.isSecureContext
-    ? "This page is secure, but cross-origin isolation is not active."
-    : "This page is not running in a secure context.";
-  ShowCapabilityError(`${reason} SharedArrayBuffer and Wasm threads are unavailable.`);
+  const reason = typeof SharedArrayBuffer === "undefined"
+    ? (window.isSecureContext
+      ? "This page is secure, but cross-origin isolation is not active."
+      : "This page is not running in a secure context.")
+    : "This browser cannot transfer a canvas to an OffscreenCanvas.";
+  ShowCapabilityError(`${reason} The whole-app-worker build cannot start.`);
 }
 
 var Module = {
@@ -361,100 +273,6 @@ var Module = {
       );
     }
   },
-  stageDonnerDocumentBitmap: function(token, slot, bitmap, width, height) {
-    if (!bitmapPresentationQueue) {
-      bitmap?.close?.();
-      return;
-    }
-    bitmapPresentationQueue.stage(token, slot, bitmap, width, height);
-  },
-  commitDonnerDocumentBitmap: function(token, slot) {
-    bitmapPresentationQueue?.commit(token, slot);
-  },
-  discardDonnerDocumentBitmap: function(token) {
-    bitmapPresentationQueue?.discard(token);
-  },
-  updateDonnerBitmapSurfaceLayout: function(layout) {
-    bitmapPresentationQueue?.updateLayout(layout);
-  },
-  reportDonnerWorkerTaskWakeFailure: function(
-    failureCount,
-    shuttingDown,
-    renderRequestDropped,
-    thumbnailDropped,
-    surfaceUnavailable,
-  ) {
-    const stats = {
-      failureCount,
-      shuttingDown: Boolean(shuttingDown),
-      renderRequestDropped: Boolean(renderRequestDropped),
-      thumbnailDropped: Boolean(thumbnailDropped),
-      surfaceUnavailable: Boolean(surfaceUnavailable),
-    };
-    window.__donnerWorkerTaskWakeFailureStats = stats;
-    const message = `Donner Wasm renderer pthread wake rejected (failure ${failureCount}): `
-      + "the target mailbox is closed or the proxy queue could not allocate; "
-      + `shuttingDown=${stats.shuttingDown}, `
-      + `renderRequestDropped=${stats.renderRequestDropped}, `
-      + `thumbnailDropped=${stats.thumbnailDropped}`;
-    if (stats.surfaceUnavailable) {
-      console.error(message);
-      window.__donnerReportWorkerSurfaceUnavailable();
-    } else {
-      console.warn(message);
-    }
-  },
-  reportDonnerWorkerRuntimeInitializationFailure: function() {
-    window.__donnerWorkerRuntimeStats = {
-      ...window.__donnerWorkerRuntimeStats,
-      ready: false,
-      failed: true,
-      failedAtMs: performance.now(),
-    };
-    window.__donnerReportWorkerSurfaceUnavailable();
-  },
-  publishDonnerWorkerRuntimeStats: function(
-    initializationMs,
-    maskPipelineMs,
-    initializationCount,
-    workerDeviceCreations,
-    headlessDeviceCreations,
-  ) {
-    window.__donnerHeadlessDeviceCreations = headlessDeviceCreations;
-    window.__donnerWorkerRuntimeStats = {
-      ready: true,
-      initializationMs,
-      maskPipelineMs,
-      initializationCount,
-      workerDeviceCreations,
-      readyAtMs: performance.now(),
-    };
-    RevealEditorAfterFirstFrame();
-  },
-  publishDonnerWorkerSurfaceDiagnostic: function(
-    frameToken,
-    samples,
-    coloredPixels,
-    nonBlackPixels,
-    maxChannel,
-    textStyleBackgroundPixels,
-    textStyleGlyphPixels,
-  ) {
-    const accepted = window.__donnerAcceptedPresentation;
-    window.__donnerWorkerSurfaceDiagnostic = {
-      frameToken,
-      samples,
-      coloredPixels,
-      nonBlackPixels,
-      maxChannel,
-      textStyleBackgroundPixels,
-      textStyleGlyphPixels,
-      acceptedAtMs: accepted?.kind === "geode" && accepted.token === frameToken
-        ? accepted.presentedAtMs
-        : 0,
-      publishedAtMs: performance.now(),
-    };
-  },
   onRuntimeInitialized: function() {
     window.__donnerRuntimeInitializedAtMs = performance.now();
     SetLoadingPhase("Opening your workspace…", 96, "Drawing the first editor frame");
@@ -469,18 +287,11 @@ var Module = {
     return prefix + path;
   },
   canvas: canvas,
-  contextAttributes: {
-    preserveDrawingBuffer: true,
-  },
 };
 
 canvas.addEventListener("contextmenu", function(event) {
   event.preventDefault();
 });
-canvas.addEventListener("webglcontextlost", function(event) {
-  alert("WebGL context lost. Reload the page.");
-  event.preventDefault();
-}, false);
 
 if (window.__donnerCanStartWasm) {
   SetLoadingPhase(
@@ -488,9 +299,6 @@ if (window.__donnerCanStartWasm) {
     12,
     "Compiling the editor on first visit; later loads use the browser cache",
   );
-  // Start the large Wasm transfer immediately. Emscripten cannot request it
-  // until editor.js has downloaded and executed; a matching fetch preload
-  // lets the browser overlap that glue work with Wasm download/compilation.
   const wasmPreload = document.createElement("link");
   wasmPreload.rel = "preload";
   wasmPreload.as = "fetch";
