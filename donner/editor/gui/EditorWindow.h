@@ -218,6 +218,12 @@ struct EditorWindowFrameTiming {
   double readbackMs = 0.0;
   /// End-frame time spent presenting or swapping the surface.
   double presentMs = 0.0;
+  /// Vertices ImGui emitted for this frame's draw data.
+  ///
+  /// The editor renders every vector path through Geode, so this must stay at
+  /// UI-widget scale. Document-complexity geometry reaching ImGui shows up here
+  /// as a jump of an order of magnitude or more.
+  int imguiVertexCount = 0;
 };
 
 /// Fonts loaded into this window's ImGui context for the editor shell.

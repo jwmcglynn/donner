@@ -1488,6 +1488,9 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     const auto imguiRenderStart = std::chrono::steady_clock::now();
     ImGui::Render();
     timing.imguiRenderMs = ElapsedMs(imguiRenderStart);
+    if (const ImDrawData* drawData = ImGui::GetDrawData(); drawData != nullptr) {
+      timing.imguiVertexCount = drawData->TotalVtxCount;
+    }
   }
   int displayW = 0;
   int displayH = 0;

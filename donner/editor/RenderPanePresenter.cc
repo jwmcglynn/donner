@@ -403,40 +403,6 @@ void RenderMemoryGraph(const FrameHistory& history) {
   DrawProfilerLegendItem(kMemoryOtherColor, "other", /*sameLine=*/true);
 }
 
-/// Draw-list transparency checkerboard, in the same two greys and cell size as
-/// the WGSL `FramebufferCheckerboardRenderer`.
-///
-/// This is not dead code behind the WGSL pass: it is the only checkerboard on
-/// builds without a WebGPU window target, and on WebGPU builds it still covers
-/// every frame that presents through the draw list instead of the framebuffer
-/// underlay - no directly presentable Geode tiles yet (document load), a tile
-/// set with a non-Geode backend, no framebuffer device, and content-only
-/// captures. Those frames have no framebuffer pass to route through, so they
-/// cannot be folded into the WGSL renderer.
-void DrawCheckerboard(ImDrawList* drawList, const ImVec2& topLeft, const ImVec2& bottomRight) {
-  constexpr float kCheckerSize = static_cast<float>(kRenderPaneCheckerboardSize);
-  const ImVec2 snappedTopLeft(std::floor(topLeft.x), std::floor(topLeft.y));
-  const ImVec2 snappedBottomRight(std::floor(bottomRight.x), std::floor(bottomRight.y));
-  if (snappedTopLeft.x >= snappedBottomRight.x || snappedTopLeft.y >= snappedBottomRight.y) {
-    return;
-  }
-
-  drawList->PushClipRect(snappedTopLeft, snappedBottomRight,
-                         /*intersect_with_current_clip_rect=*/true);
-  const float startY = std::floor(snappedTopLeft.y / kCheckerSize) * kCheckerSize;
-  const float startX = std::floor(snappedTopLeft.x / kCheckerSize) * kCheckerSize;
-  for (float y = startY; y < snappedBottomRight.y; y += kCheckerSize) {
-    const int row = static_cast<int>(std::floor(y / kCheckerSize));
-    for (float x = startX; x < snappedBottomRight.x; x += kCheckerSize) {
-      const int column = static_cast<int>(std::floor(x / kCheckerSize));
-      const ImU32 color =
-          ((row + column) % 2 == 0) ? IM_COL32(60, 60, 60, 255) : IM_COL32(40, 40, 40, 255);
-      drawList->AddRectFilled(ImVec2(x, y), ImVec2(x + kCheckerSize, y + kCheckerSize), color);
-    }
-  }
-  drawList->PopClipRect();
-}
-
 PresentedFrameTileGeometry PresentedGeometryFromTile(const GlTextureCache::TileView& tile) {
   return PresentedFrameTileGeometry{
       .canvasOffsetDoc = tile.canvasOffsetDoc,
@@ -646,8 +612,8 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
                             return ShouldPresentCompositedTile(tile, state.suppressedLayerEntity,
                                                                state.suppressDragTargetTiles);
                           });
-  // Document content remains tile-driven. Selection chrome is a transparent Donner-rendered
-  // texture composed later in this same draw list so menus and popups retain topmost ordering.
+  // Document content remains tile-driven. Selection chrome is drawn immediately onto the
+  // framebuffer between the tiles and ImGui, so it never appears in this draw list.
   const bool hasPresentedContent = hasVisibleTiles || hasVisibleOverviewTiles;
 
   const Box2d paneRect = Box2d::FromXYWH(state.viewport.paneOrigin.x, state.viewport.paneOrigin.y,
@@ -665,23 +631,16 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
                                               : state.viewport;
   const Box2d screenRect = documentViewport.imageScreenRect();
   const std::optional<Box2d> imageClipRect = PresentedImageClipRect(paneRect, screenRect);
-  const ImVec2 imageOrigin(static_cast<float>(screenRect.topLeft.x),
-                           static_cast<float>(screenRect.topLeft.y));
-  const ImVec2 imageBottomRight(static_cast<float>(screenRect.bottomRight.x),
-                                static_cast<float>(screenRect.bottomRight.y));
   ImDrawList* paneDrawList = ImGui::GetWindowDrawList();
   paneDrawList->PushClipRect(ToImVec2(paneRect.topLeft), ToImVec2(paneRect.bottomRight),
                              /*intersect_with_current_clip_rect=*/true);
-  if (!state.documentPresentedDirectly) {
-    DrawCheckerboard(paneDrawList, imageOrigin, imageBottomRight);
-  }
   if (!hasPresentedContent && !state.documentPresentedDirectly) {
     paneDrawList->PopClipRect();
     return;
   }
 
   const double pxPerDoc = documentViewport.pixelsPerDocUnit();
-  const Vector2d imageOriginScreen(imageOrigin.x, imageOrigin.y);
+  const Vector2d imageOriginScreen = screenRect.topLeft;
   const Transform2d screenFromCanvasTransform =
       Transform2d::Scale(pxPerDoc) * Transform2d::Translate(imageOriginScreen);
   const std::optional<PresentedDragBaseline> dragBaseline =
@@ -770,11 +729,6 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
       drawTile(tile);
     }
     paneDrawList->PopClipRect();
-  }
-  const GlTextureCache::OverlayTextureView overlayTexture = state.textures.overlayTexture();
-  if (overlayTexture.texture != 0) {
-    paneDrawList->AddImage(overlayTexture.texture, ToImVec2(overlayTexture.screenRect.topLeft),
-                           ToImVec2(overlayTexture.screenRect.bottomRight));
   }
   if (state.compositorTileOverlay && imageClipRect.has_value()) {
     paneDrawList->PushClipRect(ToImVec2(imageClipRect->topLeft),

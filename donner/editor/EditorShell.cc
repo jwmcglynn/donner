@@ -204,19 +204,12 @@ EM_JS(void, PublishPresentationResourceStats,
       (double totalTrackedBytes, double peakTrackedBytes, double pendingRetiredBytes,
        double agedRetiredBytes, double activeTileTextures, double overviewTileTextures,
        double pendingRetiredTextures, double agedRetiredTextures, double retiredFrameCount,
-       double lifetimeTextureCreates, double lifetimeBufferCreates), {
+       double lifetimeTextureCreates, double lifetimeBufferCreates),
+      {
         window['__donnerPresentationResourceStats'] = {
-          totalTrackedBytes,
-          peakTrackedBytes,
-          pendingRetiredBytes,
-          agedRetiredBytes,
-          activeTileTextures,
-          overviewTileTextures,
-          pendingRetiredTextures,
-          agedRetiredTextures,
-          retiredFrameCount,
-          lifetimeTextureCreates,
-          lifetimeBufferCreates,
+            totalTrackedBytes,  peakTrackedBytes,       pendingRetiredBytes,    agedRetiredBytes,
+            activeTileTextures, overviewTileTextures,   pendingRetiredTextures, agedRetiredTextures,
+            retiredFrameCount,  lifetimeTextureCreates, lifetimeBufferCreates,
         };
       });
 
@@ -342,7 +335,6 @@ std::uint64_t MegabytesRoundedUp(std::uint64_t bytes) {
 FrameMemorySample MemorySampleFromPresentationResources(
     const PresentationResourceStats& resources) {
   return FrameMemorySample{
-      .overlayBytes = resources.overlayBytes,
       .activeTileBytes = resources.activeTileBytes,
       .overviewTileBytes = resources.overviewTileBytes,
       .retiredBytes = resources.pendingRetiredBytes + resources.agedRetiredBytes,
@@ -356,7 +348,6 @@ FrameMemorySample MemorySampleFromPresentationResources(
 FrameMissResourceTelemetry FrameMissTelemetryFromPresentationResources(
     const PresentationResourceStats& resources) {
   return FrameMissResourceTelemetry{
-      .overlayBytes = resources.overlayBytes,
       .activeTileBytes = resources.activeTileBytes,
       .overviewTileBytes = resources.overviewTileBytes,
       .retiredBytes = resources.pendingRetiredBytes + resources.agedRetiredBytes,
@@ -1026,8 +1017,8 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     SetImGuiFontConfigName(boldFontConfig, kEditorUiBoldFontName);
     uiFontBold_ = io.Fonts->AddFontFromMemoryTTF(
         const_cast<unsigned char*>(embedded::kRobotoBoldTtf.data()),
-        static_cast<int>(embedded::kRobotoBoldTtf.size()),
-        static_cast<float>(15.0 * displayScale), &boldFontConfig, kEditorGlyphRanges);
+        static_cast<int>(embedded::kRobotoBoldTtf.size()), static_cast<float>(15.0 * displayScale),
+        &boldFontConfig, kEditorGlyphRanges);
   }
 
   codeFont_ = FindImGuiFontByConfigName(*io.Fonts, kEditorCodeFontName);
@@ -1046,8 +1037,7 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     std::ignore = io.Fonts->AddFontFromMemoryTTF(
         const_cast<unsigned char*>(embedded::kRobotoRegularTtf.data()),
         static_cast<int>(embedded::kRobotoRegularTtf.size()),
-        static_cast<float>(14.0 * displayScale), &codeSymbolFontConfig,
-        kEditorSymbolGlyphRanges);
+        static_cast<float>(14.0 * displayScale), &codeSymbolFontConfig, kEditorSymbolGlyphRanges);
   }
   if (!app_.loadFromString(*initialSource)) {
     // Keep the shell alive so the user can still edit/fix the file from the source pane.
@@ -1568,7 +1558,6 @@ void EditorShell::maybeLogResourceDiagnostics(const FrameCostBreakdown& frameCos
   std::cerr << "[DonnerResource] frame=" << resourceDiagnosticsFrame_
             << " tracked_mib=" << MegabytesRoundedUp(resources.totalTrackedBytes)
             << " peak_mib=" << MegabytesRoundedUp(resources.peakTrackedBytes)
-            << " overlay_mib=" << MegabytesRoundedUp(resources.overlayBytes)
             << " active_tile_mib=" << MegabytesRoundedUp(resources.activeTileBytes)
             << " overview_tile_mib=" << MegabytesRoundedUp(resources.overviewTileBytes)
             << " retired_mib="
@@ -1776,7 +1765,7 @@ void EditorShell::resetPresentationForLoadedDocument(std::string_view canonicalS
   treeviewPendingScroll_ = false;
   renderCoordinator_.resetForLoadedDocument(app_.document().documentGeneration());
   textures_.resetComposited();
-  textures_.resetOverlay();
+  installImmediateChromePlan(std::nullopt);
   renderCoordinator_.refreshSelectionBoundsCache(app_);
   cachedCanvasHasSelectableElements_ = false;
   cachedSelectionIsAllText_ = false;
@@ -3689,16 +3678,15 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   ImGui::SetNextItemAllowOverlap();
   ImGui::InvisibleButton("##render_canvas", contentRegion,
                          ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonMiddle);
-  const bool popupCapturingInput =
-      ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
+  const bool popupCapturingInput = ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
   const ImVec2 mousePosition = ImGui::GetMousePos();
   // The sample picker is a full-pane ImGui window. On the first event-driven frame after it closes,
   // ImGui's hovered-window cache still names that previous-frame window even though the matching
   // document surface is already visible. Use the authoritative pane geometry for canvas input and
   // explicitly exclude every real overlap instead of dropping that first click.
   const bool paneHovered = paneRect.contains(Vector2d(mousePosition.x, mousePosition.y));
-  const bool canvasHovered = paneHovered && !canvasChromeHovered && !showSamplePicker_ &&
-                             !popupCapturingInput;
+  const bool canvasHovered =
+      paneHovered && !canvasChromeHovered && !showSamplePicker_ && !popupCapturingInput;
 
   const bool spaceHeld = ImGui::IsKeyDown(ImGuiKey_Space);
   const bool middleDown = ImGui::IsMouseDown(ImGuiMouseButton_Middle);
@@ -3724,8 +3712,7 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
     }
   }
 
-  const bool modalCapturingInput =
-      showSamplePicker_ || canvasChromeHovered || popupCapturingInput;
+  const bool modalCapturingInput = showSamplePicker_ || canvasChromeHovered || popupCapturingInput;
   // Publish the canvas scroll-capture rect for the raw GLFW scroll callback:
   // wheel events inside the render pane are consumed by the canvas (pan/zoom)
   // and must not also reach ImGui window scrolling, or scrolling the canvas
@@ -3845,13 +3832,33 @@ void EditorShell::installFramebufferUnderlayPlan(
 #endif
 }
 
+void EditorShell::installImmediateChromePlan(
+    [[maybe_unused]] std::optional<ImmediateChromePlan> plan) {
+#ifdef DONNER_EDITOR_WGPU
+  if (!plan.has_value() || directOverlayRenderer_ == nullptr) {
+    window_.setWgpuDirectRenderCallback({});
+    return;
+  }
+  window_.setWgpuDirectRenderCallback(
+      [this, plan = std::move(*plan)](const gui::EditorWindowWgpuRenderTarget& target) {
+        if (directOverlayRenderer_ == nullptr) {
+          return;
+        }
+        lastImmediateChromeDrawMs_ = DrawImmediateChromeToFramebuffer(
+            *directOverlayRenderer_, target, plan.viewport, plan.paneClipRect, plan.snapshot);
+      });
+#else
+  // Without a WebGPU window target the editor presents no chrome; the
+  // ImGui-draw-list fallback carries document tiles only.
+#endif
+}
+
 void EditorShell::renderRenderPanePresentation(
     const ImVec2& contentRegion, const ImVec2& paneOriginImGui, const Box2d& paneRect,
     const Box2d& toolPaletteRect, const SelectionTransformHandleIntent& hoverTransformIntent,
     bool rotateCursorLocked, bool penToolActive, bool textToolActive) {
   if ((!showSamplePicker_ || samplePresentationPending_) &&
-      !renderCoordinator_.asyncRenderer().isBusy() && app_.hasDocument() &&
-      viewportInitialized_) {
+      !renderCoordinator_.asyncRenderer().isBusy() && app_.hasDocument() && viewportInitialized_) {
     requestRenderAtEndOfFrame_ = true;
   }
 
@@ -3880,7 +3887,7 @@ void EditorShell::renderRenderPanePresentation(
   lastPresentedPaneRect_ = paneRect;
   lastPresentedPaneRectValid_ = true;
   lastFullFramePresentedViewport_ = presentation.presentedViewport;
-  [[maybe_unused]] const bool workerSurfaceSelectionChromeBaked = presentation.selectionChromeBaked;
+  const bool workerSurfaceSelectionChromeBaked = presentation.selectionChromeBaked;
   // Everything drawn onto the document this frame - selection chrome, the
   // compositor tile overlay, the presented image clip - belongs in the same
   // transform the presented pixels landed in. That is the live viewport
@@ -3904,9 +3911,9 @@ void EditorShell::renderRenderPanePresentation(
   const Entity suppressedLayerEntity = renderCoordinator_.suppressedCompositedLayerEntity(app_);
   const bool suppressDragTargetTiles = renderCoordinator_.selectedElementIsDisplayNone(app_);
   const bool hasPresentableActiveDragTarget =
-      !workerDocumentSurfacePresented && HasPresentableDragTargetTile(
-                                              textures_, activeDragPreview, suppressedLayerEntity,
-                                              suppressDragTargetTiles);
+      !workerDocumentSurfacePresented &&
+      HasPresentableDragTargetTile(textures_, activeDragPreview, suppressedLayerEntity,
+                                   suppressDragTargetTiles);
   const auto representedDragPreview = OverlayRepresentedDragPreviewForPresentation(
       activeDragPreview, displayedDragPreview, hasPresentableActiveDragTarget);
   const auto representedGesturePreview = OverlayGesturePreviewForPresentation(
@@ -3945,9 +3952,12 @@ void EditorShell::renderRenderPanePresentation(
       penPreviewSuppressedEntity != entt::null ? penPreviewSuppressedEntity : suppressedLayerEntity;
   interactionController_.frameHistory().setLatestMemorySample(
       MemorySampleFromPresentationResources(textures_.presentationResourceStats()));
-  // Document tiles use the direct framebuffer path where possible. Selection chrome is prepared
-  // separately below as a transparent Donner-rendered texture in the render-pane draw order.
+  // Document tiles use the direct framebuffer path where possible. The
+  // framebuffer pass also owns the transparency checkerboard unconditionally:
+  // there is no draw-list checkerboard to fall back to, because every pixel the
+  // editor renders goes through Geode.
   std::optional<FramebufferUnderlayPlan> underlayPlan;
+  bool underlayPresentsTiles = false;
 #ifdef DONNER_EDITOR_WGPU
   const std::optional<Box2d> directDocumentClipRect =
       PresentedImageClipRect(paneRect, interactionController_.viewport().imageScreenRect());
@@ -3976,22 +3986,30 @@ void EditorShell::renderRenderPanePresentation(
   const bool drawOverviewTiles =
       ShouldPresentOverviewTiles(textures_.activeTilesViewportBounded(), textures_.overviewTiles());
   if (!workerDocumentSurfacePresented && !contentOnlyCaptureThisFrame_ &&
-      directDocumentRenderer_ != nullptr && directDocumentClipRect.has_value() &&
-      ((drawOverviewTiles && hasDirectlyPresentableTile(textures_.overviewTiles())) ||
-       hasDirectlyPresentableTile(textures_.tiles())) &&
-      (!drawOverviewTiles || canPresentTileSetDirectly(textures_.overviewTiles())) &&
-      canPresentTileSetDirectly(textures_.tiles())) {
+      directDocumentRenderer_ != nullptr && directDocumentClipRect.has_value()) {
+    // Tiles ride the framebuffer pass only when every one of them is a Geode
+    // texture. The remaining case is the browser bitmap bridge, whose CPU tiles
+    // are still blitted as images by the render pane - an image blit, never
+    // path geometry.
+    underlayPresentsTiles =
+        ((drawOverviewTiles && hasDirectlyPresentableTile(textures_.overviewTiles())) ||
+         hasDirectlyPresentableTile(textures_.tiles())) &&
+        (!drawOverviewTiles || canPresentTileSetDirectly(textures_.overviewTiles())) &&
+        canPresentTileSetDirectly(textures_.tiles());
     std::vector<GlTextureCache::TileView> directOverviewTiles;
-    if (drawOverviewTiles) {
-      directOverviewTiles.assign(textures_.overviewTiles().begin(),
-                                 textures_.overviewTiles().end());
+    std::vector<GlTextureCache::TileView> directTiles;
+    if (underlayPresentsTiles) {
+      if (drawOverviewTiles) {
+        directOverviewTiles.assign(textures_.overviewTiles().begin(),
+                                   textures_.overviewTiles().end());
+      }
+      directTiles.assign(textures_.tiles().begin(), textures_.tiles().end());
     }
     underlayPlan = FramebufferUnderlayPlan{
-        .viewport = interactionController_.viewport(),
+        .viewport = presentedDocumentViewport,
         .documentClipRect = *directDocumentClipRect,
         .overviewTiles = std::move(directOverviewTiles),
-        .tiles = std::vector<GlTextureCache::TileView>(textures_.tiles().begin(),
-                                                       textures_.tiles().end()),
+        .tiles = std::move(directTiles),
         .activeDragPreview = activeDragPreview,
         .displayedDragPreview = displayedDragPreview,
         .suppressedLayerEntity = presentSuppressedLayerEntity,
@@ -3999,49 +4017,27 @@ void EditorShell::renderRenderPanePresentation(
     };
   }
 #endif
-  if (documentPresenter_->presentUnderlay(std::move(underlayPlan))) {
+  if (documentPresenter_->presentUnderlay(std::move(underlayPlan)) && underlayPresentsTiles) {
     documentPresentedDirectly = true;
   }
-#ifdef DONNER_EDITOR_WGPU
-
-  // Browser WebGPU surface textures are a poor cross-backend seam for a second vector append pass.
-  // Rasterize chrome into a transparent Geode texture, then let RenderPanePresenter place it in
-  // ImGui's normal ordering: above document pixels, below menus and popups.
-  window_.setWgpuDirectRenderCallback({});
-  if (!contentOnlyCaptureThisFrame_ && !showSamplePicker_ && directOverlayRenderer_ != nullptr &&
+  // Chrome is drawn immediately, every frame, into the same framebuffer the
+  // tiles just landed in, with the transform those tiles were placed with.
+  // Nothing caches it, so it cannot lag the document, and nothing re-scales
+  // it, so handles cannot grow with zoom.
+  std::optional<ImmediateChromePlan> chromePlan;
+  if (!contentOnlyCaptureThisFrame_ && !showSamplePicker_ &&
       renderCoordinator_.immediateOverlaySnapshot().has_value()) {
-    SelectionChromeSnapshot overlaySnapshot = *renderCoordinator_.immediateOverlaySnapshot();
+    SelectionChromeSnapshot chromeSnapshot = *renderCoordinator_.immediateOverlaySnapshot();
     if (workerSurfaceSelectionChromeBaked) {
-      overlaySnapshot = OverlayWithoutBakedSelectionChrome(std::move(overlaySnapshot));
+      chromeSnapshot = OverlayWithoutBakedSelectionChrome(std::move(chromeSnapshot));
     }
-    // The overlay texture is placed in screen space, so it must be re-rasterized
-    // when the presented transform moves even if the chrome's document-space
-    // geometry did not: an accepted epoch landing is a placement change for the
-    // chrome exactly as much as it is for the document pixels.
-    const bool presentedViewportMoved =
-        !lastOverlayPresentedViewport_.has_value() ||
-        DocumentPresentationMappingChanged(*lastOverlayPresentedViewport_,
-                                           presentedDocumentViewport);
-    // Gate on the coordinator's capture generation, not this frame's
-    // rasterize-call return: the overlay is captured from several sites (tool
-    // event handlers, mid-frame chrome updates) whose returns are discarded,
-    // and by the time the presentation pass runs, its own call correctly
-    // reports "unchanged" for a snapshot some earlier caller replaced this
-    // frame. Comparing generations presents every capture exactly once.
-    const std::uint64_t overlayGeneration = renderCoordinator_.overlaySnapshotGeneration();
-    if (overlayGeneration != lastDrawnOverlaySnapshotGeneration_ || presentedViewportMoved ||
-        textures_.overlayTexture().texture == 0) {
-      RenderedOverlayTexture renderedOverlay = RenderImmediateOverlaySnapshotToTexture(
-          *directOverlayRenderer_, presentedDocumentViewport, overlaySnapshot);
-      textures_.updateOverlayTexture(std::move(renderedOverlay.textureSnapshot),
-                                     renderedOverlay.screenRect);
-      lastOverlayPresentedViewport_ = presentedDocumentViewport;
-      lastDrawnOverlaySnapshotGeneration_ = overlayGeneration;
-    }
-  } else {
-    textures_.resetOverlay();
+    chromePlan = ImmediateChromePlan{
+        .viewport = presentedDocumentViewport,
+        .paneClipRect = paneRect,
+        .snapshot = std::move(chromeSnapshot),
+    };
   }
-#endif
+  installImmediateChromePlan(std::move(chromePlan));
   RenderPanePresenterState paneState{
       .viewport = interactionController_.viewport(),
       .presentedDocumentViewport = &presentedDocumentViewport,
@@ -6407,8 +6403,11 @@ void EditorShell::recordFrameTelemetry(
       .previousDirectMs = hostEndFrameTiming.directMs,
       .previousReadbackMs = hostEndFrameTiming.readbackMs,
       .previousPresentMs = hostEndFrameTiming.presentMs,
+      .previousImguiVertexCount = hostEndFrameTiming.imguiVertexCount,
   };
   frameCost.directPresentation = directPresentationCost;
+  frameCost.overlay.drawMs = lastImmediateChromeDrawMs_;
+  lastImmediateChromeDrawMs_ = 0.0;
   if (sourcePaneVisible_) {
     frameCost.sourceRopes = textEditor_.lastSourceRopeCost();
   }
@@ -6508,9 +6507,9 @@ UiFrameWork EditorShell::classifyFrameWork(bool editorWakePending, bool browserI
   const bool hoverTargetChanged = g.HoveredId != g.HoveredIdPreviousFrame;
   const bool hoverDelayArmed = g.HoverItemDelayId != 0 || g.HoverItemDelayIdPreviousFrame != 0 ||
                                g.HoverItemDelayClearTimer > 0.0f;
-  const bool hoverTimersUnsettled = g.HoveredId != 0 &&
-                                    (g.HoveredIdTimer < kUiFrameHoverSettleSeconds ||
-                                     g.MouseStationaryTimer < kUiFrameHoverSettleSeconds);
+  const bool hoverTimersUnsettled =
+      g.HoveredId != 0 && (g.HoveredIdTimer < kUiFrameHoverSettleSeconds ||
+                           g.MouseStationaryTimer < kUiFrameHoverSettleSeconds);
 
   const bool toolGestureActive =
       selectTool_.isDragging() || selectTool_.marqueeRect().has_value() ||
@@ -6736,8 +6735,8 @@ void EditorShell::runFrame() {
       documentViewBoxCacheDocument_ = documentHandle;
       documentViewBoxCache_.reset();
     }
-    if (std::optional<Box2d> viewBox = ResolveDocumentViewBoxForFrame(
-            document, renderCoordinator_.asyncRenderer().isBusy())) {
+    if (std::optional<Box2d> viewBox =
+            ResolveDocumentViewBoxForFrame(document, renderCoordinator_.asyncRenderer().isBusy())) {
       documentViewBoxCache_ = *viewBox;
     }
   }

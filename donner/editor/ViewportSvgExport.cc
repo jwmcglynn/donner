@@ -385,11 +385,17 @@ std::string SerializeOverlaySnapshotToSvg(const SelectionChromeSnapshot& snapsho
        snapshot.pathControlLinesDoc) {
     AppendControlLine(&out, controlLineDoc);
   }
-  for (const Box2d& controlPointBoxDoc : snapshot.pathControlPointBoxesDoc) {
-    AppendRect(&out, controlPointBoxDoc, kOverlayStroke, "none", "0");
+  for (const Vector2d& controlPointDoc : snapshot.pathControlPointsDoc) {
+    AppendRect(&out,
+               OverlayRenderer::ChromeSquareForPoint(
+                   snapshot, OverlayRenderer::ChromeSquare::PathControlPoint, controlPointDoc),
+               kOverlayStroke, "none", "0");
   }
-  for (const Box2d& anchorBoxDoc : snapshot.pathAnchorBoxesDoc) {
-    AppendRect(&out, anchorBoxDoc, kOverlayStroke, "none", "0");
+  for (const Vector2d& anchorDoc : snapshot.pathAnchorPointsDoc) {
+    AppendRect(&out,
+               OverlayRenderer::ChromeSquareForPoint(
+                   snapshot, OverlayRenderer::ChromeSquare::PathAnchor, anchorDoc),
+               kOverlayStroke, "none", "0");
   }
 
   // Selection AABBs.
@@ -403,8 +409,11 @@ std::string SerializeOverlaySnapshotToSvg(const SelectionChromeSnapshot& snapsho
   }
 
   // Resize handles: small filled squares.
-  for (const Box2d& handleBoxDoc : snapshot.handleBoxesDoc) {
-    AppendRect(&out, handleBoxDoc, kOverlayHandleFill, kOverlayStroke, "1");
+  for (const Vector2d& handleAnchorDoc : snapshot.handleAnchorsDoc) {
+    AppendRect(&out,
+               OverlayRenderer::ChromeSquareForPoint(
+                   snapshot, OverlayRenderer::ChromeSquare::TransformHandle, handleAnchorDoc),
+               kOverlayHandleFill, kOverlayStroke, "1");
   }
 
   // Marquee rect.

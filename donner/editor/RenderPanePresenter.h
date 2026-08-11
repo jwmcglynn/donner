@@ -19,8 +19,9 @@
 
 namespace donner::editor {
 
-inline constexpr double kRenderPaneCheckerboardSize = 16.0;
-inline constexpr double kFramebufferCheckerboardSize = kRenderPaneCheckerboardSize;
+/// Transparency checkerboard cell size, in logical pixels. Only the Geode
+/// framebuffer pass draws the checkerboard; there is no draw-list fallback.
+inline constexpr double kFramebufferCheckerboardSize = 16.0;
 
 struct RenderPanePresenterState {
   /// Live viewport for this frame. Owns pane geometry: the pane rect, the
@@ -126,8 +127,8 @@ public:
    * Draw the advanced editor render pane's composited document tiles and, when
    * enabled, the performance overlay (compact FPS pill or full frame graph).
    *
-   * Selection chrome is rasterized by Donner's OverlayRenderer and composited here as a
-   * transparent texture, preserving ImGui ordering below menus and popups.
+   * Selection chrome is not drawn here: it is drawn immediately onto the window framebuffer
+   * after the document tiles and before ImGui, so it shares the tiles' transform exactly.
    *
    * @param state Presentation inputs for the current UI frame.
    */

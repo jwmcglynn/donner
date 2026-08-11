@@ -207,17 +207,6 @@ public:
     return penLivePreviewElement_;
   }
 
-  /// Monotonic count of immediate overlay snapshot captures. The overlay is
-  /// re-captured from several call sites (the per-frame presentation pass, but
-  /// also tool event handlers that update chrome mid-frame) whose boolean
-  /// returns are discarded; consumers that rasterize the snapshot into a
-  /// texture must compare this generation against the one they last drew
-  /// rather than trust any single call's "changed" return, or a capture made
-  /// by an earlier caller in the same frame is silently never presented.
-  [[nodiscard]] std::uint64_t overlaySnapshotGeneration() const {
-    return overlaySnapshotGeneration_;
-  }
-
   /// Set (or clear) the Pen tool's hover chrome for the next overlay capture:
   /// the rubber-band preview of the segment a click would commit, and the
   /// close-path affordance point when the pointer is within closing range.
@@ -284,10 +273,10 @@ public:
   /// is allowed for callers that don't care about backend timing.
   void pollRenderResult(EditorApp& app, const ViewportState& viewport, GlTextureCache& textures,
                         FrameHistory* frameHistory = nullptr);
-  bool maybeRequestRender(EditorApp& app, SelectTool& selectTool, const ViewportState& viewport,
-                          GlTextureCache* textures = nullptr, bool supersedeInFlight = false,
-                          SelectionChromeDetail directSurfaceSelectionDetail =
-                              SelectionChromeDetail::Full);
+  bool maybeRequestRender(
+      EditorApp& app, SelectTool& selectTool, const ViewportState& viewport,
+      GlTextureCache* textures = nullptr, bool supersedeInFlight = false,
+      SelectionChromeDetail directSurfaceSelectionDetail = SelectionChromeDetail::Full);
   /// Record that a document mutation requires a current-version presentation handoff.
   ///
   /// @param flushResult Metadata from the just-flushed editor command batch.
@@ -396,8 +385,6 @@ private:
   /// the element's raster tile, leaving the edited path invisible for the rest of the drag.
   /// Comparing the spline itself re-captures the overlay whenever the geometry changes.
   std::optional<Path> lastOverlayPenLiveSpline_;
-  /// See `overlaySnapshotGeneration()`.
-  std::uint64_t overlaySnapshotGeneration_ = 0;
   /// Pen hover chrome pushed by the shell each frame: rubber-band segment
   /// preview + close-path affordance (document space).
   std::optional<Path> penHoverPreviewSegmentDoc_;

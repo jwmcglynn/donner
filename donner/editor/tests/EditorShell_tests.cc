@@ -1,6 +1,7 @@
 #include "donner/editor/EditorShell.h"
 
 #include <GLFW/glfw3.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <atomic>
@@ -24,6 +25,7 @@
 #include "donner/editor/EditorShellPresentation.h"
 #include "donner/editor/FillStrokeWidget.h"
 #include "donner/editor/InMemoryClipboard.h"
+#include "donner/editor/PresentedFrameComposer.h"
 #include "donner/editor/gui/EditorWindow.h"
 #include "donner/editor/repro/ReproFile.h"
 #include "donner/svg/renderer/Renderer.h"
@@ -134,7 +136,6 @@ EditorShellOptions OptionsWithSource(std::string_view source,
 
 TEST(EditorShellInternalTest, MapsPresentationResourcesToTelemetrySamples) {
   PresentationResourceStats resources{
-      .overlayBytes = 11,
       .activeTileBytes = 22,
       .overviewTileBytes = 33,
       .pendingRetiredBytes = 44,
@@ -146,7 +147,6 @@ TEST(EditorShellInternalTest, MapsPresentationResourcesToTelemetrySamples) {
   };
 
   const FrameMemorySample memory = internal::MemorySampleFromPresentationResources(resources);
-  EXPECT_EQ(memory.overlayBytes, 11u);
   EXPECT_EQ(memory.activeTileBytes, 22u);
   EXPECT_EQ(memory.overviewTileBytes, 33u);
   EXPECT_EQ(memory.retiredBytes, 99u);
@@ -157,7 +157,6 @@ TEST(EditorShellInternalTest, MapsPresentationResourcesToTelemetrySamples) {
 
   const FrameMissResourceTelemetry telemetry =
       internal::FrameMissTelemetryFromPresentationResources(resources);
-  EXPECT_EQ(telemetry.overlayBytes, memory.overlayBytes);
   EXPECT_EQ(telemetry.activeTileBytes, memory.activeTileBytes);
   EXPECT_EQ(telemetry.overviewTileBytes, memory.overviewTileBytes);
   EXPECT_EQ(telemetry.retiredBytes, memory.retiredBytes);
@@ -167,52 +166,58 @@ TEST(EditorShellInternalTest, MapsPresentationResourcesToTelemetrySamples) {
   EXPECT_EQ(telemetry.wgpuLifetimeBufferCreates, memory.wgpuLifetimeBufferCreates);
 }
 
-TEST(EditorShellPresentationTest, SparseSelectionChromeUsesTightOverlayTextureFootprint) {
+TEST(EditorShellPresentationTest, ChromeTransformEqualsTileTransformInTheSameFrame) {
+  // The desync impossibility, pinned at the seam: chrome and tiles are placed
+  // from ONE viewport through ONE transform function in the same frame, so a
+  // document point cannot land in two places.
   ViewportState viewport;
   viewport.paneOrigin = Vector2d(40.0, 24.0);
-  viewport.paneSize = Vector2d(1200.0, 800.0);
+  viewport.paneSize = Vector2d(800.0, 600.0);
   viewport.devicePixelRatio = 2.0;
+  viewport.panScreenPoint = Vector2d(140.0, 96.0);
+  viewport.panDocPoint = Vector2d(12.0, 7.0);
+  viewport.zoom = 3.25;
 
+  // Capture-time transform is deliberately a different (stale) placement, the
+  // shape a gesture produces when the UI thread runs ahead of the pixels.
   SelectionChromeSnapshot snapshot;
-  snapshot.canvasFromDoc = Transform2d::Scale(2.0);
-  snapshot.aabbsDoc.push_back(Box2d::FromXYWH(100.0, 80.0, 160.0, 120.0));
-  snapshot.selectionStrokeWidthWorld = 1.0;
+  snapshot.canvasFromDoc = Transform2d::Scale(11.0) * Transform2d::Translate(Vector2d(3.0, 5.0));
 
-  const OverlayTexturePlacement placement = ComputeOverlayTexturePlacement(viewport, snapshot);
+  const SelectionChromeSnapshot placed = ChromePlacedOnPresentedDocument(viewport, snapshot);
+  const Transform2d presentedFromDocument = PresentedFramebufferFromDocumentTransform(viewport);
+  EXPECT_THAT(placed.canvasFromDoc.data, ::testing::ElementsAreArray(presentedFromDocument.data));
 
-  EXPECT_LT(placement.textureSizePx.x, 400);
-  EXPECT_LT(placement.textureSizePx.y, 320);
-  EXPECT_LT(placement.textureSizePx.x * placement.textureSizePx.y,
-            viewport.paneSize.x * viewport.devicePixelRatio * viewport.paneSize.y *
-                viewport.devicePixelRatio / 16.0)
-      << "Sparse selection chrome must not allocate and blend a pane-sized transparent texture ";
-  EXPECT_TRUE(placement.screenRect.contains(Vector2d(140.0, 104.0)));
-  EXPECT_TRUE(placement.screenRect.contains(Vector2d(300.0, 224.0)));
+  // The same transform is what the tile compose places quads with: a tile
+  // covering document rect (20,30)-(52,66) lands exactly where the chrome maps
+  // that rect.
+  const PresentedFrameTileGeometry tile{
+      .canvasOffsetDoc = Vector2d(20.0, 30.0),
+      .bitmapDimsDoc = Vector2d(32.0, 36.0),
+  };
+  const std::optional<PresentedTileQuad> tileQuad =
+      ComputePresentedTileQuad(tile, presentedFromDocument, std::nullopt);
+  ASSERT_TRUE(tileQuad.has_value());
+  EXPECT_EQ(tileQuad->topLeft, placed.canvasFromDoc.transformPosition(Vector2d(20.0, 30.0)));
+  EXPECT_EQ(tileQuad->bottomRight, placed.canvasFromDoc.transformPosition(Vector2d(52.0, 66.0)));
 }
 
-TEST(EditorShellPresentationTest, LivePathPreviewIncludesWideMiterStrokeExtent) {
+TEST(EditorShellPresentationTest, ChromePlacementIgnoresTheCaptureTimeTransform) {
+  // Two snapshots captured at wildly different zooms, presented into the same
+  // frame, must place identically: placement comes from the frame, not the
+  // capture.
   ViewportState viewport;
-  viewport.paneSize = Vector2d(600.0, 500.0);
+  viewport.paneSize = Vector2d(400.0, 300.0);
   viewport.devicePixelRatio = 1.0;
+  viewport.zoom = 2.0;
 
-  PathBuilder builder;
-  builder.moveTo(Vector2d(200.0, 200.0));
-  builder.lineTo(Vector2d(250.0, 100.0));
-  builder.lineTo(Vector2d(300.0, 200.0));
+  SelectionChromeSnapshot capturedAtOneX;
+  capturedAtOneX.canvasFromDoc = Transform2d::Scale(1.0);
+  SelectionChromeSnapshot capturedAtFourX;
+  capturedAtFourX.canvasFromDoc = Transform2d::Scale(4.0);
 
-  SelectionChromeSnapshot snapshot;
-  snapshot.livePathPreview = SelectionChromeSnapshot::LivePathPreview{
-      .pathDoc = builder.build(),
-      .strokeColor = css::RGBA(0xff, 0xff, 0xff, 0xff),
-      .strokeWidthDoc = 80.0,
-  };
-
-  const OverlayTexturePlacement placement = ComputeOverlayTexturePlacement(viewport, snapshot);
-
-  // OverlayRenderer uses the default SVG miter limit of four. The tight overlay must retain the
-  // worst-case stroke spike instead of clipping it to the fixed screen-space chrome padding.
-  EXPECT_TRUE(placement.screenRect.contains(Vector2d(90.0, 100.0)));
-  EXPECT_TRUE(placement.screenRect.contains(Vector2d(410.0, 200.0)));
+  EXPECT_THAT(ChromePlacedOnPresentedDocument(viewport, capturedAtOneX).canvasFromDoc.data,
+              ::testing::ElementsAreArray(
+                  ChromePlacedOnPresentedDocument(viewport, capturedAtFourX).canvasFromDoc.data));
 }
 
 TEST(EditorShellPresentationTest, BakedSelectionChromeLeavesDynamicMainThreadChrome) {
@@ -223,7 +228,7 @@ TEST(EditorShellPresentationTest, BakedSelectionChromeLeavesDynamicMainThreadChr
   SelectionChromeSnapshot snapshot;
   snapshot.paths.push_back(SelectionChromeSnapshot::PathItem{.pathDoc = pathBuilder.build()});
   snapshot.aabbsDoc.push_back(Box2d::FromXYWH(10.0, 10.0, 10.0, 10.0));
-  snapshot.handleBoxesDoc.push_back(Box2d::FromXYWH(8.0, 8.0, 4.0, 4.0));
+  snapshot.handleAnchorsDoc.push_back(Vector2d(10.0, 10.0));
   snapshot.textBaselinesDoc.push_back(SelectionChromeSnapshot::TextBaseline{
       .startDoc = Vector2d(10.0, 20.0),
       .endDoc = Vector2d(20.0, 20.0),
@@ -239,7 +244,7 @@ TEST(EditorShellPresentationTest, BakedSelectionChromeLeavesDynamicMainThreadChr
 
   EXPECT_TRUE(mainOverlay.paths.empty());
   EXPECT_TRUE(mainOverlay.aabbsDoc.empty());
-  EXPECT_TRUE(mainOverlay.handleBoxesDoc.empty());
+  EXPECT_TRUE(mainOverlay.handleAnchorsDoc.empty());
   EXPECT_TRUE(mainOverlay.textBaselinesDoc.empty());
   EXPECT_TRUE(mainOverlay.marqueeDoc.has_value());
   EXPECT_TRUE(mainOverlay.textCaretDoc.has_value());

@@ -20,6 +20,7 @@
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorInputBridge.h"
 #include "donner/editor/EditorShellLayout.h"
+#include "donner/editor/EditorShellPresentation.h"
 #include "donner/editor/FrameCostBreakdown.h"
 #include "donner/editor/GlTextureCache.h"
 #include "donner/editor/ImGuiIncludes.h"
@@ -446,11 +447,16 @@ private:
   void renderRenderPanePresentation(const ImVec2& contentRegion, const ImVec2& paneOriginImGui,
                                     const Box2d& paneRect, const Box2d& toolPaletteRect,
                                     const SelectionTransformHandleIntent& hoverTransformIntent,
-                                    bool rotateCursorLocked, bool penToolActive, bool textToolActive);
+                                    bool rotateCursorLocked, bool penToolActive,
+                                    bool textToolActive);
   /// Sink behind `documentPresenter_`'s framebuffer underlay: installs one
   /// frame's tile plan on the window, or clears the underlay on `nullopt`.
   /// The window-side WebGPU wiring is confined here.
   void installFramebufferUnderlayPlan(std::optional<FramebufferUnderlayPlan> plan);
+  /// Install one frame's immediate chrome pass, or clear it on `nullopt`. The
+  /// pass runs after the document underlay and before ImGui, so chrome lands on
+  /// the same pixels, in the same frame, with the same transform as the tiles.
+  void installImmediateChromePlan(std::optional<ImmediateChromePlan> plan);
   [[nodiscard]] Box2d toolPaletteScreenRect(const ImVec2& paneOrigin,
                                             const ImVec2& contentRegion) const;
   [[nodiscard]] Box2d canvasZoomControlScreenRect() const;
@@ -609,13 +615,6 @@ private:
   svg::SVGDocumentHandle documentViewBoxCacheDocument_;
   std::optional<Box2d> documentViewBoxCache_;
   std::optional<ViewportState> pendingViewportReplayOverride_;
-  /// Transform the current selection-chrome overlay texture was rasterized and
-  /// placed with. The overlay is screen-space, so a new accepted worker epoch
-  /// moving the presented document is on its own a reason to re-rasterize it.
-  std::optional<ViewportState> lastOverlayPresentedViewport_;
-  /// The coordinator overlay-snapshot generation last rasterized into the
-  /// overlay texture. See RenderCoordinator::overlaySnapshotGeneration().
-  std::uint64_t lastDrawnOverlaySnapshotGeneration_ = 0;
   std::optional<EditorShellDocumentReplayInput> pendingDocumentSpaceReplayInput_;
   /// True while the save modal is being used for File → Export Viewport as SVG
   /// rather than an ordinary document save. Routes the dialog's write callback
@@ -751,6 +750,8 @@ private:
   FrameCostBreakdown latestFrameCostForReadback_;
   /// Direct document presentation cost completed after the last shell frame.
   FrameCostBreakdown::DirectPresentation lastDirectPresentationCost_;
+  /// Wall time the last immediate chrome pass spent drawing, in milliseconds.
+  double lastImmediateChromeDrawMs_ = 0.0;
   bool treeSelectionOriginatedInTree_ = false;
   bool sourceSelectionOriginatedInText_ = false;
   bool sourceFocusOriginatedInStyle_ = false;

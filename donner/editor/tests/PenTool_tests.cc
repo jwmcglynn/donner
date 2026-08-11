@@ -44,18 +44,6 @@ constexpr std::string_view kOpenPathSvg =
          <path id="p" d="M 0 0 L 10 0" fill="none" stroke="black"/>
        </svg>)";
 
-MATCHER_P(BoxContainingPoint, point,
-          std::string("a Box2d that contains (") + testing::PrintToString(point.x) + ", " +
-              testing::PrintToString(point.y) + ")") {
-  if (arg.contains(point)) {
-    return true;
-  }
-  *result_listener << "box [" << arg.topLeft.x << ", " << arg.topLeft.y << " - "
-                   << arg.bottomRight.x << ", " << arg.bottomRight.y << "] does not contain ("
-                   << point.x << ", " << point.y << ")";
-  return false;
-}
-
 /// Capture pen-path overlay chrome the same way the editor does on a click frame.
 SelectionChromeSnapshot CapturePenChromeSnapshot(EditorApp& app) {
   return OverlayRenderer::captureChromeSnapshot(
@@ -189,8 +177,7 @@ TEST_F(PenToolTest, OverlayChromeIncludesNewAnchorOnSameFlush) {
 
   const SelectionChromeSnapshot snapshot = CapturePenChromeSnapshot(app);
   ASSERT_FALSE(snapshot.paths.empty());
-  EXPECT_THAT(snapshot.pathAnchorBoxesDoc,
-              testing::Contains(BoxContainingPoint(Vector2d(30.0, 40.0))))
+  EXPECT_THAT(snapshot.pathAnchorPointsDoc, testing::Contains(Vector2d(30.0, 40.0)))
       << "Overlay chrome captured on the click's own flush must contain the newly placed anchor.";
 }
 

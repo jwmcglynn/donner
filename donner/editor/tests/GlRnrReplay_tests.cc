@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <iostream>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -2593,6 +2594,62 @@ TEST(GlRnrReplayTest, PenBackspaceRemovesLastAnchorNotWholeDraft) {
 // <text> element. Reproduces the report that selecting the Text tool and
 // clicking showed nothing - the pending-click path started the gesture but
 // the live pointer path never delivered the release.
+// OPERATOR INVARIANT: paths render in Geode only, no fallback. Every vector
+// path the editor presents - selection chrome, pen previews, marquee, curves -
+// and the transparency checkerboard go through Geode; there is no ImGui
+// draw-list path or checkerboard fallback to tessellate document-complexity
+// geometry into draw lists.
+//
+// This pins the observable consequence: ImGui's per-frame draw data stays at
+// UI-widget scale during a high-zoom pan, whose image rect is many times the
+// pane. The deleted draw-list checkerboard emitted one quad per 16px cell over
+// that whole image rect, which is how a storm frame reached hundreds of
+// thousands of vertices; UI widgets alone are a small fraction of that.
+TEST(GlRnrReplayTest, ImguiDrawDataStaysWidgetScaleAtHighZoom) {
+  if (!UsesGeodePresentation()) {
+    GTEST_SKIP() << "Path rendering routes through Geode only on the Geode presentation path.";
+  }
+
+  const std::filesystem::path outputDir = DiagnosticOutputDir() / "imgui_vertex_budget";
+  const std::optional<std::filesystem::path> replayPath =
+      WriteHighZoomPanReplay(outputDir, "imgui_vertex_budget.rnr");
+  ASSERT_TRUE(replayPath.has_value());
+
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = *replayPath;
+  options.outputDir = outputDir;
+  options.captureFrames.insert(44);
+  options.maxFrame = 44;
+  options.cropMode = repro::GlRnrReplayCropMode::Full;
+  options.pace = false;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::HoldFramesBehind;
+  options.holdFramesBehind = 6;
+
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
+
+  ASSERT_FALSE(result.frameDiagnostics.empty());
+  constexpr int kWidgetScaleVertexBound = 100000;
+  int peakVertexCount = 0;
+  std::uint64_t peakFrameIndex = 0;
+  for (const repro::GlRnrReplayFrameDiagnostics& frame : result.frameDiagnostics) {
+    const int vertexCount = frame.frameCost.hostFrame.previousImguiVertexCount;
+    if (vertexCount > peakVertexCount) {
+      peakVertexCount = vertexCount;
+      peakFrameIndex = frame.frameIndex;
+    }
+  }
+  // A zero peak would mean the counter never reached the diagnostics, which
+  // would make the bound vacuous.
+  EXPECT_GT(peakVertexCount, 0) << "ImGui vertex counts never reached replay diagnostics";
+  EXPECT_LT(peakVertexCount, kWidgetScaleVertexBound)
+      << "ImGui emitted " << peakVertexCount << " vertices on frame " << peakFrameIndex
+      << "; path or checkerboard geometry is routing through the draw list again";
+  std::cerr << "[imgui-draw-data] peakVertices=" << peakVertexCount << " frame=" << peakFrameIndex
+            << " frames=" << result.frameDiagnostics.size() << "\n";
+}
+
 // During a rapid pan at high zoom, every pane pixel must keep showing
 // document content: the still-covered part of the previous bounded raster
 // stays put, and newly-exposed regions fall back to the overview infill

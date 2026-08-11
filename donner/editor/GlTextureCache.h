@@ -44,8 +44,6 @@ struct CompositedTileTextureIdentity {
 
 /// Approximate resource footprint retained by the editor presentation texture cache.
 struct PresentationResourceStats {
-  /// Bytes retained by the current overlay texture.
-  std::uint64_t overlayBytes = 0;
   /// Bytes retained by active composited tile textures.
   std::uint64_t activeTileBytes = 0;
   /// Bytes retained by the zoom-out overview tile textures.
@@ -208,22 +206,6 @@ public:
   ThumbnailTextureView retainThumbnailTextureSnapshot(
       std::uint64_t key, std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot);
 
-  /// Current transparent selection-chrome texture, composited by the render-pane ImGui draw list
-  /// so editor popups and menus remain above it.
-  struct OverlayTextureView {
-    ImTextureID texture = 0;
-    Vector2i dimensions = Vector2i::Zero();
-    Box2d screenRect;
-  };
-
-  /// Replace the current Geode overlay snapshot and retire the previous snapshot safely.
-  OverlayTextureView updateOverlayTexture(
-      std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot, const Box2d& screenRect);
-  /// Return the currently presented overlay texture, if any.
-  [[nodiscard]] OverlayTextureView overlayTexture() const;
-  /// Remove the current overlay texture.
-  void resetOverlay();
-
   /// Evict every cached thumbnail texture whose key is not in @p liveKeys,
   /// freeing the backing GL/WGPU texture. Called after each Layers-panel render
   /// so thumbnails for removed rows do not leak across refreshes.
@@ -349,8 +331,6 @@ private:
   /// holding a content fingerprint plus the cached width/height). Evicted by
   /// `retainThumbnailsOnly` when a row leaves the panel.
   std::unordered_map<std::uint64_t, CachedTextureEntry> thumbnailTextures_;
-  CachedTextureEntry overlayTexture_;
-  Box2d overlayScreenRect_;
 
   /// Paint-order view of the most recent `uploadComposited` call.
   /// Rebuilt every upload (cheap - N tiles, plain values).

@@ -209,8 +209,7 @@ void WriteCostDetails(std::ostream& out, const FrameCostBreakdown& cost) {
 }
 
 void WriteResourceDetails(std::ostream& out, const FrameMissResourceTelemetry& resources) {
-  out << "\"resources\":{\"overlay_bytes\":" << resources.overlayBytes
-      << ",\"active_tile_bytes\":" << resources.activeTileBytes
+  out << "\"resources\":{\"active_tile_bytes\":" << resources.activeTileBytes
       << ",\"overview_tile_bytes\":" << resources.overviewTileBytes
       << ",\"retired_bytes\":" << resources.retiredBytes
       << ",\"total_tracked_bytes\":" << resources.totalTrackedBytes

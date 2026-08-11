@@ -690,7 +690,7 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   overlayCost.hoverPathCount = static_cast<int>(chromeSnapshot.hoverPaths.size());
   overlayCost.aabbCount = static_cast<int>(chromeSnapshot.aabbsDoc.size());
   overlayCost.hoverAabbCount = static_cast<int>(chromeSnapshot.hoverAabbsDoc.size());
-  overlayCost.handleCount = static_cast<int>(chromeSnapshot.handleBoxesDoc.size());
+  overlayCost.handleCount = static_cast<int>(chromeSnapshot.handleAnchorsDoc.size());
   overlayCost.hasMarquee = chromeSnapshot.marqueeDoc.has_value();
   // Report the overlay payload this frame so the metric is non-zero whenever the
   // overlay was re-rasterized with content - independent of presentation
@@ -702,9 +702,9 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   // raster bytes, gated on the snapshot actually having something to draw.
   const bool overlayHasContent =
       !chromeSnapshot.paths.empty() || !chromeSnapshot.hoverPaths.empty() ||
-      !chromeSnapshot.handleBoxesDoc.empty() || !chromeSnapshot.aabbsDoc.empty() ||
-      !chromeSnapshot.pathAnchorBoxesDoc.empty() || !chromeSnapshot.pathControlLinesDoc.empty() ||
-      !chromeSnapshot.pathControlPointBoxesDoc.empty() || chromeSnapshot.marqueeDoc.has_value() ||
+      !chromeSnapshot.handleAnchorsDoc.empty() || !chromeSnapshot.aabbsDoc.empty() ||
+      !chromeSnapshot.pathAnchorPointsDoc.empty() || !chromeSnapshot.pathControlLinesDoc.empty() ||
+      !chromeSnapshot.pathControlPointsDoc.empty() || chromeSnapshot.marqueeDoc.has_value() ||
       chromeSnapshot.orientedBoundsDoc.has_value() || chromeSnapshot.livePathPreview.has_value() ||
       chromeSnapshot.penPreviewSegmentDoc.has_value() ||
       chromeSnapshot.penCloseAffordanceDoc.has_value() || chromeSnapshot.textCaretDoc.has_value() ||
@@ -717,7 +717,6 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
                 static_cast<std::uint64_t>(std::max(0, currentOverlayRasterSize.y)) * 4u
           : 0u;
   immediateOverlaySnapshot_ = chromeSnapshot;
-  ++overlaySnapshotGeneration_;
 
   lastOverlaySelectionVec_ = overlaySelection;
   lastOverlaySourceHoverVec_ = sourceHoverElements_;
@@ -1109,10 +1108,9 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
           selectTool.documentDragPreview(app);
       chromeBoundsPreview = SelectionChromeBoundsPreview{
           .startBoundsDoc = activeBoundsPreview->startBoundsDoc,
-          .documentFromStartDocument =
-              documentDragPreview.has_value()
-                  ? documentDragPreview->documentFromCachedDocument
-                  : activeBoundsPreview->documentFromStartDocument,
+          .documentFromStartDocument = documentDragPreview.has_value()
+                                           ? documentDragPreview->documentFromCachedDocument
+                                           : activeBoundsPreview->documentFromStartDocument,
       };
     }
     req.directSurfaceSelectionChrome = OverlayRenderer::captureChromeSnapshot(
