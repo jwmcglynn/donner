@@ -19,7 +19,7 @@ const { defineConfig, devices } = require("@playwright/test");
 // black-frame fraction, is widened inside the spec for this engine.
 module.exports = defineConfig({
   testDir: ".",
-  testMatch: ["composited-invariants.spec.ts"],
+  testMatch: ["composited-invariants.spec.ts", "composited-drag-invariants.spec.ts"],
   timeout: 180000,
   workers: 1,
   projects: [

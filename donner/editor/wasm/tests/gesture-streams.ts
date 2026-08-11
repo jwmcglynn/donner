@@ -149,6 +149,48 @@ export interface PanStreamOptions {
   jitterPx?: number;
 }
 
+export interface DragStreamOptions {
+  /** Active (button-down) phase length. */
+  durationMs: number;
+  /** Event cadence. Defaults to 90 Hz, a trackpad/high-rate-mouse cadence. */
+  hz?: number;
+  /** Net displacement of the whole gesture, CSS px. */
+  dx: number;
+  dy: number;
+  /**
+   * Direction reversals inside the gesture, as half-cycles of a sine
+   * superimposed on the net displacement. Zero is a monotone slide.
+   *
+   * Reversals are what make a POP-BACK decidable. A presented position that
+   * regresses is indistinguishable from a stall under a monotone drag: both
+   * look like "the object did not move this frame". Under a reversing path, a
+   * stale epoch's position sits on the opposite side of the newer one, so a
+   * regression against the instantaneous gesture direction is unambiguous.
+   */
+  reversals?: number;
+  /** Amplitude of the reversal excursion, CSS px. */
+  reversalAmplitudePx?: number;
+  /** Sub-pixel jitter amplitude, as a real pointer produces. */
+  jitterPx?: number;
+  /** Emit the terminating `pointerup`/`mouseup`. Defaults to true. */
+  release?: boolean;
+}
+
+export interface DragStreamResult {
+  /** `pointermove` events dispatched during the active phase. */
+  pointerEvents: number;
+  /** Wall-clock duration of the whole stream, measured in-page. */
+  elapsedMs: number;
+  /** Mean gap between consecutive dispatched events. */
+  meanIntervalMs: number;
+  /** Largest gap between consecutive dispatched events. */
+  maxIntervalMs: number;
+  /** Requested cadence, for comparison against `meanIntervalMs`. */
+  requestedHz: number;
+  /** Every dispatched point, `[t, clientX, clientY]`, for lag analysis. */
+  trace: Array<[number, number, number]>;
+}
+
 export interface BurstZoomStormOptions {
   /** Number of alternating zoom-out / zoom-in bursts. */
   bursts: number;
@@ -435,6 +477,192 @@ export async function panStream(
   }
 
   return runStreamPlan(page, { events, intervalMs, x: at.x, y: at.y });
+}
+
+/**
+ * A synthesized click on the editor canvas.
+ *
+ * Pair this with `dragStream` rather than mixing it with `page.mouse.click()`.
+ * Playwright's mouse dispatches TRUSTED events through the browser's own input
+ * pipeline while these streams dispatch untrusted DOM events at the canvas;
+ * the editor's ImGui backend tracks button state across both, and a trusted
+ * click followed by an untrusted press has been observed to leave the drag
+ * unstarted - the selection lands, the moves arrive, and the document never
+ * advances. Keeping a whole interaction on one dispatch path avoids that.
+ */
+export async function pointerClick(page: Page, at: GesturePoint): Promise<void> {
+  await page.evaluate(async (at: GesturePoint) => {
+    const target = document.getElementById("canvas");
+    if (target === null) {
+      throw new Error("pointer click: canvas#canvas not found");
+    }
+    const emit = (type: string, buttons: number): void => {
+      const init = {
+        bubbles: true,
+        button: 0,
+        buttons,
+        cancelable: true,
+        clientX: at.x,
+        clientY: at.y,
+        isPrimary: true,
+        pointerId: 1,
+        pointerType: "mouse",
+      };
+      if (type.startsWith("pointer")) {
+        target.dispatchEvent(new PointerEvent(type, init));
+      } else {
+        target.dispatchEvent(new MouseEvent(type, init));
+      }
+    };
+    const settle = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    // Hover first: the render pane only classifies pointer input while it is
+    // the hovered window, and ImGui needs a frame to register the hover.
+    emit("pointermove", 0);
+    emit("mousemove", 0);
+    await settle(80);
+    emit("pointerdown", 1);
+    emit("mousedown", 1);
+    await settle(50);
+    emit("pointerup", 0);
+    emit("mouseup", 0);
+    emit("click", 0);
+  }, at);
+}
+
+/**
+ * A shape drag: `pointerdown`, a paced stream of `pointermove`, `pointerup`.
+ *
+ * WHY THE SHAPE MATTERS
+ *
+ * The zoom and pan streams above cover viewport gestures, whose only document
+ * mutation is the viewport. A shape drag mutates the DOM on every move, so
+ * every event asks for a fresh document version while the worker is still
+ * rasterizing the previous one. That is a different pipeline with a different
+ * failure set - the presented object regressing to an older position, and a
+ * one-frame blank at drag start - and neither is reachable from a wheel
+ * stream.
+ *
+ * Two properties are load-bearing.
+ *
+ * First, pacing. A drag delivered as a handful of `page.mouse.move()` calls
+ * lets the worker settle between moves, which is precisely the state in which
+ * the presented position and the live position agree again. The paced form
+ * keeps the pipeline continuously superseded, which is where a stale
+ * represented position becomes visible.
+ *
+ * Second, reversals. Under a monotone drag a presented position that regresses
+ * is indistinguishable from one that merely stalled: both read as "did not
+ * move this frame". Under a reversing path the two are separable, because a
+ * regression can be tested against the gesture's own instantaneous direction
+ * rather than against an assumed one.
+ *
+ * Like the wheel streams, the pacing happens inside a single `page.evaluate`,
+ * so the inter-event gaps are the page's own timer resolution rather than a
+ * CDP round trip per event, and the returned trace lets a caller align
+ * presented positions against the pointer positions that asked for them.
+ */
+export async function dragStream(
+  page: Page,
+  from: GesturePoint,
+  options: DragStreamOptions,
+): Promise<DragStreamResult> {
+  const hz = options.hz ?? 90;
+  const reversals = options.reversals ?? 0;
+  const reversalAmplitudePx = options.reversalAmplitudePx ?? 0;
+  const jitterPx = options.jitterPx ?? 0.5;
+  const release = options.release ?? true;
+  const intervalMs = 1000 / hz;
+  const count = Math.max(1, Math.round((options.durationMs * hz) / 1000));
+
+  const points: Array<{ x: number; y: number }> = [];
+  for (let index = 1; index <= count; ++index) {
+    const fraction = index / count;
+    const swing = reversals > 0 ? Math.sin(fraction * Math.PI * reversals) : 0;
+    const { jitterX, jitterY } = jitter(index, jitterPx);
+    points.push({
+      x: from.x + options.dx * fraction + reversalAmplitudePx * swing + jitterX,
+      y: from.y + options.dy * fraction + reversalAmplitudePx * 0.5 * swing + jitterY,
+    });
+  }
+
+  return page.evaluate(
+    async (plan: {
+      points: Array<{ x: number; y: number }>;
+      intervalMs: number;
+      from: GesturePoint;
+      release: boolean;
+      requestedHz: number;
+    }) => {
+      const target = document.getElementById("canvas");
+      if (target === null) {
+        throw new Error("drag stream: canvas#canvas not found");
+      }
+      const emit = (type: string, x: number, y: number, buttons: number): void => {
+        const init = {
+          bubbles: true,
+          button: 0,
+          buttons,
+          cancelable: true,
+          clientX: x,
+          clientY: y,
+          isPrimary: true,
+          pointerId: 1,
+          pointerType: "mouse",
+        };
+        target.dispatchEvent(new PointerEvent(type, init));
+        // ImGui's browser backend consumes mouse events; a pointer-only stream
+        // updates hover state and never starts a drag.
+        const mouseType = type === "pointerdown"
+          ? "mousedown"
+          : type === "pointerup"
+          ? "mouseup"
+          : "mousemove";
+        target.dispatchEvent(new MouseEvent(mouseType, init));
+      };
+
+      // Hover, settle, then press. The render pane classifies pointer input
+      // only while it is the hovered window, and a press that arrives without
+      // a hover frame in front of it is absorbed as a click: the selection
+      // lands, the moves arrive, and the document never advances. Measured at
+      // 204c60176 on hardware Chromium: without this the same stream produced
+      // one presented frame across a 1.8 s drag; with it, dozens.
+      emit("pointermove", plan.from.x, plan.from.y, 0);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      const trace: Array<[number, number, number]> = [];
+      const intervals: number[] = [];
+      const start = performance.now();
+      emit("pointerdown", plan.from.x, plan.from.y, 1);
+      let previous = start;
+      for (const point of plan.points) {
+        emit("pointermove", point.x, point.y, 1);
+        const now = performance.now();
+        trace.push([now, point.x, point.y]);
+        intervals.push(now - previous);
+        previous = now;
+        const nextAt = start + intervals.length * plan.intervalMs;
+        const waitMs = nextAt - now;
+        if (waitMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, waitMs));
+        }
+      }
+      if (plan.release) {
+        const last = plan.points[plan.points.length - 1];
+        emit("pointerup", last.x, last.y, 0);
+      }
+      return {
+        pointerEvents: plan.points.length,
+        elapsedMs: performance.now() - start,
+        meanIntervalMs: intervals.length === 0
+          ? 0
+          : intervals.reduce((sum, value) => sum + value, 0) / intervals.length,
+        maxIntervalMs: intervals.length === 0 ? 0 : Math.max(...intervals),
+        requestedHz: plan.requestedHz,
+        trace,
+      };
+    },
+    { points, intervalMs, from, release, requestedHz: hz },
+  );
 }
 
 /**

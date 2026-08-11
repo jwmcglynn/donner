@@ -77,6 +77,18 @@ export interface CompositedSample {
   meanLuma: number;
   /** Pixels that are opaque enough and chromatic enough to be content. */
   coloredPixels: number;
+  /**
+   * Centroid of those pixels, in read-back pixels, or -1 when there were none.
+   *
+   * This is the observable for content that moves INSIDE the surface rather
+   * than with it. A shape drag does not move the viewport, so the visible
+   * region's origin (`visibleX`/`visibleY`) is constant throughout and cannot
+   * say whether the dragged object moved, stalled, or jumped backward. The
+   * centroid of the document's chromatic pixels can, without knowing anything
+   * about how the object reached the screen.
+   */
+  coloredCentroidX: number;
+  coloredCentroidY: number;
   /** Total pixels read back for this sample. */
   sampledPixels: number;
   /** False when the composited read-back did not produce pixels. */
@@ -100,6 +112,19 @@ export interface CompositedProbeOptions {
   minColorAlpha?: number;
   /** Channel spread at or above which a pixel counts as chromatic. */
   minColorSpread?: number;
+  /**
+   * Restrict the read-back to this viewport-CSS rectangle, intersected with
+   * the visible surface region. Defaults to the whole visible region.
+   *
+   * Needed whenever the observable is one object rather than the document.
+   * `coloredCentroid*` over a whole artboard is dominated by everything that
+   * is NOT moving: a letter travelling 160 CSS px across the Donner Splash
+   * shifts the full-document centroid by well under a read-back pixel, so a
+   * perfectly working drag measures as zero motion. Sampling a window around
+   * the object makes its motion the dominant term, which is the only way this
+   * observable says anything about a single dragged shape.
+   */
+  sampleRegionCss?: { x: number; y: number; width: number; height: number };
 }
 
 declare global {
@@ -133,6 +158,7 @@ export async function installCompositedProbe(
     sampleHeight: options.sampleHeight ?? 48,
     minColorAlpha: options.minColorAlpha ?? 16,
     minColorSpread: options.minColorSpread ?? 12,
+    sampleRegionCss: options.sampleRegionCss ?? null,
   };
 
   await page.evaluate((config) => {
@@ -221,12 +247,32 @@ export async function installCompositedProbe(
           meanAlpha: 0,
           meanLuma: 0,
           coloredPixels: 0,
+          coloredCentroidX: -1,
+          coloredCentroidY: -1,
           sampledPixels: 0,
           drawOk: false,
         };
       }
 
-      const bounds = visibleBounds(surface);
+      let bounds = visibleBounds(surface);
+      if (config.sampleRegionCss !== null) {
+        // Intersect the requested window with the visible region, keeping the
+        // insets expressed relative to the element box so the source rect
+        // below stays correct.
+        const wanted = config.sampleRegionCss;
+        const left = Math.max(bounds.x, wanted.x);
+        const top = Math.max(bounds.y, wanted.y);
+        const right = Math.min(bounds.x + bounds.width, wanted.x + wanted.width);
+        const bottom = Math.min(bounds.y + bounds.height, wanted.y + wanted.height);
+        bounds = {
+          x: left,
+          y: top,
+          width: Math.max(0, right - left),
+          height: Math.max(0, bottom - top),
+          insetLeft: bounds.insetLeft + (left - bounds.x),
+          insetTop: bounds.insetTop + (top - bounds.y),
+        };
+      }
       const elementRect = surface.getBoundingClientRect();
       // Backing pixels per CSS pixel of the ELEMENT box. The visible region is
       // a sub-rectangle of that box, so its source rect scales the same way.
@@ -257,6 +303,8 @@ export async function installCompositedProbe(
           meanAlpha: 0,
           meanLuma: 0,
           coloredPixels: 0,
+          coloredCentroidX: -1,
+          coloredCentroidY: -1,
           sampledPixels: 0,
           drawOk: false,
         };
@@ -281,6 +329,8 @@ export async function installCompositedProbe(
           meanAlpha: 0,
           meanLuma: 0,
           coloredPixels: 0,
+          coloredCentroidX: -1,
+          coloredCentroidY: -1,
           sampledPixels: 0,
           drawOk: false,
         };
@@ -291,6 +341,8 @@ export async function installCompositedProbe(
       let alphaSum = 0;
       let lumaSum = 0;
       let colored = 0;
+      let coloredX = 0;
+      let coloredY = 0;
       for (let index = 0; index < pixels.length; index += 4) {
         const r = pixels[index];
         const g = pixels[index + 1];
@@ -302,6 +354,9 @@ export async function installCompositedProbe(
           const spread = Math.max(r, g, b) - Math.min(r, g, b);
           if (spread >= config.minColorSpread) {
             colored += 1;
+            const pixel = index / 4;
+            coloredX += pixel % readback.width;
+            coloredY += Math.floor(pixel / readback.width);
           }
         }
       }
@@ -311,6 +366,8 @@ export async function installCompositedProbe(
         meanAlpha: alphaSum / count,
         meanLuma: lumaSum / count,
         coloredPixels: colored,
+        coloredCentroidX: colored === 0 ? -1 : coloredX / colored,
+        coloredCentroidY: colored === 0 ? -1 : coloredY / colored,
         sampledPixels: count,
         drawOk: true,
       };
@@ -639,6 +696,134 @@ export function motionFraction(
     ) {
       moved += 1;
     }
+  }
+  return {
+    movedSamples: moved,
+    comparedSamples: compared,
+    fraction: compared === 0 ? 0 : moved / compared,
+  };
+}
+
+/** One frame in which the presented content moved against the gesture. */
+export interface DragRegression {
+  /** Index of the sample whose content position regressed. */
+  sampleIndex: number;
+  /** Presented centroid movement between the two samples, read-back px. */
+  presentedDx: number;
+  presentedDy: number;
+  /** Pointer movement over the same interval, CSS px. */
+  pointerDx: number;
+  pointerDy: number;
+  /** Presented epoch before and after. */
+  previousFrameToken: number;
+  frameToken: number;
+}
+
+/**
+ * Find frames in which the presented content moved AGAINST the drag.
+ *
+ * This is the decidable form of "the shape pops back to a previous position".
+ *
+ * A pop-back cannot be tested as "the centroid decreased", because a real drag
+ * reverses direction and the content is supposed to follow it. It also cannot
+ * be tested as "the centroid did not move", because a stall is a throughput
+ * problem, not a correctness one. What is never correct is the presented
+ * position moving opposite to where the pointer went over the same interval:
+ * that is an older drag position reaching the screen after a newer one.
+ *
+ * The pointer trace supplies the direction. For each consecutive sample pair,
+ * the pointer displacement over `[previous.t, current.t]` gives the gesture's
+ * instantaneous direction; a presented displacement whose projection onto that
+ * direction is negative by more than `toleranceReadbackPx` is a regression.
+ * Intervals in which the pointer barely moved are skipped, because a direction
+ * derived from sub-pixel motion is noise.
+ *
+ * Note the units differ on purpose: the presented displacement is in read-back
+ * pixels and the pointer displacement is in CSS pixels. Only the SIGN of the
+ * projection is used, so the scale factor between them cannot change the
+ * verdict; the tolerance is applied to the presented magnitude alone.
+ */
+export function dragRegressions(
+  samples: readonly CompositedSample[],
+  pointerTrace: ReadonlyArray<readonly [number, number, number]>,
+  toleranceReadbackPx = 1.0,
+  minPointerDeltaCssPx = 2.0,
+): DragRegression[] {
+  const pointerAt = (t: number): { x: number; y: number } | null => {
+    let best: readonly [number, number, number] | null = null;
+    for (const point of pointerTrace) {
+      if (point[0] > t) {
+        break;
+      }
+      best = point;
+    }
+    return best === null ? null : { x: best[1], y: best[2] };
+  };
+
+  const regressions: DragRegression[] = [];
+  let previous: CompositedSample | undefined;
+  for (const [index, sample] of samples.entries()) {
+    if (sample.coloredCentroidX < 0 || !sample.drawOk) {
+      continue;
+    }
+    if (previous !== undefined) {
+      const before = pointerAt(previous.t);
+      const after = pointerAt(sample.t);
+      if (before !== null && after !== null) {
+        const pointerDx = after.x - before.x;
+        const pointerDy = after.y - before.y;
+        const pointerLength = Math.hypot(pointerDx, pointerDy);
+        if (pointerLength >= minPointerDeltaCssPx) {
+          const presentedDx = sample.coloredCentroidX - previous.coloredCentroidX;
+          const presentedDy = sample.coloredCentroidY - previous.coloredCentroidY;
+          const projection = (presentedDx * pointerDx + presentedDy * pointerDy) / pointerLength;
+          if (projection < -toleranceReadbackPx) {
+            regressions.push({
+              sampleIndex: index,
+              presentedDx,
+              presentedDy,
+              pointerDx,
+              pointerDy,
+              previousFrameToken: previous.frameToken,
+              frameToken: sample.frameToken,
+            });
+          }
+        }
+      }
+    }
+    previous = sample;
+  }
+  return regressions;
+}
+
+/**
+ * Fraction of sampled frames in which the presented content's centroid moved.
+ *
+ * The drag counterpart of `motionFraction`, which measures the surface's own
+ * origin and therefore cannot see an object moving inside a stationary
+ * surface.
+ */
+export function contentMotionFraction(
+  samples: readonly CompositedSample[],
+  minDeltaReadbackPx = 0.25,
+): { movedSamples: number; comparedSamples: number; fraction: number } {
+  let moved = 0;
+  let compared = 0;
+  let previous: CompositedSample | undefined;
+  for (const sample of samples) {
+    if (sample.coloredCentroidX < 0 || !sample.drawOk) {
+      continue;
+    }
+    if (previous !== undefined) {
+      compared += 1;
+      if (
+        Math.abs(sample.coloredCentroidX - previous.coloredCentroidX) > minDeltaReadbackPx
+        || Math.abs(sample.coloredCentroidY - previous.coloredCentroidY) > minDeltaReadbackPx
+      ) {
+        moved += 1;
+      }
+    }
+    previous = sample;
   }
   return {
     movedSamples: moved,
