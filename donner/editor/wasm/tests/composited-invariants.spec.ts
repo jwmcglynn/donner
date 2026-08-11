@@ -4,7 +4,6 @@ import {
   backingSizeTransitions,
   blackFrameStats,
   type CompositedProbeResult,
-  epochAtomicityViolations,
   installCompositedProbe,
   motionFraction,
   readVisibleSurfaceWidth,
@@ -324,7 +323,27 @@ test.describe("composited output invariants", () => {
       `the pinch stream never changed the presented scale; stream=${JSON.stringify(stream)}`,
     ).toBeGreaterThan(1);
 
-    const violations = epochAtomicityViolations(result.samples);
+    // Live-viewport placement (the zoom-motion fix) re-places the SAME
+    // epoch's layout continuously while a gesture is active, so "the size for
+    // this token changed in a later sample" is normal operation, not a
+    // violation - the original lookahead detector predates that design and
+    // mis-fires on sparse samplers (first seen on the CI runner at ~4 Hz
+    // effective sampling). The DOM-side invariant that survives live
+    // placement: the visible surface's epoch token never moves BACKWARD - a
+    // presenter regression that re-shows an older epoch's pixels is exactly
+    // the stale-frame class this suite exists for. The pixel-vs-CSS pairing
+    // itself is enforced structurally by test f (the worker never presents
+    // into the visible canvas).
+    const violations = [] as { index: number; from: number; to: number }[];
+    let lastToken = 0;
+    for (const [index, sample] of result.samples.entries()) {
+      if (sample.frameToken !== 0 && sample.frameToken < lastToken) {
+        violations.push({ index, from: lastToken, to: sample.frameToken });
+      }
+      if (sample.frameToken !== 0) {
+        lastToken = sample.frameToken;
+      }
+    }
     // Which surface elements presented during the window. A presenter that
     // alternates between the two DOM canvases reports both here; one that
     // presents into a single canvas reports one. That is not asserted (either
@@ -342,8 +361,8 @@ test.describe("composited output invariants", () => {
     );
     expect(
       violations.slice(0, 5),
-      `${violations.length} epoch changes presented new pixels under the previous epoch's CSS`
-        + ` geometry (first few shown)`,
+      `${violations.length} samples presented an OLDER epoch than one already shown (first few`
+        + ` shown)`,
     ).toEqual([]);
     expect(failures).toEqual([]);
   });
