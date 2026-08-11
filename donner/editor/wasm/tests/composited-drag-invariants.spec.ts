@@ -307,6 +307,18 @@ test.describe("composited drag invariants", () => {
   });
 
   test("h: a shape drag never blanks the document, including at drag start", async ({ browserName, page }) => {
+    // Gecko-at-CI carve-out, same as composited-invariants a/b/d: Playwright
+    // Firefox on shared CI runners shows a drawImage-readback artifact against
+    // worker-owned WebGPU canvases (long runs of empty samples while DOM
+    // observables prove the document is presenting). The readback-dependent
+    // assertions in this test are meaningless there; the DOM-based drag
+    // invariants (g, and h's surface-absence half via the enforced suites)
+    // keep Gecko coverage. Tracked: Gecko readback diagnosis in the Design
+    // 0062 follow-ups; remove when it lands.
+    test.skip(
+      browserName === "firefox" && Boolean(process.env.CI),
+      "Gecko CI readback artifact - see tracked diagnosis",
+    );
     // GUARDS: the first-drag black frame. Pressing down on a shape and starting
     // to move it flashes the editor background for one frame before the first
     // dragged frame arrives.
@@ -379,6 +391,18 @@ test.describe("composited drag invariants", () => {
   });
 
   test("i: the presented document follows a shape drag", async ({ browserName, page }) => {
+    // Gecko-at-CI carve-out, same as composited-invariants a/b/d: Playwright
+    // Firefox on shared CI runners shows a drawImage-readback artifact against
+    // worker-owned WebGPU canvases (long runs of empty samples while DOM
+    // observables prove the document is presenting). The readback-dependent
+    // assertions in this test are meaningless there; the DOM-based drag
+    // invariants (g, and h's surface-absence half via the enforced suites)
+    // keep Gecko coverage. Tracked: Gecko readback diagnosis in the Design
+    // 0062 follow-ups; remove when it lands.
+    test.skip(
+      browserName === "firefox" && Boolean(process.env.CI),
+      "Gecko CI readback artifact - see tracked diagnosis",
+    );
     // GUARDS: a drag that only updates the screen when the pipeline happens to
     // catch up. The dragged object's own motion is the observable, not the
     // surface's: a shape drag does not move the viewport, so every
