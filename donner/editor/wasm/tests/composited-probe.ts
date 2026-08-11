@@ -143,6 +143,22 @@ export interface CompositedSample {
    */
   sourceClamped: boolean;
   /**
+   * True when the visible surface's backing store is still the unconfigured
+   * HTML canvas default (300x150) while its element box is larger on both axes.
+   *
+   * This is NOT a stale reading of a valid size. The worker configures a slot's
+   * backing store the first time it presents into it and never returns it to
+   * the default, so 300x150 under a full-size element box means the worker has
+   * never presented into this slot at all: there is no committed frame to read
+   * back, and none for the compositor to show either.
+   *
+   * It matters because it is the one empty read that a retry cannot rescue by
+   * construction. Distinguishing it keeps "no frame exists yet" from "the frame
+   * exists and the snapshot came back empty", which are different defects with
+   * different owners.
+   */
+  backingUncommitted: boolean;
+  /**
    * How many `drawImage` read-backs this sample took. 1 in the ordinary case;
    * more when the first attempt came back empty. See the file comment.
    */
@@ -318,6 +334,7 @@ export async function installCompositedProbe(
       sourceWidth: 0,
       sourceHeight: 0,
       sourceClamped: false,
+      backingUncommitted: false,
     };
 
     const sampleOnce = (): CompositedSample => {
@@ -419,6 +436,13 @@ export async function installCompositedProbe(
         sourceWidth,
         sourceHeight,
         sourceClamped,
+        // 300x150 is the HTML canvas default, and the worker never returns a
+        // slot it has presented into to that size, so this identifies a slot
+        // with no committed frame at all rather than a stale size. The element
+        // box has to be larger on both axes for the comparison to mean
+        // anything: a genuinely 300x150 pane would report the same numbers.
+        backingUncommitted: surface.width === 300 && surface.height === 150
+          && elementRect.width > 300 && elementRect.height > 150,
       };
 
       if (!(sourceWidth >= 1) || !(sourceHeight >= 1)) {
@@ -490,6 +514,13 @@ export async function installCompositedProbe(
         measurement !== null
         && measurement.meanAlpha < config.retryBelowMeanAlpha
         && attempts < config.readbackAttempts
+        // A slot the worker has never presented into has no frame to return,
+        // so every attempt answers the same way. Retrying it cannot rescue
+        // anything and would report the sample as a snapshot-availability
+        // problem, which it is not; `backingUncommitted` carries that verdict
+        // instead. This narrows what the retry is asked to explain, it does
+        // not widen any tolerance: the sample is still empty and still counts.
+        && !base.backingUncommitted
       ) {
         const again = readOnce();
         attempts += 1;
@@ -664,10 +695,14 @@ export function describeEmptyReadbacks(
   meanAlphaThreshold = 40,
   maxDetail = 4,
 ): string {
+  // Retried samples are the read-back-availability story; never-committed slots
+  // are the no-frame-exists story. Both belong here, or a run that hits only
+  // the second one reports nothing at all.
   const empty = samples
     .map((sample, index) => ({ index, sample }))
     .filter(({ sample }) =>
-      sample.readbackAttempts > 1 && sample.meanAlpha < meanAlphaThreshold
+      (sample.readbackAttempts > 1 || sample.backingUncommitted)
+      && sample.meanAlpha < meanAlphaThreshold
     );
   if (empty.length === 0) {
     return "emptyReadbacks=0";
@@ -685,12 +720,14 @@ export function describeEmptyReadbacks(
       Math.round(sample.sourceHeight),
     ],
     clamped: sample.sourceClamped,
+    uncommittedBacking: sample.backingUncommitted,
     meanAlpha: Number(sample.meanAlpha.toFixed(2)),
     surface: sample.surfaceId,
     frameToken: sample.frameToken,
   }));
   return `emptyReadbacks=${empty.length}/${samples.length}`
     + ` clamped=${empty.filter(({ sample }) => sample.sourceClamped).length}`
+    + ` uncommittedBacking=${empty.filter(({ sample }) => sample.backingUncommitted).length}`
     + ` backingSizes=${
       JSON.stringify(
         distinct(empty.map(({ sample }) => `${sample.backingWidth}x${sample.backingHeight}`)),
@@ -708,6 +745,56 @@ export function describeEmptyReadbacks(
     + ` surfaces=${JSON.stringify(distinct(empty.map(({ sample }) => sample.surfaceId)))}`
     + ` frameTokens=[${empty[0].sample.frameToken}..${empty.at(-1)?.sample.frameToken}]`
     + ` first=${JSON.stringify(detail)}`;
+}
+
+/** Where a window's never-committed-surface samples sit, relative to first commit. */
+export interface UncommittedSurfaceSamples {
+  /**
+   * Samples taken while the visible slot had not yet presented anything in this
+   * window: the promotion reached the DOM before the slot's first frame did.
+   * Bounded by construction, since a slot leaves this state permanently once it
+   * commits once.
+   */
+  beforeFirstCommit: number[];
+  /**
+   * Samples where a slot that HAD already presented in this window went back to
+   * an unconfigured backing store. Nothing in the presenter should be able to
+   * do that, so this list being non-empty is a defect rather than a startup
+   * artifact.
+   */
+  afterFirstCommit: number[];
+}
+
+/**
+ * Split the never-committed-surface samples by whether that slot had already
+ * presented earlier in the same window.
+ *
+ * The two halves are different claims. A slot promoted before its first frame
+ * is latched is a startup ordering property of the two-canvas presenter. A slot
+ * reverting to an unconfigured backing store after it has presented is not
+ * reachable by that design at all.
+ */
+export function uncommittedSurfaceSamples(
+  samples: readonly CompositedSample[],
+): UncommittedSurfaceSamples {
+  const committed = new Set<string>();
+  const beforeFirstCommit: number[] = [];
+  const afterFirstCommit: number[] = [];
+  samples.forEach((sample, index) => {
+    if (sample.surfaceId === "") {
+      return;
+    }
+    if (!sample.backingUncommitted) {
+      committed.add(sample.surfaceId);
+      return;
+    }
+    if (committed.has(sample.surfaceId)) {
+      afterFirstCommit.push(index);
+    } else {
+      beforeFirstCommit.push(index);
+    }
+  });
+  return { beforeFirstCommit, afterFirstCommit };
 }
 
 /** One epoch-atomicity violation: pixels and layout disagreed for a window. */
