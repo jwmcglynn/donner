@@ -2,6 +2,8 @@
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
+
+#include "donner/editor/WholeAppWorkerBridge.h"
 #endif
 
 #include <utility>
@@ -13,7 +15,21 @@ namespace donner::editor {
 
 namespace {
 
-#ifdef __EMSCRIPTEN__
+#if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WHOLE_APP_WORKER)
+// The zoom-modifier shadow is a `document`-scoped capture listener, so on the
+// whole-app-worker build it lives in the shared-memory mirror that
+// `whole_app_worker::Install()` sets up; there is nothing left to install or
+// remove from the app thread.
+void InstallWasmWheelModifierCapture() {}
+void RemoveWasmWheelModifierCapture() {}
+int WasmWheelZoomModifierHeld() {
+  return whole_app_worker::ZoomModifierHeld() ? 1 : 0;
+}
+void RecordWasmScrollDebug(int zoomModifierHeld, double xoffset, double yoffset, int phys,
+                           int /*dom*/) {
+  whole_app_worker::RecordScrollDebug(zoomModifierHeld != 0, xoffset, yoffset, phys != 0);
+}
+#elif defined(__EMSCRIPTEN__)
 // clang-format off
 EM_JS(void, InstallWasmWheelModifierCapture, (), {
   const canvas = document.getElementById("canvas");

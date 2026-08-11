@@ -4,7 +4,8 @@ def _web_package_impl(ctx):
     commands = ["mkdir -p {}".format(output_dir.path)]
 
     for input_file in ctx.files.srcs:
-        output_path = output_dir.path + "/" + input_file.basename
+        name = ctx.attr.renames.get(input_file.basename, input_file.basename)
+        output_path = output_dir.path + "/" + name
         commands.append("cp {} {}".format(input_file.path, output_path))
 
     for wasm_dep in ctx.files.wasm_deps:
@@ -28,6 +29,9 @@ web_package = rule(
             allow_files = [".css", ".html", ".js", ".svg"],
         ),
         "out": attr.string(),
+        # Maps an input basename to the name it is served under, for packages
+        # that need a differently named source file to land as `index.html`.
+        "renames": attr.string_dict(),
         "wasm_deps": attr.label_list(),
     },
 )

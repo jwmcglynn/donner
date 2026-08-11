@@ -49,7 +49,8 @@ enum class DocumentPresentationTarget : std::uint8_t {
 
 /// The presentation target this build presents through.
 [[nodiscard]] constexpr DocumentPresentationTarget DefaultDocumentPresentationTarget() {
-#if defined(DONNER_EDITOR_WGPU) && defined(__EMSCRIPTEN__)
+#if defined(DONNER_EDITOR_WGPU) && defined(__EMSCRIPTEN__) && \
+    !defined(DONNER_EDITOR_WHOLE_APP_WORKER)
   return DocumentPresentationTarget::WorkerSurface;
 #else
   return DocumentPresentationTarget::FramebufferUnderlay;

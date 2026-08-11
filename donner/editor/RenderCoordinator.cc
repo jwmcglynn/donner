@@ -7,6 +7,8 @@
 #include <span>
 #include <utility>
 
+#include "donner/base/MemoryAttribution.h"
+
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 #endif
@@ -794,6 +796,7 @@ bool RenderCoordinator::rasterizeOverlayForPresentation(
 void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& viewport,
                                          GlTextureCache& textures, FrameHistory* frameHistory) {
   ZoneScopedN("RenderCoordinator::pollRenderResult");
+  const ScopedHeapDelta pollHeapDelta(MemoryStage::AppPollResult);
   auto resultOpt = renderWorker_.asyncRenderer.pollResult();
   if (!resultOpt.has_value()) {
     return;

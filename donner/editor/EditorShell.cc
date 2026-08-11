@@ -28,6 +28,7 @@
 #endif
 
 #include "GLFW/glfw3.h"
+#include "donner/base/MemoryAttribution.h"
 #include "donner/base/RcString.h"
 #include "donner/base/StringUtils.h"
 #include "donner/css/parser/ColorParser.h"
@@ -6264,6 +6265,7 @@ void EditorShell::revealSourceRange(SourceByteRange byteRange) {
 }
 
 void EditorShell::prepareFrame() {
+  const ScopedHeapDelta inputHeapDelta(MemoryStage::AppInput);
   if (showSamplePicker_) {
     ensureSampleThumbnails();
   }
@@ -6416,6 +6418,22 @@ void EditorShell::recordFrameTelemetry(
   const PresentationResourceStats presentationResources = textures_.presentationResourceStats();
   interactionController_.frameHistory().setLatestMemorySample(
       MemorySampleFromPresentationResources(presentationResources));
+  // Feed the app thread's half of the byte attribution (see
+  // `donner/base/MemoryAttribution.h`); the render thread publishes the
+  // compositor's half from `AsyncRenderer::workerLoop`. The frame publisher
+  // reads both and is the only writer of the page-visible stats object.
+  SetRetainedBytes(MemoryCategory::PresentationTiles, presentationResources.activeTileBytes);
+  SetEntryCount(MemoryCategory::PresentationTiles,
+                static_cast<std::uint64_t>(presentationResources.activeTileTextures));
+  SetRetainedBytes(MemoryCategory::PresentationOverviewTiles,
+                   presentationResources.overviewTileBytes);
+  SetEntryCount(MemoryCategory::PresentationOverviewTiles,
+                static_cast<std::uint64_t>(presentationResources.overviewTileTextures));
+  SetRetainedBytes(MemoryCategory::PresentationRetired, presentationResources.pendingRetiredBytes +
+                                                            presentationResources.agedRetiredBytes);
+  SetEntryCount(MemoryCategory::PresentationRetired,
+                static_cast<std::uint64_t>(presentationResources.pendingRetiredTextures +
+                                           presentationResources.agedRetiredTextures));
   maybeLogFrameMissTelemetry(frameCost);
   maybeLogResourceDiagnostics(frameCost);
 #ifdef __EMSCRIPTEN__
@@ -6435,6 +6453,10 @@ void EditorShell::recordFrameTelemetry(
       ++layerThumbnailTextureSnapshotCount;
     }
   }
+  SetRetainedBytes(MemoryCategory::LayerThumbnails,
+                   static_cast<std::uint64_t>(layerThumbnailBitmapBytes));
+  SetEntryCount(MemoryCategory::LayerThumbnails,
+                static_cast<std::uint64_t>(thumbnailTextures_.thumbnailTextureCount()));
   PublishLayerThumbnailStats(
       static_cast<double>(layerThumbnailStats.rowCount),
       static_cast<double>(layerThumbnailStats.renderedCount),
@@ -6609,6 +6631,7 @@ void EditorShell::runPresentationOnlyFrame() {
 
 void EditorShell::runFrame() {
   ZoneScopedN("EditorShell::runFrame");
+  const ScopedHeapDelta uiFrameHeapDelta(MemoryStage::AppUiFrame);
   ++frameTelemetryFrame_;
   renderCoordinator_.beginFrameCostTracking();
   FrameCostBreakdown::MainFrame mainFrameCost;

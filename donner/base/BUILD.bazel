@@ -46,6 +46,34 @@ donner_cc_library(
     alwayslink = True,  # link-order independence (#665)
 )
 
+# Per-frame attribution of ASYNCIFY suspend cost (Design 0064). Lives in
+# //donner/base because both the editor's frame loop and the Geode renderer's
+# GPU-readback wait have to bracket their own suspend points; it deliberately
+# has no dependencies so any layer can instrument.
+donner_cc_library(
+    name = "asyncify_suspend_probe",
+    srcs = ["AsyncifySuspendProbe.cc"],
+    hdrs = ["AsyncifySuspendProbe.h"],
+    visibility = ["//visibility:public"],
+)
+
+# Per-frame attribution of retained bytes by subsystem (Design 0064). Like
+# `asyncify_suspend_probe` it is dependency-free on purpose: the compositor, the
+# render worker, and the editor's presentation cache all publish into it, and
+# none of them may take a dependency on the others to do so.
+donner_cc_library(
+    name = "memory_attribution",
+    srcs = [
+        "HeapSizeHistogram.cc",
+        "MemoryAttribution.cc",
+    ],
+    hdrs = [
+        "HeapSizeHistogram.h",
+        "MemoryAttribution.h",
+    ],
+    visibility = ["//visibility:public"],
+)
+
 donner_cc_library(
     name = "diagnostic_renderer",
     srcs = [
@@ -133,6 +161,7 @@ filegroup(
 donner_cc_test(
     name = "base_tests",
     srcs = [
+        "tests/AsyncifySuspendProbe_tests.cc",
         "tests/BaseTestUtils_tests.cc",
         "tests/BezierUtils_tests.cc",
         "tests/Box_tests.cc",
@@ -141,6 +170,7 @@ donner_cc_test(
         "tests/DiagnosticRenderer_tests.cc",
         "tests/Length_tests.cc",
         "tests/MathUtils_tests.cc",
+        "tests/MemoryAttribution_tests.cc",
         "tests/OptionalRef_tests.cc",
         "tests/ParseDiagnostic_tests.cc",
         "tests/ParseResult_tests.cc",
@@ -163,9 +193,11 @@ donner_cc_test(
     ],
     shard_count = 10,
     deps = [
+        ":asyncify_suspend_probe",
         ":base",
         ":base_test_utils",
         ":diagnostic_renderer",
+        ":memory_attribution",
         "@com_google_gtest//:gtest_main",
     ],
 )

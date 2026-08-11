@@ -7,13 +7,18 @@
 
 #include "donner/editor/RenderPanePresenter.h"
 
-#if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
+#if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU) && \
+    !defined(DONNER_EDITOR_WHOLE_APP_WORKER)
 #include <emscripten.h>
 #endif
 
 namespace donner::editor {
 
-#if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
+// The whole-app-worker experiment has no worker-owned document canvas: the app
+// thread owns the only canvas and composites the document under the UI itself,
+// so this whole CSS placement bridge is compiled out there.
+#if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU) && \
+    !defined(DONNER_EDITOR_WHOLE_APP_WORKER)
 // Positions the worker-owned document canvas from the live viewport. The
 // bitmap-bridge and injected-hook forms take the whole layout object; the
 // direct-canvas form writes CSS geometry onto the front/back canvas pair and
@@ -76,7 +81,8 @@ EM_JS(void, UpdateWorkerDocumentSurfaceLayout,
 #endif
 
 WorkerSurfaceLayoutSink DefaultWorkerSurfaceLayoutSink() {
-#if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
+#if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU) && \
+    !defined(DONNER_EDITOR_WHOLE_APP_WORKER)
   return [](const WorkerSurfaceLayout& layout) {
     UpdateWorkerDocumentSurfaceLayout(
         layout.visible ? 1 : 0, layout.surfaceSlot, layout.left, layout.top, layout.width,
@@ -222,13 +228,11 @@ std::optional<WorkerSurfaceLayout> ComputeWorkerSurfaceLayout(
   const Vector2i contentSizePx = frame.workerSurface.rasterViewport.outputSizePx;
   const Vector2i backingSizePx = frame.workerSurface.surfaceBackingSizePx;
   if (contentSizePx.x > 0 && contentSizePx.y > 0 && backingSizePx.x > contentSizePx.x) {
-    surplusScreenX = surfaceRect.width() *
-                     static_cast<double>(backingSizePx.x - contentSizePx.x) /
+    surplusScreenX = surfaceRect.width() * static_cast<double>(backingSizePx.x - contentSizePx.x) /
                      static_cast<double>(contentSizePx.x);
   }
   if (contentSizePx.x > 0 && contentSizePx.y > 0 && backingSizePx.y > contentSizePx.y) {
-    surplusScreenY = surfaceRect.height() *
-                     static_cast<double>(backingSizePx.y - contentSizePx.y) /
+    surplusScreenY = surfaceRect.height() * static_cast<double>(backingSizePx.y - contentSizePx.y) /
                      static_cast<double>(contentSizePx.y);
   }
 
@@ -242,8 +246,7 @@ std::optional<WorkerSurfaceLayout> ComputeWorkerSurfaceLayout(
       .clipLeft = clippedSurfaceRect->topLeft.x - surfaceRect.topLeft.x,
       .clipTop = clippedSurfaceRect->topLeft.y - surfaceRect.topLeft.y,
       .clipRight = surfaceRect.bottomRight.x - clippedSurfaceRect->bottomRight.x + surplusScreenX,
-      .clipBottom =
-          surfaceRect.bottomRight.y - clippedSurfaceRect->bottomRight.y + surplusScreenY,
+      .clipBottom = surfaceRect.bottomRight.y - clippedSurfaceRect->bottomRight.y + surplusScreenY,
       .frameToken = frame.workerSurface.frameCount,
       .selectionChromeBaked = frame.workerSurface.selectionChromeBaked,
   };

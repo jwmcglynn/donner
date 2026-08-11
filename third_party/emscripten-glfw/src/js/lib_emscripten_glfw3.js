@@ -551,8 +551,10 @@ let emscripten_glfw3_impl = {
 
       ctx.restoreCSSValues();
 
-      canvas.width = ctx.originalSize.width;
-      canvas.height = ctx.originalSize.height;
+      if(!canvas.controlTransferredOffscreen) {
+        canvas.width = ctx.originalSize.width;
+        canvas.height = ctx.originalSize.height;
+      }
 
       if(ctx.fCanvasResize)
       {
@@ -577,8 +579,17 @@ let emscripten_glfw3_impl = {
     const ctx = GLFW3.fWindowContexts[glfwWindow];
     const canvas = ctx.canvas;
 
-    if(canvas.width !== fbWidth) canvas.width = fbWidth;
-    if(canvas.height !== fbHeight) canvas.height = fbHeight;
+    // A canvas whose control has been transferred to an OffscreenCanvas can no
+    // longer be resized from the thread holding the DOM element: the assignment
+    // throws `InvalidStateError` and aborts the caller. Only the owning thread
+    // may size it, through `emscripten_set_canvas_element_size`. This is never
+    // true unless the embedder transferred the canvas (Emscripten
+    // PROXY_TO_PTHREAD plus OFFSCREENCANVAS_SUPPORT), so the ordinary
+    // main-thread build is unaffected.
+    if(!canvas.controlTransferredOffscreen) {
+      if(canvas.width !== fbWidth) canvas.width = fbWidth;
+      if(canvas.height !== fbHeight) canvas.height = fbHeight;
+    }
 
     // this will (on purpose) override any css setting
     ctx.setCSSValue("width",   width + "px", "important");

@@ -27,6 +27,24 @@ config_setting(
     },
 )
 
+# Design 0064 phase 1 experiment: boot the whole editor under Emscripten
+# PROXY_TO_PTHREAD with the single `#canvas` transferred as an OffscreenCanvas,
+# and render documents inline on the app thread through the desktop-shaped
+# framebuffer-underlay path. Off by default; the default package and its size
+# gates never see this configuration.
+bool_flag(
+    name = "whole_app_worker",
+    build_setting_default = False,
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "whole_app_worker_enabled",
+    flag_values = {
+        ":whole_app_worker": "True",
+    },
+)
+
 _EDITOR_WASM_BINARY_DEPS = [
     "//donner/editor:editor_shell",
     "//donner/editor:editor_splash",
@@ -113,6 +131,94 @@ _EDITOR_LINKOPTS = [
     "-sOFFSCREENCANVAS_SUPPORT=1",
 ] + _EMDAWNWEBGPU_LINKOPTS
 
+# Design 0064 phase 1 experiment link settings. Derived from the shipping
+# settings so the two cannot drift: the whole app runs on one pthread that owns
+# the transferred `#canvas`, so the shipping build's second pool slot (the
+# render worker) is not needed and `PROXY_TO_PTHREAD` moves `main()` off the
+# browser main thread.
+#
+# Linear memory is FIXED in this build: `INITIAL_MEMORY == MAXIMUM_MEMORY` with
+# `ALLOW_MEMORY_GROWTH=0`. Growth is not a slow path here, it is the crash.
+#
+# The contract is: measure the peak, size the heap to it with fragmentation
+# headroom, and make growth impossible. A build that outgrows this number must
+# fail at the allocation that would have grown - a deterministic `Aborted(OOM)`
+# naming the frame - rather than trapping an unrelated thread later. Do not
+# re-enable growth to "fix" an OOM here; re-measure the peak and either bring it
+# down or raise both numbers together.
+#
+# THIS NUMBER IS NOT YET CORRECT, and this build is not shippable until it is.
+# Measured with the Design 0064 phase 2 memory harness
+# (`donner/editor/wasm/tests/frame-budget-harness.mjs`), 1600x900 CSS viewport,
+# Donner Splash, burst zoom storm, on the reference machine:
+#
+#   | device pixel ratio | canvas backing | outcome at 384 MiB fixed          |
+#   |--------------------|----------------|-----------------------------------|
+#   | 1 (Chromium)       | 1600x900       | `Aborted(OOM)` 0.5 to 1.5 s in    |
+#   | 2 (Chromium)       | 3200x1800      | `Aborted(OOM)` 0.25 s in          |
+#   | 2 (Firefox)        | 3200x1800      | `Aborted(OOM)` 3.5 to 4 s in      |
+#
+# The earlier claim recorded here - "384 MiB fixed: 10 s storm plus 20 s soak
+# clean on Chromium, and Firefox is a separate Gecko demand curve" - was an
+# artifact of an unmatched test. Playwright's Chromium forces
+# `devicePixelRatio` to the context's `deviceScaleFactor` (default 1) over CDP;
+# Playwright's Firefox does not and uses the display's own ratio. So the
+# Chromium arm was rasterizing a quarter of the pixels the Firefox arm was, and
+# a quarter of what a real user on the same display gets on *either* browser.
+# Every canvas-scale allocation here is proportional to DPR squared. This is not
+# a Gecko pathology; Chromium at the same ratio fails sooner.
+#
+# What actually consumes the heap under the storm, from the allocation-tag
+# table (see `donner/base/HeapSizeHistogram.h`):
+#
+#   - Full-canvas raster surfaces allocated inside `CompositorController::
+#     renderFrame` and never released: 6.20 MB each at DPR 1, 24.79 MB each at
+#     DPR 2 (exactly 4x), accumulating about one per 250 ms until the heap ends.
+#     `kMaxCompositorMemoryBytes` is 1 GiB, larger than this entire address
+#     space, so the admission check in `maybePromote` can never refuse one.
+#   - 72.9 MiB of `ImDrawVert` arrays, identical on both engines and at both
+#     ratios, live from the first storm frame onward: one 20,106,204 B ImGui
+#     draw-list vector plus three 18,79x,xxx B host staging arrays, one per
+#     frame in flight. The first storm frame emits 936,006 ImGui vertices and
+#     1,407,681 indices where the splash emits 12,370; neither ImGui's vectors
+#     nor the WGPU backend's staging arrays ever shrink, so one frame's worst
+#     case is retained for the session. That is 19 percent of this heap spent
+#     on chrome geometry.
+#
+# Raising this constant is not the fix for either of those. Bounding the
+# compositor to the address space it lives in, and not emitting a million
+# vertices of chrome per frame, are.
+_EDITOR_WORKER_APP_FIXED_MEMORY_BYTES = 402653184  # 384 MiB
+
+# Dropped from the shipping list by *setting name*, not by exact string: the
+# shipping `INITIAL_MEMORY` is re-tuned whenever boot demand is re-measured (it
+# has been 64 MiB and 192 MiB), and an exact-match filter silently stops
+# filtering when that happens, leaving two `-sINITIAL_MEMORY` flags on the link
+# line whose winner is a last-one-wins accident.
+_EDITOR_WORKER_APP_DROPPED_SETTINGS = [
+    "-sPTHREAD_POOL_SIZE=",
+    "-sALLOW_MEMORY_GROWTH=",
+    "-sMAXIMUM_MEMORY=",
+    "-sINITIAL_MEMORY=",
+]
+
+_EDITOR_WORKER_APP_LINKOPTS = [
+    opt
+    for opt in _EDITOR_LINKOPTS
+    if not [prefix for prefix in _EDITOR_WORKER_APP_DROPPED_SETTINGS if opt.startswith(prefix)]
+] + [
+    "-sALLOW_MEMORY_GROWTH=0",
+    "-sINITIAL_MEMORY={}".format(_EDITOR_WORKER_APP_FIXED_MEMORY_BYTES),
+    "-sMAXIMUM_MEMORY={}".format(_EDITOR_WORKER_APP_FIXED_MEMORY_BYTES),
+    "-sPROXY_TO_PTHREAD",
+    # The app pthread is the only thread; pre-warm exactly one pool worker so
+    # boot does not pay a worker spawn on the browser main thread.
+    "-sPTHREAD_POOL_SIZE=1",
+    # Emscripten's default already lists `#canvas`; state it so the experiment's
+    # single-canvas contract is visible at the link line.
+    "-sOFFSCREENCANVASES_TO_PTHREAD=#canvas",
+]
+
 cc_library(
     name = "notice_inputs",
     target_compatible_with = select({
@@ -185,6 +291,66 @@ web_package(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     wasm_deps = [":wasm"],
+)
+
+cc_binary(
+    name = "_editor_wasm_worker_app_binary",
+    srcs = ["//donner/editor:main.cc"],
+    additional_linker_inputs = _EMDAWNWEBGPU_JS_LIBS + [":_geode_only_guard"],
+    copts = [
+        "-pthread",
+    ],
+    linkopts = _EDITOR_WORKER_APP_LINKOPTS,
+    tags = [
+        "manual",
+        "wasm",
+    ],
+    target_compatible_with = select({
+        ":whole_app_worker_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = _EDITOR_WASM_BINARY_DEPS + ["//donner/editor:notice"],
+)
+
+wasm_cc_binary(
+    name = "wasm_worker_app",
+    cc_target = ":_editor_wasm_worker_app_binary",
+    # Subdirectory-scoped so these do not collide with the default package's
+    # `editor.js` / `editor.wasm` outputs; `web_package` copies by basename, so
+    # the served file names are unchanged.
+    outputs = [
+        "worker_app/editor.js",
+        "worker_app/editor.wasm",
+    ],
+    tags = [
+        "manual",
+        "wasm",
+    ],
+    target_compatible_with = select({
+        ":whole_app_worker_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+)
+
+web_package(
+    name = "wasm_web_package_worker_app",
+    srcs = [
+        "editor.css",
+        "enable-threads.js",
+        "worker-app-bootstrap.js",
+        "worker-app-index.html",
+        "//:donner_icon.svg",
+    ],
+    renames = {"worker-app-index.html": "index.html"},
+    tags = [
+        "manual",
+        "wasm",
+    ],
+    target_compatible_with = select({
+        ":whole_app_worker_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    wasm_deps = [":wasm_worker_app"],
 )
 
 editor_wasm_geode_transitioned_target(

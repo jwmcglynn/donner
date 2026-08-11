@@ -13,6 +13,43 @@
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 
+#include "donner/base/AsyncifySuspendProbe.h"
+#include "donner/editor/WholeAppWorkerBridge.h"
+
+#ifdef DONNER_EDITOR_WHOLE_APP_WORKER
+// The app pthread's JS context has no `window`, so the frame-scheduling flag,
+// the frame-loop probe surface, and the pinch policy publication all route
+// through the main-thread bridge instead of `EM_JS`. `callbacks` is counted
+// locally and flushed with the next sample rather than proxied per rAF tick.
+namespace {
+int g_pendingFrameLoopCallbacks = 0;
+}  // namespace
+
+void InitializeWasmEditorFrameScheduling() {
+  // Already installed at the top of main(), before anything could call an
+  // EM_JS body that assumes a browser main-thread JS context.
+}
+
+bool ConsumeBrowserEditorFrameRequest() {
+  ++g_pendingFrameLoopCallbacks;
+  return donner::editor::whole_app_worker::ConsumeFrameRequest();
+}
+
+void MarkWasmEditorFrameRendered() {}
+
+void EnsureWasmFrameLoopStats() {}
+
+void RecordWasmFrameLoopSample(int triggerBits, int uiRebuilt, double frameMs) {
+  donner::editor::whole_app_worker::RecordFrameSample(triggerBits, uiRebuilt != 0, frameMs,
+                                                      g_pendingFrameLoopCallbacks);
+  g_pendingFrameLoopCallbacks = 0;
+}
+
+void PublishWasmPinchZoomPolicy(double wheelDeltaPerLnScale) {
+  donner::editor::whole_app_worker::PublishPinchZoomPolicy(wheelDeltaPerLnScale);
+}
+#else
+
 EM_JS(void, InitializeWasmEditorFrameScheduling, (), {
   window['__donnerEditorFrameRequested'] = true;
   window['__donnerMainLoopRenderedFrames'] = 0;
@@ -115,6 +152,7 @@ EM_JS(void, RecordWasmFrameLoopSample, (int triggerBits, int uiRebuilt, double f
 // runtime initialization.
 EM_JS(void, PublishWasmPinchZoomPolicy, (double wheelDeltaPerLnScale),
       { window['__donnerPinchWheelDeltaPerLnScale'] = wheelDeltaPerLnScale; });
+#endif  // DONNER_EDITOR_WHOLE_APP_WORKER
 #else
 #include "donner/base/FailureSignalHandler.h"
 #endif
@@ -269,6 +307,13 @@ void RunWasmEditorFrame(void* userdata) {
 }  // namespace
 
 int main(int argc, char** argv) {
+#ifdef DONNER_EDITOR_WHOLE_APP_WORKER
+  // Must precede every other line: `main()` runs on a pthread here, and the
+  // first editor `EM_JS` body that touches `window` would otherwise throw
+  // before anything is constructed.
+  donner::editor::whole_app_worker::InstallWorkerGlobalShim();
+  donner::editor::whole_app_worker::Install();
+#endif
 #ifndef __EMSCRIPTEN__
   donner::InstallFailureSignalHandler();
 #endif
@@ -362,8 +407,17 @@ int main(int argc, char** argv) {
   EnsureWasmFrameLoopStats();
   PublishWasmPinchZoomPolicy(donner::editor::PinchWheelDeltaPerLnScale());
   // The browser presents the WebGPU canvas when the requestAnimationFrame callback returns.
+#ifdef DONNER_EDITOR_WHOLE_APP_WORKER
+  // `main()` runs on a worker here. Emscripten's rAF scheduler silently
+  // degrades to a setTimeout emulation when the worker global has no
+  // `requestAnimationFrame`, which is not vsync-aligned, so the driver probes
+  // for it and installs a proxied main-thread rAF pump where it is missing.
+  donner::BeginSuspendFrame();
+  donner::editor::whole_app_worker::InstallFrameDriver(&RunWasmEditorFrame, loopState);
+#else
   emscripten_set_main_loop_arg(&RunWasmEditorFrame, loopState, /*fps=*/0,
                                /*simulateInfiniteLoop=*/true);
+#endif
 #else
   while (!window->shouldClose()) {
     RunEditorFrame(*window, *shell);

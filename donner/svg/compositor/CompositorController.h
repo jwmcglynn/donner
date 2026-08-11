@@ -176,7 +176,8 @@ inline constexpr size_t kMaxCompositorMemoryBytes = 1024ull * 1024ull * 1024ull;
 /// Effective compositor bitmap budget for the current process.
 ///
 /// On wasm the linear memory is small and FIXED (growth is fatal on every
-/// browser engine - see Design 0064's memory invariant), and a budget larger
+/// browser engine, so the build links with equal initial and maximum
+/// memory), and a budget larger
 /// than the whole address space means admission can never refuse: full-canvas
 /// payloads accrue across zoom size-commit epochs until the module aborts
 /// (measured 2026-08-11: ~one 24.8MB surface per 250ms at DPR 2). Bound the
@@ -488,6 +489,30 @@ public:
    * Returns the total memory used by all layer bitmaps, in bytes.
    */
   [[nodiscard]] size_t totalBitmapMemory() const;
+
+  /// Split of \ref totalBitmapMemory by what holds the pixels. The four kinds
+  /// are evicted by different rules, so a single total cannot say which rule is
+  /// the one letting memory grow.
+  struct BitmapMemoryBreakdown {
+    /// CPU pixel buffers for cached static segments.
+    size_t segmentBitmapBytes = 0;
+    /// GPU textures for cached static segments.
+    size_t segmentTextureBytes = 0;
+    /// CPU pixel buffers for promoted layers.
+    size_t layerBitmapBytes = 0;
+    /// GPU textures for promoted layers.
+    size_t layerTextureBytes = 0;
+    /// Cached static segments holding either a bitmap or a texture.
+    size_t segmentCount = 0;
+    /// Promoted layers holding either a bitmap or a texture.
+    size_t layerCount = 0;
+  };
+
+  /**
+   * Returns \ref totalBitmapMemory split by holder. Observational only: it
+   * never reads a GPU texture back to the CPU.
+   */
+  [[nodiscard]] BitmapMemoryBreakdown bitmapMemoryBreakdown() const;
 
   /**
    * Returns a reference to the underlying SVG document.

@@ -1965,29 +1965,44 @@ size_t EffectiveCompositorMemoryBudget() {
 }
 
 size_t CompositorController::totalBitmapMemory() const {
-  size_t total = 0;
+  const BitmapMemoryBreakdown breakdown = bitmapMemoryBreakdown();
+  return breakdown.segmentBitmapBytes + breakdown.segmentTextureBytes + breakdown.layerBitmapBytes +
+         breakdown.layerTextureBytes;
+}
+
+CompositorController::BitmapMemoryBreakdown CompositorController::bitmapMemoryBreakdown() const {
+  BitmapMemoryBreakdown breakdown;
   for (const auto& segment : staticSegments_) {
-    total += segment.pixels.size();
+    breakdown.segmentBitmapBytes += segment.pixels.size();
+    if (!segment.pixels.empty()) {
+      ++breakdown.segmentCount;
+    }
   }
   for (const auto& texture : staticSegmentTextures_) {
     if (texture == nullptr) {
       continue;
     }
     const Vector2i dims = texture->dimensions();
-    total += static_cast<size_t>(dims.x) * static_cast<size_t>(dims.y) * 4u;
+    breakdown.segmentTextureBytes += static_cast<size_t>(dims.x) * static_cast<size_t>(dims.y) * 4u;
   }
   for (const auto& layer : layers_) {
+    bool holdsPixels = false;
     // `bitmap()` may explicitly read a texture snapshot back to the CPU for diagnostics. Memory
     // accounting must remain observational and must not create a second copy of every GPU layer.
     if (layer.hasValidBitmap()) {
-      total += layer.bitmap().pixels.size();
+      breakdown.layerBitmapBytes += layer.bitmap().pixels.size();
+      holdsPixels = holdsPixels || !layer.bitmap().pixels.empty();
     }
     if (layer.textureSnapshot() != nullptr) {
       const Vector2i dims = layer.textureSnapshot()->dimensions();
-      total += static_cast<size_t>(dims.x) * static_cast<size_t>(dims.y) * 4u;
+      breakdown.layerTextureBytes += static_cast<size_t>(dims.x) * static_cast<size_t>(dims.y) * 4u;
+      holdsPixels = true;
+    }
+    if (holdsPixels) {
+      ++breakdown.layerCount;
     }
   }
-  return total;
+  return breakdown;
 }
 
 CompositorLayer* CompositorController::findLayer(Entity entity) {

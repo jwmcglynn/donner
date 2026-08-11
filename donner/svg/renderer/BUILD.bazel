@@ -76,6 +76,18 @@ config_setting(
     },
 )
 
+# Geode wasm builds that still present through a worker-owned document canvas.
+# The Design 0064 phase 1 whole-app-worker experiment renders inline on the app
+# thread instead, so it must not compile the worker-surface arm.
+config_setting(
+    name = "wasm_geode_worker_surface",
+    flag_values = {
+        ":renderer_backend": "geode",
+        "//donner/editor/wasm:whole_app_worker": "false",
+        "//donner/svg/renderer/wasm:enable_wasm": "true",
+    },
+)
+
 config_setting(
     name = "filters_enabled",
     flag_values = {":filters": "true"},
@@ -163,7 +175,7 @@ donner_perf_sensitive_cc_library(
         ":text_enabled": ["DONNER_TEXT_ENABLED"],
         "//conditions:default": [],
     }) + select({
-        ":wasm_geode_enabled": ["DONNER_WASM_WORKER_SURFACE"],
+        ":wasm_geode_worker_surface": ["DONNER_WASM_WORKER_SURFACE"],
         "//conditions:default": [],
     }),
     visibility = ["//visibility:public"],

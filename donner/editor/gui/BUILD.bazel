@@ -73,9 +73,11 @@ donner_cc_library(
     }),
     deps = [
         "//donner/base",
+        "//donner/base:memory_attribution",
         "//donner/editor:editor_theme",
         "//donner/editor:imgui_headers",
         "//donner/editor:tracy_wrapper",
+        "//donner/editor:whole_app_worker_bridge",
         "//donner/svg/renderer:renderer_interface",
         "@imgui",
     ] + select({

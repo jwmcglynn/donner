@@ -2252,7 +2252,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink {
     frameFinishedEncoders.clear();
 
     if (device && device->device()) {
-      device->device().poll(true, nullptr);
+      device->pollSuspending(true);
     }
 
     framePendingTextureViewReleases.clear();
@@ -2299,7 +2299,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink {
     if (device) {
       device->drainDeferredDestroys();
       if (device->device()) {
-        device->device().poll(true, nullptr);
+        device->pollSuspending(true);
       }
     }
   }
@@ -3461,7 +3461,7 @@ void RendererGeode::popFilterLayer() {
       // Interim workaround; superseded by the single-encoder filter refactor
       // (design 0030 M3).
       if (impl_->device->isVulkan()) {
-        impl_->device->device().poll(true, nullptr);
+        impl_->device->pollSuspending(true);
       }
 
       impl_->encoder->blitFullTarget(viewportTexture.get(), 1.0);
@@ -4821,7 +4821,7 @@ static RendererBitmap ReadGeodeTextureSnapshot(const std::shared_ptr<geode::Geod
     // observe a superseding main-document request promptly. emdawnwebgpu's poll implementation
     // yields its Asyncify-enabled worker for roughly 5 ms regardless of `wait`; native polling is
     // non-blocking and gets a short sleep to avoid spinning.
-    device->device().poll(false, nullptr);
+    device->pollSuspending(false);
     ++pollIter;
 #ifndef __EMSCRIPTEN__
     std::this_thread::sleep_for(std::chrono::milliseconds(1));

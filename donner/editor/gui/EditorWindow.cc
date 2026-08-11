@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <atomic>
+
+#include "donner/base/MemoryAttribution.h"
 // The browser tier is Geode-only, so `__EMSCRIPTEN__` always implies `DONNER_EDITOR_WGPU`.
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -10,6 +12,7 @@
 #include <webgpu/webgpu.hpp>
 
 #include "GLFW/emscripten_glfw3.h"
+#include "donner/editor/WholeAppWorkerBridge.h"
 #elif defined(DONNER_EDITOR_WGPU)
 #include <webgpu/webgpu.h>
 
@@ -329,7 +332,7 @@ void ApplyInputOverride(const EditorWindowInputOverride& inputOverride) {
   }
 }
 
-#ifdef __EMSCRIPTEN__
+#if defined(__EMSCRIPTEN__) && !defined(DONNER_EDITOR_WHOLE_APP_WORKER)
 EM_JS(int, CanvasPixelWidth, (), {
   if (Module['canvas']) {
     return Module['canvas'].width;
@@ -343,7 +346,54 @@ EM_JS(int, CanvasPixelHeight, (), {
   }
   return Math.max(1, Math.floor(window.innerHeight * (window.devicePixelRatio || 1)));
 });
+#endif
 
+#ifdef __EMSCRIPTEN__
+#ifdef DONNER_EDITOR_WHOLE_APP_WORKER
+int CanvasPixelWidth() {
+  return whole_app_worker::CanvasBackingWidth();
+}
+int CanvasPixelHeight() {
+  return whole_app_worker::CanvasBackingHeight();
+}
+// `window` does not exist in the app pthread's JS context, so the viewport
+// geometry, the loader handshake, and the readback diagnostic all move off
+// `EM_JS`. `Module['canvas']` above still works: on this build it is the
+// transferred OffscreenCanvas the app thread owns, whose `width`/`height` are
+// the backing store the app itself sizes.
+int CanvasCssWidth() {
+  return whole_app_worker::CssWidth();
+}
+int CanvasCssHeight() {
+  return whole_app_worker::CssHeight();
+}
+double BrowserDevicePixelRatio() {
+  return whole_app_worker::DevicePixelRatio();
+}
+void PublishFirstPresentedFrame(int headlessDeviceCreations) {
+  whole_app_worker::NotifyFirstFramePresented(headlessDeviceCreations);
+}
+// STUBBED for the phase 1 experiment: the readback diagnostic reads the page
+// URL and publishes a page-side request/completion handshake, neither of which
+// the app thread can reach. Every caller is gated on this returning false, so
+// the diagnostic is simply unavailable in this build.
+bool WgpuReadbackStatsEnabled() {
+  return false;
+}
+// Unreachable in this build (every call site is gated on the predicate above),
+// but they must still link.
+int PeekWgpuReadbackRequest() {
+  return 0;
+}
+void WakeWasmEditorForPendingWgpuReadback() {}
+void MarkWgpuReadbackCaptureStarted(int /*requestId*/) {}
+void PublishWgpuReadbackFailure(int /*requestId*/) {}
+void PublishWgpuReadbackStats(int /*renderSamples*/, int /*renderColored*/, int /*renderNonBlack*/,
+                              int /*renderMaxChannel*/, int /*layerSamples*/, int /*layerColored*/,
+                              int /*layerNonBlack*/, int /*layerMaxChannel*/,
+                              int /*selectionChromePixels*/, int /*requestId*/) {}
+void PublishWgpuCarouselThumbnailStats(const int* /*values*/, int /*count*/) {}
+#else
 EM_JS(int, CanvasCssWidth, (), { return Math.max(1, Math.floor(window.innerWidth)); });
 EM_JS(int, CanvasCssHeight, (), { return Math.max(1, Math.floor(window.innerHeight)); });
 EM_JS(double, BrowserDevicePixelRatio, (), { return window.devicePixelRatio || 1.0; });
@@ -455,6 +505,7 @@ EM_JS(void, PublishWgpuCarouselThumbnailStats, (const int* values, int count), {
     stats['carouselThumbnails'] = thumbnails;
   }
 });
+#endif  // DONNER_EDITOR_WHOLE_APP_WORKER
 
 double CurrentDisplayScale() {
   const int logicalWidth = CanvasCssWidth();
@@ -1455,6 +1506,7 @@ void EditorWindow::beginFrameImpl(const EditorWindowInputOverride* inputOverride
 }
 
 void EditorWindow::endFrame() {
+  const ScopedHeapDelta hostFrameHeapDelta(MemoryStage::AppHostFrame);
   endFrameImpl(nullptr);
 }
 
@@ -1476,6 +1528,11 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     ~TimingCommit() {
       timing->endFrameMs = ElapsedMs(start);
       *destination = *timing;
+#if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WHOLE_APP_WORKER)
+      whole_app_worker::PublishHostFrameTiming(
+          timing->endFrameMs, timing->imguiRenderMs, timing->surfaceAcquireMs, timing->underlayMs,
+          timing->imguiDrawMs, timing->directMs, timing->readbackMs, timing->presentMs);
+#endif
     }
   };
   TimingCommit timingCommit{
@@ -1486,12 +1543,21 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   {
     ZoneScopedN("ImGui::Render");
     const auto imguiRenderStart = std::chrono::steady_clock::now();
+    // `ImGui::Render` flattens every draw list into `ImDrawData`; the per-list
+    // `ImVector<ImDrawVert>` behind it grows and never shrinks.
+    const ScopedAllocTag imguiRenderTag(AllocTag::ImGuiDrawLists);
     ImGui::Render();
     timing.imguiRenderMs = ElapsedMs(imguiRenderStart);
     if (const ImDrawData* drawData = ImGui::GetDrawData(); drawData != nullptr) {
       timing.imguiVertexCount = drawData->TotalVtxCount;
     }
   }
+#if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WHOLE_APP_WORKER)
+  if (const ImDrawData* drawData = ImGui::GetDrawData(); drawData != nullptr) {
+    whole_app_worker::PublishImGuiDrawStats(drawData->TotalVtxCount, drawData->TotalIdxCount,
+                                            drawData->CmdListsCount);
+  }
+#endif
   int displayW = 0;
   int displayH = 0;
 #ifdef __EMSCRIPTEN__
@@ -1741,6 +1807,12 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     }
     {
       ZoneScopedN("ImGui_ImplWGPU_RenderDrawData");
+      // The WGPU backend keeps one host-side `ImDrawVert` staging array per
+      // frame in flight and only ever grows them, so a single busy frame sets
+      // the size of three arrays for the rest of the session. Tagged so the
+      // large-block table names them instead of listing three anonymous
+      // eighteen-megabyte blocks.
+      const ScopedAllocTag imguiUploadTag(AllocTag::PresentationUpload);
       ImGui_ImplWGPU_RenderDrawData(ImGui::GetDrawData(), pass.get());
     }
     pass.get().end();

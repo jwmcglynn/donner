@@ -12,7 +12,7 @@
         "release",
         "submit"
       ],
-      "sha256": "1c513c16d4dae4fbc9a85cbdecc2d4d997d80eb982b0d307be2c03bbf0905b17",
+      "sha256": "8cd88f86889314cc99fc24a05b6d40a7e788a6191ffff6008a1c4e98e635e441",
       "wgpuCFunctions": [
         "wgpuInstanceCreateSurface"
       ],
@@ -70,7 +70,7 @@
       ]
     },
     "donner/editor/EditorShell.cc": {
-      "sha256": "8e0f90e9cdc589cfcb7c23d159a91801b1e7ffbc069c5dcf63ffd9195a29f891",
+      "sha256": "ed347836e0340447dcf29b5d9ca3c1ec908b0fe2c949a081b83f8d605815b494",
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
         "wgpuLifetimeTextureCreates"
@@ -225,7 +225,7 @@
         "submit",
         "unmap"
       ],
-      "sha256": "5883a8557bdba7539849777f56d332a1d565fc316ffdfdfd2830198b296baf2a",
+      "sha256": "7b9d0e2ebe624fce3cacb995b2ec1bf6a802479dc58ad901fc2ba3d46d89079c",
       "wgpuCFunctions": [
         "wgpuCreateInstance",
         "wgpuDirectRenderCallback_",
@@ -463,14 +463,13 @@
         "finish",
         "getConstMappedRange",
         "mapAsync",
-        "poll",
         "setBindGroup",
         "setPipeline",
         "submit",
         "unmap",
         "writeBuffer"
       ],
-      "sha256": "805102e4516e70e219deb77a90344d75787927a586e16f3a2a8196f89453b23b",
+      "sha256": "0aefa4a4a50175290f9bdd38a6e3b2123a0a7068e53ff3a42070b897a3ca966d",
       "wgpuCFunctions": [
         "wgpuDevicePoll",
         "wgpuLabel"
@@ -664,7 +663,7 @@
         "writeBuffer",
         "writeTexture"
       ],
-      "sha256": "00bcf8c74c5bda7de2b0dd488fe93726ff870869c59e18e6b9faf8ceb8941471",
+      "sha256": "9ca05162c506149a1b1841a3190254a58e780b538d077084151b6d90870a397a",
       "wgpuCFunctions": [
         "wgpuAdapterGetInfo",
         "wgpuAdapterInfoFreeMembers",
@@ -745,7 +744,7 @@
       "operations": [
         "poll"
       ],
-      "sha256": "07088709eea22bb26b186d265ce782642f627eed2eedb3985225fc3010a0d863",
+      "sha256": "a3e0f768d50f31411290d19da20e3dc3d64a57b66cb2504a26d068de42caf311",
       "wgpuCFunctions": [
         "wgpuDevicePoll"
       ],
@@ -779,14 +778,13 @@
         "createView",
         "dispatchWorkgroups",
         "finish",
-        "poll",
         "setBindGroup",
         "setPipeline",
         "submit",
         "writeBuffer",
         "writeTexture"
       ],
-      "sha256": "9f0e1b5005fac2cdcc8859b6b663476f98cb55bc03977b39767aadd9f53b1bed",
+      "sha256": "8f0dd281571b91c13dcad716fefcdf1d02d5ee3efc2a02045e92dff0ea55e31f",
       "wgpuCFunctions": [
         "wgpuLabel"
       ],

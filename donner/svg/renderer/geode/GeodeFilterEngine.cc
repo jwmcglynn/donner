@@ -635,7 +635,7 @@ void dispatchTwoInputUniform(GeodeDevice& device, const wgpu::BindGroupLayout& b
   // Interim workaround; superseded by the single-encoder filter refactor
   // (design 0030 M3).
   if (device.isVulkan()) {
-    device.device().poll(true, nullptr);
+    device.pollSuspending(true);
   }
 }
 
@@ -695,7 +695,7 @@ void dispatchInputOutputUniform(GeodeDevice& device, const wgpu::BindGroupLayout
   // Interim workaround; superseded by the single-encoder filter refactor
   // (design 0030 M3).
   if (device.isVulkan()) {
-    device.device().poll(true, nullptr);
+    device.pollSuspending(true);
   }
 }
 
@@ -2184,7 +2184,7 @@ wgpu::Texture GeodeFilterEngine::applyFlood(
   // Interim workaround; superseded by the single-encoder filter refactor
   // (design 0030 M3).
   if (device_.isVulkan()) {
-    device_.device().poll(true, nullptr);
+    device_.pollSuspending(true);
   }
 
   return output;
@@ -2285,7 +2285,7 @@ wgpu::Texture GeodeFilterEngine::runMergePass(FilterResourceArena& arena, const 
   // Interim workaround; superseded by the single-encoder filter refactor
   // (design 0030 M3).
   if (device_.isVulkan()) {
-    device_.device().poll(true, nullptr);
+    device_.pollSuspending(true);
   }
 
   return output;
@@ -2504,7 +2504,7 @@ wgpu::Texture GeodeFilterEngine::applyComponentTransfer(
   // Interim workaround; superseded by the single-encoder filter refactor
   // (design 0030 M3).
   if (device_.isVulkan()) {
-    device_.device().poll(true, nullptr);
+    device_.pollSuspending(true);
   }
   return output;
 }
@@ -2630,7 +2630,7 @@ wgpu::Texture GeodeFilterEngine::applyConvolveMatrix(
   // Interim workaround; superseded by the single-encoder filter refactor
   // (design 0030 M3).
   if (device_.isVulkan()) {
-    device_.device().poll(true, nullptr);
+    device_.pollSuspending(true);
   }
   return output;
 }
@@ -2748,7 +2748,7 @@ wgpu::Texture GeodeFilterEngine::applyTurbulence(
   // Interim workaround; superseded by the single-encoder filter refactor
   // (design 0030 M3).
   if (device_.isVulkan()) {
-    device_.device().poll(true, nullptr);
+    device_.pollSuspending(true);
   }
   return output;
 }
@@ -3002,7 +3002,7 @@ wgpu::Texture GeodeFilterEngine::applyDiffuseLighting(
   // Interim workaround; superseded by the single-encoder filter refactor
   // (design 0030 M3).
   if (device_.isVulkan()) {
-    device_.device().poll(true, nullptr);
+    device_.pollSuspending(true);
   }
   if (linearRGB) {
     output = applyColorSpaceConversion(arena, output, /*srgbToLinear=*/false);
@@ -3131,7 +3131,7 @@ wgpu::Texture GeodeFilterEngine::applySpecularLighting(
   // Interim workaround; superseded by the single-encoder filter refactor
   // (design 0030 M3).
   if (device_.isVulkan()) {
-    device_.device().poll(true, nullptr);
+    device_.pollSuspending(true);
   }
   if (linearRGB) {
     output = applyColorSpaceConversion(arena, output, /*srgbToLinear=*/false);

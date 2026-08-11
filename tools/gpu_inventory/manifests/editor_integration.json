@@ -12,7 +12,7 @@
         "release",
         "submit"
       ],
-      "sha256": "1c513c16d4dae4fbc9a85cbdecc2d4d997d80eb982b0d307be2c03bbf0905b17",
+      "sha256": "8cd88f86889314cc99fc24a05b6d40a7e788a6191ffff6008a1c4e98e635e441",
       "wgpuCFunctions": [
         "wgpuInstanceCreateSurface"
       ],
@@ -80,15 +80,15 @@
       "usesEditorWgpuDefine": true
     },
     "donner/editor/DocumentPresenter.cc": {
-      "sha256": "003378594b0fdfe50c01fa44a13faacf38e623882165363b19fb407ebbba55bf",
+      "sha256": "63995df061ed4383a46e55a444c1fbcf5ebd3577eab5c80366f1382a4799a952",
       "usesEditorWgpuDefine": true
     },
     "donner/editor/DocumentPresenter.h": {
-      "sha256": "864f975b854720930ba4b3cd01e4898f618ff475a0921d7508ca084c9242eef7",
+      "sha256": "13fba86c428aba13598680edb607d2616e7855c98855c7f49fa6194c2fe9df29",
       "usesEditorWgpuDefine": true
     },
     "donner/editor/EditorShell.cc": {
-      "sha256": "8e0f90e9cdc589cfcb7c23d159a91801b1e7ffbc069c5dcf63ffd9195a29f891",
+      "sha256": "ed347836e0340447dcf29b5d9ca3c1ec908b0fe2c949a081b83f8d605815b494",
       "usesEditorWgpuDefine": true,
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
@@ -268,7 +268,7 @@
         "submit",
         "unmap"
       ],
-      "sha256": "5883a8557bdba7539849777f56d332a1d565fc316ffdfdfd2830198b296baf2a",
+      "sha256": "7b9d0e2ebe624fce3cacb995b2ec1bf6a802479dc58ad901fc2ba3d46d89079c",
       "usesEditorWgpuDefine": true,
       "wgpuCFunctions": [
         "wgpuCreateInstance",

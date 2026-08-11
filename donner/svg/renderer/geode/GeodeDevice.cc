@@ -15,6 +15,8 @@
 #include <string_view>
 #include <thread>
 
+#include "donner/base/AsyncifySuspendProbe.h"
+
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
 #endif
@@ -203,6 +205,9 @@ void WaitForSubmittedWork(const wgpu::Device& device, const wgpu::Queue& queue) 
   callbackInfo.userdata2 = nullptr;
 
   queue.onSubmittedWorkDone(callbackInfo);
+  // Teardown drain, not a frame-path wait, but it can still unwind the wasm
+  // stack; attribute it so an unexpectedly long shutdown is visible.
+  const ScopedSuspendPoint suspend(SuspendKind::Startup);
   for (int pollIter = 0; !state->done.load(std::memory_order_acquire) && pollIter < 2000;
        ++pollIter) {
     device.poll(true, nullptr);
@@ -312,6 +317,11 @@ GeodeDevice::~GeodeDevice() {
   ReleaseWgpuHandle(device_);
   ReleaseWgpuHandle(adapter_);
   ReleaseWgpuHandle(instance);
+}
+
+void GeodeDevice::pollSuspending(bool wait) const {
+  const ScopedSuspendPoint suspend(SuspendKind::DeviceWait);
+  device_.poll(wait, nullptr);
 }
 
 void GeodeDevice::recordReadback(bool usedTimedWaitAny, int pollIterations) {

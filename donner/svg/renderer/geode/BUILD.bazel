@@ -206,6 +206,7 @@ donner_cc_library(
         ":geode_shaders",
         ":geode_wgpu_util",
         "//donner/base",
+        "//donner/base:asyncify_suspend_probe",
         "//donner/svg/components/filter:components",
         "//third_party/webgpu-cpp:webgpu_cpp",
     ],

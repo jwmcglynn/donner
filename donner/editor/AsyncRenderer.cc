@@ -15,6 +15,7 @@
 #include <pthread.h>
 #endif
 
+#include "donner/base/MemoryAttribution.h"
 #include "donner/base/Utils.h"
 #include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/TracyWrapper.h"
@@ -390,8 +391,8 @@ public:
           // repeated small increases during a zoom-in ramp coalesce into one
           // or two reconfigures instead of one per epoch. Overshoot is
           // clamped so it can never exceed the hard canvas dimension cap.
-          const int overshoot = std::min(configured + configured / 4,
-                                         static_cast<int>(ViewportState::kMaxCanvasDim));
+          const int overshoot =
+              std::min(configured + configured / 4, static_cast<int>(ViewportState::kMaxCanvasDim));
           size = std::max(size, overshoot);
         }
         return size;
@@ -2140,6 +2141,11 @@ void AsyncRenderer::workerLoop() {
     // Execute the render outside the lock so the UI thread can poll
     // `isBusy()` / `pollResult()` while we work.
     ZoneScopedN("AsyncRenderer::workerIteration");
+    // Stage brackets for the byte attribution (see
+    // `donner/base/MemoryAttribution.h`). `WorkerOther` spans the whole
+    // iteration; the three inner stages are disjoint and are subtracted from it
+    // when the numbers are read, so a stage that retains is named exactly.
+    const ScopedHeapDelta workerIterationHeapDelta(MemoryStage::WorkerOther);
     const auto workerStart = std::chrono::steady_clock::now();
     const auto elapsedSince = [](std::chrono::steady_clock::time_point start) {
       return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
@@ -2616,7 +2622,10 @@ void AsyncRenderer::workerLoop() {
       // snapshot work after renderFrame. Keep this scoped timing in
       // Tracy only for drilling into the compositor itself.
       const auto renderFrameStart = std::chrono::steady_clock::now();
-      renderCompleted = compositor_->renderFrame(viewport, cancelRender_, surfaceFromCanvas);
+      {
+        const ScopedHeapDelta renderFrameHeapDelta(MemoryStage::WorkerRenderFrame);
+        renderCompleted = compositor_->renderFrame(viewport, cancelRender_, surfaceFromCanvas);
+      }
 #ifdef DONNER_WASM_WORKER_SURFACE
       if (renderCompleted && request.directSurfaceSelectionChrome.has_value()) {
         // The document and Select-mode chrome must enter the browser compositor
@@ -2706,8 +2715,7 @@ void AsyncRenderer::workerLoop() {
         surfaceDiagnostic = requestRenderer.takeSnapshot();
       }
       const WorkerSurfacePresentResult presentation = wasmWorkerRuntime_->surfacePresenter->present(
-          composedTexture, requestedSurfaceSlot, frameToken,
-          request.viewport.rasterBackingCapPx());
+          composedTexture, requestedSurfaceSlot, frameToken, request.viewport.rasterBackingCapPx());
       directSurfaceSlot = presentation.surfaceSlot;
       directSurfaceBackingSizePx = presentation.configuredBackingSize;
       if (presentation.disposition == WorkerSurfacePresentDisposition::RetryNextWorkerTask) {
@@ -2781,6 +2789,7 @@ void AsyncRenderer::workerLoop() {
     // through the compositor path.
     {
       const auto buildPreviewStart = std::chrono::steady_clock::now();
+      const ScopedHeapDelta buildPreviewHeapDelta(MemoryStage::WorkerBuildPreview);
 #ifdef DONNER_WASM_WORKER_SURFACE
       if (directSurfacePresented) {
         compositedPreview = BuildDirectSurfaceCompositorTileMetadata(
@@ -2811,6 +2820,7 @@ void AsyncRenderer::workerLoop() {
 #endif
     {
       const auto finalSnapshotStart = std::chrono::steady_clock::now();
+      const ScopedHeapDelta finalSnapshotHeapDelta(MemoryStage::WorkerFinalSnapshot);
       // Read before exporting the texture because texture export detaches the renderer target.
       if (snapshotPlan.captureCpuSnapshot) {
         ZoneScopedN("Renderer::takeSnapshot");
@@ -2839,6 +2849,48 @@ void AsyncRenderer::workerLoop() {
       compositedPreview = BuildFullCanvasCompositedPreview(
           documentViewBox, bitmap, std::move(fullCanvasTexture), request.version, previewEntity,
           interactionKind, rasterViewport, request.dragPreview);
+    }
+
+    // Attribute what this render iteration is holding, before the result leaves
+    // the worker. The compositor caches are a level (they persist across
+    // frames); the full-canvas snapshot is a flow (a fresh allocation every
+    // frame that presentation consumes and drops), and the two grow linear
+    // memory in different ways, so they are published as different counter
+    // kinds. See `donner/base/MemoryAttribution.h`.
+    {
+      const auto breakdown = compositor_->bitmapMemoryBreakdown();
+      SetRetainedBytes(MemoryCategory::CompositorSegmentBitmaps, breakdown.segmentBitmapBytes);
+      SetRetainedBytes(MemoryCategory::CompositorSegmentTextures, breakdown.segmentTextureBytes);
+      SetRetainedBytes(MemoryCategory::CompositorLayerBitmaps, breakdown.layerBitmapBytes);
+      SetRetainedBytes(MemoryCategory::CompositorLayerTextures, breakdown.layerTextureBytes);
+      SetEntryCount(MemoryCategory::CompositorSegmentBitmaps, breakdown.segmentCount);
+      SetEntryCount(MemoryCategory::CompositorLayerBitmaps, breakdown.layerCount);
+
+      std::uint64_t previewTileBytes = 0;
+      std::uint64_t previewTileCount = 0;
+      if (compositedPreview.has_value()) {
+        for (const RenderResult::CompositedTile& tile : compositedPreview->tiles) {
+          previewTileBytes += tile.bitmap.pixels.size();
+          if (tile.textureSnapshot != nullptr) {
+            const Vector2i dims = tile.textureSnapshot->dimensions();
+            previewTileBytes +=
+                static_cast<std::uint64_t>(dims.x) * static_cast<std::uint64_t>(dims.y) * 4u;
+          }
+          ++previewTileCount;
+        }
+      }
+      SetRetainedBytes(MemoryCategory::RenderResultTiles, previewTileBytes);
+      SetEntryCount(MemoryCategory::RenderResultTiles, previewTileCount);
+      AddTransientBytes(MemoryCategory::RenderResultTiles, previewTileBytes);
+
+      std::uint64_t snapshotBytes = bitmap.pixels.size();
+      if (fullCanvasTexture != nullptr) {
+        const Vector2i dims = fullCanvasTexture->dimensions();
+        snapshotBytes +=
+            static_cast<std::uint64_t>(dims.x) * static_cast<std::uint64_t>(dims.y) * 4u;
+      }
+      SetRetainedBytes(MemoryCategory::WorkerFrameSnapshot, snapshotBytes);
+      AddTransientBytes(MemoryCategory::WorkerFrameSnapshot, snapshotBytes);
     }
 
     // All document reads for this iteration are done; release write access before taking `mutex_`
