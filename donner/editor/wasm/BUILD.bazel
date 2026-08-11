@@ -96,16 +96,20 @@ _EDITOR_LINKOPTS = [
     # performance question on Safari, it is fatal, so the only defense is to start with a memory
     # large enough that boot and ordinary editing never reach `emscripten_resize_heap`.
     #
-    # Measured on stock Safari 26.2 by serving the built package and instrumenting `growMemory`:
-    # boot's sbrk high-water is above 101 MiB and at or below 128 MiB. At 64 MiB the boot grew
-    # three times inside 13 ms and the renderer pthread died ~50 ms later, before the loader could
-    # hide; at 100 MiB it grew once and died the same way; at 128 MiB and 192 MiB it never grew and
-    # the editor booted in ~0.6 s and survived an open-sample plus zoom storm. 192 MiB is ~1.9x the
-    # measured boot demand, which leaves headroom for a session's documents while staying far below
-    # the 512 MiB WebContent RSS ceiling the Safari regression gate enforces. Do not lower this
-    # without re-measuring boot demand on stock Safari: a value under boot demand is a boot failure,
-    # not a slow boot.
-    "-sINITIAL_MEMORY=192MB",
+    # Measured by instrumenting `_emscripten_resize_heap` in a package built with a deliberately
+    # small initial memory and reading the largest requested break: boot demands 40,861,696 bytes
+    # (39.0 MiB), and opening the Donner Splash sample, a six-burst zoom storm and a five-step
+    # resize churn all fit inside that same peak. 64 MiB is 1.64x the measured demand.
+    #
+    # This was 192 MiB while `RenderEmbeddedSvgIconBatch` rasterized all fourteen boot icons in one
+    # atlas pass. Every document in a pass has to stay alive until its frame is submitted, at about
+    # 6 MiB of Wasm heap apiece, so that single pass demanded 101,523,456 bytes on its own; capping
+    # a pass at `kIconsPerAtlasPass` icons (donner/editor/EmbeddedSvgIcon.cc) removed 60 MiB of boot
+    # peak and made the original 64 MiB correct again.
+    #
+    # Do not lower this without re-measuring, and do not raise `kIconsPerAtlasPass` without doing
+    # the same: a value under boot demand is a boot failure on Safari, not a slow boot.
+    "-sINITIAL_MEMORY=64MB",
     "-sOFFSCREENCANVAS_SUPPORT=1",
 ] + _EMDAWNWEBGPU_LINKOPTS
 

@@ -156,7 +156,7 @@ def _editor_wasm_runtime_options_probe_impl(ctx):
             "--closure-args=--compilation_level=SIMPLE_OPTIMIZATIONS" in values,
         ),
         "exports_ccall={}".format("-sEXPORTED_RUNTIME_METHODS=ccall" in values),
-        "initial_memory_192={}".format("-sINITIAL_MEMORY=192MB" in values),
+        "initial_memory_64={}".format("-sINITIAL_MEMORY=64MB" in values),
         "pthread_pool_size_one={}".format("-sPTHREAD_POOL_SIZE=1" in values),
         "pthread_pool_size_two={}".format("-sPTHREAD_POOL_SIZE=2" in values),
     ]

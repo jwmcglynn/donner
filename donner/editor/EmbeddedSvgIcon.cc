@@ -119,6 +119,25 @@ PrewarmedIconMap& PrewarmedIcons() {
 /// any backend's maximum texture dimension.
 constexpr int kIconAtlasMaxWidthPx = 1024;
 
+/// Icons rasterized per atlas pass, which bounds peak memory during prewarm.
+///
+/// A pass has to hold every one of its documents alive until its frame ends:
+/// the GPU backend keeps each document's resident geometry and bind groups in
+/// components on that document's own registry and consumes them when the frame
+/// is submitted (see `donner/svg/renderer/geode/GeodeResidentPathComponent.h`),
+/// so releasing a document early draws blank tiles. Peak heap therefore scales
+/// with the pass size, and the cost per in-flight document is large: prewarming
+/// the editor's fourteen boot icons in one pass measured a 101.5 MB Wasm boot
+/// heap high-water, against under 32 MB when they are rasterized a few at a
+/// time. On Safari that difference is fatal rather than merely wasteful,
+/// because the boot heap has to fit in `INITIAL_MEMORY` - growing the shared
+/// memory traps a pooled pthread.
+///
+/// Each pass costs one GPU-to-CPU readback, the latency the atlas exists to
+/// amortize, so this wants to be as large as the memory budget allows rather
+/// than as small as possible. Re-measure the boot high-water before raising it.
+constexpr std::size_t kIconsPerAtlasPass = 4;
+
 /// Copy one square tile out of the atlas into a tightly-packed bitmap.
 svg::RendererBitmap SliceAtlasTile(const svg::RendererBitmap& atlas, Vector2i originPx,
                                    int sizePx) {
@@ -170,6 +189,87 @@ std::optional<svg::RendererBitmap> RenderEmbeddedSvgBitmap(std::span<const unsig
   return bitmap;
 }
 
+/// Rasterize one atlas pass over `requests[firstIndex, lastIndex)` and write the
+/// sliced tiles into `results`. Every document in the pass stays alive until
+/// the pass returns; see `kIconsPerAtlasPass`.
+void RenderEmbeddedSvgIconAtlasPass(std::span<const EmbeddedSvgIconRequest> requests,
+                                    std::size_t firstIndex, std::size_t lastIndex,
+                                    std::vector<std::optional<svg::RendererBitmap>>& results) {
+  struct AtlasSlot {
+    std::size_t requestIndex = 0;
+    Vector2i originPx = Vector2i::Zero();
+    int sizePx = 0;
+  };
+
+  // Documents are kept alive (and pointer-stable) until the atlas pass is done.
+  std::vector<svg::SVGDocument> documents;
+  std::vector<AtlasSlot> slots;
+  const std::size_t passSize = lastIndex - firstIndex;
+  documents.reserve(passSize);
+  slots.reserve(passSize);
+
+  // Shelf packing: fill a row left to right, wrap when the next tile would
+  // exceed the row width. Tiles are square, so a row is as tall as its largest.
+  int cursorX = 0;
+  int cursorY = 0;
+  int rowHeightPx = 0;
+  int atlasWidthPx = 0;
+  for (std::size_t i = firstIndex; i < lastIndex; ++i) {
+    const EmbeddedSvgIconRequest& request = requests[i];
+    if (request.outputSizePx <= 0) {
+      continue;
+    }
+
+    std::optional<svg::SVGDocument> document =
+        ParseEmbeddedSvgIcon(request.svgBytes, request.outputSizePx);
+    if (!document.has_value()) {
+      continue;
+    }
+
+    if (cursorX > 0 && cursorX + request.outputSizePx > kIconAtlasMaxWidthPx) {
+      cursorY += rowHeightPx;
+      cursorX = 0;
+      rowHeightPx = 0;
+    }
+
+    slots.push_back(AtlasSlot{i, Vector2i(cursorX, cursorY), request.outputSizePx});
+    documents.push_back(std::move(*document));
+
+    cursorX += request.outputSizePx;
+    rowHeightPx = std::max(rowHeightPx, request.outputSizePx);
+    atlasWidthPx = std::max(atlasWidthPx, cursorX);
+  }
+
+  if (slots.empty()) {
+    return;
+  }
+
+  std::vector<svg::AtlasDocumentPlacement> placements;
+  placements.reserve(slots.size());
+  for (std::size_t slotIndex = 0; slotIndex < slots.size(); ++slotIndex) {
+    placements.push_back(
+        svg::AtlasDocumentPlacement{&documents[slotIndex], slots[slotIndex].originPx});
+  }
+
+  const Vector2i atlasSizePx(atlasWidthPx, cursorY + rowHeightPx);
+  const svg::RendererBitmap atlas =
+      svg::RenderDocumentsToAtlasBitmap(SharedIconRenderer(), placements, atlasSizePx);
+  // A backend that produced a smaller target than asked for cannot be sliced by
+  // the layout that was planned against the requested size. Fall back to the
+  // per-icon path rather than reading past the rows that came back.
+  if (atlas.dimensions.x < atlasSizePx.x || atlas.dimensions.y < atlasSizePx.y) {
+    return;
+  }
+
+  for (const AtlasSlot& slot : slots) {
+    svg::RendererBitmap tile = SliceAtlasTile(atlas, slot.originPx, slot.sizePx);
+    if (requests[slot.requestIndex].tintableMask) {
+      NormalizeIconBitmapToTintableAlphaMask(&tile);
+    }
+    results[slot.requestIndex] = std::move(tile);
+  }
+}
+
 }  // namespace
 
 void ConfigureEmbeddedSvgIconRenderer(svg::RendererInterface& renderer) {
@@ -201,81 +301,10 @@ std::optional<svg::RendererBitmap> RenderEmbeddedSvgArtwork(std::span<const unsi
 std::vector<std::optional<svg::RendererBitmap>> RenderEmbeddedSvgIconBatch(
     std::span<const EmbeddedSvgIconRequest> requests) {
   std::vector<std::optional<svg::RendererBitmap>> results(requests.size());
-  if (requests.empty()) {
-    return results;
-  }
-
-  struct AtlasSlot {
-    std::size_t requestIndex = 0;
-    Vector2i originPx = Vector2i::Zero();
-    int sizePx = 0;
-  };
-
-  // Documents are kept alive (and pointer-stable) until the atlas pass is done.
-  std::vector<svg::SVGDocument> documents;
-  std::vector<AtlasSlot> slots;
-  documents.reserve(requests.size());
-  slots.reserve(requests.size());
-
-  // Shelf packing: fill a row left to right, wrap when the next tile would
-  // exceed the row width. Tiles are square, so a row is as tall as its largest.
-  int cursorX = 0;
-  int cursorY = 0;
-  int rowHeightPx = 0;
-  int atlasWidthPx = 0;
-  for (std::size_t i = 0; i < requests.size(); ++i) {
-    const EmbeddedSvgIconRequest& request = requests[i];
-    if (request.outputSizePx <= 0) {
-      continue;
-    }
-
-    std::optional<svg::SVGDocument> document =
-        ParseEmbeddedSvgIcon(request.svgBytes, request.outputSizePx);
-    if (!document.has_value()) {
-      continue;
-    }
-
-    if (cursorX > 0 && cursorX + request.outputSizePx > kIconAtlasMaxWidthPx) {
-      cursorY += rowHeightPx;
-      cursorX = 0;
-      rowHeightPx = 0;
-    }
-
-    slots.push_back(AtlasSlot{i, Vector2i(cursorX, cursorY), request.outputSizePx});
-    documents.push_back(std::move(*document));
-
-    cursorX += request.outputSizePx;
-    rowHeightPx = std::max(rowHeightPx, request.outputSizePx);
-    atlasWidthPx = std::max(atlasWidthPx, cursorX);
-  }
-
-  if (slots.empty()) {
-    return results;
-  }
-
-  std::vector<svg::AtlasDocumentPlacement> placements;
-  placements.reserve(slots.size());
-  for (std::size_t slotIndex = 0; slotIndex < slots.size(); ++slotIndex) {
-    placements.push_back(
-        svg::AtlasDocumentPlacement{&documents[slotIndex], slots[slotIndex].originPx});
-  }
-
-  const Vector2i atlasSizePx(atlasWidthPx, cursorY + rowHeightPx);
-  const svg::RendererBitmap atlas =
-      svg::RenderDocumentsToAtlasBitmap(SharedIconRenderer(), placements, atlasSizePx);
-  // A backend that produced a smaller target than asked for cannot be sliced by
-  // the layout that was planned against the requested size. Fall back to the
-  // per-icon path rather than reading past the rows that came back.
-  if (atlas.dimensions.x < atlasSizePx.x || atlas.dimensions.y < atlasSizePx.y) {
-    return results;
-  }
-
-  for (const AtlasSlot& slot : slots) {
-    svg::RendererBitmap tile = SliceAtlasTile(atlas, slot.originPx, slot.sizePx);
-    if (requests[slot.requestIndex].tintableMask) {
-      NormalizeIconBitmapToTintableAlphaMask(&tile);
-    }
-    results[slot.requestIndex] = std::move(tile);
+  for (std::size_t firstIndex = 0; firstIndex < requests.size();
+       firstIndex += kIconsPerAtlasPass) {
+    RenderEmbeddedSvgIconAtlasPass(
+        requests, firstIndex, std::min(firstIndex + kIconsPerAtlasPass, requests.size()), results);
   }
   return results;
 }

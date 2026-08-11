@@ -303,6 +303,57 @@ TEST(EmbeddedSvgIcon, AtlasSkipsUnrenderableRequestsInPlace) {
   EXPECT_TRUE(BitmapsMatch(*standaloneRing, *batched[3]));
 }
 
+// A batch larger than one atlas pass is split across several passes, because a
+// pass has to hold all of its documents alive until its frame is submitted and
+// that peak is what broke the Wasm editor's Safari boot. Splitting must be
+// invisible: every request still gets the pixels it would have rendered alone,
+// at its own index, no matter which pass it landed in. Sizes vary so each pass
+// packs its own shelf independently.
+TEST(EmbeddedSvgIcon, BatchesSpanningMultipleAtlasPassesMatchStandaloneRenders) {
+  struct Case {
+    std::string_view svg;
+    int sizePx;
+    bool tintableMask;
+  };
+  // Deliberately more icons than fit in one pass, so the split is exercised
+  // however `kIconsPerAtlasPass` is later tuned.
+  const std::array<Case, 9> cases = {{
+      {kTriangleIconSvg, 16, true},
+      {kRingIconSvg, 24, true},
+      {kTwoToneIconSvg, 20, false},
+      {kSquareIconSvg, 32, true},
+      {kTriangleIconSvg, 20, true},
+      {kRingIconSvg, 16, true},
+      {kSquareIconSvg, 24, false},
+      {kTwoToneIconSvg, 32, false},
+      {kTriangleIconSvg, 24, true},
+  }};
+
+  std::vector<EmbeddedSvgIconRequest> requests;
+  std::vector<std::optional<svg::RendererBitmap>> standalone;
+  requests.reserve(cases.size());
+  standalone.reserve(cases.size());
+  for (const Case& testCase : cases) {
+    requests.push_back(
+        EmbeddedSvgIconRequest{BytesOf(testCase.svg), testCase.sizePx, testCase.tintableMask});
+    standalone.push_back(testCase.tintableMask
+                             ? RenderEmbeddedSvgIcon(BytesOf(testCase.svg), testCase.sizePx)
+                             : RenderEmbeddedSvgArtwork(BytesOf(testCase.svg), testCase.sizePx));
+    ASSERT_TRUE(standalone.back().has_value());
+  }
+
+  const std::vector<std::optional<svg::RendererBitmap>> batched = RenderEmbeddedSvgIconBatch(
+      std::span<const EmbeddedSvgIconRequest>(requests.data(), requests.size()));
+
+  ASSERT_EQ(batched.size(), requests.size());
+  for (std::size_t i = 0; i < cases.size(); ++i) {
+    ASSERT_TRUE(batched[i].has_value()) << "request " << i;
+    EXPECT_EQ(batched[i]->dimensions, Vector2i(cases[i].sizePx, cases[i].sizePx))
+        << "request " << i;
+    EXPECT_TRUE(BitmapsMatch(*standalone[i], *batched[i])) << "request " << i;
+  }
+}
+
 // Prewarming is what removes the readbacks from the boot path: the per-icon
 // calls the panels already make have to be served from the batch.
 TEST(EmbeddedSvgIcon, PrewarmedIconsServeLaterSingleIconCalls) {

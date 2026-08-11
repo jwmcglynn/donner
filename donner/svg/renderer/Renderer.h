@@ -35,6 +35,15 @@ namespace donner::svg {
  */
 struct AtlasDocumentPlacement {
   /// Document to rasterize. Must outlive the atlas call; null entries are skipped.
+  ///
+  /// Outliving the call is a hard requirement, not a lifetime convenience. A
+  /// GPU backend keeps each document's resident geometry and bind groups in
+  /// components on that document's own registry and consumes them when the
+  /// frame is submitted (see
+  /// `donner/svg/renderer/geode/GeodeResidentPathComponent.h`), so a document
+  /// released before this call returns frees buffers the recorded draws still
+  /// reference and its tile comes back blank. Callers bounding peak memory must
+  /// therefore shrink the batch, not shorten a document's lifetime inside one.
   SVGDocument* document = nullptr;
   /// Top-left corner of this document's tile, in atlas device pixels.
   Vector2i originPx = Vector2i::Zero();
@@ -53,6 +62,12 @@ struct AtlasDocumentPlacement {
  * traversed through the same driver path, translated by its origin. Slicing the
  * returned atlas therefore yields per-document bitmaps identical to rendering
  * each document on its own.
+ *
+ * Peak memory scales with the batch, because every document has to stay alive
+ * until the frame is submitted. That cost is not small - fourteen editor icons
+ * in one batch measured a 101.5 MB Wasm boot heap high-water against under
+ * 32 MB in small batches - so a caller with many documents should split them
+ * across several calls and trade a few readbacks for the headroom.
  *
  * @param renderer Backend instance used for the atlas pass.
  * @param placements Documents and their atlas origins. Tiles must not overlap.
