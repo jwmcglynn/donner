@@ -134,13 +134,13 @@
       ]
     },
     "donner/editor/WholeAppWorkerBridge.cc": {
-      "sha256": "33f182d4caa983d0745f8873a1ed20c0f5680d409140bb6b5f9b41928533c616",
+      "sha256": "5b9ce0e43da8690092dbdc69fad69b0f66b7d0fd325f2fa1ef94d942c07da7a5",
       "wgpuCFunctions": [
         "wgpuReadbackStats"
       ]
     },
     "donner/editor/WholeAppWorkerBridge.h": {
-      "sha256": "ed4e49fad6ec685ef824606c8afd03d450a5248b355c598bf354058bbcd29e5e",
+      "sha256": "00d927a361eed2e674fd80217b37d35b42dd32ba367fb760c241f621a11420bf",
       "wgpuCFunctions": [
         "wgpuReadbackStats"
       ]
@@ -439,7 +439,7 @@
         "unmap",
         "writeBuffer"
       ],
-      "sha256": "1fe74de8dd467673ac61f38d25d828637aaf21cea32eff1c836b9554d0d6e468",
+      "sha256": "b02f07783f17bfd16b007f6e1b8245d371386e7e7873e2b16380a455b2c3490c",
       "wgpuCFunctions": [
         "wgpuDevicePoll",
         "wgpuLabel"
@@ -486,7 +486,7 @@
       ]
     },
     "donner/svg/renderer/RendererGeode.h": {
-      "sha256": "0611c3b563567243b332a6bbdd2a0af3c24722584ec5752a56c3a1b6ea29b100",
+      "sha256": "103a8137ea1015469948a49e0459a02eee38d5594e85350d7ac45eb4b7131758",
       "wgpuCppTokens": [
         "Texture",
         "TextureFormat",

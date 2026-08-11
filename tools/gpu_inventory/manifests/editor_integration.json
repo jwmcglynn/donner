@@ -162,13 +162,13 @@
       ]
     },
     "donner/editor/WholeAppWorkerBridge.cc": {
-      "sha256": "33f182d4caa983d0745f8873a1ed20c0f5680d409140bb6b5f9b41928533c616",
+      "sha256": "5b9ce0e43da8690092dbdc69fad69b0f66b7d0fd325f2fa1ef94d942c07da7a5",
       "wgpuCFunctions": [
         "wgpuReadbackStats"
       ]
     },
     "donner/editor/WholeAppWorkerBridge.h": {
-      "sha256": "ed4e49fad6ec685ef824606c8afd03d450a5248b355c598bf354058bbcd29e5e",
+      "sha256": "00d927a361eed2e674fd80217b37d35b42dd32ba367fb760c241f621a11420bf",
       "wgpuCFunctions": [
         "wgpuReadbackStats"
       ]
