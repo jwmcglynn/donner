@@ -300,6 +300,13 @@ void Install() {
         };
         if (canvas) {
           canvas.addEventListener('wheel', setModifier, {capture : true, passive : true});
+          // preventDefault mirror. The app consumes every wheel over the
+          // canvas (pan and zoom), and a ctrl+wheel left to the browser
+          // triggers page zoom. The real consumer runs on the app pthread and
+          // cannot veto the default in time, so the page mirrors the decision
+          // the app always makes for canvas wheels. Non-passive on purpose.
+          canvas.addEventListener('wheel', function(event) { event.preventDefault(); },
+                                  {passive : false});
         }
         window.addEventListener('blur', clearModifier);
         document.addEventListener('visibilitychange', clearModifier);
