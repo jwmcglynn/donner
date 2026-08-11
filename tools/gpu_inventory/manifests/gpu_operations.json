@@ -470,7 +470,7 @@
         "unmap",
         "writeBuffer"
       ],
-      "sha256": "2ca57a0257d71bc37002f43fffd965568ac0c2452b8448559400154f47d59236",
+      "sha256": "805102e4516e70e219deb77a90344d75787927a586e16f3a2a8196f89453b23b",
       "wgpuCFunctions": [
         "wgpuDevicePoll",
         "wgpuLabel"
@@ -641,7 +641,7 @@
       ]
     },
     "donner/svg/renderer/geode/GeodeCounters.h": {
-      "sha256": "e50308ca095534294cabe5a17c38e59c8c495299130e761b68267a63bfb50c62",
+      "sha256": "8e8d368e82ebed54de500c47c0ed5c1ff9d694d80bcfdb630b80ceddbe77de5e",
       "wgpuCppTokens": [
         "Device",
         "Queue",
@@ -1181,7 +1181,7 @@
       "operations": [
         "draw"
       ],
-      "sha256": "822000064fcea536a1a796ac8fbb0911bb52ed683ecd3f2041ad90e08bcf1a54",
+      "sha256": "be12ca01423f7d2379708a93c1bbebebf794ae5120b44730fdc75f6411c1e592",
       "wgpuCppTokens": [
         "Texture",
         "TextureFormat"
