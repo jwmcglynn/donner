@@ -25,37 +25,16 @@ body {
   overflow: hidden;
 }
 
-#donner-document-canvas,
-#donner-document-canvas-back {
-  position: absolute;
-  z-index: 0;
-  display: block;
-  visibility: hidden;
-  margin: 0;
-  border: 0;
-  pointer-events: none;
-  transform-origin: 0 0;
-
-  /*
-   * Solid editor background, matching the page background that uncovered
-   * render-pane pixels already show outside the document rect. The
-   * transparency checkerboard belongs to the WGSL checkerboard pass that runs
-   * inside the presented pixels; a second CSS checkerboard here was a separate
-   * implementation whose geometry followed the element rather than the
-   * presented pixels, so it showed through whenever those pixels lagged a
-   * layout write.
-   */
-  background-color: #101317;
-}
-
-#donner-worker-document-canvas {
-  display: none;
-}
-
 #canvas:focus {
   outline: none;
 }
 
+/*
+ * The only canvas. Everything rendered - document tiles, chrome, and the ImGui
+ * UI - is produced by Geode inside this element's single WebGPU frame, so no
+ * rule here may position, size, clip, or scale rendered content. CSS below this
+ * point styles page scaffolding only (the loader and the fatal-error surface).
+ */
 #canvas {
   z-index: 2;
   touch-action: none;

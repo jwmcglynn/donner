@@ -954,14 +954,11 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       inputBridge_(window_, kWheelZoomStep),
       compositorDebugPanel_(window.geodeDevice()),
       dialogPresenter_(options_.editorNoticeText) {
-  // One presenter owns where document pixels land for the whole session; the
-  // platform fork lives here rather than in the per-frame presentation path.
-  documentPresenter_ = MakeDocumentPresenter(
-      DefaultDocumentPresentationTarget(),
-      [this](std::optional<FramebufferUnderlayPlan> plan) {
+  // One presenter owns where document pixels land for the whole session.
+  documentPresenter_ =
+      MakeDocumentPresenter([this](std::optional<FramebufferUnderlayPlan> plan) {
         installFramebufferUnderlayPlan(std::move(plan));
-      },
-      DefaultWorkerSurfaceLayoutSink());
+      });
   renderCoordinator_.asyncRenderer().setCompositorDiagnosticsEnabled(false);
   // Install the embedded + system font catalog as the process-wide default provider, so every
   // document FontManager created by the render paths resolves font-family names against embedded
