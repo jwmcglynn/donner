@@ -218,6 +218,19 @@ function assertProbeUsable(result: CompositedProbeResult, minimumSamples: number
     `only ${usable}/${result.samples.length} samples produced composited pixels;`
       + " the read-back path is unavailable, so these invariants would pass vacuously",
   ).toBeGreaterThan(0.8);
+  // The bounded same-task retry rescues the known Gecko first-read-after-
+  // promotion race in 100 percent of observed cases (measured to load average
+  // 127). Retries that fire WITHOUT rescuing indicate a different, sustained
+  // snapshot-unavailability bug - fail loudly with the counters instead of
+  // letting empty samples degrade into the per-invariant bounds, where the
+  // failure mode would be untraceable.
+  if (result.readbackRetries > 0) {
+    expect(
+      result.readbackRetryRescues,
+      `${result.readbackRetries} read-back retries fired but rescued 0 samples - a sustained`
+        + " snapshot-unavailability mode, not the known per-handoff race; capture the counters",
+    ).toBeGreaterThan(0);
+  }
 }
 
 // The composited read-back of a worker-owned WebGPU canvas is not free, and it
@@ -307,18 +320,6 @@ test.describe("composited drag invariants", () => {
   });
 
   test("h: a shape drag never blanks the document, including at drag start", async ({ browserName, page }) => {
-    // Gecko-at-CI carve-out, same as composited-invariants a/b/d: Playwright
-    // Firefox on shared CI runners shows a drawImage-readback artifact against
-    // worker-owned WebGPU canvases (long runs of empty samples while DOM
-    // observables prove the document is presenting). The readback-dependent
-    // assertions in this test are meaningless there; the DOM-based drag
-    // invariants (g, and h's surface-absence half via the enforced suites)
-    // keep Gecko coverage. Tracked: Gecko readback diagnosis in the Design
-    // 0062 follow-ups; remove when it lands.
-    test.skip(
-      browserName === "firefox" && Boolean(process.env.CI),
-      "Gecko CI readback artifact - see tracked diagnosis",
-    );
     // GUARDS: the first-drag black frame. Pressing down on a shape and starting
     // to move it flashes the editor background for one frame before the first
     // dragged frame arrives.
@@ -376,6 +377,7 @@ test.describe("composited drag invariants", () => {
       `drag-black-frames engine=${browserName} samples=${result.samples.length}`
         + ` black=${stats.blackSamples} fraction=${stats.fraction.toFixed(4)}`
         + ` longestRun=${stats.longestRun} noSurface=${blankSurfaceSamples.length}`
+        + ` readbackRetries=${result.readbackRetries}/${result.readbackRetryRescues}`
         + ` pointerEvents=${stream.pointerEvents}`,
     );
     expect(
@@ -383,26 +385,17 @@ test.describe("composited drag invariants", () => {
       `${blankSurfaceSamples.length} sampled frames had NO document surface on screen during a`
         + " drag; that is the one-frame blank the user reports",
     ).toEqual([]);
+    // One bound for both engines. Gecko's extra allowance was the composited
+    // read-back artifact described in `composited-probe.ts`, which the probe
+    // now retries out; it was never a property of the drag.
     expect(
       stats.longestRun,
       `the document was missing for ${stats.longestRun} consecutive composited frames`,
-    ).toBeLessThanOrEqual(browserName === "firefox" ? 3 : 2);
+    ).toBeLessThanOrEqual(2);
     expect(failures).toEqual([]);
   });
 
   test("i: the presented document follows a shape drag", async ({ browserName, page }) => {
-    // Gecko-at-CI carve-out, same as composited-invariants a/b/d: Playwright
-    // Firefox on shared CI runners shows a drawImage-readback artifact against
-    // worker-owned WebGPU canvases (long runs of empty samples while DOM
-    // observables prove the document is presenting). The readback-dependent
-    // assertions in this test are meaningless there; the DOM-based drag
-    // invariants (g, and h's surface-absence half via the enforced suites)
-    // keep Gecko coverage. Tracked: Gecko readback diagnosis in the Design
-    // 0062 follow-ups; remove when it lands.
-    test.skip(
-      browserName === "firefox" && Boolean(process.env.CI),
-      "Gecko CI readback artifact - see tracked diagnosis",
-    );
     // GUARDS: a drag that only updates the screen when the pipeline happens to
     // catch up. The dragged object's own motion is the observable, not the
     // surface's: a shape drag does not move the viewport, so every

@@ -146,6 +146,19 @@ function assertProbeUsable(result: CompositedProbeResult, minimumSamples: number
     `only ${usable}/${result.samples.length} samples produced composited pixels;`
       + " the read-back path is unavailable, so these invariants would pass vacuously",
   ).toBeGreaterThan(0.8);
+  // The bounded same-task retry rescues the known Gecko first-read-after-
+  // promotion race in 100 percent of observed cases (measured to load average
+  // 127). Retries that fire WITHOUT rescuing indicate a different, sustained
+  // snapshot-unavailability bug - fail loudly with the counters instead of
+  // letting empty samples degrade into the per-invariant bounds, where the
+  // failure mode would be untraceable.
+  if (result.readbackRetries > 0) {
+    expect(
+      result.readbackRetryRescues,
+      `${result.readbackRetries} read-back retries fired but rescued 0 samples - a sustained`
+        + " snapshot-unavailability mode, not the known per-handoff race; capture the counters",
+    ).toBeGreaterThan(0);
+  }
 }
 
 /** Distinct visible widths, proof that a zoom stream actually moved the scale. */
@@ -159,18 +172,6 @@ function distinctVisibleWidths(result: CompositedProbeResult): number {
 
 test.describe("composited output invariants", () => {
   test("a: a zoom storm never shows an empty visible region", async ({ browserName, page }) => {
-    // Gecko-at-CI carve-out: Playwright Firefox on shared CI runners shows a
-    // drawImage-readback artifact against worker-owned WebGPU canvases (runs
-    // of empty probe samples while the same runner's pixel-poll suites prove
-    // the document is presenting), and its 14x-slower baseline-tier wasm makes
-    // per-rAF timing bounds meaningless there. The pixel-side hazard this
-    // family guards is enforced on Gecko by test f (alternation), which is
-    // timing-independent and green on CI. Tracked: Gecko readback diagnosis in
-    // the Design 0062 follow-ups; remove this skip when it lands.
-    test.skip(
-      browserName === "firefox" && Boolean(process.env.CI),
-      "Gecko CI readback artifact - see tracked diagnosis; f covers the pixel side",
-    );
     // GUARDS: the backing-store-clear flicker. A per-epoch canvas resize clears
     // the backing store, and the clear landed on a canvas that was still
     // visible, so ~18% of frames under a burst storm composited a fully
@@ -218,41 +219,35 @@ test.describe("composited output invariants", () => {
       `composited-black-frames engine=${browserName} samples=${result.samples.length}`
         + ` black=${stats.blackSamples} fraction=${stats.fraction.toFixed(4)}`
         + ` longestRun=${stats.longestRun} wheels=${stream.activeWheelEvents}`
+        + ` readbackRetries=${result.readbackRetries}/${result.readbackRetryRescues}`
         + ` detail=${JSON.stringify(blackDetail)}`,
     );
-    // The 1% fraction bound is enforced on Chromium only.
+    // Enforced on every engine, at the same bound.
     //
-    // Measured on Gecko at 78fcea1e3, this same window reports 1-3 near-empty
-    // samples out of 25-45 (fraction 0.04-0.11), reproducibly at the same two
-    // places: the first zoom-out epoch of a burst (mean alpha 2.5, visible
-    // width 892) and the fully zoomed-out epoch (mean alpha 0, visible width
-    // 89.5). Both carry valid geometry, an unchanged backing store, and a
-    // frame token that did not move, so they are not the per-epoch clear this
-    // test is named for. They are either a Gecko-specific presentation gap or
-    // a limitation of reading a worker-owned WebGPU canvas back through
-    // drawImage under Gecko, and telling those apart needs a Gecko diagnosis
-    // this lane cannot do from the outside. Until that is resolved, Gecko
-    // keeps the sustained-blackout bound below (which the named regression
-    // fails outright) and reports its fraction without asserting on it, rather
-    // than the lane carrying a bound tuned to noise. Do not widen the Chromium
-    // bound to make Gecko fit.
-    if (browserName !== "firefox") {
-      expect(
-        stats.fraction,
-        `${stats.blackSamples}/${stats.consideredSamples} composited samples had an empty visible`
-          + ` region (mean alpha < 40); longest run ${stats.longestRun} starting at sample`
-          + ` ${stats.longestRunStart}; black samples ${JSON.stringify(blackDetail)}`,
-      ).toBeLessThanOrEqual(0.01);
-    }
-    // Sustained blackout, enforced on every engine. Gecko services roughly a
-    // tenth of Chromium's animation frames here, so the same run length is a
-    // much longer wall-clock window there; allow one more sample rather than
-    // pretending the two are the same measurement.
-    const runBound = browserName === "firefox" ? 3 : 2;
+    // This used to be Chromium-only. Gecko reported 1-3 near-empty samples per
+    // storm and long empty runs on CI, and the lane could not tell a Gecko
+    // presentation gap from a Gecko read-back limitation from outside. It is
+    // the read-back: the first main-thread `drawImage` snapshot of a canvas
+    // the worker has just presented into can return transparent while the
+    // canvas is fine, and a second `drawImage` in the same task returns the
+    // real pixels (see "WHY THE READ-BACK RETRIES" in `composited-probe.ts`
+    // for the standalone measurement, 128 of 128 recovered, Chromium 0 of
+    // 6327). The probe now retries, `readbackRetries` above reports how often
+    // that fired, and the engines are held to one bound again.
+    expect(
+      stats.fraction,
+      `${stats.blackSamples}/${stats.consideredSamples} composited samples had an empty visible`
+        + ` region (mean alpha < 40); longest run ${stats.longestRun} starting at sample`
+        + ` ${stats.longestRunStart}; black samples ${JSON.stringify(blackDetail)}`,
+    ).toBeLessThanOrEqual(0.01);
+    // Sustained blackout. Gecko's widened allowance came from the same
+    // read-back artifact, not from its frame rate: a slower engine produces
+    // FEWER consecutive samples across a given wall-clock gap, not more, so
+    // there was never a throughput reason for the two engines to differ here.
     expect(
       stats.longestRun,
       `the document was missing for ${stats.longestRun} consecutive composited frames`,
-    ).toBeLessThanOrEqual(runBound);
+    ).toBeLessThanOrEqual(2);
     expect(failures).toEqual([]);
   });
 
@@ -260,18 +255,6 @@ test.describe("composited output invariants", () => {
     browserName,
     page,
   }) => {
-    // Gecko-at-CI carve-out: Playwright Firefox on shared CI runners shows a
-    // drawImage-readback artifact against worker-owned WebGPU canvases (runs
-    // of empty probe samples while the same runner's pixel-poll suites prove
-    // the document is presenting), and its 14x-slower baseline-tier wasm makes
-    // per-rAF timing bounds meaningless there. The pixel-side hazard this
-    // family guards is enforced on Gecko by test f (alternation), which is
-    // timing-independent and green on CI. Tracked: Gecko readback diagnosis in
-    // the Design 0062 follow-ups; remove this skip when it lands.
-    test.skip(
-      browserName === "firefox" && Boolean(process.env.CI),
-      "Gecko CI readback artifact - see tracked diagnosis; f covers the pixel side",
-    );
     // GUARDS: the wrong-scale flicker. A direct WebGPU present commits
     // worker-side immediately, while the CSS layout matching those pixels is
     // applied when the main thread accepts the epoch, one or more task
@@ -412,18 +395,6 @@ test.describe("composited output invariants", () => {
     browserName,
     page,
   }) => {
-    // Gecko-at-CI carve-out: Playwright Firefox on shared CI runners shows a
-    // drawImage-readback artifact against worker-owned WebGPU canvases (runs
-    // of empty probe samples while the same runner's pixel-poll suites prove
-    // the document is presenting), and its 14x-slower baseline-tier wasm makes
-    // per-rAF timing bounds meaningless there. The pixel-side hazard this
-    // family guards is enforced on Gecko by test f (alternation), which is
-    // timing-independent and green on CI. Tracked: Gecko readback diagnosis in
-    // the Design 0062 follow-ups; remove this skip when it lands.
-    test.skip(
-      browserName === "firefox" && Boolean(process.env.CI),
-      "Gecko CI readback artifact - see tracked diagnosis; f covers the pixel side",
-    );
     // GUARDS: pan shipped completely broken with a green board. It never
     // requested a worker epoch, and placement was pinned to the epoch viewport
     // so the surface could not move between epochs. The old assertion polled

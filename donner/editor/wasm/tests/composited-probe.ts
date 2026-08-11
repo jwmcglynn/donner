@@ -48,6 +48,29 @@ import { type Page } from "@playwright/test";
  * The probe reports `drawFailures` and per-sample `drawOk` so a run where the
  * read-back path itself is unavailable fails loudly instead of reporting a
  * comfortable stream of transparent frames.
+ *
+ * WHY THE READ-BACK RETRIES
+ *
+ * Gecko's first main-thread snapshot of a worker-owned WebGPU canvas can come
+ * back transparent for a canvas that is presenting perfectly. Measured on a
+ * standalone reproducer (no Donner: a worker, two transferred canvases, a
+ * WebGPU present loop, and this same sampler): with the worker resizing its
+ * backing store between epochs, 15 of 900 sampled frames read back empty or
+ * near-empty on the first `drawImage`, always within a millisecond of the
+ * present that promoted that canvas, and ALL 15 returned the real pixels on a
+ * second `drawImage` issued in the same task. The same page on Chromium
+ * produced zero empty reads in 1763 samples. The trigger is the swapchain
+ * teardown the resize forces; alternation and CSS re-placement make it more
+ * frequent but neither is sufficient on its own.
+ *
+ * So an empty read is retried a bounded number of times inside the same
+ * animation frame. This cannot hide a real defect: a genuinely cleared backing
+ * store returns the same empty answer on every attempt, and a legitimately
+ * empty visible region likewise. The only verdict a retry changes is the one
+ * where the browser gave two different answers for the same canvas in the same
+ * task, which is the definition of a read-back artifact rather than a frame.
+ * `readbackRetries` and `readbackRetryRescues` report how often that happened,
+ * so the workaround can never quietly become load-bearing.
  */
 
 /** One composited sample, taken inside a single animation frame. */
@@ -93,6 +116,37 @@ export interface CompositedSample {
   sampledPixels: number;
   /** False when the composited read-back did not produce pixels. */
   drawOk: boolean;
+  /**
+   * The element box the source rectangle was derived from, in CSS px, and the
+   * source rectangle itself, in backing-store px.
+   *
+   * The read-back is a sub-rectangle read: the visible region is mapped into
+   * the backing store through `backingSize / elementBoxSize`. The main thread
+   * owns the element box (it applies the accepted epoch's CSS) and the worker
+   * owns the backing store (it resizes its own OffscreenCanvas), so the two
+   * are written by different threads and can disagree for a window. When they
+   * do, the source rectangle can fall partly or wholly outside the backing
+   * store, and `drawImage` then returns transparent pixels for a canvas that
+   * is presenting perfectly. Recording the rectangle is what makes that case
+   * distinguishable from a real empty frame after the fact.
+   */
+  elementWidth: number;
+  elementHeight: number;
+  sourceX: number;
+  sourceY: number;
+  sourceWidth: number;
+  sourceHeight: number;
+  /**
+   * True when the source rectangle was clamped back inside the backing store
+   * before the read-back. A sample with this set was taken across a
+   * main-thread/worker size disagreement.
+   */
+  sourceClamped: boolean;
+  /**
+   * How many `drawImage` read-backs this sample took. 1 in the ordinary case;
+   * more when the first attempt came back empty. See the file comment.
+   */
+  readbackAttempts: number;
 }
 
 export interface CompositedProbeResult {
@@ -101,6 +155,10 @@ export interface CompositedProbeResult {
   drawFailures: number;
   /** Animation frames observed while the probe was running. */
   frames: number;
+  /** Samples whose first read-back was empty and was therefore retried. */
+  readbackRetries: number;
+  /** Retried samples in which a later attempt returned a non-empty frame. */
+  readbackRetryRescues: number;
 }
 
 export interface CompositedProbeOptions {
@@ -125,6 +183,20 @@ export interface CompositedProbeOptions {
    * observable says anything about a single dragged shape.
    */
   sampleRegionCss?: { x: number; y: number; width: number; height: number };
+  /**
+   * Maximum `drawImage` read-backs per sample. The extra attempts are only
+   * issued when an attempt comes back empty, so this does not change the cost
+   * of an ordinary frame. See "WHY THE READ-BACK RETRIES" above.
+   */
+  readbackAttempts?: number;
+  /**
+   * Mean alpha below which a read-back is treated as empty and retried.
+   *
+   * Deliberately the same default as `blackFrameStats`: a read that the
+   * black-frame accounting would call empty is exactly the read worth asking
+   * the browser for a second time.
+   */
+  retryBelowMeanAlpha?: number;
 }
 
 declare global {
@@ -134,6 +206,8 @@ declare global {
       samples: CompositedSample[];
       drawFailures: number;
       frames: number;
+      readbackRetries: number;
+      readbackRetryRescues: number;
       start: () => void;
       stop: () => void;
     };
@@ -159,6 +233,8 @@ export async function installCompositedProbe(
     minColorAlpha: options.minColorAlpha ?? 16,
     minColorSpread: options.minColorSpread ?? 12,
     sampleRegionCss: options.sampleRegionCss ?? null,
+    readbackAttempts: options.readbackAttempts ?? 4,
+    retryBelowMeanAlpha: options.retryBelowMeanAlpha ?? 40,
   };
 
   await page.evaluate((config) => {
@@ -225,6 +301,25 @@ export async function installCompositedProbe(
       __donnerWorkerStats?: { completedResults?: number };
     };
 
+    const kNoPixels = {
+      meanAlpha: 0,
+      meanLuma: 0,
+      coloredPixels: 0,
+      coloredCentroidX: -1,
+      coloredCentroidY: -1,
+      sampledPixels: 0,
+      drawOk: false,
+    };
+    const kNoSourceRect = {
+      elementWidth: 0,
+      elementHeight: 0,
+      sourceX: 0,
+      sourceY: 0,
+      sourceWidth: 0,
+      sourceHeight: 0,
+      sourceClamped: false,
+    };
+
     const sampleOnce = (): CompositedSample => {
       const surface = document.querySelector<HTMLCanvasElement>(
         "canvas[data-direct-surface-visible=\"true\"]",
@@ -244,13 +339,9 @@ export async function installCompositedProbe(
           backingHeight: 0,
           acceptedToken,
           completedResults,
-          meanAlpha: 0,
-          meanLuma: 0,
-          coloredPixels: 0,
-          coloredCentroidX: -1,
-          coloredCentroidY: -1,
-          sampledPixels: 0,
-          drawOk: false,
+          ...kNoPixels,
+          ...kNoSourceRect,
+          readbackAttempts: 0,
         };
       }
 
@@ -278,10 +369,36 @@ export async function installCompositedProbe(
       // a sub-rectangle of that box, so its source rect scales the same way.
       const scaleX = elementRect.width > 0 ? surface.width / elementRect.width : 0;
       const scaleY = elementRect.height > 0 ? surface.height / elementRect.height : 0;
-      const sourceX = bounds.insetLeft * scaleX;
-      const sourceY = bounds.insetTop * scaleY;
-      const sourceWidth = bounds.width * scaleX;
-      const sourceHeight = bounds.height * scaleY;
+      const wantedX = bounds.insetLeft * scaleX;
+      const wantedY = bounds.insetTop * scaleY;
+      const wantedWidth = bounds.width * scaleX;
+      const wantedHeight = bounds.height * scaleY;
+
+      // Clamp the source rectangle into the backing store.
+      //
+      // The element box is written by the main thread when it accepts an epoch
+      // and the backing store is written by the worker that owns the
+      // OffscreenCanvas, so under load the two can describe different epochs
+      // for a window. `drawImage` with a source rectangle that reaches outside
+      // the source image is not an error and does not clip to the image: the
+      // out-of-range part is composited as transparent black, so a canvas that
+      // is presenting correctly reads back empty for exactly as long as the
+      // disagreement lasts. Sampling the overlap instead answers the question
+      // the invariants actually ask ("is there a document here") for those
+      // frames, and `sourceClamped` records that it happened.
+      let sourceX = Math.max(0, wantedX);
+      let sourceY = Math.max(0, wantedY);
+      let sourceWidth = Math.min(wantedX + wantedWidth, surface.width) - sourceX;
+      let sourceHeight = Math.min(wantedY + wantedHeight, surface.height) - sourceY;
+      const sourceClamped = sourceX !== wantedX || sourceY !== wantedY
+        || Math.abs(sourceWidth - wantedWidth) > 1e-6
+        || Math.abs(sourceHeight - wantedHeight) > 1e-6;
+      if (!(sourceWidth >= 1) || !(sourceHeight >= 1)) {
+        sourceX = 0;
+        sourceY = 0;
+        sourceWidth = 0;
+        sourceHeight = 0;
+      }
 
       const base = {
         t: performance.now(),
@@ -295,82 +412,97 @@ export async function installCompositedProbe(
         backingHeight: surface.height,
         acceptedToken,
         completedResults,
+        elementWidth: elementRect.width,
+        elementHeight: elementRect.height,
+        sourceX,
+        sourceY,
+        sourceWidth,
+        sourceHeight,
+        sourceClamped,
       };
 
       if (!(sourceWidth >= 1) || !(sourceHeight >= 1)) {
-        return {
-          ...base,
-          meanAlpha: 0,
-          meanLuma: 0,
-          coloredPixels: 0,
-          coloredCentroidX: -1,
-          coloredCentroidY: -1,
-          sampledPixels: 0,
-          drawOk: false,
-        };
+        return { ...base, ...kNoPixels, readbackAttempts: 0 };
       }
 
-      context.clearRect(0, 0, readback.width, readback.height);
-      try {
-        context.drawImage(
-          surface,
-          sourceX,
-          sourceY,
-          sourceWidth,
-          sourceHeight,
-          0,
-          0,
-          readback.width,
-          readback.height,
-        );
-      } catch {
-        return {
-          ...base,
-          meanAlpha: 0,
-          meanLuma: 0,
-          coloredPixels: 0,
-          coloredCentroidX: -1,
-          coloredCentroidY: -1,
-          sampledPixels: 0,
-          drawOk: false,
-        };
-      }
+      /** One read-back of the visible region, or null if `drawImage` threw. */
+      const readOnce = (): Omit<typeof kNoPixels, "drawOk"> | null => {
+        context.clearRect(0, 0, readback.width, readback.height);
+        try {
+          context.drawImage(
+            surface,
+            sourceX,
+            sourceY,
+            sourceWidth,
+            sourceHeight,
+            0,
+            0,
+            readback.width,
+            readback.height,
+          );
+        } catch {
+          return null;
+        }
 
-      const pixels = context.getImageData(0, 0, readback.width, readback.height).data;
-      const count = pixels.length / 4;
-      let alphaSum = 0;
-      let lumaSum = 0;
-      let colored = 0;
-      let coloredX = 0;
-      let coloredY = 0;
-      for (let index = 0; index < pixels.length; index += 4) {
-        const r = pixels[index];
-        const g = pixels[index + 1];
-        const b = pixels[index + 2];
-        const a = pixels[index + 3];
-        alphaSum += a;
-        lumaSum += 0.2126 * r + 0.7152 * g + 0.0722 * b;
-        if (a >= config.minColorAlpha) {
-          const spread = Math.max(r, g, b) - Math.min(r, g, b);
-          if (spread >= config.minColorSpread) {
-            colored += 1;
-            const pixel = index / 4;
-            coloredX += pixel % readback.width;
-            coloredY += Math.floor(pixel / readback.width);
+        const pixels = context.getImageData(0, 0, readback.width, readback.height).data;
+        const count = pixels.length / 4;
+        let alphaSum = 0;
+        let lumaSum = 0;
+        let colored = 0;
+        let coloredX = 0;
+        let coloredY = 0;
+        for (let index = 0; index < pixels.length; index += 4) {
+          const r = pixels[index];
+          const g = pixels[index + 1];
+          const b = pixels[index + 2];
+          const a = pixels[index + 3];
+          alphaSum += a;
+          lumaSum += 0.2126 * r + 0.7152 * g + 0.0722 * b;
+          if (a >= config.minColorAlpha) {
+            const spread = Math.max(r, g, b) - Math.min(r, g, b);
+            if (spread >= config.minColorSpread) {
+              colored += 1;
+              const pixel = index / 4;
+              coloredX += pixel % readback.width;
+              coloredY += Math.floor(pixel / readback.width);
+            }
           }
         }
+        return {
+          meanAlpha: alphaSum / count,
+          meanLuma: lumaSum / count,
+          coloredPixels: colored,
+          coloredCentroidX: colored === 0 ? -1 : coloredX / colored,
+          coloredCentroidY: colored === 0 ? -1 : coloredY / colored,
+          sampledPixels: count,
+        };
+      };
+
+      // Ask again, in this same task, while the answer is empty. See "WHY THE
+      // READ-BACK RETRIES" at the top of this file: on Gecko the first
+      // snapshot of a canvas the worker has just presented into can be
+      // transparent while the canvas is fine, and every observed instance
+      // recovered on the second attempt. A canvas that is really empty answers
+      // the same way every time, so the bound is a cost cap, not a tolerance.
+      let measurement = readOnce();
+      let attempts = 1;
+      while (
+        measurement !== null
+        && measurement.meanAlpha < config.retryBelowMeanAlpha
+        && attempts < config.readbackAttempts
+      ) {
+        const again = readOnce();
+        attempts += 1;
+        if (again === null) {
+          break;
+        }
+        measurement = again;
+      }
+      if (measurement === null) {
+        return { ...base, ...kNoPixels, readbackAttempts: attempts };
       }
 
-      return {
-        ...base,
-        meanAlpha: alphaSum / count,
-        meanLuma: lumaSum / count,
-        coloredPixels: colored,
-        coloredCentroidX: colored === 0 ? -1 : coloredX / colored,
-        coloredCentroidY: colored === 0 ? -1 : coloredY / colored,
-        sampledPixels: count,
-        drawOk: true,
-      };
+      return { ...base, ...measurement, drawOk: true, readbackAttempts: attempts };
     };
 
     const probe = {
@@ -378,10 +510,14 @@ export async function installCompositedProbe(
       samples: [] as CompositedSample[],
       drawFailures: 0,
       frames: 0,
+      readbackRetries: 0,
+      readbackRetryRescues: 0,
       start(): void {
         probe.samples.length = 0;
         probe.drawFailures = 0;
         probe.frames = 0;
+        probe.readbackRetries = 0;
+        probe.readbackRetryRescues = 0;
         probe.running = true;
         const tick = (): void => {
           if (!probe.running) {
@@ -391,6 +527,12 @@ export async function installCompositedProbe(
           const sample = sampleOnce();
           if (!sample.drawOk) {
             probe.drawFailures += 1;
+          }
+          if (sample.readbackAttempts > 1) {
+            probe.readbackRetries += 1;
+            if (sample.drawOk && sample.meanAlpha >= config.retryBelowMeanAlpha) {
+              probe.readbackRetryRescues += 1;
+            }
           }
           probe.samples.push(sample);
           requestAnimationFrame(tick);
@@ -428,6 +570,8 @@ export async function stopCompositedProbe(page: Page): Promise<CompositedProbeRe
       samples: probe.samples.slice(),
       drawFailures: probe.drawFailures,
       frames: probe.frames,
+      readbackRetries: probe.readbackRetries,
+      readbackRetryRescues: probe.readbackRetryRescues,
     };
   });
 }

@@ -116,24 +116,48 @@ function safariWebContentProcesses() {
   return processes;
 }
 
+// Raising the automation window is a convenience, not a gate: the run's real
+// visibility requirement is checked by `requireVisibleSafariAnimationFrame`.
+//
+// It has to be best-effort and time-bounded because the Apple Events
+// permission for this script's parent process is granted interactively. Where
+// that grant is missing, `osascript` does not fail: it blocks waiting on a
+// consent decision that a non-interactive runner will never make, and the
+// whole gate sat there for about nine minutes before anything else happened.
+// Bound it, and say out loud that the window was not raised, rather than
+// letting a cosmetic step decide how long the suite takes.
+const kRaiseWindowTimeoutMs = 5_000;
+
 function bringSafariAutomationWindowForward() {
   if (process.platform !== "darwin") {
     return;
   }
-  execFileSync(
-    "/usr/bin/osascript",
-    [
-      "-e",
-      "tell application \"Safari\"",
-      "-e",
-      "activate",
-      "-e",
-      "if (count of windows) > 0 then set index of last window to 1",
-      "-e",
-      "end tell",
-    ],
-    { stdio: "ignore" },
-  );
+  try {
+    execFileSync(
+      "/usr/bin/osascript",
+      [
+        "-e",
+        "tell application \"Safari\"",
+        "-e",
+        "activate",
+        "-e",
+        "if (count of windows) > 0 then set index of last window to 1",
+        "-e",
+        "end tell",
+      ],
+      { stdio: "ignore", timeout: kRaiseWindowTimeoutMs, killSignal: "SIGKILL" },
+    );
+  } catch (error) {
+    const timedOut = error?.signal === "SIGKILL" || error?.code === "ETIMEDOUT";
+    console.warn(
+      `[safari-geode] skipped raising the Safari automation window (${
+        timedOut
+          ? `no response within ${kRaiseWindowTimeoutMs} ms, usually a missing Apple Events`
+            + " permission for this terminal"
+          : String(error?.message || error)
+      }); continuing, the run's visibility requirement is enforced separately`,
+    );
+  }
 }
 
 class SafariDriverClient {
