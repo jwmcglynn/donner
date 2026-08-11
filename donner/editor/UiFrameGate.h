@@ -137,6 +137,11 @@ struct UiFrameGateInputs {
   /// The viewport has not latched a pane size yet, so the pane geometry a presentation-only frame
   /// would reuse does not exist.
   bool viewportUninitialized = false;
+  /// A presentation-only frame refused to publish a completed worker epoch because that epoch
+  /// places the document somewhere other than where the last full frame rasterized its chrome.
+  /// The chrome, the compositor tile overlay, and the document have to move in one frame, and
+  /// only a full frame can move them together.
+  bool epochPlacementDeferred = false;
   /// The window framebuffer size changed since the last full frame.
   bool windowGeometryChanged = false;
   /// A repro recording is capturing per-frame state; it must observe every frame.

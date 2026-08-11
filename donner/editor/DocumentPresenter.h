@@ -172,15 +172,74 @@ struct DocumentPresentationResult {
 [[nodiscard]] bool DocumentPresentationMappingChanged(const ViewportState& before,
                                                       const ViewportState& after);
 
+/**
+ * Return whether re-mapping an accepted epoch through the live viewport still
+ * covers every pane pixel the epoch's own placement covered.
+ *
+ * This is the clamp that lets zoom motion follow the fingers. The accepted
+ * pixels are a fixed document rect, so mapping that rect through the live
+ * transform is geometrically correct for an unbounded raster - but a
+ * viewport-bounded high-zoom raster only covers the pane plus
+ * `ViewportState::kHighZoomRasterMarginScreenPx`, and re-mapping it through a
+ * zoomed-out live viewport shrinks it inside the pane, uncovering the editor
+ * background where document pixels used to be.
+ *
+ * Only pane area is compared: an epoch's overhang outside the render pane was
+ * clipped away and was never on screen to lose. An epoch that covered no pane
+ * area at all trivially loses nothing.
+ *
+ * @param paneRect Render-pane rect in screen pixels.
+ * @param epochSurfaceRect Surface rect placed through the epoch's own viewport.
+ * @param liveSurfaceRect The same surface rect placed through the live viewport.
+ */
+[[nodiscard]] bool LivePlacementCoversEpochCoverage(const Box2d& paneRect,
+                                                    const Box2d& epochSurfaceRect,
+                                                    const Box2d& liveSurfaceRect);
+
+/**
+ * The viewport an accepted worker-surface epoch's pixels are placed with.
+ *
+ * The live viewport runs one or more worker frames ahead during a gesture, so
+ * this picks between it and the epoch's own transform:
+ *
+ * - No usable epoch transform (a worker fallback, or an epoch published before
+ *   the field existed): the live viewport, the pre-existing behavior.
+ * - A view-box or DPR change: the epoch's transform. The document itself was
+ *   re-framed, so the raster's document rect no longer denotes the same region.
+ * - A pure pan: the live viewport. The pixels are a rigid screen translation of
+ *   themselves, so the document tracks the pointer at UI frame rate.
+ * - A zoom: the live viewport while \ref LivePlacementCoversEpochCoverage holds,
+ *   so zoom motion tracks the fingers with sharpness catching up one epoch
+ *   later; the epoch's transform otherwise.
+ *
+ * @param frame Per-frame presentation inputs.
+ */
+[[nodiscard]] const ViewportState& DirectSurfacePlacementViewport(
+    const DocumentPresentationFrame& frame);
+
+/**
+ * Return whether a presentation-only frame may publish a newly accepted epoch.
+ *
+ * A presentation-only frame skips the ImGui pass, so selection chrome and the
+ * compositor tile overlay keep the screen-space placement the last full frame
+ * rasterized them at. Publishing an epoch that lands the document somewhere else
+ * slides the document out from under its own chrome. The caller must wake a full
+ * frame instead of publishing.
+ *
+ * @param lastFullFramePresentedViewport Viewport the last full frame presented
+ *   document pixels with, or `std::nullopt` when no full frame has presented.
+ * @param candidatePresentedViewport Viewport this frame would present with.
+ */
+[[nodiscard]] bool PresentationOnlyFrameMayPlaceEpoch(
+    const std::optional<ViewportState>& lastFullFramePresentedViewport,
+    const ViewportState& candidatePresentedViewport);
+
 /// Screen placement for a worker-owned document surface this frame, or
 /// `std::nullopt` when the surface must stay hidden.
 ///
-/// Pure geometry: the accepted epoch's document rect mapped through the viewport
-/// that epoch was rasterized against (falling back to the live viewport when the
-/// epoch published none), rejected when it is empty or falls entirely outside the
-/// live render pane. Placing an epoch through a later viewport would stretch a
-/// viewport-bounded high-zoom raster past the region its pixels cover and uncover
-/// the editor background inside the pane.
+/// Pure geometry: the accepted epoch's document rect mapped through
+/// \ref DirectSurfacePlacementViewport, rejected when it is empty or falls
+/// entirely outside the live render pane.
 [[nodiscard]] std::optional<WorkerSurfaceLayout> ComputeWorkerSurfaceLayout(
     const DocumentPresentationFrame& frame);
 

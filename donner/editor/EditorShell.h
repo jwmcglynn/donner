@@ -692,6 +692,14 @@ private:
   Box2d lastPresentedPaneRect_;
   /// True once \ref lastPresentedPaneRect_ holds a rect from a completed full frame.
   bool lastPresentedPaneRectValid_ = false;
+  /// Viewport the last full frame placed document pixels with, and so the transform its selection
+  /// chrome and compositor overlay were rasterized at. A presentation-only frame may only publish
+  /// an epoch that places identically; anything else would slide the document out from under its
+  /// own chrome until a later frame rebuilt the UI.
+  std::optional<ViewportState> lastFullFramePresentedViewport_;
+  /// A presentation-only frame declined an epoch on exactly that ground. Forces the next frame to
+  /// be a full one, which places the epoch and re-rasterizes the chrome together.
+  bool epochPlacementDeferred_ = false;
   /// Previous frame's canvas (render pane) content-region size. The fallback half of
   /// `RenderPaneViewportLatchReady`, for dock trees its geometry policy does not describe.
   Vector2d lastRenderPaneContentSize_ = Vector2d(-1.0, -1.0);

@@ -422,6 +422,45 @@ TEST(AsyncRendererPresentationPolicyTest, DocumentReplacementRejectsOlderSurface
       /*requestDocumentGeneration=*/6, /*minimumDocumentGeneration=*/5));
 }
 
+TEST(AsyncRendererPresentationPolicyTest, WorkerSurfacePresentsIntoTheSlotNotOnScreen) {
+  // The whole point of the second canvas: a present must never land in the slot
+  // the main thread is currently showing, or the new epoch's pixels appear
+  // under the old epoch's CSS geometry until acceptance catches up.
+  EXPECT_EQ(NextWorkerSurfacePresentSlot(0), 1);
+  EXPECT_EQ(NextWorkerSurfacePresentSlot(1), 0);
+}
+
+TEST(AsyncRendererPresentationPolicyTest, WorkerSurfaceSlotsAlternateAcrossAcceptedEpochs) {
+  // Drive the loop the worker runs: present into the free slot, have the main
+  // thread accept it, repeat. Consecutive accepted epochs must never share a
+  // slot, and every slot must be one of the two the page owns.
+  int lastAcceptedSlot = 1;
+  int previousPresentedSlot = -1;
+  for (int epoch = 0; epoch < 8; ++epoch) {
+    const int presentedSlot = NextWorkerSurfacePresentSlot(lastAcceptedSlot);
+    EXPECT_NE(presentedSlot, lastAcceptedSlot) << "epoch " << epoch;
+    EXPECT_GE(presentedSlot, 0);
+    EXPECT_LE(presentedSlot, 1);
+    EXPECT_NE(presentedSlot, previousPresentedSlot) << "epoch " << epoch;
+    previousPresentedSlot = presentedSlot;
+    lastAcceptedSlot = presentedSlot;
+  }
+}
+
+TEST(AsyncRendererPresentationPolicyTest, RepeatedPresentsWithoutAcceptanceReuseTheFreeSlot) {
+  // Several epochs can complete before the main thread accepts any of them.
+  // They must all target the same free slot, leaving the on-screen slot intact.
+  constexpr int kOnScreenSlot = 1;
+  for (int attempt = 0; attempt < 4; ++attempt) {
+    EXPECT_EQ(NextWorkerSurfacePresentSlot(kOnScreenSlot), 0);
+  }
+}
+
+TEST(AsyncRendererPresentationPolicyTest, AnUnrecognizedAcceptedSlotStillResolvesToAValidSlot) {
+  EXPECT_EQ(NextWorkerSurfacePresentSlot(-1), 0);
+  EXPECT_EQ(NextWorkerSurfacePresentSlot(7), 0);
+}
+
 TEST(AsyncRendererTest, DeferredStartQueuesWorkAndStartsExactlyOnce) {
   svg::SVGDocument document = svg::instantiateSubtree(
       R"svg(<rect id="rect" x="1" y="1" width="8" height="8" fill="blue" />)svg");

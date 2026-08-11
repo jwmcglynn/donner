@@ -35,6 +35,7 @@ namespace {
 
 #ifdef DONNER_WASM_WORKER_SURFACE
 constexpr const char* kDirectWorkerDocumentCanvasSelector = "#donner-document-canvas";
+constexpr const char* kDirectWorkerDocumentBackCanvasSelector = "#donner-document-canvas-back";
 constexpr const char* kDirectWorkerDocumentCanvasSelectors =
     "#donner-document-canvas,#donner-document-canvas-back";
 constexpr const char* kBitmapWorkerDocumentCanvasSelector = "#donner-worker-document-canvas";
@@ -291,10 +292,22 @@ public:
     if (publishBitmap_) {
       addSurface(kBitmapWorkerDocumentCanvasSelector);
     } else {
-      // WebGPU already presents through a browser-managed swapchain. Keep one
-      // DOM surface stable so CSS promotion can never reveal an unlatched or
-      // historical canvas while Gecko composites a drag.
+      // Two DOM surfaces, presented into alternately.
+      //
+      // A direct WebGPU present commits worker-side, immediately. The CSS
+      // layout that matches those pixels - the element box scaled by
+      // backing/content and the pane clip - is only applied when the main
+      // thread accepts the epoch, one or more MessagePort task boundaries
+      // later. Presenting into the canvas that is currently on screen shows
+      // epoch N+1 pixels under epoch N geometry for that whole window: during
+      // a pinch the document visibly flickers between two scales.
+      //
+      // Alternating means the epoch being drawn is never the epoch being
+      // displayed, and acceptance flips which canvas is visible in the same
+      // style flush that writes the new geometry. Pixels and CSS become
+      // atomic.
       addSurface(kDirectWorkerDocumentCanvasSelector);
+      addSurface(kDirectWorkerDocumentBackCanvasSelector);
     }
   }
 
@@ -326,8 +339,13 @@ public:
       return {};
     }
 
-    const int surfaceSlot = publishBitmap_ ? std::clamp(requestedSurfaceSlot, 0, 1) : 0;
-    const int targetSlot = 0;
+    // The bitmap bridge owns exactly one worker canvas and stages an
+    // ImageBitmap into one of two *main-thread* canvases, so its slot names a
+    // destination the worker does not hold. The direct path owns both DOM
+    // canvases, and the slot is the surface it presents into.
+    const int lastTargetSlot = static_cast<int>(surfaces_.size()) - 1;
+    const int surfaceSlot = std::clamp(requestedSurfaceSlot, 0, 1);
+    const int targetSlot = publishBitmap_ ? 0 : std::clamp(surfaceSlot, 0, lastTargetSlot);
     SurfaceTarget& target = *surfaces_[targetSlot];
     if (target.recreateBeforeNextAttempt) {
       initializeSurface(target);
@@ -847,6 +865,13 @@ bool DirectSurfacePresentationGenerationIsCurrent(std::uint64_t requestDocumentG
 bool DirectSurfacePlacementViewportIsUsable(const ViewportState& viewport) {
   return viewport.pixelsPerDocUnit() > 0.0 && viewport.paneSize.x > 0.0 &&
          viewport.paneSize.y > 0.0;
+}
+
+int NextWorkerSurfacePresentSlot(int lastAcceptedSlot) {
+  // The invariant, for both presentation paths: never draw into the slot the
+  // main thread is currently showing. An unrecognized slot resolves to 0, which
+  // still satisfies it because no such slot can be the accepted one.
+  return lastAcceptedSlot == 0 ? 1 : 0;
 }
 
 WorkerTaskFollowUp ChooseWorkerTaskFollowUp(bool hasPendingRequest,
@@ -2604,6 +2629,27 @@ void AsyncRenderer::workerLoop() {
         requestRenderer.endFrame();
         requestRenderer.setPreserveTargetOnBeginFrame(false);
       }
+      if (renderCompleted) {
+        // The transparency checkerboard, in destination-over after the compose.
+        //
+        // Desktop draws it FIRST, scissored to the document rect, and
+        // composites tiles over it. The worker surface hands the browser one
+        // already-composed texture, so drawing it first is not available: it
+        // has to go underneath what is already there. Without this pass every
+        // see-through document pixel reaches the browser compositor at alpha
+        // zero and the page's solid background shows where the desktop editor
+        // shows checkerboard.
+        //
+        // The pattern is anchored to the page, not to the texture, so it stays
+        // put while the surface element pans with the document - the same
+        // window-anchored pattern the desktop underlay draws.
+        svg::CheckerboardUnderlayParams checkerboard;
+        checkerboard.devicePixelRatio = request.viewport.devicePixelRatio;
+        checkerboard.originOffsetPx =
+            request.viewport.documentToScreen(rasterViewport.documentRect).topLeft *
+            request.viewport.devicePixelRatio;
+        std::ignore = requestRenderer.drawCheckerboardUnderlay(checkerboard);
+      }
 #endif
       workerTiming.renderFrameMs = elapsedSince(renderFrameStart);
     }
@@ -2639,11 +2685,13 @@ void AsyncRenderer::workerLoop() {
         ownedComposedTexture = requestRenderer.takeTextureSnapshot();
         composedTexture = ownedComposedTexture.get();
       }
-      // The Safari bitmap bridge retains two main-thread canvas slots. A
-      // direct WebGPU surface remains in slot 0 and lets its own swapchain do
-      // the buffering instead of alternating DOM canvases.
+      // Both presentation paths double-buffer across two DOM canvas slots:
+      // present into the slot the main thread has *not* accepted, so the epoch
+      // being drawn is never the epoch being displayed. Acceptance then flips
+      // visibility and geometry together (see WasmWorkerSurfacePresenter's
+      // constructor for why a single direct surface flickers between scales).
       const int requestedSurfaceSlot =
-          useBitmapWorkerSurfaceBridge_ ? 1 - lastPublishedDirectSurfaceSlot_ : 0;
+          NextWorkerSurfacePresentSlot(lastPublishedDirectSurfaceSlot_);
       const std::uint64_t frameToken = directSurfaceFrameCount_ + 1u;
       svg::RendererBitmap surfaceDiagnostic;
       const bool captureSurfaceDiagnostic =

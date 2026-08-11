@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <tuple>
@@ -315,12 +316,13 @@ TEST(DocumentPresenterTest, EpochViewportMatchingTheLiveViewportPlacesTheSurface
   EXPECT_DOUBLE_EQ(layout->height, 30.0);
 }
 
-TEST(DocumentPresenterTest, LiveZoomAheadOfTheEpochKeepsTheEpochPlacement) {
+TEST(DocumentPresenterTest, LiveZoomAheadOfAFullDocumentEpochFollowsTheLiveViewport) {
   DocumentPresentationFrame frame = TestFrame(ActiveSurface(3));
   // The user has zoomed to 300% since the accepted epoch was rasterized. The
-  // epoch's 40x30 document rect still only holds 40x30 screen pixels' worth of
-  // content, so stretching it to 120x90 would magnify pixels past their
-  // coverage instead of showing the region they cover.
+  // epoch rasterized the whole document rect, so mapping that rect through the
+  // live transform is exactly where those pixels belong - magnified, with the
+  // next epoch restoring sharpness. Holding the epoch placement instead welds
+  // zoom motion to the worker's epoch rate.
   frame.viewport.zoom = 3.0;
 
   const std::optional<WorkerSurfaceLayout> layout = ComputeWorkerSurfaceLayout(frame);
@@ -328,8 +330,136 @@ TEST(DocumentPresenterTest, LiveZoomAheadOfTheEpochKeepsTheEpochPlacement) {
   ASSERT_TRUE(layout.has_value());
   EXPECT_DOUBLE_EQ(layout->left, 10.0);
   EXPECT_DOUBLE_EQ(layout->top, 20.0);
+  EXPECT_DOUBLE_EQ(layout->width, 120.0);
+  EXPECT_DOUBLE_EQ(layout->height, 90.0);
+}
+
+TEST(DocumentPresenterTest, LiveZoomOutAheadOfABoundedEpochKeepsTheEpochPlacement) {
+  // The other direction, and the reason the clamp exists: a viewport-bounded
+  // epoch covers the pane plus margin at its own zoom. Following the live
+  // viewport out would shrink it inside the pane and uncover the editor
+  // background where document pixels were.
+  DocumentPresentationFrame frame = TestFrame(BoundedActiveSurface());
+  frame.viewport.zoom = 2.0;  // The epoch rasterized at 4.0.
+
+  const std::optional<WorkerSurfaceLayout> layout = ComputeWorkerSurfaceLayout(frame);
+
+  ASSERT_TRUE(layout.has_value());
+  EXPECT_DOUBLE_EQ(layout->left, -32.0);
+  EXPECT_DOUBLE_EQ(layout->top, -32.0);
+  EXPECT_DOUBLE_EQ(layout->width, 264.0);
+  EXPECT_DOUBLE_EQ(layout->height, 164.0);
+}
+
+TEST(DocumentPresenterTest, LiveZoomInAheadOfABoundedEpochStillFollowsTheLiveViewport) {
+  // Zooming *in* grows the re-mapped rect, so it still covers everything the
+  // epoch covered inside the pane. Nothing is uncovered and the gesture tracks.
+  DocumentPresentationFrame frame = TestFrame(BoundedActiveSurface());
+  frame.viewport.zoom = 6.0;  // The epoch rasterized at 4.0.
+
+  const std::optional<WorkerSurfaceLayout> layout = ComputeWorkerSurfaceLayout(frame);
+
+  ASSERT_TRUE(layout.has_value());
+  EXPECT_DOUBLE_EQ(layout->width, 264.0 * 1.5);
+  EXPECT_DOUBLE_EQ(layout->height, 164.0 * 1.5);
+}
+
+TEST(DocumentPresenterTest, ADocumentViewBoxChangeKeepsTheEpochPlacementPin) {
+  // A re-framed document means the epoch's document rect no longer denotes the
+  // same region, so no live re-mapping of it is meaningful.
+  DocumentPresentationFrame frame = TestFrame(ActiveSurface(3));
+  frame.viewport.zoom = 3.0;
+  frame.viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 80.0, 60.0);
+
+  const std::optional<WorkerSurfaceLayout> layout = ComputeWorkerSurfaceLayout(frame);
+
+  ASSERT_TRUE(layout.has_value());
   EXPECT_DOUBLE_EQ(layout->width, 40.0);
   EXPECT_DOUBLE_EQ(layout->height, 30.0);
+}
+
+// ---------------------------------------------------------------------------
+// The live-placement coverage clamp
+// ---------------------------------------------------------------------------
+
+TEST(DocumentPresenterTest, CoverageClampAcceptsAGrowingPlacement) {
+  const Box2d epochRect = Box2d::FromXYWH(-32.0, -32.0, 264.0, 164.0);
+  const Box2d liveRect = Box2d::FromXYWH(-48.0, -48.0, 396.0, 246.0);
+
+  EXPECT_TRUE(LivePlacementCoversEpochCoverage(TestPaneRect(), epochRect, liveRect));
+}
+
+TEST(DocumentPresenterTest, CoverageClampRejectsAPlacementThatUncoversPaneArea) {
+  const Box2d epochRect = Box2d::FromXYWH(-32.0, -32.0, 264.0, 164.0);
+  // Half the scale: the surface no longer reaches the pane's right/bottom edge.
+  const Box2d liveRect = Box2d::FromXYWH(-16.0, -16.0, 132.0, 82.0);
+
+  EXPECT_FALSE(LivePlacementCoversEpochCoverage(TestPaneRect(), epochRect, liveRect));
+}
+
+TEST(DocumentPresenterTest, CoverageClampIgnoresAreaOutsideThePane) {
+  // The epoch overhung the pane by 32px on every side. The live placement gives
+  // that overhang up but still covers every pane pixel, so nothing visible is
+  // lost.
+  const Box2d epochRect = Box2d::FromXYWH(-32.0, -32.0, 264.0, 164.0);
+  const Box2d liveRect = Box2d::FromXYWH(0.0, 0.0, 200.0, 100.0);
+
+  EXPECT_TRUE(LivePlacementCoversEpochCoverage(TestPaneRect(), epochRect, liveRect));
+}
+
+TEST(DocumentPresenterTest, CoverageClampAcceptsAnEpochThatCoveredNoPaneArea) {
+  const Box2d epochRect = Box2d::FromXYWH(500.0, 500.0, 40.0, 30.0);
+  const Box2d liveRect = Box2d::FromXYWH(900.0, 900.0, 1.0, 1.0);
+
+  EXPECT_TRUE(LivePlacementCoversEpochCoverage(TestPaneRect(), epochRect, liveRect));
+}
+
+TEST(DocumentPresenterTest, CoverageClampToleratesSubPixelTransformDrift) {
+  // The two rects come out of separate floating-point transform chains, so an
+  // exact containment test would reject placements identical to under a pixel.
+  const Box2d epochRect = Box2d::FromXYWH(10.0, 20.0, 40.0, 30.0);
+  const Box2d liveRect = Box2d::FromXYWH(10.0 + 1e-9, 20.0 + 1e-9, 40.0, 30.0);
+
+  EXPECT_TRUE(LivePlacementCoversEpochCoverage(TestPaneRect(), epochRect, liveRect));
+}
+
+TEST(DocumentPresenterTest, CoverageClampRejectsANonFiniteLivePlacement) {
+  const Box2d epochRect = Box2d::FromXYWH(10.0, 20.0, 40.0, 30.0);
+  const Box2d liveRect(Vector2d(std::numeric_limits<double>::quiet_NaN(), 0.0),
+                       Vector2d(400.0, 400.0));
+
+  EXPECT_FALSE(LivePlacementCoversEpochCoverage(TestPaneRect(), epochRect, liveRect));
+}
+
+// ---------------------------------------------------------------------------
+// Presentation-only frame admission
+// ---------------------------------------------------------------------------
+
+TEST(DocumentPresenterTest, APresentationOnlyFrameMayPlaceAnEpochThatDoesNotMove) {
+  const ViewportState presented = TestViewport();
+  EXPECT_TRUE(PresentationOnlyFrameMayPlaceEpoch(presented, presented));
+}
+
+TEST(DocumentPresenterTest, APresentationOnlyFrameRefusesAnEpochThatMoves) {
+  const ViewportState presented = TestViewport();
+  ViewportState candidate = presented;
+  candidate.zoom = 1.25;
+
+  EXPECT_FALSE(PresentationOnlyFrameMayPlaceEpoch(presented, candidate));
+}
+
+TEST(DocumentPresenterTest, APresentationOnlyFrameMayPlaceWhenNoFullFrameHasPresented) {
+  EXPECT_TRUE(PresentationOnlyFrameMayPlaceEpoch(std::nullopt, TestViewport()));
+}
+
+TEST(DocumentPresenterTest, APresentationOnlyFrameIgnoresPaneGeometryAlone) {
+  // Pane origin and size do not by themselves move the document within the
+  // pane, and this path reuses the last full frame's pane rect anyway.
+  const ViewportState presented = TestViewport();
+  ViewportState candidate = presented;
+  candidate.paneOrigin = Vector2d(4.0, 4.0);
+
+  EXPECT_TRUE(PresentationOnlyFrameMayPlaceEpoch(presented, candidate));
 }
 
 TEST(DocumentPresenterTest, LivePanAheadOfTheEpochMovesWithTheLiveViewport) {
@@ -454,22 +584,37 @@ TEST(DocumentPresenterTest, TheUnderlayPresentsInTheLiveViewport) {
   EXPECT_DOUBLE_EQ(result.presentedViewport.zoom, 2.5);
 }
 
-TEST(DocumentPresenterTest, TheWorkerSurfacePresentsInTheAcceptedEpochsViewport) {
+TEST(DocumentPresenterTest, TheWorkerSurfacePresentsInThePinnedEpochsViewport) {
   RecordingSinks sinks;
   const std::unique_ptr<DocumentPresenter> presenter = MakeDocumentPresenter(
       DocumentPresentationTarget::WorkerSurface, sinks.planSink(), sinks.layoutSink());
 
-  DirectSurfacePresentationState surface = ActiveSurface(3);
-  surface.viewport.zoom = 1.0;
-  DocumentPresentationFrame frame = TestFrame(surface);
-  // The UI thread has zoomed since the worker rasterized this epoch. Chrome
-  // drawn at 3.0 would float away from pixels placed at 1.0.
+  // A bounded epoch the live zoom-out cannot follow: placement holds the epoch,
+  // so chrome must be drawn at the epoch's transform too. Chrome drawn at the
+  // live 1.0 would float away from pixels placed at 4.0.
+  DocumentPresentationFrame frame = TestFrame(BoundedActiveSurface());
+  frame.viewport.zoom = 1.0;
+
+  const DocumentPresentationResult result = presenter->resolveExternalSurface(frame);
+
+  ASSERT_TRUE(result.externalSurfacePresented);
+  EXPECT_DOUBLE_EQ(result.presentedViewport.zoom, 4.0);
+}
+
+TEST(DocumentPresenterTest, TheWorkerSurfacePresentsInTheLiveViewportWhenPlacementFollowsIt) {
+  RecordingSinks sinks;
+  const std::unique_ptr<DocumentPresenter> presenter = MakeDocumentPresenter(
+      DocumentPresentationTarget::WorkerSurface, sinks.planSink(), sinks.layoutSink());
+
+  // A full-document epoch the live zoom-in can follow: the pixels are placed at
+  // the live transform, so chrome belongs there too.
+  DocumentPresentationFrame frame = TestFrame(ActiveSurface(3));
   frame.viewport.zoom = 3.0;
 
   const DocumentPresentationResult result = presenter->resolveExternalSurface(frame);
 
   ASSERT_TRUE(result.externalSurfacePresented);
-  EXPECT_DOUBLE_EQ(result.presentedViewport.zoom, 1.0);
+  EXPECT_DOUBLE_EQ(result.presentedViewport.zoom, 3.0);
 }
 
 TEST(DocumentPresenterTest, AFrameTheWorkerSurfaceDoesNotOwnPresentsInTheLiveViewport) {

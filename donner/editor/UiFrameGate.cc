@@ -36,7 +36,8 @@ UiFrameWork DecideUiFrameWork(const UiFrameGateInputs& inputs) {
       inputs.contentOnlyCapturePending ||
       inputs.shellAnimationScheduled || inputs.lockedRejectionFlashActive ||
       inputs.toolGestureActive || inputs.pendingScrollEvents || inputs.viewportUninitialized ||
-      inputs.windowGeometryChanged || inputs.reproRecording || inputs.diagnosticOverlayVisible) {
+      inputs.epochPlacementDeferred || inputs.windowGeometryChanged || inputs.reproRecording ||
+      inputs.diagnosticOverlayVisible) {
     return UiFrameWork::FullUiFrame;
   }
 

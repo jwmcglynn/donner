@@ -3879,6 +3879,7 @@ void EditorShell::renderRenderPanePresentation(
   lastFrameExternalSurfacePresented_ = presentation.externalSurfacePresented;
   lastPresentedPaneRect_ = paneRect;
   lastPresentedPaneRectValid_ = true;
+  lastFullFramePresentedViewport_ = presentation.presentedViewport;
   [[maybe_unused]] const bool workerSurfaceSelectionChromeBaked = presentation.selectionChromeBaked;
   // Everything drawn onto the document this frame - selection chrome, the
   // compositor tile overlay, the presented image clip - belongs in the same
@@ -6550,6 +6551,7 @@ UiFrameWork EditorShell::classifyFrameWork(bool editorWakePending, bool browserI
       .toolGestureActive = toolGestureActive,
       .pendingScrollEvents = !inputBridge_.events().empty(),
       .viewportUninitialized = !viewportInitialized_ || !lastPresentedPaneRectValid_,
+      .epochPlacementDeferred = epochPlacementDeferred_,
       .windowGeometryChanged = window_.windowSize() != lastFullFrameWindowSize_,
       .reproRecording = reproRecorder_ != nullptr,
       .diagnosticOverlayVisible = perfOverlayMode_ != PerfOverlayMode::Off ||
@@ -6569,15 +6571,28 @@ void EditorShell::runPresentationOnlyFrame() {
   renderCoordinator_.pollRenderResult(app_, interactionController_.viewport(), textures_,
                                       &interactionController_.frameHistory());
 
-  const DirectSurfacePresentationState directSurface =
-      renderCoordinator_.asyncRenderer().directSurfacePresentation();
+  const DocumentPresentationFrame presentationFrame{
+      .viewport = interactionController_.viewport(),
+      .paneRect = lastPresentedPaneRect_,
+      .presentationSuppressed = false,
+      .workerSurface = renderCoordinator_.asyncRenderer().directSurfacePresentation(),
+  };
+
+  // This frame draws no chrome. Selection chrome and the compositor tile overlay keep the
+  // screen-space placement the last full frame rasterized them at, so an epoch that lands the
+  // document anywhere else - a zoom raster catching up, a surface backing growing - would slide
+  // the document out from under its own annotations. The epoch stays committed in the renderer
+  // and unpublished on screen (the worker presented it into the surface slot that is not
+  // visible); the full frame this wakes places it and re-rasterizes the chrome in one step.
+  if (!PresentationOnlyFrameMayPlaceEpoch(lastFullFramePresentedViewport_,
+                                          DirectSurfacePlacementViewport(presentationFrame))) {
+    epochPlacementDeferred_ = true;
+    window_.wakeEventLoop();
+    return;
+  }
+
   const DocumentPresentationResult presentation =
-      documentPresenter_->resolveExternalSurface(DocumentPresentationFrame{
-          .viewport = interactionController_.viewport(),
-          .paneRect = lastPresentedPaneRect_,
-          .presentationSuppressed = false,
-          .workerSurface = directSurface,
-      });
+      documentPresenter_->resolveExternalSurface(presentationFrame);
   // The presenter's two stages are a matched pair: stage 1 opens the frame and stage 2 closes it.
   // There is no window framebuffer pass on this path, so there is no underlay to install - but the
   // frame still has to be closed, and clearing the plan is also what keeps a stale underlay from
@@ -6614,6 +6629,8 @@ void EditorShell::runFrame() {
   // ownership.
   lastFrameExternalSurfacePresented_ = false;
   lastPresentedPaneRectValid_ = false;
+  // The gate has already read this; the frame it forced is now running.
+  epochPlacementDeferred_ = false;
   textures_.advancePresentationFrame();
   compositorDebugPanel_.advancePresentationFrame();
   snapshotReproFrame();

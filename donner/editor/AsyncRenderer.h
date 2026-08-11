@@ -810,6 +810,25 @@ struct DirectSurfacePresentationState {
 [[nodiscard]] bool DirectSurfacePlacementViewportIsUsable(const ViewportState& viewport);
 
 /**
+ * The worker surface slot the next presentation must draw into.
+ *
+ * Both browser presentation paths double-buffer across two DOM canvas slots.
+ * The direct WebGPU path must: its present commits worker-side immediately,
+ * while the CSS layout matching those pixels only lands when the main thread
+ * accepts the epoch a task boundary later. Drawing into the canvas that is
+ * currently on screen shows the new epoch's pixels under the old epoch's
+ * geometry for that whole window, which during a pinch reads as the document
+ * flickering between two scales. Alternating keeps the drawn epoch and the
+ * displayed epoch on different canvases, so acceptance flips visibility and
+ * geometry together.
+ *
+ * @param lastAcceptedSlot Slot the main thread most recently accepted, and so
+ *   the slot currently on screen.
+ * @return The other slot.
+ */
+[[nodiscard]] int NextWorkerSurfacePresentSlot(int lastAcceptedSlot);
+
+/**
  * Return whether a worker-surface result may replace the currently loaded document surface.
  *
  * @param requestDocumentGeneration Generation captured by the completed render request.

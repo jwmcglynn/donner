@@ -103,6 +103,7 @@ const std::vector<BlockingFieldCase>& BlockingFields() {
       {"toolGestureActive", [](UiFrameGateInputs& i) { i.toolGestureActive = true; }},
       {"pendingScrollEvents", [](UiFrameGateInputs& i) { i.pendingScrollEvents = true; }},
       {"viewportUninitialized", [](UiFrameGateInputs& i) { i.viewportUninitialized = true; }},
+      {"epochPlacementDeferred", [](UiFrameGateInputs& i) { i.epochPlacementDeferred = true; }},
       {"windowGeometryChanged", [](UiFrameGateInputs& i) { i.windowGeometryChanged = true; }},
       {"reproRecording", [](UiFrameGateInputs& i) { i.reproRecording = true; }},
       {"diagnosticOverlayVisible",
