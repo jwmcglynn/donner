@@ -280,20 +280,12 @@ void RunWasmEditorFrame(void* userdata) {
 
   state->frameActive = true;
   const double frameStartMs = emscripten_get_now();
-  // Immediate-mode UI is rebuilt from scratch every frame, and on this build that rebuild is the
-  // dominant per-frame cost. A frame woken only by the render worker publishing a fresh document
-  // epoch changes nothing the UI draws - the document lives on its own canvas - so the gate lets
-  // that frame place the document surface and leave the UI canvas showing the frame it already
-  // presented. See donner/editor/UiFrameGate.h for the full predicate.
-  const donner::editor::UiFrameWork work =
-      state->shell->classifyFrameWork(editorRequested, browserRequested, timerDue);
-  const bool uiRebuilt = work != donner::editor::UiFrameWork::PresentationOnly;
-  if (uiRebuilt) {
-    state->renderFrame(*state->window, *state->shell);
-  } else {
-    state->shell->runPresentationOnlyFrame();
-  }
-  RecordWasmFrameLoopSample(triggerBits, uiRebuilt ? 1 : 0, emscripten_get_now() - frameStartMs);
+  // Every frame is a full frame. The document and the UI are composited by Geode into the same
+  // canvas in the same pass, so there is no frame whose only work lives elsewhere: skipping the
+  // UI pass would also skip the document. The presentation-only frame the browser build used to
+  // run existed purely because the document had its own canvas.
+  state->renderFrame(*state->window, *state->shell);
+  RecordWasmFrameLoopSample(triggerBits, /*uiRebuilt=*/1, emscripten_get_now() - frameStartMs);
   MarkWasmEditorFrameRendered();
   if (const std::optional<float> wakeSeconds = state->shell->nextIdleWakeSeconds()) {
     state->nextIdleWakeAtMs = emscripten_get_now() + std::max(0.0f, *wakeSeconds) * 1000.0;

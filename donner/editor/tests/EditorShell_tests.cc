@@ -220,36 +220,6 @@ TEST(EditorShellPresentationTest, ChromePlacementIgnoresTheCaptureTimeTransform)
                   ChromePlacedOnPresentedDocument(viewport, capturedAtFourX).canvasFromDoc.data));
 }
 
-TEST(EditorShellPresentationTest, BakedSelectionChromeLeavesDynamicMainThreadChrome) {
-  PathBuilder pathBuilder;
-  pathBuilder.moveTo(Vector2d(10.0, 10.0));
-  pathBuilder.lineTo(Vector2d(20.0, 20.0));
-
-  SelectionChromeSnapshot snapshot;
-  snapshot.paths.push_back(SelectionChromeSnapshot::PathItem{.pathDoc = pathBuilder.build()});
-  snapshot.aabbsDoc.push_back(Box2d::FromXYWH(10.0, 10.0, 10.0, 10.0));
-  snapshot.handleAnchorsDoc.push_back(Vector2d(10.0, 10.0));
-  snapshot.textBaselinesDoc.push_back(SelectionChromeSnapshot::TextBaseline{
-      .startDoc = Vector2d(10.0, 20.0),
-      .endDoc = Vector2d(20.0, 20.0),
-  });
-  snapshot.marqueeDoc = Box2d::FromXYWH(30.0, 30.0, 20.0, 20.0);
-  snapshot.textCaretDoc = SelectionChromeSnapshot::TextCaret{
-      .topDoc = Vector2d(15.0, 10.0),
-      .bottomDoc = Vector2d(15.0, 20.0),
-  };
-
-  const SelectionChromeSnapshot mainOverlay =
-      OverlayWithoutBakedSelectionChrome(std::move(snapshot));
-
-  EXPECT_TRUE(mainOverlay.paths.empty());
-  EXPECT_TRUE(mainOverlay.aabbsDoc.empty());
-  EXPECT_TRUE(mainOverlay.handleAnchorsDoc.empty());
-  EXPECT_TRUE(mainOverlay.textBaselinesDoc.empty());
-  EXPECT_TRUE(mainOverlay.marqueeDoc.has_value());
-  EXPECT_TRUE(mainOverlay.textCaretDoc.has_value());
-}
-
 TEST(EditorShellInternalTest, CursorForTransformHandleIntentMapsResizeAndRotateHandles) {
   EXPECT_EQ(internal::CursorForTransformHandleIntent(
                 SelectionTransformHandleIntent{.kind = SelectionTransformHandleKind::None}),

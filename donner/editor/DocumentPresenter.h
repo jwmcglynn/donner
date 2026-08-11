@@ -29,7 +29,6 @@
 
 #include "donner/base/Box.h"
 #include "donner/base/EcsRegistry.h"
-#include "donner/editor/AsyncRenderer.h"
 #include "donner/editor/GlTextureCache.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/ViewportState.h"
@@ -71,31 +70,17 @@ struct DocumentPresentationFrame {
   /// True when this frame must present nothing outside the ImGui draw list,
   /// because a content-only capture or the sample picker owns the pane.
   bool presentationSuppressed = false;
-  /// The worker's accepted surface state as of this frame. `active` is false
-  /// on builds with no worker surface.
-  DirectSurfacePresentationState workerSurface;
 };
 
 /// What the presenter resolved for this frame.
 struct DocumentPresentationResult {
-  /// True when document pixels land outside the ImGui draw list this frame, so
-  /// `RenderPanePresenter` must draw neither tiles nor its own checkerboard.
-  bool documentPresentedDirectly = false;
-  /// True when a surface outside the window framebuffer holds this frame's
-  /// document pixels. The framebuffer underlay must then stay cleared, and
-  /// selection chrome must reuse the transform baked into those pixels.
-  bool externalSurfacePresented = false;
-  /// True when the presented external surface already contains selection
-  /// chrome, so the overlay pass must drop the baked primitives.
-  bool selectionChromeBaked = false;
   /// The viewport this frame's presented document pixels are placed with.
   ///
-  /// Equal to the live viewport whenever the framebuffer underlay presents, and
-  /// to the accepted epoch's own viewport when a worker surface does. Every
-  /// caller that draws *onto* the document - selection chrome, the compositor
-  /// tile overlay, the presented image clip - must use this rather than the
-  /// live viewport, or gesture feedback separates from the pixels it annotates
-  /// by however far the live viewport has run ahead of the worker.
+  /// Always the live viewport: the underlay draws this frame's tiles with it.
+  /// The field survives the worker-surface deletion because every caller that
+  /// draws *onto* the document - selection chrome, the compositor tile overlay,
+  /// the presented image clip - must read the transform the pixels were placed
+  /// with rather than assume one.
   ViewportState presentedViewport;
 };
 
@@ -112,68 +97,6 @@ struct DocumentPresentationResult {
  */
 [[nodiscard]] bool DocumentPresentationMappingChanged(const ViewportState& before,
                                                       const ViewportState& after);
-
-/**
- * Return whether re-mapping an accepted epoch through the live viewport still
- * covers every pane pixel the epoch's own placement covered.
- *
- * This is the clamp that lets zoom motion follow the fingers. The accepted
- * pixels are a fixed document rect, so mapping that rect through the live
- * transform is geometrically correct for an unbounded raster - but a
- * viewport-bounded high-zoom raster only covers the pane plus
- * `ViewportState::kHighZoomRasterMarginScreenPx`, and re-mapping it through a
- * zoomed-out live viewport shrinks it inside the pane, uncovering the editor
- * background where document pixels used to be.
- *
- * Only pane area is compared: an epoch's overhang outside the render pane was
- * clipped away and was never on screen to lose. An epoch that covered no pane
- * area at all trivially loses nothing.
- *
- * @param paneRect Render-pane rect in screen pixels.
- * @param epochSurfaceRect Surface rect placed through the epoch's own viewport.
- * @param liveSurfaceRect The same surface rect placed through the live viewport.
- */
-[[nodiscard]] bool LivePlacementCoversEpochCoverage(const Box2d& paneRect,
-                                                    const Box2d& epochSurfaceRect,
-                                                    const Box2d& liveSurfaceRect);
-
-/**
- * The viewport an accepted worker-surface epoch's pixels are placed with.
- *
- * The live viewport runs one or more worker frames ahead during a gesture, so
- * this picks between it and the epoch's own transform:
- *
- * - No usable epoch transform (a worker fallback, or an epoch published before
- *   the field existed): the live viewport, the pre-existing behavior.
- * - A view-box or DPR change: the epoch's transform. The document itself was
- *   re-framed, so the raster's document rect no longer denotes the same region.
- * - A pure pan: the live viewport. The pixels are a rigid screen translation of
- *   themselves, so the document tracks the pointer at UI frame rate.
- * - A zoom: the live viewport while \ref LivePlacementCoversEpochCoverage holds,
- *   so zoom motion tracks the fingers with sharpness catching up one epoch
- *   later; the epoch's transform otherwise.
- *
- * @param frame Per-frame presentation inputs.
- */
-[[nodiscard]] const ViewportState& DirectSurfacePlacementViewport(
-    const DocumentPresentationFrame& frame);
-
-/**
- * Return whether a presentation-only frame may publish a newly accepted epoch.
- *
- * A presentation-only frame skips the ImGui pass, so selection chrome and the
- * compositor tile overlay keep the screen-space placement the last full frame
- * rasterized them at. Publishing an epoch that lands the document somewhere else
- * slides the document out from under its own chrome. The caller must wake a full
- * frame instead of publishing.
- *
- * @param lastFullFramePresentedViewport Viewport the last full frame presented
- *   document pixels with, or `std::nullopt` when no full frame has presented.
- * @param candidatePresentedViewport Viewport this frame would present with.
- */
-[[nodiscard]] bool PresentationOnlyFrameMayPlaceEpoch(
-    const std::optional<ViewportState>& lastFullFramePresentedViewport,
-    const ViewportState& candidatePresentedViewport);
 
 /**
  * The per-frame document presentation decision.
@@ -195,12 +118,11 @@ public:
   virtual ~DocumentPresenter() = default;
 
   /**
-   * Stage 1: resolve whether a surface outside the window framebuffer owns this
-   * frame's document pixels, and place that surface if so. Opens the frame.
+   * Stage 1: open the frame and resolve the transform this frame's document
+   * pixels are placed with.
    *
    * @param frame Per-frame presentation inputs.
-   * @return What this frame resolved to: whether document pixels land outside
-   *   the ImGui draw list, and whether selection chrome is already baked in.
+   * @return What this frame resolved to.
    */
   virtual DocumentPresentationResult resolveExternalSurface(
       const DocumentPresentationFrame& frame) = 0;
@@ -213,10 +135,6 @@ public:
    * @return True when the underlay presents document pixels this frame.
    */
   virtual bool presentUnderlay(std::optional<FramebufferUnderlayPlan> plan) = 0;
-
-  /// True when document pixels can land on a surface outside the window
-  /// framebuffer on this build.
-  [[nodiscard]] virtual bool presentsToExternalSurface() const = 0;
 
   /// Count of stage-2 calls refused because no frame was open. Diagnostic only.
   [[nodiscard]] virtual std::uint64_t refusedUnderlayPresentCount() const = 0;
@@ -236,7 +154,6 @@ public:
   DocumentPresentationResult resolveExternalSurface(
       const DocumentPresentationFrame& frame) override;
   bool presentUnderlay(std::optional<FramebufferUnderlayPlan> plan) override;
-  [[nodiscard]] bool presentsToExternalSurface() const override { return false; }
   [[nodiscard]] std::uint64_t refusedUnderlayPresentCount() const override {
     return refusedUnderlayPresents_;
   }

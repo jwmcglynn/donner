@@ -42,7 +42,6 @@
 #include "donner/editor/TextFormatBarPresenter.h"
 #include "donner/editor/TextInspectorPanel.h"
 #include "donner/editor/TextTool.h"
-#include "donner/editor/UiFrameGate.h"
 #include "donner/editor/ViewportInteractionController.h"
 #include "donner/svg/SVGDocumentHandle.h"
 #include "donner/svg/renderer/Renderer.h"
@@ -251,31 +250,6 @@ public:
   /// Perform bounded work that may yield and must run before ImGui::NewFrame().
   void prepareFrame();
   void runFrame();
-
-  /**
-   * Classify what this animation frame has to do, given the frame's wake sources.
-   *
-   * Gathers the shell-side and ImGui-side halves of \ref UiFrameGateInputs and hands them to the
-   * pure \ref DecideUiFrameWork predicate. Must be called between frames - after the previous
-   * `ImGui::Render()` and before the next `ImGui::NewFrame()` - because it reads the settled ImGui
-   * context.
-   *
-   * @param editorWakePending An in-process `wakeEventLoop()` is outstanding.
-   * @param browserInputPending A DOM event arrived since the last frame.
-   * @param idleTimerDue A scheduled animation wake came due this frame.
-   */
-  [[nodiscard]] UiFrameWork classifyFrameWork(bool editorWakePending, bool browserInputPending,
-                                              bool idleTimerDue) const;
-
-  /**
-   * Run one frame that republishes the worker-owned document surface without rebuilding the UI.
-   *
-   * Only legal when \ref classifyFrameWork returned \ref UiFrameWork::PresentationOnly. Accepts
-   * the render worker's completed epoch and re-places the external document surface against the
-   * pane geometry the last full frame latched, then returns without opening an ImGui frame or
-   * presenting the UI canvas. The UI canvas keeps displaying the last frame it presented.
-   */
-  void runPresentationOnlyFrame();
 
   /// Font catalog (embedded Google Fonts + macOS system fonts) backing document font resolution
   /// and the font picker (Design 0013 W2 consumes this).
@@ -679,26 +653,8 @@ private:
 
   std::string lastWindowTitle_;
   bool viewportInitialized_ = false;
-  /// Whether the last frame's presentation resolved to a surface outside the window framebuffer.
-  /// A presentation-only frame is only safe while this holds: on the framebuffer-underlay
-  /// fallback the document pixels are drawn by the same pass a skipped frame does not run.
-  bool lastFrameExternalSurfacePresented_ = false;
-  /// Window framebuffer size the last full UI frame laid out against. A presentation-only frame
-  /// reuses the pane geometry derived from it, so a size change must force a full frame.
+  /// Window framebuffer size the last full UI frame laid out against.
   Vector2i lastFullFrameWindowSize_ = Vector2i(-1, -1);
-  /// Render-pane rect, in screen pixels, that the last full frame presented the document into.
-  /// Replayed by \ref runPresentationOnlyFrame, which has no ImGui pane to measure.
-  Box2d lastPresentedPaneRect_;
-  /// True once \ref lastPresentedPaneRect_ holds a rect from a completed full frame.
-  bool lastPresentedPaneRectValid_ = false;
-  /// Viewport the last full frame placed document pixels with, and so the transform its selection
-  /// chrome and compositor overlay were rasterized at. A presentation-only frame may only publish
-  /// an epoch that places identically; anything else would slide the document out from under its
-  /// own chrome until a later frame rebuilt the UI.
-  std::optional<ViewportState> lastFullFramePresentedViewport_;
-  /// A presentation-only frame declined an epoch on exactly that ground. Forces the next frame to
-  /// be a full one, which places the epoch and re-rasterizes the chrome together.
-  bool epochPlacementDeferred_ = false;
   /// Previous frame's canvas (render pane) content-region size. The fallback half of
   /// `RenderPaneViewportLatchReady`, for dock trees its geometry policy does not describe.
   Vector2d lastRenderPaneContentSize_ = Vector2d(-1.0, -1.0);

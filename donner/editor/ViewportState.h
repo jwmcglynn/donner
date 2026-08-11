@@ -139,18 +139,6 @@ struct ViewportState {
   /// Raster viewport the SVG renderer should produce for this editor view.
   [[nodiscard]] EditorRasterViewport rasterViewport() const;
 
-  /// Upper bound, in device pixels, of any raster this viewport can request:
-  /// the pane plus the high-zoom overdraw margin on every side (the same
-  /// bound the viewport-bounded raster branch applies), clamped to the hard
-  /// canvas dimension cap. Zero when the pane or DPR is degenerate.
-  ///
-  /// The browser worker configures its presentation surface once at this cap
-  /// instead of re-configuring per epoch: resizing a transferred
-  /// OffscreenCanvas clears its backing store, and the cleared frame reaches
-  /// the compositor before the drawn one, flashing the editor background on
-  /// every raster-size change during a zoom gesture.
-  [[nodiscard]] Vector2i rasterBackingCapPx() const;
-
   /// Raster viewport for idle selected-layer prewarms.
   ///
   /// This matches \ref rasterViewport at normal zooms. When the base raster is viewport-bounded,

@@ -103,13 +103,6 @@ class SelectTool;
     std::uint64_t resultVersion, std::uint64_t pendingVersion);
 
 /**
- * Return the bounded delay before retrying an exhausted transient worker-surface failure.
- *
- * @param attempt Consecutive coordinator-level delayed retry count.
- */
-[[nodiscard]] std::chrono::milliseconds DirectSurfaceRetryBackoffForAttempt(unsigned attempt);
-
-/**
  * Return the drag transform that overlay chrome should represent in the current presentation frame.
  *
  * @param activeDragPreview Active drag transform used by the presenter when a drag target tile is
@@ -171,8 +164,6 @@ public:
   void requestPresentationRefresh() { pendingPresentationRefresh_ = true; }
   /// Whether a renderer-presentation setting still needs a worker frame.
   [[nodiscard]] bool presentationRefreshPending() const { return pendingPresentationRefresh_; }
-  /// Seconds until an exhausted transient direct-surface failure should be retried.
-  [[nodiscard]] std::optional<float> nextDirectSurfaceRetryWakeSeconds() const;
   /// Clear the per-frame cost accumulator before a new UI frame starts.
   void beginFrameCostTracking() { lastFrameCostBreakdown_ = FrameCostBreakdown{}; }
   /// Replace transient source-hover chrome elements.
@@ -430,8 +421,6 @@ private:
   bool pendingDocumentMutationOverviewRefresh_ = false;
   /// Renderer-only state changed and must be represented by the next accepted worker frame.
   bool pendingPresentationRefresh_ = false;
-  std::optional<std::chrono::steady_clock::time_point> directSurfaceRetryNotBefore_;
-  unsigned directSurfaceRetryAttempt_ = 0;
   FrameCostBreakdown lastFrameCostBreakdown_;
 };
 

@@ -43,15 +43,6 @@ donner_cc_test(
 )
 
 donner_cc_test(
-    name = "ui_frame_gate_tests",
-    srcs = ["UiFrameGate_tests.cc"],
-    deps = [
-        "//donner/editor:ui_frame_gate",
-        "@com_google_gtest//:gtest_main",
-    ],
-)
-
-donner_cc_test(
     name = "editor_theme_tests",
     srcs = ["EditorTheme_tests.cc"],
     deps = [

@@ -1124,7 +1124,6 @@ std::optional<float> EditorShell::nextIdleWakeSeconds() const {
     includeWake(kSampleThumbnailRetryWakeSeconds);
   }
   includeWake(documentSyncController_.nextTextSyncWakeSeconds());
-  includeWake(renderCoordinator_.nextDirectSurfaceRetryWakeSeconds());
   includeWake(textEditor_.nextFlashWakeSeconds());
   includeWake(textEditor_.nextRopeAnimationWakeSeconds());
   // Caret blink: wake at the next visibility flip while a text session is
@@ -3860,32 +3859,14 @@ void EditorShell::renderRenderPanePresentation(
     requestRenderAtEndOfFrame_ = true;
   }
 
-  // Resolve external-surface ownership before choosing the overlay epoch. A worker surface
-  // already contains its drag transform in the accepted pixels; unlike an in-process composited
-  // tile, the UI thread cannot advance those pixels with the live pointer transform. Selection
-  // chrome must therefore reuse the transform represented by that accepted surface.
-  // Only builds that can present through an external surface pay for the
-  // worker's lock; the framebuffer presenter never reads this state.
-  const DirectSurfacePresentationState directSurface =
-      documentPresenter_->presentsToExternalSurface()
-          ? renderCoordinator_.asyncRenderer().directSurfacePresentation()
-          : DirectSurfacePresentationState{};
   const DocumentPresentationResult presentation =
       documentPresenter_->resolveExternalSurface(DocumentPresentationFrame{
           .viewport = interactionController_.viewport(),
           .paneRect = paneRect,
           .presentationSuppressed = contentOnlyCaptureThisFrame_ || showSamplePicker_,
-          .workerSurface = directSurface,
       });
-  bool documentPresentedDirectly = presentation.documentPresentedDirectly;
-  const bool workerDocumentSurfacePresented = presentation.externalSurfacePresented;
-  // Latch what a later presentation-only frame would have to replay. `runFrame` clears both at
-  // the top, so any frame that never reaches this point leaves the shell ineligible to skip.
-  lastFrameExternalSurfacePresented_ = presentation.externalSurfacePresented;
-  lastPresentedPaneRect_ = paneRect;
-  lastPresentedPaneRectValid_ = true;
-  lastFullFramePresentedViewport_ = presentation.presentedViewport;
-  const bool workerSurfaceSelectionChromeBaked = presentation.selectionChromeBaked;
+  bool documentPresentedDirectly = false;
+  const bool workerDocumentSurfacePresented = false;
   // Everything drawn onto the document this frame - selection chrome, the
   // compositor tile overlay, the presented image clip - belongs in the same
   // transform the presented pixels landed in. That is the live viewport
@@ -4026,9 +4007,6 @@ void EditorShell::renderRenderPanePresentation(
   if (!contentOnlyCaptureThisFrame_ && !showSamplePicker_ &&
       renderCoordinator_.immediateOverlaySnapshot().has_value()) {
     SelectionChromeSnapshot chromeSnapshot = *renderCoordinator_.immediateOverlaySnapshot();
-    if (workerSurfaceSelectionChromeBaked) {
-      chromeSnapshot = OverlayWithoutBakedSelectionChrome(std::move(chromeSnapshot));
-    }
     chromePlan = ImmediateChromePlan{
         .viewport = presentedDocumentViewport,
         .paneClipRect = paneRect,
@@ -5796,21 +5774,13 @@ bool EditorShell::flushInteractiveDragMutationAndRequestRender() {
   // A direct worker surface and the ImGui chrome are separate browser layers.
   // Let the normal presentation pass bind chrome to the last completed worker
   // epoch instead of capturing live resize geometry ahead of its pixels here.
-#ifndef DONNER_WASM_WORKER_SURFACE
   renderCoordinator_.rasterizeOverlayForCurrentSelection(
       app_, interactionController_.viewport(), selectTool_.marqueeRect(),
       selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview(),
       selectionChromeDetailForActiveTool());
-#endif
   const bool posted = renderCoordinator_.maybeRequestRender(
       app_, selectTool_, interactionController_.viewport(), &textures_,
-#ifdef DONNER_WASM_WORKER_SURFACE
-      // Continuous resize must not cancel every in-flight frame before it can
-      // reach the surface. Land one frame, then render the latest queued DOM.
-      /*supersedeInFlight=*/false, selectionChromeDetailForActiveTool());
-#else
       /*supersedeInFlight=*/true);
-#endif
   requestRenderAtEndOfFrame_ = !posted;
   window_.wakeEventLoop();
   return true;
@@ -6492,140 +6462,6 @@ void EditorShell::recordFrameTelemetry(
 #endif
 }
 
-UiFrameWork EditorShell::classifyFrameWork(bool editorWakePending, bool browserInputPending,
-                                           bool idleTimerDue) const {
-  // The wake sources alone settle most frames, and gathering the rest of the input set walks
-  // several subsystems and queries the window. Answer from the wake sources when they are
-  // decisive, so a saturated input stream (a continuous wheel gesture, where no frame can ever
-  // skip) pays nothing for the gate. The pure predicate still owns the wake-source logic.
-  if (!editorWakePending || browserInputPending || idleTimerDue) {
-    return DecideUiFrameWork(UiFrameGateInputs{
-        .editorWakePending = editorWakePending,
-        .browserInputPending = browserInputPending,
-        .idleTimerDue = idleTimerDue,
-    });
-  }
-
-  const ImGuiContext* context = ImGui::GetCurrentContext();
-  if (context == nullptr) {
-    return UiFrameWork::FullUiFrame;
-  }
-
-  const ImGuiContext& g = *context;
-  const ImGuiIO& io = ImGui::GetIO();
-
-  bool mouseButtonDown = false;
-  for (const bool down : io.MouseDown) {
-    mouseButtonDown = mouseButtonDown || down;
-  }
-
-  // A hover timer can still change what is drawn when the hovered target moved since the last
-  // frame, or when a tooltip/stationary delay has not yet saturated. Skipping frames makes ImGui's
-  // clock jump on the next `NewFrame`, so a delay that had not already fired could be crossed
-  // while the UI is frozen and pop a tooltip onto a stale draw list.
-  const bool hoverTargetChanged = g.HoveredId != g.HoveredIdPreviousFrame;
-  const bool hoverDelayArmed = g.HoverItemDelayId != 0 || g.HoverItemDelayIdPreviousFrame != 0 ||
-                               g.HoverItemDelayClearTimer > 0.0f;
-  const bool hoverTimersUnsettled =
-      g.HoveredId != 0 && (g.HoveredIdTimer < kUiFrameHoverSettleSeconds ||
-                           g.MouseStationaryTimer < kUiFrameHoverSettleSeconds);
-
-  const bool toolGestureActive =
-      selectTool_.isDragging() || selectTool_.marqueeRect().has_value() ||
-      penTool_.isDraggingAnchor() || penTool_.isDrafting() || textTool_.isEditing() ||
-      textTool_.isDraggingBox() || textEditor_.isFocused() ||
-      interactionController_.pendingClick().has_value() || interactionController_.panning();
-
-  // Work parked behind the async renderer's document lock. `runFrame` drains all of it on the
-  // first frame that finds the renderer idle - which is exactly a worker-completion frame - so
-  // every queue has to hold the frame open.
-  const bool deferredEditorWorkQueued =
-      !pendingHistoryActions_.empty() || samplePresentationPending_ ||
-      !pendingSampleLoadId_.empty() || documentSyncController_.hasPendingWritebacks() ||
-      (app_.hasDocument() && app_.document().hasPendingMutations());
-
-  return DecideUiFrameWork(UiFrameGateInputs{
-      .editorWakePending = editorWakePending,
-      .browserInputPending = browserInputPending,
-      .idleTimerDue = idleTimerDue,
-      .workerSurfacePresentsDocument = documentPresenter_->presentsToExternalSurface(),
-      .documentPresentedByExternalSurface = lastFrameExternalSurfacePresented_,
-      .imguiHasQueuedInputEvents = g.InputEventsQueue.Size > 0,
-      .imguiItemActive = g.ActiveId != 0,
-      .imguiPopupOpen = g.OpenPopupStack.Size > 0,
-      .imguiDragDropActive = g.DragDropActive,
-      .imguiMovingWindow = g.MovingWindow != nullptr,
-      .imguiNavWindowing = g.NavWindowingTarget != nullptr,
-      .imguiWantsTextInput = io.WantTextInput,
-      .imguiMouseButtonDown = mouseButtonDown,
-      .imguiHoverTimersPending = hoverTargetChanged || hoverDelayArmed || hoverTimersUnsettled,
-      .deferredRenderRequestPending = requestRenderAtEndOfFrame_,
-      .sidebarSnapshotRefreshPending = sidebarSnapshotRefreshPending_,
-      .deferredEditorWorkQueued = deferredEditorWorkQueued,
-      .samplePickerVisible = showSamplePicker_,
-      .contentOnlyCapturePending = contentOnlyCaptureForNextFrame_ || contentOnlyCaptureThisFrame_,
-      .shellAnimationScheduled = nextIdleWakeSeconds().has_value(),
-      .lockedRejectionFlashActive = renderCoordinator_.hasLockedRejectionFlash(),
-      .toolGestureActive = toolGestureActive,
-      .pendingScrollEvents = !inputBridge_.events().empty(),
-      .viewportUninitialized = !viewportInitialized_ || !lastPresentedPaneRectValid_,
-      .epochPlacementDeferred = epochPlacementDeferred_,
-      .windowGeometryChanged = window_.windowSize() != lastFullFrameWindowSize_,
-      .reproRecording = reproRecorder_ != nullptr,
-      .diagnosticOverlayVisible = perfOverlayMode_ != PerfOverlayMode::Off ||
-                                  showCompositorDebugPanel_ || compositorTileOverlay_ ||
-                                  geometryDebugOverlay_,
-      .documentAbsent = !app_.hasDocument(),
-  });
-}
-
-void EditorShell::runPresentationOnlyFrame() {
-  ZoneScopedN("EditorShell::runPresentationOnlyFrame");
-  // No `ImGui::NewFrame()` runs on this path, so nothing here may touch ImGui. The frame does
-  // exactly two things: accept the render worker's completed epoch, and re-place the worker-owned
-  // document surface for it. The window framebuffer, and with it the whole ImGui draw list, is
-  // left exactly as the last full frame presented it.
-  textures_.advancePresentationFrame();
-  renderCoordinator_.pollRenderResult(app_, interactionController_.viewport(), textures_,
-                                      &interactionController_.frameHistory());
-
-  const DocumentPresentationFrame presentationFrame{
-      .viewport = interactionController_.viewport(),
-      .paneRect = lastPresentedPaneRect_,
-      .presentationSuppressed = false,
-      .workerSurface = renderCoordinator_.asyncRenderer().directSurfacePresentation(),
-  };
-
-  // This frame draws no chrome. Selection chrome and the compositor tile overlay keep the
-  // screen-space placement the last full frame rasterized them at, so an epoch that lands the
-  // document anywhere else - a zoom raster catching up, a surface backing growing - would slide
-  // the document out from under its own annotations. The epoch stays committed in the renderer
-  // and unpublished on screen (the worker presented it into the surface slot that is not
-  // visible); the full frame this wakes places it and re-rasterizes the chrome in one step.
-  if (!PresentationOnlyFrameMayPlaceEpoch(lastFullFramePresentedViewport_,
-                                          DirectSurfacePlacementViewport(presentationFrame))) {
-    epochPlacementDeferred_ = true;
-    window_.wakeEventLoop();
-    return;
-  }
-
-  const DocumentPresentationResult presentation =
-      documentPresenter_->resolveExternalSurface(presentationFrame);
-  // The presenter's two stages are a matched pair: stage 1 opens the frame and stage 2 closes it.
-  // There is no window framebuffer pass on this path, so there is no underlay to install - but the
-  // frame still has to be closed, and clearing the plan is also what keeps a stale underlay from
-  // outliving the frame that installed it.
-  std::ignore = documentPresenter_->presentUnderlay(std::nullopt);
-
-  // If the worker lost external-surface ownership on this frame (a document swap, a terminal
-  // surface failure), the framebuffer underlay is the only thing that can present the document -
-  // and only a full frame draws it. Withdraw eligibility and wake for that frame.
-  lastFrameExternalSurfacePresented_ = presentation.externalSurfacePresented;
-  if (!presentation.externalSurfacePresented) {
-    window_.wakeEventLoop();
-  }
-}
-
 void EditorShell::runFrame() {
   ZoneScopedN("EditorShell::runFrame");
   const ScopedHeapDelta uiFrameHeapDelta(MemoryStage::AppUiFrame);
@@ -6642,14 +6478,6 @@ void EditorShell::runFrame() {
   };
   contentOnlyCaptureThisFrame_ = contentOnlyCaptureForNextFrame_;
   contentOnlyCaptureForNextFrame_ = false;
-  // Cleared here and re-latched only by `renderRenderPanePresentation`, so a frame that returns
-  // before the presentation stage (compact layouts, the sample picker, a suppressed capture)
-  // leaves the shell ineligible for a presentation-only frame rather than replaying stale
-  // ownership.
-  lastFrameExternalSurfacePresented_ = false;
-  lastPresentedPaneRectValid_ = false;
-  // The gate has already read this; the frame it forced is now running.
-  epochPlacementDeferred_ = false;
   textures_.advancePresentationFrame();
   compositorDebugPanel_.advancePresentationFrame();
   snapshotReproFrame();

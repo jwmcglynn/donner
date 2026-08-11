@@ -41,18 +41,6 @@ SelectionChromeSnapshot ChromePlacedOnPresentedDocument(const ViewportState& pre
   return snapshot;
 }
 
-SelectionChromeSnapshot OverlayWithoutBakedSelectionChrome(SelectionChromeSnapshot snapshot) {
-  snapshot.paths.clear();
-  snapshot.aabbsDoc.clear();
-  snapshot.orientedBoundsDoc.reset();
-  snapshot.handleAnchorsDoc.clear();
-  snapshot.pathAnchorPointsDoc.clear();
-  snapshot.pathControlLinesDoc.clear();
-  snapshot.pathControlPointsDoc.clear();
-  snapshot.textBaselinesDoc.clear();
-  return snapshot;
-}
-
 #ifdef DONNER_EDITOR_WGPU
 namespace {
 

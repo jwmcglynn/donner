@@ -207,7 +207,7 @@ TEST(RenderCoordinatorPolicyTest, SelectedViewportRefreshDeferRequiresEveryPredi
       /*needsOverviewInfill=*/true, /*pendingSelectedLayerRasterization=*/false));
 }
 
-TEST(RenderCoordinatorPolicyTest, DirectSurfaceSkipsSelectionOnlyPrewarmViewportOverdraw) {
+TEST(RenderCoordinatorPolicyTest, SelectionOnlyPrewarmDoesNotOverdrawTheViewport) {
   const Entity selectedEntity = static_cast<Entity>(7);
 
   EXPECT_TRUE(ShouldUseSelectedPrewarmRasterViewport(
@@ -276,18 +276,6 @@ TEST(RenderCoordinatorPolicyTest, PendingSelectedLayerClearRequiresEntityPreview
   forcedPreview.forceLayerRasterization = false;
   EXPECT_FALSE(ShouldClearPendingSelectedLayerRasterization(
       forcedPreview, selectedEntity, /*resultVersion=*/8, /*pendingVersion=*/8));
-}
-
-TEST(RenderCoordinatorPolicyTest, TerminalSurfaceFailureParksOrRetriesWithoutHotSpin) {
-  using Outcome = DirectSurfacePresentationOutcome;
-  using Failure = WorkerSurfaceFailureKind;
-
-  EXPECT_EQ(DirectSurfaceTerminalOutcomeFor(Failure::Timeout), Outcome::RetryAfterBackoff);
-  EXPECT_EQ(DirectSurfaceTerminalOutcomeFor(Failure::Incompatible), Outcome::Unavailable)
-      << "Permanent surface failure must expose the browser capability error instead of silently "
-         "freezing prior pixels or retrying forever.";
-  EXPECT_GT(DirectSurfaceRetryBackoffForAttempt(0u), std::chrono::milliseconds::zero());
-  EXPECT_LE(DirectSurfaceRetryBackoffForAttempt(100u), std::chrono::seconds(1));
 }
 
 TEST(RenderCoordinatorPolicyTest, RepresentedDragPreviewFollowsActiveTargetWhenPresentable) {
@@ -648,12 +636,9 @@ TEST(RenderCoordinatorTest, ResetForLoadedDocumentClearsCachesAndOverlayState) {
   coordinator.compositedPresentation().noteCachedTextures(
       QuerySelector(app, "#r1").unsafeEntityHandle().entity(), /*version=*/1, Vector2i(100, 100));
   coordinator.setSourceHoverElements({QuerySelector(app, "#r2")});
-  coordinator.asyncRenderer().setDirectSurfacePresentationForTesting(
-      DirectSurfacePresentationState{.active = true, .frameCount = 7, .surfaceSlot = 1});
 
   ASSERT_FALSE(coordinator.selectionBoundsCache().lastSelection.empty());
   ASSERT_TRUE(coordinator.compositedPresentation().hasCachedTextures());
-  ASSERT_TRUE(coordinator.asyncRenderer().directSurfacePresentation().active);
 
   coordinator.resetForLoadedDocument(app.document().documentGeneration());
 
@@ -661,7 +646,6 @@ TEST(RenderCoordinatorTest, ResetForLoadedDocumentClearsCachesAndOverlayState) {
   EXPECT_FALSE(coordinator.compositedPresentation().hasCachedTextures());
   EXPECT_EQ(coordinator.displayedDocVersion(), 0u);
   EXPECT_FALSE(coordinator.immediateOverlaySnapshot().has_value());
-  EXPECT_FALSE(coordinator.asyncRenderer().directSurfacePresentation().active);
 
   // A hover set re-issued after reset reports a change (the cleared set differs
   // from the new one) - confirming the hover state was actually cleared.

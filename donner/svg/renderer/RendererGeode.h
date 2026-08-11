@@ -369,13 +369,14 @@ public:
       UTILS_LIFETIME_BOUND override;
 
   /// Geode presentation is GPU-native when callers can sample WebGPU textures directly.
+  ///
+  /// Not on the browser build. WebGPU has no cross-thread device, surface, or texture sharing in
+  /// any shipping engine, so a texture produced on the raster thread cannot be sampled by the app
+  /// thread's device. Browser tiles therefore cross the thread boundary as CPU bitmaps and are
+  /// uploaded once per tile generation into the compositing device (Design 0064). The worker-owned
+  /// surface that used to consume a texture snapshot directly is gone.
   [[nodiscard]] bool requiresTextureSnapshotPresentation() const override {
-#if defined(__EMSCRIPTEN__) && defined(DONNER_WASM_WORKER_SURFACE)
-    // The Wasm compositor and document surface now live on the same pthread
-    // and WebGPU device, so textures stay in the worker's JS object table and
-    // are presented without CPU readback.
-    return true;
-#elif defined(__EMSCRIPTEN__)
+#ifdef __EMSCRIPTEN__
     return false;
 #else
     return true;

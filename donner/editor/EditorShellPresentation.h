@@ -83,12 +83,6 @@ struct ImmediateChromePlan {
   SelectionChromeSnapshot snapshot;
 };
 
-/// Remove selection primitives already baked into a worker document surface,
-/// retaining independently animated UI chrome such as hover, marquee, pen,
-/// text caret, and text selection feedback.
-[[nodiscard]] SelectionChromeSnapshot OverlayWithoutBakedSelectionChrome(
-    SelectionChromeSnapshot snapshot);
-
 #ifdef DONNER_EDITOR_WGPU
 class FramebufferCheckerboardRenderer {
 public:
