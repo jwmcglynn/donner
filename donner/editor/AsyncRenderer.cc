@@ -1990,7 +1990,12 @@ void AsyncRenderer::workerLoop() {
     }
 
     if (runCompositorWarmup) {
-      if (compositor_ != nullptr && compositorDocument_.has_value()) {
+      // Re-check the cancel signal after dequeue: a document swap or
+      // cancelInFlight between the dequeue above and this call tears down the
+      // lease renderer the compositor is bound to, and the warmup's first
+      // renderer dereference happens before any in-pass cancellation poll.
+      if (compositor_ != nullptr && compositorDocument_.has_value() &&
+          !cancelCompositorWarmup_.isCancelled()) {
         svg::SVGDocument& warmupDocument = *compositorDocument_;
         std::optional<svg::DocumentWriteAccess> documentAccess;
         documentAccess.emplace(warmupDocument.writeAccess());

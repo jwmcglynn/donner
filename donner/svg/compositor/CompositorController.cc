@@ -1024,6 +1024,17 @@ bool CompositorController::warmPendingFirstFrameCaches(CancellationToken& token)
   if (!firstFrameWarmupPending_) {
     return true;
   }
+  // Check cancellation BEFORE the first renderer_ dereference. The deferred
+  // warmup can be dequeued concurrently with the owner tearing down the
+  // renderer this controller is bound to (2026-08-11 linux CI SIGSEGV in this
+  // frame, editor_control_session_tests: the lease-owned renderer died between
+  // warmup dequeue and the offscreen-support probe); owners cancel the token
+  // before teardown, so honoring it here closes the common window. The
+  // structural fix - the compositor thread owning its renderer - is the
+  // Design 0064 ownership model.
+  if (token.isCancelled()) {
+    return false;
+  }
   if (!hasLastViewport_ || !hasLastSurfaceFromCanvas_) {
     return false;
   }
