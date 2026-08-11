@@ -113,6 +113,17 @@ py_test(
 )
 
 py_test(
+    name = "remote_cache_config_tests",
+    size = "small",
+    srcs = ["remote_cache_config_tests.py"],
+    data = [
+        "//:.bazelrc",
+        "//:.bazelversion",
+    ],
+    deps = ["@rules_python//python/runfiles"],
+)
+
+py_test(
     name = "lcov_metrics_tests",
     size = "small",
     srcs = [
