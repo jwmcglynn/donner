@@ -24,7 +24,7 @@ text_full=False
         self.assertEqual(actual, expected)
 
     def test_links_the_single_canvas_whole_app_worker_configuration(self) -> None:
-        """The Design 0064 wasm contract, asserted at the link line.
+        """The the single-canvas architecture wasm contract, asserted at the link line.
 
         Every value here is load-bearing:
 

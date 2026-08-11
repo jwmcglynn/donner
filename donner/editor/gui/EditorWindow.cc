@@ -373,26 +373,36 @@ double BrowserDevicePixelRatio() {
 void PublishFirstPresentedFrame(int headlessDeviceCreations) {
   whole_app_worker::NotifyFirstFramePresented(headlessDeviceCreations);
 }
-// STUBBED for the phase 1 experiment: the readback diagnostic reads the page
-// URL and publishes a page-side request/completion handshake, neither of which
-// the app thread can reach. Every caller is gated on this returning false, so
-// the diagnostic is simply unavailable in this build.
+// The readback diagnostic's page handshake lives in the whole-app bridge: the
+// request/completed ids ride the shared-memory mirror and the stats publishes
+// proxy to the main thread.
 bool WgpuReadbackStatsEnabled() {
-  return false;
+  return whole_app_worker::ReadbackStatsEnabled();
 }
-// Unreachable in this build (every call site is gated on the predicate above),
-// but they must still link.
 int PeekWgpuReadbackRequest() {
-  return 0;
+  return whole_app_worker::PeekReadbackRequest();
 }
-void WakeWasmEditorForPendingWgpuReadback() {}
-void MarkWgpuReadbackCaptureStarted(int /*requestId*/) {}
-void PublishWgpuReadbackFailure(int /*requestId*/) {}
-void PublishWgpuReadbackStats(int /*renderSamples*/, int /*renderColored*/, int /*renderNonBlack*/,
-                              int /*renderMaxChannel*/, int /*layerSamples*/, int /*layerColored*/,
-                              int /*layerNonBlack*/, int /*layerMaxChannel*/,
-                              int /*selectionChromePixels*/, int /*requestId*/) {}
-void PublishWgpuCarouselThumbnailStats(const int* /*values*/, int /*count*/) {}
+void WakeWasmEditorForPendingWgpuReadback() {
+  whole_app_worker::WakeForPendingReadback();
+}
+void MarkWgpuReadbackCaptureStarted(int requestId) {
+  whole_app_worker::MarkReadbackCaptureStarted(requestId);
+}
+void PublishWgpuReadbackFailure(int requestId) {
+  whole_app_worker::PublishReadbackFailure(requestId);
+}
+void PublishWgpuReadbackStats(int renderSamples, int renderColored, int renderNonBlack,
+                              int renderMaxChannel, int layerSamples, int layerColored,
+                              int layerNonBlack, int layerMaxChannel, int selectionChromePixels,
+                              int requestId) {
+  whole_app_worker::PublishReadbackStats(renderSamples, renderColored, renderNonBlack,
+                                         renderMaxChannel, layerSamples, layerColored,
+                                         layerNonBlack, layerMaxChannel, selectionChromePixels,
+                                         requestId);
+}
+void PublishWgpuCarouselThumbnailStats(const int* values, int count) {
+  whole_app_worker::PublishCarouselThumbnailStats(values, count);
+}
 #else
 EM_JS(int, CanvasCssWidth, (), { return Math.max(1, Math.floor(window.innerWidth)); });
 EM_JS(int, CanvasCssHeight, (), { return Math.max(1, Math.floor(window.innerHeight)); });

@@ -1,6 +1,6 @@
 #pragma once
 /// @file
-/// Live-heap histogram by allocation size (Design 0064 phase 2 investigation).
+/// Live-heap histogram by allocation size (the single-canvas presenter work investigation).
 ///
 /// See `HeapSizeHistogram.cc` for what this measures and how to turn it on. The
 /// header compiles and the accessors link in every configuration; without

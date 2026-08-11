@@ -18,25 +18,30 @@ import { type Page } from "@playwright/test";
  * those defects produced it:
  *
  *  - the pixels actually on screen (mean alpha, mean luma, colored pixel
- *    count) taken from the VISIBLE region of the visible worker surface,
- *  - `data-direct-surface-frame` of that surface, which names the epoch whose
- *    pixels are being shown,
- *  - the visible region's CSS geometry, which is the epoch the *layout*
- *    believes it is showing,
- *  - the canvas backing store size, which is what a per-epoch resize clears,
- *  - `window.__donnerAcceptedPresentation.token` and
- *    `window.__donnerWorkerStats.completedResults`, which order the samples
- *    against the worker's own progress.
+ *    count, and the centroid of the chromatic ones) taken from `#canvas`,
+ *  - the canvas backing store size, which is what a resize clears,
+ *  - `window.__donnerWorkerStats.completedResults`, which orders the samples
+ *    against the render worker's own progress.
  *
- * Pixels plus epoch token plus CSS size plus backing size, per frame, is what
- * makes the invariants in `composited-invariants.spec.ts` decidable. Any one of
- * them alone is ambiguous: geometry alone cannot see a cleared backing store,
- * pixels alone cannot tell a legitimately empty region from a dropped epoch,
- * and a settled check cannot see either.
+ * Pixels plus centroid plus backing size, per frame, is what makes the
+ * invariants in `composited-invariants.spec.ts` decidable. Either alone is
+ * ambiguous: geometry cannot see a cleared backing store, pixels cannot tell a
+ * legitimately empty region from a dropped frame, and a settled check sees
+ * neither.
+ *
+ * SINGLE CANVAS (single-canvas presenter architecture)
+ *
+ * There is one canvas and no CSS between document space and the screen, so the
+ * per-sample observables that used to describe the seam are gone: the presented
+ * epoch token (`data-direct-surface-frame`), the accepted-epoch token, which of
+ * two DOM canvases was visible, and the clip-path insets that placed the
+ * visible region. Motion and scale are now observable only INSIDE the canvas,
+ * through `coloredCentroid*` and the content statistics, because the element
+ * itself never moves.
  *
  * WHY drawImage AND NOT A SCREENSHOT
  *
- * `page.screenshot()` does not capture the worker-owned WebGPU canvas in
+ * `page.screenshot()` does not capture the transferred WebGPU canvas in
  * headless Chromium: every pixel of it reads back as the page background, so a
  * screenshot cannot distinguish "document missing" from "document present".
  * Drawing the canvas element into a small 2d canvas inside the page reads the
@@ -48,50 +53,23 @@ import { type Page } from "@playwright/test";
  * The probe reports `drawFailures` and per-sample `drawOk` so a run where the
  * read-back path itself is unavailable fails loudly instead of reporting a
  * comfortable stream of transparent frames.
- *
- * WHY THE READ-BACK RETRIES
- *
- * Gecko's first main-thread snapshot of a worker-owned WebGPU canvas can come
- * back transparent for a canvas that is presenting perfectly. Measured on a
- * standalone reproducer (no Donner: a worker, two transferred canvases, a
- * WebGPU present loop, and this same sampler): with the worker resizing its
- * backing store between epochs, 15 of 900 sampled frames read back empty or
- * near-empty on the first `drawImage`, always within a millisecond of the
- * present that promoted that canvas, and ALL 15 returned the real pixels on a
- * second `drawImage` issued in the same task. The same page on Chromium
- * produced zero empty reads in 1763 samples. The trigger is the swapchain
- * teardown the resize forces; alternation and CSS re-placement make it more
- * frequent but neither is sufficient on its own.
- *
- * So an empty read is retried a bounded number of times inside the same
- * animation frame. This cannot hide a real defect: a genuinely cleared backing
- * store returns the same empty answer on every attempt, and a legitimately
- * empty visible region likewise. The only verdict a retry changes is the one
- * where the browser gave two different answers for the same canvas in the same
- * task, which is the definition of a read-back artifact rather than a frame.
- * `readbackRetries` and `readbackRetryRescues` report how often that happened,
- * so the workaround can never quietly become load-bearing.
  */
 
 /** One composited sample, taken inside a single animation frame. */
 export interface CompositedSample {
   /** `performance.now()` at sample time. */
   t: number;
-  /** Element id of the worker surface that was visible, or "" if none was. */
-  surfaceId: string;
-  /** `data-direct-surface-frame` of the visible surface: the presented epoch. */
-  frameToken: number;
-  /** Visible-region origin in CSS px (element box minus clip-path insets). */
+  /** True when `#canvas` was present and readable for this sample. */
+  canvasPresent: boolean;
+  /** Canvas element box origin in CSS px. */
   visibleX: number;
   visibleY: number;
-  /** Visible-region size in CSS px. This is the zoom observable. */
+  /** Canvas element box size in CSS px. */
   cssWidth: number;
   cssHeight: number;
   /** Canvas backing store size in device px. */
   backingWidth: number;
   backingHeight: number;
-  /** `window.__donnerAcceptedPresentation.token`. */
-  acceptedToken: number;
   /** `window.__donnerWorkerStats.completedResults`. */
   completedResults: number;
   /** Mean alpha over the sampled region, 0-255. */
@@ -103,66 +81,31 @@ export interface CompositedSample {
   /**
    * Centroid of those pixels, in read-back pixels, or -1 when there were none.
    *
-   * This is the observable for content that moves INSIDE the surface rather
-   * than with it. A shape drag does not move the viewport, so the visible
-   * region's origin (`visibleX`/`visibleY`) is constant throughout and cannot
-   * say whether the dragged object moved, stalled, or jumped backward. The
-   * centroid of the document's chromatic pixels can, without knowing anything
-   * about how the object reached the screen.
+   * With one canvas this is the observable for ALL document motion: the canvas
+   * fills the window and never moves, so `visibleX`/`visibleY` are constant and
+   * can say nothing about whether a pan, a zoom, or a dragged object moved,
+   * stalled, or jumped backward. The centroid of the document's chromatic
+   * pixels can, without knowing anything about how those pixels reached the
+   * screen.
    */
   coloredCentroidX: number;
   coloredCentroidY: number;
+  /**
+   * Width of the chromatic content's bounding box, in read-back pixels, or 0
+   * when there was none.
+   *
+   * This is the SCALE observable. With one canvas the element box is the
+   * window and never changes with zoom, so the only place a zoom is visible is
+   * in how far apart the document's own pixels are. It saturates once the
+   * content fills the sampled region, so it is only meaningful for gestures
+   * that keep the document inside the pane.
+   */
+  coloredWidth: number;
+  coloredHeight: number;
   /** Total pixels read back for this sample. */
   sampledPixels: number;
   /** False when the composited read-back did not produce pixels. */
   drawOk: boolean;
-  /**
-   * The element box the source rectangle was derived from, in CSS px, and the
-   * source rectangle itself, in backing-store px.
-   *
-   * The read-back is a sub-rectangle read: the visible region is mapped into
-   * the backing store through `backingSize / elementBoxSize`. The main thread
-   * owns the element box (it applies the accepted epoch's CSS) and the worker
-   * owns the backing store (it resizes its own OffscreenCanvas), so the two
-   * are written by different threads and can disagree for a window. When they
-   * do, the source rectangle can fall partly or wholly outside the backing
-   * store, and `drawImage` then returns transparent pixels for a canvas that
-   * is presenting perfectly. Recording the rectangle is what makes that case
-   * distinguishable from a real empty frame after the fact.
-   */
-  elementWidth: number;
-  elementHeight: number;
-  sourceX: number;
-  sourceY: number;
-  sourceWidth: number;
-  sourceHeight: number;
-  /**
-   * True when the source rectangle was clamped back inside the backing store
-   * before the read-back. A sample with this set was taken across a
-   * main-thread/worker size disagreement.
-   */
-  sourceClamped: boolean;
-  /**
-   * True when the visible surface's backing store is still the unconfigured
-   * HTML canvas default (300x150) while its element box is larger on both axes.
-   *
-   * This is NOT a stale reading of a valid size. The worker configures a slot's
-   * backing store the first time it presents into it and never returns it to
-   * the default, so 300x150 under a full-size element box means the worker has
-   * never presented into this slot at all: there is no committed frame to read
-   * back, and none for the compositor to show either.
-   *
-   * It matters because it is the one empty read that a retry cannot rescue by
-   * construction. Distinguishing it keeps "no frame exists yet" from "the frame
-   * exists and the snapshot came back empty", which are different defects with
-   * different owners.
-   */
-  backingUncommitted: boolean;
-  /**
-   * How many `drawImage` read-backs this sample took. 1 in the ordinary case;
-   * more when the first attempt came back empty. See the file comment.
-   */
-  readbackAttempts: number;
 }
 
 export interface CompositedProbeResult {
@@ -171,10 +114,6 @@ export interface CompositedProbeResult {
   drawFailures: number;
   /** Animation frames observed while the probe was running. */
   frames: number;
-  /** Samples whose first read-back was empty and was therefore retried. */
-  readbackRetries: number;
-  /** Retried samples in which a later attempt returned a non-empty frame. */
-  readbackRetryRescues: number;
 }
 
 export interface CompositedProbeOptions {
@@ -199,20 +138,6 @@ export interface CompositedProbeOptions {
    * observable says anything about a single dragged shape.
    */
   sampleRegionCss?: { x: number; y: number; width: number; height: number };
-  /**
-   * Maximum `drawImage` read-backs per sample. The extra attempts are only
-   * issued when an attempt comes back empty, so this does not change the cost
-   * of an ordinary frame. See "WHY THE READ-BACK RETRIES" above.
-   */
-  readbackAttempts?: number;
-  /**
-   * Mean alpha below which a read-back is treated as empty and retried.
-   *
-   * Deliberately the same default as `blackFrameStats`: a read that the
-   * black-frame accounting would call empty is exactly the read worth asking
-   * the browser for a second time.
-   */
-  retryBelowMeanAlpha?: number;
 }
 
 declare global {
@@ -222,8 +147,6 @@ declare global {
       samples: CompositedSample[];
       drawFailures: number;
       frames: number;
-      readbackRetries: number;
-      readbackRetryRescues: number;
       start: () => void;
       stop: () => void;
     };
@@ -249,8 +172,6 @@ export async function installCompositedProbe(
     minColorAlpha: options.minColorAlpha ?? 16,
     minColorSpread: options.minColorSpread ?? 12,
     sampleRegionCss: options.sampleRegionCss ?? null,
-    readbackAttempts: options.readbackAttempts ?? 4,
-    retryBelowMeanAlpha: options.retryBelowMeanAlpha ?? 40,
   };
 
   await page.evaluate((config) => {
@@ -262,111 +183,53 @@ export async function installCompositedProbe(
       throw new Error("composited probe: no 2d context for read-back");
     }
 
-    // Reimplemented here rather than imported from a spec: the probe must stay
-    // usable when the specs it was extracted from are being edited, and a
-    // shared helper that lives in a test file is a coupling that breaks the
-    // moment someone reorganizes that file. The rule it encodes is CSS's:
-    // `inset()` serializes with 1 to 4 values and expands as
-    // top / right / bottom / left, with omitted values mirroring.
-    const visibleBounds = (
-      el: HTMLCanvasElement,
-    ): { x: number; y: number; width: number; height: number; insetLeft: number; insetTop: number } => {
-      const rect = el.getBoundingClientRect();
-      const clip = getComputedStyle(el).clipPath || "";
-      const match = clip.match(/inset\(([^)]*)\)/);
-      if (match === null) {
-        return {
-          x: rect.left,
-          y: rect.top,
-          width: rect.width,
-          height: rect.height,
-          insetLeft: 0,
-          insetTop: 0,
-        };
-      }
-      const parts = match[1].trim().split(/\s+/).map((part) => parseFloat(part));
-      if (parts.length === 0 || parts.some((value) => !Number.isFinite(value))) {
-        return {
-          x: rect.left,
-          y: rect.top,
-          width: rect.width,
-          height: rect.height,
-          insetLeft: 0,
-          insetTop: 0,
-        };
-      }
-      const top = parts[0];
-      const right = parts.length >= 2 ? parts[1] : parts[0];
-      const bottom = parts.length >= 3 ? parts[2] : parts[0];
-      const left = parts.length >= 4 ? parts[3] : right;
-      return {
-        x: rect.left + left,
-        y: rect.top + top,
-        width: rect.width - left - right,
-        height: rect.height - top - bottom,
-        insetLeft: left,
-        insetTop: top,
-      };
-    };
-
     // The editor's other diagnostics are declared as `Window` members by the
     // specs that own them. Read them through a local view instead, so this file
     // stays independent of whichever spec happens to declare them today.
     const diagnostics = window as unknown as {
-      __donnerAcceptedPresentation?: { token?: number };
       __donnerWorkerStats?: { completedResults?: number };
     };
 
-    const kNoPixels = {
-      meanAlpha: 0,
-      meanLuma: 0,
-      coloredPixels: 0,
-      coloredCentroidX: -1,
-      coloredCentroidY: -1,
-      sampledPixels: 0,
-      drawOk: false,
-    };
-    const kNoSourceRect = {
-      elementWidth: 0,
-      elementHeight: 0,
-      sourceX: 0,
-      sourceY: 0,
-      sourceWidth: 0,
-      sourceHeight: 0,
-      sourceClamped: false,
-      backingUncommitted: false,
-    };
-
     const sampleOnce = (): CompositedSample => {
-      const surface = document.querySelector<HTMLCanvasElement>(
-        "canvas[data-direct-surface-visible=\"true\"]",
-      );
-      const acceptedToken = diagnostics.__donnerAcceptedPresentation?.token || 0;
+      const surface = document.querySelector<HTMLCanvasElement>("canvas#canvas");
       const completedResults = diagnostics.__donnerWorkerStats?.completedResults || 0;
       if (surface === null) {
         return {
           t: performance.now(),
-          surfaceId: "",
-          frameToken: 0,
+          canvasPresent: false,
           visibleX: 0,
           visibleY: 0,
           cssWidth: 0,
           cssHeight: 0,
           backingWidth: 0,
           backingHeight: 0,
-          acceptedToken,
           completedResults,
-          ...kNoPixels,
-          ...kNoSourceRect,
-          readbackAttempts: 0,
+          meanAlpha: 0,
+          meanLuma: 0,
+          coloredPixels: 0,
+          coloredCentroidX: -1,
+          coloredCentroidY: -1,
+          coloredWidth: 0,
+          coloredHeight: 0,
+          sampledPixels: 0,
+          drawOk: false,
+          attempts: 1,
         };
       }
 
-      let bounds = visibleBounds(surface);
+      const elementBox = surface.getBoundingClientRect();
+      let bounds = {
+        x: elementBox.left,
+        y: elementBox.top,
+        width: elementBox.width,
+        height: elementBox.height,
+        insetLeft: 0,
+        insetTop: 0,
+      };
       if (config.sampleRegionCss !== null) {
-        // Intersect the requested window with the visible region, keeping the
-        // insets expressed relative to the element box so the source rect
-        // below stays correct.
+        // Intersect the requested window with the canvas box, keeping the
+        // offsets expressed relative to that box so the source rect below
+        // stays correct.
         const wanted = config.sampleRegionCss;
         const left = Math.max(bounds.x, wanted.x);
         const top = Math.max(bounds.y, wanted.y);
@@ -386,154 +249,116 @@ export async function installCompositedProbe(
       // a sub-rectangle of that box, so its source rect scales the same way.
       const scaleX = elementRect.width > 0 ? surface.width / elementRect.width : 0;
       const scaleY = elementRect.height > 0 ? surface.height / elementRect.height : 0;
-      const wantedX = bounds.insetLeft * scaleX;
-      const wantedY = bounds.insetTop * scaleY;
-      const wantedWidth = bounds.width * scaleX;
-      const wantedHeight = bounds.height * scaleY;
-
-      // Clamp the source rectangle into the backing store.
-      //
-      // The element box is written by the main thread when it accepts an epoch
-      // and the backing store is written by the worker that owns the
-      // OffscreenCanvas, so under load the two can describe different epochs
-      // for a window. `drawImage` with a source rectangle that reaches outside
-      // the source image is not an error and does not clip to the image: the
-      // out-of-range part is composited as transparent black, so a canvas that
-      // is presenting correctly reads back empty for exactly as long as the
-      // disagreement lasts. Sampling the overlap instead answers the question
-      // the invariants actually ask ("is there a document here") for those
-      // frames, and `sourceClamped` records that it happened.
-      let sourceX = Math.max(0, wantedX);
-      let sourceY = Math.max(0, wantedY);
-      let sourceWidth = Math.min(wantedX + wantedWidth, surface.width) - sourceX;
-      let sourceHeight = Math.min(wantedY + wantedHeight, surface.height) - sourceY;
-      const sourceClamped = sourceX !== wantedX || sourceY !== wantedY
-        || Math.abs(sourceWidth - wantedWidth) > 1e-6
-        || Math.abs(sourceHeight - wantedHeight) > 1e-6;
-      if (!(sourceWidth >= 1) || !(sourceHeight >= 1)) {
-        sourceX = 0;
-        sourceY = 0;
-        sourceWidth = 0;
-        sourceHeight = 0;
-      }
+      const sourceX = bounds.insetLeft * scaleX;
+      const sourceY = bounds.insetTop * scaleY;
+      const sourceWidth = bounds.width * scaleX;
+      const sourceHeight = bounds.height * scaleY;
 
       const base = {
         t: performance.now(),
-        surfaceId: surface.id,
-        frameToken: Number(surface.dataset.directSurfaceFrame || 0),
+        canvasPresent: true,
         visibleX: bounds.x,
         visibleY: bounds.y,
         cssWidth: bounds.width,
         cssHeight: bounds.height,
         backingWidth: surface.width,
         backingHeight: surface.height,
-        acceptedToken,
         completedResults,
-        elementWidth: elementRect.width,
-        elementHeight: elementRect.height,
-        sourceX,
-        sourceY,
-        sourceWidth,
-        sourceHeight,
-        sourceClamped,
-        // 300x150 is the HTML canvas default, and the worker never returns a
-        // slot it has presented into to that size, so this identifies a slot
-        // with no committed frame at all rather than a stale size. The element
-        // box has to be larger on both axes for the comparison to mean
-        // anything: a genuinely 300x150 pane would report the same numbers.
-        backingUncommitted: surface.width === 300 && surface.height === 150
-          && elementRect.width > 300 && elementRect.height > 150,
       };
 
       if (!(sourceWidth >= 1) || !(sourceHeight >= 1)) {
-        return { ...base, ...kNoPixels, readbackAttempts: 0 };
+        return {
+          ...base,
+          meanAlpha: 0,
+          meanLuma: 0,
+          coloredPixels: 0,
+          coloredCentroidX: -1,
+          coloredCentroidY: -1,
+          coloredWidth: 0,
+          coloredHeight: 0,
+          sampledPixels: 0,
+          drawOk: false,
+          attempts: 1,
+        };
       }
 
-      /** One read-back of the visible region, or null if `drawImage` threw. */
-      const readOnce = (): Omit<typeof kNoPixels, "drawOk"> | null => {
-        context.clearRect(0, 0, readback.width, readback.height);
-        try {
-          context.drawImage(
-            surface,
-            sourceX,
-            sourceY,
-            sourceWidth,
-            sourceHeight,
-            0,
-            0,
-            readback.width,
-            readback.height,
-          );
-        } catch {
-          return null;
-        }
+      context.clearRect(0, 0, readback.width, readback.height);
+      try {
+        context.drawImage(
+          surface,
+          sourceX,
+          sourceY,
+          sourceWidth,
+          sourceHeight,
+          0,
+          0,
+          readback.width,
+          readback.height,
+        );
+      } catch {
+        return {
+          ...base,
+          meanAlpha: 0,
+          meanLuma: 0,
+          coloredPixels: 0,
+          coloredCentroidX: -1,
+          coloredCentroidY: -1,
+          coloredWidth: 0,
+          coloredHeight: 0,
+          sampledPixels: 0,
+          drawOk: false,
+          attempts: 1,
+        };
+      }
 
-        const pixels = context.getImageData(0, 0, readback.width, readback.height).data;
-        const count = pixels.length / 4;
-        let alphaSum = 0;
-        let lumaSum = 0;
-        let colored = 0;
-        let coloredX = 0;
-        let coloredY = 0;
-        for (let index = 0; index < pixels.length; index += 4) {
-          const r = pixels[index];
-          const g = pixels[index + 1];
-          const b = pixels[index + 2];
-          const a = pixels[index + 3];
-          alphaSum += a;
-          lumaSum += 0.2126 * r + 0.7152 * g + 0.0722 * b;
-          if (a >= config.minColorAlpha) {
-            const spread = Math.max(r, g, b) - Math.min(r, g, b);
-            if (spread >= config.minColorSpread) {
-              colored += 1;
-              const pixel = index / 4;
-              coloredX += pixel % readback.width;
-              coloredY += Math.floor(pixel / readback.width);
-            }
+      const pixels = context.getImageData(0, 0, readback.width, readback.height).data;
+      const count = pixels.length / 4;
+      let alphaSum = 0;
+      let lumaSum = 0;
+      let colored = 0;
+      let coloredX = 0;
+      let coloredY = 0;
+      let minX = Number.POSITIVE_INFINITY;
+      let maxX = Number.NEGATIVE_INFINITY;
+      let minY = Number.POSITIVE_INFINITY;
+      let maxY = Number.NEGATIVE_INFINITY;
+      for (let index = 0; index < pixels.length; index += 4) {
+        const r = pixels[index];
+        const g = pixels[index + 1];
+        const b = pixels[index + 2];
+        const a = pixels[index + 3];
+        alphaSum += a;
+        lumaSum += 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        if (a >= config.minColorAlpha) {
+          const spread = Math.max(r, g, b) - Math.min(r, g, b);
+          if (spread >= config.minColorSpread) {
+            colored += 1;
+            const pixel = index / 4;
+            const x = pixel % readback.width;
+            const y = Math.floor(pixel / readback.width);
+            coloredX += x;
+            coloredY += y;
+            minX = Math.min(minX, x);
+            maxX = Math.max(maxX, x);
+            minY = Math.min(minY, y);
+            maxY = Math.max(maxY, y);
           }
         }
-        return {
-          meanAlpha: alphaSum / count,
-          meanLuma: lumaSum / count,
-          coloredPixels: colored,
-          coloredCentroidX: colored === 0 ? -1 : coloredX / colored,
-          coloredCentroidY: colored === 0 ? -1 : coloredY / colored,
-          sampledPixels: count,
-        };
+      }
+
+      return {
+        ...base,
+        meanAlpha: alphaSum / count,
+        meanLuma: lumaSum / count,
+        coloredPixels: colored,
+        coloredCentroidX: colored === 0 ? -1 : coloredX / colored,
+        coloredCentroidY: colored === 0 ? -1 : coloredY / colored,
+        coloredWidth: colored === 0 ? 0 : maxX - minX + 1,
+        coloredHeight: colored === 0 ? 0 : maxY - minY + 1,
+        sampledPixels: count,
+        drawOk: true,
+        attempts: 1,
       };
-
-      // Ask again, in this same task, while the answer is empty. See "WHY THE
-      // READ-BACK RETRIES" at the top of this file: on Gecko the first
-      // snapshot of a canvas the worker has just presented into can be
-      // transparent while the canvas is fine, and every observed instance
-      // recovered on the second attempt. A canvas that is really empty answers
-      // the same way every time, so the bound is a cost cap, not a tolerance.
-      let measurement = readOnce();
-      let attempts = 1;
-      while (
-        measurement !== null
-        && measurement.meanAlpha < config.retryBelowMeanAlpha
-        && attempts < config.readbackAttempts
-        // A slot the worker has never presented into has no frame to return,
-        // so every attempt answers the same way. Retrying it cannot rescue
-        // anything and would report the sample as a snapshot-availability
-        // problem, which it is not; `backingUncommitted` carries that verdict
-        // instead. This narrows what the retry is asked to explain, it does
-        // not widen any tolerance: the sample is still empty and still counts.
-        && !base.backingUncommitted
-      ) {
-        const again = readOnce();
-        attempts += 1;
-        if (again === null) {
-          break;
-        }
-        measurement = again;
-      }
-      if (measurement === null) {
-        return { ...base, ...kNoPixels, readbackAttempts: attempts };
-      }
-
-      return { ...base, ...measurement, drawOk: true, readbackAttempts: attempts };
     };
 
     const probe = {
@@ -542,28 +367,45 @@ export async function installCompositedProbe(
       drawFailures: 0,
       frames: 0,
       readbackRetries: 0,
-      readbackRetryRescues: 0,
+      readbackRescues: 0,
+      seenContent: false,
       start(): void {
         probe.samples.length = 0;
         probe.drawFailures = 0;
         probe.frames = 0;
         probe.readbackRetries = 0;
-        probe.readbackRetryRescues = 0;
+        probe.readbackRescues = 0;
+        probe.seenContent = false;
         probe.running = true;
         const tick = (): void => {
           if (!probe.running) {
             return;
           }
           probe.frames += 1;
-          const sample = sampleOnce();
+          let sample = sampleOnce();
+          let attempts = 1;
+          // Same-task retry for Gecko's empty first read of a just-presented
+          // WebGPU canvas. Only after the window has seen content: a blank
+          // boot must stay observable, and a genuinely cleared canvas answers
+          // empty on every attempt.
+          if (probe.seenContent && sample.drawOk && sample.meanAlpha < 40) {
+            probe.readbackRetries += 1;
+            while (attempts < 4) {
+              const again = sampleOnce();
+              attempts += 1;
+              if (again.drawOk && again.meanAlpha >= 40) {
+                sample = again;
+                probe.readbackRescues += 1;
+                break;
+              }
+            }
+          }
+          sample.attempts = attempts;
           if (!sample.drawOk) {
             probe.drawFailures += 1;
           }
-          if (sample.readbackAttempts > 1) {
-            probe.readbackRetries += 1;
-            if (sample.drawOk && sample.meanAlpha >= config.retryBelowMeanAlpha) {
-              probe.readbackRetryRescues += 1;
-            }
+          if (sample.drawOk && sample.coloredPixels > 0) {
+            probe.seenContent = true;
           }
           probe.samples.push(sample);
           requestAnimationFrame(tick);
@@ -602,7 +444,7 @@ export async function stopCompositedProbe(page: Page): Promise<CompositedProbeRe
       drawFailures: probe.drawFailures,
       frames: probe.frames,
       readbackRetries: probe.readbackRetries,
-      readbackRetryRescues: probe.readbackRetryRescues,
+      readbackRescues: probe.readbackRescues,
     };
   });
 }
@@ -680,263 +522,6 @@ export function blackFrameStats(
   };
 }
 
-/**
- * A compact description of the samples whose read-back stayed empty.
- *
- * The retry counters alone say THAT the browser kept answering empty; they
- * cannot say why, and the per-sample fields that can - the element box, the
- * backing store, and the source rectangle derived from them - are the ones the
- * "WHY THE READ-BACK RETRIES" comment above added for exactly this purpose.
- * Anything asserting on the counters should print this alongside them, so an
- * occurrence that does not reproduce locally is still attributable from a log.
- */
-export function describeEmptyReadbacks(
-  samples: readonly CompositedSample[],
-  meanAlphaThreshold = 40,
-  maxDetail = 4,
-): string {
-  // Retried samples are the read-back-availability story; never-committed slots
-  // are the no-frame-exists story. Both belong here, or a run that hits only
-  // the second one reports nothing at all.
-  const empty = samples
-    .map((sample, index) => ({ index, sample }))
-    .filter(({ sample }) =>
-      (sample.readbackAttempts > 1 || sample.backingUncommitted)
-      && sample.meanAlpha < meanAlphaThreshold
-    );
-  if (empty.length === 0) {
-    return "emptyReadbacks=0";
-  }
-  const distinct = (values: string[]): string[] => Array.from(new Set(values));
-  const detail = empty.slice(0, maxDetail).map(({ index, sample }) => ({
-    index,
-    attempts: sample.readbackAttempts,
-    backing: [sample.backingWidth, sample.backingHeight],
-    element: [Math.round(sample.elementWidth), Math.round(sample.elementHeight)],
-    source: [
-      Math.round(sample.sourceX),
-      Math.round(sample.sourceY),
-      Math.round(sample.sourceWidth),
-      Math.round(sample.sourceHeight),
-    ],
-    clamped: sample.sourceClamped,
-    uncommittedBacking: sample.backingUncommitted,
-    meanAlpha: Number(sample.meanAlpha.toFixed(2)),
-    surface: sample.surfaceId,
-    frameToken: sample.frameToken,
-  }));
-  return `emptyReadbacks=${empty.length}/${samples.length}`
-    + ` clamped=${empty.filter(({ sample }) => sample.sourceClamped).length}`
-    + ` uncommittedBacking=${empty.filter(({ sample }) => sample.backingUncommitted).length}`
-    + ` backingSizes=${
-      JSON.stringify(
-        distinct(empty.map(({ sample }) => `${sample.backingWidth}x${sample.backingHeight}`)),
-      )
-    }`
-    + ` elementSizes=${
-      JSON.stringify(
-        distinct(
-          empty.map(({ sample }) =>
-            `${Math.round(sample.elementWidth)}x${Math.round(sample.elementHeight)}`
-          ),
-        ),
-      )
-    }`
-    + ` surfaces=${JSON.stringify(distinct(empty.map(({ sample }) => sample.surfaceId)))}`
-    + ` frameTokens=[${empty[0].sample.frameToken}..${empty.at(-1)?.sample.frameToken}]`
-    + ` first=${JSON.stringify(detail)}`;
-}
-
-/** Where a window's never-committed-surface samples sit, relative to first commit. */
-export interface UncommittedSurfaceSamples {
-  /**
-   * Samples taken while the visible slot had not yet presented anything in this
-   * window: the promotion reached the DOM before the slot's first frame did.
-   * Bounded by construction, since a slot leaves this state permanently once it
-   * commits once.
-   */
-  beforeFirstCommit: number[];
-  /**
-   * Samples where a slot that HAD already presented in this window went back to
-   * an unconfigured backing store. Nothing in the presenter should be able to
-   * do that, so this list being non-empty is a defect rather than a startup
-   * artifact.
-   */
-  afterFirstCommit: number[];
-}
-
-/**
- * Split the never-committed-surface samples by whether that slot had already
- * presented earlier in the same window.
- *
- * The two halves are different claims. A slot promoted before its first frame
- * is latched is a startup ordering property of the two-canvas presenter. A slot
- * reverting to an unconfigured backing store after it has presented is not
- * reachable by that design at all.
- */
-export function uncommittedSurfaceSamples(
-  samples: readonly CompositedSample[],
-): UncommittedSurfaceSamples {
-  const committed = new Set<string>();
-  const beforeFirstCommit: number[] = [];
-  const afterFirstCommit: number[] = [];
-  samples.forEach((sample, index) => {
-    if (sample.surfaceId === "") {
-      return;
-    }
-    if (!sample.backingUncommitted) {
-      committed.add(sample.surfaceId);
-      return;
-    }
-    if (committed.has(sample.surfaceId)) {
-      afterFirstCommit.push(index);
-    } else {
-      beforeFirstCommit.push(index);
-    }
-  });
-  return { beforeFirstCommit, afterFirstCommit };
-}
-
-/** One epoch-atomicity violation: pixels and layout disagreed for a window. */
-export interface EpochAtomicityViolation {
-  /** Index of the sample where the presented epoch token changed. */
-  sampleIndex: number;
-  /** Epoch token before and after the change. */
-  previousFrameToken: number;
-  frameToken: number;
-  /** Visible CSS size at the token change (still the previous epoch's size). */
-  cssWidthAtChange: number;
-  cssHeightAtChange: number;
-  /** Index of the later sample where the CSS size finally caught up. */
-  cssCatchUpIndex: number;
-  /** Visible CSS size once it caught up. */
-  cssWidthAfter: number;
-  cssHeightAfter: number;
-  /** Frames the mismatch was on screen. */
-  mismatchedFrames: number;
-}
-
-/**
- * Find frames where the presented epoch and its CSS geometry were not applied
- * together.
- *
- * A direct WebGPU present commits worker-side immediately; the CSS layout that
- * matches those pixels is applied when the main thread accepts the epoch, one
- * or more task boundaries later. If the two are not atomic, there is a window
- * where epoch N+1 pixels are on screen under epoch N geometry, which is the
- * wrong-scale flicker.
- *
- * The decidable form: when the presented frame token changes at sample `i`,
- * the visible CSS size at `i` must already be the size that epoch presents. If
- * the CSS size instead changes at some LATER sample `j > i` with no further
- * token change in between, samples `i..j-1` showed the new epoch at the old
- * scale. A size change in the SAME sample as the token change is exactly the
- * atomic case and is not a violation.
- */
-export function epochAtomicityViolations(
-  samples: readonly CompositedSample[],
-  sizeToleranceCssPx = 0.5,
-): EpochAtomicityViolation[] {
-  const violations: EpochAtomicityViolation[] = [];
-  const sizeChanged = (a: CompositedSample, b: CompositedSample): boolean =>
-    Math.abs(a.cssWidth - b.cssWidth) > sizeToleranceCssPx
-    || Math.abs(a.cssHeight - b.cssHeight) > sizeToleranceCssPx;
-
-  for (let index = 1; index < samples.length; ++index) {
-    const previous = samples[index - 1];
-    const current = samples[index];
-    if (current.frameToken === previous.frameToken || current.frameToken === 0) {
-      continue;
-    }
-    if (sizeChanged(previous, current)) {
-      // Pixels and geometry moved in the same frame: atomic.
-      continue;
-    }
-    // The token moved without the geometry. That is only a violation if the
-    // geometry for this same epoch arrives later; if it never changes, this
-    // epoch genuinely presents at the same scale (a pan, or a re-raster at an
-    // unchanged zoom) and nothing was ever mismatched.
-    for (let ahead = index + 1; ahead < samples.length; ++ahead) {
-      const later = samples[ahead];
-      if (later.frameToken !== current.frameToken) {
-        break;
-      }
-      if (sizeChanged(current, later)) {
-        violations.push({
-          sampleIndex: index,
-          previousFrameToken: previous.frameToken,
-          frameToken: current.frameToken,
-          cssWidthAtChange: current.cssWidth,
-          cssHeightAtChange: current.cssHeight,
-          cssCatchUpIndex: ahead,
-          cssWidthAfter: later.cssWidth,
-          cssHeightAfter: later.cssHeight,
-          mismatchedFrames: ahead - index,
-        });
-        break;
-      }
-    }
-  }
-  return violations;
-}
-
-/** One epoch that presented on the same DOM canvas as the epoch before it. */
-export interface SurfaceAlternationViolation {
-  /** Index of the sample where the presented epoch token changed. */
-  sampleIndex: number;
-  /** Epoch token before and after the change. */
-  previousFrameToken: number;
-  frameToken: number;
-  /** The DOM canvas both epochs presented on. */
-  surfaceId: string;
-}
-
-/**
- * Find consecutive epochs that presented on the same DOM canvas.
- *
- * This is the pixel-side half of the wrong-scale flicker, expressed as
- * something the DOM can decide.
- *
- * A direct WebGPU present commits worker-side, immediately, into whichever
- * canvas the worker holds. The CSS layout matching those pixels is applied
- * only when the main thread accepts the epoch, a task boundary later. If the
- * worker presents into the canvas that is currently on screen, every epoch of
- * a gesture has a window where epoch N+1 pixels are composited under epoch N
- * geometry: the document flickers between two scales, and no attribute on the
- * page ever disagrees, because the DOM is self-consistently still epoch N.
- *
- * With two canvases presented into alternately, the epoch being drawn is never
- * the epoch being displayed, so acceptance can flip visibility and geometry in
- * one style flush. The observable consequence, and the assertion here: the
- * visible surface must change canvas on every epoch change.
- *
- * Samples with no visible surface, and repeats of the same epoch, are skipped;
- * only a token change is evidence about where the *next* present landed.
- */
-export function surfaceAlternationViolations(
-  samples: readonly CompositedSample[],
-): SurfaceAlternationViolation[] {
-  const violations: SurfaceAlternationViolation[] = [];
-  let previous: CompositedSample | undefined;
-  for (const sample of samples) {
-    if (sample.surfaceId === "" || sample.frameToken === 0) {
-      continue;
-    }
-    if (previous !== undefined && sample.frameToken !== previous.frameToken) {
-      if (sample.surfaceId === previous.surfaceId) {
-        violations.push({
-          sampleIndex: samples.indexOf(sample),
-          previousFrameToken: previous.frameToken,
-          frameToken: sample.frameToken,
-          surfaceId: sample.surfaceId,
-        });
-      }
-    }
-    previous = sample;
-  }
-  return violations;
-}
-
 /** Distinct backing-store sizes observed, in order of first appearance. */
 export function backingSizeTransitions(
   samples: readonly CompositedSample[],
@@ -962,40 +547,6 @@ export function backingSizeTransitions(
   return transitions;
 }
 
-/**
- * Fraction of sampled frames in which the visible region's origin moved.
- *
- * This is the pan observable. A pan that only updates when the worker
- * publishes a new epoch moves in a handful of frames out of hundreds; a pan
- * that tracks the gesture moves in most of them.
- */
-export function motionFraction(
-  samples: readonly CompositedSample[],
-  minDeltaCssPx = 0.25,
-): { movedSamples: number; comparedSamples: number; fraction: number } {
-  let moved = 0;
-  let compared = 0;
-  for (let index = 1; index < samples.length; ++index) {
-    const previous = samples[index - 1];
-    const current = samples[index];
-    if (previous.surfaceId === "" || current.surfaceId === "") {
-      continue;
-    }
-    compared += 1;
-    if (
-      Math.abs(current.visibleX - previous.visibleX) > minDeltaCssPx
-      || Math.abs(current.visibleY - previous.visibleY) > minDeltaCssPx
-    ) {
-      moved += 1;
-    }
-  }
-  return {
-    movedSamples: moved,
-    comparedSamples: compared,
-    fraction: compared === 0 ? 0 : moved / compared,
-  };
-}
-
 /** One frame in which the presented content moved against the gesture. */
 export interface DragRegression {
   /** Index of the sample whose content position regressed. */
@@ -1006,9 +557,6 @@ export interface DragRegression {
   /** Pointer movement over the same interval, CSS px. */
   pointerDx: number;
   pointerDy: number;
-  /** Presented epoch before and after. */
-  previousFrameToken: number;
-  frameToken: number;
 }
 
 /**
@@ -1076,8 +624,6 @@ export function dragRegressions(
               presentedDy,
               pointerDx,
               pointerDy,
-              previousFrameToken: previous.frameToken,
-              frameToken: sample.frameToken,
             });
           }
         }
@@ -1091,9 +637,9 @@ export function dragRegressions(
 /**
  * Fraction of sampled frames in which the presented content's centroid moved.
  *
- * The drag counterpart of `motionFraction`, which measures the surface's own
- * origin and therefore cannot see an object moving inside a stationary
- * surface.
+ * With one canvas this is the motion observable for every gesture, pan and
+ * zoom included: the canvas element fills the window and never moves, so the
+ * only place motion is visible is in the pixels.
  */
 export function contentMotionFraction(
   samples: readonly CompositedSample[],
@@ -1125,32 +671,62 @@ export function contentMotionFraction(
 }
 
 /**
- * Read the visible width of the currently visible worker surface, without the
- * probe running.
+ * Read the width of the document's chromatic content, in read-back pixels,
+ * without the probe running.
  *
- * The surface element spans its cap-sized backing store, so the element box
- * barely changes with zoom. The zoom observable is the VISIBLE width: the
- * element box minus its clip-path insets, which tracks the content raster.
+ * The single-canvas replacement for the old visible-surface width. There is no
+ * element whose box tracks the zoom any more: the canvas is the window. What
+ * still tracks it is the content, so a zoom is measured as how far apart the
+ * document's own chromatic pixels are.
+ *
+ * Reads through the same `drawImage` path and the same chromatic-pixel
+ * predicate the probe uses, so a ratio taken before and after a gesture is
+ * directly comparable to `CompositedSample.coloredWidth`.
  */
-export async function readVisibleSurfaceWidth(page: Page): Promise<number> {
-  return page.evaluate(() => {
-    const el = document.querySelector<HTMLCanvasElement>(
-      "canvas[data-direct-surface-visible=\"true\"]",
-    );
-    if (el === null) {
+export async function readContentWidth(
+  page: Page,
+  options: { sampleWidth?: number; sampleHeight?: number; minColorAlpha?: number; minColorSpread?: number } = {},
+): Promise<number> {
+  const config = {
+    sampleWidth: options.sampleWidth ?? 256,
+    sampleHeight: options.sampleHeight ?? 192,
+    minColorAlpha: options.minColorAlpha ?? 16,
+    minColorSpread: options.minColorSpread ?? 12,
+  };
+  return page.evaluate((config) => {
+    const surface = document.querySelector<HTMLCanvasElement>("canvas#canvas");
+    if (surface === null) {
       return 0;
     }
-    const rect = el.getBoundingClientRect();
-    const match = (getComputedStyle(el).clipPath || "").match(/inset\(([^)]*)\)/);
-    if (match === null) {
-      return rect.width;
+    const readback = document.createElement("canvas");
+    readback.width = config.sampleWidth;
+    readback.height = config.sampleHeight;
+    const context = readback.getContext("2d", { willReadFrequently: true });
+    if (context === null) {
+      return 0;
     }
-    const parts = match[1].trim().split(/\s+/).map((part) => parseFloat(part));
-    if (parts.length === 0 || parts.some((value) => !Number.isFinite(value))) {
-      return rect.width;
+    try {
+      context.drawImage(surface, 0, 0, readback.width, readback.height);
+    } catch {
+      return 0;
     }
-    const right = parts.length >= 2 ? parts[1] : parts[0];
-    const left = parts.length >= 4 ? parts[3] : right;
-    return rect.width - left - right;
-  });
+    const pixels = context.getImageData(0, 0, readback.width, readback.height).data;
+    let minX = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    for (let index = 0; index < pixels.length; index += 4) {
+      if (pixels[index + 3] < config.minColorAlpha) {
+        continue;
+      }
+      const r = pixels[index];
+      const g = pixels[index + 1];
+      const b = pixels[index + 2];
+      if (Math.max(r, g, b) - Math.min(r, g, b) < config.minColorSpread) {
+        continue;
+      }
+      const x = (index / 4) % readback.width;
+      minX = Math.min(minX, x);
+      maxX = Math.max(maxX, x);
+    }
+    return maxX < minX ? 0 : maxX - minX + 1;
+  }, config);
 }

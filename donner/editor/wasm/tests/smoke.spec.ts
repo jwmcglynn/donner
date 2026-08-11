@@ -12,7 +12,9 @@ import {
 declare global {
   interface Window {
     __donnerBackend?: string;
+    __donnerWholeAppWorker?: boolean;
     __donnerCanStartWasm?: boolean;
+    __donnerFirstFramePresented?: boolean;
     __donnerLastScrollEvent?: {
       zoomModifierHeld?: boolean;
       yoffset?: number;
@@ -29,10 +31,8 @@ declare global {
       renderFrameMs: number;
       buildPreviewMs: number;
       finalSnapshotMs: number;
-      presentMs: number;
       diagnosticsMs: number;
       pollDelayMs: number;
-      taskBoundaryMs: number;
       wakeToPollMs: number;
       firstFrameDrawMs: number;
       firstFramePlanningMs: number;
@@ -44,25 +44,10 @@ declare global {
       readbackCount: number;
       readbackPollIterations: number;
       readbackWaitStrategy: string;
-      directSurfaceFrames: number;
-    };
-    __donnerWorkerRuntimeStats?: {
-      ready: boolean;
-      initializationMs: number;
-      maskPipelineMs: number;
-      initializationCount: number;
-      workerDeviceCreations: number;
-      readyAtMs: number;
     };
     __donnerActiveSampleStats?: {
       sampleId: string;
       activatedAtMs: number;
-    };
-    __donnerAcceptedPresentation?: {
-      kind: "geode";
-      token: number;
-      presentedAtMs: number;
-      selectionChromeBaked?: boolean;
     };
     __donnerWgpuReadbackStats?: {
       frame: number;
@@ -103,17 +88,6 @@ declare global {
       active: boolean;
       resultReady: boolean;
     };
-    __donnerWorkerSurfaceDiagnostic?: {
-      frameToken: number;
-      samples: number;
-      coloredPixels: number;
-      nonBlackPixels: number;
-      maxChannel: number;
-      textStyleBackgroundPixels: number;
-      textStyleGlyphPixels: number;
-      acceptedAtMs: number;
-      publishedAtMs: number;
-    };
     __donnerLayerThumbnailStats?: {
       rowCount: number;
       renderedCount: number;
@@ -153,12 +127,10 @@ interface WgpuCarouselThumbnailStats extends WgpuReadbackColorStats {
 interface OpenEditorOptions {
   wgpuReadbackStats?: boolean;
   postInitializationDwellMs?: number;
-  workerSurfaceDiagnostic?: boolean;
-  workerSurfaceMode?: "direct-surface" | "bitmap-bridge";
 }
 
 const kFatalRuntimePattern =
-  /Aborted|Assertion failed|RuntimeError|Pthread .* sent an error|getJsObject|No available adapters|WebGPU on Linux requires|WebGPU adapter (?:request )?(?:failed|unavailable)|Donner (?:worker surface|bitmap bridge|Wasm renderer pthread wake rejected)/i;
+  /Aborted|Assertion failed|RuntimeError|Pthread .* sent an error|getJsObject|No available adapters|WebGPU on Linux requires|WebGPU adapter (?:request )?(?:failed|unavailable)|Wasm renderer pthread wake rejected/i;
 const kSourcePaneWidth = 560;
 const kRightPaneWidth = 420;
 const kWelcomeContentMaxWidth = 920;
@@ -192,38 +164,12 @@ const kLinuxGeodeLaunchArgs = [
 // browser canvas must match that window size for the regions to land on the
 // document render and the layer thumbnails.
 
-// The presented surface element spans its cap-sized canvas backing store, so
-// its bounding box includes a clipped, transparent surplus band on the right
-// and bottom. Document-space geometry must map through the VISIBLE box: the
-// element box minus the clip-path insets.
-async function visibleSurfaceBounds(
-  locator: import("@playwright/test").Locator,
-): Promise<{ x: number; y: number; width: number; height: number } | null> {
-  return locator.evaluate((el) => {
-    const rect = el.getBoundingClientRect();
-    const clip = getComputedStyle(el).clipPath || "";
-    const inset = clip.match(/inset\(([^)]*)\)/);
-    if (!inset) {
-      return { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
-    }
-    // Engines serialize the inset() shorthand with 1-4 values; expand per the
-    // CSS shorthand rules (top, right, bottom, left).
-    const v = inset[1].trim().split(/\s+/).map((part) => parseFloat(part));
-    if (v.length === 0 || v.some((n) => !Number.isFinite(n))) {
-      return { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
-    }
-    const top = v[0];
-    const right = v.length >= 2 ? v[1] : v[0];
-    const bottom = v.length >= 3 ? v[2] : v[0];
-    const left = v.length >= 4 ? v[3] : right;
-    return {
-      x: rect.left + left,
-      y: rect.top + top,
-      width: rect.width - left - right,
-      height: rect.height - top - bottom,
-    };
-  });
-}
+// Document geometry inside `#canvas` is calibrated against the native editor's
+// 1600x900 layout (source pane 560px, right pane 420px), so pointer targets
+// below are fixed offsets from the canvas box. Since the single-canvas architecture there is no
+// separate document element to measure: Geode places the document inside the
+// single canvas's WebGPU frame.
+const kBlueRectOffset = { x: 408, y: 353 };
 
 test.use({
   viewport: { width: 1600, height: 900 },
@@ -267,11 +213,8 @@ async function readWebGpuDiagnostics(page: Page) {
 }
 
 async function readRenderPaneColorStats(page: Page): Promise<CanvasColorStats> {
-  const { wgpuStats, directSurface } = await page.evaluate(() => ({
-    wgpuStats: window.__donnerWgpuReadbackStats?.renderPane,
-    directSurface: window.__donnerWorkerStats?.readbackWaitStrategy === "direct-surface",
-  }));
-  if (wgpuStats && !directSurface) {
+  const wgpuStats = await page.evaluate(() => window.__donnerWgpuReadbackStats?.renderPane);
+  if (wgpuStats) {
     return { ...wgpuStats, region: { x: 0, y: 0, width: 0, height: 0 } };
   }
 
@@ -315,17 +258,11 @@ async function readLayerPreviewColorStats(page: Page): Promise<CanvasColorStats>
 async function openEditor(page: Page, options: OpenEditorOptions = {}): Promise<string[]> {
   const baseUrl = process.env.DONNER_WASM_BASE_URL || "http://127.0.0.1:8000";
   const url = new URL(baseUrl);
-  // Surface diagnostics are intentionally opt-in: even asynchronous readback
+  // Readback diagnostics are intentionally opt-in: even asynchronous readback
   // copies and scans the framebuffer, so production interaction tests should
   // not include that debug-only work unless they are explicitly guarding it.
   if (options.wgpuReadbackStats === true) {
     url.searchParams.set("wgpuReadbackStats", "1");
-  }
-  if (options.workerSurfaceDiagnostic === true) {
-    url.searchParams.set("workerSurfaceDiagnostic", "1");
-  }
-  if (options.workerSurfaceMode) {
-    url.searchParams.set("workerSurface", options.workerSurfaceMode);
   }
   const fatalMessages: string[] = [];
 
@@ -362,9 +299,19 @@ async function openEditor(page: Page, options: OpenEditorOptions = {}): Promise<
   test.skip(!hasWebGpu, "Browser does not expose navigator.gpu");
 
   await expect(page.locator("canvas#canvas")).toBeVisible();
+  // The single canvas is the whole application, so "the editor is up" is one
+  // signal: Geode presented its first frame into it.
+  await expect
+    .poll(async () => page.evaluate(() => window.__donnerFirstFramePresented === true), {
+      message: "expected Geode to present the editor's first frame",
+      timeout: 20000,
+      intervals: [16, 25, 50, 100],
+    })
+    .toBe(true);
   await expect(page.locator("#status")).toBeHidden({ timeout: 20000 });
   const selectedBackend = await page.evaluate(() => window.__donnerBackend);
   expect(selectedBackend).toBe(kBackend);
+  expect(await page.evaluate(() => window.__donnerWholeAppWorker)).toBe(true);
   await page.waitForTimeout(options.postInitializationDwellMs ?? 2000);
 
   return fatalMessages;
@@ -379,33 +326,12 @@ async function requestWgpuDiagnostic(page: Page): Promise<number> {
   });
 }
 
-// Restore the page scroll origin and report where it ended up.
-//
-// The worker surface element spans its cap-sized backing store, which is larger
-// than the editor viewport, so the page has a scrollable overflow area it never
-// has in normal use (the editor sets `overflow: hidden` and never scrolls). Any
-// Playwright *element* screenshot - which is what `readElementColorStats` takes
-// - first scrolls that element into view, leaving the page scrolled by the
-// overflow amount. Every viewport-relative coordinate measured before such a
-// screenshot (pointer targets, `page.screenshot` clips) is stale afterwards, so
-// tests must return to the origin and re-measure rather than mix pre-scroll and
-// post-scroll geometry.
-async function restoreViewportScrollOrigin(page: Page): Promise<{ x: number; y: number }> {
-  return page.evaluate(() => {
-    window.scrollTo(0, 0);
-    document.documentElement.scrollLeft = 0;
-    document.documentElement.scrollTop = 0;
-    return { x: window.scrollX, y: window.scrollY };
-  });
-}
-
 // A landed worker result is not a settled presentation. Loading a sample can
-// queue follow-up renders (the debounced canvas-size commit, an epoch retry,
-// the post-drag settled-selection refresh), and a drag release always queues
-// one settle render behind the frame the pointer already produced. Tests that
-// assert "no further renders happened" - or that probe a diagnostic which only
-// a *specific* accepted epoch can answer - must start from quiescence, not
-// from "one result landed".
+// queue follow-up renders (the debounced canvas-size commit, the post-drag
+// settled-selection refresh), and a drag release always queues one settle
+// render behind the frame the pointer already produced. Tests that assert "no
+// further renders happened" must start from quiescence, not from "one result
+// landed".
 //
 // Quiescence here means: the worker is idle and `completedResults` has not
 // moved for a continuous settle window. Returns the settled result count.
@@ -414,8 +340,8 @@ async function waitForPresentationQuiescence(
   options: { message: string; settleMs?: number; timeout?: number },
 ): Promise<number> {
   // The settle window has to outlast the longest bounded follow-up the renderer
-  // can schedule without the worker looking busy: the 120 ms canvas-size commit
-  // debounce and the direct-surface retry backoff, which tops out at 1 s.
+  // can schedule without the worker looking busy, which is the 120 ms
+  // canvas-size commit debounce.
   const settleMs = options.settleMs ?? scaledMs(400);
   const deadline = Date.now() + (options.timeout ?? scaledMs(6000));
   let lastCount = -1;
@@ -461,7 +387,7 @@ test("loading handoff publishes ordered startup timings", async ({ page }) => {
     bootstrapStartedAtMs: window.__donnerBootstrapStartedAtMs || 0,
     runtimeInitializedAtMs: window.__donnerRuntimeInitializedAtMs || 0,
     firstFramePresentedAtMs: window.__donnerFirstFramePresentedAtMs || 0,
-    workerRuntime: window.__donnerWorkerRuntimeStats,
+    firstFramePresented: window.__donnerFirstFramePresented === true,
     editorRevealedAtMs: window.__donnerEditorRevealedAtMs || 0,
     loadingScreenHiddenAtMs: window.__donnerLoadingScreenHiddenAtMs || 0,
     wgpuReadbackStats: window.__donnerWgpuReadbackStats || null,
@@ -470,21 +396,17 @@ test("loading handoff publishes ordered startup timings", async ({ page }) => {
     readbackCaptureFailures: window.__donnerWgpuReadbackCaptureFailures || 0,
     headlessDeviceCreations: window.__donnerHeadlessDeviceCreations ?? -1,
   }));
+  expect(startup.firstFramePresented).toBe(true);
   expect(startup.bootstrapStartedAtMs).toBeGreaterThan(0);
   expect(startup.runtimeInitializedAtMs).toBeGreaterThanOrEqual(startup.bootstrapStartedAtMs);
   expect(startup.firstFramePresentedAtMs).toBeGreaterThanOrEqual(startup.runtimeInitializedAtMs);
-  if (kBackend === "geode") {
-    expect(startup.workerRuntime).toMatchObject({ ready: true, initializationCount: 1 });
-    expect(startup.workerRuntime?.workerDeviceCreations).toBeGreaterThanOrEqual(1);
-    expect(startup.headlessDeviceCreations).toBe(startup.workerRuntime?.workerDeviceCreations);
-    expect(startup.workerRuntime?.readyAtMs).toBeGreaterThanOrEqual(startup.bootstrapStartedAtMs);
-    expect(startup.editorRevealedAtMs).toBeGreaterThanOrEqual(
-      Math.max(startup.firstFramePresentedAtMs, startup.workerRuntime?.readyAtMs || 0),
-    );
-  } else {
-    expect(startup.editorRevealedAtMs).toBeGreaterThanOrEqual(startup.firstFramePresentedAtMs);
-  }
+  // The loading screen may only retire once Geode has drawn into the canvas the
+  // page handed it, so the reveal is ordered strictly after the first frame.
+  expect(startup.editorRevealedAtMs).toBeGreaterThanOrEqual(startup.firstFramePresentedAtMs);
   expect(startup.loadingScreenHiddenAtMs).toBeGreaterThanOrEqual(startup.editorRevealedAtMs);
+  if (kBackend === "geode") {
+    expect(startup.headlessDeviceCreations).toBeGreaterThanOrEqual(1);
+  }
   console.log(`wasm-startup=${JSON.stringify(startup)}`);
   console.log(`wasm-startup-device-logs=${JSON.stringify(startupDeviceLogs)}`);
   expect(fatalMessages).toEqual([]);
@@ -505,7 +427,6 @@ test("welcome picker paints before asynchronously rendering real SVG thumbnails"
   });
   const initialDeviceState = await page.evaluate(() => ({
     headlessDeviceCreations: window.__donnerHeadlessDeviceCreations || 0,
-    workerDeviceCreations: window.__donnerWorkerRuntimeStats?.workerDeviceCreations || 0,
   }));
 
   await expect
@@ -534,7 +455,6 @@ test("welcome picker paints before asynchronously rendering real SVG thumbnails"
   const settled = await page.evaluate(() => ({
     deviceState: {
       headlessDeviceCreations: window.__donnerHeadlessDeviceCreations || 0,
-      workerDeviceCreations: window.__donnerWorkerRuntimeStats?.workerDeviceCreations || 0,
     },
     frames: window.__donnerMainLoopRenderedFrames || 0,
     thumbnails: window.__donnerSampleThumbnailStats,
@@ -675,7 +595,7 @@ test("welcome picker paints before asynchronously rendering real SVG thumbnails"
 });
 
 test("WGPU diagnostics do not block the first carousel interaction", async ({ page }) => {
-  test.skip(kBackend !== "geode", "WGPU surface readback diagnostics are Geode-specific");
+  test.skip(kBackend !== "geode", "WGPU readback diagnostics are Geode-specific");
   const fatalMessages = await openEditor(page, {
     wgpuReadbackStats: true,
     postInitializationDwellMs: 0,
@@ -854,31 +774,13 @@ for (
       return;
     }
 
-    const workerRuntimeBeforeClick = await page.evaluate(
-      () => window.__donnerWorkerRuntimeStats,
+    const deviceCreationsBeforeClick = await page.evaluate(
+      () => window.__donnerHeadlessDeviceCreations ?? -1,
     );
-    if (kBackend === "geode") {
-      expect(workerRuntimeBeforeClick).toMatchObject({
-        ready: true,
-        initializationCount: 1,
-      });
-    }
-
     const beforeSample = await page.evaluate(
       () => window.__donnerWorkerStats?.completedResults || 0,
     );
-    const beforeSurfaceFrame = kBackend === "geode"
-      ? await page.evaluate(() =>
-        Math.max(
-          ...["donner-document-canvas", "donner-document-canvas-back"].map((id) =>
-            Number(document.getElementById(id)?.getAttribute("data-direct-surface-frame") || 0)
-          ),
-        )
-      )
-      : 0;
-    const beforeAcceptedPresentation = await page.evaluate(
-      () => window.__donnerAcceptedPresentation,
-    );
+    const beforeFrames = await page.evaluate(() => window.__donnerMainLoopRenderedFrames || 0);
     const clickStartedAt = await page.evaluate(() => performance.now());
     await page.mouse.click(bounds.x + bounds.width * sample.xFraction, bounds.y + sample.y);
     const carouselDeadlineMs = scaledMs(300);
@@ -892,10 +794,14 @@ for (
       presentedMs?: number;
     } = {};
     let completedWorkerStats: Window["__donnerWorkerStats"] | undefined;
+    // Presentation is now one canvas frame: the sample is on screen once the
+    // document render lands AND the app thread has drawn a frame carrying it.
+    // `presentedMs` is read on the page clock at that observation.
     const presentationReady = async () => {
       const state = await page.evaluate(() => ({
-        acceptedPresentation: window.__donnerAcceptedPresentation,
         activeSample: window.__donnerActiveSampleStats,
+        frames: window.__donnerMainLoopRenderedFrames || 0,
+        nowMs: performance.now(),
         worker: window.__donnerWorkerStats,
       }));
       if (state.activeSample?.sampleId === sample.id) {
@@ -910,26 +816,17 @@ for (
         phaseTimings.dequeuedMs = phaseTimings.startedMs - state.worker.dequeueToStartMs;
         phaseTimings.submittedMs = phaseTimings.dequeuedMs - state.worker.queueWaitMs;
       }
-      if (state.activeSample?.sampleId !== sample.id || completedResults <= beforeSample) {
-        return false;
-      }
-      const acceptedPresentation = state.acceptedPresentation;
-      const acceptedTokenAdvanced = acceptedPresentation
-        && acceptedPresentation.token > (beforeAcceptedPresentation?.token || 0);
-      const visibleSurface = page.locator("canvas[data-direct-surface-visible=\"true\"]");
-      const pixelsPresented = acceptedPresentation?.kind === "geode"
-        && acceptedTokenAdvanced
-        && await visibleSurface.count() === 1
-        && Number(await visibleSurface.getAttribute("data-direct-surface-frame"))
-          > beforeSurfaceFrame;
-      if (pixelsPresented && acceptedPresentation) {
-        phaseTimings.presentedMs = acceptedPresentation.presentedAtMs - clickStartedAt;
+      const pixelsPresented = state.activeSample?.sampleId === sample.id
+        && completedResults > beforeSample
+        && state.frames > beforeFrames;
+      if (pixelsPresented) {
+        phaseTimings.presentedMs ??= state.nowMs - clickStartedAt;
       }
       return pixelsPresented;
     };
     try {
       await expect.poll(presentationReady, {
-        message: `expected ${sample.name} to publish a matching accepted presentation epoch`,
+        message: `expected ${sample.name} to present a document frame in the editor canvas`,
         timeout: scaledMs(3000),
         intervals: [8, 16, 25, 50],
       }).toBe(true);
@@ -937,195 +834,18 @@ for (
       console.log(
         `carousel-presentation sample=${sample.id} timings=${
           JSON.stringify(phaseTimings)
-        } runtime=${JSON.stringify(workerRuntimeBeforeClick)} worker=${
-          JSON.stringify(completedWorkerStats)
-        }`,
+        } worker=${JSON.stringify(completedWorkerStats)}`,
       );
     }
     expect(phaseTimings.presentedMs).toBeLessThan(carouselDeadlineMs);
     if (kBackend === "geode") {
       expect(await page.evaluate(() => window.__donnerHeadlessDeviceCreations)).toBe(
-        workerRuntimeBeforeClick?.workerDeviceCreations,
+        deviceCreationsBeforeClick,
       );
     }
     expect(fatalMessages).toEqual([]);
   });
 }
-
-test("carousel never exposes the placeholder viewport for Donner Splash", async ({ page }) => {
-  const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
-  const canvas = page.locator("canvas#canvas");
-  const bounds = await canvas.boundingBox();
-  expect(bounds).not.toBeNull();
-  if (bounds === null) {
-    return;
-  }
-
-  await page.evaluate(() => {
-    type VisibleSurfaceSample = {
-      backingHeight: number;
-      backingWidth: number;
-      boxHeight: number;
-      boxWidth: number;
-      frame: number;
-      rectHeight: number;
-      rectWidth: number;
-      slot: string;
-    };
-    const samples: VisibleSurfaceSample[] = [];
-    const capture = () => {
-      for (const id of ["donner-document-canvas", "donner-document-canvas-back"]) {
-        const surface = document.getElementById(id) as HTMLCanvasElement | null;
-        if (surface?.dataset.directSurfaceVisible !== "true") {
-          continue;
-        }
-        const rect = surface.getBoundingClientRect();
-        // The surface is configured once at a size cap, so the backing store
-        // and the element box both span that cap and carry no document aspect
-        // ratio at all. The presented extent is the cap minus the clip-path
-        // insets that hide the surplus band, which is what `rect*` records.
-        //
-        // The element box and its clip insets are both written by the main
-        // thread in the same task, so that pair is always one consistent
-        // placement. The backing store is NOT part of that pair: the surface is
-        // a transferred OffscreenCanvas, so `canvas.width`/`height` here report
-        // the worker's last COMMITTED size, which reaches the main thread
-        // independently of the CSS the presenter applies when it accepts an
-        // epoch. It is recorded raw, for diagnosis, and never combined with the
-        // CSS insets - see the assertions below for why.
-        const clip = getComputedStyle(surface).clipPath || "";
-        const inset = clip.match(/inset\(([^)]*)\)/);
-        const parts = inset
-          ? inset[1].trim().split(/\s+/).map((part) => parseFloat(part))
-          : [];
-        const usable = parts.length > 0 && parts.every((n) => Number.isFinite(n));
-        const clipTop = usable ? parts[0] : 0;
-        const clipRight = usable ? (parts.length >= 2 ? parts[1] : parts[0]) : 0;
-        const clipBottom = usable ? (parts.length >= 3 ? parts[2] : parts[0]) : 0;
-        const clipLeft = usable ? (parts.length >= 4 ? parts[3] : clipRight) : 0;
-        const sample = {
-          backingHeight: surface.height,
-          backingWidth: surface.width,
-          boxHeight: rect.height,
-          boxWidth: rect.width,
-          frame: Number(surface.dataset.directSurfaceFrame || 0),
-          rectHeight: rect.height - clipTop - clipBottom,
-          rectWidth: rect.width - clipLeft - clipRight,
-          slot: id,
-        };
-        const previous = samples.at(-1);
-        if (JSON.stringify(previous) !== JSON.stringify(sample)) {
-          samples.push(sample);
-        }
-      }
-      (window as Window & { __donnerVisibleSurfaceSamples?: VisibleSurfaceSample[] })
-        .__donnerVisibleSurfaceSamples = samples;
-    };
-    const observer = new MutationObserver(capture);
-    for (const id of ["donner-document-canvas", "donner-document-canvas-back"]) {
-      const surface = document.getElementById(id);
-      if (surface) {
-        observer.observe(surface, { attributes: true });
-      }
-    }
-    (window as Window & { __donnerVisibleSurfaceObserver?: MutationObserver })
-      .__donnerVisibleSurfaceObserver = observer;
-    capture();
-  });
-
-  const beforeFrame = await page.evaluate(() =>
-    Math.max(
-      ...["donner-document-canvas", "donner-document-canvas-back"].map((id) =>
-        Number(document.getElementById(id)?.getAttribute("data-direct-surface-frame") || 0)
-      ),
-    )
-  );
-  await page.mouse.click(bounds.x + bounds.width * 0.24, bounds.y + 282);
-  await expect(canvas).toHaveAttribute("data-active-sample-id", "donner-splash");
-  await expect
-    .poll(async () =>
-      Number(
-        await page.locator("canvas[data-direct-surface-visible=\"true\"]")
-          .getAttribute("data-direct-surface-frame") || 0,
-      ), {
-      message: "expected Donner Splash to present a document surface",
-      timeout: scaledMs(5000),
-      intervals: [8, 16, 25, 50],
-    })
-    .toBeGreaterThan(beforeFrame);
-
-  const visibleSamples = await page.evaluate(() => {
-    const state = window as Window & {
-      __donnerVisibleSurfaceObserver?: MutationObserver;
-      __donnerVisibleSurfaceSamples?: Array<{
-        backingHeight: number;
-        backingWidth: number;
-        boxHeight: number;
-        boxWidth: number;
-        frame: number;
-        rectHeight: number;
-        rectWidth: number;
-        slot: string;
-      }>;
-    };
-    state.__donnerVisibleSurfaceObserver?.disconnect();
-    return state.__donnerVisibleSurfaceSamples || [];
-  });
-
-  expect(visibleSamples.length).toBeGreaterThan(0);
-  // The presented extent is the element box minus its clip-path insets. Both
-  // are main-thread state written in one task, so this is the one quantity that
-  // is always a single consistent placement, and it is what the user actually
-  // sees. EVERY surface the carousel makes visible must already carry the
-  // Splash artboard aspect - the first one included, which is the placeholder
-  // viewport this guards against.
-  for (const [index, sample] of visibleSamples.entries()) {
-    expect(
-      sample.rectWidth / sample.rectHeight,
-      `visible surface sample ${index} presented a non-Splash extent:`
-        + ` ${JSON.stringify(sample)}`,
-    ).toBeCloseTo(892 / 512, 2);
-  }
-  // The backing store is a separate, worker-owned observable and cannot be
-  // combined with the CSS insets at a DOM-mutation instant. The surface is a
-  // transferred OffscreenCanvas: `canvas.width`/`height` on the main thread
-  // report the worker's last committed size, which propagates independently of
-  // the placement the presenter applies when it accepts an epoch. Measured on a
-  // slow runner: the first accepted Splash placement (element box 1387x1117,
-  // `inset(0 494.5px 604.5px 0)`) was already applied while the backing store
-  // still read the unconfigured canvas default of 300x150, and 300x150 measured
-  // through those insets is a 2.8049 aspect - an extent no frame was ever
-  // presented at, produced entirely by mixing two threads' instants.
-  //
-  // What the backing store CAN say is asserted here instead, once its size has
-  // propagated: it must be proportional to the element box, so the presented
-  // extent is not a placeholder-resolution surface stretched over it.
-  await expect
-    .poll(
-      async () =>
-        page.evaluate(() => {
-          const surface = document.querySelector<HTMLCanvasElement>(
-            "canvas[data-direct-surface-visible=\"true\"]",
-          );
-          if (surface === null || !(surface.height > 0)) {
-            return null;
-          }
-          const rect = surface.getBoundingClientRect();
-          if (!(rect.width > 0) || !(rect.height > 0)) {
-            return null;
-          }
-          return (surface.width / surface.height) / (rect.width / rect.height);
-        }),
-      {
-        message: "expected the visible Splash surface's backing store to become proportional to"
-          + " its element box",
-        timeout: scaledMs(5000),
-        intervals: [8, 16, 25, 50],
-      },
-    )
-    .toBeCloseTo(1, 2);
-  expect(fatalMessages).toEqual([]);
-});
 
 test("Text and Style renders embedded glyphs without font requests", async ({ page }) => {
   const fontNetworkRequests: string[] = [];
@@ -1138,10 +858,7 @@ test("Text and Style renders embedded glyphs without font requests", async ({ pa
       fontNetworkRequests.push(request.url());
     }
   });
-  const fatalMessages = await openEditor(page, {
-    postInitializationDwellMs: 0,
-    workerSurfaceDiagnostic: kBackend === "geode",
-  });
+  const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
   const fontRequests = () =>
     page.evaluate(() =>
       performance
@@ -1164,7 +881,6 @@ test("Text and Style renders embedded glyphs without font requests", async ({ pa
   const beforeSample = await page.evaluate(
     () => window.__donnerWorkerStats?.completedResults || 0,
   );
-  const acceptedBefore = await page.evaluate(() => window.__donnerAcceptedPresentation?.token || 0);
   await page.mouse.click(bounds.x + bounds.width * 0.76, bounds.y + 282);
   await expect(canvas).toHaveAttribute("data-active-sample-id", "text-style", { timeout: 1000 });
   await expect
@@ -1174,37 +890,17 @@ test("Text and Style renders embedded glyphs without font requests", async ({ pa
       intervals: [16, 25, 50, 100],
     })
     .toBeGreaterThan(beforeSample);
-  if (kBackend === "geode") {
-    await expect
-      .poll(async () =>
-        page.evaluate((beforeToken) => {
-          const diagnostic = window.__donnerWorkerSurfaceDiagnostic;
-          return Boolean(
-            diagnostic
-              && diagnostic.frameToken > beforeToken
-              && diagnostic.acceptedAtMs > 0
-              && diagnostic.textStyleBackgroundPixels > 10_000
-              && diagnostic.textStyleGlyphPixels > 200,
-          );
-        }, acceptedBefore), {
-        message: "expected Text and Style diagnostics from the accepted direct-surface epoch",
-        timeout: scaledMs(5000),
-        intervals: [16, 25, 50, 100],
-      })
-      .toBe(true);
-    const textStats = await page.evaluate(() => window.__donnerWorkerSurfaceDiagnostic);
-    expect(textStats?.textStyleBackgroundPixels).toBeGreaterThan(10_000);
-    expect(textStats?.textStyleGlyphPixels).toBeGreaterThan(200);
-  } else {
-    const textStats = await readTextStyleGlyphStats(page, {
-      x: kSourcePaneWidth + 20,
-      y: 80,
-      width: 1600 - kSourcePaneWidth - kRightPaneWidth - 40,
-      height: 680,
-    });
-    expect(textStats.backgroundPixels).toBeGreaterThan(10_000);
-    expect(textStats.glyphPixels).toBeGreaterThan(200);
-  }
+  // Glyph evidence comes from the render pane's own pixels in the single
+  // canvas: the document background and the antialiased glyph coverage on top
+  // of it must both be present, which is what a missing embedded font breaks.
+  const textStats = await readTextStyleGlyphStats(page, {
+    x: kSourcePaneWidth + 20,
+    y: 80,
+    width: 1600 - kSourcePaneWidth - kRightPaneWidth - 40,
+    height: 680,
+  });
+  expect(textStats.backgroundPixels).toBeGreaterThan(10_000);
+  expect(textStats.glyphPixels).toBeGreaterThan(200);
   expect(await fontRequests()).toEqual([]);
   expect(fontNetworkRequests).toEqual([]);
   expect(fatalMessages).toEqual([]);
@@ -1235,35 +931,17 @@ test("browser presents the first Basic Shapes drag frame within the interaction 
     })
     .toBeGreaterThan(beforeSample);
 
-  const documentCanvas = page.locator("canvas[data-direct-surface-visible=\"true\"]");
-  const documentBounds = kBackend === "geode" ? await visibleSurfaceBounds(documentCanvas) : null;
+  const blueRectCenter = {
+    x: bounds.x + kBlueRectOffset.x,
+    y: bounds.y + kBlueRectOffset.y,
+  };
   if (kBackend === "geode") {
-    expect(documentBounds).not.toBeNull();
-    expect(await page.evaluate(() => window.__donnerWorkerSurfaceDiagnostic)).toBeUndefined();
-  }
-  const blueRectCenter = documentBounds
-    ? {
-      x: documentBounds.x + documentBounds.width * (122 / 640),
-      y: documentBounds.y + documentBounds.height * (92 / 400),
-    }
-    : { x: bounds.x + 408, y: bounds.y + 353 };
-  if (kBackend === "geode") {
-    // `selectionChromePixels` reads the ImGui canvas, so it can only see chrome
-    // the overlay drew. Once any render lands while a selection is live, the
-    // worker bakes the chrome into its own surface, `selectionChromeBaked` goes
-    // true, and EditorShell stops drawing it into the overlay - the probe then
-    // reads zero forever. Start the click from a quiesced presentation so no
-    // leftover load render can move the chrome out from under the probe.
+    // Selecting a shape must draw chrome without re-rasterizing the document.
+    // Start the click from a quiesced presentation so no leftover load render
+    // can move the chrome out from under the probe.
     const beforeSelectionResult = await waitForPresentationQuiescence(page, {
       message: "expected the Basic Shapes presentation to settle before selecting a shape",
     });
-    const beforeSelectionFrame = Number(
-      await documentCanvas.getAttribute("data-direct-surface-frame"),
-    );
-    expect(
-      await page.evaluate(() => window.__donnerAcceptedPresentation?.selectionChromeBaked ?? false),
-      "expected an unbaked accepted epoch so overlay-only chrome is observable",
-    ).toBe(false);
     const baselineRequest = await requestWgpuDiagnostic(page);
     await expect
       .poll(async () => page.evaluate(() => window.__donnerWgpuReadbackStats?.request || 0), {
@@ -1292,87 +970,42 @@ test("browser presents the first Basic Shapes drag frame within the interaction 
       })
       .toBeGreaterThanOrEqual(selectionRequest);
     let selectionChromeDelta = 0;
-    let selectionFeedbackDiagnostic = "";
     await expect
       .poll(
         async () => {
           const snapshot = await page.evaluate(() => ({
             chrome: window.__donnerWgpuReadbackStats?.selectionChromePixels || 0,
             completed: window.__donnerWorkerStats?.completedResults || 0,
-            baked: window.__donnerAcceptedPresentation?.selectionChromeBaked ?? false,
           }));
           selectionChromeDelta = snapshot.chrome - beforeSelectionChrome;
           if (selectionChromeDelta > 50) {
-            return "overlay-chrome";
+            return "selection-chrome";
           }
-          if (snapshot.baked || snapshot.completed !== beforeSelectionResult) {
-            // A render landed while the selection was live, so the worker baked
-            // the chrome into its own surface and this probe (which reads the
-            // ImGui canvas) can never see it. Stop polling and report the real
-            // failure instead of starving until the timeout.
-            selectionFeedbackDiagnostic = JSON.stringify(snapshot);
-            return "rerendered-after-selection";
-          }
-          // The completed capture may predate the overlay's first rendered
-          // frame on slow hosts; request a fresh diagnostic for the next read
+          // The completed capture may predate the first frame that drew the
+          // chrome on slow hosts; request a fresh diagnostic for the next read
           // instead of polling a stale snapshot forever.
           await requestWgpuDiagnostic(page);
           return "waiting";
         },
         {
-          message: "expected overlay-only selection feedback before starting the drag",
+          message: "expected selection chrome pixels before starting the drag",
           timeout: scaledMs(2000),
           intervals: [100, 250, 500],
         },
       )
       .not.toBe("waiting");
-    expect(
-      selectionFeedbackDiagnostic,
-      "a selection click must not trigger a render; the baked epoch hides overlay chrome",
-    ).toBe("");
     expect(selectionChromeDelta).toBeGreaterThan(50);
-    expect(await page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0)).toBe(
-      beforeSelectionResult,
-    );
-    expect(Number(await documentCanvas.getAttribute("data-direct-surface-frame"))).toBe(
-      beforeSelectionFrame,
-    );
+    expect(
+      await page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0),
+      "a selection click must draw chrome without re-rasterizing the document",
+    ).toBe(beforeSelectionResult);
   }
-  const targetClip = {
-    x: bounds.x + 280,
-    y: bounds.y + 270,
-    width: 400,
-    height: 240,
-  };
-  const beforeMouseDown = kBackend === "geode"
-    ? null
-    : await page.screenshot({ clip: targetClip });
   await page.mouse.move(blueRectCenter.x, blueRectCenter.y);
-  const mouseDownStartedAt = Date.now();
   await page.mouse.down();
-  if (beforeMouseDown !== null) {
-    await expect
-      .poll(async () => !(await page.screenshot({ clip: targetClip })).equals(beforeMouseDown), {
-        message: "expected selection feedback after mouse-down",
-        timeout: scaledMs(1000),
-        intervals: [16, 25, 50, 100],
-      })
-      .toBe(true);
-  }
-  console.log(`selection-feedback-ms=${Date.now() - mouseDownStartedAt}`);
 
-  const draggedShapeInterior = {
-    x: blueRectCenter.x - 12,
-    y: blueRectCenter.y - 12,
-    width: 24,
-    height: 24,
-  };
-  const beforeMove = kBackend === "geode"
-    ? null
-    : await page.screenshot({ clip: draggedShapeInterior });
-  const beforeMoveDirectSurfaceFrame = kBackend === "geode"
-    ? await documentCanvas.getAttribute("data-direct-surface-frame").then(Number)
-    : 0;
+  const beforeMoveResults = await page.evaluate(
+    () => window.__donnerWorkerStats?.completedResults || 0,
+  );
   // The 125 ms interaction budget is calibrated for local development
   // hardware. Shared CI runners are slower and the poll below adds up to one
   // interval of measurement quantization, so CI enforces a looser bound that
@@ -1382,14 +1015,10 @@ test("browser presents the first Basic Shapes drag frame within the interaction 
   await page.mouse.move(blueRectCenter.x + 120, blueRectCenter.y + 70);
   await expect
     .poll(async () => {
-      if (kBackend === "geode") {
-        const directSurfaceFrame = Number(
-          await documentCanvas.getAttribute("data-direct-surface-frame"),
-        );
-        return directSurfaceFrame > beforeMoveDirectSurfaceFrame;
-      }
-      return beforeMove !== null
-        && !(await page.screenshot({ clip: draggedShapeInterior })).equals(beforeMove);
+      const completed = await page.evaluate(
+        () => window.__donnerWorkerStats?.completedResults || 0,
+      );
+      return completed > beforeMoveResults;
     }, {
       message: "expected the shape's first visible drag frame while the pointer remained down",
       timeout: firstDragFrameBudgetMs,
@@ -1426,31 +1055,24 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
     })
     .toBeGreaterThan(beforeSample);
 
-  const documentCanvas = page.locator("canvas[data-direct-surface-visible=\"true\"]");
-  await expect(documentCanvas).toBeVisible({ timeout: 1000 });
   await expect
-    .poll(async () => (await readElementColorStats(documentCanvas)).coloredPixels, {
+    .poll(async () => (await readElementColorStats(canvas)).coloredPixels, {
       message: "expected visible Basic Shapes pixels before selecting the resize target",
       timeout: scaledMs(1000),
       intervals: [16, 25, 50, 100],
     })
     .toBeGreaterThan(500);
 
-  // `readElementColorStats` takes an element screenshot, which Playwright
-  // scrolls into view first; the cap-sized surface overflows the viewport, so
-  // that leaves the page scrolled. Return to the origin and re-measure before
-  // deriving any pointer target or screenshot clip from the editor canvas.
-  expect(
-    await restoreViewportScrollOrigin(page),
-    "element screenshots scrolled the editor page and it did not return to the origin",
-  ).toEqual({ x: 0, y: 0 });
   const editorBounds = await canvas.boundingBox();
   expect(editorBounds).not.toBeNull();
   if (editorBounds === null) {
     return;
   }
 
-  const blueRectCenter = { x: editorBounds.x + 408, y: editorBounds.y + 353 };
+  const blueRectCenter = {
+    x: editorBounds.x + kBlueRectOffset.x,
+    y: editorBounds.y + kBlueRectOffset.y,
+  };
   const resizeHandle = { x: editorBounds.x + 498, y: editorBounds.y + 413 };
   const probeRegion = {
     x: editorBounds.x + 300,
@@ -1503,7 +1125,7 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
       return reachedFinalPointer && horizontalGap <= 8 && verticalGap <= 8;
     }, {
       message:
-        "expected the final resized pixels and selection outline from one presentation epoch",
+        "expected the final resized pixels and selection outline from one document render",
       timeout: scaledMs(1500),
       intervals: [50, 100],
     })
@@ -1533,33 +1155,16 @@ test("Geode WASM selects through the overlay without document rerender or recurr
     })
     .toBeGreaterThan(beforeSample);
 
-  const documentCanvas = page.locator("canvas[data-direct-surface-visible=\"true\"]");
-  await expect(documentCanvas).toBeVisible();
-  await expect
-    .poll(async () => Number(await documentCanvas.getAttribute("data-direct-surface-frame")), {
-      message: "expected the worker-owned document surface to present Basic Shapes",
-      timeout: scaledMs(1000),
-      intervals: [16, 25, 50, 100],
-    })
-    .toBeGreaterThan(0);
-  const documentBounds = await visibleSurfaceBounds(documentCanvas);
-  expect(documentBounds).not.toBeNull();
-  if (documentBounds === null) {
-    return;
-  }
   const dragStart = {
-    x: documentBounds.x + documentBounds.width * (122 / 640),
-    y: documentBounds.y + documentBounds.height * (92 / 400),
+    x: bounds.x + kBlueRectOffset.x,
+    y: bounds.y + kBlueRectOffset.y,
   };
   // "One result landed" is not "the load settled" - the debounced canvas-size
-  // commit and epoch retries can still be queued. Baseline the no-rerender
-  // assertion below against a quiesced presentation instead.
+  // commit can still be queued. Baseline the no-rerender assertion below
+  // against a quiesced presentation instead.
   const beforeSelection = await waitForPresentationQuiescence(page, {
     message: "expected the Basic Shapes presentation to settle before selecting a shape",
   });
-  const beforeSelectionFrame = Number(
-    await documentCanvas.getAttribute("data-direct-surface-frame"),
-  );
   const beforeSelectionUiFrame = await page.evaluate(
     () => window.__donnerMainLoopRenderedFrames || 0,
   );
@@ -1589,47 +1194,36 @@ test("Geode WASM selects through the overlay without document rerender or recurr
   expect(await page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0)).toBe(
     beforeSelection,
   );
-  expect(Number(await documentCanvas.getAttribute("data-direct-surface-frame"))).toBe(
-    beforeSelectionFrame,
-  );
   await page.mouse.move(dragStart.x, dragStart.y);
   await page.mouse.down();
   const beforeDrag = await page.evaluate(
     () => window.__donnerWorkerStats?.completedResults || 0,
   );
-  const beforeDragFrame = Number(await documentCanvas.getAttribute("data-direct-surface-frame"));
   await page.mouse.move(dragStart.x + 18, dragStart.y + 12);
   await page.mouse.move(dragStart.x + 32, dragStart.y + 20);
   await expect
     .poll(async () => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
-      message: "expected a direct document frame while the shape drag is still active",
+      message: "expected a document frame while the shape drag is still active",
       timeout: scaledMs(1000),
       intervals: [16, 25, 50, 100],
     })
     .toBeGreaterThan(beforeDrag);
-  await expect
-    .poll(async () => Number(await documentCanvas.getAttribute("data-direct-surface-frame")), {
-      message: "expected the visible document surface to advance before mouse-up",
-      timeout: scaledMs(1000),
-      intervals: [16, 25, 50, 100],
-    })
-    .toBeGreaterThan(beforeDragFrame);
-  const beforeMouseUpFrame = Number(
-    await documentCanvas.getAttribute("data-direct-surface-frame"),
+  const beforeMouseUpResults = await page.evaluate(
+    () => window.__donnerWorkerStats?.completedResults || 0,
   );
   await page.mouse.up();
   await expect
-    .poll(async () => Number(await documentCanvas.getAttribute("data-direct-surface-frame")), {
+    .poll(async () => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
       message: "expected the drag-release settlement frame",
       timeout: scaledMs(1000),
       intervals: [16, 25, 50, 100],
     })
-    .toBeGreaterThan(beforeMouseUpFrame);
+    .toBeGreaterThan(beforeMouseUpResults);
 
   // Releasing a drag queues exactly one settled-selection refresh behind the
-  // frame the pointer already produced, so the first post-mouse-up surface
-  // frame is not the last result. Let that bounded settle finish (it not
-  // finishing is itself a failure), then assert nothing keeps re-rendering.
+  // frame the pointer already produced, so the first post-mouse-up result is
+  // not the last one. Let that bounded settle finish (it not finishing is
+  // itself a failure), then assert nothing keeps re-rendering.
   const settledCount = await waitForPresentationQuiescence(page, {
     message: "expected the drag-release settle to finish",
   });
@@ -1639,21 +1233,24 @@ test("Geode WASM selects through the overlay without document rerender or recurr
   );
   const workerStats = await page.evaluate(() => window.__donnerWorkerStats);
   expect(workerStats).toBeDefined();
-  expect(workerStats?.directSurfaceFrames).toBeGreaterThan(0);
+  // Presentation costs no CPU readback: Geode draws the document straight into
+  // the canvas frame, so the readback counters stay at zero and the wait
+  // strategy is only ever one of the two GPU-fence strategies.
   expect(workerStats?.readbackCount).toBe(0);
-  expect(workerStats?.readbackWaitStrategy).toBe("direct-surface");
   expect(workerStats?.readbackPollIterations).toBe(0);
+  expect(["timed-wait-any", "device-poll"]).toContain(workerStats?.readbackWaitStrategy);
   console.log(`wasm-worker-stats=${JSON.stringify(workerStats)}`);
   expect(fatalMessages).toEqual([]);
 });
 
 test("production Geode wasm presents visible editor pixels", async ({ page }) => {
   test.skip(kBackend !== "geode", "production WebGPU presentation is Geode-specific");
-  // Chromium screenshots omit a transferred WebGPU swapchain. Prove direct-surface pixels with a
-  // worker diagnostic tied to the exact epoch the browser accepted instead.
+  // Browser screenshots omit a transferred WebGPU swapchain, and since Design
+  // the single-canvas architecture the whole application lives in that one transferred canvas. Prove the
+  // presented pixels with the editor's own explicit GPU readback instead.
   const fatalMessages = await openEditor(page, {
     postInitializationDwellMs: 0,
-    workerSurfaceDiagnostic: true,
+    wgpuReadbackStats: true,
   });
   const gpuDiagnostics = await readWebGpuDiagnostics(page);
   console.log(`browser-gpu-diagnostics=${JSON.stringify(gpuDiagnostics)}`);
@@ -1661,151 +1258,38 @@ test("production Geode wasm presents visible editor pixels", async ({ page }) =>
     body: JSON.stringify(gpuDiagnostics, null, 2),
     contentType: "application/json",
   });
-  const canvasBox = await page.locator("canvas#canvas").boundingBox();
+  const canvas = page.locator("canvas#canvas");
+  await expect(canvas).toBeVisible();
+  const canvasBox = await canvas.boundingBox();
   expect(canvasBox).not.toBeNull();
   if (canvasBox === null) {
     return;
   }
 
-  const acceptedBefore = await page.evaluate(() => window.__donnerAcceptedPresentation?.token || 0);
   await page.mouse.click(canvasBox.x + canvasBox.width * 0.5, canvasBox.y + 282);
-  const documentCanvas = page.locator("canvas[data-direct-surface-visible=\"true\"]");
-  await expect(documentCanvas).toBeVisible({ timeout: 20000 });
+  await expect(canvas).toHaveAttribute("data-active-sample-id", "basic-shapes", {
+    timeout: 20000,
+  });
   await expect
-    .poll(async () =>
-      page.evaluate((beforeToken) => {
-        const visible = document.querySelector(
-          "canvas[data-direct-surface-visible=\"true\"]",
-        );
-        const surfaceFrame = Number(visible?.getAttribute("data-direct-surface-frame") || 0);
-        const accepted = window.__donnerAcceptedPresentation;
-        const diagnostic = window.__donnerWorkerSurfaceDiagnostic;
-        return Boolean(
-          surfaceFrame > beforeToken
-            && accepted?.kind === "geode"
-            && accepted.token === surfaceFrame
-            && diagnostic?.frameToken === surfaceFrame
-            && diagnostic.nonBlackPixels > 1000
-            && diagnostic.coloredPixels > 500
-            && diagnostic.maxChannel > 80,
-        );
-      }, acceptedBefore), {
-      message: "expected an accepted direct-surface epoch with diagnostic GPU product pixels",
+    .poll(async () => {
+      await requestWgpuDiagnostic(page);
+      const renderPane = await page.evaluate(
+        () => window.__donnerWgpuReadbackStats?.renderPane,
+      );
+      return Boolean(
+        renderPane
+          && renderPane.nonBlackPixels > 1000
+          && renderPane.coloredPixels > 500
+          && renderPane.maxChannel > 80,
+      );
+    }, {
+      message: "expected the render pane to hold Basic Shapes GPU product pixels",
       timeout: 20000,
       intervals: [16, 25, 50, 100],
     })
     .toBe(true);
-  const surfaceDiagnostic = await page.evaluate(() => window.__donnerWorkerSurfaceDiagnostic);
-  console.log(`direct-surface-diagnostic=${JSON.stringify(surfaceDiagnostic)}`);
-  expect(fatalMessages).toEqual([]);
-});
-
-test("forced bitmap worker-surface fallback presents retained Geode pixels", async ({ browserName, page }) => {
-  test.skip(browserName !== "chromium" || kBackend !== "geode", "Geode bridge probe");
-  // Complement the direct-surface diagnostic above with a real screenshot oracle on the retained
-  // ImageBitmap bridge, whose pixels Chromium capture can sample.
-  const fatalMessages = await openEditor(page, {
-    postInitializationDwellMs: 0,
-    workerSurfaceMode: "bitmap-bridge",
-  });
-  await expect
-    .poll(() => page.evaluate(() => window.__donnerWorkerSurfaceMode))
-    .toBe("bitmap-bridge");
-  const canvasBox = await page.locator("canvas#canvas").boundingBox();
-  expect(canvasBox).not.toBeNull();
-  if (canvasBox === null) {
-    return;
-  }
-  await page.mouse.click(canvasBox.x + canvasBox.width * 0.5, canvasBox.y + 282);
-  const documentCanvas = page.locator("canvas[data-direct-surface-visible=\"true\"]");
-  await expect(documentCanvas).toBeVisible({ timeout: 20000 });
-  await expect
-    .poll(async () => Number(await documentCanvas.getAttribute("data-bitmap-bridge-frame")), {
-      message: "expected the retained bitmap bridge to present a worker WebGPU frame",
-      timeout: 20000,
-      intervals: [16, 25, 50, 100],
-    })
-    .toBeGreaterThan(0);
-  await expect
-    .poll(async () => (await readElementColorStats(documentCanvas)).coloredPixels, {
-      message: "expected visible retained document pixels from the Safari bridge",
-      timeout: 20000,
-      intervals: [16, 25, 50, 100],
-    })
-    .toBeGreaterThan(500);
-
-  await page.evaluate(() => {
-    const violations: string[] = [];
-    const canvases = [
-      document.getElementById("donner-document-canvas"),
-      document.getElementById("donner-document-canvas-back"),
-    ];
-    const checkVisibleEpoch = () => {
-      for (const surfaceCanvas of canvases) {
-        if (surfaceCanvas?.getAttribute("data-direct-surface-visible") !== "true") {
-          continue;
-        }
-        const accepted = surfaceCanvas.getAttribute("data-direct-surface-frame");
-        const staged = surfaceCanvas.getAttribute("data-bitmap-bridge-frame");
-        if (!accepted || accepted !== staged) {
-          violations.push(`${surfaceCanvas.id}:accepted=${accepted}:staged=${staged}`);
-        }
-      }
-    };
-    const observer = new MutationObserver(checkVisibleEpoch);
-    for (const surfaceCanvas of canvases) {
-      if (surfaceCanvas) {
-        observer.observe(surfaceCanvas, { attributes: true });
-      }
-    }
-    (window as Window & { __donnerBitmapEpochViolations?: string[] })
-      .__donnerBitmapEpochViolations = violations;
-    checkVisibleEpoch();
-  });
-
-  const documentBounds = await visibleSurfaceBounds(documentCanvas);
-  expect(documentBounds).not.toBeNull();
-  if (documentBounds === null) {
-    return;
-  }
-  const dragStart = {
-    x: documentBounds.x + documentBounds.width * (122 / 640),
-    y: documentBounds.y + documentBounds.height * (92 / 400),
-  };
-  const beforeDragResults = await page.evaluate(
-    () => window.__donnerWorkerStats?.completedResults || 0,
-  );
-  await page.mouse.move(dragStart.x, dragStart.y);
-  await page.mouse.down();
-  for (let step = 1; step <= 12; ++step) {
-    await page.mouse.move(dragStart.x + step * 10, dragStart.y + step * 6);
-  }
-  await expect
-    .poll(async () => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
-      message: "expected a forced bitmap drag result after the superseding pointer burst",
-      timeout: scaledMs(2000),
-      intervals: [16, 25, 50, 100],
-    })
-    .toBeGreaterThan(beforeDragResults);
-  await page.mouse.up();
-
-  const bitmapEpochs = await page.evaluate(() => ({
-    violations: (window as Window & { __donnerBitmapEpochViolations?: string[] })
-      .__donnerBitmapEpochViolations || [],
-    visible: ["donner-document-canvas", "donner-document-canvas-back"]
-      .map((id) => document.getElementById(id))
-      .filter((surfaceCanvas) =>
-        surfaceCanvas?.getAttribute("data-direct-surface-visible") === "true"
-      )
-      .map((surfaceCanvas) => ({
-        accepted: surfaceCanvas?.getAttribute("data-direct-surface-frame"),
-        id: surfaceCanvas?.id,
-        staged: surfaceCanvas?.getAttribute("data-bitmap-bridge-frame"),
-      })),
-  }));
-  expect(bitmapEpochs.violations).toEqual([]);
-  expect(bitmapEpochs.visible).toHaveLength(1);
-  expect(bitmapEpochs.visible[0]?.accepted).toBe(bitmapEpochs.visible[0]?.staged);
+  const renderPaneStats = await readRenderPaneColorStats(page);
+  console.log(`render-pane-pixels=${JSON.stringify(renderPaneStats)}`);
   expect(fatalMessages).toEqual([]);
 });
 
@@ -2216,13 +1700,6 @@ test("Geode WASM presents selection path overlay pixels", async ({ page }) => {
   const beforeSampleResult = await page.evaluate(
     () => window.__donnerWorkerStats?.completedResults || 0,
   );
-  const beforeSampleSurfaceFrame = await page.evaluate(() =>
-    Math.max(
-      ...["donner-document-canvas", "donner-document-canvas-back"].map((id) =>
-        Number(document.getElementById(id)?.getAttribute("data-direct-surface-frame") || 0)
-      ),
-    )
-  );
   await page.mouse.click(bounds.x + bounds.width * 0.5, bounds.y + 282);
   await expect(canvas).toHaveAttribute("data-active-sample-id", "basic-shapes");
   await expect
@@ -2231,39 +1708,22 @@ test("Geode WASM presents selection path overlay pixels", async ({ page }) => {
       timeout: 20000,
     })
     .toBeGreaterThan(beforeSampleResult);
-  const documentCanvas = page.locator("canvas[data-direct-surface-visible=\"true\"]");
-  await expect(documentCanvas).toBeVisible({ timeout: 20000 });
-  await expect
-    .poll(async () => Number(await documentCanvas.getAttribute("data-direct-surface-frame")), {
-      message: "expected a fresh Basic Shapes direct-surface frame before reading diagnostics",
-      timeout: 20000,
-      intervals: [16, 25, 50, 100],
-    })
-    .toBeGreaterThan(beforeSampleSurfaceFrame);
-  const documentBounds = await visibleSurfaceBounds(documentCanvas);
-  expect(documentBounds).not.toBeNull();
-  if (documentBounds === null) {
-    return;
-  }
   const coloredPixel = {
-    x: documentBounds.width * (122 / 640),
-    y: documentBounds.height * (92 / 400),
+    x: bounds.x + kBlueRectOffset.x,
+    y: bounds.y + kBlueRectOffset.y,
   };
   const sampleRequest = await requestWgpuDiagnostic(page);
-  await page.mouse.move(
-    documentBounds.x + coloredPixel.x - 4,
-    documentBounds.y + coloredPixel.y - 4,
-  );
+  await page.mouse.move(coloredPixel.x - 4, coloredPixel.y - 4);
   await expect
     .poll(async () => page.evaluate(() => window.__donnerWgpuReadbackStats?.request || 0), {
-      message: "expected a diagnostic capture for the settled Basic Shapes surface",
+      message: "expected a diagnostic capture for the settled Basic Shapes render",
       timeout: 20000,
     })
     .toBeGreaterThanOrEqual(sampleRequest);
   const beforeSelectionChrome = await page.evaluate(
     () => window.__donnerWgpuReadbackStats?.selectionChromePixels || 0,
   );
-  await page.mouse.click(documentBounds.x + coloredPixel.x, documentBounds.y + coloredPixel.y);
+  await page.mouse.click(coloredPixel.x, coloredPixel.y);
   await expect
     .poll(async () => page.evaluate(() => window.__donnerInteractionStats?.selectedCount || 0), {
       message: "expected shape selection before capturing its overlay",
@@ -2272,10 +1732,7 @@ test("Geode WASM presents selection path overlay pixels", async ({ page }) => {
     })
     .toBeGreaterThan(0);
   const selectionRequest = await requestWgpuDiagnostic(page);
-  await page.mouse.move(
-    documentBounds.x + coloredPixel.x + 4,
-    documentBounds.y + coloredPixel.y + 4,
-  );
+  await page.mouse.move(coloredPixel.x + 4, coloredPixel.y + 4);
   await expect
     .poll(async () => page.evaluate(() => window.__donnerWgpuReadbackStats?.request || 0), {
       message: "expected a diagnostic capture requested after selection",

@@ -25,6 +25,7 @@
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
+#include <emscripten/threading.h>
 #endif
 
 #include "GLFW/glfw3.h"
@@ -86,89 +87,105 @@
 namespace donner::editor {
 
 #ifdef __EMSCRIPTEN__
-EM_JS(void, PublishActiveSampleId, (const char* sampleId), {
-  const id = UTF8ToString(sampleId);
-  const canvas = document.getElementById('canvas');
-  if (canvas) {
-    canvas.setAttribute('data-active-sample-id', id);
-  }
-  window['__donnerActiveSampleStats'] = {
-    'sampleId' : id,
-    'activatedAtMs' : performance.now(),
-  };
-});
+// The app runs on a pthread in the browser build, where `window` and
+// `document` do not exist; every publish below proxies to the browser main
+// thread. Fire-and-forget: none of these are read back by the app.
+void PublishActiveSampleId(const char* sampleId) {
+  MAIN_THREAD_ASYNC_EM_ASM(
+      {
+        const id = UTF8ToString($0);
+        const canvas = document.getElementById('canvas');
+        if (canvas) {
+          canvas.setAttribute('data-active-sample-id', id);
+        }
+        window['__donnerActiveSampleStats'] = ({
+          'sampleId' : id,
+          'activatedAtMs' : performance.now(),
+        });
+      },
+      sampleId);
+}
 
-EM_JS(void, PublishSampleThumbnailStats,
-      (int requested, int started, int completed, int rendered, int ready, int pending, int active,
-       int resultReady),
+void PublishSampleThumbnailStats(int requested, int started, int completed, int rendered, int ready,
+                                 int pending, int active, int resultReady) {
+  MAIN_THREAD_ASYNC_EM_ASM(
       {
         const frame = Number(window['__donnerMainLoopRenderedFrames'] || 0) + 1;
-        const previous = window['__donnerSampleThumbnailStats'] || {
+        const previous = window['__donnerSampleThumbnailStats'] || ({
           'carouselFrame' : frame,
           'firstRequestFrame' : 0,
           'ready' : 0,
-          'publicationFrames' : [],
-        };
-        const publicationFrames = Array.isArray(previous['publicationFrames'])
-                                      ? previous['publicationFrames'].slice()
-                                      : [];
-        for (let published = Number(previous['ready'] || 0); published < ready; ++published) {
+          'publicationFrames' : ([]),
+        });
+        const publicationFrames =
+            Array.isArray(previous['publicationFrames']) ? previous['publicationFrames'].slice()
+                                                         : ([]);
+        for (let published = Number(previous['ready'] || 0); published < $4; ++published) {
           publicationFrames.push(frame);
         }
-        window['__donnerSampleThumbnailStats'] = {
+        window['__donnerSampleThumbnailStats'] = ({
           'carouselFrame' : Number(previous['carouselFrame'] || frame),
-          'firstRequestFrame' :
-              Number(previous['firstRequestFrame'] || (requested > 0 ? frame : 0)),
-          requested,
-          started,
-          completed,
-          rendered,
-          ready,
-          publicationFrames,
-          'pending' : Boolean(pending),
-          'active' : Boolean(active),
-          'resultReady' : Boolean(resultReady),
-        };
-      });
+          'firstRequestFrame' : Number(previous['firstRequestFrame'] || ($0 > 0 ? frame : 0)),
+          'requested' : $0,
+          'started' : $1,
+          'completed' : $2,
+          'rendered' : $3,
+          'ready' : $4,
+          'publicationFrames' : publicationFrames,
+          'pending' : Boolean($5),
+          'active' : Boolean($6),
+          'resultReady' : Boolean($7),
+        });
+      },
+      requested, started, completed, rendered, ready, pending, active, resultReady);
+}
 
-EM_JS(void, PublishInteractionStats,
-      (int selectedCount, int pendingClick, int workerBusy, int dragging, double frame), {
-        window['__donnerInteractionStats'] = {
-          selectedCount,
-          'pendingClick' : Boolean(pendingClick),
-          'workerBusy' : Boolean(workerBusy),
-          'dragging' : Boolean(dragging),
-          'publishedAtFrame' : Number(frame),
-        };
-      });
-
-EM_JS(void, PublishLayerThumbnailStats,
-      (double rowCount, double renderedCount, double reusedCount, double deferredCount,
-       double skippedForCanvasInvalidationCount, double snapshotRebuildCount, double bitmapCount,
-       double bitmapBytes, double textureSnapshotCount, double textureCount),
+void PublishInteractionStats(int selectedCount, int pendingClick, int workerBusy, int dragging,
+                             double frame) {
+  MAIN_THREAD_ASYNC_EM_ASM(
       {
-        window['__donnerLayerThumbnailStats'] = {
-            rowCount,
-            renderedCount,
-            reusedCount,
-            deferredCount,
-            skippedForCanvasInvalidationCount,
-            snapshotRebuildCount,
-            bitmapCount,
-            bitmapBytes,
-            textureSnapshotCount,
-            textureCount,
-        };
-      });
+        window['__donnerInteractionStats'] = ({
+          'selectedCount' : $0,
+          'pendingClick' : Boolean($1),
+          'workerBusy' : Boolean($2),
+          'dragging' : Boolean($3),
+          'publishedAtFrame' : Number($4),
+        });
+      },
+      selectedCount, pendingClick, workerBusy, dragging, frame);
+}
+
+void PublishLayerThumbnailStats(double rowCount, double renderedCount, double reusedCount,
+                                double deferredCount, double skippedForCanvasInvalidationCount,
+                                double snapshotRebuildCount, double bitmapCount, double bitmapBytes,
+                                double textureSnapshotCount, double textureCount) {
+  MAIN_THREAD_ASYNC_EM_ASM(
+      {
+        window['__donnerLayerThumbnailStats'] = ({
+          'rowCount' : $0,
+          'renderedCount' : $1,
+          'reusedCount' : $2,
+          'deferredCount' : $3,
+          'skippedForCanvasInvalidationCount' : $4,
+          'snapshotRebuildCount' : $5,
+          'bitmapCount' : $6,
+          'bitmapBytes' : $7,
+          'textureSnapshotCount' : $8,
+          'textureCount' : $9,
+        });
+      },
+      rowCount, renderedCount, reusedCount, deferredCount, skippedForCanvasInvalidationCount,
+      snapshotRebuildCount, bitmapCount, bitmapBytes, textureSnapshotCount, textureCount);
+}
 
 // Accumulate this frame's UI-phase costs into the main-loop probe published by `main.cc`. The
 // perf lane divides each total by `renderedFrames` to attribute the per-frame UI cost to the
 // stage that owns it, which is how the immediate-mode submission cost of the sidebars and the
 // render pane is separated from the non-UI phases of `runFrame`.
-EM_JS(void, AccumulateFrameLoopPhaseCost,
-      (double layoutMs, double menusDialogsMs, double sourcePaneMs, double renderPaneMs,
-       double sidebarsMs, double splittersMs, double nonUiMs, double imguiRenderMs,
-       double imguiDrawMs),
+void AccumulateFrameLoopPhaseCost(double layoutMs, double menusDialogsMs, double sourcePaneMs,
+                                  double renderPaneMs, double sidebarsMs, double splittersMs,
+                                  double nonUiMs, double imguiRenderMs, double imguiDrawMs) {
+  MAIN_THREAD_ASYNC_EM_ASM(
       {
         const stats = window['__donnerFrameLoopStats'];
         if (!stats) {
@@ -177,7 +194,7 @@ EM_JS(void, AccumulateFrameLoopPhaseCost,
 
         let totals = stats['phaseTotalsMs'];
         if (!totals) {
-          totals = {
+          totals = ({
             'layout' : 0,
             'menusDialogs' : 0,
             'sourcePane' : 0,
@@ -187,32 +204,49 @@ EM_JS(void, AccumulateFrameLoopPhaseCost,
             'nonUi' : 0,
             'imguiRender' : 0,
             'imguiDraw' : 0,
-          };
+          });
           stats['phaseTotalsMs'] = totals;
         }
-        totals['layout'] += layoutMs;
-        totals['menusDialogs'] += menusDialogsMs;
-        totals['sourcePane'] += sourcePaneMs;
-        totals['renderPane'] += renderPaneMs;
-        totals['sidebars'] += sidebarsMs;
-        totals['splitters'] += splittersMs;
-        totals['nonUi'] += nonUiMs;
-        totals['imguiRender'] += imguiRenderMs;
-        totals['imguiDraw'] += imguiDrawMs;
-      });
+        totals['layout'] += $0;
+        totals['menusDialogs'] += $1;
+        totals['sourcePane'] += $2;
+        totals['renderPane'] += $3;
+        totals['sidebars'] += $4;
+        totals['splitters'] += $5;
+        totals['nonUi'] += $6;
+        totals['imguiRender'] += $7;
+        totals['imguiDraw'] += $8;
+      },
+      layoutMs, menusDialogsMs, sourcePaneMs, renderPaneMs, sidebarsMs, splittersMs, nonUiMs,
+      imguiRenderMs, imguiDrawMs);
+}
 
-EM_JS(void, PublishPresentationResourceStats,
-      (double totalTrackedBytes, double peakTrackedBytes, double pendingRetiredBytes,
-       double agedRetiredBytes, double activeTileTextures, double overviewTileTextures,
-       double pendingRetiredTextures, double agedRetiredTextures, double retiredFrameCount,
-       double lifetimeTextureCreates, double lifetimeBufferCreates),
+void PublishPresentationResourceStats(double totalTrackedBytes, double peakTrackedBytes,
+                                      double pendingRetiredBytes, double agedRetiredBytes,
+                                      double activeTileTextures, double overviewTileTextures,
+                                      double pendingRetiredTextures, double agedRetiredTextures,
+                                      double retiredFrameCount, double lifetimeTextureCreates,
+                                      double lifetimeBufferCreates) {
+  MAIN_THREAD_ASYNC_EM_ASM(
       {
-        window['__donnerPresentationResourceStats'] = {
-            totalTrackedBytes,  peakTrackedBytes,       pendingRetiredBytes,    agedRetiredBytes,
-            activeTileTextures, overviewTileTextures,   pendingRetiredTextures, agedRetiredTextures,
-            retiredFrameCount,  lifetimeTextureCreates, lifetimeBufferCreates,
-        };
-      });
+        window['__donnerPresentationResourceStats'] = ({
+          'totalTrackedBytes' : $0,
+          'peakTrackedBytes' : $1,
+          'pendingRetiredBytes' : $2,
+          'agedRetiredBytes' : $3,
+          'activeTileTextures' : $4,
+          'overviewTileTextures' : $5,
+          'pendingRetiredTextures' : $6,
+          'agedRetiredTextures' : $7,
+          'retiredFrameCount' : $8,
+          'lifetimeTextureCreates' : $9,
+          'lifetimeBufferCreates' : $10,
+        });
+      },
+      totalTrackedBytes, peakTrackedBytes, pendingRetiredBytes, agedRetiredBytes,
+      activeTileTextures, overviewTileTextures, pendingRetiredTextures, agedRetiredTextures,
+      retiredFrameCount, lifetimeTextureCreates, lifetimeBufferCreates);
+}
 
 #endif
 
@@ -947,7 +981,17 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       toolbarIconTextures_(window.geodeDevice()),
       layerThumbnailRenderer_(window.geodeDevice()),
       fontCatalog_(),
+#ifdef DONNER_EDITOR_WHOLE_APP_WORKER
+      // The raster thread owns its own headless device: tiles cross the
+      // thread boundary as CPU bitmaps by design (WebGPU has no cross-thread
+      // texture sharing in the browser), and a shared browser device makes
+      // the raster thread's snapshot readback wait on cross-thread event
+      // delivery it cannot drive (measured: 1.9 s per first-sample snapshot
+      // against the shared device, ~30 ms against its own).
+      renderCoordinator_(nullptr),
+#else
       renderCoordinator_(window.geodeDevice()),
+#endif
       rotateCursorSet_(),
       documentSyncController_(InitialDocumentSyncSource(options_)),
       interactionController_(),

@@ -26,15 +26,11 @@ test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", 
   );
   assert.match(
     String(firefox.grep),
-    /Firefox presents every accepted drag epoch on one stable surface/,
+    /Firefox keeps the dragged shape and its selection outline in every drag frame/,
   );
   assert.match(
     String(firefox.grep),
     /Firefox never exposes the checkerboard while dragging a Splash letter/,
-  );
-  assert.match(
-    String(firefox.grep),
-    /Firefox bakes the Splash letter and overlay into one accepted surface epoch/,
   );
 
   const webkit = projects.get("webkit-geode-carousel");

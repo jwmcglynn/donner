@@ -1,6 +1,6 @@
 #pragma once
 /// @file
-/// Main-thread bridges for the Design 0064 phase 1 whole-app-worker build.
+/// Main-thread bridges for the the single-canvas architecture phase 1 whole-app-worker build.
 ///
 /// In that build `main()` runs on a pthread (Emscripten `PROXY_TO_PTHREAD`) and
 /// the single `#canvas` is transferred to it as an `OffscreenCanvas`. `EM_JS`
@@ -189,6 +189,21 @@ void NotifyFirstFramePresented(int headlessDeviceCreations);
 /// Mirror one scroll event onto `window.__donnerLastScrollEvent` for the
 /// browser suites.
 void RecordScrollDebug(bool zoomModifierHeld, double xoffset, double yoffset, bool physicalKeyHeld);
+
+/// WebGPU readback diagnostic handshake. Same page contract as the pre-worker
+/// build (wgpuReadbackStats URL parameter, window counters, explicit requests);
+/// the request/completed ids additionally ride the shared-memory mirror so the
+/// app thread polls without a main-thread round trip.
+[[nodiscard]] bool ReadbackStatsEnabled();
+[[nodiscard]] int PeekReadbackRequest();
+void WakeForPendingReadback();
+void MarkReadbackCaptureStarted(int requestId);
+void PublishReadbackFailure(int requestId);
+void PublishReadbackStats(int renderSamples, int renderColored, int renderNonBlack,
+                          int renderMaxChannel, int layerSamples, int layerColored,
+                          int layerNonBlack, int layerMaxChannel, int selectionChromePixels,
+                          int requestId);
+void PublishCarouselThumbnailStats(const int* values, int count);
 
 }  // namespace donner::editor::whole_app_worker
 

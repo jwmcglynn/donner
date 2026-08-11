@@ -52,7 +52,7 @@ exports_files(
     visibility = ["//donner/editor/wasm:__pkg__"],
 )
 
-# Header-free carrier for the Design 0064 whole-app-in-worker define.
+# Header-free carrier for the the single-canvas architecture whole-app-in-worker define.
 # `defines` propagate to every dependent, so wiring this into the two roots of
 # the editor dependency graph that own browser seams (the window and the
 # document presenter) reaches the shell, the input bridge, and `main.cc`

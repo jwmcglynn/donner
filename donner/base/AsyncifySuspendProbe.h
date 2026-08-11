@@ -1,6 +1,6 @@
 #pragma once
 /// @file
-/// Per-frame attribution of ASYNCIFY suspend cost (Design 0064 phase 2).
+/// Per-frame attribution of ASYNCIFY suspend cost (the single-canvas presenter work).
 ///
 /// The browser editor links with whole-module `-sASYNCIFY`. Any call that
 /// reaches a JS-side `Asyncify.handleSleep` / `handleAsync` unwinds the wasm

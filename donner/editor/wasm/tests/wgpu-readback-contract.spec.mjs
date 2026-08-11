@@ -116,124 +116,6 @@ test("pre-map diagnostic setup failures use the same bounded completion policy",
   assert.doesNotMatch(source, /struct AsyncSmokeReadbackRetry/);
 });
 
-test("worker surface loss uses bounded recovery without aborting Wasm", () => {
-  assert.match(workerRendererSource, /WGPUSurfaceGetCurrentTextureStatus_Timeout/);
-  assert.match(workerRendererSource, /WGPUSurfaceGetCurrentTextureStatus_Outdated/);
-  assert.match(workerRendererSource, /WGPUSurfaceGetCurrentTextureStatus_Lost/);
-  assert.match(workerRendererSource, /WorkerSurfaceRecoveryDecisionFor/);
-  assert.doesNotMatch(
-    workerRendererSource,
-    /UTILS_RELEASE_ASSERT_MSG\(\s*directSurfacePresented/,
-  );
-  assert.match(workerRendererHeader, /DirectSurfacePresentationOutcome[\s\S]*RetryAfterBackoff/);
-  assert.match(
-    renderCoordinatorSource,
-    /DirectSurfacePresentationOutcome::RetryAfterBackoff[\s\S]*DirectSurfaceRetryBackoffForAttempt/,
-  );
-  assert.match(
-    renderCoordinatorSource,
-    /DirectSurfacePresentationOutcome::Unavailable[\s\S]*ReportDirectSurfaceUnavailable/,
-  );
-  assert.match(
-    editorShellSource,
-    /nextIdleWakeSeconds\(\)[\s\S]*nextDirectSurfaceRetryWakeSeconds\(\)/,
-  );
-});
-
-test("worker surface diagnostics are independently opt-in and close after presentation", () => {
-  const optIn = workerRendererSource.match(
-    /EM_JS\(int, UseWorkerSurfaceDiagnostic, \(\),([\s\S]*?)\);/,
-  );
-  assert.ok(optIn, "expected a worker-surface-specific diagnostic probe");
-  assert.match(optIn[1], /workerSurfaceDiagnostic/);
-  assert.doesNotMatch(optIn[1], /wgpuReadbackStats/);
-
-  assert.match(workerRendererHeader, /workerSurfaceDiagnosticAttempted_/);
-  assert.match(
-    workerRendererSource,
-    /captureSurfaceDiagnostic\s*=\s*[\s\S]*!workerSurfaceDiagnosticPublished_[\s\S]*if\s*\(captureSurfaceDiagnostic\)[\s\S]*workerSurfaceDiagnosticAttempted_\s*=\s*true;[\s\S]*takeSnapshot\(\)/,
-  );
-  assert.match(
-    workerRendererSource,
-    /WorkerSurfacePresentDisposition::RetryNextWorkerTask[\s\S]*workerSurfaceDiagnosticAttempted_\s*=\s*false/,
-  );
-  assert.doesNotMatch(workerRendererSource, /if\s*\(\s*!surfaceDiagnostic\.empty\(\)\s*\)/);
-  assert.match(
-    workerRendererSource,
-    /directSurfacePresented[\s\S]*PublishWorkerSurfaceDiagnostic[\s\S]*workerSurfaceDiagnosticPublished_\s*=\s*true/,
-  );
-});
-
-test("direct worker surfaces cross a local event-loop task before acceptance", () => {
-  const taskCompletion = workerRendererSource.match(
-    /void AsyncRenderer::runWorkerTask\(void\* [^)]*\)([\s\S]*?)\n}\n\nvoid AsyncRenderer::acknowledgeDirectSurfaceTaskBoundary/,
-  );
-  assert.ok(taskCompletion, "expected the worker task-boundary handoff");
-  assert.match(
-    taskCompletion[1],
-    /ScheduleWorkerTaskBoundaryCallback\(\s*reinterpret_cast<void\*>\(&AsyncRenderer::acknowledgeDirectSurfaceTaskBoundary\)/,
-    "a worker-local macrotask hop must return through JavaScript before accepting the surface",
-  );
-  // The hop must be a macrotask (MessagePort message with a setTimeout
-  // fallback), never a same-turn call, a microtask, or a nested timer that
-  // compounds into the browsers' nested-timer clamp.
-  assert.match(
-    workerRendererSource,
-    /ScheduleWorkerTaskBoundaryCallback[\s\S]{0,2400}?MessageChannel/,
-    "the task boundary must ride a MessagePort macrotask",
-  );
-  assert.doesNotMatch(taskCompletion[1], /emscripten_set_immediate/);
-  assert.doesNotMatch(
-    taskCompletion[1],
-    /emscripten_set_timeout/,
-    "a timer hop inherits the callers' timer-nesting level and hits the 4 ms nested-timer clamp",
-  );
-  assert.doesNotMatch(
-    taskCompletion[1],
-    /emscripten_proxy_async\([^;]*acknowledgeDirectSurfaceTaskBoundary/,
-  );
-  assert.match(taskCompletion[1], /frameToken\s*=\s*\*presentationBoundaryToken/);
-  assert.match(
-    workerRendererSource,
-    /WasmDirectSurfaceTaskBoundaryCallbackContext[\s\S]*shared_ptr<WasmWorkerRuntimeInitControl>/,
-    "the delayed callback must retain the shutdown owner gate",
-  );
-  const acknowledgment = workerRendererSource.match(
-    /void AsyncRenderer::acknowledgeDirectSurfaceTaskBoundary\(void\* userdata\)([\s\S]*?)\n}\n\nWorkerTaskScheduleResult/,
-  );
-  assert.ok(acknowledgment, "expected the delayed task-boundary callback");
-  assert.match(acknowledgment[1], /control->owner/);
-  assert.match(
-    acknowledgment[1],
-    /acknowledgeDirectSurfaceTaskBoundaryLocked\(context->frameToken, wake\)/,
-    "a stale callback must not acknowledge a replacement pending frame",
-  );
-  assert.match(acknowledgment[1], /presentationBoundaryPending/);
-  assert.match(workerRendererHeader, /PendingDirectSurfaceTaskBoundaryState/);
-});
-
-test("ready worker shutdown keeps task-boundary callbacks attached through join", () => {
-  const shutdown = workerRendererSource.match(
-    /void AsyncRenderer::shutdown\(\)([\s\S]*?)\n}\n\n#ifdef DONNER_WASM_WORKER_SURFACE/,
-  );
-  assert.ok(shutdown, "expected the renderer shutdown path");
-  assert.match(shutdown[1], /ChooseWasmWorkerOwnerDetachTiming/);
-
-  const beforeJoinDetach = shutdown[1].indexOf(
-    "if (ownerDetachTiming == WasmWorkerOwnerDetachTiming::BeforeWorkerJoin)",
-  );
-  const workerJoin = shutdown[1].indexOf("pthread_join(thread_, nullptr)");
-  const afterJoinDetach = shutdown[1].indexOf(
-    "if (ownerDetachTiming == WasmWorkerOwnerDetachTiming::AfterWorkerJoin)",
-  );
-  assert.ok(beforeJoinDetach >= 0 && beforeJoinDetach < workerJoin);
-  assert.ok(workerJoin >= 0 && afterJoinDetach > workerJoin);
-  assert.match(
-    workerRendererHeader,
-    /status == WasmWorkerRuntimeInitializationStatus::Ready[\s\S]*AfterWorkerJoin/,
-  );
-});
-
 test("worker WebGPU startup imports one browser Promise chain and keeps pending work off the proxy queue", () => {
   assert.match(geodeDeviceHeader, /CreateHeadlessAsync/);
   assert.match(geodeDeviceSource, /\(async \(\) =>/);
@@ -267,16 +149,6 @@ test("worker WebGPU startup imports one browser Promise chain and keeps pending 
     "browser device acquisition must continue from that adapter exactly once",
   );
 
-  const workerInitialization = workerRendererSource.match(
-    /void AsyncRenderer::beginWasmWorkerRuntimeInitialization\(\)([\s\S]*?)\n}/,
-  );
-  assert.ok(workerInitialization, "expected an event-driven worker runtime initializer");
-  assert.match(workerInitialization[1], /CreateHeadlessAsync/);
-  assert.doesNotMatch(workerInitialization[1], /CreateHeadless\(/);
-  assert.doesNotMatch(workerInitialization[1], /emscripten_proxy/);
-  assert.match(workerRendererSource, /DeferUntilRuntimeReady/);
-  assert.match(workerRendererSource, /wasmWorkerRuntimeInitControl_/);
-
   const deviceDestructor = geodeDeviceSource.match(
     /GeodeDevice::~GeodeDevice\(\)([\s\S]*?)\n}/,
   );
@@ -288,14 +160,14 @@ test("worker WebGPU startup imports one browser Promise chain and keeps pending 
   assert.match(emscriptenBranch[1], /WaitForSubmittedWork/);
 });
 
-test("renderer pthread startup waits for cursor setup and wake wiring", () => {
+test("renderer thread startup waits for cursor setup and wake wiring", () => {
   const constructor = workerRendererSource.match(
     /AsyncRenderer::AsyncRenderer\([^)]*\)([\s\S]*?)\n}\n\nvoid AsyncRenderer::start/,
   );
   assert.ok(constructor, "expected the AsyncRenderer constructor");
   assert.doesNotMatch(
     constructor[1],
-    /pthread_create/,
+    /thread_ = std::thread/,
     "constructing renderer ownership must not race the main-thread WebGPU setup",
   );
 
@@ -303,12 +175,14 @@ test("renderer pthread startup waits for cursor setup and wake wiring", () => {
     /void AsyncRenderer::start\(\)([\s\S]*?)\n}\n\nAsyncRenderer::~AsyncRenderer/,
   );
   assert.ok(startup, "expected explicit renderer-worker startup");
-  assert.match(startup[1], /pthread_create/);
-  assert.match(
-    renderCoordinatorSource,
-    /#ifdef DONNER_WASM_WORKER_SURFACE\s*return AsyncRendererStartMode::Deferred;/,
-    "the browser editor coordinator must opt into deferred construction",
-  );
+  assert.match(startup[1], /thread_ = std::thread/);
+  // the single-canvas architecture: one raster std::thread on every platform. The browser build
+  // used to create its own pthread with a transferred document canvas and defer
+  // that creation until the main-thread WebGPU device existed; there is no
+  // worker-owned canvas to transfer any more, so there is no deferred-start
+  // opt-in either.
+  assert.doesNotMatch(workerRendererSource, /pthread_create/);
+  assert.doesNotMatch(renderCoordinatorSource, /AsyncRendererStartMode::Deferred/);
 
   const shellConstructor = editorShellSource.match(
     /EditorShell::EditorShell\([\s\S]*?\)\s*\n\s*:[\s\S]*?\{([\s\S]*?)\n}/,

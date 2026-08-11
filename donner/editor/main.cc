@@ -15,6 +15,7 @@
 
 #include "donner/base/AsyncifySuspendProbe.h"
 #include "donner/editor/WholeAppWorkerBridge.h"
+#include "donner/svg/renderer/geode/GeodeDevice.h"
 
 #ifdef DONNER_EDITOR_WHOLE_APP_WORKER
 // The app pthread's JS context has no `window`, so the frame-scheduling flag,
@@ -273,6 +274,17 @@ void RunWasmEditorFrame(void* userdata) {
   const bool browserRequested = ConsumeBrowserEditorFrameRequest();
   const bool timerDue = state->nextIdleWakeAtMs.has_value() && nowMs >= *state->nextIdleWakeAtMs;
   if (!editorRequested && !browserRequested && !timerDue) {
+    // The GPU device lives on this thread, so its callbacks (the raster
+    // thread's snapshot map completions above all) are only delivered when
+    // this thread polls it. An idle editor would otherwise strand a raster
+    // thread mid-readback until the next rendered frame: measured as a
+    // 1.9 second first-sample present, the idle-timer period, with the
+    // raster thread burning 265 poll round trips. A non-blocking poll on
+    // every skipped tick is nanoseconds when nothing is pending.
+    if (const std::shared_ptr<donner::geode::GeodeDevice> device =
+            state->window->geodeDevice()) {
+      device->pollSuspending(false);
+    }
     return;
   }
   const int triggerBits =

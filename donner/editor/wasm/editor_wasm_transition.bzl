@@ -175,7 +175,7 @@ def _editor_wasm_runtime_options_probe_impl(ctx):
             "--closure-args=--compilation_level=SIMPLE_OPTIMIZATIONS" in values,
         ),
         "exports_ccall={}".format("-sEXPORTED_RUNTIME_METHODS=ccall" in values),
-        # Design 0064 single-canvas whole-app contract.
+        # the single-canvas architecture single-canvas whole-app contract.
         "proxy_to_pthread={}".format("-sPROXY_TO_PTHREAD" in values),
         "offscreencanvases_to_pthread={}".format(
             _single_setting(values, "OFFSCREENCANVASES_TO_PTHREAD"),

@@ -1,6 +1,6 @@
 #pragma once
 /// @file
-/// Per-frame attribution of retained bytes by category (Design 0064 phase 2).
+/// Per-frame attribution of retained bytes by category (the single-canvas presenter work).
 ///
 /// The browser editor links with `-sMAXIMUM_MEMORY=512MB`. When linear memory
 /// reaches that ceiling `emscripten_resize_heap` fails and the module aborts,

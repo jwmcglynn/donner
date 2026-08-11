@@ -11,6 +11,7 @@
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
+#include <emscripten/threading.h>
 #endif
 
 #include "donner/editor/EditorApp.h"
@@ -25,46 +26,71 @@ namespace donner::editor {
 namespace {
 
 #ifdef __EMSCRIPTEN__
-EM_JS(void, PublishWorkerTimingStats,
-      (double workerMs, double queueWaitMs, double dequeueToStartMs, double setupMs,
-       double renderFrameMs, double buildPreviewMs, double finalSnapshotMs,
-       double diagnosticsMs, double pollDelayMs, double wakeToPollMs,
-       double firstFrameDrawMs, double firstFramePlanningMs, double firstFrameWarmupMs,
-       double immediateRasterizeMs, double cachedRasterizeMs, int immediateTileCount,
-       int cachedTileCount, int offscreenCreateCount, int offscreenRecycleCount,
-       int offscreenCreateTotal, int offscreenRecycleTotal, int readbackCount,
-       int readbackPollIterations, int usedTimedWaitAny),
+// Proxied to the browser main thread: the render pthread has no `window`.
+// The 24 values ride one heap buffer because EM_ASM argument substitution
+// stops at $15; the buffer is static because the async proxy reads it after
+// this function returns, and the publisher is single-threaded per process.
+void PublishWorkerTimingStats(double workerMs, double queueWaitMs, double dequeueToStartMs,
+                              double setupMs, double renderFrameMs, double buildPreviewMs,
+                              double finalSnapshotMs, double diagnosticsMs, double pollDelayMs,
+                              double wakeToPollMs, double firstFrameDrawMs,
+                              double firstFramePlanningMs, double firstFrameWarmupMs,
+                              double immediateRasterizeMs, double cachedRasterizeMs,
+                              int immediateTileCount, int cachedTileCount,
+                              int offscreenCreateCount, int offscreenRecycleCount,
+                              int offscreenCreateTotal, int offscreenRecycleTotal,
+                              int readbackCount, int readbackPollIterations, int usedTimedWaitAny) {
+  static double buffer[24];
+  const double values[24] = {workerMs,
+                             queueWaitMs,
+                             dequeueToStartMs,
+                             setupMs,
+                             renderFrameMs,
+                             buildPreviewMs,
+                             finalSnapshotMs,
+                             diagnosticsMs,
+                             pollDelayMs,
+                             wakeToPollMs,
+                             firstFrameDrawMs,
+                             firstFramePlanningMs,
+                             firstFrameWarmupMs,
+                             immediateRasterizeMs,
+                             cachedRasterizeMs,
+                             static_cast<double>(immediateTileCount),
+                             static_cast<double>(cachedTileCount),
+                             static_cast<double>(offscreenCreateCount),
+                             static_cast<double>(offscreenRecycleCount),
+                             static_cast<double>(offscreenCreateTotal),
+                             static_cast<double>(offscreenRecycleTotal),
+                             static_cast<double>(readbackCount),
+                             static_cast<double>(readbackPollIterations),
+                             usedTimedWaitAny ? 1.0 : 0.0};
+  std::copy(std::begin(values), std::end(values), std::begin(buffer));
+  MAIN_THREAD_ASYNC_EM_ASM(
       {
+        const b = $0 >> 3;
+        const heap = HEAPF64;
+        const names = ([
+          'workerMs', 'queueWaitMs', 'dequeueToStartMs', 'setupMs', 'renderFrameMs',
+          'buildPreviewMs', 'finalSnapshotMs', 'diagnosticsMs', 'pollDelayMs', 'wakeToPollMs',
+          'firstFrameDrawMs', 'firstFramePlanningMs', 'firstFrameWarmupMs', 'immediateRasterizeMs',
+          'cachedRasterizeMs', 'immediateTileCount', 'cachedTileCount', 'offscreenCreateCount',
+          'offscreenRecycleCount', 'offscreenCreateTotal', 'offscreenRecycleTotal', 'readbackCount',
+          'readbackPollIterations'
+        ]);
         const previous = window['__donnerWorkerStats'];
-        window['__donnerWorkerStats'] = {
+        const stats = ({
           'completedResults' : previous ? previous['completedResults'] + 1 : 1,
           'publishedAtMs' : performance.now(),
-          'workerMs' : workerMs,
-          'queueWaitMs' : queueWaitMs,
-          'dequeueToStartMs' : dequeueToStartMs,
-          'setupMs' : setupMs,
-          'renderFrameMs' : renderFrameMs,
-          'buildPreviewMs' : buildPreviewMs,
-          'finalSnapshotMs' : finalSnapshotMs,
-          'diagnosticsMs' : diagnosticsMs,
-          'pollDelayMs' : pollDelayMs,
-          'wakeToPollMs' : wakeToPollMs,
-          'firstFrameDrawMs' : firstFrameDrawMs,
-          'firstFramePlanningMs' : firstFramePlanningMs,
-          'firstFrameWarmupMs' : firstFrameWarmupMs,
-          'immediateRasterizeMs' : immediateRasterizeMs,
-          'cachedRasterizeMs' : cachedRasterizeMs,
-          'immediateTileCount' : immediateTileCount,
-          'cachedTileCount' : cachedTileCount,
-          'offscreenCreateCount' : offscreenCreateCount,
-          'offscreenRecycleCount' : offscreenRecycleCount,
-          'offscreenCreateTotal' : offscreenCreateTotal,
-          'offscreenRecycleTotal' : offscreenRecycleTotal,
-          'readbackCount' : readbackCount,
-          'readbackPollIterations' : readbackPollIterations,
-          'readbackWaitStrategy' : usedTimedWaitAny ? 'timed-wait-any' : 'device-poll',
-        };
-      });
+        });
+        for (let index = 0; index < names.length; ++index) {
+          stats[names[index]] = heap[b + index];
+        }
+        stats['readbackWaitStrategy'] = heap[b + 23] ? 'timed-wait-any' : 'device-poll';
+        window['__donnerWorkerStats'] = stats;
+      },
+      buffer);
+}
 #endif
 
 bool IsGraphicsElement(const svg::SVGElement& element) {

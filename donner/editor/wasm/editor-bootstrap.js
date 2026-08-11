@@ -1,4 +1,4 @@
-// The editor's browser bootstrap (Design 0064, whole app in one worker).
+// The editor's browser bootstrap (the single-canvas architecture, whole app in one worker).
 //
 // The page-side contract:
 //
@@ -34,15 +34,6 @@ window.__donnerWholeAppWorker = true;
 // The app thread has its own `performance` time origin. Publish the page's so a
 // worker-side timestamp can be expressed on the page clock without a round trip.
 window.__donnerPageTimeOriginMs = performance.timeOrigin;
-window.__donnerRequiresWorkerRuntime = false;
-window.__donnerWorkerRuntimeStats = {
-  ready: true,
-  initializationMs: 0,
-  maskPipelineMs: 0,
-  initializationCount: 0,
-  workerDeviceCreations: 0,
-  readyAtMs: 0,
-};
 
 function SetLoadingPhase(message, progress, detail) {
   status.textContent = message;
@@ -68,13 +59,6 @@ function ShowCapabilityError(message) {
   canvas.hidden = true;
   console.error(message);
 }
-
-window.__donnerReportWorkerSurfaceUnavailable = function() {
-  ShowCapabilityError(
-    "The Geode WebGPU renderer could not present its canvas surface. "
-      + "Update or enable WebGPU in this browser to continue.",
-  );
-};
 
 function RevealEditorAfterFirstFrame() {
   if (editorRevealed || !window.__donnerFirstFramePresented) {
@@ -182,7 +166,7 @@ function InstallTouchPointerBridge(targetCanvas) {
 // Do not fold the classifier's 1/ln(1.1) gain in here. That pre-multiplication
 // (K = 1049.2059) shipped briefly alongside the discriminator and gained Safari
 // pinch input twice, about 10.5x too fast in log space, with the discriminator's
-// per-event clamp flattening every gesture to a full 1.5x step. The Design 0064
+// per-event clamp flattening every gesture to a full 1.5x step. The the single-canvas architecture
 // phase 1 experiment bootstrap carried the regressed value; it does not survive
 // into the shipping bootstrap.
 const kPinchWheelDeltaPerLnScaleFallback = 100;
@@ -236,10 +220,12 @@ window.__donnerCanStartWasm = typeof SharedArrayBuffer !== "undefined"
 if (!window.__donnerCanStartWasm) {
   const reason = typeof SharedArrayBuffer === "undefined"
     ? (window.isSecureContext
-      ? "This page is secure, but cross-origin isolation is not active."
-      : "This page is not running in a secure context.")
+      ? "This page is secure, but cross-origin isolation is not active, so SharedArrayBuffer "
+        + "and WebAssembly threads are unavailable."
+      : "This page is not running in a secure context, so SharedArrayBuffer and WebAssembly "
+        + "threads are unavailable.")
     : "This browser cannot transfer a canvas to an OffscreenCanvas.";
-  ShowCapabilityError(`${reason} The whole-app-worker build cannot start.`);
+  ShowCapabilityError(`${reason} The editor cannot start.`);
 }
 
 var Module = {
@@ -287,6 +273,9 @@ var Module = {
     return prefix + path;
   },
   canvas: canvas,
+  contextAttributes: {
+    preserveDrawingBuffer: true,
+  },
 };
 
 canvas.addEventListener("contextmenu", function(event) {

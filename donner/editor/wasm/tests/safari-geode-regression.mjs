@@ -24,8 +24,6 @@
  *   DONNER_SAFARI_ALLOW_UNPINNED_PACKAGE=1
  *                                  Explicit exploratory-only bypass for the required digest.
  *   DONNER_SAFARI_REQUIRED=1      Treat unavailable Safari automation as failure, not a skip.
- *   DONNER_SAFARI_SEAM_ONLY=1     Stop after the fractional-pan compositor pixel probe.
- *   DONNER_SAFARI_LIVE_PAN_ONLY=1 Capture trusted wheel-pan frames and fail on any edge leak.
  *   DONNER_SAFARI_MEMORY_ONLY=1   Hold Donner Splash for five minutes and detect resource growth or
  *                                  a Safari significant-memory reload.
  */
@@ -36,26 +34,28 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import zlib from "node:zlib";
 
 const kDriverUrl = process.env.DONNER_SAFARI_DRIVER_URL || "http://127.0.0.1:4445";
 const kBaseUrl = process.env.DONNER_WASM_BASE_URL || "http://127.0.0.1:8000";
 const kRequired = process.env.DONNER_SAFARI_REQUIRED === "1";
 const kExpectedWasmSha256 = process.env.DONNER_SAFARI_EXPECTED_WASM_SHA256 || "";
 const kAllowUnpinnedPackage = process.env.DONNER_SAFARI_ALLOW_UNPINNED_PACKAGE === "1";
-const kSeamOnly = process.env.DONNER_SAFARI_SEAM_ONLY === "1";
-const kLivePanOnly = process.env.DONNER_SAFARI_LIVE_PAN_ONLY === "1";
 const kMemoryOnly = process.env.DONNER_SAFARI_MEMORY_ONLY === "1";
 const kMemoryDwellMs = 5 * 60 * 1_000;
 const kMemoryMaxWebContentRssBytes = 512 * 1024 * 1024;
 const kMemorySampleIntervalMs = 5_000;
 const kTimeoutMs = Number(process.env.DONNER_SAFARI_TIMEOUT_MS || 30_000);
+// Where the Basic Shapes blue rounded rectangle sits inside `#canvas` at the
+// harness's 1600x1000 window. the single-canvas architecture draws the document inside the single
+// canvas's WebGPU frame, so pointer targets are canvas offsets rather than
+// fractions of a separate document element.
+const kBlueRectOffset = { x: 408, y: 353 };
 const kRunId = new Date().toISOString().replaceAll(/[^0-9A-Za-z]/g, "");
 const kPageLifetimeToken = crypto.randomUUID();
 const kArtifactDir = process.env.DONNER_SAFARI_ARTIFACT_DIR
   || path.join(os.tmpdir(), `donner-safari-geode-${kRunId}`);
 const kFatalPattern =
-  /Failed to wake Wasm renderer pthread|Wasm renderer pthread wake rejected|Aborted|Assertion failed|RuntimeError|Out of bounds|call_indirect|Unreachable code|UTILS_RELEASE_ASSERT|Pthread .* sent an error|getJsObject|No available adapters|WebGPU adapter (?:request )?(?:failed|unavailable)|Direct WebGPU import failed|Browser WebGPU import returned incomplete handles|Uncaptured WebGPU error|WebGPU device lost|Donner (?:worker surface|bitmap bridge)/i;
+  /Failed to wake Wasm renderer pthread|Wasm renderer pthread wake rejected|Aborted|Assertion failed|RuntimeError|Out of bounds|call_indirect|Unreachable code|UTILS_RELEASE_ASSERT|Pthread .* sent an error|getJsObject|No available adapters|WebGPU adapter (?:request )?(?:failed|unavailable)|Direct WebGPU import failed|Browser WebGPU import returned incomplete handles|Uncaptured WebGPU error|WebGPU device lost/i;
 
 if (process.argv.includes("--help") || process.argv.includes("-h")) {
   console.log(`Usage: node ${path.basename(process.argv[1])}
@@ -309,20 +309,8 @@ async function poll(label, callback, timeoutMs = kTimeoutMs, intervalMs = 50) {
   throw new Error(`${label} timed out after ${timeoutMs}ms; last=${JSON.stringify(lastValue)}`);
 }
 
-function displayedFrame(state) {
-  return state.surfaceMode === "bitmap-bridge"
-    ? Number(state.surface?.bitmapFrame || 0)
-    : Number(state.surface?.directFrame || 0);
-}
-
 function assertNoFatal(label, states) {
   for (const state of states) {
-    assert.notEqual(state.runtime?.failed, true, `${label}: worker runtime reported failure`);
-    assert.equal(
-      state.wakeFailure,
-      null,
-      `${label}: renderer pthread wake failure stats published`,
-    );
     assert.equal(
       Number(state.wgpuReadbackCaptureFailures || 0),
       0,
@@ -356,286 +344,6 @@ function assertFlatHeap(label, state, expectedBytes) {
     expectedBytes,
     `${label}: shared Wasm heap grew after pthread startup`,
   );
-}
-
-function assertAcceptedEpoch(label, state, minimumToken = 0) {
-  const token = Number(state.accepted?.token || 0);
-  assert.equal(state.accepted?.kind, "geode", `${label}: accepted presentation was not Geode`);
-  assert.ok(
-    token > minimumToken,
-    `${label}: accepted token ${token} did not exceed ${minimumToken}`,
-  );
-  assert.equal(
-    displayedFrame(state),
-    token,
-    `${label}: displayed surface did not match accepted presentation`,
-  );
-  assert.equal(state.visibleSurfaceCount, 1, `${label}: expected exactly one accepted surface`);
-  assert.ok(state.surface?.width > 0 && state.surface?.height > 0, `${label}: empty surface`);
-  const scale = Number(state.devicePixelRatio || 0);
-  const rect = state.surface?.rect;
-  const clip = state.surface?.clipInsets;
-  assert.ok(scale > 0 && rect && clip, `${label}: missing device-pixel surface geometry`);
-  assert.ok(
-    Math.abs(rect.width * scale - state.surface.width) <= 1e-4,
-    `${label}: ${state.surface.width} backing texels were stretched across ${
-      rect.width * scale
-    } device pixels`,
-  );
-  assert.ok(
-    Math.abs(rect.height * scale - state.surface.height) <= 1e-4,
-    `${label}: ${state.surface.height} backing texels were stretched across ${
-      rect.height * scale
-    } device pixels`,
-  );
-  const deviceClipEdges = [
-    rect.x + clip.left,
-    rect.y + clip.top,
-    rect.x + rect.width - clip.right,
-    rect.y + rect.height - clip.bottom,
-  ].map((edge) => edge * scale);
-  for (const edge of deviceClipEdges) {
-    assert.ok(
-      Math.abs(edge - Math.round(edge)) <= 1e-6,
-      `${label}: worker clip edge ${edge} did not land on the shared device-pixel grid`,
-    );
-  }
-}
-
-function decodeScreenshotPng(filePath) {
-  const bytes = fs.readFileSync(filePath);
-  assert.deepEqual(
-    [...bytes.subarray(0, 8)],
-    [137, 80, 78, 71, 13, 10, 26, 10],
-    `${filePath}: SafariDriver screenshot was not a PNG`,
-  );
-
-  let width = 0;
-  let height = 0;
-  let bitDepth = 0;
-  let colorType = 0;
-  let interlace = 0;
-  const compressed = [];
-  for (let offset = 8; offset < bytes.length;) {
-    const length = bytes.readUInt32BE(offset);
-    const type = bytes.toString("ascii", offset + 4, offset + 8);
-    const data = bytes.subarray(offset + 8, offset + 8 + length);
-    if (type === "IHDR") {
-      width = data.readUInt32BE(0);
-      height = data.readUInt32BE(4);
-      bitDepth = data[8];
-      colorType = data[9];
-      interlace = data[12];
-    } else if (type === "IDAT") {
-      compressed.push(data);
-    } else if (type === "IEND") {
-      break;
-    }
-    offset += length + 12;
-  }
-
-  assert.ok(width > 0 && height > 0, `${filePath}: PNG omitted its dimensions`);
-  assert.equal(bitDepth, 8, `${filePath}: expected an 8-bit Safari screenshot`);
-  assert.ok([2, 6].includes(colorType), `${filePath}: unsupported PNG color type ${colorType}`);
-  assert.equal(interlace, 0, `${filePath}: interlaced Safari screenshots are unsupported`);
-  const channels = colorType === 6 ? 4 : 3;
-  const rowBytes = width * channels;
-  const filtered = zlib.inflateSync(Buffer.concat(compressed));
-  assert.equal(
-    filtered.length,
-    height * (rowBytes + 1),
-    `${filePath}: unexpected decoded PNG byte count`,
-  );
-  const pixels = Buffer.alloc(height * rowBytes);
-  const paeth = (left, above, upperLeft) => {
-    const prediction = left + above - upperLeft;
-    const leftDistance = Math.abs(prediction - left);
-    const aboveDistance = Math.abs(prediction - above);
-    const upperLeftDistance = Math.abs(prediction - upperLeft);
-    if (leftDistance <= aboveDistance && leftDistance <= upperLeftDistance) return left;
-    return aboveDistance <= upperLeftDistance ? above : upperLeft;
-  };
-  for (let y = 0; y < height; ++y) {
-    const filter = filtered[y * (rowBytes + 1)];
-    const sourceOffset = y * (rowBytes + 1) + 1;
-    const destOffset = y * rowBytes;
-    for (let byte = 0; byte < rowBytes; ++byte) {
-      const encoded = filtered[sourceOffset + byte];
-      const left = byte >= channels ? pixels[destOffset + byte - channels] : 0;
-      const above = y > 0 ? pixels[destOffset + byte - rowBytes] : 0;
-      const upperLeft = y > 0 && byte >= channels
-        ? pixels[destOffset + byte - rowBytes - channels]
-        : 0;
-      let predictor = 0;
-      if (filter === 1) predictor = left;
-      else if (filter === 2) predictor = above;
-      else if (filter === 3) predictor = Math.floor((left + above) / 2);
-      else if (filter === 4) predictor = paeth(left, above, upperLeft);
-      else assert.equal(filter, 0, `${filePath}: unsupported PNG filter ${filter}`);
-      pixels[destOffset + byte] = (encoded + predictor) & 0xff;
-    }
-  }
-
-  return {
-    height,
-    pixel(x, y) {
-      assert.ok(x >= 0 && x < width && y >= 0 && y < height, `pixel outside screenshot: ${x},${y}`);
-      const offset = (y * width + x) * channels;
-      return [...pixels.subarray(offset, offset + 3)];
-    },
-    width,
-  };
-}
-
-function analyzeSolidDocumentEdges(filePath, state) {
-  const screenshot = decodeScreenshotPng(filePath);
-  const canvas = state.canvasRect;
-  const surface = state.surface;
-  assert.ok(
-    canvas && surface?.rect && surface?.clipInsets,
-    "missing surface geometry for seam probe",
-  );
-  const scaleX = screenshot.width / canvas.width;
-  const scaleY = screenshot.height / canvas.height;
-  assert.ok(Math.abs(scaleX - scaleY) <= 1e-6, "Safari screenshot used nonuniform scaling");
-  assert.ok(
-    Math.abs(scaleX - state.devicePixelRatio) <= 1e-6,
-    `Safari screenshot scale ${scaleX} did not match DPR ${state.devicePixelRatio}`,
-  );
-
-  const rect = surface.rect;
-  const clip = surface.clipInsets;
-  const edges = {
-    bottom: (rect.y + rect.height - clip.bottom - canvas.y) * scaleY,
-    left: (rect.x + clip.left - canvas.x) * scaleX,
-    right: (rect.x + rect.width - clip.right - canvas.x) * scaleX,
-    top: (rect.y + clip.top - canvas.y) * scaleY,
-  };
-  const samples = [
-    { axis: "x", edge: "left", fixed: edges.top + (edges.bottom - edges.top) * 0.45, sign: 1 },
-    { axis: "x", edge: "right", fixed: edges.top + (edges.bottom - edges.top) * 0.45, sign: -1 },
-    { axis: "y", edge: "top", fixed: edges.left + (edges.right - edges.left) * 0.9, sign: 1 },
-    { axis: "y", edge: "bottom", fixed: edges.left + (edges.right - edges.left) * 0.9, sign: -1 },
-  ];
-  const maxChannelDelta = (left, right) =>
-    Math.max(...left.map((value, i) => Math.abs(value - right[i])));
-  const diagnostics = [];
-  for (const sample of samples) {
-    const edgeCoordinate = edges[sample.edge];
-    const insideCoordinate = sample.sign > 0
-      ? Math.ceil(edgeCoordinate - 0.5)
-      : Math.floor(edgeCoordinate - 0.5);
-    const referenceCoordinate = insideCoordinate + sample.sign * 4;
-    const fixedCoordinate = Math.round(sample.fixed - 0.5);
-    const insidePixel = sample.axis === "x"
-      ? screenshot.pixel(insideCoordinate, fixedCoordinate)
-      : screenshot.pixel(fixedCoordinate, insideCoordinate);
-    const referencePixel = sample.axis === "x"
-      ? screenshot.pixel(referenceCoordinate, fixedCoordinate)
-      : screenshot.pixel(fixedCoordinate, referenceCoordinate);
-    diagnostics.push({
-      deviceCoordinate: edgeCoordinate,
-      edge: sample.edge,
-      insidePixel,
-      maxChannelDelta: maxChannelDelta(insidePixel, referencePixel),
-      referencePixel,
-    });
-  }
-  return diagnostics;
-}
-
-function scanSolidDocumentEdges(filePath, state) {
-  const screenshot = decodeScreenshotPng(filePath);
-  const canvas = state.canvasRect;
-  const surface = state.surface;
-  assert.ok(
-    canvas && surface?.rect && surface?.clipInsets,
-    "missing surface geometry for live seam scan",
-  );
-  const scaleX = screenshot.width / canvas.width;
-  const scaleY = screenshot.height / canvas.height;
-  assert.ok(Math.abs(scaleX - scaleY) <= 1e-6, "Safari screenshot used nonuniform scaling");
-  const rect = surface.rect;
-  const clip = surface.clipInsets;
-  const edges = {
-    bottom: (rect.y + rect.height - clip.bottom - canvas.y) * scaleY,
-    left: (rect.x + clip.left - canvas.x) * scaleX,
-    right: (rect.x + rect.width - clip.right - canvas.x) * scaleX,
-    top: (rect.y + clip.top - canvas.y) * scaleY,
-  };
-  const maxChannelDelta = (left, right) =>
-    Math.max(...left.map((value, i) => Math.abs(value - right[i])));
-  const diagnostics = [];
-  for (const edge of ["left", "right", "top", "bottom"]) {
-    const vertical = edge === "left" || edge === "right";
-    const leading = edge === "left" || edge === "top";
-    const deviceCoordinate = edges[edge];
-    const insideCoordinate = leading
-      ? Math.ceil(deviceCoordinate - 0.5)
-      : Math.floor(deviceCoordinate - 0.5);
-    const referenceCoordinate = insideCoordinate + (leading ? 4 : -4);
-    const variableStart = Math.ceil((vertical ? edges.top : edges.left) + 8);
-    const variableEnd = Math.floor((vertical ? edges.bottom : edges.right) - 8);
-    const midpoint = Math.floor((variableStart + variableEnd) * 0.5);
-    const midpointPixel = vertical
-      ? screenshot.pixel(insideCoordinate, midpoint)
-      : screenshot.pixel(midpoint, insideCoordinate);
-    const midpointReferencePixel = vertical
-      ? screenshot.pixel(referenceCoordinate, midpoint)
-      : screenshot.pixel(midpoint, referenceCoordinate);
-    let firstMismatch = null;
-    let maxDelta = 0;
-    let mismatchedSamples = 0;
-    let samples = 0;
-    for (let variable = variableStart; variable <= variableEnd; variable += 2) {
-      const insidePixel = vertical
-        ? screenshot.pixel(insideCoordinate, variable)
-        : screenshot.pixel(variable, insideCoordinate);
-      const referencePixel = vertical
-        ? screenshot.pixel(referenceCoordinate, variable)
-        : screenshot.pixel(variable, referenceCoordinate);
-      const delta = maxChannelDelta(insidePixel, referencePixel);
-      maxDelta = Math.max(maxDelta, delta);
-      samples += 1;
-      if (delta > 2) {
-        mismatchedSamples += 1;
-        firstMismatch ??= { insidePixel, referencePixel, variable };
-      }
-    }
-    diagnostics.push({
-      deviceCoordinate,
-      edge,
-      firstMismatch,
-      maxChannelDelta: maxDelta,
-      midpointPixel,
-      midpointReferencePixel,
-      mismatchedSamples,
-      samples,
-    });
-  }
-  return diagnostics;
-}
-
-function samePresentedGeometry(before, after) {
-  return Number(before.accepted?.token || 0) === Number(after.accepted?.token || 0)
-    && JSON.stringify(before.surface?.rect || null) === JSON.stringify(after.surface?.rect || null)
-    && JSON.stringify(before.surface?.clipInsets || null)
-      === JSON.stringify(after.surface?.clipInsets || null);
-}
-
-function assertNoSolidDocumentEdgeSeam(label, diagnostics) {
-  for (const diagnostic of diagnostics) {
-    assert.ok(
-      diagnostic.maxChannelDelta <= 2,
-      `${label}: ${diagnostic.edge} edge leaked compositor background: ${
-        JSON.stringify(diagnostic)
-      }`,
-    );
-    assert.ok(
-      Math.abs(diagnostic.deviceCoordinate - Math.round(diagnostic.deviceCoordinate)) <= 1e-6,
-      `${label}: ${diagnostic.edge} edge ${diagnostic.deviceCoordinate} split a device pixel`,
-    );
-  }
 }
 
 function assertThumbnailDiagnostic(state, initialDeviceState) {
@@ -676,10 +384,7 @@ function assertThumbnailDiagnostic(state, initialDeviceState) {
     );
   }
   assert.deepEqual(
-    {
-      headlessDeviceCreations: state.headlessDeviceCreations,
-      workerDeviceCreations: state.runtime?.workerDeviceCreations,
-    },
+    { headlessDeviceCreations: state.headlessDeviceCreations },
     initialDeviceState,
     "thumbnail generation unexpectedly created another WebGPU device",
   );
@@ -774,26 +479,7 @@ async function readState(driver) {
       const value = element.getBoundingClientRect();
       return { x: value.x, y: value.y, width: value.width, height: value.height };
     })() : null;
-    const visibleSurfaces = Array.from(
-      document.querySelectorAll('canvas[data-direct-surface-visible="true"]'),
-    );
-    const surface = visibleSurfaces[0] || null;
-    const clipInsets = (element) => {
-      const match = element?.style.clipPath?.match(/^inset\\(([^)]+)\\)$/);
-      if (!match) return null;
-      const values = match[1].trim().split(/\\s+/).map((value) => Number.parseFloat(value));
-      if (values.length < 1 || values.length > 4 || values.some((value) => !Number.isFinite(value))) {
-        return null;
-      }
-      const [top, second = top, third = top, fourth = second] = values;
-      return values.length === 2
-        ? { top, right: second, bottom: top, left: second }
-        : values.length === 3
-        ? { top, right: second, bottom: third, left: second }
-        : { top, right: second, bottom: third, left: fourth };
-    };
     return {
-      accepted: window.__donnerAcceptedPresentation || null,
       activeSample: window.__donnerActiveSampleStats || null,
       backend: window.__donnerBackend || null,
       browserCursorStats: window.__donnerBrowserCursorStats || null,
@@ -818,18 +504,7 @@ async function readState(driver) {
       pageTimeOrigin: performance.timeOrigin,
       presentationResources: window.__donnerPresentationResourceStats || null,
       runtimeInitializedAtMs: window.__donnerRuntimeInitializedAtMs || 0,
-      runtime: window.__donnerWorkerRuntimeStats || null,
-      surface: surface ? {
-        bitmapFrame: Number(surface.dataset.bitmapBridgeFrame || 0),
-        clipInsets: clipInsets(surface),
-        directFrame: Number(surface.dataset.directSurfaceFrame || 0),
-        height: surface.height,
-        rect: rect(surface),
-        slot: surface.id,
-        width: surface.width,
-      } : null,
-      surfaceMode: window.__donnerWorkerSurfaceMode || null,
-      surfaceBacking: Array.from(document.querySelectorAll('canvas')).map((element) => ({
+      canvasBacking: Array.from(document.querySelectorAll('canvas')).map((element) => ({
         backingBytes: Number(element.width || 0) * Number(element.height || 0) * 4,
         height: Number(element.height || 0),
         id: element.id || '',
@@ -838,12 +513,11 @@ async function readState(driver) {
         width: Number(element.width || 0),
       })),
       thumbnailStats: window.__donnerSampleThumbnailStats || null,
-      visibleSurfaceCount: visibleSurfaces.length,
-      wakeFailure: window.__donnerWorkerTaskWakeFailureStats || null,
       wgpuReadback: window.__donnerWgpuReadbackStats || null,
       wgpuReadbackCaptureCompletions: window.__donnerWgpuReadbackCaptureCompletions || 0,
       wgpuReadbackCaptureFailures: window.__donnerWgpuReadbackCaptureFailures || 0,
       wgpuReadbackCaptureStarts: window.__donnerWgpuReadbackCaptureStarts || 0,
+      wholeAppWorker: window.__donnerWholeAppWorker === true,
       worker: window.__donnerWorkerStats || null,
     };
   `);
@@ -856,7 +530,7 @@ async function waitForEditor(driver, label) {
     if (state.capabilityError) {
       throw new Error(`${label}: browser capability error: ${state.capabilityError}`);
     }
-    return state.loadingHidden && state.runtime?.ready && state.canvasRect ? state : null;
+    return state.loadingHidden && state.firstFramePresented && state.canvasRect ? state : null;
   });
 }
 
@@ -882,15 +556,14 @@ async function requireVisibleSafariAnimationFrame(driver) {
   }
 }
 
-async function waitForAcceptedEpoch(driver, label, minimumToken) {
+// The single-canvas replacement removed the accepted-epoch handshake: the whole application draws
+// into the one canvas, so "a new frame landed" is now a completed document
+// render followed by an app-thread frame.
+async function waitForDocumentRender(driver, label, minimumResults) {
   return poll(label, async () => {
     const state = await readState(driver);
     assertNoFatal(label, [state]);
-    const token = Number(state.accepted?.token || 0);
-    if (token > minimumToken && displayedFrame(state) === token) {
-      return state;
-    }
-    return null;
+    return Number(state.worker?.completedResults || 0) > minimumResults ? state : null;
   });
 }
 
@@ -927,12 +600,14 @@ async function runRegression(driver, editorUrl, result) {
 
   result.initial = await waitForEditor(driver, "initial Safari editor startup");
   assert.equal(result.initial.backend, "geode", "package was not Geode");
-  assert.equal(result.initial.runtime.initializationCount, 1, "worker initialized more than once");
-  assert.ok(result.initial.runtime.workerDeviceCreations >= 1, "worker created no WebGPU device");
   assert.equal(
-    result.initial.surfaceMode,
-    "bitmap-bridge",
-    "Safari did not select its bitmap bridge",
+    result.initial.wholeAppWorker,
+    true,
+    "Safari did not start the whole application on the app pthread",
+  );
+  assert.ok(
+    result.initial.headlessDeviceCreations >= 1,
+    "the app pthread created no WebGPU device",
   );
   const initialHeapBytes = Number(result.initial.heapBytes || 0);
   assert.ok(initialHeapBytes >= 64 * 1024 * 1024, "Geode started below the 64 MiB heap fence");
@@ -940,7 +615,6 @@ async function runRegression(driver, editorUrl, result) {
 
   const initialDeviceState = {
     headlessDeviceCreations: result.initial.headlessDeviceCreations,
-    workerDeviceCreations: result.initial.runtime.workerDeviceCreations,
   };
   result.thumbnailsSettled = await poll(
     "asynchronous SVG thumbnails",
@@ -985,12 +659,9 @@ async function runRegression(driver, editorUrl, result) {
   }
 
   const canvas = result.thumbnailDiagnostic.canvasRect;
-  const beforeSampleToken = Number(result.thumbnailDiagnostic.accepted?.token || 0);
   const beforeSampleResults = Number(result.thumbnailDiagnostic.worker?.completedResults || 0);
   const sample = kMemoryOnly
     ? { id: "donner-splash", label: "Donner Splash", xFraction: 0.24 }
-    : kLivePanOnly
-    ? { id: "text-style", label: "Text and Style", xFraction: 0.6875 }
     : { id: "basic-shapes", label: "Basic Shapes", xFraction: 0.5 };
   const sampleClickPoint = {
     x: canvas.x + canvas.width * sample.xFraction,
@@ -1043,7 +714,6 @@ async function runRegression(driver, editorUrl, result) {
     return {
       events: window.__donnerSafariClickProbeEvents || [],
       activeSample: window.__donnerActiveSampleStats || null,
-      accepted: window.__donnerAcceptedPresentation || null,
       mainLoopRenderedFrames: window.__donnerMainLoopRenderedFrames || 0,
       editorFrameRequested: Boolean(window.__donnerEditorFrameRequested),
       worker: window.__donnerWorkerStats || null,
@@ -1057,18 +727,15 @@ async function runRegression(driver, editorUrl, result) {
   result.selectedSample = await poll(`${sample.label} sample presentation`, async () => {
     const state = await readState(driver);
     assertNoFatal(`${sample.label} sample presentation`, [state]);
-    const token = Number(state.accepted?.token || 0);
     if (
       state.activeSample?.sampleId === sample.id
-      && token > beforeSampleToken
-      && displayedFrame(state) === token
       && Number(state.worker?.completedResults || 0) > beforeSampleResults
+      && Number(state.mainLoopRenderedFrames || 0) > 0
     ) {
       return state;
     }
     return null;
   });
-  assertAcceptedEpoch(sample.label, result.selectedSample, beforeSampleToken);
   assertFlatHeap(sample.label, result.selectedSample, initialHeapBytes);
   result.selectedSampleScreenshot = await capture(driver, `03-${sample.id}`);
 
@@ -1223,128 +890,8 @@ async function runRegression(driver, editorUrl, result) {
     return;
   }
 
-  if (kLivePanOnly) {
-    const panPoint = {
-      x: result.selectedSample.surface.rect.x + result.selectedSample.surface.rect.width * 0.5,
-      y: result.selectedSample.surface.rect.y + result.selectedSample.surface.rect.height * 0.5,
-    };
-    await driver.actions([pointerMove(panPoint.x, panPoint.y, 80)]);
-    await driver.releaseActions();
-    result.livePanFrames = [];
-    const badFrames = [];
-    const goodFrames = [];
-    const surfacePositions = new Set();
-    for (let step = 1; step <= 48; ++step) {
-      const magnitude = 9 + (step % 4) * 4;
-      const direction = step % 2 === 0 ? -1 : 1;
-      await driver.scroll(
-        panPoint.x,
-        panPoint.y,
-        direction * magnitude,
-        step % 3 === 0 ? direction * 5 : 0,
-      );
-      const beforeCapture = await readState(driver);
-      const screenshot = await capture(driver, `04-live-pan-${String(step).padStart(2, "0")}`);
-      const state = await readState(driver);
-      if (!samePresentedGeometry(beforeCapture, state)) {
-        result.livePanFrames.push({
-          beforeAcceptedToken: Number(beforeCapture.accepted?.token || 0),
-          beforeSurfaceRect: beforeCapture.surface?.rect || null,
-          screenshot,
-          skippedGeometryRace: true,
-          afterAcceptedToken: Number(state.accepted?.token || 0),
-          afterSurfaceRect: state.surface?.rect || null,
-        });
-        continue;
-      }
-      const diagnostics = scanSolidDocumentEdges(screenshot, state);
-      surfacePositions.add(JSON.stringify([state.surface.rect.x, state.surface.rect.y]));
-      const bad = diagnostics.some((edge) => edge.maxChannelDelta > 2);
-      const frame = {
-        acceptedToken: Number(state.accepted?.token || 0),
-        bad,
-        diagnostics,
-        screenshot,
-        surfaceRect: state.surface?.rect || null,
-      };
-      result.livePanFrames.push(frame);
-      if (bad) {
-        badFrames.push(frame);
-      } else {
-        goodFrames.push(frame);
-      }
-      if (badFrames.length >= 2 && goodFrames.length >= 1 && surfacePositions.size >= 2) {
-        break;
-      }
-    }
-    assert.ok(goodFrames.length >= 1, "Safari live pan captured no clean edge frame");
-    assert.ok(
-      surfacePositions.size >= 2,
-      `Safari live pan did not move through distinct surface positions: ${
-        [...surfacePositions].join(", ")
-      }`,
-    );
-    assert.deepEqual(
-      badFrames,
-      [],
-      `Safari exposed ${badFrames.length} wheel-pan frames with document-edge background leaks`,
-    );
-    return;
-  }
-
   result.basicShapes = result.selectedSample;
   result.basicShapesScreenshot = result.selectedSampleScreenshot;
-
-  const seamPanPoint = {
-    x: result.basicShapes.surface.rect.x + result.basicShapes.surface.rect.width * 0.5,
-    y: result.basicShapes.surface.rect.y + result.basicShapes.surface.rect.height * 0.5,
-  };
-  await driver.actions([pointerMove(seamPanPoint.x, seamPanPoint.y, 80)]);
-  await driver.releaseActions();
-  const beforeSeamPan = await readState(driver);
-  await driver.execute(
-    `
-    const [x, y] = arguments;
-    const canvas = document.getElementById('canvas');
-    return canvas.dispatchEvent(new WheelEvent('wheel', {
-      bubbles: true,
-      cancelable: true,
-      clientX: x,
-      clientY: y,
-      deltaMode: WheelEvent.DOM_DELTA_PIXEL,
-      deltaX: -2.5,
-      deltaY: -1.25,
-    }));
-  `,
-    [seamPanPoint.x, seamPanPoint.y],
-  );
-  const fractionalPan = await poll("fractional Safari pan layout", async () => {
-    const state = await readState(driver);
-    assertNoFatal("fractional Safari pan layout", [state]);
-    const beforeRect = beforeSeamPan.surface?.rect;
-    const rect = state.surface?.rect;
-    if (
-      rect && beforeRect
-      && (Math.abs(rect.x - beforeRect.x) > 1e-6 || Math.abs(rect.y - beforeRect.y) > 1e-6)
-    ) {
-      return state;
-    }
-    return null;
-  });
-  const fractionalPanScreenshot = await capture(driver, "04-fractional-pan-seam");
-  result.fractionalPanSeamProbe = {
-    afterRect: fractionalPan.surface.rect,
-    beforeRect: beforeSeamPan.surface.rect,
-    diagnostics: analyzeSolidDocumentEdges(fractionalPanScreenshot, fractionalPan),
-    screenshot: fractionalPanScreenshot,
-  };
-  assertNoSolidDocumentEdgeSeam(
-    "fractional Safari pan",
-    result.fractionalPanSeamProbe.diagnostics,
-  );
-  if (kSeamOnly) {
-    return;
-  }
 
   const cursorProbePoint = {
     x: canvas.x + canvas.width * 0.55,
@@ -1411,32 +958,28 @@ async function runRegression(driver, editorUrl, result) {
     "same-key browser cursor requests did not use the no-DOM-mutation fast path",
   );
 
-  const documentRect = result.basicShapes.surface?.rect;
-  assert.ok(documentRect, "Basic Shapes did not publish a visible document surface");
   const dragStart = {
-    x: documentRect.x + documentRect.width * (122 / 640),
-    y: documentRect.y + documentRect.height * (92 / 400),
+    x: result.basicShapes.canvasRect.x + kBlueRectOffset.x,
+    y: result.basicShapes.canvasRect.y + kBlueRectOffset.y,
   };
   await click(driver, dragStart.x, dragStart.y);
   await driver.actions([pointerMove(dragStart.x, dragStart.y), { type: "pointerDown", button: 0 }]);
-  result.dragEpochs = [];
-  let previousToken = Number((await readState(driver)).accepted?.token || 0);
+  result.dragRenders = [];
+  let previousResults = Number((await readState(driver)).worker?.completedResults || 0);
   try {
     for (let step = 1; step <= 16; ++step) {
       await driver.actions([pointerMove(dragStart.x + step * 6, dragStart.y + step * 3, 8)]);
-      const state = await waitForAcceptedEpoch(
+      const state = await waitForDocumentRender(
         driver,
-        `accepted Safari drag epoch ${step}`,
-        previousToken,
+        `Safari drag render ${step}`,
+        previousResults,
       );
-      assertAcceptedEpoch(`Safari drag epoch ${step}`, state, previousToken);
-      assertFlatHeap(`Safari drag epoch ${step}`, state, initialHeapBytes);
-      previousToken = Number(state.accepted.token);
-      result.dragEpochs.push({
-        acceptedToken: previousToken,
-        displayedFrame: displayedFrame(state),
+      assertFlatHeap(`Safari drag render ${step}`, state, initialHeapBytes);
+      previousResults = Number(state.worker.completedResults);
+      result.dragRenders.push({
+        completedResults: previousResults,
         heapBytes: state.heapBytes,
-        workerResults: Number(state.worker?.completedResults || 0),
+        mainLoopRenderedFrames: Number(state.mainLoopRenderedFrames || 0),
       });
       if (step % 4 === 0) {
         await capture(driver, `04-drag-${String(step).padStart(2, "0")}`);
@@ -1446,14 +989,14 @@ async function runRegression(driver, editorUrl, result) {
     await driver.actions([{ type: "pointerUp", button: 0 }]).catch(() => {});
     await driver.releaseActions().catch(() => {});
   }
-  const dragTokens = result.dragEpochs.map((sample) => sample.acceptedToken);
+  const dragResults = result.dragRenders.map((sample) => sample.completedResults);
   assert.deepEqual(
-    dragTokens,
-    [...dragTokens].sort((left, right) => left - right),
-    "accepted drag epochs regressed",
+    dragResults,
+    [...dragResults].sort((left, right) => left - right),
+    "Safari drag document renders regressed",
   );
-  assert.equal(new Set(dragTokens).size, dragTokens.length, "accepted drag epochs repeated");
-  assertNoFatal("Safari drag epochs", [await readState(driver)]);
+  assert.equal(new Set(dragResults).size, dragResults.length, "Safari drag renders repeated");
+  assertNoFatal("Safari drag renders", [await readState(driver)]);
 
   result.wakeBurst = [];
   result.wakeInput = [];
@@ -1468,7 +1011,7 @@ async function runRegression(driver, editorUrl, result) {
     `);
     await click(driver, wakePoint.x, wakePoint.y);
     await new Promise((resolve) => setTimeout(resolve, 20));
-    const beforeToken = Number((await readState(driver)).accepted?.token || 0);
+    const beforeResults = Number((await readState(driver)).worker?.completedResults || 0);
     await driver.actions([
       pointerMove(wakePoint.x, wakePoint.y, 40),
       { type: "pause", duration: 30 },
@@ -1491,18 +1034,17 @@ async function runRegression(driver, editorUrl, result) {
     }
     const wakeInput = await driver.execute(
       `
-      const [eventOffset, beforeToken] = arguments;
+      const [eventOffset, beforeResults] = arguments;
       return {
-        beforeToken,
+        beforeResults,
         events: (window.__donnerSafariClickProbeEvents || []).slice(eventOffset),
         activeSample: window.__donnerActiveSampleStats || null,
-        accepted: window.__donnerAcceptedPresentation || null,
         editorFrameRequested: Boolean(window.__donnerEditorFrameRequested),
         mainLoopRenderedFrames: window.__donnerMainLoopRenderedFrames || 0,
         worker: window.__donnerWorkerStats || null,
       };
     `,
-      [inputBefore.eventCount, beforeToken],
+      [inputBefore.eventCount, beforeResults],
     );
     result.wakeInput.push(wakeInput);
     assertTrustedClickAtPoint(
@@ -1510,18 +1052,16 @@ async function runRegression(driver, editorUrl, result) {
       wakeInput.events,
       wakePoint,
     );
-    const after = await waitForAcceptedEpoch(
+    const after = await waitForDocumentRender(
       driver,
       `renderer pthread wake burst ${iteration + 1}`,
-      beforeToken,
+      beforeResults,
     );
-    assertAcceptedEpoch(`renderer pthread wake burst ${iteration + 1}`, after, beforeToken);
     assertFlatHeap(`renderer pthread wake burst ${iteration + 1}`, after, initialHeapBytes);
     result.wakeBurst.push({
-      acceptedToken: Number(after.accepted.token),
-      displayedFrame: displayedFrame(after),
+      completedResults: Number(after.worker?.completedResults || 0),
       heapBytes: after.heapBytes,
-      workerResults: Number(after.worker?.completedResults || 0),
+      mainLoopRenderedFrames: Number(after.mainLoopRenderedFrames || 0),
     });
     wakePoint = {
       x: wakePoint.x + direction * 36,
@@ -1536,9 +1076,9 @@ async function runRegression(driver, editorUrl, result) {
   // Repeated viewport-size churn used to retain every superseded Geode primary target until
   // Safari's JavaScript/GPU garbage collection caught up, eventually triggering the browser's
   // significant-memory reload. Exercise enough distinct targets to cross the old unbounded-growth
-  // shape while proving the worker, accepted surface, Wasm heap, and page lifetime remain stable.
+  // shape while proving the worker, document renders, Wasm heap, and page lifetime remain stable.
   result.resizeChurn = [];
-  let resizeToken = Number(result.afterWakeBurst.accepted?.token || 0);
+  let resizeResults = Number(result.afterWakeBurst.worker?.completedResults || 0);
   const initialPageLifetimeToken = result.initial.pageLifetimeToken;
   assert.equal(
     initialPageLifetimeToken,
@@ -1554,26 +1094,24 @@ async function runRegression(driver, editorUrl, result) {
       x: 20,
       y: 20,
     });
-    const state = await waitForAcceptedEpoch(
+    const state = await waitForDocumentRender(
       driver,
       `Safari primary-target resize churn ${iteration + 1}`,
-      resizeToken,
+      resizeResults,
     );
-    assertAcceptedEpoch(`Safari primary-target resize churn ${iteration + 1}`, state, resizeToken);
     assertFlatHeap(`Safari primary-target resize churn ${iteration + 1}`, state, initialHeapBytes);
     assert.equal(
       state.pageLifetimeToken,
       initialPageLifetimeToken,
       `Safari reloaded the page under resize memory pressure at iteration ${iteration + 1}`,
     );
-    resizeToken = Number(state.accepted.token);
+    resizeResults = Number(state.worker.completedResults);
     result.resizeChurn.push({
-      acceptedToken: resizeToken,
-      displayedFrame: displayedFrame(state),
+      completedResults: resizeResults,
       heapBytes: state.heapBytes,
       height,
+      mainLoopRenderedFrames: Number(state.mainLoopRenderedFrames || 0),
       width,
-      workerResults: Number(state.worker?.completedResults || 0),
     });
   }
   await driver.request("POST", `/session/${driver.sessionId}/window/rect`, {
@@ -1582,12 +1120,11 @@ async function runRegression(driver, editorUrl, result) {
     x: 20,
     y: 20,
   });
-  result.afterResizeChurn = await waitForAcceptedEpoch(
+  result.afterResizeChurn = await waitForDocumentRender(
     driver,
     "Safari resize-churn restore",
-    resizeToken,
+    resizeResults,
   );
-  assertAcceptedEpoch("Safari resize-churn restore", result.afterResizeChurn, resizeToken);
   assertFlatHeap("Safari resize-churn restore", result.afterResizeChurn, initialHeapBytes);
   assert.equal(
     result.afterResizeChurn.pageLifetimeToken,
@@ -1601,11 +1138,14 @@ async function runRegression(driver, editorUrl, result) {
   result.visibleAutomationAfterReload = await requireVisibleSafariAnimationFrame(driver);
   result.afterReload = await waitForEditor(driver, "Safari reload after renderer teardown");
   assert.equal(
-    result.afterReload.runtime.initializationCount,
-    1,
-    "reload initialized worker twice",
+    result.afterReload.wholeAppWorker,
+    true,
+    "reload did not restart the whole application on the app pthread",
   );
-  assert.ok(result.afterReload.runtime.workerDeviceCreations >= 1, "reload created no device");
+  assert.ok(
+    result.afterReload.headlessDeviceCreations >= 1,
+    "reload created no WebGPU device",
+  );
   assertNoFatal("Safari reload after renderer teardown", [result.afterReload]);
   assertFlatHeap("Safari reload after renderer teardown", result.afterReload, initialHeapBytes);
   result.afterReloadSettled = await poll(
@@ -1626,7 +1166,7 @@ async function runRegression(driver, editorUrl, result) {
     result.thumbnailsSettled.heapBytes,
     result.thumbnailDiagnostic.heapBytes,
     result.basicShapes.heapBytes,
-    ...result.dragEpochs.map((sample) => sample.heapBytes),
+    ...result.dragRenders.map((sample) => sample.heapBytes),
     ...result.wakeBurst.map((sample) => sample.heapBytes),
     ...result.resizeChurn.map((sample) => sample.heapBytes),
     result.afterWakeBurst.heapBytes,
@@ -1676,13 +1216,7 @@ async function main() {
     artifactDir: kArtifactDir,
     driverUrl: kDriverUrl,
     editorUrl: editorUrl.href,
-    scope: kMemoryOnly
-      ? "significant-memory"
-      : kLivePanOnly
-      ? "live-pan-seam"
-      : kSeamOnly
-      ? "fractional-pan-seam"
-      : "full",
+    scope: kMemoryOnly ? "significant-memory" : "full",
     startedAt: new Date().toISOString(),
   };
   const driver = new SafariDriverClient(kDriverUrl);
@@ -1731,10 +1265,6 @@ async function main() {
     fs.writeFileSync(path.join(kArtifactDir, "result.json"), JSON.stringify(result, null, 2));
     const passLabel = kMemoryOnly
       ? "real Apple Safari five-minute Splash memory dwell"
-      : kLivePanOnly
-      ? "real Apple Safari live-pan edge pixels"
-      : kSeamOnly
-      ? "real Apple Safari fractional-pan edge pixels"
       : "real Apple Safari Geode startup, thumbnails, drag, wake burst, and teardown";
     console.log(`PASS: ${passLabel}; artifacts=${kArtifactDir}`);
   } catch (error) {

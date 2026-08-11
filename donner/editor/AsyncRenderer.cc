@@ -22,13 +22,13 @@ namespace donner::editor {
 namespace {
 
 // ---------------------------------------------------------------------------
-// WEBKIT BITMAP BRIDGE - RETAINED PENDING THE DESIGN 0064 PHASE 4 DECISION
+// WEBKIT BITMAP BRIDGE - RETAINED PENDING THE DEFERRED WEBKIT DECISION
 //
 // `DONNER_WASM_WORKER_SURFACE` is defined by no build configuration, so nothing
 // below is compiled anywhere. It is the complete C++ dependency list of the
 // WebKit bitmap bridge - the two alternating document-canvas selectors, the
 // worker-canvas selector, the mode probe, and the three ImageBitmap handoff
-// entry points - held out of the Design 0064 deletion series so the phase 4
+// entry points - held out of the the single-canvas architecture deletion series so the phase 4
 // retire-or-rebuild decision for WebKit is made against the real code rather
 // than a changelog.
 //

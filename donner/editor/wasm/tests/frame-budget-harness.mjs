@@ -1,5 +1,5 @@
 // Frame-budget and memory harness for the single-canvas whole-app-in-worker
-// editor (Design 0064 phase 2 exit criteria).
+// editor (the single-canvas presenter work exit criteria).
 //
 // The composited-invariant lane answers "is the output correct"; this answers
 // "does the frame budget hold" and "does memory stay bounded", both of which
@@ -23,7 +23,7 @@
 // the harness watches for the abort explicitly and reports how far the storm
 // got instead of hanging on a dead page.
 //
-// Exit criteria (Design 0064 phase 2): UI frame p99 < 8.33 ms, no frame over
+// Exit criteria (the single-canvas presenter work): UI frame p99 < 8.33 ms, no frame over
 // 16.7 ms, suspend overhead < 1 ms/frame p99, heap bounded well under the
 // 512 MiB ceiling and flat across the soak.
 //

@@ -16,10 +16,10 @@ module.exports = defineConfig({
   use: {
     ...devices["Desktop Chrome"],
     channel: "chromium",
-    // Headed, and not negotiable: this package's renderer runs WebGPU inside a
-    // worker, and the headless shell does not create a worker GPU device here
-    // (`__donnerWorkerRuntimeStats.ready` stays false and the editor never
-    // finishes booting, so every test in the lane fails in `openEditor`).
+    // Headed, and not negotiable: this package runs the whole editor, WebGPU
+    // included, on a worker pthread that owns the transferred canvas, and the
+    // headless shell does not create a worker GPU device here (the editor never
+    // presents a first frame, so every test in the lane fails in `openEditor`).
     // Headless also defeats the point of the lane, which is to measure
     // composited output on the platform GPU.
     headless: false,

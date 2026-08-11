@@ -163,7 +163,7 @@ public:
   /// Under Emscripten, emdawnwebgpu implements `poll` by yielding the
   /// Asyncify-enabled thread for roughly one browser task regardless of
   /// @p wait, so every poll unwinds and later rewinds the wasm stack. With the
-  /// whole application on one thread (Design 0064) that wall time is UI frame
+  /// whole application on one thread (single-canvas presenter architecture) that wall time is UI frame
   /// time, so it has to be attributable. Route every poll through here rather
   /// than calling `device().poll` directly; the probe is a pair of clock reads
   /// on native builds, where `poll` does not suspend at all.

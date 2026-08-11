@@ -35,10 +35,12 @@ struct alignas(8) BrowserMirror {
   std::int32_t zoomModifierHeld;  // +12
   double devicePixelRatio;        // +16
   double mouseDownEpochMs;        // +24
-  std::int32_t mouseDownSeq;      // +32
-  std::int32_t reserved;          // +36
+  std::int32_t mouseDownSeq;         // +32
+  std::int32_t readbackRequestId;    // +36 (page writes, worker reads)
+  std::int32_t readbackCompletedId;  // +40 (worker writes)
+  std::int32_t readbackEnabled;      // +44 (page writes once at install)
 };
-static_assert(sizeof(BrowserMirror) == 40,
+static_assert(sizeof(BrowserMirror) == 48,
               "BrowserMirror layout is a contract with Install()'s JS");
 
 BrowserMirror& Mirror() {
@@ -53,7 +55,9 @@ BrowserMirror& Mirror() {
       .devicePixelRatio = 1.0,
       .mouseDownEpochMs = 0.0,
       .mouseDownSeq = 0,
-      .reserved = 0,
+      .readbackRequestId = 0,
+      .readbackCompletedId = 0,
+      .readbackEnabled = 0,
   };
   return mirror;
 }
@@ -309,6 +313,32 @@ void Install() {
                                 },
                                 {capture : true, passive : true});
 
+        // WebGPU readback diagnostic handshake, same page contract as the
+        // pre-worker build: enabled by the wgpuReadbackStats URL parameter,
+        // one seeded capture proves the path, further captures are explicit.
+        // The request id rides the shared-memory mirror so the app thread can
+        // poll it without a main-thread round trip; the window counters stay
+        // authoritative for the suites that read them.
+        const readbackEnabled =
+            new URLSearchParams(window.location.search).has('wgpuReadbackStats');
+        HEAP32[i32 + 11] = readbackEnabled ? 1 : 0;
+        if (readbackEnabled) {
+          window['__donnerWgpuReadbackRequested'] = 1;
+          window['__donnerWgpuReadbackCompleted'] = 0;
+          window['__donnerWgpuReadbackCaptureStarts'] = 0;
+          window['__donnerWgpuReadbackCaptureCompletions'] = 0;
+          window['__donnerWgpuReadbackCaptureFailures'] = 0;
+          HEAP32[i32 + 9] = 1;
+          window['__donnerRequestWgpuReadback'] = function() {
+            const request = Number(window['__donnerWgpuReadbackRequested'] || 0) + 1;
+            window['__donnerWgpuReadbackRequested'] = request;
+            HEAP32[i32 + 9] = request;
+            HEAP32[i32 + 2] = 1;
+            window['__donnerEditorFrameRequested'] = true;
+            return request;
+          };
+        }
+
         window['__donnerMainLoopRenderedFrames'] = 0;
         if (!window['__donnerFrameLoopStats']) {
           window['__donnerFrameLoopStats'] = ({
@@ -331,6 +361,130 @@ void Install() {
   emscripten_set_mousedown_callback_on_thread(EMSCRIPTEN_EVENT_TARGET_WINDOW, /*userData=*/nullptr,
                                               /*useCapture=*/EM_TRUE, &OnAppThreadMouseDown,
                                               EM_CALLBACK_THREAD_CONTEXT_CALLING_THREAD);
+}
+
+void StoreRelaxed(std::int32_t& field, std::int32_t value) {
+  std::atomic_ref<std::int32_t>(field).store(value, std::memory_order_relaxed);
+}
+
+bool ReadbackStatsEnabled() {
+  return LoadRelaxed(Mirror().readbackEnabled) != 0;
+}
+
+int PeekReadbackRequest() {
+  BrowserMirror& mirror = Mirror();
+  const std::int32_t request = LoadRelaxed(mirror.readbackRequestId);
+  const std::int32_t completed = LoadRelaxed(mirror.readbackCompletedId);
+  return request > completed ? request : 0;
+}
+
+void WakeForPendingReadback() {
+  BrowserMirror& mirror = Mirror();
+  if (LoadRelaxed(mirror.readbackRequestId) > LoadRelaxed(mirror.readbackCompletedId)) {
+    StoreRelaxed(mirror.frameRequested, 1);
+  }
+}
+
+void MarkReadbackCaptureStarted(int requestId) {
+  MAIN_THREAD_ASYNC_EM_ASM(
+      {
+        window['__donnerWgpuReadbackCaptureStarts'] =
+            Number(window['__donnerWgpuReadbackCaptureStarts'] || 0) + 1;
+        window['__donnerWgpuReadbackLastStartedRequest'] = $0;
+      },
+      requestId);
+}
+
+void PublishReadbackFailure(int requestId) {
+  if (requestId <= 0) {
+    return;
+  }
+  BrowserMirror& mirror = Mirror();
+  if (requestId > LoadRelaxed(mirror.readbackCompletedId)) {
+    StoreRelaxed(mirror.readbackCompletedId, requestId);
+  }
+  MAIN_THREAD_ASYNC_EM_ASM(
+      {
+        window['__donnerWgpuReadbackCompleted'] =
+            Math.max(Number(window['__donnerWgpuReadbackCompleted'] || 0), $0);
+        window['__donnerWgpuReadbackCaptureFailures'] =
+            Number(window['__donnerWgpuReadbackCaptureFailures'] || 0) + 1;
+        window['__donnerWgpuReadbackLastFailedRequest'] = $0;
+      },
+      requestId);
+}
+
+void PublishReadbackStats(int renderSamples, int renderColored, int renderNonBlack,
+                          int renderMaxChannel, int layerSamples, int layerColored,
+                          int layerNonBlack, int layerMaxChannel, int selectionChromePixels,
+                          int requestId) {
+  BrowserMirror& mirror = Mirror();
+  if (requestId > 0 && requestId > LoadRelaxed(mirror.readbackCompletedId)) {
+    StoreRelaxed(mirror.readbackCompletedId, requestId);
+  }
+  MAIN_THREAD_ASYNC_EM_ASM(
+      {
+        if ($9 > 0) {
+          window['__donnerWgpuReadbackCompleted'] =
+              Math.max(Number(window['__donnerWgpuReadbackCompleted'] || 0), $9);
+          window['__donnerWgpuReadbackCaptureCompletions'] =
+              Number(window['__donnerWgpuReadbackCaptureCompletions'] || 0) + 1;
+        }
+        const previous = window['__donnerWgpuReadbackStats'];
+        window['__donnerWgpuReadbackStats'] = ({
+          'frame' : previous ? previous['frame'] + 1 : 1,
+          'request' : $9 > 0 ? $9 : (previous ? previous['request'] || 0 : 0),
+          'renderPane' : ({
+            'samples' : $0,
+            'coloredPixels' : $1,
+            'nonBlackPixels' : $2,
+            'maxChannel' : $3,
+          }),
+          'layerPreview' : ({
+            'samples' : $4,
+            'coloredPixels' : $5,
+            'nonBlackPixels' : $6,
+            'maxChannel' : $7,
+          }),
+          'selectionChromePixels' : $8,
+        });
+      },
+      renderSamples, renderColored, renderNonBlack, renderMaxChannel, layerSamples, layerColored,
+      layerNonBlack, layerMaxChannel, selectionChromePixels, requestId);
+}
+
+void PublishCarouselThumbnailStats(const int* values, int count) {
+  // The async proxy reads the buffer after this function returns; copy into a
+  // static so the caller's stack buffer is never read post-return. Capture is
+  // serial (one diagnostic per explicit request), so one slot suffices.
+  constexpr int kStride = 7;
+  constexpr int kMaxThumbnails = 64;
+  static int buffer[kMaxThumbnails * kStride];
+  const int clamped = count > kMaxThumbnails ? kMaxThumbnails : count;
+  std::copy(values, values + static_cast<size_t>(clamped) * kStride, buffer);
+  MAIN_THREAD_ASYNC_EM_ASM(
+      {
+        const stride = 7;
+        const base = $0 >> 2;
+        const thumbnails = ([]);
+        for (let index = 0; index < $1; ++index) {
+          const offset = base + index * stride;
+          thumbnails.push(({
+            'samples' : HEAP32[offset + 0],
+            'coloredPixels' : HEAP32[offset + 1],
+            'nonBlackPixels' : HEAP32[offset + 2],
+            'maxChannel' : HEAP32[offset + 3],
+            'fingerprint' : HEAP32[offset + 4] >>> 0,
+            'backgroundPixels' : HEAP32[offset + 5],
+            'glyphPixels' : HEAP32[offset + 6],
+          }));
+        }
+        const stats = window['__donnerWgpuReadbackStats'];
+        if (stats) {
+          stats['carouselThumbnails'] = thumbnails;
+        }
+      },
+      buffer, clamped);
 }
 
 int CssWidth() {

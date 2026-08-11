@@ -46,7 +46,7 @@ donner_cc_library(
     alwayslink = True,  # link-order independence (#665)
 )
 
-# Per-frame attribution of ASYNCIFY suspend cost (Design 0064). Lives in
+# Per-frame attribution of ASYNCIFY suspend cost (single-canvas presenter architecture). Lives in
 # //donner/base because both the editor's frame loop and the Geode renderer's
 # GPU-readback wait have to bracket their own suspend points; it deliberately
 # has no dependencies so any layer can instrument.
@@ -57,7 +57,7 @@ donner_cc_library(
     visibility = ["//visibility:public"],
 )
 
-# Per-frame attribution of retained bytes by subsystem (Design 0064). Like
+# Per-frame attribution of retained bytes by subsystem (single-canvas presenter architecture). Like
 # `asyncify_suspend_probe` it is dependency-free on purpose: the compositor, the
 # render worker, and the editor's presentation cache all publish into it, and
 # none of them may take a dependency on the others to do so.

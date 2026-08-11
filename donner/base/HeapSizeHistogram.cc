@@ -1,5 +1,5 @@
 /// @file
-/// Live-heap histogram by allocation size, for the Design 0064 phase 2 memory
+/// Live-heap histogram by allocation size, for the the single-canvas presenter work memory
 /// investigation.
 ///
 /// The category counters in `MemoryAttribution.h` only see memory a subsystem

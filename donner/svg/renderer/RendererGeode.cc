@@ -4804,30 +4804,55 @@ static RendererBitmap ReadGeodeTextureSnapshot(const std::shared_ptr<geode::Geod
   };
   mapCb.userdata1 = mapState;
   mapCb.userdata2 = nullptr;
-  // Browser WebGPU fires map completion from a Promise microtask while
-  // device.poll yields the Asyncify-enabled pthread. Keep this fallback for
-  // explicit diagnostics; normal worker-surface presentation never enters it.
   mapCb.mode = wgpu::CallbackMode::AllowSpontaneous;
-  readback.get().mapAsync(wgpu::MapMode::Read, 0, bd.size, mapCb);
+  const wgpu::Future mapFuture = readback.get().mapAsync(wgpu::MapMode::Read, 0, bd.size, mapCb);
   int pollIter = 0;
   bool cancelled = false;
+  bool usedTimedWaitAny = false;
   const auto readbackDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
   while (!mapState->done.load(std::memory_order_acquire)) {
     if ((shouldCancel && shouldCancel()) || std::chrono::steady_clock::now() >= readbackDeadline) {
       cancelled = true;
       break;
     }
+    ++pollIter;
+#ifdef __EMSCRIPTEN__
+    // The browser instance is created with TimedWaitAny (see
+    // CreateEditorWgpuInstance) exactly so this wait exists: on a pthread the
+    // map completion is a browser-side event, and poll-plus-yield loops only
+    // observe it at whatever cadence the yields happen to align with the
+    // browser's delivery (measured: a first-sample snapshot readback burned
+    // 265 five-millisecond yields, 1.85 seconds, before the completion was
+    // seen). A 5 ms timed wait returns the moment the map resolves while a
+    // cancellation or a superseding request is still observed within the
+    // slice.
+    static std::atomic<bool> instanceWaitUsable{true};
+    if (device->instance() && instanceWaitUsable.load(std::memory_order_relaxed)) {
+      wgpu::FutureWaitInfo waitInfo{};
+      waitInfo.future = mapFuture;
+      constexpr std::uint64_t kSliceNs = 5'000'000;
+      const wgpu::WaitStatus waitStatus = device->instance().waitAny(1, &waitInfo, kSliceNs);
+      if (waitStatus == wgpu::WaitStatus::Success || waitStatus == wgpu::WaitStatus::TimedOut) {
+        usedTimedWaitAny = true;
+        // Success delivers the callback before returning; TimedOut re-checks
+        // cancellation. Either way the loop condition observes `done`.
+        continue;
+      }
+      // Any other status means this thread cannot time-wait this future
+      // (instance thread affinity, unsupported timeout). Remember that and
+      // fall back to the yield-poll below for the rest of the process.
+      instanceWaitUsable.store(false, std::memory_order_relaxed);
+    }
+#endif
     // Never ask wgpu-native to block until the GPU map completes: a low-priority thumbnail must
-    // observe a superseding main-document request promptly. emdawnwebgpu's poll implementation
-    // yields its Asyncify-enabled worker for roughly 5 ms regardless of `wait`; native polling is
+    // observe a superseding main-document request promptly. Native polling is
     // non-blocking and gets a short sleep to avoid spinning.
     device->pollSuspending(false);
-    ++pollIter;
 #ifndef __EMSCRIPTEN__
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
 #endif
   }
-  device->recordReadback(/*usedTimedWaitAny=*/false, pollIter);
+  device->recordReadback(usedTimedWaitAny, pollIter);
   if (cancelled) {
     // Cancelling a pending map schedules its callback with an aborted status. The callback's
     // reference keeps `mapState` valid even when delivery happens after this method returns.

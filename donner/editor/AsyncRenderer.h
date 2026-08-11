@@ -217,7 +217,7 @@ struct HandoffTimings {
   /// equals \ref pollDelayMs. It stays a separate field because it is the one
   /// with a meaning: "the UI thread had not run a frame yet". The browser used
   /// to insert a task-boundary hop between completion and pollability, and the
-  /// split existed to tell that hop apart from this wait; Design 0064 removed
+  /// split existed to tell that hop apart from this wait; The single-canvas replacement removed
   /// the hop along with the worker-surface presentation boundary.
   double wakeToPollMs = 0.0;
 };

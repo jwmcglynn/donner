@@ -10,7 +10,7 @@
 /// This used to be a fork. The browser presented through a worker-owned canvas
 /// outside the window framebuffer, placed and clipped with CSS from the live
 /// viewport, and fell back to the underlay whenever the worker had no accepted
-/// surface epoch. Design 0064 deleted that target: the browser build now runs
+/// surface epoch. The single-canvas replacement deleted that target: the browser build now runs
 /// the whole application on one worker thread that owns the single canvas, so
 /// the document composites under the UI in the same WebGPU frame that draws the
 /// UI, exactly as on desktop. The fork it replaced is the reason this seam

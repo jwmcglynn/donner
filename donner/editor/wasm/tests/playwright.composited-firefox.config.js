@@ -17,9 +17,9 @@ const { defineConfig, devices } = require("@playwright/test");
 // of magnitude slower than Chromium, and these tests deliberately sample every
 // animation frame across a multi-second gesture.
 //
-// The correctness invariants (epoch atomicity, backing stability, pan motion,
-// pinch parity) hold on Gecko unchanged. The one timing-sensitive bound, the
-// black-frame fraction, is widened inside the spec for this engine.
+// The correctness invariants (backing stability, pan motion, pinch parity)
+// hold on Gecko unchanged. The one timing-sensitive bound, the black-frame
+// fraction, is widened inside the spec for this engine.
 module.exports = defineConfig({
   testDir: ".",
   testMatch: ["composited-invariants.spec.ts", "composited-drag-invariants.spec.ts"],

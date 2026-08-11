@@ -11,9 +11,8 @@ module.exports = defineConfig({
       grep: [
         /Geode Wasm View overlays render tile metadata and sparse Slug triangle edges/,
         /Firefox keeps Basic Shapes resize pixels and outline synchronized/,
-        /Firefox presents every accepted drag epoch on one stable surface/,
+        /Firefox keeps the dragged shape and its selection outline in every drag frame/,
         /Firefox never exposes the checkerboard while dragging a Splash letter/,
-        /Firefox bakes the Splash letter and overlay into one accepted surface epoch/,
         /Firefox renders every visible Splash layer thumbnail/,
       ],
       use: {

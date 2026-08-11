@@ -1035,7 +1035,7 @@ bool CompositorController::warmPendingFirstFrameCaches(CancellationToken& token)
   // warmup dequeue and the offscreen-support probe); owners cancel the token
   // before teardown, so honoring it here closes the common window. The
   // structural fix - the compositor thread owning its renderer - is the
-  // Design 0064 ownership model.
+  // the single-canvas architecture ownership model.
   if (token.isCancelled()) {
     return false;
   }
