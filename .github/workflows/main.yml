@@ -997,7 +997,11 @@ jobs:
       # outages now FAST-FAIL (no local fallback) rather than degrading to a
       # multi-hour local build on the capped host. The wedge-watch + rerun
       # handle recovery.
-      BAZEL_MACOS_BUILD_FLAGS: "--macos_minimum_os=13.3 --remote_cache=grpc://192.168.1.63:9092 --remote_upload_local_results=true --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=5s"
+      # Cache endpoint comes from the BAZEL_REMOTE_CACHE repository variable so
+      # the workflow stays portable across runner deployments. When the variable
+      # is unset (e.g. forks), --remote_cache= is empty and bazel builds without
+      # a remote cache.
+      BAZEL_MACOS_BUILD_FLAGS: "--macos_minimum_os=13.3 --remote_cache=${{ vars.BAZEL_REMOTE_CACHE }} --remote_upload_local_results=true --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=5s"
       BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME"
       # Keep in sync with the `macos` job: exactly one of the two runs per
       # event, so both need the Geode editor lane. See that job for why these
