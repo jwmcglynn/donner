@@ -10,8 +10,12 @@ class RemoteCacheConfigTest(unittest.TestCase):
         resolver = runfiles.Create()
         bazelrc_path = resolver.Rlocation("donner/.bazelrc")
         bazelversion_path = resolver.Rlocation("donner/.bazelversion")
+        coverage_workflow_path = resolver.Rlocation(
+            "donner/.github/workflows/coverage.yml"
+        )
         assert bazelrc_path is not None
         assert bazelversion_path is not None
+        assert coverage_workflow_path is not None
 
         with open(bazelrc_path, encoding="utf-8") as bazelrc:
             cls.bazelrc_lines = {
@@ -21,6 +25,8 @@ class RemoteCacheConfigTest(unittest.TestCase):
             }
         with open(bazelversion_path, encoding="utf-8") as bazelversion:
             cls.bazel_version = bazelversion.read().strip()
+        with open(coverage_workflow_path, encoding="utf-8") as coverage_workflow:
+            cls.coverage_workflow = coverage_workflow.read()
 
     def test_pinned_bazel_supports_lost_input_rewinding(self):
         match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", self.bazel_version)
@@ -40,6 +46,18 @@ class RemoteCacheConfigTest(unittest.TestCase):
         self.assertIn(
             "common --@rules_python//python/config_settings:bootstrap_impl=script",
             self.bazelrc_lines,
+        )
+
+    def test_coverage_skips_host_incompatible_explicit_targets(self):
+        self.assertIn(
+            "coverage --skip_incompatible_explicit_targets",
+            self.bazelrc_lines,
+        )
+
+    def test_root_bazel_pin_uses_full_baseline_coverage_path(self):
+        self.assertIn(
+            "MODULE.bazel|.bazelversion|WORKSPACE|WORKSPACE.*|build_defs/*|third_party/bazel/*)",
+            self.coverage_workflow,
         )
 
 

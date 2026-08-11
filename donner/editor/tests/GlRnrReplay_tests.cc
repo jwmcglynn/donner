@@ -3235,8 +3235,18 @@ TEST(GlRnrReplayTest, ReplaysSourcePaneCharacterInput) {
 
   std::optional<svg::RendererBitmap> bitmap = LoadCaptureBitmap(result, 63);
   ASSERT_TRUE(bitmap.has_value());
-  const svg::RendererBitmap renderPaneCrop =
-      CropBitmap(*bitmap, PixelCrop{.x = 560, .y = 0, .width = 500, .height = 600});
+  // Full captures are in device pixels. Derive the host's actual scale from
+  // the capture instead of assuming the recorded logical window uses DPR 1;
+  // Retina macOS produces a 2800x1200 bitmap for this 1400x600 replay.
+  const double captureScaleX =
+      static_cast<double>(bitmap->dimensions.x) / static_cast<double>(file.metadata.windowWidth);
+  const double captureScaleY =
+      static_cast<double>(bitmap->dimensions.y) / static_cast<double>(file.metadata.windowHeight);
+  const svg::RendererBitmap renderPaneCrop = CropBitmap(
+      *bitmap, PixelCrop{.x = static_cast<int>(std::lround(560.0 * captureScaleX)),
+                         .y = 0,
+                         .width = static_cast<int>(std::lround(500.0 * captureScaleX)),
+                         .height = static_cast<int>(std::lround(600.0 * captureScaleY))});
   EXPECT_GT(CountBrightGreenPixels(renderPaneCrop), 100);
 
   std::error_code ec;

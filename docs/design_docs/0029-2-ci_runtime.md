@@ -818,6 +818,31 @@ consecutive spurious DEADLINE_EXCEEDED-after-4.999s failures on organic load
 first tip-vs-merge run then passed full-`//...` in 17m28s on the same busy
 backend).
 
+### As-built: Bazel pin changes use the full-baseline fallback (2026-08-11)
+
+Root `.bazelversion` changes now classify as build-graph infrastructure in the
+PR coverage target selector. Bazel version changes affect analysis and action
+semantics across the repository, so bazel-diff can return a broad list of
+explicit labels even when the source diff is small. Passing that list to hosted
+PR coverage defeats the lane's incremental budget and explicitly requests
+host-incompatible targets that package-pattern coverage skips naturally. The
+PR lane therefore takes the existing full-baseline fallback and skips the
+hosted instrumented rerun; the main-push package-pattern baseline remains the
+authoritative full coverage run.
+
+The Bazel 8.7 update in PR #725 exposed the missing classification: 664 labels
+ran for 4,502 seconds before incompatible explicit targets made analysis fail,
+leaving a partial LCOV shell with no executable line data. A narrow Bazel 8.7
+coverage reproduction produced normal executable-line data, proving the toolchain
+itself was healthy. As a second guard, coverage commands now set
+`--skip_incompatible_explicit_targets`, so ordinary incremental bazel-diff sets
+can safely include a platform-incompatible label without poisoning the report.
+
+The main-shaped macOS verification also exposed a fixed-DPR assertion in the
+GL replay suite: a correct 2x Retina capture was cropped with 1x logical
+coordinates. The assertion now derives the device scale from the captured and
+recorded window dimensions, and passes in both ordinary and coverage modes.
+
 ### As-built: levers 1 and 2 (operator-approved, 2026-07-11)
 
 **Lever 1 (seed the RE coverage cache from main-push) is already live, and its

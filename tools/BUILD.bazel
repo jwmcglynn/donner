@@ -119,6 +119,7 @@ py_test(
     data = [
         "//:.bazelrc",
         "//:.bazelversion",
+        "//:.github/workflows/coverage.yml",
     ],
     deps = ["@rules_python//python/runfiles"],
 )

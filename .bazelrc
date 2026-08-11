@@ -306,6 +306,9 @@ coverage --test_tag_filters=-fuzz_target,-lint
 # Continue past build/analysis failures so coverage is collected from all tests
 # that can run.
 coverage --keep_going
+# bazel-diff supplies explicit labels and can include targets incompatible with
+# the hosted platform. Skip those exactly as package-pattern coverage does.
+coverage --skip_incompatible_explicit_targets
 
 coverage:macos --test_env=LLVM_COV=/Library/Developer/CommandLineTools/usr/bin/llvm-cov
 coverage:macos --test_env=LLVM_PROFDATA=/Library/Developer/CommandLineTools/usr/bin/llvm-profdata
