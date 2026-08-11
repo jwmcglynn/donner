@@ -4,7 +4,6 @@
 #include <emscripten.h>
 #endif
 
-#include <algorithm>
 #include <utility>
 
 #include "GLFW/glfw3.h"
@@ -151,8 +150,7 @@ void EditorInputBridge::ScrollCallback(GLFWwindow* window, double xoffset, doubl
   // a pinch gesture matches zoom = 1 + magnification; a real ctrl+mouse-wheel
   // keeps the discrete per-notch step. See PinchZoomPolicy.h.
   if (zoomModifierHeld && !IsPhysicalZoomKeyHeld(window) && WasmWheelZoomModifierHeld() != 0) {
-    const double maxUnits = MaxPinchScrollUnitsPerEvent();
-    effectiveYOffset = std::clamp(yoffset * PinchScrollUnitGain(), -maxUnits, maxUnits);
+    effectiveYOffset = ApplyPinchScrollUnitGain(yoffset);
   }
   RecordWasmScrollDebug(zoomModifierHeld ? 1 : 0, xoffset, effectiveYOffset,
                         IsPhysicalZoomKeyHeld(window) ? 1 : 0, WasmWheelZoomModifierHeld());

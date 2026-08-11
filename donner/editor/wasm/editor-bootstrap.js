@@ -266,14 +266,18 @@ function InstallTouchPointerBridge(targetCanvas) {
 // donner/editor/PinchZoomPolicy.h); this fallback covers the window before that
 // and must stay in sync with it.
 //
-// Derivation: the Wasm GLFW port turns a DOM_DELTA_PIXEL wheel event into
-// yoffset = -deltaY / 100, and the render-pane classifier applies
-// zoomFactor = pow(1.1, yoffset). Requiring zoomFactor === scale gives
-// K = 100 / Math.log(1.1) = 1049.205868725706...
+// This bridge is a shape adapter, not a gain stage. Chromium and Gecko deliver
+// a trackpad pinch natively as a ctrl-flagged wheel event with
+// deltaY = -100 * ln(scale); only WebKit withholds that channel and reports
+// gesturestart/gesturechange instead, so this synthesizes the identical
+// ungained shape and the editor's pinch discriminator applies the one canonical
+// gain for all three engines.
 //
-// The previous value of 500 made browser pinch zoom 2.0984x too slow in log
-// space relative to the native macOS pinch path.
-const kPinchWheelDeltaPerLnScaleFallback = 1049.2059;
+// Do not fold the classifier's 1/ln(1.1) gain in here. That pre-multiplication
+// (K = 1049.2059) shipped briefly alongside the discriminator and gained Safari
+// pinch input twice, about 10.5x too fast in log space, with the discriminator's
+// per-event clamp flattening every gesture to a full 1.5x step.
+const kPinchWheelDeltaPerLnScaleFallback = 100;
 
 function PinchWheelDeltaPerLnScale() {
   const published = window.__donnerPinchWheelDeltaPerLnScale;

@@ -2035,13 +2035,14 @@ test("WASM trackpad pinch gesture zooms by the gesture scale", async ({ page }) 
 
   // The editor publishes the C++-owned pinch policy at Wasm startup; the page's
   // WebKit gesture bridge must be driving off that value, not a stale literal.
+  // It is the UNGAINED wire shape (100 CSS px per unit of ln(scale)), identical
+  // to what Chromium and Gecko synthesize natively: the single pinch gain lives
+  // in the editor's input-bridge discriminator, and pre-gaining here too is the
+  // Safari "zoom far too fast" regression. See donner/editor/PinchZoomPolicy.h.
   const publishedDeltaPerLnScale = await page.evaluate(() =>
     window.__donnerPinchWheelDeltaPerLnScale
   );
-  expect(publishedDeltaPerLnScale).toBeCloseTo(
-    kWasmWheelPixelsPerScrollUnit / Math.log(kWheelZoomStep),
-    6,
-  );
+  expect(publishedDeltaPerLnScale).toBeCloseTo(kWasmWheelPixelsPerScrollUnit, 6);
 
   const center = {
     x: bounds.x + bounds.width * 0.5,
@@ -2052,7 +2053,14 @@ test("WASM trackpad pinch gesture zooms by the gesture scale", async ({ page }) 
 
   // WebKit's non-standard GestureEvent has no cross-browser constructor, so
   // synthesize the shape the bridge reads: a cancelable event carrying `scale`.
-  const gestureScale = 1.5;
+  //
+  // Keep this strictly under the discriminator's 1.5x per-event clamp. A
+  // gesture of exactly 1.5 is indistinguishable from a clamped runaway: the
+  // double-gain regression that made Safari pinch unusable pinned EVERY
+  // gesture to the clamp, so a 1.5 probe passed while real pinches were
+  // roughly 10.5x too fast in log space.
+  const gestureScale = 1.2;
+  expect(gestureScale).toBeLessThan(1.5);
   await page.evaluate(({ x, y, scale }) => {
     const target = document.getElementById("canvas");
     if (!target) {

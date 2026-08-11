@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <limits>
 #include <vector>
 
 #include "donner/editor/PinchEventMonitor.h"
@@ -98,38 +99,76 @@ TEST(RenderPaneGestureTest, PinchMagnificationRoundTripsToTheExactZoomFactor) {
   }
 }
 
-TEST(RenderPaneGestureTest, PinchWheelDeltaPerLnScaleMatchesTheClassifierStep) {
-  // Pins the browser bridge constant to its derivation. The Wasm GLFW port
-  // converts DOM_DELTA_PIXEL wheel input with `yoffset = -deltaY / 100`, so a
-  // bridge emitting `deltaY = -K * ln(scale)` zooms by exactly `scale` only
-  // when `K == 100 / ln(kWheelZoomStep)`.
-  EXPECT_NEAR(PinchWheelDeltaPerLnScale(), 100.0 / std::log(1.1), 1e-12);
-  EXPECT_NEAR(PinchWheelDeltaPerLnScale(), 1049.205868725706, 1e-9);
+// Zoom factor the editor applies for one browser trackpad-pinch event that a
+// producer emitted as `deltaY` CSS pixels, walking the exact shipped chain:
+// the Wasm GLFW port's pixels-to-scroll-units conversion, the input bridge's
+// pinch discriminator, then the render-pane classifier.
+double BrowserPinchZoomFactorForWheelDeltaY(double deltaY) {
+  const double rawScrollUnits = -deltaY / kWasmWheelPixelsPerScrollUnit;
+  const RenderPaneScrollEvent event{
+      .scrollDelta = Vector2d(0.0, ApplyPinchScrollUnitGain(rawScrollUnits)),
+      .cursorScreen = Vector2d(400.0, 300.0),
+      .zoomModifierHeld = true,
+  };
 
-  // The literal fallback baked into editor-bootstrap.js, for the window between
-  // page load and Wasm runtime initialization, must stay within rounding
-  // distance of the published value.
-  EXPECT_NEAR(PinchWheelDeltaPerLnScale(), 1049.2059, 1e-3);
+  const auto action = ClassifyRenderPaneScrollGesture(event, MakeContext(), kWheelZoomStep,
+                                                      /*panPixelsPerScrollUnit=*/10.0);
+  if (!action.has_value() || action->type != RenderPaneGestureActionType::Zoom) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+  return action->zoomFactor;
 }
 
-TEST(RenderPaneGestureTest, BrowserPinchWheelDeltaZoomsByTheGestureScale) {
-  // End-to-end policy check across the browser path, with the emscripten-glfw
-  // pixel-to-scroll-unit conversion modeled inline.
-  for (const double scale : {0.5, 0.8, 1.25, 2.0, 3.0}) {
-    const double bridgeDeltaY = -std::log(scale) * PinchWheelDeltaPerLnScale();
-    const double glfwYOffset = -bridgeDeltaY / kWasmWheelPixelsPerScrollUnit;
-    const RenderPaneScrollEvent event{
-        .scrollDelta = Vector2d(0.0, glfwYOffset),
-        .cursorScreen = Vector2d(400.0, 300.0),
-        .zoomModifierHeld = true,
-    };
+TEST(RenderPaneGestureTest, PinchWheelDeltaPerLnScaleIsTheUngainedPortConstant) {
+  // There is exactly one pinch gain authority, and it is the input bridge's
+  // discriminator (`ApplyPinchScrollUnitGain`). Producers therefore emit
+  // UNGAINED wheel deltas: `deltaY = -100 * ln(scale)`, which is the shape
+  // Chromium and Gecko already synthesize natively. A producer-side
+  // pre-multiplication by `1 / ln(kWheelZoomStep)` would be a second gain and
+  // is the Safari "zoom far too fast" regression this pins shut.
+  EXPECT_NEAR(PinchWheelDeltaPerLnScale(), kWasmWheelPixelsPerScrollUnit, 1e-12);
+  EXPECT_NEAR(PinchWheelDeltaPerLnScale(), 100.0, 1e-12);
+}
 
-    const auto action = ClassifyRenderPaneScrollGesture(event, MakeContext(), kWheelZoomStep,
-                                                        /*panPixelsPerScrollUnit=*/10.0);
-    ASSERT_TRUE(action.has_value()) << "scale=" << scale;
-    EXPECT_EQ(action->type, RenderPaneGestureActionType::Zoom);
-    EXPECT_NEAR(action->zoomFactor, scale, 1e-9) << "scale=" << scale;
+TEST(RenderPaneGestureTest, EveryBrowserPinchProducerZoomsByExactlyTheGestureScale) {
+  // The Safari gesture bridge and the native Chromium/Gecko ctrl+wheel channel
+  // are the same identity once the bridge stopped pre-gaining: both hand the
+  // editor `deltaY = -100 * ln(scale)` and both must zoom by exactly `scale`.
+  // Stay under the per-event clamp so this measures the gain and not the bound.
+  for (const double scale : {0.75, 0.9, 1.05, 1.2, 1.4}) {
+    // What donner/editor/wasm/editor-bootstrap.js dispatches for a WebKit
+    // `gesturechange` of this incremental scale.
+    const double safariBridgeDeltaY = -std::log(scale) * PinchWheelDeltaPerLnScale();
+    // What Chromium's touchpad_pinch_event_queue.cc synthesizes for the same
+    // gesture, with no bridge involved.
+    const double nativeEngineDeltaY = -std::log(scale) * kWasmWheelPixelsPerScrollUnit;
+
+    EXPECT_NEAR(BrowserPinchZoomFactorForWheelDeltaY(safariBridgeDeltaY), scale, 1e-9)
+        << "Safari gesture bridge, scale=" << scale;
+    EXPECT_NEAR(BrowserPinchZoomFactorForWheelDeltaY(nativeEngineDeltaY), scale, 1e-9)
+        << "native ctrl+wheel pinch, scale=" << scale;
   }
+}
+
+TEST(RenderPaneGestureTest, PinchGainIsAppliedExactlyOncePerEvent) {
+  // Double-gaining is silent: it still zooms, just `1 / ln(kWheelZoomStep)`
+  // times too fast in log space. Assert the exact one-gain value and that a
+  // second application would be a different, larger number.
+  const double rawScrollUnits = 0.1;  // deltaY = -10 CSS px, a small real pinch.
+  const double gainedOnce = ApplyPinchScrollUnitGain(rawScrollUnits);
+
+  EXPECT_NEAR(gainedOnce, rawScrollUnits / std::log(kWheelZoomStep), 1e-12);
+  EXPECT_NEAR(std::pow(kWheelZoomStep, gainedOnce), std::exp(rawScrollUnits), 1e-12);
+  EXPECT_GT(ApplyPinchScrollUnitGain(gainedOnce), gainedOnce);
+}
+
+TEST(RenderPaneGestureTest, PinchGainClampsOneEventToASingleOneAndAHalfXStep) {
+  // A misclassified or outsized event is merely brisk, never catastrophic.
+  const double maxUnits = MaxPinchScrollUnitsPerEvent();
+  EXPECT_NEAR(std::pow(kWheelZoomStep, maxUnits), 1.5, 1e-12);
+  EXPECT_NEAR(ApplyPinchScrollUnitGain(100.0), maxUnits, 1e-12);
+  EXPECT_NEAR(ApplyPinchScrollUnitGain(-100.0), -maxUnits, 1e-12);
+  EXPECT_NEAR(BrowserPinchZoomFactorForWheelDeltaY(-10000.0), 1.5, 1e-9);
 }
 
 TEST(RenderPaneGestureTest, DegeneratePinchMagnificationIsIgnored) {

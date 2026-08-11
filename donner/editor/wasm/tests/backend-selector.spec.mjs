@@ -662,6 +662,43 @@ test("trackpad gesture bridge prevents page zoom and emits editor wheel zoom", a
   );
 });
 
+test("trackpad gesture bridge synthesizes ungained pinch wheel deltas", async () => {
+  // The WebKit gesture bridge is a shape adapter, not a gain stage: it must emit
+  // the same UNGAINED deltaY that Chromium and Gecko synthesize natively, so the
+  // editor's pinch discriminator stays the one gain authority. Pre-multiplying
+  // by 1/ln(1.1) here (deltaY = -1049.2059 * ln(scale)) gains Safari pinch input
+  // twice. See donner/editor/PinchZoomPolicy.h.
+  const kWheelPixelsPerScrollUnit = 100;
+  const { dispatched, handlers } = await loadTouchPointerBridge();
+  const gesture = (type, scale) => ({
+    clientX: 320,
+    clientY: 240,
+    preventDefault() {},
+    scale,
+    type,
+  });
+
+  // WebKit reports `scale` relative to the gesture start, and the bridge emits
+  // the incremental scale since the previous event.
+  const incrementalScales = [1.05, 1.2, 0.8];
+  handlers.get("gesturestart")(gesture("gesturestart", 1));
+  let absoluteScale = 1;
+  for (const incrementalScale of incrementalScales) {
+    absoluteScale *= incrementalScale;
+    handlers.get("gesturechange")(gesture("gesturechange", absoluteScale));
+  }
+
+  assert.equal(dispatched.length, incrementalScales.length);
+  for (const [index, incrementalScale] of incrementalScales.entries()) {
+    const expectedDeltaY = -Math.log(incrementalScale) * kWheelPixelsPerScrollUnit;
+    assert.ok(
+      Math.abs(dispatched[index].deltaY - expectedDeltaY) < 1e-6,
+      `gesturechange with incremental scale ${incrementalScale} must synthesize the ungained `
+        + `deltaY ${expectedDeltaY}, got ${dispatched[index].deltaY}`,
+    );
+  }
+});
+
 test("loading screen remains until the editor presents its first frame", async () => {
   const { context, elements, focusCount, loadingClasses, timers, windowHandlers } =
     await loadReadyHandoff();
