@@ -1,5 +1,9 @@
 #include "donner/svg/compositor/CompositorController.h"
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/heap.h>
+#endif
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -124,7 +128,7 @@ CompositorController::PromoteResult CompositorController::promoteEntity(
     return refuse(PromoteRefusalReason::LayerLimit);
   }
 
-  if (totalBitmapMemory() >= kMaxCompositorMemoryBytes) {
+  if (totalBitmapMemory() >= EffectiveCompositorMemoryBudget()) {
     return refuse(PromoteRefusalReason::MemoryLimit);
   }
 
@@ -1949,6 +1953,15 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
 
 size_t CompositorController::layerCount() const {
   return layers_.size();
+}
+
+size_t EffectiveCompositorMemoryBudget() {
+#ifdef __EMSCRIPTEN__
+  const size_t heapBytes = emscripten_get_heap_size();
+  return std::min(kMaxCompositorMemoryBytes, heapBytes / 3);
+#else
+  return kMaxCompositorMemoryBytes;
+#endif
 }
 
 size_t CompositorController::totalBitmapMemory() const {
