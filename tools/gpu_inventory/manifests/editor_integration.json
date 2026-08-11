@@ -12,7 +12,7 @@
         "release",
         "submit"
       ],
-      "sha256": "e2d5da0b1ba6e9884d853fd55866bd49ee6fb7f869431e53f5e0a96c7b68048c",
+      "sha256": "1c513c16d4dae4fbc9a85cbdecc2d4d997d80eb982b0d307be2c03bbf0905b17",
       "wgpuCFunctions": [
         "wgpuInstanceCreateSurface"
       ],
