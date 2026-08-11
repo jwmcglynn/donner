@@ -128,9 +128,23 @@ jobs:
           export DONNER_WASM_BASE_URL="${server_url}"
           curl -fsS -o /dev/null "${DONNER_WASM_BASE_URL}/index.html"
 
+          # Chromium runs every spec in the tests directory EXCEPT
+          # composited-invariants.spec.ts, which the default config ignores:
+          # its per-rAF composited sampler starves under SwiftShader, so it
+          # runs on the platform GPU via its own config below.
           bash donner/editor/wasm/tests/run_tests.sh --headed
           npm --prefix donner/editor/wasm/tests run test:compatibility -- --project=firefox-geode-resize --headed
           npm --prefix donner/editor/wasm/tests run test:compatibility -- --project=webkit-geode-carousel --headed
+          # Gecko lane for the composited-output invariant suite. It gets its
+          # own config rather than another compatibility project: that config
+          # pins an explicit spec list and per-project grep filters, while this
+          # suite runs whole and needs a longer per-test timeout.
+          bash donner/editor/wasm/tests/run_tests.sh --headed \
+            --config=playwright.composited-firefox.config.js
+          # Hardware-Chromium lane for the same suite (full Chromium build on
+          # the platform GPU; SwiftShader cannot sustain the sampler).
+          bash donner/editor/wasm/tests/run_tests.sh --headed \
+            --config=playwright.composited-chromium.config.js
 
       - name: Upload Playwright failure artifacts
         if: failure()
