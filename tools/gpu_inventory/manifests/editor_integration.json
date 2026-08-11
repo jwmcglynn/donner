@@ -12,7 +12,7 @@
         "release",
         "submit"
       ],
-      "sha256": "c94ece0f645cbbcc87c6e7c3e34c6a75ee27a56ac2095be37e4d8a8b895f84be",
+      "sha256": "e2d5da0b1ba6e9884d853fd55866bd49ee6fb7f869431e53f5e0a96c7b68048c",
       "wgpuCFunctions": [
         "wgpuInstanceCreateSurface"
       ],
@@ -80,15 +80,15 @@
       "usesEditorWgpuDefine": true
     },
     "donner/editor/DocumentPresenter.cc": {
-      "sha256": "bfc3b1539939990cc4453741b02f9010cbe6a5805d2bb85d3e4dea732db7bac0",
+      "sha256": "003378594b0fdfe50c01fa44a13faacf38e623882165363b19fb407ebbba55bf",
       "usesEditorWgpuDefine": true
     },
     "donner/editor/DocumentPresenter.h": {
-      "sha256": "2218ca49e76687e1240b91183eca699e261bcf0c5640a0cd7753689b0193a3c7",
+      "sha256": "864f975b854720930ba4b3cd01e4898f618ff475a0921d7508ca084c9242eef7",
       "usesEditorWgpuDefine": true
     },
     "donner/editor/EditorShell.cc": {
-      "sha256": "c0b75fa37810de3deae057ba4d4a18db442225d43635be19d3134c5e2f5b6e3c",
+      "sha256": "cf2e6e20198da2f9595422f819bd4ae347637af694c41535ac5b2356b1a3fc78",
       "usesEditorWgpuDefine": true,
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
@@ -96,7 +96,7 @@
       ]
     },
     "donner/editor/EditorShell.h": {
-      "sha256": "5603c98933097b9c0603f19fd10bbb822b19d59c7212890689bc8d617c064bb1",
+      "sha256": "a981259d939f8b60f22dd6f21c3a96ea3780912d19e1fadf536ae94c9bdd447b",
       "usesEditorWgpuDefine": true
     },
     "donner/editor/EditorShellPresentation.cc": {
@@ -114,7 +114,7 @@
         "submit",
         "writeBuffer"
       ],
-      "sha256": "922de884cb87b2b134dc0c06d941cada75de0fd79284f43edb7ba1cc557fca37",
+      "sha256": "dfa772c291cc8ef7e629461769bb958e11e442bd35e6ab6b961917fdfc47d709",
       "usesEditorWgpuDefine": true,
       "wgpuCFunctions": [
         "wgpuLabel"
@@ -357,7 +357,7 @@
       ]
     },
     "donner/editor/tests/DocumentPresenter_tests.cc": {
-      "sha256": "43b29a96ca536667f9a13f096f5f6dc1484404e2e15e465ca525333fadc97c2c",
+      "sha256": "9f217237e599d74ba5bba149e11c2706f4ba46db86344fd1b47edc7cd44abee5",
       "usesEditorWgpuDefine": true
     },
     "donner/editor/tests/EditorRnrGlReplay.cc": {

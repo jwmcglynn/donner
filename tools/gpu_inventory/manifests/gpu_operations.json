@@ -12,7 +12,7 @@
         "release",
         "submit"
       ],
-      "sha256": "c94ece0f645cbbcc87c6e7c3e34c6a75ee27a56ac2095be37e4d8a8b895f84be",
+      "sha256": "e2d5da0b1ba6e9884d853fd55866bd49ee6fb7f869431e53f5e0a96c7b68048c",
       "wgpuCFunctions": [
         "wgpuInstanceCreateSurface"
       ],
@@ -70,7 +70,7 @@
       ]
     },
     "donner/editor/EditorShell.cc": {
-      "sha256": "c0b75fa37810de3deae057ba4d4a18db442225d43635be19d3134c5e2f5b6e3c",
+      "sha256": "cf2e6e20198da2f9595422f819bd4ae347637af694c41535ac5b2356b1a3fc78",
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
         "wgpuLifetimeTextureCreates"
@@ -91,7 +91,7 @@
         "submit",
         "writeBuffer"
       ],
-      "sha256": "922de884cb87b2b134dc0c06d941cada75de0fd79284f43edb7ba1cc557fca37",
+      "sha256": "dfa772c291cc8ef7e629461769bb958e11e442bd35e6ab6b961917fdfc47d709",
       "wgpuCFunctions": [
         "wgpuLabel"
       ],
@@ -450,8 +450,10 @@
     },
     "donner/svg/renderer/RendererGeode.cc": {
       "operations": [
+        "beginRenderPass",
         "copyTextureToBuffer",
         "copyTextureToTexture",
+        "createBindGroup",
         "createBuffer",
         "createCommandEncoder",
         "createTexture",
@@ -462,10 +464,13 @@
         "getConstMappedRange",
         "mapAsync",
         "poll",
+        "setBindGroup",
+        "setPipeline",
         "submit",
-        "unmap"
+        "unmap",
+        "writeBuffer"
       ],
-      "sha256": "12590ebc538418a7a36555fe8dcb47c3d387ec88aaba971ae71ddaf790ad4fc1",
+      "sha256": "2ca57a0257d71bc37002f43fffd965568ac0c2452b8448559400154f47d59236",
       "wgpuCFunctions": [
         "wgpuDevicePoll",
         "wgpuLabel"
@@ -478,6 +483,9 @@
         "WGPUTextureFormat_BGRA8Unorm"
       ],
       "wgpuCppTokens": [
+        "BindGroup",
+        "BindGroupDescriptor",
+        "BindGroupEntry",
         "Buffer",
         "BufferDescriptor",
         "BufferMapCallbackInfo",
@@ -489,7 +497,12 @@
         "Default",
         "Device",
         "Extent3D",
+        "LoadOp",
         "MapMode",
+        "RenderPassColorAttachment",
+        "RenderPassDescriptor",
+        "RenderPassEncoder",
+        "StoreOp",
         "TexelCopyBufferInfo",
         "TexelCopyTextureInfo",
         "Texture",
@@ -501,7 +514,7 @@
       ]
     },
     "donner/svg/renderer/RendererGeode.h": {
-      "sha256": "2b9f7a7a1f98cfcfbd0c5444ced9c41fa27aef4321113850238ea8097127cae9",
+      "sha256": "e9fc98f1368f4aa623bb37c0193058a49b5b1439a8f6a4cee3cbaf9ed94e7fd1",
       "wgpuCppTokens": [
         "Texture",
         "TextureFormat",
@@ -584,7 +597,7 @@
         "createRenderPipeline",
         "createShaderModule"
       ],
-      "sha256": "e1890313a0872d5ea2feaf9f1f3567d10e25ff4c749c1c4076f524beaeaaf738",
+      "sha256": "747be717071a141e142d45489daaf927a95fc9c11a41e348f6ee601bad4dca67",
       "wgpuCFunctions": [
         "wgpuLabel"
       ],
@@ -594,6 +607,9 @@
       "wgpuCppTokens": [
         "BindGroupLayoutDescriptor",
         "BindGroupLayoutEntry",
+        "BlendFactor",
+        "BlendOperation",
+        "BlendState",
         "BufferBindingType",
         "ColorTargetState",
         "ColorWriteMask",
@@ -616,7 +632,7 @@
       "operations": [
         "draw"
       ],
-      "sha256": "95245ac362f47ff026b15c0771aa029d774d3589916b2d95e33ffd79fb851527",
+      "sha256": "99fd5fb4438001b52d83c64ed880b60e24b851072dd5cae1e5fc578a0fd36cd2",
       "wgpuCppTokens": [
         "BindGroupLayout",
         "Device",
@@ -648,7 +664,7 @@
         "writeBuffer",
         "writeTexture"
       ],
-      "sha256": "6a3a43a4c9066b2a227f8bf6b9537b0d0f3d76d886a4607c7429a6a2eb6836d1",
+      "sha256": "00bcf8c74c5bda7de2b0dd488fe93726ff870869c59e18e6b9faf8ceb8941471",
       "wgpuCFunctions": [
         "wgpuAdapterGetInfo",
         "wgpuAdapterInfoFreeMembers",
@@ -729,7 +745,7 @@
       "operations": [
         "poll"
       ],
-      "sha256": "51f799a0ea6ef493484a39f75644330400c1eee7bc96b3627613ebebd4774763",
+      "sha256": "07088709eea22bb26b186d265ce782642f627eed2eedb3985225fc3010a0d863",
       "wgpuCFunctions": [
         "wgpuDevicePoll"
       ],
@@ -1165,7 +1181,7 @@
       "operations": [
         "draw"
       ],
-      "sha256": "7ac7816f69e535d6d549270e793addbc2766c146ad003e2e61df631fc35dd6c4",
+      "sha256": "822000064fcea536a1a796ac8fbb0911bb52ed683ecd3f2041ad90e08bcf1a54",
       "wgpuCppTokens": [
         "Texture",
         "TextureFormat"
