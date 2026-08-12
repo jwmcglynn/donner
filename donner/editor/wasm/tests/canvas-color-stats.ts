@@ -518,8 +518,36 @@ function matchesEditorPixelTarget(
   if (target === "splash-yellow") {
     return red > 180 && green > 135 && blue < 150 && red > blue + 70 && green > blue + 45;
   }
-  return green > 170 && blue > 150 && green > red + 65 && blue > red + 45
-    && Math.abs(green - blue) < 45;
+  // `selection-teal`: the editor's accent - (49,198,179) where the overlay
+  // covers a whole pixel - anywhere the selection chrome lands, including the
+  // blends it makes with what is behind it.
+  //
+  // This window deliberately does not test absolute brightness. The selection
+  // stroke is 1.25 LOGICAL pixels (`kSelectionStrokeLogicalPixels`), so at a
+  // device pixel ratio of 1 it is barely wider than one device pixel, and the
+  // old brightness floor (green > 170) only admitted pixels the stroke covered
+  // roughly 85% of. Nothing guarantees such a pixel exists: a 1.25-pixel wide
+  // stroke is only guaranteed to cover SOME pixel 62% of the way, so whether
+  // the count comes out in the hundreds or at zero is left to where the
+  // selection bounds land against the pixel grid and to how the runner's
+  // rasterizer antialiases them. That is not a property of the outline being
+  // on screen. Measured: CI's Gecko lane scored a selection outline at 48
+  // pixels of change where this machine scores 577 from a byte-identical
+  // document raster at the same ratio, and read the Splash press outline as
+  // absent entirely. This window asks for the accent's shape instead, which
+  // survives every coverage down to 41%: green and blue both far above red,
+  // with green at or above blue.
+  //
+  // Green-not-below-blue is what keeps the artwork out, and it is measured
+  // rather than assumed. The Splash's `Donner_line` swoosh is (83,196,241);
+  // its blue runs 14-45 above its green at every coverage, and under the old
+  // brightness window its brightest antialiased pixels scored as selection
+  // chrome - 115 of them inside the letter's own neighbourhood before anything
+  // was selected. Scored over captured Splash frames at both ratios, this
+  // window finds 0 pixels there before the click and 900 (ratio 1) / 3054
+  // (ratio 2) after it, against 115/692 and 72/2463 for the old one.
+  return green > 90 && blue > 80 && green > red + 55 && blue > red + 40 && blue <= green + 12
+    && green - blue < 60;
 }
 
 function findPixelBounds(

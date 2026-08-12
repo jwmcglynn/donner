@@ -265,20 +265,49 @@ async function waitForParkedFrameLoop(page: Page, timeoutMs: number): Promise<bo
   }
 }
 
+// Whether two captures describe the same presented picture.
+//
+// Both captures are scored in page CSS pixels off their own screenshot, so
+// equality here means the letter and its outline are in the same place and the
+// document covers the same share of its rectangle. Nothing that is moving
+// produces two of these in a row.
+function splashFramesAgree(a: SplashPresentationFrame, b: SplashPresentationFrame): boolean {
+  const sameBounds = (left: PixelBounds | null, right: PixelBounds | null): boolean =>
+    left === null || right === null
+      ? left === right
+      : left.minX === right.minX && left.minY === right.minY && left.maxX === right.maxX
+        && left.maxY === right.maxY;
+  const coverageTolerance = a.census.samples * 0.002;
+  return sameBounds(a.letter, b.letter) && sameBounds(a.outline, b.outline)
+    && Math.abs(a.census.darkBackgroundPixels - b.census.darkBackgroundPixels) <= coverageTolerance
+    && Math.abs(a.census.checkerboardPixels - b.census.checkerboardPixels) <= coverageTolerance;
+}
+
 // Take one capture of the presented document and refuse to score an unusable
 // one.
 //
 // Two ways a capture says nothing about the frame under test. It can straddle
 // two presented frames and mix their geometry, which would fake the very defect
-// this suite looks for; the demand-driven loop parks once it has presented the
-// move, so retaking until the frame counter is unchanged across the capture
-// settles that. And it can contain none of the editor's own tones at all -
-// zero artboard, zero checkerboard, zero pane backdrop - which is not a
+// this suite looks for. And it can contain none of the editor's own tones at
+// all - zero artboard, zero checkerboard, zero pane backdrop - which is not a
 // partially rendered document but a capture of something that is not the
 // editor, and is the shape of the sample a shared runner produced when this
 // test last failed. Both are retaken, bounded; a capture window that never
 // resolves fails with the histogram and the editor's published state attached,
 // so the next reader sees what was actually on screen.
+//
+// "Did not straddle a frame" is asked of the picture, not of the frame counter.
+// The counter is the cheap proof and is tried first: the demand-driven loop
+// parks once it has presented what it was woken for, so an unchanged counter
+// across the capture means one frame. But the counter also advances for wakes
+// this capture is not about - opening a sample kicks off a layer-thumbnail
+// burst that renders for seconds, one ~90ms frame per layer - and while that
+// runs the loop never parks, so a strictly-counter-based validator rejects
+// every capture in a row and fails a test whose document is fully and
+// correctly presented. Two consecutive captures that agree on the letter, the
+// outline and the coverage cannot have mixed two different pictures, so that
+// is accepted as the same proof. A capture is never rejected for showing a
+// complete document; it is rejected for being uniform, empty, or in motion.
 async function captureSplashDragFrame(
   page: Page,
   region: CssRegion,
@@ -286,15 +315,32 @@ async function captureSplashDragFrame(
   context: string,
 ): Promise<SplashPresentationFrame & { renderedFrames: number }> {
   let last: SplashPresentationFrame | null = null;
+  let previousUsable: SplashPresentationFrame | null = null;
   for (let attempt = 0; attempt < 4; ++attempt) {
-    await waitForParkedFrameLoop(page, scaledMs(2_000));
+    // Only the first attempt waits for a park. If the loop is going to park it
+    // parks within that window; if it is not - the thumbnail burst again - then
+    // spending the same wait on every retry only burns the test's budget
+    // before the retries that settle this by content can run.
+    if (attempt === 0) {
+      await waitForParkedFrameLoop(page, scaledMs(2_000));
+    } else {
+      await waitForBrowserComposite(page);
+    }
     const before = await readDocumentPresentationState(page);
     const frame = await captureSplashPresentationFrame(page, region, letterWindow);
     const after = await readDocumentPresentationState(page);
     last = frame;
-    if (before.renderedFrames === after.renderedFrames && isSplashCaptureUsable(frame.census)) {
+    if (!isSplashCaptureUsable(frame.census)) {
+      previousUsable = null;
+      continue;
+    }
+    if (
+      before.renderedFrames === after.renderedFrames
+      || (previousUsable !== null && splashFramesAgree(previousUsable, frame))
+    ) {
       return { ...frame, renderedFrames: after.renderedFrames };
     }
+    previousUsable = frame;
   }
   if (last !== null) {
     await test.info().attach(`unusable-capture-${context}`, {
@@ -957,10 +1003,31 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
   // this drag is about to move.
   const pressFrame = await captureSplashDragFrame(page, documentRegion, letterWindow, "press");
   expect(pressFrame.letter, "the press lost the Splash letter").not.toBeNull();
+  if (pressFrame.outline === null) {
+    // The letter window is a corridor a few dozen pixels wide, so "no outline
+    // in it" cannot say which failure this is: chrome drawn around the root
+    // group instead of the letter, chrome that never reached the screen, and
+    // chrome nobody can see all read the same here. The capture is of the
+    // whole presented document, so attaching it answers that directly.
+    await test.info().attach("press-frame", {
+      body: pressFrame.png,
+      contentType: "image/png",
+    });
+  }
   expect(
     pressFrame.outline,
     `the press selected something other than the Splash letter it aimed at: `
-      + `frame=${JSON.stringify({ letter: pressFrame.letter, outline: pressFrame.outline })}`,
+      + `frame=${JSON.stringify({ letter: pressFrame.letter, outline: pressFrame.outline })} `
+      + `window=${JSON.stringify(letterWindow)} press=${JSON.stringify(dragStart)} `
+      + `published=${
+        JSON.stringify(
+          await page.evaluate(() => ({
+            interaction: window.__donnerInteractionStats,
+            renderedFrames: window.__donnerMainLoopRenderedFrames || 0,
+            worker: window.__donnerWorkerStats,
+          })),
+        )
+      }`,
   ).not.toBeNull();
   const letterAtRest = pressFrame.letter!;
   const outlineAtRest = pressFrame.outline!;

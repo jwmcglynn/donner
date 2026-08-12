@@ -217,6 +217,13 @@ async function selectedCount(page: Page): Promise<number> {
   );
 }
 
+/** The editor's own account of the interaction, for failure diagnostics. */
+async function interactionStats(page: Page): Promise<unknown> {
+  return page.evaluate(() =>
+    (window as unknown as { __donnerInteractionStats?: unknown }).__donnerInteractionStats ?? null
+  );
+}
+
 function assertProbeUsable(result: CompositedProbeResult, minimumSamples: number): void {
   expect(
     result.samples.length,
@@ -642,22 +649,29 @@ test.describe("composited drag invariants", () => {
     // frame on one engine and immediately on another, and a fixed wait would
     // encode one of those as the requirement.
     let afterPixels = 0;
-    await expect
-      .poll(async () => {
-        afterPixels = (await readEditorPixelBounds(page, letterRegion, "selection-teal"))?.pixels
-          ?? 0;
-        return afterPixels - beforePixels;
-      }, {
-        message: "clicking a shape must make its selection outline visible",
-        timeout: scaledMs(6_000),
-        intervals: [100, 150, 250, 500],
-      })
-      .toBeGreaterThan(50);
-
-    console.log(
-      `click-select-outline engine=${browserName} before=${beforePixels} after=${afterPixels}`
-        + ` delta=${afterPixels - beforePixels}`,
-    );
+    try {
+      await expect
+        .poll(async () => {
+          afterPixels = (await readEditorPixelBounds(page, letterRegion, "selection-teal"))?.pixels
+            ?? 0;
+          return afterPixels - beforePixels;
+        }, {
+          message: "clicking a shape must make its selection outline visible",
+          timeout: scaledMs(6_000),
+          intervals: [100, 150, 250, 500],
+        })
+        .toBeGreaterThan(50);
+    } finally {
+      // Reported on the way out either way. The counts are the whole diagnosis
+      // - an unchanged `after` is chrome that never arrived, a large `before`
+      // is a window measuring artwork instead of chrome - and printing them
+      // only on success is what left a red run saying nothing but its delta.
+      console.log(
+        `click-select-outline engine=${browserName} before=${beforePixels} after=${afterPixels}`
+          + ` delta=${afterPixels - beforePixels} region=${JSON.stringify(letterRegion)}`
+          + ` interaction=${JSON.stringify(await interactionStats(page))}`,
+      );
+    }
     expect(failures).toEqual([]);
   });
 });
