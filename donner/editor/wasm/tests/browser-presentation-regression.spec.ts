@@ -914,9 +914,14 @@ test("a zoom storm never uncovers the editor background under the Donner Splash"
       if (persisted > 0) {
         uncovered.push({ burst, phase, backgroundPixels: persisted });
       }
+      // At storm depth the letter overflows any pane-bounded region on some
+      // viewports, so its measured width and edge positions can saturate at the
+      // region bounds. The letter's yellow fill count keeps tracking the zoom
+      // even when every edge clips: the stroke covers a different fraction of
+      // the region at each zoom level.
       const letter = await readSplashLetterBounds(page, splashLetterMeasureRegion(editorBounds));
       if (letter !== null) {
-        scaleSamples.push(Math.round(letter.maxX - letter.minX));
+        scaleSamples.push(letter.pixels);
       }
     }
   }
