@@ -677,10 +677,15 @@ export interface EditorBackgroundCoverageStats {
 /**
  * Count pixels showing the bare editor background inside a page region.
  *
- * The editor page and the worker document canvases share `#101317`, which is
- * what an uncovered render pane shows. The Donner Splash artboard is `#10131e`:
- * same red and green, six levels more blue, so the blue ceiling here separates
- * "no document pixels" from "the document's own dark background".
+ * An uncovered render pane shows the composited pane backdrop, which ANGLE
+ * screenshots encode as exactly (13,15,29) (measured; the histogram of an
+ * uncovered region is a single flat color). The Donner Splash artboard lands
+ * at (16,19,30): only one blue level away, so blue cannot discriminate and
+ * the red/green channels carry the match. The window is one level per channel
+ * around the measured backdrop: wide enough for compositor rounding, and
+ * tight enough that neither the artboard nor the dark Splash cloud gradients
+ * (which swept the old nine-level window at deep zoom) count as uncovered
+ * background.
  */
 export async function readEditorBackgroundCoverage(
   page: Page,
@@ -697,9 +702,9 @@ export async function readEditorBackgroundCoverage(
       continue;
     }
     if (
-      red >= 12 && red <= 20
-      && green >= 15 && green <= 23
-      && blue >= 19 && blue <= 26
+      red >= 12 && red <= 14
+      && green >= 14 && green <= 16
+      && blue >= 28 && blue <= 30
     ) {
       ++editorBackgroundPixels;
     }

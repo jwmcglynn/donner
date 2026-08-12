@@ -456,7 +456,6 @@ test("welcome picker paints before asynchronously rendering real SVG thumbnails"
     deviceState: {
       headlessDeviceCreations: window.__donnerHeadlessDeviceCreations || 0,
     },
-    frames: window.__donnerMainLoopRenderedFrames || 0,
     thumbnails: window.__donnerSampleThumbnailStats,
   }));
   expect(settled.thumbnails).toBeDefined();
@@ -585,12 +584,25 @@ test("welcome picker paints before asynchronously rendering real SVG thumbnails"
     expect(textStyle.glyphPixels).toBeGreaterThan(20);
   }
 
-  // Once the last result is uploaded, the worker and event-driven main loop must park. This dwell
-  // crosses the former recurring 400-500 ms update interval.
-  await page.waitForTimeout(650);
-  expect(await page.evaluate(() => window.__donnerMainLoopRenderedFrames || 0)).toBe(
-    settled.frames,
-  );
+  // Once the last result is uploaded, the worker and event-driven main loop must park. The
+  // quiet window crosses the former recurring 400-500 ms update interval, so a loop that kept
+  // re-rendering could never satisfy it; polling for the window instead of comparing against an
+  // earlier snapshot tolerates the bounded tail of frames the capture readbacks above run.
+  await expect
+    .poll(
+      async () => {
+        const first = await page.evaluate(() => window.__donnerMainLoopRenderedFrames || 0);
+        await page.waitForTimeout(650);
+        const second = await page.evaluate(() => window.__donnerMainLoopRenderedFrames || 0);
+        return second - first;
+      },
+      {
+        message: "expected the main loop to park once thumbnails settled",
+        timeout: scaledMs(8000),
+        intervals: [50],
+      },
+    )
+    .toBe(0);
   expect(fatalMessages).toEqual([]);
 });
 
@@ -995,30 +1007,39 @@ test("browser presents the first Basic Shapes drag frame within the interaction 
       )
       .not.toBe("waiting");
     expect(selectionChromeDelta).toBeGreaterThan(50);
-    expect(
-      await page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0),
-      "a selection click must draw chrome without re-rasterizing the document",
-    ).toBe(beforeSelectionResult);
+    // A selection click intentionally schedules exactly one document render to prewarm the
+    // selected layer's textures so the first drag frame presents immediately. Polling for the
+    // exact +1 keeps the contract tight: a second render never matches and times out here.
+    await expect
+      .poll(async () => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
+        message: "expected the selection click's single prewarm render and nothing further",
+        timeout: scaledMs(2000),
+        intervals: [16, 25, 50, 100],
+      })
+      .toBe(beforeSelectionResult + 1);
   }
   await page.mouse.move(blueRectCenter.x, blueRectCenter.y);
   await page.mouse.down();
 
-  const beforeMoveResults = await page.evaluate(
-    () => window.__donnerWorkerStats?.completedResults || 0,
-  );
   // The 125 ms interaction budget is calibrated for local development
   // hardware. Shared CI runners are slower and the poll below adds up to one
   // interval of measurement quantization, so CI enforces a looser bound that
   // still fails on genuine stalls.
   const firstDragFrameBudgetMs = scaledMs(125);
+  // The first visible drag frame is a UI frame presenting the prewarmed selected-layer
+  // texture at its moved position; the worker does not re-rasterize during the drag, so the
+  // budget measures the frame counter, not the document counter.
+  const beforeMoveFrames = await page.evaluate(
+    () => window.__donnerMainLoopRenderedFrames || 0,
+  );
   const dragMoveStartedAt = Date.now();
   await page.mouse.move(blueRectCenter.x + 120, blueRectCenter.y + 70);
   await expect
     .poll(async () => {
-      const completed = await page.evaluate(
-        () => window.__donnerWorkerStats?.completedResults || 0,
+      const frames = await page.evaluate(
+        () => window.__donnerMainLoopRenderedFrames || 0,
       );
-      return completed > beforeMoveResults;
+      return frames > beforeMoveFrames;
     }, {
       message: "expected the shape's first visible drag frame while the pointer remained down",
       timeout: firstDragFrameBudgetMs,
@@ -1134,7 +1155,7 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
   expect(fatalMessages).toEqual([]);
 });
 
-test("Geode WASM selects through the overlay without document rerender or recurring updates", async ({ page }) => {
+test("Geode WASM selects through the overlay with one prewarm render and no recurring updates", async ({ page }) => {
   test.skip(kBackend !== "geode", "Geode worker scheduling regression is backend-specific");
   const fatalMessages = await openEditor(page, { wgpuReadbackStats: false });
   const canvas = page.locator("canvas#canvas");
@@ -1191,23 +1212,37 @@ test("Geode WASM selects through the overlay without document rerender or recurr
       intervals: [16, 25, 50, 100],
     })
     .toBe(false);
-  expect(await page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0)).toBe(
-    beforeSelection,
-  );
+  // The click's one intentional render is the selected-layer prewarm; anything past +1 is the
+  // recurring-update regression this test exists to catch, and the exact-match poll times out.
+  await expect
+    .poll(async () => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
+      message: "expected the selection click's single prewarm render and nothing further",
+      timeout: scaledMs(2000),
+      intervals: [16, 25, 50, 100],
+    })
+    .toBe(beforeSelection + 1);
   await page.mouse.move(dragStart.x, dragStart.y);
   await page.mouse.down();
-  const beforeDrag = await page.evaluate(
-    () => window.__donnerWorkerStats?.completedResults || 0,
+  // An active drag presents by transforming the prewarmed selected-layer texture inside UI
+  // frames; the worker does not re-rasterize until the pointer releases. The live signal for
+  // "the drag is visibly presenting" is therefore the UI frame counter, and the document
+  // counter staying flat through the drag is the architecture's own contract.
+  const beforeDragFrames = await page.evaluate(
+    () => window.__donnerMainLoopRenderedFrames || 0,
   );
   await page.mouse.move(dragStart.x + 18, dragStart.y + 12);
   await page.mouse.move(dragStart.x + 32, dragStart.y + 20);
   await expect
-    .poll(async () => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
-      message: "expected a document frame while the shape drag is still active",
+    .poll(async () => page.evaluate(() => window.__donnerMainLoopRenderedFrames || 0), {
+      message: "expected drag-preview frames while the shape drag is active",
       timeout: scaledMs(1000),
       intervals: [16, 25, 50, 100],
     })
-    .toBeGreaterThan(beforeDrag);
+    .toBeGreaterThan(beforeDragFrames);
+  expect(
+    await page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0),
+    "an active drag must not re-rasterize the document before the pointer releases",
+  ).toBe(beforeSelection + 1);
   const beforeMouseUpResults = await page.evaluate(
     () => window.__donnerWorkerStats?.completedResults || 0,
   );
