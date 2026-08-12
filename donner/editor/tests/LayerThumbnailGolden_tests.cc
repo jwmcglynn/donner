@@ -99,7 +99,7 @@ TEST(LayerThumbnailGoldenTest, DonnerSplashLayerThumbnailsMatchGoldens) {
     ASSERT_TRUE(element.has_value()) << "Missing layer selector " << testCase.selector;
 
     const svg::RendererBitmap bitmap =
-        renderer.renderElementToBitmap(*element, kLayerThumbnailMaxSize);
+        renderer.renderElement(*element, kLayerThumbnailMaxSize).bitmap();
     ASSERT_FALSE(bitmap.empty()) << "Layer " << testCase.label << " produced an empty thumbnail";
 
     const std::string goldenPath =

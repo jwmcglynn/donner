@@ -18,8 +18,8 @@
 #include "donner/base/RelativeLengthMetrics.h"
 #include "donner/base/SmallVector.h"
 #include "donner/base/Transform.h"
-#include "donner/base/Vector2.h"
 #include "donner/base/Utils.h"
+#include "donner/base/Vector2.h"
 #include "donner/css/Color.h"
 #include "donner/css/FontFace.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
@@ -125,6 +125,77 @@ public:
    * @return CPU-readable bitmap, or an empty bitmap when readback is unsupported.
    */
   [[nodiscard]] virtual RendererBitmap takeSnapshot() const { return RendererBitmap{}; }
+};
+
+/**
+ * A rendered image that lives either in a backend GPU texture or in CPU pixels.
+ *
+ * Renderers return whichever form the active backend produces natively - a GPU backend hands back a
+ * sampleable texture, a software backend hands back pixels - so callers do not have to pick a
+ * rendering entry point per backend. A consumer that can sample a texture takes \ref
+ * textureSnapshot and uses \ref bitmap only when it is null; a consumer that needs CPU pixels calls
+ * \ref bitmap and pays a readback only when the image is GPU-resident.
+ */
+class RendererImage {
+public:
+  /// Constructs an empty image.
+  RendererImage() = default;
+
+  /**
+   * Constructs a CPU-resident image.
+   *
+   * @param bitmap Rendered pixels. An empty bitmap yields an empty image.
+   */
+  explicit RendererImage(RendererBitmap bitmap) : bitmap_(std::move(bitmap)) {}
+
+  /**
+   * Constructs a GPU-resident image.
+   *
+   * @param texture Backend texture holding the rendered pixels. A null texture yields an empty
+   *   image.
+   */
+  explicit RendererImage(std::shared_ptr<const RendererTextureSnapshot> texture)
+      : texture_(std::move(texture)) {}
+
+  /// Returns true when this image has no content.
+  [[nodiscard]] bool empty() const { return texture_ == nullptr && bitmap_.empty(); }
+
+  /// Pixel dimensions in device pixels, or zero when empty.
+  [[nodiscard]] Vector2i dimensions() const {
+    return texture_ != nullptr ? texture_->dimensions() : bitmap_.dimensions;
+  }
+
+  /// Alpha interpretation of the image contents.
+  [[nodiscard]] AlphaType alphaType() const {
+    return texture_ != nullptr ? texture_->alphaType() : bitmap_.alphaType;
+  }
+
+  /// The backend texture when this image is GPU-resident, or null when it is CPU pixels.
+  [[nodiscard]] const std::shared_ptr<const RendererTextureSnapshot>& textureSnapshot() const {
+    return texture_;
+  }
+
+  /**
+   * CPU pixels for this image.
+   *
+   * A GPU-resident image is read back on the first call and the result cached, so a consumer that
+   * only ever samples the texture never pays for a readback. The readback may submit GPU work and
+   * block for completion.
+   *
+   * @return Rendered pixels, or an empty bitmap when the image is empty or readback is unsupported.
+   */
+  [[nodiscard]] const RendererBitmap& bitmap() const {
+    if (texture_ != nullptr && !readbackAttempted_) {
+      readbackAttempted_ = true;
+      bitmap_ = texture_->takeSnapshot();
+    }
+    return bitmap_;
+  }
+
+private:
+  std::shared_ptr<const RendererTextureSnapshot> texture_;
+  mutable RendererBitmap bitmap_;
+  mutable bool readbackAttempted_ = false;
 };
 
 /**
@@ -580,17 +651,6 @@ public:
   /// Returns true when presentation callers must use \ref takeTextureSnapshot and must not fall
   /// back to CPU bitmap readback for normal frame handoff.
   [[nodiscard]] virtual bool requiresTextureSnapshotPresentation() const { return false; }
-
-  /// Returns true when this renderer instance can render element subtrees into directly
-  /// sampleable backend textures (see \ref Renderer::renderElementToTextureSnapshot).
-  ///
-  /// This asks a different question from \ref requiresTextureSnapshotPresentation, which is about
-  /// how *frames* cross the presentation handoff. A backend whose frame handoff has to go through
-  /// CPU bitmaps - because the producing and consuming threads own different devices - can still
-  /// hand same-thread callers a texture for a thumbnail drawn on the caller's own device. Callers
-  /// choosing between \ref Renderer::renderElementToTextureSnapshot and
-  /// \ref Renderer::renderElementToBitmap want this predicate, not that one.
-  [[nodiscard]] virtual bool supportsElementTextureSnapshots() const { return false; }
 
   /**
    * Fill the see-through parts of the completed frame target with the
