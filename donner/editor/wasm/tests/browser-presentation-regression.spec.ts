@@ -40,6 +40,10 @@ declare global {
       workerBusy: boolean;
     };
     __donnerFrameLoopStats?: FrameLoopStats;
+    __donnerOverlayStats?: {
+      compositorTileOverlay: boolean;
+      geometryDebugOverlay: boolean;
+    };
   }
 }
 
@@ -212,6 +216,45 @@ async function toggleViewMenuItem(page: Page, canvasX: number, itemY: number): P
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(null))));
 }
 
+// Drive a View-menu overlay toggle to a WANTED state and verify it took effect
+// against the app's published `__donnerOverlayStats`. The menu rows can only be
+// reached by fixed pixel offsets, and a click that lands between rows silently
+// does nothing while leaving the menu open - which is exactly how a runner with
+// slightly different row metrics kept an overlay enabled that the test believed
+// it had disabled. Escape closes any left-open menu before each retry.
+async function setViewOverlayState(
+  page: Page,
+  canvasX: number,
+  itemY: number,
+  key: "compositorTileOverlay" | "geometryDebugOverlay",
+  enabled: boolean,
+): Promise<void> {
+  for (let attempt = 0; attempt < 4; ++attempt) {
+    const current = await page.evaluate(
+      (k) => window.__donnerOverlayStats?.[k],
+      key,
+    );
+    if (current === enabled) {
+      return;
+    }
+    await toggleViewMenuItem(page, canvasX, itemY);
+    const flipped = await page
+      .waitForFunction(
+        ({ k, want }) => window.__donnerOverlayStats?.[k] === want,
+        { k: key, want: enabled },
+        { timeout: scaledMs(2_000) },
+      )
+      .then(() => true)
+      .catch(() => false);
+    if (flipped) {
+      return;
+    }
+    await page.keyboard.press("Escape");
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(null))));
+  }
+  throw new Error(`the ${key} menu toggle never reached ${enabled} after 4 attempts`);
+}
+
 async function waitForBrowserComposite(page: Page): Promise<void> {
   await page.evaluate(() =>
     new Promise((resolve) =>
@@ -307,7 +350,7 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
   const beforeCompositorResults = await page.evaluate(
     () => window.__donnerWorkerStats?.completedResults || 0,
   );
-  await toggleViewMenuItem(page, canvasBounds.x, 155);
+  await setViewOverlayState(page, canvasBounds.x, 155, "compositorTileOverlay", true);
   await expect
     .poll(() => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
       message: "Compositor Tile Overlay must rasterize a fresh document render",
@@ -334,7 +377,7 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
 
   // Disable the independent compositor overlay before checking renderer
   // geometry pixels, so tile labels cannot masquerade as Slug edges.
-  await toggleViewMenuItem(page, canvasBounds.x, 155);
+  await setViewOverlayState(page, canvasBounds.x, 155, "compositorTileOverlay", false);
   await waitForBrowserComposite(page);
   // Toggling an overlay drops the uploaded composited textures (the same
   // document version renders different pixels, so the cache cannot reuse
@@ -389,7 +432,7 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
   const beforeGeometryResults = await page.evaluate(
     () => window.__donnerWorkerStats?.completedResults || 0,
   );
-  await toggleViewMenuItem(page, canvasBounds.x, 176);
+  await setViewOverlayState(page, canvasBounds.x, 176, "geometryDebugOverlay", true);
   await expect
     .poll(() => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
       message: "Geometry Debug Overlay must schedule a freshly rasterized document render",

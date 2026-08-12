@@ -170,6 +170,26 @@ void PublishInteractionStats(int selectedCount, int pendingClick, int workerBusy
  * coordinates use, so a test can map a document coordinate onto the viewport
  * with `documentX + documentWidth * (x / viewBoxWidth)`.
  */
+/**
+ * Publish the debug-overlay toggle states.
+ *
+ * The browser suites toggle these through the ImGui View menu, which they can
+ * only reach by clicking at fixed pixel offsets; a click that lands between
+ * rows silently does nothing. Publishing the authoritative state lets a test
+ * verify the toggle took effect and retry the click instead of proceeding
+ * against a menu item it missed.
+ */
+void PublishOverlayStats(int compositorTileOverlay, int geometryDebugOverlay) {
+  MAIN_THREAD_ASYNC_EM_ASM(
+      {
+        window['__donnerOverlayStats'] = ({
+          'compositorTileOverlay' : !!$0,
+          'geometryDebugOverlay' : !!$1,
+        });
+      },
+      compositorTileOverlay, geometryDebugOverlay);
+}
+
 void PublishViewportStats(double paneX, double paneY, double paneWidth, double paneHeight,
                           double documentX, double documentY, double documentWidth,
                           double documentHeight, double zoom) {
@@ -6553,6 +6573,7 @@ void EditorShell::recordFrameTelemetry(
     PublishViewportStats(viewport.paneOrigin.x, viewport.paneOrigin.y, viewport.paneSize.x,
                          viewport.paneSize.y, documentRect.topLeft.x, documentRect.topLeft.y,
                          documentSize.x, documentSize.y, viewport.zoom);
+    PublishOverlayStats(compositorTileOverlay_ ? 1 : 0, geometryDebugOverlay_ ? 1 : 0);
   }
   AccumulateFrameLoopPhaseCost(
       mainFrameCost.layoutMs, mainFrameCost.menusDialogsMs, mainFrameCost.sourcePaneMs,
