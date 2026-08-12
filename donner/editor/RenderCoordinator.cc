@@ -119,7 +119,19 @@ svg::Renderer CreateRenderer(std::shared_ptr<::donner::geode::GeodeDevice> geode
   if (geodeDevice != nullptr) {
     return svg::Renderer(std::move(geodeDevice));
   }
+#ifdef __EMSCRIPTEN__
+  // Browser builds never render through this instance. WebGPU handles are
+  // per-worker, so `AsyncRenderer::workerLoop` constructs its own renderer on
+  // the raster thread and substitutes it for the one every request carries.
+  // Giving this instance a backend would acquire a second headless GPU device
+  // on the UI thread - an adapter/device request plus a pipeline compile that
+  // nothing ever draws with, serialized ahead of the raster thread's own
+  // device. Hand back a device-less instance so the render lease's reference
+  // stays valid without owning a device.
+  return svg::Renderer(std::shared_ptr<::donner::geode::GeodeDevice>());
+#else
   return svg::Renderer();
+#endif
 }
 
 constexpr AsyncRendererStartMode EditorRenderWorkerStartMode() {
