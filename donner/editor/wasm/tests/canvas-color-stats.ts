@@ -61,11 +61,34 @@ export interface SplashCompositeFrameCapture {
   stats: SplashCompositeFrameStats;
 }
 
-export function readSplashCompositeFrameStatsFromPng(
-  png: Buffer,
-  letterSearchBounds: Omit<PixelBounds, "pixels">,
-): SplashCompositeFrameStats {
-  const image = decodePng(png);
+/**
+ * Count the two Splash presentation classes inside a decoded render-pane capture.
+ *
+ * Both windows are calibrated against measured composited output, not against
+ * the source colors: a settled Donner Splash was captured through
+ * `page.screenshot()` over the render pane on both Firefox and Chromium-ANGLE,
+ * and the two engines produced byte-identical histograms, so one calibration
+ * covers the suite.
+ *
+ * `darkBackgroundPixels` counts the Splash document's own dark backdrop. The
+ * artboard fill is `#0d0f1d` and encodes as exactly (13,15,29); the art layers a
+ * second flat dark tone at (16,19,30) over part of it. Together they are 43% of
+ * the pane. The window spans just those two tones, which is what makes the
+ * measurement mean "the document is presented": the composited render-pane
+ * backdrop is (44,47,56) and the welcome picker's chrome is (17,18,21) and
+ * (36,39,43), so a pane with no document in it now counts near zero. The
+ * previous window (red/green 20-72 with a blue bias) matched the pane backdrop
+ * and the picker chrome instead, so it reported ~39% coverage whether or not the
+ * document had rendered at all.
+ *
+ * `checkerboardPixels` counts the transparency checkerboard, whose cells are the
+ * neutral grays 40 and 60 (`kTransparencyCheckerboardDarkColor` /
+ * `...LightColor` in `donner/svg/renderer/RendererInterface.h`) and which
+ * compositing reproduces exactly. Requiring near-neutral channels keeps the
+ * (44,47,56) pane backdrop out. The previous window matched near-white pixels,
+ * which no checkerboard has ever drawn but the Splash lightning artwork does.
+ */
+function countSplashSurfaceCoverage(image: PngImage): SplashSurfaceCoverageStats {
   let checkerboardPixels = 0;
   let darkBackgroundPixels = 0;
   for (let offset = 0; offset < image.data.length; offset += image.channels) {
@@ -78,10 +101,12 @@ export function readSplashCompositeFrameStatsFromPng(
     }
     const maxRgb = Math.max(red, green, blue);
     const minRgb = Math.min(red, green, blue);
-    if (minRgb >= 215 && maxRgb - minRgb <= 18) {
+    if (
+      maxRgb - minRgb <= 3 && ((minRgb >= 37 && minRgb <= 43) || (minRgb >= 57 && minRgb <= 63))
+    ) {
       ++checkerboardPixels;
     }
-    if (red >= 20 && red <= 72 && green >= 20 && green <= 72 && blue >= red + 5 && blue <= 105) {
+    if (red >= 11 && red <= 18 && green >= 13 && green <= 21 && blue >= 27 && blue <= 32) {
       ++darkBackgroundPixels;
     }
   }
@@ -89,6 +114,16 @@ export function readSplashCompositeFrameStatsFromPng(
     checkerboardPixels,
     darkBackgroundPixels,
     samples: image.width * image.height,
+  };
+}
+
+export function readSplashCompositeFrameStatsFromPng(
+  png: Buffer,
+  letterSearchBounds: Omit<PixelBounds, "pixels">,
+): SplashCompositeFrameStats {
+  const image = decodePng(png);
+  return {
+    ...countSplashSurfaceCoverage(image),
     teal: findPixelBounds(image, "selection-teal", letterSearchBounds),
     yellow: findPixelBounds(image, "splash-yellow", letterSearchBounds),
   };
@@ -456,69 +491,11 @@ export async function readElementColorStats(locator: Locator): Promise<CanvasCol
   return measureImage(image, { x: 0, y: 0, width: image.width, height: image.height });
 }
 
-export async function readSplashSurfaceCoverageStats(
-  locator: Locator,
-): Promise<SplashSurfaceCoverageStats> {
-  const box = await locator.boundingBox();
-  if (box === null) {
-    throw new Error("element not found");
-  }
-  const image = decodePng(await locator.screenshot());
-  let checkerboardPixels = 0;
-  let darkBackgroundPixels = 0;
-  for (let offset = 0; offset < image.data.length; offset += image.channels) {
-    const red = image.data[offset];
-    const green = image.data[offset + 1];
-    const blue = image.data[offset + 2];
-    const alpha = image.channels === 4 ? image.data[offset + 3] : 255;
-    if (alpha < 200) {
-      continue;
-    }
-    const maxRgb = Math.max(red, green, blue);
-    const minRgb = Math.min(red, green, blue);
-    if (minRgb >= 215 && maxRgb - minRgb <= 18) {
-      ++checkerboardPixels;
-    }
-    if (red >= 20 && red <= 72 && green >= 20 && green <= 72 && blue >= red + 5 && blue <= 105) {
-      ++darkBackgroundPixels;
-    }
-  }
-  return {
-    checkerboardPixels,
-    darkBackgroundPixels,
-    samples: image.width * image.height,
-  };
-}
-
 export async function readSplashPageCoverageStats(
   page: Page,
   region: CssRegion,
 ): Promise<SplashSurfaceCoverageStats> {
-  const image = decodePng(await page.screenshot({ clip: region }));
-  let checkerboardPixels = 0;
-  let darkBackgroundPixels = 0;
-  for (let offset = 0; offset < image.data.length; offset += image.channels) {
-    const red = image.data[offset];
-    const green = image.data[offset + 1];
-    const blue = image.data[offset + 2];
-    const alpha = image.channels === 4 ? image.data[offset + 3] : 255;
-    if (alpha < 200) {
-      continue;
-    }
-    const maxRgb = Math.max(red, green, blue);
-    const minRgb = Math.min(red, green, blue);
-    if (minRgb >= 215 && maxRgb - minRgb <= 18) {
-      ++checkerboardPixels;
-    }
-    if (red >= 20 && red <= 72 && green >= 20 && green <= 72 && blue >= red + 5 && blue <= 105) {
-      ++darkBackgroundPixels;
-    }
-  }
-  return {
-    checkerboardPixels,
-    darkBackgroundPixels,
-    samples: image.width * image.height,
-  };
+  return countSplashSurfaceCoverage(decodePng(await page.screenshot({ clip: region })));
 }
 
 export async function captureSplashCompositeFrame(

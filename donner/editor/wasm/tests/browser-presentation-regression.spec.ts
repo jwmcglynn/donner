@@ -124,6 +124,19 @@ async function readDocumentPresentationState(page: Page): Promise<DocumentPresen
   }));
 }
 
+// What a drag press is supposed to have accomplished, read as one snapshot: the
+// shape is selected and its single prewarm render has landed. Reading both
+// together is what makes the failure diagnosable - a press the busy worker
+// dropped reports `selectedCount: 0` rather than an unexplained missing render.
+async function readPressSelectionState(
+  page: Page,
+): Promise<{ completedResults: number; selectedCount: number }> {
+  return page.evaluate(() => ({
+    completedResults: window.__donnerWorkerStats?.completedResults || 0,
+    selectedCount: window.__donnerInteractionStats?.selectedCount ?? -1,
+  }));
+}
+
 async function openEditor(page: Page): Promise<string[]> {
   const failures: string[] = [];
   page.on("console", (message) => {
@@ -463,10 +476,13 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
   await waitForBrowserComposite(page);
   await page.mouse.move(dragStart.x, dragStart.y);
   await waitForPressReadiness(page, "drag press");
+  const resultsBeforePress = await page.evaluate(
+    () => window.__donnerWorkerStats?.completedResults || 0,
+  );
   await page.mouse.down();
 
   const samples: Array<{
-    completedResults: number;
+    renderedFrames: number;
     coloredPixels: number;
     blue: PixelBounds;
     teal: PixelBounds;
@@ -477,28 +493,43 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
     width: 460,
     height: 280,
   };
-  let previousResults = await page.evaluate(
-    () => window.__donnerWorkerStats?.completedResults || 0,
-  );
+  // An active drag presents by transforming the prewarmed selected-layer texture
+  // inside UI frames; the worker does not re-rasterize the document until the
+  // pointer releases. So the per-step signal that "the drag produced a frame" is
+  // the UI frame counter, and the document counter staying flat across the whole
+  // drag is itself part of the contract, asserted per step and after the release
+  // below. The press selects the shape, which schedules exactly one prewarm
+  // render of the selected layer; wait for it, or the drag baseline is captured
+  // before it lands and the first step reads the prewarm as a mid-drag raster.
+  const resultsDuringDrag = resultsBeforePress + 1;
+  await expect
+    .poll(() => readPressSelectionState(page), {
+      message: "expected the press to select the shape and schedule its one prewarm render",
+      timeout: scaledMs(2_000),
+      intervals: [16, 25, 50, 100],
+    })
+    .toEqual({ completedResults: resultsDuringDrag, selectedCount: 1 });
+  let previousFrames = await page.evaluate(() => window.__donnerMainLoopRenderedFrames || 0);
   for (let step = 1; step <= 16; ++step) {
     await page.mouse.move(dragStart.x + step * 6, dragStart.y + step * 3);
     await expect
-      .poll(async () => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
-        message: `expected a document render for drag step ${step}`,
+      .poll(async () => page.evaluate(() => window.__donnerMainLoopRenderedFrames || 0), {
+        message: `expected a drag-preview frame for drag step ${step}`,
         timeout: scaledMs(2_000),
         intervals: [16, 25, 50, 100],
       })
-      .toBeGreaterThan(previousResults);
-    // A capture that straddles two renders can mix geometry from both, which
-    // would fake the very defect this test looks for. Retake until the render
-    // count is unchanged across the capture.
+      .toBeGreaterThan(previousFrames);
+    // A capture that straddles two frames can mix geometry from both, which
+    // would fake the very defect this test looks for. The demand-driven loop
+    // parks once it has presented the move, so retake until the frame count is
+    // unchanged across the capture.
     let state: DocumentPresentationState | null = null;
     let geometry: { blue: PixelBounds | null; teal: PixelBounds | null } | null = null;
     for (let attempt = 0; attempt < 4; ++attempt) {
       const beforeState = await readDocumentPresentationState(page);
       geometry = await readEditorResizePixelBounds(page, probeRegion);
       const afterState = await readDocumentPresentationState(page);
-      if (beforeState.completedResults === afterState.completedResults) {
+      if (beforeState.renderedFrames === afterState.renderedFrames) {
         state = afterState;
         break;
       }
@@ -507,9 +538,9 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
     if (state === null) {
       continue;
     }
-    expect(geometry?.blue, `drag render ${state.completedResults} had no blue document pixels`).not
+    expect(geometry?.blue, `drag frame ${state.renderedFrames} had no blue document pixels`).not
       .toBeNull();
-    expect(geometry?.teal, `drag render ${state.completedResults} had no teal overlay pixels`).not
+    expect(geometry?.teal, `drag frame ${state.renderedFrames} had no teal overlay pixels`).not
       .toBeNull();
     if (
       geometry?.blue === null || geometry?.blue === undefined || geometry.teal === null
@@ -518,32 +549,44 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
       continue;
     }
     samples.push({
-      completedResults: state.completedResults,
+      renderedFrames: state.renderedFrames,
       blue: geometry.blue,
       coloredPixels: geometry.blue.pixels,
       teal: geometry.teal,
     });
-    previousResults = state.completedResults;
+    expect(
+      state.completedResults,
+      `drag frame ${state.renderedFrames} re-rasterized the document mid-drag`,
+    ).toBe(resultsDuringDrag);
+    previousFrames = state.renderedFrames;
   }
   await page.mouse.up();
 
-  expect(samples.map((sample) => sample.completedResults)).toEqual(
-    [...samples.map((sample) => sample.completedResults)].sort((a, b) => a - b),
+  expect(samples.map((sample) => sample.renderedFrames)).toEqual(
+    [...samples.map((sample) => sample.renderedFrames)].sort((a, b) => a - b),
   );
-  expect(samples.at(-1)?.completedResults || 0).toBeGreaterThan(
-    samples[0]?.completedResults || 0,
+  expect(samples.at(-1)?.renderedFrames || 0).toBeGreaterThan(
+    samples[0]?.renderedFrames || 0,
   );
+  // The release commits the moved geometry with exactly one document render.
+  await expect
+    .poll(async () => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
+      message: "expected the pointer release to commit exactly one document render",
+      timeout: scaledMs(2_000),
+      intervals: [16, 25, 50, 100],
+    })
+    .toBe(resultsDuringDrag + 1);
   const centerX = (bounds: PixelBounds) => (bounds.minX + bounds.maxX) * 0.5;
   const centerY = (bounds: PixelBounds) => (bounds.minY + bounds.maxY) * 0.5;
   for (const sample of samples) {
     expect(
       Math.abs(centerX(sample.blue) - centerX(sample.teal)),
-      `drag render ${sample.completedResults} showed historical document X geometry: `
+      `drag frame ${sample.renderedFrames} showed historical document X geometry: `
         + `blue=${JSON.stringify(sample.blue)} teal=${JSON.stringify(sample.teal)}`,
     ).toBeLessThanOrEqual(3);
     expect(
       Math.abs(centerY(sample.blue) - centerY(sample.teal)),
-      `drag render ${sample.completedResults} showed historical document Y geometry: `
+      `drag frame ${sample.renderedFrames} showed historical document Y geometry: `
         + `blue=${JSON.stringify(sample.blue)} teal=${JSON.stringify(sample.teal)}`,
     ).toBeLessThanOrEqual(3);
   }
@@ -563,24 +606,27 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
 }) => {
   test.skip(browserName !== "firefox", "Firefox Geode regression");
   const failures = await openEditor(page);
-  const editorCanvas = page.locator("canvas#canvas");
-  const editorBounds = await editorCanvas.boundingBox();
-  expect(editorBounds).not.toBeNull();
-  if (editorBounds === null) {
-    return;
-  }
-
-  await page.mouse.click(editorBounds.x + editorBounds.width * 0.24, editorBounds.y + 282);
-  await expect(editorCanvas).toHaveAttribute("data-active-sample-id", "donner-splash");
+  // Open through the shared helper so the sample's first document render has to
+  // complete before anything is measured. Clicking the picker and going straight
+  // to pixels raced the load: the picker is still on screen for as long as the
+  // first Splash raster takes, and every assertion below then describes the
+  // picker instead of the document.
+  const { editorBounds } = await openDonnerSplash(page);
 
   const documentRegion = renderPaneRegion(editorBounds);
+  // Poll for the coverage the baseline demands rather than for any coverage at
+  // all: a partially presented document satisfies "greater than zero" and would
+  // turn the assertion below into a race against the raster.
   await expect
-    .poll(async () => (await readSplashPageCoverageStats(page, documentRegion)).darkBackgroundPixels, {
+    .poll(async () => {
+      const coverage = await readSplashPageCoverageStats(page, documentRegion);
+      return coverage.darkBackgroundPixels / coverage.samples;
+    }, {
       message: "expected the Splash document to cover the render pane before the drag",
       timeout: scaledMs(5_000),
       intervals: [16, 25, 50, 100],
     })
-    .toBeGreaterThan(0);
+    .toBeGreaterThan(0.25);
   const baseline = await readSplashPageCoverageStats(page, documentRegion);
   expect(
     baseline.darkBackgroundPixels,
@@ -612,10 +658,14 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
     y: documentRegion.y + anchor.yellow.maxY - 3,
   };
   await page.mouse.move(dragStart.x, dragStart.y);
+  await waitForPressReadiness(page, "Splash drag press");
+  const resultsBeforePress = await page.evaluate(
+    () => window.__donnerWorkerStats?.completedResults || 0,
+  );
   await page.mouse.down();
   const samples: Array<{
     coverage: Awaited<ReturnType<typeof readSplashPageCoverageStats>>;
-    completedResults: number;
+    renderedFrames: number;
     teal: PixelBounds | null;
     yellow: PixelBounds | null;
   }> = [];
@@ -626,29 +676,44 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
     width: anchor.yellow.maxX - anchor.yellow.minX + letterMargin * 2,
     height: anchor.yellow.maxY - anchor.yellow.minY + letterMargin * 2,
   };
-  let previousResults = await page.evaluate(
-    () => window.__donnerWorkerStats?.completedResults || 0,
-  );
+  // The letter drag presents by transforming the prewarmed layer texture in UI
+  // frames rather than re-rasterizing the Splash per move, so each step waits on
+  // the frame counter. The press first selects the letter, which schedules its
+  // one prewarm render; the drag baseline is taken once that has landed so the
+  // first step does not read it as a mid-drag raster.
+  const resultsDuringDrag = resultsBeforePress + 1;
+  await expect
+    .poll(() => readPressSelectionState(page), {
+      message: "expected the press to select the letter and schedule its one prewarm render",
+      timeout: scaledMs(2_000),
+      intervals: [16, 25, 50, 100],
+    })
+    .toEqual({ completedResults: resultsDuringDrag, selectedCount: 1 });
+  let previousFrames = await page.evaluate(() => window.__donnerMainLoopRenderedFrames || 0);
   for (let step = 1; step <= 10; ++step) {
     await page.mouse.move(dragStart.x - step * 5, dragStart.y - step * 2.5);
     await expect
-      .poll(async () => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
-        message: `expected a Splash drag render for step ${step}`,
+      .poll(async () => page.evaluate(() => window.__donnerMainLoopRenderedFrames || 0), {
+        message: `expected a Splash drag-preview frame for step ${step}`,
         timeout: scaledMs(2_000),
         intervals: [16, 25, 50, 100],
       })
-      .toBeGreaterThan(previousResults);
-    const completedResults = await page.evaluate(
-      () => window.__donnerWorkerStats?.completedResults || 0,
+      .toBeGreaterThan(previousFrames);
+    const renderedFrames = await page.evaluate(
+      () => window.__donnerMainLoopRenderedFrames || 0,
     );
     await waitForBrowserComposite(page);
     samples.push({
       coverage: await readSplashPageCoverageStats(page, documentRegion),
-      completedResults,
+      renderedFrames,
       teal: await readEditorPixelBounds(page, letterRegion, "selection-teal"),
       yellow: await readEditorPixelBounds(page, letterRegion, "splash-yellow"),
     });
-    previousResults = completedResults;
+    expect(
+      await page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0),
+      `Splash drag frame ${renderedFrames} re-rasterized the document mid-drag`,
+    ).toBe(resultsDuringDrag);
+    previousFrames = renderedFrames;
   }
   await page.mouse.up();
 
@@ -656,7 +721,7 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
   const firstAlignedSample = samples.find(
     (sample) => sample.yellow !== null && sample.teal !== null,
   );
-  expect(firstAlignedSample, "no Splash drag render contained both letter and outline pixels")
+  expect(firstAlignedSample, "no Splash drag frame contained both letter and outline pixels")
     .toBeDefined();
   const baselineAlignment = firstAlignedSample?.yellow !== null
       && firstAlignedSample?.yellow !== undefined
@@ -675,28 +740,36 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
       sample.coverage.checkerboardPixels,
       `drag sample ${index + 1} flashed the document checkerboard: ${JSON.stringify(sample)}`,
     ).toBeLessThan(sample.coverage.samples * 0.1);
-    expect(sample.yellow, `drag render ${sample.completedResults} lost the Splash letter`).not
+    expect(sample.yellow, `drag frame ${sample.renderedFrames} lost the Splash letter`).not
       .toBeNull();
-    expect(sample.teal, `drag render ${sample.completedResults} lost the selection outline`).not
+    expect(sample.teal, `drag frame ${sample.renderedFrames} lost the selection outline`).not
       .toBeNull();
   }
   const alignmentErrors = samples
     .filter((sample) => sample.yellow !== null && sample.teal !== null)
     .map((sample) => ({
-      completedResults: sample.completedResults,
+      renderedFrames: sample.renderedFrames,
       error: Math.abs(sample.yellow!.minX - sample.teal!.minX - baselineAlignment.x),
       tealMinX: sample.teal!.minX,
       yellowMinX: sample.yellow!.minX,
     }));
   expect(
     Math.max(...alignmentErrors.map((sample) => sample.error)),
-    `Splash drag renders diverged from their outlines: ${JSON.stringify(alignmentErrors)}`,
+    `Splash drag frames diverged from their outlines: ${JSON.stringify(alignmentErrors)}`,
   ).toBeLessThanOrEqual(2);
   const yellowCenters = samples
     .map((sample) => sample.yellow)
     .filter((bounds): bounds is PixelBounds => bounds !== null)
     .map(centerX);
   expect(yellowCenters).toEqual([...yellowCenters].sort((a, b) => b - a));
+  // The release commits the moved letter with exactly one document render.
+  await expect
+    .poll(async () => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
+      message: "expected the pointer release to commit exactly one Splash document render",
+      timeout: scaledMs(2_000),
+      intervals: [16, 25, 50, 100],
+    })
+    .toBe(resultsDuringDrag + 1);
   expect(failures).toEqual([]);
 });
 

@@ -1113,25 +1113,34 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
   if (initialPixels.blue === null) {
     return;
   }
-  const initialResults = await page.evaluate(
-    () => window.__donnerWorkerStats?.completedResults || 0,
-  );
+  // A live resize presents like a live drag: the press prewarms the selected
+  // layer, and each pointer move presents by transforming that texture inside a
+  // UI frame instead of re-rasterizing the document. So "the gesture is not
+  // starved" is a claim about presented frames - every move produces one while
+  // the pointer is still down - and the document commit is asserted after the
+  // release below. Start from an idle worker anyway: the selection click above
+  // schedules the prewarm render, and a burst that begins while it is in flight
+  // is measuring the test's own timing.
+  const initialResults = await waitForPresentationQuiescence(page, {
+    message: "resize burst",
+  });
+  const initialFrames = await page.evaluate(() => window.__donnerMainLoopRenderedFrames || 0);
   await page.mouse.move(resizeHandle.x, resizeHandle.y);
   await page.mouse.down();
 
-  // Emit a short 60 Hz-style burst. Before the no-starvation policy, each
-  // move canceled the preceding render and only the final request could land.
+  // Emit a short 60 Hz-style burst. A starved gesture presents nothing until the
+  // pointer stops, so the frame counter is what separates the two behaviors.
   for (let step = 1; step <= 4; ++step) {
     await page.mouse.move(resizeHandle.x + step * 28, resizeHandle.y + step * 18);
     await page.waitForTimeout(16);
   }
   await expect
-    .poll(async () => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
+    .poll(async () => page.evaluate(() => window.__donnerMainLoopRenderedFrames || 0), {
       message: "expected multiple resize frames to land during one continuous pointer burst",
       timeout: scaledMs(500),
       intervals: [16, 25, 50],
     })
-    .toBeGreaterThanOrEqual(initialResults + 2);
+    .toBeGreaterThanOrEqual(initialFrames + 2);
 
   await expect
     .poll(async () => {
@@ -1152,6 +1161,17 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
     })
     .toBe(true);
   await page.mouse.up();
+  // The release commits the resized geometry with a document render. The gesture
+  // may already have committed a debounced canvas-size render of its own while
+  // the pointer was down, so this is a lower bound on the settled count rather
+  // than an exact one.
+  await expect
+    .poll(async () => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
+      message: "expected the pointer release to commit the resized document",
+      timeout: scaledMs(2000),
+      intervals: [16, 25, 50, 100],
+    })
+    .toBeGreaterThan(initialResults);
   expect(fatalMessages).toEqual([]);
 });
 
