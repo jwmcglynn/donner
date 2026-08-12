@@ -3929,10 +3929,8 @@ void EditorShell::renderRenderPanePresentation(
       renderCoordinator_.compositedPresentation().presentationPreview(activeDragPreview);
   const Entity suppressedLayerEntity = renderCoordinator_.suppressedCompositedLayerEntity(app_);
   const bool suppressDragTargetTiles = renderCoordinator_.selectedElementIsDisplayNone(app_);
-  const bool hasPresentableActiveDragTarget =
-      !workerDocumentSurfacePresented &&
-      HasPresentableDragTargetTile(textures_, activeDragPreview, suppressedLayerEntity,
-                                   suppressDragTargetTiles);
+  const bool hasPresentableActiveDragTarget = HasPresentableDragTargetTile(
+      textures_, activeDragPreview, suppressedLayerEntity, suppressDragTargetTiles);
   const auto representedDragPreview = OverlayRepresentedDragPreviewForPresentation(
       activeDragPreview, displayedDragPreview, hasPresentableActiveDragTarget);
   const auto representedGesturePreview = OverlayGesturePreviewForPresentation(
@@ -4004,8 +4002,8 @@ void EditorShell::renderRenderPanePresentation(
   };
   const bool drawOverviewTiles =
       ShouldPresentOverviewTiles(textures_.activeTilesViewportBounded(), textures_.overviewTiles());
-  if (!workerDocumentSurfacePresented && !contentOnlyCaptureThisFrame_ &&
-      directDocumentRenderer_ != nullptr && directDocumentClipRect.has_value()) {
+  if (!contentOnlyCaptureThisFrame_ && directDocumentRenderer_ != nullptr &&
+      directDocumentClipRect.has_value()) {
     // Tiles ride the framebuffer pass only when every one of them is a Geode
     // texture. The remaining case is the browser bitmap bridge, whose CPU tiles
     // are still blitted as images by the render pane - an image blit, never
