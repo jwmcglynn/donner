@@ -264,6 +264,30 @@ if [[ ! -d "${kTestsDir}/node_modules" ]]; then
   npm --prefix "${kTestsDir}" ci
 fi
 
+# Where each lane's failure evidence is kept.
+#
+# Every lane writes screenshots, error contexts and attachments into the one
+# Playwright output directory, and Playwright empties that directory when it
+# starts. A lane therefore erases the evidence of every lane before it, and
+# when the last lane passes it erases all of it: the job that produced this
+# archive uploaded nothing at all for two failing lanes because the passing
+# lane behind them had already cleaned up. Copying each lane's results out as
+# soon as the lane ends keeps every lane's evidence, named by the lane that
+# produced it.
+readonly kResultsDir="${kTestsDir}/test-results"
+readonly kFailureArchiveDir="${kTestsDir}/playwright-failures"
+rm -rf "${kFailureArchiveDir}"
+
+archive_lane_results() {
+  local name="$1"
+  if [[ ! -d "${kResultsDir}" ]] || [[ -z "$(ls -A "${kResultsDir}" 2>/dev/null)" ]]; then
+    return 0
+  fi
+  mkdir -p "${kFailureArchiveDir}/${name}"
+  cp -R "${kResultsDir}/." "${kFailureArchiveDir}/${name}/"
+  echo "Archived ${name} Playwright results to ${kFailureArchiveDir}/${name}"
+}
+
 # The lane invocations below spell the tests directory out rather than using
 # ${kTestsDir}: they are the definition of the CI lanes, they must read as the
 # exact command a human would type, and browser-matrix.spec.mjs matches them
@@ -283,6 +307,7 @@ run_lane() {
   local code=0
   "$@" || code=$?
 
+  archive_lane_results "${name}"
   echo "LANE ${name} exit code: ${code}"
   lane_names+=("${name}")
   lane_codes+=("${code}")

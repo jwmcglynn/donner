@@ -108,12 +108,16 @@ jobs:
           DONNER_WASM_PACKAGE_DIR: ${{ runner.temp }}/editor-wasm-package-geode
         run: bash tools/run-browser-ci.sh
 
+      # run-browser-ci.sh copies each lane's Playwright output here as the lane
+      # ends. The live output directory cannot be uploaded instead: every lane
+      # shares it and Playwright empties it on start, so a passing lane wipes
+      # the evidence of the failing lanes before it.
       - name: Upload Playwright failure artifacts
         if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: editor-wasm-playwright-failure-${{ github.sha }}
-          path: donner/editor/wasm/tests/test-results
+          path: donner/editor/wasm/tests/playwright-failures
           if-no-files-found: warn
           retention-days: 14
 

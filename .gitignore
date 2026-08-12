@@ -66,3 +66,6 @@ examples/svg_viewer_screenshot.png
 # Playwright run artifacts (browser test harness output).
 donner/editor/wasm/tests/playwright-report/
 donner/editor/wasm/tests/test-results/
+# Per-lane copies of the above, kept by tools/run-browser-ci.sh so a later lane
+# cannot erase an earlier lane's failure evidence.
+donner/editor/wasm/tests/playwright-failures/

@@ -112,6 +112,15 @@ test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", 
   // The suites scale their timing bounds by kCiTimeScale when CI is set, so a
   // local run measures CI's thresholds only if the script exports it.
   assert.match(normalizedBrowserCi, /export CI="\$\{CI:-true\}"/);
+  // Lanes share one Playwright output directory and Playwright empties it on
+  // start, so the job can only keep a failing lane's evidence if the script
+  // archives each lane's results per lane and the workflow uploads THAT.
+  assert.match(normalizedBrowserCi, /archive_lane_results "\$\{name\}"/);
+  assert.match(
+    normalizedBrowserCi,
+    /kFailureArchiveDir="\$\{kTestsDir\}\/playwright-failures"/,
+  );
+  assert.match(normalizedWorkflow, /path: donner\/editor\/wasm\/tests\/playwright-failures/);
 });
 
 test("real Safari gate pins the served Wasm and scopes every visibility probe", () => {
