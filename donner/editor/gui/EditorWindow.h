@@ -341,6 +341,18 @@ public:
   }
 #endif
 
+  /// Whether ImGui is holding input events this thread has accepted but no
+  /// frame has consumed yet.
+  ///
+  /// Input that has arrived and not been presented is a frame obligation in its
+  /// own right. `beginFrame` already carries it for the events ImGui trickles
+  /// across frames; the browser's demand-driven loop needs it as a wake source
+  /// too, because a DOM event's frame request is raised on the page's main
+  /// thread while the event itself reaches this thread through the proxying
+  /// queue, and a tick already in flight can spend the request before the event
+  /// lands.
+  [[nodiscard]] bool hasQueuedInputEvents() const;
+
   /// Starts a new ImGui frame. Caller issues `ImGui::*` widget calls
   /// after this returns.
   void beginFrame();

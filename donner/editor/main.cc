@@ -267,7 +267,21 @@ void RunWasmEditorFrame(void* userdata) {
 
   const double nowMs = emscripten_get_now();
   const bool editorRequested = state->window->consumeWasmFrameRequest();
-  const bool browserRequested = ConsumeBrowserEditorFrameRequest();
+  // Input that has arrived but not been presented is its own wake source.
+  //
+  // A DOM event raises the browser frame request on the page's main thread the
+  // moment it fires, while the event itself reaches this thread through the
+  // proxying queue. An animation-frame tick already in flight can therefore
+  // spend the request and render before the event is applied; the event then
+  // lands with nothing left to ask for a frame, and this loop declines every
+  // subsequent tick with the input un-presented. Measured on Gecko: a pointer
+  // move mid-drag sat applied-but-unpresented through ~520 consecutive declined
+  // ticks (~8s) until an unrelated DOM event happened to raise the flag again,
+  // and a press taken the same way left the click buffered and the shape
+  // unselected. Consuming the request first keeps the request-clearing
+  // unconditional.
+  const bool browserRequested = ConsumeBrowserEditorFrameRequest()
+                                || state->window->hasQueuedInputEvents();
   const bool timerDue = state->nextIdleWakeAtMs.has_value() && nowMs >= *state->nextIdleWakeAtMs;
   if (!editorRequested && !browserRequested && !timerDue) {
     // The GPU device lives on this thread, so its callbacks (the raster

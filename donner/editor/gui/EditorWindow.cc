@@ -43,9 +43,9 @@ extern "C" {
 #include "donner/editor/EditorTheme.h"
 #include "donner/editor/ImGuiBackendIncludes.h"
 #include "donner/editor/TracyWrapper.h"
-#ifdef __EMSCRIPTEN__
+// `hasQueuedInputEvents` reads the context's pending-input queue on every
+// platform, so this is no longer an Emscripten-only dependency.
 #include "donner/editor/ImGuiInternalIncludes.h"
-#endif
 #ifdef DONNER_EDITOR_WGPU
 #ifndef __EMSCRIPTEN__
 #include "donner/editor/gui/EditorWgpuSurface.h"
@@ -1459,6 +1459,11 @@ void EditorWindow::wakeEventLoop() {
 #else
   glfwPostEmptyEvent();
 #endif
+}
+
+bool EditorWindow::hasQueuedInputEvents() const {
+  const ImGuiContext* context = ImGui::GetCurrentContext();
+  return context != nullptr && context->InputEventsQueue.Size > 0;
 }
 
 void EditorWindow::beginFrame() {
