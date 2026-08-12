@@ -211,14 +211,28 @@ fi
 
 LLVM_COVERAGE_FLAGS=(
   --features=llvm_coverage_map_format
-  # Bazel's test runner copies GCOV into COVERAGE_GCOV_PATH. For LLVM lcov
-  # collection that path is used as llvm-profdata to merge profraw files.
+  # These feed the host cc autoconfiguration, which is what builds coverage on
+  # macOS. On Linux the hermetic toolchain provides its own llvm-profdata and
+  # llvm-cov, so it, not these values, merges and exports the profiles.
   --action_env=GCOV="$LLVM_PROFDATA_PATH"
   --action_env=BAZEL_LLVM_COV="$LLVM_COV_PATH"
   --action_env=BAZEL_LLVM_PROFDATA="$LLVM_PROFDATA_PATH"
-  --test_env=LLVM_COV="$LLVM_COV_PATH"
-  --test_env=LLVM_PROFDATA="$LLVM_PROFDATA_PATH"
 )
+
+# llvm-cov must come from the same LLVM release that instrumented the binaries.
+# It reads the profdata that llvm-profdata merged, and refuses any profile whose
+# format version it does not understand. On Linux the hermetic toolchain
+# (--config=latest_llvm) compiles the tests and supplies both tools, so pinning
+# the test env to the host clang's copies mixes two LLVM releases and llvm-cov
+# fails with "unsupported instrumentation profile format version", leaving an
+# LCOV report with no line data. macOS builds with the host toolchain, so there
+# the host tools are the matching ones.
+if [[ "$(uname)" == "Darwin" ]]; then
+  LLVM_COVERAGE_FLAGS+=(
+    --test_env=LLVM_COV="$LLVM_COV_PATH"
+    --test_env=LLVM_PROFDATA="$LLVM_PROFDATA_PATH"
+  )
+fi
 
 (
   cd "$WORKSPACE_ROOT"
