@@ -1156,8 +1156,13 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
     }, {
       message:
         "expected the final resized pixels and selection outline from one document render",
-      timeout: scaledMs(1500),
-      intervals: [50, 100],
+      // The pointer is resting at its final position while this polls, so the
+      // window only bounds how long presentation plus the Gecko readback
+      // cadence may take to converge; the pixel claim itself is unchanged.
+      // Gecko resolves readback maps in 2-19 waitAny slices where Chromium
+      // takes one, which made the previous window marginal on shared runners.
+      timeout: scaledMs(4000),
+      intervals: [50, 100, 250],
     })
     .toBe(true);
   await page.mouse.up();
