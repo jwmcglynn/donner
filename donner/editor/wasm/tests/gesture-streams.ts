@@ -289,14 +289,25 @@ async function runStreamPlan(page: Page, plan: StreamPlan): Promise<GestureStrea
       // Pace against the stream's own start rather than accumulating a fresh
       // timeout per event, so a slow frame does not permanently stretch the
       // cadence.
+      //
+      // ALWAYS yield, even when the stream is already behind schedule. Skipping
+      // the yield to catch up turns the whole stream into ONE synchronous task
+      // the moment an engine cannot keep up with the requested rate, and a page
+      // that never returns to its event loop delivers no animation frames, runs
+      // no timers, and lets nothing observe the gesture it is in the middle of
+      // performing. Measured on Playwright Firefox, where a synthetic pointer
+      // dispatch into this build costs ~62 ms rather than the requested 11: a
+      // 648-event drag ran as a single 40-second block with zero animation
+      // frames delivered to the page across all of it, so the per-frame probe
+      // sampled twelve frames before the drag, none during, and the rest after.
+      // A zero-delay yield keeps the drift-compensating cadence and costs
+      // nothing next to a 62 ms dispatch.
       const now = performance.now();
       intervals.push(now - previous);
       previous = now;
       const nextAt = start + intervals.length * plan.intervalMs;
-      const waitMs = nextAt - now;
-      if (waitMs > 0) {
-        await new Promise((resolve) => setTimeout(resolve, waitMs));
-      }
+      const waitMs = Math.max(0, nextAt - now);
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
     }
     const elapsedMs = performance.now() - start;
 
@@ -640,11 +651,12 @@ export async function dragStream(
         trace.push([now, point.x, point.y]);
         intervals.push(now - previous);
         previous = now;
+        // Always yield, even when behind schedule; see the identical pacing
+        // step in `runStreamPlan` for why catching up synchronously blinds
+        // every per-frame observer of the gesture.
         const nextAt = start + intervals.length * plan.intervalMs;
-        const waitMs = nextAt - now;
-        if (waitMs > 0) {
-          await new Promise((resolve) => setTimeout(resolve, waitMs));
-        }
+        const waitMs = Math.max(0, nextAt - now);
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
       }
       if (plan.release) {
         const last = plan.points[plan.points.length - 1];

@@ -6,9 +6,12 @@ import {
   contentMotionFraction,
   dragRegressions,
   installCompositedProbe,
-  readContentWidth,
+  readDocumentArtWidth,
+  readViewportStats,
   startCompositedProbe,
   stopCompositedProbe,
+  type ViewportStats,
+  visibleDocumentRegion,
 } from "./composited-probe";
 import { dragStream, pointerClick } from "./gesture-streams";
 
@@ -91,31 +94,39 @@ interface Rect {
   height: number;
 }
 
-/**
- * The visible region of the presented document, in CSS px.
- *
- * the single-canvas architecture: this is now just the canvas box. The document used to live on
- * its own element whose box spanned a cap-sized backing store, with clip-path
- * insets bounding the pixels the user could see; there is one canvas now and it
- * fills the window, so the sampling region is that box.
- */
-async function visibleDocumentRect(page: Page): Promise<Rect> {
-  const rect = await page.evaluate(() => {
-    const el = document.querySelector<HTMLCanvasElement>("canvas#canvas");
-    if (el === null) {
-      return null;
-    }
-    const box = el.getBoundingClientRect();
-    return { x: box.left, y: box.top, width: box.width, height: box.height };
-  });
-  expect(rect, "no editor canvas").not.toBeNull();
-  if (rect === null) {
-    throw new Error("no editor canvas");
+/** The published pane and document geometry, once the editor has published it. */
+async function readSettledViewportStats(page: Page): Promise<ViewportStats> {
+  await expect
+    .poll(async () => (await readViewportStats(page))?.documentWidth ?? 0, {
+      message: "the editor must publish its pane and document geometry",
+      timeout: scaledMs(10_000),
+      intervals: [16, 25, 50, 100],
+    })
+    .toBeGreaterThan(0);
+  const viewport = await readViewportStats(page);
+  if (viewport === null) {
+    throw new Error("viewport stats disappeared after publishing");
   }
-  return rect;
+  return viewport;
 }
 
-/** Open the Donner Splash from the carousel and wait for its first frame. */
+/**
+ * Open the Donner Splash from the carousel and wait until it is really open.
+ *
+ * The readiness check is the layers panel's row count, which is the
+ * page-visible form of "the editor has a document" - it reads "(no document)"
+ * until the model is live, and until then the sample carousel is still the
+ * modal on top and the render pane discards every gesture. The old check was a
+ * whole-canvas chromatic extent, which the editor's own chrome satisfies before
+ * the document exists, so it returned immediately and every gesture below raced
+ * the load.
+ *
+ * `documentRect` is the presented document's screen rectangle as the editor
+ * publishes it, NOT the canvas box. They were the same thing only while the
+ * document had its own element; on the single canvas the box is the whole
+ * editor, and mapping document coordinates through it puts every derived point
+ * hundreds of pixels away from the shape it names.
+ */
 async function openDonnerSplash(page: Page): Promise<{ editorBounds: Rect; documentRect: Rect }> {
   const editorCanvas = page.locator("canvas#canvas");
   const editorBounds = await editorCanvas.boundingBox();
@@ -127,16 +138,40 @@ async function openDonnerSplash(page: Page): Promise<{ editorBounds: Rect; docum
   await expect(editorCanvas).toHaveAttribute("data-active-sample-id", "donner-splash");
   await expect(editorCanvas).toBeVisible();
   await expect
-    .poll(() => readContentWidth(page), {
+    .poll(
+      () =>
+        page.evaluate(() =>
+          (window as unknown as { __donnerLayerThumbnailStats?: { rowCount?: number } })
+            .__donnerLayerThumbnailStats?.rowCount ?? 0
+        ),
+      {
+        message: "Donner Splash must become the editor's live document",
+        timeout: scaledMs(20_000),
+        intervals: [16, 25, 50, 100],
+      },
+    )
+    .toBeGreaterThan(0);
+  const viewport = await readSettledViewportStats(page);
+  await expect
+    .poll(() => readDocumentArtWidth(page, visibleDocumentRegion(viewport)), {
       message: "Donner Splash must present document pixels into the canvas",
-      timeout: scaledMs(5_000),
+      timeout: scaledMs(10_000),
       intervals: [16, 25, 50, 100],
     })
     .toBeGreaterThan(0);
   // The debounced canvas-size commit lands after the first frame; sampling
   // before it settles measures the load, not the gesture.
   await page.waitForTimeout(scaledMs(1_500));
-  return { editorBounds, documentRect: await visibleDocumentRect(page) };
+  const settled = await readSettledViewportStats(page);
+  return {
+    editorBounds,
+    documentRect: {
+      x: settled.documentX,
+      y: settled.documentY,
+      width: settled.documentWidth,
+      height: settled.documentHeight,
+    },
+  };
 }
 
 /**
@@ -236,7 +271,28 @@ test.describe("composited drag invariants", () => {
     // and the drag never starts.
     await page.waitForTimeout(scaledMs(800));
 
-    await installCompositedProbe(page);
+    // Sample a window around the dragged letter, with (j)'s thresholds and for
+    // (j)'s reason: a centroid over the whole canvas is dominated by everything
+    // that is not moving. The letter travels 140 CSS px out of a 1600 px canvas
+    // sampled into 64 read-back columns, which is two columns of motion against
+    // an editor's worth of stationary chrome, so the presented position
+    // quantized to whole read-back pixels barely changes and the ordering check
+    // has almost nothing to order. Measured across the same working drag: 15
+    // distinct presented positions out of 537 samples over the whole canvas,
+    // 68 with this window.
+    await installCompositedProbe(page, {
+      sampleRegionCss: letterTravelRegion(stem, -140, -70),
+      sampleWidth: 96,
+      sampleHeight: 96,
+      // The Splash artboard background is #10131e, whose channel spread is 14 -
+      // just above the probe's default chromatic threshold of 12. With the
+      // default the background counts as content, outnumbers the letter, and
+      // pins the centroid at the window's center no matter what the letter
+      // does. Raising the bar keeps only strongly chromatic pixels, which on
+      // this artboard is the letter itself.
+      minColorAlpha: 64,
+      minColorSpread: 60,
+    });
     await startCompositedProbe(page);
     const stream = await dragStream(page, stem, {
       durationMs: scaledMs(1_800),

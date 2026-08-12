@@ -21,7 +21,10 @@ import { type Page } from "@playwright/test";
  *    count, and the centroid of the chromatic ones) taken from `#canvas`,
  *  - the canvas backing store size, which is what a resize clears,
  *  - `window.__donnerWorkerStats.completedResults`, which orders the samples
- *    against the render worker's own progress.
+ *    against the render worker's own progress,
+ *  - the presented document width from `window.__donnerViewportStats`, which
+ *    is how a gesture proves it was applied at all.
+
  *
  * Pixels plus centroid plus backing size, per frame, is what makes the
  * invariants in `composited-invariants.spec.ts` decidable. Either alone is
@@ -72,6 +75,18 @@ export interface CompositedSample {
   backingHeight: number;
   /** `window.__donnerWorkerStats.completedResults`. */
   completedResults: number;
+  /**
+   * Presented width of the document on screen, CSS px, from
+   * `window.__donnerViewportStats`.
+   *
+   * The PRECONDITION observable, not an invariant one. Some gestures have to
+   * prove they were applied at all before their per-frame pixel invariant says
+   * anything, and a symmetric gesture (a zoom storm that ends where it began)
+   * cannot be caught by comparing pixels before and after it. Sampling the
+   * editor's own presented geometry every frame catches it; the invariants
+   * themselves stay on the pixels.
+   */
+  presentedDocumentWidth: number;
   /** Mean alpha over the sampled region, 0-255. */
   meanAlpha: number;
   /** Mean luma over the sampled region, 0-255, premultiplied by nothing. */
@@ -140,6 +155,63 @@ export interface CompositedProbeOptions {
   sampleRegionCss?: { x: number; y: number; width: number; height: number };
 }
 
+/** A rectangle in viewport CSS pixels. */
+export interface ScreenRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * The editor's render-pane and presented-document geometry, in viewport CSS px.
+ *
+ * Published every frame by `PublishViewportStats` in `EditorShell.cc`. The
+ * single canvas is the whole window, so its DOM box describes the editor and
+ * nothing else: it cannot say where the pane is, where the document landed
+ * inside it, or how big the document is presenting. Every observable in this
+ * file that has to separate document pixels from editor chrome starts here.
+ */
+export interface ViewportStats {
+  paneX: number;
+  paneY: number;
+  paneWidth: number;
+  paneHeight: number;
+  documentX: number;
+  documentY: number;
+  documentWidth: number;
+  documentHeight: number;
+  /** Screen pixels per document unit; 1.0 is 100%. */
+  zoom: number;
+}
+
+/** Read the published viewport geometry, or null before the first frame. */
+export async function readViewportStats(page: Page): Promise<ViewportStats | null> {
+  return page.evaluate(() =>
+    (window as unknown as { __donnerViewportStats?: ViewportStats }).__donnerViewportStats ?? null
+  );
+}
+
+/**
+ * The part of the presented document that is inside the pane.
+ *
+ * Sampling this rather than the pane keeps every piece of editor chrome out of
+ * the read-back: the floating tool palette and the zoom badge live inside the
+ * pane but outside the document, and the panels live outside the pane.
+ */
+export function visibleDocumentRegion(stats: ViewportStats): ScreenRect {
+  const left = Math.max(stats.paneX, stats.documentX);
+  const top = Math.max(stats.paneY, stats.documentY);
+  const right = Math.min(stats.paneX + stats.paneWidth, stats.documentX + stats.documentWidth);
+  const bottom = Math.min(stats.paneY + stats.paneHeight, stats.documentY + stats.documentHeight);
+  return {
+    x: left,
+    y: top,
+    width: Math.max(0, right - left),
+    height: Math.max(0, bottom - top),
+  };
+}
+
 declare global {
   interface Window {
     __donnerCompositedProbe?: {
@@ -188,11 +260,13 @@ export async function installCompositedProbe(
     // stays independent of whichever spec happens to declare them today.
     const diagnostics = window as unknown as {
       __donnerWorkerStats?: { completedResults?: number };
+      __donnerViewportStats?: { documentWidth?: number };
     };
 
     const sampleOnce = (): CompositedSample => {
       const surface = document.querySelector<HTMLCanvasElement>("canvas#canvas");
       const completedResults = diagnostics.__donnerWorkerStats?.completedResults || 0;
+      const presentedDocumentWidth = diagnostics.__donnerViewportStats?.documentWidth || 0;
       if (surface === null) {
         return {
           t: performance.now(),
@@ -204,6 +278,7 @@ export async function installCompositedProbe(
           backingWidth: 0,
           backingHeight: 0,
           completedResults,
+          presentedDocumentWidth,
           meanAlpha: 0,
           meanLuma: 0,
           coloredPixels: 0,
@@ -264,6 +339,7 @@ export async function installCompositedProbe(
         backingWidth: surface.width,
         backingHeight: surface.height,
         completedResults,
+        presentedDocumentWidth,
       };
 
       if (!(sourceWidth >= 1) || !(sourceHeight >= 1)) {
@@ -671,27 +747,53 @@ export function contentMotionFraction(
 }
 
 /**
- * Read the width of the document's chromatic content, in read-back pixels,
- * without the probe running.
+ * Read how far apart the document's own strongly chromatic pixels are, in
+ * read-back pixels of the WHOLE canvas, without the probe running.
  *
- * The single-canvas replacement for the old visible-surface width. There is no
- * element whose box tracks the zoom any more: the canvas is the window. What
- * still tracks it is the content, so a zoom is measured as how far apart the
- * document's own chromatic pixels are.
+ * This is the single-canvas SCALE observable: no element box tracks the zoom
+ * any more, so a zoom is measured as how far apart the document's pixels sit on
+ * screen.
  *
- * Reads through the same `drawImage` path and the same chromatic-pixel
- * predicate the probe uses, so a ratio taken before and after a gesture is
- * directly comparable to `CompositedSample.coloredWidth`.
+ * Two things about it are load-bearing, and getting either wrong makes the
+ * measurement mean nothing:
+ *
+ *  - THE REGION IS THE DOCUMENT, not the canvas. The canvas is the whole
+ *    editor. Its chromatic extent runs from the teal accent in the menu bar to
+ *    the icons in the layers panel, neither of which a zoom touches, and both
+ *    of which paint on their own schedule during load. A whole-canvas version
+ *    of this measured the editor's LAYOUT: it reported a 1.62x "zoom" for a
+ *    gesture the editor had ignored, because the before sample caught a
+ *    half-painted sample carousel and the after sample caught the full editor.
+ *    Pass `visibleDocumentRegion(await readViewportStats(page))`.
+ *  - THE THRESHOLD EXCLUDES THE ARTBOARD BACKGROUND. The Splash artboard's own
+ *    background is #10131e, channel spread 14, so the probe's default
+ *    chromatic threshold counts it and the measurement degenerates into the
+ *    artboard's extent - which is the region itself, making the ratio 1 by
+ *    construction, and which clips against the pane the moment the document
+ *    grows past it. The defaults here keep only strongly chromatic pixels,
+ *    which on this artboard means the art.
+ *
+ * The read-back covers the whole canvas and only the SCAN is restricted to the
+ * region, so the result stays in a unit the zoom does not move under it and a
+ * before/after ratio is the scale the gesture applied. Scanning a region that
+ * tracks the document would normalize that ratio to 1.
  */
-export async function readContentWidth(
+export async function readDocumentArtWidth(
   page: Page,
-  options: { sampleWidth?: number; sampleHeight?: number; minColorAlpha?: number; minColorSpread?: number } = {},
+  region: ScreenRect,
+  options: {
+    sampleWidth?: number;
+    sampleHeight?: number;
+    minColorAlpha?: number;
+    minColorSpread?: number;
+  } = {},
 ): Promise<number> {
   const config = {
-    sampleWidth: options.sampleWidth ?? 256,
-    sampleHeight: options.sampleHeight ?? 192,
-    minColorAlpha: options.minColorAlpha ?? 16,
-    minColorSpread: options.minColorSpread ?? 12,
+    region,
+    sampleWidth: options.sampleWidth ?? 320,
+    sampleHeight: options.sampleHeight ?? 180,
+    minColorAlpha: options.minColorAlpha ?? 64,
+    minColorSpread: options.minColorSpread ?? 60,
   };
   return page.evaluate((config) => {
     const surface = document.querySelector<HTMLCanvasElement>("canvas#canvas");
@@ -705,27 +807,48 @@ export async function readContentWidth(
     if (context === null) {
       return 0;
     }
+    context.clearRect(0, 0, readback.width, readback.height);
     try {
       context.drawImage(surface, 0, 0, readback.width, readback.height);
     } catch {
       return 0;
     }
+
+    const box = surface.getBoundingClientRect();
+    if (!(box.width > 0) || !(box.height > 0)) {
+      return 0;
+    }
+    const scaleX = readback.width / box.width;
+    const scaleY = readback.height / box.height;
+    const minColumn = Math.max(0, Math.floor((config.region.x - box.left) * scaleX));
+    const maxColumn = Math.min(
+      readback.width - 1,
+      Math.ceil((config.region.x + config.region.width - box.left) * scaleX),
+    );
+    const minRow = Math.max(0, Math.floor((config.region.y - box.top) * scaleY));
+    const maxRow = Math.min(
+      readback.height - 1,
+      Math.ceil((config.region.y + config.region.height - box.top) * scaleY),
+    );
+
     const pixels = context.getImageData(0, 0, readback.width, readback.height).data;
     let minX = Number.POSITIVE_INFINITY;
     let maxX = Number.NEGATIVE_INFINITY;
-    for (let index = 0; index < pixels.length; index += 4) {
-      if (pixels[index + 3] < config.minColorAlpha) {
-        continue;
+    for (let y = minRow; y <= maxRow; ++y) {
+      for (let x = minColumn; x <= maxColumn; ++x) {
+        const index = (y * readback.width + x) * 4;
+        if (pixels[index + 3] < config.minColorAlpha) {
+          continue;
+        }
+        const r = pixels[index];
+        const g = pixels[index + 1];
+        const b = pixels[index + 2];
+        if (Math.max(r, g, b) - Math.min(r, g, b) < config.minColorSpread) {
+          continue;
+        }
+        minX = Math.min(minX, x);
+        maxX = Math.max(maxX, x);
       }
-      const r = pixels[index];
-      const g = pixels[index + 1];
-      const b = pixels[index + 2];
-      if (Math.max(r, g, b) - Math.min(r, g, b) < config.minColorSpread) {
-        continue;
-      }
-      const x = (index / 4) % readback.width;
-      minX = Math.min(minX, x);
-      maxX = Math.max(maxX, x);
     }
     return maxX < minX ? 0 : maxX - minX + 1;
   }, config);

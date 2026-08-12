@@ -6,9 +6,12 @@ import {
   type CompositedProbeResult,
   contentMotionFraction,
   installCompositedProbe,
-  readContentWidth,
+  readDocumentArtWidth,
+  readViewportStats,
   startCompositedProbe,
   stopCompositedProbe,
+  type ViewportStats,
+  visibleDocumentRegion,
 } from "./composited-probe";
 
 /**
@@ -92,9 +95,28 @@ async function openEditor(page: Page): Promise<string[]> {
   return failures;
 }
 
-/** Open the Donner Splash from the carousel and wait for its first presented frame. */
+/**
+ * Open the Donner Splash from the carousel and wait until it is really open.
+ *
+ * "Really open" is three separate facts and every one of them has bitten:
+ *
+ *  - `data-active-sample-id` only says the carousel accepted the click.
+ *  - The document model has to be live. Until it is, the sample carousel is
+ *    still the modal on top and the render pane ignores every gesture: a pinch
+ *    dispatched here reaches the app, is correctly discarded as modal-captured
+ *    input, and the test then measures a load in progress. The layers panel
+ *    row count is the page-visible form of "the editor has a document" (it
+ *    reads "(no document)" until then).
+ *  - The document's pixels have to be on screen, which is what the invariants
+ *    below actually sample.
+ *
+ * The old version polled a whole-canvas chromatic extent, which the editor's
+ * own chrome satisfies before the document exists, so all three checks passed
+ * vacuously and every gesture below raced the load.
+ */
 async function openDonnerSplash(page: Page): Promise<{
   editorBounds: { x: number; y: number; width: number; height: number };
+  viewport: ViewportStats;
 }> {
   const editorCanvas = page.locator("canvas#canvas");
   const editorBounds = await editorCanvas.boundingBox();
@@ -106,13 +128,81 @@ async function openDonnerSplash(page: Page): Promise<{
   await expect(editorCanvas).toHaveAttribute("data-active-sample-id", "donner-splash");
   await expect(editorCanvas).toBeVisible();
   await expect
-    .poll(() => readContentWidth(page), {
+    .poll(
+      () =>
+        page.evaluate(() =>
+          (window as unknown as { __donnerLayerThumbnailStats?: { rowCount?: number } })
+            .__donnerLayerThumbnailStats?.rowCount ?? 0
+        ),
+      {
+        message: "Donner Splash must become the editor's live document",
+        timeout: scaledMs(20_000),
+        intervals: [16, 25, 50, 100],
+      },
+    )
+    .toBeGreaterThan(0);
+  const viewport = await readSettledViewportStats(page);
+  await expect
+    .poll(() => readDocumentArtWidth(page, visibleDocumentRegion(viewport)), {
       message: "Donner Splash must present document pixels into the canvas",
-      timeout: scaledMs(5_000),
+      timeout: scaledMs(10_000),
       intervals: [16, 25, 50, 100],
     })
     .toBeGreaterThan(0);
-  return { editorBounds };
+  return { editorBounds, viewport };
+}
+
+/**
+ * A square window of `sizeCss` CSS px centred on the presented document.
+ *
+ * Clamped into the pane so the window never includes the panels around it, and
+ * sized so a gesture of a few hundred CSS px keeps document content inside it
+ * for the whole sampled run.
+ */
+function documentCenterWindow(stats: ViewportStats, sizeCss: number): {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+} {
+  const region = visibleDocumentRegion(stats);
+  const width = Math.min(sizeCss, region.width);
+  const height = Math.min(sizeCss, region.height);
+  return {
+    x: region.x + (region.width - width) / 2,
+    y: region.y + (region.height - height) / 2,
+    width,
+    height,
+  };
+}
+
+/**
+ * Extent of the presented document's art, in read-back pixels of the canvas.
+ *
+ * The geometry is re-read on every call rather than captured once, because a
+ * zoom moves the document inside the pane: the scan window has to follow it or
+ * a gesture that pushes the art past the old window's edge measures as a
+ * smaller one. Only the SCAN moves; the read-back stays in canvas pixels, so
+ * the ratio of two calls is the scale the gesture applied.
+ */
+async function splashArtWidth(page: Page): Promise<number> {
+  return readDocumentArtWidth(page, visibleDocumentRegion(await readSettledViewportStats(page)));
+}
+
+/** The published pane and document geometry, once the editor has published it. */
+async function readSettledViewportStats(page: Page): Promise<ViewportStats> {
+  await expect
+    .poll(async () => (await readViewportStats(page))?.documentWidth ?? 0, {
+      message: "the editor must publish its pane and document geometry",
+      timeout: scaledMs(10_000),
+      intervals: [16, 25, 50, 100],
+    })
+    .toBeGreaterThan(0);
+  const viewport = await readViewportStats(page);
+  if (viewport === null) {
+    throw new Error("viewport stats disappeared after publishing");
+  }
+  return viewport;
 }
 
 /**
@@ -159,16 +249,21 @@ function assertProbeUsable(result: CompositedProbeResult, minimumSamples: number
 }
 
 /**
- * Distinct presented content widths, proof that a zoom stream moved the scale.
+ * Distinct presented document widths, proof that a zoom stream moved the scale.
  *
- * The element box is the window and does not change with zoom, so the scale
- * evidence is the extent of the document's own chromatic pixels. Bucketed to
- * whole read-back pixels so read-back noise cannot manufacture distinct values.
+ * This is a precondition, so it reads the editor's presented geometry rather
+ * than pixels; the invariant it guards stays on the pixels. Pixels cannot
+ * answer it here for two independent reasons: the storm is symmetric and ends
+ * at the scale it started from, so a before/after pixel comparison sees
+ * nothing, and the whole-canvas chromatic extent this used to read is the
+ * EDITOR's extent, which a zoom never changes at all - it reported the storm
+ * as scale-moving only while the editor was still painting itself in.
+ * Bucketed to whole CSS pixels so publishing noise cannot manufacture values.
  */
-function distinctContentWidths(result: CompositedProbeResult): number {
+function distinctPresentedDocumentWidths(result: CompositedProbeResult): number {
   return new Set(
-    result.samples.filter((sample) => sample.drawOk && sample.coloredWidth > 0).map((sample) =>
-      Math.round(sample.coloredWidth)
+    result.samples.filter((sample) => sample.presentedDocumentWidth > 0).map((sample) =>
+      Math.round(sample.presentedDocumentWidth)
     ),
   ).size;
 }
@@ -213,7 +308,7 @@ test.describe("composited output invariants", () => {
     assertProbeUsable(result, kMinimumProbeSamples);
     // An ignored storm proves nothing: require that the presented scale moved.
     expect(
-      distinctContentWidths(result),
+      distinctPresentedDocumentWidths(result),
       `the zoom storm never changed the presented scale; stream=${JSON.stringify(stream)}`,
     ).toBeGreaterThan(1);
 
@@ -350,10 +445,37 @@ test.describe("composited output invariants", () => {
     // longer see the difference between a tracking pan and a frozen one.
     test.setTimeout(scaledMs(120_000));
     const failures = await openEditor(page);
-    const { editorBounds } = await openDonnerSplash(page);
+    const { editorBounds, viewport } = await openDonnerSplash(page);
     const at = await parkPointerOverPane(page, editorBounds);
 
-    await installCompositedProbe(page);
+    // Sample a window over the document, at a resolution that can resolve one
+    // frame of pan.
+    //
+    // Two separate things made the whole-canvas version blind. The canvas is
+    // the editor: menu bar, tool rail and side panels are chromatic, outnumber
+    // the document's pixels and never move, so they drag the centroid toward a
+    // fixed point. And the read-back is 64 columns wide, so a whole-canvas
+    // sample is 25 CSS px per column while one frame of this pan is under 2 -
+    // an eighth of the 0.25-column motion threshold, which turns a perfectly
+    // tracking pan into a mostly-stationary one (measured 0.15 against a bound
+    // of 0.40 on hardware Chromium, on a build whose pan was fine).
+    //
+    // A 280 CSS px window read back at 96 columns is 2.9 CSS px per column, so
+    // one frame of pan clears the threshold on its own. Measured on hardware
+    // Chromium across the same gesture: 0.42 at a 420 px window, 0.65 at 280,
+    // which is the ~0.59 the bound below was calibrated against. The chromatic
+    // thresholds are raised for the same reason as the drag suite's: the Splash
+    // artboard background is #10131e, spread 14, so at the default of 12 the
+    // background counts as content and pins the centroid at the window's centre
+    // no matter what the document does.
+    const panSampleRegion = documentCenterWindow(viewport, 280);
+    await installCompositedProbe(page, {
+      sampleRegionCss: panSampleRegion,
+      sampleWidth: 96,
+      sampleHeight: 96,
+      minColorAlpha: 64,
+      minColorSpread: 60,
+    });
     await startCompositedProbe(page);
     // No momentum tail and no trailing settle here, unlike the storm tests.
     // The invariant is "the surface tracks the gesture", so the sampled window
@@ -426,7 +548,7 @@ test.describe("composited output invariants", () => {
     const { editorBounds } = await openDonnerSplash(page);
     const at = await parkPointerOverPane(page, editorBounds);
 
-    const beforeWidth = await readContentWidth(page);
+    const beforeWidth = await splashArtWidth(page);
     expect(beforeWidth, "the presented document has no measurable width").toBeGreaterThan(0);
 
     const kTargetScale = 1.25;
@@ -447,24 +569,24 @@ test.describe("composited output invariants", () => {
     expect(stream.encodedScale).toBeCloseTo(kTargetScale, 3);
 
     await expect
-      .poll(async () => (await readContentWidth(page)) / beforeWidth, {
+      .poll(async () => (await splashArtWidth(page)) / beforeWidth, {
         message: "the pinch never scaled the presented document",
         timeout: scaledMs(5_000),
         intervals: [16, 25, 50, 100],
       })
       .toBeGreaterThan(kTargetScale * 0.91);
-    const ratio = (await readContentWidth(page)) / beforeWidth;
+    const ratio = (await splashArtWidth(page)) / beforeWidth;
     console.log(
       `composited-pinch-parity engine=${browserName} encoded=${stream.encodedScale.toFixed(4)}`
         + ` applied=${ratio.toFixed(4)} target=${kTargetScale}`,
     );
-    // The band is the instrument's precision, not gesture tolerance: the
-    // content width is measured on a 64-pixel-wide readback, so each edge of
-    // the extent quantizes to about 1.5% of a typical content width, and the
-    // before/after RATIO stacks up to four edge errors. The inherited 7% band
-    // (from the finer clip-inset observable) measured 7.13% on a correct
-    // Gecko pinch. 9% keeps every defect this test exists for out of reach:
-    // the weak-gain regression read 10.49x and the double-gain regression 2x.
+    // The band is the instrument's precision, not gesture tolerance: the art's
+    // extent is measured on a 320-pixel-wide read-back of the canvas, so each
+    // edge quantizes to about 1% of the extent and the before/after RATIO
+    // stacks up to four edge errors. Measured on a correct pinch: 1.2556 on
+    // both engines, byte-identical, 0.4% off target. 9% keeps every defect
+    // this test exists for out of reach: the weak-gain regression read 10.49x
+    // and the double-gain regression 2x.
     expect(
       ratio,
       `a ${kTargetScale}x pinch applied ${ratio.toFixed(3)}x to the presented content`,
