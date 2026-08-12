@@ -336,26 +336,46 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
   // geometry pixels, so tile labels cannot masquerade as Slug edges.
   await toggleViewMenuItem(page, canvasBounds.x, 155);
   await waitForBrowserComposite(page);
+  // Toggling an overlay drops the uploaded composited textures (the same
+  // document version renders different pixels, so the cache cannot reuse
+  // them), and restoration therefore takes a full render round-trip. Poll the
+  // comparison to convergence instead of reading one instant: "must restore"
+  // is a claim about where the presentation settles, and a slow runner can
+  // screenshot the gap between the drop and the fresh upload.
+  //
+  // The screenshot clip includes a few pixels of animated render-pane chrome
+  // around the document. Compare only the document's own extent; Firefox may
+  // change those unrelated chrome pixels while menus close.
+  let lastRestoreDifference = "";
+  await expect
+    .poll(
+      async () => {
+        const shot = await page.screenshot({ clip: documentClip });
+        const difference = readCssPngPixelDifferenceStats(
+          baseline,
+          shot,
+          documentClip,
+          documentPixelsInClip,
+        );
+        lastRestoreDifference = JSON.stringify(difference);
+        return difference.changedPixels;
+      },
+      {
+        message: "Disabling Compositor Tile Overlay must restore document pixels",
+        timeout: scaledMs(5_000),
+        intervals: [50, 100, 250],
+      },
+    )
+    .toBe(0);
+  await test.info().attach("overlay-restore-difference", {
+    body: lastRestoreDifference,
+    contentType: "application/json",
+  });
   const geometryBaseline = await page.screenshot({ clip: documentClip });
   await test.info().attach("overlay-disabled-baseline", {
     body: geometryBaseline,
     contentType: "image/png",
   });
-  // The screenshot clip includes a few pixels of animated render-pane chrome
-  // around the document. Compare only the document's own extent; Firefox may
-  // change those unrelated chrome pixels while menus close.
-  const restoredBaselineDifference = readCssPngPixelDifferenceStats(
-    baseline,
-    geometryBaseline,
-    documentClip,
-    documentPixelsInClip,
-  );
-  expect(
-    restoredBaselineDifference.changedPixels,
-    `Disabling Compositor Tile Overlay must restore document pixels: ${
-      JSON.stringify(restoredBaselineDifference)
-    }`,
-  ).toBe(0);
 
   // The blue rounded rectangle spans (32,32)-(212,152). Its emitted
   // triangles share the diagonal through (122,92). Dynamic Slug dilation
