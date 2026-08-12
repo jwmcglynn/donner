@@ -28,7 +28,7 @@
       ]
     },
     "donner/editor/EditorShell.cc": {
-      "sha256": "00846da99f56fd842c7b84927f9b82c5b4c3e20d8a33702add48872b8b68666e",
+      "sha256": "b529fbd3246c4aba773cb8364a8b02fcf510a367796a5e3a3569078495f418c1",
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
         "wgpuLifetimeTextureCreates"
@@ -485,7 +485,7 @@
       ]
     },
     "donner/svg/renderer/RendererGeode.h": {
-      "sha256": "2e56ec56c37dba212e807eb098d1b31bd1f427e9f0bd603c4e6f458ade59ed42",
+      "sha256": "d26a50f70e8e935c3c741a5aecbad1f8cdc3a927af493b5eb1cf00b8531f2ec3",
       "wgpuCppTokens": [
         "Texture",
         "TextureFormat",

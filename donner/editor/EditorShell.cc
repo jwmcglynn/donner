@@ -3910,14 +3910,10 @@ void EditorShell::renderRenderPanePresentation(
           .presentationSuppressed = contentOnlyCaptureThisFrame_ || showSamplePicker_,
       });
   bool documentPresentedDirectly = false;
-  const bool workerDocumentSurfacePresented = false;
   // Everything drawn onto the document this frame - selection chrome, the
   // compositor tile overlay, the presented image clip - belongs in the same
-  // transform the presented pixels landed in. That is the live viewport
-  // whenever the framebuffer underlay presents, and the accepted worker epoch's
-  // own viewport when a worker surface does; using the live viewport there
-  // separates gesture feedback from the pixels it annotates by however far the
-  // UI thread has run ahead of the worker.
+  // transform the presented pixels landed in, which is the viewport the
+  // presentation resolved for this frame.
   const ViewportState& presentedDocumentViewport = presentation.presentedViewport;
 
   const auto liveActiveDragPreview = selectTool_.activeDragPreview();

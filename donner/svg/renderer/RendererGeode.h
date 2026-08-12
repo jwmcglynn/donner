@@ -398,8 +398,9 @@ public:
   /// Not on the browser build. WebGPU has no cross-thread device, surface, or texture sharing in
   /// any shipping engine, so a texture produced on the raster thread cannot be sampled by the app
   /// thread's device. Browser tiles therefore cross the thread boundary as CPU bitmaps and are
-  /// uploaded once per tile generation into the compositing device (single-canvas presenter architecture). The worker-owned
-  /// surface that used to consume a texture snapshot directly is gone.
+  /// uploaded once per tile generation into the compositing device (single-canvas presenter
+  /// architecture). The worker-owned surface that used to consume a texture snapshot directly
+  /// is gone.
   [[nodiscard]] bool requiresTextureSnapshotPresentation() const override {
 #ifdef __EMSCRIPTEN__
     return false;
