@@ -15,7 +15,7 @@ name: Coverage
 # So PR coverage is scoped to the affected-target subset via the same bazel-diff
 # mechanism as CI (see determine-targets below); the patch annotation survives
 # on the subset that actually changed. When the diff cannot be scoped to a
-# genuine subset (infra-file changes, bazel-diff failure, missing/empty diff),
+# genuine subset (infra/toolchain changes, bazel-diff failure, missing/empty diff),
 # the reason resolves to a FULL //... target set: running that on a PR is exactly
 # the 21-min re-run we are eliminating, so the PR coverage jobs SKIP instead --
 # the main-push baseline already covers those lines. Only the affected subset
@@ -290,7 +290,12 @@ jobs:
           while IFS= read -r path; do
             [[ -z "$path" ]] && continue
             case "$path" in
-              MODULE.bazel|WORKSPACE|WORKSPACE.*|build_defs/*|third_party/bazel/*)
+              # A root Bazel pin change changes analysis and action semantics
+              # for every target. Let the main-push package-pattern baseline
+              # validate it; feeding bazel-diff's broad explicit label set
+              # into hosted PR coverage violates the lane budget and includes
+              # host-incompatible labels that package patterns skip naturally.
+              MODULE.bazel|.bazelversion|WORKSPACE|WORKSPACE.*|build_defs/*|third_party/bazel/*)
                 echo "Build graph infrastructure change requires full coverage: $path"
                 should_fallback=true
                 fallback_reason="infra_change"

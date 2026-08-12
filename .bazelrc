@@ -23,6 +23,13 @@
 # Enables using platform-specific configs such as build:linux and build:macos in this .bazelrc file
 build --enable_platform_specific_config
 
+# Recover within the active build when an action-cache entry references an
+# input that has already been evicted from a remote content-addressable store.
+# Keep one whole-build retry as a fallback for the experimental rewinding path,
+# instead of allowing Bazel's default five retries to consume the CI budget.
+build --rewind_lost_inputs
+build --experimental_remote_cache_eviction_retries=1
+
 ##
 ## Build config
 ##
@@ -36,6 +43,11 @@ build --enable_platform_specific_config
 # since none of these targets do package-relative imports across directory
 # boundaries. See https://github.com/bazel-contrib/rules_python/issues/2945.
 common --incompatible_default_to_explicit_init_py
+
+# Use rules_python's runfiles-aware launcher in every build configuration.
+# Scoping this to latest_llvm made Python execution semantics depend on the
+# selected C++ toolchain and left hosted/default lanes on a different launcher.
+common --@rules_python//python/config_settings:bootstrap_impl=script
 
 # Force clang to be the default compiler for all Bazel C/C++ actions.
 # Propagates CC/CXX so every action (including host tools) uses clang/clang++.
@@ -80,11 +92,6 @@ common --//third_party/google_fonts:google_fonts_available=true
 common:latest_llvm --extra_toolchains=@llvm_toolchain_linux_aarch64//:all
 common:latest_llvm --extra_toolchains=@llvm_toolchain_linux_x86_64//:all
 common:latest_llvm --//build_defs:llvm_latest=1
-# Use rules_python's hermetic Python launcher rather than the default
-# `#!/usr/bin/env python3` shebang. Without this, py_binary targets still rely
-# on a host python3 in PATH, which the Bazel remote-execution sandbox
-# (bazel-re1, NixOS) does not provide.
-common:latest_llvm --@rules_python//python/config_settings:bootstrap_impl=script
 # Disable V8's JIT in the emscripten Node runtime. bazel-re1's NativeLink
 # sandbox forbids creating executable memory pages (W+X), so V8 aborts with
 # SIGTRAP in `OS::SetPermissions` the moment it tries to baseline-compile
@@ -294,6 +301,9 @@ coverage --test_tag_filters=-fuzz_target,-lint
 # Continue past build/analysis failures so coverage is collected from all tests
 # that can run.
 coverage --keep_going
+# bazel-diff supplies explicit labels and can include targets incompatible with
+# the hosted platform. Skip those exactly as package-pattern coverage does.
+coverage --skip_incompatible_explicit_targets
 
 coverage:macos --test_env=LLVM_COV=/Library/Developer/CommandLineTools/usr/bin/llvm-cov
 coverage:macos --test_env=LLVM_PROFDATA=/Library/Developer/CommandLineTools/usr/bin/llvm-profdata
