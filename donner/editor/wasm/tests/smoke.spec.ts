@@ -69,6 +69,27 @@ declare global {
       dragging: boolean;
       publishedAtFrame: number;
     };
+    __donnerViewportStats?: {
+      paneX: number;
+      paneY: number;
+      paneWidth: number;
+      paneHeight: number;
+      documentX: number;
+      documentY: number;
+      documentWidth: number;
+      documentHeight: number;
+      zoom: number;
+      // Renders the editor owes itself rather than ones an interaction asked
+      // for: a debounced canvas-size commit invalidates the render tree, and an
+      // overview-infill request restores whole-document coverage the presenter
+      // is missing. Both are bounded, both are invisible to
+      // `waitForPresentationQuiescence` while still pending, and both are
+      // therefore candidates for a render that lands on the frame an
+      // interaction wakes. Published so a render-count failure can say whether
+      // either one is responsible.
+      documentCanvasCommits: number;
+      overviewInfillRenders: number;
+    };
     __donnerFirstFramePresentedAtMs?: number;
     __donnerEditorRevealedAtMs?: number;
     __donnerLoadingScreenHiddenAtMs?: number;
@@ -366,6 +387,19 @@ async function waitForPresentationQuiescence(
     }
     await page.waitForTimeout(25);
   }
+}
+
+// One snapshot of everything that can explain a document render count: the
+// count itself, the two renders the editor owes itself (see
+// `__donnerViewportStats`), and the interaction and frame state around them.
+async function readRenderAccounting(page: Page): Promise<Record<string, unknown>> {
+  return page.evaluate(() => ({
+    completedResults: window.__donnerWorkerStats?.completedResults || 0,
+    documentCanvasCommits: window.__donnerViewportStats?.documentCanvasCommits ?? -1,
+    overviewInfillRenders: window.__donnerViewportStats?.overviewInfillRenders ?? -1,
+    interaction: window.__donnerInteractionStats,
+    renderedFrames: window.__donnerMainLoopRenderedFrames || 0,
+  }));
 }
 
 test("wasm editor starts without runtime abort", async ({ page }) => {
@@ -1214,6 +1248,7 @@ test("Geode WASM selects through the overlay with one prewarm render and no recu
   const beforeSelectionUiFrame = await page.evaluate(
     () => window.__donnerMainLoopRenderedFrames || 0,
   );
+  const beforeSelectionAccounting = await readRenderAccounting(page);
   await page.mouse.click(dragStart.x, dragStart.y);
   await expect
     .poll(async () => page.evaluate(() => window.__donnerMainLoopRenderedFrames || 0), {
@@ -1237,15 +1272,34 @@ test("Geode WASM selects through the overlay with one prewarm render and no recu
       intervals: [16, 25, 50, 100],
     })
     .toBe(false);
-  // The click's one intentional render is the selected-layer prewarm; anything past +1 is the
-  // recurring-update regression this test exists to catch, and the exact-match poll times out.
-  await expect
-    .poll(async () => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
-      message: "expected the selection click's single prewarm render and nothing further",
-      timeout: scaledMs(2000),
-      intervals: [16, 25, 50, 100],
-    })
-    .toBe(beforeSelection + 1);
+  // The click's one intentional render is the selected-layer prewarm; anything
+  // past +1 is the recurring-update regression this test exists to catch.
+  //
+  // A shared runner occasionally reports +2 here. The failure carries the
+  // editor's own render accounting so the next occurrence is attributable
+  // instead of being another timing guess: `documentCanvasCommits` and
+  // `overviewInfillRenders` are the two renders the editor can owe itself and
+  // land on the frame the click wakes, and quiescence above cannot exclude
+  // either, because one still pending moves neither the result count nor the
+  // busy flag. Measured on this build they both stay at zero through sample
+  // load, selection, and pan, so a +2 that reports zero for both is neither of
+  // them and the reason is still open.
+  const selectionDeadline = Date.now() + scaledMs(2000);
+  let selectionAccounting = await readRenderAccounting(page);
+  while (
+    selectionAccounting.completedResults !== beforeSelection + 1
+    && Date.now() < selectionDeadline
+  ) {
+    await page.waitForTimeout(25);
+    selectionAccounting = await readRenderAccounting(page);
+  }
+  expect(
+    selectionAccounting.completedResults,
+    `expected the selection click's single prewarm render and nothing further: `
+      + `beforeSelection=${beforeSelection} `
+      + `before=${JSON.stringify(beforeSelectionAccounting)} `
+      + `after=${JSON.stringify(selectionAccounting)}`,
+  ).toBe(beforeSelection + 1);
   await page.mouse.move(dragStart.x, dragStart.y);
   await page.mouse.down();
   // An active drag presents by transforming the prewarmed selected-layer texture inside UI

@@ -62,6 +62,132 @@ export interface SplashCompositeFrameCapture {
 }
 
 /**
+ * Every tone the editor is known to draw behind or around the document, plus
+ * the capture's own colour histogram.
+ *
+ * `darkBackgroundPixels` and `checkerboardPixels` are the presentation classes
+ * the Splash suites assert on; `paneBackdropPixels` is the composited render
+ * pane behind the document. A capture that contains none of the three is not a
+ * weak observation of the editor, it is an observation of something that is not
+ * the editor - a capture the compositor filled with one flat tone, for
+ * instance - and the histogram is what makes that diagnosable rather than
+ * merely failed. See `isSplashCaptureUsable`.
+ */
+export interface SplashToneCensus extends SplashSurfaceCoverageStats {
+  paneBackdropPixels: number;
+  distinctColors: number;
+  dominantColors: Array<{ color: string; pixels: number }>;
+}
+
+/**
+ * The composited render-pane backdrop, measured as exactly (44,47,56) on both
+ * engines (the same calibration `countSplashSurfaceCoverage` documents).
+ */
+const kPaneBackdropColor = { red: 44, green: 47, blue: 56 };
+
+function censusSplashTones(image: PngImage, dominantColorCount = 4): SplashToneCensus {
+  const coverage = countSplashSurfaceCoverage(image);
+  const histogram = new Map<number, number>();
+  let paneBackdropPixels = 0;
+  for (let offset = 0; offset < image.data.length; offset += image.channels) {
+    const red = image.data[offset];
+    const green = image.data[offset + 1];
+    const blue = image.data[offset + 2];
+    const key = (red << 16) | (green << 8) | blue;
+    histogram.set(key, (histogram.get(key) ?? 0) + 1);
+    const alpha = image.channels === 4 ? image.data[offset + 3] : 255;
+    if (
+      alpha >= 200 && Math.abs(red - kPaneBackdropColor.red) <= 2
+      && Math.abs(green - kPaneBackdropColor.green) <= 2
+      && Math.abs(blue - kPaneBackdropColor.blue) <= 2
+    ) {
+      ++paneBackdropPixels;
+    }
+  }
+  const dominantColors = [...histogram.entries()]
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, dominantColorCount)
+    .map(([key, pixels]) => ({
+      color: `rgb(${(key >> 16) & 0xff},${(key >> 8) & 0xff},${key & 0xff})`,
+      pixels,
+    }));
+  return {
+    ...coverage,
+    paneBackdropPixels,
+    distinctColors: histogram.size,
+    dominantColors,
+  };
+}
+
+/**
+ * Whether a capture is an observation of the editor at all.
+ *
+ * A capture is unusable when it carries none of the editor's own tones, or
+ * when it is a single flat colour. Both are the arithmetic signature of a
+ * capture that never contained the composited document - the shape of the
+ * zero-artboard/zero-checkerboard sample a shared runner produced - and
+ * neither can decide the presentation invariants the Splash suites assert.
+ * Callers retake instead of scoring such a sample.
+ */
+export function isSplashCaptureUsable(census: SplashToneCensus): boolean {
+  const knownTonePixels = census.darkBackgroundPixels + census.checkerboardPixels
+    + census.paneBackdropPixels;
+  return knownTonePixels > 0 && census.distinctColors > 1;
+}
+
+/** One capture, scored for both presentation coverage and letter geometry. */
+export interface SplashPresentationFrame {
+  census: SplashToneCensus;
+  /** `splash-yellow` bounds inside `letterWindow`, in page CSS pixels. */
+  letter: PixelBounds | null;
+  /** `selection-teal` bounds inside `letterWindow`, in page CSS pixels. */
+  outline: PixelBounds | null;
+  png: Buffer;
+}
+
+/**
+ * Capture one region and read the coverage census and the letter geometry out
+ * of THAT capture.
+ *
+ * Reading the two from separate screenshots is what let a drag sample pair a
+ * coverage number from one presented frame with a letter position from the
+ * next; every observable a per-frame invariant compares has to come from the
+ * same frame. `letterWindow` is a page-CSS rectangle inside `region`, and the
+ * returned bounds are in page CSS pixels, so the caller never has to know the
+ * device pixel ratio the runner chose.
+ */
+export async function captureSplashPresentationFrame(
+  page: Page,
+  region: CssRegion,
+  letterWindow: CssRegion,
+): Promise<SplashPresentationFrame> {
+  const png = await page.screenshot({ clip: region });
+  const image = decodePng(png);
+  const scaleX = image.width / region.width;
+  const scaleY = image.height / region.height;
+  const searchBounds = {
+    minX: Math.floor((letterWindow.x - region.x) * scaleX),
+    minY: Math.floor((letterWindow.y - region.y) * scaleY),
+    maxX: Math.ceil((letterWindow.x - region.x + letterWindow.width) * scaleX),
+    maxY: Math.ceil((letterWindow.y - region.y + letterWindow.height) * scaleY),
+  };
+  const toPageBounds = (bounds: PixelBounds | null): PixelBounds | null =>
+    bounds === null ? null : {
+      minX: region.x + bounds.minX / scaleX,
+      minY: region.y + bounds.minY / scaleY,
+      maxX: region.x + bounds.maxX / scaleX,
+      maxY: region.y + bounds.maxY / scaleY,
+      pixels: bounds.pixels,
+    };
+  return {
+    census: censusSplashTones(image),
+    letter: toPageBounds(findPixelBounds(image, "splash-yellow", searchBounds)),
+    outline: toPageBounds(findPixelBounds(image, "selection-teal", searchBounds)),
+    png,
+  };
+}
+
+/**
  * Count the two Splash presentation classes inside a decoded render-pane capture.
  *
  * Both windows are calibrated against measured composited output, not against
@@ -489,13 +615,6 @@ export async function readElementColorStats(locator: Locator): Promise<CanvasCol
   }
   const image = decodePng(await locator.screenshot());
   return measureImage(image, { x: 0, y: 0, width: image.width, height: image.height });
-}
-
-export async function readSplashPageCoverageStats(
-  page: Page,
-  region: CssRegion,
-): Promise<SplashSurfaceCoverageStats> {
-  return countSplashSurfaceCoverage(decodePng(await page.screenshot({ clip: region })));
 }
 
 export async function captureSplashCompositeFrame(

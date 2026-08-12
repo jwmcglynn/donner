@@ -1,6 +1,8 @@
 import { expect, type Page, test } from "@playwright/test";
 import {
+  captureSplashPresentationFrame,
   type CssRegion,
+  isSplashCaptureUsable,
   type PixelBounds,
   readEditorBackgroundCoverage,
   readCssPngPixelDifferenceStats,
@@ -10,7 +12,8 @@ import {
   readElementColorStats,
   readPngPixelDifferenceStats,
   readSplashCompositeFrameStats,
-  readSplashPageCoverageStats,
+  type SplashPresentationFrame,
+  type SplashToneCensus,
 } from "./canvas-color-stats";
 
 declare global {
@@ -44,7 +47,26 @@ declare global {
       compositorTileOverlay: boolean;
       geometryDebugOverlay: boolean;
     };
+    __donnerViewportStats?: ViewportStats;
   }
+}
+
+// Where the render pane and the presented document sit on screen, published by
+// `EditorShell::PublishViewportStats`. Since the single-canvas architecture the
+// canvas box describes the whole editor, so this is the only handle a pixel
+// probe has on which of its pixels are document and which are chrome. All
+// values are page CSS pixels, and a document coordinate maps onto the page with
+// `documentX + documentWidth * (x / viewBoxWidth)`.
+interface ViewportStats {
+  paneX: number;
+  paneY: number;
+  paneWidth: number;
+  paneHeight: number;
+  documentX: number;
+  documentY: number;
+  documentWidth: number;
+  documentHeight: number;
+  zoom: number;
 }
 
 // Per-frame accounting for the demand-driven frame loop in `donner/editor/main.cc`, published to
@@ -111,6 +133,187 @@ function splashLetterMeasureRegion(
     width: editorBounds.width - 60 - kRenderPaneInset.right,
     height: editorBounds.height - kRenderPaneInset.top - kRenderPaneInset.bottom,
   };
+}
+
+async function readViewportStats(page: Page): Promise<ViewportStats> {
+  const stats = await page.evaluate(() => window.__donnerViewportStats);
+  expect(stats, "the editor never published __donnerViewportStats").toBeDefined();
+  return stats as ViewportStats;
+}
+
+// The presented document's own rectangle on screen, clipped to the render pane.
+//
+// This is the window every Splash coverage probe samples, and it is derived
+// from what the editor published rather than from a hand-measured inset. A
+// fixed inset rectangle answers a different question every time the pane's
+// layout moves: `kRenderPaneInset` still names a rectangle that overlaps the
+// document but also covers pane chrome on two sides and misses document on a
+// third, which is how a "the document covers the pane" assertion came to be
+// satisfied at 43% coverage. Scoped to the document the same measurement is
+// ~75%, and a capture that contains no document at all lands at zero rather
+// than at whatever fraction of chrome the inset happened to frame.
+function presentedDocumentRegion(stats: ViewportStats): CssRegion {
+  const left = Math.max(stats.documentX, stats.paneX);
+  const top = Math.max(stats.documentY, stats.paneY);
+  const right = Math.min(stats.documentX + stats.documentWidth, stats.paneX + stats.paneWidth);
+  const bottom = Math.min(stats.documentY + stats.documentHeight, stats.paneY + stats.paneHeight);
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+// `donner_splash.svg` is authored in a 892x512 viewBox.
+const kSplashViewBox = { width: 892, height: 512 };
+
+// The `Donner_D` path's extent in that viewBox, taken from the sample's own
+// path data, and a press point inside the letter's solid left stem: right of
+// the outer edge (x=271.41), left of the counter (x=290.68), and between the
+// two horizontal bars, so the press hits the letter rather than the artwork
+// that shows through its counter.
+const kSplashLetterD = {
+  minX: 271.41,
+  minY: 346.89,
+  maxX: 332.6,
+  maxY: 433.5,
+  stemPress: { x: 281, y: 395 },
+};
+
+// The Splash drag: ten pointer steps up and to the left, in page CSS pixels.
+// Small steps keep the worker continuously superseded, which is the
+// presentation window where an incomplete render used to replace the last
+// complete one.
+const kSplashDragSteps = 10;
+const kSplashDragStep = { x: -5, y: -2.5 };
+
+// How far the selection outline's own pixels may sit outside the letter they
+// surround: the outline is stroked around the selection bounds and carries a
+// corner handle, both of which extend a few CSS pixels past the art. Measured
+// at 6-7px on both engines; the bound only has to separate "the outline is
+// around this letter" from "the outline is around something else entirely",
+// and the per-frame alignment assertion below is what holds it to a pixel.
+const kSelectionHandleMargin = 12;
+
+// How far the letter's measured travel may fall short of the pointer's. The
+// letter's edge is antialiased against the artboard, so the tone window can
+// gain or lose an edge pixel between frames; anything larger is the letter
+// failing to follow the drag.
+const kLetterTravelTolerance = 4;
+
+function splashDocumentToPage(
+  stats: ViewportStats,
+  point: { x: number; y: number },
+): { x: number; y: number } {
+  return {
+    x: stats.documentX + stats.documentWidth * (point.x / kSplashViewBox.width),
+    y: stats.documentY + stats.documentHeight * (point.y / kSplashViewBox.height),
+  };
+}
+
+// The window the dragged letter is measured in: the corridor its solid left
+// stem sweeps, from where the stem sits at rest to where the full drag travel
+// leaves it.
+//
+// The whole letter cannot be the window. The Splash draws a yellow lightning
+// bolt immediately above the D, the "O" immediately right of it, and the blue
+// "Donner_line" swoosh diagonally below it (nearest at document y=445, under
+// the stem's right edge); the first two match `splash-yellow` and the third
+// matches `selection-teal`, so a window that admits any of them reports static
+// artwork bounds and a letter that never moved still measures the same every
+// frame. The stem corridor - inset from the counter, stopping short of the
+// swoosh - contains nothing but the letter and its own outline, which makes
+// `letter.minX` and `letter.maxY` honest observables of where the letter is.
+function splashLetterTrackingWindow(stats: ViewportStats): CssRegion {
+  const scale = stats.documentWidth / kSplashViewBox.width;
+  const restStemBottomLeft = splashDocumentToPage(stats, {
+    x: kSplashLetterD.minX,
+    y: kSplashLetterD.maxY,
+  });
+  const stemInset = 20 * scale;
+  const stemHeight = 50 * scale;
+  const margin = 6 * scale;
+  const travelX = kSplashDragSteps * kSplashDragStep.x;
+  const travelY = kSplashDragSteps * kSplashDragStep.y;
+  const left = restStemBottomLeft.x + travelX - margin;
+  const top = restStemBottomLeft.y + travelY - stemHeight;
+  return {
+    x: left,
+    y: top,
+    width: restStemBottomLeft.x + stemInset - left,
+    height: restStemBottomLeft.y + margin - top,
+  };
+}
+
+// Wait for the demand-driven frame loop to park.
+//
+// Reading pixels while the loop is still servicing frames is how a capture
+// comes to straddle two of them: a full-document screenshot takes longer than a
+// frame, so any capture started mid-burst mixes geometry from both sides of it.
+// The loop parks once it has presented what it was woken for, so an unchanged
+// frame counter across a browser composite is the signal that a capture can
+// describe one frame. Reports whether it parked rather than throwing, so the
+// caller's own diagnostics carry the failure.
+async function waitForParkedFrameLoop(page: Page, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  const renderedFrames = () => page.evaluate(() => window.__donnerMainLoopRenderedFrames || 0);
+  for (;;) {
+    const before = await renderedFrames();
+    await waitForBrowserComposite(page);
+    if (before === await renderedFrames()) {
+      return true;
+    }
+    if (Date.now() >= deadline) {
+      return false;
+    }
+  }
+}
+
+// Take one capture of the presented document and refuse to score an unusable
+// one.
+//
+// Two ways a capture says nothing about the frame under test. It can straddle
+// two presented frames and mix their geometry, which would fake the very defect
+// this suite looks for; the demand-driven loop parks once it has presented the
+// move, so retaking until the frame counter is unchanged across the capture
+// settles that. And it can contain none of the editor's own tones at all -
+// zero artboard, zero checkerboard, zero pane backdrop - which is not a
+// partially rendered document but a capture of something that is not the
+// editor, and is the shape of the sample a shared runner produced when this
+// test last failed. Both are retaken, bounded; a capture window that never
+// resolves fails with the histogram and the editor's published state attached,
+// so the next reader sees what was actually on screen.
+async function captureSplashDragFrame(
+  page: Page,
+  region: CssRegion,
+  letterWindow: CssRegion,
+  context: string,
+): Promise<SplashPresentationFrame & { renderedFrames: number }> {
+  let last: SplashPresentationFrame | null = null;
+  for (let attempt = 0; attempt < 4; ++attempt) {
+    await waitForParkedFrameLoop(page, scaledMs(2_000));
+    const before = await readDocumentPresentationState(page);
+    const frame = await captureSplashPresentationFrame(page, region, letterWindow);
+    const after = await readDocumentPresentationState(page);
+    last = frame;
+    if (before.renderedFrames === after.renderedFrames && isSplashCaptureUsable(frame.census)) {
+      return { ...frame, renderedFrames: after.renderedFrames };
+    }
+  }
+  if (last !== null) {
+    await test.info().attach(`unusable-capture-${context}`, {
+      body: last.png,
+      contentType: "image/png",
+    });
+  }
+  const published = await page.evaluate(() => ({
+    frameLoop: window.__donnerFrameLoopStats,
+    interaction: window.__donnerInteractionStats,
+    renderedFrames: window.__donnerMainLoopRenderedFrames || 0,
+    viewport: window.__donnerViewportStats,
+    worker: window.__donnerWorkerStats,
+  }));
+  throw new Error(
+    `${context}: no usable capture of the presented document after 4 attempts. `
+      + `region=${JSON.stringify(region)} census=${JSON.stringify(last?.census)} `
+      + `published=${JSON.stringify(published)}`,
+  );
 }
 
 // The document's presentation progress. Since the single-canvas architecture there is no separate
@@ -674,23 +877,35 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
   // to pixels raced the load: the picker is still on screen for as long as the
   // first Splash raster takes, and every assertion below then describes the
   // picker instead of the document.
-  const { editorBounds } = await openDonnerSplash(page);
+  await openDonnerSplash(page);
 
-  const documentRegion = renderPaneRegion(editorBounds);
+  const viewport = await readViewportStats(page);
+  const documentRegion = presentedDocumentRegion(viewport);
+  const letterWindow = splashLetterTrackingWindow(viewport);
+  expect(
+    letterWindow.x >= documentRegion.x && letterWindow.y >= documentRegion.y
+      && letterWindow.x + letterWindow.width <= documentRegion.x + documentRegion.width
+      && letterWindow.y + letterWindow.height <= documentRegion.y + documentRegion.height,
+    `the letter tracking window left the presented document: `
+      + `window=${JSON.stringify(letterWindow)} document=${JSON.stringify(documentRegion)} `
+      + `viewport=${JSON.stringify(viewport)}`,
+  ).toBe(true);
+
   // Poll for the coverage the baseline demands rather than for any coverage at
   // all: a partially presented document satisfies "greater than zero" and would
   // turn the assertion below into a race against the raster.
   await expect
     .poll(async () => {
-      const coverage = await readSplashPageCoverageStats(page, documentRegion);
-      return coverage.darkBackgroundPixels / coverage.samples;
+      const frame = await captureSplashPresentationFrame(page, documentRegion, letterWindow);
+      return frame.census.darkBackgroundPixels / frame.census.samples;
     }, {
-      message: "expected the Splash document to cover the render pane before the drag",
+      message: "expected the Splash document to cover its own presented rectangle before the drag",
       timeout: scaledMs(5_000),
       intervals: [16, 25, 50, 100],
     })
     .toBeGreaterThan(0.25);
-  const baseline = await readSplashPageCoverageStats(page, documentRegion);
+  const restFrame = await captureSplashDragFrame(page, documentRegion, letterWindow, "pre-press");
+  const baseline = restFrame.census;
   expect(
     baseline.darkBackgroundPixels,
     `Splash background was not present before drag: ${JSON.stringify(baseline)}`,
@@ -699,50 +914,32 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
     baseline.checkerboardPixels,
     `checkerboard leaked through the Splash baseline: ${JSON.stringify(baseline)}`,
   ).toBeLessThan(baseline.samples * 0.1);
+  expect(
+    restFrame.letter,
+    `the rendered Splash D was not present before the drag: ${JSON.stringify(baseline)}`,
+  ).not.toBeNull();
+  expect(
+    restFrame.outline,
+    "a selection outline was already inside the letter window before anything was selected",
+  ).toBeNull();
 
-  // The document has no element of its own since the single-canvas architecture, so the drag is
-  // anchored on the letter's own pixels. Target Donner_D's solid left stem
-  // rather than its counter, where hit-testing would correctly select the
-  // background behind the letter. Tiny pointer steps keep the worker
-  // continuously superseded, which is the presentation window where an
-  // incomplete render used to replace the last complete one.
-  const anchor = await readSplashCompositeFrameStats(page, documentRegion, {
-    minX: 0,
-    minY: 0,
-    maxX: documentRegion.width,
-    maxY: documentRegion.height,
-  });
-  expect(anchor.yellow, "the rendered Splash D was not present before the drag").not.toBeNull();
-  if (anchor.yellow === null) {
-    return;
-  }
-  const dragStart = {
-    x: documentRegion.x + anchor.yellow.minX + 10,
-    y: documentRegion.y + anchor.yellow.maxY - 3,
-  };
+  // The document has no element of its own since the single-canvas
+  // architecture, so the press is placed by mapping the letter's own document
+  // coordinates through the editor's published viewport geometry. Deriving the
+  // press from a measured yellow bound instead is what made this test vacuous:
+  // the search window clipped the letter, so the measured `minX` was pinned to
+  // the window edge, the press landed a fixed 10px inside it on whatever
+  // happened to be there, and the letter never moved - which every assertion
+  // below then confirmed against byte-identical bounds.
+  const dragStart = splashDocumentToPage(viewport, kSplashLetterD.stemPress);
   await page.mouse.move(dragStart.x, dragStart.y);
   await waitForPressReadiness(page, "Splash drag press");
   const resultsBeforePress = await page.evaluate(
     () => window.__donnerWorkerStats?.completedResults || 0,
   );
   await page.mouse.down();
-  const samples: Array<{
-    coverage: Awaited<ReturnType<typeof readSplashPageCoverageStats>>;
-    renderedFrames: number;
-    teal: PixelBounds | null;
-    yellow: PixelBounds | null;
-  }> = [];
-  const letterMargin = 24;
-  const letterRegion = {
-    x: documentRegion.x + Math.max(0, anchor.yellow.minX - letterMargin),
-    y: documentRegion.y + Math.max(0, anchor.yellow.minY - letterMargin),
-    width: anchor.yellow.maxX - anchor.yellow.minX + letterMargin * 2,
-    height: anchor.yellow.maxY - anchor.yellow.minY + letterMargin * 2,
-  };
-  // The letter drag presents by transforming the prewarmed layer texture in UI
-  // frames rather than re-rasterizing the Splash per move, so each step waits on
-  // the frame counter. The press first selects the letter, which schedules its
-  // one prewarm render; the drag baseline is taken once that has landed so the
+  // The press selects the letter, which schedules exactly one prewarm render of
+  // the selected layer; the drag baseline is taken once that has landed so the
   // first step does not read it as a mid-drag raster.
   const resultsDuringDrag = resultsBeforePress + 1;
   await expect
@@ -752,79 +949,161 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
       intervals: [16, 25, 50, 100],
     })
     .toEqual({ completedResults: resultsDuringDrag, selectedCount: 1 });
-  let previousFrames = await page.evaluate(() => window.__donnerMainLoopRenderedFrames || 0);
-  for (let step = 1; step <= 10; ++step) {
-    await page.mouse.move(dragStart.x - step * 5, dragStart.y - step * 2.5);
+
+  // One selected element is not yet proof that it is the RIGHT element: a press
+  // that misses the letter and lands on the artboard behind it also reports
+  // one. The letter window held no outline pixels before the press, so an
+  // outline in it now, hugging the letter's own left edge, is the selection
+  // this drag is about to move.
+  const pressFrame = await captureSplashDragFrame(page, documentRegion, letterWindow, "press");
+  expect(pressFrame.letter, "the press lost the Splash letter").not.toBeNull();
+  expect(
+    pressFrame.outline,
+    `the press selected something other than the Splash letter it aimed at: `
+      + `frame=${JSON.stringify({ letter: pressFrame.letter, outline: pressFrame.outline })}`,
+  ).not.toBeNull();
+  const letterAtRest = pressFrame.letter!;
+  const outlineAtRest = pressFrame.outline!;
+  expect(
+    Math.abs(outlineAtRest.minX - letterAtRest.minX),
+    `the selection outline is not around the pressed letter: `
+      + `letter=${JSON.stringify(letterAtRest)} outline=${JSON.stringify(outlineAtRest)}`,
+  ).toBeLessThanOrEqual(kSelectionHandleMargin);
+
+  const samples: Array<{
+    census: SplashToneCensus;
+    letter: PixelBounds | null;
+    outline: PixelBounds | null;
+    renderedFrames: number;
+    step: number;
+  }> = [];
+  // The letter drag presents by transforming the prewarmed layer texture in UI
+  // frames rather than re-rasterizing the Splash per move, so each step waits on
+  // the frame counter to prove the loop ran at all.
+  //
+  // The counter cannot say WHICH step a frame presented: it advances for any
+  // wake, including one already in flight when the move went out, so a step can
+  // be handed a frame that predates its own pointer move. The letter's position
+  // is what identifies the step, so a capture still showing the previous step's
+  // position is retaken. A step whose move never reaches the screen fails here
+  // with both positions named rather than quietly contributing a duplicate
+  // sample.
+  let previousLetterMinX = letterAtRest.minX;
+  for (let step = 1; step <= kSplashDragSteps; ++step) {
+    const framesBeforeMove = await page.evaluate(
+      () => window.__donnerMainLoopRenderedFrames || 0,
+    );
+    await page.mouse.move(
+      dragStart.x + step * kSplashDragStep.x,
+      dragStart.y + step * kSplashDragStep.y,
+    );
     await expect
       .poll(async () => page.evaluate(() => window.__donnerMainLoopRenderedFrames || 0), {
         message: `expected a Splash drag-preview frame for step ${step}`,
         timeout: scaledMs(2_000),
         intervals: [16, 25, 50, 100],
       })
-      .toBeGreaterThan(previousFrames);
-    const renderedFrames = await page.evaluate(
-      () => window.__donnerMainLoopRenderedFrames || 0,
-    );
+      .toBeGreaterThan(framesBeforeMove);
     await waitForBrowserComposite(page);
+    let frame = await captureSplashDragFrame(
+      page,
+      documentRegion,
+      letterWindow,
+      `drag step ${step}`,
+    );
+    // A capture can also simply be earlier than the presentation: the loop parks
+    // once it has presented the move, but the browser composite the screenshot
+    // reads can trail it. Retake, bounded, while the letter still reports the
+    // previous step's position.
+    const stepDeadline = Date.now() + scaledMs(750);
+    while (
+      frame.letter !== null && frame.letter.minX >= previousLetterMinX
+      && Date.now() < stepDeadline
+    ) {
+      await waitForBrowserComposite(page);
+      frame = await captureSplashDragFrame(page, documentRegion, letterWindow, `drag step ${step}`);
+    }
     samples.push({
-      coverage: await readSplashPageCoverageStats(page, documentRegion),
-      renderedFrames,
-      teal: await readEditorPixelBounds(page, letterRegion, "selection-teal"),
-      yellow: await readEditorPixelBounds(page, letterRegion, "splash-yellow"),
+      census: frame.census,
+      letter: frame.letter,
+      outline: frame.outline,
+      renderedFrames: frame.renderedFrames,
+      step,
     });
+    expect(frame.letter, `Splash drag frame ${frame.renderedFrames} lost the Splash letter`).not
+      .toBeNull();
+    expect(
+      frame.letter!.minX,
+      `Splash drag step ${step} never reached the screen: the letter is still at `
+        + `${previousLetterMinX}`,
+    ).toBeLessThan(previousLetterMinX);
+    previousLetterMinX = frame.letter!.minX;
     expect(
       await page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0),
-      `Splash drag frame ${renderedFrames} re-rasterized the document mid-drag`,
+      `Splash drag frame ${frame.renderedFrames} re-rasterized the document mid-drag`,
     ).toBe(resultsDuringDrag);
-    previousFrames = renderedFrames;
   }
   await page.mouse.up();
 
-  const centerX = (bounds: PixelBounds) => (bounds.minX + bounds.maxX) * 0.5;
-  const firstAlignedSample = samples.find(
-    (sample) => sample.yellow !== null && sample.teal !== null,
-  );
-  expect(firstAlignedSample, "no Splash drag frame contained both letter and outline pixels")
-    .toBeDefined();
-  const baselineAlignment = firstAlignedSample?.yellow !== null
-      && firstAlignedSample?.yellow !== undefined
-      && firstAlignedSample.teal !== null
-      && firstAlignedSample.teal !== undefined
-    ? {
-      x: firstAlignedSample.yellow.minX - firstAlignedSample.teal.minX,
-    }
-    : { x: 0 };
-  for (const [index, sample] of samples.entries()) {
+  for (const sample of samples) {
     expect(
-      sample.coverage.darkBackgroundPixels,
-      `drag sample ${index + 1} exposed an incomplete document render: ${JSON.stringify(sample)}`,
+      sample.census.darkBackgroundPixels,
+      `drag sample ${sample.step} exposed an incomplete document render: ${
+        JSON.stringify(sample.census)
+      }`,
     ).toBeGreaterThan(baseline.darkBackgroundPixels * 0.8);
     expect(
-      sample.coverage.checkerboardPixels,
-      `drag sample ${index + 1} flashed the document checkerboard: ${JSON.stringify(sample)}`,
-    ).toBeLessThan(sample.coverage.samples * 0.1);
-    expect(sample.yellow, `drag frame ${sample.renderedFrames} lost the Splash letter`).not
-      .toBeNull();
-    expect(sample.teal, `drag frame ${sample.renderedFrames} lost the selection outline`).not
+      sample.census.checkerboardPixels,
+      `drag sample ${sample.step} flashed the document checkerboard: ${
+        JSON.stringify(sample.census)
+      }`,
+    ).toBeLessThan(sample.census.samples * 0.1);
+    expect(sample.outline, `drag frame ${sample.renderedFrames} lost the selection outline`).not
       .toBeNull();
   }
-  const alignmentErrors = samples
-    .filter((sample) => sample.yellow !== null && sample.teal !== null)
-    .map((sample) => ({
-      renderedFrames: sample.renderedFrames,
-      error: Math.abs(sample.yellow!.minX - sample.teal!.minX - baselineAlignment.x),
-      tealMinX: sample.teal!.minX,
-      yellowMinX: sample.yellow!.minX,
-    }));
+
+  // The letter has to have moved as far as the pointer did. Each step already
+  // proved the letter left the previous step's position; this is what stops a
+  // drag that merely jitters the letter from satisfying that, and it is what
+  // the alignment claim below needs to mean anything - identical bounds every
+  // frame are perfectly aligned.
+  const letterPositions = samples.map((sample) => ({
+    step: sample.step,
+    letterMinX: sample.letter!.minX,
+    letterMaxY: sample.letter!.maxY,
+    outlineMinX: sample.outline!.minX,
+  }));
+  const firstSample = letterPositions[0];
+  const lastSample = letterPositions.at(-1)!;
+  const expectedTravelX = (lastSample.step - firstSample.step) * kSplashDragStep.x;
+  const expectedTravelY = (lastSample.step - firstSample.step) * kSplashDragStep.y;
+  expect(
+    Math.abs(lastSample.letterMinX - firstSample.letterMinX - expectedTravelX),
+    `the Splash letter did not follow the pointer: expected ${expectedTravelX}px of travel, `
+      + `positions=${JSON.stringify(letterPositions)}`,
+  ).toBeLessThanOrEqual(kLetterTravelTolerance);
+  expect(
+    Math.abs(lastSample.letterMaxY - firstSample.letterMaxY - expectedTravelY),
+    `the Splash letter did not follow the pointer: expected ${expectedTravelY}px of travel, `
+      + `positions=${JSON.stringify(letterPositions)}`,
+  ).toBeLessThanOrEqual(kLetterTravelTolerance);
+
+  // With the letter genuinely moving, this is the claim the test is named for:
+  // every presented drag frame shows the letter and its outline at the same
+  // place, never the letter at one epoch's geometry and the outline at
+  // another's.
+  const baselineAlignment = firstSample.letterMinX - firstSample.outlineMinX;
+  const alignmentErrors = letterPositions.map((position) => ({
+    step: position.step,
+    error: Math.abs(position.letterMinX - position.outlineMinX - baselineAlignment),
+    letterMinX: position.letterMinX,
+    outlineMinX: position.outlineMinX,
+  }));
   expect(
     Math.max(...alignmentErrors.map((sample) => sample.error)),
     `Splash drag frames diverged from their outlines: ${JSON.stringify(alignmentErrors)}`,
   ).toBeLessThanOrEqual(2);
-  const yellowCenters = samples
-    .map((sample) => sample.yellow)
-    .filter((bounds): bounds is PixelBounds => bounds !== null)
-    .map(centerX);
-  expect(yellowCenters).toEqual([...yellowCenters].sort((a, b) => b - a));
+
   // The release commits the moved letter with exactly one document render.
   await expect
     .poll(async () => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
