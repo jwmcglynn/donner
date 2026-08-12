@@ -64,11 +64,12 @@ using ::donner::geode::wgpuLabel;
 
 RendererGeodeTextureSnapshot::RendererGeodeTextureSnapshot(
     std::shared_ptr<geode::GeodeDevice> device, wgpu::Texture texture, Vector2i dimensions,
-    wgpu::TextureFormat format)
+    wgpu::TextureFormat format, AlphaType alphaType)
     : device_(std::move(device)),
       ownedTexture_(std::move(texture)),
       dimensions_(dimensions),
-      format_(format) {
+      format_(format),
+      alphaType_(alphaType) {
   texture_ = ownedTexture_.get();
 }
 
@@ -89,6 +90,7 @@ RendererGeodeTextureSnapshot& RendererGeodeTextureSnapshot::operator=(
   textureView_ = std::move(other.textureView_);
   dimensions_ = std::exchange(other.dimensions_, Vector2i::Zero());
   format_ = std::exchange(other.format_, wgpu::TextureFormat::Undefined);
+  alphaType_ = std::exchange(other.alphaType_, AlphaType::Premultiplied);
   return *this;
 }
 
@@ -124,6 +126,9 @@ constexpr wgpu::TextureFormat kFilterIntermediateFormat = wgpu::TextureFormat::R
 /// The unit path bounds used by `objectBoundingBox` gradient coordinates,
 /// matching the CPU-renderer helper.
 const Box2d kUnitPathBounds(Vector2d::Zero(), Vector2d(1, 1));
+
+/// Source UV rect that samples an entire texture.
+const Box2d kWholeTextureUv(Vector2d::Zero(), Vector2d(1, 1));
 
 bool IsBgraTextureFormat(wgpu::TextureFormat format) {
   return static_cast<WGPUTextureFormat>(format) == WGPUTextureFormat_BGRA8Unorm;
@@ -3350,7 +3355,7 @@ void RendererGeode::popFilterLayer() {
               frame.layerTexture,
               Box2d::FromXYWH(0.0, 0.0, static_cast<double>(frame.layerDesc.size.width),
                               static_cast<double>(frame.layerDesc.size.height)),
-              1.0, /*pixelated=*/false);
+              kWholeTextureUv, 1.0, /*pixelated=*/false, /*sourceIsPremultiplied=*/true);
           resampleEncoder.finish();
         }
 
@@ -3383,7 +3388,8 @@ void RendererGeode::popFilterLayer() {
         impl_->encoder->drawTexture(localFiltered,
                                     Box2d::FromXYWH(0.0, 0.0, static_cast<double>(localWidth),
                                                     static_cast<double>(localHeight)),
-                                    1.0, /*pixelated=*/false);
+                                    kWholeTextureUv, 1.0, /*pixelated=*/false,
+                                    /*sourceIsPremultiplied=*/true);
         if (localFiltered && localFiltered != localTexture) {
           impl_->device->deferDestroy(std::move(localFiltered));
         }
@@ -4031,8 +4037,26 @@ bool RendererGeode::drawTextureSnapshot(const RendererTextureSnapshot& texture,
     return false;
   }
 
+  // A snapshot may report a content extent smaller than its backing texture (host uploads
+  // keep an oversized allocation so a resized payload can reuse the texture). Sample only
+  // that region, otherwise the unused remainder is squeezed into `targetRect` and every
+  // tile edge lands in the wrong place.
+  const Vector2i contentDimensions = geodeTexture->dimensions();
+  const uint32_t textureWidth = geodeTexture->texture().getWidth();
+  const uint32_t textureHeight = geodeTexture->texture().getHeight();
+  if (contentDimensions.x <= 0 || contentDimensions.y <= 0 || textureWidth == 0 ||
+      textureHeight == 0) {
+    return false;
+  }
+  const Box2d sourceUv(Vector2d::Zero(),
+                       Vector2d(std::min(1.0, static_cast<double>(contentDimensions.x) /
+                                                  static_cast<double>(textureWidth)),
+                                std::min(1.0, static_cast<double>(contentDimensions.y) /
+                                                  static_cast<double>(textureHeight))));
+
   impl_->syncTransform();
-  impl_->encoder->drawTexture(geodeTexture->texture(), targetRect, opacity, pixelated);
+  impl_->encoder->drawTexture(geodeTexture->texture(), targetRect, sourceUv, opacity, pixelated,
+                              geodeTexture->alphaType() == AlphaType::Premultiplied);
   return true;
 }
 
@@ -4740,9 +4764,12 @@ RendererBitmap RendererGeode::takeSnapshot() const {
 
 // Read a Geode-rendered texture back into a tightly packed straight-alpha RGBA
 // bitmap. Shared by the live renderer target and detached texture snapshots.
+// `sourceAlphaType` describes the texels: render targets store premultiplied alpha and are
+// divided back out, while a snapshot wrapping a straight-alpha host upload is copied as-is.
 static RendererBitmap ReadGeodeTextureSnapshot(const std::shared_ptr<geode::GeodeDevice>& device,
                                                const wgpu::Texture& texture, Vector2i dimensions,
                                                wgpu::TextureFormat format,
+                                               AlphaType sourceAlphaType,
                                                const std::function<bool()>& shouldCancel) {
   RendererBitmap bitmap;
   // Close the traversal-to-snapshot race before allocating a readback buffer or submitting any GPU
@@ -4901,6 +4928,13 @@ static RendererBitmap ReadGeodeTextureSnapshot(const std::shared_ptr<geode::Geod
       const uint8_t srcG = srcRow[x * 4 + 1];
       const uint8_t srcB = sourceIsBgra ? srcRow[x * 4 + 0] : srcRow[x * 4 + 2];
       const uint8_t srcA = srcRow[x * 4 + 3];
+      if (sourceAlphaType == AlphaType::Unpremultiplied) {
+        dstRow[x * 4 + 0] = srcR;
+        dstRow[x * 4 + 1] = srcG;
+        dstRow[x * 4 + 2] = srcB;
+        dstRow[x * 4 + 3] = srcA;
+        continue;
+      }
       if (srcA == 0u) {
         dstRow[x * 4 + 0] = 0u;
         dstRow[x * 4 + 1] = 0u;
@@ -4929,7 +4963,7 @@ static RendererBitmap ReadGeodeTextureSnapshot(const std::shared_ptr<geode::Geod
 }
 
 RendererBitmap RendererGeodeTextureSnapshot::takeSnapshot() const {
-  return ReadGeodeTextureSnapshot(device_, texture_, dimensions_, format_,
+  return ReadGeodeTextureSnapshot(device_, texture_, dimensions_, format_, alphaType_,
                                   /*shouldCancel=*/{});
 }
 
@@ -4940,7 +4974,7 @@ RendererBitmap RendererGeode::takeSnapshotInterruptibly(
   }
   return ReadGeodeTextureSnapshot(impl_->device, impl_->target,
                                   Vector2i(impl_->pixelWidth, impl_->pixelHeight),
-                                  impl_->textureFormat, shouldCancel);
+                                  impl_->textureFormat, AlphaType::Premultiplied, shouldCancel);
 }
 
 RendererReadbackStats RendererGeode::consumeReadbackStats() {

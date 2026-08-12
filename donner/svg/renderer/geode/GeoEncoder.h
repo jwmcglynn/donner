@@ -417,11 +417,20 @@ public:
    * Draw an already-GPU-resident RGBA texture into the destination rectangle.
    *
    * The current transform is applied exactly like \ref drawImage, but the
-   * texture is sampled directly without a CPU upload. The texture is expected
-   * to contain premultiplied RGBA, matching Geode render-target snapshots.
+   * texture is sampled directly without a CPU upload.
+   *
+   * @param texture GPU-resident RGBA texture.
+   * @param destRect Destination rectangle in local (pre-transform) space.
+   * @param sourceUv Source UV rectangle in [0,1] x [0,1]. Producers that keep an oversized
+   *   backing allocation pass the sub-rect that holds the valid content.
+   * @param opacity Overall opacity in [0, 1].
+   * @param pixelated If true, use nearest-neighbor filtering. Otherwise, bilinear.
+   * @param sourceIsPremultiplied True when the texels are premultiplied, as Geode
+   *   render-target snapshots are. CPU bitmaps uploaded by host presentation code are
+   *   straight-alpha and must pass false.
    */
-  void drawTexture(const wgpu::Texture& texture, const Box2d& destRect, double opacity,
-                   bool pixelated);
+  void drawTexture(const wgpu::Texture& texture, const Box2d& destRect, const Box2d& sourceUv,
+                   double opacity, bool pixelated, bool sourceIsPremultiplied);
 
   /**
    * Fill a path with a solid color.

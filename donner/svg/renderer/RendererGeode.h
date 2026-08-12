@@ -41,6 +41,12 @@ namespace donner::svg {
  * The snapshot keeps the backing \ref geode::GeodeDevice and texture alive so
  * editor presentation code can sample the texture after the renderer has moved
  * on to a later frame.
+ *
+ * The snapshot is also the single owner for host-uploaded CPU bitmaps that
+ * presentation code wants to draw through Geode. Those uploads keep an
+ * oversized backing allocation so a resized payload can reuse the texture, so
+ * \ref dimensions() reports the valid content extent rather than the
+ * allocation, and \ref alphaType() reports the uploaded pixel format.
  */
 class RendererGeodeTextureSnapshot final : public RendererTextureSnapshot {
 public:
@@ -49,11 +55,16 @@ public:
    *
    * @param device Shared Geode device that owns the WebGPU handle lifetime.
    * @param texture Resolved single-sample texture containing the rendered frame.
-   * @param dimensions Texture dimensions in device pixels.
+   * @param dimensions Valid content dimensions in device pixels, anchored at the texture
+   *   origin. May be smaller than the texture when the producer keeps an oversized
+   *   allocation.
    * @param format Texture format.
+   * @param alphaType Alpha interpretation of the stored texels. Geode render targets are
+   *   premultiplied; host-uploaded CPU bitmaps generally are not.
    */
   RendererGeodeTextureSnapshot(std::shared_ptr<geode::GeodeDevice> device, wgpu::Texture texture,
-                               Vector2i dimensions, wgpu::TextureFormat format);
+                               Vector2i dimensions, wgpu::TextureFormat format,
+                               AlphaType alphaType = AlphaType::Premultiplied);
   ~RendererGeodeTextureSnapshot() override;
 
   RendererGeodeTextureSnapshot(const RendererGeodeTextureSnapshot&) = delete;
@@ -64,9 +75,22 @@ public:
   [[nodiscard]] RendererTextureSnapshotBackend backend() const override {
     return RendererTextureSnapshotBackend::Geode;
   }
+  /// Valid content extent in device pixels, anchored at the texture origin. Sampling and
+  /// readback are confined to this region even when the backing texture is larger.
   [[nodiscard]] Vector2i dimensions() const override { return dimensions_; }
-  [[nodiscard]] AlphaType alphaType() const override { return AlphaType::Premultiplied; }
+  [[nodiscard]] AlphaType alphaType() const override { return alphaType_; }
   [[nodiscard]] RendererBitmap takeSnapshot() const override;
+
+  /**
+   * Re-point the snapshot at a different content extent inside the same backing texture.
+   *
+   * Uploaders that keep an oversized allocation alive across re-uploads call this after
+   * writing a payload whose dimensions changed. The new extent must fit within the
+   * backing texture.
+   *
+   * @param dimensions Valid content dimensions in device pixels.
+   */
+  void setDimensions(Vector2i dimensions) { dimensions_ = dimensions; }
 
   /// Resolved single-sample WebGPU texture.
   [[nodiscard]] const wgpu::Texture& texture() const { return texture_; }
@@ -92,6 +116,7 @@ private:
   mutable geode::ScopedWgpuHandle<wgpu::TextureView> textureView_;
   Vector2i dimensions_ = Vector2i::Zero();
   wgpu::TextureFormat format_ = wgpu::TextureFormat::Undefined;
+  AlphaType alphaType_ = AlphaType::Premultiplied;
 };
 
 /**

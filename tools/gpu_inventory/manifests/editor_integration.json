@@ -116,10 +116,9 @@
       ],
       "operations": [
         "createTexture",
-        "createView",
         "writeTexture"
       ],
-      "sha256": "0b6835ee528d378e1ccaf0d7df43b411281cc97a68e08ed8fa445c5c529f2c50",
+      "sha256": "118365dea85808825d6f2ed9f370b763bbcb5a338f7240375c8cce1822075af1",
       "usesEditorWgpuDefine": true,
       "wgpuCFunctions": [
         "wgpuLabel",
@@ -143,7 +142,7 @@
       ]
     },
     "donner/editor/GlTextureCache.h": {
-      "sha256": "e3bc4cf9f4a194d343511e1f0a55a718c9a070e7a44e3cf4faf2dc864e51c902",
+      "sha256": "bce74359b8e0e1f48dc57972114dbb5456dda3af7eb7e2b70f106d3c360ae6fe",
       "usesEditorWgpuDefine": true,
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",

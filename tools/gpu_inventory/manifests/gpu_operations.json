@@ -94,10 +94,9 @@
     "donner/editor/GlTextureCache.cc": {
       "operations": [
         "createTexture",
-        "createView",
         "writeTexture"
       ],
-      "sha256": "0b6835ee528d378e1ccaf0d7df43b411281cc97a68e08ed8fa445c5c529f2c50",
+      "sha256": "118365dea85808825d6f2ed9f370b763bbcb5a338f7240375c8cce1822075af1",
       "wgpuCFunctions": [
         "wgpuLabel",
         "wgpuLifetimeBufferCreates",
@@ -120,7 +119,7 @@
       ]
     },
     "donner/editor/GlTextureCache.h": {
-      "sha256": "e3bc4cf9f4a194d343511e1f0a55a718c9a070e7a44e3cf4faf2dc864e51c902",
+      "sha256": "bce74359b8e0e1f48dc57972114dbb5456dda3af7eb7e2b70f106d3c360ae6fe",
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
         "wgpuLifetimeTextureCreates"
@@ -439,7 +438,7 @@
         "unmap",
         "writeBuffer"
       ],
-      "sha256": "b02f07783f17bfd16b007f6e1b8245d371386e7e7873e2b16380a455b2c3490c",
+      "sha256": "f5e2b4d4d1318ccead5e462be315d53f76d85c48073201a4093893df75101c3a",
       "wgpuCFunctions": [
         "wgpuDevicePoll",
         "wgpuLabel"
@@ -486,7 +485,7 @@
       ]
     },
     "donner/svg/renderer/RendererGeode.h": {
-      "sha256": "103a8137ea1015469948a49e0459a02eee38d5594e85350d7ac45eb4b7131758",
+      "sha256": "2e56ec56c37dba212e807eb098d1b31bd1f427e9f0bd603c4e6f458ade59ed42",
       "wgpuCppTokens": [
         "Texture",
         "TextureFormat",
@@ -511,7 +510,7 @@
         "submit",
         "writeBuffer"
       ],
-      "sha256": "8dc8ec9c1879c0639ead3307cd8af425e375e926235fb39a0e0757eee7b7f82f",
+      "sha256": "5339f9ab04101bf40299e4866f58c3a12a01a5ff22fd4011671f3c4eaa74c0d1",
       "wgpuCFunctions": [
         "wgpuLabel"
       ],
@@ -547,7 +546,7 @@
         "finish",
         "submit"
       ],
-      "sha256": "6b0b736638cfe11cebe5c6e4b5656bf43970b8770e6106a18048282d861d6c2f",
+      "sha256": "ea19e0984c72f2c79f0b53461560d963bad2bfd558a4889d6c1b369c9c9e8669",
       "wgpuCppTokens": [
         "CommandEncoder",
         "Device",

@@ -26,6 +26,10 @@ namespace donner::geode {
 class GeodeDevice;
 }  // namespace donner::geode
 
+namespace donner::svg {
+class RendererGeodeTextureSnapshot;
+}  // namespace donner::svg
+
 namespace donner::editor {
 
 /// Stable identity for deciding whether a metadata-only composited tile can reuse an existing
@@ -264,7 +268,6 @@ public:
 private:
 #ifdef DONNER_EDITOR_WGPU
   using NativeTextureHandle = ImTextureID;
-  struct WgpuUploadedTexture;
 #else
   using NativeTextureHandle = GLuint;
 #endif
@@ -272,9 +275,12 @@ private:
   static ImTextureID ToImTextureId(NativeTextureHandle texture);
 #ifdef DONNER_EDITOR_WGPU
   static ImTextureID ToImTextureId(const svg::RendererTextureSnapshot* textureSnapshot);
-  std::shared_ptr<WgpuUploadedTexture> uploadBitmapToWgpu(
+  /// Upload a CPU bitmap into a WGPU texture owned by the returned snapshot. Reuses
+  /// @p reusableSnapshot's texture when its allocation still fits the payload, so the
+  /// snapshot handed back may be the one passed in.
+  std::shared_ptr<svg::RendererGeodeTextureSnapshot> uploadBitmapToWgpu(
       const svg::RendererBitmap& bitmap,
-      const std::shared_ptr<WgpuUploadedTexture>& reusableTexture = nullptr);
+      const std::shared_ptr<svg::RendererGeodeTextureSnapshot>& reusableSnapshot = nullptr);
 #endif
 #ifndef DONNER_EDITOR_WGPU
   static void UploadBitmap(GLuint texture, const svg::RendererBitmap& bitmap, int* outWidth,
@@ -287,7 +293,9 @@ private:
     NativeTextureHandle texture = 0;
     std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot;
 #ifdef DONNER_EDITOR_WGPU
-    std::shared_ptr<WgpuUploadedTexture> uploadedTexture;
+    /// Non-null when this cache uploaded the payload itself; aliases \ref textureSnapshot
+    /// and is the handle a later re-upload writes into.
+    std::shared_ptr<svg::RendererGeodeTextureSnapshot> uploadedSnapshot;
 #endif
     CompositedTileTextureIdentity identity;
     std::uint64_t uploadedGeneration = 0;
@@ -302,13 +310,13 @@ private:
   struct RetiredSnapshot {
     NativeTextureHandle texture = 0;
     std::shared_ptr<const svg::RendererTextureSnapshot> snapshot;
-    std::shared_ptr<WgpuUploadedTexture> uploadedTexture;
+    /// Backing allocation the retired texture still holds, which can exceed the snapshot's
+    /// content extent.
+    Vector2i allocationDimensions = Vector2i::Zero();
   };
 
   using RetiredSnapshotBatch = std::vector<RetiredSnapshot>;
 
-  static RetiredSnapshot RetireSnapshot(
-      NativeTextureHandle texture, std::shared_ptr<const svg::RendererTextureSnapshot> snapshot);
   static void releaseImGuiTexture(NativeTextureHandle texture);
 
   void retireSnapshots(RetiredSnapshotBatch snapshots);
