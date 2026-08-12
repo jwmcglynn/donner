@@ -914,7 +914,7 @@ test("a zoom storm never uncovers the editor background under the Donner Splash"
       if (persisted > 0) {
         uncovered.push({ burst, phase, backgroundPixels: persisted });
       }
-      const letter = await readSplashLetterBounds(page, renderPaneRegion(editorBounds));
+      const letter = await readSplashLetterBounds(page, splashLetterMeasureRegion(editorBounds));
       if (letter !== null) {
         scaleSamples.push(Math.round(letter.maxX - letter.minX));
       }
