@@ -111,10 +111,9 @@ void Install();
 /// `__donnerMemoryStats`.
 ///
 /// @param triggerBits Bit 0 worker, bit 1 browser input, bit 2 idle timer.
-/// @param uiRebuilt Whether the frame rebuilt the ImGui UI.
 /// @param frameMs Wall time the frame body took, in milliseconds.
 /// @param callbacks Main-loop callbacks observed since the last sample.
-void RecordFrameSample(int triggerBits, bool uiRebuilt, double frameMs, int callbacks);
+void RecordFrameSample(int triggerBits, double frameMs, int callbacks);
 
 /// How the app thread's frame loop is being driven.
 enum class FrameDriver : int {

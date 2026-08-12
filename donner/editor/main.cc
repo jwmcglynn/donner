@@ -40,8 +40,8 @@ void MarkWasmEditorFrameRendered() {}
 
 void EnsureWasmFrameLoopStats() {}
 
-void RecordWasmFrameLoopSample(int triggerBits, int uiRebuilt, double frameMs) {
-  donner::editor::whole_app_worker::RecordFrameSample(triggerBits, uiRebuilt != 0, frameMs,
+void RecordWasmFrameLoopSample(int triggerBits, double frameMs) {
+  donner::editor::whole_app_worker::RecordFrameSample(triggerBits, frameMs,
                                                       g_pendingFrameLoopCallbacks);
   g_pendingFrameLoopCallbacks = 0;
 }
@@ -87,39 +87,35 @@ EM_JS(void, MarkWasmEditorFrameRendered, (), {
       Number(window['__donnerMainLoopRenderedFrames'] || 0) + 1;
 });
 
-// Per-frame main-loop probe. Browser suites read `__donnerFrameLoopStats` to assert how many
-// frames rebuilt the immediate-mode ImGui UI versus presented the worker document surface only,
-// and the perf lane reads `uiFrameMsSamples` to compute the UI-frame cost distribution.
+// Per-frame main-loop probe. Browser suites read `__donnerFrameLoopStats` to assert that frames
+// only run when something asked for one - `callbacks` counts the animation-frame ticks the loop
+// declined - and the perf lane reads `uiFrameMsSamples` to compute the frame cost distribution.
+// Every recorded frame is a full UI frame, so that sample array covers all of them.
 //
 // Every property is quoted: the Wasm package is minified with Closure, which renames unquoted
-// object members and would leave the browser suites reading `undefined`. The sample arrays are
+// object members and would leave the browser suites reading `undefined`. The sample array is
 // capped so a long session cannot grow the page heap without bound.
 EM_JS(void, EnsureWasmFrameLoopStats, (), {
   if (!window['__donnerFrameLoopStats']) {
     window['__donnerFrameLoopStats'] = {
       'callbacks' : 0,
       'renderedFrames' : 0,
-      'uiRebuilds' : 0,
-      'presentationOnlyFrames' : 0,
       'inputTriggeredFrames' : 0,
       'workerTriggeredFrames' : 0,
       'timerTriggeredFrames' : 0,
       'workerOnlyFrames' : 0,
-      'lastFrameUiRebuilt' : true,
       'uiFrameMsSamples' : [],
-      'presentationOnlyMsSamples' : [],
     };
   }
 });
 
-EM_JS(void, RecordWasmFrameLoopSample, (int triggerBits, int uiRebuilt, double frameMs), {
+EM_JS(void, RecordWasmFrameLoopSample, (int triggerBits, double frameMs), {
   const stats = window['__donnerFrameLoopStats'];
   if (!stats) {
     return;
   }
 
   stats['renderedFrames'] = (stats['renderedFrames'] | 0) + 1;
-  stats['lastFrameUiRebuilt'] = Boolean(uiRebuilt);
   if (triggerBits & 1) {
     stats['workerTriggeredFrames'] = (stats['workerTriggeredFrames'] | 0) + 1;
   }
@@ -133,16 +129,8 @@ EM_JS(void, RecordWasmFrameLoopSample, (int triggerBits, int uiRebuilt, double f
     stats['workerOnlyFrames'] = (stats['workerOnlyFrames'] | 0) + 1;
   }
   const kMaxSamples = 4096;
-  if (uiRebuilt) {
-    stats['uiRebuilds'] = (stats['uiRebuilds'] | 0) + 1;
-    if (stats['uiFrameMsSamples'].length < kMaxSamples) {
-      stats['uiFrameMsSamples'].push(frameMs);
-    }
-  } else {
-    stats['presentationOnlyFrames'] = (stats['presentationOnlyFrames'] | 0) + 1;
-    if (stats['presentationOnlyMsSamples'].length < kMaxSamples) {
-      stats['presentationOnlyMsSamples'].push(frameMs);
-    }
+  if (stats['uiFrameMsSamples'].length < kMaxSamples) {
+    stats['uiFrameMsSamples'].push(frameMs);
   }
 });
 
@@ -305,7 +293,7 @@ void RunWasmEditorFrame(void* userdata) {
   // UI pass would also skip the document. The presentation-only frame the browser build used to
   // run existed purely because the document had its own canvas.
   state->renderFrame(*state->window, *state->shell);
-  RecordWasmFrameLoopSample(triggerBits, /*uiRebuilt=*/1, emscripten_get_now() - frameStartMs);
+  RecordWasmFrameLoopSample(triggerBits, emscripten_get_now() - frameStartMs);
   MarkWasmEditorFrameRendered();
   if (const std::optional<float> wakeSeconds = state->shell->nextIdleWakeSeconds()) {
     state->nextIdleWakeAtMs = emscripten_get_now() + std::max(0.0f, *wakeSeconds) * 1000.0;

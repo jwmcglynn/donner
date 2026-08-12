@@ -254,7 +254,6 @@ await page.evaluate(() => {
   const loop = window.__donnerFrameLoopStats;
   if (loop) {
     loop.uiFrameMsSamples.length = 0;
-    loop.presentationOnlyMsSamples.length = 0;
   }
   const suspend = window.__donnerAsyncifySuspendStats;
   if (suspend) {

@@ -356,8 +356,6 @@ py_test(
         "__donnerFrameLoopStats",
         "--expected-js-property",
         "uiFrameMsSamples",
-        "--expected-js-property",
-        "presentationOnlyFrames",
         "--forbidden-js-token",
         "tiny_skia",
         "--forbidden-js-token",

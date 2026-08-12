@@ -43,21 +43,20 @@ declare global {
   }
 }
 
-// Per-frame main-loop accounting published by `donner/editor/main.cc`. `uiRebuilds` counts frames
-// that reran the immediate-mode UI; `presentationOnlyFrames` counts frames that presented a fresh
-// document render without rebuilding the UI.
+// Per-frame accounting for the demand-driven frame loop in `donner/editor/main.cc`, published to
+// the page through the whole-app worker bridge. `renderedFrames` counts the frames the loop chose
+// to run, split by what woke it: `inputTriggeredFrames` for a DOM event, `workerTriggeredFrames`
+// for an editor-side frame request, `timerTriggeredFrames` for a due idle timer. `callbacks`
+// counts every animation-frame tick the loop saw, including the ones it declined, and reaches the
+// page with the next frame the loop runs.
 interface FrameLoopStats {
   callbacks: number;
   renderedFrames: number;
-  uiRebuilds: number;
-  presentationOnlyFrames: number;
   inputTriggeredFrames: number;
   workerTriggeredFrames: number;
   timerTriggeredFrames: number;
   workerOnlyFrames: number;
-  lastFrameUiRebuilt: boolean;
   uiFrameMsSamples: number[];
-  presentationOnlyMsSamples: number[];
 }
 
 // Shared CI runners execute this suite 2-4x slower than local development
@@ -1073,20 +1072,53 @@ async function readFrameLoopStats(page: Page): Promise<FrameLoopStats> {
 
 // Each burst delivers its notches inside one task, so a burst can only produce a small, bounded
 // number of input-driven frames however slowly the engine runs. Two per burst leaves room for
-// ImGui trickling a wheel transition across frames without letting a per-render UI rebuild pass.
+// ImGui trickling a wheel transition across frames without letting a per-render wake pass.
 const kStormBursts = 4;
 const kMaxInputFramesPerBurst = 2;
 
-test("worker-only frames present the document without rebuilding the UI", async ({ page }) => {
+// How long the storm's raster tail is allowed to keep waking the loop before it must park, and how
+// long the parked loop is then held to running nothing at all.
+const kParkTimeoutMs = 8_000;
+const kParkProbeMs = 300;
+const kQuietWindowMs = 1_500;
+const kIdleWindowMs = 2_000;
+
+// Ticks the animation-frame driver must have offered across an idle window for the "the loop
+// declined them" claim to mean anything. Far below any plausible tick rate over the windows above,
+// so this only fails when the driver stopped entirely.
+const kMinDeclinedTicks = 10;
+
+// Wait until the demand-driven loop stops running frames. The render worker keeps waking it for a
+// tail after a gesture, so the park is a bounded wait rather than an instant claim; the quiet
+// window the callers assert afterwards is the actual contract.
+async function waitForFrameLoopToPark(page: Page): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        const first = (await readFrameLoopStats(page)).renderedFrames;
+        await page.waitForTimeout(scaledMs(kParkProbeMs));
+        return (await readFrameLoopStats(page)).renderedFrames - first;
+      },
+      {
+        message: "the frame loop never stopped running frames once nothing was asking for one",
+        timeout: scaledMs(kParkTimeoutMs),
+        intervals: [50],
+      },
+    )
+    .toBe(0);
+}
+
+test("a gesture storm runs frames only while the gesture is live", async ({ page }) => {
   const failures = await openEditor(page);
   const { canvasBounds } = await openBasicShapes(page);
 
   const paneCenter = { x: canvasBounds.width * 0.55, y: canvasBounds.height * 0.5 };
-  // Park the pointer over the canvas and let ImGui's hover and tooltip delays saturate. The gate
-  // refuses to skip while a hover timer could still fire, so an unsettled pointer would make this
-  // test measure the wrong thing.
+  // Park the pointer over the canvas and let ImGui's hover and tooltip delays saturate. Those
+  // delays arm the loop's idle timer, so an unsettled pointer would keep waking frames and make
+  // this test measure the wrong thing.
   await page.mouse.move(canvasBounds.x + paneCenter.x, canvasBounds.y + paneCenter.y);
   await page.waitForTimeout(scaledMs(1_500));
+  await waitForFrameLoopToPark(page);
 
   const before = await readFrameLoopStats(page);
   const beforeDocument = await readDocumentPresentationState(page);
@@ -1098,63 +1130,88 @@ test("worker-only frames present the document without rebuilding the UI", async 
     await pinchZoom(page, paneCenter, burst % 2 === 0 ? 70 : -70, 6);
     await page.waitForTimeout(scaledMs(350));
   }
-  await page.waitForTimeout(scaledMs(500));
 
-  const after = await readFrameLoopStats(page);
-  const afterDocument = await readDocumentPresentationState(page);
-  const presentationOnlyFrames = after.presentationOnlyFrames - before.presentationOnlyFrames;
-  const uiRebuilds = after.uiRebuilds - before.uiRebuilds;
-  const detail = `rebuilds=${uiRebuilds} presentationOnly=${presentationOnlyFrames}` +
-    ` document=${beforeDocument.completedResults}->${afterDocument.completedResults}`;
+  const afterStorm = await readFrameLoopStats(page);
+  const afterStormDocument = await readDocumentPresentationState(page);
+  const inputFrames = afterStorm.inputTriggeredFrames - before.inputTriggeredFrames;
+  const stormFrames = afterStorm.renderedFrames - before.renderedFrames;
+  const detail = `frames=${stormFrames} input=${inputFrames}` +
+    ` document=${beforeDocument.completedResults}->${afterStormDocument.completedResults}`;
 
-  // The document advanced across the storm, and it did so on frames that never reran the UI: this
-  // is the whole contract - the document updates while the immediate-mode UI does not.
+  // The document advanced across the storm, and the frames that carried it were the ones the storm
+  // asked for. Every presented frame is a full UI frame in the single-canvas architecture, so the
+  // wasted-work claim the old two-canvas split expressed as "present without rebuilding the UI" is
+  // now expressed as "do not run a frame nobody asked for".
   expect(
-    afterDocument.completedResults,
+    afterStormDocument.completedResults,
     `the document must re-rasterize across the storm (${detail})`,
   ).toBeGreaterThan(beforeDocument.completedResults);
+  expect(inputFrames, `every burst must wake the loop (${detail})`)
+    .toBeGreaterThanOrEqual(kStormBursts);
   expect(
-    presentationOnlyFrames,
-    `every burst must produce at least one document render that skips the UI rebuild (${detail})`,
-  ).toBeGreaterThanOrEqual(kStormBursts);
-  expect(
-    uiRebuilds,
-    `document renders must not each pay for a full UI rebuild (${detail})`,
+    inputFrames,
+    `a burst of notches must not wake a frame per notch (${detail})`,
   ).toBeLessThanOrEqual(kStormBursts * kMaxInputFramesPerBurst);
-  expect(after.lastFrameUiRebuilt, `the settled storm tail must be presentation-only (${detail})`)
-    .toBe(false);
 
-  // A synthetic hover is a DOM input event, so it must take the next frame back off the skip path.
-  const beforeHover = await readFrameLoopStats(page);
+  // The storm's raster tail drains and the loop parks: no input, no editor request, no timer, so
+  // no frames. A loop that free-runs at vsync instead is exactly the wasted full-UI work this test
+  // has always existed to catch.
+  await waitForFrameLoopToPark(page);
+  const parked = await readFrameLoopStats(page);
+  await page.waitForTimeout(scaledMs(kQuietWindowMs));
+  const afterQuiet = await readFrameLoopStats(page);
+  expect(
+    afterQuiet.renderedFrames - parked.renderedFrames,
+    "the settled storm tail must run no frames at all",
+  ).toBe(0);
+
+  // A synthetic hover is a DOM input event, so it must take the parked loop straight back to work.
   await page.mouse.move(canvasBounds.x + canvasBounds.width - 200, canvasBounds.y + 320);
   await expect
-    .poll(async () => (await readFrameLoopStats(page)).uiRebuilds, {
-      message: "expected a synthetic hover to force a full UI rebuild",
+    .poll(async () => (await readFrameLoopStats(page)).renderedFrames, {
+      message: "expected a synthetic hover to wake the parked frame loop",
       timeout: scaledMs(3_000),
       intervals: [16, 25, 50, 100],
     })
-    .toBeGreaterThan(beforeHover.uiRebuilds);
+    .toBeGreaterThan(afterQuiet.renderedFrames);
 
   expect(failures).toEqual([]);
 });
 
-test("an idle editor runs no frames at all", async ({ page }) => {
+test("an idle editor parks the frame loop and wakes on demand", async ({ page }) => {
   const failures = await openEditor(page);
-  await openBasicShapes(page);
-  await page.waitForTimeout(scaledMs(2_000));
+  const { canvasBounds } = await openBasicShapes(page);
+  await waitForFrameLoopToPark(page);
 
-  const before = await readFrameLoopStats(page);
-  await page.waitForTimeout(scaledMs(2_000));
-  const after = await readFrameLoopStats(page);
-
-  // The browser keeps invoking the animation-frame callback; the editor must decline every one of
-  // them, on the presentation-only path as much as on the full-UI path.
-  expect(after.callbacks, "the browser must keep clocking the main loop")
-    .toBeGreaterThan(before.callbacks);
+  const parked = await readFrameLoopStats(page);
+  await page.waitForTimeout(scaledMs(kIdleWindowMs));
+  const afterIdle = await readFrameLoopStats(page);
   expect(
-    after.renderedFrames - before.renderedFrames,
-    "an idle editor must render no frames",
+    afterIdle.renderedFrames - parked.renderedFrames,
+    "an idle editor must run no frames",
   ).toBe(0);
-  expect(after.presentationOnlyFrames - before.presentationOnlyFrames).toBe(0);
+
+  // Waking the loop is what publishes the ticks it declined while parked, so the wake and the
+  // no-spinning claim are one measurement: the pinch must run frames, and the frame that reports
+  // them must also report an idle window's worth of animation-frame ticks that ran no frame.
+  const zoomPoint = { x: canvasBounds.width * 0.55, y: canvasBounds.height * 0.5 };
+  await pinchZoom(page, zoomPoint, -70, 6);
+  await expect
+    .poll(async () => (await readFrameLoopStats(page)).renderedFrames, {
+      message: "expected a pinch to wake the parked frame loop",
+      timeout: scaledMs(3_000),
+      intervals: [16, 25, 50, 100],
+    })
+    .toBeGreaterThan(afterIdle.renderedFrames);
+
+  const woken = await readFrameLoopStats(page);
+  expect(
+    woken.inputTriggeredFrames,
+    "the wake must be attributed to the DOM event that caused it",
+  ).toBeGreaterThan(afterIdle.inputTriggeredFrames);
+  expect(
+    woken.callbacks - afterIdle.callbacks,
+    "the driver must have kept clocking the loop across the idle window",
+  ).toBeGreaterThanOrEqual(kMinDeclinedTicks);
   expect(failures).toEqual([]);
 });

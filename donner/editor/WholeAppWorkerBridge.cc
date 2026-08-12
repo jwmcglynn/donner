@@ -353,15 +353,11 @@ void Install() {
           window['__donnerFrameLoopStats'] = ({
             'callbacks' : 0,
             'renderedFrames' : 0,
-            'uiRebuilds' : 0,
-            'presentationOnlyFrames' : 0,
             'inputTriggeredFrames' : 0,
             'workerTriggeredFrames' : 0,
             'timerTriggeredFrames' : 0,
             'workerOnlyFrames' : 0,
-            'lastFrameUiRebuilt' : true,
             'uiFrameMsSamples' : [],
-            'presentationOnlyMsSamples' : [],
           });
         }
       },
@@ -1064,16 +1060,15 @@ void PublishMemoryAttribution() {
 
 }  // namespace
 
-void RecordFrameSample(int triggerBits, bool uiRebuilt, double frameMs, int callbacks) {
+void RecordFrameSample(int triggerBits, double frameMs, int callbacks) {
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         const stats = window['__donnerFrameLoopStats'];
         if (!stats) {
           return;
         }
-        stats['callbacks'] = (stats['callbacks'] | 0) + $3;
+        stats['callbacks'] = (stats['callbacks'] | 0) + $2;
         stats['renderedFrames'] = (stats['renderedFrames'] | 0) + 1;
-        stats['lastFrameUiRebuilt'] = Boolean($1);
         if ($0 & 1) {
           stats['workerTriggeredFrames'] = (stats['workerTriggeredFrames'] | 0) + 1;
         }
@@ -1087,25 +1082,16 @@ void RecordFrameSample(int triggerBits, bool uiRebuilt, double frameMs, int call
           stats['workerOnlyFrames'] = (stats['workerOnlyFrames'] | 0) + 1;
         }
         const kMaxSamples = 4096;
-        if ($1) {
-          stats['uiRebuilds'] = (stats['uiRebuilds'] | 0) + 1;
-          if (stats['uiFrameMsSamples'].length < kMaxSamples) {
-            stats['uiFrameMsSamples'].push($2);
-          }
-        } else {
-          stats['presentationOnlyFrames'] = (stats['presentationOnlyFrames'] | 0) + 1;
-          if (stats['presentationOnlyMsSamples'].length < kMaxSamples) {
-            stats['presentationOnlyMsSamples'].push($2);
-          }
+        if (stats['uiFrameMsSamples'].length < kMaxSamples) {
+          stats['uiFrameMsSamples'].push($1);
         }
         window['__donnerMainLoopRenderedFrames'] =
             Number(window['__donnerMainLoopRenderedFrames'] || 0) + 1;
-        window['__donnerHeapBytes'] = $4;
+        window['__donnerHeapBytes'] = $3;
         window['__donnerHeapBytesHighWater'] =
-            Math.max(Number(window['__donnerHeapBytesHighWater'] || 0), $4);
+            Math.max(Number(window['__donnerHeapBytesHighWater'] || 0), $3);
       },
-      triggerBits, uiRebuilt ? 1 : 0, frameMs, callbacks,
-      static_cast<double>(emscripten_get_heap_size()));
+      triggerBits, frameMs, callbacks, static_cast<double>(emscripten_get_heap_size()));
 
   PublishSuspendAndTickStats();
   PublishMemoryAttribution();
