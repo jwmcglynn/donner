@@ -983,6 +983,7 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
     app.document().document().setCanvasSize(pendingCanvasSize_.x, pendingCanvasSize_.y);
     pendingCanvasSizeSince_ = now;
     ++lastFrameCostBreakdown_.documentCanvasCommitCount;
+    ++documentCanvasCommitTotal_;
     lastFrameCostBreakdown_.lastCommittedCanvasSize = pendingCanvasSize_;
   }
 
@@ -1044,6 +1045,9 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
     req.dragPreview = *schedule.dragPreview;
   }
   ++lastFrameCostBreakdown_.renderRequestsPosted;
+  if (requestOverviewInfill) {
+    ++overviewInfillRenderTotal_;
+  }
   renderWorker_.asyncRenderer.requestRender(req);
   pendingPresentationRefresh_ = false;
   return true;

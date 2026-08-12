@@ -160,6 +160,29 @@ public:
   [[nodiscard]] const FrameCostBreakdown& lastFrameCostBreakdown() const {
     return lastFrameCostBreakdown_;
   }
+  /// Document canvas-size commits this coordinator has made since startup.
+  ///
+  /// Cumulative, unlike the per-frame counter in `FrameCostBreakdown`. A commit
+  /// invalidates the render tree, so it forces a document render that no
+  /// interaction asked for; the browser suites need to tell that render apart
+  /// from one an interaction caused before they can assert on render counts,
+  /// and the commit is evaluated inside a rendered frame, so a commit still
+  /// pending when the demand-driven loop parks lands on whatever frame the next
+  /// interaction wakes.
+  [[nodiscard]] std::uint64_t documentCanvasCommitTotal() const {
+    return documentCanvasCommitTotal_;
+  }
+  /// Overview-infill render requests posted since startup.
+  ///
+  /// An overview-infill request carries no selection prewarm and no drag: it
+  /// exists to restore whole-document coverage the presenter is missing, so
+  /// like a canvas-size commit it is a render the editor owes itself rather
+  /// than one an interaction asked for. Whether the previous coverage survives
+  /// an interaction is cache- and timing-dependent, which is why a suite that
+  /// counts an interaction's renders has to be able to name this one.
+  [[nodiscard]] std::uint64_t overviewInfillRenderTotal() const {
+    return overviewInfillRenderTotal_;
+  }
   /// Request one worker render even when document and viewport epochs are already current.
   void requestPresentationRefresh() { pendingPresentationRefresh_ = true; }
   /// Whether a renderer-presentation setting still needs a worker frame.
@@ -422,6 +445,10 @@ private:
   /// Renderer-only state changed and must be represented by the next accepted worker frame.
   bool pendingPresentationRefresh_ = false;
   FrameCostBreakdown lastFrameCostBreakdown_;
+  /// Cumulative canvas-size commits; see `documentCanvasCommitTotal`.
+  std::uint64_t documentCanvasCommitTotal_ = 0;
+  /// Cumulative overview-infill requests; see `overviewInfillRenderTotal`.
+  std::uint64_t overviewInfillRenderTotal_ = 0;
 };
 
 }  // namespace donner::editor

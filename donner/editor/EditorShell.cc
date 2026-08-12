@@ -192,7 +192,8 @@ void PublishOverlayStats(int compositorTileOverlay, int geometryDebugOverlay) {
 
 void PublishViewportStats(double paneX, double paneY, double paneWidth, double paneHeight,
                           double documentX, double documentY, double documentWidth,
-                          double documentHeight, double zoom) {
+                          double documentHeight, double zoom, double documentCanvasCommits,
+                          double overviewInfillRenders) {
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         window['__donnerViewportStats'] = ({
@@ -205,10 +206,12 @@ void PublishViewportStats(double paneX, double paneY, double paneWidth, double p
           'documentWidth' : $6,
           'documentHeight' : $7,
           'zoom' : $8,
+          'documentCanvasCommits' : $9,
+          'overviewInfillRenders' : $10,
         });
       },
       paneX, paneY, paneWidth, paneHeight, documentX, documentY, documentWidth, documentHeight,
-      zoom);
+      zoom, documentCanvasCommits, overviewInfillRenders);
 }
 
 void PublishLayerThumbnailStats(double rowCount, double renderedCount, double reusedCount,
@@ -6570,9 +6573,12 @@ void EditorShell::recordFrameTelemetry(
     const ViewportState& viewport = interactionController_.viewport();
     const Box2d documentRect = viewport.imageScreenRect();
     const Vector2d documentSize = documentRect.size();
-    PublishViewportStats(viewport.paneOrigin.x, viewport.paneOrigin.y, viewport.paneSize.x,
-                         viewport.paneSize.y, documentRect.topLeft.x, documentRect.topLeft.y,
-                         documentSize.x, documentSize.y, viewport.zoom);
+    PublishViewportStats(
+        viewport.paneOrigin.x, viewport.paneOrigin.y, viewport.paneSize.x, viewport.paneSize.y,
+        documentRect.topLeft.x, documentRect.topLeft.y, documentSize.x, documentSize.y,
+        viewport.zoom,
+        static_cast<double>(renderCoordinator_.documentCanvasCommitTotal()),
+        static_cast<double>(renderCoordinator_.overviewInfillRenderTotal()));
     PublishOverlayStats(compositorTileOverlay_ ? 1 : 0, geometryDebugOverlay_ ? 1 : 0);
   }
   AccumulateFrameLoopPhaseCost(
