@@ -64,6 +64,11 @@ DONNER_WASM_BACKEND=geode \
 
 Use the URL printed by the server if port 8000 was occupied.
 
+To reproduce the full CI browser job instead of one suite, run `tools/run-browser-ci.sh`. It builds
+the package, serves a private copy on a free port, verifies the served `editor.wasm` hash, and runs
+every CI lane in CI order with `CI=true`. That script is the single source of truth for the lane
+sequence in `.github/workflows/editor_wasm.yml`; change lanes there, not in the workflow.
+
 Require all of the following before packaging:
 
 - The uninstrumented production canvas has visible pixels. Do not enable diagnostic GPU readback

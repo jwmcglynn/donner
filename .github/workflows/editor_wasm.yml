@@ -16,6 +16,7 @@ on:
       - "donner_icon.svg"
       - "third_party/**"
       - "tools/http/**"
+      - "tools/run-browser-ci.sh"
   schedule:
     - cron: "18 7 * * *"
   workflow_dispatch:
@@ -96,55 +97,16 @@ jobs:
         working-directory: donner/editor/wasm/tests
         run: npm run test:selector
 
+      # The lane sequence this job runs lives in tools/run-browser-ci.sh, so
+      # that one local command reproduces this job exactly. Change the lanes
+      # there, not here; this step only supplies the package directory. The
+      # script serves a private copy of the package, verifies the served
+      # editor.wasm hash, runs every lane (no fail-fast, so one run reports the
+      # whole matrix), and exits nonzero if any lane failed.
       - name: Serve Geode package and run browser suites
         env:
-          DONNER_WASM_BACKEND: geode
-          DONNER_WASM_REQUIRE_WEBGPU: "1"
-        run: |
-          set -euo pipefail
-          pkg_dir="${RUNNER_TEMP}/editor-wasm-package-geode"
-          server_log="${RUNNER_TEMP}/editor-wasm-geode-server.log"
-          PYTHONUNBUFFERED=1 python3 tools/http/simple_webserver.py --no-https --host 127.0.0.1 \
-            --dir "${pkg_dir}" >"${server_log}" 2>&1 &
-          server_pid=$!
-          cleanup() {
-            kill "${server_pid}" 2>/dev/null || true
-            wait "${server_pid}" 2>/dev/null || true
-          }
-          trap cleanup EXIT
-
-          server_url=""
-          for _ in $(seq 1 60); do
-            server_url=$(sed -n 's/^Serving at //p' "${server_log}" | head -n1)
-            if [[ -n "${server_url}" ]]; then break; fi
-            if ! kill -0 "${server_pid}" 2>/dev/null; then
-              cat "${server_log}"
-              wait "${server_pid}" 2>/dev/null || true
-              exit 1
-            fi
-            sleep 1
-          done
-          test -n "${server_url}"
-          export DONNER_WASM_BASE_URL="${server_url}"
-          curl -fsS -o /dev/null "${DONNER_WASM_BASE_URL}/index.html"
-
-          # Chromium runs every spec in the tests directory EXCEPT
-          # composited-invariants.spec.ts, which the default config ignores:
-          # its per-rAF composited sampler starves under SwiftShader, so it
-          # runs on the platform GPU via its own config below.
-          bash donner/editor/wasm/tests/run_tests.sh --headed
-          npm --prefix donner/editor/wasm/tests run test:compatibility -- --project=firefox-geode-resize --headed
-          npm --prefix donner/editor/wasm/tests run test:compatibility -- --project=webkit-geode-carousel --headed
-          # Gecko lane for the composited-output invariant suite. It gets its
-          # own config rather than another compatibility project: that config
-          # pins an explicit spec list and per-project grep filters, while this
-          # suite runs whole and needs a longer per-test timeout.
-          bash donner/editor/wasm/tests/run_tests.sh --headed \
-            --config=playwright.composited-firefox.config.js
-          # Hardware-Chromium lane for the same suite (full Chromium build on
-          # the platform GPU; SwiftShader cannot sustain the sampler).
-          bash donner/editor/wasm/tests/run_tests.sh --headed \
-            --config=playwright.composited-chromium.config.js
+          DONNER_WASM_PACKAGE_DIR: ${{ runner.temp }}/editor-wasm-package-geode
+        run: bash tools/run-browser-ci.sh
 
       - name: Upload Playwright failure artifacts
         if: failure()

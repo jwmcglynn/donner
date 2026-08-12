@@ -70,15 +70,48 @@ test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", 
     workflow,
     /editor-wasm-tiny-skia|wasm_tiny_skia|package-tiny_skia|backend:\s*tiny_skia/,
   );
-  assert.match(
-    normalizedWorkflow,
-    /npm --prefix donner\/editor\/wasm\/tests run test:compatibility -- --project=firefox-geode-resize/,
-  );
-  assert.match(
-    normalizedWorkflow,
-    /npm --prefix donner\/editor\/wasm\/tests run test:compatibility -- --project=webkit-geode-carousel/,
-  );
   assert.doesNotMatch(workflow, /test:ios|playwright\\.ios/);
+
+  // The browser job's lane sequence lives in tools/run-browser-ci.sh so that
+  // one local command reproduces the job; the workflow step only supplies the
+  // package directory and invokes the script. Both halves of that mirror are
+  // checked here: the workflow must still call the script, and the script must
+  // still carry every lane, in CI order.
+  assert.match(normalizedWorkflow, /run: bash tools\/run-browser-ci\.sh/);
+
+  const browserCi = readFileSync(
+    path.join(repositoryRoot, "tools/run-browser-ci.sh"),
+    "utf8",
+  );
+  const normalizedBrowserCi = browserCi
+    .replace(/\\\s*\n\s*/g, " ")
+    .replace(/\s+/g, " ");
+  const laneCommands = [
+    'run_lane "chromium-default" bash donner/editor/wasm/tests/run_tests.sh --headed',
+    'run_lane "firefox-geode-resize" npm --prefix donner/editor/wasm/tests' +
+      " run test:compatibility -- --project=firefox-geode-resize --headed",
+    'run_lane "webkit-geode-carousel" npm --prefix donner/editor/wasm/tests' +
+      " run test:compatibility -- --project=webkit-geode-carousel --headed",
+    'run_lane "firefox-composited-invariants" bash' +
+      " donner/editor/wasm/tests/run_tests.sh --headed" +
+      " --config=playwright.composited-firefox.config.js",
+    'run_lane "composited-chromium" bash' +
+      " donner/editor/wasm/tests/run_tests.sh --headed" +
+      " --config=playwright.composited-chromium.config.js",
+  ];
+  let searchFrom = 0;
+  for (const laneCommand of laneCommands) {
+    const found = normalizedBrowserCi.indexOf(laneCommand, searchFrom);
+    assert.notEqual(
+      found,
+      -1,
+      `tools/run-browser-ci.sh is missing this lane, or runs it out of CI order: ${laneCommand}`,
+    );
+    searchFrom = found + laneCommand.length;
+  }
+  // The suites scale their timing bounds by kCiTimeScale when CI is set, so a
+  // local run measures CI's thresholds only if the script exports it.
+  assert.match(normalizedBrowserCi, /export CI="\$\{CI:-true\}"/);
 });
 
 test("real Safari gate pins the served Wasm and scopes every visibility probe", () => {

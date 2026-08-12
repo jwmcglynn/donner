@@ -255,8 +255,30 @@ jobs:
           external-cache: true
           cache-save: false
 
+      # Transient release-CDN failures (dropped connections, 5xx) have failed
+      # this job outright and cost whole CI round trips. Retry the download as
+      # a whole with backoff, and let curl retry inside each attempt too.
       - name: Download bazel-diff
-        run: curl -fsSL -o "$RUNNER_TEMP/bazel-diff.jar" "https://github.com/Tinder/bazel-diff/releases/download/${BAZEL_DIFF_TAG}/bazel-diff_deploy.jar"
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="https://github.com/Tinder/bazel-diff/releases/download/${BAZEL_DIFF_TAG}/bazel-diff_deploy.jar"
+          out="$RUNNER_TEMP/bazel-diff.jar"
+          for delay in 2 4 8 16 0; do
+            if curl -fsSL --retry 4 --retry-delay 2 --retry-all-errors \
+                --connect-timeout 15 --max-time 300 -o "$out" "$url" \
+                && [[ -s "$out" ]]; then
+              exit 0
+            fi
+            rm -f "$out"
+            if [[ "$delay" -eq 0 ]]; then
+              break
+            fi
+            echo "bazel-diff download failed; retrying in ${delay}s." >&2
+            sleep "$delay"
+          done
+          echo "error: bazel-diff download failed after 5 attempts." >&2
+          exit 1
 
       - id: pr-meta
         name: Extract SHA for hash caching
