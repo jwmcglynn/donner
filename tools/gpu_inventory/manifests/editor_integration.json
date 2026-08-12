@@ -38,7 +38,7 @@
       "usesEditorWgpuDefine": true
     },
     "donner/editor/EditorShell.cc": {
-      "sha256": "01ac0f934f6c36f02c2bacfdb3f99e1d8b3c9de0a1ba17899687f8323e7cefdd",
+      "sha256": "d52b5f55b0b436d7135750d35351d0ce49dd480565315066cd41f053b1ca8c50",
       "usesEditorWgpuDefine": true,
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
