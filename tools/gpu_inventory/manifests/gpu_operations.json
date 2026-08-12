@@ -28,7 +28,7 @@
       ]
     },
     "donner/editor/EditorShell.cc": {
-      "sha256": "09c67e1782bffdf037b4c9df58c60913268dbd34b65f1cf4908b0a81a9fa81a4",
+      "sha256": "492239aa45c280a61ac886961f6782d322d1a279b4bb0211b88883e58b49d6e2",
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
         "wgpuLifetimeTextureCreates"
@@ -194,7 +194,7 @@
         "submit",
         "unmap"
       ],
-      "sha256": "976723593ecc33b349e6d22f7449834976bb76d23ac0bc5211c6f31dcf4ef19d",
+      "sha256": "316afc64cffe87671b4951672e28d6df15d60d22031c09322259d9b69bcc8f46",
       "wgpuCFunctions": [
         "wgpuCreateInstance",
         "wgpuDirectRenderCallback_",
@@ -270,7 +270,7 @@
       ]
     },
     "donner/editor/gui/EditorWindow.h": {
-      "sha256": "9a252db897db31f6982dcaf9869925558d0e6734903f571ae66d2722cce599ba",
+      "sha256": "e14569b08410ce72223883b3d9cc06103e14c64dd7fa671bfb74ba0cba1d3e45",
       "wgpuCFunctions": [
         "wgpuDirectRenderCallback_",
         "wgpuState_",
