@@ -1535,6 +1535,11 @@ void EditorShell::applyPendingDocumentSpaceReplayInputForTesting() {
     }
     if (!renderCoordinator_.asyncRenderer().isBusy()) {
       app_.flushFrame();
+    } else if (previewBeforeRelease.has_value() && previewHadVisualChange) {
+      // Same wake obligation as the live-pointer release: a busy renderer defers
+      // the flush to the idle-frame mutation sweep, which only runs if the loop
+      // keeps ticking.
+      window_.wakeEventLoop();
     }
     rasterizeCurrentSelection();
   }
@@ -3495,6 +3500,13 @@ void EditorShell::updateRenderPaneSelectionDrag(bool spaceHeld,
           renderCoordinator_.rasterizeOverlayForCurrentSelection(
               app_, interactionController_.viewport(), selectTool_.marqueeRect(), std::nullopt,
               std::nullopt, selectionChromeDetailForActiveTool());
+        } else if (previewHadVisualChange) {
+          // The release's flush could not run this frame because the renderer was
+          // mid-render. Keep requesting frames so the idle-frame mutation sweep
+          // picks the release up when the worker completes; without the wake the
+          // demand-driven loop parks with the release un-rendered until the next
+          // input arrives.
+          window_.wakeEventLoop();
         }
       } else if (!renderCoordinator_.asyncRenderer().isBusy()) {
         renderCoordinator_.refreshSelectionBoundsCache(app_);
