@@ -2191,6 +2191,14 @@ void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
     // debug uses a flat full-document pass while enabled; disabling it resets
     // that state and restores normal retained selection promotion.
     renderCoordinator_.asyncRenderer().setGeometryDebugOverlayEnabled(geometryDebugOverlay_);
+    // A composited tile's uploaded texture is keyed on the document frame version, on the
+    // assumption that identical version plus identical dimensions means identical pixels. This
+    // toggle breaks that assumption: it repaints the same document version with a renderer-side
+    // wireframe pass, so the refreshed full-canvas tile arrives with an identity the cache has
+    // already seen and the stale pre-toggle texture keeps being presented. Drop the uploaded
+    // textures the same way a document load does, so the next render's pixels are the ones that
+    // reach the canvas.
+    textures_.resetComposited();
     renderCoordinator_.requestPresentationRefresh();
     requestRenderAtEndOfFrame_ = true;
   }
