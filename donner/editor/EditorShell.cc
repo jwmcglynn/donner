@@ -155,6 +155,42 @@ void PublishInteractionStats(int selectedCount, int pendingClick, int workerBusy
       selectedCount, pendingClick, workerBusy, dragging, frame);
 }
 
+/**
+ * Publish the render pane's screen geometry and the presented document's place
+ * inside it.
+ *
+ * The browser suites need this because the single-canvas presenter left them
+ * with no DOM handle on either one: the canvas is the whole window, so its box
+ * describes the editor, not the pane and not the document. Without this a
+ * pixel probe cannot tell the document's pixels from the surrounding editor
+ * chrome, and a suite that samples the whole canvas measures the chrome - which
+ * is exactly how a pinch-parity check came to compare two carousel layouts.
+ *
+ * Both rectangles are in the same CSS-pixel screen space the page's own pointer
+ * coordinates use, so a test can map a document coordinate onto the viewport
+ * with `documentX + documentWidth * (x / viewBoxWidth)`.
+ */
+void PublishViewportStats(double paneX, double paneY, double paneWidth, double paneHeight,
+                          double documentX, double documentY, double documentWidth,
+                          double documentHeight, double zoom) {
+  MAIN_THREAD_ASYNC_EM_ASM(
+      {
+        window['__donnerViewportStats'] = ({
+          'paneX' : $0,
+          'paneY' : $1,
+          'paneWidth' : $2,
+          'paneHeight' : $3,
+          'documentX' : $4,
+          'documentY' : $5,
+          'documentWidth' : $6,
+          'documentHeight' : $7,
+          'zoom' : $8,
+        });
+      },
+      paneX, paneY, paneWidth, paneHeight, documentX, documentY, documentWidth, documentHeight,
+      zoom);
+}
+
 void PublishLayerThumbnailStats(double rowCount, double renderedCount, double reusedCount,
                                 double deferredCount, double skippedForCanvasInvalidationCount,
                                 double snapshotRebuildCount, double bitmapCount, double bitmapBytes,
@@ -6510,6 +6546,14 @@ void EditorShell::recordFrameTelemetry(
                           renderCoordinator_.asyncRenderer().isBusy() ? 1 : 0,
                           selectTool_.isDragging() ? 1 : 0,
                           static_cast<double>(frameTelemetryFrame_));
+  {
+    const ViewportState& viewport = interactionController_.viewport();
+    const Box2d documentRect = viewport.imageScreenRect();
+    const Vector2d documentSize = documentRect.size();
+    PublishViewportStats(viewport.paneOrigin.x, viewport.paneOrigin.y, viewport.paneSize.x,
+                         viewport.paneSize.y, documentRect.topLeft.x, documentRect.topLeft.y,
+                         documentSize.x, documentSize.y, viewport.zoom);
+  }
   AccumulateFrameLoopPhaseCost(
       mainFrameCost.layoutMs, mainFrameCost.menusDialogsMs, mainFrameCost.sourcePaneMs,
       mainFrameCost.renderPaneMs, mainFrameCost.sidebarsMs, mainFrameCost.splittersMs,
