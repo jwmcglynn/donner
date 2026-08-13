@@ -7,7 +7,10 @@
   <g id="path-modify-cursor-glyph" fill="none" stroke-linecap="round" stroke-linejoin="round">
     <g stroke="#ffffff" stroke-width="3.35">
       <path d="M 6 17.5 L 6 6 L 16 11.8" />
-      <rect x="13" y="15.5" width="3.5" height="3.5" fill="#ffffff" />
+      <!-- The square's white halo is wider than the crook's: at 3.5px the
+           (3.35-2)/2 ring antialiases to almost nothing, and the cursor set's
+           contrast floor requires fully opaque white pixels to survive. -->
+      <rect x="13" y="15.5" width="3.5" height="3.5" fill="#ffffff" stroke-width="4.4" />
     </g>
     <g stroke="#000000" stroke-width="2">
       <path d="M 6 17.5 L 6 6 L 16 11.8" />
