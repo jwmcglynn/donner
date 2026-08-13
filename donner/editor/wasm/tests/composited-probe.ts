@@ -658,12 +658,24 @@ export interface DragRegression {
  * pixels and the pointer displacement is in CSS pixels. Only the SIGN of the
  * projection is used, so the scale factor between them cannot change the
  * verdict; the tolerance is applied to the presented magnitude alone.
+ *
+ * Reversal carve-out: presentation legitimately lags the pointer by a frame or
+ * two, so for a beat after the pointer REVERSES the on-screen content is still
+ * finishing the old direction. That is latency, not an out-of-order frame, and
+ * no pointer-relative observer can tell the two apart inside that window. A
+ * candidate regression is therefore excused only when all three hold: the
+ * pointer's direction over the `reversalHorizonMs` before the interval opposes
+ * its direction inside it (a reversal happened), that prior direction was
+ * itself above the noise floor, and the presented motion points ALONG the
+ * pre-reversal direction (the latency signature). A pop-back during steady
+ * one-direction motion fails the first test and is still reported.
  */
 export function dragRegressions(
   samples: readonly CompositedSample[],
   pointerTrace: ReadonlyArray<readonly [number, number, number]>,
   toleranceReadbackPx = 1.0,
   minPointerDeltaCssPx = 2.0,
+  reversalHorizonMs = 150,
 ): DragRegression[] {
   const pointerAt = (t: number): { x: number; y: number } | null => {
     let best: readonly [number, number, number] | null = null;
@@ -694,13 +706,21 @@ export function dragRegressions(
           const presentedDy = sample.coloredCentroidY - previous.coloredCentroidY;
           const projection = (presentedDx * pointerDx + presentedDy * pointerDy) / pointerLength;
           if (projection < -toleranceReadbackPx) {
-            regressions.push({
-              sampleIndex: index,
-              presentedDx,
-              presentedDy,
-              pointerDx,
-              pointerDy,
-            });
+            const horizonStart = pointerAt(previous.t - reversalHorizonMs);
+            const beforeDx = horizonStart === null ? 0 : before.x - horizonStart.x;
+            const beforeDy = horizonStart === null ? 0 : before.y - horizonStart.y;
+            const excusedByReversal = Math.hypot(beforeDx, beforeDy) >= minPointerDeltaCssPx
+              && beforeDx * pointerDx + beforeDy * pointerDy < 0
+              && presentedDx * beforeDx + presentedDy * beforeDy > 0;
+            if (!excusedByReversal) {
+              regressions.push({
+                sampleIndex: index,
+                presentedDx,
+                presentedDy,
+                pointerDx,
+                pointerDy,
+              });
+            }
           }
         }
       }
