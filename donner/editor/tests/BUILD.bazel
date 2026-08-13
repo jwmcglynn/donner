@@ -63,9 +63,11 @@ donner_cc_test(
     deps = [
         "//donner/base",
         "//donner/base:base_test_utils",
+        "//donner/editor:editor_symbol_glyphs",
         "//third_party/fira-code",
         "//third_party/roboto",
         "@com_google_gtest//:gtest_main",
+        "@stb//:truetype",
     ],
 )
 

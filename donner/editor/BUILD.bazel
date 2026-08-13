@@ -190,6 +190,14 @@ donner_cc_library(
     deps = [],
 )
 
+# Non-ASCII glyphs the editor chrome draws, shared by the drawing code, the
+# font-atlas ranges, and the embedded-font coverage test.
+donner_cc_library(
+    name = "editor_symbol_glyphs",
+    hdrs = ["EditorSymbolGlyphs.h"],
+    deps = [],
+)
+
 donner_cc_library(
     name = "focus_view",
     srcs = ["FocusView.cc"],
@@ -968,6 +976,7 @@ donner_cc_library(
         ":editor_input_bridge",
         ":editor_sample_catalog",
         ":editor_shell_layout",
+        ":editor_symbol_glyphs",
         ":editor_theme",
         ":embedded_svg_icon",
         ":focus_view",
@@ -1436,6 +1445,7 @@ donner_cc_library(
     srcs = ["TextEditor.cc"],
     hdrs = ["TextEditor.h"],
     deps = [
+        ":editor_symbol_glyphs",
         ":flash_decorations",
         ":focus_view",
         ":frame_cost_breakdown",

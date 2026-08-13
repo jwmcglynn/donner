@@ -41,6 +41,7 @@
 #include "donner/editor/EditorSampleCatalog.h"
 #include "donner/editor/EditorShellInternal.h"
 #include "donner/editor/EditorShellPresentation.h"
+#include "donner/editor/EditorSymbolGlyphs.h"
 #include "donner/editor/EditorTheme.h"
 #include "donner/editor/EmbeddedSvgIcon.h"
 #include "donner/editor/FillStrokeWidget.h"
@@ -363,17 +364,28 @@ constexpr float kCanvasZoomPaddingY = 4.0f;
 constexpr float kCanvasZoomInset = 12.0f;
 constexpr std::string_view kRenderPaneContextMenuName = "Render Context Menu";
 
-constexpr ImWchar kEditorGlyphRanges[] = {
-    0x0020, 0x00ff,  // Basic Latin + Latin Supplement.
-    0x2217, 0x2217,  // Asterisk operator.
-    0x2726, 0x2726,  // Black four pointed star.
-    0x2731, 0x2731,  // Heavy asterisk.
+// Non-ASCII chrome glyphs, from `kEditorSymbolCodepoints` so the atlas can
+// never drift from what the chrome draws. ImGui wants ascending ranges
+// terminated by a zero.
+constexpr ImWchar kEditorSymbolGlyphRanges[] = {
+    static_cast<ImWchar>(kEditorSymbolCodepoints[0]),
+    static_cast<ImWchar>(kEditorSymbolCodepoints[0]),
+    static_cast<ImWchar>(kEditorSymbolCodepoints[1]),
+    static_cast<ImWchar>(kEditorSymbolCodepoints[1]),
     0,
 };
-constexpr ImWchar kEditorSymbolGlyphRanges[] = {
-    0x2217, 0x2217,  // Asterisk operator.
-    0x2726, 0x2726,  // Black four pointed star.
-    0x2731, 0x2731,  // Heavy asterisk.
+static_assert(kEditorSymbolCodepoints.size() == 2u,
+              "kEditorSymbolGlyphRanges enumerates the symbol codepoints by hand");
+static_assert(kEditorSymbolCodepoints[0] < kEditorSymbolCodepoints[1],
+              "ImGui glyph ranges must be ascending");
+
+constexpr ImWchar kEditorGlyphRanges[] = {
+    0x0020,
+    0x00ff,  // Basic Latin + Latin Supplement.
+    kEditorSymbolGlyphRanges[0],
+    kEditorSymbolGlyphRanges[1],
+    kEditorSymbolGlyphRanges[2],
+    kEditorSymbolGlyphRanges[3],
     0,
 };
 
