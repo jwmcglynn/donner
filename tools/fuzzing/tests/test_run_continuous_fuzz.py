@@ -59,7 +59,7 @@ class TestParseBazelQueryOutput:
     def test_skips_non_bin_targets(self):
         output = textwrap.dedent("""\
             //donner/base/parser:number_parser_fuzzer_bin
-            //donner/base/parser:number_parser_fuzzer_10_seconds
+            //donner/base/parser:number_parser_fuzzer_soak
             //donner/base/parser:number_parser_fuzzer
         """)
         result = parse_bazel_query_output(output)

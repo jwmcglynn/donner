@@ -4,6 +4,15 @@ name: Fuzz
 # so it doesn't gate every main push (it adds 5–7 min and uses a separate
 # toolchain that fights with the main build for cache slots).
 #
+# This lane owns exploratory mutation. `--config=fuzz-soak` raises the
+# `{fuzzer}_soak` targets' libFuzzer budget ABOVE the old fixed 10 s, whereas
+# the PR gate now runs them briefly. That is where the mutation belongs: this
+# lane builds with `--config=asan-fuzzer`, so an input it discovers reports a
+# diagnosable sanitizer failure, while the PR sweep builds without sanitizers
+# and its mutation time was searching with the detectors switched off. Corpus
+# REGRESSION coverage did not move - the `{fuzzer}` targets replay every
+# checked-in corpus input with no time budget and still run on every PR.
+#
 # - Schedule: 06:00 UTC daily — catches new corpus regressions within 24h.
 # - workflow_dispatch — manual trigger for ad-hoc runs.
 # - pull_request paths — re-runs on PRs that touch fuzz-relevant code.
@@ -66,6 +75,7 @@ jobs:
         run: |
           bazelisk test \
             --config=asan-fuzzer \
+            --config=fuzz-soak \
             --test_output=errors \
             --test_tag_filters=fuzz_target \
             --build_tag_filters=fuzz_target \
@@ -93,6 +103,7 @@ jobs:
         run: |
           bazelisk test \
             --config=asan-fuzzer \
+            --config=fuzz-soak \
             --test_output=errors \
             --test_tag_filters=fuzz_target \
             --build_tag_filters=fuzz_target \

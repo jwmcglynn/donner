@@ -385,6 +385,11 @@ build:tsan --copt=-fno-omit-frame-pointer
 build:tsan --strip=never
 build:tsan --test_env=TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1
 
+# Long-budget fuzzing. Raises the `{fuzzer}_soak` targets' libFuzzer time
+# budget above the short PR-gate default. Used by the nightly Fuzz workflow,
+# which pairs it with --config=asan-fuzzer so a discovered input is diagnosable.
+common:fuzz-soak --//build_defs:fuzz_soak=true
+
 # Fuzzing builds
 build:asan-fuzzer --config=asan
 build:asan-fuzzer --copt=-fsanitize=fuzzer-no-link

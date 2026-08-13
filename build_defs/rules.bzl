@@ -764,6 +764,14 @@ def donner_cc_fuzzer(name, corpus, deps = [], per_input_timeout_seconds = 2, **k
       deps: List of dependencies.
       per_input_timeout_seconds: Maximum time for one generated input in the timed fuzz test.
       **kwargs: Additional arguments, matching the implementation of cc_test.
+
+    Generated targets:
+      {name}        - corpus regression test. Replays every checked-in corpus
+                      input, no time budget, always on the PR gate. This is the
+                      target that catches a regression.
+      {name}_bin    - the raw fuzzer binary, for interactive fuzzing.
+      {name}_soak   - exploratory mutation. Time budget is controlled by
+                      `--//build_defs:fuzz_soak` (see build_defs/BUILD.bazel).
     """
     if per_input_timeout_seconds <= 0:
         fail("per_input_timeout_seconds must be positive")
@@ -789,13 +797,26 @@ def donner_cc_fuzzer(name, corpus, deps = [], per_input_timeout_seconds = 2, **k
         **kwargs
     )
 
+    # The time budget is a flag, not a literal. The corpus replay is what makes
+    # this a regression test, and libFuzzer always runs the whole seed corpus
+    # before it mutates anything, so the budget below only sizes the exploratory
+    # tail. On the PR gate that tail was 25% of the entire test suite's CPU
+    # (576 of 2297 CPU-seconds across 88 targets) spent mutating in a build with
+    # no sanitizers. The Fuzz workflow flips `--//build_defs:fuzz_soak=true` and
+    # gets a longer budget than the old fixed 10 s, under `--config=asan-fuzzer`
+    # where a discovered input is actually diagnosable. Net exploration goes up;
+    # it just stops happening on every unrelated pull request.
+    fuzz_time_args = select({
+        "//build_defs:fuzz_soak_enabled": ["-max_total_time=30"],
+        "//conditions:default": ["-max_total_time=2"],
+    })
+
     donner_cc_test(
-        name = name + "_10_seconds",
+        name = name + "_soak",
         add_llvm_macos_runtime_rpaths = False,
         additional_linker_inputs = fuzzer_additional_linker_inputs,
         linkopts = fuzzer_runtime_linkopts,
-        args = [
-            "-max_total_time=10",
+        args = fuzz_time_args + [
             "-timeout=%d" % per_input_timeout_seconds,
         ],
         linkstatic = 1,

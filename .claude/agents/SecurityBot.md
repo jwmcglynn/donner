@@ -104,7 +104,7 @@ deep-fuzz loop, use the `donner-fuzzing` skill; `docs/fuzzing.md` is the written
 Key facts you rely on:
 
 - `--config=asan-fuzzer` builds fuzzers everywhere; on macOS it links the vendored LLVM `libclang_rt.fuzzer_osx.a` (Apple Clang doesn't ship it) — the compiler stays Xcode clang.
-- `donner_cc_fuzzer` (`build_defs/rules.bzl`) generates a corpus regression test + a `_10_seconds` smoke test tagged `fuzz_target`; corpus dirs are checked into the tree and validated by normal `bazel test //...` runs.
+- `donner_cc_fuzzer` (`build_defs/rules.bzl`) generates a corpus regression test + a `_soak` mutation test tagged `fuzz_target`; corpus dirs are checked into the tree and validated by normal `bazel test //...` runs.
 - CI split: fuzzers do NOT gate every main push. `.github/workflows/fuzz.yml` runs the corpus regression suite on a nightly cron (06:00 UTC), on manual dispatch, and on PRs touching fuzzer files or corpora.
 - Every crash becomes a corpus entry before the fix is merged. No exceptions.
 - Timeouts in fuzzers are real bugs — they represent DoS vectors. Never raise a timeout to "make the fuzzer happy". (Precedent: fb494f63 "Fix path ops fuzzer timeout (#678)" — the parser got fixed.)
