@@ -742,12 +742,12 @@ test.describe("dragRegressions classifier (pure)", () => {
     expect(dragRegressions(samples, trace)).toEqual([]);
   });
 
-  test("a slow pipeline's reversal lag is excused only under a widened horizon", () => {
+  test("a slow pipeline's lag at a reversal is excused only within the latency window", () => {
     // The CI shape: presentation lags the pointer by ~300 ms on a loaded
     // runner, so after the t=600 reversal the content keeps moving the old
-    // way for several samples. A 150 ms horizon cannot see the turn and
-    // reports latency as a violation; the CI-scaled horizon the specs pass
-    // covers it. Both classifications are pinned.
+    // way for several samples. A 150 ms latency window cannot reach back to
+    // motion that explains it and reports a violation; the CI-scaled window
+    // the specs pass covers it. Both classifications are pinned.
     const trace = reversingTrace(1200, 600);
     const samples: CompositedSample[] = [];
     for (let i = 0; i < 36; ++i) {
@@ -760,24 +760,43 @@ test.describe("dragRegressions classifier (pure)", () => {
     expect(dragRegressions(samples, trace, 1.0, 2.0, 150).length).toBeGreaterThan(0);
   });
 
-  test("the reversal excuse expires with the horizon: a later stale frame is still reported", () => {
-    // Same reversal at t=300, but the stale frame arrives at t=480, long after
-    // the pointer's turn has left the excuse's 150 ms horizon. By then the
-    // pointer direction before and inside the interval agree (both leftward),
-    // so a presented step back toward an already-left position must be
-    // reported even though a reversal exists earlier in the drag.
-    const trace = reversingTrace(600, 300);
+  test("the apex-cancellation shape from CI is excused: slow pointer at a turn, content finishing the old way", () => {
+    // Reconstruction of the observed CI false positives: the sample interval
+    // sits well past the t=600 apex (pointer now firmly leftward), while the
+    // presented content still moves right with a ~350 ms lag. A formulation
+    // that reads one net-displacement window anchored before the interval
+    // straddles the apex, cancels below the noise floor, and reports latency
+    // as a violation. The lag sweep finds the pre-apex rightward window that
+    // explains the motion.
+    const trace = reversingTrace(1200, 600);
     const samples: CompositedSample[] = [];
-    for (let i = 0; i < 18; ++i) {
+    for (let i = 0; i < 30; ++i) {
+      const t = 350 + i * 30;
+      const laggedT = t - 350;
+      const lagged = laggedT < 600 ? 100 + (laggedT / 10) * 3 : 100 + 180 - ((laggedT - 600) / 10) * 3;
+      samples.push(sampleAt(t, lagged));
+    }
+    expect(dragRegressions(samples, trace, 1.0, 2.0, 600)).toEqual([]);
+  });
+
+  test("a stale frame that no latency in the window explains is still reported", () => {
+    // Reversal at t=300, pop-back at t=930: every lag hypothesis up to 600 ms
+    // lands in the post-reversal leftward phase, so a presented step back
+    // toward an already-left position matches no plausible latency and must
+    // be reported even though a reversal exists earlier in the drag.
+    const trace = reversingTrace(1200, 300);
+    const samples: CompositedSample[] = [];
+    for (let i = 0; i < 30; ++i) {
       const t = 60 + i * 30;
       const laggedT = t - 60;
       const lagged = laggedT < 300 ? 100 + (laggedT / 10) * 3 : 100 + 90 - ((laggedT - 300) / 10) * 3;
-      samples.push(sampleAt(t, lagged));
+      samples.push(sampleAt(t, Math.max(lagged, 40)));
     }
-    // Sample 14 (t=480) re-presents a position 20 px to the RIGHT of the
-    // lagged trajectory: a position the leftward drag already left.
-    samples[14] = sampleAt(samples[14].t, samples[14].coloredCentroidX + 20);
-    const violations = dragRegressions(samples, trace);
-    expect(violations.map((v) => v.sampleIndex)).toEqual([14]);
+    // Sample 29 (t=930) re-presents a position 20 px to the RIGHT of the
+    // lagged trajectory: a position the leftward drag left 200+ ms ago under
+    // every lag hypothesis.
+    samples[29] = sampleAt(samples[29].t, samples[29].coloredCentroidX + 20);
+    const violations = dragRegressions(samples, trace, 1.0, 2.0, 600);
+    expect(violations.map((v) => v.sampleIndex)).toEqual([29]);
   });
 });
