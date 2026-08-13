@@ -50,49 +50,12 @@
       "usesEditorWgpuDefine": true
     },
     "donner/editor/EditorShellPresentation.cc": {
-      "operations": [
-        "beginRenderPass",
-        "createBindGroup",
-        "createBuffer",
-        "createCommandEncoder",
-        "createView",
-        "draw",
-        "finish",
-        "setBindGroup",
-        "setPipeline",
-        "setScissorRect",
-        "submit",
-        "writeBuffer"
-      ],
-      "sha256": "8594709d03ddaa48801f87010e234476d4af0293e93871832f139e1a5ecff887",
-      "usesEditorWgpuDefine": true,
-      "wgpuCFunctions": [
-        "wgpuLabel"
-      ],
-      "wgpuCppTokens": [
-        "BindGroupDescriptor",
-        "BindGroupEntry",
-        "BufferDescriptor",
-        "BufferUsage",
-        "CommandBuffer",
-        "CommandEncoder",
-        "CommandEncoderDescriptor",
-        "Device",
-        "LoadOp",
-        "RenderPassColorAttachment",
-        "RenderPassDescriptor",
-        "RenderPassEncoder",
-        "StoreOp",
-        "TextureView"
-      ]
+      "sha256": "ba9053728c249b1174ec034a4a4166573bdb29e5b745c7c163872fa6cc870a04",
+      "usesEditorWgpuDefine": true
     },
     "donner/editor/EditorShellPresentation.h": {
-      "sha256": "a83a7359dc85093231891ef5f59779f07e235d1489feec1267f0ac5684805b13",
-      "usesEditorWgpuDefine": true,
-      "wgpuCppTokens": [
-        "BindGroup",
-        "Buffer"
-      ]
+      "sha256": "ee3dc46219a081bf487154beb8339e537f37b71c2a40b904552ae4efac5cab47",
+      "usesEditorWgpuDefine": true
     },
     "donner/editor/FrameMissTelemetry.cc": {
       "sha256": "147d4c33e2fafffcdf436296fcf0125eea4dbd73ddf5a5c86c496a7c2dc272d4",

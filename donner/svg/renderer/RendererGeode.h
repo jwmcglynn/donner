@@ -286,8 +286,6 @@ public:
   void beginFrame(const RenderViewport& viewport) override;
   void endFrame() override;
 
-  bool drawCheckerboardUnderlay(const CheckerboardUnderlayParams& params) override;
-
   void setTransform(const Transform2d& transform) override;
   void pushTransform(const Transform2d& transform) override;
   void popTransform() override;

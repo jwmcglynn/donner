@@ -36,7 +36,6 @@
 #include "donner/svg/renderer/geode/GeoEncoder.h"
 #include "donner/svg/renderer/geode/GeodeBufferPool.h"
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
-#include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
@@ -1060,14 +1059,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink {
   wgpu::Texture target;  // Borrowed active render target.
   geode::ScopedWgpuHandle<wgpu::Texture> ownedTarget;
   std::optional<RendererGeodeTextureSnapshot> borrowedTargetSnapshot;
-
-  // Per-renderer resources for `drawCheckerboardUnderlay`. The pipeline and its
-  // bind group layout are shared device-wide (issue #575); only the uniform
-  // buffer and bind group are per-renderer, and they are built on the first
-  // underlay draw so renderers that never present through an external surface
-  // never allocate them.
-  geode::ScopedWgpuHandle<wgpu::Buffer> checkerboardUniformBuffer;
-  geode::ScopedWgpuHandle<wgpu::BindGroup> checkerboardBindGroup;
 
   // Single CommandEncoder owned by RendererGeode for the whole frame
   // (design doc 0030 Milestone 3). All `GeoEncoder` instances created
@@ -4644,112 +4635,6 @@ const RendererTextureSnapshot* RendererGeode::borrowTextureSnapshot() {
       impl_->ownedTarget.get(), Vector2i(impl_->pixelWidth, impl_->pixelHeight),
       impl_->textureFormat));
   return &*impl_->borrowedTargetSnapshot;
-}
-
-bool RendererGeode::drawCheckerboardUnderlay(const CheckerboardUnderlayParams& params) {
-  Impl& impl = *impl_;
-  if (!impl.device || !impl.target || impl.pixelWidth <= 0 || impl.pixelHeight <= 0) {
-    return false;
-  }
-  if (!(params.devicePixelRatio > 0.0) || !(params.cellSizeLogicalPx > 0.0)) {
-    return false;
-  }
-
-  const geode::GeodeCheckerboardPipeline& checkerboard =
-      impl.device->checkerboardUnderlayPipeline();
-  if (!checkerboard.valid()) {
-    return false;
-  }
-
-  if (!impl.checkerboardBindGroup) {
-    wgpu::BufferDescriptor bufferDesc = {};
-    bufferDesc.label = wgpuLabel("RendererGeodeCheckerboardUniforms");
-    bufferDesc.size = sizeof(geode::GeodeCheckerboardPipeline::Uniforms);
-    bufferDesc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
-    impl.checkerboardUniformBuffer.reset(impl.device->device().createBuffer(bufferDesc));
-    impl.device->countBuffer();
-    if (!impl.checkerboardUniformBuffer) {
-      return false;
-    }
-
-    wgpu::BindGroupEntry bindGroupEntry = {};
-    bindGroupEntry.binding = 0;
-    bindGroupEntry.buffer = impl.checkerboardUniformBuffer.get();
-    bindGroupEntry.offset = 0;
-    bindGroupEntry.size = sizeof(geode::GeodeCheckerboardPipeline::Uniforms);
-
-    wgpu::BindGroupDescriptor bindGroupDesc = {};
-    bindGroupDesc.label = wgpuLabel("RendererGeodeCheckerboardBG");
-    bindGroupDesc.layout = checkerboard.bindGroupLayout();
-    bindGroupDesc.entryCount = 1;
-    bindGroupDesc.entries = &bindGroupEntry;
-    impl.checkerboardBindGroup.reset(impl.device->device().createBindGroup(bindGroupDesc));
-    impl.device->countBindGroup();
-    if (!impl.checkerboardBindGroup) {
-      return false;
-    }
-  }
-
-  const geode::GeodeCheckerboardPipeline::Uniforms uniforms{
-      .targetSize = {static_cast<float>(impl.pixelWidth), static_cast<float>(impl.pixelHeight)},
-      .devicePixelRatio = static_cast<float>(params.devicePixelRatio),
-      .checkerSize = static_cast<float>(params.cellSizeLogicalPx),
-      .darkColor = {params.darkColor[0], params.darkColor[1], params.darkColor[2],
-                    params.darkColor[3]},
-      .lightColor = {params.lightColor[0], params.lightColor[1], params.lightColor[2],
-                     params.lightColor[3]},
-      .originOffsetPx = {static_cast<float>(params.originOffsetPx.x),
-                         static_cast<float>(params.originOffsetPx.y)},
-      .padding = {0.0f, 0.0f},
-  };
-  impl.device->queue().writeBuffer(impl.checkerboardUniformBuffer.get(), 0, &uniforms,
-                                   sizeof(uniforms));
-  impl.device->countBufferWrite(sizeof(uniforms));
-
-  geode::ScopedWgpuHandle<wgpu::TextureView> view(impl.target.createView());
-  if (!view) {
-    return false;
-  }
-
-  wgpu::CommandEncoderDescriptor encoderDesc = {};
-  encoderDesc.label = wgpuLabel("RendererGeodeCheckerboardEncoder");
-  geode::ScopedWgpuHandle<wgpu::CommandEncoder> encoder(
-      impl.device->device().createCommandEncoder(encoderDesc));
-  if (!encoder) {
-    return false;
-  }
-
-  wgpu::RenderPassColorAttachment color = {};
-  color.view = view.get();
-  color.loadOp = wgpu::LoadOp::Load;
-  color.storeOp = wgpu::StoreOp::Store;
-  color.clearValue = {0.0, 0.0, 0.0, 0.0};
-  color.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
-
-  wgpu::RenderPassDescriptor passDesc = {};
-  passDesc.label = wgpuLabel("RendererGeodeCheckerboardPass");
-  passDesc.colorAttachmentCount = 1;
-  passDesc.colorAttachments = &color;
-  geode::ScopedWgpuHandle<wgpu::RenderPassEncoder> pass(encoder.get().beginRenderPass(passDesc));
-  if (!pass) {
-    return false;
-  }
-
-  pass.get().setPipeline(checkerboard.pipeline());
-  pass.get().setBindGroup(0, impl.checkerboardBindGroup.get(), 0, nullptr);
-  pass.get().draw(3, 1, 0, 0);
-  impl.device->countPipelineSwitch();
-  impl.device->countDraw();
-  pass.get().end();
-  pass.reset();
-
-  geode::ScopedWgpuHandle<wgpu::CommandBuffer> commands(encoder.get().finish());
-  if (!commands) {
-    return false;
-  }
-  impl.device->queue().submit(1, &commands.get());
-  impl.device->countSubmit();
-  return true;
 }
 
 RendererBitmap RendererGeode::takeSnapshot() const {

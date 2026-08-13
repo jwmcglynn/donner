@@ -28,6 +28,7 @@
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/RendererUtils.h"
 #include "donner/svg/renderer/StrokeParams.h"
+#include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/resources/ImageResource.h"
@@ -259,6 +260,22 @@ protected:
     renderer.beginFrame(viewport);
   }
 
+  /// Take the finished frame's target texture, so the checkerboard pass can draw onto content the
+  /// renderer already composed and the result can be read back.
+  std::shared_ptr<const RendererTextureSnapshot> takeFinishedFrame(RendererGeode& renderer) {
+    return renderer.takeTextureSnapshot();
+  }
+
+  /// Draw one checkerboard pass over a finished frame through the shared Geode helper.
+  bool drawCheckerboard(const RendererTextureSnapshot& frame,
+                        const geode::CheckerboardUnderlayParams& params,
+                        geode::GeodeCheckerboardPipeline::BlendMode blendMode =
+                            geode::GeodeCheckerboardPipeline::BlendMode::DestinationOver) {
+    const auto& geodeFrame = static_cast<const RendererGeodeTextureSnapshot&>(frame);
+    return checkerboardPass_.draw(*sharedDevice(), geodeFrame.texture(), geodeFrame.dimensions(),
+                                  params, blendMode);
+  }
+
   RendererBitmap renderFlatSourceThroughFilter(const components::FilterGraph& graph,
                                                const Transform2d& deviceFromFilter) {
     RendererGeode renderer = createRenderer();
@@ -287,6 +304,9 @@ protected:
     driver.drawEntityRange(document.registry(), entity, entity, viewport, Transform2d());
     return renderer.takeSnapshot();
   }
+
+  /// One pass per fixture, matching the per-consumer ownership the helper documents.
+  geode::GeodeCheckerboardPass checkerboardPass_;
 };
 
 // ----------------------------------------------------------------------------
@@ -365,33 +385,34 @@ TEST_F(RendererGeodeTest, EmptyFrameAfterOpaqueFrameClearsReusedTarget) {
 }
 
 // ---------------------------------------------------------------------------
-// Transparency-checkerboard underlay (`drawCheckerboardUnderlay`)
+// Transparency checkerboard (`geode::GeodeCheckerboardPass`)
 //
-// The browser worker surface presents one already-composed full-canvas texture,
-// so unlike the desktop framebuffer path it cannot draw the checkerboard first.
-// These pin the destination-over pass that puts it underneath instead: without
-// it, every see-through document pixel reaches the browser compositor as alpha
-// zero and the page's solid editor background shows where the desktop editor
-// shows checkerboard.
+// A GPU presentation surface that receives one already-composed texture cannot
+// draw the checkerboard *before* the document, so its checkerboard has to go in
+// destination-over after the compose instead. These pin that pass: without it,
+// every see-through document pixel reaches the presenting compositor as alpha
+// zero and whatever sits behind the surface shows where checkerboard belongs.
 // ---------------------------------------------------------------------------
 
 /// Light-cell channel value, as an 8-bit sRGB level.
 constexpr int kCheckerLight =
-    static_cast<int>(kTransparencyCheckerboardLightColor[0] * 255.0f + 0.5f);
+    static_cast<int>(geode::kTransparencyCheckerboardLightColor[0] * 255.0f + 0.5f);
 /// Dark-cell channel value, as an 8-bit sRGB level.
 constexpr int kCheckerDark =
-    static_cast<int>(kTransparencyCheckerboardDarkColor[0] * 255.0f + 0.5f);
+    static_cast<int>(geode::kTransparencyCheckerboardDarkColor[0] * 255.0f + 0.5f);
 /// Cell size in logical pixels, as an integer pixel step for sampling.
-constexpr int kCheckerCell = static_cast<int>(kTransparencyCheckerboardCellLogicalPx);
+constexpr int kCheckerCell = static_cast<int>(geode::kTransparencyCheckerboardCellLogicalPx);
 
-TEST_F(RendererGeodeTest, CheckerboardUnderlayFillsTransparentPixelsWithAlternatingCells) {
+TEST_F(RendererGeodeTest, CheckerboardFillsTransparentPixelsWithAlternatingCells) {
   RendererGeode renderer = createRenderer();
   beginFrame(renderer);
   renderer.endFrame();
 
-  ASSERT_TRUE(renderer.drawCheckerboardUnderlay(CheckerboardUnderlayParams{}));
+  const std::shared_ptr<const RendererTextureSnapshot> frame = takeFinishedFrame(renderer);
+  ASSERT_NE(frame, nullptr);
+  ASSERT_TRUE(drawCheckerboard(*frame, geode::CheckerboardUnderlayParams{}));
 
-  const RendererBitmap snapshot = renderer.takeSnapshot();
+  const RendererBitmap snapshot = frame->takeSnapshot();
   ASSERT_FALSE(snapshot.empty());
   // Two horizontally adjacent cells: (0,0) is light, (1,0) is dark.
   EXPECT_THAT(pixelAt(snapshot, kCheckerCell / 2, kCheckerCell / 2),
@@ -406,16 +427,18 @@ TEST_F(RendererGeodeTest, CheckerboardUnderlayFillsTransparentPixelsWithAlternat
       << "The vertically adjacent cell must read as the dark checker color";
 }
 
-TEST_F(RendererGeodeTest, CheckerboardUnderlayLeavesOpaqueContentUntouched) {
+TEST_F(RendererGeodeTest, CheckerboardLeavesOpaqueContentUntouched) {
   RendererGeode renderer = createRenderer();
   beginFrame(renderer);
   renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
   renderer.drawRect(Box2d({32, 32}, {kViewportSize, kViewportSize}), StrokeParams{});
   renderer.endFrame();
 
-  ASSERT_TRUE(renderer.drawCheckerboardUnderlay(CheckerboardUnderlayParams{}));
+  const std::shared_ptr<const RendererTextureSnapshot> frame = takeFinishedFrame(renderer);
+  ASSERT_NE(frame, nullptr);
+  ASSERT_TRUE(drawCheckerboard(*frame, geode::CheckerboardUnderlayParams{}));
 
-  const RendererBitmap snapshot = renderer.takeSnapshot();
+  const RendererBitmap snapshot = frame->takeSnapshot();
   ASSERT_FALSE(snapshot.empty());
   EXPECT_THAT(pixelAt(snapshot, 48, 48), RgbaEq(255, 0, 0, 255))
       << "Destination-over must not touch fully opaque document pixels";
@@ -424,16 +447,18 @@ TEST_F(RendererGeodeTest, CheckerboardUnderlayLeavesOpaqueContentUntouched) {
       << "Transparent pixels beside the document content must become checkerboard";
 }
 
-TEST_F(RendererGeodeTest, CheckerboardUnderlayBlendsUnderPartialAlpha) {
+TEST_F(RendererGeodeTest, CheckerboardBlendsUnderPartialAlpha) {
   RendererGeode renderer = createRenderer();
   beginFrame(renderer);
   renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 128)));
   renderer.drawRect(Box2d({32, 32}, {kViewportSize, kViewportSize}), StrokeParams{});
   renderer.endFrame();
 
-  ASSERT_TRUE(renderer.drawCheckerboardUnderlay(CheckerboardUnderlayParams{}));
+  const std::shared_ptr<const RendererTextureSnapshot> frame = takeFinishedFrame(renderer);
+  ASSERT_NE(frame, nullptr);
+  ASSERT_TRUE(drawCheckerboard(*frame, geode::CheckerboardUnderlayParams{}));
 
-  const RendererBitmap snapshot = renderer.takeSnapshot();
+  const RendererBitmap snapshot = frame->takeSnapshot();
   ASSERT_FALSE(snapshot.empty());
   // (48,48) is cell (3,3), a light cell. Premultiplied red over it:
   // r = 128 + 60 * (1 - 128/255) ~= 158, g = b = 60 * (1 - 128/255) ~= 30.
@@ -446,23 +471,25 @@ TEST_F(RendererGeodeTest, CheckerboardUnderlayBlendsUnderPartialAlpha) {
       << "Half-covered document pixels must show the checkerboard through their remaining alpha";
 }
 
-TEST_F(RendererGeodeTest, CheckerboardUnderlayOriginOffsetShiftsTheAnchor) {
+TEST_F(RendererGeodeTest, CheckerboardOriginOffsetShiftsTheAnchor) {
   const auto sampleFirstTwoCells = [&](Vector2d originOffsetPx) {
     RendererGeode renderer = createRenderer();
     beginFrame(renderer);
     renderer.endFrame();
-    CheckerboardUnderlayParams params;
+    const std::shared_ptr<const RendererTextureSnapshot> frame = takeFinishedFrame(renderer);
+    EXPECT_NE(frame, nullptr);
+    geode::CheckerboardUnderlayParams params;
     params.originOffsetPx = originOffsetPx;
-    EXPECT_TRUE(renderer.drawCheckerboardUnderlay(params));
-    const RendererBitmap snapshot = renderer.takeSnapshot();
+    EXPECT_TRUE(drawCheckerboard(*frame, params));
+    const RendererBitmap snapshot = frame->takeSnapshot();
     EXPECT_FALSE(snapshot.empty());
     return std::pair(pixelAt(snapshot, kCheckerCell / 2, kCheckerCell / 2),
                      pixelAt(snapshot, kCheckerCell + kCheckerCell / 2, kCheckerCell / 2));
   };
 
-  // The worker surface pans with the document, so the pattern is anchored by
-  // the surface's on-screen position rather than by the texture origin. One
-  // cell of positive offset must invert the two leading cells...
+  // A surface that pans with the document anchors the pattern by its on-screen
+  // position rather than by the texture origin. One cell of positive offset
+  // must invert the two leading cells...
   const auto shifted = sampleFirstTwoCells(Vector2d(kCheckerCell, 0.0));
   EXPECT_THAT(shifted.first, RgbaEq(kCheckerDark, kCheckerDark, kCheckerDark, 255));
   EXPECT_THAT(shifted.second, RgbaEq(kCheckerLight, kCheckerLight, kCheckerLight, 255));
@@ -474,16 +501,18 @@ TEST_F(RendererGeodeTest, CheckerboardUnderlayOriginOffsetShiftsTheAnchor) {
   EXPECT_THAT(shiftedNegative.second, RgbaEq(kCheckerLight, kCheckerLight, kCheckerLight, 255));
 }
 
-TEST_F(RendererGeodeTest, CheckerboardUnderlayCellsAreLogicalPixelsNotDevicePixels) {
+TEST_F(RendererGeodeTest, CheckerboardCellsAreLogicalPixelsNotDevicePixels) {
   RendererGeode renderer = createRenderer();
   beginFrame(renderer);
   renderer.endFrame();
 
-  CheckerboardUnderlayParams params;
+  const std::shared_ptr<const RendererTextureSnapshot> frame = takeFinishedFrame(renderer);
+  ASSERT_NE(frame, nullptr);
+  geode::CheckerboardUnderlayParams params;
   params.devicePixelRatio = 2.0;
-  ASSERT_TRUE(renderer.drawCheckerboardUnderlay(params));
+  ASSERT_TRUE(drawCheckerboard(*frame, params));
 
-  const RendererBitmap snapshot = renderer.takeSnapshot();
+  const RendererBitmap snapshot = frame->takeSnapshot();
   ASSERT_FALSE(snapshot.empty());
   // At 2x the first cell spans 32 device pixels, so the sample that was dark at
   // 1x is still inside cell (0,0).
@@ -494,23 +523,57 @@ TEST_F(RendererGeodeTest, CheckerboardUnderlayCellsAreLogicalPixelsNotDevicePixe
               RgbaEq(kCheckerDark, kCheckerDark, kCheckerDark, 255));
 }
 
-TEST_F(RendererGeodeTest, CheckerboardUnderlayRejectsDegenerateParameters) {
+TEST_F(RendererGeodeTest, CheckerboardScissorConfinesThePassToItsRegion) {
   RendererGeode renderer = createRenderer();
   beginFrame(renderer);
   renderer.endFrame();
 
-  CheckerboardUnderlayParams zeroRatio;
+  const std::shared_ptr<const RendererTextureSnapshot> frame = takeFinishedFrame(renderer);
+  ASSERT_NE(frame, nullptr);
+  geode::CheckerboardUnderlayParams params;
+  // The editor clips the window checkerboard to the render pane this way, so
+  // the chrome around the pane keeps whatever is already in the framebuffer.
+  params.scissorPx = geode::CheckerboardScissorPx{
+      .x = 0,
+      .y = 0,
+      .width = static_cast<std::uint32_t>(kCheckerCell),
+      .height = static_cast<std::uint32_t>(kCheckerCell),
+  };
+  ASSERT_TRUE(drawCheckerboard(*frame, params));
+
+  const RendererBitmap snapshot = frame->takeSnapshot();
+  ASSERT_FALSE(snapshot.empty());
+  EXPECT_THAT(pixelAt(snapshot, kCheckerCell / 2, kCheckerCell / 2),
+              RgbaEq(kCheckerLight, kCheckerLight, kCheckerLight, 255))
+      << "Pixels inside the scissor must take the checkerboard";
+  EXPECT_THAT(pixelAt(snapshot, kCheckerCell + kCheckerCell / 2, kCheckerCell / 2), IsTransparent())
+      << "Pixels outside the scissor must be left exactly as the frame composed them";
+}
+
+TEST_F(RendererGeodeTest, CheckerboardRejectsDegenerateParameters) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  renderer.endFrame();
+
+  const std::shared_ptr<const RendererTextureSnapshot> frame = takeFinishedFrame(renderer);
+  ASSERT_NE(frame, nullptr);
+
+  geode::CheckerboardUnderlayParams zeroRatio;
   zeroRatio.devicePixelRatio = 0.0;
-  EXPECT_FALSE(renderer.drawCheckerboardUnderlay(zeroRatio));
+  EXPECT_FALSE(drawCheckerboard(*frame, zeroRatio));
 
-  CheckerboardUnderlayParams zeroCell;
+  geode::CheckerboardUnderlayParams zeroCell;
   zeroCell.cellSizeLogicalPx = 0.0;
-  EXPECT_FALSE(renderer.drawCheckerboardUnderlay(zeroCell));
+  EXPECT_FALSE(drawCheckerboard(*frame, zeroCell));
 
-  const RendererBitmap snapshot = renderer.takeSnapshot();
+  geode::CheckerboardUnderlayParams emptyScissor;
+  emptyScissor.scissorPx = geode::CheckerboardScissorPx{};
+  EXPECT_FALSE(drawCheckerboard(*frame, emptyScissor));
+
+  const RendererBitmap snapshot = frame->takeSnapshot();
   ASSERT_FALSE(snapshot.empty());
   EXPECT_THAT(pixelAt(snapshot, kCheckerCell / 2, kCheckerCell / 2), IsTransparent())
-      << "A rejected underlay must leave the target untouched";
+      << "A rejected checkerboard pass must leave the target untouched";
 }
 
 /// Width/height should reflect the viewport's device-pixel size after

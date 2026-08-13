@@ -34,49 +34,6 @@
         "wgpuLifetimeTextureCreates"
       ]
     },
-    "donner/editor/EditorShellPresentation.cc": {
-      "operations": [
-        "beginRenderPass",
-        "createBindGroup",
-        "createBuffer",
-        "createCommandEncoder",
-        "createView",
-        "draw",
-        "finish",
-        "setBindGroup",
-        "setPipeline",
-        "setScissorRect",
-        "submit",
-        "writeBuffer"
-      ],
-      "sha256": "8594709d03ddaa48801f87010e234476d4af0293e93871832f139e1a5ecff887",
-      "wgpuCFunctions": [
-        "wgpuLabel"
-      ],
-      "wgpuCppTokens": [
-        "BindGroupDescriptor",
-        "BindGroupEntry",
-        "BufferDescriptor",
-        "BufferUsage",
-        "CommandBuffer",
-        "CommandEncoder",
-        "CommandEncoderDescriptor",
-        "Device",
-        "LoadOp",
-        "RenderPassColorAttachment",
-        "RenderPassDescriptor",
-        "RenderPassEncoder",
-        "StoreOp",
-        "TextureView"
-      ]
-    },
-    "donner/editor/EditorShellPresentation.h": {
-      "sha256": "a83a7359dc85093231891ef5f59779f07e235d1489feec1267f0ac5684805b13",
-      "wgpuCppTokens": [
-        "BindGroup",
-        "Buffer"
-      ]
-    },
     "donner/editor/FrameMissTelemetry.cc": {
       "sha256": "147d4c33e2fafffcdf436296fcf0125eea4dbd73ddf5a5c86c496a7c2dc272d4",
       "wgpuCFunctions": [
@@ -419,10 +376,8 @@
     },
     "donner/svg/renderer/RendererGeode.cc": {
       "operations": [
-        "beginRenderPass",
         "copyTextureToBuffer",
         "copyTextureToTexture",
-        "createBindGroup",
         "createBuffer",
         "createCommandEncoder",
         "createTexture",
@@ -432,13 +387,10 @@
         "finish",
         "getConstMappedRange",
         "mapAsync",
-        "setBindGroup",
-        "setPipeline",
         "submit",
-        "unmap",
-        "writeBuffer"
+        "unmap"
       ],
-      "sha256": "b6e1224715081b79b01b716e6438afe75f71fa14947f6d5dbd2521d12c6629d1",
+      "sha256": "858fa215519ef8198a5e85cb3b1be8db3e81d39eef5132b0cd9e90a1e2bcf72e",
       "wgpuCFunctions": [
         "wgpuDevicePoll",
         "wgpuLabel"
@@ -451,9 +403,6 @@
         "WGPUTextureFormat_BGRA8Unorm"
       ],
       "wgpuCppTokens": [
-        "BindGroup",
-        "BindGroupDescriptor",
-        "BindGroupEntry",
         "Buffer",
         "BufferDescriptor",
         "BufferMapCallbackInfo",
@@ -467,12 +416,7 @@
         "Extent3D",
         "Future",
         "FutureWaitInfo",
-        "LoadOp",
         "MapMode",
-        "RenderPassColorAttachment",
-        "RenderPassDescriptor",
-        "RenderPassEncoder",
-        "StoreOp",
         "TexelCopyBufferInfo",
         "TexelCopyTextureInfo",
         "Texture",
@@ -485,7 +429,7 @@
       ]
     },
     "donner/svg/renderer/RendererGeode.h": {
-      "sha256": "1233216e053ffee82993db647471e1a4aae55dc1e4ac68930473a234db580888",
+      "sha256": "428f3f506ebd40526fe01bdb6f8f311ae0c9086d7be2dd5b2f1609bd3176cd19",
       "wgpuCppTokens": [
         "Texture",
         "TextureFormat",
@@ -563,12 +507,24 @@
     },
     "donner/svg/renderer/geode/GeodeCheckerboardPipeline.cc": {
       "operations": [
+        "beginRenderPass",
+        "createBindGroup",
         "createBindGroupLayout",
+        "createBuffer",
+        "createCommandEncoder",
         "createPipelineLayout",
         "createRenderPipeline",
-        "createShaderModule"
+        "createShaderModule",
+        "createView",
+        "draw",
+        "finish",
+        "setBindGroup",
+        "setPipeline",
+        "setScissorRect",
+        "submit",
+        "writeBuffer"
       ],
-      "sha256": "747be717071a141e142d45489daaf927a95fc9c11a41e348f6ee601bad4dca67",
+      "sha256": "22fa2dd7ed871523a662dec46d869a4beea42e50f37612fed224fac07918f45c",
       "wgpuCFunctions": [
         "wgpuLabel"
       ],
@@ -576,38 +532,55 @@
         "WGPUBindGroupLayout"
       ],
       "wgpuCppTokens": [
+        "BindGroupDescriptor",
+        "BindGroupEntry",
         "BindGroupLayoutDescriptor",
         "BindGroupLayoutEntry",
         "BlendFactor",
         "BlendOperation",
         "BlendState",
         "BufferBindingType",
+        "BufferDescriptor",
+        "BufferUsage",
         "ColorTargetState",
         "ColorWriteMask",
+        "CommandBuffer",
+        "CommandEncoder",
+        "CommandEncoderDescriptor",
         "CullMode",
         "Default",
         "Device",
         "FragmentState",
+        "LoadOp",
         "PipelineLayout",
         "PipelineLayoutDescriptor",
         "PrimitiveTopology",
+        "RenderPassColorAttachment",
+        "RenderPassDescriptor",
+        "RenderPassEncoder",
         "RenderPipelineDescriptor",
         "ShaderModule",
         "ShaderModuleDescriptor",
         "ShaderSourceWGSL",
         "ShaderStage",
-        "TextureFormat"
+        "StoreOp",
+        "Texture",
+        "TextureFormat",
+        "TextureView"
       ]
     },
     "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h": {
       "operations": [
         "draw"
       ],
-      "sha256": "99fd5fb4438001b52d83c64ed880b60e24b851072dd5cae1e5fc578a0fd36cd2",
+      "sha256": "9a076c4a799dfa129680aed7e220307c39e836ea38b6b6fbc4714ad27528343d",
       "wgpuCppTokens": [
+        "BindGroup",
         "BindGroupLayout",
+        "Buffer",
         "Device",
         "RenderPipeline",
+        "Texture",
         "TextureFormat"
       ]
     },
@@ -635,7 +608,7 @@
         "writeBuffer",
         "writeTexture"
       ],
-      "sha256": "9ca05162c506149a1b1841a3190254a58e780b538d077084151b6d90870a397a",
+      "sha256": "e80d26f6db93d9baee15e05c41068cfb943c8ec191443af382386f95aae208f9",
       "wgpuCFunctions": [
         "wgpuAdapterGetInfo",
         "wgpuAdapterInfoFreeMembers",
@@ -1151,7 +1124,7 @@
       "operations": [
         "draw"
       ],
-      "sha256": "be12ca01423f7d2379708a93c1bbebebf794ae5120b44730fdc75f6411c1e592",
+      "sha256": "49dc45590d4085d5cb325ed88a4fed5ab0f8bcb60b7ef9fbd083211798e719d8",
       "wgpuCppTokens": [
         "Texture",
         "TextureFormat"

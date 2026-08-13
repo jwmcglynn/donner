@@ -1,7 +1,6 @@
 #pragma once
 /// @file
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -215,56 +214,6 @@ struct PathShape {
   /// "no associated entity" - non-driver callers (overlay drawing, test harnesses) leave
   /// it null and backends fall back to the un-cached path.
   EntityHandle sourceEntity;
-};
-
-/**
- * Canonical appearance of the transparency checkerboard Donner draws behind
- * see-through document pixels.
- *
- * One definition so every surface that shows the checkerboard - the desktop
- * framebuffer underlay and the browser worker surface - lands on identical
- * cells. The size is in *logical* pixels, so the pattern is anchored to device
- * pixels and never scales with document zoom.
- *
- * @{
- */
-inline constexpr double kTransparencyCheckerboardCellLogicalPx = 16.0;
-/// RGBA in the 0-1 range for odd cells.
-inline constexpr std::array<float, 4> kTransparencyCheckerboardDarkColor = {
-    40.0f / 255.0f, 40.0f / 255.0f, 40.0f / 255.0f, 1.0f};
-/// RGBA in the 0-1 range for even cells.
-inline constexpr std::array<float, 4> kTransparencyCheckerboardLightColor = {
-    60.0f / 255.0f, 60.0f / 255.0f, 60.0f / 255.0f, 1.0f};
-/// @}
-
-/**
- * Placement of a transparency-checkerboard pass over an existing render target.
- *
- * @see RendererInterface::drawCheckerboardUnderlay
- */
-struct CheckerboardUnderlayParams {
-  /// Device pixels per logical pixel. Cells are \ref
-  /// kTransparencyCheckerboardCellLogicalPx logical pixels across regardless of
-  /// document zoom, exactly like the desktop underlay.
-  double devicePixelRatio = 1.0;
-  /**
-   * Device-pixel offset from the pattern's anchor origin to the target's
-   * top-left corner.
-   *
-   * Zero anchors the pattern at the target's own origin. A target that is
-   * itself positioned somewhere on screen - a worker-owned document surface
-   * that pans with the document - passes its top-left screen position in device
-   * pixels, which reproduces the window-anchored pattern the desktop underlay
-   * would have drawn in the same place. Without it the checkerboard would slide
-   * with the document instead of staying put behind it.
-   */
-  Vector2d originOffsetPx;
-  /// Cell size in logical pixels.
-  double cellSizeLogicalPx = kTransparencyCheckerboardCellLogicalPx;
-  /// RGBA in the 0-1 range for odd cells.
-  std::array<float, 4> darkColor = kTransparencyCheckerboardDarkColor;
-  /// RGBA in the 0-1 range for even cells.
-  std::array<float, 4> lightColor = kTransparencyCheckerboardLightColor;
 };
 
 /**
@@ -651,27 +600,6 @@ public:
   /// Returns true when presentation callers must use \ref takeTextureSnapshot and must not fall
   /// back to CPU bitmap readback for normal frame handoff.
   [[nodiscard]] virtual bool requiresTextureSnapshotPresentation() const { return false; }
-
-  /**
-   * Fill the see-through parts of the completed frame target with the
-   * transparency checkerboard, underneath the content already in it.
-   *
-   * The counterpart to the desktop editor's framebuffer underlay, for
-   * presentation paths that cannot draw the checkerboard *before* the document:
-   * the browser worker surface receives one already-composed full-canvas
-   * texture, so its checkerboard has to go in destination-over after the
-   * compose instead. Fully-opaque pixels are unchanged, fully-transparent
-   * pixels become checkerboard, and partial alpha blends as `destination-over`
-   * does. Call it after the last `endFrame()` of the frame and before handing
-   * the target to the presenter.
-   *
-   * @param params Checkerboard placement and appearance.
-   * @return True when the pass was submitted. Backends without a GPU frame
-   *   target return false and leave the target untouched.
-   */
-  virtual bool drawCheckerboardUnderlay(const CheckerboardUnderlayParams& /*params*/) {
-    return false;
-  }
 
   /**
    * Creates an independent offscreen renderer instance of the same type as this one.

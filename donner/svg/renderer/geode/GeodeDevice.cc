@@ -647,8 +647,8 @@ const wgpu::Instance& GeodeDevice::instance() const {
 GeodeCheckerboardPipeline& GeodeDevice::checkerboardPipeline() const {
   if (!impl_->checkerboardPipeline) {
     // Lazy: only the editor's direct framebuffer presentation draws the
-    // checkerboard underlay; other consumers should not pay the
-    // pipeline-compile cost at startup.
+    // checkerboard; other consumers should not pay the pipeline-compile cost
+    // at startup.
     impl_->checkerboardPipeline = std::make_unique<GeodeCheckerboardPipeline>(
         device_, textureFormat_, GeodeCheckerboardPipeline::BlendMode::Replace);
   }
@@ -657,9 +657,8 @@ GeodeCheckerboardPipeline& GeodeDevice::checkerboardPipeline() const {
 GeodeCheckerboardPipeline& GeodeDevice::checkerboardUnderlayPipeline() const {
   if (!impl_->checkerboardUnderlayPipeline) {
     // Lazy for the same reason as `checkerboardPipeline()`, and separate from
-    // it because a build normally draws through exactly one of the two: the
-    // desktop framebuffer path draws the checkerboard first (replace), the
-    // browser worker surface draws it last (destination-over).
+    // it because a consumer normally draws through exactly one of the two:
+    // before the document pixels (replace) or after them (destination-over).
     impl_->checkerboardUnderlayPipeline = std::make_unique<GeodeCheckerboardPipeline>(
         device_, textureFormat_, GeodeCheckerboardPipeline::BlendMode::DestinationOver);
   }

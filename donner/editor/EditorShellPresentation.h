@@ -23,6 +23,7 @@
 
 #include "donner/editor/gui/EditorWindow.h"
 #include "donner/svg/renderer/RendererGeode.h"
+#include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #endif
@@ -84,32 +85,33 @@ struct ImmediateChromePlan {
 };
 
 #ifdef DONNER_EDITOR_WGPU
+/// Draws the window framebuffer's transparency checkerboard, clipped to the
+/// render pane. The pass itself is \ref geode::GeodeCheckerboardPass; this owns
+/// the device and turns the pane's screen-space clip rect into its scissor.
 class FramebufferCheckerboardRenderer {
 public:
+  /// @param device Device owning the window framebuffer.
   explicit FramebufferCheckerboardRenderer(std::shared_ptr<geode::GeodeDevice> device);
 
+  /**
+   * Draw the checkerboard behind the document, before any tiles land in the target.
+   *
+   * @param target Window framebuffer for this frame.
+   * @param imageClipRect Render-pane rect in screen pixels; the checkerboard is clipped to it.
+   * @param devicePixelRatio Device pixels per logical pixel.
+   * @return Number of draws submitted, for the frame cost breakdown.
+   */
   [[nodiscard]] int draw(const gui::EditorWindowWgpuRenderTarget& target,
                          const Box2d& imageClipRect, double devicePixelRatio);
 
 private:
-  struct ScissorRect {
-    std::uint32_t x = 0;
-    std::uint32_t y = 0;
-    std::uint32_t width = 0;
-    std::uint32_t height = 0;
-  };
+  /// The device-pixel scissor covering @p screenBox, or nullopt when the box is
+  /// degenerate or entirely outside the framebuffer.
+  [[nodiscard]] static std::optional<geode::CheckerboardScissorPx> ScissorRectFromScreenBox(
+      const Box2d& screenBox, double devicePixelRatio, const Vector2i& framebufferSizePx);
 
-  [[nodiscard]] bool ensureResources();
-  [[nodiscard]] static ScissorRect ScissorRectFromScreenBox(const Box2d& screenBox,
-                                                            double devicePixelRatio,
-                                                            const Vector2i& framebufferSizePx);
-
-  // The render pipeline and bind group layout are shared device-lifetime
-  // objects owned by GeodeDevice (issue #575); only the per-renderer uniform
-  // buffer and bind group live here.
   std::shared_ptr<geode::GeodeDevice> device_;
-  geode::ScopedWgpuHandle<wgpu::BindGroup> bindGroup_;
-  geode::ScopedWgpuHandle<wgpu::Buffer> uniformBuffer_;
+  geode::GeodeCheckerboardPass checkerboardPass_;
 };
 
 /// Draw the checkerboard + presented document tiles directly onto the window
