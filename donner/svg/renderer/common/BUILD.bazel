@@ -1,4 +1,5 @@
 load("@rules_cc//cc:defs.bzl", "cc_library")
+load("//build_defs:package.bzl", "donner_package")
 
 cc_library(
     name = "common",
@@ -11,23 +12,4 @@ cc_library(
     ],
 )
 
-# Source inputs for the GPU inventory ratchet (//tools/gpu_inventory). The
-# manifests are derived from a lexical scan of these files, so they must be
-# declared as real Bazel inputs for the check to be a cacheable test with
-# correct change detection. See tools/gpu_inventory/README.md.
-filegroup(
-    name = "gpu_inventory_srcs",
-    srcs = glob(
-        [
-            "**/*.h",
-            "**/*.cc",
-            "**/*.mm",
-            "**/*.wgsl",
-            "**/*.patch",
-            "**/*.bzl",
-            "BUILD.bazel",
-        ],
-        allow_empty = True,
-    ),
-    visibility = ["//tools/gpu_inventory:__pkg__"],
-)
+donner_package()

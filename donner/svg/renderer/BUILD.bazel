@@ -2,6 +2,7 @@ load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "string_flag")
 load("@donner_config//:config.bzl", "DONNER_CONFIG")
 load("//build_defs:dep_audit.bzl", "forbidden_transitive_dep_test")
 load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_perf_sensitive_cc_library")
+load("//build_defs:package.bzl", "donner_package")
 
 # Renderer backend used by //donner/svg/renderer:renderer.
 # Override with --//donner/svg/renderer:renderer_backend=<tiny_skia|geode>
@@ -510,23 +511,4 @@ forbidden_transitive_dep_test(
     target = "//donner/svg/renderer:renderer_geode",
 )
 
-# Source inputs for the GPU inventory ratchet (//tools/gpu_inventory). The
-# manifests are derived from a lexical scan of these files, so they must be
-# declared as real Bazel inputs for the check to be a cacheable test with
-# correct change detection. See tools/gpu_inventory/README.md.
-filegroup(
-    name = "gpu_inventory_srcs",
-    srcs = glob(
-        [
-            "**/*.h",
-            "**/*.cc",
-            "**/*.mm",
-            "**/*.wgsl",
-            "**/*.patch",
-            "**/*.bzl",
-            "BUILD.bazel",
-        ],
-        allow_empty = True,
-    ),
-    visibility = ["//tools/gpu_inventory:__pkg__"],
-)
+donner_package()

@@ -1,4 +1,5 @@
 load("//build_defs:rules.bzl", "donner_perf_sensitive_cc_library")
+load("//build_defs:package.bzl", "donner_package")
 
 exports_files(
     # buildifier: keep sorted
@@ -31,18 +32,8 @@ donner_perf_sensitive_cc_library(
     deps = ["@freetype"],
 )
 
-# Source inputs for the GPU inventory ratchet (//tools/gpu_inventory). See
-# tools/gpu_inventory/README.md; these must be real Bazel inputs so the check
-# is a cacheable test with correct change detection.
-filegroup(
-    name = "gpu_inventory_srcs",
-    srcs = glob(
-        [
-            "BUILD.*",
-            "bazel/*.bzl",
-            "**/*.bzl",
-        ],
-        allow_empty = True,
-    ),
-    visibility = ["//tools/gpu_inventory:__pkg__"],
-)
+donner_package(gpu_inventory_globs = [
+    "BUILD.*",
+    "bazel/*.bzl",
+    "**/*.bzl",
+])
