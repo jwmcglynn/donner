@@ -55,8 +55,21 @@ class RemoteCacheConfigTest(unittest.TestCase):
         )
 
     def test_root_bazel_pin_uses_full_baseline_coverage_path(self):
+        """Only root Bazel pins escalate to the main-push baseline.
+
+        These are the files whose change bazel-diff structurally cannot model:
+        it hashes the graph they define, so a pin moving underneath it is
+        invisible to its impact analysis.
+
+        `build_defs/*` and `.bazelrc` were on this list and are deliberately not
+        any more. bazel-diff hashes .bzl files transitively, so they produce a
+        real affected set - and escalating them composed with the coverage jobs'
+        skip-on-full-fallback gate into zero coverage on the changes most able
+        to move coverage. tools/coverage_lane_routing_tests.py holds the rest of
+        that contract.
+        """
         self.assertIn(
-            "MODULE.bazel|.bazelversion|WORKSPACE|WORKSPACE.*|build_defs/*|third_party/bazel/*)",
+            "MODULE.bazel|.bazelversion|WORKSPACE|WORKSPACE.*|third_party/bazel/*)",
             self.coverage_workflow,
         )
 
