@@ -1019,6 +1019,19 @@ donner_cc_test(
     ],
 )
 
+# Compositor Debug panel layout: every composite-tile row has to stay
+# reachable by the panel's own scrollbar, at any panel size.
+donner_cc_test(
+    name = "compositor_debug_panel_tests",
+    srcs = ["CompositorDebugPanel_tests.cc"],
+    deps = [
+        "//donner/base",
+        "//donner/editor:compositor_debug_panel",
+        "//donner/editor:imgui_headers",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 # Embedded-SVG icon rasterizer: alpha-mask output plus (geode builds) the
 # shared-renderer guarantee — a fresh renderer per icon would create a full
 # WebGPU instance/adapter/device per icon.

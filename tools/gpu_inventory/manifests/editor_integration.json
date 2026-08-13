@@ -12,7 +12,7 @@
         "createView",
         "writeTexture"
       ],
-      "sha256": "196474af5d8cfe357701ab338229ea3e10d499af7c85de5629ccf04ea938d867",
+      "sha256": "cfdb468c1c4ab33bdc79e8e96814c9d297777fa869e204f92de2be5f4f131a93",
       "usesEditorWgpuDefine": true,
       "wgpuCFunctions": [
         "wgpuLabel"
