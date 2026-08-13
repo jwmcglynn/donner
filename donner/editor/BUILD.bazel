@@ -1344,11 +1344,6 @@ donner_cc_binary(
     ],
 )
 
-test_suite(
-    name = "editor_lint",
-    tests = [":editor_impl_lint"],
-)
-
 #The full Donner editor binary.Wires EditorApp + SelectTool +
 #OverlayRenderer + TextEditor into an ImGui shell with a live source
 #pane and a click - and-drag render pane.The minimal viewer demo lives
