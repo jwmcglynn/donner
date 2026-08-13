@@ -164,10 +164,10 @@ public:
     return texture_ != nullptr ? texture_->dimensions() : bitmap_.dimensions;
   }
 
-  /// Alpha interpretation of the image contents.
-  [[nodiscard]] AlphaType alphaType() const {
-    return texture_ != nullptr ? texture_->alphaType() : bitmap_.alphaType;
-  }
+  // There is deliberately no whole-image alphaType() accessor: a GPU-resident image's
+  // texture stores premultiplied texels while bitmap() reads back straight alpha, so no
+  // single answer describes both forms. Consumers read the alpha type off the form they
+  // actually take: textureSnapshot()->alphaType() or bitmap().alphaType.
 
   /// The backend texture when this image is GPU-resident, or null when it is CPU pixels.
   [[nodiscard]] const std::shared_ptr<const RendererTextureSnapshot>& textureSnapshot() const {
