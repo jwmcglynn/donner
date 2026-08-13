@@ -1,9 +1,11 @@
 """Structural integrity tests for the checked-in GPU inventory manifests.
 
-Whole-tree freshness is enforced by the Lint workflow's
-`generate_gpu_manifests.py --check` step (a sandboxed bazel test cannot see the
-full source tree). These tests assert that the checked-in manifests are
-well-formed and still describe the invariants later design 0053 packets rely on.
+Freshness is enforced by manifest_freshness_tests.py, which rescans the declared
+inputs and compares. These tests are the complement: they assert that the
+checked-in manifests are well-formed and still describe the invariants later
+design 0053 packets rely on, which a freshness check alone cannot say (a
+manifest can be perfectly fresh and still describe a tree that lost a shader
+stage or gained an active Rust source).
 """
 
 from __future__ import annotations

@@ -146,10 +146,31 @@ class BuildManifestsTest(unittest.TestCase):
         self.assertEqual(list(manifest["files"]), ["donner/gpu_user.cc", "examples/outside.cc"])
         self.assertEqual(manifest["files"]["donner/gpu_user.cc"]["operations"], ["createBuffer"])
 
-    def test_gpu_operations_entries_carry_content_hash(self):
-        manifest = gen.build_gpu_operations_manifest(self.FILES)
-        entry = manifest["files"]["donner/gpu_user.cc"]
-        self.assertEqual(entry["sha256"], gen.content_sha256(self.FILES["donner/gpu_user.cc"]))
+    def test_entries_record_semantic_facts_only(self):
+        """No content-derived bookkeeping in any manifest entry.
+
+        Entries used to carry a `sha256` of the file, and shader entries a
+        `lineCount`. Both meant that editing a GPU-using file changed the
+        manifest even when nothing about its GPU usage changed, so every such
+        edit failed the freshness check until someone committed a mechanical
+        regeneration. The inventory is a set of facts about what the code does,
+        not a fingerprint of its bytes.
+        """
+        manifests = gen.build_all_manifests(self.FILES, self.ALLOWLIST)
+        for name, manifest in manifests.items():
+            rendered = gen.render_manifest(manifest)
+            for banned in ("sha256", "lineCount", "contentHash"):
+                self.assertNotIn(banned, rendered, f"{name} records {banned}")
+
+    def test_a_no_op_edit_does_not_change_any_manifest(self):
+        """The defect this design removes, stated as a test."""
+        before = gen.build_all_manifests(self.FILES, self.ALLOWLIST)
+        edited = dict(self.FILES)
+        edited["donner/gpu_user.cc"] = (
+            self.FILES["donner/gpu_user.cc"] + "\n// A comment. No new GPU fact.\n"
+        )
+        after = gen.build_all_manifests(edited, self.ALLOWLIST)
+        self.assertEqual(before, after)
 
     def test_vendored_sources_are_excluded(self):
         files = {"third_party/webgpu-cpp/webgpu.hpp.cc": "wgpu::Device d;"}

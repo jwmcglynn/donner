@@ -131,3 +131,18 @@ config_setting(
         ":llvm_latest": "1",
     },
 )
+
+# Source inputs for the GPU inventory ratchet (//tools/gpu_inventory). See
+# tools/gpu_inventory/README.md; these must be real Bazel inputs so the check
+# is a cacheable test with correct change detection.
+filegroup(
+    name = "gpu_inventory_srcs",
+    srcs = glob(
+        [
+            "**/*.bzl",
+            "BUILD.bazel",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//tools/gpu_inventory:__pkg__"],
+)

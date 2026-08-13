@@ -108,3 +108,18 @@ alias(
         "@platforms//cpu:x86_64": "@wgpu_native_linux_x86_64//:wgpu_native",
     }),
 )
+
+# Source inputs for the GPU inventory ratchet (//tools/gpu_inventory). See
+# tools/gpu_inventory/README.md; these must be real Bazel inputs so the check
+# is a cacheable test with correct change detection.
+filegroup(
+    name = "gpu_inventory_srcs",
+    srcs = glob(
+        [
+            "BUILD.bazel",
+            "**/*.bzl",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//tools/gpu_inventory:__pkg__"],
+)

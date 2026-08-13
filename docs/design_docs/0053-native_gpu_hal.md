@@ -356,8 +356,11 @@ directory drops.
 ### Phase 0: Freeze requirements and provenance
 
 - [x] Generate the GPU-operation, shader-feature, editor-integration, and Rust-dependency manifests
-      (`tools/gpu_inventory/`, freshness-gated by the Lint workflow's
-      `generate_gpu_manifests.py --check` step).
+      (`tools/gpu_inventory/`, freshness-gated by
+      `//tools/gpu_inventory:manifest_freshness_tests` under plain `bazel test //...`).
+      The manifests record semantic inventory only; the per-file content hashes
+      the first implementation carried were removed, because they made every
+      unrelated edit to a GPU-using file a manifest change and a CI failure.
 - [ ] Freeze representative pixels, counters, captures, error outcomes, and performance baselines
       from the current implementation using Donner-owned inputs.
 - [ ] Approve the clean-room input rules and provenance template.

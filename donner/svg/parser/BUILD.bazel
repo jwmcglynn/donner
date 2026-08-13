@@ -103,9 +103,9 @@ donner_cc_library(
 donner_cc_test(
     name = "parser_tests",
     srcs = [
+        "tests/AngleParser_tests.cc",
         "tests/AnimateElement_tests.cc",
         "tests/AnimateTransformElement_tests.cc",
-        "tests/AngleParser_tests.cc",
         "tests/AttributeParser_tests.cc",
         "tests/ClockValueParser_tests.cc",
         "tests/CssTransformParser_tests.cc",
@@ -115,8 +115,8 @@ donner_cc_test(
         "tests/PathParser_tests.cc",
         "tests/PointsListParser_tests.cc",
         "tests/PreserveAspectRatioParser_tests.cc",
-        "tests/SetElement_tests.cc",
         "tests/SVGParser_tests.cc",
+        "tests/SetElement_tests.cc",
         "tests/TransformParser_tests.cc",
         "tests/ViewBoxParser_tests.cc",
     ],
@@ -282,6 +282,27 @@ donner_cc_fuzzer(
     corpus = "tests/css_transform_parser_corpus",
     deps = [
         ":parser_core",
-        "//donner/css/parser:parser",
+        "//donner/css/parser",
     ],
+)
+
+# Source inputs for the GPU inventory ratchet (//tools/gpu_inventory). The
+# manifests are derived from a lexical scan of these files, so they must be
+# declared as real Bazel inputs for the check to be a cacheable test with
+# correct change detection. See tools/gpu_inventory/README.md.
+filegroup(
+    name = "gpu_inventory_srcs",
+    srcs = glob(
+        [
+            "**/*.h",
+            "**/*.cc",
+            "**/*.mm",
+            "**/*.wgsl",
+            "**/*.patch",
+            "**/*.bzl",
+            "BUILD.bazel",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//tools/gpu_inventory:__pkg__"],
 )

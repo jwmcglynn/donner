@@ -61,15 +61,15 @@ cc_library(
 
 donner_cc_test(
     name = "shape_system_tests",
+    srcs = [
+        "tests/ShapeSystem_tests.cc",
+    ],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
         "tiny",
         "text_full",
         "geode",
-    ],
-    srcs = [
-        "tests/ShapeSystem_tests.cc",
     ],
     deps = [
         ":shape_system",
@@ -82,15 +82,15 @@ donner_cc_test(
 
 donner_cc_test(
     name = "rect_component_tests",
+    srcs = [
+        "tests/RectComponent_tests.cc",
+    ],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
         "tiny",
         "text_full",
         "geode",
-    ],
-    srcs = [
-        "tests/RectComponent_tests.cc",
     ],
     deps = [
         ":components",
@@ -103,15 +103,15 @@ donner_cc_test(
 
 donner_cc_test(
     name = "circle_ellipse_component_tests",
+    srcs = [
+        "tests/CircleEllipseComponent_tests.cc",
+    ],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
         "tiny",
         "text_full",
         "geode",
-    ],
-    srcs = [
-        "tests/CircleEllipseComponent_tests.cc",
     ],
     deps = [
         ":components",
@@ -120,4 +120,25 @@ donner_cc_test(
         "//donner/svg",
         "@com_google_gtest//:gtest_main",
     ],
+)
+
+# Source inputs for the GPU inventory ratchet (//tools/gpu_inventory). The
+# manifests are derived from a lexical scan of these files, so they must be
+# declared as real Bazel inputs for the check to be a cacheable test with
+# correct change detection. See tools/gpu_inventory/README.md.
+filegroup(
+    name = "gpu_inventory_srcs",
+    srcs = glob(
+        [
+            "**/*.h",
+            "**/*.cc",
+            "**/*.mm",
+            "**/*.wgsl",
+            "**/*.patch",
+            "**/*.bzl",
+            "BUILD.bazel",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//tools/gpu_inventory:__pkg__"],
 )

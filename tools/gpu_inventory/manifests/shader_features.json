@@ -61,7 +61,6 @@
         "textureSample",
         "var"
       ],
-      "lineCount": 54,
       "structs": [
         "Params",
         "fs_test_Output",
@@ -190,7 +189,6 @@
         "textureSample",
         "var"
       ],
-      "lineCount": 284,
       "structs": [
         "Band",
         "InstanceTransform",
@@ -237,7 +235,6 @@
         "sign",
         "var"
       ],
-      "lineCount": 40,
       "structs": [
         "Params"
       ]
@@ -300,7 +297,6 @@
         "textureStore",
         "var"
       ],
-      "lineCount": 250,
       "structs": [
         "BlendParams"
       ]
@@ -352,7 +348,6 @@
         "textureStore",
         "var"
       ],
-      "lineCount": 71,
       "structs": [
         "ColorMatrixParams"
       ]
@@ -403,7 +398,6 @@
         "textureStore",
         "var"
       ],
-      "lineCount": 67,
       "structs": [
         "Params"
       ]
@@ -455,7 +449,6 @@
         "textureStore",
         "var"
       ],
-      "lineCount": 55,
       "structs": [
         "ComponentTransferParams"
       ]
@@ -512,7 +505,6 @@
         "textureStore",
         "var"
       ],
-      "lineCount": 81,
       "structs": [
         "CompositeParams"
       ]
@@ -565,7 +557,6 @@
         "textureStore",
         "var"
       ],
-      "lineCount": 96,
       "structs": [
         "ConvolveParams"
       ]
@@ -623,7 +614,6 @@
         "textureStore",
         "var"
       ],
-      "lineCount": 280,
       "structs": [
         "LightingParams"
       ]
@@ -684,7 +674,6 @@
         "textureStore",
         "var"
       ],
-      "lineCount": 85,
       "structs": [
         "DisplacementParams"
       ]
@@ -743,7 +732,6 @@
         "textureStore",
         "var"
       ],
-      "lineCount": 59,
       "structs": [
         "DropShadowParams"
       ]
@@ -785,7 +773,6 @@
         "textureStore",
         "var"
       ],
-      "lineCount": 23,
       "structs": [
         "FloodParams"
       ]
@@ -841,7 +828,6 @@
         "textureStore",
         "var"
       ],
-      "lineCount": 137,
       "structs": [
         "ImageParams"
       ]
@@ -890,7 +876,6 @@
         "textureStore",
         "var"
       ],
-      "lineCount": 33,
       "structs": []
     },
     "donner/svg/renderer/geode/shaders/filter_morphology.wgsl": {
@@ -940,7 +925,6 @@
         "textureStore",
         "var"
       ],
-      "lineCount": 73,
       "structs": [
         "MorphologyParams"
       ]
@@ -995,7 +979,6 @@
         "textureStore",
         "var"
       ],
-      "lineCount": 60,
       "structs": [
         "OffsetParams"
       ]
@@ -1052,7 +1035,6 @@
         "textureStore",
         "var"
       ],
-      "lineCount": 284,
       "structs": [
         "LightingParams"
       ]
@@ -1101,7 +1083,6 @@
         "textureStore",
         "var"
       ],
-      "lineCount": 55,
       "structs": [
         "SubregionClipParams"
       ]
@@ -1151,7 +1132,6 @@
         "textureStore",
         "var"
       ],
-      "lineCount": 50,
       "structs": [
         "TileParams"
       ]
@@ -1205,7 +1185,6 @@
         "textureStore",
         "var"
       ],
-      "lineCount": 221,
       "structs": [
         "TurbulenceParams",
         "TurbulenceTables"
@@ -1261,7 +1240,6 @@
         "textureStore",
         "var"
       ],
-      "lineCount": 106,
       "structs": [
         "BlurParams"
       ]
@@ -1349,7 +1327,6 @@
         "textureSample",
         "var"
       ],
-      "lineCount": 470,
       "structs": [
         "Uniforms",
         "VertexOutput"
@@ -1482,7 +1459,6 @@
         "textureSample",
         "var"
       ],
-      "lineCount": 467,
       "structs": [
         "Band",
         "FragOutput",
@@ -1600,7 +1576,6 @@
         "textureLoad",
         "var"
       ],
-      "lineCount": 471,
       "structs": [
         "Band",
         "FragOutput",
@@ -1714,7 +1689,6 @@
         "textureLoad",
         "var"
       ],
-      "lineCount": 309,
       "structs": [
         "Band",
         "FragOutput",

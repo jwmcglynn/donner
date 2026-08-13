@@ -221,8 +221,8 @@ wasm_cc_binary(
 web_package(
     name = "wasm_web_package",
     srcs = [
-        "editor-bootstrap.js",
         "editor.css",
+        "editor-bootstrap.js",
         "enable-threads.js",
         "index.html",
         "//:donner_icon.svg",
@@ -371,4 +371,25 @@ py_test(
         ":wasm_enabled": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
+)
+
+# Source inputs for the GPU inventory ratchet (//tools/gpu_inventory). The
+# manifests are derived from a lexical scan of these files, so they must be
+# declared as real Bazel inputs for the check to be a cacheable test with
+# correct change detection. See tools/gpu_inventory/README.md.
+filegroup(
+    name = "gpu_inventory_srcs",
+    srcs = glob(
+        [
+            "**/*.h",
+            "**/*.cc",
+            "**/*.mm",
+            "**/*.wgsl",
+            "**/*.patch",
+            "**/*.bzl",
+            "BUILD.bazel",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//tools/gpu_inventory:__pkg__"],
 )

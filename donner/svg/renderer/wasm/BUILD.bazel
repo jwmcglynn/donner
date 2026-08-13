@@ -101,8 +101,8 @@ filegroup(
 # host-config wildcard build does not try to pull in the wasm outputs.
 py_test(
     name = "render_test",
-    srcs = ["render_test.py"],
     size = "small",
+    srcs = ["render_test.py"],
     data = [
         "render_test_driver.mjs",
         ":donner_wasm",
@@ -190,4 +190,25 @@ serve_http(
     dir = ":test_page",
     tags = ["manual"],
     target_compatible_with = _WASM_TINY_SKIA_COMPATIBLE_WITH,
+)
+
+# Source inputs for the GPU inventory ratchet (//tools/gpu_inventory). The
+# manifests are derived from a lexical scan of these files, so they must be
+# declared as real Bazel inputs for the check to be a cacheable test with
+# correct change detection. See tools/gpu_inventory/README.md.
+filegroup(
+    name = "gpu_inventory_srcs",
+    srcs = glob(
+        [
+            "**/*.h",
+            "**/*.cc",
+            "**/*.mm",
+            "**/*.wgsl",
+            "**/*.patch",
+            "**/*.bzl",
+            "BUILD.bazel",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//tools/gpu_inventory:__pkg__"],
 )
