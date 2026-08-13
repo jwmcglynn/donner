@@ -41,6 +41,7 @@
 #include "donner/editor/EditorSampleCatalog.h"
 #include "donner/editor/EditorShellInternal.h"
 #include "donner/editor/EditorShellPresentation.h"
+#include "donner/editor/EditorSymbolGlyphs.h"
 #include "donner/editor/EditorTheme.h"
 #include "donner/editor/EmbeddedSvgIcon.h"
 #include "donner/editor/FillStrokeWidget.h"
@@ -363,17 +364,28 @@ constexpr float kCanvasZoomPaddingY = 4.0f;
 constexpr float kCanvasZoomInset = 12.0f;
 constexpr std::string_view kRenderPaneContextMenuName = "Render Context Menu";
 
-constexpr ImWchar kEditorGlyphRanges[] = {
-    0x0020, 0x00ff,  // Basic Latin + Latin Supplement.
-    0x2217, 0x2217,  // Asterisk operator.
-    0x2726, 0x2726,  // Black four pointed star.
-    0x2731, 0x2731,  // Heavy asterisk.
+// Non-ASCII chrome glyphs, from `kEditorSymbolCodepoints` so the atlas can
+// never drift from what the chrome draws. ImGui wants ascending ranges
+// terminated by a zero.
+constexpr ImWchar kEditorSymbolGlyphRanges[] = {
+    static_cast<ImWchar>(kEditorSymbolCodepoints[0]),
+    static_cast<ImWchar>(kEditorSymbolCodepoints[0]),
+    static_cast<ImWchar>(kEditorSymbolCodepoints[1]),
+    static_cast<ImWchar>(kEditorSymbolCodepoints[1]),
     0,
 };
-constexpr ImWchar kEditorSymbolGlyphRanges[] = {
-    0x2217, 0x2217,  // Asterisk operator.
-    0x2726, 0x2726,  // Black four pointed star.
-    0x2731, 0x2731,  // Heavy asterisk.
+static_assert(kEditorSymbolCodepoints.size() == 2u,
+              "kEditorSymbolGlyphRanges enumerates the symbol codepoints by hand");
+static_assert(kEditorSymbolCodepoints[0] < kEditorSymbolCodepoints[1],
+              "ImGui glyph ranges must be ascending");
+
+constexpr ImWchar kEditorGlyphRanges[] = {
+    0x0020,
+    0x00ff,  // Basic Latin + Latin Supplement.
+    kEditorSymbolGlyphRanges[0],
+    kEditorSymbolGlyphRanges[1],
+    kEditorSymbolGlyphRanges[2],
+    kEditorSymbolGlyphRanges[3],
     0,
 };
 
@@ -450,6 +462,16 @@ FrameMissResourceTelemetry FrameMissTelemetryFromPresentationResources(
       .wgpuLifetimeTextureCreates = resources.wgpuLifetimeTextureCreates,
       .wgpuLifetimeBufferCreates = resources.wgpuLifetimeBufferCreates,
   };
+}
+
+PenCursorHint PenCursorHintForIntent(PenHoverIntent intent) {
+  switch (intent) {
+    case PenHoverIntent::ClosePath: return PenCursorHint::Close;
+    case PenHoverIntent::InsertAnchor: return PenCursorHint::Add;
+    case PenHoverIntent::DragAnchor:
+    case PenHoverIntent::PlaceAnchor: break;
+  }
+  return PenCursorHint::Base;
 }
 
 ImGuiMouseCursor CursorForTransformHandleIntent(const SelectionTransformHandleIntent& intent) {
@@ -3265,21 +3287,26 @@ SelectionTransformHandleIntent EditorShell::updateRenderPaneToolCursor(
 
   SelectionTransformHandleIntent hoverTransformIntent;
   if (penToolActive && !rotateCursorLocked && toolEligible) {
-    // Contextual pen hint: the close-path cursor when a click would close the
-    // active contour, otherwise the base nib. (Add/remove-anchor hints exist in
-    // the cursor set but await a pen hover-intent query to wire live.)
-    PenCursorHint penHint = PenCursorHint::Base;
-    if (penTool_.isDrafting()) {
-      MouseModifiers hoverModifiers;
-      hoverModifiers.shift = ImGui::GetIO().KeyShift;
-      hoverModifiers.option = ImGui::GetIO().KeyAlt;
-      hoverModifiers.command = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
-      hoverModifiers.pixelsPerDocUnit = pointerHitTestPixelsPerDocUnit;
-      if (penTool_.wouldCloseAt(screenToDocument(ImGui::GetMousePos()), hoverModifiers)) {
-        penHint = PenCursorHint::Close;
-      }
+    // Contextual pen cursor: whatever the click under the pointer would
+    // actually do. Grabbing an existing anchor or control point is a different
+    // gesture from placing a new point, so it gets the anchor-point cursor
+    // rather than a nib.
+    MouseModifiers hoverModifiers;
+    hoverModifiers.shift = ImGui::GetIO().KeyShift;
+    hoverModifiers.option = ImGui::GetIO().KeyAlt;
+    hoverModifiers.command = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
+    hoverModifiers.pixelsPerDocUnit = pointerHitTestPixelsPerDocUnit;
+    const PenHoverIntent penIntent =
+        penTool_.hoverIntentAt(app_, screenToDocument(ImGui::GetMousePos()), hoverModifiers);
+
+    bool appliedPenCursor = false;
+    if (penIntent == PenHoverIntent::DragAnchor) {
+      appliedPenCursor = rotateCursorSet_.setPathModifyCursor();
+    } else {
+      appliedPenCursor = rotateCursorSet_.setPenCursor(PenCursorHintForIntent(penIntent));
     }
-    if (rotateCursorSet_.setPenCursor(penHint)) {
+
+    if (appliedPenCursor) {
       SetImGuiOsCursorManagementEnabled(false);
     } else {
       rotateCursorSet_.clearIfActive();

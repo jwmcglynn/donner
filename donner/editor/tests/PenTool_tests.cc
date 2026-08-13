@@ -1368,5 +1368,56 @@ TEST_F(PenToolLiveSyncTest, FillChangeOnDraftPathUpdatesRenderedPixels) {
       << source;
 }
 
+// The pen cursor is only useful if it tells the user which gesture the next
+// click is. Hovering an existing anchor of a selected committed path grabs and
+// moves that anchor; it does not place a new point, and before this query
+// existed the shell had no way to tell the two apart.
+TEST_F(PenToolTest, HoverIntentOnCommittedPathAnchorIsDragAnchor) {
+  ASSERT_TRUE(app.loadFromString(kOpenPathSvg));
+  auto selected = app.document().document().querySelector("#p");
+  ASSERT_TRUE(selected.has_value());
+  app.setSelection(*selected);
+
+  MouseModifiers hover;
+  // The point-hit tolerance is a fixed screen distance, so zoom in far enough
+  // that the midpoint of a 10-unit segment is outside both anchors' targets.
+  hover.pixelsPerDocUnit = 4.0;
+
+  // The committed path is "M 0 0 L 10 0".
+  EXPECT_EQ(tool.hoverIntentAt(app, Vector2d(0.0, 0.0), hover), PenHoverIntent::DragAnchor)
+      << "hovering the first anchor";
+  EXPECT_EQ(tool.hoverIntentAt(app, Vector2d(10.0, 0.0), hover), PenHoverIntent::DragAnchor)
+      << "hovering the last anchor";
+  EXPECT_EQ(tool.hoverIntentAt(app, Vector2d(5.0, 0.0), hover), PenHoverIntent::InsertAnchor)
+      << "hovering the segment between them";
+  EXPECT_EQ(tool.hoverIntentAt(app, Vector2d(50.0, 50.0), hover), PenHoverIntent::PlaceAnchor)
+      << "hovering empty canvas";
+}
+
+// The same distinction has to hold inside a live draft, where the anchors live
+// on the tool rather than on a selected element.
+TEST_F(PenToolTest, HoverIntentOnDraftAnchorsFollowsClickPrecedence) {
+  MouseModifiers hover;
+  hover.pixelsPerDocUnit = 1.0;
+
+  EXPECT_EQ(tool.hoverIntentAt(app, Vector2d(10.0, 10.0), hover), PenHoverIntent::PlaceAnchor)
+      << "no draft and no selection: a click starts a path";
+
+  tool.onMouseDown(app, Vector2d(0.0, 0.0), hover);
+  tool.onMouseUp(app, Vector2d(0.0, 0.0));
+  tool.onMouseDown(app, Vector2d(40.0, 0.0), hover);
+  tool.onMouseUp(app, Vector2d(40.0, 0.0));
+  tool.onMouseDown(app, Vector2d(40.0, 40.0), hover);
+  tool.onMouseUp(app, Vector2d(40.0, 40.0));
+  ASSERT_TRUE(tool.isDrafting());
+
+  EXPECT_EQ(tool.hoverIntentAt(app, Vector2d(40.0, 0.0), hover), PenHoverIntent::DragAnchor)
+      << "hovering an already-placed draft anchor";
+  EXPECT_EQ(tool.hoverIntentAt(app, Vector2d(0.0, 0.0), hover), PenHoverIntent::ClosePath)
+      << "hovering the draft's first anchor closes the contour, which outranks dragging it";
+  EXPECT_EQ(tool.hoverIntentAt(app, Vector2d(90.0, 90.0), hover), PenHoverIntent::PlaceAnchor)
+      << "hovering empty canvas extends the draft";
+}
+
 }  // namespace
 }  // namespace donner::editor

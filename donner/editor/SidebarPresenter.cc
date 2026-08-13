@@ -263,75 +263,50 @@ struct PathOperationButton {
   const char* tooltip;
 };
 
-constexpr std::array<PathOperationButton, 4> kPathOperationButtons = {{
-    {.operation = PathOperationKind::Union, .id = "##path_operation_union", .tooltip = "Union"},
-    {.operation = PathOperationKind::Intersect,
-     .id = "##path_operation_intersect",
-     .tooltip = "Intersect"},
-    {.operation = PathOperationKind::SubtractFront,
-     .id = "##path_operation_subtract_front",
-     .tooltip = "Subtract Front"},
-    {.operation = PathOperationKind::Exclude,
-     .id = "##path_operation_exclude",
-     .tooltip = "Exclude"},
-}};
+constexpr std::array<PathOperationButton, kInspectorPathOperations.size()> kPathOperationButtons = {
+    {
+        {.operation = PathOperationKind::Union, .id = "##path_operation_union", .tooltip = "Union"},
+        {.operation = PathOperationKind::Intersect,
+         .id = "##path_operation_intersect",
+         .tooltip = "Intersect"},
+        {.operation = PathOperationKind::SubtractFront,
+         .id = "##path_operation_subtract_front",
+         .tooltip = "Subtract Front"},
+        {.operation = PathOperationKind::Exclude,
+         .id = "##path_operation_exclude",
+         .tooltip = "Exclude"},
+    }};
 
 constexpr float kPathOperationIconSize = 18.0f;
 constexpr int kPathOperationIconRasterSizePx = 48;
 constexpr ImVec2 kPathOperationButtonFramePadding(6.0f, 4.0f);
-
-std::uint64_t PathOperationIconTextureKey(PathOperationKind operation) {
-  constexpr std::uint64_t kIconTextureKeyBase = 0xf600000000000000ull;
-  switch (operation) {
-    case PathOperationKind::Union: return kIconTextureKeyBase + 1u;
-    case PathOperationKind::Intersect: return kIconTextureKeyBase + 2u;
-    case PathOperationKind::SubtractFront: return kIconTextureKeyBase + 3u;
-    case PathOperationKind::SubtractBack: return kIconTextureKeyBase + 4u;
-    case PathOperationKind::Exclude: return kIconTextureKeyBase + 5u;
-  }
-  return kIconTextureKeyBase;
-}
-
-std::span<const unsigned char> BootstrapSvgForPathOperation(PathOperationKind operation) {
-  switch (operation) {
-    case PathOperationKind::Union: return embedded::kBootstrapUnionSvg;
-    case PathOperationKind::Intersect: return embedded::kBootstrapIntersectSvg;
-    case PathOperationKind::SubtractFront: return embedded::kBootstrapSubtractSvg;
-    case PathOperationKind::SubtractBack: return embedded::kBootstrapSubtractSvg;
-    case PathOperationKind::Exclude: return embedded::kBootstrapExcludeSvg;
-  }
-  return embedded::kBootstrapUnionSvg;
-}
 
 const std::optional<svg::RendererBitmap>& CachedPathOperationIconBitmap(
     PathOperationKind operation) {
   switch (operation) {
     case PathOperationKind::Union: {
       static const std::optional<svg::RendererBitmap> bitmap = RenderEmbeddedSvgIcon(
-          BootstrapSvgForPathOperation(PathOperationKind::Union), kPathOperationIconRasterSizePx);
+          PathOperationIconSvg(PathOperationKind::Union), kPathOperationIconRasterSizePx);
       return bitmap;
     }
     case PathOperationKind::Intersect: {
-      static const std::optional<svg::RendererBitmap> bitmap =
-          RenderEmbeddedSvgIcon(BootstrapSvgForPathOperation(PathOperationKind::Intersect),
-                                kPathOperationIconRasterSizePx);
+      static const std::optional<svg::RendererBitmap> bitmap = RenderEmbeddedSvgIcon(
+          PathOperationIconSvg(PathOperationKind::Intersect), kPathOperationIconRasterSizePx);
       return bitmap;
     }
     case PathOperationKind::SubtractFront: {
-      static const std::optional<svg::RendererBitmap> bitmap =
-          RenderEmbeddedSvgIcon(BootstrapSvgForPathOperation(PathOperationKind::SubtractFront),
-                                kPathOperationIconRasterSizePx);
+      static const std::optional<svg::RendererBitmap> bitmap = RenderEmbeddedSvgIcon(
+          PathOperationIconSvg(PathOperationKind::SubtractFront), kPathOperationIconRasterSizePx);
       return bitmap;
     }
     case PathOperationKind::SubtractBack: {
-      static const std::optional<svg::RendererBitmap> bitmap =
-          RenderEmbeddedSvgIcon(BootstrapSvgForPathOperation(PathOperationKind::SubtractBack),
-                                kPathOperationIconRasterSizePx);
+      static const std::optional<svg::RendererBitmap> bitmap = RenderEmbeddedSvgIcon(
+          PathOperationIconSvg(PathOperationKind::SubtractBack), kPathOperationIconRasterSizePx);
       return bitmap;
     }
     case PathOperationKind::Exclude: {
       static const std::optional<svg::RendererBitmap> bitmap = RenderEmbeddedSvgIcon(
-          BootstrapSvgForPathOperation(PathOperationKind::Exclude), kPathOperationIconRasterSizePx);
+          PathOperationIconSvg(PathOperationKind::Exclude), kPathOperationIconRasterSizePx);
       return bitmap;
     }
   }
@@ -464,17 +439,42 @@ constexpr double kMinimumSpanForScale = 1e-6;
 
 }  // namespace
 
+std::span<const unsigned char> PathOperationIconSvg(PathOperationKind operation) {
+  switch (operation) {
+    case PathOperationKind::Union: return embedded::kBootstrapUnionSvg;
+    case PathOperationKind::Intersect: return embedded::kBootstrapIntersectSvg;
+    case PathOperationKind::SubtractFront: return embedded::kBootstrapSubtractSvg;
+    // No inspector button today; the front/back distinction is a z-order
+    // argument, not a different boolean, so both reuse the subtract glyph.
+    case PathOperationKind::SubtractBack: return embedded::kBootstrapSubtractSvg;
+    case PathOperationKind::Exclude: return embedded::kBootstrapExcludeSvg;
+  }
+  return embedded::kBootstrapUnionSvg;
+}
+
+std::uint64_t PathOperationIconTextureKey(PathOperationKind operation) {
+  constexpr std::uint64_t kIconTextureKeyBase = 0xf600000000000000ull;
+  switch (operation) {
+    case PathOperationKind::Union: return kIconTextureKeyBase + 1u;
+    case PathOperationKind::Intersect: return kIconTextureKeyBase + 2u;
+    case PathOperationKind::SubtractFront: return kIconTextureKeyBase + 3u;
+    case PathOperationKind::SubtractBack: return kIconTextureKeyBase + 4u;
+    case PathOperationKind::Exclude: return kIconTextureKeyBase + 5u;
+  }
+  return kIconTextureKeyBase;
+}
+
 std::span<const EmbeddedSvgIconRequest> SidebarIconPrewarmRequests() {
   static const std::array<EmbeddedSvgIconRequest, 5> kRequests = {{
-      {BootstrapSvgForPathOperation(PathOperationKind::Union), kPathOperationIconRasterSizePx,
+      {PathOperationIconSvg(PathOperationKind::Union), kPathOperationIconRasterSizePx,
        /*tintableMask=*/true},
-      {BootstrapSvgForPathOperation(PathOperationKind::Intersect), kPathOperationIconRasterSizePx,
+      {PathOperationIconSvg(PathOperationKind::Intersect), kPathOperationIconRasterSizePx,
        /*tintableMask=*/true},
-      {BootstrapSvgForPathOperation(PathOperationKind::SubtractFront),
-       kPathOperationIconRasterSizePx, /*tintableMask=*/true},
-      {BootstrapSvgForPathOperation(PathOperationKind::SubtractBack),
-       kPathOperationIconRasterSizePx, /*tintableMask=*/true},
-      {BootstrapSvgForPathOperation(PathOperationKind::Exclude), kPathOperationIconRasterSizePx,
+      {PathOperationIconSvg(PathOperationKind::SubtractFront), kPathOperationIconRasterSizePx,
+       /*tintableMask=*/true},
+      {PathOperationIconSvg(PathOperationKind::SubtractBack), kPathOperationIconRasterSizePx,
+       /*tintableMask=*/true},
+      {PathOperationIconSvg(PathOperationKind::Exclude), kPathOperationIconRasterSizePx,
        /*tintableMask=*/true},
   }};
   return kRequests;

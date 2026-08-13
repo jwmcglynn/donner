@@ -1756,6 +1756,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink {
   /// single-draw path so we don't pay the per-instance-buffer cost for
   /// unbatched draws.
   struct PendingBatch {
+    /// Registry the batch's source entity belongs to. Entity ids are only
+    /// unique within one registry, so a frame that draws more than one
+    /// document (the icon-atlas pass) has to compare this too - otherwise a
+    /// second document's identically-numbered entity extends the first
+    /// document's batch and is drawn with the first document's geometry.
+    const Registry* sourceRegistry = nullptr;
     Entity sourceEntity = entt::null;
     css::RGBA color;
     FillRule rule = FillRule::NonZero;
@@ -1953,10 +1959,13 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink {
   /// The caller is expected to have already verified the draw is
   /// "batch-compatible" (solid paint, no stroke, has source entity,
   /// has cached fill encode, no in-flight pattern).
-  bool tryAppendOrStartBatch(Entity sourceEntity, const Path& path, const css::RGBA& color,
-                             FillRule rule, const geode::EncodedPath* encoded,
+  bool tryAppendOrStartBatch(const Registry* sourceRegistry, Entity sourceEntity, const Path& path,
+                             const css::RGBA& color, FillRule rule,
+                             const geode::EncodedPath* encoded,
                              geode::GeodeResidentSlot* residentFillSlot) {
-    const bool matches = pendingBatch.has_value() && pendingBatch->sourceEntity == sourceEntity &&
+    const bool matches = pendingBatch.has_value() &&
+                         pendingBatch->sourceRegistry == sourceRegistry &&
+                         pendingBatch->sourceEntity == sourceEntity &&
                          pendingBatch->color == color && pendingBatch->rule == rule;
     if (matches) {
       pendingBatch->deviceFromLocalTransforms.push_back(deviceFromLocalTransform);
@@ -1965,6 +1974,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink {
     // Key doesn't match - flush whatever's pending, then start fresh.
     flushPendingBatch();
     pendingBatch = PendingBatch{};
+    pendingBatch->sourceRegistry = sourceRegistry;
     pendingBatch->sourceEntity = sourceEntity;
     pendingBatch->color = color;
     pendingBatch->rule = rule;
@@ -3888,8 +3898,8 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
     const auto& solid = std::get<PaintServer::Solid>(impl_->paint.fill);
     const css::RGBA color = solid.color.resolve(impl_->paint.currentColor.rgba(),
                                                 static_cast<float>(impl_->paint.fillOpacity));
-    impl_->tryAppendOrStartBatch(path.sourceEntity.entity(), path.path, color, path.fillRule,
-                                 fillEncoded, residentFill);
+    impl_->tryAppendOrStartBatch(path.sourceEntity.registry(), path.sourceEntity.entity(),
+                                 path.path, color, path.fillRule, fillEncoded, residentFill);
     return;
   }
 

@@ -1,16 +1,21 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <stb/stb_truetype.h>
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <fstream>
+#include <ios>
 #include <iterator>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "donner/base/tests/Runfiles.h"
+#include "donner/editor/EditorSymbolGlyphs.h"
 #include "embed_resources/FiraCodeFont.h"
 #include "embed_resources/RobotoFont.h"
 
@@ -57,6 +62,35 @@ TEST(EditorFontAssetsTest, EmbeddedUiFontsPreserveCompleteUpstreamAssets) {
         static_cast<std::size_t>(std::distance(font.embeddedBytes.begin(), mismatch.first));
     EXPECT_EQ(mismatchOffset, upstreamBytes.size())
         << font.name << " first differs from the upstream asset at byte " << mismatchOffset;
+  }
+}
+
+// Every non-ASCII glyph the editor chrome draws has to exist in the fonts the
+// editor ships. ImGui builds its atlas from the requested ranges intersected
+// with the font's `cmap`: a codepoint the font does not have is dropped
+// silently and every draw of it falls back to the font's fallback character, a
+// literal `?`. That is how the source pane's unnumbered reference chips ended
+// up rendering `?` - they asked Roboto for dingbats it has never contained.
+TEST(EditorFontAssetsTest, EmbeddedFontsProvideEveryEditorSymbolGlyph) {
+  const std::array fonts = {
+      std::pair<std::string_view, std::span<const unsigned char>>{"Roboto Regular",
+                                                                  embedded::kRobotoRegularTtf},
+      std::pair<std::string_view, std::span<const unsigned char>>{"Roboto Bold",
+                                                                  embedded::kRobotoBoldTtf},
+      std::pair<std::string_view, std::span<const unsigned char>>{"Fira Code Regular",
+                                                                  embedded::kFiraCodeRegularTtf},
+  };
+
+  for (const auto& [name, bytes] : fonts) {
+    stbtt_fontinfo font = {};
+    ASSERT_NE(stbtt_InitFont(&font, bytes.data(), stbtt_GetFontOffsetForIndex(bytes.data(), 0)), 0)
+        << name << " could not be parsed";
+    for (const char32_t codepoint : kEditorSymbolCodepoints) {
+      EXPECT_NE(stbtt_FindGlyphIndex(&font, static_cast<int>(codepoint)), 0)
+          << name << " has no glyph for U+" << std::hex << std::uppercase
+          << static_cast<std::uint32_t>(codepoint)
+          << ", so the editor chrome draws its fallback '?' instead";
+    }
   }
 }
 

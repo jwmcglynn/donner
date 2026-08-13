@@ -523,13 +523,17 @@ void CompositorDebugPanel::render(
     return;
   }
 
+  // No `ImGuiTableFlags_ScrollY`: the table auto-extends to its row count and
+  // the panel window's own scrollbar reaches every row plus the totals footer
+  // below it. A scrolling table would size its child to the space left after
+  // the diagnostics header above, which in a short panel is nothing - the
+  // table collapsed to a sliver and the rows became unreachable at any scroll
+  // position, because the window's scroll extent stopped at the sliver.
   constexpr ImGuiTableFlags kFlags = ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg |
-                                     ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_ScrollY |
-                                     ImGuiTableFlags_Resizable;
+                                     ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_Resizable;
   if (!ImGui::BeginTable("##composite_tiles_table", 6, kFlags)) {
     return;
   }
-  ImGui::TableSetupScrollFreeze(0, 1);
   ImGui::TableSetupColumn("Preview", ImGuiTableColumnFlags_WidthFixed,
                           kThumbnailDisplayHeight * 1.4f);
   ImGui::TableSetupColumn("Kind", ImGuiTableColumnFlags_WidthFixed, 64.0f);

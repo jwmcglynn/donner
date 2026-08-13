@@ -659,23 +659,30 @@ export interface DragRegression {
  * projection is used, so the scale factor between them cannot change the
  * verdict; the tolerance is applied to the presented magnitude alone.
  *
- * Reversal carve-out: presentation legitimately lags the pointer by a frame or
- * two, so for a beat after the pointer REVERSES the on-screen content is still
- * finishing the old direction. That is latency, not an out-of-order frame, and
- * no pointer-relative observer can tell the two apart inside that window. A
- * candidate regression is therefore excused only when all three hold: the
- * pointer's direction over the `reversalHorizonMs` before the interval opposes
- * its direction inside it (a reversal happened), that prior direction was
- * itself above the noise floor, and the presented motion points ALONG the
- * pre-reversal direction (the latency signature). A pop-back during steady
- * one-direction motion fails the first test and is still reported.
+ * Latency carve-out: presentation legitimately lags the pointer, and no
+ * pointer-relative observer can distinguish lag from an out-of-order frame
+ * near a direction change. A candidate regression is therefore excused when
+ * the presented motion is consistent with the pointer stream at SOME latency
+ * in [0, maxLatencyMs]: the sweep projects the presented delta onto the
+ * pointer's displacement over the same-length interval shifted back by each
+ * lag hypothesis, and any above-noise-floor positive projection explains the
+ * motion as latency-l tracking. A genuine pop-back during sustained motion
+ * opposes the pointer at EVERY lag in the window and is still reported.
+ *
+ * Two earlier formulations failed on CI evidence before this one: a fixed
+ * single-lag "reversal horizon" (its net-displacement window straddles the
+ * reversal apex, cancels below the noise floor, and the excuse aborts exactly
+ * where it is needed - every observed false positive had pointer speed just
+ * above the noise gate, the signature of an apex), and the same horizon
+ * CI-scaled (same geometry, wider window, same cancellation). The sweep uses
+ * short per-lag windows, so nothing cancels.
  */
 export function dragRegressions(
   samples: readonly CompositedSample[],
   pointerTrace: ReadonlyArray<readonly [number, number, number]>,
   toleranceReadbackPx = 1.0,
   minPointerDeltaCssPx = 2.0,
-  reversalHorizonMs = 150,
+  maxLatencyMs = 150,
 ): DragRegression[] {
   const pointerAt = (t: number): { x: number; y: number } | null => {
     let best: readonly [number, number, number] | null = null;
@@ -706,13 +713,20 @@ export function dragRegressions(
           const presentedDy = sample.coloredCentroidY - previous.coloredCentroidY;
           const projection = (presentedDx * pointerDx + presentedDy * pointerDy) / pointerLength;
           if (projection < -toleranceReadbackPx) {
-            const horizonStart = pointerAt(previous.t - reversalHorizonMs);
-            const beforeDx = horizonStart === null ? 0 : before.x - horizonStart.x;
-            const beforeDy = horizonStart === null ? 0 : before.y - horizonStart.y;
-            const excusedByReversal = Math.hypot(beforeDx, beforeDy) >= minPointerDeltaCssPx
-              && beforeDx * pointerDx + beforeDy * pointerDy < 0
-              && presentedDx * beforeDx + presentedDy * beforeDy > 0;
-            if (!excusedByReversal) {
+            const lagStepMs = 25;
+            let excusedByLatency = false;
+            for (let lag = lagStepMs; lag <= maxLatencyMs && !excusedByLatency; lag += lagStepMs) {
+              const lagBefore = pointerAt(previous.t - lag);
+              const lagAfter = pointerAt(sample.t - lag);
+              if (lagBefore === null || lagAfter === null) {
+                continue;
+              }
+              const lagDx = lagAfter.x - lagBefore.x;
+              const lagDy = lagAfter.y - lagBefore.y;
+              excusedByLatency = Math.hypot(lagDx, lagDy) >= minPointerDeltaCssPx
+                && presentedDx * lagDx + presentedDy * lagDy > 0;
+            }
+            if (!excusedByLatency) {
               regressions.push({
                 sampleIndex: index,
                 presentedDx,

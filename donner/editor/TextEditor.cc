@@ -16,6 +16,7 @@
 #include "donner/base/Box.h"
 #include "donner/base/Utf8.h"
 #include "donner/base/Utils.h"
+#include "donner/editor/EditorSymbolGlyphs.h"
 #include "donner/editor/ImGuiInternalIncludes.h"
 #include "misc/cpp/imgui_stdlib.h"
 
@@ -1872,11 +1873,9 @@ ImU32 SourceStyleStrikethroughColor() {
   return ImGui::ColorConvertFloat4ToU32(ImVec4(1.0f, 1.0f, 1.0f, 0.92f));
 }
 
-constexpr const char* kStyleSourceChipIcon = "✦";
-
 ImVec2 StyleSourceChipTextSize() {
   return ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, -1.0f,
-                                         kStyleSourceChipIcon);
+                                         kSourceReferenceChipIcon);
 }
 
 ImVec2 ChipConnectorPoint(const ImVec2& min, const ImVec2& max, const ImVec2& otherEndpoint,
@@ -2486,7 +2485,7 @@ void TextEditor::renderFocusReferenceStyleSourceChip(ImDrawList* drawList,
   drawList->AddRect(bounds.min, bounds.max, borderColor, rounding, ImDrawFlags_None,
                     std::max(1.0f, uiScale_));
   drawList->AddText(ImVec2(bounds.min.x + paddingX, bounds.min.y + paddingY), borderColor,
-                    kStyleSourceChipIcon);
+                    kSourceReferenceChipIcon);
 }
 
 void TextEditor::renderSourceStyleDecorationChips(ImDrawList* drawList) {
@@ -2501,7 +2500,6 @@ void TextEditor::renderSourceStyleDecorationChips(ImDrawList* drawList) {
   const float markerGap = std::max(2.0f * uiScale_, 2.0f);
   const float markerFontSize = ImGui::GetFontSize() * 1.45f;
   const float markerHitPadding = std::max(2.0f * uiScale_, 2.0f);
-  constexpr const char* kOverflowMarker = "✱";
 
   for (const SourceStyleDecoration& decoration : sourceStyleDecorations_) {
     if (!decoration.showChip) {
@@ -2532,12 +2530,12 @@ void TextEditor::renderSourceStyleDecorationChips(ImDrawList* drawList) {
     });
 
     if (decoration.showOverflowMarker) {
-      const ImVec2 markerSize =
-          ImGui::GetFont()->CalcTextSizeA(markerFontSize, FLT_MAX, -1.0f, kOverflowMarker);
+      const ImVec2 markerSize = ImGui::GetFont()->CalcTextSizeA(markerFontSize, FLT_MAX, -1.0f,
+                                                                kSourceChipOverflowMarker);
       const ImVec2 markerMin(max.x + markerGap, min.y + (chipSize.y - markerSize.y) * 0.5f);
       const ImVec2 markerMax(markerMin.x + markerSize.x, markerMin.y + markerSize.y);
       drawList->AddText(ImGui::GetFont(), markerFontSize, markerMin, SourceStyleChipFillColor(),
-                        kOverflowMarker);
+                        kSourceChipOverflowMarker);
 
       sourceStyleChipHitRects_.push_back(SourceStyleChipHitRect{
           .id = decoration.id,

@@ -3,9 +3,12 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "donner/base/MathUtils.h"
@@ -19,6 +22,7 @@ namespace {
 
 using ::testing::ElementsAre;
 using ::testing::IsEmpty;
+using ::testing::Not;
 using ::testing::Pair;
 
 constexpr std::string_view kInspectorSvg =
@@ -1187,6 +1191,50 @@ TEST_F(SidebarPresenterImGuiTest, TransformFieldDragAppliesAndCommitsEdit) {
   EXPECT_FALSE(presenter.hasTransformEditForTesting())
       << "Releasing the drag must commit the transform edit.";
   EXPECT_TRUE(app.canUndo()) << "The committed drag edit must be undoable.";
+}
+
+// Each Path Operations button has to draw its own operation's artwork. Both
+// halves of that contract are pinned here: distinct SVG sources so no two
+// buttons share a glyph, and distinct texture keys so no two buttons share an
+// uploaded presentation texture. The icons are Donner-rendered SVG - the SVG
+// bytes are what the editor rasterizes - so a mapping regression is visible
+// right here rather than only on screen.
+TEST(SidebarPathOperationIcons, EveryInspectorOperationMapsToItsOwnIconAndTextureKey) {
+  std::vector<std::pair<PathOperationKind, const unsigned char*>> iconSources;
+  std::vector<std::uint64_t> textureKeys;
+  for (const PathOperationKind operation : kInspectorPathOperations) {
+    const std::span<const unsigned char> svg = PathOperationIconSvg(operation);
+    ASSERT_THAT(svg, Not(IsEmpty())) << "operation " << static_cast<int>(operation);
+    iconSources.emplace_back(operation, svg.data());
+    textureKeys.push_back(PathOperationIconTextureKey(operation));
+  }
+
+  for (std::size_t i = 0; i < iconSources.size(); ++i) {
+    for (std::size_t j = i + 1u; j < iconSources.size(); ++j) {
+      EXPECT_NE(iconSources[i].second, iconSources[j].second)
+          << "operations " << static_cast<int>(iconSources[i].first) << " and "
+          << static_cast<int>(iconSources[j].first) << " share one icon asset";
+      EXPECT_NE(textureKeys[i], textureKeys[j])
+          << "operations " << static_cast<int>(iconSources[i].first) << " and "
+          << static_cast<int>(iconSources[j].first) << " share one icon texture key";
+    }
+  }
+}
+
+// The prewarm batch is what the editor's boot path actually rasterizes, so it
+// has to carry every button's artwork; a button missing from it pays a GPU
+// readback on the first selection instead.
+TEST(SidebarPathOperationIcons, PrewarmRequestsCoverEveryInspectorButton) {
+  const std::span<const EmbeddedSvgIconRequest> requests = SidebarIconPrewarmRequests();
+  for (const PathOperationKind operation : kInspectorPathOperations) {
+    const std::span<const unsigned char> svg = PathOperationIconSvg(operation);
+    const bool present =
+        std::any_of(requests.begin(), requests.end(), [&](const EmbeddedSvgIconRequest& request) {
+          return request.svgBytes.data() == svg.data() && request.tintableMask;
+        });
+    EXPECT_TRUE(present) << "operation " << static_cast<int>(operation)
+                         << "'s icon is not in the startup prewarm batch";
+  }
 }
 
 }  // namespace

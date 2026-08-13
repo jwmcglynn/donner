@@ -17,6 +17,8 @@
 #include "donner/editor/FrameMissTelemetry.h"
 #include "donner/editor/GlTextureCache.h"
 #include "donner/editor/ImGuiIncludes.h"
+#include "donner/editor/PenTool.h"
+#include "donner/editor/RotateCursorSet.h"
 #include "donner/editor/SelectionTransformHandles.h"
 #include "donner/editor/SourceSelection.h"
 #include "donner/editor/ViewportInteractionController.h"
@@ -80,6 +82,15 @@ enum class DeferredRenderAction {
     const PresentationResourceStats& resources);
 [[nodiscard]] ImGuiMouseCursor CursorForTransformHandleIntent(
     const SelectionTransformHandleIntent& intent);
+
+/// Pen nib variant to show for @p intent.
+///
+/// \ref PenHoverIntent::DragAnchor has no nib: grabbing an existing anchor is
+/// not a nib gesture, so the shell shows the anchor-point cursor for it and
+/// this returns the plain nib as an inert default.
+///
+/// @param intent What a pen-tool click under the pointer would do.
+[[nodiscard]] PenCursorHint PenCursorHintForIntent(PenHoverIntent intent);
 [[nodiscard]] bool ContainsScreenPoint(const Box2d& rect, const ImVec2& point);
 [[nodiscard]] std::optional<Box2d> TextFormatBarScreenRect(const ImVec2& paneOrigin,
                                                            const ImVec2& contentRegion,

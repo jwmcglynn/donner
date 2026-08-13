@@ -273,6 +273,34 @@ TEST(EmbeddedSvgIcon, AtlasSlicesMatchStandaloneRenders) {
   EXPECT_TRUE(BitmapsMatch(*standaloneArtwork, *batched[2]));
 }
 
+// Two solid-filled icons of the same size in one atlas pass are the case the
+// renderer's instanced fill batching gets wrong when its batch key is not
+// document-scoped: same paint, same fill rule, and - because each icon is
+// parsed into its own fresh document - the same entity id. The second tile then
+// extends the first tile's batch and is drawn with the first tile's geometry,
+// which is how every Path Operations button ended up showing the union glyph.
+TEST(EmbeddedSvgIcon, AtlasTilesOfEqualSizeKeepTheirOwnGeometry) {
+  const std::optional<svg::RendererBitmap> standaloneSquare =
+      RenderEmbeddedSvgIcon(BytesOf(kSquareIconSvg), /*outputSizePx=*/32);
+  const std::optional<svg::RendererBitmap> standaloneTriangle =
+      RenderEmbeddedSvgIcon(BytesOf(kTriangleIconSvg), /*outputSizePx=*/32);
+  ASSERT_TRUE(standaloneSquare.has_value());
+  ASSERT_TRUE(standaloneTriangle.has_value());
+
+  const std::array<EmbeddedSvgIconRequest, 2> requests = {{
+      {BytesOf(kSquareIconSvg), 32, /*tintableMask=*/true},
+      {BytesOf(kTriangleIconSvg), 32, /*tintableMask=*/true},
+  }};
+  const std::vector<std::optional<svg::RendererBitmap>> batched =
+      RenderEmbeddedSvgIconBatch(requests);
+
+  ASSERT_EQ(batched.size(), requests.size());
+  ASSERT_TRUE(batched[0].has_value());
+  ASSERT_TRUE(batched[1].has_value());
+  EXPECT_TRUE(BitmapsMatch(*standaloneSquare, *batched[0]));
+  EXPECT_TRUE(BitmapsMatch(*standaloneTriangle, *batched[1]));
+}
+
 // The batch has to survive requests it cannot render without dropping the ones
 // it can: a bad tile must not shift the atlas slices of its neighbors.
 TEST(EmbeddedSvgIcon, AtlasSkipsUnrenderableRequestsInPlace) {

@@ -14,6 +14,7 @@
 /// commit, or a tool switch).
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -24,6 +25,20 @@
 #include "donner/svg/SVGPathElement.h"
 
 namespace donner::editor {
+
+/// What a pen-tool click at the hovered point would do. Drives the contextual
+/// pointer cursor so the user can tell "this click edits the path I am pointing
+/// at" from "this click adds a point".
+enum class PenHoverIntent : std::uint8_t {
+  /// Start a path, or append an anchor to the one being drafted.
+  PlaceAnchor,
+  /// Close the active contour on its first anchor.
+  ClosePath,
+  /// Grab the anchor or control point under the pointer and move it.
+  DragAnchor,
+  /// Split the hovered segment with a new anchor, preserving the shape.
+  InsertAnchor,
+};
 
 /// Click-to-place path authoring tool with direct point editing.
 ///
@@ -125,6 +140,19 @@ public:
   /// @param modifiers Modifier-key state for the hover.
   [[nodiscard]] bool wouldCloseAt(const Vector2d& documentPoint,
                                   const MouseModifiers& modifiers) const;
+
+  /// What a click at `documentPoint` would do, following the same precedence
+  /// \ref onMouseDown resolves the click with: close, then an existing point,
+  /// then an existing segment, then a new anchor. Answers for both the active
+  /// draft and a selected committed `<path>`, so hovering a committed path's
+  /// anchor reports \ref PenHoverIntent::DragAnchor before any pen session
+  /// exists.
+  ///
+  /// @param editor Editor state, read for the selected path.
+  /// @param documentPoint Pointer location in SVG document coordinates.
+  /// @param modifiers Modifier-key state for the hover.
+  [[nodiscard]] PenHoverIntent hoverIntentAt(const EditorApp& editor, const Vector2d& documentPoint,
+                                             const MouseModifiers& modifiers) const;
 
   /// First anchor of the active draft (the close-path target).
   [[nodiscard]] const Vector2d& draftStartPoint() const { return startPoint_; }

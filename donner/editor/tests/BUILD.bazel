@@ -63,9 +63,11 @@ donner_cc_test(
     deps = [
         "//donner/base",
         "//donner/base:base_test_utils",
+        "//donner/editor:editor_symbol_glyphs",
         "//third_party/fira-code",
         "//third_party/roboto",
         "@com_google_gtest//:gtest_main",
+        "@stb//:truetype",
     ],
 )
 
@@ -1015,6 +1017,19 @@ donner_cc_test(
     srcs = ["ToolKeybinding_tests.cc"],
     deps = [
         "//donner/editor:tool_keybinding",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+# Compositor Debug panel layout: every composite-tile row has to stay
+# reachable by the panel's own scrollbar, at any panel size.
+donner_cc_test(
+    name = "compositor_debug_panel_tests",
+    srcs = ["CompositorDebugPanel_tests.cc"],
+    deps = [
+        "//donner/base",
+        "//donner/editor:compositor_debug_panel",
+        "//donner/editor:imgui_headers",
         "@com_google_gtest//:gtest_main",
     ],
 )
