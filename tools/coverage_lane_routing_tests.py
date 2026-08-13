@@ -143,12 +143,33 @@ class CoverageLaneRoutingTest(unittest.TestCase):
         return rest[: end.start()] if end else rest
 
     def test_every_coverage_job_gates_on_runs_coverage(self):
-        for job in ("coverage-self-hosted", "coverage-self-hosted-turnstile"):
+        """All three lanes, including the hosted one.
+
+        `build` is the hosted lane, and it is not a fallback nobody exercises:
+        it is what carries coverage for every PR over the changed-file cap,
+        which is exactly when the self-hosted lane and its turnstile skip. If it
+        ever stopped consuming `runs_coverage`, a large-change PR would land in
+        the same shape the routing fix removed - all lanes skipped, run green.
+        """
+        for job in ("build", "coverage-self-hosted", "coverage-self-hosted-turnstile"):
             self.assertIn(
                 "outputs.runs_coverage == 'true'",
                 self._job_body(job),
                 "job %s does not gate on the single routing output" % job,
             )
+
+    def test_large_change_routes_to_the_hosted_lane_rather_than_nowhere(self):
+        """The cap moves coverage between lanes; it must never cancel it.
+
+        `large_change` sends a PR to the hosted lane instead of the constrained
+        self-hosted one. The two gates have to be exact complements on that
+        flag, or a large-change PR falls through both and reports green having
+        measured nothing.
+        """
+        hosted = self._job_body("build")
+        self.assertIn("outputs.large_change == 'true'", hosted)
+        for job in ("coverage-self-hosted", "coverage-self-hosted-turnstile"):
+            self.assertIn("outputs.large_change != 'true'", self._job_body(job))
 
     def test_build_defs_and_bazelrc_do_not_escalate_to_a_full_fallback(self):
         """The regression itself.
