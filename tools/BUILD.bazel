@@ -113,6 +113,14 @@ py_test(
 )
 
 py_test(
+    name = "coverage_lane_routing_tests",
+    size = "small",
+    srcs = ["coverage_lane_routing_tests.py"],
+    data = ["//:.github/workflows/coverage.yml"],
+    deps = ["@rules_python//python/runfiles"],
+)
+
+py_test(
     name = "remote_cache_config_tests",
     size = "small",
     srcs = ["remote_cache_config_tests.py"],

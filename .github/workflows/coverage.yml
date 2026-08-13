@@ -78,6 +78,7 @@ jobs:
     outputs:
       fallback: ${{ steps.determine.outputs.fallback }}
       fallback_reason: ${{ steps.determine.outputs.fallback_reason }}
+      runs_coverage: ${{ steps.determine.outputs.runs_coverage }}
       targets: ${{ steps.determine.outputs.targets }}
       target_count: ${{ steps.determine.outputs.target_count }}
       large_change: ${{ steps.determine.outputs.large_change }}
@@ -229,18 +230,67 @@ jobs:
           echo "use_self_hosted_linux=$use_self_hosted_linux" >> "$GITHUB_OUTPUT"
           echo "coverage_runner=self_hosted_linux:$use_self_hosted_linux renovate:$is_renovate pr_author:$pr_author"
 
+          # Single source of truth for "does a coverage lane actually run?".
+          #
+          # This used to be duplicated as an `if:` expression on each coverage
+          # job, which let the two halves disagree: a reason could mean "cover
+          # everything" here while every job's gate read it as "skip". That is
+          # not hypothetical - `build_defs/*` did exactly that, and the result
+          # was zero coverage on the changes most able to move coverage. The
+          # jobs now gate on `runs_coverage` alone, so the emitting side and the
+          # consuming side cannot drift apart again.
+          #
+          # `no_instrumentable_targets` is the one reason that legitimately
+          # means "nothing to do": the affected set contains no instrumentable
+          # C/C++ at all, so there is nothing a coverage run could measure.
+          # tools/coverage_lane_routing.py pins this table and asserts every
+          # reason emitted by this workflow appears in it.
+          coverage_lane_runs() {
+            local fallback="$1"
+            local reason="$2"
+
+            # Non-PR events (main pushes) always run: that baseline is what
+            # lets PR-side fallbacks be skipped at all.
+            if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+              echo true
+              return
+            fi
+            if [[ "$reason" == "no_instrumentable_targets" ]]; then
+              echo false
+              return
+            fi
+            # A genuine incremental subset, the cheap smoke subset, and an
+            # explicit opt-in all run on a PR. Everything else is a full
+            # fallback whose baseline is the main-push run.
+            if [[ "$fallback" == "false" || "$reason" == "coverage_smoke" || "$reason" == "full_test_label" ]]; then
+              echo true
+              return
+            fi
+            echo false
+          }
+
           emit_targets() {
             local fallback="$1"
             local reason="$2"
             local targets="$3"
             local count
             count="$(wc -w <<< "$targets" | tr -d ' ')"
+            local runs
+            runs="$(coverage_lane_runs "$fallback" "$reason")"
+
+            # A non-empty target set that no lane will consume is the exact
+            # shape of the bug this routing replaced. Say so in the log rather
+            # than leaving a run that looks green because it did nothing.
+            if [[ "$runs" == "false" && "$count" != "0" ]]; then
+              echo "::notice::Coverage skipped on this PR (reason=$reason); the main-push baseline covers these $count target(s)."
+            fi
 
             {
               echo "fallback=$fallback"
               echo "fallback_reason=$reason"
               echo "targets=$targets"
               echo "target_count=$count"
+              echo "runs_coverage=$runs"
               echo "large_change=$large_change"
               echo "changed_file_count=$changed_file_count"
             } >> "$GITHUB_OUTPUT"
@@ -249,6 +299,7 @@ jobs:
               echo "fallback=$fallback"
               echo "fallback_reason=$reason"
               echo "target_count=$count"
+              echo "runs_coverage=$runs"
               echo "large_change=$large_change"
               echo "changed_file_count=$changed_file_count"
               echo
@@ -313,12 +364,28 @@ jobs:
             [[ -z "$path" ]] && continue
             case "$path" in
               # A root Bazel pin change changes analysis and action semantics
-              # for every target. Let the main-push package-pattern baseline
-              # validate it; feeding bazel-diff's broad explicit label set
-              # into hosted PR coverage violates the lane budget and includes
-              # host-incompatible labels that package patterns skip naturally.
-              MODULE.bazel|.bazelversion|WORKSPACE|WORKSPACE.*|build_defs/*|third_party/bazel/*)
-                echo "Build graph infrastructure change requires full coverage: $path"
+              # for every target, and bazel-diff cannot model that: it hashes
+              # the graph these files DEFINE, so a version pin moving under it
+              # is exactly the case its impact analysis cannot see. Let the
+              # main-push package-pattern baseline validate those.
+              #
+              # `build_defs/*` and `.bazelrc` are deliberately NOT in this list.
+              # bazel-diff hashes .bzl files transitively (that is what
+              # `--includeTargetType` is for), so a rules.bzl change yields a
+              # genuine, correct affected set rather than an unbounded one. They
+              # used to escalate here, and the escalation composed with the
+              # job gate below into a coverage HOLE: this step emitted
+              # `fallback=true, reason=infra_change` meaning "cover everything",
+              # both coverage jobs gate on
+              # `fallback == 'false' || coverage_smoke || full_test_label`, and
+              # so a full fallback on a PR resolved to running NOTHING. "Run
+              # everything" silently became "run nothing" on precisely the
+              # changes most likely to alter coverage. The objection recorded
+              # here about host-incompatible labels is answered by
+              # `coverage --skip_incompatible_explicit_targets` in .bazelrc,
+              # which was added after this comment was written.
+              MODULE.bazel|.bazelversion|WORKSPACE|WORKSPACE.*|third_party/bazel/*)
+                echo "Root Bazel pin change requires full coverage: $path"
                 should_fallback=true
                 fallback_reason="infra_change"
                 break
@@ -571,7 +638,7 @@ jobs:
     # full //... fallback on a PR (infra change, bazel-diff failure, empty diff)
     # is SKIPPED here -- the main-push baseline covers those lines under the
     # 15-minute PR budget.
-    if: ${{ (needs.determine-targets.outputs.use_self_hosted_linux != 'true' || needs.determine-targets.outputs.large_change == 'true') && (github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && (needs.determine-targets.outputs.fallback == 'false' || needs.determine-targets.outputs.fallback_reason == 'coverage_smoke' || needs.determine-targets.outputs.fallback_reason == 'full_test_label'))) }}
+    if: ${{ (needs.determine-targets.outputs.use_self_hosted_linux != 'true' || needs.determine-targets.outputs.large_change == 'true') && needs.determine-targets.outputs.runs_coverage == 'true' }}
 
     steps:
       - uses: actions/checkout@v7
@@ -675,7 +742,7 @@ jobs:
   coverage-self-hosted-turnstile:
     runs-on: ubuntu-24.04
     needs: determine-targets
-    if: ${{ needs.determine-targets.outputs.use_self_hosted_linux == 'true' && needs.determine-targets.outputs.large_change != 'true' && (github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && (needs.determine-targets.outputs.fallback == 'false' || needs.determine-targets.outputs.fallback_reason == 'coverage_smoke' || needs.determine-targets.outputs.fallback_reason == 'full_test_label'))) }}
+    if: ${{ needs.determine-targets.outputs.use_self_hosted_linux == 'true' && needs.determine-targets.outputs.large_change != 'true' && needs.determine-targets.outputs.runs_coverage == 'true' }}
     timeout-minutes: 165
     steps:
       - name: Checkout turnstile action
@@ -697,7 +764,7 @@ jobs:
     # skipped on PRs (main-push baseline covers it). Trusted main pushes run
     # here instead of hosted Ubuntu. Large-change PRs (over the changed-file
     # cap) stay on the hosted coverage lane.
-    if: ${{ needs.determine-targets.outputs.use_self_hosted_linux == 'true' && needs.determine-targets.outputs.large_change != 'true' && (github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && (needs.determine-targets.outputs.fallback == 'false' || needs.determine-targets.outputs.fallback_reason == 'coverage_smoke' || needs.determine-targets.outputs.fallback_reason == 'full_test_label'))) }}
+    if: ${{ needs.determine-targets.outputs.use_self_hosted_linux == 'true' && needs.determine-targets.outputs.large_change != 'true' && needs.determine-targets.outputs.runs_coverage == 'true' }}
     # Coverage healthy median is ~21 min. This budget starts only after the
     # hosted turnstile admits this job, so queued work does not consume it or
     # occupy the constrained self-hosted runner pool.
