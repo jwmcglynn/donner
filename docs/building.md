@@ -266,13 +266,14 @@ bazel run //donner/editor -- donner_splash.svg
 bazel run //donner/editor -- path/to/file.svg
 ```
 
-The browser editor build also uses Geode/WebGPU by default and is
-toolchain-gated behind `--config=editor-wasm`:
+The browser editor package uses Geode/WebGPU by default. The package target accepts the explicit
+configuration for build automation, while the local server applies that configuration through a
+build transition:
 
 ```sh
 bazel build --config=editor-wasm //donner/editor/wasm:wasm_web_package
-bazel run --config=editor-wasm //donner/editor/wasm:serve_http
-bazel run --config=editor-wasm //donner/editor/wasm:serve_http -- --https
+bazel run //donner/editor/wasm:serve_http
+bazel run //donner/editor/wasm:serve_http -- --https
 ```
 
 Use `-- --https` for LAN access with the generated local certificate. Then open

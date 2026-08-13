@@ -89,8 +89,6 @@ struct FrameProfilerSample {
 
 /// Presentation memory retained by the editor texture cache for one UI frame.
 struct FrameMemorySample {
-  /// Bytes retained by the current overlay texture, if the retained overlay fallback is active.
-  std::uint64_t overlayBytes = 0;
   /// Bytes retained by active composited tile textures.
   std::uint64_t activeTileBytes = 0;
   /// Bytes retained by zoom-out overview tile textures.

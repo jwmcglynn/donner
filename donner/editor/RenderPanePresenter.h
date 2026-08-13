@@ -19,11 +19,24 @@
 
 namespace donner::editor {
 
-inline constexpr double kRenderPaneCheckerboardSize = 16.0;
-inline constexpr double kFramebufferCheckerboardSize = kRenderPaneCheckerboardSize;
+/// Transparency checkerboard cell size, in logical pixels. Only the Geode
+/// framebuffer pass draws the checkerboard; there is no draw-list fallback.
+inline constexpr double kFramebufferCheckerboardSize = 16.0;
 
 struct RenderPanePresenterState {
+  /// Live viewport for this frame. Owns pane geometry: the pane rect, the
+  /// content region, and everything anchored to the window rather than to the
+  /// document.
   const ViewportState& viewport;
+  /// Viewport the document pixels presented this frame are actually placed
+  /// with, or null when that is the live viewport.
+  ///
+  /// A worker-owned surface is positioned with the viewport its accepted epoch
+  /// was rasterized against, which can be one or more worker frames behind the
+  /// live one. Everything drawn in document space - the presented image clip
+  /// rect, tile quads, and the compositor tile overlay - must use that same
+  /// transform, or it annotates pixels that are no longer underneath it.
+  const ViewportState* presentedDocumentViewport = nullptr;
   const FrameHistory& frameHistory;
   const GlTextureCache& textures;
   const std::optional<SelectionChromeSnapshot>& immediateOverlaySnapshot;
@@ -114,9 +127,8 @@ public:
    * Draw the advanced editor render pane's composited document tiles and, when
    * enabled, the performance overlay (compact FPS pill or full frame graph).
    *
-   * Selection chrome is not drawn here: it is rendered by Donner's OverlayRenderer
-   * straight onto the Geode framebuffer (see
-   * EditorShell::DrawImmediateOverlaySnapshotToFramebuffer).
+   * Selection chrome is not drawn here: it is drawn immediately onto the window framebuffer
+   * after the document tiles and before ImGui, so it shares the tiles' transform exactly.
    *
    * @param state Presentation inputs for the current UI frame.
    */

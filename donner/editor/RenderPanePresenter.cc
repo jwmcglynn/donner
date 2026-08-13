@@ -403,30 +403,6 @@ void RenderMemoryGraph(const FrameHistory& history) {
   DrawProfilerLegendItem(kMemoryOtherColor, "other", /*sameLine=*/true);
 }
 
-void DrawCheckerboard(ImDrawList* drawList, const ImVec2& topLeft, const ImVec2& bottomRight) {
-  constexpr float kCheckerSize = static_cast<float>(kRenderPaneCheckerboardSize);
-  const ImVec2 snappedTopLeft(std::floor(topLeft.x), std::floor(topLeft.y));
-  const ImVec2 snappedBottomRight(std::floor(bottomRight.x), std::floor(bottomRight.y));
-  if (snappedTopLeft.x >= snappedBottomRight.x || snappedTopLeft.y >= snappedBottomRight.y) {
-    return;
-  }
-
-  drawList->PushClipRect(snappedTopLeft, snappedBottomRight,
-                         /*intersect_with_current_clip_rect=*/true);
-  const float startY = std::floor(snappedTopLeft.y / kCheckerSize) * kCheckerSize;
-  const float startX = std::floor(snappedTopLeft.x / kCheckerSize) * kCheckerSize;
-  for (float y = startY; y < snappedBottomRight.y; y += kCheckerSize) {
-    const int row = static_cast<int>(std::floor(y / kCheckerSize));
-    for (float x = startX; x < snappedBottomRight.x; x += kCheckerSize) {
-      const int column = static_cast<int>(std::floor(x / kCheckerSize));
-      const ImU32 color =
-          ((row + column) % 2 == 0) ? IM_COL32(60, 60, 60, 255) : IM_COL32(40, 40, 40, 255);
-      drawList->AddRectFilled(ImVec2(x, y), ImVec2(x + kCheckerSize, y + kCheckerSize), color);
-    }
-  }
-  drawList->PopClipRect();
-}
-
 PresentedFrameTileGeometry PresentedGeometryFromTile(const GlTextureCache::TileView& tile) {
   return PresentedFrameTileGeometry{
       .canvasOffsetDoc = tile.canvasOffsetDoc,
@@ -636,11 +612,8 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
                             return ShouldPresentCompositedTile(tile, state.suppressedLayerEntity,
                                                                state.suppressDragTargetTiles);
                           });
-  // Selection chrome (path outlines, hover, AABBs, oriented bounds, handles,
-  // marquee) is rendered exclusively by Donner's OverlayRenderer straight onto
-  // the Geode framebuffer (see EditorShell::DrawImmediateOverlaySnapshotToFramebuffer).
-  // The presenter only blits composited document tiles plus UI furniture, so
-  // presentable content here is purely tile-driven.
+  // Document content remains tile-driven. Selection chrome is drawn immediately onto the
+  // framebuffer between the tiles and ImGui, so it never appears in this draw list.
   const bool hasPresentedContent = hasVisibleTiles || hasVisibleOverviewTiles;
 
   const Box2d paneRect = Box2d::FromXYWH(state.viewport.paneOrigin.x, state.viewport.paneOrigin.y,
@@ -649,36 +622,38 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
       paneRect.bottomRight.y <= paneRect.topLeft.y) {
     return;
   }
-  const Box2d screenRect = state.viewport.imageScreenRect();
+  // Document-space drawing follows the pixels that are actually on screen. Pane
+  // geometry above stays on the live viewport; the artboard rect, tile quads,
+  // and the compositor tile overlay below all have to sit in the same transform
+  // the presented document pixels were placed with.
+  const ViewportState& documentViewport = state.presentedDocumentViewport != nullptr
+                                              ? *state.presentedDocumentViewport
+                                              : state.viewport;
+  const Box2d screenRect = documentViewport.imageScreenRect();
   const std::optional<Box2d> imageClipRect = PresentedImageClipRect(paneRect, screenRect);
-  const ImVec2 imageOrigin(static_cast<float>(screenRect.topLeft.x),
-                           static_cast<float>(screenRect.topLeft.y));
-  const ImVec2 imageBottomRight(static_cast<float>(screenRect.bottomRight.x),
-                                static_cast<float>(screenRect.bottomRight.y));
   ImDrawList* paneDrawList = ImGui::GetWindowDrawList();
   paneDrawList->PushClipRect(ToImVec2(paneRect.topLeft), ToImVec2(paneRect.bottomRight),
                              /*intersect_with_current_clip_rect=*/true);
-  if (!state.documentPresentedDirectly) {
-    DrawCheckerboard(paneDrawList, imageOrigin, imageBottomRight);
-  }
   if (!hasPresentedContent && !state.documentPresentedDirectly) {
     paneDrawList->PopClipRect();
     return;
   }
 
-  const double pxPerDoc = state.viewport.pixelsPerDocUnit();
-  const Vector2d imageOriginScreen(imageOrigin.x, imageOrigin.y);
+  const double pxPerDoc = documentViewport.pixelsPerDocUnit();
+  const Vector2d imageOriginScreen = screenRect.topLeft;
   const Transform2d screenFromCanvasTransform =
       Transform2d::Scale(pxPerDoc) * Transform2d::Translate(imageOriginScreen);
   const std::optional<PresentedDragBaseline> dragBaseline =
       PresentedBaselineFromSelectPreviews(state.activeDragPreview, state.displayedDragPreview);
-  const auto computeTileQuad = [&](const GlTextureCache::TileView& tile) {
-    if (!ShouldPresentCompositedTile(tile, state.suppressedLayerEntity,
-                                     state.suppressDragTargetTiles)) {
-      return std::optional<PresentedTileQuad>();
-    }
-    if (state.suppressDragTargetTiles &&
-        TileMatchesActiveDragPreview(tile, state.activeDragPreview)) {
+  const auto tileMetadataIsSuppressed = [&](const GlTextureCache::TileView& tile) {
+    return (state.suppressDragTargetTiles && tile.isDragTarget) ||
+           (state.suppressedLayerEntity != entt::null &&
+            tile.layerEntity == state.suppressedLayerEntity) ||
+           (state.suppressDragTargetTiles &&
+            TileMatchesActiveDragPreview(tile, state.activeDragPreview));
+  };
+  const auto computeTileQuadFromMetadata = [&](const GlTextureCache::TileView& tile) {
+    if (tileMetadataIsSuppressed(tile)) {
       return std::optional<PresentedTileQuad>();
     }
     const std::optional<PresentedTileQuad> tileQuad = ComputePresentedTileQuad(
@@ -693,17 +668,28 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
     }
     return tileQuad;
   };
+  const auto computeTileQuad = [&](const GlTextureCache::TileView& tile) {
+    if (!ShouldPresentCompositedTile(tile, state.suppressedLayerEntity,
+                                     state.suppressDragTargetTiles)) {
+      return std::optional<PresentedTileQuad>();
+    }
+    return computeTileQuadFromMetadata(tile);
+  };
   const auto drawTile = [&](const GlTextureCache::TileView& tile) {
     const std::optional<PresentedTileQuad> tileQuad = computeTileQuad(tile);
     if (!tileQuad.has_value()) {
       return;
     }
-    const ImVec2 uvTopLeft(0.0f, 0.0f);
-    const ImVec2 uvBottomRight(static_cast<float>(tile.uvBottomRight.x),
-                               static_cast<float>(tile.uvBottomRight.y));
-    const Box2d tileBounds = PresentedTileQuadBounds(*tileQuad);
-    paneDrawList->AddImage(tile.texture, ToImVec2(tileBounds.topLeft),
-                           ToImVec2(tileBounds.bottomRight), uvTopLeft, uvBottomRight);
+    const float uvRight = static_cast<float>(tile.uvBottomRight.x);
+    const float uvBottom = static_cast<float>(tile.uvBottomRight.y);
+    // Draw-list fallback for frames with no directly presentable Geode tile and
+    // for non-WGPU builds; the quads carry the affine drag-preview transform
+    // that AddImage cannot express. Retired by the presentation-path
+    // unification.
+    paneDrawList->AddImageQuad(  // NOLINT(banned_patterns: sanctioned fallback presentation)
+        tile.texture, ToImVec2(tileQuad->topLeft), ToImVec2(tileQuad->topRight),
+        ToImVec2(tileQuad->bottomRight), ToImVec2(tileQuad->bottomLeft), ImVec2(0.0f, 0.0f),
+        ImVec2(uvRight, 0.0f), ImVec2(uvRight, uvBottom), ImVec2(0.0f, uvBottom));
   };
   if (imageClipRect.has_value() && !state.documentPresentedDirectly) {
     paneDrawList->PushClipRect(ToImVec2(imageClipRect->topLeft),
@@ -749,7 +735,7 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
                                ToImVec2(imageClipRect->bottomRight),
                                /*intersect_with_current_clip_rect=*/true);
     for (const auto& tile : state.textures.tiles()) {
-      if (const std::optional<PresentedTileQuad> tileQuad = computeTileQuad(tile)) {
+      if (const std::optional<PresentedTileQuad> tileQuad = computeTileQuadFromMetadata(tile)) {
         DrawCompositorTileOverlay(paneDrawList, tile, *tileQuad);
       }
     }

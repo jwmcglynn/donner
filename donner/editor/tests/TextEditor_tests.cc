@@ -2326,6 +2326,16 @@ TEST_F(TextEditorTests, CalculateFoldsSortsAndPairsNestedFoldEndpoints) {
   EXPECT_EQ(FoldStates(), (std::vector<bool>{false, false}));
 }
 
+TEST_F(TextEditorTests, CalculateFoldsLeavesUnmatchedBeginDisconnected) {
+  editor.setText("{\n");
+  ConfigureFoldEndpointsForCalculation({Coordinates(0, 0)}, {});
+
+  CalculateFoldsDirect(/*currentLine=*/0, /*totalLines=*/2);
+
+  EXPECT_THAT(FoldConnections(), ElementsAre(-1));
+  EXPECT_THAT(FoldStates(), ElementsAre(false));
+}
+
 TEST_F(TextEditorTests, MoveLeftRetractsCursor) {
   editor.setText("Hello");
   editor.setCursorPosition(Coordinates(0, 2));

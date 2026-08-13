@@ -56,6 +56,39 @@ int RowIndex(const LayersPanel& panel, std::string_view name) {
 static_assert(!std::is_same_v<LayersPanel, CompositorDebugPanel>,
               "LayersPanel must be a distinct type from CompositorDebugPanel");
 
+// Row thumbnail pixels, whichever side of the presentation split the backend uses.
+//
+// Backends that present textures directly (Geode) keep row thumbnails on the GPU and expose them
+// through `rowTextureThumbnail()`; `rowThumbnail()` is empty there by design, because reading
+// every layer row back to the CPU only to re-upload it is the exact cost the texture path exists
+// to avoid. Tests that inspect thumbnail pixels take the explicit readback that
+// `RendererTextureSnapshot::takeSnapshot()` documents for capture, diagnostics, and tests.
+std::optional<svg::RendererBitmap> RowThumbnailBitmap(const LayersPanel& panel,
+                                                      std::uint64_t stableId) {
+  if (const svg::RendererBitmap* bitmap = panel.rowThumbnail(stableId);
+      bitmap != nullptr && !bitmap->empty()) {
+    return *bitmap;
+  }
+  if (const auto* textureSnapshot = panel.rowTextureThumbnail(stableId);
+      textureSnapshot != nullptr && *textureSnapshot != nullptr) {
+    svg::RendererBitmap readback = (*textureSnapshot)->takeSnapshot();
+    if (!readback.empty()) {
+      return readback;
+    }
+  }
+  return std::nullopt;
+}
+
+// True when the row carries a rendered thumbnail on either presentation path.
+bool HasRowThumbnail(const LayersPanel& panel, std::uint64_t stableId) {
+  if (const svg::RendererBitmap* bitmap = panel.rowThumbnail(stableId);
+      bitmap != nullptr && !bitmap->empty()) {
+    return true;
+  }
+  const auto* textureSnapshot = panel.rowTextureThumbnail(stableId);
+  return textureSnapshot != nullptr && *textureSnapshot != nullptr;
+}
+
 TEST(LayersPanelTest, PlainClickSelectsRowElement) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kSvg));
@@ -83,7 +116,7 @@ TEST(LayersPanelTest, SwatchesOnlyRefreshDoesNotRasterizeThumbnails) {
   EXPECT_EQ(panel.thumbnailRefreshStats().renderedCount, 0u);
   EXPECT_EQ(panel.thumbnailRefreshStats().reusedCount, 0u);
   ASSERT_FALSE(panel.rows().empty());
-  EXPECT_EQ(panel.rowThumbnail(panel.rows().front().stableId), nullptr);
+  EXPECT_FALSE(HasRowThumbnail(panel, panel.rows().front().stableId));
   EXPECT_TRUE(panel.hasThumbnailOrSwatch(panel.rows().front().stableId));
 }
 
@@ -193,7 +226,7 @@ TEST(LayersPanelTest, MissingRowPreviewQueriesReturnEmpty) {
   const std::uint64_t missingStableId = std::numeric_limits<std::uint64_t>::max();
   EXPECT_FALSE(panel.hasThumbnailOrSwatch(missingStableId));
   EXPECT_FALSE(panel.rowFallbackSwatch(missingStableId).has_value());
-  EXPECT_EQ(panel.rowThumbnail(missingStableId), nullptr);
+  EXPECT_FALSE(HasRowThumbnail(panel, missingStableId));
 }
 
 TEST(LayersPanelTest, RefreshSnapshotWithoutDocumentClearsRowsAndThumbnailState) {
@@ -290,7 +323,7 @@ TEST(LayersPanelTest, RefreshSnapshotDropsStaleRowStateAndThumbnailsAfterReload)
   const int cIndex = RowIndex(panel, "c");
   ASSERT_GE(cIndex, 0);
   const std::uint64_t staleStableId = panel.rows()[static_cast<std::size_t>(cIndex)].stableId;
-  ASSERT_NE(panel.rowThumbnail(staleStableId), nullptr);
+  ASSERT_TRUE(HasRowThumbnail(panel, staleStableId));
 
   panel.handleRowClick(app, static_cast<std::size_t>(cIndex), LayersPanel::ClickModifiers{});
 
@@ -300,7 +333,7 @@ TEST(LayersPanelTest, RefreshSnapshotDropsStaleRowStateAndThumbnailsAfterReload)
   EXPECT_EQ(panel.visibleRowCount(), 0u);
   EXPECT_FALSE(panel.hasThumbnailOrSwatch(staleStableId));
   EXPECT_FALSE(panel.rowFallbackSwatch(staleStableId).has_value());
-  EXPECT_EQ(panel.rowThumbnail(staleStableId), nullptr);
+  EXPECT_FALSE(HasRowThumbnail(panel, staleStableId));
 }
 
 TEST(LayersPanelTest, RowClickOutOfRangeIsNoOpAndShiftWithoutAnchorSelectsClickedRow) {
@@ -696,6 +729,35 @@ TEST(LayersPanelTest, RefreshSnapshotSkipsLiveThumbnailRenderWhileCanvasInvalida
          "compositor consumes a pending invalidation.";
 }
 
+TEST(LayersPanelTest, CurrentCanvasPresentationAllowsThumbnailRenderWithoutConsumingInvalidation) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40">
+    <rect id="background" width="40" height="40" fill="red"/>
+    <rect id="foreground" x="10" y="10" width="10" height="10" fill="blue"/>
+  </svg>)");
+
+  svg::Renderer renderer;
+  renderer.draw(app.document().document());
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const int index = RowIndex(panel, "background");
+  ASSERT_GE(index, 0);
+  const svg::SVGElement target = panel.rows()[static_cast<std::size_t>(index)].element;
+
+  panel.handleEyeClick(app, static_cast<std::size_t>(index));
+  EXPECT_TRUE(app.document().flushFrame());
+  ASSERT_TRUE(svg::tests::ElementHasRenderInstanceDirtyFlag(target));
+
+  panel.refreshSnapshot(app, &renderer, LayersPanel::ThumbnailRefreshMode::Render,
+                        /*canvasPresentationCurrent=*/true);
+
+  EXPECT_EQ(panel.thumbnailRefreshStats().skippedForCanvasInvalidationCount, 0u);
+  EXPECT_TRUE(svg::tests::ElementHasRenderInstanceDirtyFlag(target))
+      << "thumbnail rendering may inspect an already-presented version but must restore its "
+         "live invalidation for later document work";
+}
+
 TEST(LayersPanelTest, RefreshSnapshotUsesLiveRenderTreeForThumbnailsWhenCanvasIsClean) {
   EditorApp app;
   LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40">
@@ -815,6 +877,29 @@ TEST(LayersPanelTest, LockClickSetsLockedAttribute) {
   EXPECT_FALSE(unlocked->isLocked);
   EXPECT_FALSE(unlocked->element.getAttribute("data-donner-locked").has_value())
       << "unlock should remove data-donner-locked, not set it to \"false\"";
+}
+
+TEST(LayersPanelTest, LockClickDeselectsLockedSubtreeAndPreservesOtherSelection) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <g id="group1">
+      <rect id="child" x="0" y="0" width="10" height="10"/>
+    </g>
+    <rect id="outside" x="20" y="0" width="10" height="10"/>
+  </svg>)");
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const std::optional<LayerTreeRow> child = FindRow(panel, "child");
+  const std::optional<LayerTreeRow> outside = FindRow(panel, "outside");
+  ASSERT_TRUE(child.has_value());
+  ASSERT_TRUE(outside.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{child->element, outside->element});
+
+  panel.handleLockClick(app, static_cast<std::size_t>(RowIndex(panel, "group1")));
+
+  EXPECT_THAT(app.selectedElements(), testing::ElementsAre(outside->element));
+  EXPECT_TRUE(panel.consumeSelectionChanged());
 }
 
 TEST(LayersPanelTest, LockSurvivesLoadFromSource) {
@@ -1015,8 +1100,8 @@ TEST(LayersPanelTest, RowThumbnailIsRealRender) {
   const std::optional<LayerTreeRow> row = FindRow(panel, "solidRed");
   ASSERT_TRUE(row.has_value());
 
-  const svg::RendererBitmap* thumbnail = panel.rowThumbnail(row->stableId);
-  ASSERT_NE(thumbnail, nullptr) << "geometry row must have a rendered thumbnail bitmap";
+  const std::optional<svg::RendererBitmap> thumbnail = RowThumbnailBitmap(panel, row->stableId);
+  ASSERT_TRUE(thumbnail.has_value()) << "geometry row must have a rendered thumbnail bitmap";
   ASSERT_FALSE(thumbnail->empty());
   ASSERT_EQ(thumbnail->dimensions, Vector2i(24, 24));
 
@@ -1040,8 +1125,8 @@ TEST(LayersPanelTest, RowThumbnailIsCroppedToElementBounds) {
   const std::optional<LayerTreeRow> row = FindRow(panel, "smallOffOrigin");
   ASSERT_TRUE(row.has_value());
 
-  const svg::RendererBitmap* thumbnail = panel.rowThumbnail(row->stableId);
-  ASSERT_NE(thumbnail, nullptr) << "geometry row must have a rendered thumbnail bitmap";
+  const std::optional<svg::RendererBitmap> thumbnail = RowThumbnailBitmap(panel, row->stableId);
+  ASSERT_TRUE(thumbnail.has_value()) << "geometry row must have a rendered thumbnail bitmap";
   ASSERT_FALSE(thumbnail->empty());
   ASSERT_EQ(thumbnail->dimensions, Vector2i(24, 24));
 
@@ -1075,8 +1160,8 @@ TEST(LayersPanelTest, GroupThumbnailComposesChildren) {
   const std::optional<LayerTreeRow> group = FindRow(panel, "halves");
   ASSERT_TRUE(group.has_value());
 
-  const svg::RendererBitmap* thumbnail = panel.rowThumbnail(group->stableId);
-  ASSERT_NE(thumbnail, nullptr) << "a group row composes its descendants into one thumbnail";
+  const std::optional<svg::RendererBitmap> thumbnail = RowThumbnailBitmap(panel, group->stableId);
+  ASSERT_TRUE(thumbnail.has_value()) << "a group row composes its descendants into one thumbnail";
   ASSERT_FALSE(thumbnail->empty());
   ASSERT_EQ(thumbnail->dimensions, Vector2i(24, 24));
 
@@ -1100,8 +1185,8 @@ TEST(LayersPanelTest, DonnerSplashDonnerRowThumbnailShowsLetterFill) {
   const std::optional<LayerTreeRow> row = FindRow(panel, "Donner");
   ASSERT_TRUE(row.has_value());
 
-  const svg::RendererBitmap* thumbnail = panel.rowThumbnail(row->stableId);
-  ASSERT_NE(thumbnail, nullptr);
+  const std::optional<svg::RendererBitmap> thumbnail = RowThumbnailBitmap(panel, row->stableId);
+  ASSERT_TRUE(thumbnail.has_value());
   ASSERT_FALSE(thumbnail->empty());
   ASSERT_GT(thumbnail->dimensions.x, thumbnail->dimensions.y)
       << "the Donner wordmark thumbnail should use a wide content-sized bitmap";
@@ -1132,8 +1217,8 @@ TEST(LayersPanelTest, DonnerSplashSunburstRowThumbnailCentersBrightContent) {
   const std::optional<LayerTreeRow> row = FindRow(panel, "Sunburst");
   ASSERT_TRUE(row.has_value());
 
-  const svg::RendererBitmap* thumbnail = panel.rowThumbnail(row->stableId);
-  ASSERT_NE(thumbnail, nullptr);
+  const std::optional<svg::RendererBitmap> thumbnail = RowThumbnailBitmap(panel, row->stableId);
+  ASSERT_TRUE(thumbnail.has_value());
   ASSERT_FALSE(thumbnail->empty());
   ASSERT_LE(thumbnail->dimensions.x, kMaxThumbnailWidthPx);
   ASSERT_LE(thumbnail->dimensions.y, kMaxThumbnailHeightPx);
@@ -1157,8 +1242,8 @@ TEST(LayersPanelTest, DonnerSplashSunburstRowThumbnailUsesFullElementBounds) {
   const std::optional<LayerTreeRow> row = FindRow(panel, "Sunburst");
   ASSERT_TRUE(row.has_value());
 
-  const svg::RendererBitmap* thumbnail = panel.rowThumbnail(row->stableId);
-  ASSERT_NE(thumbnail, nullptr);
+  const std::optional<svg::RendererBitmap> thumbnail = RowThumbnailBitmap(panel, row->stableId);
+  ASSERT_TRUE(thumbnail.has_value());
   ASSERT_FALSE(thumbnail->empty());
 
   EXPECT_EQ(thumbnail->dimensions.x, 41);
@@ -1177,8 +1262,8 @@ TEST(LayersPanelTest, DonnerSplashBlueCenterBurstRowThumbnailUsesFullElementBoun
   const std::optional<LayerTreeRow> row = FindRow(panel, "Blue_center_burst");
   ASSERT_TRUE(row.has_value());
 
-  const svg::RendererBitmap* thumbnail = panel.rowThumbnail(row->stableId);
-  ASSERT_NE(thumbnail, nullptr);
+  const std::optional<svg::RendererBitmap> thumbnail = RowThumbnailBitmap(panel, row->stableId);
+  ASSERT_TRUE(thumbnail.has_value());
   ASSERT_FALSE(thumbnail->empty());
 
   EXPECT_EQ(thumbnail->dimensions.x, 21);
@@ -1197,8 +1282,9 @@ TEST(LayersPanelTest, DonnerSplashBackgroundStickerThumbnailIsStableAfterCanvasR
 
   const std::optional<LayerTreeRow> firstRow = FindRow(panel, "Background_sticker");
   ASSERT_TRUE(firstRow.has_value());
-  const svg::RendererBitmap* firstThumbnail = panel.rowThumbnail(firstRow->stableId);
-  ASSERT_NE(firstThumbnail, nullptr);
+  const std::optional<svg::RendererBitmap> firstThumbnail =
+      RowThumbnailBitmap(panel, firstRow->stableId);
+  ASSERT_TRUE(firstThumbnail.has_value());
   ASSERT_FALSE(firstThumbnail->empty());
   const svg::RendererBitmap first = *firstThumbnail;
 
@@ -1210,8 +1296,8 @@ TEST(LayersPanelTest, DonnerSplashBackgroundStickerThumbnailIsStableAfterCanvasR
 
     const std::optional<LayerTreeRow> row = FindRow(panel, "Background_sticker");
     ASSERT_TRUE(row.has_value());
-    const svg::RendererBitmap* thumbnail = panel.rowThumbnail(row->stableId);
-    ASSERT_NE(thumbnail, nullptr);
+    const std::optional<svg::RendererBitmap> thumbnail = RowThumbnailBitmap(panel, row->stableId);
+    ASSERT_TRUE(thumbnail.has_value());
     ASSERT_FALSE(thumbnail->empty());
     CompareBitmapToBitmap(
         *thumbnail, first,
@@ -1254,6 +1340,42 @@ TEST(LayersPanelTest, RefreshSnapshotReusesThumbnailsWhenDocumentFrameIsUnchange
   EXPECT_NE(changedStats.documentFrameVersion, firstStats.documentFrameVersion);
   EXPECT_GT(changedStats.renderedCount, 0u)
       << "a real document-frame change must invalidate cached layer thumbnails";
+}
+
+TEST(LayersPanelTest, IncrementalRefreshRendersAtMostOneStaleThumbnailPerPass) {
+  EditorApp app;
+  ASSERT_TRUE(
+      app.loadFromString(R"SVG(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="40">
+    <rect id="left" x="0" y="0" width="40" height="40" fill="red"/>
+    <rect id="middle" x="40" y="0" width="40" height="40" fill="green"/>
+    <rect id="right" x="80" y="0" width="40" height="40" fill="blue"/>
+  </svg>)SVG"));
+
+  svg::Renderer renderer;
+  LayersPanel panel;
+  panel.refreshSnapshot(app, &renderer, LayersPanel::ThumbnailRefreshMode::RenderIncremental);
+  const std::size_t rowCount = panel.thumbnailRefreshStats().rowCount;
+  ASSERT_GT(rowCount, 1u);
+  EXPECT_EQ(panel.thumbnailRefreshStats().renderedCount, 1u);
+  EXPECT_EQ(panel.thumbnailRefreshStats().reusedCount, 0u);
+  EXPECT_EQ(panel.thumbnailRefreshStats().deferredCount, rowCount - 1u);
+  EXPECT_EQ(panel.thumbnailRefreshStats().snapshotRebuildCount, 1u);
+
+  for (std::size_t pass = 1; pass < rowCount; ++pass) {
+    panel.refreshSnapshot(app, &renderer, LayersPanel::ThumbnailRefreshMode::RenderIncremental);
+    EXPECT_EQ(panel.thumbnailRefreshStats().renderedCount, 1u) << "pass=" << pass;
+    EXPECT_EQ(panel.thumbnailRefreshStats().reusedCount, pass) << "pass=" << pass;
+    EXPECT_EQ(panel.thumbnailRefreshStats().deferredCount, rowCount - pass - 1u) << "pass=" << pass;
+    EXPECT_EQ(panel.thumbnailRefreshStats().snapshotRebuildCount, 0u)
+        << "incremental thumbnail frames must not rebuild the full row/style snapshot; pass="
+        << pass;
+  }
+
+  panel.refreshSnapshot(app, &renderer, LayersPanel::ThumbnailRefreshMode::RenderIncremental);
+  EXPECT_EQ(panel.thumbnailRefreshStats().renderedCount, 0u);
+  EXPECT_EQ(panel.thumbnailRefreshStats().reusedCount, rowCount);
+  EXPECT_EQ(panel.thumbnailRefreshStats().deferredCount, 0u);
+  EXPECT_EQ(panel.thumbnailRefreshStats().snapshotRebuildCount, 0u);
 }
 
 // The approved thumbnail PNGs are default-renderer goldens. The Geode wrapper
@@ -1750,9 +1872,13 @@ protected:
     return diagnostics;
   }
 
+  // `textureSnapshotProvider` mirrors the shell: backends that keep thumbnails on the GPU deliver
+  // them through the snapshot provider, and `LayersPanel::render` prefers it when a row has a
+  // texture. Tests pass both so the same case covers either presentation path.
   std::optional<ThumbnailImageDiagnostics> ThumbnailImageDrawDiagnostics(
       LayersPanel& panel, EditorApp& app,
-      const LayersPanel::ThumbnailTextureProvider& textureProvider, ImTextureID texture) {
+      const LayersPanel::ThumbnailTextureProvider& textureProvider, ImTextureID texture,
+      const LayersPanel::ThumbnailTextureSnapshotProvider& textureSnapshotProvider = {}) {
     ImGuiIO& io = ImGui::GetIO();
     io.DisplaySize = ImVec2(400, 300);
     io.AddMousePosEvent(-1.0f, -1.0f);
@@ -1763,7 +1889,8 @@ protected:
     ImGui::Begin("##layers_thumbnail_uv_test", nullptr,
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar);
-    panel.render(&app, textureProvider);
+    panel.render(&app, textureProvider, LayersPanel::IconTextureProvider{},
+                 /*minimumInteractionHeight=*/0.0f, textureSnapshotProvider);
     const ImDrawList* drawList = ImGui::GetWindowDrawList();
     std::optional<ThumbnailImageDiagnostics> diagnostics;
     for (int cmdIndex = 0; cmdIndex < drawList->CmdBuffer.Size; ++cmdIndex) {
@@ -1923,9 +2050,8 @@ TEST_F(LayersPanelImGuiTest, ThumbnailImageUsesPayloadUv) {
   panel.refreshSnapshot(app);
 
   ImTextureID texture = static_cast<ImTextureID>(0x1234);
-  const LayersPanel::ThumbnailTextureProvider textureProvider =
-      [texture](std::uint64_t, const svg::RendererBitmap& bitmap) -> LayersPanel::ThumbnailTexture {
-    if (bitmap.dimensions.x != 42 || bitmap.dimensions.y >= 24) {
+  const auto uploadWideThumbnail = [texture](const Vector2i& dimensions) {
+    if (dimensions.x != 42 || dimensions.y >= 24) {
       return LayersPanel::ThumbnailTexture{};
     }
     return LayersPanel::ThumbnailTexture{
@@ -1933,9 +2059,18 @@ TEST_F(LayersPanelImGuiTest, ThumbnailImageUsesPayloadUv) {
         .uvBottomRight = Vector2d(42.0 / 64.0, 5.0 / 8.0),
     };
   };
+  const LayersPanel::ThumbnailTextureProvider textureProvider =
+      [&uploadWideThumbnail](std::uint64_t,
+                             const svg::RendererBitmap& bitmap) -> LayersPanel::ThumbnailTexture {
+    return uploadWideThumbnail(bitmap.dimensions);
+  };
+  const LayersPanel::ThumbnailTextureSnapshotProvider textureSnapshotProvider =
+      [&uploadWideThumbnail](std::uint64_t,
+                             const std::shared_ptr<const svg::RendererTextureSnapshot>& snapshot)
+      -> LayersPanel::ThumbnailTexture { return uploadWideThumbnail(snapshot->dimensions()); };
 
   const std::optional<ThumbnailImageDiagnostics> diagnostics =
-      ThumbnailImageDrawDiagnostics(panel, app, textureProvider, texture);
+      ThumbnailImageDrawDiagnostics(panel, app, textureProvider, texture, textureSnapshotProvider);
   ASSERT_TRUE(diagnostics.has_value()) << "expected the row thumbnail to emit an image draw";
   EXPECT_NEAR(diagnostics->uvBottomRight.x, 42.0f / 64.0f, 0.001f);
   EXPECT_NEAR(diagnostics->uvBottomRight.y, 5.0f / 8.0f, 0.001f);
@@ -1956,14 +2091,14 @@ TEST_F(LayersPanelImGuiTest, DonnerSplashThumbnailImageDrawsAtRenderedBitmapSize
 
   const std::optional<LayerTreeRow> donnerRow = FindRow(panel, "Donner");
   ASSERT_TRUE(donnerRow.has_value());
-  const svg::RendererBitmap* thumbnail = panel.rowThumbnail(donnerRow->stableId);
-  ASSERT_NE(thumbnail, nullptr);
+  const std::optional<svg::RendererBitmap> thumbnail =
+      RowThumbnailBitmap(panel, donnerRow->stableId);
+  ASSERT_TRUE(thumbnail.has_value());
   ASSERT_FALSE(thumbnail->empty());
 
   ImTextureID texture = static_cast<ImTextureID>(0x3456);
-  const LayersPanel::ThumbnailTextureProvider textureProvider =
-      [targetStableId = donnerRow->stableId, texture](
-          std::uint64_t stableId, const svg::RendererBitmap&) -> LayersPanel::ThumbnailTexture {
+  const auto uploadTargetRow = [targetStableId = donnerRow->stableId,
+                                texture](std::uint64_t stableId) {
     if (stableId != targetStableId) {
       return LayersPanel::ThumbnailTexture{};
     }
@@ -1972,9 +2107,18 @@ TEST_F(LayersPanelImGuiTest, DonnerSplashThumbnailImageDrawsAtRenderedBitmapSize
         .uvBottomRight = Vector2d(1.0, 1.0),
     };
   };
+  const LayersPanel::ThumbnailTextureProvider textureProvider =
+      [&uploadTargetRow](std::uint64_t stableId,
+                         const svg::RendererBitmap&) -> LayersPanel::ThumbnailTexture {
+    return uploadTargetRow(stableId);
+  };
+  const LayersPanel::ThumbnailTextureSnapshotProvider textureSnapshotProvider =
+      [&uploadTargetRow](std::uint64_t stableId,
+                         const std::shared_ptr<const svg::RendererTextureSnapshot>&)
+      -> LayersPanel::ThumbnailTexture { return uploadTargetRow(stableId); };
 
   const std::optional<ThumbnailImageDiagnostics> diagnostics =
-      ThumbnailImageDrawDiagnostics(panel, app, textureProvider, texture);
+      ThumbnailImageDrawDiagnostics(panel, app, textureProvider, texture, textureSnapshotProvider);
   ASSERT_TRUE(diagnostics.has_value()) << "expected the Donner row thumbnail to emit an image draw";
   EXPECT_NEAR(diagnostics->size.x, static_cast<float>(thumbnail->dimensions.x), 0.001f);
   EXPECT_NEAR(diagnostics->size.y, static_cast<float>(thumbnail->dimensions.y), 0.001f);
@@ -2378,8 +2522,8 @@ TEST(LayersPanelSubtreePreviewTest, UseLeafRowThumbnailShowsReferencedContent) {
   panel.refreshSnapshot(app);
   const std::optional<LayerTreeRow> useRow = FindRow(panel, "theUse");
   ASSERT_TRUE(useRow.has_value());
-  const svg::RendererBitmap* bitmap = panel.rowThumbnail(useRow->stableId);
-  ASSERT_NE(bitmap, nullptr) << "use row has no rendered thumbnail (fell back to swatch)";
+  const std::optional<svg::RendererBitmap> bitmap = RowThumbnailBitmap(panel, useRow->stableId);
+  ASSERT_TRUE(bitmap.has_value()) << "use row has no rendered thumbnail (fell back to swatch)";
   const int bluePixels = CountThumbnailPixelsMatching(
       *bitmap, [](const std::array<uint8_t, 4>& px) { return px[2] > 150 && px[0] < 100; });
   EXPECT_GT(bluePixels, 0) << "use row thumbnail missing referenced content";
@@ -2408,14 +2552,14 @@ TEST(LayersPanelSubtreePreviewTest, SubtreeThumbnailsViaPanelForNestedRows) {
   ASSERT_TRUE(left.has_value());
   ASSERT_TRUE(right.has_value());
 
-  const svg::RendererBitmap* leftBitmap = panel.rowThumbnail(left->stableId);
-  ASSERT_NE(leftBitmap, nullptr);
+  const std::optional<svg::RendererBitmap> leftBitmap = RowThumbnailBitmap(panel, left->stableId);
+  ASSERT_TRUE(leftBitmap.has_value());
   const int blueInLeft = CountThumbnailPixelsMatching(
       *leftBitmap, [](const std::array<uint8_t, 4>& px) { return px[2] > 150 && px[0] < 100; });
   EXPECT_EQ(blueInLeft, 0) << "left subgroup thumbnail contains right subgroup content";
 
-  const svg::RendererBitmap* rightBitmap = panel.rowThumbnail(right->stableId);
-  ASSERT_NE(rightBitmap, nullptr);
+  const std::optional<svg::RendererBitmap> rightBitmap = RowThumbnailBitmap(panel, right->stableId);
+  ASSERT_TRUE(rightBitmap.has_value());
   const int redInRight = CountThumbnailPixelsMatching(
       *rightBitmap, [](const std::array<uint8_t, 4>& px) { return px[0] > 150 && px[2] < 100; });
   EXPECT_EQ(redInRight, 0) << "right subgroup thumbnail contains left subgroup content";

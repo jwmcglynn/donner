@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <iostream>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -248,6 +249,21 @@ constexpr std::string_view kDocumentSpaceDragSvg =
 constexpr std::string_view kBlankPenCanvasSvg =
     "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"80\" "
     "viewBox=\"0 0 80 80\"></svg>";
+
+// First replay frame whose framebuffer can contain document pixels.
+//
+// `EditorShell` will not request a document render before it latches `viewportInitialized_` (the
+// placeholder-viewport guard: a render posted against a not-yet-settled pane would present at the
+// wrong fit and then jump). On a cold start frame 0 cannot satisfy that latch: the DockSpace's
+// right column has not been split off the host yet, so frame 0's render pane is the whole host and
+// `RenderPaneViewportLatchReady` rejects it, and there is no previous frame to corroborate it
+// against either. Frame 1 is the first settled pane, so it fits the viewport, latches it, and posts
+// the first render; frame 2 is the first frame that can poll and present a result. Captures and
+// presentation diagnostics for a freshly loaded document therefore start here.
+//
+// This is a cold-start cost only. Loading a document into an already-running editor (the sample
+// carousel) latches on the load frame itself, because the dock layout is already settled then.
+constexpr std::uint64_t kFirstPresentedReplayFrame = 2;
 
 std::optional<std::filesystem::path> WriteStaticContentReplay(
     const std::filesystem::path& outputDir, std::string_view name, std::uint64_t lastFrame) {
@@ -2123,15 +2139,15 @@ int CountLegacyBluePenPixels(const svg::RendererBitmap& bitmap) {
 
 TEST(GlRnrReplayTest, ContentOnlyDocumentCanvasCaptureMatchesRendererGroundTruth) {
   const std::filesystem::path outputDir = DiagnosticOutputDir() / "content_only_ground_truth";
-  const std::optional<std::filesystem::path> replayPath =
-      WriteStaticContentReplay(outputDir, "content_only_ground_truth.rnr", 1);
+  const std::optional<std::filesystem::path> replayPath = WriteStaticContentReplay(
+      outputDir, "content_only_ground_truth.rnr", kFirstPresentedReplayFrame);
   ASSERT_TRUE(replayPath.has_value());
 
   repro::GlRnrReplayOptions options;
   options.rnrPath = *replayPath;
   options.outputDir = outputDir;
-  options.captureFrames.insert(1);
-  options.maxFrame = 1;
+  options.captureFrames.insert(kFirstPresentedReplayFrame);
+  options.maxFrame = kFirstPresentedReplayFrame;
   options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
   options.pace = false;
   options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
@@ -2141,7 +2157,7 @@ TEST(GlRnrReplayTest, ContentOnlyDocumentCanvasCaptureMatchesRendererGroundTruth
   std::string error;
   ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
-  std::optional<svg::RendererBitmap> actual = LoadCaptureBitmap(result, 1);
+  std::optional<svg::RendererBitmap> actual = LoadCaptureBitmap(result, kFirstPresentedReplayFrame);
   ASSERT_TRUE(actual.has_value());
   std::optional<svg::RendererBitmap> rendererReference =
       RenderGroundTruth(kStaticContentOnlySvg, Vector2i(200, 120));
@@ -2157,15 +2173,15 @@ TEST(GlRnrReplayTest, ContentOnlyDocumentCanvasCaptureMatchesRendererGroundTruth
 
 TEST(GlRnrReplayTest, DirectDocumentCanvasCaptureIsNotDimmedByRenderPaneBackground) {
   const std::filesystem::path outputDir = DiagnosticOutputDir() / "direct_document_not_dimmed";
-  const std::optional<std::filesystem::path> replayPath =
-      WriteStaticContentReplay(outputDir, "direct_document_not_dimmed.rnr", 1);
+  const std::optional<std::filesystem::path> replayPath = WriteStaticContentReplay(
+      outputDir, "direct_document_not_dimmed.rnr", kFirstPresentedReplayFrame);
   ASSERT_TRUE(replayPath.has_value());
 
   repro::GlRnrReplayOptions options;
   options.rnrPath = *replayPath;
   options.outputDir = outputDir;
-  options.captureFrames.insert(1);
-  options.maxFrame = 1;
+  options.captureFrames.insert(kFirstPresentedReplayFrame);
+  options.maxFrame = kFirstPresentedReplayFrame;
   options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
   options.pace = false;
   options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
@@ -2175,7 +2191,7 @@ TEST(GlRnrReplayTest, DirectDocumentCanvasCaptureIsNotDimmedByRenderPaneBackgrou
   std::string error;
   ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
-  std::optional<svg::RendererBitmap> actual = LoadCaptureBitmap(result, 1);
+  std::optional<svg::RendererBitmap> actual = LoadCaptureBitmap(result, kFirstPresentedReplayFrame);
   ASSERT_TRUE(actual.has_value());
   ASSERT_GT(actual->dimensions.x, 0);
   ASSERT_GT(actual->dimensions.y, 0);
@@ -2207,11 +2223,13 @@ TEST(GlRnrReplayTest, DirectFramebufferCheckerboardUsesSingleDrawDuringDrag) {
   repro::GlRnrReplayOptions options;
   options.rnrPath = *replayPath;
   options.outputDir = outputDir;
+  options.captureFrames.insert(8);
   options.captureFrames.insert(20);
   options.maxFrame = 20;
   options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
   options.pace = false;
-  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::HoldFramesBehind;
+  options.holdFramesBehind = 6;
   options.driveDocumentSpaceInput = true;
 
   repro::GlRnrReplayResult result;
@@ -2232,7 +2250,53 @@ TEST(GlRnrReplayTest, DirectFramebufferCheckerboardUsesSingleDrawDuringDrag) {
   }
   EXPECT_GT(directDragFrames, 0) << "test setup must exercise direct drag presentation";
 
-  RemoveDiagnosticOutputOnSuccess(outputDir);
+  struct PixelBounds {
+    int minX = 0;
+    int minY = 0;
+    int maxX = 0;
+    int maxY = 0;
+  };
+  const auto greenBounds = [](const svg::RendererBitmap& source) -> std::optional<PixelBounds> {
+    const svg::RendererBitmap bitmap = NormalizeBitmap(source);
+    std::optional<PixelBounds> bounds;
+    for (int y = 0; y < bitmap.dimensions.y; ++y) {
+      for (int x = 0; x < bitmap.dimensions.x; ++x) {
+        const std::size_t offset =
+            (static_cast<std::size_t>(y) * static_cast<std::size_t>(bitmap.dimensions.x) +
+             static_cast<std::size_t>(x)) *
+            4u;
+        if (bitmap.pixels[offset] > 80 || bitmap.pixels[offset + 1] < 150 ||
+            bitmap.pixels[offset + 2] > 80) {
+          continue;
+        }
+        if (!bounds.has_value()) {
+          bounds = PixelBounds{x, y, x, y};
+        } else {
+          bounds->minX = std::min(bounds->minX, x);
+          bounds->minY = std::min(bounds->minY, y);
+          bounds->maxX = std::max(bounds->maxX, x);
+          bounds->maxY = std::max(bounds->maxY, y);
+        }
+      }
+    }
+    return bounds;
+  };
+
+  const std::optional<svg::RendererBitmap> baseline = LoadCaptureBitmap(result, 8);
+  const std::optional<svg::RendererBitmap> dragged = LoadCaptureBitmap(result, 20);
+  ASSERT_TRUE(baseline.has_value());
+  ASSERT_TRUE(dragged.has_value());
+  const std::optional<PixelBounds> baselineGreen = greenBounds(*baseline);
+  const std::optional<PixelBounds> draggedGreen = greenBounds(*dragged);
+  ASSERT_TRUE(baselineGreen.has_value()) << "pre-drag target pixels must be visible";
+  ASSERT_TRUE(draggedGreen.has_value()) << "mid-drag target pixels must remain visible";
+  EXPECT_GT(draggedGreen->minX, baselineGreen->minX + 20)
+      << "The direct presenter must move shape pixels during the held worker update";
+  EXPECT_GT(draggedGreen->minY, baselineGreen->minY + 10)
+      << "The direct presenter must track the live vertical drag before mouse-up";
+
+  std::error_code ec;
+  std::filesystem::remove_all(outputDir, ec);
 }
 
 TEST(GlRnrReplayTest, DocumentSpaceInputDrivesCanvasSelectionThroughEditorShell) {
@@ -2530,6 +2594,62 @@ TEST(GlRnrReplayTest, PenBackspaceRemovesLastAnchorNotWholeDraft) {
 // <text> element. Reproduces the report that selecting the Text tool and
 // clicking showed nothing - the pending-click path started the gesture but
 // the live pointer path never delivered the release.
+// OPERATOR INVARIANT: paths render in Geode only, no fallback. Every vector
+// path the editor presents - selection chrome, pen previews, marquee, curves -
+// and the transparency checkerboard go through Geode; there is no ImGui
+// draw-list path or checkerboard fallback to tessellate document-complexity
+// geometry into draw lists.
+//
+// This pins the observable consequence: ImGui's per-frame draw data stays at
+// UI-widget scale during a high-zoom pan, whose image rect is many times the
+// pane. The deleted draw-list checkerboard emitted one quad per 16px cell over
+// that whole image rect, which is how a storm frame reached hundreds of
+// thousands of vertices; UI widgets alone are a small fraction of that.
+TEST(GlRnrReplayTest, ImguiDrawDataStaysWidgetScaleAtHighZoom) {
+  if (!UsesGeodePresentation()) {
+    GTEST_SKIP() << "Path rendering routes through Geode only on the Geode presentation path.";
+  }
+
+  const std::filesystem::path outputDir = DiagnosticOutputDir() / "imgui_vertex_budget";
+  const std::optional<std::filesystem::path> replayPath =
+      WriteHighZoomPanReplay(outputDir, "imgui_vertex_budget.rnr");
+  ASSERT_TRUE(replayPath.has_value());
+
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = *replayPath;
+  options.outputDir = outputDir;
+  options.captureFrames.insert(44);
+  options.maxFrame = 44;
+  options.cropMode = repro::GlRnrReplayCropMode::Full;
+  options.pace = false;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::HoldFramesBehind;
+  options.holdFramesBehind = 6;
+
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
+
+  ASSERT_FALSE(result.frameDiagnostics.empty());
+  constexpr int kWidgetScaleVertexBound = 100000;
+  int peakVertexCount = 0;
+  std::uint64_t peakFrameIndex = 0;
+  for (const repro::GlRnrReplayFrameDiagnostics& frame : result.frameDiagnostics) {
+    const int vertexCount = frame.frameCost.hostFrame.previousImguiVertexCount;
+    if (vertexCount > peakVertexCount) {
+      peakVertexCount = vertexCount;
+      peakFrameIndex = frame.frameIndex;
+    }
+  }
+  // A zero peak would mean the counter never reached the diagnostics, which
+  // would make the bound vacuous.
+  EXPECT_GT(peakVertexCount, 0) << "ImGui vertex counts never reached replay diagnostics";
+  EXPECT_LT(peakVertexCount, kWidgetScaleVertexBound)
+      << "ImGui emitted " << peakVertexCount << " vertices on frame " << peakFrameIndex
+      << "; path or checkerboard geometry is routing through the draw list again";
+  std::cerr << "[imgui-draw-data] peakVertices=" << peakVertexCount << " frame=" << peakFrameIndex
+            << " frames=" << result.frameDiagnostics.size() << "\n";
+}
+
 // During a rapid pan at high zoom, every pane pixel must keep showing
 // document content: the still-covered part of the previous bounded raster
 // stays put, and newly-exposed regions fall back to the overview infill
@@ -2748,8 +2868,7 @@ TEST(GlRnrReplayTest, TypingIntoTextKeepsTextPixelsPresentEveryFrame) {
               << " removed=" << diag->lastFlushRemovedElements
               << " invalidated=" << diag->lastFlushCacheInvalidatedElements.size()
               << " green=" << (bmp.has_value() ? greenPixels(*bmp) : -1)
-              << " selectionChrome=" << (bmp.has_value() ? selectionChromePixels(*bmp) : -1)
-              << " tiles=";
+              << " chrome=" << (bmp.has_value() ? selectionChromePixels(*bmp) : -1) << " tiles=";
     for (const auto& tile : diag->tiles) {
       std::cerr << tile.id << "(g" << tile.generation << ",grn" << tile.textureGreenPixels << ") ";
     }
@@ -3016,8 +3135,8 @@ TEST(GlRnrReplayTest, ColorPickerFillOnPenPathRerendersGeodePromotedLayer) {
 
 TEST(GlRnrReplayTest, DrainEachFrameContentCaptureIsDeterministicAcrossPaceAndDelay) {
   const std::filesystem::path outputDir = DiagnosticOutputDir() / "deterministic_replay_matrix";
-  const std::optional<std::filesystem::path> replayPath =
-      WriteStaticContentReplay(outputDir, "deterministic_replay_matrix.rnr", 1);
+  const std::optional<std::filesystem::path> replayPath = WriteStaticContentReplay(
+      outputDir, "deterministic_replay_matrix.rnr", kFirstPresentedReplayFrame);
   ASSERT_TRUE(replayPath.has_value());
 
   std::optional<svg::RendererBitmap> baselineCapture;
@@ -3029,8 +3148,8 @@ TEST(GlRnrReplayTest, DrainEachFrameContentCaptureIsDeterministicAcrossPaceAndDe
       options.rnrPath = *replayPath;
       options.outputDir = outputDir / (std::string(pace ? "paced" : "unpaced") + "_delay_" +
                                        std::to_string(delayMs));
-      options.captureFrames.insert(1);
-      options.maxFrame = 1;
+      options.captureFrames.insert(kFirstPresentedReplayFrame);
+      options.maxFrame = kFirstPresentedReplayFrame;
       options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
       options.pace = pace;
       options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
@@ -3041,12 +3160,14 @@ TEST(GlRnrReplayTest, DrainEachFrameContentCaptureIsDeterministicAcrossPaceAndDe
       std::string error;
       ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
-      std::optional<svg::RendererBitmap> capture = LoadCaptureBitmap(result, 1);
+      std::optional<svg::RendererBitmap> capture =
+          LoadCaptureBitmap(result, kFirstPresentedReplayFrame);
       ASSERT_TRUE(capture.has_value());
       const svg::RendererBitmap normalizedCapture = NormalizeBitmap(*capture);
       // Frame 0 observes initial async-renderer warm-up and can report a transient stale canvas on
       // slower software GL hosts. The invariant for this matrix is the explicit capture frame.
-      const std::string captureFrameDiagnostics = CanonicalReplayDiagnostics(result, 1u, 1u);
+      const std::string captureFrameDiagnostics = CanonicalReplayDiagnostics(
+          result, kFirstPresentedReplayFrame, kFirstPresentedReplayFrame);
       const std::string label = std::string("gl_replay_matrix_") + (pace ? "paced" : "unpaced") +
                                 "_delay_" + std::to_string(delayMs);
 
@@ -3068,14 +3189,14 @@ TEST(GlRnrReplayTest, DrainEachFrameContentCaptureIsDeterministicAcrossPaceAndDe
 TEST(GlRnrReplayTest, HoldFramesBehindRecordsWithheldReplayDiagnostics) {
   const std::filesystem::path outputDir = DiagnosticOutputDir() / "hold_frames_behind";
   const std::optional<std::filesystem::path> replayPath =
-      WriteStaticContentReplay(outputDir, "hold_frames_behind.rnr", 2);
+      WriteStaticContentReplay(outputDir, "hold_frames_behind.rnr", kFirstPresentedReplayFrame + 1);
   ASSERT_TRUE(replayPath.has_value());
 
   repro::GlRnrReplayOptions options;
   options.rnrPath = *replayPath;
   options.outputDir = outputDir;
-  options.captureFrames.insert(2);
-  options.maxFrame = 2;
+  options.captureFrames.insert(kFirstPresentedReplayFrame + 1);
+  options.maxFrame = kFirstPresentedReplayFrame + 1;
   options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
   options.pace = false;
   options.workerScheduling = repro::GlRnrReplayWorkerScheduling::HoldFramesBehind;
@@ -3087,7 +3208,10 @@ TEST(GlRnrReplayTest, HoldFramesBehindRecordsWithheldReplayDiagnostics) {
   std::string error;
   ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
-  const repro::GlRnrReplayFrameDiagnostics* withheld = FindFrameDiagnostics(result, 1);
+  // The first result is ready on `kFirstPresentedReplayFrame`; `holdFramesBehind = 1` withholds it
+  // for exactly that one poll and releases it on the next frame.
+  const repro::GlRnrReplayFrameDiagnostics* withheld =
+      FindFrameDiagnostics(result, kFirstPresentedReplayFrame);
   ASSERT_NE(withheld, nullptr);
   EXPECT_EQ(withheld->replayWorkerScheduling, repro::GlRnrReplayWorkerScheduling::HoldFramesBehind);
   EXPECT_EQ(withheld->replayWorkerRenderDelayMsForTesting, 1);
@@ -3095,11 +3219,12 @@ TEST(GlRnrReplayTest, HoldFramesBehindRecordsWithheldReplayDiagnostics) {
   EXPECT_EQ(withheld->replayResultHoldPollsThisFrame, 1u);
   EXPECT_TRUE(withheld->replayResultWithheld);
 
-  const repro::GlRnrReplayFrameDiagnostics* released = FindFrameDiagnostics(result, 2);
+  const repro::GlRnrReplayFrameDiagnostics* released =
+      FindFrameDiagnostics(result, kFirstPresentedReplayFrame + 1);
   ASSERT_NE(released, nullptr);
   EXPECT_EQ(released->replayResultHoldPollsThisFrame, 0u);
   EXPECT_FALSE(released->replayResultWithheld);
-  EXPECT_NE(FindCapture(result, 2), nullptr);
+  EXPECT_NE(FindCapture(result, kFirstPresentedReplayFrame + 1), nullptr);
 
   RemoveDiagnosticOutputOnSuccess(outputDir);
 }
@@ -3427,8 +3552,13 @@ TEST(GlRnrReplayTest, GeodeDragZoomRebuildsDonnerDGestureBoundsEveryPresentedFra
         << "Selection overlay was not rebuilt for presented zoom frame " << frame;
     EXPECT_TRUE(diagnostics->frameCost.overlay.selectionBoundsOnly)
         << "Active drag should use gesture-owned bounds chrome on presented zoom frame " << frame;
-    EXPECT_EQ(diagnostics->frameCost.overlay.pathCount, 0)
-        << "Active drag re-traversed selected path geometry on presented zoom frame " << frame;
+    // Gesture-owned bounds chrome keeps exactly one selection outline per selected element so the
+    // outline scales and rotates with the presented object; it drops per-element AABBs and
+    // path-point chrome. Pinned by
+    // `OverlayRendererTest.ActiveCombinedBoundsPreviewKeepsScaledSelectionPath`.
+    EXPECT_EQ(diagnostics->frameCost.overlay.pathCount, 1)
+        << "Active drag lost the gesture-scaled selection outline on presented zoom frame "
+        << frame;
     EXPECT_EQ(diagnostics->frameCost.overlay.handleCount, 4)
         << "Selection transform handles were not rebuilt for presented zoom frame " << frame;
     EXPECT_GT(diagnostics->frameCost.overlay.payloadBytes, 0u)

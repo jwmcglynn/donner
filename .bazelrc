@@ -184,20 +184,13 @@ build:wasm-size --linkopt=-sFILESYSTEM=0
 #   bazel build --config=editor-wasm //donner/editor/wasm:wasm
 common:editor-wasm --config=wasm-geode
 common:editor-wasm --//donner/editor/wasm:enable_wasm=true
+common:editor-wasm --//donner/svg/renderer:text=true
+common:editor-wasm --//donner/svg/renderer:text_full=false
 build:editor-wasm --copt=-pthread
+build:editor-wasm --copt=-Oz
 build:editor-wasm --linkopt=-pthread
-
-# Software-fallback editor WASM build. Uses the tiny_skia CPU backend (via
-# --config=wasm) so the rendered document is drawn into the WebGL canvas and is
-# capturable through headless screenshots — unlike the Geode/WebGPU present
-# path, whose swapchain pixels never reach a screenshot under headless Chrome.
-# This lane exists so CI can validate desktop-parity software rendering; it does
-# NOT exercise the production Geode/WebGPU present path. Usage:
-#   bazel build --config=editor-wasm-tiny-skia //donner/editor/wasm:wasm_tiny_skia_web_package
-common:editor-wasm-tiny-skia --config=wasm
-common:editor-wasm-tiny-skia --//donner/editor/wasm:enable_wasm=true
-build:editor-wasm-tiny-skia --copt=-pthread
-build:editor-wasm-tiny-skia --linkopt=-pthread
+build:editor-wasm --linkopt=-Oz
+build:editor-wasm -c opt
 
 # Geode (WebGPU) WASM build. Usage:
 #   bazel build --config=wasm-geode //donner/svg/renderer/wasm:donner_wasm_geode
@@ -228,12 +221,14 @@ build:macos --features=oso_prefix_is_pwd
 # std::filesystem and std::format floating-point formatting.
 build:macos --macos_minimum_os=13.3
 
-# apple_support's clang wrapper expects these Xcode paths. The local Darwin
-# sandbox sets them implicitly; remote execution does not.
+# apple_support's clang wrapper expects DEVELOPER_DIR. The local Darwin
+# sandbox sets it implicitly; remote execution does not. SDKROOT must NOT be
+# pinned here: the apple toolchain supplies its own (versioned) SDKROOT per
+# action, and a second value from action_env crashes analysis/spawn setup
+# with a duplicate-key error once the installed Xcode ships versioned SDK
+# directories (first seen with Xcode 26.5).
 build:re --action_env=DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 build:re --host_action_env=DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
-build:re --action_env=SDKROOT=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
-build:re --host_action_env=SDKROOT=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
 # NativeLink's sandbox can SIGKILL Tracy's static client startup before
 # gtest main runs (the test exits 9 with no gtest output). Keep editor
 # profiling enabled by default, but build the no-op wrapper for any action

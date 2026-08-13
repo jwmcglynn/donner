@@ -205,7 +205,8 @@ TEST_F(SamplePickerPresenterImGuiTest, HiddenPickerEmitsNothingAndSkipsDrawing) 
   EXPECT_GT(lastVertexCount_, hiddenVertexCount);
 }
 
-TEST_F(SamplePickerPresenterImGuiTest, RenderRequestsOneThumbnailPerVisibleCatalogSample) {
+TEST_F(SamplePickerPresenterImGuiTest,
+       RequestsEveryVisibleThumbnailAndDoesNotDrawSyntheticDocumentArt) {
   const std::span<const EditorSample> samples = GetEditorSampleCatalog();
   ASSERT_FALSE(samples.empty());
 
@@ -213,15 +214,15 @@ TEST_F(SamplePickerPresenterImGuiTest, RenderRequestsOneThumbnailPerVisibleCatal
   state.selectedSampleId = samples.front().id;  // Exercises the selected-card styling.
 
   std::vector<std::pair<std::string, std::size_t>> requests;
-  const SamplePickerThumbnailProvider provider =
-      [&requests](const EditorSample& sample, std::size_t index) {
-        requests.emplace_back(std::string(sample.id), index);
-        SamplePickerThumbnail thumbnail;
-        // Alternate landscape/portrait art so both letterbox arms are drawn.
-        thumbnail.texture = static_cast<ImTextureID>(0x1234);
-        thumbnail.aspectRatio = index % 2 == 0 ? 1.8f : 0.5f;
-        return thumbnail;
-      };
+  const SamplePickerThumbnailProvider provider = [&requests](const EditorSample& sample,
+                                                             std::size_t index) {
+    requests.emplace_back(std::string(sample.id), index);
+    SamplePickerThumbnail thumbnail;
+    // Alternate landscape/portrait art so both letterbox arms are drawn.
+    thumbnail.texture = static_cast<ImTextureID>(0x1234);
+    thumbnail.aspectRatio = index % 2 == 0 ? 1.8f : 0.5f;
+    return thumbnail;
+  };
 
   // A wide pane lays the catalog out in a multi-column grid; rendering asks
   // the provider for exactly one thumbnail per visible sample, in order.
@@ -233,11 +234,15 @@ TEST_F(SamplePickerPresenterImGuiTest, RenderRequestsOneThumbnailPerVisibleCatal
     EXPECT_EQ(requests[i].second, i);
   }
 
-  // Without a provider the cards render placeholder art and still emit no
-  // actions; the frame draws fewer vertices than the thumbnail-backed frame.
+  // Without a provider the cards still emit no actions. The thumbnail wells must remain neutral
+  // while asynchronous SVG raster work is pending. Missing
+  // textures must not be replaced with synthetic document art: removing one textured quad per
+  // visible card is the only draw-geometry difference.
   const int thumbnailVertexCount = lastVertexCount_;
   EXPECT_TRUE(NoActions(Frame(state, {}, 1024.0f)));
-  EXPECT_LT(lastVertexCount_, thumbnailVertexCount);
+  constexpr int kVerticesPerImageQuad = 4;
+  EXPECT_EQ(lastVertexCount_ + static_cast<int>(visibleCount) * kVerticesPerImageQuad,
+            thumbnailVertexCount);
 }
 
 TEST_F(SamplePickerPresenterImGuiTest, ClickingDismissButtonEmitsDismiss) {

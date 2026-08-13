@@ -1,15 +1,103 @@
+// The editor's browser bootstrap (the single-canvas architecture, whole app in one worker).
+//
+// The page-side contract:
+//
+//   - There is exactly ONE canvas. Emscripten transfers `#canvas` to the app
+//     pthread as an OffscreenCanvas at startup (PROXY_TO_PTHREAD plus
+//     OFFSCREENCANVAS_SUPPORT), so the page never draws into it. There is no
+//     second document canvas, no CSS placement of rendered content, and no
+//     bitmap presentation queue: every presented pixel and every transform
+//     between document space and the screen is produced by Geode inside that
+//     one canvas's WebGPU frame. CSS here styles page scaffolding only (the
+//     loader and the fatal-error surface).
+//   - `main()` runs on a worker. Everything below runs on the browser main
+//     thread and must stay side-effect free with respect to the canvas backing
+//     store, because touching `canvas.width` after the transfer throws.
+//   - The `__donner*` probe surface stays on `window` so the browser suites and
+//     the perf lane keep reading the page. The app thread posts into it through
+//     `MAIN_THREAD_ASYNC_EM_ASM` / shared-memory mirrors (see
+//     `donner/editor/WholeAppWorkerBridge.h`).
+
 const canvas = document.getElementById("canvas");
+const loadingScreen = document.getElementById("loading-screen");
 const status = document.getElementById("status");
+const loadingProgress = document.getElementById("loading-progress");
+const loadingProgressFill = document.getElementById("loading-progress-fill");
+const loadingDetail = document.getElementById("loading-detail");
 const capabilityError = document.getElementById("capability-error");
 const capabilityErrorDetail = document.getElementById("capability-error-detail");
+let editorRevealed = false;
+
+window.__donnerBootstrapStartedAtMs = performance.now();
+window.__donnerBackend = "geode";
+window.__donnerWholeAppWorker = true;
+// The app thread has its own `performance` time origin. Publish the page's so a
+// worker-side timestamp can be expressed on the page clock without a round trip.
+window.__donnerPageTimeOriginMs = performance.timeOrigin;
+
+function SetLoadingPhase(message, progress, detail) {
+  status.textContent = message;
+  if (detail) {
+    loadingDetail.textContent = detail;
+  }
+  if (Number.isFinite(progress)) {
+    const percent = Math.max(0, Math.min(100, progress));
+    loadingProgress.classList.add("is-determinate");
+    loadingProgress.setAttribute("aria-valuenow", String(Math.round(percent)));
+    loadingProgressFill.style.width = `${percent}%`;
+  } else {
+    loadingProgress.classList.remove("is-determinate");
+    loadingProgress.removeAttribute("aria-valuenow");
+    loadingProgressFill.style.width = "";
+  }
+}
 
 function ShowCapabilityError(message) {
   capabilityErrorDetail.textContent = message;
   capabilityError.hidden = false;
+  loadingScreen.hidden = true;
   canvas.hidden = true;
-  status.hidden = true;
   console.error(message);
 }
+
+function RevealEditorAfterFirstFrame() {
+  if (editorRevealed || !window.__donnerFirstFramePresented) {
+    return;
+  }
+  editorRevealed = true;
+  window.__donnerEditorRevealedAtMs = performance.now();
+  loadingScreen.classList.add("is-complete");
+  canvas.focus();
+  setTimeout(() => {
+    window.__donnerLoadingScreenHiddenAtMs = performance.now();
+    loadingScreen.hidden = true;
+  }, 220);
+}
+
+window.addEventListener(
+  "donner:first-frame-presented",
+  () => {
+    window.__donnerFirstFramePresentedAtMs = performance.now();
+    RevealEditorAfterFirstFrame();
+  },
+  { once: true },
+);
+
+// The app thread cannot dispatch a DOM event, so it flips this flag through the
+// shared-memory bridge and the page polls it until the first frame lands.
+window.__donnerNotifyFirstFramePresented = function() {
+  window.__donnerFirstFramePresented = true;
+  window.dispatchEvent(new Event("donner:first-frame-presented"));
+};
+
+// Event round-trip probe. The capture-phase listener runs before any Emscripten
+// proxying, so the delta the app thread computes against
+// `__donnerLastPointerDownEpochMs` is the full main-thread-to-worker hop.
+window.__donnerInputLatencyMsSamples = [];
+window.__donnerLastPointerDownEpochMs = 0;
+window.addEventListener("pointerdown", () => {
+  window.__donnerLastPointerDownEpochMs = performance.timeOrigin + performance.now();
+}, { capture: true, passive: true });
 
 function InstallTouchPointerBridge(targetCanvas) {
   if (!window.PointerEvent) {
@@ -62,14 +150,82 @@ function InstallTouchPointerBridge(targetCanvas) {
   targetCanvas.addEventListener("pointercancel", finishTouch);
 }
 
-InstallTouchPointerBridge(canvas);
+// Wheel deltaY (CSS pixels) to synthesize per unit of ln(scale) when WebKit
+// reports a trackpad pinch. The editor publishes the authoritative value as
+// window.__donnerPinchWheelDeltaPerLnScale once the Wasm runtime starts (see
+// donner/editor/PinchZoomPolicy.h); this fallback covers the window before that
+// and must stay in sync with it.
+//
+// This bridge is a shape adapter, not a gain stage. Chromium and Gecko deliver
+// a trackpad pinch natively as a ctrl-flagged wheel event with
+// deltaY = -100 * ln(scale); only WebKit withholds that channel and reports
+// gesturestart/gesturechange instead, so this synthesizes the identical
+// ungained shape and the editor's pinch discriminator applies the one canonical
+// gain for all three engines.
+//
+// Do not fold the classifier's 1/ln(1.1) gain in here. That pre-multiplication
+// (K = 1049.2059) shipped briefly alongside the discriminator and gained Safari
+// pinch input twice, about 10.5x too fast in log space, with the discriminator's
+// per-event clamp flattening every gesture to a full 1.5x step. The the single-canvas architecture
+// phase 1 experiment bootstrap carried the regressed value; it does not survive
+// into the shipping bootstrap.
+const kPinchWheelDeltaPerLnScaleFallback = 100;
 
-window.__donnerCanStartWasm = typeof SharedArrayBuffer !== "undefined";
+function PinchWheelDeltaPerLnScale() {
+  const published = window.__donnerPinchWheelDeltaPerLnScale;
+  return Number.isFinite(published) && published > 0
+    ? published
+    : kPinchWheelDeltaPerLnScaleFallback;
+}
+
+function InstallTrackpadGestureBridge(targetCanvas) {
+  let previousScale = 1;
+  const preventPageZoom = (event) => {
+    event.preventDefault();
+  };
+  targetCanvas.addEventListener("gesturestart", (event) => {
+    preventPageZoom(event);
+    previousScale = Number.isFinite(event.scale) && event.scale > 0 ? event.scale : 1;
+    targetCanvas.focus();
+  }, { passive: false });
+  targetCanvas.addEventListener("gesturechange", (event) => {
+    preventPageZoom(event);
+    const scale = Number.isFinite(event.scale) && event.scale > 0 ? event.scale : previousScale;
+    const incrementalScale = scale / Math.max(previousScale, 0.001);
+    previousScale = scale;
+    targetCanvas.dispatchEvent(
+      new WheelEvent("wheel", {
+        bubbles: true,
+        cancelable: true,
+        clientX: event.clientX,
+        clientY: event.clientY,
+        ctrlKey: true,
+        deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+        deltaY: -Math.log(Math.max(incrementalScale, 0.001)) * PinchWheelDeltaPerLnScale(),
+      }),
+    );
+  }, { passive: false });
+  targetCanvas.addEventListener("gestureend", (event) => {
+    preventPageZoom(event);
+    previousScale = 1;
+  }, { passive: false });
+}
+
+InstallTouchPointerBridge(canvas);
+InstallTrackpadGestureBridge(canvas);
+
+window.__donnerCanStartWasm = typeof SharedArrayBuffer !== "undefined"
+  && typeof OffscreenCanvas !== "undefined"
+  && typeof canvas.transferControlToOffscreen === "function";
 if (!window.__donnerCanStartWasm) {
-  const reason = window.isSecureContext
-    ? "This page is secure, but cross-origin isolation is not active."
-    : "This page is not running in a secure context.";
-  ShowCapabilityError(`${reason} SharedArrayBuffer and Wasm threads are unavailable.`);
+  const reason = typeof SharedArrayBuffer === "undefined"
+    ? (window.isSecureContext
+      ? "This page is secure, but cross-origin isolation is not active, so SharedArrayBuffer "
+        + "and WebAssembly threads are unavailable."
+      : "This page is not running in a secure context, so SharedArrayBuffer and WebAssembly "
+        + "threads are unavailable.")
+    : "This browser cannot transfer a canvas to an OffscreenCanvas.";
+  ShowCapabilityError(`${reason} The editor cannot start.`);
 }
 
 var Module = {
@@ -82,16 +238,33 @@ var Module = {
     console.error(text);
   },
   setStatus: function(text) {
-    status.textContent = text || "";
+    if (!text) {
+      return;
+    }
+    const progressMatch = text.match(/\((\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)\)/);
+    const progress = progressMatch && Number(progressMatch[2]) > 0
+      ? (Number(progressMatch[1]) / Number(progressMatch[2])) * 100
+      : undefined;
+    SetLoadingPhase(text.replace(/\s*\([^)]*\)\s*$/, ""), progress);
   },
   monitorRunDependencies: function(left) {
     if (left > 0) {
-      status.textContent = `Loading… (${left} remaining)`;
+      Module.totalDependencies = Math.max(Module.totalDependencies || 0, left);
+      const completed = Module.totalDependencies - left;
+      const progress = 28 + (completed / Module.totalDependencies) * 62;
+      SetLoadingPhase(
+        "Starting the editor…",
+        progress,
+        `${left} runtime step${left === 1 ? "" : "s"} remaining`,
+      );
     }
   },
   onRuntimeInitialized: function() {
-    status.style.display = "none";
-    canvas.focus();
+    window.__donnerRuntimeInitializedAtMs = performance.now();
+    SetLoadingPhase("Opening your workspace…", 96, "Drawing the first editor frame");
+    if (window.__donnerFirstFramePresented) {
+      RevealEditorAfterFirstFrame();
+    }
   },
   locateFile: function(path, prefix) {
     if (path.endsWith(".wasm")) {
@@ -108,27 +281,27 @@ var Module = {
 canvas.addEventListener("contextmenu", function(event) {
   event.preventDefault();
 });
-canvas.addEventListener("webglcontextlost", function(event) {
-  alert("WebGL context lost. Reload the page.");
-  event.preventDefault();
-}, false);
 
-window.__donnerBackendPromise
-  .then((backend) => {
-    if (!window.__donnerCanStartWasm) {
-      return;
-    }
-    const loader = document.createElement("script");
-    loader.async = true;
-    loader.type = "text/javascript";
-    loader.src = backend.base + "editor.js";
-    loader.addEventListener("error", () => {
-      ShowCapabilityError(`Unable to load the ${backend.name} renderer package.`);
-    });
-    document.body.appendChild(loader);
-  })
-  .catch((error) => {
-    if (window.__donnerCanStartWasm) {
-      ShowCapabilityError(String(error));
-    }
+if (window.__donnerCanStartWasm) {
+  SetLoadingPhase(
+    "Downloading the Geode WebGPU editor…",
+    12,
+    "Compiling the editor on first visit; later loads use the browser cache",
+  );
+  const wasmPreload = document.createElement("link");
+  wasmPreload.rel = "preload";
+  wasmPreload.as = "fetch";
+  wasmPreload.type = "application/wasm";
+  wasmPreload.crossOrigin = "anonymous";
+  wasmPreload.href = "editor.wasm";
+  document.head.appendChild(wasmPreload);
+
+  const loader = document.createElement("script");
+  loader.async = true;
+  loader.type = "text/javascript";
+  loader.src = "editor.js";
+  loader.addEventListener("error", () => {
+    ShowCapabilityError("Unable to load the Geode WebGPU renderer package.");
   });
+  document.body.appendChild(loader);
+}

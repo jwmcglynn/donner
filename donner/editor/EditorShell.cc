@@ -25,13 +25,16 @@
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
+#include <emscripten/threading.h>
 #endif
 
 #include "GLFW/glfw3.h"
+#include "donner/base/MemoryAttribution.h"
 #include "donner/base/RcString.h"
 #include "donner/base/StringUtils.h"
 #include "donner/css/parser/ColorParser.h"
 #include "donner/editor/AttributeWriteback.h"
+#include "donner/editor/DisclosureChevron.h"
 #include "donner/editor/DocumentSave.h"
 #include "donner/editor/DragCoalesce.h"
 #include "donner/editor/EditorDockLayout.h"
@@ -46,7 +49,9 @@
 #include "donner/editor/ImGuiClipboard.h"
 #include "donner/editor/ImGuiInternalIncludes.h"
 #include "donner/editor/KeyboardShortcutPolicy.h"
+#include "donner/editor/LockState.h"
 #include "donner/editor/NativeWindowChrome.h"
+#include "donner/editor/PinchZoomPolicy.h"
 #include "donner/editor/SelectionTransformHandles.h"
 #include "donner/editor/ShapeClipboardCommands.h"
 #include "donner/editor/ShapeClipboardPayload.h"
@@ -81,6 +86,229 @@
 
 namespace donner::editor {
 
+#ifdef __EMSCRIPTEN__
+// The app runs on a pthread in the browser build, where `window` and
+// `document` do not exist; every publish below proxies to the browser main
+// thread. Fire-and-forget: none of these are read back by the app.
+void PublishActiveSampleId(const char* sampleId) {
+  MAIN_THREAD_ASYNC_EM_ASM(
+      {
+        const id = UTF8ToString($0);
+        const canvas = document.getElementById('canvas');
+        if (canvas) {
+          canvas.setAttribute('data-active-sample-id', id);
+        }
+        window['__donnerActiveSampleStats'] = ({
+          'sampleId' : id,
+          'activatedAtMs' : performance.now(),
+        });
+      },
+      sampleId);
+}
+
+void PublishSampleThumbnailStats(int requested, int started, int completed, int rendered, int ready,
+                                 int pending, int active, int resultReady) {
+  MAIN_THREAD_ASYNC_EM_ASM(
+      {
+        const frame = Number(window['__donnerMainLoopRenderedFrames'] || 0) + 1;
+        const previous = window['__donnerSampleThumbnailStats'] || ({
+          'carouselFrame' : frame,
+          'firstRequestFrame' : 0,
+          'ready' : 0,
+          'publicationFrames' : ([]),
+        });
+        const publicationFrames =
+            Array.isArray(previous['publicationFrames']) ? previous['publicationFrames'].slice()
+                                                         : ([]);
+        for (let published = Number(previous['ready'] || 0); published < $4; ++published) {
+          publicationFrames.push(frame);
+        }
+        window['__donnerSampleThumbnailStats'] = ({
+          'carouselFrame' : Number(previous['carouselFrame'] || frame),
+          'firstRequestFrame' : Number(previous['firstRequestFrame'] || ($0 > 0 ? frame : 0)),
+          'requested' : $0,
+          'started' : $1,
+          'completed' : $2,
+          'rendered' : $3,
+          'ready' : $4,
+          'publicationFrames' : publicationFrames,
+          'pending' : Boolean($5),
+          'active' : Boolean($6),
+          'resultReady' : Boolean($7),
+        });
+      },
+      requested, started, completed, rendered, ready, pending, active, resultReady);
+}
+
+void PublishInteractionStats(int selectedCount, int pendingClick, int workerBusy, int dragging,
+                             double frame) {
+  MAIN_THREAD_ASYNC_EM_ASM(
+      {
+        window['__donnerInteractionStats'] = ({
+          'selectedCount' : $0,
+          'pendingClick' : Boolean($1),
+          'workerBusy' : Boolean($2),
+          'dragging' : Boolean($3),
+          'publishedAtFrame' : Number($4),
+        });
+      },
+      selectedCount, pendingClick, workerBusy, dragging, frame);
+}
+
+/**
+ * Publish the render pane's screen geometry and the presented document's place
+ * inside it.
+ *
+ * The browser suites need this because the single-canvas presenter left them
+ * with no DOM handle on either one: the canvas is the whole window, so its box
+ * describes the editor, not the pane and not the document. Without this a
+ * pixel probe cannot tell the document's pixels from the surrounding editor
+ * chrome, and a suite that samples the whole canvas measures the chrome - which
+ * is exactly how a pinch-parity check came to compare two carousel layouts.
+ *
+ * Both rectangles are in the same CSS-pixel screen space the page's own pointer
+ * coordinates use, so a test can map a document coordinate onto the viewport
+ * with `documentX + documentWidth * (x / viewBoxWidth)`.
+ */
+/**
+ * Publish the debug-overlay toggle states.
+ *
+ * The browser suites toggle these through the ImGui View menu, which they can
+ * only reach by clicking at fixed pixel offsets; a click that lands between
+ * rows silently does nothing. Publishing the authoritative state lets a test
+ * verify the toggle took effect and retry the click instead of proceeding
+ * against a menu item it missed.
+ */
+void PublishOverlayStats(int compositorTileOverlay, int geometryDebugOverlay) {
+  MAIN_THREAD_ASYNC_EM_ASM(
+      {
+        window['__donnerOverlayStats'] = ({
+          'compositorTileOverlay' : !!$0,
+          'geometryDebugOverlay' : !!$1,
+        });
+      },
+      compositorTileOverlay, geometryDebugOverlay);
+}
+
+void PublishViewportStats(double paneX, double paneY, double paneWidth, double paneHeight,
+                          double documentX, double documentY, double documentWidth,
+                          double documentHeight, double zoom, double documentCanvasCommits,
+                          double overviewInfillRenders) {
+  MAIN_THREAD_ASYNC_EM_ASM(
+      {
+        window['__donnerViewportStats'] = ({
+          'paneX' : $0,
+          'paneY' : $1,
+          'paneWidth' : $2,
+          'paneHeight' : $3,
+          'documentX' : $4,
+          'documentY' : $5,
+          'documentWidth' : $6,
+          'documentHeight' : $7,
+          'zoom' : $8,
+          'documentCanvasCommits' : $9,
+          'overviewInfillRenders' : $10,
+        });
+      },
+      paneX, paneY, paneWidth, paneHeight, documentX, documentY, documentWidth, documentHeight,
+      zoom, documentCanvasCommits, overviewInfillRenders);
+}
+
+void PublishLayerThumbnailStats(double rowCount, double renderedCount, double reusedCount,
+                                double deferredCount, double skippedForCanvasInvalidationCount,
+                                double snapshotRebuildCount, double bitmapCount, double bitmapBytes,
+                                double textureSnapshotCount, double textureCount) {
+  MAIN_THREAD_ASYNC_EM_ASM(
+      {
+        window['__donnerLayerThumbnailStats'] = ({
+          'rowCount' : $0,
+          'renderedCount' : $1,
+          'reusedCount' : $2,
+          'deferredCount' : $3,
+          'skippedForCanvasInvalidationCount' : $4,
+          'snapshotRebuildCount' : $5,
+          'bitmapCount' : $6,
+          'bitmapBytes' : $7,
+          'textureSnapshotCount' : $8,
+          'textureCount' : $9,
+        });
+      },
+      rowCount, renderedCount, reusedCount, deferredCount, skippedForCanvasInvalidationCount,
+      snapshotRebuildCount, bitmapCount, bitmapBytes, textureSnapshotCount, textureCount);
+}
+
+// Accumulate this frame's UI-phase costs into the main-loop probe published by `main.cc`. The
+// perf lane divides each total by `renderedFrames` to attribute the per-frame UI cost to the
+// stage that owns it, which is how the immediate-mode submission cost of the sidebars and the
+// render pane is separated from the non-UI phases of `runFrame`.
+void AccumulateFrameLoopPhaseCost(double layoutMs, double menusDialogsMs, double sourcePaneMs,
+                                  double renderPaneMs, double sidebarsMs, double splittersMs,
+                                  double nonUiMs, double imguiRenderMs, double imguiDrawMs) {
+  MAIN_THREAD_ASYNC_EM_ASM(
+      {
+        const stats = window['__donnerFrameLoopStats'];
+        if (!stats) {
+          return;
+        }
+
+        let totals = stats['phaseTotalsMs'];
+        if (!totals) {
+          totals = ({
+            'layout' : 0,
+            'menusDialogs' : 0,
+            'sourcePane' : 0,
+            'renderPane' : 0,
+            'sidebars' : 0,
+            'splitters' : 0,
+            'nonUi' : 0,
+            'imguiRender' : 0,
+            'imguiDraw' : 0,
+          });
+          stats['phaseTotalsMs'] = totals;
+        }
+        totals['layout'] += $0;
+        totals['menusDialogs'] += $1;
+        totals['sourcePane'] += $2;
+        totals['renderPane'] += $3;
+        totals['sidebars'] += $4;
+        totals['splitters'] += $5;
+        totals['nonUi'] += $6;
+        totals['imguiRender'] += $7;
+        totals['imguiDraw'] += $8;
+      },
+      layoutMs, menusDialogsMs, sourcePaneMs, renderPaneMs, sidebarsMs, splittersMs, nonUiMs,
+      imguiRenderMs, imguiDrawMs);
+}
+
+void PublishPresentationResourceStats(double totalTrackedBytes, double peakTrackedBytes,
+                                      double pendingRetiredBytes, double agedRetiredBytes,
+                                      double activeTileTextures, double overviewTileTextures,
+                                      double pendingRetiredTextures, double agedRetiredTextures,
+                                      double retiredFrameCount, double lifetimeTextureCreates,
+                                      double lifetimeBufferCreates) {
+  MAIN_THREAD_ASYNC_EM_ASM(
+      {
+        window['__donnerPresentationResourceStats'] = ({
+          'totalTrackedBytes' : $0,
+          'peakTrackedBytes' : $1,
+          'pendingRetiredBytes' : $2,
+          'agedRetiredBytes' : $3,
+          'activeTileTextures' : $4,
+          'overviewTileTextures' : $5,
+          'pendingRetiredTextures' : $6,
+          'agedRetiredTextures' : $7,
+          'retiredFrameCount' : $8,
+          'lifetimeTextureCreates' : $9,
+          'lifetimeBufferCreates' : $10,
+        });
+      },
+      totalTrackedBytes, peakTrackedBytes, pendingRetiredBytes, agedRetiredBytes,
+      activeTileTextures, overviewTileTextures, pendingRetiredTextures, agedRetiredTextures,
+      retiredFrameCount, lifetimeTextureCreates, lifetimeBufferCreates);
+}
+
+#endif
+
 namespace internal {
 
 constexpr float kMinSourcePaneWidth = 240.0f;
@@ -91,8 +319,19 @@ constexpr float kSourcePaneCollapseThreshold = kMinSourcePaneWidth;
 constexpr float kKeyboardZoomStep = 1.5f;
 constexpr float kMinRightPaneWidth = 220.0f;
 constexpr float kMaxRightPaneWidth = 900.0f;
+#ifdef __EMSCRIPTEN__
+// emscripten-glfw normalizes every DOM_DELTA_PIXEL wheel at 100 px per scroll
+// unit, where desktop GLFW scales precise trackpad deltas at 10 px per unit.
+// This keeps pan 1:1 with finger travel on both; it also moves macOS mouse
+// wheel pan from 4 px to 40 px per notch, which matches native browser scroll.
+constexpr double kTrackpadPanPixelsPerScrollUnit = 100.0;
+#else
 constexpr double kTrackpadPanPixelsPerScrollUnit = 10.0;
-constexpr double kWheelZoomStep = 1.1;
+#endif
+// `kWheelZoomStep` intentionally has no definition here: it is shared policy
+// owned by `donner/editor/PinchZoomPolicy.h` (enclosing `donner::editor`
+// namespace) so the desktop pinch monitor, the browser pinch bridge, and this
+// shell can never drift apart. Unqualified uses below resolve to it.
 constexpr double kSelectMarqueeHoldDelaySeconds = 0.20;
 constexpr int kMaxSaveSyncFlushPasses = 4;
 constexpr float kSelectionSizeChipPaddingX = 6.0f;
@@ -138,6 +377,32 @@ constexpr ImWchar kEditorSymbolGlyphRanges[] = {
     0,
 };
 
+constexpr std::string_view kEditorUiRegularFontName = "Donner UI Regular";
+constexpr std::string_view kEditorUiBoldFontName = "Donner UI Bold";
+constexpr std::string_view kEditorCodeFontName = "Donner Code";
+constexpr std::string_view kEditorCodeSymbolFontName = "Donner Code Symbols";
+
+void SetImGuiFontConfigName(ImFontConfig& config, std::string_view name) {
+  const std::size_t size = std::min(name.size(), sizeof(config.Name) - 1u);
+  std::copy_n(name.data(), size, config.Name);
+  config.Name[size] = '\0';
+}
+
+ImFont* FindImGuiFontByConfigName(const ImFontAtlas& atlas, std::string_view name) {
+  for (ImFont* font : atlas.Fonts) {
+    if (font == nullptr || font->ConfigData == nullptr) {
+      continue;
+    }
+
+    for (int configIndex = 0; configIndex < font->ConfigDataCount; ++configIndex) {
+      if (name == font->ConfigData[configIndex].Name) {
+        return font;
+      }
+    }
+  }
+  return nullptr;
+}
+
 bool ResourceDiagnosticsEnabled() {
   return std::getenv("DONNER_EDITOR_RESOURCE_LOG") != nullptr;
 }
@@ -164,7 +429,6 @@ std::uint64_t MegabytesRoundedUp(std::uint64_t bytes) {
 FrameMemorySample MemorySampleFromPresentationResources(
     const PresentationResourceStats& resources) {
   return FrameMemorySample{
-      .overlayBytes = resources.overlayBytes,
       .activeTileBytes = resources.activeTileBytes,
       .overviewTileBytes = resources.overviewTileBytes,
       .retiredBytes = resources.pendingRetiredBytes + resources.agedRetiredBytes,
@@ -178,7 +442,6 @@ FrameMemorySample MemorySampleFromPresentationResources(
 FrameMissResourceTelemetry FrameMissTelemetryFromPresentationResources(
     const PresentationResourceStats& resources) {
   return FrameMissResourceTelemetry{
-      .overlayBytes = resources.overlayBytes,
       .activeTileBytes = resources.activeTileBytes,
       .overviewTileBytes = resources.overviewTileBytes,
       .retiredBytes = resources.pendingRetiredBytes + resources.agedRetiredBytes,
@@ -288,9 +551,35 @@ bool GroupOperationCanDispatch(bool rendererBusy,
   return !rendererBusy && availability.canApply;
 }
 
-bool PendingDocumentReplacementCanProcess(bool hasPendingRequest, bool rendererBusy,
+bool PendingDocumentReplacementCanProcess(bool hasPendingRequest, bool documentWriteAvailable,
                                           bool hasPendingMutations) noexcept {
-  return hasPendingRequest && !rendererBusy && !hasPendingMutations;
+  return hasPendingRequest && documentWriteAvailable && !hasPendingMutations;
+}
+
+bool ShouldRefreshSidebarSnapshots(bool rendererBusy, bool interactionActive) noexcept {
+  return !rendererBusy && !interactionActive;
+}
+
+bool SidebarSnapshotRefreshPendingAfterPass(std::size_t deferredThumbnailCount) noexcept {
+  return deferredThumbnailCount > 0u;
+}
+
+bool SamplePickerActionsNeedFollowupFrame(bool dismiss, bool openFile) noexcept {
+  return dismiss || openFile;
+}
+
+DeferredRenderAction DeferredRenderActionForState(bool hasDocument, bool penDragFlushed,
+                                                  bool rendererBusy) noexcept {
+  if (!hasDocument) {
+    return DeferredRenderAction::ClearRequest;
+  }
+  if (penDragFlushed) {
+    return DeferredRenderAction::WakeForPenDrag;
+  }
+  if (!rendererBusy) {
+    return DeferredRenderAction::SubmitRender;
+  }
+  return DeferredRenderAction::WaitForRendererCompletion;
 }
 
 // Build the "<label> (<key>)" tooltip string for a tool button from the shared
@@ -690,13 +979,14 @@ Box2d ResolveDocumentViewBox(svg::SVGDocument& document) {
   return ResolveDocumentViewBoxWithAccess(document);
 }
 
-std::optional<Box2d> TryResolveDocumentViewBox(svg::SVGDocument& document) {
-  std::optional<svg::DocumentReadAccess> access = document.tryReadAccess();
-  if (!access.has_value()) {
+std::optional<Box2d> ResolveDocumentViewBoxForFrame(svg::SVGDocument& document, bool rendererBusy) {
+  if (rendererBusy) {
+    // The viewport already owns the last complete document epoch. Returning nullopt tells
+    // updatePaneLayout to preserve it instead of blocking the UI thread on the worker's write
+    // guard. The next idle frame refreshes it from the live document.
     return std::nullopt;
   }
-
-  return ResolveDocumentViewBoxWithAccess(document);
+  return ResolveDocumentViewBox(document);
 }
 
 }  // namespace internal
@@ -719,6 +1009,24 @@ std::optional<SelectionChromeSnapshot::TextBoxDragPreview> TextBoxDragPreviewFro
   };
 }
 
+/// Rasterize every embedded UI icon in one batched pass before the first frame.
+///
+/// Each icon used to be rasterized lazily at its first draw, and each
+/// rasterization ends in a GPU-to-CPU readback. In a browser that readback is an
+/// asynchronous buffer mapping resolved from the frame loop, so the first frame
+/// paid several of them back to back and stalled for hundreds of milliseconds.
+/// Batching them collapses the set into a single readback taken before the UI
+/// starts drawing; the per-icon calls then hit the prewarmed cache.
+void PrewarmEditorIcons() {
+  std::vector<EmbeddedSvgIconRequest> requests;
+  for (const std::span<const EmbeddedSvgIconRequest> group :
+       {ToolbarIconPrewarmRequests(), DisclosureChevronPrewarmRequests(),
+        LayersPanelIconPrewarmRequests(), SidebarIconPrewarmRequests()}) {
+    requests.insert(requests.end(), group.begin(), group.end());
+  }
+  PrewarmEmbeddedSvgIcons(requests);
+}
+
 EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     : window_(window),
       options_(std::move(options)),
@@ -730,20 +1038,35 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       thumbnailTextures_(window.geodeDevice()),
       sampleThumbnailTextures_(window.geodeDevice()),
       toolbarIconTextures_(window.geodeDevice()),
-      layerThumbnailRenderer_(),
-      sampleThumbnailRenderer_(),
+      layerThumbnailRenderer_(window.geodeDevice()),
+      fontCatalog_(),
+#ifdef DONNER_EDITOR_WHOLE_APP_WORKER
+      // The raster thread owns its own headless device: tiles cross the
+      // thread boundary as CPU bitmaps by design (WebGPU has no cross-thread
+      // texture sharing in the browser), and a shared browser device makes
+      // the raster thread's snapshot readback wait on cross-thread event
+      // delivery it cannot drive (measured: 1.9 s per first-sample snapshot
+      // against the shared device, ~30 ms against its own).
+      renderCoordinator_(nullptr),
+#else
       renderCoordinator_(window.geodeDevice()),
+#endif
       rotateCursorSet_(),
       documentSyncController_(InitialDocumentSyncSource(options_)),
       interactionController_(),
       inputBridge_(window_, kWheelZoomStep),
       compositorDebugPanel_(window.geodeDevice()),
       dialogPresenter_(options_.editorNoticeText) {
+  // One presenter owns where document pixels land for the whole session.
+  documentPresenter_ =
+      MakeDocumentPresenter([this](std::optional<FramebufferUnderlayPlan> plan) {
+        installFramebufferUnderlayPlan(std::move(plan));
+      });
+  renderCoordinator_.asyncRenderer().setCompositorDiagnosticsEnabled(false);
   // Install the embedded + system font catalog as the process-wide default provider, so every
   // document FontManager created by the render paths resolves font-family names against embedded
   // Google Fonts and macOS system fonts before falling back to Public Sans (Design 0013 W3).
   svg::FontManager::SetDefaultFontProvider(&fontCatalog_);
-
   std::optional<std::string> initialSource = options_.initialSource;
   if (!initialSource.has_value() && !options_.svgPath.empty()) {
     initialSource = LoadFile(options_.svgPath);
@@ -776,46 +1099,47 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     }
     return response;
   });
-
   ImGuiIO& io = ImGui::GetIO();
-  const gui::EditorWindowFonts& existingFonts = window_.editorFonts();
-  if (existingFonts.complete()) {
-    // Multiple EditorShell instances can share one EditorWindow in tests and
-    // document-replacement workflows. Re-adding fonts after the WGPU backend
-    // has uploaded the atlas clears its texture id, leaving the next draw with
-    // a null texture view. Reuse the window-owned context-local pointers
-    // without changing the fonts' ImGui debug names.
-    uiFontBold_ = existingFonts.uiBold;
-    codeFont_ = existingFonts.code;
-  } else {
-    ImFontConfig fontCfg;
-    fontCfg.FontDataOwnedByAtlas = false;
-    const double displayScale = window_.displayScale();
-    ImFont* uiFontRegular = io.Fonts->AddFontFromMemoryTTF(
-        const_cast<unsigned char*>(embedded::kRobotoRegularTtf.data()),
-        static_cast<int>(embedded::kRobotoRegularTtf.size()),
-        static_cast<float>(15.0 * displayScale), &fontCfg, kEditorGlyphRanges);
-    uiFontBold_ = io.Fonts->AddFontFromMemoryTTF(
-        const_cast<unsigned char*>(embedded::kRobotoBoldTtf.data()),
-        static_cast<int>(embedded::kRobotoBoldTtf.size()), static_cast<float>(15.0 * displayScale),
-        &fontCfg, kEditorGlyphRanges);
-    codeFont_ = io.Fonts->AddFontFromMemoryTTF(
-        const_cast<unsigned char*>(embedded::kFiraCodeRegularTtf.data()),
-        static_cast<int>(embedded::kFiraCodeRegularTtf.size()),
-        static_cast<float>(14.0 * displayScale), &fontCfg, kEditorGlyphRanges);
-    ImFontConfig codeSymbolFontCfg = fontCfg;
-    codeSymbolFontCfg.MergeMode = true;
+  const double displayScale = window_.displayScale();
+  if (FindImGuiFontByConfigName(*io.Fonts, kEditorUiRegularFontName) == nullptr) {
+    ImFontConfig regularFontConfig;
+    regularFontConfig.FontDataOwnedByAtlas = false;
+    SetImGuiFontConfigName(regularFontConfig, kEditorUiRegularFontName);
     std::ignore = io.Fonts->AddFontFromMemoryTTF(
         const_cast<unsigned char*>(embedded::kRobotoRegularTtf.data()),
         static_cast<int>(embedded::kRobotoRegularTtf.size()),
-        static_cast<float>(14.0 * displayScale), &codeSymbolFontCfg, kEditorSymbolGlyphRanges);
-    window_.setEditorFonts({
-        .uiRegular = uiFontRegular,
-        .uiBold = uiFontBold_,
-        .code = codeFont_,
-    });
+        static_cast<float>(15.0 * displayScale), &regularFontConfig, kEditorGlyphRanges);
   }
 
+  uiFontBold_ = FindImGuiFontByConfigName(*io.Fonts, kEditorUiBoldFontName);
+  if (uiFontBold_ == nullptr) {
+    ImFontConfig boldFontConfig;
+    boldFontConfig.FontDataOwnedByAtlas = false;
+    SetImGuiFontConfigName(boldFontConfig, kEditorUiBoldFontName);
+    uiFontBold_ = io.Fonts->AddFontFromMemoryTTF(
+        const_cast<unsigned char*>(embedded::kRobotoBoldTtf.data()),
+        static_cast<int>(embedded::kRobotoBoldTtf.size()), static_cast<float>(15.0 * displayScale),
+        &boldFontConfig, kEditorGlyphRanges);
+  }
+
+  codeFont_ = FindImGuiFontByConfigName(*io.Fonts, kEditorCodeFontName);
+  if (codeFont_ == nullptr) {
+    ImFontConfig codeFontConfig;
+    codeFontConfig.FontDataOwnedByAtlas = false;
+    SetImGuiFontConfigName(codeFontConfig, kEditorCodeFontName);
+    codeFont_ = io.Fonts->AddFontFromMemoryTTF(
+        const_cast<unsigned char*>(embedded::kFiraCodeRegularTtf.data()),
+        static_cast<int>(embedded::kFiraCodeRegularTtf.size()),
+        static_cast<float>(14.0 * displayScale), &codeFontConfig, kEditorGlyphRanges);
+
+    ImFontConfig codeSymbolFontConfig = codeFontConfig;
+    codeSymbolFontConfig.MergeMode = true;
+    SetImGuiFontConfigName(codeSymbolFontConfig, kEditorCodeSymbolFontName);
+    std::ignore = io.Fonts->AddFontFromMemoryTTF(
+        const_cast<unsigned char*>(embedded::kRobotoRegularTtf.data()),
+        static_cast<int>(embedded::kRobotoRegularTtf.size()),
+        static_cast<float>(14.0 * displayScale), &codeSymbolFontConfig, kEditorSymbolGlyphRanges);
+  }
   if (!app_.loadFromString(*initialSource)) {
     // Keep the shell alive so the user can still edit/fix the file from the source pane.
   }
@@ -843,20 +1167,25 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     directDocumentRenderer_ =
         std::make_unique<svg::RendererGeode>(window_.geodeFramebufferDevice());
     directOverlayRenderer_ = std::make_unique<svg::RendererGeode>(window_.geodeFramebufferDevice());
+    // Embedded UI icons are rasterized on the UI thread. Borrow this existing
+    // UI-only renderer so icon startup creates neither another renderer nor a
+    // headless WebGPU device. The matching destructor reset runs before the
+    // unique_ptr is released.
+    ConfigureEmbeddedSvgIconRenderer(*directOverlayRenderer_);
   }
 #endif
+  PrewarmEditorIcons();
   if (!rotateCursorSet_.initialize(window_.rawHandle(), window_.geodeDevice())) {
     std::fprintf(stderr, "[editor] custom rotate cursor unavailable; using fallback cursor\n");
   }
 
-  // On-demand render loop: the main thread sleeps in `window.waitEvents()`
-  // between user inputs, so the worker thread has to nudge it when a
-  // render finishes - otherwise the fresh bitmap sits in `result_`
-  // forever. Safe to capture `this` because `AsyncRenderer`'s lifetime
-  // is strictly nested inside `RenderCoordinator`'s, which is a member
-  // of `*this`.
-  renderCoordinator_.asyncRenderer().setWakeCallback([this]() { window_.wakeEventLoop(); });
-
+  // On-demand render loop: the main thread sleeps in `window.waitEvents()` between user inputs, so
+  // the worker nudges it when a result finishes. Capture the constructor's externally-owned window
+  // directly, not `this`: EditorWindow is required to outlive EditorShell, and shutdown detaches
+  // then joins this callback before shell member teardown begins.
+  gui::EditorWindow* const wakeWindow = &window_;
+  renderCoordinator_.asyncRenderer().setWakeCallback(
+      [wakeWindow]() { wakeWindow->wakeEventLoop(); });
   if (options_.reproOutputPath.has_value()) {
     repro::ReproRecorderOptions recorderOptions;
     recorderOptions.outputPath = *options_.reproOutputPath;
@@ -871,7 +1200,12 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
   }
 
   showSamplePicker_ = options_.showWelcome;
+  welcomePlaceholderActive_ = options_.showWelcome;
   valid_ = true;
+  // Safari cannot safely resume a second WebGPU device's Promise completion while the main
+  // pthread is suspended in the Asyncify readbacks used to rasterize custom cursors. Start the
+  // renderer pthread only after all synchronous UI GPU setup and its wake callback are complete.
+  renderCoordinator_.asyncRenderer().start();
 }
 
 std::optional<float> EditorShell::nextIdleWakeSeconds() const {
@@ -885,6 +1219,13 @@ std::optional<float> EditorShell::nextIdleWakeSeconds() const {
     result = result.has_value() ? std::min(*result, clampedWakeSeconds) : clampedWakeSeconds;
   };
 
+  // Sample-picker thumbnails refused by an initializing worker runtime: poll
+  // back soon enough that the carousel fills in without a visible gap, slowly
+  // enough that a still-initializing runtime is not spun on.
+  if (sampleThumbnailRetryPending_) {
+    constexpr float kSampleThumbnailRetryWakeSeconds = 0.05f;
+    includeWake(kSampleThumbnailRetryWakeSeconds);
+  }
   includeWake(documentSyncController_.nextTextSyncWakeSeconds());
   includeWake(textEditor_.nextFlashWakeSeconds());
   includeWake(textEditor_.nextRopeAnimationWakeSeconds());
@@ -899,6 +1240,15 @@ std::optional<float> EditorShell::nextIdleWakeSeconds() const {
 }
 
 EditorShell::~EditorShell() {
+#ifdef DONNER_EDITOR_WGPU
+  if (directOverlayRenderer_ != nullptr) {
+    ResetEmbeddedSvgIconRenderer(*directOverlayRenderer_);
+  }
+#endif
+  // The worker borrows both the window wake target and FontCatalog. Detach/cancel/join it while
+  // those dependencies are still alive, before clearing the process-wide provider or allowing
+  // reverse-order member destruction to begin.
+  renderCoordinator_.asyncRenderer().shutdown();
   // Detach our font catalog from the global default before it is destroyed.
   if (svg::FontManager::DefaultFontProvider() == &fontCatalog_) {
     svg::FontManager::SetDefaultFontProvider(nullptr);
@@ -1181,7 +1531,7 @@ void EditorShell::applyPendingDocumentSpaceReplayInputForTesting() {
     } else if (activeTool_ == ActiveTool::Text) {
       textTool_.onMouseDown(app_, input.documentPoint, input.modifiers);
       flushQueuedMutationAndRefreshOverlay();
-    } else {
+    } else if (!tryBeginTextEditingFromSelectDoubleClick(input.documentPoint, input.modifiers)) {
       selectTool_.onMouseDown(app_, input.documentPoint, input.modifiers);
       rasterizeCurrentSelection();
     }
@@ -1191,12 +1541,14 @@ void EditorShell::applyPendingDocumentSpaceReplayInputForTesting() {
       penDragFlushedThisFrame_ = true;
     }
   } else if (input.leftMouseDown && activeTool_ == ActiveTool::Text &&
-             (textTool_.isDraggingBox() || textTool_.isAdjustingFrame())) {
+             (textTool_.isDraggingBox() || textTool_.isAdjustingFrame() ||
+              textTool_.isSelectingText())) {
     const bool rotatingFrame = textTool_.isRotatingFrame();
+    const bool selectingText = textTool_.isSelectingText();
     textTool_.onMouseMove(app_, input.documentPoint, /*buttonHeld=*/true);
     if (rotatingFrame) {
       refreshAfterToolDrivenFlush();
-    } else {
+    } else if (!selectingText) {
       // Box creation and frame resize are local previews. The frame is pushed
       // into overlay chrome later this frame; no DOM flush or rewrap is needed.
       window_.wakeEventLoop();
@@ -1211,9 +1563,13 @@ void EditorShell::applyPendingDocumentSpaceReplayInputForTesting() {
 
   if (input.leftMouseReleased) {
     if (activeTool_ == ActiveTool::Text &&
-        (textTool_.isDraggingBox() || textTool_.isAdjustingFrame())) {
+        (textTool_.isDraggingBox() || textTool_.isAdjustingFrame() ||
+         textTool_.isSelectingText())) {
+      const bool selectingText = textTool_.isSelectingText();
       textTool_.onMouseUp(app_, input.documentPoint);
-      refreshAfterToolDrivenFlush();
+      if (!selectingText) {
+        refreshAfterToolDrivenFlush();
+      }
       return;
     }
     if (activeTool_ == ActiveTool::Pen) {
@@ -1238,6 +1594,11 @@ void EditorShell::applyPendingDocumentSpaceReplayInputForTesting() {
     }
     if (!renderCoordinator_.asyncRenderer().isBusy()) {
       app_.flushFrame();
+    } else if (previewBeforeRelease.has_value() && previewHadVisualChange) {
+      // Same wake obligation as the live-pointer release: a busy renderer defers
+      // the flush to the idle-frame mutation sweep, which only runs if the loop
+      // keeps ticking.
+      window_.wakeEventLoop();
     }
     rasterizeCurrentSelection();
   }
@@ -1266,7 +1627,7 @@ void EditorShell::applyPendingDocumentSpaceReplayInputForTesting() {
           textTool_.caretBlinkVisible() ? std::make_optional(SelectionChromeSnapshot::TextCaret{
                                               textChrome->caretTopDoc, textChrome->caretBottomDoc})
                                         : std::nullopt,
-          textChrome->frameCornersDoc, textChrome->frameOpacity);
+          textChrome->frameCornersDoc, textChrome->frameOpacity, textChrome->selectionQuadsDoc);
     }
     renderCoordinator_.setTextBoxDragPreview(std::nullopt);
   } else if (activeTool_ == ActiveTool::Text) {
@@ -1302,7 +1663,6 @@ void EditorShell::maybeLogResourceDiagnostics(const FrameCostBreakdown& frameCos
   std::cerr << "[DonnerResource] frame=" << resourceDiagnosticsFrame_
             << " tracked_mib=" << MegabytesRoundedUp(resources.totalTrackedBytes)
             << " peak_mib=" << MegabytesRoundedUp(resources.peakTrackedBytes)
-            << " overlay_mib=" << MegabytesRoundedUp(resources.overlayBytes)
             << " active_tile_mib=" << MegabytesRoundedUp(resources.activeTileBytes)
             << " overview_tile_mib=" << MegabytesRoundedUp(resources.overviewTileBytes)
             << " retired_mib="
@@ -1374,10 +1734,9 @@ bool EditorShell::tryLoadSource(std::string_view source, std::optional<std::stri
     return false;
   }
 
-  svg::SVGDocument& document = app_.document().document();
-  documentViewBoxCacheDocument_ = document.handle();
-  documentViewBoxCache_ = ResolveDocumentViewBox(document);
-
+  cancelSampleThumbnailGeneration();
+  welcomePlaceholderActive_ = false;
+  samplePresentationPending_ = false;
   showSamplePicker_ = false;
   textEditor_.setText(std::string(source));
   textEditor_.resetTextChanged();
@@ -1397,6 +1756,10 @@ void EditorShell::queuePendingSampleLoad(std::string sampleId) {
   pendingSampleLoadId_ = std::move(sampleId);
   pendingSampleLoadNeedsConfirmation_ = false;
   pendingSampleLoadDiscardConfirmed_ = false;
+  // The selected sample supersedes the current document frame. Start cancellation in the click
+  // frame so the next UI frame can claim the DOM as soon as SVG traversal reaches a safe point.
+  cancelSampleThumbnailGeneration();
+  renderCoordinator_.asyncRenderer().cancelInFlight();
 }
 
 void EditorShell::cancelPendingSampleLoad() {
@@ -1415,8 +1778,15 @@ void EditorShell::confirmPendingSampleLoadDiscard() {
 }
 
 void EditorShell::processPendingSampleLoad() {
+  if (pendingSampleLoadId_.empty()) {
+    return;
+  }
+  const bool hasDocument = app_.hasDocument();
+  std::optional<svg::DocumentWriteAccess> documentAccess =
+      hasDocument ? app_.document().document().tryWriteAccess() : std::nullopt;
+  const bool documentWriteAvailable = !hasDocument || documentAccess.has_value();
   if (!internal::PendingDocumentReplacementCanProcess(!pendingSampleLoadId_.empty(),
-                                                      renderCoordinator_.asyncRenderer().isBusy(),
+                                                      documentWriteAvailable,
                                                       app_.document().hasPendingMutations())) {
     return;
   }
@@ -1441,10 +1811,20 @@ void EditorShell::processPendingSampleLoad() {
   // submission. Detach it before releasing presentation resources for the old document.
   window_.setWgpuDirectRenderCallback({});
 #endif
+  // If the previous render is packaging a result after releasing the DOM, ensure that result is
+  // dropped instead of landing over the replacement document.
+  renderCoordinator_.asyncRenderer().cancelInFlight();
   std::string error;
   if (tryLoadSource(sample->source, std::nullopt, &error)) {
     activeSampleId_ = sampleId;
-    showSamplePicker_ = false;
+#ifdef __EMSCRIPTEN__
+    PublishActiveSampleId(activeSampleId_.c_str());
+#endif
+    samplePresentationPending_ = true;
+    showSamplePicker_ = true;
+    // The picker click runs after the render pane has already laid out this frame. Defer the first
+    // sample request until the next frame has fitted the new intrinsic viewBox.
+    requestRenderAtEndOfFrame_ = false;
   } else {
     showSamplePicker_ = true;
     std::fprintf(stderr, "[editor] failed to load built-in sample %s: %s\n", sampleId.c_str(),
@@ -1488,9 +1868,12 @@ void EditorShell::resetPresentationForLoadedDocument(std::string_view canonicalS
   renderContextMenuOpenRequested_ = false;
   treeSelectionOriginatedInTree_ = false;
   treeviewPendingScroll_ = false;
-  renderCoordinator_.resetForLoadedDocument();
+  renderCoordinator_.resetForLoadedDocument(app_.document().documentGeneration());
   textures_.resetComposited();
+  installImmediateChromePlan(std::nullopt);
   renderCoordinator_.refreshSelectionBoundsCache(app_);
+  cachedCanvasHasSelectableElements_ = false;
+  cachedSelectionIsAllText_ = false;
   dialogPresenter_.clearOpenFileError();
   dialogPresenter_.clearSaveFileError();
 }
@@ -1753,6 +2136,7 @@ void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
     dialogPresenter_.requestAbout();
   }
   if (menuActions.openFile) {
+    cancelSampleThumbnailGeneration();
     cancelPendingSampleLoad();
     dialogPresenter_.requestOpenFile(app_.currentFilePath());
   }
@@ -1862,10 +2246,25 @@ void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
   ApplyViewMenuToggleActions(menuActions, &showCompositorDebugPanel_, &perfOverlayMode_,
                              &geometryDebugOverlay_, &compositorTileOverlay_);
   if (geometryDebugOverlay_ != geometryDebugOverlayBeforeMenu) {
-    // Push the new overlay state to the render worker and post a render:
-    // the worker re-rasterizes every cached segment with the overlay
-    // state on its next iteration (see AsyncRenderer::workerLoop).
+    // Push the new overlay state to the worker and post a render. Geometry
+    // debug uses a flat full-document pass while enabled; disabling it resets
+    // that state and restores normal retained selection promotion.
     renderCoordinator_.asyncRenderer().setGeometryDebugOverlayEnabled(geometryDebugOverlay_);
+    // A composited tile's uploaded texture is keyed on the document frame version, on the
+    // assumption that identical version plus identical dimensions means identical pixels. This
+    // toggle breaks that assumption: it repaints the same document version with a renderer-side
+    // wireframe pass, so the refreshed full-canvas tile arrives with an identity the cache has
+    // already seen and the stale pre-toggle texture keeps being presented. Drop the uploaded
+    // textures the same way a document load does, so the next render's pixels are the ones that
+    // reach the canvas.
+    textures_.resetComposited();
+    renderCoordinator_.requestPresentationRefresh();
+    requestRenderAtEndOfFrame_ = true;
+  }
+  if (compositorTileOverlay_ && compositorTileOverlay_ != compositorTileOverlayBeforeMenu) {
+    // The first direct-surface frame can land before deferred compositor cache warmup. Request one
+    // metadata-publishing frame so the UI-side overlay has tile geometry to draw.
+    renderCoordinator_.requestPresentationRefresh();
     requestRenderAtEndOfFrame_ = true;
   }
   // DockSpace layout controls: toggle the lock or request a rebuild of the
@@ -1882,6 +2281,12 @@ void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
       compositorTileOverlay_ != compositorTileOverlayBeforeMenu ||
       perfOverlayMode_ != perfOverlayModeBeforeMenu ||
       geometryDebugOverlay_ != geometryDebugOverlayBeforeMenu) {
+    if (showCompositorDebugPanel_ != showCompositorDebugPanelBeforeMenu) {
+      renderCoordinator_.asyncRenderer().setCompositorDiagnosticsEnabled(showCompositorDebugPanel_);
+      if (showCompositorDebugPanel_) {
+        requestRenderAtEndOfFrame_ = true;
+      }
+    }
     window_.wakeEventLoop();
   }
 }
@@ -2051,7 +2456,7 @@ void EditorShell::handleGlobalShortcuts() {
     textEditor_.selectAll();
   } else if (CanSelectAllFromCanvasShortcut(
                  pressedA, cmd, shift, anyPopupOpen, sourcePaneFocused,
-                 /*canvasHasSelectableElements=*/canvasHasSelectableElements())) {
+                 /*canvasHasSelectableElements=*/cachedCanvasHasSelectableElements_)) {
     selectAllCanvasElements();
   }
 
@@ -2503,8 +2908,18 @@ void EditorShell::renderFillStrokeToolbarWidget() {
       sourceForRanges = std::string_view(editorSource);
     }
   }
-  const ToolbarPaintState paintState =
-      rendererBusy ? ToolbarPaintState{} : ToolbarPaintStateForApp(app_, sourceForRanges);
+  // The worker owns the selected element while busy. Preserve the last idle
+  // presentation instead of replacing the selected paint with the unrelated
+  // authoring default for every render update.
+  ToolbarPaintState paintState;
+  if (!rendererBusy) {
+    paintState = ToolbarPaintStateForApp(app_, sourceForRanges);
+    toolbarPaintSnapshot_ = std::make_unique<ToolbarPaintState>(paintState);
+  } else if (toolbarPaintSnapshot_ != nullptr) {
+    paintState = *toolbarPaintSnapshot_;
+  } else {
+    paintState = ToolbarPaintStateForActivePaint(app_.activePaintStyle());
+  }
   ImGui::BeginDisabled(!canEditPaint);
   ImGui::InvisibleButton("##fill_stroke_widget",
                          ImVec2(kToolPalettePaintWidgetWidth, kToolPaletteButtonSize));
@@ -2575,6 +2990,9 @@ void EditorShell::renderFillStrokeToolbarWidget() {
       const std::string strokeStr = SvgPaintStringForSlot(paintState.stroke);
       app_.setActiveFill(strokeStr);
       app_.setActiveStroke(fillStr);
+      if (toolbarPaintSnapshot_ != nullptr) {
+        std::swap(toolbarPaintSnapshot_->fill, toolbarPaintSnapshot_->stroke);
+      }
       bool changed = app_.setStylePropertyOnSelection("fill", strokeStr);
       changed = app_.setStylePropertyOnSelection("stroke", fillStr) || changed;
       if (changed) {
@@ -2594,6 +3012,11 @@ void EditorShell::renderFillStrokeToolbarWidget() {
       app_.setActiveFill("none");
     } else {
       app_.setActiveStroke("none");
+    }
+    if (toolbarPaintSnapshot_ != nullptr) {
+      ToolbarPaintSlotState& slot =
+          attrName == "fill" ? toolbarPaintSnapshot_->fill : toolbarPaintSnapshot_->stroke;
+      slot = ToolbarPaintSlotStateForActiveAttribute("none");
     }
     const bool changed = app_.hasSelection() && app_.setStylePropertyOnSelection(attrName, "none");
     if (changed) {
@@ -2679,6 +3102,11 @@ void EditorShell::renderFillStrokeToolbarWidget() {
         app_.setActiveFill(svgColor);
       } else {
         app_.setActiveStroke(svgColor);
+      }
+      if (toolbarPaintSnapshot_ != nullptr) {
+        ToolbarPaintSlotState& snapshotSlot =
+            attrName == "fill" ? toolbarPaintSnapshot_->fill : toolbarPaintSnapshot_->stroke;
+        snapshotSlot = ToolbarPaintSlotStateForActiveAttribute(svgColor);
       }
       if (app_.setStylePropertyOnSelection(attrName, svgColor)) {
         flushQueuedMutationAndRefreshOverlay();
@@ -2788,190 +3216,53 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
   ImGui::PopID();
 }
 
-void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
-  // The render pane is docked into the DockSpace central node (see
-  // renderDockSpaceHost); the DockSpace owns its position and size, so we no
-  // longer place it manually. The window's content region below still drives the
-  // authoritative viewport pane layout.
-  ImGui::Begin(kRenderPaneWindowName, nullptr, paneFlags);
-
-  renderPaneScrollYForDiagnostics_ = ImGui::GetScrollY();
-  renderPaneScrollMaxYForDiagnostics_ = ImGui::GetScrollMaxY();
-  const ImVec2 contentRegion = ImGui::GetContentRegionAvail();
-  const ImVec2 paneOriginImGui = ImGui::GetCursorScreenPos();
-  interactionController_.updatePaneLayout(Vector2d(paneOriginImGui.x, paneOriginImGui.y),
-                                          Vector2d(contentRegion.x, contentRegion.y),
-                                          documentViewBoxCache_,
-                                          /*preservePaneCenterDocumentPoint=*/true);
-  interactionController_.updateDevicePixelRatio(window_.contentScale().x);
-
-  if (pendingViewportReplayOverride_.has_value()) {
-    interactionController_.viewport() = *pendingViewportReplayOverride_;
-    pendingViewportReplayOverride_.reset();
-    viewportInitialized_ = true;
+bool EditorShell::setActiveGestureCursor(
+    const std::optional<SelectTool::ActiveGesturePreview>& activeGesturePreview) {
+  if (!activeGesturePreview.has_value()) {
+    return false;
+  }
+  const SelectTool::ActiveGestureKind kind = activeGesturePreview->kind;
+  const bool applied = kind == SelectTool::ActiveGestureKind::Rotate
+                           ? rotateCursorSet_.setRotateCursor(activeGesturePreview->corner)
+                       : kind == SelectTool::ActiveGestureKind::Resize
+                           ? rotateCursorSet_.setScaleCursor(activeGesturePreview->corner)
+                           : false;
+  if (kind != SelectTool::ActiveGestureKind::Rotate &&
+      kind != SelectTool::ActiveGestureKind::Resize) {
+    return false;
   }
 
-  // The canvas is docked into the DockSpace central node, whose size only
-  // settles after ImGui has run a dock update. On the very first frame the
-  // freshly-docked "Render" window briefly reports the full host width before
-  // the right-column split is applied. Fit-to-actual-size must not latch on that
-  // transient size (it would center the document for the wrong pane and clip it
-  // once the pane settles), so we keep re-fitting until the pane size is stable
-  // across two consecutive frames, then latch.
-  const bool renderPaneSizeStable =
-      std::abs(contentRegion.x - lastRenderPaneContentSize_.x) < 1.0f &&
-      std::abs(contentRegion.y - lastRenderPaneContentSize_.y) < 1.0f;
-  lastRenderPaneContentSize_ = Vector2d(contentRegion.x, contentRegion.y);
-  if (!viewportInitialized_ && interactionController_.viewport().paneSize.x > 0.0 &&
-      interactionController_.viewport().paneSize.y > 0.0 && app_.hasDocument()) {
-    std::ignore = interactionController_.resetToActualSize();
-    if (renderPaneSizeStable) {
-      viewportInitialized_ = true;
-    } else {
-      window_.wakeEventLoop();
-    }
+  if (applied) {
+    SetImGuiOsCursorManagementEnabled(false);
+  } else {
+    rotateCursorSet_.clearIfActive();
+    SetImGuiOsCursorManagementEnabled(true);
+    ImGui::SetMouseCursor(ImGuiMouseCursor_Arrow);
   }
+  return true;
+}
 
-  // Capture chrome for the document version that is already being presented before this frame's
-  // input can queue another geometry mutation. Ordinary geometry edits keep chrome on the
-  // presented document version; active Pen drags can explicitly opt into live path chrome later in
-  // the frame.
-  if (!contentOnlyCaptureThisFrame_ && app_.hasDocument() &&
-      app_.document().currentFrameVersion() ==
-          renderCoordinator_.displayedDocVersionForDiagnostics()) {
-    renderCoordinator_.rasterizeOverlayForCurrentSelection(
-        app_, interactionController_.viewport(), selectTool_.marqueeRect(),
-        selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview(),
-        selectionChromeDetailForActiveTool());
+SelectionTransformHandleIntent EditorShell::cachedSelectionHandleIntentAt(
+    const Vector2d& documentPoint, bool includeRotate, double pointerHitTestPixelsPerDocUnit) {
+  const auto& boundsCache = renderCoordinator_.selectionBoundsCache();
+  if (boundsCache.lastSelection != app_.selectedElements()) {
+    return SelectionTransformHandleIntent{};
   }
+  const std::vector<Box2d>& boundsDoc = !boundsCache.displayedBoundsDoc.empty()
+                                            ? boundsCache.displayedBoundsDoc
+                                            : boundsCache.pendingBoundsDoc;
+  return HitTestSelectionTransformHandles(boundsDoc, documentPoint, pointerHitTestPixelsPerDocUnit,
+                                          includeRotate);
+}
 
-  refreshReferenceHighlightSummaryIfNeeded();
-  const std::string referenceChipLabel = ReferenceHighlightChipLabel(referenceHighlightSummary_);
-  const bool hideReferenceChip = selectTool_.activeTransformBoundsPreview().has_value();
-  const std::optional<Box2d> referenceChipRect =
-      hideReferenceChip ? std::nullopt : referenceHighlightChipScreenRect(referenceChipLabel);
-  const Box2d toolPaletteRect = toolPaletteScreenRect(paneOriginImGui, contentRegion);
-  const std::optional<Box2d> textFormatBarRect =
-      TextFormatBarScreenRect(paneOriginImGui, contentRegion, toolPaletteRect,
-                              adaptiveUiLayout_.showTextFormatBar && formatBarShouldShow(),
-                              TextFormatBarPresenter::BarHeight());
-  const std::optional<Box2d> editingScopeBreadcrumbRect =
-      EditingScopeBreadcrumbScreenRect(paneOriginImGui, toolPaletteRect, app_.editingScope());
-  const Box2d canvasZoomControlRect = canvasZoomControlScreenRect();
-  const std::optional<Box2d> compactPanelRect = compactPanelScreenRect();
-  const bool canvasChromeHovered = CanvasChromeCapturesInput(
-      ImGui::GetMousePos(), referenceChipRect, toolPaletteRect, textFormatBarRect,
-      editingScopeBreadcrumbRect, canvasZoomControlRect, compactPanelRect);
-
-  ImGui::SetNextItemAllowOverlap();
-  ImGui::InvisibleButton("##render_canvas", contentRegion,
-                         ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonMiddle);
-  const bool paneHovered = ImGui::IsItemHovered();
-  const bool canvasHovered = paneHovered && !canvasChromeHovered && !showSamplePicker_;
-  const Box2d paneRect = Box2d::FromXYWH(interactionController_.viewport().paneOrigin.x,
-                                         interactionController_.viewport().paneOrigin.y,
-                                         interactionController_.viewport().paneSize.x,
-                                         interactionController_.viewport().paneSize.y);
-
-  const bool spaceHeld = ImGui::IsKeyDown(ImGuiKey_Space);
-  const bool middleDown = ImGui::IsMouseDown(ImGuiMouseButton_Middle);
-  // Hold the matching custom cursor for the whole rotate/scale drag, not just
-  // while hovering the handle, so it doesn't flicker back to the arrow as the
-  // pointer leaves the handle mid-gesture.
-  const auto setActiveGestureCursor =
-      [&](const std::optional<SelectTool::ActiveGesturePreview>& activeGesturePreview) {
-        if (!activeGesturePreview.has_value()) {
-          return false;
-        }
-        const SelectTool::ActiveGestureKind kind = activeGesturePreview->kind;
-        const bool applied = kind == SelectTool::ActiveGestureKind::Rotate
-                                 ? rotateCursorSet_.setRotateCursor(activeGesturePreview->corner)
-                             : kind == SelectTool::ActiveGestureKind::Resize
-                                 ? rotateCursorSet_.setScaleCursor(activeGesturePreview->corner)
-                                 : false;
-        if (kind != SelectTool::ActiveGestureKind::Rotate &&
-            kind != SelectTool::ActiveGestureKind::Resize) {
-          return false;
-        }
-
-        if (applied) {
-          SetImGuiOsCursorManagementEnabled(false);
-        } else {
-          rotateCursorSet_.clearIfActive();
-          SetImGuiOsCursorManagementEnabled(true);
-          ImGui::SetMouseCursor(ImGuiMouseCursor_Arrow);
-        }
-        return true;
-      };
-  const auto activeGesturePreviewBeforeInput = selectTool_.activeGesturePreview();
-  const bool rotateCursorLocked = setActiveGestureCursor(activeGesturePreviewBeforeInput);
-  std::ignore = interactionController_.updatePanState(canvasHovered, spaceHeld, middleDown,
-                                                      ImGui::IsMouseDown(ImGuiMouseButton_Left),
-                                                      ImGui::GetMousePos());
-  const bool showPanCursor =
-      !rotateCursorLocked &&
-      ShouldShowRenderPanePanCursor(canvasHovered, spaceHeld, interactionController_.panning());
-  if (showPanCursor) {
-    const PanCursorKind panCursorKind =
-        interactionController_.panning() ? PanCursorKind::ClosedHand : PanCursorKind::OpenHand;
-    if (rotateCursorSet_.setPanCursor(panCursorKind)) {
-      SetImGuiOsCursorManagementEnabled(false);
-    } else {
-      SetImGuiOsCursorManagementEnabled(true);
-      ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-    }
-  }
-
-  const bool modalCapturingInput = showSamplePicker_ || canvasChromeHovered ||
-                                   ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
-  // Publish the canvas scroll-capture rect for the raw GLFW scroll callback:
-  // wheel events inside the render pane are consumed by the canvas (pan/zoom)
-  // and must not also reach ImGui window scrolling, or scrolling the canvas
-  // drags the surrounding UI along. Popups/modals re-enable UI scrolling.
-  inputBridge_.setCanvasScrollCaptureRect(modalCapturingInput ? std::nullopt
-                                                              : std::make_optional(paneRect));
-  const ScrollConsumptionResult scrollResult = interactionController_.consumeScrollEvents(
-      inputBridge_.events(), paneRect, modalCapturingInput, kWheelZoomStep,
-      kTrackpadPanPixelsPerScrollUnit);
-  if (scrollResult.zoomChanged) {
-    requestRenderAtEndOfFrame_ = true;
-  }
-
-  const auto screenToDocument = [&](const ImVec2& screenPoint) -> Vector2d {
+SelectionTransformHandleIntent EditorShell::updateRenderPaneToolCursor(
+    bool rotateCursorLocked, bool toolEligible, bool showPanCursor, bool selectToolActive,
+    bool penToolActive, bool textToolActive, double pointerHitTestPixelsPerDocUnit) {
+  const auto screenToDocument = [this](const ImVec2& screenPoint) -> Vector2d {
     return interactionController_.viewport().screenToDocument(
         Vector2d(screenPoint.x, screenPoint.y));
   };
-  // Keep handles visually crisp while making their invisible hit regions more
-  // forgiving under touch. The tools express hit sizes in screen pixels by
-  // dividing by this scale, so halving it doubles only interaction tolerance.
-  const double pointerHitTestPixelsPerDocUnit =
-      interactionController_.viewport().pixelsPerDocUnit() /
-      (adaptiveUiLayout_.compactTouch() ? 2.0 : 1.0);
 
-  if (canvasHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right, /*repeat=*/false)) {
-    openRenderPaneContextMenu(screenToDocument(ImGui::GetMousePos()));
-  }
-
-  const ImVec2 hoverMousePos = ImGui::GetMousePos();
-  const bool overCanvasScrollbar = internal::CanvasScrollbarsCaptureInput(
-      adaptiveUiLayout_.showCanvasScrollbars, interactionController_.viewport(),
-      Vector2d(hoverMousePos.x, hoverMousePos.y));
-  const bool toolEligible =
-      canvasHovered && !interactionController_.panning() && !spaceHeld && !overCanvasScrollbar;
-  const bool selectToolActive = activeTool_ == ActiveTool::Select;
-  const bool penToolActive = activeTool_ == ActiveTool::Pen;
-  const bool textToolActive = activeTool_ == ActiveTool::Text;
-  const auto cachedHandleIntentAt = [&](const Vector2d& documentPoint, bool includeRotate) {
-    const auto& boundsCache = renderCoordinator_.selectionBoundsCache();
-    if (boundsCache.lastSelection != app_.selectedElements()) {
-      return SelectionTransformHandleIntent{};
-    }
-    const std::vector<Box2d>& boundsDoc = !boundsCache.displayedBoundsDoc.empty()
-                                              ? boundsCache.displayedBoundsDoc
-                                              : boundsCache.pendingBoundsDoc;
-    return HitTestSelectionTransformHandles(boundsDoc, documentPoint,
-                                            pointerHitTestPixelsPerDocUnit, includeRotate);
-  };
   SelectionTransformHandleIntent hoverTransformIntent;
   if (penToolActive && !rotateCursorLocked && toolEligible) {
     // Contextual pen hint: the close-path cursor when a click would close the
@@ -2997,8 +3288,9 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
     }
   } else if (selectToolActive && !rotateCursorLocked && toolEligible &&
              !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-    hoverTransformIntent = cachedHandleIntentAt(screenToDocument(ImGui::GetMousePos()),
-                                                /*includeRotate=*/!ImGui::GetIO().KeyShift);
+    hoverTransformIntent = cachedSelectionHandleIntentAt(screenToDocument(ImGui::GetMousePos()),
+                                                         /*includeRotate=*/!ImGui::GetIO().KeyShift,
+                                                         pointerHitTestPixelsPerDocUnit);
     if (hoverTransformIntent.kind != SelectionTransformHandleKind::None) {
       // Custom cursors over the selection handles: rotate glyph on a rotate
       // handle, scale glyph on a resize handle; fall back to ImGui's built-in
@@ -3052,25 +3344,12 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
     rotateCursorSet_.clearIfActive();
     SetImGuiOsCursorManagementEnabled(true);
   }
-  // Double-click while drafting commits the in-progress open path (no trailing
-  // Z) as one undoable command, matching Enter. Checked before the click is
-  // buffered so the double-click doesn't also place a stray anchor.
-  if (penToolActive && toolEligible && penTool_.isDrafting() &&
-      ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-    penTool_.commitOpenPath(app_);
-    flushQueuedMutationAndRefreshOverlay();
-  } else if (toolEligible && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-    preserveSourceEditFocusCursor_ = false;
-    MouseModifiers modifiers;
-    modifiers.shift = ImGui::GetIO().KeyShift;
-    modifiers.option = ImGui::GetIO().KeyAlt;
-    modifiers.command = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
-    modifiers.doubleClick = ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
-    modifiers.pixelsPerDocUnit = pointerHitTestPixelsPerDocUnit;
-    interactionController_.bufferPendingClick(screenToDocument(ImGui::GetMousePos()), modifiers);
-    pendingSelectClickStartSeconds_ = ImGui::GetTime();
-  }
+  return hoverTransformIntent;
+}
 
+void EditorShell::dispatchBufferedRenderPaneClick(bool selectToolActive, bool penToolActive,
+                                                  bool textToolActive,
+                                                  double pointerHitTestPixelsPerDocUnit) {
   // Design doc 0033 §M8 - click→drag handoff doesn't wait for raster.
   //
   // Fast path: if the user clicks inside the bounds of the currently-
@@ -3091,6 +3370,9 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   // when the chrome catches up a frame later.
   if (interactionController_.pendingClick().has_value()) {
     const auto& pendingClick = *interactionController_.pendingClick();
+    std::optional<svg::DocumentWriteAccess> pendingClickDocumentAccess =
+        app_.hasDocument() ? app_.document().document().tryWriteAccess() : std::nullopt;
+    const bool documentWriteAvailable = pendingClickDocumentAccess.has_value();
     const auto& boundsCache = renderCoordinator_.selectionBoundsCache();
     const bool cacheMatchesSelection = boundsCache.lastSelection == app_.selectedElements();
     const std::vector<Box2d>& redragBoundsDoc = !boundsCache.displayedBoundsDoc.empty()
@@ -3101,16 +3383,19 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
                                                          : boundsCache.pendingOccludingBoundsDoc;
     const SelectionTransformHandleIntent pendingHandleIntent =
         cacheMatchesSelection
-            ? cachedHandleIntentAt(pendingClick.documentPoint,
-                                   /*includeRotate=*/!pendingClick.modifiers.shift)
+            ? cachedSelectionHandleIntentAt(pendingClick.documentPoint,
+                                            /*includeRotate=*/!pendingClick.modifiers.shift,
+                                            pointerHitTestPixelsPerDocUnit)
             : SelectionTransformHandleIntent{};
-    bool tookFastRedrag = selectToolActive && cacheMatchesSelection &&
-                          pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
-                          selectTool_.tryStartRedragOnSelected(
-                              app_, pendingClick.documentPoint, pendingClick.modifiers,
-                              redragBoundsDoc, redragOccludingBoundsDoc);
-    if (!tookFastRedrag && renderCoordinator_.asyncRenderer().isBusy() && selectToolActive &&
-        cacheMatchesSelection && pendingHandleIntent.kind == SelectionTransformHandleKind::None) {
+    bool tookFastRedrag =
+        documentWriteAvailable && selectToolActive && !pendingClick.modifiers.doubleClick &&
+        cacheMatchesSelection && pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
+        selectTool_.tryStartRedragOnSelected(app_, pendingClick.documentPoint,
+                                             pendingClick.modifiers, redragBoundsDoc,
+                                             redragOccludingBoundsDoc);
+    if (!tookFastRedrag && !pendingClick.modifiers.doubleClick && documentWriteAvailable &&
+        renderCoordinator_.asyncRenderer().isBusy() && selectToolActive && cacheMatchesSelection &&
+        pendingHandleIntent.kind == SelectionTransformHandleKind::None) {
       // The occlusion cache uses broad AABBs for later-painted elements. When the worker is busy,
       // prefer an optimistic re-drag of the current selection over freezing behind a conservative
       // false-positive overlap; the idle path above still uses full hit-testing for retargets.
@@ -3118,8 +3403,7 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
                                                             pendingClick.modifiers, redragBoundsDoc,
                                                             std::span<const Box2d>());
     }
-    switch (PendingClickBusyActionForState(tookFastRedrag,
-                                           renderCoordinator_.asyncRenderer().isBusy())) {
+    switch (PendingClickBusyActionForState(tookFastRedrag, !documentWriteAvailable)) {
       case PendingClickBusyAction::CompleteFastRedrag:
         lastPostedScreenPoint_.reset();
         interactionController_.clearPendingClick();
@@ -3177,9 +3461,16 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
             lastPostedScreenPoint_.reset();
             bool queuedMutationForNextFrame = false;
             if (selectToolActive) {
-              selectTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
-              if (!leftMouseDown) {
-                selectTool_.onMouseUp(app_, pendingClick.documentPoint);
+              if (tryBeginTextEditingFromSelectDoubleClick(pendingClick.documentPoint,
+                                                           pendingClick.modifiers)) {
+                if (!leftMouseDown) {
+                  textTool_.onMouseUp(app_, pendingClick.documentPoint);
+                }
+              } else {
+                selectTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
+                if (!leftMouseDown) {
+                  selectTool_.onMouseUp(app_, pendingClick.documentPoint);
+                }
               }
             } else if (penToolActive) {
               penTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
@@ -3227,17 +3518,14 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
         break;
     }
   }
+}
 
-  // After-idle follow-up for the M8 fast-path click. This reads the
-  // live registry, so it must wait for the worker to land. Keep the
-  // follow-up to cache refresh only: posting a render here would run
-  // before this same frame's drag move is applied, leaving the overlay
-  // one interaction step behind the composited pixels during re-drag.
-  if (pendingClickFollowupAfterIdle_ && !renderCoordinator_.asyncRenderer().isBusy()) {
-    renderCoordinator_.refreshSelectionBoundsCache(app_);
-    pendingClickFollowupAfterIdle_ = false;
-  }
-
+void EditorShell::updateRenderPaneSelectionDrag(bool spaceHeld,
+                                                double pointerHitTestPixelsPerDocUnit) {
+  const auto screenToDocument = [this](const ImVec2& screenPoint) -> Vector2d {
+    return interactionController_.viewport().screenToDocument(
+        Vector2d(screenPoint.x, screenPoint.y));
+  };
   if (selectTool_.isDragging() || selectTool_.isMarqueeing()) {
     if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && !spaceHeld) {
       const ImVec2 currentScreen = ImGui::GetMousePos();
@@ -3253,12 +3541,7 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
         selectTool_.onMouseMove(app_, screenToDocument(currentScreen), /*buttonHeld=*/true,
                                 modifiers);
         lastPostedScreenPoint_ = currentScreen;
-        if (!renderCoordinator_.asyncRenderer().isBusy() && app_.flushFrame()) {
-          renderCoordinator_.rasterizeOverlayForCurrentSelection(
-              app_, interactionController_.viewport(), selectTool_.marqueeRect(),
-              selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview(),
-              selectionChromeDetailForActiveTool());
-        }
+        flushInteractiveDragMutationAndRequestRender();
       }
     }
     if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
@@ -3284,6 +3567,13 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
           renderCoordinator_.rasterizeOverlayForCurrentSelection(
               app_, interactionController_.viewport(), selectTool_.marqueeRect(), std::nullopt,
               std::nullopt, selectionChromeDetailForActiveTool());
+        } else if (previewHadVisualChange) {
+          // The release's flush could not run this frame because the renderer was
+          // mid-render. Keep requesting frames so the idle-frame mutation sweep
+          // picks the release up when the worker completes; without the wake the
+          // demand-driven loop parks with the release un-rendered until the next
+          // input arrives.
+          window_.wakeEventLoop();
         }
       } else if (!renderCoordinator_.asyncRenderer().isBusy()) {
         renderCoordinator_.refreshSelectionBoundsCache(app_);
@@ -3293,31 +3583,45 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
       }
     }
   }
+}
 
-  if (!interactionController_.pendingClick().has_value()) {
-    pendingSelectClickStartSeconds_.reset();
-  }
-
+void EditorShell::updateRenderPaneTextPointer(bool spaceHeld) {
+  const auto screenToDocument = [this](const ImVec2& screenPoint) -> Vector2d {
+    return interactionController_.viewport().screenToDocument(
+        Vector2d(screenPoint.x, screenPoint.y));
+  };
   // Text-tool live pointer path: the pending-click buffer delivers the
   // mousedown (starting the box drag or a frame handle gesture), but the
   // drag extension and the release come from the live ImGui pointer, exactly
   // like the pen tool's anchor drag below.
-  if (textToolActive && (textTool_.isDraggingBox() || textTool_.isAdjustingFrame())) {
+  if (activeTool_ == ActiveTool::Text &&
+      (textTool_.isDraggingBox() || textTool_.isAdjustingFrame() || textTool_.isSelectingText())) {
     if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && !spaceHeld) {
       const bool rotatingFrame = textTool_.isRotatingFrame();
+      const bool selectingText = textTool_.isSelectingText();
       textTool_.onMouseMove(app_, screenToDocument(ImGui::GetMousePos()), /*buttonHeld=*/true);
       if (rotatingFrame) {
         refreshAfterToolDrivenFlush();
-      } else {
+      } else if (!selectingText) {
         window_.wakeEventLoop();
       }
     }
     if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+      const bool selectingText = textTool_.isSelectingText();
       textTool_.onMouseUp(app_, screenToDocument(ImGui::GetMousePos()));
-      refreshAfterToolDrivenFlush();
+      if (!selectingText) {
+        refreshAfterToolDrivenFlush();
+      }
     }
   }
+}
 
+void EditorShell::updateRenderPanePenPointer(bool penToolActive, bool spaceHeld,
+                                             double pointerHitTestPixelsPerDocUnit) {
+  const auto screenToDocument = [this](const ImVec2& screenPoint) -> Vector2d {
+    return interactionController_.viewport().screenToDocument(
+        Vector2d(screenPoint.x, screenPoint.y));
+  };
   if (penToolActive && penTool_.isDraggingAnchor()) {
     if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && !spaceHeld) {
       MouseModifiers dragModifiers;
@@ -3355,7 +3659,13 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   } else {
     renderCoordinator_.setPenHoverChrome(std::nullopt, std::nullopt);
   }
+}
 
+void EditorShell::updateRenderPaneTextChrome(bool textToolActive) {
+  const auto screenToDocument = [this](const ImVec2& screenPoint) -> Vector2d {
+    return interactionController_.viewport().screenToDocument(
+        Vector2d(screenPoint.x, screenPoint.y));
+  };
   if (textToolActive && textTool_.isEditing() &&
       (ImGui::GetIO().MouseDelta.x != 0.0f || ImGui::GetIO().MouseDelta.y != 0.0f)) {
     textTool_.notifyPointerMoved(screenToDocument(ImGui::GetMousePos()));
@@ -3375,19 +3685,315 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
           textTool_.caretBlinkVisible() ? std::make_optional(SelectionChromeSnapshot::TextCaret{
                                               textChrome->caretTopDoc, textChrome->caretBottomDoc})
                                         : std::nullopt,
-          textChrome->frameCornersDoc, textChrome->frameOpacity);
+          textChrome->frameCornersDoc, textChrome->frameOpacity, textChrome->selectionQuadsDoc);
     }
     renderCoordinator_.setTextBoxDragPreview(std::nullopt);
   } else {
     renderCoordinator_.setTextEditingChrome(std::nullopt, std::nullopt);
     renderCoordinator_.setTextBoxDragPreview(std::nullopt);
   }
+}
+
+void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
+  // The render pane is docked into the DockSpace central node (see
+  // renderDockSpaceHost); the DockSpace owns its position and size, so we no
+  // longer place it manually. The window's content region below still drives the
+  // authoritative viewport pane layout.
+  ImGui::Begin(kRenderPaneWindowName, nullptr, paneFlags);
+
+  renderPaneScrollYForDiagnostics_ = ImGui::GetScrollY();
+  renderPaneScrollMaxYForDiagnostics_ = ImGui::GetScrollMaxY();
+  const ImVec2 contentRegion = ImGui::GetContentRegionAvail();
+  const ImVec2 paneOriginImGui = ImGui::GetCursorScreenPos();
+  const std::optional<Box2d> documentViewBox =
+      app_.hasDocument()
+          ? ResolveDocumentViewBoxForFrame(app_.document().document(),
+                                           renderCoordinator_.asyncRenderer().isBusy())
+          : std::nullopt;
+  interactionController_.updatePaneLayout(Vector2d(paneOriginImGui.x, paneOriginImGui.y),
+                                          Vector2d(contentRegion.x, contentRegion.y),
+                                          documentViewBox,
+                                          /*preservePaneCenterDocumentPoint=*/true);
+  interactionController_.updateDevicePixelRatio(window_.contentScale().x);
+
+  if (pendingViewportReplayOverride_.has_value()) {
+    interactionController_.viewport() = *pendingViewportReplayOverride_;
+    pendingViewportReplayOverride_.reset();
+    viewportInitialized_ = true;
+  }
+
+  // The canvas is docked into the DockSpace central node, so ImGui owns the pane rectangle and
+  // reports transient values while a layout change propagates. Fit-to-actual-size must not latch
+  // on a transient rectangle: it would fit the document to the wrong pane, render against that
+  // fit, and present the result before the pane settles.
+  //
+  // `RenderPaneViewportLatchReady` holds the policy (and its argument for why it is timing-robust)
+  // as pure layout code. Everything it needs beyond ImGui's own report is geometry the shell
+  // computed for itself in `renderDockSpaceHost` earlier this frame.
+  const ImVec2 paneWindowOrigin = ImGui::GetWindowPos();
+  const ImVec2 paneWindowSize = ImGui::GetWindowSize();
+  const bool renderPaneSizeStable = RenderPaneViewportLatchReady(RenderPaneLatchInput{
+      .paneWindow = LayoutRect{.x = paneWindowOrigin.x,
+                               .y = paneWindowOrigin.y,
+                               .width = paneWindowSize.x,
+                               .height = paneWindowSize.y},
+      .dockCentralNode = LayoutRect{.x = static_cast<float>(dockCentralNodeOrigin_.x),
+                                    .y = static_cast<float>(dockCentralNodeOrigin_.y),
+                                    .width = static_cast<float>(dockCentralNodeSize_.x),
+                                    .height = static_cast<float>(dockCentralNodeSize_.y)},
+      .dockHost = dockHostRect_,
+      .previousDockHost = previousDockHostRect_,
+      .paneContentWidth = contentRegion.x,
+      .paneContentHeight = contentRegion.y,
+      .previousPaneContentWidth = static_cast<float>(lastRenderPaneContentSize_.x),
+      .previousPaneContentHeight = static_cast<float>(lastRenderPaneContentSize_.y),
+      .sidebarColumnIncluded = !adaptiveUiLayout_.compactTouch(),
+  });
+  lastRenderPaneContentSize_ = Vector2d(contentRegion.x, contentRegion.y);
+  if (!viewportInitialized_ && interactionController_.viewport().paneSize.x > 0.0 &&
+      interactionController_.viewport().paneSize.y > 0.0 && app_.hasDocument()) {
+    std::ignore = interactionController_.resetToActualSize();
+    if (renderPaneSizeStable) {
+      viewportInitialized_ = true;
+    } else {
+      window_.wakeEventLoop();
+    }
+  }
+
+  // Capture chrome for the document version that is already being presented before this frame's
+  // input can queue another geometry mutation. Ordinary geometry edits keep chrome on the
+  // presented document version; active Pen drags can explicitly opt into live path chrome later in
+  // the frame.
+  if (!contentOnlyCaptureThisFrame_ && app_.hasDocument() &&
+      app_.document().currentFrameVersion() ==
+          renderCoordinator_.displayedDocVersionForDiagnostics()) {
+    renderCoordinator_.rasterizeOverlayForCurrentSelection(
+        app_, interactionController_.viewport(), selectTool_.marqueeRect(),
+        selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview(),
+        selectionChromeDetailForActiveTool());
+  }
+
+  refreshReferenceHighlightSummaryIfNeeded();
+  const std::string referenceChipLabel = ReferenceHighlightChipLabel(referenceHighlightSummary_);
+  const bool hideReferenceChip = selectTool_.activeTransformBoundsPreview().has_value();
+  const std::optional<Box2d> referenceChipRect =
+      hideReferenceChip ? std::nullopt : referenceHighlightChipScreenRect(referenceChipLabel);
+  const Box2d toolPaletteRect = toolPaletteScreenRect(paneOriginImGui, contentRegion);
+  const std::optional<Box2d> textFormatBarRect =
+      TextFormatBarScreenRect(paneOriginImGui, contentRegion, toolPaletteRect,
+                              adaptiveUiLayout_.showTextFormatBar && formatBarShouldShow(),
+                              TextFormatBarPresenter::BarHeight());
+  const std::optional<Box2d> editingScopeBreadcrumbRect =
+      EditingScopeBreadcrumbScreenRect(paneOriginImGui, toolPaletteRect, app_.editingScope());
+  const Box2d canvasZoomControlRect = canvasZoomControlScreenRect();
+  const std::optional<Box2d> compactPanelRect = compactPanelScreenRect();
+  const bool canvasChromeHovered = CanvasChromeCapturesInput(
+      ImGui::GetMousePos(), referenceChipRect, toolPaletteRect, textFormatBarRect,
+      editingScopeBreadcrumbRect, canvasZoomControlRect, compactPanelRect);
+
+  const Box2d paneRect = Box2d::FromXYWH(interactionController_.viewport().paneOrigin.x,
+                                         interactionController_.viewport().paneOrigin.y,
+                                         interactionController_.viewport().paneSize.x,
+                                         interactionController_.viewport().paneSize.y);
+  ImGui::SetNextItemAllowOverlap();
+  ImGui::InvisibleButton("##render_canvas", contentRegion,
+                         ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonMiddle);
+  const bool popupCapturingInput = ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
+  const ImVec2 mousePosition = ImGui::GetMousePos();
+  // The sample picker is a full-pane ImGui window. On the first event-driven frame after it closes,
+  // ImGui's hovered-window cache still names that previous-frame window even though the matching
+  // document surface is already visible. Use the authoritative pane geometry for canvas input and
+  // explicitly exclude every real overlap instead of dropping that first click.
+  const bool paneHovered = paneRect.contains(Vector2d(mousePosition.x, mousePosition.y));
+  const bool canvasHovered =
+      paneHovered && !canvasChromeHovered && !showSamplePicker_ && !popupCapturingInput;
+
+  const bool spaceHeld = ImGui::IsKeyDown(ImGuiKey_Space);
+  const bool middleDown = ImGui::IsMouseDown(ImGuiMouseButton_Middle);
+  // Hold the matching custom cursor for the whole rotate/scale drag, not just
+  // while hovering the handle, so it doesn't flicker back to the arrow as the
+  // pointer leaves the handle mid-gesture.
+  const auto activeGesturePreviewBeforeInput = selectTool_.activeGesturePreview();
+  const bool rotateCursorLocked = setActiveGestureCursor(activeGesturePreviewBeforeInput);
+  const bool panMoved = interactionController_.updatePanState(
+      canvasHovered, spaceHeld, middleDown, ImGui::IsMouseDown(ImGuiMouseButton_Left),
+      ImGui::GetMousePos());
+  const bool showPanCursor =
+      !rotateCursorLocked &&
+      ShouldShowRenderPanePanCursor(canvasHovered, spaceHeld, interactionController_.panning());
+  if (showPanCursor) {
+    const PanCursorKind panCursorKind =
+        interactionController_.panning() ? PanCursorKind::ClosedHand : PanCursorKind::OpenHand;
+    if (rotateCursorSet_.setPanCursor(panCursorKind)) {
+      SetImGuiOsCursorManagementEnabled(false);
+    } else {
+      SetImGuiOsCursorManagementEnabled(true);
+      ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    }
+  }
+
+  const bool modalCapturingInput = showSamplePicker_ || canvasChromeHovered || popupCapturingInput;
+  // Publish the canvas scroll-capture rect for the raw GLFW scroll callback:
+  // wheel events inside the render pane are consumed by the canvas (pan/zoom)
+  // and must not also reach ImGui window scrolling, or scrolling the canvas
+  // drags the surrounding UI along. Popups/modals re-enable UI scrolling.
+  inputBridge_.setCanvasScrollCaptureRect(modalCapturingInput ? std::nullopt
+                                                              : std::make_optional(paneRect));
+  const ScrollConsumptionResult scrollResult = interactionController_.consumeScrollEvents(
+      inputBridge_.events(), paneRect, modalCapturingInput, kWheelZoomStep,
+      kTrackpadPanPixelsPerScrollUnit);
+  // Any viewport change needs a fresh worker epoch, not just zoom: on the
+  // browser the presented document only moves when an epoch lands, so a pan
+  // that never requests one is invisible forever (the canvas scrollbar pan
+  // paths below already follow this contract).
+  if (scrollResult.zoomChanged || scrollResult.viewportChanged || panMoved) {
+    requestRenderAtEndOfFrame_ = true;
+  }
+
+  const auto screenToDocument = [&](const ImVec2& screenPoint) -> Vector2d {
+    return interactionController_.viewport().screenToDocument(
+        Vector2d(screenPoint.x, screenPoint.y));
+  };
+  // Keep handles visually crisp while making their invisible hit regions more
+  // forgiving under touch. The tools express hit sizes in screen pixels by
+  // dividing by this scale, so halving it doubles only interaction tolerance.
+  const double pointerHitTestPixelsPerDocUnit =
+      interactionController_.viewport().pixelsPerDocUnit() /
+      (adaptiveUiLayout_.compactTouch() ? 2.0 : 1.0);
+
+  if (canvasHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right, /*repeat=*/false)) {
+    openRenderPaneContextMenu(screenToDocument(ImGui::GetMousePos()));
+  }
+
+  const ImVec2 hoverMousePos = ImGui::GetMousePos();
+  const bool overCanvasScrollbar = internal::CanvasScrollbarsCaptureInput(
+      adaptiveUiLayout_.showCanvasScrollbars, interactionController_.viewport(),
+      Vector2d(hoverMousePos.x, hoverMousePos.y));
+  const bool toolEligible =
+      canvasHovered && !interactionController_.panning() && !spaceHeld && !overCanvasScrollbar;
+  const bool selectToolActive = activeTool_ == ActiveTool::Select;
+  const bool penToolActive = activeTool_ == ActiveTool::Pen;
+  const bool textToolActive = activeTool_ == ActiveTool::Text;
+  const SelectionTransformHandleIntent hoverTransformIntent =
+      updateRenderPaneToolCursor(rotateCursorLocked, toolEligible, showPanCursor, selectToolActive,
+                                 penToolActive, textToolActive, pointerHitTestPixelsPerDocUnit);
+  // Double-click while drafting commits the in-progress open path (no trailing
+  // Z) as one undoable command, matching Enter. Checked before the click is
+  // buffered so the double-click doesn't also place a stray anchor.
+  if (penToolActive && toolEligible && penTool_.isDrafting() &&
+      ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+    penTool_.commitOpenPath(app_);
+    flushQueuedMutationAndRefreshOverlay();
+  } else if (toolEligible && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    preserveSourceEditFocusCursor_ = false;
+    MouseModifiers modifiers;
+    modifiers.shift = ImGui::GetIO().KeyShift;
+    modifiers.option = ImGui::GetIO().KeyAlt;
+    modifiers.command = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
+    modifiers.doubleClick = ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+    modifiers.pixelsPerDocUnit = pointerHitTestPixelsPerDocUnit;
+    interactionController_.bufferPendingClick(screenToDocument(ImGui::GetMousePos()), modifiers);
+    pendingSelectClickStartSeconds_ = ImGui::GetTime();
+  }
+
+  dispatchBufferedRenderPaneClick(selectToolActive, penToolActive, textToolActive,
+                                  pointerHitTestPixelsPerDocUnit);
+
+  // After-idle follow-up for the M8 fast-path click. This reads the
+  // live registry, so it must wait for the worker to land. Keep the
+  // follow-up to cache refresh only: posting a render here would run
+  // before this same frame's drag move is applied, leaving the overlay
+  // one interaction step behind the composited pixels during re-drag.
+  if (pendingClickFollowupAfterIdle_ && !renderCoordinator_.asyncRenderer().isBusy()) {
+    renderCoordinator_.refreshSelectionBoundsCache(app_);
+    pendingClickFollowupAfterIdle_ = false;
+  }
+
+  updateRenderPaneSelectionDrag(spaceHeld, pointerHitTestPixelsPerDocUnit);
+
+  if (!interactionController_.pendingClick().has_value()) {
+    pendingSelectClickStartSeconds_.reset();
+  }
+
+  updateRenderPaneTextPointer(spaceHeld);
+
+  updateRenderPanePenPointer(penToolActive, spaceHeld, pointerHitTestPixelsPerDocUnit);
+
+  updateRenderPaneTextChrome(textToolActive);
 
   applyPendingDocumentSpaceReplayInputForTesting();
 
-  if (!renderCoordinator_.asyncRenderer().isBusy() && app_.hasDocument()) {
+  renderRenderPanePresentation(contentRegion, paneOriginImGui, paneRect, toolPaletteRect,
+                               hoverTransformIntent, rotateCursorLocked, penToolActive,
+                               textToolActive);
+  ImGui::End();
+}
+
+void EditorShell::installFramebufferUnderlayPlan(
+    [[maybe_unused]] std::optional<FramebufferUnderlayPlan> plan) {
+#ifdef DONNER_EDITOR_WGPU
+  if (!plan.has_value()) {
+    window_.setWgpuUnderlayRenderCallback({});
+    return;
+  }
+  window_.setWgpuUnderlayRenderCallback(
+      [this, plan = std::move(*plan)](const gui::EditorWindowWgpuRenderTarget& target) {
+        if (directCheckerboardRenderer_ == nullptr || directDocumentRenderer_ == nullptr) {
+          return;
+        }
+        lastDirectPresentationCost_ = DrawDocumentPresentationToFramebuffer(
+            *directCheckerboardRenderer_, *directDocumentRenderer_, target, plan.viewport,
+            plan.documentClipRect, plan.overviewTiles, plan.tiles, plan.activeDragPreview,
+            plan.displayedDragPreview, plan.suppressedLayerEntity, plan.suppressDragTargetTiles);
+      });
+#else
+  // Without a WebGPU window target there is no framebuffer underlay to install;
+  // `RenderPanePresenter` draws document tiles through the ImGui draw list.
+#endif
+}
+
+void EditorShell::installImmediateChromePlan(
+    [[maybe_unused]] std::optional<ImmediateChromePlan> plan) {
+#ifdef DONNER_EDITOR_WGPU
+  if (!plan.has_value() || directOverlayRenderer_ == nullptr) {
+    window_.setWgpuDirectRenderCallback({});
+    return;
+  }
+  window_.setWgpuDirectRenderCallback(
+      [this, plan = std::move(*plan)](const gui::EditorWindowWgpuRenderTarget& target) {
+        if (directOverlayRenderer_ == nullptr) {
+          return;
+        }
+        lastImmediateChromeDrawMs_ = DrawImmediateChromeToFramebuffer(
+            *directOverlayRenderer_, target, plan.viewport, plan.paneClipRect, plan.snapshot);
+      });
+#else
+  // Without a WebGPU window target the editor presents no chrome; the
+  // ImGui-draw-list fallback carries document tiles only.
+#endif
+}
+
+void EditorShell::renderRenderPanePresentation(
+    const ImVec2& contentRegion, const ImVec2& paneOriginImGui, const Box2d& paneRect,
+    const Box2d& toolPaletteRect, const SelectionTransformHandleIntent& hoverTransformIntent,
+    bool rotateCursorLocked, bool penToolActive, bool textToolActive) {
+  if ((!showSamplePicker_ || samplePresentationPending_) &&
+      !renderCoordinator_.asyncRenderer().isBusy() && app_.hasDocument() && viewportInitialized_) {
     requestRenderAtEndOfFrame_ = true;
   }
+
+  const DocumentPresentationResult presentation =
+      documentPresenter_->resolveExternalSurface(DocumentPresentationFrame{
+          .viewport = interactionController_.viewport(),
+          .paneRect = paneRect,
+          .presentationSuppressed = contentOnlyCaptureThisFrame_ || showSamplePicker_,
+      });
+  bool documentPresentedDirectly = false;
+  // Everything drawn onto the document this frame - selection chrome, the
+  // compositor tile overlay, the presented image clip - belongs in the same
+  // transform the presented pixels landed in, which is the viewport the
+  // presentation resolved for this frame.
+  const ViewportState& presentedDocumentViewport = presentation.presentedViewport;
 
   const auto liveActiveDragPreview = selectTool_.activeDragPreview();
   const auto activeGesturePreview = selectTool_.activeGesturePreview();
@@ -3408,6 +4014,7 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
       activeDragPreview, displayedDragPreview, hasPresentableActiveDragTarget);
   const auto representedGesturePreview = OverlayGesturePreviewForPresentation(
       activeGesturePreview, liveActiveDragPreview, representedDragPreview);
+  [[maybe_unused]] bool overlaySnapshotChanged = false;
   if (!contentOnlyCaptureThisFrame_ && !showSamplePicker_) {
     // While the Pen tool is active the selected path is itself the live
     // interaction surface, so chrome must track the live DOM even between
@@ -3421,7 +4028,7 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
     const bool allowLiveGeometryOverlay =
         penToolActive || (textToolActive && (textTool_.isEditing() || textTool_.isDraggingBox()));
     updatePenLivePreviewTarget();
-    renderCoordinator_.rasterizeOverlayForPresentation(
+    overlaySnapshotChanged = renderCoordinator_.rasterizeOverlayForPresentation(
         app_, selectTool_, interactionController_.viewport(), textures_, activeDragPreview,
         representedDragPreview, selectionChromeDetailForActiveTool(), allowLiveGeometryOverlay);
   }
@@ -3441,16 +4048,13 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
       penPreviewSuppressedEntity != entt::null ? penPreviewSuppressedEntity : suppressedLayerEntity;
   interactionController_.frameHistory().setLatestMemorySample(
       MemorySampleFromPresentationResources(textures_.presentationResourceStats()));
-  // Selection chrome is rendered exclusively by Donner's OverlayRenderer drawn
-  // straight onto the Geode framebuffer via this direct-render callback. There
-  // is no ImGui-vector or texture-blit fallback: edge frames that can't take
-  // this path (a content-only capture, which intentionally carries no chrome,
-  // or a viewport with no presentable clip rect, which has nowhere to draw)
-  // simply skip the overlay - clearing the callback leaves the framebuffer
-  // chrome-free for that frame.
-  bool documentPresentedDirectly = false;
+  // Document tiles use the direct framebuffer path where possible. The
+  // framebuffer pass also owns the transparency checkerboard unconditionally:
+  // there is no draw-list checkerboard to fall back to, because every pixel the
+  // editor renders goes through Geode.
+  std::optional<FramebufferUnderlayPlan> underlayPlan;
+  bool underlayPresentsTiles = false;
 #ifdef DONNER_EDITOR_WGPU
-  window_.setWgpuUnderlayRenderCallback({});
   const std::optional<Box2d> directDocumentClipRect =
       PresentedImageClipRect(paneRect, interactionController_.viewport().imageScreenRect());
   const auto isDirectlyPresentableTile = [&](const GlTextureCache::TileView& tile) {
@@ -3478,58 +4082,58 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   const bool drawOverviewTiles =
       ShouldPresentOverviewTiles(textures_.activeTilesViewportBounded(), textures_.overviewTiles());
   if (!contentOnlyCaptureThisFrame_ && directDocumentRenderer_ != nullptr &&
-      directDocumentClipRect.has_value() &&
-      ((drawOverviewTiles && hasDirectlyPresentableTile(textures_.overviewTiles())) ||
-       hasDirectlyPresentableTile(textures_.tiles())) &&
-      (!drawOverviewTiles || canPresentTileSetDirectly(textures_.overviewTiles())) &&
-      canPresentTileSetDirectly(textures_.tiles())) {
-    documentPresentedDirectly = true;
-    const ViewportState documentViewport = interactionController_.viewport();
-    const Box2d documentClipRect = *directDocumentClipRect;
+      directDocumentClipRect.has_value()) {
+    // Tiles ride the framebuffer pass only when every one of them is a Geode
+    // texture. The remaining case is the browser bitmap bridge, whose CPU tiles
+    // are still blitted as images by the render pane - an image blit, never
+    // path geometry.
+    underlayPresentsTiles =
+        ((drawOverviewTiles && hasDirectlyPresentableTile(textures_.overviewTiles())) ||
+         hasDirectlyPresentableTile(textures_.tiles())) &&
+        (!drawOverviewTiles || canPresentTileSetDirectly(textures_.overviewTiles())) &&
+        canPresentTileSetDirectly(textures_.tiles());
     std::vector<GlTextureCache::TileView> directOverviewTiles;
-    if (drawOverviewTiles) {
-      directOverviewTiles.assign(textures_.overviewTiles().begin(),
-                                 textures_.overviewTiles().end());
+    std::vector<GlTextureCache::TileView> directTiles;
+    if (underlayPresentsTiles) {
+      if (drawOverviewTiles) {
+        directOverviewTiles.assign(textures_.overviewTiles().begin(),
+                                   textures_.overviewTiles().end());
+      }
+      directTiles.assign(textures_.tiles().begin(), textures_.tiles().end());
     }
-    std::vector<GlTextureCache::TileView> directTiles(textures_.tiles().begin(),
-                                                      textures_.tiles().end());
-    window_.setWgpuUnderlayRenderCallback(
-        [this, documentViewport, documentClipRect,
-         directOverviewTiles = std::move(directOverviewTiles), directTiles = std::move(directTiles),
-         activeDragPreview, displayedDragPreview, presentSuppressedLayerEntity,
-         suppressDragTargetTiles](const gui::EditorWindowWgpuRenderTarget& target) {
-          if (directCheckerboardRenderer_ == nullptr || directDocumentRenderer_ == nullptr) {
-            return;
-          }
-          lastDirectPresentationCost_ = DrawDocumentPresentationToFramebuffer(
-              *directCheckerboardRenderer_, *directDocumentRenderer_, target, documentViewport,
-              documentClipRect, directOverviewTiles, directTiles, activeDragPreview,
-              displayedDragPreview, presentSuppressedLayerEntity, suppressDragTargetTiles);
-        });
-  }
-
-  window_.setWgpuDirectRenderCallback({});
-  const std::optional<Box2d> directOverlayClipRect =
-      PresentedImageClipRect(paneRect, interactionController_.viewport().imageScreenRect());
-  if (!contentOnlyCaptureThisFrame_ && directOverlayRenderer_ != nullptr &&
-      renderCoordinator_.immediateOverlaySnapshot().has_value() &&
-      directOverlayClipRect.has_value()) {
-    SelectionChromeSnapshot overlaySnapshot = *renderCoordinator_.immediateOverlaySnapshot();
-    ViewportState overlayViewport = interactionController_.viewport();
-    const Box2d overlayClipRect = *directOverlayClipRect;
-    window_.setWgpuDirectRenderCallback(
-        [this, overlaySnapshot = std::move(overlaySnapshot), overlayViewport,
-         overlayClipRect](const gui::EditorWindowWgpuRenderTarget& target) {
-          if (directOverlayRenderer_ == nullptr) {
-            return;
-          }
-          DrawImmediateOverlaySnapshotToFramebuffer(
-              *directOverlayRenderer_, target, overlayViewport, overlayClipRect, overlaySnapshot);
-        });
+    underlayPlan = FramebufferUnderlayPlan{
+        .viewport = presentedDocumentViewport,
+        .documentClipRect = *directDocumentClipRect,
+        .overviewTiles = std::move(directOverviewTiles),
+        .tiles = std::move(directTiles),
+        .activeDragPreview = activeDragPreview,
+        .displayedDragPreview = displayedDragPreview,
+        .suppressedLayerEntity = presentSuppressedLayerEntity,
+        .suppressDragTargetTiles = suppressDragTargetTiles,
+    };
   }
 #endif
+  if (documentPresenter_->presentUnderlay(std::move(underlayPlan)) && underlayPresentsTiles) {
+    documentPresentedDirectly = true;
+  }
+  // Chrome is drawn immediately, every frame, into the same framebuffer the
+  // tiles just landed in, with the transform those tiles were placed with.
+  // Nothing caches it, so it cannot lag the document, and nothing re-scales
+  // it, so handles cannot grow with zoom.
+  std::optional<ImmediateChromePlan> chromePlan;
+  if (!contentOnlyCaptureThisFrame_ && !showSamplePicker_ &&
+      renderCoordinator_.immediateOverlaySnapshot().has_value()) {
+    SelectionChromeSnapshot chromeSnapshot = *renderCoordinator_.immediateOverlaySnapshot();
+    chromePlan = ImmediateChromePlan{
+        .viewport = presentedDocumentViewport,
+        .paneClipRect = paneRect,
+        .snapshot = std::move(chromeSnapshot),
+    };
+  }
+  installImmediateChromePlan(std::move(chromePlan));
   RenderPanePresenterState paneState{
       .viewport = interactionController_.viewport(),
+      .presentedDocumentViewport = &presentedDocumentViewport,
       .frameHistory = interactionController_.frameHistory(),
       .textures = textures_,
       .immediateOverlaySnapshot = renderCoordinator_.immediateOverlaySnapshot(),
@@ -3568,36 +4172,97 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
     }
     renderRenderPaneContextMenu();
   }
-  ImGui::End();
 }
 
 void EditorShell::ensureSampleThumbnails() {
+  const std::span<const EditorSample> samples = GetEditorSampleCatalog();
   constexpr int kThumbnailWidthPx = 192;
   constexpr int kThumbnailHeightPx = 120;
-  const std::span<const EditorSample> samples = GetEditorSampleCatalog();
   if (sampleThumbnailBitmaps_.empty()) {
     sampleThumbnailBitmaps_.resize(samples.size());
   }
-  if (sampleThumbnailGenerationCursor_ >= samples.size()) {
+
+  AsyncRenderer& asyncRenderer = renderCoordinator_.asyncRenderer();
+  const auto publishStats = [&] {
+#ifdef __EMSCRIPTEN__
+    std::size_t ready = 0u;
+    for (const std::optional<svg::RendererBitmap>& bitmap : sampleThumbnailBitmaps_) {
+      ready += bitmap.has_value() ? 1u : 0u;
+    }
+    const SampleThumbnailRenderStats stats = asyncRenderer.sampleThumbnailRenderStats();
+    PublishSampleThumbnailStats(static_cast<int>(stats.requested), static_cast<int>(stats.started),
+                                static_cast<int>(stats.completed), static_cast<int>(stats.rendered),
+                                static_cast<int>(ready), stats.pending ? 1 : 0,
+                                stats.active ? 1 : 0, stats.resultReady ? 1 : 0);
+#endif
+  };
+
+  // The first picker frame is presentation-only. Posting even a worker task here can contend with
+  // Wasm startup and delay the carousel itself, so arm one explicit follow-up frame and return.
+  if (!samplePickerHasPresentedFrame_) {
+    samplePickerHasPresentedFrame_ = true;
+    publishStats();
+    window_.wakeEventLoop();
     return;
   }
 
-  const std::size_t index = sampleThumbnailGenerationCursor_++;
-  const EditorSample& sample = samples[index];
-  ParseWarningSink warnings = ParseWarningSink::Disabled();
-  auto parsed = svg::parser::SVGParser::ParseSVG(sample.source, warnings);
-  if (!parsed.hasError()) {
-    svg::SVGDocument document = std::move(parsed.result());
-    document.setCanvasSize(kThumbnailWidthPx, kThumbnailHeightPx);
-    sampleThumbnailRenderer_.draw(document);
-    svg::RendererBitmap bitmap = sampleThumbnailRenderer_.takeSnapshot();
-    if (!bitmap.empty()) {
-      sampleThumbnailBitmaps_[index] = std::move(bitmap);
+  if (std::optional<SampleThumbnailRenderResult> result =
+          asyncRenderer.pollSampleThumbnailResult()) {
+    const std::size_t index = static_cast<std::size_t>(result->key);
+    if (index < samples.size()) {
+      if (result->outcome == SampleThumbnailRenderOutcome::Rendered && !result->bitmap.empty()) {
+        sampleThumbnailBitmaps_[index] = std::move(result->bitmap);
+      }
+      if (result->outcome != SampleThumbnailRenderOutcome::Cancelled &&
+          index == sampleThumbnailGenerationCursor_) {
+        ++sampleThumbnailGenerationCursor_;
+      }
+    }
+    if (sampleThumbnailInFlightIndex_ == index) {
+      sampleThumbnailInFlightIndex_.reset();
     }
   }
-  if (sampleThumbnailGenerationCursor_ < samples.size()) {
-    window_.wakeEventLoop();
+
+  if (sampleThumbnailGenerationCursor_ >= samples.size()) {
+    sampleThumbnailRetryPending_ = false;
+    publishStats();
+    return;
   }
+  if (sampleThumbnailInFlightIndex_.has_value() || asyncRenderer.isBusy()) {
+    // Work in flight ends in a completion callback, which wakes the loop.
+    sampleThumbnailRetryPending_ = false;
+    publishStats();
+    return;
+  }
+
+  const std::size_t index = sampleThumbnailGenerationCursor_;
+  SampleThumbnailRenderRequest request{
+      .key = index,
+      .source = std::string(samples[index].source),
+      .dimensions = Vector2i(kThumbnailWidthPx, kThumbnailHeightPx),
+  };
+#ifndef __EMSCRIPTEN__
+  request.nativeRenderer = &renderCoordinator_.renderer();
+#endif
+  if (asyncRenderer.requestSampleThumbnail(std::move(request))) {
+    sampleThumbnailInFlightIndex_ = index;
+    sampleThumbnailRetryPending_ = false;
+  } else {
+    // The worker runtime can still be initializing when the picker's first
+    // frames land - the two race, and which side wins moves with how fast the
+    // first frame gets presented. A refused request leaves nothing in flight,
+    // so no completion callback will ever wake the on-demand loop again and the
+    // carousel would keep its placeholders forever. Arm a short idle retry
+    // instead of blocking the frame on worker readiness.
+    sampleThumbnailRetryPending_ = true;
+  }
+  publishStats();
+}
+
+void EditorShell::cancelSampleThumbnailGeneration() {
+  renderCoordinator_.asyncRenderer().cancelSampleThumbnailWork();
+  sampleThumbnailInFlightIndex_.reset();
+  sampleThumbnailRetryPending_ = false;
 }
 
 void EditorShell::renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& contentRegion) {
@@ -3667,13 +4332,27 @@ void EditorShell::renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& con
   ImGui::PopStyleColor();
 
   if (actions.dismiss) {
+    cancelSampleThumbnailGeneration();
     cancelPendingSampleLoad();
-    showSamplePicker_ = false;
+    if (welcomePlaceholderActive_) {
+      queuePendingSampleLoad("donner-splash");
+    } else {
+      showSamplePicker_ = false;
+    }
   }
   if (actions.openFile) {
+    cancelSampleThumbnailGeneration();
     cancelPendingSampleLoad();
-    showSamplePicker_ = false;
+    if (!welcomePlaceholderActive_) {
+      showSamplePicker_ = false;
+    }
     dialogPresenter_.requestOpenFile(app_.currentFilePath());
+  }
+  if (internal::SamplePickerActionsNeedFollowupFrame(actions.dismiss, actions.openFile)) {
+    // These actions mutate state after the picker has already drawn this frame.
+    // Explicitly present the replacement document/modal even if no further DOM
+    // input arrives to wake the event-driven browser loop.
+    window_.wakeEventLoop();
   }
   if (actions.openGitHub) {
 #ifdef __EMSCRIPTEN__
@@ -3690,6 +4369,8 @@ void EditorShell::renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& con
   }
   if (actions.loadSample) {
     queuePendingSampleLoad(actions.sampleId);
+    // Start a clean, idle replacement after this frame's document UI work has already finished.
+    processPendingSampleLoad();
     window_.wakeEventLoop();
   }
 }
@@ -4065,14 +4746,42 @@ void EditorShell::renderSidebars() {
   // so the panes keep showing their last-known content instead of flashing
   // to "(rendering...)" placeholders.
   const bool rendererBusy = renderCoordinator_.asyncRenderer().isBusy();
-  if (!rendererBusy) {
+  const bool interactionActive = selectTool_.isDragging() || penTool_.isDraggingAnchor() ||
+                                 textTool_.isDraggingBox() || textTool_.isAdjustingFrame() ||
+                                 textTool_.isSelectingText();
+  if (!showSamplePicker_ && ShouldRefreshSidebarSnapshots(rendererBusy, interactionActive)) {
     sidebarPresenter_.refreshSnapshot(app_);
     // Compact sheets use deterministic fill swatches. Avoiding per-row raster
     // rendering and texture uploads keeps the touch panel responsive and also
     // avoids backend-specific thumbnail presentation differences in Wasm.
-    layersPanel_.refreshSnapshot(app_, compactSheet ? nullptr : &layerThumbnailRenderer_,
-                                 compactSheet ? LayersPanel::ThumbnailRefreshMode::SwatchesOnly
-                                              : LayersPanel::ThumbnailRefreshMode::Render);
+    const bool presentationCurrent =
+        !app_.hasDocument() || renderCoordinator_.displayedDocVersionForDiagnostics() ==
+                                   app_.document().currentFrameVersion();
+    LayersPanel::ThumbnailRefreshMode thumbnailMode =
+        compactSheet || !presentationCurrent ? LayersPanel::ThumbnailRefreshMode::SwatchesOnly
+                                             : LayersPanel::ThumbnailRefreshMode::RenderIncremental;
+    const bool thumbnailRefreshWasPending = sidebarSnapshotRefreshPending_;
+    layersPanel_.refreshSnapshot(app_,
+                                 thumbnailMode == LayersPanel::ThumbnailRefreshMode::SwatchesOnly
+                                     ? nullptr
+                                     : &layerThumbnailRenderer_,
+                                 thumbnailMode, presentationCurrent);
+    // A transient SwatchesOnly pass means the canvas presentation is catching
+    // up; it is not evidence that the incremental thumbnail queue completed.
+    // Preserve the existing obligation so Firefox timing cannot render the
+    // first row, clear the queue signal, and leave every later row black.
+    sidebarSnapshotRefreshPending_ =
+        thumbnailMode == LayersPanel::ThumbnailRefreshMode::SwatchesOnly
+            ? thumbnailRefreshWasPending
+            : internal::SidebarSnapshotRefreshPendingAfterPass(
+                  layersPanel_.thumbnailRefreshStats().deferredCount);
+    if (sidebarSnapshotRefreshPending_) {
+      window_.wakeEventLoop();
+    }
+  } else if (!showSamplePicker_ && sidebarSnapshotRefreshPending_) {
+    // Preserve the refresh obligation across a renderer-busy frame or a trickled mouse transition.
+    // This is bounded: the flag is cleared by the first idle refresh above.
+    window_.wakeEventLoop();
   }
   EditorApp* liveAppForClicks = rendererBusy ? nullptr : &app_;
 
@@ -4126,6 +4835,17 @@ void EditorShell::renderSidebars() {
     return LayersPanel::ThumbnailTexture{
         .texture = uploaded.texture,
         .uvBottomRight = uploaded.uvBottomRight,
+    };
+  };
+  const LayersPanel::ThumbnailTextureSnapshotProvider thumbnailTextureSnapshotProvider =
+      [this](std::uint64_t stableId,
+             const std::shared_ptr<const svg::RendererTextureSnapshot>& textureSnapshot)
+      -> LayersPanel::ThumbnailTexture {
+    const GlTextureCache::ThumbnailTextureView retained =
+        thumbnailTextures_.retainThumbnailTextureSnapshot(stableId, textureSnapshot);
+    return LayersPanel::ThumbnailTexture{
+        .texture = retained.texture,
+        .uvBottomRight = retained.uvBottomRight,
     };
   };
   const LayersPanel::IconTextureProvider layerIconTextureProvider =
@@ -4187,7 +4907,9 @@ void EditorShell::renderSidebars() {
   layersPanel_.render(
       liveAppForClicks,
       compactSheet ? LayersPanel::ThumbnailTextureProvider{} : thumbnailTextureProvider,
-      layerIconTextureProvider, compactSheet ? 44.0f : 0.0f);
+      layerIconTextureProvider, compactSheet ? 44.0f : 0.0f,
+      compactSheet ? LayersPanel::ThumbnailTextureSnapshotProvider{}
+                   : thumbnailTextureSnapshotProvider);
   // Feed the Layers-panel hover into the shared source-hover preview so the
   // canvas (and source pane) highlight the hovered element, the same way
   // hovering a source-pane token does.
@@ -4429,6 +5151,18 @@ void EditorShell::renderDockSpaceHost(float hostX, float hostY, float hostWidth,
   dockSidebarsIncludedInLayout_ = sidebarsIncluded;
 
   ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f), EditorDockSpaceFlags(dockLayoutLocked_));
+  // Record the central node's rect alongside the host rect the shell just laid out. Comparing the
+  // two is how `RenderPaneViewportLatchReady` tells a settled render pane from a rectangle ImGui
+  // is still propagating, without waiting to see the same value twice.
+  if (const ImGuiDockNode* centralNode = ImGui::DockBuilderGetCentralNode(dockspaceId)) {
+    dockCentralNodeSize_ = Vector2d(centralNode->Size.x, centralNode->Size.y);
+    dockCentralNodeOrigin_ = Vector2d(centralNode->Pos.x, centralNode->Pos.y);
+  } else {
+    dockCentralNodeSize_ = Vector2d::Zero();
+    dockCentralNodeOrigin_ = Vector2d::Zero();
+  }
+  previousDockHostRect_ = dockHostRect_;
+  dockHostRect_ = LayoutRect{.x = hostX, .y = hostY, .width = hostWidth, .height = hostHeight};
   ImGui::End();
 }
 
@@ -4924,16 +5658,39 @@ SelectionChromeDetail EditorShell::selectionChromeDetailForActiveTool() const {
     // Drag chrome is projected from the immutable gesture bounds. Avoid
     // rebuilding every selected path (notably one path per outlined glyph)
     // while the compositor and DOM are advancing asynchronously.
-    return SelectionChromeDetail::CombinedBoundsOnly;
+    const std::optional<SelectTool::ActiveGesturePreview> preview =
+        selectTool_.activeGesturePreview();
+    return preview.has_value() && preview->hasMoved ? SelectionChromeDetail::CombinedBoundsOnly
+                                                    : SelectionChromeDetail::Full;
   }
   if (activeTool_ == ActiveTool::Text && textTool_.isEditing()) {
-    // The caret and oriented session frame are pushed explicitly through
-    // setTextEditingChrome. Skip generic text baselines/bounds/path traversal:
-    // they duplicate that UI and force synchronous text geometry work after
-    // every keystroke.
+    // The caret, range highlights, and oriented session frame are pushed
+    // explicitly through setTextEditingChrome. Retain only the generic text
+    // baseline from the selected element; EditingChromeOnly skips its bounds
+    // and path traversal while preserving that guidance line.
     return SelectionChromeDetail::EditingChromeOnly;
   }
   return SelectionChromeDetail::Full;
+}
+
+bool EditorShell::tryBeginTextEditingFromSelectDoubleClick(const Vector2d& documentPoint,
+                                                           MouseModifiers modifiers) {
+  if (activeTool_ != ActiveTool::Select || !modifiers.doubleClick || !app_.hasDocument()) {
+    return false;
+  }
+  const std::optional<svg::SVGGraphicsElement> hit = app_.hitTest(documentPoint);
+  if (!hit.has_value() || IsLocked(*hit)) {
+    return false;
+  }
+  const bool hitText = hit->withReadAccess(
+      [&hit](svg::DocumentReadAccess&, EntityHandle) { return hit->isa<svg::SVGTextElement>(); });
+  if (!hitText) {
+    return false;
+  }
+
+  activeTool_ = ActiveTool::Text;
+  textTool_.onMouseDown(app_, documentPoint, modifiers);
+  return textTool_.isEditing();
 }
 
 void EditorShell::updatePenLivePreviewTarget() {
@@ -4971,7 +5728,9 @@ void EditorShell::handleTextEditingKeyboard() {
   }
 
   if (cmd) {
-    if (ImGui::IsKeyPressed(ImGuiKey_B, /*repeat=*/false)) {
+    if (ImGui::IsKeyPressed(ImGuiKey_A, /*repeat=*/false)) {
+      textTool_.selectAll();
+    } else if (ImGui::IsKeyPressed(ImGuiKey_B, /*repeat=*/false)) {
       textTool_.toggleBold(app_);
       edited = true;
     } else if (ImGui::IsKeyPressed(ImGuiKey_I, /*repeat=*/false)) {
@@ -5002,22 +5761,22 @@ void EditorShell::handleTextEditingKeyboard() {
     edited = true;
   }
   if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, /*repeat=*/true)) {
-    textTool_.moveCaret(app_, TextTool::CaretMove::Left);
+    textTool_.moveCaret(app_, TextTool::CaretMove::Left, io.KeyShift);
   }
   if (ImGui::IsKeyPressed(ImGuiKey_RightArrow, /*repeat=*/true)) {
-    textTool_.moveCaret(app_, TextTool::CaretMove::Right);
+    textTool_.moveCaret(app_, TextTool::CaretMove::Right, io.KeyShift);
   }
   if (ImGui::IsKeyPressed(ImGuiKey_UpArrow, /*repeat=*/true)) {
-    textTool_.moveCaret(app_, TextTool::CaretMove::Up);
+    textTool_.moveCaret(app_, TextTool::CaretMove::Up, io.KeyShift);
   }
   if (ImGui::IsKeyPressed(ImGuiKey_DownArrow, /*repeat=*/true)) {
-    textTool_.moveCaret(app_, TextTool::CaretMove::Down);
+    textTool_.moveCaret(app_, TextTool::CaretMove::Down, io.KeyShift);
   }
   if (ImGui::IsKeyPressed(ImGuiKey_Home, /*repeat=*/false)) {
-    textTool_.moveCaret(app_, TextTool::CaretMove::LineStart);
+    textTool_.moveCaret(app_, TextTool::CaretMove::LineStart, io.KeyShift);
   }
   if (ImGui::IsKeyPressed(ImGuiKey_End, /*repeat=*/false)) {
-    textTool_.moveCaret(app_, TextTool::CaretMove::LineEnd);
+    textTool_.moveCaret(app_, TextTool::CaretMove::LineEnd, io.KeyShift);
   }
 
   std::u32string queuedCharacters;
@@ -5101,6 +5860,45 @@ bool EditorShell::flushQueuedMutationAndRefreshOverlay() {
         selectionChromeDetailForActiveTool());
   }
   requestRenderAtEndOfFrame_ = true;
+  window_.wakeEventLoop();
+  return true;
+}
+
+bool EditorShell::flushInteractiveDragMutationAndRequestRender() {
+  const bool hasPendingMutation = app_.hasDocument() && app_.document().hasPendingMutations();
+  if (!hasPendingMutation) {
+    return false;
+  }
+
+  // A worker can remain busy after SVG traversal while it packages or presents the completed
+  // frame. Never block the browser UI thread on that phase: claim the DOM only when the write
+  // guard is immediately available, then supersede the stale worker request with the moved state.
+  std::optional<svg::DocumentWriteAccess> documentAccess =
+      app_.document().document().tryWriteAccess();
+  if (!documentAccess.has_value()) {
+    renderCoordinator_.asyncRenderer().cancelInFlight();
+    window_.wakeEventLoop();
+    return false;
+  }
+
+  if (!app_.flushFrame()) {
+    return false;
+  }
+
+  // Transform-only drag flushes remain represented by the promoted tile/direct-surface request.
+  // Preserve the cached presentation just as the start-of-frame drag flush path does.
+  renderCoordinator_.invalidatePresentationAfterDocumentFlush(app_.document().lastFlushResult());
+  // A direct worker surface and the ImGui chrome are separate browser layers.
+  // Let the normal presentation pass bind chrome to the last completed worker
+  // epoch instead of capturing live resize geometry ahead of its pixels here.
+  renderCoordinator_.rasterizeOverlayForCurrentSelection(
+      app_, interactionController_.viewport(), selectTool_.marqueeRect(),
+      selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview(),
+      selectionChromeDetailForActiveTool());
+  const bool posted = renderCoordinator_.maybeRequestRender(
+      app_, selectTool_, interactionController_.viewport(), &textures_,
+      /*supersedeInFlight=*/true);
+  requestRenderAtEndOfFrame_ = !posted;
   window_.wakeEventLoop();
   return true;
 }
@@ -5551,13 +6349,251 @@ void EditorShell::revealSourceRange(SourceByteRange byteRange) {
 }
 
 void EditorShell::prepareFrame() {
+  const ScopedHeapDelta inputHeapDelta(MemoryStage::AppInput);
   if (showSamplePicker_) {
     ensureSampleThumbnails();
   }
 }
 
+void EditorShell::snapshotReproFrame() {
+  if (!reproRecorder_) {
+    return;
+  }
+
+  // Snapshot before any widget consumes input events. ImGui's IO
+  // state for the frame has been populated by
+  // `ImGui_ImplGlfw_NewFrame` (called in `window_.beginFrame()`
+  // upstream of `runFrame`); nothing below has touched it yet.
+  //
+  // The viewport snapshot is the OUTCOME of any previous frame's
+  // viewport mutation (pinch-zoom, keyboard zoom, pan). Capturing
+  // it every frame is what lets `RnrReplayTest`'s
+  // `ApplyRecordedViewport` reconstruct zoom changes during
+  // playback, even for gestures (macOS trackpad pinch via
+  // `PinchEventMonitor`) that bypass ImGui's input boundary and
+  // therefore aren't visible to the recorder as discrete events.
+  const ViewportState& vp = interactionController_.viewport();
+  repro::FrameContext frameContext;
+  frameContext.viewport = repro::ReproViewport{
+      .paneOriginX = vp.paneOrigin.x,
+      .paneOriginY = vp.paneOrigin.y,
+      .paneSizeW = vp.paneSize.x,
+      .paneSizeH = vp.paneSize.y,
+      .devicePixelRatio = vp.devicePixelRatio,
+      .zoom = vp.zoom,
+      .panDocX = vp.panDocPoint.x,
+      .panDocY = vp.panDocPoint.y,
+      .panScreenX = vp.panScreenPoint.x,
+      .panScreenY = vp.panScreenPoint.y,
+      .viewBoxX = vp.documentViewBox.topLeft.x,
+      .viewBoxY = vp.documentViewBox.topLeft.y,
+      .viewBoxW = vp.documentViewBox.size().x,
+      .viewBoxH = vp.documentViewBox.size().y,
+  };
+  reproRecorder_->snapshotFrame(frameContext);
+}
+
+void EditorShell::renderMenuBarAndDialogs(bool compactUi) {
+  const bool rendererIdle = !renderCoordinator_.asyncRenderer().isBusy();
+  MenuBarState menuState{
+      .sourcePaneFocused = !compactUi && sourcePaneVisible_ && textEditor_.isFocused(),
+      .canSave = app_.hasDocument(),
+      .canRevert = app_.hasDocument() && app_.isDirty() && !app_.cleanSourceText().empty(),
+      .canUndo = app_.canUndo(),
+      .canRedo = app_.canRedo(),
+      .sourceFocusMode = sourceFocusMode_,
+      .hasShapeSelection = app_.hasSelection(),
+      .hasShapeClipboard = shapeClipboard_ != nullptr && shapeClipboard_->hasText(),
+      .hasTextSelection = cachedSelectionIsAllText_,
+      .canGroup = rendererIdle && app_.groupSelectionAvailability().canApply,
+      .canUngroup = rendererIdle && app_.ungroupSelectionAvailability().canApply,
+      .hasSelectableElements = cachedCanvasHasSelectableElements_,
+      .showCompositorDebugPanel = showCompositorDebugPanel_,
+      .compositorTileOverlay = compositorTileOverlay_,
+      .geometryDebugOverlay = geometryDebugOverlay_,
+      .perfOverlayMode = perfOverlayMode_,
+      .panelLayoutLocked = dockLayoutLocked_,
+  };
+  MenuBarActions menuActions;
+  if (compactUi) {
+    renderCompactTopBar();
+  } else {
+    menuActions = menuBarPresenter_.render(menuState, uiFontBold_);
+  }
+  applyMenuActions(menuActions);
+
+  // On macOS, service any pending open/save with a native OS panel; this
+  // consumes the request so the ImGui modal below stays closed. On other
+  // platforms it is a no-op and the ImGui modal renders as before.
+  serviceNativeDialogs();
+  dialogPresenter_.render(
+      [this](std::string_view path, std::string* error) { return tryOpenPath(path, error); },
+      [this](std::string_view path, std::string* error) {
+        return pendingViewportExport_ ? tryExportViewportSvgToPath(path, error)
+                                      : trySavePath(path, error);
+      });
+}
+
+void EditorShell::applyDeferredRenderRequest() {
+  if (!requestRenderAtEndOfFrame_) {
+    return;
+  }
+
+  if (renderCoordinator_.presentationRefreshPending() &&
+      renderCoordinator_.asyncRenderer().isBusy()) {
+    // A renderer-setting flip makes speculative warmup and any in-flight frame stale. Cancel it
+    // so its completion wake can submit the forced refresh without blocking the UI on the live
+    // document guard.
+    renderCoordinator_.asyncRenderer().cancelInFlight();
+  }
+  switch (internal::DeferredRenderActionForState(app_.hasDocument(), penDragFlushedThisFrame_,
+                                                 renderCoordinator_.asyncRenderer().isBusy())) {
+    case internal::DeferredRenderAction::ClearRequest: requestRenderAtEndOfFrame_ = false; break;
+    case internal::DeferredRenderAction::WakeForPenDrag:
+      // An actively-moving pen drag flushed new path geometry this frame. The
+      // live preview already presents that geometry, so skip the async render
+      // request: keeping the worker idle guarantees the next drag frame's
+      // flush is never blocked behind a busy render (the source of pen-drag
+      // frame stutter). The request flag stays set and fires on the first
+      // frame the pointer pauses; wake the loop so that frame happens even
+      // without further input.
+      window_.wakeEventLoop();
+      break;
+    case internal::DeferredRenderAction::SubmitRender:
+      renderCoordinator_.maybeRequestRender(app_, selectTool_, interactionController_.viewport(),
+                                            &textures_, /*supersedeInFlight=*/false,
+                                            selectionChromeDetailForActiveTool());
+      requestRenderAtEndOfFrame_ = false;
+      break;
+    case internal::DeferredRenderAction::WaitForRendererCompletion:
+      // AsyncRenderer's completion callback wakes the host. Posting another
+      // wake here would spin the Wasm main thread at requestAnimationFrame
+      // cadence for the entire worker render.
+      break;
+  }
+}
+
+void EditorShell::recordFrameTelemetry(
+    const FrameCostBreakdown::MainFrame& mainFrameCost,
+    const FrameCostBreakdown::DirectPresentation& directPresentationCost) {
+  FrameCostBreakdown frameCost = renderCoordinator_.lastFrameCostBreakdown();
+  const gui::EditorWindowFrameTiming& hostEndFrameTiming = window_.lastEndFrameTiming();
+  frameCost.mainFrame = mainFrameCost;
+  frameCost.hostFrame = FrameCostBreakdown::HostFrame{
+      .beginFrameMs = window_.lastBeginFrameMs(),
+      .previousEndFrameMs = hostEndFrameTiming.endFrameMs,
+      .previousImguiRenderMs = hostEndFrameTiming.imguiRenderMs,
+      .previousSurfaceAcquireMs = hostEndFrameTiming.surfaceAcquireMs,
+      .previousUnderlayMs = hostEndFrameTiming.underlayMs,
+      .previousImguiDrawMs = hostEndFrameTiming.imguiDrawMs,
+      .previousDirectMs = hostEndFrameTiming.directMs,
+      .previousReadbackMs = hostEndFrameTiming.readbackMs,
+      .previousPresentMs = hostEndFrameTiming.presentMs,
+      .previousImguiVertexCount = hostEndFrameTiming.imguiVertexCount,
+  };
+  frameCost.directPresentation = directPresentationCost;
+  frameCost.overlay.drawMs = lastImmediateChromeDrawMs_;
+  lastImmediateChromeDrawMs_ = 0.0;
+  if (sourcePaneVisible_) {
+    frameCost.sourceRopes = textEditor_.lastSourceRopeCost();
+  }
+  latestFrameCostForReadback_ = frameCost;
+  interactionController_.frameHistory().setLatestFrameCost(frameCost);
+  const PresentationResourceStats presentationResources = textures_.presentationResourceStats();
+  interactionController_.frameHistory().setLatestMemorySample(
+      MemorySampleFromPresentationResources(presentationResources));
+  // Feed the app thread's half of the byte attribution (see
+  // `donner/base/MemoryAttribution.h`); the render thread publishes the
+  // compositor's half from `AsyncRenderer::workerLoop`. The frame publisher
+  // reads both and is the only writer of the page-visible stats object.
+  SetRetainedBytes(MemoryCategory::PresentationTiles, presentationResources.activeTileBytes);
+  SetEntryCount(MemoryCategory::PresentationTiles,
+                static_cast<std::uint64_t>(presentationResources.activeTileTextures));
+  SetRetainedBytes(MemoryCategory::PresentationOverviewTiles,
+                   presentationResources.overviewTileBytes);
+  SetEntryCount(MemoryCategory::PresentationOverviewTiles,
+                static_cast<std::uint64_t>(presentationResources.overviewTileTextures));
+  SetRetainedBytes(MemoryCategory::PresentationRetired, presentationResources.pendingRetiredBytes +
+                                                            presentationResources.agedRetiredBytes);
+  SetEntryCount(MemoryCategory::PresentationRetired,
+                static_cast<std::uint64_t>(presentationResources.pendingRetiredTextures +
+                                           presentationResources.agedRetiredTextures));
+  maybeLogFrameMissTelemetry(frameCost);
+  maybeLogResourceDiagnostics(frameCost);
+#ifdef __EMSCRIPTEN__
+  const LayersPanel::ThumbnailRefreshStats& layerThumbnailStats =
+      layersPanel_.thumbnailRefreshStats();
+  std::size_t layerThumbnailBitmapCount = 0u;
+  std::size_t layerThumbnailBitmapBytes = 0u;
+  std::size_t layerThumbnailTextureSnapshotCount = 0u;
+  for (const LayerTreeRow& row : layersPanel_.rows()) {
+    if (const svg::RendererBitmap* thumbnail = layersPanel_.rowThumbnail(row.stableId);
+        thumbnail != nullptr && !thumbnail->empty()) {
+      ++layerThumbnailBitmapCount;
+      layerThumbnailBitmapBytes += thumbnail->pixels.size();
+    }
+    if (const auto* textureSnapshot = layersPanel_.rowTextureThumbnail(row.stableId);
+        textureSnapshot != nullptr && *textureSnapshot != nullptr) {
+      ++layerThumbnailTextureSnapshotCount;
+    }
+  }
+  SetRetainedBytes(MemoryCategory::LayerThumbnails,
+                   static_cast<std::uint64_t>(layerThumbnailBitmapBytes));
+  SetEntryCount(MemoryCategory::LayerThumbnails,
+                static_cast<std::uint64_t>(thumbnailTextures_.thumbnailTextureCount()));
+  PublishLayerThumbnailStats(
+      static_cast<double>(layerThumbnailStats.rowCount),
+      static_cast<double>(layerThumbnailStats.renderedCount),
+      static_cast<double>(layerThumbnailStats.reusedCount),
+      static_cast<double>(layerThumbnailStats.deferredCount),
+      static_cast<double>(layerThumbnailStats.skippedForCanvasInvalidationCount),
+      static_cast<double>(layerThumbnailStats.snapshotRebuildCount),
+      static_cast<double>(layerThumbnailBitmapCount),
+      static_cast<double>(layerThumbnailBitmapBytes),
+      static_cast<double>(layerThumbnailTextureSnapshotCount),
+      static_cast<double>(thumbnailTextures_.thumbnailTextureCount()));
+  PublishPresentationResourceStats(
+      static_cast<double>(presentationResources.totalTrackedBytes),
+      static_cast<double>(presentationResources.peakTrackedBytes),
+      static_cast<double>(presentationResources.pendingRetiredBytes),
+      static_cast<double>(presentationResources.agedRetiredBytes),
+      static_cast<double>(presentationResources.activeTileTextures),
+      static_cast<double>(presentationResources.overviewTileTextures),
+      static_cast<double>(presentationResources.pendingRetiredTextures),
+      static_cast<double>(presentationResources.agedRetiredTextures),
+      static_cast<double>(presentationResources.retiredFrameCount),
+      static_cast<double>(presentationResources.wgpuLifetimeTextureCreates),
+      static_cast<double>(presentationResources.wgpuLifetimeBufferCreates));
+  PublishInteractionStats(static_cast<int>(app_.selectedElements().size()),
+                          interactionController_.pendingClick().has_value() ? 1 : 0,
+                          renderCoordinator_.asyncRenderer().isBusy() ? 1 : 0,
+                          selectTool_.isDragging() ? 1 : 0,
+                          static_cast<double>(frameTelemetryFrame_));
+  {
+    const ViewportState& viewport = interactionController_.viewport();
+    const Box2d documentRect = viewport.imageScreenRect();
+    const Vector2d documentSize = documentRect.size();
+    PublishViewportStats(
+        viewport.paneOrigin.x, viewport.paneOrigin.y, viewport.paneSize.x, viewport.paneSize.y,
+        documentRect.topLeft.x, documentRect.topLeft.y, documentSize.x, documentSize.y,
+        viewport.zoom,
+        static_cast<double>(renderCoordinator_.documentCanvasCommitTotal()),
+        static_cast<double>(renderCoordinator_.overviewInfillRenderTotal()));
+    PublishOverlayStats(compositorTileOverlay_ ? 1 : 0, geometryDebugOverlay_ ? 1 : 0);
+  }
+  AccumulateFrameLoopPhaseCost(
+      mainFrameCost.layoutMs, mainFrameCost.menusDialogsMs, mainFrameCost.sourcePaneMs,
+      mainFrameCost.renderPaneMs, mainFrameCost.sidebarsMs, mainFrameCost.splittersMs,
+      mainFrameCost.preparationMs + mainFrameCost.renderPollMs + mainFrameCost.documentFlushMs +
+          mainFrameCost.overlayRefreshMs + mainFrameCost.documentSyncMs +
+          mainFrameCost.shortcutsMs + mainFrameCost.endRenderRequestMs,
+      frameCost.hostFrame.previousImguiRenderMs, frameCost.hostFrame.previousImguiDrawMs);
+#endif
+}
+
 void EditorShell::runFrame() {
   ZoneScopedN("EditorShell::runFrame");
+  const ScopedHeapDelta uiFrameHeapDelta(MemoryStage::AppUiFrame);
   ++frameTelemetryFrame_;
   renderCoordinator_.beginFrameCostTracking();
   FrameCostBreakdown::MainFrame mainFrameCost;
@@ -5573,39 +6609,7 @@ void EditorShell::runFrame() {
   contentOnlyCaptureForNextFrame_ = false;
   textures_.advancePresentationFrame();
   compositorDebugPanel_.advancePresentationFrame();
-  if (reproRecorder_) {
-    // Snapshot before any widget consumes input events. ImGui's IO
-    // state for the frame has been populated by
-    // `ImGui_ImplGlfw_NewFrame` (called in `window_.beginFrame()`
-    // upstream of `runFrame`); nothing below has touched it yet.
-    //
-    // The viewport snapshot is the OUTCOME of any previous frame's
-    // viewport mutation (pinch-zoom, keyboard zoom, pan). Capturing
-    // it every frame is what lets `RnrReplayTest`'s
-    // `ApplyRecordedViewport` reconstruct zoom changes during
-    // playback, even for gestures (macOS trackpad pinch via
-    // `PinchEventMonitor`) that bypass ImGui's input boundary and
-    // therefore aren't visible to the recorder as discrete events.
-    const ViewportState& vp = interactionController_.viewport();
-    repro::FrameContext frameContext;
-    frameContext.viewport = repro::ReproViewport{
-        .paneOriginX = vp.paneOrigin.x,
-        .paneOriginY = vp.paneOrigin.y,
-        .paneSizeW = vp.paneSize.x,
-        .paneSizeH = vp.paneSize.y,
-        .devicePixelRatio = vp.devicePixelRatio,
-        .zoom = vp.zoom,
-        .panDocX = vp.panDocPoint.x,
-        .panDocY = vp.panDocPoint.y,
-        .panScreenX = vp.panScreenPoint.x,
-        .panScreenY = vp.panScreenPoint.y,
-        .viewBoxX = vp.documentViewBox.topLeft.x,
-        .viewBoxY = vp.documentViewBox.topLeft.y,
-        .viewBoxW = vp.documentViewBox.size().x,
-        .viewBoxH = vp.documentViewBox.size().y,
-    };
-    reproRecorder_->snapshotFrame(frameContext);
-  }
+  snapshotReproFrame();
   const float frameDeltaMs = ImGui::GetIO().DeltaTime * 1000.0f;
   interactionController_.noteFrameDelta(frameDeltaMs);
 
@@ -5631,6 +6635,17 @@ void EditorShell::runFrame() {
   renderCoordinator_.pollRenderResult(app_, interactionController_.viewport(), textures_,
                                       &interactionController_.frameHistory());
   applyPendingHistoryActions();
+  if (samplePresentationPending_ && viewportInitialized_ && app_.hasDocument() &&
+      renderCoordinator_.displayedDocVersionForDiagnostics() ==
+          app_.document().currentFrameVersion()) {
+    samplePresentationPending_ = false;
+    showSamplePicker_ = false;
+    sidebarSnapshotRefreshPending_ = true;
+    // Accepting the worker surface can happen on a frame where the renderer still appears busy or
+    // ImGui is still trickling the picker click. Keep requesting frames until renderSidebars()
+    // consumes the explicit refresh obligation on an idle frame.
+    window_.wakeEventLoop();
+  }
   markPhase(mainFrameCost.renderPollMs);
 
   if (!renderCoordinator_.asyncRenderer().isBusy()) {
@@ -5654,11 +6669,20 @@ void EditorShell::runFrame() {
       }
       // UI mutations can be queued while the async renderer is busy. When they flush here, the
       // DOM/source panes already reflect the edit, so request a matching document render instead of
-      // continuing to present stale composited textures.
-      requestRenderAtEndOfFrame_ = true;
+      // continuing to present stale composited textures. The welcome document is only a source/UI
+      // placeholder, though: rendering it races the selected sample's first correctly fitted
+      // surface and can expose the placeholder viewport between the picker and the sample.
+      requestRenderAtEndOfFrame_ = !showSamplePicker_ || samplePresentationPending_;
     }
   }
   processPendingSampleLoad();
+  const bool documentUiSnapshotRendererBusy = renderCoordinator_.asyncRenderer().isBusy();
+  cachedCanvasHasSelectableElements_ = internal::ResolveCachedDocumentBoolForFrame(
+      documentUiSnapshotRendererBusy, cachedCanvasHasSelectableElements_,
+      [this] { return canvasHasSelectableElements(); });
+  cachedSelectionIsAllText_ = internal::ResolveCachedDocumentBoolForFrame(
+      documentUiSnapshotRendererBusy, cachedSelectionIsAllText_,
+      [this] { return selectionIsAllText(); });
   markPhase(mainFrameCost.documentFlushMs);
 
   // Re-rasterize the overlay against the just-flushed DOM while a locked-rejection flash is (or was
@@ -5688,12 +6712,14 @@ void EditorShell::runFrame() {
       documentViewBoxCacheDocument_ = documentHandle;
       documentViewBoxCache_.reset();
     }
-    if (std::optional<Box2d> viewBox = TryResolveDocumentViewBox(document)) {
+    if (std::optional<Box2d> viewBox =
+            ResolveDocumentViewBoxForFrame(document, renderCoordinator_.asyncRenderer().isBusy())) {
       documentViewBoxCache_ = *viewBox;
     }
   }
 
   const Vector2i windowSize = window_.windowSize();
+  lastFullFrameWindowSize_ = windowSize;
 #ifdef __EMSCRIPTEN__
   static const bool kPreferTouchInput =
       EM_ASM_INT({
@@ -5752,51 +6778,19 @@ void EditorShell::runFrame() {
       renderPaneSize = Vector2d(centralNode->Size.x, centralNode->Size.y);
     }
   }
-  interactionController_.updatePaneLayout(renderPaneOrigin, renderPaneSize, documentViewBoxCache_,
+  const std::optional<Box2d> documentViewBox =
+      app_.hasDocument()
+          ? ResolveDocumentViewBoxForFrame(app_.document().document(),
+                                           renderCoordinator_.asyncRenderer().isBusy())
+          : std::nullopt;
+  interactionController_.updatePaneLayout(renderPaneOrigin, renderPaneSize, documentViewBox,
                                           /*preservePaneCenterDocumentPoint=*/true);
   markPhase(mainFrameCost.layoutMs);
 
   handleGlobalShortcuts();
   markPhase(mainFrameCost.shortcutsMs);
 
-  const bool rendererIdle = !renderCoordinator_.asyncRenderer().isBusy();
-  MenuBarState menuState{
-      .sourcePaneFocused = !compactUi && sourcePaneVisible_ && textEditor_.isFocused(),
-      .canSave = app_.hasDocument(),
-      .canRevert = app_.hasDocument() && app_.isDirty() && !app_.cleanSourceText().empty(),
-      .canUndo = app_.canUndo(),
-      .canRedo = app_.canRedo(),
-      .sourceFocusMode = sourceFocusMode_,
-      .hasShapeSelection = app_.hasSelection(),
-      .hasShapeClipboard = shapeClipboard_ != nullptr && shapeClipboard_->hasText(),
-      .hasTextSelection = selectionIsAllText(),
-      .canGroup = rendererIdle && app_.groupSelectionAvailability().canApply,
-      .canUngroup = rendererIdle && app_.ungroupSelectionAvailability().canApply,
-      .hasSelectableElements = canvasHasSelectableElements(),
-      .showCompositorDebugPanel = showCompositorDebugPanel_,
-      .compositorTileOverlay = compositorTileOverlay_,
-      .geometryDebugOverlay = geometryDebugOverlay_,
-      .perfOverlayMode = perfOverlayMode_,
-      .panelLayoutLocked = dockLayoutLocked_,
-  };
-  MenuBarActions menuActions;
-  if (compactUi) {
-    renderCompactTopBar();
-  } else {
-    menuActions = menuBarPresenter_.render(menuState, uiFontBold_);
-  }
-  applyMenuActions(menuActions);
-
-  // On macOS, service any pending open/save with a native OS panel; this
-  // consumes the request so the ImGui modal below stays closed. On other
-  // platforms it is a no-op and the ImGui modal renders as before.
-  serviceNativeDialogs();
-  dialogPresenter_.render(
-      [this](std::string_view path, std::string* error) { return tryOpenPath(path, error); },
-      [this](std::string_view path, std::string* error) {
-        return pendingViewportExport_ ? tryExportViewportSvgToPath(path, error)
-                                      : trySavePath(path, error);
-      });
+  renderMenuBarAndDialogs(compactUi);
   markPhase(mainFrameCost.menusDialogsMs);
 
   std::ignore = highlightSelectionSourceIfNeeded();
@@ -5828,53 +6822,10 @@ void EditorShell::runFrame() {
                        ImVec2(static_cast<float>(windowSize.x), paneHeight));
   }
   markPhase(mainFrameCost.splittersMs);
-  if (requestRenderAtEndOfFrame_) {
-    if (!app_.hasDocument()) {
-      requestRenderAtEndOfFrame_ = false;
-    } else if (penDragFlushedThisFrame_) {
-      // An actively-moving pen drag flushed new path geometry this frame. The
-      // live preview already presents that geometry, so skip the async render
-      // request: keeping the worker idle guarantees the next drag frame's
-      // flush is never blocked behind a busy render (the source of pen-drag
-      // frame stutter). The request flag stays set and fires on the first
-      // frame the pointer pauses; wake the loop so that frame happens even
-      // without further input.
-      window_.wakeEventLoop();
-    } else if (!renderCoordinator_.asyncRenderer().isBusy()) {
-      renderCoordinator_.maybeRequestRender(app_, selectTool_, interactionController_.viewport(),
-                                            &textures_);
-      requestRenderAtEndOfFrame_ = false;
-    } else {
-      window_.wakeEventLoop();
-    }
-  }
+  applyDeferredRenderRequest();
   penDragFlushedThisFrame_ = false;
   markPhase(mainFrameCost.endRenderRequestMs);
-  FrameCostBreakdown frameCost = renderCoordinator_.lastFrameCostBreakdown();
-  const gui::EditorWindowFrameTiming& hostEndFrameTiming = window_.lastEndFrameTiming();
-  frameCost.mainFrame = mainFrameCost;
-  frameCost.hostFrame = FrameCostBreakdown::HostFrame{
-      .beginFrameMs = window_.lastBeginFrameMs(),
-      .previousEndFrameMs = hostEndFrameTiming.endFrameMs,
-      .previousImguiRenderMs = hostEndFrameTiming.imguiRenderMs,
-      .previousSurfaceAcquireMs = hostEndFrameTiming.surfaceAcquireMs,
-      .previousUnderlayMs = hostEndFrameTiming.underlayMs,
-      .previousImguiDrawMs = hostEndFrameTiming.imguiDrawMs,
-      .previousDirectMs = hostEndFrameTiming.directMs,
-      .previousReadbackMs = hostEndFrameTiming.readbackMs,
-      .previousPresentMs = hostEndFrameTiming.presentMs,
-  };
-  frameCost.directPresentation = directPresentationCost;
-  if (sourcePaneVisible_) {
-    frameCost.sourceRopes = textEditor_.lastSourceRopeCost();
-  }
-  latestFrameCostForReadback_ = frameCost;
-  interactionController_.frameHistory().setLatestFrameCost(frameCost);
-  const PresentationResourceStats presentationResources = textures_.presentationResourceStats();
-  interactionController_.frameHistory().setLatestMemorySample(
-      MemorySampleFromPresentationResources(presentationResources));
-  maybeLogFrameMissTelemetry(frameCost);
-  maybeLogResourceDiagnostics(frameCost);
+  recordFrameTelemetry(mainFrameCost, directPresentationCost);
   contentOnlyCaptureThisFrame_ = false;
 }
 
@@ -5888,12 +6839,13 @@ std::string_view TextToolHintLabel(bool isEditing, bool isDraggingBox, bool touc
                         : "Double-click to place text. Drag to draw a text box.";
 }
 
-PendingClickBusyAction PendingClickBusyActionForState(bool tookFastRedrag, bool rendererBusy) {
+PendingClickBusyAction PendingClickBusyActionForState(bool tookFastRedrag,
+                                                      bool documentWriteUnavailable) {
   if (tookFastRedrag) {
     return PendingClickBusyAction::CompleteFastRedrag;
   }
 
-  if (rendererBusy) {
+  if (documentWriteUnavailable) {
     return PendingClickBusyAction::CancelBusyRender;
   }
 

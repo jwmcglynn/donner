@@ -891,4 +891,123 @@ ToolCallResult EditorControlSession::transformSelector(const json& arguments) {
   return out;
 }
 
+ToolCallResult EditorControlSession::pointerGesture(const json& arguments) {
+  std::string error;
+  if (!ensureDocumentLoaded(&error)) {
+    return MakeErrorResult(error);
+  }
+  (void)drainPendingWritebacks();
+
+  double startX = 0.0;
+  double startY = 0.0;
+  int requestedFrames = 1;
+  int clickCount = 1;
+  int requestedIdleFrames = 0;
+  bool shift = false;
+  bool option = false;
+  bool renderAfterGesture = false;
+  CaptureOptions capture;
+  if (!ReadOptionalDouble(arguments, "start_x", 0.0, &startX, &error) ||
+      !ReadOptionalDouble(arguments, "start_y", 0.0, &startY, &error) ||
+      !ReadOptionalInt(arguments, "frames", 1, &requestedFrames, &error) ||
+      !ReadOptionalInt(arguments, "click_count", 1, &clickCount, &error) ||
+      !ReadOptionalInt(arguments, "idle_frames", 0, &requestedIdleFrames, &error) ||
+      !ReadOptionalBool(arguments, "shift", false, &shift, &error) ||
+      !ReadOptionalBool(arguments, "option", false, &option, &error) ||
+      !ReadOptionalBool(arguments, "render_after_gesture", false, &renderAfterGesture, &error) ||
+      !ReadCaptureOptions(arguments, false, &capture, &error)) {
+    return MakeErrorResult(error);
+  }
+
+  double endX = startX;
+  double endY = startY;
+  if (!ReadOptionalDouble(arguments, "end_x", startX, &endX, &error) ||
+      !ReadOptionalDouble(arguments, "end_y", startY, &endY, &error)) {
+    return MakeErrorResult(error);
+  }
+  if (clickCount < 1 || clickCount > 2) {
+    return MakeErrorResult("click_count must be 1 or 2");
+  }
+
+  const Vector2d start(startX, startY);
+  const Vector2d end(endX, endY);
+  const bool dragging = end != start;
+  if (dragging && clickCount != 1) {
+    return MakeErrorResult("a drag requires click_count=1");
+  }
+
+  const int frames = std::clamp(requestedFrames, 1, kMaxDragFrames);
+  const int idleFrames = std::clamp(requestedIdleFrames, 0, kMaxDragFrames);
+  MouseModifiers modifiers;
+  modifiers.shift = shift;
+  modifiers.option = option;
+  modifiers.pixelsPerDocUnit = std::max(currentReproViewport().zoom, 1e-9);
+  const int modifierMask = ModifierMaskFromMouseModifiers(modifiers);
+
+  for (int click = 0; click < clickCount; ++click) {
+    modifiers.doubleClick = click > 0;
+    replayMouseDown(start, modifiers);
+    repro::ReproEvent mouseDown;
+    mouseDown.kind = repro::ReproEvent::Kind::MouseDown;
+    mouseDown.mouseButton = 0;
+    mouseDown.modifiers = modifierMask;
+    appendRnrFrame(start, /*mouseButtonMask=*/1, modifierMask, {mouseDown});
+
+    if (dragging) {
+      for (int frame = 1; frame <= frames; ++frame) {
+        const double t = static_cast<double>(frame) / static_cast<double>(frames);
+        const Vector2d point = start + (end - start) * t;
+        replayMouseMove(point, /*buttonHeld=*/true, modifiers);
+        appendRnrFrame(point, /*mouseButtonMask=*/1, modifierMask, {});
+      }
+    }
+
+    replayMouseUp(end);
+    repro::ReproEvent mouseUp;
+    mouseUp.kind = repro::ReproEvent::Kind::MouseUp;
+    mouseUp.mouseButton = 0;
+    mouseUp.modifiers = modifierMask;
+    appendRnrFrame(end, /*mouseButtonMask=*/0, modifierMask, {mouseUp});
+  }
+
+  for (int frame = 0; frame < idleFrames; ++frame) {
+    appendRnrFrame(end, /*mouseButtonMask=*/0, modifierMask, {});
+  }
+
+  (void)app_.flushFrame();
+  syncSourceTextFromDocumentIfChanged();
+
+  std::string activeTool;
+  switch (activeReplayTool_) {
+    case ActiveReplayTool::Select: activeTool = "select"; break;
+    case ActiveReplayTool::Pen: activeTool = "pen"; break;
+    case ActiveReplayTool::Text: activeTool = "text"; break;
+  }
+
+  ToolCallResult out;
+  out.body = json{
+      {"ok", true},
+      {"active_tool", activeTool},
+      {"start_doc", VectorToJson(start)},
+      {"end_doc", VectorToJson(end)},
+      {"click_count", clickCount},
+      {"drag_frames", dragging ? frames : 0},
+      {"idle_frames", idleFrames},
+      {"text_editing", textTool_.isEditing()},
+      {"text_caret_index", textTool_.isEditing() ? json(textTool_.caretIndex()) : json(nullptr)},
+      {"selection", selectedElementJson()},
+      {"source", sourceStateJson()},
+  };
+
+  if (renderAfterGesture) {
+    std::vector<CapturedRenderResult> renderResults;
+    if (!renderCurrentFrame(&renderResults, &error)) {
+      return MakeErrorResult(error);
+    }
+    out.body["render_stages"] = RenderResultsJson(renderResults, &out, capture, "pointer_gesture");
+  }
+  out.body["attached_image_count"] = out.images.size();
+  return out;
+}
+
 }  // namespace donner::editor::mcp

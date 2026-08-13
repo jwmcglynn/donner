@@ -34,14 +34,11 @@
       ]
     },
     "donner/editor/CompositorDebugPanel.h": {
-      "sha256": "579b48222a1976e06da737891a69734979867611d6180b9ebdbfcf56ef133675",
+      "sha256": "bb9099f2e8029d105e3f884c98092f2d381f1666c4e7724c3ebf54d2c75b7c7c",
       "usesEditorWgpuDefine": true
     },
     "donner/editor/EditorShell.cc": {
-      "operations": [
-        "draw"
-      ],
-      "sha256": "fbd08d139c1d95b13b02a641961242596530393309a0466fa71f599bc12bb7d0",
+      "sha256": "492239aa45c280a61ac886961f6782d322d1a279b4bb0211b88883e58b49d6e2",
       "usesEditorWgpuDefine": true,
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
@@ -49,7 +46,7 @@
       ]
     },
     "donner/editor/EditorShell.h": {
-      "sha256": "594dce529d956a66ab56673662d3634cba41a41c84bfa92d036b9dc9299509c8",
+      "sha256": "2c08b80518582868d0141cb7b46831c7b15c412d8a929e7b2552611ab6de0440",
       "usesEditorWgpuDefine": true
     },
     "donner/editor/EditorShellPresentation.cc": {
@@ -67,7 +64,7 @@
         "submit",
         "writeBuffer"
       ],
-      "sha256": "8f206c561c28ac53625d6a5b1022583bc1b95f11d1572cb6b1987941d5380109",
+      "sha256": "8594709d03ddaa48801f87010e234476d4af0293e93871832f139e1a5ecff887",
       "usesEditorWgpuDefine": true,
       "wgpuCFunctions": [
         "wgpuLabel"
@@ -90,7 +87,7 @@
       ]
     },
     "donner/editor/EditorShellPresentation.h": {
-      "sha256": "cfce0bc97258101837aca304e9558495bf8099a106bc5e0a9294a57865cb1068",
+      "sha256": "a83a7359dc85093231891ef5f59779f07e235d1489feec1267f0ac5684805b13",
       "usesEditorWgpuDefine": true,
       "wgpuCppTokens": [
         "BindGroup",
@@ -98,14 +95,14 @@
       ]
     },
     "donner/editor/FrameMissTelemetry.cc": {
-      "sha256": "a62af66ece2bb3cd340557691cd29efe56e13163eb940adf4ad2c152ccac39e8",
+      "sha256": "147d4c33e2fafffcdf436296fcf0125eea4dbd73ddf5a5c86c496a7c2dc272d4",
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
         "wgpuLifetimeTextureCreates"
       ]
     },
     "donner/editor/FrameMissTelemetry.h": {
-      "sha256": "0e4de260e4e544f75ad93eb3501ffd8d22306ef10a828abe048db6fc40afa159",
+      "sha256": "810edf8ed7ec557ef64c5ca4b36abe6538819e4ade1c6ac20218ee8baad45342",
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
         "wgpuLifetimeTextureCreates"
@@ -119,10 +116,9 @@
       ],
       "operations": [
         "createTexture",
-        "createView",
         "writeTexture"
       ],
-      "sha256": "a4ff09ecb143e258b403e38c3a05f10d72da002365dcbf89f88ccb4fce829607",
+      "sha256": "118365dea85808825d6f2ed9f370b763bbcb5a338f7240375c8cce1822075af1",
       "usesEditorWgpuDefine": true,
       "wgpuCFunctions": [
         "wgpuLabel",
@@ -146,7 +142,7 @@
       ]
     },
     "donner/editor/GlTextureCache.h": {
-      "sha256": "90e6b51e6e8afd32191b6eaa9c79f6e943800db36a9cf4bd653c5ae0f9d6578d",
+      "sha256": "bce74359b8e0e1f48dc57972114dbb5456dda3af7eb7e2b70f106d3c360ae6fe",
       "usesEditorWgpuDefine": true,
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
@@ -158,10 +154,22 @@
       "usesEditorWgpuDefine": true
     },
     "donner/editor/ViewportInteractionController.h": {
-      "sha256": "f68976c751485abeaaee96c0272424c6d0a666434d1422ad32f8117c87ea1df0",
+      "sha256": "ad9feddb75d2ded81a8a31c156c0f5d9d22b11104683710e494d9de7732d98db",
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
         "wgpuLifetimeTextureCreates"
+      ]
+    },
+    "donner/editor/WholeAppWorkerBridge.cc": {
+      "sha256": "bb49c45dfce557daf70c03fbe8ca260e14dd14303053022d307505ca90f7ba24",
+      "wgpuCFunctions": [
+        "wgpuReadbackStats"
+      ]
+    },
+    "donner/editor/WholeAppWorkerBridge.h": {
+      "sha256": "b12e5462ae34a4ed2adca43ca95b84767c62c79abf0f82d2447e3ddd77667fc0",
+      "wgpuCFunctions": [
+        "wgpuReadbackStats"
       ]
     },
     "donner/editor/gui/EditorWgpuSurface.h": {
@@ -215,12 +223,13 @@
         "mapAsync",
         "poll",
         "present",
+        "release",
         "requestAdapter",
         "requestDevice",
         "submit",
         "unmap"
       ],
-      "sha256": "e9c34530878e3f3af813a346fe2ecebdce59feb21d4bb05825686e01b7cf3602",
+      "sha256": "316afc64cffe87671b4951672e28d6df15d60d22031c09322259d9b69bcc8f46",
       "usesEditorWgpuDefine": true,
       "wgpuCFunctions": [
         "wgpuCreateInstance",
@@ -243,8 +252,11 @@
         "WGPUMapAsyncStatus_Success",
         "WGPUStringView",
         "WGPUSurfaceDescriptor",
+        "WGPUSurfaceGetCurrentTextureStatus_Lost",
+        "WGPUSurfaceGetCurrentTextureStatus_Outdated",
         "WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal",
         "WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal",
+        "WGPUSurfaceGetCurrentTextureStatus_Timeout",
         "WGPUTextureFormat",
         "WGPUTextureFormat_BGRA8Unorm",
         "WGPUTextureFormat_RGBA8Unorm",
@@ -266,8 +278,6 @@
         "Device",
         "DeviceDescriptor",
         "Extent3D",
-        "Future",
-        "FutureWaitInfo",
         "Instance",
         "InstanceDescriptor",
         "LoadOp",
@@ -292,12 +302,11 @@
         "TextureFormat",
         "TextureUsage",
         "TextureView",
-        "WaitStatus",
         "createInstance"
       ]
     },
     "donner/editor/gui/EditorWindow.h": {
-      "sha256": "56f6c42fe05558c30cd17ad0564dd69a04e0cc979d97ef65e82202757cb2aad6",
+      "sha256": "e14569b08410ce72223883b3d9cc06103e14c64dd7fa671bfb74ba0cba1d3e45",
       "usesEditorWgpuDefine": true,
       "wgpuCFunctions": [
         "wgpuDirectRenderCallback_",
@@ -309,18 +318,22 @@
       ]
     },
     "donner/editor/tests/EditorRnrGlReplay.cc": {
-      "sha256": "a436eac4e5c755e761a65d515ce2fbb4551f0e11ef079401c3f21b6117a35724",
+      "sha256": "653a1234f483ccc371e538469921c7d86c453902b1890ced14a0a8ac4b500c8b",
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
         "wgpuLifetimeTextureCreates"
       ]
     },
     "donner/editor/tests/EditorShell_tests.cc": {
-      "sha256": "70f4f5ee031f22342db7fd145a48a9e1f2a31abad6ccb0e63210e215e50f9e1f",
+      "sha256": "cfdbf5a296702330c33d36b2810793ec103e7f7cbaa3667c48943039908a40a3",
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
         "wgpuLifetimeTextureCreates"
       ]
+    },
+    "donner/editor/tests/EditorWindowOffscreenTarget_tests.cc": {
+      "sha256": "fecbefe2fb233b4ac3e624173f03b60c2f21315ddfea6d7b41f60c0145fe738d",
+      "usesEditorWgpuDefine": true
     },
     "donner/editor/tests/EditorWindow_tests.cc": {
       "imguiWgpuTokens": [
@@ -331,7 +344,7 @@
       "operations": [
         "draw"
       ],
-      "sha256": "438b9c68a747a4b0086ff14a3a00738ce44114c8e6e18a20f3572acc9f22b0bb",
+      "sha256": "3e3c802b81473606bc44ccded06402ca177183e1b8073c9bcbc5fb964dda7d71",
       "usesEditorWgpuDefine": true,
       "wgpuCTypes": [
         "WGPUTextureView"
@@ -347,7 +360,7 @@
       "operations": [
         "createTexture"
       ],
-      "sha256": "9cc6cc67790eb2e0a605496c9834eb6624306e049dd40db6a9a2ccb93b065e26",
+      "sha256": "c6254f760545a5bd2272007d34e07b38f4ac7c2818a4c39f6585b5678df105e5",
       "usesEditorWgpuDefine": true,
       "wgpuCppTokens": [
         "Texture",
@@ -358,11 +371,11 @@
       ]
     },
     "donner/editor/tests/LayersPanel_tests.cc": {
-      "sha256": "4072d66276e3c02ff6e1d10059e5b6edee02944cef5ef7cdcaa203c7ea705f29",
+      "sha256": "89b9e977921a06ea3ee509d64f3ed113ebf664b58cb810483aeadc80bfed350f",
       "usesEditorWgpuDefine": true
     },
     "donner/editor/tests/ViewportInteractionController_tests.cc": {
-      "sha256": "0d1f4a03dfa99511979f64c66ba3f1617ab30a588b432a59e773824363b34e91",
+      "sha256": "0384202414354620d67f8451a32bc3af93bbd452a5fe73bf14192298f0844353",
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
         "wgpuLifetimeTextureCreates"

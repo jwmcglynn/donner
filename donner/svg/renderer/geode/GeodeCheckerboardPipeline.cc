@@ -15,6 +15,8 @@ struct Params {
   checker_size: f32,
   dark_color: vec4<f32>,
   light_color: vec4<f32>,
+  origin_offset: vec2<f32>,
+  padding: vec2<f32>,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -31,9 +33,17 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> @builtin(position) vec4<
 
 @fragment
 fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
-  let screen = min(position.xy, params.target_size) / max(params.device_pixel_ratio, 0.0001);
+  // `origin_offset` shifts the pattern's anchor away from the target's top-left
+  // so a target that is itself placed somewhere on screen (a worker-owned
+  // document surface) can pin the same cells the window-anchored desktop
+  // underlay would have drawn there.
+  let anchored = min(position.xy, params.target_size) + params.origin_offset;
+  let screen = anchored / max(params.device_pixel_ratio, 0.0001);
   let cell = vec2<i32>(floor(screen / vec2<f32>(params.checker_size, params.checker_size)));
-  if ((cell.x + cell.y) % 2 == 0) {
+  // Bitwise parity, not `% 2`: a negative offset produces negative cell indices
+  // and WGSL's `%` keeps the sign, so `(-1) % 2 == -1` would break the
+  // alternation at the anchor boundary.
+  if (((cell.x + cell.y) & 1) == 0) {
     return params.light_color;
   }
 
@@ -44,7 +54,8 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
 }  // namespace
 
 GeodeCheckerboardPipeline::GeodeCheckerboardPipeline(const wgpu::Device& device,
-                                                     wgpu::TextureFormat colorFormat) {
+                                                     wgpu::TextureFormat colorFormat,
+                                                     BlendMode blendMode) {
   wgpu::BindGroupLayoutEntry layoutEntry = {};
   layoutEntry.binding = 0;
   layoutEntry.visibility = wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment;
@@ -83,9 +94,25 @@ GeodeCheckerboardPipeline::GeodeCheckerboardPipeline(const wgpu::Device& device,
     return;
   }
 
+  // `result = dst + src * (1 - dst.alpha)` on both color and alpha. The shader
+  // emits an opaque checker color, so fully-transparent destination pixels take
+  // the checker outright, fully-opaque ones are untouched, and partially
+  // transparent premultiplied content blends over it exactly as `destination-
+  // over` does in Canvas2D / Skia.
+  wgpu::BlendState destinationOver = {};
+  destinationOver.color.operation = wgpu::BlendOperation::Add;
+  destinationOver.color.srcFactor = wgpu::BlendFactor::OneMinusDstAlpha;
+  destinationOver.color.dstFactor = wgpu::BlendFactor::One;
+  destinationOver.alpha.operation = wgpu::BlendOperation::Add;
+  destinationOver.alpha.srcFactor = wgpu::BlendFactor::OneMinusDstAlpha;
+  destinationOver.alpha.dstFactor = wgpu::BlendFactor::One;
+
   wgpu::ColorTargetState colorTarget = {};
   colorTarget.format = colorFormat;
   colorTarget.writeMask = wgpu::ColorWriteMask::All;
+  if (blendMode == BlendMode::DestinationOver) {
+    colorTarget.blend = &destinationOver;
+  }
 
   wgpu::FragmentState fragmentState = {};
   fragmentState.module = shader.get();

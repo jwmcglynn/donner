@@ -1286,15 +1286,31 @@ bool EditorControlSession::setActiveToolForReplay(std::string_view tool, std::st
       (void)app_.flushFrame();
       syncSourceTextFromDocumentIfChanged();
     }
+    if (activeReplayTool_ == ActiveReplayTool::Text && textTool_.commit(app_)) {
+      (void)app_.flushFrame();
+      syncSourceTextFromDocumentIfChanged();
+    }
     activeReplayTool_ = ActiveReplayTool::Select;
     return true;
   }
   if (tool == "pen") {
+    if (activeReplayTool_ == ActiveReplayTool::Text && textTool_.commit(app_)) {
+      (void)app_.flushFrame();
+      syncSourceTextFromDocumentIfChanged();
+    }
     activeReplayTool_ = ActiveReplayTool::Pen;
     return true;
   }
+  if (tool == "text") {
+    if (activeReplayTool_ == ActiveReplayTool::Pen && penTool_.commitOpenPath(app_)) {
+      (void)app_.flushFrame();
+      syncSourceTextFromDocumentIfChanged();
+    }
+    activeReplayTool_ = ActiveReplayTool::Text;
+    return true;
+  }
 
-  *error = "tool must be 'select' or 'pen'";
+  *error = "tool must be 'select', 'pen', or 'text'";
   return false;
 }
 
@@ -1335,6 +1351,8 @@ void EditorControlSession::replayMouseDown(const Vector2d& documentPoint,
                                            MouseModifiers modifiers) {
   if (activeReplayTool_ == ActiveReplayTool::Pen) {
     penTool_.onMouseDown(app_, documentPoint, modifiers);
+  } else if (activeReplayTool_ == ActiveReplayTool::Text) {
+    textTool_.onMouseDown(app_, documentPoint, modifiers);
   } else {
     selectTool_->onMouseDown(app_, documentPoint, modifiers);
   }
@@ -1344,6 +1362,8 @@ void EditorControlSession::replayMouseMove(const Vector2d& documentPoint, bool b
                                            MouseModifiers modifiers) {
   if (activeReplayTool_ == ActiveReplayTool::Pen) {
     penTool_.onMouseMove(app_, documentPoint, buttonHeld, modifiers);
+  } else if (activeReplayTool_ == ActiveReplayTool::Text) {
+    textTool_.onMouseMove(app_, documentPoint, buttonHeld);
   } else {
     selectTool_->onMouseMove(app_, documentPoint, buttonHeld, modifiers);
   }
@@ -1352,6 +1372,8 @@ void EditorControlSession::replayMouseMove(const Vector2d& documentPoint, bool b
 void EditorControlSession::replayMouseUp(const Vector2d& documentPoint) {
   if (activeReplayTool_ == ActiveReplayTool::Pen) {
     penTool_.onMouseUp(app_, documentPoint);
+  } else if (activeReplayTool_ == ActiveReplayTool::Text) {
+    textTool_.onMouseUp(app_, documentPoint);
   } else {
     selectTool_->onMouseUp(app_, documentPoint);
   }

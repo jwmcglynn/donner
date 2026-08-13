@@ -63,6 +63,14 @@ svg::PaintParams MakeSelectionStrokePaint(double worldStrokeWidth, double opacit
   return paint;
 }
 
+svg::PaintParams MakeTextSelectionFillPaint() {
+  svg::PaintParams paint;
+  paint.fill = svg::PaintServer::Solid(css::Color(EditorTheme::Active().selectionRgba(0x55)));
+  paint.stroke = svg::PaintServer::None{};
+  paint.fillOpacity = 1.0;
+  return paint;
+}
+
 svg::PaintParams MakePathControlLinePaint(double worldStrokeWidth) {
   svg::PaintParams paint;
   paint.fill = svg::PaintServer::None{};
@@ -190,6 +198,38 @@ Box2d PointBoxForDevicePixels(const Vector2d& centerDoc, double sizeDevicePixels
   return Box2d(centerDoc - halfSize, centerDoc + halfSize);
 }
 
+/// Chrome sizes resolved against the transform the chrome is being drawn with.
+/// Every value is a logical-pixel constant converted into document units, so
+/// the same snapshot drawn at a different zoom keeps its on-screen size.
+struct ChromeDrawScale {
+  double canvasScale = 1.0;
+  double selectionStrokeWidthWorld = 0.0;
+  double hoverStrokeWidthWorld = 0.0;
+  double marqueeStrokeWidthWorld = 0.0;
+  double pathAnchorSizeDevicePixels = 0.0;
+  double pathControlPointSizeDevicePixels = 0.0;
+};
+
+ChromeDrawScale ChromeDrawScaleFor(const Transform2d& canvasFromDoc, double devicePixelRatio) {
+  const double scale = LinearScale(canvasFromDoc);
+  const auto pixelToWorld = [scale](double pixels) {
+    return scale > 1e-9 ? pixels / scale : pixels;
+  };
+  return ChromeDrawScale{
+      .canvasScale = scale,
+      .selectionStrokeWidthWorld = pixelToWorld(
+          DevicePixelsForLogicalPixels(kSelectionStrokeLogicalPixels, devicePixelRatio)),
+      .hoverStrokeWidthWorld =
+          pixelToWorld(DevicePixelsForLogicalPixels(kHoverStrokeLogicalPixels, devicePixelRatio)),
+      .marqueeStrokeWidthWorld =
+          pixelToWorld(DevicePixelsForLogicalPixels(kMarqueeStrokeLogicalPixels, devicePixelRatio)),
+      .pathAnchorSizeDevicePixels =
+          DevicePixelsForLogicalPixels(kPathAnchorLogicalPixels, devicePixelRatio),
+      .pathControlPointSizeDevicePixels =
+          DevicePixelsForLogicalPixels(kPathControlPointLogicalPixels, devicePixelRatio),
+  };
+}
+
 std::array<Vector2d, 4> TransformedBoxCorners(const Box2d& box,
                                               const Transform2d& documentFromBoxDocument) {
   const std::array<Vector2d, 4> corners{
@@ -296,23 +336,26 @@ void AddBoxToOptional(std::optional<Box2d>* target, const Box2d& box) {
 
 void AppendPathPointChrome(
     const Path& pathDoc, double canvasScale, double devicePixelRatio,
-    const std::optional<Box2d>& cullRectDoc, std::vector<Box2d>* outPathAnchorBoxes,
+    const std::optional<Box2d>& cullRectDoc, std::vector<Vector2d>* outPathAnchorPoints,
     std::vector<SelectionChromeSnapshot::PathControlLine>* outPathControlLines,
-    std::vector<Box2d>* outPathControlPointBoxes) {
+    std::vector<Vector2d>* outPathControlPoints) {
   const double anchorSizeDevicePixels =
       DevicePixelsForLogicalPixels(kPathAnchorLogicalPixels, devicePixelRatio);
   const double controlPointSizeDevicePixels =
       DevicePixelsForLogicalPixels(kPathControlPointLogicalPixels, devicePixelRatio);
 
-  auto appendPointBox = [&](std::vector<Box2d>* boxes, const Vector2d& pointDoc,
-                            double sizeDevicePixels) {
-    if (boxes == nullptr) {
+  // Culling uses the capture-time square footprint; the drawn square is sized
+  // from the draw transform, but the two differ only by the zoom delta between
+  // capture and draw, which is far below the cull rect's screen-space margin.
+  auto appendPoint = [&](std::vector<Vector2d>* points, const Vector2d& pointDoc,
+                         double sizeDevicePixels) {
+    if (points == nullptr) {
       return;
     }
 
     const Box2d box = PointBoxForDevicePixels(pointDoc, sizeDevicePixels, canvasScale);
     if (BoxIntersectsCullRect(box, cullRectDoc)) {
-      boxes->push_back(box);
+      points->push_back(pointDoc);
     }
   };
 
@@ -341,10 +384,10 @@ void AppendPathPointChrome(
         subpathStartDoc = points[0];
         hasCurrentPoint = true;
         hasSubpathStart = true;
-        appendPointBox(outPathAnchorBoxes, points[0], anchorSizeDevicePixels);
+        appendPoint(outPathAnchorPoints, points[0], anchorSizeDevicePixels);
         break;
       case Path::Verb::LineTo:
-        appendPointBox(outPathAnchorBoxes, points[0], anchorSizeDevicePixels);
+        appendPoint(outPathAnchorPoints, points[0], anchorSizeDevicePixels);
         currentPointDoc = points[0];
         hasCurrentPoint = true;
         break;
@@ -353,8 +396,8 @@ void AppendPathPointChrome(
           appendControlLine(currentPointDoc, points[0]);
           appendControlLine(points[1], points[0]);
         }
-        appendPointBox(outPathControlPointBoxes, points[0], controlPointSizeDevicePixels);
-        appendPointBox(outPathAnchorBoxes, points[1], anchorSizeDevicePixels);
+        appendPoint(outPathControlPoints, points[0], controlPointSizeDevicePixels);
+        appendPoint(outPathAnchorPoints, points[1], anchorSizeDevicePixels);
         currentPointDoc = points[1];
         hasCurrentPoint = true;
         break;
@@ -363,9 +406,9 @@ void AppendPathPointChrome(
           appendControlLine(currentPointDoc, points[0]);
           appendControlLine(points[2], points[1]);
         }
-        appendPointBox(outPathControlPointBoxes, points[0], controlPointSizeDevicePixels);
-        appendPointBox(outPathControlPointBoxes, points[1], controlPointSizeDevicePixels);
-        appendPointBox(outPathAnchorBoxes, points[2], anchorSizeDevicePixels);
+        appendPoint(outPathControlPoints, points[0], controlPointSizeDevicePixels);
+        appendPoint(outPathControlPoints, points[1], controlPointSizeDevicePixels);
+        appendPoint(outPathAnchorPoints, points[2], anchorSizeDevicePixels);
         currentPointDoc = points[2];
         hasCurrentPoint = true;
         break;
@@ -447,19 +490,19 @@ void AppendTextBaselines(const svg::SVGTextElement& text,
 std::optional<Box2d> AppendChromeItems(
     std::span<const svg::SVGElement> elements, const std::optional<Box2d>& cullRectDoc,
     std::vector<SelectionChromeSnapshot::PathItem>* outPaths, std::vector<Box2d>* outAabbs,
-    std::vector<Box2d>* outPathAnchorBoxes,
+    std::vector<Vector2d>* outPathAnchorPoints,
     std::vector<SelectionChromeSnapshot::PathControlLine>* outPathControlLines,
-    std::vector<Box2d>* outPathControlPointBoxes,
+    std::vector<Vector2d>* outPathControlPoints,
     std::vector<SelectionChromeSnapshot::TextBaseline>* outTextBaselines = nullptr,
     AppendChromeItemsOptions options = {}) {
   std::optional<Box2d> combinedBounds;
   for (const auto& element : elements) {
-    element.withWriteAccess([&element, &cullRectDoc, outPaths, outAabbs, outPathAnchorBoxes,
-                             outPathControlLines, outPathControlPointBoxes, outTextBaselines,
-                             options, &combinedBounds](svg::DocumentWriteAccess&, EntityHandle) {
+    element.withWriteAccess([&element, &cullRectDoc, outPaths, outAabbs, outPathAnchorPoints,
+                             outPathControlLines, outPathControlPoints, outTextBaselines, options,
+                             &combinedBounds](svg::DocumentWriteAccess&, EntityHandle) {
       std::optional<Box2d> mergedBounds;
       for (const auto& geometry : CollectRenderableGeometry(element)) {
-        const std::optional<Box2d> worldBoundsDoc = geometry.worldBounds();
+        const std::optional<Box2d> worldBoundsDoc = GeometryWorldFrameBounds(geometry);
         const std::optional<Box2d> representedBoundsDoc =
             worldBoundsDoc.has_value()
                 ? std::make_optional(
@@ -487,15 +530,15 @@ std::optional<Box2d> AppendChromeItems(
           item.displayNone = HasDisplayNoneInAncestorChain(geometry);
           if (options.includePathPointChrome && geometry.isa<svg::SVGPathElement>()) {
             AppendPathPointChrome(item.pathDoc, options.canvasScale, options.devicePixelRatio,
-                                  cullRectDoc, outPathAnchorBoxes, outPathControlLines,
-                                  outPathControlPointBoxes);
+                                  cullRectDoc, outPathAnchorPoints, outPathControlLines,
+                                  outPathControlPoints);
           }
           outPaths->push_back(std::move(item));
         }
       }
 
       // Text roots have no spline outline; they contribute their frame - the
-      // authored text box for box text, or the laid-out ink bounds for point
+      // authored text box for box text, or the full laid-out bounds for point
       // text - so text gets the same selection rectangle + transform handles
       // as shapes, plus a baseline underlay segment per line.
       for (const auto& text : CollectRenderableTextRoots(element)) {
@@ -599,12 +642,26 @@ std::optional<SelectionChromeSnapshot::LivePathPreview> CaptureLivePathPreview(
   });
 }
 
-void CullBoxesInPlace(std::vector<Box2d>* boxes, const std::optional<Box2d>& cullRectDoc) {
+/// Drop handle anchors whose capture-time square footprint misses the cull rect.
+void CullHandleAnchorsInPlace(std::vector<Vector2d>* anchors, double canvasScale,
+                              const std::optional<Box2d>& cullRectDoc) {
   if (!cullRectDoc.has_value()) {
     return;
   }
 
-  std::erase_if(*boxes, [&](const Box2d& box) { return !BoxesIntersect(box, *cullRectDoc); });
+  std::erase_if(*anchors, [&](const Vector2d& anchorDoc) {
+    return !BoxesIntersect(HandleBoxForCorner(anchorDoc, canvasScale), *cullRectDoc);
+  });
+}
+
+/// The four corner points of @p bounds, in the handle order the chrome draws.
+std::vector<Vector2d> SelectionTransformCornerPoints(const Box2d& boundsDoc) {
+  return {
+      boundsDoc.topLeft,
+      Vector2d(boundsDoc.bottomRight.x, boundsDoc.topLeft.y),
+      boundsDoc.bottomRight,
+      Vector2d(boundsDoc.topLeft.x, boundsDoc.bottomRight.y),
+  };
 }
 
 std::optional<SelectionChromeSnapshot::OrientedBox> CullOrientedBox(
@@ -688,8 +745,8 @@ SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
     std::vector<Box2d> flashAabbs;
     std::array<svg::SVGElement, 1> flashElements{lockedFlash->element};
     AppendChromeItems(std::span<const svg::SVGElement>(flashElements), /*cullRectDoc=*/std::nullopt,
-                      &flashPaths, &flashAabbs, /*outPathAnchorBoxes=*/nullptr,
-                      /*outPathControlLines=*/nullptr, /*outPathControlPointBoxes=*/nullptr,
+                      &flashPaths, &flashAabbs, /*outPathAnchorPoints=*/nullptr,
+                      /*outPathControlLines=*/nullptr, /*outPathControlPoints=*/nullptr,
                       /*outTextBaselines=*/nullptr,
                       AppendChromeItemsOptions{.includePathPointChrome = false});
     if (!flashPaths.empty()) {
@@ -704,25 +761,35 @@ SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
     }
   }
 
+  // Sizes are NOT baked here: the draw phase resolves them from whatever
+  // transform it draws with, so the snapshot stays valid at any zoom.
+  snapshot.devicePixelRatio = devicePixelRatio;
   const double scale = LinearScale(canvasFromDoc);
-  const auto pixelToWorld = [scale](double pixels) {
-    return scale > 1e-9 ? pixels / scale : pixels;
-  };
-  snapshot.selectionStrokeWidthWorld =
-      pixelToWorld(DevicePixelsForLogicalPixels(kSelectionStrokeLogicalPixels, devicePixelRatio));
-  snapshot.hoverStrokeWidthWorld =
-      pixelToWorld(DevicePixelsForLogicalPixels(kHoverStrokeLogicalPixels, devicePixelRatio));
-  snapshot.marqueeStrokeWidthWorld =
-      pixelToWorld(DevicePixelsForLogicalPixels(kMarqueeStrokeLogicalPixels, devicePixelRatio));
 
   if (!sourceHover.empty()) {
     AppendChromeItems(sourceHover, cullRectDoc, &snapshot.hoverPaths, &snapshot.hoverAabbsDoc,
-                      /*outPathAnchorBoxes=*/nullptr, /*outPathControlLines=*/nullptr,
-                      /*outPathControlPointBoxes=*/nullptr, /*outTextBaselines=*/nullptr,
+                      /*outPathAnchorPoints=*/nullptr, /*outPathControlLines=*/nullptr,
+                      /*outPathControlPoints=*/nullptr, /*outTextBaselines=*/nullptr,
                       AppendChromeItemsOptions{.includePathPointChrome = false});
   }
 
-  if (selection.empty() || selectionDetail == SelectionChromeDetail::EditingChromeOnly) {
+  if (selection.empty()) {
+    return snapshot;
+  }
+
+  if (selectionDetail == SelectionChromeDetail::EditingChromeOnly) {
+    AppendChromeItems(
+        selection, cullRectDoc, /*outPaths=*/nullptr, /*outAabbs=*/nullptr,
+        /*outPathAnchorPoints=*/nullptr, /*outPathControlLines=*/nullptr,
+        /*outPathControlPoints=*/nullptr, &snapshot.textBaselinesDoc,
+        AppendChromeItemsOptions{
+            .includePaths = false,
+            .includePerElementAabbs = false,
+            .includePathPointChrome = false,
+            .canvasScale = scale,
+            .devicePixelRatio = devicePixelRatio,
+            .representedDocumentFromLiveDocument = representedDocumentFromLiveDocument,
+        });
     return snapshot;
   }
 
@@ -733,12 +800,24 @@ SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
   const bool pathOutlinesOnly = selectionDetail == SelectionChromeDetail::PathOutlinesOnly;
   const bool includePathPointChrome = pathOutlinesOnly;
 
-  // A live select gesture already carries immutable start bounds and the
-  // exact current document transform. Build its lightweight bounds chrome
-  // directly from that state instead of traversing selected geometry while
-  // the async renderer may hold the document. Besides avoiding contention,
-  // this keeps converted text (one path per glyph) at constant overlay cost.
+  // A live select gesture carries immutable start bounds and the exact current
+  // document transform. Keep its path outline sampled from the live DOM so it
+  // scales and rotates with the presented object, while retaining the
+  // lightweight oriented-bounds path for handles and omitting per-element
+  // AABBs and path-point chrome.
   if (combinedBoundsOnly && activeBoundsPreview.has_value()) {
+    AppendChromeItems(
+        selection, cullRectDoc, &snapshot.paths, &snapshot.aabbsDoc,
+        /*outPathAnchorPoints=*/nullptr, /*outPathControlLines=*/nullptr,
+        /*outPathControlPoints=*/nullptr, &snapshot.textBaselinesDoc,
+        AppendChromeItemsOptions{
+            .includePaths = true,
+            .includePerElementAabbs = false,
+            .includePathPointChrome = false,
+            .canvasScale = scale,
+            .devicePixelRatio = devicePixelRatio,
+            .representedDocumentFromLiveDocument = representedDocumentFromLiveDocument,
+        });
     const auto corners = TransformedBoxCorners(activeBoundsPreview->startBoundsDoc,
                                                activeBoundsPreview->documentFromStartDocument);
     std::array<Vector2d, 4> representedCorners;
@@ -748,18 +827,15 @@ SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
     snapshot.orientedBoundsDoc = CullOrientedBox(
         SelectionChromeSnapshot::OrientedBox{.cornersDoc = representedCorners}, cullRectDoc);
     if (snapshot.orientedBoundsDoc.has_value()) {
-      snapshot.handleBoxesDoc.reserve(representedCorners.size());
-      for (const Vector2d& corner : representedCorners) {
-        snapshot.handleBoxesDoc.push_back(HandleBoxForCorner(corner, scale));
-      }
-      CullBoxesInPlace(&snapshot.handleBoxesDoc, cullRectDoc);
+      snapshot.handleAnchorsDoc.assign(representedCorners.begin(), representedCorners.end());
+      CullHandleAnchorsInPlace(&snapshot.handleAnchorsDoc, scale, cullRectDoc);
     }
     return snapshot;
   }
 
   const std::optional<Box2d> combinedSelectionBounds = AppendChromeItems(
-      selection, cullRectDoc, &snapshot.paths, &snapshot.aabbsDoc, &snapshot.pathAnchorBoxesDoc,
-      &snapshot.pathControlLinesDoc, &snapshot.pathControlPointBoxesDoc, &snapshot.textBaselinesDoc,
+      selection, cullRectDoc, &snapshot.paths, &snapshot.aabbsDoc, &snapshot.pathAnchorPointsDoc,
+      &snapshot.pathControlLinesDoc, &snapshot.pathControlPointsDoc, &snapshot.textBaselinesDoc,
       AppendChromeItemsOptions{
           .includePaths = !combinedBoundsOnly,
           .includePerElementAabbs = !combinedBoundsOnly && !pathOutlinesOnly,
@@ -796,18 +872,29 @@ SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
     if (!snapshot.orientedBoundsDoc.has_value()) {
       snapshot.aabbsDoc.clear();
     }
-    snapshot.handleBoxesDoc.reserve(representedCorners.size());
-    for (const Vector2d& corner : representedCorners) {
-      snapshot.handleBoxesDoc.push_back(HandleBoxForCorner(corner, scale));
-    }
+    snapshot.handleAnchorsDoc.assign(representedCorners.begin(), representedCorners.end());
   } else if (!snapshot.aabbsDoc.empty()) {
     const Box2d combinedBounds = CombinedSelectionBounds(snapshot.aabbsDoc);
-    const SelectionTransformHandleBoxes handleBoxes =
-        SelectionTransformHandleBoxesForBounds(combinedBounds, scale);
-    snapshot.handleBoxesDoc.assign(handleBoxes.boxes.begin(), handleBoxes.boxes.end());
+    snapshot.handleAnchorsDoc = SelectionTransformCornerPoints(combinedBounds);
   }
-  CullBoxesInPlace(&snapshot.handleBoxesDoc, cullRectDoc);
+  CullHandleAnchorsInPlace(&snapshot.handleAnchorsDoc, scale, cullRectDoc);
   return snapshot;
+}
+
+Box2d OverlayRenderer::ChromeSquareForPoint(const SelectionChromeSnapshot& snapshot,
+                                            ChromeSquare kind, const Vector2d& pointDoc) {
+  const ChromeDrawScale drawScale =
+      ChromeDrawScaleFor(snapshot.canvasFromDoc, snapshot.devicePixelRatio);
+  switch (kind) {
+    case ChromeSquare::PathAnchor:
+      return PointBoxForDevicePixels(pointDoc, drawScale.pathAnchorSizeDevicePixels,
+                                     drawScale.canvasScale);
+    case ChromeSquare::PathControlPoint:
+      return PointBoxForDevicePixels(pointDoc, drawScale.pathControlPointSizeDevicePixels,
+                                     drawScale.canvasScale);
+    case ChromeSquare::TransformHandle: break;
+  }
+  return HandleBoxForCorner(pointDoc, drawScale.canvasScale);
 }
 
 void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
@@ -815,15 +902,21 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
   ZoneScopedN("OverlayRenderer::drawChromeFromSnapshot");
   if (snapshot.paths.empty() && snapshot.hoverPaths.empty() && snapshot.aabbsDoc.empty() &&
       snapshot.hoverAabbsDoc.empty() && !snapshot.orientedBoundsDoc.has_value() &&
-      snapshot.handleBoxesDoc.empty() && snapshot.pathAnchorBoxesDoc.empty() &&
-      snapshot.pathControlLinesDoc.empty() && snapshot.pathControlPointBoxesDoc.empty() &&
+      snapshot.handleAnchorsDoc.empty() && snapshot.pathAnchorPointsDoc.empty() &&
+      snapshot.pathControlLinesDoc.empty() && snapshot.pathControlPointsDoc.empty() &&
       !snapshot.marqueeDoc.has_value() && !snapshot.lockedFlash.has_value() &&
       !snapshot.livePathPreview.has_value() && !snapshot.penPreviewSegmentDoc.has_value() &&
       !snapshot.penCloseAffordanceDoc.has_value() && !snapshot.textCaretDoc.has_value() &&
-      !snapshot.textFrameCornersDoc.has_value() && !snapshot.textBoxDragPreviewDoc.has_value() &&
-      snapshot.textBaselinesDoc.empty()) {
+      snapshot.textSelectionQuadsDoc.empty() && !snapshot.textFrameCornersDoc.has_value() &&
+      !snapshot.textBoxDragPreviewDoc.has_value() && snapshot.textBaselinesDoc.empty()) {
     return;
   }
+
+  // Every chrome size below is resolved against the transform this draw uses,
+  // never the one capture sampled with. That is what keeps handles at a
+  // constant screen size when the same snapshot is redrawn at a new zoom.
+  const ChromeDrawScale drawScale =
+      ChromeDrawScaleFor(snapshot.canvasFromDoc, snapshot.devicePixelRatio);
 
   // Live pen-path geometry first: it stands in for the (suppressed) document
   // raster of the edited path, so every chrome layer must draw on top of it.
@@ -853,13 +946,25 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
     renderer.drawPath(shape, paint.strokeParams);
   }
 
+  if (!snapshot.textSelectionQuadsDoc.empty()) {
+    const svg::PaintParams selectionFill = MakeTextSelectionFillPaint();
+    renderer.setPaint(selectionFill);
+    renderer.setTransform(snapshot.canvasFromDoc);
+    for (const std::array<Vector2d, 4>& corners : snapshot.textSelectionQuadsDoc) {
+      svg::PathShape shape;
+      shape.path = PathForCorners(corners);
+      shape.parentFromEntity = Transform2d();
+      renderer.drawPath(shape, selectionFill.strokeParams);
+    }
+  }
+
   // Baseline underlay for selected text: drawn before every other chrome
   // layer so the selection rectangle, handles, and caret all read on top of
   // it. Guidance styling (translucent control-line stroke), not committed-
   // geometry styling.
   if (!snapshot.textBaselinesDoc.empty()) {
     const svg::PaintParams baselinePaint =
-        MakePathControlLinePaint(snapshot.selectionStrokeWidthWorld);
+        MakePathControlLinePaint(drawScale.selectionStrokeWidthWorld);
     renderer.setPaint(baselinePaint);
     renderer.setTransform(snapshot.canvasFromDoc);
     for (const SelectionChromeSnapshot::TextBaseline& baseline : snapshot.textBaselinesDoc) {
@@ -875,7 +980,7 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
 
   if (!snapshot.hoverPaths.empty()) {
     const svg::PaintParams hoverShapePaint =
-        MakeSourceHoverShapePaint(snapshot.hoverStrokeWidthWorld);
+        MakeSourceHoverShapePaint(drawScale.hoverStrokeWidthWorld);
     renderer.setPaint(hoverShapePaint);
     renderer.setTransform(snapshot.canvasFromDoc);
     for (const auto& item : snapshot.hoverPaths) {
@@ -886,7 +991,7 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
     }
   } else if (!snapshot.hoverAabbsDoc.empty()) {
     const svg::PaintParams hoverBoundsPaint =
-        MakeSourceHoverBoundsPaint(snapshot.hoverStrokeWidthWorld);
+        MakeSourceHoverBoundsPaint(drawScale.hoverStrokeWidthWorld);
     renderer.setPaint(hoverBoundsPaint);
     renderer.setTransform(snapshot.canvasFromDoc);
     for (const Box2d& aabb : snapshot.hoverAabbsDoc) {
@@ -895,9 +1000,9 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
   }
 
   const svg::PaintParams selectionStrokePaint =
-      MakeSelectionStrokePaint(snapshot.selectionStrokeWidthWorld);
+      MakeSelectionStrokePaint(drawScale.selectionStrokeWidthWorld);
   const svg::PaintParams displayNoneSelectionStrokePaint =
-      MakeDisplayNoneSelectionStrokePaint(snapshot.selectionStrokeWidthWorld);
+      MakeDisplayNoneSelectionStrokePaint(drawScale.selectionStrokeWidthWorld);
 
   // Per-element path outlines first - the user sees the exact shape of
   // every selected element regardless of how many are picked.
@@ -919,7 +1024,7 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
   // affordance highlights the first anchor with an enlarged handle ring.
   if (snapshot.penPreviewSegmentDoc.has_value()) {
     const svg::PaintParams previewPaint =
-        MakePathControlLinePaint(snapshot.selectionStrokeWidthWorld);
+        MakePathControlLinePaint(drawScale.selectionStrokeWidthWorld);
     renderer.setPaint(previewPaint);
     renderer.setTransform(snapshot.canvasFromDoc);
     svg::PathShape shape;
@@ -928,10 +1033,10 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
     renderer.drawPath(shape, previewPaint.strokeParams);
   }
   if (snapshot.penCloseAffordanceDoc.has_value()) {
-    const svg::PaintParams affordancePaint = MakeHandlePaint(snapshot.selectionStrokeWidthWorld);
+    const svg::PaintParams affordancePaint = MakeHandlePaint(drawScale.selectionStrokeWidthWorld);
     renderer.setPaint(affordancePaint);
     renderer.setTransform(snapshot.canvasFromDoc);
-    const double halfSizeDoc = snapshot.selectionStrokeWidthWorld * 4.0;
+    const double halfSizeDoc = drawScale.selectionStrokeWidthWorld * 4.0;
     const Vector2d halfSize(halfSizeDoc, halfSizeDoc);
     renderer.drawRect(Box2d(*snapshot.penCloseAffordanceDoc - halfSize,
                             *snapshot.penCloseAffordanceDoc + halfSize),
@@ -947,12 +1052,12 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
     renderer.setTransform(snapshot.canvasFromDoc);
 
     const svg::PaintParams framePaint =
-        MakeSelectionStrokePaint(snapshot.selectionStrokeWidthWorld);
+        MakeSelectionStrokePaint(drawScale.selectionStrokeWidthWorld);
     renderer.setPaint(framePaint);
     renderer.drawRect(preview.boxDoc, framePaint.strokeParams);
 
     const svg::PaintParams baselinePaint =
-        MakePathControlLinePaint(snapshot.selectionStrokeWidthWorld);
+        MakePathControlLinePaint(drawScale.selectionStrokeWidthWorld);
     renderer.setPaint(baselinePaint);
     {
       PathBuilder builder;
@@ -965,7 +1070,7 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
     }
 
     const svg::PaintParams ibeamPaint =
-        MakeSelectionStrokePaint(snapshot.selectionStrokeWidthWorld * 1.5);
+        MakeSelectionStrokePaint(drawScale.selectionStrokeWidthWorld * 1.5);
     renderer.setPaint(ibeamPaint);
     {
       // Serif half-length scales with the bar height so the I-beam keeps its
@@ -995,7 +1100,7 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
     const double frameOpacity =
         std::clamp(static_cast<double>(snapshot.textFrameOpacity), 0.0, 1.0);
     const svg::PaintParams framePaint =
-        MakeSelectionStrokePaint(snapshot.selectionStrokeWidthWorld, frameOpacity);
+        MakeSelectionStrokePaint(drawScale.selectionStrokeWidthWorld, frameOpacity);
     renderer.setPaint(framePaint);
     svg::PathShape frameShape;
     frameShape.path = PathForCorners(*snapshot.textFrameCornersDoc);
@@ -1005,16 +1110,16 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
     // Use the select tool's handle-box helper directly. Deriving this size
     // from stroke width double-counted device scale on high-density displays.
     const svg::PaintParams handlePaint =
-        MakeHandlePaint(snapshot.selectionStrokeWidthWorld, frameOpacity);
+        MakeHandlePaint(drawScale.selectionStrokeWidthWorld, frameOpacity);
     renderer.setPaint(handlePaint);
-    const double canvasScale = LinearScale(snapshot.canvasFromDoc);
     for (const Vector2d& corner : *snapshot.textFrameCornersDoc) {
-      renderer.drawRect(HandleBoxForCorner(corner, canvasScale), handlePaint.strokeParams);
+      renderer.drawRect(HandleBoxForCorner(corner, drawScale.canvasScale),
+                        handlePaint.strokeParams);
     }
   }
   if (snapshot.textCaretDoc.has_value()) {
     const svg::PaintParams caretPaint =
-        MakeSelectionStrokePaint(snapshot.selectionStrokeWidthWorld * 1.5);
+        MakeSelectionStrokePaint(drawScale.selectionStrokeWidthWorld * 1.5);
     renderer.setPaint(caretPaint);
     renderer.setTransform(snapshot.canvasFromDoc);
     PathBuilder caretBuilder;
@@ -1028,7 +1133,7 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
 
   if (!snapshot.pathControlLinesDoc.empty()) {
     const svg::PaintParams pathControlLinePaint =
-        MakePathControlLinePaint(snapshot.selectionStrokeWidthWorld);
+        MakePathControlLinePaint(drawScale.selectionStrokeWidthWorld);
     renderer.setPaint(pathControlLinePaint);
     renderer.setTransform(snapshot.canvasFromDoc);
     for (const SelectionChromeSnapshot::PathControlLine& line : snapshot.pathControlLinesDoc) {
@@ -1042,21 +1147,26 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
     }
   }
 
-  if (!snapshot.pathControlPointBoxesDoc.empty()) {
+  if (!snapshot.pathControlPointsDoc.empty()) {
     renderer.setTransform(snapshot.canvasFromDoc);
     const svg::PaintParams controlPointPaint = MakePathPointPaint();
     renderer.setPaint(controlPointPaint);
-    for (const Box2d& controlPointBox : snapshot.pathControlPointBoxesDoc) {
-      renderer.drawRect(controlPointBox, controlPointPaint.strokeParams);
+    for (const Vector2d& controlPointDoc : snapshot.pathControlPointsDoc) {
+      renderer.drawRect(
+          PointBoxForDevicePixels(controlPointDoc, drawScale.pathControlPointSizeDevicePixels,
+                                  drawScale.canvasScale),
+          controlPointPaint.strokeParams);
     }
   }
 
-  if (!snapshot.pathAnchorBoxesDoc.empty()) {
+  if (!snapshot.pathAnchorPointsDoc.empty()) {
     renderer.setTransform(snapshot.canvasFromDoc);
     const svg::PaintParams pathAnchorPaint = MakePathPointPaint();
     renderer.setPaint(pathAnchorPaint);
-    for (const Box2d& anchorBox : snapshot.pathAnchorBoxesDoc) {
-      renderer.drawRect(anchorBox, pathAnchorPaint.strokeParams);
+    for (const Vector2d& anchorDoc : snapshot.pathAnchorPointsDoc) {
+      renderer.drawRect(PointBoxForDevicePixels(anchorDoc, drawScale.pathAnchorSizeDevicePixels,
+                                                drawScale.canvasScale),
+                        pathAnchorPaint.strokeParams);
     }
   }
 
@@ -1083,12 +1193,13 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
     }
   }
 
-  if (!snapshot.handleBoxesDoc.empty()) {
+  if (!snapshot.handleAnchorsDoc.empty()) {
     renderer.setTransform(snapshot.canvasFromDoc);
-    const svg::PaintParams handlePaint = MakeHandlePaint(snapshot.selectionStrokeWidthWorld);
+    const svg::PaintParams handlePaint = MakeHandlePaint(drawScale.selectionStrokeWidthWorld);
     renderer.setPaint(handlePaint);
-    for (const Box2d& handleBox : snapshot.handleBoxesDoc) {
-      renderer.drawRect(handleBox, handlePaint.strokeParams);
+    for (const Vector2d& anchorDoc : snapshot.handleAnchorsDoc) {
+      renderer.drawRect(HandleBoxForCorner(anchorDoc, drawScale.canvasScale),
+                        handlePaint.strokeParams);
     }
   }
 
@@ -1101,7 +1212,8 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
     renderer.setPaint(marqueeFill);
     renderer.drawRect(*snapshot.marqueeDoc, marqueeFill.strokeParams);
 
-    const svg::PaintParams marqueeStroke = MakeMarqueeStrokePaint(snapshot.marqueeStrokeWidthWorld);
+    const svg::PaintParams marqueeStroke =
+        MakeMarqueeStrokePaint(drawScale.marqueeStrokeWidthWorld);
     renderer.setPaint(marqueeStroke);
     renderer.drawRect(*snapshot.marqueeDoc, marqueeStroke.strokeParams);
   }
@@ -1111,8 +1223,8 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
   // the snapshot's pixel-to-world scale just like the selection outline.
   if (snapshot.lockedFlash.has_value() && snapshot.lockedFlash->intensity > 0.0f) {
     const double lockedFlashStrokeWidthWorld =
-        snapshot.selectionStrokeWidthWorld > 0.0
-            ? snapshot.selectionStrokeWidthWorld *
+        drawScale.selectionStrokeWidthWorld > 0.0
+            ? drawScale.selectionStrokeWidthWorld *
                   (kLockedFlashStrokeLogicalPixels / kSelectionStrokeLogicalPixels)
             : kLockedFlashStrokeLogicalPixels;
     const svg::PaintParams lockedFlashPaint =

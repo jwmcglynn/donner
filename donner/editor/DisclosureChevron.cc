@@ -1,9 +1,19 @@
 #include "donner/editor/DisclosureChevron.h"
 
+#include <array>
+
 #include "donner/editor/EmbeddedSvgIcon.h"
 #include "embed_resources/EditorIcons.h"
 
 namespace donner::editor {
+
+std::span<const EmbeddedSvgIconRequest> DisclosureChevronPrewarmRequests() {
+  static const std::array<EmbeddedSvgIconRequest, 2> kRequests = {{
+      {embedded::kEditorChevronSvg, kDisclosureChevronRasterSizePx, /*tintableMask=*/true},
+      {embedded::kEditorChevronDownSvg, kDisclosureChevronRasterSizePx, /*tintableMask=*/true},
+  }};
+  return kRequests;
+}
 
 const std::optional<svg::RendererBitmap>& CachedDisclosureChevronBitmap(bool expanded) {
   static const std::optional<svg::RendererBitmap> collapsed =

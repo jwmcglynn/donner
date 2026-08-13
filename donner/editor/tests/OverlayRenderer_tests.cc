@@ -41,8 +41,10 @@ constexpr std::string_view kTrivialSvg =
          <rect id="r1" x="20" y="30" width="40" height="50" fill="red"/>
        </svg>)";
 
-bool AnyBoxContains(std::span<const Box2d> boxes, const Vector2d& point) {
-  return std::ranges::any_of(boxes, [&](const Box2d& box) { return box.contains(point); });
+bool AnyPointNear(std::span<const Vector2d> points, const Vector2d& expected) {
+  return std::ranges::any_of(points, [&](const Vector2d& point) {
+    return std::abs(point.x - expected.x) < 1e-9 && std::abs(point.y - expected.y) < 1e-9;
+  });
 }
 
 auto Vector2dNear(Vector2d expected, double tolerance) {
@@ -181,7 +183,7 @@ TEST(OverlayRendererTest, CaptureSnapshotIncludesSourceHoverChromeWithoutSelecti
 
   EXPECT_TRUE(snapshot.paths.empty());
   EXPECT_TRUE(snapshot.aabbsDoc.empty());
-  EXPECT_TRUE(snapshot.handleBoxesDoc.empty());
+  EXPECT_TRUE(snapshot.handleAnchorsDoc.empty());
   EXPECT_FALSE(snapshot.hoverPaths.empty());
   EXPECT_FALSE(snapshot.hoverAabbsDoc.empty());
 }
@@ -222,15 +224,20 @@ TEST(OverlayRendererTest, PathOutlinesOnlyOmitsSelectionBoundsAndHandles) {
   EXPECT_FALSE(snapshot.paths.empty());
   EXPECT_TRUE(snapshot.aabbsDoc.empty());
   EXPECT_FALSE(snapshot.orientedBoundsDoc.has_value());
-  EXPECT_TRUE(snapshot.handleBoxesDoc.empty());
+  EXPECT_TRUE(snapshot.handleAnchorsDoc.empty());
 }
 
 TEST(OverlayRendererTest, EditingChromeOnlySkipsSelectionGeometry) {
+  constexpr std::string_view kTextSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+           <text id="t" x="50" y="80" font-size="20" font-family="sans-serif">Hello</text>
+         </svg>)";
+
   EditorApp app;
-  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
-  auto rect = app.document().document().querySelector("#r1");
-  ASSERT_TRUE(rect.has_value());
-  app.setSelection(*rect);
+  ASSERT_TRUE(app.loadFromString(kTextSvg));
+  auto text = app.document().document().querySelector("#t");
+  ASSERT_TRUE(text.has_value());
+  app.setSelection(*text);
 
   const SelectionChromeSnapshot snapshot = OverlayRenderer::captureChromeSnapshot(
       std::span<const svg::SVGElement>(app.selectedElements()), std::nullopt, Transform2d(),
@@ -239,32 +246,65 @@ TEST(OverlayRendererTest, EditingChromeOnlySkipsSelectionGeometry) {
 
   EXPECT_TRUE(snapshot.paths.empty());
   EXPECT_TRUE(snapshot.aabbsDoc.empty());
-  EXPECT_TRUE(snapshot.textBaselinesDoc.empty());
-  EXPECT_TRUE(snapshot.handleBoxesDoc.empty());
+  ASSERT_EQ(snapshot.textBaselinesDoc.size(), 1u);
+  EXPECT_NEAR(snapshot.textBaselinesDoc.front().startDoc.y, 80.0, 1.0);
+  EXPECT_TRUE(snapshot.handleAnchorsDoc.empty());
 }
 
-TEST(OverlayRendererTest, ActiveCombinedBoundsPreviewAvoidsSelectionPathCapture) {
-  EditorApp app;
-  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
-  auto rect = app.document().document().querySelector("#r1");
-  ASSERT_TRUE(rect.has_value());
-  app.setSelection(*rect);
+TEST(OverlayRendererTest, ActiveCombinedBoundsPreviewKeepsTextBaseline) {
+  constexpr std::string_view kTextSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+           <text id="t" x="50" y="80" font-size="20" font-family="sans-serif">Hello</text>
+         </svg>)";
 
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTextSvg));
+  auto text = app.document().document().querySelector("#t");
+  ASSERT_TRUE(text.has_value());
+  app.setSelection(*text);
+
+  const Transform2d scale = Transform2d::Scale(Vector2d(1.5, 1.2));
+  text->cast<svg::SVGGraphicsElement>().setTransform(scale);
   const SelectionChromeBoundsPreview boundsPreview{
-      .startBoundsDoc = Box2d::FromXYWH(20.0, 30.0, 40.0, 50.0),
-      .documentFromStartDocument = Transform2d::Translate(Vector2d(15.0, 5.0)),
+      .startBoundsDoc = Box2d::FromXYWH(50.0, 60.0, 50.0, 20.0),
+      .documentFromStartDocument = scale,
   };
   const SelectionChromeSnapshot snapshot = OverlayRenderer::captureChromeSnapshot(
       std::span<const svg::SVGElement>(app.selectedElements()), std::nullopt, Transform2d(),
       boundsPreview, std::span<const svg::SVGElement>(), std::nullopt,
       SelectionChromeDetail::CombinedBoundsOnly);
 
-  EXPECT_TRUE(snapshot.paths.empty());
+  ASSERT_EQ(snapshot.textBaselinesDoc.size(), 1u);
+  EXPECT_NEAR(snapshot.textBaselinesDoc.front().startDoc.y, 96.0, 1.0);
+}
+
+TEST(OverlayRendererTest, ActiveCombinedBoundsPreviewKeepsScaledSelectionPath) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+  auto rect = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(rect.has_value());
+  app.setSelection(*rect);
+
+  const Transform2d scale = Transform2d::Scale(Vector2d(1.5, 1.2));
+  rect->cast<svg::SVGGraphicsElement>().setTransform(scale);
+
+  const SelectionChromeBoundsPreview boundsPreview{
+      .startBoundsDoc = Box2d::FromXYWH(20.0, 30.0, 40.0, 50.0),
+      .documentFromStartDocument = scale,
+  };
+  const SelectionChromeSnapshot snapshot = OverlayRenderer::captureChromeSnapshot(
+      std::span<const svg::SVGElement>(app.selectedElements()), std::nullopt, Transform2d(),
+      boundsPreview, std::span<const svg::SVGElement>(), std::nullopt,
+      SelectionChromeDetail::CombinedBoundsOnly);
+
+  ASSERT_EQ(snapshot.paths.size(), 1u);
+  EXPECT_EQ(snapshot.paths.front().pathDoc.bounds(),
+            scale.transformBox(boundsPreview.startBoundsDoc));
   EXPECT_TRUE(snapshot.aabbsDoc.empty());
   ASSERT_TRUE(snapshot.orientedBoundsDoc.has_value());
-  EXPECT_EQ(snapshot.orientedBoundsDoc->cornersDoc[0], Vector2d(35.0, 35.0));
-  EXPECT_EQ(snapshot.orientedBoundsDoc->cornersDoc[2], Vector2d(75.0, 85.0));
-  EXPECT_EQ(snapshot.handleBoxesDoc.size(), 4u);
+  EXPECT_EQ(snapshot.orientedBoundsDoc->cornersDoc[0], Vector2d(30.0, 36.0));
+  EXPECT_EQ(snapshot.orientedBoundsDoc->cornersDoc[2], Vector2d(90.0, 96.0));
+  EXPECT_EQ(snapshot.handleAnchorsDoc.size(), 4u);
 }
 
 TEST(OverlayRendererTest, SelectedPathSnapshotIncludesAnchorsAndControlLines) {
@@ -287,17 +327,17 @@ TEST(OverlayRendererTest, SelectedPathSnapshotIncludesAnchorsAndControlLines) {
       SelectionChromeDetail::PathOutlinesOnly);
 
   EXPECT_EQ(snapshot.paths.size(), 1u);
-  EXPECT_EQ(snapshot.pathAnchorBoxesDoc.size(), 3u);
+  EXPECT_EQ(snapshot.pathAnchorPointsDoc.size(), 3u);
   EXPECT_EQ(snapshot.pathControlLinesDoc.size(), 2u);
-  EXPECT_EQ(snapshot.pathControlPointBoxesDoc.size(), 2u);
+  EXPECT_EQ(snapshot.pathControlPointsDoc.size(), 2u);
   EXPECT_TRUE(snapshot.aabbsDoc.empty());
-  EXPECT_TRUE(snapshot.handleBoxesDoc.empty());
+  EXPECT_TRUE(snapshot.handleAnchorsDoc.empty());
 
-  EXPECT_TRUE(AnyBoxContains(snapshot.pathAnchorBoxesDoc, Vector2d(10.0, 20.0)));
-  EXPECT_TRUE(AnyBoxContains(snapshot.pathAnchorBoxesDoc, Vector2d(50.0, 20.0)));
-  EXPECT_TRUE(AnyBoxContains(snapshot.pathAnchorBoxesDoc, Vector2d(80.0, 20.0)));
-  EXPECT_TRUE(AnyBoxContains(snapshot.pathControlPointBoxesDoc, Vector2d(20.0, 10.0)));
-  EXPECT_TRUE(AnyBoxContains(snapshot.pathControlPointBoxesDoc, Vector2d(40.0, 10.0)));
+  EXPECT_TRUE(AnyPointNear(snapshot.pathAnchorPointsDoc, Vector2d(10.0, 20.0)));
+  EXPECT_TRUE(AnyPointNear(snapshot.pathAnchorPointsDoc, Vector2d(50.0, 20.0)));
+  EXPECT_TRUE(AnyPointNear(snapshot.pathAnchorPointsDoc, Vector2d(80.0, 20.0)));
+  EXPECT_TRUE(AnyPointNear(snapshot.pathControlPointsDoc, Vector2d(20.0, 10.0)));
+  EXPECT_TRUE(AnyPointNear(snapshot.pathControlPointsDoc, Vector2d(40.0, 10.0)));
 
   EXPECT_THAT(snapshot.pathControlLinesDoc,
               ElementsAre(PathControlLineIs(Vector2d(10.0, 20.0), Vector2d(20.0, 10.0)),
@@ -323,9 +363,9 @@ TEST(OverlayRendererTest, FullSelectionChromeOmitsPathPointChrome) {
       std::nullopt, std::span<const svg::SVGElement>(), std::nullopt, SelectionChromeDetail::Full);
 
   EXPECT_FALSE(snapshot.paths.empty());
-  EXPECT_TRUE(snapshot.pathAnchorBoxesDoc.empty());
+  EXPECT_TRUE(snapshot.pathAnchorPointsDoc.empty());
   EXPECT_TRUE(snapshot.pathControlLinesDoc.empty());
-  EXPECT_TRUE(snapshot.pathControlPointBoxesDoc.empty());
+  EXPECT_TRUE(snapshot.pathControlPointsDoc.empty());
 }
 
 TEST(OverlayRendererTest, NonPathSelectionsDoNotEmitPathPointChrome) {
@@ -340,12 +380,72 @@ TEST(OverlayRendererTest, NonPathSelectionsDoNotEmitPathPointChrome) {
       std::span<const svg::SVGElement>(app.selectedElements()), std::nullopt, Transform2d());
 
   EXPECT_FALSE(snapshot.paths.empty());
-  EXPECT_TRUE(snapshot.pathAnchorBoxesDoc.empty());
+  EXPECT_TRUE(snapshot.pathAnchorPointsDoc.empty());
   EXPECT_TRUE(snapshot.pathControlLinesDoc.empty());
-  EXPECT_TRUE(snapshot.pathControlPointBoxesDoc.empty());
+  EXPECT_TRUE(snapshot.pathControlPointsDoc.empty());
 }
 
-TEST(OverlayRendererTest, SelectionStrokeWidthScalesWithDevicePixelRatio) {
+/// Non-transparent pixel count, the drawn footprint of chrome in screen pixels.
+std::size_t NonTransparentPixelCount(const svg::RendererBitmap& bitmap) {
+  std::size_t count = 0;
+  for (std::size_t y = 0; y < static_cast<std::size_t>(bitmap.dimensions.y); ++y) {
+    const std::uint8_t* row = bitmap.pixels.data() + y * bitmap.rowBytes;
+    for (std::size_t x = 0; x < static_cast<std::size_t>(bitmap.dimensions.x); ++x) {
+      if (row[x * 4 + 3] != 0) {
+        ++count;
+      }
+    }
+  }
+  return count;
+}
+
+/// Chrome placed so the document origin lands at canvas (60,60) at any zoom.
+SelectionChromeSnapshot OriginAnchoredChromeAtZoom(double zoom) {
+  SelectionChromeSnapshot snapshot;
+  snapshot.canvasFromDoc = Transform2d::Scale(zoom) * Transform2d::Translate(Vector2d(60.0, 60.0));
+  snapshot.handleAnchorsDoc.push_back(Vector2d::Zero());
+  return snapshot;
+}
+
+}  // namespace
+
+// Handles, path anchors, and control points are chrome, not content: they hold
+// a constant screen size while the document scales under them. The immediate
+// presentation path redraws one captured snapshot at whatever transform the
+// frame presents with, so this has to hold for a REDRAWN snapshot too, not just
+// for a snapshot recaptured at the new zoom.
+TEST(OverlayRendererTest, HandleScreenSizeIsConstantAcrossZoom) {
+  const SelectionChromeSnapshot atZoom1 = OriginAnchoredChromeAtZoom(1.0);
+  SelectionChromeSnapshot redrawnAtZoom4 = atZoom1;
+  redrawnAtZoom4.canvasFromDoc =
+      Transform2d::Scale(4.0) * Transform2d::Translate(Vector2d(60.0, 60.0));
+
+  const svg::RendererBitmap zoom1Bitmap = DrawSnapshot(atZoom1);
+  const svg::RendererBitmap zoom4Bitmap = DrawSnapshot(redrawnAtZoom4);
+  ASSERT_FALSE(zoom1Bitmap.empty());
+  ASSERT_FALSE(zoom4Bitmap.empty());
+
+  const std::size_t zoom1Pixels = NonTransparentPixelCount(zoom1Bitmap);
+  EXPECT_GT(zoom1Pixels, 0u);
+  EXPECT_EQ(NonTransparentPixelCount(zoom4Bitmap), zoom1Pixels)
+      << "The same handle redrawn at 4x zoom must cover the same screen pixels.";
+
+  // Same statement in geometry: the document-space square shrinks exactly as
+  // fast as the transform grows, so the screen-space edge never changes.
+  for (double zoom : {0.5, 1.0, 4.0, 17.0}) {
+    const SelectionChromeSnapshot snapshot = OriginAnchoredChromeAtZoom(zoom);
+    const Box2d handleDoc = OverlayRenderer::ChromeSquareForPoint(
+        snapshot, OverlayRenderer::ChromeSquare::TransformHandle, Vector2d::Zero());
+    const Box2d anchorDoc = OverlayRenderer::ChromeSquareForPoint(
+        snapshot, OverlayRenderer::ChromeSquare::PathAnchor, Vector2d::Zero());
+    EXPECT_DOUBLE_EQ(handleDoc.width() * zoom, 9.0) << "zoom=" << zoom;
+    EXPECT_DOUBLE_EQ(anchorDoc.width() * zoom, 5.0) << "zoom=" << zoom;
+  }
+}
+
+namespace {
+
+TEST(OverlayRendererTest, ChromeSizesScaleWithDevicePixelRatio) {
   const SelectionChromeSnapshot oneX = OverlayRenderer::captureChromeSnapshot(
       std::span<const svg::SVGElement>(), std::nullopt, Transform2d(), std::nullopt,
       std::span<const svg::SVGElement>(), std::nullopt, SelectionChromeDetail::Full, Transform2d(),
@@ -355,8 +455,16 @@ TEST(OverlayRendererTest, SelectionStrokeWidthScalesWithDevicePixelRatio) {
       std::span<const svg::SVGElement>(), std::nullopt, SelectionChromeDetail::Full, Transform2d(),
       std::nullopt, 2.0);
 
-  EXPECT_GT(oneX.selectionStrokeWidthWorld, 1.0);
-  EXPECT_DOUBLE_EQ(twoX.selectionStrokeWidthWorld, oneX.selectionStrokeWidthWorld * 2.0);
+  EXPECT_DOUBLE_EQ(oneX.devicePixelRatio, 1.0);
+  EXPECT_DOUBLE_EQ(twoX.devicePixelRatio, 2.0);
+  // Chrome squares are resolved at draw time, so the device-pixel ratio has to
+  // reach them through the snapshot rather than through a baked size.
+  const Box2d oneXAnchor = OverlayRenderer::ChromeSquareForPoint(
+      oneX, OverlayRenderer::ChromeSquare::PathAnchor, Vector2d::Zero());
+  const Box2d twoXAnchor = OverlayRenderer::ChromeSquareForPoint(
+      twoX, OverlayRenderer::ChromeSquare::PathAnchor, Vector2d::Zero());
+  EXPECT_GT(oneXAnchor.width(), 1.0);
+  EXPECT_DOUBLE_EQ(twoXAnchor.width(), oneXAnchor.width() * 2.0);
 }
 
 TEST(OverlayRendererTest, CaptureSnapshotCullsOffscreenSelectionAndHoverChrome) {
@@ -387,7 +495,7 @@ TEST(OverlayRendererTest, CaptureSnapshotCullsOffscreenSelectionAndHoverChrome) 
   EXPECT_EQ(snapshot.aabbsDoc.front(), Box2d::FromXYWH(10.0, 10.0, 20.0, 20.0));
   EXPECT_TRUE(snapshot.hoverPaths.empty());
   EXPECT_TRUE(snapshot.hoverAabbsDoc.empty());
-  EXPECT_EQ(snapshot.handleBoxesDoc.size(), 4u);
+  EXPECT_EQ(snapshot.handleAnchorsDoc.size(), 4u);
 }
 
 TEST(OverlayRendererTest, CaptureSnapshotCullsOffscreenHandles) {
@@ -410,7 +518,7 @@ TEST(OverlayRendererTest, CaptureSnapshotCullsOffscreenHandles) {
 
   EXPECT_EQ(snapshot.paths.size(), 1u);
   EXPECT_EQ(snapshot.aabbsDoc.size(), 1u);
-  EXPECT_TRUE(snapshot.handleBoxesDoc.empty());
+  EXPECT_TRUE(snapshot.handleAnchorsDoc.empty());
 }
 
 TEST(OverlayRendererTest, CaptureSnapshotCombinedBoundsOnlySkipsSelectionPaths) {
@@ -438,7 +546,7 @@ TEST(OverlayRendererTest, CaptureSnapshotCombinedBoundsOnlySkipsSelectionPaths) 
   EXPECT_TRUE(snapshot.paths.empty());
   ASSERT_EQ(snapshot.aabbsDoc.size(), 1u);
   EXPECT_EQ(snapshot.aabbsDoc.front(), Box2d::FromXYWH(10.0, 10.0, 50.0, 60.0));
-  EXPECT_EQ(snapshot.handleBoxesDoc.size(), 4u);
+  EXPECT_EQ(snapshot.handleAnchorsDoc.size(), 4u);
 }
 
 // The editor draws selection chrome into a *second* renderer's frame
@@ -574,7 +682,7 @@ TEST(OverlayRendererTest, ActiveRotationUsesOrientedBoundsUntilGestureEnds) {
       });
 
   ASSERT_TRUE(activeSnapshot.orientedBoundsDoc.has_value());
-  ASSERT_EQ(activeSnapshot.handleBoxesDoc.size(), 4u);
+  ASSERT_EQ(activeSnapshot.handleAnchorsDoc.size(), 4u);
   const Vector2d expectedTopLeft =
       rotatedDocumentFromStartDocument.transformPosition(startBounds.topLeft);
   EXPECT_THAT(activeSnapshot.orientedBoundsDoc->cornersDoc,
@@ -614,9 +722,6 @@ TEST(OverlayRendererTest, CaptureSnapshotCanProjectLiveDragBackToRepresentedDocu
 TEST(OverlayRendererTest, DrawChromeFromSnapshotCoversAuxiliaryChromeLayers) {
   SelectionChromeSnapshot snapshot;
   snapshot.canvasFromDoc = Transform2d();
-  snapshot.selectionStrokeWidthWorld = 1.25;
-  snapshot.hoverStrokeWidthWorld = 1.5;
-  snapshot.marqueeStrokeWidthWorld = 1.5;
   snapshot.livePathPreview = SelectionChromeSnapshot::LivePathPreview{
       .pathDoc = RectPath(4.0, 4.0, 12.0, 8.0),
       .fillColor = css::RGBA(0x20, 0x80, 0xff, 0xff),
@@ -628,8 +733,8 @@ TEST(OverlayRendererTest, DrawChromeFromSnapshotCoversAuxiliaryChromeLayers) {
   });
   snapshot.pathControlLinesDoc.push_back(SelectionChromeSnapshot::PathControlLine{
       .anchorDoc = Vector2d(8.0, 36.0), .controlDoc = Vector2d(28.0, 24.0)});
-  snapshot.pathControlPointBoxesDoc.push_back(Box2d::FromXYWH(24.0, 22.0, 4.0, 4.0));
-  snapshot.pathAnchorBoxesDoc.push_back(Box2d::FromXYWH(6.0, 34.0, 5.0, 5.0));
+  snapshot.pathControlPointsDoc.push_back(Vector2d(26.0, 24.0));
+  snapshot.pathAnchorPointsDoc.push_back(Vector2d(8.5, 36.5));
   snapshot.penPreviewSegmentDoc = LinePath(Vector2d(44.0, 8.0), Vector2d(76.0, 24.0));
   snapshot.penCloseAffordanceDoc = Vector2d(78.0, 24.0);
   snapshot.orientedBoundsDoc = SelectionChromeSnapshot::OrientedBox{
@@ -641,7 +746,7 @@ TEST(OverlayRendererTest, DrawChromeFromSnapshotCoversAuxiliaryChromeLayers) {
               Vector2d(18.0, 88.0),
           },
   };
-  snapshot.handleBoxesDoc.push_back(Box2d::FromXYWH(8.0, 56.0, 8.0, 8.0));
+  snapshot.handleAnchorsDoc.push_back(Vector2d(12.0, 60.0));
   snapshot.marqueeDoc = Box2d::FromXYWH(60.0, 60.0, 24.0, 18.0);
 
   const auto bitmap = DrawSnapshot(snapshot);
@@ -653,8 +758,6 @@ TEST(OverlayRendererTest, DrawChromeFromSnapshotCoversAuxiliaryChromeLayers) {
 TEST(OverlayRendererTest, DrawChromeFromSnapshotCoversHoverBoundsAndStrokeOnlyPreview) {
   SelectionChromeSnapshot snapshot;
   snapshot.canvasFromDoc = Transform2d();
-  snapshot.selectionStrokeWidthWorld = 1.25;
-  snapshot.hoverStrokeWidthWorld = 1.5;
   snapshot.livePathPreview = SelectionChromeSnapshot::LivePathPreview{
       .pathDoc = RectPath(12.0, 12.0, 20.0, 16.0),
       .fillColor = std::nullopt,
@@ -688,7 +791,7 @@ TEST(OverlayRendererTest, CaptureSnapshotCullsOffscreenActiveRotationBounds) {
 
   EXPECT_FALSE(snapshot.orientedBoundsDoc.has_value());
   EXPECT_TRUE(snapshot.aabbsDoc.empty());
-  EXPECT_TRUE(snapshot.handleBoxesDoc.empty());
+  EXPECT_TRUE(snapshot.handleAnchorsDoc.empty());
 }
 
 TEST(OverlayRendererTest, CaptureLivePathPreviewAcceptsSolidPaintedPath) {
@@ -1663,13 +1766,12 @@ TEST(OverlayRendererTest, TextSelectionCapturesBoundsAndTransformHandles) {
   EXPECT_GT(snapshot.aabbsDoc[0].size().x, 0.0);
   EXPECT_NEAR(snapshot.aabbsDoc[0].topLeft.x, 50.0, 3.0);
   EXPECT_LT(snapshot.aabbsDoc[0].topLeft.y, 80.0);
-  EXPECT_FALSE(snapshot.handleBoxesDoc.empty());
+  EXPECT_FALSE(snapshot.handleAnchorsDoc.empty());
 }
 
 TEST(OverlayRendererTest, TextFrameHandlesMatchSelectHandleSizeAtTwoXScale) {
   SelectionChromeSnapshot snapshot;
   snapshot.canvasFromDoc = Transform2d::Scale(2.0);
-  snapshot.selectionStrokeWidthWorld = 1.25;
   snapshot.textFrameCornersDoc = std::array<Vector2d, 4>{
       Vector2d(20.0, 20.0), Vector2d(40.0, 20.0), Vector2d(40.0, 40.0), Vector2d(20.0, 40.0)};
 
@@ -1690,12 +1792,20 @@ TEST(OverlayRendererTest, TextFrameHandlesMatchSelectHandleSizeAtTwoXScale) {
 TEST(OverlayRendererTest, ZeroOpacityPointFrameDrawsNoFrameOrHandles) {
   SelectionChromeSnapshot snapshot;
   snapshot.canvasFromDoc = Transform2d();
-  snapshot.selectionStrokeWidthWorld = 1.25;
   snapshot.textFrameCornersDoc = std::array<Vector2d, 4>{
       Vector2d(20.0, 20.0), Vector2d(80.0, 20.0), Vector2d(80.0, 80.0), Vector2d(20.0, 80.0)};
   snapshot.textFrameOpacity = 0.0f;
 
   EXPECT_FALSE(HasAnyNonTransparentPixel(DrawSnapshot(snapshot)));
+}
+
+TEST(OverlayRendererTest, TextRangeHighlightDrawsOrientedQuad) {
+  SelectionChromeSnapshot snapshot;
+  snapshot.canvasFromDoc = Transform2d();
+  snapshot.textSelectionQuadsDoc.push_back(std::array<Vector2d, 4>{
+      Vector2d(20.0, 20.0), Vector2d(50.0, 20.0), Vector2d(50.0, 45.0), Vector2d(20.0, 45.0)});
+
+  EXPECT_TRUE(HasAnyNonTransparentPixel(DrawSnapshot(snapshot)));
 }
 
 TEST(OverlayRendererTest, TextSelectionCapturesBaselineUnderlay) {
@@ -1749,9 +1859,6 @@ TEST(OverlayRendererTest, TextBoxDragPreviewDrawsFrameBaselineAndIbeamDistinctFr
   // build the snapshot directly the way RenderCoordinator stamps it.
   SelectionChromeSnapshot snapshot;
   snapshot.canvasFromDoc = Transform2d();
-  snapshot.selectionStrokeWidthWorld = 1.5;
-  snapshot.hoverStrokeWidthWorld = 1.5;
-  snapshot.marqueeStrokeWidthWorld = 1.5;
   snapshot.textBoxDragPreviewDoc = SelectionChromeSnapshot::TextBoxDragPreview{
       .boxDoc = Box2d(Vector2d(40.0, 40.0), Vector2d(160.0, 140.0)),
       .baselineStartDoc = Vector2d(45.0, 72.0),

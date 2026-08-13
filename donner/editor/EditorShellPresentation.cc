@@ -19,6 +19,28 @@
 
 namespace donner::editor {
 
+Transform2d PresentedFramebufferFromDocumentTransform(const ViewportState& viewport) {
+  const double devicePixelsPerDocUnit = viewport.devicePixelsPerDocUnit();
+  const Vector2d framebufferOriginFromDocumentOrigin =
+      viewport.panScreenPoint * viewport.devicePixelRatio -
+      viewport.panDocPoint * devicePixelsPerDocUnit;
+
+  Transform2d framebufferFromDocument(Transform2d::uninitialized);
+  framebufferFromDocument.data[0] = devicePixelsPerDocUnit;
+  framebufferFromDocument.data[1] = 0.0;
+  framebufferFromDocument.data[2] = 0.0;
+  framebufferFromDocument.data[3] = devicePixelsPerDocUnit;
+  framebufferFromDocument.data[4] = framebufferOriginFromDocumentOrigin.x;
+  framebufferFromDocument.data[5] = framebufferOriginFromDocumentOrigin.y;
+  return framebufferFromDocument;
+}
+
+SelectionChromeSnapshot ChromePlacedOnPresentedDocument(const ViewportState& presentedViewport,
+                                                        SelectionChromeSnapshot snapshot) {
+  snapshot.canvasFromDoc = PresentedFramebufferFromDocumentTransform(presentedViewport);
+  return snapshot;
+}
+
 #ifdef DONNER_EDITOR_WGPU
 namespace {
 
@@ -80,22 +102,6 @@ Box2d FramebufferBoxFromScreenBox(const Box2d& screenBox, double devicePixelRati
   return Box2d(screenBox.topLeft * devicePixelRatio, screenBox.bottomRight * devicePixelRatio);
 }
 
-Transform2d FramebufferFromDocumentTransform(const ViewportState& viewport) {
-  const double devicePixelsPerDocUnit = viewport.devicePixelsPerDocUnit();
-  const Vector2d framebufferOriginFromDocumentOrigin =
-      viewport.panScreenPoint * viewport.devicePixelRatio -
-      viewport.panDocPoint * devicePixelsPerDocUnit;
-
-  Transform2d framebufferFromDocument(Transform2d::uninitialized);
-  framebufferFromDocument.data[0] = devicePixelsPerDocUnit;
-  framebufferFromDocument.data[1] = 0.0;
-  framebufferFromDocument.data[2] = 0.0;
-  framebufferFromDocument.data[3] = devicePixelsPerDocUnit;
-  framebufferFromDocument.data[4] = framebufferOriginFromDocumentOrigin.x;
-  framebufferFromDocument.data[5] = framebufferOriginFromDocumentOrigin.y;
-  return framebufferFromDocument;
-}
-
 std::optional<Transform2d> FramebufferFromTextureTransform(const PresentedTileQuad& tileQuad,
                                                            const Vector2i& textureSizePx) {
   if (textureSizePx.x <= 0 || textureSizePx.y <= 0) {
@@ -149,7 +155,8 @@ FrameCostBreakdown::DirectPresentation DrawDocumentPresentationToFramebuffer(
   renderer.pushClip(clip);
   renderer.setTransform(Transform2d());
 
-  const Transform2d framebufferFromCanvasTransform = FramebufferFromDocumentTransform(viewport);
+  const Transform2d framebufferFromCanvasTransform =
+      PresentedFramebufferFromDocumentTransform(viewport);
   const std::optional<PresentedDragBaseline> dragBaseline =
       PresentedBaselineFromDragPreviews(activeDragPreview, displayedDragPreview);
   const Box2d framebufferClipRect =
@@ -253,17 +260,14 @@ FrameCostBreakdown::DirectPresentation DrawDocumentPresentationToFramebuffer(
   return cost;
 }
 
-void DrawImmediateOverlaySnapshotToFramebuffer(svg::RendererGeode& renderer,
-                                               const gui::EditorWindowWgpuRenderTarget& target,
-                                               const ViewportState& viewport,
-                                               const Box2d& imageClipRect,
-                                               const SelectionChromeSnapshot& snapshot) {
+double DrawImmediateChromeToFramebuffer(svg::RendererGeode& renderer,
+                                        const gui::EditorWindowWgpuRenderTarget& target,
+                                        const ViewportState& viewport, const Box2d& paneClipRect,
+                                        const SelectionChromeSnapshot& snapshot) {
+  const auto start = std::chrono::steady_clock::now();
   if (!target.texture || target.framebufferSizePx.x <= 0 || target.framebufferSizePx.y <= 0) {
-    return;
+    return 0.0;
   }
-
-  SelectionChromeSnapshot framebufferSnapshot = snapshot;
-  framebufferSnapshot.canvasFromDoc = FramebufferFromDocumentTransform(viewport);
 
   svg::RenderViewport renderViewport;
   renderViewport.size = Vector2d(static_cast<double>(target.framebufferSizePx.x),
@@ -273,13 +277,22 @@ void DrawImmediateOverlaySnapshotToFramebuffer(svg::RendererGeode& renderer,
   renderer.setTargetTexture(target.texture);
   renderer.setPreserveTargetOnBeginFrame(true);
   renderer.beginFrame(renderViewport);
+
   svg::ResolvedClip clip;
-  clip.clipRect = FramebufferBoxFromScreenBox(imageClipRect, viewport.devicePixelRatio);
+  clip.clipRect = FramebufferBoxFromScreenBox(paneClipRect, viewport.devicePixelRatio);
+  renderer.setTransform(Transform2d());
   renderer.pushClip(clip);
-  OverlayRenderer::drawChromeFromSnapshot(renderer, framebufferSnapshot);
+
+  // What makes chrome/content desync impossible: chrome is placed with the
+  // transform the tiles were placed with this frame, from the same viewport and
+  // the same function, not the one capture happened to sample.
+  OverlayRenderer::drawChromeFromSnapshot(renderer,
+                                          ChromePlacedOnPresentedDocument(viewport, snapshot));
+
   renderer.popClip();
   renderer.endFrame();
   renderer.clearTargetTexture();
+  return ElapsedMs(start);
 }
 
 FramebufferCheckerboardRenderer::FramebufferCheckerboardRenderer(
@@ -369,13 +382,29 @@ int FramebufferCheckerboardRenderer::draw(const gui::EditorWindowWgpuRenderTarge
     return 0;
   }
 
+  // Appearance comes from the shared renderer-level constants, not from local
+  // literals: the browser worker surface draws the same checkerboard through
+  // `RendererInterface::drawCheckerboardUnderlay`, and the two must be pixel-
+  // identical for the same document to look the same on both presentation
+  // paths.
+  static_assert(kFramebufferCheckerboardSize == svg::kTransparencyCheckerboardCellLogicalPx);
   const geode::GeodeCheckerboardPipeline::Uniforms uniforms{
       .targetSize = {static_cast<float>(target.framebufferSizePx.x),
                      static_cast<float>(target.framebufferSizePx.y)},
       .devicePixelRatio = static_cast<float>(devicePixelRatio),
       .checkerSize = static_cast<float>(kFramebufferCheckerboardSize),
-      .darkColor = {40.0f / 255.0f, 40.0f / 255.0f, 40.0f / 255.0f, 1.0f},
-      .lightColor = {60.0f / 255.0f, 60.0f / 255.0f, 60.0f / 255.0f, 1.0f},
+      .darkColor = {svg::kTransparencyCheckerboardDarkColor[0],
+                    svg::kTransparencyCheckerboardDarkColor[1],
+                    svg::kTransparencyCheckerboardDarkColor[2],
+                    svg::kTransparencyCheckerboardDarkColor[3]},
+      .lightColor = {svg::kTransparencyCheckerboardLightColor[0],
+                     svg::kTransparencyCheckerboardLightColor[1],
+                     svg::kTransparencyCheckerboardLightColor[2],
+                     svg::kTransparencyCheckerboardLightColor[3]},
+      // The window framebuffer *is* the anchor: the pattern is fixed to the
+      // window and the document slides over it.
+      .originOffsetPx = {0.0f, 0.0f},
+      .padding = {0.0f, 0.0f},
   };
   device_->queue().writeBuffer(uniformBuffer_.get(), 0, &uniforms, sizeof(uniforms));
 

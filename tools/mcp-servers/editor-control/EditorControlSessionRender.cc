@@ -563,6 +563,21 @@ bool EditorControlSession::renderCurrentFrame(std::vector<CapturedRenderResult>*
           .renderResult = std::move(*result),
           .displayFrame = std::move(displayFrame),
       });
+      // A completed render can leave a deferred first-frame cache warmup queued on the
+      // worker. That warmup traverses the document from the worker thread, while the next
+      // tool call mutates the DOM from this thread through `EditorApp::flushFrame()`, which
+      // applies queued commands without taking document write access. The interactive shell
+      // absorbs the deferred work in its idle frame loop and gates every flush on
+      // `!isBusy()`; this session has no such loop, so a tool call must not return while
+      // speculative worker work is still walking the registry.
+      const auto warmupDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+      while (asyncRenderer_.isBusy() && std::chrono::steady_clock::now() < warmupDeadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+      if (asyncRenderer_.isBusy()) {
+        *error = "timed out waiting for the deferred compositor warmup to settle";
+        return false;
+      }
       return true;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(1));

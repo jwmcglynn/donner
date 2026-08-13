@@ -12,6 +12,7 @@
 #include <span>
 
 #include "donner/base/Vector2.h"
+#include "donner/editor/EmbeddedSvgIcon.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/svg/renderer/RendererInterface.h"
 
@@ -56,6 +57,11 @@ using ToolbarIconTextureProvider =
 /// The Donner-rendered two-tone bitmap for @p icon, rendered once and cached
 /// for the process lifetime. `std::nullopt` if parsing/rendering failed.
 [[nodiscard]] const std::optional<svg::RendererBitmap>& CachedToolbarIconBitmap(ToolbarIcon icon);
+
+/// Every toolbar icon rasterization, for the shell's startup prewarm batch.
+/// The palette is on screen from the first frame, so all of these are paid
+/// during boot whether or not they are prewarmed.
+[[nodiscard]] std::span<const EmbeddedSvgIconRequest> ToolbarIconPrewarmRequests();
 
 /// Draw @p icon centered within the button rect `[min, max]`, tinted with
 /// @p tintColor. No-op when @p provider is null or the icon can't be uploaded

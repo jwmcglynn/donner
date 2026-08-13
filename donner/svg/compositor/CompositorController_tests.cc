@@ -144,6 +144,45 @@ TEST_F(CompositorControllerTest, ConstructsWithDocumentAndRenderer) {
   EXPECT_EQ(compositor.totalBitmapMemory(), 0u);
 }
 
+TEST_F(CompositorControllerTest, GeometryDebugForcesFlatRootPresentation) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" width="10" height="10" fill="red" />
+  )svg");
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  CompositorConfig config;
+  config.deferFirstFrameWarmup = true;
+  CompositorController compositor(document, renderer_, config);
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
+  ASSERT_EQ(compositor.layerCount(), 1u);
+
+  ON_CALL(renderer_, debugGeometryOverlay()).WillByDefault(::testing::Return(true));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  const auto state = compositor.snapshotState();
+  EXPECT_EQ(state.activeHintsCount, 0u);
+  EXPECT_EQ(state.layerCount, 0u);
+  EXPECT_FALSE(state.splitPathActive);
+  EXPECT_FALSE(compositor.hasPendingFirstFrameWarmup());
+  EXPECT_TRUE(compositor.snapshotTilesForUpload().empty())
+      << "Geometry debug frames must be presented from the flat root target";
+}
+
+TEST_F(CompositorControllerTest, GeometryDebugFlatRenderStopsBeforeTraversalWhenCancelled) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect width="10" height="10" fill="red" />
+  )svg");
+  ON_CALL(renderer_, debugGeometryOverlay()).WillByDefault(::testing::Return(true));
+  CompositorController compositor(document, renderer_);
+
+  CancellationToken token;
+  token.cancel();
+  EXPECT_CALL(renderer_, beginFrame(_)).Times(0);
+  EXPECT_FALSE(compositor.renderFrame(RenderViewport{kTestSvgDefaultSize}, token));
+  EXPECT_FALSE(compositor.hasPendingFirstFrameWarmup());
+}
+
 TEST_F(CompositorControllerTest, PromoteEntitySucceeds) {
   SVGDocument document = makeDocument(R"svg(
     <rect id="target" width="10" height="10" fill="red" />
@@ -362,6 +401,41 @@ TEST_F(CompositorControllerTest, M9PendingDemoteKeepsHasSplitStaticLayersTrue) {
       << "Pending-demote A must not mask the live promote B from "
          "hasSplitStaticLayers() - would otherwise force composeLayers "
          "to run every fast-path drag frame.";
+}
+
+TEST_F(CompositorControllerTest,
+       TextureBackedFlatComposeTranslatesReusedImmediateDragLayer) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect width="100" height="100" fill="white" />
+    <rect id="target" x="10" y="10" width="20" height="20" fill="red" />
+  )svg");
+
+  configureMockForTextureCaching();
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+  const RenderViewport viewport{kTestSvgDefaultSize};
+
+  CompositorConfig config;
+  config.immediateStaticSpans = false;
+  config.dynamicImmediateStaticSpans = false;
+  CompositorController compositor(document, renderer_, config);
+  ASSERT_TRUE(compositor.promoteEntity(entity, InteractionHint::ActiveDrag));
+  compositor.renderFrame(viewport);
+  const auto warmTiles =
+      compositor.snapshotTilesForUpload(CompositorTileBitmapPayload::MetadataOnly);
+  const auto targetTile = std::ranges::find(warmTiles, entity, &CompositorTile::layerEntity);
+  ASSERT_NE(targetTile, warmTiles.end());
+  ASSERT_TRUE(targetTile->immediate);
+
+  // An immediate drag layer reuses its retained payload while the DOM translation changes. The
+  // flat direct-surface compose must therefore blit that payload with canvasFromBitmap instead of
+  // direct-drawing the range as if the cached transform were still identity.
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(5.0, 0.0)));
+  EXPECT_CALL(renderer_, drawTextureSnapshot(::testing::_, ::testing::_, ::testing::_,
+                                              ::testing::_))
+      .Times(2);
+  compositor.renderFrame(viewport);
 }
 
 // Design doc 0033 §M9 + §M2C - pending-demote entries must NOT keep
@@ -1337,6 +1411,42 @@ TEST_F(CompositorControllerTest, CheapStaticSpanPlanChoosesImmediate) {
   EXPECT_THAT(inspectorTileIt->spanRangeLabel, HasSubstr("rect#cheap"));
 }
 
+TEST_F(CompositorControllerTest, HighOverheadBackendCanCacheOtherwiseImmediateStaticSpans) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" x="40" y="0" width="10" height="10" fill="red" />
+    <rect id="cheap" x="2" y="2" width="8" height="8" fill="blue" />
+  )svg");
+
+  configureMockForCaching();
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  CompositorConfig config;
+  config.immediateStaticSpans = false;
+  CompositorController compositor(document, renderer_, config);
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  const auto plans = compositor.snapshotStaticSpanPlansForTesting();
+  EXPECT_THAT(plans, ::testing::Each(::testing::Field("mode", &StaticSpanPlan::mode,
+                                                      StaticSpanMode::CachedTile)));
+  const auto countersAfterWarmup = compositor.fastPathCountersForTesting();
+
+  configureMockForCaching();
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  const auto stats = compositor.lastRenderFrameStats();
+  EXPECT_EQ(stats.immediateTileCount, 0)
+      << "Cached static spans must not rerasterize on a stable follow-up frame";
+  EXPECT_EQ(stats.cachedTileCount, 0)
+      << "Stable cached static spans must reuse their existing payload";
+  const auto countersAfterStableFrame = compositor.fastPathCountersForTesting();
+  EXPECT_EQ(countersAfterStableFrame.segmentResyncRebuilds,
+            countersAfterWarmup.segmentResyncRebuilds)
+      << "An unchanged layer topology must not rebuild every parallel segment vector";
+  EXPECT_EQ(countersAfterStableFrame.paintOrderSnapshots, countersAfterWarmup.paintOrderSnapshots)
+      << "A frame with no dirty static segments must not walk the full paint order";
+}
+
 TEST_F(CompositorControllerTest, ImmediateStaticSpanComposesDirectlyIntoCurrentFrame) {
   SVGDocument document = makeDocument(R"svg(
     <rect id="target" x="40" y="0" width="10" height="10" fill="red" />
@@ -1920,6 +2030,34 @@ TEST_F(CompositorControllerTest, MandatoryFilterLayerSurvivesCanvasResize) {
       << "Filter-bearing layer should still be promoted after canvas resize.";
 }
 
+TEST_F(CompositorControllerTest, DeferredFirstFrameWarmupDoesNotDelayPresentableDraw) {
+  SVGDocument document = makeDocument(R"svg(
+    <defs>
+      <filter id="f"><feGaussianBlur stdDeviation="2"/></filter>
+    </defs>
+    <g id="target" filter="url(#f)">
+      <rect x="0" y="0" width="10" height="10" fill="red" />
+    </g>
+  )svg");
+
+  configureMockForCaching(std::chrono::milliseconds(10));
+  CompositorConfig config;
+  config.deferFirstFrameWarmup = true;
+  CompositorController compositor(document, renderer_, config);
+
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  EXPECT_EQ(compositor.lastRenderFrameStats().firstFrameWarmupMs, 0.0)
+      << "A correct first-frame draw is already presentable; retained-cache warmup must not hold "
+         "that frame behind offscreen work.";
+  ASSERT_TRUE(compositor.hasPendingFirstFrameWarmup());
+
+  CancellationToken cancellation;
+  EXPECT_TRUE(compositor.warmPendingFirstFrameCaches(cancellation));
+  EXPECT_FALSE(compositor.hasPendingFirstFrameWarmup());
+  EXPECT_GT(compositor.lastRenderFrameStats().firstFrameWarmupMs, 0.0);
+}
+
 TEST_F(CompositorControllerTest, SnapshotLayerInspectorRowsFormatsFallbackReasons) {
   SVGDocument document = makeDocument(R"svg(
     <defs>
@@ -2107,6 +2245,114 @@ TEST_F(CompositorControllerTest, RemapAfterStructuralReplaceFailsWhenLayerRangeI
   EXPECT_FALSE(compositor.remapAfterStructuralReplace({{groupEntity, groupEntity}}));
 
   compositor.resetAllLayers();
+}
+
+// Tile rasterization pools its offscreen renderer: the first acquisition of a
+// compositor's lifetime constructs an instance and every later tile reuses
+// it. The pre-pool behavior (one construct + teardown per tile) is what made
+// multi-tile size-commit frames hitch on the browser backend - each teardown
+// blocks on two GPU-idle device polls - so a regression here is a direct
+// reintroduction of that hitch.
+TEST_F(CompositorControllerTest, PooledOffscreenIsReusedAcrossTilesAndFrames) {
+  configureMockForCaching();
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="a" x="0" width="20" height="20" fill="red" />
+    <rect id="b" x="30" width="20" height="20" fill="green" />
+    <rect id="c" x="60" width="20" height="20" fill="blue" />
+  )svg");
+  auto a = document.querySelector("#a");
+  auto b = document.querySelector("#b");
+  ASSERT_TRUE(a.has_value());
+  ASSERT_TRUE(b.has_value());
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(a->unsafeEntityHandle().entity()));
+  ASSERT_TRUE(compositor.promoteEntity(b->unsafeEntityHandle().entity()));
+
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  const auto firstFrame = compositor.lastRenderFrameStats();
+  EXPECT_EQ(firstFrame.offscreenCreateCount, 1)
+      << "the first frame constructs exactly one offscreen instance (the support probe), "
+         "then every tile reuses it";
+  EXPECT_GE(firstFrame.offscreenRecycleCount, 2) << "later tiles must draw on the pooled instance";
+
+  // A canvas size change invalidates every cached tile; the full re-rasterize
+  // must still not construct a new offscreen instance.
+  compositor.renderFrame(RenderViewport{Vector2i(kTestSvgDefaultSize.x / 2,  //
+                                                 kTestSvgDefaultSize.y / 2)});
+  const auto secondFrame = compositor.lastRenderFrameStats();
+  EXPECT_EQ(secondFrame.offscreenCreateCount, 0)
+      << "steady-state frames rasterize every tile on the pooled instance";
+  EXPECT_GE(secondFrame.offscreenRecycleCount, 2);
+}
+
+// `CompositorConfig::yieldBetweenTiles` fires exactly once per rasterized
+// tile, after that tile's timing stamp. The browser worker installs a bounded
+// event-loop yield here because pooled offscreen renderers removed the
+// per-tile teardown suspensions that used to (incidentally) service canvas
+// size commits and WebGPU callbacks mid-pass.
+TEST_F(CompositorControllerTest, YieldBetweenTilesFiresPerRasterizedTile) {
+  configureMockForCaching();
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="a" x="0" width="20" height="20" fill="red" />
+    <rect id="b" x="30" width="20" height="20" fill="green" />
+  )svg");
+  auto a = document.querySelector("#a");
+  ASSERT_TRUE(a.has_value());
+
+  int yieldCount = 0;
+  CompositorConfig config;
+  config.yieldBetweenTiles = [&yieldCount]() { ++yieldCount; };
+  CompositorController compositor(document, renderer_, config);
+  ASSERT_TRUE(compositor.promoteEntity(a->unsafeEntityHandle().entity()));
+
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  const auto stats = compositor.lastRenderFrameStats();
+  EXPECT_EQ(yieldCount, stats.immediateTileCount + stats.cachedTileCount)
+      << "one yield per rasterized tile (empty segments neither rasterize nor yield)";
+  EXPECT_GT(yieldCount, 0) << "test setup must rasterize at least one tile";
+
+  // A clean frame rasterizes nothing and must not yield.
+  const int yieldsAfterFirstFrame = yieldCount;
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  EXPECT_EQ(yieldCount, yieldsAfterFirstFrame);
+}
+
+// A cancellation delivered AT the between-tiles safe point (exactly how the
+// browser worker receives a superseding viewport request during the yield)
+// stops the pass at the next tile boundary, keeps the cleanly-recycled pooled
+// instance, and lets the following frame finish the remaining tiles without
+// constructing a new offscreen renderer.
+TEST_F(CompositorControllerTest, CancellationAtYieldSafePointPreservesPooledOffscreen) {
+  configureMockForCaching();
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="a" x="0" width="20" height="20" fill="red" />
+    <rect id="b" x="30" width="20" height="20" fill="green" />
+    <rect id="c" x="60" width="20" height="20" fill="blue" />
+  )svg");
+  auto a = document.querySelector("#a");
+  auto b = document.querySelector("#b");
+  ASSERT_TRUE(a.has_value());
+  ASSERT_TRUE(b.has_value());
+
+  CancellationToken token;
+  CompositorConfig config;
+  config.yieldBetweenTiles = [&token]() { token.cancel(); };
+  CompositorController compositor(document, renderer_, config);
+  ASSERT_TRUE(compositor.promoteEntity(a->unsafeEntityHandle().entity()));
+  ASSERT_TRUE(compositor.promoteEntity(b->unsafeEntityHandle().entity()));
+
+  EXPECT_FALSE(compositor.renderFrame(RenderViewport{kTestSvgDefaultSize}, token))
+      << "the yield-delivered cancellation must stop the pass";
+  const auto cancelledFrame = compositor.lastRenderFrameStats();
+  EXPECT_LE(cancelledFrame.offscreenCreateCount, 1);
+
+  // The interrupted pass recycled its last tile's instance before yielding;
+  // the completion frame reuses it for every remaining tile.
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  const auto completionFrame = compositor.lastRenderFrameStats();
+  EXPECT_EQ(completionFrame.offscreenCreateCount, 0)
+      << "a safe-point cancellation must not discard the pooled offscreen instance";
 }
 
 }  // namespace donner::svg::compositor

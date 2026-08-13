@@ -48,6 +48,14 @@ public:
   /// Return the pending source-text sync wake interval, if a throttled edit is waiting.
   [[nodiscard]] std::optional<float> nextTextSyncWakeSeconds() const;
   void applyPendingWritebacks(EditorApp& app, SelectTool& selectTool, TextEditor& textEditor);
+  /// True when \ref applyPendingWritebacks still has queued work. Writebacks accumulate while the
+  /// async renderer owns the document and are drained by the first frame that finds it idle - so a
+  /// frame that skips the document-sync stage while this holds would strand them until the next
+  /// user input.
+  [[nodiscard]] bool hasPendingWritebacks() const {
+    return !pendingTransformWritebacks_.empty() || !pendingElementRemoveWritebacks_.empty() ||
+           !pendingSourceEditIntents_.empty() || textChangePending_;
+  }
 
 private:
   std::string previousSourceText_;

@@ -1,4 +1,5 @@
 load("@rules_python//python:defs.bzl", "py_test")
+load("//build_defs:rules.bzl", "donner_cc_test")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -45,7 +46,9 @@ cc_library(
         "//donner/editor:presentation_render_scheduler",
         "//donner/editor:presented_frame_composer",
         "//donner/editor:select_tool",
+        "//donner/editor:selection_aabb",
         "//donner/editor:selection_transform_handles",
+        "//donner/editor:text_tool",
         "//donner/editor:viewport_state",
         "//donner/editor/repro:gl_rnr_replay",
         "//donner/editor/repro:repro_file",
@@ -71,7 +74,7 @@ cc_binary(
     ],
 )
 
-cc_test(
+donner_cc_test(
     name = "editor_control_session_tests",
     size = "small",
     srcs = ["EditorControlSession_tests.cc"],

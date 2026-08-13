@@ -3,6 +3,7 @@
 /// RAII wrapper around a WebGPU device - headless or host-provided.
 
 #include <atomic>
+#include <cstddef>
 #include <memory>
 #include <vector>
 #include <webgpu/webgpu.hpp>
@@ -11,6 +12,11 @@
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::geode {
+
+#ifdef __EMSCRIPTEN__
+extern "C" void donnerGeodeCompleteHeadlessImport(void* userdata, WGPUInstance instance,
+                                                  WGPUAdapter adapter, WGPUDevice device);
+#endif
 
 // Forward declarations - GeodeDevice exposes accessors for the pipeline
 // objects it owns (see "Shared render / compute pipelines" section below).
@@ -99,7 +105,22 @@ public:
    * @return A valid GeodeDevice on success, or an empty unique_ptr if the
    *   runtime could not create an adapter/device (e.g., no GPU, no driver).
    */
-  static std::unique_ptr<GeodeDevice> CreateHeadless();
+  static std::unique_ptr<GeodeDevice> CreateHeadless(
+      wgpu::TextureFormat textureFormat = wgpu::TextureFormat::RGBA8Unorm);
+
+#ifdef __EMSCRIPTEN__
+  /// Completion for callback-driven browser device acquisition. The callback runs on the
+  /// requesting pthread and owns the returned device, if any.
+  using CreateHeadlessAsyncCallback = void (*)(std::unique_ptr<GeodeDevice> device, void* userdata);
+
+  /// Create a browser WebGPU device without suspending the pthread through Asyncify.
+  ///
+  /// Safari can re-enter Wasm with a spontaneous requestAdapter/requestDevice completion while
+  /// Emscripten's synchronous convenience wrapper is unwinding a stack-local continuation. Keep
+  /// all partial state on the heap and advance acquisition only from browser callbacks instead.
+  static void CreateHeadlessAsync(wgpu::TextureFormat textureFormat,
+                                  CreateHeadlessAsyncCallback callback, void* userdata);
+#endif
 
   /**
    * Create a GeodeDevice wrapping a host-provided device and queue.
@@ -137,12 +158,34 @@ public:
   /// Returns the wgpu::Device. Guaranteed valid for the lifetime of this object.
   const wgpu::Device& device() const { return device_; }
 
+  /// Poll the device, bracketed for ASYNCIFY suspend attribution.
+  ///
+  /// Under Emscripten, emdawnwebgpu implements `poll` by yielding the
+  /// Asyncify-enabled thread for roughly one browser task regardless of
+  /// @p wait, so every poll unwinds and later rewinds the wasm stack. With the
+  /// whole application on one thread (single-canvas presenter architecture) that wall time is UI frame
+  /// time, so it has to be attributable. Route every poll through here rather
+  /// than calling `device().poll` directly; the probe is a pair of clock reads
+  /// on native builds, where `poll` does not suspend at all.
+  void pollSuspending(bool wait) const;
+
+  /// Instance that created the headless device. Null for externally-owned devices.
+  const wgpu::Instance& instance() const;
+
   /// Returns the default queue.
   const wgpu::Queue& queue() const { return queue_; }
 
-  /// Returns the instance that created this device. In embedded mode this is
-  /// null unless the host supplied `GeodeEmbedConfig::instance`.
-  const wgpu::Instance& instance() const;
+  struct ReadbackStats {
+    int count = 0;
+    int pollIterations = 0;
+    bool usedTimedWaitAny = false;
+  };
+
+  /// Record one completed CPU readback from a renderer sharing this device.
+  void recordReadback(bool usedTimedWaitAny, int pollIterations);
+
+  /// Consume aggregate readback diagnostics for all renderers sharing this device.
+  [[nodiscard]] ReadbackStats consumeReadbackStats();
 
   /// Returns the adapter backing this device. May be null in embedded mode if
   /// the host did not provide an adapter.
@@ -176,6 +219,12 @@ public:
    * without an explicit `device.poll()`.
    */
   void drainDeferredDestroys();
+
+  /// Number of textures waiting for the next frame-boundary destroy pass.
+  /// Exposed to pin resource-retirement behavior in renderer regression tests.
+  [[nodiscard]] std::size_t deferredTextureDestroyCountForTesting() const {
+    return pendingTextures_.size();
+  }
 
   /**
    * Process-unique identity for this device instance, assigned at
@@ -374,10 +423,22 @@ public:
   /// presentation path. Built lazily on first access - only the editor draws
   /// it, so headless/WASM consumers never pay the compile cost.
   GeodeCheckerboardPipeline& checkerboardPipeline() const;
+  /// Destination-over variant of \ref checkerboardPipeline, for targets that
+  /// already hold composed premultiplied content and need the checkerboard
+  /// placed underneath it. Built lazily and independently of the replace-blend
+  /// pipeline, so a consumer only pays for the variant it actually draws.
+  GeodeCheckerboardPipeline& checkerboardUnderlayPipeline() const;
   /// @}
 
 private:
   GeodeDevice();
+
+#ifdef __EMSCRIPTEN__
+  struct AsyncCreateContext;
+  static void completeAsyncCreate(AsyncCreateContext* context, std::unique_ptr<GeodeDevice> device);
+  friend void donnerGeodeCompleteHeadlessImport(void* userdata, WGPUInstance instance,
+                                                WGPUAdapter adapter, WGPUDevice device);
+#endif
 
   /// Allocate the shared pipelines and filter engine after `device_`,
   /// `queue_`, and `textureFormat_` are finalised. Called from both
@@ -416,6 +477,10 @@ private:
   // (the caller is reporting, not mutating visible state).
   mutable uint64_t lifetimeTextureCreates_ = 0;
   mutable uint64_t lifetimeBufferCreates_ = 0;
+
+  std::atomic<int> readbackCount_{0};
+  std::atomic<int> readbackPollIterations_{0};
+  std::atomic<bool> readbackUsedTimedWaitAny_{false};
 
   // Shared live-resident-bytes gauge (design doc 0030 wave 2). Mutable +
   // lazily created so `residentBytesGauge()` stays const like the other

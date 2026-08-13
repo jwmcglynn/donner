@@ -7,6 +7,7 @@
 
 #include <vector>
 
+#include "donner/editor/PinchZoomPolicy.h"
 #include "donner/editor/RenderPaneGesture.h"
 
 struct GLFWwindow;
@@ -22,7 +23,8 @@ namespace donner::editor {
 ///
 /// @param magnification Cocoa magnification delta (e.g. 0.2 for 20%
 ///   pinch-out).
-/// @param wheelZoomStep Multiplicative zoom step per +1.0 scroll unit.
+/// @param wheelZoomStep Multiplicative zoom step per +1.0 scroll unit,
+///   normally `kWheelZoomStep` from `PinchZoomPolicy.h`.
 /// @return Synthetic `scrollDelta.y` that yields the same zoom factor,
 ///   or 0.0 for degenerate inputs.
 [[nodiscard]] double PinchMagnificationToScrollDelta(double magnification, double wheelZoomStep);

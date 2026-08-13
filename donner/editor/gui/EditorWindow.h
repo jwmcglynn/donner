@@ -21,6 +21,7 @@
 /// doesn't own the widget tree, just the hosting surface.
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -44,6 +45,102 @@ class GeodeDevice;
 }
 
 namespace donner::editor::gui {
+
+namespace internal {
+
+/// The Wasm render worker owns a separate WebGPU device, so the UI's primary
+/// and direct-framebuffer renderers remain single-threaded and may share one
+/// GeodeDevice wrapper. Desktop's AsyncRenderer shares the primary wrapper
+/// across threads; its UI-only framebuffer renderers need a separate wrapper
+/// to isolate mutable counters and deferred-destroy queues.
+[[nodiscard]] constexpr bool ShouldShareWgpuFramebufferGeodeDevice(bool emscriptenBuild) noexcept {
+  return emscriptenBuild;
+}
+
+/// Opaque fallback clear color for the browser UI surface, matching the page
+/// background painted behind the canvas (`donner/editor/wasm/editor.css`:
+/// `background: #101317`).
+inline constexpr std::array<float, 4> kWasmOpaqueSurfaceClearColor = {
+    16.0f / 255.0f, 19.0f / 255.0f, 23.0f / 255.0f, 1.0f};
+
+/// Pick the browser UI surface's clear color.
+///
+/// The Wasm UI surface clears uncovered render-pane pixels to alpha 0 so the
+/// worker's document canvas composites underneath it. That only produces
+/// transparency when the configured surface honors the alpha channel; a surface
+/// composited as opaque turns the same clear into solid black and blanks the
+/// whole editor area until real content covers it. Keep the transparent clear
+/// only when the surface actually reports premultiplied alpha; otherwise clear
+/// to the page background so the result matches what the page already paints
+/// behind the canvas.
+[[nodiscard]] constexpr std::array<float, 4> WasmSurfaceClearColor(
+    std::array<float, 4> transparentClearColor, bool premultipliedAlphaSupported) noexcept {
+  return premultipliedAlphaSupported ? transparentClearColor : kWasmOpaqueSurfaceClearColor;
+}
+
+enum class WgpuSurfaceFailureKind {
+  Timeout,
+  OutdatedOrLost,
+  Setup,
+  Fatal,
+};
+
+struct WgpuSurfaceRetryDecision {
+  bool requestFrame = false;
+  bool reconfigure = false;
+
+  bool operator==(const WgpuSurfaceRetryDecision&) const = default;
+};
+
+/// Bound retries so a permanently lost/device-fatal surface cannot turn the
+/// event-driven Wasm loop back into a hot spin.
+[[nodiscard]] constexpr WgpuSurfaceRetryDecision WgpuSurfaceRetryDecisionFor(
+    WgpuSurfaceFailureKind failure, unsigned consecutiveFailures) noexcept {
+  constexpr unsigned kMaxConsecutiveRetries = 3u;
+  if (failure == WgpuSurfaceFailureKind::Fatal || consecutiveFailures >= kMaxConsecutiveRetries) {
+    return {};
+  }
+  return WgpuSurfaceRetryDecision{
+      .requestFrame = true,
+      .reconfigure = failure == WgpuSurfaceFailureKind::OutdatedOrLost,
+  };
+}
+
+struct WgpuDiagnosticReadbackDecision {
+  bool retry = false;
+  bool completeRequest = false;
+
+  bool operator==(const WgpuDiagnosticReadbackDecision&) const = default;
+};
+
+/// Diagnostic readback is deliberately best-effort. A transient capture failure, including setup
+/// before mapAsync, gets two retries, while a successful capture or third consecutive failure
+/// completes the request so the event-driven browser loop cannot become a permanent readback spin.
+[[nodiscard]] constexpr WgpuDiagnosticReadbackDecision WgpuDiagnosticReadbackDecisionFor(
+    bool captureSucceeded, unsigned consecutiveFailuresBeforeAttempt) noexcept {
+  constexpr unsigned kMaxFailedAttempts = 3u;
+  if (captureSucceeded || consecutiveFailuresBeforeAttempt >= kMaxFailedAttempts - 1u) {
+    return WgpuDiagnosticReadbackDecision{
+        .retry = false,
+        .completeRequest = true,
+    };
+  }
+  return WgpuDiagnosticReadbackDecision{
+      .retry = true,
+      .completeRequest = false,
+  };
+}
+
+/// Once the map callback releases the in-flight gate, every live completion must recheck the
+/// JavaScript request counters. A transient failure needs another attempt, while a successful or
+/// terminal attempt may have a newer request waiting behind it. The JavaScript wake helper filters
+/// completed requests, so this recheck does not create idle frames.
+[[nodiscard]] constexpr bool ShouldRecheckPendingWgpuReadbackRequestsAfterCompletion(
+    bool callbackAlive, WgpuDiagnosticReadbackDecision decision) noexcept {
+  return callbackAlive && (decision.retry || decision.completeRequest);
+}
+
+}  // namespace internal
 
 /// HiDPI settings derived from the native window/display scale.
 struct UiScaleConfig {
@@ -73,6 +170,16 @@ struct EditorWindowOptions {
   /// available. macOS keeps a native GPU-backed Cocoa context and relies on
   /// `visible = false` for hidden replay windows.
   bool offscreen = false;
+  /// Force the WebGPU frame path to render into an offscreen texture instead of
+  /// a presentable window surface, on every platform.
+  ///
+  /// Linux replay reaches that arm implicitly through GLFW's windowless "null"
+  /// platform, so on macOS - which always builds a real (possibly hidden) Cocoa
+  /// surface - the offscreen arm is otherwise unreachable and untestable. This
+  /// flag makes it reachable anywhere a WebGPU device exists, so a single test
+  /// can cover the offscreen target creation, resize, and readback path on both
+  /// the Linux and macOS lanes. No effect in non-WebGPU (OpenGL) builds.
+  bool forceOffscreenRenderTarget = false;
   /// Content/display scale to emulate for hidden replay windows. Replay sets
   /// this to the recorded scale so framebuffer readback reproduces the pixel
   /// geometry of captures taken on a HiDPI machine.
@@ -111,6 +218,12 @@ struct EditorWindowFrameTiming {
   double readbackMs = 0.0;
   /// End-frame time spent presenting or swapping the surface.
   double presentMs = 0.0;
+  /// Vertices ImGui emitted for this frame's draw data.
+  ///
+  /// The editor renders every vector path through Geode, so this must stay at
+  /// UI-widget scale. Document-complexity geometry reaching ImGui shows up here
+  /// as a jump of an order of magnitude or more.
+  int imguiVertexCount = 0;
 };
 
 /// Fonts loaded into this window's ImGui context for the editor shell.
@@ -217,8 +330,28 @@ public:
   /// async renderer worker to wake the UI thread when a render result
   /// becomes available.
   ///
-  /// No-op on Emscripten.
+  /// On Emscripten, sets the atomic gate consumed by the next browser animation frame.
   void wakeEventLoop();
+
+#ifdef __EMSCRIPTEN__
+  /// Consume one Wasm main-frame request posted by editor or worker code.
+  /// Browser input requests are tracked separately by the JavaScript bridge in `main.cc`.
+  [[nodiscard]] bool consumeWasmFrameRequest() {
+    return wasmFrameRequested_.exchange(false, std::memory_order_acq_rel);
+  }
+#endif
+
+  /// Whether ImGui is holding input events this thread has accepted but no
+  /// frame has consumed yet.
+  ///
+  /// Input that has arrived and not been presented is a frame obligation in its
+  /// own right. `beginFrame` already carries it for the events ImGui trickles
+  /// across frames; the browser's demand-driven loop needs it as a wake source
+  /// too, because a DOM event's frame request is raised on the page's main
+  /// thread while the event itself reaches this thread through the proxying
+  /// queue, and a tick already in flight can spend the request before the event
+  /// lands.
+  [[nodiscard]] bool hasQueuedInputEvents() const;
 
   /// Starts a new ImGui frame. Caller issues `ImGui::*` widget calls
   /// after this returns.
@@ -256,6 +389,11 @@ public:
   /// Logical window size in screen coordinates.
   [[nodiscard]] Vector2i windowSize() const;
 
+  /// Physical framebuffer size in pixels. Equals \ref windowSize scaled by the
+  /// backing display scale, and matches the dimensions of a bitmap returned by
+  /// \ref endFrameAndReadPixels. (0, 0) when the window failed to initialize.
+  [[nodiscard]] Vector2i framebufferSize() const;
+
   /// Backing display content scale (for example 2.0 on a Retina display).
   [[nodiscard]] Vector2d contentScale() const;
 
@@ -291,13 +429,21 @@ public:
   [[nodiscard]] std::shared_ptr<geode::GeodeDevice> geodeDevice() const;
 
 #ifdef DONNER_EDITOR_WGPU
-  /// Single-sample Geode device for direct append passes into the editor framebuffer.
+  /// True when frames render into an offscreen WebGPU texture rather than a
+  /// presentable window surface. That is the case for headless/offscreen Linux
+  /// replay (GLFW's null platform) and whenever
+  /// \ref EditorWindowOptions::forceOffscreenRenderTarget was requested.
+  /// False in OpenGL builds and before the WebGPU device came up.
+  [[nodiscard]] bool usingOffscreenRenderTarget() const;
+
+  /// Shared Geode device for direct append passes into the editor framebuffer.
   [[nodiscard]] std::shared_ptr<geode::GeodeDevice> geodeFramebufferDevice() const;
 
   /// Set the direct framebuffer underlay callback for the next and subsequent frames.
   void setWgpuUnderlayRenderCallback(WgpuUnderlayRenderCallback callback);
 
-  /// Set the direct framebuffer render callback for the next and subsequent frames.
+  /// Set the direct framebuffer overlay callback for the next and subsequent frames.
+  /// The callback renders above the document underlay and below ImGui UI.
   void setWgpuDirectRenderCallback(WgpuDirectRenderCallback callback);
 #endif
 
@@ -328,6 +474,10 @@ private:
   bool valid_ = false;
   bool glUnavailable_ = false;
   bool imguiInitialized_ = false;
+#ifdef __EMSCRIPTEN__
+  /// Cross-thread wake gate for the event-driven Wasm main loop.
+  std::atomic_bool wasmFrameRequested_{true};
+#endif
 };
 
 }  // namespace donner::editor::gui

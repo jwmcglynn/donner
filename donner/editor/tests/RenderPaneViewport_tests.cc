@@ -408,6 +408,12 @@ TEST(ViewportStateTest, SelectedPrewarmRasterViewportAddsBoundedOverdraw) {
   EXPECT_NEAR_VEC(outputBottomRight, Vector2d(2624.0, 2224.0), 1e-9);
 }
 
+// An unbounded base raster already covers the whole document at full resolution, so there is no
+// unrendered edge for prewarm overdraw to hide and padding it would only inflate the raster.
+// `RenderCoordinator`'s `ShouldUseSelectedPrewarmRasterViewport` gate reflects that: the prewarm
+// viewport is only requested when the base raster is viewport-bounded. Off-canvas drags are kept
+// crisp by `CompositedPresentation::needsCompositedLayerCapture`, which recaptures the layer
+// before the cached bitmap's overdraw margin is exhausted, not by widening this raster.
 TEST(ViewportStateTest, SelectedPrewarmRasterViewportDoesNotPadUnboundedOutput) {
   ViewportState v = MakeFreshState(Vector2d::Zero(), Vector2d(800.0, 600.0),
                                    Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0),
@@ -417,6 +423,7 @@ TEST(ViewportStateTest, SelectedPrewarmRasterViewportDoesNotPadUnboundedOutput) 
   const EditorRasterViewport padded = v.selectedPrewarmRasterViewport();
 
   EXPECT_FALSE(base.viewportBounded);
+  EXPECT_FALSE(padded.viewportBounded);
   EXPECT_EQ(padded.documentRect, base.documentRect);
   EXPECT_EQ(padded.outputSizePx, base.outputSizePx);
   EXPECT_EQ(padded.semanticCanvasSizePx, base.semanticCanvasSizePx);

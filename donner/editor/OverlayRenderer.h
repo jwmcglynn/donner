@@ -71,7 +71,8 @@ enum class SelectionChromeDetail {
   Full,
   /// Capture visible path outlines only, skipping selection bounds and transform handles.
   PathOutlinesOnly,
-  /// Capture only the combined selection bounds, skipping path extraction.
+  /// Capture only the combined selection bounds. An active scale/rotate
+  /// preview also keeps the selection path outline aligned with the gesture.
   CombinedBoundsOnly,
   /// Skip selection geometry entirely. Dedicated editing chrome (for example
   /// a text caret and session frame) is attached to the snapshot separately.
@@ -91,6 +92,13 @@ enum class SelectionChromeDetail {
 /// Design doc 0033 §M7. Lets the chrome rasterize run while the worker
 /// is mid-render, so the editor can paint selection chrome in a frame
 /// that the worker hasn't returned a result for yet.
+///
+/// Every geometry member is ANCHORED in document space and every chrome SIZE
+/// (stroke widths, handle squares, path anchor/control squares) is resolved at
+/// draw time from \ref canvasFromDoc. A snapshot is therefore drawable at any
+/// transform: the presenter re-points `canvasFromDoc` at the transform this
+/// frame's document pixels landed in and draws immediately, which is what makes
+/// chrome/content desync and zoom-scaled handles structurally impossible.
 struct SelectionChromeSnapshot {
   /// Four document-space corners of an oriented selection box.
   struct OrientedBox {
@@ -121,12 +129,14 @@ struct SelectionChromeSnapshot {
     Vector2d controlDoc = Vector2d();
   };
 
-  /// Anchor squares for selected SVG path vertices, sized in document units at capture time.
-  std::vector<Box2d> pathAnchorBoxesDoc;
+  /// Anchor square centers for selected SVG path vertices, in document space.
+  /// The square's size is resolved at draw time, in screen pixels.
+  std::vector<Vector2d> pathAnchorPointsDoc;
   /// Control-point guide lines for selected SVG paths.
   std::vector<PathControlLine> pathControlLinesDoc;
-  /// Control-point squares for selected SVG paths, sized in document units at capture time.
-  std::vector<Box2d> pathControlPointBoxesDoc;
+  /// Control-point square centers for selected SVG paths, in document space.
+  /// The square's size is resolved at draw time, in screen pixels.
+  std::vector<Vector2d> pathControlPointsDoc;
 
   /// Transient "this element is locked, you can't select it" feedback. When present, the rejected
   /// (locked) element's outline is stroked in red with alpha scaled by `intensity` (1 → 0 as the
@@ -199,6 +209,9 @@ struct SelectionChromeSnapshot {
   };
   /// The active text-editing caret, or nullopt when no text session is open.
   std::optional<TextCaret> textCaretDoc;
+  /// Highlight quads for the active text range, in document space. Each quad
+  /// follows its character cell through the text element's transform.
+  std::vector<std::array<Vector2d, 4>> textSelectionQuadsDoc;
   /// Session frame for the active text-editing session: local TL, TR, BR, BL
   /// corners mapped through the text's transform. An ORIENTED quad - after a
   /// rotate it stays aligned to the text's rotation, never the axis-aligned
@@ -258,20 +271,24 @@ struct SelectionChromeSnapshot {
   /// a rotation gesture is active.
   std::optional<OrientedBox> orientedBoundsDoc;
 
-  /// Corner resize handles in document space. Empty when there is no
-  /// selection AABB.
-  std::vector<Box2d> handleBoxesDoc;
+  /// Corner resize handle centers in document space. Empty when there is no
+  /// selection AABB. Handle squares are sized at draw time, in screen pixels.
+  std::vector<Vector2d> handleAnchorsDoc;
 
-  /// `canvasFromDoc` at capture time. The draw phase needs this for
-  /// drawing AABBs and the marquee (both live in doc space).
+  /// Document-to-canvas transform the chrome is drawn with.
+  ///
+  /// Capture stamps the transform it sampled geometry against, but the draw
+  /// phase is free to overwrite it: every size in this snapshot is resolved
+  /// from this transform at draw time, so re-pointing it at the transform the
+  /// document pixels actually landed in re-places the chrome without a
+  /// recapture, and without changing any on-screen chrome size.
   Transform2d canvasFromDoc;
 
-  /// World-space stroke widths derived from the snapshot's
-  /// `canvasFromDoc` scale, pre-computed so the draw phase doesn't
-  /// have to recompute anything that depends on registry state.
-  double selectionStrokeWidthWorld = 0.0;
-  double hoverStrokeWidthWorld = 0.0;
-  double marqueeStrokeWidthWorld = 0.0;
+  /// Viewport device-pixel ratio the chrome is sized for. Stroke widths and
+  /// point-chrome squares are logical-pixel constants scaled by this and
+  /// divided by `canvasFromDoc`'s scale at draw time, so they hold a constant
+  /// screen size at any zoom.
+  double devicePixelRatio = 1.0;
 };
 
 class OverlayRenderer {
@@ -343,8 +360,10 @@ public:
   /// otherwise not mutating these components on the same registry.
   /// When `cullRectDoc` is present, path outlines, AABBs, and handles
   /// fully outside that document-space rect are skipped before draw.
-  /// `CombinedBoundsOnly` skips selected path extraction and stores one
-  /// combined bounds box for low-latency large-selection feedback.
+  /// `CombinedBoundsOnly` normally skips selected path extraction and stores
+  /// one combined bounds box for low-latency large-selection feedback. During
+  /// an active scale/rotate preview it also captures path outlines so they
+  /// remain visible and aligned with the gesture.
   /// @param devicePixelRatio Viewport framebuffer scale used to convert
   ///   logical UI stroke widths into device pixels.
   ///
@@ -368,6 +387,31 @@ public:
       const std::optional<LockedRejectionFlashInput>& lockedFlash = std::nullopt,
       double devicePixelRatio = 1.0,
       const std::optional<svg::SVGElement>& livePathPreviewElement = std::nullopt);
+
+  /// Chrome squares whose on-screen size is fixed, and therefore resolved
+  /// against the transform the chrome is drawn with rather than stored.
+  enum class ChromeSquare {
+    /// Selected-path vertex anchor square.
+    PathAnchor,
+    /// Selected-path Bezier control-point square.
+    PathControlPoint,
+    /// Selection resize/rotate corner handle square.
+    TransformHandle,
+  };
+
+  /**
+   * Document-space square for one chrome point, sized for @p snapshot's current
+   * `canvasFromDoc`.
+   *
+   * Consumers outside the draw path (the SVG viewport export) resolve their
+   * geometry through this so it matches the drawn chrome exactly.
+   *
+   * @param snapshot Snapshot supplying the transform and device pixel ratio.
+   * @param kind Which chrome square to size.
+   * @param pointDoc Document-space center of the square.
+   */
+  [[nodiscard]] static Box2d ChromeSquareForPoint(const SelectionChromeSnapshot& snapshot,
+                                                  ChromeSquare kind, const Vector2d& pointDoc);
 
   /// Race-free chrome rasterize: reads only the snapshot, never the
   /// registry. Safe to call while the async-renderer worker is

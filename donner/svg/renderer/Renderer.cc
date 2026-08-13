@@ -443,8 +443,104 @@ RendererBitmap RenderElementToBitmap(RendererInterface& renderer, SVGElement ele
   return RenderThumbnailRange(thumbnailRenderer, registry, span, cropBounds, bitmapSizePx);
 }
 
+RendererBitmap RenderDocumentsToAtlasBitmap(RendererInterface& renderer,
+                                            std::span<const AtlasDocumentPlacement> placements,
+                                            Vector2i atlasSizePx) {
+  if (atlasSizePx.x <= 0 || atlasSizePx.y <= 0 || placements.empty()) {
+    return RendererBitmap{};
+  }
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(atlasSizePx.x, atlasSizePx.y);
+  viewport.devicePixelRatio = 1.0;
+
+  // Access guards are held for the whole pass so the draw loop can stay inside
+  // one begin/end frame window.
+  std::vector<DocumentWriteAccess> accessGuards;
+  std::vector<SVGDocument*> tileDocuments;
+  std::vector<Transform2d> tileTransforms;
+  accessGuards.reserve(placements.size());
+  tileDocuments.reserve(placements.size());
+  tileTransforms.reserve(placements.size());
+  for (const AtlasDocumentPlacement& placement : placements) {
+    if (placement.document == nullptr) {
+      continue;
+    }
+    accessGuards.emplace_back(placement.document->writeAccess());
+    tileDocuments.push_back(placement.document);
+    tileTransforms.push_back(
+        Transform2d::Translate(Vector2d(placement.originPx.x, placement.originPx.y)));
+  }
+
+  if (tileDocuments.empty()) {
+    return RendererBitmap{};
+  }
+
+  renderer.beginFrame(viewport);
+  RendererDriver driver(renderer);
+  for (std::size_t i = 0; i < tileDocuments.size(); ++i) {
+    // A root `<svg>` viewport clip is pushed *before* its own entity transform
+    // is set (see `RendererDriver::drawPreparedEntityRange`), so it lands in
+    // whatever matrix the renderer already holds. Standalone rendering leaves
+    // that as the identity that `beginFrame` installs; here the tile offset has
+    // to be active first or the clip would scissor the tile away.
+    renderer.setTransform(tileTransforms[i]);
+    driver.drawDocumentIntoCurrentFrame(*tileDocuments[i], viewport, tileTransforms[i]);
+  }
+  renderer.endFrame();
+
+  return renderer.takeSnapshot();
+}
+
 RendererBitmap Renderer::renderElementToBitmap(SVGElement element, Vector2i sizePx) {
   return RenderElementToBitmap(*impl_, element, sizePx);
+}
+
+std::shared_ptr<const RendererTextureSnapshot> Renderer::renderElementToTextureSnapshot(
+    SVGElement element, Vector2i sizePx) {
+  if (sizePx.x <= 0 || sizePx.y <= 0) {
+    return nullptr;
+  }
+
+  SVGDocument document = element.ownerDocument();
+  DocumentWriteAccess access = document.writeAccess();
+  Registry& registry = document.registry();
+  ScopedRenderInvalidationRestore restoreInvalidation(registry);
+
+  ParseWarningSink warnings;
+  RendererUtils::prepareDocumentForRendering(document, /*verbose=*/false, warnings);
+
+  std::unordered_set<Entity> subtreeEntities;
+  CollectSubtreeEntities(element, subtreeEntities);
+  const SubtreeRenderSpan span = ResolveSubtreeRenderSpan(registry, subtreeEntities);
+  if (span.firstEntity == entt::null || span.lastEntity == entt::null ||
+      !span.worldBounds.has_value() || span.worldBounds->isEmpty()) {
+    return nullptr;
+  }
+
+  Box2d cropBounds = *span.worldBounds;
+  if (const std::optional<Box2d> rootCanvasBounds = RootViewBoxCanvasBounds(document, registry)) {
+    const std::optional<Box2d> visibleBounds = IntersectBoxes(cropBounds, *rootCanvasBounds);
+    if (!visibleBounds.has_value()) {
+      return nullptr;
+    }
+    cropBounds = *visibleBounds;
+  }
+
+  if (elementTextureThumbnailRenderer_ == nullptr) {
+    elementTextureThumbnailRenderer_ = impl_->createOffscreenInstance();
+  }
+  if (elementTextureThumbnailRenderer_ == nullptr) {
+    return nullptr;
+  }
+
+  const Vector2i textureSizePx = ComputeThumbnailBitmapSize(cropBounds, sizePx);
+  const ThumbnailTransform thumbnailTransform =
+      ComputeThumbnailTransform(cropBounds, textureSizePx);
+  RendererDriver driver(*elementTextureThumbnailRenderer_);
+  driver.drawEntityRange(registry, span.firstEntity, span.lastEntity, thumbnailTransform.viewport,
+                         thumbnailTransform.surfaceFromCanvas);
+  return elementTextureThumbnailRenderer_->takeTextureSnapshot();
 }
 
 void Renderer::beginFrame(const RenderViewport& viewport) {
@@ -453,6 +549,10 @@ void Renderer::beginFrame(const RenderViewport& viewport) {
 
 void Renderer::endFrame() {
   impl_->endFrame();
+}
+
+void Renderer::setPreserveTargetOnBeginFrame(bool preserve) {
+  impl_->setPreserveTargetOnBeginFrame(preserve);
 }
 
 void Renderer::setTransform(const Transform2d& transform) {
@@ -553,12 +653,33 @@ RendererBitmap Renderer::takeSnapshot() const {
   return impl_->takeSnapshot();
 }
 
+RendererBitmap Renderer::takeSnapshotInterruptibly(
+    const std::function<bool()>& shouldCancel) const {
+  return impl_->takeSnapshotInterruptibly(shouldCancel);
+}
+
+RendererReadbackStats Renderer::consumeReadbackStats() {
+  return impl_->consumeReadbackStats();
+}
+
 std::shared_ptr<const RendererTextureSnapshot> Renderer::takeTextureSnapshot() {
   return impl_->takeTextureSnapshot();
 }
 
+const RendererTextureSnapshot* Renderer::borrowTextureSnapshot() {
+  return impl_->borrowTextureSnapshot();
+}
+
+bool Renderer::drawCheckerboardUnderlay(const CheckerboardUnderlayParams& params) {
+  return impl_->drawCheckerboardUnderlay(params);
+}
+
 bool Renderer::requiresTextureSnapshotPresentation() const {
   return impl_->requiresTextureSnapshotPresentation();
+}
+
+bool Renderer::supportsElementTextureSnapshots() const {
+  return impl_->supportsElementTextureSnapshots();
 }
 
 std::unique_ptr<RendererInterface> Renderer::createOffscreenInstance() const {

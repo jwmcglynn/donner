@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <functional>
 #include <optional>
 #include <span>
 #include <unordered_map>
@@ -52,6 +53,18 @@ public:
             const Transform2d& surfaceFromCanvas);
 
   /**
+   * Prepare and render a document while polling @p shouldCancel between rendered entities.
+   *
+   * The document write guard and renderer frame are always balanced before this method returns.
+   * A cancelled partial frame is safe for a background worker to discard.
+   *
+   * @return True when the complete document rendered, false when cancellation stopped work.
+   */
+  [[nodiscard]] bool drawInterruptibly(SVGDocument& document, const RenderViewport& viewport,
+                                       const Transform2d& surfaceFromCanvas,
+                                       const std::function<bool()>& shouldCancel);
+
+  /**
    * Capture an immutable render snapshot from the given \ref SVGDocument.
    *
    * Snapshot capture prepares the live render tree under document access, then
@@ -89,6 +102,20 @@ public:
                        const RenderViewport& viewport, const Transform2d& surfaceFromCanvas);
 
   /**
+   * Render a prepared entity range while polling @p shouldCancel between shapes.
+   *
+   * The renderer frame is always balanced and ended before this method returns. A cancelled
+   * partial frame is safe to discard, which lets editor workers release their document guard
+   * without waiting for an entire complex compositor segment to finish.
+   *
+   * @return True when the complete range was rendered, false when cancellation stopped traversal.
+   */
+  [[nodiscard]] bool drawEntityRangeInterruptibly(Registry& registry, Entity firstEntity,
+                                                  Entity lastEntity, const RenderViewport& viewport,
+                                                  const Transform2d& surfaceFromCanvas,
+                                                  const std::function<bool()>& shouldCancel);
+
+  /**
    * Render a range of entities into the renderer's already-active frame.
    *
    * This is the current-frame form of \ref drawEntityRange: the caller owns
@@ -107,6 +134,24 @@ public:
   void drawEntityRangeIntoCurrentFrame(Registry& registry, Entity firstEntity, Entity lastEntity,
                                        const RenderViewport& viewport,
                                        const Transform2d& surfaceFromCanvas);
+
+  /**
+   * Prepare and draw a whole document into the renderer's already-open frame,
+   * using the same main-entity selection as `drawInterruptibly` (traversal
+   * order, offscreen feImage shadow entities excluded). Use this instead of
+   * deriving an entity range by hand: a range computed from a different
+   * ordering can cross `drawEntityRange`'s first/last walk and unbalance
+   * layer bookkeeping.
+   *
+   * The caller owns beginFrame/endFrame and holds the document's write access.
+   *
+   * @param document Document to draw; prepared for rendering by this call.
+   * @param viewport Viewport for the active render pass.
+   * @param surfaceFromCanvas Transform that maps canvas coords to the active
+   *     render surface.
+   */
+  void drawDocumentIntoCurrentFrame(SVGDocument& document, const RenderViewport& viewport,
+                                    const Transform2d& surfaceFromCanvas);
 
   /**
    * Compute the canvas-space bounding box of every pixel a subsequent
@@ -169,7 +214,9 @@ private:
   void drawPreparedDocument(SVGDocument& document);
   void drawPreparedDocument(SVGDocument& document, const RenderViewport& viewport,
                             const Transform2d& surfaceFromCanvas);
-  void drawPreparedEntityRange(Registry& registry, Entity firstEntity, Entity lastEntity);
+  [[nodiscard]] bool drawPreparedEntityRange(Registry& registry, Entity firstEntity,
+                                             Entity lastEntity,
+                                             const std::function<bool()>& shouldCancel);
   void traverse(RenderingInstanceView& view, Registry& registry);
   void traverseRange(RenderingInstanceView& view, Registry& registry, Entity startEntity,
                      Entity endEntity);

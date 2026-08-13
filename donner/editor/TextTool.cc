@@ -161,6 +161,39 @@ std::size_t LogicalIndexForDomChar(const std::u32string& content, std::size_t do
   return logical;
 }
 
+struct TextVerticalMetrics {
+  double ascent = 0.0;
+  double descent = 0.0;
+};
+
+/// Resolve a stable ascender-to-descender cell from the text's em-box.
+TextVerticalMetrics ResolveTextVerticalMetrics(const svg::SVGTextElement& text,
+                                               double fallbackFontSize) {
+  return text.withWriteAccess([&text, fallbackFontSize](svg::DocumentWriteAccess&, EntityHandle) {
+    TextVerticalMetrics result{fallbackFontSize * 0.9, fallbackFontSize * 0.25};
+    const long charCount = text.getNumberOfChars();
+    if (charCount <= 0) {
+      return result;
+    }
+
+    double minBaselineY = text.getStartPositionOfChar(0u).y;
+    double maxBaselineY = minBaselineY;
+    for (long i = 1; i < charCount; ++i) {
+      const double baselineY = text.getStartPositionOfChar(static_cast<std::size_t>(i)).y;
+      minBaselineY = std::min(minBaselineY, baselineY);
+      maxBaselineY = std::max(maxBaselineY, baselineY);
+    }
+
+    const Box2d emBox = text.objectBoundingBox();
+    const double ascent = minBaselineY - emBox.topLeft.y;
+    const double descent = emBox.bottomRight.y - maxBaselineY;
+    if (ascent > 0.0 && descent >= 0.0) {
+      result = TextVerticalMetrics{ascent, descent};
+    }
+    return result;
+  });
+}
+
 }  // namespace
 
 void TextTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
@@ -175,7 +208,7 @@ void TextTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
   if (state_ == State::Editing) {
     // A press on the frame's transform handles starts a frame gesture; a
     // click inside the session's text moves the caret (inside the frame but
-    // off every glyph parks it at the end); a click anywhere else commits
+    // off its line cells parks it at the end); a click anywhere else commits
     // the session before the idle click rules run below.
     if (sessionText_.has_value()) {
       if (beginFrameGestureAtPoint(documentPoint, modifiers)) {
@@ -183,14 +216,30 @@ void TextTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
       }
       if (const std::optional<std::size_t> caret = caretIndexAtPoint(documentPoint);
           caret.has_value()) {
+        if (modifiers.shift) {
+          if (!selectionAnchorIndex_.has_value()) {
+            selectionAnchorIndex_ = caretIndex_;
+          }
+        } else {
+          selectionAnchorIndex_ = *caret;
+        }
         caretIndex_ = *caret;
+        selectingText_ = true;
         resetCaretBlinkPhase();
         return;
       }
       if (const std::optional<Box2d> frameLocal = sessionFrameLocal(); frameLocal.has_value()) {
         const Vector2d localPoint = documentFromText_.inverse().transformPosition(documentPoint);
         if (frameLocal->contains(localPoint)) {
+          if (modifiers.shift) {
+            if (!selectionAnchorIndex_.has_value()) {
+              selectionAnchorIndex_ = caretIndex_;
+            }
+          } else {
+            selectionAnchorIndex_ = content_.size();
+          }
           caretIndex_ = content_.size();
+          selectingText_ = true;
           resetCaretBlinkPhase();
           return;
         }
@@ -211,6 +260,8 @@ void TextTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
         });
     if (hitText.has_value()) {
       beginEditingSessionForExisting(editor, *hitText, documentPoint);
+      selectionAnchorIndex_ = caretIndex_;
+      selectingText_ = true;
       return;
     }
   }
@@ -227,6 +278,18 @@ void TextTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, boo
   if (frameGesture_ != FrameGesture::None) {
     if (buttonHeld) {
       updateFrameGesture(editor, documentPoint);
+    }
+    return;
+  }
+
+  if (state_ == State::Editing && selectingText_) {
+    if (buttonHeld) {
+      if (const std::optional<std::size_t> caret =
+              caretIndexAtPoint(documentPoint, /*clampToNearestLine=*/true);
+          caret.has_value()) {
+        caretIndex_ = *caret;
+        resetCaretBlinkPhase();
+      }
     }
     return;
   }
@@ -252,6 +315,15 @@ void TextTool::onMouseUp(EditorApp& editor, const Vector2d& documentPoint) {
     }
     // Frame gestures end on release; the editing session stays open.
     frameGesture_ = FrameGesture::None;
+    return;
+  }
+
+  if (state_ == State::Editing && selectingText_) {
+    onMouseMove(editor, documentPoint, /*buttonHeld=*/true);
+    selectingText_ = false;
+    if (selectionAnchorIndex_ == caretIndex_) {
+      selectionAnchorIndex_.reset();
+    }
     return;
   }
 
@@ -300,6 +372,10 @@ void TextTool::beginEditingSession(EditorApp& editor, const Vector2d& originDoc,
   text.setAttribute("style",
                     "fill: " + (activeFill.empty() ? std::string(kDefaultFill) : activeFill));
   if (boxDoc.has_value()) {
+    text.setAttribute("data-donner-text-box-x",
+                      donner::detail::FormatNumberForSVG(boxDoc->topLeft.x));
+    text.setAttribute("data-donner-text-box-y",
+                      donner::detail::FormatNumberForSVG(boxDoc->topLeft.y));
     text.setAttribute("data-donner-text-box-width",
                       donner::detail::FormatNumberForSVG(boxDoc->size().x));
     text.setAttribute("data-donner-text-box-height",
@@ -316,6 +392,8 @@ void TextTool::beginEditingSession(EditorApp& editor, const Vector2d& originDoc,
   content_.clear();
   cachedCharWidths_.clear();
   caretIndex_ = 0;
+  selectionAnchorIndex_.reset();
+  selectingText_ = false;
   state_ = State::Editing;
   pointFrameVisible_ = boxDoc.has_value();
   pointFrameFadeStart_.reset();
@@ -382,9 +460,10 @@ void TextTool::beginEditingSessionForExisting(EditorApp& editor, const svg::SVGT
     const std::optional<double> boxHeight =
         ParseNumericAttribute(text, "data-donner-text-box-height");
     if (boxWidth.has_value() && boxHeight.has_value()) {
-      // Invert the creation rule: the origin sits one font-size below the
-      // box's top-left corner.
-      const Vector2d topLeft(originText_.x, originText_.y - fontSize_);
+      const Vector2d legacyTopLeft(originText_.x, originText_.y - fontSize_);
+      const Vector2d topLeft(
+          ParseNumericAttribute(text, "data-donner-text-box-x").value_or(legacyTopLeft.x),
+          ParseNumericAttribute(text, "data-donner-text-box-y").value_or(legacyTopLeft.y));
       boxText_ = Box2d(topLeft, topLeft + Vector2d(*boxWidth, *boxHeight));
     }
   });
@@ -397,39 +476,100 @@ void TextTool::beginEditingSessionForExisting(EditorApp& editor, const svg::SVGT
       boxText_.has_value() ? std::nullopt : std::make_optional(documentPoint);
   cachedCharWidths_ = boxText_.has_value() ? measureCharacterWidths(editor) : std::vector<double>{};
   caretIndex_ = caretIndexAtPoint(documentPoint).value_or(content_.size());
+  selectionAnchorIndex_.reset();
+  selectingText_ = false;
   resetCaretBlinkPhase();
 
   editor.setSelection(text);
   editor.flushFrame();
 }
 
-std::optional<std::size_t> TextTool::caretIndexAtPoint(const Vector2d& documentPoint) const {
+std::optional<std::size_t> TextTool::caretIndexAtPoint(const Vector2d& documentPoint,
+                                                       bool clampToNearestLine) const {
   if (!sessionText_.has_value()) {
     return std::nullopt;
   }
 
   const Vector2d textPoint = documentFromText_.inverse().transformPosition(documentPoint);
-  struct CharHit {
-    long index = -1;
-    bool afterCenter = false;
+  struct CaretCell {
+    std::size_t before = 0u;
+    std::size_t after = 0u;
+    double startX = 0.0;
+    double endX = 0.0;
   };
-  const CharHit hit = sessionText_->withWriteAccess([this, &textPoint](svg::DocumentWriteAccess&,
-                                                                       EntityHandle) -> CharHit {
-    CharHit result;
-    result.index = sessionText_->getCharNumAtPosition(textPoint);
-    if (result.index >= 0) {
-      const Box2d extent = sessionText_->getExtentOfChar(static_cast<std::size_t>(result.index));
-      result.afterCenter = textPoint.x > (extent.topLeft.x + extent.bottomRight.x) * 0.5;
-    }
-    return result;
-  });
-  if (hit.index < 0) {
+  struct CaretLine {
+    double baselineY = 0.0;
+    double minX = 0.0;
+    double maxX = 0.0;
+    std::vector<CaretCell> cells;
+  };
+  const std::vector<CaretLine> caretLines =
+      sessionText_->withWriteAccess([this](svg::DocumentWriteAccess&, EntityHandle) {
+        std::vector<CaretLine> lines;
+        const long charCount = sessionText_->getNumberOfChars();
+        constexpr double kBaselineYToleranceLocal = 0.25;
+        for (long i = 0; i < charCount; ++i) {
+          const std::size_t domIndex = static_cast<std::size_t>(i);
+          const Vector2d start = sessionText_->getStartPositionOfChar(domIndex);
+          const Vector2d end = sessionText_->getEndPositionOfChar(domIndex);
+          if (lines.empty() ||
+              std::abs(start.y - lines.back().baselineY) > kBaselineYToleranceLocal) {
+            lines.push_back(CaretLine{.baselineY = start.y,
+                                      .minX = std::min(start.x, end.x),
+                                      .maxX = std::max(start.x, end.x)});
+          }
+          CaretLine& line = lines.back();
+          line.minX = std::min(line.minX, std::min(start.x, end.x));
+          line.maxX = std::max(line.maxX, std::max(start.x, end.x));
+          const std::size_t logical = LogicalIndexForDomChar(content_, domIndex);
+          line.cells.push_back(CaretCell{.before = logical,
+                                         .after = std::min(logical + 1u, content_.size()),
+                                         .startX = start.x,
+                                         .endX = end.x});
+        }
+        return lines;
+      });
+  if (caretLines.empty()) {
     return std::nullopt;
   }
 
-  const std::size_t logical = LogicalIndexForDomChar(content_, static_cast<std::size_t>(hit.index));
-  // A click in the trailing half of a glyph places the caret after it.
-  return hit.afterCenter ? std::min(logical + 1u, content_.size()) : logical;
+  const TextVerticalMetrics verticalMetrics = ResolveTextVerticalMetrics(*sessionText_, fontSize_);
+  const CaretLine* nearestLine = nullptr;
+  double nearestLineDistance = 0.0;
+  for (const CaretLine& line : caretLines) {
+    const double top = line.baselineY - verticalMetrics.ascent;
+    const double bottom = line.baselineY + verticalMetrics.descent;
+    const bool insideY = textPoint.y >= top && textPoint.y <= bottom;
+    const bool insideX = textPoint.x >= line.minX && textPoint.x <= line.maxX;
+    if (!clampToNearestLine && (!insideX || !insideY)) {
+      continue;
+    }
+    const double distance =
+        textPoint.y < top ? top - textPoint.y : (textPoint.y > bottom ? textPoint.y - bottom : 0.0);
+    if (!nearestLine || distance < nearestLineDistance) {
+      nearestLine = &line;
+      nearestLineDistance = distance;
+    }
+  }
+  if (!nearestLine) {
+    return std::nullopt;
+  }
+
+  std::size_t nearestCaret = nearestLine->cells.front().before;
+  double nearestCaretDistance = std::abs(textPoint.x - nearestLine->cells.front().startX);
+  for (const CaretCell& cell : nearestLine->cells) {
+    const double beforeDistance = std::abs(textPoint.x - cell.startX);
+    if (beforeDistance < nearestCaretDistance) {
+      nearestCaret = cell.before;
+      nearestCaretDistance = beforeDistance;
+    }
+    const double afterDistance = std::abs(textPoint.x - cell.endX);
+    if (afterDistance < nearestCaretDistance) {
+      nearestCaret = cell.after;
+      nearestCaretDistance = afterDistance;
+    }
+  }
+  return nearestCaret;
 }
 
 std::optional<Box2d> TextTool::sessionFrameLocal() const {
@@ -502,10 +642,7 @@ bool TextTool::beginFrameGestureAtPoint(const Vector2d& documentPoint, MouseModi
     rotateCenterDoc_ =
         documentFromText_.transformPosition((frameLocal->topLeft + frameLocal->bottomRight) * 0.5);
     rotateStartAngleRadians_ = AngleFromCenter(rotateCenterDoc_, documentPoint);
-    rotateStartTransform_ =
-        sessionText_->withReadAccess([this](svg::DocumentReadAccess&, EntityHandle) {
-          return sessionText_->cast<svg::SVGGraphicsElement>().transform();
-        });
+    rotateStartTransform_ = sessionText_->cast<svg::SVGGraphicsElement>().transform();
   }
   return true;
 }
@@ -555,7 +692,6 @@ void TextTool::updateFrameGesture(EditorApp& editor, const Vector2d& documentPoi
       Vector2d(std::max(anchor.x, movingCorner.x), std::max(anchor.y, movingCorner.y)));
 
   boxText_ = newFrame;
-  originText_ = Vector2d(newFrame.topLeft.x, newFrame.topLeft.y + fontSize_);
 }
 
 void TextTool::commitFrameResize(EditorApp& editor) {
@@ -568,6 +704,12 @@ void TextTool::commitFrameResize(EditorApp& editor) {
       *sessionText_, "x", donner::detail::FormatNumberForSVG(originText_.x)));
   editor.applyMutation(EditorCommand::SetAttributeCommand(
       *sessionText_, "y", donner::detail::FormatNumberForSVG(originText_.y)));
+  editor.applyMutation(
+      EditorCommand::SetAttributeCommand(*sessionText_, "data-donner-text-box-x",
+                                         donner::detail::FormatNumberForSVG(newFrame.topLeft.x)));
+  editor.applyMutation(
+      EditorCommand::SetAttributeCommand(*sessionText_, "data-donner-text-box-y",
+                                         donner::detail::FormatNumberForSVG(newFrame.topLeft.y)));
   editor.applyMutation(
       EditorCommand::SetAttributeCommand(*sessionText_, "data-donner-text-box-width",
                                          donner::detail::FormatNumberForSVG(newFrame.size().x)));
@@ -598,6 +740,7 @@ void TextTool::insertCodepoints(EditorApp& editor, std::span<const char32_t> cod
     return;
   }
 
+  deleteSelection();
   content_.insert(content_.begin() + static_cast<std::ptrdiff_t>(caretIndex_), inserted.begin(),
                   inserted.end());
   caretIndex_ += inserted.size();
@@ -610,6 +753,7 @@ void TextTool::insertNewline(EditorApp& editor) {
   if (state_ != State::Editing) {
     return;
   }
+  deleteSelection();
   content_.insert(content_.begin() + static_cast<std::ptrdiff_t>(caretIndex_), U'\n');
   ++caretIndex_;
   resetCaretBlinkPhase();
@@ -618,7 +762,16 @@ void TextTool::insertNewline(EditorApp& editor) {
 }
 
 void TextTool::backspace(EditorApp& editor) {
-  if (state_ != State::Editing || caretIndex_ == 0) {
+  if (state_ != State::Editing) {
+    return;
+  }
+  if (deleteSelection()) {
+    resetCaretBlinkPhase();
+    hidePointFrameAfterTyping();
+    syncContentToDom(editor);
+    return;
+  }
+  if (caretIndex_ == 0) {
     return;
   }
   content_.erase(content_.begin() + static_cast<std::ptrdiff_t>(caretIndex_) - 1);
@@ -629,7 +782,16 @@ void TextTool::backspace(EditorApp& editor) {
 }
 
 void TextTool::deleteForward(EditorApp& editor) {
-  if (state_ != State::Editing || caretIndex_ >= content_.size()) {
+  if (state_ != State::Editing) {
+    return;
+  }
+  if (deleteSelection()) {
+    resetCaretBlinkPhase();
+    hidePointFrameAfterTyping();
+    syncContentToDom(editor);
+    return;
+  }
+  if (caretIndex_ >= content_.size()) {
     return;
   }
   content_.erase(content_.begin() + static_cast<std::ptrdiff_t>(caretIndex_));
@@ -638,9 +800,25 @@ void TextTool::deleteForward(EditorApp& editor) {
   syncContentToDom(editor);
 }
 
-void TextTool::moveCaret(EditorApp& editor, CaretMove move) {
+void TextTool::moveCaret(EditorApp& editor, CaretMove move, bool extendSelection) {
   if (state_ != State::Editing) {
     return;
+  }
+
+  if (extendSelection) {
+    if (!selectionAnchorIndex_.has_value()) {
+      selectionAnchorIndex_ = caretIndex_;
+    }
+  } else if (const std::optional<SelectionRange> selection = selectionRange();
+             selection.has_value() && (move == CaretMove::Left || move == CaretMove::Right ||
+                                       move == CaretMove::Up || move == CaretMove::Down)) {
+    caretIndex_ =
+        (move == CaretMove::Left || move == CaretMove::Up) ? selection->start : selection->end;
+    selectionAnchorIndex_.reset();
+    resetCaretBlinkPhase();
+    return;
+  } else {
+    selectionAnchorIndex_.reset();
   }
 
   const std::vector<std::u32string> lines = displayLines(editor);
@@ -683,6 +861,46 @@ void TextTool::moveCaret(EditorApp& editor, CaretMove move) {
       break;
     }
   }
+  if (selectionAnchorIndex_ == caretIndex_) {
+    selectionAnchorIndex_.reset();
+  }
+  resetCaretBlinkPhase();
+}
+
+void TextTool::selectAll() {
+  if (state_ != State::Editing) {
+    return;
+  }
+  selectionAnchorIndex_ = 0u;
+  caretIndex_ = content_.size();
+  selectingText_ = false;
+  if (content_.empty()) {
+    selectionAnchorIndex_.reset();
+  }
+  resetCaretBlinkPhase();
+}
+
+std::optional<TextTool::SelectionRange> TextTool::selectionRange() const {
+  if (!selectionAnchorIndex_.has_value() || *selectionAnchorIndex_ == caretIndex_) {
+    return std::nullopt;
+  }
+  return SelectionRange{
+      .start = std::min(*selectionAnchorIndex_, caretIndex_),
+      .end = std::max(*selectionAnchorIndex_, caretIndex_),
+  };
+}
+
+bool TextTool::deleteSelection() {
+  const std::optional<SelectionRange> selection = selectionRange();
+  if (!selection.has_value()) {
+    return false;
+  }
+  content_.erase(content_.begin() + static_cast<std::ptrdiff_t>(selection->start),
+                 content_.begin() + static_cast<std::ptrdiff_t>(selection->end));
+  caretIndex_ = selection->start;
+  selectionAnchorIndex_.reset();
+  selectingText_ = false;
+  return true;
 }
 
 void TextTool::toggleBold(EditorApp& editor) {
@@ -783,6 +1001,8 @@ void TextTool::cancel() {
   content_.clear();
   cachedCharWidths_.clear();
   caretIndex_ = 0;
+  selectionAnchorIndex_.reset();
+  selectingText_ = false;
   sessionBeforeSource_.reset();
   previousSelection_.clear();
   pointFrameVisible_ = false;
@@ -1139,18 +1359,77 @@ std::optional<TextTool::EditingChrome> TextTool::editingChrome(EditorApp& editor
 
   const double lineHeight = fontSize_ * kLineHeightFactor;
   const double baselineY = originText_.y + static_cast<double>(line) * lineHeight;
+  const TextVerticalMetrics verticalMetrics = ResolveTextVerticalMetrics(*sessionText_, fontSize_);
 
   EditingChrome chrome;
-  // Approximate ascent/descent from the font size; exact metrics are not
-  // needed for a caret.
   chrome.caretTopDoc =
-      documentFromText_.transformPosition(Vector2d(caretX, baselineY - fontSize_ * 0.9));
+      documentFromText_.transformPosition(Vector2d(caretX, baselineY - verticalMetrics.ascent));
   chrome.caretBottomDoc =
-      documentFromText_.transformPosition(Vector2d(caretX, baselineY + fontSize_ * 0.25));
+      documentFromText_.transformPosition(Vector2d(caretX, baselineY + verticalMetrics.descent));
   const float frameOpacity = pointFrameOpacity();
   if (const std::optional<Box2d> frameLocal = sessionFrameLocal(); frameLocal.has_value()) {
     chrome.frameCornersDoc = FrameCornersDoc(documentFromText_, *frameLocal);
     chrome.frameOpacity = frameOpacity;
+  }
+  if (const std::optional<SelectionRange> selection = selectionRange(); selection.has_value()) {
+    std::vector<std::size_t> displayLineByLogicalIndex;
+    displayLineByLogicalIndex.reserve(content_.size());
+    for (std::size_t displayLine = 0u; displayLine < lines.size(); ++displayLine) {
+      for (std::size_t column = 0u; column < lines[displayLine].size(); ++column) {
+        displayLineByLogicalIndex.push_back(displayLine);
+      }
+    }
+    struct SelectedLineRange {
+      double minX = 0.0;
+      double maxX = 0.0;
+      double baselineY = 0.0;
+      bool initialized = false;
+    };
+    const std::vector<Box2d> selectedLineExtents =
+        sessionText_->withWriteAccess([this, &displayLineByLogicalIndex, &lines, &selection,
+                                       &verticalMetrics](svg::DocumentWriteAccess&, EntityHandle) {
+          std::vector<SelectedLineRange> rangesByLine(lines.size());
+          std::size_t domIndex = 0u;
+          const std::size_t domCharCount =
+              static_cast<std::size_t>(std::max(0L, sessionText_->getNumberOfChars()));
+          for (std::size_t logicalIndex = 0; logicalIndex < content_.size(); ++logicalIndex) {
+            if (content_[logicalIndex] == U'\n') {
+              continue;
+            }
+            if (logicalIndex >= selection->start && logicalIndex < selection->end &&
+                domIndex < domCharCount && logicalIndex < displayLineByLogicalIndex.size()) {
+              const Vector2d start = sessionText_->getStartPositionOfChar(domIndex);
+              const Vector2d end = sessionText_->getEndPositionOfChar(domIndex);
+              const std::size_t displayLine = displayLineByLogicalIndex[logicalIndex];
+              SelectedLineRange& range = rangesByLine[displayLine];
+              const double minX = std::min(start.x, end.x);
+              const double maxX = std::max(start.x, end.x);
+              if (range.initialized) {
+                range.minX = std::min(range.minX, minX);
+                range.maxX = std::max(range.maxX, maxX);
+              } else {
+                range.minX = minX;
+                range.maxX = maxX;
+                range.baselineY = start.y;
+                range.initialized = true;
+              }
+            }
+            ++domIndex;
+          }
+          std::vector<Box2d> extents;
+          extents.reserve(rangesByLine.size());
+          for (const SelectedLineRange& range : rangesByLine) {
+            if (range.initialized) {
+              extents.emplace_back(Vector2d(range.minX, range.baselineY - verticalMetrics.ascent),
+                                   Vector2d(range.maxX, range.baselineY + verticalMetrics.descent));
+            }
+          }
+          return extents;
+        });
+    chrome.selectionQuadsDoc.reserve(selectedLineExtents.size());
+    for (const Box2d& extent : selectedLineExtents) {
+      chrome.selectionQuadsDoc.push_back(FrameCornersDoc(documentFromText_, extent));
+    }
   }
   return chrome;
 }

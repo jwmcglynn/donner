@@ -81,6 +81,19 @@ TEST(LayerThumbnailGoldenTest, DonnerSplashLayerThumbnailsMatchGoldens) {
   svg::SVGDocument document = ParseDonnerSplash();
   svg::Renderer renderer;
 
+  // TinySkia rasterizes these thumbnails identically everywhere, so that arm stays bit-exact.
+  // The Geode goldens are one GPU's rasterization and no other GPU reproduces them bit-exactly:
+  // measured against the committed goldens on Apple Metal, up to a quarter of each 42x24
+  // thumbnail differs, every difference at most three LSB apart except two pixels whose alpha is
+  // 2-3 (where unpremultiplying amplifies a one-LSB coverage difference into a large RGB delta).
+  // The Geode arm therefore compares at the renderer suite's perceptual threshold with
+  // antialiased pixels excluded, still allowing no pixel to exceed it. A bit-exact GPU golden is
+  // not portable across rasterizers and cannot gate CI.
+  const BitmapGoldenCompareParams compareParams =
+      renderer.requiresTextureSnapshotPresentation()
+          ? ApprovedPixelToleranceParams(0.02f, 0, /*includeAntiAliasing=*/false)
+          : PixelmatchIdentityParams();
+
   for (const LayerGoldenCase& testCase : kDonnerSplashLayerCases) {
     std::optional<svg::SVGElement> element = document.querySelector(testCase.selector);
     ASSERT_TRUE(element.has_value()) << "Missing layer selector " << testCase.selector;
@@ -91,7 +104,7 @@ TEST(LayerThumbnailGoldenTest, DonnerSplashLayerThumbnailsMatchGoldens) {
 
     const std::string goldenPath =
         GoldenPathForBackend(testCase.goldenPath, renderer.requiresTextureSnapshotPresentation());
-    CompareBitmapToGolden(bitmap, goldenPath, testCase.label, PixelmatchIdentityParams());
+    CompareBitmapToGolden(bitmap, goldenPath, testCase.label, compareParams);
   }
 }
 

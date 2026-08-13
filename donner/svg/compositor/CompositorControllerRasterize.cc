@@ -43,6 +43,27 @@ uint64_t SegmentTileId(Entity left, Entity right) {
 
 }  // namespace
 
+std::unique_ptr<RendererInterface> CompositorController::acquireOffscreen() {
+  if (pooledOffscreen_ != nullptr) {
+    ++lastRenderFrameStats_.offscreenRecycleCount;
+    ++lastRenderFrameStats_.offscreenRecycleTotal;
+    return std::move(pooledOffscreen_);
+  }
+  ++lastRenderFrameStats_.offscreenCreateCount;
+  ++lastRenderFrameStats_.offscreenCreateTotal;
+  return renderer().createOffscreenInstance();
+}
+
+void CompositorController::recycleOffscreen(std::unique_ptr<RendererInterface> offscreen) {
+  pooledOffscreen_ = std::move(offscreen);
+}
+
+void CompositorController::yieldBetweenTiles() {
+  if (config_.yieldBetweenTiles) {
+    config_.yieldBetweenTiles();
+  }
+}
+
 void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderViewport& viewport,
                                           const Transform2d& surfaceFromCanvas) {
   ZoneScopedN("Compositor::rasterizeLayer");
@@ -84,17 +105,23 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
          presentationCost.redrawCost <= presentationCost.cacheOverheadCost);
   }
 
-  auto offscreen = renderer().createOffscreenInstance();
+  auto offscreen = acquireOffscreen();
   UTILS_RELEASE_ASSERT(offscreen != nullptr);
   RendererDriver driver(*offscreen);
 
   if (geometry.tight) {
     ZoneScopedN("Compositor::rasterizeLayer::drawEntityRangeTight");
-    driver.drawEntityRange(registry, layer.firstEntity(), layer.lastEntity(), geometry.viewport,
-                           geometry.surfaceFromCanvas);
+    if (!driver.drawEntityRangeInterruptibly(registry, layer.firstEntity(), layer.lastEntity(),
+                                             geometry.viewport, geometry.surfaceFromCanvas,
+                                             [this]() { return isCancelled(); })) {
+      return;
+    }
   } else {
-    driver.drawEntityRange(registry, layer.firstEntity(), layer.lastEntity(), geometry.viewport,
-                           geometry.surfaceFromCanvas);
+    if (!driver.drawEntityRangeInterruptibly(registry, layer.firstEntity(), layer.lastEntity(),
+                                             geometry.viewport, geometry.surfaceFromCanvas,
+                                             [this]() { return isCancelled(); })) {
+      return;
+    }
   }
 
   // Stamp the bitmap with the entity's current absolute transform so the
@@ -121,6 +148,10 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
   } else {
     layer.setBitmap(offscreen->takeSnapshot(), surfaceFromEntity);
   }
+  // The snapshot detached the offscreen's target; the instance is clean and
+  // reusable. Cancellation paths above return without recycling, so a
+  // half-drawn frame's state is destroyed rather than pooled.
+  recycleOffscreen(std::move(offscreen));
   // `setBitmap`/`setTextureSnapshot` bump a per-object generation that resets
   // to 1 for every freshly-built layer. After a document replace reuses entity
   // ids, that "1" collides with the generation the editor's GL texture cache
@@ -170,12 +201,12 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
   // The fast path in `renderFrame` is what updates `canvasFromBitmap_`
   // for DOM-driven deltas; rasterization itself just refreshes the
   // bitmap's content and the stamped `bitmapEntityFromWorldTransform`.
+  yieldBetweenTiles();
 }
 
 void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& viewport,
                                                         const Transform2d& surfaceFromCanvas) {
   ZoneScopedN("Compositor::rasterizeDirtyStaticSegmentsImpl");
-  Registry& registry = document().registry();
   const size_t layerCount = layers_.size();
   UTILS_RELEASE_ASSERT(staticSegments_.size() == layerCount + 1);
   UTILS_RELEASE_ASSERT(staticSegmentDirty_.size() == layerCount + 1);
@@ -197,11 +228,19 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
     staticSpanPlans_.resize(layerCount + 1);
   }
 
+  if (std::none_of(staticSegmentDirty_.begin(), staticSegmentDirty_.end(),
+                   [](bool dirty) { return dirty; })) {
+    return;
+  }
+
+  Registry& registry = document().registry();
+
   // Snapshot paint order once per frame. Each segment is a slice of this list,
   // rendered by entity range without mutating registry visibility.
   std::vector<Entity> paintOrder;
   {
     ZoneScopedN("Compositor::paintOrderSnapshot");
+    ++fastPathCounters_.paintOrderSnapshots;
     const auto& storage = registry.storage<components::RenderingInstanceComponent>();
     paintOrder.reserve(storage.size());
     RenderingInstanceView view(registry);
@@ -372,14 +411,14 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
         spanPlan.estimatedRedrawCost = presentationCost.redrawCost;
         spanPlan.estimatedCacheOverheadCost = presentationCost.cacheOverheadCost;
         spanPlan.staticHeuristicImmediate =
-            IsStaticSpanImmediateSafe(spanPlan) &&
+            config_.immediateStaticSpans && IsStaticSpanImmediateSafe(spanPlan) &&
             presentationCost.redrawCost <= presentationCost.cacheOverheadCost;
       }
 
       std::unique_ptr<RendererInterface> offscreen;
       {
         ZoneScopedN("Compositor::segment::createOffscreen");
-        offscreen = renderer().createOffscreenInstance();
+        offscreen = acquireOffscreen();
       }
       UTILS_RELEASE_ASSERT(offscreen != nullptr);
 
@@ -389,9 +428,12 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
         tightViewport.size = tightBoundsSnapped.size();
         tightViewport.devicePixelRatio = viewport.devicePixelRatio;
         RendererDriver driver(*offscreen);
-        driver.drawEntityRange(
-            registry, paintOrder[startIdx], paintOrder[endIdx], tightViewport,
-            surfaceFromCanvas * Transform2d::Translate(-tightBoundsSnapped.topLeft));
+        if (!driver.drawEntityRangeInterruptibly(
+                registry, paintOrder[startIdx], paintOrder[endIdx], tightViewport,
+                surfaceFromCanvas * Transform2d::Translate(-tightBoundsSnapped.topLeft),
+                [this]() { return isCancelled(); })) {
+          return;
+        }
         if (offscreen->requiresTextureSnapshotPresentation()) {
           std::shared_ptr<const RendererTextureSnapshot> texture = offscreen->takeTextureSnapshot();
           UTILS_RELEASE_ASSERT_MSG(
@@ -404,12 +446,16 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
           staticSegments_[i] = offscreen->takeSnapshot();
           staticSegmentTextures_[i].reset();
         }
+        recycleOffscreen(std::move(offscreen));
         staticSegmentOffsets_[i] = tightBoundsSnapped.topLeft;
       } else {
         ZoneScopedN("Compositor::segment::drawEntityRange");
         RendererDriver driver(*offscreen);
-        driver.drawEntityRange(registry, paintOrder[startIdx], paintOrder[endIdx], viewport,
-                               surfaceFromCanvas);
+        if (!driver.drawEntityRangeInterruptibly(registry, paintOrder[startIdx], paintOrder[endIdx],
+                                                 viewport, surfaceFromCanvas,
+                                                 [this]() { return isCancelled(); })) {
+          return;
+        }
         if (offscreen->requiresTextureSnapshotPresentation()) {
           std::shared_ptr<const RendererTextureSnapshot> texture = offscreen->takeTextureSnapshot();
           UTILS_RELEASE_ASSERT_MSG(
@@ -422,6 +468,7 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
           staticSegments_[i] = offscreen->takeSnapshot();
           staticSegmentTextures_[i].reset();
         }
+        recycleOffscreen(std::move(offscreen));
         staticSegmentOffsets_[i] = Vector2d::Zero();
       }
     }
@@ -443,7 +490,7 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
                                       static_cast<double>(spanPlan.estimatedRetainedBytes) / 4.0);
     spanPlan.estimatedRasterizeMs = estimatedRasterizeMs;
     spanPlan.immediateBudgetMs = ImmediateStaticSpanBudgetMs();
-    if (IsStaticSpanImmediateSafe(spanPlan)) {
+    if (config_.immediateStaticSpans && IsStaticSpanImmediateSafe(spanPlan)) {
       const double budgetChargeMs = ImmediateStaticSpanBudgetChargeMs(estimatedRasterizeMs);
       spanPlan.immediateBudgetChargeMs = budgetChargeMs;
       if (spanPlan.staticHeuristicImmediate) {
@@ -462,7 +509,8 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
       spanPlan.demotedDynamicImmediate = true;
     }
     if (!segmentIsEmpty) {
-      if (!spanPlan.demotedDynamicImmediate && IsBoundedMultiDrawStaticSpan(spanPlan)) {
+      if (config_.immediateStaticSpans && !spanPlan.demotedDynamicImmediate &&
+          IsBoundedMultiDrawStaticSpan(spanPlan)) {
         spanPlan.mode = StaticSpanMode::Immediate;
         spanPlan.staticHeuristicImmediate = true;
         spanPlan.immediateBudgetChargeMs = ImmediateStaticSpanBudgetChargeMs(estimatedRasterizeMs);
@@ -505,12 +553,42 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
     if (i < staticSegmentLastRasterizeMs_.size()) {
       staticSegmentLastRasterizeMs_[i] = elapsedMs;
     }
+    if (!segmentIsEmpty) {
+      // After the segment's timing stamp so the yield never inflates the
+      // measured rasterize time that dynamic-immediate promotion consumes.
+      yieldBetweenTiles();
+    }
   }
 }
 
 bool CompositorController::resyncSegmentsToLayerSet(const Vector2i& currentCanvasSize,
                                                     const Transform2d& surfaceFromCanvas) {
   const size_t newCount = layers_.size() + 1;
+
+  // Canvas resized - bitmap caches are sized to the old canvas and can't
+  // be reused at a different resolution (would be scaled or leave
+  // transparent gaps). Full invalidation.
+  const bool canvasChanged = staticSegmentsCanvas_ != currentCanvasSize;
+  const bool surfaceChanged =
+      hasStaticSegmentsSurfaceFromCanvas_ &&
+      !SameTransformNear(staticSegmentsSurfaceFromCanvas_, surfaceFromCanvas);
+
+  const bool parallelStateSized =
+      staticSegments_.size() == newCount && staticSegmentTextures_.size() == newCount &&
+      staticSegmentDirty_.size() == newCount && staticSegmentGeneration_.size() == newCount &&
+      staticSegmentOffsets_.size() == newCount &&
+      staticSegmentLastRasterizeMs_.size() == newCount && staticSpanPlans_.size() == newCount;
+  bool boundariesUnchanged = staticSegmentBoundaries_.size() == newCount;
+  for (size_t i = 0; boundariesUnchanged && i < newCount; ++i) {
+    const Entity left = (i == 0) ? entt::null : layers_[i - 1].entity();
+    const Entity right = (i == layers_.size()) ? entt::null : layers_[i].entity();
+    boundariesUnchanged = staticSegmentBoundaries_[i] == std::pair{left, right};
+  }
+  if (!canvasChanged && !surfaceChanged && hasStaticSegmentsSurfaceFromCanvas_ &&
+      parallelStateSized && boundariesUnchanged) {
+    return std::any_of(staticSegmentDirty_.begin(), staticSegmentDirty_.end(),
+                       [](bool dirty) { return dirty; });
+  }
 
   // Compute the NEW boundary identity for each slot. Slot i sits between
   // layers_[i-1] and layers_[i]; the edge cases at i==0 and i==N use
@@ -522,13 +600,7 @@ bool CompositorController::resyncSegmentsToLayerSet(const Vector2i& currentCanva
     newBoundaries[i] = {left, right};
   }
 
-  // Canvas resized - bitmap caches are sized to the old canvas and can't
-  // be reused at a different resolution (would be scaled or leave
-  // transparent gaps). Full invalidation.
-  const bool canvasChanged = staticSegmentsCanvas_ != currentCanvasSize;
-  const bool surfaceChanged =
-      hasStaticSegmentsSurfaceFromCanvas_ &&
-      !SameTransformNear(staticSegmentsSurfaceFromCanvas_, surfaceFromCanvas);
+  ++fastPathCounters_.segmentResyncRebuilds;
 
   std::vector<RendererBitmap> newSegments(newCount);
   std::vector<std::shared_ptr<const RendererTextureSnapshot>> newTextures(newCount);
@@ -875,7 +947,16 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
   };
 
   const auto drawLayer = [&](const CompositorLayer& layer) {
-    if (ShouldDirectComposeLayer(layer)) {
+    // A clean immediate drag layer may deliberately retain its raster while a pure translation
+    // moves `canvasFromBitmap`. Direct-drawing that layer can reproduce its old pixels in the
+    // flattened frame, so translate the retained payload below. Scale and rotation keep the
+    // established direct-render path, which avoids resampling differences from transforming an
+    // already-rasterized payload.
+    const bool shouldDirectComposeLayer = ShouldDirectComposeLayer(layer);
+    const bool blitRetainedTranslation = shouldDirectComposeLayer &&
+                                         !layer.canvasFromBitmap().isIdentity() &&
+                                         layer.canvasFromBitmap().isTranslation();
+    if (shouldDirectComposeLayer && !blitRetainedTranslation) {
       const auto directStart = std::chrono::steady_clock::now();
       RendererDriver driver(renderer());
       driver.drawEntityRangeIntoCurrentFrame(document().registry(), layer.firstEntity(),

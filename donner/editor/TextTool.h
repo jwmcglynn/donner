@@ -78,6 +78,19 @@ public:
     /// fully opaque. New point text starts at zero, pointer movement reveals
     /// it, and text input fades it back to zero.
     float frameOpacity = 1.0f;
+    /// Highlight quads for the active text range, one continuous oriented
+    /// fragment per display line in document space. Empty for a collapsed caret.
+    std::vector<std::array<Vector2d, 4>> selectionQuadsDoc;
+  };
+
+  /// Normalized logical text range, with `start` inclusive and `end`
+  /// exclusive. Newline code points participate in the logical range even
+  /// though they do not produce highlight geometry.
+  struct SelectionRange {
+    std::size_t start = 0;
+    std::size_t end = 0;
+
+    bool operator==(const SelectionRange&) const = default;
   };
 
   /// Drag-to-create preview chrome (document space): the live box being
@@ -127,6 +140,8 @@ public:
   [[nodiscard]] bool isRotatingFrame() const { return frameGesture_ == FrameGesture::Rotate; }
   /// True while the active frame gesture is a resize.
   [[nodiscard]] bool isResizingFrame() const { return frameGesture_ == FrameGesture::Resize; }
+  /// True while a pointer gesture is extending a text selection.
+  [[nodiscard]] bool isSelectingText() const { return selectingText_; }
   /// Corner of the active frame gesture, for cursor feedback.
   [[nodiscard]] SelectionTransformCorner frameCorner() const { return frameCorner_; }
 
@@ -164,8 +179,10 @@ public:
   void backspace(EditorApp& editor);
   /// Delete the code point after the caret.
   void deleteForward(EditorApp& editor);
-  /// Move the caret.
-  void moveCaret(EditorApp& editor, CaretMove move);
+  /// Move the caret, optionally extending the active range from its anchor.
+  void moveCaret(EditorApp& editor, CaretMove move, bool extendSelection = false);
+  /// Select the full logical contents of the active session.
+  void selectAll();
 
   /// Toggle `font-weight: bold` on the session's text element.
   void toggleBold(EditorApp& editor);
@@ -212,6 +229,8 @@ public:
   [[nodiscard]] const std::u32string& sessionContent() const { return content_; }
   /// Caret position in code points; for tests.
   [[nodiscard]] std::size_t caretIndex() const { return caretIndex_; }
+  /// Active normalized text range, or nullopt for a collapsed caret.
+  [[nodiscard]] std::optional<SelectionRange> selectionRange() const;
 
 private:
   enum class State {
@@ -225,14 +244,19 @@ private:
                            const std::optional<Box2d>& boxDoc);
   /// Open an editing session on an existing `<text>` element: reconstruct the
   /// logical content from its DOM children and place the caret at the clicked
-  /// character (@p documentPoint), or at the end when the click misses every
-  /// glyph.
+  /// line position (@p documentPoint), or at the end when the click misses the
+  /// text's line cells.
   void beginEditingSessionForExisting(EditorApp& editor, const svg::SVGTextElement& text,
                                       const Vector2d& documentPoint);
-  /// Caret index for a click at @p documentPoint inside the session's text,
-  /// or nullopt when the click misses every glyph. Clicks in the trailing
-  /// half of a glyph place the caret after it.
-  [[nodiscard]] std::optional<std::size_t> caretIndexAtPoint(const Vector2d& documentPoint) const;
+  /// Caret index nearest @p documentPoint inside the session's text line
+  /// cells, or nullopt when a click misses every line cell. When
+  /// @p clampToNearestLine is true, points outside the line bounds clamp to
+  /// the nearest caret position for continuous pointer selection.
+  [[nodiscard]] std::optional<std::size_t> caretIndexAtPoint(const Vector2d& documentPoint,
+                                                             bool clampToNearestLine = false) const;
+  /// Delete the active text range and collapse the caret to its start.
+  /// Returns true when content was removed.
+  bool deleteSelection();
   /// The session frame in the text's local space: the authored box for box
   /// text, or the font em-box bounds for point text. Nullopt when no glyph
   /// geometry exists and no box is authored.
@@ -320,6 +344,10 @@ private:
   std::u32string content_;
   /// Caret position in code points (0..content_.size()).
   std::size_t caretIndex_ = 0;
+  /// Fixed end of an active range. The moving end is `caretIndex_`.
+  std::optional<std::size_t> selectionAnchorIndex_;
+  /// Pointer-down is extending a range inside the active session.
+  bool selectingText_ = false;
   /// Font size in document units (drives baseline offset and line height).
   double fontSize_ = kDefaultFontSize;
   /// Cached per-code-point widths from the last sync, for wrapping.

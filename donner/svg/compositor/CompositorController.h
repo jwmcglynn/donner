@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -163,13 +164,31 @@ private:
 [[nodiscard]] std::unordered_map<Entity, Entity> BuildStructuralEntityRemap(
     const SVGDocument& oldDoc, const SVGDocument& newDoc);
 
-/// Maximum total memory budget for compositor layer bitmaps, in bytes.
+/// Maximum total memory budget for compositor layer bitmaps, in bytes, on
+/// hosts with a large address space.
 ///
 /// Sized for high-DPI editor sessions with mandatory filter, mask, and
 /// isolated-layer promotions plus one active drag target. Scale-band caching
 /// should eventually reduce per-layer memory by letting layers live below full
 /// canvas resolution.
 inline constexpr size_t kMaxCompositorMemoryBytes = 1024ull * 1024ull * 1024ull;
+
+/// Effective compositor bitmap budget for the current process.
+///
+/// On wasm the linear memory is small and FIXED (growth is fatal on every
+/// browser engine, so the build links with equal initial and maximum
+/// memory), and a budget larger
+/// than the whole address space means admission can never refuse: full-canvas
+/// payloads accrue across zoom size-commit epochs until the module aborts
+/// (measured 2026-08-11: ~one 24.8MB surface per 250ms at DPR 2). Bound the
+/// budget to a third of the actual heap there. Native keeps the constant.
+///
+/// NOTE the measured caveat: refusing promotion is not free - an unpromoted
+/// heavy subtree re-rasterizes full-document per frame, which can cost MORE
+/// transient memory than the retained tile (a blind 96MB budget made storms
+/// OOM sooner). This bound therefore stays generous (heap/3, not heap/10);
+/// right-sizing below that requires measuring the demotion fallback path.
+[[nodiscard]] size_t EffectiveCompositorMemoryBudget();
 
 /**
  * Runtime feature gates for `CompositorController`.
@@ -228,6 +247,11 @@ struct CompositorConfig {
   /// new policy. See 0027-tight_bounded_segments.md § Reversibility.
   bool tightBoundedSegments = true;
 
+  /// Allow cheap static spans to be presented as immediate geometry and re-rasterized on every
+  /// compositor update. Backends with high per-draw submission overhead, notably browser WebGPU,
+  /// disable this so a span is rasterized once and then reused as a cached tile.
+  bool immediateStaticSpans = true;
+
   /// When true, a static segment that the deterministic cost heuristic would
   /// cache may additionally be promoted to an immediate (re-rasterized every
   /// frame) span when its *measured* rasterize time fits the per-frame
@@ -239,6 +263,23 @@ struct CompositorConfig {
   /// Deterministic tests that assert on that partition set this false so only
   /// the (host-independent) cost heuristic classifies spans. Default on.
   bool dynamicImmediateStaticSpans = true;
+
+  /// Return the first correct full-document draw before rasterizing retained layer and segment
+  /// caches. The owner must call `warmPendingFirstFrameCaches` from a later, cancellable idle task.
+  /// This keeps cache preparation off the click-to-present critical path without abandoning the
+  /// prewarm that makes the first drag responsive.
+  bool deferFirstFrameWarmup = false;
+
+  /// Invoked between tile rasterizations (the same coarse safe points where
+  /// `isCancelled()` is polled). Owners whose event delivery requires the
+  /// rendering thread to periodically service its event loop install a
+  /// bounded yield here: the browser worker's canvas-size commits and WebGPU
+  /// callbacks arrive as worker events, and a multi-tile rasterize pass with
+  /// pooled offscreen renderers otherwise never yields mid-pass. The callback
+  /// must be cheap and reentrancy-safe with respect to compositor state: it
+  /// may deliver a cancellation (observed at the next `isCancelled()` poll)
+  /// but must not call back into this controller. Empty means no yield.
+  std::function<void()> yieldBetweenTiles;
 };
 
 /**
@@ -430,6 +471,15 @@ public:
   bool renderFrame(const RenderViewport& viewport, CancellationToken& token,
                    const Transform2d& surfaceFromCanvas);
 
+  /// True when the first correct frame has been drawn but its retained caches still need warming.
+  [[nodiscard]] bool hasPendingFirstFrameWarmup() const { return firstFrameWarmupPending_; }
+
+  /// Warm retained layer and segment caches for the already-presented first frame.
+  ///
+  /// This never writes the main render target. It is intended for a later low-priority worker turn
+  /// and leaves unfinished cache work pending when cancelled by interactive rendering.
+  [[nodiscard]] bool warmPendingFirstFrameCaches(CancellationToken& token);
+
   /**
    * Returns the number of currently active layers (excluding the root layer).
    */
@@ -439,6 +489,30 @@ public:
    * Returns the total memory used by all layer bitmaps, in bytes.
    */
   [[nodiscard]] size_t totalBitmapMemory() const;
+
+  /// Split of \ref totalBitmapMemory by what holds the pixels. The four kinds
+  /// are evicted by different rules, so a single total cannot say which rule is
+  /// the one letting memory grow.
+  struct BitmapMemoryBreakdown {
+    /// CPU pixel buffers for cached static segments.
+    size_t segmentBitmapBytes = 0;
+    /// GPU textures for cached static segments.
+    size_t segmentTextureBytes = 0;
+    /// CPU pixel buffers for promoted layers.
+    size_t layerBitmapBytes = 0;
+    /// GPU textures for promoted layers.
+    size_t layerTextureBytes = 0;
+    /// Cached static segments holding either a bitmap or a texture.
+    size_t segmentCount = 0;
+    /// Promoted layers holding either a bitmap or a texture.
+    size_t layerCount = 0;
+  };
+
+  /**
+   * Returns \ref totalBitmapMemory split by holder. Observational only: it
+   * never reads a GPU texture back to the CPU.
+   */
+  [[nodiscard]] BitmapMemoryBreakdown bitmapMemoryBreakdown() const;
 
   /**
    * Returns a reference to the underlying SVG document.
@@ -481,6 +555,12 @@ public:
     /// wasn't reached because no entities were dirty (e.g. page-load,
     /// selection-change-only frames).
     uint64_t noDirtyFrames = 0;
+    /// Number of times segment topology/state vectors were rebuilt. Stable
+    /// frames must preserve these vectors in place instead of reallocating them.
+    uint64_t segmentResyncRebuilds = 0;
+    /// Number of full document paint-order snapshots taken while planning dirty
+    /// static segments. Clean frames should not walk paint order at all.
+    uint64_t paintOrderSnapshots = 0;
   };
   [[nodiscard]] const FastPathCounters& fastPathCountersForTesting() const {
     return fastPathCounters_;
@@ -742,6 +822,12 @@ public:
   /// Worker render costs from the most recent `renderFrame` call, split by whether the work was
   /// caused by immediate-mode transient spans or retained cached tiles.
   struct RenderFrameStats {
+    /// First-frame full-document draw that produces the immediately presentable surface.
+    double firstFrameDrawMs = 0.0;
+    /// First-frame detector, resolver, and layer-plan construction after the initial draw.
+    double firstFramePlanningMs = 0.0;
+    /// First-frame retained layer/segment cache warmup performed after planning.
+    double firstFrameWarmupMs = 0.0;
     /// Segment raster time caused by immediate-mode static spans.
     double immediateRasterizeMs = 0.0;
     /// Segment/layer raster time that produces retained cached bitmap/texture tiles.
@@ -750,6 +836,21 @@ public:
     int immediateTileCount = 0;
     /// Count of segment/layer tiles charged to cached raster work.
     int cachedTileCount = 0;
+    /// Offscreen renderer instances constructed this frame. With pooling,
+    /// a steady-state frame reuses the pooled instance and reports 0 or 1
+    /// here regardless of tile count; per-tile construction (the pre-pool
+    /// behavior whose teardown polls dominated size-commit frames) would
+    /// report one per tile. Pinned by regression tests.
+    int offscreenCreateCount = 0;
+    /// Tile rasterizations served by the pooled offscreen instance.
+    int offscreenRecycleCount = 0;
+    /// Monotonic controller-lifetime totals of the two counts above. Browser
+    /// regression tests poll published stats asynchronously and can miss any
+    /// individual frame's per-frame values; the totals let them assert
+    /// "tiles rasterized without constructing instances" across a window
+    /// without sampling the exact re-rasterize frame.
+    int offscreenCreateTotal = 0;
+    int offscreenRecycleTotal = 0;
   };
 
   /// Return the current render-frame raster cost split.
@@ -800,6 +901,9 @@ public:
     /// `hasSplitStaticLayers()` - the editor's drag-overlay fast
     /// path is active when this is true.
     bool splitPathActive = false;
+    /// A correct flat frame was published while retained caches still
+    /// await low-priority warmup.
+    bool firstFrameWarmupPending = false;
     /// Entity the compositor cached the bg/fg split for. `entt::null`
     /// when split-path is inactive.
     Entity splitStaticLayersEntity = entt::null;
@@ -930,6 +1034,28 @@ private:
   /// Rasterize a single promoted layer into its bitmap cache.
   void rasterizeLayer(CompositorLayer& layer, const RenderViewport& viewport,
                       const Transform2d& surfaceFromCanvas);
+
+  /// Take the pooled offscreen renderer, or construct a fresh one when the
+  /// pool is empty. Tile rasterization used to construct and destroy one
+  /// offscreen renderer per tile; on the browser WebGPU backend each
+  /// destructor blocks on two GPU-idle device polls (~14.5 ms per tile), and
+  /// that teardown dominated multi-tile size-commit frames. Callers return a
+  /// CLEAN instance via `recycleOffscreen` after taking its snapshot, and
+  /// simply drop the instance on cancellation paths so a half-drawn frame's
+  /// state is never reused.
+  [[nodiscard]] std::unique_ptr<RendererInterface> acquireOffscreen();
+
+  /// Return a cleanly-finished offscreen renderer to the single-slot pool.
+  void recycleOffscreen(std::unique_ptr<RendererInterface> offscreen);
+
+  /// Invoke `config_.yieldBetweenTiles` if installed. Called at the coarse
+  /// per-tile safe points, after a tile's snapshot is taken and before the
+  /// next tile's `isCancelled()` poll (so a cancellation delivered by the
+  /// yield takes effect immediately).
+  void yieldBetweenTiles();
+
+  /// Populate the retained caches discovered after the first full-document draw.
+  void warmFirstFrameCaches(const RenderViewport& viewport, const Transform2d& surfaceFromCanvas);
 
   /// Rasterize any static segments whose `staticSegmentDirty_` flag is
   /// set. Each segment lives between two consecutive promoted layers in
@@ -1210,8 +1336,15 @@ private:
   /// `renderFrame` call can't scan (RICs don't exist yet), so we defer the
   /// first scan until just after the initial `prepareDocumentForRendering`.
   bool hintsScanned_ = false;
+  /// The first correct main-renderer frame has already been produced, while its offscreen retained
+  /// caches are intentionally waiting for a lower-priority worker turn.
+  bool firstFrameWarmupPending_ = false;
   bool offscreenSupportKnown_ = false;
   bool offscreenSupported_ = false;
+  /// Single-slot pool for tile-rasterization offscreen renderers. See
+  /// `acquireOffscreen`. Destroyed with the controller (one teardown per
+  /// compositor lifetime instead of one per tile).
+  std::unique_ptr<RendererInterface> pooledOffscreen_;
   /// When true, `composeLayers` skips the main-renderer draw calls while
   /// the split bg/drag/fg cache is populated - the editor reads those
   /// bitmaps directly, so the main-renderer output would go unconsumed.

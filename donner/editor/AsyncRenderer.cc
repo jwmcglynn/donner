@@ -6,19 +6,96 @@
 #include <thread>
 #include <utility>
 
+
+#include "donner/base/MemoryAttribution.h"
 #include "donner/base/Utils.h"
 #include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/TracyWrapper.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/compositor/CompositorController.h"
+#include "donner/svg/parser/SVGParser.h"
+#include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererInterface.h"
 
 namespace donner::editor {
 
 namespace {
 
+// ---------------------------------------------------------------------------
+// WEBKIT BITMAP BRIDGE - RETAINED PENDING THE DEFERRED WEBKIT DECISION
+//
+// `DONNER_WASM_WORKER_SURFACE` is defined by no build configuration, so nothing
+// below is compiled anywhere. It is the complete C++ dependency list of the
+// WebKit bitmap bridge - the two alternating document-canvas selectors, the
+// worker-canvas selector, the mode probe, and the three ImageBitmap handoff
+// entry points - held out of the the single-canvas architecture deletion series so the phase 4
+// retire-or-rebuild decision for WebKit is made against the real code rather
+// than a changelog.
+//
+// This block is NOT a supported configuration and must not be revived as-is:
+// it presents into a second DOM canvas, which the "no CSS in presentation"
+// invariant forbids. Phase 4 either deletes it (see the series' optional
+// bridge-deletion patch, which does exactly that and nothing else) or rebuilds
+// an ImageBitmap handoff against the single canvas. Retained-but-unused code is
+// not an outcome.
+// ---------------------------------------------------------------------------
+#ifdef DONNER_WASM_WORKER_SURFACE
+constexpr const char* kDirectWorkerDocumentCanvasSelector = "#donner-document-canvas";
+constexpr const char* kDirectWorkerDocumentBackCanvasSelector = "#donner-document-canvas-back";
+constexpr const char* kDirectWorkerDocumentCanvasSelectors =
+    "#donner-document-canvas,#donner-document-canvas-back";
+constexpr const char* kBitmapWorkerDocumentCanvasSelector = "#donner-worker-document-canvas";
+
+EM_JS(int, UseBitmapWorkerSurfaceBridge, (),
+      { return globalThis['__donnerWorkerSurfaceMode'] == 'bitmap-bridge' ? 1 : 0; });
+
+EM_JS(int, StageWorkerDocumentBitmap,
+      (const char* selector, int width, int height, double frameToken, int surfaceSlot), {
+        try {
+          const canvasTarget = findCanvasEventTarget(UTF8ToString(selector));
+          const canvas = canvasTarget && (canvasTarget['offscreenCanvas'] || canvasTarget);
+          if (!canvas || typeof canvas.transferToImageBitmap != 'function') {
+            Module['printErr'](
+                'Donner bitmap bridge: transferred canvas cannot create an ImageBitmap');
+            return 0;
+          }
+          const bitmap = canvas.transferToImageBitmap();
+          postMessage({
+            'cmd' : 'callHandler',
+            'handler' : 'stageDonnerDocumentBitmap',
+            'args' : [ frameToken, surfaceSlot, bitmap, width, height ],
+          },
+                      [bitmap]);
+          return 1;
+        } catch (error) {
+          Module['printErr']('Donner bitmap bridge failed: ' + error);
+          return 0;
+        }
+      });
+
+EM_JS(void, CommitWorkerDocumentBitmap, (double frameToken, int surfaceSlot), {
+  if (typeof Module['commitDonnerDocumentBitmap'] == 'function') {
+    Module['commitDonnerDocumentBitmap'](frameToken, surfaceSlot);
+  }
+});
+
+EM_JS(void, DiscardWorkerDocumentBitmap, (double frameToken), {
+  if (typeof document != 'undefined') {
+    if (typeof Module['discardDonnerDocumentBitmap'] == 'function') {
+      Module['discardDonnerDocumentBitmap'](frameToken);
+    }
+    return;
+  }
+  postMessage({
+    'cmd' : 'callHandler',
+    'handler' : 'discardDonnerDocumentBitmap',
+    'args' : [frameToken],
+  });
+});
+#endif  // DONNER_WASM_WORKER_SURFACE
+
 RenderResult::CompositedPreview BuildFullCanvasCompositedPreview(
-    svg::SVGDocument& document, const svg::RendererBitmap& bitmap,
+    const Box2d& documentViewBox, const svg::RendererBitmap& bitmap,
     std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot, std::uint64_t generation,
     Entity entity, svg::compositor::InteractionHint interactionKind,
     const EditorRasterViewport& rasterViewport,
@@ -29,10 +106,6 @@ RenderResult::CompositedPreview BuildFullCanvasCompositedPreview(
   tile.generation = generation;
   tile.bitmap = bitmap;
   tile.textureSnapshot = std::move(textureSnapshot);
-  const std::optional<Box2d> viewBox = document.svgElement().viewBox();
-  const Box2d documentViewBox =
-      viewBox.value_or(Box2d::FromXYWH(0, 0, static_cast<double>(rasterViewport.outputSizePx.x),
-                                       static_cast<double>(rasterViewport.outputSizePx.y)));
   tile.canvasOffsetDoc = rasterViewport.documentRect.topLeft - documentViewBox.topLeft;
   const Vector2i payloadDims =
       !bitmap.empty() ? bitmap.dimensions
@@ -54,6 +127,10 @@ RenderResult::CompositedPreview BuildFullCanvasCompositedPreview(
       .representedDragPreview = std::move(representedDragPreview),
   };
 }
+
+}  // namespace
+
+namespace {
 
 EditorRasterViewport EffectiveRasterViewportForRequest(svg::SVGDocument& document,
                                                        const EditorRasterViewport& requested) {
@@ -114,7 +191,79 @@ bool ContainsAllEntities(const std::vector<Entity>& haystack, const std::vector<
                              [&](Entity entity) { return ContainsEntity(haystack, entity); });
 }
 
+bool WaitForSampleThumbnailDelay(const svg::compositor::CancellationToken& cancellation,
+                                 std::chrono::milliseconds delay) {
+  const auto deadline = std::chrono::steady_clock::now() + delay;
+  while (!cancellation.isCancelled()) {
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= deadline) {
+      return true;
+    }
+    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
+    std::this_thread::sleep_for(std::min(remaining, std::chrono::milliseconds(1)));
+  }
+  return false;
+}
+
+SampleThumbnailRenderResult RenderSampleThumbnail(
+    SampleThumbnailRenderRequest request, svg::RendererInterface& renderer,
+    const svg::compositor::CancellationToken& cancellation, std::chrono::milliseconds delay) {
+  SampleThumbnailRenderResult result{
+      .key = request.key,
+      .outcome = SampleThumbnailRenderOutcome::RenderError,
+  };
+  if (request.dimensions.x <= 0 || request.dimensions.y <= 0) {
+    return result;
+  }
+  if (delay.count() > 0 && !WaitForSampleThumbnailDelay(cancellation, delay)) {
+    result.outcome = SampleThumbnailRenderOutcome::Cancelled;
+    return result;
+  }
+  if (cancellation.isCancelled()) {
+    result.outcome = SampleThumbnailRenderOutcome::Cancelled;
+    return result;
+  }
+
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = svg::parser::SVGParser::ParseSVG(request.source, warnings);
+  if (parsed.hasError()) {
+    result.outcome = SampleThumbnailRenderOutcome::ParseError;
+    return result;
+  }
+  if (cancellation.isCancelled()) {
+    result.outcome = SampleThumbnailRenderOutcome::Cancelled;
+    return result;
+  }
+
+  svg::SVGDocument document = std::move(parsed.result());
+  document.setCanvasSize(request.dimensions.x, request.dimensions.y);
+
+  svg::RenderViewport viewport;
+  viewport.size = Vector2d(request.dimensions.x, request.dimensions.y);
+  viewport.devicePixelRatio = 1.0;
+  svg::RendererDriver driver(renderer);
+  const bool completed = driver.drawInterruptibly(
+      document, viewport, Transform2d(), [&cancellation] { return cancellation.isCancelled(); });
+  if (!completed || cancellation.isCancelled()) {
+    result.outcome = SampleThumbnailRenderOutcome::Cancelled;
+    return result;
+  }
+
+  result.bitmap =
+      renderer.takeSnapshotInterruptibly([&cancellation] { return cancellation.isCancelled(); });
+  if (cancellation.isCancelled()) {
+    result.bitmap = {};
+    result.outcome = SampleThumbnailRenderOutcome::Cancelled;
+    return result;
+  }
+  if (!result.bitmap.empty()) {
+    result.outcome = SampleThumbnailRenderOutcome::Rendered;
+  }
+  return result;
+}
+
 }  // namespace
+
 
 PresentationSnapshotPlan ChoosePresentationSnapshotPlan(bool hasCompositedPreview,
                                                         bool requiresTextureSnapshotPresentation,
@@ -126,25 +275,64 @@ PresentationSnapshotPlan ChoosePresentationSnapshotPlan(bool hasCompositedPrevie
     };
   }
 
+  // Without a composited preview the CPU bitmap *is* the presented frame, so it is always read
+  // back. When a preview covers the frame the readback is pure overhead for presentation, but
+  // `captureCpuSnapshot` callers (replay harnesses, goldens, thumbnail and diagnostic captures)
+  // consume `RenderResult::bitmap` directly and must still receive one.
   return PresentationSnapshotPlan{
-      .captureCpuSnapshot = true,
+      .captureCpuSnapshot = captureCpuSnapshot || !hasCompositedPreview,
   };
 }
 
-AsyncRenderer::AsyncRenderer() {
+AsyncRenderer::AsyncRenderer(AsyncRendererStartMode startMode) {
+  if (startMode == AsyncRendererStartMode::Immediate) {
+    start();
+  }
+}
+
+void AsyncRenderer::start() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (std::holds_alternative<ShutdownState>(workerState_)) {
+    return;
+  }
+  if (thread_.joinable()) {
+    return;
+  }
   thread_ = std::thread([this] { workerLoop(); });
 }
 
 AsyncRenderer::~AsyncRenderer() {
+  shutdown();
+}
+
+void AsyncRenderer::shutdown() {
+  bool initiatedShutdown = false;
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    // Detach first so no later worker completion can copy a callback into its local wake slot. A
+    // callback copied before this lock is still safe: the join below waits for it to return while
+    // the owner and its window remain alive.
+    wakeCallback_ = {};
+    if (std::holds_alternative<ShutdownState>(workerState_)) {
+      return;
+    }
+    pendingSampleThumbnail_.reset();
+    sampleThumbnailResult_.reset();
+    cancelSampleThumbnail_.cancel();
+    pendingCompositorWarmup_ = false;
+    cancelCompositorWarmup_.cancel();
+    cancelRender_.cancel();
     workerState_ = ShutdownState{};
+    initiatedShutdown = true;
   }
-  cv_.notify_all();
+  if (initiatedShutdown) {
+    cv_.notify_all();
+  }
   if (thread_.joinable()) {
     thread_.join();
   }
 }
+
 
 void AsyncRenderer::notePublishedCompositedPreview(
     const std::optional<RenderResult::CompositedPreview>& compositedPreview) {
@@ -183,7 +371,8 @@ void AsyncRenderer::notePublishedCompositedPreview(
 
 bool AsyncRenderer::workerStateBusy(const WorkerState& state) {
   return std::holds_alternative<RenderingState>(state) ||
-         std::holds_alternative<CancellingState>(state) || std::holds_alternative<DoneState>(state);
+         std::holds_alternative<CancellingState>(state) ||
+         std::holds_alternative<DoneState>(state);
 }
 
 bool AsyncRenderer::workerStateRenderInFlight(const WorkerState& state) {
@@ -193,19 +382,22 @@ bool AsyncRenderer::workerStateRenderInFlight(const WorkerState& state) {
 
 bool AsyncRenderer::isBusy() const {
   std::lock_guard<std::mutex> lock(mutex_);
-  return workerStateBusy(workerState_);
+  return workerStateBusy(workerState_) || pendingCompositorWarmup_ || compositorWarmupActive_;
 }
 
 bool AsyncRenderer::hasRenderInFlightForTesting() const {
   std::lock_guard<std::mutex> lock(mutex_);
-  return workerStateRenderInFlight(workerState_);
+  return workerStateRenderInFlight(workerState_) || pendingCompositorWarmup_ ||
+         compositorWarmupActive_;
 }
 
 bool AsyncRenderer::waitUntilNoRenderInFlightForTesting(
     std::chrono::steady_clock::time_point deadline) {
   std::unique_lock<std::mutex> lock(mutex_);
-  return cv_.wait_until(lock, deadline,
-                        [this] { return !workerStateRenderInFlight(workerState_); });
+  return cv_.wait_until(lock, deadline, [this] {
+    return !workerStateRenderInFlight(workerState_) && !pendingCompositorWarmup_ &&
+           !compositorWarmupActive_;
+  });
 }
 
 void AsyncRenderer::setReplayRenderDelayForTesting(std::chrono::milliseconds delay) {
@@ -222,7 +414,11 @@ void AsyncRenderer::requestRender(const RenderRequest& request) {
   bool signalCancel = false;
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (std::holds_alternative<ShutdownState>(workerState_)) {
+      return;
+    }
     RenderRequest stagedRequest = request;
+    stagedRequest.queuedAt = std::chrono::steady_clock::now();
     if (!request.structuralRemap.empty()) {
       retainedStructuralRemaps_[request.documentGeneration] = request.structuralRemap;
     } else {
@@ -230,6 +426,13 @@ void AsyncRenderer::requestRender(const RenderRequest& request) {
       if (retainedIt != retainedStructuralRemaps_.end()) {
         stagedRequest.structuralRemap = retainedIt->second;
       }
+    }
+
+    // Foreground interaction always outranks speculative cache work. The compositor's normal
+    // render path will finish any still-missing payloads against the newest DOM and viewport.
+    pendingCompositorWarmup_ = false;
+    if (compositorWarmupActive_) {
+      cancelCompositorWarmup_.cancel();
     }
 
     if (auto* rendering = std::get_if<RenderingState>(&workerState_)) {
@@ -248,14 +451,28 @@ void AsyncRenderer::requestRender(const RenderRequest& request) {
       // replacement request and then receive a stale cancel.
       cancelRender_.cancel();
     }
+    if (sampleThumbnailActive_) {
+      // Main-document presentation always preempts background preview work. The thumbnail
+      // traversal polls its independent token between rendered entities.
+      cancelSampleThumbnail_.cancel();
+    }
   }
   cv_.notify_one();
 }
 
 void AsyncRenderer::cancelInFlight() {
   bool signalCancel = false;
+  std::function<void()> wakeAfterSettledCancellation;
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    pendingCompositorWarmup_ = false;
+    if (compositorWarmupActive_) {
+      // Cancellation-token sampling is not an acknowledgment. The worker may have completed its
+      // final poll while it still owns DocumentWriteAccess, so remember the waiter until the
+      // active flag and guard are released together below.
+      compositorWarmupReleaseWakePending_ = true;
+      cancelCompositorWarmup_.cancel();
+    }
     if (std::holds_alternative<RenderingState>(workerState_)) {
       // Worker is mid-renderFrame. Transition to `Cancelling` (not
       // `Idle`) so the editor's `!isBusy()` gates keep gating registry reads
@@ -269,51 +486,152 @@ void AsyncRenderer::cancelInFlight() {
       // supersedes it. Drop the result and transition to Idle directly.
       workerState_ = IdleState{};
     }
+
+    // `isBusy()` and `cancelInFlight()` cannot form an atomic check-then-act pair. If the worker
+    // released its guard between those calls, cancellation is already settled and the deferred
+    // input still needs a retry frame. Active render/cancellation states provide their own later
+    // completion wake; an active compositor warmup uses the durable waiter above.
+    const bool cancellationSettled =
+        !compositorWarmupActive_ &&
+        (std::holds_alternative<IdleState>(workerState_) ||
+         std::holds_alternative<DoneState>(workerState_));
+    if (cancellationSettled) {
+      wakeAfterSettledCancellation = wakeCallback_;
+    }
   }
   if (signalCancel) {
     // Notify in case the worker was still in `cv_.wait` when we
     // landed - its updated predicate also wakes on `Cancelling`.
     cv_.notify_one();
   }
+  if (wakeAfterSettledCancellation) {
+    wakeAfterSettledCancellation();
+  }
 }
 
 std::optional<RenderResult> AsyncRenderer::pollResult() {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::unique_lock<std::mutex> lock(mutex_);
   if (auto* done = std::get_if<DoneState>(&workerState_)) {
-    if (done->replayHoldPollsRemaining > 0) {
-      --done->replayHoldPollsRemaining;
+    if (done->presentationHoldPollsRemaining > 0) {
+      --done->presentationHoldPollsRemaining;
       replayResultHoldPollCount_.fetch_add(1, std::memory_order_release);
+      const std::function<void()> wake = wakeCallback_;
+      lock.unlock();
+      // Wasm's expensive main-frame gate is event-driven even though its lightweight scheduler
+      // runs every rAF. Request the next UI frame explicitly; otherwise the staged surface could
+      // remain behind the prior epoch until another input event arrives.
+      if (wake) {
+        wake();
+      }
       return std::nullopt;
     }
 
     RenderResult result = std::move(done->result);
+    const HandoffTimings handoff =
+        ComputeHandoffTimings(result.workerCompletedAt, std::chrono::steady_clock::now());
+    result.workerTiming.pollDelayMs = handoff.pollDelayMs;
+    result.workerTiming.wakeToPollMs = handoff.wakeToPollMs;
+    if (!result.overviewInfillOnly) {
+      notePublishedCompositedPreview(result.compositedPreview);
+    }
     workerState_ = IdleState{};
+    if (compositor_ != nullptr && compositor_->hasPendingFirstFrameWarmup()) {
+      pendingCompositorWarmup_ = true;
+    }
+    const bool scheduleLowPriorityWork =
+        pendingCompositorWarmup_ || pendingSampleThumbnail_.has_value();
+    lock.unlock();
     cv_.notify_all();
+    if (scheduleLowPriorityWork) {
+      cv_.notify_one();
+    }
     return result;
   }
   return std::nullopt;
 }
 
+bool AsyncRenderer::requestSampleThumbnail(SampleThumbnailRenderRequest request) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (std::holds_alternative<ShutdownState>(workerState_) ||
+        pendingSampleThumbnail_.has_value() || sampleThumbnailActive_ ||
+        sampleThumbnailResult_.has_value()) {
+      return false;
+    }
+    pendingSampleThumbnail_.emplace(std::move(request));
+    ++sampleThumbnailCounters_.requested;
+  }
+  cv_.notify_one();
+  return true;
+}
+
+std::optional<SampleThumbnailRenderResult> AsyncRenderer::pollSampleThumbnailResult() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!sampleThumbnailResult_.has_value()) {
+    return std::nullopt;
+  }
+  std::optional<SampleThumbnailRenderResult> result = std::move(sampleThumbnailResult_);
+  sampleThumbnailResult_.reset();
+  return result;
+}
+
+void AsyncRenderer::cancelSampleThumbnailWork() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (pendingSampleThumbnail_.has_value()) {
+    pendingSampleThumbnail_.reset();
+    ++sampleThumbnailCounters_.completed;
+    ++sampleThumbnailCounters_.cancelled;
+  }
+  sampleThumbnailResult_.reset();
+  if (sampleThumbnailActive_) {
+    discardActiveSampleThumbnailResult_ = true;
+    cancelSampleThumbnail_.cancel();
+  }
+}
+
+SampleThumbnailRenderStats AsyncRenderer::sampleThumbnailRenderStats() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  SampleThumbnailRenderStats stats = sampleThumbnailCounters_;
+  stats.pending = pendingSampleThumbnail_.has_value();
+  stats.active = sampleThumbnailActive_;
+  stats.resultReady = sampleThumbnailResult_.has_value();
+  return stats;
+}
+
+void AsyncRenderer::setSampleThumbnailRenderDelayForTesting(std::chrono::milliseconds delay) {
+  const std::chrono::milliseconds clamped = std::max(delay, std::chrono::milliseconds(0));
+  sampleThumbnailRenderDelayMsForTesting_.store(clamped.count(), std::memory_order_release);
+}
+
 void AsyncRenderer::setWakeCallback(std::function<void()> callback) {
   std::lock_guard<std::mutex> lock(mutex_);
+  if (std::holds_alternative<ShutdownState>(workerState_)) {
+    return;
+  }
   wakeCallback_ = std::move(callback);
 }
 
 void AsyncRenderer::workerLoop() {
-#ifdef __EMSCRIPTEN__
+#if   defined(__EMSCRIPTEN__)
   // Emscripten's WebGPU object table is per-worker. Construct and use the
   // renderer on this pthread so wgpu handles never cross JS worker boundaries.
   svg::Renderer workerRenderer;
 #endif
+  std::unique_ptr<svg::RendererInterface> sampleThumbnailRenderer;
+  svg::RendererInterface* sampleThumbnailRendererRoot = nullptr;
 
   while (true) {
     std::optional<RenderRequest> requestStorage;
+    std::optional<SampleThumbnailRenderRequest> sampleThumbnailStorage;
+    bool runCompositorWarmup = false;
     {
       std::unique_lock<std::mutex> lock(mutex_);
       cv_.wait(lock, [this] {
         return std::holds_alternative<RenderingState>(workerState_) ||
                std::holds_alternative<CancellingState>(workerState_) ||
-               std::holds_alternative<ShutdownState>(workerState_);
+               std::holds_alternative<ShutdownState>(workerState_) ||
+               (std::holds_alternative<IdleState>(workerState_) &&
+                (pendingCompositorWarmup_ || pendingSampleThumbnail_.has_value()));
       });
       if (std::holds_alternative<ShutdownState>(workerState_)) {
 #ifdef __EMSCRIPTEN__
@@ -334,21 +652,148 @@ void AsyncRenderer::workerLoop() {
         }
         continue;
       }
-      auto* rendering = std::get_if<RenderingState>(&workerState_);
-      assert(rendering != nullptr);
-      assert(rendering->pendingRequest.has_value() &&
-             "Rendering worker state requires a pending request while waiting");
-      requestStorage.emplace(std::move(*rendering->pendingRequest));
-      rendering->pendingRequest.reset();
+      if (auto* rendering = std::get_if<RenderingState>(&workerState_)) {
+        assert(rendering->pendingRequest.has_value() &&
+               "Rendering worker state requires a pending request while waiting");
+        requestStorage.emplace(std::move(*rendering->pendingRequest));
+        rendering->pendingRequest.reset();
+      } else {
+        assert(std::holds_alternative<IdleState>(workerState_));
+        if (pendingCompositorWarmup_) {
+          pendingCompositorWarmup_ = false;
+          cancelCompositorWarmup_.reset();
+          compositorWarmupActive_ = true;
+          runCompositorWarmup = true;
+        } else {
+          assert(pendingSampleThumbnail_.has_value());
+          sampleThumbnailStorage.emplace(std::move(*pendingSampleThumbnail_));
+          pendingSampleThumbnail_.reset();
+          cancelSampleThumbnail_.reset();
+          sampleThumbnailActive_ = true;
+          discardActiveSampleThumbnailResult_ = false;
+          ++sampleThumbnailCounters_.started;
+        }
+      }
     }
+
+    if (runCompositorWarmup) {
+      // Re-check the cancel signal after dequeue: a document swap or
+      // cancelInFlight between the dequeue above and this call tears down the
+      // lease renderer the compositor is bound to, and the warmup's first
+      // renderer dereference happens before any in-pass cancellation poll.
+      if (compositor_ != nullptr && compositorDocument_.has_value() &&
+          !cancelCompositorWarmup_.isCancelled()) {
+        svg::SVGDocument& warmupDocument = *compositorDocument_;
+        std::optional<svg::DocumentWriteAccess> documentAccess;
+        documentAccess.emplace(warmupDocument.writeAccess());
+        (void)compositor_->warmPendingFirstFrameCaches(cancelCompositorWarmup_);
+      }
+
+      std::function<void()> wake;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        compositorWarmupActive_ = false;
+        const bool releaseWakePending = std::exchange(compositorWarmupReleaseWakePending_, false);
+        if (releaseWakePending && !std::holds_alternative<ShutdownState>(workerState_)) {
+          // Speculative work changes no visible state, including when a foreground render
+          // preempts it. Wake only a caller that explicitly registered against the document
+          // guard's release; the foreground render supplies its own completion wake.
+          wake = wakeCallback_;
+        }
+      }
+      cv_.notify_all();
+      if (wake) {
+        wake();
+      }
+      continue;
+    }
+
+    if (sampleThumbnailStorage.has_value()) {
+      svg::RendererInterface* offscreenRenderer = nullptr;
+#if   defined(__EMSCRIPTEN__)
+      if (sampleThumbnailRenderer == nullptr || sampleThumbnailRendererRoot != &workerRenderer) {
+        sampleThumbnailRenderer = workerRenderer.createOffscreenInstance();
+        sampleThumbnailRendererRoot = &workerRenderer;
+        if (sampleThumbnailRenderer != nullptr) {
+          std::lock_guard<std::mutex> lock(mutex_);
+          ++sampleThumbnailCounters_.offscreenRendererCreations;
+        }
+      }
+      offscreenRenderer = sampleThumbnailRenderer.get();
+#else
+      svg::RendererInterface* requestedRoot = sampleThumbnailStorage->nativeRenderer;
+      if (requestedRoot != nullptr &&
+          (sampleThumbnailRenderer == nullptr || sampleThumbnailRendererRoot != requestedRoot)) {
+        sampleThumbnailRenderer = requestedRoot->createOffscreenInstance();
+        sampleThumbnailRendererRoot = requestedRoot;
+        if (sampleThumbnailRenderer != nullptr) {
+          std::lock_guard<std::mutex> lock(mutex_);
+          ++sampleThumbnailCounters_.offscreenRendererCreations;
+        }
+      }
+      offscreenRenderer = requestedRoot != nullptr ? sampleThumbnailRenderer.get() : nullptr;
+#endif
+
+      SampleThumbnailRenderResult result;
+      if (offscreenRenderer == nullptr) {
+        result.key = sampleThumbnailStorage->key;
+        result.outcome = SampleThumbnailRenderOutcome::RendererUnavailable;
+      } else {
+        const std::chrono::milliseconds delay(
+            sampleThumbnailRenderDelayMsForTesting_.load(std::memory_order_acquire));
+        result = RenderSampleThumbnail(std::move(*sampleThumbnailStorage), *offscreenRenderer,
+                                       cancelSampleThumbnail_, delay);
+      }
+
+      std::function<void()> wake;
+      bool notifyStateChange = false;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        sampleThumbnailActive_ = false;
+        if (!std::holds_alternative<ShutdownState>(workerState_)) {
+          ++sampleThumbnailCounters_.completed;
+          if (discardActiveSampleThumbnailResult_) {
+            ++sampleThumbnailCounters_.cancelled;
+          } else {
+            if (result.outcome == SampleThumbnailRenderOutcome::Rendered) {
+              ++sampleThumbnailCounters_.rendered;
+            } else if (result.outcome == SampleThumbnailRenderOutcome::Cancelled) {
+              ++sampleThumbnailCounters_.cancelled;
+            }
+            sampleThumbnailResult_.emplace(std::move(result));
+          }
+          discardActiveSampleThumbnailResult_ = false;
+          wake = wakeCallback_;
+          notifyStateChange = true;
+        }
+      }
+      if (notifyStateChange) {
+        cv_.notify_all();
+      }
+      if (wake) {
+        wake();
+      }
+      continue;
+    }
+
+    assert(requestStorage.has_value());
     RenderRequest& request = *requestStorage;
-#ifdef __EMSCRIPTEN__
+    const auto workerDequeuedAt = std::chrono::steady_clock::now();
+    const double queueWaitMs =
+        request.queuedAt.time_since_epoch().count() == 0
+            ? 0.0
+            : std::chrono::duration<double, std::milli>(workerDequeuedAt - request.queuedAt)
+                  .count();
+#if   defined(__EMSCRIPTEN__)
     svg::Renderer& requestRenderer = workerRenderer;
 #else
     // Geode editor builds intentionally use the request renderer so worker texture snapshots are
     // created on the same WGPU device as ImGui presentation.
     svg::Renderer& requestRenderer = request.lease.renderer();
 #endif
+    // Readback counters live on the backend device shared by the root renderer
+    // and compositor offscreens. Start each worker iteration from a clean epoch.
+    (void)requestRenderer.consumeReadbackStats();
     svg::SVGDocument& requestDocument = request.lease.document();
 
     // §M4: every iteration starts with a fresh (non-cancelled) token.
@@ -360,12 +805,20 @@ void AsyncRenderer::workerLoop() {
     // Execute the render outside the lock so the UI thread can poll
     // `isBusy()` / `pollResult()` while we work.
     ZoneScopedN("AsyncRenderer::workerIteration");
+    // Stage brackets for the byte attribution (see
+    // `donner/base/MemoryAttribution.h`). `WorkerOther` spans the whole
+    // iteration; the three inner stages are disjoint and are subtracted from it
+    // when the numbers are read, so a stage that retains is named exactly.
+    const ScopedHeapDelta workerIterationHeapDelta(MemoryStage::WorkerOther);
     const auto workerStart = std::chrono::steady_clock::now();
     const auto elapsedSince = [](std::chrono::steady_clock::time_point start) {
       return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
           .count();
     };
     RenderResult::WorkerTimingBreakdown workerTiming;
+    workerTiming.queueWaitMs = queueWaitMs;
+    workerTiming.dequeueToStartMs =
+        std::chrono::duration<double, std::milli>(workerStart - workerDequeuedAt).count();
     std::optional<RenderResult::CompositedPreview> compositedPreview;
 
     // §concurrent-dom: serialize this worker render against UI-thread DOM reads. The lease shares
@@ -417,9 +870,23 @@ void AsyncRenderer::workerLoop() {
     // `RnrReplayTest::FilterSnapbackReproPreservesCompositorAcrossWriteback`.
     const bool needsFreshCompositor = !compositor_ || compositorRenderer_ != &requestRenderer;
     if (needsFreshCompositor) {
-      compositor_ =
-          std::make_unique<svg::compositor::CompositorController>(requestDocument, requestRenderer);
-      compositorDocument_ = requestDocument;  // cheap: refcount bump on the Registry handle.
+      svg::compositor::CompositorConfig compositorConfig;
+      // The editor retains compositor textures across frames, so even a geometrically cheap span
+      // is less expensive to upload once than to rerasterize during every pointer update. Browser
+      // WebGPU makes the difference especially pronounced, but the same policy removes the native
+      // renderer's dominant steady-drag CPU cost as well.
+      compositorConfig.immediateStaticSpans = false;
+      compositorConfig.dynamicImmediateStaticSpans = false;
+      // The first full-document draw is already correct. Publish it first, then warm retained
+      // caches from the worker's independent low-priority lane after the result is accepted.
+      compositorConfig.deferFirstFrameWarmup = true;
+      // CompositorController stores its SVGDocument by reference. Bind that reference to the
+      // AsyncRenderer-owned value before constructing the controller: RenderLease is destroyed
+      // after this request, while deferred warmup and later frames intentionally outlive it.
+      compositor_.reset();
+      compositorDocument_.emplace(requestDocument);  // Cheap: refcount bump on the Registry.
+      compositor_ = std::make_unique<svg::compositor::CompositorController>(
+          *compositorDocument_, requestRenderer, compositorConfig);
       compositorRenderer_ = &requestRenderer;
       compositorEntity_ = entt::null;
       compositorEntities_.clear();
@@ -439,6 +906,11 @@ void AsyncRenderer::workerLoop() {
          (compositorDocument_.has_value() &&
           compositorDocument_->handle().get() != requestDocument.handle().get()));
     if (documentSwapDetected) {
+      // Preserve the SVGDocument object's address because CompositorController references it, but
+      // update its shared Registry handle before asking the compositor to remap/reset against the
+      // replacement entity space.
+      assert(compositorDocument_.has_value());
+      *compositorDocument_ = requestDocument;
       bool remapped = false;
       if (!request.structuralRemap.empty()) {
         remapped = compositor_->remapAfterStructuralReplace(request.structuralRemap);
@@ -472,12 +944,33 @@ void AsyncRenderer::workerLoop() {
         compositorResetCount_.fetch_add(1, std::memory_order_release);
       }
       publishedCompositedTiles_.clear();
-      compositorDocument_ = requestDocument;
       compositorDocumentGeneration_ = request.documentGeneration;
       {
         std::lock_guard<std::mutex> lock(mutex_);
         retainedStructuralRemaps_.erase(request.documentGeneration);
       }
+    }
+
+    // Geometry debug is a frame-global final pass. Retained segmented tiles can
+    // crop or cover its wireframe, so every debug frame stays flat and carries
+    // no selection prewarm/promotion state. Toggling back off resets once more,
+    // then the normal promotion path below rebuilds the selected layer.
+    const bool geometryDebugOverlayRequested =
+        geometryDebugOverlay_.load(std::memory_order_acquire);
+    requestRenderer.setDebugGeometryOverlay(geometryDebugOverlayRequested);
+    // Unsupported backends intentionally ignore the request and report false.
+    // Keep their normal retained-presentation path active instead of clearing
+    // selection prewarm for a debug pass they cannot draw.
+    const bool geometryDebugOverlay = requestRenderer.debugGeometryOverlay();
+    const bool geometryDebugOverlayChanged = geometryDebugOverlay != appliedGeometryDebugOverlay_;
+    if (geometryDebugOverlayChanged) {
+      appliedGeometryDebugOverlay_ = geometryDebugOverlay;
+      compositor_->resetAllLayers();
+      compositorResetCount_.fetch_add(1, std::memory_order_release);
+      compositorEntity_ = entt::null;
+      compositorEntities_.clear();
+      compositorInteractionKind_ = svg::compositor::InteractionHint::Selection;
+      publishedCompositedTiles_.clear();
     }
 
     // Resolve what the compositor should be promoted on this render.
@@ -488,7 +981,8 @@ void AsyncRenderer::workerLoop() {
     // document-space transform to every drag-target tile, keeping the path
     // overlay and cached content in lockstep while avoiding a full DOM render
     // on each pointer frame.
-    const std::vector<Entity> desiredEntities = DesiredCompositorEntities(request);
+    const std::vector<Entity> desiredEntities =
+        geometryDebugOverlay ? std::vector<Entity>() : DesiredCompositorEntities(request);
     const Entity desiredEntity = desiredEntities.empty() ? entt::null : desiredEntities.front();
     const svg::compositor::InteractionHint desiredKind =
         request.dragPreview.has_value() ? request.dragPreview->interactionKind
@@ -559,6 +1053,9 @@ void AsyncRenderer::workerLoop() {
     // No emulation layer on top of the DOM.
     svg::RenderViewport viewport;
     const Vector2i semanticCanvasSize = requestDocument.canvasSize();
+    [[maybe_unused]] const Box2d documentViewBox = requestDocument.svgElement().viewBox().value_or(
+        Box2d::FromXYWH(0, 0, static_cast<double>(semanticCanvasSize.x),
+                        static_cast<double>(semanticCanvasSize.y)));
     const Vector2i outputCanvasSize = rasterViewport.outputSizePx;
     viewport.size = Vector2d(outputCanvasSize.x, outputCanvasSize.y);
     viewport.devicePixelRatio = 1.0;
@@ -570,18 +1067,6 @@ void AsyncRenderer::workerLoop() {
     // it marks all segments dirty so the flip takes effect this frame.
     compositor_->setTightBoundedSegmentsEnabled(
         tightBoundedSegments_.load(std::memory_order_acquire));
-
-    // Push the Geode geometry debug overlay flag into the document
-    // renderer. Applied unconditionally (cheap bool store, and it must
-    // reach a renderer that changed under us); on a flip, every cached
-    // segment bitmap is stale (the overlay draws into rasterized
-    // tiles), so force a full re-raster.
-    const bool geometryDebugOverlay = geometryDebugOverlay_.load(std::memory_order_acquire);
-    requestRenderer.setDebugGeometryOverlay(geometryDebugOverlay);
-    if (geometryDebugOverlay != appliedGeometryDebugOverlay_) {
-      appliedGeometryDebugOverlay_ = geometryDebugOverlay;
-      compositor_->resetAllLayers();
-    }
 
     // Keep the compositor hint in ActiveDrag across mouse-up so the
     // layer/segment caches survive quick release->drag-again cycles, but
@@ -610,12 +1095,9 @@ void AsyncRenderer::workerLoop() {
         return std::nullopt;
       }
       const std::vector<Entity> dragPreviewEntities = DragPreviewEntities(*request.dragPreview);
-      const Box2d viewBox = requestDocument.svgElement().viewBox().value_or(
-          Box2d::FromXYWH(0, 0, static_cast<double>(semanticCanvasSize.x),
-                          static_cast<double>(semanticCanvasSize.y)));
       const Transform2d documentFromOutput = rasterViewport.outputFromDocument.inverse();
       const auto outputPointToPresentedDoc = [&](const Vector2d& outputPoint) {
-        return documentFromOutput.transformPosition(outputPoint) - viewBox.topLeft;
+        return documentFromOutput.transformPosition(outputPoint) - documentViewBox.topLeft;
       };
       const auto outputVectorToDoc = [&](const Vector2d& outputVector) {
         return documentFromOutput.transformVector(outputVector);
@@ -784,8 +1266,26 @@ void AsyncRenderer::workerLoop() {
       // snapshot work after renderFrame. Keep this scoped timing in
       // Tracy only for drilling into the compositor itself.
       const auto renderFrameStart = std::chrono::steady_clock::now();
-      renderCompleted = compositor_->renderFrame(viewport, cancelRender_, surfaceFromCanvas);
+      {
+        const ScopedHeapDelta renderFrameHeapDelta(MemoryStage::WorkerRenderFrame);
+        renderCompleted = compositor_->renderFrame(viewport, cancelRender_, surfaceFromCanvas);
+      }
       workerTiming.renderFrameMs = elapsedSince(renderFrameStart);
+    }
+
+    // A superseding request can arrive after the compositor's final internal cancellation point.
+    // Recheck at the presentation boundary so a stale pointer frame never enters a browser surface
+    // handoff that cannot itself be cancelled.
+    if (renderCompleted && cancelRender_.isCancelled()) {
+      renderCompleted = false;
+    }
+
+    if (renderCompleted) {
+      // SVG traversal is complete. Snapshot/readback, browser presentation, and diagnostic
+      // packaging below use renderer/compositor-owned state only, so release the live DOM before
+      // those potentially slow operations. UI input can then acquire the document without waiting
+      // for a browser surface handoff to finish.
+      releaseDocumentAccess();
     }
 
     // §M4: a cancelled render leaves compositor dirty flags ready for the next
@@ -820,6 +1320,7 @@ void AsyncRenderer::workerLoop() {
     // through the compositor path.
     {
       const auto buildPreviewStart = std::chrono::steady_clock::now();
+      const ScopedHeapDelta buildPreviewHeapDelta(MemoryStage::WorkerBuildPreview);
       compositedPreview = buildCompositedPreview();
       workerTiming.buildPreviewMs = elapsedSince(buildPreviewStart);
     }
@@ -831,11 +1332,16 @@ void AsyncRenderer::workerLoop() {
     (void)request.selection;
     svg::RendererBitmap bitmap;
     std::shared_ptr<const svg::RendererTextureSnapshot> fullCanvasTexture;
-    const PresentationSnapshotPlan snapshotPlan = ChoosePresentationSnapshotPlan(
+    PresentationSnapshotPlan snapshotPlan;
+    // Worker-surface builds present GPU-native frames and ignore
+    // request.captureCpuSnapshot; browser diagnostics read pixels through the
+    // async smoke-readback path instead.
+    snapshotPlan = ChoosePresentationSnapshotPlan(
         compositedPreview.has_value(), requestRenderer.requiresTextureSnapshotPresentation(),
         request.captureCpuSnapshot);
     {
       const auto finalSnapshotStart = std::chrono::steady_clock::now();
+      const ScopedHeapDelta finalSnapshotHeapDelta(MemoryStage::WorkerFinalSnapshot);
       // Read before exporting the texture because texture export detaches the renderer target.
       if (snapshotPlan.captureCpuSnapshot) {
         ZoneScopedN("Renderer::takeSnapshot");
@@ -851,6 +1357,10 @@ void AsyncRenderer::workerLoop() {
       }
       workerTiming.finalSnapshotMs = elapsedSince(finalSnapshotStart);
     }
+    const svg::RendererReadbackStats readbackStats = requestRenderer.consumeReadbackStats();
+    workerTiming.readbackCount = readbackStats.count;
+    workerTiming.readbackPollIterations = readbackStats.pollIterations;
+    workerTiming.usedTimedWaitAny = readbackStats.usedTimedWaitAny;
     if (!compositedPreview.has_value() && (!bitmap.empty() || fullCanvasTexture != nullptr)) {
       const Entity previewEntity =
           request.dragPreview.has_value() ? request.dragPreview->entity : request.selectedEntity;
@@ -858,8 +1368,50 @@ void AsyncRenderer::workerLoop() {
           request.dragPreview.has_value() ? request.dragPreview->interactionKind
                                           : svg::compositor::InteractionHint::Selection;
       compositedPreview = BuildFullCanvasCompositedPreview(
-          requestDocument, bitmap, std::move(fullCanvasTexture), request.version, previewEntity,
+          documentViewBox, bitmap, std::move(fullCanvasTexture), request.version, previewEntity,
           interactionKind, rasterViewport, request.dragPreview);
+    }
+
+    // Attribute what this render iteration is holding, before the result leaves
+    // the worker. The compositor caches are a level (they persist across
+    // frames); the full-canvas snapshot is a flow (a fresh allocation every
+    // frame that presentation consumes and drops), and the two grow linear
+    // memory in different ways, so they are published as different counter
+    // kinds. See `donner/base/MemoryAttribution.h`.
+    {
+      const auto breakdown = compositor_->bitmapMemoryBreakdown();
+      SetRetainedBytes(MemoryCategory::CompositorSegmentBitmaps, breakdown.segmentBitmapBytes);
+      SetRetainedBytes(MemoryCategory::CompositorSegmentTextures, breakdown.segmentTextureBytes);
+      SetRetainedBytes(MemoryCategory::CompositorLayerBitmaps, breakdown.layerBitmapBytes);
+      SetRetainedBytes(MemoryCategory::CompositorLayerTextures, breakdown.layerTextureBytes);
+      SetEntryCount(MemoryCategory::CompositorSegmentBitmaps, breakdown.segmentCount);
+      SetEntryCount(MemoryCategory::CompositorLayerBitmaps, breakdown.layerCount);
+
+      std::uint64_t previewTileBytes = 0;
+      std::uint64_t previewTileCount = 0;
+      if (compositedPreview.has_value()) {
+        for (const RenderResult::CompositedTile& tile : compositedPreview->tiles) {
+          previewTileBytes += tile.bitmap.pixels.size();
+          if (tile.textureSnapshot != nullptr) {
+            const Vector2i dims = tile.textureSnapshot->dimensions();
+            previewTileBytes +=
+                static_cast<std::uint64_t>(dims.x) * static_cast<std::uint64_t>(dims.y) * 4u;
+          }
+          ++previewTileCount;
+        }
+      }
+      SetRetainedBytes(MemoryCategory::RenderResultTiles, previewTileBytes);
+      SetEntryCount(MemoryCategory::RenderResultTiles, previewTileCount);
+      AddTransientBytes(MemoryCategory::RenderResultTiles, previewTileBytes);
+
+      std::uint64_t snapshotBytes = bitmap.pixels.size();
+      if (fullCanvasTexture != nullptr) {
+        const Vector2i dims = fullCanvasTexture->dimensions();
+        snapshotBytes +=
+            static_cast<std::uint64_t>(dims.x) * static_cast<std::uint64_t>(dims.y) * 4u;
+      }
+      SetRetainedBytes(MemoryCategory::WorkerFrameSnapshot, snapshotBytes);
+      AddTransientBytes(MemoryCategory::WorkerFrameSnapshot, snapshotBytes);
     }
 
     // All document reads for this iteration are done; release write access before taking `mutex_`
@@ -874,45 +1426,46 @@ void AsyncRenderer::workerLoop() {
       // superseded mid-render.
       if (auto* rendering = std::get_if<RenderingState>(&workerState_)) {
         if (rendering->pendingRequest.has_value()) {
-          continue;
+        } else {
+          DoneState done;
+          done.result.bitmap = std::move(bitmap);
+          done.result.compositedPreview = std::move(compositedPreview);
+          done.result.rasterViewport = rasterViewport;
+          done.result.viewport = request.viewport;
+          done.result.overviewInfillOnly = request.overviewInfillOnly;
+          done.result.version = request.version;
+          done.result.documentGeneration = request.documentGeneration;
+          done.presentationHoldPollsRemaining = replayResultHoldFramesForTesting_;
+          lastFastPathCounters_ = compositor_->fastPathCountersForTesting();
+          lastCompositorRenderFrameStats_ = compositor_->lastRenderFrameStats();
+          if (compositorDiagnosticsEnabled_.load(std::memory_order_acquire)) {
+            const auto diagnosticsStart = std::chrono::steady_clock::now();
+            const auto thumbnailMode =
+                activeDragRequest
+                    ? svg::compositor::CompositorController::SnapshotThumbnails::Omit
+                    : svg::compositor::CompositorController::SnapshotThumbnails::Include;
+            lastLayerInspectorRows_ = compositor_->snapshotLayerInspectorRows(thumbnailMode);
+            lastSegmentInspectorRows_ = compositor_->snapshotSegmentInspectorRows();
+            lastCompositeTiles_ = compositor_->snapshotCompositeTiles(thumbnailMode);
+            lastStateSnapshot_ = compositor_->snapshotState();
+            workerTiming.diagnosticsMs = elapsedSince(diagnosticsStart);
+          }
+          lastWorkerCompositorEntity_ = compositorEntity_;
+          lastDocumentCanvasSize_ = outputCanvasSize;
+          const auto workerEnd = std::chrono::steady_clock::now();
+          const double workerMs =
+              std::chrono::duration<double, std::milli>(workerEnd - workerStart).count();
+          done.result.workerMs = workerMs;
+          done.result.workerTiming = workerTiming;
+          done.result.workerCompletedAt = workerEnd;
+            workerState_ = std::move(done);
+            // Snapshot the callback under the lock so a concurrent
+            // `setWakeCallback` swap can't tear the invocation. Fire it
+            // outside the lock to keep the hook cheap and avoid any
+            // chance of deadlock if the caller re-enters AsyncRenderer.
+            wake = wakeCallback_;
+          notifyStateChange = true;
         }
-
-        if (!request.overviewInfillOnly) {
-          notePublishedCompositedPreview(compositedPreview);
-        }
-
-        DoneState done;
-        done.result.bitmap = std::move(bitmap);
-        done.result.compositedPreview = std::move(compositedPreview);
-        done.result.rasterViewport = rasterViewport;
-        done.result.overviewInfillOnly = request.overviewInfillOnly;
-        done.result.version = request.version;
-        done.replayHoldPollsRemaining = replayResultHoldFramesForTesting_;
-        const auto diagnosticsStart = std::chrono::steady_clock::now();
-        const auto thumbnailMode =
-            activeDragRequest ? svg::compositor::CompositorController::SnapshotThumbnails::Omit
-                              : svg::compositor::CompositorController::SnapshotThumbnails::Include;
-        lastFastPathCounters_ = compositor_->fastPathCountersForTesting();
-        lastCompositorRenderFrameStats_ = compositor_->lastRenderFrameStats();
-        lastLayerInspectorRows_ = compositor_->snapshotLayerInspectorRows(thumbnailMode);
-        lastSegmentInspectorRows_ = compositor_->snapshotSegmentInspectorRows();
-        lastCompositeTiles_ = compositor_->snapshotCompositeTiles(thumbnailMode);
-        lastStateSnapshot_ = compositor_->snapshotState();
-        workerTiming.diagnosticsMs = elapsedSince(diagnosticsStart);
-        lastWorkerCompositorEntity_ = compositorEntity_;
-        lastDocumentCanvasSize_ = outputCanvasSize;
-        const auto workerEnd = std::chrono::steady_clock::now();
-        const double workerMs =
-            std::chrono::duration<double, std::milli>(workerEnd - workerStart).count();
-        done.result.workerMs = workerMs;
-        done.result.workerTiming = workerTiming;
-        workerState_ = std::move(done);
-        notifyStateChange = true;
-        // Snapshot the callback under the lock so a concurrent
-        // `setWakeCallback` swap can't tear the invocation. Fire it
-        // outside the lock to keep the hook cheap and avoid any
-        // chance of deadlock if the caller re-enters AsyncRenderer.
-        wake = wakeCallback_;
       } else if (std::holds_alternative<CancellingState>(workerState_)) {
         // `cancelInFlight` raced with the worker's final lap -
         // renderFrame finished naturally but the user-input event

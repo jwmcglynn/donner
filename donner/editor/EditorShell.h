@@ -15,10 +15,12 @@
 #include "donner/editor/ClipboardInterface.h"
 #include "donner/editor/CompositorDebugPanel.h"
 #include "donner/editor/DialogPresenter.h"
+#include "donner/editor/DocumentPresenter.h"
 #include "donner/editor/DocumentSyncController.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorInputBridge.h"
 #include "donner/editor/EditorShellLayout.h"
+#include "donner/editor/EditorShellPresentation.h"
 #include "donner/editor/FrameCostBreakdown.h"
 #include "donner/editor/GlTextureCache.h"
 #include "donner/editor/ImGuiIncludes.h"
@@ -62,6 +64,10 @@ struct ReproAction;
 }  // namespace donner::editor::repro
 
 namespace donner::editor {
+
+namespace internal {
+struct ToolbarPaintState;
+}
 
 #ifdef DONNER_EDITOR_WGPU
 class FramebufferCheckerboardRenderer;
@@ -379,6 +385,52 @@ private:
   void selectAllCanvasElements();
   void renderSourcePane(float paneOriginY, float paneHeight, float paneWidth, ImFont* codeFont);
   void renderRenderPane(ImGuiWindowFlags paneFlags);
+  // Frame stages split out of `runFrame` and `renderRenderPane`, deliberately kept out of line.
+  //
+  // Those two are the editor's frame-sized functions: everything the shell does in a frame is
+  // reachable from them. Folded together they compile to a single Wasm function body large enough
+  // to trip the browser tier-compiler complexity budget enforced by
+  // `//donner/editor/wasm:wasm_geode_package_size_tests`, and Safari's optimizing compiler then
+  // spends gigabytes tiering up that one body. The `noinline` attributes are the source-side guard
+  // for that budget, not a performance hint: each stage runs at most once per frame, so the extra
+  // call is unmeasurable next to the work it performs.
+  [[gnu::noinline]] void snapshotReproFrame();
+  [[gnu::noinline]] void renderMenuBarAndDialogs(bool compactUi);
+  [[gnu::noinline]] void applyDeferredRenderRequest();
+  [[gnu::noinline]] void recordFrameTelemetry(
+      const FrameCostBreakdown::MainFrame& mainFrameCost,
+      const FrameCostBreakdown::DirectPresentation& directPresentationCost);
+  /// Selection transform-handle hit test against the idle-frame bounds cache. Returns an empty
+  /// intent when the cache does not describe the current selection.
+  [[nodiscard]] SelectionTransformHandleIntent cachedSelectionHandleIntentAt(
+      const Vector2d& documentPoint, bool includeRotate, double pointerHitTestPixelsPerDocUnit);
+  [[nodiscard]] [[gnu::noinline]] SelectionTransformHandleIntent updateRenderPaneToolCursor(
+      bool rotateCursorLocked, bool toolEligible, bool showPanCursor, bool selectToolActive,
+      bool penToolActive, bool textToolActive, double pointerHitTestPixelsPerDocUnit);
+  [[gnu::noinline]] void dispatchBufferedRenderPaneClick(bool selectToolActive, bool penToolActive,
+                                                         bool textToolActive,
+                                                         double pointerHitTestPixelsPerDocUnit);
+  [[gnu::noinline]] void updateRenderPaneSelectionDrag(bool spaceHeld,
+                                                       double pointerHitTestPixelsPerDocUnit);
+  [[gnu::noinline]] void updateRenderPaneTextPointer(bool spaceHeld);
+  [[gnu::noinline]] void updateRenderPanePenPointer(bool penToolActive, bool spaceHeld,
+                                                    double pointerHitTestPixelsPerDocUnit);
+  [[gnu::noinline]] void updateRenderPaneTextChrome(bool textToolActive);
+  [[nodiscard]] bool setActiveGestureCursor(
+      const std::optional<SelectTool::ActiveGesturePreview>& activeGesturePreview);
+  void renderRenderPanePresentation(const ImVec2& contentRegion, const ImVec2& paneOriginImGui,
+                                    const Box2d& paneRect, const Box2d& toolPaletteRect,
+                                    const SelectionTransformHandleIntent& hoverTransformIntent,
+                                    bool rotateCursorLocked, bool penToolActive,
+                                    bool textToolActive);
+  /// Sink behind `documentPresenter_`'s framebuffer underlay: installs one
+  /// frame's tile plan on the window, or clears the underlay on `nullopt`.
+  /// The window-side WebGPU wiring is confined here.
+  void installFramebufferUnderlayPlan(std::optional<FramebufferUnderlayPlan> plan);
+  /// Install one frame's immediate chrome pass, or clear it on `nullopt`. The
+  /// pass runs after the document underlay and before ImGui, so chrome lands on
+  /// the same pixels, in the same frame, with the same transform as the tiles.
+  void installImmediateChromePlan(std::optional<ImmediateChromePlan> plan);
   [[nodiscard]] Box2d toolPaletteScreenRect(const ImVec2& paneOrigin,
                                             const ImVec2& contentRegion) const;
   [[nodiscard]] Box2d canvasZoomControlScreenRect() const;
@@ -389,6 +441,7 @@ private:
   void renderCompactTopBar();
   void renderSidebars();
   void ensureSampleThumbnails();
+  void cancelSampleThumbnailGeneration();
   void renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& contentRegion);
   void renderSourcePaneSplitter(float windowWidth, float paneOriginY, float paneHeight,
                                 float sourcePaneWidth);
@@ -431,6 +484,7 @@ private:
   void renderTextToolHint();
   [[nodiscard]] SelectionChromeDetail selectionChromeDetailForActiveTool() const;
   bool flushQueuedMutationAndRefreshOverlay();
+  bool flushInteractiveDragMutationAndRequestRender();
   /// Re-run the post-flush presentation refresh after a tool that flushes the
   /// document internally (the text tool's wrap measurement).
   void refreshAfterToolDrivenFlush();
@@ -441,6 +495,10 @@ private:
   /// Keyboard handling while the in-canvas text editing session is active:
   /// typing, caret movement, Cmd+B/I/U style toggles, Escape commit.
   void handleTextEditingKeyboard();
+  /// On a Select-tool double-click, hand an unlocked text hit directly to
+  /// TextTool so the same press opens editing and places the caret.
+  bool tryBeginTextEditingFromSelectDoubleClick(const Vector2d& documentPoint,
+                                                MouseModifiers modifiers);
   /// Emulated canvas scrollbars along the pane edges: they represent the
   /// document extent relative to the viewport and pan the canvas when
   /// dragged. The pane window itself never scrolls.
@@ -507,13 +565,23 @@ private:
   /// retention-swept (unlike `thumbnailTextures_`), so the four icons upload
   /// once and persist for the process lifetime.
   GlTextureCache toolbarIconTextures_;
-  /// CPU renderer for Layers-panel thumbnails. The results are CPU bitmaps for
-  /// ImGui upload, so using Geode here would serialize one GPU readback per row.
-  svg::RendererTinySkia layerThumbnailRenderer_;
-  /// CPU renderer and owned bitmaps for the four built-in sample cards.
-  svg::RendererTinySkia sampleThumbnailRenderer_;
+  /// Clean offscreen renderer used only for Layers-panel thumbnails. This
+  /// shares the editor's Geode device but is never bound to the live framebuffer,
+  /// so row previews cannot inherit presentation state from the main renderer.
+  svg::Renderer layerThumbnailRenderer_;
+  /// Owned bitmaps for the four built-in sample cards. Their offscreen renderer lives on the
+  /// existing asynchronous render worker and shares its production renderer/device.
   std::vector<std::optional<svg::RendererBitmap>> sampleThumbnailBitmaps_;
   std::size_t sampleThumbnailGenerationCursor_ = 0;
+  std::optional<std::size_t> sampleThumbnailInFlightIndex_;
+  bool samplePickerHasPresentedFrame_ = false;
+  /// Set when the worker refused a thumbnail request because its runtime was
+  /// still initializing. Nothing else wakes the on-demand loop for that, so the
+  /// picker arms its own short idle retry. @see nextIdleWakeSeconds
+  bool sampleThumbnailRetryPending_ = false;
+  /// Embedded + system font catalog. It is declared before the render coordinator so it outlives
+  /// every worker-side FontManager and offscreen renderer during reverse-order destruction.
+  svg::FontCatalog fontCatalog_;
   RenderCoordinator renderCoordinator_;
   RotateCursorSet rotateCursorSet_;
   DocumentSyncController documentSyncController_;
@@ -550,10 +618,19 @@ private:
   SamplePickerPresenter samplePickerPresenter_;
   TextFormatBarPresenter textFormatBarPresenter_;
   SidebarPresenter sidebarPresenter_;
+  /// A loaded sample has replaced the welcome document, but Layers and Inspector have not yet
+  /// captured an idle snapshot of it. Kept until refresh succeeds so a busy renderer or a
+  /// trickled input transition cannot consume the only follow-up frame.
+  bool sidebarSnapshotRefreshPending_ = false;
+  /// Last paint presentation read while the document was idle. The renderer
+  /// owns the document registry while busy, so worker frames replay this
+  /// value instead of substituting the unrelated authoring paint.
+  std::unique_ptr<internal::ToolbarPaintState> toolbarPaintSnapshot_;
+  /// Document-derived menu/shortcut state from the last idle UI epoch. Busy frames must replay
+  /// these values instead of traversing the live registry behind the worker's write guard.
+  bool cachedCanvasHasSelectableElements_ = false;
+  bool cachedSelectionIsAllText_ = false;
   TextInspectorPanel textInspectorPanel_;
-  /// Embedded + system font catalog, installed as the FontManager default provider so document
-  /// text resolves font-family names against embedded and system fonts.
-  svg::FontCatalog fontCatalog_;
   LayersPanel layersPanel_;
   /// Element hovered in the Layers panel as of the last frame, fed into the
   /// source-hover preview so the canvas and source pane highlight the element
@@ -564,6 +641,10 @@ private:
   RenderPanePresenter renderPanePresenter_;
   DialogPresenter dialogPresenter_;
   NativeDialogCoordinator nativeDialogs_;
+  /// Owns where this frame's document pixels land. Constructed once for the
+  /// session's presentation target, so the per-frame path carries no platform
+  /// fork. Never null after construction.
+  std::unique_ptr<DocumentPresenter> documentPresenter_;
 #ifdef DONNER_EDITOR_WGPU
   std::unique_ptr<FramebufferCheckerboardRenderer> directCheckerboardRenderer_;
   std::unique_ptr<svg::RendererGeode> directDocumentRenderer_;
@@ -572,10 +653,22 @@ private:
 
   std::string lastWindowTitle_;
   bool viewportInitialized_ = false;
-  /// Previous frame's canvas (render pane) content-region size, used to detect
-  /// when the docked central node has settled before latching the initial
-  /// fit-to-actual-size.
+  /// Window framebuffer size the last full UI frame laid out against.
+  Vector2i lastFullFrameWindowSize_ = Vector2i(-1, -1);
+  /// Previous frame's canvas (render pane) content-region size. The fallback half of
+  /// `RenderPaneViewportLatchReady`, for dock trees its geometry policy does not describe.
   Vector2d lastRenderPaneContentSize_ = Vector2d(-1.0, -1.0);
+  /// Size of the DockSpace central node as of this frame's dock-host pass, or zero before the
+  /// DockSpace has built one.
+  Vector2d dockCentralNodeSize_ = Vector2d::Zero();
+  /// Screen origin of the DockSpace central node as of this frame's dock-host pass.
+  Vector2d dockCentralNodeOrigin_ = Vector2d::Zero();
+  /// Dock host rect the shell itself submitted this frame, in screen pixels, and the same rect
+  /// from the previous frame. Both are computed from the window size and the shell's own pane
+  /// state rather than read back from ImGui, so comparing them detects a moving layout that no
+  /// amount of ImGui introspection could.
+  LayoutRect dockHostRect_;
+  LayoutRect previousDockHostRect_;
   /// Requested width (in pixels) of the right-side panel column. Seeds the
   /// initial DockSpace right-column split; after the layout is built the
   /// DockSpace owns panel sizing.
@@ -613,6 +706,8 @@ private:
   FrameCostBreakdown latestFrameCostForReadback_;
   /// Direct document presentation cost completed after the last shell frame.
   FrameCostBreakdown::DirectPresentation lastDirectPresentationCost_;
+  /// Wall time the last immediate chrome pass spent drawing, in milliseconds.
+  double lastImmediateChromeDrawMs_ = 0.0;
   bool treeSelectionOriginatedInTree_ = false;
   bool sourceSelectionOriginatedInText_ = false;
   bool sourceFocusOriginatedInStyle_ = false;
@@ -645,6 +740,10 @@ private:
   float sourcePaneWidth_ = 560.0f;
   bool sourcePaneVisible_ = false;
   bool showSamplePicker_ = false;
+  bool welcomePlaceholderActive_ = false;
+  /// Keep the picker covering the render pane until the selected sample has a current-viewport
+  /// presentation. This prevents the startup placeholder surface from becoming user-visible.
+  bool samplePresentationPending_ = false;
   std::string activeSampleId_;
   std::string pendingSampleLoadId_;
   bool pendingSampleLoadNeedsConfirmation_ = false;
@@ -664,10 +763,12 @@ private:
   /// View menu's Performance Overlay submenu.
   PerfOverlayMode perfOverlayMode_ = PerfOverlayMode::Off;
   /// Whether the Geode geometry debug overlay is enabled on the document
-  /// renderer (band strips + per-path bounding-quad triangles drawn into
-  /// rasterized tiles). Off by default; toggled via the View menu. Applied
-  /// to the render worker through
-  /// `AsyncRenderer::setGeometryDebugOverlayEnabled`.
+  /// renderer. It shows the dynamically-dilated post-vertex Slug quad
+  /// triangles in one frame-final root-target pass. While enabled, the editor
+  /// forces flat full-document compositor presentation so retained tiles
+  /// cannot crop or cover the wireframe.
+  /// Off by default; toggled via the View menu and applied to the render worker
+  /// through `AsyncRenderer::setGeometryDebugOverlayEnabled`.
   bool geometryDebugOverlay_ = false;
 
   ImFont* uiFontBold_ = nullptr;

@@ -253,10 +253,14 @@ ReplayResults ReplayRepro(const std::filesystem::path& reproPath,
 
     for (const auto& e : frame.events) {
       if (e.kind == repro::ReproEvent::Kind::MouseDown && e.mouseButton == 0) {
-        if (!renderCoordinator.asyncRenderer().isBusy()) {
-          selectTool.onMouseDown(app, mouseDoc, /*modifiers=*/{});
-          results.mouseDownFrameIndices.push_back(frame.index);
-        }
+        // A busy worker (including the deferred first-frame compositor warmup)
+        // must defer the scripted press, not drop it: on slow hosts the warmup
+        // can still be draining at the first scripted frame, and losing the
+        // press changes what the repro replays.
+        renderCoordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
+            std::chrono::steady_clock::now() + std::chrono::seconds(5));
+        selectTool.onMouseDown(app, mouseDoc, /*modifiers=*/{});
+        results.mouseDownFrameIndices.push_back(frame.index);
       } else if (e.kind == repro::ReproEvent::Kind::MouseUp && e.mouseButton == 0) {
         selectTool.onMouseUp(app, mouseDoc);
         results.mouseUpFrameIndices.push_back(frame.index);

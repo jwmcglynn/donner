@@ -2,6 +2,7 @@
 /// @file
 
 #include <memory>
+#include <span>
 
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
@@ -26,6 +27,57 @@ namespace donner::svg {
  */
 [[nodiscard]] RendererBitmap RenderElementToBitmap(RendererInterface& renderer, SVGElement element,
                                                    Vector2i sizePx);
+
+/**
+ * Placement of one document inside a shared atlas render target.
+ *
+ * @see RenderDocumentsToAtlasBitmap
+ */
+struct AtlasDocumentPlacement {
+  /// Document to rasterize. Must outlive the atlas call; null entries are skipped.
+  ///
+  /// Outliving the call is a hard requirement, not a lifetime convenience. A
+  /// GPU backend keeps each document's resident geometry and bind groups in
+  /// components on that document's own registry and consumes them when the
+  /// frame is submitted (see
+  /// `donner/svg/renderer/geode/GeodeResidentPathComponent.h`), so a document
+  /// released before this call returns frees buffers the recorded draws still
+  /// reference and its tile comes back blank. Callers bounding peak memory must
+  /// therefore shrink the batch, not shorten a document's lifetime inside one.
+  SVGDocument* document = nullptr;
+  /// Top-left corner of this document's tile, in atlas device pixels.
+  Vector2i originPx = Vector2i::Zero();
+};
+
+/**
+ * Rasterize several documents into one render target and read it back once.
+ *
+ * Each document is drawn at its own atlas origin inside a single
+ * `beginFrame`/`endFrame` window, so the whole set costs exactly one
+ * GPU-to-CPU readback instead of one per document. Where a readback is a round
+ * trip through an asynchronous buffer mapping - WebGPU in a browser - that
+ * difference dominates: N serialized readback latencies collapse into one.
+ *
+ * Every tile renders as it would standalone: each document is prepared and
+ * traversed through the same driver path, translated by its origin. Slicing the
+ * returned atlas therefore yields per-document bitmaps identical to rendering
+ * each document on its own.
+ *
+ * Peak memory scales with the batch, because every document has to stay alive
+ * until the frame is submitted. That cost is not small - fourteen editor icons
+ * in one batch measured a 101.5 MB Wasm boot heap high-water against under
+ * 32 MB in small batches - so a caller with many documents should split them
+ * across several calls and trade a few readbacks for the headroom.
+ *
+ * @param renderer Backend instance used for the atlas pass.
+ * @param placements Documents and their atlas origins. Tiles must not overlap.
+ * @param atlasSizePx Atlas dimensions in device pixels, large enough to contain
+ *   every placed tile.
+ * @return The atlas bitmap, or an empty bitmap when nothing could be rendered.
+ */
+[[nodiscard]] RendererBitmap RenderDocumentsToAtlasBitmap(
+    RendererInterface& renderer, std::span<const AtlasDocumentPlacement> placements,
+    Vector2i atlasSizePx);
 
 /**
  * Backend-agnostic renderer that resolves to the active build backend (Skia or tiny-skia).
@@ -111,6 +163,17 @@ public:
   [[nodiscard]] RendererBitmap renderElementToBitmap(SVGElement element, Vector2i sizePx);
 
   /**
+   * Renders an element subtree into a directly sampleable backend texture.
+   *
+   * This is the GPU-native counterpart to \ref renderElementToBitmap. It uses
+   * the same bounds, crop, and isolated offscreen draw, then transfers
+   * ownership of the rendered target instead of reading it back through the
+   * CPU. Backends without texture snapshots return nullptr.
+   */
+  [[nodiscard]] std::shared_ptr<const RendererTextureSnapshot> renderElementToTextureSnapshot(
+      SVGElement element, Vector2i sizePx);
+
+  /**
    * Begins a render pass for the given viewport.
    *
    * @param viewport The viewport dimensions for the render pass.
@@ -119,6 +182,9 @@ public:
 
   /// Completes the current render pass.
   void endFrame() override;
+
+  /// Preserve the current backend target for an append pass when supported.
+  void setPreserveTargetOnBeginFrame(bool preserve) override;
 
   /**
    * Sets the absolute transform, replacing the current matrix.
@@ -267,11 +333,30 @@ public:
    */
   [[nodiscard]] RendererBitmap takeSnapshot() const override;
 
+  /// Forwards cancellation-aware CPU snapshot capture to the active backend.
+  [[nodiscard]] RendererBitmap takeSnapshotInterruptibly(
+      const std::function<bool()>& shouldCancel) const override;
+
+  /// Consume readback diagnostics from the active backend.
+  [[nodiscard]] RendererReadbackStats consumeReadbackStats() override;
+
   /// Captures a backend-owned GPU texture snapshot when the active backend supports it.
   [[nodiscard]] std::shared_ptr<const RendererTextureSnapshot> takeTextureSnapshot() override;
 
+  /// Borrows the current backend-owned GPU texture for a synchronous presentation operation.
+  [[nodiscard]] const RendererTextureSnapshot* borrowTextureSnapshot()
+      UTILS_LIFETIME_BOUND override;
+
+  /// Fills the completed frame target's see-through pixels with the
+  /// transparency checkerboard, underneath the content already in it.
+  bool drawCheckerboardUnderlay(const CheckerboardUnderlayParams& params) override;
+
   /// Returns true when this backend requires direct texture presentation.
   [[nodiscard]] bool requiresTextureSnapshotPresentation() const override;
+
+  /// Returns true when \ref renderElementToTextureSnapshot can produce a texture on this
+  /// backend, i.e. when thumbnail callers should prefer it over \ref renderElementToBitmap.
+  [[nodiscard]] bool supportsElementTextureSnapshots() const override;
 
   /// Creates an offscreen renderer of the active backend type.
   [[nodiscard]] std::unique_ptr<RendererInterface> createOffscreenInstance() const override;
@@ -307,6 +392,7 @@ public:
 
 private:
   std::unique_ptr<RendererInterface> impl_;
+  std::unique_ptr<RendererInterface> elementTextureThumbnailRenderer_;
 };
 
 }  // namespace donner::svg

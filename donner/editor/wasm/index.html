@@ -10,17 +10,43 @@
     <title>Donner SVG Editor</title>
   </head>
   <body>
-    <div id="capability-error" hidden>
-      <h1>WebAssembly runtime unavailable</h1>
-      <p id="capability-error-detail"></p>
-      <p>
-        This editor requires HTTPS, cross-origin isolation, WebAssembly threads, and either WebGPU
-        or WebGL2.
-      </p>
-    </div>
     <canvas class="emscripten" id="canvas" tabindex="0"></canvas>
-    <div id="status">Loading Donner SVG Editor…</div>
-    <script src="backend-selector.js"></script>
+    <main id="loading-screen" role="status" aria-live="polite" aria-labelledby="loading-title">
+      <section class="loading-card">
+        <div class="loading-brand">
+          <span class="loading-mark"><img src="donner_icon.svg" alt="" /></span>
+          <span class="loading-wordmark">Donner</span>
+          <span class="loading-product">SVG Editor</span>
+        </div>
+        <div class="loading-copy">
+          <p class="loading-eyebrow">Browser workspace</p>
+          <h1 id="loading-title">Preparing your canvas</h1>
+          <p id="status">Checking renderer support…</p>
+        </div>
+        <div
+          id="loading-progress"
+          class="loading-progress"
+          role="progressbar"
+          aria-label="Editor loading progress"
+          aria-valuemin="0"
+          aria-valuemax="100"
+        >
+          <span id="loading-progress-fill"></span>
+        </div>
+        <p id="loading-detail">A local-first editor powered by WebAssembly</p>
+      </section>
+    </main>
+    <div id="capability-error" hidden>
+      <div class="capability-error-card">
+        <p class="loading-eyebrow">Unable to start</p>
+        <h1>WebAssembly runtime unavailable</h1>
+        <p id="capability-error-detail"></p>
+        <p>
+          This editor requires HTTPS, cross-origin isolation, WebAssembly threads, OffscreenCanvas,
+          and WebGPU.
+        </p>
+      </div>
+    </div>
     <script src="editor-bootstrap.js"></script>
   </body>
 </html>

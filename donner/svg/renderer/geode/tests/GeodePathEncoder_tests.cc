@@ -12,6 +12,11 @@
 
 namespace donner::geode {
 
+/// Path-local flattening tolerance. This case asserts on exact path-local point
+/// counts, so it pins the local-space tolerance rather than a device-derived
+/// one (`strokeToFill` has no default; every caller states its intent).
+constexpr double kFlattenTolerance = Path::kLocalFlattenTolerance;
+
 /// Non-asserting encode-cost probe: times `GeodePathEncoder::encode` on a
 /// synthetic many-curve, many-band path and prints the per-encode median
 /// to stderr. Wall-clock budgets are not CI-stable, so this only reports;
@@ -314,7 +319,7 @@ TEST(GeodePathEncoder, ClosedStrokeRightContourUsesInsideJoins) {
                         .quadTo({100, 45}, {50, 85})
                         .closePath()
                         .build();
-  const Path stroke = path.strokeToFill({.width = 1.0});
+  const Path stroke = path.strokeToFill({.width = 1.0}, kFlattenTolerance);
   ASSERT_FALSE(stroke.empty());
   EXPECT_EQ(stroke.points().size(), 95u)
       << "Pre-fix right-contour misclassification emitted 117 outline points";

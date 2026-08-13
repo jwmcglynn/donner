@@ -10,10 +10,8 @@
 #include <unordered_set>
 #include <vector>
 
-#if defined(__EMSCRIPTEN__) && !defined(DONNER_EDITOR_WGPU)
-#define GLFW_INCLUDE_ES3
-#include <GLES3/gl3.h>
-#elif !defined(DONNER_EDITOR_WGPU)
+// The browser tier is Geode-only, so the OpenGL presentation path is desktop-only.
+#ifndef DONNER_EDITOR_WGPU
 #include "glad/glad.h"
 #endif
 
@@ -27,6 +25,10 @@
 namespace donner::geode {
 class GeodeDevice;
 }  // namespace donner::geode
+
+namespace donner::svg {
+class RendererGeodeTextureSnapshot;
+}  // namespace donner::svg
 
 namespace donner::editor {
 
@@ -46,8 +48,6 @@ struct CompositedTileTextureIdentity {
 
 /// Approximate resource footprint retained by the editor presentation texture cache.
 struct PresentationResourceStats {
-  /// Bytes retained by the current overlay texture.
-  std::uint64_t overlayBytes = 0;
   /// Bytes retained by active composited tile textures.
   std::uint64_t activeTileBytes = 0;
   /// Bytes retained by the zoom-out overview tile textures.
@@ -207,6 +207,8 @@ public:
     Vector2d uvBottomRight = Vector2d(1.0, 1.0);  ///< Bottom-right valid payload UV.
   };
   ThumbnailTextureView uploadThumbnail(std::uint64_t key, const svg::RendererBitmap& bitmap);
+  ThumbnailTextureView retainThumbnailTextureSnapshot(
+      std::uint64_t key, std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot);
 
   /// Evict every cached thumbnail texture whose key is not in @p liveKeys,
   /// freeing the backing GL/WGPU texture. Called after each Layers-panel render
@@ -239,8 +241,9 @@ public:
     bool isDragTarget = false;
   };
 
-  /// Paint-order tile view; empty when no composited preview has been
-  /// uploaded yet (or the preview was cleared via `resetComposited`).
+  /// Paint-order tile view; metadata-only direct-surface entries have a zero texture handle.
+  /// Empty when no composited preview has been uploaded yet (or the preview was cleared via
+  /// `resetComposited`).
   [[nodiscard]] const std::vector<TileView>& tiles() const { return tiles_; }
   /// Last retained unbounded full-document tile set, drawn underneath
   /// viewport-bounded tiles as a coherent zoom-out fallback.
@@ -265,7 +268,6 @@ public:
 private:
 #ifdef DONNER_EDITOR_WGPU
   using NativeTextureHandle = ImTextureID;
-  struct WgpuUploadedTexture;
 #else
   using NativeTextureHandle = GLuint;
 #endif
@@ -273,9 +275,12 @@ private:
   static ImTextureID ToImTextureId(NativeTextureHandle texture);
 #ifdef DONNER_EDITOR_WGPU
   static ImTextureID ToImTextureId(const svg::RendererTextureSnapshot* textureSnapshot);
-  std::shared_ptr<WgpuUploadedTexture> uploadBitmapToWgpu(
+  /// Upload a CPU bitmap into a WGPU texture owned by the returned snapshot. Reuses
+  /// @p reusableSnapshot's texture when its allocation still fits the payload, so the
+  /// snapshot handed back may be the one passed in.
+  std::shared_ptr<svg::RendererGeodeTextureSnapshot> uploadBitmapToWgpu(
       const svg::RendererBitmap& bitmap,
-      const std::shared_ptr<WgpuUploadedTexture>& reusableTexture = nullptr);
+      const std::shared_ptr<svg::RendererGeodeTextureSnapshot>& reusableSnapshot = nullptr);
 #endif
 #ifndef DONNER_EDITOR_WGPU
   static void UploadBitmap(GLuint texture, const svg::RendererBitmap& bitmap, int* outWidth,
@@ -288,7 +293,9 @@ private:
     NativeTextureHandle texture = 0;
     std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot;
 #ifdef DONNER_EDITOR_WGPU
-    std::shared_ptr<WgpuUploadedTexture> uploadedTexture;
+    /// Non-null when this cache uploaded the payload itself; aliases \ref textureSnapshot
+    /// and is the handle a later re-upload writes into.
+    std::shared_ptr<svg::RendererGeodeTextureSnapshot> uploadedSnapshot;
 #endif
     CompositedTileTextureIdentity identity;
     std::uint64_t uploadedGeneration = 0;
@@ -303,13 +310,13 @@ private:
   struct RetiredSnapshot {
     NativeTextureHandle texture = 0;
     std::shared_ptr<const svg::RendererTextureSnapshot> snapshot;
-    std::shared_ptr<WgpuUploadedTexture> uploadedTexture;
+    /// Backing allocation the retired texture still holds, which can exceed the snapshot's
+    /// content extent.
+    Vector2i allocationDimensions = Vector2i::Zero();
   };
 
   using RetiredSnapshotBatch = std::vector<RetiredSnapshot>;
 
-  static RetiredSnapshot RetireSnapshot(
-      NativeTextureHandle texture, std::shared_ptr<const svg::RendererTextureSnapshot> snapshot);
   static void releaseImGuiTexture(NativeTextureHandle texture);
 
   void retireSnapshots(RetiredSnapshotBatch snapshots);

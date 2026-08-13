@@ -2,6 +2,8 @@
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
+
+#include "donner/editor/WholeAppWorkerBridge.h"
 #endif
 
 #include <utility>
@@ -13,7 +15,21 @@ namespace donner::editor {
 
 namespace {
 
-#ifdef __EMSCRIPTEN__
+#if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WHOLE_APP_WORKER)
+// The zoom-modifier shadow is a `document`-scoped capture listener, so on the
+// whole-app-worker build it lives in the shared-memory mirror that
+// `whole_app_worker::Install()` sets up; there is nothing left to install or
+// remove from the app thread.
+void InstallWasmWheelModifierCapture() {}
+void RemoveWasmWheelModifierCapture() {}
+int WasmWheelZoomModifierHeld() {
+  return whole_app_worker::ZoomModifierHeld() ? 1 : 0;
+}
+void RecordWasmScrollDebug(int zoomModifierHeld, double xoffset, double yoffset, int phys,
+                           int /*dom*/) {
+  whole_app_worker::RecordScrollDebug(zoomModifierHeld != 0, xoffset, yoffset, phys != 0);
+}
+#elif defined(__EMSCRIPTEN__)
 // clang-format off
 EM_JS(void, InstallWasmWheelModifierCapture, (), {
   const canvas = document.getElementById("canvas");
@@ -21,58 +37,72 @@ EM_JS(void, InstallWasmWheelModifierCapture, (), {
     return;
   }
 
-  if (canvas.__donnerWheelModifierCapture) {
-    canvas.__donnerWheelModifierCapture.state.zoomModifierHeld = false;
+  if (canvas['__donnerWheelModifierCapture']) {
+    canvas['__donnerWheelModifierCapture']['state']['zoomModifierHeld'] = false;
     return;
   }
 
   const state = {
-    zoomModifierHeld: false,
+    'zoomModifierHeld': false,
   };
   const handler = function(event) {
     state.zoomModifierHeld = !!(event.ctrlKey || event.metaKey);
   };
+  // macOS drops the keyup when Cmd is held across a focus change; never let a
+  // stale modifier shadow classify ordinary scrolls as zoom after a blur.
+  const clear = function() {
+    state.zoomModifierHeld = false;
+  };
+  window.addEventListener("blur", clear);
+  document.addEventListener("visibilitychange", clear);
 
-  canvas.__donnerWheelModifierCapture = {
-    state: state,
-    handler: handler,
+  canvas['__donnerWheelModifierCapture'] = {
+    'state': state,
+    'handler': handler,
   };
   canvas.addEventListener("wheel", handler, {capture: true, passive: false});
 });
 
 EM_JS(void, RemoveWasmWheelModifierCapture, (), {
   const canvas = document.getElementById("canvas");
-  const capture = canvas && canvas.__donnerWheelModifierCapture;
+  const capture = canvas && canvas['__donnerWheelModifierCapture'];
   if (!capture) {
     return;
   }
 
-  canvas.removeEventListener("wheel", capture.handler, true);
-  delete canvas.__donnerWheelModifierCapture;
+  canvas.removeEventListener("wheel", capture['handler'], true);
+  delete canvas['__donnerWheelModifierCapture'];
 });
 
 EM_JS(int, WasmWheelZoomModifierHeld, (), {
   const canvas = document.getElementById("canvas");
-  const capture = canvas && canvas.__donnerWheelModifierCapture;
-  return capture && capture.state && capture.state.zoomModifierHeld ? 1 : 0;
+  const capture = canvas && canvas['__donnerWheelModifierCapture'];
+  return capture && capture['state'] && capture['state']['zoomModifierHeld'] ? 1 : 0;
 });
 
-EM_JS(void, RecordWasmScrollDebug, (int zoomModifierHeld, double xoffset, double yoffset), {
-  window.__donnerLastScrollEvent = {
-    zoomModifierHeld: !!zoomModifierHeld,
-    xoffset: xoffset,
-    yoffset: yoffset,
-    count: ((window.__donnerLastScrollEvent && window.__donnerLastScrollEvent.count) || 0) + 1,
+EM_JS(void, RecordWasmScrollDebug, (int zoomModifierHeld, double xoffset, double yoffset, int phys, int dom), {
+  const previous = window['__donnerLastScrollEvent'];
+  window['__donnerLastScrollEvent'] = {
+    'zoomModifierHeld': !!zoomModifierHeld,
+    'phys': phys,
+    'dom': dom,
+    'xoffset': xoffset,
+    'yoffset': yoffset,
+    'count': ((previous && previous['count']) || 0) + 1,
   };
 });
 // clang-format on
 #endif
 
+[[nodiscard]] bool IsPhysicalZoomKeyHeld(GLFWwindow* window) {
+  return glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
+         glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS ||
+         glfwGetKey(window, GLFW_KEY_LEFT_SUPER) == GLFW_PRESS ||
+         glfwGetKey(window, GLFW_KEY_RIGHT_SUPER) == GLFW_PRESS;
+}
+
 [[nodiscard]] bool IsZoomModifierHeld(GLFWwindow* window) {
-  const bool keyHeld = glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
-                       glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS ||
-                       glfwGetKey(window, GLFW_KEY_LEFT_SUPER) == GLFW_PRESS ||
-                       glfwGetKey(window, GLFW_KEY_RIGHT_SUPER) == GLFW_PRESS;
+  const bool keyHeld = IsPhysicalZoomKeyHeld(window);
 #ifdef __EMSCRIPTEN__
   return keyHeld || WasmWheelZoomModifierHeld() != 0;
 #else
@@ -128,11 +158,21 @@ void EditorInputBridge::ScrollCallback(GLFWwindow* window, double xoffset, doubl
   }
 
   const bool zoomModifierHeld = IsZoomModifierHeld(window);
+  double effectiveYOffset = yoffset;
 #ifdef __EMSCRIPTEN__
-  RecordWasmScrollDebug(zoomModifierHeld ? 1 : 0, xoffset, yoffset);
+  // A ctrl-flagged wheel with no Ctrl/Cmd physically held is a
+  // browser-synthesized trackpad pinch (Chromium: deltaY = -100*ln(scale),
+  // Gecko: -100*magnification). Those need the desktop pinch calibration so
+  // a pinch gesture matches zoom = 1 + magnification; a real ctrl+mouse-wheel
+  // keeps the discrete per-notch step. See PinchZoomPolicy.h.
+  if (zoomModifierHeld && !IsPhysicalZoomKeyHeld(window) && WasmWheelZoomModifierHeld() != 0) {
+    effectiveYOffset = ApplyPinchScrollUnitGain(yoffset);
+  }
+  RecordWasmScrollDebug(zoomModifierHeld ? 1 : 0, xoffset, effectiveYOffset,
+                        IsPhysicalZoomKeyHeld(window) ? 1 : 0, WasmWheelZoomModifierHeld());
 #endif
   state->events.push_back(RenderPaneScrollEvent{
-      .scrollDelta = Vector2d(xoffset, yoffset),
+      .scrollDelta = Vector2d(xoffset, effectiveYOffset),
       .cursorScreen = Vector2d(cursorX, cursorY),
       .zoomModifierHeld = zoomModifierHeld,
   });

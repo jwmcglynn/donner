@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <memory>
 #include <vector>
 
 #include "donner/base/xml/components/TreeComponent.h"
@@ -794,6 +795,90 @@ TEST_F(RendererDriverTest, DrawEntityRangeDefersSubtreeCleanupAndAppliesBaseTran
   EXPECT_EQ(pushLayerCount, 1);
   EXPECT_EQ(popLayerCount, 1);
   EXPECT_THAT(transforms, testing::Contains(TransformNear(baseTransform, 1e-6)));
+}
+
+TEST_F(RendererDriverTest, InterruptibleEntityRangeStopsBeforeSecondShape) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect x="1" y="1" width="4" height="4" fill="red" />
+    <rect x="7" y="1" width="4" height="4" fill="green" />
+    <rect x="13" y="1" width="4" height="4" fill="blue" />
+  )svg",
+                                      Vector2i(20, 8));
+
+  ParseWarningSink warnings;
+  RendererUtils::prepareDocumentForRendering(document, false, warnings);
+  ASSERT_FALSE(warnings.hasWarnings());
+
+  std::vector<Entity> pathEntities;
+  RenderingInstanceView view(document.registry());
+  while (!view.done()) {
+    const auto& instance = view.get();
+    if (instance.dataHandle(document.registry()).all_of<components::ComputedPathComponent>()) {
+      pathEntities.push_back(view.currentEntity());
+    }
+    view.advance();
+  }
+  ASSERT_EQ(pathEntities.size(), 3u);
+
+  int drawPathCount = 0;
+  EXPECT_CALL(renderer, beginFrame(_)).Times(1);
+  EXPECT_CALL(renderer, endFrame()).Times(1);
+  EXPECT_CALL(renderer, drawPath(_, _)).WillRepeatedly([&](const PathShape&, const StrokeParams&) {
+    ++drawPathCount;
+  });
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(20, 8);
+  viewport.devicePixelRatio = 1.0;
+
+  const bool completed = driver.drawEntityRangeInterruptibly(
+      document.registry(), pathEntities.front(), pathEntities.back(), viewport, Transform2d(),
+      [&]() { return drawPathCount >= 1; });
+
+  EXPECT_FALSE(completed);
+  EXPECT_EQ(drawPathCount, 1)
+      << "cancellation must release the document between shapes instead of after the full range";
+}
+
+TEST_F(RendererDriverTest, InterruptibleDocumentRedrawIgnoresFeImageShadowSentinels) {
+  SVGDocument document = makeDocument(R"svg(
+    <defs>
+      <filter id="filter">
+        <feImage href="#source" />
+      </filter>
+      <rect id="source" x="3" y="3" width="10" height="10" fill="green" />
+    </defs>
+    <rect x="1" y="1" width="16" height="16" fill="red" filter="url(#filter)" />
+  )svg",
+                                      Vector2i(20, 20));
+
+  ON_CALL(renderer, createOffscreenInstance()).WillByDefault([]() {
+    auto offscreen = std::make_unique<::testing::NiceMock<MockRendererInterface>>();
+    ON_CALL(*offscreen, takeSnapshot())
+        .WillByDefault(::testing::Return(MockRendererInterface::makeDummyBitmap()));
+    return offscreen;
+  });
+
+  int drawPathCount = 0;
+  EXPECT_CALL(renderer, beginFrame(_)).Times(2);
+  EXPECT_CALL(renderer, endFrame()).Times(2);
+  EXPECT_CALL(renderer, drawPath(_, _)).WillRepeatedly([&](const PathShape&, const StrokeParams&) {
+    ++drawPathCount;
+  });
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(20, 20);
+  viewport.devicePixelRatio = 1.0;
+  const auto neverCancel = []() { return false; };
+
+  ASSERT_TRUE(driver.drawInterruptibly(document, viewport, Transform2d(), neverCancel));
+  const int firstDrawPathCount = drawPathCount;
+  ASSERT_GT(firstDrawPathCount, 0);
+
+  drawPathCount = 0;
+  EXPECT_TRUE(driver.drawInterruptibly(document, viewport, Transform2d(), neverCancel));
+  EXPECT_EQ(drawPathCount, firstDrawPathCount)
+      << "a lingering OffscreenFeImage shadow must not become the interruptible range sentinel";
 }
 
 TEST_F(RendererDriverTest, DrawEntityRangeConvertsCssFilterFunctionsToFilterGraph) {

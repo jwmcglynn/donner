@@ -69,6 +69,14 @@ config_setting(
 )
 
 config_setting(
+    name = "wasm_geode_enabled",
+    flag_values = {
+        ":renderer_backend": "geode",
+        "//donner/svg/renderer/wasm:enable_wasm": "true",
+    },
+)
+
+config_setting(
     name = "filters_enabled",
     flag_values = {":filters": "true"},
     visibility = ["//visibility:public"],
@@ -381,6 +389,7 @@ donner_cc_library(
         "//donner/svg/renderer/geode:geode_path_cache_component",
         "//donner/svg/renderer/geode:geode_resident_path_component",
         "//donner/svg/renderer/geode:geode_path_encoder",
+        "//donner/svg/renderer/geode:geode_stroke_tolerance",
         "//donner/svg/renderer/geode:geode_wgpu_util",
         "//donner/svg/resources:image_resource",
         "//third_party/webgpu-cpp:webgpu_cpp",

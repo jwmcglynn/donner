@@ -18,6 +18,7 @@
 #include "donner/base/Vector2.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorApp.h"
+#include "donner/editor/EmbeddedSvgIcon.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/svg/renderer/RendererInterface.h"
@@ -239,12 +240,16 @@ private:
 
   struct InspectorSnapshot {
     bool hasSelection = false;
+    bool transformEditable = false;
+    bool strokeEditable = false;
+    float strokeWidth = 1.0f;
     std::string titleText;
     std::optional<Box2d> bounds;
     std::optional<Transform2d> transform;
     std::vector<std::pair<std::string, std::string>> xmlAttributes;
     std::vector<std::pair<std::string, std::string>> computedStyle;
     std::vector<std::optional<ImU32>> computedStyleSwatches;
+    std::vector<PathOperationAvailability> pathOperationAvailability;
   };
 
   /// State for the transform edit currently in progress (one ImGui item can
@@ -318,5 +323,11 @@ private:
   /// state). Reset implicitly as entities change across document reloads.
   mutable std::unordered_set<std::uint32_t> treeExpandedEntities_;
 };
+
+/// Every inspector path-operation button icon, for the shell's startup prewarm
+/// batch. These first appear when a selection makes the boolean-op row
+/// available, so batching them with the boot icons keeps that first selection
+/// from stalling on a run of GPU readbacks.
+[[nodiscard]] std::span<const EmbeddedSvgIconRequest> SidebarIconPrewarmRequests();
 
 }  // namespace donner::editor

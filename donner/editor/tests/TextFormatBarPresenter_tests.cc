@@ -359,8 +359,14 @@ protected:
 
   static FormatBarActions RenderFrame(TextFormatBarPresenter& bar, const FormatBarState& state) {
     ImGui::NewFrame();
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize, ImGuiCond_Always);
+    ImGui::Begin("TextFormatBarHost", nullptr,
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+                     ImGuiWindowFlags_NoSavedSettings);
     const FormatBarActions actions =
         bar.render(state, ImVec2(320.0f, 80.0f), TextFormatBarPresenter::PreferredWidth());
+    ImGui::End();
     ImGui::Render();
     return actions;
   }
@@ -478,8 +484,38 @@ protected:
     ImGui::NewFrame();
     frameHeight_ = ImGui::GetFrameHeight();
     itemSpacingX_ = ImGui::GetStyle().ItemSpacing.x;
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(io.DisplaySize, ImGuiCond_Always);
+    ImGui::Begin("TextFormatBarInputHost", nullptr,
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+                     ImGuiWindowFlags_NoSavedSettings);
     const FormatBarActions actions =
         bar_.render(state, ImVec2(kBarX, kBarY), TextFormatBarPresenter::PreferredWidth());
+    ImGui::End();
+    ImGui::Render();
+    return actions;
+  }
+
+  FormatBarActions FrameOverCanvas(const FormatBarState& state,
+                                   const ImVec2& mouse = ImVec2(-100.0f, -100.0f),
+                                   bool mouseDown = false) {
+    ImGuiIO& io = ImGui::GetIO();
+    io.AddMousePosEvent(mouse.x, mouse.y);
+    io.AddMouseButtonEvent(0, mouseDown);
+    ImGui::NewFrame();
+    frameHeight_ = ImGui::GetFrameHeight();
+    itemSpacingX_ = ImGui::GetStyle().ItemSpacing.x;
+
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(io.DisplaySize, ImGuiCond_Always);
+    ImGui::Begin(
+        "RenderCanvasHost", nullptr,
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
+    ImGui::SetNextItemAllowOverlap();
+    ImGui::InvisibleButton("##canvas", ImGui::GetContentRegionAvail());
+    const FormatBarActions actions =
+        bar_.render(state, ImVec2(kBarX, kBarY), TextFormatBarPresenter::PreferredWidth());
+    ImGui::End();
     ImGui::Render();
     return actions;
   }
@@ -488,6 +524,12 @@ protected:
   FormatBarActions Click(const FormatBarState& state, const ImVec2& mouse) {
     FormatBarActions merged = Frame(state, mouse, /*mouseDown=*/true);
     MergeActions(merged, Frame(state, mouse, /*mouseDown=*/false));
+    return merged;
+  }
+
+  FormatBarActions ClickOverCanvas(const FormatBarState& state, const ImVec2& mouse) {
+    FormatBarActions merged = FrameOverCanvas(state, mouse, /*mouseDown=*/true);
+    MergeActions(merged, FrameOverCanvas(state, mouse, /*mouseDown=*/false));
     return merged;
   }
 
@@ -503,9 +545,7 @@ protected:
   float ItalicLeft() const { return BoldLeft() + frameHeight_ + itemSpacingX_; }
   float UnderlineLeft() const { return ItalicLeft() + frameHeight_ + itemSpacingX_; }
 
-  ImVec2 ToggleCenter(float left) const {
-    return ImVec2(left + frameHeight_ * 0.5f, RowCenterY());
-  }
+  ImVec2 ToggleCenter(float left) const { return ImVec2(left + frameHeight_ * 0.5f, RowCenterY()); }
 
   /// Open the combo popup whose arrow-only control is centered at
   /// @p arrowCenter. New ImGui windows are hidden their first frame while
@@ -562,6 +602,18 @@ TEST_F(TextFormatBarPresenterInputTest, ClickingToggleButtonsEmitsBoldItalicUnde
   actions = Click(state, ToggleCenter(UnderlineLeft()));
   EXPECT_TRUE(actions.toggleUnderline);
   EXPECT_FALSE(actions.toggleBold);
+}
+
+TEST_F(TextFormatBarPresenterInputTest, ControlsRemainClickableAfterCanvasTakesFocus) {
+  const FormatBarState state = MakeState();
+
+  FrameOverCanvas(state);
+  // Selecting the text focuses the canvas window immediately before the
+  // contextual bar is used.
+  ClickOverCanvas(state, ImVec2(100.0f, 300.0f));
+
+  const FormatBarActions actions = ClickOverCanvas(state, ToggleCenter(BoldLeft()));
+  EXPECT_TRUE(actions.toggleBold);
 }
 
 TEST_F(TextFormatBarPresenterInputTest, DraggingSizeControlCommitsNewFontSize) {

@@ -95,6 +95,7 @@ bool EditorControlSession::loadCurrentSourceText(const LoadOptions& options,
 
   selectTool_ = std::make_unique<SelectTool>();
   penTool_.cancel();
+  textTool_.cancel();
   activeReplayTool_ = ActiveReplayTool::Select;
   displayPresentation_ = CompositedPresentation{};
   displayTextures_.reset();

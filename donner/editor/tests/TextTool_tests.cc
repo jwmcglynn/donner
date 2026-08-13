@@ -158,6 +158,8 @@ TEST_F(TextToolTest, DragOpensBoxTextSessionWithBoxAttributes) {
   // below the top.
   EXPECT_THAT(attr(inserted, "x"), Eq("10"));
   EXPECT_THAT(attr(inserted, "y"), Eq("52"));
+  EXPECT_THAT(attr(inserted, "data-donner-text-box-x"), Eq("10"));
+  EXPECT_THAT(attr(inserted, "data-donner-text-box-y"), Eq("20"));
   EXPECT_THAT(attr(inserted, "data-donner-text-box-width"), Eq("200"));
   EXPECT_THAT(attr(inserted, "data-donner-text-box-height"), Eq("100"));
 }
@@ -532,6 +534,120 @@ TEST_F(TextToolExistingTextTest, ClickInTrailingHalfPlacesCaretAfterCharacter) {
   EXPECT_EQ(tool.caretIndex(), 2u);
 }
 
+TEST_F(TextToolExistingTextTest, DragSelectionIsReplacedByTyping) {
+  clickAt(pointInChar(0, /*rightHalf=*/false));
+
+  const Vector2d selectionStart = pointInChar(1, /*rightHalf=*/false);
+  const Vector2d selectionEnd = pointInChar(3, /*rightHalf=*/true);
+  tool.onMouseDown(app, selectionStart, MouseModifiers{});
+  tool.onMouseMove(app, selectionEnd, /*buttonHeld=*/true);
+  tool.onMouseUp(app, selectionEnd);
+
+  const std::optional<TextTool::SelectionRange> selection = tool.selectionRange();
+  ASSERT_TRUE(selection.has_value());
+  EXPECT_EQ(selection->start, 1u);
+  EXPECT_EQ(selection->end, 4u);
+  const std::optional<TextTool::EditingChrome> chrome = tool.editingChrome(app);
+  ASSERT_TRUE(chrome.has_value());
+  svg::SVGTextElement element = text();
+  const Box2d expectedSelection =
+      element.withWriteAccess([&element](svg::DocumentWriteAccess&, EntityHandle) {
+        const Box2d emBox = element.objectBoundingBox();
+        return Box2d(Vector2d(element.getStartPositionOfChar(1u).x, emBox.topLeft.y),
+                     Vector2d(element.getEndPositionOfChar(3u).x, emBox.bottomRight.y));
+      });
+  ASSERT_EQ(chrome->selectionQuadsDoc.size(), 1u);
+  EXPECT_EQ(chrome->selectionQuadsDoc[0],
+            (std::array<Vector2d, 4>{
+                expectedSelection.topLeft,
+                Vector2d(expectedSelection.bottomRight.x, expectedSelection.topLeft.y),
+                expectedSelection.bottomRight,
+                Vector2d(expectedSelection.topLeft.x, expectedSelection.bottomRight.y),
+            }));
+
+  tool.insertCodepoint(app, U'X');
+
+  EXPECT_EQ(tool.sessionContent(), U"HXo");
+  EXPECT_EQ(text().textContent(), "HXo");
+  EXPECT_FALSE(tool.selectionRange().has_value());
+}
+
+TEST_F(TextToolExistingTextTest, SelectionHeightIsStableAcrossGlyphShapes) {
+  clickAt(pointInChar(0, /*rightHalf=*/false));
+
+  const auto selectCharacter = [this](std::size_t charIndex) {
+    const Vector2d start = pointInChar(charIndex, /*rightHalf=*/false);
+    const Vector2d end = pointInChar(charIndex, /*rightHalf=*/true);
+    tool.onMouseDown(app, start, MouseModifiers{});
+    tool.onMouseMove(app, end, /*buttonHeld=*/true);
+    tool.onMouseUp(app, end);
+    const std::optional<TextTool::EditingChrome> chrome = tool.editingChrome(app);
+    EXPECT_TRUE(chrome.has_value());
+    EXPECT_EQ(chrome->selectionQuadsDoc.size(), 1u);
+    return chrome->selectionQuadsDoc.front();
+  };
+
+  const std::array<Vector2d, 4> uppercaseSelection = selectCharacter(0u);
+  const std::array<Vector2d, 4> lowercaseSelection = selectCharacter(1u);
+  svg::SVGTextElement element = text();
+  const Box2d emBox = element.withWriteAccess(
+      [&element](svg::DocumentWriteAccess&, EntityHandle) { return element.objectBoundingBox(); });
+
+  EXPECT_NEAR(uppercaseSelection[0].y, emBox.topLeft.y, 1e-6);
+  EXPECT_NEAR(uppercaseSelection[3].y, emBox.bottomRight.y, 1e-6);
+  EXPECT_NEAR(lowercaseSelection[0].y, emBox.topLeft.y, 1e-6);
+  EXPECT_NEAR(lowercaseSelection[3].y, emBox.bottomRight.y, 1e-6);
+}
+
+TEST_F(TextToolTest, DragSelectionAcrossWhitespaceKeepsNearestCaret) {
+  constexpr std::string_view kTextSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="240" height="140">
+           <text id="label" x="30" y="75" font-family="sans-serif" font-size="32"
+             >Hello text</text>
+         </svg>)";
+  ASSERT_TRUE(app.loadFromString(kTextSvg));
+
+  clickAt(Vector2d(55.0, 67.0));
+  ASSERT_TRUE(tool.isEditing());
+  svg::SVGTextElement element = text();
+  const Vector2d spacePoint =
+      element.withWriteAccess([&element](svg::DocumentWriteAccess&, EntityHandle) {
+        const Vector2d start = element.getStartPositionOfChar(5u);
+        const Vector2d end = element.getEndPositionOfChar(5u);
+        return Vector2d(start.x + (end.x - start.x) * 0.25, start.y - 8.0);
+      });
+  tool.onMouseDown(app, Vector2d(43.0, 67.0), MouseModifiers{});
+  tool.onMouseMove(app, spacePoint, /*buttonHeld=*/true);
+
+  EXPECT_EQ(tool.caretIndex(), 5u);
+  EXPECT_THAT(tool.selectionRange(), Optional(TextTool::SelectionRange{1u, 5u}));
+
+  tool.onMouseUp(app, spacePoint);
+  EXPECT_EQ(tool.caretIndex(), 5u);
+  EXPECT_THAT(tool.selectionRange(), Optional(TextTool::SelectionRange{1u, 5u}));
+}
+
+TEST_F(TextToolExistingTextTest, ShiftNavigationAndSelectAllMaintainLogicalRanges) {
+  clickAt(pointInChar(1, /*rightHalf=*/false));
+
+  tool.moveCaret(app, TextTool::CaretMove::Right, /*extendSelection=*/true);
+  tool.moveCaret(app, TextTool::CaretMove::Right, /*extendSelection=*/true);
+  ASSERT_TRUE(tool.selectionRange().has_value());
+  EXPECT_EQ(tool.selectionRange()->start, 1u);
+  EXPECT_EQ(tool.selectionRange()->end, 3u);
+
+  tool.backspace(app);
+  EXPECT_EQ(tool.sessionContent(), U"Hlo");
+  EXPECT_FALSE(tool.selectionRange().has_value());
+
+  tool.selectAll();
+  ASSERT_TRUE(tool.selectionRange().has_value());
+  EXPECT_EQ(tool.selectionRange()->start, 0u);
+  EXPECT_EQ(tool.selectionRange()->end, 3u);
+  tool.insertCodepoint(app, U'X');
+  EXPECT_EQ(tool.sessionContent(), U"X");
+}
+
 TEST_F(TextToolExistingTextTest, EditingExistingTextCommitRecordsEditUndo) {
   clickAt(pointInChar(4, /*rightHalf=*/true));
   ASSERT_EQ(tool.caretIndex(), 5u);
@@ -612,7 +728,11 @@ TEST_F(TextToolExistingTextTest, TransformedTextClickMapsThroughElementTransform
   // The caret chrome maps back into document space through the transform.
   const auto chrome = tool.editingChrome(app);
   ASSERT_TRUE(chrome.has_value());
-  EXPECT_NEAR(chrome->caretBottomDoc.y, 80.0 + 40.0 + 20.0 * 0.25, 1.0);
+  svg::SVGTextElement element = text();
+  const Box2d emBox = element.withWriteAccess(
+      [&element](svg::DocumentWriteAccess&, EntityHandle) { return element.objectBoundingBox(); });
+  EXPECT_NEAR(chrome->caretTopDoc.y, emBox.topLeft.y + 40.0, 1.0);
+  EXPECT_NEAR(chrome->caretBottomDoc.y, emBox.bottomRight.y + 40.0, 1.0);
   EXPECT_GT(chrome->caretTopDoc.x, 150.0);
 }
 
@@ -673,6 +793,55 @@ TEST_F(TextToolTest, FrameHandleResizeReflowsBoxWithoutScalingGlyphs) {
   // The wider frame no longer wraps the content.
   EXPECT_EQ(tspanCount(), 0);
   EXPECT_EQ(element.textContent(), "MMMM MMMM");
+}
+
+TEST_F(TextToolTest, TopEdgeFrameResizeKeepsTextBaselineFixed) {
+  tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(70.0, 120.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(70.0, 120.0));
+  ASSERT_TRUE(tool.isEditing());
+  type("Hi");
+
+  const std::optional<TextTool::EditingChrome> beforeResize = tool.editingChrome(app);
+  ASSERT_TRUE(beforeResize.has_value());
+  ASSERT_TRUE(beforeResize->frameCornersDoc.has_value());
+  const Vector2d caretTopBefore = beforeResize->caretTopDoc;
+  const Vector2d caretBottomBefore = beforeResize->caretBottomDoc;
+
+  tool.onMouseDown(app, Vector2d(70.0, 20.0), MouseModifiers{});
+  ASSERT_TRUE(tool.isResizingFrame());
+  tool.onMouseMove(app, Vector2d(90.0, 10.0), /*buttonHeld=*/true);
+
+  const std::optional<TextTool::EditingChrome> resizePreview = tool.editingChrome(app);
+  ASSERT_TRUE(resizePreview.has_value());
+  ASSERT_TRUE(resizePreview->frameCornersDoc.has_value());
+  EXPECT_EQ(*resizePreview->frameCornersDoc,
+            (std::array<Vector2d, 4>{Vector2d(10.0, 10.0), Vector2d(90.0, 10.0),
+                                     Vector2d(90.0, 120.0), Vector2d(10.0, 120.0)}));
+  EXPECT_EQ(resizePreview->caretTopDoc, caretTopBefore);
+  EXPECT_EQ(resizePreview->caretBottomDoc, caretBottomBefore);
+
+  tool.onMouseUp(app, Vector2d(90.0, 10.0));
+  EXPECT_THAT(attr(text(), "x"), Eq("10"));
+  EXPECT_THAT(attr(text(), "y"), Eq("52"));
+  EXPECT_THAT(attr(text(), "data-donner-text-box-x"), Eq("10"));
+  EXPECT_THAT(attr(text(), "data-donner-text-box-y"), Eq("10"));
+  EXPECT_THAT(attr(text(), "data-donner-text-box-width"), Eq("80"));
+  EXPECT_THAT(attr(text(), "data-donner-text-box-height"), Eq("110"));
+
+  ASSERT_TRUE(tool.commit(app));
+  app.flushFrame();
+  svg::SVGTextElement resizedText = text();
+  const Box2d firstGlyphExtent =
+      resizedText.withWriteAccess([&resizedText](svg::DocumentWriteAccess&, EntityHandle) {
+        return resizedText.getExtentOfChar(0);
+      });
+  clickAt((firstGlyphExtent.topLeft + firstGlyphExtent.bottomRight) * 0.5);
+  ASSERT_TRUE(tool.isEditing());
+  const std::optional<TextTool::EditingChrome> reopened = tool.editingChrome(app);
+  ASSERT_TRUE(reopened.has_value());
+  ASSERT_TRUE(reopened->frameCornersDoc.has_value());
+  EXPECT_EQ(*reopened->frameCornersDoc, *resizePreview->frameCornersDoc);
 }
 
 TEST_F(TextToolTest, FrameResizeConvertsPointTextToUserSizedBox) {
@@ -736,6 +905,24 @@ TEST_F(TextToolTest, RotateRingRotatesElementKeepingFrameAttributes) {
   EXPECT_THAT(attr(element, "data-donner-text-box-width"), Eq("60"));
   EXPECT_THAT(attr(element, "data-donner-text-box-height"), Eq("100"));
   EXPECT_THAT(attr(element, "font-size"), Eq("32"));
+}
+
+// Regression coverage for a main-thread self-deadlock observed in the live editor. The rotate
+// gesture used to hold a ConcurrentDom read guard while calling the lazy transform() accessor,
+// which attempts to acquire the same document's write lock. Starting the gesture would then wait
+// forever for its own read guard to drain.
+TEST_F(TextToolTest, RotateRingStartsUnderConcurrentDomWithoutSelfDeadlock) {
+  tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(70.0, 120.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(70.0, 120.0));
+  ASSERT_TRUE(tool.isEditing());
+  type("Hi");
+
+  app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+
+  tool.onMouseDown(app, Vector2d(84.0, 134.0), MouseModifiers{});
+
+  EXPECT_TRUE(tool.isRotatingFrame());
 }
 
 TEST_F(TextToolTest, RotatedFrameStaysOrientedAndResizesInLocalSpace) {

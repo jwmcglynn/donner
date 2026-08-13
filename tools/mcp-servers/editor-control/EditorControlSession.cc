@@ -40,6 +40,7 @@
 #include "donner/editor/LayersPanel.h"
 #include "donner/editor/PresentationRenderScheduler.h"
 #include "donner/editor/PresentedFrameComposer.h"
+#include "donner/editor/SelectionAabb.h"
 #include "donner/editor/SelectionTransformHandles.h"
 #include "donner/editor/TextPatch.h"
 #include "donner/editor/repro/GlRnrReplay.h"
@@ -231,10 +232,42 @@ json EditorControlSession::toolList() {
                 {
                     {"tool",
                      {{"type", "string"},
-                      {"enum", json::array({"select", "pen"})},
+                      {"enum", json::array({"select", "pen", "text"})},
                       {"description", "Canvas tool to activate."}}},
                 }},
                {"required", json::array({"tool"})},
+           }},
+      },
+      {
+          {"name", "pointer_gesture"},
+          {"description",
+           "Dispatch a recorded click, double-click, or drag through the active canvas tool. "
+           "Idle tail frames make timed chrome such as caret blink replayable."},
+          {"inputSchema",
+           {
+               {"type", "object"},
+               {"properties",
+                {
+                    {"start_x", {{"type", "number"}}},
+                    {"start_y", {{"type", "number"}}},
+                    {"end_x", {{"type", "number"}}},
+                    {"end_y", {{"type", "number"}}},
+                    {"frames", {{"type", "integer"}, {"minimum", 1}, {"maximum", kMaxDragFrames}}},
+                    {"click_count",
+                     {{"type", "integer"}, {"minimum", 1}, {"maximum", 2}, {"default", 1}}},
+                    {"shift", {{"type", "boolean"}, {"default", false}}},
+                    {"option", {{"type", "boolean"}, {"default", false}}},
+                    {"idle_frames",
+                     {{"type", "integer"},
+                      {"minimum", 0},
+                      {"maximum", kMaxDragFrames},
+                      {"default", 0}}},
+                    {"render_after_gesture", {{"type", "boolean"}, {"default", false}}},
+                    {"include_final_frame", {{"type", "boolean"}, {"default", false}}},
+                    {"include_tile_images", {{"type", "boolean"}, {"default", false}}},
+                    {"embed_png_base64", {{"type", "boolean"}, {"default", false}}},
+                }},
+               {"required", json::array({"start_x", "start_y"})},
            }},
       },
       {
@@ -472,6 +505,7 @@ ToolCallResult EditorControlSession::handleToolCall(std::string_view name, const
   if (name == "pen_path") return penPath(arguments);
   if (name == "drag_selector") return dragSelector(arguments);
   if (name == "transform_selector") return transformSelector(arguments);
+  if (name == "pointer_gesture") return pointerGesture(arguments);
   if (name == "render_frame") return renderFrameTool(arguments);
   if (name == "session_state") return sessionState(arguments);
   if (name == "start_rnr_recording") return startRnrRecording(arguments);
@@ -522,37 +556,10 @@ std::optional<svg::SVGElement> EditorControlSession::querySelector(std::string_v
 
 std::optional<Box2d> EditorControlSession::elementWorldBounds(
     const svg::SVGElement& element) const {
-  std::optional<Box2d> result;
-  const std::optional<svg::SVGGeometryElement> geometry =
-      element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
-        if (!element.isa<svg::SVGGeometryElement>()) {
-          return std::optional<svg::SVGGeometryElement>();
-        }
-
-        return std::optional(element.cast<svg::SVGGeometryElement>());
-      });
-  if (geometry.has_value()) {
-    result = geometry->worldBounds();
-  }
-
-  std::optional<svg::SVGElement> child = element.withReadAccess(
-      [&element](svg::DocumentReadAccess&, EntityHandle) { return element.firstChild(); });
-  while (child.has_value()) {
-    const svg::SVGElement currentChild = *child;
-    if (auto childBounds = elementWorldBounds(*child); childBounds.has_value()) {
-      if (result.has_value()) {
-        result->addBox(*childBounds);
-      } else {
-        result = *childBounds;
-      }
-    }
-
-    child = currentChild.withReadAccess([&currentChild](svg::DocumentReadAccess&, EntityHandle) {
-      return currentChild.nextSibling();
-    });
-  }
-
-  return result;
+  const std::array<svg::SVGElement, 1> selection{element};
+  const std::vector<Box2d> bounds =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(selection));
+  return bounds.empty() ? std::nullopt : std::optional<Box2d>(bounds.front());
 }
 
 json EditorControlSession::selectedElementJson() const {

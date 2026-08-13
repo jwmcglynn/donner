@@ -192,6 +192,14 @@ public:
   /// Returns the current drag preview, if a drag is in progress.
   [[nodiscard]] std::optional<ActiveDragPreview> activeDragPreview() const;
 
+  /// Returns the drag transform currently committed to the DOM.
+  ///
+  /// Pointer input can advance activeDragPreview() while its transform command remains queued
+  /// behind an in-flight render. Overlay capture reads that older DOM geometry, so presentation
+  /// uses this baseline to project the captured outline into the same frame as the promoted shape
+  /// tile.
+  [[nodiscard]] std::optional<ActiveDragPreview> documentDragPreview(const EditorApp& editor) const;
+
   /// Returns the current selection gesture preview, if a drag is in progress.
   [[nodiscard]] std::optional<ActiveGesturePreview> activeGesturePreview() const;
 
@@ -268,6 +276,15 @@ private:
     /// Current affine transform from the gesture-start document geometry
     /// to the active preview geometry.
     Transform2d currentDocumentFromStartDocument = Transform2d();
+    /// Latest drag transform known to be committed to the DOM. While a transform command is
+    /// queued, overlay geometry is captured in this document frame rather than the pointer's
+    /// current preview frame.
+    Vector2d committedDocumentDelta = Vector2d::Zero();
+    Transform2d committedDocumentFromStartDocument = Transform2d();
+    /// Document frame version at which committedDocumentFromStartDocument was observed. A version
+    /// advance proves that the previous queued drag transform reached the DOM even if another
+    /// unrelated command has since been queued.
+    std::uint64_t committedDocumentFrameVersion = 0;
     /// Whether any `onMouseMove` has fired since `onMouseDown`. A
     /// click-without-drag shouldn't leave an undo entry behind.
     bool hasMoved = false;

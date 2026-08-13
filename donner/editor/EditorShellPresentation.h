@@ -1,10 +1,11 @@
 #pragma once
 /// @file
 /// EditorShell's direct-to-framebuffer presentation seam: converting cached
-/// GL/WGPU tiles and the immediate overlay snapshot into presented pixels.
+/// GL/WGPU tiles and the immediate chrome snapshot into presented pixels.
 /// On Geode/WGPU builds this draws the checkerboard, document tiles, and
-/// selection chrome straight onto the window framebuffer (no intermediate
-/// texture); the tile-geometry helpers are backend-neutral.
+/// selection chrome straight onto the window framebuffer, in that order, in
+/// one frame and with one transform; the tile-geometry helpers are
+/// backend-neutral.
 
 #include <optional>
 #include <vector>
@@ -39,6 +40,48 @@ PresentedFrameTileGeometry PresentedGeometryFromTileView(
 std::optional<PresentedDragBaseline> PresentedBaselineFromDragPreviews(
     const std::optional<SelectTool::ActiveDragPreview>& activePreview,
     const std::optional<SelectTool::ActiveDragPreview>& displayedPreview);
+
+/**
+ * Transform from document coordinates into window-framebuffer device pixels for
+ * one presented frame.
+ *
+ * The single source of the presented frame's placement: document tiles and
+ * editor chrome both derive their transform from this, from the same
+ * `ViewportState`, in the same frame. Nothing else may compute it, or the two
+ * can disagree and the chrome annotates pixels that moved.
+ *
+ * @param viewport Viewport this frame's document pixels are placed with.
+ */
+[[nodiscard]] Transform2d PresentedFramebufferFromDocumentTransform(const ViewportState& viewport);
+
+/**
+ * Return @p snapshot re-pointed at the transform @p presentedViewport places
+ * this frame's document pixels with.
+ *
+ * Capture stamps the transform it happened to sample against, which during a
+ * gesture is one or more frames ahead of the pixels on screen. Re-pointing here
+ * is what collapses that gap: the chrome cannot be drawn with any transform
+ * other than the presented one.
+ *
+ * @param presentedViewport Viewport this frame's document pixels landed in.
+ * @param snapshot Captured chrome geometry.
+ */
+[[nodiscard]] SelectionChromeSnapshot ChromePlacedOnPresentedDocument(
+    const ViewportState& presentedViewport, SelectionChromeSnapshot snapshot);
+
+/// Everything the immediate chrome pass needs to draw one frame of editor
+/// chrome. Captured by value because the direct-render callback runs later in
+/// the frame, after the shell's borrowed snapshot reference would go stale.
+struct ImmediateChromePlan {
+  /// Viewport this frame's document pixels were placed with. The chrome is
+  /// drawn with the transform derived from this, which is the same transform
+  /// \ref DrawDocumentPresentationToFramebuffer placed the tiles with.
+  ViewportState viewport;
+  /// Render-pane rect in screen pixels; chrome is clipped to it.
+  Box2d paneClipRect;
+  /// Chrome geometry, anchored in document space and sized at draw time.
+  SelectionChromeSnapshot snapshot;
+};
 
 #ifdef DONNER_EDITOR_WGPU
 class FramebufferCheckerboardRenderer {
@@ -80,13 +123,24 @@ FrameCostBreakdown::DirectPresentation DrawDocumentPresentationToFramebuffer(
     const std::optional<SelectTool::ActiveDragPreview>& displayedDragPreview,
     Entity suppressedLayerEntity, bool suppressDragTargetTiles);
 
-/// Draw the immediate overlay snapshot (selection chrome, pen previews)
-/// directly onto the window framebuffer.
-void DrawImmediateOverlaySnapshotToFramebuffer(svg::RendererGeode& renderer,
-                                               const gui::EditorWindowWgpuRenderTarget& target,
-                                               const ViewportState& viewport,
-                                               const Box2d& imageClipRect,
-                                               const SelectionChromeSnapshot& snapshot);
+/// Draw editor chrome straight onto the window framebuffer, above the document
+/// tiles and below ImGui.
+///
+/// The snapshot is re-pointed at @p viewport before drawing, so the chrome uses
+/// the exact transform \ref DrawDocumentPresentationToFramebuffer placed this
+/// frame's tiles with. Chrome sizes resolve from that same transform, which is
+/// why handles keep a constant screen size across zoom.
+///
+/// @param renderer Geode renderer bound to the window framebuffer.
+/// @param target Window framebuffer this frame draws into.
+/// @param viewport Viewport this frame's document pixels were placed with.
+/// @param paneClipRect Render-pane rect in screen pixels; chrome is clipped to it.
+/// @param snapshot Chrome geometry captured from the DOM.
+/// @return Wall time spent drawing chrome, in milliseconds.
+double DrawImmediateChromeToFramebuffer(svg::RendererGeode& renderer,
+                                        const gui::EditorWindowWgpuRenderTarget& target,
+                                        const ViewportState& viewport, const Box2d& paneClipRect,
+                                        const SelectionChromeSnapshot& snapshot);
 #endif
 
 }  // namespace donner::editor

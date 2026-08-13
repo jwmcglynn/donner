@@ -18,7 +18,9 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -26,9 +28,14 @@
 #include "donner/base/Vector2.h"
 #include "donner/css/Color.h"
 #include "donner/editor/EditorApp.h"
+#include "donner/editor/EmbeddedSvgIcon.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/LayerTreeModel.h"
 #include "donner/svg/renderer/RendererInterface.h"
+
+namespace donner::svg {
+class Renderer;
+}
 
 namespace donner::editor {
 
@@ -44,11 +51,19 @@ struct LayersLockedRejectionFlash {
   float intensity = 0.0f;
 };
 
+/// Every per-row affordance icon (visible/hidden, locked/unlocked) the panel can
+/// draw, for the shell's startup prewarm batch. The visible and unlocked masks
+/// are on screen from the first frame; the toggled states cost nothing extra to
+/// rasterize in the same batch and keep the first toggle from stalling on a
+/// readback.
+[[nodiscard]] std::span<const EmbeddedSvgIconRequest> LayersPanelIconPrewarmRequests();
+
 /// ImGui Layers panel backed by a `LayerTreeModel` snapshot.
 class LayersPanel {
 public:
   enum class ThumbnailRefreshMode {
     Render,
+    RenderIncremental,
     SwatchesOnly,
   };
 
@@ -72,6 +87,9 @@ public:
   };
   using ThumbnailTextureProvider =
       std::function<ThumbnailTexture(std::uint64_t stableId, const svg::RendererBitmap& bitmap)>;
+  using ThumbnailTextureSnapshotProvider = std::function<ThumbnailTexture(
+      std::uint64_t stableId,
+      const std::shared_ptr<const svg::RendererTextureSnapshot>& textureSnapshot)>;
 
   /// Maps a static layer-affordance icon bitmap to an ImGui texture handle for
   /// display. The icon bitmaps are rendered from embedded Bootstrap SVG resources
@@ -99,8 +117,13 @@ public:
     std::size_t renderedCount = 0;
     /// Number of cached row thumbnails reused during this refresh.
     std::size_t reusedCount = 0;
+    /// Number of stale row thumbnails deferred to a later refresh.
+    std::size_t deferredCount = 0;
     /// Number of rows skipped because the canvas render tree had pending invalidation.
     std::size_t skippedForCanvasInvalidationCount = 0;
+    /// Number of full model/swatch snapshots rebuilt during this refresh.
+    /// Incremental thumbnail follow-up frames keep this at zero.
+    std::size_t snapshotRebuildCount = 0;
     /// Wall time spent in thumbnail rasterization work.
     double renderMs = 0.0;
   };
@@ -121,8 +144,13 @@ public:
   /// @param app Live editor app to snapshot.
   /// @param renderer Optional renderer to use for thumbnail rasterization.
   /// @param mode Whether to render thumbnails or refresh only the row swatches.
-  void refreshSnapshot(const EditorApp& app, svg::RendererInterface* renderer = nullptr,
-                       ThumbnailRefreshMode mode = ThumbnailRefreshMode::Render);
+  /// @param canvasPresentationCurrent True only when the canvas has already
+  ///   presented this exact document version. In that state thumbnail rendering
+  ///   may preserve and work through live render invalidation that belongs to
+  ///   the already-consumed async snapshot.
+  void refreshSnapshot(const EditorApp& app, svg::Renderer* renderer = nullptr,
+                       ThumbnailRefreshMode mode = ThumbnailRefreshMode::Render,
+                       bool canvasPresentationCurrent = false);
 
   /// Render the panel into the current ImGui window. Must be called inside an
   /// `ImGui::Begin(...) / End()` pair. When @p liveApp is null (the worker owns
@@ -139,7 +167,8 @@ public:
   ///   default by passing zero.
   void render(EditorApp* liveApp, const ThumbnailTextureProvider& textureProvider = {},
               const IconTextureProvider& iconTextureProvider = {},
-              float minimumInteractionHeight = 0.0f);
+              float minimumInteractionHeight = 0.0f,
+              const ThumbnailTextureSnapshotProvider& textureSnapshotProvider = {});
 
   /// Set the current locked-rejection flash (or clear it with `std::nullopt`).
   /// When set with a positive intensity and the flashed element matches a
@@ -262,6 +291,8 @@ public:
   ///
   /// @param stableId Stable id of the row.
   [[nodiscard]] const svg::RendererBitmap* rowThumbnail(std::uint64_t stableId) const;
+  [[nodiscard]] const std::shared_ptr<const svg::RendererTextureSnapshot>* rowTextureThumbnail(
+      std::uint64_t stableId) const;
 
   /// Whether the most recent `render` / `handleRowClick` changed the editor
   /// selection. Consumes the flag. Used by `EditorShell` to fire the existing
@@ -289,8 +320,14 @@ public:
   [[nodiscard]] const LayerTreeModel& model() const { return model_; }
 
 private:
+  struct PendingThumbnail {
+    std::uint64_t stableId = 0;
+    svg::SVGElement element;
+  };
+
   struct CachedThumbnail {
     svg::RendererBitmap bitmap;
+    std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot;
     std::uint64_t documentFrameVersion = 0;
     Vector2i maxSizePx = Vector2i::Zero();
   };
@@ -311,6 +348,19 @@ private:
   std::unordered_map<std::uint64_t, CachedThumbnail> thumbnailBitmapByStableId_;
   /// Diagnostics for the most recent thumbnail refresh.
   ThumbnailRefreshStats thumbnailRefreshStats_;
+  /// Snapshot identity used to avoid repeating the O(N) model/style walk while
+  /// an incremental thumbnail batch drains one row per host frame.
+  bool snapshotPrepared_ = false;
+  bool modelRefreshRequested_ = true;
+  std::uint64_t snapshotDocumentGeneration_ = 0;
+  std::uint64_t snapshotDocumentFrameVersion_ = 0;
+  std::vector<std::uint64_t> snapshotSelectionStableIds_;
+  /// Stable, per-snapshot thumbnail work queue. Building it once turns an N-row
+  /// incremental refresh from N full scans into one scan plus N O(1) tasks.
+  bool thumbnailQueuePrepared_ = false;
+  std::vector<PendingThumbnail> pendingThumbnails_;
+  std::size_t pendingThumbnailCursor_ = 0;
+  std::size_t thumbnailQueueBaseReusedCount_ = 0;
   /// Visible-row index of the most recent plain/ctrl click; the anchor for
   /// shift-range selection.
   std::optional<std::size_t> anchorRowIndex_;

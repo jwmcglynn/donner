@@ -33,6 +33,13 @@ namespace donner::editor {
 [[nodiscard]] std::vector<svg::SVGTextElement> CollectRenderableTextRoots(
     const svg::SVGElement& root);
 
+/// Document-space AABB of @p geometry including its rendered stroke extent.
+/// Returns the path geometry bounds when the computed stroke is `none` or has
+/// zero width. Stroke caps, joins, transforms, and non-scaling-stroke are
+/// reflected in the expanded result.
+[[nodiscard]] std::optional<Box2d> GeometryWorldFrameBounds(
+    const svg::SVGGeometryElement& geometry);
+
 /// Document-space AABB of @p text's laid-out glyph ink, or nullopt when the
 /// text has no ink (empty content or unlaid-out text). The text-local ink
 /// box is mapped corner-by-corner through the element's transform, so a
@@ -40,20 +47,20 @@ namespace donner::editor {
 [[nodiscard]] std::optional<Box2d> TextWorldInkBounds(const svg::SVGTextElement& text);
 
 /// Text-local frame rect authored by the text tool: the
-/// `data-donner-text-box-width`/`-height` region anchored one font-size
-/// above the `x`/`y` origin (inverting the tool's "first baseline sits one
-/// font-size below the box top" rule). Nullopt for point text.
+/// `data-donner-text-box-x`/`-y`/`-width`/`-height` region. Legacy boxes
+/// without an explicit frame origin are anchored one font-size above the
+/// text's `x`/`y` origin. Nullopt for point text.
 [[nodiscard]] std::optional<Box2d> AuthoredTextBoxLocal(const svg::SVGTextElement& text);
 
 /// Document-space frame of @p text: the authored text box when present (the
-/// region the user dragged out), otherwise the laid-out ink bounds (the
-/// computed extent of a point-text span). This is the rect that selection
-/// chrome and transform handles anchor to.
+/// region the user dragged out), otherwise the full laid-out object bounds of
+/// a point-text span. Visible stroke extent is included. This is the rect that
+/// selection chrome and transform handles anchor to.
 [[nodiscard]] std::optional<Box2d> TextWorldFrameBounds(const svg::SVGTextElement& text);
 
 /// Snapshot world-space bounds for every selected element that has
 /// renderable content. Elements that are themselves geometry contribute
-/// their own bounds; `<text>` roots contribute their laid-out ink bounds;
+/// their stroke-aware bounds; `<text>` roots contribute their full frame;
 /// group-like elements contribute the union of their renderable
 /// descendants. Elements with no renderable content produce no entry.
 ///

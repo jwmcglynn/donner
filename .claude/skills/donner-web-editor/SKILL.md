@@ -39,15 +39,7 @@ The production package is Geode/WebGPU:
 bazel build --config=editor-wasm //donner/editor/wasm:wasm_web_package
 ```
 
-Build the software fallback separately:
-
-```sh
-bazel build --config=editor-wasm-tiny-skia \
-  //donner/editor/wasm:wasm_tiny_skia_web_package
-```
-
-Do not copy outputs between the backends. Both packages use the same public filenames, so mixing
-their files creates a plausible-looking but invalid site.
+The editor Wasm package is Geode-only; there is no software-fallback package.
 
 ## 2. Serve and verify locally
 
@@ -70,9 +62,12 @@ DONNER_WASM_BACKEND=geode \
   bash donner/editor/wasm/tests/run_tests.sh --headed
 ```
 
-Use the URL printed by the server if port 8000 was occupied. Repeat against TinySkia with
-`serve_http_tiny_skia`, `--config=editor-wasm-tiny-skia`, and
-`DONNER_WASM_BACKEND=tiny_skia`.
+Use the URL printed by the server if port 8000 was occupied.
+
+To reproduce the full CI browser job instead of one suite, run `tools/run-browser-ci.sh`. It builds
+the package, serves a private copy on a free port, verifies the served `editor.wasm` hash, and runs
+every CI lane in CI order with `CI=true`. That script is the single source of truth for the lane
+sequence in `.github/workflows/editor_wasm.yml`; change lanes there, not in the workflow.
 
 Require all of the following before packaging:
 

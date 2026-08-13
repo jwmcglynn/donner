@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import { inflateSync } from "node:zlib";
 
 export interface CssRegion {
@@ -21,6 +21,266 @@ interface PngImage {
   height: number;
   channels: number;
   data: Uint8Array;
+}
+
+export interface PixelBounds {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+  pixels: number;
+}
+
+export interface PngPixelDifferenceStats {
+  comparedPixels: number;
+  changedPixels: number;
+  changedBounds: PixelBounds | null;
+  changedPixelsAbove8: number;
+  maxChannelDelta: number;
+  totalChannelDelta: number;
+}
+
+export interface TextStyleGlyphStats {
+  backgroundPixels: number;
+  glyphPixels: number;
+}
+
+export interface SplashSurfaceCoverageStats {
+  checkerboardPixels: number;
+  darkBackgroundPixels: number;
+  samples: number;
+}
+
+export interface SplashCompositeFrameStats extends SplashSurfaceCoverageStats {
+  teal: PixelBounds | null;
+  yellow: PixelBounds | null;
+}
+
+export interface SplashCompositeFrameCapture {
+  png: Buffer;
+  stats: SplashCompositeFrameStats;
+}
+
+/**
+ * Every tone the editor is known to draw behind or around the document, plus
+ * the capture's own colour histogram.
+ *
+ * `darkBackgroundPixels` and `checkerboardPixels` are the presentation classes
+ * the Splash suites assert on; `paneBackdropPixels` is the composited render
+ * pane behind the document. A capture that contains none of the three is not a
+ * weak observation of the editor, it is an observation of something that is not
+ * the editor - a capture the compositor filled with one flat tone, for
+ * instance - and the histogram is what makes that diagnosable rather than
+ * merely failed. See `isSplashCaptureUsable`.
+ */
+export interface SplashToneCensus extends SplashSurfaceCoverageStats {
+  paneBackdropPixels: number;
+  distinctColors: number;
+  dominantColors: Array<{ color: string; pixels: number }>;
+}
+
+/**
+ * The composited render-pane backdrop, measured as exactly (44,47,56) on both
+ * engines (the same calibration `countSplashSurfaceCoverage` documents).
+ */
+const kPaneBackdropColor = { red: 44, green: 47, blue: 56 };
+
+function censusSplashTones(image: PngImage, dominantColorCount = 4): SplashToneCensus {
+  const coverage = countSplashSurfaceCoverage(image);
+  const histogram = new Map<number, number>();
+  let paneBackdropPixels = 0;
+  for (let offset = 0; offset < image.data.length; offset += image.channels) {
+    const red = image.data[offset];
+    const green = image.data[offset + 1];
+    const blue = image.data[offset + 2];
+    const key = (red << 16) | (green << 8) | blue;
+    histogram.set(key, (histogram.get(key) ?? 0) + 1);
+    const alpha = image.channels === 4 ? image.data[offset + 3] : 255;
+    if (
+      alpha >= 200 && Math.abs(red - kPaneBackdropColor.red) <= 2
+      && Math.abs(green - kPaneBackdropColor.green) <= 2
+      && Math.abs(blue - kPaneBackdropColor.blue) <= 2
+    ) {
+      ++paneBackdropPixels;
+    }
+  }
+  const dominantColors = [...histogram.entries()]
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, dominantColorCount)
+    .map(([key, pixels]) => ({
+      color: `rgb(${(key >> 16) & 0xff},${(key >> 8) & 0xff},${key & 0xff})`,
+      pixels,
+    }));
+  return {
+    ...coverage,
+    paneBackdropPixels,
+    distinctColors: histogram.size,
+    dominantColors,
+  };
+}
+
+/**
+ * Whether a capture is an observation of the editor at all.
+ *
+ * A capture is unusable when it carries none of the editor's own tones, or
+ * when it is a single flat colour. Both are the arithmetic signature of a
+ * capture that never contained the composited document - the shape of the
+ * zero-artboard/zero-checkerboard sample a shared runner produced - and
+ * neither can decide the presentation invariants the Splash suites assert.
+ * Callers retake instead of scoring such a sample.
+ */
+export function isSplashCaptureUsable(census: SplashToneCensus): boolean {
+  const knownTonePixels = census.darkBackgroundPixels + census.checkerboardPixels
+    + census.paneBackdropPixels;
+  return knownTonePixels > 0 && census.distinctColors > 1;
+}
+
+/** One capture, scored for both presentation coverage and letter geometry. */
+export interface SplashPresentationFrame {
+  census: SplashToneCensus;
+  /** `splash-yellow` bounds inside `letterWindow`, in page CSS pixels. */
+  letter: PixelBounds | null;
+  /** `selection-teal` bounds inside `letterWindow`, in page CSS pixels. */
+  outline: PixelBounds | null;
+  png: Buffer;
+}
+
+/**
+ * Capture one region and read the coverage census and the letter geometry out
+ * of THAT capture.
+ *
+ * Reading the two from separate screenshots is what let a drag sample pair a
+ * coverage number from one presented frame with a letter position from the
+ * next; every observable a per-frame invariant compares has to come from the
+ * same frame. `letterWindow` is a page-CSS rectangle inside `region`, and the
+ * returned bounds are in page CSS pixels, so the caller never has to know the
+ * device pixel ratio the runner chose.
+ */
+export async function captureSplashPresentationFrame(
+  page: Page,
+  region: CssRegion,
+  letterWindow: CssRegion,
+): Promise<SplashPresentationFrame> {
+  const png = await page.screenshot({ clip: region });
+  const image = decodePng(png);
+  const scaleX = image.width / region.width;
+  const scaleY = image.height / region.height;
+  const searchBounds = {
+    minX: Math.floor((letterWindow.x - region.x) * scaleX),
+    minY: Math.floor((letterWindow.y - region.y) * scaleY),
+    maxX: Math.ceil((letterWindow.x - region.x + letterWindow.width) * scaleX),
+    maxY: Math.ceil((letterWindow.y - region.y + letterWindow.height) * scaleY),
+  };
+  const toPageBounds = (bounds: PixelBounds | null): PixelBounds | null =>
+    bounds === null ? null : {
+      minX: region.x + bounds.minX / scaleX,
+      minY: region.y + bounds.minY / scaleY,
+      maxX: region.x + bounds.maxX / scaleX,
+      maxY: region.y + bounds.maxY / scaleY,
+      pixels: bounds.pixels,
+    };
+  return {
+    census: censusSplashTones(image),
+    letter: toPageBounds(findPixelBounds(image, "splash-yellow", searchBounds)),
+    outline: toPageBounds(findPixelBounds(image, "selection-teal", searchBounds)),
+    png,
+  };
+}
+
+/**
+ * Count the two Splash presentation classes inside a decoded render-pane capture.
+ *
+ * Both windows are calibrated against measured composited output, not against
+ * the source colors: a settled Donner Splash was captured through
+ * `page.screenshot()` over the render pane on both Firefox and Chromium-ANGLE,
+ * and the two engines produced byte-identical histograms, so one calibration
+ * covers the suite.
+ *
+ * `darkBackgroundPixels` counts the Splash document's own dark backdrop. The
+ * artboard fill is `#0d0f1d` and encodes as exactly (13,15,29); the art layers a
+ * second flat dark tone at (16,19,30) over part of it. Together they are 43% of
+ * the pane. The window spans just those two tones, which is what makes the
+ * measurement mean "the document is presented": the composited render-pane
+ * backdrop is (44,47,56) and the welcome picker's chrome is (17,18,21) and
+ * (36,39,43), so a pane with no document in it now counts near zero. The
+ * previous window (red/green 20-72 with a blue bias) matched the pane backdrop
+ * and the picker chrome instead, so it reported ~39% coverage whether or not the
+ * document had rendered at all.
+ *
+ * `checkerboardPixels` counts the transparency checkerboard, whose cells are the
+ * neutral grays 40 and 60 (`kTransparencyCheckerboardDarkColor` /
+ * `...LightColor` in `donner/svg/renderer/RendererInterface.h`) and which
+ * compositing reproduces exactly. Requiring near-neutral channels keeps the
+ * (44,47,56) pane backdrop out. The previous window matched near-white pixels,
+ * which no checkerboard has ever drawn but the Splash lightning artwork does.
+ */
+function countSplashSurfaceCoverage(image: PngImage): SplashSurfaceCoverageStats {
+  let checkerboardPixels = 0;
+  let darkBackgroundPixels = 0;
+  for (let offset = 0; offset < image.data.length; offset += image.channels) {
+    const red = image.data[offset];
+    const green = image.data[offset + 1];
+    const blue = image.data[offset + 2];
+    const alpha = image.channels === 4 ? image.data[offset + 3] : 255;
+    if (alpha < 200) {
+      continue;
+    }
+    const maxRgb = Math.max(red, green, blue);
+    const minRgb = Math.min(red, green, blue);
+    if (
+      maxRgb - minRgb <= 3 && ((minRgb >= 37 && minRgb <= 43) || (minRgb >= 57 && minRgb <= 63))
+    ) {
+      ++checkerboardPixels;
+    }
+    if (red >= 11 && red <= 18 && green >= 13 && green <= 21 && blue >= 27 && blue <= 32) {
+      ++darkBackgroundPixels;
+    }
+  }
+  return {
+    checkerboardPixels,
+    darkBackgroundPixels,
+    samples: image.width * image.height,
+  };
+}
+
+export function readSplashCompositeFrameStatsFromPng(
+  png: Buffer,
+  letterSearchBounds: Omit<PixelBounds, "pixels">,
+): SplashCompositeFrameStats {
+  const image = decodePng(png);
+  return {
+    ...countSplashSurfaceCoverage(image),
+    teal: findPixelBounds(image, "selection-teal", letterSearchBounds),
+    yellow: findPixelBounds(image, "splash-yellow", letterSearchBounds),
+  };
+}
+
+export type EditorPixelTarget = "basic-blue" | "selection-teal" | "splash-yellow";
+
+export function readEditorPixelBoundsFromPng(
+  png: Buffer,
+  target: EditorPixelTarget,
+  cssSize: Pick<CssRegion, "width" | "height">,
+  searchBounds: Omit<PixelBounds, "pixels">,
+): PixelBounds | null {
+  const image = decodePng(png);
+  const scaleX = image.width / cssSize.width;
+  const scaleY = image.height / cssSize.height;
+  const bounds = findPixelBounds(image, target, {
+    minX: Math.floor(searchBounds.minX * scaleX),
+    minY: Math.floor(searchBounds.minY * scaleY),
+    maxX: Math.ceil(searchBounds.maxX * scaleX),
+    maxY: Math.ceil(searchBounds.maxY * scaleY),
+  });
+  return bounds === null
+    ? null
+    : {
+      minX: bounds.minX / scaleX,
+      minY: bounds.minY / scaleY,
+      maxX: bounds.maxX / scaleX,
+      maxY: bounds.maxY / scaleY,
+      pixels: bounds.pixels,
+    };
 }
 
 function paethPredictor(left: number, up: number, upLeft: number): number {
@@ -113,27 +373,107 @@ function decodePng(buffer: Buffer): PngImage {
   return { width, height, channels, data: output };
 }
 
-export async function readCanvasColorStats(
-  page: Page,
-  region: CssRegion,
-): Promise<CanvasColorStats> {
-  const canvasBox = await page.locator("canvas#canvas").boundingBox();
-  if (canvasBox === null) {
-    throw new Error("canvas not found");
+export function readPngPixelDifferenceStats(
+  beforeBuffer: Buffer,
+  afterBuffer: Buffer,
+  region?: CssRegion,
+): PngPixelDifferenceStats {
+  const before = decodePng(beforeBuffer);
+  const after = decodePng(afterBuffer);
+  if (
+    before.width !== after.width
+    || before.height !== after.height
+    || before.channels !== after.channels
+  ) {
+    throw new Error(
+      `PNG dimensions differ: ${before.width}x${before.height}x${before.channels}`
+        + ` vs ${after.width}x${after.height}x${after.channels}`,
+    );
   }
 
-  const x = Math.max(0, region.x);
-  const y = Math.max(0, region.y);
-  const width = Math.max(1, Math.min(region.width, canvasBox.width - x));
-  const height = Math.max(1, Math.min(region.height, canvasBox.height - y));
-  const clip = {
-    x: canvasBox.x + x,
-    y: canvasBox.y + y,
-    width,
-    height,
-  };
-  const image = decodePng(await page.screenshot({ clip }));
+  const minX = Math.max(0, Math.floor(region?.x ?? 0));
+  const minY = Math.max(0, Math.floor(region?.y ?? 0));
+  const maxX = Math.min(
+    before.width,
+    Math.ceil((region?.x ?? 0) + (region?.width ?? before.width)),
+  );
+  const maxY = Math.min(
+    before.height,
+    Math.ceil((region?.y ?? 0) + (region?.height ?? before.height)),
+  );
+  let changedPixels = 0;
+  let changedPixelsAbove8 = 0;
+  let maxChannelDelta = 0;
+  let totalChannelDelta = 0;
+  let changedMinX = before.width;
+  let changedMinY = before.height;
+  let changedMaxX = -1;
+  let changedMaxY = -1;
+  for (let y = minY; y < maxY; ++y) {
+    for (let x = minX; x < maxX; ++x) {
+      const offset = (y * before.width + x) * before.channels;
+      let pixelChanged = false;
+      let pixelMaxDelta = 0;
+      for (let channel = 0; channel < before.channels; ++channel) {
+        const delta = Math.abs(before.data[offset + channel] - after.data[offset + channel]);
+        maxChannelDelta = Math.max(maxChannelDelta, delta);
+        pixelMaxDelta = Math.max(pixelMaxDelta, delta);
+        totalChannelDelta += delta;
+        pixelChanged ||= delta !== 0;
+      }
+      if (pixelChanged) {
+        ++changedPixels;
+        changedPixelsAbove8 += pixelMaxDelta > 8 ? 1 : 0;
+        changedMinX = Math.min(changedMinX, x);
+        changedMinY = Math.min(changedMinY, y);
+        changedMaxX = Math.max(changedMaxX, x);
+        changedMaxY = Math.max(changedMaxY, y);
+      }
+    }
+  }
 
+  return {
+    comparedPixels: Math.max(0, maxX - minX) * Math.max(0, maxY - minY),
+    changedPixels,
+    changedBounds: changedPixels > 0
+      ? {
+        minX: changedMinX,
+        minY: changedMinY,
+        maxX: changedMaxX,
+        maxY: changedMaxY,
+        pixels: changedPixels,
+      }
+      : null,
+    changedPixelsAbove8,
+    maxChannelDelta,
+    totalChannelDelta,
+  };
+}
+
+export function readCssPngPixelDifferenceStats(
+  beforeBuffer: Buffer,
+  afterBuffer: Buffer,
+  screenshotCssSize: Pick<CssRegion, "width" | "height">,
+  region?: CssRegion,
+): PngPixelDifferenceStats {
+  const image = decodePng(beforeBuffer);
+  const scaleX = image.width / screenshotCssSize.width;
+  const scaleY = image.height / screenshotCssSize.height;
+  return readPngPixelDifferenceStats(
+    beforeBuffer,
+    afterBuffer,
+    region === undefined
+      ? undefined
+      : {
+        x: region.x * scaleX,
+        y: region.y * scaleY,
+        width: region.width * scaleX,
+        height: region.height * scaleY,
+      },
+  );
+}
+
+function measureImage(image: PngImage, region: CssRegion): CanvasColorStats {
   let coloredPixels = 0;
   let nonBlackPixels = 0;
   let maxChannel = 0;
@@ -158,6 +498,340 @@ export async function readCanvasColorStats(
     coloredPixels,
     nonBlackPixels,
     maxChannel,
-    region: { x, y, width: image.width, height: image.height },
+    region,
   };
+}
+
+function matchesEditorPixelTarget(
+  target: EditorPixelTarget,
+  red: number,
+  green: number,
+  blue: number,
+  alpha: number,
+): boolean {
+  if (alpha < 180) {
+    return false;
+  }
+  if (target === "basic-blue") {
+    return blue > 170 && blue > green + 45 && green > red + 25;
+  }
+  if (target === "splash-yellow") {
+    return red > 180 && green > 135 && blue < 150 && red > blue + 70 && green > blue + 45;
+  }
+  // `selection-teal`: the editor's accent - (49,198,179) where the overlay
+  // covers a whole pixel - anywhere the selection chrome lands, including the
+  // blends it makes with what is behind it.
+  //
+  // This window deliberately does not test absolute brightness. The selection
+  // stroke is 1.25 LOGICAL pixels (`kSelectionStrokeLogicalPixels`), so at a
+  // device pixel ratio of 1 it is barely wider than one device pixel, and the
+  // old brightness floor (green > 170) only admitted pixels the stroke covered
+  // roughly 85% of. Nothing guarantees such a pixel exists: a 1.25-pixel wide
+  // stroke is only guaranteed to cover SOME pixel 62% of the way, so whether
+  // the count comes out in the hundreds or at zero is left to where the
+  // selection bounds land against the pixel grid and to how the runner's
+  // rasterizer antialiases them. That is not a property of the outline being
+  // on screen. Measured: CI's Gecko lane scored a selection outline at 48
+  // pixels of change where this machine scores 577 from a byte-identical
+  // document raster at the same ratio, and read the Splash press outline as
+  // absent entirely. This window asks for the accent's shape instead, which
+  // survives every coverage down to 41%: green and blue both far above red,
+  // with green at or above blue.
+  //
+  // Green-not-below-blue is what keeps the artwork out, and it is measured
+  // rather than assumed. The Splash's `Donner_line` swoosh is (83,196,241);
+  // its blue runs 14-45 above its green at every coverage, and under the old
+  // brightness window its brightest antialiased pixels scored as selection
+  // chrome - 115 of them inside the letter's own neighbourhood before anything
+  // was selected. Scored over captured Splash frames at both ratios, this
+  // window finds 0 pixels there before the click and 900 (ratio 1) / 3054
+  // (ratio 2) after it, against 115/692 and 72/2463 for the old one.
+  return green > 90 && blue > 80 && green > red + 55 && blue > red + 40 && blue <= green + 12
+    && green - blue < 60;
+}
+
+function findPixelBounds(
+  image: PngImage,
+  target: EditorPixelTarget,
+  searchBounds?: Omit<PixelBounds, "pixels">,
+): PixelBounds | null {
+  const searchMinX = Math.max(0, searchBounds?.minX ?? 0);
+  const searchMinY = Math.max(0, searchBounds?.minY ?? 0);
+  const searchMaxX = Math.min(image.width - 1, searchBounds?.maxX ?? image.width - 1);
+  const searchMaxY = Math.min(image.height - 1, searchBounds?.maxY ?? image.height - 1);
+  let minX = image.width;
+  let minY = image.height;
+  let maxX = -1;
+  let maxY = -1;
+  let pixels = 0;
+  for (let y = searchMinY; y <= searchMaxY; ++y) {
+    for (let x = searchMinX; x <= searchMaxX; ++x) {
+      const offset = (y * image.width + x) * image.channels;
+      const red = image.data[offset];
+      const green = image.data[offset + 1];
+      const blue = image.data[offset + 2];
+      const alpha = image.channels === 4 ? image.data[offset + 3] : 255;
+      if (!matchesEditorPixelTarget(target, red, green, blue, alpha)) {
+        continue;
+      }
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x);
+      maxY = Math.max(maxY, y);
+      pixels += 1;
+    }
+  }
+  return pixels > 0 ? { minX, minY, maxX, maxY, pixels } : null;
+}
+
+function measureTextStyleGlyphs(image: PngImage): TextStyleGlyphStats {
+  const isBackground = (red: number, green: number, blue: number, alpha: number) =>
+    alpha > 200 && red >= 15 && red <= 32 && green >= 24 && green <= 45 && blue >= 34
+    && blue <= 55;
+
+  let minBackgroundX = image.width;
+  let minBackgroundY = image.height;
+  let maxBackgroundX = -1;
+  let maxBackgroundY = -1;
+  let backgroundPixels = 0;
+  for (let y = 0; y < image.height; ++y) {
+    for (let x = 0; x < image.width; ++x) {
+      const offset = (y * image.width + x) * image.channels;
+      const alpha = image.channels === 4 ? image.data[offset + 3] : 255;
+      if (
+        !isBackground(image.data[offset], image.data[offset + 1], image.data[offset + 2], alpha)
+      ) {
+        continue;
+      }
+      minBackgroundX = Math.min(minBackgroundX, x);
+      minBackgroundY = Math.min(minBackgroundY, y);
+      maxBackgroundX = Math.max(maxBackgroundX, x);
+      maxBackgroundY = Math.max(maxBackgroundY, y);
+      backgroundPixels += 1;
+    }
+  }
+
+  if (backgroundPixels === 0) {
+    return { backgroundPixels: 0, glyphPixels: 0 };
+  }
+
+  let glyphPixels = 0;
+  for (let y = minBackgroundY; y <= maxBackgroundY; ++y) {
+    for (let x = minBackgroundX; x <= maxBackgroundX; ++x) {
+      const offset = (y * image.width + x) * image.channels;
+      const red = image.data[offset];
+      const green = image.data[offset + 1];
+      const blue = image.data[offset + 2];
+      const alpha = image.channels === 4 ? image.data[offset + 3] : 255;
+      const neutralLight = alpha > 200 && Math.min(red, green, blue) > 130
+        && Math.max(red, green, blue) - Math.min(red, green, blue) < 35;
+      const mintText = alpha > 200 && red > 100 && green > 170 && blue > 140
+        && green - red > 30 && green - blue > 10;
+      if (neutralLight || mintText) {
+        glyphPixels += 1;
+      }
+    }
+  }
+
+  return { backgroundPixels, glyphPixels };
+}
+
+export async function readElementColorStats(locator: Locator): Promise<CanvasColorStats> {
+  const box = await locator.boundingBox();
+  if (box === null) {
+    throw new Error("element not found");
+  }
+  const image = decodePng(await locator.screenshot());
+  return measureImage(image, { x: 0, y: 0, width: image.width, height: image.height });
+}
+
+export async function captureSplashCompositeFrame(
+  page: Page,
+  region: CssRegion,
+  letterSearchBounds: Omit<PixelBounds, "pixels">,
+): Promise<SplashCompositeFrameCapture> {
+  const png = await page.screenshot({ clip: region });
+  const image = decodePng(png);
+  const screenshotScaleX = image.width / region.width;
+  const screenshotScaleY = image.height / region.height;
+  const screenshotLetterSearchBounds = {
+    minX: Math.floor(letterSearchBounds.minX * screenshotScaleX),
+    minY: Math.floor(letterSearchBounds.minY * screenshotScaleY),
+    maxX: Math.ceil(letterSearchBounds.maxX * screenshotScaleX),
+    maxY: Math.ceil(letterSearchBounds.maxY * screenshotScaleY),
+  };
+  const toCssBounds = (
+    bounds: PixelBounds | null,
+  ): PixelBounds | null => bounds === null
+    ? null
+    : {
+      minX: bounds.minX / screenshotScaleX,
+      minY: bounds.minY / screenshotScaleY,
+      maxX: bounds.maxX / screenshotScaleX,
+      maxY: bounds.maxY / screenshotScaleY,
+      pixels: bounds.pixels,
+  };
+  const stats = readSplashCompositeFrameStatsFromPng(
+    png,
+    screenshotLetterSearchBounds,
+  );
+  return {
+    png,
+    stats: {
+      ...stats,
+      teal: toCssBounds(stats.teal),
+      yellow: toCssBounds(stats.yellow),
+    },
+  };
+}
+
+export async function readSplashCompositeFrameStats(
+  page: Page,
+  region: CssRegion,
+  letterSearchBounds: Omit<PixelBounds, "pixels">,
+): Promise<SplashCompositeFrameStats> {
+  return (await captureSplashCompositeFrame(page, region, letterSearchBounds)).stats;
+}
+
+export async function findElementColoredPixel(locator: Locator): Promise<{ x: number; y: number }> {
+  const box = await locator.boundingBox();
+  if (box === null) {
+    throw new Error("element not found");
+  }
+  const image = decodePng(await locator.screenshot());
+  for (let y = 0; y < image.height; ++y) {
+    for (let x = 0; x < image.width; ++x) {
+      const offset = (y * image.width + x) * image.channels;
+      const red = image.data[offset];
+      const green = image.data[offset + 1];
+      const blue = image.data[offset + 2];
+      const alpha = image.channels === 4 ? image.data[offset + 3] : 255;
+      const maxRgb = Math.max(red, green, blue);
+      const minRgb = Math.min(red, green, blue);
+      if (alpha > 0 && maxRgb > 80 && maxRgb - minRgb > 30) {
+        return {
+          x: ((x + 0.5) / image.width) * box.width,
+          y: ((y + 0.5) / image.height) * box.height,
+        };
+      }
+    }
+  }
+  throw new Error("element contains no colored pixel");
+}
+
+export async function readCanvasColorStats(
+  page: Page,
+  region: CssRegion,
+): Promise<CanvasColorStats> {
+  const canvasBox = await page.locator("canvas#canvas").boundingBox();
+  if (canvasBox === null) {
+    throw new Error("canvas not found");
+  }
+
+  const x = Math.max(0, region.x);
+  const y = Math.max(0, region.y);
+  const width = Math.max(1, Math.min(region.width, canvasBox.width - x));
+  const height = Math.max(1, Math.min(region.height, canvasBox.height - y));
+  const clip = {
+    x: canvasBox.x + x,
+    y: canvasBox.y + y,
+    width,
+    height,
+  };
+  const image = decodePng(await page.screenshot({ clip }));
+
+  return measureImage(image, { x, y, width: image.width, height: image.height });
+}
+
+export async function readTextStyleGlyphStats(
+  page: Page,
+  region: CssRegion,
+): Promise<TextStyleGlyphStats> {
+  const canvasBox = await page.locator("canvas#canvas").boundingBox();
+  if (canvasBox === null) {
+    throw new Error("canvas not found");
+  }
+
+  const x = Math.max(0, region.x);
+  const y = Math.max(0, region.y);
+  const width = Math.max(1, Math.min(region.width, canvasBox.width - x));
+  const height = Math.max(1, Math.min(region.height, canvasBox.height - y));
+  const image = decodePng(
+    await page.screenshot({
+      clip: { x: canvasBox.x + x, y: canvasBox.y + y, width, height },
+    }),
+  );
+  return measureTextStyleGlyphs(image);
+}
+
+export async function readEditorPixelBounds(
+  page: Page,
+  region: CssRegion,
+  target: EditorPixelTarget,
+): Promise<PixelBounds | null> {
+  const image = decodePng(await page.screenshot({ clip: region }));
+  return findPixelBounds(image, target);
+}
+
+export async function readEditorResizePixelBounds(
+  page: Page,
+  region: CssRegion,
+): Promise<{ blue: PixelBounds | null; teal: PixelBounds | null }> {
+  const image = decodePng(await page.screenshot({ clip: region }));
+  const blue = findPixelBounds(image, "basic-blue");
+  const selectionSearchMargin = 32;
+  return {
+    blue,
+    teal: blue === null
+      ? findPixelBounds(image, "selection-teal")
+      : findPixelBounds(image, "selection-teal", {
+        minX: blue.minX - selectionSearchMargin,
+        minY: blue.minY - selectionSearchMargin,
+        maxX: blue.maxX + selectionSearchMargin,
+        maxY: blue.maxY + selectionSearchMargin,
+      }),
+  };
+}
+
+export interface EditorBackgroundCoverageStats {
+  editorBackgroundPixels: number;
+  samples: number;
+}
+
+/**
+ * Count pixels showing the bare editor background inside a page region.
+ *
+ * An uncovered render pane shows the composited pane backdrop, which ANGLE
+ * screenshots encode as exactly (13,15,29) (measured; the histogram of an
+ * uncovered region is a single flat color). The Donner Splash artboard lands
+ * at (16,19,30): only one blue level away, so blue cannot discriminate and
+ * the red/green channels carry the match. The window is one level per channel
+ * around the measured backdrop: wide enough for compositor rounding, and
+ * tight enough that neither the artboard nor the dark Splash cloud gradients
+ * (which swept the old nine-level window at deep zoom) count as uncovered
+ * background.
+ */
+export async function readEditorBackgroundCoverage(
+  page: Page,
+  region: CssRegion,
+): Promise<EditorBackgroundCoverageStats> {
+  const image = decodePng(await page.screenshot({ clip: region }));
+  let editorBackgroundPixels = 0;
+  for (let offset = 0; offset < image.data.length; offset += image.channels) {
+    const red = image.data[offset];
+    const green = image.data[offset + 1];
+    const blue = image.data[offset + 2];
+    const alpha = image.channels === 4 ? image.data[offset + 3] : 255;
+    if (alpha < 200) {
+      continue;
+    }
+    if (
+      red >= 12 && red <= 14
+      && green >= 14 && green <= 16
+      && blue >= 28 && blue <= 30
+    ) {
+      ++editorBackgroundPixels;
+    }
+  }
+  return { editorBackgroundPixels, samples: image.width * image.height };
 }

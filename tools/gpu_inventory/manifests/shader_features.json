@@ -227,15 +227,17 @@
       ],
       "features": [
         "array",
+        "break",
         "floor",
         "if",
         "let",
         "max",
         "min",
         "return",
+        "sign",
         "var"
       ],
-      "lineCount": 31,
+      "lineCount": 41,
       "structs": [
         "Params"
       ]

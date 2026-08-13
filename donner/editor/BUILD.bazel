@@ -32,14 +32,6 @@ config_setting(
 )
 
 config_setting(
-    name = "wasm_tiny_skia_enabled",
-    flag_values = {
-        "//donner/editor/wasm:enable_wasm": "true",
-        "//donner/svg/renderer:renderer_backend": "tiny_skia",
-    },
-)
-
-config_setting(
     name = "linux_tracy_enabled",
     constraint_values = ["@platforms//os:linux"],
     flag_values = {
@@ -58,6 +50,33 @@ config_setting(
 exports_files(
     ["main.cc"],
     visibility = ["//donner/editor/wasm:__pkg__"],
+)
+
+# Header-free carrier for the the single-canvas architecture whole-app-in-worker define.
+# `defines` propagate to every dependent, so wiring this into the two roots of
+# the editor dependency graph that own browser seams (the window and the
+# document presenter) reaches the shell, the input bridge, and `main.cc`
+# without repeating the select. Resolves to an empty list off wasm+Geode, so
+# desktop compile commands are unchanged.
+cc_library(
+    name = "whole_app_worker_config",
+    defines = select({
+        ":wasm_geode_enabled": ["DONNER_EDITOR_WHOLE_APP_WORKER"],
+        "//conditions:default": [],
+    }),
+)
+
+# Main-thread bridges for the whole-app-in-worker build. Compiles to nothing
+# unless `whole_app_worker_config` turns the define on.
+donner_cc_library(
+    name = "whole_app_worker_bridge",
+    srcs = ["WholeAppWorkerBridge.cc"],
+    hdrs = ["WholeAppWorkerBridge.h"],
+    deps = [
+        ":whole_app_worker_config",
+        "//donner/base:asyncify_suspend_probe",
+        "//donner/base:memory_attribution",
+    ],
 )
 
 donner_cc_library(
@@ -145,14 +164,11 @@ donner_cc_library(
         "//donner/base",
         "//donner/svg",
         "//donner/svg/parser",
-        "//donner/svg/renderer:renderer_tiny_skia",
+        "//donner/svg/renderer",
+        "@glfw",
     ] + select({
-        ":wasm_tiny_skia_enabled": [
-            "//third_party/emscripten-glfw",
-        ],
-        "//conditions:default": [
-            "@glfw",
-        ],
+        ":wasm_geode_enabled": [],
+        "//conditions:default": ["//donner/svg/renderer:renderer_tiny_skia"],
     }),
 )
 
@@ -236,6 +252,11 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "pinch_zoom_policy",
+    hdrs = ["PinchZoomPolicy.h"],
+)
+
+donner_cc_library(
     name = "pinch_event_monitor",
     srcs = ["PinchEventMonitor.cc"] + select({
         "@platforms//os:macos": [],
@@ -243,6 +264,7 @@ donner_cc_library(
     }),
     hdrs = ["PinchEventMonitor.h"],
     deps = [
+        ":pinch_zoom_policy",
         ":render_pane_gesture",
     ],
 )
@@ -480,9 +502,12 @@ donner_cc_library(
         ":tracy_wrapper",
         ":viewport_state",
         "//donner/base",
+        "//donner/base:memory_attribution",
         "//donner/svg",
         "//donner/svg/compositor",
+        "//donner/svg/parser",
         "//donner/svg/renderer",
+        "//donner/svg/renderer:renderer_driver",
     ],
 )
 
@@ -525,9 +550,6 @@ donner_cc_library(
             "//third_party/emscripten-glfw",
             "@imgui//:imgui_wgpu_backend",
         ],
-        ":wasm_tiny_skia_enabled": [
-            "//third_party/emscripten-glfw",
-        ],
         "//donner/svg/renderer:renderer_backend_geode": [
             "//donner/svg/renderer:renderer_geode",
             "@imgui//:imgui_wgpu_backend",
@@ -545,11 +567,9 @@ donner_cc_library(
     deps = [
         ":pinch_event_monitor",
         ":render_pane_gesture",
+        ":whole_app_worker_bridge",
         "//donner/editor/gui:editor_window",
     ] + select({
-        ":wasm_tiny_skia_enabled": [
-            "//third_party/emscripten-glfw",
-        ],
         "@platforms//os:macos": [
             ":pinch_event_monitor_macos",
             "@glfw",
@@ -688,7 +708,6 @@ donner_cc_library(
         "//donner/svg/parser",
         "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_interface",
-        "//donner/svg/renderer:renderer_tiny_skia",
     ],
 )
 
@@ -793,9 +812,6 @@ donner_cc_library(
             "//third_party/emscripten-glfw",
             "@imgui//:imgui_wgpu_backend",
         ],
-        ":wasm_tiny_skia_enabled": [
-            "//third_party/emscripten-glfw",
-        ],
         "//donner/svg/renderer:renderer_backend_geode": [
             "//donner/svg/renderer:renderer_geode",
             "@imgui//:imgui_wgpu_backend",
@@ -843,6 +859,30 @@ donner_cc_library(
     ],
 )
 
+# Per-frame decision of where document pixels land: the window framebuffer
+# underlay, or a worker-owned surface outside it. Both concrete presenters reach
+# the outside world through injected sinks, so the placement math and the
+# frame-token gating stay unit-testable headlessly on any build.
+donner_cc_library(
+    name = "document_presenter",
+    srcs = ["DocumentPresenter.cc"],
+    hdrs = ["DocumentPresenter.h"],
+    defines = select({
+        ":wasm_geode_enabled": ["DONNER_EDITOR_WGPU"],
+        "//donner/svg/renderer:renderer_backend_geode": ["DONNER_EDITOR_WGPU"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":async_renderer",
+        ":gl_texture_cache",
+        ":render_pane_presenter",
+        ":select_tool",
+        ":viewport_state",
+        ":whole_app_worker_config",
+        "//donner/base",
+    ],
+)
+
 donner_cc_library(
     name = "presentation_render_scheduler",
     srcs = ["PresentationRenderScheduler.cc"],
@@ -872,6 +912,7 @@ donner_cc_library(
         ":tracy_wrapper",
         ":viewport_interaction_controller",
         "//donner/base",
+        "//donner/base:memory_attribution",
         "//donner/svg",
     ],
 )
@@ -917,6 +958,8 @@ donner_cc_library(
         ":clipboard_interface",
         ":compositor_debug_panel",
         ":dialog_presenter",
+        ":disclosure_chevron",
+        ":document_presenter",
         ":document_save",
         ":document_sync_controller",
         ":drag_coalesce",
@@ -926,6 +969,7 @@ donner_cc_library(
         ":editor_sample_catalog",
         ":editor_shell_layout",
         ":editor_theme",
+        ":embedded_svg_icon",
         ":focus_view",
         ":frame_cost_breakdown",
         ":frame_miss_telemetry",
@@ -936,10 +980,12 @@ donner_cc_library(
         ":layer_inspector_diagnostics",
         ":layer_tree_model",
         ":layers_panel",
+        ":lock_state",
         ":menu_bar_presenter",
         ":native_dialog_coordinator",
         ":native_window_chrome",
         ":pen_tool",
+        ":pinch_zoom_policy",
         ":render_coordinator",
         ":render_pane_presenter",
         ":rotate_cursor_set",
@@ -966,6 +1012,7 @@ donner_cc_library(
         ":viewport_svg_export",
         ":xml_autocomplete",
         "//donner/base",
+        "//donner/base:memory_attribution",
         "//donner/base/xml",
         "//donner/editor/gui:editor_window",
         "//donner/editor/repro:repro_recorder",
@@ -1280,6 +1327,7 @@ donner_cc_binary(
         ":editor_shell",
         ":editor_splash",
         ":notice",
+        ":pinch_zoom_policy",
         ":tracy_wrapper",
         "//donner/base",
         "//donner/base:failure_signal_handler",

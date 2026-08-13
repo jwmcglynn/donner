@@ -524,6 +524,102 @@ TEST(EditorWindowTest, ComputeUiScaleConfigClampsToOne) {
   EXPECT_FLOAT_EQ(config.fontGlobalScale(), 1.0f);
 }
 
+TEST(EditorWindowTest, WasmSurfaceFailuresUseStatusAwareBoundedRetries) {
+  using Failure = internal::WgpuSurfaceFailureKind;
+
+  EXPECT_EQ(internal::WgpuSurfaceRetryDecisionFor(Failure::Timeout, 0u),
+            (internal::WgpuSurfaceRetryDecision{.requestFrame = true, .reconfigure = false}));
+  EXPECT_EQ(internal::WgpuSurfaceRetryDecisionFor(Failure::OutdatedOrLost, 1u),
+            (internal::WgpuSurfaceRetryDecision{.requestFrame = true, .reconfigure = true}));
+  EXPECT_EQ(internal::WgpuSurfaceRetryDecisionFor(Failure::Setup, 2u),
+            (internal::WgpuSurfaceRetryDecision{.requestFrame = true, .reconfigure = false}));
+  EXPECT_EQ(internal::WgpuSurfaceRetryDecisionFor(Failure::Timeout, 3u),
+            (internal::WgpuSurfaceRetryDecision{}));
+  EXPECT_EQ(internal::WgpuSurfaceRetryDecisionFor(Failure::Fatal, 0u),
+            (internal::WgpuSurfaceRetryDecision{}));
+}
+
+TEST(EditorWindowTest, WasmSurfaceClearColorNeverRequiresUnsupportedTransparency) {
+  constexpr std::array<float, 4> kTransparent = {0.11f, 0.11f, 0.13f, 0.0f};
+
+  // A premultiplied-alpha surface composites the transparent clear correctly,
+  // so uncovered render-pane pixels keep showing the worker document canvas.
+  EXPECT_EQ(internal::WasmSurfaceClearColor(kTransparent, /*premultipliedAlphaSupported=*/true),
+            kTransparent);
+
+  // Without premultiplied compositing the same clear would present as opaque
+  // black; fall back to the page background already painted behind the canvas.
+  EXPECT_EQ(internal::WasmSurfaceClearColor(kTransparent, /*premultipliedAlphaSupported=*/false),
+            internal::kWasmOpaqueSurfaceClearColor);
+  EXPECT_FLOAT_EQ(internal::kWasmOpaqueSurfaceClearColor[3], 1.0f);
+}
+
+TEST(EditorWindowTest, WasmDiagnosticReadbackFailuresUseBoundedRetries) {
+  EXPECT_EQ(internal::WgpuDiagnosticReadbackDecisionFor(true, 2u),
+            (internal::WgpuDiagnosticReadbackDecision{
+                .retry = false,
+                .completeRequest = true,
+            }));
+  EXPECT_EQ(internal::WgpuDiagnosticReadbackDecisionFor(false, 0u),
+            (internal::WgpuDiagnosticReadbackDecision{
+                .retry = true,
+                .completeRequest = false,
+            }));
+  EXPECT_EQ(internal::WgpuDiagnosticReadbackDecisionFor(false, 1u),
+            (internal::WgpuDiagnosticReadbackDecision{
+                .retry = true,
+                .completeRequest = false,
+            }));
+  EXPECT_EQ(internal::WgpuDiagnosticReadbackDecisionFor(false, 2u),
+            (internal::WgpuDiagnosticReadbackDecision{
+                .retry = false,
+                .completeRequest = true,
+            }));
+}
+
+TEST(EditorWindowTest, WasmDiagnosticReadbackSetupFailuresCompleteOnThirdAttempt) {
+  unsigned consecutiveFailures = 0u;
+  unsigned attempts = 0u;
+  bool requestCompleted = false;
+
+  while (!requestCompleted && attempts < 10u) {
+    const internal::WgpuDiagnosticReadbackDecision decision =
+        internal::WgpuDiagnosticReadbackDecisionFor(/*captureSucceeded=*/false,
+                                                    consecutiveFailures);
+    ++attempts;
+    EXPECT_TRUE(internal::ShouldRecheckPendingWgpuReadbackRequestsAfterCompletion(
+        /*callbackAlive=*/true, decision));
+    if (decision.completeRequest) {
+      consecutiveFailures = 0u;
+      requestCompleted = true;
+    } else {
+      ++consecutiveFailures;
+    }
+  }
+
+  EXPECT_TRUE(requestCompleted);
+  EXPECT_EQ(attempts, 3u);
+  EXPECT_EQ(consecutiveFailures, 0u);
+}
+
+TEST(EditorWindowTest, WasmDiagnosticReadbackCompletionAlwaysRechecksPendingRequests) {
+  const internal::WgpuDiagnosticReadbackDecision successfulCapture =
+      internal::WgpuDiagnosticReadbackDecisionFor(true, 0u);
+  const internal::WgpuDiagnosticReadbackDecision transientFailure =
+      internal::WgpuDiagnosticReadbackDecisionFor(false, 0u);
+  const internal::WgpuDiagnosticReadbackDecision terminalFailure =
+      internal::WgpuDiagnosticReadbackDecisionFor(false, 2u);
+
+  EXPECT_TRUE(internal::ShouldRecheckPendingWgpuReadbackRequestsAfterCompletion(
+      /*callbackAlive=*/true, successfulCapture));
+  EXPECT_TRUE(internal::ShouldRecheckPendingWgpuReadbackRequestsAfterCompletion(
+      /*callbackAlive=*/true, transientFailure));
+  EXPECT_TRUE(internal::ShouldRecheckPendingWgpuReadbackRequestsAfterCompletion(
+      /*callbackAlive=*/true, terminalFailure));
+  EXPECT_FALSE(internal::ShouldRecheckPendingWgpuReadbackRequestsAfterCompletion(
+      /*callbackAlive=*/false, transientFailure));
+}
+
 #if defined(DONNER_EDITOR_WGPU)
 #if defined(__linux__)
 TEST(EditorWindowTest, WgpuOffscreenTargetSupportsHeadlessReadback) {
@@ -545,6 +641,7 @@ TEST(EditorWindowTest, WgpuOffscreenTargetSupportsHeadlessReadback) {
   EXPECT_EQ(actual.dimensions, Vector2i(64, 48));
   EXPECT_THAT(PixelAt(actual, 8, 8),
               Rgba(testing::Le(3), testing::Le(3), Near(255, 3), testing::Eq(255)));
+  EXPECT_TRUE(window.usingOffscreenRenderTarget());
 }
 #endif
 
@@ -562,7 +659,34 @@ TEST(EditorWindowTest, NumericDragFieldsSupportSimpleClickToEdit) {
   EXPECT_TRUE(ImGui::GetIO().ConfigDragClickToInputText);
 }
 
-TEST(EditorWindowTest, WgpuDirectRenderCallbackAppendsToFramebuffer) {
+TEST(EditorWindowTest, WgpuFramebufferGeodeDeviceSharingMatchesThreadingModel) {
+  EXPECT_TRUE(internal::ShouldShareWgpuFramebufferGeodeDevice(/*emscriptenBuild=*/true));
+  EXPECT_FALSE(internal::ShouldShareWgpuFramebufferGeodeDevice(/*emscriptenBuild=*/false));
+
+  EditorWindow window(EditorWindowOptions{
+      .title = "Shared WGPU Geode Device Test",
+      .initialWidth = 64,
+      .initialHeight = 64,
+      .visible = false,
+  });
+  if (!window.valid() || window.geodeDevice() == nullptr ||
+      window.geodeFramebufferDevice() == nullptr) {
+    GTEST_SKIP() << "WebGPU editor window is unavailable on this host";
+  }
+
+#ifdef __EMSCRIPTEN__
+  EXPECT_EQ(window.geodeFramebufferDevice().get(), window.geodeDevice().get())
+      << "The Wasm worker owns its own device, so the main-thread framebuffer path can share the "
+         "primary wrapper and avoid recompiling every shared pipeline at startup.";
+#else
+  EXPECT_NE(window.geodeFramebufferDevice().get(), window.geodeDevice().get())
+      << "Desktop background rendering shares the primary wrapper across threads. The UI-only "
+         "framebuffer path needs a separate wrapper to isolate mutable counters and deferred "
+         "destroy queues.";
+#endif
+}
+
+TEST(EditorWindowTest, WgpuDirectRenderCallbackDrawsBelowImGuiChrome) {
   EditorWindow window(EditorWindowOptions{
       .title = "Direct WGPU Framebuffer Append Test",
       .initialWidth = 96,
@@ -598,26 +722,27 @@ TEST(EditorWindowTest, WgpuDirectRenderCallbackAppendsToFramebuffer) {
     paint.opacity = 1.0;
     paint.fillOpacity = 1.0;
     directRenderer.setPaint(paint);
-    directRenderer.drawRect(Box2d(Vector2d(32.0, 32.0) * framebufferFromLogical,
-                                  Vector2d(64.0, 64.0) * framebufferFromLogical),
+    directRenderer.drawRect(Box2d(Vector2d(0.0, 0.0) * framebufferFromLogical,
+                                  Vector2d(96.0, 96.0) * framebufferFromLogical),
                             svg::StrokeParams{});
     directRenderer.endFrame();
     directRenderer.clearTargetTexture();
   });
 
   window.beginFrame();
-  ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(96.0f, 96.0f),
+  ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(32.0f, 32.0f), ImVec2(64.0f, 64.0f),
                                                 IM_COL32(0, 0, 255, 255));
   const svg::RendererBitmap actual = window.endFrameAndReadPixels();
   ASSERT_FALSE(actual.empty());
   const Vector2d readbackFromLogical = ReadbackScale(actual, 96, 96);
 
   const std::array<std::uint8_t, 4> outside = PixelAtLogical(actual, readbackFromLogical, 16, 16);
-  EXPECT_THAT(outside, Rgba(testing::Le(3), testing::Le(3), Near(255, 3), testing::Eq(255)))
-      << "The direct Geode pass must preserve earlier ImGui framebuffer pixels.";
+  EXPECT_THAT(outside, Rgba(Near(255, 3), testing::Le(3), testing::Le(3), testing::Eq(255)))
+      << "The direct Geode pass must remain visible outside ImGui chrome.";
 
   const std::array<std::uint8_t, 4> inside = PixelAtLogical(actual, readbackFromLogical, 48, 48);
-  EXPECT_THAT(inside, Rgba(Near(255, 3), testing::Le(3), testing::Le(3), testing::Eq(255)));
+  EXPECT_THAT(inside, Rgba(testing::Le(3), testing::Le(3), Near(255, 3), testing::Eq(255)))
+      << "ImGui popups and controls must paint above the direct selection overlay.";
 }
 
 TEST(EditorWindowTest, WgpuUnderlayDirectRenderCallbackDrawsBelowImGui) {
@@ -1368,10 +1493,15 @@ TEST(EditorWindowTest, WgpuLayerThumbnailUploadHonorsPayloadUv) {
   const svg::RendererBitmap actual = window.endFrameAndReadPixels();
 
   ASSERT_FALSE(actual.empty());
-  const std::array<std::uint8_t, 4> center = PixelAt(actual, 37, 28);
+  // ImGui draw coordinates are logical; the readback is in device pixels. On a
+  // 2x host this window reads back 192x192, so sampling raw framebuffer
+  // coordinates lands above the drawn quad's top edge, on the clear color.
+  const Vector2d readbackFromLogical = ReadbackScale(actual, 96, 96);
+  const std::array<std::uint8_t, 4> center = PixelAtLogical(actual, readbackFromLogical, 37, 28);
   EXPECT_THAT(center, Rgba(testing::Le(8), testing::Ge(245), testing::Le(8), testing::Eq(255)))
       << "The middle band should stay green; sampling the full power-of-two texture instead of "
-         "the payload UV shifts the blue edge padding into the center.";
+         "the payload UV shifts the blue edge padding into the center. Readback was "
+      << actual.dimensions << " for a 96x96 logical window.";
 }
 
 TEST(EditorWindowTest, WgpuLayersPanelPresentsBackgroundStickerThumbnailLikeGolden) {
@@ -1403,18 +1533,37 @@ TEST(EditorWindowTest, WgpuLayersPanelPresentsBackgroundStickerThumbnailLikeGold
 
   const std::optional<LayerTreeRow> row = FindLayerRow(panel, "Background_sticker");
   ASSERT_TRUE(row.has_value());
-  const svg::RendererBitmap* panelThumbnail = panel.rowThumbnail(row->stableId);
-  ASSERT_NE(panelThumbnail, nullptr);
-  EXPECT_EQ(panelThumbnail->dimensions, goldenBitmap->dimensions)
-      << "The UI presentation test isolates ImGui/WGPU by uploading the approved golden, but the "
-         "row layout must still reserve the approved thumbnail size.";
+  if (thumbnailRenderer.requiresTextureSnapshotPresentation()) {
+    // Geode presents row thumbnails as GPU texture snapshots; the CPU-bitmap
+    // cache is intentionally left empty on that path
+    // (LayersPanel::refreshSnapshot), so assert the texture form instead.
+    const std::shared_ptr<const svg::RendererTextureSnapshot>* panelTexture =
+        panel.rowTextureThumbnail(row->stableId);
+    ASSERT_NE(panelTexture, nullptr);
+    ASSERT_NE(*panelTexture, nullptr);
+    EXPECT_EQ((*panelTexture)->dimensions(), goldenBitmap->dimensions)
+        << "The UI presentation test isolates ImGui/WGPU by uploading the approved golden, but "
+           "the row layout must still reserve the approved thumbnail size.";
+  } else {
+    const svg::RendererBitmap* panelThumbnail = panel.rowThumbnail(row->stableId);
+    ASSERT_NE(panelThumbnail, nullptr);
+    EXPECT_EQ(panelThumbnail->dimensions, goldenBitmap->dimensions)
+        << "The UI presentation test isolates ImGui/WGPU by uploading the approved golden, but "
+           "the row layout must still reserve the approved thumbnail size.";
+  }
 
   GlTextureCache textures(window.geodeDevice());
   textures.initialize();
   GlTextureCache::ThumbnailTextureView actualUpload;
-  const LayersPanel::ThumbnailTextureProvider textureProvider =
-      [targetStableId = row->stableId, &textures, &goldenBitmap, &actualUpload](
-          std::uint64_t stableId, const svg::RendererBitmap&) -> LayersPanel::ThumbnailTexture {
+  // The panel routes each row through exactly one of the two providers
+  // depending on the thumbnail payload `refreshSnapshot` produced: Geode keeps
+  // thumbnails on the GPU and delivers a texture snapshot, every other backend
+  // delivers a CPU bitmap. Wire both, exactly like `EditorShell` does, and
+  // upload the approved golden either way so this test stays a pure ImGui/WGPU
+  // presentation check.
+  const auto uploadTargetRow =
+      [targetStableId = row->stableId, &textures, &goldenBitmap,
+       &actualUpload](std::uint64_t stableId) -> LayersPanel::ThumbnailTexture {
     if (stableId != targetStableId) {
       return LayersPanel::ThumbnailTexture{};
     }
@@ -1425,6 +1574,15 @@ TEST(EditorWindowTest, WgpuLayersPanelPresentsBackgroundStickerThumbnailLikeGold
         .uvBottomRight = actualUpload.uvBottomRight,
     };
   };
+  const LayersPanel::ThumbnailTextureProvider textureProvider =
+      [&uploadTargetRow](std::uint64_t stableId,
+                         const svg::RendererBitmap&) -> LayersPanel::ThumbnailTexture {
+    return uploadTargetRow(stableId);
+  };
+  const LayersPanel::ThumbnailTextureSnapshotProvider textureSnapshotProvider =
+      [&uploadTargetRow](std::uint64_t stableId,
+                         const std::shared_ptr<const svg::RendererTextureSnapshot>&)
+      -> LayersPanel::ThumbnailTexture { return uploadTargetRow(stableId); };
   const GlTextureCache::ThumbnailTextureView expectedUpload =
       textures.uploadThumbnail(/*key=*/0xbac65002u, *goldenBitmap);
   ASSERT_NE(expectedUpload.texture, 0);
@@ -1438,7 +1596,8 @@ TEST(EditorWindowTest, WgpuLayersPanelPresentsBackgroundStickerThumbnailLikeGold
   ImGui::Begin("##layers_panel_thumbnail_presentation", nullptr,
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                    ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar);
-  panel.render(&app, textureProvider);
+  panel.render(&app, textureProvider, /*iconTextureProvider=*/{},
+               /*minimumInteractionHeight=*/0.0f, textureSnapshotProvider);
   const std::optional<ImageDrawRect> actualRect =
       FindTextureDrawRect(*ImGui::GetWindowDrawList(), actualUpload.texture);
   ImGui::End();

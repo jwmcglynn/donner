@@ -75,6 +75,28 @@ donner_cc_library(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
+# Header-only device-aware curve-flattening tolerance for stroke outlines.
+# Pure transform math with no WebGPU dependency, so it builds (and is tested)
+# regardless of the enable_geode flag.
+donner_cc_library(
+    name = "geode_stroke_tolerance",
+    hdrs = ["GeodeStrokeTolerance.h"],
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+    deps = [
+        "//donner/base",
+    ],
+)
+
+donner_cc_test(
+    name = "geode_stroke_tolerance_tests",
+    srcs = ["tests/GeodeStrokeTolerance_tests.cc"],
+    deps = [
+        ":geode_stroke_tolerance",
+        "//donner/base",
+        "//donner/base:gtest_timeout_main",
+    ],
+)
+
 # Header-only ECS component for wave-2 GPU residence: persistent per-entity
 # GPU buffers for cached encoded paths. See design doc 0030 (wave 2).
 donner_cc_library(
@@ -184,6 +206,7 @@ donner_cc_library(
         ":geode_shaders",
         ":geode_wgpu_util",
         "//donner/base",
+        "//donner/base:asyncify_suspend_probe",
         "//donner/svg/components/filter:components",
         "//third_party/webgpu-cpp:webgpu_cpp",
     ],
@@ -625,7 +648,9 @@ donner_multi_transitioned_test(
 )
 
 # Geode geometry debug overlay (RendererGeode::setDebugGeometryOverlay):
-# default-off contract, overlay-on rendering, and clean toggling.
+# byte-identical default-off/null-sink behavior, exact dynamically-dilated
+# post-vertex quad triangles (including text and instances), one frame-final
+# root wireframe pass, preserved batching, and clean toggling.
 donner_cc_test(
     name = "geode_debug_overlay_tests_impl",
     srcs = ["tests/GeodeDebugOverlay_tests.cc"],
@@ -646,4 +671,5 @@ donner_multi_transitioned_test(
     testonly = 1,
     dep = ":geode_debug_overlay_tests_impl",
     renderer_backend = "geode",
+    text = "true",
 )

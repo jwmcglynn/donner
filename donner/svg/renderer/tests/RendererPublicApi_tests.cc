@@ -307,6 +307,7 @@ TEST(RendererPublicApiTest, RendererInterfaceDefaultMethodsRejectUnsupportedText
                                             /*pixelated=*/true));
   EXPECT_EQ(renderer.takeTextureSnapshot(), nullptr);
   EXPECT_FALSE(renderer.requiresTextureSnapshotPresentation());
+  EXPECT_FALSE(renderer.supportsElementTextureSnapshots());
   EXPECT_EQ(renderer.createOffscreenInstance(), nullptr);
 }
 

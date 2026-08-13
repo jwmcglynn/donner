@@ -26,6 +26,22 @@ namespace donner::geode {
 struct EncodedPath;
 struct GeodeResidentSlot;
 
+/**
+ * Optional debug observer for Slug draws that actually reach a GPU draw call.
+ *
+ * The observer is null in normal rendering. Implementations must copy any
+ * needed `EncodedPath` data before returning because an inline encode may be
+ * destroyed immediately after the submission call.
+ */
+class GeometryDebugSink {
+public:
+  virtual ~GeometryDebugSink() = default;
+
+  virtual void recordSlugDraw(const EncodedPath& encoded, const Transform2d& targetFromPath,
+                              const Transform2d& rootFromTarget,
+                              std::span<const float> instanceTransforms) = 0;
+};
+
 class GeodeBufferPool;
 class GeodeDevice;
 class GeodeImagePipeline;
@@ -172,6 +188,16 @@ public:
    * to disable (default).
    */
   void setBufferPool(GeodeBufferPool* pool);
+
+  /**
+   * Observe Slug draws recorded by this encoder.
+   *
+   * `rootFromTarget` maps this encoder's target pixels to the owning
+   * renderer's final target. Pass null to disable observation. The default
+   * path stores one pointer and one branch per actual Slug submission.
+   */
+  void setGeometryDebugSink(GeometryDebugSink* sink,
+                            const Transform2d& rootFromTarget = Transform2d());
 
   GeoEncoder(const GeoEncoder&) = delete;
   GeoEncoder& operator=(const GeoEncoder&) = delete;
@@ -391,11 +417,20 @@ public:
    * Draw an already-GPU-resident RGBA texture into the destination rectangle.
    *
    * The current transform is applied exactly like \ref drawImage, but the
-   * texture is sampled directly without a CPU upload. The texture is expected
-   * to contain premultiplied RGBA, matching Geode render-target snapshots.
+   * texture is sampled directly without a CPU upload.
+   *
+   * @param texture GPU-resident RGBA texture.
+   * @param destRect Destination rectangle in local (pre-transform) space.
+   * @param sourceUv Source UV rectangle in [0,1] x [0,1]. Producers that keep an oversized
+   *   backing allocation pass the sub-rect that holds the valid content.
+   * @param opacity Overall opacity in [0, 1].
+   * @param pixelated If true, use nearest-neighbor filtering. Otherwise, bilinear.
+   * @param sourceIsPremultiplied True when the texels are premultiplied, as Geode
+   *   render-target snapshots are. CPU bitmaps uploaded by host presentation code are
+   *   straight-alpha and must pass false.
    */
-  void drawTexture(const wgpu::Texture& texture, const Box2d& destRect, double opacity,
-                   bool pixelated);
+  void drawTexture(const wgpu::Texture& texture, const Box2d& destRect, const Box2d& sourceUv,
+                   double opacity, bool pixelated, bool sourceIsPremultiplied);
 
   /**
    * Fill a path with a solid color.
@@ -575,7 +610,7 @@ private:
 
   /// Shared path for solid and pattern fills: encode path, upload buffers,
   /// build bind group, record draw call.
-  void submitFillDraw(const FillDrawArgs& args);
+  void submitFillDraw(const FillDrawArgs& args, std::span<const float> instanceTransforms = {});
 
   /// Shared construction helpers used by both constructors. Factored out
   /// to avoid duplicating ~20 lines of setup. See GeoEncoder.cc.

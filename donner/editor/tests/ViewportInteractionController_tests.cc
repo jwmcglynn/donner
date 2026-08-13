@@ -126,7 +126,6 @@ TEST(ViewportInteractionControllerTest, FrameHistoryTracksPresentationMemoryForL
 
   controller.noteFrameDelta(16.0f);
   const FrameMemorySample sample{
-      .overlayBytes = 1u,
       .activeTileBytes = 2u,
       .overviewTileBytes = 3u,
       .retiredBytes = 4u,
@@ -139,7 +138,6 @@ TEST(ViewportInteractionControllerTest, FrameHistoryTracksPresentationMemoryForL
 
   const std::size_t latestIdx =
       (controller.frameHistory().writeIndex + kFrameHistoryCapacity - 1) % kFrameHistoryCapacity;
-  EXPECT_EQ(controller.frameHistory().memory[latestIdx].overlayBytes, 1u);
   EXPECT_EQ(controller.frameHistory().memory[latestIdx].activeTileBytes, 2u);
   EXPECT_EQ(controller.frameHistory().memory[latestIdx].overviewTileBytes, 3u);
   EXPECT_EQ(controller.frameHistory().memory[latestIdx].retiredBytes, 4u);

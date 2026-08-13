@@ -60,7 +60,7 @@ test("secure static host isolation fallback enables Wasm threads", async ({ page
   await expect(page.locator("#status")).toBeHidden({ timeout: 45000 });
   await expect
     .poll(async () => page.evaluate(() => window.__donnerBackend))
-    .toMatch(/^(geode|tiny_skia|packaged)$/);
+    .toBe("geode");
   await page.waitForTimeout(1000);
   expect(fatalMessages).toEqual([]);
 });

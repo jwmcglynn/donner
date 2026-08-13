@@ -125,8 +125,8 @@ TEST(ViewportSvgExportTest, RootIdWithDoubleHyphenSanitizedInComment) {
   const SVGDocument doc = ParseOrDie(kDoubleHyphenIdSvg);
 
   ViewportExportOptions options;
-  const Result<std::string, std::string> result =
-      ExportViewportAsSvg(doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(400, 300)), options);
+  const Result<std::string, std::string> result = ExportViewportAsSvg(
+      doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(400, 300)), options);
   ASSERT_TRUE(result.ok()) << result.error;
 
   // The comment body (between "<!--" and "-->") must not contain "--".
@@ -198,8 +198,7 @@ TEST(ViewportSvgExportTest, InjectedClipPathIdIsUniquifiedAgainstSourceIds) {
   // The source-declared clip path and its reference are preserved verbatim.
   EXPECT_THAT(result.value, HasSubstr("<clipPath id=\"donner-viewport-clip\">"
                                       "<rect x=\"0\" y=\"0\" width=\"50\" height=\"50\"/>"));
-  EXPECT_THAT(result.value,
-              HasSubstr("clip-path=\"url(#donner-viewport-clip)\"/>"));
+  EXPECT_THAT(result.value, HasSubstr("clip-path=\"url(#donner-viewport-clip)\"/>"));
 }
 
 TEST(ViewportSvgExportTest, OverlayGroupAbsentByDefault) {
@@ -819,7 +818,7 @@ double ParseAttr(const std::string& text, std::string_view attr, std::size_t fro
 SelectionChromeSnapshot MakeAabbSnapshot() {
   SelectionChromeSnapshot snapshot;
   snapshot.aabbsDoc.push_back(Box2d(Vector2d(50.0, 60.0), Vector2d(150.0, 160.0)));
-  snapshot.handleBoxesDoc.push_back(Box2d(Vector2d(48.0, 58.0), Vector2d(52.0, 62.0)));
+  snapshot.handleAnchorsDoc.push_back(Vector2d(50.0, 60.0));
   return snapshot;
 }
 
@@ -829,8 +828,8 @@ SelectionChromeSnapshot MakePathPointSnapshot() {
       .anchorDoc = Vector2d(10.0, 20.0),
       .controlDoc = Vector2d(20.0, 10.0),
   });
-  snapshot.pathControlPointBoxesDoc.push_back(Box2d(Vector2d(18.0, 8.0), Vector2d(22.0, 12.0)));
-  snapshot.pathAnchorBoxesDoc.push_back(Box2d(Vector2d(8.0, 18.0), Vector2d(12.0, 22.0)));
+  snapshot.pathControlPointsDoc.push_back(Vector2d(20.0, 10.0));
+  snapshot.pathAnchorPointsDoc.push_back(Vector2d(10.0, 20.0));
   return snapshot;
 }
 
@@ -897,10 +896,12 @@ TEST(ViewportSvgExportTest, OverlayPathPointChromeRendered) {
   const std::string overlay = OverlayGroupSpan(result.value);
   ASSERT_THAT(overlay, Not(IsEmpty())) << result.value;
   EXPECT_THAT(overlay, HasSubstr("d=\"M 10 20 L 20 10\""));
+  // Squares are sized by the export from the snapshot's own transform, exactly
+  // as the editor draws them: 4 logical px for a control point, 5 for an anchor.
   EXPECT_THAT(overlay,
               HasSubstr("<rect x=\"18\" y=\"8\" width=\"4\" height=\"4\" fill=\"#1ea7fd\""));
   EXPECT_THAT(overlay,
-              HasSubstr("<rect x=\"8\" y=\"18\" width=\"4\" height=\"4\" fill=\"#1ea7fd\""));
+              HasSubstr("<rect x=\"7.5\" y=\"17.5\" width=\"5\" height=\"5\" fill=\"#1ea7fd\""));
   EXPECT_THAT(overlay, HasSubstr("stroke=\"none\" stroke-width=\"0\""));
 }
 

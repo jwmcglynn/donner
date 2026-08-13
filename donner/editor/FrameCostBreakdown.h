@@ -60,6 +60,11 @@ struct FrameCostBreakdown {
     double previousReadbackMs = 0.0;
     /// Previous end-frame time spent presenting or swapping the surface.
     double previousPresentMs = 0.0;
+    /// Vertices ImGui emitted for the previous frame's draw data.
+    ///
+    /// Editor vector paths render in Geode only, with no draw-list fallback, so
+    /// this stays at UI-widget scale no matter how complex the document is.
+    int previousImguiVertexCount = 0;
   };
 
   /// Direct WGPU document presentation work completed in the previous host frame.

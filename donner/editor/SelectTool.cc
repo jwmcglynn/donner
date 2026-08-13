@@ -616,6 +616,18 @@ void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, b
     return;
   }
 
+  // When the mutation queue is empty, the DOM represents the previous active preview. Preserve
+  // that baseline before advancing the pointer preview and queueing its next transform. If a
+  // render is already in flight, the queue remains non-empty and this baseline stays at the last
+  // transform that actually reached the registry.
+  const std::uint64_t documentFrameVersion = editor.document().currentFrameVersion();
+  if (!editor.document().hasPendingMutations() ||
+      documentFrameVersion != dragState_->committedDocumentFrameVersion) {
+    dragState_->committedDocumentDelta = dragState_->currentDocumentDelta;
+    dragState_->committedDocumentFromStartDocument = dragState_->currentDocumentFromStartDocument;
+    dragState_->committedDocumentFrameVersion = documentFrameVersion;
+  }
+
   dragState_->currentDocumentDelta = deltaDoc;
   dragState_->currentDocumentFromStartDocument = *documentFromStartDocument;
   const Transform2d primaryNewTransform =
@@ -786,6 +798,19 @@ std::optional<SelectTool::ActiveDragPreview> SelectTool::activeDragPreview() con
       .translation = dragState_->currentDocumentDelta,
       .documentFromCachedDocument = dragState_->currentDocumentFromStartDocument,
       .dragGeneration = dragState_->generation};
+}
+
+std::optional<SelectTool::ActiveDragPreview> SelectTool::documentDragPreview(
+    const EditorApp& editor) const {
+  std::optional<ActiveDragPreview> preview = activeDragPreview();
+  if (!preview.has_value() || !editor.document().hasPendingMutations() ||
+      editor.document().currentFrameVersion() != dragState_->committedDocumentFrameVersion) {
+    return preview;
+  }
+
+  preview->translation = dragState_->committedDocumentDelta;
+  preview->documentFromCachedDocument = dragState_->committedDocumentFromStartDocument;
+  return preview;
 }
 
 std::optional<SelectTool::ActiveGesturePreview> SelectTool::activeGesturePreview() const {

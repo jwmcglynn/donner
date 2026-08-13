@@ -739,7 +739,12 @@ protected:
     while (std::chrono::steady_clock::now() < deadline) {
       std::optional<RenderResult> result = asyncRenderer_.pollResult();
       if (result.has_value()) {
-        EXPECT_FALSE(asyncRenderer_.isBusy()) << phase << ": async renderer stayed busy";
+        // The compositor defers its first-frame cache warmup to a later worker turn
+        // (`CompositorConfig::deferFirstFrameWarmup`), so the renderer legitimately stays busy
+        // past `pollResult()`. What must hold is that the worker always drains.
+        EXPECT_TRUE(asyncRenderer_.waitUntilNoRenderInFlightForTesting(
+            std::chrono::steady_clock::now() + std::chrono::seconds(5)))
+            << phase << ": async renderer stayed busy";
         return std::move(*result);
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(1));

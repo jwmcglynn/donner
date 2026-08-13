@@ -53,6 +53,23 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "editor_font_assets_tests",
+    srcs = ["EditorFontAssets_tests.cc"],
+    data = [
+        "//third_party/fira-code:FiraCode-Regular.ttf",
+        "//third_party/roboto:Roboto-Bold.ttf",
+        "//third_party/roboto:Roboto-Regular.ttf",
+    ],
+    deps = [
+        "//donner/base",
+        "//donner/base:base_test_utils",
+        "//third_party/fira-code",
+        "//third_party/roboto",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "editor_shell_tests",
     srcs = ["EditorShell_tests.cc"],
     # 83 independent gtest cases; shard so the suite runs as parallel RE
@@ -62,6 +79,8 @@ donner_cc_test(
         "//donner/editor:clipboard_interface",
         "//donner/editor:editor_shell",
         "//donner/editor/gui:editor_window",
+        "//donner/svg/renderer",
+        "//donner/svg/resources:font_manager",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -102,6 +121,23 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "sample_thumbnail_async_tests",
+    srcs = ["SampleThumbnailAsync_tests.cc"],
+    deps = [
+        "//donner/base",
+        "//donner/editor:async_renderer",
+        "//donner/editor:editor_sample_catalog",
+        "//donner/svg/parser",
+        "//donner/svg/renderer",
+        "//donner/svg/renderer/tests:mock_renderer_interface",
+        "//donner/svg/renderer/tests:rgba_test_matchers",
+        "//donner/svg/resources:font_catalog",
+        "//donner/svg/resources:font_manager",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "editor_window_tests",
     srcs = ["EditorWindow_tests.cc"],
     data = [
@@ -135,6 +171,32 @@ donner_cc_test(
             "//donner/svg/renderer/tests:renderer_image_test_utils",
             "//donner/svg/renderer/tests:rgba_test_matchers",
             "@imgui//:imgui_wgpu_backend",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+# The surface-less arm of the editor's WebGPU frame path. Split out of
+# `editor_window_tests` so it can carry a `geode` variant: that is what makes
+# `bazel test //...` run it on both the macOS and Linux lanes, which is the only
+# way this arm gets executed anywhere. macOS always builds a real window
+# surface, and the default tiny_skia backend compiles the WebGPU path out
+# entirely, so headless Linux replay was previously its sole coverage.
+donner_cc_test(
+    name = "editor_window_offscreen_target_tests",
+    srcs = ["EditorWindowOffscreenTarget_tests.cc"],
+    defines = select({
+        "//donner/svg/renderer:renderer_backend_geode": ["DONNER_EDITOR_WGPU"],
+        "//conditions:default": [],
+    }),
+    variants = ["geode"],
+    deps = [
+        "//donner/editor/gui:editor_window",
+        "@com_google_gtest//:gtest_main",
+    ] + select({
+        "//donner/svg/renderer:renderer_backend_geode": [
+            "//donner/svg/renderer:renderer_interface",
+            "//donner/svg/renderer/tests:rgba_test_matchers",
         ],
         "//conditions:default": [],
     }),
@@ -249,6 +311,7 @@ donner_cc_test(
     srcs = ["RenderPaneGesture_tests.cc"],
     deps = [
         "//donner/editor:pinch_event_monitor",
+        "//donner/editor:pinch_zoom_policy",
         "//donner/editor:render_pane_gesture",
         "@com_google_gtest//:gtest_main",
     ],
@@ -259,6 +322,20 @@ donner_cc_test(
     srcs = ["PresentedFrameComposer_tests.cc"],
     deps = [
         "//donner/editor:presented_frame_composer",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "document_presenter_tests",
+    srcs = ["DocumentPresenter_tests.cc"],
+    defines = select({
+        "//donner/svg/renderer:renderer_backend_geode": ["DONNER_EDITOR_WGPU"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        "//donner/base",
+        "//donner/editor:document_presenter",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -287,6 +364,7 @@ donner_cc_test(
         "//donner/base:base_test_utils",
         "//donner/editor:gl_texture_cache",
         "//donner/editor:imgui_headers",
+        "//donner/editor:menu_bar_presenter",
         "//donner/editor:render_pane_presenter",
         "//donner/editor/gui:editor_window",
         "//donner/svg/renderer:renderer_image_io",
@@ -527,6 +605,12 @@ donner_cc_fuzzer(
     name = "inspector_ui_fuzzer",
     srcs = ["InspectorUi_fuzzer.cc"],
     corpus = "testdata/inspector_ui_fuzzer_corpus",
+    # The first fuzzed frame stands up the ImGui atlas and table state; under
+    # ASan on a loaded shared runner that setup alone can cross the default
+    # 2-second per-input alarm (observed repeatedly in CI on the trivial
+    # newline input, while passing locally in every run). A genuine hang still
+    # trips comfortably at 10 seconds.
+    per_input_timeout_seconds = 10,
     deps = [
         "//donner/editor:editor_app",
         "//donner/editor:editor_theme",

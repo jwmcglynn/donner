@@ -181,4 +181,67 @@ struct RightSidebarLayout {
                                                    float minLayerPanelHeight,
                                                    float maxLayerPanelHeight, float splitterDeltaY);
 
+/// A screen-space rectangle in logical pixels.
+struct LayoutRect {
+  float x = 0.0f;
+  float y = 0.0f;
+  float width = 0.0f;
+  float height = 0.0f;
+};
+
+/// Geometry the render pane's first-fit latch inspects to decide whether this frame's pane
+/// rectangle is the settled one. See \ref RenderPaneViewportLatchReady.
+struct RenderPaneLatchInput {
+  /// Rect of the docked render-pane window as ImGui reports it this frame.
+  LayoutRect paneWindow;
+  /// Rect of the DockSpace central node as of this frame's dock-host pass.
+  LayoutRect dockCentralNode;
+  /// Dock host rect the shell computed for this frame. Derived from the window size and the
+  /// shell's own pane state, never from ImGui's layout state.
+  LayoutRect dockHost;
+  /// The same shell-computed dock host rect from the previous frame.
+  LayoutRect previousDockHost;
+  /// Render-pane content region this frame.
+  float paneContentWidth = 0.0f;
+  float paneContentHeight = 0.0f;
+  /// Render-pane content region on the previous frame, or a negative size before any frame has
+  /// reported one.
+  float previousPaneContentWidth = -1.0f;
+  float previousPaneContentHeight = -1.0f;
+  /// Whether this frame's dock layout splits a sidebar column off the host. False in the
+  /// compact-touch profile, whose root node *is* the canvas node.
+  bool sidebarColumnIncluded = true;
+};
+
+/**
+ * Decide whether the render pane's rectangle may be latched as the document's initial fit.
+ *
+ * The canvas is docked into the DockSpace central node, so ImGui owns the pane rectangle and
+ * reports transient values while a layout change propagates. Fitting the document to a transient
+ * rectangle and rendering against it presents the document at the wrong fit (the placeholder
+ * viewport) and then jumps once the pane settles, so the latch must reject every pre-settle
+ * rectangle regardless of how many frames the transient survives.
+ *
+ * The policy is two-sided and grounded in geometry the shell computes itself:
+ *
+ * 1. The dock host rect, a pure function of the window size and the shell's own pane state, must
+ *    be unchanged from the previous frame. Nothing downstream of a moving host is settled, and no
+ *    inspection of ImGui's own state can tell a moving host from a stationary one.
+ * 2. ImGui must have propagated this frame's central-node rect into the docked pane window, i.e.
+ *    the pane window rect equals the central node rect. A stale pane window fails this whether it
+ *    is larger or smaller than the node.
+ * 3. The central node must be the host's column split: same origin, full host height, and never
+ *    wider than the host. These are exact comparisons against the shell's own host rect, so a node
+ *    that is short or offset because some upstream geometry has not settled is rejected.
+ * 4. When the layout carries a sidebar column, that column must already be split off (the node is
+ *    strictly narrower than the host); in the compact profile the node instead spans the host.
+ *
+ * A dock tree this policy cannot recognize, a customized layout restored from the persisted .ini
+ * say, falls back to the pre-existing rule: the same content region on two consecutive frames,
+ * still gated on a stationary host.
+ *
+ * @param input This frame's pane, central-node, and host geometry plus the previous frame's.
+ */
+[[nodiscard]] bool RenderPaneViewportLatchReady(const RenderPaneLatchInput& input);
+
 }  // namespace donner::editor

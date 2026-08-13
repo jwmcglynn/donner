@@ -73,9 +73,11 @@ donner_cc_library(
     }),
     deps = [
         "//donner/base",
+        "//donner/base:memory_attribution",
         "//donner/editor:editor_theme",
         "//donner/editor:imgui_headers",
         "//donner/editor:tracy_wrapper",
+        "//donner/editor:whole_app_worker_bridge",
         "//donner/svg/renderer:renderer_interface",
         "@imgui",
     ] + select({
@@ -85,9 +87,6 @@ donner_cc_library(
             "//third_party/emscripten-glfw",
             "//third_party/webgpu-cpp:webgpu_cpp",
             "@imgui//:imgui_wgpu_backend",
-        ],
-        "//donner/editor:wasm_tiny_skia_enabled": [
-            "//third_party/emscripten-glfw",
         ],
         "//donner/svg/renderer:renderer_backend_geode": [
             ":editor_wgpu_surface",

@@ -20,6 +20,13 @@ parser.add_argument(
     help="host/interface to bind (default: all IPv4 interfaces)",
 )
 parser.add_argument(
+    "--port",
+    type=int,
+    default=None,
+    help="bind this exact port instead of searching 8000-8019 (in HTTPS mode "
+    "this is the HTTPS port); useful when the default range is exhausted",
+)
+parser.add_argument(
     "--https",
     action=argparse.BooleanOptionalAction,
     default=True,
@@ -240,7 +247,11 @@ handler = functools.partial(CrossOriginHandler, directory=serve_dir)
 if args.https:
     http_bind_host = "127.0.0.1"
     http_port = find_free_port(http_bind_host)
-    https_port = find_free_port_excluding(bind_host, {http_port})
+    https_port = (
+        args.port
+        if args.port is not None
+        else find_free_port_excluding(bind_host, {http_port})
+    )
 
     localhost_url = f"http://127.0.0.1:{http_port}"
     _, _, https_url_host = classify_host_san(bind_host, lan_ip)
@@ -280,7 +291,7 @@ if args.https:
         http_server.server_close()
         https_server.server_close()
 else:
-    port = find_free_port(bind_host)
+    port = args.port if args.port is not None else find_free_port(bind_host)
     localhost_url = f"http://127.0.0.1:{port}"
     lan_url = f"http://{lan_ip}:{port}" if lan_ip else None
 

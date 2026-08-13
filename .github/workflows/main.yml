@@ -255,8 +255,30 @@ jobs:
           external-cache: true
           cache-save: false
 
+      # Transient release-CDN failures (dropped connections, 5xx) have failed
+      # this job outright and cost whole CI round trips. Retry the download as
+      # a whole with backoff, and let curl retry inside each attempt too.
       - name: Download bazel-diff
-        run: curl -fsSL -o "$RUNNER_TEMP/bazel-diff.jar" "https://github.com/Tinder/bazel-diff/releases/download/${BAZEL_DIFF_TAG}/bazel-diff_deploy.jar"
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="https://github.com/Tinder/bazel-diff/releases/download/${BAZEL_DIFF_TAG}/bazel-diff_deploy.jar"
+          out="$RUNNER_TEMP/bazel-diff.jar"
+          for delay in 2 4 8 16 0; do
+            if curl -fsSL --retry 4 --retry-delay 2 --retry-all-errors \
+                --connect-timeout 15 --max-time 300 -o "$out" "$url" \
+                && [[ -s "$out" ]]; then
+              exit 0
+            fi
+            rm -f "$out"
+            if [[ "$delay" -eq 0 ]]; then
+              break
+            fi
+            echo "bazel-diff download failed; retrying in ${delay}s." >&2
+            sleep "$delay"
+          done
+          echo "error: bazel-diff download failed after 5 attempts." >&2
+          exit 1
 
       - id: pr-meta
         name: Extract SHA for hash caching
@@ -894,6 +916,20 @@ jobs:
       # gen_cmakelists_test invokes Homebrew LLVM from inside Bazel's test
       # sandbox; Homebrew's tool wrappers require HOME.
       BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME"
+      # Editor tests whose WebGPU/Geode arm is compiled out of the default
+      # tiny_skia build and which carry no `variants = ["geode"]` wrapper, so
+      # the plain `bazel test //...` sweep above never executes them. Without
+      # this step they run on no lane at all. Measured on Apple Silicon with a
+      # warm build: 74 s wall, ~62 s of it test execution (`test:geode` pins
+      # `--local_test_jobs=1`, so the suite is serial). The whole
+      # `//donner/editor/...` tree under `--config=geode` is 260 tests / 193 s
+      # if this ever needs widening.
+      GEODE_EDITOR_TARGETS: >-
+        //donner/editor/tests:editor_window_tests
+        //donner/editor/tests:layer_thumbnail_golden_tests
+        //donner/editor/tests:async_renderer_tests
+        //donner/editor/tests:rnr_replay_tests
+        //donner/editor/tests:gl_rnr_replay_tests
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -949,8 +985,16 @@ jobs:
         # nightly cron so it doesn't gate every main push. PRs touching
         # fuzzer code re-trigger that workflow via path filter.
 
+      - name: Test (Geode editor lane)
+        id: geode_test
+        shell: bash
+        run: |
+          set -euo pipefail
+          bazelisk test --config=ci --config=geode --test_output=errors \
+            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $GEODE_EDITOR_TARGETS
+
       - name: Upload Bazel test failure artifacts
-        if: failure() && steps.test.outcome == 'failure'
+        if: failure() && (steps.test.outcome == 'failure' || steps.geode_test.outcome == 'failure')
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
@@ -975,8 +1019,21 @@ jobs:
       # outages now FAST-FAIL (no local fallback) rather than degrading to a
       # multi-hour local build on the capped host. The wedge-watch + rerun
       # handle recovery.
-      BAZEL_MACOS_BUILD_FLAGS: "--macos_minimum_os=13.3 --remote_cache=grpc://192.168.1.63:9092 --remote_upload_local_results=true --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=5s"
+      # Cache endpoint comes from the BAZEL_REMOTE_CACHE repository variable so
+      # the workflow stays portable across runner deployments. When the variable
+      # is unset (e.g. forks), --remote_cache= is empty and bazel builds without
+      # a remote cache.
+      BAZEL_MACOS_BUILD_FLAGS: "--macos_minimum_os=13.3 --remote_cache=${{ vars.BAZEL_REMOTE_CACHE }} --remote_upload_local_results=true --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=5s"
       BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME"
+      # Keep in sync with the `macos` job: exactly one of the two runs per
+      # event, so both need the Geode editor lane. See that job for why these
+      # targets need an explicit invocation and for the measured runtime.
+      GEODE_EDITOR_TARGETS: >-
+        //donner/editor/tests:editor_window_tests
+        //donner/editor/tests:layer_thumbnail_golden_tests
+        //donner/editor/tests:async_renderer_tests
+        //donner/editor/tests:rnr_replay_tests
+        //donner/editor/tests:gl_rnr_replay_tests
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -1020,8 +1077,16 @@ jobs:
         # nightly cron so it doesn't gate every main push. PRs touching
         # fuzzer code re-trigger that workflow via path filter.
 
+      - name: Test (Geode editor lane)
+        id: geode_test
+        shell: bash
+        run: |
+          set -euo pipefail
+          bazelisk --nohome_rc test --config=ci --config=geode --test_output=errors \
+            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $GEODE_EDITOR_TARGETS
+
       - name: Upload Bazel test failure artifacts
-        if: failure() && steps.test.outcome == 'failure'
+        if: failure() && (steps.test.outcome == 'failure' || steps.geode_test.outcome == 'failure')
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}

@@ -1,6 +1,7 @@
 #include "donner/editor/EditorShellLayout.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace donner::editor {
 
@@ -154,6 +155,65 @@ float ResizeLayerPanelHeightFraction(float currentFraction, float lowerPaneHeigh
   const float currentHeight = std::clamp(currentFraction, 0.0f, 1.0f) * clampedLowerPaneHeight;
   const float nextHeight = std::clamp(currentHeight - splitterDeltaY, minHeight, maxHeight);
   return nextHeight / clampedLowerPaneHeight;
+}
+
+namespace {
+
+/// Layout rects are integral ImGui pixel coordinates; a pixel of slack absorbs float rounding
+/// without admitting a genuinely different rectangle.
+constexpr float kLayoutSettleEpsilonPx = 1.0f;
+
+bool NearlyEqual(float a, float b) {
+  return std::abs(a - b) <= kLayoutSettleEpsilonPx;
+}
+
+bool SameRect(const LayoutRect& a, const LayoutRect& b) {
+  return NearlyEqual(a.x, b.x) && NearlyEqual(a.y, b.y) && NearlyEqual(a.width, b.width) &&
+         NearlyEqual(a.height, b.height);
+}
+
+/// True when the central node is this frame's dock host split into a canvas column, exactly as
+/// the shell laid the host out. Every comparison is against geometry the shell computed itself.
+bool CentralNodeMatchesDockHost(const RenderPaneLatchInput& input) {
+  if (!NearlyEqual(input.dockCentralNode.x, input.dockHost.x) ||
+      !NearlyEqual(input.dockCentralNode.y, input.dockHost.y) ||
+      !NearlyEqual(input.dockCentralNode.height, input.dockHost.height) ||
+      input.dockCentralNode.width > input.dockHost.width + kLayoutSettleEpsilonPx) {
+    return false;
+  }
+
+  return input.sidebarColumnIncluded
+             ? input.dockCentralNode.width < input.dockHost.width - kLayoutSettleEpsilonPx
+             : NearlyEqual(input.dockCentralNode.width, input.dockHost.width);
+}
+
+}  // namespace
+
+bool RenderPaneViewportLatchReady(const RenderPaneLatchInput& input) {
+  if (input.dockHost.width <= 0.0f || input.dockHost.height <= 0.0f ||
+      input.paneContentWidth <= 0.0f || input.paneContentHeight <= 0.0f) {
+    return false;
+  }
+
+  // A host that moved this frame invalidates everything downstream of it, including the
+  // two-frame content-region history, which would otherwise pair a pre-change frame with a
+  // post-change one.
+  if (!SameRect(input.dockHost, input.previousDockHost)) {
+    return false;
+  }
+
+  const bool dockGeometrySettled = input.dockCentralNode.width > 0.0f &&
+                                   input.dockCentralNode.height > 0.0f &&
+                                   SameRect(input.paneWindow, input.dockCentralNode) &&
+                                   CentralNodeMatchesDockHost(input);
+  if (dockGeometrySettled) {
+    return true;
+  }
+
+  // Fallback for dock trees the policy above does not describe: the same content region on two
+  // consecutive frames, which is only reached with a stationary host.
+  return NearlyEqual(input.paneContentWidth, input.previousPaneContentWidth) &&
+         NearlyEqual(input.paneContentHeight, input.previousPaneContentHeight);
 }
 
 }  // namespace donner::editor

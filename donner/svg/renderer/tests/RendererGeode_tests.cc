@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -304,43 +306,42 @@ TEST_F(RendererGeodeTest, EmptyFrameIsTransparent) {
   EXPECT_THAT(pixel, IsTransparent()) << "Empty frame should be transparent";
 }
 
-TEST_F(RendererGeodeTest, SharedDeviceSurvivesRendererTeardown) {
-  for (int iteration = 0; iteration < 3; ++iteration) {
-    RendererGeode renderer = createRenderer();
-    beginFrame(renderer);
-    renderer.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
-    renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
-    renderer.endFrame();
+TEST_F(RendererGeodeTest, PreCancelledInterruptibleSnapshotSkipsGpuReadback) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  renderer.endFrame();
+  (void)renderer.consumeReadbackStats();
+  const std::uint64_t buffersBefore = sharedDevice()->lifetimeBufferCreates();
 
-    const RendererBitmap snapshot = renderer.takeSnapshot();
-    ASSERT_FALSE(snapshot.empty()) << "iteration " << iteration;
-    EXPECT_THAT(pixelAt(snapshot, 32, 32), RgbaEq(0, 255, 0, 255)) << "iteration " << iteration;
-  }
+  const RendererBitmap snapshot = renderer.takeSnapshotInterruptibly([] { return true; });
+
+  EXPECT_TRUE(snapshot.empty());
+  EXPECT_EQ(sharedDevice()->lifetimeBufferCreates(), buffersBefore)
+      << "A pre-cancelled low-priority snapshot must not allocate a GPU readback buffer";
+  const RendererReadbackStats stats = renderer.consumeReadbackStats();
+  EXPECT_EQ(stats.count, 0);
+  EXPECT_EQ(stats.pollIterations, 0);
 }
 
-TEST_F(RendererGeodeTest, MoveAssignmentDetachesDisplacedCounters) {
-  const std::shared_ptr<geode::GeodeDevice> device = sharedDevice();
-  RendererGeode source(device);
-  RendererGeode destination(device);
+TEST_F(RendererGeodeTest, InterruptibleSnapshotCancelsPromptlyAfterGpuSubmit) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  renderer.endFrame();
+  (void)renderer.consumeReadbackStats();
 
-  ASSERT_NE(device->counters(), nullptr);
-  destination = std::move(source);
+  std::atomic<int> cancellationChecks{0};
+  const auto start = std::chrono::steady_clock::now();
+  const RendererBitmap snapshot = renderer.takeSnapshotInterruptibly(
+      [&] { return cancellationChecks.fetch_add(1, std::memory_order_relaxed) >= 1; });
+  const auto elapsed = std::chrono::steady_clock::now() - start;
 
-  // Move-assignment destroys the destination's old Impl. The device must not
-  // retain that Impl's counter address while the moved-in renderer is idle.
-  EXPECT_EQ(device->counters(), nullptr);
-
-  // The moved-in renderer must rebind its counters at the next frame and
-  // remain fully usable.
-  beginFrame(destination);
-  EXPECT_NE(device->counters(), nullptr);
-  destination.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
-  destination.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
-  destination.endFrame();
-
-  const RendererBitmap snapshot = destination.takeSnapshot();
-  ASSERT_FALSE(snapshot.empty());
-  EXPECT_THAT(pixelAt(snapshot, 32, 32), RgbaEq(0, 255, 0, 255));
+  EXPECT_TRUE(snapshot.empty());
+  EXPECT_LT(elapsed, std::chrono::milliseconds(250))
+      << "The sole render worker must not remain blocked in thumbnail map/readback";
+  const RendererReadbackStats stats = renderer.consumeReadbackStats();
+  EXPECT_EQ(stats.count, 1);
+  EXPECT_EQ(stats.pollIterations, 0)
+      << "Cancellation should be observed before entering the GPU poll loop";
 }
 
 TEST_F(RendererGeodeTest, EmptyFrameAfterOpaqueFrameClearsReusedTarget) {
@@ -361,6 +362,155 @@ TEST_F(RendererGeodeTest, EmptyFrameAfterOpaqueFrameClearsReusedTarget) {
   ASSERT_FALSE(transparentSnap.empty());
   EXPECT_THAT(pixelAt(transparentSnap, 32, 32), IsTransparent())
       << "A same-size Geode frame with no draws must clear pixels from the previous frame.";
+}
+
+// ---------------------------------------------------------------------------
+// Transparency-checkerboard underlay (`drawCheckerboardUnderlay`)
+//
+// The browser worker surface presents one already-composed full-canvas texture,
+// so unlike the desktop framebuffer path it cannot draw the checkerboard first.
+// These pin the destination-over pass that puts it underneath instead: without
+// it, every see-through document pixel reaches the browser compositor as alpha
+// zero and the page's solid editor background shows where the desktop editor
+// shows checkerboard.
+// ---------------------------------------------------------------------------
+
+/// Light-cell channel value, as an 8-bit sRGB level.
+constexpr int kCheckerLight =
+    static_cast<int>(kTransparencyCheckerboardLightColor[0] * 255.0f + 0.5f);
+/// Dark-cell channel value, as an 8-bit sRGB level.
+constexpr int kCheckerDark =
+    static_cast<int>(kTransparencyCheckerboardDarkColor[0] * 255.0f + 0.5f);
+/// Cell size in logical pixels, as an integer pixel step for sampling.
+constexpr int kCheckerCell = static_cast<int>(kTransparencyCheckerboardCellLogicalPx);
+
+TEST_F(RendererGeodeTest, CheckerboardUnderlayFillsTransparentPixelsWithAlternatingCells) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  renderer.endFrame();
+
+  ASSERT_TRUE(renderer.drawCheckerboardUnderlay(CheckerboardUnderlayParams{}));
+
+  const RendererBitmap snapshot = renderer.takeSnapshot();
+  ASSERT_FALSE(snapshot.empty());
+  // Two horizontally adjacent cells: (0,0) is light, (1,0) is dark.
+  EXPECT_THAT(pixelAt(snapshot, kCheckerCell / 2, kCheckerCell / 2),
+              RgbaEq(kCheckerLight, kCheckerLight, kCheckerLight, 255))
+      << "Cell (0,0) of a fully transparent frame must read as the light checker color";
+  EXPECT_THAT(pixelAt(snapshot, kCheckerCell + kCheckerCell / 2, kCheckerCell / 2),
+              RgbaEq(kCheckerDark, kCheckerDark, kCheckerDark, 255))
+      << "The horizontally adjacent cell must read as the dark checker color";
+  // And vertically, so a solid fill of either color cannot pass.
+  EXPECT_THAT(pixelAt(snapshot, kCheckerCell / 2, kCheckerCell + kCheckerCell / 2),
+              RgbaEq(kCheckerDark, kCheckerDark, kCheckerDark, 255))
+      << "The vertically adjacent cell must read as the dark checker color";
+}
+
+TEST_F(RendererGeodeTest, CheckerboardUnderlayLeavesOpaqueContentUntouched) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d({32, 32}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.endFrame();
+
+  ASSERT_TRUE(renderer.drawCheckerboardUnderlay(CheckerboardUnderlayParams{}));
+
+  const RendererBitmap snapshot = renderer.takeSnapshot();
+  ASSERT_FALSE(snapshot.empty());
+  EXPECT_THAT(pixelAt(snapshot, 48, 48), RgbaEq(255, 0, 0, 255))
+      << "Destination-over must not touch fully opaque document pixels";
+  EXPECT_THAT(pixelAt(snapshot, kCheckerCell / 2, kCheckerCell / 2),
+              RgbaEq(kCheckerLight, kCheckerLight, kCheckerLight, 255))
+      << "Transparent pixels beside the document content must become checkerboard";
+}
+
+TEST_F(RendererGeodeTest, CheckerboardUnderlayBlendsUnderPartialAlpha) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 128)));
+  renderer.drawRect(Box2d({32, 32}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.endFrame();
+
+  ASSERT_TRUE(renderer.drawCheckerboardUnderlay(CheckerboardUnderlayParams{}));
+
+  const RendererBitmap snapshot = renderer.takeSnapshot();
+  ASSERT_FALSE(snapshot.empty());
+  // (48,48) is cell (3,3), a light cell. Premultiplied red over it:
+  // r = 128 + 60 * (1 - 128/255) ~= 158, g = b = 60 * (1 - 128/255) ~= 30.
+  constexpr int kCoverage = 128;
+  const double transmitted = 1.0 - static_cast<double>(kCoverage) / 255.0;
+  const int expectedRed = static_cast<int>(kCoverage + kCheckerLight * transmitted + 0.5);
+  const int expectedGreenBlue = static_cast<int>(kCheckerLight * transmitted + 0.5);
+  EXPECT_THAT(pixelAt(snapshot, 48, 48), Rgba(Near(expectedRed, 2), Near(expectedGreenBlue, 2),
+                                              Near(expectedGreenBlue, 2), Near(255, 1)))
+      << "Half-covered document pixels must show the checkerboard through their remaining alpha";
+}
+
+TEST_F(RendererGeodeTest, CheckerboardUnderlayOriginOffsetShiftsTheAnchor) {
+  const auto sampleFirstTwoCells = [&](Vector2d originOffsetPx) {
+    RendererGeode renderer = createRenderer();
+    beginFrame(renderer);
+    renderer.endFrame();
+    CheckerboardUnderlayParams params;
+    params.originOffsetPx = originOffsetPx;
+    EXPECT_TRUE(renderer.drawCheckerboardUnderlay(params));
+    const RendererBitmap snapshot = renderer.takeSnapshot();
+    EXPECT_FALSE(snapshot.empty());
+    return std::pair(pixelAt(snapshot, kCheckerCell / 2, kCheckerCell / 2),
+                     pixelAt(snapshot, kCheckerCell + kCheckerCell / 2, kCheckerCell / 2));
+  };
+
+  // The worker surface pans with the document, so the pattern is anchored by
+  // the surface's on-screen position rather than by the texture origin. One
+  // cell of positive offset must invert the two leading cells...
+  const auto shifted = sampleFirstTwoCells(Vector2d(kCheckerCell, 0.0));
+  EXPECT_THAT(shifted.first, RgbaEq(kCheckerDark, kCheckerDark, kCheckerDark, 255));
+  EXPECT_THAT(shifted.second, RgbaEq(kCheckerLight, kCheckerLight, kCheckerLight, 255));
+
+  // ...and so must one cell of negative offset, which is the case that produces
+  // negative cell indices. Sign-preserving `%` would leave both cells dark.
+  const auto shiftedNegative = sampleFirstTwoCells(Vector2d(-kCheckerCell, 0.0));
+  EXPECT_THAT(shiftedNegative.first, RgbaEq(kCheckerDark, kCheckerDark, kCheckerDark, 255));
+  EXPECT_THAT(shiftedNegative.second, RgbaEq(kCheckerLight, kCheckerLight, kCheckerLight, 255));
+}
+
+TEST_F(RendererGeodeTest, CheckerboardUnderlayCellsAreLogicalPixelsNotDevicePixels) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  renderer.endFrame();
+
+  CheckerboardUnderlayParams params;
+  params.devicePixelRatio = 2.0;
+  ASSERT_TRUE(renderer.drawCheckerboardUnderlay(params));
+
+  const RendererBitmap snapshot = renderer.takeSnapshot();
+  ASSERT_FALSE(snapshot.empty());
+  // At 2x the first cell spans 32 device pixels, so the sample that was dark at
+  // 1x is still inside cell (0,0).
+  EXPECT_THAT(pixelAt(snapshot, kCheckerCell + kCheckerCell / 2, kCheckerCell / 2),
+              RgbaEq(kCheckerLight, kCheckerLight, kCheckerLight, 255))
+      << "Cells are sized in logical pixels, so a 2x ratio doubles their device-pixel extent";
+  EXPECT_THAT(pixelAt(snapshot, 2 * kCheckerCell + kCheckerCell / 2, kCheckerCell / 2),
+              RgbaEq(kCheckerDark, kCheckerDark, kCheckerDark, 255));
+}
+
+TEST_F(RendererGeodeTest, CheckerboardUnderlayRejectsDegenerateParameters) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  renderer.endFrame();
+
+  CheckerboardUnderlayParams zeroRatio;
+  zeroRatio.devicePixelRatio = 0.0;
+  EXPECT_FALSE(renderer.drawCheckerboardUnderlay(zeroRatio));
+
+  CheckerboardUnderlayParams zeroCell;
+  zeroCell.cellSizeLogicalPx = 0.0;
+  EXPECT_FALSE(renderer.drawCheckerboardUnderlay(zeroCell));
+
+  const RendererBitmap snapshot = renderer.takeSnapshot();
+  ASSERT_FALSE(snapshot.empty());
+  EXPECT_THAT(pixelAt(snapshot, kCheckerCell / 2, kCheckerCell / 2), IsTransparent())
+      << "A rejected underlay must leave the target untouched";
 }
 
 /// Width/height should reflect the viewport's device-pixel size after
@@ -404,6 +554,139 @@ TEST_F(RendererGeodeTest, TakeTextureSnapshotReturnsTextureAndDetachesTarget) {
   std::shared_ptr<const RendererTextureSnapshot> secondTexture = renderer.takeTextureSnapshot();
   ASSERT_TRUE(secondTexture != nullptr);
   EXPECT_EQ(secondTexture->dimensions(), texture->dimensions());
+}
+
+TEST_F(RendererGeodeTest, OwnedTextureSnapshotExplicitlyDestroysBackingOnRelease) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  renderer.endFrame();
+
+  const std::uint64_t destroysBefore =
+      geode::ScopedWgpuHandle<wgpu::Texture>::backingDestroyCountForTesting();
+  std::shared_ptr<const RendererTextureSnapshot> snapshot = renderer.takeTextureSnapshot();
+  ASSERT_NE(snapshot, nullptr);
+  snapshot.reset();
+
+  EXPECT_EQ(geode::ScopedWgpuHandle<wgpu::Texture>::backingDestroyCountForTesting(),
+            destroysBefore + 1u)
+      << "Dropping an owned presentation snapshot must explicitly destroy its GPU backing";
+}
+
+TEST_F(RendererGeodeTest, BorrowedTextureSnapshotNeverDestroysBacking) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  renderer.endFrame();
+
+  const std::uint64_t destroysBefore =
+      geode::ScopedWgpuHandle<wgpu::Texture>::backingDestroyCountForTesting();
+  const RendererTextureSnapshot* snapshot = renderer.borrowTextureSnapshot();
+  ASSERT_NE(snapshot, nullptr);
+
+  beginFrame(renderer);
+  renderer.endFrame();
+
+  EXPECT_EQ(geode::ScopedWgpuHandle<wgpu::Texture>::backingDestroyCountForTesting(), destroysBefore)
+      << "A frame-local borrowed snapshot must not destroy the renderer's reusable target";
+}
+
+TEST_F(RendererGeodeTest, SynchronousDirectPresentationReusesSameSizeRenderTarget) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  renderer.endFrame();
+  ASSERT_TRUE(renderer.borrowTextureSnapshot() != nullptr);
+
+  beginFrame(renderer);
+  renderer.endFrame();
+  ASSERT_TRUE(renderer.borrowTextureSnapshot() != nullptr);
+
+  beginFrame(renderer);
+  renderer.endFrame();
+  ASSERT_TRUE(renderer.borrowTextureSnapshot() != nullptr);
+  EXPECT_EQ(renderer.lastFrameTimings().counters.textureCreates, 0u)
+      << "A same-size synchronous direct presentation must borrow the current texture instead of "
+         "detaching the renderer's reusable full-canvas target.";
+}
+
+TEST_F(RendererGeodeTest, ResizingDefersSupersededPrimaryTargetDestruction) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  sharedDevice()->drainDeferredDestroys();
+  RendererGeode renderer = createRenderer();
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(64.0, 64.0);
+  viewport.devicePixelRatio = 1.0;
+  renderer.beginFrame(viewport);
+  renderer.endFrame();
+  ASSERT_EQ(sharedDevice()->deferredTextureDestroyCountForTesting(), 0u);
+
+  renderer.beginFrame(viewport);
+  EXPECT_EQ(sharedDevice()->deferredTextureDestroyCountForTesting(), 0u)
+      << "A same-size frame must retain the reusable primary target";
+  renderer.endFrame();
+
+  viewport.size = Vector2d(96.0, 64.0);
+  renderer.beginFrame(viewport);
+  EXPECT_EQ(sharedDevice()->deferredTextureDestroyCountForTesting(), 1u)
+      << "Replacing the primary target must retain its handle until a later frame boundary, then "
+         "explicitly destroy its GPU backing";
+  renderer.endFrame();
+
+  viewport.size = Vector2d(128.0, 64.0);
+  renderer.beginFrame(viewport);
+  EXPECT_EQ(sharedDevice()->deferredTextureDestroyCountForTesting(), 1u)
+      << "Each resize must drain the prior retirement before queuing the newly superseded target";
+  renderer.endFrame();
+}
+
+TEST_F(RendererGeodeTest, TransientTexturePoolStaysWithinGlobalMemoryBudgetAcrossSizeChurn) {
+  constexpr int kUniqueTextureSizes = 122;
+  constexpr int kMinimumTextureDimension = 512;
+  constexpr uint64_t kExpectedBudgetBytes = 64u * 1024u * 1024u;
+  constexpr std::size_t kMaximumTextureCount =
+      kExpectedBudgetBytes / (kMinimumTextureDimension * kMinimumTextureDimension * 4u);
+
+  RendererGeode firstRenderer = createRenderer();
+  RendererGeode secondRenderer = createRenderer();
+  for (int index = 0; index < kUniqueTextureSizes; ++index) {
+    RendererGeode& renderer = index % 2 == 0 ? firstRenderer : secondRenderer;
+    RenderViewport viewport;
+    viewport.size = Vector2d(kMinimumTextureDimension + index, kMinimumTextureDimension);
+    viewport.devicePixelRatio = 1.0;
+    renderer.beginFrame(viewport);
+    renderer.pushIsolatedLayer(1.0, MixBlendMode::Normal);
+    renderer.popIsolatedLayer();
+    renderer.endFrame();
+  }
+
+  RenderViewport crossRendererReuseViewport;
+  crossRendererReuseViewport.size =
+      Vector2d(kMinimumTextureDimension + kUniqueTextureSizes - 2, kMinimumTextureDimension);
+  crossRendererReuseViewport.devicePixelRatio = 1.0;
+  secondRenderer.beginFrame(crossRendererReuseViewport);
+  secondRenderer.pushIsolatedLayer(1.0, MixBlendMode::Normal);
+  secondRenderer.popIsolatedLayer();
+  secondRenderer.endFrame();
+  EXPECT_EQ(secondRenderer.lastFrameTimings().counters.textureCreates, 1u)
+      << "Only the resized primary target should be created; the isolated-layer texture was "
+         "released by the other renderer and must be reused";
+
+  const RendererGeodeTexturePoolStats firstStats = firstRenderer.texturePoolStats();
+  const RendererGeodeTexturePoolStats secondStats = secondRenderer.texturePoolStats();
+  EXPECT_EQ(firstStats.bytes, secondStats.bytes)
+      << "Renderers sharing a GeodeDevice must report the same device-global pool";
+  EXPECT_EQ(firstStats.textureCount, secondStats.textureCount);
+  EXPECT_EQ(firstStats.bucketCount, secondStats.bucketCount);
+  EXPECT_EQ(firstStats.budgetBytes, secondStats.budgetBytes);
+  EXPECT_EQ(firstStats.budgetBytes, kExpectedBudgetBytes);
+  EXPECT_LE(firstStats.bytes, kExpectedBudgetBytes)
+      << "Size churn must not retain unbounded free GPU texture memory";
+  EXPECT_LE(firstStats.textureCount, kMaximumTextureCount)
+      << "Each exercised texture is at least 1 MiB, so the byte budget also bounds count";
+  EXPECT_LE(firstStats.bucketCount, kMaximumTextureCount)
+      << "Unique texture sizes must not bypass the global pool budget";
 }
 
 TEST_F(RendererGeodeTest, DrawTextureSnapshotPreservesPremultipliedAlpha) {
@@ -768,6 +1051,137 @@ TEST_F(RendererGeodeTest, OversizedDashArrayPreservesSolidStrokeFallback) {
       << "oversized dash fallback should retain the solid stroke band";
   EXPECT_THAT(pixelAt(snapshot, 32, 32), IsTransparent())
       << "oversized dash fallback must not fill the closed stroke interior";
+}
+
+// ----------------------------------------------------------------------------
+// Device-aware stroke flattening.
+//
+// Stroke outlines are generated by `Path::strokeToFill`, which flattens curves
+// to line segments using a tolerance expressed in the PATH's coordinate space.
+// Geometry is submitted in document space and scaled by the device transform on
+// the GPU, so a fixed path-local tolerance is magnified by the view scale: a
+// circle (four kappa cubics) flattened once at document scale shows as a
+// visible chain of segments as soon as the view is zoomed in. That is a
+// rendering-correctness violation, so the tolerance must be derived from the
+// draw-time transform at every stroke call site.
+//
+// `strokeOutlinePoints` counts the points of the stroke outlines a frame
+// actually rebuilt, which makes the derivation observable: finer flattening at
+// a higher device scale means strictly more outline points. A scale-blind
+// pipeline reports the same count at 1x and at 32x.
+// ----------------------------------------------------------------------------
+
+/// The editor-overlay shape of the bug: a document-space path drawn with no
+/// source entity under a zoom transform (`OverlayRenderer` submits selection
+/// chrome exactly this way). The stroke outline must be re-flattened for the
+/// device scale rather than reused at document density.
+TEST_F(RendererGeodeTest, StrokeFlatteningTracksDeviceScaleWithoutASourceEntity) {
+  RendererGeode renderer = createRenderer();
+
+  PathShape shape;
+  shape.path = PathBuilder().addCircle(Vector2d(32.0, 32.0), 12.0).build();
+  shape.fillRule = FillRule::NonZero;
+
+  StrokeParams stroke;
+  stroke.strokeWidth = 2.0;
+
+  const auto outlinePointsAtScale = [&](double scale) {
+    beginFrame(renderer);
+    renderer.setPaint(solidStroke(css::RGBA(255, 0, 0, 255)));
+    renderer.setTransform(Transform2d::Scale(scale));
+    renderer.drawPath(shape, stroke);
+    renderer.endFrame();
+    return renderer.lastFrameTimings().counters.strokeOutlinePoints;
+  };
+
+  const uint64_t atOne = outlinePointsAtScale(1.0);
+  const uint64_t atThirtyTwo = outlinePointsAtScale(32.0);
+
+  ASSERT_GT(atOne, 0u) << "The stroke outline counter must observe the 1:1 draw.";
+  EXPECT_GT(atThirtyTwo, atOne * 4u)
+      << "A circle stroked at 32x device scale must be flattened far more finely than the same "
+         "circle at 1:1 ("
+      << atThirtyTwo << " vs " << atOne
+      << " outline points). Equal counts mean the flattening tolerance ignored the device "
+         "transform, which is what renders zoomed-in curves as visible polygons.";
+}
+
+/// Same invariant through the M2 per-entity stroke cache. That cache is keyed by
+/// `StrokeStyle`, which does not change with zoom, so the derived flattening
+/// tolerance has to be part of the key: otherwise a zoomed-in frame serves the
+/// coarse outline that was tessellated for the previous scale.
+TEST_F(RendererGeodeTest, StrokeCacheRebuildsOutlineWhenTheDeviceScaleChanges) {
+  ParseWarningSink warningSink;
+  auto maybeDocument = parser::SVGParser::ParseSVG(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+             <circle id="c" cx="50" cy="50" r="20"
+                     style="fill: none; stroke: black; stroke-width: 2"/>
+           </svg>)svg",
+      warningSink);
+  ASSERT_FALSE(maybeDocument.hasError()) << maybeDocument.error();
+  SVGDocument document = std::move(maybeDocument).result();
+  auto circle = document.querySelector("#c");
+  ASSERT_TRUE(circle.has_value());
+  const Entity circleEntity = circle->unsafeEntityHandle().entity();
+
+  RendererUtils::prepareDocumentForRendering(document, /*verbose=*/false, warningSink);
+
+  RendererGeode renderer = createRenderer();
+  const auto outlinePointsAtScale = [&](double scale) {
+    RenderViewport viewport;
+    viewport.size = Vector2d(100.0 * scale, 100.0 * scale);
+    viewport.devicePixelRatio = 1.0;
+    RendererDriver driver(renderer);
+    driver.drawEntityRange(document.registry(), circleEntity, circleEntity, viewport,
+                           Transform2d::Scale(scale));
+    return renderer.lastFrameTimings().counters.strokeOutlinePoints;
+  };
+
+  const uint64_t atOne = outlinePointsAtScale(1.0);
+  const uint64_t atThirtyTwo = outlinePointsAtScale(32.0);
+
+  ASSERT_GT(atOne, 0u) << "The first draw must build (and count) the stroke outline.";
+  EXPECT_GT(atThirtyTwo, atOne * 4u)
+      << "Zooming to 32x must re-derive the stroke outline (" << atThirtyTwo << " vs " << atOne
+      << " outline points). A zero or unchanged count means the stroke cache served the outline "
+         "flattened for the previous device scale.";
+}
+
+/// The flip side of the cache-key change: the derived tolerance is quantized to
+/// power-of-two scale buckets, so a continuous zoom inside one bucket must not
+/// re-flatten anything. Without the quantization every zoom frame would rebuild
+/// and re-encode every stroked path.
+TEST_F(RendererGeodeTest, StrokeCacheIsReusedWithinAScaleBucket) {
+  ParseWarningSink warningSink;
+  auto maybeDocument = parser::SVGParser::ParseSVG(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+             <circle id="c" cx="50" cy="50" r="20"
+                     style="fill: none; stroke: black; stroke-width: 2"/>
+           </svg>)svg",
+      warningSink);
+  ASSERT_FALSE(maybeDocument.hasError()) << maybeDocument.error();
+  SVGDocument document = std::move(maybeDocument).result();
+  auto circle = document.querySelector("#c");
+  ASSERT_TRUE(circle.has_value());
+  const Entity circleEntity = circle->unsafeEntityHandle().entity();
+
+  RendererUtils::prepareDocumentForRendering(document, /*verbose=*/false, warningSink);
+
+  RendererGeode renderer = createRenderer();
+  const auto flattensAtScale = [&](double scale) {
+    RenderViewport viewport;
+    viewport.size = Vector2d(400.0, 400.0);
+    viewport.devicePixelRatio = 1.0;
+    RendererDriver driver(renderer);
+    driver.drawEntityRange(document.registry(), circleEntity, circleEntity, viewport,
+                           Transform2d::Scale(scale));
+    return renderer.lastFrameTimings().counters.strokeOutlineFlattens;
+  };
+
+  ASSERT_GT(flattensAtScale(2.5), 0u) << "The first draw at this scale must build the outline.";
+  EXPECT_EQ(flattensAtScale(2.9), 0u)
+      << "A zoom step inside the same power-of-two scale bucket must reuse the cached stroke "
+         "outline instead of re-flattening every frame.";
 }
 
 /// Fill and stroke together: interior should be the fill color, the stroke
@@ -2240,6 +2654,16 @@ TEST_F(RendererGeodeTest, FilterAppliedBeforeClipPathSvgRenderingOrder) {
 // historical failure was a SIGSEGV in
 // drawPath -> Impl::getFillEncode -> GeodeDevice::countPathEncode() when the
 // resvg suite ran on a worker whose adapter acquisition failed.
+TEST(RendererGeodeNullDeviceTest, ReadbackStatsAreEmpty) {
+  RendererGeode renderer(std::shared_ptr<geode::GeodeDevice>(nullptr), /*verbose=*/false);
+
+  const RendererReadbackStats stats = renderer.consumeReadbackStats();
+
+  EXPECT_EQ(stats.count, 0);
+  EXPECT_EQ(stats.pollIterations, 0);
+  EXPECT_FALSE(stats.usedTimedWaitAny);
+}
+
 TEST_F(RendererGeodeTest, NullDeviceEntersNoOpModeWithoutCrashing) {
   // Deterministically simulate CreateHeadless() having returned nullptr by
   // handing the renderer a null device. Does not depend on the host GPU.

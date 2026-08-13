@@ -472,6 +472,7 @@ struct GeoEncoder::Impl {
     wgpu::BindGroup bindGroup = transientResources.retain(dev.createBindGroup(bgDesc));
     device->countBindGroup();
 
+    recordGeometryDebugDraw(encoded);
     pass.get().setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
     pass.get().setBindGroup(0, bindGroup, 0, nullptr);
     pass.get().draw(static_cast<uint32_t>(encoded.quadVertices.size()), 1, 0, 0);
@@ -551,6 +552,19 @@ struct GeoEncoder::Impl {
 
   // Current transform - applied to MVP for the next draw.
   Transform2d transform = Transform2d();  // Identity.
+
+  // Optional renderer-owned debug observer. Null in normal rendering;
+  // `rootFromTarget` canonicalizes offscreen target pixels for that observer.
+  GeometryDebugSink* geometryDebugSink = nullptr;
+  Transform2d geometryDebugRootFromTarget;
+
+  void recordGeometryDebugDraw(const EncodedPath& encoded,
+                               std::span<const float> instanceTransforms = {}) const {
+    if (geometryDebugSink != nullptr) {
+      geometryDebugSink->recordSlugDraw(encoded, transform, geometryDebugRootFromTarget,
+                                        instanceTransforms);
+    }
+  }
 
   // Current scissor rectangle in target-pixel coords. An empty/unset
   // scissor means "no clipping" (full target extent). Applied to each
@@ -1104,6 +1118,7 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
   wgpu::BindGroup bindGroup = impl_->transientResources.retain(dev.createBindGroup(bgDesc));
   impl_->device->countBindGroup();
 
+  impl_->recordGeometryDebugDraw(encoded);
   impl_->maskPass.get().setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
   impl_->maskPass.get().setBindGroup(0, bindGroup, 0, nullptr);
   impl_->maskPass.get().draw(static_cast<uint32_t>(encoded.quadVertices.size()), 1, 0, 0);
@@ -1149,6 +1164,11 @@ void GeoEncoder::clearClipMask() {
 
 void GeoEncoder::setBufferPool(GeodeBufferPool* pool) {
   impl_->bufferPool = pool;
+}
+
+void GeoEncoder::setGeometryDebugSink(GeometryDebugSink* sink, const Transform2d& rootFromTarget) {
+  impl_->geometryDebugSink = sink;
+  impl_->geometryDebugRootFromTarget = rootFromTarget;
 }
 
 void GeoEncoder::setAntialias(bool antialias) {
@@ -1429,6 +1449,7 @@ void GeoEncoder::Impl::submitResidentFillDraw(GeodeResidentSlot& slot, const Enc
     buildResidentBindGroup(slot);
   }
 
+  recordGeometryDebugDraw(encoded);
   pass.get().setVertexBuffer(0, slot.buffer.get(), slot.vertex.offset, slot.vertex.size);
   pass.get().setBindGroup(0, slot.bindGroup.get(), 0, nullptr);
   pass.get().draw(slot.vertexCount, 1, 0, 0);
@@ -1527,7 +1548,7 @@ void GeoEncoder::fillPathInstanced(const EncodedPath& encoded, const css::RGBA& 
   args.instanceTransformsSize = itAlloc.size;
   args.instanceCount = instanceCount;
 
-  submitFillDraw(args);
+  submitFillDraw(args, instanceTransforms);
 }
 
 void GeoEncoder::fillPathPattern(const Path& path, FillRule rule, const PatternPaint& paint,
@@ -1565,7 +1586,8 @@ void GeoEncoder::fillPathPattern(const Path& path, FillRule rule, const PatternP
   submitFillDraw(args);
 }
 
-void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
+void GeoEncoder::submitFillDraw(const FillDrawArgs& args,
+                                std::span<const float> instanceTransforms) {
   // Dummy resources are pre-created in the encoder constructor; no
   // per-draw ensure call is needed.
   impl_->ensurePassOpen();
@@ -1688,6 +1710,7 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
   impl_->device->countBindGroup();
 
   // 4. Record the draw call - one quad (6 vertices) per path.
+  impl_->recordGeometryDebugDraw(encoded, instanceTransforms);
   impl_->pass.get().setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
   impl_->pass.get().setBindGroup(0, bindGroup, 0, nullptr);
   impl_->pass.get().draw(static_cast<uint32_t>(encoded.quadVertices.size()), args.instanceCount, 0,
@@ -2020,9 +2043,10 @@ void GeoEncoder::drawImage(const svg::ImageResource& image, const Box2d& destRec
                                         impl_->transientResources);
 }
 
-void GeoEncoder::drawTexture(const wgpu::Texture& texture, const Box2d& destRect, double opacity,
-                             bool pixelated) {
-  if (!texture || destRect.isEmpty() || opacity <= 0.0) {
+void GeoEncoder::drawTexture(const wgpu::Texture& texture, const Box2d& destRect,
+                             const Box2d& sourceUv, double opacity, bool pixelated,
+                             bool sourceIsPremultiplied) {
+  if (!texture || destRect.isEmpty() || sourceUv.isEmpty() || opacity <= 0.0) {
     return;
   }
 
@@ -2034,14 +2058,15 @@ void GeoEncoder::drawTexture(const wgpu::Texture& texture, const Box2d& destRect
 
   GeodeTextureEncoder::QuadParams qp;
   qp.destRect = destRect;
-  qp.srcRect = Box2d({0.0, 0.0}, {1.0, 1.0});
+  qp.srcRect = sourceUv;
   qp.opacity = opacity;
   qp.filter =
       pixelated ? GeodeTextureEncoder::Filter::Nearest : GeodeTextureEncoder::Filter::Linear;
-  // Renderer texture snapshots come from Geode render targets, which store
-  // premultiplied RGBA. Sampling them as straight-alpha would multiply RGB by
-  // alpha a second time and visibly darken translucent cached layers.
-  qp.sourceIsPremultiplied = true;
+  // Texture snapshots produced by Geode render targets store premultiplied RGBA; sampling
+  // those as straight-alpha would multiply RGB by alpha a second time and visibly darken
+  // translucent cached layers. Snapshots wrapping a host-uploaded CPU bitmap are
+  // straight-alpha and need the shader's straight-to-premultiplied conversion instead.
+  qp.sourceIsPremultiplied = sourceIsPremultiplied;
   qp.clipMaskView = impl_->activeClipMaskView;
 
   GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass.get(),

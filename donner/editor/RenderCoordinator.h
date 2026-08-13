@@ -58,7 +58,9 @@ class SelectTool;
  * @param hasActiveDrag True while a drag preview is active.
  * @param currentVersion Current document frame version.
  * @param displayedDocVersion Document frame version currently presented.
- * @param hasCachedPresentation True when any current-version presentation texture is cached.
+ * @param hasCachedPresentation True when any current presentation texture is already cached.
+ *   The selected layer may still be warming; the existing full presentation is sufficient to
+ *   keep zoom responsive while that stale prewarm is cancelled.
  * @param rasterViewportSettled True when the viewport has passed the commit delay.
  * @param needsOverviewInfill True when a bounded viewport still needs overview coverage.
  * @param pendingSelectedLayerRasterization True when selected-layer pixels are known stale.
@@ -67,6 +69,26 @@ class SelectTool;
     Entity selectedEntity, bool hasActiveDrag, std::uint64_t currentVersion,
     std::uint64_t displayedDocVersion, bool hasCachedPresentation, bool rasterViewportSettled,
     bool needsOverviewInfill, bool pendingSelectedLayerRasterization);
+
+/**
+ * Return true when selected-layer overdraw should replace the base raster viewport.
+ *
+ * Direct worker surfaces disable selection-only prewarming because the UI thread cannot consume a
+ * promoted texture. They still use overdraw when a drag or another real invalidation needs a
+ * worker render.
+ *
+ * @param selectedEntity Selected compositable entity, or entt::null.
+ * @param requestOverviewInfill True when the request is reserved for full-document overview fill.
+ * @param rasterViewportBounded True when the base raster only covers the visible viewport.
+ * @param selectionOnlyPrewarmMayTriggerRender Backend policy for idle selection cache misses.
+ * @param hasIndependentRenderReason True when drag, document invalidation, forced rasterization, or
+ *   retry already requires a worker request.
+ */
+[[nodiscard]] bool ShouldUseSelectedPrewarmRasterViewport(Entity selectedEntity,
+                                                          bool requestOverviewInfill,
+                                                          bool rasterViewportBounded,
+                                                          bool selectionOnlyPrewarmMayTriggerRender,
+                                                          bool hasIndependentRenderReason);
 
 /**
  * Return true when a render result satisfies a pending selected-layer rasterization.
@@ -96,14 +118,14 @@ OverlayRepresentedDragPreviewForPresentation(
     bool hasPresentableActiveDragTarget);
 
 /**
- * Return the document transform that projects live drag chrome onto the represented presentation.
+ * Return the document transform that projects geometry from one drag frame onto another.
  *
- * @param liveDragPreview Live drag transform currently applied to the DOM.
- * @param representedDragPreview Drag transform the presented content represents.
+ * @param sourceDragPreview Drag transform represented by the source geometry.
+ * @param targetDragPreview Drag transform the presented content represents.
  */
-[[nodiscard]] Transform2d OverlayRepresentedDocumentFromLiveDocument(
-    const std::optional<SelectTool::ActiveDragPreview>& liveDragPreview,
-    const std::optional<SelectTool::ActiveDragPreview>& representedDragPreview);
+[[nodiscard]] Transform2d OverlayDocumentFromSourceDragPreview(
+    const std::optional<SelectTool::ActiveDragPreview>& sourceDragPreview,
+    const std::optional<SelectTool::ActiveDragPreview>& targetDragPreview);
 
 /**
  * Project live gesture chrome, including the selection size/angle chip, to the overlay state.
@@ -138,6 +160,33 @@ public:
   [[nodiscard]] const FrameCostBreakdown& lastFrameCostBreakdown() const {
     return lastFrameCostBreakdown_;
   }
+  /// Document canvas-size commits this coordinator has made since startup.
+  ///
+  /// Cumulative, unlike the per-frame counter in `FrameCostBreakdown`. A commit
+  /// invalidates the render tree, so it forces a document render that no
+  /// interaction asked for; the browser suites need to tell that render apart
+  /// from one an interaction caused before they can assert on render counts,
+  /// and the commit is evaluated inside a rendered frame, so a commit still
+  /// pending when the demand-driven loop parks lands on whatever frame the next
+  /// interaction wakes.
+  [[nodiscard]] std::uint64_t documentCanvasCommitTotal() const {
+    return documentCanvasCommitTotal_;
+  }
+  /// Overview-infill render requests posted since startup.
+  ///
+  /// An overview-infill request carries no selection prewarm and no drag: it
+  /// exists to restore whole-document coverage the presenter is missing, so
+  /// like a canvas-size commit it is a render the editor owes itself rather
+  /// than one an interaction asked for. Whether the previous coverage survives
+  /// an interaction is cache- and timing-dependent, which is why a suite that
+  /// counts an interaction's renders has to be able to name this one.
+  [[nodiscard]] std::uint64_t overviewInfillRenderTotal() const {
+    return overviewInfillRenderTotal_;
+  }
+  /// Request one worker render even when document and viewport epochs are already current.
+  void requestPresentationRefresh() { pendingPresentationRefresh_ = true; }
+  /// Whether a renderer-presentation setting still needs a worker frame.
+  [[nodiscard]] bool presentationRefreshPending() const { return pendingPresentationRefresh_; }
   /// Clear the per-frame cost accumulator before a new UI frame starts.
   void beginFrameCostTracking() { lastFrameCostBreakdown_ = FrameCostBreakdown{}; }
   /// Replace transient source-hover chrome elements.
@@ -186,10 +235,12 @@ public:
   /// TL, TR, BR, BL mapped through the text's transform), in document space.
   void setTextEditingChrome(std::optional<SelectionChromeSnapshot::TextCaret> caretDoc,
                             std::optional<std::array<Vector2d, 4>> frameCornersDoc,
-                            float frameOpacity = 1.0f) {
+                            float frameOpacity = 1.0f,
+                            std::vector<std::array<Vector2d, 4>> selectionQuadsDoc = {}) {
     textEditingCaretDoc_ = caretDoc;
     textEditingFrameCornersDoc_ = frameCornersDoc;
     textEditingFrameOpacity_ = frameOpacity;
+    textEditingSelectionQuadsDoc_ = std::move(selectionQuadsDoc);
   }
 
   /// Set (or clear) the text tool's drag-to-create preview chrome for the
@@ -200,20 +251,24 @@ public:
     textBoxDragPreviewDoc_ = previewDoc;
   }
 
-  void resetForLoadedDocument();
+  /**
+   * Reset presentation state after loading a different document.
+   *
+   * @param documentGeneration Generation of the newly loaded document.
+   */
+  void resetForLoadedDocument(std::uint64_t documentGeneration);
   void refreshSelectionBoundsCache(EditorApp& app);
   void promoteSelectionBoundsIfReady();
   /// Capture the editor chrome (path outlines, selection AABBs, marquee) for immediate
   /// presentation. `marqueeRectDoc` is the active marquee rectangle in document space (nullopt when
-  /// the user isn't marquee-dragging). The snapshot is drawn directly by Donner's OverlayRenderer
-  /// straight onto the Geode framebuffer, so selected chrome does not allocate, rasterize,
-  /// snapshot, or upload an overlay texture.
+  /// the user isn't marquee-dragging). The snapshot remains vector geometry until the presentation
+  /// layer rasterizes it into the ordered Geode overlay texture.
   bool rasterizeOverlayForCurrentSelection(
       EditorApp& app, const ViewportState& viewport, const std::optional<Box2d>& marqueeRectDoc,
       std::optional<SelectTool::ActiveDragPreview> representedDragPreview = std::nullopt,
       std::optional<SelectTool::ActiveTransformBoundsPreview> activeBoundsPreview = std::nullopt,
       std::optional<SelectionChromeDetail> selectionDetail = std::nullopt,
-      std::optional<SelectTool::ActiveDragPreview> liveDragPreview = std::nullopt);
+      std::optional<SelectTool::ActiveDragPreview> documentDragPreview = std::nullopt);
   /// Rasterize the current UI-frame overlay immediately before presentation.
   ///
   /// Unlike content render scheduling, overlay chrome is intentionally not gated on worker
@@ -232,8 +287,10 @@ public:
   /// is allowed for callers that don't care about backend timing.
   void pollRenderResult(EditorApp& app, const ViewportState& viewport, GlTextureCache& textures,
                         FrameHistory* frameHistory = nullptr);
-  void maybeRequestRender(EditorApp& app, SelectTool& selectTool, const ViewportState& viewport,
-                          GlTextureCache* textures = nullptr);
+  bool maybeRequestRender(
+      EditorApp& app, SelectTool& selectTool, const ViewportState& viewport,
+      GlTextureCache* textures = nullptr, bool supersedeInFlight = false,
+      SelectionChromeDetail directSurfaceSelectionDetail = SelectionChromeDetail::Full);
   /// Record that a document mutation requires a current-version presentation handoff.
   ///
   /// @param flushResult Metadata from the just-flushed editor command batch.
@@ -335,6 +392,13 @@ private:
   /// Pen live-preview element baked into the current immediate overlay snapshot. Used to
   /// invalidate cached chrome when the preview target appears/changes/clears.
   std::optional<svg::SVGElement> lastOverlayPenLivePreviewElement_;
+  /// The live preview element's computed spline (element space) observed when the current
+  /// overlay snapshot was captured. Pen anchor/handle drags mutate the path in place on the
+  /// SAME element with no other overlay input changing, so element identity alone froze the
+  /// snapshot at its first - possibly degenerate - capture while the pen preview suppressed
+  /// the element's raster tile, leaving the edited path invisible for the rest of the drag.
+  /// Comparing the spline itself re-captures the overlay whenever the geometry changes.
+  std::optional<Path> lastOverlayPenLiveSpline_;
   /// Pen hover chrome pushed by the shell each frame: rubber-band segment
   /// preview + close-path affordance (document space).
   std::optional<Path> penHoverPreviewSegmentDoc_;
@@ -342,6 +406,7 @@ private:
   std::optional<SelectionChromeSnapshot::TextCaret> textEditingCaretDoc_;
   std::optional<std::array<Vector2d, 4>> textEditingFrameCornersDoc_;
   float textEditingFrameOpacity_ = 1.0f;
+  std::vector<std::array<Vector2d, 4>> textEditingSelectionQuadsDoc_;
   /// Text-box drag-to-create preview pushed by the shell each frame.
   std::optional<SelectionChromeSnapshot::TextBoxDragPreview> textBoxDragPreviewDoc_;
   /// Pen hover chrome baked into the current immediate overlay snapshot;
@@ -352,6 +417,7 @@ private:
   std::optional<SelectionChromeSnapshot::TextCaret> lastOverlayTextEditingCaretDoc_;
   std::optional<std::array<Vector2d, 4>> lastOverlayTextEditingFrameCornersDoc_;
   float lastOverlayTextEditingFrameOpacity_ = 1.0f;
+  std::vector<std::array<Vector2d, 4>> lastOverlayTextEditingSelectionQuadsDoc_;
   std::optional<SelectionChromeSnapshot::TextBoxDragPreview> lastOverlayTextBoxDragPreviewDoc_;
 
   PresentationRenderScheduler renderScheduler_;
@@ -376,7 +442,13 @@ private:
   /// True after a structural mutation whose existing overview/full-document cache may contain
   /// deleted pixels. The old presentation remains visible until the replacement render lands.
   bool pendingDocumentMutationOverviewRefresh_ = false;
+  /// Renderer-only state changed and must be represented by the next accepted worker frame.
+  bool pendingPresentationRefresh_ = false;
   FrameCostBreakdown lastFrameCostBreakdown_;
+  /// Cumulative canvas-size commits; see `documentCanvasCommitTotal`.
+  std::uint64_t documentCanvasCommitTotal_ = 0;
+  /// Cumulative overview-infill requests; see `overviewInfillRenderTotal`.
+  std::uint64_t overviewInfillRenderTotal_ = 0;
 };
 
 }  // namespace donner::editor

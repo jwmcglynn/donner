@@ -32,6 +32,7 @@
 /// `!isBusy()` unless they are using guarded access for immediate overlay presentation. The UI
 /// thread must not call any method on the worker `Renderer` at any time - it lives on the worker.
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -46,9 +47,11 @@
 #include <variant>
 #include <vector>
 
+
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
+#include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
@@ -64,7 +67,12 @@ class CompositorController;
 }
 }  // namespace donner::svg
 
+namespace donner::geode {
+class GeodeDevice;
+}
+
 namespace donner::editor {
+
 
 /// Non-null renderer/document handoff for a render request.
 struct RenderLease {
@@ -106,8 +114,8 @@ struct RenderRequest {
     svg::compositor::InteractionHint interactionKind = svg::compositor::InteractionHint::ActiveDrag;
     /// Active drag translation represented by this request. Selection prewarms use zero.
     Vector2d translation = Vector2d::Zero();
-    /// Active affine transform represented by this request. Selection
-    /// prewarms use identity.
+    /// Active affine transform represented by this request, relative to the
+    /// drag-start cached document. Selection prewarms use identity.
     Transform2d documentFromCachedDocument = Transform2d();
     /// Monotonic id for the active drag gesture. Selection prewarms use zero.
     std::uint64_t dragGeneration = 0;
@@ -129,6 +137,8 @@ struct RenderRequest {
 
   /// Non-null renderer/document lease for the worker handoff.
   RenderLease lease;
+  /// Internal timestamp captured by `requestRender()` for queue-latency diagnostics.
+  std::chrono::steady_clock::time_point queuedAt;
   /// Document frame version snapshotted at request time so the UI can
   /// match the landed bitmap with other same-version assets.
   std::uint64_t version = 0;
@@ -158,6 +168,13 @@ struct RenderRequest {
   /// editor camera so the worker can render a bounded high-zoom output
   /// surface without reading live UI state.
   EditorRasterViewport rasterViewport;
+  /// Live editor viewport \ref rasterViewport was derived from.
+  ///
+  /// Carried through the worker untouched so presentation can place the
+  /// resulting pixels with the same screen transform they were rasterized
+  /// against. Placing them through a later viewport would stretch a
+  /// viewport-bounded raster past the document region it actually covers.
+  ViewportState viewport;
   /// True when this request should produce only a low-resolution full-document overview infill.
   ///
   /// The worker still keeps the selected entity promoted, but skips the composited split preview
@@ -190,10 +207,50 @@ struct PresentationSnapshotPlan {
 [[nodiscard]] PresentationSnapshotPlan ChoosePresentationSnapshotPlan(
     bool hasCompositedPreview, bool requiresTextureSnapshotPresentation, bool captureCpuSnapshot);
 
+/// Attribution of one worker-to-UI handoff, in milliseconds.
+struct HandoffTimings {
+  /// Total time from worker render completion until the UI thread accepted the result.
+  double pollDelayMs = 0.0;
+  /// Portion spent waiting for the UI thread's next frame once the result was pollable.
+  ///
+  /// A result becomes pollable at render completion on every platform, so this
+  /// equals \ref pollDelayMs. It stays a separate field because it is the one
+  /// with a meaning: "the UI thread had not run a frame yet". The browser used
+  /// to insert a task-boundary hop between completion and pollability, and the
+  /// split existed to tell that hop apart from this wait; The single-canvas replacement removed
+  /// the hop along with the worker-surface presentation boundary.
+  double wakeToPollMs = 0.0;
+};
+
+/**
+ * Attribute the worker-to-UI handoff delay.
+ *
+ * A default-constructed \p workerCompletedAt means "not recorded" and yields all-zero timings.
+ * Timestamps that go backwards are clamped to zero rather than reported as negative durations.
+ *
+ * @param workerCompletedAt When the worker finished the render and staged the result.
+ * @param polledAt When the UI thread accepted the result.
+ */
+inline HandoffTimings ComputeHandoffTimings(std::chrono::steady_clock::time_point workerCompletedAt,
+                                            std::chrono::steady_clock::time_point polledAt) {
+  HandoffTimings timings;
+  if (workerCompletedAt.time_since_epoch().count() == 0) {
+    return timings;
+  }
+  timings.pollDelayMs = std::max(
+      0.0, std::chrono::duration<double, std::milli>(polledAt - workerCompletedAt).count());
+  timings.wakeToPollMs = timings.pollDelayMs;
+  return timings;
+}
+
 /// Presentation payload plus the document version it was rendered from.
 struct RenderResult {
   /// Internal timing split for one async worker iteration.
   struct WorkerTimingBreakdown {
+    /// Time from UI-thread request submission until the worker dequeues the request.
+    double queueWaitMs = 0.0;
+    /// Worker-thread preflight between dequeue and the measured render iteration.
+    double dequeueToStartMs = 0.0;
     /// Time before `CompositorController::renderFrame`, including compositor selection setup.
     double setupMs = 0.0;
     /// Time spent in `CompositorController::renderFrame`.
@@ -204,6 +261,17 @@ struct RenderResult {
     double finalSnapshotMs = 0.0;
     /// Time spent copying compositor diagnostics for editor panels.
     double diagnosticsMs = 0.0;
+    /// Time from worker result completion until the UI thread polls it.
+    double pollDelayMs = 0.0;
+    /// Portion of `pollDelayMs` spent waiting for the UI thread's next frame after the result
+    /// became pollable. This is the handoff's animation-frame phase wait.
+    double wakeToPollMs = 0.0;
+    /// GPU-to-CPU readbacks performed by the worker renderer and its offscreen instances.
+    int readbackCount = 0;
+    /// Legacy device-poll iterations used while waiting for those readbacks.
+    int readbackPollIterations = 0;
+    /// True when browser readbacks used the event-driven timed WaitAny path.
+    bool usedTimedWaitAny = false;
   };
 
   /// One composite tile from the worker's `CompositorController::
@@ -284,9 +352,13 @@ struct RenderResult {
   std::optional<CompositedPreview> compositedPreview;
   /// Raster viewport used to produce this result.
   EditorRasterViewport rasterViewport;
+  /// Editor viewport \ref rasterViewport was derived from, copied from the request.
+  ViewportState viewport;
   /// True when this result should update only retained overview infill.
   bool overviewInfillOnly = false;
   std::uint64_t version = 0;
+  /// Document generation captured by the render request.
+  std::uint64_t documentGeneration = 0;
   /// Wall-clock milliseconds spent in the worker iteration after a request is
   /// dequeued, including `CompositorController::renderFrame`, final
   /// snapshot/readback work, and diagnostic snapshots that gate presentation.
@@ -294,11 +366,63 @@ struct RenderResult {
   /// on the frame graph. Zero means no worker timing was recorded.
   double workerMs = 0.0;
   WorkerTimingBreakdown workerTiming;
+  /// Internal completion timestamp used to populate `workerTiming.pollDelayMs` on acceptance.
+  std::chrono::steady_clock::time_point workerCompletedAt;
+};
+
+/// Terminal outcome for one low-priority sample-thumbnail render attempt.
+enum class SampleThumbnailRenderOutcome : std::uint8_t {
+  Rendered,
+  Cancelled,
+  ParseError,
+  RenderError,
+  RendererUnavailable,
+};
+
+/// One SVG source queued for bounded, low-priority rendering on the existing render worker.
+struct SampleThumbnailRenderRequest {
+  /// Caller-defined key copied into the result (the sample-catalog index in `EditorShell`).
+  std::uint64_t key = 0;
+  /// Complete SVG source. The request owns its copy until the worker finishes parsing it.
+  std::string source;
+  /// Output bitmap dimensions in device pixels.
+  Vector2i dimensions = Vector2i::Zero();
+  /// Root renderer used to create the worker-local offscreen on native builds.
+  ///
+  /// Browser builds ignore this pointer and reuse the renderer already owned by their worker.
+  /// The native caller must keep it alive until the result is polled or the renderer is destroyed.
+  svg::RendererInterface* nativeRenderer = nullptr;
+};
+
+/// CPU bitmap returned by one asynchronous sample-thumbnail attempt.
+struct SampleThumbnailRenderResult {
+  std::uint64_t key = 0;
+  SampleThumbnailRenderOutcome outcome = SampleThumbnailRenderOutcome::RenderError;
+  svg::RendererBitmap bitmap;
+};
+
+/// Observable state and monotonic counters for the bounded sample-thumbnail lane.
+struct SampleThumbnailRenderStats {
+  std::uint64_t requested = 0;
+  std::uint64_t started = 0;
+  std::uint64_t completed = 0;
+  std::uint64_t rendered = 0;
+  std::uint64_t cancelled = 0;
+  std::uint64_t offscreenRendererCreations = 0;
+  bool pending = false;
+  bool active = false;
+  bool resultReady = false;
+};
+
+/// Whether construction starts the render worker or leaves it inert until an explicit start call.
+enum class AsyncRendererStartMode : std::uint8_t {
+  Immediate,
+  Deferred,
 };
 
 class AsyncRenderer {
 public:
-  AsyncRenderer();
+  explicit AsyncRenderer(AsyncRendererStartMode startMode = AsyncRendererStartMode::Immediate);
   ~AsyncRenderer();
 
   AsyncRenderer(const AsyncRenderer&) = delete;
@@ -306,7 +430,31 @@ public:
   AsyncRenderer(AsyncRenderer&&) = delete;
   AsyncRenderer& operator=(AsyncRenderer&&) = delete;
 
-  /// Returns true while a render is in flight or a finished result is waiting to be polled.
+  /**
+   * Start the render worker after its borrowed main-thread dependencies are ready.
+   *
+   * Native construction starts immediately for existing standalone users. Browser editor startup
+   * calls this explicitly after synchronous main-thread WebGPU initialization, because Safari
+   * cannot safely interleave another device's Promise completion with an Asyncify readback.
+   * Repeated calls and calls after shutdown are no-ops.
+   */
+  void start();
+
+  /// True when this instance currently owns a joinable/running render worker.
+  [[nodiscard]] bool workerStartedForTesting() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return thread_.joinable();
+  }
+
+  /**
+   * Stop accepting work, cancel both priority lanes, detach the wake callback, and join the worker.
+   *
+   * Safe to call more than once from the owning thread. The destructor calls this automatically;
+   * owners with borrowed worker dependencies may call it earlier to control teardown order.
+   */
+  void shutdown();
+
+  /// Returns true while a render/result or document-reading cache warmup owns the input gate.
   /// The UI thread must not touch the `Renderer` or mutate the `SVGDocument` while this returns
   /// true.
   [[nodiscard]] bool isBusy() const;
@@ -323,6 +471,14 @@ public:
   [[nodiscard]] bool waitUntilNoRenderInFlightForTesting(
       std::chrono::steady_clock::time_point deadline);
 
+  /// Whether the compositor's document reference is bound to the renderer-owned retained value.
+  /// A compositor bound to a request-local RenderLease becomes dangling before deferred warmup.
+  [[nodiscard]] bool compositorUsesRetainedDocumentForTesting() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return compositor_ != nullptr && compositorDocument_.has_value() &&
+           &compositor_->document() == &*compositorDocument_;
+  }
+
   /**
    * Inject a fixed delay into each worker render attempt for replay tests.
    *
@@ -336,6 +492,33 @@ public:
    * @param frameCount Number of poll attempts to withhold a newly staged result.
    */
   void setReplayResultHoldFramesForTesting(int frameCount);
+
+  /// Install a synthetic low-priority warmup state for document-access gate tests.
+  void stageCompositorWarmupForTesting(bool pending, bool active) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (std::holds_alternative<ShutdownState>(workerState_)) {
+      return;
+    }
+    pendingCompositorWarmup_ = pending;
+    compositorWarmupActive_ = active;
+  }
+
+  /// Simulate the active warmup releasing its document guard.
+  void completeCompositorWarmupForTesting() {
+    std::function<void()> wake;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      pendingCompositorWarmup_ = false;
+      compositorWarmupActive_ = false;
+      if (std::exchange(compositorWarmupReleaseWakePending_, false)) {
+        wake = wakeCallback_;
+      }
+    }
+    cv_.notify_all();
+    if (wake) {
+      wake();
+    }
+  }
 
   /// Number of poll attempts that intentionally withheld a staged result for replay tests.
   [[nodiscard]] std::uint64_t replayResultHoldPollCountForTesting() const {
@@ -367,6 +550,29 @@ public:
   /// `std::nullopt` if no render is pending-ready (either still busy
   /// or idle with nothing to hand off).
   std::optional<RenderResult> pollResult();
+
+  /**
+   * Queue one low-priority SVG thumbnail on this renderer's existing worker.
+   *
+   * The lane has exactly one slot spanning pending, active, and completed-but-unpolled work. Main
+   * document renders always take priority and cancel an active thumbnail at the next safe point.
+   *
+   * @return True when the request was accepted, false when the bounded slot is occupied or the
+   * renderer is shutting down.
+   */
+  [[nodiscard]] bool requestSampleThumbnail(SampleThumbnailRenderRequest request);
+
+  /// Poll one completed sample-thumbnail result without changing main-document busy state.
+  [[nodiscard]] std::optional<SampleThumbnailRenderResult> pollSampleThumbnailResult();
+
+  /// Drop queued/unpolled sample-thumbnail work and cancel an active attempt.
+  void cancelSampleThumbnailWork();
+
+  /// Snapshot low-priority worker counters and slot state.
+  [[nodiscard]] SampleThumbnailRenderStats sampleThumbnailRenderStats() const;
+
+  /// Inject a cancellation-aware delay before thumbnail parsing for deterministic priority tests.
+  void setSampleThumbnailRenderDelayForTesting(std::chrono::milliseconds delay);
 
   /// Install a callback that the worker thread invokes when a render
   /// result or cancellation completes. Used by the editor's on-demand
@@ -400,11 +606,13 @@ public:
   }
 
   /// Toggle the Geode geometry debug overlay
-  /// (`RendererInterface::setDebugGeometryOverlay`) on the document
-  /// renderer. The change applies at the start of the next worker
-  /// iteration; on a flip the worker also calls
-  /// `CompositorController::resetAllLayers()` so every cached segment
-  /// re-rasterizes with the new overlay state.
+  /// (`RendererInterface::setDebugGeometryOverlay`) on the root document
+  /// renderer. The change applies at the start of the next worker iteration.
+  /// Each state transition clears retained compositor state once. While
+  /// enabled, selection promotion/prewarm remains suppressed and every render
+  /// presents one flat full-document root frame so retained tiles cannot crop
+  /// or cover the frame-final wireframe. Disabling performs one transition
+  /// reset, then normal retained promotion resumes.
   ///
   /// Same threading contract as \ref setTightBoundedSegmentsEnabled:
   /// safe to call from the UI thread while a render is in flight.
@@ -422,8 +630,9 @@ public:
   /// since construction. Tests use this to assert that frame-version mutations
   /// do not masquerade as document replacements.
   ///
-  /// Counts only resets driven by a `request.documentGeneration` mismatch; not
-  /// the implicit reset performed on first compositor construction.
+  /// Counts resets driven by a `request.documentGeneration` mismatch and
+  /// geometry-debug state transitions; not the implicit reset performed on
+  /// first compositor construction.
   ///
   /// Safe to read from the UI thread; incremented under the internal mutex on
   /// the worker.
@@ -520,6 +729,12 @@ public:
     return lastDocumentCanvasSize_;
   }
 
+  /// Enable expensive compositor inspector snapshots for the developer panel.
+  /// Scalar render timing and fast-path counters remain available when disabled.
+  void setCompositorDiagnosticsEnabled(bool enabled) {
+    compositorDiagnosticsEnabled_.store(enabled, std::memory_order_release);
+  }
+
 private:
   void workerLoop();
 
@@ -537,8 +752,10 @@ private:
   struct DoneState {
     /// Render result. Draining this transitions the worker state to idle.
     RenderResult result;
-    /// Replay-only poll attempts remaining before this staged result becomes visible.
-    int replayHoldPollsRemaining = 0;
+    /// UI poll attempts remaining before this staged result becomes visible.
+    ///
+    /// Replay tests use this to model delayed delivery.
+    int presentationHoldPollsRemaining = 0;
   };
   struct ShutdownState {};
   using WorkerState =
@@ -548,6 +765,25 @@ private:
   [[nodiscard]] static bool workerStateRenderInFlight(const WorkerState& state);
 
   WorkerState workerState_;
+  /// Single low-priority slot. It remains independent from `WorkerState` so thumbnail work never
+  /// makes `isBusy()` gate editor input or document mutation.
+  std::optional<SampleThumbnailRenderRequest> pendingSampleThumbnail_;
+  std::optional<SampleThumbnailRenderResult> sampleThumbnailResult_;
+  bool sampleThumbnailActive_ = false;
+  bool discardActiveSampleThumbnailResult_ = false;
+  SampleThumbnailRenderStats sampleThumbnailCounters_;
+  svg::compositor::CancellationToken cancelSampleThumbnail_;
+  std::atomic<std::chrono::milliseconds::rep> sampleThumbnailRenderDelayMsForTesting_{0};
+  /// Offscreen-only cache preparation left over after publishing a correct first document frame.
+  /// It shares the worker but not `WorkerState`, so input can post a foreground render immediately;
+  /// that request cancels this work at the compositor's existing safe points.
+  bool pendingCompositorWarmup_ = false;
+  bool compositorWarmupActive_ = false;
+  /// A caller deferred document access while warmup owned the write guard. Keep this independent
+  /// from the cancellation token so a cancel arriving after warmup's final token poll still wakes
+  /// the caller at the actual guard-release edge.
+  bool compositorWarmupReleaseWakePending_ = false;
+  svg::compositor::CancellationToken cancelCompositorWarmup_;
   /// Structural remaps retained by document generation until the worker has
   /// actually advanced the compositor to that generation. A request can be
   /// canceled before the worker consumes its remap; without this cache, the
@@ -559,7 +795,6 @@ private:
   /// installer. Held under `mutex_` so mutation vs. invocation races
   /// are impossible.
   std::function<void()> wakeCallback_;
-  std::unique_ptr<svg::compositor::CompositorController> compositor_;
   /// The `SVGDocument` this compositor is currently configured for. Stored by
   /// value - `SVGDocument` is a thin value-facade over a `std::shared_ptr<Registry>`
   /// (see `SVGDocumentHandle`), so copying is a refcount bump, not a deep copy
@@ -571,6 +806,9 @@ private:
   /// document - two `SVGDocument` values wrapping the same `std::shared_ptr<
   /// Registry>` compare equal, which is the right "same document" semantic.
   std::optional<svg::SVGDocument> compositorDocument_;
+  /// Declared after the retained document so reverse member destruction tears the controller down
+  /// first while its referenced SVGDocument value is still alive.
+  std::unique_ptr<svg::compositor::CompositorController> compositor_;
   svg::Renderer* compositorRenderer_ = nullptr;
   Entity compositorEntity_ = entt::null;
   /// Full set of explicit editor-promoted entities currently tracked by the worker compositor.
@@ -605,8 +843,9 @@ private:
   void notePublishedCompositedPreview(
       const std::optional<RenderResult::CompositedPreview>& compositedPreview);
 
-  /// Counter of worker-side `resetAllLayers()` invocations. Tests verify that
-  /// only document-generation changes fire resets.
+  /// Counter of worker-side `resetAllLayers()` invocations. Document-generation
+  /// changes and supported geometry-overlay state transitions increment it;
+  /// ordinary frame-version changes do not.
   std::atomic<std::uint64_t> compositorResetCount_{0};
 
   /// Counter of worker-side `compositor_ = make_unique<...>(...)` reconstructs.
@@ -676,9 +915,12 @@ private:
   /// renderer's default.
   std::atomic<bool> geometryDebugOverlay_{false};
 
-  /// Worker-thread-only: the overlay state last applied to the request
-  /// renderer, so the worker can detect flips and invalidate cached
-  /// segments exactly once per change.
+  /// Whether completed renders should materialize developer inspector snapshots.
+  std::atomic<bool> compositorDiagnosticsEnabled_{true};
+
+  /// Worker-thread-only: the overlay state last applied to the root request
+  /// renderer. Transitions trigger one retained-state reset; the enabled state
+  /// additionally keeps every debug frame in flat full-document mode.
   bool appliedGeometryDebugOverlay_ = false;
 
   /// Replay/test-only fixed delay injected into each worker render attempt.
