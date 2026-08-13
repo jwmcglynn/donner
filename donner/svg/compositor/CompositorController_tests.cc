@@ -151,9 +151,7 @@ TEST_F(CompositorControllerTest, GeometryDebugForcesFlatRootPresentation) {
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
 
-  CompositorConfig config;
-  config.deferFirstFrameWarmup = true;
-  CompositorController compositor(document, renderer_, config);
+  CompositorController compositor(document, renderer_);
   ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
   ASSERT_EQ(compositor.layerCount(), 1u);
 
@@ -164,7 +162,6 @@ TEST_F(CompositorControllerTest, GeometryDebugForcesFlatRootPresentation) {
   EXPECT_EQ(state.activeHintsCount, 0u);
   EXPECT_EQ(state.layerCount, 0u);
   EXPECT_FALSE(state.splitPathActive);
-  EXPECT_FALSE(compositor.hasPendingFirstFrameWarmup());
   EXPECT_TRUE(compositor.snapshotTilesForUpload().empty())
       << "Geometry debug frames must be presented from the flat root target";
 }
@@ -180,7 +177,6 @@ TEST_F(CompositorControllerTest, GeometryDebugFlatRenderStopsBeforeTraversalWhen
   token.cancel();
   EXPECT_CALL(renderer_, beginFrame(_)).Times(0);
   EXPECT_FALSE(compositor.renderFrame(RenderViewport{kTestSvgDefaultSize}, token));
-  EXPECT_FALSE(compositor.hasPendingFirstFrameWarmup());
 }
 
 TEST_F(CompositorControllerTest, PromoteEntitySucceeds) {
@@ -2030,7 +2026,7 @@ TEST_F(CompositorControllerTest, MandatoryFilterLayerSurvivesCanvasResize) {
       << "Filter-bearing layer should still be promoted after canvas resize.";
 }
 
-TEST_F(CompositorControllerTest, DeferredFirstFrameWarmupDoesNotDelayPresentableDraw) {
+TEST_F(CompositorControllerTest, FirstFrameComposesFromSegmentsWithWarmCaches) {
   SVGDocument document = makeDocument(R"svg(
     <defs>
       <filter id="f"><feGaussianBlur stdDeviation="2"/></filter>
@@ -2041,21 +2037,18 @@ TEST_F(CompositorControllerTest, DeferredFirstFrameWarmupDoesNotDelayPresentable
   )svg");
 
   configureMockForCaching(std::chrono::milliseconds(10));
-  CompositorConfig config;
-  config.deferFirstFrameWarmup = true;
-  CompositorController compositor(document, renderer_, config);
+  CompositorController compositor(document, renderer_);
 
   compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
 
-  EXPECT_EQ(compositor.lastRenderFrameStats().firstFrameWarmupMs, 0.0)
-      << "A correct first-frame draw is already presentable; retained-cache warmup must not hold "
-         "that frame behind offscreen work.";
-  ASSERT_TRUE(compositor.hasPendingFirstFrameWarmup());
-
-  CancellationToken cancellation;
-  EXPECT_TRUE(compositor.warmPendingFirstFrameCaches(cancellation));
-  EXPECT_FALSE(compositor.hasPendingFirstFrameWarmup());
-  EXPECT_GT(compositor.lastRenderFrameStats().firstFrameWarmupMs, 0.0);
+  // The first frame runs the detectors and composes from segment tiles
+  // directly, so the retained caches a first interaction needs already exist
+  // when the frame returns. There is no deferred warmup for a later idle task
+  // to run; the first press must not pay the segment rasterization.
+  const auto state = compositor.snapshotState();
+  EXPECT_GT(state.layerCount, 0u) << "the mandatory filter must promote on the first frame";
+  EXPECT_FALSE(compositor.snapshotTilesForUpload().empty())
+      << "the first frame must be composed from tiles, not a flat root draw";
 }
 
 TEST_F(CompositorControllerTest, SnapshotLayerInspectorRowsFormatsFallbackReasons) {

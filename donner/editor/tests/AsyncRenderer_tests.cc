@@ -273,7 +273,6 @@ TEST(AsyncRendererTest, GeometryOverlayForcesFlatFrameThenRepromotesSelectionWhe
   EXPECT_EQ(state.activeHintsCount, 0u);
   EXPECT_EQ(state.layerCount, 0u);
   EXPECT_FALSE(state.splitPathActive);
-  EXPECT_FALSE(state.firstFrameWarmupPending);
   const std::uint64_t resetCountAfterEnable = asyncRenderer.compositorResetCountForTesting();
   EXPECT_EQ(resetCountAfterEnable, 1u);
 
@@ -282,7 +281,6 @@ TEST(AsyncRendererTest, GeometryOverlayForcesFlatFrameThenRepromotesSelectionWhe
   EXPECT_TRUE(asyncRenderer.workerCompositorEntity() == entt::null);
   EXPECT_EQ(consecutiveDebugState.activeHintsCount, 0u);
   EXPECT_EQ(consecutiveDebugState.layerCount, 0u);
-  EXPECT_FALSE(consecutiveDebugState.firstFrameWarmupPending);
   EXPECT_EQ(asyncRenderer.compositorResetCountForTesting(), resetCountAfterEnable)
       << "A steady geometry-debug frame must not reset empty compositor state again";
 
@@ -334,58 +332,7 @@ TEST(AsyncRendererTest, ShutdownBeforeDeferredStartCannotRestartWorker) {
   EXPECT_FALSE(asyncRenderer.isBusy());
 }
 
-TEST(AsyncRendererTest, DeferredCompositorWarmupParticipatesInDocumentAccessGate) {
-  AsyncRenderer asyncRenderer(AsyncRendererStartMode::Deferred);
-
-  asyncRenderer.stageCompositorWarmupForTesting(/*pending=*/true, /*active=*/false);
-  EXPECT_TRUE(asyncRenderer.isBusy())
-      << "A queued warmup is about to take DocumentWriteAccess, so input must cancel it before "
-         "touching the live DOM.";
-  asyncRenderer.cancelInFlight();
-  EXPECT_FALSE(asyncRenderer.isBusy()) << "Cancelling an unclaimed warmup releases the gate now.";
-
-  asyncRenderer.stageCompositorWarmupForTesting(/*pending=*/false, /*active=*/true);
-  EXPECT_TRUE(asyncRenderer.isBusy());
-  asyncRenderer.cancelInFlight();
-  EXPECT_TRUE(asyncRenderer.isBusy())
-      << "An active warmup keeps the gate closed until the worker observes cancellation and "
-         "releases DocumentWriteAccess.";
-  asyncRenderer.completeCompositorWarmupForTesting();
-  EXPECT_FALSE(asyncRenderer.isBusy());
-}
-
-TEST(AsyncRendererTest, CancellingDeferredCompositorWarmupCannotLoseDocumentWaiterWake) {
-  AsyncRenderer asyncRenderer(AsyncRendererStartMode::Deferred);
-  int wakeCount = 0;
-  asyncRenderer.setWakeCallback([&] { ++wakeCount; });
-
-  asyncRenderer.stageCompositorWarmupForTesting(/*pending=*/true, /*active=*/false);
-  asyncRenderer.cancelInFlight();
-  EXPECT_EQ(wakeCount, 1)
-      << "Cancelling an unclaimed warmup releases the document gate immediately, so deferred "
-         "input needs an immediate retry frame.";
-
-  asyncRenderer.stageCompositorWarmupForTesting(/*pending=*/false, /*active=*/true);
-  asyncRenderer.cancelInFlight();
-  EXPECT_EQ(wakeCount, 1)
-      << "An active warmup must keep the document gate closed until its write access is released.";
-
-  // Model cancellation arriving after warmup code's final token check but before its document
-  // guard and active-state flag are released. The durable waiter, rather than the sampled token,
-  // must cause the retry wake at the actual release edge.
-  asyncRenderer.completeCompositorWarmupForTesting();
-  EXPECT_EQ(wakeCount, 2);
-
-  asyncRenderer.stageCompositorWarmupForTesting(/*pending=*/false, /*active=*/true);
-  asyncRenderer.completeCompositorWarmupForTesting();
-  EXPECT_EQ(wakeCount, 2) << "Successful speculative work has no visible state to publish.";
-  asyncRenderer.cancelInFlight();
-  EXPECT_EQ(wakeCount, 3)
-      << "The cancellation API must also close the check-then-act race where the caller observed "
-         "busy immediately before the worker released the gate.";
-}
-
-TEST(AsyncRendererTest, FirstDocumentResultPublishesBeforeRetainedCacheWarmup) {
+TEST(AsyncRendererTest, FirstDocumentResultCarriesWarmSegmentCaches) {
   svg::SVGDocument document = svg::instantiateSubtree(R"svg(
     <defs>
       <filter id="f"><feGaussianBlur stdDeviation="2"/></filter>
@@ -404,11 +351,12 @@ TEST(AsyncRendererTest, FirstDocumentResultPublishesBeforeRetainedCacheWarmup) {
   asyncRenderer.requestRender(request);
   ASSERT_TRUE(WaitForRenderResult(asyncRenderer).has_value());
 
-  const auto stats = asyncRenderer.compositorRenderFrameStats();
-  EXPECT_GT(stats.firstFrameDrawMs, 0.0);
-  EXPECT_EQ(stats.firstFrameWarmupMs, 0.0)
-      << "The accepted result must describe the already-correct main draw, not later speculative "
-         "cache preparation.";
+  // The first frame composes from segment tiles with its retained caches
+  // already built, so the compositor reports layer state immediately and no
+  // deferred warmup exists for a later idle task.
+  const auto state = asyncRenderer.compositorState();
+  EXPECT_GT(state.layerCount, 0u)
+      << "the mandatory filter must promote and rasterize on the first frame";
 }
 
 TEST(AsyncRendererTest, MultiSelectActiveDragMarksEverySelectedLayerAsDragTarget) {

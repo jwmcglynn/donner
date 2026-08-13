@@ -546,7 +546,6 @@ CompositorController::StateSnapshot CompositorController::snapshotState() const 
   out.activeHintsCount = static_cast<uint32_t>(activeHints_.size());
   out.layerCount = static_cast<uint32_t>(layers_.size());
   out.splitPathActive = hasSplitStaticLayers();
-  out.firstFrameWarmupPending = firstFrameWarmupPending_;
   out.splitStaticLayersEntity = splitStaticLayersEntity_;
   out.canvasSize = staticSegmentsCanvas_;
   out.lastPromoteRefusalReason = lastPromoteRefusalReason_;
@@ -935,7 +934,6 @@ void CompositorController::resetAllLayers(bool documentReplaced) {
   rootDirty_ = true;
   documentPrepared_ = false;
   hintsScanned_ = false;
-  firstFrameWarmupPending_ = false;
   // Main renderer's cached frame is for the old document - invalidate
   // so the next `composeLayers` does a full first-frame compose.
   mainRendererHasCachedFrame_ = false;
@@ -953,115 +951,6 @@ void CompositorController::setTightBoundedSegmentsEnabled(bool enabled) {
   // every slot dirty so the next frame rebuilds under the new policy.
   markAllSegmentsDirty();
 }
-
-void CompositorController::warmFirstFrameCaches(const RenderViewport& viewport,
-                                                const Transform2d& surfaceFromCanvas) {
-  if (!offscreenSupportKnown_) {
-    // Probe through the pool so a successful probe's instance is retained
-    // for the tile rasterizations below instead of being torn down (the
-    // teardown blocks on GPU-idle device polls on the browser backend).
-    if (auto probe = acquireOffscreen()) {
-      recycleOffscreen(std::move(probe));
-      offscreenSupported_ = true;
-    }
-    offscreenSupportKnown_ = true;
-  }
-  if (offscreenSupported_) {
-    const Vector2i currentCanvasSize = BitmapDimensionsForViewport(viewport);
-    {
-      uint32_t liveHints = 0;
-      Entity liveDragCandidate = entt::null;
-      for (const auto& [hintEntity, hint] : activeHints_) {
-        if (pendingDemotions_.contains(hintEntity)) {
-          continue;
-        }
-        ++liveHints;
-        liveDragCandidate = hintEntity;
-      }
-      if (liveHints == 1 && findLayer(liveDragCandidate) != nullptr) {
-        splitStaticLayersEntity_ = liveDragCandidate;
-        splitStaticLayersViewport_ = currentCanvasSize;
-      }
-    }
-    {
-      ZoneScopedN("Compositor::eagerWarmupRasterizeLayers");
-      for (auto& layer : layers_) {
-        if (isCancelled()) {
-          return;
-        }
-        if (!layer.hasRenderablePayload()) {
-          rasterizeLayer(layer, viewport, surfaceFromCanvas);
-          if (layer.isImmediate()) {
-            lastRenderFrameStats_.immediateRasterizeMs += layer.lastRasterizeMs();
-            ++lastRenderFrameStats_.immediateTileCount;
-          } else {
-            lastRenderFrameStats_.cachedRasterizeMs += layer.lastRasterizeMs();
-            ++lastRenderFrameStats_.cachedTileCount;
-          }
-        }
-      }
-    }
-    if (isCancelled()) {
-      return;
-    }
-    // Seed segment state via the preserving resync path so
-    // `staticSegmentBoundaries_` is consistent with the new layer
-    // set. Nothing to preserve yet (segments are empty), so every
-    // slot is marked dirty and rasterized.
-    {
-      ZoneScopedN("Compositor::resyncSegmentsToLayerSet (first)");
-      resyncSegmentsToLayerSet(currentCanvasSize, surfaceFromCanvas);
-    }
-    if (isCancelled()) {
-      return;
-    }
-    {
-      ZoneScopedN("Compositor::rasterizeDirtyStaticSegments (first)");
-      rasterizeDirtyStaticSegments(viewport, surfaceFromCanvas);
-    }
-  } else {
-    offscreenSupportKnown_ = true;
-  }
-}
-
-bool CompositorController::warmPendingFirstFrameCaches(CancellationToken& token) {
-  if (!firstFrameWarmupPending_) {
-    return true;
-  }
-  // Check cancellation BEFORE the first renderer_ dereference. The deferred
-  // warmup can be dequeued concurrently with the owner tearing down the
-  // renderer this controller is bound to (2026-08-11 linux CI SIGSEGV in this
-  // frame, editor_control_session_tests: the lease-owned renderer died between
-  // warmup dequeue and the offscreen-support probe); owners cancel the token
-  // before teardown, so honoring it here closes the common window. The
-  // structural fix - the compositor thread owning its renderer - is the
-  // the single-canvas architecture ownership model.
-  if (token.isCancelled()) {
-    return false;
-  }
-  if (!hasLastViewport_ || !hasLastSurfaceFromCanvas_) {
-    return false;
-  }
-
-  lastRenderFrameStats_.firstFrameWarmupMs = 0.0;
-  lastRenderFrameStats_.immediateRasterizeMs = 0.0;
-  lastRenderFrameStats_.cachedRasterizeMs = 0.0;
-  lastRenderFrameStats_.immediateTileCount = 0;
-  lastRenderFrameStats_.cachedTileCount = 0;
-  const auto warmupStart = std::chrono::steady_clock::now();
-  cancelToken_.emplace(token);
-  warmFirstFrameCaches(lastViewport_, lastSurfaceFromCanvas_);
-  const bool completed = !token.isCancelled();
-  cancelToken_.reset();
-  lastRenderFrameStats_.firstFrameWarmupMs =
-      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - warmupStart)
-          .count();
-  if (completed) {
-    firstFrameWarmupPending_ = false;
-  }
-  return completed;
-}
-
 bool CompositorController::renderFrame(const RenderViewport& viewport, CancellationToken& token) {
   return renderFrame(viewport, token, Transform2d());
 }
@@ -1089,9 +978,6 @@ void CompositorController::renderFrame(const RenderViewport& viewport,
 void CompositorController::renderFrameImpl(const RenderViewport& viewport,
                                            const Transform2d& surfaceFromCanvas) {
   ZoneScopedN("Compositor::renderFrame");
-  // Any foreground render supersedes the deferred cold-frame warmup. The normal frame path below
-  // will populate whatever retained payloads are still missing, with the current viewport and DOM.
-  firstFrameWarmupPending_ = false;
   {
     // Per-frame counters reset; the offscreen pool totals are controller-
     // lifetime monotonic (see RenderFrameStats).
@@ -1112,11 +998,9 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   // retained state and render one flat full-document frame into the root
   // target. No warmup or promotion is allowed to repopulate segmented output.
   if (renderer().debugGeometryOverlay()) {
-    if (!activeHints_.empty() || !layers_.empty() || !staticSegments_.empty() ||
-        firstFrameWarmupPending_) {
+    if (!activeHints_.empty() || !layers_.empty() || !staticSegments_.empty()) {
       resetAllLayers();
     }
-    firstFrameWarmupPending_ = false;
     lastViewport_ = viewport;
     hasLastViewport_ = true;
     lastSurfaceFromCanvas_ = surfaceFromCanvas;
@@ -1508,83 +1392,12 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
     rootDirty_ = true;
   }
 
-  // If no promoted layers yet, take the simple full-render path. This
-  // runs `prepareDocumentForRendering` implicitly via `driver.draw()`,
-  // so by the time the detectors run afterwards they can observe RICs.
-  //
-  // Retained-cache warmup: after the detectors pick up mandatory / bucket layers, rasterize them
-  // before the first interaction has to. Standalone callers keep the original same-call behavior;
-  // interactive owners may publish the already-correct flat draw and run the offscreen-only work
-  // from a later cancellable worker turn.
-  if (layers_.empty()) {
-    ZoneScopedN("Compositor::firstFrameEmptyLayersPath");
-    RendererDriver driver(renderer());
-    {
-      ZoneScopedN("Compositor::driver.draw (first-frame)");
-      const auto firstFrameDrawStart = std::chrono::steady_clock::now();
-      driver.draw(document(), viewport, surfaceFromCanvas);
-      lastRenderFrameStats_.firstFrameDrawMs = elapsedMsSince(firstFrameDrawStart);
-    }
-    mainRendererHasCachedFrame_ = true;
-    // `driver.draw` runs preparation for the first frame. Defensively clear
-    // the rebuild flag so the eager-warmed compositor caches survive the next
-    // `renderFrame`.
-    if (registry.ctx().contains<components::RenderTreeState>()) {
-      registry.ctx().get<components::RenderTreeState>().needsFullRebuild = false;
-    }
-    staticSegments_.clear();
-    staticSegmentTextures_.clear();
-    staticSegmentOffsets_.clear();
-    staticSegmentLastRasterizeMs_.clear();
-    staticSpanPlans_.clear();
-    staticSegmentsCanvas_ = Vector2i::Zero();
-    hasStaticSegmentsSurfaceFromCanvas_ = false;
-    staticSegmentsLayerCount_ = 0;
-    splitStaticLayersEntity_ = entt::null;
-    splitStaticLayersViewport_ = Vector2i::Zero();
-    rootDirty_ = false;
-    documentPrepared_ = true;
-
-    // Populated RICs now exist. If the detectors haven't scanned yet, run
-    // them once against the populated view and rebuild `layers_`. A newly
-    // discovered mandatory filter/mask/isolated-layer promotes the affected
-    // subtree immediately.
-    const auto firstFramePlanningStart = std::chrono::steady_clock::now();
-    if (!hintsScanned_) {
-      ZoneScopedN("Compositor::firstFrameDetectorsAndWarmup");
-      {
-        ZoneScopedN("Compositor::mandatoryDetector.reconcile (first)");
-        mandatoryDetector_.reconcile(registry);
-      }
-      if (config_.complexityBucketing) {
-        ZoneScopedN("Compositor::complexityBucketer.reconcile (first)");
-        complexityBucketer_.reconcile(registry);
-      }
-      hintsScanned_ = true;
-      {
-        ZoneScopedN("Compositor::resolver.resolve (first)");
-        resolver_.resolve(registry, kMaxCompositorLayers, resolveOptions);
-      }
-      {
-        ZoneScopedN("Compositor::reconcileLayers (first)");
-        reconcileLayers(registry);
-      }
-      refreshLayerMetadata();
-      lastRenderFrameStats_.firstFramePlanningMs = elapsedMsSince(firstFramePlanningStart);
-
-      // The flat output above is already the correct frame. Interactive owners may publish it now
-      // and perform this offscreen-only cache preparation in a later cancellable worker turn.
-      if (config_.deferFirstFrameWarmup) {
-        firstFrameWarmupPending_ = true;
-      } else {
-        const auto firstFrameWarmupStart = std::chrono::steady_clock::now();
-        warmFirstFrameCaches(viewport, surfaceFromCanvas);
-        lastRenderFrameStats_.firstFrameWarmupMs = elapsedMsSince(firstFrameWarmupStart);
-      }
-    }
-    return;
-  }
-
+  // The first frame flows through the same prepare -> detectors -> segmented
+  // compose path as every later frame, so the first presented output is
+  // composed from tiles and the retained segment caches exist before the
+  // first interaction needs them. The flat full-document first frame this
+  // path used to draw (plus its deferred cache warmup) made the first press
+  // pay the entire segment rasterization instead.
   // Only prepare the document when it hasn't been prepared yet or when
   // dirty. `prepareDocumentForRendering` rebuilds the render instance tree,
   // which is expensive. During drag (composition transform changes only),
@@ -1634,26 +1447,11 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
     }
   }
 
-  if (layers_.empty()) {
-    ZoneScopedN("Compositor::emptyLayerSetAfterPrepare");
-    RendererDriver driver(renderer());
-    driver.draw(document(), viewport, surfaceFromCanvas);
-    staticSegments_.clear();
-    staticSegmentTextures_.clear();
-    staticSegmentBoundaries_.clear();
-    staticSegmentDirty_.clear();
-    staticSegmentOffsets_.clear();
-    staticSegmentLastRasterizeMs_.clear();
-    staticSpanPlans_.clear();
-    staticSegmentsCanvas_ = Vector2i::Zero();
-    hasStaticSegmentsSurfaceFromCanvas_ = false;
-    staticSegmentsLayerCount_ = 0;
-    splitStaticLayersEntity_ = entt::null;
-    splitStaticLayersViewport_ = Vector2i::Zero();
-    rootDirty_ = false;
-    mainRendererHasCachedFrame_ = true;
-    return;
-  }
+  // A document with no promoted layers still composes from static segment
+  // tiles: the segmentation covers the whole document independent of layer
+  // promotion, and the tiles are what keep the first interaction from paying
+  // a full rasterization. Only a backend without offscreen support falls back
+  // to the flat root draw (probed below).
 
   // Update composition transforms for layers whose stamped transform
   // differs from their current RIC transform by a pure translation.

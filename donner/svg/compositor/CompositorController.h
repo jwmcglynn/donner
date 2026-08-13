@@ -264,11 +264,6 @@ struct CompositorConfig {
   /// the (host-independent) cost heuristic classifies spans. Default on.
   bool dynamicImmediateStaticSpans = true;
 
-  /// Return the first correct full-document draw before rasterizing retained layer and segment
-  /// caches. The owner must call `warmPendingFirstFrameCaches` from a later, cancellable idle task.
-  /// This keeps cache preparation off the click-to-present critical path without abandoning the
-  /// prewarm that makes the first drag responsive.
-  bool deferFirstFrameWarmup = false;
 
   /// Invoked between tile rasterizations (the same coarse safe points where
   /// `isCancelled()` is polled). Owners whose event delivery requires the
@@ -472,13 +467,7 @@ public:
                    const Transform2d& surfaceFromCanvas);
 
   /// True when the first correct frame has been drawn but its retained caches still need warming.
-  [[nodiscard]] bool hasPendingFirstFrameWarmup() const { return firstFrameWarmupPending_; }
 
-  /// Warm retained layer and segment caches for the already-presented first frame.
-  ///
-  /// This never writes the main render target. It is intended for a later low-priority worker turn
-  /// and leaves unfinished cache work pending when cancelled by interactive rendering.
-  [[nodiscard]] bool warmPendingFirstFrameCaches(CancellationToken& token);
 
   /**
    * Returns the number of currently active layers (excluding the root layer).
@@ -903,7 +892,6 @@ public:
     bool splitPathActive = false;
     /// A correct flat frame was published while retained caches still
     /// await low-priority warmup.
-    bool firstFrameWarmupPending = false;
     /// Entity the compositor cached the bg/fg split for. `entt::null`
     /// when split-path is inactive.
     Entity splitStaticLayersEntity = entt::null;
@@ -1054,8 +1042,6 @@ private:
   /// yield takes effect immediately).
   void yieldBetweenTiles();
 
-  /// Populate the retained caches discovered after the first full-document draw.
-  void warmFirstFrameCaches(const RenderViewport& viewport, const Transform2d& surfaceFromCanvas);
 
   /// Rasterize any static segments whose `staticSegmentDirty_` flag is
   /// set. Each segment lives between two consecutive promoted layers in
@@ -1336,9 +1322,6 @@ private:
   /// `renderFrame` call can't scan (RICs don't exist yet), so we defer the
   /// first scan until just after the initial `prepareDocumentForRendering`.
   bool hintsScanned_ = false;
-  /// The first correct main-renderer frame has already been produced, while its offscreen retained
-  /// caches are intentionally waiting for a lower-priority worker turn.
-  bool firstFrameWarmupPending_ = false;
   bool offscreenSupportKnown_ = false;
   bool offscreenSupported_ = false;
   /// Single-slot pool for tile-rasterization offscreen renderers. See

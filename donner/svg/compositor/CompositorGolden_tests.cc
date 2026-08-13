@@ -2352,7 +2352,6 @@ TEST_F(CompositorGoldenTest, RealSplashRetainedLetterMovesInFlattenedDragFrame) 
   CompositorConfig config;
   config.immediateStaticSpans = false;
   config.dynamicImmediateStaticSpans = false;
-  config.deferFirstFrameWarmup = true;
   CompositorController compositor(document, renderer_, config);
   // Match the editor lifecycle: the document surface is published before anything is selected.
   compositor.renderFrame(viewport);
@@ -2418,14 +2417,14 @@ TEST_F(CompositorGoldenTest, TightBoundedSegmentsPixelIdentityOnRealSplash) {
   // (so every segment goes through `rasterizeDirtyStaticSegments`).
   const auto result = verifier.renderAndVerify(viewport);
 
-  // Exact pixel identity is the strictest gate: tight-bound bounds
-  // must produce bit-identical composited output to the full-render
-  // reference. Any mismatch is either a bounds miscalculation or an
-  // offset misapplication. If this flakes in CI, loosen to
-  // `isWithinTolerance(1)` for anti-aliasing drift across backends
-  // - but only after confirming the diff is AA-noise, not a
-  // cropping/shifting regression.
-  EXPECT_TRUE(result.isExact())
+  // Tolerance 1: the first frame now composes from segment tiles (it used to
+  // be a flat root draw, which made this comparison flat-vs-flat and
+  // trivially exact), and segment-edge antialiasing legitimately differs
+  // from the flat reference by at most one channel unit. Measured when the
+  // tile-first change landed: 187 of 456704 pixels at max channel diff 1.
+  // A cropping or shifting regression produces large channel diffs, which
+  // this still catches.
+  EXPECT_TRUE(result.isWithinTolerance(1))
       << "real-splash tight-bounds pixel identity failed. Mismatch count=" << result.mismatchCount
       << " max channel diff=" << int(result.maxChannelDiff)
       << ". If non-zero, tight-bound bounds are cropping content the reference renders "

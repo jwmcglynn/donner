@@ -493,33 +493,6 @@ public:
    */
   void setReplayResultHoldFramesForTesting(int frameCount);
 
-  /// Install a synthetic low-priority warmup state for document-access gate tests.
-  void stageCompositorWarmupForTesting(bool pending, bool active) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (std::holds_alternative<ShutdownState>(workerState_)) {
-      return;
-    }
-    pendingCompositorWarmup_ = pending;
-    compositorWarmupActive_ = active;
-  }
-
-  /// Simulate the active warmup releasing its document guard.
-  void completeCompositorWarmupForTesting() {
-    std::function<void()> wake;
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      pendingCompositorWarmup_ = false;
-      compositorWarmupActive_ = false;
-      if (std::exchange(compositorWarmupReleaseWakePending_, false)) {
-        wake = wakeCallback_;
-      }
-    }
-    cv_.notify_all();
-    if (wake) {
-      wake();
-    }
-  }
-
   /// Number of poll attempts that intentionally withheld a staged result for replay tests.
   [[nodiscard]] std::uint64_t replayResultHoldPollCountForTesting() const {
     return replayResultHoldPollCount_.load(std::memory_order_acquire);
@@ -777,13 +750,6 @@ private:
   /// Offscreen-only cache preparation left over after publishing a correct first document frame.
   /// It shares the worker but not `WorkerState`, so input can post a foreground render immediately;
   /// that request cancels this work at the compositor's existing safe points.
-  bool pendingCompositorWarmup_ = false;
-  bool compositorWarmupActive_ = false;
-  /// A caller deferred document access while warmup owned the write guard. Keep this independent
-  /// from the cancellation token so a cancel arriving after warmup's final token poll still wakes
-  /// the caller at the actual guard-release edge.
-  bool compositorWarmupReleaseWakePending_ = false;
-  svg::compositor::CancellationToken cancelCompositorWarmup_;
   /// Structural remaps retained by document generation until the worker has
   /// actually advanced the compositor to that generation. A request can be
   /// canceled before the worker consumes its remap; without this cache, the

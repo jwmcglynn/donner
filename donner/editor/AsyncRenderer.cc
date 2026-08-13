@@ -319,8 +319,6 @@ void AsyncRenderer::shutdown() {
     pendingSampleThumbnail_.reset();
     sampleThumbnailResult_.reset();
     cancelSampleThumbnail_.cancel();
-    pendingCompositorWarmup_ = false;
-    cancelCompositorWarmup_.cancel();
     cancelRender_.cancel();
     workerState_ = ShutdownState{};
     initiatedShutdown = true;
@@ -382,21 +380,19 @@ bool AsyncRenderer::workerStateRenderInFlight(const WorkerState& state) {
 
 bool AsyncRenderer::isBusy() const {
   std::lock_guard<std::mutex> lock(mutex_);
-  return workerStateBusy(workerState_) || pendingCompositorWarmup_ || compositorWarmupActive_;
+  return workerStateBusy(workerState_);
 }
 
 bool AsyncRenderer::hasRenderInFlightForTesting() const {
   std::lock_guard<std::mutex> lock(mutex_);
-  return workerStateRenderInFlight(workerState_) || pendingCompositorWarmup_ ||
-         compositorWarmupActive_;
+  return workerStateRenderInFlight(workerState_);
 }
 
 bool AsyncRenderer::waitUntilNoRenderInFlightForTesting(
     std::chrono::steady_clock::time_point deadline) {
   std::unique_lock<std::mutex> lock(mutex_);
   return cv_.wait_until(lock, deadline, [this] {
-    return !workerStateRenderInFlight(workerState_) && !pendingCompositorWarmup_ &&
-           !compositorWarmupActive_;
+    return !workerStateRenderInFlight(workerState_);
   });
 }
 
@@ -426,13 +422,6 @@ void AsyncRenderer::requestRender(const RenderRequest& request) {
       if (retainedIt != retainedStructuralRemaps_.end()) {
         stagedRequest.structuralRemap = retainedIt->second;
       }
-    }
-
-    // Foreground interaction always outranks speculative cache work. The compositor's normal
-    // render path will finish any still-missing payloads against the newest DOM and viewport.
-    pendingCompositorWarmup_ = false;
-    if (compositorWarmupActive_) {
-      cancelCompositorWarmup_.cancel();
     }
 
     if (auto* rendering = std::get_if<RenderingState>(&workerState_)) {
@@ -465,14 +454,6 @@ void AsyncRenderer::cancelInFlight() {
   std::function<void()> wakeAfterSettledCancellation;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    pendingCompositorWarmup_ = false;
-    if (compositorWarmupActive_) {
-      // Cancellation-token sampling is not an acknowledgment. The worker may have completed its
-      // final poll while it still owns DocumentWriteAccess, so remember the waiter until the
-      // active flag and guard are released together below.
-      compositorWarmupReleaseWakePending_ = true;
-      cancelCompositorWarmup_.cancel();
-    }
     if (std::holds_alternative<RenderingState>(workerState_)) {
       // Worker is mid-renderFrame. Transition to `Cancelling` (not
       // `Idle`) so the editor's `!isBusy()` gates keep gating registry reads
@@ -490,9 +471,8 @@ void AsyncRenderer::cancelInFlight() {
     // `isBusy()` and `cancelInFlight()` cannot form an atomic check-then-act pair. If the worker
     // released its guard between those calls, cancellation is already settled and the deferred
     // input still needs a retry frame. Active render/cancellation states provide their own later
-    // completion wake; an active compositor warmup uses the durable waiter above.
+    // completion wake.
     const bool cancellationSettled =
-        !compositorWarmupActive_ &&
         (std::holds_alternative<IdleState>(workerState_) ||
          std::holds_alternative<DoneState>(workerState_));
     if (cancellationSettled) {
@@ -535,11 +515,7 @@ std::optional<RenderResult> AsyncRenderer::pollResult() {
       notePublishedCompositedPreview(result.compositedPreview);
     }
     workerState_ = IdleState{};
-    if (compositor_ != nullptr && compositor_->hasPendingFirstFrameWarmup()) {
-      pendingCompositorWarmup_ = true;
-    }
-    const bool scheduleLowPriorityWork =
-        pendingCompositorWarmup_ || pendingSampleThumbnail_.has_value();
+    const bool scheduleLowPriorityWork = pendingSampleThumbnail_.has_value();
     lock.unlock();
     cv_.notify_all();
     if (scheduleLowPriorityWork) {
@@ -623,7 +599,6 @@ void AsyncRenderer::workerLoop() {
   while (true) {
     std::optional<RenderRequest> requestStorage;
     std::optional<SampleThumbnailRenderRequest> sampleThumbnailStorage;
-    bool runCompositorWarmup = false;
     {
       std::unique_lock<std::mutex> lock(mutex_);
       cv_.wait(lock, [this] {
@@ -631,7 +606,7 @@ void AsyncRenderer::workerLoop() {
                std::holds_alternative<CancellingState>(workerState_) ||
                std::holds_alternative<ShutdownState>(workerState_) ||
                (std::holds_alternative<IdleState>(workerState_) &&
-                (pendingCompositorWarmup_ || pendingSampleThumbnail_.has_value()));
+                pendingSampleThumbnail_.has_value());
       });
       if (std::holds_alternative<ShutdownState>(workerState_)) {
 #ifdef __EMSCRIPTEN__
@@ -659,53 +634,14 @@ void AsyncRenderer::workerLoop() {
         rendering->pendingRequest.reset();
       } else {
         assert(std::holds_alternative<IdleState>(workerState_));
-        if (pendingCompositorWarmup_) {
-          pendingCompositorWarmup_ = false;
-          cancelCompositorWarmup_.reset();
-          compositorWarmupActive_ = true;
-          runCompositorWarmup = true;
-        } else {
-          assert(pendingSampleThumbnail_.has_value());
-          sampleThumbnailStorage.emplace(std::move(*pendingSampleThumbnail_));
-          pendingSampleThumbnail_.reset();
-          cancelSampleThumbnail_.reset();
-          sampleThumbnailActive_ = true;
-          discardActiveSampleThumbnailResult_ = false;
-          ++sampleThumbnailCounters_.started;
-        }
+        assert(pendingSampleThumbnail_.has_value());
+        sampleThumbnailStorage.emplace(std::move(*pendingSampleThumbnail_));
+        pendingSampleThumbnail_.reset();
+        cancelSampleThumbnail_.reset();
+        sampleThumbnailActive_ = true;
+        discardActiveSampleThumbnailResult_ = false;
+        ++sampleThumbnailCounters_.started;
       }
-    }
-
-    if (runCompositorWarmup) {
-      // Re-check the cancel signal after dequeue: a document swap or
-      // cancelInFlight between the dequeue above and this call tears down the
-      // lease renderer the compositor is bound to, and the warmup's first
-      // renderer dereference happens before any in-pass cancellation poll.
-      if (compositor_ != nullptr && compositorDocument_.has_value() &&
-          !cancelCompositorWarmup_.isCancelled()) {
-        svg::SVGDocument& warmupDocument = *compositorDocument_;
-        std::optional<svg::DocumentWriteAccess> documentAccess;
-        documentAccess.emplace(warmupDocument.writeAccess());
-        (void)compositor_->warmPendingFirstFrameCaches(cancelCompositorWarmup_);
-      }
-
-      std::function<void()> wake;
-      {
-        std::lock_guard<std::mutex> lock(mutex_);
-        compositorWarmupActive_ = false;
-        const bool releaseWakePending = std::exchange(compositorWarmupReleaseWakePending_, false);
-        if (releaseWakePending && !std::holds_alternative<ShutdownState>(workerState_)) {
-          // Speculative work changes no visible state, including when a foreground render
-          // preempts it. Wake only a caller that explicitly registered against the document
-          // guard's release; the foreground render supplies its own completion wake.
-          wake = wakeCallback_;
-        }
-      }
-      cv_.notify_all();
-      if (wake) {
-        wake();
-      }
-      continue;
     }
 
     if (sampleThumbnailStorage.has_value()) {
@@ -877,12 +813,9 @@ void AsyncRenderer::workerLoop() {
       // renderer's dominant steady-drag CPU cost as well.
       compositorConfig.immediateStaticSpans = false;
       compositorConfig.dynamicImmediateStaticSpans = false;
-      // The first full-document draw is already correct. Publish it first, then warm retained
-      // caches from the worker's independent low-priority lane after the result is accepted.
-      compositorConfig.deferFirstFrameWarmup = true;
       // CompositorController stores its SVGDocument by reference. Bind that reference to the
       // AsyncRenderer-owned value before constructing the controller: RenderLease is destroyed
-      // after this request, while deferred warmup and later frames intentionally outlive it.
+      // after this request, while later frames intentionally outlive it.
       compositor_.reset();
       compositorDocument_.emplace(requestDocument);  // Cheap: refcount bump on the Registry.
       compositor_ = std::make_unique<svg::compositor::CompositorController>(
