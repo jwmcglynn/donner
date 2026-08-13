@@ -20,8 +20,14 @@
 /// job previously had to do.
 ///
 /// LeakSanitizer matches a suppression against the function, file, and module of every frame in an
-/// allocation stack, and rescans suppressed chunks as roots, so blocks reported as indirect leaks
-/// below a suppressed allocation are covered too.
+/// allocation stack, so this template covers any allocation the prebuilt library made, whatever
+/// called into it.
+///
+/// It cannot cover allocations whose owning module is already unloaded when the leak check runs,
+/// because those frames have no module name to match. The Vulkan loader unloads its driver
+/// libraries during teardown and produces exactly that shape; `--config=asan` sets
+/// `VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING` to keep them mapped. See the comment in
+/// `.bazelrc`.
 
 #if defined(__linux__) && !defined(__EMSCRIPTEN__)
 

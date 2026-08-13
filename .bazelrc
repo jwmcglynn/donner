@@ -344,6 +344,13 @@ build:asan --linkopt=-fsanitize=address,undefined
 build:asan --copt=-fno-omit-frame-pointer
 build:asan --copt=-fsanitize-address-use-after-scope
 build:asan --test_env=ASAN_SYMBOLIZER_PATH
+# LeakSanitizer scans loaded modules' globals for root pointers and symbolizes stacks against
+# loaded modules, so a driver library the Vulkan loader unloads during teardown takes both with
+# it: memory its globals still owned is reported as an unreachable leak, and every frame prints
+# as `<unknown module>`, which no suppression template can name. The Vulkan loader exposes this
+# switch for exactly that reason; it keeps ICDs and layers mapped so the reports stay
+# attributable. Test-only, and a no-op on hosts without a Vulkan loader.
+build:asan --test_env=VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=1
 # These require libubsan, which is not linked properly by bazel, so disable.
 # See https://github.com/google/oss-fuzz/issues/713
 build:asan --copt=-fno-sanitize=vptr,function
