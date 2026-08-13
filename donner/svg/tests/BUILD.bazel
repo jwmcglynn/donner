@@ -83,6 +83,7 @@ donner_cc_test(
         "SVGUnknownElement_tests.cc",
         "SVGUseElement_tests.cc",
     ],
+    opens_gpu_device = True,
     shard_count = 10,
     # Variant lanes (doc 0031 M2.3): emits `svg_tests_tiny`,
     # `svg_tests_text_full`, and `svg_tests_geode` so `bazel test //...`

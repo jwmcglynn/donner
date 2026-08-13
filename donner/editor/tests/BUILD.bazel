@@ -191,6 +191,7 @@ donner_cc_test(
         "//donner/svg/renderer:renderer_backend_geode": ["DONNER_EDITOR_WGPU"],
         "//conditions:default": [],
     }),
+    opens_gpu_device = True,
     variants = ["geode"],
     deps = [
         "//donner/editor/gui:editor_window",
@@ -1123,6 +1124,7 @@ donner_cc_test(
     name = "render_element_to_bitmap_tests",
     srcs = ["RenderElementToBitmap_tests.cc"],
     data = ["//:donner_splash.svg"],
+    opens_gpu_device = True,
     variants = ["geode"],
     deps = [
         "//donner/base:base_test_utils",
@@ -1175,6 +1177,7 @@ donner_cc_test(
         "//donner/svg/renderer:renderer_backend_geode": ["DONNER_EDITOR_WGPU"],
         "//conditions:default": [],
     }),
+    opens_gpu_device = True,
     # 71 independent panel/golden cases. The geode variant runs them through
     # software Vulkan on GPU-less CI (~23 s single-shard); shard so the render
     # work runs as parallel RE actions.

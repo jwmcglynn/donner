@@ -252,6 +252,7 @@ donner_cc_test(
     srcs = [
         "InteractionHintNoAllocation_tests.cc",
     ],
+    opens_gpu_device = True,
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
