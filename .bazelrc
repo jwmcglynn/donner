@@ -290,8 +290,16 @@ build:macos-binary-size-lto --copt=-flto=thin --linkopt=-flto=thin
 build:linux-binary-size-lto --config=linux-binary-size
 build:linux-binary-size-lto --copt=-flto=thin --linkopt=-flto=thin
 
-test --test_env=LLM
-test --test_env=DONNER_RENDERER_TEST_VERBOSE
+# Declared on `build`, not `test`. Bazel keys its analysis cache on the whole
+# option set, so an option that exists on one command and not the other makes
+# every build/test alternation discard the cache and re-analyse the graph
+# ("Build option --test_env has changed, discarding analysis cache"). CI runs
+# `bazel build <targets>` and then `bazel test <targets>`, so with these on
+# `test` the second invocation threw away the first one's analysis and re-walked
+# all ~17k actions. `--test_env` is accepted on `build` and applies to the test
+# actions exactly the same way.
+build --test_env=LLM
+build --test_env=DONNER_RENDERER_TEST_VERBOSE
 
 # Coverage builds
 coverage --config=coverage

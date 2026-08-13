@@ -271,8 +271,13 @@ fi
   rm -f "$COVERAGE_REPORT"
 
   if [ "$QUIET" = true ]; then
+    # Keep progress ON even in --quiet mode. Console noise is already handled by
+    # redirecting to $BAZEL_COVERAGE_LOG, and `--noshow_progress` left that log
+    # containing a single line, so a coverage run that stalled for 200 minutes
+    # produced no evidence of WHAT it stalled on. Progress lines are the only
+    # record of the in-flight target when the job is killed by its timeout.
     run_quiet_with_progress "Bazel coverage" "$BAZEL_COVERAGE_LOG" \
-      "${BAZEL_CMD[@]}" coverage --config=latest_llvm --ui_event_filters=-info,-stdout,-stderr --noshow_progress \
+      "${BAZEL_CMD[@]}" coverage --config=latest_llvm --ui_event_filters=-info,-stdout,-stderr \
       "${DEFAULT_BAZEL_COVERAGE_FLAGS[@]}" \
       "${BAZEL_COVERAGE_FLAGS[@]}" \
       "${LLVM_COVERAGE_FLAGS[@]}" \

@@ -733,7 +733,16 @@ jobs:
       # 2026-07-02 as DEADLINE_EXCEEDED upload failures); 60s fails fast enough
       # on a dead endpoint while tolerating a loaded one.
       BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS: "--remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s"
-      DONNER_COVERAGE_BAZEL_FLAGS: "--remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s"
+      # `--config=ci` must be here, not just on the fetch step above. It is what
+      # routes this lane the same way the sibling CI lane is routed, and it is
+      # what applies `--//build_defs:enable_tracy=false`, which .bazelrc
+      # documents as required for anything running through the CI execution
+      # path. Without it this lane compiled a DIFFERENT configuration from
+      # main.yml's linux-self-hosted lane, so the two shared no action-cache
+      # entries at all and coverage rebuilt the world every run; it also
+      # discarded the analysis cache the fetch step had just populated (the
+      # fetch step does pass `--config=ci`).
+      DONNER_COVERAGE_BAZEL_FLAGS: "--config=ci --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s"
 
     steps:
       - uses: actions/checkout@v7
