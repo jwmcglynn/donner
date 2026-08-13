@@ -389,10 +389,18 @@ async function waitForPresentationQuiescence(
   }
 }
 
+interface RenderAccounting {
+  completedResults: number;
+  documentCanvasCommits: number;
+  overviewInfillRenders: number;
+  interaction: Window["__donnerInteractionStats"];
+  renderedFrames: number;
+}
+
 // One snapshot of everything that can explain a document render count: the
 // count itself, the two renders the editor owes itself (see
 // `__donnerViewportStats`), and the interaction and frame state around them.
-async function readRenderAccounting(page: Page): Promise<Record<string, unknown>> {
+async function readRenderAccounting(page: Page): Promise<RenderAccounting> {
   return page.evaluate(() => ({
     completedResults: window.__donnerWorkerStats?.completedResults || 0,
     documentCanvasCommits: window.__donnerViewportStats?.documentCanvasCommits ?? -1,
@@ -400,6 +408,23 @@ async function readRenderAccounting(page: Page): Promise<Record<string, unknown>
     interaction: window.__donnerInteractionStats,
     renderedFrames: window.__donnerMainLoopRenderedFrames || 0,
   }));
+}
+
+// Poll `readRenderAccounting` until `predicate` accepts it, then return the last
+// snapshot. Callers assert on the returned snapshot so the failure carries the
+// whole render accounting instead of a bare count.
+async function pollRenderAccounting(
+  page: Page,
+  timeoutMs: number,
+  predicate: (accounting: RenderAccounting) => boolean,
+): Promise<RenderAccounting> {
+  const deadline = Date.now() + timeoutMs;
+  let accounting = await readRenderAccounting(page);
+  while (!predicate(accounting) && Date.now() < deadline) {
+    await page.waitForTimeout(25);
+    accounting = await readRenderAccounting(page);
+  }
+  return accounting;
 }
 
 test("wasm editor starts without runtime abort", async ({ page }) => {
@@ -1284,15 +1309,11 @@ test("Geode WASM selects through the overlay with one prewarm render and no recu
   // busy flag. Measured on this build they both stay at zero through sample
   // load, selection, and pan, so a +2 that reports zero for both is neither of
   // them and the reason is still open.
-  const selectionDeadline = Date.now() + scaledMs(2000);
-  let selectionAccounting = await readRenderAccounting(page);
-  while (
-    selectionAccounting.completedResults !== beforeSelection + 1
-    && Date.now() < selectionDeadline
-  ) {
-    await page.waitForTimeout(25);
-    selectionAccounting = await readRenderAccounting(page);
-  }
+  const selectionAccounting = await pollRenderAccounting(
+    page,
+    scaledMs(2000),
+    (accounting) => accounting.completedResults === beforeSelection + 1,
+  );
   expect(
     selectionAccounting.completedResults,
     `expected the selection click's single prewarm render and nothing further: `
@@ -1322,17 +1343,38 @@ test("Geode WASM selects through the overlay with one prewarm render and no recu
     await page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0),
     "an active drag must not re-rasterize the document before the pointer releases",
   ).toBe(beforeSelection + 1);
-  const beforeMouseUpResults = await page.evaluate(
-    () => window.__donnerWorkerStats?.completedResults || 0,
+  // Separate the two ways this can go wrong. A release only owes a document
+  // commit when a drag was live to release: if the buffered press never became
+  // a drag (the press is buffered and dispatched on a later frame, so a slow
+  // runner can dispatch it after the gesture is over), the settlement assertion
+  // below would report a missing settle for a press that never moved anything.
+  // Name that case here instead.
+  const beforeMouseUpAccounting = await pollRenderAccounting(
+    page,
+    scaledMs(1000),
+    (accounting) => accounting.interaction?.dragging === true,
   );
+  const beforeMouseUpResults = beforeMouseUpAccounting.completedResults;
+  expect(
+    beforeMouseUpAccounting.interaction?.dragging ?? false,
+    `expected the shape drag to still be live at mouse-up: `
+      + `${JSON.stringify(beforeMouseUpAccounting)}`,
+  ).toBe(true);
   await page.mouse.up();
-  await expect
-    .poll(async () => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
-      message: "expected the drag-release settlement frame",
-      timeout: scaledMs(1000),
-      intervals: [16, 25, 50, 100],
-    })
-    .toBeGreaterThan(beforeMouseUpResults);
+  // The release owes exactly one document commit. Carry the same render
+  // accounting the selection assertion above attaches, so a settlement that
+  // never lands names what the editor was doing instead of reporting a count.
+  const settlementAccounting = await pollRenderAccounting(
+    page,
+    scaledMs(1000),
+    (accounting) => accounting.completedResults > beforeMouseUpResults,
+  );
+  expect(
+    settlementAccounting.completedResults,
+    `expected the drag-release settlement frame: `
+      + `beforeMouseUp=${JSON.stringify(beforeMouseUpAccounting)} `
+      + `after=${JSON.stringify(settlementAccounting)}`,
+  ).toBeGreaterThan(beforeMouseUpResults);
 
   // Releasing a drag queues exactly one settled-selection refresh behind the
   // frame the pointer already produced, so the first post-mouse-up result is
