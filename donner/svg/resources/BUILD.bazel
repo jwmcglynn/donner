@@ -221,6 +221,8 @@ donner_cc_test(
     deps = [
         ":font_catalog",
         ":font_catalog_types",
+        ":font_manager",
+        "//donner/svg/core",
         "@com_google_gtest//:gtest_main",
     ],
 )
