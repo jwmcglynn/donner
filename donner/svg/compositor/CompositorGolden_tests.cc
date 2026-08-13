@@ -1868,9 +1868,18 @@ TEST_F(CompositorGoldenTest, SplashDragMultipleFilterLayersStableAcrossManyFrame
   ASSERT_NE(glowBData, nullptr);
   ASSERT_NE(glowCData, nullptr);
 
-  // Drive many more drag frames, pure-translation only - no filter layer's
+  // Drive further drag frames, pure-translation only - no filter layer's
   // pixel content has changed, so no filter layer should re-rasterize.
-  constexpr int kTrailingDragFrames = 20;
+  //
+  // Five frames, not twenty. The assertion below is end-only: it compares the
+  // filter layers' bitmap pointers after the loop. The regression this pins is
+  // "a drag-target mutation escalates to marking the filter layer dirty", which
+  // reallocates the layer vector on the FIRST re-render after the mutation, not
+  // on some later one - there is no counter or hysteresis in that path that
+  // could delay it. Each iteration is a full splash-sized composite, so the
+  // extra fifteen frames were the dominant cost of this case and could not
+  // observe anything the first few do not.
+  constexpr int kTrailingDragFrames = 5;
   for (int i = 2; i <= kTrailingDragFrames; ++i) {
     letter2->cast<SVGGraphicsElement>().setTransform(
         Transform2d::Translate(Vector2d(static_cast<double>(i) * 4.0, 0.0)));
@@ -1942,10 +1951,18 @@ TEST_F(CompositorGoldenTest, SplashDragOnGroupReExercisesRasterizePath) {
   // Now promote the `<g>` - a multi-entity range.
   ASSERT_TRUE(compositor.promoteEntity(donnerEntity));
 
-  // Drive many drag frames. If any frame crashes inside `rasterizeLayer`
-  // because of a bad renderer state, the test fails via SIGSEGV. If it
-  // completes without crashing, we've retained the correctness invariant.
-  constexpr int kDragFrames = 30;
+  // Drive drag frames. If any frame crashes inside `rasterizeLayer` because of
+  // a bad renderer state, the test fails via SIGSEGV. If it completes without
+  // crashing, we've retained the correctness invariant.
+  //
+  // Five frames, not thirty. There is no per-frame assertion here - the only
+  // observable is "did it crash", and the crash mode (a stale renderer state
+  // reused by the multi-entity slow path) is entered on the first slow-path
+  // frame after promotion, deterministically. Each frame is a full
+  // splash-sized composite through the slow path, so this case was one of the
+  // most expensive in the suite while every frame after the second was
+  // re-running an already-proven code path.
+  constexpr int kDragFrames = 5;
   for (int i = 1; i <= kDragFrames; ++i) {
     donner->cast<SVGGraphicsElement>().setTransform(
         Transform2d::Translate(Vector2d(static_cast<double>(i) * 2.0, 0.0)));
@@ -2356,8 +2373,8 @@ TEST_F(CompositorGoldenTest, RealSplashRetainedLetterMovesInFlattenedDragFrame) 
   CompositorController compositor(document, renderer_, config);
   // Match the editor lifecycle: the document surface is published before anything is selected.
   compositor.renderFrame(viewport);
-  ASSERT_TRUE(compositor.promoteEntity(letter->unsafeEntityHandle().entity(),
-                                       InteractionHint::ActiveDrag));
+  ASSERT_TRUE(
+      compositor.promoteEntity(letter->unsafeEntityHandle().entity(), InteractionHint::ActiveDrag));
   compositor.renderFrame(viewport);
 
   const auto yellowMinX = [](const RendererBitmap& bitmap) {

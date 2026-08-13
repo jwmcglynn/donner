@@ -138,12 +138,18 @@ std::optional<RenderResult> WaitForRenderResult(AsyncRenderer& asyncRenderer) {
   // few seconds on a fast machine but can take longer on a loaded self-hosted
   // CI runner; a tight 4s budget flaked there (the worker simply hadn't
   // published yet). A generous bound stays robust without masking a real hang.
-  for (int i = 0; i < 3000; ++i) {
+  //
+  // Poll at 1 ms, not 10 ms. Every wait in this file rounds up to the poll
+  // quantum, so a render that publishes in 2 ms still cost 10 ms, across ~88
+  // tests each with several waits. The iteration bounds here and in the sibling
+  // loops below were multiplied by ten at the same time, so every deadline is
+  // unchanged - this only removes rounding, it does not tighten any timeout.
+  for (int i = 0; i < 30000; ++i) {
     auto result = asyncRenderer.pollResult();
     if (result.has_value()) {
       return result;
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
   return std::nullopt;
 }
@@ -572,12 +578,12 @@ TEST(AsyncRendererTest, ProductionRendererCachesStaticSpansAcrossPublishedFrames
   const auto waitForResult = [&]() -> std::optional<RenderResult> {
     // 30s budget - generous for a loaded self-hosted CI runner (see
     // WaitForRenderResult).
-    for (int i = 0; i < 3000; ++i) {
+    for (int i = 0; i < 30000; ++i) {
       auto result = asyncRenderer.pollResult();
       if (result.has_value()) {
         return result;
       }
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     return std::nullopt;
   };
@@ -975,10 +981,10 @@ TEST(AsyncRendererTest, PollResultStillWorksWithoutWakeCallback) {
   asyncRenderer.requestRender(request);
 
   std::optional<RenderResult> result;
-  for (int i = 0; i < 200 && !result.has_value(); ++i) {
+  for (int i = 0; i < 2000 && !result.has_value(); ++i) {
     result = asyncRenderer.pollResult();
     if (!result.has_value()) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
   }
   ASSERT_TRUE(result.has_value());
@@ -1013,12 +1019,12 @@ TEST(AsyncRendererTest, PendingDemotePreviousDragTargetKeepsDragTranslationInTil
   AsyncRenderer asyncRenderer;
 
   const auto waitForResult = [&]() -> std::optional<RenderResult> {
-    for (int i = 0; i < 400; ++i) {
+    for (int i = 0; i < 4000; ++i) {
       auto result = asyncRenderer.pollResult();
       if (result.has_value()) {
         return result;
       } else {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
       }
     }
     return std::nullopt;
@@ -1124,12 +1130,12 @@ TEST(AsyncRendererTest, DisplayNoneSelectionDropsStaleCompositedLayerImmediately
   AsyncRenderer asyncRenderer;
 
   const auto waitForResult = [&]() -> std::optional<RenderResult> {
-    for (int i = 0; i < 400; ++i) {
+    for (int i = 0; i < 4000; ++i) {
       auto result = asyncRenderer.pollResult();
       if (result.has_value()) {
         return result;
       } else {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
       }
     }
     return std::nullopt;
@@ -1208,12 +1214,12 @@ TEST(AsyncRendererTest, DisplayNoneSelectionDoesNotLeaveStaleBackgroundPixelsWhe
   const auto waitForResult = [&]() -> std::optional<RenderResult> {
     // 30s budget - generous for a loaded self-hosted CI runner (see
     // WaitForRenderResult).
-    for (int i = 0; i < 3000; ++i) {
+    for (int i = 0; i < 30000; ++i) {
       auto result = asyncRenderer.pollResult();
       if (result.has_value()) {
         return result;
       }
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     return std::nullopt;
   };
@@ -1379,10 +1385,10 @@ TEST(AsyncRendererTest, RequestRenderDuringBusySignalsCancellationAndPicksUpNewR
   }
 
   std::optional<RenderResult> result;
-  for (int i = 0; i < 600 && !result.has_value(); ++i) {
+  for (int i = 0; i < 6000 && !result.has_value(); ++i) {
     result = asyncRenderer.pollResult();
     if (!result.has_value()) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
   }
   ASSERT_TRUE(result.has_value());
@@ -1547,10 +1553,10 @@ TEST(AsyncRendererTest, DragPreviewRequestReturnsCompositedPreviewLayers) {
   asyncRenderer.requestRender(request);
 
   std::optional<RenderResult> result;
-  for (int i = 0; i < 200 && !result.has_value(); ++i) {
+  for (int i = 0; i < 2000 && !result.has_value(); ++i) {
     result = asyncRenderer.pollResult();
     if (!result.has_value()) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
   }
 
@@ -1597,10 +1603,10 @@ TEST(AsyncRendererTest, PreviewRequestWithoutDomTransformReturnsCompositedPrevie
   asyncRenderer.requestRender(request);
 
   std::optional<RenderResult> result;
-  for (int i = 0; i < 200 && !result.has_value(); ++i) {
+  for (int i = 0; i < 2000 && !result.has_value(); ++i) {
     result = asyncRenderer.pollResult();
     if (!result.has_value()) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
   }
 
@@ -1634,10 +1640,10 @@ TEST(AsyncRendererTest, CompositorResetOnDocumentVersionChange) {
     asyncRenderer.requestRender(request);
 
     std::optional<RenderResult> result;
-    for (int i = 0; i < 200 && !result.has_value(); ++i) {
+    for (int i = 0; i < 2000 && !result.has_value(); ++i) {
       result = asyncRenderer.pollResult();
       if (!result.has_value()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
       }
     }
     ASSERT_TRUE(result.has_value());
@@ -1655,10 +1661,10 @@ TEST(AsyncRendererTest, CompositorResetOnDocumentVersionChange) {
     asyncRenderer.requestRender(request);
 
     std::optional<RenderResult> result;
-    for (int i = 0; i < 200 && !result.has_value(); ++i) {
+    for (int i = 0; i < 2000 && !result.has_value(); ++i) {
       result = asyncRenderer.pollResult();
       if (!result.has_value()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
       }
     }
     ASSERT_TRUE(result.has_value());
@@ -1694,10 +1700,10 @@ TEST(AsyncRendererTest, SelectedEntityWithoutDragPreviewProducesCompositedPrevie
   asyncRenderer.requestRender(request);
 
   std::optional<RenderResult> result;
-  for (int i = 0; i < 200 && !result.has_value(); ++i) {
+  for (int i = 0; i < 2000 && !result.has_value(); ++i) {
     result = asyncRenderer.pollResult();
     if (!result.has_value()) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
   }
 
@@ -1723,10 +1729,10 @@ TEST(AsyncRendererTest, ColdRenderWithoutSelectionProducesFullCanvasCompositedTi
   asyncRenderer.requestRender(request);
 
   std::optional<RenderResult> result;
-  for (int i = 0; i < 200 && !result.has_value(); ++i) {
+  for (int i = 0; i < 2000 && !result.has_value(); ++i) {
     result = asyncRenderer.pollResult();
     if (!result.has_value()) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
   }
 
@@ -1774,10 +1780,10 @@ TEST(AsyncRendererTest, CompositedTilesCarryRasterCanvasSizeForCacheIdentity) {
   asyncRenderer.requestRender(request);
 
   std::optional<RenderResult> result;
-  for (int i = 0; i < 200 && !result.has_value(); ++i) {
+  for (int i = 0; i < 2000 && !result.has_value(); ++i) {
     result = asyncRenderer.pollResult();
     if (!result.has_value()) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
   }
 
@@ -1834,10 +1840,10 @@ TEST(AsyncRendererTest, CompositingContextDescendantsProduceFullCanvasComposited
     asyncRenderer.requestRender(request);
 
     std::optional<RenderResult> result;
-    for (int i = 0; i < 200 && !result.has_value(); ++i) {
+    for (int i = 0; i < 2000 && !result.has_value(); ++i) {
       result = asyncRenderer.pollResult();
       if (!result.has_value()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
       }
     }
 
@@ -1883,10 +1889,10 @@ TEST(AsyncRendererTest, CompositorStaysAliveAcrossDragRelease) {
 
   const auto waitForResult = [&]() {
     std::optional<RenderResult> result;
-    for (int i = 0; i < 200 && !result.has_value(); ++i) {
+    for (int i = 0; i < 2000 && !result.has_value(); ++i) {
       result = asyncRenderer.pollResult();
       if (!result.has_value()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
       }
     }
     return result;
@@ -1988,12 +1994,12 @@ TEST(AsyncRendererTest, ActiveDragCanvasResizePublishesFreshFinalOnly) {
   AsyncRenderer asyncRenderer;
 
   const auto waitForResult = [&]() -> std::optional<RenderResult> {
-    for (int i = 0; i < 400; ++i) {
+    for (int i = 0; i < 4000; ++i) {
       auto result = asyncRenderer.pollResult();
       if (result.has_value()) {
         return result;
       } else {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
       }
     }
     return std::nullopt;
@@ -2089,10 +2095,10 @@ TEST(AsyncRendererTest, SplashShapeDragFramesDoNotCrash) {
 
   const auto waitForResult = [&]() {
     std::optional<RenderResult> result;
-    for (int i = 0; i < 400 && !result.has_value(); ++i) {
+    for (int i = 0; i < 4000 && !result.has_value(); ++i) {
       result = asyncRenderer.pollResult();
       if (!result.has_value()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
       }
     }
     return result;
@@ -2186,10 +2192,10 @@ TEST(AsyncRendererTest, ActiveDragStartDoesNotAdvanceUnchangedTileGenerations) {
   AsyncRenderer asyncRenderer;
 
   const auto waitForResult = [&]() -> std::optional<RenderResult> {
-    for (int i = 0; i < 400; ++i) {
+    for (int i = 0; i < 4000; ++i) {
       auto result = asyncRenderer.pollResult();
       if (result.has_value()) return result;
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     return std::nullopt;
   };
@@ -2316,10 +2322,10 @@ TEST(AsyncRendererTest, SteadyActiveDragTargetReusesPublishedTextureMetadataOnly
   AsyncRenderer asyncRenderer;
 
   const auto waitForResult = [&]() -> std::optional<RenderResult> {
-    for (int i = 0; i < 200; ++i) {
+    for (int i = 0; i < 2000; ++i) {
       auto result = asyncRenderer.pollResult();
       if (result.has_value()) return result;
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     return std::nullopt;
   };
@@ -3054,10 +3060,10 @@ TEST(AsyncRendererTest, DragFrameVersionBumpDoesNotResetCompositor) {
 
   const auto waitForResult = [&]() {
     std::optional<RenderResult> result;
-    for (int i = 0; i < 200 && !result.has_value(); ++i) {
+    for (int i = 0; i < 2000 && !result.has_value(); ++i) {
       result = asyncRenderer.pollResult();
       if (!result.has_value()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
       }
     }
     return result;

@@ -921,14 +921,19 @@ donner_cc_test(
     # wall-clock render delay. A fixed frame-count lag (or per-frame drain)
     # decouples them from real frame pacing and host load, so they run reliably
     # on shared/loaded executors without a forced-local execution strategy.
+    # Only the recordings this suite actually opens. `drag_start_hang_repro.rnr`
+    # (695 frames), `pen-fill.rnr` (254) and `//:zoom-out-drag-jump.rnr` (253)
+    # were listed here but referenced by no test in GlRnrReplay_tests.cc, so
+    # each of the six shards staged ~328 KB of runfiles it never read - and on a
+    # remote executor that is input-tree work repeated per shard, per run.
+    # `//:zoom-out-drag-jump.rnr` is still consumed by
+    # //tools/mcp-servers/editor-control, which declares it itself, and the
+    # `editor_rnr_gl_replay` developer binary above still stages all of them.
     data = [
-        "drag_start_hang_repro.rnr",
         "filter_post_drag_jump.rnr",
         "geode_drag_zoom_o_pop.rnr",
-        "pen-fill.rnr",
         ":filtered_element_flash_after_drags_2_rnr",
         "//:donner_splash.svg",
-        "//:zoom-out-drag-jump.rnr",
     ],
     defines = select({
         "//donner/svg/renderer:renderer_backend_geode": ["DONNER_GL_RNR_GEODE_BACKEND"],
