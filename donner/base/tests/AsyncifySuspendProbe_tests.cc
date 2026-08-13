@@ -67,7 +67,23 @@ TEST_F(AsyncifySuspendProbeTest, SeparateKindsAccumulateSeparately) {
   EXPECT_EQ(totals.count, 2u);
   EXPECT_EQ(totals.countByKind[kTileYield], 1u);
   EXPECT_EQ(totals.countByKind[kDeviceWait], 1u);
-  EXPECT_THAT(totals.msByKind[kDeviceWait], Ge(totals.msByKind[kTileYield]));
+  // Each kind is charged its own interval, asserted against its own spin floor.
+  //
+  // Do NOT compare the two kinds' durations against each other. Both are
+  // wall-clock measurements of independently preempted intervals: `SpinFor`
+  // guarantees a scope runs for AT LEAST its argument, never at most, so on a
+  // loaded machine the 1 ms scope can be descheduled and measure longer than
+  // the 3 ms one. The previous `msByKind[kDeviceWait] >= msByKind[kTileYield]`
+  // failed exactly that way on a shared CI runner (TileYield 4.22 ms against
+  // DeviceWait 3.00 ms), and reproduces at ~6% under CPU contention.
+  //
+  // The floors are also stronger than the comparison was, not a relaxation.
+  // Mutating the probe to charge every kind to the DeviceWait bucket leaves
+  // DeviceWait=4.0 and TileYield=0.0, so the old `DeviceWait >= TileYield`
+  // reads 4.0 >= 0.0 and passes while the attribution is completely broken.
+  // The TileYield floor below fails on that mutant.
+  EXPECT_THAT(totals.msByKind[kTileYield], Ge(1.0));
+  EXPECT_THAT(totals.msByKind[kDeviceWait], Ge(3.0));
   EXPECT_THAT(totals.longestMs, Ge(3.0));
   // `longestMs` is the largest single suspend, never the sum.
   EXPECT_LE(totals.longestMs, totals.totalMs);
