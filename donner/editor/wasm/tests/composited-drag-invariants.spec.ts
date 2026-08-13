@@ -321,7 +321,13 @@ test.describe("composited drag invariants", () => {
     // presented content moving against the pointer. `dragRegressions` is that
     // measurement, and it is strictly stronger than the counter was, because a
     // monotone counter could still carry stale pixels.
-    const violations = dragRegressions(result.samples, stream.trace);
+    // The reversal-latency excuse window must scale with the same CI factor as
+    // every timeout in this suite: on a loaded CI runner the presentation lags
+    // the pointer by several hundred ms, so a 150 ms horizon misses reversals
+    // the presented content is legitimately still finishing (observed live:
+    // a violation whose presented delta tracked the pre-reversal direction
+    // with the turn ~2 samples beyond the unscaled horizon).
+    const violations = dragRegressions(result.samples, stream.trace, 1.0, 2.0, scaledMs(150));
     const presentedFrames = new Set(
       result.samples.filter((sample) => sample.drawOk && sample.coloredWidth > 0).map((sample) =>
         `${Math.round(sample.coloredCentroidX)}x${Math.round(sample.coloredCentroidY)}`
@@ -583,7 +589,7 @@ test.describe("composited drag invariants", () => {
       "the reversing drag never moved the presented content, so a regression could not appear",
     ).toBeGreaterThan(2);
 
-    const regressions = dragRegressions(result.samples, stream.trace);
+    const regressions = dragRegressions(result.samples, stream.trace, 1.0, 2.0, scaledMs(150));
     console.log(
       `drag-pop-back engine=${browserName} samples=${result.samples.length}`
         + ` moved=${motion.movedSamples}/${motion.comparedSamples}`
@@ -734,6 +740,24 @@ test.describe("dragRegressions classifier (pure)", () => {
       samples.push(sampleAt(t, lagged));
     }
     expect(dragRegressions(samples, trace)).toEqual([]);
+  });
+
+  test("a slow pipeline's reversal lag is excused only under a widened horizon", () => {
+    // The CI shape: presentation lags the pointer by ~300 ms on a loaded
+    // runner, so after the t=600 reversal the content keeps moving the old
+    // way for several samples. A 150 ms horizon cannot see the turn and
+    // reports latency as a violation; the CI-scaled horizon the specs pass
+    // covers it. Both classifications are pinned.
+    const trace = reversingTrace(1200, 600);
+    const samples: CompositedSample[] = [];
+    for (let i = 0; i < 36; ++i) {
+      const t = 300 + i * 30;
+      const laggedT = t - 300;
+      const lagged = laggedT < 600 ? 100 + (laggedT / 10) * 3 : 100 + 180 - ((laggedT - 600) / 10) * 3;
+      samples.push(sampleAt(t, lagged));
+    }
+    expect(dragRegressions(samples, trace, 1.0, 2.0, 600).length).toBe(0);
+    expect(dragRegressions(samples, trace, 1.0, 2.0, 150).length).toBeGreaterThan(0);
   });
 
   test("the reversal excuse expires with the horizon: a later stale frame is still reported", () => {
