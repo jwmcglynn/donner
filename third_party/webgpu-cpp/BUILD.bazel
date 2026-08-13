@@ -26,12 +26,30 @@ exports_files(["webgpu.hpp"])
 cc_library(
     name = "webgpu_cpp",
     hdrs = ["webgpu.hpp"],
+    include_prefix = "webgpu",
     # The header includes <webgpu/webgpu.h> and <webgpu/wgpu.h> directly, so
     # the wgpu-native `cc_library` must be exported as part of this target's
     # public headers, not just a link-time dep.
     strip_include_prefix = ".",
-    include_prefix = "webgpu",
-    deps = [":wgpu_native_platform"],
+    deps = [":wgpu_native_platform"] + select({
+        "@platforms//os:linux": [":wgpu_native_lsan_suppressions"],
+        "//conditions:default": [],
+    }),
+)
+
+# LeakSanitizer only runs on Linux, and the suppression is only meaningful for a binary that links
+# the prebuilt wgpu-native library, so it rides along with the wrapper every such binary depends
+# on. `alwayslink` is required: nothing references the symbol, and the sanitizer runtime's own weak
+# definition wins unless this object is force-linked into the executable.
+cc_library(
+    name = "wgpu_native_lsan_suppressions",
+    srcs = ["wgpu_native_lsan_suppressions.cc"],
+    linkstatic = True,
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    alwayslink = True,
 )
 
 # Alias the active wgpu-native archive for the current (os, cpu). Each

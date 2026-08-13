@@ -244,6 +244,11 @@ donner_cc_test(
 
 donner_cc_test(
     name = "zoom_filter_repro_tests",
+    # One scenario per shard, so sharding cannot split the heaviest one further. Under ASan that
+    # shard measures 58-60 s on the hosted nightly runner, right at the 60 s ceiling the default
+    # `size = "small"` imposes, and it tips over on a slow run. Give the shard headroom explicitly
+    # rather than let an instrumented build decide the lane's colour.
+    timeout = "moderate",
     srcs = ["ZoomFilterRepro_tests.cc"],
     data = ["//:donner_splash.svg"],
     # 4 independent zoom/filter repro scenarios, ~80 s serial on the
