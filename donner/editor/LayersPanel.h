@@ -136,10 +136,10 @@ public:
   };
 
   /// Rebuild the row snapshot, per-row preview swatches, and per-row rendered
-  /// thumbnail bitmaps from live editor state. Safe to call only when the async
+  /// thumbnails from live editor state. Safe to call only when the async
   /// renderer is idle (delegates to `LayerTreeModel::refresh` and renders each
-  /// row's element subtree through `svg::Renderer::renderElementToBitmap`, which
-  /// takes document write access).
+  /// row's element subtree through `svg::Renderer::renderElement`, which takes
+  /// document write access).
   ///
   /// @param app Live editor app to snapshot.
   /// @param renderer Optional renderer to use for thumbnail rasterization.
@@ -284,15 +284,14 @@ public:
   /// or `std::nullopt` if the row is not present.
   [[nodiscard]] std::optional<css::RGBA> rowFallbackSwatch(std::uint64_t stableId) const;
 
-  /// The Donner-rendered preview thumbnail bitmap for the row identified by
-  /// @p stableId, or `nullptr` when the row has no real raster preview (it then
-  /// uses the fallback swatch). This is the non-ImGui data seam: tests assert on
-  /// the rendered pixels here without needing a GL context or an ImGui frame.
+  /// The Donner-rendered preview thumbnail for the row identified by @p stableId, or `nullptr`
+  /// when the row has no real raster preview (it then uses the fallback swatch). The image is
+  /// GPU-resident on backends that render into a sampleable texture and CPU pixels otherwise; see
+  /// \ref svg::RendererImage. This is the non-ImGui data seam: tests assert on the rendered pixels
+  /// here without needing a GL context or an ImGui frame.
   ///
   /// @param stableId Stable id of the row.
-  [[nodiscard]] const svg::RendererBitmap* rowThumbnail(std::uint64_t stableId) const;
-  [[nodiscard]] const std::shared_ptr<const svg::RendererTextureSnapshot>* rowTextureThumbnail(
-      std::uint64_t stableId) const;
+  [[nodiscard]] const svg::RendererImage* rowThumbnail(std::uint64_t stableId) const;
 
   /// Whether the most recent `render` / `handleRowClick` changed the editor
   /// selection. Consumes the flag. Used by `EditorShell` to fire the existing
@@ -326,8 +325,7 @@ private:
   };
 
   struct CachedThumbnail {
-    svg::RendererBitmap bitmap;
-    std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot;
+    svg::RendererImage image;
     std::uint64_t documentFrameVersion = 0;
     Vector2i maxSizePx = Vector2i::Zero();
   };
@@ -340,12 +338,11 @@ private:
   /// refresh so it tracks the current document and styles.
   std::unordered_map<std::uint64_t, css::RGBA> swatchByStableId_;
   /// Per-row Donner-rendered preview thumbnails keyed by stable id. Each entry
-  /// is the element's subtree rasterized through
-  /// `svg::Renderer::renderElementToBitmap` into the preview cell size - a real
-  /// render of the user's artwork, not an ImGui-synthesized silhouette. Rows
-  /// whose subtree has no boundable geometry (empty groups, text, image, use)
-  /// have no entry and fall back to the swatch.
-  std::unordered_map<std::uint64_t, CachedThumbnail> thumbnailBitmapByStableId_;
+  /// is the element's subtree rasterized through `svg::Renderer::renderElement`
+  /// into the preview cell size - a real render of the user's artwork, not an
+  /// ImGui-synthesized silhouette. Rows whose subtree has no boundable geometry
+  /// (empty groups, text, image, use) have no entry and fall back to the swatch.
+  std::unordered_map<std::uint64_t, CachedThumbnail> thumbnailByStableId_;
   /// Diagnostics for the most recent thumbnail refresh.
   ThumbnailRefreshStats thumbnailRefreshStats_;
   /// Snapshot identity used to avoid repeating the O(N) model/style walk while

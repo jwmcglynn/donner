@@ -2,6 +2,7 @@
 
 #include <string_view>
 
+#include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::geode {
@@ -34,9 +35,8 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> @builtin(position) vec4<
 @fragment
 fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
   // `origin_offset` shifts the pattern's anchor away from the target's top-left
-  // so a target that is itself placed somewhere on screen (a worker-owned
-  // document surface) can pin the same cells the window-anchored desktop
-  // underlay would have drawn there.
+  // so a target that is itself placed somewhere on screen can pin the same
+  // cells a window-anchored pattern would have drawn there.
   let anchored = min(position.xy, params.target_size) + params.origin_offset;
   let screen = anchored / max(params.device_pixel_ratio, 0.0001);
   let cell = vec2<i32>(floor(screen / vec2<f32>(params.checker_size, params.checker_size)));
@@ -50,6 +50,15 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
   return params.dark_color;
 }
 )wgsl";
+
+/// The device-owned pipeline for @p blendMode. Each blend mode is compiled and
+/// cached independently, so a consumer only pays for the variant it draws.
+GeodeCheckerboardPipeline& PipelineForBlendMode(GeodeDevice& device,
+                                                GeodeCheckerboardPipeline::BlendMode blendMode) {
+  return blendMode == GeodeCheckerboardPipeline::BlendMode::DestinationOver
+             ? device.checkerboardUnderlayPipeline()
+             : device.checkerboardPipeline();
+}
 
 }  // namespace
 
@@ -133,6 +142,130 @@ GeodeCheckerboardPipeline::GeodeCheckerboardPipeline(const wgpu::Device& device,
   pipelineDesc.multisample.count = 1;
   pipelineDesc.multisample.mask = 0xFFFFFFFF;
   pipeline_ = device.createRenderPipeline(pipelineDesc);
+}
+
+bool GeodeCheckerboardPass::ensureResources(GeodeDevice& device,
+                                            const GeodeCheckerboardPipeline& pipeline,
+                                            GeodeCheckerboardPipeline::BlendMode blendMode) {
+  if (bindGroup_ && bindGroupBlendMode_ == blendMode) {
+    return true;
+  }
+  bindGroup_.reset();
+
+  if (!uniformBuffer_) {
+    wgpu::BufferDescriptor bufferDesc = {};
+    bufferDesc.label = wgpuLabel("GeodeCheckerboardUniforms");
+    bufferDesc.size = sizeof(GeodeCheckerboardPipeline::Uniforms);
+    bufferDesc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
+    uniformBuffer_.reset(device.device().createBuffer(bufferDesc));
+    device.countBuffer();
+    if (!uniformBuffer_) {
+      return false;
+    }
+  }
+
+  wgpu::BindGroupEntry bindGroupEntry = {};
+  bindGroupEntry.binding = 0;
+  bindGroupEntry.buffer = uniformBuffer_.get();
+  bindGroupEntry.offset = 0;
+  bindGroupEntry.size = sizeof(GeodeCheckerboardPipeline::Uniforms);
+
+  wgpu::BindGroupDescriptor bindGroupDesc = {};
+  bindGroupDesc.label = wgpuLabel("GeodeCheckerboardBG");
+  bindGroupDesc.layout = pipeline.bindGroupLayout();
+  bindGroupDesc.entryCount = 1;
+  bindGroupDesc.entries = &bindGroupEntry;
+  bindGroup_.reset(device.device().createBindGroup(bindGroupDesc));
+  device.countBindGroup();
+  if (!bindGroup_) {
+    return false;
+  }
+
+  bindGroupBlendMode_ = blendMode;
+  return true;
+}
+
+bool GeodeCheckerboardPass::draw(GeodeDevice& device, const wgpu::Texture& target,
+                                 Vector2i targetSizePx, const CheckerboardUnderlayParams& params,
+                                 GeodeCheckerboardPipeline::BlendMode blendMode) {
+  if (!target || targetSizePx.x <= 0 || targetSizePx.y <= 0) {
+    return false;
+  }
+  if (!(params.devicePixelRatio > 0.0) || !(params.cellSizeLogicalPx > 0.0)) {
+    return false;
+  }
+  if (params.scissorPx.has_value() &&
+      (params.scissorPx->width == 0 || params.scissorPx->height == 0)) {
+    return false;
+  }
+
+  const GeodeCheckerboardPipeline& checkerboard = PipelineForBlendMode(device, blendMode);
+  if (!checkerboard.valid() || !ensureResources(device, checkerboard, blendMode)) {
+    return false;
+  }
+
+  const GeodeCheckerboardPipeline::Uniforms uniforms{
+      .targetSize = {static_cast<float>(targetSizePx.x), static_cast<float>(targetSizePx.y)},
+      .devicePixelRatio = static_cast<float>(params.devicePixelRatio),
+      .checkerSize = static_cast<float>(params.cellSizeLogicalPx),
+      .darkColor = {params.darkColor[0], params.darkColor[1], params.darkColor[2],
+                    params.darkColor[3]},
+      .lightColor = {params.lightColor[0], params.lightColor[1], params.lightColor[2],
+                     params.lightColor[3]},
+      .originOffsetPx = {static_cast<float>(params.originOffsetPx.x),
+                         static_cast<float>(params.originOffsetPx.y)},
+      .padding = {0.0f, 0.0f},
+  };
+  device.queue().writeBuffer(uniformBuffer_.get(), 0, &uniforms, sizeof(uniforms));
+  device.countBufferWrite(sizeof(uniforms));
+
+  ScopedWgpuHandle<wgpu::TextureView> view(target.createView());
+  if (!view) {
+    return false;
+  }
+
+  wgpu::CommandEncoderDescriptor encoderDesc = {};
+  encoderDesc.label = wgpuLabel("GeodeCheckerboardEncoder");
+  ScopedWgpuHandle<wgpu::CommandEncoder> encoder(device.device().createCommandEncoder(encoderDesc));
+  if (!encoder) {
+    return false;
+  }
+
+  wgpu::RenderPassColorAttachment color = {};
+  color.view = view.get();
+  color.loadOp = wgpu::LoadOp::Load;
+  color.storeOp = wgpu::StoreOp::Store;
+  color.clearValue = {0.0, 0.0, 0.0, 0.0};
+  color.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+
+  wgpu::RenderPassDescriptor passDesc = {};
+  passDesc.label = wgpuLabel("GeodeCheckerboardPass");
+  passDesc.colorAttachmentCount = 1;
+  passDesc.colorAttachments = &color;
+  ScopedWgpuHandle<wgpu::RenderPassEncoder> pass(encoder.get().beginRenderPass(passDesc));
+  if (!pass) {
+    return false;
+  }
+
+  if (params.scissorPx.has_value()) {
+    pass.get().setScissorRect(params.scissorPx->x, params.scissorPx->y, params.scissorPx->width,
+                              params.scissorPx->height);
+  }
+  pass.get().setPipeline(checkerboard.pipeline());
+  pass.get().setBindGroup(0, bindGroup_.get(), 0, nullptr);
+  pass.get().draw(3, 1, 0, 0);
+  device.countPipelineSwitch();
+  device.countDraw();
+  pass.get().end();
+  pass.reset();
+
+  ScopedWgpuHandle<wgpu::CommandBuffer> commands(encoder.get().finish());
+  if (!commands) {
+    return false;
+  }
+  device.queue().submit(1, &commands.get());
+  device.countSubmit();
+  return true;
 }
 
 }  // namespace donner::geode

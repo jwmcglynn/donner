@@ -118,14 +118,19 @@ ThumbnailTransform ComputeThumbnailTransform(const Box2d& cropBounds, Vector2i s
   return result;
 }
 
-RendererBitmap RenderThumbnailRange(RendererInterface& renderer, Registry& registry,
-                                    const SubtreeRenderSpan& span, const Box2d& cropBounds,
-                                    Vector2i sizePx) {
+/// Draw @p span into @p renderer and take the result in whichever form the backend produces
+/// natively: a sampleable texture when it has one, CPU pixels otherwise.
+RendererImage RenderThumbnailRange(RendererInterface& renderer, Registry& registry,
+                                   const SubtreeRenderSpan& span, const Box2d& cropBounds,
+                                   Vector2i sizePx) {
   const ThumbnailTransform thumbnailTransform = ComputeThumbnailTransform(cropBounds, sizePx);
   RendererDriver driver(renderer);
   driver.drawEntityRange(registry, span.firstEntity, span.lastEntity, thumbnailTransform.viewport,
                          thumbnailTransform.surfaceFromCanvas);
-  return driver.takeSnapshot();
+  if (std::shared_ptr<const RendererTextureSnapshot> texture = renderer.takeTextureSnapshot()) {
+    return RendererImage(std::move(texture));
+  }
+  return RendererImage(driver.takeSnapshot());
 }
 
 bool SolidPaintContributesBounds(const PaintServer::Solid& solid, css::RGBA currentColor,
@@ -387,27 +392,12 @@ SubtreeRenderSpan ResolveSubtreeRenderSpan(Registry& registry,
   return span;
 }
 
-}  // namespace
-
-Renderer::Renderer(bool verbose) : impl_(CreateRendererImplementation(verbose)) {}
-
-Renderer::Renderer(std::shared_ptr<geode::GeodeDevice> device, bool verbose)
-    : impl_(CreateRendererImplementation(std::move(device), verbose)) {}
-
-Renderer::~Renderer() = default;
-
-Renderer::Renderer(Renderer&&) noexcept = default;
-
-Renderer& Renderer::operator=(Renderer&&) noexcept = default;
-
-void Renderer::draw(SVGDocument& document) {
-  impl_->draw(document);
-}
-
-RendererBitmap RenderElementToBitmap(RendererInterface& renderer, SVGElement element,
-                                     Vector2i sizePx) {
+/// Shared body of element-subtree rendering. @p offscreenRenderer is the isolated instance the
+/// subtree draws into; the caller owns its lifetime and decides whether it is reused across calls.
+RendererImage RenderElementSubtreeToImage(RendererInterface& offscreenRenderer, SVGElement element,
+                                          Vector2i sizePx) {
   if (sizePx.x <= 0 || sizePx.y <= 0) {
-    return RendererBitmap{};
+    return RendererImage{};
   }
 
   SVGDocument document = element.ownerDocument();
@@ -423,24 +413,37 @@ RendererBitmap RenderElementToBitmap(RendererInterface& renderer, SVGElement ele
   const SubtreeRenderSpan span = ResolveSubtreeRenderSpan(registry, subtreeEntities);
   if (span.firstEntity == entt::null || span.lastEntity == entt::null ||
       !span.worldBounds.has_value() || span.worldBounds->isEmpty()) {
-    return RendererBitmap{};
+    return RendererImage{};
   }
 
   Box2d cropBounds = *span.worldBounds;
   if (const std::optional<Box2d> rootCanvasBounds = RootViewBoxCanvasBounds(document, registry)) {
     const std::optional<Box2d> visibleBounds = IntersectBoxes(cropBounds, *rootCanvasBounds);
     if (!visibleBounds.has_value()) {
-      return RendererBitmap{};
+      return RendererImage{};
     }
     cropBounds = *visibleBounds;
   }
 
-  std::unique_ptr<RendererInterface> offscreenRenderer = renderer.createOffscreenInstance();
-  RendererInterface& thumbnailRenderer =
-      offscreenRenderer != nullptr ? *offscreenRenderer : renderer;
+  const Vector2i imageSizePx = ComputeThumbnailBitmapSize(cropBounds, sizePx);
+  return RenderThumbnailRange(offscreenRenderer, registry, span, cropBounds, imageSizePx);
+}
 
-  const Vector2i bitmapSizePx = ComputeThumbnailBitmapSize(cropBounds, sizePx);
-  return RenderThumbnailRange(thumbnailRenderer, registry, span, cropBounds, bitmapSizePx);
+}  // namespace
+
+Renderer::Renderer(bool verbose) : impl_(CreateRendererImplementation(verbose)) {}
+
+Renderer::Renderer(std::shared_ptr<geode::GeodeDevice> device, bool verbose)
+    : impl_(CreateRendererImplementation(std::move(device), verbose)) {}
+
+Renderer::~Renderer() = default;
+
+Renderer::Renderer(Renderer&&) noexcept = default;
+
+Renderer& Renderer::operator=(Renderer&&) noexcept = default;
+
+void Renderer::draw(SVGDocument& document) {
+  impl_->draw(document);
 }
 
 RendererBitmap RenderDocumentsToAtlasBitmap(RendererInterface& renderer,
@@ -492,55 +495,12 @@ RendererBitmap RenderDocumentsToAtlasBitmap(RendererInterface& renderer,
   return renderer.takeSnapshot();
 }
 
-RendererBitmap Renderer::renderElementToBitmap(SVGElement element, Vector2i sizePx) {
-  return RenderElementToBitmap(*impl_, element, sizePx);
-}
-
-std::shared_ptr<const RendererTextureSnapshot> Renderer::renderElementToTextureSnapshot(
-    SVGElement element, Vector2i sizePx) {
-  if (sizePx.x <= 0 || sizePx.y <= 0) {
-    return nullptr;
+RendererImage Renderer::renderElement(SVGElement element, Vector2i sizePx) {
+  if (elementThumbnailRenderer_ == nullptr) {
+    elementThumbnailRenderer_ = impl_->createOffscreenInstance();
   }
-
-  SVGDocument document = element.ownerDocument();
-  DocumentWriteAccess access = document.writeAccess();
-  Registry& registry = document.registry();
-  ScopedRenderInvalidationRestore restoreInvalidation(registry);
-
-  ParseWarningSink warnings;
-  RendererUtils::prepareDocumentForRendering(document, /*verbose=*/false, warnings);
-
-  std::unordered_set<Entity> subtreeEntities;
-  CollectSubtreeEntities(element, subtreeEntities);
-  const SubtreeRenderSpan span = ResolveSubtreeRenderSpan(registry, subtreeEntities);
-  if (span.firstEntity == entt::null || span.lastEntity == entt::null ||
-      !span.worldBounds.has_value() || span.worldBounds->isEmpty()) {
-    return nullptr;
-  }
-
-  Box2d cropBounds = *span.worldBounds;
-  if (const std::optional<Box2d> rootCanvasBounds = RootViewBoxCanvasBounds(document, registry)) {
-    const std::optional<Box2d> visibleBounds = IntersectBoxes(cropBounds, *rootCanvasBounds);
-    if (!visibleBounds.has_value()) {
-      return nullptr;
-    }
-    cropBounds = *visibleBounds;
-  }
-
-  if (elementTextureThumbnailRenderer_ == nullptr) {
-    elementTextureThumbnailRenderer_ = impl_->createOffscreenInstance();
-  }
-  if (elementTextureThumbnailRenderer_ == nullptr) {
-    return nullptr;
-  }
-
-  const Vector2i textureSizePx = ComputeThumbnailBitmapSize(cropBounds, sizePx);
-  const ThumbnailTransform thumbnailTransform =
-      ComputeThumbnailTransform(cropBounds, textureSizePx);
-  RendererDriver driver(*elementTextureThumbnailRenderer_);
-  driver.drawEntityRange(registry, span.firstEntity, span.lastEntity, thumbnailTransform.viewport,
-                         thumbnailTransform.surfaceFromCanvas);
-  return elementTextureThumbnailRenderer_->takeTextureSnapshot();
+  return RenderElementSubtreeToImage(
+      elementThumbnailRenderer_ != nullptr ? *elementThumbnailRenderer_ : *impl_, element, sizePx);
 }
 
 void Renderer::beginFrame(const RenderViewport& viewport) {
@@ -670,16 +630,8 @@ const RendererTextureSnapshot* Renderer::borrowTextureSnapshot() {
   return impl_->borrowTextureSnapshot();
 }
 
-bool Renderer::drawCheckerboardUnderlay(const CheckerboardUnderlayParams& params) {
-  return impl_->drawCheckerboardUnderlay(params);
-}
-
 bool Renderer::requiresTextureSnapshotPresentation() const {
   return impl_->requiresTextureSnapshotPresentation();
-}
-
-bool Renderer::supportsElementTextureSnapshots() const {
-  return impl_->supportsElementTextureSnapshots();
 }
 
 std::unique_ptr<RendererInterface> Renderer::createOffscreenInstance() const {

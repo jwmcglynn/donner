@@ -15,20 +15,6 @@ class GeodeDevice;
 namespace donner::svg {
 
 /**
- * Rasterize an element subtree through an isolated instance of a specific
- * renderer implementation. This is the backend-explicit counterpart to
- * `Renderer::renderElementToBitmap` for callers that intentionally choose a
- * CPU or GPU renderer.
- *
- * @param renderer Backend instance used to rasterize the subtree.
- * @param element Root element of the subtree to rasterize.
- * @param sizePx Output bitmap dimensions in pixels.
- * @return The rasterized subtree bitmap.
- */
-[[nodiscard]] RendererBitmap RenderElementToBitmap(RendererInterface& renderer, SVGElement element,
-                                                   Vector2i sizePx);
-
-/**
  * Placement of one document inside a shared atlas render target.
  *
  * @see RenderDocumentsToAtlasBitmap
@@ -133,13 +119,13 @@ public:
   void draw(SVGDocument& document) override;
 
   /**
-   * Rasterize a single \ref SVGElement and its descendant subtree to an RGBA
-   * bitmap fitted into a target box.
+   * Rasterize a single \ref SVGElement and its descendant subtree to an image
+   * fitted into a target box.
    *
    * This renders just the given element + its descendants through an isolated
    * offscreen instance of this renderer, scaled and centered into @p sizePx with
    * a transparent background. The requested size is a maximum thumbnail extent:
-   * the returned bitmap dimensions are computed from the element's nonzero-
+   * the returned image dimensions are computed from the element's nonzero-
    * opacity painted geometry bounds and may be narrower or shorter than
    * @p sizePx. Layers whose visible bounds cover the root SVG viewBox fit the
    * canvas-visible bounds into the preview cell. The element's own paint and
@@ -153,25 +139,18 @@ public:
    * for this isolated draw, then its pending render invalidation state is
    * restored so previews do not consume dirty flags needed by another renderer.
    *
+   * A GPU backend keeps the result in a sampleable texture and a software
+   * backend returns pixels; \ref RendererImage hides the difference, reading the
+   * texture back on demand for callers that need pixels.
+   *
    * @param element Element whose subtree should be rasterized.
-   * @param sizePx Maximum bitmap dimensions in device pixels. Both axes must be
-   *   positive; otherwise an empty bitmap is returned.
-   * @return The rendered RGBA bitmap with a transparent background, or an empty
-   *   \ref RendererBitmap when the element has no renderable geometry or the
+   * @param sizePx Maximum image dimensions in device pixels. Both axes must be
+   *   positive; otherwise an empty image is returned.
+   * @return The rendered image with a transparent background, or an empty
+   *   \ref RendererImage when the element has no renderable geometry or the
    *   inputs are degenerate.
    */
-  [[nodiscard]] RendererBitmap renderElementToBitmap(SVGElement element, Vector2i sizePx);
-
-  /**
-   * Renders an element subtree into a directly sampleable backend texture.
-   *
-   * This is the GPU-native counterpart to \ref renderElementToBitmap. It uses
-   * the same bounds, crop, and isolated offscreen draw, then transfers
-   * ownership of the rendered target instead of reading it back through the
-   * CPU. Backends without texture snapshots return nullptr.
-   */
-  [[nodiscard]] std::shared_ptr<const RendererTextureSnapshot> renderElementToTextureSnapshot(
-      SVGElement element, Vector2i sizePx);
+  [[nodiscard]] RendererImage renderElement(SVGElement element, Vector2i sizePx);
 
   /**
    * Begins a render pass for the given viewport.
@@ -347,16 +326,8 @@ public:
   [[nodiscard]] const RendererTextureSnapshot* borrowTextureSnapshot()
       UTILS_LIFETIME_BOUND override;
 
-  /// Fills the completed frame target's see-through pixels with the
-  /// transparency checkerboard, underneath the content already in it.
-  bool drawCheckerboardUnderlay(const CheckerboardUnderlayParams& params) override;
-
   /// Returns true when this backend requires direct texture presentation.
   [[nodiscard]] bool requiresTextureSnapshotPresentation() const override;
-
-  /// Returns true when \ref renderElementToTextureSnapshot can produce a texture on this
-  /// backend, i.e. when thumbnail callers should prefer it over \ref renderElementToBitmap.
-  [[nodiscard]] bool supportsElementTextureSnapshots() const override;
 
   /// Creates an offscreen renderer of the active backend type.
   [[nodiscard]] std::unique_ptr<RendererInterface> createOffscreenInstance() const override;
@@ -392,7 +363,9 @@ public:
 
 private:
   std::unique_ptr<RendererInterface> impl_;
-  std::unique_ptr<RendererInterface> elementTextureThumbnailRenderer_;
+  /// Isolated instance \ref renderElement draws element subtrees into, created on first use and
+  /// reused so a per-row thumbnail batch does not rebuild backend state for every row.
+  std::unique_ptr<RendererInterface> elementThumbnailRenderer_;
 };
 
 }  // namespace donner::svg

@@ -3,6 +3,7 @@ import { readEditorPixelBounds } from "./canvas-color-stats";
 import {
   blackFrameStats,
   type CompositedProbeResult,
+  type CompositedSample,
   contentMotionFraction,
   dragRegressions,
   installCompositedProbe,
@@ -673,5 +674,86 @@ test.describe("composited drag invariants", () => {
       );
     }
     expect(failures).toEqual([]);
+  });
+});
+
+// Pure-function coverage for the regression classifier itself. No page, no
+// browser state: these pin the measurement physics that test (g) stands on,
+// after a CI flake showed the classifier counting pipeline latency at a drag
+// REVERSAL as an out-of-order frame (presented content finishing the old
+// direction for one sample after the pointer turned around).
+test.describe("dragRegressions classifier (pure)", () => {
+  /** Sample with only the fields the classifier reads. */
+  function sampleAt(t: number, centroidX: number): CompositedSample {
+    return {
+      t,
+      drawOk: true,
+      coloredCentroidX: centroidX,
+      coloredCentroidY: 50,
+    } as unknown as CompositedSample;
+  }
+
+  /** Pointer trace moving +3 css px per 10 ms until `reverseAt`, then -3. */
+  function reversingTrace(
+    endMs: number,
+    reverseAt: number,
+  ): Array<readonly [number, number, number]> {
+    const trace: Array<readonly [number, number, number]> = [];
+    let x = 100;
+    for (let t = 0; t <= endMs; t += 10) {
+      trace.push([t, x, 200] as const);
+      x += t < reverseAt ? 3 : -3;
+    }
+    return trace;
+  }
+
+  test("a pop-back during steady one-direction motion is reported", () => {
+    const trace = reversingTrace(600, Infinity);
+    // Presented follows the pointer with a 60 ms lag, except sample index 6
+    // re-presents a position from 5 samples earlier: a genuine older frame.
+    const samples: CompositedSample[] = [];
+    for (let i = 0; i < 18; ++i) {
+      const t = 60 + i * 30;
+      const lagged = 100 + ((t - 60) / 10) * 3;
+      samples.push(sampleAt(t, i === 6 ? lagged - 45 : lagged));
+    }
+    const violations = dragRegressions(samples, trace);
+    expect(violations.map((v) => v.sampleIndex)).toEqual([6]);
+  });
+
+  test("one sample of lag at a pointer reversal is latency, not a violation", () => {
+    // The CI flake's shape: pointer reverses at t=300; the presented centroid
+    // lags 60 ms, so for two samples after the reversal it still moves in the
+    // old direction while the pointer moves in the new one.
+    const trace = reversingTrace(600, 300);
+    const samples: CompositedSample[] = [];
+    for (let i = 0; i < 18; ++i) {
+      const t = 60 + i * 30;
+      const laggedT = t - 60;
+      const lagged = laggedT < 300 ? 100 + (laggedT / 10) * 3 : 100 + 90 - ((laggedT - 300) / 10) * 3;
+      samples.push(sampleAt(t, lagged));
+    }
+    expect(dragRegressions(samples, trace)).toEqual([]);
+  });
+
+  test("the reversal excuse expires with the horizon: a later stale frame is still reported", () => {
+    // Same reversal at t=300, but the stale frame arrives at t=480, long after
+    // the pointer's turn has left the excuse's 150 ms horizon. By then the
+    // pointer direction before and inside the interval agree (both leftward),
+    // so a presented step back toward an already-left position must be
+    // reported even though a reversal exists earlier in the drag.
+    const trace = reversingTrace(600, 300);
+    const samples: CompositedSample[] = [];
+    for (let i = 0; i < 18; ++i) {
+      const t = 60 + i * 30;
+      const laggedT = t - 60;
+      const lagged = laggedT < 300 ? 100 + (laggedT / 10) * 3 : 100 + 90 - ((laggedT - 300) / 10) * 3;
+      samples.push(sampleAt(t, lagged));
+    }
+    // Sample 14 (t=480) re-presents a position 20 px to the RIGHT of the
+    // lagged trajectory: a position the leftward drag already left.
+    samples[14] = sampleAt(samples[14].t, samples[14].coloredCentroidX + 20);
+    const violations = dragRegressions(samples, trace);
+    expect(violations.map((v) => v.sampleIndex)).toEqual([14]);
   });
 });

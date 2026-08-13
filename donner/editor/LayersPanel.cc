@@ -205,7 +205,7 @@ constexpr css::RGBA kPlaceholderSwatch = css::RGBA(128, 128, 128, 255);
 /// only as the fallback when no rendered thumbnail is available - e.g. a row
 /// whose subtree has no boundable geometry, or a build with no GL texture
 /// context. The real per-row preview is the Donner-rendered raster produced by
-/// `svg::Renderer::renderElementToBitmap` in `refreshSnapshot`.
+/// `svg::Renderer::renderElement` in `refreshSnapshot`.
 css::RGBA SwatchColorForElement(const svg::SVGElement& element) {
   const svg::PropertyRegistry& style = element.getComputedStyle();
   const auto fill = style.fill.get();
@@ -283,9 +283,9 @@ void LayersPanel::refreshSnapshot(const EditorApp& app, svg::Renderer* renderer,
     // Keep the previous non-empty thumbnail for a live row when an idle refresh
     // transiently misses renderable geometry; otherwise rows can flash back to
     // the fallback swatch until the next successful refresh.
-    for (auto it = thumbnailBitmapByStableId_.begin(); it != thumbnailBitmapByStableId_.end();) {
+    for (auto it = thumbnailByStableId_.begin(); it != thumbnailByStableId_.end();) {
       if (liveStableIds.count(it->first) == 0) {
-        it = thumbnailBitmapByStableId_.erase(it);
+        it = thumbnailByStableId_.erase(it);
       } else {
         ++it;
       }
@@ -309,7 +309,7 @@ void LayersPanel::refreshSnapshot(const EditorApp& app, svg::Renderer* renderer,
 
   thumbnailRefreshStats_.rowCount = model_.rows().size();
   if (!hasDocument) {
-    thumbnailBitmapByStableId_.clear();
+    thumbnailByStableId_.clear();
     pendingThumbnails_.clear();
     pendingThumbnailCursor_ = 0;
     thumbnailQueuePrepared_ = false;
@@ -348,8 +348,8 @@ void LayersPanel::refreshSnapshot(const EditorApp& app, svg::Renderer* renderer,
     thumbnailQueueBaseReusedCount_ = 0;
     pendingThumbnails_.reserve(model_.rows().size());
     for (const LayerTreeRow& row : model_.rows()) {
-      const auto thumbnailIt = thumbnailBitmapByStableId_.find(row.stableId);
-      if (thumbnailIt != thumbnailBitmapByStableId_.end() &&
+      const auto thumbnailIt = thumbnailByStableId_.find(row.stableId);
+      if (thumbnailIt != thumbnailByStableId_.end() &&
           thumbnailIt->second.documentFrameVersion == documentFrameVersion &&
           thumbnailIt->second.maxSizePx == thumbnailMaxSizePx) {
         ++thumbnailQueueBaseReusedCount_;
@@ -372,28 +372,15 @@ void LayersPanel::refreshSnapshot(const EditorApp& app, svg::Renderer* renderer,
     // Donner renderer. Rows whose subtree has no boundable geometry come back
     // empty and fall back to the swatch.
     ++thumbnailRefreshStats_.renderedCount;
-    CachedThumbnail& cacheEntry = thumbnailBitmapByStableId_[pending.stableId];
+    CachedThumbnail& cacheEntry = thumbnailByStableId_[pending.stableId];
     cacheEntry.documentFrameVersion = thumbnailRefreshStats_.documentFrameVersion;
     cacheEntry.maxSizePx = thumbnailMaxSizePx;
-    // Prefer a GPU texture whenever this renderer can make one. The question is whether *this*
-    // renderer can hand back a sampleable texture, not how the compositor's cross-thread frame
-    // handoff works: the caller renders these rows on its own thread and device, so asking
-    // `requiresTextureSnapshotPresentation()` here would drop the browser build onto a pointless
-    // GPU readback plus re-upload per row.
-    if (renderer->supportsElementTextureSnapshots()) {
-      std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot =
-          renderer->renderElementToTextureSnapshot(pending.element, thumbnailMaxSizePx);
-      if (textureSnapshot != nullptr) {
-        cacheEntry.bitmap = {};
-        cacheEntry.textureSnapshot = std::move(textureSnapshot);
-      }
-    } else {
-      svg::RendererBitmap thumbnail =
-          renderer->renderElementToBitmap(pending.element, thumbnailMaxSizePx);
-      if (!thumbnail.empty()) {
-        cacheEntry.bitmap = std::move(thumbnail);
-        cacheEntry.textureSnapshot.reset();
-      }
+    // The renderer decides whether the row lands in a GPU texture or in CPU pixels; the upload
+    // path below reads whichever one came back. Never read pixels back here: on a GPU backend
+    // that would cost a readback plus a re-upload per row.
+    svg::RendererImage thumbnail = renderer->renderElement(pending.element, thumbnailMaxSizePx);
+    if (!thumbnail.empty()) {
+      cacheEntry.image = std::move(thumbnail);
     }
   }
   thumbnailRefreshStats_.deferredCount = pendingThumbnails_.size() - pendingThumbnailCursor_;
@@ -422,21 +409,12 @@ std::optional<css::RGBA> LayersPanel::rowFallbackSwatch(std::uint64_t stableId) 
   return it->second;
 }
 
-const svg::RendererBitmap* LayersPanel::rowThumbnail(std::uint64_t stableId) const {
-  const auto it = thumbnailBitmapByStableId_.find(stableId);
-  if (it == thumbnailBitmapByStableId_.end() || it->second.bitmap.empty()) {
+const svg::RendererImage* LayersPanel::rowThumbnail(std::uint64_t stableId) const {
+  const auto it = thumbnailByStableId_.find(stableId);
+  if (it == thumbnailByStableId_.end() || it->second.image.empty()) {
     return nullptr;
   }
-  return &it->second.bitmap;
-}
-
-const std::shared_ptr<const svg::RendererTextureSnapshot>* LayersPanel::rowTextureThumbnail(
-    std::uint64_t stableId) const {
-  const auto it = thumbnailBitmapByStableId_.find(stableId);
-  if (it == thumbnailBitmapByStableId_.end() || it->second.textureSnapshot == nullptr) {
-    return nullptr;
-  }
-  return &it->second.textureSnapshot;
+  return &it->second.image;
 }
 
 bool LayersPanel::consumeSelectionChanged() {
@@ -665,27 +643,25 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
     const ImVec2 slotCellMin = ImGui::GetCursorScreenPos();
     const ImVec2 slotMin(slotCellMin.x, slotCellMin.y + (rowHeight - kPreviewHeight) * 0.5f);
     const ImVec2 slotMax(slotMin.x + kPreviewWidth, slotMin.y + kPreviewHeight);
-    const svg::RendererBitmap* thumbnailBitmap = nullptr;
-    const svg::RendererTextureSnapshot* thumbnailTextureSnapshot = nullptr;
+    const svg::RendererImage* thumbnailImage = nullptr;
     ThumbnailTexture thumbnailTexture;
-    if (const auto thumbnailIt = thumbnailBitmapByStableId_.find(row.stableId);
-        thumbnailIt != thumbnailBitmapByStableId_.end()) {
-      if (textureSnapshotProvider && thumbnailIt->second.textureSnapshot != nullptr) {
-        thumbnailTextureSnapshot = thumbnailIt->second.textureSnapshot.get();
-        thumbnailTexture =
-            textureSnapshotProvider(row.stableId, thumbnailIt->second.textureSnapshot);
-      } else if (textureProvider && !thumbnailIt->second.bitmap.empty()) {
-        thumbnailBitmap = &thumbnailIt->second.bitmap;
-        thumbnailTexture = textureProvider(row.stableId, *thumbnailBitmap);
+    if (const auto thumbnailIt = thumbnailByStableId_.find(row.stableId);
+        thumbnailIt != thumbnailByStableId_.end() && !thumbnailIt->second.image.empty()) {
+      const svg::RendererImage& image = thumbnailIt->second.image;
+      // A GPU-resident row goes straight to the texture uploader; only a CPU-resident row has
+      // pixels to hand over, and asking a GPU-resident one for them would read the texture back.
+      if (textureSnapshotProvider && image.textureSnapshot() != nullptr) {
+        thumbnailImage = &image;
+        thumbnailTexture = textureSnapshotProvider(row.stableId, image.textureSnapshot());
+      } else if (textureProvider && image.textureSnapshot() == nullptr) {
+        thumbnailImage = &image;
+        thumbnailTexture = textureProvider(row.stableId, image.bitmap());
       }
     }
 
     ImVec2 thumbnailSize(kPreviewHeight, kPreviewHeight);
-    if (thumbnailTexture.texture != 0 &&
-        (thumbnailBitmap != nullptr || thumbnailTextureSnapshot != nullptr)) {
-      const Vector2i dimensions = thumbnailBitmap != nullptr
-                                      ? thumbnailBitmap->dimensions
-                                      : thumbnailTextureSnapshot->dimensions();
+    if (thumbnailTexture.texture != 0 && thumbnailImage != nullptr) {
+      const Vector2i dimensions = thumbnailImage->dimensions();
       thumbnailSize = ImVec2(std::min(kPreviewWidth, static_cast<float>(dimensions.x)),
                              std::min(kPreviewHeight, static_cast<float>(dimensions.y)));
     }

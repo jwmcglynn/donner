@@ -299,12 +299,12 @@ FramebufferCheckerboardRenderer::FramebufferCheckerboardRenderer(
     std::shared_ptr<geode::GeodeDevice> device)
     : device_(std::move(device)) {}
 
-FramebufferCheckerboardRenderer::ScissorRect
+std::optional<geode::CheckerboardScissorPx>
 FramebufferCheckerboardRenderer::ScissorRectFromScreenBox(const Box2d& screenBox,
                                                           double devicePixelRatio,
                                                           const Vector2i& framebufferSizePx) {
   if (devicePixelRatio <= 0.0 || framebufferSizePx.x <= 0 || framebufferSizePx.y <= 0) {
-    return ScissorRect{};
+    return std::nullopt;
   }
 
   const double maxX = static_cast<double>(framebufferSizePx.x);
@@ -315,10 +315,10 @@ FramebufferCheckerboardRenderer::ScissorRectFromScreenBox(const Box2d& screenBox
   const double bottom =
       std::clamp(std::ceil(screenBox.bottomRight.y * devicePixelRatio), 0.0, maxY);
   if (left >= right || top >= bottom) {
-    return ScissorRect{};
+    return std::nullopt;
   }
 
-  return ScissorRect{
+  return geode::CheckerboardScissorPx{
       .x = static_cast<std::uint32_t>(left),
       .y = static_cast<std::uint32_t>(top),
       .width = static_cast<std::uint32_t>(right - left),
@@ -326,133 +326,36 @@ FramebufferCheckerboardRenderer::ScissorRectFromScreenBox(const Box2d& screenBox
   };
 }
 
-bool FramebufferCheckerboardRenderer::ensureResources() {
-  if (bindGroup_) {
-    return true;
-  }
-  if (device_ == nullptr) {
-    return false;
-  }
-
-  // The pipeline and bind group layout are compiled once per GeodeDevice and
-  // shared across consumers (issue #575); only the uniform buffer and its
-  // bind group are per-renderer.
-  const geode::GeodeCheckerboardPipeline& checkerboard = device_->checkerboardPipeline();
-  if (!checkerboard.valid()) {
-    return false;
-  }
-
-  const wgpu::Device& device = device_->device();
-  wgpu::BufferDescriptor bufferDesc = {};
-  bufferDesc.label = geode::wgpuLabel("EditorFramebufferCheckerboardUniforms");
-  bufferDesc.size = sizeof(geode::GeodeCheckerboardPipeline::Uniforms);
-  bufferDesc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
-  uniformBuffer_.reset(device.createBuffer(bufferDesc));
-  device_->countBuffer();
-  if (!uniformBuffer_) {
-    return false;
-  }
-
-  wgpu::BindGroupEntry bindGroupEntry = {};
-  bindGroupEntry.binding = 0;
-  bindGroupEntry.buffer = uniformBuffer_.get();
-  bindGroupEntry.offset = 0;
-  bindGroupEntry.size = sizeof(geode::GeodeCheckerboardPipeline::Uniforms);
-
-  wgpu::BindGroupDescriptor bindGroupDesc = {};
-  bindGroupDesc.label = geode::wgpuLabel("EditorFramebufferCheckerboardBG");
-  bindGroupDesc.layout = checkerboard.bindGroupLayout();
-  bindGroupDesc.entryCount = 1;
-  bindGroupDesc.entries = &bindGroupEntry;
-  bindGroup_.reset(device.createBindGroup(bindGroupDesc));
-  device_->countBindGroup();
-  return static_cast<bool>(bindGroup_);
-}
-
 int FramebufferCheckerboardRenderer::draw(const gui::EditorWindowWgpuRenderTarget& target,
                                           const Box2d& imageClipRect, double devicePixelRatio) {
-  if (!target.texture || target.framebufferSizePx.x <= 0 || target.framebufferSizePx.y <= 0 ||
-      device_ == nullptr || !ensureResources()) {
+  if (device_ == nullptr || !target.texture) {
     return 0;
   }
 
-  const ScissorRect scissor =
+  const std::optional<geode::CheckerboardScissorPx> scissor =
       ScissorRectFromScreenBox(imageClipRect, devicePixelRatio, target.framebufferSizePx);
-  if (scissor.width == 0 || scissor.height == 0) {
+  if (!scissor.has_value()) {
     return 0;
   }
 
-  // Appearance comes from the shared renderer-level constants, not from local
-  // literals: the browser worker surface draws the same checkerboard through
-  // `RendererInterface::drawCheckerboardUnderlay`, and the two must be pixel-
-  // identical for the same document to look the same on both presentation
-  // paths.
-  static_assert(kFramebufferCheckerboardSize == svg::kTransparencyCheckerboardCellLogicalPx);
-  const geode::GeodeCheckerboardPipeline::Uniforms uniforms{
-      .targetSize = {static_cast<float>(target.framebufferSizePx.x),
-                     static_cast<float>(target.framebufferSizePx.y)},
-      .devicePixelRatio = static_cast<float>(devicePixelRatio),
-      .checkerSize = static_cast<float>(kFramebufferCheckerboardSize),
-      .darkColor = {svg::kTransparencyCheckerboardDarkColor[0],
-                    svg::kTransparencyCheckerboardDarkColor[1],
-                    svg::kTransparencyCheckerboardDarkColor[2],
-                    svg::kTransparencyCheckerboardDarkColor[3]},
-      .lightColor = {svg::kTransparencyCheckerboardLightColor[0],
-                     svg::kTransparencyCheckerboardLightColor[1],
-                     svg::kTransparencyCheckerboardLightColor[2],
-                     svg::kTransparencyCheckerboardLightColor[3]},
-      // The window framebuffer *is* the anchor: the pattern is fixed to the
-      // window and the document slides over it.
-      .originOffsetPx = {0.0f, 0.0f},
-      .padding = {0.0f, 0.0f},
-  };
-  device_->queue().writeBuffer(uniformBuffer_.get(), 0, &uniforms, sizeof(uniforms));
+  // Appearance comes from the shared checkerboard constants, not from local
+  // literals, so every surface that shows the checkerboard lands on identical
+  // cells for the same document.
+  static_assert(kFramebufferCheckerboardSize == geode::kTransparencyCheckerboardCellLogicalPx);
+  geode::CheckerboardUnderlayParams params;
+  params.devicePixelRatio = devicePixelRatio;
+  params.cellSizeLogicalPx = kFramebufferCheckerboardSize;
+  // The window framebuffer *is* the anchor: the pattern is fixed to the window
+  // and the document slides over it, so the target's own origin is the anchor.
+  params.originOffsetPx = Vector2d::Zero();
+  params.scissorPx = scissor;
 
-  geode::ScopedWgpuHandle<wgpu::TextureView> view(target.texture.createView());
-  if (!view) {
-    return 0;
-  }
-
-  wgpu::CommandEncoderDescriptor encoderDesc = {};
-  encoderDesc.label = geode::wgpuLabel("EditorFramebufferCheckerboardEncoder");
-  geode::ScopedWgpuHandle<wgpu::CommandEncoder> encoder(
-      device_->device().createCommandEncoder(encoderDesc));
-  if (!encoder) {
-    return 0;
-  }
-
-  wgpu::RenderPassColorAttachment color = {};
-  color.view = view.get();
-  color.loadOp = wgpu::LoadOp::Load;
-  color.storeOp = wgpu::StoreOp::Store;
-  color.clearValue = {0.0, 0.0, 0.0, 0.0};
-  color.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
-
-  wgpu::RenderPassDescriptor passDesc = {};
-  passDesc.label = geode::wgpuLabel("EditorFramebufferCheckerboardPass");
-  passDesc.colorAttachmentCount = 1;
-  passDesc.colorAttachments = &color;
-  geode::ScopedWgpuHandle<wgpu::RenderPassEncoder> pass(encoder.get().beginRenderPass(passDesc));
-  if (!pass) {
-    return 0;
-  }
-
-  pass.get().setScissorRect(scissor.x, scissor.y, scissor.width, scissor.height);
-  pass.get().setPipeline(device_->checkerboardPipeline().pipeline());
-  pass.get().setBindGroup(0, bindGroup_.get(), 0, nullptr);
-  pass.get().draw(3, 1, 0, 0);
-  device_->countPipelineSwitch();
-  device_->countDraw();
-  pass.get().end();
-  pass.reset();
-
-  geode::ScopedWgpuHandle<wgpu::CommandBuffer> commands(encoder.get().finish());
-  if (!commands) {
-    return 0;
-  }
-  device_->queue().submit(1, &commands.get());
-  device_->countSubmit();
-  return 1;
+  // The document tiles are drawn on top of this in the same frame, so the
+  // checkerboard overwrites the scissored region rather than blending under it.
+  return checkerboardPass_.draw(*device_, target.texture, target.framebufferSizePx, params,
+                                geode::GeodeCheckerboardPipeline::BlendMode::Replace)
+             ? 1
+             : 0;
 }
 
 #endif

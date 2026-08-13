@@ -58,35 +58,21 @@ static_assert(!std::is_same_v<LayersPanel, CompositorDebugPanel>,
 
 // Row thumbnail pixels, whichever side of the presentation split the backend uses.
 //
-// Backends that present textures directly (Geode) keep row thumbnails on the GPU and expose them
-// through `rowTextureThumbnail()`; `rowThumbnail()` is empty there by design, because reading
-// every layer row back to the CPU only to re-upload it is the exact cost the texture path exists
-// to avoid. Tests that inspect thumbnail pixels take the explicit readback that
-// `RendererTextureSnapshot::takeSnapshot()` documents for capture, diagnostics, and tests.
+// Backends that present textures directly (Geode) keep row thumbnails on the GPU, so reading
+// pixels here costs the explicit readback `svg::RendererImage::bitmap()` documents for capture,
+// diagnostics, and tests. The panel's own render path never takes it.
 std::optional<svg::RendererBitmap> RowThumbnailBitmap(const LayersPanel& panel,
                                                       std::uint64_t stableId) {
-  if (const svg::RendererBitmap* bitmap = panel.rowThumbnail(stableId);
-      bitmap != nullptr && !bitmap->empty()) {
-    return *bitmap;
+  const svg::RendererImage* image = panel.rowThumbnail(stableId);
+  if (image == nullptr || image->bitmap().empty()) {
+    return std::nullopt;
   }
-  if (const auto* textureSnapshot = panel.rowTextureThumbnail(stableId);
-      textureSnapshot != nullptr && *textureSnapshot != nullptr) {
-    svg::RendererBitmap readback = (*textureSnapshot)->takeSnapshot();
-    if (!readback.empty()) {
-      return readback;
-    }
-  }
-  return std::nullopt;
+  return image->bitmap();
 }
 
 // True when the row carries a rendered thumbnail on either presentation path.
 bool HasRowThumbnail(const LayersPanel& panel, std::uint64_t stableId) {
-  if (const svg::RendererBitmap* bitmap = panel.rowThumbnail(stableId);
-      bitmap != nullptr && !bitmap->empty()) {
-    return true;
-  }
-  const auto* textureSnapshot = panel.rowTextureThumbnail(stableId);
-  return textureSnapshot != nullptr && *textureSnapshot != nullptr;
+  return panel.rowThumbnail(stableId) != nullptr;
 }
 
 TEST(LayersPanelTest, PlainClickSelectsRowElement) {
@@ -1419,10 +1405,10 @@ TEST(LayersPanelTest, DonnerSplashRowThumbnailsMatchApprovedRendererGoldens) {
     const std::optional<LayerTreeRow> row = FindRow(panel, testCase.displayName);
     ASSERT_TRUE(row.has_value()) << "Missing layer row " << testCase.displayName;
 
-    const svg::RendererBitmap* thumbnail = panel.rowThumbnail(row->stableId);
+    const svg::RendererImage* thumbnail = panel.rowThumbnail(row->stableId);
     ASSERT_NE(thumbnail, nullptr) << "Layer " << testCase.displayName
-                                  << " must have a rendered thumbnail bitmap";
-    CompareBitmapToGolden(*thumbnail, testCase.goldenPath, testCase.displayName,
+                                  << " must have a rendered thumbnail";
+    CompareBitmapToGolden(thumbnail->bitmap(), testCase.goldenPath, testCase.displayName,
                           tests::PixelmatchIdentityParams());
   }
 }
@@ -2410,13 +2396,13 @@ TEST(LayersPanelSubtreePreviewTest, LeafThumbnailExcludesOverlappingSibling) {
   ASSERT_TRUE(under.has_value());
   ASSERT_TRUE(over.has_value());
 
-  const svg::RendererBitmap underBitmap = renderer.renderElementToBitmap(*under, Vector2i(42, 24));
+  const svg::RendererBitmap underBitmap = renderer.renderElement(*under, Vector2i(42, 24)).bitmap();
   ASSERT_FALSE(underBitmap.empty());
   const int bluePixelsInUnder = CountThumbnailPixelsMatching(
       underBitmap, [](const std::array<uint8_t, 4>& px) { return px[2] > 150 && px[0] < 100; });
   EXPECT_EQ(bluePixelsInUnder, 0) << "sibling content leaked into leaf thumbnail";
 
-  const svg::RendererBitmap overBitmap = renderer.renderElementToBitmap(*over, Vector2i(42, 24));
+  const svg::RendererBitmap overBitmap = renderer.renderElement(*over, Vector2i(42, 24)).bitmap();
   ASSERT_FALSE(overBitmap.empty());
   const int redPixelsInOver = CountThumbnailPixelsMatching(
       overBitmap, [](const std::array<uint8_t, 4>& px) { return px[0] > 150 && px[2] < 100; });
@@ -2437,7 +2423,7 @@ TEST(LayersPanelSubtreePreviewTest, NestedGroupThumbnailUnderTransformedParent) 
   svg::Renderer renderer;
   auto inner = app.document().document().querySelector("#inner");
   ASSERT_TRUE(inner.has_value());
-  const svg::RendererBitmap bitmap = renderer.renderElementToBitmap(*inner, Vector2i(42, 24));
+  const svg::RendererBitmap bitmap = renderer.renderElement(*inner, Vector2i(42, 24)).bitmap();
   ASSERT_FALSE(bitmap.empty());
   const std::array<uint8_t, 4> center =
       ThumbnailPixelAt(bitmap, bitmap.dimensions.x / 2, bitmap.dimensions.y / 2);
@@ -2461,7 +2447,7 @@ TEST(LayersPanelSubtreePreviewTest, GroupThumbnailIncludesUseChild) {
   svg::Renderer renderer;
   auto grp = app.document().document().querySelector("#grp");
   ASSERT_TRUE(grp.has_value());
-  const svg::RendererBitmap bitmap = renderer.renderElementToBitmap(*grp, Vector2i(42, 24));
+  const svg::RendererBitmap bitmap = renderer.renderElement(*grp, Vector2i(42, 24)).bitmap();
   ASSERT_FALSE(bitmap.empty());
   const int bluePixels = CountThumbnailPixelsMatching(
       bitmap, [](const std::array<uint8_t, 4>& px) { return px[2] > 150 && px[0] < 100; });
@@ -2481,7 +2467,7 @@ TEST(LayersPanelSubtreePreviewTest, HiddenSiblingExcludedFromGroupThumbnail) {
   svg::Renderer renderer;
   auto grp = app.document().document().querySelector("#grp");
   ASSERT_TRUE(grp.has_value());
-  const svg::RendererBitmap bitmap = renderer.renderElementToBitmap(*grp, Vector2i(42, 24));
+  const svg::RendererBitmap bitmap = renderer.renderElement(*grp, Vector2i(42, 24)).bitmap();
   ASSERT_FALSE(bitmap.empty());
   const int bluePixels = CountThumbnailPixelsMatching(
       bitmap, [](const std::array<uint8_t, 4>& px) { return px[2] > 150 && px[0] < 100; });
@@ -2501,7 +2487,7 @@ TEST(LayersPanelSubtreePreviewTest, GroupThumbnailIncludesTextChild) {
   svg::Renderer renderer;
   auto grp = app.document().document().querySelector("#grp");
   ASSERT_TRUE(grp.has_value());
-  const svg::RendererBitmap bitmap = renderer.renderElementToBitmap(*grp, Vector2i(42, 24));
+  const svg::RendererBitmap bitmap = renderer.renderElement(*grp, Vector2i(42, 24)).bitmap();
   ASSERT_FALSE(bitmap.empty());
   const int bluePixels = CountThumbnailPixelsMatching(
       bitmap, [](const std::array<uint8_t, 4>& px) { return px[2] > 150 && px[0] < 100; });

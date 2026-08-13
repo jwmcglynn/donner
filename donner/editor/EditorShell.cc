@@ -1467,9 +1467,9 @@ LayerInspectorStatusReadback EditorShell::layerInspectorStatusForReadback() cons
   readback.rowThumbnails.reserve(layersPanel_.rows().size());
   for (const LayerTreeRow& row : layersPanel_.rows()) {
     Vector2i bitmapDims = Vector2i::Zero();
-    if (const svg::RendererBitmap* thumbnail = layersPanel_.rowThumbnail(row.stableId);
+    if (const svg::RendererImage* thumbnail = layersPanel_.rowThumbnail(row.stableId);
         thumbnail != nullptr) {
-      bitmapDims = thumbnail->dimensions;
+      bitmapDims = thumbnail->dimensions();
     }
     readback.rowThumbnails.push_back(LayerInspectorStatusReadback::RowThumbnail{
         .displayName = row.displayName,
@@ -6527,14 +6527,17 @@ void EditorShell::recordFrameTelemetry(
   std::size_t layerThumbnailBitmapBytes = 0u;
   std::size_t layerThumbnailTextureSnapshotCount = 0u;
   for (const LayerTreeRow& row : layersPanel_.rows()) {
-    if (const svg::RendererBitmap* thumbnail = layersPanel_.rowThumbnail(row.stableId);
-        thumbnail != nullptr && !thumbnail->empty()) {
-      ++layerThumbnailBitmapCount;
-      layerThumbnailBitmapBytes += thumbnail->pixels.size();
+    const svg::RendererImage* thumbnail = layersPanel_.rowThumbnail(row.stableId);
+    if (thumbnail == nullptr) {
+      continue;
     }
-    if (const auto* textureSnapshot = layersPanel_.rowTextureThumbnail(row.stableId);
-        textureSnapshot != nullptr && *textureSnapshot != nullptr) {
+    // Only CPU-resident rows are measured in bytes; asking a GPU-resident row for its pixels
+    // would read the texture back just to weigh it.
+    if (thumbnail->textureSnapshot() != nullptr) {
       ++layerThumbnailTextureSnapshotCount;
+    } else {
+      ++layerThumbnailBitmapCount;
+      layerThumbnailBitmapBytes += thumbnail->bitmap().pixels.size();
     }
   }
   SetRetainedBytes(MemoryCategory::LayerThumbnails,

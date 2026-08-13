@@ -1,8 +1,8 @@
 /// @file
 /// Unit tests for the single-element rasterization API
-/// (`svg::Renderer::renderElementToBitmap`), which the Layers panel uses to
-/// produce real Donner-rendered row thumbnails instead of ImGui-synthesized
-/// vector silhouettes (CLAUDE.md "No Rendering Vector Graphics With ImGui").
+/// (`svg::Renderer::renderElement`), which the Layers panel uses to produce
+/// real Donner-rendered row thumbnails instead of ImGui-synthesized vector
+/// silhouettes (CLAUDE.md "No Rendering Vector Graphics With ImGui").
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -179,7 +179,7 @@ TEST(RenderElementToBitmapTest, RedRectFillsCenterRed) {
   ASSERT_TRUE(rect.has_value());
 
   Renderer renderer;
-  const RendererBitmap bitmap = renderer.renderElementToBitmap(*rect, Vector2i(24, 24));
+  const RendererBitmap bitmap = renderer.renderElement(*rect, Vector2i(24, 24)).bitmap();
   ASSERT_FALSE(bitmap.empty());
   EXPECT_EQ(bitmap.dimensions, Vector2i(24, 24));
 
@@ -203,7 +203,7 @@ TEST(RenderElementToBitmapTest, GreenCircleCenterGreenCornerTransparent) {
   ASSERT_TRUE(circle.has_value());
 
   Renderer renderer;
-  const RendererBitmap bitmap = renderer.renderElementToBitmap(*circle, Vector2i(24, 24));
+  const RendererBitmap bitmap = renderer.renderElement(*circle, Vector2i(24, 24)).bitmap();
   ASSERT_FALSE(bitmap.empty());
 
   // Center is inside the circle: green and opaque.
@@ -221,7 +221,7 @@ TEST(RenderElementToBitmapTest, ForegroundThumbnailDoesNotIncludeBackgroundSibli
   ASSERT_TRUE(dot.has_value());
 
   Renderer renderer;
-  const RendererBitmap bitmap = renderer.renderElementToBitmap(*dot, Vector2i(24, 24));
+  const RendererBitmap bitmap = renderer.renderElement(*dot, Vector2i(24, 24)).bitmap();
   ASSERT_FALSE(bitmap.empty());
 
   EXPECT_THAT(PixelAt(bitmap, 12, 12), RgbaNear(250, 225, 0, 255, 6));
@@ -240,7 +240,7 @@ TEST(RenderElementToBitmapTest, DonnerSplashLayerThumbnailDoesNotIncludeBackgrou
   ASSERT_TRUE(donner.has_value());
 
   Renderer renderer;
-  const RendererBitmap bitmap = renderer.renderElementToBitmap(*donner, Vector2i(32, 32));
+  const RendererBitmap bitmap = renderer.renderElement(*donner, Vector2i(32, 32)).bitmap();
   ASSERT_FALSE(bitmap.empty());
 
   EXPECT_THAT(PixelAt(bitmap, 0, 0), RgbaNear(0, 0, 0, 0, 2))
@@ -258,7 +258,7 @@ TEST(RenderElementToBitmapTest, DonnerSplashDonnerThumbnailShowsLetterFill) {
   ASSERT_TRUE(donner.has_value());
 
   Renderer renderer;
-  const RendererBitmap bitmap = renderer.renderElementToBitmap(*donner, Vector2i(32, 32));
+  const RendererBitmap bitmap = renderer.renderElement(*donner, Vector2i(32, 32)).bitmap();
   ASSERT_FALSE(bitmap.empty());
 
   EXPECT_THAT(PixelAt(bitmap, 0, 0), RgbaNear(0, 0, 0, 0, 2))
@@ -282,7 +282,7 @@ TEST(RenderElementToBitmapTest, DonnerSplashSunburstThumbnailCentersBrightConten
   ASSERT_TRUE(sunburst.has_value());
 
   Renderer renderer;
-  const RendererBitmap bitmap = renderer.renderElementToBitmap(*sunburst, Vector2i(32, 32));
+  const RendererBitmap bitmap = renderer.renderElement(*sunburst, Vector2i(32, 32)).bitmap();
   ASSERT_FALSE(bitmap.empty());
 
   const int warmPixels = CountPixelsMatching(bitmap, IsBrightWarmPixel);
@@ -301,7 +301,7 @@ TEST(RenderElementToBitmapTest, DonnerSplashSunburstThumbnailUsesFullElementBoun
   ASSERT_TRUE(sunburst.has_value());
 
   Renderer renderer;
-  const RendererBitmap bitmap = renderer.renderElementToBitmap(*sunburst, Vector2i(42, 24));
+  const RendererBitmap bitmap = renderer.renderElement(*sunburst, Vector2i(42, 24)).bitmap();
   ASSERT_FALSE(bitmap.empty());
 
   // #Sunburst's full canvas-visible element bounds are the shine ellipse
@@ -322,7 +322,7 @@ TEST(RenderElementToBitmapTest, DonnerSplashBlueCenterBurstThumbnailUsesFullElem
   ASSERT_TRUE(burst.has_value());
 
   Renderer renderer;
-  const RendererBitmap bitmap = renderer.renderElementToBitmap(*burst, Vector2i(42, 24));
+  const RendererBitmap bitmap = renderer.renderElement(*burst, Vector2i(42, 24)).bitmap();
   ASSERT_FALSE(bitmap.empty());
 
   // #Blue_center_burst is a 365.32x420.64 ellipse, clipped by the root viewBox
@@ -348,24 +348,24 @@ TEST(RenderElementToBitmapTest, DonnerSplashLayerThumbnailBoundsStayStableAfterC
 
   Renderer renderer;
   const RendererBitmap initialSunburst =
-      renderer.renderElementToBitmap(*sunburst, Vector2i(42, 24));
+      renderer.renderElement(*sunburst, Vector2i(42, 24)).bitmap();
   const RendererBitmap initialBackgroundSticker =
-      renderer.renderElementToBitmap(*backgroundSticker, Vector2i(42, 24));
+      renderer.renderElement(*backgroundSticker, Vector2i(42, 24)).bitmap();
   const RendererBitmap initialBlueCenterBurst =
-      renderer.renderElementToBitmap(*blueCenterBurst, Vector2i(42, 24));
+      renderer.renderElement(*blueCenterBurst, Vector2i(42, 24)).bitmap();
   ASSERT_EQ(initialSunburst.dimensions, Vector2i(41, 24));
   ASSERT_EQ(initialBackgroundSticker.dimensions, Vector2i(27, 24));
   ASSERT_EQ(initialBlueCenterBurst.dimensions, Vector2i(21, 24));
 
   app.document().document().setCanvasSize(1784, 1024);
 
-  EXPECT_EQ(renderer.renderElementToBitmap(*sunburst, Vector2i(42, 24)).dimensions,
+  EXPECT_EQ(renderer.renderElement(*sunburst, Vector2i(42, 24)).dimensions(),
             initialSunburst.dimensions)
       << "the layer thumbnail crop must stay in the same coordinate space after the editor "
          "resizes the live document canvas for a rerender";
-  EXPECT_EQ(renderer.renderElementToBitmap(*backgroundSticker, Vector2i(42, 24)).dimensions,
+  EXPECT_EQ(renderer.renderElement(*backgroundSticker, Vector2i(42, 24)).dimensions(),
             initialBackgroundSticker.dimensions);
-  EXPECT_EQ(renderer.renderElementToBitmap(*blueCenterBurst, Vector2i(42, 24)).dimensions,
+  EXPECT_EQ(renderer.renderElement(*blueCenterBurst, Vector2i(42, 24)).dimensions(),
             initialBlueCenterBurst.dimensions);
 }
 
@@ -377,7 +377,7 @@ TEST(RenderElementToBitmapTest, WideLayerThumbnailFitsFullContentInRectangularBi
   ASSERT_TRUE(group.has_value());
 
   Renderer renderer;
-  const RendererBitmap bitmap = renderer.renderElementToBitmap(*group, Vector2i(42, 24));
+  const RendererBitmap bitmap = renderer.renderElement(*group, Vector2i(42, 24)).bitmap();
   ASSERT_FALSE(bitmap.empty());
 
   EXPECT_EQ(bitmap.dimensions.x, 42);
@@ -402,7 +402,7 @@ TEST(RenderElementToBitmapTest, TransparentGeometryDoesNotBiasTightCrop) {
   ASSERT_TRUE(group.has_value());
 
   Renderer renderer;
-  const RendererBitmap bitmap = renderer.renderElementToBitmap(*group, Vector2i(24, 24));
+  const RendererBitmap bitmap = renderer.renderElement(*group, Vector2i(24, 24)).bitmap();
   ASSERT_FALSE(bitmap.empty());
 
   EXPECT_GT(CountPixelsMatching(bitmap, IsBrightWarmPixel), 250)
@@ -419,7 +419,7 @@ TEST(RenderElementToBitmapTest, StrokeOnlyLayerThumbnailUsesStrokeContentBounds)
   ASSERT_TRUE(line.has_value());
 
   Renderer renderer;
-  const RendererBitmap bitmap = renderer.renderElementToBitmap(*line, Vector2i(24, 24));
+  const RendererBitmap bitmap = renderer.renderElement(*line, Vector2i(24, 24)).bitmap();
   ASSERT_FALSE(bitmap.empty())
       << "stroke-only geometry is visible layer content and must not fall back to a fill swatch";
 
@@ -438,7 +438,7 @@ TEST(RenderElementToBitmapTest, GroupComposesDescendants) {
   ASSERT_TRUE(group.has_value());
 
   Renderer renderer;
-  const RendererBitmap bitmap = renderer.renderElementToBitmap(*group, Vector2i(24, 24));
+  const RendererBitmap bitmap = renderer.renderElement(*group, Vector2i(24, 24)).bitmap();
   ASSERT_FALSE(bitmap.empty());
 
   // The group's two halves compose into one preview: left blue, right yellow.
@@ -454,7 +454,7 @@ TEST(RenderElementToBitmapTest, WideBackgroundFillsMatchingRectangularThumbnail)
   ASSERT_TRUE(background.has_value());
 
   Renderer renderer;
-  const RendererBitmap bitmap = renderer.renderElementToBitmap(*background, Vector2i(42, 24));
+  const RendererBitmap bitmap = renderer.renderElement(*background, Vector2i(42, 24)).bitmap();
   ASSERT_FALSE(bitmap.empty());
 
   EXPECT_EQ(bitmap.dimensions, Vector2i(42, 24));
@@ -473,7 +473,7 @@ TEST(RenderElementToBitmapTest, RootGroupThumbnailIsClippedToSvgViewBox) {
   ASSERT_TRUE(group.has_value());
 
   Renderer renderer;
-  const RendererBitmap bitmap = renderer.renderElementToBitmap(*group, Vector2i(24, 24));
+  const RendererBitmap bitmap = renderer.renderElement(*group, Vector2i(24, 24)).bitmap();
   ASSERT_FALSE(bitmap.empty());
 
   EXPECT_THAT(PixelAt(bitmap, 12, 0), RgbaNear(0, 0, 0, 255, 4))
@@ -490,8 +490,8 @@ TEST(RenderElementToBitmapTest, ZeroSizeReturnsEmpty) {
   ASSERT_TRUE(rect.has_value());
 
   Renderer renderer;
-  EXPECT_TRUE(renderer.renderElementToBitmap(*rect, Vector2i(0, 24)).empty());
-  EXPECT_TRUE(renderer.renderElementToBitmap(*rect, Vector2i(24, -3)).empty());
+  EXPECT_TRUE(renderer.renderElement(*rect, Vector2i(0, 24)).empty());
+  EXPECT_TRUE(renderer.renderElement(*rect, Vector2i(24, -3)).empty());
 }
 
 }  // namespace

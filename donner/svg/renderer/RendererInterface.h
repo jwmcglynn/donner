@@ -1,7 +1,6 @@
 #pragma once
 /// @file
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -18,8 +17,8 @@
 #include "donner/base/RelativeLengthMetrics.h"
 #include "donner/base/SmallVector.h"
 #include "donner/base/Transform.h"
-#include "donner/base/Vector2.h"
 #include "donner/base/Utils.h"
+#include "donner/base/Vector2.h"
 #include "donner/css/Color.h"
 #include "donner/css/FontFace.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
@@ -128,6 +127,77 @@ public:
 };
 
 /**
+ * A rendered image that lives either in a backend GPU texture or in CPU pixels.
+ *
+ * Renderers return whichever form the active backend produces natively - a GPU backend hands back a
+ * sampleable texture, a software backend hands back pixels - so callers do not have to pick a
+ * rendering entry point per backend. A consumer that can sample a texture takes \ref
+ * textureSnapshot and uses \ref bitmap only when it is null; a consumer that needs CPU pixels calls
+ * \ref bitmap and pays a readback only when the image is GPU-resident.
+ */
+class RendererImage {
+public:
+  /// Constructs an empty image.
+  RendererImage() = default;
+
+  /**
+   * Constructs a CPU-resident image.
+   *
+   * @param bitmap Rendered pixels. An empty bitmap yields an empty image.
+   */
+  explicit RendererImage(RendererBitmap bitmap) : bitmap_(std::move(bitmap)) {}
+
+  /**
+   * Constructs a GPU-resident image.
+   *
+   * @param texture Backend texture holding the rendered pixels. A null texture yields an empty
+   *   image.
+   */
+  explicit RendererImage(std::shared_ptr<const RendererTextureSnapshot> texture)
+      : texture_(std::move(texture)) {}
+
+  /// Returns true when this image has no content.
+  [[nodiscard]] bool empty() const { return texture_ == nullptr && bitmap_.empty(); }
+
+  /// Pixel dimensions in device pixels, or zero when empty.
+  [[nodiscard]] Vector2i dimensions() const {
+    return texture_ != nullptr ? texture_->dimensions() : bitmap_.dimensions;
+  }
+
+  // There is deliberately no whole-image alphaType() accessor: a GPU-resident image's
+  // texture stores premultiplied texels while bitmap() reads back straight alpha, so no
+  // single answer describes both forms. Consumers read the alpha type off the form they
+  // actually take: textureSnapshot()->alphaType() or bitmap().alphaType.
+
+  /// The backend texture when this image is GPU-resident, or null when it is CPU pixels.
+  [[nodiscard]] const std::shared_ptr<const RendererTextureSnapshot>& textureSnapshot() const {
+    return texture_;
+  }
+
+  /**
+   * CPU pixels for this image.
+   *
+   * A GPU-resident image is read back on the first call and the result cached, so a consumer that
+   * only ever samples the texture never pays for a readback. The readback may submit GPU work and
+   * block for completion.
+   *
+   * @return Rendered pixels, or an empty bitmap when the image is empty or readback is unsupported.
+   */
+  [[nodiscard]] const RendererBitmap& bitmap() const {
+    if (texture_ != nullptr && !readbackAttempted_) {
+      readbackAttempted_ = true;
+      bitmap_ = texture_->takeSnapshot();
+    }
+    return bitmap_;
+  }
+
+private:
+  std::shared_ptr<const RendererTextureSnapshot> texture_;
+  mutable RendererBitmap bitmap_;
+  mutable bool readbackAttempted_ = false;
+};
+
+/**
  * Represents a resolved path along with its fill rule, transform, and layer index for boolean ops.
  */
 struct PathShape {
@@ -144,56 +214,6 @@ struct PathShape {
   /// "no associated entity" - non-driver callers (overlay drawing, test harnesses) leave
   /// it null and backends fall back to the un-cached path.
   EntityHandle sourceEntity;
-};
-
-/**
- * Canonical appearance of the transparency checkerboard Donner draws behind
- * see-through document pixels.
- *
- * One definition so every surface that shows the checkerboard - the desktop
- * framebuffer underlay and the browser worker surface - lands on identical
- * cells. The size is in *logical* pixels, so the pattern is anchored to device
- * pixels and never scales with document zoom.
- *
- * @{
- */
-inline constexpr double kTransparencyCheckerboardCellLogicalPx = 16.0;
-/// RGBA in the 0-1 range for odd cells.
-inline constexpr std::array<float, 4> kTransparencyCheckerboardDarkColor = {
-    40.0f / 255.0f, 40.0f / 255.0f, 40.0f / 255.0f, 1.0f};
-/// RGBA in the 0-1 range for even cells.
-inline constexpr std::array<float, 4> kTransparencyCheckerboardLightColor = {
-    60.0f / 255.0f, 60.0f / 255.0f, 60.0f / 255.0f, 1.0f};
-/// @}
-
-/**
- * Placement of a transparency-checkerboard pass over an existing render target.
- *
- * @see RendererInterface::drawCheckerboardUnderlay
- */
-struct CheckerboardUnderlayParams {
-  /// Device pixels per logical pixel. Cells are \ref
-  /// kTransparencyCheckerboardCellLogicalPx logical pixels across regardless of
-  /// document zoom, exactly like the desktop underlay.
-  double devicePixelRatio = 1.0;
-  /**
-   * Device-pixel offset from the pattern's anchor origin to the target's
-   * top-left corner.
-   *
-   * Zero anchors the pattern at the target's own origin. A target that is
-   * itself positioned somewhere on screen - a worker-owned document surface
-   * that pans with the document - passes its top-left screen position in device
-   * pixels, which reproduces the window-anchored pattern the desktop underlay
-   * would have drawn in the same place. Without it the checkerboard would slide
-   * with the document instead of staying put behind it.
-   */
-  Vector2d originOffsetPx;
-  /// Cell size in logical pixels.
-  double cellSizeLogicalPx = kTransparencyCheckerboardCellLogicalPx;
-  /// RGBA in the 0-1 range for odd cells.
-  std::array<float, 4> darkColor = kTransparencyCheckerboardDarkColor;
-  /// RGBA in the 0-1 range for even cells.
-  std::array<float, 4> lightColor = kTransparencyCheckerboardLightColor;
 };
 
 /**
@@ -580,38 +600,6 @@ public:
   /// Returns true when presentation callers must use \ref takeTextureSnapshot and must not fall
   /// back to CPU bitmap readback for normal frame handoff.
   [[nodiscard]] virtual bool requiresTextureSnapshotPresentation() const { return false; }
-
-  /// Returns true when this renderer instance can render element subtrees into directly
-  /// sampleable backend textures (see \ref Renderer::renderElementToTextureSnapshot).
-  ///
-  /// This asks a different question from \ref requiresTextureSnapshotPresentation, which is about
-  /// how *frames* cross the presentation handoff. A backend whose frame handoff has to go through
-  /// CPU bitmaps - because the producing and consuming threads own different devices - can still
-  /// hand same-thread callers a texture for a thumbnail drawn on the caller's own device. Callers
-  /// choosing between \ref Renderer::renderElementToTextureSnapshot and
-  /// \ref Renderer::renderElementToBitmap want this predicate, not that one.
-  [[nodiscard]] virtual bool supportsElementTextureSnapshots() const { return false; }
-
-  /**
-   * Fill the see-through parts of the completed frame target with the
-   * transparency checkerboard, underneath the content already in it.
-   *
-   * The counterpart to the desktop editor's framebuffer underlay, for
-   * presentation paths that cannot draw the checkerboard *before* the document:
-   * the browser worker surface receives one already-composed full-canvas
-   * texture, so its checkerboard has to go in destination-over after the
-   * compose instead. Fully-opaque pixels are unchanged, fully-transparent
-   * pixels become checkerboard, and partial alpha blends as `destination-over`
-   * does. Call it after the last `endFrame()` of the frame and before handing
-   * the target to the presenter.
-   *
-   * @param params Checkerboard placement and appearance.
-   * @return True when the pass was submitted. Backends without a GPU frame
-   *   target return false and leave the target untouched.
-   */
-  virtual bool drawCheckerboardUnderlay(const CheckerboardUnderlayParams& /*params*/) {
-    return false;
-  }
 
   /**
    * Creates an independent offscreen renderer instance of the same type as this one.

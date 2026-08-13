@@ -38,7 +38,7 @@
       "usesEditorWgpuDefine": true
     },
     "donner/editor/EditorShell.cc": {
-      "sha256": "492239aa45c280a61ac886961f6782d322d1a279b4bb0211b88883e58b49d6e2",
+      "sha256": "ac87bd47ac65944f09d865cebbfa760255f176602f98a9bd3440a7235dde7e76",
       "usesEditorWgpuDefine": true,
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
@@ -50,49 +50,12 @@
       "usesEditorWgpuDefine": true
     },
     "donner/editor/EditorShellPresentation.cc": {
-      "operations": [
-        "beginRenderPass",
-        "createBindGroup",
-        "createBuffer",
-        "createCommandEncoder",
-        "createView",
-        "draw",
-        "finish",
-        "setBindGroup",
-        "setPipeline",
-        "setScissorRect",
-        "submit",
-        "writeBuffer"
-      ],
-      "sha256": "8594709d03ddaa48801f87010e234476d4af0293e93871832f139e1a5ecff887",
-      "usesEditorWgpuDefine": true,
-      "wgpuCFunctions": [
-        "wgpuLabel"
-      ],
-      "wgpuCppTokens": [
-        "BindGroupDescriptor",
-        "BindGroupEntry",
-        "BufferDescriptor",
-        "BufferUsage",
-        "CommandBuffer",
-        "CommandEncoder",
-        "CommandEncoderDescriptor",
-        "Device",
-        "LoadOp",
-        "RenderPassColorAttachment",
-        "RenderPassDescriptor",
-        "RenderPassEncoder",
-        "StoreOp",
-        "TextureView"
-      ]
+      "sha256": "ba9053728c249b1174ec034a4a4166573bdb29e5b745c7c163872fa6cc870a04",
+      "usesEditorWgpuDefine": true
     },
     "donner/editor/EditorShellPresentation.h": {
-      "sha256": "a83a7359dc85093231891ef5f59779f07e235d1489feec1267f0ac5684805b13",
-      "usesEditorWgpuDefine": true,
-      "wgpuCppTokens": [
-        "BindGroup",
-        "Buffer"
-      ]
+      "sha256": "ee3dc46219a081bf487154beb8339e537f37b71c2a40b904552ae4efac5cab47",
+      "usesEditorWgpuDefine": true
     },
     "donner/editor/FrameMissTelemetry.cc": {
       "sha256": "147d4c33e2fafffcdf436296fcf0125eea4dbd73ddf5a5c86c496a7c2dc272d4",
@@ -344,7 +307,7 @@
       "operations": [
         "draw"
       ],
-      "sha256": "3e3c802b81473606bc44ccded06402ca177183e1b8073c9bcbc5fb964dda7d71",
+      "sha256": "6474a2d3e049c3fa797c0b8e62e414cdca57f373da9684fd5574092261183f72",
       "usesEditorWgpuDefine": true,
       "wgpuCTypes": [
         "WGPUTextureView"
@@ -371,7 +334,7 @@
       ]
     },
     "donner/editor/tests/LayersPanel_tests.cc": {
-      "sha256": "89b9e977921a06ea3ee509d64f3ed113ebf664b58cb810483aeadc80bfed350f",
+      "sha256": "f2ac8b06b694387b3e41de4cb0467943d3649e1dfe94fcc0e210016df4a1c6d4",
       "usesEditorWgpuDefine": true
     },
     "donner/editor/tests/ViewportInteractionController_tests.cc": {
