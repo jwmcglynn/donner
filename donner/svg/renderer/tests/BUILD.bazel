@@ -189,6 +189,7 @@ donner_cc_test(
         "//third_party/resvg-test-suite:fonts",
         "//third_party/resvg-test-suite:resources",
     ],
+    opens_gpu_device = True,
     variants = [
         "text_full",
         "geode",
@@ -262,6 +263,7 @@ donner_cc_test(
     srcs = [
         "RendererPublicApi_tests.cc",
     ],
+    opens_gpu_device = True,
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode wrappers run
     # automatically under `bazel test //...`. The base test still runs at
     # the active default config.
@@ -283,6 +285,7 @@ donner_cc_test(
     srcs = [
         "RendererErrorPaths_tests.cc",
     ],
+    opens_gpu_device = True,
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
@@ -312,6 +315,7 @@ donner_cc_test(
         "@platforms//os:linux": {"DONNER_GEODE_FORCE_FALLBACK_ADAPTER": "1"},
         "//conditions:default": {},
     }),
+    opens_gpu_device = True,
     variants = [
         "tiny",
         "text_full",
@@ -328,6 +332,7 @@ donner_cc_test(
     srcs = [
         "RendererAnimation_tests.cc",
     ],
+    opens_gpu_device = True,
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
@@ -344,6 +349,7 @@ donner_cc_test(
 donner_cc_test(
     name = "terminal_image_viewer_tests",
     srcs = ["TerminalImageViewer_tests.cc"],
+    opens_gpu_device = True,
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
@@ -466,10 +472,19 @@ donner_multi_transitioned_test(
     timeout = "long",
     testonly = 1,
     dep = ":renderer_geode_golden_tests_impl",
-    # Route the GPU test action to a remote-execution worker with a physical
-    # GPU (`gpu=present`: any real adapter, not a software rasterizer or a
-    # GPU-less hosted runner). Ignored for local / non-remote execution.
-    exec_properties = {"gpu": "present"},
+    opens_gpu_device = True,
+    # NO platform pin. A remote-execution platform property is a HARD match
+    # requirement: if no worker in the pool advertises it, the action queues
+    # forever with no timeout and no diagnostic (the per-test timeout only
+    # starts once a test RUNS). A `gpu` property pinned this suite to a worker
+    # class the Linux CI pool does not provide, and every self-hosted run since
+    # then burned its whole job budget parked in the scheduler queue on this
+    # target and its siblings. This suite is designed to run on software WebGPU
+    # (Mesa lavapipe / llvmpipe) exactly as the comments in this file describe,
+    # and it additionally runs on real GPU hardware on the macOS lanes, where
+    # `bazel test //...` selects the platform's native adapter. Do not
+    # reintroduce a platform pin without first proving a matching worker class
+    # exists AND adding a bounded-queue guard.
     renderer_backend = "geode",
 )
 
@@ -515,7 +530,8 @@ donner_multi_transitioned_test(
     timeout = "long",
     testonly = 1,
     dep = ":renderer_geode_tests_impl",
-    exec_properties = {"gpu": "present"},
+    opens_gpu_device = True,
+    # No platform pin: see the note on renderer_geode_golden_tests above.
     renderer_backend = "geode",
 )
 
@@ -525,6 +541,7 @@ donner_cc_test(
         "RendererDriver_tests.cc",
         "RenderingContext_tests.cc",
     ],
+    opens_gpu_device = True,
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
@@ -645,11 +662,15 @@ donner_variant_cc_test(
             "text_full": "false",
             "args": ["--gtest_filter=-*_TinyGolden"],
             "shard_count": 16,
-            # Route only this GPU variant to a remote-execution worker with a
-            # physical GPU (`gpu=present`). Ignored for local / non-remote runs.
-            "exec_properties": {"gpu": "present"},
+            # No platform pin: see the note on renderer_geode_golden_tests
+            # above. This variant is explicitly designed for software Vulkan
+            # (see the resvg_test_suite_impl comment on the lavapipe per-case
+            # budget), so pinning it to a hardware-GPU worker class both
+            # contradicted that design and parked the whole test phase in the
+            # scheduler queue.
         },
     ],
+    opens_gpu_device = True,
     # Hundreds of independent image comparisons per variant. Unsharded, the
     # geode variant alone ran ~267 s on the self-hosted RE lane
     # (CI baseline, 2026-07-01) and sat on the test-step critical path. 8 shards

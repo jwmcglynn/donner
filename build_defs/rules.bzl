@@ -388,11 +388,27 @@ _donner_multi_transitioned_test = rule(
     },
 )
 
-def donner_multi_transitioned_test(name, dep, renderer_backend, **kwargs):
-    """Create a transitioned test with an honest short-runtime default."""
+def donner_multi_transitioned_test(name, dep, renderer_backend, opens_gpu_device = False, **kwargs):
+    """Create a transitioned test with an honest short-runtime default.
+
+    Args:
+      name: Rule name.
+      dep: The underlying test target to transition.
+      renderer_backend: "tiny_skia" or "geode".
+      opens_gpu_device: True when the test actually instantiates a GPU
+        device/adapter. Only those tests get `exclusive-if-local`, which makes
+        Bazel drain them one at a time so a device loss in one process cannot
+        cascade into its neighbours. Selecting the geode BACKEND is not the
+        same thing as opening a device: most variant targets link wgpu-native
+        and never touch it (they use MockRendererInterface, or assert on
+        parsing/ECS/CSS/text-shaping), and tagging those serialized every
+        geode-configured target in the repo into a single-file queue at the
+        end of the test phase.
+      **kwargs: Additional arguments for the underlying test rule.
+    """
     if "size" not in kwargs and "timeout" not in kwargs:
         kwargs["size"] = "small"
-    if renderer_backend == "geode":
+    if renderer_backend == "geode" and opens_gpu_device:
         tags = kwargs.get("tags", [])
         if "exclusive-if-local" not in tags:
             kwargs["tags"] = tags + ["exclusive-if-local"]
@@ -428,7 +444,7 @@ donner_multi_transitioned_binary = rule(
     },
 )
 
-def donner_variant_cc_test(name, dep, variants = None, named_variants = None, **kwargs):
+def donner_variant_cc_test(name, dep, variants = None, named_variants = None, opens_gpu_device = False, **kwargs):
     """
     Generate test targets for variant configurations, plus a default alias
     that inherits the active command-line config.
@@ -444,6 +460,7 @@ def donner_variant_cc_test(name, dep, variants = None, named_variants = None, **
       dep: The test implementation target (tagged manual).
       variants: (legacy) List of variant axis lists.
       named_variants: List of dicts describing each variant explicitly.
+      opens_gpu_device: Forwarded to donner_multi_transitioned_test; see there.
       **kwargs: Additional arguments passed to the generated test rules.
 
     Generated targets:
@@ -463,8 +480,6 @@ def donner_variant_cc_test(name, dep, variants = None, named_variants = None, **
                 variant_kwargs["args"] = v["args"]
             if "shard_count" in v:
                 variant_kwargs["shard_count"] = v["shard_count"]
-            if "exec_properties" in v:
-                variant_kwargs["exec_properties"] = v["exec_properties"]
 
             donner_multi_transitioned_test(
                 name = target_name,
@@ -472,6 +487,7 @@ def donner_variant_cc_test(name, dep, variants = None, named_variants = None, **
                 renderer_backend = v["backend"],
                 text = v.get("text", "false"),
                 text_full = v.get("text_full", "false"),
+                opens_gpu_device = opens_gpu_device,
                 testonly = 1,
                 **variant_kwargs
             )
@@ -492,6 +508,7 @@ def donner_variant_cc_test(name, dep, variants = None, named_variants = None, **
                     renderer_backend = backend,
                     text = text_val,
                     text_full = text_full_val,
+                    opens_gpu_device = opens_gpu_device,
                     testonly = 1,
                     **kwargs
                 )
@@ -582,6 +599,7 @@ def donner_cc_test(
         deps = [],
         tags = [],
         variants = None,
+        opens_gpu_device = False,
         add_llvm_macos_runtime_rpaths = True,
         **kwargs):
     """
@@ -599,6 +617,10 @@ def donner_cc_test(
         wrapper per entry via `donner_multi_transitioned_test`. This is the
         opt-in mechanism that lets `bazel test //...` cover variant lanes
         without per-test `--config=` flags. See doc 0031 M2.3.
+      opens_gpu_device: True when this test instantiates a real GPU
+        device/adapter, so its geode-backed variants must be drained serially.
+        Forwarded to donner_multi_transitioned_test; see there for why it is
+        opt-in rather than implied by the geode backend.
       add_llvm_macos_runtime_rpaths: Add LLVM 21 sanitizer runtime rpaths on macOS.
       **kwargs: Additional arguments, matching the implementation of cc_test.
     """
@@ -643,6 +665,7 @@ def donner_cc_test(
                 name = "{}_{}".format(name, variant_name),
                 dep = ":" + name,
                 renderer_backend = spec["backend"],
+                opens_gpu_device = opens_gpu_device,
                 text = spec["text"],
                 text_full = spec["text_full"],
                 tags = tags + ["variant_" + variant_name],
