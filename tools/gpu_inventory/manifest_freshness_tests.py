@@ -60,12 +60,25 @@ def _scanned_paths(root: Path) -> list[str]:
     """
     paths = []
     for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
-        dirnames[:] = [d for d in dirnames if d not in (".git", "external")]
+        dirnames[:] = [d for d in dirnames if not _is_not_a_source_dir(d)]
         for filename in filenames:
             relpath = os.path.relpath(os.path.join(dirpath, filename), root)
             if gen.is_scannable_path(relpath):
                 paths.append(relpath)
     return sorted(paths)
+
+
+def _is_not_a_source_dir(name: str) -> bool:
+    """Directories that are build output, not declared source inputs.
+
+    A runfiles tree can contain the runfiles of tools this target depends on,
+    which are themselves staged copies of source files under `bazel-out/` and
+    `*.runfiles/`. Walking into those double-counts real sources under fake
+    paths - observed as `third_party/bazel/non_bcr_deps.bzl` reappearing as
+    `bazel-out/.../gen_cmakelists_test.runfiles/_main/third_party/bazel/
+    non_bcr_deps.bzl` and being reported as a brand-new Rust archive site.
+    """
+    return name in (".git", "external", "bazel-out") or name.endswith(".runfiles")
 
 
 def _describe_entry_delta(path: str, expected, actual) -> list[str]:
