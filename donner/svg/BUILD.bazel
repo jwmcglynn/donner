@@ -1,4 +1,5 @@
 load("//build_defs:rules.bzl", "donner_cc_library")
+load("//build_defs:package.bzl", "donner_package")
 
 donner_cc_library(
     name = "svg_document_handle",
@@ -216,3 +217,5 @@ donner_cc_library(
         "//donner/svg/parser",
     ],
 )
+
+donner_package()

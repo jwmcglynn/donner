@@ -3,6 +3,7 @@ load("@emsdk//emscripten_toolchain:wasm_cc_binary.bzl", "wasm_cc_binary")
 load("@rules_cc//cc:defs.bzl", "cc_binary")
 load("@rules_python//python:defs.bzl", "py_test")
 load("//tools/http:serve_http.bzl", "serve_http")
+load("//build_defs:package.bzl", "donner_package")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -101,8 +102,8 @@ filegroup(
 # host-config wildcard build does not try to pull in the wasm outputs.
 py_test(
     name = "render_test",
-    srcs = ["render_test.py"],
     size = "small",
+    srcs = ["render_test.py"],
     data = [
         "render_test_driver.mjs",
         ":donner_wasm",
@@ -191,3 +192,5 @@ serve_http(
     tags = ["manual"],
     target_compatible_with = _WASM_TINY_SKIA_COMPATIBLE_WITH,
 )
+
+donner_package()

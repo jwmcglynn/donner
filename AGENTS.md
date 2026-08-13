@@ -91,9 +91,9 @@ When creating a pull request:
 1. **Rebase on latest `origin/main`** before pushing — `git fetch origin main && git rebase origin/main`.
 2. **Run `bazel test //...`** before opening the PR. This is the single source of truth for local validation — it covers:
    - Unit tests across the default config AND the `tiny` / `text_full` / `geode` variant lanes (auto-emitted as `*_tiny` / `*_text_full` / `*_geode` wrappers by `donner_cc_test(variants=…)`).
-   - The per-library banned-patterns lint (`*_lint` py_tests auto-emitted by `donner_cc_library`/`_test`/`_binary`). Catches `long long`, `std::aligned_storage`, user-defined literal operators at test time.
      On Intel Arc Xe hosts the Geode lane needs `--test_env=VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json --test_env=XDG_RUNTIME_DIR=/tmp` to fall back to llvmpipe.
      Also run, separately:
+   - **`tools/lint.sh`** (~3 s) - the banned-patterns gate: `long long`, `std::aligned_storage`, user-defined literal operators, hidden Unicode whitespace/punctuation. This is one repo-wide scan, not a bazel test; it replaced 476 per-target `*_lint` py_tests that cost 31% of the suite's CPU to do the same work.
    - `python3 tools/cmake/gen_cmakelists.py --check` (CMake generator + output validator; runs outside bazel because it uses `bazel query`).
    - **`clang-format -i` on every modified C/C++ file** before committing — `git clang-format` covers staged changes. The project `.clang-format` is tuned so clang-format 18 and 19 produce identical output, so any locally-installed clang-format works.
 3. **For fuzzer-sensitive changes**, run `bazel test --config=asan-fuzzer <fuzzer target>`. macOS needs this config because Apple Clang lacks `libclang_rt.fuzzer_osx.a`; `--config=asan-fuzzer` activates the LLVM 21 toolchain which provides it.

@@ -21,6 +21,18 @@ EOF
   exit 0
 }
 
+# Signal a process and every descendant. Killing only the launcher leaves the
+# Bazel client alive, still writing to the log the caller is about to report on.
+function kill_process_tree() {
+  local signal="$1"
+  local root="$2"
+  local child
+  for child in $(ps -A -o pid=,ppid= 2> /dev/null | awk -v p="$root" '$2 == p {print $1}'); do
+    kill_process_tree "$signal" "$child"
+  done
+  kill "-$signal" "$root" 2> /dev/null || true
+}
+
 function run_quiet_with_progress() {
   local description="$1"
   local log_file="$2"
@@ -34,7 +46,21 @@ function run_quiet_with_progress() {
   "$@" > "$log_file" 2>&1 &
   local command_pid=$!
 
+  # Stall watchdog, not just a heartbeat. "Still running after 12229s" repeated
+  # 200 times is not a diagnosis. Bazel re-emits its progress line with updated
+  # elapsed time while an action is in flight, so a log whose last line has not
+  # changed for DONNER_COVERAGE_STALL_LIMIT_SECONDS means the invocation has
+  # stopped making observable progress - which is what a target queued on a
+  # remote executor and never scheduled looks like, and what no per-test timeout
+  # can catch (those only start once a test RUNS). Report the last line, which
+  # names the target, and kill so the job fails fast instead of running out its
+  # backstop.
+  local stall_limit="${DONNER_COVERAGE_STALL_LIMIT_SECONDS:-900}"
+
   (
+    local last_line=""
+    local last_change
+    last_change=$(date +%s)
     while sleep "$progress_interval"; do
       if ! kill -0 "$command_pid" 2> /dev/null; then
         exit 0
@@ -43,14 +69,38 @@ function run_quiet_with_progress() {
       local now
       now=$(date +%s)
       local elapsed=$((now - start_time))
-      echo "$description still running after ${elapsed}s; detailed log: $log_file"
+
+      local current
+      current="$(tail -n 1 "$log_file" 2> /dev/null || true)"
+      if [[ "$current" != "$last_line" ]]; then
+        last_line="$current"
+        last_change=$now
+        echo "$description still running after ${elapsed}s; detailed log: $log_file"
+        continue
+      fi
+
+      local stalled=$((now - last_change))
+      if ((stalled < stall_limit)); then
+        echo "$description still running after ${elapsed}s (no new output for ${stalled}s); detailed log: $log_file"
+        continue
+      fi
+
+      echo "ERROR: $description made no progress for ${stalled}s (limit ${stall_limit}s)."
+      echo "ERROR: last output line, which names what it was waiting on:"
+      echo "  ${last_line:-<no output>}"
+      kill_process_tree TERM "$command_pid"
+      sleep 15
+      kill_process_tree KILL "$command_pid"
+      exit 0
     done
   ) &
   local progress_pid=$!
 
   local status=0
   wait "$command_pid" || status=$?
-  kill "$progress_pid" 2> /dev/null || true
+  # kill_process_tree, not plain kill: the watcher is normally parked in
+  # `sleep`, and killing only the subshell leaves that sleep running.
+  kill_process_tree TERM "$progress_pid"
   wait "$progress_pid" 2> /dev/null || true
 
   local end_time
@@ -271,8 +321,13 @@ fi
   rm -f "$COVERAGE_REPORT"
 
   if [ "$QUIET" = true ]; then
+    # Keep progress ON even in --quiet mode. Console noise is already handled by
+    # redirecting to $BAZEL_COVERAGE_LOG, and `--noshow_progress` left that log
+    # containing a single line, so a coverage run that stalled for 200 minutes
+    # produced no evidence of WHAT it stalled on. Progress lines are the only
+    # record of the in-flight target when the job is killed by its timeout.
     run_quiet_with_progress "Bazel coverage" "$BAZEL_COVERAGE_LOG" \
-      "${BAZEL_CMD[@]}" coverage --config=latest_llvm --ui_event_filters=-info,-stdout,-stderr --noshow_progress \
+      "${BAZEL_CMD[@]}" coverage --config=latest_llvm --ui_event_filters=-info,-stdout,-stderr \
       "${DEFAULT_BAZEL_COVERAGE_FLAGS[@]}" \
       "${BAZEL_COVERAGE_FLAGS[@]}" \
       "${LLVM_COVERAGE_FLAGS[@]}" \

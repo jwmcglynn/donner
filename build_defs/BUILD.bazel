@@ -1,6 +1,7 @@
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "string_flag")
 load("@rules_python//python:defs.bzl", "py_test")
 load("//build_defs:banned_deps.bzl", "banned_deps_test")
+load("//build_defs:package.bzl", "donner_package")
 
 exports_files(
     [
@@ -56,6 +57,33 @@ bool_flag(
     visibility = ["//visibility:public"],
 )
 
+# Length of the libFuzzer time budget on the generated `{fuzzer}_soak` tests.
+#
+# Off by default, which is what `bazel test //...` and the PR gate get: each
+# fuzzer replays its whole checked-in corpus (the actual regression guard) plus
+# a short mutation burst. Measured from a full CI run, the 88 fuzz-timer targets
+# were 576 of the suite's 2297 test CPU-seconds - 25% of everything - and almost
+# all of it was wall-clock the flag below now controls.
+#
+# The Fuzz workflow sets this to true so exploratory mutation gets a LONGER
+# budget than the old fixed one, in a build that can actually find things (that
+# lane runs `--config=asan-fuzzer`; the PR sweep does not, so its mutation time
+# was searching without sanitizers). Set with
+# `--//build_defs:fuzz_soak=true`, or `--config=fuzz-soak`.
+bool_flag(
+    name = "fuzz_soak",
+    build_setting_default = False,
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "fuzz_soak_enabled",
+    flag_values = {
+        ":fuzz_soak": "True",
+    },
+    visibility = ["//visibility:public"],
+)
+
 banned_deps_test(
     name = "check_banned_deps_test",
     size = "small",
@@ -104,3 +132,8 @@ config_setting(
         ":llvm_latest": "1",
     },
 )
+
+donner_package(gpu_inventory_globs = [
+    "**/*.bzl",
+    "BUILD.bazel",
+])

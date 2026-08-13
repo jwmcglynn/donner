@@ -11,6 +11,7 @@ load(
     "editor_wasm_runtime_options_probe",
 )
 load(":web_package.bzl", "web_package")
+load("//build_defs:package.bzl", "donner_package")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -221,8 +222,8 @@ wasm_cc_binary(
 web_package(
     name = "wasm_web_package",
     srcs = [
-        "editor-bootstrap.js",
         "editor.css",
+        "editor-bootstrap.js",
         "enable-threads.js",
         "index.html",
         "//:donner_icon.svg",
@@ -372,3 +373,5 @@ py_test(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
 )
+
+donner_package()

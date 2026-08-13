@@ -1,7 +1,11 @@
 load("//build_defs:rules.bzl", "donner_cc_test")
+load("//build_defs:package.bzl", "donner_package")
 
 donner_cc_test(
     name = "reference_tests",
+    srcs = [
+        "Reference_tests.cc",
+    ],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
@@ -9,11 +13,10 @@ donner_cc_test(
         "text_full",
         "geode",
     ],
-    srcs = [
-        "Reference_tests.cc",
-    ],
     deps = [
         "//donner/svg/graph",
         "@com_google_gtest//:gtest_main",
     ],
 )
+
+donner_package()

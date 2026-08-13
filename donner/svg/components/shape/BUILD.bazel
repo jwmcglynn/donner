@@ -1,5 +1,6 @@
 load("@rules_cc//cc:defs.bzl", "cc_library")
 load("//build_defs:rules.bzl", "donner_cc_test")
+load("//build_defs:package.bzl", "donner_package")
 
 cc_library(
     name = "components",
@@ -61,15 +62,15 @@ cc_library(
 
 donner_cc_test(
     name = "shape_system_tests",
+    srcs = [
+        "tests/ShapeSystem_tests.cc",
+    ],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
         "tiny",
         "text_full",
         "geode",
-    ],
-    srcs = [
-        "tests/ShapeSystem_tests.cc",
     ],
     deps = [
         ":shape_system",
@@ -82,15 +83,15 @@ donner_cc_test(
 
 donner_cc_test(
     name = "rect_component_tests",
+    srcs = [
+        "tests/RectComponent_tests.cc",
+    ],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
         "tiny",
         "text_full",
         "geode",
-    ],
-    srcs = [
-        "tests/RectComponent_tests.cc",
     ],
     deps = [
         ":components",
@@ -103,15 +104,15 @@ donner_cc_test(
 
 donner_cc_test(
     name = "circle_ellipse_component_tests",
+    srcs = [
+        "tests/CircleEllipseComponent_tests.cc",
+    ],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
         "tiny",
         "text_full",
         "geode",
-    ],
-    srcs = [
-        "tests/CircleEllipseComponent_tests.cc",
     ],
     deps = [
         ":components",
@@ -121,3 +122,5 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
     ],
 )
+
+donner_package()

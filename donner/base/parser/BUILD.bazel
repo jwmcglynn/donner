@@ -1,4 +1,5 @@
 load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test")
+load("//build_defs:package.bzl", "donner_package")
 
 donner_cc_library(
     name = "parser",
@@ -37,13 +38,13 @@ donner_cc_library(
 
 donner_cc_test(
     name = "parser_tests",
-    shard_count = 5,
     srcs = [
         "tests/DataUrlParser_tests.cc",
         "tests/IntegerParser_tests.cc",
         "tests/LengthParser_tests.cc",
         "tests/NumberParser_tests.cc",
     ],
+    shard_count = 5,
     deps = [
         ":parser",
         "//donner/base:base_test_utils",
@@ -94,3 +95,5 @@ donner_cc_fuzzer(
         ":parser",
     ],
 )
+
+donner_package()

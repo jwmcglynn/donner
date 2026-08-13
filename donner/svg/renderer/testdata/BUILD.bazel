@@ -1,3 +1,5 @@
+load("//build_defs:package.bzl", "donner_package")
+
 filegroup(
     name = "testdata",
     srcs = glob([
@@ -13,3 +15,5 @@ filegroup(
         "//donner:__subpackages__",
     ],
 )
+
+donner_package()

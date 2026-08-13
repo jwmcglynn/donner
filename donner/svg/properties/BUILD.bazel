@@ -1,4 +1,5 @@
 load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
+load("//build_defs:package.bzl", "donner_package")
 
 donner_cc_library(
     name = "property_parsing",
@@ -66,3 +67,5 @@ donner_cc_library(
         "//donner/css",
     ],
 )
+
+donner_package()

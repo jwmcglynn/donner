@@ -12,7 +12,6 @@
         "createView",
         "writeTexture"
       ],
-      "sha256": "cfdb468c1c4ab33bdc79e8e96814c9d297777fa869e204f92de2be5f4f131a93",
       "usesEditorWgpuDefine": true,
       "wgpuCFunctions": [
         "wgpuLabel"
@@ -34,11 +33,9 @@
       ]
     },
     "donner/editor/CompositorDebugPanel.h": {
-      "sha256": "bb9099f2e8029d105e3f884c98092f2d381f1666c4e7724c3ebf54d2c75b7c7c",
       "usesEditorWgpuDefine": true
     },
     "donner/editor/EditorShell.cc": {
-      "sha256": "cc2cda9272dfbeb10c679e5b1b2ee2f610ea4dbb319948662dd4ad70495ee89e",
       "usesEditorWgpuDefine": true,
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
@@ -46,26 +43,21 @@
       ]
     },
     "donner/editor/EditorShell.h": {
-      "sha256": "2c08b80518582868d0141cb7b46831c7b15c412d8a929e7b2552611ab6de0440",
       "usesEditorWgpuDefine": true
     },
     "donner/editor/EditorShellPresentation.cc": {
-      "sha256": "ba9053728c249b1174ec034a4a4166573bdb29e5b745c7c163872fa6cc870a04",
       "usesEditorWgpuDefine": true
     },
     "donner/editor/EditorShellPresentation.h": {
-      "sha256": "ee3dc46219a081bf487154beb8339e537f37b71c2a40b904552ae4efac5cab47",
       "usesEditorWgpuDefine": true
     },
     "donner/editor/FrameMissTelemetry.cc": {
-      "sha256": "147d4c33e2fafffcdf436296fcf0125eea4dbd73ddf5a5c86c496a7c2dc272d4",
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
         "wgpuLifetimeTextureCreates"
       ]
     },
     "donner/editor/FrameMissTelemetry.h": {
-      "sha256": "810edf8ed7ec557ef64c5ca4b36abe6538819e4ade1c6ac20218ee8baad45342",
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
         "wgpuLifetimeTextureCreates"
@@ -81,7 +73,6 @@
         "createTexture",
         "writeTexture"
       ],
-      "sha256": "118365dea85808825d6f2ed9f370b763bbcb5a338f7240375c8cce1822075af1",
       "usesEditorWgpuDefine": true,
       "wgpuCFunctions": [
         "wgpuLabel",
@@ -105,7 +96,6 @@
       ]
     },
     "donner/editor/GlTextureCache.h": {
-      "sha256": "bce74359b8e0e1f48dc57972114dbb5456dda3af7eb7e2b70f106d3c360ae6fe",
       "usesEditorWgpuDefine": true,
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
@@ -113,37 +103,31 @@
       ]
     },
     "donner/editor/ImGuiBackendIncludes.h": {
-      "sha256": "5859928b7adbc7abba584765fd7a5a6d938196c31d21dea9ecdfe8ff1e7fd0be",
       "usesEditorWgpuDefine": true
     },
     "donner/editor/ViewportInteractionController.h": {
-      "sha256": "ad9feddb75d2ded81a8a31c156c0f5d9d22b11104683710e494d9de7732d98db",
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
         "wgpuLifetimeTextureCreates"
       ]
     },
     "donner/editor/WholeAppWorkerBridge.cc": {
-      "sha256": "bb49c45dfce557daf70c03fbe8ca260e14dd14303053022d307505ca90f7ba24",
       "wgpuCFunctions": [
         "wgpuReadbackStats"
       ]
     },
     "donner/editor/WholeAppWorkerBridge.h": {
-      "sha256": "b12e5462ae34a4ed2adca43ca95b84767c62c79abf0f82d2447e3ddd77667fc0",
       "wgpuCFunctions": [
         "wgpuReadbackStats"
       ]
     },
     "donner/editor/gui/EditorWgpuSurface.h": {
-      "sha256": "be60420bf199f229dd65300b9c4a15c23f51a309fc9b5a32244a2a1699779906",
       "wgpuCppTokens": [
         "Instance",
         "Surface"
       ]
     },
     "donner/editor/gui/EditorWgpuSurface_linux.cc": {
-      "sha256": "5d203d54c295aa24c02d0c6eae9766570836040987015de5450afb1cfaec502a",
       "wgpuCppTokens": [
         "Default",
         "Instance",
@@ -153,7 +137,6 @@
       ]
     },
     "donner/editor/gui/EditorWgpuSurface_macos.mm": {
-      "sha256": "6603fe3661b869039fc45e1d6ee8dab074af3b183070b9b2bc883cf81b726cd6",
       "wgpuCppTokens": [
         "Default",
         "Instance",
@@ -192,7 +175,6 @@
         "submit",
         "unmap"
       ],
-      "sha256": "316afc64cffe87671b4951672e28d6df15d60d22031c09322259d9b69bcc8f46",
       "usesEditorWgpuDefine": true,
       "wgpuCFunctions": [
         "wgpuCreateInstance",
@@ -269,7 +251,6 @@
       ]
     },
     "donner/editor/gui/EditorWindow.h": {
-      "sha256": "e14569b08410ce72223883b3d9cc06103e14c64dd7fa671bfb74ba0cba1d3e45",
       "usesEditorWgpuDefine": true,
       "wgpuCFunctions": [
         "wgpuDirectRenderCallback_",
@@ -281,21 +262,18 @@
       ]
     },
     "donner/editor/tests/EditorRnrGlReplay.cc": {
-      "sha256": "653a1234f483ccc371e538469921c7d86c453902b1890ced14a0a8ac4b500c8b",
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
         "wgpuLifetimeTextureCreates"
       ]
     },
     "donner/editor/tests/EditorShell_tests.cc": {
-      "sha256": "1cb3b06937e7675229e8902288a8acbae905444ece3fe6ff7cc4653bcdb10d61",
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
         "wgpuLifetimeTextureCreates"
       ]
     },
     "donner/editor/tests/EditorWindowOffscreenTarget_tests.cc": {
-      "sha256": "fecbefe2fb233b4ac3e624173f03b60c2f21315ddfea6d7b41f60c0145fe738d",
       "usesEditorWgpuDefine": true
     },
     "donner/editor/tests/EditorWindow_tests.cc": {
@@ -307,14 +285,12 @@
       "operations": [
         "draw"
       ],
-      "sha256": "6474a2d3e049c3fa797c0b8e62e414cdca57f373da9684fd5574092261183f72",
       "usesEditorWgpuDefine": true,
       "wgpuCTypes": [
         "WGPUTextureView"
       ]
     },
     "donner/editor/tests/FrameMissTelemetry_tests.cc": {
-      "sha256": "3eeba44a3b342c94228046621599b445cdc25fd7094fe7610fc6fddf157cccc6",
       "wgpuCFunctions": [
         "wgpuLifetimeTextureCreates"
       ]
@@ -323,7 +299,6 @@
       "operations": [
         "createTexture"
       ],
-      "sha256": "c6254f760545a5bd2272007d34e07b38f4ac7c2818a4c39f6585b5678df105e5",
       "usesEditorWgpuDefine": true,
       "wgpuCppTokens": [
         "Texture",
@@ -334,11 +309,9 @@
       ]
     },
     "donner/editor/tests/LayersPanel_tests.cc": {
-      "sha256": "f2ac8b06b694387b3e41de4cb0467943d3649e1dfe94fcc0e210016df4a1c6d4",
       "usesEditorWgpuDefine": true
     },
     "donner/editor/tests/ViewportInteractionController_tests.cc": {
-      "sha256": "0384202414354620d67f8451a32bc3af93bbd452a5fe73bf14192298f0844353",
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
         "wgpuLifetimeTextureCreates"

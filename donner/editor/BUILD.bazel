@@ -15,6 +15,7 @@ graphs via `dev_dependency = True` in `MODULE.bazel`.
 load("@bazel_skylib//lib:selects.bzl", "selects")
 load("//build_defs:embed_resources.bzl", "embed_resources")
 load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_multi_transitioned_binary")
+load("//build_defs:package.bzl", "donner_package")
 
 #Editor libraries are public so the  // examples:svg_viewer target (in the
 #separate examples Bazel module) can depend on `: text_editor`.BCR
@@ -1344,11 +1345,6 @@ donner_cc_binary(
     ],
 )
 
-test_suite(
-    name = "editor_lint",
-    tests = [":editor_impl_lint"],
-)
-
 #The full Donner editor binary.Wires EditorApp + SelectTool +
 #OverlayRenderer + TextEditor into an ImGui shell with a live source
 #pane and a click - and-drag render pane.The minimal viewer demo lives
@@ -1515,3 +1511,5 @@ donner_cc_library(
         "@imgui",
     ],
 )
+
+donner_package()

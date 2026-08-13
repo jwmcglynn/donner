@@ -1,4 +1,5 @@
 load("@rules_cc//cc:defs.bzl", "cc_library")
+load("//build_defs:package.bzl", "donner_package")
 
 cc_library(
     name = "common",
@@ -10,3 +11,5 @@ cc_library(
         "//donner/svg/components",
     ],
 )
+
+donner_package()

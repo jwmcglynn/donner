@@ -7,7 +7,9 @@ exports_files(
     ],
     visibility = ["//donner:__subpackages__"],
 )
+
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
+load("//build_defs:package.bzl", "donner_package")
 
 donner_cc_library(
     name = "fonts",
@@ -94,3 +96,5 @@ donner_cc_fuzzer(
         ":woff2_parser",
     ],
 )
+
+donner_package()

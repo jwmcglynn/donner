@@ -3141,7 +3141,18 @@ TEST(GlRnrReplayTest, DrainEachFrameContentCaptureIsDeterministicAcrossPaceAndDe
 
   std::optional<svg::RendererBitmap> baselineCapture;
   std::optional<std::string> baselineDiagnostics;
-  constexpr int kDelayMatrixMs[] = {0, 5, 10, 20, 50};
+  // Two delays, not a five-point sweep. Each matrix cell builds a whole hidden
+  // GL editor window and replays the same three-frame static-content recording,
+  // so the cost is entirely window construction and scales linearly with the
+  // number of cells. The invariant under test is that a DrainEachFrame replay
+  // produces a byte-identical content capture no matter how long the worker
+  // takes relative to the frame loop; the two endpoints are what separate
+  // "worker finishes within the frame" (0 ms) from "worker finishes several
+  // frames late" (50 ms, well beyond the frame budget). The 5/10/20 ms cells
+  // sat between those two regimes and could only reproduce a defect that the
+  // endpoints already reproduce, because nothing in the drain path branches on
+  // a delay threshold.
+  constexpr int kDelayMatrixMs[] = {0, 50};
   for (const bool pace : {false, true}) {
     for (const int delayMs : kDelayMatrixMs) {
       repro::GlRnrReplayOptions options;

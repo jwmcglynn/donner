@@ -132,7 +132,7 @@ Load the `donner-fuzzing` skill for the full workflow. The essentials:
 
 - **`donner_cc_fuzzer` anatomy** (`build_defs/rules.bzl`): the bare-name target replays the corpus
   as a regression test under plain `bazel test //...`; `<name>_bin` is the libFuzzer binary for
-  active fuzzing and `-minimize_crash`; `<name>_10_seconds` runs a short CI fuzz pass. `corpus=`
+  active fuzzing and `-minimize_crash`; `<name>_soak` runs an exploratory mutation pass whose budget is set by `--//build_defs:fuzz_soak` (short on the PR gate, long on the nightly Fuzz lane). `corpus=`
   globs a directory into a filegroup.
 - **Corpus grows over time.** Every parser bug fix should add its input to the corpus as a
   regression test. That input will get mutated by future fuzzer runs, catching regressions of the

@@ -133,19 +133,81 @@ std::vector<svg::SVGElement> QueryNumberedRects(svg::SVGDocument& document, int 
   return elements;
 }
 
+// Every wait in this file is the same loop: poll, stop when it yields, sleep a
+// millisecond, give up at a bound. Only the bound and the predicate differed,
+// and the loop was written out ~40 times.
+constexpr auto kPollInterval = std::chrono::milliseconds(1);
+
+// Polls until `poll()` yields a value, or `maxPolls` intervals elapse.
+//
+// Iteration-bounded rather than clock-bounded on purpose. The callers this
+// replaced counted iterations, and each iteration also spends the poll's own
+// time, so a wall-clock deadline of `maxPolls * kPollInterval` would be
+// strictly TIGHTER than what they had - a silent timeout reduction is exactly
+// the kind of change that turns into a flake on a loaded runner months later.
+template <typename PollFn>
+auto PollForResult(PollFn&& poll, int maxPolls) -> decltype(poll()) {
+  for (int i = 0; i < maxPolls; ++i) {
+    if (auto result = poll(); result.has_value()) {
+      return result;
+    }
+    std::this_thread::sleep_for(kPollInterval);
+  }
+  return std::nullopt;
+}
+
+// Polls until `poll()` yields a value, or `deadline` passes.
+template <typename PollFn>
+auto PollForResult(PollFn&& poll, std::chrono::steady_clock::time_point deadline)
+    -> decltype(poll()) {
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (auto result = poll(); result.has_value()) {
+      return result;
+    }
+    std::this_thread::sleep_for(kPollInterval);
+  }
+  return std::nullopt;
+}
+
+// Waits until `isDone()` holds or `deadline` passes, without polling anything.
+// Returns whether it finished rather than timed out.
+template <typename DoneFn>
+bool WaitUntil(DoneFn&& isDone, std::chrono::steady_clock::time_point deadline) {
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (isDone()) {
+      return true;
+    }
+    std::this_thread::sleep_for(kPollInterval);
+  }
+  return isDone();
+}
+
+// Runs `poll()` for its side effects until `isDone()` holds or `deadline`
+// passes. Returns whether it finished rather than timed out.
+template <typename PollFn, typename DoneFn>
+bool PollUntil(PollFn&& poll, DoneFn&& isDone, std::chrono::steady_clock::time_point deadline) {
+  while (std::chrono::steady_clock::now() < deadline) {
+    poll();
+    if (isDone()) {
+      return true;
+    }
+    std::this_thread::sleep_for(kPollInterval);
+  }
+  return false;
+}
+
 std::optional<RenderResult> WaitForRenderResult(AsyncRenderer& asyncRenderer) {
   // Poll up to 30s. The expensive cases (splash high-zoom render) finish in a
   // few seconds on a fast machine but can take longer on a loaded self-hosted
   // CI runner; a tight 4s budget flaked there (the worker simply hadn't
   // published yet). A generous bound stays robust without masking a real hang.
-  for (int i = 0; i < 3000; ++i) {
-    auto result = asyncRenderer.pollResult();
-    if (result.has_value()) {
-      return result;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  }
-  return std::nullopt;
+  //
+  // Poll at 1 ms, not 10 ms. Every wait in this file rounds up to the poll
+  // quantum, so a render that publishes in 2 ms still cost 10 ms, across ~88
+  // tests each with several waits. The iteration bounds here and in the sibling
+  // loops below were multiplied by ten at the same time, so every deadline is
+  // unchanged - this only removes rounding, it does not tighten any timeout.
+  return PollForResult([&] { return asyncRenderer.pollResult(); }, 30000);
 }
 
 std::string DescribeCompositeSegments(
@@ -572,14 +634,7 @@ TEST(AsyncRendererTest, ProductionRendererCachesStaticSpansAcrossPublishedFrames
   const auto waitForResult = [&]() -> std::optional<RenderResult> {
     // 30s budget - generous for a loaded self-hosted CI runner (see
     // WaitForRenderResult).
-    for (int i = 0; i < 3000; ++i) {
-      auto result = asyncRenderer.pollResult();
-      if (result.has_value()) {
-        return result;
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-    return std::nullopt;
+    return PollForResult([&] { return asyncRenderer.pollResult(); }, 30000);
   };
   const auto postSelection = [&](std::uint64_t version) {
     RenderRequest request(renderer, document);
@@ -948,9 +1003,7 @@ TEST(AsyncRendererTest, WakeCallbackFiresWhenCancellationReturnsWorkerToIdle) {
       << "cancelInFlight returned the worker to idle without waking the UI loop";
 
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-  while (asyncRenderer.isBusy() && std::chrono::steady_clock::now() < deadline) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  }
+  WaitUntil([&] { return !asyncRenderer.isBusy(); }, deadline);
   ASSERT_FALSE(asyncRenderer.isBusy());
   EXPECT_FALSE(asyncRenderer.pollResult().has_value());
   EXPECT_GE(wakeCount.load(std::memory_order_acquire), 1);
@@ -975,11 +1028,8 @@ TEST(AsyncRendererTest, PollResultStillWorksWithoutWakeCallback) {
   asyncRenderer.requestRender(request);
 
   std::optional<RenderResult> result;
-  for (int i = 0; i < 200 && !result.has_value(); ++i) {
-    result = asyncRenderer.pollResult();
-    if (!result.has_value()) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
+  if (!result.has_value()) {
+    result = PollForResult([&] { return asyncRenderer.pollResult(); }, 2000);
   }
   ASSERT_TRUE(result.has_value());
 }
@@ -1013,15 +1063,7 @@ TEST(AsyncRendererTest, PendingDemotePreviousDragTargetKeepsDragTranslationInTil
   AsyncRenderer asyncRenderer;
 
   const auto waitForResult = [&]() -> std::optional<RenderResult> {
-    for (int i = 0; i < 400; ++i) {
-      auto result = asyncRenderer.pollResult();
-      if (result.has_value()) {
-        return result;
-      } else {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      }
-    }
-    return std::nullopt;
+    return PollForResult([&] { return asyncRenderer.pollResult(); }, 4000);
   };
 
   // 1. Pre-warm A - promote with Selection so A's layer rasterizes at
@@ -1124,15 +1166,7 @@ TEST(AsyncRendererTest, DisplayNoneSelectionDropsStaleCompositedLayerImmediately
   AsyncRenderer asyncRenderer;
 
   const auto waitForResult = [&]() -> std::optional<RenderResult> {
-    for (int i = 0; i < 400; ++i) {
-      auto result = asyncRenderer.pollResult();
-      if (result.has_value()) {
-        return result;
-      } else {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      }
-    }
-    return std::nullopt;
+    return PollForResult([&] { return asyncRenderer.pollResult(); }, 4000);
   };
 
   {
@@ -1208,14 +1242,7 @@ TEST(AsyncRendererTest, DisplayNoneSelectionDoesNotLeaveStaleBackgroundPixelsWhe
   const auto waitForResult = [&]() -> std::optional<RenderResult> {
     // 30s budget - generous for a loaded self-hosted CI runner (see
     // WaitForRenderResult).
-    for (int i = 0; i < 3000; ++i) {
-      auto result = asyncRenderer.pollResult();
-      if (result.has_value()) {
-        return result;
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-    return std::nullopt;
+    return PollForResult([&] { return asyncRenderer.pollResult(); }, 30000);
   };
   const auto pixelAt = [](const svg::RendererBitmap& bitmap, int x,
                           int y) -> std::array<uint8_t, 4> {
@@ -1379,11 +1406,8 @@ TEST(AsyncRendererTest, RequestRenderDuringBusySignalsCancellationAndPicksUpNewR
   }
 
   std::optional<RenderResult> result;
-  for (int i = 0; i < 600 && !result.has_value(); ++i) {
-    result = asyncRenderer.pollResult();
-    if (!result.has_value()) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
+  if (!result.has_value()) {
+    result = PollForResult([&] { return asyncRenderer.pollResult(); }, 6000);
   }
   ASSERT_TRUE(result.has_value());
 
@@ -1441,9 +1465,7 @@ TEST(AsyncRendererTest, CancelInFlightDropsResultAndReturnsWorkerToIdle) {
   // fired mid-render or the render completed and `result_` got
   // dropped via the state-flip, the worker must end up parked.
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-  while (asyncRenderer.isBusy() && std::chrono::steady_clock::now() < deadline) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  }
+  WaitUntil([&] { return !asyncRenderer.isBusy(); }, deadline);
   ASSERT_FALSE(asyncRenderer.isBusy())
       << "cancelInFlight failed to return the worker to idle within 5 s";
 
@@ -1500,9 +1522,13 @@ TEST(AsyncRendererTest, CancelInFlightFollowedByRequestRenderRunsCleanly) {
   asyncRenderer.requestRender(request);
   asyncRenderer.cancelInFlight();
 
-  // Drain the cancelled state.
+  // Drain the cancelled state. Deliberately left as an unbounded wait rather
+  // than routed through WaitUntil: giving it a deadline would let the test
+  // continue with a still-busy renderer and assert against a half-cancelled
+  // state, turning a hang into a confusing failure. If cancelInFlight ever
+  // fails to settle, hanging here is the more honest signal.
   while (asyncRenderer.isBusy()) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    std::this_thread::sleep_for(kPollInterval);
   }
   EXPECT_FALSE(asyncRenderer.pollResult().has_value());
 
@@ -1512,12 +1538,7 @@ TEST(AsyncRendererTest, CancelInFlightFollowedByRequestRenderRunsCleanly) {
   asyncRenderer.requestRender(request);
   std::optional<RenderResult> result;
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-  while (!result.has_value() && std::chrono::steady_clock::now() < deadline) {
-    result = asyncRenderer.pollResult();
-    if (!result.has_value()) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-  }
+  result = PollForResult([&] { return asyncRenderer.pollResult(); }, deadline);
   ASSERT_TRUE(result.has_value()) << "requestRender after cancelInFlight stalled";
   EXPECT_EQ(result->version, 2u);
 }
@@ -1547,11 +1568,8 @@ TEST(AsyncRendererTest, DragPreviewRequestReturnsCompositedPreviewLayers) {
   asyncRenderer.requestRender(request);
 
   std::optional<RenderResult> result;
-  for (int i = 0; i < 200 && !result.has_value(); ++i) {
-    result = asyncRenderer.pollResult();
-    if (!result.has_value()) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
+  if (!result.has_value()) {
+    result = PollForResult([&] { return asyncRenderer.pollResult(); }, 2000);
   }
 
   ASSERT_TRUE(result.has_value());
@@ -1597,11 +1615,8 @@ TEST(AsyncRendererTest, PreviewRequestWithoutDomTransformReturnsCompositedPrevie
   asyncRenderer.requestRender(request);
 
   std::optional<RenderResult> result;
-  for (int i = 0; i < 200 && !result.has_value(); ++i) {
-    result = asyncRenderer.pollResult();
-    if (!result.has_value()) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
+  if (!result.has_value()) {
+    result = PollForResult([&] { return asyncRenderer.pollResult(); }, 2000);
   }
 
   ASSERT_TRUE(result.has_value());
@@ -1634,11 +1649,8 @@ TEST(AsyncRendererTest, CompositorResetOnDocumentVersionChange) {
     asyncRenderer.requestRender(request);
 
     std::optional<RenderResult> result;
-    for (int i = 0; i < 200 && !result.has_value(); ++i) {
-      result = asyncRenderer.pollResult();
-      if (!result.has_value()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      }
+    if (!result.has_value()) {
+      result = PollForResult([&] { return asyncRenderer.pollResult(); }, 2000);
     }
     ASSERT_TRUE(result.has_value());
     ASSERT_TRUE(result->compositedPreview.has_value());
@@ -1655,11 +1667,8 @@ TEST(AsyncRendererTest, CompositorResetOnDocumentVersionChange) {
     asyncRenderer.requestRender(request);
 
     std::optional<RenderResult> result;
-    for (int i = 0; i < 200 && !result.has_value(); ++i) {
-      result = asyncRenderer.pollResult();
-      if (!result.has_value()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      }
+    if (!result.has_value()) {
+      result = PollForResult([&] { return asyncRenderer.pollResult(); }, 2000);
     }
     ASSERT_TRUE(result.has_value());
     // After a version change, the compositor should still produce valid composited output.
@@ -1694,11 +1703,8 @@ TEST(AsyncRendererTest, SelectedEntityWithoutDragPreviewProducesCompositedPrevie
   asyncRenderer.requestRender(request);
 
   std::optional<RenderResult> result;
-  for (int i = 0; i < 200 && !result.has_value(); ++i) {
-    result = asyncRenderer.pollResult();
-    if (!result.has_value()) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
+  if (!result.has_value()) {
+    result = PollForResult([&] { return asyncRenderer.pollResult(); }, 2000);
   }
 
   ASSERT_TRUE(result.has_value());
@@ -1723,11 +1729,8 @@ TEST(AsyncRendererTest, ColdRenderWithoutSelectionProducesFullCanvasCompositedTi
   asyncRenderer.requestRender(request);
 
   std::optional<RenderResult> result;
-  for (int i = 0; i < 200 && !result.has_value(); ++i) {
-    result = asyncRenderer.pollResult();
-    if (!result.has_value()) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
+  if (!result.has_value()) {
+    result = PollForResult([&] { return asyncRenderer.pollResult(); }, 2000);
   }
 
   ASSERT_TRUE(result.has_value());
@@ -1774,11 +1777,8 @@ TEST(AsyncRendererTest, CompositedTilesCarryRasterCanvasSizeForCacheIdentity) {
   asyncRenderer.requestRender(request);
 
   std::optional<RenderResult> result;
-  for (int i = 0; i < 200 && !result.has_value(); ++i) {
-    result = asyncRenderer.pollResult();
-    if (!result.has_value()) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
+  if (!result.has_value()) {
+    result = PollForResult([&] { return asyncRenderer.pollResult(); }, 2000);
   }
 
   ASSERT_TRUE(result.has_value());
@@ -1834,11 +1834,8 @@ TEST(AsyncRendererTest, CompositingContextDescendantsProduceFullCanvasComposited
     asyncRenderer.requestRender(request);
 
     std::optional<RenderResult> result;
-    for (int i = 0; i < 200 && !result.has_value(); ++i) {
-      result = asyncRenderer.pollResult();
-      if (!result.has_value()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      }
+    if (!result.has_value()) {
+      result = PollForResult([&] { return asyncRenderer.pollResult(); }, 2000);
     }
 
     ASSERT_TRUE(result.has_value());
@@ -1883,11 +1880,8 @@ TEST(AsyncRendererTest, CompositorStaysAliveAcrossDragRelease) {
 
   const auto waitForResult = [&]() {
     std::optional<RenderResult> result;
-    for (int i = 0; i < 200 && !result.has_value(); ++i) {
-      result = asyncRenderer.pollResult();
-      if (!result.has_value()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      }
+    if (!result.has_value()) {
+      result = PollForResult([&] { return asyncRenderer.pollResult(); }, 2000);
     }
     return result;
   };
@@ -1988,15 +1982,7 @@ TEST(AsyncRendererTest, ActiveDragCanvasResizePublishesFreshFinalOnly) {
   AsyncRenderer asyncRenderer;
 
   const auto waitForResult = [&]() -> std::optional<RenderResult> {
-    for (int i = 0; i < 400; ++i) {
-      auto result = asyncRenderer.pollResult();
-      if (result.has_value()) {
-        return result;
-      } else {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      }
-    }
-    return std::nullopt;
+    return PollForResult([&] { return asyncRenderer.pollResult(); }, 4000);
   };
 
   {
@@ -2089,11 +2075,8 @@ TEST(AsyncRendererTest, SplashShapeDragFramesDoNotCrash) {
 
   const auto waitForResult = [&]() {
     std::optional<RenderResult> result;
-    for (int i = 0; i < 400 && !result.has_value(); ++i) {
-      result = asyncRenderer.pollResult();
-      if (!result.has_value()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      }
+    if (!result.has_value()) {
+      result = PollForResult([&] { return asyncRenderer.pollResult(); }, 4000);
     }
     return result;
   };
@@ -2186,12 +2169,7 @@ TEST(AsyncRendererTest, ActiveDragStartDoesNotAdvanceUnchangedTileGenerations) {
   AsyncRenderer asyncRenderer;
 
   const auto waitForResult = [&]() -> std::optional<RenderResult> {
-    for (int i = 0; i < 400; ++i) {
-      auto result = asyncRenderer.pollResult();
-      if (result.has_value()) return result;
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-    return std::nullopt;
+    return PollForResult([&] { return asyncRenderer.pollResult(); }, 4000);
   };
   const auto postRequest = [&](std::uint64_t version,
                                svg::compositor::InteractionHint interactionHint) {
@@ -2316,12 +2294,7 @@ TEST(AsyncRendererTest, SteadyActiveDragTargetReusesPublishedTextureMetadataOnly
   AsyncRenderer asyncRenderer;
 
   const auto waitForResult = [&]() -> std::optional<RenderResult> {
-    for (int i = 0; i < 200; ++i) {
-      auto result = asyncRenderer.pollResult();
-      if (result.has_value()) return result;
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-    return std::nullopt;
+    return PollForResult([&] { return asyncRenderer.pollResult(); }, 2000);
   };
   const auto postActiveDrag = [&](std::uint64_t version, double x) {
     target->cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(x, 0.0)));
@@ -2577,12 +2550,7 @@ TEST(AsyncRendererE2ETest, DragOThenSelectEDoesNotAdvanceExistingLayerGeneration
   using Clock = std::chrono::steady_clock;
   const auto waitForResult = [&]() -> std::optional<RenderResult> {
     const auto deadline = Clock::now() + std::chrono::seconds(30);
-    while (Clock::now() < deadline) {
-      auto result = asyncRenderer.pollResult();
-      if (result.has_value()) return result;
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    return std::nullopt;
+    return PollForResult([&] { return asyncRenderer.pollResult(); }, deadline);
   };
   uint64_t renderVersion = 0;
   const auto postRequest = [&]() {
@@ -3054,11 +3022,8 @@ TEST(AsyncRendererTest, DragFrameVersionBumpDoesNotResetCompositor) {
 
   const auto waitForResult = [&]() {
     std::optional<RenderResult> result;
-    for (int i = 0; i < 200 && !result.has_value(); ++i) {
-      result = asyncRenderer.pollResult();
-      if (!result.has_value()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      }
+    if (!result.has_value()) {
+      result = PollForResult([&] { return asyncRenderer.pollResult(); }, 2000);
     }
     return result;
   };
@@ -3178,12 +3143,7 @@ EndToEndDragStats RunEditorFlowDragHarness(AsyncSVGDocument& asyncDoc, svg::Rend
 
   const auto waitForResult = [&]() -> std::optional<RenderResult> {
     const auto deadline = Clock::now() + std::chrono::seconds(30);
-    while (Clock::now() < deadline) {
-      auto result = asyncRenderer.pollResult();
-      if (result.has_value()) return result;
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    return std::nullopt;
+    return PollForResult([&] { return asyncRenderer.pollResult(); }, deadline);
   };
 
   const auto postRequest = [&](uint64_t version, bool hasSelection, bool hasDrag) {
@@ -3322,12 +3282,7 @@ FaithfulFrameDragStats RunFaithfulEditorFrameDragHarness(AsyncSVGDocument& async
 
   const auto waitForResult = [&]() -> std::optional<RenderResult> {
     const auto deadline = Clock::now() + std::chrono::seconds(30);
-    while (Clock::now() < deadline) {
-      auto result = asyncRenderer.pollResult();
-      if (result.has_value()) return result;
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    return std::nullopt;
+    return PollForResult([&] { return asyncRenderer.pollResult(); }, deadline);
   };
 
   const auto postRequest = [&](uint64_t version, bool hasSelection, bool hasDrag) {
@@ -3886,14 +3841,7 @@ TEST(AsyncRendererE2ETest, RawSelectedZoomRenderOnRealSplashBreaksDownPerFrameCo
   };
   const auto waitForResult = [&]() -> std::optional<RenderResult> {
     const auto deadline = Clock::now() + std::chrono::seconds(30);
-    while (Clock::now() < deadline) {
-      auto result = asyncRenderer.pollResult();
-      if (result.has_value()) {
-        return result;
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    return std::nullopt;
+    return PollForResult([&] { return asyncRenderer.pollResult(); }, deadline);
   };
   const auto postSelectionPrewarm = [&](std::uint64_t version,
                                         const EditorRasterViewport& rasterViewport) {
@@ -4034,12 +3982,7 @@ TEST(AsyncRendererE2ETest, MultiShapeClickDragHiDpiRepro) {
   };
   const auto waitForResult = [&]() -> std::optional<RenderResult> {
     const auto deadline = Clock::now() + std::chrono::seconds(30);
-    while (Clock::now() < deadline) {
-      auto result = asyncRenderer.pollResult();
-      if (result.has_value()) return result;
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    return std::nullopt;
+    return PollForResult([&] { return asyncRenderer.pollResult(); }, deadline);
   };
   const auto post = [&](uint64_t version, Entity selectedEntity, Entity dragEntity) {
     RenderRequest request(renderer, asyncDoc.document());
@@ -4206,12 +4149,7 @@ TEST(AsyncRendererE2ETest, PresentationStaysNonTransparentAcrossDragTargetSwap) 
   using Clock = std::chrono::steady_clock;
   const auto waitForResult = [&]() -> std::optional<RenderResult> {
     const auto deadline = Clock::now() + std::chrono::seconds(30);
-    while (Clock::now() < deadline) {
-      auto result = asyncRenderer.pollResult();
-      if (result.has_value()) return result;
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    return std::nullopt;
+    return PollForResult([&] { return asyncRenderer.pollResult(); }, deadline);
   };
   const auto post = [&](uint64_t version, Entity selectedEntity, Entity dragEntity) {
     RenderRequest request(renderer, asyncDoc.document());
@@ -4350,12 +4288,7 @@ TEST(AsyncRendererE2ETest, DragEndWritebackTakesStructuralRemapPath) {
   using Clock = std::chrono::steady_clock;
   const auto waitForResult = [&]() -> std::optional<RenderResult> {
     const auto deadline = Clock::now() + std::chrono::seconds(10);
-    while (Clock::now() < deadline) {
-      auto result = asyncRenderer.pollResult();
-      if (result.has_value()) return result;
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    return std::nullopt;
+    return PollForResult([&] { return asyncRenderer.pollResult(); }, deadline);
   };
 
   const auto postRequest = [&](uint64_t version, bool drag) {
@@ -4477,21 +4410,12 @@ TEST(AsyncRendererE2ETest, StructuralRemapSurvivesSupersededWritebackRequest) {
   using Clock = std::chrono::steady_clock;
   const auto waitForResult = [&]() -> std::optional<RenderResult> {
     const auto deadline = Clock::now() + std::chrono::seconds(10);
-    while (Clock::now() < deadline) {
-      auto result = asyncRenderer.pollResult();
-      if (result.has_value()) return result;
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    return std::nullopt;
+    return PollForResult([&] { return asyncRenderer.pollResult(); }, deadline);
   };
   const auto waitUntilIdle = [&]() -> bool {
     const auto deadline = Clock::now() + std::chrono::seconds(10);
-    while (Clock::now() < deadline) {
-      (void)asyncRenderer.pollResult();
-      if (!asyncRenderer.isBusy()) return true;
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    return false;
+    return PollUntil([&] { (void)asyncRenderer.pollResult(); },
+                     [&] { return !asyncRenderer.isBusy(); }, deadline);
   };
 
   RenderRequest initialRequest(renderer, asyncDoc.document());
@@ -4574,12 +4498,7 @@ TEST(AsyncRendererE2ETest, StructuralWritebackDoesNotResizeCanvasAndRerasterFilt
   using Clock = std::chrono::steady_clock;
   const auto waitForResult = [&]() -> std::optional<RenderResult> {
     const auto deadline = Clock::now() + std::chrono::seconds(10);
-    while (Clock::now() < deadline) {
-      auto result = asyncRenderer.pollResult();
-      if (result.has_value()) return result;
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    return std::nullopt;
+    return PollForResult([&] { return asyncRenderer.pollResult(); }, deadline);
   };
   const auto postRequest = [&](uint64_t version, Entity selectedEntity) {
     RenderRequest request(renderer, asyncDoc.document());
@@ -4682,12 +4601,7 @@ TEST(AsyncRendererE2ETest, SourcePaneStructurallyEquivalentReparseAvoidsReset) {
   using Clock = std::chrono::steady_clock;
   const auto waitForResult = [&]() -> std::optional<RenderResult> {
     const auto deadline = Clock::now() + std::chrono::seconds(10);
-    while (Clock::now() < deadline) {
-      auto result = asyncRenderer.pollResult();
-      if (result.has_value()) return result;
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    return std::nullopt;
+    return PollForResult([&] { return asyncRenderer.pollResult(); }, deadline);
   };
 
   const auto postRequest = [&](uint64_t version, bool drag) {
@@ -4816,14 +4730,8 @@ TEST(RenderCoordinatorTest, StableSelectedFullDocumentPrewarmStaysIdle) {
 
   const auto waitForCoordinator = [&]() {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (std::chrono::steady_clock::now() < deadline) {
-      coordinator.pollRenderResult(app, viewport, textures);
-      if (!coordinator.asyncRenderer().isBusy()) {
-        return true;
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    return false;
+    return PollUntil([&] { coordinator.pollRenderResult(app, viewport, textures); },
+                     [&] { return !coordinator.asyncRenderer().isBusy(); }, deadline);
   };
 
   coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
@@ -4867,14 +4775,8 @@ TEST(RenderCoordinatorTest, ContinuousSelectedZoomDefersViewportPrewarmUntilStab
 
   const auto waitForCoordinator = [&]() {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (std::chrono::steady_clock::now() < deadline) {
-      coordinator.pollRenderResult(app, viewport, textures);
-      if (!coordinator.asyncRenderer().isBusy()) {
-        return true;
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    return false;
+    return PollUntil([&] { coordinator.pollRenderResult(app, viewport, textures); },
+                     [&] { return !coordinator.asyncRenderer().isBusy(); }, deadline);
   };
 
   coordinator.maybeRequestRender(app, selectTool, viewport);
@@ -4933,14 +4835,8 @@ TEST(RenderCoordinatorTest,
 
   const auto waitForCoordinator = [&]() {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (std::chrono::steady_clock::now() < deadline) {
-      coordinator.pollRenderResult(app, viewport, textures);
-      if (!coordinator.asyncRenderer().isBusy()) {
-        return true;
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    return false;
+    return PollUntil([&] { coordinator.pollRenderResult(app, viewport, textures); },
+                     [&] { return !coordinator.asyncRenderer().isBusy(); }, deadline);
   };
 
   coordinator.maybeRequestRender(app, selectTool, viewport);
@@ -4962,9 +4858,7 @@ TEST(RenderCoordinatorTest,
   coordinator.maybeRequestRender(app, selectTool, viewport);
 
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-  while (coordinator.asyncRenderer().isBusy() && std::chrono::steady_clock::now() < deadline) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  }
+  WaitUntil([&] { return !coordinator.asyncRenderer().isBusy(); }, deadline);
   EXPECT_FALSE(coordinator.asyncRenderer().isBusy())
       << "The first zoom step must cancel a stale in-flight selected prewarm instead of letting it "
          "finish over the next few frames.";
@@ -5003,14 +4897,8 @@ TEST(RenderCoordinatorTest, ViewportBoundedSelectionRequestsOverviewBeforeActive
 
   const auto waitForCoordinator = [&]() {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (std::chrono::steady_clock::now() < deadline) {
-      coordinator.pollRenderResult(app, viewport, textures);
-      if (!coordinator.asyncRenderer().isBusy()) {
-        return true;
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    return false;
+    return PollUntil([&] { coordinator.pollRenderResult(app, viewport, textures); },
+                     [&] { return !coordinator.asyncRenderer().isBusy(); }, deadline);
   };
 
   coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
@@ -5060,14 +4948,8 @@ TEST(RenderCoordinatorTest, ViewportBoundedResultWithoutOverviewIsDiscarded) {
 
   const auto waitForCoordinator = [&]() {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (std::chrono::steady_clock::now() < deadline) {
-      coordinator.pollRenderResult(app, viewport, textures);
-      if (!coordinator.asyncRenderer().isBusy()) {
-        return true;
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    return false;
+    return PollUntil([&] { coordinator.pollRenderResult(app, viewport, textures); },
+                     [&] { return !coordinator.asyncRenderer().isBusy(); }, deadline);
   };
 
   const std::uint64_t previousDisplayedVersion = coordinator.displayedDocVersion();
@@ -5240,13 +5122,8 @@ TEST(RenderCoordinatorTest, DeletedBackgroundKeepsPresentationUntilReplacementRe
   ASSERT_TRUE(coordinator.asyncRenderer().isBusy());
 
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-  while (std::chrono::steady_clock::now() < deadline) {
-    coordinator.pollRenderResult(app, viewport, textures);
-    if (!coordinator.asyncRenderer().isBusy()) {
-      break;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  }
+  PollUntil([&] { coordinator.pollRenderResult(app, viewport, textures); },
+            [&] { return !coordinator.asyncRenderer().isBusy(); }, deadline);
 
   EXPECT_FALSE(coordinator.asyncRenderer().isBusy());
   EXPECT_EQ(coordinator.displayedDocVersion(), deletedVersion);

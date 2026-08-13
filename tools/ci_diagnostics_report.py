@@ -17,10 +17,10 @@ exists).
 Usage: python3 tools/ci_diagnostics_report.py <diag_dir>
 """
 
-import gzip
 import json
 import os
 import sys
+import zlib
 from collections import deque
 
 TOP_N = 20
@@ -28,11 +28,53 @@ CONSOLE_TAIL_LINES = 80
 
 
 def load_profile_events(path):
-    """Return the list of Chrome-trace events from a Bazel --profile file."""
-    opener = gzip.open if path.endswith(".gz") else open
-    with opener(path, "rt", encoding="utf-8", errors="replace") as f:
-        data = json.load(f)
-    return data.get("traceEvents", data if isinstance(data, list) else [])
+    """Return the list of Chrome-trace events from a Bazel --profile file.
+
+    Tolerates a TRUNCATED profile. This report exists for runs that went wrong,
+    and the worst of those are killed by the job timeout while Bazel still has
+    the profile open, which leaves the gzip stream without its end-of-stream
+    marker. A plain `json.load` then raises EOFError, the caller's `|| true`
+    swallows it, and the run that most needed a report produced an empty one
+    (observed on every self-hosted run that hit the 210-minute backstop).
+
+    Bazel writes one JSON object per line inside `traceEvents`, so a truncated
+    file is still a readable prefix: decompress whatever is intact and parse
+    line by line, discarding only the final partial record.
+    """
+    raw = _read_possibly_truncated(path)
+    try:
+        return json.loads(raw).get("traceEvents", [])
+    except ValueError:
+        pass
+
+    events = []
+    for line in raw.split("\n"):
+        line = line.strip().rstrip(",")
+        if line.startswith("{") and line.endswith("}"):
+            try:
+                events.append(json.loads(line))
+            except ValueError:
+                continue
+    return events
+
+
+def _read_possibly_truncated(path):
+    """Decompress as much of `path` as is intact and return it as text."""
+    if not path.endswith(".gz"):
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            return f.read()
+
+    # zlib's incremental decompressor keeps everything it produced before it
+    # ran out of input; gzip.read() discards the partial chunk it was building.
+    decompressor = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    out = bytearray()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            try:
+                out += decompressor.decompress(chunk)
+            except zlib.error:
+                break
+    return out.decode("utf-8", errors="replace")
 
 
 def fmt_secs(us):
@@ -114,6 +156,56 @@ def console_tail_summary(name, bep_path, console_path, lines):
     lines.append("")
 
 
+def unfinished_tests_summary(path, lines):
+    """Name every test target the invocation configured but never finished.
+
+    This is the section that turns a silent stall into a diagnosis. A test that
+    is queued and never scheduled produces a `targetConfigured` event and no
+    `testSummary`, and no timeout ever fires against it, because per-test
+    timeouts only start counting once a test RUNS. Bazel's console shows only
+    the one target it happens to be printing. Listing the whole unfinished set
+    is what distinguishes "one target is stuck" from "the executor is wedged"
+    without needing live access to the runner.
+
+    Targets that are simply incompatible with the host or tagged `manual` also
+    land here, so the list is a starting point, not a verdict - but when a run
+    dies at its job backstop, this is the shortest path to the culprit.
+    """
+    if not os.path.exists(path):
+        return
+    configured = set()
+    finished = set()
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            event_id = event.get("id", {})
+            target = event_id.get("targetConfigured")
+            if target and event.get("configured", {}).get("testSize"):
+                configured.add(target.get("label", "?"))
+            summary = event_id.get("testSummary")
+            if summary:
+                finished.add(summary.get("label", "?"))
+
+    unfinished = sorted(configured - finished)
+    if not unfinished:
+        return
+    lines.append(
+        f"**Configured but never finished ({len(unfinished)} test targets):**")
+    lines.append("")
+    lines.append("These produced no test summary. A target that is queued but "
+                 "never scheduled looks exactly like this, and no per-test "
+                 "timeout applies to it.")
+    lines.append("")
+    for label in unfinished[:TOP_N * 5]:
+        lines.append(f"- `{label}`")
+    if len(unfinished) > TOP_N * 5:
+        lines.append(f"- _...and {len(unfinished) - TOP_N * 5} more_")
+    lines.append("")
+
+
 def test_summary(path, lines):
     if not os.path.exists(path):
         return
@@ -173,6 +265,7 @@ def main():
                     lines)
     console_tail_summary("Test", os.path.join(diag_dir, "test", "bep.json"),
                          os.path.join(diag_dir, "test", "console.log"), lines)
+    unfinished_tests_summary(os.path.join(diag_dir, "test", "bep.json"), lines)
     test_summary(os.path.join(diag_dir, "test", "bep.json"), lines)
 
     print("\n".join(lines))

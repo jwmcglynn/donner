@@ -2,6 +2,7 @@ load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "string_flag")
 load("@donner_config//:config.bzl", "DONNER_CONFIG")
 load("//build_defs:dep_audit.bzl", "forbidden_transitive_dep_test")
 load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_perf_sensitive_cc_library")
+load("//build_defs:package.bzl", "donner_package")
 
 # Renderer backend used by //donner/svg/renderer:renderer.
 # Override with --//donner/svg/renderer:renderer_backend=<tiny_skia|geode>
@@ -509,3 +510,5 @@ forbidden_transitive_dep_test(
     ],
     target = "//donner/svg/renderer:renderer_geode",
 )
+
+donner_package()

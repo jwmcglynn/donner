@@ -1,6 +1,7 @@
 """Geode renderer benchmarks — per-phase timing for the WebGPU/Slug backend."""
 
 load("//build_defs:rules.bzl", "donner_cc_binary")
+load("//build_defs:package.bzl", "donner_package")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -22,3 +23,5 @@ donner_cc_binary(
         "//donner/svg/renderer/geode:geode_device",
     ],
 )
+
+donner_package()

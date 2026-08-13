@@ -7,6 +7,7 @@
 ## Main library
 ##
 load("//build_defs:rules.bzl", "donner_cc_library")
+load("//build_defs:package.bzl", "donner_package")
 
 platform(
     name = "linux_aarch64",
@@ -102,3 +103,9 @@ filegroup(
         "//donner:__subpackages__",
     ],
 )
+
+donner_package(gpu_inventory_globs = [
+    "MODULE.bazel",
+    ".bazelrc",
+    "**/*.bzl",
+])

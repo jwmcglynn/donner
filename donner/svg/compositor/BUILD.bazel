@@ -1,4 +1,5 @@
 load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test", "donner_perf_sensitive_cc_library")
+load("//build_defs:package.bzl", "donner_package")
 
 COMPOSITOR_GOLDEN_PERF_TESTS = [
     "CompositorGoldenTest.SplashDragLatencyBudgetsOnRealRenderer",
@@ -252,6 +253,7 @@ donner_cc_test(
     srcs = [
         "InteractionHintNoAllocation_tests.cc",
     ],
+    opens_gpu_device = True,
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
@@ -308,3 +310,5 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
     ],
 )
+
+donner_package()

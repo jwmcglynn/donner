@@ -1,4 +1,5 @@
 load("@rules_cc//cc:defs.bzl", "cc_binary")
+load("//build_defs:package.bzl", "donner_package")
 
 # Tools for producing release assets through the editor's merged code paths.
 #
@@ -24,3 +25,5 @@ cc_binary(
         "//donner/svg/parser",
     ],
 )
+
+donner_package()

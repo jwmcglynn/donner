@@ -1,7 +1,11 @@
 load("//build_defs:rules.bzl", "donner_cc_test")
+load("//build_defs:package.bzl", "donner_package")
 
 donner_cc_test(
     name = "sub_document_cache_tests",
+    srcs = [
+        "SubDocumentCache_tests.cc",
+    ],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
@@ -9,14 +13,13 @@ donner_cc_test(
         "text_full",
         "geode",
     ],
-    srcs = [
-        "SubDocumentCache_tests.cc",
-    ],
     deps = [
-        "//donner/base/encoding:base64",
         "//donner/base:base_test_utils",
-        "//donner/svg/components/resources:resource_manager_context",
+        "//donner/base/encoding:base64",
         "//donner/svg",
+        "//donner/svg/components/resources:resource_manager_context",
         "@com_google_gtest//:gtest_main",
     ],
 )
+
+donner_package()

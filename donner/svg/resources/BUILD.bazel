@@ -1,4 +1,5 @@
 load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test")
+load("//build_defs:package.bzl", "donner_package")
 
 donner_cc_library(
     name = "sandboxed_file_resource_loader",
@@ -295,3 +296,5 @@ donner_cc_fuzzer(
         ":resource_loader_interface",
     ],
 )
+
+donner_package()

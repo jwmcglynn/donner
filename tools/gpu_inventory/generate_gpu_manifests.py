@@ -15,8 +15,21 @@ tools/gpu_inventory/manifests/:
 
 The scan is intentionally lexical: it over-approximates so that any new GPU
 operation, shader feature, or Rust dependency edge changes at least one manifest.
-Adding such a use without regenerating the manifests fails the `--check` step in
-the Lint workflow.
+It does not parse C++ or WGSL, it matches tokens - including inside comments and
+string literals - because a false positive costs a manifest line and a false
+negative costs the ratchet.
+
+The manifests record SEMANTIC FACTS ONLY: which files use which GPU operations,
+what each shader declares, which editor files touch the GPU surface, and where
+Rust enters the build graph. They deliberately record nothing derived from a
+file's bytes beyond those facts - no content hashes, no line counts. An edit
+that does not change a file's inventory facts must produce no manifest change
+and require no regeneration. Recording a hash made every edit to a GPU-using
+file a manifest change, which meant a steady stream of CI failures whose only
+remedy was a mechanical regeneration commit that reviewed as noise.
+
+//tools/gpu_inventory:manifest_freshness_tests enforces freshness under plain
+`bazel test //...`, scanning the same files as declared Bazel inputs.
 
 Usage:
   python3 tools/gpu_inventory/generate_gpu_manifests.py            # regenerate
@@ -26,11 +39,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 import subprocess
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 
 MANIFEST_DIR = Path(__file__).resolve().parent / "manifests"
@@ -52,12 +65,20 @@ EDITOR_WGPU_DEFINE_RE = re.compile(r"\bDONNER_EDITOR_WGPU\b")
 
 # GPU operation methods, per the design 0053 current-state inventory. Matched as
 # `.method(` inside files that already reference the WebGPU wrapper, so generic
-# names like `draw` do not pick up unrelated call sites. This is a curated,
-# labeled view; completeness of the ratchet does not depend on it because every
-# scanned file also records a content hash, so any edit to a wgpu-using file
-# forces a manifest regeneration. `RenderPassEncoder::end` is intentionally not
-# tracked lexically (`.end(` is ambiguous with container `end()`); pass lifetime
-# coverage comes from beginRenderPass/beginComputePass plus the content hash.
+# names like `draw` do not pick up unrelated call sites.
+#
+# This table IS the ratchet. It used to be backstopped by a per-file content
+# hash, so an unlisted operation still forced a manifest change via the hash;
+# that backstop is gone, because it also fired on every comment fix and made the
+# manifests churn constantly. Completeness now rests on this list plus the
+# token regexes above, which is a fair trade only if the list is maintained:
+# ADD AN ENTRY HERE when the backend starts calling a new WebGPU method.
+#
+# `RenderPassEncoder::end` is still not tracked as a method (`.end(` is
+# ambiguous with container `end()`). Pass lifetime is instead covered by the
+# type tokens: a file that ends a pass must name `RenderPassEncoder` or
+# `ComputePassEncoder`, and those land in `wgpuCppTokens`, which the manifest
+# records.
 OPERATION_METHODS = (
     "beginComputePass",
     "beginRenderPass",
@@ -291,7 +312,6 @@ def scan_wgsl(text: str) -> dict[str, object]:
         "builtins": builtins,
         "entryPoints": entry_points,
         "features": features,
-        "lineCount": text.count("\n") + (0 if text.endswith("\n") or not text else 1),
         "structs": structs,
     }
 
@@ -305,12 +325,6 @@ def is_first_party_source(path: str) -> bool:
     return path.endswith((".h", ".cc", ".mm"))
 
 
-def content_sha256(text: str) -> str:
-    """Content hash recorded per manifest entry so any edit to a GPU-using file
-    forces a manifest regeneration, independent of the curated token lists."""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
 def build_gpu_operations_manifest(files: dict[str, str]) -> dict[str, object]:
     """Builds the per-file WebGPU token/operation manifest for first-party sources."""
     per_file: dict[str, object] = {}
@@ -319,7 +333,6 @@ def build_gpu_operations_manifest(files: dict[str, str]) -> dict[str, object]:
             continue
         tokens = scan_wgpu_tokens(files[path])
         if tokens:
-            tokens["sha256"] = content_sha256(files[path])
             per_file[path] = tokens
 
     # Patched third-party WebGPU integration code (e.g. the ImGui WebGPU backend
@@ -362,7 +375,6 @@ def build_editor_integration_manifest(files: dict[str, str]) -> dict[str, object
         if EDITOR_WGPU_DEFINE_RE.search(text):
             entry["usesEditorWgpuDefine"] = True
         if entry:
-            entry["sha256"] = content_sha256(text)
             per_file[path] = entry
     return {"_comment": GENERATOR_NOTE, "files": per_file}
 
@@ -436,23 +448,44 @@ def render_manifest(manifest: dict[str, object]) -> str:
     return json.dumps(manifest, indent=2, sort_keys=True) + "\n"
 
 
-def collect_repo_files(repo_root: Path) -> dict[str, str]:
-    """Reads all git-tracked text files relevant to the manifest scans."""
+def is_scannable_path(path: str) -> bool:
+    """True for repo-relative paths whose contents feed any manifest scan."""
+    return (
+        is_first_party_source(path)
+        or path.startswith("donner/")
+        or path.endswith((".wgsl", ".patch"))
+        or is_rust_source_path(path)
+        or BUILD_GRAPH_FILE_RE.search(path) is not None
+    )
+
+
+def collect_files(repo_root: Path, paths: Iterable[str]) -> dict[str, str]:
+    """Reads the scannable subset of `paths` into a repo-relative path -> text map.
+
+    The scan itself is pure over this mapping, which is what lets the same code
+    serve two very different callers: the regeneration CLI, which enumerates the
+    tree with git, and the Bazel test, which is handed its inputs as runfiles and
+    must never shell out to git.
+    """
     files: dict[str, str] = {}
-    for path in git_tracked_files(repo_root):
-        interesting = (
-            is_first_party_source(path)
-            or path.startswith("donner/")
-            or path.endswith((".wgsl", ".patch"))
-            or is_rust_source_path(path)
-            or BUILD_GRAPH_FILE_RE.search(path) is not None
-        )
-        if not interesting:
+    for path in paths:
+        if not is_scannable_path(path):
             continue
         text = read_text_or_none(repo_root / path)
         if text is not None:
             files[path] = text
     return files
+
+
+def collect_repo_files(repo_root: Path) -> dict[str, str]:
+    """Reads all git-tracked text files relevant to the manifest scans.
+
+    Regeneration only. `git ls-files` is the right enumeration for a human
+    running the regenerate command in a real checkout, and the wrong one inside
+    a Bazel test: a test that walks the source tree has undeclared inputs, so it
+    is neither cacheable nor visible to change-based target selection.
+    """
+    return collect_files(repo_root, git_tracked_files(repo_root))
 
 
 def main() -> int:

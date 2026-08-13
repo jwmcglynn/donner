@@ -2,11 +2,16 @@ load("@rules_python//python:defs.bzl", "py_binary", "py_test")
 
 # GPU runtime inventory manifests and no-Rust-dependency verifier (design 0053).
 #
-# Whole-tree scans (`generate_gpu_manifests.py --check` and
-# `check_no_rust_dependencies.py`) run as standalone steps in the Lint workflow
-# because sandboxed bazel tests cannot see the full source tree. The py_tests
-# here cover the pure scanning/verification logic and the structural integrity
-# of the checked-in manifests.
+# Manifest freshness is `manifest_freshness_tests` below: an ordinary bazel test
+# whose scan inputs are declared as runfiles via the per-package
+# `gpu_inventory_srcs` filegroups. It used to be a Lint-workflow step, on the
+# premise that a sandboxed test cannot see the source tree - true, but a test
+# does not need the source tree, it needs its inputs declared, which also gets
+# it caching and correct change detection.
+#
+# `check_no_rust_dependencies.py` still runs as a Lint step: it is report-only
+# by design (0053 phase 6 makes it blocking) and it inspects the vendored
+# `third_party/tiny-skia-cpp` subtree, which .bazelignore hides from Bazel.
 
 filegroup(
     name = "manifests",
@@ -52,4 +57,87 @@ py_test(
         ":manifests",
     ],
     deps = ["@rules_python//python/runfiles"],
+)
+
+# Freshness gate for the checked-in manifests, replacing the Lint workflow's
+# `generate_gpu_manifests.py --check` step. Runs under plain `bazel test //...`.
+#
+# `data` is the scan universe, declared as real inputs. That is the whole point:
+# a test that walked the source tree would have undeclared inputs, so Bazel
+# could neither cache it nor tell change-based target selection which edits
+# matter. Each `gpu_inventory_srcs` filegroup covers one package; a package that
+# gains GPU code but not a filegroup is caught by
+# `test_every_inventoried_file_is_a_declared_input`, not silently under-scanned.
+py_test(
+    name = "manifest_freshness_tests",
+    size = "small",
+    srcs = [
+        "generate_gpu_manifests.py",
+        "manifest_freshness_tests.py",
+    ],
+    data = [
+        "rust_allowlist.json",
+        ":manifests",
+        "//:gpu_inventory_srcs",
+        "//build_defs:gpu_inventory_srcs",
+        "//donner/base:gpu_inventory_srcs",
+        "//donner/base/element:gpu_inventory_srcs",
+        "//donner/base/encoding:gpu_inventory_srcs",
+        "//donner/base/fonts:gpu_inventory_srcs",
+        "//donner/base/parser:gpu_inventory_srcs",
+        "//donner/base/xml:gpu_inventory_srcs",
+        "//donner/base/xml/components:gpu_inventory_srcs",
+        "//donner/benchmarks:gpu_inventory_srcs",
+        "//donner/css:gpu_inventory_srcs",
+        "//donner/css/parser:gpu_inventory_srcs",
+        "//donner/editor:gpu_inventory_srcs",
+        "//donner/editor/app:gpu_inventory_srcs",
+        "//donner/editor/app/tests:gpu_inventory_srcs",
+        "//donner/editor/gui:gpu_inventory_srcs",
+        "//donner/editor/repro:gpu_inventory_srcs",
+        "//donner/editor/repro/tests:gpu_inventory_srcs",
+        "//donner/editor/tests:gpu_inventory_srcs",
+        "//donner/editor/tools:gpu_inventory_srcs",
+        "//donner/editor/wasm:gpu_inventory_srcs",
+        "//donner/gpu:gpu_inventory_srcs",
+        "//donner/gpu/metal:gpu_inventory_srcs",
+        "//donner/gpu/metal/tests:gpu_inventory_srcs",
+        "//donner/gpu/shader:gpu_inventory_srcs",
+        "//donner/svg:gpu_inventory_srcs",
+        "//donner/svg/components:gpu_inventory_srcs",
+        "//donner/svg/components/animation:gpu_inventory_srcs",
+        "//donner/svg/components/filter:gpu_inventory_srcs",
+        "//donner/svg/components/layout:gpu_inventory_srcs",
+        "//donner/svg/components/paint:gpu_inventory_srcs",
+        "//donner/svg/components/resources:gpu_inventory_srcs",
+        "//donner/svg/components/resources/tests:gpu_inventory_srcs",
+        "//donner/svg/components/shadow:gpu_inventory_srcs",
+        "//donner/svg/components/shape:gpu_inventory_srcs",
+        "//donner/svg/components/style:gpu_inventory_srcs",
+        "//donner/svg/components/text:gpu_inventory_srcs",
+        "//donner/svg/compositor:gpu_inventory_srcs",
+        "//donner/svg/core:gpu_inventory_srcs",
+        "//donner/svg/core/tests:gpu_inventory_srcs",
+        "//donner/svg/graph:gpu_inventory_srcs",
+        "//donner/svg/graph/tests:gpu_inventory_srcs",
+        "//donner/svg/parser:gpu_inventory_srcs",
+        "//donner/svg/properties:gpu_inventory_srcs",
+        "//donner/svg/properties/tests:gpu_inventory_srcs",
+        "//donner/svg/renderer:gpu_inventory_srcs",
+        "//donner/svg/renderer/benchmarks:gpu_inventory_srcs",
+        "//donner/svg/renderer/common:gpu_inventory_srcs",
+        "//donner/svg/renderer/geode:gpu_inventory_srcs",
+        "//donner/svg/renderer/testdata:gpu_inventory_srcs",
+        "//donner/svg/renderer/tests:gpu_inventory_srcs",
+        "//donner/svg/renderer/wasm:gpu_inventory_srcs",
+        "//donner/svg/resources:gpu_inventory_srcs",
+        "//donner/svg/tests:gpu_inventory_srcs",
+        "//donner/svg/text:gpu_inventory_srcs",
+        "//donner/svg/tool:gpu_inventory_srcs",
+        "//examples:gpu_inventory_srcs",
+        "//examples/third_party/patches:gpu_inventory_srcs",
+        "//third_party:gpu_inventory_srcs",
+        "//third_party/patches:gpu_inventory_srcs",
+        "//third_party/webgpu-cpp:gpu_inventory_srcs",
+    ],
 )

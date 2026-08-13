@@ -4,7 +4,11 @@
 # core module — Bazel forbids cross-module patch label references, so each
 # module must keep its own copy. If you change the donner core copy, change
 # this copy too. (presubmit can be taught to check this with `cmp`.)
+load("//build_defs:package.bzl", "donner_package")
+
 exports_files([
     "imgui_bazel_build_files.patch",
     "glfw_bazel_build_files.patch",
 ])
+
+donner_package()

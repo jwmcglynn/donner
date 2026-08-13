@@ -1,4 +1,5 @@
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
+load("//build_defs:package.bzl", "donner_package")
 
 # donner::gpu::metal - the Metal backend of the Donner GPU runtime (design doc
 # 0053, change sequence packet 6).
@@ -27,3 +28,5 @@ objc_library(
         "//donner/gpu/shader",
     ],
 )
+
+donner_package()
