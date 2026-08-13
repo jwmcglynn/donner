@@ -4,54 +4,38 @@ Helper rules, such as for building fuzzers.
 
 load("@bazel_tools//tools/cpp:toolchain_utils.bzl", "find_cpp_toolchain")
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
-load("@rules_python//python:defs.bzl", "py_test")
-
-# Script that enforces banned source patterns (no `long long`, no
-# `std::aligned_storage`, no user-defined literal operators, no hidden
-# Unicode whitespace / typographic punctuation). See
-# docs/coding_style.md "Language and Library Features".
-_BANNED_PATTERNS_SCRIPT = "//build_defs:check_banned_patterns.py"
 
 def _banned_patterns_lint_test(name, srcs, hdrs, tags = [], **_kwargs):
-    """Emit a py_test that runs check_banned_patterns.py on srcs + hdrs.
+    """Emits nothing. The banned-patterns check is now one repo-wide scan.
 
-    One lint test is emitted per donner_cc_{library,test,binary} via this
-    helper, so `bazel test //...` catches new banned patterns automatically.
-    The test is tagged `lint` so it can be filtered if desired.
+    This used to emit one `{name}_lint` py_test per
+    donner_cc_{library,test,binary,fuzzer}, producing 476 test targets. Measured
+    from a full self-hosted CI run's build event log, those 476 targets burned
+    714 of the suite's 2297 test CPU-seconds - 31% of the entire test suite -
+    to run a regex scan whose real work is 2.5 seconds for the whole repository
+    in a single process. Essentially all of it was per-target interpreter
+    startup, runfiles staging, and test-runner overhead; the scan itself is
+    microseconds per file.
+
+    The check did not shrink, it got BROADER. `tools/lint.sh` feeds
+    check_banned_patterns.py every C++ file under donner/ and examples/,
+    including the ones this macro could never see: `select()`-valued srcs/hdrs
+    (skipped outright above), label-form srcs from other rules, files no target
+    lists at all, and anything tagged `manual`. Verified clean over all 2479
+    files at the commit that made this change.
+
+    The signature is preserved so the call sites in donner_cc_library /
+    donner_cc_test / donner_cc_binary stay unchanged, and so this rationale
+    sits where the next reader will look for the missing `_lint` targets.
 
     Args:
-      name: Parent target name. The lint test is named `{name}_lint`.
-      srcs: Source files to lint.
-      hdrs: Header files to lint.
-      tags: Tags from the parent rule. `manual` is propagated so libraries
-        tagged manual don't pull their lint into `bazel test //...`.
+      name: Unused; parent target name.
+      srcs: Unused; source files.
+      hdrs: Unused; header files.
+      tags: Unused; tags from the parent rule.
+      **_kwargs: Unused.
     """
-
-    # select()-valued srcs/hdrs can't be enumerated at load time; skip linting
-    # them here. Those files are still linted whenever another target references
-    # them as a plain list.
-    if type(srcs) != "list" or type(hdrs) != "list":
-        return
-
-    # Only lint files we own in this package (string entries). Label-form
-    # srcs (e.g. ":generated_header") come from other rules and are skipped.
-    lintable = [f for f in (srcs + hdrs) if type(f) == "string" and not f.startswith(":") and not f.startswith("//")]
-    if not lintable:
-        return
-
-    propagated_tags = ["lint", "banned_patterns"]
-    if "manual" in tags:
-        propagated_tags.append("manual")
-
-    py_test(
-        name = name + "_lint",
-        srcs = [_BANNED_PATTERNS_SCRIPT],
-        main = "check_banned_patterns.py",
-        args = ["$(rootpath {})".format(f) for f in lintable],
-        data = lintable,
-        tags = propagated_tags,
-        size = "small",
-    )
+    _ = (name, srcs, hdrs, tags)  # @unused
 
 def llvm21_macos_runtime_rpath_linkopts():
     """

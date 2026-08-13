@@ -69,20 +69,17 @@ jobs:
             ${{ runner.os }}-bazel-lint-
             ${{ runner.os }}-bazel-
 
-      - name: Check banned patterns in examples/
+      # Whole-repo banned-patterns gate. This replaces the 476 per-target
+      # `{name}_lint` py_tests the donner_cc_* macros used to emit, which cost
+      # 714 of the test suite's 2297 CPU-seconds to do what takes ~2.5 s here in
+      # one process. The file set is strictly larger than the macros reached:
+      # select()-valued and label-form srcs, manual-tagged targets, and files no
+      # target enumerates are all covered now. `tools/lint.sh` is also the
+      # documented local command, so this job and a contributor's machine run
+      # exactly the same check.
+      - name: Check banned patterns
         shell: bash
-        run: |
-          # Examples/ isn't fully enumerated by the donner_cc_* py_test lint
-          # macros (some examples are tagged manual and excluded from
-          # `bazel test //...`), so we run the checker here directly.
-          mapfile -t example_sources < <(
-            find examples -maxdepth 1 -type f -name '*.cc' \
-              ! -name 'render_test.cc' \
-              ! -name 'wasm_reproducer.cc' \
-              | sort
-          )
-
-          python3 build_defs/check_banned_patterns.py donner "${example_sources[@]}"
+        run: tools/lint.sh
 
       - name: Check design document provenance
         run: python3 tools/check_design_doc_provenance.py
