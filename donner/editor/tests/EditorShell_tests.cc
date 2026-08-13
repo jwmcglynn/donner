@@ -249,6 +249,16 @@ TEST(EditorShellInternalTest, CursorForTransformHandleIntentMapsResizeAndRotateH
             ImGuiMouseCursor_ResizeNESW);
 }
 
+// The hint the shell turns each pen hover intent into. `DragAnchor` deliberately
+// has no nib of its own - the shell swaps in the anchor-point cursor for it, so
+// this returns the plain nib as an inert default.
+TEST(EditorShellInternalTest, PenCursorHintForIntentMapsEachHoverIntentToItsNib) {
+  EXPECT_EQ(internal::PenCursorHintForIntent(PenHoverIntent::PlaceAnchor), PenCursorHint::Base);
+  EXPECT_EQ(internal::PenCursorHintForIntent(PenHoverIntent::ClosePath), PenCursorHint::Close);
+  EXPECT_EQ(internal::PenCursorHintForIntent(PenHoverIntent::InsertAnchor), PenCursorHint::Add);
+  EXPECT_EQ(internal::PenCursorHintForIntent(PenHoverIntent::DragAnchor), PenCursorHint::Base);
+}
+
 TEST(EditorShellInternalTest, TextToolHintShowsOnlyWhileIdle) {
   // Idle text tool: the double-click / drag affordances are invisible, so
   // the hint must teach them.

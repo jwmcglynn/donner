@@ -968,6 +968,45 @@ std::optional<Path> PenTool::previewSegmentPath(const Vector2d& documentPoint,
   return builder.build();
 }
 
+PenHoverIntent PenTool::hoverIntentAt(const EditorApp& editor, const Vector2d& documentPoint,
+                                      const MouseModifiers& modifiers) const {
+  if (!editor.document().hasDocument()) {
+    return PenHoverIntent::PlaceAnchor;
+  }
+
+  const double toleranceDoc =
+      kPointHitScreenTolerance / std::max(modifiers.pixelsPerDocUnit, 0.000001);
+
+  if (activePath_.has_value()) {
+    if (!modifiers.command && shouldCloseAt(documentPoint, modifiers)) {
+      return PenHoverIntent::ClosePath;
+    }
+    if (HitTestPoints(anchors_, documentPoint, toleranceDoc)) {
+      return PenHoverIntent::DragAnchor;
+    }
+    // Cmd/Ctrl restricts the gesture to point editing, so a miss does nothing;
+    // the plain nib is the honest cursor for "this click will not land".
+    if (!modifiers.command && HitTestSegments(anchors_, closed_, documentPoint, toleranceDoc)) {
+      return PenHoverIntent::InsertAnchor;
+    }
+    return PenHoverIntent::PlaceAnchor;
+  }
+
+  const std::optional<SelectedPathState> state = stateForSelectedPath(editor);
+  if (!state.has_value()) {
+    return PenHoverIntent::PlaceAnchor;
+  }
+
+  if (HitTestPoints(state->anchors, documentPoint, toleranceDoc)) {
+    return PenHoverIntent::DragAnchor;
+  }
+  if (!modifiers.command &&
+      HitTestSegments(state->anchors, state->closed, documentPoint, toleranceDoc)) {
+    return PenHoverIntent::InsertAnchor;
+  }
+  return PenHoverIntent::PlaceAnchor;
+}
+
 bool PenTool::wouldCloseAt(const Vector2d& documentPoint, const MouseModifiers& modifiers) const {
   return activePath_.has_value() && !editingExistingPath_ && !closed_ &&
          shouldCloseAt(documentPoint, modifiers);

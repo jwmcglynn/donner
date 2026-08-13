@@ -28,7 +28,7 @@
       ]
     },
     "donner/editor/EditorShell.cc": {
-      "sha256": "19248554c772ddd33ce46d136f9c9b65c70c1ac01c4c0cd7d94ce66c5e7ebcf8",
+      "sha256": "cc2cda9272dfbeb10c679e5b1b2ee2f610ea4dbb319948662dd4ad70495ee89e",
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
         "wgpuLifetimeTextureCreates"
@@ -245,7 +245,7 @@
       ]
     },
     "donner/editor/tests/EditorShell_tests.cc": {
-      "sha256": "cfdbf5a296702330c33d36b2810793ec103e7f7cbaa3667c48943039908a40a3",
+      "sha256": "1cb3b06937e7675229e8902288a8acbae905444ece3fe6ff7cc4653bcdb10d61",
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
         "wgpuLifetimeTextureCreates"
