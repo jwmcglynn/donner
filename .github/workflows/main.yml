@@ -233,8 +233,6 @@ jobs:
       fallback: ${{ steps.determine.outputs.fallback }}
       affected: ${{ steps.determine.outputs.affected }}
       full_test: ${{ steps.determine.outputs.full_test }}
-      large_change: ${{ steps.determine.outputs.large_change }}
-      changed_file_count: ${{ steps.determine.outputs.changed_file_count }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -311,15 +309,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          SELF_HOSTED_MAX_CHANGED_FILES=75
 
           if [[ "${{ github.event_name }}" != "pull_request" ]]; then
             echo "Non-PR event; keeping full //... coverage."
             echo "fallback=true" >> "$GITHUB_OUTPUT"
             echo "affected=" >> "$GITHUB_OUTPUT"
             echo "full_test=false" >> "$GITHUB_OUTPUT"
-            echo "large_change=false" >> "$GITHUB_OUTPUT"
-            echo "changed_file_count=0" >> "$GITHUB_OUTPUT"
 
             if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
               cached="$HOME/.cache/bazel-diff-base-hashes/${{ github.sha }}.json"
@@ -345,8 +340,6 @@ jobs:
             echo "fallback=true" >> "$GITHUB_OUTPUT"
             echo "affected=" >> "$GITHUB_OUTPUT"
             echo "full_test=false" >> "$GITHUB_OUTPUT"
-            echo "large_change=false" >> "$GITHUB_OUTPUT"
-            echo "changed_file_count=0" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -355,8 +348,6 @@ jobs:
             echo "fallback=true" >> "$GITHUB_OUTPUT"
             echo "affected=" >> "$GITHUB_OUTPUT"
             echo "full_test=true" >> "$GITHUB_OUTPUT"
-            echo "large_change=false" >> "$GITHUB_OUTPUT"
-            echo "changed_file_count=0" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -377,14 +368,6 @@ jobs:
             diff_base="$BASE_SHA"
           fi
           changed_files="$(git diff --name-only "$diff_base" "$HEAD_SHA")"
-          changed_file_count="$(printf '%s\n' "$changed_files" | sed '/^$/d' | wc -l | tr -d ' ')"
-          large_change=false
-          if (( changed_file_count > SELF_HOSTED_MAX_CHANGED_FILES )); then
-            large_change=true
-            echo "Large PR (${changed_file_count} changed files) exceeds self-hosted routing cap (${SELF_HOSTED_MAX_CHANGED_FILES}); using hosted Linux lane."
-          fi
-          echo "large_change=$large_change" >> "$GITHUB_OUTPUT"
-          echo "changed_file_count=$changed_file_count" >> "$GITHUB_OUTPUT"
 
           if [[ -z "$changed_files" ]]; then
             echo "No changed files detected; falling back to //...."
@@ -502,13 +485,11 @@ jobs:
           echo "affected=$affected" >> "$GITHUB_OUTPUT"
 
   linux:
-    # GitHub-hosted x86_64 baseline. Suppressed for small operator PRs when the
-    # self-hosted ARM64 lane is active (see gate comment above), but broad PRs
-    # stay hosted so a self-hosted SLA timeout cannot leave the only
-    # required Linux path canceled.
+    # GitHub-hosted x86_64 baseline. Suppressed when the trusted self-hosted
+    # ARM64 lane is active (see gate comment above).
     runs-on: ubuntu-24.04
     needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && (needs.gatekeeper.outputs.use_self_hosted_linux != 'true' || needs.determine-targets.outputs.large_change == 'true') }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux != 'true' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -574,7 +555,7 @@ jobs:
 
   # Non-lld linker canary, split into its own always-on hosted job so it runs
   # regardless of Linux runner routing. The hosted `linux` lane is suppressed
-  # for small operator PRs when self-hosted routing is active, and the
+  # when self-hosted routing is active, and the
   # self-hosted lane's hermetic LLVM toolchain ships lld (not gold), so the gold
   # canary has no home there. Keeping it on a dedicated ubuntu-24.04 job runs it
   # on the runner that actually has gold and preserves coverage on every
@@ -638,7 +619,7 @@ jobs:
   linux-self-hosted-turnstile:
     runs-on: ubuntu-24.04
     needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' && needs.determine-targets.outputs.large_change != 'true' }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' }}
     timeout-minutes: 165
     steps:
       - name: Checkout turnstile action
@@ -656,7 +637,6 @@ jobs:
   # Operator's ARM64 Linux runs on the operator's self-hosted runner.
   # Replaces `linux` for trusted operator PRs and main pushes (extra arch
   # coverage + homelab cache). Renovate and non-operator runs stay hosted.
-  # Large-change PRs (over the changed-file cap) stay on hosted Linux.
   # The NixOS host pre-provisions the toolchain (fontconfig, freetype, mesa,
   # vulkan, X11, clang-tidy) and writes bazel-cache1 over LAN gRPC, so there
   # is no apt/setup-bazel step. The runner intentionally has no host GPU
@@ -666,7 +646,7 @@ jobs:
   linux-self-hosted:
     runs-on: [self-hosted, linux, arm64]
     needs: [gatekeeper, determine-targets, linux-self-hosted-turnstile]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' && needs.determine-targets.outputs.large_change != 'true' }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' }}
     # RE-availability SLA lane. A healthy affected-target run is ~21 min. This
     # budget applies only after the hosted turnstile admits this job. It retains
     # ample room for an unusually slow build without making the admission wait
