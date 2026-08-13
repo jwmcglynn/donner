@@ -14,8 +14,8 @@ namespace donner::svg {
  *
  * A default-constructed catalog contains an embedded provider (curated Google Fonts) followed by a
  * system provider (CoreText on macOS; a no-op stub elsewhere). Providers are consulted in order, so
- * resolution and `loadFace()` prefer **Embedded** families over **System** families, and `families()`
- * lists the Embedded group before the System group.
+ * resolution and `loadFace()` prefer **Embedded** families over **System** families, and
+ * `families()` lists the Embedded group before the System group.
  *
  * The catalog implements \ref FontFamilyProvider, so it can be installed directly on a \ref
  * FontManager (via `setFontProvider()` or `SetDefaultFontProvider()`).
@@ -61,15 +61,19 @@ public:
   std::optional<FontFamilyInfo> find(std::string_view family) const;
 
   /// Raw sfnt bytes for \p family from the first provider that has it (Embedded before System).
-  std::vector<uint8_t> loadFamilyData(std::string_view family) const override;
+  std::vector<uint8_t> loadFamilyData(std::string_view family,
+                                      const FontFaceRequest& request) const override;
 
   // Picker conveniences:
 
   /// Families from a single source (Embedded or System), sorted by name.
   std::vector<FontFamilyInfo> familiesBySource(FontSource source) const;
 
-  /// Alias for `loadFamilyData()`, named for the picker's preview use.
-  std::vector<uint8_t> loadFace(std::string_view family) const { return loadFamilyData(family); }
+  /// Alias for `loadFamilyData()`, named for the picker's preview use. Previews show the family's
+  /// default face, so this asks for the regular upright one.
+  std::vector<uint8_t> loadFace(std::string_view family) const {
+    return loadFamilyData(family, FontFaceRequest{});
+  }
 
 private:
   std::vector<std::unique_ptr<FontFamilyProvider>> providers_;

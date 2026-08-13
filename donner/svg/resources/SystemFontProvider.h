@@ -13,8 +13,9 @@ namespace donner::svg {
  *
  * On macOS this enumerates families via CoreText (`CTFontManagerCopyAvailableFontFamilyNames`) and
  * materializes a flat sfnt byte stream on demand by reconstructing the font's tables through
- * CoreText (which works even for `.ttc`/`.dfont` members). All families report \ref
- * FontSource::System.
+ * CoreText (which works even for `.ttc`/`.dfont` members). Faces within a family are scored against
+ * the requested weight/style/stretch, so bold and italic resolve to the real designed face. All
+ * families report \ref FontSource::System.
  *
  * On non-Apple platforms this is a stub: it enumerates nothing and loads nothing, so the catalog
  * still compiles and behaves (embedded fonts only).
@@ -25,7 +26,8 @@ public:
 
   std::vector<FontFamilyInfo> families() const override;
   bool hasFamily(std::string_view family) const override;
-  std::vector<uint8_t> loadFamilyData(std::string_view family) const override;
+  std::vector<uint8_t> loadFamilyData(std::string_view family,
+                                      const FontFaceRequest& request) const override;
 
   /// Returns true if this build enumerates real system fonts (i.e. macOS), false for the stub.
   static bool isSupported();

@@ -10,7 +10,11 @@
 #include <vector>
 
 #include "donner/base/fonts/SfntUtils.h"
+#include "donner/svg/core/FontStretch.h"
+#include "donner/svg/core/FontStyle.h"
 #include "embed_resources/PublicSansFont.h"
+
+using testing::Eq;
 
 namespace donner::svg {
 
@@ -62,8 +66,10 @@ public:
     return false;
   }
 
-  std::vector<uint8_t> loadFamilyData(std::string_view family) const override {
+  std::vector<uint8_t> loadFamilyData(std::string_view family,
+                                      const FontFaceRequest& request) const override {
     ++loadCalls;
+    lastRequest = request;
     if (!hasFamily(family)) {
       return {};
     }
@@ -72,6 +78,7 @@ public:
   }
 
   mutable int loadCalls = 0;
+  mutable FontFaceRequest lastRequest;
 
 private:
   std::vector<std::string> families_;
@@ -533,6 +540,40 @@ TEST(FontManagerTest, FallsBackToPublicSansWhenProviderLacksFamily) {
   EXPECT_TRUE(static_cast<bool>(handle));
   EXPECT_EQ(handle, mgr.fallbackFont());
   EXPECT_EQ(provider.loadCalls, 0);
+}
+
+// Regression: a family is a set of faces, so the provider needs the requested weight/style/stretch
+// to pick one. Dropping them here is what makes `font-weight: bold` render as regular for every
+// catalog-resolved family.
+TEST(FontManagerTest, ProviderReceivesTheRequestedFace) {
+  Registry registry;
+  FontManager mgr(registry);
+  FakeFontProvider provider({"ProviderFamily"});
+  mgr.setFontProvider(&provider);
+
+  (void)mgr.findFont("ProviderFamily", 700, static_cast<int>(FontStyle::Italic),
+                     static_cast<int>(FontStretch::Condensed));
+
+  EXPECT_THAT(provider.lastRequest,
+              Eq(FontFaceRequest{
+                  .weight = 700, .style = FontStyle::Italic, .stretch = FontStretch::Condensed}));
+}
+
+// Faces are cached per requested face, not per family, so a later bold lookup is not served the
+// regular face out of the cache.
+TEST(FontManagerTest, ProviderIsConsultedOncePerRequestedFace) {
+  Registry registry;
+  FontManager mgr(registry);
+  FakeFontProvider provider({"ProviderFamily"});
+  mgr.setFontProvider(&provider);
+
+  (void)mgr.findFont("ProviderFamily", 400);
+  (void)mgr.findFont("ProviderFamily", 400);
+  EXPECT_EQ(provider.loadCalls, 1);
+
+  (void)mgr.findFont("ProviderFamily", 700);
+  EXPECT_EQ(provider.loadCalls, 2);
+  EXPECT_THAT(provider.lastRequest.weight, Eq(700));
 }
 
 TEST(FontManagerTest, DefaultProviderAdoptedByNewInstances) {

@@ -487,23 +487,24 @@ TEST(SVGTextElementCacheTests, FontSizeAttributeChangeInvalidatesCache) {
               testing::DoubleNear(lengthBefore * 2.0, lengthBefore * 0.05));
 }
 
-TEST(SVGTextElementCacheTests, LetterSpacingAttributeChangeInvalidatesCache) {
+TEST(SVGTextElementCacheTests, TextAnchorAttributeChangeInvalidatesCache) {
   SVGDocument doc = instantiateSubtree(R"-(
     <svg viewBox="0 0 200 40">
-      <text id="t" x="10" y="20" font-family="fallback-font" font-size="12px">ABCDEF</text>
+      <text id="t" x="100" y="20" font-family="fallback-font" font-size="12px">ABCDEF</text>
     </svg>
   )-",
                                        kExperimentalOptions);
 
   auto textElement = doc.querySelector("#t")->cast<SVGTextElement>();
 
-  const double lengthBefore = textElement.getComputedTextLength();
-  ASSERT_GT(lengthBefore, 0.0);
+  const double length = textElement.getComputedTextLength();
+  ASSERT_GT(length, 0.0);
+  ASSERT_THAT(textElement.getStartPositionOfChar(0).x, testing::DoubleNear(100.0, 0.5));
 
-  textElement.setAttribute("letter-spacing", "10px");
+  textElement.setAttribute("text-anchor", "end");
 
-  // Five inter-character gaps across "ABCDEF" grow by 10px each.
-  EXPECT_THAT(textElement.getComputedTextLength(), testing::DoubleNear(lengthBefore + 50.0, 1.0));
+  // `text-anchor: end` puts the *end* of the run on the anchor point.
+  EXPECT_THAT(textElement.getStartPositionOfChar(0).x, testing::DoubleNear(100.0 - length, 0.5));
 }
 
 TEST(SVGTextElementCacheTests, StyleAttributeChangeInvalidatesCache) {

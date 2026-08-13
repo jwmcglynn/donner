@@ -2,11 +2,8 @@
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Vector2.h"
-#include "donner/base/xml/components/TreeComponent.h"
-#include "donner/svg/components/DirtyFlagsComponent.h"
-#include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
-#include "donner/svg/components/text/TextRootComponent.h"
+#include "donner/svg/components/text/TextInvalidation.h"
 #include "donner/svg/text/TextEngine.h"
 
 namespace donner::svg {
@@ -36,23 +33,7 @@ SVGTextContentElement::SVGTextContentElement(EntityHandle handle) : SVGGraphicsE
 
 void SVGTextContentElement::invalidateTextGeometry() {
   [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
-  // Walk up to the text root and remove cached text layout.
-  Registry& registry = *handle_.registry();
-  Entity current = handle_.entity();
-  while (current != entt::null) {
-    if (registry.any_of<components::TextRootComponent>(current)) {
-      registry.remove<components::ComputedTextGeometryComponent>(current);
-      registry.get_or_emplace<components::DirtyFlagsComponent>(current).mark(
-          components::DirtyFlagsComponent::TextGeometry |
-          components::DirtyFlagsComponent::RenderInstance);
-      return;
-    }
-    const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
-    if (!tree) {
-      break;
-    }
-    current = tree->parent();
-  }
+  (void)components::InvalidateTextLayout(handle_);
 }
 
 std::vector<Path> SVGTextContentElement::computedGlyphPaths() const {

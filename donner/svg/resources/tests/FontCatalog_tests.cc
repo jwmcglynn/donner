@@ -41,7 +41,8 @@ public:
                        [&](const std::string& name) { return name == family; });
   }
 
-  std::vector<uint8_t> loadFamilyData(std::string_view family) const override {
+  std::vector<uint8_t> loadFamilyData(std::string_view family,
+                                      const FontFaceRequest& /*request*/) const override {
     if (!hasFamily(family)) {
       return {};
     }
@@ -98,7 +99,7 @@ TEST(EmbeddedFontProviderTest, SetSpansMultipleCategories) {
 TEST(EmbeddedFontProviderTest, EveryAdvertisedFamilyLoadsValidSfntBytes) {
   EmbeddedFontProvider provider;
   for (const FontFamilyInfo& info : provider.families()) {
-    const std::vector<uint8_t> data = provider.loadFamilyData(info.family);
+    const std::vector<uint8_t> data = provider.loadFamilyData(info.family, FontFaceRequest{});
     ASSERT_GE(data.size(), 4u) << info.family;
     // Every curated source is a TrueType sfnt with magic 0x00010000.
     EXPECT_EQ(data[0], 0x00) << info.family;
@@ -113,7 +114,7 @@ TEST(EmbeddedFontProviderTest, LookupIsCaseInsensitive) {
   EXPECT_TRUE(provider.hasFamily("inter"));
   EXPECT_TRUE(provider.hasFamily("JETBRAINS MONO"));
   EXPECT_FALSE(provider.hasFamily("Definitely Not A Font"));
-  EXPECT_TRUE(provider.loadFamilyData("Definitely Not A Font").empty());
+  EXPECT_TRUE(provider.loadFamilyData("Definitely Not A Font", FontFaceRequest{}).empty());
 }
 
 // --- FontCatalog aggregation + precedence -----------------------------------------------------
@@ -198,7 +199,7 @@ TEST(SystemFontProviderTest, LoadsSfntForKnownSystemFamily) {
   if (!provider.hasFamily("Helvetica")) {
     GTEST_SKIP() << "Helvetica not available on this host";
   }
-  const std::vector<uint8_t> data = provider.loadFamilyData("Helvetica");
+  const std::vector<uint8_t> data = provider.loadFamilyData("Helvetica", FontFaceRequest{});
   ASSERT_GE(data.size(), 4u);
   const uint32_t magic = (uint32_t(data[0]) << 24) | (uint32_t(data[1]) << 16) |
                          (uint32_t(data[2]) << 8) | uint32_t(data[3]);
@@ -210,7 +211,8 @@ TEST(SystemFontProviderTest, LoadsSfntForKnownSystemFamily) {
 TEST(SystemFontProviderTest, UnknownFamilyReturnsEmpty) {
   SystemFontProvider provider;
   EXPECT_FALSE(provider.hasFamily("Definitely Not Installed Font XYZ"));
-  EXPECT_TRUE(provider.loadFamilyData("Definitely Not Installed Font XYZ").empty());
+  EXPECT_TRUE(
+      provider.loadFamilyData("Definitely Not Installed Font XYZ", FontFaceRequest{}).empty());
 }
 
 // Regression: a catalog family is a *set* of faces, and `font-weight`/`font-style` pick which one.
