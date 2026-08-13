@@ -390,7 +390,7 @@
         "submit",
         "unmap"
       ],
-      "sha256": "858fa215519ef8198a5e85cb3b1be8db3e81d39eef5132b0cd9e90a1e2bcf72e",
+      "sha256": "a1250a0ef8282749cb2119eb826c5f2ff5780e1d78b6ca91d849796fd3d15726",
       "wgpuCFunctions": [
         "wgpuDevicePoll",
         "wgpuLabel"

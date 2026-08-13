@@ -168,6 +168,42 @@ TEST(RendererPublicApiTest, DrawProducesSnapshotAndPng) {
   EXPECT_GT(std::filesystem::file_size(outputPath), 0u);
 }
 
+// An atlas pass draws several independent documents into one frame. Nothing
+// about a renderer's draw batching may key on an entity id alone: ids are only
+// unique within one document's registry, and freshly parsed documents of the
+// same shape hand out the same ids. When that leaks, the second tile inherits
+// the first tile's geometry - the whole atlas renders as copies of tile 0. Both
+// documents here are solid black fills of the same size, which is exactly the
+// case an instanced-fill batch tries to coalesce.
+TEST(RendererPublicApiTest, AtlasTilesKeepTheirOwnDocumentsGeometry) {
+  SVGDocument leftHalf = ParseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+        <rect width="8" height="16" fill="#000000" />
+      </svg>
+    )svg");
+  SVGDocument rightHalf = ParseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+        <rect x="8" width="8" height="16" fill="#000000" />
+      </svg>
+    )svg");
+
+  const std::array<AtlasDocumentPlacement, 2> placements = {{
+      {&leftHalf, Vector2i(0, 0)},
+      {&rightHalf, Vector2i(16, 0)},
+  }};
+
+  Renderer renderer;
+  const RendererBitmap atlas =
+      NormalizeSnapshot(RenderDocumentsToAtlasBitmap(renderer, placements, Vector2i(32, 16)));
+  ASSERT_EQ(atlas.dimensions, Vector2i(32, 16));
+
+  EXPECT_THAT(PixelAt(atlas, 3, 8), IsOpaque()) << "first tile's own left half";
+  EXPECT_THAT(PixelAt(atlas, 12, 8), IsTransparent()) << "first tile's own right half";
+  EXPECT_THAT(PixelAt(atlas, 19, 8), IsTransparent())
+      << "second tile drew the first tile's geometry";
+  EXPECT_THAT(PixelAt(atlas, 28, 8), IsOpaque()) << "second tile's own right half";
+}
+
 TEST(RendererPublicApiTest, IncrementalStyleInvalidationMatchesFullRender) {
   SVGDocument incrementalDocument = ParseDocument(R"svg(
       <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12">

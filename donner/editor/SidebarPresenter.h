@@ -330,4 +330,26 @@ private:
 /// from stalling on a run of GPU readbacks.
 [[nodiscard]] std::span<const EmbeddedSvgIconRequest> SidebarIconPrewarmRequests();
 
+/// The path operations the inspector shows a button for, in button order.
+inline constexpr std::array<PathOperationKind, 4> kInspectorPathOperations = {
+    PathOperationKind::Union,
+    PathOperationKind::Intersect,
+    PathOperationKind::SubtractFront,
+    PathOperationKind::Exclude,
+};
+
+/// Embedded SVG source for @p operation's button icon. Every operation the
+/// inspector shows a button for maps to its own artwork, which the editor
+/// rasterizes through Donner rather than shipping a baked bitmap or a font
+/// glyph.
+///
+/// @param operation Path operation whose icon artwork is wanted.
+[[nodiscard]] std::span<const unsigned char> PathOperationIconSvg(PathOperationKind operation);
+
+/// Presentation-texture cache key for @p operation's button icon. Distinct per
+/// operation so two buttons never share an uploaded texture.
+///
+/// @param operation Path operation whose icon texture key is wanted.
+[[nodiscard]] std::uint64_t PathOperationIconTextureKey(PathOperationKind operation);
+
 }  // namespace donner::editor
